@@ -203,7 +203,7 @@ public class ServerChunkPushManager {
     public void submitMetadataTask(List<ServerPlayer> players, ChunkPos pos,
                                    ClientboundLevelChunkWithLightPacket packet, String dimension) {
         ensureInitialized();
-#if MC_VER < MC_1_21_11
+#if MC_VER < MC_1_21_6
         final int sectionCount = players.get(0).serverLevel().getSectionsCount();
         final RegistryAccess registryAccess = players.get(0).serverLevel().registryAccess();
 #else
@@ -243,7 +243,7 @@ public class ServerChunkPushManager {
     public void submitMetadataTask(ServerPlayer player, ChunkPos pos,
                                    Packet<?> chunkPacket, String dimension) {
         ensureInitialized();
-#if MC_VER < MC_1_21_11
+#if MC_VER < MC_1_21_6
         final int sectionCount = player.serverLevel().getSectionsCount();
         final RegistryAccess registryAccess = player.serverLevel().registryAccess();
 #else
@@ -265,7 +265,7 @@ public class ServerChunkPushManager {
                     }
                 } else {
                     // 回退：从世界读取（非标准 packet 类型）
-#if MC_VER < MC_1_21_11
+#if MC_VER < MC_1_21_6
                     ServerLevel level = player.serverLevel();
 #else
                     ServerLevel level = player.level();
@@ -338,7 +338,7 @@ public class ServerChunkPushManager {
     public void handleSectionHashRequest(ServerPlayer player, SectionHashRequestC2SPacket request) {
         if (!player.isAlive() || player.hasDisconnected()) { return; }
 
-#if MC_VER < MC_1_21_11
+#if MC_VER < MC_1_21_6
         ServerLevel level = player.serverLevel();
         int viewDistance = player.server.getPlayerList().getViewDistance();
 #else
@@ -416,7 +416,7 @@ public class ServerChunkPushManager {
     public void handleBlockEntityRequest(ServerPlayer player, BlockEntityRequestC2SPacket request) {
         if (!player.isAlive() || player.hasDisconnected()) { return; }
 
-#if MC_VER < MC_1_21_11
+#if MC_VER < MC_1_21_6
         ServerLevel level = player.serverLevel();
         int viewDistance = player.server.getPlayerList().getViewDistance();
 #else
@@ -598,7 +598,7 @@ public class ServerChunkPushManager {
             return;
         }
 
-#if MC_VER < MC_1_21_11
+#if MC_VER < MC_1_21_6
         ServerLevel level = player.serverLevel();
 #else
         ServerLevel level = player.level();

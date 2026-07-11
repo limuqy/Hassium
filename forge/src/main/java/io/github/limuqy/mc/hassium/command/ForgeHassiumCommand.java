@@ -8,7 +8,7 @@ import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.network.chat.Component;
 import net.minecraftforge.event.RegisterCommandsEvent;
-#if MC_VER > MC_1_21_4
+#if MC_VER > MC_1_21_5
 import net.minecraftforge.eventbus.api.listener.SubscribeEvent;
 #else
 import net.minecraftforge.eventbus.api.SubscribeEvent;

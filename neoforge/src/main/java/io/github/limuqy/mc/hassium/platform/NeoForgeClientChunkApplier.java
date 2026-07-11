@@ -22,7 +22,7 @@ public class NeoForgeClientChunkApplier implements IClientChunkApplier {
     @Override
     public void applyToLevelFromByteBuf(ClientLevel level, ChunkPos pos, FriendlyByteBuf buf, boolean renderOnly) {
         try {
-#if MC_VER < MC_1_20_6
+#if MC_VER < MC_1_20_5
             ClientboundLevelChunkWithLightPacket packet = new ClientboundLevelChunkWithLightPacket(buf);
 #else
             ClientboundLevelChunkWithLightPacket packet = ClientboundLevelChunkWithLightPacket.STREAM_CODEC

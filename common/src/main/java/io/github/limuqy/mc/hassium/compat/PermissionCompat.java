@@ -1,7 +1,7 @@
 package io.github.limuqy.mc.hassium.compat;
 
 import net.minecraft.commands.CommandSourceStack;
-#if MC_VER > MC_1_21_4
+#if MC_VER >= MC_1_21_11
 import net.minecraft.server.permissions.Permission;
 import net.minecraft.server.permissions.PermissionLevel;
 #endif
@@ -17,7 +17,7 @@ public final class PermissionCompat {
     }
 
     public static boolean hasCommandPermission(CommandSourceStack source, int level) {
-#if MC_VER > MC_1_21_4
+#if MC_VER >= MC_1_21_11
         return source.permissions().hasPermission(new Permission.HasCommandLevel(PermissionLevel.byId(level)));
 #else
         return source.hasPermission(level);

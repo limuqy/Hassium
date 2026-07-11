@@ -22,7 +22,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public abstract class MixinServerPlayer extends Player {
 
     public MixinServerPlayer(Level level, BlockPos pos, float yRot, GameProfile gameProfile) {
-#if MC_VER < MC_1_21_11
+#if MC_VER < MC_1_21_6
         super(level, pos, yRot, gameProfile);
 #else
         super(level, gameProfile);

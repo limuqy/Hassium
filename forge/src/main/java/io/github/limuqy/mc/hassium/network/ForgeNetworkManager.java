@@ -15,7 +15,7 @@ import net.minecraft.server.level.ServerPlayer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-#if MC_VER < MC_1_20_6
+#if MC_VER < MC_1_20_2
 import net.minecraftforge.network.NetworkDirection;
 import net.minecraftforge.network.NetworkRegistry;
 import net.minecraftforge.network.simple.SimpleChannel;
@@ -60,7 +60,7 @@ public class ForgeNetworkManager implements NetworkManager {
     }
 
     // 创建网络通道
-#if MC_VER < MC_1_20_6
+#if MC_VER < MC_1_20_2
     public static final SimpleChannel CHANNEL = NetworkRegistry.newSimpleChannel(
             ResourceLocationCompat.create(Constants.MOD_ID, "main"),
             () -> PROTOCOL_VERSION,
@@ -68,7 +68,7 @@ public class ForgeNetworkManager implements NetworkManager {
             PROTOCOL_VERSION::equals
     );
 #else
-    // 1.20.6+: SimpleChannel API changed, networking disabled
+    // 1.20.2+: SimpleChannel API removed, networking disabled
     public static final Object CHANNEL = null;
 #endif
 
@@ -77,7 +77,7 @@ public class ForgeNetworkManager implements NetworkManager {
     @Override
     public void registerChannels() {
         LOGGER.info("Hassium: Registering Forge network channels");
-#if MC_VER < MC_1_20_6
+#if MC_VER < MC_1_20_2
         // 注册握手请求数据包
         CHANNEL.<HandshakePacket>registerMessage(
                 packetId++,
@@ -336,7 +336,7 @@ public class ForgeNetworkManager implements NetworkManager {
                 true,  // globalPacketCompressionSupported
                 true   // compactHeaderSupported
         );
-#if MC_VER < MC_1_20_6
+#if MC_VER < MC_1_20_2
         CHANNEL.sendToServer(packet);
 #else
         LOGGER.warn("Hassium: Forge networking not supported on 1.20.6+, dropping handshake request");
@@ -358,7 +358,7 @@ public class ForgeNetworkManager implements NetworkManager {
         byte[] data = new byte[buf.readableBytes()];
         buf.readBytes(data);
         buf.release();
-#if MC_VER < MC_1_20_6
+#if MC_VER < MC_1_20_2
         CHANNEL.sendToServer(new DataRequestWrapper(data));
 #else
         LOGGER.warn("Hassium: Forge networking not supported on 1.20.6+, dropping chunk data request");
@@ -376,7 +376,7 @@ public class ForgeNetworkManager implements NetworkManager {
         byte[] data = new byte[buf.readableBytes()];
         buf.readBytes(data);
         buf.release();
-#if MC_VER < MC_1_20_6
+#if MC_VER < MC_1_20_2
         CHANNEL.sendTo(new ChunkHashWrapper(data), player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
 #else
         LOGGER.warn("Hassium: Forge networking not supported on 1.20.6+, dropping chunk hash packet");
@@ -388,7 +388,7 @@ public class ForgeNetworkManager implements NetworkManager {
         byte[] data = new byte[buf.readableBytes()];
         buf.readBytes(data);
         buf.release();
-#if MC_VER < MC_1_20_6
+#if MC_VER < MC_1_20_2
         CHANNEL.sendToServer(new SectionHashRequestWrapper(data));
 #else
         LOGGER.warn("Hassium: Forge networking not supported on 1.20.6+, dropping section hash request");
@@ -400,7 +400,7 @@ public class ForgeNetworkManager implements NetworkManager {
         byte[] data = new byte[buf.readableBytes()];
         buf.readBytes(data);
         buf.release();
-#if MC_VER < MC_1_20_6
+#if MC_VER < MC_1_20_2
         CHANNEL.sendTo(new SectionDeltaWrapper(data), player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
 #else
         LOGGER.warn("Hassium: Forge networking not supported on 1.20.6+, dropping section delta packet");
@@ -412,7 +412,7 @@ public class ForgeNetworkManager implements NetworkManager {
         byte[] data = new byte[buf.readableBytes()];
         buf.readBytes(data);
         buf.release();
-#if MC_VER < MC_1_20_6
+#if MC_VER < MC_1_20_2
         CHANNEL.sendToServer(new BlockEntityRequestWrapper(data));
 #else
         LOGGER.warn("Hassium: Forge networking not supported on 1.20.6+, dropping block entity request");
@@ -424,7 +424,7 @@ public class ForgeNetworkManager implements NetworkManager {
         byte[] data = new byte[buf.readableBytes()];
         buf.readBytes(data);
         buf.release();
-#if MC_VER < MC_1_20_6
+#if MC_VER < MC_1_20_2
         CHANNEL.sendTo(new BlockEntityDataWrapper(data), player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
 #else
         LOGGER.warn("Hassium: Forge networking not supported on 1.20.6+, dropping block entity data");
@@ -437,7 +437,7 @@ public class ForgeNetworkManager implements NetworkManager {
     public static void sendCompressedChunk(ServerPlayer player, ChunkCompressionHandler.CompressedChunkData compressed) {
         try {
             byte[] data = compressed.encode();
-#if MC_VER < MC_1_20_6
+#if MC_VER < MC_1_20_2
             CHANNEL.sendTo(new CompressedPayloadWrapper(data), player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
             LOGGER.debug("Hassium: Sent compressed chunk [{}, {}] to player {}",
                     compressed.chunkX, compressed.chunkZ, player.getName().getString());

@@ -36,6 +36,15 @@ processResources {
     def m = mcRange =~ /\[([^,\]]+),([^)\]]+)\)/
     def compatible_fabric_mc_version_range = m ? ">=${m[0][1]} <${m[0][2]}" : gradle.ext.minecraft_version
 
+    // Auto-derive neoforge_loader_version_range from neoforge_loader if not explicitly set
+    def neoLoader = gradle.ext.has('neoforge_loader') ? gradle.ext.neoforge_loader as String : ''
+    def neoLoaderRange = gradle.ext.has('neoforge_loader_version_range') ? gradle.ext.neoforge_loader_version_range : ''
+    if (!neoLoaderRange && neoLoader) {
+        // neoforge_loader format: "47.1.105" (Forge-like for 1.20.1) or "20.5.21-beta"
+        def majorMinor = neoLoader.tokenize('.').take(2).join('.')
+        neoLoaderRange = "[${majorMinor},)"
+    }
+
     var expandProps = ['version'                              : mod_version,
                        'group'                                : project.group,
                        'minecraft_version'                    : gradle.ext.minecraft_version,
@@ -47,8 +56,8 @@ processResources {
                        'mod_id'                       : mod_id,
                        'license'                      : license,
                        'description'                  : project.description,
-                       'neoforge_loader'              : gradle.ext.has('neoforge_loader') ? gradle.ext.neoforge_loader : '',
-                       'neoforge_loader_version_range' : gradle.ext.has('neoforge_loader_version_range') ? gradle.ext.neoforge_loader_version_range : '[20.4,)',
+                       'neoforge_loader'              : neoLoader,
+                       'neoforge_loader_version_range' : neoLoaderRange,
                        'forge_loader'                 : gradle.ext.has('forge_loader') ? gradle.ext.forge_loader : '',
                        'forge_version'                : gradle.ext.has('forge_loader') ? gradle.ext.forge_loader : '',
                        'forge_loader_version_range'   : gradle.ext.has('forge_loader_version_range') ? gradle.ext.forge_loader_version_range : '[47,)',

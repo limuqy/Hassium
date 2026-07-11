@@ -122,7 +122,7 @@ public class MixinLightRecompute {
             return;
         }
 
-#if MC_VER < MC_1_21_4
+#if MC_VER < MC_1_21_2
         int bottomSection = level.getMinSection();
         int topSection = level.getMaxSection();
 #else
@@ -246,7 +246,7 @@ public class MixinLightRecompute {
      */
     @Unique
     private void hassium$recomputeLightSync(LevelChunk chunk, ChunkPos chunkPos) {
-#if MC_VER < MC_1_21_4
+#if MC_VER < MC_1_21_2
         int bottomSection = level.getMinSection();
         int topSection = level.getMaxSection();
 #else

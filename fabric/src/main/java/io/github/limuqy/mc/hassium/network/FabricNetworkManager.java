@@ -173,10 +173,10 @@ INDEX_SYNC_S2C = ResourceLocationCompat.create(Constants.MOD_ID, "index_sync_s2c
         HassiumAggregationManager.setSender((connection, buf) -> {
             if (connection.getPacketListener() instanceof net.minecraft.server.network.ServerGamePacketListenerImpl handler) {
                 ServerPlayer player = handler.getPlayer();
-#if MC_VER < MC_1_20_6
+#if MC_VER < MC_1_20_5
                 ServerPlayNetworking.send(player, AGGREGATION_S2C, buf);
 #else
-                LOGGER.warn("Fabric networking send not supported on 1.20.6+, dropping packet");
+                LOGGER.warn("Fabric networking send not supported on 1.20.5+, dropping packet");
                 buf.release();
 #endif
             } else {
@@ -205,7 +205,7 @@ INDEX_SYNC_S2C = ResourceLocationCompat.create(Constants.MOD_ID, "index_sync_s2c
      */
     public void registerClientChannels() {
         // 注册客户端接收压缩区块数据
-#if MC_VER < MC_1_20_6
+#if MC_VER < MC_1_20_5
         ClientPlayNetworking.registerGlobalReceiver(CHUNK_PAYLOAD_S2C, (client, handler, buf, responseSender) -> {
             LOGGER.info("[CLIENT] Received chunk payload packet");
             int length = buf.readVarInt();
@@ -224,11 +224,11 @@ INDEX_SYNC_S2C = ResourceLocationCompat.create(Constants.MOD_ID, "index_sync_s2c
             });
         });
 #else
-        LOGGER.warn("Fabric networking receiver not registered on 1.20.6+: {}", CHUNK_PAYLOAD_S2C);
+        LOGGER.warn("Fabric networking receiver not registered on 1.20.5+: {}", CHUNK_PAYLOAD_S2C);
 #endif
 
         // 注册字典同步响应
-#if MC_VER < MC_1_20_6
+#if MC_VER < MC_1_20_5
         ClientPlayNetworking.registerGlobalReceiver(DICTIONARY_SYNC_S2C, (client, handler, buf, responseSender) -> {
             try {
                 FriendlyByteBuf packetBuf = new FriendlyByteBuf(buf.copy());
@@ -244,11 +244,11 @@ INDEX_SYNC_S2C = ResourceLocationCompat.create(Constants.MOD_ID, "index_sync_s2c
             }
         });
 #else
-        LOGGER.warn("Fabric networking receiver not registered on 1.20.6+: {}", DICTIONARY_SYNC_S2C);
+        LOGGER.warn("Fabric networking receiver not registered on 1.20.5+: {}", DICTIONARY_SYNC_S2C);
 #endif
 
         // 注册握手响应
-#if MC_VER < MC_1_20_6
+#if MC_VER < MC_1_20_5
         ClientPlayNetworking.registerGlobalReceiver(HANDSHAKE_S2C, (client, handler, buf, responseSender) -> {
             int protocolVersion = buf.readVarInt();
             boolean accepted = buf.readBoolean();
@@ -264,11 +264,11 @@ INDEX_SYNC_S2C = ResourceLocationCompat.create(Constants.MOD_ID, "index_sync_s2c
             }
         });
 #else
-        LOGGER.warn("Fabric networking receiver not registered on 1.20.6+: {}", HANDSHAKE_S2C);
+        LOGGER.warn("Fabric networking receiver not registered on 1.20.5+: {}", HANDSHAKE_S2C);
 #endif
 
         // 注册索引同步响应
-#if MC_VER < MC_1_20_6
+#if MC_VER < MC_1_20_5
         ClientPlayNetworking.registerGlobalReceiver(INDEX_SYNC_S2C, (client, handler, buf, responseSender) -> {
             try {
                 int dataLength = buf.readVarInt();
@@ -301,11 +301,11 @@ INDEX_SYNC_S2C = ResourceLocationCompat.create(Constants.MOD_ID, "index_sync_s2c
             }
         });
 #else
-        LOGGER.warn("Fabric networking receiver not registered on 1.20.6+: {}", INDEX_SYNC_S2C);
+        LOGGER.warn("Fabric networking receiver not registered on 1.20.5+: {}", INDEX_SYNC_S2C);
 #endif
 
         // 注册聚合包接收
-#if MC_VER < MC_1_20_6
+#if MC_VER < MC_1_20_5
         ClientPlayNetworking.registerGlobalReceiver(AGGREGATION_S2C, (client, handler, buf, responseSender) -> {
             try {
                 FriendlyByteBuf packetBuf = new FriendlyByteBuf(buf.copy());
@@ -327,11 +327,11 @@ INDEX_SYNC_S2C = ResourceLocationCompat.create(Constants.MOD_ID, "index_sync_s2c
             }
         });
 #else
-        LOGGER.warn("Fabric networking receiver not registered on 1.20.6+: {}", AGGREGATION_S2C);
+        LOGGER.warn("Fabric networking receiver not registered on 1.20.5+: {}", AGGREGATION_S2C);
 #endif
 
         // 注册区块元数据接收（新协议）
-#if MC_VER < MC_1_20_6
+#if MC_VER < MC_1_20_5
         ClientPlayNetworking.registerGlobalReceiver(CHUNK_METADATA_S2C, (client, handler, buf, responseSender) -> {
             try {
                 LOGGER.info("[CLIENT] Received chunk metadata packet");
@@ -348,11 +348,11 @@ INDEX_SYNC_S2C = ResourceLocationCompat.create(Constants.MOD_ID, "index_sync_s2c
             }
         });
 #else
-        LOGGER.warn("Fabric networking receiver not registered on 1.20.6+: {}", CHUNK_METADATA_S2C);
+        LOGGER.warn("Fabric networking receiver not registered on 1.20.5+: {}", CHUNK_METADATA_S2C);
 #endif
 
         // 注册区块哈希广播接收（阶段一）
-#if MC_VER < MC_1_20_6
+#if MC_VER < MC_1_20_5
         ClientPlayNetworking.registerGlobalReceiver(CHUNK_HASH_S2C, (client, handler, buf, responseSender) -> {
             try {
                 ChunkHashS2CPacket packet = ChunkHashS2CPacket.decode(buf);
@@ -362,11 +362,11 @@ INDEX_SYNC_S2C = ResourceLocationCompat.create(Constants.MOD_ID, "index_sync_s2c
             }
         });
 #else
-        LOGGER.warn("Fabric networking receiver not registered on 1.20.6+: {}", CHUNK_HASH_S2C);
+        LOGGER.warn("Fabric networking receiver not registered on 1.20.5+: {}", CHUNK_HASH_S2C);
 #endif
 
         // 注册 section delta 响应接收（阶段二）
-#if MC_VER < MC_1_20_6
+#if MC_VER < MC_1_20_5
         ClientPlayNetworking.registerGlobalReceiver(SECTION_DELTA_S2C, (client, handler, buf, responseSender) -> {
             try {
                 SectionDeltaS2CPacket packet = SectionDeltaS2CPacket.decode(buf);
@@ -376,11 +376,11 @@ INDEX_SYNC_S2C = ResourceLocationCompat.create(Constants.MOD_ID, "index_sync_s2c
             }
         });
 #else
-        LOGGER.warn("Fabric networking receiver not registered on 1.20.6+: {}", SECTION_DELTA_S2C);
+        LOGGER.warn("Fabric networking receiver not registered on 1.20.5+: {}", SECTION_DELTA_S2C);
 #endif
 
         // 注册 blockEntity 数据响应接收
-#if MC_VER < MC_1_20_6
+#if MC_VER < MC_1_20_5
         ClientPlayNetworking.registerGlobalReceiver(BLOCK_ENTITY_DATA_S2C, (client, handler, buf, responseSender) -> {
             try {
                 BlockEntityDataS2CPacket packet = BlockEntityDataS2CPacket.decode(buf);
@@ -390,7 +390,7 @@ INDEX_SYNC_S2C = ResourceLocationCompat.create(Constants.MOD_ID, "index_sync_s2c
             }
         });
 #else
-        LOGGER.warn("Fabric networking receiver not registered on 1.20.6+: {}", BLOCK_ENTITY_DATA_S2C);
+        LOGGER.warn("Fabric networking receiver not registered on 1.20.5+: {}", BLOCK_ENTITY_DATA_S2C);
 #endif
     }
 
@@ -411,10 +411,10 @@ INDEX_SYNC_S2C = ResourceLocationCompat.create(Constants.MOD_ID, "index_sync_s2c
             buf.writeBoolean(true);  // globalPacketCompressionSupported
             buf.writeBoolean(true);  // compactHeaderSupported
 
-#if MC_VER < MC_1_20_6
+#if MC_VER < MC_1_20_5
             ClientPlayNetworking.send(HANDSHAKE_C2S, buf);
 #else
-            LOGGER.warn("Fabric networking send not supported on 1.20.6+, dropping packet");
+            LOGGER.warn("Fabric networking send not supported on 1.20.5+, dropping packet");
             buf.release();
 #endif
             LOGGER.debug("Hassium: Sent handshake request to server");
@@ -432,10 +432,10 @@ INDEX_SYNC_S2C = ResourceLocationCompat.create(Constants.MOD_ID, "index_sync_s2c
     @Override
     public void sendChunkDataRequest(FriendlyByteBuf buf) {
         if (Minecraft.getInstance().getConnection() != null) {
-#if MC_VER < MC_1_20_6
+#if MC_VER < MC_1_20_5
             ClientPlayNetworking.send(CHUNK_DATA_REQUEST_C2S, buf);
 #else
-            LOGGER.warn("Fabric networking send not supported on 1.20.6+, dropping packet");
+            LOGGER.warn("Fabric networking send not supported on 1.20.5+, dropping packet");
             buf.release();
 #endif
             LOGGER.debug("Hassium: Sent chunk data request");
@@ -452,10 +452,10 @@ INDEX_SYNC_S2C = ResourceLocationCompat.create(Constants.MOD_ID, "index_sync_s2c
 
     @Override
     public void sendChunkHashPacket(ServerPlayer player, FriendlyByteBuf buf) {
-#if MC_VER < MC_1_20_6
+#if MC_VER < MC_1_20_5
         ServerPlayNetworking.send(player, CHUNK_HASH_S2C, buf);
 #else
-        LOGGER.warn("Fabric networking send not supported on 1.20.6+, dropping packet");
+        LOGGER.warn("Fabric networking send not supported on 1.20.5+, dropping packet");
         buf.release();
 #endif
     }
@@ -463,10 +463,10 @@ INDEX_SYNC_S2C = ResourceLocationCompat.create(Constants.MOD_ID, "index_sync_s2c
     @Override
     public void sendSectionHashRequest(FriendlyByteBuf buf) {
         if (Minecraft.getInstance().getConnection() != null) {
-#if MC_VER < MC_1_20_6
+#if MC_VER < MC_1_20_5
             ClientPlayNetworking.send(SECTION_HASH_REQUEST_C2S, buf);
 #else
-            LOGGER.warn("Fabric networking send not supported on 1.20.6+, dropping packet");
+            LOGGER.warn("Fabric networking send not supported on 1.20.5+, dropping packet");
             buf.release();
 #endif
         } else {
@@ -476,10 +476,10 @@ INDEX_SYNC_S2C = ResourceLocationCompat.create(Constants.MOD_ID, "index_sync_s2c
 
     @Override
     public void sendSectionDeltaPacket(ServerPlayer player, FriendlyByteBuf buf) {
-#if MC_VER < MC_1_20_6
+#if MC_VER < MC_1_20_5
         ServerPlayNetworking.send(player, SECTION_DELTA_S2C, buf);
 #else
-        LOGGER.warn("Fabric networking send not supported on 1.20.6+, dropping packet");
+        LOGGER.warn("Fabric networking send not supported on 1.20.5+, dropping packet");
         buf.release();
 #endif
     }
@@ -487,10 +487,10 @@ INDEX_SYNC_S2C = ResourceLocationCompat.create(Constants.MOD_ID, "index_sync_s2c
     @Override
     public void sendBlockEntityRequest(FriendlyByteBuf buf) {
         if (Minecraft.getInstance().getConnection() != null) {
-#if MC_VER < MC_1_20_6
+#if MC_VER < MC_1_20_5
             ClientPlayNetworking.send(BLOCK_ENTITY_REQUEST_C2S, buf);
 #else
-            LOGGER.warn("Fabric networking send not supported on 1.20.6+, dropping packet");
+            LOGGER.warn("Fabric networking send not supported on 1.20.5+, dropping packet");
             buf.release();
 #endif
         } else {
@@ -500,10 +500,10 @@ INDEX_SYNC_S2C = ResourceLocationCompat.create(Constants.MOD_ID, "index_sync_s2c
 
     @Override
     public void sendBlockEntityData(ServerPlayer player, FriendlyByteBuf buf) {
-#if MC_VER < MC_1_20_6
+#if MC_VER < MC_1_20_5
         ServerPlayNetworking.send(player, BLOCK_ENTITY_DATA_S2C, buf);
 #else
-        LOGGER.warn("Fabric networking send not supported on 1.20.6+, dropping packet");
+        LOGGER.warn("Fabric networking send not supported on 1.20.5+, dropping packet");
         buf.release();
 #endif
     }
@@ -523,12 +523,12 @@ INDEX_SYNC_S2C = ResourceLocationCompat.create(Constants.MOD_ID, "index_sync_s2c
             buf.writeBytes(data);
 
             LOGGER.info("[SEND_CHUNK] Encoded chunk data ({} bytes), sending via network", data.length);
-#if MC_VER < MC_1_20_6
+#if MC_VER < MC_1_20_5
             ServerPlayNetworking.send(player, CHUNK_PAYLOAD_S2C, buf);
             LOGGER.info("[SEND_CHUNK] Successfully sent compressed chunk [{}, {}] to player {}",
                     compressed.chunkX, compressed.chunkZ, player.getName().getString());
 #else
-            LOGGER.warn("Fabric networking send not supported on 1.20.6+, dropping packet");
+            LOGGER.warn("Fabric networking send not supported on 1.20.5+, dropping packet");
             buf.release();
 #endif
         } catch (Exception e) {
@@ -546,14 +546,14 @@ INDEX_SYNC_S2C = ResourceLocationCompat.create(Constants.MOD_ID, "index_sync_s2c
             DictionarySyncPayload payload = new DictionarySyncPayload(aggregationDict, false);
             FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
             payload.encode(buf);
-#if MC_VER < MC_1_20_6
+#if MC_VER < MC_1_20_5
             ServerPlayNetworking.send(player, DICTIONARY_SYNC_S2C, buf);
 
             LOGGER.info("Hassium: Sent aggregation dictionary sync to player {} ({} bytes)",
                     player.getName().getString(),
                     aggregationDict != null ? aggregationDict.length : 0);
 #else
-            LOGGER.warn("Fabric networking send not supported on 1.20.6+, dropping packet");
+            LOGGER.warn("Fabric networking send not supported on 1.20.5+, dropping packet");
             buf.release();
 #endif
         } catch (Exception e) {
@@ -569,13 +569,13 @@ INDEX_SYNC_S2C = ResourceLocationCompat.create(Constants.MOD_ID, "index_sync_s2c
             DictionarySyncPayload payload = new DictionarySyncPayload(dictionary, false);
             FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
             payload.encode(buf);
-#if MC_VER < MC_1_20_6
+#if MC_VER < MC_1_20_5
             ServerPlayNetworking.send(player, DICTIONARY_SYNC_S2C, buf);
 
             LOGGER.info("Hassium: Pushed new aggregation dictionary to player {} ({} bytes)",
                     player.getName().getString(), dictionary != null ? dictionary.length : 0);
 #else
-            LOGGER.warn("Fabric networking send not supported on 1.20.6+, dropping packet");
+            LOGGER.warn("Fabric networking send not supported on 1.20.5+, dropping packet");
             buf.release();
 #endif
         } catch (Exception e) {
@@ -597,12 +597,12 @@ INDEX_SYNC_S2C = ResourceLocationCompat.create(Constants.MOD_ID, "index_sync_s2c
             FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
             buf.writeVarInt(data.length);
             buf.writeBytes(data);
-#if MC_VER < MC_1_20_6
+#if MC_VER < MC_1_20_5
             ServerPlayNetworking.send(player, INDEX_SYNC_S2C, buf);
             LOGGER.info("Hassium: Sent index sync packet to player {} ({} packet types)",
                     player.getName().getString(), indexSyncManager.getServerIndexManager().size());
 #else
-            LOGGER.warn("Fabric networking send not supported on 1.20.6+, dropping packet");
+            LOGGER.warn("Fabric networking send not supported on 1.20.5+, dropping packet");
             buf.release();
 #endif
         } catch (Exception e) {
@@ -615,7 +615,7 @@ INDEX_SYNC_S2C = ResourceLocationCompat.create(Constants.MOD_ID, "index_sync_s2c
      */
     private void registerServerChannels() {
         // 注册握手请求
-#if MC_VER < MC_1_20_6
+#if MC_VER < MC_1_20_5
         ServerPlayNetworking.registerGlobalReceiver(HANDSHAKE_C2S, (server, player, handler, buf, sender) -> {
             LOGGER.info("[HANDSHAKE] Received handshake packet from player {}", player.getName().getString());
 
@@ -694,11 +694,11 @@ INDEX_SYNC_S2C = ResourceLocationCompat.create(Constants.MOD_ID, "index_sync_s2c
             });
         });
 #else
-        LOGGER.warn("Fabric networking receiver not registered on 1.20.6+: {}", HANDSHAKE_C2S);
+        LOGGER.warn("Fabric networking receiver not registered on 1.20.5+: {}", HANDSHAKE_C2S);
 #endif
 
         // 注册压缩就绪确认
-#if MC_VER < MC_1_20_6
+#if MC_VER < MC_1_20_5
         ServerPlayNetworking.registerGlobalReceiver(CompressionReadyPayload.CHANNEL, (server, player, handler, buf, sender) -> {
             CompressionReadyPayload payload = CompressionReadyPayload.decode(buf);
             LOGGER.info("Hassium: Received compression ready from player {}, ready: {}",
@@ -715,11 +715,11 @@ INDEX_SYNC_S2C = ResourceLocationCompat.create(Constants.MOD_ID, "index_sync_s2c
             }
         });
 #else
-        LOGGER.warn("Fabric networking receiver not registered on 1.20.6+: {}", CompressionReadyPayload.CHANNEL);
+        LOGGER.warn("Fabric networking receiver not registered on 1.20.5+: {}", CompressionReadyPayload.CHANNEL);
 #endif
 
         // 注册区块数据请求（新协议）
-#if MC_VER < MC_1_20_6
+#if MC_VER < MC_1_20_5
         ServerPlayNetworking.registerGlobalReceiver(CHUNK_DATA_REQUEST_C2S, (server, player, handler, buf, sender) -> {
             try {
                 LOGGER.info("[SERVER] Received chunk data request packet from player {}", player.getName().getString());
@@ -745,11 +745,11 @@ INDEX_SYNC_S2C = ResourceLocationCompat.create(Constants.MOD_ID, "index_sync_s2c
             }
         });
 #else
-        LOGGER.warn("Fabric networking receiver not registered on 1.20.6+: {}", CHUNK_DATA_REQUEST_C2S);
+        LOGGER.warn("Fabric networking receiver not registered on 1.20.5+: {}", CHUNK_DATA_REQUEST_C2S);
 #endif
 
         // 注册 section 哈希请求（阶段二）
-#if MC_VER < MC_1_20_6
+#if MC_VER < MC_1_20_5
         ServerPlayNetworking.registerGlobalReceiver(SECTION_HASH_REQUEST_C2S, (server, player, handler, buf, sender) -> {
             try {
                 SectionHashRequestC2SPacket request = SectionHashRequestC2SPacket.decode(
@@ -768,11 +768,11 @@ INDEX_SYNC_S2C = ResourceLocationCompat.create(Constants.MOD_ID, "index_sync_s2c
             }
         });
 #else
-        LOGGER.warn("Fabric networking receiver not registered on 1.20.6+: {}", SECTION_HASH_REQUEST_C2S);
+        LOGGER.warn("Fabric networking receiver not registered on 1.20.5+: {}", SECTION_HASH_REQUEST_C2S);
 #endif
 
         // 注册 blockEntity 数据请求
-#if MC_VER < MC_1_20_6
+#if MC_VER < MC_1_20_5
         ServerPlayNetworking.registerGlobalReceiver(BLOCK_ENTITY_REQUEST_C2S, (server, player, handler, buf, sender) -> {
             try {
                 BlockEntityRequestC2SPacket request = BlockEntityRequestC2SPacket.decode(
@@ -791,7 +791,7 @@ INDEX_SYNC_S2C = ResourceLocationCompat.create(Constants.MOD_ID, "index_sync_s2c
             }
         });
 #else
-        LOGGER.warn("Fabric networking receiver not registered on 1.20.6+: {}", BLOCK_ENTITY_REQUEST_C2S);
+        LOGGER.warn("Fabric networking receiver not registered on 1.20.5+: {}", BLOCK_ENTITY_REQUEST_C2S);
 #endif
     }
 }

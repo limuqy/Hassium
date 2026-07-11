@@ -14,7 +14,7 @@ import net.minecraft.server.level.ServerPlayer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-#if MC_VER < MC_1_20_6
+#if MC_VER < MC_1_20_2
 import net.minecraftforge.network.NetworkDirection;
 #endif
 
@@ -32,7 +32,7 @@ public class ForgeNetworkManagerService implements INetworkManagerService {
         byte[] data = new byte[buf.readableBytes()];
         buf.readBytes(data);
         buf.release();
-#if MC_VER < MC_1_20_6
+#if MC_VER < MC_1_20_2
         ForgeNetworkManager.CHANNEL.sendTo(
                 new ForgeNetworkManager.MetadataWrapper(data),
                 player.connection.connection,
@@ -48,7 +48,7 @@ public class ForgeNetworkManagerService implements INetworkManagerService {
         byte[] data = new byte[buf.readableBytes()];
         buf.readBytes(data);
         buf.release();
-#if MC_VER < MC_1_20_6
+#if MC_VER < MC_1_20_2
         ForgeNetworkManager.CHANNEL.sendToServer(new ForgeNetworkManager.DataRequestWrapper(data));
 #else
         LOGGER.warn("Hassium: Forge networking not supported on 1.20.6+, dropping chunk data request");
@@ -60,7 +60,7 @@ public class ForgeNetworkManagerService implements INetworkManagerService {
         byte[] data = new byte[buf.readableBytes()];
         buf.readBytes(data);
         buf.release();
-#if MC_VER < MC_1_20_6
+#if MC_VER < MC_1_20_2
         ForgeNetworkManager.CHANNEL.sendTo(
                 new ForgeNetworkManager.ChunkHashWrapper(data),
                 player.connection.connection,
@@ -76,7 +76,7 @@ public class ForgeNetworkManagerService implements INetworkManagerService {
         byte[] data = new byte[buf.readableBytes()];
         buf.readBytes(data);
         buf.release();
-#if MC_VER < MC_1_20_6
+#if MC_VER < MC_1_20_2
         ForgeNetworkManager.CHANNEL.sendToServer(new ForgeNetworkManager.SectionHashRequestWrapper(data));
 #else
         LOGGER.warn("Hassium: Forge networking not supported on 1.20.6+, dropping section hash request");
@@ -88,7 +88,7 @@ public class ForgeNetworkManagerService implements INetworkManagerService {
         byte[] data = new byte[buf.readableBytes()];
         buf.readBytes(data);
         buf.release();
-#if MC_VER < MC_1_20_6
+#if MC_VER < MC_1_20_2
         ForgeNetworkManager.CHANNEL.sendTo(
                 new ForgeNetworkManager.SectionDeltaWrapper(data),
                 player.connection.connection,
@@ -104,7 +104,7 @@ public class ForgeNetworkManagerService implements INetworkManagerService {
         byte[] data = new byte[buf.readableBytes()];
         buf.readBytes(data);
         buf.release();
-#if MC_VER < MC_1_20_6
+#if MC_VER < MC_1_20_2
         ForgeNetworkManager.CHANNEL.sendToServer(new ForgeNetworkManager.BlockEntityRequestWrapper(data));
 #else
         LOGGER.warn("Hassium: Forge networking not supported on 1.20.6+, dropping block entity request");
@@ -116,7 +116,7 @@ public class ForgeNetworkManagerService implements INetworkManagerService {
         byte[] data = new byte[buf.readableBytes()];
         buf.readBytes(data);
         buf.release();
-#if MC_VER < MC_1_20_6
+#if MC_VER < MC_1_20_2
         ForgeNetworkManager.CHANNEL.sendTo(
                 new ForgeNetworkManager.BlockEntityDataWrapper(data),
                 player.connection.connection,

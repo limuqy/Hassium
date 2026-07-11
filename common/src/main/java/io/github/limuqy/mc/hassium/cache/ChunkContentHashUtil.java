@@ -35,7 +35,7 @@ import net.minecraft.world.level.biome.Biome;
 import net.minecraft.world.level.block.entity.BlockEntityType;
 import net.minecraft.world.level.chunk.LevelChunk;
 import net.minecraft.world.level.chunk.LevelChunkSection;
-#if MC_VER >= MC_1_21_11
+#if MC_VER >= MC_1_21_9
 import net.minecraft.world.level.chunk.PalettedContainerFactory;
 #endif
 import net.minecraft.world.level.lighting.LevelLightEngine;
@@ -104,7 +104,7 @@ public final class ChunkContentHashUtil {
         HashingOutputStream out = new HashingOutputStream(streamingHasher);
         try {
             out.write(sections);
-#if MC_VER < MC_1_21_11
+#if MC_VER < MC_1_21_5
             writeNbt(out, chunkData.getHeightmaps());
 #else
             CompoundTag heightmapTag = new CompoundTag();
@@ -309,7 +309,7 @@ public final class ChunkContentHashUtil {
         try {
             // 只写入 sections 数据，不写入 blockEntity
             out.write(sections);
-#if MC_VER < MC_1_21_11
+#if MC_VER <= MC_1_21_4
             writeNbt(out, chunkData.getHeightmaps());
 #else
             CompoundTag heightmapTag = new CompoundTag();
@@ -369,7 +369,7 @@ public final class ChunkContentHashUtil {
         Map<Integer, Long> hashes = new HashMap<>();
         FriendlyByteBuf buf = new FriendlyByteBuf(Unpooled.wrappedBuffer(allData));
         try {
-#if MC_VER < MC_1_21_11
+#if MC_VER < MC_1_21_9
             Registry<Biome> biomeRegistry = RegistryCompat.getBiomeRegistry(registryAccess);
             LevelChunkSection scratch = new LevelChunkSection(biomeRegistry);
 #else
@@ -400,7 +400,7 @@ public final class ChunkContentHashUtil {
      * 使用原版 read，避免手动解析 PalettedContainer。
      */
     public static void skipOneSection(FriendlyByteBuf buf, RegistryAccess registryAccess) {
-#if MC_VER < MC_1_21_11
+#if MC_VER < MC_1_21_9
         Registry<Biome> biomeRegistry = RegistryCompat.getBiomeRegistry(registryAccess);
         new LevelChunkSection(biomeRegistry).read(buf);
 #else
@@ -420,7 +420,7 @@ public final class ChunkContentHashUtil {
         List<int[]> ranges = new ArrayList<>(sectionCount);
         FriendlyByteBuf buf = new FriendlyByteBuf(Unpooled.wrappedBuffer(sectionsBytes));
         try {
-#if MC_VER < MC_1_21_11
+#if MC_VER < MC_1_21_9
             Registry<Biome> biomeRegistry = RegistryCompat.getBiomeRegistry(registryAccess);
             LevelChunkSection scratch = new LevelChunkSection(biomeRegistry);
 #else
@@ -460,7 +460,7 @@ public final class ChunkContentHashUtil {
         }
         out.write(element.getId());
         if (element instanceof CompoundTag c) {
-#if MC_VER < MC_1_21_11
+#if MC_VER < MC_1_21_5
             List<String> keys = new ArrayList<>(c.getAllKeys());
 #else
             List<String> keys = new ArrayList<>(c.keySet());
@@ -477,43 +477,43 @@ public final class ChunkContentHashUtil {
                 writeNbt(out, e);
             }
         } else if (element instanceof ByteTag b) {
-#if MC_VER < MC_1_21_11
+#if MC_VER < MC_1_21_5
             out.write(b.getAsByte());
 #else
             out.write(b.byteValue());
 #endif
         } else if (element instanceof ShortTag s) {
-#if MC_VER < MC_1_21_11
+#if MC_VER < MC_1_21_5
             writeShort(out, s.getAsShort());
 #else
             writeShort(out, s.shortValue());
 #endif
         } else if (element instanceof IntTag ni) {
-#if MC_VER < MC_1_21_11
+#if MC_VER < MC_1_21_5
             writeInt(out, ni.getAsInt());
 #else
             writeInt(out, ni.intValue());
 #endif
         } else if (element instanceof LongTag nl) {
-#if MC_VER < MC_1_21_11
+#if MC_VER < MC_1_21_5
             writeLong(out, nl.getAsLong());
 #else
             writeLong(out, nl.longValue());
 #endif
         } else if (element instanceof FloatTag f) {
-#if MC_VER < MC_1_21_11
+#if MC_VER < MC_1_21_5
             writeInt(out, Float.floatToIntBits(f.getAsFloat()));
 #else
             writeInt(out, Float.floatToIntBits(f.floatValue()));
 #endif
         } else if (element instanceof DoubleTag d) {
-#if MC_VER < MC_1_21_11
+#if MC_VER < MC_1_21_5
             writeLong(out, Double.doubleToLongBits(d.getAsDouble()));
 #else
             writeLong(out, Double.doubleToLongBits(d.doubleValue()));
 #endif
         } else if (element instanceof StringTag s) {
-#if MC_VER < MC_1_21_11
+#if MC_VER < MC_1_21_5
             writeString(out, s.getAsString());
 #else
             writeString(out, s.value());

@@ -2,7 +2,7 @@ package io.github.limuqy.mc.hassium.mixin;
 
 import io.github.limuqy.mc.hassium.Constants;
 import net.minecraft.nbt.CompoundTag;
-#if MC_VER < MC_1_21_4
+#if MC_VER < MC_1_21_2
 import net.minecraft.world.level.chunk.storage.ChunkSerializer;
 #else
 import net.minecraft.world.level.chunk.storage.SerializableChunkData;
@@ -21,7 +21,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * 拦截区块序列化操作，用于统计序列化/反序列化操作。
  */
 @Mixin(
-#if MC_VER < MC_1_21_4
+#if MC_VER < MC_1_21_2
     ChunkSerializer.class
 #else
     SerializableChunkData.class
@@ -41,7 +41,11 @@ public class MixinChunkSerializer {
      * 在区块被序列化为 NBT 后，记录统计信息。
      */
     @Inject(method = "write", at = @At("RETURN"))
-    private static void hassium$onWrite(CallbackInfoReturnable<CompoundTag> cir) {
+    private
+#if MC_VER < MC_1_21_2
+    static
+#endif
+    void hassium$onWrite(CallbackInfoReturnable<CompoundTag> cir) {
         hassium$totalWriteOperations.incrementAndGet();
 
         CompoundTag nbt = cir.getReturnValue();
@@ -58,7 +62,11 @@ public class MixinChunkSerializer {
      * 在区块从 NBT 反序列化前，记录统计信息。
      */
     @Inject(method = "read", at = @At("HEAD"))
-    private static void hassium$onRead(CallbackInfoReturnable<?> cir) {
+    private
+#if MC_VER < MC_1_21_2
+    static
+#endif
+    void hassium$onRead(CallbackInfoReturnable<?> cir) {
         hassium$totalReadOperations.incrementAndGet();
         Constants.LOG.debug("Chunk deserialization started (total reads: {})",
                 hassium$totalReadOperations.get());

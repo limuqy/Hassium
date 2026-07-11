@@ -139,9 +139,9 @@ public class ZstdContextEncoder extends MessageToByteEncoder<ByteBuf> {
         }
     }
 
-    @Override
-    protected void finalize() throws Throwable {
-        close();
-        super.finalize();
-    }
+//    @Override
+//    protected void finalize() throws Throwable {
+//        close();
+//        super.finalize();
+//    }
 }

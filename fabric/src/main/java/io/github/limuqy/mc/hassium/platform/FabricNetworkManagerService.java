@@ -29,70 +29,70 @@ public class FabricNetworkManagerService implements INetworkManagerService {
     public void sendMetadataPacket(ServerPlayer player, FriendlyByteBuf buf) {
         // ServerPlayNetworking.send 会接管 buf 的所有权并负责释放
         // 不需要手动释放
-#if MC_VER < MC_1_20_6
+#if MC_VER < MC_1_20_5
         ServerPlayNetworking.send(player, ChunkMetadataS2CPacket.CHANNEL, buf);
 #else
-        LOGGER.warn("Fabric networking send not supported on 1.20.6+, dropping packet");
+        LOGGER.warn("Fabric networking send not supported on 1.20.5+, dropping packet");
         buf.release();
 #endif
     }
 
     @Override
     public void sendChunkDataRequest(FriendlyByteBuf buf) {
-#if MC_VER < MC_1_20_6
+#if MC_VER < MC_1_20_5
         ClientPlayNetworking.send(ChunkDataRequestC2SPacket.CHANNEL, buf);
 #else
-        LOGGER.warn("Fabric networking send not supported on 1.20.6+, dropping packet");
+        LOGGER.warn("Fabric networking send not supported on 1.20.5+, dropping packet");
         buf.release();
 #endif
     }
 
     @Override
     public void sendChunkHashPacket(ServerPlayer player, FriendlyByteBuf buf) {
-#if MC_VER < MC_1_20_6
+#if MC_VER < MC_1_20_5
         ServerPlayNetworking.send(player, ChunkHashS2CPacket.CHANNEL, buf);
 #else
-        LOGGER.warn("Fabric networking send not supported on 1.20.6+, dropping packet");
+        LOGGER.warn("Fabric networking send not supported on 1.20.5+, dropping packet");
         buf.release();
 #endif
     }
 
     @Override
     public void sendSectionHashRequest(FriendlyByteBuf buf) {
-#if MC_VER < MC_1_20_6
+#if MC_VER < MC_1_20_5
         ClientPlayNetworking.send(SectionHashRequestC2SPacket.CHANNEL, buf);
 #else
-        LOGGER.warn("Fabric networking send not supported on 1.20.6+, dropping packet");
+        LOGGER.warn("Fabric networking send not supported on 1.20.5+, dropping packet");
         buf.release();
 #endif
     }
 
     @Override
     public void sendSectionDeltaPacket(ServerPlayer player, FriendlyByteBuf buf) {
-#if MC_VER < MC_1_20_6
+#if MC_VER < MC_1_20_5
         ServerPlayNetworking.send(player, SectionDeltaS2CPacket.CHANNEL, buf);
 #else
-        LOGGER.warn("Fabric networking send not supported on 1.20.6+, dropping packet");
+        LOGGER.warn("Fabric networking send not supported on 1.20.5+, dropping packet");
         buf.release();
 #endif
     }
 
     @Override
     public void sendBlockEntityRequest(FriendlyByteBuf buf) {
-#if MC_VER < MC_1_20_6
+#if MC_VER < MC_1_20_5
         ClientPlayNetworking.send(BlockEntityRequestC2SPacket.CHANNEL, buf);
 #else
-        LOGGER.warn("Fabric networking send not supported on 1.20.6+, dropping packet");
+        LOGGER.warn("Fabric networking send not supported on 1.20.5+, dropping packet");
         buf.release();
 #endif
     }
 
     @Override
     public void sendBlockEntityData(ServerPlayer player, FriendlyByteBuf buf) {
-#if MC_VER < MC_1_20_6
+#if MC_VER < MC_1_20_5
         ServerPlayNetworking.send(player, BlockEntityDataS2CPacket.CHANNEL, buf);
 #else
-        LOGGER.warn("Fabric networking send not supported on 1.20.6+, dropping packet");
+        LOGGER.warn("Fabric networking send not supported on 1.20.5+, dropping packet");
         buf.release();
 #endif
     }

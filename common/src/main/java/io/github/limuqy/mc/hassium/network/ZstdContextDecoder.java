@@ -150,9 +150,9 @@ public class ZstdContextDecoder extends ByteToMessageDecoder {
         }
     }
 
-    @Override
-    protected void finalize() throws Throwable {
-        close();
-        super.finalize();
-    }
+//    @Override
+//    protected void finalize() throws Throwable {
+//        close();
+//        super.finalize();
+//    }
 }

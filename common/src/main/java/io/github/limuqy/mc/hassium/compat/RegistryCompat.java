@@ -19,7 +19,7 @@ public final class RegistryCompat {
 
     @SuppressWarnings("unchecked")
     public static Registry<Biome> getBiomeRegistry(RegistryAccess access) {
-#if MC_VER < MC_1_21_4
+#if MC_VER < MC_1_21_2
         return access.registryOrThrow(Registries.BIOME);
 #else
         return (Registry<Biome>) access.lookupOrThrow(Registries.BIOME);

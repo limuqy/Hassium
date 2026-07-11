@@ -14,15 +14,9 @@ repositories {
 }
 
 // buildSrc 在 settings.gradle 之前求值，无法访问 gradle.ext，需要直接读取属性文件
-def rootProps = new Properties()
-rootProps.load(new FileInputStream(file('../gradle.properties')))
-def mcVer = rootProps.getProperty('mc_ver', '1.20.1')
-
-def versionProps = new Properties()
-versionProps.load(new FileInputStream(file("../versionProperties/${mcVer}.properties")))
-def architecturyLoom = versionProps.getProperty('architectury_loom')
-
+// 使用单一最新 architectury-loom 版本以避免 buildSrc 缓存失效问题
+// 当通过 -Pmc_ver 切换 MC 版本时，buildSrc 不会自动重新编译，Loom 版本不会更新
 dependencies {
-    implementation "dev.architectury:architectury-loom:${architecturyLoom}"
+    implementation "dev.architectury:architectury-loom:1.13.469"
     implementation "xyz.wagyourtail:manifold-gradle:1.0.0-SNAPSHOT"
 }
