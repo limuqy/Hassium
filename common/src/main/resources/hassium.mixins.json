@@ -1,0 +1,36 @@
+{
+    "required": true,
+    "minVersion": "0.8",
+    "package": "io.github.limuqy.mc.hassium.mixin",
+    "refmap": "${mod_id}.refmap.json",
+    "compatibilityLevel": "JAVA_17",
+    "mixins": [
+        "MixinRegionFile",
+        "MixinChunkSerializer",
+        "MixinIOWorker",
+        "RegionFileAccessor",
+        "MixinServerGamePacketListenerImpl",
+        "MixinMinecraftServer",
+        "MixinConnection",
+        "MixinConnectionSetupCompression",
+        "MixinChunkHolder",
+        "MixinServerPlayer",
+        "MixinChunkMap"
+    ],
+    "client": [
+      "MixinMinecraft",
+      "MixinClientPacketListener",
+      "MixinClientLevel",
+      "MixinLevelRenderer",
+      "MixinClientTick",
+      "MixinLightRecompute",
+      "MinecraftAccessor",
+      "ClientLevelAccessor"
+    ],
+    "server": [
+    ],
+    "injectors": {
+        "defaultRequire": 1
+    }
+}
+

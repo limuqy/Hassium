@@ -1,0 +1,39 @@
+{
+    "schemaVersion": 1,
+    "id": "${mod_id}",
+    "version": "${version}",
+    "name": "${mod_name}",
+    "description": "${description}",
+    "authors": [
+        "${mod_author}"
+    ],
+    "contact": {
+        "homepage": "https://github.com/limuqy/hassium",
+        "sources": "https://github.com/limuqy/hassium"
+    },
+    "license": "${license}",
+    "icon": "assets/${mod_id}/logo.png",
+    "environment": "*",
+        "entrypoints": {
+        "main": [
+            "io.github.limuqy.mc.hassium.HassiumMod"
+        ],
+        "client": [
+            "io.github.limuqy.mc.hassium.HassiumClientMod"
+        ]
+    },
+    "mixins": [
+        "${mod_id}.mixins.json",
+        "${mod_id}.fabric.mixins.json"
+    ],
+    "depends": {
+        "fabricloader": ">=0.14",
+        "fabric": "*",
+        "minecraft": "${minecraft_version}",
+        "java": ">=17"
+    },
+    "suggests": {
+        "another-mod": "*"
+    }
+}
+  

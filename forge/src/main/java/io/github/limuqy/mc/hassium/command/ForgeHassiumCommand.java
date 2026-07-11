@@ -1,0 +1,71 @@
+package io.github.limuqy.mc.hassium.command;
+
+import com.mojang.brigadier.CommandDispatcher;
+import com.mojang.brigadier.context.CommandContext;
+import io.github.limuqy.mc.hassium.metrics.NetworkStats;
+import net.minecraft.commands.CommandSourceStack;
+import net.minecraft.commands.Commands;
+import net.minecraft.network.chat.Component;
+import net.minecraftforge.event.RegisterCommandsEvent;
+import net.minecraftforge.eventbus.api.SubscribeEvent;
+import net.minecraftforge.fml.common.Mod;
+
+/**
+ * Forge 命令注册
+ */
+@Mod.EventBusSubscriber(modid = io.github.limuqy.mc.hassium.Constants.MOD_ID)
+public class ForgeHassiumCommand {
+
+    @SubscribeEvent
+    public static void onRegisterCommands(RegisterCommandsEvent event) {
+        registerCommands(event.getDispatcher());
+    }
+
+    private static void registerCommands(CommandDispatcher<CommandSourceStack> dispatcher) {
+        dispatcher.register(
+                Commands.literal("hassium")
+                        .requires(source -> source.hasPermission(2))
+                        .then(Commands.literal("stats")
+                                .requires(source -> HassiumCommandHandler.isMetricsEnabled())
+                                .executes(ForgeHassiumCommand::showServerStats)
+                                .then(Commands.literal("reset")
+                                        .executes(ForgeHassiumCommand::resetStats))
+                                .then(Commands.literal("toggle")
+                                        .executes(ForgeHassiumCommand::toggleStats))
+                        )
+                        .then(Commands.literal("metrics")
+                                .then(Commands.literal("on")
+                                        .executes(ctx -> toggleMetrics(ctx, true)))
+                                .then(Commands.literal("off")
+                                        .executes(ctx -> toggleMetrics(ctx, false)))
+                        )
+        );
+    }
+
+    private static int showServerStats(CommandContext<CommandSourceStack> context) {
+        String message = HassiumCommandHandler.getServerStatsMessage();
+        context.getSource().sendSuccess(() -> Component.literal(message), false);
+        return 1;
+    }
+
+    private static int resetStats(CommandContext<CommandSourceStack> context) {
+        String message = HassiumCommandHandler.resetStats();
+        context.getSource().sendSuccess(() -> Component.literal(message), true);
+        return 1;
+    }
+
+    private static int toggleStats(CommandContext<CommandSourceStack> context) {
+        String message = HassiumCommandHandler.toggleStats();
+        context.getSource().sendSuccess(() -> Component.literal(message), true);
+        return 1;
+    }
+
+    private static int toggleMetrics(CommandContext<CommandSourceStack> context, boolean enabled) {
+        NetworkStats.setEnabled(enabled);
+        String message = enabled
+                ? "§aHassium 指标收集已启用，使用 /hassium stats 查看§r"
+                : "§cHassium 指标收集已关闭§r";
+        context.getSource().sendSuccess(() -> Component.literal(message), true);
+        return 1;
+    }
+}
