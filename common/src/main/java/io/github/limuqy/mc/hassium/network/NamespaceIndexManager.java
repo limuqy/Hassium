@@ -1,10 +1,15 @@
 package io.github.limuqy.mc.hassium.network;
 
+import io.github.limuqy.mc.hassium.compat.ResourceLocationCompat;
 import it.unimi.dsi.fastutil.ints.Int2ObjectMap;
 import net.minecraft.network.ConnectionProtocol;
 import net.minecraft.network.protocol.Packet;
 import net.minecraft.network.protocol.PacketFlow;
+#if MC_VER < MC_1_21_11
 import net.minecraft.resources.ResourceLocation;
+#else
+import net.minecraft.resources.Identifier;
+#endif
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -68,17 +73,35 @@ public class NamespaceIndexManager {
     /**
      * 原版包类 -> 标识符映射
      */
-    private final Map<Class<?>, ResourceLocation> vanillaClassToIdentifier = new HashMap<>();
+    private final Map<Class<?>,
+#if MC_VER < MC_1_21_11
+ResourceLocation
+#else
+Identifier
+#endif
+> vanillaClassToIdentifier = new HashMap<>();
 
     /**
      * 标识符 -> 原版包 ID 映射 (S2C)
      */
-    private final Map<ResourceLocation, Integer> vanillaIdS2C = new HashMap<>();
+    private final Map<
+#if MC_VER < MC_1_21_11
+ResourceLocation
+#else
+Identifier
+#endif
+, Integer> vanillaIdS2C = new HashMap<>();
 
     /**
      * 标识符 -> 原版包 ID 映射 (C2S)
      */
-    private final Map<ResourceLocation, Integer> vanillaIdC2S = new HashMap<>();
+    private final Map<
+#if MC_VER < MC_1_21_11
+ResourceLocation
+#else
+Identifier
+#endif
+, Integer> vanillaIdC2S = new HashMap<>();
 
     /**
      * 注册一个包类型
@@ -149,6 +172,7 @@ public class NamespaceIndexManager {
 
     @SuppressWarnings("unchecked")
     private void initVanillaForSide(PacketFlow side) {
+#if MC_VER < MC_1_20_5
         var map = (Int2ObjectMap<Class<? extends Packet<?>>>) (Int2ObjectMap<?>)
                 ConnectionProtocol.PLAY.getPacketsByIds(side);
 
@@ -173,7 +197,7 @@ public class NamespaceIndexManager {
 
             // 类名转 snake_case
             String path = toSnakeCase(clazz.getSimpleName());
-            ResourceLocation id = new ResourceLocation("minecraft", path);
+            ResourceLocation id = ResourceLocationCompat.create("minecraft", path);
 
             // 注册到索引
             register(id.toString());
@@ -185,6 +209,10 @@ public class NamespaceIndexManager {
                 vanillaIdC2S.put(id, packetId);
             }
         }
+#else
+        // 1.20.5+: getPacketsByIds removed, skip vanilla packet initialization
+        return;
+#endif
     }
 
     /**
@@ -219,7 +247,13 @@ public class NamespaceIndexManager {
      * @param packetClass 包类
      * @return 标识符，如果不是原版包返回 null
      */
-    public ResourceLocation getVanillaIdentifier(Class<?> packetClass) {
+    public
+#if MC_VER < MC_1_21_11
+    ResourceLocation
+#else
+    Identifier
+#endif
+    getVanillaIdentifier(Class<?> packetClass) {
         return vanillaClassToIdentifier.get(packetClass);
     }
 
@@ -230,7 +264,13 @@ public class NamespaceIndexManager {
      * @param side 网络方向
      * @return 包 ID，如果不是原版包返回 null
      */
-    public Integer getVanillaPacketId(ResourceLocation type, PacketFlow side) {
+    public Integer getVanillaPacketId(
+#if MC_VER < MC_1_21_11
+ResourceLocation
+#else
+Identifier
+#endif
+ type, PacketFlow side) {
         return side == PacketFlow.CLIENTBOUND ? vanillaIdS2C.get(type) : vanillaIdC2S.get(type);
     }
 

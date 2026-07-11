@@ -21,3 +21,11 @@ build
 # other
 eclipse
 run
+/.claude/
+/.codegraph/
+/.comate/
+/.omc/
+/.vscode/
+/.idea/
+/common/.omc/
+/common/logs/

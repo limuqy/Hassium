@@ -157,7 +157,13 @@ public class ClientCacheLoadQueue {
                 if (mc.player == null || mc.getConnection() == null) {
                     return;
                 }
-                String dimension = mc.player.level().dimension().location().toString();
+                String dimension = mc.player.level().dimension()
+#if MC_VER < MC_1_21_11
+                        .location()
+#else
+                        .identifier()
+#endif
+                        .toString();
                 ChunkDataRequestC2SPacket request = new ChunkDataRequestC2SPacket(dimension, List.of(pos));
                 FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
                 boolean sent = false;

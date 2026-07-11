@@ -3,6 +3,7 @@ package io.github.limuqy.mc.hassium.network;
 import com.github.luben.zstd.ZstdCompressCtx;
 import com.github.luben.zstd.ZstdDecompressCtx;
 import io.github.limuqy.mc.hassium.Constants;
+import io.github.limuqy.mc.hassium.compat.PacketPayloadCompat;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
@@ -11,8 +12,11 @@ import net.minecraft.network.ConnectionProtocol;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.network.protocol.Packet;
 import net.minecraft.network.protocol.PacketFlow;
-import net.minecraft.network.protocol.game.ClientboundCustomPayloadPacket;
+#if MC_VER < MC_1_21_11
 import net.minecraft.resources.ResourceLocation;
+#else
+import net.minecraft.resources.Identifier;
+#endif
 
 import java.util.ArrayList;
 import java.util.List;
@@ -179,7 +183,12 @@ public class HassiumAggregationPacket {
     public void handle(Connection connection) {
         for (AggregatedSubPacket subPacket : subPackets) {
             try {
-                ResourceLocation type = subPacket.getType();
+#if MC_VER < MC_1_21_11
+                ResourceLocation
+#else
+                Identifier
+#endif
+                type = subPacket.getType();
                 ByteBuf data = subPacket.getDataBuf();
 
                 Constants.LOG.debug("Handling aggregated sub-packet: {}", type);
@@ -192,15 +201,27 @@ public class HassiumAggregationPacket {
                     // 原版包：使用 ConnectionProtocol.PLAY 解码
                     FriendlyByteBuf pBuf = new FriendlyByteBuf(data);
                     try {
+#if MC_VER < MC_1_20_2
                         packet = ConnectionProtocol.PLAY.createPacket(
                                 PacketFlow.CLIENTBOUND, vanillaId, pBuf);
+#else
+#if MC_VER < MC_1_20_5
+                        packet = ConnectionProtocol.PLAY.codec(PacketFlow.CLIENTBOUND).createPacket(vanillaId, pBuf);
+#else
+                        // 1.20.5+: ConnectionProtocol.codec() removed
+                        Constants.LOG.error("Vanilla packet deserialization not supported on 1.20.5+");
+                        continue;
+#endif
+#endif
                     } catch (Exception e) {
                         Constants.LOG.error("Failed to decode vanilla packet {} (id={})", type, vanillaId, e);
                         continue;
                     }
                 } else {
-                    // 自定义包：包装为 ClientboundCustomPayloadPacket
-                    packet = new ClientboundCustomPayloadPacket(type, new FriendlyByteBuf(data.copy()));
+                    // 自定义包：通过 compat 层构造
+                    byte[] rawBytes = new byte[data.readableBytes()];
+                    data.readBytes(rawBytes);
+                    packet = PacketPayloadCompat.createClientboundPayload(type, rawBytes);
                 }
 
                 // 分发到处理器

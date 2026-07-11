@@ -6,7 +6,11 @@ import io.github.limuqy.mc.hassium.network.HassiumConnectionRegistry;
 import io.github.limuqy.mc.hassium.network.PacketCompressionBlacklist;
 import io.github.limuqy.mc.hassium.network.PacketTypeHelper;
 import net.minecraft.network.Connection;
+#if MC_VER < MC_1_21_11
 import net.minecraft.resources.ResourceLocation;
+#else
+import net.minecraft.resources.Identifier;
+#endif
 import net.minecraft.network.PacketListener;
 import net.minecraft.network.PacketSendListener;
 import net.minecraft.network.protocol.Packet;
@@ -43,7 +47,12 @@ public class MixinConnection {
         }
 
         // 获取包类型
-        ResourceLocation packetType = PacketTypeHelper.getPacketType(packet);
+#if MC_VER < MC_1_21_11
+        ResourceLocation
+#else
+        Identifier
+#endif
+        packetType = PacketTypeHelper.getPacketType(packet);
         if (packetType == null) {
             // 无法识别的包不聚合，直接发送
             return;

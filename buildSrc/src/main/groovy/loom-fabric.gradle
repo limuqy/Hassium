@@ -1,0 +1,18 @@
+plugins {
+    id 'minecraft'
+}
+
+dependencies {
+    modImplementation "net.fabricmc:fabric-loader:${gradle.ext.fabric_loader}"
+}
+
+loom {
+    runConfigs.configureEach {
+        ideConfigGenerated = true
+        if (name == 'client') {
+            runDir = 'run/client'
+        } else if (name == 'server') {
+            runDir = 'run/server'
+        }
+    }
+}

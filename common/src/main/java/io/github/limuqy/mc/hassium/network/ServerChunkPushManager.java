@@ -5,15 +5,21 @@ import io.github.limuqy.mc.hassium.cache.ChunkContentHashUtil;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.metrics.NetworkStats;
 import io.github.limuqy.mc.hassium.platform.Services;
+import io.github.limuqy.mc.hassium.compat.RegistryCompat;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Registry;
+import net.minecraft.core.RegistryAccess;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.network.protocol.Packet;
 import net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket;
+#if MC_VER < MC_1_21_11
 import net.minecraft.resources.ResourceLocation;
+#else
+import net.minecraft.resources.Identifier;
+#endif
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.level.ChunkPos;
@@ -126,7 +132,13 @@ public class ServerChunkPushManager {
         FriendlyByteBuf buf = null;
         boolean sent = false;
         try {
-            String dimension = player.level().dimension().location().toString();
+            String dimension = player.level().dimension()
+#if MC_VER < MC_1_21_11
+                    .location()
+#else
+                    .identifier()
+#endif
+                    .toString();
             List<ChunkMetadataS2CPacket.MetadataEntry> entries = List.of(
                     new ChunkMetadataS2CPacket.MetadataEntry(pos.x, pos.z, contentHash)
             );
@@ -191,14 +203,18 @@ public class ServerChunkPushManager {
     public void submitMetadataTask(List<ServerPlayer> players, ChunkPos pos,
                                    ClientboundLevelChunkWithLightPacket packet, String dimension) {
         ensureInitialized();
+#if MC_VER < MC_1_21_11
         final int sectionCount = players.get(0).serverLevel().getSectionsCount();
-        final Registry<Biome> biomeRegistry = players.get(0).serverLevel().registryAccess()
-                .registryOrThrow(Registries.BIOME);
+        final RegistryAccess registryAccess = players.get(0).serverLevel().registryAccess();
+#else
+        final int sectionCount = players.get(0).level().getSectionsCount();
+        final RegistryAccess registryAccess = players.get(0).level().registryAccess();
+#endif
         pushPool.submit(() -> {
             try {
                 // 从已序列化的 packet 数据计算 section 哈希（线程安全，无需读取世界）
                 Map<Integer, Long> sectionHashes = ChunkContentHashUtil.computeSectionHashesFromPacket(
-                        packet.getChunkData(), sectionCount, biomeRegistry);
+                        packet.getChunkData(), sectionCount, registryAccess);
                 long chunkHash = ChunkContentHashUtil.combineSectionHashes(sectionHashes);
                 // 从 sectionHashes 推导 bitmap：有 hash 的 section = 有方块数据
                 int sectionBitmap = 0;
@@ -227,9 +243,13 @@ public class ServerChunkPushManager {
     public void submitMetadataTask(ServerPlayer player, ChunkPos pos,
                                    Packet<?> chunkPacket, String dimension) {
         ensureInitialized();
+#if MC_VER < MC_1_21_11
         final int sectionCount = player.serverLevel().getSectionsCount();
-        final Registry<Biome> biomeRegistry = player.serverLevel().registryAccess()
-                .registryOrThrow(Registries.BIOME);
+        final RegistryAccess registryAccess = player.serverLevel().registryAccess();
+#else
+        final int sectionCount = player.level().getSectionsCount();
+        final RegistryAccess registryAccess = player.level().registryAccess();
+#endif
         pushPool.submit(() -> {
             try {
                 Map<Integer, Long> sectionHashes;
@@ -238,14 +258,18 @@ public class ServerChunkPushManager {
                 if (chunkPacket instanceof ClientboundLevelChunkWithLightPacket lightPacket) {
                     // 从已序列化的 packet 数据计算（线程安全）
                     sectionHashes = ChunkContentHashUtil.computeSectionHashesFromPacket(
-                            lightPacket.getChunkData(), sectionCount, biomeRegistry);
+                            lightPacket.getChunkData(), sectionCount, registryAccess);
                     sectionBitmap = 0;
                     for (int idx : sectionHashes.keySet()) {
                         sectionBitmap |= (1 << idx);
                     }
                 } else {
                     // 回退：从世界读取（非标准 packet 类型）
+#if MC_VER < MC_1_21_11
                     ServerLevel level = player.serverLevel();
+#else
+                    ServerLevel level = player.level();
+#endif
                     LevelChunk chunk = level.getChunk(pos.x, pos.z);
                     sectionHashes = ChunkContentHashUtil.computeSectionHashes(chunk);
                     sectionBitmap = computeSectionBitmap(chunk);
@@ -314,8 +338,13 @@ public class ServerChunkPushManager {
     public void handleSectionHashRequest(ServerPlayer player, SectionHashRequestC2SPacket request) {
         if (!player.isAlive() || player.hasDisconnected()) { return; }
 
+#if MC_VER < MC_1_21_11
         ServerLevel level = player.serverLevel();
         int viewDistance = player.server.getPlayerList().getViewDistance();
+#else
+        ServerLevel level = player.level();
+        int viewDistance = player.level().getServer().getPlayerList().getViewDistance();
+#endif
         ChunkPos playerChunkPos = player.chunkPosition();
         List<SectionDeltaS2CPacket.DeltaEntry> deltas = new ArrayList<>();
 
@@ -387,8 +416,13 @@ public class ServerChunkPushManager {
     public void handleBlockEntityRequest(ServerPlayer player, BlockEntityRequestC2SPacket request) {
         if (!player.isAlive() || player.hasDisconnected()) { return; }
 
+#if MC_VER < MC_1_21_11
         ServerLevel level = player.serverLevel();
         int viewDistance = player.server.getPlayerList().getViewDistance();
+#else
+        ServerLevel level = player.level();
+        int viewDistance = player.level().getServer().getPlayerList().getViewDistance();
+#endif
         ChunkPos playerChunkPos = player.chunkPosition();
         List<BlockEntityDataS2CPacket.ChunkBlockEntities> entries = new ArrayList<>();
 
@@ -406,8 +440,17 @@ public class ServerChunkPushManager {
                 for (Map.Entry<BlockPos, BlockEntity> entry : chunk.getBlockEntities().entrySet()) {
                     BlockPos bePos = entry.getKey();
                     BlockEntity be = entry.getValue();
+#if MC_VER < MC_1_20_5
                     CompoundTag nbt = be.saveWithoutMetadata();
-                    ResourceLocation type = BuiltInRegistries.BLOCK_ENTITY_TYPE.getKey(be.getType());
+#else
+                    CompoundTag nbt = be.saveWithoutMetadata(be.getLevel().registryAccess());
+#endif
+#if MC_VER < MC_1_21_11
+                    ResourceLocation
+#else
+                    Identifier
+#endif
+                    type = BuiltInRegistries.BLOCK_ENTITY_TYPE.getKey(be.getType());
                     if (type != null) {
                         blockEntities.add(new BlockEntityDataS2CPacket.BlockEntityData(bePos, type, nbt));
                     }
@@ -463,8 +506,17 @@ public class ServerChunkPushManager {
         for (Map.Entry<BlockPos, BlockEntity> entry : chunk.getBlockEntities().entrySet()) {
             BlockPos pos = entry.getKey();
             BlockEntity be = entry.getValue();
+#if MC_VER < MC_1_20_5
             CompoundTag nbt = be.saveWithoutMetadata();
-            ResourceLocation type = net.minecraft.core.registries.BuiltInRegistries.BLOCK_ENTITY_TYPE.getKey(be.getType());
+#else
+            CompoundTag nbt = be.saveWithoutMetadata(be.getLevel().registryAccess());
+#endif
+#if MC_VER < MC_1_21_11
+            ResourceLocation
+#else
+            Identifier
+#endif
+            type = net.minecraft.core.registries.BuiltInRegistries.BLOCK_ENTITY_TYPE.getKey(be.getType());
             if (type != null) {
                 result.add(new SectionDeltaS2CPacket.BlockEntityData(pos, type, nbt));
             }
@@ -546,7 +598,11 @@ public class ServerChunkPushManager {
             return;
         }
 
+#if MC_VER < MC_1_21_11
         ServerLevel level = player.serverLevel();
+#else
+        ServerLevel level = player.level();
+#endif
         ChunkSender sender = ChunkSender.getInstance();
         if (sender == null) {
             Constants.LOG.error("[PROCESS_QUEUE] ChunkSender not initialized, cannot send chunk data");
@@ -637,11 +693,17 @@ public class ServerChunkPushManager {
         io.netty.buffer.ByteBuf tempBuf = io.netty.buffer.Unpooled.buffer();
         try {
             FriendlyByteBuf friendlyBuf = new FriendlyByteBuf(tempBuf);
+#if MC_VER < MC_1_20_5
             chunkPacket.write(friendlyBuf);
 
             byte[] data = new byte[tempBuf.readableBytes()];
             tempBuf.getBytes(0, data);
             return data;
+#else
+            // 1.20.6+: Packet.write() removed
+            Constants.LOG.warn("Chunk packet serialization not supported on 1.20.6+");
+            return null;
+#endif
         } catch (Exception e) {
             Constants.LOG.error("Hassium: Failed to serialize chunk {}", chunk.getPos(), e);
             return null;

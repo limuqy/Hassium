@@ -1,0 +1,30 @@
+plugins {
+    id 'loom-neoforge'
+}
+
+configurations {
+    library
+}
+// Keep these libs on the compile/shade classpath...
+configurations.implementation.extendsFrom(configurations.library)
+// ...and inject them into the FML game-layer classpath (legacy_classpath.txt) so they
+// load in dev runs, not just in the shaded production jar.
+configurations.minecraftLibraries.extendsFrom(configurations.library)
+
+dependencies {
+    library 'com.github.luben:zstd-jni:1.5.5-7'
+    library 'org.lz4:lz4-java:1.8.0'
+    library 'com.google.code.findbugs:jsr305:3.0.1'
+    library 'org.xerial:sqlite-jdbc:3.45.1.0'
+}
+
+// zstd-jni shading
+jar {
+    from({
+        configurations.runtimeClasspath.filter {
+            it.name.contains('zstd-jni')
+        }.collect { zipTree(it) }
+    }) {
+        exclude 'META-INF/**'
+    }
+}

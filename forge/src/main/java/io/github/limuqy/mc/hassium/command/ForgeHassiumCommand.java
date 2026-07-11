@@ -2,12 +2,17 @@ package io.github.limuqy.mc.hassium.command;
 
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.context.CommandContext;
+import io.github.limuqy.mc.hassium.compat.PermissionCompat;
 import io.github.limuqy.mc.hassium.metrics.NetworkStats;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.network.chat.Component;
 import net.minecraftforge.event.RegisterCommandsEvent;
+#if MC_VER > MC_1_21_4
+import net.minecraftforge.eventbus.api.listener.SubscribeEvent;
+#else
 import net.minecraftforge.eventbus.api.SubscribeEvent;
+#endif
 import net.minecraftforge.fml.common.Mod;
 
 /**
@@ -24,7 +29,7 @@ public class ForgeHassiumCommand {
     private static void registerCommands(CommandDispatcher<CommandSourceStack> dispatcher) {
         dispatcher.register(
                 Commands.literal("hassium")
-                        .requires(source -> source.hasPermission(2))
+                        .requires(source -> PermissionCompat.hasCommandPermission(source, 2))
                         .then(Commands.literal("stats")
                                 .requires(source -> HassiumCommandHandler.isMetricsEnabled())
                                 .executes(ForgeHassiumCommand::showServerStats)

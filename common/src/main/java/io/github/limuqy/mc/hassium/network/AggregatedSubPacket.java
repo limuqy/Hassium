@@ -3,7 +3,12 @@ package io.github.limuqy.mc.hassium.network;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import net.minecraft.network.FriendlyByteBuf;
+#if MC_VER < MC_1_21_11
 import net.minecraft.resources.ResourceLocation;
+#else
+import net.minecraft.resources.Identifier;
+#endif
+import io.github.limuqy.mc.hassium.compat.ResourceLocationCompat;
 
 /**
  * 聚合包中的子包包装
@@ -11,10 +16,22 @@ import net.minecraft.resources.ResourceLocation;
  * 存储包类型标识符和原始数据
  */
 public class AggregatedSubPacket {
-    private final ResourceLocation type;
+    private final
+#if MC_VER < MC_1_21_11
+    ResourceLocation
+#else
+    Identifier
+#endif
+    type;
     private final byte[] data;
 
-    public AggregatedSubPacket(ResourceLocation type, byte[] data) {
+    public AggregatedSubPacket(
+#if MC_VER < MC_1_21_11
+            ResourceLocation
+#else
+            Identifier
+#endif
+            type, byte[] data) {
         this.type = type;
         this.data = data;
     }
@@ -46,7 +63,12 @@ public class AggregatedSubPacket {
     public static AggregatedSubPacket decode(FriendlyByteBuf buf, NamespaceIndexManager indexManager) {
         // 读取紧凑包头标识符
         String identifier = CompactHeaderCodec.readIdentifier(buf, indexManager);
-        ResourceLocation type = new ResourceLocation(identifier);
+#if MC_VER < MC_1_21_11
+        ResourceLocation
+#else
+        Identifier
+#endif
+        type = ResourceLocationCompat.create(identifier);
 
         // 读取数据长度和数据
         int length = buf.readVarInt();
@@ -56,7 +78,13 @@ public class AggregatedSubPacket {
         return new AggregatedSubPacket(type, data);
     }
 
-    public ResourceLocation getType() {
+    public
+#if MC_VER < MC_1_21_11
+    ResourceLocation
+#else
+    Identifier
+#endif
+    getType() {
         return type;
     }
 

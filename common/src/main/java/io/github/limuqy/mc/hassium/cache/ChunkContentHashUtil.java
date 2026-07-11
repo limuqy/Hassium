@@ -2,6 +2,8 @@ package io.github.limuqy.mc.hassium.cache;
 
 import com.google.common.hash.Hashing;
 import io.github.limuqy.mc.hassium.Constants;
+import io.github.limuqy.mc.hassium.compat.RegistryCompat;
+import net.minecraft.core.RegistryAccess;
 import net.jpountz.xxhash.XXHash64;
 import net.jpountz.xxhash.XXHashFactory;
 import net.jpountz.xxhash.StreamingXXHash64;
@@ -24,11 +26,18 @@ import net.minecraft.nbt.Tag;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.network.protocol.game.ClientboundLevelChunkPacketData;
 import net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket;
+#if MC_VER < MC_1_21_11
 import net.minecraft.resources.ResourceLocation;
+#else
+import net.minecraft.resources.Identifier;
+#endif
 import net.minecraft.world.level.biome.Biome;
 import net.minecraft.world.level.block.entity.BlockEntityType;
 import net.minecraft.world.level.chunk.LevelChunk;
 import net.minecraft.world.level.chunk.LevelChunkSection;
+#if MC_VER >= MC_1_21_11
+import net.minecraft.world.level.chunk.PalettedContainerFactory;
+#endif
 import net.minecraft.world.level.lighting.LevelLightEngine;
 
 import io.netty.buffer.Unpooled;
@@ -95,13 +104,26 @@ public final class ChunkContentHashUtil {
         HashingOutputStream out = new HashingOutputStream(streamingHasher);
         try {
             out.write(sections);
+#if MC_VER < MC_1_21_11
             writeNbt(out, chunkData.getHeightmaps());
+#else
+            CompoundTag heightmapTag = new CompoundTag();
+            for (var entry : chunkData.getHeightmaps().entrySet()) {
+                heightmapTag.put(entry.getKey().getSerializedName(), new LongArrayTag(entry.getValue()));
+            }
+            writeNbt(out, heightmapTag);
+#endif
             writeInt(out, entities.size());
             for (BlockEntityEntry e : entities) {
                 writeInt(out, e.pos.getX());
                 writeInt(out, e.pos.getY());
                 writeInt(out, e.pos.getZ());
-                ResourceLocation typeId = BuiltInRegistries.BLOCK_ENTITY_TYPE.getKey(e.type);
+#if MC_VER < MC_1_21_11
+                ResourceLocation
+#else
+                Identifier
+#endif
+                typeId = BuiltInRegistries.BLOCK_ENTITY_TYPE.getKey(e.type);
                 writeString(out, typeId != null ? typeId.toString() : "");
                 writeNbt(out, e.nbt);
             }
@@ -287,7 +309,15 @@ public final class ChunkContentHashUtil {
         try {
             // 只写入 sections 数据，不写入 blockEntity
             out.write(sections);
+#if MC_VER < MC_1_21_11
             writeNbt(out, chunkData.getHeightmaps());
+#else
+            CompoundTag heightmapTag = new CompoundTag();
+            for (var entry : chunkData.getHeightmaps().entrySet()) {
+                heightmapTag.put(entry.getKey().getSerializedName(), new LongArrayTag(entry.getValue()));
+            }
+            writeNbt(out, heightmapTag);
+#endif
 
             long hash = out.getValue();
             return hash == 0L ? 1L : hash;
@@ -304,12 +334,12 @@ public final class ChunkContentHashUtil {
      *
      * @param sectionsBytes 原始 section 字节（从 packet 中提取）
      * @param sectionCount  section 数量
-     * @param biomeRegistry 生物群系注册表（用于原版 PalettedContainer 解析）
+     * @param registryAccess 注册表访问（用于原版 PalettedContainer 解析）
      * @return sectionIndex -> xxHash64 的映射
      */
     public static Map<Integer, Long> computeSectionHashesFromBytes(
-            byte[] sectionsBytes, int sectionCount, Registry<Biome> biomeRegistry) {
-        return parseAndHashSections(sectionsBytes, sectionCount, biomeRegistry);
+            byte[] sectionsBytes, int sectionCount, RegistryAccess registryAccess) {
+        return parseAndHashSections(sectionsBytes, sectionCount, registryAccess);
     }
 
     /**
@@ -320,7 +350,7 @@ public final class ChunkContentHashUtil {
      */
     public static Map<Integer, Long> computeSectionHashesFromPacket(
             ClientboundLevelChunkPacketData chunkData, int sectionCount,
-            Registry<Biome> biomeRegistry) {
+            RegistryAccess registryAccess) {
         FriendlyByteBuf sBuf = chunkData.getReadBuffer();
         sBuf.readerIndex(0);
 
@@ -328,18 +358,23 @@ public final class ChunkContentHashUtil {
         byte[] sections = new byte[sectionsBytes];
         sBuf.getBytes(sBuf.readerIndex(), sections);
 
-        return parseAndHashSections(sections, sectionCount, biomeRegistry);
+        return parseAndHashSections(sections, sectionCount, registryAccess);
     }
 
     /**
      * 解析 section 字节并计算 per-section 哈希。
      */
     private static Map<Integer, Long> parseAndHashSections(
-            byte[] allData, int sectionCount, Registry<Biome> biomeRegistry) {
+            byte[] allData, int sectionCount, RegistryAccess registryAccess) {
         Map<Integer, Long> hashes = new HashMap<>();
         FriendlyByteBuf buf = new FriendlyByteBuf(Unpooled.wrappedBuffer(allData));
         try {
+#if MC_VER < MC_1_21_11
+            Registry<Biome> biomeRegistry = RegistryCompat.getBiomeRegistry(registryAccess);
             LevelChunkSection scratch = new LevelChunkSection(biomeRegistry);
+#else
+            LevelChunkSection scratch = new LevelChunkSection(PalettedContainerFactory.create(registryAccess));
+#endif
             for (int i = 0; i < sectionCount && buf.readableBytes() > 0; i++) {
                 int start = buf.readerIndex();
                 scratch.read(buf);
@@ -364,8 +399,13 @@ public final class ChunkContentHashUtil {
      * 跳过一个完整 LevelChunkSection（blockCount + blockStates + biomes）。
      * 使用原版 read，避免手动解析 PalettedContainer。
      */
-    public static void skipOneSection(FriendlyByteBuf buf, Registry<Biome> biomeRegistry) {
+    public static void skipOneSection(FriendlyByteBuf buf, RegistryAccess registryAccess) {
+#if MC_VER < MC_1_21_11
+        Registry<Biome> biomeRegistry = RegistryCompat.getBiomeRegistry(registryAccess);
         new LevelChunkSection(biomeRegistry).read(buf);
+#else
+        new LevelChunkSection(PalettedContainerFactory.create(registryAccess)).read(buf);
+#endif
     }
 
     /**
@@ -376,11 +416,16 @@ public final class ChunkContentHashUtil {
      * {@link IndexOutOfBoundsException}。
      */
     public static List<int[]> parseSectionRanges(byte[] sectionsBytes, int sectionCount,
-                                                   Registry<Biome> biomeRegistry) {
+                                                   RegistryAccess registryAccess) {
         List<int[]> ranges = new ArrayList<>(sectionCount);
         FriendlyByteBuf buf = new FriendlyByteBuf(Unpooled.wrappedBuffer(sectionsBytes));
         try {
+#if MC_VER < MC_1_21_11
+            Registry<Biome> biomeRegistry = RegistryCompat.getBiomeRegistry(registryAccess);
             LevelChunkSection scratch = new LevelChunkSection(biomeRegistry);
+#else
+            LevelChunkSection scratch = new LevelChunkSection(PalettedContainerFactory.create(registryAccess));
+#endif
             for (int i = 0; i < sectionCount; i++) {
                 int start = buf.readerIndex();
                 scratch.read(buf);
@@ -415,7 +460,11 @@ public final class ChunkContentHashUtil {
         }
         out.write(element.getId());
         if (element instanceof CompoundTag c) {
+#if MC_VER < MC_1_21_11
             List<String> keys = new ArrayList<>(c.getAllKeys());
+#else
+            List<String> keys = new ArrayList<>(c.keySet());
+#endif
             Collections.sort(keys);
             writeInt(out, keys.size());
             for (String key : keys) {
@@ -428,19 +477,47 @@ public final class ChunkContentHashUtil {
                 writeNbt(out, e);
             }
         } else if (element instanceof ByteTag b) {
+#if MC_VER < MC_1_21_11
             out.write(b.getAsByte());
+#else
+            out.write(b.byteValue());
+#endif
         } else if (element instanceof ShortTag s) {
+#if MC_VER < MC_1_21_11
             writeShort(out, s.getAsShort());
+#else
+            writeShort(out, s.shortValue());
+#endif
         } else if (element instanceof IntTag ni) {
+#if MC_VER < MC_1_21_11
             writeInt(out, ni.getAsInt());
+#else
+            writeInt(out, ni.intValue());
+#endif
         } else if (element instanceof LongTag nl) {
+#if MC_VER < MC_1_21_11
             writeLong(out, nl.getAsLong());
+#else
+            writeLong(out, nl.longValue());
+#endif
         } else if (element instanceof FloatTag f) {
+#if MC_VER < MC_1_21_11
             writeInt(out, Float.floatToIntBits(f.getAsFloat()));
+#else
+            writeInt(out, Float.floatToIntBits(f.floatValue()));
+#endif
         } else if (element instanceof DoubleTag d) {
+#if MC_VER < MC_1_21_11
             writeLong(out, Double.doubleToLongBits(d.getAsDouble()));
+#else
+            writeLong(out, Double.doubleToLongBits(d.doubleValue()));
+#endif
         } else if (element instanceof StringTag s) {
+#if MC_VER < MC_1_21_11
             writeString(out, s.getAsString());
+#else
+            writeString(out, s.value());
+#endif
         } else if (element instanceof ByteArrayTag a) {
             byte[] arr = a.getAsByteArray();
             writeInt(out, arr.length);

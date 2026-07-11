@@ -1,13 +1,18 @@
 package io.github.limuqy.mc.hassium.network;
 
 import io.github.limuqy.mc.hassium.Constants;
+import io.github.limuqy.mc.hassium.compat.ResourceLocationCompat;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.minecraft.client.Minecraft;
 import net.minecraft.network.Connection;
 import net.minecraft.network.FriendlyByteBuf;
+#if MC_VER < MC_1_21_11
 import net.minecraft.resources.ResourceLocation;
+#else
+import net.minecraft.resources.Identifier;
+#endif
 import net.minecraft.server.level.ServerPlayer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -60,20 +65,104 @@ public class FabricNetworkManager implements NetworkManager {
     }
 
     // 资源位置定义
-    public static final ResourceLocation HANDSHAKE_C2S = new ResourceLocation(Constants.MOD_ID, "handshake_c2s");
-    public static final ResourceLocation HANDSHAKE_S2C = new ResourceLocation(Constants.MOD_ID, "handshake_s2c");
-    public static final ResourceLocation COMPRESSION_READY_C2S = new ResourceLocation(Constants.MOD_ID, "compression_ready_c2s");
-    public static final ResourceLocation AGGREGATION_S2C = new ResourceLocation(Constants.MOD_ID, "aggregation");
-    public static final ResourceLocation DICTIONARY_SYNC_S2C = DictionarySyncPayload.CHANNEL;
-    public static final ResourceLocation CHUNK_METADATA_S2C = ChunkMetadataS2CPacket.CHANNEL;
-    public static final ResourceLocation CHUNK_DATA_REQUEST_C2S = ChunkDataRequestC2SPacket.CHANNEL;
-    public static final ResourceLocation CHUNK_HASH_S2C = ChunkHashS2CPacket.CHANNEL;
-    public static final ResourceLocation SECTION_HASH_REQUEST_C2S = SectionHashRequestC2SPacket.CHANNEL;
-    public static final ResourceLocation SECTION_DELTA_S2C = SectionDeltaS2CPacket.CHANNEL;
-    public static final ResourceLocation BLOCK_ENTITY_REQUEST_C2S = BlockEntityRequestC2SPacket.CHANNEL;
-    public static final ResourceLocation BLOCK_ENTITY_DATA_S2C = BlockEntityDataS2CPacket.CHANNEL;
-    public static final ResourceLocation CHUNK_PAYLOAD_S2C = new ResourceLocation(Constants.MOD_ID, "chunk_payload_s2c");
-    public static final ResourceLocation INDEX_SYNC_S2C = new ResourceLocation(Constants.MOD_ID, "index_sync_s2c");
+    public static final
+#if MC_VER < MC_1_21_11
+ResourceLocation
+#else
+Identifier
+#endif
+HANDSHAKE_C2S = ResourceLocationCompat.create(Constants.MOD_ID, "handshake_c2s");
+    public static final
+#if MC_VER < MC_1_21_11
+ResourceLocation
+#else
+Identifier
+#endif
+HANDSHAKE_S2C = ResourceLocationCompat.create(Constants.MOD_ID, "handshake_s2c");
+    public static final
+#if MC_VER < MC_1_21_11
+ResourceLocation
+#else
+Identifier
+#endif
+COMPRESSION_READY_C2S = ResourceLocationCompat.create(Constants.MOD_ID, "compression_ready_c2s");
+    public static final
+#if MC_VER < MC_1_21_11
+ResourceLocation
+#else
+Identifier
+#endif
+AGGREGATION_S2C = ResourceLocationCompat.create(Constants.MOD_ID, "aggregation");
+    public static final
+#if MC_VER < MC_1_21_11
+ResourceLocation
+#else
+Identifier
+#endif
+DICTIONARY_SYNC_S2C = DictionarySyncPayload.CHANNEL;
+    public static final
+#if MC_VER < MC_1_21_11
+ResourceLocation
+#else
+Identifier
+#endif
+CHUNK_METADATA_S2C = ChunkMetadataS2CPacket.CHANNEL;
+    public static final
+#if MC_VER < MC_1_21_11
+ResourceLocation
+#else
+Identifier
+#endif
+CHUNK_DATA_REQUEST_C2S = ChunkDataRequestC2SPacket.CHANNEL;
+    public static final
+#if MC_VER < MC_1_21_11
+ResourceLocation
+#else
+Identifier
+#endif
+CHUNK_HASH_S2C = ChunkHashS2CPacket.CHANNEL;
+    public static final
+#if MC_VER < MC_1_21_11
+ResourceLocation
+#else
+Identifier
+#endif
+SECTION_HASH_REQUEST_C2S = SectionHashRequestC2SPacket.CHANNEL;
+    public static final
+#if MC_VER < MC_1_21_11
+ResourceLocation
+#else
+Identifier
+#endif
+SECTION_DELTA_S2C = SectionDeltaS2CPacket.CHANNEL;
+    public static final
+#if MC_VER < MC_1_21_11
+ResourceLocation
+#else
+Identifier
+#endif
+BLOCK_ENTITY_REQUEST_C2S = BlockEntityRequestC2SPacket.CHANNEL;
+    public static final
+#if MC_VER < MC_1_21_11
+ResourceLocation
+#else
+Identifier
+#endif
+BLOCK_ENTITY_DATA_S2C = BlockEntityDataS2CPacket.CHANNEL;
+    public static final
+#if MC_VER < MC_1_21_11
+ResourceLocation
+#else
+Identifier
+#endif
+CHUNK_PAYLOAD_S2C = ResourceLocationCompat.create(Constants.MOD_ID, "chunk_payload_s2c");
+    public static final
+#if MC_VER < MC_1_21_11
+ResourceLocation
+#else
+Identifier
+#endif
+INDEX_SYNC_S2C = ResourceLocationCompat.create(Constants.MOD_ID, "index_sync_s2c");
 
     @Override
     public void registerChannels() {
@@ -84,7 +173,12 @@ public class FabricNetworkManager implements NetworkManager {
         HassiumAggregationManager.setSender((connection, buf) -> {
             if (connection.getPacketListener() instanceof net.minecraft.server.network.ServerGamePacketListenerImpl handler) {
                 ServerPlayer player = handler.getPlayer();
+#if MC_VER < MC_1_20_6
                 ServerPlayNetworking.send(player, AGGREGATION_S2C, buf);
+#else
+                LOGGER.warn("Fabric networking send not supported on 1.20.6+, dropping packet");
+                buf.release();
+#endif
             } else {
                 LOGGER.error("Cannot send aggregation packet: connection has no player");
                 buf.release();
@@ -111,6 +205,7 @@ public class FabricNetworkManager implements NetworkManager {
      */
     public void registerClientChannels() {
         // 注册客户端接收压缩区块数据
+#if MC_VER < MC_1_20_6
         ClientPlayNetworking.registerGlobalReceiver(CHUNK_PAYLOAD_S2C, (client, handler, buf, responseSender) -> {
             LOGGER.info("[CLIENT] Received chunk payload packet");
             int length = buf.readVarInt();
@@ -128,8 +223,12 @@ public class FabricNetworkManager implements NetworkManager {
                 }
             });
         });
+#else
+        LOGGER.warn("Fabric networking receiver not registered on 1.20.6+: {}", CHUNK_PAYLOAD_S2C);
+#endif
 
         // 注册字典同步响应
+#if MC_VER < MC_1_20_6
         ClientPlayNetworking.registerGlobalReceiver(DICTIONARY_SYNC_S2C, (client, handler, buf, responseSender) -> {
             try {
                 FriendlyByteBuf packetBuf = new FriendlyByteBuf(buf.copy());
@@ -144,8 +243,12 @@ public class FabricNetworkManager implements NetworkManager {
                 LOGGER.error("Hassium: Failed to decode dictionary sync packet", e);
             }
         });
+#else
+        LOGGER.warn("Fabric networking receiver not registered on 1.20.6+: {}", DICTIONARY_SYNC_S2C);
+#endif
 
         // 注册握手响应
+#if MC_VER < MC_1_20_6
         ClientPlayNetworking.registerGlobalReceiver(HANDSHAKE_S2C, (client, handler, buf, responseSender) -> {
             int protocolVersion = buf.readVarInt();
             boolean accepted = buf.readBoolean();
@@ -160,8 +263,12 @@ public class FabricNetworkManager implements NetworkManager {
                 LOGGER.info("Hassium: Handshake accepted without global compression");
             }
         });
+#else
+        LOGGER.warn("Fabric networking receiver not registered on 1.20.6+: {}", HANDSHAKE_S2C);
+#endif
 
         // 注册索引同步响应
+#if MC_VER < MC_1_20_6
         ClientPlayNetworking.registerGlobalReceiver(INDEX_SYNC_S2C, (client, handler, buf, responseSender) -> {
             try {
                 int dataLength = buf.readVarInt();
@@ -193,8 +300,12 @@ public class FabricNetworkManager implements NetworkManager {
                 LOGGER.error("Hassium: Failed to decode index sync packet", e);
             }
         });
+#else
+        LOGGER.warn("Fabric networking receiver not registered on 1.20.6+: {}", INDEX_SYNC_S2C);
+#endif
 
         // 注册聚合包接收
+#if MC_VER < MC_1_20_6
         ClientPlayNetworking.registerGlobalReceiver(AGGREGATION_S2C, (client, handler, buf, responseSender) -> {
             try {
                 FriendlyByteBuf packetBuf = new FriendlyByteBuf(buf.copy());
@@ -215,8 +326,12 @@ public class FabricNetworkManager implements NetworkManager {
                 LOGGER.error("Failed to handle aggregation packet", e);
             }
         });
+#else
+        LOGGER.warn("Fabric networking receiver not registered on 1.20.6+: {}", AGGREGATION_S2C);
+#endif
 
         // 注册区块元数据接收（新协议）
+#if MC_VER < MC_1_20_6
         ClientPlayNetworking.registerGlobalReceiver(CHUNK_METADATA_S2C, (client, handler, buf, responseSender) -> {
             try {
                 LOGGER.info("[CLIENT] Received chunk metadata packet");
@@ -232,8 +347,12 @@ public class FabricNetworkManager implements NetworkManager {
                 LOGGER.error("[CLIENT] Failed to handle chunk metadata", e);
             }
         });
+#else
+        LOGGER.warn("Fabric networking receiver not registered on 1.20.6+: {}", CHUNK_METADATA_S2C);
+#endif
 
         // 注册区块哈希广播接收（阶段一）
+#if MC_VER < MC_1_20_6
         ClientPlayNetworking.registerGlobalReceiver(CHUNK_HASH_S2C, (client, handler, buf, responseSender) -> {
             try {
                 ChunkHashS2CPacket packet = ChunkHashS2CPacket.decode(buf);
@@ -242,8 +361,12 @@ public class FabricNetworkManager implements NetworkManager {
                 LOGGER.error("[CLIENT] Failed to handle chunk hash packet", e);
             }
         });
+#else
+        LOGGER.warn("Fabric networking receiver not registered on 1.20.6+: {}", CHUNK_HASH_S2C);
+#endif
 
         // 注册 section delta 响应接收（阶段二）
+#if MC_VER < MC_1_20_6
         ClientPlayNetworking.registerGlobalReceiver(SECTION_DELTA_S2C, (client, handler, buf, responseSender) -> {
             try {
                 SectionDeltaS2CPacket packet = SectionDeltaS2CPacket.decode(buf);
@@ -252,8 +375,12 @@ public class FabricNetworkManager implements NetworkManager {
                 LOGGER.error("[CLIENT] Failed to handle section delta packet", e);
             }
         });
+#else
+        LOGGER.warn("Fabric networking receiver not registered on 1.20.6+: {}", SECTION_DELTA_S2C);
+#endif
 
         // 注册 blockEntity 数据响应接收
+#if MC_VER < MC_1_20_6
         ClientPlayNetworking.registerGlobalReceiver(BLOCK_ENTITY_DATA_S2C, (client, handler, buf, responseSender) -> {
             try {
                 BlockEntityDataS2CPacket packet = BlockEntityDataS2CPacket.decode(buf);
@@ -262,6 +389,9 @@ public class FabricNetworkManager implements NetworkManager {
                 LOGGER.error("[CLIENT] Failed to handle block entity data packet", e);
             }
         });
+#else
+        LOGGER.warn("Fabric networking receiver not registered on 1.20.6+: {}", BLOCK_ENTITY_DATA_S2C);
+#endif
     }
 
     @Override
@@ -281,7 +411,12 @@ public class FabricNetworkManager implements NetworkManager {
             buf.writeBoolean(true);  // globalPacketCompressionSupported
             buf.writeBoolean(true);  // compactHeaderSupported
 
+#if MC_VER < MC_1_20_6
             ClientPlayNetworking.send(HANDSHAKE_C2S, buf);
+#else
+            LOGGER.warn("Fabric networking send not supported on 1.20.6+, dropping packet");
+            buf.release();
+#endif
             LOGGER.debug("Hassium: Sent handshake request to server");
         }
     }
@@ -297,7 +432,12 @@ public class FabricNetworkManager implements NetworkManager {
     @Override
     public void sendChunkDataRequest(FriendlyByteBuf buf) {
         if (Minecraft.getInstance().getConnection() != null) {
+#if MC_VER < MC_1_20_6
             ClientPlayNetworking.send(CHUNK_DATA_REQUEST_C2S, buf);
+#else
+            LOGGER.warn("Fabric networking send not supported on 1.20.6+, dropping packet");
+            buf.release();
+#endif
             LOGGER.debug("Hassium: Sent chunk data request");
         } else {
             // 连接不存在，释放缓冲区
@@ -312,13 +452,23 @@ public class FabricNetworkManager implements NetworkManager {
 
     @Override
     public void sendChunkHashPacket(ServerPlayer player, FriendlyByteBuf buf) {
+#if MC_VER < MC_1_20_6
         ServerPlayNetworking.send(player, CHUNK_HASH_S2C, buf);
+#else
+        LOGGER.warn("Fabric networking send not supported on 1.20.6+, dropping packet");
+        buf.release();
+#endif
     }
 
     @Override
     public void sendSectionHashRequest(FriendlyByteBuf buf) {
         if (Minecraft.getInstance().getConnection() != null) {
+#if MC_VER < MC_1_20_6
             ClientPlayNetworking.send(SECTION_HASH_REQUEST_C2S, buf);
+#else
+            LOGGER.warn("Fabric networking send not supported on 1.20.6+, dropping packet");
+            buf.release();
+#endif
         } else {
             buf.release();
         }
@@ -326,13 +476,23 @@ public class FabricNetworkManager implements NetworkManager {
 
     @Override
     public void sendSectionDeltaPacket(ServerPlayer player, FriendlyByteBuf buf) {
+#if MC_VER < MC_1_20_6
         ServerPlayNetworking.send(player, SECTION_DELTA_S2C, buf);
+#else
+        LOGGER.warn("Fabric networking send not supported on 1.20.6+, dropping packet");
+        buf.release();
+#endif
     }
 
     @Override
     public void sendBlockEntityRequest(FriendlyByteBuf buf) {
         if (Minecraft.getInstance().getConnection() != null) {
+#if MC_VER < MC_1_20_6
             ClientPlayNetworking.send(BLOCK_ENTITY_REQUEST_C2S, buf);
+#else
+            LOGGER.warn("Fabric networking send not supported on 1.20.6+, dropping packet");
+            buf.release();
+#endif
         } else {
             buf.release();
         }
@@ -340,7 +500,12 @@ public class FabricNetworkManager implements NetworkManager {
 
     @Override
     public void sendBlockEntityData(ServerPlayer player, FriendlyByteBuf buf) {
+#if MC_VER < MC_1_20_6
         ServerPlayNetworking.send(player, BLOCK_ENTITY_DATA_S2C, buf);
+#else
+        LOGGER.warn("Fabric networking send not supported on 1.20.6+, dropping packet");
+        buf.release();
+#endif
     }
 
     /**
@@ -358,9 +523,14 @@ public class FabricNetworkManager implements NetworkManager {
             buf.writeBytes(data);
 
             LOGGER.info("[SEND_CHUNK] Encoded chunk data ({} bytes), sending via network", data.length);
+#if MC_VER < MC_1_20_6
             ServerPlayNetworking.send(player, CHUNK_PAYLOAD_S2C, buf);
             LOGGER.info("[SEND_CHUNK] Successfully sent compressed chunk [{}, {}] to player {}",
                     compressed.chunkX, compressed.chunkZ, player.getName().getString());
+#else
+            LOGGER.warn("Fabric networking send not supported on 1.20.6+, dropping packet");
+            buf.release();
+#endif
         } catch (Exception e) {
             LOGGER.error("[SEND_CHUNK] Failed to send compressed chunk to player {}", player.getName().getString(), e);
         }
@@ -376,11 +546,16 @@ public class FabricNetworkManager implements NetworkManager {
             DictionarySyncPayload payload = new DictionarySyncPayload(aggregationDict, false);
             FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
             payload.encode(buf);
+#if MC_VER < MC_1_20_6
             ServerPlayNetworking.send(player, DICTIONARY_SYNC_S2C, buf);
 
             LOGGER.info("Hassium: Sent aggregation dictionary sync to player {} ({} bytes)",
                     player.getName().getString(),
                     aggregationDict != null ? aggregationDict.length : 0);
+#else
+            LOGGER.warn("Fabric networking send not supported on 1.20.6+, dropping packet");
+            buf.release();
+#endif
         } catch (Exception e) {
             LOGGER.error("Hassium: Failed to send dictionary sync packet", e);
         }
@@ -394,10 +569,15 @@ public class FabricNetworkManager implements NetworkManager {
             DictionarySyncPayload payload = new DictionarySyncPayload(dictionary, false);
             FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
             payload.encode(buf);
+#if MC_VER < MC_1_20_6
             ServerPlayNetworking.send(player, DICTIONARY_SYNC_S2C, buf);
 
             LOGGER.info("Hassium: Pushed new aggregation dictionary to player {} ({} bytes)",
                     player.getName().getString(), dictionary != null ? dictionary.length : 0);
+#else
+            LOGGER.warn("Fabric networking send not supported on 1.20.6+, dropping packet");
+            buf.release();
+#endif
         } catch (Exception e) {
             LOGGER.error("Hassium: Failed to push dictionary to player {}", player.getName().getString(), e);
         }
@@ -417,9 +597,14 @@ public class FabricNetworkManager implements NetworkManager {
             FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
             buf.writeVarInt(data.length);
             buf.writeBytes(data);
+#if MC_VER < MC_1_20_6
             ServerPlayNetworking.send(player, INDEX_SYNC_S2C, buf);
             LOGGER.info("Hassium: Sent index sync packet to player {} ({} packet types)",
                     player.getName().getString(), indexSyncManager.getServerIndexManager().size());
+#else
+            LOGGER.warn("Fabric networking send not supported on 1.20.6+, dropping packet");
+            buf.release();
+#endif
         } catch (Exception e) {
             LOGGER.error("Hassium: Failed to send index sync packet", e);
         }
@@ -430,6 +615,7 @@ public class FabricNetworkManager implements NetworkManager {
      */
     private void registerServerChannels() {
         // 注册握手请求
+#if MC_VER < MC_1_20_6
         ServerPlayNetworking.registerGlobalReceiver(HANDSHAKE_C2S, (server, player, handler, buf, sender) -> {
             LOGGER.info("[HANDSHAKE] Received handshake packet from player {}", player.getName().getString());
 
@@ -507,8 +693,12 @@ public class FabricNetworkManager implements NetworkManager {
                 }
             });
         });
+#else
+        LOGGER.warn("Fabric networking receiver not registered on 1.20.6+: {}", HANDSHAKE_C2S);
+#endif
 
         // 注册压缩就绪确认
+#if MC_VER < MC_1_20_6
         ServerPlayNetworking.registerGlobalReceiver(CompressionReadyPayload.CHANNEL, (server, player, handler, buf, sender) -> {
             CompressionReadyPayload payload = CompressionReadyPayload.decode(buf);
             LOGGER.info("Hassium: Received compression ready from player {}, ready: {}",
@@ -524,8 +714,12 @@ public class FabricNetworkManager implements NetworkManager {
                 }
             }
         });
+#else
+        LOGGER.warn("Fabric networking receiver not registered on 1.20.6+: {}", CompressionReadyPayload.CHANNEL);
+#endif
 
         // 注册区块数据请求（新协议）
+#if MC_VER < MC_1_20_6
         ServerPlayNetworking.registerGlobalReceiver(CHUNK_DATA_REQUEST_C2S, (server, player, handler, buf, sender) -> {
             try {
                 LOGGER.info("[SERVER] Received chunk data request packet from player {}", player.getName().getString());
@@ -550,8 +744,12 @@ public class FabricNetworkManager implements NetworkManager {
                 LOGGER.error("[SERVER] Failed to decode chunk data request", e);
             }
         });
+#else
+        LOGGER.warn("Fabric networking receiver not registered on 1.20.6+: {}", CHUNK_DATA_REQUEST_C2S);
+#endif
 
         // 注册 section 哈希请求（阶段二）
+#if MC_VER < MC_1_20_6
         ServerPlayNetworking.registerGlobalReceiver(SECTION_HASH_REQUEST_C2S, (server, player, handler, buf, sender) -> {
             try {
                 SectionHashRequestC2SPacket request = SectionHashRequestC2SPacket.decode(
@@ -569,8 +767,12 @@ public class FabricNetworkManager implements NetworkManager {
                 LOGGER.error("[SERVER] Failed to decode section hash request", e);
             }
         });
+#else
+        LOGGER.warn("Fabric networking receiver not registered on 1.20.6+: {}", SECTION_HASH_REQUEST_C2S);
+#endif
 
         // 注册 blockEntity 数据请求
+#if MC_VER < MC_1_20_6
         ServerPlayNetworking.registerGlobalReceiver(BLOCK_ENTITY_REQUEST_C2S, (server, player, handler, buf, sender) -> {
             try {
                 BlockEntityRequestC2SPacket request = BlockEntityRequestC2SPacket.decode(
@@ -588,5 +790,8 @@ public class FabricNetworkManager implements NetworkManager {
                 LOGGER.error("[SERVER] Failed to decode block entity request", e);
             }
         });
+#else
+        LOGGER.warn("Fabric networking receiver not registered on 1.20.6+: {}", BLOCK_ENTITY_REQUEST_C2S);
+#endif
     }
 }

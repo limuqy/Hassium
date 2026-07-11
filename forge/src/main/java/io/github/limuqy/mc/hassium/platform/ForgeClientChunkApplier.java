@@ -26,7 +26,12 @@ public class ForgeClientChunkApplier implements IClientChunkApplier {
     public void applyToLevelFromByteBuf(ClientLevel level, ChunkPos pos, FriendlyByteBuf buf, boolean renderOnly) {
         try {
             // 解压后的数据是完整的数据包内容（坐标 + 区块数据 + 光照数据）
+#if MC_VER < MC_1_20_6
             ClientboundLevelChunkWithLightPacket packet = new ClientboundLevelChunkWithLightPacket(buf);
+#else
+            ClientboundLevelChunkWithLightPacket packet = ClientboundLevelChunkWithLightPacket.STREAM_CODEC
+                    .decode(new net.minecraft.network.RegistryFriendlyByteBuf(buf, level.registryAccess()));
+#endif
 
             // 验证坐标
             if (packet.getX() != pos.x || packet.getZ() != pos.z) {

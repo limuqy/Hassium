@@ -4,27 +4,35 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目概述
 
-Hassium 是一个 Minecraft 1.20.1 模组，目标是优化区块存储和网络传输。使用 ZSTD 压缩算法替代原版 Zlib，并实现客户端区块缓存以减少带宽占用。项目基于 multiloader 模板，同时支持 Forge 和 Fabric。
+Hassium 是一个 Minecraft 模组，目标是优化区块存储和网络传输。使用 ZSTD 压缩算法替代原版 Zlib，并实现客户端区块缓存以减少带宽占用。项目基于 architectury-loom + manifold 方案，支持多版本和多加载器。
+
+**构建系统**：architectury-loom（统一支持 Fabric/Forge/NeoForge）+ manifold（源码级条件编译）
+**版本管理**：`versionProperties/{mc_ver}.properties`（每版本独立配置）
 
 ## 构建命令
 
 ```bash
-# 构建所有平台
+# 构建当前版本（默认 1.20.1）
 ./gradlew build
 
-# 仅构建 Fabric
-./gradlew fabric:build
+# 构建指定版本
+./gradlew build -Pmc_ver=1.20.1    # Fabric + Forge
+./gradlew build -Pmc_ver=1.20.4    # Fabric + NeoForge
 
-# 仅构建 Forge
-./gradlew forge:build
+# 仅构建指定加载器
+./gradlew :fabric:build
+./gradlew :forge:build
+./gradlew :neoforge:build
 
 # 运行开发客户端
-./gradlew fabric:runClient    # Fabric 客户端
-./gradlew forge:runClient     # Forge 客户端
+./gradlew :fabric:runClient
+./gradlew :forge:runClient
+./gradlew :neoforge:runClient
 
 # 运行开发服务端
-./gradlew fabric:runServer    # Fabric 服务端
-./gradlew forge:runServer     # Forge 服务端
+./gradlew :fabric:runServer
+./gradlew :forge:runServer
+./gradlew :neoforge:runServer
 
 # 反编译 Minecraft（首次需要）
 ./gradlew common:decompile
@@ -41,11 +49,22 @@ Hassium 是一个 Minecraft 1.20.1 模组，目标是优化区块存储和网络
 
 ```
 Hassium/
-├── common/          # 共享代码，仅依赖原版 Minecraft
-├── fabric/          # Fabric 加载器特定代码
-├── forge/           # Forge 加载器特定代码
-└── buildSrc/        # Gradle 构建插件
+├── common/              # 共享代码，仅依赖原版 Minecraft
+├── fabric/              # Fabric 加载器特定代码
+├── forge/               # Forge 加载器特定代码
+├── neoforge/            # NeoForge 加载器特定代码
+├── versionProperties/   # 版本配置文件（每 MC 版本一个 .properties）
+└── buildSrc/            # Gradle 构建插件（architectury-loom + manifold）
 ```
+
+### 版本矩阵
+
+| MC 版本 | Java | Fabric | Forge | NeoForge | 状态 |
+|---------|------|--------|-------|----------|------|
+| 1.20.1  | 17   | ✅     | ✅    | ✅       | 当前 |
+| 1.20.4  | 17   | ✅     | ❌    | ⚠️       | 待适配 |
+
+> ⚠️ 1.20.4 需要处理 API 差异（如 `ClientboundCustomPayloadPacket` 重命名）
 
 ### 核心设计原则
 
@@ -247,3 +266,45 @@ ClientCacheLoadQueue  发送 ChunkDataRequestC2SPacket
 - **距离排序**：`sqrt((chunkX - playerChunkX)² + (chunkZ - playerChunkZ)²)`，近距离优先
 - **时间戳比对**：客户端缓存时间戳 >= 服务端时间戳 = 缓存命中
 - **兼容性检查**：`PlayerCompressionTracker.isCompressionEnabled(player)`
+
+## NeoForge 支持（2026-07-11 准备）
+
+### 状态
+
+NeoForge 模块框架已搭建完成，但因 ModDev 插件兼容性问题暂时禁用。
+
+**问题**：ModDev 插件 2.0.77 版本对应 NeoForge 21.x（MC 1.21.x），而 NeoForge 20.4.x（MC 1.20.4）需要使用不同版本的插件。
+
+### 已创建的文件
+
+```
+neoforge/
+├── build.gradle
+├── src/main/java/io/github/limuqy/mc/hassium/
+│   ├── HassiumNeoForge.java          # NeoForge 入口类
+│   ├── NeoForgeNetworkManager.java   # 网络管理器（骨架）
+│   ├── platform/
+│   │   ├── NeoForgePlatformHelper.java
+│   │   ├── NeoForgeNetworkManagerService.java
+│   │   └── NeoForgeClientChunkApplier.java
+│   └── command/
+│       └── NeoForgeHassiumCommand.java
+└── src/main/resources/
+    ├── META-INF/
+    │   ├── neoforge.mods.toml
+    │   └── services/                 # ServiceLoader 注册
+    └── hassium.neoforge.mixins.json
+```
+
+### 启用 NeoForge 支持
+
+1. 在 `settings.gradle` 中取消注释 `include("neoforge")`
+2. 确保 `gradle.properties` 中的 `neoforge_version` 与插件版本兼容
+3. 运行 `./gradlew neoforge:compileJava` 验证编译
+
+### 详细文档
+
+- 技术架构：`docs/multi-version-neoforge-architecture.md`
+- 实现计划：`.omc/plans/autopilot-impl.md`
+- 验证报告：`.omc/plans/autopilot-impl-review.md`
+- 总结文档：`docs/autopilot-multiversion-summary.md`

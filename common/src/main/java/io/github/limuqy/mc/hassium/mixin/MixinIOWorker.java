@@ -34,7 +34,7 @@ public class MixinIOWorker {
     /**
      * 拦截关闭操作
      */
-    @Inject(method = "close", at = @At("HEAD"))
+    @Inject(method = "close", at = @At("HEAD"), remap = false)
     private void hassium$onClose(CallbackInfo ci) {
         Constants.LOG.info("IOWorker.close() called, total store operations: {}",
                 hassium$totalStoreOperations.get());

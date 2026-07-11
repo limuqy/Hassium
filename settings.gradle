@@ -1,53 +1,91 @@
 pluginManagement {
     repositories {
-        gradlePluginPortal()
-        maven {
-            name = 'Forge'
-            url = 'https://maven.minecraftforge.net/'
-        }
-        maven {
-            name = 'Fabric'
-            url = 'https://maven.fabricmc.net/'
-        }
-        maven {
-            name = 'Sponge Snapshots'
-            url = 'https://repo.spongepowered.org/repository/maven-public/'
-        }
-    }
-}
-
-dependencyResolutionManagement {
-    repositoriesMode.set(RepositoriesMode.PREFER_PROJECT)
-    repositories {
         maven {
             name = 'Aliyun Maven Public'
             url = uri('https://maven.aliyun.com/repository/public')
         }
-        maven {
-            name = 'Fabric'
-            url = uri('https://maven.fabricmc.net/')
+        gradlePluginPortal()
+        mavenCentral()
+        maven { url "https://maven.architectury.dev/" }
+        maven { url "https://maven.fabricmc.net/" }
+        maven { url "https://maven.minecraftforge.net/" }
+        maven { url "https://maven.neoforged.net/releases" }
+        exclusiveContent {
+            forRepository {
+                maven {
+                    name = 'Sponge'
+                    url = uri('https://repo.spongepowered.org/repository/maven-public')
+                }
+            }
+            filter {
+                includeGroupAndSubgroups("org.spongepowered")
+            }
         }
-        maven {
-            name = 'Forge'
-            url = uri('https://maven.minecraftforge.net/')
-        }
-        maven {
-            name = 'NeoForge'
-            url = uri('https://maven.neoforged.net/releases')
-        }
-        maven {
-            name = 'Sponge Snapshots'
-            url = uri('https://repo.spongepowered.org/repository/maven-public/')
-        }
-        maven {
-            name = 'ParchmentMC'
-            url = uri('https://maven.parchmentmc.org/')
+        exclusiveContent {
+            forRepository {
+                maven {
+                    name = 'Forge'
+                    url = uri('https://maven.minecraftforge.net')
+                }
+            }
+            filter {
+                includeGroupAndSubgroups('net.minecraftforge')
+            }
         }
     }
 }
 
-// This should match the folder name of the project, or else IDEA may complain (see https://youtrack.jetbrains.com/issue/IDEA-317606)
+def loadVersionProperties() {
+    // Get all the files in "versionProperties", remove ".properties" to get versions
+    def mcVers = fileTree("versionProperties").files.collect { it.name.replaceAll("\\.properties", "") }
+        .sort { a, b -> // Sort oldest to newest using semantic versioning
+            def aParts = a.tokenize('.'); def bParts = b.tokenize('.')
+            for (int i = 0; i < Math.min(aParts.size(), bParts.size()); i++) {
+                def aNum = aParts[i].isInteger() ? aParts[i].toInteger() : aParts[i]
+                def bNum = bParts[i].isInteger() ? bParts[i].toInteger() : bParts[i]
+                def compare = aNum <=> bNum
+                if (compare != 0) return compare
+            }
+            return aParts.size() <=> bParts.size()
+        }
+    def mcVer = hasProperty("mc_ver") ? mc_ver : ""
+    def mcIndex = mcVers.indexOf(mcVer)
+
+    assert mcIndex != -1 : "MC version $mcVer not found in $mcVers. Is the 'mc_ver' property correctly set?"
+
+    def props = new Properties()
+    props.load(new FileInputStream("$rootDir/versionProperties/${mcVer}.properties"))
+
+    props.each { key, value -> gradle.ext.set(key, value) }
+    gradle.ext.mcVers = mcVers
+    gradle.ext.mcIndex = mcIndex
+}
+loadVersionProperties()
+
+def loaders = ((String) gradle.builds_for).split(",").collect { it.trim() }
+if (loaders.contains('neoforge')) {
+    def mcVer = gradle.ext.minecraft_version as String
+    def parts = mcVer.tokenize('.')
+    def major = parts[0].isInteger() ? parts[0].toInteger() : 0
+    def minor = parts.size() > 1 && parts[1].isInteger() ? parts[1].toInteger() : 0
+    assert major > 1 || (major == 1 && minor >= 20) :
+        "NeoForge 不支持 MC ${mcVer}。请从 versionProperties/${mcVer}.properties 的 builds_for 中移除 neoforge。"
+    assert gradle.ext.has('neoforge_loader') && gradle.ext.neoforge_loader :
+        "MC ${mcVer} 启用了 neoforge 但未配置 neoforge_loader。"
+}
+
+include('common')
+loaders.each { loader -> include(loader.trim()) }
+
+// Architectury Loom reads loom.platform when the plugin is applied.
+// Inject per-subproject so each loader module initializes correctly.
+gradle.beforeProject { project ->
+    if (project.name == 'fabric' || project.name == 'forge') {
+        project.ext.set('loom.platform', project.name)
+    } else if (project.name == 'neoforge') {
+        // 1.20.1 的 NeoForge 仍沿用 Forge userdev / SRG 管线，Loom 需按 forge 平台初始化。
+        project.ext.set('loom.platform', gradle.ext.minecraft_version == '1.20.1' ? 'forge' : 'neoforge')
+    }
+}
+
 rootProject.name = 'Hassium'
-include("common")
-include("fabric")
-include("forge")

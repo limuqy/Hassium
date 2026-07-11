@@ -122,8 +122,13 @@ public class MixinLightRecompute {
             return;
         }
 
+#if MC_VER < MC_1_21_4
         int bottomSection = level.getMinSection();
         int topSection = level.getMaxSection();
+#else
+        int bottomSection = level.getMinSectionY();
+        int topSection = level.getMaxSectionY() + 1; // getMaxSectionY is inclusive, +1 for exclusive upper bound
+#endif
 
         // 收集需要扫描的 section
         List<SectionScanTask> scanTasks = new ArrayList<>();
@@ -241,8 +246,13 @@ public class MixinLightRecompute {
      */
     @Unique
     private void hassium$recomputeLightSync(LevelChunk chunk, ChunkPos chunkPos) {
+#if MC_VER < MC_1_21_4
         int bottomSection = level.getMinSection();
         int topSection = level.getMaxSection();
+#else
+        int bottomSection = level.getMinSectionY();
+        int topSection = level.getMaxSectionY() + 1; // getMaxSectionY is inclusive, +1 for exclusive upper bound
+#endif
         List<BlockPos> lightSources = new ArrayList<>();
 
         for (int sectionY = bottomSection; sectionY < topSection; sectionY++) {

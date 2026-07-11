@@ -22,7 +22,11 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public abstract class MixinServerPlayer extends Player {
 
     public MixinServerPlayer(Level level, BlockPos pos, float yRot, GameProfile gameProfile) {
+#if MC_VER < MC_1_21_11
         super(level, pos, yRot, gameProfile);
+#else
+        super(level, gameProfile);
+#endif
     }
 
     @Inject(method = "<init>", at = @At("TAIL"))
@@ -39,7 +43,13 @@ public abstract class MixinServerPlayer extends Player {
         }
 
         // 异步计算 hash 并发送元数据到 pushPool 工作线程
-        String dimension = self.level().dimension().location().toString();
+        String dimension = self.level().dimension()
+#if MC_VER < MC_1_21_11
+                .location()
+#else
+                .identifier()
+#endif
+                .toString();
         ServerChunkPushManager.getInstance().submitMetadataTask(self, pos, chunkPacket, dimension);
 
         ci.cancel();

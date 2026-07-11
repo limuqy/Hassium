@@ -47,7 +47,7 @@ public class MixinMinecraft {
     /**
      * 在 Minecraft 关闭时保存配置
      */
-    @Inject(method = "close", at = @At("HEAD"))
+    @Inject(method = "close", at = @At("HEAD"), remap = false)
     private void onClose(CallbackInfo ci) {
         LOGGER.info("Hassium: Saving configuration before shutdown");
         try {

@@ -2,7 +2,12 @@ package io.github.limuqy.mc.hassium.network;
 
 import io.github.limuqy.mc.hassium.Constants;
 import net.minecraft.network.FriendlyByteBuf;
+#if MC_VER < MC_1_21_11
 import net.minecraft.resources.ResourceLocation;
+#else
+import net.minecraft.resources.Identifier;
+#endif
+import io.github.limuqy.mc.hassium.compat.ResourceLocationCompat;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -16,7 +21,13 @@ public record ChunkMetadataS2CPacket(
         String dimension,
         List<MetadataEntry> entries
 ) {
-    public static final ResourceLocation CHANNEL = new ResourceLocation(Constants.MOD_ID, "chunk_metadata_s2c");
+    public static final
+#if MC_VER < MC_1_21_11
+ResourceLocation
+#else
+Identifier
+#endif
+CHANNEL = ResourceLocationCompat.create(Constants.MOD_ID, "chunk_metadata_s2c");
 
     public void encode(FriendlyByteBuf buf) {
         buf.writeUtf(dimension);

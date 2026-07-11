@@ -58,7 +58,12 @@ public class FabricClientChunkApplier implements IClientChunkApplier {
         try {
             // 解压后的数据是完整的数据包内容（坐标 + 区块数据 + 光照数据）
             // 直接用来构造数据包，让数据包构造函数自己读取坐标
+#if MC_VER < MC_1_20_6
             ClientboundLevelChunkWithLightPacket packet = new ClientboundLevelChunkWithLightPacket(buf);
+#else
+            ClientboundLevelChunkWithLightPacket packet = ClientboundLevelChunkWithLightPacket.STREAM_CODEC
+                    .decode(new net.minecraft.network.RegistryFriendlyByteBuf(buf, level.registryAccess()));
+#endif
 
             // 验证坐标
             if (packet.getX() != pos.x || packet.getZ() != pos.z) {

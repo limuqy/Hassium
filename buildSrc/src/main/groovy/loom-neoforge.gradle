@@ -1,0 +1,42 @@
+plugins {
+    id 'minecraft'
+}
+
+loom {
+    if (gradle.ext.minecraft_version == '1.20.1') {
+        forge {
+            mixinConfig "${mod_id}.mixins.json"
+            mixinConfig "${mod_id}.neoforge.mixins.json"
+        }
+    } else {
+        neoForge {
+        }
+    }
+}
+
+def resolveNeoForgeDependency() {
+    def mcVer = gradle.ext.minecraft_version as String
+    def loader = gradle.ext.neoforge_loader as String
+    if (mcVer == "1.20.1") {
+        // 1.20.1 的 NeoForge 仍发布在 net.neoforged:forge，版本号带 MC 前缀。
+        return "net.neoforged:forge:${mcVer}-${loader}"
+    }
+    return "net.neoforged:neoforge:${loader}"
+}
+
+dependencies {
+    def neoForgeDependency = resolveNeoForgeDependency()
+    if (gradle.ext.minecraft_version == '1.20.1') {
+        forge neoForgeDependency
+    } else {
+        neoForge neoForgeDependency
+    }
+}
+
+tasks.named('runClient') {
+    workingDir = file('run/client')
+}
+
+tasks.named('runServer') {
+    workingDir = file('run/server')
+}

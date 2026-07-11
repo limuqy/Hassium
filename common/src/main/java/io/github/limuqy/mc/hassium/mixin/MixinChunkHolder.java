@@ -66,7 +66,13 @@ public class MixinChunkHolder {
         }
 
         // 异步计算 hash 并发送元数据到 pushPool 工作线程
-        String dimension = hassiumPlayers.get(0).level().dimension().location().toString();
+        String dimension = hassiumPlayers.get(0).level().dimension()
+#if MC_VER < MC_1_21_11
+                .location()
+#else
+                .identifier()
+#endif
+                .toString();
         ServerChunkPushManager.getInstance().submitMetadataTask(
                 hassiumPlayers, pos, chunkPacket, dimension);
 

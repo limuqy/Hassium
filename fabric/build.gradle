@@ -1,40 +1,21 @@
 plugins {
-    id 'multiloader-loader'
-    id 'fabric-loom'
-}
-dependencies {
-    minecraft "com.mojang:minecraft:${minecraft_version}"
-    mappings loom.layered {
-        officialMojangMappings()
-        parchment("org.parchmentmc.data:parchment-${parchment_minecraft}:${parchment_version}@zip")
-    }
-    modImplementation "net.fabricmc:fabric-loader:${fabric_loader_version}"
-    modImplementation "net.fabricmc.fabric-api:fabric-api:${fabric_version}"
-    implementation group: 'com.google.code.findbugs', name: 'jsr305', version: '3.0.1'
-    implementation group: 'com.github.luben', name: 'zstd-jni', version: '1.5.5-7'
-    implementation 'org.lz4:lz4-java:1.8.0'
-    implementation project(":common")
+    id 'loom-fabric'
 }
 
-loom {
-    if (project(":common").file("src/main/resources/${mod_id}.accesswidener").exists()) {
-        accessWidenerPath.set(project(":common").file("src/main/resources/${mod_id}.accesswidener"))
-    }
-    mixin {
-        defaultRefmapName.set("${mod_id}.refmap.json")
-    }
-    runs {
-        client {
-            client()
-            setConfigName("Fabric Client")
-            ideConfigGenerated(true)
-            runDir = 'run/client'
-        }
-        server {
-            server()
-            setConfigName("Fabric Server")
-            ideConfigGenerated(true)
-            runDir = 'run/server'
-        }
+dependencies {
+    modImplementation "net.fabricmc.fabric-api:fabric-api:${gradle.ext.fabric_api_version}"
+    implementation 'com.github.luben:zstd-jni:1.5.5-7'
+    implementation 'org.lz4:lz4-java:1.8.0'
+    implementation 'com.google.code.findbugs:jsr305:3.0.1'
+}
+
+// zstd-jni shading
+jar {
+    from({
+        configurations.runtimeClasspath.filter {
+            it.name.contains('zstd-jni')
+        }.collect { zipTree(it) }
+    }) {
+        exclude 'META-INF/**'
     }
 }

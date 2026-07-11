@@ -1,0 +1,37 @@
+plugins {
+    id 'dev.architectury.loom'
+    id 'common'
+}
+
+loom {
+    silentMojangMappingsLicense()
+}
+
+dependencies {
+    minecraft "com.mojang:minecraft:${gradle.ext.minecraft_version}"
+    mappings loom.officialMojangMappings()
+}
+
+if (project.name == "common") return // Don't apply the code below to the common project
+
+dependencies {
+    implementation(project(":common"))
+}
+
+// loader 模块合并 common 源码，随 loader jar 一起编译
+afterEvaluate {
+    sourceSets.main {
+        java.srcDirs += project(':common').sourceSets.main.java.srcDirs
+        resources.srcDirs += project(':common').sourceSets.main.resources.srcDirs
+    }
+}
+
+tasks.named('jar').configure {
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    from(project(':common').sourceSets.main.output)
+}
+
+processResources {
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    from project(":common").sourceSets.main.resources
+}

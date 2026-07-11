@@ -2,10 +2,11 @@ package io.github.limuqy.mc.hassium.command;
 
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.context.CommandContext;
+import io.github.limuqy.mc.hassium.compat.PermissionCompat;
+import io.github.limuqy.mc.hassium.metrics.NetworkStats;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.network.chat.Component;
-import io.github.limuqy.mc.hassium.metrics.NetworkStats;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandManager;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
 import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource;
@@ -37,7 +38,7 @@ public class FabricHassiumCommand {
     private static void registerServerCommands(CommandDispatcher<CommandSourceStack> dispatcher) {
         dispatcher.register(
                 Commands.literal("hassium")
-                        .requires(source -> source.hasPermission(2))
+                        .requires(source -> PermissionCompat.hasCommandPermission(source, 2))
                         .then(Commands.literal("stats")
                                 .requires(source -> HassiumCommandHandler.isMetricsEnabled())
                                 .executes(FabricHassiumCommand::showServerStats)

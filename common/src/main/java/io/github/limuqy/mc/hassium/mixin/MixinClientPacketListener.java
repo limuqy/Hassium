@@ -12,7 +12,6 @@ import io.github.limuqy.mc.hassium.network.ClientChunkHandler;
 import io.github.limuqy.mc.hassium.network.ClientMetadataHandler;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientPacketListener;
-import net.minecraft.network.chat.Component;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
@@ -28,6 +27,9 @@ import java.nio.file.Path;
  * 元数据处理逻辑在 {@link io.github.limuqy.mc.hassium.network.ClientMetadataHandler} 中。
  * <p>
  * M2: SQLite 初始化异步化 —— handleLogin 时在后台线程完成 ClientHassiumStorage 创建。
+ * <p>
+ * 1.20.2+：{@code onDisconnect} 已上移到 {@code ClientCommonPacketListenerImpl}，
+ * 由 {@link MixinClientCommonPacketListenerImpl} 注入。
  */
 @Mixin(ClientPacketListener.class)
 public class MixinClientPacketListener {
@@ -54,17 +56,28 @@ public class MixinClientPacketListener {
         }
     }
 
+#if MC_VER < MC_1_20_2
     /**
-     * 断开连接时清理
+     * 断开连接时清理（仅 1.20.1：onDisconnect 仍在 ClientPacketListener）
+     */
+    @Inject(method = "onDisconnect", at = @At("HEAD"))
+    private void hassium$onDisconnect(net.minecraft.network.chat.Component reason, CallbackInfo ci) {
+        hassium$cleanupOnDisconnect();
+    }
+#endif
+
+    /**
+     * 断开连接时清理客户端缓存状态。
      * <p>
      * 必须在 clearLevel() 之前刷新缓存保存队列，否则 level 被置空后保存会失败。
      * <p>
      * 时序：flushAsync → cancelAll(SAFE_TO_CANCEL) → shutdownClient → clearClient
      * <p>
      * S2: flushAsync 替代同步 flush，避免主线程阻塞。
+     * <p>
+     * 供本类（1.20.1）与 {@link MixinClientCommonPacketListenerImpl}（1.20.2+）共用。
      */
-    @Inject(method = "onDisconnect", at = @At("HEAD"))
-    private void hassium$onDisconnect(Component reason, CallbackInfo ci) {
+    static void hassium$cleanupOnDisconnect() {
         hassium$initialized = false;
 
         // S2: 异步刷新缓存保存队列（最多等待 3 秒）
@@ -121,7 +134,13 @@ public class MixinClientPacketListener {
 
             String dimension = "minecraft:overworld";
             if (mc.player.level() != null) {
-                dimension = mc.player.level().dimension().location().toString();
+                dimension = mc.player.level().dimension()
+#if MC_VER < MC_1_21_11
+                        .location()
+#else
+                        .identifier()
+#endif
+                        .toString();
             }
             final String finalDimension = dimension;
 

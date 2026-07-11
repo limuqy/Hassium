@@ -1,0 +1,22 @@
+plugins {
+    id 'minecraft'
+}
+
+loom {
+    forge {
+        mixinConfig "${mod_id}.mixins.json"
+        mixinConfig "${mod_id}.forge.mixins.json"
+    }
+}
+
+dependencies {
+    forge "net.minecraftforge:forge:${gradle.ext.minecraft_version}-${gradle.ext.forge_loader}"
+}
+
+tasks.named('runClient') {
+    workingDir = file('run/client')
+}
+
+tasks.named('runServer') {
+    workingDir = file('run/server')
+}

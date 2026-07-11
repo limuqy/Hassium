@@ -5,6 +5,7 @@ import io.github.limuqy.mc.hassium.cache.ChunkContentHashUtil;
 import io.github.limuqy.mc.hassium.concurrent.HassiumTaskExecutor;
 import io.github.limuqy.mc.hassium.concurrent.TaskCategory;
 import io.github.limuqy.mc.hassium.network.ClientChunkHandler;
+import io.github.limuqy.mc.hassium.compat.RegistryCompat;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket;
@@ -188,10 +189,15 @@ public class CacheSaveQueue {
 
             FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
             try {
+#if MC_VER < MC_1_20_5
                 packet.write(buf);
                 byte[] data = new byte[buf.readableBytes()];
                 buf.readBytes(data);
                 return data;
+#else
+                // 1.20.6+: Packet.write() removed, skip serialization
+                return null;
+#endif
             } finally {
                 buf.release();
             }
@@ -222,10 +228,8 @@ public class CacheSaveQueue {
                 ClientLevel clientLevel = net.minecraft.client.Minecraft.getInstance().level;
                 if (clientLevel == null) return null;
                 int sectionCount = clientLevel.getSectionsCount();
-                var biomeRegistry = clientLevel.registryAccess()
-                        .registryOrThrow(net.minecraft.core.registries.Registries.BIOME);
                 java.util.Map<Integer, Long> hashes =
-                        ChunkContentHashUtil.computeSectionHashesFromBytes(sectionsBytes, sectionCount, biomeRegistry);
+                        ChunkContentHashUtil.computeSectionHashesFromBytes(sectionsBytes, sectionCount, clientLevel.registryAccess());
                 return ChunkContentHashUtil.sectionHashesToArray(hashes);
             } finally {
                 buf.release();

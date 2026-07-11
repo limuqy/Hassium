@@ -2,7 +2,11 @@ package io.github.limuqy.mc.hassium.mixin;
 
 import io.github.limuqy.mc.hassium.Constants;
 import net.minecraft.nbt.CompoundTag;
+#if MC_VER < MC_1_21_4
 import net.minecraft.world.level.chunk.storage.ChunkSerializer;
+#else
+import net.minecraft.world.level.chunk.storage.SerializableChunkData;
+#endif
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
@@ -16,7 +20,13 @@ import java.util.concurrent.atomic.AtomicLong;
  * <p>
  * 拦截区块序列化操作，用于统计序列化/反序列化操作。
  */
-@Mixin(ChunkSerializer.class)
+@Mixin(
+#if MC_VER < MC_1_21_4
+    ChunkSerializer.class
+#else
+    SerializableChunkData.class
+#endif
+)
 public class MixinChunkSerializer {
 
     @Unique

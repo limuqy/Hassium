@@ -1,26 +1,14 @@
 plugins {
-    id 'multiloader-common'
-    id 'net.neoforged.moddev.legacyforge'
-}
-
-legacyForge {
-    mcpVersion = minecraft_version
-    if (file("src/main/resources/META-INF/accesstransformer.cfg").exists()) {
-        accessTransformers = ["src/main/resources/META-INF/accesstransformer.cfg"]
-    }
-    parchment {
-        minecraftVersion = parchment_minecraft
-        mappingsVersion = parchment_version
-    }
+    id 'loom-common'
+    id 'java-library'
 }
 
 dependencies {
-    compileOnly group: 'org.spongepowered', name: 'mixin', version: '0.8.5'
-    implementation group: 'com.google.code.findbugs', name: 'jsr305', version: '3.0.1'
-    implementation group: 'com.github.luben', name: 'zstd-jni', version: '1.5.5-7'
+    compileOnly 'org.spongepowered:mixin:0.8.5'
+    implementation 'com.github.luben:zstd-jni:1.5.5-7'
+    implementation 'org.lz4:lz4-java:1.8.0'
+    implementation 'com.google.code.findbugs:jsr305:3.0.1'
     implementation 'org.xerial:sqlite-jdbc:3.45.1.0'
-    // xxHash64（生产路径内容哈希）
-    api 'org.lz4:lz4-java:1.8.0'
 
     testImplementation 'org.junit.jupiter:junit-jupiter-api:5.10.1'
     testRuntimeOnly 'org.junit.jupiter:junit-jupiter-engine:5.10.1'
@@ -43,20 +31,4 @@ task runJava(type: JavaExec) {
 
     standardOutput = System.out
     errorOutput = System.err
-}
-
-configurations {
-    commonJava {
-        canBeResolved = false
-        canBeConsumed = true
-    }
-    commonResources {
-        canBeResolved = false
-        canBeConsumed = true
-    }
-}
-
-artifacts {
-    commonJava sourceSets.main.java.sourceDirectories.singleFile
-    commonResources sourceSets.main.resources.sourceDirectories.singleFile
 }

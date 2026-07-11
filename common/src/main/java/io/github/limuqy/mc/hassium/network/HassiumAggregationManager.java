@@ -1,11 +1,15 @@
 package io.github.limuqy.mc.hassium.network;
 
 import io.github.limuqy.mc.hassium.Constants;
+import io.github.limuqy.mc.hassium.compat.PacketPayloadCompat;
 import net.minecraft.network.Connection;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.network.protocol.Packet;
-import net.minecraft.network.protocol.game.ClientboundCustomPayloadPacket;
+#if MC_VER < MC_1_21_11
 import net.minecraft.resources.ResourceLocation;
+#else
+import net.minecraft.resources.Identifier;
+#endif
 
 import java.util.ArrayList;
 import java.util.List;
@@ -82,7 +86,12 @@ public class HassiumAggregationManager {
      * @param connection 连接
      */
     public static void takeOver(Packet<?> packet, Connection connection) {
-        ResourceLocation type = PacketTypeHelper.getPacketType(packet);
+#if MC_VER < MC_1_21_11
+        ResourceLocation
+#else
+        Identifier
+#endif
+        type = PacketTypeHelper.getPacketType(packet);
         if (type == null) {
             Constants.LOG.warn("Unknown packet type, skipping aggregation: {}", packet.getClass().getSimpleName());
             return;
@@ -92,23 +101,30 @@ public class HassiumAggregationManager {
         FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
         try {
             byte[] data;
-            if (packet instanceof ClientboundCustomPayloadPacket customPayload) {
+            if (PacketPayloadCompat.isCustomPayloadPacket(packet)) {
                 // 自定义 Payload 包：只提取 payload 数据部分
                 // packet.write() 会写入 [ResourceLocation identifier] + [payload]
                 // 但 identifier 已通过 CompactHeader 单独存储，不能重复编码
-                FriendlyByteBuf payloadBuf = customPayload.getData();
-                data = new byte[payloadBuf.readableBytes()];
-                payloadBuf.readBytes(data);
-                payloadBuf.release();
+                data = PacketPayloadCompat.extractPayloadData(packet);
+                if (data == null) {
+                    Constants.LOG.warn("Failed to extract payload data, skipping aggregation: {}", type);
+                    return;
+                }
                 Constants.LOG.debug("Hassium: Extracted payload from CustomPayloadPacket: {} ({} bytes)",
                         type, data.length);
             } else {
                 // 原版包：write() 只写入包数据（不含包 ID）
+#if MC_VER < MC_1_20_5
                 packet.write(buf);
                 data = new byte[buf.readableBytes()];
                 buf.readBytes(data);
                 Constants.LOG.debug("Hassium: Serialized vanilla packet: {} ({} bytes)",
                         type, data.length);
+#else
+                // 1.20.6+: Packet.write() removed, aggregation not supported
+                Constants.LOG.warn("Packet serialization not supported on 1.20.6+, skipping aggregation");
+                return;
+#endif
             }
 
             AggregatedSubPacket subPacket = new AggregatedSubPacket(type, data);

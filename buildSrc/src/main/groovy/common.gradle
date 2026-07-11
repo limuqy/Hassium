@@ -1,0 +1,90 @@
+plugins {
+    id 'java'
+    id 'maven-publish'
+    id 'xyz.wagyourtail.manifold'
+}
+
+version = "${mod_version}-${gradle.ext.build_version_suffix}"
+base {
+    archivesName = "${mod_id}-${project == rootProject ? "" : project.name}"
+}
+
+manifold {
+    version = manifold_version
+}
+
+repositories {
+    maven {
+        name = 'Aliyun Maven Public'
+        url = uri('https://maven.aliyun.com/repository/public')
+    }
+    maven { url 'https://maven.fabricmc.net/' }
+    maven { url 'https://maven.minecraftforge.net/' }
+    maven { url 'https://maven.neoforged.net/releases' }
+    mavenCentral()
+}
+
+dependencies {
+    annotationProcessor(manifold.module("preprocessor"))
+    annotationProcessor(manifold.module("strings"))
+    testAnnotationProcessor manifold.module("preprocessor")
+    testAnnotationProcessor manifold.module("strings")
+}
+
+processResources {
+    def mcRange = gradle.ext.minecraft_version_range as String
+    def m = mcRange =~ /\[([^,\]]+),([^)\]]+)\)/
+    def compatible_fabric_mc_version_range = m ? ">=${m[0][1]} <${m[0][2]}" : gradle.ext.minecraft_version
+
+    var expandProps = ['version'                              : mod_version,
+                       'group'                                : project.group,
+                       'minecraft_version'                    : gradle.ext.minecraft_version,
+                       'compatible_mc_version_range'          : mcRange,
+                       'compatible_fabric_mc_version_range'   : compatible_fabric_mc_version_range,
+                       'minecraft_version_range'       : gradle.ext.minecraft_version_range,
+                       'mod_name'                     : mod_name,
+                       'mod_author'                   : mod_author,
+                       'mod_id'                       : mod_id,
+                       'license'                      : license,
+                       'description'                  : project.description,
+                       'neoforge_loader'              : gradle.ext.has('neoforge_loader') ? gradle.ext.neoforge_loader : '',
+                       'neoforge_loader_version_range' : gradle.ext.has('neoforge_loader_version_range') ? gradle.ext.neoforge_loader_version_range : '[20.4,)',
+                       'forge_loader'                 : gradle.ext.has('forge_loader') ? gradle.ext.forge_loader : '',
+                       'forge_version'                : gradle.ext.has('forge_loader') ? gradle.ext.forge_loader : '',
+                       'forge_loader_version_range'   : gradle.ext.has('forge_loader_version_range') ? gradle.ext.forge_loader_version_range : '[47,)',
+                       'credits'                      : credits,
+                       'java_version'                 : gradle.ext.java_version]
+
+    filesMatching(['pack.mcmeta', 'fabric.mod.json', 'META-INF/mods.toml', 'META-INF/neoforge.mods.toml', '*.mixins.json']) {
+        expand expandProps
+    }
+    inputs.properties(expandProps)
+}
+
+def javaVer = gradle.ext.java_version.toInteger()
+java {
+    sourceCompatibility = JavaVersion.toVersion(javaVer)
+    targetCompatibility = JavaVersion.toVersion(javaVer)
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    if (javaVer >= 9) {
+        options.release = javaVer
+    }
+}
+
+tasks.withType(GenerateModuleMetadata).configureEach {
+    enabled = false
+}
+tasks.withType(Sign).configureEach {
+    enabled = false
+}
+
+// lz4-java capability resolution（InstantBackup 验证）
+configurations.configureEach {
+    resolutionStrategy.capabilitiesResolution.withCapability('org.lz4:lz4-java') {
+        def preferred = candidates.find { it.id.group == 'at.yawk.lz4' }
+        select(preferred ?: candidates.first())
+    }
+}

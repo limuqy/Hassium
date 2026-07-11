@@ -21,7 +21,13 @@ public class MixinServerGamePacketListenerImpl {
     public ServerPlayer player;
 
     @Inject(method = "onDisconnect", at = @At("HEAD"))
-    private void onPlayerDisconnect(CallbackInfo ci) {
+    private void onPlayerDisconnect(
+#if MC_VER < MC_1_21_1
+            net.minecraft.network.chat.Component reason,
+#else
+            net.minecraft.network.DisconnectionDetails details,
+#endif
+            CallbackInfo ci) {
         Constants.LOG.debug("Hassium: Player {} disconnected", player.getName().getString());
         PlayerCompressionTracker.removePlayer(player);
         ServerChunkPushManager.getInstance().removePlayer(player.getUUID());

@@ -1,60 +1,36 @@
 plugins {
-    id 'multiloader-loader'
-    id 'net.neoforged.moddev.legacyforge'
+    id 'loom-forge'
 }
 
-mixin {
-    add(sourceSets.main, "${mod_id}.refmap.json")
-
-    config("${mod_id}.mixins.json")
-    config("${mod_id}.forge.mixins.json")
+configurations {
+    library
 }
+// Keep these libs on the compile/shade classpath...
+configurations.implementation.extendsFrom(configurations.library)
+// ...and inject them into the FML game-layer classpath (legacy_classpath.txt) so they
+// load in dev runs, not just in the shaded production jar.
+configurations.minecraftLibraries.extendsFrom(configurations.library)
 
-legacyForge {
-    version = "${minecraft_version}-${forge_version}"
-
-    validateAccessTransformers = true
-
-    def at = project(':common').file('src/main/resources/META-INF/accesstransformer.cfg')
-    if (at.exists()) {
-        accessTransformers = ["src/main/resources/META-INF/accesstransformer.cfg"]
-    }
-    parchment {
-        minecraftVersion = parchment_minecraft
-        mappingsVersion = parchment_version
-    }
-    runs {
-        client {
-            client()
-        }
-        data {
-            data()
-            programArguments.addAll '--mod', project.mod_id, '--all', '--output', file('src/generated/resources/').getAbsolutePath(), '--existing', file('src/main/resources/').getAbsolutePath()
-        }
-        server {
-            server()
-        }
-    }
-
-    mods {
-        "${mod_id}" {
-            sourceSet sourceSets.main
-        }
-    }
+// Mixin AP 配置：禁用目标验证（architectury-loom 的 remapping 会在运行时处理）
+tasks.withType(JavaCompile).configureEach {
+    options.compilerArgs.add('-Arequires=0')
+    options.compilerArgs.add('-AdefaultObfuscationEnv=mojang')
 }
-
-sourceSets.main.resources.srcDir 'src/generated/resources'
 
 dependencies {
-    compileOnly project(":common")
-    implementation group: 'com.github.luben', name: 'zstd-jni', version: '1.5.5-7'
-    implementation 'org.lz4:lz4-java:1.8.0'
-    annotationProcessor("org.spongepowered:mixin:0.8.5-SNAPSHOT:processor")
+    library 'com.github.luben:zstd-jni:1.5.5-7'
+    library 'org.lz4:lz4-java:1.8.0'
+    library 'com.google.code.findbugs:jsr305:3.0.1'
+    library 'org.xerial:sqlite-jdbc:3.45.1.0'
 }
 
+// zstd-jni shading
 jar {
-    finalizedBy('reobfJar')
-    manifest.attributes([
-            "MixinConfigs": "${mod_id}.mixins.json,${mod_id}.forge.mixins.json"
-    ])
+    from({
+        configurations.runtimeClasspath.filter {
+            it.name.contains('zstd-jni')
+        }.collect { zipTree(it) }
+    }) {
+        exclude 'META-INF/**'
+    }
 }

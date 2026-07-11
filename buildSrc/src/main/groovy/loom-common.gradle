@@ -1,0 +1,10 @@
+plugins {
+    id 'minecraft'
+}
+
+// 延迟配置Loom任务以避免过早的依赖解析
+tasks.configureEach {
+    if (it.name == 'remapJar') {
+        it.mustRunAfter tasks.matching { t -> t.name == 'compileJava' }
+    }
+}

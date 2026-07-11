@@ -11,6 +11,7 @@ import io.github.limuqy.mc.hassium.concurrent.TaskCategory;
 import io.github.limuqy.mc.hassium.platform.Services;
 import io.github.limuqy.mc.hassium.utils.DebugLogger;
 import io.github.limuqy.mc.hassium.utils.DebugLogger.LogType;
+import io.github.limuqy.mc.hassium.compat.RegistryCompat;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Registry;
@@ -257,7 +258,13 @@ public class ClientMetadataHandler {
         try {
             String serverIp = mc.getConnection().getServerData().ip;
             String serverId = "server_" + serverIp.replaceAll("[^a-zA-Z0-9._-]", "_");
-            String dimension = mc.player.level().dimension().location().toString();
+            String dimension = mc.player.level().dimension()
+#if MC_VER < MC_1_21_11
+                    .location()
+#else
+                    .identifier()
+#endif
+                    .toString();
             ClientChunkHandler.initStorage(
                     mc.gameDirectory.toPath(),
                     serverId,
@@ -643,9 +650,8 @@ public class ClientMetadataHandler {
         if (mc.level == null) {
             throw new IllegalStateException("Client level is null, cannot parse section ranges");
         }
-        Registry<Biome> biomeRegistry = mc.level.registryAccess().registryOrThrow(Registries.BIOME);
         return ChunkContentHashUtil.parseSectionRanges(
-                sectionsBytes, mc.level.getSectionsCount(), biomeRegistry);
+                sectionsBytes, mc.level.getSectionsCount(), mc.level.registryAccess());
     }
 
     /**
@@ -711,7 +717,21 @@ public class ClientMetadataHandler {
                 copy.putInt("x", pos.getX());
                 copy.putInt("y", pos.getY());
                 copy.putInt("z", pos.getZ());
+#if MC_VER < MC_1_20_5
                 be.load(copy);
+#else
+                // 1.20.6+: BlockEntity.load() removed, loadAdditional is protected; use reflection
+                try {
+                    var m = net.minecraft.world.level.block.entity.BlockEntity.class
+                            .getDeclaredMethod("loadAdditional",
+                                    net.minecraft.nbt.CompoundTag.class,
+                                    net.minecraft.core.HolderLookup.Provider.class);
+                    m.setAccessible(true);
+                    m.invoke(be, copy, be.getLevel().registryAccess());
+                } catch (ReflectiveOperationException ex) {
+                    DebugLogger.error("[BLOCK_ENTITY] Failed to load block entity via reflection at {}", pos, ex);
+                }
+#endif
                 DebugLogger.info(LogType.METADATA, "[BLOCK_ENTITY] Updated block entity at {}", pos);
             } else {
                 PENDING_BLOCK_ENTITIES
@@ -744,7 +764,22 @@ public class ClientMetadataHandler {
                     nbt.putInt("x", beData.pos().getX());
                     nbt.putInt("y", beData.pos().getY());
                     nbt.putInt("z", beData.pos().getZ());
+#if MC_VER < MC_1_20_5
                     be.load(nbt);
+#else
+                    // 1.20.6+: BlockEntity.load() removed, loadAdditional is protected; use reflection
+                    try {
+                        var m = net.minecraft.world.level.block.entity.BlockEntity.class
+                                .getDeclaredMethod("loadAdditional",
+                                        net.minecraft.nbt.CompoundTag.class,
+                                        net.minecraft.core.HolderLookup.Provider.class);
+                        m.setAccessible(true);
+                        m.invoke(be, nbt, be.getLevel().registryAccess());
+                    } catch (ReflectiveOperationException ex) {
+                        DebugLogger.error("[BLOCK_ENTITY] Failed to load block entity via reflection at {}",
+                                beData.pos(), ex);
+                    }
+#endif
                     DebugLogger.info(LogType.METADATA, "[BLOCK_ENTITY] Flushed pending block entity at {}",
                             beData.pos());
                 } else {

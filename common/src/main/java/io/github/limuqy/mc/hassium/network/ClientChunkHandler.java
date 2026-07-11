@@ -10,6 +10,7 @@ import io.github.limuqy.mc.hassium.concurrent.TaskCategory;
 import io.github.limuqy.mc.hassium.platform.Services;
 import io.github.limuqy.mc.hassium.utils.DebugLogger;
 import io.github.limuqy.mc.hassium.utils.DebugLogger.LogType;
+import io.github.limuqy.mc.hassium.compat.RegistryCompat;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.world.level.ChunkPos;
@@ -402,10 +403,8 @@ public class ClientChunkHandler {
                 return null;
             }
             int sectionCount = mc.level.getSectionsCount();
-            var biomeRegistry = mc.level.registryAccess()
-                    .registryOrThrow(net.minecraft.core.registries.Registries.BIOME);
             java.util.Map<Integer, Long> sectionHashes =
-                    ChunkContentHashUtil.computeSectionHashesFromBytes(sectionsBytes, sectionCount, biomeRegistry);
+                    ChunkContentHashUtil.computeSectionHashesFromBytes(sectionsBytes, sectionCount, mc.level.registryAccess());
 
             return ChunkContentHashUtil.sectionHashesToArray(sectionHashes);
         } catch (Exception e) {

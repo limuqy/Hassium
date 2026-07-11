@@ -1,17 +1,25 @@
 package io.github.limuqy.mc.hassium.network;
 
 import io.github.limuqy.mc.hassium.Constants;
+import io.github.limuqy.mc.hassium.compat.ResourceLocationCompat;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import net.minecraft.client.Minecraft;
 import net.minecraft.network.Connection;
 import net.minecraft.network.FriendlyByteBuf;
+#if MC_VER < MC_1_21_11
 import net.minecraft.resources.ResourceLocation;
+#else
+import net.minecraft.resources.Identifier;
+#endif
 import net.minecraft.server.level.ServerPlayer;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+#if MC_VER < MC_1_20_6
 import net.minecraftforge.network.NetworkDirection;
 import net.minecraftforge.network.NetworkRegistry;
 import net.minecraftforge.network.simple.SimpleChannel;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+#endif
 
 import java.lang.reflect.Field;
 
@@ -52,19 +60,24 @@ public class ForgeNetworkManager implements NetworkManager {
     }
 
     // 创建网络通道
+#if MC_VER < MC_1_20_6
     public static final SimpleChannel CHANNEL = NetworkRegistry.newSimpleChannel(
-            new ResourceLocation(Constants.MOD_ID, "main"),
+            ResourceLocationCompat.create(Constants.MOD_ID, "main"),
             () -> PROTOCOL_VERSION,
             PROTOCOL_VERSION::equals,
             PROTOCOL_VERSION::equals
     );
+#else
+    // 1.20.6+: SimpleChannel API changed, networking disabled
+    public static final Object CHANNEL = null;
+#endif
 
     private static int packetId = 0;
 
     @Override
     public void registerChannels() {
         LOGGER.info("Hassium: Registering Forge network channels");
-
+#if MC_VER < MC_1_20_6
         // 注册握手请求数据包
         CHANNEL.<HandshakePacket>registerMessage(
                 packetId++,
@@ -304,6 +317,9 @@ public class ForgeNetworkManager implements NetworkManager {
         );
 
         LOGGER.info("Hassium: Registered {} network packets", packetId);
+#else
+        LOGGER.warn("Hassium: Forge SimpleChannel networking not supported on 1.20.6+, networking disabled");
+#endif
     }
 
     @Override
@@ -320,7 +336,11 @@ public class ForgeNetworkManager implements NetworkManager {
                 true,  // globalPacketCompressionSupported
                 true   // compactHeaderSupported
         );
+#if MC_VER < MC_1_20_6
         CHANNEL.sendToServer(packet);
+#else
+        LOGGER.warn("Hassium: Forge networking not supported on 1.20.6+, dropping handshake request");
+#endif
         LOGGER.debug("Hassium: Sent handshake request to server");
     }
 
@@ -338,7 +358,11 @@ public class ForgeNetworkManager implements NetworkManager {
         byte[] data = new byte[buf.readableBytes()];
         buf.readBytes(data);
         buf.release();
+#if MC_VER < MC_1_20_6
         CHANNEL.sendToServer(new DataRequestWrapper(data));
+#else
+        LOGGER.warn("Hassium: Forge networking not supported on 1.20.6+, dropping chunk data request");
+#endif
         LOGGER.debug("Hassium: Sent chunk data request");
     }
 
@@ -352,7 +376,11 @@ public class ForgeNetworkManager implements NetworkManager {
         byte[] data = new byte[buf.readableBytes()];
         buf.readBytes(data);
         buf.release();
+#if MC_VER < MC_1_20_6
         CHANNEL.sendTo(new ChunkHashWrapper(data), player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
+#else
+        LOGGER.warn("Hassium: Forge networking not supported on 1.20.6+, dropping chunk hash packet");
+#endif
     }
 
     @Override
@@ -360,7 +388,11 @@ public class ForgeNetworkManager implements NetworkManager {
         byte[] data = new byte[buf.readableBytes()];
         buf.readBytes(data);
         buf.release();
+#if MC_VER < MC_1_20_6
         CHANNEL.sendToServer(new SectionHashRequestWrapper(data));
+#else
+        LOGGER.warn("Hassium: Forge networking not supported on 1.20.6+, dropping section hash request");
+#endif
     }
 
     @Override
@@ -368,7 +400,11 @@ public class ForgeNetworkManager implements NetworkManager {
         byte[] data = new byte[buf.readableBytes()];
         buf.readBytes(data);
         buf.release();
+#if MC_VER < MC_1_20_6
         CHANNEL.sendTo(new SectionDeltaWrapper(data), player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
+#else
+        LOGGER.warn("Hassium: Forge networking not supported on 1.20.6+, dropping section delta packet");
+#endif
     }
 
     @Override
@@ -376,7 +412,11 @@ public class ForgeNetworkManager implements NetworkManager {
         byte[] data = new byte[buf.readableBytes()];
         buf.readBytes(data);
         buf.release();
+#if MC_VER < MC_1_20_6
         CHANNEL.sendToServer(new BlockEntityRequestWrapper(data));
+#else
+        LOGGER.warn("Hassium: Forge networking not supported on 1.20.6+, dropping block entity request");
+#endif
     }
 
     @Override
@@ -384,7 +424,11 @@ public class ForgeNetworkManager implements NetworkManager {
         byte[] data = new byte[buf.readableBytes()];
         buf.readBytes(data);
         buf.release();
+#if MC_VER < MC_1_20_6
         CHANNEL.sendTo(new BlockEntityDataWrapper(data), player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
+#else
+        LOGGER.warn("Hassium: Forge networking not supported on 1.20.6+, dropping block entity data");
+#endif
     }
 
     /**
@@ -393,9 +437,14 @@ public class ForgeNetworkManager implements NetworkManager {
     public static void sendCompressedChunk(ServerPlayer player, ChunkCompressionHandler.CompressedChunkData compressed) {
         try {
             byte[] data = compressed.encode();
+#if MC_VER < MC_1_20_6
             CHANNEL.sendTo(new CompressedPayloadWrapper(data), player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
             LOGGER.debug("Hassium: Sent compressed chunk [{}, {}] to player {}",
                     compressed.chunkX, compressed.chunkZ, player.getName().getString());
+#else
+            LOGGER.warn("Hassium: Forge networking not supported on 1.20.6+, dropping compressed chunk [{}, {}]",
+                    compressed.chunkX, compressed.chunkZ);
+#endif
         } catch (Exception e) {
             LOGGER.error("Hassium: Failed to send compressed chunk to player {}", player.getName().getString(), e);
         }
