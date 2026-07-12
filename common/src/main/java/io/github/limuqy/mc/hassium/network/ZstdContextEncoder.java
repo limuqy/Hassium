@@ -71,19 +71,21 @@ public class ZstdContextEncoder extends MessageToByteEncoder<ByteBuf> {
         FriendlyByteBuf friendlyBuf = new FriendlyByteBuf(out);
 
         if (readableBytes < this.threshold) {
-            // 低于阈值：不压缩，写 VarInt(0) + 原始数据
+            // 低于阈值：不压缩，写 VarInt(0) + 数据长度 + 原始数据
             friendlyBuf.writeVarInt(0);
+            friendlyBuf.writeVarInt(readableBytes);
             friendlyBuf.writeBytes(in);
         } else {
             // 高于阈值：使用上下文压缩
             byte[] input = new byte[readableBytes];
             in.readBytes(input);
 
-            // 写入原始长度
-            friendlyBuf.writeVarInt(input.length);
-
             // 使用上下文压缩（复用历史窗口状态，提升压缩率）
             byte[] compressed = compressCtx.compress(input);
+
+            // 写入原始长度 + 压缩长度 + 压缩数据
+            friendlyBuf.writeVarInt(input.length);
+            friendlyBuf.writeVarInt(compressed.length);
             friendlyBuf.writeBytes(compressed);
 
             if (LOGGER.isDebugEnabled()) {

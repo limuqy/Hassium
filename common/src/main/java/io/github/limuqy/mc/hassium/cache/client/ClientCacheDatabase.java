@@ -69,6 +69,13 @@ public class ClientCacheDatabase implements Closeable {
             throw new SQLException("Failed to create cache directory", e);
         }
 
+        // 手动加载 SQLite JDBC 驱动（解决模块化类加载器环境下的驱动注册问题）
+        try {
+            Class.forName("org.sqlite.JDBC");
+        } catch (ClassNotFoundException e) {
+            throw new SQLException("SQLite JDBC driver not found", e);
+        }
+
         connection = DriverManager.getConnection("jdbc:sqlite:" + dbPath);
         optimizeConnection();
         createTables();
@@ -623,16 +630,25 @@ public class ClientCacheDatabase implements Closeable {
         }
 
         if (connection != null) {
+            // 关闭 prepared statements（非关键，失败不阻断连接关闭）
             try {
                 if (upsertStmt != null) { upsertStmt.close(); }
                 if (updateAccessStmt != null) { updateAccessStmt.close(); }
                 if (deleteEntryStmt != null) { deleteEntryStmt.close(); }
                 if (updateSectionHashesStmt != null) { updateSectionHashesStmt.close(); }
+            } catch (SQLException ignored) {
+                // 预处理语句关闭失败不影响后续关闭
+            }
 
-                try (Statement stmt = connection.createStatement()) {
-                    stmt.execute("PRAGMA wal_checkpoint(TRUNCATE)");
-                }
+            // WAL checkpoint（非关键，表被锁时跳过，不阻断连接关闭）
+            try (Statement stmt = connection.createStatement()) {
+                stmt.execute("PRAGMA wal_checkpoint(TRUNCATE)");
+            } catch (SQLException ignored) {
+                // 表被锁时无法 checkpoint，跳过即可
+            }
 
+            // 关闭连接（关键操作）
+            try {
                 connection.close();
             } catch (SQLException e) {
                 throw new IOException("Failed to close database connection", e);

@@ -10,6 +10,9 @@ configurations.implementation.extendsFrom(configurations.library)
 // ...and inject them into the FML game-layer classpath (legacy_classpath.txt) so they
 // load in dev runs, not just in the shaded production jar.
 configurations.minecraftLibraries.extendsFrom(configurations.library)
+// Also put them on the JVM runtime classpath so the Mixin transformer (modlauncher)
+// can resolve classes like ZstdDictCompress during transformation.
+configurations.minecraftRuntimeLibraries.extendsFrom(configurations.library)
 
 // Mixin AP 配置：禁用目标验证（architectury-loom 的 remapping 会在运行时处理）
 tasks.withType(JavaCompile).configureEach {

@@ -115,11 +115,17 @@ public class AggregatedZstdDecoder extends ByteToMessageDecoder {
             }
         }
 
-        // 读取压缩数据
-        int compressedLength = in.readableBytes();
+        // 读取压缩数据长度
+        int compressedLength = readVarInt(in);
         if (compressedLength > MAXIMUM_COMPRESSED_LENGTH) {
             throw new DecoderException("Badly compressed packet - compressed size " +
                     compressedLength + " exceeds maximum " + MAXIMUM_COMPRESSED_LENGTH);
+        }
+
+        // 检查是否有足够的压缩数据，不够则回滚等待更多数据
+        if (in.readableBytes() < compressedLength) {
+            in.resetReaderIndex();
+            return;
         }
 
         byte[] compressed = new byte[compressedLength];

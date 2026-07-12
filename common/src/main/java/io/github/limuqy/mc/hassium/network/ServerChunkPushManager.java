@@ -288,12 +288,44 @@ public class ServerChunkPushManager {
     }
 
     /**
+     * 异步计算 sectionHashes → chunkHash 并发送阶段一元数据（从 PlayerChunkSender.sendChunk 调用，1.20.2+）。
+     * <p>
+     * 1.20.2+ 移除了 {@code ServerPlayer.trackChunk}，初始区块发送改走
+     * {@code PlayerChunkSender.sendChunk}，此方法从 {@link LevelChunk} 直接计算 section 哈希。
+     *
+     * @param player    目标玩家
+     * @param pos       区块位置
+     * @param chunk     区块对象（主线程捕获，后台线程只读）
+     * @param dimension 维度标识
+     */
+    public void submitMetadataTaskFromChunk(ServerPlayer player, ChunkPos pos,
+                                             LevelChunk chunk, String dimension) {
+        ensureInitialized();
+        pushPool.submit(() -> {
+            try {
+                Map<Integer, Long> sectionHashes = ChunkContentHashUtil.computeSectionHashes(chunk);
+                int sectionBitmap = computeSectionBitmap(chunk);
+                long chunkHash = ChunkContentHashUtil.combineSectionHashes(sectionHashes);
+
+                if (player.isAlive() && !player.hasDisconnected()) {
+                    sendChunkHash(List.of(player), pos, chunkHash, sectionBitmap, dimension);
+                }
+            } catch (Exception e) {
+                Constants.LOG.error("[ASYNC_METADATA] Failed to compute chunkHash for chunk {} (player={})",
+                        pos, player.getName().getString(), e);
+            }
+        });
+    }
+
+    /**
      * 发送阶段一 chunkHash 给客户端
      */
     private void sendChunkHash(List<ServerPlayer> players, ChunkPos pos,
                                 long chunkHash, int sectionBitmap, String dimension) {
         for (ServerPlayer player : players) {
             if (!player.isAlive() || player.hasDisconnected()) { continue; }
+            Constants.LOG.info("[SEND_HASH] Sending chunkHash for chunk {} to player {} (hash={})",
+                    pos, player.getName().getString(), Long.toHexString(chunkHash));
             FriendlyByteBuf buf = null;
             boolean sent = false;
             try {
@@ -690,26 +722,37 @@ public class ServerChunkPushManager {
                 new net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket(
                         chunk, level.getLightEngine(), lightMask, lightMask);
 
+#if MC_VER < MC_1_20_5
         io.netty.buffer.ByteBuf tempBuf = io.netty.buffer.Unpooled.buffer();
         try {
             FriendlyByteBuf friendlyBuf = new FriendlyByteBuf(tempBuf);
-#if MC_VER < MC_1_20_5
             chunkPacket.write(friendlyBuf);
 
             byte[] data = new byte[tempBuf.readableBytes()];
             tempBuf.getBytes(0, data);
             return data;
-#else
-            // 1.20.6+: Packet.write() removed
-            Constants.LOG.warn("Chunk packet serialization not supported on 1.20.6+");
-            return null;
-#endif
         } catch (Exception e) {
             Constants.LOG.error("Hassium: Failed to serialize chunk {}", chunk.getPos(), e);
             return null;
         } finally {
             tempBuf.release();
         }
+#else
+        // 1.20.5+: Packet.write() removed, use STREAM_CODEC with RegistryFriendlyByteBuf
+        net.minecraft.network.RegistryFriendlyByteBuf buf =
+                new net.minecraft.network.RegistryFriendlyByteBuf(io.netty.buffer.Unpooled.buffer(), level.registryAccess());
+        try {
+            net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket.STREAM_CODEC.encode(buf, chunkPacket);
+            byte[] data = new byte[buf.readableBytes()];
+            buf.readBytes(data);
+            return data;
+        } catch (Exception e) {
+            Constants.LOG.error("Hassium: Failed to serialize chunk {}", chunk.getPos(), e);
+            return null;
+        } finally {
+            buf.release();
+        }
+#endif
     }
 
     /**

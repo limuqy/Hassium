@@ -1,5 +1,6 @@
 package io.github.limuqy.mc.hassium.mixin;
 
+import io.github.limuqy.mc.hassium.cache.client.ClientLifecycleHelper;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
@@ -11,6 +12,9 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
  * <p>
  * 1.20.1 无 {@code ClientCommonPacketListenerImpl}，挂空壳到 {@code Minecraft}
  * 以满足 mixins.json 注册。
+ * <p>
+ * 清理逻辑在 {@link ClientLifecycleHelper#cleanupOnDisconnect()}（非 Mixin 类），
+ * 因 Mixin 0.8.7 不允许 Mixin 类中存在非 private 的静态方法。
  */
 #if MC_VER >= MC_1_20_2
 @Mixin(net.minecraft.client.multiplayer.ClientCommonPacketListenerImpl.class)
@@ -34,7 +38,7 @@ public class MixinClientCommonPacketListenerImpl {
             net.minecraft.network.DisconnectionDetails details,
 #endif
             CallbackInfo ci) {
-        MixinClientPacketListener.hassium$cleanupOnDisconnect();
+        ClientLifecycleHelper.cleanupOnDisconnect();
     }
 #endif
 }

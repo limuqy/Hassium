@@ -15,6 +15,9 @@ import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.server.level.ServerPlayer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+#if MC_VER >= MC_1_20_5
+import io.github.limuqy.mc.hassium.network.FabricPayloadRegistry;
+#endif
 
 /**
  * Fabric 平台的网络管理器服务实现
@@ -27,13 +30,10 @@ public class FabricNetworkManagerService implements INetworkManagerService {
 
     @Override
     public void sendMetadataPacket(ServerPlayer player, FriendlyByteBuf buf) {
-        // ServerPlayNetworking.send 会接管 buf 的所有权并负责释放
-        // 不需要手动释放
 #if MC_VER < MC_1_20_5
         ServerPlayNetworking.send(player, ChunkMetadataS2CPacket.CHANNEL, buf);
 #else
-        LOGGER.warn("Fabric networking send not supported on 1.20.5+, dropping packet");
-        buf.release();
+        ServerPlayNetworking.send(player, FabricPayloadRegistry.toPayload(FabricPayloadRegistry.CHUNK_METADATA_S2C_TYPE, buf));
 #endif
     }
 
@@ -42,8 +42,7 @@ public class FabricNetworkManagerService implements INetworkManagerService {
 #if MC_VER < MC_1_20_5
         ClientPlayNetworking.send(ChunkDataRequestC2SPacket.CHANNEL, buf);
 #else
-        LOGGER.warn("Fabric networking send not supported on 1.20.5+, dropping packet");
-        buf.release();
+        ClientPlayNetworking.send(FabricPayloadRegistry.toPayload(FabricPayloadRegistry.CHUNK_DATA_REQUEST_C2S_TYPE, buf));
 #endif
     }
 
@@ -52,8 +51,7 @@ public class FabricNetworkManagerService implements INetworkManagerService {
 #if MC_VER < MC_1_20_5
         ServerPlayNetworking.send(player, ChunkHashS2CPacket.CHANNEL, buf);
 #else
-        LOGGER.warn("Fabric networking send not supported on 1.20.5+, dropping packet");
-        buf.release();
+        ServerPlayNetworking.send(player, FabricPayloadRegistry.toPayload(FabricPayloadRegistry.CHUNK_HASH_S2C_TYPE, buf));
 #endif
     }
 
@@ -62,8 +60,7 @@ public class FabricNetworkManagerService implements INetworkManagerService {
 #if MC_VER < MC_1_20_5
         ClientPlayNetworking.send(SectionHashRequestC2SPacket.CHANNEL, buf);
 #else
-        LOGGER.warn("Fabric networking send not supported on 1.20.5+, dropping packet");
-        buf.release();
+        ClientPlayNetworking.send(FabricPayloadRegistry.toPayload(FabricPayloadRegistry.SECTION_HASH_REQUEST_C2S_TYPE, buf));
 #endif
     }
 
@@ -72,8 +69,7 @@ public class FabricNetworkManagerService implements INetworkManagerService {
 #if MC_VER < MC_1_20_5
         ServerPlayNetworking.send(player, SectionDeltaS2CPacket.CHANNEL, buf);
 #else
-        LOGGER.warn("Fabric networking send not supported on 1.20.5+, dropping packet");
-        buf.release();
+        ServerPlayNetworking.send(player, FabricPayloadRegistry.toPayload(FabricPayloadRegistry.SECTION_DELTA_S2C_TYPE, buf));
 #endif
     }
 
@@ -82,8 +78,7 @@ public class FabricNetworkManagerService implements INetworkManagerService {
 #if MC_VER < MC_1_20_5
         ClientPlayNetworking.send(BlockEntityRequestC2SPacket.CHANNEL, buf);
 #else
-        LOGGER.warn("Fabric networking send not supported on 1.20.5+, dropping packet");
-        buf.release();
+        ClientPlayNetworking.send(FabricPayloadRegistry.toPayload(FabricPayloadRegistry.BLOCK_ENTITY_REQUEST_C2S_TYPE, buf));
 #endif
     }
 
@@ -92,8 +87,7 @@ public class FabricNetworkManagerService implements INetworkManagerService {
 #if MC_VER < MC_1_20_5
         ServerPlayNetworking.send(player, BlockEntityDataS2CPacket.CHANNEL, buf);
 #else
-        LOGGER.warn("Fabric networking send not supported on 1.20.5+, dropping packet");
-        buf.release();
+        ServerPlayNetworking.send(player, FabricPayloadRegistry.toPayload(FabricPayloadRegistry.BLOCK_ENTITY_DATA_S2C_TYPE, buf));
 #endif
     }
 }

@@ -24,8 +24,14 @@ public class MixinLevelRenderer {
 
     /**
      * 在编译区块后，强制编译 renderOnly 区块的渲染缓冲
+     * <p>
+     * 1.20.2+：compileChunks 重命名为 compileSections。
      */
+#if MC_VER < MC_1_20_2
     @Inject(method = "compileChunks", at = @At("RETURN"))
+#else
+    @Inject(method = "compileSections", at = @At("RETURN"))
+#endif
     private void hassium$includeRenderOnlyChunks(CallbackInfo ci) {
         ClientLevel level = hassium$minecraft.level;
         if (level == null) {

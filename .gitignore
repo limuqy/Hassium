@@ -17,6 +17,7 @@ out
 # gradle
 build
 .gradle
+build.properties
 
 # other
 eclipse
@@ -29,3 +30,4 @@ run
 /.idea/
 /common/.omc/
 /common/logs/
+/.mimocode/

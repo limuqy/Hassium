@@ -46,12 +46,18 @@ public class ZstdPacketDecoder extends ByteToMessageDecoder {
             return;
         }
 
+        in.markReaderIndex();
         FriendlyByteBuf friendlyBuf = new FriendlyByteBuf(in);
         int uncompressedLength = friendlyBuf.readVarInt();
 
         if (uncompressedLength == 0) {
-            // 未压缩数据，直接透传
-            out.add(friendlyBuf.readBytes(friendlyBuf.readableBytes()));
+            // 未压缩数据
+            int dataLength = friendlyBuf.readVarInt();
+            if (friendlyBuf.readableBytes() < dataLength) {
+                in.resetReaderIndex();
+                return;
+            }
+            out.add(friendlyBuf.readBytes(dataLength));
         } else {
             // 验证解压大小
             if (this.validateDecompressed) {
@@ -65,11 +71,16 @@ public class ZstdPacketDecoder extends ByteToMessageDecoder {
                 }
             }
 
-            // 读取压缩数据
-            int compressedLength = friendlyBuf.readableBytes();
+            // 读取压缩数据长度
+            int compressedLength = friendlyBuf.readVarInt();
             if (compressedLength > MAXIMUM_COMPRESSED_LENGTH) {
                 throw new DecoderException("Badly compressed packet - compressed size " +
                         compressedLength + " exceeds maximum " + MAXIMUM_COMPRESSED_LENGTH);
+            }
+
+            if (friendlyBuf.readableBytes() < compressedLength) {
+                in.resetReaderIndex();
+                return;
             }
 
             byte[] compressed = new byte[compressedLength];

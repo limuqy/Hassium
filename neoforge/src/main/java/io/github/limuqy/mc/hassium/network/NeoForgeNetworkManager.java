@@ -1,0 +1,1089 @@
+package io.github.limuqy.mc.hassium.network;
+
+import io.github.limuqy.mc.hassium.Constants;
+import io.github.limuqy.mc.hassium.compat.ResourceLocationCompat;
+import io.github.limuqy.mc.hassium.config.HassiumConfigService;
+import io.github.limuqy.mc.hassium.platform.Services;
+import net.minecraft.network.FriendlyByteBuf;
+import net.minecraft.server.level.ServerPlayer;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+#if MC_VER < MC_1_20_2
+import net.minecraftforge.fml.common.Mod;
+import net.minecraftforge.fml.event.lifecycle.FMLCommonSetupEvent;
+import net.minecraftforge.eventbus.api.IEventBus;
+import net.minecraftforge.eventbus.api.SubscribeEvent;
+import net.minecraftforge.network.NetworkDirection;
+import net.minecraftforge.network.NetworkRegistry;
+import net.minecraftforge.network.simple.SimpleChannel;
+#else
+import net.minecraft.network.codec.ByteBufCodecs;
+import net.minecraft.network.codec.StreamCodec;
+import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
+import net.neoforged.fml.common.Mod;
+import net.neoforged.fml.event.lifecycle.FMLCommonSetupEvent;
+import net.neoforged.bus.api.IEventBus;
+import net.neoforged.bus.api.SubscribeEvent;
+import net.neoforged.neoforge.network.event.RegisterPayloadHandlersEvent;
+import net.neoforged.neoforge.network.handling.IPayloadContext;
+#endif
+
+import java.lang.reflect.Field;
+
+/**
+ * NeoForge 平台网络管理器实现
+ * 支持 1.20.1-1.21.11 全版本
+ */
+public class NeoForgeNetworkManager implements NetworkManager {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger("Hassium/NeoForgeNetwork");
+    private static final String PROTOCOL_VERSION = "1";
+
+    // 缓存服务器实例
+    private static volatile net.minecraft.server.MinecraftServer cachedServer;
+
+    /**
+     * 设置服务器实例
+     */
+    public static void setServerInstance(net.minecraft.server.MinecraftServer server) {
+        cachedServer = server;
+    }
+
+    /**
+     * 通过反射获取 Connection 的 channel 字段
+     */
+    private static io.netty.channel.Channel getConnectionChannel(net.minecraft.network.Connection connection) {
+        try {
+            Field channelField = net.minecraft.network.Connection.class.getDeclaredField("channel");
+            channelField.setAccessible(true);
+            return (io.netty.channel.Channel) channelField.get(connection);
+        } catch (Exception e) {
+            LOGGER.error("Hassium: Failed to get channel from connection", e);
+            return null;
+        }
+    }
+
+    /**
+     * 通过反射获取 ServerPlayer 的 Connection
+     */
+    private static net.minecraft.network.Connection getPlayerConnection(ServerPlayer player) {
+        try {
+            Field connectionField = player.connection.getClass().getDeclaredField("connection");
+            connectionField.setAccessible(true);
+            return (net.minecraft.network.Connection) connectionField.get(player.connection);
+        } catch (Exception e) {
+            LOGGER.error("Hassium: Failed to get connection from player", e);
+            return null;
+        }
+    }
+
+#if MC_VER < MC_1_20_2
+    // 1.20.1: 使用 SimpleChannel
+    public static final SimpleChannel CHANNEL = NetworkRegistry.newSimpleChannel(
+            ResourceLocationCompat.create(Constants.MOD_ID, "main"),
+            () -> PROTOCOL_VERSION,
+            PROTOCOL_VERSION::equals,
+            PROTOCOL_VERSION::equals
+    );
+
+    // 1.20.1 数据包 ID 计数器
+    private static int packetId = 0;
+
+    // 防止重复注册（commonSetup 和 onClientSetup 都可能调用）
+    private static boolean packetsRegistered = false;
+
+    // 1.20.1 包装类定义
+    public record ChunkHashWrapper(byte[] data) {
+        public void encode(FriendlyByteBuf buf) {
+            buf.writeVarInt(data.length);
+            buf.writeBytes(data);
+        }
+        public static ChunkHashWrapper decode(FriendlyByteBuf buf) {
+            int length = buf.readVarInt();
+            byte[] data = new byte[length];
+            buf.readBytes(data);
+            return new ChunkHashWrapper(data);
+        }
+    }
+
+    public record SectionDeltaWrapper(byte[] data) {
+        public void encode(FriendlyByteBuf buf) {
+            buf.writeVarInt(data.length);
+            buf.writeBytes(data);
+        }
+        public static SectionDeltaWrapper decode(FriendlyByteBuf buf) {
+            int length = buf.readVarInt();
+            byte[] data = new byte[length];
+            buf.readBytes(data);
+            return new SectionDeltaWrapper(data);
+        }
+    }
+
+    public record BlockEntityDataWrapper(byte[] data) {
+        public void encode(FriendlyByteBuf buf) {
+            buf.writeVarInt(data.length);
+            buf.writeBytes(data);
+        }
+        public static BlockEntityDataWrapper decode(FriendlyByteBuf buf) {
+            int length = buf.readVarInt();
+            byte[] data = new byte[length];
+            buf.readBytes(data);
+            return new BlockEntityDataWrapper(data);
+        }
+    }
+
+    public record CompressedChunkWrapper(byte[] data) {
+        public void encode(FriendlyByteBuf buf) {
+            buf.writeVarInt(data.length);
+            buf.writeBytes(data);
+        }
+        public static CompressedChunkWrapper decode(FriendlyByteBuf buf) {
+            int length = buf.readVarInt();
+            byte[] data = new byte[length];
+            buf.readBytes(data);
+            return new CompressedChunkWrapper(data);
+        }
+    }
+
+    public record ChunkMetadataWrapper(byte[] data) {
+        public void encode(FriendlyByteBuf buf) {
+            buf.writeVarInt(data.length);
+            buf.writeBytes(data);
+        }
+        public static ChunkMetadataWrapper decode(FriendlyByteBuf buf) {
+            int length = buf.readVarInt();
+            byte[] data = new byte[length];
+            buf.readBytes(data);
+            return new ChunkMetadataWrapper(data);
+        }
+    }
+
+    public record ChunkDataRequestWrapper(byte[] data) {
+        public void encode(FriendlyByteBuf buf) {
+            buf.writeVarInt(data.length);
+            buf.writeBytes(data);
+        }
+        public static ChunkDataRequestWrapper decode(FriendlyByteBuf buf) {
+            int length = buf.readVarInt();
+            byte[] data = new byte[length];
+            buf.readBytes(data);
+            return new ChunkDataRequestWrapper(data);
+        }
+    }
+
+    public record SectionHashRequestWrapper(byte[] data) {
+        public void encode(FriendlyByteBuf buf) {
+            buf.writeVarInt(data.length);
+            buf.writeBytes(data);
+        }
+        public static SectionHashRequestWrapper decode(FriendlyByteBuf buf) {
+            int length = buf.readVarInt();
+            byte[] data = new byte[length];
+            buf.readBytes(data);
+            return new SectionHashRequestWrapper(data);
+        }
+    }
+
+    public record BlockEntityRequestWrapper(byte[] data) {
+        public void encode(FriendlyByteBuf buf) {
+            buf.writeVarInt(data.length);
+            buf.writeBytes(data);
+        }
+        public static BlockEntityRequestWrapper decode(FriendlyByteBuf buf) {
+            int length = buf.readVarInt();
+            byte[] data = new byte[length];
+            buf.readBytes(data);
+            return new BlockEntityRequestWrapper(data);
+        }
+    }
+
+    public record HandshakeWrapper(
+            int protocolVersion,
+            String modVersion,
+            String[] supportedAlgorithms,
+            boolean clientCacheSupported,
+            boolean chunkRevisionSupported,
+            boolean scheme127Supported,
+            boolean globalPacketCompressionSupported,
+            boolean compactHeaderSupported
+    ) {
+        public void encode(FriendlyByteBuf buf) {
+            buf.writeVarInt(protocolVersion);
+            buf.writeUtf(modVersion);
+            buf.writeVarInt(supportedAlgorithms.length);
+            for (String algo : supportedAlgorithms) {
+                buf.writeUtf(algo);
+            }
+            buf.writeBoolean(clientCacheSupported);
+            buf.writeBoolean(chunkRevisionSupported);
+            buf.writeBoolean(scheme127Supported);
+            buf.writeBoolean(globalPacketCompressionSupported);
+            buf.writeBoolean(compactHeaderSupported);
+        }
+        public static HandshakeWrapper decode(FriendlyByteBuf buf) {
+            int protocolVersion = buf.readVarInt();
+            String modVersion = buf.readUtf();
+            int algoCount = buf.readVarInt();
+            String[] algorithms = new String[algoCount];
+            for (int i = 0; i < algoCount; i++) {
+                algorithms[i] = buf.readUtf();
+            }
+            boolean clientCache = buf.readBoolean();
+            boolean chunkRevision = buf.readBoolean();
+            boolean scheme127 = buf.readBoolean();
+            boolean globalPacketCompression = buf.readBoolean();
+            boolean compactHeader = buf.readBoolean();
+            return new HandshakeWrapper(protocolVersion, modVersion, algorithms, clientCache, chunkRevision, scheme127, globalPacketCompression, compactHeader);
+        }
+    }
+
+    public record HandshakeResponseWrapper(
+            int protocolVersion,
+            boolean accepted,
+            boolean globalCompressionAccepted,
+            boolean compactHeaderAccepted
+    ) {
+        public void encode(FriendlyByteBuf buf) {
+            buf.writeVarInt(protocolVersion);
+            buf.writeBoolean(accepted);
+            buf.writeBoolean(globalCompressionAccepted);
+            buf.writeBoolean(compactHeaderAccepted);
+        }
+        public static HandshakeResponseWrapper decode(FriendlyByteBuf buf) {
+            int protocolVersion = buf.readVarInt();
+            boolean accepted = buf.readBoolean();
+            boolean globalCompressionAccepted = buf.readBoolean();
+            boolean compactHeaderAccepted = buf.readBoolean();
+            return new HandshakeResponseWrapper(protocolVersion, accepted, globalCompressionAccepted, compactHeaderAccepted);
+        }
+    }
+
+#else
+    // 1.20.2+: 使用 Payload API
+    public static final Object CHANNEL = null;
+
+    /**
+     * 握手请求 Payload (C2S)
+     */
+    public record HandshakePayload(
+            int protocolVersion,
+            String modVersion,
+            String[] supportedAlgorithms,
+            boolean clientCacheSupported,
+            boolean chunkRevisionSupported,
+            boolean scheme127Supported,
+            boolean globalPacketCompressionSupported,
+            boolean compactHeaderSupported
+    ) implements CustomPacketPayload {
+
+        public static final Type<HandshakePayload> TYPE = new Type<>(
+                ResourceLocationCompat.create(Constants.MOD_ID, "handshake_c2s")
+        );
+
+        public static final StreamCodec<FriendlyByteBuf, HandshakePayload> STREAM_CODEC = StreamCodec.composite(
+                ByteBufCodecs.VAR_INT, HandshakePayload::protocolVersion,
+                ByteBufCodecs.STRING_UTF8, HandshakePayload::modVersion,
+                ByteBufCodecs.STRING_UTF8.apply(ByteBufCodecs.list()).map(
+                        list -> list.toArray(new String[0]),
+                        arr -> java.util.Arrays.asList(arr)
+                ), HandshakePayload::supportedAlgorithms,
+                ByteBufCodecs.BOOL, HandshakePayload::clientCacheSupported,
+                ByteBufCodecs.BOOL, HandshakePayload::chunkRevisionSupported,
+                ByteBufCodecs.BOOL, HandshakePayload::scheme127Supported,
+                ByteBufCodecs.BOOL, HandshakePayload::globalPacketCompressionSupported,
+                ByteBufCodecs.BOOL, HandshakePayload::compactHeaderSupported,
+                HandshakePayload::new
+        );
+
+        @Override
+        public Type<HandshakePayload> type() {
+            return TYPE;
+        }
+    }
+
+    /**
+     * 握手响应 Payload (S2C)
+     */
+    public record HandshakeResponsePayload(
+            int protocolVersion,
+            boolean accepted,
+            boolean globalCompressionAccepted,
+            boolean compactHeaderAccepted
+    ) implements CustomPacketPayload {
+
+        public static final Type<HandshakeResponsePayload> TYPE = new Type<>(
+                ResourceLocationCompat.create(Constants.MOD_ID, "handshake_s2c")
+        );
+
+        public static final StreamCodec<FriendlyByteBuf, HandshakeResponsePayload> STREAM_CODEC = StreamCodec.composite(
+                ByteBufCodecs.VAR_INT, HandshakeResponsePayload::protocolVersion,
+                ByteBufCodecs.BOOL, HandshakeResponsePayload::accepted,
+                ByteBufCodecs.BOOL, HandshakeResponsePayload::globalCompressionAccepted,
+                ByteBufCodecs.BOOL, HandshakeResponsePayload::compactHeaderAccepted,
+                HandshakeResponsePayload::new
+        );
+
+        @Override
+        public Type<HandshakeResponsePayload> type() {
+            return TYPE;
+        }
+    }
+
+    /**
+     * 压缩区块数据 Payload (S2C)
+     */
+    public record CompressedChunkPayload(byte[] data) implements CustomPacketPayload {
+
+        public static final Type<CompressedChunkPayload> TYPE = new Type<>(
+                ResourceLocationCompat.create(Constants.MOD_ID, "chunk_payload_s2c")
+        );
+
+        public static final StreamCodec<FriendlyByteBuf, CompressedChunkPayload> STREAM_CODEC = StreamCodec.composite(
+                ByteBufCodecs.BYTE_ARRAY, CompressedChunkPayload::data,
+                CompressedChunkPayload::new
+        );
+
+        @Override
+        public Type<CompressedChunkPayload> type() {
+            return TYPE;
+        }
+    }
+
+    /**
+     * 区块元数据 Payload (S2C)
+     */
+    public record ChunkMetadataPayload(byte[] data) implements CustomPacketPayload {
+
+        public static final Type<ChunkMetadataPayload> TYPE = new Type<>(
+                ResourceLocationCompat.create(Constants.MOD_ID, "chunk_metadata_s2c")
+        );
+
+        public static final StreamCodec<FriendlyByteBuf, ChunkMetadataPayload> STREAM_CODEC = StreamCodec.composite(
+                ByteBufCodecs.BYTE_ARRAY, ChunkMetadataPayload::data,
+                ChunkMetadataPayload::new
+        );
+
+        @Override
+        public Type<ChunkMetadataPayload> type() {
+            return TYPE;
+        }
+    }
+
+    /**
+     * 区块数据请求 Payload (C2S)
+     */
+    public record ChunkDataRequestPayload(byte[] data) implements CustomPacketPayload {
+
+        public static final Type<ChunkDataRequestPayload> TYPE = new Type<>(
+                ResourceLocationCompat.create(Constants.MOD_ID, "chunk_data_request_c2s")
+        );
+
+        public static final StreamCodec<FriendlyByteBuf, ChunkDataRequestPayload> STREAM_CODEC = StreamCodec.composite(
+                ByteBufCodecs.BYTE_ARRAY, ChunkDataRequestPayload::data,
+                ChunkDataRequestPayload::new
+        );
+
+        @Override
+        public Type<ChunkDataRequestPayload> type() {
+            return TYPE;
+        }
+    }
+
+    /**
+     * 区块哈希 Payload (S2C)
+     */
+    public record ChunkHashPayload(byte[] data) implements CustomPacketPayload {
+
+        public static final Type<ChunkHashPayload> TYPE = new Type<>(
+                ResourceLocationCompat.create(Constants.MOD_ID, "chunk_hash_s2c")
+        );
+
+        public static final StreamCodec<FriendlyByteBuf, ChunkHashPayload> STREAM_CODEC = StreamCodec.composite(
+                ByteBufCodecs.BYTE_ARRAY, ChunkHashPayload::data,
+                ChunkHashPayload::new
+        );
+
+        @Override
+        public Type<ChunkHashPayload> type() {
+            return TYPE;
+        }
+    }
+
+    /**
+     * Section 哈希请求 Payload (C2S)
+     */
+    public record SectionHashRequestPayload(byte[] data) implements CustomPacketPayload {
+
+        public static final Type<SectionHashRequestPayload> TYPE = new Type<>(
+                ResourceLocationCompat.create(Constants.MOD_ID, "section_hash_request_c2s")
+        );
+
+        public static final StreamCodec<FriendlyByteBuf, SectionHashRequestPayload> STREAM_CODEC = StreamCodec.composite(
+                ByteBufCodecs.BYTE_ARRAY, SectionHashRequestPayload::data,
+                SectionHashRequestPayload::new
+        );
+
+        @Override
+        public Type<SectionHashRequestPayload> type() {
+            return TYPE;
+        }
+    }
+
+    /**
+     * Section Delta Payload (S2C)
+     */
+    public record SectionDeltaPayload(byte[] data) implements CustomPacketPayload {
+
+        public static final Type<SectionDeltaPayload> TYPE = new Type<>(
+                ResourceLocationCompat.create(Constants.MOD_ID, "section_delta_s2c")
+        );
+
+        public static final StreamCodec<FriendlyByteBuf, SectionDeltaPayload> STREAM_CODEC = StreamCodec.composite(
+                ByteBufCodecs.BYTE_ARRAY, SectionDeltaPayload::data,
+                SectionDeltaPayload::new
+        );
+
+        @Override
+        public Type<SectionDeltaPayload> type() {
+            return TYPE;
+        }
+    }
+
+    /**
+     * BlockEntity 请求 Payload (C2S)
+     */
+    public record BlockEntityRequestPayload(byte[] data) implements CustomPacketPayload {
+
+        public static final Type<BlockEntityRequestPayload> TYPE = new Type<>(
+                ResourceLocationCompat.create(Constants.MOD_ID, "block_entity_request_c2s")
+        );
+
+        public static final StreamCodec<FriendlyByteBuf, BlockEntityRequestPayload> STREAM_CODEC = StreamCodec.composite(
+                ByteBufCodecs.BYTE_ARRAY, BlockEntityRequestPayload::data,
+                BlockEntityRequestPayload::new
+        );
+
+        @Override
+        public Type<BlockEntityRequestPayload> type() {
+            return TYPE;
+        }
+    }
+
+    /**
+     * BlockEntity 数据 Payload (S2C)
+     */
+    public record BlockEntityDataPayload(byte[] data) implements CustomPacketPayload {
+
+        public static final Type<BlockEntityDataPayload> TYPE = new Type<>(
+                ResourceLocationCompat.create(Constants.MOD_ID, "block_entity_data_s2c")
+        );
+
+        public static final StreamCodec<FriendlyByteBuf, BlockEntityDataPayload> STREAM_CODEC = StreamCodec.composite(
+                ByteBufCodecs.BYTE_ARRAY, BlockEntityDataPayload::data,
+                BlockEntityDataPayload::new
+        );
+
+        @Override
+        public Type<BlockEntityDataPayload> type() {
+            return TYPE;
+        }
+    }
+
+#endif
+
+    // ========== 注册方法 ==========
+
+    @Override
+    public void registerChannels() {
+        LOGGER.info("Hassium: NeoForge network channels will be registered via event");
+#if MC_VER < MC_1_20_2
+        registerSimpleChannelPackets();
+#endif
+    }
+
+#if MC_VER < MC_1_20_2
+    /**
+     * 注册 SimpleChannel 数据包 (1.20.1)
+     */
+    private void registerSimpleChannelPackets() {
+        if (packetsRegistered) {
+            LOGGER.debug("Hassium: SimpleChannel packets already registered, skipping");
+            return;
+        }
+        packetsRegistered = true;
+        LOGGER.info("Hassium: Registering SimpleChannel packets for 1.20.1");
+
+        // 注册握手请求
+        CHANNEL.registerMessage(packetId++, HandshakeWrapper.class,
+                HandshakeWrapper::encode, HandshakeWrapper::decode,
+                (msg, ctx) -> {
+                    ctx.get().enqueueWork(() -> {
+                        ServerPlayer player = ctx.get().getSender();
+                        if (player == null) return;
+                        handleHandshake1201(player, msg);
+                    });
+                });
+
+        // 注册握手响应
+        CHANNEL.registerMessage(packetId++, HandshakeResponseWrapper.class,
+                HandshakeResponseWrapper::encode, HandshakeResponseWrapper::decode,
+                (msg, ctx) -> {
+                    ctx.get().enqueueWork(() -> {
+                        handleHandshakeResponse1201(msg);
+                    });
+                });
+
+        // 注册压缩区块
+        CHANNEL.registerMessage(packetId++, CompressedChunkWrapper.class,
+                CompressedChunkWrapper::encode, CompressedChunkWrapper::decode,
+                (msg, ctx) -> {
+                    ctx.get().enqueueWork(() -> {
+                        try {
+                            ClientChunkHandler.handleCompressedChunk(msg.data());
+                        } catch (Exception e) {
+                            LOGGER.error("[CLIENT] Failed to handle compressed chunk", e);
+                        }
+                    });
+                });
+
+        // 注册区块元数据
+        CHANNEL.registerMessage(packetId++, ChunkMetadataWrapper.class,
+                ChunkMetadataWrapper::encode, ChunkMetadataWrapper::decode,
+                (msg, ctx) -> {
+                    ctx.get().enqueueWork(() -> {
+                        try {
+                            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data()));
+                            ChunkMetadataS2CPacket packet = ChunkMetadataS2CPacket.decode(buf);
+                            ClientMetadataHandler.handleMetadataPacket(packet);
+                        } catch (Exception e) {
+                            LOGGER.error("[CLIENT] Failed to handle chunk metadata", e);
+                        }
+                    });
+                });
+
+        // 注册区块数据请求
+        CHANNEL.registerMessage(packetId++, ChunkDataRequestWrapper.class,
+                ChunkDataRequestWrapper::encode, ChunkDataRequestWrapper::decode,
+                (msg, ctx) -> {
+                    ctx.get().enqueueWork(() -> {
+                        ServerPlayer player = ctx.get().getSender();
+                        if (player == null) return;
+                        try {
+                            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data()));
+                            ChunkDataRequestC2SPacket request = ChunkDataRequestC2SPacket.decode(buf);
+                            ServerChunkPushManager.getInstance().enqueueDataRequest(player, request.dimension(), request.chunks());
+                        } catch (Exception e) {
+                            LOGGER.error("[SERVER] Failed to handle chunk data request", e);
+                        }
+                    });
+                });
+
+        // 注册区块哈希
+        CHANNEL.registerMessage(packetId++, ChunkHashWrapper.class,
+                ChunkHashWrapper::encode, ChunkHashWrapper::decode,
+                (msg, ctx) -> {
+                    ctx.get().enqueueWork(() -> {
+                        try {
+                            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data()));
+                            ChunkHashS2CPacket packet = ChunkHashS2CPacket.decode(buf);
+                            ClientMetadataHandler.handleChunkHashPacket(packet);
+                        } catch (Exception e) {
+                            LOGGER.error("[CLIENT] Failed to handle chunk hash", e);
+                        }
+                    });
+                });
+
+        // 注册 Section 哈希请求
+        CHANNEL.registerMessage(packetId++, SectionHashRequestWrapper.class,
+                SectionHashRequestWrapper::encode, SectionHashRequestWrapper::decode,
+                (msg, ctx) -> {
+                    ctx.get().enqueueWork(() -> {
+                        ServerPlayer player = ctx.get().getSender();
+                        if (player == null) return;
+                        try {
+                            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data()));
+                            SectionHashRequestC2SPacket request = SectionHashRequestC2SPacket.decode(buf);
+                            ServerChunkPushManager.getInstance().handleSectionHashRequest(player, request);
+                        } catch (Exception e) {
+                            LOGGER.error("[SERVER] Failed to handle section hash request", e);
+                        }
+                    });
+                });
+
+        // 注册 Section Delta
+        CHANNEL.registerMessage(packetId++, SectionDeltaWrapper.class,
+                SectionDeltaWrapper::encode, SectionDeltaWrapper::decode,
+                (msg, ctx) -> {
+                    ctx.get().enqueueWork(() -> {
+                        try {
+                            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data()));
+                            SectionDeltaS2CPacket packet = SectionDeltaS2CPacket.decode(buf);
+                            ClientMetadataHandler.handleSectionDeltaPacket(packet);
+                        } catch (Exception e) {
+                            LOGGER.error("[CLIENT] Failed to handle section delta", e);
+                        }
+                    });
+                });
+
+        // 注册 BlockEntity 请求
+        CHANNEL.registerMessage(packetId++, BlockEntityRequestWrapper.class,
+                BlockEntityRequestWrapper::encode, BlockEntityRequestWrapper::decode,
+                (msg, ctx) -> {
+                    ctx.get().enqueueWork(() -> {
+                        ServerPlayer player = ctx.get().getSender();
+                        if (player == null) return;
+                        try {
+                            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data()));
+                            BlockEntityRequestC2SPacket request = BlockEntityRequestC2SPacket.decode(buf);
+                            ServerChunkPushManager.getInstance().handleBlockEntityRequest(player, request);
+                        } catch (Exception e) {
+                            LOGGER.error("[SERVER] Failed to handle block entity request", e);
+                        }
+                    });
+                });
+
+        // 注册 BlockEntity 数据
+        CHANNEL.registerMessage(packetId++, BlockEntityDataWrapper.class,
+                BlockEntityDataWrapper::encode, BlockEntityDataWrapper::decode,
+                (msg, ctx) -> {
+                    ctx.get().enqueueWork(() -> {
+                        try {
+                            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data()));
+                            BlockEntityDataS2CPacket packet = BlockEntityDataS2CPacket.decode(buf);
+                            ClientMetadataHandler.handleBlockEntityDataPacket(packet);
+                        } catch (Exception e) {
+                            LOGGER.error("[CLIENT] Failed to handle block entity data", e);
+                        }
+                    });
+                });
+
+        LOGGER.info("Hassium: Registered {} SimpleChannel packets", packetId);
+    }
+
+    private void handleHandshake1201(ServerPlayer player, HandshakeWrapper msg) {
+        LOGGER.info("[HANDSHAKE] Received from player {}", player.getName().getString());
+        PlayerCompressionTracker.enableCompression(player);
+
+        boolean serverSupportsGlobalCompression = HassiumConfigService.getInstance().isGlobalPacketCompressionEnabled();
+        boolean useGlobalCompression = serverSupportsGlobalCompression && msg.globalPacketCompressionSupported();
+        boolean serverSupportsCompactHeader = HassiumConfigService.getInstance().isCompactHeaderEnabled();
+        boolean useCompactHeader = serverSupportsCompactHeader && msg.compactHeaderSupported();
+
+        HandshakeResponseWrapper response = new HandshakeResponseWrapper(
+                Constants.CURRENT_PROTOCOL_VERSION,
+                true,
+                useGlobalCompression,
+                useCompactHeader
+        );
+        CHANNEL.sendTo(response, player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
+        LOGGER.info("Hassium: Sent handshake response to {}", player.getName().getString());
+    }
+
+    private void handleHandshakeResponse1201(HandshakeResponseWrapper msg) {
+        LOGGER.info("Hassium: Received handshake response, accepted: {}, globalCompression: {}",
+                msg.accepted(), msg.globalCompressionAccepted());
+    }
+
+#else
+    /**
+     * 注册所有 Payload (1.20.2+)
+     */
+    @SubscribeEvent
+    public static void registerPayloads(RegisterPayloadHandlersEvent event) {
+        LOGGER.info("Hassium: Registering NeoForge Payload handlers");
+
+        var registrar = event.registrar(PROTOCOL_VERSION);
+
+        // 注册握手请求 (C2S)
+        registrar.playToServer(
+                HandshakePayload.TYPE,
+                HandshakePayload.STREAM_CODEC,
+                NeoForgeNetworkManager::handleHandshake
+        );
+
+        // 注册握手响应 (S2C)
+        registrar.playToClient(
+                HandshakeResponsePayload.TYPE,
+                HandshakeResponsePayload.STREAM_CODEC,
+                NeoForgeNetworkManager::handleHandshakeResponse
+        );
+
+        // 注册压缩区块数据 (S2C)
+        registrar.playToClient(
+                CompressedChunkPayload.TYPE,
+                CompressedChunkPayload.STREAM_CODEC,
+                NeoForgeNetworkManager::handleCompressedChunk
+        );
+
+        // 注册区块元数据 (S2C)
+        registrar.playToClient(
+                ChunkMetadataPayload.TYPE,
+                ChunkMetadataPayload.STREAM_CODEC,
+                NeoForgeNetworkManager::handleChunkMetadata
+        );
+
+        // 注册区块数据请求 (C2S)
+        registrar.playToServer(
+                ChunkDataRequestPayload.TYPE,
+                ChunkDataRequestPayload.STREAM_CODEC,
+                NeoForgeNetworkManager::handleChunkDataRequest
+        );
+
+        // 注册区块哈希 (S2C)
+        registrar.playToClient(
+                ChunkHashPayload.TYPE,
+                ChunkHashPayload.STREAM_CODEC,
+                NeoForgeNetworkManager::handleChunkHash
+        );
+
+        // 注册 Section 哈希请求 (C2S)
+        registrar.playToServer(
+                SectionHashRequestPayload.TYPE,
+                SectionHashRequestPayload.STREAM_CODEC,
+                NeoForgeNetworkManager::handleSectionHashRequest
+        );
+
+        // 注册 Section Delta (S2C)
+        registrar.playToClient(
+                SectionDeltaPayload.TYPE,
+                SectionDeltaPayload.STREAM_CODEC,
+                NeoForgeNetworkManager::handleSectionDelta
+        );
+
+        // 注册 BlockEntity 请求 (C2S)
+        registrar.playToServer(
+                BlockEntityRequestPayload.TYPE,
+                BlockEntityRequestPayload.STREAM_CODEC,
+                NeoForgeNetworkManager::handleBlockEntityRequest
+        );
+
+        // 注册 BlockEntity 数据 (S2C)
+        registrar.playToClient(
+                BlockEntityDataPayload.TYPE,
+                BlockEntityDataPayload.STREAM_CODEC,
+                NeoForgeNetworkManager::handleBlockEntityData
+        );
+
+        LOGGER.info("Hassium: Registered all NeoForge payload handlers");
+    }
+
+    private static void handleHandshake(HandshakePayload payload, IPayloadContext context) {
+        context.enqueueWork(() -> {
+            LOGGER.info("[HANDSHAKE] Received from player {}", context.player().getName().getString());
+            if (context.player() instanceof ServerPlayer player) {
+                PlayerCompressionTracker.enableCompression(player);
+                boolean useGlobalCompression = HassiumConfigService.getInstance().isGlobalPacketCompressionEnabled()
+                        && payload.globalPacketCompressionSupported();
+                boolean useCompactHeader = HassiumConfigService.getInstance().isCompactHeaderEnabled()
+                        && payload.compactHeaderSupported();
+                HandshakeResponsePayload response = new HandshakeResponsePayload(
+                        Constants.CURRENT_PROTOCOL_VERSION, true, useGlobalCompression, useCompactHeader);
+                player.connection.send(response);
+            }
+        });
+    }
+
+    private static void handleHandshakeResponse(HandshakeResponsePayload payload, IPayloadContext context) {
+        context.enqueueWork(() -> {
+            LOGGER.info("Hassium: Received handshake response, accepted: {}", payload.accepted());
+        });
+    }
+
+    private static void handleCompressedChunk(CompressedChunkPayload payload, IPayloadContext context) {
+        context.enqueueWork(() -> {
+            try {
+                ClientChunkHandler.handleCompressedChunk(payload.data());
+            } catch (Exception e) {
+                LOGGER.error("[CLIENT] Failed to handle compressed chunk", e);
+            }
+        });
+    }
+
+    private static void handleChunkMetadata(ChunkMetadataPayload payload, IPayloadContext context) {
+        context.enqueueWork(() -> {
+            try {
+                FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(payload.data()));
+                ChunkMetadataS2CPacket packet = ChunkMetadataS2CPacket.decode(buf);
+                ClientMetadataHandler.handleMetadataPacket(packet);
+            } catch (Exception e) {
+                LOGGER.error("[CLIENT] Failed to handle chunk metadata", e);
+            }
+        });
+    }
+
+    private static void handleChunkDataRequest(ChunkDataRequestPayload payload, IPayloadContext context) {
+        context.enqueueWork(() -> {
+            try {
+                if (context.player() instanceof ServerPlayer player) {
+                    FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(payload.data()));
+                    ChunkDataRequestC2SPacket request = ChunkDataRequestC2SPacket.decode(buf);
+                    ServerChunkPushManager.getInstance().enqueueDataRequest(player, request.dimension(), request.chunks());
+                }
+            } catch (Exception e) {
+                LOGGER.error("[SERVER] Failed to handle chunk data request", e);
+            }
+        });
+    }
+
+    private static void handleChunkHash(ChunkHashPayload payload, IPayloadContext context) {
+        context.enqueueWork(() -> {
+            try {
+                FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(payload.data()));
+                ChunkHashS2CPacket packet = ChunkHashS2CPacket.decode(buf);
+                ClientMetadataHandler.handleChunkHashPacket(packet);
+            } catch (Exception e) {
+                LOGGER.error("[CLIENT] Failed to handle chunk hash", e);
+            }
+        });
+    }
+
+    private static void handleSectionHashRequest(SectionHashRequestPayload payload, IPayloadContext context) {
+        context.enqueueWork(() -> {
+            try {
+                if (context.player() instanceof ServerPlayer player) {
+                    FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(payload.data()));
+                    SectionHashRequestC2SPacket request = SectionHashRequestC2SPacket.decode(buf);
+                    ServerChunkPushManager.getInstance().handleSectionHashRequest(player, request);
+                }
+            } catch (Exception e) {
+                LOGGER.error("[SERVER] Failed to handle section hash request", e);
+            }
+        });
+    }
+
+    private static void handleSectionDelta(SectionDeltaPayload payload, IPayloadContext context) {
+        context.enqueueWork(() -> {
+            try {
+                FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(payload.data()));
+                SectionDeltaS2CPacket packet = SectionDeltaS2CPacket.decode(buf);
+                ClientMetadataHandler.handleSectionDeltaPacket(packet);
+            } catch (Exception e) {
+                LOGGER.error("[CLIENT] Failed to handle section delta", e);
+            }
+        });
+    }
+
+    private static void handleBlockEntityRequest(BlockEntityRequestPayload payload, IPayloadContext context) {
+        context.enqueueWork(() -> {
+            try {
+                if (context.player() instanceof ServerPlayer player) {
+                    FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(payload.data()));
+                    BlockEntityRequestC2SPacket request = BlockEntityRequestC2SPacket.decode(buf);
+                    ServerChunkPushManager.getInstance().handleBlockEntityRequest(player, request);
+                }
+            } catch (Exception e) {
+                LOGGER.error("[SERVER] Failed to handle block entity request", e);
+            }
+        });
+    }
+
+    private static void handleBlockEntityData(BlockEntityDataPayload payload, IPayloadContext context) {
+        context.enqueueWork(() -> {
+            try {
+                FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(payload.data()));
+                BlockEntityDataS2CPacket packet = BlockEntityDataS2CPacket.decode(buf);
+                ClientMetadataHandler.handleBlockEntityDataPacket(packet);
+            } catch (Exception e) {
+                LOGGER.error("[CLIENT] Failed to handle block entity data", e);
+            }
+        });
+    }
+#endif
+
+    // ========== 发送方法实现 ==========
+
+    @Override
+    public void sendHandshakeRequest() {
+#if MC_VER < MC_1_20_2
+        if (net.minecraft.client.Minecraft.getInstance().getConnection() != null) {
+            String compressionAlgorithm = HassiumConfigService.getInstance().getCompressionAlgorithm();
+            String dictAlgorithm = compressionAlgorithm + "_dict";
+            CHANNEL.sendToServer(new HandshakeWrapper(
+                    Constants.CURRENT_PROTOCOL_VERSION,
+                    Constants.MOD_VERSION,
+                    new String[]{compressionAlgorithm, dictAlgorithm},
+                    true, true, false, true, true
+            ));
+            LOGGER.info("Hassium: Sent handshake request (1.20.1)");
+        } else {
+            LOGGER.warn("Hassium: Cannot send handshake request, connection is null");
+        }
+#else
+        if (net.minecraft.client.Minecraft.getInstance().getConnection() != null) {
+            String compressionAlgorithm = HassiumConfigService.getInstance().getCompressionAlgorithm();
+            String dictAlgorithm = compressionAlgorithm + "_dict";
+            HandshakePayload payload = new HandshakePayload(
+                    Constants.CURRENT_PROTOCOL_VERSION,
+                    Constants.MOD_VERSION,
+                    new String[]{compressionAlgorithm, dictAlgorithm},
+                    true, true, false, true, true
+            );
+            net.minecraft.client.Minecraft.getInstance().getConnection().send(payload);
+            LOGGER.debug("Hassium: Sent handshake request (1.20.2+)");
+        }
+#endif
+    }
+
+    @Override
+    public void sendMetadataPacket(FriendlyByteBuf buf) {
+        LOGGER.warn("sendMetadataPacket called on NeoForgeNetworkManager, use NeoForgeNetworkManagerService instead");
+        buf.release();
+    }
+
+    @Override
+    public void sendChunkDataRequest(FriendlyByteBuf buf) {
+#if MC_VER < MC_1_20_2
+        if (net.minecraft.client.Minecraft.getInstance().getConnection() != null) {
+            byte[] data = new byte[buf.readableBytes()];
+            buf.readBytes(data);
+            buf.release();
+            CHANNEL.sendToServer(new ChunkDataRequestWrapper(data));
+            LOGGER.debug("Hassium: Sent chunk data request (1.20.1)");
+        } else {
+            buf.release();
+        }
+#else
+        if (net.minecraft.client.Minecraft.getInstance().getConnection() != null) {
+            byte[] data = new byte[buf.readableBytes()];
+            buf.readBytes(data);
+            buf.release();
+            ChunkDataRequestPayload payload = new ChunkDataRequestPayload(data);
+            net.minecraft.client.Minecraft.getInstance().getConnection().send(payload);
+            LOGGER.debug("Hassium: Sent chunk data request (1.20.2+)");
+        } else {
+            buf.release();
+        }
+#endif
+    }
+
+    @Override
+    public void sendCompressedPayload(CompressedPayloadPacket packet) {
+        throw new UnsupportedOperationException("Use sendCompressedChunk() instead");
+    }
+
+    @Override
+    public void sendChunkHashPacket(ServerPlayer player, FriendlyByteBuf buf) {
+#if MC_VER < MC_1_20_2
+        byte[] data = new byte[buf.readableBytes()];
+        buf.readBytes(data);
+        buf.release();
+        CHANNEL.sendTo(new ChunkHashWrapper(data), player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
+#else
+        byte[] data = new byte[buf.readableBytes()];
+        buf.readBytes(data);
+        buf.release();
+        ChunkHashPayload payload = new ChunkHashPayload(data);
+        player.connection.send(payload);
+        LOGGER.debug("Hassium: Sent chunk hash packet to {}", player.getName().getString());
+#endif
+    }
+
+    @Override
+    public void sendSectionHashRequest(FriendlyByteBuf buf) {
+#if MC_VER < MC_1_20_2
+        if (net.minecraft.client.Minecraft.getInstance().getConnection() != null) {
+            byte[] data = new byte[buf.readableBytes()];
+            buf.readBytes(data);
+            buf.release();
+            CHANNEL.sendToServer(new SectionHashRequestWrapper(data));
+        } else {
+            buf.release();
+        }
+#else
+        if (net.minecraft.client.Minecraft.getInstance().getConnection() != null) {
+            byte[] data = new byte[buf.readableBytes()];
+            buf.readBytes(data);
+            buf.release();
+            SectionHashRequestPayload payload = new SectionHashRequestPayload(data);
+            net.minecraft.client.Minecraft.getInstance().getConnection().send(payload);
+            LOGGER.debug("Hassium: Sent section hash request");
+        } else {
+            buf.release();
+        }
+#endif
+    }
+
+    @Override
+    public void sendSectionDeltaPacket(ServerPlayer player, FriendlyByteBuf buf) {
+#if MC_VER < MC_1_20_2
+        byte[] data = new byte[buf.readableBytes()];
+        buf.readBytes(data);
+        buf.release();
+        CHANNEL.sendTo(new SectionDeltaWrapper(data), player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
+#else
+        byte[] data = new byte[buf.readableBytes()];
+        buf.readBytes(data);
+        buf.release();
+        SectionDeltaPayload payload = new SectionDeltaPayload(data);
+        player.connection.send(payload);
+        LOGGER.debug("Hassium: Sent section delta packet to {}", player.getName().getString());
+#endif
+    }
+
+    @Override
+    public void sendBlockEntityRequest(FriendlyByteBuf buf) {
+#if MC_VER < MC_1_20_2
+        if (net.minecraft.client.Minecraft.getInstance().getConnection() != null) {
+            byte[] data = new byte[buf.readableBytes()];
+            buf.readBytes(data);
+            buf.release();
+            CHANNEL.sendToServer(new BlockEntityRequestWrapper(data));
+        } else {
+            buf.release();
+        }
+#else
+        if (net.minecraft.client.Minecraft.getInstance().getConnection() != null) {
+            byte[] data = new byte[buf.readableBytes()];
+            buf.readBytes(data);
+            buf.release();
+            BlockEntityRequestPayload payload = new BlockEntityRequestPayload(data);
+            net.minecraft.client.Minecraft.getInstance().getConnection().send(payload);
+            LOGGER.debug("Hassium: Sent block entity request");
+        } else {
+            buf.release();
+        }
+#endif
+    }
+
+    @Override
+    public void sendBlockEntityData(ServerPlayer player, FriendlyByteBuf buf) {
+#if MC_VER < MC_1_20_2
+        byte[] data = new byte[buf.readableBytes()];
+        buf.readBytes(data);
+        buf.release();
+        CHANNEL.sendTo(new BlockEntityDataWrapper(data), player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
+#else
+        byte[] data = new byte[buf.readableBytes()];
+        buf.readBytes(data);
+        buf.release();
+        BlockEntityDataPayload payload = new BlockEntityDataPayload(data);
+        player.connection.send(payload);
+        LOGGER.debug("Hassium: Sent block entity data packet to {}", player.getName().getString());
+#endif
+    }
+
+    /**
+     * 发送压缩区块数据到指定玩家
+     */
+    public static void sendCompressedChunk(ServerPlayer player, ChunkCompressionHandler.CompressedChunkData compressed) {
+        try {
+            LOGGER.debug("[SEND_CHUNK] Sending compressed chunk [{}, {}] to player {} (size={})",
+                    compressed.chunkX, compressed.chunkZ, player.getName().getString(),
+                    compressed.compressedData.length);
+
+            byte[] data = compressed.encode();
+
+#if MC_VER < MC_1_20_2
+            CHANNEL.sendTo(new CompressedChunkWrapper(data), player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
+#else
+            CompressedChunkPayload payload = new CompressedChunkPayload(data);
+            player.connection.send(payload);
+#endif
+            LOGGER.debug("[SEND_CHUNK] Successfully sent chunk [{}, {}] to {}",
+                    compressed.chunkX, compressed.chunkZ, player.getName().getString());
+        } catch (Exception e) {
+            LOGGER.error("[SEND_CHUNK] Failed to send chunk to {}", player.getName().getString(), e);
+        }
+    }
+}

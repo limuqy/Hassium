@@ -187,20 +187,29 @@ public class CacheSaveQueue {
                     new ClientboundLevelChunkWithLightPacket(
                             chunk, level.getLightEngine(), lightMask, lightMask);
 
+#if MC_VER < MC_1_20_5
             FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
             try {
-#if MC_VER < MC_1_20_5
                 packet.write(buf);
                 byte[] data = new byte[buf.readableBytes()];
                 buf.readBytes(data);
                 return data;
-#else
-                // 1.20.6+: Packet.write() removed, skip serialization
-                return null;
-#endif
             } finally {
                 buf.release();
             }
+#else
+            // 1.20.5+: Packet.write() removed, use STREAM_CODEC with RegistryFriendlyByteBuf
+            net.minecraft.network.RegistryFriendlyByteBuf buf =
+                    new net.minecraft.network.RegistryFriendlyByteBuf(io.netty.buffer.Unpooled.buffer(), level.registryAccess());
+            try {
+                ClientboundLevelChunkWithLightPacket.STREAM_CODEC.encode(buf, packet);
+                byte[] data = new byte[buf.readableBytes()];
+                buf.readBytes(data);
+                return data;
+            } finally {
+                buf.release();
+            }
+#endif
 
         } catch (Exception e) {
             Constants.LOG.error("Hassium: [CACHE SAVE] Serialization failed for chunk {}", chunk.getPos(), e);

@@ -34,19 +34,21 @@ public class ZstdPacketEncoder extends MessageToByteEncoder<ByteBuf> {
         FriendlyByteBuf friendlyBuf = new FriendlyByteBuf(out);
 
         if (readableBytes < this.threshold) {
-            // 低于阈值：不压缩，写 VarInt(0) + 原始数据
+            // 低于阈值：不压缩，写 VarInt(0) + 数据长度 + 原始数据
             friendlyBuf.writeVarInt(0);
+            friendlyBuf.writeVarInt(readableBytes);
             friendlyBuf.writeBytes(in);
         } else {
             // 高于阈值：ZSTD 压缩
             byte[] input = new byte[readableBytes];
             in.readBytes(input);
 
-            // 写入原始长度
-            friendlyBuf.writeVarInt(input.length);
-
             // ZSTD 压缩
             byte[] compressed = Zstd.compress(input, this.compressionLevel);
+
+            // 写入原始长度 + 压缩长度 + 压缩数据
+            friendlyBuf.writeVarInt(input.length);
+            friendlyBuf.writeVarInt(compressed.length);
             friendlyBuf.writeBytes(compressed);
 
             LOGGER.debug("Compressed packet: {} -> {} bytes ({}% reduction)",

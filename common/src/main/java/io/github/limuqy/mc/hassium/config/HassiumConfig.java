@@ -170,7 +170,7 @@ public record HassiumConfig(
                 true,              // metricsEnabled: 默认启用指标收集
                 // === 自适应吞吐默认配置 ===
                 60,                // targetFPS: 目标 FPS，默认 60
-                4,                 // maxLightRecomputePerFrame: 每帧最多重算光照区块数
+                10,                 // maxLightRecomputePerFrame: 每帧最多重算光照区块数
                 // === 动态线程池默认配置 ===
                 true,              // dynamicThreadPoolEnabled: 默认启用动态线程池
                 2,                 // minPushThreads: 最小推送线程数

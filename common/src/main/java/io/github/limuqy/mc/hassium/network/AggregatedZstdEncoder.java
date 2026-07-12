@@ -91,11 +91,12 @@ public class AggregatedZstdEncoder extends MessageToByteEncoder<ByteBuf> {
         byte[] input = new byte[readableBytes];
         in.readBytes(input);
 
+        byte[] compressed = compressCtx.compress(input);
+
         FriendlyByteBuf friendlyBuf = new FriendlyByteBuf(out);
         friendlyBuf.writeByte(NOT_AGGREGATED_FLAG);
         friendlyBuf.writeVarInt(input.length);
-
-        byte[] compressed = compressCtx.compress(input);
+        friendlyBuf.writeVarInt(compressed.length);
         friendlyBuf.writeBytes(compressed);
 
         if (LOGGER.isDebugEnabled()) {
@@ -127,6 +128,7 @@ public class AggregatedZstdEncoder extends MessageToByteEncoder<ByteBuf> {
             FriendlyByteBuf friendlyBuf = new FriendlyByteBuf(out);
             friendlyBuf.writeByte(AGGREGATED_FLAG);
             friendlyBuf.writeVarInt(input.length);
+            friendlyBuf.writeVarInt(compressed.length);
             friendlyBuf.writeBytes(compressed);
 
             if (LOGGER.isDebugEnabled()) {

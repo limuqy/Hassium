@@ -62,7 +62,10 @@ public class MixinMinecraft {
      * <p>
      * 维度切换和断开连接都会调用 setLevel()，但不会逐个 unload 区块。
      * 必须在旧 level 被替换前保存所有待处理的区块。
+     * <p>
+     * 1.20.5+：setLevel 签名变为 (ClientLevel, ReceivingLevelScreen.Reason)。
      */
+#if MC_VER < MC_1_20_5
     @Inject(method = "setLevel", at = @At("HEAD"))
     private void hassium$onSetLevel(ClientLevel newLevel, CallbackInfo ci) {
         try {
@@ -71,4 +74,16 @@ public class MixinMinecraft {
             LOGGER.error("Hassium: Failed to flush cache save queue on level change", e);
         }
     }
+#else
+    @Inject(method = "setLevel", at = @At("HEAD"))
+    private void hassium$onSetLevel(ClientLevel newLevel,
+                                     net.minecraft.client.gui.screens.ReceivingLevelScreen.Reason reason,
+                                     CallbackInfo ci) {
+        try {
+            CacheSaveQueue.getInstance().flush();
+        } catch (Exception e) {
+            LOGGER.error("Hassium: Failed to flush cache save queue on level change", e);
+        }
+    }
+#endif
 }

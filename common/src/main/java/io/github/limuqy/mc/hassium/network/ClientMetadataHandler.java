@@ -287,7 +287,7 @@ public class ClientMetadataHandler {
         Minecraft mc = Minecraft.getInstance();
         if (mc.player == null) return;
 
-        DebugLogger.info(LogType.METADATA, "[CHUNK_HASH] Received chunk hash packet: {} entries, dimension={}",
+        Constants.LOG.info("[RECV_HASH] Received chunk hash packet: {} entries, dimension={}",
                 packet.entries().size(), packet.dimension());
 
         // 记录收到元数据（估算大小：dimension字符串 + 每条记录约16字节）

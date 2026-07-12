@@ -13,10 +13,13 @@ dependencies {
     forge "net.minecraftforge:forge:${gradle.ext.minecraft_version}-${gradle.ext.forge_loader}"
 }
 
-tasks.named('runClient') {
-    workingDir = file('run/client')
-}
-
-tasks.named('runServer') {
-    workingDir = file('run/server')
+loom {
+    runConfigs.configureEach {
+        ideConfigGenerated = true
+        if (name == 'client') {
+            runDir = 'run/client'
+        } else if (name == 'server') {
+            runDir = 'run/server'
+        }
+    }
 }

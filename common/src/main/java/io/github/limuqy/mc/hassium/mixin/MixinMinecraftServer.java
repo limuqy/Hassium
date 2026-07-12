@@ -1,6 +1,7 @@
 package io.github.limuqy.mc.hassium.mixin;
 
 import io.github.limuqy.mc.hassium.Constants;
+import io.github.limuqy.mc.hassium.concurrent.MainThreadDispatcher;
 import io.github.limuqy.mc.hassium.network.PlayerCompressionTracker;
 import io.github.limuqy.mc.hassium.network.ServerChunkPushManager;
 import net.minecraft.server.MinecraftServer;
@@ -21,7 +22,8 @@ public class MixinMinecraftServer {
 
     @Inject(method = "tickServer", at = @At("TAIL"))
     private void onServerTick(BooleanSupplier hasTimeLeft, CallbackInfo ci) {
-        // 每 tick 可以用于统计或清理（当前无阻塞操作）
+        // 刷新服务端主线程回调队列（每 tick 调用）
+        MainThreadDispatcher.flushServer();
     }
 
     @Inject(method = "runServer", at = @At(value = "INVOKE", target = "Lnet/minecraft/server/MinecraftServer;initServer()Z"))
