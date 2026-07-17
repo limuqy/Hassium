@@ -137,6 +137,7 @@ io.github.limuqy.mc.hassium/
 ## Version constraints
 
 - Target: Minecraft 1.20.1–1.21.11 via Manifold `#if MC_VER`
+- **Forge `builds_for`：仅 1.20.1 / 1.20.6**；1.21+ 不构建 Forge（用 NeoForge）
 - **Adaptation unit**: 9 effective segments × loaders in `builds_for` — see [`docs/version-segments.md`](docs/version-segments.md)
 - PowerShell: always quote `-Pmc_ver=...` as `"-Pmc_ver=1.20.1"` (otherwise `1.20.1` is truncated to `1`)
 - Mojang API diffs belong in `common/.../compat/`; do not scatter new `#if MC_VER` in business/Mixin code

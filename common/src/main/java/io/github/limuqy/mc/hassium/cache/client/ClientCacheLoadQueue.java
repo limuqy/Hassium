@@ -260,11 +260,7 @@ public class ClientCacheLoadQueue {
      */
     private int getCurrentFPS() {
         try {
-            net.minecraft.client.Minecraft mc = net.minecraft.client.Minecraft.getInstance();
-            if (mc instanceof io.github.limuqy.mc.hassium.mixin.MinecraftAccessor accessor) {
-                return accessor.hassium$getFps();
-            }
-            return 60;
+            return net.minecraft.client.Minecraft.getInstance().getFps();
         } catch (Exception e) {
             return 60; // 默认值
         }

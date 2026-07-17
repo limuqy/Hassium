@@ -567,7 +567,7 @@ public class ClientMetadataHandler {
     /**
      * 替换 packet 字节中指定索引的 section 数据
      * <p>
-     * packet 格式：chunkX(4) + chunkZ(4) + heightmaps(NBT) + sectionsSize(varint) + sections(bytes) + ...
+     * packet 格式：chunkX(4) + chunkZ(4) + heightmaps + sectionsSize(varint) + sections(bytes) + ...
      * sections 内部按 LevelChunkSection.write() 格式顺序排列。
      */
     private static byte[] replaceSectionsInPacket(byte[] packetData,
@@ -582,10 +582,10 @@ public class ClientMetadataHandler {
         }
 
         try {
-            // 复制 header: chunkX + chunkZ + heightmaps NBT
+            // 复制 header: chunkX + chunkZ + heightmaps
             dst.writeInt(src.readInt()); // chunkX
             dst.writeInt(src.readInt()); // chunkZ
-            dst.writeNbt(src.readNbt()); // heightmaps
+            io.github.limuqy.mc.hassium.compat.ChunkPacketDataCompat.copyHeightmaps(src, dst);
 
             // 读取 sections 字节数组
             int sectionsSize = src.readVarInt();
@@ -717,21 +717,8 @@ public class ClientMetadataHandler {
                 copy.putInt("x", pos.getX());
                 copy.putInt("y", pos.getY());
                 copy.putInt("z", pos.getZ());
-#if MC_VER < MC_1_20_5
-                be.load(copy);
-#else
-                // 1.20.6+: BlockEntity.load() removed, loadAdditional is protected; use reflection
-                try {
-                    var m = net.minecraft.world.level.block.entity.BlockEntity.class
-                            .getDeclaredMethod("loadAdditional",
-                                    net.minecraft.nbt.CompoundTag.class,
-                                    net.minecraft.core.HolderLookup.Provider.class);
-                    m.setAccessible(true);
-                    m.invoke(be, copy, be.getLevel().registryAccess());
-                } catch (ReflectiveOperationException ex) {
-                    DebugLogger.error("[BLOCK_ENTITY] Failed to load block entity via reflection at {}", pos, ex);
-                }
-#endif
+                io.github.limuqy.mc.hassium.compat.BlockEntityCompat.loadFromTag(
+                        be, copy, be.getLevel().registryAccess());
                 DebugLogger.info(LogType.METADATA, "[BLOCK_ENTITY] Updated block entity at {}", pos);
             } else {
                 PENDING_BLOCK_ENTITIES
@@ -764,22 +751,8 @@ public class ClientMetadataHandler {
                     nbt.putInt("x", beData.pos().getX());
                     nbt.putInt("y", beData.pos().getY());
                     nbt.putInt("z", beData.pos().getZ());
-#if MC_VER < MC_1_20_5
-                    be.load(nbt);
-#else
-                    // 1.20.6+: BlockEntity.load() removed, loadAdditional is protected; use reflection
-                    try {
-                        var m = net.minecraft.world.level.block.entity.BlockEntity.class
-                                .getDeclaredMethod("loadAdditional",
-                                        net.minecraft.nbt.CompoundTag.class,
-                                        net.minecraft.core.HolderLookup.Provider.class);
-                        m.setAccessible(true);
-                        m.invoke(be, nbt, be.getLevel().registryAccess());
-                    } catch (ReflectiveOperationException ex) {
-                        DebugLogger.error("[BLOCK_ENTITY] Failed to load block entity via reflection at {}",
-                                beData.pos(), ex);
-                    }
-#endif
+                    io.github.limuqy.mc.hassium.compat.BlockEntityCompat.loadFromTag(
+                            be, nbt, be.getLevel().registryAccess());
                     DebugLogger.info(LogType.METADATA, "[BLOCK_ENTITY] Flushed pending block entity at {}",
                             beData.pos());
                 } else {

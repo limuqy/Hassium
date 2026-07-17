@@ -610,7 +610,7 @@ public class ServerChunkPushManager {
         }
 
         // 读区块 / 序列化 / 发包必须在服务端主线程（否则 ThreadingDetector 或 SimpleChannel 异常）
-        net.minecraft.server.MinecraftServer server = player.getServer();
+        net.minecraft.server.MinecraftServer server = PlayerCompat.getMinecraftServer(player);
         if (server != null && !server.isSameThread()) {
             server.execute(() -> processPlayerQueue(player, dimension));
             return;
@@ -757,24 +757,28 @@ public class ServerChunkPushManager {
                 .mapToInt(PriorityBlockingQueue::size)
                 .sum();
 
-        int currentPoolSize = pushPool.getPoolSize();
-        int activeThreads = pushPool.getActiveCount();
+        int coreThreads = pushPool.getCorePoolSize();
         int maxThreads = pushPool.getMaximumPoolSize();
+        int configuredMax = HassiumConfigService.getInstance().getMaxPushThreads();
         int minThreads = HassiumConfigService.getInstance().getMinPushThreads();
+        int activeThreads = pushPool.getActiveCount();
 
-        // 队列堆积且线程数未达上限，扩容
-        if (totalPending > QUEUE_HIGH_THRESHOLD && currentPoolSize < maxThreads) {
-            int newMax = Math.min(currentPoolSize + 2, maxThreads);
+        // 队列堆积：抬高 maximum（须先保证 max >= core）
+        if (totalPending > QUEUE_HIGH_THRESHOLD && maxThreads < configuredMax) {
+            int newMax = Math.min(maxThreads + 2, configuredMax);
             pushPool.setMaximumPoolSize(newMax);
-            Constants.LOG.debug("Hassium: Thread pool expanded to {} (queueSize={}, active={})",
+            Constants.LOG.debug("Hassium: Thread pool max expanded to {} (queueSize={}, active={})",
                     newMax, totalPending, activeThreads);
         }
-        // 队列空闲且线程数高于最小值，缩容
-        else if (totalPending < QUEUE_LOW_THRESHOLD && currentPoolSize > minThreads && activeThreads < currentPoolSize) {
-            int newMax = Math.max(currentPoolSize - 1, minThreads);
-            pushPool.setMaximumPoolSize(newMax);
-            Constants.LOG.debug("Hassium: Thread pool shrunk to {} (queueSize={}, active={})",
-                    newMax, totalPending, activeThreads);
+        // 队列空闲：先降 core 再降 max，避免 max < core 抛 IllegalArgumentException
+        else if (totalPending < QUEUE_LOW_THRESHOLD && coreThreads > minThreads && activeThreads < coreThreads) {
+            int newCore = Math.max(coreThreads - 1, minThreads);
+            pushPool.setCorePoolSize(newCore);
+            if (pushPool.getMaximumPoolSize() < newCore) {
+                pushPool.setMaximumPoolSize(newCore);
+            }
+            Constants.LOG.debug("Hassium: Thread pool core shrunk to {} (queueSize={}, active={})",
+                    newCore, totalPending, activeThreads);
         }
     }
 

@@ -103,10 +103,7 @@ public final class PacketCodecCompat {
             registryAccess = RegistryAccess.EMPTY;
         }
         PacketFlow flow = packet.type().flow();
-        var unbound = flow == PacketFlow.CLIENTBOUND
-                ? net.minecraft.network.protocol.game.GameProtocols.CLIENTBOUND
-                : net.minecraft.network.protocol.game.GameProtocols.SERVERBOUND;
-        var info = unbound.bind(net.minecraft.network.RegistryFriendlyByteBuf.decorator(registryAccess));
+        var info = playBound(flow, registryAccess);
         ByteBuf buf = Unpooled.buffer();
         try {
             ((net.minecraft.network.codec.StreamCodec) info.codec()).encode(buf, packet);
@@ -143,8 +140,7 @@ public final class PacketCodecCompat {
         if (registryAccess == null) {
             registryAccess = RegistryAccess.EMPTY;
         }
-        var info = net.minecraft.network.protocol.game.GameProtocols.CLIENTBOUND
-                .bind(net.minecraft.network.RegistryFriendlyByteBuf.decorator(registryAccess));
+        var info = playBound(PacketFlow.CLIENTBOUND, registryAccess);
         FriendlyByteBuf buf = new FriendlyByteBuf(Unpooled.buffer(body.length + 5));
         try {
             buf.writeVarInt(vanillaId);
@@ -184,14 +180,79 @@ public final class PacketCodecCompat {
     }
 
 #if MC_VER >= MC_1_20_5
+    /**
+     * 绑定 PLAY 协议编解码器。
+     * <ul>
+     *   <li>1.20.5–1.21.4：{@code ProtocolInfo.Unbound.bind(decorator)}</li>
+     *   <li>1.21.5+：CLIENTBOUND 为 {@code SimpleUnboundProtocol}；
+     *       SERVERBOUND 为带 {@code GameProtocols.Context} 的 {@code UnboundProtocol}</li>
+     * </ul>
+     */
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private static net.minecraft.network.ProtocolInfo<?> playBound(
+            PacketFlow flow,
+            RegistryAccess registryAccess
+    ) {
+        var decorator = net.minecraft.network.RegistryFriendlyByteBuf.decorator(registryAccess);
+#if MC_VER < MC_1_21_5
+        return playUnbound(flow).bind(decorator);
+#else
+        if (flow == PacketFlow.CLIENTBOUND) {
+            return net.minecraft.network.protocol.game.GameProtocols.CLIENTBOUND_TEMPLATE.bind(decorator);
+        }
+        return net.minecraft.network.protocol.game.GameProtocols.SERVERBOUND_TEMPLATE.bind(
+                decorator,
+                () -> true);
+#endif
+    }
+
+#if MC_VER < MC_1_21_5
+    /**
+     * 1.20.5–1.20.6：{@code GameProtocols.CLIENTBOUND/SERVERBOUND}
+     * 1.21.1–1.21.4：{@code CLIENTBOUND_TEMPLATE/SERVERBOUND_TEMPLATE}（仍为 {@code ProtocolInfo.Unbound}）
+     */
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private static net.minecraft.network.ProtocolInfo.Unbound playUnbound(PacketFlow flow) {
+#if MC_VER < MC_1_21_1
+        return flow == PacketFlow.CLIENTBOUND
+                ? net.minecraft.network.protocol.game.GameProtocols.CLIENTBOUND
+                : net.minecraft.network.protocol.game.GameProtocols.SERVERBOUND;
+#else
+        return flow == PacketFlow.CLIENTBOUND
+                ? net.minecraft.network.protocol.game.GameProtocols.CLIENTBOUND_TEMPLATE
+                : net.minecraft.network.protocol.game.GameProtocols.SERVERBOUND_TEMPLATE;
+#endif
+    }
+#endif
+
     @SuppressWarnings("unchecked")
     private static List<PlayPacketEntry> loadPlayPackets(PacketFlow flow) {
         try {
-            var unbound = flow == PacketFlow.CLIENTBOUND
-                    ? net.minecraft.network.protocol.game.GameProtocols.CLIENTBOUND
-                    : net.minecraft.network.protocol.game.GameProtocols.SERVERBOUND;
-            var info = unbound.bind(
-                    net.minecraft.network.RegistryFriendlyByteBuf.decorator(RegistryAccess.EMPTY));
+#if MC_VER < MC_1_21_1
+            // 1.20.5–1.20.6：Unbound 无 listPackets，直接走 IdDispatchCodec 回退
+#elif MC_VER < MC_1_21_5
+            // 1.21.1–1.21.4：Unbound 上有 listPackets
+            List<PlayPacketEntry> fromList = new ArrayList<>();
+            playUnbound(flow).listPackets((packetType, numericId) ->
+                    fromList.add(new PlayPacketEntry(packetType.id(), numericId, flow)));
+            if (!fromList.isEmpty()) {
+                LOGGER.info("枚举 PLAY {} 包类型: {} 个", flow, fromList.size());
+                return Collections.unmodifiableList(fromList);
+            }
+#else
+            List<PlayPacketEntry> fromList = new ArrayList<>();
+            net.minecraft.network.ProtocolInfo.Details details = flow == PacketFlow.CLIENTBOUND
+                    ? net.minecraft.network.protocol.game.GameProtocols.CLIENTBOUND_TEMPLATE.details()
+                    : net.minecraft.network.protocol.game.GameProtocols.SERVERBOUND_TEMPLATE.details();
+            details.listPackets((packetType, numericId) ->
+                    fromList.add(new PlayPacketEntry(packetType.id(), numericId, flow)));
+            if (!fromList.isEmpty()) {
+                LOGGER.info("枚举 PLAY {} 包类型: {} 个", flow, fromList.size());
+                return Collections.unmodifiableList(fromList);
+            }
+#endif
+            // 回退：反射 IdDispatchCodec.byId（旧路径）
+            var info = playBound(flow, RegistryAccess.EMPTY);
             Object codec = info.codec();
             if (!(codec instanceof net.minecraft.network.codec.IdDispatchCodec<?, ?, ?> idCodec)) {
                 LOGGER.error("ProtocolInfo.codec() 不是 IdDispatchCodec: {}", codec.getClass().getName());
@@ -250,7 +311,11 @@ public final class PacketCodecCompat {
         try {
             net.minecraft.network.protocol.common.ClientboundCustomPayloadPacket.GAMEPLAY_STREAM_CODEC
                     .encode(buf, new net.minecraft.network.protocol.common.ClientboundCustomPayloadPacket(payload));
+#if MC_VER < MC_1_21_11
             buf.readResourceLocation(); // 跳过 type id
+#else
+            buf.readIdentifier(); // 1.21.11+: ResourceLocation → Identifier
+#endif
             byte[] data = new byte[buf.readableBytes()];
             buf.readBytes(data);
             return data;

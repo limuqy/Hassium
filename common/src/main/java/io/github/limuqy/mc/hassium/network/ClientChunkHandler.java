@@ -188,15 +188,18 @@ public class ClientChunkHandler {
                 DebugLogger.info(LogType.COMPRESSION, "[HANDLE_COMPRESSED] Decompressed chunk [{}, {}] ({} -> {} bytes)",
                     chunkX, chunkZ, compData.length, decompressed.length);
 
-                // 立即缓存到本地（后台线程，含压缩+磁盘写入）
-                persistDecompressedChunk(chunkX, chunkZ, decompressed);
-
-                // 回到主线程应用区块数据
+                // 先回主线程应用区块，再写缓存——缓存失败（含 Error）不得阻断加载
                 MainThreadDispatcher.execute(() -> {
                     DebugLogger.info(LogType.COMPRESSION, "[HANDLE_COMPRESSED] Applying chunk [{}, {}] to world", chunkX, chunkZ);
                     applyChunkData(chunkX, chunkZ, decompressed, false);
                     DebugLogger.info(LogType.COMPRESSION, "[HANDLE_COMPRESSED] Successfully applied chunk [{}, {}] from server", chunkX, chunkZ);
                 }, new ChunkPos(chunkX, chunkZ), TaskCategory.SAFE_TO_CANCEL);
+
+                try {
+                    persistDecompressedChunk(chunkX, chunkZ, decompressed);
+                } catch (Throwable t) {
+                    Constants.LOG.warn("Hassium: Failed to persist chunk [{}, {}] after apply", chunkX, chunkZ, t);
+                }
 
             } catch (Exception e) {
                 DebugLogger.error("[HANDLE_COMPRESSED] Error in background decompress for chunk [{}, {}]", e, chunkX, chunkZ);
@@ -219,10 +222,14 @@ public class ClientChunkHandler {
             Constants.LOG.debug("Hassium: Decompressed chunk [{}, {}] on main thread (fallback), size: {} -> {} bytes",
                 compressed.chunkX, compressed.chunkZ, compressed.compressedData.length, decompressed.length);
 
-            // 立即缓存到本地
-            persistDecompressedChunk(compressed.chunkX, compressed.chunkZ, decompressed);
-
+            // 先应用再写缓存，避免缓存路径 Error 阻断加载
             applyChunkData(compressed.chunkX, compressed.chunkZ, decompressed, false);
+            try {
+                persistDecompressedChunk(compressed.chunkX, compressed.chunkZ, decompressed);
+            } catch (Throwable t) {
+                Constants.LOG.warn("Hassium: Failed to persist chunk [{}, {}] after apply (fallback)",
+                        compressed.chunkX, compressed.chunkZ, t);
+            }
             Constants.LOG.debug("Hassium: Applied chunk [{}, {}] from server",
                 compressed.chunkX, compressed.chunkZ);
         } catch (Exception e) {
@@ -358,8 +365,9 @@ public class ClientChunkHandler {
                 if (sectionHashes != null) {
                     storePendingSectionHashes(chunkX, chunkZ, sectionHashes);
                 }
-            } catch (Exception e) {
-                Constants.LOG.debug("Hassium: Failed to compute section hashes for chunk [{}, {}]", chunkX, chunkZ, e);
+            } catch (Throwable t) {
+                // NoSuchMethodError 等 Error 也要吞掉，避免阻断后续 persist / apply
+                Constants.LOG.debug("Hassium: Failed to compute section hashes for chunk [{}, {}]", chunkX, chunkZ, t);
             }
 
             ChunkPos pos = new ChunkPos(chunkX, chunkZ);
@@ -390,13 +398,12 @@ public class ClientChunkHandler {
 
             // 读取完整的 chunk packet 数据
             // packet 格式：chunkX(4) + chunkZ(4) + chunkData + lightData
-            // chunkData 格式：heightmapsNBT + sectionsBytes(varint) + sections + blockEntities
+            // chunkData 格式：heightmaps + sectionsBytes(varint) + sections + blockEntities
             int chunkX = friendlyBuf.readInt();
             int chunkZ = friendlyBuf.readInt();
 
-            // 读取 chunk data 部分（与 ClientboundLevelChunkPacketData 相同格式）
-            // 跳过 heightmaps NBT
-            net.minecraft.nbt.Tag heightmaps = friendlyBuf.readNbt();
+            // 跳过 heightmaps（1.21.5+ 为 StreamCodec，此前为 NBT）
+            io.github.limuqy.mc.hassium.compat.ChunkPacketDataCompat.skipHeightmaps(friendlyBuf);
 
             // 读取 sections 数据大小（varint）
             int sectionsSize = friendlyBuf.readVarInt();

@@ -25,7 +25,6 @@
       "MixinLevelRenderer",
       "MixinClientTick",
       "MixinLightRecompute",
-      "MinecraftAccessor",
       "ClientLevelAccessor"
     ],
     "server": [

@@ -8,7 +8,6 @@ import org.slf4j.LoggerFactory;
 
 #if MC_VER < MC_1_20_2
 import net.minecraftforge.api.distmarker.Dist;
-import net.minecraftforge.api.distmarker.OnlyIn;
 import net.minecraftforge.client.event.ClientPlayerNetworkEvent;
 import net.minecraftforge.common.MinecraftForge;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
@@ -17,7 +16,6 @@ import net.minecraftforge.fml.event.lifecycle.FMLClientSetupEvent;
 import net.minecraftforge.network.NetworkHooks;
 #elif MC_VER < MC_1_20_5
 import net.neoforged.api.distmarker.Dist;
-import net.neoforged.api.distmarker.OnlyIn;
 import net.neoforged.neoforge.client.event.ClientPlayerNetworkEvent;
 import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.bus.api.SubscribeEvent;
@@ -25,7 +23,6 @@ import net.neoforged.fml.common.Mod;
 import net.neoforged.fml.event.lifecycle.FMLClientSetupEvent;
 #else
 import net.neoforged.api.distmarker.Dist;
-import net.neoforged.api.distmarker.OnlyIn;
 import net.neoforged.neoforge.client.event.ClientPlayerNetworkEvent;
 import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.bus.api.SubscribeEvent;
@@ -37,13 +34,16 @@ import net.neoforged.fml.event.lifecycle.FMLClientSetupEvent;
  * NeoForge 客户端初始化
  * 
  * <p>
- * 处理客户端特定的事件和网络初始化
+ * 处理客户端特定的事件和网络初始化。
+ * 侧边隔离由 {@code @EventBusSubscriber(value = Dist.CLIENT)} 负责，勿再使用已失效的 {@code @OnlyIn}。
  */
-@OnlyIn(Dist.CLIENT)
 #if MC_VER < MC_1_20_5
 @Mod.EventBusSubscriber(modid = Constants.MOD_ID, value = Dist.CLIENT, bus = Mod.EventBusSubscriber.Bus.MOD)
-#else
+#elif MC_VER < MC_1_21_6
 @EventBusSubscriber(modid = Constants.MOD_ID, value = Dist.CLIENT, bus = EventBusSubscriber.Bus.MOD)
+#else
+// 1.21.6+：bus 参数已移除，FML 按事件类型自动挂到 Mod / Game 总线
+@EventBusSubscriber(modid = Constants.MOD_ID, value = Dist.CLIENT)
 #endif
 public class HassiumNeoForgeClient {
 

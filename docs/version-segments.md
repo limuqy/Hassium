@@ -21,12 +21,12 @@
 |----------|-------------|-------------|------------|---------------|
 | `MC_1_20_2` | `onDisconnect` 上移、`CustomPayload` 包路径、`createPacket` | — | 旧 `newSimpleChannel` 断；1.20.6+ 用 `ChannelBuilder` | forge→neoforge 包名；仍用 SimpleChannel + `PlayNetworkDirection`（非 StreamCodec） |
 | `MC_1_20_5` | `Packet.write()` 移除、`BlockEntity.load()` 移除、`getPacketsByIds` 移除 | 网络改 StreamCodec | ChunkPacket STREAM_CODEC（若构建） | Payload + StreamCodec（`RegisterPayloadHandlersEvent`） |
-| `MC_1_21_1` | `Component` → `DisconnectionDetails`；RL 构造私有化 | — | — | — |
+| `MC_1_21_1` | `Component` → `DisconnectionDetails`；RL 构造私有化；`GameProtocols.CLIENTBOUND/SERVERBOUND` → `*_TEMPLATE`；`ChunkHolder.pos` 上移至 `GenerationChunkHolder`；`ProtocolInfo.Unbound.listPackets` | — | — | — |
 | `MC_1_21_2` | `ChunkSerializer` → `SerializableChunkData`、`registryOrThrow` → `lookupOrThrow` | — | — | — |
-| `MC_1_21_5` | `CompoundTag` API（`getAllKeys`→`keySet` 等） | — | — | — |
-| `MC_1_21_6` | `serverLevel()` → `level()` | — | `SubscribeEvent` 包路径 | — |
-| `MC_1_21_9` | `LevelChunkSection` 构造、`PalettedContainerFactory` | — | — | `FMLLoader.getCurrent()` |
-| `MC_1_21_11` | `ResourceLocation` → `Identifier` | import + 返回值 | import | — |
+| `MC_1_21_5` | `CompoundTag` API（`getAllKeys`→`keySet` 等）；`ProtocolInfo.Unbound` → `SimpleUnboundProtocol` / `UnboundProtocol`（SERVERBOUND 需 `GameProtocols.Context`）；`ClientboundLevelChunkPacketData` heightmaps NBT→StreamCodec | — | — | — |
+| `MC_1_21_6` | `serverLevel()` → `level()`；`ServerPlayer` 构造精简；`Connection.send` 监听器 `PacketSendListener`→`ChannelFutureListener`；`BlockEntity.load*` → `ValueInput` | — | `SubscribeEvent` 包路径 | `EventBusSubscriber.bus` 移除（按事件自动选总线） |
+| `MC_1_21_9` | `LevelChunkSection` 构造、`PalettedContainerFactory`；`Entity.getServer()` 移除；`Minecraft.setLevel` 去掉 Reason | — | — | `FMLLoader.getCurrent()` |
+| `MC_1_21_11` | `ResourceLocation` → `Identifier`；`FriendlyByteBuf.read/writeResourceLocation` → `read/writeIdentifier` | import + 返回值 | import | — |
 
 另：`MC_1_21_4` / `PermissionCompat` 等若与上表冲突，以 **compat 类内注释的实际切分点**为准，并应并入上表后再使用。
 
@@ -56,11 +56,11 @@ MC_1_21_11
 | A | **1.20.1** | — | 基准：旧网络 + 全部旧 API |
 | B | **1.20.2** | 1.20.3, 1.20.4 | CustomPayload / NeoForge 包名；段内无 Forge builds_for |
 | C | **1.20.5** | 1.20.6 | StreamCodec；`Packet.write` 等移除（无 1.21.0 属性文件时以 1.20.6 为段尾） |
-| D | **1.21.1** | — | `DisconnectionDetails` |
+| D | **1.21.1** | — | `DisconnectionDetails`；RL 构造私有化；`GameProtocols.*_TEMPLATE` |
 | E | **1.21.2** | 1.21.3, 1.21.4 | `SerializableChunkData`、`lookupOrThrow` |
-| F | **1.21.5** | — | CompoundTag API |
-| G | **1.21.6** | 1.21.7, 1.21.8 | `serverLevel()`→`level()` |
-| H | **1.21.9** | 1.21.10 | `LevelChunkSection` / PalettedContainerFactory |
+| F | **1.21.5** | — | CompoundTag API；ProtocolInfo Unbound 拆分；chunk heightmaps 线格式；**客户端缓存不跨 MC 版本兼容**（见 rollout） |
+| G | **1.21.6** | 1.21.7, 1.21.8 | `serverLevel()`→`level()`；Connection.send 监听器；NeoForge EBS.bus 移除 |
+| H | **1.21.9** | 1.21.10 | LevelChunkSection / PalettedContainerFactory；getServer 移除；setLevel 单参 |
 | I | **1.21.11** | — | Identifier |
 
 ### 锚点 × `builds_for`（编译矩阵）
@@ -72,12 +72,14 @@ MC_1_21_11
 | 1.20.1 | fabric, forge, neoforge |
 | 1.20.2 | fabric, neoforge |
 | 1.20.5 | fabric, neoforge |
-| 1.21.1 | fabric, neoforge, forge |
+| 1.21.1 | fabric, neoforge |
 | 1.21.2 | fabric, neoforge |
-| 1.21.5 | fabric, neoforge, forge |
-| 1.21.6 | fabric, neoforge, forge |
-| 1.21.9 | fabric, neoforge, forge |
-| 1.21.11 | fabric, neoforge, forge |
+| 1.21.5 | fabric, neoforge |
+| 1.21.6 | fabric, neoforge |
+| 1.21.9 | fabric, neoforge |
+| 1.21.11 | fabric, neoforge |
+
+> **Forge 仅支持 1.20.1 与 1.20.6**（段 A / 段 C 段尾）。**1.21+ 不构建 Forge**（Loom SecureJar / Automatic-Module-Name 冲突适配成本过高；1.21 请用 NeoForge）。详见 [`version-rollout.md`](version-rollout.md)。
 
 本地 / CI：
 
@@ -133,12 +135,14 @@ MC_1_21_11
 | `RegistryCompat` | 1.21.2 | registryOrThrow / lookupOrThrow |
 | `DisconnectCompat` | 1.21.1 | onDisconnect 参数 |
 | `PermissionCompat` | 1.21.11 | 命令权限 API |
-| `PlayerCompat` | 1.21.6 | `serverLevel()` / `level()` |
+| `PlayerCompat` | 1.20.2 / 1.21.6 / 1.21.9 | `serverLevel()` / `level()`；`getServer()`→`level().getServer()`；`getConnection` 沿继承链取 `connection` |
+| `BlockEntityCompat` | 1.20.5 / 1.21.6 | `load` / `loadWithComponents(CompoundTag)` / `ValueInput` |
 | `LevelChunkSectionCompat` | 1.21.9 | Section 构造 |
 | `CompoundTagCompat` | 1.21.5 | keys / 标量读取 |
+| `ChunkPacketDataCompat` | 1.21.5 | chunk packet heightmaps 跳过/复制（NBT→StreamCodec） |
 | `ChunkDataCompat` | 1.21.2 | Mixin 目标类说明（序列化入口） |
 | `NetworkCapability` | 1.20.5 | 自定义通道是否完整可用（段 C 后恒 true） |
-| `PacketCodecCompat` | 1.20.5 | StreamCodec 聚合写包 / GameProtocols 包枚举 / Payload 提取 |
+| `PacketCodecCompat` | 1.20.5 / 1.21.1 / 1.21.5 / 1.21.11 | StreamCodec 聚合写包 / GameProtocols 包枚举 / ProtocolInfo bind / Payload 提取；`listPackets` 自 1.21.1（此前走 IdDispatchCodec）；`readResourceLocation`→`readIdentifier` |
 
 ---
 
@@ -147,4 +151,5 @@ MC_1_21_11
 - 不引入按版本的 Gradle source set / 子模块复制
 - 不追求每个小版本手测
 - 不在 `builds_for` 不含 forge 的版本上硬撑 Forge 网络
+- **不构建 Forge 1.21+**（已正式取消；见 rollout）
 - 不把 Identifier rename 散落到业务文件

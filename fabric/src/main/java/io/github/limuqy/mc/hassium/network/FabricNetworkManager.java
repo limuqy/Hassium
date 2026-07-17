@@ -61,14 +61,7 @@ public class FabricNetworkManager implements NetworkManager {
      * 通过反射获取 ServerPlayer 的 Connection
      */
     private static Connection getPlayerConnection(ServerPlayer player) {
-        try {
-            Field connectionField = player.connection.getClass().getDeclaredField("connection");
-            connectionField.setAccessible(true);
-            return (Connection) connectionField.get(player.connection);
-        } catch (Exception e) {
-            LOGGER.error("Hassium: Failed to get connection from player", e);
-            return null;
-        }
+        return io.github.limuqy.mc.hassium.compat.PlayerCompat.getConnection(player);
     }
 
     // 资源位置定义
@@ -871,7 +864,7 @@ INDEX_SYNC_S2C = ResourceLocationCompat.create(Constants.MOD_ID, "index_sync_s2c
                         protocolVersion, modVersion, String.join(", ", algorithms), clientCache, globalPacketCompression, compactHeader);
 
                 ServerPlayer player = context.player();
-                net.minecraft.server.MinecraftServer server = player.getServer();
+                net.minecraft.server.MinecraftServer server = io.github.limuqy.mc.hassium.compat.PlayerCompat.getMinecraftServer(player);
 
                 // 启用该玩家的压缩
                 PlayerCompressionTracker.enableCompression(player);
@@ -1005,7 +998,7 @@ INDEX_SYNC_S2C = ResourceLocationCompat.create(Constants.MOD_ID, "index_sync_s2c
             FriendlyByteBuf buf = FabricPayloadRegistry.fromPayload(payload);
             try {
                 ServerPlayer player = context.player();
-                net.minecraft.server.MinecraftServer server = player.getServer();
+                net.minecraft.server.MinecraftServer server = io.github.limuqy.mc.hassium.compat.PlayerCompat.getMinecraftServer(player);
                 LOGGER.info("[SERVER] Received chunk data request packet from player {}", player.getName().getString());
                 ChunkDataRequestC2SPacket request = ChunkDataRequestC2SPacket.decode(buf);
                 LOGGER.info("[SERVER] Decoded chunk data request: {} chunks, dimension={}, chunks={}",
@@ -1053,7 +1046,7 @@ INDEX_SYNC_S2C = ResourceLocationCompat.create(Constants.MOD_ID, "index_sync_s2c
             FriendlyByteBuf buf = FabricPayloadRegistry.fromPayload(payload);
             try {
                 ServerPlayer player = context.player();
-                net.minecraft.server.MinecraftServer server = player.getServer();
+                net.minecraft.server.MinecraftServer server = io.github.limuqy.mc.hassium.compat.PlayerCompat.getMinecraftServer(player);
                 SectionHashRequestC2SPacket request = SectionHashRequestC2SPacket.decode(buf);
 
                 server.execute(() -> {
@@ -1096,7 +1089,7 @@ INDEX_SYNC_S2C = ResourceLocationCompat.create(Constants.MOD_ID, "index_sync_s2c
             FriendlyByteBuf buf = FabricPayloadRegistry.fromPayload(payload);
             try {
                 ServerPlayer player = context.player();
-                net.minecraft.server.MinecraftServer server = player.getServer();
+                net.minecraft.server.MinecraftServer server = io.github.limuqy.mc.hassium.compat.PlayerCompat.getMinecraftServer(player);
                 BlockEntityRequestC2SPacket request = BlockEntityRequestC2SPacket.decode(buf);
 
                 server.execute(() -> {

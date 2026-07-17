@@ -229,7 +229,7 @@ public class CacheSaveQueue {
             try {
                 buf.readInt(); // chunkX
                 buf.readInt(); // chunkZ
-                buf.readNbt(); // heightmaps
+                io.github.limuqy.mc.hassium.compat.ChunkPacketDataCompat.skipHeightmaps(buf);
                 int sectionsSize = buf.readVarInt();
                 if (sectionsSize <= 0 || sectionsSize > buf.readableBytes()) return null;
                 byte[] sectionsBytes = new byte[sectionsSize];

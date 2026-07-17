@@ -72,14 +72,7 @@ public class NeoForgeNetworkManager implements NetworkManager {
      * 通过反射获取 ServerPlayer 的 Connection
      */
     private static net.minecraft.network.Connection getPlayerConnection(ServerPlayer player) {
-        try {
-            Field connectionField = player.connection.getClass().getDeclaredField("connection");
-            connectionField.setAccessible(true);
-            return (net.minecraft.network.Connection) connectionField.get(player.connection);
-        } catch (Exception e) {
-            LOGGER.error("Hassium: Failed to get connection from player", e);
-            return null;
-        }
+        return io.github.limuqy.mc.hassium.compat.PlayerCompat.getConnection(player);
     }
 
 #if MC_VER < MC_1_20_5

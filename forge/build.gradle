@@ -27,6 +27,7 @@ dependencies {
     library 'org.xerial:sqlite-jdbc:3.45.1.0'
 }
 
+// Forge 模块仅构建 1.20.1 / 1.20.6（1.21+ 已从 builds_for 移除）。
 // Forge 50+ / architectury-loom 开发环境 module path 冲突：
 // 1) loom#191：classpath 仅有 LWJGL natives → 服务端整段移除
 // 2) loom#308：去掉 fabric-log4j-util，避免与 terminalconsoleappender 冲突
@@ -42,21 +43,21 @@ afterEvaluate {
             return
         }
         boolean server = task.name.toLowerCase().contains('server')
-        def filtered = task.classpath.filter { file ->
+        def rewritten = []
+        task.classpath.files.each { file ->
             def path = file.absolutePath.replace('\\', '/')
             if (server && path.contains('/org.lwjgl/')) {
-                return false
+                return
             }
             if (path.contains('/fabric-log4j-util/')) {
-                return false
+                return
             }
-            // common 源码已合并进 forge；再挂 common jar 会与 hassium 模块重复 export 包
             if (file.name.startsWith('hassium-common-') && file.name.endsWith('.jar')) {
-                return false
+                return
             }
-            return true
+            rewritten.add(file)
         }
-        task.classpath = filtered
+        task.classpath = project.files(rewritten)
     }
 }
 

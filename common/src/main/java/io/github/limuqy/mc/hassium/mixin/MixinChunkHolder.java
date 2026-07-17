@@ -11,9 +11,7 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.level.ChunkPos;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
-import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
@@ -23,14 +21,13 @@ import java.util.List;
 
 /**
  * 拦截 ChunkHolder.broadcast：对 Hassium 客户端发送 contentHash 元数据。
+ * <p>
+ * 1.21.1+：{@code pos} 上移到 {@code GenerationChunkHolder}，此处改从 packet 取坐标，
+ * 避免跨版本 @Shadow 父类字段。
  */
 @Mixin(ChunkHolder.class)
 public class MixinChunkHolder {
     private static final Logger LOGGER = LoggerFactory.getLogger("Hassium/ChunkHolder");
-
-    @Shadow
-    @Final
-    private ChunkPos pos;
 
     @Inject(method = "broadcast", at = @At("HEAD"), cancellable = true)
     private void hassium$onBroadcast(List<ServerPlayer> players, Packet<?> packet, CallbackInfo ci) {
@@ -66,6 +63,7 @@ public class MixinChunkHolder {
         }
 
         // 异步计算 hash 并发送元数据到 pushPool 工作线程
+        ChunkPos chunkPos = new ChunkPos(chunkPacket.getX(), chunkPacket.getZ());
         String dimension = hassiumPlayers.get(0).level().dimension()
 #if MC_VER < MC_1_21_11
                 .location()
@@ -74,7 +72,7 @@ public class MixinChunkHolder {
 #endif
                 .toString();
         ServerChunkPushManager.getInstance().submitMetadataTask(
-                hassiumPlayers, pos, chunkPacket, dimension);
+                hassiumPlayers, chunkPos, chunkPacket, dimension);
 
         ci.cancel();
     }
