@@ -165,7 +165,7 @@ public class DictionaryManager {
     public static void setChunkDict(byte[] dict) {
         if (dict != null && dict.length > 0) {
             chunkDict = dict;
-            LOGGER.info("Chunk dictionary loaded ({} bytes)", dict.length);
+            LOGGER.debug("Chunk dictionary loaded ({} bytes)", dict.length);
         } else {
             chunkDict = null;
         }
@@ -179,7 +179,7 @@ public class DictionaryManager {
     public static void setAggregationDict(byte[] dict) {
         if (dict != null && dict.length > 0) {
             aggregationDict = dict;
-            LOGGER.info("Aggregation dictionary loaded ({} bytes)", dict.length);
+            LOGGER.debug("Aggregation dictionary loaded ({} bytes)", dict.length);
         } else {
             aggregationDict = null;
         }
@@ -204,7 +204,7 @@ public class DictionaryManager {
         if (callback != null && dict != null && dict.length > 0) {
             try {
                 callback.pushToAllClients(dict);
-                LOGGER.info("Pushed aggregation dictionary to all connected clients ({} bytes)", dict.length);
+                LOGGER.debug("Pushed aggregation dictionary to all connected clients ({} bytes)", dict.length);
             } catch (Exception e) {
                 LOGGER.error("Failed to push dictionary to clients", e);
             }
@@ -263,8 +263,12 @@ public class DictionaryManager {
             samples.add(raw);
             totalSampleBytes += raw.length;
             int count = samples.size();
-            if (count % 500 == 0) {
-                LOGGER.info("Aggregation dictionary sampling: {}/{} samples ({} KB)",
+            // 每 25% 里程碑记录采样进度（debug 级别）
+            if (count == SAMPLE_THRESHOLD / 4
+                    || count == SAMPLE_THRESHOLD / 2
+                    || count == SAMPLE_THRESHOLD * 3 / 4
+                    || count == SAMPLE_THRESHOLD) {
+                LOGGER.debug("Aggregation dictionary sampling: {}/{} samples ({} KB)",
                         count, SAMPLE_THRESHOLD, totalSampleBytes / 1024);
             }
             if (count >= SAMPLE_THRESHOLD) {
@@ -288,7 +292,7 @@ public class DictionaryManager {
         }
         CompletableFuture.runAsync(() -> {
             try {
-                LOGGER.info("Training aggregation dictionary from {} samples...", snapshot.size());
+                LOGGER.debug("Training aggregation dictionary from {} samples...", snapshot.size());
                 int sampleSum = snapshot.stream().mapToInt(s -> s.length).sum();
                 var trainer = new ZstdDictTrainer(sampleSum, DICT_SIZE);
                 for (byte[] sample : snapshot) {
@@ -308,7 +312,8 @@ public class DictionaryManager {
 
                 // 最后才启用字典压缩
                 aggregationDict = dict;
-                LOGGER.info("Aggregation dictionary trained, saved, and pushed to clients ({} bytes from {} samples)", dict.length, snapshot.size());
+                LOGGER.debug("Aggregation dictionary trained, saved, and pushed to clients ({} bytes from {} samples)",
+                        dict.length, snapshot.size());
             } catch (Exception e) {
                 LOGGER.error("Aggregation dictionary training failed", e);
             } finally {
@@ -324,7 +329,7 @@ public class DictionaryManager {
         try {
             Files.createDirectories(AGGREGATION_DICT_PATH.getParent());
             Files.write(AGGREGATION_DICT_PATH, dict);
-            LOGGER.info("Aggregation dictionary saved to {}", AGGREGATION_DICT_PATH);
+            LOGGER.debug("Aggregation dictionary saved to {}", AGGREGATION_DICT_PATH);
         } catch (IOException e) {
             LOGGER.error("Failed to save aggregation dictionary to disk", e);
         }

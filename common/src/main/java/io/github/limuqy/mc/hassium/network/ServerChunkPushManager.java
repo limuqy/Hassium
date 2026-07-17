@@ -7,6 +7,8 @@ import io.github.limuqy.mc.hassium.metrics.NetworkStats;
 import io.github.limuqy.mc.hassium.platform.Services;
 import io.github.limuqy.mc.hassium.compat.PlayerCompat;
 import io.github.limuqy.mc.hassium.compat.RegistryCompat;
+import io.github.limuqy.mc.hassium.utils.DebugLogger;
+import io.github.limuqy.mc.hassium.utils.DebugLogger.LogType;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Registry;
 import net.minecraft.core.RegistryAccess;
@@ -136,73 +138,6 @@ public class ServerChunkPushManager {
 
             Constants.LOG.info("Hassium: ServerChunkPushManager initialized with {} threads (min={}, max={})",
                     initialThreads, minThreads, maxThreads);
-        }
-    }
-
-    /**
-     * 直接发送区块元数据给客户端（轻量操作，不入队）
-     *
-     * @param player      目标玩家
-     * @param pos         区块位置
-     * @param contentHash 内容哈希
-     */
-    public void sendMetadata(ServerPlayer player, ChunkPos pos, long contentHash) {
-        FriendlyByteBuf buf = null;
-        boolean sent = false;
-        try {
-            String dimension = player.level().dimension()
-#if MC_VER < MC_1_21_11
-                    .location()
-#else
-                    .identifier()
-#endif
-                    .toString();
-            List<ChunkMetadataS2CPacket.MetadataEntry> entries = List.of(
-                    new ChunkMetadataS2CPacket.MetadataEntry(pos.x, pos.z, contentHash)
-            );
-            ChunkMetadataS2CPacket packet = new ChunkMetadataS2CPacket(dimension, entries);
-
-            buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
-            packet.encode(buf);
-
-            Constants.LOG.debug("[SEND_METADATA] chunk {} -> {} (hash={}, bufSize={})",
-                    pos, player.getName().getString(), Long.toHexString(contentHash), buf.readableBytes());
-
-            Services.NETWORK_MANAGER.sendMetadataPacket(player, buf);
-            sent = true;
-            NetworkStats.recordMetadataSent(buf.readableBytes());
-        } catch (Exception e) {
-            Constants.LOG.error("[SEND_METADATA] Failed to send metadata for chunk {} to player {}",
-                    pos, player.getName().getString(), e);
-        } finally {
-            if (!sent && buf != null) {
-                buf.release();
-            }
-        }
-    }
-
-    /**
-     * 批量发送区块元数据给客户端
-     */
-    public void sendMetadataBatch(ServerPlayer player, String dimension,
-                                  List<ChunkMetadataS2CPacket.MetadataEntry> entries) {
-        FriendlyByteBuf buf = null;
-        boolean sent = false;
-        try {
-            ChunkMetadataS2CPacket packet = new ChunkMetadataS2CPacket(dimension, entries);
-            buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
-            packet.encode(buf);
-            Services.NETWORK_MANAGER.sendMetadataPacket(player, buf);
-            sent = true;
-        } catch (Exception e) {
-            Constants.LOG.debug("Hassium: Failed to send metadata batch to player {}",
-                    player.getName().getString(), e);
-        } finally {
-            // 只有在发送失败时才释放缓冲区
-            // 发送成功时，Fabric/Forge 会接管 buf 的所有权
-            if (!sent && buf != null) {
-                buf.release();
-            }
         }
     }
 
@@ -373,7 +308,7 @@ public class ServerChunkPushManager {
         if (!player.isAlive() || player.hasDisconnected()) {
             return;
         }
-        Constants.LOG.info("[SEND_HASH] Flushing {} chunkHashes to player {} (dimension={})",
+        DebugLogger.info(LogType.NETWORK, "[SEND_HASH] Flushing {} chunkHashes to player {} (dimension={})",
                 batch.entries.size(), player.getName().getString(), batch.dimension);
         FriendlyByteBuf buf = null;
         boolean sent = false;
@@ -642,7 +577,7 @@ public class ServerChunkPushManager {
         // 记录收到数据请求
         NetworkStats.recordDataRequestReceived();
 
-        Constants.LOG.info("[ENQUEUE_DATA] Player {} requested {} chunks (dimension={})",
+        DebugLogger.info(LogType.NETWORK, "[ENQUEUE_DATA] Player {} requested {} chunks (dimension={})",
                 player.getName().getString(), chunks.size(), dimension);
 
         ensureInitialized();
@@ -677,7 +612,7 @@ public class ServerChunkPushManager {
             queue.offer(new DataRequestTask(pos, dimension, distance));
         }
 
-        Constants.LOG.info("[ENQUEUE_DATA] Player {} queued {} chunks (queueSize={}, playerPos=({}, {}))",
+        DebugLogger.info(LogType.NETWORK, "[ENQUEUE_DATA] Player {} queued {} chunks (queueSize={}, playerPos=({}, {}))",
                 player.getName().getString(), chunks.size(), queue.size(), playerChunkX, playerChunkZ);
         // 实际 drain 由 onServerTick 按真实每 tick 上限处理，避免连环 submit 卡主线程
     }
@@ -745,7 +680,7 @@ public class ServerChunkPushManager {
 
                     works.add(new SerializedChunkWork(player, task.pos(), chunkData));
                     processed++;
-                    Constants.LOG.info("[PROCESS_QUEUE] Serialized chunk {} ({} bytes, remaining={})",
+                    DebugLogger.info(LogType.NETWORK, "[PROCESS_QUEUE] Serialized chunk {} ({} bytes, remaining={})",
                             task.pos(), chunkData.length, queue.size());
                 } catch (Exception e) {
                     Constants.LOG.error("[PROCESS_QUEUE] Failed to serialize chunk {} for player {}",
@@ -754,7 +689,7 @@ public class ServerChunkPushManager {
             }
 
             if (!works.isEmpty()) {
-                Constants.LOG.info("[PROCESS_QUEUE] Tick drain for {}: serialized={}, remaining={}",
+                DebugLogger.info(LogType.NETWORK, "[PROCESS_QUEUE] Tick drain for {}: serialized={}, remaining={}",
                         player.getName().getString(), works.size(), queue.size());
                 for (SerializedChunkWork work : works) {
                     pushPool.submit(() -> compressAndSend(work, sender));
@@ -783,7 +718,7 @@ public class ServerChunkPushManager {
             }
             sender.sendCompressedChunk(player, compressed);
             NetworkStats.recordChunkSent(work.chunkData().length, compressed.compressedData.length);
-            Constants.LOG.info("[PROCESS_QUEUE] Sent chunk {} to player {} ({} -> {} bytes, ratio={})",
+            DebugLogger.info(LogType.NETWORK, "[PROCESS_QUEUE] Sent chunk {} to player {} ({} -> {} bytes, ratio={})",
                     work.pos(), player.getName().getString(),
                     work.chunkData().length, compressed.compressedData.length,
                     String.format("%.2f", (double) work.chunkData().length / compressed.compressedData.length));

@@ -168,7 +168,7 @@ Identifier
     public void initVanillaPackets() {
         initVanillaForSide(PacketFlow.CLIENTBOUND);
         initVanillaForSide(PacketFlow.SERVERBOUND);
-        LOGGER.info("Initialized vanilla packets: {} types", vanillaClassToIdentifier.size());
+        LOGGER.debug("Initialized vanilla packets: {} types", vanillaClassToIdentifier.size());
     }
 
     @SuppressWarnings("unchecked")
@@ -497,7 +497,7 @@ Identifier
             }
         }
 
-        LOGGER.info("Deserialized namespace index: {} namespaces, {} total types",
+        LOGGER.debug("Deserialized namespace index: {} namespaces, {} total types",
                 namespaceCount, size());
     }
 

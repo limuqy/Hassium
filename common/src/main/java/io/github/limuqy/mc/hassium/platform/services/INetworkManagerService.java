@@ -10,11 +10,6 @@ import net.minecraft.server.level.ServerPlayer;
 public interface INetworkManagerService {
 
     /**
-     * 发送区块元数据包给客户端（服务端调用）
-     */
-    void sendMetadataPacket(ServerPlayer player, FriendlyByteBuf buf);
-
-    /**
      * 发送区块数据请求到服务端（客户端调用）
      */
     void sendChunkDataRequest(FriendlyByteBuf buf);

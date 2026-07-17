@@ -21,26 +21,22 @@ public class Services {
     // This is lazily loaded only in client environment to avoid server-side class loading errors.
     private static IClientChunkApplier clientChunkApplier;
 
-    // Network manager service for sending cache queries and decisions.
+    // 网络管理器：发送 chunkHash / 区块数据请求等
     public static final INetworkManagerService NETWORK_MANAGER = load(INetworkManagerService.class);
 
     /**
-     * Get the client chunk applier (only available on client side)
+     * 获取客户端区块应用器（仅物理客户端可用）
      */
     public static IClientChunkApplier getClientChunkApplier() {
         if (clientChunkApplier == null) {
             if (PLATFORM.isPhysicalClient()) {
                 clientChunkApplier = load(IClientChunkApplier.class);
             } else {
-                throw new UnsupportedOperationException("CLIENT_CHUNK_APPLIER is only available on client side");
+                throw new UnsupportedOperationException("getClientChunkApplier() 仅在客户端可用");
             }
         }
         return clientChunkApplier;
     }
-
-    // Legacy accessor for compatibility (will throw on server)
-    @Deprecated
-    public static final IClientChunkApplier CLIENT_CHUNK_APPLIER = null; // Placeholder, use getClientChunkApplier() instead
 
     // This code is used to load a service for the current environment. Your implementation of the service must be defined
     // manually by including a text file in META-INF/services named with the fully qualified class name of the service.

@@ -145,7 +145,6 @@ public record HassiumConfig(
         public static final Set<String> DEFAULT_COMPRESSION_BLACKLIST = Set.of(
                 "hassium:chunk_payload_s2c",
                 "hassium:chunk_hash_s2c",
-                "hassium:chunk_metadata_s2c",
                 "hassium:chunk_data_request_c2s",
                 "hassium:handshake_c2s",
                 "hassium:handshake_s2c",

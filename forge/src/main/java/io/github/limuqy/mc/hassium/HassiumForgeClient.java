@@ -44,8 +44,6 @@ public class HassiumForgeClient {
 
     @SubscribeEvent
     public static void onClientSetup(FMLClientSetupEvent event) {
-        LOGGER.info("Hassium: Initializing Forge client-side");
-
         DictionaryManager.loadChunkDictionary();
 
         // ClientPlayerNetworkEvent 在 Forge 游戏总线，不在 Mod 总线
@@ -77,26 +75,24 @@ public class HassiumForgeClient {
             }
 #endif
             if (!HassiumConfigService.getInstance().isNetworkCompressionEnabled()) {
-                LOGGER.info("Hassium: Client joined server, network disabled — skip handshake");
+                LOGGER.debug("Hassium: Client joined server, network disabled — skip handshake");
                 return;
             }
             if (ForgeNetworkManager.CHANNEL == null) {
                 LOGGER.warn("Hassium: CHANNEL not registered yet, skip handshake");
                 return;
             }
-            LOGGER.info("Hassium: Client joined server, sending handshake request");
             networkManager.sendHandshakeRequest();
         }
 
         @SubscribeEvent
         public void onPlayerLoggedOut(ClientPlayerNetworkEvent.LoggingOut event) {
-            LOGGER.info("Hassium: Client disconnected from server");
             var storage = ClientChunkHandler.getClientStorage();
             if (storage != null) {
                 storage.close();
-                LOGGER.info("Hassium: Closed client cache storage");
             }
             ClientChunkHandler.resetStorage();
+            LOGGER.info("Hassium: Client disconnected, cache cleaned up");
         }
     }
 }

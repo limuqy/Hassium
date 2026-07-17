@@ -4,22 +4,17 @@ import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.cache.ChunkContentHashUtil;
 import io.github.limuqy.mc.hassium.cache.client.ClientCacheLoadQueue;
 import io.github.limuqy.mc.hassium.metrics.NetworkStats;
-import io.github.limuqy.mc.hassium.cache.client.ClientChunkMetadata;
 import io.github.limuqy.mc.hassium.cache.client.ClientHassiumStorage;
 import io.github.limuqy.mc.hassium.concurrent.HassiumTaskExecutor;
 import io.github.limuqy.mc.hassium.concurrent.TaskCategory;
 import io.github.limuqy.mc.hassium.platform.Services;
 import io.github.limuqy.mc.hassium.utils.DebugLogger;
 import io.github.limuqy.mc.hassium.utils.DebugLogger.LogType;
-import io.github.limuqy.mc.hassium.compat.RegistryCompat;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
-import net.minecraft.core.Registry;
-import net.minecraft.core.registries.Registries;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.world.level.ChunkPos;
-import net.minecraft.world.level.biome.Biome;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -64,229 +59,6 @@ public class ClientMetadataHandler {
     /** storage 就绪等待超时（毫秒），超时后对暂存包回退全量请求 */
     private static final long STORAGE_READY_TIMEOUT_MS = 2_000L;
 
-    /**
-     * 元数据比对结果
-     */
-    public record MetadataResult(
-            List<ChunkPos> hitChunks,
-            List<Double> hitDistances,
-            List<ChunkPos> missedChunks,
-            String dimension,
-            int totalEntries
-    ) {}
-
-    /**
-     * 处理区块元数据包（S3 异步化入口）
-     * <p>
-     * 将元数据比对（磁盘 I/O）提交到后台线程，结果通过 MainThreadDispatcher 回到主线程应用。
-     * 任务标记为 BEST_EFFORT：登出时可以取消，但通常会完成以利下次连接。
-     * <p>
-     * 如果 HassiumTaskExecutor 未初始化，回退到同步处理。
-     */
-    public static void handleMetadataPacket(ChunkMetadataS2CPacket packet) {
-        Minecraft mc = Minecraft.getInstance();
-        if (mc.player == null) {
-            DebugLogger.warn(LogType.METADATA, "[CLIENT_METADATA] Player is null, skipping metadata packet");
-            return;
-        }
-
-        DebugLogger.info(LogType.METADATA, "[CLIENT_METADATA] Received metadata packet, dimension={}, entries={}",
-                packet.dimension(), packet.entries().size());
-
-        // 记录收到元数据（估算大小：dimension字符串 + 每条记录约18字节）
-        int estimatedSize = packet.dimension().length() + packet.entries().size() * 18 + 8;
-        NetworkStats.recordMetadataReceived(estimatedSize);
-
-        // 如果 storage 尚未初始化（异步初始化尚未完成），尝试同步初始化
-        ClientHassiumStorage storage = ClientChunkHandler.getClientStorage();
-        if (storage == null) {
-            DebugLogger.warn(LogType.METADATA, "[CLIENT_METADATA] Client storage not initialized, attempting sync init");
-            // 回退到同步初始化（仅在此路径发生）
-            tryInitStorage(mc);
-            storage = ClientChunkHandler.getClientStorage();
-            if (storage == null) {
-                DebugLogger.error("[CLIENT_METADATA] Client storage initialization failed, skipping metadata");
-                return;
-            }
-            DebugLogger.info(LogType.METADATA, "[CLIENT_METADATA] Client storage initialized successfully");
-        }
-
-        HassiumTaskExecutor executor = HassiumTaskExecutor.getClient();
-        if (executor != null && executor.isRunning()) {
-            DebugLogger.debug(LogType.METADATA, "[CLIENT_METADATA] Using async path for metadata comparison");
-            // 异步路径：在后台线程比对元数据
-            final ClientHassiumStorage finalStorage = storage;
-            final String dimension = packet.dimension();
-            final List<ChunkMetadataS2CPacket.MetadataEntry> entries = packet.entries();
-            final double playerChunkX = mc.player.getX() / 16.0;
-            final double playerChunkZ = mc.player.getZ() / 16.0;
-
-            executor.submitAndCallback(() ->
-                    compareMetadata(finalStorage, dimension, entries, playerChunkX, playerChunkZ),
-                    ClientMetadataHandler::applyMetadataResult,
-                    TaskCategory.BEST_EFFORT);
-        } else {
-            DebugLogger.debug(LogType.METADATA, "[CLIENT_METADATA] Using sync path for metadata comparison");
-            // 同步回退
-            double playerChunkX = mc.player.getX() / 16.0;
-            double playerChunkZ = mc.player.getZ() / 16.0;
-            MetadataResult result = compareMetadata(storage, packet.dimension(), packet.entries(),
-                    playerChunkX, playerChunkZ);
-            applyMetadataResult(result);
-        }
-    }
-
-    /**
-     * 在后台线程比对元数据（S3 核心）
-     * <p>
-     * 此方法在后台线程执行，可以安全地进行 region 文件磁盘 I/O。
-     *
-     * @return 比对结果
-     */
-    private static MetadataResult compareMetadata(
-            ClientHassiumStorage storage,
-            String dimension,
-            List<ChunkMetadataS2CPacket.MetadataEntry> entries,
-            double playerChunkX,
-            double playerChunkZ) {
-
-        int totalEntries = entries.size();
-        DebugLogger.info(LogType.METADATA, "[COMPARE_METADATA] Starting comparison: {} entries, dimension={}, playerPos=({}, {})",
-                totalEntries, dimension, playerChunkX, playerChunkZ);
-
-        List<ChunkPos> hitChunks = new ArrayList<>();
-        List<Double> hitDistances = new ArrayList<>();
-        List<ChunkPos> missedChunks = new ArrayList<>();
-        int hitCount = 0;
-        int staleCount = 0;
-        int missCount = 0;
-
-        for (ChunkMetadataS2CPacket.MetadataEntry entry : entries) {
-            ChunkPos pos = new ChunkPos(entry.chunkX(), entry.chunkZ());
-
-            // 暂存 contentHash，供后续收到区块数据时写入缓存
-            ClientChunkHandler.storePendingContentHash(entry.chunkX(), entry.chunkZ(), entry.contentHash());
-
-            double dx = entry.chunkX() - playerChunkX;
-            double dz = entry.chunkZ() - playerChunkZ;
-            double distance = Math.sqrt(dx * dx + dz * dz);
-
-            // 比对本地缓存：contentHash 相等才命中
-            ClientChunkMetadata meta = storage.readMetadata(pos);
-            if (meta != null && meta.contentHash() == entry.contentHash()) {
-                hitChunks.add(pos);
-                hitDistances.add(distance);
-                hitCount++;
-                NetworkStats.recordCacheHit(ESTIMATED_CHUNK_BYTES);
-                DebugLogger.info(LogType.METADATA, "[COMPARE_METADATA] HIT chunk {} (hash={}, dist={})",
-                        pos, Long.toHexString(entry.contentHash()), String.format("%.1f", distance));
-            } else {
-                missedChunks.add(pos);
-                if (meta != null) {
-                    staleCount++;
-                    NetworkStats.recordCacheStale(ESTIMATED_CHUNK_BYTES);
-                    DebugLogger.info(LogType.METADATA, "[COMPARE_METADATA] STALE chunk {} (local={}, server={})",
-                            pos, Long.toHexString(meta.contentHash()), Long.toHexString(entry.contentHash()));
-                } else {
-                    missCount++;
-                    NetworkStats.recordCacheMiss(ESTIMATED_CHUNK_BYTES);
-                    DebugLogger.info(LogType.METADATA, "[COMPARE_METADATA] MISS chunk {} (not cached)", pos);
-                }
-            }
-        }
-
-        DebugLogger.info(LogType.METADATA, "[COMPARE_METADATA] Result: {} hits, {} stale, {} misses (total {})",
-                hitCount, staleCount, missCount, totalEntries);
-
-        return new MetadataResult(hitChunks, hitDistances, missedChunks, dimension, totalEntries);
-    }
-
-    /**
-     * 主线程应用元数据比对结果
-     * <p>
-     * 通过 MainThreadDispatcher 回到主线程执行。
-     */
-    private static void applyMetadataResult(MetadataResult result) {
-        // 异步回调可能在玩家断开后执行，需要检查连接状态
-        Minecraft mc = Minecraft.getInstance();
-        if (mc.player == null || mc.getConnection() == null) {
-            DebugLogger.warn(LogType.METADATA, "[APPLY_METADATA] Player disconnected, skipping result");
-            return;
-        }
-
-        DebugLogger.info(LogType.METADATA, "[APPLY_METADATA] Applying result: {} hits, {} misses, dimension={}",
-                result.hitChunks().size(), result.missedChunks().size(), result.dimension());
-
-        ClientCacheLoadQueue loadQueue = ClientCacheLoadQueue.getInstance();
-
-        // 缓存命中：加入加载队列
-        if (!result.hitChunks().isEmpty()) {
-            for (int i = 0; i < result.hitChunks().size(); i++) {
-                ChunkPos pos = result.hitChunks().get(i);
-                double distance = result.hitDistances().get(i);
-                loadQueue.enqueue(pos, distance);
-                DebugLogger.info(LogType.METADATA, "[APPLY_METADATA] Queued chunk {} for cache loading (distance={})",
-                        pos, String.format("%.1f", distance));
-            }
-            DebugLogger.info(LogType.METADATA, "[APPLY_METADATA] {} chunks queued for cache loading", result.hitChunks().size());
-        } else {
-            DebugLogger.info(LogType.METADATA, "[APPLY_METADATA] No cache hits to load");
-        }
-
-        // 缓存未命中：发送数据请求给服务端
-        if (!result.missedChunks().isEmpty()) {
-            DebugLogger.info(LogType.METADATA, "[APPLY_METADATA] Requesting {} chunks from server: {}",
-                    result.missedChunks().size(), result.missedChunks());
-
-            // 记录发送数据请求
-            NetworkStats.recordDataRequestSent();
-
-            ChunkDataRequestC2SPacket request = new ChunkDataRequestC2SPacket(result.dimension(), result.missedChunks());
-
-            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
-            boolean sent = false;
-            try {
-                request.encode(buf);
-                Services.NETWORK_MANAGER.sendChunkDataRequest(buf);
-                sent = true;
-                DebugLogger.info(LogType.METADATA, "[APPLY_METADATA] Successfully sent chunk data request to server");
-            } catch (Exception e) {
-                DebugLogger.error("[APPLY_METADATA] Failed to send chunk data request", e);
-            } finally {
-                // 只有在发送失败时才释放缓冲区
-                // 发送成功时，Fabric/Forge 会接管 buf 的所有权
-                if (!sent && buf != null) {
-                    buf.release();
-                }
-            }
-        } else {
-            DebugLogger.info(LogType.METADATA, "[APPLY_METADATA] No chunks to request from server");
-        }
-    }
-
-    /**
-     * 尝试初始化存储（同步回退路径）
-     */
-    private static void tryInitStorage(Minecraft mc) {
-        try {
-            String serverIp = mc.getConnection().getServerData().ip;
-            String serverId = "server_" + serverIp.replaceAll("[^a-zA-Z0-9._-]", "_");
-            String dimension = mc.player.level().dimension()
-#if MC_VER < MC_1_21_11
-                    .location()
-#else
-                    .identifier()
-#endif
-                    .toString();
-            ClientChunkHandler.initStorage(
-                    mc.gameDirectory.toPath(),
-                    serverId,
-                    dimension);
-        } catch (Exception e) {
-            Constants.LOG.error("Hassium: Failed to initialize client storage", e);
-        }
-    }
-
     // ===== 阶段一：chunkHash 比对 =====
 
     /**
@@ -300,7 +72,7 @@ public class ClientMetadataHandler {
         Minecraft mc = Minecraft.getInstance();
         if (mc.player == null) return;
 
-        Constants.LOG.info("[RECV_HASH] Received chunk hash packet: {} entries, dimension={}",
+        DebugLogger.info(LogType.METADATA, "[RECV_HASH] Received chunk hash packet: {} entries, dimension={}",
                 packet.entries().size(), packet.dimension());
 
         // 记录收到元数据（估算大小：dimension字符串 + 每条记录约16字节）
@@ -530,10 +302,12 @@ public class ClientMetadataHandler {
         }
     }
 
-    // ===== 阶段二：sectionHash 请求和 delta 响应 =====
+    // ===== 阶段二：sectionHash 请求和 delta 响应（暂禁用，生产 miss 走全量）=====
 
     /**
-     * 发送阶段二 sectionHash 请求到服务端
+     * 发送阶段二 sectionHash 请求到服务端。
+     * <p>
+     * 当前生产路径不调用；保留供阶段二恢复。
      */
     private static void sendSectionHashRequest(String dimension,
                                                 List<SectionHashRequestC2SPacket.Entry> entries) {

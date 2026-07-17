@@ -283,7 +283,7 @@ public class CacheSaveQueue {
             return;
         }
 
-        Constants.LOG.info("Hassium: [CACHE SAVE FLUSH] Flushing {} remaining tasks (timeout={}ms)",
+        Constants.LOG.debug("Hassium: [CACHE SAVE FLUSH] Flushing {} remaining tasks (timeout={}ms)",
                 remainingTasks.size(), timeoutMs);
 
         HassiumTaskExecutor executor = HassiumTaskExecutor.getClient();

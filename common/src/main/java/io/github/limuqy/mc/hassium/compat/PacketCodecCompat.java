@@ -236,7 +236,7 @@ public final class PacketCodecCompat {
             playUnbound(flow).listPackets((packetType, numericId) ->
                     fromList.add(new PlayPacketEntry(packetType.id(), numericId, flow)));
             if (!fromList.isEmpty()) {
-                LOGGER.info("枚举 PLAY {} 包类型: {} 个", flow, fromList.size());
+                LOGGER.debug("枚举 PLAY {} 包类型: {} 个", flow, fromList.size());
                 return Collections.unmodifiableList(fromList);
             }
 #else
@@ -247,7 +247,7 @@ public final class PacketCodecCompat {
             details.listPackets((packetType, numericId) ->
                     fromList.add(new PlayPacketEntry(packetType.id(), numericId, flow)));
             if (!fromList.isEmpty()) {
-                LOGGER.info("枚举 PLAY {} 包类型: {} 个", flow, fromList.size());
+                LOGGER.debug("枚举 PLAY {} 包类型: {} 个", flow, fromList.size());
                 return Collections.unmodifiableList(fromList);
             }
 #endif
@@ -271,7 +271,7 @@ public final class PacketCodecCompat {
                 }
                 result.add(new PlayPacketEntry(packetType.id(), i, flow));
             }
-            LOGGER.info("枚举 PLAY {} 包类型: {} 个", flow, result.size());
+            LOGGER.debug("枚举 PLAY {} 包类型: {} 个", flow, result.size());
             return Collections.unmodifiableList(result);
         } catch (Exception e) {
             LOGGER.error("枚举 PLAY 包类型失败 ({})", flow, e);

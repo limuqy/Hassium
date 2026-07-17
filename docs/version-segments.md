@@ -58,7 +58,7 @@ MC_1_21_11
 | C | **1.20.5** | 1.20.6 | StreamCodec；`Packet.write` 等移除（无 1.21.0 属性文件时以 1.20.6 为段尾） |
 | D | **1.21.1** | — | `DisconnectionDetails`；RL 构造私有化；`GameProtocols.*_TEMPLATE` |
 | E | **1.21.2** | 1.21.3, 1.21.4 | `SerializableChunkData`、`lookupOrThrow` |
-| F | **1.21.5** | — | CompoundTag API；ProtocolInfo Unbound 拆分；chunk heightmaps 线格式；**客户端缓存不跨 MC 版本兼容**（见 rollout） |
+| F | **1.21.5** | — | CompoundTag API；ProtocolInfo Unbound 拆分；chunk heightmaps 线格式；**客户端缓存不跨 MC 版本兼容**（见文末附录） |
 | G | **1.21.6** | 1.21.7, 1.21.8 | `serverLevel()`→`level()`；Connection.send 监听器；NeoForge EBS.bus 移除 |
 | H | **1.21.9** | 1.21.10 | LevelChunkSection / PalettedContainerFactory；getServer 移除；setLevel 单参 |
 | I | **1.21.11** | — | Identifier |
@@ -79,7 +79,7 @@ MC_1_21_11
 | 1.21.9 | fabric, neoforge |
 | 1.21.11 | fabric, neoforge |
 
-> **Forge 仅支持 1.20.1 与 1.20.6**（段 A / 段 C 段尾）。**1.21+ 不构建 Forge**（Loom SecureJar / Automatic-Module-Name 冲突适配成本过高；1.21 请用 NeoForge）。详见 [`version-rollout.md`](version-rollout.md)。
+> **Forge 仅支持 1.20.1 与 1.20.6**（段 A / 段 C 段尾）。**1.21+ 不构建 Forge**（Loom SecureJar / Automatic-Module-Name 冲突适配成本过高；1.21 请用 NeoForge）。
 
 本地 / CI：
 
@@ -88,7 +88,7 @@ MC_1_21_11
 ./gradlew compileAnchors          # 或 scripts/compile-anchors.ps1 / .sh
 ```
 
-推进顺序与门控状态见 [`version-rollout.md`](version-rollout.md)。
+推进顺序：按 **A → I** 锚点推进；禁止并行铺满九段。当前状态见文末附录。
 
 ---
 
@@ -151,5 +151,31 @@ MC_1_21_11
 - 不引入按版本的 Gradle source set / 子模块复制
 - 不追求每个小版本手测
 - 不在 `builds_for` 不含 forge 的版本上硬撑 Forge 网络
-- **不构建 Forge 1.21+**（已正式取消；见 rollout）
+- **不构建 Forge 1.21+**（已正式取消）
 - 不把 Identifier rename 散落到业务文件
+
+---
+
+## 附录：九段适配状态（2026-07-18）
+
+**九段适配已全部完成。** 关键运行时回归：1.20.1 / 1.20.5 / 1.21.1 / 1.21.11 通过。
+
+| 段 | 锚点 | 状态 |
+|----|------|------|
+| A–I | 见上表 | 已完成 / 已联调 |
+
+### 客户端缓存跨版本策略（自段 F / 1.21.5）
+
+客户端区块缓存存的是当前 MC 的 chunk packet 线格式，**不保证跨 MC 大版本读写兼容**。
+
+- 同 MC 版本内（含 Fabric↔NeoForge）正常命中与覆盖写入
+- 升版本后旧缓存可懒覆盖（MISS → 重拉 → persist），不做启动时整库作废
+- 不实现跨版本迁移 / 格式协商
+
+### Forge 支持范围
+
+| MC 版本 | Forge |
+|---------|-------|
+| 1.20.1 | ✅ `builds_for` 含 forge |
+| 1.20.6 | ✅（段 C 段尾） |
+| 1.21+ | ❌ 使用 NeoForge |

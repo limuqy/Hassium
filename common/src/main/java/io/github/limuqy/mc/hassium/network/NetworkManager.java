@@ -20,11 +20,6 @@ public interface NetworkManager {
     void sendHandshakeRequest();
 
     /**
-     * 发送区块元数据包到客户端（服务端调用）
-     */
-    void sendMetadataPacket(FriendlyByteBuf buf);
-
-    /**
      * 发送区块数据请求到服务端（客户端调用）
      */
     void sendChunkDataRequest(FriendlyByteBuf buf);

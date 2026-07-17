@@ -19,6 +19,8 @@ import java.util.List;
  * <p>
  * 服务端比对客户端的 section 哈希后，只发送变更的 section 数据和全部 blockEntity 数据。
  * 客户端组装：缓存的 sections + 新 sections + 实体数据。
+ * <p>
+ * <b>阶段二暂禁用</b>：生产路径 miss/mismatch 一律走全量请求；本协议与 handler 保留供后续恢复。
  */
 public record SectionDeltaS2CPacket(
         String dimension,

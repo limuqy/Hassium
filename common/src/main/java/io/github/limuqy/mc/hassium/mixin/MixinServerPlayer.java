@@ -1,9 +1,10 @@
 package io.github.limuqy.mc.hassium.mixin;
 
 import com.mojang.authlib.GameProfile;
-import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.network.PlayerCompressionTracker;
 import io.github.limuqy.mc.hassium.network.ServerChunkPushManager;
+import io.github.limuqy.mc.hassium.utils.DebugLogger;
+import io.github.limuqy.mc.hassium.utils.DebugLogger.LogType;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.protocol.Packet;
 import net.minecraft.server.level.ServerPlayer;
@@ -52,7 +53,7 @@ public abstract class MixinServerPlayer extends Player {
             return;
         }
 
-        Constants.LOG.info("[TRACK_CHUNK] Player {} tracking chunk {} (compressionEnabled=true)",
+        DebugLogger.info(LogType.NETWORK, "[TRACK_CHUNK] Player {} tracking chunk {} (compressionEnabled=true)",
                 self.getName().getString(), pos);
 
         // 异步计算 hash 并发送元数据到 pushPool 工作线程

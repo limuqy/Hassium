@@ -15,7 +15,7 @@ public enum StorageMode {
     MIRROR("mirror"),
 
     /**
-     * Hassium 专属：优先读取 Hassium envelope，失败时按配置决定是否回退原版
+     * Hassium 专属：优先读取 type 126 Hassium payload，失败时按配置决定是否回退原版
      */
     HASSIUM_ONLY("hassium_only");
 

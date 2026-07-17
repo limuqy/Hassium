@@ -142,19 +142,6 @@ public class NeoForgeNetworkManager implements NetworkManager {
         }
     }
 
-    public record ChunkMetadataWrapper(byte[] data) {
-        public void encode(FriendlyByteBuf buf) {
-            buf.writeVarInt(data.length);
-            buf.writeBytes(data);
-        }
-        public static ChunkMetadataWrapper decode(FriendlyByteBuf buf) {
-            int length = buf.readVarInt();
-            byte[] data = new byte[length];
-            buf.readBytes(data);
-            return new ChunkMetadataWrapper(data);
-        }
-    }
-
     public record ChunkDataRequestWrapper(byte[] data) {
         public void encode(FriendlyByteBuf buf) {
             buf.writeVarInt(data.length);
@@ -368,26 +355,6 @@ public class NeoForgeNetworkManager implements NetworkManager {
     }
 
     /**
-     * 区块元数据 Payload (S2C)
-     */
-    public record ChunkMetadataPayload(byte[] data) implements CustomPacketPayload {
-
-        public static final Type<ChunkMetadataPayload> TYPE = new Type<>(
-                ResourceLocationCompat.create(Constants.MOD_ID, "chunk_metadata_s2c")
-        );
-
-        public static final StreamCodec<FriendlyByteBuf, ChunkMetadataPayload> STREAM_CODEC = StreamCodec.composite(
-                ByteBufCodecs.BYTE_ARRAY, ChunkMetadataPayload::data,
-                ChunkMetadataPayload::new
-        );
-
-        @Override
-        public Type<ChunkMetadataPayload> type() {
-            return TYPE;
-        }
-    }
-
-    /**
      * 区块数据请求 Payload (C2S)
      */
     public record ChunkDataRequestPayload(byte[] data) implements CustomPacketPayload {
@@ -517,7 +484,7 @@ public class NeoForgeNetworkManager implements NetworkManager {
             LOGGER.warn("Hassium: network.enabled=false, skipping NeoForge channel registration");
             return;
         }
-        LOGGER.info("Hassium: NeoForge network channels will be registered via event");
+        LOGGER.debug("Hassium: NeoForge network channels will be registered via event");
 #if MC_VER < MC_1_20_5
         registerSimpleChannelPackets();
 #endif
@@ -533,7 +500,7 @@ public class NeoForgeNetworkManager implements NetworkManager {
             return;
         }
         packetsRegistered = true;
-        LOGGER.info("Hassium: Registering SimpleChannel packets");
+        LOGGER.debug("Hassium: Registering SimpleChannel packets");
 
         // 必须 setPacketHandled(true)，否则会把包交给原版 → Unknown custom packet identifier: hassium:main
         // S2C / C2S 必须带方向枚举，避免方向校验失败
@@ -603,39 +570,6 @@ public class NeoForgeNetworkManager implements NetworkManager {
                             ClientChunkHandler.handleCompressedChunk(msg.data());
                         } catch (Exception e) {
                             LOGGER.error("[CLIENT] Failed to handle compressed chunk", e);
-                        }
-                    });
-                    ctx.setPacketHandled(true);
-                },
-                java.util.Optional.of(PlayNetworkDirection.PLAY_TO_CLIENT));
-#endif
-
-        // 3: 区块元数据 S2C
-        CHANNEL.registerMessage(packetId++, ChunkMetadataWrapper.class,
-                ChunkMetadataWrapper::encode, ChunkMetadataWrapper::decode,
-#if MC_VER < MC_1_20_2
-                (msg, ctx) -> {
-                    ctx.get().enqueueWork(() -> {
-                        try {
-                            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data()));
-                            ChunkMetadataS2CPacket packet = ChunkMetadataS2CPacket.decode(buf);
-                            ClientMetadataHandler.handleMetadataPacket(packet);
-                        } catch (Exception e) {
-                            LOGGER.error("[CLIENT] Failed to handle chunk metadata", e);
-                        }
-                    });
-                    ctx.get().setPacketHandled(true);
-                },
-                java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT));
-#else
-                (msg, ctx) -> {
-                    ctx.enqueueWork(() -> {
-                        try {
-                            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data()));
-                            ChunkMetadataS2CPacket packet = ChunkMetadataS2CPacket.decode(buf);
-                            ClientMetadataHandler.handleMetadataPacket(packet);
-                        } catch (Exception e) {
-                            LOGGER.error("[CLIENT] Failed to handle chunk metadata", e);
                         }
                     });
                     ctx.setPacketHandled(true);
@@ -857,7 +791,6 @@ public class NeoForgeNetworkManager implements NetworkManager {
     }
 
     private void handleHandshakeSimple(ServerPlayer player, HandshakeWrapper msg) {
-        LOGGER.info("[HANDSHAKE] Received from player {}", player.getName().getString());
         PlayerCompressionTracker.enableCompression(player);
 
         boolean serverSupportsGlobalCompression = HassiumConfigService.getInstance().isGlobalPacketCompressionEnabled();
@@ -865,9 +798,10 @@ public class NeoForgeNetworkManager implements NetworkManager {
         boolean serverSupportsCompactHeader = HassiumConfigService.getInstance().isCompactHeaderEnabled();
         boolean useCompactHeader = serverSupportsCompactHeader && msg.compactHeaderSupported();
 
+        boolean accepted = true;
         HandshakeResponseWrapper response = new HandshakeResponseWrapper(
                 Constants.CURRENT_PROTOCOL_VERSION,
-                true,
+                accepted,
                 useGlobalCompression,
                 useCompactHeader
         );
@@ -876,12 +810,13 @@ public class NeoForgeNetworkManager implements NetworkManager {
 #else
         CHANNEL.sendTo(response, player.connection.connection, PlayNetworkDirection.PLAY_TO_CLIENT);
 #endif
-        LOGGER.info("Hassium: Sent handshake response to {}", player.getName().getString());
+        LOGGER.info("Hassium: Server handshake for {}: accepted={}, globalCompression={}, compactHeader={}",
+                player.getName().getString(), accepted, useGlobalCompression, useCompactHeader);
     }
 
     private void handleHandshakeResponseSimple(HandshakeResponseWrapper msg) {
-        LOGGER.info("Hassium: Received handshake response, accepted: {}, globalCompression: {}",
-                msg.accepted(), msg.globalCompressionAccepted());
+        LOGGER.info("Hassium: Client handshake response: accepted={}, globalCompression={}, compactHeader={}",
+                msg.accepted(), msg.globalCompressionAccepted(), msg.compactHeaderAccepted());
     }
 
 #else
@@ -894,7 +829,7 @@ public class NeoForgeNetworkManager implements NetworkManager {
             LOGGER.warn("Hassium: network.enabled=false, skipping NeoForge Payload registration");
             return;
         }
-        LOGGER.info("Hassium: Registering NeoForge Payload handlers");
+        LOGGER.debug("Hassium: Registering NeoForge Payload handlers");
 
         var registrar = event.registrar(PROTOCOL_VERSION);
 
@@ -917,13 +852,6 @@ public class NeoForgeNetworkManager implements NetworkManager {
                 CompressedChunkPayload.TYPE,
                 CompressedChunkPayload.STREAM_CODEC,
                 NeoForgeNetworkManager::handleCompressedChunk
-        );
-
-        // 注册区块元数据 (S2C)
-        registrar.playToClient(
-                ChunkMetadataPayload.TYPE,
-                ChunkMetadataPayload.STREAM_CODEC,
-                NeoForgeNetworkManager::handleChunkMetadata
         );
 
         // 注册区块数据请求 (C2S)
@@ -973,23 +901,26 @@ public class NeoForgeNetworkManager implements NetworkManager {
 
     private static void handleHandshake(HandshakePayload payload, IPayloadContext context) {
         context.enqueueWork(() -> {
-            LOGGER.info("[HANDSHAKE] Received from player {}", context.player().getName().getString());
             if (context.player() instanceof ServerPlayer player) {
                 PlayerCompressionTracker.enableCompression(player);
                 boolean useGlobalCompression = HassiumConfigService.getInstance().isGlobalPacketCompressionEnabled()
                         && payload.globalPacketCompressionSupported();
                 boolean useCompactHeader = HassiumConfigService.getInstance().isCompactHeaderEnabled()
                         && payload.compactHeaderSupported();
+                boolean accepted = true;
                 HandshakeResponsePayload response = new HandshakeResponsePayload(
-                        Constants.CURRENT_PROTOCOL_VERSION, true, useGlobalCompression, useCompactHeader);
+                        Constants.CURRENT_PROTOCOL_VERSION, accepted, useGlobalCompression, useCompactHeader);
                 player.connection.send(response);
+                LOGGER.info("Hassium: Server handshake for {}: accepted={}, globalCompression={}, compactHeader={}",
+                        player.getName().getString(), accepted, useGlobalCompression, useCompactHeader);
             }
         });
     }
 
     private static void handleHandshakeResponse(HandshakeResponsePayload payload, IPayloadContext context) {
         context.enqueueWork(() -> {
-            LOGGER.info("Hassium: Received handshake response, accepted: {}", payload.accepted());
+            LOGGER.info("Hassium: Client handshake response: accepted={}, globalCompression={}, compactHeader={}",
+                    payload.accepted(), payload.globalCompressionAccepted(), payload.compactHeaderAccepted());
         });
     }
 
@@ -999,18 +930,6 @@ public class NeoForgeNetworkManager implements NetworkManager {
                 ClientChunkHandler.handleCompressedChunk(payload.data());
             } catch (Exception e) {
                 LOGGER.error("[CLIENT] Failed to handle compressed chunk", e);
-            }
-        });
-    }
-
-    private static void handleChunkMetadata(ChunkMetadataPayload payload, IPayloadContext context) {
-        context.enqueueWork(() -> {
-            try {
-                FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(payload.data()));
-                ChunkMetadataS2CPacket packet = ChunkMetadataS2CPacket.decode(buf);
-                ClientMetadataHandler.handleMetadataPacket(packet);
-            } catch (Exception e) {
-                LOGGER.error("[CLIENT] Failed to handle chunk metadata", e);
             }
         });
     }
@@ -1112,7 +1031,7 @@ public class NeoForgeNetworkManager implements NetworkManager {
                     new String[]{compressionAlgorithm, dictAlgorithm},
                     true, true, false, true, true
             ));
-            LOGGER.info("Hassium: Sent handshake request (SimpleChannel)");
+            LOGGER.debug("Hassium: Sent handshake request to server");
         } else {
             LOGGER.warn("Hassium: Cannot send handshake request, connection is null");
         }
@@ -1130,12 +1049,6 @@ public class NeoForgeNetworkManager implements NetworkManager {
             LOGGER.debug("Hassium: Sent handshake request (Payload)");
         }
 #endif
-    }
-
-    @Override
-    public void sendMetadataPacket(FriendlyByteBuf buf) {
-        LOGGER.warn("sendMetadataPacket called on NeoForgeNetworkManager, use NeoForgeNetworkManagerService instead");
-        buf.release();
     }
 
     @Override

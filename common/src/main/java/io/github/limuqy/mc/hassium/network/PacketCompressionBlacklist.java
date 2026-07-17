@@ -28,7 +28,6 @@ public class PacketCompressionBlacklist {
             "hassium:main",
             // 区块缓存推送控制面
             HassiumPacketIds.CHUNK_HASH_S2C,
-            HassiumPacketIds.CHUNK_METADATA_S2C,
             HassiumPacketIds.CHUNK_DATA_REQUEST_C2S,
             HassiumPacketIds.SECTION_HASH_REQUEST_C2S,
             HassiumPacketIds.SECTION_DELTA_S2C,

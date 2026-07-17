@@ -2,7 +2,6 @@ package io.github.limuqy.mc.hassium.platform;
 
 import io.github.limuqy.mc.hassium.network.ChunkDataRequestC2SPacket;
 import io.github.limuqy.mc.hassium.network.ChunkHashS2CPacket;
-import io.github.limuqy.mc.hassium.network.ChunkMetadataS2CPacket;
 import io.github.limuqy.mc.hassium.network.FabricNetworkManager;
 import io.github.limuqy.mc.hassium.network.SectionDeltaS2CPacket;
 import io.github.limuqy.mc.hassium.network.BlockEntityDataS2CPacket;
@@ -27,15 +26,6 @@ public class FabricNetworkManagerService implements INetworkManagerService {
     private static final Logger LOGGER = LoggerFactory.getLogger("Hassium/Network");
 
     private static final FabricNetworkManager NETWORK_MANAGER = new FabricNetworkManager();
-
-    @Override
-    public void sendMetadataPacket(ServerPlayer player, FriendlyByteBuf buf) {
-#if MC_VER < MC_1_20_5
-        ServerPlayNetworking.send(player, ChunkMetadataS2CPacket.CHANNEL, buf);
-#else
-        ServerPlayNetworking.send(player, FabricPayloadRegistry.toPayload(FabricPayloadRegistry.CHUNK_METADATA_S2C_TYPE, buf));
-#endif
-    }
 
     @Override
     public void sendChunkDataRequest(FriendlyByteBuf buf) {

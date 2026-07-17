@@ -3,6 +3,8 @@ package io.github.limuqy.mc.hassium.network;
 import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.compat.ResourceLocationCompat;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
+import io.github.limuqy.mc.hassium.utils.DebugLogger;
+import io.github.limuqy.mc.hassium.utils.DebugLogger.LogType;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.minecraft.client.Minecraft;
@@ -106,13 +108,6 @@ ResourceLocation
 #else
 Identifier
 #endif
-CHUNK_METADATA_S2C = ChunkMetadataS2CPacket.CHANNEL;
-    public static final
-#if MC_VER < MC_1_21_11
-ResourceLocation
-#else
-Identifier
-#endif
 CHUNK_DATA_REQUEST_C2S = ChunkDataRequestC2SPacket.CHANNEL;
     public static final
 #if MC_VER < MC_1_21_11
@@ -170,7 +165,7 @@ INDEX_SYNC_S2C = ResourceLocationCompat.create(Constants.MOD_ID, "index_sync_s2c
             LOGGER.warn("Hassium: network.enabled=false, skipping Fabric channel registration");
             return;
         }
-        LOGGER.info("Hassium: Registering Fabric network channels");
+        LOGGER.debug("Hassium: Registering Fabric network channels");
 #if MC_VER >= MC_1_20_5
         FabricPayloadRegistry.registerAll();
 #endif
@@ -217,16 +212,15 @@ INDEX_SYNC_S2C = ResourceLocationCompat.create(Constants.MOD_ID, "index_sync_s2c
         // 注册客户端接收压缩区块数据
 #if MC_VER < MC_1_20_5
         ClientPlayNetworking.registerGlobalReceiver(CHUNK_PAYLOAD_S2C, (client, handler, buf, responseSender) -> {
-            LOGGER.info("[CLIENT] Received chunk payload packet");
             int length = buf.readVarInt();
             byte[] data = new byte[length];
             buf.readBytes(data);
 
-            LOGGER.info("[CLIENT] Received compressed chunk payload ({} bytes)", data.length);
+            DebugLogger.info(LogType.NETWORK, "[CLIENT] Received compressed chunk payload ({} bytes)", data.length);
 
             client.execute(() -> {
                 try {
-                    LOGGER.info("[CLIENT] Processing compressed chunk on main thread");
+                    DebugLogger.debug(LogType.COMPRESSION, "[CLIENT] Processing compressed chunk on main thread");
                     ClientChunkHandler.handleCompressedChunk(data);
                 } catch (Exception e) {
                     LOGGER.error("[CLIENT] Failed to handle compressed chunk data", e);
@@ -263,7 +257,7 @@ INDEX_SYNC_S2C = ResourceLocationCompat.create(Constants.MOD_ID, "index_sync_s2c
 
                 client.execute(() -> {
                     DictionaryManager.setAggregationDict(dict);
-                    LOGGER.info("Hassium: Received aggregation dictionary from server ({} bytes)", dict.length);
+                    DebugLogger.debug(LogType.NETWORK, "Hassium: Received aggregation dictionary from server ({} bytes)", dict.length);
                 });
             } catch (Exception e) {
                 LOGGER.error("Hassium: Failed to decode dictionary sync packet", e);
@@ -277,7 +271,7 @@ INDEX_SYNC_S2C = ResourceLocationCompat.create(Constants.MOD_ID, "index_sync_s2c
                 byte[] dict = dictPayload.dictionary();
                 context.client().execute(() -> {
                     DictionaryManager.setAggregationDict(dict);
-                    LOGGER.info("Hassium: Received aggregation dictionary from server ({} bytes)", dict.length);
+                    DebugLogger.debug(LogType.NETWORK, "Hassium: Received aggregation dictionary from server ({} bytes)", dict.length);
                 });
             } catch (Exception e) {
                 LOGGER.error("Hassium: Failed to decode dictionary sync packet", e);
@@ -290,35 +284,23 @@ INDEX_SYNC_S2C = ResourceLocationCompat.create(Constants.MOD_ID, "index_sync_s2c
         // 注册握手响应
 #if MC_VER < MC_1_20_5
         ClientPlayNetworking.registerGlobalReceiver(HANDSHAKE_S2C, (client, handler, buf, responseSender) -> {
-            int protocolVersion = buf.readVarInt();
+            buf.readVarInt(); // protocolVersion
             boolean accepted = buf.readBoolean();
             boolean globalCompressionAccepted = buf.readBoolean();
             boolean compactHeaderAccepted = buf.readBoolean();
-            LOGGER.info("Hassium: Received handshake response, protocol: {}, accepted: {}, globalCompression: {}, compactHeader: {}",
-                    protocolVersion, accepted, globalCompressionAccepted, compactHeaderAccepted);
-
-            if (accepted && globalCompressionAccepted) {
-                LOGGER.info("Hassium: Handshake accepted with global compression, waiting for index sync");
-            } else if (accepted) {
-                LOGGER.info("Hassium: Handshake accepted without global compression");
-            }
+            LOGGER.info("Hassium: Client handshake response: accepted={}, globalCompression={}, compactHeader={}",
+                    accepted, globalCompressionAccepted, compactHeaderAccepted);
         });
 #else
         ClientPlayNetworking.registerGlobalReceiver(FabricPayloadRegistry.HANDSHAKE_S2C_TYPE, (payload, context) -> {
             FriendlyByteBuf buf = FabricPayloadRegistry.fromPayload(payload);
             try {
-                int protocolVersion = buf.readVarInt();
+                buf.readVarInt(); // protocolVersion
                 boolean accepted = buf.readBoolean();
                 boolean globalCompressionAccepted = buf.readBoolean();
                 boolean compactHeaderAccepted = buf.readBoolean();
-                LOGGER.info("Hassium: Received handshake response, protocol: {}, accepted: {}, globalCompression: {}, compactHeader: {}",
-                        protocolVersion, accepted, globalCompressionAccepted, compactHeaderAccepted);
-
-                if (accepted && globalCompressionAccepted) {
-                    LOGGER.info("Hassium: Handshake accepted with global compression, waiting for index sync");
-                } else if (accepted) {
-                    LOGGER.info("Hassium: Handshake accepted without global compression");
-                }
+                LOGGER.info("Hassium: Client handshake response: accepted={}, globalCompression={}, compactHeader={}",
+                        accepted, globalCompressionAccepted, compactHeaderAccepted);
             } finally {
                 buf.release();
             }
@@ -348,7 +330,8 @@ INDEX_SYNC_S2C = ResourceLocationCompat.create(Constants.MOD_ID, "index_sync_s2c
                         FriendlyByteBuf readyBuf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
                         new CompressionReadyPayload(true).encode(readyBuf);
                         ClientPlayNetworking.send(CompressionReadyPayload.CHANNEL, readyBuf);
-                        LOGGER.info("Hassium: Received index sync ({} types), sent compression ready",
+                        DebugLogger.debug(LogType.NETWORK,
+                                "Hassium: Received index sync ({} types), sent compression ready",
                                 clientIndexManager.size());
                     } catch (Exception e) {
                         LOGGER.error("Hassium: Failed to process index sync packet", e);
@@ -384,7 +367,8 @@ INDEX_SYNC_S2C = ResourceLocationCompat.create(Constants.MOD_ID, "index_sync_s2c
                         readyBuf.readBytes(readyData);
                         readyBuf.release();
                         ClientPlayNetworking.send(FabricPayloadRegistry.createPayload(FabricPayloadRegistry.COMPRESSION_READY_C2S_TYPE, readyData));
-                        LOGGER.info("Hassium: Received index sync ({} types), sent compression ready",
+                        DebugLogger.debug(LogType.NETWORK,
+                                "Hassium: Received index sync ({} types), sent compression ready",
                                 clientIndexManager.size());
                     } catch (Exception e) {
                         LOGGER.error("Hassium: Failed to process index sync packet", e);
@@ -439,37 +423,6 @@ INDEX_SYNC_S2C = ResourceLocationCompat.create(Constants.MOD_ID, "index_sync_s2c
                 });
             } catch (Exception e) {
                 LOGGER.error("Failed to handle aggregation packet", e);
-            } finally {
-                buf.release();
-            }
-        });
-#endif
-
-        // 注册区块元数据接收（新协议）
-#if MC_VER < MC_1_20_5
-        ClientPlayNetworking.registerGlobalReceiver(CHUNK_METADATA_S2C, (client, handler, buf, responseSender) -> {
-            try {
-                LOGGER.info("[CLIENT] Received chunk metadata packet");
-                ChunkMetadataS2CPacket packet = ChunkMetadataS2CPacket.decode(buf);
-                LOGGER.info("[CLIENT] Decoded chunk metadata: {} entries, dimension={}",
-                        packet.entries().size(), packet.dimension());
-
-                client.execute(() -> {
-                    LOGGER.info("[CLIENT] Processing chunk metadata on main thread");
-                    ClientMetadataHandler.handleMetadataPacket(packet);
-                });
-            } catch (Exception e) {
-                LOGGER.error("[CLIENT] Failed to handle chunk metadata", e);
-            }
-        });
-#else
-        ClientPlayNetworking.registerGlobalReceiver(FabricPayloadRegistry.CHUNK_METADATA_S2C_TYPE, (payload, context) -> {
-            FriendlyByteBuf buf = FabricPayloadRegistry.fromPayload(payload);
-            try {
-                ChunkMetadataS2CPacket packet = ChunkMetadataS2CPacket.decode(buf);
-                context.client().execute(() -> ClientMetadataHandler.handleMetadataPacket(packet));
-            } catch (Exception e) {
-                LOGGER.error("[CLIENT] Failed to handle chunk metadata", e);
             } finally {
                 buf.release();
             }
@@ -580,14 +533,6 @@ INDEX_SYNC_S2C = ResourceLocationCompat.create(Constants.MOD_ID, "index_sync_s2c
     }
 
     @Override
-    public void sendMetadataPacket(FriendlyByteBuf buf) {
-        // 服务端调用，委托给 FabricNetworkManagerService
-        // 此方法不应在 FabricNetworkManager 上直接调用
-        Constants.LOG.warn("sendMetadataPacket called on FabricNetworkManager, use FabricNetworkManagerService instead");
-        buf.release();
-    }
-
-    @Override
     public void sendChunkDataRequest(FriendlyByteBuf buf) {
         if (Minecraft.getInstance().getConnection() != null) {
 #if MC_VER < MC_1_20_5
@@ -665,7 +610,8 @@ INDEX_SYNC_S2C = ResourceLocationCompat.create(Constants.MOD_ID, "index_sync_s2c
      */
     public static void sendCompressedChunk(ServerPlayer player, ChunkCompressionHandler.CompressedChunkData compressed) {
         try {
-            LOGGER.info("[SEND_CHUNK] Sending compressed chunk [{}, {}] to player {} (compressedSize={}, algorithm={})",
+            DebugLogger.info(LogType.COMPRESSION,
+                    "[SEND_CHUNK] Sending compressed chunk [{}, {}] to player {} (compressedSize={}, algorithm={})",
                     compressed.chunkX, compressed.chunkZ, player.getName().getString(),
                     compressed.compressedData.length, compressed.algorithm);
 
@@ -674,14 +620,14 @@ INDEX_SYNC_S2C = ResourceLocationCompat.create(Constants.MOD_ID, "index_sync_s2c
             buf.writeVarInt(data.length);
             buf.writeBytes(data);
 
-            LOGGER.info("[SEND_CHUNK] Encoded chunk data ({} bytes), sending via network", data.length);
+            DebugLogger.debug(LogType.NETWORK, "[SEND_CHUNK] Encoded chunk data ({} bytes), sending via network", data.length);
 #if MC_VER < MC_1_20_5
             ServerPlayNetworking.send(player, CHUNK_PAYLOAD_S2C, buf);
-            LOGGER.info("[SEND_CHUNK] Successfully sent compressed chunk [{}, {}] to player {}",
+            DebugLogger.debug(LogType.NETWORK, "[SEND_CHUNK] Successfully sent compressed chunk [{}, {}] to player {}",
                     compressed.chunkX, compressed.chunkZ, player.getName().getString());
 #else
             ServerPlayNetworking.send(player, FabricPayloadRegistry.toPayload(FabricPayloadRegistry.CHUNK_PAYLOAD_S2C_TYPE, buf));
-            LOGGER.info("[SEND_CHUNK] Successfully sent compressed chunk [{}, {}] to player {}",
+            DebugLogger.debug(LogType.NETWORK, "[SEND_CHUNK] Successfully sent compressed chunk [{}, {}] to player {}",
                     compressed.chunkX, compressed.chunkZ, player.getName().getString());
 #endif
         } catch (Exception e) {
@@ -704,7 +650,7 @@ INDEX_SYNC_S2C = ResourceLocationCompat.create(Constants.MOD_ID, "index_sync_s2c
 #else
             ServerPlayNetworking.send(player, FabricPayloadRegistry.toPayload(FabricPayloadRegistry.DICTIONARY_SYNC_S2C_TYPE, buf));
 #endif
-            LOGGER.info("Hassium: Sent aggregation dictionary sync to player {} ({} bytes)",
+            DebugLogger.debug(LogType.NETWORK, "Hassium: Sent aggregation dictionary sync to player {} ({} bytes)",
                     player.getName().getString(),
                     aggregationDict != null ? aggregationDict.length : 0);
         } catch (Exception e) {
@@ -725,7 +671,7 @@ INDEX_SYNC_S2C = ResourceLocationCompat.create(Constants.MOD_ID, "index_sync_s2c
 #else
             ServerPlayNetworking.send(player, FabricPayloadRegistry.toPayload(FabricPayloadRegistry.DICTIONARY_SYNC_S2C_TYPE, buf));
 #endif
-            LOGGER.info("Hassium: Pushed new aggregation dictionary to player {} ({} bytes)",
+            DebugLogger.debug(LogType.NETWORK, "Hassium: Pushed new aggregation dictionary to player {} ({} bytes)",
                     player.getName().getString(), dictionary != null ? dictionary.length : 0);
         } catch (Exception e) {
             LOGGER.error("Hassium: Failed to push dictionary to player {}", player.getName().getString(), e);
@@ -751,7 +697,7 @@ INDEX_SYNC_S2C = ResourceLocationCompat.create(Constants.MOD_ID, "index_sync_s2c
 #else
             ServerPlayNetworking.send(player, FabricPayloadRegistry.toPayload(FabricPayloadRegistry.INDEX_SYNC_S2C_TYPE, buf));
 #endif
-            LOGGER.info("Hassium: Sent index sync packet to player {} ({} packet types)",
+            DebugLogger.debug(LogType.NETWORK, "Hassium: Sent index sync packet to player {} ({} packet types)",
                     player.getName().getString(), indexSyncManager.getServerIndexManager().size());
         } catch (Exception e) {
             LOGGER.error("Hassium: Failed to send index sync packet", e);
@@ -765,8 +711,6 @@ INDEX_SYNC_S2C = ResourceLocationCompat.create(Constants.MOD_ID, "index_sync_s2c
         // 注册握手请求
 #if MC_VER < MC_1_20_5
         ServerPlayNetworking.registerGlobalReceiver(HANDSHAKE_C2S, (server, player, handler, buf, sender) -> {
-            LOGGER.info("[HANDSHAKE] Received handshake packet from player {}", player.getName().getString());
-
             int protocolVersion = buf.readVarInt();
             String modVersion = buf.readUtf();
             int algoCount = buf.readVarInt();
@@ -780,16 +724,13 @@ INDEX_SYNC_S2C = ResourceLocationCompat.create(Constants.MOD_ID, "index_sync_s2c
             boolean globalPacketCompression = buf.readBoolean();
             boolean compactHeader = buf.readBoolean();
 
-            LOGGER.info("[HANDSHAKE] Handshake details: protocol={}, modVersion={}, algorithms={}, clientCache={}, globalCompression={}, compactHeader={}",
-                    protocolVersion, modVersion, String.join(", ", algorithms), clientCache, globalPacketCompression, compactHeader);
+            DebugLogger.debug(LogType.NETWORK,
+                    "[HANDSHAKE] Details from {}: protocol={}, modVersion={}, algorithms={}, clientCache={}, globalCompression={}, compactHeader={}",
+                    player.getName().getString(), protocolVersion, modVersion, String.join(", ", algorithms),
+                    clientCache, globalPacketCompression, compactHeader);
 
             // 启用该玩家的压缩
             PlayerCompressionTracker.enableCompression(player);
-            LOGGER.info("[HANDSHAKE] Enabled compression for player {}", player.getName().getString());
-
-            // 验证压缩已启用
-            boolean isEnabled = PlayerCompressionTracker.isCompressionEnabled(player);
-            LOGGER.info("[HANDSHAKE] Verification - Player {} compression enabled: {}", player.getName().getString(), isEnabled);
 
             // 检查是否支持全局压缩
             boolean serverSupportsGlobalCompression = HassiumConfigService.getInstance().isGlobalPacketCompressionEnabled();
@@ -799,16 +740,18 @@ INDEX_SYNC_S2C = ResourceLocationCompat.create(Constants.MOD_ID, "index_sync_s2c
             boolean serverSupportsCompactHeader = HassiumConfigService.getInstance().isCompactHeaderEnabled();
             boolean useCompactHeader = serverSupportsCompactHeader && compactHeader;
 
+            boolean accepted = true;
+
             // 发送握手响应
             server.execute(() -> {
                 FriendlyByteBuf response = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
                 response.writeVarInt(Constants.CURRENT_PROTOCOL_VERSION);
-                response.writeBoolean(true); // 接受压缩
-                response.writeBoolean(useGlobalCompression); // 全局压缩协商结果
-                response.writeBoolean(useCompactHeader); // 紧凑包头协商结果
+                response.writeBoolean(accepted);
+                response.writeBoolean(useGlobalCompression);
+                response.writeBoolean(useCompactHeader);
                 ServerPlayNetworking.send(player, HANDSHAKE_S2C, response);
-                LOGGER.info("Hassium: Sent handshake response to client {}, globalCompression: {}, compactHeader: {}",
-                        player.getName().getString(), useGlobalCompression, useCompactHeader);
+                LOGGER.info("Hassium: Server handshake for {}: accepted={}, globalCompression={}, compactHeader={}",
+                        player.getName().getString(), accepted, useGlobalCompression, useCompactHeader);
 
                 // 如果启用全局压缩，发送字典和索引同步
                 if (useGlobalCompression) {
@@ -823,7 +766,8 @@ INDEX_SYNC_S2C = ResourceLocationCompat.create(Constants.MOD_ID, "index_sync_s2c
                     if (connection != null) {
                         HassiumConnectionRegistry.markPending(connection);
                         HassiumAggregationManager.init();
-                        LOGGER.info("Hassium: Marked connection as PENDING for player {}", player.getName().getString());
+                        DebugLogger.debug(LogType.NETWORK,
+                                "Hassium: Marked connection as PENDING for player {}", player.getName().getString());
 
                         // 安全超时
                         String playerName = player.getName().getString();
@@ -845,8 +789,6 @@ INDEX_SYNC_S2C = ResourceLocationCompat.create(Constants.MOD_ID, "index_sync_s2c
         ServerPlayNetworking.registerGlobalReceiver(FabricPayloadRegistry.HANDSHAKE_C2S_TYPE, (payload, context) -> {
             FriendlyByteBuf buf = FabricPayloadRegistry.fromPayload(payload);
             try {
-                LOGGER.info("[HANDSHAKE] Received handshake packet from player {}", context.player().getName().getString());
-
                 int protocolVersion = buf.readVarInt();
                 String modVersion = buf.readUtf();
                 int algoCount = buf.readVarInt();
@@ -860,15 +802,16 @@ INDEX_SYNC_S2C = ResourceLocationCompat.create(Constants.MOD_ID, "index_sync_s2c
                 boolean globalPacketCompression = buf.readBoolean();
                 boolean compactHeader = buf.readBoolean();
 
-                LOGGER.info("[HANDSHAKE] Handshake details: protocol={}, modVersion={}, algorithms={}, clientCache={}, globalCompression={}, compactHeader={}",
-                        protocolVersion, modVersion, String.join(", ", algorithms), clientCache, globalPacketCompression, compactHeader);
-
                 ServerPlayer player = context.player();
                 net.minecraft.server.MinecraftServer server = io.github.limuqy.mc.hassium.compat.PlayerCompat.getMinecraftServer(player);
 
+                DebugLogger.debug(LogType.NETWORK,
+                        "[HANDSHAKE] Details from {}: protocol={}, modVersion={}, algorithms={}, clientCache={}, globalCompression={}, compactHeader={}",
+                        player.getName().getString(), protocolVersion, modVersion, String.join(", ", algorithms),
+                        clientCache, globalPacketCompression, compactHeader);
+
                 // 启用该玩家的压缩
                 PlayerCompressionTracker.enableCompression(player);
-                LOGGER.info("[HANDSHAKE] Enabled compression for player {}", player.getName().getString());
 
                 // 检查是否支持全局压缩
                 boolean serverSupportsGlobalCompression = HassiumConfigService.getInstance().isGlobalPacketCompressionEnabled();
@@ -878,16 +821,18 @@ INDEX_SYNC_S2C = ResourceLocationCompat.create(Constants.MOD_ID, "index_sync_s2c
                 boolean serverSupportsCompactHeader = HassiumConfigService.getInstance().isCompactHeaderEnabled();
                 boolean useCompactHeader = serverSupportsCompactHeader && compactHeader;
 
+                boolean accepted = true;
+
                 // 发送握手响应
                 server.execute(() -> {
                     FriendlyByteBuf response = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
                     response.writeVarInt(Constants.CURRENT_PROTOCOL_VERSION);
-                    response.writeBoolean(true); // 接受压缩
-                    response.writeBoolean(useGlobalCompression); // 全局压缩协商结果
-                    response.writeBoolean(useCompactHeader); // 紧凑包头协商结果
+                    response.writeBoolean(accepted);
+                    response.writeBoolean(useGlobalCompression);
+                    response.writeBoolean(useCompactHeader);
                     ServerPlayNetworking.send(player, FabricPayloadRegistry.toPayload(FabricPayloadRegistry.HANDSHAKE_S2C_TYPE, response));
-                    LOGGER.info("Hassium: Sent handshake response to client {}, globalCompression: {}, compactHeader: {}",
-                            player.getName().getString(), useGlobalCompression, useCompactHeader);
+                    LOGGER.info("Hassium: Server handshake for {}: accepted={}, globalCompression={}, compactHeader={}",
+                            player.getName().getString(), accepted, useGlobalCompression, useCompactHeader);
 
                     // 如果启用全局压缩，发送字典和索引同步
                     if (useGlobalCompression) {
@@ -902,7 +847,8 @@ INDEX_SYNC_S2C = ResourceLocationCompat.create(Constants.MOD_ID, "index_sync_s2c
                         if (connection != null) {
                             HassiumConnectionRegistry.markPending(connection);
                             HassiumAggregationManager.init();
-                            LOGGER.info("Hassium: Marked connection as PENDING for player {}", player.getName().getString());
+                            DebugLogger.debug(LogType.NETWORK,
+                                    "Hassium: Marked connection as PENDING for player {}", player.getName().getString());
 
                             // 安全超时
                             String playerName = player.getName().getString();
@@ -931,7 +877,7 @@ INDEX_SYNC_S2C = ResourceLocationCompat.create(Constants.MOD_ID, "index_sync_s2c
 #if MC_VER < MC_1_20_5
         ServerPlayNetworking.registerGlobalReceiver(CompressionReadyPayload.CHANNEL, (server, player, handler, buf, sender) -> {
             CompressionReadyPayload payload = CompressionReadyPayload.decode(buf);
-            LOGGER.info("Hassium: Received compression ready from player {}, ready: {}",
+            DebugLogger.debug(LogType.NETWORK, "Hassium: Received compression ready from player {}, ready: {}",
                     player.getName().getString(), payload.isReady());
 
             if (payload.isReady()) {
@@ -939,7 +885,8 @@ INDEX_SYNC_S2C = ResourceLocationCompat.create(Constants.MOD_ID, "index_sync_s2c
                 if (connection != null) {
                     HassiumConnectionRegistry.markEnabled(connection);
                     HassiumAggregationManager.flushConnection(connection);
-                    LOGGER.info("Hassium: Marked connection as ENABLED for player {}, flushing buffered packets",
+                    DebugLogger.debug(LogType.NETWORK,
+                            "Hassium: Marked connection as ENABLED for player {}, flushing buffered packets",
                             player.getName().getString());
                 }
             }
@@ -949,7 +896,7 @@ INDEX_SYNC_S2C = ResourceLocationCompat.create(Constants.MOD_ID, "index_sync_s2c
             FriendlyByteBuf buf = FabricPayloadRegistry.fromPayload(payload);
             try {
                 CompressionReadyPayload readyPayload = CompressionReadyPayload.decode(buf);
-                LOGGER.info("Hassium: Received compression ready from player {}, ready: {}",
+                DebugLogger.debug(LogType.NETWORK, "Hassium: Received compression ready from player {}, ready: {}",
                         context.player().getName().getString(), readyPayload.isReady());
 
                 if (readyPayload.isReady()) {
@@ -957,7 +904,8 @@ INDEX_SYNC_S2C = ResourceLocationCompat.create(Constants.MOD_ID, "index_sync_s2c
                     if (connection != null) {
                         HassiumConnectionRegistry.markEnabled(connection);
                         HassiumAggregationManager.flushConnection(connection);
-                        LOGGER.info("Hassium: Marked connection as ENABLED for player {}, flushing buffered packets",
+                        DebugLogger.debug(LogType.NETWORK,
+                                "Hassium: Marked connection as ENABLED for player {}, flushing buffered packets",
                                 context.player().getName().getString());
                     }
                 }
@@ -973,16 +921,15 @@ INDEX_SYNC_S2C = ResourceLocationCompat.create(Constants.MOD_ID, "index_sync_s2c
 #if MC_VER < MC_1_20_5
         ServerPlayNetworking.registerGlobalReceiver(CHUNK_DATA_REQUEST_C2S, (server, player, handler, buf, sender) -> {
             try {
-                LOGGER.info("[SERVER] Received chunk data request packet from player {}", player.getName().getString());
+                DebugLogger.debug(LogType.NETWORK, "[SERVER] Received chunk data request from player {}",
+                        player.getName().getString());
                 ChunkDataRequestC2SPacket request = ChunkDataRequestC2SPacket.decode(
                         new net.minecraft.network.FriendlyByteBuf(buf.copy()));
-                LOGGER.info("[SERVER] Decoded chunk data request: {} chunks, dimension={}, chunks={}",
-                        request.chunks().size(), request.dimension(), request.chunks());
+                DebugLogger.debug(LogType.NETWORK, "[SERVER] Decoded chunk data request: {} chunks, dimension={}",
+                        request.chunks().size(), request.dimension());
 
                 server.execute(() -> {
                     try {
-                        LOGGER.info("[SERVER] Processing chunk data request on server thread for player {}",
-                                player.getName().getString());
                         ServerChunkPushManager.getInstance().enqueueDataRequest(
                                 player, request.dimension(), request.chunks());
                     } catch (Exception e) {
@@ -999,15 +946,14 @@ INDEX_SYNC_S2C = ResourceLocationCompat.create(Constants.MOD_ID, "index_sync_s2c
             try {
                 ServerPlayer player = context.player();
                 net.minecraft.server.MinecraftServer server = io.github.limuqy.mc.hassium.compat.PlayerCompat.getMinecraftServer(player);
-                LOGGER.info("[SERVER] Received chunk data request packet from player {}", player.getName().getString());
+                DebugLogger.debug(LogType.NETWORK, "[SERVER] Received chunk data request from player {}",
+                        player.getName().getString());
                 ChunkDataRequestC2SPacket request = ChunkDataRequestC2SPacket.decode(buf);
-                LOGGER.info("[SERVER] Decoded chunk data request: {} chunks, dimension={}, chunks={}",
-                        request.chunks().size(), request.dimension(), request.chunks());
+                DebugLogger.debug(LogType.NETWORK, "[SERVER] Decoded chunk data request: {} chunks, dimension={}",
+                        request.chunks().size(), request.dimension());
 
                 server.execute(() -> {
                     try {
-                        LOGGER.info("[SERVER] Processing chunk data request on server thread for player {}",
-                                player.getName().getString());
                         ServerChunkPushManager.getInstance().enqueueDataRequest(
                                 player, request.dimension(), request.chunks());
                     } catch (Exception e) {

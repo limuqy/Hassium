@@ -152,7 +152,7 @@ public class IndexSyncManager {
         // 初始化原版包映射（用于聚合包解码）
         clientManager.initVanillaPackets();
 
-        LOGGER.info("Client index synchronized for connection {}: {} packet types",
+        LOGGER.debug("Client index synchronized for connection {}: {} packet types",
                 connectionId, clientManager.size());
         return clientManager;
     }

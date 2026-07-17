@@ -1,169 +1,77 @@
 # AGENTS.md
 
-Guidance for AI agents working in the Hassium repository. See `CLAUDE.md` for comprehensive project overview.
+AI Agent 速查。完整背景见 [`CLAUDE.md`](CLAUDE.md)；多版本真相源见 [`docs/version-segments.md`](docs/version-segments.md)。
 
-## Project identity
+## 项目身份
 
-Minecraft 1.20.1 multiloader mod (Forge + Fabric) that replaces vanilla Zlib with ZSTD compression for chunk storage and network transport. Three modules: `common/` (loader-agnostic), `fabric/`, `forge/`.
+Minecraft 1.20.1–1.21.11 多加载器模组（Fabric / Forge / NeoForge），ZSTD 优化存档与网络；九段适配单位见 version-segments。Forge 仅 **1.20.1 / 1.20.6**。
 
-## Critical build commands
+## 关键构建命令
 
 ```bash
-# First-time setup or if decompile artifacts missing
-./gradlew common:decompile
-
-# Compile checking (faster than full build, run after code changes)
-./gradlew common:compileJava
-./gradlew fabric:compileJava
-./gradlew forge:compileJava
-
-# Full build
-./gradlew build                    # all platforms
-./gradlew fabric:build             # Fabric only
-./gradlew forge:build              # Forge only
-
-# Dev testing
-./gradlew fabric:runClient
-./gradlew forge:runClient
-./gradlew fabric:runServer
-./gradlew forge:runServer
-
-# Run benchmark/utility from common
-./gradlew common:runJava -PmainClass=<fully.qualified.ClassName> -Pargs=arg1,arg2
+./gradlew --no-daemon common:decompile
+./gradlew --no-daemon common:compileJava          # 改 common 后先编
+./gradlew --no-daemon fabric:compileJava
+./gradlew --no-daemon forge:compileJava
+./gradlew --no-daemon neoforge:compileJava
+./gradlew --no-daemon build
+./gradlew --no-daemon common:test
 ```
 
-**Command order matters:** After changing `common/` code, run `common:compileJava` first to catch errors before they cascade to loader modules.
+PowerShell：始终写 `"-Pmc_ver=1.20.1"`，否则 `1.20.1` 会被截成 `1`。
 
-## Module dependency rules
+## 模块依赖
 
 ```
-common/   ← loader-agnostic logic only, NO imports from fabric/forge
+common/  ← 无 fabric/forge/neoforge import
   ↑
-fabric/   ← can import common
-forge/    ← can import common
+fabric/ | forge/ | neoforge/
 ```
 
-**Where code goes:**
-- Business logic, algorithms, data structures, config records → `common/`
-- Loader-specific API calls (events, registries, network channels) → `fabric/` or `forge/`
-- When loader-specific implementation needed: define interface in `common/src/main/java/.../platform/services/`, implement in both loaders, register via `META-INF/services/<interface.fqn>` (see ServiceLoader pattern below)
+业务逻辑进 `common`；加载器 API 进对应模块；跨版本差异进 `common/.../compat/`，禁止业务散落新 `#if MC_VER`。
 
-## Platform abstraction (ServiceLoader)
+## ServiceLoader
 
-When adding cross-platform functionality:
+1. 接口：`common/.../platform/services/IXxxHelper.java`
+2. 访问：`Services.XXX`
+3. 实现：三端各一份
+4. 注册：`META-INF/services/<接口 FQN>`（三端都要）
 
-1. Define interface in `common/src/main/java/.../platform/services/IXxxHelper.java`
-2. Access via `Services.XXX` in common code
-3. Implement in `fabric/src/main/java/.../platform/FabricXxxHelper.java`
-4. Implement in `forge/src/main/java/.../platform/ForgeXxxHelper.java`
-5. **CRITICAL:** Register in both:
-   - `fabric/src/main/resources/META-INF/services/io.github.limuqy.mc.hassium.platform.services.IXxxHelper`
-   - `forge/src/main/resources/META-INF/services/io.github.limuqy.mc.hassium.platform.services.IXxxHelper`
-   
-   Each file contains one line: the fully qualified implementation class name.
+漏注册 → 运行时 `NoSuchElementException`，编译不过滤。
 
-**Most common mistake:** Forgetting one or both `META-INF/services/` registration files causes runtime `NoSuchElementException`, not compile error.
+## Mixin（仅 common）
 
-## Mixin injection (common only)
+- 命名：`@Unique` + `hassium$` 前缀
+- 存储相关：入口先查 `isStorageEnabled()`
+- 网络相关：入口先查网络开关 + 握手状态
+- 登记：`common/src/main/resources/hassium.mixins.json`
+- 优先 `@Inject` cancellable，避免 `@Overwrite`
 
-All Mixins live in `common/` at `io.github.limuqy.mc.hassium.mixin/`. Target classes use Mojang mappings (1.20.1).
+清单与规范：skill `hassium-mixin`。
 
-**Standard pattern:**
-```java
-@Mixin(TargetClass.class)
-public abstract class MixinTargetClass {
-    @Unique
-    private static final Logger hassium$LOGGER = LoggerFactory.getLogger("Hassium/TargetClass");
-    
-    @Inject(method = "methodName", at = @At("HEAD"), cancellable = true)
-    private void hassium$onMethodName(CallbackInfoReturnable<ReturnType> cir) {
-        if (!HassiumConfigService.getInstance().isStorageEnabled()) {
-            return; // Feature disabled by default, must bail early
-        }
-        // ...
-    }
-}
-```
+## 配置红线
 
-**Rules:**
-- All injected fields/methods must have `@Unique` + `hassium$` prefix
-- Storage-related mixins MUST check `isStorageEnabled()` first (default: disabled)
-- Private fields/methods access requires `@Accessor`/`@Invoker` interface (e.g., `RegionFileAccessor`)
-- Add class name (no package) to `common/src/main/resources/hassium.mixins.json` under `"mixins"` array (or `"client"` if client-only)
-- Avoid `@Overwrite`, prefer `@Inject` with `cancellable = true`
+| 项 | 默认 | 注意 |
+|----|------|------|
+| `storage.enabled` | **true** | 改存档格式 → 提醒备份 |
+| `network.enabled` | true | |
+| `globalPacketCompression` | true | |
+| `clientCache.enabled` | true | |
+| `debug.*` | false | 热路径用 `DebugLogger` |
 
-**Verification:** After adding/modifying mixin, run all three `compileJava` tasks. Mapping errors appear at runtime, not compile time.
+存档格式 type **126**（非 127）；元数据推送字段为 **chunkHash**（非 inhabitedTime）。
 
-## Configuration defaults
+## Skills
 
-- `storage.enabled = false` (MUST default to off, world save safety)
-- `network.enabled = true` (Hassium custom channel compression)
-- `network.globalPacketCompression = true` (global ZSTD replaces vanilla Zlib)
-- `clientCache.enabled = true`
+| Skill | 用途 |
+|-------|------|
+| `hassium-dev` | 构建、模块、ServiceLoader、配置、包地图 |
+| `hassium-storage` | 存储 / codec / Region / 字典 |
+| `hassium-network` | 网络压缩、chunkHash 推送、限流、指标 |
+| `hassium-mixin` | Mixin 清单与注入 |
 
-New config fields that modify save format MUST default to disabled/safe.
+## 文档
 
-## Testing
-
-```bash
-# Unit tests (common module has JUnit 5 setup)
-./gradlew common:test
-
-# Integration: use runClient/runServer
-```
-
-## Package structure
-
-```
-io.github.limuqy.mc.hassium/
-├── api/          # Public API (HassiumApi, HassiumCapabilities)
-├── storage/      # Region file format (interfaces, data classes)
-├── compression/  # ZSTD codec (CompressionService, HassiumEnvelope, DictionaryRegistry)
-├── cache/        # Client-side chunk cache
-├── network/      # Custom packets (hassium:* channels)
-├── config/       # Config records (HassiumConfig + subconfigs)
-├── metrics/      # Performance stats
-├── migration/    # Format migration tools
-├── platform/     # ServiceLoader abstraction (Services.java, services/ interfaces)
-└── mixin/        # All Mixin classes (common only)
-```
-
-## Dependencies
-
-- `com.github.luben:zstd-jni:1.5.5-7` already added to `common/build.gradle`
-- New dependencies go in `common/` (inherited by loaders via multiloader plugin in `buildSrc/`)
-- Native libraries: verify jar-in-jar packing works on both loaders before merging
-
-## Version constraints
-
-- Target: Minecraft 1.20.1–1.21.11 via Manifold `#if MC_VER`
-- **Forge `builds_for`：仅 1.20.1 / 1.20.6**；1.21+ 不构建 Forge（用 NeoForge）
-- **Adaptation unit**: 9 effective segments × loaders in `builds_for` — see [`docs/version-segments.md`](docs/version-segments.md)
-- PowerShell: always quote `-Pmc_ver=...` as `"-Pmc_ver=1.20.1"` (otherwise `1.20.1` is truncated to `1`)
-- Mojang API diffs belong in `common/.../compat/`; do not scatter new `#if MC_VER` in business/Mixin code
-- Legal boundary constants are whitelisted in `docs/version-segments.md` (`./gradlew scanVersionBoundaries`)
-- Compression type ID `127` (vanilla's custom scheme marker)
-- Design must allow future compression-scheme upgrade path (don't hardcode `127` checks everywhere)
-
-## Skills available
-
-Load via the `skill` tool:
-- `hassium-dev`: General cross-platform development, ServiceLoader, config
-- `hassium-mixin`: Mixin injection details (RegionFile, ChunkSerializer, etc.)
-- `hassium-compression`: Compression codec, envelope format, dictionary training
-
-## Key gotchas
-
-1. **Mixin refmap failures**: Usually means target method/field name wrong for Mojang mappings or target class not in classpath
-2. **ServiceLoader returning empty**: Missing `META-INF/services/` registration file
-3. **Config not respected**: Check feature gate (`isStorageEnabled()`, etc.) exists at mixin entry point
-4. **Build errors in loader modules**: Fix `common/` first, loader errors often cascade from common
-5. **Proxy settings**: `gradle.properties` has hardcoded proxy (127.0.0.1:7890), may need adjustment for non-CN environments
-
-## Documentation
-
-- `CLAUDE.md`: Full project overview (architecture, status, todos)
-- `docs/hassium-requirements.md`: Feature requirements and feasibility
-- `docs/hassium-development.md`: Detailed architecture and design
-- `docs/chunk-queue-implementation.md`: Network queue system details
-- `.claude/skills/`: Detailed task-specific workflows
+- [`docs/architecture.md`](docs/architecture.md)
+- [`docs/chunk-cache.md`](docs/chunk-cache.md)
+- [`docs/version-segments.md`](docs/version-segments.md)

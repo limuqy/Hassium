@@ -14,7 +14,6 @@
         "MixinConnectionSetupCompression",
         "MixinChunkHolder",
         "MixinServerPlayer",
-        "MixinChunkMap",
         "MixinPlayerChunkSender"
     ],
     "client": [

@@ -1,3 +1,8 @@
+import java.util.jar.Manifest
+import java.util.zip.ZipEntry
+import java.util.zip.ZipInputStream
+import java.util.zip.ZipOutputStream
+
 plugins {
     id 'loom-forge'
 }
@@ -27,11 +32,58 @@ dependencies {
     library 'org.xerial:sqlite-jdbc:3.45.1.0'
 }
 
+/**
+ * 去掉 Guava jar 的 Automatic-Module-Name。
+ * Loom/jimfs 引入的 guava-32 与 FML game layer 的 guava-31 同名模块冲突时，
+ * game layer 副本被 Ignoring duplicate 丢掉 → TRANSFORMER 找不到 InetAddresses。
+ * 保留 guava-32 字节码供 jimfs 使用，但不让它占据模块名 com.google.common。
+ */
+def hassiumStripGuavaAmn = { File src ->
+    def outDir = layout.buildDirectory.dir('patched-guava').get().asFile
+    outDir.mkdirs()
+    def out = new File(outDir, src.name)
+    def stamp = new File(outDir, src.name + '.stamp')
+    def stampVal = "${src.canonicalPath}|${src.lastModified()}|${src.length()}"
+    if (out.exists() && stamp.exists() && stamp.text.trim() == stampVal) {
+        return out
+    }
+    out.withOutputStream { fos ->
+        def zos = new ZipOutputStream(fos)
+        src.withInputStream { fis ->
+            def zis = new ZipInputStream(fis)
+            ZipEntry entry
+            while ((entry = zis.nextEntry) != null) {
+                if (entry.name == 'META-INF/MANIFEST.MF') {
+                    def mf = new Manifest(zis)
+                    mf.mainAttributes.remove(new java.util.jar.Attributes.Name('Automatic-Module-Name'))
+                    zos.putNextEntry(new ZipEntry(entry.name))
+                    mf.write(zos)
+                    zos.closeEntry()
+                } else if (!entry.isDirectory()) {
+                    zos.putNextEntry(new ZipEntry(entry.name))
+                    zis.transferTo(zos)
+                    zos.closeEntry()
+                }
+                zis.closeEntry()
+            }
+            zis.close()
+        }
+        zos.close()
+    }
+    stamp.text = stampVal
+    return out
+}
+
 // Forge 模块仅构建 1.20.1 / 1.20.6（1.21+ 已从 builds_for 移除）。
 // Forge 50+ / architectury-loom 开发环境 module path 冲突：
 // 1) loom#191：classpath 仅有 LWJGL natives → 服务端整段移除
 // 2) loom#308：去掉 fabric-log4j-util，避免与 terminalconsoleappender 冲突
 // 3) 去掉已合并源码的 hassium-common jar，避免与 hassium 模块重复 export
+// 4) guava-32 Automatic-Module-Name 与 game-layer guava-31 冲突 → 剥 AMN
+//
+// 必须用 FileCollection.filter，不能 project.files([...]) 重建：
+// 后者会丢掉对 compileJava/processResources 的任务依赖，导致未编译时
+// MOD_CLASSES 全是不存在路径 → SecureJar "Invalid paths argument"。
 afterEvaluate {
     def forgeLoader = gradle.ext.has('forge_loader') ? (gradle.ext.forge_loader as String) : ''
     def forgeMajor = forgeLoader.tokenize('.')[0]?.isInteger() ? (forgeLoader.tokenize('.')[0] as int) : 0
@@ -43,21 +95,36 @@ afterEvaluate {
             return
         }
         boolean server = task.name.toLowerCase().contains('server')
-        def rewritten = []
-        task.classpath.files.each { file ->
+        def original = task.classpath
+        // 显式依赖 classes：eager project.files([...]) 会丢掉 FileCollection 的编译依赖
+        task.dependsOn(tasks.named('classes'))
+        def rewritten = original.files.findAll { file ->
             def path = file.absolutePath.replace('\\', '/')
-            if (server && path.contains('/org.lwjgl/')) {
-                return
+            !(server && path.contains('/org.lwjgl/')) &&
+                    !path.contains('/fabric-log4j-util/') &&
+                    !(file.name.startsWith('hassium-common-') && file.name.endsWith('.jar'))
+        }.collect { file ->
+            def path = file.absolutePath.replace('\\', '/')
+            if (path.contains('/com.google.guava/guava/') && file.name.contains('guava-32')) {
+                return hassiumStripGuavaAmn(file)
             }
-            if (path.contains('/fabric-log4j-util/')) {
-                return
-            }
-            if (file.name.startsWith('hassium-common-') && file.name.endsWith('.jar')) {
-                return
-            }
-            rewritten.add(file)
+            return file
         }
         task.classpath = project.files(rewritten)
+
+        task.doFirst {
+            // IDEA/Loom 会把 out/production 写进 MOD_CLASSES；Gradle 输出只在 build/。
+            def modClasses = environment.get('MOD_CLASSES')
+            if (modClasses instanceof String && !modClasses.isEmpty()) {
+                def kept = modClasses.split(';').findAll { entry ->
+                    def parts = entry.split('%%', 2)
+                    parts.length < 2 || new File(parts[1]).exists()
+                }
+                if (kept) {
+                    environment('MOD_CLASSES', kept.join(';'))
+                }
+            }
+        }
     }
 }
 

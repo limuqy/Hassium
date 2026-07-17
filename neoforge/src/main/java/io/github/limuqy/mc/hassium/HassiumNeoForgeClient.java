@@ -55,13 +55,8 @@ public class HassiumNeoForgeClient {
      */
     @SubscribeEvent
     public static void onClientSetup(FMLClientSetupEvent event) {
-        LOGGER.info("Hassium: Initializing NeoForge client-side");
-
         // 加载内置区块字典
         DictionaryManager.loadChunkDictionary();
-
-        // 网络通道已在 HassiumNeoForge.commonSetup() 中注册，此处不再重复注册
-        // （重复注册会导致 static packetId 计数器递增，客户端/服务端 ID 不一致）
 
         // 注册到 Forge 事件总线监听玩家网络事件（这些事件不在 Mod 总线）
 #if MC_VER < MC_1_20_2
@@ -97,10 +92,9 @@ public class HassiumNeoForgeClient {
             // 段 C 门控关闭网络时通道未注册，发握手会导致断连
             if (!io.github.limuqy.mc.hassium.config.HassiumConfigService.getInstance()
                     .isNetworkCompressionEnabled()) {
-                LOGGER.info("Hassium: Client joined server, network disabled — skip handshake");
+                LOGGER.debug("Hassium: Client joined server, network disabled — skip handshake");
                 return;
             }
-            LOGGER.info("Hassium: Client joined server, sending handshake request");
             networkManager.sendHandshakeRequest();
         }
 
@@ -109,14 +103,12 @@ public class HassiumNeoForgeClient {
          */
         @SubscribeEvent
         public void onPlayerLoggedOut(ClientPlayerNetworkEvent.LoggingOut event) {
-            LOGGER.info("Hassium: Client disconnected from server");
             var storage = ClientChunkHandler.getClientStorage();
             if (storage != null) {
                 storage.close();
-                LOGGER.info("Hassium: Closed client cache storage");
             }
-            // 重置缓存存储，确保下次登入时重新初始化
             ClientChunkHandler.resetStorage();
+            LOGGER.info("Hassium: Client disconnected, cache cleaned up");
         }
     }
 }

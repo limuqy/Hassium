@@ -28,7 +28,7 @@ public class MixinServerGamePacketListenerImpl {
             net.minecraft.network.DisconnectionDetails details,
 #endif
             CallbackInfo ci) {
-        Constants.LOG.debug("Hassium: Player {} disconnected", player.getName().getString());
+        Constants.LOG.info("Hassium: Player {} disconnected, push queue cleaned up", player.getName().getString());
         PlayerCompressionTracker.removePlayer(player);
         ServerChunkPushManager.getInstance().removePlayer(player.getUUID());
     }

@@ -133,9 +133,6 @@ public class ClientChunkHandler {
      * 任务标记为 SAFE_TO_CANCEL，登出时如果解压尚未完成可安全取消。
      */
     public static void handleCompressedChunk(byte[] compressedData) {
-        // 始终打 INFO，避免仅依赖 DebugLogger 时无法确认 NeoForge 收包
-        Constants.LOG.info("[HANDLE_COMPRESSED] Received compressed chunk data ({} bytes)",
-                compressedData == null ? -1 : compressedData.length);
         DebugLogger.info(LogType.COMPRESSION, "[HANDLE_COMPRESSED] Received compressed chunk data ({} bytes)",
                 compressedData == null ? -1 : compressedData.length);
 
@@ -154,7 +151,7 @@ public class ClientChunkHandler {
             return;
         }
 
-        Constants.LOG.info("[HANDLE_COMPRESSED] Decoded chunk [{}, {}] ({} -> {} bytes, algo={})",
+        DebugLogger.info(LogType.COMPRESSION, "[HANDLE_COMPRESSED] Decoded chunk [{}, {}] ({} -> {} bytes, algo={})",
                 compressed.chunkX, compressed.chunkZ, compressed.compressedData.length,
                 compressed.originalSize, compressed.algorithm);
 

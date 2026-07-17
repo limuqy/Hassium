@@ -17,8 +17,6 @@ public class HassiumClientMod implements ClientModInitializer {
 
     @Override
     public void onInitializeClient() {
-        LOGGER.info("Hassium: Initializing client-side network channels");
-
         // 加载内置区块字典（打包在 mod 中，不需要从服务端传输）
         DictionaryManager.loadChunkDictionary();
 
@@ -27,12 +25,10 @@ public class HassiumClientMod implements ClientModInitializer {
 
         // 监听客户端加入服务器事件，发送握手请求
         ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> {
-            // 段 C 门控关闭网络时通道未注册，发握手会 EncoderException 断连
             if (!HassiumConfigService.getInstance().isNetworkCompressionEnabled()) {
-                LOGGER.info("Hassium: Client joined server, network disabled — skip handshake");
+                LOGGER.debug("Hassium: Client joined server, network disabled — skip handshake");
                 return;
             }
-            LOGGER.info("Hassium: Client joined server, sending handshake request");
             networkManager.sendHandshakeRequest();
         });
 
@@ -41,14 +37,13 @@ public class HassiumClientMod implements ClientModInitializer {
             var storage = ClientChunkHandler.getClientStorage();
             if (storage != null) {
                 storage.close();
-                LOGGER.info("Hassium: Closed client cache storage");
             }
-            // 重置缓存存储，确保下次登入时重新初始化
             ClientChunkHandler.resetStorage();
+            LOGGER.info("Hassium: Client disconnected, cache cleaned up");
         });
 
         // 注册客户端命令
         FabricHassiumCommand.registerClientCommands();
-        LOGGER.info("Hassium: Client commands registered");
+        LOGGER.info("Hassium: Fabric client-side initialization complete");
     }
 }

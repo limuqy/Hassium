@@ -65,11 +65,6 @@ public final class HassiumPacketIds {
     // ===== 区块缓存推送相关包 =====
 
     /**
-     * 服务端 -> 客户端：区块元数据（位置+时间戳）
-     */
-    public static final String CHUNK_METADATA_S2C = "hassium:chunk_metadata_s2c";
-
-    /**
      * 客户端 -> 服务端：请求区块数据
      */
     public static final String CHUNK_DATA_REQUEST_C2S = "hassium:chunk_data_request_c2s";

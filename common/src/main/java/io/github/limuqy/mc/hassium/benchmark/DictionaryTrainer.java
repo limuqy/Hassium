@@ -232,7 +232,7 @@ public class DictionaryTrainer {
 
     /**
      * 解压原版 payload（type 1 = GZip, type 2 = Zlib）。
-     * 未知或 Hassium 扩展（type 127）类型直接跳过，训练样本必须是未压缩 NBT。
+     * 未知或 Hassium 扩展（type 126 等）类型直接跳过，训练样本必须是未压缩 NBT。
      */
     private static byte[] decodeVanillaPayload(byte compressionType, byte[] payload) {
         try {

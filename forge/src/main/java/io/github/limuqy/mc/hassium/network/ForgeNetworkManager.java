@@ -3,6 +3,8 @@ package io.github.limuqy.mc.hassium.network;
 import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.compat.ResourceLocationCompat;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
+import io.github.limuqy.mc.hassium.utils.DebugLogger;
+import io.github.limuqy.mc.hassium.utils.DebugLogger.LogType;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.server.level.ServerPlayer;
 import org.slf4j.Logger;
@@ -59,7 +61,7 @@ public class ForgeNetworkManager implements NetworkManager {
             LOGGER.warn("Hassium: network.enabled=false, skipping Forge channel registration");
             return;
         }
-        LOGGER.info("Hassium: Registering Forge network channels");
+        LOGGER.debug("Hassium: Registering Forge network channels");
 #if MC_VER < MC_1_20_2
         registerLegacyChannels();
 #else
@@ -105,18 +107,6 @@ public class ForgeNetworkManager implements NetworkManager {
                 CompressedPayloadWrapper::decode,
                 (msg, ctx) -> {
                     ctx.get().enqueueWork(() -> handleCompressedPayload(msg));
-                    ctx.get().setPacketHandled(true);
-                },
-                java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT)
-        );
-
-        CHANNEL.<MetadataWrapper>registerMessage(
-                packetId++,
-                MetadataWrapper.class,
-                MetadataWrapper::encode,
-                MetadataWrapper::decode,
-                (msg, ctx) -> {
-                    ctx.get().enqueueWork(() -> handleMetadata(msg));
                     ctx.get().setPacketHandled(true);
                 },
                 java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT)
@@ -227,8 +217,6 @@ public class ForgeNetworkManager implements NetworkManager {
                         .addMain(CompressedPayloadWrapper.class,
                                 playCodec(CompressedPayloadWrapper::encode, CompressedPayloadWrapper::decode),
                                 ForgeNetworkManager::onCompressedPayload)
-                        .addMain(MetadataWrapper.class, playCodec(MetadataWrapper::encode, MetadataWrapper::decode),
-                                ForgeNetworkManager::onMetadata)
                         .addMain(ChunkHashWrapper.class, playCodec(ChunkHashWrapper::encode, ChunkHashWrapper::decode),
                                 ForgeNetworkManager::onChunkHash)
                         .addMain(SectionDeltaWrapper.class, playCodec(SectionDeltaWrapper::encode, SectionDeltaWrapper::decode),
@@ -238,7 +226,7 @@ public class ForgeNetworkManager implements NetworkManager {
                                 ForgeNetworkManager::onBlockEntityData)
                 .build();
 
-        LOGGER.info("Hassium: Registered Forge 50+ ChannelBuilder play channel (4 C2S + 6 S2C)");
+        LOGGER.info("Hassium: Registered Forge 50+ ChannelBuilder play channel (4 C2S + 5 S2C)");
     }
 
     private static <M> StreamCodec<RegistryFriendlyByteBuf, M> playCodec(
@@ -261,10 +249,6 @@ public class ForgeNetworkManager implements NetworkManager {
 
     private static void onCompressedPayload(CompressedPayloadWrapper msg, CustomPayloadEvent.Context ctx) {
         handleCompressedPayload(msg);
-    }
-
-    private static void onMetadata(MetadataWrapper msg, CustomPayloadEvent.Context ctx) {
-        handleMetadata(msg);
     }
 
     private static void onDataRequest(DataRequestWrapper msg, CustomPayloadEvent.Context ctx) {
@@ -320,7 +304,8 @@ public class ForgeNetworkManager implements NetworkManager {
             return;
         }
 
-        LOGGER.info("Hassium: Received handshake from client {}, protocol: {}, globalCompression: {}, compactHeader: {}",
+        DebugLogger.debug(LogType.NETWORK,
+                "[HANDSHAKE] Received from client {}, protocol={}, globalCompression={}, compactHeader={}",
                 player.getName().getString(), msg.protocolVersion(),
                 msg.globalPacketCompressionSupported(), msg.compactHeaderSupported());
 
@@ -331,26 +316,29 @@ public class ForgeNetworkManager implements NetworkManager {
         boolean serverSupportsCompactHeader = HassiumConfigService.getInstance().isCompactHeaderEnabled();
         boolean useCompactHeader = serverSupportsCompactHeader && msg.compactHeaderSupported();
 
+        boolean accepted = true;
         HandshakeResponsePacket response = new HandshakeResponsePacket(
                 Constants.CURRENT_PROTOCOL_VERSION,
-                true,
+                accepted,
                 useGlobalCompression,
                 useCompactHeader
         );
         reply.accept(response);
-        LOGGER.info("Hassium: Sent handshake response to client {}, globalCompression: {}, compactHeader: {}",
-                player.getName().getString(), useGlobalCompression, useCompactHeader);
+        LOGGER.info("Hassium: Server handshake for {}: accepted={}, globalCompression={}, compactHeader={}",
+                player.getName().getString(), accepted, useGlobalCompression, useCompactHeader);
 
         if (useGlobalCompression) {
-            LOGGER.info("Hassium: Global ZSTD pipeline switch deferred on Forge (custom channel only)");
+            DebugLogger.debug(LogType.NETWORK,
+                    "Hassium: Global ZSTD pipeline switch deferred on Forge (custom channel only)");
         }
     }
 
     private static void handleHandshakeS2C(HandshakeResponsePacket msg) {
-        LOGGER.info("Hassium: Received handshake response, accepted: {}, globalCompression: {}, compactHeader: {}",
+        LOGGER.info("Hassium: Client handshake response: accepted={}, globalCompression={}, compactHeader={}",
                 msg.accepted(), msg.globalCompressionAccepted(), msg.compactHeaderAccepted());
         if (msg.accepted() && msg.globalCompressionAccepted()) {
-            LOGGER.info("Hassium: Global ZSTD accepted but pipeline switch deferred on Forge");
+            DebugLogger.debug(LogType.NETWORK,
+                    "Hassium: Global ZSTD accepted but pipeline switch deferred on Forge");
         }
     }
 
@@ -359,16 +347,6 @@ public class ForgeNetworkManager implements NetworkManager {
             ClientChunkHandler.handleCompressedChunk(msg.data());
         } catch (Exception e) {
             LOGGER.error("Hassium: Failed to handle compressed payload", e);
-        }
-    }
-
-    private static void handleMetadata(MetadataWrapper msg) {
-        try {
-            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data()));
-            ChunkMetadataS2CPacket packet = ChunkMetadataS2CPacket.decode(buf);
-            ClientMetadataHandler.handleMetadataPacket(packet);
-        } catch (Exception e) {
-            LOGGER.error("Hassium: Failed to handle metadata packet", e);
         }
     }
 
@@ -469,12 +447,6 @@ public class ForgeNetworkManager implements NetworkManager {
     }
 
     @Override
-    public void sendMetadataPacket(FriendlyByteBuf buf) {
-        buf.release();
-        throw new UnsupportedOperationException("Use ForgeNetworkManagerService.sendMetadataPacket() instead");
-    }
-
-    @Override
     public void sendChunkDataRequest(FriendlyByteBuf buf) {
         byte[] data = new byte[buf.readableBytes()];
         buf.readBytes(data);
@@ -570,13 +542,6 @@ public class ForgeNetworkManager implements NetworkManager {
         }
     }
 
-#if MC_VER >= MC_1_20_2
-    /** 供 Service 层发送元数据等 S2C 包 */
-    public static void sendMetadataToPlayer(ServerPlayer player, byte[] data) {
-        sendToPlayer(player, new MetadataWrapper(data));
-    }
-#endif
-
     // ========== 数据包记录 ==========
 
     public record HandshakePacket(
@@ -658,20 +623,6 @@ public class ForgeNetworkManager implements NetworkManager {
             byte[] data = new byte[length];
             buf.readBytes(data);
             return new CompressedPayloadWrapper(data);
-        }
-    }
-
-    public record MetadataWrapper(byte[] data) {
-        public void encode(FriendlyByteBuf buf) {
-            buf.writeVarInt(data.length);
-            buf.writeBytes(data);
-        }
-
-        public static MetadataWrapper decode(FriendlyByteBuf buf) {
-            int length = buf.readVarInt();
-            byte[] data = new byte[length];
-            buf.readBytes(data);
-            return new MetadataWrapper(data);
         }
     }
 

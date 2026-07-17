@@ -9,8 +9,6 @@ import net.minecraft.network.CompressionEncoder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.Set;
-
 /**
  * ZSTD Pipeline 切换器
  * <p>
@@ -60,8 +58,10 @@ public class ZstdPipelineSwitcher {
         boolean useAggregation = config.isPacketAggregationEnabled();
 
         // 根据配置选择编码器/解码器
+        final String mode;
         if (useAggregation && useContext) {
             // 聚合模式：包聚合 + 上下文压缩（最高压缩率）
+            mode = "aggregated";
             PacketAggregator aggregator = new PacketAggregator(
                     config.getAggregationMinBatchSize(),
                     config.getAggregationMaxWaitTimeMs(),
@@ -71,29 +71,29 @@ public class ZstdPipelineSwitcher {
                     new AggregatedZstdDecoder(threshold, true, magicless));
             addHandlerBefore(pipeline, "encoder", COMPRESS_HANDLER_NAME,
                     new AggregatedZstdEncoder(threshold, level, magicless, aggregator));
-            LOGGER.info("Installed aggregated ZSTD compression (level={}, threshold={}, magicless={}, batch={})",
-                    level, threshold, magicless, config.getAggregationMinBatchSize());
         } else if (useContext) {
             // 上下文模式：使用 ZstdCompressCtx（借鉴 NEB，利用历史窗口状态）
+            mode = "context";
             addHandlerBefore(pipeline, "decoder", DECOMPRESS_HANDLER_NAME,
                     new ZstdContextDecoder(threshold, true, magicless));
             addHandlerBefore(pipeline, "encoder", COMPRESS_HANDLER_NAME,
                     new ZstdContextEncoder(threshold, level, magicless));
-            LOGGER.info("Installed ZSTD context compression (level={}, threshold={}, magicless={})",
-                    level, threshold, magicless);
         } else {
             // 基础模式：使用无状态的 Zstd.compress
+            mode = "basic";
             addHandlerBefore(pipeline, "decoder", DECOMPRESS_HANDLER_NAME,
                     new ZstdPacketDecoder(threshold, true));
             addHandlerBefore(pipeline, "encoder", COMPRESS_HANDLER_NAME,
                     new ZstdPacketEncoder(threshold, level));
-            LOGGER.info("Installed ZSTD basic compression (level={}, threshold={})", level, threshold);
         }
 
         // 紧凑包头已在聚合包内部实现（通过 AggregatedSubPacket + CompactHeaderCodec），
         // 无需在 Pipeline 层安装独立的 CompactPacketEncoder。
-        if (config.isCompactHeaderEnabled()) {
-            LOGGER.info("Compact header is enabled (applied inside aggregated packets via CompactHeaderCodec)");
+        boolean compactHeader = config.isCompactHeaderEnabled();
+        LOGGER.info("Installed ZSTD pipeline (mode={}, level={}, threshold={}, magicless={}, compactHeader={})",
+                mode, level, threshold, magicless, compactHeader);
+        if (compactHeader) {
+            LOGGER.debug("Compact header enabled inside aggregated packets via CompactHeaderCodec");
         }
 
         // 记录最终 Pipeline 状态（调试用）
@@ -131,50 +131,6 @@ public class ZstdPipelineSwitcher {
         } catch (Exception e) {
             LOGGER.warn("Failed to remove handler '{}': {}", name, e.getMessage());
         }
-    }
-
-    /**
-     * 安全地在指定 Handler 之后添加新 Handler
-     * <p>
-     * 如果目标 Handler 不存在，则添加到 Pipeline 末尾
-     */
-    private static void addHandlerAfter(ChannelPipeline pipeline, String baseName, String newName, ChannelHandler handler) {
-        if (pipeline.get(baseName) != null) {
-            pipeline.addAfter(baseName, newName, handler);
-        } else {
-            // 如果目标 Handler 不存在，尝试添加到末尾
-            pipeline.addLast(newName, handler);
-            LOGGER.warn("Handler '{}' not found, added '{}' to end of pipeline", baseName, newName);
-        }
-    }
-
-    /**
-     * 安装紧凑包头处理器（已弃用）
-     * <p>
-     * 注意：紧凑包头已在聚合包内部实现（通过 AggregatedSubPacket + CompactHeaderCodec），
-     * 无需在 Pipeline 层安装独立的处理器。此方法保留仅为向后兼容。
-     *
-     * @param channel Netty 通道
-     * @deprecated 紧凑包头已在聚合包内部实现，无需 Pipeline 层处理器
-     */
-    @Deprecated
-    public static void installCompactHeader(Channel channel) {
-        LOGGER.info("installCompactHeader() is deprecated - compact headers are now handled inside aggregated packets");
-    }
-
-    /**
-     * 为客户端安装紧凑包头处理器（已弃用）
-     * <p>
-     * 注意：紧凑包头已在聚合包内部实现（通过 AggregatedSubPacket + CompactHeaderCodec），
-     * 无需在 Pipeline 层安装独立的处理器。此方法保留仅为向后兼容。
-     *
-     * @param channel       Netty 通道
-     * @param indexManager  客户端索引管理器
-     * @deprecated 紧凑包头已在聚合包内部实现，无需 Pipeline 层处理器
-     */
-    @Deprecated
-    public static void installCompactHeaderForClient(Channel channel, NamespaceIndexManager indexManager) {
-        LOGGER.info("installCompactHeaderForClient() is deprecated - compact headers are now handled inside aggregated packets");
     }
 
     /**
@@ -233,18 +189,6 @@ public class ZstdPipelineSwitcher {
     public static boolean isAggregationMode(Channel channel) {
         ChannelPipeline pipeline = channel.pipeline();
         return pipeline.get(COMPRESS_HANDLER_NAME) instanceof AggregatedZstdEncoder;
-    }
-
-    /**
-     * 检查当前是否使用紧凑包头
-     * <p>
-     * 注意：紧凑包头已在聚合包内部实现，此方法始终返回 false。
-     *
-     * @deprecated 紧凑包头已在聚合包内部实现
-     */
-    @Deprecated
-    public static boolean isCompactHeaderInstalled(Channel channel) {
-        return false;
     }
 
     /**

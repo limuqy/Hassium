@@ -6,6 +6,8 @@ import io.github.limuqy.mc.hassium.concurrent.TaskCategory;
 import io.github.limuqy.mc.hassium.network.ChunkDataRequestC2SPacket;
 import io.github.limuqy.mc.hassium.network.ClientChunkHandler;
 import io.github.limuqy.mc.hassium.platform.Services;
+import io.github.limuqy.mc.hassium.utils.DebugLogger;
+import io.github.limuqy.mc.hassium.utils.DebugLogger.LogType;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.world.level.ChunkPos;
 
@@ -50,7 +52,7 @@ public class ClientCacheLoadQueue {
      * @param renderOnly 是否仅渲染
      */
     public void enqueue(ChunkPos pos, double priority, boolean renderOnly) {
-        Constants.LOG.info("[CACHE_LOAD_QUEUE] Enqueuing chunk {} (priority={}, renderOnly={}, pendingSize={})",
+        DebugLogger.info(LogType.CACHE, "[CACHE_LOAD_QUEUE] Enqueuing chunk {} (priority={}, renderOnly={}, pendingSize={})",
                 pos, String.format("%.1f", priority), renderOnly, pendingTasks.size());
         pendingTasks.offer(new LoadTask(pos, priority, renderOnly));
         // 提交加载任务到统一后台执行器（Phase 6）
@@ -120,7 +122,7 @@ public class ClientCacheLoadQueue {
             return;
         }
 
-        Constants.LOG.info("[CACHE_LOAD] Processing chunk {} (priority={}, pendingSize={})",
+        DebugLogger.info(LogType.CACHE, "[CACHE_LOAD] Processing chunk {} (priority={}, pendingSize={})",
                 task.pos(), String.format("%.1f", task.priority()), pendingTasks.size());
 
         try {
@@ -128,7 +130,7 @@ public class ClientCacheLoadQueue {
             byte[] data = ClientChunkHandler.loadChunkDataFromCache(task.pos());
             if (data != null) {
                 readyQueue.offer(new ReadyChunk(task.pos(), data, task.priority(), task.renderOnly()));
-                Constants.LOG.info("[CACHE_LOAD] Chunk {} loaded from disk ({} bytes, readySize={})",
+                DebugLogger.info(LogType.CACHE, "[CACHE_LOAD] Chunk {} loaded from disk ({} bytes, readySize={})",
                         task.pos(), data.length, readyQueue.size());
             } else {
                 Constants.LOG.warn("[CACHE_LOAD] Failed to load chunk {} from cache, requesting from server",
@@ -229,7 +231,7 @@ public class ClientCacheLoadQueue {
         }
 
         if (applied > 0) {
-            Constants.LOG.info("[CACHE_APPLY] Applied {} chunks this frame (hardCap={}, remaining: {})",
+            DebugLogger.info(LogType.CHUNK_APPLY, "[CACHE_APPLY] Applied {} chunks this frame (hardCap={}, remaining: {})",
                     applied, hardCap, readyQueue.size());
         }
         return deadlineNs;

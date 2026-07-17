@@ -40,8 +40,6 @@ public final class FabricPayloadRegistry {
             type("index_sync_s2c");
     public static final CustomPacketPayload.Type<RawPayload> AGGREGATION_S2C_TYPE =
             type("aggregation");
-    public static final CustomPacketPayload.Type<RawPayload> CHUNK_METADATA_S2C_TYPE =
-            type("chunk_metadata_s2c");
     public static final CustomPacketPayload.Type<RawPayload> CHUNK_HASH_S2C_TYPE =
             type("chunk_hash_s2c");
     public static final CustomPacketPayload.Type<RawPayload> SECTION_DELTA_S2C_TYPE =
@@ -117,7 +115,6 @@ public final class FabricPayloadRegistry {
         PayloadTypeRegistry.playS2C().register(HANDSHAKE_S2C_TYPE, codec(HANDSHAKE_S2C_TYPE));
         PayloadTypeRegistry.playS2C().register(INDEX_SYNC_S2C_TYPE, codec(INDEX_SYNC_S2C_TYPE));
         PayloadTypeRegistry.playS2C().register(AGGREGATION_S2C_TYPE, codec(AGGREGATION_S2C_TYPE));
-        PayloadTypeRegistry.playS2C().register(CHUNK_METADATA_S2C_TYPE, codec(CHUNK_METADATA_S2C_TYPE));
         PayloadTypeRegistry.playS2C().register(CHUNK_HASH_S2C_TYPE, codec(CHUNK_HASH_S2C_TYPE));
         PayloadTypeRegistry.playS2C().register(SECTION_DELTA_S2C_TYPE, codec(SECTION_DELTA_S2C_TYPE));
         PayloadTypeRegistry.playS2C().register(BLOCK_ENTITY_DATA_S2C_TYPE, codec(BLOCK_ENTITY_DATA_S2C_TYPE));
@@ -129,7 +126,7 @@ public final class FabricPayloadRegistry {
         PayloadTypeRegistry.playC2S().register(SECTION_HASH_REQUEST_C2S_TYPE, codec(SECTION_HASH_REQUEST_C2S_TYPE));
         PayloadTypeRegistry.playC2S().register(BLOCK_ENTITY_REQUEST_C2S_TYPE, codec(BLOCK_ENTITY_REQUEST_C2S_TYPE));
 
-        LOGGER.info("Hassium: Registered 9 S2C and 5 C2S payload types for 1.20.5+");
+        LOGGER.info("Hassium: Registered 8 S2C and 5 C2S payload types for 1.20.5+");
     }
 
     /**
