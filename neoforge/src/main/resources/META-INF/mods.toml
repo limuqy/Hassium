@@ -1,5 +1,7 @@
 modLoader = "javafml" #mandatory
-loaderVersion = "${neoforge_loader_version_range}" #mandatory
+# < 1.20.5 使用本文件；>= 1.20.5 改用 neoforge.mods.toml
+# javafml 语言提供者版本，不是 NeoForge 版本号
+loaderVersion = "${javafml_loader_version_range}" #mandatory
 license = "${license}"
 
 [[mods]] #mandatory
@@ -9,8 +11,15 @@ displayName = "${mod_name}" #mandatory
 authors = "${mod_author}" #optional
 description = '''${description}''' #mandatory
 
+# 1.20.2+ NeoForge 必须在此声明；1.20.1 的 loom forge.mixinConfig 也会注册，重复声明安全
+[[mixins]]
+config = "${mod_id}.mixins.json"
+[[mixins]]
+config = "${mod_id}.neoforge.mixins.json"
+
 [[dependencies.${mod_id}]] #optional
-modId = "forge" #mandatory
+# 1.20.1=forge，1.20.2–1.20.4=neoforge（由 gradle expand）
+modId = "${neoforge_dependency_mod_id}" #mandatory
 mandatory = true #mandatory
 versionRange = "${neoforge_loader_version_range}" #mandatory
 ordering = "NONE"

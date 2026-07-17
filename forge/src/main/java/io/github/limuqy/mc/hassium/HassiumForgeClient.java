@@ -71,6 +71,11 @@ public class HassiumForgeClient {
                         + " hassium:main 通道已禁用，客户端统计会保持全 0；请用同加载器的 forge:runServer + forge:runClient 测试。");
                 return;
             }
+            if (!io.github.limuqy.mc.hassium.config.HassiumConfigService.getInstance()
+                    .isNetworkCompressionEnabled()) {
+                LOGGER.info("Hassium: Client joined server, network disabled — skip handshake");
+                return;
+            }
             LOGGER.info("Hassium: Client joined server, sending handshake request");
             networkManager.sendHandshakeRequest();
         }

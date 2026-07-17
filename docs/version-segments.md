@@ -19,8 +19,8 @@
 
 | 分界常量 | common 变因 | fabric 特有 | forge 特有 | neoforge 特有 |
 |----------|-------------|-------------|------------|---------------|
-| `MC_1_20_2` | `onDisconnect` 上移、`CustomPayload` 包路径、`createPacket` | — | SimpleChannel 移除 | forge→neoforge 包名 |
-| `MC_1_20_5` | `Packet.write()` 移除、`BlockEntity.load()` 移除、`getPacketsByIds` 移除 | 网络改 StreamCodec | ChunkPacket STREAM_CODEC（若构建） | ChunkPacket STREAM_CODEC |
+| `MC_1_20_2` | `onDisconnect` 上移、`CustomPayload` 包路径、`createPacket` | — | SimpleChannel 移除 | forge→neoforge 包名；仍用 SimpleChannel + `PlayNetworkDirection`（非 StreamCodec） |
+| `MC_1_20_5` | `Packet.write()` 移除、`BlockEntity.load()` 移除、`getPacketsByIds` 移除 | 网络改 StreamCodec | ChunkPacket STREAM_CODEC（若构建） | Payload + StreamCodec（`RegisterPayloadHandlersEvent`） |
 | `MC_1_21_1` | `Component` → `DisconnectionDetails`；RL 构造私有化 | — | — | — |
 | `MC_1_21_2` | `ChunkSerializer` → `SerializableChunkData`、`registryOrThrow` → `lookupOrThrow` | — | — | — |
 | `MC_1_21_5` | `CompoundTag` API（`getAllKeys`→`keySet` 等） | — | — | — |

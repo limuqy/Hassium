@@ -10,20 +10,17 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 #if MC_VER < MC_1_20_2
-import net.minecraftforge.fml.common.Mod;
-import net.minecraftforge.fml.event.lifecycle.FMLCommonSetupEvent;
-import net.minecraftforge.eventbus.api.IEventBus;
-import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.network.NetworkDirection;
 import net.minecraftforge.network.NetworkRegistry;
 import net.minecraftforge.network.simple.SimpleChannel;
+#elif MC_VER < MC_1_20_5
+import net.neoforged.neoforge.network.NetworkRegistry;
+import net.neoforged.neoforge.network.PlayNetworkDirection;
+import net.neoforged.neoforge.network.simple.SimpleChannel;
 #else
 import net.minecraft.network.codec.ByteBufCodecs;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
-import net.neoforged.fml.common.Mod;
-import net.neoforged.fml.event.lifecycle.FMLCommonSetupEvent;
-import net.neoforged.bus.api.IEventBus;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.neoforge.network.event.RegisterPayloadHandlersEvent;
 import net.neoforged.neoforge.network.handling.IPayloadContext;
@@ -37,7 +34,8 @@ import java.lang.reflect.Field;
  * 版本整段切分（见 docs/version-segments.md）：
  * <ul>
  *   <li>{@code MC_VER < MC_1_20_2}：SimpleChannel（1.20.1 仍用 forge 包名）</li>
- *   <li>{@code MC_VER >= MC_1_20_2}：Payload + StreamCodec</li>
+ *   <li>{@code MC_1_20_2 <= MC_VER < MC_1_20_5}：SimpleChannel（neoforged 包名 + PlayNetworkDirection）</li>
+ *   <li>{@code MC_VER >= MC_1_20_5}：Payload + StreamCodec</li>
  * </ul>
  * common 聚合能力由 {@link io.github.limuqy.mc.hassium.compat.NetworkCapability} 门控。
  */
@@ -84,8 +82,8 @@ public class NeoForgeNetworkManager implements NetworkManager {
         }
     }
 
-#if MC_VER < MC_1_20_2
-    // 1.20.1: 使用 SimpleChannel
+#if MC_VER < MC_1_20_5
+    // 1.20.1–1.20.4: SimpleChannel（包名随加载器切换）
     public static final SimpleChannel CHANNEL = NetworkRegistry.newSimpleChannel(
             ResourceLocationCompat.create(Constants.MOD_ID, "main"),
             () -> PROTOCOL_VERSION,
@@ -93,7 +91,6 @@ public class NeoForgeNetworkManager implements NetworkManager {
             PROTOCOL_VERSION::equals
     );
 
-    // 1.20.1 数据包 ID 计数器
     private static int packetId = 0;
 
     // 防止重复注册（commonSetup 和 onClientSetup 都可能调用）
@@ -266,7 +263,7 @@ public class NeoForgeNetworkManager implements NetworkManager {
     }
 
 #else
-    // 1.20.2+: 使用 Payload API
+    // 1.20.5+: 使用 Payload + StreamCodec
     public static final Object CHANNEL = null;
 
     /**
@@ -507,14 +504,14 @@ public class NeoForgeNetworkManager implements NetworkManager {
             return;
         }
         LOGGER.info("Hassium: NeoForge network channels will be registered via event");
-#if MC_VER < MC_1_20_2
+#if MC_VER < MC_1_20_5
         registerSimpleChannelPackets();
 #endif
     }
 
-#if MC_VER < MC_1_20_2
+#if MC_VER < MC_1_20_5
     /**
-     * 注册 SimpleChannel 数据包 (1.20.1)
+     * 注册 SimpleChannel 数据包（1.20.1 forge / 1.20.2–1.20.4 neoforge）
      */
     private void registerSimpleChannelPackets() {
         if (packetsRegistered) {
@@ -522,41 +519,61 @@ public class NeoForgeNetworkManager implements NetworkManager {
             return;
         }
         packetsRegistered = true;
-        LOGGER.info("Hassium: Registering SimpleChannel packets for 1.20.1");
+        LOGGER.info("Hassium: Registering SimpleChannel packets");
 
-        // 必须 setPacketHandled(true)，否则 Forge 会把包交给原版 → Unknown custom packet identifier: hassium:main
-        // S2C / C2S 必须带 NetworkDirection，避免方向校验失败
+        // 必须 setPacketHandled(true)，否则会把包交给原版 → Unknown custom packet identifier: hassium:main
+        // S2C / C2S 必须带方向枚举，避免方向校验失败
+        // 注意：Forge 1.20.1 的 consumer 参数是 Supplier<Context>；NeoForge 20.2 直接传 Context
 
         // 0: 握手请求 C2S
         CHANNEL.registerMessage(packetId++, HandshakeWrapper.class,
                 HandshakeWrapper::encode, HandshakeWrapper::decode,
+#if MC_VER < MC_1_20_2
                 (msg, ctx) -> {
                     ctx.get().enqueueWork(() -> {
                         ServerPlayer player = ctx.get().getSender();
                         if (player == null) return;
-                        handleHandshake1201(player, msg);
+                        handleHandshakeSimple(player, msg);
                     });
                     ctx.get().setPacketHandled(true);
                 },
                 java.util.Optional.of(NetworkDirection.PLAY_TO_SERVER));
+#else
+                (msg, ctx) -> {
+                    ctx.enqueueWork(() -> {
+                        ServerPlayer player = ctx.getSender();
+                        if (player == null) return;
+                        handleHandshakeSimple(player, msg);
+                    });
+                    ctx.setPacketHandled(true);
+                },
+                java.util.Optional.of(PlayNetworkDirection.PLAY_TO_SERVER));
+#endif
 
         // 1: 握手响应 S2C
         CHANNEL.registerMessage(packetId++, HandshakeResponseWrapper.class,
                 HandshakeResponseWrapper::encode, HandshakeResponseWrapper::decode,
+#if MC_VER < MC_1_20_2
                 (msg, ctx) -> {
-                    ctx.get().enqueueWork(() -> handleHandshakeResponse1201(msg));
+                    ctx.get().enqueueWork(() -> handleHandshakeResponseSimple(msg));
                     ctx.get().setPacketHandled(true);
                 },
                 java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT));
+#else
+                (msg, ctx) -> {
+                    ctx.enqueueWork(() -> handleHandshakeResponseSimple(msg));
+                    ctx.setPacketHandled(true);
+                },
+                java.util.Optional.of(PlayNetworkDirection.PLAY_TO_CLIENT));
+#endif
 
         // 2: 压缩区块 S2C
         CHANNEL.registerMessage(packetId++, CompressedChunkWrapper.class,
                 CompressedChunkWrapper::encode, CompressedChunkWrapper::decode,
+#if MC_VER < MC_1_20_2
                 (msg, ctx) -> {
                     ctx.get().enqueueWork(() -> {
                         try {
-                            LOGGER.info("[CLIENT] Received CompressedChunkWrapper ({} bytes)",
-                                    msg.data() == null ? -1 : msg.data().length);
                             ClientChunkHandler.handleCompressedChunk(msg.data());
                         } catch (Exception e) {
                             LOGGER.error("[CLIENT] Failed to handle compressed chunk", e);
@@ -565,10 +582,24 @@ public class NeoForgeNetworkManager implements NetworkManager {
                     ctx.get().setPacketHandled(true);
                 },
                 java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT));
+#else
+                (msg, ctx) -> {
+                    ctx.enqueueWork(() -> {
+                        try {
+                            ClientChunkHandler.handleCompressedChunk(msg.data());
+                        } catch (Exception e) {
+                            LOGGER.error("[CLIENT] Failed to handle compressed chunk", e);
+                        }
+                    });
+                    ctx.setPacketHandled(true);
+                },
+                java.util.Optional.of(PlayNetworkDirection.PLAY_TO_CLIENT));
+#endif
 
         // 3: 区块元数据 S2C
         CHANNEL.registerMessage(packetId++, ChunkMetadataWrapper.class,
                 ChunkMetadataWrapper::encode, ChunkMetadataWrapper::decode,
+#if MC_VER < MC_1_20_2
                 (msg, ctx) -> {
                     ctx.get().enqueueWork(() -> {
                         try {
@@ -582,10 +613,26 @@ public class NeoForgeNetworkManager implements NetworkManager {
                     ctx.get().setPacketHandled(true);
                 },
                 java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT));
+#else
+                (msg, ctx) -> {
+                    ctx.enqueueWork(() -> {
+                        try {
+                            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data()));
+                            ChunkMetadataS2CPacket packet = ChunkMetadataS2CPacket.decode(buf);
+                            ClientMetadataHandler.handleMetadataPacket(packet);
+                        } catch (Exception e) {
+                            LOGGER.error("[CLIENT] Failed to handle chunk metadata", e);
+                        }
+                    });
+                    ctx.setPacketHandled(true);
+                },
+                java.util.Optional.of(PlayNetworkDirection.PLAY_TO_CLIENT));
+#endif
 
         // 4: 区块数据请求 C2S
         CHANNEL.registerMessage(packetId++, ChunkDataRequestWrapper.class,
                 ChunkDataRequestWrapper::encode, ChunkDataRequestWrapper::decode,
+#if MC_VER < MC_1_20_2
                 (msg, ctx) -> {
                     ctx.get().enqueueWork(() -> {
                         ServerPlayer player = ctx.get().getSender();
@@ -601,10 +648,28 @@ public class NeoForgeNetworkManager implements NetworkManager {
                     ctx.get().setPacketHandled(true);
                 },
                 java.util.Optional.of(NetworkDirection.PLAY_TO_SERVER));
+#else
+                (msg, ctx) -> {
+                    ctx.enqueueWork(() -> {
+                        ServerPlayer player = ctx.getSender();
+                        if (player == null) return;
+                        try {
+                            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data()));
+                            ChunkDataRequestC2SPacket request = ChunkDataRequestC2SPacket.decode(buf);
+                            ServerChunkPushManager.getInstance().enqueueDataRequest(player, request.dimension(), request.chunks());
+                        } catch (Exception e) {
+                            LOGGER.error("[SERVER] Failed to handle chunk data request", e);
+                        }
+                    });
+                    ctx.setPacketHandled(true);
+                },
+                java.util.Optional.of(PlayNetworkDirection.PLAY_TO_SERVER));
+#endif
 
         // 5: 区块哈希 S2C
         CHANNEL.registerMessage(packetId++, ChunkHashWrapper.class,
                 ChunkHashWrapper::encode, ChunkHashWrapper::decode,
+#if MC_VER < MC_1_20_2
                 (msg, ctx) -> {
                     ctx.get().enqueueWork(() -> {
                         try {
@@ -618,10 +683,26 @@ public class NeoForgeNetworkManager implements NetworkManager {
                     ctx.get().setPacketHandled(true);
                 },
                 java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT));
+#else
+                (msg, ctx) -> {
+                    ctx.enqueueWork(() -> {
+                        try {
+                            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data()));
+                            ChunkHashS2CPacket packet = ChunkHashS2CPacket.decode(buf);
+                            ClientMetadataHandler.handleChunkHashPacket(packet);
+                        } catch (Exception e) {
+                            LOGGER.error("[CLIENT] Failed to handle chunk hash", e);
+                        }
+                    });
+                    ctx.setPacketHandled(true);
+                },
+                java.util.Optional.of(PlayNetworkDirection.PLAY_TO_CLIENT));
+#endif
 
         // 6: Section 哈希请求 C2S
         CHANNEL.registerMessage(packetId++, SectionHashRequestWrapper.class,
                 SectionHashRequestWrapper::encode, SectionHashRequestWrapper::decode,
+#if MC_VER < MC_1_20_2
                 (msg, ctx) -> {
                     ctx.get().enqueueWork(() -> {
                         ServerPlayer player = ctx.get().getSender();
@@ -637,10 +718,28 @@ public class NeoForgeNetworkManager implements NetworkManager {
                     ctx.get().setPacketHandled(true);
                 },
                 java.util.Optional.of(NetworkDirection.PLAY_TO_SERVER));
+#else
+                (msg, ctx) -> {
+                    ctx.enqueueWork(() -> {
+                        ServerPlayer player = ctx.getSender();
+                        if (player == null) return;
+                        try {
+                            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data()));
+                            SectionHashRequestC2SPacket request = SectionHashRequestC2SPacket.decode(buf);
+                            ServerChunkPushManager.getInstance().handleSectionHashRequest(player, request);
+                        } catch (Exception e) {
+                            LOGGER.error("[SERVER] Failed to handle section hash request", e);
+                        }
+                    });
+                    ctx.setPacketHandled(true);
+                },
+                java.util.Optional.of(PlayNetworkDirection.PLAY_TO_SERVER));
+#endif
 
         // 7: Section Delta S2C
         CHANNEL.registerMessage(packetId++, SectionDeltaWrapper.class,
                 SectionDeltaWrapper::encode, SectionDeltaWrapper::decode,
+#if MC_VER < MC_1_20_2
                 (msg, ctx) -> {
                     ctx.get().enqueueWork(() -> {
                         try {
@@ -654,10 +753,26 @@ public class NeoForgeNetworkManager implements NetworkManager {
                     ctx.get().setPacketHandled(true);
                 },
                 java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT));
+#else
+                (msg, ctx) -> {
+                    ctx.enqueueWork(() -> {
+                        try {
+                            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data()));
+                            SectionDeltaS2CPacket packet = SectionDeltaS2CPacket.decode(buf);
+                            ClientMetadataHandler.handleSectionDeltaPacket(packet);
+                        } catch (Exception e) {
+                            LOGGER.error("[CLIENT] Failed to handle section delta", e);
+                        }
+                    });
+                    ctx.setPacketHandled(true);
+                },
+                java.util.Optional.of(PlayNetworkDirection.PLAY_TO_CLIENT));
+#endif
 
         // 8: BlockEntity 请求 C2S
         CHANNEL.registerMessage(packetId++, BlockEntityRequestWrapper.class,
                 BlockEntityRequestWrapper::encode, BlockEntityRequestWrapper::decode,
+#if MC_VER < MC_1_20_2
                 (msg, ctx) -> {
                     ctx.get().enqueueWork(() -> {
                         ServerPlayer player = ctx.get().getSender();
@@ -673,10 +788,28 @@ public class NeoForgeNetworkManager implements NetworkManager {
                     ctx.get().setPacketHandled(true);
                 },
                 java.util.Optional.of(NetworkDirection.PLAY_TO_SERVER));
+#else
+                (msg, ctx) -> {
+                    ctx.enqueueWork(() -> {
+                        ServerPlayer player = ctx.getSender();
+                        if (player == null) return;
+                        try {
+                            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data()));
+                            BlockEntityRequestC2SPacket request = BlockEntityRequestC2SPacket.decode(buf);
+                            ServerChunkPushManager.getInstance().handleBlockEntityRequest(player, request);
+                        } catch (Exception e) {
+                            LOGGER.error("[SERVER] Failed to handle block entity request", e);
+                        }
+                    });
+                    ctx.setPacketHandled(true);
+                },
+                java.util.Optional.of(PlayNetworkDirection.PLAY_TO_SERVER));
+#endif
 
         // 9: BlockEntity 数据 S2C
         CHANNEL.registerMessage(packetId++, BlockEntityDataWrapper.class,
                 BlockEntityDataWrapper::encode, BlockEntityDataWrapper::decode,
+#if MC_VER < MC_1_20_2
                 (msg, ctx) -> {
                     ctx.get().enqueueWork(() -> {
                         try {
@@ -690,11 +823,26 @@ public class NeoForgeNetworkManager implements NetworkManager {
                     ctx.get().setPacketHandled(true);
                 },
                 java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT));
+#else
+                (msg, ctx) -> {
+                    ctx.enqueueWork(() -> {
+                        try {
+                            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data()));
+                            BlockEntityDataS2CPacket packet = BlockEntityDataS2CPacket.decode(buf);
+                            ClientMetadataHandler.handleBlockEntityDataPacket(packet);
+                        } catch (Exception e) {
+                            LOGGER.error("[CLIENT] Failed to handle block entity data", e);
+                        }
+                    });
+                    ctx.setPacketHandled(true);
+                },
+                java.util.Optional.of(PlayNetworkDirection.PLAY_TO_CLIENT));
+#endif
 
         LOGGER.info("Hassium: Registered {} SimpleChannel packets", packetId);
     }
 
-    private void handleHandshake1201(ServerPlayer player, HandshakeWrapper msg) {
+    private void handleHandshakeSimple(ServerPlayer player, HandshakeWrapper msg) {
         LOGGER.info("[HANDSHAKE] Received from player {}", player.getName().getString());
         PlayerCompressionTracker.enableCompression(player);
 
@@ -709,18 +857,22 @@ public class NeoForgeNetworkManager implements NetworkManager {
                 useGlobalCompression,
                 useCompactHeader
         );
+#if MC_VER < MC_1_20_2
         CHANNEL.sendTo(response, player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
+#else
+        CHANNEL.sendTo(response, player.connection.connection, PlayNetworkDirection.PLAY_TO_CLIENT);
+#endif
         LOGGER.info("Hassium: Sent handshake response to {}", player.getName().getString());
     }
 
-    private void handleHandshakeResponse1201(HandshakeResponseWrapper msg) {
+    private void handleHandshakeResponseSimple(HandshakeResponseWrapper msg) {
         LOGGER.info("Hassium: Received handshake response, accepted: {}, globalCompression: {}",
                 msg.accepted(), msg.globalCompressionAccepted());
     }
 
 #else
     /**
-     * 注册所有 Payload (1.20.2+)
+     * 注册所有 Payload (1.20.5+)
      */
     @SubscribeEvent
     public static void registerPayloads(RegisterPayloadHandlersEvent event) {
@@ -932,7 +1084,11 @@ public class NeoForgeNetworkManager implements NetworkManager {
 
     @Override
     public void sendHandshakeRequest() {
-#if MC_VER < MC_1_20_2
+        if (!HassiumConfigService.getInstance().isNetworkCompressionEnabled()) {
+            LOGGER.debug("Hassium: Skip handshake — network.enabled=false");
+            return;
+        }
+#if MC_VER < MC_1_20_5
         if (net.minecraft.client.Minecraft.getInstance().getConnection() != null) {
             String compressionAlgorithm = HassiumConfigService.getInstance().getCompressionAlgorithm();
             String dictAlgorithm = compressionAlgorithm + "_dict";
@@ -942,7 +1098,7 @@ public class NeoForgeNetworkManager implements NetworkManager {
                     new String[]{compressionAlgorithm, dictAlgorithm},
                     true, true, false, true, true
             ));
-            LOGGER.info("Hassium: Sent handshake request (1.20.1)");
+            LOGGER.info("Hassium: Sent handshake request (SimpleChannel)");
         } else {
             LOGGER.warn("Hassium: Cannot send handshake request, connection is null");
         }
@@ -957,7 +1113,7 @@ public class NeoForgeNetworkManager implements NetworkManager {
                     true, true, false, true, true
             );
             net.minecraft.client.Minecraft.getInstance().getConnection().send(payload);
-            LOGGER.debug("Hassium: Sent handshake request (1.20.2+)");
+            LOGGER.debug("Hassium: Sent handshake request (Payload)");
         }
 #endif
     }
@@ -970,13 +1126,13 @@ public class NeoForgeNetworkManager implements NetworkManager {
 
     @Override
     public void sendChunkDataRequest(FriendlyByteBuf buf) {
-#if MC_VER < MC_1_20_2
+#if MC_VER < MC_1_20_5
         if (net.minecraft.client.Minecraft.getInstance().getConnection() != null) {
             byte[] data = new byte[buf.readableBytes()];
             buf.readBytes(data);
             buf.release();
             CHANNEL.sendToServer(new ChunkDataRequestWrapper(data));
-            LOGGER.debug("Hassium: Sent chunk data request (1.20.1)");
+            LOGGER.debug("Hassium: Sent chunk data request (SimpleChannel)");
         } else {
             buf.release();
         }
@@ -987,7 +1143,7 @@ public class NeoForgeNetworkManager implements NetworkManager {
             buf.release();
             ChunkDataRequestPayload payload = new ChunkDataRequestPayload(data);
             net.minecraft.client.Minecraft.getInstance().getConnection().send(payload);
-            LOGGER.debug("Hassium: Sent chunk data request (1.20.2+)");
+            LOGGER.debug("Hassium: Sent chunk data request (Payload)");
         } else {
             buf.release();
         }
@@ -1001,15 +1157,16 @@ public class NeoForgeNetworkManager implements NetworkManager {
 
     @Override
     public void sendChunkHashPacket(ServerPlayer player, FriendlyByteBuf buf) {
-#if MC_VER < MC_1_20_2
         byte[] data = new byte[buf.readableBytes()];
         buf.readBytes(data);
         buf.release();
+#if MC_VER < MC_1_20_5
+#if MC_VER < MC_1_20_2
         CHANNEL.sendTo(new ChunkHashWrapper(data), player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
 #else
-        byte[] data = new byte[buf.readableBytes()];
-        buf.readBytes(data);
-        buf.release();
+        CHANNEL.sendTo(new ChunkHashWrapper(data), player.connection.connection, PlayNetworkDirection.PLAY_TO_CLIENT);
+#endif
+#else
         ChunkHashPayload payload = new ChunkHashPayload(data);
         player.connection.send(payload);
         LOGGER.debug("Hassium: Sent chunk hash packet to {}", player.getName().getString());
@@ -1018,7 +1175,7 @@ public class NeoForgeNetworkManager implements NetworkManager {
 
     @Override
     public void sendSectionHashRequest(FriendlyByteBuf buf) {
-#if MC_VER < MC_1_20_2
+#if MC_VER < MC_1_20_5
         if (net.minecraft.client.Minecraft.getInstance().getConnection() != null) {
             byte[] data = new byte[buf.readableBytes()];
             buf.readBytes(data);
@@ -1043,15 +1200,16 @@ public class NeoForgeNetworkManager implements NetworkManager {
 
     @Override
     public void sendSectionDeltaPacket(ServerPlayer player, FriendlyByteBuf buf) {
-#if MC_VER < MC_1_20_2
         byte[] data = new byte[buf.readableBytes()];
         buf.readBytes(data);
         buf.release();
+#if MC_VER < MC_1_20_5
+#if MC_VER < MC_1_20_2
         CHANNEL.sendTo(new SectionDeltaWrapper(data), player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
 #else
-        byte[] data = new byte[buf.readableBytes()];
-        buf.readBytes(data);
-        buf.release();
+        CHANNEL.sendTo(new SectionDeltaWrapper(data), player.connection.connection, PlayNetworkDirection.PLAY_TO_CLIENT);
+#endif
+#else
         SectionDeltaPayload payload = new SectionDeltaPayload(data);
         player.connection.send(payload);
         LOGGER.debug("Hassium: Sent section delta packet to {}", player.getName().getString());
@@ -1060,7 +1218,7 @@ public class NeoForgeNetworkManager implements NetworkManager {
 
     @Override
     public void sendBlockEntityRequest(FriendlyByteBuf buf) {
-#if MC_VER < MC_1_20_2
+#if MC_VER < MC_1_20_5
         if (net.minecraft.client.Minecraft.getInstance().getConnection() != null) {
             byte[] data = new byte[buf.readableBytes()];
             buf.readBytes(data);
@@ -1085,15 +1243,16 @@ public class NeoForgeNetworkManager implements NetworkManager {
 
     @Override
     public void sendBlockEntityData(ServerPlayer player, FriendlyByteBuf buf) {
-#if MC_VER < MC_1_20_2
         byte[] data = new byte[buf.readableBytes()];
         buf.readBytes(data);
         buf.release();
+#if MC_VER < MC_1_20_5
+#if MC_VER < MC_1_20_2
         CHANNEL.sendTo(new BlockEntityDataWrapper(data), player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
 #else
-        byte[] data = new byte[buf.readableBytes()];
-        buf.readBytes(data);
-        buf.release();
+        CHANNEL.sendTo(new BlockEntityDataWrapper(data), player.connection.connection, PlayNetworkDirection.PLAY_TO_CLIENT);
+#endif
+#else
         BlockEntityDataPayload payload = new BlockEntityDataPayload(data);
         player.connection.send(payload);
         LOGGER.debug("Hassium: Sent block entity data packet to {}", player.getName().getString());
@@ -1111,8 +1270,12 @@ public class NeoForgeNetworkManager implements NetworkManager {
 
             byte[] data = compressed.encode();
 
+#if MC_VER < MC_1_20_5
 #if MC_VER < MC_1_20_2
             CHANNEL.sendTo(new CompressedChunkWrapper(data), player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
+#else
+            CHANNEL.sendTo(new CompressedChunkWrapper(data), player.connection.connection, PlayNetworkDirection.PLAY_TO_CLIENT);
+#endif
 #else
             CompressedChunkPayload payload = new CompressedChunkPayload(data);
             player.connection.send(payload);

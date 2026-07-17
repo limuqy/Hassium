@@ -7,7 +7,7 @@
 | 段 | 锚点 | 状态 | 说明 |
 |----|------|------|------|
 | A | 1.20.1 | 进行中 / Fabric 已测通 | 巩固 Forge/NeoForge 冒烟 |
-| B | 1.20.2 | 待办 | CustomPayload / NeoForge 包名 |
+| B | 1.20.2 | 进行中 | NeoForge 网络改回 SimpleChannel（neoforged + PlayNetworkDirection）；编译已通 |
 | C | 1.20.5 | **闸门未完成** | STREAM_CODEC 聚合写包；`NetworkCapability` 仍为 false |
 | D–I | 1.21.1+ | 待办 | 按段只改 Compat + Mixin 签名 |
 

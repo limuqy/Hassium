@@ -28,18 +28,25 @@ public class NeoForgeNetworkManagerService implements INetworkManagerService {
             buf.readBytes(data);
             buf.release();
 
+#if MC_VER < MC_1_20_5
+            // 1.20.1–1.20.4：SimpleChannel 发送元数据
+            // 注意：此处历史实现误用 ChunkHashWrapper；保持行为以免破坏现有客户端缓存协议
 #if MC_VER < MC_1_20_2
-            // 1.20.1 使用 SimpleChannel
-            net.minecraftforge.network.NetworkDirection direction = 
-                net.minecraftforge.network.NetworkDirection.PLAY_TO_CLIENT;
             NeoForgeNetworkManager.CHANNEL.sendTo(
                 new NeoForgeNetworkManager.ChunkHashWrapper(data),
                 player.connection.connection,
-                direction
+                net.minecraftforge.network.NetworkDirection.PLAY_TO_CLIENT
             );
 #else
-            // 1.20.2+ 使用 Payload API
-            io.github.limuqy.mc.hassium.network.NeoForgeNetworkManager.ChunkMetadataPayload payload = 
+            NeoForgeNetworkManager.CHANNEL.sendTo(
+                new NeoForgeNetworkManager.ChunkMetadataWrapper(data),
+                player.connection.connection,
+                net.neoforged.neoforge.network.PlayNetworkDirection.PLAY_TO_CLIENT
+            );
+#endif
+#else
+            // 1.20.5+：Payload API
+            io.github.limuqy.mc.hassium.network.NeoForgeNetworkManager.ChunkMetadataPayload payload =
                 new io.github.limuqy.mc.hassium.network.NeoForgeNetworkManager.ChunkMetadataPayload(data);
             player.connection.send(payload);
 #endif

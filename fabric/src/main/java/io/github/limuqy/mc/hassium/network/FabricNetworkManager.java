@@ -558,6 +558,10 @@ INDEX_SYNC_S2C = ResourceLocationCompat.create(Constants.MOD_ID, "index_sync_s2c
 
     @Override
     public void sendHandshakeRequest() {
+        if (!HassiumConfigService.getInstance().isNetworkCompressionEnabled()) {
+            LOGGER.debug("Hassium: Skip handshake — network.enabled=false");
+            return;
+        }
         if (Minecraft.getInstance().getConnection() != null) {
             FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
             buf.writeVarInt(Constants.CURRENT_PROTOCOL_VERSION);

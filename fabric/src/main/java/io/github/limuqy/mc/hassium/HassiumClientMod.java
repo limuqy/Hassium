@@ -1,6 +1,7 @@
 package io.github.limuqy.mc.hassium;
 
 import io.github.limuqy.mc.hassium.command.FabricHassiumCommand;
+import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.network.ClientChunkHandler;
 import io.github.limuqy.mc.hassium.network.DictionaryManager;
 import io.github.limuqy.mc.hassium.network.FabricNetworkManager;
@@ -26,6 +27,11 @@ public class HassiumClientMod implements ClientModInitializer {
 
         // 监听客户端加入服务器事件，发送握手请求
         ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> {
+            // 段 C 门控关闭网络时通道未注册，发握手会 EncoderException 断连
+            if (!HassiumConfigService.getInstance().isNetworkCompressionEnabled()) {
+                LOGGER.info("Hassium: Client joined server, network disabled — skip handshake");
+                return;
+            }
             LOGGER.info("Hassium: Client joined server, sending handshake request");
             networkManager.sendHandshakeRequest();
         });

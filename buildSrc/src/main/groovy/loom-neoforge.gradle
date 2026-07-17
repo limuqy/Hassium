@@ -9,6 +9,7 @@ loom {
             mixinConfig "${mod_id}.neoforge.mixins.json"
         }
     } else {
+        // 1.20.2+：mixin 由 mods.toml / neoforge.mods.toml 的 [[mixins]] 声明
         neoForge {
         }
     }
@@ -41,5 +42,20 @@ loom {
         } else if (name == 'server') {
             runDir = 'run/server'
         }
+    }
+}
+
+// NeoForge 元数据文件分界（见 20.5 release notes）：
+// - < 1.20.5：只认 META-INF/mods.toml（1.20.2–1.20.4 若只打 neoforge.mods.toml 会被静默跳过）
+// - >= 1.20.5：只认 META-INF/neoforge.mods.toml
+// 两者不能同时打进 jar。
+processResources {
+    def mcVer = gradle.ext.minecraft_version as String
+    def parts = mcVer.tokenize('.').collect { it as int }
+    def useNeoForgeModsToml = parts[0] > 1 || (parts[0] == 1 && (parts[1] > 20 || (parts[1] == 20 && parts[2] >= 5)))
+    if (useNeoForgeModsToml) {
+        exclude 'META-INF/mods.toml'
+    } else {
+        exclude 'META-INF/neoforge.mods.toml'
     }
 }

@@ -10,35 +10,25 @@ import net.minecraft.commands.Commands;
 import net.minecraft.network.chat.Component;
 #if MC_VER < MC_1_20_2
 import net.minecraftforge.event.RegisterCommandsEvent;
-import net.minecraftforge.client.event.RegisterClientCommandsEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
 #else
 import net.neoforged.neoforge.event.RegisterCommandsEvent;
-import net.neoforged.neoforge.client.event.RegisterClientCommandsEvent;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.Mod;
 #endif
 
 /**
- * NeoForge 命令注册
+ * NeoForge 服务端命令注册（/hassium）。
  * <p>
- * 1.20.1: NeoForge 仍使用 net.minecraftforge 包名 + @Mod.EventBusSubscriber
- * 1.20.2+: 切换到 net.neoforged 包名，通过 NeoForge.EVENT_BUS 显式注册
+ * 客户端命令见 {@link NeoForgeHassiumClientCommand}，避免专用服务端加载 client event 类。
  */
-#if MC_VER < MC_1_20_2
 @Mod.EventBusSubscriber(modid = Constants.MOD_ID)
-#endif
 public class NeoForgeHassiumCommand {
 
     @SubscribeEvent
     public static void onRegisterCommands(RegisterCommandsEvent event) {
         registerCommands(event.getDispatcher());
-    }
-
-    @SubscribeEvent
-    public static void onRegisterClientCommands(RegisterClientCommandsEvent event) {
-        registerClientCommands(event.getDispatcher());
     }
 
     private static void registerCommands(CommandDispatcher<CommandSourceStack> dispatcher) {
@@ -62,23 +52,8 @@ public class NeoForgeHassiumCommand {
         );
     }
 
-    private static void registerClientCommands(CommandDispatcher<CommandSourceStack> dispatcher) {
-        dispatcher.register(
-                Commands.literal("hassiumc")
-                        .then(Commands.literal("stats")
-                                .requires(source -> HassiumCommandHandler.isMetricsEnabled())
-                                .executes(NeoForgeHassiumCommand::showClientStats))
-        );
-    }
-
     private static int showServerStats(CommandContext<CommandSourceStack> context) {
         String message = HassiumCommandHandler.getServerStatsMessage();
-        context.getSource().sendSuccess(() -> Component.literal(message), false);
-        return 1;
-    }
-
-    private static int showClientStats(CommandContext<CommandSourceStack> context) {
-        String message = HassiumCommandHandler.getClientStatsMessage();
         context.getSource().sendSuccess(() -> Component.literal(message), false);
         return 1;
     }

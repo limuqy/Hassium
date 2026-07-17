@@ -45,6 +45,21 @@ processResources {
         neoLoaderRange = "[${majorMinor},)"
     }
 
+    // javafml 的 loaderVersion ≠ NeoForge 版本号：
+    // - 1.20.1（Forge 风格 NeoForge，loader 47.x）：与 forge/neoforge loader 区间一致
+    // - 1.20.2+（FancyModLoader）：language provider Implementation-Version 为 1.0/2.0/...，默认 [1,)
+    // 高版本若需收紧可在 versionProperties 设 javafml_loader_version_range
+    def javafmlRange = gradle.ext.has('javafml_loader_version_range') ? gradle.ext.javafml_loader_version_range : ''
+    if (!javafmlRange) {
+        def neoMajor = neoLoader ? neoLoader.tokenize('.')[0].toInteger() : 0
+        javafmlRange = (neoMajor >= 40) ? neoLoaderRange : '[1,)'
+    }
+
+    // mods.toml 里的加载器依赖 modId：
+    // - 1.20.1 NeoForge 仍为 forge；1.20.2+ 为 neoforge
+    def mcVer = gradle.ext.minecraft_version as String
+    def neoDepModId = (mcVer == '1.20.1') ? 'forge' : 'neoforge'
+
     var expandProps = ['version'                              : mod_version,
                        'group'                                : project.group,
                        'minecraft_version'                    : gradle.ext.minecraft_version,
@@ -58,6 +73,8 @@ processResources {
                        'description'                  : project.description,
                        'neoforge_loader'              : neoLoader,
                        'neoforge_loader_version_range' : neoLoaderRange,
+                       'javafml_loader_version_range'  : javafmlRange,
+                       'neoforge_dependency_mod_id'   : neoDepModId,
                        'forge_loader'                 : gradle.ext.has('forge_loader') ? gradle.ext.forge_loader : '',
                        'forge_version'                : gradle.ext.has('forge_loader') ? gradle.ext.forge_loader : '',
                        'forge_loader_version_range'   : gradle.ext.has('forge_loader_version_range') ? gradle.ext.forge_loader_version_range : '[47,)',

@@ -311,6 +311,10 @@ public class ForgeNetworkManager implements NetworkManager {
 
     @Override
     public void sendHandshakeRequest() {
+        if (!HassiumConfigService.getInstance().isNetworkCompressionEnabled()) {
+            LOGGER.debug("Hassium: Skip handshake — network.enabled=false");
+            return;
+        }
         String compressionAlgorithm = HassiumConfigService.getInstance().getCompressionAlgorithm();
         String dictAlgorithm = compressionAlgorithm + "_dict";
         HandshakePacket packet = new HandshakePacket(

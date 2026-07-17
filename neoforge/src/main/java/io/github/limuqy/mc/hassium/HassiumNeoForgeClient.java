@@ -82,6 +82,12 @@ public class HassiumNeoForgeClient {
                 return;
             }
 #endif
+            // 段 C 门控关闭网络时通道未注册，发握手会导致断连
+            if (!io.github.limuqy.mc.hassium.config.HassiumConfigService.getInstance()
+                    .isNetworkCompressionEnabled()) {
+                LOGGER.info("Hassium: Client joined server, network disabled — skip handshake");
+                return;
+            }
             LOGGER.info("Hassium: Client joined server, sending handshake request");
             networkManager.sendHandshakeRequest();
         }
