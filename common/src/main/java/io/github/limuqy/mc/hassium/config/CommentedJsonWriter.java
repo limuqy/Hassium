@@ -73,10 +73,11 @@ public class CommentedJsonWriter {
         COMMENTS.put("network.clientChunkLoadThreads", "客户端区块加载线程数");
         COMMENTS.put("network.lightStripEnabled", "是否启用光照剥离");
         COMMENTS.put("network.backgroundThreads", "后台线程池大小");
-        COMMENTS.put("network.maxChunksPerFrame", "每帧最多应用缓存区块数");
-        COMMENTS.put("network.maxCallbacksPerFrame", "每帧最多主线程异步回调数");
+        COMMENTS.put("network.maxChunksPerFrame", "每帧应用缓存区块安全硬顶（主限流为时间预算）");
+        COMMENTS.put("network.maxCallbacksPerFrame", "每帧主线程回调安全硬顶（主限流为时间预算）");
         COMMENTS.put("network.metricsEnabled", "是否启用网络指标收集（流量、缓存命中率等）");
-        COMMENTS.put("network.targetFPS", "目标 FPS（用于自适应每帧区块应用数调整）");
+        COMMENTS.put("network.mainThreadChunkBudgetMs", "每帧主线程应用区块的时间预算（毫秒，默认 3；进服 JoinBoost 期间临时提高）");
+        COMMENTS.put("network.targetFPS", "遗留字段：不再参与限流");
         COMMENTS.put("network.maxLightRecomputePerFrame", "每帧最多重算光照区块数");
         COMMENTS.put("network.dynamicThreadPoolEnabled", "是否启用动态线程池调整（根据队列负载自动扩缩容）");
         COMMENTS.put("network.minPushThreads", "最小推送线程数（动态调整时的下限）");
@@ -154,6 +155,7 @@ public class CommentedJsonWriter {
                     "network.backgroundThreads",
                     "network.maxChunksPerFrame",
                     "network.maxCallbacksPerFrame",
+                    "network.mainThreadChunkBudgetMs",
                     "network.targetFPS",
                     "network.maxLightRecomputePerFrame"
             );

@@ -486,7 +486,7 @@ public class HassiumConfigService {
     }
 
     /**
-     * 获取每帧最多加载的缓存区块数
+     * 获取每帧安全硬顶（最多应用缓存区块数）；主限流改用时间预算。
      */
     public int getMaxChunksPerFrame() {
         int value = config.network().maxChunksPerFrame();
@@ -494,11 +494,24 @@ public class HassiumConfigService {
     }
 
     /**
-     * 获取每帧最多执行的主线程异步回调数
+     * 获取每帧安全硬顶（最多主线程异步回调数）；主限流改用时间预算。
      */
     public int getMaxCallbacksPerFrame() {
         int value = config.network().maxCallbacksPerFrame();
         return Math.max(1, value); // 至少为 1，避免为 0 导致无法处理
+    }
+
+    /**
+     * 获取客户端主线程每帧区块应用时间预算（毫秒）。
+     * <p>
+     * 旧配置缺失该字段时 Gson 会读出 0，回退到默认 3ms。
+     */
+    public int getMainThreadChunkBudgetMs() {
+        int value = config.network().mainThreadChunkBudgetMs();
+        if (value <= 0) {
+            return 3;
+        }
+        return Math.min(50, value); // 上限 50ms，避免单帧占满
     }
 
     /**
@@ -509,7 +522,7 @@ public class HassiumConfigService {
     }
 
     /**
-     * 获取目标 FPS（用于自适应吞吐调整）
+     * 获取目标 FPS（遗留配置，不再参与限流）
      */
     public int getTargetFPS() {
         int value = config.network().targetFPS();

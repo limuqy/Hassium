@@ -46,7 +46,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * <p>
  * 职责：
  * 1. 直接发送区块元数据（位置+时间戳）给客户端
- * 2. 管理区块数据请求队列，使用线程池异步压缩和发送
+ * 2. 管理区块数据请求队列：主线程序列化，线程池异步压缩发送
+ * 3. 短窗口批量发送 ChunkHash，降低进服包风暴
  */
 public class ServerChunkPushManager {
 
@@ -58,7 +59,17 @@ public class ServerChunkPushManager {
     private final Map<UUID, PriorityBlockingQueue<DataRequestTask>> dataQueues = new ConcurrentHashMap<>();
 
     /**
-     * 数据请求处理线程池
+     * 每玩家是否正在本 tick 序列化（防重复 drain）
+     */
+    private final Map<UUID, AtomicBoolean> processingFlags = new ConcurrentHashMap<>();
+
+    /**
+     * 每玩家待发送的 chunkHash 批次
+     */
+    private final Map<UUID, PendingHashBatch> hashBatches = new ConcurrentHashMap<>();
+
+    /**
+     * 数据请求处理线程池（hash 计算 + 压缩发送）
      */
     private volatile ThreadPoolExecutor pushPool;
 
@@ -88,6 +99,12 @@ public class ServerChunkPushManager {
      */
     private static final int QUEUE_HIGH_THRESHOLD = 50;
     private static final int QUEUE_LOW_THRESHOLD = 10;
+
+    /** ChunkHash 单包最多 entries */
+    private static final int HASH_BATCH_MAX_ENTRIES = 16;
+
+    /** ChunkHash 批次最大等待（毫秒） */
+    private static final long HASH_BATCH_MAX_WAIT_MS = 10;
 
     /**
      * 初始化线程池（懒加载）
@@ -307,34 +324,113 @@ public class ServerChunkPushManager {
     }
 
     /**
-     * 发送阶段一 chunkHash 给客户端
+     * 将阶段一 chunkHash 加入短窗口批次（由 server tick 或凑满后发送）。
      */
     private void sendChunkHash(List<ServerPlayer> players, ChunkPos pos,
                                 long chunkHash, int sectionBitmap, String dimension) {
+        ChunkHashS2CPacket.Entry entry =
+                new ChunkHashS2CPacket.Entry(pos.x, pos.z, chunkHash, sectionBitmap);
         for (ServerPlayer player : players) {
-            if (!player.isAlive() || player.hasDisconnected()) { continue; }
-            Constants.LOG.info("[SEND_HASH] Sending chunkHash for chunk {} to player {} (hash={})",
-                    pos, player.getName().getString(), Long.toHexString(chunkHash));
-            FriendlyByteBuf buf = null;
-            boolean sent = false;
-            try {
-                List<ChunkHashS2CPacket.Entry> entries = List.of(
-                        new ChunkHashS2CPacket.Entry(pos.x, pos.z, chunkHash, sectionBitmap)
-                );
-                ChunkHashS2CPacket packet = new ChunkHashS2CPacket(dimension, entries);
-                buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
-                packet.encode(buf);
-                Services.NETWORK_MANAGER.sendChunkHashPacket(player, buf);
-                sent = true;
-            } catch (Exception e) {
-                Constants.LOG.error("[CHUNK_HASH] Failed to send chunkHash for chunk {} to player {}",
-                        pos, player.getName().getString(), e);
-            } finally {
-                if (!sent && buf != null) {
-                    buf.release();
+            if (!player.isAlive() || player.hasDisconnected()) {
+                continue;
+            }
+            UUID playerId = player.getUUID();
+            PendingHashBatch flushDueToDimension = null;
+            PendingHashBatch flushDueToSize = null;
+            synchronized (hashBatches) {
+                PendingHashBatch batch = hashBatches.get(playerId);
+                if (batch != null && !batch.dimension.equals(dimension)) {
+                    flushDueToDimension = batch;
+                    hashBatches.remove(playerId);
+                    batch = null;
+                }
+                if (batch == null) {
+                    batch = new PendingHashBatch(dimension);
+                    hashBatches.put(playerId, batch);
+                }
+                batch.entries.add(entry);
+                if (batch.entries.size() >= HASH_BATCH_MAX_ENTRIES) {
+                    flushDueToSize = batch;
+                    hashBatches.remove(playerId);
                 }
             }
+            if (flushDueToDimension != null) {
+                flushHashBatch(player, flushDueToDimension);
+            }
+            if (flushDueToSize != null) {
+                flushHashBatch(player, flushDueToSize);
+            }
         }
+    }
+
+    /**
+     * 冲刷单个玩家的 hash 批次。
+     */
+    private void flushHashBatch(ServerPlayer player, PendingHashBatch batch) {
+        if (batch == null || batch.entries.isEmpty()) {
+            return;
+        }
+        if (!player.isAlive() || player.hasDisconnected()) {
+            return;
+        }
+        Constants.LOG.info("[SEND_HASH] Flushing {} chunkHashes to player {} (dimension={})",
+                batch.entries.size(), player.getName().getString(), batch.dimension);
+        FriendlyByteBuf buf = null;
+        boolean sent = false;
+        try {
+            ChunkHashS2CPacket packet = new ChunkHashS2CPacket(batch.dimension, new ArrayList<>(batch.entries));
+            buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
+            packet.encode(buf);
+            Services.NETWORK_MANAGER.sendChunkHashPacket(player, buf);
+            sent = true;
+        } catch (Exception e) {
+            Constants.LOG.error("[CHUNK_HASH] Failed to flush chunkHash batch to player {}",
+                    player.getName().getString(), e);
+        } finally {
+            if (!sent && buf != null) {
+                buf.release();
+            }
+        }
+    }
+
+    /**
+     * 服务端每 tick：冲刷到期 hash 批次 + 按 tick 限流序列化数据请求。
+     */
+    public void onServerTick(net.minecraft.server.MinecraftServer server) {
+        if (server == null) {
+            return;
+        }
+        if (!initialized.get() && dataQueues.isEmpty() && hashBatches.isEmpty()) {
+            return;
+        }
+        ensureInitialized();
+
+        long now = System.currentTimeMillis();
+        for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+            flushPlayerHashBatchIfDue(player, now);
+            drainPlayerQueueTick(player);
+        }
+
+        // 清理已离线玩家的批次
+        hashBatches.keySet().removeIf(id -> server.getPlayerList().getPlayer(id) == null);
+        adjustThreadPool();
+    }
+
+    private void flushPlayerHashBatchIfDue(ServerPlayer player, long nowMs) {
+        UUID playerId = player.getUUID();
+        PendingHashBatch batch;
+        synchronized (hashBatches) {
+            batch = hashBatches.get(playerId);
+            if (batch == null || batch.entries.isEmpty()) {
+                return;
+            }
+            if (nowMs - batch.createdAtMs < HASH_BATCH_MAX_WAIT_MS
+                    && batch.entries.size() < HASH_BATCH_MAX_ENTRIES) {
+                return;
+            }
+            hashBatches.remove(playerId, batch);
+        }
+        flushHashBatch(player, batch);
     }
 
     /**
@@ -583,115 +679,117 @@ public class ServerChunkPushManager {
 
         Constants.LOG.info("[ENQUEUE_DATA] Player {} queued {} chunks (queueSize={}, playerPos=({}, {}))",
                 player.getName().getString(), chunks.size(), queue.size(), playerChunkX, playerChunkZ);
-
-        // 提交处理任务到线程池
-        pushPool.submit(() -> processPlayerQueue(player, dimension));
+        // 实际 drain 由 onServerTick 按真实每 tick 上限处理，避免连环 submit 卡主线程
     }
 
     /**
-     * 处理单个玩家的数据请求队列
+     * 每 tick 在主线程序列化最多 maxChunksPerTick 个区块，压缩发送下推到 pushPool。
      */
-    private void processPlayerQueue(ServerPlayer player, String dimension) {
+    private void drainPlayerQueueTick(ServerPlayer player) {
         UUID playerId = player.getUUID();
         PriorityBlockingQueue<DataRequestTask> queue = dataQueues.get(playerId);
         if (queue == null || queue.isEmpty()) {
-            Constants.LOG.debug("[PROCESS_QUEUE] Queue is empty for player {}", player.getName().getString());
             return;
         }
 
-        Constants.LOG.info("[PROCESS_QUEUE] Processing queue for player {} (queueSize={})",
-                player.getName().getString(), queue.size());
-
-        // 检查玩家是否仍然在线
         if (!player.isAlive() || player.hasDisconnected()) {
-            Constants.LOG.warn("[PROCESS_QUEUE] Player {} is not online, removing queue", player.getName().getString());
             removePlayer(playerId);
             return;
         }
 
-        // 读区块 / 序列化 / 发包必须在服务端主线程（否则 ThreadingDetector 或 SimpleChannel 异常）
-        net.minecraft.server.MinecraftServer server = PlayerCompat.getMinecraftServer(player);
-        if (server != null && !server.isSameThread()) {
-            server.execute(() -> processPlayerQueue(player, dimension));
+        AtomicBoolean flag = processingFlags.computeIfAbsent(playerId, k -> new AtomicBoolean(false));
+        if (!flag.compareAndSet(false, true)) {
             return;
         }
 
-        ServerLevel level = PlayerCompat.getServerLevel(player);
-        ChunkSender sender = ChunkSender.getInstance();
-        if (sender == null) {
-            Constants.LOG.error("[PROCESS_QUEUE] ChunkSender not initialized, cannot send chunk data "
-                    + "(loader must call ChunkSender.setInstance in mod init)");
-            // 不继续调度，避免空转刷屏；队列保留，待下次 enqueue 时再试
-            return;
-        }
-
-        // 每批处理的最大区块数
-        int maxPerBatch = HassiumConfigService.getInstance().getConfig().network().maxChunksPerTick();
-
-        Constants.LOG.info("[PROCESS_QUEUE] Processing up to {} chunks for player {}", maxPerBatch, player.getName().getString());
-
-        int processed = 0;
-        while (processed < maxPerBatch && !queue.isEmpty()) {
-            // 再次检查玩家是否仍然在线
-            if (!player.isAlive() || player.hasDisconnected()) {
-                Constants.LOG.warn("[PROCESS_QUEUE] Player {} disconnected during processing", player.getName().getString());
-                removePlayer(playerId);
+        try {
+            ChunkSender sender = ChunkSender.getInstance();
+            if (sender == null) {
+                Constants.LOG.error("[PROCESS_QUEUE] ChunkSender not initialized, cannot send chunk data "
+                        + "(loader must call ChunkSender.setInstance in mod init)");
                 return;
             }
 
-            DataRequestTask task = queue.poll();
-            if (task == null) break;
-
-            Constants.LOG.info("[PROCESS_QUEUE] Processing chunk {} (priority={}, remaining={})",
-                    task.pos(), String.format("%.1f", task.priority()), queue.size());
-
-            try {
-                LevelChunk chunk = level.getChunk(task.pos().x, task.pos().z);
-                if (chunk == null) {
-                    Constants.LOG.warn("[PROCESS_QUEUE] Chunk {} not loaded, skipping", task.pos());
-                    continue;
-                }
-
-                // 序列化区块数据
-                byte[] chunkData = serializeChunk(chunk, level);
-                if (chunkData == null) {
-                    Constants.LOG.warn("[PROCESS_QUEUE] Failed to serialize chunk {}", task.pos());
-                    continue;
-                }
-
-                Constants.LOG.info("[PROCESS_QUEUE] Serialized chunk {} ({} bytes)", task.pos(), chunkData.length);
-
-                // 压缩并发送
-                ChunkCompressionHandler.CompressedChunkData compressed =
-                        ChunkCompressionHandler.compressChunkData(chunkData, task.pos().x, task.pos().z);
-                if (compressed != null) {
-                    sender.sendCompressedChunk(player, compressed);
-                    processed++;
-
-                    // 记录区块发送（压缩前后对比）
-                    NetworkStats.recordChunkSent(chunkData.length, compressed.compressedData.length);
-
-                    Constants.LOG.info("[PROCESS_QUEUE] Sent chunk {} to player {} ({} -> {} bytes, ratio={})",
-                            task.pos(), player.getName().getString(), chunkData.length, compressed.compressedData.length,
-                            String.format("%.2f", (double) chunkData.length / compressed.compressedData.length));
-                } else {
-                    Constants.LOG.warn("[PROCESS_QUEUE] Failed to compress chunk {}", task.pos());
-                }
-            } catch (Exception e) {
-                Constants.LOG.error("[PROCESS_QUEUE] Failed to process chunk {} for player {}",
-                        task.pos(), player.getName().getString(), e);
+            int maxPerTick = HassiumConfigService.getInstance().getConfig().network().maxChunksPerTick();
+            if (maxPerTick <= 0) {
+                maxPerTick = 10;
             }
+
+            ServerLevel level = PlayerCompat.getServerLevel(player);
+            List<SerializedChunkWork> works = new ArrayList<>(maxPerTick);
+            int processed = 0;
+
+            while (processed < maxPerTick && !queue.isEmpty()) {
+                if (!player.isAlive() || player.hasDisconnected()) {
+                    removePlayer(playerId);
+                    return;
+                }
+
+                DataRequestTask task = queue.poll();
+                if (task == null) {
+                    break;
+                }
+
+                try {
+                    LevelChunk chunk = level.getChunk(task.pos().x, task.pos().z);
+                    if (chunk == null) {
+                        Constants.LOG.warn("[PROCESS_QUEUE] Chunk {} not loaded, skipping", task.pos());
+                        continue;
+                    }
+
+                    byte[] chunkData = serializeChunk(chunk, level);
+                    if (chunkData == null) {
+                        Constants.LOG.warn("[PROCESS_QUEUE] Failed to serialize chunk {}", task.pos());
+                        continue;
+                    }
+
+                    works.add(new SerializedChunkWork(player, task.pos(), chunkData));
+                    processed++;
+                    Constants.LOG.info("[PROCESS_QUEUE] Serialized chunk {} ({} bytes, remaining={})",
+                            task.pos(), chunkData.length, queue.size());
+                } catch (Exception e) {
+                    Constants.LOG.error("[PROCESS_QUEUE] Failed to serialize chunk {} for player {}",
+                            task.pos(), player.getName().getString(), e);
+                }
+            }
+
+            if (!works.isEmpty()) {
+                Constants.LOG.info("[PROCESS_QUEUE] Tick drain for {}: serialized={}, remaining={}",
+                        player.getName().getString(), works.size(), queue.size());
+                for (SerializedChunkWork work : works) {
+                    pushPool.submit(() -> compressAndSend(work, sender));
+                }
+            }
+        } finally {
+            flag.set(false);
         }
+    }
 
-        Constants.LOG.info("[PROCESS_QUEUE] Completed processing for player {}: sent={}, remaining={}",
-                player.getName().getString(), processed, queue.size());
-
-        // 动态调整线程池
-        adjustThreadPool();
-
-        // 队列未排空时继续调度，避免大批量 miss 请求卡死
-        if (!queue.isEmpty() && player.isAlive() && !player.hasDisconnected()) {
-            pushPool.submit(() -> processPlayerQueue(player, dimension));
+    /**
+     * 后台压缩并发送（不访问世界对象）。
+     */
+    private void compressAndSend(SerializedChunkWork work, ChunkSender sender) {
+        ServerPlayer player = work.player();
+        if (!player.isAlive() || player.hasDisconnected()) {
+            return;
+        }
+        try {
+            ChunkCompressionHandler.CompressedChunkData compressed =
+                    ChunkCompressionHandler.compressChunkData(
+                            work.chunkData(), work.pos().x, work.pos().z);
+            if (compressed == null) {
+                Constants.LOG.warn("[PROCESS_QUEUE] Failed to compress chunk {}", work.pos());
+                return;
+            }
+            sender.sendCompressedChunk(player, compressed);
+            NetworkStats.recordChunkSent(work.chunkData().length, compressed.compressedData.length);
+            Constants.LOG.info("[PROCESS_QUEUE] Sent chunk {} to player {} ({} -> {} bytes, ratio={})",
+                    work.pos(), player.getName().getString(),
+                    work.chunkData().length, compressed.compressedData.length,
+                    String.format("%.2f", (double) work.chunkData().length / compressed.compressedData.length));
+        } catch (Exception e) {
+            Constants.LOG.error("[PROCESS_QUEUE] Failed to compress/send chunk {} for player {}",
+                    work.pos(), player.getName().getString(), e);
         }
     }
 
@@ -790,6 +888,8 @@ public class ServerChunkPushManager {
         if (queue != null) {
             queue.clear();
         }
+        processingFlags.remove(playerId);
+        hashBatches.remove(playerId);
     }
 
     /**
@@ -797,6 +897,8 @@ public class ServerChunkPushManager {
      */
     public void shutdown() {
         dataQueues.clear();
+        processingFlags.clear();
+        hashBatches.clear();
         if (pushPool != null) {
             pushPool.shutdownNow();
         }
@@ -821,4 +923,22 @@ public class ServerChunkPushManager {
      * 区块数据请求任务
      */
     private record DataRequestTask(ChunkPos pos, String dimension, double priority) {}
+
+    /**
+     * 主线程已序列化、待后台压缩发送的工作项
+     */
+    private record SerializedChunkWork(ServerPlayer player, ChunkPos pos, byte[] chunkData) {}
+
+    /**
+     * 短窗口 ChunkHash 批次
+     */
+    private static final class PendingHashBatch {
+        final String dimension;
+        final List<ChunkHashS2CPacket.Entry> entries = new ArrayList<>();
+        final long createdAtMs = System.currentTimeMillis();
+
+        PendingHashBatch(String dimension) {
+            this.dimension = dimension;
+        }
+    }
 }

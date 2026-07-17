@@ -3,7 +3,6 @@ package io.github.limuqy.mc.hassium.cache.client;
 import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.concurrent.HassiumTaskExecutor;
 import io.github.limuqy.mc.hassium.concurrent.TaskCategory;
-import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.network.ChunkDataRequestC2SPacket;
 import io.github.limuqy.mc.hassium.network.ClientChunkHandler;
 import io.github.limuqy.mc.hassium.platform.Services;
@@ -16,7 +15,7 @@ import java.util.concurrent.PriorityBlockingQueue;
 /**
  * 客户端缓存加载队列
  * <p>
- * 异步加载缓存命中区块，按距离优先级排序，每帧限制应用数量避免卡顿。
+ * 异步加载缓存命中区块，按距离优先级排序；主线程按时间预算 apply，避免 FPS 负反馈。
  * Phase 6: 后台加载任务通过 HassiumTaskExecutor 提交，不再维护独立的线程池。
  */
 public class ClientCacheLoadQueue {
@@ -183,136 +182,57 @@ public class ClientCacheLoadQueue {
     }
 
     /**
-     * 每帧应用区块，从就绪队列中取出区块应用到世界
-     * <p>
-     * 自适应调整：根据当前 FPS 和距离因子动态调整每帧应用数
+     * 每帧应用区块（无预算参数，使用当前 JoinBoost/配置预算）。
      */
     public void processQueue() {
+        long deadlineNs = System.nanoTime() + ClientMainThreadBudget.getBudgetNs();
+        processQueueUntil(deadlineNs);
+    }
+
+    /**
+     * 在共享时间预算内从就绪队列应用区块。
+     *
+     * @param deadlineNs 本帧截止时间（{@link System#nanoTime()}）
+     * @return 剩余截止时间（可能已过期）
+     */
+    public long processQueueUntil(long deadlineNs) {
         if (readyQueue.isEmpty()) {
-            return;
+            return deadlineNs;
         }
 
         Constants.LOG.debug("[CACHE_APPLY] Processing queue, readySize={}", readyQueue.size());
 
-        int maxPerFrame = calculateAdaptiveMaxPerFrame();
-
+        int hardCap = ClientMainThreadBudget.getHardCap();
         int applied = 0;
-        while (applied < maxPerFrame && !readyQueue.isEmpty()) {
+        // 至少应用 1 个，避免预算过紧饿死
+        boolean forceOne = true;
+
+        while (!readyQueue.isEmpty() && applied < hardCap) {
+            long now = System.nanoTime();
+            if (!forceOne && now >= deadlineNs) {
+                break;
+            }
+            forceOne = false;
+
             ReadyChunk chunk = readyQueue.poll();
-            if (chunk != null) {
-                Constants.LOG.debug("[CACHE_APPLY] Applying chunk {} to world (renderOnly={}, remaining={})",
-                        chunk.pos(), chunk.renderOnly(), readyQueue.size());
-                try {
-                    ClientChunkHandler.applyChunkData(chunk.pos().x, chunk.pos().z, chunk.data(), chunk.renderOnly());
-                    applied++;
-                } catch (Exception e) {
-                    Constants.LOG.error("[CACHE_APPLY] Error applying cached chunk {}", chunk.pos(), e);
-                }
+            if (chunk == null) {
+                break;
+            }
+            Constants.LOG.debug("[CACHE_APPLY] Applying chunk {} to world (renderOnly={}, remaining={})",
+                    chunk.pos(), chunk.renderOnly(), readyQueue.size());
+            try {
+                ClientChunkHandler.applyChunkData(chunk.pos().x, chunk.pos().z, chunk.data(), chunk.renderOnly());
+                applied++;
+            } catch (Exception e) {
+                Constants.LOG.error("[CACHE_APPLY] Error applying cached chunk {}", chunk.pos(), e);
             }
         }
 
         if (applied > 0) {
-            Constants.LOG.info("[CACHE_APPLY] Applied {} chunks this frame (max={}, remaining: {})",
-                    applied, maxPerFrame, readyQueue.size());
+            Constants.LOG.info("[CACHE_APPLY] Applied {} chunks this frame (hardCap={}, remaining: {})",
+                    applied, hardCap, readyQueue.size());
         }
-    }
-
-    /**
-     * 计算自适应的每帧最大应用数
-     * <p>
-     * 算法：基准值 * FPS 因子 * 距离因子
-     * <ul>
-     *   <li>FPS 因子：当前 FPS / 目标 FPS，限制在 [0.25, 1.5] 范围</li>
-     *   <li>距离因子：基于就绪队列中区块的平均距离，近距离优先</li>
-     * </ul>
-     */
-    private int calculateAdaptiveMaxPerFrame() {
-        int baseMax = HassiumConfigService.getInstance().getMaxChunksPerFrame();
-        if (baseMax <= 0) {
-            baseMax = 10;
-        }
-
-        // 获取当前 FPS
-        int currentFPS = getCurrentFPS();
-        int targetFPS = HassiumConfigService.getInstance().getTargetFPS();
-
-        // FPS 因子：当前 FPS / 目标 FPS，限制在 [0.25, 1.5] 范围
-        // 高 FPS 时可以增加应用数，低 FPS 时减少
-        double fpsFactor = (double) currentFPS / targetFPS;
-        fpsFactor = Math.max(0.25, Math.min(1.5, fpsFactor));
-
-        // 距离因子：基于就绪队列中区块的平均距离
-        double distanceFactor = calculateDistanceFactor();
-
-        // 计算最终值
-        int result = (int) (baseMax * fpsFactor * distanceFactor);
-        result = Math.max(1, Math.min(baseMax * 2, result)); // 限制在 [1, baseMax*2] 范围
-
-        Constants.LOG.debug("[CACHE_APPLY] Adaptive: base={}, fps={}({}), dist={}, result={}",
-                baseMax, currentFPS, String.format("%.2f", fpsFactor),
-                String.format("%.2f", distanceFactor), result);
-
-        return result;
-    }
-
-    /**
-     * 获取当前 FPS
-     */
-    private int getCurrentFPS() {
-        try {
-            return net.minecraft.client.Minecraft.getInstance().getFps();
-        } catch (Exception e) {
-            return 60; // 默认值
-        }
-    }
-
-    /**
-     * 计算距离因子
-     * <p>
-     * 基于就绪队列中区块的平均距离，近距离区块优先处理。
-     * 距离因子范围 [0.5, 1.0]，近距离区块因子更高。
-     */
-    private double calculateDistanceFactor() {
-        if (readyQueue.isEmpty()) {
-            return 1.0;
-        }
-
-        try {
-            net.minecraft.client.Minecraft mc = net.minecraft.client.Minecraft.getInstance();
-            if (mc.player == null) {
-                return 1.0;
-            }
-
-            double playerChunkX = mc.player.getX() / 16.0;
-            double playerChunkZ = mc.player.getZ() / 16.0;
-
-            // 采样前几个区块计算平均距离
-            int sampleSize = Math.min(readyQueue.size(), 5);
-            double totalDistance = 0;
-            int sampled = 0;
-
-            // 使用 peek 遍历（不移除元素）
-            for (ReadyChunk chunk : readyQueue) {
-                if (sampled >= sampleSize) break;
-                double dx = chunk.pos().x - playerChunkX;
-                double dz = chunk.pos().z - playerChunkZ;
-                totalDistance += Math.sqrt(dx * dx + dz * dz);
-                sampled++;
-            }
-
-            if (sampled == 0) {
-                return 1.0;
-            }
-
-            double avgDistance = totalDistance / sampled;
-            int renderDistance = mc.options.renderDistance().get();
-
-            // 距离因子：近距离（< renderDistance/2）时因子为 1.0，远距离时逐渐降低到 0.5
-            double distanceFactor = 1.0 - (avgDistance / renderDistance) * 0.5;
-            return Math.max(0.5, Math.min(1.0, distanceFactor));
-        } catch (Exception e) {
-            return 1.0; // 出错时使用默认因子
-        }
+        return deadlineNs;
     }
 
     /**

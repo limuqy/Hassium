@@ -24,6 +24,7 @@ import net.minecraft.world.level.biome.Biome;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
 
 /**
  * 客户端区块元数据处理器
@@ -50,6 +51,18 @@ public class ClientMetadataHandler {
             new ConcurrentHashMap<>();
 
     private record PendingBlockEntityNbt(BlockPos pos, CompoundTag nbt) {}
+
+    /**
+     * storage 未就绪时暂存的 chunkHash 包；就绪后批量比对，超时再回退全量请求。
+     */
+    private static final ConcurrentLinkedQueue<ChunkHashS2CPacket> PENDING_HASH_PACKETS =
+            new ConcurrentLinkedQueue<>();
+
+    /** 首次因 storage 未就绪而暂存 hash 的时间戳；0 表示当前无等待 */
+    private static volatile long pendingHashWaitStartedAtMs = 0L;
+
+    /** storage 就绪等待超时（毫秒），超时后对暂存包回退全量请求 */
+    private static final long STORAGE_READY_TIMEOUT_MS = 2_000L;
 
     /**
      * 元数据比对结果
@@ -296,14 +309,71 @@ public class ClientMetadataHandler {
 
         ClientHassiumStorage storage = ClientChunkHandler.getClientStorage();
         if (storage == null) {
-            DebugLogger.warn(LogType.METADATA, "[CHUNK_HASH] Storage not initialized, requesting full data");
-            // 无缓存，直接请求完整数据
-            requestFullChunks(packet.dimension(), packet.entries().stream()
-                    .map(e -> new ChunkPos(e.chunkX(), e.chunkZ()))
-                    .toList());
+            // 暂存等待 storage 就绪，避免进服早期假全量请求
+            if (pendingHashWaitStartedAtMs == 0L) {
+                pendingHashWaitStartedAtMs = System.currentTimeMillis();
+            }
+            PENDING_HASH_PACKETS.offer(packet);
+            DebugLogger.warn(LogType.METADATA,
+                    "[CHUNK_HASH] Storage not ready, buffering hash packet (pending={})",
+                    PENDING_HASH_PACKETS.size());
             return;
         }
 
+        dispatchChunkHashCompare(storage, packet);
+    }
+
+    /**
+     * storage 异步初始化完成后调用：冲刷暂存的 hash 包。
+     */
+    public static void onStorageReady() {
+        pendingHashWaitStartedAtMs = 0L;
+        flushPendingHashPackets(false);
+    }
+
+    /**
+     * 每帧检查：storage 已就绪则冲刷；超时则回退全量请求。
+     */
+    public static void tickPendingHashGate() {
+        if (PENDING_HASH_PACKETS.isEmpty()) {
+            return;
+        }
+        ClientHassiumStorage storage = ClientChunkHandler.getClientStorage();
+        if (storage != null) {
+            onStorageReady();
+            return;
+        }
+        long started = pendingHashWaitStartedAtMs;
+        if (started > 0L && System.currentTimeMillis() - started >= STORAGE_READY_TIMEOUT_MS) {
+            DebugLogger.warn(LogType.METADATA,
+                    "[CHUNK_HASH] Storage ready timeout ({}ms), falling back to full requests for {} packets",
+                    STORAGE_READY_TIMEOUT_MS, PENDING_HASH_PACKETS.size());
+            flushPendingHashPackets(true);
+            pendingHashWaitStartedAtMs = 0L;
+        }
+    }
+
+    /**
+     * 冲刷暂存 hash：正常比对或超时全量请求。
+     */
+    private static void flushPendingHashPackets(boolean forceFullRequest) {
+        ClientHassiumStorage storage = ClientChunkHandler.getClientStorage();
+        ChunkHashS2CPacket packet;
+        while ((packet = PENDING_HASH_PACKETS.poll()) != null) {
+            if (forceFullRequest || storage == null) {
+                requestFullChunks(packet.dimension(), packet.entries().stream()
+                        .map(e -> new ChunkPos(e.chunkX(), e.chunkZ()))
+                        .toList());
+            } else {
+                dispatchChunkHashCompare(storage, packet);
+            }
+        }
+    }
+
+    /**
+     * 将 chunkHash 比对提交到后台或同步执行。
+     */
+    private static void dispatchChunkHashCompare(ClientHassiumStorage storage, ChunkHashS2CPacket packet) {
         HassiumTaskExecutor executor = HassiumTaskExecutor.getClient();
         if (executor != null && executor.isRunning()) {
             final ClientHassiumStorage finalStorage = storage;
@@ -416,6 +486,8 @@ public class ClientMetadataHandler {
     public static void clearPendingState() {
         PENDING_BE_REQUESTS.clear();
         PENDING_BLOCK_ENTITIES.clear();
+        PENDING_HASH_PACKETS.clear();
+        pendingHashWaitStartedAtMs = 0L;
     }
 
     /**

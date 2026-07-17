@@ -129,7 +129,9 @@ public record HassiumConfig(
             int maxCallbacksPerFrame,
             // === 指标监控配置 ===
             boolean metricsEnabled,
-            // === 自适应吞吐配置 ===
+            // === 主线程时间预算（替代 FPS 自适应）===
+            int mainThreadChunkBudgetMs,
+            // === 遗留字段：不再参与限流，保留以兼容旧配置 ===
             int targetFPS,
             int maxLightRecomputePerFrame,
             // === 动态线程池配置 ===
@@ -138,10 +140,18 @@ public record HassiumConfig(
             int maxPushThreads
     ) {
         /**
-         * 默认压缩黑名单（硬编码，始终排除）
+         * 默认压缩黑名单（与硬编码黑名单对齐的配置侧副本）
          */
         public static final Set<String> DEFAULT_COMPRESSION_BLACKLIST = Set.of(
-                "hassium:chunk_payload_s2c"
+                "hassium:chunk_payload_s2c",
+                "hassium:chunk_hash_s2c",
+                "hassium:chunk_metadata_s2c",
+                "hassium:chunk_data_request_c2s",
+                "hassium:handshake_c2s",
+                "hassium:handshake_s2c",
+                "hassium:index_sync_s2c",
+                "hassium:dictionary_sync",
+                "hassium:compression_ready_c2s"
         );
 
         public static final NetworkConfig DEFAULT = new NetworkConfig(
@@ -164,12 +174,14 @@ public record HassiumConfig(
                 10,                 // clientChunkLoadThreads: 客户端加载线程数
                 true,              // lightStripEnabled: 默认启用光照剥离
                 8,                 // backgroundThreads: 后台线程池大小（平台线程模式）
-                10,                // maxChunksPerFrame: 每帧最多应用缓存区块数
-                10,                 // maxCallbacksPerFrame: 每帧最多主线程异步回调数
+                32,                // maxChunksPerFrame: 每帧安全硬顶（非主限流）
+                32,                // maxCallbacksPerFrame: 每帧回调安全硬顶（非主限流）
                 // === 指标监控默认配置 ===
                 true,              // metricsEnabled: 默认启用指标收集
-                // === 自适应吞吐默认配置 ===
-                60,                // targetFPS: 目标 FPS，默认 60
+                // === 主线程时间预算 ===
+                3,                 // mainThreadChunkBudgetMs: 每帧约 3ms
+                // === 遗留字段 ===
+                60,                // targetFPS: 不再参与限流
                 10,                 // maxLightRecomputePerFrame: 每帧最多重算光照区块数
                 // === 动态线程池默认配置 ===
                 true,              // dynamicThreadPoolEnabled: 默认启用动态线程池

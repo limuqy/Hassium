@@ -41,6 +41,9 @@ public final class ClientLifecycleHelper {
         int threads = HassiumConfigService.getInstance().getClientChunkLoadThreads();
         HassiumTaskExecutor.initClient(threads);
 
+        // 进服吞吐加速：临时提高主线程时间预算
+        ClientMainThreadBudget.startJoinBoost();
+
         // M2: 异步初始化存储（SQLite 初始化在后台线程）
         initializeCacheAsync();
         initialized = true;
@@ -57,6 +60,7 @@ public final class ClientLifecycleHelper {
      */
     public static void cleanupOnDisconnect() {
         initialized = false;
+        ClientMainThreadBudget.clearJoinBoost();
 
         // S2: 异步刷新缓存保存队列（最多等待 3 秒）
         CacheSaveQueue.getInstance().flushAsync(3000);
@@ -126,12 +130,14 @@ public final class ClientLifecycleHelper {
             if (executor != null && executor.isRunning()) {
                 executor.submit(() -> {
                     ClientChunkHandler.initStorage(gameDir, serverId, finalDimension);
+                    ClientMetadataHandler.onStorageReady();
                     Constants.LOG.info("Hassium: Async initialized client cache for server {} dim {}",
                             serverIp, finalDimension);
                 }, TaskCategory.BEST_EFFORT);
             } else {
                 // 回退：同步初始化
                 ClientChunkHandler.initStorage(gameDir, serverId, finalDimension);
+                ClientMetadataHandler.onStorageReady();
                 Constants.LOG.info("Hassium: Initialized client cache for server {} dim {}", serverIp, finalDimension);
             }
         } catch (Exception e) {

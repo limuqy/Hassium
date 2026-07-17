@@ -24,6 +24,9 @@ public class MixinMinecraftServer {
     private void onServerTick(BooleanSupplier hasTimeLeft, CallbackInfo ci) {
         // 刷新服务端主线程回调队列（每 tick 调用）
         MainThreadDispatcher.flushServer();
+        // 按真实 tick 限流序列化区块 + 冲刷 ChunkHash 批次
+        MinecraftServer server = (MinecraftServer) (Object) this;
+        ServerChunkPushManager.getInstance().onServerTick(server);
     }
 
     @Inject(method = "runServer", at = @At(value = "INVOKE", target = "Lnet/minecraft/server/MinecraftServer;initServer()Z"))

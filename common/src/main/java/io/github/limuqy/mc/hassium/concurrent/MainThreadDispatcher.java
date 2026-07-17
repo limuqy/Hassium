@@ -112,20 +112,41 @@ public final class MainThreadDispatcher {
     }
 
     /**
-     * 刷新客户端主线程回调队列（每帧调用）
+     * 刷新客户端主线程回调队列（每帧调用，按数量硬顶）。
      *
      * @param maxPerFrame 单帧最多执行的回调数
      */
     public static void flushClient(int maxPerFrame) {
+        long deadlineNs = System.nanoTime() + 50_000_000L; // 兼容旧调用：给足预算，仍受 hardCap 约束
+        flushClientUntil(deadlineNs, maxPerFrame);
+    }
+
+    /**
+     * 在共享时间预算内刷新客户端回调队列。
+     *
+     * @param deadlineNs  本帧截止时间（{@link System#nanoTime()}）
+     * @param hardCap     安全硬顶（最多回调数）
+     * @return 实际处理的回调数
+     */
+    public static int flushClientUntil(long deadlineNs, int hardCap) {
         if (CLIENT_QUEUE.isEmpty()) {
-            return;
+            return 0;
         }
-        DebugLogger.info(LogType.DISPATCHER, "[MAIN_DISPATCHER] Flushing client queue (queueSize={}, maxPerFrame={})",
+        int maxPerFrame = Math.max(1, hardCap);
+        DebugLogger.info(LogType.DISPATCHER, "[MAIN_DISPATCHER] Flushing client queue (queueSize={}, hardCap={})",
                 CLIENT_QUEUE.size(), maxPerFrame);
 
         int processed = 0;
+        boolean forceOne = true;
         CallbackTask task;
         while (processed < maxPerFrame && (task = CLIENT_QUEUE.poll()) != null) {
+            long now = System.nanoTime();
+            if (!forceOne && now >= deadlineNs) {
+                // 预算用尽：把任务放回队列头部语义由优先级队列保证，重新 offer
+                CLIENT_QUEUE.offer(task);
+                break;
+            }
+            forceOne = false;
             try {
                 DebugLogger.info(LogType.DISPATCHER, "[MAIN_DISPATCHER] Executing callback (priority={}, category={})",
                         task.priority(), task.category());
@@ -138,6 +159,7 @@ public final class MainThreadDispatcher {
         }
         DebugLogger.info(LogType.DISPATCHER, "[MAIN_DISPATCHER] Flushed {} callbacks, remaining={}",
                 processed, CLIENT_QUEUE.size());
+        return processed;
     }
 
     /**
