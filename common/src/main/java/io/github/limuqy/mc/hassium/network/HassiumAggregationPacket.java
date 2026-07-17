@@ -3,12 +3,12 @@ package io.github.limuqy.mc.hassium.network;
 import com.github.luben.zstd.ZstdCompressCtx;
 import com.github.luben.zstd.ZstdDecompressCtx;
 import io.github.limuqy.mc.hassium.Constants;
+import io.github.limuqy.mc.hassium.compat.PacketCodecCompat;
 import io.github.limuqy.mc.hassium.compat.PacketPayloadCompat;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import net.minecraft.network.Connection;
-import net.minecraft.network.ConnectionProtocol;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.network.protocol.Packet;
 import net.minecraft.network.protocol.PacketFlow;
@@ -198,21 +198,14 @@ public class HassiumAggregationPacket {
 
                 Packet<?> packet;
                 if (vanillaId != null) {
-                    // 原版包：使用 ConnectionProtocol.PLAY 解码
-                    FriendlyByteBuf pBuf = new FriendlyByteBuf(data);
+                    // 原版包：1.20.5- 用 ConnectionProtocol；1.20.5+ 用 GameProtocols StreamCodec
                     try {
-#if MC_VER < MC_1_20_2
-                        packet = ConnectionProtocol.PLAY.createPacket(
-                                PacketFlow.CLIENTBOUND, vanillaId, pBuf);
-#else
-#if MC_VER < MC_1_20_5
-                        packet = ConnectionProtocol.PLAY.codec(PacketFlow.CLIENTBOUND).createPacket(vanillaId, pBuf);
-#else
-                        // 1.20.5+: ConnectionProtocol.codec() removed
-                        Constants.LOG.error("Vanilla packet deserialization not supported on 1.20.5+");
-                        continue;
-#endif
-#endif
+                        byte[] body = new byte[data.readableBytes()];
+                        data.readBytes(body);
+                        packet = PacketCodecCompat.deserializeClientbound(
+                                vanillaId,
+                                body,
+                                PacketCodecCompat.resolveRegistryAccess(connection));
                     } catch (Exception e) {
                         Constants.LOG.error("Failed to decode vanilla packet {} (id={})", type, vanillaId, e);
                         continue;

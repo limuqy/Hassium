@@ -27,6 +27,39 @@ dependencies {
     library 'org.xerial:sqlite-jdbc:3.45.1.0'
 }
 
+// Forge 50+ / architectury-loom 开发环境 module path 冲突：
+// 1) loom#191：classpath 仅有 LWJGL natives → 服务端整段移除
+// 2) loom#308：去掉 fabric-log4j-util，避免与 terminalconsoleappender 冲突
+// 3) 去掉已合并源码的 hassium-common jar，避免与 hassium 模块重复 export
+afterEvaluate {
+    def forgeLoader = gradle.ext.has('forge_loader') ? (gradle.ext.forge_loader as String) : ''
+    def forgeMajor = forgeLoader.tokenize('.')[0]?.isInteger() ? (forgeLoader.tokenize('.')[0] as int) : 0
+    if (forgeMajor < 50) {
+        return
+    }
+    tasks.matching { it.name.startsWith('run') }.configureEach { task ->
+        if (!task.hasProperty('classpath')) {
+            return
+        }
+        boolean server = task.name.toLowerCase().contains('server')
+        def filtered = task.classpath.filter { file ->
+            def path = file.absolutePath.replace('\\', '/')
+            if (server && path.contains('/org.lwjgl/')) {
+                return false
+            }
+            if (path.contains('/fabric-log4j-util/')) {
+                return false
+            }
+            // common 源码已合并进 forge；再挂 common jar 会与 hassium 模块重复 export 包
+            if (file.name.startsWith('hassium-common-') && file.name.endsWith('.jar')) {
+                return false
+            }
+            return true
+        }
+        task.classpath = filtered
+    }
+}
+
 // zstd-jni shading
 jar {
     from({

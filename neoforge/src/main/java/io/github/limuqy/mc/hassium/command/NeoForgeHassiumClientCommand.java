@@ -11,11 +11,16 @@ import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.client.event.RegisterClientCommandsEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
-#else
+#elif MC_VER < MC_1_20_5
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.neoforge.client.event.RegisterClientCommandsEvent;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.Mod;
+#else
+import net.neoforged.api.distmarker.Dist;
+import net.neoforged.neoforge.client.event.RegisterClientCommandsEvent;
+import net.neoforged.bus.api.SubscribeEvent;
+import net.neoforged.fml.common.EventBusSubscriber;
 #endif
 
 /**
@@ -23,7 +28,11 @@ import net.neoforged.fml.common.Mod;
  * <p>
  * 仅在 Dist.CLIENT 加载，避免专用服务端解析 RegisterClientCommandsEvent。
  */
+#if MC_VER < MC_1_20_5
 @Mod.EventBusSubscriber(modid = Constants.MOD_ID, value = Dist.CLIENT)
+#else
+@EventBusSubscriber(modid = Constants.MOD_ID, value = Dist.CLIENT)
+#endif
 public class NeoForgeHassiumClientCommand {
 
     @SubscribeEvent

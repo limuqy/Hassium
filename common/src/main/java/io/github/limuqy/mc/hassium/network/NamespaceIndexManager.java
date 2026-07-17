@@ -1,5 +1,6 @@
 package io.github.limuqy.mc.hassium.network;
 
+import io.github.limuqy.mc.hassium.compat.PacketCodecCompat;
 import io.github.limuqy.mc.hassium.compat.ResourceLocationCompat;
 import it.unimi.dsi.fastutil.ints.Int2ObjectMap;
 import net.minecraft.network.ConnectionProtocol;
@@ -210,8 +211,22 @@ Identifier
             }
         }
 #else
-        // 1.20.5+: getPacketsByIds removed, skip vanilla packet initialization
-        return;
+        // 1.20.5+: 通过 GameProtocols / IdDispatchCodec 枚举 PacketType
+        for (PacketCodecCompat.PlayPacketEntry entry : PacketCodecCompat.enumeratePlayPackets(side)) {
+#if MC_VER < MC_1_21_11
+            ResourceLocation
+#else
+            Identifier
+#endif
+            id = entry.id();
+            int packetId = entry.numericId();
+            register(id.toString());
+            if (side == PacketFlow.CLIENTBOUND) {
+                vanillaIdS2C.put(id, packetId);
+            } else {
+                vanillaIdC2S.put(id, packetId);
+            }
+        }
 #endif
     }
 

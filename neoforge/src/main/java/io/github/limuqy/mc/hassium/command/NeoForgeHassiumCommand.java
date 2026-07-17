@@ -12,10 +12,14 @@ import net.minecraft.network.chat.Component;
 import net.minecraftforge.event.RegisterCommandsEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
-#else
+#elif MC_VER < MC_1_20_5
 import net.neoforged.neoforge.event.RegisterCommandsEvent;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.Mod;
+#else
+import net.neoforged.neoforge.event.RegisterCommandsEvent;
+import net.neoforged.bus.api.SubscribeEvent;
+import net.neoforged.fml.common.EventBusSubscriber;
 #endif
 
 /**
@@ -23,7 +27,11 @@ import net.neoforged.fml.common.Mod;
  * <p>
  * 客户端命令见 {@link NeoForgeHassiumClientCommand}，避免专用服务端加载 client event 类。
  */
+#if MC_VER < MC_1_20_5
 @Mod.EventBusSubscriber(modid = Constants.MOD_ID)
+#else
+@EventBusSubscriber(modid = Constants.MOD_ID)
+#endif
 public class NeoForgeHassiumCommand {
 
     @SubscribeEvent

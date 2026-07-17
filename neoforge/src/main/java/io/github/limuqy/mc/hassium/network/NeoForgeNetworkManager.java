@@ -284,19 +284,40 @@ public class NeoForgeNetworkManager implements NetworkManager {
                 ResourceLocationCompat.create(Constants.MOD_ID, "handshake_c2s")
         );
 
-        public static final StreamCodec<FriendlyByteBuf, HandshakePayload> STREAM_CODEC = StreamCodec.composite(
-                ByteBufCodecs.VAR_INT, HandshakePayload::protocolVersion,
-                ByteBufCodecs.STRING_UTF8, HandshakePayload::modVersion,
-                ByteBufCodecs.STRING_UTF8.apply(ByteBufCodecs.list()).map(
-                        list -> list.toArray(new String[0]),
-                        arr -> java.util.Arrays.asList(arr)
-                ), HandshakePayload::supportedAlgorithms,
-                ByteBufCodecs.BOOL, HandshakePayload::clientCacheSupported,
-                ByteBufCodecs.BOOL, HandshakePayload::chunkRevisionSupported,
-                ByteBufCodecs.BOOL, HandshakePayload::scheme127Supported,
-                ByteBufCodecs.BOOL, HandshakePayload::globalPacketCompressionSupported,
-                ByteBufCodecs.BOOL, HandshakePayload::compactHeaderSupported,
-                HandshakePayload::new
+        // StreamCodec.composite 最多 6 字段；握手有 8 字段，用手写编解码
+        public static final StreamCodec<FriendlyByteBuf, HandshakePayload> STREAM_CODEC = StreamCodec.of(
+                (buf, p) -> {
+                    buf.writeVarInt(p.protocolVersion());
+                    buf.writeUtf(p.modVersion());
+                    buf.writeVarInt(p.supportedAlgorithms().length);
+                    for (String alg : p.supportedAlgorithms()) {
+                        buf.writeUtf(alg);
+                    }
+                    buf.writeBoolean(p.clientCacheSupported());
+                    buf.writeBoolean(p.chunkRevisionSupported());
+                    buf.writeBoolean(p.scheme127Supported());
+                    buf.writeBoolean(p.globalPacketCompressionSupported());
+                    buf.writeBoolean(p.compactHeaderSupported());
+                },
+                buf -> {
+                    int protocolVersion = buf.readVarInt();
+                    String modVersion = buf.readUtf();
+                    int algCount = buf.readVarInt();
+                    String[] algorithms = new String[algCount];
+                    for (int i = 0; i < algCount; i++) {
+                        algorithms[i] = buf.readUtf();
+                    }
+                    return new HandshakePayload(
+                            protocolVersion,
+                            modVersion,
+                            algorithms,
+                            buf.readBoolean(),
+                            buf.readBoolean(),
+                            buf.readBoolean(),
+                            buf.readBoolean(),
+                            buf.readBoolean()
+                    );
+                }
         );
 
         @Override

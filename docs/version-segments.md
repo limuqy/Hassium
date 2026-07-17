@@ -19,7 +19,7 @@
 
 | 分界常量 | common 变因 | fabric 特有 | forge 特有 | neoforge 特有 |
 |----------|-------------|-------------|------------|---------------|
-| `MC_1_20_2` | `onDisconnect` 上移、`CustomPayload` 包路径、`createPacket` | — | SimpleChannel 移除 | forge→neoforge 包名；仍用 SimpleChannel + `PlayNetworkDirection`（非 StreamCodec） |
+| `MC_1_20_2` | `onDisconnect` 上移、`CustomPayload` 包路径、`createPacket` | — | 旧 `newSimpleChannel` 断；1.20.6+ 用 `ChannelBuilder` | forge→neoforge 包名；仍用 SimpleChannel + `PlayNetworkDirection`（非 StreamCodec） |
 | `MC_1_20_5` | `Packet.write()` 移除、`BlockEntity.load()` 移除、`getPacketsByIds` 移除 | 网络改 StreamCodec | ChunkPacket STREAM_CODEC（若构建） | Payload + StreamCodec（`RegisterPayloadHandlersEvent`） |
 | `MC_1_21_1` | `Component` → `DisconnectionDetails`；RL 构造私有化 | — | — | — |
 | `MC_1_21_2` | `ChunkSerializer` → `SerializableChunkData`、`registryOrThrow` → `lookupOrThrow` | — | — | — |
@@ -54,7 +54,7 @@ MC_1_21_11
 | 段 | 锚点（必编 / 必测） | 段内其余版本 | 进入本段后的关键变化 |
 |----|---------------------|--------------|----------------------|
 | A | **1.20.1** | — | 基准：旧网络 + 全部旧 API |
-| B | **1.20.2** | 1.20.3, 1.20.4 | CustomPayload / NeoForge 包名；Forge 网络断 |
+| B | **1.20.2** | 1.20.3, 1.20.4 | CustomPayload / NeoForge 包名；段内无 Forge builds_for |
 | C | **1.20.5** | 1.20.6 | StreamCodec；`Packet.write` 等移除（无 1.21.0 属性文件时以 1.20.6 为段尾） |
 | D | **1.21.1** | — | `DisconnectionDetails` |
 | E | **1.21.2** | 1.21.3, 1.21.4 | `SerializableChunkData`、`lookupOrThrow` |
@@ -107,19 +107,18 @@ MC_1_21_11
 | 分界 | 动作 |
 |------|------|
 | 1.20.1 | 现有实现（Fabric 已测通） |
-| 1.20.2 | CustomPayload 路径；Forge SimpleChannel 断 → 以 NeoForge 为主 |
+| 1.20.2 | CustomPayload 路径；段内无 Forge；1.20.6+ Forge 用 ChannelBuilder play() |
 | 1.20.5 | STREAM_CODEC / `type()`；聚合写包、原版包枚举等 common 能力 |
 | 其后 | 多为 common API；网络协议少变 |
 
 加载器内网络适配器允许 **≤3 个整段实现块**（`<1.20.2` / `1.20.2–1.20.4` / `≥1.20.5`），禁止每个 send/receive 再套一层碎片 `#if`。
 
-### 功能门控（段 C 完成前）
+### 功能门控（段 C 已完成）
 
-当 common 侧仍存在「≥1.20.5 跳过 `packet.write` / 包枚举」等未完成路径时：
+段 C 完成后 `NetworkCapability.isCustomChannelFullySupported()` 恒为 true；`CommonClass.init()` 不再因版本强制关闭网络。
 
-- `CommonClass.init()` 强制 `networkCompressionEnabled = false` 并打告警
-- 各加载器 `registerChannels` / 握手入口尊重 `HassiumConfigService.isNetworkCompressionEnabled()`
-- **编过 ≠ 能用**；门控解除条件见 `NetworkCapability` / `CommonClass` 注释
+- 各加载器 `registerChannels` / 握手入口仍尊重配置项 `HassiumConfigService.isNetworkCompressionEnabled()`
+- 实现细节见 `PacketCodecCompat`（StreamCodec / GameProtocols / IdDispatchCodec）
 
 运行时验证优先级：**1.20.1 → 1.20.5 → 1.21.11**；其余锚点以编译 + 短冒烟为主。
 
@@ -138,7 +137,8 @@ MC_1_21_11
 | `LevelChunkSectionCompat` | 1.21.9 | Section 构造 |
 | `CompoundTagCompat` | 1.21.5 | keys / 标量读取 |
 | `ChunkDataCompat` | 1.21.2 | Mixin 目标类说明（序列化入口） |
-| `NetworkCapability` | 1.20.5 | 自定义通道是否完整可用 |
+| `NetworkCapability` | 1.20.5 | 自定义通道是否完整可用（段 C 后恒 true） |
+| `PacketCodecCompat` | 1.20.5 | StreamCodec 聚合写包 / GameProtocols 包枚举 / Payload 提取 |
 
 ---
 

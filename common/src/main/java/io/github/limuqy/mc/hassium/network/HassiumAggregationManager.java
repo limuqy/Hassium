@@ -1,6 +1,7 @@
 package io.github.limuqy.mc.hassium.network;
 
 import io.github.limuqy.mc.hassium.Constants;
+import io.github.limuqy.mc.hassium.compat.PacketCodecCompat;
 import io.github.limuqy.mc.hassium.compat.PacketPayloadCompat;
 import net.minecraft.network.Connection;
 import net.minecraft.network.FriendlyByteBuf;
@@ -113,18 +114,15 @@ public class HassiumAggregationManager {
                 Constants.LOG.debug("Hassium: Extracted payload from CustomPayloadPacket: {} ({} bytes)",
                         type, data.length);
             } else {
-                // 原版包：write() 只写入包数据（不含包 ID）
-#if MC_VER < MC_1_20_5
-                packet.write(buf);
-                data = new byte[buf.readableBytes()];
-                buf.readBytes(data);
+                // 原版包：只写入包数据（不含包 ID）；1.20.5+ 走 StreamCodec
+                data = PacketCodecCompat.serializePacketBody(
+                        packet, PacketCodecCompat.resolveRegistryAccess(connection));
+                if (data == null) {
+                    Constants.LOG.warn("Failed to serialize vanilla packet, skipping aggregation: {}", type);
+                    return;
+                }
                 Constants.LOG.debug("Hassium: Serialized vanilla packet: {} ({} bytes)",
                         type, data.length);
-#else
-                // 1.20.5+: Packet.write() 已移除；聚合需 StreamCodec（段 C，见 NetworkCapability）
-                Constants.LOG.warn("Packet serialization not supported on 1.20.5+, skipping aggregation");
-                return;
-#endif
             }
 
             AggregatedSubPacket subPacket = new AggregatedSubPacket(type, data);

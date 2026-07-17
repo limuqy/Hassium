@@ -36,10 +36,15 @@ public class PacketTypeHelper {
         if (PacketPayloadCompat.isCustomPayloadPacket(packet)) {
             return PacketPayloadCompat.getPayloadId(packet);
         } else {
+#if MC_VER >= MC_1_20_5
+            // 1.20.5+: PacketType 自带 ResourceLocation id
+            return packet.type().id();
+#else
             // 原版包：从 IndexSyncManager 获取标识符
             IndexSyncManager indexSyncManager = IndexSyncManager.getInstance();
             NamespaceIndexManager indexManager = indexSyncManager.getServerIndexManager();
             return indexManager.getVanillaIdentifier(packet.getClass());
+#endif
         }
     }
 

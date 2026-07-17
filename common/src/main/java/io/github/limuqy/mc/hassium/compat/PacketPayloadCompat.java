@@ -71,10 +71,12 @@ public final class PacketPayloadCompat {
             return data;
         }
 #else
-        // 1.20.5+: 无 write()；本模组 RawCustomPayload 可直接取字节，其它 payload 需 StreamCodec（段 C 未完成）
-        if (packet instanceof net.minecraft.network.protocol.common.ClientboundCustomPayloadPacket cp
-                && cp.payload() instanceof RawCustomPayload raw) {
-            return raw.data();
+        // 1.20.5+: RawCustomPayload / Fabric RawPayload.data() / StreamCodec 编码剥头
+        if (packet instanceof net.minecraft.network.protocol.common.ClientboundCustomPayloadPacket cp) {
+            if (cp.payload() instanceof RawCustomPayload raw) {
+                return raw.data();
+            }
+            return PacketCodecCompat.extractCustomPayloadBytes(cp.payload(), null);
         }
 #endif
 #endif
