@@ -133,19 +133,30 @@ public class ClientChunkHandler {
      * 任务标记为 SAFE_TO_CANCEL，登出时如果解压尚未完成可安全取消。
      */
     public static void handleCompressedChunk(byte[] compressedData) {
-        DebugLogger.info(LogType.COMPRESSION, "[HANDLE_COMPRESSED] Received compressed chunk data ({} bytes)", compressedData.length);
+        // 始终打 INFO，避免仅依赖 DebugLogger 时无法确认 NeoForge 收包
+        Constants.LOG.info("[HANDLE_COMPRESSED] Received compressed chunk data ({} bytes)",
+                compressedData == null ? -1 : compressedData.length);
+        DebugLogger.info(LogType.COMPRESSION, "[HANDLE_COMPRESSED] Received compressed chunk data ({} bytes)",
+                compressedData == null ? -1 : compressedData.length);
+
+        if (compressedData == null || compressedData.length == 0) {
+            Constants.LOG.error("[HANDLE_COMPRESSED] Empty compressed payload, ignoring");
+            return;
+        }
 
         // 解码（轻量操作，无 I/O）
         ChunkCompressionHandler.CompressedChunkData compressed =
             ChunkCompressionHandler.CompressedChunkData.decode(compressedData);
 
         if (compressed == null) {
+            Constants.LOG.error("[HANDLE_COMPRESSED] Failed to decode compressed chunk data");
             DebugLogger.error("[HANDLE_COMPRESSED] Failed to decode compressed chunk data");
             return;
         }
 
-        DebugLogger.info(LogType.COMPRESSION, "[HANDLE_COMPRESSED] Decoded chunk [{}, {}] (originalSize={}, algorithm={}, compressedSize={})",
-                compressed.chunkX, compressed.chunkZ, compressed.originalSize, compressed.algorithm, compressed.compressedData.length);
+        Constants.LOG.info("[HANDLE_COMPRESSED] Decoded chunk [{}, {}] ({} -> {} bytes, algo={})",
+                compressed.chunkX, compressed.chunkZ, compressed.compressedData.length,
+                compressed.originalSize, compressed.algorithm);
 
         // 记录收到压缩区块数据
         NetworkStats.recordChunkReceived(compressed.originalSize, compressed.compressedData.length);

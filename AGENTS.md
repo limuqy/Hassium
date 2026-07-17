@@ -136,9 +136,13 @@ io.github.limuqy.mc.hassium/
 
 ## Version constraints
 
-- Target: Minecraft 1.20.1, Java 17
+- Target: Minecraft 1.20.1–1.21.11 via Manifold `#if MC_VER`
+- **Adaptation unit**: 9 effective segments × loaders in `builds_for` — see [`docs/version-segments.md`](docs/version-segments.md)
+- PowerShell: always quote `-Pmc_ver=...` as `"-Pmc_ver=1.20.1"` (otherwise `1.20.1` is truncated to `1`)
+- Mojang API diffs belong in `common/.../compat/`; do not scatter new `#if MC_VER` in business/Mixin code
+- Legal boundary constants are whitelisted in `docs/version-segments.md` (`./gradlew scanVersionBoundaries`)
 - Compression type ID `127` (vanilla's custom scheme marker)
-- Design must allow future 1.20.5+ upgrade path (don't hardcode `127` checks everywhere)
+- Design must allow future compression-scheme upgrade path (don't hardcode `127` checks everywhere)
 
 ## Skills available
 

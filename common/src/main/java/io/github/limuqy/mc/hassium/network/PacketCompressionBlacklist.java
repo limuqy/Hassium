@@ -22,7 +22,9 @@ public class PacketCompressionBlacklist {
      * 区块数据包已通过自定义通道压缩，避免双重压缩
      */
     private static final Set<String> HARDCODED_BLACKLIST = Set.of(
-            "hassium:chunk_payload_s2c"
+            "hassium:chunk_payload_s2c",
+            // Forge/NeoForge SimpleChannel 共用通道；禁止被 MixinConnection 聚合吞掉
+            "hassium:main"
     );
 
     /**

@@ -3,8 +3,6 @@ package io.github.limuqy.mc.hassium.network;
 import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.compat.ResourceLocationCompat;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
-import net.minecraft.client.Minecraft;
-import net.minecraft.network.Connection;
 import net.minecraft.network.FriendlyByteBuf;
 #if MC_VER < MC_1_21_11
 import net.minecraft.resources.ResourceLocation;
@@ -21,43 +19,19 @@ import net.minecraftforge.network.NetworkRegistry;
 import net.minecraftforge.network.simple.SimpleChannel;
 #endif
 
-import java.lang.reflect.Field;
-
 /**
- * Forge 平台网络管理器实现
+ * Forge 平台网络管理器实现。
+ * <p>
+ * 版本整段切分（见 docs/version-segments.md）：
+ * <ul>
+ *   <li>{@code MC_VER < MC_1_20_2}：SimpleChannel 完整实现</li>
+ *   <li>{@code MC_VER >= MC_1_20_2}：SimpleChannel 已移除，整段 stub（本加载器不在多数高版本 builds_for 中）</li>
+ * </ul>
  */
 public class ForgeNetworkManager implements NetworkManager {
 
     private static final Logger LOGGER = LoggerFactory.getLogger("Hassium/Network");
     private static final String PROTOCOL_VERSION = "1";
-
-    /**
-     * 通过反射获取 Connection 的 channel 字段
-     */
-    private static io.netty.channel.Channel getConnectionChannel(Connection connection) {
-        try {
-            Field channelField = Connection.class.getDeclaredField("channel");
-            channelField.setAccessible(true);
-            return (io.netty.channel.Channel) channelField.get(connection);
-        } catch (Exception e) {
-            LOGGER.error("Hassium: Failed to get channel from connection", e);
-            return null;
-        }
-    }
-
-    /**
-     * 通过反射获取 ServerPlayer 的 Connection
-     */
-    private static Connection getPlayerConnection(ServerPlayer player) {
-        try {
-            Field connectionField = player.connection.getClass().getDeclaredField("connection");
-            connectionField.setAccessible(true);
-            return (Connection) connectionField.get(player.connection);
-        } catch (Exception e) {
-            LOGGER.error("Hassium: Failed to get connection from player", e);
-            return null;
-        }
-    }
 
     // 创建网络通道
 #if MC_VER < MC_1_20_2
@@ -76,244 +50,257 @@ public class ForgeNetworkManager implements NetworkManager {
 
     @Override
     public void registerChannels() {
+        if (!HassiumConfigService.getInstance().isNetworkCompressionEnabled()) {
+            LOGGER.warn("Hassium: network.enabled=false, skipping Forge channel registration");
+            return;
+        }
         LOGGER.info("Hassium: Registering Forge network channels");
 #if MC_VER < MC_1_20_2
-        // 注册握手请求数据包
+        // 必须 setPacketHandled(true)（在 enqueueWork 外），否则 Forge 会把包交给原版
+        // S2C / C2S 必须带 NetworkDirection，避免方向校验失败（与 NeoForge 1.20.1 对齐）
+
+        // 0: 握手请求 C2S
         CHANNEL.<HandshakePacket>registerMessage(
                 packetId++,
                 HandshakePacket.class,
                 HandshakePacket::encode,
                 HandshakePacket::decode,
-                (msg, ctx) -> ctx.get().enqueueWork(() -> {
-                    ServerPlayer player = ctx.get().getSender();
-                    if (player == null) {
-                        LOGGER.error("Hassium: Received handshake from non-player");
-                        return;
-                    }
-
-                    LOGGER.info("Hassium: Received handshake from client {}, protocol: {}, globalCompression: {}, compactHeader: {}",
-                            player.getName().getString(), msg.protocolVersion(), msg.globalPacketCompressionSupported(), msg.compactHeaderSupported());
-
-                    // 启用该玩家的压缩
-                    PlayerCompressionTracker.enableCompression(player);
-
-                    // 检查是否支持全局压缩
-                    boolean serverSupportsGlobalCompression = HassiumConfigService.getInstance().isGlobalPacketCompressionEnabled();
-                    boolean useGlobalCompression = serverSupportsGlobalCompression && msg.globalPacketCompressionSupported();
-
-                    // 检查是否支持紧凑包头
-                    boolean serverSupportsCompactHeader = HassiumConfigService.getInstance().isCompactHeaderEnabled();
-                    boolean useCompactHeader = serverSupportsCompactHeader && msg.compactHeaderSupported();
-
-                    // 发送握手响应
-                    HandshakeResponsePacket response = new HandshakeResponsePacket(
-                            Constants.CURRENT_PROTOCOL_VERSION,
-                            true, // 接受
-                            useGlobalCompression,
-                            useCompactHeader
-                    );
-                    CHANNEL.sendTo(response, player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
-                    LOGGER.info("Hassium: Sent handshake response to client {}, globalCompression: {}, compactHeader: {}",
-                            player.getName().getString(), useGlobalCompression, useCompactHeader);
-
-                    // 如果协商成功，在事件循环立即切换 pipeline
-                    if (useGlobalCompression) {
-                        Connection connection = getPlayerConnection(player);
-                        if (connection != null) {
-                            io.netty.channel.Channel channel = getConnectionChannel(connection);
-                            if (channel != null) {
-                                channel.eventLoop().execute(() -> {
-                                    int threshold = HassiumConfigService.getInstance().getGlobalCompressionThreshold();
-                                    int level = HassiumConfigService.getInstance().getGlobalCompressionLevel();
-                                    ZstdNegotiationTracker.markNegotiated(channel);
-                                    ZstdPipelineSwitcher.switchToZstd(channel, threshold, level);
-                                    LOGGER.info("Hassium: Switched to ZSTD compression for player {}", player.getName().getString());
-                                });
-                            }
+                (msg, ctx) -> {
+                    ctx.get().enqueueWork(() -> {
+                        ServerPlayer player = ctx.get().getSender();
+                        if (player == null) {
+                            LOGGER.error("Hassium: Received handshake from non-player");
+                            return;
                         }
-                    }
-                })
+
+                        LOGGER.info("Hassium: Received handshake from client {}, protocol: {}, globalCompression: {}, compactHeader: {}",
+                                player.getName().getString(), msg.protocolVersion(), msg.globalPacketCompressionSupported(), msg.compactHeaderSupported());
+
+                        PlayerCompressionTracker.enableCompression(player);
+
+                        boolean serverSupportsGlobalCompression = HassiumConfigService.getInstance().isGlobalPacketCompressionEnabled();
+                        boolean useGlobalCompression = serverSupportsGlobalCompression && msg.globalPacketCompressionSupported();
+                        boolean serverSupportsCompactHeader = HassiumConfigService.getInstance().isCompactHeaderEnabled();
+                        boolean useCompactHeader = serverSupportsCompactHeader && msg.compactHeaderSupported();
+
+                        HandshakeResponsePacket response = new HandshakeResponsePacket(
+                                Constants.CURRENT_PROTOCOL_VERSION,
+                                true,
+                                useGlobalCompression,
+                                useCompactHeader
+                        );
+                        CHANNEL.sendTo(response, player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
+                        LOGGER.info("Hassium: Sent handshake response to client {}, globalCompression: {}, compactHeader: {}",
+                                player.getName().getString(), useGlobalCompression, useCompactHeader);
+
+                        // 不在此处 switchToZstd：握手后立即切管道会与仍在飞行的原版包竞态，
+                        // 且 Forge 客户端 pipeline 常找不到 decoder/encoder（装到末尾）→
+                        // AggregatedZstdDecoder: Unsupported frame parameter → 断连。
+                        // 与 NeoForge 一致：全局 ZSTD 管道切换暂不启用，区块仍走 hassium:main 自定义通道。
+                        if (useGlobalCompression) {
+                            LOGGER.info("Hassium: Global ZSTD pipeline switch deferred on Forge (custom channel only)");
+                        }
+                    });
+                    ctx.get().setPacketHandled(true);
+                },
+                java.util.Optional.of(NetworkDirection.PLAY_TO_SERVER)
         );
 
-        // 注册握手响应数据包（客户端接收）
+        // 1: 握手响应 S2C
         CHANNEL.<HandshakeResponsePacket>registerMessage(
                 packetId++,
                 HandshakeResponsePacket.class,
                 HandshakeResponsePacket::encode,
                 HandshakeResponsePacket::decode,
                 (msg, ctx) -> {
-                    LOGGER.info("Hassium: Received handshake response, accepted: {}, globalCompression: {}, compactHeader: {}",
-                            msg.accepted(), msg.globalCompressionAccepted(), msg.compactHeaderAccepted());
+                    ctx.get().enqueueWork(() -> {
+                        LOGGER.info("Hassium: Received handshake response, accepted: {}, globalCompression: {}, compactHeader: {}",
+                                msg.accepted(), msg.globalCompressionAccepted(), msg.compactHeaderAccepted());
 
-                    // 如果全局压缩被接受，立即切换 pipeline
-                    if (msg.accepted() && msg.globalCompressionAccepted()) {
-                        if (Minecraft.getInstance().getConnection() != null) {
-                            Connection connection = Minecraft.getInstance().getConnection().getConnection();
-                            if (connection != null) {
-                                io.netty.channel.Channel channel = getConnectionChannel(connection);
-                                if (channel != null) {
-                                    int threshold = HassiumConfigService.getInstance().getGlobalCompressionThreshold();
-                                    int level = HassiumConfigService.getInstance().getGlobalCompressionLevel();
-                                    ZstdNegotiationTracker.markNegotiated(channel);
-                                    ZstdPipelineSwitcher.switchToZstd(channel, threshold, level);
-                                    LOGGER.info("Hassium: Client switched to ZSTD compression");
-                                }
-                            }
+                        // 同上：Forge 暂不切换全局 ZSTD 管道（见服务端握手处理注释）
+                        if (msg.accepted() && msg.globalCompressionAccepted()) {
+                            LOGGER.info("Hassium: Global ZSTD accepted but pipeline switch deferred on Forge");
                         }
-                    }
+                    });
                     ctx.get().setPacketHandled(true);
-                }
+                },
+                java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT)
         );
 
-        // 注册压缩区块数据包
+        // 2: 压缩区块 S2C
         CHANNEL.<CompressedPayloadWrapper>registerMessage(
                 packetId++,
                 CompressedPayloadWrapper.class,
                 CompressedPayloadWrapper::encode,
                 CompressedPayloadWrapper::decode,
-                (msg, ctx) -> ctx.get().enqueueWork(() -> {
-                    try {
-                        ClientChunkHandler.handleCompressedChunk(msg.data());
-                    } catch (Exception e) {
-                        LOGGER.error("Hassium: Failed to handle compressed payload", e);
-                    }
-                })
+                (msg, ctx) -> {
+                    ctx.get().enqueueWork(() -> {
+                        try {
+                            ClientChunkHandler.handleCompressedChunk(msg.data());
+                        } catch (Exception e) {
+                            LOGGER.error("Hassium: Failed to handle compressed payload", e);
+                        }
+                    });
+                    ctx.get().setPacketHandled(true);
+                },
+                java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT)
         );
 
-        // 注册区块元数据包（服务端 -> 客户端）
+        // 3: 区块元数据 S2C
         CHANNEL.<MetadataWrapper>registerMessage(
                 packetId++,
                 MetadataWrapper.class,
                 MetadataWrapper::encode,
                 MetadataWrapper::decode,
-                (msg, ctx) -> ctx.get().enqueueWork(() -> {
-                    try {
-                        FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data()));
-                        ChunkMetadataS2CPacket packet = ChunkMetadataS2CPacket.decode(buf);
-                        ClientMetadataHandler.handleMetadataPacket(packet);
-                    } catch (Exception e) {
-                        LOGGER.error("Hassium: Failed to handle metadata packet", e);
-                    }
+                (msg, ctx) -> {
+                    ctx.get().enqueueWork(() -> {
+                        try {
+                            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data()));
+                            ChunkMetadataS2CPacket packet = ChunkMetadataS2CPacket.decode(buf);
+                            ClientMetadataHandler.handleMetadataPacket(packet);
+                        } catch (Exception e) {
+                            LOGGER.error("Hassium: Failed to handle metadata packet", e);
+                        }
+                    });
                     ctx.get().setPacketHandled(true);
-                })
+                },
+                java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT)
         );
 
-        // 注册区块数据请求包（客户端 -> 服务端）
+        // 4: 区块数据请求 C2S
         CHANNEL.<DataRequestWrapper>registerMessage(
                 packetId++,
                 DataRequestWrapper.class,
                 DataRequestWrapper::encode,
                 DataRequestWrapper::decode,
-                (msg, ctx) -> ctx.get().enqueueWork(() -> {
-                    try {
-                        ServerPlayer player = ctx.get().getSender();
-                        if (player == null) return;
+                (msg, ctx) -> {
+                    ctx.get().enqueueWork(() -> {
+                        try {
+                            ServerPlayer player = ctx.get().getSender();
+                            if (player == null) return;
 
-                        FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data()));
-                        ChunkDataRequestC2SPacket request = ChunkDataRequestC2SPacket.decode(buf);
-                        ServerChunkPushManager.getInstance().enqueueDataRequest(
-                                player, request.dimension(), request.chunks());
-                    } catch (Exception e) {
-                        LOGGER.error("Hassium: Failed to handle chunk data request", e);
-                    }
+                            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data()));
+                            ChunkDataRequestC2SPacket request = ChunkDataRequestC2SPacket.decode(buf);
+                            ServerChunkPushManager.getInstance().enqueueDataRequest(
+                                    player, request.dimension(), request.chunks());
+                        } catch (Exception e) {
+                            LOGGER.error("Hassium: Failed to handle chunk data request", e);
+                        }
+                    });
                     ctx.get().setPacketHandled(true);
-                })
+                },
+                java.util.Optional.of(NetworkDirection.PLAY_TO_SERVER)
         );
 
-        // 注册区块哈希广播包（阶段一，服务端 -> 客户端）
+        // 5: 区块哈希 S2C
         CHANNEL.<ChunkHashWrapper>registerMessage(
                 packetId++,
                 ChunkHashWrapper.class,
                 ChunkHashWrapper::encode,
                 ChunkHashWrapper::decode,
-                (msg, ctx) -> ctx.get().enqueueWork(() -> {
-                    try {
-                        FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data()));
-                        ChunkHashS2CPacket packet = ChunkHashS2CPacket.decode(buf);
-                        ClientMetadataHandler.handleChunkHashPacket(packet);
-                    } catch (Exception e) {
-                        LOGGER.error("Hassium: Failed to handle chunk hash packet", e);
-                    }
+                (msg, ctx) -> {
+                    ctx.get().enqueueWork(() -> {
+                        try {
+                            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data()));
+                            ChunkHashS2CPacket packet = ChunkHashS2CPacket.decode(buf);
+                            ClientMetadataHandler.handleChunkHashPacket(packet);
+                        } catch (Exception e) {
+                            LOGGER.error("Hassium: Failed to handle chunk hash packet", e);
+                        }
+                    });
                     ctx.get().setPacketHandled(true);
-                })
+                },
+                java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT)
         );
 
-        // 注册 section 哈希请求包（阶段二，客户端 -> 服务端）
+        // 6: section 哈希请求 C2S
         CHANNEL.<SectionHashRequestWrapper>registerMessage(
                 packetId++,
                 SectionHashRequestWrapper.class,
                 SectionHashRequestWrapper::encode,
                 SectionHashRequestWrapper::decode,
-                (msg, ctx) -> ctx.get().enqueueWork(() -> {
-                    try {
-                        ServerPlayer player = ctx.get().getSender();
-                        if (player == null) return;
+                (msg, ctx) -> {
+                    ctx.get().enqueueWork(() -> {
+                        try {
+                            ServerPlayer player = ctx.get().getSender();
+                            if (player == null) return;
 
-                        FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data()));
-                        SectionHashRequestC2SPacket request = SectionHashRequestC2SPacket.decode(buf);
-                        ServerChunkPushManager.getInstance().handleSectionHashRequest(player, request);
-                    } catch (Exception e) {
-                        LOGGER.error("Hassium: Failed to handle section hash request", e);
-                    }
+                            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data()));
+                            SectionHashRequestC2SPacket request = SectionHashRequestC2SPacket.decode(buf);
+                            ServerChunkPushManager.getInstance().handleSectionHashRequest(player, request);
+                        } catch (Exception e) {
+                            LOGGER.error("Hassium: Failed to handle section hash request", e);
+                        }
+                    });
                     ctx.get().setPacketHandled(true);
-                })
+                },
+                java.util.Optional.of(NetworkDirection.PLAY_TO_SERVER)
         );
 
-        // 注册 section delta 响应包（阶段二，服务端 -> 客户端）
+        // 7: section delta S2C
         CHANNEL.<SectionDeltaWrapper>registerMessage(
                 packetId++,
                 SectionDeltaWrapper.class,
                 SectionDeltaWrapper::encode,
                 SectionDeltaWrapper::decode,
-                (msg, ctx) -> ctx.get().enqueueWork(() -> {
-                    try {
-                        FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data()));
-                        SectionDeltaS2CPacket packet = SectionDeltaS2CPacket.decode(buf);
-                        ClientMetadataHandler.handleSectionDeltaPacket(packet);
-                    } catch (Exception e) {
-                        LOGGER.error("Hassium: Failed to handle section delta packet", e);
-                    }
+                (msg, ctx) -> {
+                    ctx.get().enqueueWork(() -> {
+                        try {
+                            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data()));
+                            SectionDeltaS2CPacket packet = SectionDeltaS2CPacket.decode(buf);
+                            ClientMetadataHandler.handleSectionDeltaPacket(packet);
+                        } catch (Exception e) {
+                            LOGGER.error("Hassium: Failed to handle section delta packet", e);
+                        }
+                    });
                     ctx.get().setPacketHandled(true);
-                })
+                },
+                java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT)
         );
 
-        // 注册 blockEntity 数据请求包（客户端 -> 服务端）
+        // 8: blockEntity 请求 C2S
         CHANNEL.<BlockEntityRequestWrapper>registerMessage(
                 packetId++,
                 BlockEntityRequestWrapper.class,
                 BlockEntityRequestWrapper::encode,
                 BlockEntityRequestWrapper::decode,
-                (msg, ctx) -> ctx.get().enqueueWork(() -> {
-                    try {
-                        ServerPlayer player = ctx.get().getSender();
-                        if (player != null) {
-                            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data()));
-                            BlockEntityRequestC2SPacket request = BlockEntityRequestC2SPacket.decode(buf);
-                            ServerChunkPushManager.getInstance().handleBlockEntityRequest(player, request);
+                (msg, ctx) -> {
+                    ctx.get().enqueueWork(() -> {
+                        try {
+                            ServerPlayer player = ctx.get().getSender();
+                            if (player != null) {
+                                FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data()));
+                                BlockEntityRequestC2SPacket request = BlockEntityRequestC2SPacket.decode(buf);
+                                ServerChunkPushManager.getInstance().handleBlockEntityRequest(player, request);
+                            }
+                        } catch (Exception e) {
+                            LOGGER.error("Hassium: Failed to handle block entity request", e);
                         }
-                    } catch (Exception e) {
-                        LOGGER.error("Hassium: Failed to handle block entity request", e);
-                    }
+                    });
                     ctx.get().setPacketHandled(true);
-                })
+                },
+                java.util.Optional.of(NetworkDirection.PLAY_TO_SERVER)
         );
 
-        // 注册 blockEntity 数据响应包（服务端 -> 客户端）
+        // 9: blockEntity 数据 S2C
         CHANNEL.<BlockEntityDataWrapper>registerMessage(
                 packetId++,
                 BlockEntityDataWrapper.class,
                 BlockEntityDataWrapper::encode,
                 BlockEntityDataWrapper::decode,
-                (msg, ctx) -> ctx.get().enqueueWork(() -> {
-                    try {
-                        FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data()));
-                        BlockEntityDataS2CPacket packet = BlockEntityDataS2CPacket.decode(buf);
-                        ClientMetadataHandler.handleBlockEntityDataPacket(packet);
-                    } catch (Exception e) {
-                        LOGGER.error("Hassium: Failed to handle block entity data packet", e);
-                    }
+                (msg, ctx) -> {
+                    ctx.get().enqueueWork(() -> {
+                        try {
+                            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data()));
+                            BlockEntityDataS2CPacket packet = BlockEntityDataS2CPacket.decode(buf);
+                            ClientMetadataHandler.handleBlockEntityDataPacket(packet);
+                        } catch (Exception e) {
+                            LOGGER.error("Hassium: Failed to handle block entity data packet", e);
+                        }
+                    });
                     ctx.get().setPacketHandled(true);
-                })
+                },
+                java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT)
         );
 
         LOGGER.info("Hassium: Registered {} network packets", packetId);

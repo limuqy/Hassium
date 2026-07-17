@@ -1,5 +1,6 @@
 package io.github.limuqy.mc.hassium;
 
+import io.github.limuqy.mc.hassium.network.ChunkSender;
 import io.github.limuqy.mc.hassium.network.ForgeNetworkManager;
 import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.fml.event.lifecycle.FMLCommonSetupEvent;
@@ -18,6 +19,10 @@ public class HassiumMod {
 
     public HassiumMod() {
         CommonClass.init();
+
+        // 与 Fabric/NeoForge 对齐：未注册则 ServerChunkPushManager 无法下发压缩区块
+        ChunkSender.setInstance(ForgeNetworkManager::sendCompressedChunk);
+        LOGGER.info("Hassium: ChunkSender registered for Forge");
     }
 
     @Mod.EventBusSubscriber(modid = Constants.MOD_ID, bus = Mod.EventBusSubscriber.Bus.MOD)

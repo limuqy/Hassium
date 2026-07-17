@@ -204,6 +204,8 @@ io.github.limuqy.mc.hassium
 
 ## 文档
 
+- `docs/version-segments.md`：**多版本适配真相源**（9 段锚点、分界 checklist、编译矩阵）
+- `docs/version-rollout.md`：A→I 推进顺序与段 C 网络门控解除条件
 - `docs/hassium-requirements.md`：功能需求和可行性分析
 - `docs/hassium-development.md`：详细开发文档和架构设计
 - `docs/chunk-cache-refactor.md`：区块缓存系统改造技术文档

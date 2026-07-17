@@ -32,8 +32,14 @@ import net.neoforged.neoforge.network.handling.IPayloadContext;
 import java.lang.reflect.Field;
 
 /**
- * NeoForge 平台网络管理器实现
- * 支持 1.20.1-1.21.11 全版本
+ * NeoForge 平台网络管理器实现。
+ * <p>
+ * 版本整段切分（见 docs/version-segments.md）：
+ * <ul>
+ *   <li>{@code MC_VER < MC_1_20_2}：SimpleChannel（1.20.1 仍用 forge 包名）</li>
+ *   <li>{@code MC_VER >= MC_1_20_2}：Payload + StreamCodec</li>
+ * </ul>
+ * common 聚合能力由 {@link io.github.limuqy.mc.hassium.compat.NetworkCapability} 门控。
  */
 public class NeoForgeNetworkManager implements NetworkManager {
 
@@ -496,6 +502,10 @@ public class NeoForgeNetworkManager implements NetworkManager {
 
     @Override
     public void registerChannels() {
+        if (!HassiumConfigService.getInstance().isNetworkCompressionEnabled()) {
+            LOGGER.warn("Hassium: network.enabled=false, skipping NeoForge channel registration");
+            return;
+        }
         LOGGER.info("Hassium: NeoForge network channels will be registered via event");
 #if MC_VER < MC_1_20_2
         registerSimpleChannelPackets();
@@ -514,7 +524,10 @@ public class NeoForgeNetworkManager implements NetworkManager {
         packetsRegistered = true;
         LOGGER.info("Hassium: Registering SimpleChannel packets for 1.20.1");
 
-        // 注册握手请求
+        // 必须 setPacketHandled(true)，否则 Forge 会把包交给原版 → Unknown custom packet identifier: hassium:main
+        // S2C / C2S 必须带 NetworkDirection，避免方向校验失败
+
+        // 0: 握手请求 C2S
         CHANNEL.registerMessage(packetId++, HandshakeWrapper.class,
                 HandshakeWrapper::encode, HandshakeWrapper::decode,
                 (msg, ctx) -> {
@@ -523,31 +536,37 @@ public class NeoForgeNetworkManager implements NetworkManager {
                         if (player == null) return;
                         handleHandshake1201(player, msg);
                     });
-                });
+                    ctx.get().setPacketHandled(true);
+                },
+                java.util.Optional.of(NetworkDirection.PLAY_TO_SERVER));
 
-        // 注册握手响应
+        // 1: 握手响应 S2C
         CHANNEL.registerMessage(packetId++, HandshakeResponseWrapper.class,
                 HandshakeResponseWrapper::encode, HandshakeResponseWrapper::decode,
                 (msg, ctx) -> {
-                    ctx.get().enqueueWork(() -> {
-                        handleHandshakeResponse1201(msg);
-                    });
-                });
+                    ctx.get().enqueueWork(() -> handleHandshakeResponse1201(msg));
+                    ctx.get().setPacketHandled(true);
+                },
+                java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT));
 
-        // 注册压缩区块
+        // 2: 压缩区块 S2C
         CHANNEL.registerMessage(packetId++, CompressedChunkWrapper.class,
                 CompressedChunkWrapper::encode, CompressedChunkWrapper::decode,
                 (msg, ctx) -> {
                     ctx.get().enqueueWork(() -> {
                         try {
+                            LOGGER.info("[CLIENT] Received CompressedChunkWrapper ({} bytes)",
+                                    msg.data() == null ? -1 : msg.data().length);
                             ClientChunkHandler.handleCompressedChunk(msg.data());
                         } catch (Exception e) {
                             LOGGER.error("[CLIENT] Failed to handle compressed chunk", e);
                         }
                     });
-                });
+                    ctx.get().setPacketHandled(true);
+                },
+                java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT));
 
-        // 注册区块元数据
+        // 3: 区块元数据 S2C
         CHANNEL.registerMessage(packetId++, ChunkMetadataWrapper.class,
                 ChunkMetadataWrapper::encode, ChunkMetadataWrapper::decode,
                 (msg, ctx) -> {
@@ -560,9 +579,11 @@ public class NeoForgeNetworkManager implements NetworkManager {
                             LOGGER.error("[CLIENT] Failed to handle chunk metadata", e);
                         }
                     });
-                });
+                    ctx.get().setPacketHandled(true);
+                },
+                java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT));
 
-        // 注册区块数据请求
+        // 4: 区块数据请求 C2S
         CHANNEL.registerMessage(packetId++, ChunkDataRequestWrapper.class,
                 ChunkDataRequestWrapper::encode, ChunkDataRequestWrapper::decode,
                 (msg, ctx) -> {
@@ -577,9 +598,11 @@ public class NeoForgeNetworkManager implements NetworkManager {
                             LOGGER.error("[SERVER] Failed to handle chunk data request", e);
                         }
                     });
-                });
+                    ctx.get().setPacketHandled(true);
+                },
+                java.util.Optional.of(NetworkDirection.PLAY_TO_SERVER));
 
-        // 注册区块哈希
+        // 5: 区块哈希 S2C
         CHANNEL.registerMessage(packetId++, ChunkHashWrapper.class,
                 ChunkHashWrapper::encode, ChunkHashWrapper::decode,
                 (msg, ctx) -> {
@@ -592,9 +615,11 @@ public class NeoForgeNetworkManager implements NetworkManager {
                             LOGGER.error("[CLIENT] Failed to handle chunk hash", e);
                         }
                     });
-                });
+                    ctx.get().setPacketHandled(true);
+                },
+                java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT));
 
-        // 注册 Section 哈希请求
+        // 6: Section 哈希请求 C2S
         CHANNEL.registerMessage(packetId++, SectionHashRequestWrapper.class,
                 SectionHashRequestWrapper::encode, SectionHashRequestWrapper::decode,
                 (msg, ctx) -> {
@@ -609,9 +634,11 @@ public class NeoForgeNetworkManager implements NetworkManager {
                             LOGGER.error("[SERVER] Failed to handle section hash request", e);
                         }
                     });
-                });
+                    ctx.get().setPacketHandled(true);
+                },
+                java.util.Optional.of(NetworkDirection.PLAY_TO_SERVER));
 
-        // 注册 Section Delta
+        // 7: Section Delta S2C
         CHANNEL.registerMessage(packetId++, SectionDeltaWrapper.class,
                 SectionDeltaWrapper::encode, SectionDeltaWrapper::decode,
                 (msg, ctx) -> {
@@ -624,9 +651,11 @@ public class NeoForgeNetworkManager implements NetworkManager {
                             LOGGER.error("[CLIENT] Failed to handle section delta", e);
                         }
                     });
-                });
+                    ctx.get().setPacketHandled(true);
+                },
+                java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT));
 
-        // 注册 BlockEntity 请求
+        // 8: BlockEntity 请求 C2S
         CHANNEL.registerMessage(packetId++, BlockEntityRequestWrapper.class,
                 BlockEntityRequestWrapper::encode, BlockEntityRequestWrapper::decode,
                 (msg, ctx) -> {
@@ -641,9 +670,11 @@ public class NeoForgeNetworkManager implements NetworkManager {
                             LOGGER.error("[SERVER] Failed to handle block entity request", e);
                         }
                     });
-                });
+                    ctx.get().setPacketHandled(true);
+                },
+                java.util.Optional.of(NetworkDirection.PLAY_TO_SERVER));
 
-        // 注册 BlockEntity 数据
+        // 9: BlockEntity 数据 S2C
         CHANNEL.registerMessage(packetId++, BlockEntityDataWrapper.class,
                 BlockEntityDataWrapper::encode, BlockEntityDataWrapper::decode,
                 (msg, ctx) -> {
@@ -656,7 +687,9 @@ public class NeoForgeNetworkManager implements NetworkManager {
                             LOGGER.error("[CLIENT] Failed to handle block entity data", e);
                         }
                     });
-                });
+                    ctx.get().setPacketHandled(true);
+                },
+                java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT));
 
         LOGGER.info("Hassium: Registered {} SimpleChannel packets", packetId);
     }
@@ -691,6 +724,10 @@ public class NeoForgeNetworkManager implements NetworkManager {
      */
     @SubscribeEvent
     public static void registerPayloads(RegisterPayloadHandlersEvent event) {
+        if (!HassiumConfigService.getInstance().isNetworkCompressionEnabled()) {
+            LOGGER.warn("Hassium: network.enabled=false, skipping NeoForge Payload registration");
+            return;
+        }
         LOGGER.info("Hassium: Registering NeoForge Payload handlers");
 
         var registrar = event.registrar(PROTOCOL_VERSION);

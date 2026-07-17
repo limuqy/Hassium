@@ -121,8 +121,8 @@ public class HassiumAggregationManager {
                 Constants.LOG.debug("Hassium: Serialized vanilla packet: {} ({} bytes)",
                         type, data.length);
 #else
-                // 1.20.6+: Packet.write() removed, aggregation not supported
-                Constants.LOG.warn("Packet serialization not supported on 1.20.6+, skipping aggregation");
+                // 1.20.5+: Packet.write() 已移除；聚合需 StreamCodec（段 C，见 NetworkCapability）
+                Constants.LOG.warn("Packet serialization not supported on 1.20.5+, skipping aggregation");
                 return;
 #endif
             }

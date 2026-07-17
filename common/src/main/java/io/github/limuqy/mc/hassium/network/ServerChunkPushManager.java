@@ -5,6 +5,7 @@ import io.github.limuqy.mc.hassium.cache.ChunkContentHashUtil;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.metrics.NetworkStats;
 import io.github.limuqy.mc.hassium.platform.Services;
+import io.github.limuqy.mc.hassium.compat.PlayerCompat;
 import io.github.limuqy.mc.hassium.compat.RegistryCompat;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Registry;
@@ -203,13 +204,9 @@ public class ServerChunkPushManager {
     public void submitMetadataTask(List<ServerPlayer> players, ChunkPos pos,
                                    ClientboundLevelChunkWithLightPacket packet, String dimension) {
         ensureInitialized();
-#if MC_VER < MC_1_21_6
-        final int sectionCount = players.get(0).serverLevel().getSectionsCount();
-        final RegistryAccess registryAccess = players.get(0).serverLevel().registryAccess();
-#else
-        final int sectionCount = players.get(0).level().getSectionsCount();
-        final RegistryAccess registryAccess = players.get(0).level().registryAccess();
-#endif
+        final ServerLevel firstLevel = PlayerCompat.getServerLevel(players.get(0));
+        final int sectionCount = firstLevel.getSectionsCount();
+        final RegistryAccess registryAccess = firstLevel.registryAccess();
         pushPool.submit(() -> {
             try {
                 // 从已序列化的 packet 数据计算 section 哈希（线程安全，无需读取世界）
@@ -243,13 +240,9 @@ public class ServerChunkPushManager {
     public void submitMetadataTask(ServerPlayer player, ChunkPos pos,
                                    Packet<?> chunkPacket, String dimension) {
         ensureInitialized();
-#if MC_VER < MC_1_21_6
-        final int sectionCount = player.serverLevel().getSectionsCount();
-        final RegistryAccess registryAccess = player.serverLevel().registryAccess();
-#else
-        final int sectionCount = player.level().getSectionsCount();
-        final RegistryAccess registryAccess = player.level().registryAccess();
-#endif
+        final ServerLevel playerLevel = PlayerCompat.getServerLevel(player);
+        final int sectionCount = playerLevel.getSectionsCount();
+        final RegistryAccess registryAccess = playerLevel.registryAccess();
         pushPool.submit(() -> {
             try {
                 Map<Integer, Long> sectionHashes;
@@ -265,11 +258,7 @@ public class ServerChunkPushManager {
                     }
                 } else {
                     // 回退：从世界读取（非标准 packet 类型）
-#if MC_VER < MC_1_21_6
-                    ServerLevel level = player.serverLevel();
-#else
-                    ServerLevel level = player.level();
-#endif
+                    ServerLevel level = PlayerCompat.getServerLevel(player);
                     LevelChunk chunk = level.getChunk(pos.x, pos.z);
                     sectionHashes = ChunkContentHashUtil.computeSectionHashes(chunk);
                     sectionBitmap = computeSectionBitmap(chunk);
@@ -370,13 +359,8 @@ public class ServerChunkPushManager {
     public void handleSectionHashRequest(ServerPlayer player, SectionHashRequestC2SPacket request) {
         if (!player.isAlive() || player.hasDisconnected()) { return; }
 
-#if MC_VER < MC_1_21_6
-        ServerLevel level = player.serverLevel();
-        int viewDistance = player.server.getPlayerList().getViewDistance();
-#else
-        ServerLevel level = player.level();
-        int viewDistance = player.level().getServer().getPlayerList().getViewDistance();
-#endif
+        ServerLevel level = PlayerCompat.getServerLevel(player);
+        int viewDistance = PlayerCompat.getViewDistance(player);
         ChunkPos playerChunkPos = player.chunkPosition();
         List<SectionDeltaS2CPacket.DeltaEntry> deltas = new ArrayList<>();
 
@@ -448,13 +432,8 @@ public class ServerChunkPushManager {
     public void handleBlockEntityRequest(ServerPlayer player, BlockEntityRequestC2SPacket request) {
         if (!player.isAlive() || player.hasDisconnected()) { return; }
 
-#if MC_VER < MC_1_21_6
-        ServerLevel level = player.serverLevel();
-        int viewDistance = player.server.getPlayerList().getViewDistance();
-#else
-        ServerLevel level = player.level();
-        int viewDistance = player.level().getServer().getPlayerList().getViewDistance();
-#endif
+        ServerLevel level = PlayerCompat.getServerLevel(player);
+        int viewDistance = PlayerCompat.getViewDistance(player);
         ChunkPos playerChunkPos = player.chunkPosition();
         List<BlockEntityDataS2CPacket.ChunkBlockEntities> entries = new ArrayList<>();
 
@@ -630,14 +609,19 @@ public class ServerChunkPushManager {
             return;
         }
 
-#if MC_VER < MC_1_21_6
-        ServerLevel level = player.serverLevel();
-#else
-        ServerLevel level = player.level();
-#endif
+        // 读区块 / 序列化 / 发包必须在服务端主线程（否则 ThreadingDetector 或 SimpleChannel 异常）
+        net.minecraft.server.MinecraftServer server = player.getServer();
+        if (server != null && !server.isSameThread()) {
+            server.execute(() -> processPlayerQueue(player, dimension));
+            return;
+        }
+
+        ServerLevel level = PlayerCompat.getServerLevel(player);
         ChunkSender sender = ChunkSender.getInstance();
         if (sender == null) {
-            Constants.LOG.error("[PROCESS_QUEUE] ChunkSender not initialized, cannot send chunk data");
+            Constants.LOG.error("[PROCESS_QUEUE] ChunkSender not initialized, cannot send chunk data "
+                    + "(loader must call ChunkSender.setInstance in mod init)");
+            // 不继续调度，避免空转刷屏；队列保留，待下次 enqueue 时再试
             return;
         }
 

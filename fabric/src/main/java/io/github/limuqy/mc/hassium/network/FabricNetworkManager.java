@@ -20,7 +20,14 @@ import org.slf4j.LoggerFactory;
 import java.lang.reflect.Field;
 
 /**
- * Fabric 平台网络管理器实现
+ * Fabric 平台网络管理器实现。
+ * <p>
+ * 版本整段切分（见 docs/version-segments.md）：
+ * <ul>
+ *   <li>{@code MC_VER < MC_1_20_5}：Identifier + FriendlyByteBuf 收发</li>
+ *   <li>{@code MC_VER >= MC_1_20_5}：CustomPacketPayload + StreamCodec（{@link FabricPayloadRegistry}）</li>
+ * </ul>
+ * 禁止在每个 send/receive 再引入碎片分界；common 侧聚合能力由 {@link io.github.limuqy.mc.hassium.compat.NetworkCapability} 门控。
  */
 public class FabricNetworkManager implements NetworkManager {
 
@@ -166,6 +173,10 @@ INDEX_SYNC_S2C = ResourceLocationCompat.create(Constants.MOD_ID, "index_sync_s2c
 
     @Override
     public void registerChannels() {
+        if (!HassiumConfigService.getInstance().isNetworkCompressionEnabled()) {
+            LOGGER.warn("Hassium: network.enabled=false, skipping Fabric channel registration");
+            return;
+        }
         LOGGER.info("Hassium: Registering Fabric network channels");
 #if MC_VER >= MC_1_20_5
         FabricPayloadRegistry.registerAll();
@@ -206,6 +217,10 @@ INDEX_SYNC_S2C = ResourceLocationCompat.create(Constants.MOD_ID, "index_sync_s2c
      * 注册客户端网络通道
      */
     public void registerClientChannels() {
+        if (!HassiumConfigService.getInstance().isNetworkCompressionEnabled()) {
+            LOGGER.warn("Hassium: network.enabled=false, skipping Fabric client channel registration");
+            return;
+        }
         // 注册客户端接收压缩区块数据
 #if MC_VER < MC_1_20_5
         ClientPlayNetworking.registerGlobalReceiver(CHUNK_PAYLOAD_S2C, (client, handler, buf, responseSender) -> {

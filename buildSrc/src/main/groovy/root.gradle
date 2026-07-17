@@ -16,3 +16,64 @@ def writePreprocessorDefinitions() {
     new File(rootDir, "build.properties").text = sb.toString()
 }
 writePreprocessorDefinitions()
+
+// 合法 #if 分界（与 docs/version-segments.md 同步）
+def ALLOWED_MC_BOUNDARIES = [
+        'MC_1_20_1', 'MC_1_20_2', 'MC_1_20_5',
+        'MC_1_21_1', 'MC_1_21_2', 'MC_1_21_5', 'MC_1_21_6',
+        'MC_1_21_9', 'MC_1_21_11'
+] as Set
+
+tasks.register('scanVersionBoundaries') {
+    group = 'verification'
+    description = 'Reject #if MC_1_*_* tokens outside docs/version-segments.md whitelist'
+    doLast {
+        def pattern = ~/MC_1_\d+_\d+/
+        def illegal = []
+        ['common', 'fabric', 'forge', 'neoforge'].each { mod ->
+            def dir = file(mod)
+            if (!dir.exists()) return
+            fileTree(dir: dir, include: '**/*.java').each { f ->
+                def rel = rootProject.relativePath(f)
+                f.eachLine { line, idx ->
+                    def m = pattern.matcher(line)
+                    while (m.find()) {
+                        def token = m.group()
+                        if (!ALLOWED_MC_BOUNDARIES.contains(token)) {
+                            illegal << "${rel}:${idx + 1}: ${token}"
+                        }
+                    }
+                }
+            }
+        }
+        if (!illegal.isEmpty()) {
+            throw new GradleException(
+                    "Illegal version boundaries (see docs/version-segments.md):\n  "
+                            + illegal.join('\n  '))
+        }
+        logger.lifecycle('scanVersionBoundaries: OK')
+    }
+}
+
+tasks.register('compileAnchors') {
+    group = 'verification'
+    description = 'Compile all 9 anchor MC versions × builds_for (invokes scripts/compile-anchors.*)'
+    doLast {
+        def isWindows = System.getProperty('os.name').toLowerCase().contains('windows')
+        def script = isWindows
+                ? file('scripts/compile-anchors.ps1')
+                : file('scripts/compile-anchors.sh')
+        if (!script.exists()) {
+            throw new GradleException("Missing ${script}")
+        }
+        def pb = isWindows
+                ? new ProcessBuilder('powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script.absolutePath)
+                : new ProcessBuilder('bash', script.absolutePath)
+        pb.directory(rootDir)
+        pb.inheritIO()
+        def code = pb.start().waitFor()
+        if (code != 0) {
+            throw new GradleException("compileAnchors failed with exit code ${code}")
+        }
+    }
+}

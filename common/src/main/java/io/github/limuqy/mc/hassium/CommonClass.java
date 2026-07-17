@@ -1,6 +1,8 @@
 package io.github.limuqy.mc.hassium;
 
 import io.github.limuqy.mc.hassium.compression.HassiumCompression;
+import io.github.limuqy.mc.hassium.compat.NetworkCapability;
+import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.metrics.NetworkStats;
 import io.github.limuqy.mc.hassium.platform.Services;
 
@@ -41,8 +43,7 @@ public class CommonClass {
 
         // 设置配置目录并加载配置
         try {
-            io.github.limuqy.mc.hassium.config.HassiumConfigService configService =
-                io.github.limuqy.mc.hassium.config.HassiumConfigService.getInstance();
+            HassiumConfigService configService = HassiumConfigService.getInstance();
             // 配置目录：config/hassium/
             Path configDir = Services.PLATFORM.getConfigDirectory().resolve(Constants.MOD_ID);
             configService.setConfigDir(configDir);
@@ -51,6 +52,12 @@ public class CommonClass {
 
             // 同步指标开关到 NetworkStats
             NetworkStats.setEnabled(configService.isMetricsEnabled());
+
+            // 段 C 完成前：高版本自定义通道未完整可用时强制关闭网络（编过 ≠ 能用）
+            if (!NetworkCapability.isCustomChannelFullySupported()) {
+                configService.setNetworkCompressionEnabled(false);
+                Constants.LOG.warn(NetworkCapability.unsupportedReason());
+            }
         } catch (Exception e) {
             Constants.LOG.error("Failed to load configuration", e);
         }

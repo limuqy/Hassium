@@ -2,13 +2,13 @@ package io.github.limuqy.mc.hassium.cache;
 
 import com.google.common.hash.Hashing;
 import io.github.limuqy.mc.hassium.Constants;
-import io.github.limuqy.mc.hassium.compat.RegistryCompat;
-import net.minecraft.core.RegistryAccess;
+import io.github.limuqy.mc.hassium.compat.CompoundTagCompat;
+import io.github.limuqy.mc.hassium.compat.LevelChunkSectionCompat;
+import net.jpountz.xxhash.StreamingXXHash64;
 import net.jpountz.xxhash.XXHash64;
 import net.jpountz.xxhash.XXHashFactory;
-import net.jpountz.xxhash.StreamingXXHash64;
 import net.minecraft.core.BlockPos;
-import net.minecraft.core.Registry;
+import net.minecraft.core.RegistryAccess;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.nbt.ByteArrayTag;
 import net.minecraft.nbt.ByteTag;
@@ -31,13 +31,9 @@ import net.minecraft.resources.ResourceLocation;
 #else
 import net.minecraft.resources.Identifier;
 #endif
-import net.minecraft.world.level.biome.Biome;
 import net.minecraft.world.level.block.entity.BlockEntityType;
 import net.minecraft.world.level.chunk.LevelChunk;
 import net.minecraft.world.level.chunk.LevelChunkSection;
-#if MC_VER >= MC_1_21_9
-import net.minecraft.world.level.chunk.PalettedContainerFactory;
-#endif
 import net.minecraft.world.level.lighting.LevelLightEngine;
 
 import io.netty.buffer.Unpooled;
@@ -309,7 +305,7 @@ public final class ChunkContentHashUtil {
         try {
             // 只写入 sections 数据，不写入 blockEntity
             out.write(sections);
-#if MC_VER <= MC_1_21_4
+#if MC_VER < MC_1_21_5
             writeNbt(out, chunkData.getHeightmaps());
 #else
             CompoundTag heightmapTag = new CompoundTag();
@@ -369,12 +365,7 @@ public final class ChunkContentHashUtil {
         Map<Integer, Long> hashes = new HashMap<>();
         FriendlyByteBuf buf = new FriendlyByteBuf(Unpooled.wrappedBuffer(allData));
         try {
-#if MC_VER < MC_1_21_9
-            Registry<Biome> biomeRegistry = RegistryCompat.getBiomeRegistry(registryAccess);
-            LevelChunkSection scratch = new LevelChunkSection(biomeRegistry);
-#else
-            LevelChunkSection scratch = new LevelChunkSection(PalettedContainerFactory.create(registryAccess));
-#endif
+            LevelChunkSection scratch = LevelChunkSectionCompat.create(registryAccess);
             for (int i = 0; i < sectionCount && buf.readableBytes() > 0; i++) {
                 int start = buf.readerIndex();
                 scratch.read(buf);
@@ -400,12 +391,7 @@ public final class ChunkContentHashUtil {
      * 使用原版 read，避免手动解析 PalettedContainer。
      */
     public static void skipOneSection(FriendlyByteBuf buf, RegistryAccess registryAccess) {
-#if MC_VER < MC_1_21_9
-        Registry<Biome> biomeRegistry = RegistryCompat.getBiomeRegistry(registryAccess);
-        new LevelChunkSection(biomeRegistry).read(buf);
-#else
-        new LevelChunkSection(PalettedContainerFactory.create(registryAccess)).read(buf);
-#endif
+        LevelChunkSectionCompat.create(registryAccess).read(buf);
     }
 
     /**
@@ -420,12 +406,7 @@ public final class ChunkContentHashUtil {
         List<int[]> ranges = new ArrayList<>(sectionCount);
         FriendlyByteBuf buf = new FriendlyByteBuf(Unpooled.wrappedBuffer(sectionsBytes));
         try {
-#if MC_VER < MC_1_21_9
-            Registry<Biome> biomeRegistry = RegistryCompat.getBiomeRegistry(registryAccess);
-            LevelChunkSection scratch = new LevelChunkSection(biomeRegistry);
-#else
-            LevelChunkSection scratch = new LevelChunkSection(PalettedContainerFactory.create(registryAccess));
-#endif
+            LevelChunkSection scratch = LevelChunkSectionCompat.create(registryAccess);
             for (int i = 0; i < sectionCount; i++) {
                 int start = buf.readerIndex();
                 scratch.read(buf);
@@ -460,11 +441,7 @@ public final class ChunkContentHashUtil {
         }
         out.write(element.getId());
         if (element instanceof CompoundTag c) {
-#if MC_VER < MC_1_21_5
-            List<String> keys = new ArrayList<>(c.getAllKeys());
-#else
-            List<String> keys = new ArrayList<>(c.keySet());
-#endif
+            List<String> keys = new ArrayList<>(CompoundTagCompat.getKeys(c));
             Collections.sort(keys);
             writeInt(out, keys.size());
             for (String key : keys) {
@@ -477,47 +454,19 @@ public final class ChunkContentHashUtil {
                 writeNbt(out, e);
             }
         } else if (element instanceof ByteTag b) {
-#if MC_VER < MC_1_21_5
-            out.write(b.getAsByte());
-#else
-            out.write(b.byteValue());
-#endif
+            out.write(CompoundTagCompat.getByte(b));
         } else if (element instanceof ShortTag s) {
-#if MC_VER < MC_1_21_5
-            writeShort(out, s.getAsShort());
-#else
-            writeShort(out, s.shortValue());
-#endif
+            writeShort(out, CompoundTagCompat.getShort(s));
         } else if (element instanceof IntTag ni) {
-#if MC_VER < MC_1_21_5
-            writeInt(out, ni.getAsInt());
-#else
-            writeInt(out, ni.intValue());
-#endif
+            writeInt(out, CompoundTagCompat.getInt(ni));
         } else if (element instanceof LongTag nl) {
-#if MC_VER < MC_1_21_5
-            writeLong(out, nl.getAsLong());
-#else
-            writeLong(out, nl.longValue());
-#endif
+            writeLong(out, CompoundTagCompat.getLong(nl));
         } else if (element instanceof FloatTag f) {
-#if MC_VER < MC_1_21_5
-            writeInt(out, Float.floatToIntBits(f.getAsFloat()));
-#else
-            writeInt(out, Float.floatToIntBits(f.floatValue()));
-#endif
+            writeInt(out, Float.floatToIntBits(CompoundTagCompat.getFloat(f)));
         } else if (element instanceof DoubleTag d) {
-#if MC_VER < MC_1_21_5
-            writeLong(out, Double.doubleToLongBits(d.getAsDouble()));
-#else
-            writeLong(out, Double.doubleToLongBits(d.doubleValue()));
-#endif
+            writeLong(out, Double.doubleToLongBits(CompoundTagCompat.getDouble(d)));
         } else if (element instanceof StringTag s) {
-#if MC_VER < MC_1_21_5
-            writeString(out, s.getAsString());
-#else
-            writeString(out, s.value());
-#endif
+            writeString(out, CompoundTagCompat.getString(s));
         } else if (element instanceof ByteArrayTag a) {
             byte[] arr = a.getAsByteArray();
             writeInt(out, arr.length);

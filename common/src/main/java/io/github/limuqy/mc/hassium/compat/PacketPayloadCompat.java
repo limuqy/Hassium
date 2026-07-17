@@ -71,9 +71,11 @@ public final class PacketPayloadCompat {
             return data;
         }
 #else
-        // 1.20.6+: CustomPacketPayload 无 write() 方法，需通过 StreamCodec 序列化
-        // 暂不支持，返回 null 触发回退逻辑
-        // TODO: 实现 1.20.6+ 的 payload 序列化
+        // 1.20.5+: 无 write()；本模组 RawCustomPayload 可直接取字节，其它 payload 需 StreamCodec（段 C 未完成）
+        if (packet instanceof net.minecraft.network.protocol.common.ClientboundCustomPayloadPacket cp
+                && cp.payload() instanceof RawCustomPayload raw) {
+            return raw.data();
+        }
 #endif
 #endif
         return null;

@@ -14,6 +14,7 @@ import net.minecraftforge.common.MinecraftForge;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.fml.event.lifecycle.FMLClientSetupEvent;
+import net.minecraftforge.network.NetworkHooks;
 #else
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
@@ -73,6 +74,14 @@ public class HassiumNeoForgeClient {
          */
         @SubscribeEvent
         public void onPlayerLoggedIn(ClientPlayerNetworkEvent.LoggingIn event) {
+#if MC_VER < MC_1_20_2
+            var connection = event.getConnection();
+            if (connection != null && NetworkHooks.isVanillaConnection(connection)) {
+                LOGGER.warn("Hassium: 当前连接被识别为原版/非匹配模组服。"
+                        + " hassium:main 通道已禁用，客户端统计会保持全 0；请用同加载器的客户端+服务端测试。");
+                return;
+            }
+#endif
             LOGGER.info("Hassium: Client joined server, sending handshake request");
             networkManager.sendHandshakeRequest();
         }
