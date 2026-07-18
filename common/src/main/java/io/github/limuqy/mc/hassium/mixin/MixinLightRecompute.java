@@ -154,7 +154,10 @@ public class MixinLightRecompute {
 
             // 无露天新区：邻区洞穴内已有天空光不会因 propagate 自动灌入，
             // 需在共享边界对新区格子 checkBlock（light==0 → PULL_LIGHT_IN_ENTRY）
-            hassium$pullLightFromNeighborEdges(chunkPos);
+            // 方块 Y 范围由 section 边界推导，避免 getMinBuildHeight/getMinY 跨版本差异
+            int minBlockY = bottomSection << 4;
+            int maxBlockYExclusive = topSection << 4;
+            hassium$pullLightFromNeighborEdges(chunkPos, minBlockY, maxBlockYExclusive);
 
             Constants.LOG.debug("Hassium: Recomputed light for chunk {}", chunkPos);
         } catch (Exception e) {
@@ -167,24 +170,25 @@ public class MixinLightRecompute {
      * <p>
      * 仅当邻区边界格天空光或方块光大于 0 时，对本区对应边界格 checkBlock，
      * 触发原版 light==0 时的 PULL 逻辑，避免无光边界全高扫一遍。
+     *
+     * @param minBlockY           扫描下限（含）
+     * @param maxBlockYExclusive  扫描上限（不含）
      */
     @Unique
-    private void hassium$pullLightFromNeighborEdges(ChunkPos chunkPos) {
+    private void hassium$pullLightFromNeighborEdges(ChunkPos chunkPos, int minBlockY, int maxBlockYExclusive) {
         LevelLightEngine lightEngine = level.getLightEngine();
         LayerLightEventListener sky = lightEngine.getLayerListener(LightLayer.SKY);
         LayerLightEventListener block = lightEngine.getLayerListener(LightLayer.BLOCK);
         BlockPos.MutableBlockPos neighborPos = new BlockPos.MutableBlockPos();
         BlockPos.MutableBlockPos ourPos = new BlockPos.MutableBlockPos();
 
-        int minY = level.getMinBuildHeight();
-        int maxY = level.getMaxBuildHeight();
         int minX = chunkPos.getMinBlockX();
         int minZ = chunkPos.getMinBlockZ();
 
         // 东 (+X)
         if (level.getChunkSource().getChunkNow(chunkPos.x + 1, chunkPos.z) != null) {
             for (int z = 0; z < 16; z++) {
-                for (int y = minY; y < maxY; y++) {
+                for (int y = minBlockY; y < maxBlockYExclusive; y++) {
                     neighborPos.set(minX + 16, y, minZ + z);
                     if (sky.getLightValue(neighborPos) > 0 || block.getLightValue(neighborPos) > 0) {
                         ourPos.set(minX + 15, y, minZ + z);
@@ -196,7 +200,7 @@ public class MixinLightRecompute {
         // 西 (-X)
         if (level.getChunkSource().getChunkNow(chunkPos.x - 1, chunkPos.z) != null) {
             for (int z = 0; z < 16; z++) {
-                for (int y = minY; y < maxY; y++) {
+                for (int y = minBlockY; y < maxBlockYExclusive; y++) {
                     neighborPos.set(minX - 1, y, minZ + z);
                     if (sky.getLightValue(neighborPos) > 0 || block.getLightValue(neighborPos) > 0) {
                         ourPos.set(minX, y, minZ + z);
@@ -208,7 +212,7 @@ public class MixinLightRecompute {
         // 南 (+Z)
         if (level.getChunkSource().getChunkNow(chunkPos.x, chunkPos.z + 1) != null) {
             for (int x = 0; x < 16; x++) {
-                for (int y = minY; y < maxY; y++) {
+                for (int y = minBlockY; y < maxBlockYExclusive; y++) {
                     neighborPos.set(minX + x, y, minZ + 16);
                     if (sky.getLightValue(neighborPos) > 0 || block.getLightValue(neighborPos) > 0) {
                         ourPos.set(minX + x, y, minZ + 15);
@@ -220,7 +224,7 @@ public class MixinLightRecompute {
         // 北 (-Z)
         if (level.getChunkSource().getChunkNow(chunkPos.x, chunkPos.z - 1) != null) {
             for (int x = 0; x < 16; x++) {
-                for (int y = minY; y < maxY; y++) {
+                for (int y = minBlockY; y < maxBlockYExclusive; y++) {
                     neighborPos.set(minX + x, y, minZ - 1);
                     if (sky.getLightValue(neighborPos) > 0 || block.getLightValue(neighborPos) > 0) {
                         ourPos.set(minX + x, y, minZ);
