@@ -56,7 +56,7 @@ description: Hassium Mixin 注入技能。在 common 模块为 RegionFile、Conn
 | `MixinClientTick` | `Minecraft` | 客户端 drain |
 | `MixinClientPacketListener` | `ClientPacketListener` | 包处理 |
 | `MixinClientCommonPacketListenerImpl` | `ClientCommonPacketListenerImpl` | 通用监听 |
-| `MixinLightRecompute` | `ClientPacketListener` | 光照重算限流 |
+| `MixinLightRecompute` | `ClientPacketListener` | lightStrip 后本地重算（propagate + 邻区边界拉取）与每帧限流 |
 | `MixinLevelRenderer` | `LevelRenderer` | 渲染相关 |
 
 当前共 **19** 个已注册类（以 `hassium.mixins.json` 为准）。

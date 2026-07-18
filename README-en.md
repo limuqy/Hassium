@@ -1,7 +1,7 @@
 # Hassium
 
 **Hassium** — high-performance chunk compression and client-side caching for Minecraft.  
-Replaces vanilla Zlib with ZSTD for world storage and network transport. Supports Fabric / Forge / NeoForge across Minecraft 1.20.1–1.21.11.
+Smaller world saves and bandwidth than vanilla, local chunk reuse, and smoother joins. Supports Fabric / Forge / NeoForge across Minecraft 1.20.1–1.21.11.
 
 [简体中文](README.md) · **English**
 
@@ -17,14 +17,13 @@ Replaces vanilla Zlib with ZSTD for world storage and network transport. Support
 
 | Feature | Description |
 | --- | --- |
-| **Region-compatible storage** | Keeps `.mca` layout; payload type `126` + ZSTD (dictionary-aware) |
-| **Network compression** | Custom `hassium:*` channels; optional global ZSTD replacing vanilla Zlib |
-| **Client chunk cache** | Writes on unload; server pushes `chunkHash`; hits skip full downloads |
-| **Join throttling** | Main-thread serialize + background compress; client time budget / JoinBoost |
-| **Bloom / sectionHashes** | Fewer disk probes; section hashes combine into `chunkHash` |
-| **Metrics** | `/hassium stats` (server), `/hassiumc stats` (client) |
-
-Version: `1.0.0-beta`. APIs and config may change.
+| **Efficient storage** | Higher-ratio world chunk compression for smaller saves; keeps vanilla Region (`.mca`) layout |
+| **Network compression** | More efficient compression for chunks and packets — less bandwidth and wait time |
+| **Chunk cache** | Loaded chunks are kept locally; revisiting an area prefers the cache instead of full downloads |
+| **Light stripping** | Server can omit light data; the client recomputes lighting locally to save more bandwidth |
+| **Smooth loading** | Caps main-thread work during join and view expansion to reduce hitch spikes |
+| **Client-friendly** | Clients without the mod can connect by default; install on both sides for full compression and cache benefits |
+| **Traffic metrics** | `/hassium stats` (server) and `/hassiumc stats` (client) to inspect compression and cache results |
 
 ---
 
