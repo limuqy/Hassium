@@ -2,7 +2,9 @@ package io.github.limuqy.mc.hassium.network;
 
 import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.cache.ChunkContentHashUtil;
+import io.github.limuqy.mc.hassium.cache.client.ChunkDiskCodec;
 import io.github.limuqy.mc.hassium.cache.client.ClientHassiumStorage;
+import io.github.limuqy.mc.hassium.cache.client.ViewDistanceExtensionService;
 import io.github.limuqy.mc.hassium.metrics.NetworkStats;
 import io.github.limuqy.mc.hassium.concurrent.HassiumTaskExecutor;
 import io.github.limuqy.mc.hassium.concurrent.MainThreadDispatcher;
@@ -237,10 +239,17 @@ public class ClientChunkHandler {
 
     /**
      * 将解压后的区块数据应用到客户端世界
+     * <p>
+     * {@code chunkData} 支持两种格式：
+     * <ul>
+     *   <li>NBT 字节（含 {@code "HBT1"} magic 前缀）：{@link ChunkDiskCodec#bytesToNbt} →
+     *       {@link ChunkDiskCodec#nbtToPacketBytes} 重组 packet → {@code applyToLevelFromByteBuf}</li>
+     *   <li>旧 packet 字节（无 magic 前缀，向后兼容）：直接 {@code applyToLevelFromByteBuf}</li>
+     * </ul>
      *
      * @param chunkX     区块X坐标
      * @param chunkZ     区块Z坐标
-     * @param chunkData  解压后的NBT字节数据
+     * @param chunkData  NBT 字节或 packet 字节
      * @param renderOnly true=仅渲染不参与逻辑tick
      */
     public static void applyChunkData(int chunkX, int chunkZ, byte[] chunkData, boolean renderOnly) {
@@ -256,14 +265,17 @@ public class ClientChunkHandler {
         }
 
         try {
+            ChunkPos pos = new ChunkPos(chunkX, chunkZ);
+            byte[] packetBytes = ChunkDiskCodec.maybeNbtToPacketBytes(
+                    chunkData, level.registryAccess(), level.getSectionsCount());
+
             // chunkData 是 FriendlyByteBuf 格式，需要通过 Minecraft 的数据包处理器来应用
             // 创建 FriendlyByteBuf 来读取数据，确保从位置 0 开始读取
-            io.netty.buffer.ByteBuf nettyBuf = io.netty.buffer.Unpooled.wrappedBuffer(chunkData);
+            io.netty.buffer.ByteBuf nettyBuf = io.netty.buffer.Unpooled.wrappedBuffer(packetBytes);
             nettyBuf.readerIndex(0);  // 确保从头开始读取
             net.minecraft.network.FriendlyByteBuf friendlyBuf = new net.minecraft.network.FriendlyByteBuf(nettyBuf);
 
             // 通过平台抽象注入区块（需要传入 FriendlyByteBuf）
-            ChunkPos pos = new ChunkPos(chunkX, chunkZ);
             Services.getClientChunkApplier().applyToLevelFromByteBuf(level, pos, friendlyBuf, renderOnly);
 
             DebugLogger.info(LogType.CHUNK_APPLY, "[APPLY_CHUNK] Successfully applied chunk [{}, {}] to client world", chunkX, chunkZ);
@@ -276,6 +288,10 @@ public class ClientChunkHandler {
 
         } catch (Exception e) {
             DebugLogger.error("[APPLY_CHUNK] Failed to apply chunk data for [{}, {}]", e, chunkX, chunkZ);
+            // renderOnly：回滚标记，允许后续 tick 在扩大 ClientChunkCache 后再试
+            if (renderOnly) {
+                ViewDistanceExtensionService.getInstance().onRenderOnlyMiss(new ChunkPos(chunkX, chunkZ));
+            }
         }
     }
 
@@ -323,9 +339,12 @@ public class ClientChunkHandler {
      * 从缓存加载区块数据（仅加载和解压，不应用到世界）
      * <p>
      * 可以在后台线程调用，避免阻塞主线程。
+     * <p>
+     * 旧 packet 缓存识别：解压后若不是合法 NBT（无 magic 前缀），删块并返回 null，
+     * 让 {@code ClientCacheLoadQueue} 走全量请求。
      *
      * @param pos 区块坐标
-     * @return 解压后的区块数据，如果不存在返回 null
+     * @return NBT 字节（含 magic 前缀）；不存在或非法返回 null
      */
     public static byte[] loadChunkDataFromCache(ChunkPos pos) {
         if (clientStorage == null) {
@@ -334,9 +353,26 @@ public class ClientChunkHandler {
 
         try {
             byte[] chunkData = clientStorage.loadAndDecompress(pos);
-            if (chunkData != null) {
-                Constants.LOG.debug("Hassium: Loaded chunk {} from cache ({} bytes)", pos, chunkData.length);
+            if (chunkData == null) {
+                return null;
             }
+            // 校验 NBT 格式：仅旧 packet（无 HBT1 magic）才删盘；HBT1 结构异常保留以免误删
+            if (!ChunkDiskCodec.isValidChunkNbt(chunkData)) {
+                if (ChunkDiskCodec.stripMagicPrefix(chunkData) == null) {
+                    Constants.LOG.debug("Hassium: Cache invalid (non-NBT) for chunk {}, removing", pos);
+                    try {
+                        clientStorage.remove(pos);
+                    } catch (Throwable t) {
+                        Constants.LOG.debug("Hassium: Failed to remove invalid cache for {}", pos, t);
+                    }
+                } else {
+                    Constants.LOG.warn("Hassium: Cache has HBT1 magic but invalid chunk NBT for {}, keeping on disk",
+                            pos);
+                }
+                NetworkStats.recordCacheMiss();
+                return null;
+            }
+            Constants.LOG.debug("Hassium: Loaded chunk {} from cache ({} NBT bytes)", pos, chunkData.length);
             return chunkData;
         } catch (Exception e) {
             Constants.LOG.debug("Hassium: Failed to load chunk {} from cache", pos, e);
@@ -345,10 +381,22 @@ public class ClientChunkHandler {
     }
 
     /**
-     * 将解压后的区块数据持久化到本地缓存（后台线程安全）
+     * 从缓存加载区块 NBT（后台线程安全）。
+     *
+     * @param pos 区块坐标
+     * @return chunk NBT；不存在或非法返回 null
+     */
+    public static net.minecraft.nbt.CompoundTag loadChunkNbtFromCache(ChunkPos pos) {
+        byte[] bytes = loadChunkDataFromCache(pos);
+        return bytes != null ? ChunkDiskCodec.bytesToNbt(bytes) : null;
+    }
+
+    /**
+     * 将解压后的区块数据持久化到本地缓存（后台线程安全）。
      * <p>
+     * 收包路径：packet 字节 → {@link ChunkDiskCodec#packetBytesToNbt} → NBT 字节 → persist。
      * MetadataTable / 命中比对使用的 contentHash 必须与服务端 chunkHash 一致：
-     * {@code combine(sectionHashes)}。pending 仅作回退（当前生产路径未必会暂存）。
+     * {@code combine(sectionHashes)}。
      */
     private static void persistDecompressedChunk(int chunkX, int chunkZ, byte[] data) {
         if (clientStorage == null) {
@@ -356,26 +404,45 @@ public class ClientChunkHandler {
         }
 
         try {
-            long contentHash = consumePendingContentHash(chunkX, chunkZ);
+            net.minecraft.client.Minecraft mc = net.minecraft.client.Minecraft.getInstance();
+            net.minecraft.client.multiplayer.ClientLevel level = mc.level;
+            if (level == null) return;
 
-            // 计算 section 哈希（从解压后的 packet 字节）
+            // packet 字节 → NBT（传入世界 section 数，避免 guess 多读尾部残字节）
+            net.minecraft.nbt.CompoundTag nbt = ChunkDiskCodec.packetBytesToNbt(
+                    data, level.registryAccess(), level.getSectionsCount());
+            if (nbt == null) {
+                Constants.LOG.debug("Hassium: Failed to convert packet to NBT for chunk [{}, {}]", chunkX, chunkZ);
+                return;
+            }
+
+            // 计算 section 哈希（从 packet 字节，与服务端同算法）
             long[] sectionHashes = null;
+            long contentHash;
             try {
                 sectionHashes = computeSectionHashesFromData(data);
                 if (sectionHashes != null) {
                     storePendingSectionHashes(chunkX, chunkZ, sectionHashes);
-                    // 与服务端 ChunkHashS2C 使用同一算法，写入 MetadataTable 才能命中
                     contentHash = ChunkContentHashUtil.combineSectionHashesFromArray(sectionHashes);
+                } else {
+                    contentHash = consumePendingContentHash(chunkX, chunkZ);
                 }
             } catch (Throwable t) {
-                // NoSuchMethodError 等 Error 也要吞掉，避免阻断后续 persist / apply
                 Constants.LOG.debug("Hassium: Failed to compute section hashes for chunk [{}, {}]", chunkX, chunkZ, t);
+                contentHash = consumePendingContentHash(chunkX, chunkZ);
+            }
+
+            // NBT → 字节 → 落盘
+            byte[] nbtBytes = ChunkDiskCodec.nbtToBytes(nbt);
+            if (nbtBytes == null) {
+                Constants.LOG.debug("Hassium: Failed to encode NBT bytes for chunk [{}, {}]", chunkX, chunkZ);
+                return;
             }
 
             ChunkPos pos = new ChunkPos(chunkX, chunkZ);
-            boolean saved = persistToCache(pos, data, contentHash, sectionHashes);
+            boolean saved = persistToCache(pos, nbtBytes, contentHash, sectionHashes);
             if (saved) {
-                Constants.LOG.debug("Hassium: Cached chunk [{}, {}] from server data (hash={})",
+                Constants.LOG.debug("Hassium: Cached chunk [{}, {}] as NBT (hash={})",
                         chunkX, chunkZ, Long.toHexString(contentHash));
             }
         } catch (Exception e) {

@@ -19,4 +19,14 @@ public interface IClientLevelExtension {
      * 检查指定区块是否为仅渲染区块（OVD）
      */
     boolean hassium$isRenderOnly(ChunkPos pos);
+
+    /**
+     * 添加仅渲染区块标记
+     */
+    void hassium$addRenderOnlyChunk(ChunkPos pos);
+
+    /**
+     * 移除仅渲染区块标记
+     */
+    void hassium$removeRenderOnlyChunk(ChunkPos pos);
 }

@@ -425,41 +425,55 @@ public class ServerChunkPushManager {
     }
 
     /**
+     * 分段增量视距余量：覆盖玩家移动导致「刚推完 ChunkHash 就走出视距」的竞态。
+     */
+    private static final int SECTION_DELTA_VIEW_MARGIN = 1;
+
+    /**
      * 处理客户端的 section 哈希请求（阶段二）。
      * <p>
      * 比对客户端的 section 哈希与服务端当前数据，只发送变更的 section 和 blockEntity。
+     * 每次请求都回包：可服务的进 {@code entries}，超距/失败的进 {@code skipped}（客户端回退全量）。
      */
     public void handleSectionHashRequest(ServerPlayer player, SectionHashRequestC2SPacket request) {
         if (!player.isAlive() || player.hasDisconnected()) { return; }
 
         ServerLevel level = PlayerCompat.getServerLevel(player);
-        int viewDistance = PlayerCompat.getViewDistance(player);
+        int maxDist = PlayerCompat.getViewDistance(player) + SECTION_DELTA_VIEW_MARGIN;
         ChunkPos playerChunkPos = player.chunkPosition();
         List<SectionDeltaS2CPacket.DeltaEntry> deltas = new ArrayList<>();
+        List<SectionDeltaS2CPacket.SkippedChunk> skipped = new ArrayList<>();
 
         for (var entry : request.entries()) {
             try {
-                // 校验区块是否在玩家视距范围内
                 int dx = Math.abs(entry.chunkX() - playerChunkPos.x);
                 int dz = Math.abs(entry.chunkZ() - playerChunkPos.z);
-                if (dx > viewDistance || dz > viewDistance) { continue; }
+                if (dx > maxDist || dz > maxDist) {
+                    DebugLogger.info(LogType.NETWORK,
+                            "[SECTION_DELTA] Skip [{}, {}] out of range (dx={}, dz={}, maxDist={}, player=[{}, {}])",
+                            entry.chunkX(), entry.chunkZ(), dx, dz, maxDist,
+                            playerChunkPos.x, playerChunkPos.z);
+                    skipped.add(new SectionDeltaS2CPacket.SkippedChunk(entry.chunkX(), entry.chunkZ()));
+                    continue;
+                }
 
                 LevelChunk chunk = level.getChunk(entry.chunkX(), entry.chunkZ());
-                if (chunk == null) { continue; }
+                if (chunk == null) {
+                    skipped.add(new SectionDeltaS2CPacket.SkippedChunk(entry.chunkX(), entry.chunkZ()));
+                    continue;
+                }
 
-                // 计算当前 section 哈希（不含 blockEntity）
+                // 计算当前 section 哈希（不含 blockEntity；空气 section 不在 map 中，视为 0）
                 Map<Integer, Long> currentHashes = ChunkContentHashUtil.computeSectionHashes(chunk);
                 long[] clientHashes = entry.sectionHashes();
 
-                // 比对，找出变更的 sections
+                // 按完整索引比对：避免「服务端变空气」时漏发清除（非空 map 扫不到该 idx）
                 List<SectionDeltaS2CPacket.SectionData> changedSections = new ArrayList<>();
-                for (var current : currentHashes.entrySet()) {
-                    int idx = current.getKey();
-                    long serverHash = current.getValue();
+                int sectionCount = chunk.getSectionsCount();
+                for (int idx = 0; idx < sectionCount; idx++) {
+                    long serverHash = currentHashes.getOrDefault(idx, 0L);
                     long clientHash = idx < clientHashes.length ? clientHashes[idx] : 0L;
-
                     if (serverHash != clientHash) {
-                        // 方块数据有变更，序列化该 section
                         byte[] data = serializeSection(chunk, idx);
                         changedSections.add(new SectionDeltaS2CPacket.SectionData(idx, data));
                     }
@@ -473,26 +487,28 @@ public class ServerChunkPushManager {
             } catch (Exception e) {
                 Constants.LOG.error("[SECTION_DELTA] Failed to process chunk [{}, {}]",
                         entry.chunkX(), entry.chunkZ(), e);
+                skipped.add(new SectionDeltaS2CPacket.SkippedChunk(entry.chunkX(), entry.chunkZ()));
             }
         }
 
-        // 发送 delta 响应
-        if (!deltas.isEmpty()) {
-            FriendlyByteBuf buf = null;
-            boolean sent = false;
-            try {
-                SectionDeltaS2CPacket deltaPacket = new SectionDeltaS2CPacket(
-                        request.dimension(), deltas);
-                buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
-                deltaPacket.encode(buf);
-                Services.NETWORK_MANAGER.sendSectionDeltaPacket(player, buf);
-                sent = true;
-            } catch (Exception e) {
-                Constants.LOG.error("[SECTION_DELTA] Failed to send delta response", e);
-            } finally {
-                if (!sent && buf != null) {
-                    buf.release();
-                }
+        // 始终回包，避免客户端悬等（含 entries/skipped 皆空的边界）
+        FriendlyByteBuf buf = null;
+        boolean sent = false;
+        try {
+            SectionDeltaS2CPacket deltaPacket = new SectionDeltaS2CPacket(
+                    request.dimension(), deltas, skipped);
+            buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
+            deltaPacket.encode(buf);
+            Services.NETWORK_MANAGER.sendSectionDeltaPacket(player, buf);
+            sent = true;
+            DebugLogger.info(LogType.NETWORK,
+                    "[SECTION_DELTA] Sent response: {} deltas, {} skipped (dimension={})",
+                    deltas.size(), skipped.size(), request.dimension());
+        } catch (Exception e) {
+            Constants.LOG.error("[SECTION_DELTA] Failed to send delta response", e);
+        } finally {
+            if (!sent && buf != null) {
+                buf.release();
             }
         }
     }

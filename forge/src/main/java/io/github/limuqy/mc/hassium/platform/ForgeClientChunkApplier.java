@@ -1,9 +1,9 @@
 package io.github.limuqy.mc.hassium.platform;
 
 import io.github.limuqy.mc.hassium.Constants;
+import io.github.limuqy.mc.hassium.cache.client.IClientLevelExtension;
 import io.github.limuqy.mc.hassium.cache.client.ViewDistanceExtensionService;
 import io.github.limuqy.mc.hassium.mixin.ClientLevelAccessor;
-import io.github.limuqy.mc.hassium.mixin.MixinClientLevel;
 import io.github.limuqy.mc.hassium.platform.services.IClientChunkApplier;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientChunkCache;
@@ -38,6 +38,9 @@ public class ForgeClientChunkApplier implements IClientChunkApplier {
             if (packet.getX() != pos.x || packet.getZ() != pos.z) {
                 Constants.LOG.error("Hassium: Chunk position mismatch! Expected [{}, {}], got [{}, {}]",
                     pos.x, pos.z, packet.getX(), packet.getZ());
+                if (renderOnly) {
+                    ViewDistanceExtensionService.getInstance().onRenderOnlyMiss(pos);
+                }
                 return;
             }
 
@@ -46,13 +49,22 @@ public class ForgeClientChunkApplier implements IClientChunkApplier {
             ClientPacketListener packetListener = mc.getConnection();
 
             if (packetListener != null) {
-                MixinClientLevel mixinAccessor = (MixinClientLevel) (Object) level;
+                IClientLevelExtension mixinAccessor = (IClientLevelExtension) level;
                 if (!renderOnly) {
                     // 真实区块到达：apply 前清除可能的 renderOnly 标记（边界替换）
                     mixinAccessor.hassium$removeRenderOnlyChunk(pos);
                 }
                 // 直接调用原版的处理方法
                 packetListener.handleLevelChunkWithLight(packet);
+
+                ClientChunkCache chunkSource = ((ClientLevelAccessor) level).hassium$getChunkSource();
+                if (!chunkSource.hasChunk(pos.x, pos.z)) {
+                    if (renderOnly) {
+                        ViewDistanceExtensionService.getInstance().onRenderOnlyMiss(pos);
+                    }
+                    throw new IllegalStateException(
+                            "Chunk apply ignored by ClientChunkCache (out of view range): " + pos);
+                }
 
                 if (renderOnly) {
                     // renderOnly 区块：apply 后标记
@@ -70,6 +82,10 @@ public class ForgeClientChunkApplier implements IClientChunkApplier {
 
         } catch (Exception e) {
             Constants.LOG.error("Hassium: Failed to apply chunk [{}, {}] from ByteBuf", pos.x, pos.z, e);
+            if (e instanceof RuntimeException re) {
+                throw re;
+            }
+            throw new RuntimeException(e);
         }
     }
 
@@ -97,7 +113,7 @@ public class ForgeClientChunkApplier implements IClientChunkApplier {
 
             // 如果是仅渲染区块，标记它
             if (renderOnly) {
-                MixinClientLevel mixinAccessor = (MixinClientLevel) (Object) level;
+                IClientLevelExtension mixinAccessor = (IClientLevelExtension) level;
                 mixinAccessor.hassium$addRenderOnlyChunk(pos);
             }
 

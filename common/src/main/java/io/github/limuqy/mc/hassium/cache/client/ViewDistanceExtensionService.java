@@ -3,7 +3,6 @@ package io.github.limuqy.mc.hassium.cache.client;
 import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.mixin.ClientLevelAccessor;
-import io.github.limuqy.mc.hassium.mixin.MixinClientLevel;
 import io.github.limuqy.mc.hassium.mixin.OptionsAccessor;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientChunkCache;
@@ -41,6 +40,15 @@ public class ViewDistanceExtensionService {
 
     /** 已加载的 renderOnly 区块 */
     private final Set<ChunkPos> loadedRenderOnly = new HashSet<>();
+
+    /**
+     * 判断指定区块是否为 renderOnly（仅渲染、不参与模拟）。
+     * <p>
+     * 供 {@link CacheSaveQueue} 在卸载时短路：renderOnly 区块不写回缓存，保留历史快照。
+     */
+    public boolean isRenderOnly(ChunkPos pos) {
+        return pos != null && loadedRenderOnly.contains(pos);
+    }
 
     /** 上次更新的玩家位置与视距（避免每 tick 重复计算） */
     private ChunkPos lastPlayerPos = null;
@@ -81,6 +89,11 @@ public class ViewDistanceExtensionService {
             return;
         }
 
+        // 关键：服务端 ClientboundSetChunkCacheRadius 会把 ClientChunkCache 半径钳在 serverVD，
+        // 环带外区块经 handleLevelChunkWithLight → replaceWithPacketData 时
+        // storage.inRange 失败被静默丢弃，表现为「部分虚空」。扩大到 clientVD。
+        ensureChunkCacheRadius(mc.level, clientVD);
+
         ChunkPos playerPos = mc.player.chunkPosition();
         if (playerPos.equals(lastPlayerPos) && clientVD == lastClientVD && serverVD == lastServerVD) {
             return;
@@ -105,6 +118,20 @@ public class ViewDistanceExtensionService {
         lastPlayerPos = playerPos;
         lastClientVD = clientVD;
         lastServerVD = serverVD;
+    }
+
+    /**
+     * 将 {@link ClientChunkCache} 视距半径扩大到客户端 RD。
+     * <p>
+     * {@link ClientChunkCache#updateViewRadius(int)} 在半径不变时为 no-op，可每 tick 调用。
+     */
+    private void ensureChunkCacheRadius(ClientLevel level, int clientVD) {
+        try {
+            ClientChunkCache cache = ((ClientLevelAccessor) level).hassium$getChunkSource();
+            cache.updateViewRadius(clientVD);
+        } catch (Exception e) {
+            Constants.LOG.debug("Hassium: Failed to expand ClientChunkCache radius to {}", clientVD, e);
+        }
     }
 
     /**
@@ -134,7 +161,7 @@ public class ViewDistanceExtensionService {
             return;
         }
 
-        MixinClientLevel accessor = (MixinClientLevel) (Object) level;
+        IClientLevelExtension accessor = (IClientLevelExtension) level;
         // 已是 renderOnly → 不重复 enqueue
         if (accessor.hassium$isRenderOnly(pos)) {
             return;
@@ -167,7 +194,7 @@ public class ViewDistanceExtensionService {
             loadedRenderOnly.remove(pos);
             return;
         }
-        MixinClientLevel accessor = (MixinClientLevel) (Object) level;
+        IClientLevelExtension accessor = (IClientLevelExtension) level;
         // 仅当区块仍是 renderOnly 标记时才 drop（防止误删真实区块）
         if (accessor.hassium$isRenderOnly(pos)) {
             dropChunkFromClientCache(level, pos);
@@ -212,7 +239,7 @@ public class ViewDistanceExtensionService {
         Minecraft mc = Minecraft.getInstance();
         loadedRenderOnly.remove(pos);
         if (mc.level != null) {
-            ((MixinClientLevel) (Object) mc.level).hassium$removeRenderOnlyChunk(pos);
+            ((IClientLevelExtension) mc.level).hassium$removeRenderOnlyChunk(pos);
         }
     }
 
@@ -230,7 +257,7 @@ public class ViewDistanceExtensionService {
     public void clearAllRenderOnly() {
         Minecraft mc = Minecraft.getInstance();
         if (mc.level != null) {
-            MixinClientLevel accessor = (MixinClientLevel) (Object) mc.level;
+            IClientLevelExtension accessor = (IClientLevelExtension) mc.level;
             for (ChunkPos pos : new HashSet<>(loadedRenderOnly)) {
                 accessor.hassium$removeRenderOnlyChunk(pos);
             }

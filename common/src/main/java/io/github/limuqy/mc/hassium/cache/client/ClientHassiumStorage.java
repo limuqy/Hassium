@@ -140,11 +140,14 @@ public class ClientHassiumStorage {
     }
 
     /**
-     * 持久化区块数据到缓存
+     * 持久化区块数据到缓存。
+     * <p>
+     * 自 {@code disk-nbt-cache-and-export} 起，{@code nbtData} 语义为 {@link ChunkDiskCodec#nbtToBytes}
+     * 产出的 NBT 字节（含 {@code "HBT1"} magic 前缀）；ZSTD 字典压缩 + type 126 + MetadataTable 逻辑不变。
      *
      * @param pos           区块坐标
-     * @param nbtData       原始数据（未压缩）
-     * @param contentHash   内容哈希（来自服务端元数据或本地重算）
+     * @param nbtData       NBT 字节（含 magic 前缀，未压缩）
+     * @param contentHash   内容哈希（必须等于 combineSectionHashesFromArray(sectionHashes)）
      * @param sectionHashes per-section 哈希数组（可为 null）
      * @return 是否成功
      */
@@ -544,6 +547,11 @@ public class ClientHassiumStorage {
 
         ZstdDictCompress dict = new ZstdDictCompress(dictionary, level);
         return Zstd.compress(data, dict);
+    }
+
+    /** 供 {@link CacheWorldExporter} 复用的 ZSTD 字典解压入口。 */
+    public byte[] decompressForExport(byte[] compressedData) {
+        return decompressWithDictionary(compressedData);
     }
 
     private byte[] decompressWithDictionary(byte[] compressedData) {

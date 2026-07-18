@@ -15,17 +15,25 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * 服务端 -> 客户端：section delta 响应（阶段二）
+ * 服务端 -> 客户端：分段增量响应（阶段二）
  * <p>
  * 服务端比对客户端的 section 哈希后，只发送变更的 section 数据和全部 blockEntity 数据。
  * 客户端组装：缓存的 sections + 新 sections + 实体数据。
  * <p>
- * <b>阶段二暂禁用</b>：生产路径 miss/mismatch 一律走全量请求；本协议与 handler 保留供后续恢复。
+ * {@code skipped}：本请求中因超视距等原因未处理的区块；客户端应立即回退全量。
+ * 服务端对每次 SectionHashRequest 都会回包（entries/skipped 可空），避免客户端悬等。
+ * <p>
+ * 由客户端 {@code clientCache.sectionDeltaEnabled} 门控：开启时 MISMATCH 走分段增量，关闭时全量。
  */
 public record SectionDeltaS2CPacket(
         String dimension,
-        List<DeltaEntry> entries
+        List<DeltaEntry> entries,
+        List<SkippedChunk> skipped
 ) {
+    public SectionDeltaS2CPacket(String dimension, List<DeltaEntry> entries) {
+        this(dimension, entries, List.of());
+    }
+
     public static final
 #if MC_VER < MC_1_21_11
 ResourceLocation
@@ -56,6 +64,12 @@ CHANNEL = ResourceLocationCompat.create(Constants.MOD_ID, "section_delta_s2c");
                 buf.writeUtf(be.type.toString());
                 buf.writeNbt(be.nbt);
             }
+        }
+
+        buf.writeVarInt(skipped.size());
+        for (SkippedChunk s : skipped) {
+            buf.writeVarInt(s.chunkX);
+            buf.writeVarInt(s.chunkZ);
         }
     }
 
@@ -95,7 +109,16 @@ CHANNEL = ResourceLocationCompat.create(Constants.MOD_ID, "section_delta_s2c");
 
             entries.add(new DeltaEntry(chunkX, chunkZ, sections, blockEntities));
         }
-        return new SectionDeltaS2CPacket(dimension, entries);
+
+        List<SkippedChunk> skipped = new ArrayList<>();
+        if (buf.isReadable()) {
+            int skippedCount = buf.readVarInt();
+            skipped = new ArrayList<>(skippedCount);
+            for (int i = 0; i < skippedCount; i++) {
+                skipped.add(new SkippedChunk(buf.readVarInt(), buf.readVarInt()));
+            }
+        }
+        return new SectionDeltaS2CPacket(dimension, entries, skipped);
     }
 
     /**
@@ -107,6 +130,11 @@ CHANNEL = ResourceLocationCompat.create(Constants.MOD_ID, "section_delta_s2c");
             List<SectionData> changedSections,
             List<BlockEntityData> blockEntities
     ) {}
+
+    /**
+     * 请求中被服务端跳过的区块（客户端应回退全量）
+     */
+    public record SkippedChunk(int chunkX, int chunkZ) {}
 
     /**
      * 变更的 section 数据

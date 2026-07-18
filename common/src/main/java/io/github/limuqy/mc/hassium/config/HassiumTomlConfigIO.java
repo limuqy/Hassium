@@ -109,17 +109,18 @@ public final class HassiumTomlConfigIO {
     }
 
     private static CommentedFileConfig open(Path path) {
+        // preserveInsertionOrder：底层 LinkedHashMap，按 set() 顺序写出 toml；
+        // 默认 concurrent/HashMap 会导致删掉重生成后 section/键顺序仍混乱。
         return CommentedFileConfig.builder(path)
                 .sync()
+                .preserveInsertionOrder()
                 .writingMode(WritingMode.REPLACE)
                 .build();
     }
 
     private static void writeClient(Path path, HassiumConfig.ClientCacheConfig cache, ClientNet net) {
+        // 不 load 旧文件：避免保留旧键顺序导致 toml 顺序混乱；每次按代码定义顺序全量重写。
         try (CommentedFileConfig cfg = open(path)) {
-            if (Files.isRegularFile(path)) {
-                cfg.load();
-            }
             writeClientCache(cfg, cache);
             writeClientNetwork(cfg, net);
             cfg.save();
@@ -133,10 +134,8 @@ public final class HassiumTomlConfigIO {
             HassiumConfig.CompatConfig compat,
             HassiumConfig.DebugConfig debug
     ) {
+        // 不 load 旧文件：避免保留旧键顺序导致 toml 顺序混乱；每次按代码定义顺序全量重写。
         try (CommentedFileConfig cfg = open(path)) {
-            if (Files.isRegularFile(path)) {
-                cfg.load();
-            }
             writeStorage(cfg, storage);
             writeCommonNetwork(cfg, net);
             writeCompat(cfg, compat);
@@ -208,26 +207,30 @@ public final class HassiumTomlConfigIO {
                 getDouble(cfg, "clientCache.bloomFilterFpp", d.bloomFilterFpp()),
                 getBool(cfg, "clientCache.viewDistanceExtensionEnabled", d.viewDistanceExtensionEnabled()),
                 getInt(cfg, "clientCache.maxRenderDistance", d.maxRenderDistance()),
-                getInt(cfg, "clientCache.ovdUnloadDelaySecs", d.ovdUnloadDelaySecs())
+                getInt(cfg, "clientCache.ovdUnloadDelaySecs", d.ovdUnloadDelaySecs()),
+                getBool(cfg, "clientCache.sectionDeltaEnabled", d.sectionDeltaEnabled())
         );
     }
 
     private static void writeClientCache(CommentedConfig cfg, HassiumConfig.ClientCacheConfig c) {
-        set(cfg, "clientCache.enabled", c.enabled(), "是否启用客户端缓存");
+        set(cfg, "clientCache.enabled", c.enabled(), "=== 基础 ===\n是否启用客户端缓存");
         set(cfg, "clientCache.maxSizeMb", c.maxSizeMb(), "缓存最大容量（MB）");
         set(cfg, "clientCache.maxAgeDays", c.maxAgeDays(), "缓存过期天数");
-        set(cfg, "clientCache.hotScoreThreshold", c.hotScoreThreshold(), "热点分数阈值");
+        set(cfg, "clientCache.hotScoreThreshold", c.hotScoreThreshold(), "=== 热度清理 ===\n热点分数阈值");
         set(cfg, "clientCache.recencyWeight", c.recencyWeight(), "最近访问权重");
         set(cfg, "clientCache.frequencyWeight", c.frequencyWeight(), "访问频率权重");
         set(cfg, "clientCache.cleanupIntervalTicks", c.cleanupIntervalTicks(), "清理检查间隔（刻）");
         set(cfg, "clientCache.targetCacheSizeMb", c.targetCacheSizeMb(), "目标缓存大小（MB；0=自动）");
         set(cfg, "clientCache.minCleanupBatchSize", c.minCleanupBatchSize(), "每次最少清理区块数");
-        set(cfg, "clientCache.bloomFilterEnabled", c.bloomFilterEnabled(), "是否启用 Bloom Filter");
+        set(cfg, "clientCache.bloomFilterEnabled", c.bloomFilterEnabled(), "=== Bloom Filter 预筛 ===\n是否启用 Bloom Filter");
         set(cfg, "clientCache.bloomFilterExpectedInsertions", c.bloomFilterExpectedInsertions(), "Bloom 预期元素数");
         set(cfg, "clientCache.bloomFilterFpp", c.bloomFilterFpp(), "Bloom 期望假阳性率");
-        set(cfg, "clientCache.viewDistanceExtensionEnabled", c.viewDistanceExtensionEnabled(), "是否启用视距外显示（OVD）");
+        set(cfg, "clientCache.viewDistanceExtensionEnabled", c.viewDistanceExtensionEnabled(),
+                "=== 视距外显示（OVD） ===\n是否启用视距外显示（OVD）");
         set(cfg, "clientCache.maxRenderDistance", c.maxRenderDistance(), "渲染距离上限（Fog/内存约束）");
         set(cfg, "clientCache.ovdUnloadDelaySecs", c.ovdUnloadDelaySecs(), "离开环带后延迟卸载秒数");
+        set(cfg, "clientCache.sectionDeltaEnabled", c.sectionDeltaEnabled(),
+                "=== 分段增量 ===\n缓存过期时是否走分段增量（默认 true；依赖 clientCache.enabled）");
     }
 
     private static ClientNet readClientNetwork(CommentedConfig cfg) {
@@ -244,10 +247,10 @@ public final class HassiumTomlConfigIO {
     }
 
     private static void writeClientNetwork(CommentedConfig cfg, ClientNet n) {
-        set(cfg, "network.clientChunkLoadThreads", n.clientChunkLoadThreads, "客户端区块加载线程数");
+        set(cfg, "network.clientChunkLoadThreads", n.clientChunkLoadThreads, "=== 客户端线程与光照 ===\n客户端区块加载线程数");
         set(cfg, "network.lightStripEnabled", n.lightStripEnabled, "是否启用光照剥离");
         set(cfg, "network.backgroundThreads", n.backgroundThreads, "客户端后台线程池大小");
-        set(cfg, "network.maxChunksPerFrame", n.maxChunksPerFrame, "每帧应用缓存区块硬顶");
+        set(cfg, "network.maxChunksPerFrame", n.maxChunksPerFrame, "=== 主线程限流 ===\n每帧应用缓存区块硬顶");
         set(cfg, "network.maxCallbacksPerFrame", n.maxCallbacksPerFrame, "每帧异步回调硬顶");
         set(cfg, "network.mainThreadChunkBudgetMs", n.mainThreadChunkBudgetMs, "主线程 apply 预算（ms）");
         set(cfg, "network.maxLightRecomputePerFrame", n.maxLightRecomputePerFrame, "每帧最多重算光照区块数");
@@ -296,23 +299,23 @@ public final class HassiumTomlConfigIO {
     }
 
     private static void writeCommonNetwork(CommentedConfig cfg, CommonNet n) {
-        set(cfg, "network.enabled", n.enabled, "是否启用 Hassium 自定义通道");
+        set(cfg, "network.enabled", n.enabled, "=== 基础 ===\n是否启用 Hassium 自定义通道");
         set(cfg, "network.compressionLevel", n.compressionLevel, "自定义通道 ZSTD 等级");
         set(cfg, "network.maxChunksPerTick", n.maxChunksPerTick, "每玩家每 tick 推送上限");
-        set(cfg, "network.globalPacketCompression", n.globalPacketCompression, "是否启用全局 ZSTD");
+        set(cfg, "network.globalPacketCompression", n.globalPacketCompression, "=== 全局包压缩（替换原版 Zlib） ===\n是否启用全局 ZSTD");
         set(cfg, "network.globalCompressionLevel", n.globalCompressionLevel, "全局压缩等级");
         set(cfg, "network.globalCompressionThreshold", n.globalCompressionThreshold, "全局压缩阈值（字节）");
         set(cfg, "network.compressionBlacklist", new ArrayList<>(n.compressionBlacklist), "压缩/聚合黑名单");
-        set(cfg, "network.useContextCompression", n.useContextCompression, "是否使用上下文压缩");
+        set(cfg, "network.useContextCompression", n.useContextCompression, "=== 上下文压缩 ===\n是否使用上下文压缩");
         set(cfg, "network.magiclessZstd", n.magiclessZstd, "是否使用无 magic 的 ZSTD");
-        set(cfg, "network.enablePacketAggregation", n.enablePacketAggregation, "是否启用包聚合");
+        set(cfg, "network.enablePacketAggregation", n.enablePacketAggregation, "=== 包聚合 ===\n是否启用包聚合");
         set(cfg, "network.aggregationMinBatchSize", n.aggregationMinBatchSize, "聚合最小批量");
         set(cfg, "network.aggregationMaxWaitTimeMs", (int) n.aggregationMaxWaitTimeMs, "聚合最大等待（ms）");
         set(cfg, "network.aggregationMaxSize", n.aggregationMaxSize, "聚合最大大小（字节）");
         set(cfg, "network.enableCompactHeader", n.enableCompactHeader, "是否启用紧凑包头");
-        set(cfg, "network.serverChunkPushThreads", n.serverChunkPushThreads, "服务端推送线程数");
-        set(cfg, "network.metricsEnabled", n.metricsEnabled, "是否启用指标收集");
-        set(cfg, "network.dynamicThreadPoolEnabled", n.dynamicThreadPoolEnabled, "是否动态调整推送线程");
+        set(cfg, "network.serverChunkPushThreads", n.serverChunkPushThreads, "=== 服务端推送线程 ===\n服务端推送线程数");
+        set(cfg, "network.metricsEnabled", n.metricsEnabled, "=== 指标 ===\n是否启用指标收集");
+        set(cfg, "network.dynamicThreadPoolEnabled", n.dynamicThreadPoolEnabled, "=== 动态线程池 ===\n是否动态调整推送线程");
         set(cfg, "network.minPushThreads", n.minPushThreads, "动态池最小线程数");
         set(cfg, "network.maxPushThreads", n.maxPushThreads, "动态池最大线程数");
     }

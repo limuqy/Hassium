@@ -38,6 +38,8 @@
     "hassium.configuration.clientCache.maxRenderDistance.tooltip":  "Fog/内存约束。vanilla 滑块上限 32。RD>32 需手动编辑 options.txt。默认 32。",
     "hassium.configuration.clientCache.ovdUnloadDelaySecs":  "OVD 卸载延迟（秒）",
     "hassium.configuration.clientCache.ovdUnloadDelaySecs.tooltip":  "离开 OVD 环带后延迟卸载秒数（避免快速移动反复加载/卸载）。0=同步卸载。默认 5。",
+    "hassium.configuration.clientCache.sectionDeltaEnabled":  "启用分段增量",
+    "hassium.configuration.clientCache.sectionDeltaEnabled.tooltip":  "本地缓存哈希与服务器不一致时，仅请求变更的分段（16×16×16）并合并缓存后再应用；关闭则改为请求整块。依赖客户端缓存。默认开启。",
     "hassium.configuration.clientNetwork":  "客户端网络",
     "hassium.configuration.clientNetwork.button":  "客户端网络…",
     "hassium.configuration.clientNetwork.clientChunkLoadThreads":  "客户端区块加载线程数",

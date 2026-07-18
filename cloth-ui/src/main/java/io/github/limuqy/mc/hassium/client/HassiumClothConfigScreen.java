@@ -83,6 +83,9 @@ public final class HassiumClothConfigScreen {
         clientCache.addEntry(intRange(entries, "hassium.configuration.clientCache.ovdUnloadDelaySecs",
                 draft.cacheOvdUnloadDelaySecs, dCache.ovdUnloadDelaySecs(), 0, 60,
                 v -> draft.cacheOvdUnloadDelaySecs = v));
+        clientCache.addEntry(bool(entries, "hassium.configuration.clientCache.sectionDeltaEnabled",
+                draft.cacheSectionDeltaEnabled, dCache.sectionDeltaEnabled(),
+                v -> draft.cacheSectionDeltaEnabled = v));
 
         ConfigCategory clientNetwork = builder.getOrCreateCategory(
                 Component.translatable("hassium.configuration.clientNetwork"));
@@ -259,6 +262,7 @@ public final class HassiumClothConfigScreen {
         boolean cacheViewDistanceExtensionEnabled;
         int cacheMaxRenderDistance;
         int cacheOvdUnloadDelaySecs;
+        boolean cacheSectionDeltaEnabled;
 
         int clientChunkLoadThreads;
         boolean lightStripEnabled;
@@ -326,6 +330,7 @@ public final class HassiumClothConfigScreen {
             d.cacheViewDistanceExtensionEnabled = cache.viewDistanceExtensionEnabled();
             d.cacheMaxRenderDistance = cache.maxRenderDistance();
             d.cacheOvdUnloadDelaySecs = cache.ovdUnloadDelaySecs();
+            d.cacheSectionDeltaEnabled = cache.sectionDeltaEnabled();
 
             d.clientChunkLoadThreads = net.clientChunkLoadThreads();
             d.lightStripEnabled = net.lightStripEnabled();
@@ -381,7 +386,8 @@ public final class HassiumClothConfigScreen {
                             cacheHotScoreThreshold, cacheRecencyWeight, cacheFrequencyWeight,
                             cacheCleanupIntervalTicks, cacheTargetCacheSizeMb, cacheMinCleanupBatchSize,
                             cacheBloomFilterEnabled, cacheBloomFilterExpectedInsertions, cacheBloomFilterFpp,
-                            cacheViewDistanceExtensionEnabled, cacheMaxRenderDistance, cacheOvdUnloadDelaySecs
+                            cacheViewDistanceExtensionEnabled, cacheMaxRenderDistance, cacheOvdUnloadDelaySecs,
+                            cacheSectionDeltaEnabled
                     ),
                     new HassiumConfig.NetworkConfig(
                             networkEnabled, compressionLevel, maxChunksPerTick,

@@ -54,13 +54,13 @@ fabric/ forge/ neoforge/  ← ServiceLoader 实现 + 入口
   → 主线程序列化 + pushPool 压缩 → 客户端时间预算 apply（JoinBoost）
 ```
 
-**section-delta 阶段二保留但生产禁用**（miss 一律全量）。详见 [`docs/chunk-cache.md`](docs/chunk-cache.md)。
+**分段增量**（`clientCache.sectionDeltaEnabled`，默认 `true`）：缓存过期时仅补变更分段。详见 [`docs/chunk-cache.md`](docs/chunk-cache.md)。
 
 ## 已完成 / 待办
 
 **已完成（摘要）：** ZSTD 存储与网络、握手、chunkHash 推送、进服限流、Bloom、sectionHashes、BE 专用通道、监控命令、九段适配回归。
 
-**待办：** 方向性预加载；恢复可靠的 section-delta merge；`migration` / 公共 `HassiumApi` 实现。
+**待办：** 方向性预加载；分段增量接回 OVD；`migration` / 公共 `HassiumApi` 实现。
 
 ## 文档与 Skills
 

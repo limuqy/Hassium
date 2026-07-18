@@ -143,7 +143,7 @@ ERROR / WARN 始终输出。
 ## 9. 路线图（未实现）
 
 - **区块预加载**：按移动方向提高推送优先级（方案曾单独成文，实现时写入 `chunk-cache.md`）
-- **section-delta 阶段二**：协议与 handler 已保留，生产路径暂禁用（见 chunk-cache）
+- **分段增量**：`clientCache.sectionDeltaEnabled` 默认开；缓存过期时仅补变更分段（见 chunk-cache）
 - **`migration/` / `HassiumApi`**：公共 API / 世界迁移工具桩，尚未落地
 
 ## 10. 相关文档

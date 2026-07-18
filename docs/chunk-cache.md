@@ -7,7 +7,7 @@
 - 用 **内容哈希**（非 `inhabitedTime`）判断缓存是否可复用
 - section 方块数据哈希排除会每 tick 变化的 blockEntity NBT
 - blockEntity 不进缓存命中域：区块 apply 后再走专用请求
-- 自 **1.21.5** 起：客户端缓存存当前 MC 的 chunk packet 线格式，**不保证跨 MC 大版本兼容**
+- 自 `disk-nbt-cache-and-export` 起：客户端缓存 payload 为 **磁盘 chunk `CompoundTag`**（含 `"HBT1"` magic 前缀），跨大版本约束放宽到 NBT schema 兼容
 
 ## 2. 哈希
 
@@ -29,7 +29,7 @@ chunkHash   = combineSectionHashes(sectionIndex → sectionHash)
 
 ## 3. 现行数据流
 
-> **阶段二 section-delta：代码保留，生产路径禁用。** miss / mismatch **一律全量** `ChunkDataRequestC2S`。
+> **阶段二 分段增量**（默认开）：缓存过期（MISMATCH）走 `SectionHashRequest` → NBT merge（失败回退全量）。详见 §11。
 
 ### 服务端
 
@@ -60,16 +60,17 @@ storage 未就绪 → 暂存；就绪后批量比对（超时约 2s 回退全量
         │
 readChunkHash（MetadataTable，必要时 SectionHashStore combine）
         │
-   ┌────┴────┐
- 匹配       不匹配 / miss
-   │            │
-CacheLoadQueue  ChunkDataRequestC2S（全量）
-   │            │
-后台磁盘+解压   ChunkPayload → 后台解压 → persist
-   └────┬────┘         （contentHash=combine + sectionHashes）
+   ┌────┴────────────┬────────────┐
+  HIT              MISS         MISMATCH（过期）
+   │                 │              │
+CacheLoadQueue   全量请求     分段增量（默认开）
+   │                 │         SectionHashRequest
+后台磁盘+解压    ChunkPayload    → SectionDelta → NBT merge
+   └────────┬────────┘              │（失败/skipped/超时 → 全量）
+            └───────────┬───────────┘
 主线程时间预算 apply（JoinBoost：进服约 5s 提高预算）
         │
-apply 后再请求 blockEntity
+HIT apply 后再请求 blockEntity
 ```
 ## 4. 主线程限流
 
@@ -90,14 +91,22 @@ ChunkHashS2CPacket(dimension, List<Entry>)
 // Entry(chunkX, chunkZ, chunkHash, sectionBitmap)
 ```
 
-### 阶段二（保留、暂禁用）
+### 阶段二：分段增量（默认开启，可关闭）
 
 ```java
 SectionHashRequestC2SPacket  // 客户端 → 服务端
-SectionDeltaS2CPacket        // 服务端 → 客户端（变更 section + BE）
+SectionDeltaS2CPacket        // 服务端 → 客户端（变更分段 + BE）
 ```
 
-生产比对在 `ClientMetadataHandler.compareChunkHashes`：命中走缓存队列，否则全量请求。`sendSectionHashRequest` 无生产调用方。
+门控：`clientCache.sectionDeltaEnabled`（默认 `true`；需同时 `clientCache.enabled`）。
+
+| 比对结果 | 开关关 | 开关开（默认） |
+|----------|--------|----------------|
+| HIT | 缓存队列 | 缓存队列 |
+| MISS | 全量 | 全量 |
+| MISMATCH（过期） | 全量 | `sendSectionHashRequest` → NBT merge（失败回退全量） |
+
+服务端按 `0..sectionsCount-1` 比对 hash（空气=0），不等则统一 `serializeSection`（无专用空气协议）。详见 §11.5。
 
 旧 `ChunkMetadataS2C`（contentHash 批量元数据）协议已删除。
 
@@ -113,7 +122,7 @@ SectionDeltaS2CPacket        // 服务端 → 客户端（变更 section + BE）
 | `ChunkBloomFilter` | 减少无效磁盘 IO |
 | `ClientHassiumStorage` / `HassiumRegionFile` | 客户端 Region 缓存 + MetadataTable |
 | `ClientHeatIndex` | 访问热度 / LRU（`config/hassium/heat.idx`），不参与命中 |
-| `SectionHashStore` | per-dimension `section_hashes.bin`；阶段二预留，命中比对回退 |
+| `SectionHashStore` | per-dimension `section_hashes.bin`；分段增量比对 / 命中回退 |
 
 ## 7. 客户端淘汰
 
@@ -126,7 +135,7 @@ SectionDeltaS2CPacket        // 服务端 → 客户端（变更 section + BE）
 ## 9. 待实现
 
 - 方向性区块预加载（提高推送优先级，不改变协议）
-- 恢复 section-delta：需可靠 merge + 集成测试后再接回 miss 路径
+- warm-stash 优化（收包后暂存 NBT，卸载时 dirty=false 则 flush warm 跳过 live 重算）
 
 ## 10. 视距外显示（OVD / renderOnly）
 
@@ -220,5 +229,131 @@ OVD 环带区块数 ≈ `π × (clientVD² − serverVD²)`（圆形），每块
 
 - Bobby FakeChunk / 独立 `.bobby` 目录
 - 视距外向服务器 `ChunkDataRequestC2S` / 放宽 BE 视距校验
-- section-delta 接回 OVD
+- 分段增量接回 OVD
 - 抬高 vanilla 滑块上限 >32（版本差异大，用户编辑 options.txt）
+
+## 11. 磁盘 NBT 缓存格式
+
+自 `disk-nbt-cache-and-export` 起，客户端缓存 payload 从 packet 字节改为磁盘 chunk `CompoundTag`。
+
+### 11.1 外层布局（不变）
+
+仍为 `HassiumRegionFile` 的 3-sector header + `[length(4)][type=126][ZSTD 字典压缩 NBT 字节]`：
+- Sector 0: offset table（4096B）
+- Sector 1-2: MetadataTable（1024 × int64 contentHash）
+- Data: `[length(4)][type=126][ZSTD compressed NBT bytes]`
+
+### 11.2 内层 NBT schema
+
+解压后的字节为 `["HBT1" magic(4)][NBT binary]`，NBT 顶层 `CompoundTag`：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `x` | IntTag | chunkX |
+| `z` | IntTag | chunkZ |
+| `section_count` | IntTag | section 数量 |
+| `sections` | ListTag&lt;CompoundTag&gt; | 每个：`{"data": ByteArrayTag (LevelChunkSection 线格式), "has_only_air": ByteTag}` |
+| `heightmaps` | CompoundTag | 1.21.5-: 直接 NBT；1.21.5+: `Map<Types, long[]>` 序列化为 CompoundTag |
+| `block_entities` | ListTag&lt;CompoundTag&gt; | 每个 BE 的完整 NBT |
+| `is_light_on` | ByteTag | 固定 0（apply 时由客户端重算光照） |
+
+### 11.3 Live-Unload Snapshot（主一致性方案）
+
+真实区块卸载时用 `LevelChunk` + `ChunkContentHashUtil.computeSectionHashes(chunk)` 覆盖磁盘：
+- `CacheSaveQueue.enqueue` 入口检查 renderOnly → 直接跳过（保留历史快照）
+- `ChunkDiskCodec.levelChunkToNbt(chunk, level)` → NBT
+- `computeSectionHashes(chunk)` → `combineSectionHashesFromArray` → contentHash（与服务端同算法）
+- persist 覆盖磁盘
+
+这保证「曾加载并收到更新」的块再进应 HIT。
+
+### 11.4 旧 packet 缓存识别
+
+`loadChunkDataFromCache` 解压后调 `ChunkDiskCodec.isValidChunkNbt`：
+- 合法 NBT（含 magic 前缀）→ 正常返回
+- 非法（旧 packet 字节）→ `clientStorage.remove(pos)` 删块 + 记 miss → 全量请求
+
+### 11.5 分段增量（缓存过期 / MISMATCH 路径）
+
+仅当 `HassiumConfigService.isSectionDeltaEnabled()` 为真时启用（默认开）；关闭则过期与未命中一样全量。
+
+`compareChunkHashes` MISMATCH → `sendSectionHashRequest` → `ServerChunkPushManager.handleSectionHashRequest`（按索引完整比对；视距+1 余量）→ **始终**回 `SectionDeltaS2CPacket`（`entries` + `skipped`）：
+1. `entries`：读缓存 NBT；`ensureSectionsSize` 占位须为合法 `writeSection` 字节（禁止 `data=[]`）
+2. 变更分段的 `SectionData.blockData` 替换 `sections[idx].data`
+3. BE 写盘覆盖；主线程 apply 后再 `applyBlockEntities`（packet 线格式不带 BE）
+4. 重算 `sectionHashes` + `chunkHash` → persist + `nbtToPacketBytes` apply
+5. `skipped` / merge 失败 / 3s 无覆盖 → `requestFullChunks`（保底）
+
+### 11.6 关键组件
+
+| 组件 | 职责 |
+|------|------|
+| `ChunkDiskCodec` | packet↔NBT、LevelChunk→NBT、NBT 字节序列化 |
+| `ChunkPacketDataCompat` | section/heightmaps NBT 读写（跨版本） |
+| `CompoundTagCompat` | CompoundTag getter（1.21.5+ Optional 兼容） |
+| `CacheSaveQueue` | Live-Unload 主路径（renderOnly 跳过） |
+| `ClientChunkHandler` | apply 走 NBT→packet 重组（复用 `applyToLevelFromByteBuf`） |
+
+## 12. 缓存导出（`/hassiumc cache export`）
+
+把客户端缓存导出为可进单机世界的原版 Anvil 存档。
+
+### 12.1 命令
+
+```
+/hassiumc cache export [<worldName>]
+```
+
+- `<worldName>` 可选；默认 `HassiumCache_<timestamp>`
+- 仅客户端命令，无权限要求
+- 输出目录：`<gameDir>/saves/<worldName>/`
+
+### 12.2 输出结构
+
+| 维度 | 目标目录 |
+|------|----------|
+| `minecraft:overworld` | `region/` |
+| `minecraft:the_nether` | `DIM-1/region/` |
+| `minecraft:the_end` | `DIM1/region/` |
+| 其它 | `dimensions/<ns>/<path>/region/` |
+
+- `level.dat` + `level.dat_old`：最小可进世界脚手架（`DataVersion`=当前客户端、`GameType=SURVIVAL`、`SpawnX/Y/Z`、`generatorName=default`）
+- 每个 Region 文件：原版 2-sector header（offset + timestamp）+ `[length(4)][type=2][zlib data]`
+- 转码：Hassium type126 ZSTD → NBT → zlib type2
+
+### 12.3 异步与进度
+
+- 提交到 `HassiumTaskExecutor` 后台线程池
+- 进度按维度粒度回调，通过聊天回报
+- 单 region 失败不中断整体导出（累加失败计数）
+- 全局 `AtomicReference<Future>` 防重入；正在导出时拒绝新请求
+
+### 12.4 限制说明
+
+导出完成后聊天回报包含以下限制：
+
+- **无实体、无玩家背包/成就**：缓存仅含方块状态与 BE NBT
+- **仅为「去过的区块」快照**：空洞区块由世界生成器填充
+- **模组方块需相同模组与相近 MC 版本**：否则方块可能显示为未知
+- **DataVersion 与当前客户端一致**：跨版本存档升级交给原版
+- **BE 取决于缓存是否含 NBT**：Live-Unload 快照包含 BE；收包 warm-stash 可能缺失
+
+### 12.5 示例
+
+```
+/hassiumc cache export MyCacheWorld
+```
+
+输出：
+```
+saves/MyCacheWorld/
+├── level.dat
+├── level.dat_old
+├── region/
+│   ├── r.0.0.mca
+│   └── r.0.-1.mca
+├── DIM-1/region/
+└── DIM1/region/
+```
+
+完成后在单机主菜单可见 `MyCacheWorld`，进入后可浏览去过的区块。

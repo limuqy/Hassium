@@ -158,11 +158,39 @@ public class NetworkStats {
     }
 
     /**
-     * 记录发送数据请求
+     * 记录发送数据请求（1 次批请求）
      */
     public static void recordDataRequestSent() {
         if (!enabled) return;
         metrics.incrementDataRequestsSent();
+    }
+
+    /**
+     * 记录发送全量数据请求（按区块数）
+     */
+    public static void recordDataRequestsSent(int chunkCount) {
+        if (!enabled) return;
+        metrics.addDataRequestsSent(chunkCount);
+    }
+
+    /**
+     * 记录发出的分段增量请求（按区块数）
+     */
+    public static void recordSectionDeltaRequestsSent(int chunkCount) {
+        if (!enabled) return;
+        metrics.addSectionDeltaRequestsSent(chunkCount);
+    }
+
+    /**
+     * 记录收到的分段增量（计入网络接收，不计入区块解压）
+     *
+     * @param chunks       区块数
+     * @param vanillaBytes 若走全量时的原版等价字节（估算）
+     * @param actualBytes  实际 delta 载荷字节
+     */
+    public static void recordSectionDeltaReceived(int chunks, long vanillaBytes, long actualBytes) {
+        if (!enabled) return;
+        metrics.recordSectionDeltaReceived(chunks, vanillaBytes, actualBytes);
     }
 
     // ===== 便捷查询 =====

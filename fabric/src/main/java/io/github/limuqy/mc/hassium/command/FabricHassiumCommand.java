@@ -63,7 +63,28 @@ public class FabricHassiumCommand {
                                 .requires(source -> HassiumCommandHandler.isMetricsEnabled())
                                 .executes(FabricHassiumCommand::showClientStats)
                         )
+                        .then(ClientCommandManager.literal("cache")
+                                .then(ClientCommandManager.literal("export")
+                                        .executes(FabricHassiumCommand::exportCacheDefault)
+                                        .then(ClientCommandManager.argument("worldName", com.mojang.brigadier.arguments.StringArgumentType.greedyString())
+                                                .executes(FabricHassiumCommand::exportCacheNamed)
+                                        )
+                                )
+                        )
         );
+    }
+
+    private static int exportCacheDefault(CommandContext<FabricClientCommandSource> context) {
+        String msg = HassiumCommandHandler.startCacheExport(null);
+        context.getSource().sendFeedback(Component.literal(msg));
+        return 1;
+    }
+
+    private static int exportCacheNamed(CommandContext<FabricClientCommandSource> context) {
+        String name = com.mojang.brigadier.arguments.StringArgumentType.getString(context, "worldName");
+        String msg = HassiumCommandHandler.startCacheExport(name);
+        context.getSource().sendFeedback(Component.literal(msg));
+        return 1;
     }
 
     private static int showServerStats(CommandContext<CommandSourceStack> context) {

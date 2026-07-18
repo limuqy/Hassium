@@ -433,4 +433,13 @@ public class HassiumConfigService {
     public int getOvdUnloadDelaySecs() {
         return Math.max(0, config.clientCache().ovdUnloadDelaySecs());
     }
+
+    /**
+     * MISMATCH 是否走分段增量（仍依赖 {@link #isClientCacheEnabled()}）。
+     * <p>
+     * 默认 true：开启时仅请求变更分段并合并本地缓存；关闭时与全量请求路径一致。
+     */
+    public boolean isSectionDeltaEnabled() {
+        return isClientCacheEnabled() && config.clientCache().sectionDeltaEnabled();
+    }
 }

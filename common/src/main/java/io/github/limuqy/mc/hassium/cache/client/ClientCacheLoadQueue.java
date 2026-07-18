@@ -239,6 +239,11 @@ public class ClientCacheLoadQueue {
                 applied++;
             } catch (Exception e) {
                 Constants.LOG.error("[CACHE_APPLY] Error applying cached chunk {}", chunk.pos(), e);
+                if (!chunk.renderOnly()) {
+                    requestChunkFromServer(chunk.pos());
+                } else {
+                    ViewDistanceExtensionService.getInstance().onRenderOnlyMiss(chunk.pos());
+                }
             }
         }
 

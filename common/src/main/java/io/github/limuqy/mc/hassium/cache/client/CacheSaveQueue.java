@@ -5,15 +5,14 @@ import io.github.limuqy.mc.hassium.cache.ChunkContentHashUtil;
 import io.github.limuqy.mc.hassium.concurrent.HassiumTaskExecutor;
 import io.github.limuqy.mc.hassium.concurrent.TaskCategory;
 import io.github.limuqy.mc.hassium.network.ClientChunkHandler;
-import io.github.limuqy.mc.hassium.compat.RegistryCompat;
 import net.minecraft.client.multiplayer.ClientLevel;
-import net.minecraft.network.FriendlyByteBuf;
-import net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket;
+import net.minecraft.nbt.CompoundTag;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.chunk.LevelChunk;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.Future;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
@@ -25,6 +24,11 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * <p>
  * 区块卸载时在主线程提交保存任务，后台线程执行序列化、压缩和持久化。
  * 避免在主线程执行耗时的 IO 操作导致卡顿。
+ * <p>
+ * <b>Live-Unload Snapshot 策略</b>（替代旧的「有权威 hash 则 skip 卸载」）：
+ * 真实区块卸载时用 {@link LevelChunk} + {@link ChunkContentHashUtil#computeSectionHashes}
+ * 重新计算 hash 与 NBT，覆盖磁盘上的推送快照。这保证「曾加载并收到更新」的块再进应 HIT。
+ * renderOnly 区块卸载直接跳过（保留历史快照）。
  * <p>
  * 线程安全设计：
  * <ul>
@@ -46,14 +50,19 @@ public class CacheSaveQueue {
     /** 线程是否已启动 */
     private final AtomicBoolean initialized = new AtomicBoolean(false);
 
-    /** 保存任务：只持有序列化后的字节数组快照、contentHash 和 sectionHashes */
+    /**
+     * 保存任务：只持有 NBT 字节快照、contentHash 和 sectionHashes。
+     * <p>
+     * {@code serializedData} 语义为 {@link ChunkDiskCodec#nbtToBytes} 产出的 NBT 字节（含 magic 前缀）。
+     */
     public record SaveTask(
             ChunkPos pos,
             int chunkX,
             int chunkZ,
             byte[] serializedData,
             long contentHash,
-            long[] sectionHashes
+            long[] sectionHashes,
+            boolean fromLiveUnload
     ) {}
 
     private CacheSaveQueue() {}
@@ -75,50 +84,63 @@ public class CacheSaveQueue {
     }
 
     /**
-     * 提交区块保存任务（主线程调用）
+     * 提交区块保存任务（主线程调用，Live-Unload 主路径）
      * <p>
-     * 在主线程完成序列化与 contentHash 计算，后台只处理字节数组。
+     * 在主线程完成 LevelChunk → NBT 序列化与 sectionHashes 计算，后台只处理字节数组。
      * <p>
-     * 若缓存中已有服务端下行写入的 sectionHashes，则跳过卸载重写，
-     * 避免客户端 LevelChunk 再编码覆盖权威 packet/hash 导致假 MISMATCH。
+     * renderOnly 区块直接跳过（保留历史快照，避免覆盖推送时的权威数据）。
+     * 已卸载/null 的 chunk 跳过。
      */
     public void enqueue(LevelChunk chunk) {
+        if (chunk == null) return;
         ChunkPos pos = chunk.getPos();
 
-        ClientHassiumStorage storage = ClientChunkHandler.getClientStorage();
-        if (storage != null) {
-            long[] existing = storage.readSectionHashes(pos);
-            if (existing != null && existing.length > 0) {
-                Constants.LOG.debug(
-                        "Hassium: [CACHE SAVE] Skip unload rewrite for chunk {} (authoritative sectionHashes present)",
-                        pos);
-                return;
-            }
+        // renderOnly 区块卸载不写回缓存（OVD 历史快照保留）
+        if (ViewDistanceExtensionService.getInstance().isRenderOnly(pos)) {
+            Constants.LOG.debug("Hassium: [CACHE SAVE] Skip unload for render-only chunk {}", pos);
+            return;
+        }
+
+        ClientLevel level = (ClientLevel) chunk.getLevel();
+        if (level == null) {
+            Constants.LOG.debug("Hassium: [CACHE SAVE] Skip chunk {} (level null)", pos);
+            return;
         }
 
         ensureInitialized();
 
-        ClientLevel level = (ClientLevel) chunk.getLevel();
-        byte[] serializedData = serializeChunk(chunk, level);
-        if (serializedData == null) {
-            Constants.LOG.warn("Hassium: [CACHE SAVE] Failed to serialize chunk {}, skipping", pos);
+        // Live-Unload：从 LevelChunk 直接序列化为 NBT（不依赖 packet 路径）
+        CompoundTag nbt = ChunkDiskCodec.levelChunkToNbt(chunk, level);
+        if (nbt == null) {
+            Constants.LOG.warn("Hassium: [CACHE SAVE] Failed to serialize chunk {} to NBT, skipping", pos);
+            return;
+        }
+        byte[] nbtBytes = ChunkDiskCodec.nbtToBytes(nbt);
+        if (nbtBytes == null) {
+            Constants.LOG.warn("Hassium: [CACHE SAVE] Failed to encode NBT bytes for chunk {}, skipping", pos);
             return;
         }
 
-        // 必须与服务端 chunkHash（combine sectionHashes）一致，不能用含 BE/heightmap 的 compute()
-        long[] sectionHashes = computeSectionHashesFromSerialized(serializedData);
+        // sectionHashes 直接从 LevelChunk 计算（与服务端 ServerChunkPushManager 同算法）
+        long[] sectionHashes;
         long contentHash;
-        if (sectionHashes != null && sectionHashes.length > 0) {
+        try {
+            Map<Integer, Long> hashesMap = ChunkContentHashUtil.computeSectionHashes(chunk);
+            sectionHashes = ChunkContentHashUtil.sectionHashesToArray(hashesMap);
             contentHash = ChunkContentHashUtil.combineSectionHashesFromArray(sectionHashes);
-        } else {
-            contentHash = ChunkContentHashUtil.compute(chunk, level.getLightEngine()).hash();
+        } catch (Throwable t) {
+            // hash 计算失败不阻断落盘（contentHash 用 0 表示无效，命中比对会回退全量）
+            Constants.LOG.debug("Hassium: [CACHE SAVE] Failed to compute section hashes for {}", pos, t);
+            sectionHashes = new long[0];
+            contentHash = 0L;
         }
-        SaveTask task = new SaveTask(pos, pos.x, pos.z, serializedData, contentHash, sectionHashes);
+
+        SaveTask task = new SaveTask(pos, pos.x, pos.z, nbtBytes, contentHash, sectionHashes, true);
         taskQueue.offer(task);
 
         int sectionHashCount = sectionHashes != null ? sectionHashes.length : 0;
-        Constants.LOG.debug("Hassium: [CACHE SAVE QUEUED] chunk {} ({} bytes, hash={}, sections={}, queue size: {})",
-                pos, serializedData.length, Long.toHexString(contentHash), sectionHashCount, taskQueue.size());
+        Constants.LOG.debug("Hassium: [CACHE SAVE QUEUED] chunk {} ({} NBT bytes, hash={}, sections={}, queue: {})",
+                pos, nbtBytes.length, Long.toHexString(contentHash), sectionHashCount, taskQueue.size());
     }
 
     /**
@@ -163,95 +185,15 @@ public class CacheSaveQueue {
 
             boolean saved = storage.persist(task.pos(), task.serializedData(), task.contentHash(), task.sectionHashes());
             if (saved) {
-                Constants.LOG.debug("Hassium: [CACHE SAVE] Saved chunk {} ({} bytes, hash={})",
-                        task.pos(), task.serializedData().length, Long.toHexString(task.contentHash()));
+                Constants.LOG.debug("Hassium: [CACHE SAVE] Saved chunk {} ({} bytes, hash={}, live={})",
+                        task.pos(), task.serializedData().length, Long.toHexString(task.contentHash()),
+                        task.fromLiveUnload());
             } else {
                 Constants.LOG.warn("Hassium: [CACHE SAVE] Failed to persist chunk {}", task.pos());
             }
 
         } catch (Exception e) {
             Constants.LOG.error("Hassium: [CACHE SAVE] Error saving chunk {}", task.pos(), e);
-        }
-    }
-
-    /**
-     * 序列化区块数据（主线程调用，空光照）
-     * <p>
-     * 使用 ClientboundLevelChunkWithLightPacket 序列化，光照剥离由配置控制。
-     * 在主线程完成以避免访问 Minecraft 对象的数据竞争。
-     */
-    private byte[] serializeChunk(LevelChunk chunk, ClientLevel level) {
-        try {
-            if (level == null) {
-                return null;
-            }
-
-            // 光照剥离与服务端配置一致
-            boolean stripLight = io.github.limuqy.mc.hassium.config.HassiumConfigService.getInstance().isLightStripEnabled();
-            java.util.BitSet lightMask = stripLight ? new java.util.BitSet() : null;
-            ClientboundLevelChunkWithLightPacket packet =
-                    new ClientboundLevelChunkWithLightPacket(
-                            chunk, level.getLightEngine(), lightMask, lightMask);
-
-#if MC_VER < MC_1_20_5
-            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
-            try {
-                packet.write(buf);
-                byte[] data = new byte[buf.readableBytes()];
-                buf.readBytes(data);
-                return data;
-            } finally {
-                buf.release();
-            }
-#else
-            // 1.20.5+: Packet.write() removed, use STREAM_CODEC with RegistryFriendlyByteBuf
-            net.minecraft.network.RegistryFriendlyByteBuf buf =
-                    new net.minecraft.network.RegistryFriendlyByteBuf(io.netty.buffer.Unpooled.buffer(), level.registryAccess());
-            try {
-                ClientboundLevelChunkWithLightPacket.STREAM_CODEC.encode(buf, packet);
-                byte[] data = new byte[buf.readableBytes()];
-                buf.readBytes(data);
-                return data;
-            } finally {
-                buf.release();
-            }
-#endif
-
-        } catch (Exception e) {
-            Constants.LOG.error("Hassium: [CACHE SAVE] Serialization failed for chunk {}", chunk.getPos(), e);
-            return null;
-        }
-    }
-
-    /**
-     * 从序列化的 packet 字节中计算 section 哈希（主线程调用）
-     * <p>
-     * 解析 packet 格式提取 sections 字节数组，委托 ChunkContentHashUtil 计算各 section 哈希。
-     * 失败时返回 null（非致命，sectionHashes 为可选优化）。
-     */
-    private long[] computeSectionHashesFromSerialized(byte[] data) {
-        try {
-            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(data));
-            try {
-                buf.readInt(); // chunkX
-                buf.readInt(); // chunkZ
-                io.github.limuqy.mc.hassium.compat.ChunkPacketDataCompat.skipHeightmaps(buf);
-                int sectionsSize = buf.readVarInt();
-                if (sectionsSize <= 0 || sectionsSize > buf.readableBytes()) return null;
-                byte[] sectionsBytes = new byte[sectionsSize];
-                buf.readBytes(sectionsBytes);
-                ClientLevel clientLevel = net.minecraft.client.Minecraft.getInstance().level;
-                if (clientLevel == null) return null;
-                int sectionCount = clientLevel.getSectionsCount();
-                java.util.Map<Integer, Long> hashes =
-                        ChunkContentHashUtil.computeSectionHashesFromBytes(sectionsBytes, sectionCount, clientLevel.registryAccess());
-                return ChunkContentHashUtil.sectionHashesToArray(hashes);
-            } finally {
-                buf.release();
-            }
-        } catch (Exception e) {
-            Constants.LOG.debug("Hassium: [CACHE SAVE] Failed to compute section hashes", e);
-            return null;
         }
     }
 

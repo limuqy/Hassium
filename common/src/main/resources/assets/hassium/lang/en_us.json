@@ -38,6 +38,8 @@
     "hassium.configuration.clientCache.maxRenderDistance.tooltip":  "Fog/memory cap. Vanilla slider max is 32. RD>32 needs manual options.txt edit. Default: 32.",
     "hassium.configuration.clientCache.ovdUnloadDelaySecs":  "OVD unload delay (seconds)",
     "hassium.configuration.clientCache.ovdUnloadDelaySecs.tooltip":  "Delay before unloading chunks that left the OVD ring (avoids thrash on fast movement). 0 = synchronous. Default: 5.",
+    "hassium.configuration.clientCache.sectionDeltaEnabled":  "Enable section delta",
+    "hassium.configuration.clientCache.sectionDeltaEnabled.tooltip":  "When the local cache hash mismatches the server, request only changed 16×16×16 sections and merge into the cache instead of a full chunk. Requires client cache. Default: on.",
     "hassium.configuration.clientNetwork":  "Client Network",
     "hassium.configuration.clientNetwork.button":  "Client Network…",
     "hassium.configuration.clientNetwork.clientChunkLoadThreads":  "Client chunk load threads",

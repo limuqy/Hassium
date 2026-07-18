@@ -1,6 +1,7 @@
 package io.github.limuqy.mc.hassium.mixin;
 
 import io.github.limuqy.mc.hassium.cache.client.ClientCacheLoadQueue;
+import io.github.limuqy.mc.hassium.cache.client.ClientLightRecomputeService;
 import io.github.limuqy.mc.hassium.cache.client.ClientMainThreadBudget;
 import io.github.limuqy.mc.hassium.cache.client.ViewDistanceExtensionService;
 import io.github.limuqy.mc.hassium.concurrent.MainThreadDispatcher;
@@ -46,7 +47,14 @@ public class MixinClientTick {
             // 忽略
         }
 
-        // 共享主线程时间预算：先 flush 近距网络回调，再 apply 缓存区块
+        // 上一帧光照限流溢出 → 本帧 flush 前入队
+        try {
+            ClientLightRecomputeService.promoteOverflow();
+        } catch (Exception e) {
+            // 忽略
+        }
+
+        // 共享主线程时间预算：先 flush 近距网络回调（含延后光照），再 apply 缓存区块
         long deadlineNs = System.nanoTime() + ClientMainThreadBudget.getBudgetNs();
         int hardCap = ClientMainThreadBudget.getHardCap();
 

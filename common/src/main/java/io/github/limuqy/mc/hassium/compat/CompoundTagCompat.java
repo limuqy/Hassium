@@ -5,9 +5,11 @@ import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.DoubleTag;
 import net.minecraft.nbt.FloatTag;
 import net.minecraft.nbt.IntTag;
+import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.LongTag;
 import net.minecraft.nbt.ShortTag;
 import net.minecraft.nbt.StringTag;
+import net.minecraft.nbt.Tag;
 
 import java.util.Collection;
 
@@ -16,6 +18,9 @@ import java.util.Collection;
  * <p>
  * 1.21.4-: {@code getAllKeys()}、{@code getAsByte()} 等
  * 1.21.5+: {@code keySet()}、{@code byteValue()} 等
+ * <p>
+ * 1.21.5+ 起 {@code getInt}/{@code getBoolean}/{@code getList} 等返回 {@code Optional}，
+ * 本类统一返回原始类型（缺失返回默认值）。
  */
 public final class CompoundTagCompat {
     private CompoundTagCompat() {}
@@ -85,5 +90,50 @@ public final class CompoundTagCompat {
 #else
         return tag.value();
 #endif
+    }
+
+    /**
+     * 读取 int 字段（1.21.5+ Optional 兼容）。
+     */
+    public static int getInt(CompoundTag tag, String key, int defaultValue) {
+#if MC_VER < MC_1_21_5
+        return tag.getInt(key);
+#else
+        return tag.getInt(key).orElse(defaultValue);
+#endif
+    }
+
+    /**
+     * 读取 boolean 字段（1.21.5+ Optional 兼容）。
+     */
+    public static boolean getBoolean(CompoundTag tag, String key, boolean defaultValue) {
+#if MC_VER < MC_1_21_5
+        return tag.getBoolean(key);
+#else
+        return tag.getBoolean(key).orElse(defaultValue);
+#endif
+    }
+
+    /**
+     * 读取 ListTag 字段（1.21.5+ Optional 与 TagType 重构兼容）。
+     * 不校验 list element type，调用方自行 instanceof 判断。
+     */
+    public static ListTag getList(CompoundTag tag, String key) {
+        Tag t = tag.get(key);
+        return t instanceof ListTag lt ? lt : new ListTag();
+    }
+
+    /**
+     * 判断是否含指定 key 且为 CompoundTag。
+     */
+    public static boolean containsCompound(CompoundTag tag, String key) {
+        return tag.get(key) instanceof CompoundTag;
+    }
+
+    /**
+     * 判断是否含指定 key 且为 ListTag（如 chunk NBT 的 {@code sections}）。
+     */
+    public static boolean containsList(CompoundTag tag, String key) {
+        return tag.get(key) instanceof ListTag;
     }
 }

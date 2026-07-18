@@ -1,5 +1,6 @@
 package io.github.limuqy.mc.hassium.command;
 
+import io.github.limuqy.mc.hassium.cache.client.CacheWorldExporter;
 import io.github.limuqy.mc.hassium.metrics.HassiumMetricsImpl;
 import io.github.limuqy.mc.hassium.metrics.NetworkStats;
 
@@ -58,23 +59,34 @@ public class HassiumCommandHandler {
         long cacheHits = metrics.getCacheHitCount();
         long cacheMisses = metrics.getCacheMissCount();
         long cacheStale = metrics.getCacheStaleCount();
+        long cacheHitBytes = metrics.getCacheHitBytes();
+        long deltaReq = metrics.getSectionDeltaRequestsSent();
+        long deltaRecv = metrics.getSectionDeltaChunksReceived();
         double cacheHitRate = metrics.getCacheHitRate() * 100.0;
         double recvSaving = vanillaRecv > 0 ? (double) (vanillaRecv - actualRecv) / vanillaRecv * 100.0 : 0.0;
         double compressionRatio = actualRecv > 0 ? (double) vanillaRecv / actualRecv : 0.0;
 
+        String recvNote = actualRecv == 0 && cacheHits > 0
+                ? "\n§7（本局区块几乎全走缓存命中；网络接收仅计全量压缩包与分段增量）§r"
+                : "\n§7（网络接收 = 全量压缩包 + 分段增量；不含缓存命中）§r";
+
         return String.format(
                 "§6=== Hassium 客户端统计 ===§r\n" +
-                "§e接收:§r %s (原版 %s) — §a节省 %.1f%%§r\n" +
-                "§e压缩比:§r %.2f:1\n" +
+                "§e网络接收:§r %s (原版等价 %s) — §a相对全量节省 %.1f%%§r\n" +
+                "§e压缩比:§r %.2f:1%s\n" +
                 "§e缓存命中率:§r %.1f%% (§a命中 %d§r, §c未命中 %d§r, §6过期 %d§r)\n" +
+                "§e缓存命中节省:§r %s（估算，未走网络）\n" +
                 "§e元数据接收:§r %s\n" +
-                "§e数据请求发送:§r %d\n" +
-                "§e区块解压:§r %d",
+                "§e全量数据请求:§r %d 块\n" +
+                "§e分段增量:§r 请求 %d / 接收 %d\n" +
+                "§e区块解压:§r %d（仅全量压缩通道）",
                 formatBytes(actualRecv), formatBytes(vanillaRecv), recvSaving,
-                compressionRatio,
+                compressionRatio, recvNote,
                 cacheHitRate, cacheHits, cacheMisses, cacheStale,
+                formatBytes(cacheHitBytes),
                 formatBytes(metrics.getMetadataBytesReceived()),
                 metrics.getDataRequestsSent(),
+                deltaReq, deltaRecv,
                 metrics.getChunksDecompressed()
         );
     }
@@ -143,5 +155,38 @@ public class HassiumCommandHandler {
         if (bytes < 1024 * 1024) return String.format("%.1f KB", bytes / 1024.0);
         if (bytes < 1024L * 1024 * 1024) return String.format("%.1f MB", bytes / (1024.0 * 1024));
         return String.format("%.1f GB", bytes / (1024.0 * 1024 * 1024));
+    }
+
+    /**
+     * 启动缓存导出为原版世界（客户端命令）。
+     * <p>
+     * 异步执行；进度通过聊天回报。限制说明见 {@link CacheWorldExporter}。
+     *
+     * @param worldName 输出世界名；null/空时自动生成 {@code HassiumCache_<timestamp>}
+     * @return 启动结果消息
+     */
+    public static String startCacheExport(String worldName) {
+        if (worldName == null || worldName.isEmpty()) {
+            worldName = "HassiumCache_" + System.currentTimeMillis();
+        }
+        if (CacheWorldExporter.isRunning()) {
+            return "§c已有导出任务正在运行，请等待完成§r";
+        }
+        boolean started = CacheWorldExporter.exportAsync(worldName, (done, total, message) -> {
+            net.minecraft.client.Minecraft mc = net.minecraft.client.Minecraft.getInstance();
+            if (mc != null && mc.gui != null) {
+                mc.gui.getChat().addMessage(net.minecraft.network.chat.Component.literal("§6[Hassium]§r " + message));
+            }
+        });
+        return started
+                ? "§a开始导出缓存到 saves/" + worldName + "/...§r\n§7限制: 无实体/玩家背包；仅为去过区块快照；模组方块需相同模组§r"
+                : "§c导出启动失败（执行器不可用或已有任务在跑）§r";
+    }
+
+    /** 查询当前导出状态。 */
+    public static String getCacheExportStatus() {
+        return CacheWorldExporter.isRunning()
+                ? "§6导出进行中...§r"
+                : "§a无导出任务§r";
     }
 }

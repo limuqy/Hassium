@@ -453,7 +453,7 @@ INDEX_SYNC_S2C = ResourceLocationCompat.create(Constants.MOD_ID, "index_sync_s2c
         });
 #endif
 
-        // 注册 section delta 响应接收（阶段二）
+        // 注册分段增量响应接收（阶段二）
 #if MC_VER < MC_1_20_5
         ClientPlayNetworking.registerGlobalReceiver(SECTION_DELTA_S2C, (client, handler, buf, responseSender) -> {
             try {

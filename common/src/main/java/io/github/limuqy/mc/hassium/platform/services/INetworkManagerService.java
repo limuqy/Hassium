@@ -25,7 +25,7 @@ public interface INetworkManagerService {
     void sendSectionHashRequest(FriendlyByteBuf buf);
 
     /**
-     * 发送 section delta 响应到客户端（阶段二，服务端调用）
+     * 发送分段增量响应到客户端（阶段二，服务端调用）
      */
     void sendSectionDeltaPacket(ServerPlayer player, FriendlyByteBuf buf);
 

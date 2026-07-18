@@ -41,6 +41,11 @@ public class HassiumMetricsImpl implements HassiumMetrics {
     private final AtomicLong dataRequestsReceived = new AtomicLong(0);
     private final AtomicLong chunksCompressed = new AtomicLong(0);
     private final AtomicLong chunksDecompressed = new AtomicLong(0);
+    /** 客户端发出的分段增量请求区块数 */
+    private final AtomicLong sectionDeltaRequestsSent = new AtomicLong(0);
+
+    /** 客户端收到并计入流量的分段增量区块数 */
+    private final AtomicLong sectionDeltaChunksReceived = new AtomicLong(0);
 
     // 错误指标
     private final AtomicLong storageErrors = new AtomicLong(0);
@@ -228,6 +233,8 @@ public class HassiumMetricsImpl implements HassiumMetrics {
         dataRequestsReceived.set(0);
         chunksCompressed.set(0);
         chunksDecompressed.set(0);
+        sectionDeltaRequestsSent.set(0);
+        sectionDeltaChunksReceived.set(0);
         storageErrors.set(0);
         networkErrors.set(0);
         compressionErrors.set(0);
@@ -410,10 +417,55 @@ public class HassiumMetricsImpl implements HassiumMetrics {
     }
 
     /**
+     * 记录数据请求发送（按区块数累加）
+     */
+    public void addDataRequestsSent(long count) {
+        if (count > 0) {
+            dataRequestsSent.addAndGet(count);
+        }
+    }
+
+    /**
      * 记录数据请求接收次数
      */
     public void incrementDataRequestsReceived() {
         dataRequestsReceived.incrementAndGet();
+    }
+
+    /**
+     * 记录分段增量请求（按区块数）
+     */
+    public void addSectionDeltaRequestsSent(long count) {
+        if (count > 0) {
+            sectionDeltaRequestsSent.addAndGet(count);
+        }
+    }
+
+    /**
+     * 记录分段增量接收：计入网络接收字节，不计入「区块解压」
+     *
+     * @param chunks       收到 delta 的区块数
+     * @param vanillaBytes 若走全量时的原版等价字节（估算）
+     * @param actualBytes  实际 delta 载荷字节
+     */
+    public void recordSectionDeltaReceived(long chunks, long vanillaBytes, long actualBytes) {
+        if (chunks > 0) {
+            sectionDeltaChunksReceived.addAndGet(chunks);
+        }
+        if (vanillaBytes > 0) {
+            vanillaBytesReceived.addAndGet(vanillaBytes);
+        }
+        if (actualBytes > 0) {
+            actualBytesReceived.addAndGet(actualBytes);
+        }
+    }
+
+    public long getSectionDeltaRequestsSent() {
+        return sectionDeltaRequestsSent.get();
+    }
+
+    public long getSectionDeltaChunksReceived() {
+        return sectionDeltaChunksReceived.get();
     }
 
     /**
@@ -469,6 +521,7 @@ public class HassiumMetricsImpl implements HassiumMetrics {
                         "  压缩比: %.2f:1\n" +
                         "  元数据: 发送 %s, 接收 %s\n" +
                         "  数据请求: 发送 %d, 接收 %d\n" +
+                        "  分段增量: 请求 %d, 接收 %d\n" +
                         "  区块: 压缩 %d, 解压 %d\n" +
                         "错误:\n" +
                         "  存储: %d\n" +
@@ -489,6 +542,7 @@ public class HassiumMetricsImpl implements HassiumMetrics {
                 getNetworkCompressionRatio(),
                 formatBytes(metadataBytesSent.get()), formatBytes(metadataBytesReceived.get()),
                 dataRequestsSent.get(), dataRequestsReceived.get(),
+                sectionDeltaRequestsSent.get(), sectionDeltaChunksReceived.get(),
                 chunksCompressed.get(), chunksDecompressed.get(),
                 storageErrors.get(),
                 networkErrors.get(),

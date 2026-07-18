@@ -36,7 +36,7 @@ public class MixinClientLevel implements IClientLevelExtension {
     /**
      * 添加仅渲染区块
      */
-    @Unique
+    @Override
     public void hassium$addRenderOnlyChunk(ChunkPos pos) {
         hassium$renderOnlyChunks.add(pos);
         Constants.LOG.debug("Hassium: Added render-only chunk {}", pos);
@@ -45,7 +45,7 @@ public class MixinClientLevel implements IClientLevelExtension {
     /**
      * 移除仅渲染区块
      */
-    @Unique
+    @Override
     public void hassium$removeRenderOnlyChunk(ChunkPos pos) {
         hassium$renderOnlyChunks.remove(pos);
     }

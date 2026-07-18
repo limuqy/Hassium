@@ -82,7 +82,7 @@ public final class HassiumPacketIds {
     public static final String SECTION_HASH_REQUEST_C2S = "hassium:section_hash_request_c2s";
 
     /**
-     * 服务端 -> 客户端：section delta 响应（阶段二）
+     * 服务端 -> 客户端：分段增量响应（阶段二）
      */
     public static final String SECTION_DELTA_S2C = "hassium:section_delta_s2c";
 

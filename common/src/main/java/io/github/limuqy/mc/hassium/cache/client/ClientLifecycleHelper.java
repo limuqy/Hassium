@@ -80,6 +80,7 @@ public final class ClientLifecycleHelper {
 
         // 清空主线程回调队列（不保留任何任务）
         MainThreadDispatcher.clearClient(false);
+        ClientLightRecomputeService.clear();
 
         ClientMetadataHandler.clearPendingState();
         ClientHassiumStorage.closeSharedDatabase();

@@ -1,6 +1,6 @@
 ---
 name: hassium-network
-description: Hassium 网络与区块缓存推送技能。涉及握手、全局/通道 ZSTD、ServerChunkPushManager、ChunkHashS2C、ClientCacheLoadQueue、主线程预算/JoinBoost、黑名单、指标命令、section-delta 或 network/cache 包任务时使用。
+description: Hassium 网络与区块缓存推送技能。涉及握手、全局/通道 ZSTD、ServerChunkPushManager、ChunkHashS2C、ClientCacheLoadQueue、主线程预算/JoinBoost、黑名单、指标命令、分段增量（section-delta）或 network/cache 包任务时使用。
 ---
 
 # Hassium 网络与缓存推送
@@ -32,7 +32,7 @@ Mixin 拦截 broadcast/trackChunk/PlayerChunkSender
   → persist：contentHash=combine(sectionHashes) + SectionHashStore
 ```
 
-**section-delta（阶段二）**：协议与 handler **保留**，生产 miss/mismatch **一律全量**。恢复前勿接回 `sendSectionHashRequest`。
+**分段增量（阶段二）**：`clientCache.sectionDeltaEnabled`（默认 `true`）。开启时缓存过期（MISMATCH）→ `SectionHashRequest` → NBT merge；关闭时走全量。服务端按索引比对（空气 hash=0），统一 `serializeSection`；超视距进 `skipped` 并始终回包；客户端对 skipped/超时回退全量。
 
 已删除：`ChunkMetadataS2CPacket` / `sendMetadata*`。
 
@@ -59,7 +59,7 @@ Mixin 拦截 broadcast/trackChunk/PlayerChunkSender
 | `maxChunksPerTick` | 每玩家每 **server tick** 序列化上限 |
 | `mainThreadChunkBudgetMs` | 客户端每帧预算（默认 3；JoinBoost ~10） |
 | `maxChunksPerFrame` / `maxCallbacksPerFrame` | 硬顶，非主限流 |
-| `maxLightRecomputePerFrame` | 客户端每帧光照重算区块上限（默认 10） |
+| `maxLightRecomputePerFrame` | 客户端每帧光照重算区块上限；超额进溢出队列；重算与 apply 解耦（Dispatcher） |
 
 ## 日志
 

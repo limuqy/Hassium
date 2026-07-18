@@ -73,7 +73,8 @@ public final class HassiumConfigSpec {
                         CLIENT.cacheBloomFilterFpp.get(),
                         CLIENT.cacheViewDistanceExtensionEnabled.get(),
                         CLIENT.cacheMaxRenderDistance.get(),
-                        CLIENT.cacheOvdUnloadDelaySecs.get()
+                        CLIENT.cacheOvdUnloadDelaySecs.get(),
+                        CLIENT.cacheSectionDeltaEnabled.get()
                 ),
                 new HassiumConfig.NetworkConfig(
                         COMMON.networkEnabled.get(),
@@ -144,6 +145,7 @@ public final class HassiumConfigSpec {
         CLIENT.cacheViewDistanceExtensionEnabled.set(cache.viewDistanceExtensionEnabled());
         CLIENT.cacheMaxRenderDistance.set(cache.maxRenderDistance());
         CLIENT.cacheOvdUnloadDelaySecs.set(cache.ovdUnloadDelaySecs());
+        CLIENT.cacheSectionDeltaEnabled.set(cache.sectionDeltaEnabled());
         CLIENT.networkClientChunkLoadThreads.set(net.clientChunkLoadThreads());
         CLIENT.networkLightStripEnabled.set(net.lightStripEnabled());
         CLIENT.networkBackgroundThreads.set(net.backgroundThreads());
@@ -211,6 +213,7 @@ public final class HassiumConfigSpec {
         public final ForgeConfigSpec.BooleanValue cacheViewDistanceExtensionEnabled;
         public final ForgeConfigSpec.IntValue cacheMaxRenderDistance;
         public final ForgeConfigSpec.IntValue cacheOvdUnloadDelaySecs;
+        public final ForgeConfigSpec.BooleanValue cacheSectionDeltaEnabled;
 
         public final ForgeConfigSpec.IntValue networkClientChunkLoadThreads;
         public final ForgeConfigSpec.BooleanValue networkLightStripEnabled;
@@ -239,6 +242,7 @@ public final class HassiumConfigSpec {
         public final ModConfigSpec.BooleanValue cacheViewDistanceExtensionEnabled;
         public final ModConfigSpec.IntValue cacheMaxRenderDistance;
         public final ModConfigSpec.IntValue cacheOvdUnloadDelaySecs;
+        public final ModConfigSpec.BooleanValue cacheSectionDeltaEnabled;
 
         public final ModConfigSpec.IntValue networkClientChunkLoadThreads;
         public final ModConfigSpec.BooleanValue networkLightStripEnabled;
@@ -254,6 +258,7 @@ public final class HassiumConfigSpec {
                     .translation("hassium.configuration.clientCache")
                     .push("clientCache");
             cacheEnabled = builder
+                    .comment("=== 基础 ===")
                     .comment("是否启用客户端缓存（命中本地 Region 可减少重复区块传输；默认 true）")
                     .translation("hassium.configuration.clientCache.enabled")
                     .define("enabled", true);
@@ -266,6 +271,7 @@ public final class HassiumConfigSpec {
                     .translation("hassium.configuration.clientCache.maxAgeDays")
                     .defineInRange("maxAgeDays", 30, 1, 3650);
             cacheHotScoreThreshold = builder
+                    .comment("=== 热度清理 ===")
                     .comment("热点分数阈值：低于此值视为冷区块，清理时优先淘汰（默认 0.3）")
                     .translation("hassium.configuration.clientCache.hotScoreThreshold")
                     .defineInRange("hotScoreThreshold", 0.3, 0.0, 1.0);
@@ -290,6 +296,7 @@ public final class HassiumConfigSpec {
                     .translation("hassium.configuration.clientCache.minCleanupBatchSize")
                     .defineInRange("minCleanupBatchSize", 100, 1, 100000);
             cacheBloomFilterEnabled = builder
+                    .comment("=== Bloom Filter 预筛 ===")
                     .comment("是否启用 Bloom Filter 预筛（减少无效 .mca 读取；默认 true）")
                     .translation("hassium.configuration.clientCache.bloomFilterEnabled")
                     .define("bloomFilterEnabled", true);
@@ -302,6 +309,7 @@ public final class HassiumConfigSpec {
                     .translation("hassium.configuration.clientCache.bloomFilterFpp")
                     .defineInRange("bloomFilterFpp", 0.01, 0.001, 0.1);
             cacheViewDistanceExtensionEnabled = builder
+                    .comment("=== 视距外显示（OVD） ===")
                     .comment("是否启用视距外显示（OVD）：客户端 RD > 服务端视距时，用本地缓存回填环带仅渲染。"
                             + "依赖 clientCache.enabled。与 Bobby 互斥，勿同装。默认 true")
                     .translation("hassium.configuration.clientCache.viewDistanceExtensionEnabled")
@@ -315,12 +323,21 @@ public final class HassiumConfigSpec {
                     .comment("离开 OVD 环带后延迟卸载秒数（避免快速移动反复加载/卸载；默认 5；0=同步卸载）")
                     .translation("hassium.configuration.clientCache.ovdUnloadDelaySecs")
                     .defineInRange("ovdUnloadDelaySecs", 5, 0, 60);
+            cacheSectionDeltaEnabled = builder
+                    .comment("=== 分段增量 ===")
+                    .comment("缓存哈希不一致（MISMATCH）时是否走分段增量："
+                            + "仅请求变更的分段（16×16×16）并合并本地缓存，而非整块全量。"
+                            + "关闭时与未命中一样全量请求。依赖 clientCache.enabled。默认 true。"
+                            + "详见 docs/disk-nbt-cache.md / docs/chunk-cache.md")
+                    .translation("hassium.configuration.clientCache.sectionDeltaEnabled")
+                    .define("sectionDeltaEnabled", true);
             builder.pop();
 
             builder.comment("客户端网络与主线程应用相关配置")
                     .translation("hassium.configuration.clientNetwork")
                     .push("network");
             networkClientChunkLoadThreads = builder
+                    .comment("=== 客户端线程与光照 ===")
                     .comment("客户端区块加载线程数（默认 10）")
                     .translation("hassium.configuration.clientNetwork.clientChunkLoadThreads")
                     .defineInRange("clientChunkLoadThreads", 10, 1, 64);
@@ -334,6 +351,7 @@ public final class HassiumConfigSpec {
                     .translation("hassium.configuration.clientNetwork.backgroundThreads")
                     .defineInRange("backgroundThreads", 8, 1, 64);
             networkMaxChunksPerFrame = builder
+                    .comment("=== 主线程限流 ===")
                     .comment("每帧应用缓存区块的安全硬顶（主限流为时间预算；默认 32）")
                     .translation("hassium.configuration.clientNetwork.maxChunksPerFrame")
                     .defineInRange("maxChunksPerFrame", 32, 1, 512);
@@ -451,6 +469,7 @@ public final class HassiumConfigSpec {
                     .translation("hassium.configuration.network")
                     .push("network");
             networkEnabled = builder
+                    .comment("=== 基础 ===")
                     .comment("是否启用 Hassium 自定义通道（chunkHash / hassium:* 推送）。"
                             + "关闭后回退原版区块包。默认 true。【改后建议重连/重启】")
                     .translation("hassium.configuration.network.enabled")
@@ -464,6 +483,7 @@ public final class HassiumConfigSpec {
                     .translation("hassium.configuration.network.maxChunksPerTick")
                     .defineInRange("maxChunksPerTick", 10, 1, 256);
             networkGlobalPacketCompression = builder
+                    .comment("=== 全局包压缩（替换原版 Zlib） ===")
                     .comment("【高风险】是否用 ZSTD 替换原版 Zlib 全局包压缩（影响几乎所有数据包）。"
                             + "与同类压缩/Via 同进程叠用可能冲突。默认 true。【改后建议重启】")
                     .translation("hassium.configuration.network.globalPacketCompression")
@@ -485,6 +505,7 @@ public final class HassiumConfigSpec {
                             () -> new ArrayList<>(HassiumConfig.NetworkConfig.DEFAULT_COMPRESSION_BLACKLIST),
                             o -> o instanceof String);
             networkUseContextCompression = builder
+                    .comment("=== 上下文压缩 ===")
                     .comment("是否使用上下文压缩（默认 true）")
                     .translation("hassium.configuration.network.useContextCompression")
                     .define("useContextCompression", true);
@@ -493,6 +514,7 @@ public final class HassiumConfigSpec {
                     .translation("hassium.configuration.network.magiclessZstd")
                     .define("magiclessZstd", true);
             networkEnablePacketAggregation = builder
+                    .comment("=== 包聚合 ===")
                     .comment("【高风险/兼容逃生】是否启用包聚合。与第三方自定义通道冲突时可关闭。"
                             + "详见 docs/mod-compat.md（默认 true）")
                     .translation("hassium.configuration.network.enablePacketAggregation")
@@ -514,14 +536,17 @@ public final class HassiumConfigSpec {
                     .translation("hassium.configuration.network.enableCompactHeader")
                     .define("enableCompactHeader", true);
             networkServerChunkPushThreads = builder
+                    .comment("=== 服务端推送线程 ===")
                     .comment("服务端区块推送线程数（动态池关闭时的基准；默认 8；仅服务端）")
                     .translation("hassium.configuration.network.serverChunkPushThreads")
                     .defineInRange("serverChunkPushThreads", 8, 1, 64);
             networkMetricsEnabled = builder
+                    .comment("=== 指标 ===")
                     .comment("是否启用网络指标收集（流量、缓存命中等；默认 true）")
                     .translation("hassium.configuration.network.metricsEnabled")
                     .define("metricsEnabled", true);
             networkDynamicThreadPoolEnabled = builder
+                    .comment("=== 动态线程池 ===")
                     .comment("是否按队列负载动态调整推送线程数（默认 true；仅服务端）")
                     .translation("hassium.configuration.network.dynamicThreadPoolEnabled")
                     .define("dynamicThreadPoolEnabled", true);

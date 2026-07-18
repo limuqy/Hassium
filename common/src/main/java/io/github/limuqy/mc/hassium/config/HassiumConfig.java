@@ -59,7 +59,9 @@ public record HassiumConfig(
             // === 视距外显示（OVD）配置 ===
             boolean viewDistanceExtensionEnabled,
             int maxRenderDistance,
-            int ovdUnloadDelaySecs
+            int ovdUnloadDelaySecs,
+            // === 分段增量（缓存过期时仅补变更分段）===
+            boolean sectionDeltaEnabled
     ) {
         public static final ClientCacheConfig DEFAULT = new ClientCacheConfig(
                 true,   // enabled: 默认启用
@@ -79,7 +81,9 @@ public record HassiumConfig(
                 // === OVD 默认配置 ===
                 true,   // viewDistanceExtensionEnabled: 视距外显示总开关
                 32,     // maxRenderDistance: 渲染距离上限（Fog/内存约束）
-                5       // ovdUnloadDelaySecs: 离开环带后延迟卸载秒数
+                5,      // ovdUnloadDelaySecs: 离开环带后延迟卸载秒数
+                // === 分段增量默认配置 ===
+                true    // sectionDeltaEnabled: 缓存过期时走分段增量（默认开）
         );
 
         /**

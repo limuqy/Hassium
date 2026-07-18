@@ -2,6 +2,7 @@ package io.github.limuqy.mc.hassium;
 
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.network.ClientChunkHandler;
+import io.github.limuqy.mc.hassium.network.ClientMetadataHandler;
 import io.github.limuqy.mc.hassium.network.DictionaryManager;
 import io.github.limuqy.mc.hassium.network.ForgeNetworkManager;
 import net.minecraftforge.client.event.ClientPlayerNetworkEvent;
@@ -94,6 +95,9 @@ public class HassiumForgeClient {
                 storage.close();
             }
             ClientChunkHandler.resetStorage();
+            // 立即清空 pending hash/delta，避免 Mixin onDisconnect 触发前的
+            // tick 窗口期被 tickPendingHashGate 触发向已关闭连接发包
+            ClientMetadataHandler.clearPendingState();
             LOGGER.info("Hassium: Client disconnected, cache cleaned up");
         }
     }

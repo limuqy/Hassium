@@ -59,7 +59,28 @@ public class ForgeHassiumCommand {
                         .then(Commands.literal("stats")
                                 .requires(source -> HassiumCommandHandler.isMetricsEnabled())
                                 .executes(ForgeHassiumCommand::showClientStats))
+                        .then(Commands.literal("cache")
+                                .then(Commands.literal("export")
+                                        .executes(ForgeHassiumCommand::exportCacheDefault)
+                                        .then(Commands.argument("worldName", com.mojang.brigadier.arguments.StringArgumentType.greedyString())
+                                                .executes(ForgeHassiumCommand::exportCacheNamed)
+                                        )
+                                )
+                        )
         );
+    }
+
+    private static int exportCacheDefault(CommandContext<CommandSourceStack> context) {
+        String msg = HassiumCommandHandler.startCacheExport(null);
+        context.getSource().sendSuccess(() -> Component.literal(msg), false);
+        return 1;
+    }
+
+    private static int exportCacheNamed(CommandContext<CommandSourceStack> context) {
+        String name = com.mojang.brigadier.arguments.StringArgumentType.getString(context, "worldName");
+        String msg = HassiumCommandHandler.startCacheExport(name);
+        context.getSource().sendSuccess(() -> Component.literal(msg), false);
+        return 1;
     }
 
     private static int showServerStats(CommandContext<CommandSourceStack> context) {
