@@ -418,4 +418,19 @@ public class HassiumConfigService {
         double value = config.clientCache().bloomFilterFpp();
         return Math.max(0.001, Math.min(0.1, value));
     }
+
+    /** 是否启用视距外显示（OVD）；仍依赖 clientCache.enabled */
+    public boolean isViewDistanceExtensionEnabled() {
+        return config.clientCache().viewDistanceExtensionEnabled();
+    }
+
+    /** 渲染距离上限（Fog/内存约束） */
+    public int getMaxRenderDistance() {
+        return Math.max(2, config.clientCache().maxRenderDistance());
+    }
+
+    /** 离开 OVD 环带后延迟卸载秒数（0=同步卸载） */
+    public int getOvdUnloadDelaySecs() {
+        return Math.max(0, config.clientCache().ovdUnloadDelaySecs());
+    }
 }

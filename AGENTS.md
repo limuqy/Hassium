@@ -80,5 +80,6 @@ fabric/ | forge/ | neoforge/
 
 - [`docs/architecture.md`](docs/architecture.md)
 - [`docs/chunk-cache.md`](docs/chunk-cache.md)
+- [`docs/ovd.md`](docs/ovd.md)
 - [`docs/version-segments.md`](docs/version-segments.md)
 - [`docs/mod-compat.md`](docs/mod-compat.md)

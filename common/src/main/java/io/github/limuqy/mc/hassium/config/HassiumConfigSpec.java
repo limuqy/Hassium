@@ -70,7 +70,10 @@ public final class HassiumConfigSpec {
                         CLIENT.cacheMinCleanupBatchSize.get(),
                         CLIENT.cacheBloomFilterEnabled.get(),
                         CLIENT.cacheBloomFilterExpectedInsertions.get(),
-                        CLIENT.cacheBloomFilterFpp.get()
+                        CLIENT.cacheBloomFilterFpp.get(),
+                        CLIENT.cacheViewDistanceExtensionEnabled.get(),
+                        CLIENT.cacheMaxRenderDistance.get(),
+                        CLIENT.cacheOvdUnloadDelaySecs.get()
                 ),
                 new HassiumConfig.NetworkConfig(
                         COMMON.networkEnabled.get(),
@@ -138,6 +141,9 @@ public final class HassiumConfigSpec {
         CLIENT.cacheBloomFilterEnabled.set(cache.bloomFilterEnabled());
         CLIENT.cacheBloomFilterExpectedInsertions.set(cache.bloomFilterExpectedInsertions());
         CLIENT.cacheBloomFilterFpp.set(cache.bloomFilterFpp());
+        CLIENT.cacheViewDistanceExtensionEnabled.set(cache.viewDistanceExtensionEnabled());
+        CLIENT.cacheMaxRenderDistance.set(cache.maxRenderDistance());
+        CLIENT.cacheOvdUnloadDelaySecs.set(cache.ovdUnloadDelaySecs());
         CLIENT.networkClientChunkLoadThreads.set(net.clientChunkLoadThreads());
         CLIENT.networkLightStripEnabled.set(net.lightStripEnabled());
         CLIENT.networkBackgroundThreads.set(net.backgroundThreads());
@@ -201,6 +207,11 @@ public final class HassiumConfigSpec {
         public final ForgeConfigSpec.IntValue cacheBloomFilterExpectedInsertions;
         public final ForgeConfigSpec.DoubleValue cacheBloomFilterFpp;
 
+        // OVD（视距外显示）配置
+        public final ForgeConfigSpec.BooleanValue cacheViewDistanceExtensionEnabled;
+        public final ForgeConfigSpec.IntValue cacheMaxRenderDistance;
+        public final ForgeConfigSpec.IntValue cacheOvdUnloadDelaySecs;
+
         public final ForgeConfigSpec.IntValue networkClientChunkLoadThreads;
         public final ForgeConfigSpec.BooleanValue networkLightStripEnabled;
         public final ForgeConfigSpec.IntValue networkBackgroundThreads;
@@ -223,6 +234,11 @@ public final class HassiumConfigSpec {
         public final ModConfigSpec.BooleanValue cacheBloomFilterEnabled;
         public final ModConfigSpec.IntValue cacheBloomFilterExpectedInsertions;
         public final ModConfigSpec.DoubleValue cacheBloomFilterFpp;
+
+        // OVD（视距外显示）配置
+        public final ModConfigSpec.BooleanValue cacheViewDistanceExtensionEnabled;
+        public final ModConfigSpec.IntValue cacheMaxRenderDistance;
+        public final ModConfigSpec.IntValue cacheOvdUnloadDelaySecs;
 
         public final ModConfigSpec.IntValue networkClientChunkLoadThreads;
         public final ModConfigSpec.BooleanValue networkLightStripEnabled;
@@ -285,6 +301,20 @@ public final class HassiumConfigSpec {
                     .comment("Bloom Filter 期望假阳性率（0.01 = 1%；默认 0.01）")
                     .translation("hassium.configuration.clientCache.bloomFilterFpp")
                     .defineInRange("bloomFilterFpp", 0.01, 0.001, 0.1);
+            cacheViewDistanceExtensionEnabled = builder
+                    .comment("是否启用视距外显示（OVD）：客户端 RD > 服务端视距时，用本地缓存回填环带仅渲染。"
+                            + "依赖 clientCache.enabled。与 Bobby 互斥，勿同装。默认 true")
+                    .translation("hassium.configuration.clientCache.viewDistanceExtensionEnabled")
+                    .define("viewDistanceExtensionEnabled", true);
+            cacheMaxRenderDistance = builder
+                    .comment("渲染距离上限（Fog/内存约束；vanilla 滑块上限 32，默认 32）。"
+                            + "RD>32 时需手动编辑 options.txt；Fog Mixin 据此钳制雾距")
+                    .translation("hassium.configuration.clientCache.maxRenderDistance")
+                    .defineInRange("maxRenderDistance", 32, 2, 64);
+            cacheOvdUnloadDelaySecs = builder
+                    .comment("离开 OVD 环带后延迟卸载秒数（避免快速移动反复加载/卸载；默认 5；0=同步卸载）")
+                    .translation("hassium.configuration.clientCache.ovdUnloadDelaySecs")
+                    .defineInRange("ovdUnloadDelaySecs", 5, 0, 60);
             builder.pop();
 
             builder.comment("客户端网络与主线程应用相关配置")

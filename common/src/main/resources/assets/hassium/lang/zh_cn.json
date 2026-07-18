@@ -1,4 +1,4 @@
-﻿{
+{
     "hassium.config.screen.title":  "Hassium 配置",
     "hassium.config.screen.hint":  "请通过 Mod Menu 打开配置，或直接编辑 config/hassium/hassium-client.toml 与 config/hassium/hassium-common.toml",
     "hassium.configuration.title":  "%s 配置",
@@ -32,6 +32,12 @@
     "hassium.configuration.clientCache.bloomFilterExpectedInsertions.tooltip":  "影响内存占用。默认 10000。",
     "hassium.configuration.clientCache.bloomFilterFpp":  "Bloom 假阳性率",
     "hassium.configuration.clientCache.bloomFilterFpp.tooltip":  "0.01 = 1%。默认 0.01。",
+    "hassium.configuration.clientCache.viewDistanceExtensionEnabled":  "视距外显示（OVD）",
+    "hassium.configuration.clientCache.viewDistanceExtensionEnabled.tooltip":  "客户端 RD > 服务端视距时，用本地缓存回填环带仅渲染。依赖 clientCache.enabled。与 Bobby 互斥，勿同装。默认 true。",
+    "hassium.configuration.clientCache.maxRenderDistance":  "渲染距离上限",
+    "hassium.configuration.clientCache.maxRenderDistance.tooltip":  "Fog/内存约束。vanilla 滑块上限 32。RD>32 需手动编辑 options.txt。默认 32。",
+    "hassium.configuration.clientCache.ovdUnloadDelaySecs":  "OVD 卸载延迟（秒）",
+    "hassium.configuration.clientCache.ovdUnloadDelaySecs.tooltip":  "离开 OVD 环带后延迟卸载秒数（避免快速移动反复加载/卸载）。0=同步卸载。默认 5。",
     "hassium.configuration.clientNetwork":  "客户端网络",
     "hassium.configuration.clientNetwork.button":  "客户端网络…",
     "hassium.configuration.clientNetwork.clientChunkLoadThreads":  "客户端区块加载线程数",

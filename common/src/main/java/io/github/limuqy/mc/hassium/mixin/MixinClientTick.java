@@ -7,7 +7,6 @@ import io.github.limuqy.mc.hassium.concurrent.MainThreadDispatcher;
 import io.github.limuqy.mc.hassium.network.ClientMetadataHandler;
 import net.minecraft.client.Minecraft;
 import org.spongepowered.asm.mixin.Mixin;
-import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
@@ -19,16 +18,13 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 @Mixin(Minecraft.class)
 public class MixinClientTick {
 
-    @Unique
-    private static final ViewDistanceExtensionService hassium$viewDistanceService = new ViewDistanceExtensionService();
-
     /**
      * 在客户端 tick 中更新视距扩展和处理缓存加载队列
      */
     @Inject(method = "tick", at = @At("TAIL"))
     private void hassium$onTick(CallbackInfo ci) {
         try {
-            hassium$viewDistanceService.update();
+            ViewDistanceExtensionService.getInstance().update();
         } catch (Exception e) {
             // 忽略更新错误
         }

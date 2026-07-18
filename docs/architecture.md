@@ -1,4 +1,4 @@
-﻿# Hassium 架构与功能说明
+# Hassium 架构与功能说明
 
 本文档是项目**需求要点 + 模块架构 + 配置/运维**的权威说明。多版本细节见 [`version-segments.md`](version-segments.md)；区块缓存推送流水线见 [`chunk-cache.md`](chunk-cache.md)。
 
@@ -83,6 +83,9 @@ Sector 3+:    [length(4)][type=126][ZSTD 压缩数据]
 | `storage.mode` | `mirror` | 镜像模式 |
 | `storage.zstdLevel` | 9 | 存储压缩等级 |
 | `clientCache.enabled` | true | 客户端缓存 |
+| `clientCache.viewDistanceExtensionEnabled` | true | OVD 视距外显示（依赖 clientCache.enabled；与 Bobby 互斥） |
+| `clientCache.maxRenderDistance` | 32 | 渲染距离上限（Fog/内存约束；RD>32 需手改 options.txt） |
+| `clientCache.ovdUnloadDelaySecs` | 5 | OVD 离开环带后延迟卸载秒数（0=同步卸载） |
 | `network.enabled` | true | Hassium 通道 |
 | `network.globalPacketCompression` | true | 全局 ZSTD |
 | `network.compressionLevel` | 3 | 网络压缩等级（速度优先） |
@@ -146,6 +149,7 @@ ERROR / WARN 始终输出。
 ## 10. 相关文档
 
 - [`chunk-cache.md`](chunk-cache.md) — 缓存推送与进服流水线
+- [`ovd.md`](ovd.md) — 视距外显示（OVD）技术实现
 - [`version-segments.md`](version-segments.md) — 九段适配真相源
 - [`mod-compat.md`](mod-compat.md) — 多 Mod 兼容边界与配置逃生
 - 根目录 `README.md` — 用户安装与特性

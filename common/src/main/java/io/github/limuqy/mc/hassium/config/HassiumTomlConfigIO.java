@@ -205,7 +205,10 @@ public final class HassiumTomlConfigIO {
                 getInt(cfg, "clientCache.minCleanupBatchSize", d.minCleanupBatchSize()),
                 getBool(cfg, "clientCache.bloomFilterEnabled", d.bloomFilterEnabled()),
                 getInt(cfg, "clientCache.bloomFilterExpectedInsertions", d.bloomFilterExpectedInsertions()),
-                getDouble(cfg, "clientCache.bloomFilterFpp", d.bloomFilterFpp())
+                getDouble(cfg, "clientCache.bloomFilterFpp", d.bloomFilterFpp()),
+                getBool(cfg, "clientCache.viewDistanceExtensionEnabled", d.viewDistanceExtensionEnabled()),
+                getInt(cfg, "clientCache.maxRenderDistance", d.maxRenderDistance()),
+                getInt(cfg, "clientCache.ovdUnloadDelaySecs", d.ovdUnloadDelaySecs())
         );
     }
 
@@ -222,6 +225,9 @@ public final class HassiumTomlConfigIO {
         set(cfg, "clientCache.bloomFilterEnabled", c.bloomFilterEnabled(), "是否启用 Bloom Filter");
         set(cfg, "clientCache.bloomFilterExpectedInsertions", c.bloomFilterExpectedInsertions(), "Bloom 预期元素数");
         set(cfg, "clientCache.bloomFilterFpp", c.bloomFilterFpp(), "Bloom 期望假阳性率");
+        set(cfg, "clientCache.viewDistanceExtensionEnabled", c.viewDistanceExtensionEnabled(), "是否启用视距外显示（OVD）");
+        set(cfg, "clientCache.maxRenderDistance", c.maxRenderDistance(), "渲染距离上限（Fog/内存约束）");
+        set(cfg, "clientCache.ovdUnloadDelaySecs", c.ovdUnloadDelaySecs(), "离开环带后延迟卸载秒数");
     }
 
     private static ClientNet readClientNetwork(CommentedConfig cfg) {

@@ -28,7 +28,7 @@ public class MixinClientLevel implements IClientLevelExtension {
     /**
      * 检查区块是否为仅渲染区块
      */
-    @Unique
+    @Override
     public boolean hassium$isRenderOnly(ChunkPos pos) {
         return hassium$renderOnlyChunks.contains(pos);
     }

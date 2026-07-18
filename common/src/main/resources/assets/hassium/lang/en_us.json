@@ -1,4 +1,4 @@
-﻿{
+{
     "hassium.config.screen.title":  "Hassium Config",
     "hassium.config.screen.hint":  "Open the config via Mod Menu, or edit config/hassium/hassium-client.toml and config/hassium/hassium-common.toml",
     "hassium.configuration.title":  "%s Configuration",
@@ -32,6 +32,12 @@
     "hassium.configuration.clientCache.bloomFilterExpectedInsertions.tooltip":  "Affects memory use. Default: 10000.",
     "hassium.configuration.clientCache.bloomFilterFpp":  "Bloom false-positive rate",
     "hassium.configuration.clientCache.bloomFilterFpp.tooltip":  "0.01 = 1%. Default: 0.01.",
+    "hassium.configuration.clientCache.viewDistanceExtensionEnabled":  "View distance extension (OVD)",
+    "hassium.configuration.clientCache.viewDistanceExtensionEnabled.tooltip":  "When client RD > server view-distance, fill the ring with local cache (render only). Depends on clientCache.enabled. Mutually exclusive with Bobby. Default: true.",
+    "hassium.configuration.clientCache.maxRenderDistance":  "Max render distance cap",
+    "hassium.configuration.clientCache.maxRenderDistance.tooltip":  "Fog/memory cap. Vanilla slider max is 32. RD>32 needs manual options.txt edit. Default: 32.",
+    "hassium.configuration.clientCache.ovdUnloadDelaySecs":  "OVD unload delay (seconds)",
+    "hassium.configuration.clientCache.ovdUnloadDelaySecs.tooltip":  "Delay before unloading chunks that left the OVD ring (avoids thrash on fast movement). 0 = synchronous. Default: 5.",
     "hassium.configuration.clientNetwork":  "Client Network",
     "hassium.configuration.clientNetwork.button":  "Client Network…",
     "hassium.configuration.clientNetwork.clientChunkLoadThreads":  "Client chunk load threads",

@@ -269,7 +269,10 @@ public class ClientChunkHandler {
             DebugLogger.info(LogType.CHUNK_APPLY, "[APPLY_CHUNK] Successfully applied chunk [{}, {}] to client world", chunkX, chunkZ);
 
             // 区块就绪：发送延后的 BE 请求 + 冲刷暂存 BE
-            ClientMetadataHandler.onChunkApplied(pos);
+            // renderOnly（OVD）不向服务器请求 BE，避免视距外流量
+            if (!renderOnly) {
+                ClientMetadataHandler.onChunkApplied(pos);
+            }
 
         } catch (Exception e) {
             DebugLogger.error("[APPLY_CHUNK] Failed to apply chunk data for [{}, {}]", e, chunkX, chunkZ);

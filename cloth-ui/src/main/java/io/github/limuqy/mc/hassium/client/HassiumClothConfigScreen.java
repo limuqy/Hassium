@@ -74,6 +74,15 @@ public final class HassiumClothConfigScreen {
                 1000, 50_000_000, v -> draft.cacheBloomFilterExpectedInsertions = v));
         clientCache.addEntry(doubleRange(entries, "hassium.configuration.clientCache.bloomFilterFpp",
                 draft.cacheBloomFilterFpp, dCache.bloomFilterFpp(), 0.001, 0.1, v -> draft.cacheBloomFilterFpp = v));
+        clientCache.addEntry(bool(entries, "hassium.configuration.clientCache.viewDistanceExtensionEnabled",
+                draft.cacheViewDistanceExtensionEnabled, dCache.viewDistanceExtensionEnabled(),
+                v -> draft.cacheViewDistanceExtensionEnabled = v));
+        clientCache.addEntry(intRange(entries, "hassium.configuration.clientCache.maxRenderDistance",
+                draft.cacheMaxRenderDistance, dCache.maxRenderDistance(), 2, 64,
+                v -> draft.cacheMaxRenderDistance = v));
+        clientCache.addEntry(intRange(entries, "hassium.configuration.clientCache.ovdUnloadDelaySecs",
+                draft.cacheOvdUnloadDelaySecs, dCache.ovdUnloadDelaySecs(), 0, 60,
+                v -> draft.cacheOvdUnloadDelaySecs = v));
 
         ConfigCategory clientNetwork = builder.getOrCreateCategory(
                 Component.translatable("hassium.configuration.clientNetwork"));
@@ -246,6 +255,10 @@ public final class HassiumClothConfigScreen {
         boolean cacheBloomFilterEnabled;
         int cacheBloomFilterExpectedInsertions;
         double cacheBloomFilterFpp;
+        // OVD（视距外显示）
+        boolean cacheViewDistanceExtensionEnabled;
+        int cacheMaxRenderDistance;
+        int cacheOvdUnloadDelaySecs;
 
         int clientChunkLoadThreads;
         boolean lightStripEnabled;
@@ -310,6 +323,9 @@ public final class HassiumClothConfigScreen {
             d.cacheBloomFilterEnabled = cache.bloomFilterEnabled();
             d.cacheBloomFilterExpectedInsertions = cache.bloomFilterExpectedInsertions();
             d.cacheBloomFilterFpp = cache.bloomFilterFpp();
+            d.cacheViewDistanceExtensionEnabled = cache.viewDistanceExtensionEnabled();
+            d.cacheMaxRenderDistance = cache.maxRenderDistance();
+            d.cacheOvdUnloadDelaySecs = cache.ovdUnloadDelaySecs();
 
             d.clientChunkLoadThreads = net.clientChunkLoadThreads();
             d.lightStripEnabled = net.lightStripEnabled();
@@ -364,7 +380,8 @@ public final class HassiumClothConfigScreen {
                             cacheEnabled, cacheMaxSizeMb, cacheMaxAgeDays,
                             cacheHotScoreThreshold, cacheRecencyWeight, cacheFrequencyWeight,
                             cacheCleanupIntervalTicks, cacheTargetCacheSizeMb, cacheMinCleanupBatchSize,
-                            cacheBloomFilterEnabled, cacheBloomFilterExpectedInsertions, cacheBloomFilterFpp
+                            cacheBloomFilterEnabled, cacheBloomFilterExpectedInsertions, cacheBloomFilterFpp,
+                            cacheViewDistanceExtensionEnabled, cacheMaxRenderDistance, cacheOvdUnloadDelaySecs
                     ),
                     new HassiumConfig.NetworkConfig(
                             networkEnabled, compressionLevel, maxChunksPerTick,

@@ -133,13 +133,25 @@ public class ClientCacheLoadQueue {
                 DebugLogger.info(LogType.CACHE, "[CACHE_LOAD] Chunk {} loaded from disk ({} bytes, readySize={})",
                         task.pos(), data.length, readyQueue.size());
             } else {
-                Constants.LOG.warn("[CACHE_LOAD] Failed to load chunk {} from cache, requesting from server",
-                        task.pos());
-                requestChunkFromServer(task.pos());
+                if (task.renderOnly()) {
+                    // 视距外（OVD）：缓存 miss 静默，不向服务器请求，回滚 loadedRenderOnly 标记
+                    DebugLogger.info(LogType.CACHE,
+                            "[CACHE_LOAD] renderOnly miss for {} (no cache, no server request)", task.pos());
+                    ViewDistanceExtensionService.getInstance().onRenderOnlyMiss(task.pos());
+                } else {
+                    Constants.LOG.warn("[CACHE_LOAD] Failed to load chunk {} from cache, requesting from server",
+                            task.pos());
+                    requestChunkFromServer(task.pos());
+                }
             }
         } catch (Exception e) {
-            Constants.LOG.error("[CACHE_LOAD] Error loading chunk {} from cache", task.pos(), e);
-            requestChunkFromServer(task.pos());
+            if (task.renderOnly()) {
+                DebugLogger.error("[CACHE_LOAD] renderOnly load error for {}", task.pos(), e);
+                ViewDistanceExtensionService.getInstance().onRenderOnlyMiss(task.pos());
+            } else {
+                Constants.LOG.error("[CACHE_LOAD] Error loading chunk {} from cache", task.pos(), e);
+                requestChunkFromServer(task.pos());
+            }
         }
 
         // 继续处理队列中剩余任务
