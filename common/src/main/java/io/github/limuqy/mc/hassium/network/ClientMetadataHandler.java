@@ -26,7 +26,7 @@ import java.util.concurrent.ConcurrentLinkedQueue;
  * <p>
  * 处理服务端发送的区块元数据包，比对本地缓存决定加载方式。
  * S3: 元数据比对在后台线程执行，避免主线程阻塞在 region 文件磁盘 I/O 上。
- * M2: SQLite 初始化由 MixinClientPacketListener 在 handleLogin 时异步完成。
+ * M2: 缓存存储初始化由 MixinClientPacketListener 在 handleLogin 时异步完成。
  */
 public class ClientMetadataHandler {
 

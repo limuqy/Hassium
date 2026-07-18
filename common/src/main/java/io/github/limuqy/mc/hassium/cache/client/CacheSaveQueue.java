@@ -105,8 +105,14 @@ public class CacheSaveQueue {
             return;
         }
 
-        long contentHash = ChunkContentHashUtil.compute(chunk, level.getLightEngine()).hash();
+        // 必须与服务端 chunkHash（combine sectionHashes）一致，不能用含 BE/heightmap 的 compute()
         long[] sectionHashes = computeSectionHashesFromSerialized(serializedData);
+        long contentHash;
+        if (sectionHashes != null && sectionHashes.length > 0) {
+            contentHash = ChunkContentHashUtil.combineSectionHashesFromArray(sectionHashes);
+        } else {
+            contentHash = ChunkContentHashUtil.compute(chunk, level.getLightEngine()).hash();
+        }
         SaveTask task = new SaveTask(pos, pos.x, pos.z, serializedData, contentHash, sectionHashes);
         taskQueue.offer(task);
 

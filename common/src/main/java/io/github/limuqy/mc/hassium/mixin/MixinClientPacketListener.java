@@ -12,7 +12,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
  * 负责初始化缓存系统和断开连接时清理。
  * 元数据处理逻辑在 {@link io.github.limuqy.mc.hassium.network.ClientMetadataHandler} 中。
  * <p>
- * M2: SQLite 初始化异步化 —— handleLogin 时在后台线程完成 ClientHassiumStorage 创建。
+ * M2: 缓存存储初始化异步化 —— handleLogin 时在后台线程完成 ClientHassiumStorage 创建。
  * <p>
  * 1.20.2+：{@code onDisconnect} 已上移到 {@code ClientCommonPacketListenerImpl}，
  * 由 {@link MixinClientCommonPacketListenerImpl} 注入。

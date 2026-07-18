@@ -19,8 +19,9 @@ description: Hassium 存储与压缩技能。涉及 Region/type 126、ChunkPaylo
 - **无** `HassiumEnvelope` / HSM1；运行时写入 type **126**
 - type **127** 仅作 1.20.5+ 原版 custom scheme 迁移规划，勿当作当前写入格式
 - 服务端：`MixinRegionFile`（先查 `isStorageEnabled()`）
-- 客户端缓存：`HassiumRegionFile` + 同构 MetadataTable
-- SQLite（`ClientCacheDatabase`）仅 LRU/热度，**不参与命中**
+- 客户端缓存：`HassiumRegionFile` + MetadataTable；`contentHash` = `combine(sectionHashes)`
+- 客户端辅存：`ClientHeatIndex`（热度/LRU）、`SectionHashStore`（sectionHashes；命中回退 / 阶段二）
+- 命中比对见 `docs/chunk-cache.md`（`readChunkHash`）
 
 ## 关键 API
 
@@ -28,7 +29,8 @@ description: Hassium 存储与压缩技能。涉及 Region/type 126、ChunkPaylo
 |----|------|
 | `ChunkPayloadCodec` / `EncodedChunkPayload` | type 字节 + ZSTD 编解码 |
 | `HassiumRegionFile` | 客户端/独立 Region 读写 |
-| `MetadataTable` | contentHash64 |
+| `MetadataTable` | contentHash64（= chunkHash） |
+| `ClientHeatIndex` / `SectionHashStore` | 热度索引 / section 哈希辅存 |
 | `ChunkContentHashUtil` | sectionHash / combine → chunkHash |
 | `CompressionService` + `CompressionCodec` | 算法注册与调用 |
 | `HassiumCompression` | 初始化；字典 codec 在此注册 |

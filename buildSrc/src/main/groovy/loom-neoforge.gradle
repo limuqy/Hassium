@@ -1,5 +1,6 @@
 plugins {
     id 'minecraft'
+    id 'native-dep-shade'
 }
 
 loom {

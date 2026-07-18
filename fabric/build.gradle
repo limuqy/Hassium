@@ -8,14 +8,3 @@ dependencies {
     implementation 'org.lz4:lz4-java:1.8.0'
     implementation 'com.google.code.findbugs:jsr305:3.0.1'
 }
-
-// zstd-jni shading
-jar {
-    from({
-        configurations.runtimeClasspath.filter {
-            it.name.contains('zstd-jni')
-        }.collect { zipTree(it) }
-    }) {
-        exclude 'META-INF/**'
-    }
-}

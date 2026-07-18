@@ -17,7 +17,7 @@ public enum TaskCategory {
     SAFE_TO_CANCEL,
 
     /**
-     * 尽力完成 —— 可以取消，但完成有利于下次连接（如 SQLite 初始化、元数据读取）
+     * 尽力完成 —— 可以取消，但完成有利于下次连接（如缓存索引初始化、元数据读取）
      */
     BEST_EFFORT
 }

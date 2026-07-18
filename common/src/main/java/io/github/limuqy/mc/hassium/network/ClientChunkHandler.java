@@ -344,8 +344,8 @@ public class ClientChunkHandler {
     /**
      * 将解压后的区块数据持久化到本地缓存（后台线程安全）
      * <p>
-     * 使用从元数据包暂存的 contentHash。
-     * 同时计算 section 哈希并持久化，用于阶段二比对。
+     * MetadataTable / 命中比对使用的 contentHash 必须与服务端 chunkHash 一致：
+     * {@code combine(sectionHashes)}。pending 仅作回退（当前生产路径未必会暂存）。
      */
     private static void persistDecompressedChunk(int chunkX, int chunkZ, byte[] data) {
         if (clientStorage == null) {
@@ -361,6 +361,8 @@ public class ClientChunkHandler {
                 sectionHashes = computeSectionHashesFromData(data);
                 if (sectionHashes != null) {
                     storePendingSectionHashes(chunkX, chunkZ, sectionHashes);
+                    // 与服务端 ChunkHashS2C 使用同一算法，写入 MetadataTable 才能命中
+                    contentHash = ChunkContentHashUtil.combineSectionHashesFromArray(sectionHashes);
                 }
             } catch (Throwable t) {
                 // NoSuchMethodError 等 Error 也要吞掉，避免阻断后续 persist / apply

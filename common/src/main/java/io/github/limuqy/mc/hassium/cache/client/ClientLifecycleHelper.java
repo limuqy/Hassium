@@ -30,8 +30,8 @@ public final class ClientLifecycleHelper {
     /**
      * 玩家登录时初始化缓存系统。
      * <p>
-     * M2: 将 ClientHassiumStorage 创建（含 SQLite 初始化）异步化，
-     * handleLogin 主线程不再阻塞在数据库初始化上。
+     * M2: 将 ClientHassiumStorage 创建（含热度索引 / section 哈希初始化）异步化，
+     * handleLogin 主线程不再阻塞在磁盘索引初始化上。
      */
     public static void onLogin() {
         if (initialized) {
@@ -44,7 +44,7 @@ public final class ClientLifecycleHelper {
         // 进服吞吐加速：临时提高主线程时间预算
         ClientMainThreadBudget.startJoinBoost();
 
-        // M2: 异步初始化存储（SQLite 初始化在后台线程）
+        // M2: 异步初始化存储（热度索引 / section 哈希在后台线程）
         initializeCacheAsync();
         initialized = true;
     }
@@ -88,7 +88,7 @@ public final class ClientLifecycleHelper {
     /**
      * 异步初始化客户端缓存系统（M2）
      * <p>
-     * ClientHassiumStorage 构造函数中包含 SQLite 初始化（~5-20ms），
+     * ClientHassiumStorage 构造函数中包含热度索引 / section 哈希初始化，
      * 将这部分移到后台线程，避免阻塞主线程。
      * <p>
      * 初始化完成前，元数据包处理会通过同步回退路径。
@@ -125,7 +125,7 @@ public final class ClientLifecycleHelper {
             }
             final String finalDimension = dimension;
 
-            // M2: 异步初始化存储（SQLite 在后台线程）
+            // M2: 异步初始化存储（热度索引 / section 哈希在后台线程）
             HassiumTaskExecutor executor = HassiumTaskExecutor.getClient();
             if (executor != null && executor.isRunning()) {
                 executor.submit(() -> {

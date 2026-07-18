@@ -16,7 +16,16 @@ sectionHash = hash(section 方块 palette + 生物群系序列化字节)
 chunkHash   = combineSectionHashes(sectionIndex → sectionHash)
 ```
 
-实现：`ChunkContentHashUtil`。服务端与客户端算法一致。磁盘侧快速比对可读 Region **MetadataTable** 中的 64-bit `contentHash`（不解压）。
+实现：`ChunkContentHashUtil`。服务端与客户端算法一致。
+
+客户端落盘时 `MetadataTable.contentHash` **必须**等于 `combine(sectionHashes)`（与 `ChunkHashS2C` 同值）。卸载重写（`CacheSaveQueue`）同样用 combine，勿用含 BE/heightmap 的 `compute()`。
+
+命中比对（`ClientHassiumStorage.readChunkHash`）：
+
+1. Bloom 预筛 → 打开 Region
+2. 读 MetadataTable `contentHash`（合法非 0；`1` 视为无效占位）
+3. 若无效则 `combine(SectionHashStore)` 回退
+4. 与服务端 `chunkHash` 相等 → 命中
 
 ## 3. 现行数据流
 
@@ -48,20 +57,19 @@ ChunkHashS2C
         │
 storage 未就绪 → 暂存；就绪后批量比对（超时约 2s 回退全量）
         │
-读取 sectionHashes → combine → cachedChunkHash
+readChunkHash（MetadataTable，必要时 SectionHashStore combine）
         │
    ┌────┴────┐
  匹配       不匹配 / miss
    │            │
 CacheLoadQueue  ChunkDataRequestC2S（全量）
    │            │
-后台磁盘+解压   ChunkPayload → 后台解压
-   └────┬────┘
+后台磁盘+解压   ChunkPayload → 后台解压 → persist
+   └────┬────┘         （contentHash=combine + sectionHashes）
 主线程时间预算 apply（JoinBoost：进服约 5s 提高预算）
         │
 apply 后再请求 blockEntity
 ```
-
 ## 4. 主线程限流
 
 | 机制 | 说明 |
@@ -103,12 +111,13 @@ SectionDeltaS2CPacket        // 服务端 → 客户端（变更 section + BE）
 | `ClientCacheLoadQueue` | 后台读缓存 |
 | `ClientMainThreadBudget` + `MainThreadDispatcher` | 主线程时间预算 drain |
 | `ChunkBloomFilter` | 减少无效磁盘 IO |
-| `ClientHassiumStorage` / `HassiumRegionFile` | 客户端 Region 缓存 |
-| `ClientCacheDatabase` | 仅热度 / LRU，不参与命中 |
+| `ClientHassiumStorage` / `HassiumRegionFile` | 客户端 Region 缓存 + MetadataTable |
+| `ClientHeatIndex` | 访问热度 / LRU（`config/hassium/heat.idx`），不参与命中 |
+| `SectionHashStore` | per-dimension `section_hashes.bin`；阶段二预留，命中比对回退 |
 
 ## 7. 客户端淘汰
 
-SQLite 维护访问热度与大小；超过 `maxSizeMb` / `maxAgeDays` 时按评分清理。命中路径 **不查 SQL**。
+`ClientHeatIndex` 按 `chunkBytes`（单块压缩大小）与热度评分清理；超过 `maxSizeMb` 等阈值时删 Region 内单块（`storage.remove`），不整文件删除 `.mca`。
 
 ## 8. 调试
 

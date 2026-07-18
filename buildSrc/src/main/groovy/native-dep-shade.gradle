@@ -1,0 +1,30 @@
+/**
+ * 将 zstd-jni shade 进 loader jar，并按主流平台裁剪 native。
+ *
+ * 保留：
+ * - Windows: amd64 / aarch64
+ * - Linux: amd64 / aarch64 / arm
+ * - macOS: darwin x86_64 / aarch64
+ *
+ * 去掉：IA-32、armv6、FreeBSD、Android、Musl、ppc/riscv/s390x/mips/loongarch 等。
+ */
+jar {
+    from({
+        configurations.runtimeClasspath.filter {
+            it.name.contains('zstd-jni')
+        }.collect { zipTree(it) }
+    }) {
+        exclude 'META-INF/**'
+
+        // —— zstd-jni ——
+        exclude 'freebsd/**'
+        exclude 'win/x86/**'
+        exclude 'linux/i386/**'
+        exclude 'linux/loongarch64/**'
+        exclude 'linux/mips64/**'
+        exclude 'linux/ppc64/**'
+        exclude 'linux/ppc64le/**'
+        exclude 'linux/riscv64/**'
+        exclude 'linux/s390x/**'
+    }
+}

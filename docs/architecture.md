@@ -31,7 +31,7 @@ Hassium/
 | `storage/` | Region 读写、`ChunkPayloadCodec`、type 126、`HassiumRegionFile`、`MetadataTable` |
 | `compression/` | `CompressionCodec` / `CompressionService`、字典注册 |
 | `network/` | 握手、ZSTD Pipeline、聚合、chunkHash 推送、`ServerChunkPushManager` |
-| `cache/` | 客户端缓存、Bloom、淘汰（SQLite 仅 LRU） |
+| `cache/` | 客户端缓存、Bloom、`ClientHeatIndex` / `SectionHashStore`、淘汰 |
 | `config/` | `HassiumConfig` record + `HassiumConfigService` |
 | `metrics/` | `NetworkStats` 零分配指标 |
 | `compat/` | Manifold 跨版本 API 桥接 |
@@ -50,7 +50,8 @@ Sector 3+:    [length(4)][type=126][ZSTD 压缩数据]
 
 - **无** HassiumEnvelope / HSM1 / type 127 运行时写入（127 仅作未来原版 scheme 迁移规划）
 - 服务端：`MixinRegionFile`（需 `storage.enabled`）
-- 客户端缓存：`HassiumRegionFile` 同构
+- 客户端缓存：`HassiumRegionFile` 同构；`contentHash` = `combine(sectionHashes)`（与网络 chunkHash 一致）
+- 客户端辅存：`heat.idx`（热度）、`section_hashes.bin`（per-section 哈希）
 - 字典缺失时拒绝写入 Hassium payload，回退原版
 
 ## 4. 网络压缩

@@ -16,22 +16,10 @@ dependencies {
     library 'com.github.luben:zstd-jni:1.5.5-7'
     library 'org.lz4:lz4-java:1.8.0'
     library 'com.google.code.findbugs:jsr305:3.0.1'
-    library 'org.xerial:sqlite-jdbc:3.45.1.0'
 }
 
 // Mixin AP 配置：禁用目标验证（architectury-loom 的 remapping 会在运行时处理）
 tasks.withType(JavaCompile).configureEach {
     options.compilerArgs.add('-Arequires=0')
     options.compilerArgs.add('-AdefaultObfuscationEnv=mojang')
-}
-
-// zstd-jni shading
-jar {
-    from({
-        configurations.runtimeClasspath.filter {
-            it.name.contains('zstd-jni')
-        }.collect { zipTree(it) }
-    }) {
-        exclude 'META-INF/**'
-    }
 }
