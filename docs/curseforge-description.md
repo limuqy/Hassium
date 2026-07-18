@@ -18,7 +18,7 @@
 # Description（完整描述，建议粘贴到 CurseForge Description）
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/limuqy/Hassium/main/docs/logo.svg" alt="Hassium Logo" width="200">
+  <img src="https://raw.githubusercontent.com/limuqy/Hassium/refs/heads/master/docs/logo.svg" alt="Hassium Logo" width="200">
 </p>
 
 <p align="center">
