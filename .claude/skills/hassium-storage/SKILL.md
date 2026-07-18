@@ -44,7 +44,7 @@ description: Hassium 存储与压缩技能。涉及 Region/type 126、ChunkPaylo
 1. 实现 `CompressionCodec`，用 `CompressionAlgorithmId` 注册
 2. 字典缺失 → **拒绝写入** Hassium payload，回退原版
 3. 解压端勿错误复用压缩侧 `CompressionOptions`（等级等）
-4. 校验：`isVerifyChecksumEnabled()`（配置项）
+4. 字典 ID / 存储算法固定为内置常量（不开放配置）
 
 ## 初始化链
 

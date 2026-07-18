@@ -1,4 +1,4 @@
-# Hassium
+﻿# Hassium
 
 <p align="center">
   <img src="common/src/main/resources/assets/hassium/logo.png" alt="Hassium Logo" width="200">
@@ -48,9 +48,9 @@
 
 1. 从 [Releases](https://github.com/limuqy/Hassium/releases) 下载对应加载器的 JAR。
 2. 放入客户端或服务端 `mods/`。
-3. 启动后生成 `config/hassium/hassium.json`。
+3. 启动后生成 `config/hassium/hassium-client.toml` 与 `config/hassium/hassium-common.toml`（Fabric：Mod Menu + Cloth；Forge/NeoForge：Configured 或手改 toml）。
 
-**依赖：** Fabric 需 Fabric API；Forge / NeoForge 无额外前置。建议双端均安装以启用协商压缩与缓存。
+**依赖：** Fabric 需 Fabric API（Cloth 已 jiJ）；Forge / NeoForge 无额外前置。建议双端均安装以启用协商压缩与缓存。
 
 ---
 
@@ -68,7 +68,7 @@
 
 ## 配置摘要
 
-文件：`config/hassium/hassium.json`
+文件：`config/hassium/hassium-client.toml`、`config/hassium/hassium-common.toml`
 
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
@@ -140,6 +140,7 @@ flowchart TD
 | [`docs/architecture.md`](docs/architecture.md) | 架构、存储格式、配置、日志、命令 |
 | [`docs/chunk-cache.md`](docs/chunk-cache.md) | 区块缓存推送与进服流水线 |
 | [`docs/version-segments.md`](docs/version-segments.md) | 多版本九段适配真相源 |
+| [`docs/mod-compat.md`](docs/mod-compat.md) | 多 Mod 兼容边界与配置逃生 |
 
 ---
 

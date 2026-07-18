@@ -6,8 +6,6 @@ import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.metrics.NetworkStats;
 import io.github.limuqy.mc.hassium.platform.Services;
 
-import java.nio.file.Path;
-
 /**
  * Hassium 模组的公共初始化类
  * <p>
@@ -21,7 +19,7 @@ public class CommonClass {
     /**
      * 模组初始化入口
      * <p>
-     * 由各加载器的入口点调用。
+     * 由各加载器的入口点调用。调用前应已完成 ConfigSpec 注册。
      */
     public static void init() {
         Constants.LOG.info("Initializing Hassium v{} on {} ({})",
@@ -29,31 +27,24 @@ public class CommonClass {
                 Services.PLATFORM.getPlatformName(),
                 Services.PLATFORM.getEnvironmentName());
 
-        // 检查是否在开发环境
         if (Services.PLATFORM.isDevelopmentEnvironment()) {
             Constants.LOG.info("Running in development environment");
         }
 
-        // 初始化压缩系统（加载字典和注册编解码器）
         try {
             HassiumCompression.initialize();
         } catch (Exception e) {
             Constants.LOG.error("Failed to initialize compression system", e);
         }
 
-        // 设置配置目录并加载配置
         try {
             HassiumConfigService configService = HassiumConfigService.getInstance();
-            // 配置目录：config/hassium/
-            Path configDir = Services.PLATFORM.getConfigDirectory().resolve(Constants.MOD_ID);
-            configService.setConfigDir(configDir);
-            configService.setPhysicalClient(Services.PLATFORM.isPhysicalClient());
-            configService.loadConfig();
-
-            // 同步指标开关到 NetworkStats
+            // Fabric 已 loadFromToml；Forge/NeoForge 再从 Spec 同步
+            if (!configService.isTomlBackend()) {
+                configService.syncFromSpec();
+            }
             NetworkStats.setEnabled(configService.isMetricsEnabled());
 
-            // 段 C 完成前：高版本自定义通道未完整可用时强制关闭网络（编过 ≠ 能用）
             if (!NetworkCapability.isCustomChannelFullySupported()) {
                 configService.setNetworkCompressionEnabled(false);
                 Constants.LOG.warn(NetworkCapability.unsupportedReason());

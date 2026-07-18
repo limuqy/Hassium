@@ -29,18 +29,12 @@ public record HassiumConfig(
     public record StorageConfig(
             boolean enabled,
             String mode,
-            int zstdLevel,
-            String zstdDictionaryId,
-            String storageCompressionAlgorithm,
-            boolean verifyChecksum
+            int zstdLevel
     ) {
         public static final StorageConfig DEFAULT = new StorageConfig(
-                true,           // enabled: 默认开启
-                "mirror",        // mode: 镜像模式
-                9,               // zstdLevel: 默认等级 9
-                "hassium-dictionary",      // zstdDictionaryId: 使用内置字典
-                "hassium:zstd",  // storageCompressionAlgorithm: 存储压缩算法
-                true            // verifyChecksum: 校验和
+                true,    // enabled: 默认开启
+                "mirror", // mode: 镜像模式
+                9        // zstdLevel: 默认等级 9
         );
     }
 
@@ -88,9 +82,9 @@ public record HassiumConfig(
         }
 
         /**
-         * 获取目标缓存大小（MB）
+         * 解析后的目标缓存大小（MB；配置为 0 时取 maxSizeMb×0.8）
          */
-        public int targetCacheSizeMb() {
+        public int resolvedTargetCacheSizeMb() {
             return targetCacheSizeMb > 0 ? targetCacheSizeMb : (int) (maxSizeMb * 0.8);
         }
 
@@ -98,7 +92,7 @@ public record HassiumConfig(
          * 获取目标缓存大小（字节）
          */
         public long targetCacheSizeBytes() {
-            return (long) targetCacheSizeMb() * 1024 * 1024;
+            return (long) resolvedTargetCacheSizeMb() * 1024 * 1024;
         }
     }
 
@@ -107,7 +101,6 @@ public record HassiumConfig(
      */
     public record NetworkConfig(
             boolean enabled,
-            String compressionAlgorithm,
             int compressionLevel,
             int maxChunksPerTick,
             boolean globalPacketCompression,
@@ -127,14 +120,9 @@ public record HassiumConfig(
             int backgroundThreads,
             int maxChunksPerFrame,
             int maxCallbacksPerFrame,
-            // === 指标监控配置 ===
             boolean metricsEnabled,
-            // === 主线程时间预算（替代 FPS 自适应）===
             int mainThreadChunkBudgetMs,
-            // === 遗留字段：不再参与限流，保留以兼容旧配置 ===
-            int targetFPS,
             int maxLightRecomputePerFrame,
-            // === 动态线程池配置 ===
             boolean dynamicThreadPoolEnabled,
             int minPushThreads,
             int maxPushThreads
@@ -154,38 +142,32 @@ public record HassiumConfig(
         );
 
         public static final NetworkConfig DEFAULT = new NetworkConfig(
-                true,              // enabled: 默认启用
-                "hassium:zstd",    // compressionAlgorithm: ZSTD
-                3,                 // compressionLevel: 默认等级 3（速度优先）
-                10,                // maxChunksPerTick: 每个玩家每 tick 最多发送 10 个区块
-                true,              // globalPacketCompression: 默认启用全局包压缩（用 ZSTD 替换原版 Zlib）
-                3,                 // globalCompressionLevel: 默认等级 3
-                256,               // globalCompressionThreshold: 与原版一致
-                DEFAULT_COMPRESSION_BLACKLIST,  // compressionBlacklist: 默认黑名单
-                true,              // useContextCompression: 默认启用上下文压缩
-                true,              // magiclessZstd: 默认启用 magicless 模式
-                true,              // enablePacketAggregation: 默认启用包聚合
-                4,                 // aggregationMinBatchSize: 最小批量大小
-                20,                // aggregationMaxWaitTimeMs: 最大等待 20ms
-                256 * 1024,        // aggregationMaxSize: 最大聚合大小 256KB
-                true,              // enableCompactHeader: 默认启用紧凑包头（仅在聚合包内部使用）
-                8,                 // serverChunkPushThreads: 服务端推送线程数
-                10,                 // clientChunkLoadThreads: 客户端加载线程数
-                true,              // lightStripEnabled: 默认启用光照剥离
-                8,                 // backgroundThreads: 后台线程池大小（平台线程模式）
-                32,                // maxChunksPerFrame: 每帧安全硬顶（非主限流）
-                32,                // maxCallbacksPerFrame: 每帧回调安全硬顶（非主限流）
-                // === 指标监控默认配置 ===
-                true,              // metricsEnabled: 默认启用指标收集
-                // === 主线程时间预算 ===
-                3,                 // mainThreadChunkBudgetMs: 每帧约 3ms
-                // === 遗留字段 ===
-                60,                // targetFPS: 不再参与限流
-                10,                 // maxLightRecomputePerFrame: 每帧最多重算光照区块数
-                // === 动态线程池默认配置 ===
-                true,              // dynamicThreadPoolEnabled: 默认启用动态线程池
-                2,                 // minPushThreads: 最小推送线程数
-                8                  // maxPushThreads: 最大推送线程数
+                true,              // enabled
+                3,                 // compressionLevel（速度优先）
+                10,                // maxChunksPerTick
+                true,              // globalPacketCompression
+                3,                 // globalCompressionLevel
+                256,               // globalCompressionThreshold
+                DEFAULT_COMPRESSION_BLACKLIST,
+                true,              // useContextCompression
+                true,              // magiclessZstd
+                true,              // enablePacketAggregation
+                4,                 // aggregationMinBatchSize
+                20,                // aggregationMaxWaitTimeMs
+                256 * 1024,        // aggregationMaxSize
+                true,              // enableCompactHeader
+                8,                 // serverChunkPushThreads
+                10,                // clientChunkLoadThreads
+                true,              // lightStripEnabled
+                8,                 // backgroundThreads
+                32,                // maxChunksPerFrame
+                32,                // maxCallbacksPerFrame
+                true,              // metricsEnabled
+                3,                 // mainThreadChunkBudgetMs
+                10,                // maxLightRecomputePerFrame
+                true,              // dynamicThreadPoolEnabled
+                2,                 // minPushThreads
+                8                  // maxPushThreads
         );
     }
 

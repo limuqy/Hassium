@@ -1,14 +1,29 @@
 package io.github.limuqy.mc.hassium;
 
+import io.github.limuqy.mc.hassium.config.HassiumConfigService;
+import io.github.limuqy.mc.hassium.config.HassiumConfigSpec;
 import io.github.limuqy.mc.hassium.network.ChunkSender;
 import io.github.limuqy.mc.hassium.network.NeoForgeNetworkManager;
 
 #if MC_VER < MC_1_20_2
+import net.minecraftforge.fml.ModLoadingContext;
 import net.minecraftforge.fml.common.Mod;
+import net.minecraftforge.fml.config.ModConfig;
+import net.minecraftforge.fml.event.config.ModConfigEvent;
 import net.minecraftforge.fml.event.lifecycle.FMLCommonSetupEvent;
 import net.minecraftforge.eventbus.api.IEventBus;
-#else
+#elif MC_VER < MC_1_21_1
+import net.neoforged.fml.ModLoadingContext;
 import net.neoforged.fml.common.Mod;
+import net.neoforged.fml.config.ModConfig;
+import net.neoforged.fml.event.config.ModConfigEvent;
+import net.neoforged.fml.event.lifecycle.FMLCommonSetupEvent;
+import net.neoforged.bus.api.IEventBus;
+#else
+import net.neoforged.fml.ModContainer;
+import net.neoforged.fml.common.Mod;
+import net.neoforged.fml.config.ModConfig;
+import net.neoforged.fml.event.config.ModConfigEvent;
 import net.neoforged.fml.event.lifecycle.FMLCommonSetupEvent;
 import net.neoforged.bus.api.IEventBus;
 #endif
@@ -27,22 +42,51 @@ public class HassiumNeoForge {
 
     private static final Logger LOGGER = LoggerFactory.getLogger("Hassium/NeoForge");
 
+#if MC_VER < MC_1_21_1
     public HassiumNeoForge(IEventBus modEventBus) {
+        ModLoadingContext.get().registerConfig(
+                ModConfig.Type.CLIENT, HassiumConfigSpec.CLIENT_SPEC, Constants.CONFIG_CLIENT_FILE);
+        ModLoadingContext.get().registerConfig(
+                ModConfig.Type.COMMON, HassiumConfigSpec.COMMON_SPEC, Constants.CONFIG_COMMON_FILE);
+        hassium$init(modEventBus);
+    }
+#else
+    public HassiumNeoForge(IEventBus modEventBus, ModContainer modContainer) {
+        modContainer.registerConfig(
+                ModConfig.Type.CLIENT, HassiumConfigSpec.CLIENT_SPEC, Constants.CONFIG_CLIENT_FILE);
+        modContainer.registerConfig(
+                ModConfig.Type.COMMON, HassiumConfigSpec.COMMON_SPEC, Constants.CONFIG_COMMON_FILE);
+        hassium$init(modEventBus);
+    }
+#endif
+
+    private void hassium$init(IEventBus modEventBus) {
+        modEventBus.addListener(this::onConfigLoad);
+        modEventBus.addListener(this::onConfigReload);
+
         CommonClass.init();
 
-        // 区块推送队列依赖 ChunkSender；未注册会导致队列堆满、移动后虚空
         ChunkSender.setInstance(NeoForgeNetworkManager::sendCompressedChunk);
         LOGGER.info("Hassium: ChunkSender registered for NeoForge");
 
 #if MC_VER < MC_1_20_5
-        // SimpleChannel：在 FMLCommonSetupEvent 中注册
         modEventBus.addListener(this::commonSetup);
 #else
-        // 1.20.5+：注册 Payload 处理器
         modEventBus.addListener(NeoForgeNetworkManager::registerPayloads);
         LOGGER.info("Hassium: Registered NeoForge payload handlers for 1.20.5+");
 #endif
-        // 命令通过 @Mod.EventBusSubscriber 自动注册（见 NeoForgeHassiumCommand / ClientCommand）
+    }
+
+    private void onConfigLoad(ModConfigEvent.Loading event) {
+        if (Constants.MOD_ID.equals(event.getConfig().getModId())) {
+            HassiumConfigService.getInstance().syncFromSpec();
+        }
+    }
+
+    private void onConfigReload(ModConfigEvent.Reloading event) {
+        if (Constants.MOD_ID.equals(event.getConfig().getModId())) {
+            HassiumConfigService.getInstance().syncFromSpec();
+        }
     }
 
 #if MC_VER < MC_1_20_5

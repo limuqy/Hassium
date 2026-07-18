@@ -7,6 +7,14 @@ plugins {
     id 'loom-forge'
 }
 
+sourceSets {
+    main {
+        java {
+            srcDir rootProject.file('cloth-ui/src/main/java')
+        }
+    }
+}
+
 configurations {
     library
 }
@@ -29,6 +37,16 @@ dependencies {
     library 'com.github.luben:zstd-jni:1.5.5-7'
     library 'org.lz4:lz4-java:1.8.0'
     library 'com.google.code.findbugs:jsr305:3.0.1'
+
+    // 1.20.6：common Spec 使用 NeoForge ModConfigSpec，经 FCAP Forge 提供并 jiJ
+    if (gradle.ext.minecraft_version == '1.20.6' && gradle.ext.has('forge_config_api_port_version')) {
+        implementation include("fuzs.forgeconfigapiport:forgeconfigapiport-forge:${gradle.ext.forge_config_api_port_version}")
+    }
+
+    // Cloth：模组列表「配置」按钮
+    if (gradle.ext.has('cloth_config_version')) {
+        modApi include("me.shedaniel.cloth:cloth-config-forge:${gradle.ext.cloth_config_version}")
+    }
 }
 
 /**

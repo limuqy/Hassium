@@ -40,7 +40,7 @@ Mixin 拦截 broadcast/trackChunk/PlayerChunkSender
 
 | 类 | 职责 |
 |----|------|
-| `ServerChunkPushManager` | hash 批量、数据队列、tick、pushPool |
+| `ServerChunkPushManager` | hash 批量、数据队列、tick、pushPool；拦截时缓存包字节供 miss 复用（反透视） |
 | `ClientMetadataHandler` | hash 比对、全量请求、（保留）delta |
 | `ClientCacheLoadQueue` | 后台读缓存 |
 | `ClientMainThreadBudget` / `MainThreadDispatcher` | 主线程 drain |
@@ -60,7 +60,6 @@ Mixin 拦截 broadcast/trackChunk/PlayerChunkSender
 | `mainThreadChunkBudgetMs` | 客户端每帧预算（默认 3；JoinBoost ~10） |
 | `maxChunksPerFrame` / `maxCallbacksPerFrame` | 硬顶，非主限流 |
 | `maxLightRecomputePerFrame` | 客户端每帧光照重算区块上限（默认 10） |
-| `targetFPS` | **遗留**，不参与限流 |
 
 ## 日志
 

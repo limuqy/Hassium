@@ -80,6 +80,8 @@ MC_1_21_11
 | 1.21.11 | fabric, neoforge |
 
 > **Forge 仅支持 1.20.1 与 1.20.6**（段 A / 段 C 段尾）。**1.21+ 不构建 Forge**（Loom SecureJar / Automatic-Module-Name 冲突适配成本过高；1.21 请用 NeoForge）。
+>
+> **Fabric 配置**：自管 toml + Cloth/Mod Menu，**不依赖 FCAP**。FCAP 仅 Forge 1.20.6 桥接保留。
 
 本地 / CI：
 
@@ -152,6 +154,7 @@ MC_1_21_11
 - 不追求每个小版本手测
 - 不在 `builds_for` 不含 forge 的版本上硬撑 Forge 网络
 - **不构建 Forge 1.21+**（已正式取消）
+- **Fabric 不引入 FCAP**（自管 toml + Cloth）；不在 Forge 1.20.6 以外硬撑 FCAP
 - 不把 Identifier rename 散落到业务文件
 
 ---
@@ -179,3 +182,12 @@ MC_1_21_11
 | 1.20.1 | ✅ `builds_for` 含 forge |
 | 1.20.6 | ✅（段 C 段尾） |
 | 1.21+ | ❌ 使用 NeoForge |
+
+### Fabric / FCAP 配置策略
+
+| 加载器 | 配置后端 | GUI |
+|--------|----------|-----|
+| Fabric | Night Config toml（自管） | Mod Menu + Cloth（jiJ） |
+| NeoForge | 原生 ModConfigSpec | Cloth（jiJ，模组列表配置） |
+| Forge 1.20.1 | 原生 ForgeConfigSpec | Cloth（jiJ） |
+| Forge 1.20.6 | ModConfigSpec + FCAP Forge jiJ | Cloth（jiJ） |

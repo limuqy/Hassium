@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # 按 docs/version-segments.md 对 9 个锚点 × builds_for 执行 compileJava。
+# 每个锚点结束后 --stop，避免 loom 全局锁 / Daemon 残留导致下一版本无限等待。
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -18,6 +19,35 @@ ANCHORS=(
 )
 
 GRADLEW=./gradlew
+
+stop_daemons() {
+  "$GRADLEW" --stop >/dev/null 2>&1 || true
+}
+
+assert_no_foreign_loom_lock() {
+  local loom="${HOME}/.gradle/caches/fabric-loom"
+  [[ -d "$loom" ]] || return 0
+  while IFS= read -r lock; do
+    [[ -f "$lock" ]] || continue
+    local pid
+    pid=$(grep -oE 'pid["=: ]+[0-9]+' "$lock" 2>/dev/null | grep -oE '[0-9]+' | head -1 || true)
+    [[ -n "${pid:-}" ]] || continue
+    if kill -0 "$pid" 2>/dev/null; then
+      cat <<EOF >&2
+
+错误: fabric-loom 缓存锁仍被存活进程占用 (pid=$pid)。
+命令行 Gradle 会无限等待该锁。请先停止 IDE Gradle Sync 或结束该进程后重试。
+
+EOF
+      exit 2
+    fi
+  done < <(find "$loom" -name '*.lock' 2>/dev/null || true)
+}
+
+echo "Stopping existing Gradle daemons..."
+stop_daemons
+assert_no_foreign_loom_lock
+
 failed=()
 
 for ver in "${ANCHORS[@]}"; do
@@ -37,9 +67,16 @@ for ver in "${ANCHORS[@]}"; do
 
   echo ""
   echo "=== Anchor $ver (${builds_for}) ==="
-  if ! "$GRADLEW" --no-daemon "${tasks[@]}" "-Pmc_ver=$ver"; then
+  assert_no_foreign_loom_lock
+  set +e
+  "$GRADLEW" "${tasks[@]}" "-Pmc_ver=$ver" --console=plain
+  code=$?
+  set -e
+  stop_daemons
+
+  if [[ $code -ne 0 ]]; then
     failed+=("$ver")
-    echo "FAILED: $ver"
+    echo "FAILED: $ver (exit $code)"
   else
     echo "OK: $ver"
   fi

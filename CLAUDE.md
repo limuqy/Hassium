@@ -69,6 +69,7 @@ fabric/ forge/ neoforge/  ← ServiceLoader 实现 + 入口
 | [`docs/architecture.md`](docs/architecture.md) | 架构 / 存储 / 配置 / 日志 / 命令 |
 | [`docs/chunk-cache.md`](docs/chunk-cache.md) | 缓存推送真相源 |
 | [`docs/version-segments.md`](docs/version-segments.md) | 九段 / `#if` 白名单 / compat |
+| [`docs/mod-compat.md`](docs/mod-compat.md) | 多 Mod 兼容边界与配置逃生 |
 | [`AGENTS.md`](AGENTS.md) | Agent 速查 |
 
 | Skill | 触发 |

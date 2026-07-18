@@ -12,6 +12,9 @@ logoFile = "assets/${mod_id}/logo.png"
 authors = "${mod_author}" #optional
 description = '''${description}''' #mandatory
 
+[modproperties.${mod_id}]
+configuredBackground = "minecraft:textures/block/deepslate.png"
+
 # 1.20.2+ NeoForge 必须在此声明；1.20.1 的 loom forge.mixinConfig 也会注册，重复声明安全
 [[mixins]]
 config = "${mod_id}.mixins.json"

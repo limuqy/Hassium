@@ -44,6 +44,7 @@ public class HassiumClientMod implements ClientModInitializer {
 
         // 注册客户端命令
         FabricHassiumCommand.registerClientCommands();
+
         LOGGER.info("Hassium: Fabric client-side initialization complete");
     }
 }

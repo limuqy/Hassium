@@ -3,10 +3,10 @@ package io.github.limuqy.mc.hassium.storage;
 import com.github.luben.zstd.Zstd;
 import com.github.luben.zstd.ZstdDictCompress;
 import com.github.luben.zstd.ZstdDictDecompress;
+import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.compression.CompressionException;
 import io.github.limuqy.mc.hassium.compression.CompressionService;
 import io.github.limuqy.mc.hassium.compression.DictionaryRegistry;
-import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 
 /**
  * 区块 payload 编解码器
@@ -25,7 +25,7 @@ public class ChunkPayloadCodec {
 
     public ChunkPayloadCodec(int compressionLevel) {
         this.compressionLevel = compressionLevel;
-        this.dictionaryId = HassiumConfigService.getInstance().getConfig().storage().zstdDictionaryId();
+        this.dictionaryId = Constants.DEFAULT_ZSTD_DICTIONARY_ID;
         CompressionService service = CompressionService.getInstance();
         this.dictionaryRegistry = service.getDictionaryRegistry()
                 .orElseThrow(() -> new RuntimeException("Dictionary registry not available"));

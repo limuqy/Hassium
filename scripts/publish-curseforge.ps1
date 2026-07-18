@@ -84,9 +84,11 @@ foreach ($ver in $versionList) {
     $loaders = $buildsFor.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ }
 
     Write-Host "`n=== Publish $ver ($($loaders -join ',')) ===" -ForegroundColor Cyan
-    # PowerShell 会拆开 1.20.1，必须给 -P 参数加引号
-    & $Gradlew --no-daemon build publishCurseForge "-Pmc_ver=$ver" @extra
-    if ($LASTEXITCODE -ne 0) {
+    # PowerShell 会拆开 1.20.1，必须给 -P 参数加引号；锚点间 --stop 释放 loom 锁
+    & $Gradlew build publishCurseForge "-Pmc_ver=$ver" @extra
+    $code = $LASTEXITCODE
+    & $Gradlew --stop 2>$null | Out-Null
+    if ($code -ne 0) {
         $failed += "$ver"
         Write-Host "FAILED: $ver" -ForegroundColor Red
     } else {

@@ -1,4 +1,4 @@
-# Hassium 架构与功能说明
+﻿# Hassium 架构与功能说明
 
 本文档是项目**需求要点 + 模块架构 + 配置/运维**的权威说明。多版本细节见 [`version-segments.md`](version-segments.md)；区块缓存推送流水线见 [`chunk-cache.md`](chunk-cache.md)。
 
@@ -32,7 +32,7 @@ Hassium/
 | `compression/` | `CompressionCodec` / `CompressionService`、字典注册 |
 | `network/` | 握手、ZSTD Pipeline、聚合、chunkHash 推送、`ServerChunkPushManager` |
 | `cache/` | 客户端缓存、Bloom、`ClientHeatIndex` / `SectionHashStore`、淘汰 |
-| `config/` | `HassiumConfig` record + `HassiumConfigService` |
+| `config/` | `HassiumConfigSpec`（CLIENT/COMMON toml）+ `HassiumConfigService` 门面 |
 | `metrics/` | `NetworkStats` 零分配指标 |
 | `compat/` | Manifold 跨版本 API 桥接 |
 | `mixin/` | 全部 Mixin（common only） |
@@ -67,7 +67,15 @@ Sector 3+:    [length(4)][type=126][ZSTD 压缩数据]
 
 ## 5. 配置默认值（安全与行为）
 
-配置文件：`config/hassium/hassium.json`。
+配置文件：
+
+- `config/hassium/hassium-client.toml` — 仅物理客户端（缓存与客户端网络应用项）
+- `config/hassium/hassium-common.toml` — 客户端与专用服（存储、共享网络、兼容与调试）
+
+游戏内编辑：
+- **Fabric**：Night Config 自管 toml + jiJ **Cloth**；安装 **Mod Menu** 即可打开。不依赖 FCAP / Configured。
+- **Forge / NeoForge**：原生 ConfigSpec + jiJ **Cloth**（模组列表「配置」按钮）；亦可手改 toml。Configured 仍可选。Forge **1.20.6** 因与 NeoForge 共用 `ModConfigSpec`，仅该端保留 FCAP Forge 桥接。
+各项 GUI 文案见 `assets/hassium/lang/*`；toml 注释仍为中文。
 
 | 项 | 默认 | 说明 |
 |----|------|------|
@@ -82,7 +90,6 @@ Sector 3+:    [length(4)][type=126][ZSTD 压缩数据]
 | `network.mainThreadChunkBudgetMs` | 3 | 客户端主线程 apply 预算（ms） |
 | `network.lightStripEnabled` | true | 发包剥离 LightData，由客户端本地重算 |
 | `network.maxLightRecomputePerFrame` | 10 | 每帧最多重算光照的区块数 |
-| `network.targetFPS` | （遗留） | **不参与**限流 |
 | `network.metricsEnabled` | true | 指标收集 |
 | `compat.requireClientMod` | false | 无模组客户端可连 |
 | `debug.*` | 全 false | 调试分类日志，见下 |
@@ -140,5 +147,6 @@ ERROR / WARN 始终输出。
 
 - [`chunk-cache.md`](chunk-cache.md) — 缓存推送与进服流水线
 - [`version-segments.md`](version-segments.md) — 九段适配真相源
+- [`mod-compat.md`](mod-compat.md) — 多 Mod 兼容边界与配置逃生
 - 根目录 `README.md` — 用户安装与特性
 - `CLAUDE.md` / `AGENTS.md` — 开发者与 Agent 入口

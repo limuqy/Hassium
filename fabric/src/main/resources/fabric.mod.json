@@ -14,12 +14,15 @@
     "license": "${license}",
     "icon": "assets/${mod_id}/logo.png",
     "environment": "*",
-        "entrypoints": {
+    "entrypoints": {
         "main": [
             "io.github.limuqy.mc.hassium.HassiumMod"
         ],
         "client": [
             "io.github.limuqy.mc.hassium.HassiumClientMod"
+        ],
+        "modmenu": [
+            "io.github.limuqy.mc.hassium.client.HassiumModMenuIntegration"
         ]
     },
     "mixins": [
@@ -33,7 +36,6 @@
         "java": ">=17"
     },
     "suggests": {
-        "another-mod": "*"
+        "modmenu": "*"
     }
 }
-  

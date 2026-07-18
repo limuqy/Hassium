@@ -13,6 +13,7 @@ public class HassiumMod implements ModInitializer {
 
     @Override
     public void onInitialize() {
+        io.github.limuqy.mc.hassium.config.FabricHassiumConfig.register();
         CommonClass.init();
 
         // 注册网络通道

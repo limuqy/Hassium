@@ -46,6 +46,8 @@ public class HassiumForgeClient {
     public static void onClientSetup(FMLClientSetupEvent event) {
         DictionaryManager.loadChunkDictionary();
 
+        event.enqueueWork(io.github.limuqy.mc.hassium.client.HassiumForgeConfigScreens::register);
+
         // ClientPlayerNetworkEvent 在 Forge 游戏总线，不在 Mod 总线
         MinecraftForge.EVENT_BUS.register(new ClientNetworkEventHandler());
 

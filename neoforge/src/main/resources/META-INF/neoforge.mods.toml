@@ -11,6 +11,9 @@ logoFile = "assets/${mod_id}/logo.png"
 authors = "${mod_author}" #optional
 description = '''${description}''' #mandatory
 
+[modproperties.${mod_id}]
+configuredBackground = "minecraft:textures/block/deepslate.png"
+
 [[mixins]]
 config = "${mod_id}.mixins.json"
 [[mixins]]

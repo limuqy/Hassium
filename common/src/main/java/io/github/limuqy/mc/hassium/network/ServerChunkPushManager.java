@@ -47,13 +47,17 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * 服务端区块推送管理器
  * <p>
  * 职责：
- * 1. 直接发送区块元数据（位置+时间戳）给客户端
+ * 1. 发送 chunkHash 元数据给客户端
  * 2. 管理区块数据请求队列：主线程序列化，线程池异步压缩发送
  * 3. 短窗口批量发送 ChunkHash，降低进服包风暴
+ * 4. 缓存拦截时已构建的区块包字节，miss 全量时复用（兼容反透视等改包 mod）
  */
 public class ServerChunkPushManager {
 
     private static final ServerChunkPushManager INSTANCE = new ServerChunkPushManager();
+
+    /** 每玩家已准备包字节缓存上限，防止永不 miss 时泄漏 */
+    private static final int MAX_PREPARED_PER_PLAYER = 384;
 
     /**
      * 每玩家区块数据请求队列
@@ -69,6 +73,12 @@ public class ServerChunkPushManager {
      * 每玩家待发送的 chunkHash 批次
      */
     private final Map<UUID, PendingHashBatch> hashBatches = new ConcurrentHashMap<>();
+
+    /**
+     * 每玩家：chunkPosLong → 已编码的 ClientboundLevelChunkWithLightPacket 线格式字节。
+     * 在广播/初始发送拦截时写入，miss 全量请求时优先取出，避免从 LevelChunk 重建旁路反透视。
+     */
+    private final Map<UUID, ConcurrentHashMap<Long, byte[]>> preparedChunkPackets = new ConcurrentHashMap<>();
 
     /**
      * 数据请求处理线程池（hash 计算 + 压缩发送）
@@ -159,6 +169,13 @@ public class ServerChunkPushManager {
         final ServerLevel firstLevel = PlayerCompat.getServerLevel(players.get(0));
         final int sectionCount = firstLevel.getSectionsCount();
         final RegistryAccess registryAccess = firstLevel.registryAccess();
+        // 主线程编码并缓存：保留反透视等 mod 已改写的包视图
+        byte[] encoded = encodeChunkPacket(packet, registryAccess);
+        if (encoded != null) {
+            for (ServerPlayer player : players) {
+                putPreparedChunkPacket(player.getUUID(), pos, encoded);
+            }
+        }
         pushPool.submit(() -> {
             try {
                 // 从已序列化的 packet 数据计算 section 哈希（线程安全，无需读取世界）
@@ -195,6 +212,12 @@ public class ServerChunkPushManager {
         final ServerLevel playerLevel = PlayerCompat.getServerLevel(player);
         final int sectionCount = playerLevel.getSectionsCount();
         final RegistryAccess registryAccess = playerLevel.registryAccess();
+        if (chunkPacket instanceof ClientboundLevelChunkWithLightPacket lightPacket) {
+            byte[] encoded = encodeChunkPacket(lightPacket, registryAccess);
+            if (encoded != null) {
+                putPreparedChunkPacket(player.getUUID(), pos, encoded);
+            }
+        }
         pushPool.submit(() -> {
             try {
                 Map<Integer, Long> sectionHashes;
@@ -232,20 +255,39 @@ public class ServerChunkPushManager {
      * 异步计算 sectionHashes → chunkHash 并发送阶段一元数据（从 PlayerChunkSender.sendChunk 调用，1.20.2+）。
      * <p>
      * 1.20.2+ 移除了 {@code ServerPlayer.trackChunk}，初始区块发送改走
-     * {@code PlayerChunkSender.sendChunk}，此方法从 {@link LevelChunk} 直接计算 section 哈希。
+     * {@code PlayerChunkSender.sendChunk}。主线程先按原版路径构建包并缓存字节（供反透视注入），
+     * 再在 pushPool 上从包数据计算 hash。
      *
      * @param player    目标玩家
      * @param pos       区块位置
-     * @param chunk     区块对象（主线程捕获，后台线程只读）
+     * @param chunk     区块对象（须在主线程调用）
      * @param dimension 维度标识
      */
     public void submitMetadataTaskFromChunk(ServerPlayer player, ChunkPos pos,
                                              LevelChunk chunk, String dimension) {
         ensureInitialized();
+        ServerLevel level = PlayerCompat.getServerLevel(player);
+        final int sectionCount = level.getSectionsCount();
+        final RegistryAccess registryAccess = level.registryAccess();
+
+        ClientboundLevelChunkWithLightPacket packet = buildChunkPacket(chunk, level);
+        if (packet == null) {
+            Constants.LOG.warn("[ASYNC_METADATA] Failed to build chunk packet for {}", pos);
+            return;
+        }
+        byte[] encoded = encodeChunkPacket(packet, registryAccess);
+        if (encoded != null) {
+            putPreparedChunkPacket(player.getUUID(), pos, encoded);
+        }
+
         pushPool.submit(() -> {
             try {
-                Map<Integer, Long> sectionHashes = ChunkContentHashUtil.computeSectionHashes(chunk);
-                int sectionBitmap = computeSectionBitmap(chunk);
+                Map<Integer, Long> sectionHashes = ChunkContentHashUtil.computeSectionHashesFromPacket(
+                        packet.getChunkData(), sectionCount, registryAccess);
+                int sectionBitmap = 0;
+                for (int idx : sectionHashes.keySet()) {
+                    sectionBitmap |= (1 << idx);
+                }
                 long chunkHash = ChunkContentHashUtil.combineSectionHashes(sectionHashes);
 
                 if (player.isAlive() && !player.hasDisconnected()) {
@@ -666,13 +708,16 @@ public class ServerChunkPushManager {
                 }
 
                 try {
-                    LevelChunk chunk = level.getChunk(task.pos().x, task.pos().z);
-                    if (chunk == null) {
-                        Constants.LOG.warn("[PROCESS_QUEUE] Chunk {} not loaded, skipping", task.pos());
-                        continue;
+                    // 优先使用拦截时缓存的包字节（与 chunkHash / 反透视视图一致）
+                    byte[] chunkData = takePreparedChunkPacket(playerId, task.pos());
+                    if (chunkData == null) {
+                        LevelChunk chunk = level.getChunk(task.pos().x, task.pos().z);
+                        if (chunk == null) {
+                            Constants.LOG.warn("[PROCESS_QUEUE] Chunk {} not loaded, skipping", task.pos());
+                            continue;
+                        }
+                        chunkData = serializeChunk(chunk, level);
                     }
-
-                    byte[] chunkData = serializeChunk(chunk, level);
                     if (chunkData == null) {
                         Constants.LOG.warn("[PROCESS_QUEUE] Failed to serialize chunk {}", task.pos());
                         continue;
@@ -729,47 +774,88 @@ public class ServerChunkPushManager {
     }
 
     /**
-     * 序列化区块为字节数组
+     * 按原版构造路径构建区块包（主线程；反透视等可在构造/写路径注入）。
      */
-    private byte[] serializeChunk(LevelChunk chunk, ServerLevel level) {
-        // 光照剥离：启用时传入空 BitSet，不传输光照数据
-        boolean stripLight = HassiumConfigService.getInstance().isLightStripEnabled();
-        java.util.BitSet lightMask = stripLight ? new java.util.BitSet() : null;
-        net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket chunkPacket =
-                new net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket(
-                        chunk, level.getLightEngine(), lightMask, lightMask);
+    private ClientboundLevelChunkWithLightPacket buildChunkPacket(LevelChunk chunk, ServerLevel level) {
+        try {
+            boolean stripLight = HassiumConfigService.getInstance().isLightStripEnabled();
+            java.util.BitSet lightMask = stripLight ? new java.util.BitSet() : null;
+            return new ClientboundLevelChunkWithLightPacket(
+                    chunk, level.getLightEngine(), lightMask, lightMask);
+        } catch (Exception e) {
+            Constants.LOG.error("Hassium: Failed to build chunk packet {}", chunk.getPos(), e);
+            return null;
+        }
+    }
 
+    /**
+     * 将区块包编码为线格式字节（须在持有 RegistryAccess 的线程调用，通常为主线程）。
+     */
+    private byte[] encodeChunkPacket(ClientboundLevelChunkWithLightPacket chunkPacket,
+                                     RegistryAccess registryAccess) {
 #if MC_VER < MC_1_20_5
         io.netty.buffer.ByteBuf tempBuf = io.netty.buffer.Unpooled.buffer();
         try {
             FriendlyByteBuf friendlyBuf = new FriendlyByteBuf(tempBuf);
             chunkPacket.write(friendlyBuf);
-
             byte[] data = new byte[tempBuf.readableBytes()];
             tempBuf.getBytes(0, data);
             return data;
         } catch (Exception e) {
-            Constants.LOG.error("Hassium: Failed to serialize chunk {}", chunk.getPos(), e);
+            Constants.LOG.error("Hassium: Failed to encode chunk packet", e);
             return null;
         } finally {
             tempBuf.release();
         }
 #else
-        // 1.20.5+: Packet.write() removed, use STREAM_CODEC with RegistryFriendlyByteBuf
         net.minecraft.network.RegistryFriendlyByteBuf buf =
-                new net.minecraft.network.RegistryFriendlyByteBuf(io.netty.buffer.Unpooled.buffer(), level.registryAccess());
+                new net.minecraft.network.RegistryFriendlyByteBuf(
+                        io.netty.buffer.Unpooled.buffer(), registryAccess);
         try {
-            net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket.STREAM_CODEC.encode(buf, chunkPacket);
+            ClientboundLevelChunkWithLightPacket.STREAM_CODEC.encode(buf, chunkPacket);
             byte[] data = new byte[buf.readableBytes()];
             buf.readBytes(data);
             return data;
         } catch (Exception e) {
-            Constants.LOG.error("Hassium: Failed to serialize chunk {}", chunk.getPos(), e);
+            Constants.LOG.error("Hassium: Failed to encode chunk packet", e);
             return null;
         } finally {
             buf.release();
         }
 #endif
+    }
+
+    /**
+     * 序列化区块为字节数组（缓存未命中时的回退路径）。
+     */
+    private byte[] serializeChunk(LevelChunk chunk, ServerLevel level) {
+        ClientboundLevelChunkWithLightPacket chunkPacket = buildChunkPacket(chunk, level);
+        if (chunkPacket == null) {
+            return null;
+        }
+        return encodeChunkPacket(chunkPacket, level.registryAccess());
+    }
+
+    private void putPreparedChunkPacket(UUID playerId, ChunkPos pos, byte[] data) {
+        ConcurrentHashMap<Long, byte[]> map =
+                preparedChunkPackets.computeIfAbsent(playerId, k -> new ConcurrentHashMap<>());
+        map.put(ChunkPos.asLong(pos.x, pos.z), data);
+        if (map.size() > MAX_PREPARED_PER_PLAYER) {
+            int toRemove = map.size() - MAX_PREPARED_PER_PLAYER;
+            var it = map.keySet().iterator();
+            while (toRemove-- > 0 && it.hasNext()) {
+                it.next();
+                it.remove();
+            }
+        }
+    }
+
+    private byte[] takePreparedChunkPacket(UUID playerId, ChunkPos pos) {
+        ConcurrentHashMap<Long, byte[]> map = preparedChunkPackets.get(playerId);
+        if (map == null) {
+            return null;
+        }
+        return map.remove(ChunkPos.asLong(pos.x, pos.z));
     }
 
     /**
@@ -825,6 +911,7 @@ public class ServerChunkPushManager {
         }
         processingFlags.remove(playerId);
         hashBatches.remove(playerId);
+        preparedChunkPackets.remove(playerId);
     }
 
     /**
@@ -834,6 +921,7 @@ public class ServerChunkPushManager {
         dataQueues.clear();
         processingFlags.clear();
         hashBatches.clear();
+        preparedChunkPackets.clear();
         if (pushPool != null) {
             pushPool.shutdownNow();
         }

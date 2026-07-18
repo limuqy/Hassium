@@ -1,4 +1,4 @@
-# Hassium
+﻿# Hassium
 
 <p align="center">
   <img src="common/src/main/resources/assets/hassium/logo.png" alt="Hassium Logo" width="200">
@@ -48,7 +48,7 @@ See [`docs/version-segments.md`](docs/version-segments.md) for the nine adaptati
 
 1. Download the loader-specific JAR from [Releases](https://github.com/limuqy/Hassium/releases).
 2. Place it in `mods/` on client and/or server.
-3. Config is created at `config/hassium/hassium.json`.
+3. Config is created at `config/hassium/hassium-client.toml` and `config/hassium/hassium-common.toml` (Fabric: Mod Menu + Cloth; Forge/NeoForge: Configured or edit toml).
 
 **Dependencies:** Fabric needs Fabric API; Forge / NeoForge have no required extras. Install on both sides for negotiated compression and caching.
 
@@ -68,7 +68,7 @@ Enabled by default:
 
 ## Config (summary)
 
-File: `config/hassium/hassium.json`
+Files: `config/hassium/hassium-client.toml`, `config/hassium/hassium-common.toml`
 
 | Key | Default | Notes |
 | --- | --- | --- |
@@ -140,6 +140,7 @@ Developer entry points: [`CLAUDE.md`](CLAUDE.md), [`AGENTS.md`](AGENTS.md).
 | [`docs/architecture.md`](docs/architecture.md) | Architecture, storage, config, logging, commands |
 | [`docs/chunk-cache.md`](docs/chunk-cache.md) | Cache push & join pipeline |
 | [`docs/version-segments.md`](docs/version-segments.md) | Multi-version segments |
+| [`docs/mod-compat.md`](docs/mod-compat.md) | Multi-mod compatibility & config escapes |
 
 ---
 

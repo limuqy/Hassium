@@ -211,11 +211,7 @@ public class CacheEvictionManager {
     }
 
     private long getTargetSizeBytes(HassiumConfig.ClientCacheConfig config) {
-        long maxSizeBytes = config.maxCacheSizeBytes();
-        if (config.targetCacheSizeMb() > 0) {
-            return (long) config.targetCacheSizeMb() * 1024 * 1024;
-        }
-        return (long) (maxSizeBytes * 0.8);
+        return config.targetCacheSizeBytes();
     }
 
     private static long bytesToMB(long bytes) {

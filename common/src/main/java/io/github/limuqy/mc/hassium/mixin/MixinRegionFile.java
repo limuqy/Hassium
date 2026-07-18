@@ -7,6 +7,7 @@ import io.github.limuqy.mc.hassium.compression.CompressionAlgorithmId;
 import io.github.limuqy.mc.hassium.compression.CompressionException;
 import io.github.limuqy.mc.hassium.compression.CompressionService;
 import io.github.limuqy.mc.hassium.compression.DictionaryRegistry;
+import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.storage.HassiumChunkWriteBuffer;
 import net.minecraft.world.level.ChunkPos;
@@ -275,7 +276,7 @@ public abstract class MixinRegionFile {
         DictionaryRegistry registry = compressionService.getDictionaryRegistry()
                 .orElseThrow(() -> new CompressionException("Dictionary registry not available"));
 
-        String dictionaryId = HassiumConfigService.getInstance().getConfig().storage().zstdDictionaryId();
+        String dictionaryId = Constants.DEFAULT_ZSTD_DICTIONARY_ID;
         byte[] dictionary = registry.findDictionary(dictionaryId)
                 .orElseThrow(() -> new CompressionException("Dictionary not found: " + dictionaryId));
 
@@ -292,7 +293,7 @@ public abstract class MixinRegionFile {
         DictionaryRegistry registry = compressionService.getDictionaryRegistry()
                 .orElseThrow(() -> new CompressionException("Dictionary registry not available"));
 
-        String dictionaryId = HassiumConfigService.getInstance().getConfig().storage().zstdDictionaryId();
+        String dictionaryId = Constants.DEFAULT_ZSTD_DICTIONARY_ID;
         byte[] dictionary = registry.findDictionary(dictionaryId)
                 .orElseThrow(() -> new CompressionException("Dictionary not found: " + dictionaryId));
 

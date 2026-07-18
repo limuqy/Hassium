@@ -12,6 +12,10 @@ logoFile = "assets/${mod_id}/logo.png" #optional (needs to be in the root of you
 credits = "Thanks for this example mod goes to Java" #optional
 authors = "${mod_author}" #optional
 description = '''${description}''' #mandatory (Supports multiline text)
+
+[modproperties.${mod_id}]
+configuredBackground = "minecraft:textures/block/deepslate.png"
+
 [[dependencies.${mod_id}]] #optional
 modId = "forge" #mandatory
 mandatory = true #mandatory

@@ -58,6 +58,9 @@ public class HassiumNeoForgeClient {
         // 加载内置区块字典
         DictionaryManager.loadChunkDictionary();
 
+        // 模组列表「配置」按钮
+        event.enqueueWork(io.github.limuqy.mc.hassium.client.HassiumNeoForgeConfigScreens::register);
+
         // 注册到 Forge 事件总线监听玩家网络事件（这些事件不在 Mod 总线）
 #if MC_VER < MC_1_20_2
         MinecraftForge.EVENT_BUS.register(new ClientNetworkEventHandler());

@@ -25,7 +25,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * 热度索引（{@link ClientHeatIndex}）与 section 哈希（{@link SectionHashStore}）分离存储。
  * <p>
  * 目录结构：
- * - 配置文件：config/hassium/hassium.json
+ * - 配置：config/hassium/hassium-client.toml / config/hassium/hassium-common.toml
  * - 热度索引：config/hassium/heat.idx
  * - 缓存文件：hassium_cache/&lt;serverId&gt;/&lt;dimension&gt;/r.&lt;x&gt;.&lt;z&gt;.mca
  * - section 哈希：hassium_cache/&lt;serverId&gt;/&lt;dimension&gt;/section_hashes.bin
@@ -538,7 +538,7 @@ public class ClientHassiumStorage {
         DictionaryRegistry registry = service.getDictionaryRegistry()
                 .orElseThrow(() -> new RuntimeException("Dictionary registry not available"));
 
-        String dictionaryId = HassiumConfigService.getInstance().getConfig().storage().zstdDictionaryId();
+        String dictionaryId = Constants.DEFAULT_ZSTD_DICTIONARY_ID;
         byte[] dictionary = registry.findDictionary(dictionaryId)
                 .orElseThrow(() -> new RuntimeException("Dictionary not found: " + dictionaryId));
 
@@ -551,7 +551,7 @@ public class ClientHassiumStorage {
         DictionaryRegistry registry = service.getDictionaryRegistry()
                 .orElseThrow(() -> new RuntimeException("Dictionary registry not available"));
 
-        String dictionaryId = HassiumConfigService.getInstance().getConfig().storage().zstdDictionaryId();
+        String dictionaryId = Constants.DEFAULT_ZSTD_DICTIONARY_ID;
         byte[] dictionary = registry.findDictionary(dictionaryId)
                 .orElseThrow(() -> new RuntimeException("Dictionary not found: " + dictionaryId));
 

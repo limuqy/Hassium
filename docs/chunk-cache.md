@@ -1,4 +1,4 @@
-# 区块缓存推送与进服加载
+﻿# 区块缓存推送与进服加载
 
 本文档是 **chunkHash 元数据推送 + 客户端缓存命中** 流水线的唯一真相源。存储文件格式见 [`architecture.md`](architecture.md)。
 
@@ -36,6 +36,7 @@ chunkHash   = combineSectionHashes(sectionIndex → sectionHash)
 ```
 ChunkHolder.broadcast / ServerPlayer.trackChunk / PlayerChunkSender
         │  (握手后 Mixin 拦截，cancel 原版全量包)
+        │  主线程：编码并缓存已构建包字节（反透视兼容，见 mod-compat.md）
         ▼
 pushPool: computeSectionHashes → combine → chunkHash
         ▼
@@ -46,7 +47,7 @@ pushPool: computeSectionHashes → combine → chunkHash
 enqueueDataRequest（距离优先）
         ▼
 onServerTick（真实 server tick 限流）:
-  主线程: getChunk + serialize ≤ maxChunksPerTick
+  主线程: 优先 take 缓存包字节，否则 getChunk + serialize ≤ maxChunksPerTick
   pushPool: ZSTD + ChunkPayloadS2C
 ```
 
@@ -77,7 +78,6 @@ apply 后再请求 blockEntity
 | `mainThreadChunkBudgetMs` | 每帧 apply/回调共享预算（默认 3ms） |
 | JoinBoost | 进服约 5s 预算约 10ms |
 | `maxChunksPerFrame` / `maxCallbacksPerFrame` | 安全硬顶（默认 32） |
-| `targetFPS` | 遗留，**不参与**限流 |
 
 控制面包（hash / 握手 / index sync 等）在 `PacketCompressionBlacklist`，避免进 PENDING 聚合窗口。
 
@@ -121,7 +121,7 @@ SectionDeltaS2CPacket        // 服务端 → 客户端（变更 section + BE）
 
 ## 8. 调试
 
-默认无热路径 INFO。排查时打开 `config/hassium/hassium.json` 的 `debug.metadataLogging` / `debug.networkLogging` / `debug.cacheLogging` 等（见 architecture）。运行时统计：`/hassiumc stats`。
+默认无热路径 INFO。排查时打开 `config/hassium/hassium-common.toml` 的 `debug.metadataLogging` / `debug.networkLogging` / `debug.cacheLogging` 等（见 architecture）。运行时统计：`/hassiumc stats`。
 
 ## 9. 待实现
 

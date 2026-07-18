@@ -115,7 +115,7 @@ Vanilla clients can still connect by default. Install Hassium on **both** client
 
 ### How to use (defaults)
 
-After first launch, config is created at `config/hassium/hassium.json`.
+After first launch, config is created at `config/hassium/hassium-client.toml` and `config/hassium/hassium-common.toml`.
 
 **Enabled by default:**
 
@@ -161,7 +161,7 @@ With `network.lightStripEnabled = true` (default), the server omits light data i
 
 ### Config summary
 
-File: `config/hassium/hassium.json`
+Files: `config/hassium/hassium-client.toml`, `config/hassium/hassium-common.toml`
 
 | Key | Default | Notes |
 | --- | --- | --- |
@@ -240,7 +240,7 @@ Hassium 用 **ZSTD** 替代原版 Zlib，主要优化三件事：
 
 ### 用法与默认行为
 
-首次启动后生成配置：`config/hassium/hassium.json`。
+首次启动后生成配置：`config/hassium/hassium-client.toml` 与 `config/hassium/hassium-common.toml`。
 
 **默认启用：**
 
@@ -286,7 +286,7 @@ Hassium 用 **ZSTD** 替代原版 Zlib，主要优化三件事：
 
 ### 配置摘要
 
-文件：`config/hassium/hassium.json`
+文件：`config/hassium/hassium-client.toml`、`config/hassium/hassium-common.toml`
 
 | 键 | 默认 | 说明 |
 | --- | --- | --- |

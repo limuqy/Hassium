@@ -2,6 +2,14 @@ plugins {
     id 'loom-neoforge'
 }
 
+sourceSets {
+    main {
+        java {
+            srcDir rootProject.file('cloth-ui/src/main/java')
+        }
+    }
+}
+
 configurations {
     library
 }
@@ -16,6 +24,14 @@ dependencies {
     library 'com.github.luben:zstd-jni:1.5.5-7'
     library 'org.lz4:lz4-java:1.8.0'
     library 'com.google.code.findbugs:jsr305:3.0.1'
+
+    // Cloth：模组列表「配置」按钮（与 Fabric 共用 cloth-ui）
+    if (gradle.ext.has('cloth_config_version')) {
+        def clothArtifact = gradle.ext.minecraft_version == '1.20.1'
+                ? 'cloth-config-forge'
+                : 'cloth-config-neoforge'
+        modApi include("me.shedaniel.cloth:${clothArtifact}:${gradle.ext.cloth_config_version}")
+    }
 }
 
 // Mixin AP 配置：禁用目标验证（architectury-loom 的 remapping 会在运行时处理）
