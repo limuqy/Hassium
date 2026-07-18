@@ -32,7 +32,7 @@ Hassium/
 | `compression/` | `CompressionCodec` / `CompressionService`、字典注册 |
 | `network/` | 握手、ZSTD Pipeline、聚合、chunkHash 推送、`ServerChunkPushManager` |
 | `cache/` | 客户端缓存、Bloom、`ClientHeatIndex` / `SectionHashStore`、淘汰 |
-| `config/` | `HassiumConfigSpec`（CLIENT/COMMON toml）+ `HassiumConfigService` 门面 |
+| `config/` | `HassiumConfigService` 门面；Fabric：`HassiumTomlConfigIO`；Forge/NeoForge：`HassiumConfigSpec` |
 | `metrics/` | `NetworkStats` 零分配指标 |
 | `compat/` | Manifold 跨版本 API 桥接 |
 | `mixin/` | 全部 Mixin（common only） |

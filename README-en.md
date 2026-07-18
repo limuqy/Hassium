@@ -48,7 +48,7 @@ See [`docs/version-segments.md`](docs/version-segments.md) for the nine adaptati
 
 1. Download the loader-specific JAR from [Releases](https://github.com/limuqy/Hassium/releases).
 2. Place it in `mods/` on client and/or server.
-3. Config is created at `config/hassium/hassium-client.toml` and `config/hassium/hassium-common.toml` (Fabric: Mod Menu + Cloth; Forge/NeoForge: Configured or edit toml).
+3. Config is created at `config/hassium/hassium-client.toml` and `config/hassium/hassium-common.toml` (Fabric: Mod Menu + Cloth; Forge/NeoForge: Cloth from the mods list, or edit toml).
 
 **Dependencies:** Fabric needs Fabric API; Forge / NeoForge have no required extras. Install on both sides for negotiated compression and caching.
 

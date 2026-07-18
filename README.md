@@ -48,7 +48,7 @@
 
 1. 从 [Releases](https://github.com/limuqy/Hassium/releases) 下载对应加载器的 JAR。
 2. 放入客户端或服务端 `mods/`。
-3. 启动后生成 `config/hassium/hassium-client.toml` 与 `config/hassium/hassium-common.toml`（Fabric：Mod Menu + Cloth；Forge/NeoForge：Configured 或手改 toml）。
+3. 启动后生成 `config/hassium/hassium-client.toml` 与 `config/hassium/hassium-common.toml`（Fabric：Mod Menu + Cloth；Forge/NeoForge：模组列表 Cloth 配置屏，亦可手改 toml）。
 
 **依赖：** Fabric 需 Fabric API（Cloth 已 jiJ）；Forge / NeoForge 无额外前置。建议双端均安装以启用协商压缩与缓存。
 

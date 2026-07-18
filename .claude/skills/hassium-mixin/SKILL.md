@@ -85,6 +85,7 @@ description: Hassium Mixin 注入技能。在 common 模块为 RegionFile、Conn
 - static 字段泄漏玩家状态 → 用弱引用或连接级 registry
 - 同一逻辑勿在 ChunkHolder + ServerPlayer 重复发送（核对拦截点）
 - 1.20.1 无 `PlayerChunkSender` 时保留空 mixin 以满足 json 注册需要
+- `hassium.refmap.json`：Loom 生成的 Mixin 名映射表；发行 jar 必需。`runClient` 下 WARN「could not be read」通常可忽略（详见 [`docs/mod-compat.md`](../../../docs/mod-compat.md) §10）
 
 ## 调试
 
