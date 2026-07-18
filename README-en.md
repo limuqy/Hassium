@@ -1,5 +1,9 @@
 # Hassium
 
+<p align="center">
+  <img src="common/src/main/resources/assets/hassium/logo.png" alt="Hassium Logo" width="200">
+</p>
+
 **Hassium** — high-performance chunk compression and client-side caching for Minecraft.  
 Smaller world saves and bandwidth than vanilla, local chunk reuse, and smoother joins. Supports Fabric / Forge / NeoForge across Minecraft 1.20.1–1.21.11.
 

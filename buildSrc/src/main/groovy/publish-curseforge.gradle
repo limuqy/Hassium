@@ -1,0 +1,78 @@
+import net.darkhax.curseforgegradle.TaskPublishCurseForge
+
+/**
+ * 为 fabric / forge / neoforge 子项目注册 publishCurseForge。
+ * Token：环境变量 CURSEFORGE_TOKEN，或本机 gradle 属性 curseforge_token（勿提交）。
+ * 项目 ID：根 gradle.properties 的 curseforge_project_id。
+ */
+
+def cfLoaderByProject = [
+        fabric  : 'Fabric',
+        forge   : 'Forge',
+        neoforge: 'NeoForge'
+]
+def cfLoader = cfLoaderByProject[project.name]
+if (!cfLoader) {
+    throw new GradleException("publish-curseforge 仅适用于 fabric/forge/neoforge，当前: ${project.name}")
+}
+
+afterEvaluate {
+    tasks.register('publishCurseForge', TaskPublishCurseForge) {
+        group = 'publishing'
+        description = "将 ${project.name}（MC ${gradle.ext.minecraft_version}）上传到 CurseForge"
+
+        def token = System.getenv('CURSEFORGE_TOKEN') ?: findProperty('curseforge_token')
+        apiToken = (token ?: '').toString()
+
+        def debugProp = findProperty('curseforge_debug')
+        debugMode = debugProp != null && debugProp.toString().equalsIgnoreCase('true')
+
+        // Architectury Loom 不会被自动识别为 Fabric/Forge/NeoForge，手动声明
+        disableVersionDetection()
+
+        // 配置期允许为空，避免未填 ID 时 `gradlew tasks` 失败；真正上传时再校验
+        def projectId = findProperty('curseforge_project_id')?.toString()?.trim() ?: ''
+
+        def mcVer = gradle.ext.minecraft_version as String
+        def javaVer = gradle.ext.java_version as String
+        def releaseTypeProp = findProperty('curseforge_release_type')?.toString()?.trim()
+        if (!releaseTypeProp) {
+            releaseTypeProp = 'release'
+        }
+
+        def changelogText = findProperty('curseforge_changelog')?.toString()
+        if (!changelogText) {
+            def changelogFile = rootProject.file('CHANGELOG.md')
+            if (changelogFile.exists()) {
+                changelogText = changelogFile.getText('UTF-8')
+            } else {
+                changelogText = "Hassium ${mod_version} for Minecraft ${mcVer} (${cfLoader})."
+            }
+        }
+
+        def mainFile = upload(projectId ?: '0', tasks.named('remapJar'))
+        mainFile.changelogType = 'markdown'
+        mainFile.changelog = changelogText
+        mainFile.releaseType = releaseTypeProp
+        mainFile.displayName = "Hassium ${mod_version} — ${mcVer} ${cfLoader}"
+        mainFile.addGameVersion(mcVer)
+        mainFile.addModLoader(cfLoader)
+        mainFile.addEnvironment('Client', 'Server')
+        mainFile.addJavaVersion("Java ${javaVer}")
+
+        if (project.name == 'fabric') {
+            mainFile.addRequirement('fabric-api')
+        }
+
+        doFirst {
+            if (!projectId || projectId == '0') {
+                throw new GradleException(
+                        "未设置 curseforge_project_id。请在根 gradle.properties 填写 CurseForge 数字项目 ID。")
+            }
+            if (!apiToken) {
+                throw new GradleException(
+                        "未设置 CurseForge Token。请设置环境变量 CURSEFORGE_TOKEN，或在本机 ~/.gradle/gradle.properties 写 curseforge_token=...（勿提交仓库）。")
+            }
+        }
+    }
+}

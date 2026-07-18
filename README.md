@@ -1,5 +1,9 @@
 # Hassium
 
+<p align="center">
+  <img src="common/src/main/resources/assets/hassium/logo.png" alt="Hassium Logo" width="200">
+</p>
+
 **Hassium** · 高性能区块压缩与客户端缓存模组  
 相对原版缩小存档与带宽、复用本地区块、减轻进服卡顿。支持 Fabric / Forge / NeoForge，覆盖 Minecraft 1.20.1–1.21.11。
 

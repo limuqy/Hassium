@@ -1,0 +1,71 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <!-- 主渐变：深蓝到亮蓝 -->
+    <linearGradient id="mainGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0a1628;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#1a3a5c;stop-opacity:1" />
+    </linearGradient>
+    
+    <!-- 强调渐变：亮蓝到青色 -->
+    <linearGradient id="accentGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#00b4d8;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#48cae4;stop-opacity:1" />
+    </linearGradient>
+    
+    <!-- 发光效果 -->
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="3" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    
+    <!-- 像素化纹理 -->
+    <pattern id="pixelGrid" width="8" height="8" patternUnits="userSpaceOnUse">
+      <rect width="7" height="7" fill="rgba(255,255,255,0.02)" x="0.5" y="0.5"/>
+    </pattern>
+  </defs>
+  
+  <!-- 背景方块（Minecraft风格） -->
+  <rect x="56" y="56" width="400" height="400" rx="20" fill="url(#mainGrad)" stroke="#00b4d8" stroke-width="3"/>
+  <rect x="56" y="56" width="400" height="400" rx="20" fill="url(#pixelGrid)"/>
+  
+  <!-- 内部边框装饰 -->
+  <rect x="72" y="72" width="368" height="368" rx="12" fill="none" stroke="#00b4d8" stroke-width="1" opacity="0.4"/>
+  
+  <!-- 主文字：Hs（Hassium化学符号） -->
+  <text x="256" y="280" font-family="'Courier New', monospace" font-size="180" font-weight="bold" 
+        fill="url(#accentGrad)" text-anchor="middle" filter="url(#glow)" letter-spacing="-10">
+    Hs
+  </text>
+  
+  <!-- 压缩箭头（向下）表示优化 -->
+  <g transform="translate(256, 360)" opacity="0.9">
+    <path d="M-25,-20 L0,15 L25,-20" fill="none" stroke="#00b4d8" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+    <line x1="0" y1="-35" x2="0" y2="15" stroke="#00b4d8" stroke-width="4" stroke-linecap="round"/>
+  </g>
+  
+  <!-- 原子序数108 -->
+  <text x="145" y="165" font-family="'Courier New', monospace" font-size="24" fill="#48cae4" opacity="0.8">
+    108
+  </text>
+  
+  <!-- 项目名称 -->
+  <text x="256" y="430" font-family="'Segoe UI', Arial, sans-serif" font-size="36" font-weight="600" 
+        fill="#e0e0e0" text-anchor="middle" letter-spacing="12">
+    HASSIUM
+  </text>
+
+  <!-- 角落装饰（像素风格） -->
+  <rect x="64" y="64" width="12" height="12" fill="#00b4d8" opacity="0.6"/>
+  <rect x="436" y="64" width="12" height="12" fill="#00b4d8" opacity="0.6"/>
+  <rect x="64" y="436" width="12" height="12" fill="#00b4d8" opacity="0.6"/>
+  <rect x="436" y="436" width="12" height="12" fill="#00b4d8" opacity="0.6"/>
+  
+  <!-- 连接线装饰 -->
+  <line x1="76" y1="70" x2="120" y2="70" stroke="#00b4d8" stroke-width="2" opacity="0.4"/>
+  <line x1="392" y1="70" x2="436" y2="70" stroke="#00b4d8" stroke-width="2" opacity="0.4"/>
+  <line x1="76" y1="442" x2="120" y2="442" stroke="#00b4d8" stroke-width="2" opacity="0.4"/>
+  <line x1="392" y1="442" x2="436" y2="442" stroke="#00b4d8" stroke-width="2" opacity="0.4"/>
+</svg>

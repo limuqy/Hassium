@@ -77,3 +77,44 @@ tasks.register('compileAnchors') {
         }
     }
 }
+
+// 当前 mc_ver 下已 include 的加载器 → 一并上传 CurseForge
+tasks.register('publishCurseForge') {
+    group = 'publishing'
+    description = 'Upload current mc_ver loader JARs to CurseForge (see scripts/publish-curseforge.ps1 for all versions)'
+}
+afterEvaluate {
+    def publishTasks = []
+    ['fabric', 'forge', 'neoforge'].each { name ->
+        def p = findProject(":${name}")
+        if (p != null) {
+            publishTasks << "${name}:publishCurseForge"
+        }
+    }
+    tasks.named('publishCurseForge').configure {
+        dependsOn publishTasks
+    }
+}
+
+tasks.register('publishCurseForgeAll') {
+    group = 'publishing'
+    description = 'Build & publish all versionProperties × builds_for to CurseForge (invokes scripts/publish-curseforge.*)'
+    doLast {
+        def isWindows = System.getProperty('os.name').toLowerCase().contains('windows')
+        def script = isWindows
+                ? file('scripts/publish-curseforge.ps1')
+                : file('scripts/publish-curseforge.sh')
+        if (!script.exists()) {
+            throw new GradleException("Missing ${script}")
+        }
+        def pb = isWindows
+                ? new ProcessBuilder('powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script.absolutePath)
+                : new ProcessBuilder('bash', script.absolutePath)
+        pb.directory(rootDir)
+        pb.inheritIO()
+        def code = pb.start().waitFor()
+        if (code != 0) {
+            throw new GradleException("publishCurseForgeAll failed with exit code ${code}")
+        }
+    }
+}

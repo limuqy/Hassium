@@ -78,6 +78,15 @@ compat 类索引（完整表见 version-segments）：`PacketPayloadCompat`、`R
 ./gradlew --no-daemon common:runJava -PmainClass=<FQN> -Pargs=a,b
 ```
 
+## CurseForge 本地推送
+
+1. `gradle.properties` 填 `curseforge_project_id`（CF 项目数字 ID）
+2. Token：`$env:CURSEFORGE_TOKEN=...` 或本机 `~/.gradle/gradle.properties` 的 `curseforge_token=`（勿提交）
+3. 单版本：`./gradlew --no-daemon build publishCurseForge "-Pmc_ver=1.20.1"`
+4. 全版本：`./scripts/publish-curseforge.ps1`（或 `./gradlew publishCurseForgeAll`）
+5. 干跑：`./scripts/publish-curseforge.ps1 -DryRun` 或 `-Pcurseforge_debug=true`
+6. 仅锚点+1.20.6：`-AnchorsOnly`
+
 ## 文档
 
 - `docs/architecture.md` — 架构与配置

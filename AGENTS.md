@@ -70,6 +70,12 @@ fabric/ | forge/ | neoforge/
 | `hassium-network` | 网络压缩、chunkHash 推送、限流、指标 |
 | `hassium-mixin` | Mixin 清单与注入 |
 
+## CurseForge 本地推送
+
+- 配置：`curseforge_project_id`（`gradle.properties`）+ `CURSEFORGE_TOKEN`（环境变量，勿提交）
+- 单版本：`./gradlew build publishCurseForge "-Pmc_ver=1.20.1"`
+- 全版本：`./scripts/publish-curseforge.ps1`（干跑加 `-DryRun`）
+
 ## 文档
 
 - [`docs/architecture.md`](docs/architecture.md)
