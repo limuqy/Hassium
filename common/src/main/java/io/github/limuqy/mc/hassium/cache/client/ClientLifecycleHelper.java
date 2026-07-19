@@ -66,7 +66,7 @@ public final class ClientLifecycleHelper {
         CacheSaveQueue.getInstance().flushAsync(3000);
         CacheSaveQueue.getInstance().clear();
         ClientCacheLoadQueue.getInstance().clear();
-        // 清理 OVD renderOnly 状态（断连后 loadedRenderOnly 残留会导致重连后误判）
+        // 清理超视渲染 renderOnly 状态（断连后 loadedRenderOnly 残留会导致重连后误判）
         ViewDistanceExtensionService.getInstance().clearAllRenderOnly();
 
         // 取消可安全丢弃的后台任务（光照扫描、网络解压等）
@@ -134,6 +134,8 @@ public final class ClientLifecycleHelper {
                 executor.submit(() -> {
                     ClientChunkHandler.initStorage(gameDir, serverId, finalDimension);
                     ClientMetadataHandler.onStorageReady();
+                    // 超视渲染：清 miss 耗尽状态并强制下一 tick 全环带重扫
+                    ViewDistanceExtensionService.getInstance().onClientStorageReady();
                     Constants.LOG.info("Hassium: Async initialized client cache for server {} dim {}",
                             serverIp, finalDimension);
                 }, TaskCategory.BEST_EFFORT);
@@ -141,6 +143,7 @@ public final class ClientLifecycleHelper {
                 // 回退：同步初始化
                 ClientChunkHandler.initStorage(gameDir, serverId, finalDimension);
                 ClientMetadataHandler.onStorageReady();
+                ViewDistanceExtensionService.getInstance().onClientStorageReady();
                 Constants.LOG.info("Hassium: Initialized client cache for server {} dim {}", serverIp, finalDimension);
             }
         } catch (Exception e) {

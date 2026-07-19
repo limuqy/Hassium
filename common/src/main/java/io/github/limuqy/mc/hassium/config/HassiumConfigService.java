@@ -419,7 +419,7 @@ public class HassiumConfigService {
         return Math.max(0.001, Math.min(0.1, value));
     }
 
-    /** 是否启用视距外显示（OVD）；仍依赖 clientCache.enabled */
+    /** 是否启用超视渲染；仍依赖 clientCache.enabled */
     public boolean isViewDistanceExtensionEnabled() {
         return config.clientCache().viewDistanceExtensionEnabled();
     }
@@ -429,7 +429,7 @@ public class HassiumConfigService {
         return Math.max(2, config.clientCache().maxRenderDistance());
     }
 
-    /** 离开 OVD 环带后延迟卸载秒数（0=同步卸载） */
+    /** 离开超视渲染环带后延迟卸载秒数（0=同步卸载） */
     public int getOvdUnloadDelaySecs() {
         return Math.max(0, config.clientCache().ovdUnloadDelaySecs());
     }

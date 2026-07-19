@@ -19,14 +19,17 @@
 
 ## 特性
 
-| 能力 | 说明 |
-| --- | --- |
-| **高效存储** | 世界区块用更高压缩率落盘，显著减小存档体积；仍兼容原版 Region（`.mca`）布局 |
-| **网络压缩** | 区块与数据包用更高效压缩传输，降低带宽占用与下载等待 |
-| **区块缓存** | 曾加载过的区块写入本地；再次进入同一区域时优先用本地数据，少传全量包 |
-| **光照剥离** | 服务端可不传光照数据，由客户端本地重算，进一步省流量 |
-| **平滑加载** | 进服与视野扩展时限制主线程压力，减少卡顿尖峰 |
-| **兼容友好** | 未安装本模组的客户端默认可连接；双端都装才能吃满压缩与缓存 |
+| 能力 | 说明                                                    |
+| --- |-------------------------------------------------------|
+| **高效存储** | 世界区块用更高压缩率落盘，显著减小存档体积；仍兼容原版 Region（`.mca`）布局          |
+| **网络压缩** | 区块与数据包用更高效压缩传输，降低带宽占用与下载等待                            |
+| **区块缓存** | 曾加载过的区块写入本地；再次进入同一区域时优先用本地数据，少传全量包                    |
+| **分段增量** | 缓存过期时仅拉取变更分段（`sectionDelta`），避免整块重传                   |
+| **超视渲染** | 多人服客户端 RD 大于服务端视距时，用本地缓存回填视距外地形（仅渲染、不向服索要视距外区块）       |
+| **世界导出** | `/hassiumc cache export` 将本地缓存导出为可进单机的原版 Anvil 世界     |
+| **光照剥离** | 服务端可不传光照数据，由客户端本地重算，进一步省流量                            |
+| **平滑加载** | 进服与视野扩展时限制主线程压力，减少卡顿尖峰                                |
+| **兼容友好** | 未安装本模组的客户端默认可连接；双端都装才能吃满压缩与缓存                         |
 | **流量监控** | `/hassium stats`（服务端）、`/hassiumc stats`（客户端）查看压缩与缓存效果 |
 
 ---
@@ -74,6 +77,10 @@
 | --- | --- | --- |
 | `storage.enabled` | `true` | 世界存档 ZSTD（请备份） |
 | `clientCache.enabled` | `true` | 客户端缓存 |
+| `clientCache.sectionDeltaEnabled` | `true` | 缓存过期时分段增量 |
+| `clientCache.viewDistanceExtensionEnabled` | `true` | 超视渲染（多人；与 Bobby 互斥） |
+| `clientCache.maxRenderDistance` | `32` | 超视渲染 / 有效 RD 上限（2–64） |
+| `clientCache.ovdUnloadDelaySecs` | `5` | 离开超视渲染环带后延迟卸载（秒；0=同步） |
 | `network.enabled` | `true` | 自定义通道 |
 | `network.globalPacketCompression` | `true` | 全局 ZSTD |
 | `network.maxChunksPerTick` | `10` | 每玩家每 tick 序列化上限 |
@@ -92,7 +99,8 @@
 | `/hassium stats` | 服务端统计（OP 2） |
 | `/hassium metrics on\|off` | 开关指标 |
 | `/hassium stats reset` | 重置计数器 |
-| `/hassiumc stats` | 客户端统计 |
+| `/hassiumc stats` | 客户端统计（含超视渲染 / 缓存命中） |
+| `/hassiumc cache export [<世界名>]` | 将本地缓存导出为 `saves/` 下原版 Anvil 世界 |
 
 ---
 
@@ -138,7 +146,9 @@ flowchart TD
 | 文档 | 内容 |
 | --- | --- |
 | [`docs/architecture.md`](docs/architecture.md) | 架构、存储格式、配置、日志、命令 |
-| [`docs/chunk-cache.md`](docs/chunk-cache.md) | 区块缓存推送与进服流水线 |
+| [`docs/chunk-cache.md`](docs/chunk-cache.md) | 区块缓存推送、超视渲染摘要、磁盘 NBT、导出 |
+| [`docs/ovd.md`](docs/ovd.md) | 超视渲染技术实现 |
+| [`docs/disk-nbt-cache.md`](docs/disk-nbt-cache.md) | 磁盘 NBT 缓存、Live-Unload、分段增量细节 |
 | [`docs/version-segments.md`](docs/version-segments.md) | 多版本九段适配真相源 |
 | [`docs/mod-compat.md`](docs/mod-compat.md) | 多 Mod 兼容边界与配置逃生 |
 

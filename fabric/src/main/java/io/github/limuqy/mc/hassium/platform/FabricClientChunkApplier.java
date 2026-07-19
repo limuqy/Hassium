@@ -85,6 +85,9 @@ public class FabricClientChunkApplier implements IClientChunkApplier {
                 if (!renderOnly) {
                     // 真实区块到达：apply 前清除可能的 renderOnly 标记（边界替换）
                     mixinAccessor.hassium$removeRenderOnlyChunk(pos);
+                } else {
+                    // 超视渲染：apply 前再扩一次半径，覆盖 server 缩半径与本 tick 之间的窗口
+                    ViewDistanceExtensionService.getInstance().ensureExpandedRadius();
                 }
                 // 直接调用原版的处理方法
                 packetListener.handleLevelChunkWithLight(packet);
@@ -93,7 +96,11 @@ public class FabricClientChunkApplier implements IClientChunkApplier {
                 ClientChunkCache chunkSource = ((ClientLevelAccessor) level).hassium$getChunkSource();
                 if (!chunkSource.hasChunk(pos.x, pos.z)) {
                     if (renderOnly) {
+                        // 仍 out-of-range：软 miss + 退避，禁止 ERROR 刷屏
                         ViewDistanceExtensionService.getInstance().onRenderOnlyMiss(pos);
+                        Constants.LOG.debug(
+                                "Hassium: OVD apply skipped (out of view range) [{}, {}]", pos.x, pos.z);
+                        return;
                     }
                     throw new IllegalStateException(
                             "Chunk apply ignored by ClientChunkCache (out of view range): " + pos);

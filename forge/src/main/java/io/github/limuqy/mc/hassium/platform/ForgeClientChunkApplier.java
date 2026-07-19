@@ -53,6 +53,8 @@ public class ForgeClientChunkApplier implements IClientChunkApplier {
                 if (!renderOnly) {
                     // 真实区块到达：apply 前清除可能的 renderOnly 标记（边界替换）
                     mixinAccessor.hassium$removeRenderOnlyChunk(pos);
+                } else {
+                    ViewDistanceExtensionService.getInstance().ensureExpandedRadius();
                 }
                 // 直接调用原版的处理方法
                 packetListener.handleLevelChunkWithLight(packet);
@@ -61,6 +63,9 @@ public class ForgeClientChunkApplier implements IClientChunkApplier {
                 if (!chunkSource.hasChunk(pos.x, pos.z)) {
                     if (renderOnly) {
                         ViewDistanceExtensionService.getInstance().onRenderOnlyMiss(pos);
+                        Constants.LOG.debug(
+                                "Hassium: OVD apply skipped (out of view range) [{}, {}]", pos.x, pos.z);
+                        return;
                     }
                     throw new IllegalStateException(
                             "Chunk apply ignored by ClientChunkCache (out of view range): " + pos);

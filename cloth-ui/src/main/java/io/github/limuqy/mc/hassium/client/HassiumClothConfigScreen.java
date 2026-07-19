@@ -258,7 +258,7 @@ public final class HassiumClothConfigScreen {
         boolean cacheBloomFilterEnabled;
         int cacheBloomFilterExpectedInsertions;
         double cacheBloomFilterFpp;
-        // OVD（视距外显示）
+        // 超视渲染
         boolean cacheViewDistanceExtensionEnabled;
         int cacheMaxRenderDistance;
         int cacheOvdUnloadDelaySecs;

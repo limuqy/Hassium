@@ -3,6 +3,7 @@ package io.github.limuqy.mc.hassium.mixin;
 import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.cache.client.CacheSaveQueue;
 import io.github.limuqy.mc.hassium.cache.client.IClientLevelExtension;
+import io.github.limuqy.mc.hassium.cache.client.ViewDistanceExtensionService;
 import io.github.limuqy.mc.hassium.network.ClientChunkHandler;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.world.level.ChunkPos;
@@ -59,17 +60,40 @@ public class MixinClientLevel implements IClientLevelExtension {
     }
 
     /**
-     * 区块卸载时提交缓存保存任务并清理 renderOnly 标记
-     * <p>
-     * 保存任务由 CacheSaveQueue 在后台线程异步执行，不阻塞主线程。
+     * 区块卸载时（兜底路径）：
+     * <ol>
+     *   <li>主路径：Forget 在 {@link MixinClientPacketListener} 已 cancel drop，通常不会到这里</li>
+     *   <li>若当前已是 renderOnly：不写盘（保留历史快照）</li>
+     *   <li>否则先异步落盘真实区块（须在超视渲染标记之前，避免 isRenderOnly 短路）</li>
+     *   <li>超视渲染：若仍应在环带内，同栈 apply renderOnly 填回 slot</li>
+     *   <li>成功替换时勿清 renderOnly 标记</li>
+     * </ol>
      */
     @Inject(method = "unload", at = @At("HEAD"))
     private void hassium$onUnload(LevelChunk chunk, CallbackInfo ci) {
-        // 清理 renderOnly 标记
-        hassium$renderOnlyChunks.remove(chunk.getPos());
+        ChunkPos pos = chunk.getPos();
+        boolean wasRenderOnly = hassium$renderOnlyChunks.contains(pos)
+                || ViewDistanceExtensionService.getInstance().isRenderOnly(pos);
 
-        // 提交异步保存任务
-        hassium$enqueueCacheSave(chunk);
+        // 真实区块：先排队落盘（此时 isRenderOnly 仍为 false）
+        if (!wasRenderOnly) {
+            hassium$enqueueCacheSave(chunk);
+        } else {
+            Constants.LOG.debug("Hassium: [CACHE SAVE] Skip unload for render-only chunk {}", pos);
+        }
+
+        boolean substituted = false;
+        try {
+            // 兜底：Forget 未拦截时（非服务端 Forget 的 drop）同栈填回
+            substituted = ViewDistanceExtensionService.getInstance().trySubstituteOnUnload(chunk);
+        } catch (Exception e) {
+            Constants.LOG.debug("Hassium: OVD unload substitute error for {}", pos, e);
+        }
+
+        // 成功替换时 apply 已 addRenderOnly；勿再摘掉
+        if (!substituted) {
+            hassium$renderOnlyChunks.remove(pos);
+        }
     }
 
     /**

@@ -10,7 +10,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 /**
  * 解除 {@link Options#getEffectiveRenderDistance()} 的服务端钳制，
- * 让客户端渲染距离滑块值（{@code renderDistance}）直接生效，从而扩大 ViewArea。
+ * 返回 min(客户端 RD 滑块, {@code clientCache.maxRenderDistance})，从而扩大 ViewArea。
  * <p>
  * 门控：仅多人游戏 + clientCache.enabled + viewDistanceExtensionEnabled 时启用；
  * 单人游戏不启用（无缓存数据源，且单人 RD 不受 server 钳制）。
@@ -39,7 +39,9 @@ public class MixinOptions {
             return;
         }
 
-        // 返回客户端滑块值，绕过 server 钳制
-        cir.setReturnValue(((Options) (Object) this).renderDistance().get());
+        // min(滑块, maxRenderDistance)，与超视渲染环带 / Cache 半径一致
+        int slider = ((Options) (Object) this).renderDistance().get();
+        int max = cfg.getMaxRenderDistance();
+        cir.setReturnValue(Math.max(2, Math.min(slider, max)));
     }
 }

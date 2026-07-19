@@ -1,6 +1,7 @@
 package io.github.limuqy.mc.hassium.command;
 
 import io.github.limuqy.mc.hassium.cache.client.CacheWorldExporter;
+import io.github.limuqy.mc.hassium.cache.client.ViewDistanceExtensionService;
 import io.github.limuqy.mc.hassium.metrics.HassiumMetricsImpl;
 import io.github.limuqy.mc.hassium.metrics.NetworkStats;
 
@@ -70,6 +71,18 @@ public class HassiumCommandHandler {
                 ? "\n§7（本局区块几乎全走缓存命中；网络接收仅计全量压缩包与分段增量）§r"
                 : "\n§7（网络接收 = 全量压缩包 + 分段增量；不含缓存命中）§r";
 
+        ViewDistanceExtensionService ovd = ViewDistanceExtensionService.getInstance();
+        String ovdLine = String.format(
+                "§e超视渲染:§r %s  loaded=%d pendingMiss=%d missTotal=%d retry=%d forgetRetain=%d unloadSub=%d",
+                ovd.isEnabled() ? "§aon§r" : "§7off§r",
+                ovd.getLoadedCount(),
+                ovd.getPendingMissCount(),
+                ovd.getMissTotal(),
+                ovd.getRetryTotal(),
+                ovd.getForgetRetainTotal(),
+                ovd.getUnloadSubstituteTotal()
+        );
+
         return String.format(
                 "§6=== Hassium 客户端统计 ===§r\n" +
                 "§e网络接收:§r %s (原版等价 %s) — §a相对全量节省 %.1f%%§r\n" +
@@ -79,7 +92,8 @@ public class HassiumCommandHandler {
                 "§e元数据接收:§r %s\n" +
                 "§e全量数据请求:§r %d 块\n" +
                 "§e分段增量:§r 请求 %d / 接收 %d\n" +
-                "§e区块解压:§r %d（仅全量压缩通道）",
+                "§e区块解压:§r %d（仅全量压缩通道）\n" +
+                "%s",
                 formatBytes(actualRecv), formatBytes(vanillaRecv), recvSaving,
                 compressionRatio, recvNote,
                 cacheHitRate, cacheHits, cacheMisses, cacheStale,
@@ -87,7 +101,8 @@ public class HassiumCommandHandler {
                 formatBytes(metrics.getMetadataBytesReceived()),
                 metrics.getDataRequestsSent(),
                 deltaReq, deltaRecv,
-                metrics.getChunksDecompressed()
+                metrics.getChunksDecompressed(),
+                ovdLine
         );
     }
 

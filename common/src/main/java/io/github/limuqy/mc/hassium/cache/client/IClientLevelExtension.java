@@ -16,7 +16,7 @@ public interface IClientLevelExtension {
     Set<ChunkPos> hassium$getRenderOnlyChunks();
 
     /**
-     * 检查指定区块是否为仅渲染区块（OVD）
+     * 检查指定区块是否为仅渲染区块（超视渲染）
      */
     boolean hassium$isRenderOnly(ChunkPos pos);
 

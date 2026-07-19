@@ -57,9 +57,13 @@ fabric/ | forge/ | neoforge/
 | `network.enabled` | true | |
 | `globalPacketCompression` | true | |
 | `clientCache.enabled` | true | |
+| `clientCache.sectionDeltaEnabled` | true | 过期分段增量 |
+| `clientCache.viewDistanceExtensionEnabled` | true | 超视渲染（多人；≠ Bobby） |
 | `debug.*` | false | 热路径用 `DebugLogger` |
 
-存档格式 type **126**（非 127）；元数据推送字段为 **chunkHash**（非 inhabitedTime）。
+存档格式 type **126**（非 127）；元数据推送字段为 **chunkHash**（非 inhabitedTime）。客户端磁盘 payload 为 **NBT（HBT1）**，非旧 packet 字节。
+
+卖点（已实现）：**分段增量**、**超视渲染**、**`/hassiumc cache export` 世界导出**。
 
 ## Skills
 
@@ -81,5 +85,6 @@ fabric/ | forge/ | neoforge/
 - [`docs/architecture.md`](docs/architecture.md)
 - [`docs/chunk-cache.md`](docs/chunk-cache.md)
 - [`docs/ovd.md`](docs/ovd.md)
+- [`docs/disk-nbt-cache.md`](docs/disk-nbt-cache.md)
 - [`docs/version-segments.md`](docs/version-segments.md)
 - [`docs/mod-compat.md`](docs/mod-compat.md)

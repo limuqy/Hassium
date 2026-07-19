@@ -4,6 +4,7 @@ import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.cache.ChunkContentHashUtil;
 import io.github.limuqy.mc.hassium.cache.client.ChunkDiskCodec;
 import io.github.limuqy.mc.hassium.cache.client.ClientHassiumStorage;
+import io.github.limuqy.mc.hassium.cache.client.ClientLightRecomputeService;
 import io.github.limuqy.mc.hassium.cache.client.ViewDistanceExtensionService;
 import io.github.limuqy.mc.hassium.metrics.NetworkStats;
 import io.github.limuqy.mc.hassium.concurrent.HassiumTaskExecutor;
@@ -265,6 +266,11 @@ public class ClientChunkHandler {
         }
 
         try {
+            // 超视渲染 / 缓存 apply 前先保证 Storage 半径 ≥ clientVD（防 server 缩半径窗口）
+            if (renderOnly) {
+                ViewDistanceExtensionService.getInstance().ensureExpandedRadius();
+            }
+
             ChunkPos pos = new ChunkPos(chunkX, chunkZ);
             byte[] packetBytes = ChunkDiskCodec.maybeNbtToPacketBytes(
                     chunkData, level.registryAccess(), level.getSectionsCount());
@@ -281,14 +287,18 @@ public class ClientChunkHandler {
             DebugLogger.info(LogType.CHUNK_APPLY, "[APPLY_CHUNK] Successfully applied chunk [{}, {}] to client world", chunkX, chunkZ);
 
             // 区块就绪：发送延后的 BE 请求 + 冲刷暂存 BE
-            // renderOnly（OVD）不向服务器请求 BE，避免视距外流量
+            // renderOnly（超视渲染）不向服务器请求 BE，避免视距外流量
             if (!renderOnly) {
                 ClientMetadataHandler.onChunkApplied(pos);
+            } else {
+                // 超视渲染：磁盘 NBT 无 LightData，本地重算避免黑块
+                ClientLightRecomputeService.schedule(pos);
+                ViewDistanceExtensionService.getInstance().onRenderOnlyApplied(pos);
             }
 
         } catch (Exception e) {
             DebugLogger.error("[APPLY_CHUNK] Failed to apply chunk data for [{}, {}]", e, chunkX, chunkZ);
-            // renderOnly：回滚标记，允许后续 tick 在扩大 ClientChunkCache 后再试
+            // renderOnly：登记 miss 退避重试
             if (renderOnly) {
                 ViewDistanceExtensionService.getInstance().onRenderOnlyMiss(new ChunkPos(chunkX, chunkZ));
             }

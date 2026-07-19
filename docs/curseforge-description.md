@@ -97,6 +97,9 @@ Vanilla clients can still connect by default. Install Hassium on **both** client
 | **Efficient storage** | Higher-ratio world chunk compression for smaller saves; keeps vanilla Region (`.mca`) layout |
 | **Network compression** | ZSTD for chunks and (optionally) the whole packet pipeline — less bandwidth and wait time |
 | **Chunk cache** | Loaded chunks are kept locally; revisiting an area prefers the cache instead of full downloads |
+| **Section delta** | On cache mismatch, pull only changed sections instead of the whole chunk |
+| **Beyond-view render** | When client render distance exceeds server view distance (multiplayer), fill the outer ring from local history (render-only; no out-of-range server requests) |
+| **World export** | `/hassiumc cache export` turns the local cache into a vanilla Anvil singleplayer world under `saves/` |
 | **Light stripping** | Server can omit light data; the client recomputes lighting locally to save more bandwidth |
 | **Smooth loading** | Caps main-thread work during join and view expansion to reduce hitch spikes |
 | **Client-friendly** | Clients without the mod can connect by default; both sides needed for full benefits |
@@ -120,7 +123,7 @@ After first launch, config is created at `config/hassium/hassium-client.toml` an
 **Enabled by default:**
 
 - Hassium channel compression and global packet compression
-- Client chunk cache
+- Client chunk cache (**section delta** + **beyond-view render** when client RD > server view distance)
 - **World storage compression** (`storage.enabled = true`)
 
 > **Backup your world before first use.** Storage compression rewrites on-disk chunk payloads. Vanilla clients can still join (`compat.requireClientMod = false`).
@@ -133,6 +136,8 @@ Typical setups:
 | Server-only storage shrink | Server mod only; clients without the mod still connect, but no cache / negotiated chunk pipeline |
 | Disable storage rewrite | Set `storage.enabled` to `false` (keeps network + cache if enabled) |
 | Force clients to install | Set `compat.requireClientMod` to `true` |
+| Disable beyond-view render only | Set `clientCache.viewDistanceExtensionEnabled` to `false` (keep cache) |
+| Export visited terrain | Client: `/hassiumc cache export [worldName]` → `saves/` |
 
 ### Feature usage in practice
 
@@ -149,9 +154,19 @@ Flow in short:
 2. Server computes a content `chunkHash` and pushes it to the client.
 3. Client compares with its local Region / metadata.
 4. **Hit** → load from local cache under a main-thread time budget.
-5. **Miss** → request a full compressed chunk payload, then apply and persist.
+5. **Mismatch** (and `sectionDeltaEnabled`) → request section hashes / deltas, merge into disk NBT, then apply; fallback to full chunk on failure.
+6. **Miss** → request a full compressed chunk payload, then apply and persist.
 
-Block entities are requested after the chunk is applied (they are not part of the cache hit domain). From Minecraft **1.21.5+**, the client cache stores the current version’s chunk packet wire format and is **not** guaranteed across major MC versions.
+Block entities are requested after a real (non–beyond-view) chunk is applied. Client disk cache uses an NBT snapshot format; it is **not** guaranteed across major Minecraft versions.
+
+**Section delta**  
+Default on. When the whole-chunk hash no longer matches but you still have a local copy, only changed vertical sections are transferred and merged — less bandwidth than re-downloading the entire chunk every time terrain edits.
+
+**Beyond-view render**  
+On multiplayer, if your client render distance is larger than the server’s `view-distance`, Hassium can show **historical** terrain from `hassium_cache` in the outer ring (render-only). It does **not** ask the server for those out-of-range chunks or block entities. Stale snapshots are intentional. Mutually exclusive with Bobby. Toggle with `clientCache.viewDistanceExtensionEnabled`; cap with `maxRenderDistance` (default 32).
+
+**World export**  
+`/hassiumc cache export [name]` writes a minimal vanilla Anvil world under `saves/` from your client cache (blocks + BE NBT you have visited). No entities, no player inventory; empty holes regenerate. Same mods / similar MC version recommended for modded blocks.
 
 **Light stripping**  
 With `network.lightStripEnabled = true` (default), the server omits light data in the payload; the client recomputes lighting locally (rate-limited by `maxLightRecomputePerFrame`).
@@ -168,6 +183,10 @@ Files: `config/hassium/hassium-client.toml`, `config/hassium/hassium-common.toml
 | `storage.enabled` | `true` | World ZSTD — **back up first** |
 | `storage.zstdLevel` | `9` | Storage compression level |
 | `clientCache.enabled` | `true` | Client cache |
+| `clientCache.sectionDeltaEnabled` | `true` | Section delta on mismatch |
+| `clientCache.viewDistanceExtensionEnabled` | `true` | Beyond-view render (multiplayer; exclusive with Bobby) |
+| `clientCache.maxRenderDistance` | `32` | Beyond-view / effective RD cap (2–64) |
+| `clientCache.ovdUnloadDelaySecs` | `5` | Delay unload after leaving beyond-view ring (s) |
 | `network.enabled` | `true` | Custom Hassium channels |
 | `network.globalPacketCompression` | `true` | Global ZSTD pipeline |
 | `network.compressionLevel` | `3` | Network level (speed-biased) |
@@ -188,7 +207,8 @@ Hot-path logs (packet sizes, cache hits/misses, etc.) stay off unless you enable
 | `/hassium stats` | Server | Compression / send stats (permission level 2 / OP) |
 | `/hassium metrics on\|off` | Server | Toggle metrics at runtime |
 | `/hassium stats reset` | Server | Reset counters |
-| `/hassiumc stats` | Client | Receive / cache-hit stats |
+| `/hassiumc stats` | Client | Receive / cache-hit / beyond-view stats |
+| `/hassiumc cache export [<worldName>]` | Client | Export local cache as vanilla Anvil under `saves/` |
 
 When metrics are disabled, related stats commands are unavailable.
 
@@ -222,6 +242,9 @@ Hassium 用 **ZSTD** 替代原版 Zlib，主要优化三件事：
 | **高效存储** | 世界区块更高压缩率落盘，显著减小存档体积；仍兼容原版 Region（`.mca`）布局 |
 | **网络压缩** | 区块与（可选）全局数据包使用更高效压缩，降低带宽与等待 |
 | **区块缓存** | 曾加载区块写入本地；再次进入优先用本地数据，少传全量包 |
+| **分段增量** | 缓存过期时仅拉取变更分段，避免整块重传 |
+| **超视渲染** | 多人客户端 RD 大于服务端视距时，用本地历史回填环带（仅渲染、不向服索要视距外区块） |
+| **世界导出** | `/hassiumc cache export` 将本地缓存导出为可进单机的原版 Anvil 世界 |
 | **光照剥离** | 服务端可不传光照数据，由客户端本地重算，进一步省流量 |
 | **平滑加载** | 进服与视野扩展时限制主线程压力，减少卡顿尖峰 |
 | **兼容友好** | 未装模组的客户端默认可连；双端都装才能吃满压缩与缓存 |
@@ -245,7 +268,7 @@ Hassium 用 **ZSTD** 替代原版 Zlib，主要优化三件事：
 **默认启用：**
 
 - Hassium 通道压缩与全局包压缩
-- 客户端区块缓存
+- 客户端区块缓存（含 **分段增量**；多人且 RD > 服务端视距时启用 **超视渲染**）
 - **存档存储压缩**（`storage.enabled = true`）
 
 > **首次使用前请备份世界。** 启用存储会改写区块落盘格式。未装模组的客户端默认可连接（`compat.requireClientMod = false`）。
@@ -258,6 +281,8 @@ Hassium 用 **ZSTD** 替代原版 Zlib，主要优化三件事：
 | 仅缩小服务端存档 | 只装服务端；无模组客户端仍可连，但无缓存 / 协商区块通道 |
 | 关闭存档改写 | 将 `storage.enabled` 设为 `false`（网络与缓存可继续开） |
 | 强制客户端安装 | 将 `compat.requireClientMod` 设为 `true` |
+| 仅关闭超视渲染 | `clientCache.viewDistanceExtensionEnabled = false`（保留缓存） |
+| 导出去过的地形 | 客户端 `/hassiumc cache export [世界名]` → `saves/` |
 
 ### 功能怎么用
 
@@ -274,9 +299,19 @@ Hassium 用 **ZSTD** 替代原版 Zlib，主要优化三件事：
 2. 服务端计算内容 `chunkHash` 并推送给客户端。
 3. 客户端与本地 Region / 元数据比对。
 4. **命中** → 在主线程时间预算内从本地缓存加载。
-5. **未命中** → 请求全量压缩区块，应用后写入本地缓存。
+5. **过期（MISMATCH）且开启分段增量** → 仅拉变更分段合并写盘再 apply；失败回退全量。
+6. **未命中** → 请求全量压缩区块，应用后写入本地缓存。
 
-方块实体（blockEntity）在区块 apply 后再单独请求（不参与缓存命中域）。自 Minecraft **1.21.5** 起，客户端缓存按当前版本的 chunk 线格式存储，**不保证跨 MC 大版本兼容**。
+真实区块 apply 后再请求方块实体。磁盘缓存为 NBT 快照格式，**不保证跨 MC 大版本兼容**。
+
+**分段增量**  
+默认开启。整块 hash 不再匹配但仍有本地副本时，只传输变更的竖直分段并合并，比每次整块重下更省流量。
+
+**超视渲染**  
+多人服中，客户端渲染距离大于服务端 `view-distance` 时，可用 `hassium_cache` 历史区块回填外侧环带（**仅渲染**）。**不会**向服务器请求视距外区块或 BE；过期快照按设计接受。与 Bobby **互斥**。开关：`clientCache.viewDistanceExtensionEnabled`；上限：`maxRenderDistance`（默认 32）。
+
+**世界导出**  
+`/hassiumc cache export [名字]` 把客户端缓存写成 `saves/` 下可进单机的最小 Anvil 世界（方块 + 已缓存的 BE）。无实体、无玩家背包；空洞由世界生成补全。模组方块需相同模组与相近 MC 版本。
 
 **光照剥离**  
 `network.lightStripEnabled = true`（默认）时，服务端发包可剥离光照数据，由客户端本地重算（受 `maxLightRecomputePerFrame` 限流）。
@@ -293,6 +328,10 @@ Hassium 用 **ZSTD** 替代原版 Zlib，主要优化三件事：
 | `storage.enabled` | `true` | 世界存档 ZSTD（**请先备份**） |
 | `storage.zstdLevel` | `9` | 存储压缩等级 |
 | `clientCache.enabled` | `true` | 客户端缓存 |
+| `clientCache.sectionDeltaEnabled` | `true` | 缓存过期时分段增量 |
+| `clientCache.viewDistanceExtensionEnabled` | `true` | 超视渲染（多人；与 Bobby 互斥） |
+| `clientCache.maxRenderDistance` | `32` | 超视渲染 / 有效 RD 上限（2–64） |
+| `clientCache.ovdUnloadDelaySecs` | `5` | 离开超视渲染环带后延迟卸载（秒） |
 | `network.enabled` | `true` | 自定义 Hassium 通道 |
 | `network.globalPacketCompression` | `true` | 全局 ZSTD |
 | `network.compressionLevel` | `3` | 网络压缩等级（偏速度） |
@@ -313,7 +352,8 @@ Hassium 用 **ZSTD** 替代原版 Zlib，主要优化三件事：
 | `/hassium stats` | 服务端 | 压缩/发送统计（需权限等级 2 / OP） |
 | `/hassium metrics on\|off` | 服务端 | 运行时开关指标 |
 | `/hassium stats reset` | 服务端 | 重置计数器 |
-| `/hassiumc stats` | 客户端 | 接收/缓存命中统计 |
+| `/hassiumc stats` | 客户端 | 接收/缓存命中/超视渲染 统计 |
+| `/hassiumc cache export [<世界名>]` | 客户端 | 导出本地缓存为 `saves/` 下原版 Anvil 世界 |
 
 指标关闭时，相关 stats 命令不可用。
 

@@ -226,9 +226,9 @@ public final class HassiumTomlConfigIO {
         set(cfg, "clientCache.bloomFilterExpectedInsertions", c.bloomFilterExpectedInsertions(), "Bloom 预期元素数");
         set(cfg, "clientCache.bloomFilterFpp", c.bloomFilterFpp(), "Bloom 期望假阳性率");
         set(cfg, "clientCache.viewDistanceExtensionEnabled", c.viewDistanceExtensionEnabled(),
-                "=== 视距外显示（OVD） ===\n是否启用视距外显示（OVD）");
-        set(cfg, "clientCache.maxRenderDistance", c.maxRenderDistance(), "渲染距离上限（Fog/内存约束）");
-        set(cfg, "clientCache.ovdUnloadDelaySecs", c.ovdUnloadDelaySecs(), "离开环带后延迟卸载秒数");
+                "=== 超视渲染 ===\n是否启用超视渲染（客户端 RD > 服务端视距时本地缓存回填环带）");
+        set(cfg, "clientCache.maxRenderDistance", c.maxRenderDistance(), "超视渲染 / 有效 RD 上限（Fog/内存约束）");
+        set(cfg, "clientCache.ovdUnloadDelaySecs", c.ovdUnloadDelaySecs(), "离开超视渲染环带后延迟卸载秒数");
         set(cfg, "clientCache.sectionDeltaEnabled", c.sectionDeltaEnabled(),
                 "=== 分段增量 ===\n缓存过期时是否走分段增量（默认 true；依赖 clientCache.enabled）");
     }

@@ -56,7 +56,7 @@ public record HassiumConfig(
             boolean bloomFilterEnabled,
             int bloomFilterExpectedInsertions,
             double bloomFilterFpp,
-            // === 视距外显示（OVD）配置 ===
+            // === 超视渲染配置 ===
             boolean viewDistanceExtensionEnabled,
             int maxRenderDistance,
             int ovdUnloadDelaySecs,
@@ -78,9 +78,9 @@ public record HassiumConfig(
                 true,   // bloomFilterEnabled: 默认启用 Bloom Filter 预筛
                 10000,  // bloomFilterExpectedInsertions: 预期插入元素数量
                 0.01,   // bloomFilterFpp: 期望假阳性率 1%
-                // === OVD 默认配置 ===
-                true,   // viewDistanceExtensionEnabled: 视距外显示总开关
-                32,     // maxRenderDistance: 渲染距离上限（Fog/内存约束）
+                // === 超视渲染默认配置 ===
+                true,   // viewDistanceExtensionEnabled: 超视渲染总开关
+                32,     // maxRenderDistance: 超视渲染/有效 RD 上限 min(滑块, 此值)
                 5,      // ovdUnloadDelaySecs: 离开环带后延迟卸载秒数
                 // === 分段增量默认配置 ===
                 true    // sectionDeltaEnabled: 缓存过期时走分段增量（默认开）

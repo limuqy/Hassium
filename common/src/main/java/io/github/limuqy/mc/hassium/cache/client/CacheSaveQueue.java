@@ -95,7 +95,7 @@ public class CacheSaveQueue {
         if (chunk == null) return;
         ChunkPos pos = chunk.getPos();
 
-        // renderOnly 区块卸载不写回缓存（OVD 历史快照保留）
+        // renderOnly 区块卸载不写回缓存（超视渲染历史快照保留）
         if (ViewDistanceExtensionService.getInstance().isRenderOnly(pos)) {
             Constants.LOG.debug("Hassium: [CACHE SAVE] Skip unload for render-only chunk {}", pos);
             return;

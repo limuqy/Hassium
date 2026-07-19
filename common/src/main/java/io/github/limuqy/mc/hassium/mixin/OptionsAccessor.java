@@ -9,7 +9,7 @@ import org.spongepowered.asm.mixin.gen.Accessor;
  * <p>
  * {@code serverRenderDistance} 由 {@code ClientboundSetChunkCacheRadiusPacket} 在 login 后写入，
  * 反映服务端 {@code view-distance}。原版为 private 字段，通过 Accessor 暴露给
- * {@link io.github.limuqy.mc.hassium.cache.client.ViewDistanceExtensionService} 用于 OVD 环带计算。
+ * {@link io.github.limuqy.mc.hassium.cache.client.ViewDistanceExtensionService} 用于超视渲染环带计算。
  */
 @Mixin(Options.class)
 public interface OptionsAccessor {

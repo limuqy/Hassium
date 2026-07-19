@@ -96,7 +96,25 @@ public class ClientCacheLoadQueue {
      * @param priority 优先级
      */
     public void enqueueWithData(ChunkPos pos, byte[] data, double priority) {
-        readyQueue.offer(new ReadyChunk(pos, data, priority, false));
+        enqueueWithData(pos, data, priority, false);
+    }
+
+    /**
+     * 添加已有数据的区块到就绪队列（含 renderOnly / 超视渲染即时替换路径）。
+     *
+     * @param pos        区块坐标
+     * @param data       NBT 字节（HBT1）或 packet 字节
+     * @param priority   优先级（越小越优先）
+     * @param renderOnly 是否仅渲染
+     */
+    public void enqueueWithData(ChunkPos pos, byte[] data, double priority, boolean renderOnly) {
+        if (pos == null || data == null) {
+            return;
+        }
+        readyQueue.offer(new ReadyChunk(pos, data, priority, renderOnly));
+        DebugLogger.info(LogType.CACHE,
+                "[CACHE_LOAD_QUEUE] Enqueued with data {} (priority={}, renderOnly={}, readySize={})",
+                pos, String.format("%.1f", priority), renderOnly, readyQueue.size());
     }
 
     /**
@@ -134,7 +152,7 @@ public class ClientCacheLoadQueue {
                         task.pos(), data.length, readyQueue.size());
             } else {
                 if (task.renderOnly()) {
-                    // 视距外（OVD）：缓存 miss 静默，不向服务器请求，回滚 loadedRenderOnly 标记
+                    // 超视渲染：缓存 miss 静默，不向服务器请求，回滚 loadedRenderOnly 标记
                     DebugLogger.info(LogType.CACHE,
                             "[CACHE_LOAD] renderOnly miss for {} (no cache, no server request)", task.pos());
                     ViewDistanceExtensionService.getInstance().onRenderOnlyMiss(task.pos());

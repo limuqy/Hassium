@@ -9,6 +9,9 @@ Hassium 是 Minecraft 多加载器模组（Fabric / Forge / NeoForge），用 **
 1. **世界存档压缩**（Region 外层不变，payload type `126`）
 2. **网络传输压缩**（自定义 `hassium:*` 通道 + 可选全局包压缩）
 3. **客户端区块缓存**（本地 Region + `chunkHash` 命中跳过全量下载）
+4. **分段增量**（缓存过期时仅补变更 section，默认开）
+5. **超视渲染**（多人客户端 RD > 服务端视距时，本地缓存回填环带，仅渲染）
+6. **世界导出**（本地缓存导出为可进单机的原版 Anvil 世界）
 
 目标版本：Minecraft **1.20.1–1.21.11**（九段适配，见 version-segments）。Forge 仅 **1.20.1 / 1.20.6**。
 
@@ -83,9 +86,10 @@ Sector 3+:    [length(4)][type=126][ZSTD 压缩数据]
 | `storage.mode` | `mirror` | 镜像模式 |
 | `storage.zstdLevel` | 9 | 存储压缩等级 |
 | `clientCache.enabled` | true | 客户端缓存 |
-| `clientCache.viewDistanceExtensionEnabled` | true | OVD 视距外显示（依赖 clientCache.enabled；与 Bobby 互斥） |
-| `clientCache.maxRenderDistance` | 32 | 渲染距离上限（Fog/内存约束；RD>32 需手改 options.txt） |
-| `clientCache.ovdUnloadDelaySecs` | 5 | OVD 离开环带后延迟卸载秒数（0=同步卸载） |
+| `clientCache.sectionDeltaEnabled` | true | 缓存过期时分段增量（关则过期走全量） |
+| `clientCache.viewDistanceExtensionEnabled` | true | 超视渲染（依赖 clientCache.enabled；与 Bobby 互斥） |
+| `clientCache.maxRenderDistance` | 32 | 运行时有效 RD / 超视渲染环带上限（2–64；默认对齐 vanilla 滑块） |
+| `clientCache.ovdUnloadDelaySecs` | 5 | 超视渲染离开环带后延迟卸载秒数（0=同步卸载） |
 | `network.enabled` | true | Hassium 通道 |
 | `network.globalPacketCompression` | true | 全局 ZSTD |
 | `network.compressionLevel` | 3 | 网络压缩等级（速度优先） |
@@ -122,9 +126,10 @@ ERROR / WARN 始终输出。
 | `/hassium stats` | 服务端 | 压缩/发送统计（需 OP 2） |
 | `/hassium metrics on\|off` | 服务端 | 运行时开关指标 |
 | `/hassium stats reset` | 服务端 | 重置计数器 |
-| `/hassiumc stats` | 客户端 | 接收/缓存命中统计 |
+| `/hassiumc stats` | 客户端 | 接收/缓存命中/超视渲染 统计 |
+| `/hassiumc cache export [<世界名>]` | 客户端 | 导出本地缓存为 `saves/` 下原版 Anvil 世界 |
 
-实现：`metrics/NetworkStats`（`AtomicLong`，可关闭）。指标关闭时相关命令不可用。
+实现：`metrics/NetworkStats`（`AtomicLong`，可关闭）。指标关闭时相关 stats 命令不可用。导出走 `CacheWorldExporter`（异步，见 `disk-nbt-cache.md` / `chunk-cache.md` §12）。
 
 ## 8. 构建与运行
 
@@ -140,16 +145,28 @@ ERROR / WARN 始终输出。
 
 首次或缺少反编译产物：`./gradlew common:decompile`。
 
-## 9. 路线图（未实现）
+## 9. 卖点特性（已实现摘要）
 
-- **区块预加载**：按移动方向提高推送优先级（方案曾单独成文，实现时写入 `chunk-cache.md`）
-- **分段增量**：`clientCache.sectionDeltaEnabled` 默认开；缓存过期时仅补变更分段（见 chunk-cache）
+| 特性 | 配置 / 命令 | 要点 | 详文 |
+|------|-------------|------|------|
+| **分段增量** | `clientCache.sectionDeltaEnabled`（默认 true） | MISMATCH 时按 section 比对，仅补变更分段 + BE 覆盖；失败/超时回退全量 | [`chunk-cache.md`](chunk-cache.md) §11.5、[`disk-nbt-cache.md`](disk-nbt-cache.md) |
+| **超视渲染** | `viewDistanceExtensionEnabled`、`maxRenderDistance`、`ovdUnloadDelaySecs` | 多人、clientVD>serverVD 时本地缓存回填环带；Forget 原地 renderOnly；不向服索要视距外区块/BE | [`ovd.md`](ovd.md)、[`chunk-cache.md`](chunk-cache.md) §10 |
+| **世界导出** | `/hassiumc cache export [<世界名>]` | 客户端缓存 → 原版 Anvil（type2 zlib）；无实体/仅去过的区块快照 | [`chunk-cache.md`](chunk-cache.md) §12、[`disk-nbt-cache.md`](disk-nbt-cache.md) |
+
+客户端磁盘缓存 payload 为 NBT（`"HBT1"` + CompoundTag），主一致性路径为 **Live-Unload Snapshot**（renderOnly 跳过落盘）。旧 packet 字节缓存读到即删并全量请求。
+
+## 10. 路线图（未实现）
+
+- **方向性预加载**：按移动方向提高推送优先级（不改协议；方案写入 `chunk-cache.md` 时同步）
+- **分段增量接回超视渲染**：超视渲染 miss 路径仍不走 sectionDelta（需可靠 merge + 集成测试）
 - **`migration/` / `HassiumApi`**：公共 API / 世界迁移工具桩，尚未落地
+- **Fog / Sodium 条件 Mixin**：仅在 RD>32 穿帮或实测 mesh 不建时按需补
 
-## 10. 相关文档
+## 11. 相关文档
 
-- [`chunk-cache.md`](chunk-cache.md) — 缓存推送与进服流水线
-- [`ovd.md`](ovd.md) — 视距外显示（OVD）技术实现
+- [`chunk-cache.md`](chunk-cache.md) — 缓存推送、超视渲染摘要、磁盘 NBT、导出
+- [`ovd.md`](ovd.md) — 超视渲染技术实现
+- [`disk-nbt-cache.md`](disk-nbt-cache.md) — 磁盘 NBT 缓存、Live-Unload、分段增量、导出细节
 - [`version-segments.md`](version-segments.md) — 九段适配真相源
 - [`mod-compat.md`](mod-compat.md) — 多 Mod 兼容边界与配置逃生
 - 根目录 `README.md` — 用户安装与特性

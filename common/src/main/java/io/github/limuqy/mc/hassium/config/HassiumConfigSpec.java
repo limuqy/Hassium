@@ -209,7 +209,7 @@ public final class HassiumConfigSpec {
         public final ForgeConfigSpec.IntValue cacheBloomFilterExpectedInsertions;
         public final ForgeConfigSpec.DoubleValue cacheBloomFilterFpp;
 
-        // OVD（视距外显示）配置
+        // 超视渲染配置
         public final ForgeConfigSpec.BooleanValue cacheViewDistanceExtensionEnabled;
         public final ForgeConfigSpec.IntValue cacheMaxRenderDistance;
         public final ForgeConfigSpec.IntValue cacheOvdUnloadDelaySecs;
@@ -238,7 +238,7 @@ public final class HassiumConfigSpec {
         public final ModConfigSpec.IntValue cacheBloomFilterExpectedInsertions;
         public final ModConfigSpec.DoubleValue cacheBloomFilterFpp;
 
-        // OVD（视距外显示）配置
+        // 超视渲染配置
         public final ModConfigSpec.BooleanValue cacheViewDistanceExtensionEnabled;
         public final ModConfigSpec.IntValue cacheMaxRenderDistance;
         public final ModConfigSpec.IntValue cacheOvdUnloadDelaySecs;
@@ -309,18 +309,18 @@ public final class HassiumConfigSpec {
                     .translation("hassium.configuration.clientCache.bloomFilterFpp")
                     .defineInRange("bloomFilterFpp", 0.01, 0.001, 0.1);
             cacheViewDistanceExtensionEnabled = builder
-                    .comment("=== 视距外显示（OVD） ===")
-                    .comment("是否启用视距外显示（OVD）：客户端 RD > 服务端视距时，用本地缓存回填环带仅渲染。"
+                    .comment("=== 超视渲染 ===")
+                    .comment("是否启用超视渲染：客户端 RD > 服务端视距时，用本地缓存回填环带仅渲染。"
                             + "依赖 clientCache.enabled。与 Bobby 互斥，勿同装。默认 true")
                     .translation("hassium.configuration.clientCache.viewDistanceExtensionEnabled")
                     .define("viewDistanceExtensionEnabled", true);
             cacheMaxRenderDistance = builder
-                    .comment("渲染距离上限（Fog/内存约束；vanilla 滑块上限 32，默认 32）。"
+                    .comment("超视渲染 / 有效 RD 上限（Fog/内存约束；vanilla 滑块上限 32，默认 32）。"
                             + "RD>32 时需手动编辑 options.txt；Fog Mixin 据此钳制雾距")
                     .translation("hassium.configuration.clientCache.maxRenderDistance")
                     .defineInRange("maxRenderDistance", 32, 2, 64);
             cacheOvdUnloadDelaySecs = builder
-                    .comment("离开 OVD 环带后延迟卸载秒数（避免快速移动反复加载/卸载；默认 5；0=同步卸载）")
+                    .comment("离开超视渲染环带后延迟卸载秒数（避免快速移动反复加载/卸载；默认 5；0=同步卸载）")
                     .translation("hassium.configuration.clientCache.ovdUnloadDelaySecs")
                     .defineInRange("ovdUnloadDelaySecs", 5, 0, 60);
             cacheSectionDeltaEnabled = builder

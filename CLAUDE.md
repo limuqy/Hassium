@@ -4,7 +4,7 @@ Hassium 开发者全景索引。任务级操作见 `.claude/skills/`；多版本
 
 ## 项目身份
 
-Minecraft 多加载器模组（Fabric / Forge / NeoForge），Manifold `#if MC_VER` 单套源码覆盖 **1.20.1–1.21.11**。用 ZSTD 优化存档与网络；客户端以 `chunkHash` 命中本地 Region 缓存。
+Minecraft 多加载器模组（Fabric / Forge / NeoForge），Manifold `#if MC_VER` 单套源码覆盖 **1.20.1–1.21.11**。用 ZSTD 优化存档与网络；客户端以 `chunkHash` 命中本地 Region 缓存；卖点含 **分段增量**、**超视渲染**、**缓存世界导出**。
 
 - 构建：architectury-loom + `versionProperties/{mc_ver}.properties`
 - 默认 `mc_ver`：见根 `gradle.properties`（PowerShell 覆盖时必须 `"-Pmc_ver=1.20.1"`）
@@ -44,6 +44,9 @@ fabric/ forge/ neoforge/  ← ServiceLoader 实现 + 入口
 - `storage.enabled = true`（备份世界）
 - `network.enabled = true`，`globalPacketCompression = true`
 - `clientCache.enabled = true`
+- `clientCache.sectionDeltaEnabled = true`
+- `clientCache.viewDistanceExtensionEnabled = true`（超视渲染；多人；与 Bobby 互斥）
+- `clientCache.maxRenderDistance = 32`，`ovdUnloadDelaySecs = 5`
 - `debug.* = false`（热路径经 `DebugLogger`）
 
 ## 区块缓存流水线（现行）
@@ -51,23 +54,30 @@ fabric/ forge/ neoforge/  ← ServiceLoader 实现 + 入口
 ```
 拦截 broadcast/trackChunk → 异步算 chunkHash → 批量 ChunkHashS2C
   → 命中 ClientCacheLoadQueue / 未命中全量请求
+  → MISMATCH 且 sectionDeltaEnabled → SectionDeltaS2C 合并写盘再 apply
   → 主线程序列化 + pushPool 压缩 → 客户端时间预算 apply（JoinBoost）
 ```
 
-**分段增量**（`clientCache.sectionDeltaEnabled`，默认 `true`）：缓存过期时仅补变更分段。详见 [`docs/chunk-cache.md`](docs/chunk-cache.md)。
+磁盘 payload：NBT（`HBT1` + CompoundTag）；主一致性 **Live-Unload Snapshot**。详见 [`docs/chunk-cache.md`](docs/chunk-cache.md)、[`docs/disk-nbt-cache.md`](docs/disk-nbt-cache.md)。
+
+**超视渲染：** 多人 clientVD>serverVD 时 `ViewDistanceExtensionService` 环带 `renderOnly` 回填；Forget 原地保留；不向服请求视距外区块/BE。详见 [`docs/ovd.md`](docs/ovd.md)。
+
+**导出：** `/hassiumc cache export [<世界名>]` → `saves/` 原版 Anvil。
 
 ## 已完成 / 待办
 
-**已完成（摘要）：** ZSTD 存储与网络、握手、chunkHash 推送、进服限流、Bloom、sectionHashes、BE 专用通道、监控命令、九段适配回归。
+**已完成（摘要）：** ZSTD 存储与网络、握手、chunkHash 推送、进服限流、Bloom、sectionHashes、BE 专用通道、**分段增量**、磁盘 NBT 缓存、**超视渲染**、**缓存世界导出**、监控命令、九段适配回归。
 
-**待办：** 方向性预加载；分段增量接回 OVD；`migration` / 公共 `HassiumApi` 实现。
+**待办：** 方向性预加载；分段增量接回超视渲染；`migration` / 公共 `HassiumApi` 实现。
 
 ## 文档与 Skills
 
 | 文档 | 用途 |
 |------|------|
 | [`docs/architecture.md`](docs/architecture.md) | 架构 / 存储 / 配置 / 日志 / 命令 |
-| [`docs/chunk-cache.md`](docs/chunk-cache.md) | 缓存推送真相源 |
+| [`docs/chunk-cache.md`](docs/chunk-cache.md) | 缓存推送 / 超视渲染摘要 / 磁盘 NBT / 导出 |
+| [`docs/ovd.md`](docs/ovd.md) | 超视渲染技术实现 |
+| [`docs/disk-nbt-cache.md`](docs/disk-nbt-cache.md) | 磁盘 NBT / Live-Unload / 分段增量细节 |
 | [`docs/version-segments.md`](docs/version-segments.md) | 九段 / `#if` 白名单 / compat |
 | [`docs/mod-compat.md`](docs/mod-compat.md) | 多 Mod 兼容边界与配置逃生 |
 | [`AGENTS.md`](AGENTS.md) | Agent 速查 |

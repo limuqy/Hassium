@@ -11,7 +11,7 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
- * 跳过 renderOnly（OVD）区块的 blockEntity tick。
+ * 跳过 renderOnly（超视渲染）区块的 blockEntity tick。
  * <p>
  * 注入 {@link Level#tickBlockEntity} HEAD：若 BE 所属 chunk 在 renderOnly 集合中则 cancel。
  * 仅客户端生效（服务端 {@code instanceof ClientLevel} 为 false 直接 return）。

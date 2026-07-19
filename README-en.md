@@ -24,6 +24,9 @@ Smaller world saves and bandwidth than vanilla, local chunk reuse, and smoother 
 | **Efficient storage** | Higher-ratio world chunk compression for smaller saves; keeps vanilla Region (`.mca`) layout |
 | **Network compression** | More efficient compression for chunks and packets — less bandwidth and wait time |
 | **Chunk cache** | Loaded chunks are kept locally; revisiting an area prefers the cache instead of full downloads |
+| **Section delta** | On cache mismatch, fetch only changed sections (`sectionDelta`) instead of the whole chunk |
+| **Beyond-view render** | When client RD exceeds server view distance (multiplayer), fill the outer ring from local cache (render-only; no out-of-range server requests) |
+| **World export** | `/hassiumc cache export` writes the local cache as a vanilla Anvil singleplayer world |
 | **Light stripping** | Server can omit light data; the client recomputes lighting locally to save more bandwidth |
 | **Smooth loading** | Caps main-thread work during join and view expansion to reduce hitch spikes |
 | **Client-friendly** | Clients without the mod can connect by default; install on both sides for full compression and cache benefits |
@@ -74,6 +77,10 @@ Files: `config/hassium/hassium-client.toml`, `config/hassium/hassium-common.toml
 | --- | --- | --- |
 | `storage.enabled` | `true` | World ZSTD (**back up first**) |
 | `clientCache.enabled` | `true` | Client cache |
+| `clientCache.sectionDeltaEnabled` | `true` | Section delta on cache mismatch |
+| `clientCache.viewDistanceExtensionEnabled` | `true` | Beyond-view render (multiplayer; exclusive with Bobby) |
+| `clientCache.maxRenderDistance` | `32` | Beyond-view / effective RD cap (2–64) |
+| `clientCache.ovdUnloadDelaySecs` | `5` | Delay unload after leaving beyond-view ring (s; 0=sync) |
 | `network.enabled` | `true` | Custom channels |
 | `network.globalPacketCompression` | `true` | Global ZSTD |
 | `network.maxChunksPerTick` | `10` | Per-player serialize cap per server tick |
@@ -92,7 +99,8 @@ Full reference: [`docs/architecture.md`](docs/architecture.md).
 | `/hassium stats` | Server stats (OP 2) |
 | `/hassium metrics on\|off` | Toggle metrics |
 | `/hassium stats reset` | Reset counters |
-| `/hassiumc stats` | Client stats |
+| `/hassiumc stats` | Client stats (cache / beyond-view) |
+| `/hassiumc cache export [<worldName>]` | Export local cache to a vanilla Anvil world under `saves/` |
 
 ---
 
@@ -138,7 +146,9 @@ Developer entry points: [`CLAUDE.md`](CLAUDE.md), [`AGENTS.md`](AGENTS.md).
 | Doc | Content |
 | --- | --- |
 | [`docs/architecture.md`](docs/architecture.md) | Architecture, storage, config, logging, commands |
-| [`docs/chunk-cache.md`](docs/chunk-cache.md) | Cache push & join pipeline |
+| [`docs/chunk-cache.md`](docs/chunk-cache.md) | Cache push, beyond-view summary, disk NBT, export |
+| [`docs/ovd.md`](docs/ovd.md) | Beyond-view render implementation |
+| [`docs/disk-nbt-cache.md`](docs/disk-nbt-cache.md) | Disk NBT cache, Live-Unload, section delta |
 | [`docs/version-segments.md`](docs/version-segments.md) | Multi-version segments |
 | [`docs/mod-compat.md`](docs/mod-compat.md) | Multi-mod compatibility & config escapes |
 

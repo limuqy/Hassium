@@ -2,6 +2,16 @@
 
 本文档是 **chunkHash 元数据推送 + 客户端缓存命中** 流水线的唯一真相源。存储文件格式见 [`architecture.md`](architecture.md)。
 
+**相关专文（细节不在此重复）：**
+
+| 主题 | 文档 | 本文摘要 |
+|------|------|----------|
+| 超视渲染 | [`ovd.md`](ovd.md) | §10 |
+| 磁盘 NBT / Live-Unload / 分段增量 | [`disk-nbt-cache.md`](disk-nbt-cache.md) | §11 |
+| 世界导出 | 同上 + 本文 §12 | §12 |
+
+**卖点特性（已实现）：** 分段增量（§3 阶段二 / §11）、超视渲染（§10）、`/hassiumc cache export`（§12）。
+
 ## 1. 目标与约束
 
 - 用 **内容哈希**（非 `inhabitedTime`）判断缓存是否可复用
@@ -137,7 +147,7 @@ SectionDeltaS2CPacket        // 服务端 → 客户端（变更分段 + BE）
 - 方向性区块预加载（提高推送优先级，不改变协议）
 - warm-stash 优化（收包后暂存 NBT，卸载时 dirty=false 则 flush warm 跳过 live 重算）
 
-## 10. 视距外显示（OVD / renderOnly）
+## 10. 超视渲染（renderOnly）
 
 ### 10.1 目标
 
@@ -193,7 +203,7 @@ MixinClientTick.tick
 
 | 场景 | 处理 |
 |------|------|
-| 单人游戏 | `MixinOptions` / `ViewDistanceExtensionService` 均检查 `mc.getSingleplayerServer() != null` → 跳过 OVD |
+| 单人游戏 | `MixinOptions` / `ViewDistanceExtensionService` 均检查 `mc.getSingleplayerServer() != null` → 跳过超视渲染 |
 | `serverRenderDistance == 0`（未登录） | fallback `simulationDistance`；仍 ≤0 则 `clearAllRenderOnly` |
 | `clientVD <= serverVD` | `clearAllRenderOnly`，恢复原版 |
 | 配置关（`viewDistanceExtensionEnabled=false`） | `clearAllRenderOnly`；`MixinOptions` 不 cancel（原版钳制） |
@@ -212,7 +222,7 @@ RD > 32（需手改 `options.txt`）时雾距会跟随 `getEffectiveRenderDistan
 
 ### 10.11 内存估算
 
-OVD 环带区块数 ≈ `π × (clientVD² − serverVD²)`（圆形），每块完整 `LevelChunk` 约 20–50 KB（视方块密度与生物群系复杂度）。
+超视渲染环带区块数 ≈ `π × (clientVD² − serverVD²)`（圆形），每块完整 `LevelChunk` 约 20–50 KB（视方块密度与生物群系复杂度）。
 
 示例：
 
@@ -229,7 +239,7 @@ OVD 环带区块数 ≈ `π × (clientVD² − serverVD²)`（圆形），每块
 
 - Bobby FakeChunk / 独立 `.bobby` 目录
 - 视距外向服务器 `ChunkDataRequestC2S` / 放宽 BE 视距校验
-- 分段增量接回 OVD
+- 分段增量接回超视渲染
 - 抬高 vanilla 滑块上限 >32（版本差异大，用户编辑 options.txt）
 
 ## 11. 磁盘 NBT 缓存格式
