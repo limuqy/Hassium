@@ -4,14 +4,15 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 
-#if MC_VER < MC_1_20_5
+#if MC_VER < MC_1_20_2
 import net.minecraftforge.common.ForgeConfigSpec;
 #else
 import net.neoforged.neoforge.common.ModConfigSpec;
 #endif
 
 /**
- * Hassium Forge/NeoForge ConfigSpec 定义（Fabric 经 Forge Config API Port）。
+ * Hassium Forge/NeoForge ConfigSpec 定义（Fabric 仅编译期引用；运行时走 Toml）。
+ * 1.20.1：ForgeConfigSpec；1.20.2+：ModConfigSpec（NeoForge 原生 / FCAP common-neoforgeapi）。
  * <p>
  * CLIENT：客户端缓存与客户端网络应用相关项。<br>
  * COMMON：存储、共享网络、兼容与调试。<br>
@@ -20,7 +21,7 @@ import net.neoforged.neoforge.common.ModConfigSpec;
  */
 public final class HassiumConfigSpec {
 
-#if MC_VER < MC_1_20_5
+#if MC_VER < MC_1_20_2
     public static final ForgeConfigSpec CLIENT_SPEC;
     public static final ForgeConfigSpec COMMON_SPEC;
 #else
@@ -32,7 +33,7 @@ public final class HassiumConfigSpec {
     public static final Common COMMON;
 
     static {
-#if MC_VER < MC_1_20_5
+#if MC_VER < MC_1_20_2
         ForgeConfigSpec.Builder clientBuilder = new ForgeConfigSpec.Builder();
         ForgeConfigSpec.Builder commonBuilder = new ForgeConfigSpec.Builder();
 #else
@@ -74,7 +75,8 @@ public final class HassiumConfigSpec {
                         CLIENT.cacheViewDistanceExtensionEnabled.get(),
                         CLIENT.cacheMaxRenderDistance.get(),
                         CLIENT.cacheOvdUnloadDelaySecs.get(),
-                        CLIENT.cacheSectionDeltaEnabled.get()
+                        CLIENT.cacheSectionDeltaEnabled.get(),
+                        CLIENT.cacheJoinBoostEnabled.get()
                 ),
                 new HassiumConfig.NetworkConfig(
                         COMMON.networkEnabled.get(),
@@ -99,7 +101,6 @@ public final class HassiumConfigSpec {
                         CLIENT.networkMaxCallbacksPerFrame.get(),
                         COMMON.networkMetricsEnabled.get(),
                         CLIENT.networkMainThreadChunkBudgetMs.get(),
-                        CLIENT.networkMaxLightRecomputePerFrame.get(),
                         COMMON.networkDynamicThreadPoolEnabled.get(),
                         COMMON.networkMinPushThreads.get(),
                         COMMON.networkMaxPushThreads.get()
@@ -146,13 +147,13 @@ public final class HassiumConfigSpec {
         CLIENT.cacheMaxRenderDistance.set(cache.maxRenderDistance());
         CLIENT.cacheOvdUnloadDelaySecs.set(cache.ovdUnloadDelaySecs());
         CLIENT.cacheSectionDeltaEnabled.set(cache.sectionDeltaEnabled());
+        CLIENT.cacheJoinBoostEnabled.set(cache.joinBoostEnabled());
         CLIENT.networkClientChunkLoadThreads.set(net.clientChunkLoadThreads());
         CLIENT.networkLightStripEnabled.set(net.lightStripEnabled());
         CLIENT.networkBackgroundThreads.set(net.backgroundThreads());
         CLIENT.networkMaxChunksPerFrame.set(net.maxChunksPerFrame());
         CLIENT.networkMaxCallbacksPerFrame.set(net.maxCallbacksPerFrame());
         CLIENT.networkMainThreadChunkBudgetMs.set(net.mainThreadChunkBudgetMs());
-        CLIENT.networkMaxLightRecomputePerFrame.set(net.maxLightRecomputePerFrame());
 
         COMMON.storageEnabled.set(storage.enabled());
         COMMON.storageMode.set(storage.mode());
@@ -195,7 +196,7 @@ public final class HassiumConfigSpec {
     }
 
     public static final class Client {
-#if MC_VER < MC_1_20_5
+#if MC_VER < MC_1_20_2
         public final ForgeConfigSpec.BooleanValue cacheEnabled;
         public final ForgeConfigSpec.IntValue cacheMaxSizeMb;
         public final ForgeConfigSpec.IntValue cacheMaxAgeDays;
@@ -214,6 +215,7 @@ public final class HassiumConfigSpec {
         public final ForgeConfigSpec.IntValue cacheMaxRenderDistance;
         public final ForgeConfigSpec.IntValue cacheOvdUnloadDelaySecs;
         public final ForgeConfigSpec.BooleanValue cacheSectionDeltaEnabled;
+        public final ForgeConfigSpec.BooleanValue cacheJoinBoostEnabled;
 
         public final ForgeConfigSpec.IntValue networkClientChunkLoadThreads;
         public final ForgeConfigSpec.BooleanValue networkLightStripEnabled;
@@ -221,7 +223,6 @@ public final class HassiumConfigSpec {
         public final ForgeConfigSpec.IntValue networkMaxChunksPerFrame;
         public final ForgeConfigSpec.IntValue networkMaxCallbacksPerFrame;
         public final ForgeConfigSpec.IntValue networkMainThreadChunkBudgetMs;
-        public final ForgeConfigSpec.IntValue networkMaxLightRecomputePerFrame;
 
         Client(ForgeConfigSpec.Builder builder) {
 #else
@@ -243,6 +244,7 @@ public final class HassiumConfigSpec {
         public final ModConfigSpec.IntValue cacheMaxRenderDistance;
         public final ModConfigSpec.IntValue cacheOvdUnloadDelaySecs;
         public final ModConfigSpec.BooleanValue cacheSectionDeltaEnabled;
+        public final ModConfigSpec.BooleanValue cacheJoinBoostEnabled;
 
         public final ModConfigSpec.IntValue networkClientChunkLoadThreads;
         public final ModConfigSpec.BooleanValue networkLightStripEnabled;
@@ -250,7 +252,6 @@ public final class HassiumConfigSpec {
         public final ModConfigSpec.IntValue networkMaxChunksPerFrame;
         public final ModConfigSpec.IntValue networkMaxCallbacksPerFrame;
         public final ModConfigSpec.IntValue networkMainThreadChunkBudgetMs;
-        public final ModConfigSpec.IntValue networkMaxLightRecomputePerFrame;
 
         Client(ModConfigSpec.Builder builder) {
 #endif
@@ -331,6 +332,12 @@ public final class HassiumConfigSpec {
                             + "详见 docs/disk-nbt-cache.md / docs/chunk-cache.md")
                     .translation("hassium.configuration.clientCache.sectionDeltaEnabled")
                     .define("sectionDeltaEnabled", true);
+            cacheJoinBoostEnabled = builder
+                    .comment("=== JoinBoost ===")
+                    .comment("进服后短时（5秒）提高主线程预算加速区块加载，预算从 10ms 线性退坡到 mainThreadChunkBudgetMs。"
+                            + "关闭后进服不提速，但避免高负载时的节奏波动。默认 true。")
+                    .translation("hassium.configuration.clientCache.joinBoostEnabled")
+                    .define("joinBoostEnabled", true);
             builder.pop();
 
             builder.comment("客户端网络与主线程应用相关配置")
@@ -363,16 +370,12 @@ public final class HassiumConfigSpec {
                     .comment("每帧主线程应用区块的时间预算（毫秒；默认 3；进服 JoinBoost 期间可临时提高）")
                     .translation("hassium.configuration.clientNetwork.mainThreadChunkBudgetMs")
                     .defineInRange("mainThreadChunkBudgetMs", 3, 1, 50);
-            networkMaxLightRecomputePerFrame = builder
-                    .comment("每帧最多重算光照的区块数（默认 10）")
-                    .translation("hassium.configuration.clientNetwork.maxLightRecomputePerFrame")
-                    .defineInRange("maxLightRecomputePerFrame", 10, 1, 256);
             builder.pop();
         }
     }
 
     public static final class Common {
-#if MC_VER < MC_1_20_5
+#if MC_VER < MC_1_20_2
         public final ForgeConfigSpec.BooleanValue storageEnabled;
         public final ForgeConfigSpec.ConfigValue<String> storageMode;
         public final ForgeConfigSpec.IntValue storageZstdLevel;

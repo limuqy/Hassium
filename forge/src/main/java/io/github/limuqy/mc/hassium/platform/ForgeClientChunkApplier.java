@@ -38,10 +38,8 @@ public class ForgeClientChunkApplier implements IClientChunkApplier {
             if (packet.getX() != pos.x || packet.getZ() != pos.z) {
                 Constants.LOG.error("Hassium: Chunk position mismatch! Expected [{}, {}], got [{}, {}]",
                     pos.x, pos.z, packet.getX(), packet.getZ());
-                if (renderOnly) {
-                    ViewDistanceExtensionService.getInstance().onRenderOnlyMiss(pos);
-                }
-                return;
+                // 抛异常让 ClientChunkHandler.applyChunkData 的 catch 块统一处理 onRenderOnlyMiss
+                throw new IllegalStateException("Chunk position mismatch");
             }
 
             // 使用 Minecraft 的客户端数据包监听器处理
@@ -61,12 +59,9 @@ public class ForgeClientChunkApplier implements IClientChunkApplier {
 
                 ClientChunkCache chunkSource = ((ClientLevelAccessor) level).hassium$getChunkSource();
                 if (!chunkSource.hasChunk(pos.x, pos.z)) {
-                    if (renderOnly) {
-                        ViewDistanceExtensionService.getInstance().onRenderOnlyMiss(pos);
-                        Constants.LOG.debug(
-                                "Hassium: OVD apply skipped (out of view range) [{}, {}]", pos.x, pos.z);
-                        return;
-                    }
+                    // 不在此处调用 onRenderOnlyMiss；抛异常让 applyChunkData 的 catch 块统一处理。
+                    // 否则 applyChunkData 会继续调用 onRenderOnlyApplied，把未入缓存的 pos 加入
+                    // loadedRenderOnly，触发 reconcileMissingLoadedChunks 死循环（虚空根因）。
                     throw new IllegalStateException(
                             "Chunk apply ignored by ClientChunkCache (out of view range): " + pos);
                 }

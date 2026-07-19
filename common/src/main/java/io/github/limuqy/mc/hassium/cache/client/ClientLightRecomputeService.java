@@ -1,9 +1,6 @@
 package io.github.limuqy.mc.hassium.cache.client;
 
 import io.github.limuqy.mc.hassium.Constants;
-import io.github.limuqy.mc.hassium.config.HassiumConfigService;
-import io.github.limuqy.mc.hassium.concurrent.MainThreadDispatcher;
-import io.github.limuqy.mc.hassium.concurrent.TaskCategory;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.core.BlockPos;
@@ -16,45 +13,30 @@ import net.minecraft.world.level.chunk.LevelChunkSection;
 import net.minecraft.world.level.lighting.LayerLightEventListener;
 import net.minecraft.world.level.lighting.LevelLightEngine;
 
-import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.atomic.AtomicInteger;
-
 /**
- * 客户端光照重算（从 Mixin 抽出，避免 Mixin 类上出现 public static）。
+ * 客户端光照重算服务（从 Mixin 抽出，避免 Mixin 类上出现 public static）。
  * <p>
- * 剥离光照包到达后延后到 {@link MainThreadDispatcher}；每帧限流，超额进溢出队列。
+ * 合并 apply+光照 pipeline：剥离光照包到达或超视渲染 renderOnly apply 后，
+ * 由调用方在主线程同步调 {@link #applyLightEngineNow}，
+ * 不再经过 {@code MainThreadDispatcher} 延迟调度，避免跨帧黑块。
+ * <p>
+ * 限流由 {@code ClientCacheLoadQueue.processQueueUntil} 的时间预算自然约束
+ * （apply+光照作为一个整体受预算限制）。
  */
 public final class ClientLightRecomputeService {
 
-    private static final AtomicInteger PROCESSED_THIS_FRAME = new AtomicInteger(0);
-    private static volatile long lastFrameTimeMs = 0L;
-    private static final ConcurrentLinkedQueue<ChunkPos> OVERFLOW = new ConcurrentLinkedQueue<>();
-
     private ClientLightRecomputeService() {}
 
-    /** 安排一次光照重算（可在任意线程调用）。 */
-    public static void schedule(ChunkPos chunkPos) {
-        MainThreadDispatcher.execute(
-                () -> tryApply(chunkPos),
-                chunkPos,
-                TaskCategory.SAFE_TO_CANCEL);
-    }
-
-    /** 上一帧溢出任务 → 本帧 flush 前入队（由 MixinClientTick 调用）。 */
-    public static void promoteOverflow() {
-        ChunkPos pos;
-        while ((pos = OVERFLOW.poll()) != null) {
-            schedule(pos);
-        }
-    }
-
-    /** 断连时清空。 */
-    public static void clear() {
-        OVERFLOW.clear();
-        PROCESSED_THIS_FRAME.set(0);
-    }
-
-    private static void tryApply(ChunkPos chunkPos) {
+    /**
+     * 同步执行光照重算（主线程调用）。
+     * <p>
+     * 合并 apply+光照 pipeline：{@code applyToLevelFromByteBuf} 后立即调用，
+     * 不再经过 {@code MainThreadDispatcher} 延迟调度，避免跨帧黑块。
+     * 限流由 {@code ClientCacheLoadQueue.processQueueUntil} 的时间预算自然约束。
+     *
+     * @param chunkPos 区块坐标
+     */
+    public static void applyLightEngineNow(ChunkPos chunkPos) {
         ClientLevel level = Minecraft.getInstance().level;
         if (level == null) {
             return;
@@ -63,21 +45,16 @@ public final class ClientLightRecomputeService {
         if (chunk == null) {
             return;
         }
-
-        int maxPerFrame = HassiumConfigService.getInstance().getMaxLightRecomputePerFrame();
-        long now = System.currentTimeMillis();
-        if (now - lastFrameTimeMs > 50) {
-            PROCESSED_THIS_FRAME.set(0);
-            lastFrameTimeMs = now;
-        }
-
-        if (PROCESSED_THIS_FRAME.get() >= maxPerFrame) {
-            OVERFLOW.offer(chunkPos);
-            return;
-        }
-
-        PROCESSED_THIS_FRAME.incrementAndGet();
         applyLightEngine(level, chunk, chunkPos);
+    }
+
+    /**
+     * 断连时清空（保留占位，OVERFLOW 已删除，无状态需清空）。
+     * <p>
+     * 供 {@code ClientLifecycleHelper} 调用，保持调用方不变。
+     */
+    public static void clear() {
+        // 无状态需清空
     }
 
     private static void applyLightEngine(ClientLevel level, LevelChunk chunk, ChunkPos chunkPos) {

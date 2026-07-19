@@ -24,14 +24,14 @@ config = "${mod_id}.neoforge.mixins.json"
 [[dependencies.${mod_id}]] #optional
 # 1.20.1=forge，1.20.2–1.20.4=neoforge（由 gradle expand）
 modId = "${neoforge_dependency_mod_id}" #mandatory
-mandatory = true #mandatory
+${dependency_required_field}
 versionRange = "${neoforge_loader_version_range}" #mandatory
 ordering = "NONE"
 side = "BOTH"
 
 [[dependencies.${mod_id}]]
 modId = "minecraft"
-mandatory = true
+${dependency_required_field}
 versionRange = "${minecraft_version_range}"
 ordering = "NONE"
 side = "BOTH"

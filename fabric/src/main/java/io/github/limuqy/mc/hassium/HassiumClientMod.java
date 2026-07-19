@@ -1,9 +1,9 @@
 package io.github.limuqy.mc.hassium;
 
+import io.github.limuqy.mc.hassium.cache.client.ClientLifecycleHelper;
+import io.github.limuqy.mc.hassium.client.ClientSmokeTest;
 import io.github.limuqy.mc.hassium.command.FabricHassiumCommand;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
-import io.github.limuqy.mc.hassium.network.ClientChunkHandler;
-import io.github.limuqy.mc.hassium.network.ClientMetadataHandler;
 import io.github.limuqy.mc.hassium.network.DictionaryManager;
 import io.github.limuqy.mc.hassium.network.FabricNetworkManager;
 import net.fabricmc.api.ClientModInitializer;
@@ -18,6 +18,8 @@ public class HassiumClientMod implements ClientModInitializer {
 
     @Override
     public void onInitializeClient() {
+        ClientSmokeTest.initIfEnabled();
+
         // 加载内置区块字典（打包在 mod 中，不需要从服务端传输）
         DictionaryManager.loadChunkDictionary();
 
@@ -33,17 +35,11 @@ public class HassiumClientMod implements ClientModInitializer {
             networkManager.sendHandshakeRequest();
         });
 
-        // 监听客户端断开连接事件，关闭缓存存储并重置状态
+        // 监听客户端断开连接事件，统一走 ClientLifecycleHelper.cleanupOnDisconnect
+        // （MixinClientCommonPacketListenerImpl.onDisconnect 在 1.20.2+ 可能不被触发，
+        //  必须在此主动清理，否则 initialized 标志残留导致重连后 onLogin early-return）
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
-            var storage = ClientChunkHandler.getClientStorage();
-            if (storage != null) {
-                storage.close();
-            }
-            ClientChunkHandler.resetStorage();
-            // 立即清空 pending hash/delta，避免 Mixin onDisconnect 触发前的
-            // tick 窗口期被 tickPendingHashGate 触发向已关闭连接发包
-            ClientMetadataHandler.clearPendingState();
-            LOGGER.info("Hassium: Client disconnected, cache cleaned up");
+            ClientLifecycleHelper.cleanupOnDisconnect();
         });
 
         // 注册客户端命令

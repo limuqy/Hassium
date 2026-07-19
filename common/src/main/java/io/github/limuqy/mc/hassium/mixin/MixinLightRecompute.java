@@ -17,6 +17,9 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
  * <p>
  * 检测到剥离光照后委托 {@link ClientLightRecomputeService}（逻辑不放 Mixin 类，
  * 避免 public static 触发 InvalidMixinException）。
+ * <p>
+ * 合并 pipeline：handleLevelChunkWithLight TAIL 时区块已 apply，直接同步重算光照，
+ * 不再经过 MainThreadDispatcher 延迟调度，避免跨帧黑块。
  */
 @Mixin(ClientPacketListener.class)
 public class MixinLightRecompute {
@@ -39,6 +42,7 @@ public class MixinLightRecompute {
             return;
         }
 
-        ClientLightRecomputeService.schedule(new ChunkPos(packet.getX(), packet.getZ()));
+        // 合并 pipeline：handleLevelChunkWithLight TAIL 时区块已 apply，直接同步重算光照
+        ClientLightRecomputeService.applyLightEngineNow(new ChunkPos(packet.getX(), packet.getZ()));
     }
 }

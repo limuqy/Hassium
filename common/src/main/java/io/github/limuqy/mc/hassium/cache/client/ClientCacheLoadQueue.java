@@ -35,7 +35,7 @@ public class ClientCacheLoadQueue {
     /** 加载任务 */
     private record LoadTask(ChunkPos pos, double priority, boolean renderOnly) {}
 
-    /** 已加载完成的区块 */
+    /** 已加载完成的区块（data 为 packet 字节：后台重组完成；或 NBT 字节：level 未就绪回退路径） */
     public record ReadyChunk(ChunkPos pos, byte[] data, double priority, boolean renderOnly) {}
 
     private ClientCacheLoadQueue() {}
@@ -147,9 +147,21 @@ public class ClientCacheLoadQueue {
             // 从缓存加载（磁盘 I/O + ZSTD 解压，在后台线程安全执行）
             byte[] data = ClientChunkHandler.loadChunkDataFromCache(task.pos());
             if (data != null) {
-                readyQueue.offer(new ReadyChunk(task.pos(), data, task.priority(), task.renderOnly()));
+                // 后台线程重组 NBT→packet 字节（CPU 密集，前移出主线程）
+                // maybeNbtToPacketBytes 幂等：NBT 字节重组为 packet，packet 字节原样返回
+                net.minecraft.client.Minecraft mc = net.minecraft.client.Minecraft.getInstance();
+                net.minecraft.client.multiplayer.ClientLevel level = mc.level;
+                byte[] packetBytes;
+                if (level != null) {
+                    packetBytes = ChunkDiskCodec.maybeNbtToPacketBytes(
+                            data, level.registryAccess(), level.getSectionsCount());
+                } else {
+                    // level 未就绪：直接存 NBT，主线程 applyChunkData 的 maybeNbtToPacketBytes 兜底重组
+                    packetBytes = data;
+                }
+                readyQueue.offer(new ReadyChunk(task.pos(), packetBytes, task.priority(), task.renderOnly()));
                 DebugLogger.info(LogType.CACHE, "[CACHE_LOAD] Chunk {} loaded from disk ({} bytes, readySize={})",
-                        task.pos(), data.length, readyQueue.size());
+                        task.pos(), packetBytes.length, readyQueue.size());
             } else {
                 if (task.renderOnly()) {
                     // 超视渲染：缓存 miss 静默，不向服务器请求，回滚 loadedRenderOnly 标记

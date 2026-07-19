@@ -3,6 +3,7 @@ package io.github.limuqy.mc.hassium.network;
 import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.compat.ResourceLocationCompat;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
+import io.github.limuqy.mc.hassium.network.ServerChunkPushManager;
 import io.github.limuqy.mc.hassium.utils.DebugLogger;
 import io.github.limuqy.mc.hassium.utils.DebugLogger.LogType;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
@@ -731,6 +732,8 @@ INDEX_SYNC_S2C = ResourceLocationCompat.create(Constants.MOD_ID, "index_sync_s2c
 
             // 启用该玩家的压缩
             PlayerCompressionTracker.enableCompression(player);
+            // 初始 trackChunk 常早于握手：主线程补发视距内 chunkHash
+            server.execute(() -> ServerChunkPushManager.getInstance().resyncTrackedChunks(player));
 
             // 检查是否支持全局压缩
             boolean serverSupportsGlobalCompression = HassiumConfigService.getInstance().isGlobalPacketCompressionEnabled();
@@ -812,6 +815,8 @@ INDEX_SYNC_S2C = ResourceLocationCompat.create(Constants.MOD_ID, "index_sync_s2c
 
                 // 启用该玩家的压缩
                 PlayerCompressionTracker.enableCompression(player);
+                // 初始 trackChunk 常早于握手：主线程补发视距内 chunkHash
+                server.execute(() -> ServerChunkPushManager.getInstance().resyncTrackedChunks(player));
 
                 // 检查是否支持全局压缩
                 boolean serverSupportsGlobalCompression = HassiumConfigService.getInstance().isGlobalPacketCompressionEnabled();

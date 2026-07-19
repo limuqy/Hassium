@@ -127,13 +127,16 @@ public class SectionHashStore implements Closeable {
             try {
                 Thread.sleep(2000);
             } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
+                // 退出前会做最终 flush；先清中断，避免 FileChannel 抛 ClosedByInterruptException
+                Thread.interrupted();
                 break;
             }
             if (dirty.get()) {
                 flush();
             }
         }
+        // close() 会 interrupt 本线程；NIO 在中断置位时可能失败，最终落盘前必须清除
+        Thread.interrupted();
         flush();
     }
 
@@ -177,6 +180,16 @@ public class SectionHashStore implements Closeable {
                 } catch (java.nio.file.AtomicMoveNotSupportedException e) {
                     Files.move(tmp, filePath, StandardCopyOption.REPLACE_EXISTING);
                 }
+            } catch (java.nio.channels.ClosedByInterruptException e) {
+                // 关闭竞态：调用方已 interrupt writer；由 close() 再 flush 一次
+                dirty.set(true);
+                Thread.interrupted();
+                Constants.LOG.debug("Hassium: section_hashes.bin flush interrupted (will retry on close)");
+                try {
+                    Files.deleteIfExists(tmp);
+                } catch (IOException ignored) {
+                    // ignore
+                }
             } catch (Exception e) {
                 dirty.set(true);
                 Constants.LOG.warn("Hassium: Failed to flush section_hashes.bin", e);
@@ -198,6 +211,7 @@ public class SectionHashStore implements Closeable {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
+        // writer 可能因中断未落盘；此处在主调线程再刷一次（本线程无中断标志）
         flush();
     }
 }

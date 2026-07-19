@@ -13,8 +13,24 @@ loom {
         ideConfigGenerated = true
         if (name == 'client') {
             runDir = 'run/client'
+            // 冒烟：脚本通过 -PhassiumSmokeTest=true 注入 JVM 属性 + quickPlay
+            if (project.hasProperty('hassiumSmokeTest') && project.property('hassiumSmokeTest').toString() == 'true') {
+                def host = project.findProperty('hassiumSmokeHost') ?: '127.0.0.1:25565'
+                def delayMs = project.findProperty('hassiumSmokeDelayMs') ?: '15000'
+                vmArgs.addAll([
+                        "-Dhassium.smokeTest=true",
+                        "-Dhassium.smokeTest.delayMs=${delayMs}"
+                ])
+                programArgs.addAll([
+                        '--quickPlayMultiplayer', host.toString()
+                ])
+            }
         } else if (name == 'server') {
             runDir = 'run/server'
+            if (project.hasProperty('hassiumSmokeTest') && project.property('hassiumSmokeTest').toString() == 'true') {
+                // 无 GUI，避免头少环境挂起
+                programArgs.add('nogui')
+            }
         }
     }
 }

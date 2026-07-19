@@ -109,7 +109,15 @@ public class HassiumConfigService {
             NetworkStats.setEnabled(loaded.network().metricsEnabled());
             LOGGER.info("Hassium: Configuration synced from ConfigSpec");
         } catch (Exception e) {
-            LOGGER.error("Hassium: Failed to sync configuration from ConfigSpec", e);
+            // NeoForge 1.20.2–1.20.4 上 FileWatcher 可能在 Spec 未 setConfig 时并发 reload，
+            // get() 会抛 IllegalStateException；保留已有快照并记 debug 即可。
+            if (!configLoaded.get()) {
+                this.config = HassiumConfig.DEFAULT;
+                this.networkCompressionEnabled.set(true);
+                this.storageEnabled.set(true);
+                this.configLoaded.set(true);
+            }
+            LOGGER.debug("Hassium: ConfigSpec sync skipped (spec not ready yet): {}", e.toString());
         } finally {
             lock.writeLock().unlock();
         }
@@ -389,10 +397,6 @@ public class HassiumConfigService {
         return config.network().metricsEnabled();
     }
 
-    public int getMaxLightRecomputePerFrame() {
-        return Math.max(1, config.network().maxLightRecomputePerFrame());
-    }
-
     public boolean isDynamicThreadPoolEnabled() {
         return config.network().dynamicThreadPoolEnabled();
     }
@@ -432,6 +436,11 @@ public class HassiumConfigService {
     /** 离开超视渲染环带后延迟卸载秒数（0=同步卸载） */
     public int getOvdUnloadDelaySecs() {
         return Math.max(0, config.clientCache().ovdUnloadDelaySecs());
+    }
+
+    /** 是否启用 JoinBoost（进服后短时提高主线程预算加速加载） */
+    public boolean isJoinBoostEnabled() {
+        return config.clientCache().joinBoostEnabled();
     }
 
     /**

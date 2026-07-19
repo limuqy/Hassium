@@ -32,7 +32,9 @@ import net.minecraft.world.level.chunk.LevelChunk;
 import net.minecraft.world.level.chunk.LevelChunkSection;
 
 import java.util.ArrayList;
+import java.util.ArrayDeque;
 import java.util.Comparator;
+import java.util.Deque;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -60,6 +62,13 @@ public class ServerChunkPushManager {
     private static final int MAX_PREPARED_PER_PLAYER = 384;
 
     /**
+     * 握手后 resync 分批补发：每 tick 最多处理的区块数。
+     * 避免一次性提交数百个 submitMetadataTaskFromChunk 卡住主线程，
+     * 且减缓客户端 ChunkDataRequest 风暴导致 readyQueue 堆积。
+     */
+    private static final int RESYNC_PER_TICK = 32;
+
+    /**
      * 每玩家区块数据请求队列
      */
     private final Map<UUID, PriorityBlockingQueue<DataRequestTask>> dataQueues = new ConcurrentHashMap<>();
@@ -73,6 +82,16 @@ public class ServerChunkPushManager {
      * 每玩家待发送的 chunkHash 批次
      */
     private final Map<UUID, PendingHashBatch> hashBatches = new ConcurrentHashMap<>();
+
+    /**
+     * 握手后 resync 待补发队列：playerId → 待补发 entry 队列。
+     * resyncTrackedChunks 入队，onServerTick 每 tick 最多补发 RESYNC_PER_TICK 个，
+     * 避免一次性提交数百个任务卡住主线程。
+     */
+    private final Map<UUID, Deque<ResyncEntry>> pendingResync = new ConcurrentHashMap<>();
+
+    /** resync 待补发条目 */
+    private record ResyncEntry(ChunkPos pos, String dimension) {}
 
     /**
      * 每玩家：chunkPosLong → 已编码的 ClientboundLevelChunkWithLightPacket 线格式字节。
@@ -358,8 +377,10 @@ public class ServerChunkPushManager {
             ChunkHashS2CPacket packet = new ChunkHashS2CPacket(batch.dimension, new ArrayList<>(batch.entries));
             buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
             packet.encode(buf);
+            int bytes = buf.readableBytes();
             Services.NETWORK_MANAGER.sendChunkHashPacket(player, buf);
             sent = true;
+            NetworkStats.recordMetadataSent(bytes);
         } catch (Exception e) {
             Constants.LOG.error("[CHUNK_HASH] Failed to flush chunkHash batch to player {}",
                     player.getName().getString(), e);
@@ -371,13 +392,129 @@ public class ServerChunkPushManager {
     }
 
     /**
+     * 握手成功后补发玩家当前视距内已加载区块的 chunkHash。
+     * <p>
+     * 初始 {@code trackChunk}/{@code sendChunk} 往往发生在握手完成之前，
+     * 彼时 {@link PlayerCompressionTracker#isCompressionEnabled} 为 false，
+     * 拦截器放行原版包且不推 hash，导致客户端统计全 0、缓存主链路永不启动。
+     * 必须在主线程调用（读世界区块）。
+     */
+    public void resyncTrackedChunks(ServerPlayer player) {
+        if (player == null || !player.isAlive() || player.hasDisconnected()) {
+            return;
+        }
+        if (!PlayerCompressionTracker.isCompressionEnabled(player)) {
+            return;
+        }
+        if (!HassiumConfigService.getInstance().isNetworkCompressionEnabled()
+                || !HassiumConfigService.getInstance().isClientCacheEnabled()) {
+            return;
+        }
+
+        ensureInitialized();
+        ServerLevel level = PlayerCompat.getServerLevel(player);
+        if (level == null) {
+            return;
+        }
+
+        int viewDistance = PlayerCompat.getViewDistance(player);
+        // 与 ChunkMap 扫描余量一致，略扩一圈避免边界遗漏
+        int radius = Math.max(2, viewDistance + 1);
+        int centerX = player.chunkPosition().x;
+        int centerZ = player.chunkPosition().z;
+        String dimension = level.dimension()
+#if MC_VER < MC_1_21_11
+                .location()
+#else
+                .identifier()
+#endif
+                .toString();
+
+        // 收集所有需要补发的 pos，入队待分批处理（避免一次性提交数百个任务卡住主线程）
+        Deque<ResyncEntry> queue = new ArrayDeque<>();
+        for (int dx = -radius; dx <= radius; dx++) {
+            for (int dz = -radius; dz <= radius; dz++) {
+                if (!isServerChunkInRange(centerX + dx, centerZ + dz, centerX, centerZ, viewDistance)) {
+                    continue;
+                }
+                queue.add(new ResyncEntry(new ChunkPos(centerX + dx, centerZ + dz), dimension));
+            }
+        }
+        if (!queue.isEmpty()) {
+            pendingResync.put(player.getUUID(), queue);
+            Constants.LOG.info("Hassium: Queued {} chunkHashes for resync (player={}, vd={}, perTick={})",
+                    queue.size(), player.getName().getString(), viewDistance, RESYNC_PER_TICK);
+        }
+    }
+
+    /**
+     * 每 tick 分批补发 resync 队列：每玩家最多 RESYNC_PER_TICK 个。
+     * 在主线程调用（getChunkNow 读世界区块）。
+     */
+    private void drainPendingResync(net.minecraft.server.MinecraftServer server) {
+        if (pendingResync.isEmpty()) {
+            return;
+        }
+        try {
+            for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+                Deque<ResyncEntry> queue = pendingResync.get(player.getUUID());
+                if (queue == null || queue.isEmpty()) {
+                    continue;
+                }
+                ServerLevel level = PlayerCompat.getServerLevel(player);
+                if (level == null) {
+                    continue;
+                }
+                int processed = 0;
+                int skipped = 0;
+                while (!queue.isEmpty() && processed < RESYNC_PER_TICK) {
+                    ResyncEntry entry = queue.poll();
+                    // chunk 可能已被卸载；getChunkNow 返回 null 时跳过
+                    LevelChunk chunk = level.getChunkSource().getChunkNow(entry.pos().x, entry.pos().z);
+                    if (chunk == null) {
+                        skipped++;
+                        continue;
+                    }
+                    submitMetadataTaskFromChunk(player, entry.pos(), chunk, entry.dimension());
+                    processed++;
+                }
+                if (processed > 0) {
+                    Constants.LOG.info("Hassium: Resync drain for {} — submitted {}, skipped {}, remaining {}",
+                            player.getName().getString(), processed, skipped, queue.size());
+                }
+                if (queue.isEmpty()) {
+                    pendingResync.remove(player.getUUID());
+                }
+            }
+            // 清理已离线玩家的队列
+            pendingResync.keySet().removeIf(id -> server.getPlayerList().getPlayer(id) == null);
+        } catch (Exception e) {
+            Constants.LOG.error("Hassium: drainPendingResync failed", e);
+        }
+    }
+
+    /**
+     * 与原版 {@code ChunkMap.isChunkInRange} 一致的视距判定（圆柱近似）。
+     */
+    private static boolean isServerChunkInRange(int chunkX, int chunkZ, int centerX, int centerZ, int viewDistance) {
+        int dx = Math.max(0, Math.abs(chunkX - centerX) - 1);
+        int dz = Math.max(0, Math.abs(chunkZ - centerZ) - 1);
+        long outer = Math.max(0, Math.max(dx, dz) - 1);
+        long inner = Math.min(dx, dz);
+        long distSq = inner * inner + outer * outer;
+        long limit = (long) viewDistance * (long) viewDistance;
+        return distSq < limit;
+    }
+
+    /**
      * 服务端每 tick：冲刷到期 hash 批次 + 按 tick 限流序列化数据请求。
      */
     public void onServerTick(net.minecraft.server.MinecraftServer server) {
         if (server == null) {
             return;
         }
-        if (!initialized.get() && dataQueues.isEmpty() && hashBatches.isEmpty()) {
+        // 注意：pendingResync 也需要 onServerTick 来 drain，必须加入条件判断
+        if (!initialized.get() && dataQueues.isEmpty() && hashBatches.isEmpty() && pendingResync.isEmpty()) {
             return;
         }
         ensureInitialized();
@@ -387,6 +524,9 @@ public class ServerChunkPushManager {
             flushPlayerHashBatchIfDue(player, now);
             drainPlayerQueueTick(player);
         }
+
+        // 分批补发握手后 resync 队列（每 tick 最多 RESYNC_PER_TICK 个/玩家）
+        drainPendingResync(server);
 
         // 清理已离线玩家的批次
         hashBatches.keySet().removeIf(id -> server.getPlayerList().getPlayer(id) == null);
@@ -652,26 +792,38 @@ public class ServerChunkPushManager {
                 playerId, k -> new PriorityBlockingQueue<>(100, Comparator.comparingDouble(DataRequestTask::priority))
         );
 
-        // 限制队列大小，防止内存溢出
-        int maxQueueSize = 500;
-        if (queue.size() + chunks.size() > maxQueueSize) {
-            Constants.LOG.warn("[ENQUEUE_DATA] Queue too large for player {} ({} + {} > {}), dropping request",
-                    player.getName().getString(), queue.size(), chunks.size(), maxQueueSize);
+        // 限制队列大小，防止内存溢出；超限时按距离只填剩余容量，勿整批丢弃
+        int maxQueueSize = 2048;
+        int room = maxQueueSize - queue.size();
+        if (room <= 0) {
+            Constants.LOG.warn("[ENQUEUE_DATA] Queue full for player {} (size={}, max={}), dropping {} chunks",
+                    player.getName().getString(), queue.size(), maxQueueSize, chunks.size());
             return;
         }
 
         double playerChunkX = player.getX() / 16.0;
         double playerChunkZ = player.getZ() / 16.0;
 
+        List<DataRequestTask> tasks = new ArrayList<>(chunks.size());
         for (ChunkPos pos : chunks) {
             double dx = pos.x - playerChunkX;
             double dz = pos.z - playerChunkZ;
             double distance = Math.sqrt(dx * dx + dz * dz);
-            queue.offer(new DataRequestTask(pos, dimension, distance));
+            tasks.add(new DataRequestTask(pos, dimension, distance));
+        }
+        if (tasks.size() > room) {
+            tasks.sort(Comparator.comparingDouble(DataRequestTask::priority));
+            int dropped = tasks.size() - room;
+            tasks = tasks.subList(0, room);
+            Constants.LOG.warn("[ENQUEUE_DATA] Queue near limit for player {} ({} + {} > {}), queued nearest {} dropped {}",
+                    player.getName().getString(), queue.size(), chunks.size(), maxQueueSize, room, dropped);
+        }
+        for (DataRequestTask task : tasks) {
+            queue.offer(task);
         }
 
         DebugLogger.info(LogType.NETWORK, "[ENQUEUE_DATA] Player {} queued {} chunks (queueSize={}, playerPos=({}, {}))",
-                player.getName().getString(), chunks.size(), queue.size(), playerChunkX, playerChunkZ);
+                player.getName().getString(), tasks.size(), queue.size(), playerChunkX, playerChunkZ);
         // 实际 drain 由 onServerTick 按真实每 tick 上限处理，避免连环 submit 卡主线程
     }
 
@@ -928,6 +1080,7 @@ public class ServerChunkPushManager {
         processingFlags.remove(playerId);
         hashBatches.remove(playerId);
         preparedChunkPackets.remove(playerId);
+        pendingResync.remove(playerId);
     }
 
     /**
@@ -938,6 +1091,7 @@ public class ServerChunkPushManager {
         processingFlags.clear();
         hashBatches.clear();
         preparedChunkPackets.clear();
+        pendingResync.clear();
         if (pushPool != null) {
             pushPool.shutdownNow();
         }

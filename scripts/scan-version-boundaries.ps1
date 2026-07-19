@@ -3,6 +3,7 @@
 $AllowedBoundaries = @(
     'MC_1_20_1',  # 基准（注释 / 偶发比较）
     'MC_1_20_2',
+    'MC_1_20_4',  # NeoForge 网络技术断层：1.20.4 移除 SimpleChannel
     'MC_1_20_5',
     'MC_1_21_1',
     'MC_1_21_2',

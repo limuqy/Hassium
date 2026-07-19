@@ -194,17 +194,13 @@ public class ClientMetadataHandler {
      * 将 chunkHash 比对提交到后台或同步执行。
      */
     private static void dispatchChunkHashCompare(ClientHassiumStorage storage, ChunkHashS2CPacket packet) {
-        HassiumTaskExecutor executor = HassiumTaskExecutor.getClient();
-        if (executor != null && executor.isRunning()) {
-            final ClientHassiumStorage finalStorage = storage;
-            executor.submitAndCallback(() ->
-                    compareChunkHashes(finalStorage, packet),
-                    result -> applyChunkHashResult(result, packet.dimension()),
-                    TaskCategory.BEST_EFFORT);
-        } else {
-            ChunkHashResult result = compareChunkHashes(storage, packet);
-            applyChunkHashResult(result, packet.dimension());
-        }
+        // 同步执行比对：compareChunkHashes 是纯内存操作（readChunkHash 查 Bloom Filter +
+        // SectionHashStore，均在内存），不阻塞主线程。
+        // 不能提交到 HassiumTaskExecutor：进服时超视渲染会提交数千个 processNextTask
+        // （缓存加载）任务到同一 executor，chunkHash 比对任务被淹没导致延迟十数秒，
+        // serverVD 内区块无法及时加载（用户看到"脚下10区块加载后等10秒才继续"）。
+        ChunkHashResult result = compareChunkHashes(storage, packet);
+        applyChunkHashResult(result, packet.dimension());
     }
 
     /**

@@ -178,7 +178,6 @@ public final class HassiumTomlConfigIO {
                         clientNet.maxCallbacksPerFrame,
                         commonNet.metricsEnabled,
                         clientNet.mainThreadChunkBudgetMs,
-                        clientNet.maxLightRecomputePerFrame,
                         commonNet.dynamicThreadPoolEnabled,
                         commonNet.minPushThreads,
                         commonNet.maxPushThreads
@@ -208,7 +207,8 @@ public final class HassiumTomlConfigIO {
                 getBool(cfg, "clientCache.viewDistanceExtensionEnabled", d.viewDistanceExtensionEnabled()),
                 getInt(cfg, "clientCache.maxRenderDistance", d.maxRenderDistance()),
                 getInt(cfg, "clientCache.ovdUnloadDelaySecs", d.ovdUnloadDelaySecs()),
-                getBool(cfg, "clientCache.sectionDeltaEnabled", d.sectionDeltaEnabled())
+                getBool(cfg, "clientCache.sectionDeltaEnabled", d.sectionDeltaEnabled()),
+                getBool(cfg, "clientCache.joinBoostEnabled", d.joinBoostEnabled())
         );
     }
 
@@ -231,6 +231,8 @@ public final class HassiumTomlConfigIO {
         set(cfg, "clientCache.ovdUnloadDelaySecs", c.ovdUnloadDelaySecs(), "离开超视渲染环带后延迟卸载秒数");
         set(cfg, "clientCache.sectionDeltaEnabled", c.sectionDeltaEnabled(),
                 "=== 分段增量 ===\n缓存过期时是否走分段增量（默认 true；依赖 clientCache.enabled）");
+        set(cfg, "clientCache.joinBoostEnabled", c.joinBoostEnabled(),
+                "=== JoinBoost ===\n进服后短时提高主线程预算加速加载（默认 true）");
     }
 
     private static ClientNet readClientNetwork(CommentedConfig cfg) {
@@ -241,8 +243,7 @@ public final class HassiumTomlConfigIO {
                 getInt(cfg, "network.backgroundThreads", d.backgroundThreads),
                 getInt(cfg, "network.maxChunksPerFrame", d.maxChunksPerFrame),
                 getInt(cfg, "network.maxCallbacksPerFrame", d.maxCallbacksPerFrame),
-                getInt(cfg, "network.mainThreadChunkBudgetMs", d.mainThreadChunkBudgetMs),
-                getInt(cfg, "network.maxLightRecomputePerFrame", d.maxLightRecomputePerFrame)
+                getInt(cfg, "network.mainThreadChunkBudgetMs", d.mainThreadChunkBudgetMs)
         );
     }
 
@@ -253,7 +254,6 @@ public final class HassiumTomlConfigIO {
         set(cfg, "network.maxChunksPerFrame", n.maxChunksPerFrame, "=== 主线程限流 ===\n每帧应用缓存区块硬顶");
         set(cfg, "network.maxCallbacksPerFrame", n.maxCallbacksPerFrame, "每帧异步回调硬顶");
         set(cfg, "network.mainThreadChunkBudgetMs", n.mainThreadChunkBudgetMs, "主线程 apply 预算（ms）");
-        set(cfg, "network.maxLightRecomputePerFrame", n.maxLightRecomputePerFrame, "每帧最多重算光照区块数");
     }
 
     // --- COMMON ---
@@ -423,8 +423,7 @@ public final class HassiumTomlConfigIO {
             int backgroundThreads,
             int maxChunksPerFrame,
             int maxCallbacksPerFrame,
-            int mainThreadChunkBudgetMs,
-            int maxLightRecomputePerFrame
+            int mainThreadChunkBudgetMs
     ) {
         static final ClientNet DEFAULT = from(HassiumConfig.NetworkConfig.DEFAULT);
 
@@ -435,8 +434,7 @@ public final class HassiumTomlConfigIO {
                     n.backgroundThreads(),
                     n.maxChunksPerFrame(),
                     n.maxCallbacksPerFrame(),
-                    n.mainThreadChunkBudgetMs(),
-                    n.maxLightRecomputePerFrame()
+                    n.mainThreadChunkBudgetMs()
             );
         }
     }

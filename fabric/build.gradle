@@ -23,6 +23,7 @@ dependencies {
     include "com.electronwill.night-config:toml:3.6.7"
 
     // ConfigSpec：仅编译期（HassiumConfigSpec 随 common 源码编译；运行时不加载、不 jiJ FCAP）
+    // 1.20.1：ForgeConfigSpec via fabric 制品；1.20.2+：ModConfigSpec via common-neoforgeapi
     if (gradle.ext.has('forge_config_api_port_version')) {
         def fcapVer = gradle.ext.forge_config_api_port_version
         def artifact = gradle.ext.has('forge_config_api_port_common_artifact')

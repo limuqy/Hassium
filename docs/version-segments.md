@@ -19,7 +19,8 @@
 
 | 分界常量 | common 变因 | fabric 特有 | forge 特有 | neoforge 特有 |
 |----------|-------------|-------------|------------|---------------|
-| `MC_1_20_2` | `onDisconnect` 上移、`CustomPayload` 包路径、`createPacket` | — | 旧 `newSimpleChannel` 断；1.20.6+ 用 `ChannelBuilder` | forge→neoforge 包名；仍用 SimpleChannel + `PlayNetworkDirection`（非 StreamCodec） |
+| `MC_1_20_2` | `onDisconnect` 上移、`CustomPayload` 包路径、`createPacket` | — | 旧 `newSimpleChannel` 断；1.20.6+ 用 `ChannelBuilder` | forge→neoforge 包名；1.20.2/1.20.3 仍用 SimpleChannel + `PlayNetworkDirection`（非 StreamCodec） |
+| `MC_1_20_4` | —（仅 NeoForge 网络子分界） | — | — | **NeoForge 20.4 移除 SimpleChannel**：改用 `RegisterPayloadHandlerEvent`（注意 1.20.5+ 改名 `RegisterPayloadHandlersEvent`） + `CustomPacketPayload.write/id`（无 StreamCodec / Type\<T\>） |
 | `MC_1_20_5` | `Packet.write()` 移除、`BlockEntity.load()` 移除、`getPacketsByIds` 移除 | 网络改 StreamCodec | ChunkPacket STREAM_CODEC（若构建） | Payload + StreamCodec（`RegisterPayloadHandlersEvent`） |
 | `MC_1_21_1` | `Component` → `DisconnectionDetails`；RL 构造私有化；`GameProtocols.CLIENTBOUND/SERVERBOUND` → `*_TEMPLATE`；`ChunkHolder.pos` 上移至 `GenerationChunkHolder`；`ProtocolInfo.Unbound.listPackets` | — | — | — |
 | `MC_1_21_2` | `ChunkSerializer` → `SerializableChunkData`、`registryOrThrow` → `lookupOrThrow` | — | — | — |
@@ -34,6 +35,7 @@
 
 ```
 MC_1_20_2
+MC_1_20_4
 MC_1_20_5
 MC_1_21_1
 MC_1_21_2
@@ -47,6 +49,8 @@ MC_1_21_11
 
 历史遗留：代码中偶见 `MC_1_21_4`（与 `MC_1_21_5` 等价边界）。新代码禁止新增；清扫时统一为 `MC_1_21_5`。
 
+> **关于 `MC_1_20_4`**：这是 NeoForge 网络子系统在段 B 内的**子分界**（仅影响 neoforge 模块）。NeoForge 20.4 移除 SimpleChannel，1.20.4 必须改用 `RegisterPayloadHandlerEvent` + `CustomPacketPayload.write/id`；段 B 的其它版本（1.20.2/1.20.3）仍走 SimpleChannel。引入此子分界是技术必要，非"碎片边界"。
+
 ---
 
 ## 九段 × 锚点
@@ -54,7 +58,7 @@ MC_1_21_11
 | 段 | 锚点（必编 / 必测） | 段内其余版本 | 进入本段后的关键变化 |
 |----|---------------------|--------------|----------------------|
 | A | **1.20.1** | — | 基准：旧网络 + 全部旧 API |
-| B | **1.20.2** | 1.20.3, 1.20.4 | CustomPayload / NeoForge 包名；段内无 Forge builds_for |
+| B | **1.20.2** | 1.20.3 | CustomPayload / NeoForge 包名；段内无 Forge builds_for。NeoForge 1.20.4 因移除 SimpleChannel 走独立子分界 `MC_1_20_4`（见上） |
 | C | **1.20.5** | 1.20.6 | StreamCodec；`Packet.write` 等移除（无 1.21.0 属性文件时以 1.20.6 为段尾） |
 | D | **1.21.1** | — | `DisconnectionDetails`；RL 构造私有化；`GameProtocols.*_TEMPLATE` |
 | E | **1.21.2** | 1.21.3, 1.21.4 | `SerializableChunkData`、`lookupOrThrow` |
@@ -112,10 +116,15 @@ MC_1_21_11
 |------|------|
 | 1.20.1 | 现有实现（Fabric 已测通） |
 | 1.20.2 | CustomPayload 路径；段内无 Forge；1.20.6+ Forge 用 ChannelBuilder play() |
+| 1.20.4 | **仅 NeoForge**：SimpleChannel 被移除，改用 `RegisterPayloadHandlerEvent` + `CustomPacketPayload.write/id`（1.20.5+ 才有 StreamCodec） |
 | 1.20.5 | STREAM_CODEC / `type()`；聚合写包、原版包枚举等 common 能力 |
 | 其后 | 多为 common API；网络协议少变 |
 
-加载器内网络适配器允许 **≤3 个整段实现块**（`<1.20.2` / `1.20.2–1.20.4` / `≥1.20.5`），禁止每个 send/receive 再套一层碎片 `#if`。
+加载器内网络适配器允许整段实现块：
+- **NeoForge**：4 段（`<1.20.2` / `1.20.2–1.20.3` / `1.20.4` / `≥1.20.5`）
+- **Fabric / Forge**：3 段（`<1.20.2` / `1.20.2–1.20.4` / `≥1.20.5`）
+
+禁止每个 send/receive 再套一层碎片 `#if`。
 
 ### 功能门控（段 C 已完成）
 

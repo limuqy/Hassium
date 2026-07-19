@@ -73,9 +73,10 @@ public class HassiumCommandHandler {
 
         ViewDistanceExtensionService ovd = ViewDistanceExtensionService.getInstance();
         String ovdLine = String.format(
-                "§e超视渲染:§r %s  loaded=%d pendingMiss=%d missTotal=%d retry=%d forgetRetain=%d unloadSub=%d",
+                "§e超视渲染:§r %s  loaded=%d pendingLoad=%d pendingMiss=%d missTotal=%d retry=%d forgetRetain=%d unloadSub=%d",
                 ovd.isEnabled() ? "§aon§r" : "§7off§r",
                 ovd.getLoadedCount(),
+                ovd.getPendingLoadCount(),
                 ovd.getPendingMissCount(),
                 ovd.getMissTotal(),
                 ovd.getRetryTotal(),

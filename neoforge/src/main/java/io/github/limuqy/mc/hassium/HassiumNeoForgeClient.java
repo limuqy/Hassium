@@ -1,7 +1,7 @@
 package io.github.limuqy.mc.hassium;
 
-import io.github.limuqy.mc.hassium.network.ClientChunkHandler;
-import io.github.limuqy.mc.hassium.network.ClientMetadataHandler;
+import io.github.limuqy.mc.hassium.cache.client.ClientLifecycleHelper;
+import io.github.limuqy.mc.hassium.client.ClientSmokeTest;
 import io.github.limuqy.mc.hassium.network.DictionaryManager;
 import io.github.limuqy.mc.hassium.network.NeoForgeNetworkManager;
 import org.slf4j.Logger;
@@ -56,6 +56,8 @@ public class HassiumNeoForgeClient {
      */
     @SubscribeEvent
     public static void onClientSetup(FMLClientSetupEvent event) {
+        ClientSmokeTest.initIfEnabled();
+
         // 加载内置区块字典
         DictionaryManager.loadChunkDictionary();
 
@@ -107,15 +109,8 @@ public class HassiumNeoForgeClient {
          */
         @SubscribeEvent
         public void onPlayerLoggedOut(ClientPlayerNetworkEvent.LoggingOut event) {
-            var storage = ClientChunkHandler.getClientStorage();
-            if (storage != null) {
-                storage.close();
-            }
-            ClientChunkHandler.resetStorage();
-            // 立即清空 pending hash/delta，避免 Mixin onDisconnect 触发前的
-            // tick 窗口期被 tickPendingHashGate 触发向已关闭连接发包
-            ClientMetadataHandler.clearPendingState();
-            LOGGER.info("Hassium: Client disconnected, cache cleaned up");
+            // 统一走 ClientLifecycleHelper.cleanupOnDisconnect（与 Fabric / Forge 一致）
+            ClientLifecycleHelper.cleanupOnDisconnect();
         }
     }
 }

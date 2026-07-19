@@ -86,6 +86,9 @@ public final class HassiumClothConfigScreen {
         clientCache.addEntry(bool(entries, "hassium.configuration.clientCache.sectionDeltaEnabled",
                 draft.cacheSectionDeltaEnabled, dCache.sectionDeltaEnabled(),
                 v -> draft.cacheSectionDeltaEnabled = v));
+        clientCache.addEntry(bool(entries, "hassium.configuration.clientCache.joinBoostEnabled",
+                draft.cacheJoinBoostEnabled, dCache.joinBoostEnabled(),
+                v -> draft.cacheJoinBoostEnabled = v));
 
         ConfigCategory clientNetwork = builder.getOrCreateCategory(
                 Component.translatable("hassium.configuration.clientNetwork"));
@@ -103,9 +106,6 @@ public final class HassiumClothConfigScreen {
         clientNetwork.addEntry(intRange(entries, "hassium.configuration.clientNetwork.mainThreadChunkBudgetMs",
                 draft.mainThreadChunkBudgetMs, dNet.mainThreadChunkBudgetMs(), 1, 50,
                 v -> draft.mainThreadChunkBudgetMs = v));
-        clientNetwork.addEntry(intRange(entries, "hassium.configuration.clientNetwork.maxLightRecomputePerFrame",
-                draft.maxLightRecomputePerFrame, dNet.maxLightRecomputePerFrame(), 1, 256,
-                v -> draft.maxLightRecomputePerFrame = v));
 
         ConfigCategory storage = builder.getOrCreateCategory(
                 Component.translatable("hassium.configuration.storage"));
@@ -263,6 +263,7 @@ public final class HassiumClothConfigScreen {
         int cacheMaxRenderDistance;
         int cacheOvdUnloadDelaySecs;
         boolean cacheSectionDeltaEnabled;
+        boolean cacheJoinBoostEnabled;
 
         int clientChunkLoadThreads;
         boolean lightStripEnabled;
@@ -270,7 +271,6 @@ public final class HassiumClothConfigScreen {
         int maxChunksPerFrame;
         int maxCallbacksPerFrame;
         int mainThreadChunkBudgetMs;
-        int maxLightRecomputePerFrame;
 
         boolean storageEnabled;
         String storageMode;
@@ -331,6 +331,7 @@ public final class HassiumClothConfigScreen {
             d.cacheMaxRenderDistance = cache.maxRenderDistance();
             d.cacheOvdUnloadDelaySecs = cache.ovdUnloadDelaySecs();
             d.cacheSectionDeltaEnabled = cache.sectionDeltaEnabled();
+            d.cacheJoinBoostEnabled = cache.joinBoostEnabled();
 
             d.clientChunkLoadThreads = net.clientChunkLoadThreads();
             d.lightStripEnabled = net.lightStripEnabled();
@@ -338,7 +339,6 @@ public final class HassiumClothConfigScreen {
             d.maxChunksPerFrame = net.maxChunksPerFrame();
             d.maxCallbacksPerFrame = net.maxCallbacksPerFrame();
             d.mainThreadChunkBudgetMs = net.mainThreadChunkBudgetMs();
-            d.maxLightRecomputePerFrame = net.maxLightRecomputePerFrame();
 
             d.storageEnabled = storage.enabled();
             d.storageMode = storage.mode();
@@ -387,7 +387,7 @@ public final class HassiumClothConfigScreen {
                             cacheCleanupIntervalTicks, cacheTargetCacheSizeMb, cacheMinCleanupBatchSize,
                             cacheBloomFilterEnabled, cacheBloomFilterExpectedInsertions, cacheBloomFilterFpp,
                             cacheViewDistanceExtensionEnabled, cacheMaxRenderDistance, cacheOvdUnloadDelaySecs,
-                            cacheSectionDeltaEnabled
+                            cacheSectionDeltaEnabled, cacheJoinBoostEnabled
                     ),
                     new HassiumConfig.NetworkConfig(
                             networkEnabled, compressionLevel, maxChunksPerTick,
@@ -396,7 +396,7 @@ public final class HassiumClothConfigScreen {
                             aggregationMinBatchSize, aggregationMaxWaitTimeMs, aggregationMaxSize,
                             enableCompactHeader, serverChunkPushThreads, clientChunkLoadThreads,
                             lightStripEnabled, backgroundThreads, maxChunksPerFrame, maxCallbacksPerFrame,
-                            metricsEnabled, mainThreadChunkBudgetMs, maxLightRecomputePerFrame,
+                            metricsEnabled, mainThreadChunkBudgetMs,
                             dynamicThreadPoolEnabled, minPushThreads, maxPushThreads
                     ),
                     new HassiumConfig.CompatConfig(requireClientMod, autoDowngradeOnError),

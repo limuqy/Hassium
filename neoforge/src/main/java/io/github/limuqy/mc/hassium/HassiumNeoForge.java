@@ -34,7 +34,8 @@ import org.slf4j.LoggerFactory;
  * NeoForge 入口类
  * <p>
  * 1.20.1: NeoForge 仍使用 net.minecraftforge 包名 + SimpleChannel
- * 1.20.2–1.20.4: net.neoforged 包名 + SimpleChannel
+ * 1.20.2–1.20.3: net.neoforged 包名 + SimpleChannel
+ * 1.20.4: RegisterPayloadHandlerEvent + CustomPacketPayload.write/id（NeoForge 20.4 移除 SimpleChannel）
  * 1.20.5+: net.neoforged 包名 + Payload/StreamCodec
  */
 @Mod(Constants.MOD_ID)
@@ -69,11 +70,11 @@ public class HassiumNeoForge {
         ChunkSender.setInstance(NeoForgeNetworkManager::sendCompressedChunk);
         LOGGER.info("Hassium: ChunkSender registered for NeoForge");
 
-#if MC_VER < MC_1_20_5
+#if MC_VER < MC_1_20_4
         modEventBus.addListener(this::commonSetup);
 #else
         modEventBus.addListener(NeoForgeNetworkManager::registerPayloads);
-        LOGGER.info("Hassium: Registered NeoForge payload handlers for 1.20.5+");
+        LOGGER.info("Hassium: Registered NeoForge payload handlers");
 #endif
     }
 
@@ -89,7 +90,7 @@ public class HassiumNeoForge {
         }
     }
 
-#if MC_VER < MC_1_20_5
+#if MC_VER < MC_1_20_4
     private void commonSetup(FMLCommonSetupEvent event) {
         LOGGER.info("Hassium: Initializing NeoForge SimpleChannel network");
         NeoForgeNetworkManager networkManager = new NeoForgeNetworkManager();

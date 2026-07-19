@@ -13,13 +13,15 @@ dependencies {
     implementation 'com.electronwill.night-config:toml:3.6.7'
 
     // ConfigSpec API：common 独立编译用（Fuzs common / common-neoforgeapi）
+    // - 1.20.1：ForgeConfigSpec（FCAP fabric 或 Forge jar）
+    // - 1.20.2+：ModConfigSpec（FCAP common-neoforgeapi 或 NeoForge 原生）
     if (gradle.ext.has('forge_config_api_port_version')) {
         def fcapVer = gradle.ext.forge_config_api_port_version
         def artifact = gradle.ext.has('forge_config_api_port_common_artifact')
                 ? gradle.ext.forge_config_api_port_common_artifact
                 : 'common-neoforgeapi'
         compileOnly "fuzs.forgeconfigapiport:forgeconfigapiport-${artifact}:${fcapVer}"
-        // FCAP 20.2.x 的 common 为空壳，ForgeConfigSpec 只在 fabric 制品里
+        // 旧 artifact=common 为空壳：1.20.1 仍需 fabric 制品提供 ForgeConfigSpec
         if (artifact == 'common') {
             compileOnly "fuzs.forgeconfigapiport:forgeconfigapiport-fabric:${fcapVer}"
         }

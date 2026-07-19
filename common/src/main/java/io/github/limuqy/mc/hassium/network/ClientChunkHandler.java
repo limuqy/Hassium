@@ -292,7 +292,8 @@ public class ClientChunkHandler {
                 ClientMetadataHandler.onChunkApplied(pos);
             } else {
                 // 超视渲染：磁盘 NBT 无 LightData，本地重算避免黑块
-                ClientLightRecomputeService.schedule(pos);
+                // 合并 pipeline：同一主线程时间片内完成光照重算，避免跨帧黑块
+                ClientLightRecomputeService.applyLightEngineNow(pos);
                 ViewDistanceExtensionService.getInstance().onRenderOnlyApplied(pos);
             }
 

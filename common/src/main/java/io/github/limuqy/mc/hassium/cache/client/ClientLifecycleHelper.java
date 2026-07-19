@@ -57,6 +57,11 @@ public final class ClientLifecycleHelper {
      * 时序：flushAsync → cancelAll(SAFE_TO_CANCEL) → shutdownClient → clearClient
      * <p>
      * S2: flushAsync 替代同步 flush，避免主线程阻塞。
+     * <p>
+     * 三端 DISCONNECT 事件（Fabric ClientPlayConnectionEvents / NeoForge ClientPlayerNetworkEvent.LoggingOut /
+     * Forge 同事件）统一调用此方法，避免漏清 {@code initialized} 标志导致重连后
+     * {@code onLogin} early-return、{@code clientStorage} 保持 null、超视渲染全部跳过 enqueue。
+     * 幂等：storage 已关闭 / executor 已 shutdown 时再次调用安全。
      */
     public static void cleanupOnDisconnect() {
         initialized = false;
@@ -83,9 +88,18 @@ public final class ClientLifecycleHelper {
         ClientLightRecomputeService.clear();
 
         ClientMetadataHandler.clearPendingState();
+        // 关闭当前 storage（region / sectionHashStore）+ 共享热度索引；resetStorage 把 clientStorage 置 null
+        ClientHassiumStorage storage = ClientChunkHandler.getClientStorage();
+        if (storage != null) {
+            try {
+                storage.close();
+            } catch (Exception e) {
+                Constants.LOG.warn("Hassium: Failed to close client storage on disconnect", e);
+            }
+        }
         ClientHassiumStorage.closeSharedDatabase();
         ClientChunkHandler.resetStorage();
-        Constants.LOG.debug("Hassium: Cleared client cache state on disconnect");
+        Constants.LOG.info("Hassium: Client disconnected, cache cleaned up");
     }
 
     /**

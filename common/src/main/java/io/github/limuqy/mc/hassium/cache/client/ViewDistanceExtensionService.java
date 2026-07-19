@@ -16,6 +16,7 @@ import java.util.HashSet;
 import java.util.Iterator;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -52,25 +53,40 @@ public class ViewDistanceExtensionService {
      */
     private static final long STALE_LOADED_RECONCILE_MS = 2000L;
 
+    /**
+     * 超视渲染静默阈值：当权威区块加载队列（pending + ready）超过此值时，
+     * 暂停 renderOnly enqueue，优先保证 serverVD 内权威区块加载。
+     * 避免进服/飞行时超视渲染环带（数千区块）压垮 executor，导致 chunkHash 比对和
+     * 权威区块加载延迟。
+     */
+    private static final int OVD_LOAD_THRESHOLD = 128;
+
     public static ViewDistanceExtensionService getInstance() {
         return INSTANCE;
     }
 
-    /** 已加载 / 排队中的 renderOnly 区块 */
-    private final Set<ChunkPos> loadedRenderOnly = new HashSet<>();
+    /**
+     * 已成功 apply 到 ClientChunkCache 的 renderOnly 区块（真正「loaded」）。
+     * 仅排队、尚未命中缓存者不计入此集合，避免 stats loaded 虚高或 miss 后出现负语义。
+     * Concurrent：主线程 enqueue/apply 与工作线程 onRenderOnlyMiss 并发访问。
+     */
+    private final Set<ChunkPos> loadedRenderOnly = ConcurrentHashMap.newKeySet();
+
+    /** 已 enqueue 等待磁盘加载的 renderOnly 区块（与 loaded 互斥） */
+    private final Set<ChunkPos> pendingRenderOnly = ConcurrentHashMap.newKeySet();
 
     /**
      * miss 退避：pos → 下次允许重试的 epoch ms。
-     * 与 loadedRenderOnly 互斥（miss 后从 loaded 移除，登记到此 map）。
+     * 与 loaded/pending 互斥（miss 后从两者移除，登记到此 map）。
      */
-    private final Map<ChunkPos, Long> missRetryAt = new HashMap<>();
+    private final Map<ChunkPos, Long> missRetryAt = new ConcurrentHashMap<>();
     /** miss 次数：pos → count */
-    private final Map<ChunkPos, Integer> missRetryCount = new HashMap<>();
+    private final Map<ChunkPos, Integer> missRetryCount = new ConcurrentHashMap<>();
     /**
      * 离开环带后的延迟卸载：pos → 到期 epoch ms。
-     * 仍在 loadedRenderOnly 中，避免高速移动时反复 drop/load 闪虚空。
+     * 仍在 loaded 中，避免高速移动时反复 drop/load 闪虚空。
      */
-    private final Map<ChunkPos, Long> delayedUnloadAt = new HashMap<>();
+    private final Map<ChunkPos, Long> delayedUnloadAt = new ConcurrentHashMap<>();
 
     private ChunkPos lastPlayerPos = null;
     private int lastServerVD = -1;
@@ -111,7 +127,33 @@ public class ViewDistanceExtensionService {
      * 供 {@link CacheSaveQueue} 在卸载时短路：renderOnly 区块不写回缓存，保留历史快照。
      */
     public boolean isRenderOnly(ChunkPos pos) {
-        return pos != null && loadedRenderOnly.contains(pos);
+        return pos != null && (loadedRenderOnly.contains(pos) || pendingRenderOnly.contains(pos));
+    }
+
+    /**
+     * 与原版 {@code ChunkMap.isChunkInRange} / 服务端 {@code ServerChunkPushManager.isServerChunkInRange}
+     * 一致的视距判定（圆角方形近似）。
+     * <p>
+     * 必须使用此算法而非欧氏距离，否则会把服务器实际推送的边界区块（如 vd=6 时的 [6, ±1]、[6, ±2]、
+     * [±1, 6]、[±2, 6]）误判为超视距，导致先 apply renderOnly 历史快照、再被服务器真实数据覆盖，
+     * 表现为「闪烁跳变」与边界虚空。
+     */
+    private static boolean isChunkInServerRange(int dx, int dz, int serverVD) {
+        int adx = Math.max(0, Math.abs(dx) - 1);
+        int adz = Math.max(0, Math.abs(dz) - 1);
+        long outer = Math.max(0, Math.max(adx, adz) - 1);
+        long inner = Math.min(adx, adz);
+        long distSq = inner * inner + outer * outer;
+        long limit = (long) serverVD * (long) serverVD;
+        return distSq < limit;
+    }
+
+    /**
+     * 客户端渲染范围判定（切比雪夫 / 方形，与原版 ViewArea 一致）。
+     * {@code Options.renderDistance} 直接作为方形半径，{@code Math.max(|dx|,|dz|) <= clientVD} 即在渲染范围内。
+     */
+    private static boolean isChunkInClientRange(int dx, int dz, int clientVD) {
+        return Math.abs(dx) <= clientVD && Math.abs(dz) <= clientVD;
     }
 
     /**
@@ -132,10 +174,10 @@ public class ViewDistanceExtensionService {
             return false;
         }
         ChunkPos playerPos = mc.player.chunkPosition();
-        double dx = pos.x - playerPos.x;
-        double dz = pos.z - playerPos.z;
-        double dist = Math.sqrt(dx * dx + dz * dz);
-        return dist > serverVD && dist <= clientVD;
+        int dx = pos.x - playerPos.x;
+        int dz = pos.z - playerPos.z;
+        // 超视距环带 = 不在服务器推送范围内 && 仍在客户端渲染范围内
+        return !isChunkInServerRange(dx, dz, serverVD) && isChunkInClientRange(dx, dz, clientVD);
     }
 
     /**
@@ -221,6 +263,8 @@ public class ViewDistanceExtensionService {
                 delayedUnloadAt.putIfAbsent(pos, now + delayMs);
             }
         }
+        // 离开环带的 pending：取消排队登记（避免 stats/ isRenderOnly 假阳性）
+        pendingRenderOnly.removeIf(p -> !needed.contains(p));
         // 重新进入环带：取消待卸载
         for (ChunkPos pos : needed) {
             delayedUnloadAt.remove(pos);
@@ -235,9 +279,26 @@ public class ViewDistanceExtensionService {
             }
         }
 
-        // 加载新的 renderOnly（跳过已有真实区块 / 已排队 / 未到期 miss）
+        // 加载新的 renderOnly（跳过已 apply / 已排队 / 未到期 miss）
+        // 负载高时静默：优先保证 serverVD 内权威区块（chunkHash 比对后的缓存加载），
+        // 避免超视渲染环带（数千区块）压垮 executor 导致权威区块延迟。
+        // JoinBoost 窗口内（进服 5s）暂停限制：让超视距环带立即 enqueue，与权威区块并行加载，
+        // 避免进服时环带空洞与不连贯。权威区块距离玩家更近（serverVD 内），PriorityBlockingQueue
+        // 按距离排序会优先出队，不会被 renderOnly 饿死。
+        // 不更新 lastPlayerPos → 下一 tick geometryChanged 仍为 true → 自动重试。
+        if (!ClientMainThreadBudget.isJoinBoostActive()) {
+            int pendingLoad = ClientCacheLoadQueue.getInstance().getPendingSize()
+                    + ClientCacheLoadQueue.getInstance().getReadySize();
+            if (pendingLoad > OVD_LOAD_THRESHOLD) {
+                Constants.LOG.debug("Hassium: OVD paused (pendingLoad={}, threshold={}), waiting for authority chunks",
+                        pendingLoad, OVD_LOAD_THRESHOLD);
+                return;
+            }
+        }
+
         Set<ChunkPos> toLoad = new HashSet<>(needed);
         toLoad.removeAll(loadedRenderOnly);
+        toLoad.removeAll(pendingRenderOnly);
         for (ChunkPos pos : toLoad) {
             Long retryAt = missRetryAt.get(pos);
             if (retryAt != null && System.currentTimeMillis() < retryAt) {
@@ -267,11 +328,10 @@ public class ViewDistanceExtensionService {
         }
         for (ChunkPos pos : due) {
             delayedUnloadAt.remove(pos);
-            double dx = pos.x - playerPos.x;
-            double dz = pos.z - playerPos.z;
-            double dist = Math.sqrt(dx * dx + dz * dz);
+            int dx = pos.x - playerPos.x;
+            int dz = pos.z - playerPos.z;
             // 到期时若又回到环带则保留
-            if (dist > serverVD && dist <= clientVD) {
+            if (!isChunkInServerRange(dx, dz, serverVD) && isChunkInClientRange(dx, dz, clientVD)) {
                 continue;
             }
             unloadRenderOnlyChunk(pos);
@@ -297,10 +357,9 @@ public class ViewDistanceExtensionService {
         ClientChunkCache cache = ((ClientLevelAccessor) level).hassium$getChunkSource();
         Set<ChunkPos> stale = new HashSet<>();
         for (ChunkPos pos : loadedRenderOnly) {
-            double dx = pos.x - playerPos.x;
-            double dz = pos.z - playerPos.z;
-            double dist = Math.sqrt(dx * dx + dz * dz);
-            if (dist <= serverVD || dist > clientVD) {
+            int dx = pos.x - playerPos.x;
+            int dz = pos.z - playerPos.z;
+            if (isChunkInServerRange(dx, dz, serverVD) || !isChunkInClientRange(dx, dz, clientVD)) {
                 continue;
             }
             if (!cache.hasChunk(pos.x, pos.z)) {
@@ -328,10 +387,9 @@ public class ViewDistanceExtensionService {
             }
         }
         for (ChunkPos pos : due) {
-            double dx = pos.x - playerPos.x;
-            double dz = pos.z - playerPos.z;
-            double dist = Math.sqrt(dx * dx + dz * dz);
-            if (dist <= serverVD || dist > clientVD) {
+            int dx = pos.x - playerPos.x;
+            int dz = pos.z - playerPos.z;
+            if (isChunkInServerRange(dx, dz, serverVD) || !isChunkInClientRange(dx, dz, clientVD)) {
                 missRetryAt.remove(pos);
                 missRetryCount.remove(pos);
                 continue;
@@ -339,6 +397,11 @@ public class ViewDistanceExtensionService {
             Integer count = missRetryCount.getOrDefault(pos, 0);
             if (count >= MISS_RETRY_MAX_COUNT) {
                 // 保留登记但不无限打盘；storageReady / RD 变化会清表
+                continue;
+            }
+            if (loadedRenderOnly.contains(pos) || pendingRenderOnly.contains(pos)) {
+                missRetryAt.remove(pos);
+                missRetryCount.remove(pos);
                 continue;
             }
             missRetryAt.remove(pos);
@@ -383,9 +446,9 @@ public class ViewDistanceExtensionService {
         Set<ChunkPos> chunks = new HashSet<>();
         for (int dx = -clientVD; dx <= clientVD; dx++) {
             for (int dz = -clientVD; dz <= clientVD; dz++) {
-                double dist = Math.sqrt(dx * dx + dz * dz);
-                if (dist > clientVD) continue;
-                if (dist <= serverVD) continue;
+                // 形状与服务器实际推送范围一致：避免边界区块误判为超视距导致闪烁
+                if (isChunkInServerRange(dx, dz, serverVD)) continue;
+                if (!isChunkInClientRange(dx, dz, clientVD)) continue;
                 chunks.add(new ChunkPos(playerPos.x + dx, playerPos.z + dz));
             }
         }
@@ -417,8 +480,10 @@ public class ViewDistanceExtensionService {
         double dx = pos.x - (mc.player.getX() / 16.0);
         double dz = pos.z - (mc.player.getZ() / 16.0);
         double priority = Math.sqrt(dx * dx + dz * dz);
+        // 仅 pending；apply 成功后再进 loaded，避免 miss 后 loaded 语义错误 / 负向感知
+        pendingRenderOnly.add(pos);
+        loadedRenderOnly.remove(pos);
         ClientCacheLoadQueue.getInstance().enqueue(pos, priority, true);
-        loadedRenderOnly.add(pos);
         delayedUnloadAt.remove(pos);
         // 重试路径：清掉旧 miss 时间戳，保留 count 供下次 miss 退避
         missRetryAt.remove(pos);
@@ -464,6 +529,7 @@ public class ViewDistanceExtensionService {
             // 落盘必须在标 renderOnly 之前（CacheSaveQueue 对 renderOnly 短路）
             CacheSaveQueue.getInstance().enqueue(chunk);
 
+            pendingRenderOnly.remove(pos);
             loadedRenderOnly.add(pos);
             delayedUnloadAt.remove(pos);
             missRetryAt.remove(pos);
@@ -521,6 +587,7 @@ public class ViewDistanceExtensionService {
                 return false;
             }
 
+            pendingRenderOnly.remove(pos);
             loadedRenderOnly.add(pos);
             delayedUnloadAt.remove(pos);
             missRetryAt.remove(pos);
@@ -550,20 +617,23 @@ public class ViewDistanceExtensionService {
         ClientLevel level = mc.level;
         if (level == null) {
             loadedRenderOnly.remove(pos);
+            pendingRenderOnly.remove(pos);
             missRetryAt.remove(pos);
             missRetryCount.remove(pos);
             return;
         }
         IClientLevelExtension accessor = (IClientLevelExtension) level;
         // 仅 drop 当前仍标为 renderOnly 的块；真实区块留给 vanilla Forget 路径
-        if (accessor.hassium$isRenderOnly(pos) || loadedRenderOnly.contains(pos)) {
+        if (accessor.hassium$isRenderOnly(pos) || loadedRenderOnly.contains(pos) || pendingRenderOnly.contains(pos)) {
             // 先清标记，避免 drop→unload 再触发 substitute / 写盘短路误判
             accessor.hassium$removeRenderOnlyChunk(pos);
             loadedRenderOnly.remove(pos);
+            pendingRenderOnly.remove(pos);
             dropChunkFromClientCache(level, pos);
         } else {
             accessor.hassium$removeRenderOnlyChunk(pos);
             loadedRenderOnly.remove(pos);
+            pendingRenderOnly.remove(pos);
         }
         missRetryAt.remove(pos);
         missRetryCount.remove(pos);
@@ -572,8 +642,12 @@ public class ViewDistanceExtensionService {
     private void dropChunkFromClientCache(ClientLevel level, ChunkPos pos) {
         try {
             ClientChunkCache cache = ((ClientLevelAccessor) level).hassium$getChunkSource();
-            // Storage.drop(int,int) 在 Mojmap 上是 ClientChunkCache.drop，优先直调
+            // 1.20.1: drop(int, int)；1.20.2+: drop(ChunkPos)
+#if MC_VER < MC_1_20_2
             cache.drop(pos.x, pos.z);
+#else
+            cache.drop(pos);
+#endif
         } catch (Exception e) {
             // 回退反射（部分版本 / 映射差异）
             try {
@@ -602,6 +676,7 @@ public class ViewDistanceExtensionService {
      */
     public void onRenderOnlyMiss(ChunkPos pos) {
         Minecraft mc = Minecraft.getInstance();
+        pendingRenderOnly.remove(pos);
         loadedRenderOnly.remove(pos);
         delayedUnloadAt.remove(pos);
         if (mc.level != null) {
@@ -629,6 +704,7 @@ public class ViewDistanceExtensionService {
      * 真实区块到达 renderOnly pos 时由 applier 回调。
      */
     public void onRealChunkApplied(ChunkPos pos) {
+        pendingRenderOnly.remove(pos);
         loadedRenderOnly.remove(pos);
         delayedUnloadAt.remove(pos);
         missRetryAt.remove(pos);
@@ -636,12 +712,13 @@ public class ViewDistanceExtensionService {
     }
 
     /**
-     * renderOnly apply 成功：清 miss 计数，确保 loaded 集合一致。
+     * renderOnly apply 成功：pending → loaded，清 miss 计数。
      */
     public void onRenderOnlyApplied(ChunkPos pos) {
         if (pos == null) {
             return;
         }
+        pendingRenderOnly.remove(pos);
         loadedRenderOnly.add(pos);
         delayedUnloadAt.remove(pos);
         missRetryAt.remove(pos);
@@ -658,11 +735,16 @@ public class ViewDistanceExtensionService {
             for (ChunkPos pos : new HashSet<>(loadedRenderOnly)) {
                 accessor.hassium$removeRenderOnlyChunk(pos);
             }
+            for (ChunkPos pos : new HashSet<>(pendingRenderOnly)) {
+                accessor.hassium$removeRenderOnlyChunk(pos);
+            }
         }
-        if (!loadedRenderOnly.isEmpty()) {
-            Constants.LOG.debug("Hassium: Cleared {} render-only chunks", loadedRenderOnly.size());
+        int cleared = loadedRenderOnly.size() + pendingRenderOnly.size();
+        if (cleared > 0) {
+            Constants.LOG.debug("Hassium: Cleared {} render-only chunks", cleared);
         }
         loadedRenderOnly.clear();
+        pendingRenderOnly.clear();
         missRetryAt.clear();
         missRetryCount.clear();
         delayedUnloadAt.clear();
@@ -673,8 +755,14 @@ public class ViewDistanceExtensionService {
         forceRescan = false;
     }
 
+    /** 已成功 apply 到客户端的 renderOnly 数量（不含仅排队）。 */
     public int getLoadedCount() {
         return loadedRenderOnly.size();
+    }
+
+    /** 已 enqueue、等待磁盘 hit/miss 的 renderOnly 数量。 */
+    public int getPendingLoadCount() {
+        return pendingRenderOnly.size();
     }
 
     public int getPendingMissCount() {

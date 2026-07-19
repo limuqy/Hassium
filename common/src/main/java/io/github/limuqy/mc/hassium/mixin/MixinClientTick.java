@@ -1,9 +1,9 @@
 package io.github.limuqy.mc.hassium.mixin;
 
 import io.github.limuqy.mc.hassium.cache.client.ClientCacheLoadQueue;
-import io.github.limuqy.mc.hassium.cache.client.ClientLightRecomputeService;
 import io.github.limuqy.mc.hassium.cache.client.ClientMainThreadBudget;
 import io.github.limuqy.mc.hassium.cache.client.ViewDistanceExtensionService;
+import io.github.limuqy.mc.hassium.client.ClientSmokeTest;
 import io.github.limuqy.mc.hassium.concurrent.MainThreadDispatcher;
 import io.github.limuqy.mc.hassium.network.ClientMetadataHandler;
 import net.minecraft.client.Minecraft;
@@ -24,6 +24,13 @@ public class MixinClientTick {
      */
     @Inject(method = "tick", at = @At("TAIL"))
     private void hassium$onTick(CallbackInfo ci) {
+        // 开发冒烟：进服等待后打印 getClientStatsMessage 并退出（仅 -Dhassium.smokeTest=true）
+        try {
+            ClientSmokeTest.onClientTick(Minecraft.getInstance());
+        } catch (Exception e) {
+            // 冒烟失败不阻断正常 tick
+        }
+
         try {
             ViewDistanceExtensionService.getInstance().update();
         } catch (Exception e) {
@@ -47,25 +54,24 @@ public class MixinClientTick {
             // 忽略
         }
 
-        // 上一帧光照限流溢出 → 本帧 flush 前入队
-        try {
-            ClientLightRecomputeService.promoteOverflow();
-        } catch (Exception e) {
-            // 忽略
-        }
-
-        // 共享主线程时间预算：先 flush 近距网络回调（含延后光照），再 apply 缓存区块
-        long deadlineNs = System.nanoTime() + ClientMainThreadBudget.getBudgetNs();
+        // 主线程时间预算拆分：网络回调占 1/3，缓存 apply 占 2/3。
+        // 避免 resyncTrackedChunks 等场景下服务器推送占满预算，导致 processQueueUntil 被饿死、
+        // readyQueue 堆积与 reconcile 死循环（虚空根因之一）。
+        long budgetNs = ClientMainThreadBudget.getBudgetNs();
         int hardCap = ClientMainThreadBudget.getHardCap();
+        long flushBudgetNs = budgetNs / 3;
+        long applyBudgetNs = budgetNs - flushBudgetNs;
 
         try {
-            MainThreadDispatcher.flushClientUntil(deadlineNs, hardCap);
+            long flushDeadlineNs = System.nanoTime() + flushBudgetNs;
+            MainThreadDispatcher.flushClientUntil(flushDeadlineNs, hardCap);
         } catch (Exception e) {
             MainThreadDispatcher.flushClient();
         }
 
         try {
-            ClientCacheLoadQueue.getInstance().processQueueUntil(deadlineNs);
+            long applyDeadlineNs = System.nanoTime() + applyBudgetNs;
+            ClientCacheLoadQueue.getInstance().processQueueUntil(applyDeadlineNs);
         } catch (Exception e) {
             // 忽略加载错误
         }

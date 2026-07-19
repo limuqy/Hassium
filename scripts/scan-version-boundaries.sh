@@ -4,7 +4,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-ALLOWED='MC_1_20_1|MC_1_20_2|MC_1_20_5|MC_1_21_1|MC_1_21_2|MC_1_21_5|MC_1_21_6|MC_1_21_9|MC_1_21_11'
+ALLOWED='MC_1_20_1|MC_1_20_2|MC_1_20_4|MC_1_20_5|MC_1_21_1|MC_1_21_2|MC_1_21_5|MC_1_21_6|MC_1_21_9|MC_1_21_11'
 
 illegal=0
 while IFS= read -r -d '' file; do

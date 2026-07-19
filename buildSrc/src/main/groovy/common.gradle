@@ -75,6 +75,11 @@ processResources {
     def mcVer = gradle.ext.minecraft_version as String
     def neoDepModId = (mcVer == '1.20.1') ? 'forge' : 'neoforge'
 
+    // mods.toml 依赖声明字段：
+    // - 1.20.1（Forge 47.x）：必须用 `mandatory = true`，不支持 `type`
+    // - 1.20.2+（NeoForge 20.2+）：必须用 `type = "required"`，`mandatory` 在 20.4+ 被拒绝
+    def depRequiredField = (mcVer == '1.20.1') ? 'mandatory = true' : 'type = "required"'
+
     var expandProps = ['version'                              : mod_version,
                        'group'                                : project.group,
                        'minecraft_version'                    : gradle.ext.minecraft_version,
@@ -90,6 +95,7 @@ processResources {
                        'neoforge_loader_version_range' : neoLoaderRange,
                        'javafml_loader_version_range'  : javafmlRange,
                        'neoforge_dependency_mod_id'   : neoDepModId,
+                       'dependency_required_field'    : depRequiredField,
                        'forge_loader'                 : gradle.ext.has('forge_loader') ? gradle.ext.forge_loader : '',
                        'forge_version'                : gradle.ext.has('forge_loader') ? gradle.ext.forge_loader : '',
                        'forge_loader_version_range'   : gradle.ext.has('forge_loader_version_range') ? gradle.ext.forge_loader_version_range : '[47,)',
@@ -113,6 +119,9 @@ tasks.withType(JavaCompile).configureEach {
     if (javaVer >= 9) {
         options.release = javaVer
     }
+    // build.properties 由 root.gradle 写入，承载 Manifold 预处理定义（MC_VER / MC_1_21_1 等）。
+    // 必须声明为输入，否则切换 -Pmc_ver 后 Gradle 增量编译不会触发重编，旧 .class 沿用过期的 #if 分支。
+    inputs.file(rootProject.file('build.properties'))
 }
 
 tasks.withType(GenerateModuleMetadata).configureEach {

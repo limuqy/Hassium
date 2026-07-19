@@ -61,7 +61,9 @@ public record HassiumConfig(
             int maxRenderDistance,
             int ovdUnloadDelaySecs,
             // === 分段增量（缓存过期时仅补变更分段）===
-            boolean sectionDeltaEnabled
+            boolean sectionDeltaEnabled,
+            // === JoinBoost（进服后短时提高主线程预算，加速加载）===
+            boolean joinBoostEnabled
     ) {
         public static final ClientCacheConfig DEFAULT = new ClientCacheConfig(
                 true,   // enabled: 默认启用
@@ -83,7 +85,9 @@ public record HassiumConfig(
                 32,     // maxRenderDistance: 超视渲染/有效 RD 上限 min(滑块, 此值)
                 5,      // ovdUnloadDelaySecs: 离开环带后延迟卸载秒数
                 // === 分段增量默认配置 ===
-                true    // sectionDeltaEnabled: 缓存过期时走分段增量（默认开）
+                true,   // sectionDeltaEnabled: 缓存过期时走分段增量（默认开）
+                // === JoinBoost 默认配置 ===
+                true    // joinBoostEnabled: 进服后 5s 内提高主线程预算加速加载（默认开）
         );
 
         /**
@@ -134,7 +138,6 @@ public record HassiumConfig(
             int maxCallbacksPerFrame,
             boolean metricsEnabled,
             int mainThreadChunkBudgetMs,
-            int maxLightRecomputePerFrame,
             boolean dynamicThreadPoolEnabled,
             int minPushThreads,
             int maxPushThreads
@@ -176,7 +179,6 @@ public record HassiumConfig(
                 32,                // maxCallbacksPerFrame
                 true,              // metricsEnabled
                 3,                 // mainThreadChunkBudgetMs
-                10,                // maxLightRecomputePerFrame
                 true,              // dynamicThreadPoolEnabled
                 2,                 // minPushThreads
                 8                  // maxPushThreads
