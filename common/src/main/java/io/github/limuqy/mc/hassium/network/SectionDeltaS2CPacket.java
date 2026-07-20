@@ -1,6 +1,9 @@
 package io.github.limuqy.mc.hassium.network;
 
 import io.github.limuqy.mc.hassium.Constants;
+import io.github.limuqy.mc.hassium.compression.CompressionException;
+import io.github.limuqy.mc.hassium.compression.CompressionService;
+import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import net.minecraft.core.BlockPos;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.FriendlyByteBuf;
@@ -24,6 +27,9 @@ import java.util.List;
  * 服务端对每次 SectionHashRequest 都会回包（entries/skipped 可空），避免客户端悬等。
  * <p>
  * 由客户端 {@code clientCache.sectionDeltaEnabled} 门控：开启时 MISMATCH 走分段增量，关闭时全量。
+ * <p>
+ * 独立 ZSTD 压缩：entries+skipped payload 经 ZSTD 压缩后发送（黑名单排除全局 Pipeline 压缩，
+ * 避免双重压缩）。压缩比 < 1 时自动回退未压缩。
  */
 public record SectionDeltaS2CPacket(
         String dimension,
@@ -35,15 +41,17 @@ public record SectionDeltaS2CPacket(
     }
 
     public static final
-#if MC_VER < MC_1_21_11
+    #if MC_VER < MC_1_21_11
 ResourceLocation
-#else
+    #else
 Identifier
-#endif
+    #endif
 CHANNEL = ResourceLocationCompat.create(Constants.MOD_ID, "section_delta_s2c");
 
-    public void encode(FriendlyByteBuf buf) {
-        buf.writeUtf(dimension);
+    /**
+     * 序列化 entries+skipped 到 buf（不含 dimension 和压缩头）。
+     */
+    private void encodePayload(FriendlyByteBuf buf) {
         buf.writeVarInt(entries.size());
         for (DeltaEntry entry : entries) {
             buf.writeVarInt(entry.chunkX);
@@ -73,8 +81,10 @@ CHANNEL = ResourceLocationCompat.create(Constants.MOD_ID, "section_delta_s2c");
         }
     }
 
-    public static SectionDeltaS2CPacket decode(FriendlyByteBuf buf) {
-        String dimension = buf.readUtf();
+    /**
+     * 从 buf 解析 entries+skipped（不含 dimension 和压缩头）。
+     */
+    private static SectionDeltaS2CPacket decodePayload(String dimension, FriendlyByteBuf buf) {
         int size = buf.readVarInt();
         List<DeltaEntry> entries = new ArrayList<>(size);
         for (int i = 0; i < size; i++) {
@@ -119,6 +129,78 @@ CHANNEL = ResourceLocationCompat.create(Constants.MOD_ID, "section_delta_s2c");
             }
         }
         return new SectionDeltaS2CPacket(dimension, entries, skipped);
+    }
+
+    public void encode(FriendlyByteBuf buf) {
+        buf.writeUtf(dimension);
+
+        // 序列化 payload 到临时 buf
+        FriendlyByteBuf payloadBuf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
+        try {
+            encodePayload(payloadBuf);
+            byte[] rawBytes = new byte[payloadBuf.readableBytes()];
+            payloadBuf.getBytes(0, rawBytes);
+
+            // ZSTD 压缩
+            String algorithm = Constants.NETWORK_COMPRESSION_ALGORITHM;
+            int level = HassiumConfigService.getNetworkCompressionLevel();
+            byte[] compressed;
+            try {
+                compressed = CompressionService.getInstance().compress(rawBytes, algorithm, level);
+            } catch (CompressionException e) {
+                throw new RuntimeException("Failed to compress section delta payload", e);
+            }
+
+            if (compressed != null && compressed.length < rawBytes.length) {
+                // 压缩更小：写 flag=1 + algorithm + originalSize + compressedLen + compressedBytes
+                buf.writeByte(1);
+                buf.writeUtf(algorithm);
+                buf.writeVarInt(rawBytes.length);
+                buf.writeVarInt(compressed.length);
+                buf.writeBytes(compressed);
+            } else {
+                // 未压缩更小：写 flag=0 + rawLen + rawBytes
+                buf.writeByte(0);
+                buf.writeVarInt(rawBytes.length);
+                buf.writeBytes(rawBytes);
+            }
+        } finally {
+            payloadBuf.release();
+        }
+    }
+
+    public static SectionDeltaS2CPacket decode(FriendlyByteBuf buf) {
+        String dimension = buf.readUtf();
+        byte flag = buf.readByte();
+
+        FriendlyByteBuf payloadBuf;
+        if (flag == 1) {
+            // 压缩：读 algorithm + originalSize + compressedLen + compressedBytes → ZSTD 解压
+            String algorithm = buf.readUtf();
+            int originalSize = buf.readVarInt();
+            int compressedLen = buf.readVarInt();
+            byte[] compressed = new byte[compressedLen];
+            buf.readBytes(compressed);
+            byte[] raw;
+            try {
+                raw = CompressionService.getInstance().decompress(compressed, algorithm);
+            } catch (CompressionException e) {
+                throw new RuntimeException("Failed to decompress section delta payload", e);
+            }
+            payloadBuf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(raw));
+        } else {
+            // 未压缩：读 rawLen + rawBytes
+            int rawLen = buf.readVarInt();
+            byte[] raw = new byte[rawLen];
+            buf.readBytes(raw);
+            payloadBuf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(raw));
+        }
+
+        try {
+            return decodePayload(dimension, payloadBuf);
+        } finally {
+            payloadBuf.release();
+        }
     }
 
     /**

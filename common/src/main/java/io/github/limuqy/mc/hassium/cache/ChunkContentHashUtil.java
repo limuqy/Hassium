@@ -257,21 +257,15 @@ public final class ChunkContentHashUtil {
 
     /**
      * 计算单个 section 的方块哈希（方块状态 + 生物群系，不含 blockEntity）。
+     * <p>
+     * 1.21.9+ 用 pack(Strategy) 规范化，避免 palette 排列变化导致 hash 不匹配。
+     * 1.20.1-1.21.8 用 section.write() 字节（palette 排列稳定）。
      */
     public static long computeSectionHash(LevelChunkSection section) {
         StreamingXXHash64 hasher = XX_FACTORY.newStreamingHash64(HASH_SEED);
         HashingOutputStream out = new HashingOutputStream(hasher);
         try {
-            // 序列化方块状态 palette + 数据
-            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
-            try {
-                section.write(buf);
-                byte[] sectionBytes = new byte[buf.readableBytes()];
-                buf.getBytes(0, sectionBytes);
-                out.write(sectionBytes);
-            } finally {
-                buf.release();
-            }
+            LevelChunkSectionCompat.writeSectionForHash(section, out);
             return out.getValue();
         } catch (IOException e) {
             throw new IllegalStateException("Failed to hash section", e);
@@ -367,16 +361,23 @@ public final class ChunkContentHashUtil {
         try {
             LevelChunkSection scratch = LevelChunkSectionCompat.create(registryAccess);
             for (int i = 0; i < sectionCount && buf.readableBytes() > 0; i++) {
-                int start = buf.readerIndex();
                 scratch.read(buf);
-                int end = buf.readerIndex();
 
                 // 空 section（仅空气）不计入 chunkHash，与 computeSectionHashes 一致
                 if (scratch.hasOnlyAir()) {
                     continue;
                 }
 
-                long hash = xxHash64OfBytes(allData, start, end - start);
+                // 用 writeSectionForHash 统一哈希方式：
+                // 1.21.9+ pack(Strategy) 规范化，1.20.1-1.21.8 section.write() 字节
+                StreamingXXHash64 hasher = XX_FACTORY.newStreamingHash64(HASH_SEED);
+                HashingOutputStream out = new HashingOutputStream(hasher);
+                try {
+                    LevelChunkSectionCompat.writeSectionForHash(scratch, out);
+                } catch (IOException e) {
+                    throw new IllegalStateException("Failed to hash section " + i, e);
+                }
+                long hash = out.getValue();
                 if (hash == 0L) hash = 1L;
                 hashes.put(i, hash);
             }

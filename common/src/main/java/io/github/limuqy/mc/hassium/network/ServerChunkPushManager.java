@@ -570,6 +570,19 @@ public class ServerChunkPushManager {
     private static final int SECTION_DELTA_VIEW_MARGIN = 1;
 
     /**
+     * 分段增量退化阈值：变更 section 占总 section 的百分比达到此值时回退全量请求。
+     * <p>
+     * 当 chunk 大部分 section 变更时，分段增量的 per-section 框架开销
+     * (sectionIndex VarInt + dataLen VarInt) 会使响应比全量包更大。
+     * 此阈值兜底防止「分段增量不如原版」的退化场景。
+     * <p>
+     * 75% 选择依据：分段增量额外开销 ≈ 变更数 × 3 字节(框架) + BE 列表；
+     * 全量开销 ≈ 全部 sections + heightmaps + light。当变更占比 ≥ 75% 时，
+     * 分段增量数据量已接近全量，加上框架开销后大概率超过全量。
+     */
+    private static final int SECTION_DELTA_FALLBACK_THRESHOLD_PCT = 75;
+
+    /**
      * 处理客户端的 section 哈希请求（阶段二）。
      * <p>
      * 比对客户端的 section 哈希与服务端当前数据，只发送变更的 section 和 blockEntity。
@@ -619,8 +632,25 @@ public class ServerChunkPushManager {
                     }
                 }
 
-                // 收集 blockEntity 数据（始终发送）
-                List<SectionDeltaS2CPacket.BlockEntityData> blockEntities = collectBlockEntities(chunk);
+                // 退化保护：变更 section 占非空 section 的占比达阈值时回退全量，避免分段增量比全量包更大。
+                // 用非空 section 数（currentHashes.size()）而非总 section 数做分母：
+                // 空 section 不进 delta，用总数会稀释占比，导致该回退时不回退。
+                int nonEmptyCount = currentHashes.size();
+                if (nonEmptyCount > 0 && !changedSections.isEmpty()
+                        && changedSections.size() * 100 / nonEmptyCount >= SECTION_DELTA_FALLBACK_THRESHOLD_PCT) {
+                    DebugLogger.info(LogType.NETWORK,
+                            "[SECTION_DELTA] Fallback to full for [{}, {}]: {}/{} non-empty sections changed (>= {}%)",
+                            entry.chunkX(), entry.chunkZ(), changedSections.size(), nonEmptyCount,
+                            SECTION_DELTA_FALLBACK_THRESHOLD_PCT);
+                    skipped.add(new SectionDeltaS2CPacket.SkippedChunk(entry.chunkX(), entry.chunkZ()));
+                    continue;
+                }
+
+                // 收集 blockEntity 数据：仅在有变更 section 时发送。
+                // 若 changedSections 为空（section hash 全部匹配），客户端缓存 BE 仍有效，无需重发。
+                List<SectionDeltaS2CPacket.BlockEntityData> blockEntities = changedSections.isEmpty()
+                        ? List.of()
+                        : collectBlockEntities(chunk);
 
                 deltas.add(new SectionDeltaS2CPacket.DeltaEntry(
                         entry.chunkX(), entry.chunkZ(), changedSections, blockEntities));

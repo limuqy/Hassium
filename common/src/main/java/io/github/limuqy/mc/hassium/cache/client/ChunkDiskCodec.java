@@ -242,6 +242,7 @@ public final class ChunkDiskCodec {
         ListTag sectionsList = CompoundTagCompat.getList(nbt, "sections");
         int len = Math.max(sectionCount, sectionsList.size());
         long[] hashes = new long[len];
+        LevelChunkSection scratch = LevelChunkSectionCompat.create(registryAccess);
         for (int i = 0; i < sectionsList.size(); i++) {
             Tag t = sectionsList.get(i);
             if (!(t instanceof CompoundTag ct)) continue;
@@ -250,8 +251,16 @@ public final class ChunkDiskCodec {
             if (!(dataTag instanceof ByteArrayTag bat)) continue;
             byte[] bytes = bat.getAsByteArray();
             if (bytes.length == 0) continue;
-            long hash = ChunkContentHashUtil.xxHash64OfBytes(bytes);
-            hashes[i] = hash == 0L ? 1L : hash;
+            // 从 NBT 字节读取 section，用 writeSectionForHash 哈希
+            // 1.21.9+ pack(Strategy) 规范化，1.20.1-1.21.8 section.write() 字节
+            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(bytes));
+            try {
+                scratch.read(buf);
+                long hash = ChunkContentHashUtil.computeSectionHash(scratch);
+                hashes[i] = hash == 0L ? 1L : hash;
+            } finally {
+                buf.release();
+            }
         }
         return hashes;
     }
