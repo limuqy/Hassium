@@ -211,9 +211,17 @@ build/smoke-test/
 - 检查 `server_<SessionId>.log` 是否有 `HassiumSmokeTest:SERVER` 开头的日志
 - 检查 `MixinMinecraftServer.onServerTick` 是否真的被调用（mixin 配置问题）
 
+### 7. 并行模式下 Round2Pass=False（fabric PASS 但 neoforge FAIL）
+
+- 检查 `parallel_<SessionId>.log` 是否显示 `Round2: stats=False pass=False`
+- 检查 `client_<SessionId>.log` 末尾是否停在 `WAIT_JOIN_2 ... waiting N ms before stats`（说明客户端在 ROUND2 等待期间被杀）
+- **根因**：单会话清理逻辑误杀了另一会话的 java 进程
+- **修复后**：`Stop-SessionJava` 只通过端口和 `<loader>\run\{client,server}` 目录定位本会话 java 进程，不影响另一会话
+- 若仍出现：检查是否有其他脚本/工具调用了 `Get-Process -Name java | Stop-Process`
+
 ## 并行模式
 
-`-Parallel` 开关启用后，同版本的 fabric + neoforge 用 `Start-Job` 同时启动，节省约一半时间。
+`-Parallel` 开关启用后，同版本的 fabric + neoforge 用 `Start-Process` 同时启动，节省约一半时间。
 
 **端口分配**：`fabric = BasePort`（默认 25565），`neoforge = BasePort + 1`（默认 25566）。用 `-BasePort` 可整体偏移。
 
@@ -221,11 +229,18 @@ build/smoke-test/
 
 **资源需求**：同时跑 4 个 JVM（2 服务端 + 2 客户端），每个 2–4G，建议至少 16G RAM。本机若内存不足，去掉 `-Parallel` 回退到串行模式。
 
-**`gradlew --stop` 策略**：并行模式下每会话后**不调用** `gradlew --stop`（会杀掉另一会话的 daemon），仅杀 java 进程 + sleep 3s；整个 batch 结束后统一调用一次 `gradlew --stop`。
+**预编译**：并行模式下，先同步编译所有 loader（`compileJava`），避免两个并行进程同时触发编译冲突。若某 loader 预编译失败，该 loader 会话会被跳过（结果记录为 `precompile_failed`），不影响其他 loader。
 
-**失败重试**：每个 loader 独立计数 `MaxRetries`，互不影响。
+**进程清理（关键）**：并行模式下，单会话结束时的清理**只杀本会话相关的 java 进程**，不会杀掉另一会话的 java：
+- 服务端：通过 `Get-NetTCPConnection -LocalPort $ServerPort` 定位占用端口的 java 进程
+- 客户端/兜底服务端：通过 `Get-CimInstance Win32_Process` 匹配命令行中包含 `<loader>\run\client` 或 `<loader>\run\server` 的 java 进程
+- **不杀 gradle daemon**（其命令行不含 `run/server` 或 `run/client`），保留给下一版本复用
 
-**Job 超时**：`Wait-Job -Timeout 600`（10 分钟）兜底；Job 内部已有服务端 180s + 客户端 480s 超时，正常情况下不会触发外层超时。
+**`gradlew --stop` 策略**：并行模式下每版本结束后**不调用** `gradlew --stop`（会杀掉共享 daemon，影响下一版本预编译）；仅清理残留 Minecraft java 进程（命令行匹配 `run[/\\](server|client)` 的 java）+ sleep 3s；整个 batch 结束后统一调用一次 `gradlew --stop`。
+
+**失败重试**：并行模式下单次失败**不重试**（`Attempts=1`），与串行模式（`MaxRetries=3`）不同。如需重试，跑完一轮后对失败的会话单独跑回归轮（`-Phase R -Versions @(...)`）。
+
+**Job 超时**：总超时 = `ServerReadyTimeoutSec + ClientTimeoutSec + 120s` 兜底；内部已有服务端 300s + 客户端 600s 超时，正常情况下不会触发外层超时。
 
 **单 loader 模式**：若 `-Loaders fabric` 只指定一个加载器，`-Parallel` 仍生效但无并行意义，逻辑保持统一。
 

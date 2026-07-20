@@ -52,6 +52,41 @@ New-Item -ItemType Directory -Force -Path $resultsDir | Out-Null
 
 Set-Location $projectRoot
 
+# 仅清理本会话相关的 java 进程，避免在并行模式下误杀另一会话。
+# 服务端通过端口定位；客户端/兜底服务端通过 $Loader\run\{client,server} 目录在命令行中的出现来定位。
+# 不会杀掉 gradle daemon（其命令行不含 run/server 或 run/client）。
+function Stop-SessionJava {
+    param(
+        [int]$ServerPort,
+        [string]$Loader
+    )
+
+    # 1. 通过端口定位服务端 java 进程（最精确）
+    if ($ServerPort -gt 0) {
+        $serverConns = Get-NetTCPConnection -LocalPort $ServerPort -ErrorAction SilentlyContinue
+        if ($serverConns) {
+            $serverConns | ForEach-Object {
+                Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue
+            }
+            Start-Sleep -Milliseconds 500
+        }
+    }
+
+    # 2. 通过 run 目录定位本 loader 的客户端/服务端 java 进程（兜底）
+    # 匹配命令行中包含 "<loader>\run\client" 或 "<loader>\run\server" 的 java 进程
+    $clientPattern = "$([regex]::Escape($Loader))[\\/]+run[\\/]+client"
+    $serverPattern = "$([regex]::Escape($Loader))[\\/]+run[\\/]+server"
+    $sessionJava = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+        $_.Name -eq "java.exe" -and (
+            ($_.CommandLine -and $_.CommandLine -match $clientPattern) -or
+            ($_.CommandLine -and $_.CommandLine -match $serverPattern)
+        )
+    }
+    foreach ($proc in $sessionJava) {
+        Stop-Process -Id $proc.ProcessId -Force -ErrorAction SilentlyContinue
+    }
+}
+
 # 1. 清理客户端缓存（整个 hassium_cache 目录 + config/hassium 整个目录 + crash-reports）
 Write-Host "[$SessionId] [1/9] 清理客户端缓存 ($Loader/run/client/)..."
 Remove-Item -Recurse -Force (Join-Path $clientRunDir "hassium_cache") -ErrorAction SilentlyContinue
@@ -131,7 +166,7 @@ while ((Get-Date) -lt $deadline) {
 if (-not $serverReady) {
     Write-Host "[$SessionId] 服务端未就绪，标记失败 (exit 3)"
     if (-not $server.HasExited) { Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue }
-    Get-Process -Name java -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    Stop-SessionJava -ServerPort $ServerPort -Loader $Loader
     $resultObj = @{
         SessionId = $SessionId
         Ver = $Ver
@@ -225,7 +260,9 @@ $result = if ($hasPass -and $clientExit -eq 0) { "PASS" } else { "FAIL" }
 # 10. 停止服务端 + 残留 java
 Write-Host "[$SessionId] [9/9] 停止服务端..."
 if (-not $server.HasExited) { Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue }
-Get-Process -Name java -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+if (-not $clientProc.HasExited) { Stop-Process -Id $clientProc.Id -Force -ErrorAction SilentlyContinue }
+# 仅杀本会话相关的 java 进程（通过端口和 run 目录定位），避免影响并行会话
+Stop-SessionJava -ServerPort $ServerPort -Loader $Loader
 
 # 输出结果 JSON
 $resultObj = @{

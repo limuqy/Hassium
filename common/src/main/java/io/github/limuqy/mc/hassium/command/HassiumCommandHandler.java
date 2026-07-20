@@ -75,7 +75,7 @@ public class HassiumCommandHandler {
                 "§e带宽压缩：§r%s（当前 %s，原版 %s，压缩比 %s）\n" +
                 "§e缓存命中：§r%s（命中 %s，增量 %s）\n" +
                 "§e区块加载：§r%d（新增 %d/%s，过期 %d/%s）\n" +
-                "§e超视渲染：§r%s（已加载 %d，缺失 %d，重试 %d）",
+                "§e超视渲染：§r%s（已加载 %d，缺失 %d）",
                 MetricsTextFormatter.formatPercent(currentBandwidthPercent),
                 MetricsTextFormatter.formatBytes(actualRecv), MetricsTextFormatter.formatBytes(vanillaRecv),
                 MetricsTextFormatter.formatCompressionRatio(vanillaRecv, actualRecv),
@@ -85,8 +85,7 @@ public class HassiumCommandHandler {
                 staleRequests, MetricsTextFormatter.formatBytes(staleRequestBytes),
                 ovd.isEnabled() ? "§aON§r" : "§7OFF§r",
                 ovd.getLoadedCount(),
-                ovd.getPendingMissCount(),
-                ovd.getRetryTotal()
+                ovd.getPendingMissCount()
         );
     }
 

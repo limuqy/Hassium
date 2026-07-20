@@ -154,19 +154,38 @@ foreach ($ver in $targetVersions) {
 
         # 预编译：在并行启动前先同步编译所有 loader，避免两个并行进程同时触发编译冲突
         $gradlew = Join-Path $projectRoot "gradlew.bat"
+        $precompileFailed = @{}
         foreach ($loader in $Loaders) {
             Write-Host "[$ver/${loader}] 预编译 (compileJava)..."
             & $gradlew ":${loader}:compileJava" "-Pmc_ver=${ver}" 2>&1 | Out-Host
             if ($LASTEXITCODE -ne 0) {
-                Write-Host "[$ver/${loader}] 预编译失败 (exit $LASTEXITCODE)" -ForegroundColor Red
+                Write-Host "[$ver/${loader}] 预编译失败 (exit $LASTEXITCODE)，跳过该会话" -ForegroundColor Red
+                $precompileFailed[$loader] = $true
             }
+        }
+
+        # 过滤掉预编译失败的 loader
+        $activeLoaders = $Loaders | Where-Object { -not $precompileFailed[$_] }
+        if ($activeLoaders.Count -eq 0) {
+            Write-Host "[$ver] 所有 loader 预编译失败，跳过该版本" -ForegroundColor Red
+            foreach ($loader in $Loaders) {
+                $skipSessionId = "${ver}_${loader}_${Phase}"
+                $results += [PSCustomObject]@{
+                    Ver=$ver; Loader=$loader; Phase=$Phase; Result="FAIL"
+                    SessionId=$skipSessionId; Attempts=0; Reason="precompile_failed"
+                }
+                Add-Content -Path $failuresLog -Value "[$skipSessionId] FAILED: precompile_failed"
+            }
+            continue
         }
 
         $processes = @()
         $scriptPath = Join-Path $PSScriptRoot "runtime-smoke-test.ps1"
-        for ($i = 0; $i -lt $Loaders.Count; $i++) {
-            $loader = $Loaders[$i]
-            $port = $BasePort + $i
+        for ($i = 0; $i -lt $activeLoaders.Count; $i++) {
+            $loader = $activeLoaders[$i]
+            # 端口分配：原 Loaders 顺序保持不变，确保 fabric=BasePort, neoforge=BasePort+1
+            $loaderIndex = [Array]::IndexOf($Loaders, $loader)
+            $port = $BasePort + $loaderIndex
             $jobName = "${ver}_${loader}_${Phase}"
             Write-Host "[$jobName] 启动进程 (port=$port)..."
 
@@ -192,7 +211,7 @@ foreach ($ver in $targetVersions) {
             $processes += [PSCustomObject]@{ Name=$jobName; Process=$proc; Loader=$loader; Port=$port; OutLog=$procOutLog }
 
             # 启动后等 3 秒再启动下一个，避免同时启动竞争资源；最后一个不用等
-            if ($i -lt $Loaders.Count - 1) {
+            if ($i -lt $activeLoaders.Count - 1) {
                 Start-Sleep -Seconds 3
             }
         }
@@ -255,8 +274,11 @@ foreach ($ver in $targetVersions) {
             }
         }
 
-        # 并行模式：每版本结束后只杀 java + sleep，不调用 gradlew --stop（避免误杀另一会话 daemon）
-        Get-Process -Name java -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+        # 并行模式：每版本结束后清理残留 Minecraft java 进程，保留 gradle daemon 供下一版本复用
+        # 仅杀命令行包含 "run\server" 或 "run\client" 的 java（即 Minecraft 实例），不杀 gradle daemon
+        Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+            $_.Name -eq "java.exe" -and $_.CommandLine -and $_.CommandLine -match "run[\\/]+(server|client)"
+        } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
         Start-Sleep -Seconds 3
     } else {
         # ===== 串行模式（默认）：保持原有行为 =====
@@ -268,8 +290,10 @@ foreach ($ver in $targetVersions) {
             $r = Invoke-Session -Ver $ver -Loader $loader -Phase $Phase -ServerPort $BasePort -MaxRetries $MaxRetries -ServerReadyTimeoutSec $ServerReadyTimeoutSec -ClientTimeoutSec $ClientTimeoutSec
             $results += $r
 
-            # 杀残留 java 进程
-            Get-Process -Name java -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+            # 杀残留 Minecraft java 进程（不杀 gradle daemon）
+            Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+                $_.Name -eq "java.exe" -and $_.CommandLine -and $_.CommandLine -match "run[\\/]+(server|client)"
+            } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
             Start-Sleep -Seconds 3
 
             # Gradle daemon 清理（避免 loom 锁）
