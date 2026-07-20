@@ -3,6 +3,7 @@ package io.github.limuqy.mc.hassium.command;
 import io.github.limuqy.mc.hassium.cache.client.CacheWorldExporter;
 import io.github.limuqy.mc.hassium.cache.client.ViewDistanceExtensionService;
 import io.github.limuqy.mc.hassium.metrics.HassiumMetricsImpl;
+import io.github.limuqy.mc.hassium.metrics.MetricsTextFormatter;
 import io.github.limuqy.mc.hassium.metrics.NetworkStats;
 
 /**
@@ -31,19 +32,17 @@ public class HassiumCommandHandler {
         long metadataSent = metrics.getMetadataBytesSent();
         long dataRequestsReceived = metrics.getDataRequestsReceived();
         long chunksCompressed = metrics.getChunksCompressed();
-        double sendSaving = vanillaSent > 0 ? (double) (vanillaSent - actualSent) / vanillaSent * 100.0 : 0.0;
-        double compressionRatio = actualSent > 0 ? (double) vanillaSent / actualSent : 0.0;
-
         return String.format(
                 "§6=== Hassium 服务端统计 ===§r\n" +
-                "§e发送:§r %s (原版 %s) — §a节省 %.1f%%§r\n" +
-                "§e压缩比:§r %.2f:1\n" +
+                "§e发送:§r %s (原版 %s) — §a节省 %s§r\n" +
+                "§e压缩比:§r %s\n" +
                 "§e元数据发送:§r %s\n" +
                 "§e数据请求接收:§r %d\n" +
                 "§e区块压缩:§r %d",
-                formatBytes(actualSent), formatBytes(vanillaSent), sendSaving,
-                compressionRatio,
-                formatBytes(metadataSent),
+                MetricsTextFormatter.formatBytes(actualSent), MetricsTextFormatter.formatBytes(vanillaSent),
+                MetricsTextFormatter.formatPercent(metrics.getSendBandwidthSavingPercent()),
+                MetricsTextFormatter.formatCompressionRatio(vanillaSent, actualSent),
+                MetricsTextFormatter.formatBytes(metadataSent),
                 dataRequestsReceived,
                 chunksCompressed
         );
@@ -57,53 +56,37 @@ public class HassiumCommandHandler {
 
         long vanillaRecv = metrics.getVanillaBytesReceived();
         long actualRecv = metrics.getActualBytesReceived();
-        long cacheHits = metrics.getCacheHitCount();
-        long cacheMisses = metrics.getCacheMissCount();
-        long cacheStale = metrics.getCacheStaleCount();
-        long cacheHitBytes = metrics.getCacheHitBytes();
-        long deltaReq = metrics.getSectionDeltaRequestsSent();
-        long deltaRecv = metrics.getSectionDeltaChunksReceived();
-        double cacheHitRate = metrics.getCacheHitRate() * 100.0;
-        double recvSaving = vanillaRecv > 0 ? (double) (vanillaRecv - actualRecv) / vanillaRecv * 100.0 : 0.0;
-        double compressionRatio = actualRecv > 0 ? (double) vanillaRecv / actualRecv : 0.0;
+        long fullHitBytes = metrics.getCacheHitFullChunkBytes();
+        long deltaSavedBytes = metrics.getCacheDeltaSavedBytes();
+        long fullRequests = metrics.getFullChunkRequestCount();
+        long newRequests = metrics.getNewFullChunkRequestCount();
+        long staleRequests = metrics.getStaleFullChunkRequestCount();
+        long newRequestBytes = metrics.getNewFullChunkRequestBytes();
+        long staleRequestBytes = metrics.getStaleFullChunkRequestBytes();
 
-        String recvNote = actualRecv == 0 && cacheHits > 0
-                ? "\n§7（本局区块几乎全走缓存命中；网络接收仅计全量压缩包与分段增量）§r"
-                : "\n§7（网络接收 = 全量压缩包 + 分段增量；不含缓存命中）§r";
+        double currentBandwidthPercent = vanillaRecv > 0
+                ? (double) actualRecv / vanillaRecv * 100.0
+                : 0.0;
 
         ViewDistanceExtensionService ovd = ViewDistanceExtensionService.getInstance();
-        String ovdLine = String.format(
-                "§e超视渲染:§r %s  loaded=%d pendingLoad=%d pendingMiss=%d missTotal=%d retry=%d forgetRetain=%d unloadSub=%d",
-                ovd.isEnabled() ? "§aon§r" : "§7off§r",
-                ovd.getLoadedCount(),
-                ovd.getPendingLoadCount(),
-                ovd.getPendingMissCount(),
-                ovd.getMissTotal(),
-                ovd.getRetryTotal(),
-                ovd.getForgetRetainTotal(),
-                ovd.getUnloadSubstituteTotal()
-        );
 
         return String.format(
                 "§6=== Hassium 客户端统计 ===§r\n" +
-                "§e网络接收:§r %s (原版等价 %s) — §a相对全量节省 %.1f%%§r\n" +
-                "§e压缩比:§r %.2f:1%s\n" +
-                "§e缓存命中率:§r %.1f%% (§a命中 %d§r, §c未命中 %d§r, §6过期 %d§r)\n" +
-                "§e缓存命中节省:§r %s（估算，未走网络）\n" +
-                "§e元数据接收:§r %s\n" +
-                "§e全量数据请求:§r %d 块\n" +
-                "§e分段增量:§r 请求 %d / 接收 %d\n" +
-                "§e区块解压:§r %d（仅全量压缩通道）\n" +
-                "%s",
-                formatBytes(actualRecv), formatBytes(vanillaRecv), recvSaving,
-                compressionRatio, recvNote,
-                cacheHitRate, cacheHits, cacheMisses, cacheStale,
-                formatBytes(cacheHitBytes),
-                formatBytes(metrics.getMetadataBytesReceived()),
-                metrics.getDataRequestsSent(),
-                deltaReq, deltaRecv,
-                metrics.getChunksDecompressed(),
-                ovdLine
+                "§e带宽压缩：§r%s（当前 %s，原版 %s，压缩比 %s）\n" +
+                "§e缓存命中：§r%s（命中 %s，增量 %s）\n" +
+                "§e区块加载：§r%d（新增 %d/%s，过期 %d/%s）\n" +
+                "§e超视渲染：§r%s（已加载 %d，缺失 %d，重试 %d）",
+                MetricsTextFormatter.formatPercent(currentBandwidthPercent),
+                MetricsTextFormatter.formatBytes(actualRecv), MetricsTextFormatter.formatBytes(vanillaRecv),
+                MetricsTextFormatter.formatCompressionRatio(vanillaRecv, actualRecv),
+                MetricsTextFormatter.formatPercent(metrics.getEffectiveCacheHitRate() * 100.0),
+                MetricsTextFormatter.formatBytes(fullHitBytes), MetricsTextFormatter.formatBytes(deltaSavedBytes),
+                fullRequests, newRequests, MetricsTextFormatter.formatBytes(newRequestBytes),
+                staleRequests, MetricsTextFormatter.formatBytes(staleRequestBytes),
+                ovd.isEnabled() ? "§aON§r" : "§7OFF§r",
+                ovd.getLoadedCount(),
+                ovd.getPendingMissCount(),
+                ovd.getRetryTotal()
         );
     }
 
@@ -120,25 +103,22 @@ public class HassiumCommandHandler {
         long cacheHits = metrics.getCacheHitCount();
         long cacheMisses = metrics.getCacheMissCount();
         long cacheStale = metrics.getCacheStaleCount();
-        double cacheHitRate = metrics.getCacheHitRate() * 100.0;
-        double sendSaving = vanillaSent > 0 ? (double) (vanillaSent - actualSent) / vanillaSent * 100.0 : 0.0;
-        double recvSaving = vanillaRecv > 0 ? (double) (vanillaRecv - actualRecv) / vanillaRecv * 100.0 : 0.0;
-        double compressionRatio = actualSent > 0 ? (double) vanillaSent / actualSent : 0.0;
-
         return String.format(
                 "§6=== Hassium 网络统计 ===§r\n" +
-                "§e发送:§r %s (原版 %s) — §a节省 %.1f%%§r\n" +
-                "§e接收:§r %s (原版 %s) — §a节省 %.1f%%§r\n" +
-                "§e缓存命中率:§r %.1f%% (§a命中 %d§r, §c未命中 %d§r, §6过期 %d§r)\n" +
-                "§e压缩比:§r %.2f:1\n" +
+                "§e发送:§r %s (原版 %s) — §a节省 %s§r\n" +
+                "§e接收:§r %s (原版 %s) — §a节省 %s§r\n" +
+                "§e缓存命中率:§r %s (§a命中 %d§r, §c未命中 %d§r, §6过期 %d§r)\n" +
+                "§e压缩比:§r %s\n" +
                 "§e元数据:§r 发送 %s, 接收 %s\n" +
                 "§e数据请求:§r 发送 %d, 接收 %d\n" +
                 "§e区块:§r 压缩 %d, 解压 %d",
-                formatBytes(actualSent), formatBytes(vanillaSent), sendSaving,
-                formatBytes(actualRecv), formatBytes(vanillaRecv), recvSaving,
-                cacheHitRate, cacheHits, cacheMisses, cacheStale,
-                compressionRatio,
-                formatBytes(metrics.getMetadataBytesSent()), formatBytes(metrics.getMetadataBytesReceived()),
+                MetricsTextFormatter.formatBytes(actualSent), MetricsTextFormatter.formatBytes(vanillaSent),
+                MetricsTextFormatter.formatPercent(metrics.getSendBandwidthSavingPercent()),
+                MetricsTextFormatter.formatBytes(actualRecv), MetricsTextFormatter.formatBytes(vanillaRecv),
+                MetricsTextFormatter.formatPercent(metrics.getReceiveBandwidthSavingPercent()),
+                MetricsTextFormatter.formatPercent(metrics.getCacheHitRate() * 100.0), cacheHits, cacheMisses, cacheStale,
+                MetricsTextFormatter.formatCompressionRatio(vanillaSent, actualSent),
+                MetricsTextFormatter.formatBytes(metrics.getMetadataBytesSent()), MetricsTextFormatter.formatBytes(metrics.getMetadataBytesReceived()),
                 metrics.getDataRequestsSent(), metrics.getDataRequestsReceived(),
                 metrics.getChunksCompressed(), metrics.getChunksDecompressed()
         );
@@ -161,16 +141,6 @@ public class HassiumCommandHandler {
         return newState
                 ? "§aHassium 指标收集已启用§r"
                 : "§cHassium 指标收集已关闭§r";
-    }
-
-    /**
-     * 格式化字节数为人类可读格式
-     */
-    private static String formatBytes(long bytes) {
-        if (bytes < 1024) return bytes + " B";
-        if (bytes < 1024 * 1024) return String.format("%.1f KB", bytes / 1024.0);
-        if (bytes < 1024L * 1024 * 1024) return String.format("%.1f MB", bytes / (1024.0 * 1024));
-        return String.format("%.1f GB", bytes / (1024.0 * 1024 * 1024));
     }
 
     /**

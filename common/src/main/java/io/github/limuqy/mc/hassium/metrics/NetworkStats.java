@@ -158,6 +158,42 @@ public class NetworkStats {
     }
 
     /**
+     * 记录已完成 hash 决策的完整区块等价值。
+     */
+    public static void recordCacheLoadEligible(long bytes) {
+        if (!enabled) return;
+        metrics.recordCacheLoadEligible(bytes);
+    }
+
+    /**
+     * 记录直接从本地缓存加载的完整区块等价值。
+     */
+    public static void recordCacheFullHit(long bytes) {
+        if (!enabled) return;
+        metrics.recordCacheFullHit(bytes);
+    }
+
+    /**
+     * 记录成功应用分段增量后避免加载完整区块的字节数。
+     */
+    public static void recordCacheDeltaSaved(long bytes) {
+        if (!enabled) return;
+        metrics.recordCacheDeltaSaved(bytes);
+    }
+
+    /**
+     * 记录已成功发出的完整区块请求及其来源。
+     *
+     * @param chunkCount       请求的区块数
+     * @param bytes            统一完整区块等价值字节数
+     * @param staleOrFallback  是否由缓存过期或技术性回退触发
+     */
+    public static void recordFullChunkRequests(int chunkCount, long bytes, boolean staleOrFallback) {
+        if (!enabled) return;
+        metrics.recordFullChunkRequests(chunkCount, bytes, staleOrFallback);
+    }
+
+    /**
      * 记录发送数据请求（1 次批请求）
      */
     public static void recordDataRequestSent() {

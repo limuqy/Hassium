@@ -151,6 +151,17 @@ foreach ($ver in $targetVersions) {
         # ===== 并行模式：同版本多 loader 用 Start-Process 同时跑 =====
         # 注意：不能用 Start-Job（Job 内 Start-Process gradlew.bat 会静默失败）
         # 改用 Start-Process powershell.exe -File 启动独立进程，各进程内 Start-Process gradlew.bat 正常工作
+
+        # 预编译：在并行启动前先同步编译所有 loader，避免两个并行进程同时触发编译冲突
+        $gradlew = Join-Path $projectRoot "gradlew.bat"
+        foreach ($loader in $Loaders) {
+            Write-Host "[$ver/${loader}] 预编译 (compileJava)..."
+            & $gradlew ":${loader}:compileJava" "-Pmc_ver=${ver}" 2>&1 | Out-Host
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host "[$ver/${loader}] 预编译失败 (exit $LASTEXITCODE)" -ForegroundColor Red
+            }
+        }
+
         $processes = @()
         $scriptPath = Join-Path $PSScriptRoot "runtime-smoke-test.ps1"
         for ($i = 0; $i -lt $Loaders.Count; $i++) {
@@ -179,6 +190,11 @@ foreach ($ver in $targetVersions) {
                 -PassThru -WindowStyle Hidden
 
             $processes += [PSCustomObject]@{ Name=$jobName; Process=$proc; Loader=$loader; Port=$port; OutLog=$procOutLog }
+
+            # 启动后等 3 秒再启动下一个，避免同时启动竞争资源；最后一个不用等
+            if ($i -lt $Loaders.Count - 1) {
+                Start-Sleep -Seconds 3
+            }
         }
 
         # 等待所有进程完成（总超时 = serverReadyTimeout + clientTimeout + 120s 缓冲）

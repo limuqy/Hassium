@@ -13,10 +13,10 @@ param(
     [switch]$CleanWorld,
     [string]$SmokeHost = "",
     [int]$ServerPort = 25565,
-    [int]$DelayMs = 15000,
+    [int]$DelayMs = 10000,
     [int]$ReconnectDelayMs = 3000,
-    [int]$ServerReadyTimeoutSec = 60,
-    [int]$ClientTimeoutSec = 180
+    [int]$ServerReadyTimeoutSec = 200,
+    [int]$ClientTimeoutSec = 300
 )
 
 $ErrorActionPreference = "Continue"
@@ -55,11 +55,8 @@ Set-Location $projectRoot
 # 1. 清理客户端缓存（整个 hassium_cache 目录 + config/hassium 整个目录 + crash-reports）
 Write-Host "[$SessionId] [1/9] 清理客户端缓存 ($Loader/run/client/)..."
 Remove-Item -Recurse -Force (Join-Path $clientRunDir "hassium_cache") -ErrorAction SilentlyContinue
-Remove-Item -Recurse -Force (Join-Path $clientRunDir "config\hassium") -ErrorAction SilentlyContinue
+# Remove-Item -Recurse -Force (Join-Path $clientRunDir "config\hassium") -ErrorAction SilentlyContinue
 Remove-Item -Recurse -Force (Join-Path $clientRunDir "crash-reports") -ErrorAction SilentlyContinue
-# 兼容清理根目录 run/（旧配置遗留）
-Remove-Item -Recurse -Force (Join-Path $projectRoot "run\client\hassium_cache") -ErrorAction SilentlyContinue
-Remove-Item -Recurse -Force (Join-Path $projectRoot "run\client\config\hassium") -ErrorAction SilentlyContinue
 
 # 2. 配置服务端（view-distance 由 ServerSmokeTest 控制，这里设基础值）
 Write-Host "[$SessionId] [2/9] 配置服务端 ($Loader/run/server/)..."
@@ -67,8 +64,9 @@ New-Item -ItemType Directory -Force -Path $serverRunDir -ErrorAction SilentlyCon
 Set-Content -Path (Join-Path $serverRunDir "eula.txt") -Value "eula=true" -NoNewline
 $props = @"
 server-port=$ServerPort
-view-distance=20
+view-distance=16
 online-mode=false
+gamemode=creative
 level-type=minecraft\:normal
 motd=Hassium Smoke Test
 max-players=20

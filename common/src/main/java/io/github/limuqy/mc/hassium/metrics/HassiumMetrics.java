@@ -79,6 +79,51 @@ public interface HassiumMetrics {
      */
     long getCacheStaleBytes();
 
+    /**
+     * 获取已完成 hash 决策的完整区块等价值字节数。
+     */
+    long getCacheLoadEligibleBytes();
+
+    /**
+     * 获取直接从本地缓存加载的完整区块等价值字节数。
+     */
+    long getCacheHitFullChunkBytes();
+
+    /**
+     * 获取成功应用分段增量后避免加载完整区块的字节数。
+     */
+    long getCacheDeltaSavedBytes();
+
+    /**
+     * 获取客户端成功发出的完整区块请求数。
+     */
+    long getFullChunkRequestCount();
+
+    /**
+     * 获取客户端成功发出的完整区块请求等价值字节数。
+     */
+    long getFullChunkRequestBytes();
+
+    /**
+     * 获取由无本地缓存导致的完整区块请求数。
+     */
+    long getNewFullChunkRequestCount();
+
+    /**
+     * 获取由缓存过期或技术性回退导致的完整区块请求数。
+     */
+    long getStaleFullChunkRequestCount();
+
+    /**
+     * 获取由无本地缓存导致的完整区块请求等价值字节数。
+     */
+    long getNewFullChunkRequestBytes();
+
+    /**
+     * 获取由缓存过期或技术性回退导致的完整区块请求等价值字节数。
+     */
+    long getStaleFullChunkRequestBytes();
+
     // ===== 网络指标 =====
 
     /**
@@ -189,6 +234,22 @@ public interface HassiumMetrics {
             return (double) getCacheHitCount() / total;
         }
         return (double) hitBytes / totalBytes;
+    }
+
+    /**
+     * 计算有效缓存命中字节数。
+     */
+    default long getEffectiveCacheHitBytes() {
+        return getCacheHitFullChunkBytes() + getCacheDeltaSavedBytes();
+    }
+
+    /**
+     * 计算有效缓存命中率（按避免加载完整区块的等价值字节数）。
+     */
+    default double getEffectiveCacheHitRate() {
+        long eligibleBytes = getCacheLoadEligibleBytes();
+        if (eligibleBytes <= 0) return 0.0;
+        return (double) getEffectiveCacheHitBytes() / eligibleBytes;
     }
 
     /**

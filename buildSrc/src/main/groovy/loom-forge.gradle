@@ -22,7 +22,7 @@ loom {
             runDir = 'run/client'
             if (project.hasProperty('hassiumSmokeTest') && project.property('hassiumSmokeTest').toString() == 'true') {
                 def host = project.findProperty('hassiumSmokeHost') ?: '127.0.0.1:25565'
-                def delayMs = project.findProperty('hassiumSmokeDelayMs') ?: '20000'
+                def delayMs = project.findProperty('hassiumSmokeDelayMs') ?: '10000'
                 vmArgs.addAll([
                         "-Dhassium.smokeTest=true",
                         "-Dhassium.smokeTest.delayMs=${delayMs}"

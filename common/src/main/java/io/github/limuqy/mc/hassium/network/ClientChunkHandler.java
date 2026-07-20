@@ -191,8 +191,11 @@ public class ClientChunkHandler {
                 // 先回主线程应用区块，再写缓存——缓存失败（含 Error）不得阻断加载
                 MainThreadDispatcher.execute(() -> {
                     DebugLogger.info(LogType.COMPRESSION, "[HANDLE_COMPRESSED] Applying chunk [{}, {}] to world", chunkX, chunkZ);
-                    applyChunkData(chunkX, chunkZ, decompressed, false);
-                    DebugLogger.info(LogType.COMPRESSION, "[HANDLE_COMPRESSED] Successfully applied chunk [{}, {}] from server", chunkX, chunkZ);
+                    if (applyChunkData(chunkX, chunkZ, decompressed, false)) {
+                        DebugLogger.info(LogType.COMPRESSION, "[HANDLE_COMPRESSED] Successfully applied chunk [{}, {}] from server", chunkX, chunkZ);
+                    } else {
+                        DebugLogger.warn(LogType.COMPRESSION, "[HANDLE_COMPRESSED] Failed to apply chunk [{}, {}] from server", chunkX, chunkZ);
+                    }
                 }, new ChunkPos(chunkX, chunkZ), TaskCategory.SAFE_TO_CANCEL);
 
                 try {
@@ -223,15 +226,20 @@ public class ClientChunkHandler {
                 compressed.chunkX, compressed.chunkZ, compressed.compressedData.length, decompressed.length);
 
             // 先应用再写缓存，避免缓存路径 Error 阻断加载
-            applyChunkData(compressed.chunkX, compressed.chunkZ, decompressed, false);
+            boolean applied = applyChunkData(compressed.chunkX, compressed.chunkZ, decompressed, false);
             try {
                 persistDecompressedChunk(compressed.chunkX, compressed.chunkZ, decompressed);
             } catch (Throwable t) {
                 Constants.LOG.warn("Hassium: Failed to persist chunk [{}, {}] after apply (fallback)",
                         compressed.chunkX, compressed.chunkZ, t);
             }
-            Constants.LOG.debug("Hassium: Applied chunk [{}, {}] from server",
-                compressed.chunkX, compressed.chunkZ);
+            if (applied) {
+                Constants.LOG.debug("Hassium: Applied chunk [{}, {}] from server",
+                        compressed.chunkX, compressed.chunkZ);
+            } else {
+                Constants.LOG.warn("Hassium: Failed to apply chunk [{}, {}] from server",
+                        compressed.chunkX, compressed.chunkZ);
+            }
         } catch (Exception e) {
             Constants.LOG.error("Hassium: Error in fallback decompress for chunk [{}, {}]",
                 compressed.chunkX, compressed.chunkZ, e);
@@ -253,16 +261,20 @@ public class ClientChunkHandler {
      * @param chunkData  NBT 字节或 packet 字节
      * @param renderOnly true=仅渲染不参与逻辑tick
      */
-    public static void applyChunkData(int chunkX, int chunkZ, byte[] chunkData, boolean renderOnly) {
+    public static boolean applyChunkData(int chunkX, int chunkZ, byte[] chunkData, boolean renderOnly) {
         DebugLogger.info(LogType.CHUNK_APPLY, "[APPLY_CHUNK] Applying chunk [{}, {}] (dataSize={}, renderOnly={})",
                 chunkX, chunkZ, chunkData.length, renderOnly);
 
+        ChunkPos pos = new ChunkPos(chunkX, chunkZ);
         Minecraft mc = Minecraft.getInstance();
         ClientLevel level = mc.level;
 
         if (level == null) {
             DebugLogger.error("[APPLY_CHUNK] Cannot apply chunk [{}, {}], client level is null", chunkX, chunkZ);
-            return;
+            if (renderOnly) {
+                ViewDistanceExtensionService.getInstance().onRenderOnlyMiss(pos);
+            }
+            return false;
         }
 
         try {
@@ -271,7 +283,6 @@ public class ClientChunkHandler {
                 ViewDistanceExtensionService.getInstance().ensureExpandedRadius();
             }
 
-            ChunkPos pos = new ChunkPos(chunkX, chunkZ);
             byte[] packetBytes = ChunkDiskCodec.maybeNbtToPacketBytes(
                     chunkData, level.registryAccess(), level.getSectionsCount());
 
@@ -296,6 +307,7 @@ public class ClientChunkHandler {
                 ClientLightRecomputeService.applyLightEngineNow(pos);
                 ViewDistanceExtensionService.getInstance().onRenderOnlyApplied(pos);
             }
+            return true;
 
         } catch (Exception e) {
             DebugLogger.error("[APPLY_CHUNK] Failed to apply chunk data for [{}, {}]", e, chunkX, chunkZ);
@@ -303,6 +315,7 @@ public class ClientChunkHandler {
             if (renderOnly) {
                 ViewDistanceExtensionService.getInstance().onRenderOnlyMiss(new ChunkPos(chunkX, chunkZ));
             }
+            return false;
         }
     }
 
@@ -336,14 +349,11 @@ public class ClientChunkHandler {
             return false;
         }
 
-        try {
-            applyChunkData(pos.x, pos.z, chunkData, renderOnly);
+        boolean applied = applyChunkData(pos.x, pos.z, chunkData, renderOnly);
+        if (applied) {
             Constants.LOG.debug("Hassium: Applied chunk {} from cache (renderOnly={})", pos, renderOnly);
-            return true;
-        } catch (Exception e) {
-            Constants.LOG.error("Hassium: Failed to apply chunk {} from cache", pos, e);
-            return false;
         }
+        return applied;
     }
 
     /**

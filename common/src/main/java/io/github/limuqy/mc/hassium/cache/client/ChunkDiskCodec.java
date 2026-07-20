@@ -256,6 +256,7 @@ public final class ChunkDiskCodec {
             FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(bytes));
             try {
                 scratch.read(buf);
+                if (scratch.hasOnlyAir()) continue;  // 运行时二次校验，防止 NBT has_only_air 标志错误
                 long hash = ChunkContentHashUtil.computeSectionHash(scratch);
                 hashes[i] = hash == 0L ? 1L : hash;
             } finally {

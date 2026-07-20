@@ -169,7 +169,7 @@ public class ClientMetadataHandler {
         for (var e : timedOut.entrySet()) {
             DebugLogger.warn(LogType.METADATA,
                     "[SECTION_DELTA] Timeout waiting for {} chunks, fallback to full", e.getValue().size());
-            requestFullChunks(e.getKey(), e.getValue());
+            requestFullChunks(e.getKey(), e.getValue(), true);
         }
     }
 
@@ -183,7 +183,7 @@ public class ClientMetadataHandler {
             if (forceFullRequest || storage == null) {
                 requestFullChunks(packet.dimension(), packet.entries().stream()
                         .map(e -> new ChunkPos(e.chunkX(), e.chunkZ()))
-                        .toList());
+                        .toList(), true);
             } else {
                 dispatchChunkHashCompare(storage, packet);
             }
@@ -210,7 +210,8 @@ public class ClientMetadataHandler {
      */
     private record ChunkHashResult(
             List<ChunkPos> hitChunks,
-            List<ChunkPos> fullRequestChunks,
+            List<ChunkPos> newFullRequestChunks,
+            List<ChunkPos> staleFullRequestChunks,
             List<ChunkPos> deltaRequestChunks,
             String dimension
     ) {}
@@ -221,23 +222,26 @@ public class ClientMetadataHandler {
     private static ChunkHashResult compareChunkHashes(
             ClientHassiumStorage storage, ChunkHashS2CPacket packet) {
         List<ChunkPos> hitChunks = new ArrayList<>();
-        List<ChunkPos> fullRequestChunks = new ArrayList<>();
+        List<ChunkPos> newFullRequestChunks = new ArrayList<>();
+        List<ChunkPos> staleFullRequestChunks = new ArrayList<>();
         List<ChunkPos> deltaRequestChunks = new ArrayList<>();
 
         for (ChunkHashS2CPacket.Entry entry : packet.entries()) {
             ChunkPos pos = new ChunkPos(entry.chunkX(), entry.chunkZ());
             long cachedChunkHash = storage.readChunkHash(pos);
+            NetworkStats.recordCacheLoadEligible(ESTIMATED_CHUNK_BYTES);
 
             if (cachedChunkHash != 0L && cachedChunkHash == entry.chunkHash()) {
                 hitChunks.add(pos);
                 NetworkStats.recordCacheHit(ESTIMATED_CHUNK_BYTES);
+                NetworkStats.recordCacheFullHit(ESTIMATED_CHUNK_BYTES);
                 DebugLogger.info(LogType.METADATA, "[CHUNK_HASH] HIT chunk {} (hash={})",
                         pos, Long.toHexString(entry.chunkHash()));
             } else if (cachedChunkHash == 0L) {
                 // MISS：无缓存，走全量
                 NetworkStats.recordCacheMiss(ESTIMATED_CHUNK_BYTES);
                 DebugLogger.info(LogType.METADATA, "[CHUNK_HASH] MISS chunk {}", pos);
-                fullRequestChunks.add(pos);
+                newFullRequestChunks.add(pos);
             } else {
                 // MISMATCH：开关开启走分段增量，否则全量（见 clientCache.sectionDeltaEnabled）
                 NetworkStats.recordCacheStale(ESTIMATED_CHUNK_BYTES);
@@ -250,17 +254,18 @@ public class ClientMetadataHandler {
                     DebugLogger.info(LogType.METADATA,
                             "[CHUNK_HASH] MISMATCH chunk {} (cached={}, server={}) -> full",
                             pos, Long.toHexString(cachedChunkHash), Long.toHexString(entry.chunkHash()));
-                    fullRequestChunks.add(pos);
+                    staleFullRequestChunks.add(pos);
                 }
             }
         }
 
         DebugLogger.info(LogType.METADATA,
-                "[CHUNK_HASH] Result: {} hits, {} full-request, {} delta-request (total {})",
-                hitChunks.size(), fullRequestChunks.size(), deltaRequestChunks.size(),
-                packet.entries().size());
+                "[CHUNK_HASH] Result: {} hits, {} new full-request, {} stale full-request, {} delta-request (total {})",
+                hitChunks.size(), newFullRequestChunks.size(), staleFullRequestChunks.size(),
+                deltaRequestChunks.size(), packet.entries().size());
 
-        return new ChunkHashResult(hitChunks, fullRequestChunks, deltaRequestChunks, packet.dimension());
+        return new ChunkHashResult(hitChunks, newFullRequestChunks, staleFullRequestChunks,
+                deltaRequestChunks, packet.dimension());
     }
 
     /**
@@ -284,11 +289,18 @@ public class ClientMetadataHandler {
             }
         }
 
-        if (!result.fullRequestChunks().isEmpty()) {
+        if (!result.newFullRequestChunks().isEmpty()) {
             DebugLogger.info(LogType.METADATA,
                     "[CHUNK_HASH] {} misses, requesting full chunks",
-                    result.fullRequestChunks().size());
-            requestFullChunks(dimension, result.fullRequestChunks());
+                    result.newFullRequestChunks().size());
+            requestFullChunks(dimension, result.newFullRequestChunks(), false);
+        }
+
+        if (!result.staleFullRequestChunks().isEmpty()) {
+            DebugLogger.info(LogType.METADATA,
+                    "[CHUNK_HASH] {} stale chunks, requesting full chunks",
+                    result.staleFullRequestChunks().size());
+            requestFullChunks(dimension, result.staleFullRequestChunks(), true);
         }
 
         // MISMATCH：发送 sectionHash 请求，服务端比对后回 SectionDeltaS2CPacket（分段增量）
@@ -307,7 +319,7 @@ public class ClientMetadataHandler {
         ClientHassiumStorage storage = ClientChunkHandler.getClientStorage();
         if (storage == null) {
             // storage 不可用，回退全量
-            requestFullChunks(dimension, chunks);
+            requestFullChunks(dimension, chunks, true);
             return;
         }
         List<SectionHashRequestC2SPacket.Entry> entries = new ArrayList<>();
@@ -326,7 +338,7 @@ public class ClientMetadataHandler {
         if (!fallback.isEmpty()) {
             DebugLogger.info(LogType.METADATA,
                     "[CHUNK_HASH] {} chunks have no sectionHashes, fallback to full", fallback.size());
-            requestFullChunks(dimension, fallback);
+            requestFullChunks(dimension, fallback, true);
         }
     }
 
@@ -361,7 +373,7 @@ public class ClientMetadataHandler {
     /**
      * 请求完整区块数据（无缓存时的回退）
      */
-    private static void requestFullChunks(String dimension, List<ChunkPos> chunks) {
+    private static void requestFullChunks(String dimension, List<ChunkPos> chunks, boolean staleOrFallback) {
         // 兜底：断连后不再发包，避免 Cannot send packets when not in game!
         // 异步回调（applyChunkHashResult 等）与 tickPendingHashGate 之间存在竞态，
         // 即使上层已检查，这里仍兜一道。
@@ -372,8 +384,6 @@ public class ClientMetadataHandler {
                     chunks.size());
             return;
         }
-        // 按区块数计，避免一批多块只记 1 次导致「全量请求」与日志对不上
-        NetworkStats.recordDataRequestsSent(chunks.size());
         ChunkDataRequestC2SPacket request = new ChunkDataRequestC2SPacket(dimension, chunks);
         FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
         boolean sent = false;
@@ -381,6 +391,9 @@ public class ClientMetadataHandler {
             request.encode(buf);
             Services.NETWORK_MANAGER.sendChunkDataRequest(buf);
             sent = true;
+            // 按区块数计，避免一批多块只记 1 次导致「全量请求」与日志对不上
+            NetworkStats.recordDataRequestsSent(chunks.size());
+            NetworkStats.recordFullChunkRequests(chunks.size(), chunks.size() * ESTIMATED_CHUNK_BYTES, staleOrFallback);
         } catch (Exception e) {
             DebugLogger.error("[CHUNK_HASH] Failed to request full chunks", e);
         } finally {
@@ -445,7 +458,7 @@ public class ClientMetadataHandler {
             for (SectionHashRequestC2SPacket.Entry entry : entries) {
                 fallback.add(new ChunkPos(entry.chunkX(), entry.chunkZ()));
             }
-            requestFullChunks(dimension, fallback);
+            requestFullChunks(dimension, fallback, true);
         }
     }
 
@@ -462,16 +475,20 @@ public class ClientMetadataHandler {
                 "[SECTION_DELTA] Received delta packet: {} entries, {} skipped, dimension={}",
                 packet.entries().size(), packet.skipped().size(), packet.dimension());
 
-        if (!packet.entries().isEmpty()) {
+        int receivedChunkCount = packet.entries().size() + packet.skipped().size();
+        if (receivedChunkCount > 0) {
             long actualBytes = estimateSectionDeltaPayloadBytes(packet);
-            long vanillaBytes = packet.entries().size() * ESTIMATED_CHUNK_BYTES;
-            NetworkStats.recordSectionDeltaReceived(packet.entries().size(), vanillaBytes, actualBytes);
+            long vanillaBytes = (long) receivedChunkCount * ESTIMATED_CHUNK_BYTES;
+            NetworkStats.recordSectionDeltaReceived(receivedChunkCount, vanillaBytes, actualBytes);
         }
 
-        for (SectionDeltaS2CPacket.DeltaEntry entry : packet.entries()) {
+        for (int i = 0; i < packet.entries().size(); i++) {
+            SectionDeltaS2CPacket.DeltaEntry entry = packet.entries().get(i);
             PENDING_DELTA_REQUESTS.remove(ChunkPos.asLong(entry.chunkX(), entry.chunkZ()));
             try {
-                applyDeltaEntry(entry, packet.dimension());
+                long deltaSavedBytes = Math.max(0L,
+                        ESTIMATED_CHUNK_BYTES - estimateSectionDeltaEntryPayloadBytes(packet, entry, i));
+                applyDeltaEntry(entry, packet.dimension(), deltaSavedBytes);
             } catch (Exception e) {
                 DebugLogger.error("[SECTION_DELTA] Failed to apply delta for chunk [{}, {}]",
                         entry.chunkX(), entry.chunkZ(), e);
@@ -486,7 +503,7 @@ public class ClientMetadataHandler {
             }
             DebugLogger.info(LogType.METADATA,
                     "[SECTION_DELTA] {} chunks skipped by server, fallback to full", fallback.size());
-            requestFullChunks(packet.dimension(), fallback);
+            requestFullChunks(packet.dimension(), fallback, true);
         }
     }
 
@@ -496,22 +513,40 @@ public class ClientMetadataHandler {
     private static long estimateSectionDeltaPayloadBytes(SectionDeltaS2CPacket packet) {
         long bytes = 8L + packet.dimension().length();
         for (SectionDeltaS2CPacket.DeltaEntry entry : packet.entries()) {
-            bytes += 8;
-            for (SectionDeltaS2CPacket.SectionData sd : entry.changedSections()) {
-                bytes += 8L + (sd.blockData() != null ? sd.blockData().length : 0);
-            }
-            for (SectionDeltaS2CPacket.BlockEntityData be : entry.blockEntities()) {
-                // BE：坐标 + 类型字符串 + NBT 粗估
-                bytes += 48;
-                if (be.type() != null) {
-                    bytes += be.type().toString().length();
-                }
-                if (be.nbt() != null) {
-                    bytes += 64;
-                }
-            }
+            bytes += estimateSectionDeltaEntryPayloadBytes(entry);
         }
         bytes += packet.skipped().size() * 8L;
+        return bytes;
+    }
+
+    private static long estimateSectionDeltaEntryPayloadBytes(SectionDeltaS2CPacket packet,
+                                                               SectionDeltaS2CPacket.DeltaEntry entry,
+                                                               int entryIndex) {
+        int entryCount = packet.entries().size();
+        if (entryCount <= 0) {
+            return 0L;
+        }
+        long sharedBytes = 8L + packet.dimension().length();
+        long apportionedSharedBytes = sharedBytes / entryCount
+                + (entryIndex < sharedBytes % entryCount ? 1L : 0L);
+        return estimateSectionDeltaEntryPayloadBytes(entry) + apportionedSharedBytes;
+    }
+
+    private static long estimateSectionDeltaEntryPayloadBytes(SectionDeltaS2CPacket.DeltaEntry entry) {
+        long bytes = 8L;
+        for (SectionDeltaS2CPacket.SectionData sd : entry.changedSections()) {
+            bytes += 8L + (sd.blockData() != null ? sd.blockData().length : 0);
+        }
+        for (SectionDeltaS2CPacket.BlockEntityData be : entry.blockEntities()) {
+            // BE：坐标 + 类型字符串 + NBT 粗估
+            bytes += 48;
+            if (be.type() != null) {
+                bytes += be.type().toString().length();
+            }
+            if (be.nbt() != null) {
+                bytes += 64;
+            }
+        }
         return bytes;
     }
 
@@ -528,13 +563,13 @@ public class ClientMetadataHandler {
      * </ol>
      * 任一步失败 → {@code requestFullChunks}（保底，不比现在差）。
      */
-    private static void applyDeltaEntry(SectionDeltaS2CPacket.DeltaEntry entry, String dimension) {
+    private static boolean applyDeltaEntry(SectionDeltaS2CPacket.DeltaEntry entry, String dimension, long deltaSavedBytes) {
         ChunkPos pos = new ChunkPos(entry.chunkX(), entry.chunkZ());
         try {
             Minecraft mc = Minecraft.getInstance();
             if (mc.level == null) {
-                requestFullChunks(dimension, List.of(pos));
-                return;
+                requestFullChunks(dimension, List.of(pos), true);
+                return false;
             }
 
             // 1. 读缓存 NBT
@@ -542,8 +577,8 @@ public class ClientMetadataHandler {
             if (nbt == null) {
                 DebugLogger.info(LogType.METADATA,
                         "[SECTION_DELTA] No cached NBT for {}, fallback to full", pos);
-                requestFullChunks(dimension, List.of(pos));
-                return;
+                requestFullChunks(dimension, List.of(pos), true);
+                return false;
             }
 
             // 2. 替换变更的 sections
@@ -580,8 +615,8 @@ public class ClientMetadataHandler {
             long newChunkHash = ChunkContentHashUtil.combineSectionHashesFromArray(newSectionHashes);
             byte[] nbtBytes = io.github.limuqy.mc.hassium.cache.client.ChunkDiskCodec.nbtToBytes(nbt);
             if (nbtBytes == null) {
-                requestFullChunks(dimension, List.of(pos));
-                return;
+                requestFullChunks(dimension, List.of(pos), true);
+                return false;
             }
             ClientChunkHandler.persistToCache(pos, nbtBytes, newChunkHash, newSectionHashes);
 
@@ -593,22 +628,29 @@ public class ClientMetadataHandler {
             byte[] packetBytes = io.github.limuqy.mc.hassium.cache.client.ChunkDiskCodec
                     .nbtToPacketBytes(nbt, registryAccess, sectionCount);
             if (packetBytes == null) {
-                requestFullChunks(dimension, List.of(pos));
-                return;
+                requestFullChunks(dimension, List.of(pos), true);
+                return false;
             }
             final byte[] finalPacketBytes = packetBytes;
             final List<SectionDeltaS2CPacket.BlockEntityData> bes = entry.blockEntities();
             io.github.limuqy.mc.hassium.concurrent.MainThreadDispatcher.execute(() -> {
-                ClientChunkHandler.applyChunkData(entry.chunkX(), entry.chunkZ(), finalPacketBytes, false);
-                if (!bes.isEmpty()) {
-                    applyBlockEntities(entry.chunkX(), entry.chunkZ(), bes);
+                boolean applied = ClientChunkHandler.applyChunkData(entry.chunkX(), entry.chunkZ(), finalPacketBytes, false);
+                if (applied) {
+                    if (!bes.isEmpty()) {
+                        applyBlockEntities(entry.chunkX(), entry.chunkZ(), bes);
+                    }
+                    NetworkStats.recordCacheDeltaSaved(deltaSavedBytes);
+                } else {
+                    requestFullChunks(dimension, List.of(pos), true);
                 }
             }, pos);
+            return true;
 
         } catch (Throwable t) {
             DebugLogger.warn(LogType.METADATA,
                     "[SECTION_DELTA] Merge failed for {}, fallback to full", pos, t);
-            requestFullChunks(dimension, List.of(pos));
+            requestFullChunks(dimension, List.of(pos), true);
+            return false;
         }
     }
 

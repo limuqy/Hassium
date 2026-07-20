@@ -264,16 +264,12 @@ public class ClientCacheLoadQueue {
             }
             Constants.LOG.debug("[CACHE_APPLY] Applying chunk {} to world (renderOnly={}, remaining={})",
                     chunk.pos(), chunk.renderOnly(), readyQueue.size());
-            try {
-                ClientChunkHandler.applyChunkData(chunk.pos().x, chunk.pos().z, chunk.data(), chunk.renderOnly());
+            boolean appliedToWorld = ClientChunkHandler.applyChunkData(
+                    chunk.pos().x, chunk.pos().z, chunk.data(), chunk.renderOnly());
+            if (appliedToWorld) {
                 applied++;
-            } catch (Exception e) {
-                Constants.LOG.error("[CACHE_APPLY] Error applying cached chunk {}", chunk.pos(), e);
-                if (!chunk.renderOnly()) {
-                    requestChunkFromServer(chunk.pos());
-                } else {
-                    ViewDistanceExtensionService.getInstance().onRenderOnlyMiss(chunk.pos());
-                }
+            } else if (!chunk.renderOnly()) {
+                requestChunkFromServer(chunk.pos());
             }
         }
 

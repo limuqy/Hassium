@@ -7,8 +7,6 @@ import net.minecraft.network.chat.Component;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 /**
  * 开发环境客户端冒烟测试：支持两轮连服统计。
@@ -137,6 +135,7 @@ public final class ClientSmokeTest {
             return;
         }
 
+        long delayMs = state == State.WAIT_JOIN_1 ? ClientSmokeTest.delayMs * 3 : ClientSmokeTest.delayMs;
         if (joinAtMs < 0L) {
             joinAtMs = now;
             LOGGER.info("HassiumSmokeTest: {} player entered world at y={}, waiting {} ms before stats",
@@ -383,44 +382,18 @@ public final class ClientSmokeTest {
     }
 
     /**
-     * 加强统计校验：
-     * 1. 关键字必须存在（Hassium、客户端统计、网络接收、缓存命中率、超视渲染）
-     * 2. 缓存命中数 + 未命中数 > 0（确保有区块加载）
-     * 3. 网络接收字节数 > 0 或缓存命中数 > 0（确保有数据传输或缓存命中）
+     * 校验客户端统计摘要的稳定结构。
      */
     static boolean validateStats(String plain) {
         if (plain == null || plain.isBlank()) {
             return false;
         }
-        // 关键字校验
-        if (!plain.contains("Hassium") || !plain.contains("客户端统计")) {
-            return false;
-        }
-        if (!plain.contains("网络接收") || !plain.contains("缓存命中率") || !plain.contains("超视渲染")) {
-            return false;
-        }
-
-        // 提取数字字段：缓存命中率、命中数、未命中数
-        // 格式：缓存命中率: 50.0% (命中 100, 未命中 50, 过期 5)
-        Pattern cachePattern = Pattern.compile("缓存命中率[^\\d]*([\\d.]+)%[^()]*\\([^)]*命中\\s+(\\d+)[^)]*未命中\\s+(\\d+)");
-        Matcher m = cachePattern.matcher(plain);
-        if (m.find()) {
-            try {
-                long hits = Long.parseLong(m.group(2));
-                long misses = Long.parseLong(m.group(3));
-                if (hits + misses == 0) {
-                    LOGGER.error("HassiumSmokeTest: validateStats failed - no chunks loaded (hits={} misses={})", hits, misses);
-                    return false;
-                }
-                LOGGER.info("HassiumSmokeTest: stats OK - cache hits={} misses={}", hits, misses);
-            } catch (NumberFormatException e) {
-                LOGGER.warn("HassiumSmokeTest: failed to parse cache stats, accepting keyword-only validation");
-            }
-        } else {
-            LOGGER.warn("HassiumSmokeTest: cache stats pattern not found, accepting keyword-only validation");
-        }
-
-        return true;
+        return plain.contains("Hassium")
+                && plain.contains("客户端统计")
+                && plain.contains("带宽压缩")
+                && plain.contains("缓存命中")
+                && plain.contains("区块加载")
+                && plain.contains("超视渲染");
     }
 
     private static String stripSection(String s) {

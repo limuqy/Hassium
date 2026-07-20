@@ -7,9 +7,7 @@ import io.github.limuqy.mc.hassium.compat.LevelChunkSectionCompat;
 import net.jpountz.xxhash.StreamingXXHash64;
 import net.jpountz.xxhash.XXHash64;
 import net.jpountz.xxhash.XXHashFactory;
-import net.minecraft.core.BlockPos;
 import net.minecraft.core.RegistryAccess;
-import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.nbt.ByteArrayTag;
 import net.minecraft.nbt.ByteTag;
 import net.minecraft.nbt.CompoundTag;
@@ -25,16 +23,8 @@ import net.minecraft.nbt.StringTag;
 import net.minecraft.nbt.Tag;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.network.protocol.game.ClientboundLevelChunkPacketData;
-import net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket;
-#if MC_VER < MC_1_21_11
-import net.minecraft.resources.ResourceLocation;
-#else
-import net.minecraft.resources.Identifier;
-#endif
-import net.minecraft.world.level.block.entity.BlockEntityType;
 import net.minecraft.world.level.chunk.LevelChunk;
 import net.minecraft.world.level.chunk.LevelChunkSection;
-import net.minecraft.world.level.lighting.LevelLightEngine;
 
 import io.netty.buffer.Unpooled;
 
@@ -42,9 +32,7 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.BitSet;
 import java.util.Collections;
-import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -64,75 +52,6 @@ public final class ChunkContentHashUtil {
     private static final long HASH_SEED = 0L;
 
     private ChunkContentHashUtil() {}
-
-    public record Result(long hash, int sectionsBytes) {}
-
-    public static Result compute(ClientboundLevelChunkWithLightPacket packet) {
-        return compute(packet.getChunkData(), packet.getX(), packet.getZ());
-    }
-
-    public static Result compute(LevelChunk chunk, LevelLightEngine lightEngine) {
-        BitSet empty = new BitSet();
-        ClientboundLevelChunkWithLightPacket packet =
-                new ClientboundLevelChunkWithLightPacket(chunk, lightEngine, empty, empty);
-        return compute(packet);
-    }
-
-    @SuppressWarnings("deprecation")
-    public static Result compute(ClientboundLevelChunkPacketData chunkData, int chunkX, int chunkZ) {
-        FriendlyByteBuf sBuf = chunkData.getReadBuffer();
-        int sectionsBytes = sBuf.readableBytes();
-        byte[] sections = new byte[sectionsBytes];
-        sBuf.getBytes(sBuf.readerIndex(), sections);
-
-        List<BlockEntityEntry> entities = new ArrayList<>();
-        chunkData.getBlockEntitiesTagsConsumer(chunkX, chunkZ).accept(
-                (BlockPos pos, BlockEntityType<?> type, CompoundTag nbt) ->
-                        entities.add(new BlockEntityEntry(pos.immutable(), type, nbt))
-        );
-        entities.sort(Comparator
-                .comparingInt((BlockEntityEntry e) -> e.pos.getX())
-                .thenComparingInt(e -> e.pos.getY())
-                .thenComparingInt(e -> e.pos.getZ()));
-
-        // 流式哈希：直接写入 StreamingXXHash64，无需中间 byte[]
-        StreamingXXHash64 streamingHasher = XX_FACTORY.newStreamingHash64(HASH_SEED);
-        HashingOutputStream out = new HashingOutputStream(streamingHasher);
-        try {
-            out.write(sections);
-#if MC_VER < MC_1_21_5
-            writeNbt(out, chunkData.getHeightmaps());
-#else
-            CompoundTag heightmapTag = new CompoundTag();
-            for (var entry : chunkData.getHeightmaps().entrySet()) {
-                heightmapTag.put(entry.getKey().getSerializedName(), new LongArrayTag(entry.getValue()));
-            }
-            writeNbt(out, heightmapTag);
-#endif
-            writeInt(out, entities.size());
-            for (BlockEntityEntry e : entities) {
-                writeInt(out, e.pos.getX());
-                writeInt(out, e.pos.getY());
-                writeInt(out, e.pos.getZ());
-#if MC_VER < MC_1_21_11
-                ResourceLocation
-#else
-                Identifier
-#endif
-                typeId = BuiltInRegistries.BLOCK_ENTITY_TYPE.getKey(e.type);
-                writeString(out, typeId != null ? typeId.toString() : "");
-                writeNbt(out, e.nbt);
-            }
-
-            long hash = out.getValue();
-            if (hash == 0L) {
-                hash = 1L;
-            }
-            return new Result(hash, sectionsBytes);
-        } catch (IOException e) {
-            throw new IllegalStateException("Failed to build chunk hash input", e);
-        }
-    }
 
     /**
      * 计算 chunk 中每个 section 的方块哈希（不含 blockEntity NBT）。
@@ -261,6 +180,24 @@ public final class ChunkContentHashUtil {
      * 1.21.9+ 用 pack(Strategy) 规范化，避免 palette 排列变化导致 hash 不匹配。
      * 1.20.1-1.21.8 用 section.write() 字节（palette 排列稳定）。
      */
+    /**
+     * 计算单个 section 的方块哈希（仅 blockStates，不含 biomes / blockEntity）。
+     * <p>
+     * 所有 hash 计算路径均通过此方法或 {@link #parseAndHashSections} 调用
+     * {@link LevelChunkSectionCompat#writeSectionForHash}，最终用 pack(Strategy)（1.21.9+）
+     * 或 section.write()（1.20.1-1.21.8）规范化后哈希。
+     * <p>
+     * 5 条路径等价性保证：
+     * <ul>
+     *   <li>路径 A（服务端广播）：packet bytes → scratch.read → pack → hash</li>
+     *   <li>路径 B（服务端 Stage2）：in-memory LCS → pack → hash</li>
+     *   <li>路径 C（客户端 persist）：packet bytes → scratch.read → pack → hash</li>
+     *   <li>路径 D（客户端 delta merge）：NBT bytes → scratch.read → pack → hash</li>
+     *   <li>路径 E（客户端 Live-Unload）：in-memory LCS → pack → hash</li>
+     * </ul>
+     * pack(Strategy) 重新遍历全部位置构建 HashMapPalette，输出只依赖 block-at-position 数据；
+     * write()→read() 往返忠实保留 storage raw longs 和 palette entries，故 5 条路径产出一致。
+     */
     public static long computeSectionHash(LevelChunkSection section) {
         StreamingXXHash64 hasher = XX_FACTORY.newStreamingHash64(HASH_SEED);
         HashingOutputStream out = new HashingOutputStream(hasher);
@@ -269,50 +206,6 @@ public final class ChunkContentHashUtil {
             return out.getValue();
         } catch (IOException e) {
             throw new IllegalStateException("Failed to hash section", e);
-        }
-    }
-
-    /**
-     * 计算 chunk 级哈希（从 packet 数据）。
-     * <p>
-     * 排除 blockEntity NBT，只包含 sections + heightmaps。
-     * 用于阶段一的 chunkHash 广播。
-     */
-    public static long computeChunkHashFromPacket(ClientboundLevelChunkWithLightPacket packet) {
-        return computeChunkHashFromPacketData(packet.getChunkData(), packet.getX(), packet.getZ());
-    }
-
-    /**
-     * 计算 chunk 级哈希（从 packet 数据）。
-     * <p>
-     * 排除 blockEntity NBT，只包含 sections + heightmaps。
-     */
-    public static long computeChunkHashFromPacketData(
-            ClientboundLevelChunkPacketData chunkData, int chunkX, int chunkZ) {
-        FriendlyByteBuf sBuf = chunkData.getReadBuffer();
-        int sectionsBytes = sBuf.readableBytes();
-        byte[] sections = new byte[sectionsBytes];
-        sBuf.getBytes(sBuf.readerIndex(), sections);
-
-        StreamingXXHash64 hasher = XX_FACTORY.newStreamingHash64(HASH_SEED);
-        HashingOutputStream out = new HashingOutputStream(hasher);
-        try {
-            // 只写入 sections 数据，不写入 blockEntity
-            out.write(sections);
-#if MC_VER < MC_1_21_5
-            writeNbt(out, chunkData.getHeightmaps());
-#else
-            CompoundTag heightmapTag = new CompoundTag();
-            for (var entry : chunkData.getHeightmaps().entrySet()) {
-                heightmapTag.put(entry.getKey().getSerializedName(), new LongArrayTag(entry.getValue()));
-            }
-            writeNbt(out, heightmapTag);
-#endif
-
-            long hash = out.getValue();
-            return hash == 0L ? 1L : hash;
-        } catch (IOException e) {
-            throw new IllegalStateException("Failed to compute chunk hash from packet", e);
         }
     }
 
@@ -353,6 +246,10 @@ public final class ChunkContentHashUtil {
 
     /**
      * 解析 section 字节并计算 per-section 哈希。
+     * <p>
+     * 路径 A（服务端广播，经 {@link #computeSectionHashesFromPacket}）和
+     * 路径 C（客户端 persist，经 {@link #computeSectionHashesFromBytes}）的共享实现。
+     * 数据流：packet/NBT bytes → scratch.read → writeSectionForHash → pack(Strategy) → xxHash64。
      */
     private static Map<Integer, Long> parseAndHashSections(
             byte[] allData, int sectionCount, RegistryAccess registryAccess) {
@@ -537,6 +434,4 @@ public final class ChunkContentHashUtil {
             return hasher.getValue();
         }
     }
-
-    private record BlockEntityEntry(BlockPos pos, BlockEntityType<?> type, CompoundTag nbt) {}
 }

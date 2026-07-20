@@ -25,6 +25,17 @@ public class HassiumMetricsImpl implements HassiumMetrics {
     private final AtomicLong cacheMissBytes = new AtomicLong(0);
     private final AtomicLong cacheStaleBytes = new AtomicLong(0);
 
+    // 客户端缓存加载展示指标（统一使用完整区块等价值）
+    private final AtomicLong cacheLoadEligibleBytes = new AtomicLong(0);
+    private final AtomicLong cacheHitFullChunkBytes = new AtomicLong(0);
+    private final AtomicLong cacheDeltaSavedBytes = new AtomicLong(0);
+    private final AtomicLong fullChunkRequestCount = new AtomicLong(0);
+    private final AtomicLong fullChunkRequestBytes = new AtomicLong(0);
+    private final AtomicLong newFullChunkRequestCount = new AtomicLong(0);
+    private final AtomicLong newFullChunkRequestBytes = new AtomicLong(0);
+    private final AtomicLong staleFullChunkRequestCount = new AtomicLong(0);
+    private final AtomicLong staleFullChunkRequestBytes = new AtomicLong(0);
+
     // 网络指标
     private final AtomicLong networkBytesSaved = new AtomicLong(0);
     private final AtomicLong networkCompressTimeNs = new AtomicLong(0);
@@ -120,6 +131,51 @@ public class HassiumMetricsImpl implements HassiumMetrics {
     @Override
     public long getCacheStaleBytes() {
         return cacheStaleBytes.get();
+    }
+
+    @Override
+    public long getCacheLoadEligibleBytes() {
+        return cacheLoadEligibleBytes.get();
+    }
+
+    @Override
+    public long getCacheHitFullChunkBytes() {
+        return cacheHitFullChunkBytes.get();
+    }
+
+    @Override
+    public long getCacheDeltaSavedBytes() {
+        return cacheDeltaSavedBytes.get();
+    }
+
+    @Override
+    public long getFullChunkRequestCount() {
+        return fullChunkRequestCount.get();
+    }
+
+    @Override
+    public long getFullChunkRequestBytes() {
+        return fullChunkRequestBytes.get();
+    }
+
+    @Override
+    public long getNewFullChunkRequestCount() {
+        return newFullChunkRequestCount.get();
+    }
+
+    @Override
+    public long getStaleFullChunkRequestCount() {
+        return staleFullChunkRequestCount.get();
+    }
+
+    @Override
+    public long getNewFullChunkRequestBytes() {
+        return newFullChunkRequestBytes.get();
+    }
+
+    @Override
+    public long getStaleFullChunkRequestBytes() {
+        return staleFullChunkRequestBytes.get();
     }
 
     @Override
@@ -220,6 +276,15 @@ public class HassiumMetricsImpl implements HassiumMetrics {
         cacheHitBytes.set(0);
         cacheMissBytes.set(0);
         cacheStaleBytes.set(0);
+        cacheLoadEligibleBytes.set(0);
+        cacheHitFullChunkBytes.set(0);
+        cacheDeltaSavedBytes.set(0);
+        fullChunkRequestCount.set(0);
+        fullChunkRequestBytes.set(0);
+        newFullChunkRequestCount.set(0);
+        newFullChunkRequestBytes.set(0);
+        staleFullChunkRequestCount.set(0);
+        staleFullChunkRequestBytes.set(0);
         networkBytesSaved.set(0);
         networkCompressTimeNs.set(0);
         networkDecompressTimeNs.set(0);
@@ -321,6 +386,51 @@ public class HassiumMetricsImpl implements HassiumMetrics {
     public void recordCacheStale(long bytes) {
         cacheStaleCount.incrementAndGet();
         cacheStaleBytes.addAndGet(bytes);
+    }
+
+    /**
+     * 记录已完成 hash 决策的完整区块等价值。
+     */
+    public void recordCacheLoadEligible(long bytes) {
+        if (bytes > 0) {
+            cacheLoadEligibleBytes.addAndGet(bytes);
+        }
+    }
+
+    /**
+     * 记录直接从本地缓存加载的完整区块等价值。
+     */
+    public void recordCacheFullHit(long bytes) {
+        if (bytes > 0) {
+            cacheHitFullChunkBytes.addAndGet(bytes);
+        }
+    }
+
+    /**
+     * 记录成功应用分段增量后避免加载完整区块的字节数。
+     */
+    public void recordCacheDeltaSaved(long bytes) {
+        if (bytes > 0) {
+            cacheDeltaSavedBytes.addAndGet(bytes);
+        }
+    }
+
+    /**
+     * 记录已成功发出的完整区块请求。
+     */
+    public void recordFullChunkRequests(long chunkCount, long bytes, boolean staleOrFallback) {
+        if (chunkCount <= 0 || bytes <= 0) {
+            return;
+        }
+        fullChunkRequestCount.addAndGet(chunkCount);
+        fullChunkRequestBytes.addAndGet(bytes);
+        if (staleOrFallback) {
+            staleFullChunkRequestCount.addAndGet(chunkCount);
+            staleFullChunkRequestBytes.addAndGet(bytes);
+        } else {
+            newFullChunkRequestCount.addAndGet(chunkCount);
+            newFullChunkRequestBytes.addAndGet(bytes);
+        }
     }
 
     /**
@@ -508,17 +618,17 @@ public class HassiumMetricsImpl implements HassiumMetrics {
                         "  原版写入: %d bytes (%d 次)\n" +
                         "  压缩读取: %d bytes (%d 次)\n" +
                         "  压缩写入: %d bytes (%d 次)\n" +
-                        "  压缩率: %.2f%%\n" +
+                        "  压缩率: %s\n" +
                         "缓存:\n" +
                         "  命中: %d 次 (%s)\n" +
                         "  未命中: %d 次 (%s)\n" +
                         "  过期: %d 次 (%s)\n" +
-                        "  命中率: %.2f%% (按大小)\n" +
+                        "  命中率: %s (按大小)\n" +
                         "网络:\n" +
-                        "  节省: %d bytes\n" +
-                        "  发送: %s (原版 %s) — 节省 %.1f%%\n" +
-                        "  接收: %s (原版 %s) — 节省 %.1f%%\n" +
-                        "  压缩比: %.2f:1\n" +
+                        "  节省: %s\n" +
+                        "  发送: %s (原版 %s) — 节省 %s\n" +
+                        "  接收: %s (原版 %s) — 节省 %s\n" +
+                        "  压缩比: %s\n" +
                         "  元数据: 发送 %s, 接收 %s\n" +
                         "  数据请求: 发送 %d, 接收 %d\n" +
                         "  分段增量: 请求 %d, 接收 %d\n" +
@@ -531,16 +641,16 @@ public class HassiumMetricsImpl implements HassiumMetrics {
                 storageBytesVanillaWritten.get(), storageWriteCount.get(),
                 storageBytesCompressedRead.get(), storageReadCount.get(),
                 storageBytesCompressedWritten.get(), storageWriteCount.get(),
-                getCompressionRatio() * 100,
-                cacheHitCount.get(), formatBytes(cacheHitBytes.get()),
-                cacheMissCount.get(), formatBytes(cacheMissBytes.get()),
-                cacheStaleCount.get(), formatBytes(cacheStaleBytes.get()),
-                getCacheHitRate() * 100,
-                networkBytesSaved.get(),
-                formatBytes(actualBytesSent.get()), formatBytes(vanillaBytesSent.get()), getSendBandwidthSavingPercent(),
-                formatBytes(actualBytesReceived.get()), formatBytes(vanillaBytesReceived.get()), getReceiveBandwidthSavingPercent(),
-                getNetworkCompressionRatio(),
-                formatBytes(metadataBytesSent.get()), formatBytes(metadataBytesReceived.get()),
+                MetricsTextFormatter.formatPercent(getCompressionRatio() * 100.0),
+                cacheHitCount.get(), MetricsTextFormatter.formatBytes(cacheHitBytes.get()),
+                cacheMissCount.get(), MetricsTextFormatter.formatBytes(cacheMissBytes.get()),
+                cacheStaleCount.get(), MetricsTextFormatter.formatBytes(cacheStaleBytes.get()),
+                MetricsTextFormatter.formatPercent(getCacheHitRate() * 100.0),
+                MetricsTextFormatter.formatBytes(networkBytesSaved.get()),
+                MetricsTextFormatter.formatBytes(actualBytesSent.get()), MetricsTextFormatter.formatBytes(vanillaBytesSent.get()), MetricsTextFormatter.formatPercent(getSendBandwidthSavingPercent()),
+                MetricsTextFormatter.formatBytes(actualBytesReceived.get()), MetricsTextFormatter.formatBytes(vanillaBytesReceived.get()), MetricsTextFormatter.formatPercent(getReceiveBandwidthSavingPercent()),
+                MetricsTextFormatter.formatCompressionRatio(vanillaBytesSent.get(), actualBytesSent.get()),
+                MetricsTextFormatter.formatBytes(metadataBytesSent.get()), MetricsTextFormatter.formatBytes(metadataBytesReceived.get()),
                 dataRequestsSent.get(), dataRequestsReceived.get(),
                 sectionDeltaRequestsSent.get(), sectionDeltaChunksReceived.get(),
                 chunksCompressed.get(), chunksDecompressed.get(),
@@ -548,15 +658,5 @@ public class HassiumMetricsImpl implements HassiumMetrics {
                 networkErrors.get(),
                 compressionErrors.get()
         );
-    }
-
-    /**
-     * 格式化字节数为人类可读格式
-     */
-    private static String formatBytes(long bytes) {
-        if (bytes < 1024) return bytes + " B";
-        if (bytes < 1024 * 1024) return String.format("%.1f KB", bytes / 1024.0);
-        if (bytes < 1024L * 1024 * 1024) return String.format("%.1f MB", bytes / (1024.0 * 1024));
-        return String.format("%.1f GB", bytes / (1024.0 * 1024 * 1024));
     }
 }
