@@ -823,13 +823,13 @@ public class ServerChunkPushManager {
         );
 
         // 限制队列大小，防止内存溢出；超限时按距离只填剩余容量，勿整批丢弃
-        int maxQueueSize = 2048;
-        int room = maxQueueSize - queue.size();
-        if (room <= 0) {
-            Constants.LOG.warn("[ENQUEUE_DATA] Queue full for player {} (size={}, max={}), dropping {} chunks",
-                    player.getName().getString(), queue.size(), maxQueueSize, chunks.size());
-            return;
-        }
+//        int maxQueueSize = 2048;
+//        int room = maxQueueSize - queue.size();
+//        if (room <= 0) {
+//            Constants.LOG.warn("[ENQUEUE_DATA] Queue full for player {} (size={}, max={}), dropping {} chunks",
+//                    player.getName().getString(), queue.size(), maxQueueSize, chunks.size());
+//            return;
+//        }
 
         double playerChunkX = player.getX() / 16.0;
         double playerChunkZ = player.getZ() / 16.0;
@@ -841,13 +841,13 @@ public class ServerChunkPushManager {
             double distance = Math.sqrt(dx * dx + dz * dz);
             tasks.add(new DataRequestTask(pos, dimension, distance));
         }
-        if (tasks.size() > room) {
-            tasks.sort(Comparator.comparingDouble(DataRequestTask::priority));
-            int dropped = tasks.size() - room;
-            tasks = tasks.subList(0, room);
-            Constants.LOG.warn("[ENQUEUE_DATA] Queue near limit for player {} ({} + {} > {}), queued nearest {} dropped {}",
-                    player.getName().getString(), queue.size(), chunks.size(), maxQueueSize, room, dropped);
-        }
+//        if (tasks.size() > room) {
+//            tasks.sort(Comparator.comparingDouble(DataRequestTask::priority));
+//            int dropped = tasks.size() - room;
+//            tasks = tasks.subList(0, room);
+//            Constants.LOG.warn("[ENQUEUE_DATA] Queue near limit for player {} ({} + {} > {}), queued nearest {} dropped {}",
+//                    player.getName().getString(), queue.size(), chunks.size(), maxQueueSize, room, dropped);
+//        }
         for (DataRequestTask task : tasks) {
             queue.offer(task);
         }

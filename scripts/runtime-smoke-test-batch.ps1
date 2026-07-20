@@ -153,14 +153,24 @@ foreach ($ver in $targetVersions) {
         # 改用 Start-Process powershell.exe -File 启动独立进程，各进程内 Start-Process gradlew.bat 正常工作
 
         # 预编译：在并行启动前先同步编译所有 loader，避免两个并行进程同时触发编译冲突
+        # 优先用 :classes 一次编译所有模块（gradle.properties 已启用 parallel，Gradle 内部并行编译）
+        # 失败时回退到逐 loader 编译，以隔离错误（fabric 失败仍可跑 neoforge）
         $gradlew = Join-Path $projectRoot "gradlew.bat"
         $precompileFailed = @{}
-        foreach ($loader in $Loaders) {
-            Write-Host "[$ver/${loader}] 预编译 (compileJava)..."
-            & $gradlew ":${loader}:compileJava" "-Pmc_ver=${ver}" 2>&1 | Out-Host
-            if ($LASTEXITCODE -ne 0) {
-                Write-Host "[$ver/${loader}] 预编译失败 (exit $LASTEXITCODE)，跳过该会话" -ForegroundColor Red
-                $precompileFailed[$loader] = $true
+
+        Write-Host "[$ver] 预编译 (classes, parallel)..."
+        & $gradlew classes "-Pmc_ver=${ver}" 2>&1 | Out-Host
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "[$ver] 预编译成功 (classes)" -ForegroundColor Green
+        } else {
+            Write-Host "[$ver] :classes 失败 (exit $LASTEXITCODE)，回退到逐 loader 编译以隔离错误" -ForegroundColor Yellow
+            foreach ($loader in $Loaders) {
+                Write-Host "[$ver/${loader}] 预编译 (compileJava)..."
+                & $gradlew ":${loader}:compileJava" "-Pmc_ver=${ver}" 2>&1 | Out-Host
+                if ($LASTEXITCODE -ne 0) {
+                    Write-Host "[$ver/${loader}] 预编译失败 (exit $LASTEXITCODE)，跳过该会话" -ForegroundColor Red
+                    $precompileFailed[$loader] = $true
+                }
             }
         }
 

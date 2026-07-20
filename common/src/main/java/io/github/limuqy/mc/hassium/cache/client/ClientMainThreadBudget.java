@@ -14,7 +14,7 @@ public final class ClientMainThreadBudget {
     private static final long JOIN_BOOST_DURATION_MS = 5_000;
 
     /** JoinBoost 期间的预算（毫秒） */
-    private static final int JOIN_BOOST_BUDGET_MS = 10;
+    private static final int JOIN_BOOST_BUDGET_MS = 30;
 
     private static volatile long joinBoostUntilMs = 0L;
 

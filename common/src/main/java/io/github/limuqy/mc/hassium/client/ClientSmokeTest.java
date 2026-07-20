@@ -135,7 +135,7 @@ public final class ClientSmokeTest {
             return;
         }
 
-        long delayMs = state == State.WAIT_JOIN_1 ? ClientSmokeTest.delayMs * 3 : ClientSmokeTest.delayMs;
+        long delayMs = state == State.WAIT_JOIN_1 ? ClientSmokeTest.delayMs * 2 : ClientSmokeTest.delayMs;
         if (joinAtMs < 0L) {
             joinAtMs = now;
             LOGGER.info("HassiumSmokeTest: {} player entered world at y={}, waiting {} ms before stats",

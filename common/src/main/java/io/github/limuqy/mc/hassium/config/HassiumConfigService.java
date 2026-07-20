@@ -388,7 +388,7 @@ public class HassiumConfigService {
     public int getMainThreadChunkBudgetMs() {
         int value = config.network().mainThreadChunkBudgetMs();
         if (value <= 0) {
-            return 3;
+            return 10;
         }
         return Math.min(50, value);
     }

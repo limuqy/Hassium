@@ -1,5 +1,7 @@
 package io.github.limuqy.mc.hassium.config;
 
+import io.github.limuqy.mc.hassium.network.HassiumPacketIds;
+
 import java.util.Set;
 
 /**
@@ -146,20 +148,16 @@ public record HassiumConfig(
          * 默认压缩黑名单（与硬编码黑名单对齐的配置侧副本）
          */
         public static final Set<String> DEFAULT_COMPRESSION_BLACKLIST = Set.of(
-                "hassium:chunk_payload_s2c",
-                "hassium:chunk_hash_s2c",
-                "hassium:chunk_data_request_c2s",
-                "hassium:handshake_c2s",
-                "hassium:handshake_s2c",
-                "hassium:index_sync_s2c",
-                "hassium:dictionary_sync",
-                "hassium:compression_ready_c2s"
+                HassiumPacketIds.CHUNK_PAYLOAD_S2C,
+                HassiumPacketIds.SECTION_DELTA_S2C,
+                "hassium:main",
+                "hassium:aggregation"
         );
 
         public static final NetworkConfig DEFAULT = new NetworkConfig(
                 true,              // enabled
                 3,                 // compressionLevel（速度优先）
-                10,                // maxChunksPerTick
+                32,                // maxChunksPerTick
                 true,              // globalPacketCompression
                 3,                 // globalCompressionLevel
                 256,               // globalCompressionThreshold
@@ -178,7 +176,7 @@ public record HassiumConfig(
                 32,                // maxChunksPerFrame
                 32,                // maxCallbacksPerFrame
                 true,              // metricsEnabled
-                3,                 // mainThreadChunkBudgetMs
+                10,                 // mainThreadChunkBudgetMs
                 true,              // dynamicThreadPoolEnabled
                 2,                 // minPushThreads
                 8                  // maxPushThreads
