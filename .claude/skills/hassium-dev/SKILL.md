@@ -78,6 +78,30 @@ compat 类索引（完整表见 version-segments）：`PacketPayloadCompat`、`R
 ./gradlew --no-daemon common:runJava -PmainClass=<FQN> -Pargs=a,b
 ```
 
+## 运行时冒烟测试（dev 环境）
+
+跨版本×加载器实跑验证：服务端 VD=20 → 客户端连服 → 10s 统计 → 断开 → 服务端切 VD=8 → 重连 → 10s 统计 → 退出。Java 侧 `ClientSmokeTest` / `ServerSmokeTest` 已集成在 mixin 与加载器入口点，仅 dev 生效（`-Dhassium.smokeTest=true`）。
+
+```powershell
+# 单会话
+.\scripts\runtime-smoke-test.ps1 -Ver 1.20.1 -Loader fabric -Phase I -SessionId "1.20.1_fabric_I"
+# 全量初始轮（17 版 × 2 加载器，约 4–6 小时）
+.\scripts\runtime-smoke-test-batch.ps1 -Phase I
+# 并行跑全量初始轮（fabric+neoforge 同时，约 20–30 分钟）
+.\scripts\runtime-smoke-test-batch.ps1 -Phase I -Parallel
+# 指定版本回归轮
+.\scripts\runtime-smoke-test-batch.ps1 -Phase R -Versions @("1.20.1","1.21.11")
+```
+
+关键真相源（避免重蹈覆辙）：
+- **Loom runDir 在子项目目录**：`fabric/run/client/`、`neoforge/run/client/`，不是根目录 `run/`
+- **缓存清理要删整个 `hassium_cache` 目录** + `config/hassium/`，不是单个 `heat.idx`
+- **退版本必须 `-CleanWorld`**：高版本存档无法被低版本读取
+- **`$projectRoot` 由 `$PSScriptRoot` 推导**，脚本不依赖工作目录
+- **并行模式 `-Parallel`**：fabric 用 25565、neoforge 用 25566，版本间仍串行；至少 16G RAM
+
+输出：`build/smoke-test/{logs,stats,results}/`；退出码 0=PASS / 2=FAIL / 3=server_not_ready。完整说明见 `docs/runtime-smoke-test.md`。
+
 ## CurseForge 本地推送
 
 1. `gradle.properties` 填 `curseforge_project_id`（CF 项目数字 ID）

@@ -1,0 +1,275 @@
+# 运行时冒烟测试（Runtime Smoke Test）
+
+Hassium 跨版本（1.20.1–1.21.11）× 多加载器（fabric / neoforge）的实跑验证流程。在 dev 环境同时启动服务端和客户端，自动连服 → 采集统计 → 断开 → 重连 → 再采集，用于发现编译通过但运行时才暴露的回归（路径错误、Mixin 失效、跨版本 API 漂移、缓存未清理等）。
+
+## 概述
+
+- **测试矩阵**：17 个 MC 版本 × 2 个加载器 = 34 个会话（fabric / neoforge；Forge 仅 1.20.1 / 1.20.6，由 neoforge 子项目以 `loom.platform='forge'` 覆盖）
+- **执行方式**：PowerShell 脚本驱动 Gradle `runServer` / `runClient`，注入 `-Dhassium.smokeTest=true` 等 JVM 属性
+- **dev 专用**：测试代码（`ClientSmokeTest` / `ServerSmokeTest`）只在 dev 环境启用，正常生产 jar 不受影响
+- **输出位置**：`build/smoke-test/`（已在 `.gitignore` 范围内）
+
+## 前置条件
+
+1. **JDK 21+**：Hassium 全版本编译需要
+2. **Gradle wrapper**：使用项目自带的 `gradlew.bat`，无需本机全局安装
+3. **Windows + PowerShell**：脚本依赖 `Get-NetTCPConnection`、`Start-Process` 等 cmdlet
+4. **25565 端口可用**：脚本会尝试释放被占用端口，但建议预先关闭其它 MC 服务端
+5. **首次运行前**：跑过一次 `./gradlew --no-daemon common:decompile`，确保 mappings 已下载
+
+## 快速开始
+
+```powershell
+# 单次会话（1.20.1 fabric，初始轮）
+.\scripts\runtime-smoke-test.ps1 -Ver 1.20.1 -Loader fabric -Phase I -SessionId "1.20.1_fabric_I"
+
+# 全量初始轮（17 版 × 2 加载器，约 4–6 小时）
+.\scripts\runtime-smoke-test-batch.ps1 -Phase I
+
+# 并行跑全量初始轮（fabric+neoforge 同时，节省约一半时间，约 20–30 分钟）
+.\scripts\runtime-smoke-test-batch.ps1 -Phase I -Parallel
+
+# 并行 + 自定义起始端口（fabric=25570, neoforge=25571）
+.\scripts\runtime-smoke-test-batch.ps1 -Phase I -Parallel -BasePort 25570
+
+# 仅指定版本×fabric
+.\scripts\runtime-smoke-test-batch.ps1 -Phase I -Versions @("1.20.1","1.21.11") -Loaders fabric
+
+# 回归轮（默认对全部版本再跑一遍；可结合初始轮结果挑选）
+.\scripts\runtime-smoke-test-batch.ps1 -Phase R -Versions @("1.20.1","1.21.6")
+```
+
+### 单会话参数
+
+| 参数 | 必填 | 默认 | 说明 |
+|------|------|------|------|
+| `-Ver` | 是 | — | MC 版本，如 `1.20.1` |
+| `-Loader` | 是 | — | `fabric` 或 `neoforge` |
+| `-Phase` | 是 | — | `I`（初始轮）或 `R`（回归轮），仅用于命名 |
+| `-SessionId` | 是 | — | 会话 ID，用于日志文件命名，如 `1.20.1_fabric_I` |
+| `-CleanWorld` | 否 | false | 删除服务端存档（batch 脚本默认强制 true） |
+| `-SmokeHost` | 否 | 空 | 客户端连服完整地址（如 `127.0.0.1:25566`）；指定后优先于 `-ServerPort` |
+| `-ServerPort` | 否 | `25565` | 服务端监听端口（并行模式由 batch 脚本分配：fabric=BasePort, neoforge=BasePort+1） |
+| `-DelayMs` | 否 | `10000` | 进世界后等待毫秒，再 dump 统计 |
+| `-ReconnectDelayMs` | 否 | `3000` | 第一轮断开后到重连的毫秒 |
+| `-ServerReadyTimeoutSec` | 否 | `180` | 服务端 `Done!` 出现超时 |
+| `-ClientTimeoutSec` | 否 | `480` | 客户端退出超时 |
+
+### 批量参数
+
+| 参数 | 必填 | 默认 | 说明 |
+|------|------|------|------|
+| `-Phase` | 是 | — | `I` 或 `R` |
+| `-Versions` | 否 | 全部 17 版 | 指定版本子集 |
+| `-Loaders` | 否 | `fabric,neoforge` | 加载器子集 |
+| `-MaxRetries` | 否 | `3` | 单会话失败重试次数上限 |
+| `-Parallel` | 否 | false | 同版本 fabric+neoforge 并行跑（Start-Job） |
+| `-BasePort` | 否 | `25565` | 起始端口；fabric 用此端口，neoforge 自动 +1（仅并行模式生效） |
+
+## 测试流程
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│  1. 清理 <loader>/run/client/hassium_cache + config/hassium             │
+│  2. 写 <loader>/run/server/server.properties (VD=20, online-mode=false) │
+│  3. (CleanWorld) 删 <loader>/run/server/world*                          │
+│  4. 启动 :<loader>:runServer  →  ServerSmokeTest 设置 VD=20            │
+│  5. 等待 server log "Done ("                                            │
+│  6. 启动 :<loader>:runClient  →  ClientSmokeTest 状态机驱动             │
+│     ┌───────────────────────────────────────────────────────────────┐  │
+│     │  WAIT_JOIN_1  →  等到 player.getY() > 0                       │  │
+│     │      ↓ (DelayMs)                                              │  │
+│     │  ROUND_1_STATS  →  dump HassiumCommandHandler.getClientStats  │  │
+│     │      ↓                                                         │  │
+│     │  DISCONNECTING  →  conn.disconnect + NetworkStats.reset       │  │
+│     │      ↓ (ReconnectDelayMs)                                      │  │
+│     │  等服务端检测玩家数 0→切 VD=8                                  │  │
+│     │      ↓                                                         │  │
+│     │  WAIT_JOIN_2  →  反射 ConnectScreen.startConnecting            │  │
+│     │      ↓ (DelayMs)                                              │  │
+│     │  ROUND_2_STATS  →  dump 第二轮统计                             │  │
+│     │      ↓                                                         │  │
+│     │  DONE  →  System.exit(0 / 2)                                   │  │
+│     └───────────────────────────────────────────────────────────────┘  │
+│  7. 解析 client log：提取 ROUND1/2 统计、PASS/FAIL 标记                  │
+│  8. 写 result_${SessionId}.json + stats/*.txt                           │
+│  9. 杀服务端 + 残留 java                                                │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+**为什么等到 `player.getY() > 0` 才开始计时？** 部分版本进服很慢（需要区块替换、服务端处理）；如果 player 对象一创建就开始 10s 计时，统计时区块还没加载完，`hits + misses == 0`。改为等玩家位置被服务端确认（收到 `ClientboundPlayerPositionPacket`）后才开始计时。
+
+## 退出码
+
+| 退出码 | 含义 |
+|--------|------|
+| `0` | PASS：两轮统计均 OK 且客户端正常退出 |
+| `2` | FAIL：统计校验失败、客户端崩溃或非 0 退出 |
+| `3` | server_not_ready：服务端 180s 内未出现 `Done!` |
+
+## 统计字段说明
+
+每个 ROUND 的统计来自 `/hassiumc stats` 命令的输出（`HassiumCommandHandler.getClientStatsMessage()`），主要字段：
+
+| 字段 | 含义 |
+|------|------|
+| **网络接收** | 客户端从服务端接收的字节数（含全量压缩 + 分段增量，不含缓存命中）；括号内为原版等价字节数与节省百分比 |
+| **压缩比** | 全量压缩通道的解压前后比值，如 `5.13:1` |
+| **缓存命中率** | `(hits / (hits + misses)) * 100%`，括号内含命中数 / 未命中数 / 过期数 |
+| **缓存命中节省** | 缓存命中避免的网络字节数估算 |
+| **元数据接收** | ChunkHashS2CPacket 等元数据包字节数 |
+| **全量数据请求** | 客户端请求服务端全量推送的区块数 |
+| **分段增量** | section-delta 请求/接收数（仅过期分段，非整块重传） |
+| **区块解压** | 全量压缩通道解压的区块数（不含缓存命中） |
+| **超视渲染（OVD）** | `loaded / pendingLoad / pendingMiss / missTotal / retry / forgetRetain / unloadSub`；ROUND2 应非 0 |
+
+**典型健康指标**（1.20.1 fabric 参考）：
+
+- ROUND1（VD=20，无缓存）：网络接收 6.7 MB（原版 34.6 MB），节省 80.5%，压缩比 5.13:1
+- ROUND2（VD=8，已有缓存）：缓存命中率 >80%，OVD loaded >800
+
+## 日志位置
+
+```
+build/smoke-test/
+├── logs/
+│   ├── server_<SessionId>.log           # 服务端 stdout
+│   ├── server_<SessionId>_err.log       # 服务端 stderr
+│   ├── client_<SessionId>.log           # 客户端 stdout（含 ROUND1/2 统计原文）
+│   └── client_<SessionId>_err.log       # 客户端 stderr
+├── stats/
+│   ├── <SessionId>_round1_VD20.txt      # 提取后的 ROUND1 统计（VD=20 场景）
+│   ├── <SessionId>_round2_VD8.txt       # 提取后的 ROUND2 统计（VD=8 + OVD 场景）
+│   └── <SessionId>_server.txt           # 服务端视距切换日志
+├── results/
+│   ├── result_<SessionId>.json          # 单会话结构化结果
+├── batch-results-<Phase>.csv            # 批量汇总
+└── failures-<Phase>.log                 # 失败会话清单（仅 batch 模式）
+```
+
+`result_<SessionId>.json` 字段：
+
+```json
+{
+    "SessionId": "1.20.1_fabric_I",
+    "Ver": "1.20.1",
+    "Loader": "fabric",
+    "Phase": "I",
+    "Result": "PASS",
+    "ClientExitCode": 0,
+    "Round1Stats": true,
+    "Round1Pass": true,
+    "Round2Stats": true,
+    "Round2Pass": true,
+    "ServerSwitched": true,
+    "HasPass": true,
+    "HasFail": false,
+    "StatsFiles": [
+        "build/smoke-test/stats/1.20.1_fabric_I_round1_VD20.txt",
+        "build/smoke-test/stats/1.20.1_fabric_I_round2_VD8.txt"
+    ]
+}
+```
+
+## 失败诊断清单
+
+### 1. 客户端崩溃（exit 2 或非 0）
+
+- 看 `client_<SessionId>_err.log` 末尾的异常堆栈
+- 看 `<loader>/run/client/crash-reports/` 最新 crash report
+- 常见：`readerIndex out of bounds` → fabric 1.21.5/1.21.7–1.21.11 已知问题
+- 常见：`ClassNotFoundException: ...TransferState` → 反射未匹配到正确类路径
+
+### 2. 服务端未就绪（exit 3）
+
+- 看 `server_<SessionId>.log` 是否有 `Done (` 行
+- 如果没到 `Done!` 就退出：看 `_err.log`，常见是 mods.toml / neoforge.mods.toml 字段不兼容（`mandatory=true` vs `type="required"`）
+- 如果卡在 `Preparing spawn area`：世界生成慢，可调大 `-ServerReadyTimeoutSec 300`
+
+### 3. 重连失败
+
+- 看 `client_<SessionId>.log` 是否有 `no compatible startConnecting method found`
+- 检查 `ClientSmokeTest.triggerReconnect` 反射逻辑是否覆盖当前版本签名
+- 参考 1.20.5+ 的 6 参数 `startConnecting(Screen, Minecraft, ServerAddress, ServerData, boolean, TransferState)`，TransferState 类路径在 1.21.6+ 从 `multiplayer.TransferState` 改到 `multiplayer.transfer.TransferState`
+
+### 4. 统计无区块加载（`hits + misses == 0`）
+
+- `ClientSmokeTest.validateStats` 会返回 false，标记 FAIL
+- 原因 1：进服超时（10s 内区块未加载）→ 调大 `-DelayMs 20000`
+- 原因 2：客户端连服失败（看 client log 是否有 `Connection refused`）
+- 原因 3：单人世界被误判（`mc.getSingleplayerServer() != null` 时跳过）
+
+### 5. 缓存命中率 0%
+
+- 检查 `hassium_cache` 目录是否真的被清理（路径必须在 `<loader>/run/client/hassium_cache`，不是根目录 `run/client/`）
+- Loom runDir 在子项目目录下，是关键真相源
+- ROUND1 缓存命中率 0% 正常（首次连服无缓存）；ROUND2 缓存命中率 0% 说明缓存没被写入磁盘
+
+### 6. ServerSwitched=false
+
+- 服务端 `ServerSmokeTest` 未检测到玩家退出
+- 检查 `server_<SessionId>.log` 是否有 `HassiumSmokeTest:SERVER` 开头的日志
+- 检查 `MixinMinecraftServer.onServerTick` 是否真的被调用（mixin 配置问题）
+
+## 并行模式
+
+`-Parallel` 开关启用后，同版本的 fabric + neoforge 用 `Start-Job` 同时启动，节省约一半时间。
+
+**端口分配**：`fabric = BasePort`（默认 25565），`neoforge = BasePort + 1`（默认 25566）。用 `-BasePort` 可整体偏移。
+
+**版本间仍串行**：并行只在同一版本的两个加载器之间；不同版本之间仍串行，避免跨版本存档冲突（高版本存档无法被低版本读取）。
+
+**资源需求**：同时跑 4 个 JVM（2 服务端 + 2 客户端），每个 2–4G，建议至少 16G RAM。本机若内存不足，去掉 `-Parallel` 回退到串行模式。
+
+**`gradlew --stop` 策略**：并行模式下每会话后**不调用** `gradlew --stop`（会杀掉另一会话的 daemon），仅杀 java 进程 + sleep 3s；整个 batch 结束后统一调用一次 `gradlew --stop`。
+
+**失败重试**：每个 loader 独立计数 `MaxRetries`，互不影响。
+
+**Job 超时**：`Wait-Job -Timeout 600`（10 分钟）兜底；Job 内部已有服务端 180s + 客户端 480s 超时，正常情况下不会触发外层超时。
+
+**单 loader 模式**：若 `-Loaders fabric` 只指定一个加载器，`-Parallel` 仍生效但无并行意义，逻辑保持统一。
+
+## 已知限制
+
+| 版本 | 加载器 | 问题 |
+|------|--------|------|
+| 1.21.5 / 1.21.7–1.21.11 | fabric | `setViewDistance` 切换后区块包序列化出现 `readerIndex out of bounds`，客户端崩溃；neoforge 不受影响 |
+| 慢加载版本 | 全部 | 部分版本首次进服需要区块替换，10s 不够；可调 `-DelayMs 20000` |
+| Forge 1.20.1 / 1.20.6 | forge | 当前脚本未单独跑 forge 子项目；用 neoforge 子项目 + `loom.platform='forge'` 覆盖（见 `settings.gradle`） |
+
+## Java 侧开关参考
+
+### Gradle 属性（`-P`）
+
+| 属性 | 值 | 作用 |
+|------|----|----|
+| `hassiumSmokeTest` | `true` | 触发 loom-fabric / loom-neoforge 注入 smoke test JVM 属性 |
+| `hassiumSmokeHost` | `127.0.0.1:25565` | 客户端 quickPlayMultiplayer 目标地址 |
+| `hassiumSmokeDelayMs` | `10000` | 每轮进服后等待毫秒 |
+| `hassiumSmokeReconnectDelayMs` | `3000` | 第一轮断开后到重连的毫秒 |
+
+### JVM 系统属性（`-D`，由 loom 自动注入）
+
+| 属性 | 默认 | 作用 |
+|------|------|------|
+| `hassium.smokeTest` | `false` | 客户端启用 `ClientSmokeTest` |
+| `hassium.smokeTest.delayMs` | `10000` | 同上 DelayMs |
+| `hassium.smokeTest.reconnectDelayMs` | `3000` | 同上 ReconnectDelayMs |
+| `hassium.smokeTest.joinTimeoutMs` | `120000` | 单轮进服超时 |
+| `hassium.smokeTest.host` | `127.0.0.1:25565` | 重连目标 |
+| `hassium.serverSmokeTest` | `false` | 服务端启用 `ServerSmokeTest` |
+| `hassium.serverSmokeTest.vd1` | `20` | 第一轮视距 |
+| `hassium.serverSmokeTest.vd2` | `8` | 第二轮视距 |
+
+## 相关代码
+
+| 路径 | 作用 |
+|------|------|
+| `common/src/main/java/io/github/limuqy/mc/hassium/client/ClientSmokeTest.java` | 客户端状态机 + 反射重连 + 统计校验 |
+| `common/src/main/java/io/github/limuqy/mc/hassium/server/ServerSmokeTest.java` | 服务端视距切换（启动 VD=20，玩家退出后 VD=8） |
+| `common/.../mixin/MixinClientTick.java` | 每帧调用 `ClientSmokeTest.onClientTick` |
+| `common/.../mixin/MixinMinecraftServer.java` | 服务端 tick + init 钩子 |
+| `fabric/.../HassiumClientMod.java`、`forge/.../HassiumForgeClient.java`、`neoforge/.../HassiumNeoForgeClient.java` | 加载器客户端入口，调用 `ClientSmokeTest.initIfEnabled()` |
+| `buildSrc/src/main/groovy/loom-fabric.gradle`、`loom-neoforge.gradle` | `-PhassiumSmokeTest=true` 时注入 JVM 属性 |
+| `scripts/runtime-smoke-test.ps1` | 单次会话脚本 |
+| `scripts/runtime-smoke-test-batch.ps1` | 批量脚本 |

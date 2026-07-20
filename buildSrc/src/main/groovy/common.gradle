@@ -77,8 +77,14 @@ processResources {
 
     // mods.toml 依赖声明字段：
     // - 1.20.1（Forge 47.x）：必须用 `mandatory = true`，不支持 `type`
-    // - 1.20.2+（NeoForge 20.2+）：必须用 `type = "required"`，`mandatory` 在 20.4+ 被拒绝
-    def depRequiredField = (mcVer == '1.20.1') ? 'mandatory = true' : 'type = "required"'
+    // - 1.20.2–1.20.3（NeoForge 20.2.x/20.3.x）：仍要求 `mandatory`，`type` 未实现
+    // - 1.20.4+（NeoForge 20.4+）：必须用 `type = "required"`，`mandatory` 被拒绝
+    def depRequiredField
+    if (mcVer == '1.20.1' || mcVer == '1.20.2' || mcVer == '1.20.3') {
+        depRequiredField = 'mandatory = true'
+    } else {
+        depRequiredField = 'type = "required"'
+    }
 
     var expandProps = ['version'                              : mod_version,
                        'group'                                : project.group,

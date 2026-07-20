@@ -1,0 +1,287 @@
+# 运行时冒烟测试 — 批量脚本（两轮连服版，支持并行）
+# 用法:
+#   .\scripts\runtime-smoke-test-batch.ps1 -Phase I                              # 全量初始轮（串行）
+#   .\scripts\runtime-smoke-test-batch.ps1 -Phase I -Parallel                    # 全量初始轮（并行，fabric+neoforge 同时）
+#   .\scripts\runtime-smoke-test-batch.ps1 -Phase I -Versions @("1.20.1","1.20.2")
+#   .\scripts\runtime-smoke-test-batch.ps1 -Phase R                              # 回归轮
+#   .\scripts\runtime-smoke-test-batch.ps1 -Phase I -Loaders fabric              # 仅 fabric
+#   .\scripts\runtime-smoke-test-batch.ps1 -Phase I -Parallel -BasePort 25570    # 并行 + 自定义起始端口
+# 每个版本×加载器 1 个会话（客户端自动两轮：VD=20 + VD=8）
+# 退版本时自动清理服务端存档；失败最多重试 MaxRetries 次
+# 并行模式: 同版本 fabric+neoforge 同时跑，端口分配 fabric=BasePort, neoforge=BasePort+1
+#           版本间仍串行（避免跨版本存档冲突）；不调用会话间 gradlew --stop，batch 结束后统一 stop
+param(
+    [Parameter(Mandatory=$true)][ValidateSet("I","R")][string]$Phase,
+    [string[]]$Versions,
+    [ValidateSet("fabric","neoforge")][string[]]$Loaders = @("fabric","neoforge"),
+    [int]$MaxRetries = 3,
+    [switch]$Parallel,
+    [int]$BasePort = 25565,
+    [int]$ServerReadyTimeoutSec = 300,
+    [int]$ClientTimeoutSec = 600
+)
+
+$ErrorActionPreference = "Continue"
+
+# 路径自推导（脚本位于 <repo>/scripts/，项目根是父目录）
+$projectRoot = Split-Path -Parent $PSScriptRoot
+$logRoot = Join-Path $projectRoot "build\smoke-test"
+$logDir = Join-Path $logRoot "logs"
+$resultsDir = Join-Path $logRoot "results"
+$failuresLog = Join-Path $logRoot "failures-${Phase}.log"
+
+New-Item -ItemType Directory -Force -Path $logRoot | Out-Null
+New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+New-Item -ItemType Directory -Force -Path $resultsDir | Out-Null
+
+# 版本顺序（低到高）
+$allVersions = @(
+    "1.20.1","1.20.2","1.20.3","1.20.4","1.20.5","1.20.6",
+    "1.21.1","1.21.2","1.21.3","1.21.4","1.21.5","1.21.6",
+    "1.21.7","1.21.8","1.21.9","1.21.10","1.21.11"
+)
+
+if ($Versions) {
+    $targetVersions = $Versions
+} else {
+    $targetVersions = $allVersions
+}
+
+# 版本比较函数：返回 true 表示 currentVer < prevVer（退版本）
+function IsVersionDowngrade($current, $previous) {
+    $cur = $current -split '\.' | ForEach-Object { [int]$_ }
+    $prev = $previous -split '\.' | ForEach-Object { [int]$_ }
+    for ($i = 0; $i -lt [Math]::Max($cur.Count, $prev.Count); $i++) {
+        $c = if ($i -lt $cur.Count) { $cur[$i] } else { 0 }
+        $p = if ($i -lt $prev.Count) { $prev[$i] } else { 0 }
+        if ($c -lt $p) { return $true }
+        if ($c -gt $p) { return $false }
+    }
+    return $false
+}
+
+# 单会话执行函数（封装重试逻辑，供串行/并行路径共用）
+# 返回 [PSCustomObject]@{ Ver; Loader; Phase; Result; SessionId; Attempts; Reason }
+function Invoke-Session {
+    param(
+        [string]$Ver,
+        [string]$Loader,
+        [string]$Phase,
+        [int]$ServerPort,
+        [int]$MaxRetries,
+        [int]$ServerReadyTimeoutSec = 180,
+        [int]$ClientTimeoutSec = 300
+    )
+    $sessionId = "${Ver}_${Loader}_${Phase}"
+    $cleanWorld = $true
+    $sessionResult = $null
+    $attempt = 0
+    $lastReason = ""
+    $scriptPath = Join-Path $PSScriptRoot "runtime-smoke-test.ps1"
+
+    while ($attempt -lt $MaxRetries) {
+        $attempt++
+        Write-Host "[$sessionId] 尝试 $attempt/$MaxRetries (port=$ServerPort)..."
+
+        $result = & $scriptPath `
+            -Ver $Ver -Loader $Loader -Phase $Phase `
+            -SessionId $sessionId -CleanWorld:$cleanWorld `
+            -ServerPort $ServerPort `
+            -ServerReadyTimeoutSec $ServerReadyTimeoutSec `
+            -ClientTimeoutSec $ClientTimeoutSec
+
+        if ($result -eq "PASS") {
+            $sessionResult = "PASS"
+            $lastReason = ""
+            break
+        }
+
+        $sessionResult = "FAIL"
+        # 读取 result JSON 提取失败原因
+        $resultJsonPath = Join-Path $resultsDir "result_${sessionId}.json"
+        if (Test-Path $resultJsonPath) {
+            try {
+                $resultObj = Get-Content $resultJsonPath -Raw | ConvertFrom-Json
+                $lastReason = if ($resultObj.Reason) { $resultObj.Reason } else {
+                    "Round1Pass=$($resultObj.Round1Pass) Round2Pass=$($resultObj.Round2Pass) Exit=$($resultObj.ClientExitCode)"
+                }
+            } catch {
+                $lastReason = "result JSON parse error"
+            }
+        }
+        Write-Host "[$sessionId] 尝试 $attempt 失败: $lastReason" -ForegroundColor Red
+    }
+
+    if ($sessionResult -eq "FAIL") {
+        $failLine = "[$sessionId] FAILED after $MaxRetries attempts: $lastReason"
+        Add-Content -Path $failuresLog -Value $failLine
+        Write-Host $failLine -ForegroundColor Red
+    }
+
+    return [PSCustomObject]@{
+        Ver=$Ver
+        Loader=$Loader
+        Phase=$Phase
+        Result=$sessionResult
+        SessionId=$sessionId
+        Attempts=$attempt
+        Reason=$lastReason
+    }
+}
+
+$results = @()
+$prevVer = $null
+
+foreach ($ver in $targetVersions) {
+    # 检测退版本
+    $isDowngrade = $false
+    if ($prevVer -and (IsVersionDowngrade $ver $prevVer)) {
+        $isDowngrade = $true
+        Write-Host ""
+        Write-Host "=== 检测到退版本: $prevVer -> $ver，将清理服务端存档 ===" -ForegroundColor Yellow
+    }
+    $prevVer = $ver
+
+    Write-Host ""
+    Write-Host "============================================"
+    Write-Host "=== Testing: $ver (loaders: $($Loaders -join ','))"
+    Write-Host "============================================"
+
+    if ($Parallel -and $Loaders.Count -gt 1) {
+        # ===== 并行模式：同版本多 loader 用 Start-Process 同时跑 =====
+        # 注意：不能用 Start-Job（Job 内 Start-Process gradlew.bat 会静默失败）
+        # 改用 Start-Process powershell.exe -File 启动独立进程，各进程内 Start-Process gradlew.bat 正常工作
+        $processes = @()
+        $scriptPath = Join-Path $PSScriptRoot "runtime-smoke-test.ps1"
+        for ($i = 0; $i -lt $Loaders.Count; $i++) {
+            $loader = $Loaders[$i]
+            $port = $BasePort + $i
+            $jobName = "${ver}_${loader}_${Phase}"
+            Write-Host "[$jobName] 启动进程 (port=$port)..."
+
+            $procArgs = @(
+                "-NoProfile", "-ExecutionPolicy", "Bypass",
+                "-File", $scriptPath,
+                "-Ver", $ver, "-Loader", $loader, "-Phase", $Phase,
+                "-SessionId", $jobName, "-CleanWorld",
+                "-ServerPort", $port,
+                "-ServerReadyTimeoutSec", $ServerReadyTimeoutSec,
+                "-ClientTimeoutSec", $ClientTimeoutSec
+            )
+
+            $procOutLog = Join-Path $logDir "parallel_${jobName}.log"
+            $procErrLog = Join-Path $logDir "parallel_${jobName}_err.log"
+
+            $proc = Start-Process -FilePath "powershell.exe" `
+                -ArgumentList $procArgs `
+                -RedirectStandardOutput $procOutLog `
+                -RedirectStandardError $procErrLog `
+                -PassThru -WindowStyle Hidden
+
+            $processes += [PSCustomObject]@{ Name=$jobName; Process=$proc; Loader=$loader; Port=$port; OutLog=$procOutLog }
+        }
+
+        # 等待所有进程完成（总超时 = serverReadyTimeout + clientTimeout + 120s 缓冲）
+        $procTimeoutMs = ($ServerReadyTimeoutSec + $ClientTimeoutSec + 120) * 1000
+        Write-Host "等待 $($processes.Count) 个进程完成..."
+
+        foreach ($p in $processes) {
+            if (-not $p.Process.HasExited) {
+                $p.Process.WaitForExit($procTimeoutMs) | Out-Null
+            }
+            if (-not $p.Process.HasExited) {
+                Write-Host "[$($p.Name)] 进程超时，强制停止" -ForegroundColor Red
+                Stop-Process -Id $p.Process.Id -Force -ErrorAction SilentlyContinue
+                Start-Sleep -Seconds 2
+            }
+        }
+
+        # 回显进程输出 + 从 result JSON 收集结果
+        foreach ($p in $processes) {
+            $sessionId = $p.Name
+
+            # 回显进程 stdout 到控制台
+            if (Test-Path $p.OutLog) {
+                $procOutput = Get-Content $p.OutLog -Raw
+                if ($procOutput -and $procOutput.Trim()) {
+                    Write-Host $procOutput
+                }
+            }
+
+            # 从 result JSON 读取结果
+            $resultJsonPath = Join-Path $resultsDir "result_${sessionId}.json"
+            if (Test-Path $resultJsonPath) {
+                try {
+                    $resultObj = Get-Content $resultJsonPath -Raw | ConvertFrom-Json
+                    $lastReason = if ($resultObj.Reason) { $resultObj.Reason } else {
+                        if ($resultObj.Result -ne "PASS") {
+                            "Round1Pass=$($resultObj.Round1Pass) Round2Pass=$($resultObj.Round2Pass) Exit=$($resultObj.ClientExitCode)"
+                        } else { "" }
+                    }
+                    if ($resultObj.Result -ne "PASS") {
+                        Add-Content -Path $failuresLog -Value "[$sessionId] FAILED: $lastReason"
+                    }
+                    $results += [PSCustomObject]@{
+                        Ver=$ver; Loader=$p.Loader; Phase=$Phase; Result=$resultObj.Result
+                        SessionId=$sessionId; Attempts=1; Reason=$lastReason
+                    }
+                } catch {
+                    $results += [PSCustomObject]@{
+                        Ver=$ver; Loader=$p.Loader; Phase=$Phase; Result="FAIL"
+                        SessionId=$sessionId; Attempts=1; Reason="result JSON parse error"
+                    }
+                }
+            } else {
+                $results += [PSCustomObject]@{
+                    Ver=$ver; Loader=$p.Loader; Phase=$Phase; Result="FAIL"
+                    SessionId=$sessionId; Attempts=0; Reason="no_result_json"
+                }
+            }
+        }
+
+        # 并行模式：每版本结束后只杀 java + sleep，不调用 gradlew --stop（避免误杀另一会话 daemon）
+        Get-Process -Name java -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 3
+    } else {
+        # ===== 串行模式（默认）：保持原有行为 =====
+        foreach ($loader in $Loaders) {
+            $sessionId = "${ver}_${loader}_${Phase}"
+            Write-Host ""
+            Write-Host "--- $sessionId ---"
+
+            $r = Invoke-Session -Ver $ver -Loader $loader -Phase $Phase -ServerPort $BasePort -MaxRetries $MaxRetries -ServerReadyTimeoutSec $ServerReadyTimeoutSec -ClientTimeoutSec $ClientTimeoutSec
+            $results += $r
+
+            # 杀残留 java 进程
+            Get-Process -Name java -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds 3
+
+            # Gradle daemon 清理（避免 loom 锁）
+            & (Join-Path $projectRoot "gradlew.bat") --stop 2>&1 | Out-Null
+            Start-Sleep -Seconds 2
+        }
+    }
+}
+
+# 并行模式：batch 结束后统一调用一次 gradlew --stop
+if ($Parallel) {
+    Write-Host ""
+    Write-Host "=== batch 结束，统一清理 Gradle daemon ===" -ForegroundColor Cyan
+    & (Join-Path $projectRoot "gradlew.bat") --stop 2>&1 | Out-Null
+}
+
+# 最终汇总
+Write-Host ""
+Write-Host "=== BATCH SUMMARY ($Phase, parallel=$Parallel) ===" -ForegroundColor Cyan
+$results | Format-Table Ver,Loader,Result,Attempts -AutoSize
+$csvPath = Join-Path $logRoot "batch-results-${Phase}.csv"
+$results | Export-Csv $csvPath -NoTypeInformation
+Write-Host "Results saved to: $csvPath"
+
+# 统计
+$pass = @($results | Where-Object { $_.Result -eq "PASS" }).Count
+$fail = @($results | Where-Object { $_.Result -eq "FAIL" }).Count
+Write-Host "PASS: $pass / FAIL: $fail / TOTAL: $($results.Count)" -ForegroundColor Cyan
+if ($fail -gt 0) {
+    Write-Host "Failures log: $failuresLog" -ForegroundColor Yellow
+}

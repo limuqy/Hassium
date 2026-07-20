@@ -4,6 +4,7 @@ import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.concurrent.MainThreadDispatcher;
 import io.github.limuqy.mc.hassium.network.PlayerCompressionTracker;
 import io.github.limuqy.mc.hassium.network.ServerChunkPushManager;
+import io.github.limuqy.mc.hassium.server.ServerSmokeTest;
 import net.minecraft.server.MinecraftServer;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
@@ -27,6 +28,8 @@ public class MixinMinecraftServer {
         // 按真实 tick 限流序列化区块 + 冲刷 ChunkHash 批次
         MinecraftServer server = (MinecraftServer) (Object) this;
         ServerChunkPushManager.getInstance().onServerTick(server);
+        // 服务端冒烟测试：检测玩家退出后切换视距
+        ServerSmokeTest.onServerTick(server);
     }
 
     @Inject(method = "runServer", at = @At(value = "INVOKE", target = "Lnet/minecraft/server/MinecraftServer;initServer()Z"))
@@ -40,6 +43,8 @@ public class MixinMinecraftServer {
         } catch (Exception e) {
             // 忽略，非关键功能
         }
+        // 初始化服务端冒烟测试（设置初始 VD=20）
+        ServerSmokeTest.initIfEnabled(server);
     }
 
     @Inject(method = "stopServer", at = @At("HEAD"))

@@ -43,10 +43,13 @@ loom {
             runDir = 'run/client'
             if (project.hasProperty('hassiumSmokeTest') && project.property('hassiumSmokeTest').toString() == 'true') {
                 def host = project.findProperty('hassiumSmokeHost') ?: '127.0.0.1:25565'
-                def delayMs = project.findProperty('hassiumSmokeDelayMs') ?: '15000'
+                def delayMs = project.findProperty('hassiumSmokeDelayMs') ?: '10000'
+                def reconnectDelayMs = project.findProperty('hassiumSmokeReconnectDelayMs') ?: '3000'
                 vmArgs.addAll([
                         "-Dhassium.smokeTest=true",
-                        "-Dhassium.smokeTest.delayMs=${delayMs}"
+                        "-Dhassium.smokeTest.delayMs=${delayMs}",
+                        "-Dhassium.smokeTest.reconnectDelayMs=${reconnectDelayMs}",
+                        "-Dhassium.smokeTest.host=${host}"
                 ])
                 programArgs.addAll([
                         '--quickPlayMultiplayer', host.toString()
@@ -56,6 +59,10 @@ loom {
             runDir = 'run/server'
             if (project.hasProperty('hassiumSmokeTest') && project.property('hassiumSmokeTest').toString() == 'true') {
                 programArgs.add('nogui')
+                // 服务端冒烟：启动 VD=20，玩家退出后切 VD=8
+                vmArgs.addAll([
+                        "-Dhassium.serverSmokeTest=true"
+                ])
             }
         }
     }

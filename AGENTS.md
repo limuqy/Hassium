@@ -88,3 +88,4 @@ fabric/ | forge/ | neoforge/
 - [`docs/disk-nbt-cache.md`](docs/disk-nbt-cache.md)
 - [`docs/version-segments.md`](docs/version-segments.md)
 - [`docs/mod-compat.md`](docs/mod-compat.md)
+- [`docs/runtime-smoke-test.md`](docs/runtime-smoke-test.md)

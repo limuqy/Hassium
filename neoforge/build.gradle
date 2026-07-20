@@ -25,12 +25,15 @@ dependencies {
     library 'org.lz4:lz4-java:1.8.0'
     library 'com.google.code.findbugs:jsr305:3.0.1'
 
-    // Cloth：模组列表「配置」按钮（与 Fabric 共用 cloth-ui）
+    // Cloth：编译期需要（HassiumClothConfigScreen）；dev 运行时不加载（避免 mod 加载警告卡界面）；发布 jiJ
+    // 旧配置 modApi include(...) 会在 dev 运行时加载 cloth-config，部分 neoforge 版本（20.2.x/20.3.x/21.5+）
+    // 的 cloth-config mods.toml 不兼容，导致 "Warning while loading mods" 界面卡住，客户端无法进服。
     if (gradle.ext.has('cloth_config_version')) {
         def clothArtifact = gradle.ext.minecraft_version == '1.20.1'
                 ? 'cloth-config-forge'
                 : 'cloth-config-neoforge'
-        modApi include("me.shedaniel.cloth:${clothArtifact}:${gradle.ext.cloth_config_version}")
+        modCompileOnly("me.shedaniel.cloth:${clothArtifact}:${gradle.ext.cloth_config_version}")
+        include("me.shedaniel.cloth:${clothArtifact}:${gradle.ext.cloth_config_version}")
     }
 }
 

@@ -41,8 +41,11 @@ dependencies {
         modLocalRuntime "com.terraformersmc:modmenu:${gradle.ext.modmenu_version}"
     }
 
-    // Cloth Config：全版本 jiJ，承接 Mod Menu 配置屏
+    // Cloth Config：编译期需要（HassiumClothConfigScreen）；dev 运行时不加载（避免 mod 加载警告卡界面）；发布 jiJ
+    // 旧配置 modApi include(...) 会在 dev 运行时加载 cloth-config，部分 neoforge 版本（20.2.x/20.3.x/21.5+）
+    // 的 cloth-config mods.toml 不兼容，导致 "Warning while loading mods" 界面卡住，客户端无法进服。
     if (gradle.ext.has('cloth_config_version')) {
-        modApi include("me.shedaniel.cloth:cloth-config-fabric:${gradle.ext.cloth_config_version}")
+        modCompileOnly("me.shedaniel.cloth:cloth-config-fabric:${gradle.ext.cloth_config_version}")
+        include("me.shedaniel.cloth:cloth-config-fabric:${gradle.ext.cloth_config_version}")
     }
 }
