@@ -2,10 +2,16 @@ package io.github.limuqy.mc.hassium.mixin;
 
 import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.cache.client.CacheSaveQueue;
+import io.github.limuqy.mc.hassium.cache.client.ClientEntitySnapshotStore;
 import io.github.limuqy.mc.hassium.cache.client.IClientLevelExtension;
+import io.github.limuqy.mc.hassium.compat.EntitySnapshotCompat;
+import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.cache.client.ViewDistanceExtensionService;
 import io.github.limuqy.mc.hassium.network.ClientChunkHandler;
 import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.chunk.LevelChunk;
 import org.spongepowered.asm.mixin.Mixin;
@@ -14,7 +20,9 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
+import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 
 /**
@@ -77,6 +85,7 @@ public class MixinClientLevel implements IClientLevelExtension {
 
         // 真实区块：先排队落盘（此时 isRenderOnly 仍为 false）
         if (!wasRenderOnly) {
+            hassium$captureEntitySnapshots(pos);
             hassium$enqueueCacheSave(chunk);
         } else {
             Constants.LOG.debug("Hassium: [CACHE SAVE] Skip unload for render-only chunk {}", pos);
@@ -94,6 +103,50 @@ public class MixinClientLevel implements IClientLevelExtension {
         if (!substituted) {
             hassium$renderOnlyChunks.remove(pos);
         }
+    }
+
+    @Unique
+    private void hassium$captureEntitySnapshots(ChunkPos pos) {
+        if (!HassiumConfigService.getInstance().isEntitySnapshotsEnabled()) {
+            return;
+        }
+        ClientEntitySnapshotStore store = ClientEntitySnapshotStore.current();
+        if (store == null) {
+            return;
+        }
+        try {
+            ClientLevel level = (ClientLevel) (Object) this;
+            List<Entity> roots = ClientEntitySnapshotStore.selectSnapshotRoots(
+                    level.entitiesForRendering(),
+                    entity -> pos.equals(entity.chunkPosition()),
+                    Entity::isPassenger,
+                    MixinClientLevel::hassium$containsPlayer,
+                    entity -> entity
+            );
+            List<CompoundTag> snapshots = new ArrayList<>(roots.size());
+            for (Entity entity : roots) {
+                CompoundTag snapshot = EntitySnapshotCompat.save(entity);
+                if (snapshot != null) {
+                    snapshots.add(snapshot.copy());
+                }
+            }
+            store.writeChunk(pos, snapshots);
+        } catch (Exception e) {
+            Constants.LOG.debug("Hassium: Failed to capture entity snapshot for chunk {}", pos, e);
+        }
+    }
+
+    @Unique
+    private static boolean hassium$containsPlayer(Entity entity) {
+        if (entity instanceof Player) {
+            return true;
+        }
+        for (Entity passenger : entity.getPassengers()) {
+            if (hassium$containsPlayer(passenger)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**

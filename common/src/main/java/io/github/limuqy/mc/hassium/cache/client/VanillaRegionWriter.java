@@ -33,10 +33,14 @@ public class VanillaRegionWriter implements AutoCloseable {
     private final BitSet allocatedSectors = new BitSet();
     private boolean headerDirty = true;
 
-    public VanillaRegionWriter(Path path) throws IOException {
-        this.file = new RandomAccessFile(path.toFile(), "rw");
-        // 预留 header 2 sectors
+    VanillaRegionWriter(RandomAccessFile file) {
+        this.file = file;
         allocatedSectors.set(0, HEADER_SECTORS);
+    }
+
+    public VanillaRegionWriter(Path path) throws IOException {
+        this(new RandomAccessFile(path.toFile(), "rw"));
+        // 预留 header 2 sectors
         file.setLength(HEADER_SECTORS * SECTOR_SIZE);
     }
 
@@ -131,11 +135,23 @@ public class VanillaRegionWriter implements AutoCloseable {
 
     @Override
     public void close() throws IOException {
+        IOException failure = null;
         try {
             flush();
         } catch (IOException e) {
-            Constants.LOG.warn("Hassium: Failed to flush VanillaRegionWriter header", e);
+            failure = e;
         }
-        file.close();
+        try {
+            file.close();
+        } catch (IOException e) {
+            if (failure != null) {
+                failure.addSuppressed(e);
+            } else {
+                failure = e;
+            }
+        }
+        if (failure != null) {
+            throw failure;
+        }
     }
 }

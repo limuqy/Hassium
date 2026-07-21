@@ -56,6 +56,8 @@
     "hassium.configuration.clientNetwork.mainThreadChunkBudgetMs.tooltip":  "Per-frame time budget for applying chunks. Default: 3; may rise during join JoinBoost.",
     "hassium.configuration.clientCache.joinBoostEnabled":  "JoinBoost acceleration",
     "hassium.configuration.clientCache.joinBoostEnabled.tooltip":  "Briefly raises main-thread budget after join to speed up loading. Default: true.",
+    "hassium.configuration.clientCache.entitySnapshotsEnabled":  "Capture entity snapshots",
+    "hassium.configuration.clientCache.entitySnapshotsEnabled.tooltip":  "Capture non-player entities when a chunk unloads for later world export. Stored separately from chunk cache regions. Default: off.",
     "hassium.configuration.storage":  "Storage",
     "hassium.configuration.storage.button":  "Storage…",
     "hassium.configuration.storage.enabled":  "Enable world compression",

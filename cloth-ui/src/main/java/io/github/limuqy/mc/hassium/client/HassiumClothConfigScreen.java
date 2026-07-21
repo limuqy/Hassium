@@ -89,6 +89,9 @@ public final class HassiumClothConfigScreen {
         clientCache.addEntry(bool(entries, "hassium.configuration.clientCache.joinBoostEnabled",
                 draft.cacheJoinBoostEnabled, dCache.joinBoostEnabled(),
                 v -> draft.cacheJoinBoostEnabled = v));
+        clientCache.addEntry(bool(entries, "hassium.configuration.clientCache.entitySnapshotsEnabled",
+                draft.cacheEntitySnapshotsEnabled, dCache.entitySnapshotsEnabled(),
+                v -> draft.cacheEntitySnapshotsEnabled = v));
 
         ConfigCategory clientNetwork = builder.getOrCreateCategory(
                 Component.translatable("hassium.configuration.clientNetwork"));
@@ -264,6 +267,7 @@ public final class HassiumClothConfigScreen {
         int cacheOvdUnloadDelaySecs;
         boolean cacheSectionDeltaEnabled;
         boolean cacheJoinBoostEnabled;
+        boolean cacheEntitySnapshotsEnabled;
 
         int clientChunkLoadThreads;
         boolean lightStripEnabled;
@@ -332,6 +336,7 @@ public final class HassiumClothConfigScreen {
             d.cacheOvdUnloadDelaySecs = cache.ovdUnloadDelaySecs();
             d.cacheSectionDeltaEnabled = cache.sectionDeltaEnabled();
             d.cacheJoinBoostEnabled = cache.joinBoostEnabled();
+            d.cacheEntitySnapshotsEnabled = cache.entitySnapshotsEnabled();
 
             d.clientChunkLoadThreads = net.clientChunkLoadThreads();
             d.lightStripEnabled = net.lightStripEnabled();
@@ -387,7 +392,7 @@ public final class HassiumClothConfigScreen {
                             cacheCleanupIntervalTicks, cacheTargetCacheSizeMb, cacheMinCleanupBatchSize,
                             cacheBloomFilterEnabled, cacheBloomFilterExpectedInsertions, cacheBloomFilterFpp,
                             cacheViewDistanceExtensionEnabled, cacheMaxRenderDistance, cacheOvdUnloadDelaySecs,
-                            cacheSectionDeltaEnabled, cacheJoinBoostEnabled
+                            cacheSectionDeltaEnabled, cacheJoinBoostEnabled, cacheEntitySnapshotsEnabled
                     ),
                     new HassiumConfig.NetworkConfig(
                             networkEnabled, compressionLevel, maxChunksPerTick,

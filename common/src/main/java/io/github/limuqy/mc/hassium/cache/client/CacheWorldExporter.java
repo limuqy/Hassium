@@ -7,12 +7,15 @@ import io.github.limuqy.mc.hassium.concurrent.TaskCategory;
 import io.github.limuqy.mc.hassium.network.ClientChunkHandler;
 import io.github.limuqy.mc.hassium.storage.HassiumRegionFile;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.core.RegistryAccess;
 import net.minecraft.nbt.CompoundTag;
+import net.minecraft.nbt.NbtIo;
 import net.minecraft.world.level.ChunkPos;
 
 import java.io.ByteArrayOutputStream;
-import java.io.DataOutputStream;
 import java.io.IOException;
+import java.io.OutputStream;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -37,7 +40,7 @@ import java.util.zip.Deflater;
  *   <li>{@code dimensions/<ns>/<path>/region/}：其它维度</li>
  * </ul>
  * <p>
- * <b>限制</b>：无实体、无玩家背包；仅为「去过的区块」快照；模组方块需相同模组与相近 MC 版本。
+ * <b>限制</b>：无实体、无玩家背包；仅为「去过的区块」快照；首次单机打开会重算光照；模组方块需相同模组与相近 MC 版本。
  */
 public final class CacheWorldExporter {
 
@@ -98,6 +101,17 @@ public final class CacheWorldExporter {
             notifyProgress(progress, -1, -1, "Minecraft 实例不可用");
             return;
         }
+        ClientLevel level = mc.level;
+        if (level == null) {
+            notifyProgress(progress, -1, -1, "未连接世界，无法读取注册表");
+            return;
+        }
+        RegistryAccess registryAccess = level.registryAccess();
+#if MC_VER < MC_1_21_2
+        int minSection = level.getMinSection();
+#else
+        int minSection = level.getMinSectionY();
+#endif
         Path gameDir = mc.gameDirectory.toPath();
         Path outputDir = gameDir.resolve("saves").resolve(worldName);
         Files.createDirectories(outputDir);
@@ -130,6 +144,7 @@ public final class CacheWorldExporter {
         int total = dimDirs.size();
         int done = 0;
         int failedRegions = 0;
+        int failedChunks = 0;
 
         for (Path dimDir : dimDirs) {
             String dimName = dimDir.getFileName().toString();
@@ -139,7 +154,7 @@ public final class CacheWorldExporter {
             try (DirectoryStream<Path> regionFiles = Files.newDirectoryStream(dimDir, "r.*.mca")) {
                 for (Path regionFile : regionFiles) {
                     try {
-                        exportOneRegion(regionFile, regionOutDir, storage);
+                        failedChunks += exportOneRegion(regionFile, regionOutDir, storage, registryAccess, minSection);
                     } catch (Throwable t) {
                         failedRegions++;
                         Constants.LOG.warn("Hassium: Failed to export region {}", regionFile, t);
@@ -151,21 +166,24 @@ public final class CacheWorldExporter {
                     "已导出维度 " + dimName + " (" + done + "/" + total + ")");
         }
 
-        String summary = "导出完成: " + outputDir + " (失败 region 数: " + failedRegions + ")";
+        String summary = "导出完成: " + outputDir + " (失败 region 数: " + failedRegions
+                + ", 转换失败 chunk 数: " + failedChunks + ")";
         notifyProgress(progress, total, total, summary);
     }
 
     /** 把单个 Hassium region 文件转码为原版 region 文件。 */
-    private static void exportOneRegion(Path hassiumRegionFile, Path outRegionDir,
-                                        ClientHassiumStorage storage) throws IOException {
+    private static int exportOneRegion(Path hassiumRegionFile, Path outRegionDir,
+                                       ClientHassiumStorage storage, RegistryAccess registryAccess,
+                                       int minSection) throws IOException {
+        int failedChunks = 0;
         Matcher m = REGION_FILE_PATTERN.matcher(hassiumRegionFile.getFileName().toString());
-        if (!m.matches()) return;
+        if (!m.matches()) return 0;
         int regionX = Integer.parseInt(m.group(1));
         int regionZ = Integer.parseInt(m.group(2));
 
         Path outFile = outRegionDir.resolve("r." + regionX + "." + regionZ + ".mca");
-        HassiumRegionFile src = new HassiumRegionFile(hassiumRegionFile);
-        try (VanillaRegionWriter dst = new VanillaRegionWriter(outFile)) {
+        try (HassiumRegionFile src = new HassiumRegionFile(hassiumRegionFile);
+             VanillaRegionWriter dst = new VanillaRegionWriter(outFile)) {
             for (int i = 0; i < 1024; i++) {
                 int cx = regionX * 32 + (i & 31);
                 int cz = regionZ * 32 + (i >> 5);
@@ -179,17 +197,28 @@ public final class CacheWorldExporter {
                     System.arraycopy(chunkData, 1, compressed, 0, compressed.length);
                     byte[] nbtBytes = storage.decompressForExport(compressed);
                     if (nbtBytes == null) continue;
-                    // 剥离 magic 前缀得到纯 NBT
-                    byte[] pureNbt = ChunkDiskCodec.stripMagicPrefix(nbtBytes);
-                    if (pureNbt == null) continue;
-                    // zlib 压缩
+                    CompoundTag cachedNbt = ChunkDiskCodec.bytesToNbt(nbtBytes);
+                    if (cachedNbt == null) throw new VanillaChunkNbtCompat.ConversionException("invalid cache NBT");
+                    CompoundTag vanillaNbt = VanillaChunkNbtCompat.convert(cachedNbt, registryAccess, minSection);
+                    byte[] pureNbt = rawNbtBytes(vanillaNbt);
                     byte[] zlibData = zlibCompress(pureNbt);
                     dst.writeChunk(pos, zlibData);
                 } catch (Throwable t) {
+                    failedChunks++;
                     Constants.LOG.debug("Hassium: Skip chunk {} during export", pos, t);
                 }
             }
         }
+        return failedChunks;
+    }
+
+    /** Serialize raw, uncompressed NBT for Anvil's type-2 zlib payload. */
+    private static byte[] rawNbtBytes(CompoundTag nbt) throws IOException {
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        try (java.io.DataOutputStream data = new java.io.DataOutputStream(output)) {
+            NbtIo.write(nbt, data);
+        }
+        return output.toByteArray();
     }
 
     /** 解析维度目录名 → 原版世界结构下的 region 目录。 */
@@ -244,19 +273,11 @@ public final class CacheWorldExporter {
         writeNbtToFile(data, levelDatOld);
     }
 
-    /** 用 FriendlyByteBuf 序列化 NBT 到文件（跨版本兼容）。 */
-    private static void writeNbtToFile(CompoundTag nbt, Path path) throws IOException {
-        net.minecraft.network.FriendlyByteBuf buf =
-                new net.minecraft.network.FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
-        byte[] bytes;
-        try {
-            buf.writeNbt(nbt);
-            bytes = new byte[buf.readableBytes()];
-            buf.getBytes(0, bytes);
-        } finally {
-            buf.release();
+    /** Writes one gzip-compressed NBT file in the vanilla level.dat format. */
+    static void writeNbtToFile(CompoundTag nbt, Path path) throws IOException {
+        try (OutputStream output = Files.newOutputStream(path)) {
+            NbtIo.writeCompressed(nbt, output);
         }
-        Files.write(path, bytes);
     }
 
     /** 用 JDK Deflater 做 zlib 压缩（不依赖 VanillaZlibCodec 注册）。 */

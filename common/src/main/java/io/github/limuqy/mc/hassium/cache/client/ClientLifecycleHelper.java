@@ -97,6 +97,7 @@ public final class ClientLifecycleHelper {
                 Constants.LOG.warn("Hassium: Failed to close client storage on disconnect", e);
             }
         }
+        ClientEntitySnapshotStore.closeCurrent();
         ClientHassiumStorage.closeSharedDatabase();
         ClientChunkHandler.resetStorage();
         Constants.LOG.info("Hassium: Client disconnected, cache cleaned up");
@@ -147,6 +148,7 @@ public final class ClientLifecycleHelper {
             if (executor != null && executor.isRunning()) {
                 executor.submit(() -> {
                     ClientChunkHandler.initStorage(gameDir, serverId, finalDimension);
+                    initializeEntitySnapshots(gameDir, serverId, finalDimension);
                     ClientMetadataHandler.onStorageReady();
                     // 超视渲染：清 miss 耗尽状态并强制下一 tick 全环带重扫
                     ViewDistanceExtensionService.getInstance().onClientStorageReady();
@@ -156,12 +158,24 @@ public final class ClientLifecycleHelper {
             } else {
                 // 回退：同步初始化
                 ClientChunkHandler.initStorage(gameDir, serverId, finalDimension);
+                initializeEntitySnapshots(gameDir, serverId, finalDimension);
                 ClientMetadataHandler.onStorageReady();
                 ViewDistanceExtensionService.getInstance().onClientStorageReady();
                 Constants.LOG.info("Hassium: Initialized client cache for server {} dim {}", serverIp, finalDimension);
             }
         } catch (Exception e) {
             Constants.LOG.error("Hassium: Failed to initialize client cache", e);
+        }
+    }
+
+    private static void initializeEntitySnapshots(Path gameDir, String serverId, String dimension) {
+        if (!HassiumConfigService.getInstance().isEntitySnapshotsEnabled()) {
+            return;
+        }
+        try {
+            ClientEntitySnapshotStore.initialize(gameDir, serverId, dimension);
+        } catch (Exception e) {
+            Constants.LOG.warn("Hassium: Failed to initialize entity snapshot store for {}", dimension, e);
         }
     }
 }

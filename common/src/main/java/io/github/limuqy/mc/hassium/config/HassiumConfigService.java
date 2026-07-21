@@ -222,6 +222,10 @@ public class HassiumConfigService {
         return config.clientCache().enabled();
     }
 
+    public boolean isEntitySnapshotsEnabled() {
+        return isClientCacheEnabled() && config.clientCache().entitySnapshotsEnabled();
+    }
+
     /**
      * 网络压缩算法（固定 ZSTD，无其它实现可选）。
      */

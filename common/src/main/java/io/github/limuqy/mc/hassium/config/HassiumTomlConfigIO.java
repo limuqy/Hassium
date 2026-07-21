@@ -208,7 +208,8 @@ public final class HassiumTomlConfigIO {
                 getInt(cfg, "clientCache.maxRenderDistance", d.maxRenderDistance()),
                 getInt(cfg, "clientCache.ovdUnloadDelaySecs", d.ovdUnloadDelaySecs()),
                 getBool(cfg, "clientCache.sectionDeltaEnabled", d.sectionDeltaEnabled()),
-                getBool(cfg, "clientCache.joinBoostEnabled", d.joinBoostEnabled())
+                getBool(cfg, "clientCache.joinBoostEnabled", d.joinBoostEnabled()),
+                getBool(cfg, "clientCache.entitySnapshotsEnabled", d.entitySnapshotsEnabled())
         );
     }
 
@@ -233,6 +234,8 @@ public final class HassiumTomlConfigIO {
                 "=== 分段增量 ===\n缓存过期时是否走分段增量（默认 true；依赖 clientCache.enabled）");
         set(cfg, "clientCache.joinBoostEnabled", c.joinBoostEnabled(),
                 "=== JoinBoost ===\n进服后短时提高主线程预算加速加载（默认 true）");
+        set(cfg, "clientCache.entitySnapshotsEnabled", c.entitySnapshotsEnabled(),
+                "=== 实体快照 ===\n区块卸载时保存非玩家实体快照（默认 false）");
     }
 
     private static ClientNet readClientNetwork(CommentedConfig cfg) {

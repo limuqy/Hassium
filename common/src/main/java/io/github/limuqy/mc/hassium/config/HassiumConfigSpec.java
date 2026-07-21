@@ -76,7 +76,8 @@ public final class HassiumConfigSpec {
                         CLIENT.cacheMaxRenderDistance.get(),
                         CLIENT.cacheOvdUnloadDelaySecs.get(),
                         CLIENT.cacheSectionDeltaEnabled.get(),
-                        CLIENT.cacheJoinBoostEnabled.get()
+                        CLIENT.cacheJoinBoostEnabled.get(),
+                        CLIENT.cacheEntitySnapshotsEnabled.get()
                 ),
                 new HassiumConfig.NetworkConfig(
                         COMMON.networkEnabled.get(),
@@ -148,6 +149,7 @@ public final class HassiumConfigSpec {
         CLIENT.cacheOvdUnloadDelaySecs.set(cache.ovdUnloadDelaySecs());
         CLIENT.cacheSectionDeltaEnabled.set(cache.sectionDeltaEnabled());
         CLIENT.cacheJoinBoostEnabled.set(cache.joinBoostEnabled());
+        CLIENT.cacheEntitySnapshotsEnabled.set(cache.entitySnapshotsEnabled());
         CLIENT.networkClientChunkLoadThreads.set(net.clientChunkLoadThreads());
         CLIENT.networkLightStripEnabled.set(net.lightStripEnabled());
         CLIENT.networkBackgroundThreads.set(net.backgroundThreads());
@@ -216,6 +218,7 @@ public final class HassiumConfigSpec {
         public final ForgeConfigSpec.IntValue cacheOvdUnloadDelaySecs;
         public final ForgeConfigSpec.BooleanValue cacheSectionDeltaEnabled;
         public final ForgeConfigSpec.BooleanValue cacheJoinBoostEnabled;
+        public final ForgeConfigSpec.BooleanValue cacheEntitySnapshotsEnabled;
 
         public final ForgeConfigSpec.IntValue networkClientChunkLoadThreads;
         public final ForgeConfigSpec.BooleanValue networkLightStripEnabled;
@@ -245,6 +248,7 @@ public final class HassiumConfigSpec {
         public final ModConfigSpec.IntValue cacheOvdUnloadDelaySecs;
         public final ModConfigSpec.BooleanValue cacheSectionDeltaEnabled;
         public final ModConfigSpec.BooleanValue cacheJoinBoostEnabled;
+        public final ModConfigSpec.BooleanValue cacheEntitySnapshotsEnabled;
 
         public final ModConfigSpec.IntValue networkClientChunkLoadThreads;
         public final ModConfigSpec.BooleanValue networkLightStripEnabled;
@@ -338,6 +342,11 @@ public final class HassiumConfigSpec {
                             + "关闭后进服不提速，但避免高负载时的节奏波动。默认 true。")
                     .translation("hassium.configuration.clientCache.joinBoostEnabled")
                     .define("joinBoostEnabled", true);
+            cacheEntitySnapshotsEnabled = builder
+                    .comment("=== 实体快照 ===")
+                    .comment("区块卸载时保存非玩家实体快照到独立 entities 目录。默认 false。")
+                    .translation("hassium.configuration.clientCache.entitySnapshotsEnabled")
+                    .define("entitySnapshotsEnabled", false);
             builder.pop();
 
             builder.comment("客户端网络与主线程应用相关配置")

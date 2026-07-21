@@ -65,7 +65,9 @@ public record HassiumConfig(
             // === 分段增量（缓存过期时仅补变更分段）===
             boolean sectionDeltaEnabled,
             // === JoinBoost（进服后短时提高主线程预算，加速加载）===
-            boolean joinBoostEnabled
+            boolean joinBoostEnabled,
+            // === 可选实体快照（仅卸载冷路径捕获）===
+            boolean entitySnapshotsEnabled
     ) {
         public static final ClientCacheConfig DEFAULT = new ClientCacheConfig(
                 true,   // enabled: 默认启用
@@ -89,7 +91,9 @@ public record HassiumConfig(
                 // === 分段增量默认配置 ===
                 true,   // sectionDeltaEnabled: 缓存过期时走分段增量（默认开）
                 // === JoinBoost 默认配置 ===
-                true    // joinBoostEnabled: 进服后 5s 内提高主线程预算加速加载（默认开）
+                true,   // joinBoostEnabled: 进服后 5s 内提高主线程预算加速加载（默认开）
+                // === 实体快照默认配置 ===
+                false   // entitySnapshotsEnabled: 默认关闭
         );
 
         /**

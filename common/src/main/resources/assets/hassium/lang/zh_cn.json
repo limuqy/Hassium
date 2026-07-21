@@ -56,6 +56,8 @@
     "hassium.configuration.clientNetwork.mainThreadChunkBudgetMs.tooltip":  "每帧应用区块的时间预算。默认 3；进服 JoinBoost 期间可临时提高。",
     "hassium.configuration.clientCache.joinBoostEnabled":  "JoinBoost 加速",
     "hassium.configuration.clientCache.joinBoostEnabled.tooltip":  "进服后短时提高主线程预算加速加载。默认 true。",
+    "hassium.configuration.clientCache.entitySnapshotsEnabled":  "捕获实体快照",
+    "hassium.configuration.clientCache.entitySnapshotsEnabled.tooltip":  "区块卸载时捕获非玩家实体，供后续世界导出使用；数据与区块缓存 Region 完全分离。默认关闭。",
     "hassium.configuration.storage":  "存储",
     "hassium.configuration.storage.button":  "存储…",
     "hassium.configuration.storage.enabled":  "启用存档压缩",

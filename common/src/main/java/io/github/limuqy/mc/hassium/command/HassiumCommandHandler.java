@@ -164,7 +164,7 @@ public class HassiumCommandHandler {
             }
         });
         return started
-                ? "§a开始导出缓存到 saves/" + worldName + "/...§r\n§7限制: 无实体/玩家背包；仅为去过区块快照；模组方块需相同模组§r"
+                ? "§a开始导出缓存到 saves/" + worldName + "/...§r\n§7限制: 无实体/玩家背包；仅为去过区块快照；首次单机打开会重算光照；模组方块需相同模组§r"
                 : "§c导出启动失败（执行器不可用或已有任务在跑）§r";
     }
 
