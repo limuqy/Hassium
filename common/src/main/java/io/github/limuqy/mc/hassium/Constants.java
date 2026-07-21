@@ -45,4 +45,5 @@ public class Constants {
 	 */
 	public static final String CONFIG_CLIENT_FILE = "hassium/hassium-client.toml";
 	public static final String CONFIG_COMMON_FILE = "hassium/hassium-common.toml";
+	public static final String CONFIG_SERVER_FILE = "hassium/hassium-server.toml";
 }

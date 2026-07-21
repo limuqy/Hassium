@@ -31,19 +31,30 @@ public final class HassiumConfigSpec {
 
     public static final Client CLIENT;
     public static final Common COMMON;
+    public static final Server SERVER;
+
+#if MC_VER < MC_1_20_2
+    public static final ForgeConfigSpec SERVER_SPEC;
+#else
+    public static final ModConfigSpec SERVER_SPEC;
+#endif
 
     static {
 #if MC_VER < MC_1_20_2
         ForgeConfigSpec.Builder clientBuilder = new ForgeConfigSpec.Builder();
         ForgeConfigSpec.Builder commonBuilder = new ForgeConfigSpec.Builder();
+        ForgeConfigSpec.Builder serverBuilder = new ForgeConfigSpec.Builder();
 #else
         ModConfigSpec.Builder clientBuilder = new ModConfigSpec.Builder();
         ModConfigSpec.Builder commonBuilder = new ModConfigSpec.Builder();
+        ModConfigSpec.Builder serverBuilder = new ModConfigSpec.Builder();
 #endif
         CLIENT = new Client(clientBuilder);
         COMMON = new Common(commonBuilder);
+        SERVER = new Server(serverBuilder);
         CLIENT_SPEC = clientBuilder.build();
         COMMON_SPEC = commonBuilder.build();
+        SERVER_SPEC = serverBuilder.build();
     }
 
     private HassiumConfigSpec() {
@@ -82,7 +93,7 @@ public final class HassiumConfigSpec {
                 new HassiumConfig.NetworkConfig(
                         COMMON.networkEnabled.get(),
                         COMMON.networkCompressionLevel.get(),
-                        COMMON.networkMaxChunksPerTick.get(),
+                        SERVER.networkMaxChunksPerTick.get(),
                         COMMON.networkGlobalPacketCompression.get(),
                         COMMON.networkGlobalCompressionLevel.get(),
                         COMMON.networkGlobalCompressionThreshold.get(),
@@ -94,7 +105,7 @@ public final class HassiumConfigSpec {
                         COMMON.networkAggregationMaxWaitTimeMs.get().longValue(),
                         COMMON.networkAggregationMaxSize.get(),
                         COMMON.networkEnableCompactHeader.get(),
-                        COMMON.networkServerChunkPushThreads.get(),
+                        SERVER.networkServerChunkPushThreads.get(),
                         CLIENT.networkClientChunkLoadThreads.get(),
                         CLIENT.networkLightStripEnabled.get(),
                         CLIENT.networkBackgroundThreads.get(),
@@ -102,12 +113,12 @@ public final class HassiumConfigSpec {
                         CLIENT.networkMaxCallbacksPerFrame.get(),
                         COMMON.networkMetricsEnabled.get(),
                         CLIENT.networkMainThreadChunkBudgetMs.get(),
-                        COMMON.networkDynamicThreadPoolEnabled.get(),
-                        COMMON.networkMinPushThreads.get(),
-                        COMMON.networkMaxPushThreads.get()
+                        SERVER.networkDynamicThreadPoolEnabled.get(),
+                        SERVER.networkMinPushThreads.get(),
+                        SERVER.networkMaxPushThreads.get()
                 ),
                 new HassiumConfig.CompatConfig(
-                        COMMON.compatRequireClientMod.get(),
+                        SERVER.compatRequireClientMod.get(),
                         COMMON.compatAutoDowngradeOnError.get()
                 ),
                 new HassiumConfig.DebugConfig(
@@ -162,7 +173,6 @@ public final class HassiumConfigSpec {
         COMMON.storageZstdLevel.set(storage.zstdLevel());
         COMMON.networkEnabled.set(net.enabled());
         COMMON.networkCompressionLevel.set(net.compressionLevel());
-        COMMON.networkMaxChunksPerTick.set(net.maxChunksPerTick());
         COMMON.networkGlobalPacketCompression.set(net.globalPacketCompression());
         COMMON.networkGlobalCompressionLevel.set(net.globalCompressionLevel());
         COMMON.networkGlobalCompressionThreshold.set(net.globalCompressionThreshold());
@@ -174,12 +184,7 @@ public final class HassiumConfigSpec {
         COMMON.networkAggregationMaxWaitTimeMs.set((int) net.aggregationMaxWaitTimeMs());
         COMMON.networkAggregationMaxSize.set(net.aggregationMaxSize());
         COMMON.networkEnableCompactHeader.set(net.enableCompactHeader());
-        COMMON.networkServerChunkPushThreads.set(net.serverChunkPushThreads());
         COMMON.networkMetricsEnabled.set(net.metricsEnabled());
-        COMMON.networkDynamicThreadPoolEnabled.set(net.dynamicThreadPoolEnabled());
-        COMMON.networkMinPushThreads.set(net.minPushThreads());
-        COMMON.networkMaxPushThreads.set(net.maxPushThreads());
-        COMMON.compatRequireClientMod.set(compat.requireClientMod());
         COMMON.compatAutoDowngradeOnError.set(compat.autoDowngradeOnError());
         COMMON.debugMetadataLogging.set(debug.metadataLogging());
         COMMON.debugDispatcherLogging.set(debug.dispatcherLogging());
@@ -189,11 +194,21 @@ public final class HassiumConfigSpec {
         COMMON.debugNetworkLogging.set(debug.networkLogging());
         COMMON.debugCacheLogging.set(debug.cacheLogging());
 
+        SERVER.networkMaxChunksPerTick.set(net.maxChunksPerTick());
+        SERVER.networkServerChunkPushThreads.set(net.serverChunkPushThreads());
+        SERVER.networkDynamicThreadPoolEnabled.set(net.dynamicThreadPoolEnabled());
+        SERVER.networkMinPushThreads.set(net.minPushThreads());
+        SERVER.networkMaxPushThreads.set(net.maxPushThreads());
+        SERVER.compatRequireClientMod.set(compat.requireClientMod());
+
         if (CLIENT_SPEC.isLoaded()) {
             CLIENT_SPEC.save();
         }
         if (COMMON_SPEC.isLoaded()) {
             COMMON_SPEC.save();
+        }
+        if (SERVER_SPEC.isLoaded()) {
+            SERVER_SPEC.save();
         }
     }
 
@@ -376,9 +391,9 @@ public final class HassiumConfigSpec {
                     .translation("hassium.configuration.clientNetwork.maxCallbacksPerFrame")
                     .defineInRange("maxCallbacksPerFrame", 32, 1, 512);
             networkMainThreadChunkBudgetMs = builder
-                    .comment("每帧主线程应用区块的时间预算（毫秒；默认 3；进服 JoinBoost 期间可临时提高）")
+                    .comment("每帧主线程应用区块的时间预算（毫秒；默认 10；进服 JoinBoost 期间可临时提高）")
                     .translation("hassium.configuration.clientNetwork.mainThreadChunkBudgetMs")
-                    .defineInRange("mainThreadChunkBudgetMs", 3, 1, 50);
+                    .defineInRange("mainThreadChunkBudgetMs", 10, 1, 50);
             builder.pop();
         }
     }
@@ -391,7 +406,6 @@ public final class HassiumConfigSpec {
 
         public final ForgeConfigSpec.BooleanValue networkEnabled;
         public final ForgeConfigSpec.IntValue networkCompressionLevel;
-        public final ForgeConfigSpec.IntValue networkMaxChunksPerTick;
         public final ForgeConfigSpec.BooleanValue networkGlobalPacketCompression;
         public final ForgeConfigSpec.IntValue networkGlobalCompressionLevel;
         public final ForgeConfigSpec.IntValue networkGlobalCompressionThreshold;
@@ -403,13 +417,8 @@ public final class HassiumConfigSpec {
         public final ForgeConfigSpec.IntValue networkAggregationMaxWaitTimeMs;
         public final ForgeConfigSpec.IntValue networkAggregationMaxSize;
         public final ForgeConfigSpec.BooleanValue networkEnableCompactHeader;
-        public final ForgeConfigSpec.IntValue networkServerChunkPushThreads;
         public final ForgeConfigSpec.BooleanValue networkMetricsEnabled;
-        public final ForgeConfigSpec.BooleanValue networkDynamicThreadPoolEnabled;
-        public final ForgeConfigSpec.IntValue networkMinPushThreads;
-        public final ForgeConfigSpec.IntValue networkMaxPushThreads;
 
-        public final ForgeConfigSpec.BooleanValue compatRequireClientMod;
         public final ForgeConfigSpec.BooleanValue compatAutoDowngradeOnError;
 
         public final ForgeConfigSpec.BooleanValue debugMetadataLogging;
@@ -428,7 +437,6 @@ public final class HassiumConfigSpec {
 
         public final ModConfigSpec.BooleanValue networkEnabled;
         public final ModConfigSpec.IntValue networkCompressionLevel;
-        public final ModConfigSpec.IntValue networkMaxChunksPerTick;
         public final ModConfigSpec.BooleanValue networkGlobalPacketCompression;
         public final ModConfigSpec.IntValue networkGlobalCompressionLevel;
         public final ModConfigSpec.IntValue networkGlobalCompressionThreshold;
@@ -440,13 +448,8 @@ public final class HassiumConfigSpec {
         public final ModConfigSpec.IntValue networkAggregationMaxWaitTimeMs;
         public final ModConfigSpec.IntValue networkAggregationMaxSize;
         public final ModConfigSpec.BooleanValue networkEnableCompactHeader;
-        public final ModConfigSpec.IntValue networkServerChunkPushThreads;
         public final ModConfigSpec.BooleanValue networkMetricsEnabled;
-        public final ModConfigSpec.BooleanValue networkDynamicThreadPoolEnabled;
-        public final ModConfigSpec.IntValue networkMinPushThreads;
-        public final ModConfigSpec.IntValue networkMaxPushThreads;
 
-        public final ModConfigSpec.BooleanValue compatRequireClientMod;
         public final ModConfigSpec.BooleanValue compatAutoDowngradeOnError;
 
         public final ModConfigSpec.BooleanValue debugMetadataLogging;
@@ -490,10 +493,6 @@ public final class HassiumConfigSpec {
                     .comment("自定义通道 ZSTD 压缩等级（默认 3，速度优先；算法固定为 hassium:zstd）")
                     .translation("hassium.configuration.network.compressionLevel")
                     .defineInRange("compressionLevel", 3, 1, 22);
-            networkMaxChunksPerTick = builder
-                    .comment("每玩家每 server tick 最多序列化/推送区块数（默认 10；仅服务端）")
-                    .translation("hassium.configuration.network.maxChunksPerTick")
-                    .defineInRange("maxChunksPerTick", 10, 1, 256);
             networkGlobalPacketCompression = builder
                     .comment("=== 全局包压缩（替换原版 Zlib） ===")
                     .comment("【高风险】是否用 ZSTD 替换原版 Zlib 全局包压缩（影响几乎所有数据包）。"
@@ -547,39 +546,16 @@ public final class HassiumConfigSpec {
                     .comment("是否启用紧凑包头（主要用于聚合包内部；默认 true）")
                     .translation("hassium.configuration.network.enableCompactHeader")
                     .define("enableCompactHeader", true);
-            networkServerChunkPushThreads = builder
-                    .comment("=== 服务端推送线程 ===")
-                    .comment("服务端区块推送线程数（动态池关闭时的基准；默认 8；仅服务端）")
-                    .translation("hassium.configuration.network.serverChunkPushThreads")
-                    .defineInRange("serverChunkPushThreads", 8, 1, 64);
             networkMetricsEnabled = builder
                     .comment("=== 指标 ===")
                     .comment("是否启用网络指标收集（流量、缓存命中等；默认 true）")
                     .translation("hassium.configuration.network.metricsEnabled")
                     .define("metricsEnabled", true);
-            networkDynamicThreadPoolEnabled = builder
-                    .comment("=== 动态线程池 ===")
-                    .comment("是否按队列负载动态调整推送线程数（默认 true；仅服务端）")
-                    .translation("hassium.configuration.network.dynamicThreadPoolEnabled")
-                    .define("dynamicThreadPoolEnabled", true);
-            networkMinPushThreads = builder
-                    .comment("动态线程池最小推送线程数（默认 2；仅服务端）")
-                    .translation("hassium.configuration.network.minPushThreads")
-                    .defineInRange("minPushThreads", 2, 1, 64);
-            networkMaxPushThreads = builder
-                    .comment("动态线程池最大推送线程数（默认 8；仅服务端）")
-                    .translation("hassium.configuration.network.maxPushThreads")
-                    .defineInRange("maxPushThreads", 8, 1, 64);
             builder.pop();
 
             builder.comment("兼容性配置")
                     .translation("hassium.configuration.compat")
                     .push("compat");
-            compatRequireClientMod = builder
-                    .comment("是否强制要求客户端安装 Hassium。"
-                            + "false（默认）时无模组客户端仍可进服并走原版包。详见 docs/mod-compat.md")
-                    .translation("hassium.configuration.compat.requireClientMod")
-                    .define("requireClientMod", false);
             compatAutoDowngradeOnError = builder
                     .comment("出错时是否自动降级到原版行为（默认 true）")
                     .translation("hassium.configuration.compat.autoDowngradeOnError")
@@ -617,6 +593,68 @@ public final class HassiumConfigSpec {
                     .comment("缓存读写日志（默认 false）")
                     .translation("hassium.configuration.debug.cacheLogging")
                     .define("cacheLogging", false);
+            builder.pop();
+        }
+    }
+
+    /**
+     * 服务端专用配置（仅专用服加载）。
+     */
+    public static final class Server {
+#if MC_VER < MC_1_20_2
+        public final ForgeConfigSpec.IntValue networkMaxChunksPerTick;
+        public final ForgeConfigSpec.IntValue networkServerChunkPushThreads;
+        public final ForgeConfigSpec.BooleanValue networkDynamicThreadPoolEnabled;
+        public final ForgeConfigSpec.IntValue networkMinPushThreads;
+        public final ForgeConfigSpec.IntValue networkMaxPushThreads;
+        public final ForgeConfigSpec.BooleanValue compatRequireClientMod;
+
+        Server(ForgeConfigSpec.Builder builder) {
+#else
+        public final ModConfigSpec.IntValue networkMaxChunksPerTick;
+        public final ModConfigSpec.IntValue networkServerChunkPushThreads;
+        public final ModConfigSpec.BooleanValue networkDynamicThreadPoolEnabled;
+        public final ModConfigSpec.IntValue networkMinPushThreads;
+        public final ModConfigSpec.IntValue networkMaxPushThreads;
+        public final ModConfigSpec.BooleanValue compatRequireClientMod;
+
+        Server(ModConfigSpec.Builder builder) {
+#endif
+            builder.comment("服务端推送配置（仅专用服生效）")
+                    .translation("hassium.configuration.server")
+                    .push("network");
+            networkMaxChunksPerTick = builder
+                    .comment("每玩家每 server tick 最多序列化/推送区块数（默认 32；仅服务端）")
+                    .translation("hassium.configuration.server.maxChunksPerTick")
+                    .defineInRange("maxChunksPerTick", 32, 1, 256);
+            networkServerChunkPushThreads = builder
+                    .comment("=== 服务端推送线程 ===")
+                    .comment("服务端区块推送线程数（动态池关闭时的基准；默认 8；仅服务端）")
+                    .translation("hassium.configuration.server.serverChunkPushThreads")
+                    .defineInRange("serverChunkPushThreads", 8, 1, 64);
+            networkDynamicThreadPoolEnabled = builder
+                    .comment("=== 动态线程池 ===")
+                    .comment("是否按队列负载动态调整推送线程数（默认 true；仅服务端）")
+                    .translation("hassium.configuration.server.dynamicThreadPoolEnabled")
+                    .define("dynamicThreadPoolEnabled", true);
+            networkMinPushThreads = builder
+                    .comment("动态线程池最小推送线程数（默认 2；仅服务端）")
+                    .translation("hassium.configuration.server.minPushThreads")
+                    .defineInRange("minPushThreads", 2, 1, 64);
+            networkMaxPushThreads = builder
+                    .comment("动态线程池最大推送线程数（默认 8；仅服务端）")
+                    .translation("hassium.configuration.server.maxPushThreads")
+                    .defineInRange("maxPushThreads", 8, 1, 64);
+            builder.pop();
+
+            builder.comment("兼容性配置")
+                    .translation("hassium.configuration.compat")
+                    .push("compat");
+            compatRequireClientMod = builder
+                    .comment("是否强制要求客户端安装 Hassium。"
+                            + "false（默认）时无模组客户端仍可进服并走原版包。详见 docs/mod-compat.md")
+                    .translation("hassium.configuration.compat.requireClientMod")
+                    .define("requireClientMod", false);
             builder.pop();
         }
     }

@@ -62,7 +62,7 @@ fabric/ forge/ neoforge/  ← ServiceLoader 实现 + 入口
 
 **超视渲染：** 多人 clientVD>serverVD 时 `ViewDistanceExtensionService` 环带 `renderOnly` 回填；Forget 原地保留；不向服请求视距外区块/BE。详见 [`docs/ovd.md`](docs/ovd.md)。
 
-**导出：** `/hassiumc cache export [<世界名>]` → `saves/` 原版 Anvil。
+**导出：** `/hassiumc export [<serverIp>] [seed]` → `saves/` 原版 Anvil。无参数导出当前多人服务器缓存；不填 seed 使用空岛模式。
 
 ## 已完成 / 待办
 

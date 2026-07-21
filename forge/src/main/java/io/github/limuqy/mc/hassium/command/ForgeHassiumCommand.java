@@ -1,7 +1,10 @@
 package io.github.limuqy.mc.hassium.command;
 
 import com.mojang.brigadier.CommandDispatcher;
+import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.context.CommandContext;
+import com.mojang.brigadier.suggestion.Suggestions;
+import com.mojang.brigadier.suggestion.SuggestionsBuilder;
 import io.github.limuqy.mc.hassium.compat.PermissionCompat;
 import io.github.limuqy.mc.hassium.metrics.NetworkStats;
 import net.minecraft.commands.CommandSourceStack;
@@ -15,6 +18,8 @@ import net.minecraftforge.eventbus.api.listener.SubscribeEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 #endif
 import net.minecraftforge.fml.common.Mod;
+
+import java.util.concurrent.CompletableFuture;
 
 /**
  * Forge 命令注册
@@ -59,26 +64,49 @@ public class ForgeHassiumCommand {
                         .then(Commands.literal("stats")
                                 .requires(source -> HassiumCommandHandler.isMetricsEnabled())
                                 .executes(ForgeHassiumCommand::showClientStats))
-                        .then(Commands.literal("cache")
-                                .then(Commands.literal("export")
-                                        .executes(ForgeHassiumCommand::exportCacheDefault)
-                                        .then(Commands.argument("worldName", com.mojang.brigadier.arguments.StringArgumentType.greedyString())
-                                                .executes(ForgeHassiumCommand::exportCacheNamed)
-                                        )
+                        .then(Commands.literal("export")
+                                .executes(ForgeHassiumCommand::exportCurrentWorld)
+                                .then(Commands.argument("args", StringArgumentType.greedyString())
+                                        .suggests(ForgeHassiumCommand::suggestCachedServers)
+                                        .executes(ForgeHassiumCommand::exportWithArgs)
                                 )
                         )
         );
     }
 
-    private static int exportCacheDefault(CommandContext<CommandSourceStack> context) {
-        String msg = HassiumCommandHandler.startCacheExport(null);
+    private static CompletableFuture<Suggestions> suggestCachedServers(
+            CommandContext<CommandSourceStack> context, SuggestionsBuilder builder) {
+        HassiumCommandHandler.getCachedServerIds().forEach(builder::suggest);
+        return builder.buildFuture();
+    }
+
+    /** 无参数：导出当前世界（单人世界会提示错误） */
+    private static int exportCurrentWorld(CommandContext<CommandSourceStack> context) {
+        String msg = HassiumCommandHandler.startCacheExport(null, null);
         context.getSource().sendSuccess(() -> Component.literal(msg), false);
         return 1;
     }
 
-    private static int exportCacheNamed(CommandContext<CommandSourceStack> context) {
-        String name = com.mojang.brigadier.arguments.StringArgumentType.getString(context, "worldName");
-        String msg = HassiumCommandHandler.startCacheExport(name);
+    /** 解析参数：serverIp [seed] */
+    private static int exportWithArgs(CommandContext<CommandSourceStack> context) {
+        String args = StringArgumentType.getString(context, "args");
+        String serverIp;
+        Long seed = null;
+
+        int lastSpace = args.lastIndexOf(' ');
+        if (lastSpace > 0) {
+            String lastPart = args.substring(lastSpace + 1);
+            try {
+                seed = Long.parseLong(lastPart);
+                serverIp = args.substring(0, lastSpace);
+            } catch (NumberFormatException e) {
+                serverIp = args;
+            }
+        } else {
+            serverIp = args;
+        }
+
+        String msg = HassiumCommandHandler.startCacheExport(serverIp, seed);
         context.getSource().sendSuccess(() -> Component.literal(msg), false);
         return 1;
     }

@@ -19,7 +19,8 @@ import java.util.Set;
  * Fabric 自管 toml 读写（键路径对齐 {@link HassiumConfigSpec}，兼容旧 FCAP 生成文件）。
  * <p>
  * CLIENT（仅物理客户端）：{@code hassium/hassium-client.toml}（clientCache + 客户端 network）<br>
- * COMMON（客户端与专用服）：{@code hassium/hassium-common.toml}（storage / network / compat / debug）
+ * COMMON（客户端与专用服）：{@code hassium/hassium-common.toml}（storage / network / compat / debug）<br>
+ * SERVER（仅专用服）：{@code hassium/hassium-server.toml}（服务端推送 + requireClientMod）
  */
 public final class HassiumTomlConfigIO {
 
@@ -36,8 +37,12 @@ public final class HassiumTomlConfigIO {
         return Services.PLATFORM.getConfigDirectory().resolve(Constants.CONFIG_COMMON_FILE);
     }
 
+    public static Path serverPath() {
+        return Services.PLATFORM.getConfigDirectory().resolve(Constants.CONFIG_SERVER_FILE);
+    }
+
     /**
-     * 按物理端加载：专用服只读写 common；物理客户端读写 client + common。
+     * 按物理端加载：物理客户端读写 client + common；专用服读写 common + server。
      * 缺文件则写入默认；损坏时回退默认并打 warn。
      */
     public static HassiumConfig load() {
@@ -52,6 +57,7 @@ public final class HassiumTomlConfigIO {
             CommonNet commonNet = CommonNet.DEFAULT;
             HassiumConfig.CompatConfig compat = HassiumConfig.CompatConfig.DEFAULT;
             HassiumConfig.DebugConfig debug = HassiumConfig.DebugConfig.DEFAULT;
+            ServerNet serverNet = ServerNet.DEFAULT;
 
             if (physicalClient) {
                 Path client = clientPath();
@@ -65,6 +71,18 @@ public final class HassiumTomlConfigIO {
                     }
                 } else {
                     writeClient(client, cache, clientNet);
+                }
+            } else {
+                Path server = serverPath();
+                if (Files.isRegularFile(server)) {
+                    try (CommentedFileConfig cfg = open(server)) {
+                        cfg.load();
+                        serverNet = readServerNetwork(cfg);
+                    } catch (Exception e) {
+                        LOGGER.warn("Hassium: 读取 {} 失败，使用默认服务端配置", server, e);
+                    }
+                } else {
+                    writeServer(server, serverNet);
                 }
             }
 
@@ -82,7 +100,7 @@ public final class HassiumTomlConfigIO {
                 writeCommon(common, storage, commonNet, compat, debug);
             }
 
-            return merge(storage, cache, clientNet, commonNet, compat, debug);
+            return merge(storage, cache, clientNet, commonNet, serverNet, compat, debug);
         } catch (Exception e) {
             LOGGER.error("Hassium: Toml 配置加载失败，使用内置默认", e);
             return HassiumConfig.DEFAULT;
@@ -90,7 +108,7 @@ public final class HassiumTomlConfigIO {
     }
 
     /**
-     * 按物理端保存：专用服只写 common；物理客户端写 client + common。
+     * 按物理端保存：物理客户端写 client + common；专用服写 common + server。
      */
     public static void save(HassiumConfig config) {
         try {
@@ -99,6 +117,8 @@ public final class HassiumTomlConfigIO {
             Files.createDirectories(common.getParent());
             if (physicalClient) {
                 writeClient(clientPath(), config.clientCache(), ClientNet.from(config.network()));
+            } else {
+                writeServer(serverPath(), ServerNet.from(config.network(), config.compat()));
             }
             writeCommon(common, config.storage(), CommonNet.from(config.network()),
                     config.compat(), config.debug());
@@ -144,11 +164,19 @@ public final class HassiumTomlConfigIO {
         }
     }
 
+    private static void writeServer(Path path, ServerNet net) {
+        try (CommentedFileConfig cfg = open(path)) {
+            writeServerNetwork(cfg, net);
+            cfg.save();
+        }
+    }
+
     private static HassiumConfig merge(
             HassiumConfig.StorageConfig storage,
             HassiumConfig.ClientCacheConfig cache,
             ClientNet clientNet,
             CommonNet commonNet,
+            ServerNet serverNet,
             HassiumConfig.CompatConfig compat,
             HassiumConfig.DebugConfig debug
     ) {
@@ -158,7 +186,7 @@ public final class HassiumTomlConfigIO {
                 new HassiumConfig.NetworkConfig(
                         commonNet.enabled,
                         commonNet.compressionLevel,
-                        commonNet.maxChunksPerTick,
+                        serverNet.maxChunksPerTick,
                         commonNet.globalPacketCompression,
                         commonNet.globalCompressionLevel,
                         commonNet.globalCompressionThreshold,
@@ -170,7 +198,7 @@ public final class HassiumTomlConfigIO {
                         commonNet.aggregationMaxWaitTimeMs,
                         commonNet.aggregationMaxSize,
                         commonNet.enableCompactHeader,
-                        commonNet.serverChunkPushThreads,
+                        serverNet.serverChunkPushThreads,
                         clientNet.clientChunkLoadThreads,
                         clientNet.lightStripEnabled,
                         clientNet.backgroundThreads,
@@ -178,11 +206,14 @@ public final class HassiumTomlConfigIO {
                         clientNet.maxCallbacksPerFrame,
                         commonNet.metricsEnabled,
                         clientNet.mainThreadChunkBudgetMs,
-                        commonNet.dynamicThreadPoolEnabled,
-                        commonNet.minPushThreads,
-                        commonNet.maxPushThreads
+                        serverNet.dynamicThreadPoolEnabled,
+                        serverNet.minPushThreads,
+                        serverNet.maxPushThreads
                 ),
-                compat,
+                new HassiumConfig.CompatConfig(
+                        serverNet.requireClientMod,
+                        compat.autoDowngradeOnError()
+                ),
                 debug
         );
     }
@@ -281,7 +312,6 @@ public final class HassiumTomlConfigIO {
         return new CommonNet(
                 getBool(cfg, "network.enabled", d.enabled),
                 getInt(cfg, "network.compressionLevel", d.compressionLevel),
-                getInt(cfg, "network.maxChunksPerTick", d.maxChunksPerTick),
                 getBool(cfg, "network.globalPacketCompression", d.globalPacketCompression),
                 getInt(cfg, "network.globalCompressionLevel", d.globalCompressionLevel),
                 getInt(cfg, "network.globalCompressionThreshold", d.globalCompressionThreshold),
@@ -293,18 +323,13 @@ public final class HassiumTomlConfigIO {
                 getLong(cfg, "network.aggregationMaxWaitTimeMs", d.aggregationMaxWaitTimeMs),
                 getInt(cfg, "network.aggregationMaxSize", d.aggregationMaxSize),
                 getBool(cfg, "network.enableCompactHeader", d.enableCompactHeader),
-                getInt(cfg, "network.serverChunkPushThreads", d.serverChunkPushThreads),
-                getBool(cfg, "network.metricsEnabled", d.metricsEnabled),
-                getBool(cfg, "network.dynamicThreadPoolEnabled", d.dynamicThreadPoolEnabled),
-                getInt(cfg, "network.minPushThreads", d.minPushThreads),
-                getInt(cfg, "network.maxPushThreads", d.maxPushThreads)
+                getBool(cfg, "network.metricsEnabled", d.metricsEnabled)
         );
     }
 
     private static void writeCommonNetwork(CommentedConfig cfg, CommonNet n) {
         set(cfg, "network.enabled", n.enabled, "=== 基础 ===\n是否启用 Hassium 自定义通道");
         set(cfg, "network.compressionLevel", n.compressionLevel, "自定义通道 ZSTD 等级");
-        set(cfg, "network.maxChunksPerTick", n.maxChunksPerTick, "每玩家每 tick 推送上限");
         set(cfg, "network.globalPacketCompression", n.globalPacketCompression, "=== 全局包压缩（替换原版 Zlib） ===\n是否启用全局 ZSTD");
         set(cfg, "network.globalCompressionLevel", n.globalCompressionLevel, "全局压缩等级");
         set(cfg, "network.globalCompressionThreshold", n.globalCompressionThreshold, "全局压缩阈值（字节）");
@@ -316,23 +341,41 @@ public final class HassiumTomlConfigIO {
         set(cfg, "network.aggregationMaxWaitTimeMs", (int) n.aggregationMaxWaitTimeMs, "聚合最大等待（ms）");
         set(cfg, "network.aggregationMaxSize", n.aggregationMaxSize, "聚合最大大小（字节）");
         set(cfg, "network.enableCompactHeader", n.enableCompactHeader, "是否启用紧凑包头");
-        set(cfg, "network.serverChunkPushThreads", n.serverChunkPushThreads, "=== 服务端推送线程 ===\n服务端推送线程数");
         set(cfg, "network.metricsEnabled", n.metricsEnabled, "=== 指标 ===\n是否启用指标收集");
-        set(cfg, "network.dynamicThreadPoolEnabled", n.dynamicThreadPoolEnabled, "=== 动态线程池 ===\n是否动态调整推送线程");
-        set(cfg, "network.minPushThreads", n.minPushThreads, "动态池最小线程数");
-        set(cfg, "network.maxPushThreads", n.maxPushThreads, "动态池最大线程数");
+    }
+
+    private static ServerNet readServerNetwork(CommentedConfig cfg) {
+        var d = ServerNet.DEFAULT;
+        return new ServerNet(
+                getInt(cfg, "network.maxChunksPerTick", d.maxChunksPerTick),
+                getInt(cfg, "network.serverChunkPushThreads", d.serverChunkPushThreads),
+                getBool(cfg, "network.dynamicThreadPoolEnabled", d.dynamicThreadPoolEnabled),
+                getInt(cfg, "network.minPushThreads", d.minPushThreads),
+                getInt(cfg, "network.maxPushThreads", d.maxPushThreads),
+                getBool(cfg, "compat.requireClientMod", d.requireClientMod)
+        );
+    }
+
+    private static void writeServerNetwork(CommentedConfig cfg, ServerNet n) {
+        set(cfg, "network.maxChunksPerTick", n.maxChunksPerTick, "=== 服务端推送 ===\n每玩家每 tick 推送上限（仅服务端）");
+        set(cfg, "network.serverChunkPushThreads", n.serverChunkPushThreads, "服务端推送线程数（仅服务端）");
+        set(cfg, "network.dynamicThreadPoolEnabled", n.dynamicThreadPoolEnabled, "=== 动态线程池 ===\n是否动态调整推送线程（仅服务端）");
+        set(cfg, "network.minPushThreads", n.minPushThreads, "动态池最小线程数（仅服务端）");
+        set(cfg, "network.maxPushThreads", n.maxPushThreads, "动态池最大线程数（仅服务端）");
+        set(cfg, "compat.requireClientMod", n.requireClientMod, "=== 兼容 ===\n是否强制要求客户端安装 Hassium");
     }
 
     private static HassiumConfig.CompatConfig readCompat(CommentedConfig cfg) {
         var d = HassiumConfig.CompatConfig.DEFAULT;
+        // requireClientMod 已移到 server.toml，common 中读取时使用默认值
         return new HassiumConfig.CompatConfig(
-                getBool(cfg, "compat.requireClientMod", d.requireClientMod()),
+                d.requireClientMod(),
                 getBool(cfg, "compat.autoDowngradeOnError", d.autoDowngradeOnError())
         );
     }
 
     private static void writeCompat(CommentedConfig cfg, HassiumConfig.CompatConfig c) {
-        set(cfg, "compat.requireClientMod", c.requireClientMod(), "是否强制客户端安装 Hassium");
+        // requireClientMod 已移到 server.toml，common 中仅保留 autoDowngradeOnError
         set(cfg, "compat.autoDowngradeOnError", c.autoDowngradeOnError(), "出错时是否自动降级");
     }
 
@@ -445,7 +488,6 @@ public final class HassiumTomlConfigIO {
     private record CommonNet(
             boolean enabled,
             int compressionLevel,
-            int maxChunksPerTick,
             boolean globalPacketCompression,
             int globalCompressionLevel,
             int globalCompressionThreshold,
@@ -457,11 +499,7 @@ public final class HassiumTomlConfigIO {
             long aggregationMaxWaitTimeMs,
             int aggregationMaxSize,
             boolean enableCompactHeader,
-            int serverChunkPushThreads,
-            boolean metricsEnabled,
-            boolean dynamicThreadPoolEnabled,
-            int minPushThreads,
-            int maxPushThreads
+            boolean metricsEnabled
     ) {
         static final CommonNet DEFAULT = from(HassiumConfig.NetworkConfig.DEFAULT);
 
@@ -469,7 +507,6 @@ public final class HassiumTomlConfigIO {
             return new CommonNet(
                     n.enabled(),
                     n.compressionLevel(),
-                    n.maxChunksPerTick(),
                     n.globalPacketCompression(),
                     n.globalCompressionLevel(),
                     n.globalCompressionThreshold(),
@@ -481,11 +518,29 @@ public final class HassiumTomlConfigIO {
                     n.aggregationMaxWaitTimeMs(),
                     n.aggregationMaxSize(),
                     n.enableCompactHeader(),
+                    n.metricsEnabled()
+            );
+        }
+    }
+
+    private record ServerNet(
+            int maxChunksPerTick,
+            int serverChunkPushThreads,
+            boolean dynamicThreadPoolEnabled,
+            int minPushThreads,
+            int maxPushThreads,
+            boolean requireClientMod
+    ) {
+        static final ServerNet DEFAULT = from(HassiumConfig.NetworkConfig.DEFAULT, HassiumConfig.CompatConfig.DEFAULT);
+
+        static ServerNet from(HassiumConfig.NetworkConfig n, HassiumConfig.CompatConfig c) {
+            return new ServerNet(
+                    n.maxChunksPerTick(),
                     n.serverChunkPushThreads(),
-                    n.metricsEnabled(),
                     n.dynamicThreadPoolEnabled(),
                     n.minPushThreads(),
-                    n.maxPushThreads()
+                    n.maxPushThreads(),
+                    c.requireClientMod()
             );
         }
     }

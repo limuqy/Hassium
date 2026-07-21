@@ -43,9 +43,9 @@ dependencies {
         implementation include("fuzs.forgeconfigapiport:forgeconfigapiport-forge:${gradle.ext.forge_config_api_port_version}")
     }
 
-    // Cloth：模组列表「配置」按钮
+    // Cloth Config：编译期需要；可选依赖，不 jiJ
     if (gradle.ext.has('cloth_config_version')) {
-        modApi include("me.shedaniel.cloth:cloth-config-forge:${gradle.ext.cloth_config_version}")
+        modCompileOnly("me.shedaniel.cloth:cloth-config-forge:${gradle.ext.cloth_config_version}")
     }
 }
 

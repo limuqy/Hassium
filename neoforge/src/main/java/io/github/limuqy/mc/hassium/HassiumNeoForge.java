@@ -49,6 +49,8 @@ public class HassiumNeoForge {
                 ModConfig.Type.CLIENT, HassiumConfigSpec.CLIENT_SPEC, Constants.CONFIG_CLIENT_FILE);
         ModLoadingContext.get().registerConfig(
                 ModConfig.Type.COMMON, HassiumConfigSpec.COMMON_SPEC, Constants.CONFIG_COMMON_FILE);
+        ModLoadingContext.get().registerConfig(
+                ModConfig.Type.SERVER, HassiumConfigSpec.SERVER_SPEC, Constants.CONFIG_SERVER_FILE);
         hassium$init(modEventBus);
     }
 #else
@@ -57,6 +59,8 @@ public class HassiumNeoForge {
                 ModConfig.Type.CLIENT, HassiumConfigSpec.CLIENT_SPEC, Constants.CONFIG_CLIENT_FILE);
         modContainer.registerConfig(
                 ModConfig.Type.COMMON, HassiumConfigSpec.COMMON_SPEC, Constants.CONFIG_COMMON_FILE);
+        modContainer.registerConfig(
+                ModConfig.Type.SERVER, HassiumConfigSpec.SERVER_SPEC, Constants.CONFIG_SERVER_FILE);
         hassium$init(modEventBus);
     }
 #endif
