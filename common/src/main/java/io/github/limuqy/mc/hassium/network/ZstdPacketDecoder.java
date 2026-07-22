@@ -51,13 +51,8 @@ public class ZstdPacketDecoder extends ByteToMessageDecoder {
         int uncompressedLength = friendlyBuf.readVarInt();
 
         if (uncompressedLength == 0) {
-            // 未压缩数据
-            int dataLength = friendlyBuf.readVarInt();
-            if (friendlyBuf.readableBytes() < dataLength) {
-                in.resetReaderIndex();
-                return;
-            }
-            out.add(friendlyBuf.readBytes(dataLength));
+            // 与原版一致：剩余全部为未压缩包体
+            out.add(friendlyBuf.readBytes(friendlyBuf.readableBytes()));
         } else {
             // 验证解压大小
             if (this.validateDecompressed) {
@@ -71,23 +66,16 @@ public class ZstdPacketDecoder extends ByteToMessageDecoder {
                 }
             }
 
-            // 读取压缩数据长度
-            int compressedLength = friendlyBuf.readVarInt();
+            int compressedLength = friendlyBuf.readableBytes();
             if (compressedLength > MAXIMUM_COMPRESSED_LENGTH) {
                 throw new DecoderException("Badly compressed packet - compressed size " +
                         compressedLength + " exceeds maximum " + MAXIMUM_COMPRESSED_LENGTH);
-            }
-
-            if (friendlyBuf.readableBytes() < compressedLength) {
-                in.resetReaderIndex();
-                return;
             }
 
             byte[] compressed = new byte[compressedLength];
             friendlyBuf.readBytes(compressed);
 
             // ZSTD 解压
-            // 使用推荐的解压方法，不需要预先知道解压后大小
             byte[] result = Zstd.decompress(compressed, uncompressedLength);
             if (result == null || result.length == 0) {
                 throw new DecoderException("ZSTD decompression failed: empty output");

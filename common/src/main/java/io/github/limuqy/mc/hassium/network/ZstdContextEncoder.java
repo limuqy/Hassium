@@ -16,9 +16,9 @@ import org.slf4j.LoggerFactory;
  * 2. Magicless ZSTD（减少 4 字节开销）
  * 3. 可配置的压缩级别
  * <p>
- * 保持与原版相同的线协议格式：VarInt(uncompressedLength) + compressedData
- * <p>
- * 注意：黑名单检查已在 MixinConnection 中完成，此处不再重复检查
+ * 线协议与原版 {@code CompressionEncoder} 一致：
+ * {@code VarInt(uncompressedLength)} + data（未压缩时 length=0，其后为原始包体；
+ * 压缩时 length 为解压后大小，其后为压缩字节，无额外长度前缀）。
  */
 public class ZstdContextEncoder extends MessageToByteEncoder<ByteBuf> {
 
@@ -31,16 +31,15 @@ public class ZstdContextEncoder extends MessageToByteEncoder<ByteBuf> {
     private volatile boolean closed = false;
 
     /**
-     * @param threshold  压缩阈值（低于此值不压缩）
-     * @param level      ZSTD 压缩级别（1-22）
-     * @param magicless  是否启用 magicless 模式（去掉 4 字节魔数头）
+     * @param threshold 压缩阈值（低于此值不压缩）
+     * @param level     ZSTD 压缩级别（1-22）
+     * @param magicless 是否启用 magicless 模式（去掉 4 字节魔数头）
      */
     public ZstdContextEncoder(int threshold, int level, boolean magicless) {
         this.threshold = threshold;
         this.compressionLevel = level;
         this.magicless = magicless;
 
-        // 创建 per-connection 压缩上下文
         this.compressCtx = new ZstdCompressCtx();
         this.compressCtx.setLevel(level);
         if (magicless) {
@@ -62,7 +61,6 @@ public class ZstdContextEncoder extends MessageToByteEncoder<ByteBuf> {
     @Override
     protected void encode(ChannelHandlerContext ctx, ByteBuf in, ByteBuf out) throws Exception {
         if (closed) {
-            // 上下文已关闭，直接透传
             out.writeBytes(in);
             return;
         }
@@ -71,21 +69,17 @@ public class ZstdContextEncoder extends MessageToByteEncoder<ByteBuf> {
         FriendlyByteBuf friendlyBuf = new FriendlyByteBuf(out);
 
         if (readableBytes < this.threshold) {
-            // 低于阈值：不压缩，写 VarInt(0) + 数据长度 + 原始数据
+            // 与原版一致：VarInt(0) + 原始数据（无额外长度前缀）
             friendlyBuf.writeVarInt(0);
-            friendlyBuf.writeVarInt(readableBytes);
             friendlyBuf.writeBytes(in);
         } else {
-            // 高于阈值：使用上下文压缩
             byte[] input = new byte[readableBytes];
             in.readBytes(input);
 
-            // 使用上下文压缩（复用历史窗口状态，提升压缩率）
             byte[] compressed = compressCtx.compress(input);
 
-            // 写入原始长度 + 压缩长度 + 压缩数据
+            // 与原版一致：VarInt(uncompressedLength) + 压缩数据
             friendlyBuf.writeVarInt(input.length);
-            friendlyBuf.writeVarInt(compressed.length);
             friendlyBuf.writeBytes(compressed);
 
             if (LOGGER.isDebugEnabled()) {
@@ -96,30 +90,18 @@ public class ZstdContextEncoder extends MessageToByteEncoder<ByteBuf> {
         }
     }
 
-    /**
-     * 更新压缩阈值
-     */
     public void setThreshold(int threshold) {
         this.threshold = threshold;
     }
 
-    /**
-     * 获取压缩阈值
-     */
     public int getThreshold() {
         return threshold;
     }
 
-    /**
-     * 获取压缩级别
-     */
     public int getCompressionLevel() {
         return compressionLevel;
     }
 
-    /**
-     * 检查是否启用 magicless 模式
-     */
     public boolean isMagicless() {
         return magicless;
     }
@@ -130,9 +112,6 @@ public class ZstdContextEncoder extends MessageToByteEncoder<ByteBuf> {
         super.exceptionCaught(ctx, cause);
     }
 
-    /**
-     * 关闭压缩上下文，释放资源
-     */
     public synchronized void close() {
         if (!closed) {
             closed = true;
@@ -140,10 +119,4 @@ public class ZstdContextEncoder extends MessageToByteEncoder<ByteBuf> {
             LOGGER.debug("Closed ZSTD context encoder");
         }
     }
-
-//    @Override
-//    protected void finalize() throws Throwable {
-//        close();
-//        super.finalize();
-//    }
 }

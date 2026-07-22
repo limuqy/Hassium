@@ -33,6 +33,15 @@ public class ZstdPipelineSwitcher {
      * @param level     ZSTD 压缩等级
      */
     public static void switchToZstd(Channel channel, int threshold, int level) {
+        if (channel == null) {
+            return;
+        }
+        // 管线修改必须在 EventLoop 上；若从其他线程调用则投递并返回
+        if (!channel.eventLoop().inEventLoop()) {
+            channel.eventLoop().execute(() -> switchToZstd(channel, threshold, level));
+            return;
+        }
+
         ChannelPipeline pipeline = channel.pipeline();
 
         // 移除旧的压缩 Handler（如果存在）
@@ -43,7 +52,6 @@ public class ZstdPipelineSwitcher {
             LOGGER.debug("Pipeline after removing old handlers: {}", pipeline.names());
         }
 
-        // 获取配置
         HassiumConfigService config = HassiumConfigService.getInstance();
         boolean magicless = config.isMagiclessZstd();
 

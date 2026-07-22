@@ -365,26 +365,34 @@ public class ForgeNetworkManager implements NetworkManager {
         LOGGER.info("Hassium: Server handshake for {}: accepted={}, globalCompression={}, compactHeader={}",
                 player.getName().getString(), accepted, useGlobalCompression, useCompactHeader);
 
-        // 聚合初始化
+        // HandshakeResponse 先经 Zlib 出站；再在 EventLoop 切换 ZSTD，随后发 Dict/Index
         if (useGlobalCompression) {
             DictionaryManager.init();
-            sendDictionarySyncPacket(player);
-
-            IndexSyncManager indexSyncManager = IndexSyncManager.getInstance();
-            indexSyncManager.initializeServerIndex();
-            sendIndexSyncPacket(player);
-
             Connection connection = getPlayerConnection(player);
-            if (connection != null) {
-                HassiumConnectionRegistry.markPending(connection);
-                HassiumAggregationManager.init();
-                io.netty.channel.Channel channel = getConnectionChannel(connection);
-                if (channel != null) {
+            Channel channel = connection != null ? getConnectionChannel(connection) : null;
+            if (channel != null) {
+                int level = HassiumConfigService.getInstance().getGlobalCompressionLevel();
+                int threshold = HassiumConfigService.getInstance().getGlobalCompressionThreshold();
+                var server = io.github.limuqy.mc.hassium.compat.PlayerCompat.getMinecraftServer(player);
+                channel.eventLoop().execute(() -> {
                     ZstdNegotiationTracker.markNegotiated(channel);
-                    int level = HassiumConfigService.getInstance().getGlobalCompressionLevel();
-                    int threshold = HassiumConfigService.getInstance().getGlobalCompressionThreshold();
                     ZstdPipelineSwitcher.switchToZstd(channel, threshold, level);
-                }
+                    Runnable afterSwitch = () -> {
+                        sendDictionarySyncPacket(player);
+                        IndexSyncManager indexSyncManager = IndexSyncManager.getInstance();
+                        indexSyncManager.initializeServerIndex();
+                        sendIndexSyncPacket(player);
+                        if (connection != null) {
+                            HassiumConnectionRegistry.markPending(connection);
+                            HassiumAggregationManager.init();
+                        }
+                    };
+                    if (server != null) {
+                        server.execute(afterSwitch);
+                    } else {
+                        afterSwitch.run();
+                    }
+                });
             }
         }
     }
@@ -393,8 +401,18 @@ public class ForgeNetworkManager implements NetworkManager {
         LOGGER.info("Hassium: Client handshake response: accepted={}, globalCompression={}, compactHeader={}",
                 msg.accepted(), msg.globalCompressionAccepted(), msg.compactHeaderAccepted());
         if (msg.accepted() && msg.globalCompressionAccepted()) {
-            DebugLogger.debug(LogType.NETWORK,
-                    "Hassium: Global ZSTD accepted by server, client-side ZSTD pipeline switch deferred");
+            var mc = net.minecraft.client.Minecraft.getInstance();
+            var conn = mc.getConnection();
+            if (conn != null) {
+                Channel channel = getConnectionChannel(conn.getConnection());
+                if (channel != null) {
+                    // 尽快切管线（switchToZstd 会投递到 EventLoop）
+                    ZstdNegotiationTracker.markNegotiated(channel);
+                    int level = HassiumConfigService.getInstance().getGlobalCompressionLevel();
+                    int threshold = HassiumConfigService.getInstance().getGlobalCompressionThreshold();
+                    ZstdPipelineSwitcher.switchToZstd(channel, threshold, level);
+                }
+            }
         }
     }
 

@@ -19,20 +19,14 @@ import java.util.List;
  * 1. Per-connection 解压上下文复用
  * 2. Magicless ZSTD 支持
  * <p>
- * 保持与原版相同的线协议格式：VarInt(uncompressedLength) + compressedData
+ * 线协议与原版 {@code CompressionDecoder} 一致：
+ * {@code VarInt(uncompressedLength)} + data。
  */
 public class ZstdContextDecoder extends ByteToMessageDecoder {
 
     private static final Logger LOGGER = LoggerFactory.getLogger("Hassium/ZstdContextDecoder");
 
-    /**
-     * 最大压缩数据长度（2MB）
-     */
     private static final int MAXIMUM_COMPRESSED_LENGTH = 2 * 1024 * 1024;
-
-    /**
-     * 最大解压数据长度（8MB）
-     */
     private static final int MAXIMUM_UNCOMPRESSED_LENGTH = 8 * 1024 * 1024;
 
     private int threshold;
@@ -41,15 +35,14 @@ public class ZstdContextDecoder extends ByteToMessageDecoder {
     private volatile boolean closed = false;
 
     /**
-     * @param threshold           压缩阈值
+     * @param threshold            压缩阈值
      * @param validateDecompressed 是否验证解压大小
-     * @param magicless           是否启用 magicless 模式
+     * @param magicless            是否启用 magicless 模式
      */
     public ZstdContextDecoder(int threshold, boolean validateDecompressed, boolean magicless) {
         this.threshold = threshold;
         this.validateDecompressed = validateDecompressed;
 
-        // 创建 per-connection 解压上下文
         this.decompressCtx = new ZstdDecompressCtx();
         if (magicless) {
             this.decompressCtx.setMagicless(true);
@@ -60,9 +53,6 @@ public class ZstdContextDecoder extends ByteToMessageDecoder {
                 threshold, magicless);
     }
 
-    /**
-     * 创建默认解码器（带魔数头）
-     */
     public ZstdContextDecoder(int threshold, boolean validateDecompressed) {
         this(threshold, validateDecompressed, false);
     }
@@ -70,7 +60,6 @@ public class ZstdContextDecoder extends ByteToMessageDecoder {
     @Override
     protected void decode(ChannelHandlerContext ctx, ByteBuf in, List<Object> out) throws Exception {
         if (closed) {
-            // 上下文已关闭，直接透传
             out.add(in.readBytes(in.readableBytes()));
             return;
         }
@@ -79,20 +68,13 @@ public class ZstdContextDecoder extends ByteToMessageDecoder {
             return;
         }
 
-        in.markReaderIndex();
         FriendlyByteBuf friendlyBuf = new FriendlyByteBuf(in);
         int uncompressedLength = friendlyBuf.readVarInt();
 
         if (uncompressedLength == 0) {
-            // 未压缩数据
-            int dataLength = friendlyBuf.readVarInt();
-            if (friendlyBuf.readableBytes() < dataLength) {
-                in.resetReaderIndex();
-                return;
-            }
-            out.add(friendlyBuf.readBytes(dataLength));
+            // 与原版一致：剩余全部为未压缩包体
+            out.add(friendlyBuf.readBytes(friendlyBuf.readableBytes()));
         } else {
-            // 验证解压大小
             if (this.validateDecompressed) {
                 if (uncompressedLength < this.threshold) {
                     throw new DecoderException("Badly compressed packet - size " +
@@ -104,22 +86,15 @@ public class ZstdContextDecoder extends ByteToMessageDecoder {
                 }
             }
 
-            // 读取压缩数据长度
-            int compressedLength = friendlyBuf.readVarInt();
+            int compressedLength = friendlyBuf.readableBytes();
             if (compressedLength > MAXIMUM_COMPRESSED_LENGTH) {
                 throw new DecoderException("Badly compressed packet - compressed size " +
                         compressedLength + " exceeds maximum " + MAXIMUM_COMPRESSED_LENGTH);
             }
 
-            if (friendlyBuf.readableBytes() < compressedLength) {
-                in.resetReaderIndex();
-                return;
-            }
-
             byte[] compressed = new byte[compressedLength];
             friendlyBuf.readBytes(compressed);
 
-            // 使用上下文解压（复用历史窗口状态）
             byte[] result = decompressCtx.decompress(compressed, uncompressedLength);
 
             if (LOGGER.isDebugEnabled()) {
@@ -129,17 +104,11 @@ public class ZstdContextDecoder extends ByteToMessageDecoder {
         }
     }
 
-    /**
-     * 更新压缩阈值
-     */
     public void setThreshold(int threshold, boolean validateDecompressed) {
         this.threshold = threshold;
         this.validateDecompressed = validateDecompressed;
     }
 
-    /**
-     * 获取压缩阈值
-     */
     public int getThreshold() {
         return threshold;
     }
@@ -150,9 +119,6 @@ public class ZstdContextDecoder extends ByteToMessageDecoder {
         super.exceptionCaught(ctx, cause);
     }
 
-    /**
-     * 关闭解压上下文，释放资源
-     */
     public synchronized void close() {
         if (!closed) {
             closed = true;
@@ -160,10 +126,4 @@ public class ZstdContextDecoder extends ByteToMessageDecoder {
             LOGGER.debug("Closed ZSTD context decoder");
         }
     }
-
-//    @Override
-//    protected void finalize() throws Throwable {
-//        close();
-//        super.finalize();
-//    }
 }

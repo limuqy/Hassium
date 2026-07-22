@@ -299,6 +299,18 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
             boolean compactHeaderAccepted = buf.readBoolean();
             LOGGER.info("Hassium: Client handshake response: accepted={}, globalCompression={}, compactHeader={}",
                     accepted, globalCompressionAccepted, compactHeaderAccepted);
+            if (accepted && globalCompressionAccepted) {
+                var conn = client.getConnection();
+                if (conn != null) {
+                    Channel channel = getConnectionChannel(conn.getConnection());
+                    if (channel != null) {
+                        ZstdNegotiationTracker.markNegotiated(channel);
+                        int level = HassiumConfigService.getInstance().getGlobalCompressionLevel();
+                        int threshold = HassiumConfigService.getInstance().getGlobalCompressionThreshold();
+                        ZstdPipelineSwitcher.switchToZstd(channel, threshold, level);
+                    }
+                }
+            }
         });
 #else
         ClientPlayNetworking.registerGlobalReceiver(FabricPayloadRegistry.HANDSHAKE_S2C_TYPE, (payload, context) -> {
@@ -310,6 +322,18 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
                 boolean compactHeaderAccepted = buf.readBoolean();
                 LOGGER.info("Hassium: Client handshake response: accepted={}, globalCompression={}, compactHeader={}",
                         accepted, globalCompressionAccepted, compactHeaderAccepted);
+                if (accepted && globalCompressionAccepted) {
+                    var conn = context.client().getConnection();
+                    if (conn != null) {
+                        Channel channel = getConnectionChannel(conn.getConnection());
+                        if (channel != null) {
+                            ZstdNegotiationTracker.markNegotiated(channel);
+                            int level = HassiumConfigService.getInstance().getGlobalCompressionLevel();
+                            int threshold = HassiumConfigService.getInstance().getGlobalCompressionThreshold();
+                            ZstdPipelineSwitcher.switchToZstd(channel, threshold, level);
+                        }
+                    }
+                }
             } finally {
                 buf.release();
             }
@@ -747,6 +771,81 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
     }
 
     /**
+     * 完成服务端握手：先发 HandshakeResponse（Zlib），再在 EventLoop 切换 ZSTD，最后发 Dict/Index。
+     */
+    private void completeServerHandshake(
+            net.minecraft.server.MinecraftServer server,
+            ServerPlayer player,
+            boolean accepted,
+            boolean useGlobalCompression,
+            boolean useCompactHeader) {
+        FriendlyByteBuf response = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
+        response.writeVarInt(Constants.CURRENT_PROTOCOL_VERSION);
+        response.writeBoolean(accepted);
+        response.writeBoolean(useGlobalCompression);
+        response.writeBoolean(useCompactHeader);
+#if MC_VER < MC_1_20_5
+        ServerPlayNetworking.send(player, HANDSHAKE_S2C, response);
+#else
+        ServerPlayNetworking.send(player, FabricPayloadRegistry.toPayload(FabricPayloadRegistry.HANDSHAKE_S2C_TYPE, response));
+#endif
+        LOGGER.info("Hassium: Server handshake for {}: accepted={}, globalCompression={}, compactHeader={}",
+                player.getName().getString(), accepted, useGlobalCompression, useCompactHeader);
+
+        if (!useGlobalCompression) {
+            return;
+        }
+
+        DictionaryManager.init();
+        Connection connection = getPlayerConnection(player);
+        Channel channel = connection != null ? getConnectionChannel(connection) : null;
+        if (channel == null) {
+            LOGGER.warn("Hassium: No channel for {}, cannot install ZSTD pipeline", player.getName().getString());
+            return;
+        }
+
+        int level = HassiumConfigService.getInstance().getGlobalCompressionLevel();
+        int threshold = HassiumConfigService.getInstance().getGlobalCompressionThreshold();
+        // 投递到 EventLoop：保证排在 HandshakeResponse 的 encode 之后执行
+        channel.eventLoop().execute(() -> {
+            ZstdNegotiationTracker.markNegotiated(channel);
+            ZstdPipelineSwitcher.switchToZstd(channel, threshold, level);
+            server.execute(() -> enableAggregationAfterZstdSwitch(player, connection));
+        });
+    }
+
+    /**
+     * ZSTD 管线已切换后：发送 Dict/Index，并将连接标为 PENDING。
+     */
+    private void enableAggregationAfterZstdSwitch(ServerPlayer player, Connection connection) {
+        sendDictionarySyncPacket(player);
+
+        IndexSyncManager indexSyncManager = IndexSyncManager.getInstance();
+        indexSyncManager.initializeServerIndex();
+        sendIndexSyncPacket(player);
+
+        if (connection == null) {
+            return;
+        }
+        HassiumConnectionRegistry.markPending(connection);
+        HassiumAggregationManager.init();
+        DebugLogger.debug(LogType.NETWORK,
+                "Hassium: Marked connection as PENDING for player {}", player.getName().getString());
+
+        String playerName = player.getName().getString();
+        java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "Hassium-PendingTimeout");
+            t.setDaemon(true);
+            return t;
+        }).schedule(() -> {
+            if (HassiumConnectionRegistry.tryDemoteFromPending(connection)) {
+                HassiumAggregationManager.discardConnection(connection);
+                LOGGER.warn("Hassium: Ack timeout for {}, disabling aggregation", playerName);
+            }
+        }, 5, java.util.concurrent.TimeUnit.SECONDS);
+    }
+
+    /**
      * 注册服务端网络通道
      */
     private void registerServerChannels() {
@@ -787,52 +886,11 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
             boolean accepted = true;
 
             // 发送握手响应
-            server.execute(() -> {
-                FriendlyByteBuf response = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
-                response.writeVarInt(Constants.CURRENT_PROTOCOL_VERSION);
-                response.writeBoolean(accepted);
-                response.writeBoolean(useGlobalCompression);
-                response.writeBoolean(useCompactHeader);
-                ServerPlayNetworking.send(player, HANDSHAKE_S2C, response);
-                LOGGER.info("Hassium: Server handshake for {}: accepted={}, globalCompression={}, compactHeader={}",
-                        player.getName().getString(), accepted, useGlobalCompression, useCompactHeader);
-
-                // 如果启用全局压缩，发送字典和索引同步
-                if (useGlobalCompression) {
-                    DictionaryManager.init();
-                    sendDictionarySyncPacket(player);
-
-                    IndexSyncManager indexSyncManager = IndexSyncManager.getInstance();
-                    indexSyncManager.initializeServerIndex();
-                    sendIndexSyncPacket(player);
-
-                    Connection connection = getPlayerConnection(player);
-                    if (connection != null) {
-                        HassiumConnectionRegistry.markPending(connection);
-                        HassiumAggregationManager.init();
-                        // 标记 ZSTD 已协商
-                        Channel channel = getConnectionChannel(connection);
-                        if (channel != null) {
-                            ZstdNegotiationTracker.markNegotiated(channel);
-                        }
-                        DebugLogger.debug(LogType.NETWORK,
-                                "Hassium: Marked connection as PENDING for player {}", player.getName().getString());
-
-                        // 安全超时
-                        String playerName = player.getName().getString();
-                        java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
-                            Thread t = new Thread(r, "Hassium-PendingTimeout");
-                            t.setDaemon(true);
-                            return t;
-                        }).schedule(() -> {
-                            if (HassiumConnectionRegistry.tryDemoteFromPending(connection)) {
-                                HassiumAggregationManager.discardConnection(connection);
-                                LOGGER.warn("Hassium: Ack timeout for {}, disabling aggregation", playerName);
-                            }
-                        }, 5, java.util.concurrent.TimeUnit.SECONDS);
-                    }
-                }
-            });
+            // 时序（对齐原版 SetCompression）：
+            // 1) HandshakeResponse 先经 Zlib 出站
+            // 2) 再在 EventLoop 上切换 ZSTD（排在已排队的 encode 之后）
+            // 3) 随后再发 Dict/Index（走 ZSTD）；客户端在收到 HandshakeResponse 后切换
+            server.execute(() -> completeServerHandshake(server, player, accepted, useGlobalCompression, useCompactHeader));
         });
 #else
         ServerPlayNetworking.registerGlobalReceiver(FabricPayloadRegistry.HANDSHAKE_C2S_TYPE, (payload, context) -> {
@@ -874,53 +932,7 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
 
                 boolean accepted = true;
 
-                // 发送握手响应
-                server.execute(() -> {
-                    FriendlyByteBuf response = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
-                    response.writeVarInt(Constants.CURRENT_PROTOCOL_VERSION);
-                    response.writeBoolean(accepted);
-                    response.writeBoolean(useGlobalCompression);
-                    response.writeBoolean(useCompactHeader);
-                    ServerPlayNetworking.send(player, FabricPayloadRegistry.toPayload(FabricPayloadRegistry.HANDSHAKE_S2C_TYPE, response));
-                    LOGGER.info("Hassium: Server handshake for {}: accepted={}, globalCompression={}, compactHeader={}",
-                            player.getName().getString(), accepted, useGlobalCompression, useCompactHeader);
-
-                    // 如果启用全局压缩，发送字典和索引同步
-                    if (useGlobalCompression) {
-                        DictionaryManager.init();
-                        sendDictionarySyncPacket(player);
-
-                        IndexSyncManager indexSyncManager = IndexSyncManager.getInstance();
-                        indexSyncManager.initializeServerIndex();
-                        sendIndexSyncPacket(player);
-
-                        Connection connection = getPlayerConnection(player);
-                        if (connection != null) {
-                            HassiumConnectionRegistry.markPending(connection);
-                            HassiumAggregationManager.init();
-                            // 标记 ZSTD 已协商
-                            Channel channel = getConnectionChannel(connection);
-                            if (channel != null) {
-                                ZstdNegotiationTracker.markNegotiated(channel);
-                            }
-                            DebugLogger.debug(LogType.NETWORK,
-                                    "Hassium: Marked connection as PENDING for player {}", player.getName().getString());
-
-                            // 安全超时
-                            String playerName = player.getName().getString();
-                            java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
-                                Thread t = new Thread(r, "Hassium-PendingTimeout");
-                                t.setDaemon(true);
-                                return t;
-                            }).schedule(() -> {
-                                if (HassiumConnectionRegistry.tryDemoteFromPending(connection)) {
-                                    HassiumAggregationManager.discardConnection(connection);
-                                    LOGGER.warn("Hassium: Ack timeout for {}, disabling aggregation", playerName);
-                                }
-                            }, 5, java.util.concurrent.TimeUnit.SECONDS);
-                        }
-                    }
-                });
+                server.execute(() -> completeServerHandshake(server, player, accepted, useGlobalCompression, useCompactHeader));
             } catch (Exception e) {
                 LOGGER.error("[HANDSHAKE] Failed to handle handshake packet", e);
             } finally {
