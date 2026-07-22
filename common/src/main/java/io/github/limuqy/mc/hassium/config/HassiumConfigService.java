@@ -246,6 +246,23 @@ public class HassiumConfigService {
         return getInstance().getCompressionLevel();
     }
 
+    public int getGlobalCompressionLevel() {
+        return config.serverNetwork().globalCompressionLevel();
+    }
+
+    public static int getNetworkGlobalCompressionLevel() {
+        return getInstance().getGlobalCompressionLevel();
+    }
+
+    public int getGlobalCompressionThreshold() {
+        return config.serverNetwork().globalCompressionThreshold();
+    }
+
+    public static int getNetworkGlobalCompressionThreshold() {
+        return getInstance().getGlobalCompressionThreshold();
+    }
+
+
     public int getStorageCompressionLevel() {
         return config.storage().zstdLevel();
     }

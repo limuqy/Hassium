@@ -6,6 +6,7 @@ import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.network.ServerChunkPushManager;
 import io.github.limuqy.mc.hassium.platform.Services;
 import net.minecraft.network.FriendlyByteBuf;
+import net.minecraft.network.Connection;
 import net.minecraft.server.level.ServerPlayer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -38,6 +39,10 @@ import net.neoforged.neoforge.network.handling.IPayloadContext;
 #endif
 
 import java.lang.reflect.Field;
+import io.github.limuqy.mc.hassium.network.HassiumConnectionRegistry;
+import io.github.limuqy.mc.hassium.network.HassiumAggregationManager;
+import io.github.limuqy.mc.hassium.network.ZstdNegotiationTracker;
+import io.netty.channel.Channel;
 
 /**
  * NeoForge 平台网络管理器实现。
@@ -1125,6 +1130,9 @@ public class NeoForgeNetworkManager implements NetworkManager {
     private void handleHandshakeResponseSimple(HandshakeResponseWrapper msg) {
         LOGGER.info("Hassium: Client handshake response: accepted={}, globalCompression={}, compactHeader={}",
                 msg.accepted(), msg.globalCompressionAccepted(), msg.compactHeaderAccepted());
+        if (msg.accepted() && msg.globalCompressionAccepted()) {
+            LOGGER.debug("Hassium: Global ZSTD accepted, client-side pipeline switch deferred");
+        }
     }
 
 #elif MC_VER < MC_1_20_5
@@ -1199,6 +1207,27 @@ public class NeoForgeNetworkManager implements NetworkManager {
                 boolean useCompactHeader = HassiumConfigService.getInstance().isCompactHeaderEnabled()
                         && payload.compactHeaderSupported();
                 boolean accepted = true;
+
+                // 新增：聚合初始化
+                if (useGlobalCompression) {
+                    DictionaryManager.init();
+
+                    IndexSyncManager indexSyncManager = IndexSyncManager.getInstance();
+                    indexSyncManager.initializeServerIndex();
+
+                    Connection connection = getPlayerConnection(player);
+                    if (connection != null) {
+                        HassiumConnectionRegistry.markPending(connection);
+                        HassiumAggregationManager.init();
+                        Channel channel = getConnectionChannel(connection);
+                        if (channel != null) {
+                            ZstdNegotiationTracker.markNegotiated(channel);
+                            int level = HassiumConfigService.getInstance().getGlobalCompressionLevel();
+                            int threshold = HassiumConfigService.getInstance().getGlobalCompressionThreshold();
+                            ZstdPipelineSwitcher.switchToZstd(channel, threshold, level);
+                        }
+                    }
+                }
                 HandshakeResponsePayload response = new HandshakeResponsePayload(
                         Constants.CURRENT_PROTOCOL_VERSION, accepted, useGlobalCompression, useCompactHeader);
                 player.connection.send(new ClientboundCustomPayloadPacket(response));
@@ -1212,6 +1241,9 @@ public class NeoForgeNetworkManager implements NetworkManager {
         context.workHandler().execute(() -> {
             LOGGER.info("Hassium: Client handshake response: accepted={}, globalCompression={}, compactHeader={}",
                     payload.accepted(), payload.globalCompressionAccepted(), payload.compactHeaderAccepted());
+            if (payload.accepted() && payload.globalCompressionAccepted()) {
+                LOGGER.debug("Hassium: Global ZSTD accepted, client-side pipeline switch deferred");
+            }
         });
     }
 
@@ -1393,6 +1425,27 @@ public class NeoForgeNetworkManager implements NetworkManager {
                 boolean useCompactHeader = HassiumConfigService.getInstance().isCompactHeaderEnabled()
                         && payload.compactHeaderSupported();
                 boolean accepted = true;
+
+                // 新增：聚合初始化
+                if (useGlobalCompression) {
+                    DictionaryManager.init();
+
+                    IndexSyncManager indexSyncManager = IndexSyncManager.getInstance();
+                    indexSyncManager.initializeServerIndex();
+
+                    Connection connection = getPlayerConnection(player);
+                    if (connection != null) {
+                        HassiumConnectionRegistry.markPending(connection);
+                        HassiumAggregationManager.init();
+                        Channel channel = getConnectionChannel(connection);
+                        if (channel != null) {
+                            ZstdNegotiationTracker.markNegotiated(channel);
+                            int level = HassiumConfigService.getInstance().getGlobalCompressionLevel();
+                            int threshold = HassiumConfigService.getInstance().getGlobalCompressionThreshold();
+                            ZstdPipelineSwitcher.switchToZstd(channel, threshold, level);
+                        }
+                    }
+                }
                 HandshakeResponsePayload response = new HandshakeResponsePayload(
                         Constants.CURRENT_PROTOCOL_VERSION, accepted, useGlobalCompression, useCompactHeader);
                 player.connection.send(response);
@@ -1406,6 +1459,9 @@ public class NeoForgeNetworkManager implements NetworkManager {
         context.enqueueWork(() -> {
             LOGGER.info("Hassium: Client handshake response: accepted={}, globalCompression={}, compactHeader={}",
                     payload.accepted(), payload.globalCompressionAccepted(), payload.compactHeaderAccepted());
+            if (payload.accepted() && payload.globalCompressionAccepted()) {
+                LOGGER.debug("Hassium: Global ZSTD accepted, client-side pipeline switch deferred");
+            }
         });
     }
 
@@ -1775,5 +1831,13 @@ public class NeoForgeNetworkManager implements NetworkManager {
         } catch (Exception e) {
             LOGGER.error("[SEND_CHUNK] Failed to send chunk to {}", player.getName().getString(), e);
         }
+    }
+
+    private static void sendDictionarySyncPacket(ServerPlayer player) {
+        // Dictionary sync sent via platform-specific payload; see handshake handler init calls.
+    }
+
+    private static void sendIndexSyncPacket(ServerPlayer player) {
+        // Index sync sent via platform-specific payload; see handshake handler init calls.
     }
 }

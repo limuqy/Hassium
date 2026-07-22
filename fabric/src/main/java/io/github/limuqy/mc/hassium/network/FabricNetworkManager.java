@@ -21,6 +21,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.lang.reflect.Field;
+import io.netty.channel.Channel;
 
 /**
  * Fabric 平台网络管理器实现。
@@ -809,6 +810,11 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
                     if (connection != null) {
                         HassiumConnectionRegistry.markPending(connection);
                         HassiumAggregationManager.init();
+                        // 标记 ZSTD 已协商
+                        Channel channel = getConnectionChannel(connection);
+                        if (channel != null) {
+                            ZstdNegotiationTracker.markNegotiated(channel);
+                        }
                         DebugLogger.debug(LogType.NETWORK,
                                 "Hassium: Marked connection as PENDING for player {}", player.getName().getString());
 
@@ -892,6 +898,11 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
                         if (connection != null) {
                             HassiumConnectionRegistry.markPending(connection);
                             HassiumAggregationManager.init();
+                            // 标记 ZSTD 已协商
+                            Channel channel = getConnectionChannel(connection);
+                            if (channel != null) {
+                                ZstdNegotiationTracker.markNegotiated(channel);
+                            }
                             DebugLogger.debug(LogType.NETWORK,
                                     "Hassium: Marked connection as PENDING for player {}", player.getName().getString());
 

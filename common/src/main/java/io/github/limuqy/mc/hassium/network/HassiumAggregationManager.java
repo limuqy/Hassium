@@ -1,6 +1,7 @@
 package io.github.limuqy.mc.hassium.network;
 
 import io.github.limuqy.mc.hassium.Constants;
+import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.compat.PacketCodecCompat;
 import io.github.limuqy.mc.hassium.compat.PacketPayloadCompat;
 import net.minecraft.network.Connection;
@@ -33,9 +34,10 @@ import java.util.concurrent.TimeUnit;
  * 4. ENABLED 状态下正常聚合
  */
 public class HassiumAggregationManager {
-    private static final int MIN_BATCH_PACKETS = 4;
-    private static final int MAX_EXTRA_CYCLES = 2;
+    private static int minBatchPackets = 4;
+    private static int maxWaitCycles = 2;
     private static final int FLUSH_PERIOD_MS = 20;
+    private static int maxAggregationSize = 256 * 1024;
 
     private static final ConcurrentHashMap<Connection, List<AggregatedSubPacket>> PACKET_BUFFER = new ConcurrentHashMap<>();
     private static final ConcurrentHashMap<Connection, Integer> FLUSH_WAIT = new ConcurrentHashMap<>();
@@ -71,13 +73,21 @@ public class HassiumAggregationManager {
             return;
         }
         PACKET_BUFFER.clear();
+
+        // 从配置读取参数
+        HassiumConfigService config = HassiumConfigService.getInstance();
+        minBatchPackets = config.getAggregationMinBatchSize();
+        maxWaitCycles = Math.max(1, (int) (config.getAggregationMaxWaitTimeMs() / FLUSH_PERIOD_MS));
+        maxAggregationSize = config.getAggregationMaxSize();
+
         if (flushTask != null) {
             flushTask.cancel(false);
         }
         flushTask = TIMER.scheduleAtFixedRate(HassiumAggregationManager::flush, 0,
                 FLUSH_PERIOD_MS, TimeUnit.MILLISECONDS);
         initialized = true;
-        Constants.LOG.info("Hassium aggregation manager initialized");
+        Constants.LOG.info("Hassium aggregation manager initialized (minBatch={}, maxWait={}ms, maxSize={}KB)",
+                minBatchPackets, maxWaitCycles * FLUSH_PERIOD_MS, maxAggregationSize / 1024);
     }
 
     /**
@@ -165,11 +175,11 @@ public class HassiumAggregationManager {
                 }
 
                 // 检查是否达到最小批量
-                if (packets.size() < MIN_BATCH_PACKETS) {
+                if (packets.size() < minBatchPackets) {
                     int waited = FLUSH_WAIT.getOrDefault(connection, 0);
-                    if (waited < MAX_EXTRA_CYCLES) {
+                    if (waited < maxWaitCycles) {
                         FLUSH_WAIT.put(connection, waited + 1);
-                        Constants.LOG.debug("Waiting for more packets: {} (waited: {}/{})", packets.size(), waited, MAX_EXTRA_CYCLES);
+                        Constants.LOG.debug("Waiting for more packets: {} (waited: {}/{})", packets.size(), waited, maxWaitCycles);
                         continue;
                     }
                 }
@@ -232,26 +242,57 @@ public class HassiumAggregationManager {
             List<AggregatedSubPacket> sendPackets = new ArrayList<>(packets);
             packets.clear();
 
-            // 创建聚合包并编码
+            // 检查聚合大小限制，超过则分批发送
+            int totalSize = 0;
+            for (AggregatedSubPacket sp : sendPackets) {
+                totalSize += sp.getData().length;
+            }
+            if (totalSize > maxAggregationSize) {
+                Constants.LOG.warn("Aggregation buffer exceeds max size ({} > {} bytes), splitting",
+                        totalSize, maxAggregationSize);
+                List<AggregatedSubPacket> batch = new ArrayList<>();
+                int batchSize = 0;
+                for (AggregatedSubPacket sp : sendPackets) {
+                    if (batchSize + sp.getData().length > maxAggregationSize && !batch.isEmpty()) {
+                        flushBatch(connection, batch);
+                        batch = new ArrayList<>();
+                        batchSize = 0;
+                    }
+                    batch.add(sp);
+                    batchSize += sp.getData().length;
+                }
+                if (!batch.isEmpty()) {
+                    flushBatch(connection, batch);
+                }
+                return;
+            }
+
+            flushBatch(connection, sendPackets);
+        } catch (Exception e) {
+            Constants.LOG.error("Failed to flush aggregation buffer", e);
+        }
+    }
+
+    private static void flushBatch(Connection connection, List<AggregatedSubPacket> batch) {
+        try {
             IndexSyncManager indexSyncManager = IndexSyncManager.getInstance();
             NamespaceIndexManager indexManager = indexSyncManager.getServerIndexManager();
 
-            HassiumAggregationPacket aggregationPacket = new HassiumAggregationPacket(sendPackets, indexManager);
+            HassiumAggregationPacket aggregationPacket = new HassiumAggregationPacket(batch, indexManager);
             FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
             aggregationPacket.encode(buf);
 
-            // 通过回调发送（Fabric/Forge 各自实现）
             if (sender != null) {
                 sender.send(connection, buf);
             } else {
-                Constants.LOG.error("AggregationSender not set, dropping {} packets", sendPackets.size());
+                Constants.LOG.error("AggregationSender not set, dropping {} packets", batch.size());
                 buf.release();
             }
 
-            Constants.LOG.debug("Flushed aggregation buffer: {} packets for {}",
-                    sendPackets.size(), connection.getRemoteAddress());
+            Constants.LOG.debug("Flushed aggregation batch: {} packets for {}",
+                    batch.size(), connection.getRemoteAddress());
         } catch (Exception e) {
-            Constants.LOG.error("Failed to flush aggregation buffer", e);
+            Constants.LOG.error("Failed to flush aggregation batch", e);
         }
     }
 }

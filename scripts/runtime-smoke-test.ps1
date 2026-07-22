@@ -13,10 +13,10 @@ param(
     [switch]$CleanWorld,
     [string]$SmokeHost = "",
     [int]$ServerPort = 25565,
-    [int]$DelayMs = 12000,
+    [int]$DelayMs = 6000,
     [int]$ReconnectDelayMs = 3000,
-    [int]$ServerReadyTimeoutSec = 200,
-    [int]$ClientTimeoutSec = 300
+    [int]$ServerReadyTimeoutSec = 160,
+    [int]$ClientTimeoutSec = 100
 )
 
 $ErrorActionPreference = "Continue"

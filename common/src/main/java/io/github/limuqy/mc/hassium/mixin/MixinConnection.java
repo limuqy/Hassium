@@ -3,8 +3,11 @@ package io.github.limuqy.mc.hassium.mixin;
 import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.network.HassiumAggregationManager;
 import io.github.limuqy.mc.hassium.network.HassiumConnectionRegistry;
+import io.github.limuqy.mc.hassium.network.ZstdNegotiationTracker;
+import io.netty.channel.Channel;
 import io.github.limuqy.mc.hassium.network.PacketCompressionBlacklist;
 import io.github.limuqy.mc.hassium.network.PacketTypeHelper;
+import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import net.minecraft.network.Connection;
 #if MC_VER < MC_1_21_11
 import net.minecraft.resources.ResourceLocation;
@@ -38,6 +41,9 @@ public class MixinConnection {
 
     @Shadow
     private PacketListener packetListener;
+
+    @Shadow
+    private Channel channel;
 
 #if MC_VER < MC_1_21_6
     @Inject(method = "send(Lnet/minecraft/network/protocol/Packet;Lnet/minecraft/network/PacketSendListener;)V", at = @At("HEAD"), cancellable = true)
@@ -93,6 +99,11 @@ public class MixinConnection {
             return;
         }
 
+        // 检查聚合配置开关
+        if (!HassiumConfigService.getInstance().isPacketAggregationEnabled()) {
+            return;
+        }
+
         // 需要回调的包不聚合，直接发送
         if (hasSendListener) {
             HassiumAggregationManager.flushConnectionSync(self);
@@ -103,5 +114,15 @@ public class MixinConnection {
         Constants.LOG.debug("Aggregating packet: {}", packetType);
         HassiumAggregationManager.takeOver(packet, self);
         ci.cancel();
+    }
+
+    @Inject(method = "disconnect", at = @At("HEAD"))
+    private void hassium$onDisconnect(CallbackInfo ci) {
+        Connection self = (Connection) (Object) this;
+        HassiumConnectionRegistry.markDisabled(self);
+        HassiumAggregationManager.discardConnection(self);
+        if (this.channel != null) {
+            ZstdNegotiationTracker.removeChannel(this.channel);
+        }
     }
 }

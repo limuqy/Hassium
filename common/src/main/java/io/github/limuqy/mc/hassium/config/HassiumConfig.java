@@ -120,24 +120,23 @@ public record HassiumConfig(
      * 服务端网络配置（仅专用服；server.toml network.*）
      * <p>
      * 包含共享网络行为（压缩/聚合）和服务端专属推送设置。
-     * 标记"实验性"的字段当前未生效（ZstdPipelineSwitcher.switchToZstd 无调用者）。
      */
     public record ServerNetworkConfig(
             boolean enabled,
             int compressionLevel,
             boolean magiclessZstd,
-            // === 实验性：全局包压缩（管线未安装）===
+            // === 全局包压缩（管线级 ZSTD 替换 Zlib）===
             boolean globalPacketCompression,
             int globalCompressionLevel,
             int globalCompressionThreshold,
             // === 上下文压缩 ===
             boolean useContextCompression,
-            // === 实验性：包聚合（管线未安装）===
+            // === 包聚合（应用层，MixinConnection 拦截）===
             boolean enablePacketAggregation,
             int aggregationMinBatchSize,
             long aggregationMaxWaitTimeMs,
             int aggregationMaxSize,
-            // === 实验性：紧凑包头（管线未安装）===
+            // === 紧凑包头（聚合包内部 VarInt 索引）===
             boolean enableCompactHeader,
             // === 黑名单 ===
             Set<String> compressionBlacklist,
@@ -163,15 +162,15 @@ public record HassiumConfig(
                 true,              // enabled
                 3,                 // compressionLevel
                 true,              // magiclessZstd
-                true,              // globalPacketCompression (experimental)
-                3,                 // globalCompressionLevel (experimental)
-                256,               // globalCompressionThreshold (experimental)
+                true,              // globalPacketCompression
+                3,                 // globalCompressionLevel
+                256,               // globalCompressionThreshold
                 true,              // useContextCompression
-                true,              // enablePacketAggregation (experimental)
-                4,                 // aggregationMinBatchSize (experimental)
-                20,                // aggregationMaxWaitTimeMs (experimental)
-                256 * 1024,        // aggregationMaxSize (experimental)
-                true,              // enableCompactHeader (experimental)
+                true,              // enablePacketAggregation
+                4,                 // aggregationMinBatchSize
+                20,                // aggregationMaxWaitTimeMs
+                256 * 1024,        // aggregationMaxSize
+                true,              // enableCompactHeader
                 DEFAULT_COMPRESSION_BLACKLIST,
                 true,              // metricsEnabled
                 32,                // maxChunksPerTick
