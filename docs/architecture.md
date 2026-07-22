@@ -127,7 +127,7 @@ ERROR / WARN 始终输出。
 | `/hassium metrics on\|off` | 服务端 | 运行时开关指标 |
 | `/hassium stats reset` | 服务端 | 重置计数器 |
 | `/hassiumc stats` | 客户端 | 接收/缓存命中/超视渲染 统计 |
-| `/hassiumc cache export [<世界名>]` | 客户端 | 导出本地缓存为 `saves/` 下原版 Anvil 世界 |
+| `/hassiumc export [<服务器IP>] [seed]` | 客户端 | 导出本地缓存为 `saves/` 下原版 Anvil 世界 |
 
 实现：`metrics/NetworkStats`（`AtomicLong`，可关闭）。指标关闭时相关 stats 命令不可用。导出走 `CacheWorldExporter`（异步，见 `disk-nbt-cache.md` / `chunk-cache.md` §12）。
 
@@ -151,7 +151,7 @@ ERROR / WARN 始终输出。
 |------|-------------|------|------|
 | **分段增量** | `clientCache.sectionDeltaEnabled`（默认 true） | MISMATCH 时按 section 比对，仅补变更分段 + BE 覆盖；失败/超时回退全量 | [`chunk-cache.md`](chunk-cache.md) §11.5、[`disk-nbt-cache.md`](disk-nbt-cache.md) |
 | **超视渲染** | `viewDistanceExtensionEnabled`、`maxRenderDistance`、`ovdUnloadDelaySecs` | 多人、clientVD>serverVD 时本地缓存回填环带；Forget 原地 renderOnly；不向服索要视距外区块/BE | [`ovd.md`](ovd.md)、[`chunk-cache.md`](chunk-cache.md) §10 |
-| **世界导出** | `/hassiumc cache export [<世界名>]` | 客户端缓存 → 原版 Anvil（type2 zlib）；无实体/仅去过的区块快照 | [`chunk-cache.md`](chunk-cache.md) §12、[`disk-nbt-cache.md`](disk-nbt-cache.md) |
+| **世界导出** | `/hassiumc export [<服务器IP>] [seed]` | 客户端缓存 → 原版 Anvil（type2 zlib）；无实体/仅去过的区块快照 | [`chunk-cache.md`](chunk-cache.md) §12、[`disk-nbt-cache.md`](disk-nbt-cache.md) |
 
 客户端磁盘缓存 payload 为 NBT（`"HBT1"` + CompoundTag），主一致性路径为 **Live-Unload Snapshot**（renderOnly 跳过落盘）。旧 packet 字节缓存读到即删并全量请求。
 

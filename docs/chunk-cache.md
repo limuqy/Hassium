@@ -10,7 +10,7 @@
 | 磁盘 NBT / Live-Unload / 分段增量 | [`disk-nbt-cache.md`](disk-nbt-cache.md) | §11 |
 | 世界导出 | 同上 + 本文 §12 | §12 |
 
-**卖点特性（已实现）：** 分段增量（§3 阶段二 / §11）、超视渲染（§10）、`/hassiumc cache export`（§12）。
+**卖点特性（已实现）：** 分段增量（§3 阶段二 / §11）、超视渲染（§10）、`/hassiumc export`（§12）。
 
 ## 1. 目标与约束
 
@@ -321,17 +321,18 @@ RD > 32（需手改 `options.txt`）时雾距会跟随 `getEffectiveRenderDistan
 | `CacheSaveQueue` | Live-Unload 主路径（renderOnly 跳过） |
 | `ClientChunkHandler` | apply 走 NBT→packet 重组（复用 `applyToLevelFromByteBuf`） |
 
-## 12. 缓存导出（`/hassiumc cache export`）
+## 12. 缓存导出（`/hassiumc export`）
 
 把客户端缓存导出为可进单机世界的原版 Anvil 存档。
 
 ### 12.1 命令
 
 ```
-/hassiumc cache export [<worldName>]
+/hassiumc export [serverIp] [seed]
 ```
 
-- `<worldName>` 可选；默认 `HassiumCache_<timestamp>`
+- `<serverIp>` 可选；指定时导出该服务器的缓存；不指定时导出当前连接的服务器
+- `seed` 可选；不指定时使用随机 seed + 空岛模式
 - 仅客户端命令，无权限要求
 - 输出目录：`<gameDir>/saves/<worldName>/`
 
@@ -369,7 +370,7 @@ RD > 32（需手改 `options.txt`）时雾距会跟随 `getEffectiveRenderDistan
 ### 12.5 示例
 
 ```
-/hassiumc cache export MyCacheWorld
+/hassiumc export 192.168.1.100_25565
 ```
 
 输出：

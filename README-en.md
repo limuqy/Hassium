@@ -26,8 +26,9 @@ Smaller world saves and bandwidth than vanilla, local chunk reuse, and smoother 
 | **Chunk cache** | Loaded chunks are kept locally; revisiting an area prefers the cache instead of full downloads |
 | **Section delta** | On cache mismatch, fetch only changed sections (`sectionDelta`) instead of the whole chunk |
 | **Beyond-view render** | When client RD exceeds server view distance (multiplayer), fill the outer ring from local cache (render-only; no out-of-range server requests) |
-| **World export** | `/hassiumc cache export` writes the local cache as a vanilla Anvil singleplayer world |
+| **World export** | `/hassiumc export` writes the local cache as a vanilla Anvil singleplayer world |
 | **Light stripping** | Server can omit light data; the client recomputes lighting locally to save more bandwidth |
+| **Light cache** | Light data is cached after first recompute; cache hits apply pre-computed lighting directly, skipping expensive recomputation |
 | **Smooth loading** | Caps main-thread work during join and view expansion to reduce hitch spikes |
 | **Client-friendly** | Clients without the mod can connect by default; install on both sides for full compression and cache benefits |
 | **Traffic metrics** | `/hassium stats` (server) and `/hassiumc stats` (client) to inspect compression and cache results |
@@ -78,6 +79,7 @@ Files: `config/hassium/hassium-client.toml`, `config/hassium/hassium-common.toml
 | `storage.enabled` | `true` | World ZSTD (**back up first**) |
 | `clientCache.enabled` | `true` | Client cache |
 | `clientCache.sectionDeltaEnabled` | `true` | Section delta on cache mismatch |
+| `clientCache.lightCacheEnabled` | `true` | Light cache (hits skip recomputation) |
 | `clientCache.viewDistanceExtensionEnabled` | `true` | Beyond-view render (multiplayer; exclusive with Bobby) |
 | `clientCache.maxRenderDistance` | `32` | Beyond-view / effective RD cap (2–64) |
 | `clientCache.ovdUnloadDelaySecs` | `5` | Delay unload after leaving beyond-view ring (s; 0=sync) |
@@ -100,7 +102,7 @@ Full reference: [`docs/architecture.md`](docs/architecture.md).
 | `/hassium metrics on\|off` | Toggle metrics |
 | `/hassium stats reset` | Reset counters |
 | `/hassiumc stats` | Client stats (cache / beyond-view) |
-| `/hassiumc cache export [<worldName>]` | Export local cache to a vanilla Anvil world under `saves/` |
+| `/hassiumc export [<serverIp>] [seed]` | Export local cache to a vanilla Anvil world under `saves/` |
 
 ---
 
