@@ -364,6 +364,7 @@ RD > 32（需手改 `options.txt`）时雾距会跟随 `getEffectiveRenderDistan
 - **模组方块需相同模组与相近 MC 版本**：否则方块可能显示为未知
 - **DataVersion 与当前客户端一致**：跨版本存档升级交给原版
 - **BE 取决于缓存是否含 NBT**：Live-Unload 快照包含 BE；收包 warm-stash 可能缺失
+- **光照从缓存保留**：`is_light_on=1` 的区块导出时携带 `SkyLight`/`BlockLight`，单机打开无需重算
 
 ### 12.5 示例
 

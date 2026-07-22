@@ -12,7 +12,7 @@ Profiling 显示 `Minecraft.tick()` 中 Hassium 占 66% 时间（2844ms / 4320ms
 
 ## 约束
 
-- **网络带宽不变**：服务器继续 `lightStrip`，不在网络传输光照数据
+- **网络带宽不变**：服务器继续剥离网络光照，不在网络传输光照数据
 - **首次加载仍有重算开销**：这是可接受的一次性成本
 - **chunkHash 不受影响**：hash 只覆盖 blockStates，排除 LightData
 - **不需要向后兼容**：新项目，旧缓存可丢弃
@@ -38,7 +38,7 @@ Profiling 显示 `Minecraft.tick()` 中 Hassium 占 66% 时间（2844ms / 4320ms
 
 ```
 首次加载（缓存未命中）:
-  服务器 --[lightStrip]--> 客户端接收（空光照）
+  服务器 --[剥离网络光照]--> 客户端接收（空光照）
     -> handleLevelChunkWithLight（vanilla 应用方块数据）
     -> MixinLightRecompute 检测空光照
     -> applyLightEngineNow（同步重算，一次性开销）

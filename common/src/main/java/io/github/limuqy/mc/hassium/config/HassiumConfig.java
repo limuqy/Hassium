@@ -40,7 +40,7 @@ public record HassiumConfig(
     /**
      * 客户端缓存配置（仅物理客户端；client.toml clientCache.*）
      * <p>
-     * 吸收了原 NetworkConfig 中客户端专属字段：loadThreads、lightStrip、maxChunksPerFrame、mainThreadChunkBudgetMs。
+     * 吸收了原 NetworkConfig 中客户端专属字段：loadThreads、lightCacheEnabled（原 lightStrip）、maxChunksPerFrame、mainThreadChunkBudgetMs。
      * Bloom filter 参数硬编码（enabled=true, insertions=10000, fpp=0.01）。
      * maxAgeDays 已删除（热度评分隐式覆盖）。
      */
@@ -67,7 +67,7 @@ public record HassiumConfig(
             boolean entitySnapshotsEnabled,
             // === 从原 NetworkConfig 吸收的客户端字段 ===
             int loadThreads,
-            boolean lightStrip,
+            boolean lightCacheEnabled,
             int maxChunksPerFrame,
             int mainThreadChunkBudgetMs
     ) {
@@ -88,7 +88,7 @@ public record HassiumConfig(
                 true,    // joinBoostEnabled
                 false,   // entitySnapshotsEnabled
                 10,      // loadThreads
-                true,    // lightStrip
+                true,    // lightCacheEnabled
                 32,      // maxChunksPerFrame
                 10       // mainThreadChunkBudgetMs
         );

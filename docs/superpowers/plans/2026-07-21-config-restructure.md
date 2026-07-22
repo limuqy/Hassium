@@ -115,7 +115,7 @@ public record HassiumConfig(
     /**
      * 客户端缓存配置（仅物理客户端；client.toml clientCache.*）
      * <p>
-     * 吸收了原 NetworkConfig 中客户端专属字段：loadThreads、lightStrip、maxChunksPerFrame、mainThreadChunkBudgetMs。
+     * 吸收了原 NetworkConfig 中客户端专属字段：loadThreads、lightCacheEnabled（原 lightStrip）、maxChunksPerFrame、mainThreadChunkBudgetMs。
      * Bloom filter 参数硬编码（enabled=true, insertions=10000, fpp=0.01）。
      * maxAgeDays 已删除（热度评分隐式覆盖）。
      */
@@ -142,7 +142,7 @@ public record HassiumConfig(
             boolean entitySnapshotsEnabled,
             // === 从原 NetworkConfig 吸收的客户端字段 ===
             int loadThreads,
-            boolean lightStrip,
+            boolean lightCacheEnabled,
             int maxChunksPerFrame,
             int mainThreadChunkBudgetMs
     ) {
@@ -163,7 +163,7 @@ public record HassiumConfig(
                 true,    // joinBoostEnabled
                 false,   // entitySnapshotsEnabled
                 10,      // loadThreads
-                true,    // lightStrip
+                true,    // lightCacheEnabled
                 32,      // maxChunksPerFrame
                 10       // mainThreadChunkBudgetMs
         );
@@ -224,7 +224,7 @@ public record HassiumConfig(
             boolean dynamicThreadPoolEnabled,
             int minPushThreads,
             int maxPushThreads,
-            // === 光照剥离（服务端控制是否发包时剥离 LightData）===
+            // === 光照剥离（服务端控制是否发包时剥离 LightData；客户端光照缓存由 clientCache.lightCacheEnabled 控制）===
             boolean lightStrip
     ) {
         public static final Set<String> DEFAULT_COMPRESSION_BLACKLIST = Set.of(
@@ -318,7 +318,7 @@ git commit -m "refactor: split NetworkConfig into ClientNetworkConfig + ServerNe
 
 完整替换。关键变化：
 - 删除 `COMMON_SPEC` 和 `Common` 内部类
-- `Client` 内部类：使用新的 `ClientCacheConfig` 字段（含吸收的 loadThreads/lightStrip/maxChunksPerFrame/mainThreadChunkBudgetMs + 新增 cacheCompressionLevel），删除 bloom/maxAgeDays/backgroundThreads/maxCallbacksPerFrame
+- `Client` 内部类：使用新的 `ClientCacheConfig` 字段（含吸收的 loadThreads/lightCacheEnabled/maxChunksPerFrame/mainThreadChunkBudgetMs + 新增 cacheCompressionLevel），删除 bloom/maxAgeDays/backgroundThreads/maxCallbacksPerFrame
 - `Server` 内部类：合并原 Common 的网络/存储/兼容/调试字段 + 原 Server 的推送字段
 - `toHassiumConfig()` 构建新的 `HassiumConfig`（含 `ClientNetworkConfig` + `ServerNetworkConfig`）
 - `applyFrom()` 写回两个 spec
@@ -367,8 +367,8 @@ public int getCacheCompressionLevel() {
 public int getLoadThreads() {
     return config.clientCache().loadThreads();
 }
-public boolean isLightStrip() {
-    return config.clientCache().lightStrip();
+public boolean isLightCacheEnabled() {
+    return config.clientCache().lightCacheEnabled();
 }
 // 服务端光照剥离（ServerChunkPushManager 用）
 public boolean isServerLightStrip() {
@@ -801,7 +801,7 @@ git commit -m "refactor: update Fabric entry for new config structure"
 
 关键变化：
 - 删除 `Draft` 中的：`cacheMaxAgeDays`、`cacheBloomFilterEnabled`、`cacheBloomFilterExpectedInsertions`、`cacheBloomFilterFpp`、`backgroundThreads`、`maxCallbacksPerFrame`、所有服务端字段（storage*、serverNetwork*、compat*）
-- 新增 `Draft` 中的：`cacheCompressionLevel`、`loadThreads`、`lightStrip`（在 clientCache 下）
+- 新增 `Draft` 中的：`cacheCompressionLevel`、`loadThreads`、`lightCacheEnabled`（在 clientCache 下）
 - `toConfig()` 只构建客户端 config（`ClientCacheConfig` + `ClientNetworkConfig` + `DebugConfig`），服务端字段用 DEFAULT
 - 删除 Category 4（存储与通用）、Category 5（压缩与聚合）中的服务端字段
 - 重新组织 category：客户端缓存（14项）→ 超视渲染与分段增量（6项）→ 客户端线程与应用（4项）→ 网络开关（2项）→ 调试（7项）
@@ -842,11 +842,11 @@ git commit -m "refactor: update Cloth config screen for client-only fields"
 新增：
 - `hassium.configuration.clientCache.cacheCompressionLevel` = "缓存压缩等级"
 - `hassium.configuration.clientCache.loadThreads` = "加载线程数"
-- `hassium.configuration.clientCache.lightStrip` = "光照剥离"
+- `hassium.configuration.clientCache.lightCacheEnabled` = "光照缓存"
 
 修改（移动到 clientCache 分类下）：
 - `hassium.configuration.clientNetwork.clientChunkLoadThreads` → `hassium.configuration.clientCache.loadThreads`
-- `hassium.configuration.clientNetwork.lightStripEnabled` → `hassium.configuration.clientCache.lightStrip`
+- `hassium.configuration.clientNetwork.lightStripEnabled` → `hassium.configuration.clientCache.lightCacheEnabled`
 - `hassium.configuration.clientNetwork.maxChunksPerFrame` → `hassium.configuration.clientCache.maxChunksPerFrame`
 - `hassium.configuration.clientNetwork.mainThreadChunkBudgetMs` → `hassium.configuration.clientCache.mainThreadChunkBudgetMs`
 

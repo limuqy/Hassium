@@ -23,7 +23,7 @@ import net.minecraft.world.level.chunk.PalettedContainerFactory;
 #endif
 import net.minecraft.world.level.chunk.PalettedContainerRO;
 
-/** Converts Hassium's packet-oriented cache NBT into vanilla chunk-storage NBT. */
+/** Converts Hassium's packet-oriented cache NBT into vanilla chunk-storage NBT. Preserves cached light data when available. */
 final class VanillaChunkNbtCompat {
     private VanillaChunkNbtCompat() {}
 
@@ -47,6 +47,7 @@ final class VanillaChunkNbtCompat {
         result.put("PostProcessing", new ListTag());
         result.put("structures", new CompoundTag());
 
+        boolean hasCachedLight = ChunkDiskCodec.isLightOn(cached);
         ListTag sections = new ListTag();
         for (int i = 0; i < cachedSections.size(); i++) {
             Tag tag = cachedSections.get(i);
@@ -60,7 +61,12 @@ final class VanillaChunkNbtCompat {
             LevelChunkSection section = LevelChunkSectionCompat.create(registryAccess);
             try {
                 ChunkPacketDataCompat.readSectionInto(cachedSection, section, registryAccess);
-                sections.add(encodeSection(section, minSection + i, registryAccess));
+                CompoundTag sectionNbt = encodeSection(section, minSection + i, registryAccess);
+                if (hasCachedLight) {
+                    copyLightTag(cachedSection, sectionNbt, "sky_light", "SkyLight");
+                    copyLightTag(cachedSection, sectionNbt, "block_light", "BlockLight");
+                }
+                sections.add(sectionNbt);
             } catch (RuntimeException e) {
                 throw new ConversionException("section " + i + " could not be decoded", e);
             }
@@ -108,6 +114,17 @@ final class VanillaChunkNbtCompat {
     private static ListTag listOrEmpty(CompoundTag tag, String key) {
         Tag value = tag.get(key);
         return value instanceof ListTag list ? list : new ListTag();
+    }
+
+    /** 从缓存 section 复制光照 tag 到原版 section（重命名 key）。 */
+    private static void copyLightTag(CompoundTag src, CompoundTag dst, String srcKey, String dstKey) {
+        Tag lightTag = src.get(srcKey);
+        if (lightTag instanceof net.minecraft.nbt.ByteArrayTag bat) {
+            byte[] data = bat.getAsByteArray();
+            if (data.length == 2048) {
+                dst.putByteArray(dstKey, data.clone());
+            }
+        }
     }
 
     static final class ConversionException extends Exception {

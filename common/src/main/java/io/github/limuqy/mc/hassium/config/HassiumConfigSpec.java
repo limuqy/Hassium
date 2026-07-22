@@ -76,7 +76,7 @@ public final class HassiumConfigSpec {
                         CLIENT.cacheJoinBoostEnabled.get(),
                         CLIENT.cacheEntitySnapshotsEnabled.get(),
                         CLIENT.cacheLoadThreads.get(),
-                        CLIENT.cacheLightStrip.get(),
+                        CLIENT.cacheLightCacheEnabled.get(),
                         CLIENT.cacheMaxChunksPerFrame.get(),
                         CLIENT.cacheMainThreadChunkBudgetMs.get()
                 ),
@@ -150,7 +150,7 @@ public final class HassiumConfigSpec {
         CLIENT.cacheJoinBoostEnabled.set(cache.joinBoostEnabled());
         CLIENT.cacheEntitySnapshotsEnabled.set(cache.entitySnapshotsEnabled());
         CLIENT.cacheLoadThreads.set(cache.loadThreads());
-        CLIENT.cacheLightStrip.set(cache.lightStrip());
+        CLIENT.cacheLightCacheEnabled.set(cache.lightCacheEnabled());
         CLIENT.cacheMaxChunksPerFrame.set(cache.maxChunksPerFrame());
         CLIENT.cacheMainThreadChunkBudgetMs.set(cache.mainThreadChunkBudgetMs());
 
@@ -232,7 +232,7 @@ public final class HassiumConfigSpec {
         public final ForgeConfigSpec.BooleanValue cacheEntitySnapshotsEnabled;
         // 从原 NetworkConfig 吸收的客户端字段
         public final ForgeConfigSpec.IntValue cacheLoadThreads;
-        public final ForgeConfigSpec.BooleanValue cacheLightStrip;
+        public final ForgeConfigSpec.BooleanValue cacheLightCacheEnabled;
         public final ForgeConfigSpec.IntValue cacheMaxChunksPerFrame;
         public final ForgeConfigSpec.IntValue cacheMainThreadChunkBudgetMs;
 
@@ -262,7 +262,7 @@ public final class HassiumConfigSpec {
         public final ModConfigSpec.BooleanValue cacheEntitySnapshotsEnabled;
         // 从原 NetworkConfig 吸收的客户端字段
         public final ModConfigSpec.IntValue cacheLoadThreads;
-        public final ModConfigSpec.BooleanValue cacheLightStrip;
+        public final ModConfigSpec.BooleanValue cacheLightCacheEnabled;
         public final ModConfigSpec.IntValue cacheMaxChunksPerFrame;
         public final ModConfigSpec.IntValue cacheMainThreadChunkBudgetMs;
 
@@ -352,11 +352,11 @@ public final class HassiumConfigSpec {
                     .comment("客户端区块加载线程数（默认 10）")
                     .translation("hassium.configuration.clientCache.loadThreads")
                     .defineInRange("loadThreads", 10, 1, 64);
-            cacheLightStrip = builder
-                    .comment("是否启用光照剥离：发包去掉 LightData，由客户端本地重算。"
+            cacheLightCacheEnabled = builder
+                    .comment("是否启用光照缓存：首次加载重算后存储光照数据，缓存命中时直接应用。"
                             + "出现光照异常时可关闭。详见 docs/mod-compat.md（默认 true）")
-                    .translation("hassium.configuration.clientCache.lightStrip")
-                    .define("lightStrip", true);
+                    .translation("hassium.configuration.clientCache.lightCacheEnabled")
+                    .define("lightCacheEnabled", true);
             cacheMaxChunksPerFrame = builder
                     .comment("每帧应用缓存区块的安全硬顶（主限流为时间预算；默认 32）")
                     .translation("hassium.configuration.clientCache.maxChunksPerFrame")

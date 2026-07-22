@@ -6,7 +6,7 @@
 
 | 文件名 | 加载方 | 包含分类 |
 |--------|--------|----------|
-| `hassium/hassium-client.toml` | 仅物理客户端 | `clientCache.*` + `network.client*` + `network.lightStrip*` + `network.background*` + `network.maxChunks*` + `network.maxCallbacks*` + `network.mainThread*` |
+| `hassium/hassium-client.toml` | 仅物理客户端 | `clientCache.*` + `network.client*` + `network.background*` + `network.maxChunks*` + `network.maxCallbacks*` + `network.mainThread*` |
 | `hassium/hassium-common.toml` | 客户端 + 专用服 | `storage.*` + `network.enabled/compression/aggregate/compact/metrics` + `compat.autoDowngradeOnError` + `debug.*` |
 | `hassium/hassium-server.toml` | 仅专用服 | `network.maxChunksPerTick` + `network.serverChunkPush*` + `network.dynamicThread*` + `network.minPush*` + `network.maxPush*` + `compat.requireClientMod` |
 
@@ -72,7 +72,7 @@ Forge/NeoForge 端注册 3 个 spec（CLIENT / COMMON / SERVER），物理客户
 | 配置项 | 默认值 | 客户端/服务端/双端 | 实际调用 | 状态 |
 |--------|--------|---------------------|----------|------|
 | `network.clientChunkLoadThreads` | `10` | **客户端** | `ClientLifecycleHelper` 初始化线程池 | ✅ 正常 |
-| `network.lightStripEnabled` | `true` | **客户端 + 服务端** | `MixinLightRecompute:32`(客户端) + `ServerChunkPushManager:979`(服务端) | ✅ 正常 |
+| `clientCache.lightCacheEnabled` | `true` | **客户端** | 光照缓存：首次重算后存储光照，缓存命中跳过重算 | ✅ 正常 |
 | `network.backgroundThreads` | `8` | **客户端** | **❌ 死代码** — getter 存在但无业务逻辑调用 | ⚠️ |
 | `network.maxChunksPerFrame` | `32` | **客户端** | `ClientMainThreadBudget:78` | ✅ 正常 |
 | `network.maxCallbacksPerFrame` | `32` | **客户端** | **❌ 死代码** — getter 存在但无业务逻辑调用 | ⚠️ |
@@ -137,20 +137,17 @@ Forge/NeoForge 端注册 3 个 spec（CLIENT / COMMON / SERVER），物理客户
 
 这不算 bug，但 `CompatConfig` 横跨两个文件，用户可能困惑。
 
-#### 3. `lightStripEnabled` 的归属模糊
+#### 3. `lightCacheEnabled`（原 `lightStripEnabled`）
 
-定义在 `client.toml`（CLIENT spec），但实际**客户端和服务端都读取**：
+光照缓存功能由 `clientCache.lightCacheEnabled` 控制（客户端）。服务端是否从网络包剥离光照数据由 `serverNetwork.lightStrip` 控制。
 
-- 客户端：`MixinLightRecompute:32`
-- 服务端：`ServerChunkPushManager:979`
-
-物理客户端写入 `client.toml` 没问题，但专用服**没有这个文件**，会使用默认值 `true`。这意味着服务端的光照剥离行为无法通过配置调整——除非用户手动创建 `client.toml`（但专用服不会读它）。
+客户端写入 `client.toml` 没问题，但专用服**没有这个文件**，会使用默认值 `true`。这意味着服务端的光照剥离行为无法通过配置调整——除非用户手动创建 `client.toml`（但专用服不会读它）。
 
 ## 四、建议
 
 1. **清理 3 个死代码配置项**：要么实现 `maxAgeDays` 过期清理逻辑、`backgroundThreads` 线程池初始化、`maxCallbacksPerFrame` 限流；要么移除这些配置定义和 getter
 2. **考虑拆分 `NetworkConfig` record** 为 `ClientNetworkConfig` + `SharedNetworkConfig` + `ServerNetworkConfig`，与 toml 文件结构对齐
-3. **`lightStripEnabled` 服务端可达性**：当前专用服无法配置此项，如果需要可将其移到 `common.toml`
+3. **`serverNetwork.lightStrip` 服务端可达性**：当前专用服无法配置此项，如果需要可将其移到 `common.toml`
 
 ## 五、统计汇总
 

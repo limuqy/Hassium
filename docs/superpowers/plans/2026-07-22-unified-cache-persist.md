@@ -14,7 +14,7 @@
 - `#if MC_VER` only in `compat/` files, never in business logic
 - Mixin fields: `@Unique` + `hassium$` prefix
 - Storage gate: `isStorageEnabled()` check at entry points
-- `lightStrip=true` default — server strips light from packets
+- `lightCacheEnabled` default — server strips light from packets; client caches after first recompute
 - Cache data is expendable — dirty/corrupt cache is the only hard failure
 
 ---

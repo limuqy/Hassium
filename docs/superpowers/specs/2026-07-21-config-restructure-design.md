@@ -66,7 +66,7 @@
 **移除项：**
 - ~~`magiclessZstd`~~：聚合包两端统一使用 ZSTD，硬编码 `true`
 - ~~`clientChunkLoadThreads`~~：移入 `clientCache.*`（改为 `loadThreads`）
-- ~~`lightStripEnabled`~~：移入 `clientCache.*`（改为 `lightStrip`）
+- ~~`lightStripEnabled`~~：移入 `clientCache.*`（改为 `lightCacheEnabled`）
 - ~~`maxChunksPerFrame`~~：移入 `clientCache.*`
 - ~~`mainThreadChunkBudgetMs`~~：移入 `clientCache.*`
 
@@ -137,7 +137,7 @@ HassiumConfig (总 record)
 
 `ClientCacheConfig` 吸收的字段：
 - `loadThreads`（原 `network.clientChunkLoadThreads`）
-- `lightStrip`（原 `network.lightStripEnabled`）
+- `lightCacheEnabled`（原 `network.lightStripEnabled`，概念改为光照缓存）
 - `maxChunksPerFrame`（原 `network.maxChunksPerFrame`）
 - `mainThreadChunkBudgetMs`（原 `network.mainThreadChunkBudgetMs`）
 
@@ -177,10 +177,10 @@ HassiumConfig (总 record)
 
 | 原位置 | 新位置 | 说明 |
 |--------|--------|------|
-| `network.lightStripEnabled`（client） | `network.lightStrip`（server） | 服务端 `ServerChunkPushManager` 也读取 |
+| `network.lightStripEnabled`（client） | `clientCache.lightCacheEnabled`（client） + `serverNetwork.lightStrip`（server） | 客户端光照缓存 + 服务端剥离分离 |
 | `network.maxChunksPerTick`（server） | 不变 | 服务端专属 |
 
-**注意**：`lightStripEnabled` 当前定义在 client spec 但服务端也读取。迁移后专用服可通过 `server.toml` 配置此项。物理客户端的光照剥离行为由 `clientCache.lightStrip` 控制。
+**注意**：`lightStripEnabled` 原为客户端+服务端共用。重构后拆分为：`clientCache.lightCacheEnabled`（客户端光照缓存）+ `serverNetwork.lightStrip`（服务端网络剥离）。专用服可通过 `server.toml` 配置剥离行为。
 
 ## 影响面
 

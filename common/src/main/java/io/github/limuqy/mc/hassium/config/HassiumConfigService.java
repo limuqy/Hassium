@@ -366,8 +366,8 @@ public class HassiumConfigService {
         return config.clientCache().loadThreads();
     }
 
-    public boolean isLightStrip() {
-        return config.clientCache().lightStrip();
+    public boolean isLightCacheEnabled() {
+        return config.clientCache().lightCacheEnabled();
     }
 
     public boolean isServerLightStrip() {

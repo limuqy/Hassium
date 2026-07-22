@@ -199,7 +199,7 @@ public final class FabricTomlConfigIO {
                 getBool(cfg, "clientCache.joinBoostEnabled", d.joinBoostEnabled()),
                 getBool(cfg, "clientCache.entitySnapshotsEnabled", d.entitySnapshotsEnabled()),
                 getInt(cfg, "clientCache.loadThreads", d.loadThreads()),
-                getBool(cfg, "clientCache.lightStrip", d.lightStrip()),
+                getBool(cfg, "clientCache.lightCacheEnabled", d.lightCacheEnabled()),
                 getInt(cfg, "clientCache.maxChunksPerFrame", d.maxChunksPerFrame()),
                 getInt(cfg, "clientCache.mainThreadChunkBudgetMs", d.mainThreadChunkBudgetMs())
         );
@@ -226,7 +226,7 @@ public final class FabricTomlConfigIO {
         set(cfg, "clientCache.entitySnapshotsEnabled", c.entitySnapshotsEnabled(),
                 "区块卸载时保存非玩家实体快照（默认 false）");
         set(cfg, "clientCache.loadThreads", c.loadThreads(), "客户端区块加载线程数");
-        set(cfg, "clientCache.lightStrip", c.lightStrip(), "是否启用光照剥离");
+        set(cfg, "clientCache.lightCacheEnabled", c.lightCacheEnabled(), "是否启用光照缓存");
         set(cfg, "clientCache.maxChunksPerFrame", c.maxChunksPerFrame(), "每帧应用缓存区块硬顶");
         set(cfg, "clientCache.mainThreadChunkBudgetMs", c.mainThreadChunkBudgetMs(), "主线程 apply 预算（ms）");
     }

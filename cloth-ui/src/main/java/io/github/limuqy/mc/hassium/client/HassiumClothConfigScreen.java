@@ -53,6 +53,8 @@ public final class HassiumClothConfigScreen {
         cache.addEntry(bool(entries, "hassium.configuration.clientCache.sectionDeltaEnabled",
                 draft.cacheSectionDeltaEnabled, dCache.sectionDeltaEnabled(),
                 v -> draft.cacheSectionDeltaEnabled = v));
+        cache.addEntry(bool(entries, "hassium.configuration.clientCache.lightCacheEnabled",
+                draft.lightCacheEnabled, dCache.lightCacheEnabled(), v -> draft.lightCacheEnabled = v));
         cache.addEntry(bool(entries, "hassium.configuration.network.enabled",
                 draft.networkEnabled, dClientNet.enabled(), v -> draft.networkEnabled = v));
         cache.addEntry(doubleRange(entries, "hassium.configuration.clientCache.hotScoreThreshold",
@@ -75,7 +77,7 @@ public final class HassiumClothConfigScreen {
                 draft.cacheEntitySnapshotsEnabled, dCache.entitySnapshotsEnabled(),
                 v -> draft.cacheEntitySnapshotsEnabled = v));
 
-        // === Category 2: 渲染（9 项）===
+        // === Category 2: 渲染（8 项）===
         ConfigCategory render = builder.getOrCreateCategory(
                 Component.translatable("hassium.configuration.category.render"));
         render.addEntry(bool(entries, "hassium.configuration.clientCache.viewDistanceExtensionEnabled",
@@ -93,8 +95,6 @@ public final class HassiumClothConfigScreen {
         render.addEntry(intRange(entries, "hassium.configuration.clientCache.loadThreads",
                 draft.loadThreads, dCache.loadThreads(), 1, 64,
                 v -> draft.loadThreads = v));
-        render.addEntry(bool(entries, "hassium.configuration.clientCache.lightStrip",
-                draft.lightStrip, dCache.lightStrip(), v -> draft.lightStrip = v));
         render.addEntry(intRange(entries, "hassium.configuration.clientCache.maxChunksPerFrame",
                 draft.maxChunksPerFrame, dCache.maxChunksPerFrame(), 1, 512, v -> draft.maxChunksPerFrame = v));
         render.addEntry(intRange(entries, "hassium.configuration.clientCache.mainThreadChunkBudgetMs",
@@ -194,7 +194,7 @@ public final class HassiumClothConfigScreen {
         boolean cacheEntitySnapshotsEnabled;
         // 线程与应用
         int loadThreads;
-        boolean lightStrip;
+        boolean lightCacheEnabled;
         int maxChunksPerFrame;
         int mainThreadChunkBudgetMs;
         // 网络开关
@@ -231,7 +231,7 @@ public final class HassiumClothConfigScreen {
             d.cacheJoinBoostEnabled = cache.joinBoostEnabled();
             d.cacheEntitySnapshotsEnabled = cache.entitySnapshotsEnabled();
             d.loadThreads = cache.loadThreads();
-            d.lightStrip = cache.lightStrip();
+            d.lightCacheEnabled = cache.lightCacheEnabled();
             d.maxChunksPerFrame = cache.maxChunksPerFrame();
             d.mainThreadChunkBudgetMs = cache.mainThreadChunkBudgetMs();
 
@@ -257,7 +257,7 @@ public final class HassiumClothConfigScreen {
                             cacheCleanupIntervalTicks, cacheTargetCacheSizeMb, cacheMinCleanupBatchSize,
                             cacheViewDistanceExtensionEnabled, cacheMaxRenderDistance, cacheOvdUnloadDelaySecs,
                             cacheSectionDeltaEnabled, cacheJoinBoostEnabled, cacheEntitySnapshotsEnabled,
-                            loadThreads, lightStrip, maxChunksPerFrame, mainThreadChunkBudgetMs
+                            loadThreads, lightCacheEnabled, maxChunksPerFrame, mainThreadChunkBudgetMs
                     ),
                     new HassiumConfig.ClientNetworkConfig(networkEnabled, metricsEnabled),
                     HassiumConfig.ServerNetworkConfig.DEFAULT,

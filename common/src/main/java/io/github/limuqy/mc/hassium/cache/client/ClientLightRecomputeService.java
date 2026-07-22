@@ -4,6 +4,7 @@ import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.compat.CompoundTagCompat;
 import io.github.limuqy.mc.hassium.network.ClientChunkHandler;
 import io.github.limuqy.mc.hassium.metrics.NetworkStats;
+import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.core.BlockPos;
@@ -59,7 +60,10 @@ public final class ClientLightRecomputeService {
             return;
         }
         applyLightEngine(level, chunk, chunkPos);
-        updateCacheWithLightData(level, chunkPos, cachedNbt);
+        // 仅光照缓存开启时回写磁盘；关闭时只重算不存储
+        if (HassiumConfigService.getInstance().isLightCacheEnabled()) {
+            updateCacheWithLightData(level, chunkPos, cachedNbt);
+        }
     }
 
     /**

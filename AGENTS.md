@@ -63,7 +63,7 @@ fabric/ | forge/ | neoforge/
 
 存档格式 type **126**（非 127）；元数据推送字段为 **chunkHash**（非 inhabitedTime）。客户端磁盘 payload 为 **NBT（HBT1）**，非旧 packet 字节。
 
-卖点（已实现）：**分段增量**、**超视渲染**、**`/hassiumc cache export` 世界导出**。
+卖点（已实现）：**分段增量**、**超视渲染**、**光照缓存**、**`/hassiumc cache export` 世界导出**。
 
 ## Skills
 

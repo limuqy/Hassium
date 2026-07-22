@@ -46,7 +46,7 @@ import java.util.zip.Deflater;
  *   <li>{@code dimensions/<ns>/<path>/region/}：其它维度</li>
  * </ul>
  * <p>
- * <b>限制</b>：无实体、无玩家背包；仅为「去过的区块」快照；首次单机打开会重算光照；模组方块需相同模组与相近 MC 版本。
+ * <b>限制</b>：无实体、无玩家背包；仅为「去过的区块」快照；光照数据从缓存保留（is_light_on=1 时）；模组方块需相同模组与相近 MC 版本。
  */
 public final class CacheWorldExporter {
 
