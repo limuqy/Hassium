@@ -133,6 +133,7 @@ public final class ClientLifecycleHelper {
         ClientEntitySnapshotStore.closeCurrent();
         ClientHassiumStorage.closeSharedDatabase();
         ClientChunkHandler.resetStorage();
+        ClientChunkDirtyTracker.clearAll();
         Constants.LOG.info("Hassium: Client disconnected, cache cleaned up");
     }
 

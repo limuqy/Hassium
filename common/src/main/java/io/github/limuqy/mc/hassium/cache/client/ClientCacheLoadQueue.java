@@ -8,6 +8,7 @@ import io.github.limuqy.mc.hassium.network.ClientChunkHandler;
 import io.github.limuqy.mc.hassium.platform.Services;
 import io.github.limuqy.mc.hassium.utils.DebugLogger;
 import io.github.limuqy.mc.hassium.utils.DebugLogger.LogType;
+import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.world.level.ChunkPos;
 
@@ -35,8 +36,15 @@ public class ClientCacheLoadQueue {
     /** 加载任务 */
     private record LoadTask(ChunkPos pos, double priority, boolean renderOnly) {}
 
-    /** 已加载完成的区块（data 为 packet 字节：后台重组完成；或 NBT 字节：level 未就绪回退路径） */
-    public record ReadyChunk(ChunkPos pos, byte[] data, double priority, boolean renderOnly) {}
+    /**
+     * 已加载完成的区块。
+     *
+     * @param data              packet 字节（后台重组完成）或 NBT 字节（level 未就绪回退）
+     * @param hasCachedLight    磁盘 NBT {@code is_light_on=1}，apply 时可跳过同步重算
+     * @param lightWritebackNbt 仅 miss 时保留，供重算后回写，避免再读盘；有光照时为 null
+     */
+    public record ReadyChunk(ChunkPos pos, byte[] data, double priority, boolean renderOnly,
+                             boolean hasCachedLight, CompoundTag lightWritebackNbt) {}
 
     private ClientCacheLoadQueue() {}
 
@@ -111,10 +119,13 @@ public class ClientCacheLoadQueue {
         if (pos == null || data == null) {
             return;
         }
-        readyQueue.offer(new ReadyChunk(pos, data, priority, renderOnly));
+        CompoundTag nbt = ChunkDiskCodec.bytesToNbt(data);
+        boolean hasLight = ChunkDiskCodec.isLightOn(nbt);
+        CompoundTag writeback = (!hasLight && nbt != null) ? nbt : null;
+        readyQueue.offer(new ReadyChunk(pos, data, priority, renderOnly, hasLight, writeback));
         DebugLogger.info(LogType.CACHE,
-                "[CACHE_LOAD_QUEUE] Enqueued with data {} (priority={}, renderOnly={}, readySize={})",
-                pos, String.format("%.1f", priority), renderOnly, readyQueue.size());
+                "[CACHE_LOAD_QUEUE] Enqueued with data {} (priority={}, renderOnly={}, hasLight={}, readySize={})",
+                pos, String.format("%.1f", priority), renderOnly, hasLight, readyQueue.size());
     }
 
     /**
@@ -147,6 +158,8 @@ public class ClientCacheLoadQueue {
             // 从缓存加载（磁盘 I/O + ZSTD 解压，在后台线程安全执行）
             byte[] data = ClientChunkHandler.loadChunkDataFromCache(task.pos());
             if (data != null) {
+                CompoundTag nbt = ChunkDiskCodec.bytesToNbt(data);
+                boolean hasLight = ChunkDiskCodec.isLightOn(nbt);
                 // 后台线程重组 NBT→packet 字节（CPU 密集，前移出主线程）
                 // maybeNbtToPacketBytes 幂等：NBT 字节重组为 packet，packet 字节原样返回
                 net.minecraft.client.Minecraft mc = net.minecraft.client.Minecraft.getInstance();
@@ -159,9 +172,12 @@ public class ClientCacheLoadQueue {
                     // level 未就绪：直接存 NBT，主线程 applyChunkData 的 maybeNbtToPacketBytes 兜底重组
                     packetBytes = data;
                 }
-                readyQueue.offer(new ReadyChunk(task.pos(), packetBytes, task.priority(), task.renderOnly()));
-                DebugLogger.info(LogType.CACHE, "[CACHE_LOAD] Chunk {} loaded from disk ({} bytes, readySize={})",
-                        task.pos(), packetBytes.length, readyQueue.size());
+                CompoundTag writeback = (!hasLight && nbt != null) ? nbt : null;
+                readyQueue.offer(new ReadyChunk(task.pos(), packetBytes, task.priority(), task.renderOnly(),
+                        hasLight, writeback));
+                DebugLogger.info(LogType.CACHE,
+                        "[CACHE_LOAD] Chunk {} loaded from disk ({} bytes, hasLight={}, readySize={})",
+                        task.pos(), packetBytes.length, hasLight, readyQueue.size());
             } else {
                 if (task.renderOnly()) {
                     // 超视渲染：缓存 miss 静默，不向服务器请求，回滚 loadedRenderOnly 标记
@@ -262,10 +278,11 @@ public class ClientCacheLoadQueue {
             if (chunk == null) {
                 break;
             }
-            Constants.LOG.debug("[CACHE_APPLY] Applying chunk {} to world (renderOnly={}, remaining={})",
-                    chunk.pos(), chunk.renderOnly(), readyQueue.size());
+            Constants.LOG.debug("[CACHE_APPLY] Applying chunk {} to world (renderOnly={}, hasLight={}, remaining={})",
+                    chunk.pos(), chunk.renderOnly(), chunk.hasCachedLight(), readyQueue.size());
             boolean appliedToWorld = ClientChunkHandler.applyChunkData(
-                    chunk.pos().x, chunk.pos().z, chunk.data(), chunk.renderOnly());
+                    chunk.pos().x, chunk.pos().z, chunk.data(), chunk.renderOnly(),
+                    chunk.lightWritebackNbt(), chunk.hasCachedLight());
             if (appliedToWorld) {
                 applied++;
             } else if (!chunk.renderOnly()) {

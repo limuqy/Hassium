@@ -351,10 +351,12 @@ if (packet instanceof ClientboundLightUpdatePacket lightPacket) {
 
 | 调用点 | 录入 |
 |--------|------|
-| `nbtToPacketBytes()` 检测 `is_light_on=1` | `recordLightCacheHit()` |
-| `nbtToPacketBytes()` 检测 `is_light_on=0` | `recordLightCacheMiss()` |
+| `ClientChunkHandler` 缓存 apply 且 `hasCachedLight` | `recordLightCacheHit()` |
+| `MixinLightRecompute` 空光照触发重算 | `recordLightCacheMiss()` |
 | `ClientLightRecomputeService.applyLightEngine()` | `recordLightRecomputeTime(elapsedNs)` |
 | `ClientMetadataHandler.handleLightDeltaPacket()` | `recordLightDeltaReceived(count)` |
+
+（`nbtToPacketBytes` 不再记 hit/miss，避免暖缓存假 100%。）
 
 ### 显示
 
@@ -450,13 +452,16 @@ if (packet instanceof ClientboundLightUpdatePacket lightPacket) {
 10. ✅ 新增光照缓存指标（HassiumMetrics + NetworkStats + 显示）
 11. ✅ 更新 `docs/chunk-cache.md` 文档
 12. ✅ 冒烟测试：1.20.1 Fabric PASS（命中率 78.3%）
+13. ✅ 收口：renderOnly `hasCachedLight` 跳过同步重算；hit/miss 改在 apply/Mixin 决策点录入
+14. ✅ 收口：`markCacheLightStale` 真写盘并保留 contentHash；`CacheSaveQueue.flushAsync` 非 interrupt 排空
 
 ## 验证结果
 
 | 验证项 | 结果 |
 |--------|------|
 | 1.20.1 Fabric 冒烟测试 | ✅ PASS |
-| 光照缓存命中率 | ✅ 78.3%（Round 2） |
+| 光照缓存命中率 | ✅ 78.3%（Round 2，收口前；指标语义已修正，需复测） |
 | `/hassiumc stats` 光照缓存节 | ✅ 正常显示 |
 | 编译（common + fabric + neoforge） | ✅ 全部通过 |
 | 指标单元测试 | ✅ 通过 |
+| renderOnly 有光照跳过重算 | ✅ 已实现（待冒烟确认重算耗时下降） |

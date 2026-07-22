@@ -80,13 +80,8 @@ public final class ClientLightRecomputeService {
                 if (nbt == null) return;
             }
 
-            // 检查是否已有光照数据
-            net.minecraft.nbt.Tag lightOnTag = nbt.get("is_light_on");
-            if (lightOnTag instanceof net.minecraft.nbt.ByteTag bt && bt.getAsByte() != 0) {
-                return;
-            }
-
-            // 从光照引擎提取光照数据
+            // 刚重算完：始终用引擎态覆盖磁盘（勿因旧 is_light_on=1 提前 return，
+            // SectionDelta 曾留下「flag=1 + 残缺 light」时会永久跳过回写）
             net.minecraft.world.level.lighting.LevelLightEngine lightEngine = level.getLightEngine();
             net.minecraft.world.level.lighting.LayerLightEventListener skyListener =
                     lightEngine.getLayerListener(net.minecraft.world.level.LightLayer.SKY);
@@ -112,12 +107,16 @@ public final class ClientLightRecomputeService {
                 if (skyData != null && !skyData.isEmpty()) {
                     sectionTag.putByteArray("sky_light", skyData.getData().clone());
                     hasAnyLight = true;
+                } else {
+                    sectionTag.remove("sky_light");
                 }
 
                 net.minecraft.world.level.chunk.DataLayer blockData = blockListener.getDataLayerData(sectionPos);
                 if (blockData != null && !blockData.isEmpty()) {
                     sectionTag.putByteArray("block_light", blockData.getData().clone());
                     hasAnyLight = true;
+                } else {
+                    sectionTag.remove("block_light");
                 }
             }
 
@@ -125,10 +124,21 @@ public final class ClientLightRecomputeService {
                 nbt.putByte("is_light_on", (byte) 1);
                 byte[] updatedBytes = ChunkDiskCodec.nbtToBytes(nbt);
                 if (updatedBytes != null) {
-                    storage.persist(chunkPos, updatedBytes, 0L, null);
+                    // 保留原 contentHash / sectionHashes，避免 persist(0) 被 MetadataTable 写成 1
+                    long contentHash = storage.readChunkHash(chunkPos);
+                    if (contentHash == 0L || contentHash == 1L) {
+                        // 入库尚未完成或元数据不可信：勿覆盖 hash，保持 dirty 等卸载补丁
+                        Constants.LOG.debug("Hassium: Skip light writeback for {} (hash={})",
+                                chunkPos, Long.toHexString(contentHash));
+                        return;
+                    }
+                    long[] sectionHashes = storage.readSectionHashes(chunkPos);
+                    storage.persist(chunkPos, updatedBytes, contentHash, sectionHashes);
+                    ClientChunkDirtyTracker.clear(chunkPos);
                     Constants.LOG.debug("Hassium: Updated cache with light data for {}", chunkPos);
                 }
             }
+            // 引擎尚无光照可写：保持 dirty，留给卸载光照补丁
         } catch (Exception e) {
             Constants.LOG.debug("Hassium: Failed to update cache with light data for {}", chunkPos, e);
         }
@@ -178,21 +188,9 @@ public final class ClientLightRecomputeService {
                 level.setSectionDirtyWithNeighbors(chunkPos.x, sectionY, chunkPos.z);
             }
 
+            // 只重算本块。禁止对邻居 propagateLightSources：邻居若已从缓存注入正确光照，
+            // 再 propagate 会先清空再不全量重建 → 「闪一下又灭」（二次进服相邻块互踩）。
             lightEngine.propagateLightSources(chunkPos);
-
-            for (int dx = -1; dx <= 1; dx++) {
-                for (int dz = -1; dz <= 1; dz++) {
-                    if ((dx == 0) == (dz == 0)) {
-                        continue;
-                    }
-                    int nx = chunkPos.x + dx;
-                    int nz = chunkPos.z + dz;
-                    if (level.getChunkSource().getChunkNow(nx, nz) != null) {
-                        lightEngine.propagateLightSources(new ChunkPos(nx, nz));
-                    }
-                }
-            }
-
             pullLightFromNeighborEdges(level, chunkPos, bottomSection, topSection);
             Constants.LOG.debug("Hassium: Recomputed light for chunk {}", chunkPos);
         } catch (Exception e) {

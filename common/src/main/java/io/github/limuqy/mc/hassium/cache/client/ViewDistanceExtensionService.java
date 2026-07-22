@@ -595,6 +595,7 @@ public class ViewDistanceExtensionService {
             unloadSubstituteTotal.incrementAndGet();
 
             // 同栈 apply：Storage slot 已在 unload 前被 CAS 清空，此时写入不会被随后覆盖
+            // levelChunkToNbt 已含光照 → isLightOn 为 true，跳过同步重算
             if (ClientChunkHandler.applyChunkData(pos.x, pos.z, nbtBytes, true, nbt)) {
                 Constants.LOG.debug("Hassium: OVD unload substitute applied immediately for {}", pos);
             } else {

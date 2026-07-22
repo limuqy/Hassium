@@ -15,8 +15,6 @@ import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.world.level.chunk.LevelChunk;
 import net.minecraft.world.level.chunk.LevelChunkSection;
 
-import io.github.limuqy.mc.hassium.metrics.NetworkStats;
-
 import java.util.BitSet;
 import java.util.Map;
 
@@ -180,14 +178,11 @@ public final class ChunkDiskCodec {
             buf.writeVarInt(0);
 
             // WithLight 包尾部：根据 is_light_on 决定写真实光照或空光照
-            Tag lightOnTag = nbt.get("is_light_on");
-            boolean hasLight = lightOnTag instanceof net.minecraft.nbt.ByteTag bt && bt.getAsByte() != 0;
-            if (hasLight) {
+            // hit/miss 指标在 apply 决策点录入（ClientChunkHandler / MixinLightRecompute），此处不记
+            if (isLightOn(nbt)) {
                 ChunkPacketDataCompat.writeLightDataFromNbt(buf, sectionsList, sectionLimit);
-                NetworkStats.recordLightCacheHit();
             } else {
                 ChunkPacketDataCompat.writeEmptyLightData(buf);
-                NetworkStats.recordLightCacheMiss();
             }
 
             byte[] result = new byte[buf.readableBytes()];
@@ -204,9 +199,8 @@ public final class ChunkDiskCodec {
     /**
      * {@link LevelChunk} → {@link CompoundTag}（Live-Unload 主路径；不依赖 ServerLevel）。
      * <p>
-     * 通过构造 {@link net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket}
-     * 间接获取 packet 字节，再委托 {@link #packetBytesToNbt}。避免直接调用依赖服务端的
-     * {@code ChunkSerializer.write}。
+     * 用空光照 bitmask 构造 packet（只序列化方块/HM/BE），再从 {@link LevelLightEngine}
+     * 直接把 DataLayer 写入 section NBT。避免把 每 section 4KiB 光照编进 packet 再解析回来。
      *
      * @param chunk 目标区块
      * @param level 客户端世界
@@ -215,56 +209,12 @@ public final class ChunkDiskCodec {
     public static CompoundTag levelChunkToNbt(LevelChunk chunk, ClientLevel level) {
         if (chunk == null || level == null) return null;
         try {
-            // 从光照引擎提取光照数据，构建真实 bitmask
             net.minecraft.world.level.lighting.LevelLightEngine lightEngine = level.getLightEngine();
-            net.minecraft.world.level.lighting.LayerLightEventListener skyListener =
-                    lightEngine.getLayerListener(net.minecraft.world.level.LightLayer.SKY);
-            net.minecraft.world.level.lighting.LayerLightEventListener blockListener =
-                    lightEngine.getLayerListener(net.minecraft.world.level.LightLayer.BLOCK);
-
-            int minSection = level.getMinSection();
-            int maxSection = level.getMaxSection();
-            BitSet skyMask = new BitSet();
-            BitSet blockMask = new BitSet();
-
-            int skyCount = 0;
-            int blockCount = 0;
-            int totalSections = maxSection - minSection;
-            for (int sectionY = minSection; sectionY < maxSection; sectionY++) {
-                net.minecraft.core.SectionPos sectionPos =
-                        net.minecraft.core.SectionPos.of(chunk.getPos().x, sectionY, chunk.getPos().z);
-                int idx = sectionY - minSection;
-
-                net.minecraft.world.level.chunk.DataLayer skyData = skyListener.getDataLayerData(sectionPos);
-                boolean skyOk = skyData != null && !skyData.isEmpty();
-                if (skyOk) {
-                    skyMask.set(idx);
-                    skyCount++;
-                }
-
-                net.minecraft.world.level.chunk.DataLayer blockData = blockListener.getDataLayerData(sectionPos);
-                boolean blockOk = blockData != null && !blockData.isEmpty();
-                if (blockOk) {
-                    blockMask.set(idx);
-                    blockCount++;
-                }
-
-                // 详细日志：每 8 个 section 输出一次
-                if (idx % 8 == 0) {
-                    Constants.LOG.debug("Hassium: Light data for {} sectionY={}: sky={} (null={}, empty={}), block={} (null={}, empty={})",
-                            chunk.getPos(), sectionY,
-                            skyOk, skyData == null, skyData != null && skyData.isEmpty(),
-                            blockOk, blockData == null, blockData != null && blockData.isEmpty());
-                }
-            }
-
-            Constants.LOG.debug("Hassium: levelChunkToNbt for {} - total sections: {}, sky: {}, block: {}",
-                    chunk.getPos(), totalSections, skyCount, blockCount);
-
-            // 传递真实 bitmask，packet 构造函数会序列化光照数据
+            // 空 mask：packet 构造/编码不携带光照载荷
+            BitSet emptyMask = new BitSet();
             net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket packet =
                     new net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket(
-                            chunk, lightEngine, skyMask, blockMask);
+                            chunk, lightEngine, emptyMask, emptyMask);
 
             byte[] packetBytes;
 #if MC_VER < MC_1_20_5
@@ -289,13 +239,63 @@ public final class ChunkDiskCodec {
             }
 #endif
 
-            CompoundTag nbt = packetBytesToNbt(packetBytes, level.registryAccess());
-            // y_pos 不写入：apply 走 packet 重组路径不需要；导出时由 level.dat 兜底
+            CompoundTag nbt = packetBytesToNbt(packetBytes, level.registryAccess(), level.getSectionsCount());
+            if (nbt == null) {
+                return null;
+            }
+            // 直接从光照引擎写入 section NBT（不经 packet 光照尾部）
+            copyLightEngineToNbt(nbt, chunk.getPos(), level);
             return nbt;
         } catch (Exception e) {
             Constants.LOG.debug("Hassium: levelChunkToNbt failed for chunk {}", chunk.getPos(), e);
             return null;
         }
+    }
+
+    /**
+     * 从 LevelLightEngine 提取 sky/block DataLayer，写入 NBT sections，并设置 {@code is_light_on}。
+     */
+    public static void copyLightEngineToNbt(CompoundTag nbt, net.minecraft.world.level.ChunkPos chunkPos,
+                                            ClientLevel level) {
+        if (nbt == null || level == null) return;
+        net.minecraft.world.level.lighting.LevelLightEngine lightEngine = level.getLightEngine();
+        net.minecraft.world.level.lighting.LayerLightEventListener skyListener =
+                lightEngine.getLayerListener(net.minecraft.world.level.LightLayer.SKY);
+        net.minecraft.world.level.lighting.LayerLightEventListener blockListener =
+                lightEngine.getLayerListener(net.minecraft.world.level.LightLayer.BLOCK);
+
+        int minSection = level.getMinSection();
+        int maxSection = level.getMaxSection();
+        ListTag sectionsList = CompoundTagCompat.getList(nbt, "sections");
+        boolean hasAnyLight = false;
+
+        for (int sectionY = minSection; sectionY < maxSection; sectionY++) {
+            int idx = sectionY - minSection;
+            if (idx >= sectionsList.size()) break;
+            Tag t = sectionsList.get(idx);
+            if (!(t instanceof CompoundTag sectionTag)) continue;
+
+            net.minecraft.core.SectionPos sectionPos =
+                    net.minecraft.core.SectionPos.of(chunkPos.x, sectionY, chunkPos.z);
+
+            net.minecraft.world.level.chunk.DataLayer skyData = skyListener.getDataLayerData(sectionPos);
+            if (skyData != null && !skyData.isEmpty()) {
+                sectionTag.putByteArray("sky_light", skyData.getData().clone());
+                hasAnyLight = true;
+            } else {
+                sectionTag.remove("sky_light");
+            }
+
+            net.minecraft.world.level.chunk.DataLayer blockData = blockListener.getDataLayerData(sectionPos);
+            if (blockData != null && !blockData.isEmpty()) {
+                sectionTag.putByteArray("block_light", blockData.getData().clone());
+                hasAnyLight = true;
+            } else {
+                sectionTag.remove("block_light");
+            }
+        }
+
+        nbt.putByte("is_light_on", (byte) (hasAnyLight ? 1 : 0));
     }
 
     /**
@@ -462,6 +462,15 @@ public final class ChunkDiskCodec {
             buf.release();
         }
         return list;
+    }
+
+    /**
+     * 缓存 NBT 是否已含可用光照（{@code is_light_on != 0}）。
+     */
+    public static boolean isLightOn(CompoundTag nbt) {
+        if (nbt == null) return false;
+        Tag lightOnTag = nbt.get("is_light_on");
+        return lightOnTag instanceof net.minecraft.nbt.ByteTag bt && bt.getAsByte() != 0;
     }
 
     /**

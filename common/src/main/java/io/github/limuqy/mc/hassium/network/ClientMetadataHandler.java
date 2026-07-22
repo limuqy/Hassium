@@ -588,6 +588,7 @@ public class ClientMetadataHandler {
             for (SectionDeltaS2CPacket.SectionData sd : entry.changedSections()) {
                 int idx = sd.sectionIndex();
                 ensureSectionsSize(sections, idx + 1, registryAccess);
+                // 新 section 不含 sky/block_light：方块变了则旧光照必过时
                 net.minecraft.nbt.CompoundTag newSection = new net.minecraft.nbt.CompoundTag();
                 boolean hasOnlyAir = checkSectionHasOnlyAir(sd.blockData(), registryAccess);
                 newSection.putBoolean("has_only_air", hasOnlyAir);
@@ -595,6 +596,8 @@ public class ClientMetadataHandler {
                 sections.set(idx, newSection);
             }
             nbt.put("sections", sections);
+            // 方块变更后磁盘光照不可信；否则 is_light_on=1 + 残缺 light 会跳过重算并长期黑块
+            nbt.putByte("is_light_on", (byte) 0);
 
             // 3. BE 全量覆盖（写盘）；世界内 BE 在 apply 后走 applyBlockEntities
             if (!entry.blockEntities().isEmpty()) {
@@ -607,7 +610,7 @@ public class ClientMetadataHandler {
                 nbt.put("block_entities", beList);
             }
 
-            // 4. 重算 hash + persist
+            // 4. 重算 hash + persist（is_light_on=0 → 保持 dirty，等光照回写/卸载）
             int sectionCount = mc.level.getSectionsCount();
             nbt.putInt("section_count", sectionCount);
             long[] newSectionHashes = io.github.limuqy.mc.hassium.cache.client.ChunkDiskCodec
@@ -840,15 +843,11 @@ public class ClientMetadataHandler {
     }
 
     /**
-     * 标记缓存中的区块光照过时（设置 is_light_on=0）。
-     * <p>
-     * 区块卸载时由 levelChunkToNbt 统一写入最新光照数据。
+     * 标记缓存光照过时：仅标脏，卸载时由 levelChunkToNbt 写入最新光照。
      */
     private static void markCacheLightStale(ChunkPos chunkPos) {
-        // 光照过时标记在下次缓存读取时自然生效
-        // is_light_on=0 会触发 applyLightEngineNow 重算
-        // 区块卸载时 levelChunkToNbt 会捕获最新光照
+        io.github.limuqy.mc.hassium.cache.client.ClientChunkDirtyTracker.markDirty(chunkPos);
         DebugLogger.debug(LogType.METADATA,
-                "[LIGHT_DELTA] Marked cache light stale for chunk [{}, {}]", chunkPos.x, chunkPos.z);
+                "[LIGHT_DELTA] Marked dirty (light stale) for chunk [{}, {}]", chunkPos.x, chunkPos.z);
     }
 }

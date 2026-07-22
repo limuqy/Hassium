@@ -393,7 +393,8 @@ public final class ClientSmokeTest {
                 && plain.contains("带宽压缩")
                 && plain.contains("区块缓存")
                 && plain.contains("区块加载")
-                && plain.contains("超视渲染");
+                && plain.contains("超视渲染")
+                && plain.contains("光照缓存");
     }
 
     private static String stripSection(String s) {

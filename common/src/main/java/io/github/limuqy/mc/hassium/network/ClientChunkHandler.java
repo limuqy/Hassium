@@ -75,6 +75,7 @@ public class ClientChunkHandler {
         clientStorage = null;
         pendingContentHashes.clear();
         pendingSectionHashes.clear();
+        io.github.limuqy.mc.hassium.cache.client.ClientChunkDirtyTracker.clearAll();
     }
 
     /**
@@ -90,6 +91,14 @@ public class ClientChunkHandler {
      */
     private static long consumePendingContentHash(int chunkX, int chunkZ) {
         PendingHash entry = pendingContentHashes.remove(chunkPosKey(chunkX, chunkZ));
+        return entry != null ? entry.hash() : 0L;
+    }
+
+    /**
+     * 窥视暂存 contentHash（不移除），供异步入库与 apply 共用。
+     */
+    private static long peekPendingContentHash(int chunkX, int chunkZ) {
+        PendingHash entry = pendingContentHashes.get(chunkPosKey(chunkX, chunkZ));
         return entry != null ? entry.hash() : 0L;
     }
 
@@ -110,6 +119,11 @@ public class ClientChunkHandler {
         return entry != null ? entry.hashes() : null;
     }
 
+    private static long[] peekPendingSectionHashes(int chunkX, int chunkZ) {
+        PendingSectionHashes entry = pendingSectionHashes.get(chunkPosKey(chunkX, chunkZ));
+        return entry != null ? entry.hashes() : null;
+    }
+
     /**
      * 懒清理过期条目（定期调用，避免无限增长）
      */
@@ -126,6 +140,68 @@ public class ClientChunkHandler {
     private static long chunkPosKey(int x, int z) {
         return ((long) x << 32) | (z & 0xFFFFFFFFL);
     }
+
+    /**
+     * 全量推送异步入库：packet → NBT → CacheSaveQueue（不堵主线程）。
+     * <p>
+     * 初始多为 is_light_on=0；光照回写后标净。level 未就绪时保持 dirty，留给卸载/断连安全网。
+     */
+    private static void scheduleAsyncCacheIngest(int chunkX, int chunkZ, byte[] packetBytes) {
+        ChunkPos pos = new ChunkPos(chunkX, chunkZ);
+        io.github.limuqy.mc.hassium.cache.client.ClientChunkDirtyTracker.markDirty(pos);
+
+        HassiumTaskExecutor executor = HassiumTaskExecutor.getClient();
+        Runnable ingest = () -> {
+            try {
+                if (clientStorage == null) {
+                    return;
+                }
+                Minecraft mc = Minecraft.getInstance();
+                ClientLevel level = mc.level;
+                if (level == null) {
+                    DebugLogger.debug(LogType.COMPRESSION,
+                            "[CACHE_INGEST] Level not ready for [{}, {}], keep dirty for unload", chunkX, chunkZ);
+                    return;
+                }
+                CompoundTag nbt = ChunkDiskCodec.packetBytesToNbt(
+                        packetBytes, level.registryAccess(), level.getSectionsCount());
+                if (nbt == null) {
+                    DebugLogger.debug(LogType.COMPRESSION,
+                            "[CACHE_INGEST] packetBytesToNbt failed for [{}, {}]", chunkX, chunkZ);
+                    return;
+                }
+                byte[] nbtBytes = ChunkDiskCodec.nbtToBytes(nbt);
+                if (nbtBytes == null) {
+                    return;
+                }
+                long contentHash = peekPendingContentHash(chunkX, chunkZ);
+                long[] sectionHashes = peekPendingSectionHashes(chunkX, chunkZ);
+                if (contentHash == 0L && sectionHashes != null && sectionHashes.length > 0) {
+                    contentHash = io.github.limuqy.mc.hassium.cache.ChunkContentHashUtil
+                            .combineSectionHashesFromArray(sectionHashes);
+                }
+                io.github.limuqy.mc.hassium.cache.client.CacheSaveQueue.getInstance()
+                        .enqueueSerialized(pos, nbtBytes, contentHash, sectionHashes);
+                consumePendingContentHash(chunkX, chunkZ);
+                consumePendingSectionHashes(chunkX, chunkZ);
+            } catch (Exception e) {
+                DebugLogger.debug(LogType.COMPRESSION,
+                        "[CACHE_INGEST] Failed for [{}, {}]: {}", chunkX, chunkZ, e.getMessage());
+            }
+        };
+
+        if (Minecraft.getInstance().isSameThread()) {
+            if (executor != null && executor.isRunning()) {
+                executor.submit(ingest, TaskCategory.SAFE_TO_CANCEL);
+            } else {
+                ingest.run();
+            }
+        } else {
+            // 已在解压后台线程，直接入库避免再排队
+            ingest.run();
+        }
+    }
+
     /**
      * 处理接收到的压缩区块数据
      * <p>
@@ -187,7 +263,10 @@ public class ClientChunkHandler {
                 DebugLogger.info(LogType.COMPRESSION, "[HANDLE_COMPRESSED] Decompressed chunk [{}, {}] ({} -> {} bytes)",
                     chunkX, chunkZ, compData.length, decompressed.length);
 
-                // 回主线程应用区块（缓存由卸载路径统一处理）
+                // 推送即入库：后台转 NBT 并投入 CacheSaveQueue（与主线程 apply 并行摊销写盘）
+                scheduleAsyncCacheIngest(chunkX, chunkZ, decompressed);
+
+                // 回主线程应用区块
                 MainThreadDispatcher.execute(() -> {
                     DebugLogger.info(LogType.COMPRESSION, "[HANDLE_COMPRESSED] Applying chunk [{}, {}] to world", chunkX, chunkZ);
                     if (applyChunkData(chunkX, chunkZ, decompressed, false)) {
@@ -218,7 +297,9 @@ public class ClientChunkHandler {
             Constants.LOG.debug("Hassium: Decompressed chunk [{}, {}] on main thread (fallback), size: {} -> {} bytes",
                 compressed.chunkX, compressed.chunkZ, compressed.compressedData.length, decompressed.length);
 
-            // 应用区块（缓存由卸载路径统一处理）
+            scheduleAsyncCacheIngest(compressed.chunkX, compressed.chunkZ, decompressed);
+
+            // 应用区块
             boolean applied = applyChunkData(compressed.chunkX, compressed.chunkZ, decompressed, false);
             if (applied) {
                 Constants.LOG.debug("Hassium: Applied chunk [{}, {}] from server",
@@ -249,7 +330,13 @@ public class ClientChunkHandler {
      * @param renderOnly true=仅渲染不参与逻辑tick
      */
     public static boolean applyChunkData(int chunkX, int chunkZ, byte[] chunkData, boolean renderOnly) {
-        return applyChunkDataInternal(chunkX, chunkZ, chunkData, renderOnly, null);
+        // 仍是 HBT1 NBT 时自动识别 is_light_on；已是 packet 字节则视为无标志（由调用方显式传入）
+        CompoundTag nbt = ChunkDiskCodec.bytesToNbt(chunkData);
+        if (nbt != null) {
+            return applyChunkDataInternal(chunkX, chunkZ, chunkData, renderOnly, nbt,
+                    ChunkDiskCodec.isLightOn(nbt));
+        }
+        return applyChunkDataInternal(chunkX, chunkZ, chunkData, renderOnly, null, false);
     }
 
     /**
@@ -263,13 +350,25 @@ public class ClientChunkHandler {
      */
     public static boolean applyChunkData(int chunkX, int chunkZ, byte[] chunkData,
                                          boolean renderOnly, CompoundTag cachedNbt) {
-        return applyChunkDataInternal(chunkX, chunkZ, chunkData, renderOnly, cachedNbt);
+        return applyChunkDataInternal(chunkX, chunkZ, chunkData, renderOnly, cachedNbt,
+                ChunkDiskCodec.isLightOn(cachedNbt));
+    }
+
+    /**
+     * 缓存队列 apply：显式传入是否已含光照，避免 packet 字节路径无法再读 {@code is_light_on}。
+     */
+    public static boolean applyChunkData(int chunkX, int chunkZ, byte[] chunkData,
+                                         boolean renderOnly, CompoundTag cachedNbt,
+                                         boolean hasCachedLight) {
+        return applyChunkDataInternal(chunkX, chunkZ, chunkData, renderOnly, cachedNbt, hasCachedLight);
     }
 
     private static boolean applyChunkDataInternal(int chunkX, int chunkZ, byte[] chunkData,
-                                                  boolean renderOnly, CompoundTag cachedNbt) {
-        DebugLogger.info(LogType.CHUNK_APPLY, "[APPLY_CHUNK] Applying chunk [{}, {}] (dataSize={}, renderOnly={})",
-                chunkX, chunkZ, chunkData.length, renderOnly);
+                                                  boolean renderOnly, CompoundTag cachedNbt,
+                                                  boolean hasCachedLight) {
+        DebugLogger.info(LogType.CHUNK_APPLY,
+                "[APPLY_CHUNK] Applying chunk [{}, {}] (dataSize={}, renderOnly={}, hasCachedLight={})",
+                chunkX, chunkZ, chunkData.length, renderOnly, hasCachedLight);
 
         ChunkPos pos = new ChunkPos(chunkX, chunkZ);
         Minecraft mc = Minecraft.getInstance();
@@ -305,12 +404,21 @@ public class ClientChunkHandler {
 
             // 区块就绪：发送延后的 BE 请求 + 冲刷暂存 BE
             // renderOnly（超视渲染）不向服务器请求 BE，避免视距外流量
+            // 空光照重算由 MixinLightRecompute 在 handleLevelChunkWithLight TAIL 完成，此处勿重复调用
             if (!renderOnly) {
+                if (hasCachedLight) {
+                    NetworkStats.recordLightCacheHit();
+                }
                 ClientMetadataHandler.onChunkApplied(pos);
+            } else if (hasCachedLight) {
+                // 缓存已含光照：packet 已写入真实 LightData，Mixin 跳过重算
+                NetworkStats.recordLightCacheHit();
+                ViewDistanceExtensionService.getInstance().onRenderOnlyApplied(pos);
             } else {
-                // 超视渲染：磁盘 NBT 无 LightData，本地重算避免黑块
-                // 合并 pipeline：同一主线程时间片内完成光照重算，避免跨帧黑块
-                ClientLightRecomputeService.applyLightEngineNow(pos, cachedNbt);
+                // Mixin 已同步重算；用内存 NBT 补回写，避免仅依赖读盘
+                if (cachedNbt != null) {
+                    ClientLightRecomputeService.updateCacheWithLightNbt(pos, cachedNbt);
+                }
                 ViewDistanceExtensionService.getInstance().onRenderOnlyApplied(pos);
             }
             return true;
@@ -339,7 +447,17 @@ public class ClientChunkHandler {
             Constants.LOG.warn("Hassium: Client storage not initialized");
             return false;
         }
-        return clientStorage.persist(pos, data, contentHash, sectionHashes);
+        boolean ok = clientStorage.persist(pos, data, contentHash, sectionHashes);
+        if (ok) {
+            // contentHash 不含光照：仅 is_light_on=1 才标净；否则等光照回写 / 卸载快照
+            CompoundTag nbt = ChunkDiskCodec.bytesToNbt(data);
+            if (ChunkDiskCodec.isLightOn(nbt)) {
+                io.github.limuqy.mc.hassium.cache.client.ClientChunkDirtyTracker.clear(pos);
+            } else {
+                io.github.limuqy.mc.hassium.cache.client.ClientChunkDirtyTracker.markDirty(pos);
+            }
+        }
+        return ok;
     }
 
     /**

@@ -2,6 +2,7 @@ package io.github.limuqy.mc.hassium.mixin;
 
 import io.github.limuqy.mc.hassium.cache.client.ClientLightRecomputeService;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
+import io.github.limuqy.mc.hassium.metrics.NetworkStats;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.multiplayer.ClientPacketListener;
 import net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket;
@@ -42,7 +43,8 @@ public class MixinLightRecompute {
             return;
         }
 
-        // 合并 pipeline：handleLevelChunkWithLight TAIL 时区块已 apply，直接同步重算光照
+        // 空光照：需同步重算（服务端 lightStrip / 缓存 is_light_on=0）
+        NetworkStats.recordLightCacheMiss();
         ClientLightRecomputeService.applyLightEngineNow(new ChunkPos(packet.getX(), packet.getZ()));
     }
 }

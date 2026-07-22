@@ -270,12 +270,19 @@ RD > 32（需手改 `options.txt`）时雾距会跟随 `getEffectiveRenderDistan
 **光照数据存储**：当 `is_light_on=1` 时，每个 section 的 NBT 可能包含 `sky_light` 和 `block_light`（各 2048 bytes）。
 
 **光照缓存流水线**：
-1. 首次加载（服务器 lightStrip=true）：区块到达 → `applyLightEngineNow()` 重算光照 → 立即回写缓存（`is_light_on=1`）
-2. 缓存命中：`nbtToPacketBytes()` 读取光照写入 packet → 客户端直接应用，无需重算
-3. 方块变更：拦截 `ClientboundLightUpdatePacket` → 发送 `LightDeltaS2CPacket` → 客户端重算 → 标记缓存 `is_light_on=0`
-4. 区块卸载：`levelChunkToNbt()` 从 `LevelLightEngine` 提取光照（兜底路径）
+1. 首次加载（服务器 lightStrip=true）：区块到达 → `MixinLightRecompute` / 空光 → `applyLightEngineNow()` 重算 → 立即回写缓存（`is_light_on=1`），并记「需重算」
+2. 缓存命中（含超视 renderOnly）：后台读 `is_light_on` → `nbtToPacketBytes()` 写入真实光照 → apply 后**跳过**同步重算，记「缓存命中」
+3. 方块变更：拦截 `ClientboundLightUpdatePacket` → 发送 `LightDeltaS2CPacket` → 客户端本地重算 → **标脏**（卸载/`levelChunkToNbt` 再写 `is_light_on=1`）；SectionDelta 合并后强制 `is_light_on=0` 并保持 dirty，避免「flag=1 + 残缺 light」跳过重算
+4. 区块卸载 / 断连 dump：脏块若 contentHash 与磁盘一致 → **只补光照、保留磁盘 hash/sectionHashes**（禁止 Live-Unload 重算覆盖 MetadataTable，否则次回大批 MISMATCH）；hash 不一致才全量 `levelChunkToNbt`
+5. 空光重算：只对本块 `propagateLightSources` + 从邻居边缘拉取，**不对邻居再 propagate**（避免缓存命中块被相邻重算踩灭）
 
-**命中率**：冒烟测试 1.20.1 实测 78.3%（Round 2），剩余 21.7% 为 renderOnly 区块或光照回写前已卸载的区块。
+**指标语义**（`/hassiumc stats`）：
+- 展示：`光照缓存：xx%（命中 N，重算 M）`，与区块缓存同行风格一致
+- **命中**：从缓存 apply 且跳过同步重算（`is_light_on=1`）
+- **重算**：空光照触发 `applyLightEngineNow`（首次推送 / `is_light_on=0`）
+- 命中率 = 命中 / (命中 + 重算)；与 `nbtToPacketBytes` 解耦，避免暖缓存假 100%
+
+**renderOnly**：`ClientCacheLoadQueue.ReadyChunk.hasCachedLight` 为 true 时不再调用 `applyLightEngineNow`（空光仍由 Mixin 重算一次，Handler 只补内存 NBT 回写）。
 
 ### 11.3 Live-Unload Snapshot（主一致性方案）
 

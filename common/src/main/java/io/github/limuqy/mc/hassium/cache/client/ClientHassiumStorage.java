@@ -371,6 +371,9 @@ public class ClientHassiumStorage {
         for (HassiumRegionFile region : openRegions.values()) {
             try {
                 region.close();
+            } catch (java.nio.channels.ClosedChannelException e) {
+                // 断连竞态：save 线程 interrupt 后 channel 已关，可忽略
+                Constants.LOG.debug("Hassium: Region file already closed");
             } catch (IOException e) {
                 Constants.LOG.warn("Failed to close region file", e);
             }
