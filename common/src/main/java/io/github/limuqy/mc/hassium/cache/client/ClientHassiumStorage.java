@@ -35,7 +35,6 @@ public class ClientHassiumStorage {
     private static final String CACHE_DIR_NAME = "hassium_cache";
     private static final String CONFIG_DIR_NAME = "hassium";
     private static final String REGION_EXTENSION = ".mca";
-    private static final int DEFAULT_COMPRESSION_LEVEL = 9;
 
     private final Path cacheRoot;
     private final String serverId;
@@ -54,21 +53,13 @@ public class ClientHassiumStorage {
         this.dimension = dimension;
         this.cacheRoot = gameDir.resolve(CACHE_DIR_NAME).resolve(serverId).resolve(dimension);
 
-        boolean bloomEnabled = HassiumConfigService.getInstance().isBloomFilterEnabled();
-        this.bloomFilter = bloomEnabled ? ChunkBloomFilter.fromConfig() : null;
+        this.bloomFilter = ChunkBloomFilter.createDefault();
 
         initializeStorage(gameDir);
-
-        if (bloomFilter != null) {
-            loadExistingCacheToBloomFilter();
-        }
+        loadExistingCacheToBloomFilter();
     }
 
     private void loadExistingCacheToBloomFilter() {
-        if (bloomFilter == null) {
-            return;
-        }
-
         try {
             if (!Files.exists(cacheRoot)) {
                 return;
@@ -153,7 +144,8 @@ public class ClientHassiumStorage {
      */
     public boolean persist(ChunkPos pos, byte[] nbtData, long contentHash, long[] sectionHashes) {
         try {
-            byte[] compressed = compressWithDictionary(nbtData, DEFAULT_COMPRESSION_LEVEL);
+            int level = HassiumConfigService.getInstance().getCacheCompressionLevel();
+            byte[] compressed = compressWithDictionary(nbtData, level);
 
             byte[] chunkData = new byte[1 + compressed.length];
             chunkData[0] = (byte) 126;
@@ -164,9 +156,7 @@ public class ClientHassiumStorage {
 
             updateIndexEntries(pos, chunkData.length, sectionHashes);
 
-            if (bloomFilter != null) {
-                bloomFilter.put(pos.x, pos.z, dimension);
-            }
+            bloomFilter.put(pos.x, pos.z, dimension);
 
             Constants.LOG.debug("Cached chunk [{}, {}] to region ({} bytes, contentHash={})",
                     pos.x, pos.z, chunkData.length, Long.toHexString(contentHash));
@@ -213,7 +203,7 @@ public class ClientHassiumStorage {
      * 快速读取区块元数据（只读 Metadata Table）
      */
     public ClientChunkMetadata readMetadata(ChunkPos pos) {
-        if (bloomFilter != null && !bloomFilter.mightContain(pos.x, pos.z, dimension)) {
+        if (!bloomFilter.mightContain(pos.x, pos.z, dimension)) {
             return null;
         }
 
@@ -242,7 +232,7 @@ public class ClientHassiumStorage {
      * 若 MetadataTable 为空/无效但 SectionHashStore 有数据，则 combine 回退（兼容曾写入 0→1 的旧缓存）。
      */
     public long readChunkHash(ChunkPos pos) {
-        if (bloomFilter != null && !bloomFilter.mightContain(pos.x, pos.z, dimension)) {
+        if (!bloomFilter.mightContain(pos.x, pos.z, dimension)) {
             return 0L;
         }
         try {

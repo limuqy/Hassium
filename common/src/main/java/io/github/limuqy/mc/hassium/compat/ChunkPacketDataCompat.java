@@ -240,6 +240,112 @@ public final class ChunkPacketDataCompat {
         return list;
     }
 
+    /**
+     * 从 section NBT 列表中读取光照数据，按 {@code ClientboundLightUpdatePacketData} 线格式写入。
+     * <p>
+     * 遍历每个 section 的 {@code sky_light} / {@code block_light} ByteArrayTag，
+     * 构建 BitSet 掩码和 DataLayer 列表。空 section 或缺失 tag 视为无数据。
+     *
+     * @param buf          目标缓冲区
+     * @param sections     section NBT 列表（每个可能含 sky_light / block_light）
+     * @param sectionCount section 总数
+     */
+    public static void writeLightDataFromNbt(FriendlyByteBuf buf, ListTag sections, int sectionCount) {
+        BitSet skyYMask = new BitSet();
+        BitSet blockYMask = new BitSet();
+        BitSet emptySkyYMask = new BitSet();
+        BitSet emptyBlockYMask = new BitSet();
+        java.util.ArrayList<byte[]> skyUpdates = new java.util.ArrayList<>();
+        java.util.ArrayList<byte[]> blockUpdates = new java.util.ArrayList<>();
+
+        for (int i = 0; i < sectionCount && i < sections.size(); i++) {
+            Tag t = sections.get(i);
+            if (!(t instanceof CompoundTag sectionTag)) continue;
+
+            Tag skyTag = sectionTag.get("sky_light");
+            if (skyTag instanceof ByteArrayTag skyBat) {
+                byte[] skyBytes = skyBat.getAsByteArray();
+                if (skyBytes.length == 2048) {
+                    if (isAllZero(skyBytes)) {
+                        emptySkyYMask.set(i);
+                    } else {
+                        skyYMask.set(i);
+                        skyUpdates.add(skyBytes);
+                    }
+                }
+            }
+
+            Tag blockTag = sectionTag.get("block_light");
+            if (blockTag instanceof ByteArrayTag blockBat) {
+                byte[] blockBytes = blockBat.getAsByteArray();
+                if (blockBytes.length == 2048) {
+                    if (isAllZero(blockBytes)) {
+                        emptyBlockYMask.set(i);
+                    } else {
+                        blockYMask.set(i);
+                        blockUpdates.add(blockBytes);
+                    }
+                }
+            }
+        }
+
+        buf.writeBitSet(skyYMask);
+        buf.writeBitSet(blockYMask);
+        buf.writeBitSet(emptySkyYMask);
+        buf.writeBitSet(emptyBlockYMask);
+        buf.writeCollection(skyUpdates, (b, arr) -> b.writeByteArray(arr));
+        buf.writeCollection(blockUpdates, (b, arr) -> b.writeByteArray(arr));
+    }
+
+    /**
+     * 从 packet 字节流读取光照数据，存入对应 section 的 NBT。
+     * <p>
+     * 读取顺序：skyYMask → blockYMask → emptySkyYMask → emptyBlockYMask → skyUpdates → blockUpdates。
+     * 读取后为每个 section 添加 {@code sky_light} / {@code block_light} ByteArrayTag。
+     *
+     * @param buf          已定位到光照数据起点的缓冲区
+     * @param sectionCount section 总数
+     * @param sections     section NBT 列表（将被修改）
+     */
+    public static void readLightDataFromPacket(FriendlyByteBuf buf, int sectionCount, ListTag sections) {
+        BitSet skyYMask = buf.readBitSet();
+        BitSet blockYMask = buf.readBitSet();
+        BitSet emptySkyYMask = buf.readBitSet();
+        BitSet emptyBlockYMask = buf.readBitSet();
+
+        List<byte[]> skyUpdates = buf.readCollection(java.util.ArrayList::new, FriendlyByteBuf::readByteArray);
+        List<byte[]> blockUpdates = buf.readCollection(java.util.ArrayList::new, FriendlyByteBuf::readByteArray);
+
+        int skyIdx = 0;
+        int blockIdx = 0;
+
+        for (int i = 0; i < sectionCount && i < sections.size(); i++) {
+            Tag t = sections.get(i);
+            if (!(t instanceof CompoundTag sectionTag)) continue;
+
+            if (skyYMask.get(i) && skyIdx < skyUpdates.size()) {
+                sectionTag.putByteArray("sky_light", skyUpdates.get(skyIdx++));
+            } else if (emptySkyYMask.get(i)) {
+                sectionTag.putByteArray("sky_light", EMPTY_LIGHT);
+            }
+
+            if (blockYMask.get(i) && blockIdx < blockUpdates.size()) {
+                sectionTag.putByteArray("block_light", blockUpdates.get(blockIdx++));
+            } else if (emptyBlockYMask.get(i)) {
+                sectionTag.putByteArray("block_light", EMPTY_LIGHT);
+            }
+        }
+    }
+
+    private static final byte[] EMPTY_LIGHT = new byte[2048];
+
+    private static boolean isAllZero(byte[] data) {
+        for (byte b : data) {
+            if (b != 0) return false;
+        }
+        return true;
+    }
+
     private static CompoundTag toBlockEntityNbt(int packedXZ, int y, BlockEntityType<?> type,
                                                 CompoundTag tag, int chunkX, int chunkZ) {
         if (type == null) {

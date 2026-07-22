@@ -40,5 +40,7 @@ public class MixinClientCommonPacketListenerImpl {
             CallbackInfo ci) {
         ClientLifecycleHelper.cleanupOnDisconnect();
     }
+
+
 #endif
 }

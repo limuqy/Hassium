@@ -76,7 +76,7 @@ public class HassiumAggregationPacket {
             if (compress) {
                 // 使用 ZSTD 压缩（支持聚合包字典）
                 int level = config.getCompressionLevel();
-                boolean magicless = config.isMagiclessZstd();
+                boolean magicless = true; // 聚合包统一 ZSTD，硬编码
 
                 ZstdCompressCtx compressCtx = new ZstdCompressCtx();
                 compressCtx.setLevel(level);
@@ -134,8 +134,7 @@ public class HassiumAggregationPacket {
             byte[] compressed = new byte[compressedLength];
             buf.readBytes(compressed);
 
-            HassiumConfigService config = HassiumConfigService.getInstance();
-            boolean magicless = config.isMagiclessZstd();
+            boolean magicless = true; // 聚合包统一 ZSTD，硬编码
 
             ZstdDecompressCtx decompressCtx = new ZstdDecompressCtx();
             if (magicless) {

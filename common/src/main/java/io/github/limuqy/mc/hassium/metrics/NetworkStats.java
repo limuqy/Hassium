@@ -229,6 +229,40 @@ public class NetworkStats {
         metrics.recordSectionDeltaReceived(chunks, vanillaBytes, actualBytes);
     }
 
+    // ===== 光照缓存埋点 =====
+
+    /**
+     * 记录光照缓存命中（缓存含光照数据）
+     */
+    public static void recordLightCacheHit() {
+        if (!enabled) return;
+        metrics.recordLightCacheHit();
+    }
+
+    /**
+     * 记录光照缓存未命中（缓存不含光照数据，需重算）
+     */
+    public static void recordLightCacheMiss() {
+        if (!enabled) return;
+        metrics.recordLightCacheMiss();
+    }
+
+    /**
+     * 记录光照重算耗时
+     */
+    public static void recordLightRecomputeTime(long timeNs) {
+        if (!enabled) return;
+        metrics.recordLightRecomputeTime(timeNs);
+    }
+
+    /**
+     * 记录收到 LightDeltaS2CPacket 条目
+     */
+    public static void recordLightDeltaReceived(long count) {
+        if (!enabled) return;
+        metrics.recordLightDeltaReceived(count);
+    }
+
     // ===== 便捷查询 =====
 
     /**

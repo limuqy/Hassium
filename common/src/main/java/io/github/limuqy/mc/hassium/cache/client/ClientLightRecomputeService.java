@@ -1,6 +1,9 @@
 package io.github.limuqy.mc.hassium.cache.client;
 
 import io.github.limuqy.mc.hassium.Constants;
+import io.github.limuqy.mc.hassium.compat.CompoundTagCompat;
+import io.github.limuqy.mc.hassium.network.ClientChunkHandler;
+import io.github.limuqy.mc.hassium.metrics.NetworkStats;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.core.BlockPos;
@@ -37,6 +40,16 @@ public final class ClientLightRecomputeService {
      * @param chunkPos 区块坐标
      */
     public static void applyLightEngineNow(ChunkPos chunkPos) {
+        applyLightEngineNow(chunkPos, null);
+    }
+
+    /**
+     * 同步执行光照重算，使用内存中的 NBT（避免从磁盘读取）。
+     *
+     * @param chunkPos  区块坐标
+     * @param cachedNbt 内存中的缓存 NBT（可为 null，null 时回退磁盘读取）
+     */
+    public static void applyLightEngineNow(ChunkPos chunkPos, net.minecraft.nbt.CompoundTag cachedNbt) {
         ClientLevel level = Minecraft.getInstance().level;
         if (level == null) {
             return;
@@ -46,6 +59,93 @@ public final class ClientLightRecomputeService {
             return;
         }
         applyLightEngine(level, chunk, chunkPos);
+        updateCacheWithLightData(level, chunkPos, cachedNbt);
+    }
+
+    /**
+     * 从光照引擎提取光照数据，更新缓存（优先使用内存 NBT）。
+     */
+    private static void updateCacheWithLightData(ClientLevel level, ChunkPos chunkPos,
+                                                  net.minecraft.nbt.CompoundTag cachedNbt) {
+        try {
+            ClientHassiumStorage storage = ClientChunkHandler.getClientStorage();
+            if (storage == null) return;
+
+            net.minecraft.nbt.CompoundTag nbt = cachedNbt;
+            if (nbt == null) {
+                // fallback：从磁盘读取
+                byte[] cachedData = storage.loadAndDecompress(chunkPos);
+                if (cachedData == null) return;
+                nbt = ChunkDiskCodec.bytesToNbt(cachedData);
+                if (nbt == null) return;
+            }
+
+            // 检查是否已有光照数据
+            net.minecraft.nbt.Tag lightOnTag = nbt.get("is_light_on");
+            if (lightOnTag instanceof net.minecraft.nbt.ByteTag bt && bt.getAsByte() != 0) {
+                return;
+            }
+
+            // 从光照引擎提取光照数据
+            net.minecraft.world.level.lighting.LevelLightEngine lightEngine = level.getLightEngine();
+            net.minecraft.world.level.lighting.LayerLightEventListener skyListener =
+                    lightEngine.getLayerListener(net.minecraft.world.level.LightLayer.SKY);
+            net.minecraft.world.level.lighting.LayerLightEventListener blockListener =
+                    lightEngine.getLayerListener(net.minecraft.world.level.LightLayer.BLOCK);
+
+            int minSection = level.getMinSection();
+            int maxSection = level.getMaxSection();
+            net.minecraft.nbt.ListTag sectionsList = CompoundTagCompat.getList(nbt, "sections");
+
+            boolean hasAnyLight = false;
+            for (int sectionY = minSection; sectionY < maxSection; sectionY++) {
+                int idx = sectionY - minSection;
+                if (idx >= sectionsList.size()) break;
+
+                net.minecraft.nbt.Tag t = sectionsList.get(idx);
+                if (!(t instanceof net.minecraft.nbt.CompoundTag sectionTag)) continue;
+
+                net.minecraft.core.SectionPos sectionPos =
+                        net.minecraft.core.SectionPos.of(chunkPos.x, sectionY, chunkPos.z);
+
+                net.minecraft.world.level.chunk.DataLayer skyData = skyListener.getDataLayerData(sectionPos);
+                if (skyData != null && !skyData.isEmpty()) {
+                    sectionTag.putByteArray("sky_light", skyData.getData().clone());
+                    hasAnyLight = true;
+                }
+
+                net.minecraft.world.level.chunk.DataLayer blockData = blockListener.getDataLayerData(sectionPos);
+                if (blockData != null && !blockData.isEmpty()) {
+                    sectionTag.putByteArray("block_light", blockData.getData().clone());
+                    hasAnyLight = true;
+                }
+            }
+
+            if (hasAnyLight) {
+                nbt.putByte("is_light_on", (byte) 1);
+                byte[] updatedBytes = ChunkDiskCodec.nbtToBytes(nbt);
+                if (updatedBytes != null) {
+                    storage.persist(chunkPos, updatedBytes, 0L, null);
+                    Constants.LOG.debug("Hassium: Updated cache with light data for {}", chunkPos);
+                }
+            }
+        } catch (Exception e) {
+            Constants.LOG.debug("Hassium: Failed to update cache with light data for {}", chunkPos, e);
+        }
+    }
+
+    /**
+     * 公开入口：使用内存 NBT 更新光照缓存（供外部调用方使用）。
+     *
+     * @param chunkPos  区块坐标
+     * @param cachedNbt 内存中的缓存 NBT（可为 null）
+     */
+    public static void updateCacheWithLightNbt(ChunkPos chunkPos, net.minecraft.nbt.CompoundTag cachedNbt) {
+        ClientLevel level = Minecraft.getInstance().level;
+        if (level == null) {
+            return;
+        }
+        updateCacheWithLightData(level, chunkPos, cachedNbt);
     }
 
     /**
@@ -58,6 +158,7 @@ public final class ClientLightRecomputeService {
     }
 
     private static void applyLightEngine(ClientLevel level, LevelChunk chunk, ChunkPos chunkPos) {
+        long startNs = System.nanoTime();
         try {
 #if MC_VER < MC_1_21_2
             int bottomSection = level.getMinSection();
@@ -96,6 +197,9 @@ public final class ClientLightRecomputeService {
             Constants.LOG.debug("Hassium: Recomputed light for chunk {}", chunkPos);
         } catch (Exception e) {
             Constants.LOG.error("Hassium: Failed to apply light engine for chunk {}", chunkPos, e);
+        } finally {
+            long elapsedNs = System.nanoTime() - startNs;
+            NetworkStats.recordLightRecomputeTime(elapsedNs);
         }
     }
 

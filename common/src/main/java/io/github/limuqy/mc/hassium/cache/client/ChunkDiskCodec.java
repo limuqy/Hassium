@@ -15,6 +15,8 @@ import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.world.level.chunk.LevelChunk;
 import net.minecraft.world.level.chunk.LevelChunkSection;
 
+import io.github.limuqy.mc.hassium.metrics.NetworkStats;
+
 import java.util.BitSet;
 import java.util.Map;
 
@@ -95,7 +97,24 @@ public final class ChunkDiskCodec {
             ListTag beList = ChunkPacketDataCompat.readBlockEntitiesAsNbt(
                     buf, chunkX, chunkZ, registryAccess);
 
-            return buildChunkNbt(chunkX, chunkZ, sectionCount, sectionsList, heightmaps, beList);
+            // 尝试读取光照数据（如果 packet 包含非空光照）
+            boolean lightOn = false;
+            if (buf.readableBytes() > 0) {
+                try {
+                    // 读取光照数据到 sections
+                    ChunkPacketDataCompat.readLightDataFromPacket(buf, sectionCount, sectionsList);
+                    // 检查是否有任何 section 包含实际光照数据（非全空）
+                    lightOn = hasAnyLightData(sectionsList, sectionCount);
+                    if (lightOn) {
+                        Constants.LOG.debug("Hassium: Light data detected in packet for [{}, {}]", chunkX, chunkZ);
+                    }
+                } catch (Exception e) {
+                    // 光照读取失败不影响区块数据
+                    Constants.LOG.debug("Hassium: light data read skipped for [{}, {}]: {}", chunkX, chunkZ, e.getMessage());
+                }
+            }
+
+            return buildChunkNbt(chunkX, chunkZ, sectionCount, sectionsList, heightmaps, beList, lightOn);
         } catch (Exception e) {
             Constants.LOG.debug("Hassium: packetBytesToNbt failed", e);
             return null;
@@ -160,8 +179,16 @@ public final class ChunkDiskCodec {
             // 命中路径由专用 BE 通道补发，此处一律写空列表，避免 apply 时误解析。
             buf.writeVarInt(0);
 
-            // WithLight 包尾部：空光照（磁盘不存光，客户端重算）
-            ChunkPacketDataCompat.writeEmptyLightData(buf);
+            // WithLight 包尾部：根据 is_light_on 决定写真实光照或空光照
+            Tag lightOnTag = nbt.get("is_light_on");
+            boolean hasLight = lightOnTag instanceof net.minecraft.nbt.ByteTag bt && bt.getAsByte() != 0;
+            if (hasLight) {
+                ChunkPacketDataCompat.writeLightDataFromNbt(buf, sectionsList, sectionLimit);
+                NetworkStats.recordLightCacheHit();
+            } else {
+                ChunkPacketDataCompat.writeEmptyLightData(buf);
+                NetworkStats.recordLightCacheMiss();
+            }
 
             byte[] result = new byte[buf.readableBytes()];
             buf.getBytes(0, result);
@@ -188,11 +215,56 @@ public final class ChunkDiskCodec {
     public static CompoundTag levelChunkToNbt(LevelChunk chunk, ClientLevel level) {
         if (chunk == null || level == null) return null;
         try {
-            // 光照剥离与服务端配置一致（空光照，apply 时原版重算）
-            BitSet emptyMask = new BitSet();
+            // 从光照引擎提取光照数据，构建真实 bitmask
+            net.minecraft.world.level.lighting.LevelLightEngine lightEngine = level.getLightEngine();
+            net.minecraft.world.level.lighting.LayerLightEventListener skyListener =
+                    lightEngine.getLayerListener(net.minecraft.world.level.LightLayer.SKY);
+            net.minecraft.world.level.lighting.LayerLightEventListener blockListener =
+                    lightEngine.getLayerListener(net.minecraft.world.level.LightLayer.BLOCK);
+
+            int minSection = level.getMinSection();
+            int maxSection = level.getMaxSection();
+            BitSet skyMask = new BitSet();
+            BitSet blockMask = new BitSet();
+
+            int skyCount = 0;
+            int blockCount = 0;
+            int totalSections = maxSection - minSection;
+            for (int sectionY = minSection; sectionY < maxSection; sectionY++) {
+                net.minecraft.core.SectionPos sectionPos =
+                        net.minecraft.core.SectionPos.of(chunk.getPos().x, sectionY, chunk.getPos().z);
+                int idx = sectionY - minSection;
+
+                net.minecraft.world.level.chunk.DataLayer skyData = skyListener.getDataLayerData(sectionPos);
+                boolean skyOk = skyData != null && !skyData.isEmpty();
+                if (skyOk) {
+                    skyMask.set(idx);
+                    skyCount++;
+                }
+
+                net.minecraft.world.level.chunk.DataLayer blockData = blockListener.getDataLayerData(sectionPos);
+                boolean blockOk = blockData != null && !blockData.isEmpty();
+                if (blockOk) {
+                    blockMask.set(idx);
+                    blockCount++;
+                }
+
+                // 详细日志：每 8 个 section 输出一次
+                if (idx % 8 == 0) {
+                    Constants.LOG.debug("Hassium: Light data for {} sectionY={}: sky={} (null={}, empty={}), block={} (null={}, empty={})",
+                            chunk.getPos(), sectionY,
+                            skyOk, skyData == null, skyData != null && skyData.isEmpty(),
+                            blockOk, blockData == null, blockData != null && blockData.isEmpty());
+                }
+            }
+
+            Constants.LOG.debug("Hassium: levelChunkToNbt for {} - total sections: {}, sky: {}, block: {}",
+                    chunk.getPos(), totalSections, skyCount, blockCount);
+
+            // 传递真实 bitmask，packet 构造函数会序列化光照数据
             net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket packet =
                     new net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket(
-                            chunk, level.getLightEngine(), emptyMask, emptyMask);
+                            chunk, lightEngine, skyMask, blockMask);
 
             byte[] packetBytes;
 #if MC_VER < MC_1_20_5
@@ -329,6 +401,12 @@ public final class ChunkDiskCodec {
     private static CompoundTag buildChunkNbt(int chunkX, int chunkZ, int sectionCount,
                                              ListTag sections, CompoundTag heightmaps,
                                              ListTag blockEntities) {
+        return buildChunkNbt(chunkX, chunkZ, sectionCount, sections, heightmaps, blockEntities, false);
+    }
+
+    private static CompoundTag buildChunkNbt(int chunkX, int chunkZ, int sectionCount,
+                                             ListTag sections, CompoundTag heightmaps,
+                                             ListTag blockEntities, boolean lightOn) {
         CompoundTag nbt = new CompoundTag();
         nbt.putInt("x", chunkX);
         nbt.putInt("z", chunkZ);
@@ -336,7 +414,7 @@ public final class ChunkDiskCodec {
         nbt.put("sections", sections);
         nbt.put("heightmaps", heightmaps != null ? heightmaps : new CompoundTag());
         nbt.put("block_entities", blockEntities != null ? blockEntities : new ListTag());
-        nbt.putByte("is_light_on", (byte) 0);
+        nbt.putByte("is_light_on", (byte) (lightOn ? 1 : 0));
         return nbt;
     }
 
@@ -384,6 +462,40 @@ public final class ChunkDiskCodec {
             buf.release();
         }
         return list;
+    }
+
+    /**
+     * 检查 sections 列表中是否有任何 section 包含实际光照数据（非全空）。
+     */
+    private static boolean hasAnyLightData(ListTag sections, int sectionCount) {
+        for (int i = 0; i < sectionCount && i < sections.size(); i++) {
+            Tag t = sections.get(i);
+            if (!(t instanceof CompoundTag sectionTag)) continue;
+
+            Tag skyTag = sectionTag.get("sky_light");
+            if (skyTag instanceof net.minecraft.nbt.ByteArrayTag skyBat) {
+                byte[] skyBytes = skyBat.getAsByteArray();
+                if (skyBytes.length == 2048 && !isAllZero(skyBytes)) {
+                    return true;
+                }
+            }
+
+            Tag blockTag = sectionTag.get("block_light");
+            if (blockTag instanceof net.minecraft.nbt.ByteArrayTag blockBat) {
+                byte[] blockBytes = blockBat.getAsByteArray();
+                if (blockBytes.length == 2048 && !isAllZero(blockBytes)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private static boolean isAllZero(byte[] data) {
+        for (byte b : data) {
+            if (b != 0) return false;
+        }
+        return true;
     }
 
     /**

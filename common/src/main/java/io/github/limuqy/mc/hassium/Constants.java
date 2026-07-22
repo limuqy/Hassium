@@ -44,6 +44,5 @@ public class Constants {
 	 * ConfigSpec 文件名（相对 {@code config/}，写入 {@code config/hassium/}）
 	 */
 	public static final String CONFIG_CLIENT_FILE = "hassium/hassium-client.toml";
-	public static final String CONFIG_COMMON_FILE = "hassium/hassium-common.toml";
 	public static final String CONFIG_SERVER_FILE = "hassium/hassium-server.toml";
 }

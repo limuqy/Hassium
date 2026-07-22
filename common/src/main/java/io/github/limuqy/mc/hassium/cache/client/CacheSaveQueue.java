@@ -4,10 +4,13 @@ import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.cache.ChunkContentHashUtil;
 import io.github.limuqy.mc.hassium.concurrent.HassiumTaskExecutor;
 import io.github.limuqy.mc.hassium.concurrent.TaskCategory;
+import io.github.limuqy.mc.hassium.mixin.ClientLevelAccessor;
 import io.github.limuqy.mc.hassium.network.ClientChunkHandler;
+import net.minecraft.client.multiplayer.ClientChunkCache;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.world.level.ChunkPos;
+import net.minecraft.world.level.chunk.ChunkStatus;
 import net.minecraft.world.level.chunk.LevelChunk;
 
 import java.util.ArrayList;
@@ -49,6 +52,8 @@ public class CacheSaveQueue {
 
     /** 线程是否已启动 */
     private final AtomicBoolean initialized = new AtomicBoolean(false);
+    /** 最近有效的 ClientLevel（断连时 mc.level 可能已清空，用此引用批量 enqueue） */
+    private volatile ClientLevel trackedLevel;
 
     /**
      * 保存任务：只持有 NBT 字节快照、contentHash 和 sectionHashes。
@@ -94,6 +99,7 @@ public class CacheSaveQueue {
     public void enqueue(LevelChunk chunk) {
         if (chunk == null) return;
         ChunkPos pos = chunk.getPos();
+        Constants.LOG.info("Hassium: [CACHE SAVE] enqueue called for chunk {}", pos);
 
         // renderOnly 区块卸载不写回缓存（超视渲染历史快照保留）
         if (ViewDistanceExtensionService.getInstance().isRenderOnly(pos)) {
@@ -102,6 +108,9 @@ public class CacheSaveQueue {
         }
 
         ClientLevel level = (ClientLevel) chunk.getLevel();
+        if (level == null) {
+            level = trackedLevel;
+        }
         if (level == null) {
             Constants.LOG.debug("Hassium: [CACHE SAVE] Skip chunk {} (level null)", pos);
             return;
@@ -141,6 +150,45 @@ public class CacheSaveQueue {
         int sectionHashCount = sectionHashes != null ? sectionHashes.length : 0;
         Constants.LOG.debug("Hassium: [CACHE SAVE QUEUED] chunk {} ({} NBT bytes, hash={}, sections={}, queue: {})",
                 pos, nbtBytes.length, Long.toHexString(contentHash), sectionHashCount, taskQueue.size());
+    }
+
+    /**
+     * 批量保存 level 中所有已加载区块。
+     * <p>
+     * clearLevel() 不逐个调用 unload()，必须在 level 仍有效时批量 enqueue。
+     * 使用与 ViewDistanceExtensionService 相同的反射路径访问 Storage.chunks。
+     */
+    public void enqueueAllFromLevel(ClientLevel level) {
+        if (level == null) {
+            return;
+        }
+        int count = 0;
+        try {
+            ClientChunkCache cache = ((ClientLevelAccessor) level).hassium$getChunkSource();
+            // ClientChunkCache.Storage 内部 chunks[] 的字段名跨版本不稳定，
+            // 但 hasChunk/getChunk 始终可用。按视距范围扫描所有可能位置。
+            // ClientChunkCache.Storage 内部 chunks[] 字段名跨版本不稳定，
+            // 用 getChunk 逐块检查（null = 未加载）。
+            int radius = 33; // 最大视距 32 + 1
+            for (int cx = -radius; cx <= radius; cx++) {
+                for (int cz = -radius; cz <= radius; cz++) {
+                    try {
+                        LevelChunk chunk = (LevelChunk) cache.getChunk(cx, cz, ChunkStatus.FULL, false);
+                        if (chunk != null) {
+                            enqueue(chunk);
+                            count++;
+                        }
+                    } catch (Exception ignored) {}
+                }
+            }
+        } catch (Exception e) {
+            Constants.LOG.warn("Hassium: [CACHE SAVE] Failed to iterate loaded chunks", e);
+        }
+        if (count > 0) {
+            Constants.LOG.info("Hassium: [CACHE SAVE] Enqueued {} chunks from level before disconnect", count);
+        } else {
+            Constants.LOG.info("Hassium: [CACHE SAVE] No loaded chunks found to enqueue before disconnect");
+        }
     }
 
     /**
@@ -217,6 +265,7 @@ public class CacheSaveQueue {
     public void flushAsync(long timeoutMs) {
         // 停止后台线程接受新任务
         stopSaveThread();
+        initialized.set(false);
 
         // 收集队列中所有剩余任务
         List<Runnable> remainingTasks = new ArrayList<>();
@@ -274,6 +323,68 @@ public class CacheSaveQueue {
             }
         }
     }
+    /**
+     * 同步排空队列中所有待处理任务（断连 finalize 阶段调用）。
+     * <p>
+     * 与 {@link #flushAsync} 不同，此方法不停止 save 线程——
+     * 调用方负责后续调用 {@link #shutdown()}。
+     *
+     * @param timeoutMs 最大等待时间（毫秒）
+     */
+    public void drainRemaining(long timeoutMs) {
+        List<Runnable> tasks = new ArrayList<>();
+        SaveTask task;
+        while ((task = taskQueue.poll()) != null) {
+            final SaveTask t = task;
+            tasks.add(() -> processTask(t));
+        }
+        if (tasks.isEmpty()) {
+            return;
+        }
+
+        Constants.LOG.info("Hassium: [CACHE SAVE] Final drain - {} tasks (timeout={}ms)", tasks.size(), timeoutMs);
+
+        HassiumTaskExecutor executor = HassiumTaskExecutor.getClient();
+        if (executor != null && executor.isRunning()) {
+            List<Future<?>> futures = new ArrayList<>();
+            for (Runnable r : tasks) {
+                futures.add(executor.submit(() -> { r.run(); return null; }, TaskCategory.MISSION_CRITICAL));
+            }
+            long deadline = System.currentTimeMillis() + timeoutMs;
+            int completed = 0;
+            for (Future<?> future : futures) {
+                long remaining = deadline - System.currentTimeMillis();
+                if (remaining <= 0) {
+                    Constants.LOG.warn("Hassium: [CACHE SAVE] Final drain timed out, {} tasks lost",
+                            futures.size() - completed);
+                    break;
+                }
+                try {
+                    future.get(remaining, TimeUnit.MILLISECONDS);
+                    completed++;
+                } catch (TimeoutException e) {
+                    break;
+                } catch (Exception e) {
+                    Constants.LOG.error("Hassium: [CACHE SAVE] Final drain task failed", e);
+                    completed++;
+                }
+            }
+            Constants.LOG.info("Hassium: [CACHE SAVE] Final drain complete: {}/{}", completed, tasks.size());
+        } else {
+            // executor 不可用：同步执行
+            int completed = 0;
+            for (Runnable r : tasks) {
+                try {
+                    r.run();
+                    completed++;
+                } catch (Exception e) {
+                    Constants.LOG.error("Hassium: [CACHE SAVE] Final drain sync task failed", e);
+                }
+            }
+            Constants.LOG.info("Hassium: [CACHE SAVE] Final drain sync complete: {}/{}", completed, tasks.size());
+        }
+    }
+
 
     /**
      * 异步刷新（默认超时 3 秒）
@@ -325,5 +436,27 @@ public class CacheSaveQueue {
         stopSaveThread();
         taskQueue.clear();
         initialized.set(false);
+        trackedLevel = null;
+    }
+
+    /**
+     * 保存 level 引用供断连时 clearLevel() 使用。
+     * <p>
+     * setLevel(null) 替换 mc.level 后，clearLevel() 触发的 unload 中 chunk.getLevel() 返回 null，
+     * 此时用保存的引用完成序列化。
+     */
+    /** 跟踪当前 ClientLevel（进服 / tick 时更新） */
+    public void trackLevel(ClientLevel level) {
+        if (level != null) {
+            trackedLevel = level;
+        }
+    }
+
+    public ClientLevel getTrackedLevel() {
+        return trackedLevel;
+    }
+
+    public void clearTrackedLevel() {
+        trackedLevel = null;
     }
 }

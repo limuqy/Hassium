@@ -262,10 +262,20 @@ RD > 32（需手改 `options.txt`）时雾距会跟随 `getEffectiveRenderDistan
 | `x` | IntTag | chunkX |
 | `z` | IntTag | chunkZ |
 | `section_count` | IntTag | section 数量 |
-| `sections` | ListTag&lt;CompoundTag&gt; | 每个：`{"data": ByteArrayTag (LevelChunkSection 线格式), "has_only_air": ByteTag}` |
+| `sections` | ListTag&lt;CompoundTag&gt; | 每个：`{"data": ByteArrayTag (LevelChunkSection 线格式), "has_only_air": ByteTag, "sky_light": ByteArrayTag[2048]?, "block_light": ByteArrayTag[2048]?}` |
 | `heightmaps` | CompoundTag | 1.21.5-: 直接 NBT；1.21.5+: `Map<Types, long[]>` 序列化为 CompoundTag |
 | `block_entities` | ListTag&lt;CompoundTag&gt; | 每个 BE 的完整 NBT |
-| `is_light_on` | ByteTag | 固定 0（apply 时由客户端重算光照） |
+| `is_light_on` | ByteTag | 0 = 光照未存储（apply 时客户端重算）；1 = 光照已存储（直接应用） |
+
+**光照数据存储**：当 `is_light_on=1` 时，每个 section 的 NBT 可能包含 `sky_light` 和 `block_light`（各 2048 bytes）。
+
+**光照缓存流水线**：
+1. 首次加载（服务器 lightStrip=true）：区块到达 → `applyLightEngineNow()` 重算光照 → 立即回写缓存（`is_light_on=1`）
+2. 缓存命中：`nbtToPacketBytes()` 读取光照写入 packet → 客户端直接应用，无需重算
+3. 方块变更：拦截 `ClientboundLightUpdatePacket` → 发送 `LightDeltaS2CPacket` → 客户端重算 → 标记缓存 `is_light_on=0`
+4. 区块卸载：`levelChunkToNbt()` 从 `LevelLightEngine` 提取光照（兜底路径）
+
+**命中率**：冒烟测试 1.20.1 实测 78.3%（Round 2），剩余 21.7% 为 renderOnly 区块或光照回写前已卸载的区块。
 
 ### 11.3 Live-Unload Snapshot（主一致性方案）
 

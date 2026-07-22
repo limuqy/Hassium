@@ -1,5 +1,6 @@
 package io.github.limuqy.mc.hassium.mixin;
 
+import io.github.limuqy.mc.hassium.cache.client.CacheSaveQueue;
 import io.github.limuqy.mc.hassium.cache.client.ClientCacheLoadQueue;
 import io.github.limuqy.mc.hassium.cache.client.ClientMainThreadBudget;
 import io.github.limuqy.mc.hassium.cache.client.ViewDistanceExtensionService;
@@ -38,10 +39,14 @@ public class MixinClientTick {
         }
 
         // 更新玩家坐标，用于 MainThreadDispatcher 距离优先级计算
+        // 同时跟踪 ClientLevel，供断连时 bulk-enqueue（此时 mc.level 可能已 null）
         try {
             Minecraft mc = Minecraft.getInstance();
             if (mc.player != null) {
                 MainThreadDispatcher.updatePlayerPosition(mc.player.getX(), mc.player.getZ());
+            }
+            if (mc.level != null) {
+                CacheSaveQueue.getInstance().trackLevel(mc.level);
             }
         } catch (Exception e) {
             // 忽略

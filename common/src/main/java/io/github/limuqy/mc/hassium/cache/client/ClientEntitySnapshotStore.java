@@ -45,9 +45,11 @@ public final class ClientEntitySnapshotStore implements AutoCloseable {
 
     public static synchronized void initialize(Path gameDir, String serverId, String dimension) throws IOException {
         closeCurrent();
+        // 维度目录名：将冒号替换为下划线（与 ClientChunkHandler.initStorage 一致）
+        String dimDir = dimension.replaceAll("[^a-zA-Z0-9._-]", "_");
         Path dimensionRoot = gameDir.resolve(CACHE_DIR)
                 .resolve(serverId)
-                .resolve(dimension);
+                .resolve(dimDir);
         current = new ClientEntitySnapshotStore(dimensionRoot);
     }
 

@@ -524,6 +524,18 @@ public class ForgeNetworkManager implements NetworkManager {
 #endif
     }
 
+    @Override
+    public void sendLightDeltaPacket(ServerPlayer player, FriendlyByteBuf buf) {
+        byte[] data = new byte[buf.readableBytes()];
+        buf.readBytes(data);
+        buf.release();
+#if MC_VER < MC_1_20_2
+        CHANNEL.sendTo(new LightDeltaWrapper(data), player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
+#else
+        sendToPlayer(player, new LightDeltaWrapper(data));
+#endif
+    }
+
     /**
      * 发送压缩的区块数据到指定玩家
      */
@@ -707,6 +719,20 @@ public class ForgeNetworkManager implements NetworkManager {
             byte[] data = new byte[length];
             buf.readBytes(data);
             return new BlockEntityDataWrapper(data);
+        }
+    }
+
+    public record LightDeltaWrapper(byte[] data) {
+        public void encode(FriendlyByteBuf buf) {
+            buf.writeVarInt(data.length);
+            buf.writeBytes(data);
+        }
+
+        public static LightDeltaWrapper decode(FriendlyByteBuf buf) {
+            int length = buf.readVarInt();
+            byte[] data = new byte[length];
+            buf.readBytes(data);
+            return new LightDeltaWrapper(data);
         }
     }
 }

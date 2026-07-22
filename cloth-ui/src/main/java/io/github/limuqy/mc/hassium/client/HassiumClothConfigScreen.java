@@ -8,17 +8,14 @@ import me.shedaniel.clothconfig2.api.ConfigEntryBuilder;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
 import java.util.ArrayList;
-import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Set;
 import java.util.function.Consumer;
 
 /**
  * Cloth 配置屏：绑定 {@link HassiumConfig}。
  * Fabric 保存 toml；Forge/NeoForge 写回 ConfigSpec。
  * <p>
- * 6 个 category，每项不超过 12 项，避免 Cloth Config 滚动 bug。
- * 服务端配置（maxChunksPerTick 等）不显示在 GUI 中，但 Draft 保留字段以避免覆盖。
+ * 仅显示客户端字段；服务端字段不出现 GUI 中，toConfig() 用 DEFAULT 填充。
  */
 public final class HassiumClothConfigScreen {
 
@@ -40,153 +37,88 @@ public final class HassiumClothConfigScreen {
 
         ConfigEntryBuilder entries = builder.entryBuilder();
         var dCache = HassiumConfig.ClientCacheConfig.DEFAULT;
-        var dNet = HassiumConfig.NetworkConfig.DEFAULT;
-        var dStorage = HassiumConfig.StorageConfig.DEFAULT;
-        var dCompat = HassiumConfig.CompatConfig.DEFAULT;
+        var dClientNet = HassiumConfig.ClientNetworkConfig.DEFAULT;
         var dDebug = HassiumConfig.DebugConfig.DEFAULT;
 
-        // === Category 1: 客户端缓存（12 项）===
-        ConfigCategory clientCache = builder.getOrCreateCategory(
-                Component.translatable("hassium.configuration.category.clientCache"));
-        clientCache.addEntry(bool(entries, "hassium.configuration.clientCache.enabled",
+        // === Category 1: 缓存（11 项）===
+        ConfigCategory cache = builder.getOrCreateCategory(
+                Component.translatable("hassium.configuration.category.cache"));
+        cache.addEntry(bool(entries, "hassium.configuration.clientCache.enabled",
                 draft.cacheEnabled, dCache.enabled(), v -> draft.cacheEnabled = v));
-        clientCache.addEntry(intRange(entries, "hassium.configuration.clientCache.maxSizeMb",
+        cache.addEntry(intRange(entries, "hassium.configuration.clientCache.maxSizeMb",
                 draft.cacheMaxSizeMb, dCache.maxSizeMb(), 64, 1024 * 1024, v -> draft.cacheMaxSizeMb = v));
-        clientCache.addEntry(intRange(entries, "hassium.configuration.clientCache.maxAgeDays",
-                draft.cacheMaxAgeDays, dCache.maxAgeDays(), 1, 3650, v -> draft.cacheMaxAgeDays = v));
-        clientCache.addEntry(doubleRange(entries, "hassium.configuration.clientCache.hotScoreThreshold",
-                draft.cacheHotScoreThreshold, dCache.hotScoreThreshold(), 0.0, 1.0,
-                v -> draft.cacheHotScoreThreshold = v));
-        clientCache.addEntry(doubleRange(entries, "hassium.configuration.clientCache.recencyWeight",
-                draft.cacheRecencyWeight, dCache.recencyWeight(), 0.0, 1.0, v -> draft.cacheRecencyWeight = v));
-        clientCache.addEntry(doubleRange(entries, "hassium.configuration.clientCache.frequencyWeight",
-                draft.cacheFrequencyWeight, dCache.frequencyWeight(), 0.0, 1.0, v -> draft.cacheFrequencyWeight = v));
-        clientCache.addEntry(intRange(entries, "hassium.configuration.clientCache.cleanupIntervalTicks",
-                draft.cacheCleanupIntervalTicks, dCache.cleanupIntervalTicks(), 20, 72000,
-                v -> draft.cacheCleanupIntervalTicks = v));
-        clientCache.addEntry(intRange(entries, "hassium.configuration.clientCache.targetCacheSizeMb",
-                draft.cacheTargetCacheSizeMb, dCache.targetCacheSizeMb(), 0, 1024 * 1024,
-                v -> draft.cacheTargetCacheSizeMb = v));
-        clientCache.addEntry(intRange(entries, "hassium.configuration.clientCache.minCleanupBatchSize",
-                draft.cacheMinCleanupBatchSize, dCache.minCleanupBatchSize(), 1, 100000,
-                v -> draft.cacheMinCleanupBatchSize = v));
-        clientCache.addEntry(bool(entries, "hassium.configuration.clientCache.bloomFilterEnabled",
-                draft.cacheBloomFilterEnabled, dCache.bloomFilterEnabled(), v -> draft.cacheBloomFilterEnabled = v));
-        clientCache.addEntry(intRange(entries, "hassium.configuration.clientCache.bloomFilterExpectedInsertions",
-                draft.cacheBloomFilterExpectedInsertions, dCache.bloomFilterExpectedInsertions(),
-                1000, 50_000_000, v -> draft.cacheBloomFilterExpectedInsertions = v));
-        clientCache.addEntry(doubleRange(entries, "hassium.configuration.clientCache.bloomFilterFpp",
-                draft.cacheBloomFilterFpp, dCache.bloomFilterFpp(), 0.001, 0.1, v -> draft.cacheBloomFilterFpp = v));
-
-        // === Category 2: 超视渲染与分段增量（6 项）===
-        ConfigCategory ovdAndDelta = builder.getOrCreateCategory(
-                Component.translatable("hassium.configuration.category.ovdAndDelta"));
-        ovdAndDelta.addEntry(bool(entries, "hassium.configuration.clientCache.viewDistanceExtensionEnabled",
-                draft.cacheViewDistanceExtensionEnabled, dCache.viewDistanceExtensionEnabled(),
-                v -> draft.cacheViewDistanceExtensionEnabled = v));
-        ovdAndDelta.addEntry(intRange(entries, "hassium.configuration.clientCache.maxRenderDistance",
-                draft.cacheMaxRenderDistance, dCache.maxRenderDistance(), 2, 64,
-                v -> draft.cacheMaxRenderDistance = v));
-        ovdAndDelta.addEntry(intRange(entries, "hassium.configuration.clientCache.ovdUnloadDelaySecs",
-                draft.cacheOvdUnloadDelaySecs, dCache.ovdUnloadDelaySecs(), 0, 60,
-                v -> draft.cacheOvdUnloadDelaySecs = v));
-        ovdAndDelta.addEntry(bool(entries, "hassium.configuration.clientCache.sectionDeltaEnabled",
+        cache.addEntry(intRange(entries, "hassium.configuration.clientCache.cacheCompressionLevel",
+                draft.cacheCompressionLevel, dCache.cacheCompressionLevel(), 1, 22,
+                v -> draft.cacheCompressionLevel = v));
+        cache.addEntry(bool(entries, "hassium.configuration.clientCache.sectionDeltaEnabled",
                 draft.cacheSectionDeltaEnabled, dCache.sectionDeltaEnabled(),
                 v -> draft.cacheSectionDeltaEnabled = v));
-        ovdAndDelta.addEntry(bool(entries, "hassium.configuration.clientCache.joinBoostEnabled",
-                draft.cacheJoinBoostEnabled, dCache.joinBoostEnabled(),
-                v -> draft.cacheJoinBoostEnabled = v));
-        ovdAndDelta.addEntry(bool(entries, "hassium.configuration.clientCache.entitySnapshotsEnabled",
+        cache.addEntry(bool(entries, "hassium.configuration.network.enabled",
+                draft.networkEnabled, dClientNet.enabled(), v -> draft.networkEnabled = v));
+        cache.addEntry(doubleRange(entries, "hassium.configuration.clientCache.hotScoreThreshold",
+                draft.cacheHotScoreThreshold, dCache.hotScoreThreshold(), 0.0, 1.0,
+                v -> draft.cacheHotScoreThreshold = v));
+        cache.addEntry(doubleRange(entries, "hassium.configuration.clientCache.recencyWeight",
+                draft.cacheRecencyWeight, dCache.recencyWeight(), 0.0, 1.0, v -> draft.cacheRecencyWeight = v));
+        cache.addEntry(doubleRange(entries, "hassium.configuration.clientCache.frequencyWeight",
+                draft.cacheFrequencyWeight, dCache.frequencyWeight(), 0.0, 1.0, v -> draft.cacheFrequencyWeight = v));
+        cache.addEntry(intRange(entries, "hassium.configuration.clientCache.cleanupIntervalTicks",
+                draft.cacheCleanupIntervalTicks, dCache.cleanupIntervalTicks(), 20, 72000,
+                v -> draft.cacheCleanupIntervalTicks = v));
+        cache.addEntry(intRange(entries, "hassium.configuration.clientCache.targetCacheSizeMb",
+                draft.cacheTargetCacheSizeMb, dCache.targetCacheSizeMb(), 0, 1024 * 1024,
+                v -> draft.cacheTargetCacheSizeMb = v));
+        cache.addEntry(intRange(entries, "hassium.configuration.clientCache.minCleanupBatchSize",
+                draft.cacheMinCleanupBatchSize, dCache.minCleanupBatchSize(), 1, 100000,
+                v -> draft.cacheMinCleanupBatchSize = v));
+        cache.addEntry(bool(entries, "hassium.configuration.clientCache.entitySnapshotsEnabled",
                 draft.cacheEntitySnapshotsEnabled, dCache.entitySnapshotsEnabled(),
                 v -> draft.cacheEntitySnapshotsEnabled = v));
 
-        // === Category 3: 客户端网络（6 项）===
-        ConfigCategory clientNetwork = builder.getOrCreateCategory(
-                Component.translatable("hassium.configuration.category.clientNetwork"));
-        clientNetwork.addEntry(intRange(entries, "hassium.configuration.clientNetwork.clientChunkLoadThreads",
-                draft.clientChunkLoadThreads, dNet.clientChunkLoadThreads(), 1, 64,
-                v -> draft.clientChunkLoadThreads = v));
-        clientNetwork.addEntry(bool(entries, "hassium.configuration.clientNetwork.lightStripEnabled",
-                draft.lightStripEnabled, dNet.lightStripEnabled(), v -> draft.lightStripEnabled = v));
-        clientNetwork.addEntry(intRange(entries, "hassium.configuration.clientNetwork.backgroundThreads",
-                draft.backgroundThreads, dNet.backgroundThreads(), 1, 64, v -> draft.backgroundThreads = v));
-        clientNetwork.addEntry(intRange(entries, "hassium.configuration.clientNetwork.maxChunksPerFrame",
-                draft.maxChunksPerFrame, dNet.maxChunksPerFrame(), 1, 512, v -> draft.maxChunksPerFrame = v));
-        clientNetwork.addEntry(intRange(entries, "hassium.configuration.clientNetwork.maxCallbacksPerFrame",
-                draft.maxCallbacksPerFrame, dNet.maxCallbacksPerFrame(), 1, 512, v -> draft.maxCallbacksPerFrame = v));
-        clientNetwork.addEntry(intRange(entries, "hassium.configuration.clientNetwork.mainThreadChunkBudgetMs",
-                draft.mainThreadChunkBudgetMs, dNet.mainThreadChunkBudgetMs(), 1, 50,
+        // === Category 2: 渲染（9 项）===
+        ConfigCategory render = builder.getOrCreateCategory(
+                Component.translatable("hassium.configuration.category.render"));
+        render.addEntry(bool(entries, "hassium.configuration.clientCache.viewDistanceExtensionEnabled",
+                draft.cacheViewDistanceExtensionEnabled, dCache.viewDistanceExtensionEnabled(),
+                v -> draft.cacheViewDistanceExtensionEnabled = v));
+        render.addEntry(intRange(entries, "hassium.configuration.clientCache.maxRenderDistance",
+                draft.cacheMaxRenderDistance, dCache.maxRenderDistance(), 2, 64,
+                v -> draft.cacheMaxRenderDistance = v));
+        render.addEntry(intRange(entries, "hassium.configuration.clientCache.ovdUnloadDelaySecs",
+                draft.cacheOvdUnloadDelaySecs, dCache.ovdUnloadDelaySecs(), 0, 60,
+                v -> draft.cacheOvdUnloadDelaySecs = v));
+        render.addEntry(bool(entries, "hassium.configuration.clientCache.joinBoostEnabled",
+                draft.cacheJoinBoostEnabled, dCache.joinBoostEnabled(),
+                v -> draft.cacheJoinBoostEnabled = v));
+        render.addEntry(intRange(entries, "hassium.configuration.clientCache.loadThreads",
+                draft.loadThreads, dCache.loadThreads(), 1, 64,
+                v -> draft.loadThreads = v));
+        render.addEntry(bool(entries, "hassium.configuration.clientCache.lightStrip",
+                draft.lightStrip, dCache.lightStrip(), v -> draft.lightStrip = v));
+        render.addEntry(intRange(entries, "hassium.configuration.clientCache.maxChunksPerFrame",
+                draft.maxChunksPerFrame, dCache.maxChunksPerFrame(), 1, 512, v -> draft.maxChunksPerFrame = v));
+        render.addEntry(intRange(entries, "hassium.configuration.clientCache.mainThreadChunkBudgetMs",
+                draft.mainThreadChunkBudgetMs, dCache.mainThreadChunkBudgetMs(), 1, 50,
                 v -> draft.mainThreadChunkBudgetMs = v));
+        render.addEntry(bool(entries, "hassium.configuration.network.metricsEnabled",
+                draft.metricsEnabled, dClientNet.metricsEnabled(), v -> draft.metricsEnabled = v));
 
-        // === Category 4: 存储与通用（5 项）===
-        ConfigCategory storageAndGeneral = builder.getOrCreateCategory(
-                Component.translatable("hassium.configuration.category.storageAndGeneral"));
-        storageAndGeneral.addEntry(bool(entries, "hassium.configuration.storage.enabled",
-                draft.storageEnabled, dStorage.enabled(), v -> draft.storageEnabled = v));
-        storageAndGeneral.addEntry(str(entries, "hassium.configuration.storage.mode",
-                draft.storageMode, dStorage.mode(), v -> draft.storageMode = v));
-        storageAndGeneral.addEntry(intRange(entries, "hassium.configuration.storage.zstdLevel",
-                draft.storageZstdLevel, dStorage.zstdLevel(), 1, 22, v -> draft.storageZstdLevel = v));
-        storageAndGeneral.addEntry(bool(entries, "hassium.configuration.network.enabled",
-                draft.networkEnabled, dNet.enabled(), v -> draft.networkEnabled = v));
-        storageAndGeneral.addEntry(bool(entries, "hassium.configuration.network.metricsEnabled",
-                draft.metricsEnabled, dNet.metricsEnabled(), v -> draft.metricsEnabled = v));
-
-        // === Category 5: 压缩与聚合（12 项）===
-        ConfigCategory compression = builder.getOrCreateCategory(
-                Component.translatable("hassium.configuration.category.compression"));
-        compression.addEntry(intRange(entries, "hassium.configuration.network.compressionLevel",
-                draft.compressionLevel, dNet.compressionLevel(), 1, 22, v -> draft.compressionLevel = v));
-        compression.addEntry(bool(entries, "hassium.configuration.network.globalPacketCompression",
-                draft.globalPacketCompression, dNet.globalPacketCompression(),
-                v -> draft.globalPacketCompression = v));
-        compression.addEntry(intRange(entries, "hassium.configuration.network.globalCompressionLevel",
-                draft.globalCompressionLevel, dNet.globalCompressionLevel(), 1, 22,
-                v -> draft.globalCompressionLevel = v));
-        compression.addEntry(intRange(entries, "hassium.configuration.network.globalCompressionThreshold",
-                draft.globalCompressionThreshold, dNet.globalCompressionThreshold(), 0, 65536,
-                v -> draft.globalCompressionThreshold = v));
-        compression.addEntry(strList(entries, "hassium.configuration.network.compressionBlacklist",
-                draft.compressionBlacklist,
-                new ArrayList<>(HassiumConfig.NetworkConfig.DEFAULT_COMPRESSION_BLACKLIST),
-                v -> draft.compressionBlacklist = v));
-        compression.addEntry(bool(entries, "hassium.configuration.network.useContextCompression",
-                draft.useContextCompression, dNet.useContextCompression(), v -> draft.useContextCompression = v));
-        compression.addEntry(bool(entries, "hassium.configuration.network.magiclessZstd",
-                draft.magiclessZstd, dNet.magiclessZstd(), v -> draft.magiclessZstd = v));
-        compression.addEntry(bool(entries, "hassium.configuration.network.enablePacketAggregation",
-                draft.enablePacketAggregation, dNet.enablePacketAggregation(),
-                v -> draft.enablePacketAggregation = v));
-        compression.addEntry(intRange(entries, "hassium.configuration.network.aggregationMinBatchSize",
-                draft.aggregationMinBatchSize, dNet.aggregationMinBatchSize(), 1, 256,
-                v -> draft.aggregationMinBatchSize = v));
-        compression.addEntry(intRange(entries, "hassium.configuration.network.aggregationMaxWaitTimeMs",
-                (int) draft.aggregationMaxWaitTimeMs, (int) dNet.aggregationMaxWaitTimeMs(), 1, 5000,
-                v -> draft.aggregationMaxWaitTimeMs = v));
-        compression.addEntry(intRange(entries, "hassium.configuration.network.aggregationMaxSize",
-                draft.aggregationMaxSize, dNet.aggregationMaxSize(), 1024, 8 * 1024 * 1024,
-                v -> draft.aggregationMaxSize = v));
-        compression.addEntry(bool(entries, "hassium.configuration.network.enableCompactHeader",
-                draft.enableCompactHeader, dNet.enableCompactHeader(), v -> draft.enableCompactHeader = v));
-
-        // === Category 6: 兼容与调试（8 项）===
-        ConfigCategory compatAndDebug = builder.getOrCreateCategory(
-                Component.translatable("hassium.configuration.category.compatAndDebug"));
-        compatAndDebug.addEntry(bool(entries, "hassium.configuration.compat.autoDowngradeOnError",
-                draft.autoDowngradeOnError, dCompat.autoDowngradeOnError(), v -> draft.autoDowngradeOnError = v));
-        compatAndDebug.addEntry(bool(entries, "hassium.configuration.debug.metadataLogging",
+        // === Category 3: 调试（7 项）===
+        ConfigCategory debugCat = builder.getOrCreateCategory(
+                Component.translatable("hassium.configuration.category.debug"));
+        debugCat.addEntry(bool(entries, "hassium.configuration.debug.metadataLogging",
                 draft.metadataLogging, dDebug.metadataLogging(), v -> draft.metadataLogging = v));
-        compatAndDebug.addEntry(bool(entries, "hassium.configuration.debug.dispatcherLogging",
+        debugCat.addEntry(bool(entries, "hassium.configuration.debug.dispatcherLogging",
                 draft.dispatcherLogging, dDebug.dispatcherLogging(), v -> draft.dispatcherLogging = v));
-        compatAndDebug.addEntry(bool(entries, "hassium.configuration.debug.asyncLogging",
+        debugCat.addEntry(bool(entries, "hassium.configuration.debug.asyncLogging",
                 draft.asyncLogging, dDebug.asyncLogging(), v -> draft.asyncLogging = v));
-        compatAndDebug.addEntry(bool(entries, "hassium.configuration.debug.compressionLogging",
+        debugCat.addEntry(bool(entries, "hassium.configuration.debug.compressionLogging",
                 draft.compressionLogging, dDebug.compressionLogging(), v -> draft.compressionLogging = v));
-        compatAndDebug.addEntry(bool(entries, "hassium.configuration.debug.chunkApplyLogging",
+        debugCat.addEntry(bool(entries, "hassium.configuration.debug.chunkApplyLogging",
                 draft.chunkApplyLogging, dDebug.chunkApplyLogging(), v -> draft.chunkApplyLogging = v));
-        compatAndDebug.addEntry(bool(entries, "hassium.configuration.debug.networkLogging",
+        debugCat.addEntry(bool(entries, "hassium.configuration.debug.networkLogging",
                 draft.networkLogging, dDebug.networkLogging(), v -> draft.networkLogging = v));
-        compatAndDebug.addEntry(bool(entries, "hassium.configuration.debug.cacheLogging",
+        debugCat.addEntry(bool(entries, "hassium.configuration.debug.cacheLogging",
                 draft.cacheLogging, dDebug.cacheLogging(), v -> draft.cacheLogging = v));
 
         return builder.build();
@@ -241,20 +173,18 @@ public final class HassiumClothConfigScreen {
                 .build();
     }
 
-    /** Cloth 编辑用可变草稿。 */
+    /** Cloth 编辑用可变草稿（仅客户端字段）。 */
     private static final class Draft {
+        // 客户端缓存基础
         boolean cacheEnabled;
         int cacheMaxSizeMb;
-        int cacheMaxAgeDays;
+        int cacheCompressionLevel;
         double cacheHotScoreThreshold;
         double cacheRecencyWeight;
         double cacheFrequencyWeight;
         int cacheCleanupIntervalTicks;
         int cacheTargetCacheSizeMb;
         int cacheMinCleanupBatchSize;
-        boolean cacheBloomFilterEnabled;
-        int cacheBloomFilterExpectedInsertions;
-        double cacheBloomFilterFpp;
         // 超视渲染与分段增量
         boolean cacheViewDistanceExtensionEnabled;
         int cacheMaxRenderDistance;
@@ -262,45 +192,15 @@ public final class HassiumClothConfigScreen {
         boolean cacheSectionDeltaEnabled;
         boolean cacheJoinBoostEnabled;
         boolean cacheEntitySnapshotsEnabled;
-
-        int clientChunkLoadThreads;
-        boolean lightStripEnabled;
-        int backgroundThreads;
+        // 线程与应用
+        int loadThreads;
+        boolean lightStrip;
         int maxChunksPerFrame;
-        int maxCallbacksPerFrame;
         int mainThreadChunkBudgetMs;
-
-        boolean storageEnabled;
-        String storageMode;
-        int storageZstdLevel;
-
+        // 网络开关
         boolean networkEnabled;
-        int compressionLevel;
-        // 服务端配置（GUI 不显示，但 toConfig() 时回写原值）
-        int maxChunksPerTick;
-        boolean globalPacketCompression;
-        int globalCompressionLevel;
-        int globalCompressionThreshold;
-        List<String> compressionBlacklist;
-        boolean useContextCompression;
-        boolean magiclessZstd;
-        boolean enablePacketAggregation;
-        int aggregationMinBatchSize;
-        long aggregationMaxWaitTimeMs;
-        int aggregationMaxSize;
-        boolean enableCompactHeader;
-        // 服务端配置（GUI 不显示，但 toConfig() 时回写原值）
-        int serverChunkPushThreads;
         boolean metricsEnabled;
-        // 服务端配置（GUI 不显示，但 toConfig() 时回写原值）
-        boolean dynamicThreadPoolEnabled;
-        int minPushThreads;
-        int maxPushThreads;
-
-        // 服务端配置（GUI 不显示，但 toConfig() 时回写原值）
-        boolean requireClientMod;
-        boolean autoDowngradeOnError;
-
+        // 调试
         boolean metadataLogging;
         boolean dispatcherLogging;
         boolean asyncLogging;
@@ -312,63 +212,31 @@ public final class HassiumClothConfigScreen {
         static Draft from(HassiumConfig c) {
             Draft d = new Draft();
             var cache = c.clientCache();
-            var net = c.network();
-            var storage = c.storage();
-            var compat = c.compat();
+            var clientNet = c.clientNetwork();
             var debug = c.debug();
 
             d.cacheEnabled = cache.enabled();
             d.cacheMaxSizeMb = cache.maxSizeMb();
-            d.cacheMaxAgeDays = cache.maxAgeDays();
+            d.cacheCompressionLevel = cache.cacheCompressionLevel();
             d.cacheHotScoreThreshold = cache.hotScoreThreshold();
             d.cacheRecencyWeight = cache.recencyWeight();
             d.cacheFrequencyWeight = cache.frequencyWeight();
             d.cacheCleanupIntervalTicks = cache.cleanupIntervalTicks();
             d.cacheTargetCacheSizeMb = cache.targetCacheSizeMb();
             d.cacheMinCleanupBatchSize = cache.minCleanupBatchSize();
-            d.cacheBloomFilterEnabled = cache.bloomFilterEnabled();
-            d.cacheBloomFilterExpectedInsertions = cache.bloomFilterExpectedInsertions();
-            d.cacheBloomFilterFpp = cache.bloomFilterFpp();
             d.cacheViewDistanceExtensionEnabled = cache.viewDistanceExtensionEnabled();
             d.cacheMaxRenderDistance = cache.maxRenderDistance();
             d.cacheOvdUnloadDelaySecs = cache.ovdUnloadDelaySecs();
             d.cacheSectionDeltaEnabled = cache.sectionDeltaEnabled();
             d.cacheJoinBoostEnabled = cache.joinBoostEnabled();
             d.cacheEntitySnapshotsEnabled = cache.entitySnapshotsEnabled();
+            d.loadThreads = cache.loadThreads();
+            d.lightStrip = cache.lightStrip();
+            d.maxChunksPerFrame = cache.maxChunksPerFrame();
+            d.mainThreadChunkBudgetMs = cache.mainThreadChunkBudgetMs();
 
-            d.clientChunkLoadThreads = net.clientChunkLoadThreads();
-            d.lightStripEnabled = net.lightStripEnabled();
-            d.backgroundThreads = net.backgroundThreads();
-            d.maxChunksPerFrame = net.maxChunksPerFrame();
-            d.maxCallbacksPerFrame = net.maxCallbacksPerFrame();
-            d.mainThreadChunkBudgetMs = net.mainThreadChunkBudgetMs();
-
-            d.storageEnabled = storage.enabled();
-            d.storageMode = storage.mode();
-            d.storageZstdLevel = storage.zstdLevel();
-
-            d.networkEnabled = net.enabled();
-            d.compressionLevel = net.compressionLevel();
-            d.maxChunksPerTick = net.maxChunksPerTick();
-            d.globalPacketCompression = net.globalPacketCompression();
-            d.globalCompressionLevel = net.globalCompressionLevel();
-            d.globalCompressionThreshold = net.globalCompressionThreshold();
-            d.compressionBlacklist = new ArrayList<>(net.compressionBlacklist());
-            d.useContextCompression = net.useContextCompression();
-            d.magiclessZstd = net.magiclessZstd();
-            d.enablePacketAggregation = net.enablePacketAggregation();
-            d.aggregationMinBatchSize = net.aggregationMinBatchSize();
-            d.aggregationMaxWaitTimeMs = net.aggregationMaxWaitTimeMs();
-            d.aggregationMaxSize = net.aggregationMaxSize();
-            d.enableCompactHeader = net.enableCompactHeader();
-            d.serverChunkPushThreads = net.serverChunkPushThreads();
-            d.metricsEnabled = net.metricsEnabled();
-            d.dynamicThreadPoolEnabled = net.dynamicThreadPoolEnabled();
-            d.minPushThreads = net.minPushThreads();
-            d.maxPushThreads = net.maxPushThreads();
-
-            d.requireClientMod = compat.requireClientMod();
-            d.autoDowngradeOnError = compat.autoDowngradeOnError();
+            d.networkEnabled = clientNet.enabled();
+            d.metricsEnabled = clientNet.metricsEnabled();
 
             d.metadataLogging = debug.metadataLogging();
             d.dispatcherLogging = debug.dispatcherLogging();
@@ -381,28 +249,19 @@ public final class HassiumClothConfigScreen {
         }
 
         HassiumConfig toConfig() {
-            Set<String> blacklist = Set.copyOf(new LinkedHashSet<>(compressionBlacklist));
             return new HassiumConfig(
-                    new HassiumConfig.StorageConfig(storageEnabled, storageMode, storageZstdLevel),
+                    HassiumConfig.StorageConfig.DEFAULT,
                     new HassiumConfig.ClientCacheConfig(
-                            cacheEnabled, cacheMaxSizeMb, cacheMaxAgeDays,
+                            cacheEnabled, cacheMaxSizeMb, cacheCompressionLevel,
                             cacheHotScoreThreshold, cacheRecencyWeight, cacheFrequencyWeight,
                             cacheCleanupIntervalTicks, cacheTargetCacheSizeMb, cacheMinCleanupBatchSize,
-                            cacheBloomFilterEnabled, cacheBloomFilterExpectedInsertions, cacheBloomFilterFpp,
                             cacheViewDistanceExtensionEnabled, cacheMaxRenderDistance, cacheOvdUnloadDelaySecs,
-                            cacheSectionDeltaEnabled, cacheJoinBoostEnabled, cacheEntitySnapshotsEnabled
+                            cacheSectionDeltaEnabled, cacheJoinBoostEnabled, cacheEntitySnapshotsEnabled,
+                            loadThreads, lightStrip, maxChunksPerFrame, mainThreadChunkBudgetMs
                     ),
-                    new HassiumConfig.NetworkConfig(
-                            networkEnabled, compressionLevel, maxChunksPerTick,
-                            globalPacketCompression, globalCompressionLevel, globalCompressionThreshold,
-                            blacklist, useContextCompression, magiclessZstd, enablePacketAggregation,
-                            aggregationMinBatchSize, aggregationMaxWaitTimeMs, aggregationMaxSize,
-                            enableCompactHeader, serverChunkPushThreads, clientChunkLoadThreads,
-                            lightStripEnabled, backgroundThreads, maxChunksPerFrame, maxCallbacksPerFrame,
-                            metricsEnabled, mainThreadChunkBudgetMs,
-                            dynamicThreadPoolEnabled, minPushThreads, maxPushThreads
-                    ),
-                    new HassiumConfig.CompatConfig(requireClientMod, autoDowngradeOnError),
+                    new HassiumConfig.ClientNetworkConfig(networkEnabled, metricsEnabled),
+                    HassiumConfig.ServerNetworkConfig.DEFAULT,
+                    HassiumConfig.CompatConfig.DEFAULT,
                     new HassiumConfig.DebugConfig(
                             metadataLogging, dispatcherLogging, asyncLogging, compressionLogging,
                             chunkApplyLogging, networkLogging, cacheLogging

@@ -391,7 +391,7 @@ public final class ClientSmokeTest {
         return plain.contains("Hassium")
                 && plain.contains("客户端统计")
                 && plain.contains("带宽压缩")
-                && plain.contains("缓存命中")
+                && plain.contains("区块缓存")
                 && plain.contains("区块加载")
                 && plain.contains("超视渲染");
     }

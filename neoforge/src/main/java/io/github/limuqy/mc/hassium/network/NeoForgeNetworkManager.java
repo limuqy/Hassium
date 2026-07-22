@@ -141,6 +141,19 @@ public class NeoForgeNetworkManager implements NetworkManager {
         }
     }
 
+    public record LightDeltaWrapper(byte[] data) {
+        public void encode(FriendlyByteBuf buf) {
+            buf.writeVarInt(data.length);
+            buf.writeBytes(data);
+        }
+        public static LightDeltaWrapper decode(FriendlyByteBuf buf) {
+            int length = buf.readVarInt();
+            byte[] data = new byte[length];
+            buf.readBytes(data);
+            return new LightDeltaWrapper(data);
+        }
+    }
+
     public record CompressedChunkWrapper(byte[] data) {
         public void encode(FriendlyByteBuf buf) {
             buf.writeVarInt(data.length);
@@ -490,6 +503,26 @@ public class NeoForgeNetworkManager implements NetworkManager {
         }
     }
 
+    /**
+     * 光照增量通知 Payload (S2C)
+     */
+    public record LightDeltaPayload(byte[] data) implements CustomPacketPayload {
+        public static final ResourceLocation ID = ResourceLocationCompat.create(Constants.MOD_ID, "light_delta_s2c");
+        @Override
+        public void write(FriendlyByteBuf buf) {
+            buf.writeVarInt(data.length);
+            buf.writeBytes(data);
+        }
+        @Override
+        public ResourceLocation id() { return ID; }
+        public static LightDeltaPayload decode(FriendlyByteBuf buf) {
+            int length = buf.readVarInt();
+            byte[] data = new byte[length];
+            buf.readBytes(data);
+            return new LightDeltaPayload(data);
+        }
+    }
+
 #else
     // 1.20.5+: 使用 Payload + StreamCodec
     public static final Object CHANNEL = null;
@@ -718,6 +751,26 @@ public class NeoForgeNetworkManager implements NetworkManager {
 
         @Override
         public Type<BlockEntityDataPayload> type() {
+            return TYPE;
+        }
+    }
+
+    /**
+     * 光照增量通知 Payload (S2C)
+     */
+    public record LightDeltaPayload(byte[] data) implements CustomPacketPayload {
+
+        public static final Type<LightDeltaPayload> TYPE = new Type<>(
+                ResourceLocationCompat.create(Constants.MOD_ID, "light_delta_s2c")
+        );
+
+        public static final StreamCodec<FriendlyByteBuf, LightDeltaPayload> STREAM_CODEC = StreamCodec.composite(
+                ByteBufCodecs.BYTE_ARRAY, LightDeltaPayload::data,
+                LightDeltaPayload::new
+        );
+
+        @Override
+        public Type<LightDeltaPayload> type() {
             return TYPE;
         }
     }
@@ -1670,6 +1723,27 @@ public class NeoForgeNetworkManager implements NetworkManager {
         BlockEntityDataPayload payload = new BlockEntityDataPayload(data);
         player.connection.send(payload);
         LOGGER.debug("Hassium: Sent block entity data packet to {}", player.getName().getString());
+#endif
+    }
+
+    @Override
+    public void sendLightDeltaPacket(ServerPlayer player, FriendlyByteBuf buf) {
+        byte[] data = new byte[buf.readableBytes()];
+        buf.readBytes(data);
+        buf.release();
+#if MC_VER < MC_1_20_4
+#if MC_VER < MC_1_20_2
+        CHANNEL.sendTo(new LightDeltaWrapper(data), player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
+#else
+        CHANNEL.sendTo(new LightDeltaWrapper(data), player.connection.connection, PlayNetworkDirection.PLAY_TO_CLIENT);
+#endif
+#elif MC_VER < MC_1_20_5
+        player.connection.send(new ClientboundCustomPayloadPacket(new LightDeltaPayload(data)));
+        LOGGER.debug("Hassium: Sent light delta packet to {} (1.20.4)", player.getName().getString());
+#else
+        LightDeltaPayload payload = new LightDeltaPayload(data);
+        player.connection.send(payload);
+        LOGGER.debug("Hassium: Sent light delta packet to {}", player.getName().getString());
 #endif
     }
 

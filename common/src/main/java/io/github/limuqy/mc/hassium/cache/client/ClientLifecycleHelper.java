@@ -8,8 +8,10 @@ import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.network.ClientChunkHandler;
 import io.github.limuqy.mc.hassium.network.ClientMetadataHandler;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.multiplayer.ClientLevel;
 
 import java.nio.file.Path;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * 客户端生命周期辅助类（非 Mixin）。
@@ -23,6 +25,7 @@ import java.nio.file.Path;
 public final class ClientLifecycleHelper {
 
     private static volatile boolean initialized = false;
+    private static final AtomicBoolean finalized = new AtomicBoolean(false);
 
     private ClientLifecycleHelper() {
     }
@@ -38,7 +41,7 @@ public final class ClientLifecycleHelper {
             return;
         }
         // 初始化统一后台执行器（平台线程数由配置文件控制，虚拟线程模式下忽略）
-        int threads = HassiumConfigService.getInstance().getClientChunkLoadThreads();
+        int threads = HassiumConfigService.getInstance().getLoadThreads();
         HassiumTaskExecutor.initClient(threads);
 
         // 进服吞吐加速：临时提高主线程时间预算
@@ -50,45 +53,75 @@ public final class ClientLifecycleHelper {
     }
 
     /**
-     * 断开连接时清理客户端缓存状态。
+     * 断开连接时清理（HEAD 注入，vanilla clearLevel 之前）。
      * <p>
-     * 必须在 clearLevel() 之前刷新缓存保存队列，否则 level 被置空后保存会失败。
+     * 轻量清理：拉高预算消费加载队列，排空已有 save 队列，取消后台任务。
+     * 保留 save 线程和 executor 存活——vanilla clearLevel() 会触发所有 chunk 的 unload，
+     * unload Mixin 会 enqueue 到 save 队列，由仍在运行的 save 线程消费。
      * <p>
-     * 时序：flushAsync → cancelAll(SAFE_TO_CANCEL) → shutdownClient → clearClient
-     * <p>
-     * S2: flushAsync 替代同步 flush，避免主线程阻塞。
-     * <p>
-     * 三端 DISCONNECT 事件（Fabric ClientPlayConnectionEvents / NeoForge ClientPlayerNetworkEvent.LoggingOut /
-     * Forge 同事件）统一调用此方法，避免漏清 {@code initialized} 标志导致重连后
-     * {@code onLogin} early-return、{@code clientStorage} 保持 null、超视渲染全部跳过 enqueue。
-     * 幂等：storage 已关闭 / executor 已 shutdown 时再次调用安全。
+     * 重量清理（executor shutdown、storage close）推迟到 {@link #finalizeDisconnect()}。
      */
     public static void cleanupOnDisconnect() {
         initialized = false;
+        finalized.set(false);
         ClientMainThreadBudget.clearJoinBoost();
 
-        // S2: 异步刷新缓存保存队列（最多等待 3 秒）
-        CacheSaveQueue.getInstance().flushAsync(3000);
-        CacheSaveQueue.getInstance().clear();
+        // ① 拉高预算，尽可能消费加载队列中的缓存区块
+        drainLoadQueueWithRaisedBudget();
+
+        // ② 批量 enqueue 所有已加载区块并 flush。
+        // clearLevel() 不保证逐个 unload，不能依赖 unload Mixin 落盘。
+        // mc.level 此时可能已 null，优先用 tick 跟踪的 trackedLevel。
+        CacheSaveQueue saveQueue = CacheSaveQueue.getInstance();
+        Minecraft mc = Minecraft.getInstance();
+        ClientLevel level = mc.level != null ? mc.level : saveQueue.getTrackedLevel();
+        if (level != null) {
+            saveQueue.enqueueAllFromLevel(level);
+        } else {
+            Constants.LOG.warn("Hassium: No ClientLevel available on disconnect — chunks may not be cached");
+        }
+        saveQueue.flushAsync(5000);
+
+        // ③ 清空加载队列（不再有新区块需要加载）
         ClientCacheLoadQueue.getInstance().clear();
-        // 清理超视渲染 renderOnly 状态（断连后 loadedRenderOnly 残留会导致重连后误判）
         ViewDistanceExtensionService.getInstance().clearAllRenderOnly();
 
-        // 取消可安全丢弃的后台任务（光照扫描、网络解压等）
+        // ④ 取消后台任务（但不关闭 executor，save 还需要它）
         HassiumTaskExecutor clientExecutor = HassiumTaskExecutor.getClient();
         if (clientExecutor != null) {
             clientExecutor.cancelAll(TaskCategory.SAFE_TO_CANCEL);
         }
 
-        // 关闭统一后台执行器，等待最多 5 秒完成 MISSION_CRITICAL + BEST_EFFORT
-        HassiumTaskExecutor.shutdownClient(5000);
-
-        // 清空主线程回调队列（不保留任何任务）
+        // ⑤ 清空主线程回调队列
         MainThreadDispatcher.clearClient(false);
         ClientLightRecomputeService.clear();
-
         ClientMetadataHandler.clearPendingState();
-        // 关闭当前 storage（region / sectionHashStore）+ 共享热度索引；resetStorage 把 clientStorage 置 null
+
+        // ⑥ finalizeDisconnect 由 MixinMinecraft.clearLevel TAIL 触发
+
+        Constants.LOG.info("Hassium: Disconnect cleanup done (chunks enqueued + flushed before clearLevel)");
+    }
+
+    /**
+     * 断开连接最终清理（主线程下一 tick，vanilla clearLevel 之后）。
+     * <p>
+     * 由 {@link #cleanupOnDisconnect()} 通过 {@link MainThreadDispatcher} 调度，
+     * 确保在 vanilla clearLevel() 触发的 chunk unload → enqueue 之后执行。
+     * <p>
+     * 排空 clearLevel() 触发的 unload → enqueue 的 save 任务，然后关闭所有基础设施。
+     */
+    public static void finalizeDisconnect() {
+        if (!finalized.compareAndSet(false, true)) return;
+        // ⑥ finalDrain：排空 clearLevel 产生的 save 任务
+        CacheSaveQueue.getInstance().drainRemaining(5000);
+
+        // ⑦ 关闭 executor
+        HassiumTaskExecutor.shutdownClient(5000);
+
+        // ⑧ 停止 save 线程
+        CacheSaveQueue.getInstance().shutdown();
+
+        // ⑨ 关闭 storage
         ClientHassiumStorage storage = ClientChunkHandler.getClientStorage();
         if (storage != null) {
             try {
@@ -101,6 +134,48 @@ public final class ClientLifecycleHelper {
         ClientHassiumStorage.closeSharedDatabase();
         ClientChunkHandler.resetStorage();
         Constants.LOG.info("Hassium: Client disconnected, cache cleaned up");
+    }
+
+    /**
+     * 断连时拉高预算，尽可能消费加载队列中的缓存区块。
+     * <p>
+     * 未 apply 的区块在断连后丢失（可接受），但 apply 过的区块在卸载时会被 save。
+     */
+    private static void drainLoadQueueWithRaisedBudget() {
+        ClientCacheLoadQueue loadQueue = ClientCacheLoadQueue.getInstance();
+        int pending = loadQueue.getPendingSize() + loadQueue.getReadySize();
+        if (pending <= 0) {
+            return;
+        }
+
+        Constants.LOG.info("Hassium: Disconnect drain - {} chunks pending, raising budget", pending);
+
+        long deadlineNs = System.nanoTime() + 5_000_000_000L; // 5秒总超时
+        while (System.nanoTime() < deadlineNs) {
+            int ready = loadQueue.getReadySize();
+            int pendingTasks = loadQueue.getPendingSize();
+            if (ready == 0 && pendingTasks == 0) {
+                break;
+            }
+
+            // 消费 ready 队列（主线程 apply + 光照重算）
+            if (ready > 0) {
+                long frameBudgetNs = 50_000_000L; // 每帧 50ms（正常 ~10ms）
+                loadQueue.processQueueUntil(System.nanoTime() + frameBudgetNs);
+            }
+
+            // 等待 pending → ready（后台解压 + NBT 重组）
+            if (loadQueue.getReadySize() == 0 && loadQueue.getPendingSize() > 0) {
+                try {
+                    Thread.sleep(10);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+        }
+
+        Constants.LOG.info("Hassium: Disconnect drain complete");
     }
 
     /**

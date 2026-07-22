@@ -3,6 +3,7 @@ package io.github.limuqy.mc.hassium.platform;
 import io.github.limuqy.mc.hassium.network.ChunkDataRequestC2SPacket;
 import io.github.limuqy.mc.hassium.network.ChunkHashS2CPacket;
 import io.github.limuqy.mc.hassium.network.FabricNetworkManager;
+import io.github.limuqy.mc.hassium.network.LightDeltaS2CPacket;
 import io.github.limuqy.mc.hassium.network.SectionDeltaS2CPacket;
 import io.github.limuqy.mc.hassium.network.BlockEntityDataS2CPacket;
 import io.github.limuqy.mc.hassium.network.BlockEntityRequestC2SPacket;
@@ -78,6 +79,15 @@ public class FabricNetworkManagerService implements INetworkManagerService {
         ServerPlayNetworking.send(player, BlockEntityDataS2CPacket.CHANNEL, buf);
 #else
         ServerPlayNetworking.send(player, FabricPayloadRegistry.toPayload(FabricPayloadRegistry.BLOCK_ENTITY_DATA_S2C_TYPE, buf));
+#endif
+    }
+
+    @Override
+    public void sendLightDeltaPacket(ServerPlayer player, FriendlyByteBuf buf) {
+#if MC_VER < MC_1_20_5
+        ServerPlayNetworking.send(player, LightDeltaS2CPacket.CHANNEL, buf);
+#else
+        ServerPlayNetworking.send(player, FabricPayloadRegistry.toPayload(FabricPayloadRegistry.LIGHT_DELTA_S2C_TYPE, buf));
 #endif
     }
 }

@@ -63,17 +63,6 @@ public class ChunkBloomFilter {
     }
 
     /**
-     * 从配置创建 Bloom Filter
-     */
-    public static ChunkBloomFilter fromConfig() {
-        io.github.limuqy.mc.hassium.config.HassiumConfigService configService =
-                io.github.limuqy.mc.hassium.config.HassiumConfigService.getInstance();
-        int expectedInsertions = configService.getBloomFilterExpectedInsertions();
-        double fpp = configService.getBloomFilterFpp();
-        return new ChunkBloomFilter(expectedInsertions, fpp);
-    }
-
-    /**
      * 向 Bloom Filter 添加元素
      *
      * @param chunkX 区块 X 坐标

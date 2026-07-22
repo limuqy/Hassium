@@ -87,6 +87,11 @@ public final class HassiumPacketIds {
     public static final String SECTION_DELTA_S2C = "hassium:section_delta_s2c";
 
     /**
+     * 服务端 -> 客户端：光照增量通知
+     */
+    public static final String LIGHT_DELTA_S2C = "hassium:light_delta_s2c";
+
+    /**
      * 检查是否为 Hassium 数据包
      */
     public static boolean isHassiumPacket(String packetId) {

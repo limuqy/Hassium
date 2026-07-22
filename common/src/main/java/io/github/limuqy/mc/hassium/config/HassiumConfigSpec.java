@@ -15,7 +15,7 @@ import net.neoforged.neoforge.common.ModConfigSpec;
  * 1.20.1：ForgeConfigSpec；1.20.2+：ModConfigSpec（NeoForge 原生 / FCAP common-neoforgeapi）。
  * <p>
  * CLIENT：客户端缓存与客户端网络应用相关项。<br>
- * COMMON：存储、共享网络、兼容与调试。<br>
+ * SERVER：存储、服务端网络、兼容与调试。<br>
  * GUI 显示名/提示走 {@code hassium.configuration.*} 语言键（见 lang/zh_cn.json、en_us.json）；
  * toml 内 comment 仍为简体中文说明。
  */
@@ -23,37 +23,26 @@ public final class HassiumConfigSpec {
 
 #if MC_VER < MC_1_20_2
     public static final ForgeConfigSpec CLIENT_SPEC;
-    public static final ForgeConfigSpec COMMON_SPEC;
+    public static final ForgeConfigSpec SERVER_SPEC;
 #else
     public static final ModConfigSpec CLIENT_SPEC;
-    public static final ModConfigSpec COMMON_SPEC;
+    public static final ModConfigSpec SERVER_SPEC;
 #endif
 
     public static final Client CLIENT;
-    public static final Common COMMON;
     public static final Server SERVER;
-
-#if MC_VER < MC_1_20_2
-    public static final ForgeConfigSpec SERVER_SPEC;
-#else
-    public static final ModConfigSpec SERVER_SPEC;
-#endif
 
     static {
 #if MC_VER < MC_1_20_2
         ForgeConfigSpec.Builder clientBuilder = new ForgeConfigSpec.Builder();
-        ForgeConfigSpec.Builder commonBuilder = new ForgeConfigSpec.Builder();
         ForgeConfigSpec.Builder serverBuilder = new ForgeConfigSpec.Builder();
 #else
         ModConfigSpec.Builder clientBuilder = new ModConfigSpec.Builder();
-        ModConfigSpec.Builder commonBuilder = new ModConfigSpec.Builder();
         ModConfigSpec.Builder serverBuilder = new ModConfigSpec.Builder();
 #endif
         CLIENT = new Client(clientBuilder);
-        COMMON = new Common(commonBuilder);
         SERVER = new Server(serverBuilder);
         CLIENT_SPEC = clientBuilder.build();
-        COMMON_SPEC = commonBuilder.build();
         SERVER_SPEC = serverBuilder.build();
     }
 
@@ -66,69 +55,69 @@ public final class HassiumConfigSpec {
     public static HassiumConfig toHassiumConfig() {
         return new HassiumConfig(
                 new HassiumConfig.StorageConfig(
-                        COMMON.storageEnabled.get(),
-                        COMMON.storageMode.get(),
-                        COMMON.storageZstdLevel.get()
+                        SERVER.storageEnabled.get(),
+                        SERVER.storageMode.get(),
+                        SERVER.storageZstdLevel.get()
                 ),
                 new HassiumConfig.ClientCacheConfig(
                         CLIENT.cacheEnabled.get(),
                         CLIENT.cacheMaxSizeMb.get(),
-                        CLIENT.cacheMaxAgeDays.get(),
+                        CLIENT.cacheCompressionLevel.get(),
                         CLIENT.cacheHotScoreThreshold.get(),
                         CLIENT.cacheRecencyWeight.get(),
                         CLIENT.cacheFrequencyWeight.get(),
                         CLIENT.cacheCleanupIntervalTicks.get(),
                         CLIENT.cacheTargetCacheSizeMb.get(),
                         CLIENT.cacheMinCleanupBatchSize.get(),
-                        CLIENT.cacheBloomFilterEnabled.get(),
-                        CLIENT.cacheBloomFilterExpectedInsertions.get(),
-                        CLIENT.cacheBloomFilterFpp.get(),
                         CLIENT.cacheViewDistanceExtensionEnabled.get(),
                         CLIENT.cacheMaxRenderDistance.get(),
                         CLIENT.cacheOvdUnloadDelaySecs.get(),
                         CLIENT.cacheSectionDeltaEnabled.get(),
                         CLIENT.cacheJoinBoostEnabled.get(),
-                        CLIENT.cacheEntitySnapshotsEnabled.get()
+                        CLIENT.cacheEntitySnapshotsEnabled.get(),
+                        CLIENT.cacheLoadThreads.get(),
+                        CLIENT.cacheLightStrip.get(),
+                        CLIENT.cacheMaxChunksPerFrame.get(),
+                        CLIENT.cacheMainThreadChunkBudgetMs.get()
                 ),
-                new HassiumConfig.NetworkConfig(
-                        COMMON.networkEnabled.get(),
-                        COMMON.networkCompressionLevel.get(),
+                new HassiumConfig.ClientNetworkConfig(
+                        CLIENT.networkEnabled.get(),
+                        CLIENT.networkMetricsEnabled.get()
+                ),
+                new HassiumConfig.ServerNetworkConfig(
+                        SERVER.networkEnabled.get(),
+                        SERVER.networkCompressionLevel.get(),
+                        SERVER.networkMagiclessZstd.get(),
+                        SERVER.networkGlobalPacketCompression.get(),
+                        SERVER.networkGlobalCompressionLevel.get(),
+                        SERVER.networkGlobalCompressionThreshold.get(),
+                        SERVER.networkUseContextCompression.get(),
+                        SERVER.networkEnablePacketAggregation.get(),
+                        SERVER.networkAggregationMinBatchSize.get(),
+                        SERVER.networkAggregationMaxWaitTimeMs.get().longValue(),
+                        SERVER.networkAggregationMaxSize.get(),
+                        SERVER.networkEnableCompactHeader.get(),
+                        Set.copyOf(SERVER.networkCompressionBlacklist.get()),
+                        SERVER.networkMetricsEnabled.get(),
                         SERVER.networkMaxChunksPerTick.get(),
-                        COMMON.networkGlobalPacketCompression.get(),
-                        COMMON.networkGlobalCompressionLevel.get(),
-                        COMMON.networkGlobalCompressionThreshold.get(),
-                        Set.copyOf(COMMON.networkCompressionBlacklist.get()),
-                        COMMON.networkUseContextCompression.get(),
-                        COMMON.networkMagiclessZstd.get(),
-                        COMMON.networkEnablePacketAggregation.get(),
-                        COMMON.networkAggregationMinBatchSize.get(),
-                        COMMON.networkAggregationMaxWaitTimeMs.get().longValue(),
-                        COMMON.networkAggregationMaxSize.get(),
-                        COMMON.networkEnableCompactHeader.get(),
                         SERVER.networkServerChunkPushThreads.get(),
-                        CLIENT.networkClientChunkLoadThreads.get(),
-                        CLIENT.networkLightStripEnabled.get(),
-                        CLIENT.networkBackgroundThreads.get(),
-                        CLIENT.networkMaxChunksPerFrame.get(),
-                        CLIENT.networkMaxCallbacksPerFrame.get(),
-                        COMMON.networkMetricsEnabled.get(),
-                        CLIENT.networkMainThreadChunkBudgetMs.get(),
                         SERVER.networkDynamicThreadPoolEnabled.get(),
                         SERVER.networkMinPushThreads.get(),
-                        SERVER.networkMaxPushThreads.get()
+                        SERVER.networkMaxPushThreads.get(),
+                        SERVER.networkLightStrip.get()
                 ),
                 new HassiumConfig.CompatConfig(
                         SERVER.compatRequireClientMod.get(),
-                        COMMON.compatAutoDowngradeOnError.get()
+                        SERVER.compatAutoDowngradeOnError.get()
                 ),
                 new HassiumConfig.DebugConfig(
-                        COMMON.debugMetadataLogging.get(),
-                        COMMON.debugDispatcherLogging.get(),
-                        COMMON.debugAsyncLogging.get(),
-                        COMMON.debugCompressionLogging.get(),
-                        COMMON.debugChunkApplyLogging.get(),
-                        COMMON.debugNetworkLogging.get(),
-                        COMMON.debugCacheLogging.get()
+                        SERVER.debugMetadataLogging.get(),
+                        SERVER.debugDispatcherLogging.get(),
+                        SERVER.debugAsyncLogging.get(),
+                        SERVER.debugCompressionLogging.get(),
+                        SERVER.debugChunkApplyLogging.get(),
+                        SERVER.debugNetworkLogging.get(),
+                        SERVER.debugCacheLogging.get()
                 )
         );
     }
@@ -138,139 +127,148 @@ public final class HassiumConfigSpec {
      */
     public static void applyFrom(HassiumConfig config) {
         var cache = config.clientCache();
-        var net = config.network();
+        var clientNet = config.clientNetwork();
+        var serverNet = config.serverNetwork();
         var storage = config.storage();
         var compat = config.compat();
         var debug = config.debug();
 
+        // ---- CLIENT: clientCache.* ----
         CLIENT.cacheEnabled.set(cache.enabled());
         CLIENT.cacheMaxSizeMb.set(cache.maxSizeMb());
-        CLIENT.cacheMaxAgeDays.set(cache.maxAgeDays());
+        CLIENT.cacheCompressionLevel.set(cache.cacheCompressionLevel());
         CLIENT.cacheHotScoreThreshold.set(cache.hotScoreThreshold());
         CLIENT.cacheRecencyWeight.set(cache.recencyWeight());
         CLIENT.cacheFrequencyWeight.set(cache.frequencyWeight());
         CLIENT.cacheCleanupIntervalTicks.set(cache.cleanupIntervalTicks());
         CLIENT.cacheTargetCacheSizeMb.set(cache.targetCacheSizeMb());
         CLIENT.cacheMinCleanupBatchSize.set(cache.minCleanupBatchSize());
-        CLIENT.cacheBloomFilterEnabled.set(cache.bloomFilterEnabled());
-        CLIENT.cacheBloomFilterExpectedInsertions.set(cache.bloomFilterExpectedInsertions());
-        CLIENT.cacheBloomFilterFpp.set(cache.bloomFilterFpp());
         CLIENT.cacheViewDistanceExtensionEnabled.set(cache.viewDistanceExtensionEnabled());
         CLIENT.cacheMaxRenderDistance.set(cache.maxRenderDistance());
         CLIENT.cacheOvdUnloadDelaySecs.set(cache.ovdUnloadDelaySecs());
         CLIENT.cacheSectionDeltaEnabled.set(cache.sectionDeltaEnabled());
         CLIENT.cacheJoinBoostEnabled.set(cache.joinBoostEnabled());
         CLIENT.cacheEntitySnapshotsEnabled.set(cache.entitySnapshotsEnabled());
-        CLIENT.networkClientChunkLoadThreads.set(net.clientChunkLoadThreads());
-        CLIENT.networkLightStripEnabled.set(net.lightStripEnabled());
-        CLIENT.networkBackgroundThreads.set(net.backgroundThreads());
-        CLIENT.networkMaxChunksPerFrame.set(net.maxChunksPerFrame());
-        CLIENT.networkMaxCallbacksPerFrame.set(net.maxCallbacksPerFrame());
-        CLIENT.networkMainThreadChunkBudgetMs.set(net.mainThreadChunkBudgetMs());
+        CLIENT.cacheLoadThreads.set(cache.loadThreads());
+        CLIENT.cacheLightStrip.set(cache.lightStrip());
+        CLIENT.cacheMaxChunksPerFrame.set(cache.maxChunksPerFrame());
+        CLIENT.cacheMainThreadChunkBudgetMs.set(cache.mainThreadChunkBudgetMs());
 
-        COMMON.storageEnabled.set(storage.enabled());
-        COMMON.storageMode.set(storage.mode());
-        COMMON.storageZstdLevel.set(storage.zstdLevel());
-        COMMON.networkEnabled.set(net.enabled());
-        COMMON.networkCompressionLevel.set(net.compressionLevel());
-        COMMON.networkGlobalPacketCompression.set(net.globalPacketCompression());
-        COMMON.networkGlobalCompressionLevel.set(net.globalCompressionLevel());
-        COMMON.networkGlobalCompressionThreshold.set(net.globalCompressionThreshold());
-        COMMON.networkCompressionBlacklist.set(new ArrayList<>(net.compressionBlacklist()));
-        COMMON.networkUseContextCompression.set(net.useContextCompression());
-        COMMON.networkMagiclessZstd.set(net.magiclessZstd());
-        COMMON.networkEnablePacketAggregation.set(net.enablePacketAggregation());
-        COMMON.networkAggregationMinBatchSize.set(net.aggregationMinBatchSize());
-        COMMON.networkAggregationMaxWaitTimeMs.set((int) net.aggregationMaxWaitTimeMs());
-        COMMON.networkAggregationMaxSize.set(net.aggregationMaxSize());
-        COMMON.networkEnableCompactHeader.set(net.enableCompactHeader());
-        COMMON.networkMetricsEnabled.set(net.metricsEnabled());
-        COMMON.compatAutoDowngradeOnError.set(compat.autoDowngradeOnError());
-        COMMON.debugMetadataLogging.set(debug.metadataLogging());
-        COMMON.debugDispatcherLogging.set(debug.dispatcherLogging());
-        COMMON.debugAsyncLogging.set(debug.asyncLogging());
-        COMMON.debugCompressionLogging.set(debug.compressionLogging());
-        COMMON.debugChunkApplyLogging.set(debug.chunkApplyLogging());
-        COMMON.debugNetworkLogging.set(debug.networkLogging());
-        COMMON.debugCacheLogging.set(debug.cacheLogging());
+        // ---- CLIENT: network.* ----
+        CLIENT.networkEnabled.set(clientNet.enabled());
+        CLIENT.networkMetricsEnabled.set(clientNet.metricsEnabled());
 
-        SERVER.networkMaxChunksPerTick.set(net.maxChunksPerTick());
-        SERVER.networkServerChunkPushThreads.set(net.serverChunkPushThreads());
-        SERVER.networkDynamicThreadPoolEnabled.set(net.dynamicThreadPoolEnabled());
-        SERVER.networkMinPushThreads.set(net.minPushThreads());
-        SERVER.networkMaxPushThreads.set(net.maxPushThreads());
+        // ---- SERVER: storage.* ----
+        SERVER.storageEnabled.set(storage.enabled());
+        SERVER.storageMode.set(storage.mode());
+        SERVER.storageZstdLevel.set(storage.zstdLevel());
+
+        // ---- SERVER: network.* ----
+        SERVER.networkEnabled.set(serverNet.enabled());
+        SERVER.networkCompressionLevel.set(serverNet.compressionLevel());
+        SERVER.networkMagiclessZstd.set(serverNet.magiclessZstd());
+        SERVER.networkGlobalPacketCompression.set(serverNet.globalPacketCompression());
+        SERVER.networkGlobalCompressionLevel.set(serverNet.globalCompressionLevel());
+        SERVER.networkGlobalCompressionThreshold.set(serverNet.globalCompressionThreshold());
+        SERVER.networkUseContextCompression.set(serverNet.useContextCompression());
+        SERVER.networkEnablePacketAggregation.set(serverNet.enablePacketAggregation());
+        SERVER.networkAggregationMinBatchSize.set(serverNet.aggregationMinBatchSize());
+        SERVER.networkAggregationMaxWaitTimeMs.set((int) serverNet.aggregationMaxWaitTimeMs());
+        SERVER.networkAggregationMaxSize.set(serverNet.aggregationMaxSize());
+        SERVER.networkEnableCompactHeader.set(serverNet.enableCompactHeader());
+        SERVER.networkCompressionBlacklist.set(new ArrayList<>(serverNet.compressionBlacklist()));
+        SERVER.networkMetricsEnabled.set(serverNet.metricsEnabled());
+        SERVER.networkMaxChunksPerTick.set(serverNet.maxChunksPerTick());
+        SERVER.networkServerChunkPushThreads.set(serverNet.serverChunkPushThreads());
+        SERVER.networkDynamicThreadPoolEnabled.set(serverNet.dynamicThreadPoolEnabled());
+        SERVER.networkMinPushThreads.set(serverNet.minPushThreads());
+        SERVER.networkMaxPushThreads.set(serverNet.maxPushThreads());
+        SERVER.networkLightStrip.set(serverNet.lightStrip());
+
+        // ---- SERVER: compat.* ----
         SERVER.compatRequireClientMod.set(compat.requireClientMod());
+        SERVER.compatAutoDowngradeOnError.set(compat.autoDowngradeOnError());
+
+        // ---- SERVER: debug.* ----
+        SERVER.debugMetadataLogging.set(debug.metadataLogging());
+        SERVER.debugDispatcherLogging.set(debug.dispatcherLogging());
+        SERVER.debugAsyncLogging.set(debug.asyncLogging());
+        SERVER.debugCompressionLogging.set(debug.compressionLogging());
+        SERVER.debugChunkApplyLogging.set(debug.chunkApplyLogging());
+        SERVER.debugNetworkLogging.set(debug.networkLogging());
+        SERVER.debugCacheLogging.set(debug.cacheLogging());
 
         if (CLIENT_SPEC.isLoaded()) {
             CLIENT_SPEC.save();
-        }
-        if (COMMON_SPEC.isLoaded()) {
-            COMMON_SPEC.save();
         }
         if (SERVER_SPEC.isLoaded()) {
             SERVER_SPEC.save();
         }
     }
 
+    // ─────────────────────────────────────────────────────
+    //  CLIENT inner class
+    // ─────────────────────────────────────────────────────
+
     public static final class Client {
 #if MC_VER < MC_1_20_2
+        // ---- clientCache.* ----
         public final ForgeConfigSpec.BooleanValue cacheEnabled;
         public final ForgeConfigSpec.IntValue cacheMaxSizeMb;
-        public final ForgeConfigSpec.IntValue cacheMaxAgeDays;
+        public final ForgeConfigSpec.IntValue cacheCompressionLevel;
         public final ForgeConfigSpec.DoubleValue cacheHotScoreThreshold;
         public final ForgeConfigSpec.DoubleValue cacheRecencyWeight;
         public final ForgeConfigSpec.DoubleValue cacheFrequencyWeight;
         public final ForgeConfigSpec.IntValue cacheCleanupIntervalTicks;
         public final ForgeConfigSpec.IntValue cacheTargetCacheSizeMb;
         public final ForgeConfigSpec.IntValue cacheMinCleanupBatchSize;
-        public final ForgeConfigSpec.BooleanValue cacheBloomFilterEnabled;
-        public final ForgeConfigSpec.IntValue cacheBloomFilterExpectedInsertions;
-        public final ForgeConfigSpec.DoubleValue cacheBloomFilterFpp;
-
         // 超视渲染配置
         public final ForgeConfigSpec.BooleanValue cacheViewDistanceExtensionEnabled;
         public final ForgeConfigSpec.IntValue cacheMaxRenderDistance;
         public final ForgeConfigSpec.IntValue cacheOvdUnloadDelaySecs;
+        // 分段增量 / JoinBoost / 实体快照
         public final ForgeConfigSpec.BooleanValue cacheSectionDeltaEnabled;
         public final ForgeConfigSpec.BooleanValue cacheJoinBoostEnabled;
         public final ForgeConfigSpec.BooleanValue cacheEntitySnapshotsEnabled;
+        // 从原 NetworkConfig 吸收的客户端字段
+        public final ForgeConfigSpec.IntValue cacheLoadThreads;
+        public final ForgeConfigSpec.BooleanValue cacheLightStrip;
+        public final ForgeConfigSpec.IntValue cacheMaxChunksPerFrame;
+        public final ForgeConfigSpec.IntValue cacheMainThreadChunkBudgetMs;
 
-        public final ForgeConfigSpec.IntValue networkClientChunkLoadThreads;
-        public final ForgeConfigSpec.BooleanValue networkLightStripEnabled;
-        public final ForgeConfigSpec.IntValue networkBackgroundThreads;
-        public final ForgeConfigSpec.IntValue networkMaxChunksPerFrame;
-        public final ForgeConfigSpec.IntValue networkMaxCallbacksPerFrame;
-        public final ForgeConfigSpec.IntValue networkMainThreadChunkBudgetMs;
+        // ---- network.* ----
+        public final ForgeConfigSpec.BooleanValue networkEnabled;
+        public final ForgeConfigSpec.BooleanValue networkMetricsEnabled;
 
         Client(ForgeConfigSpec.Builder builder) {
 #else
+        // ---- clientCache.* ----
         public final ModConfigSpec.BooleanValue cacheEnabled;
         public final ModConfigSpec.IntValue cacheMaxSizeMb;
-        public final ModConfigSpec.IntValue cacheMaxAgeDays;
+        public final ModConfigSpec.IntValue cacheCompressionLevel;
         public final ModConfigSpec.DoubleValue cacheHotScoreThreshold;
         public final ModConfigSpec.DoubleValue cacheRecencyWeight;
         public final ModConfigSpec.DoubleValue cacheFrequencyWeight;
         public final ModConfigSpec.IntValue cacheCleanupIntervalTicks;
         public final ModConfigSpec.IntValue cacheTargetCacheSizeMb;
         public final ModConfigSpec.IntValue cacheMinCleanupBatchSize;
-        public final ModConfigSpec.BooleanValue cacheBloomFilterEnabled;
-        public final ModConfigSpec.IntValue cacheBloomFilterExpectedInsertions;
-        public final ModConfigSpec.DoubleValue cacheBloomFilterFpp;
-
         // 超视渲染配置
         public final ModConfigSpec.BooleanValue cacheViewDistanceExtensionEnabled;
         public final ModConfigSpec.IntValue cacheMaxRenderDistance;
         public final ModConfigSpec.IntValue cacheOvdUnloadDelaySecs;
+        // 分段增量 / JoinBoost / 实体快照
         public final ModConfigSpec.BooleanValue cacheSectionDeltaEnabled;
         public final ModConfigSpec.BooleanValue cacheJoinBoostEnabled;
         public final ModConfigSpec.BooleanValue cacheEntitySnapshotsEnabled;
+        // 从原 NetworkConfig 吸收的客户端字段
+        public final ModConfigSpec.IntValue cacheLoadThreads;
+        public final ModConfigSpec.BooleanValue cacheLightStrip;
+        public final ModConfigSpec.IntValue cacheMaxChunksPerFrame;
+        public final ModConfigSpec.IntValue cacheMainThreadChunkBudgetMs;
 
-        public final ModConfigSpec.IntValue networkClientChunkLoadThreads;
-        public final ModConfigSpec.BooleanValue networkLightStripEnabled;
-        public final ModConfigSpec.IntValue networkBackgroundThreads;
-        public final ModConfigSpec.IntValue networkMaxChunksPerFrame;
-        public final ModConfigSpec.IntValue networkMaxCallbacksPerFrame;
-        public final ModConfigSpec.IntValue networkMainThreadChunkBudgetMs;
+        // ---- network.* ----
+        public final ModConfigSpec.BooleanValue networkEnabled;
+        public final ModConfigSpec.BooleanValue networkMetricsEnabled;
 
         Client(ModConfigSpec.Builder builder) {
 #endif
@@ -283,13 +281,13 @@ public final class HassiumConfigSpec {
                     .translation("hassium.configuration.clientCache.enabled")
                     .define("enabled", true);
             cacheMaxSizeMb = builder
-                    .comment("缓存最大容量（MB；默认 2048 = 2GB）")
+                    .comment("缓存最大容量（MB；默认 4096 = 4GB）")
                     .translation("hassium.configuration.clientCache.maxSizeMb")
-                    .defineInRange("maxSizeMb", 2048, 64, 1024 * 1024);
-            cacheMaxAgeDays = builder
-                    .comment("缓存过期天数（超过未访问可被清理；默认 30）")
-                    .translation("hassium.configuration.clientCache.maxAgeDays")
-                    .defineInRange("maxAgeDays", 30, 1, 3650);
+                    .defineInRange("maxSizeMb", 4096, 64, 1024 * 1024);
+            cacheCompressionLevel = builder
+                    .comment("客户端缓存 ZSTD 压缩等级（1–22；默认 9，越高压缩比越好但越慢）")
+                    .translation("hassium.configuration.clientCache.compressionLevel")
+                    .defineInRange("compressionLevel", 9, 1, 22);
             cacheHotScoreThreshold = builder
                     .comment("=== 热度清理 ===")
                     .comment("热点分数阈值：低于此值视为冷区块，清理时优先淘汰（默认 0.3）")
@@ -315,19 +313,6 @@ public final class HassiumConfigSpec {
                     .comment("每次最少清理区块数（默认 100）")
                     .translation("hassium.configuration.clientCache.minCleanupBatchSize")
                     .defineInRange("minCleanupBatchSize", 100, 1, 100000);
-            cacheBloomFilterEnabled = builder
-                    .comment("=== Bloom Filter 预筛 ===")
-                    .comment("是否启用 Bloom Filter 预筛（减少无效 .mca 读取；默认 true）")
-                    .translation("hassium.configuration.clientCache.bloomFilterEnabled")
-                    .define("bloomFilterEnabled", true);
-            cacheBloomFilterExpectedInsertions = builder
-                    .comment("Bloom Filter 预期元素数量（影响内存；默认 10000）")
-                    .translation("hassium.configuration.clientCache.bloomFilterExpectedInsertions")
-                    .defineInRange("bloomFilterExpectedInsertions", 10000, 1000, 50_000_000);
-            cacheBloomFilterFpp = builder
-                    .comment("Bloom Filter 期望假阳性率（0.01 = 1%；默认 0.01）")
-                    .translation("hassium.configuration.clientCache.bloomFilterFpp")
-                    .defineInRange("bloomFilterFpp", 0.01, 0.001, 0.1);
             cacheViewDistanceExtensionEnabled = builder
                     .comment("=== 超视渲染 ===")
                     .comment("是否启用超视渲染：客户端 RD > 服务端视距时，用本地缓存回填环带仅渲染。"
@@ -362,65 +347,80 @@ public final class HassiumConfigSpec {
                     .comment("区块卸载时保存非玩家实体快照到独立 entities 目录。默认 false。")
                     .translation("hassium.configuration.clientCache.entitySnapshotsEnabled")
                     .define("entitySnapshotsEnabled", false);
-            builder.pop();
-
-            builder.comment("客户端网络与主线程应用相关配置")
-                    .translation("hassium.configuration.clientNetwork")
-                    .push("network");
-            networkClientChunkLoadThreads = builder
-                    .comment("=== 客户端线程与光照 ===")
+            cacheLoadThreads = builder
+                    .comment("=== 线程与渲染限流 ===")
                     .comment("客户端区块加载线程数（默认 10）")
-                    .translation("hassium.configuration.clientNetwork.clientChunkLoadThreads")
-                    .defineInRange("clientChunkLoadThreads", 10, 1, 64);
-            networkLightStripEnabled = builder
+                    .translation("hassium.configuration.clientCache.loadThreads")
+                    .defineInRange("loadThreads", 10, 1, 64);
+            cacheLightStrip = builder
                     .comment("是否启用光照剥离：发包去掉 LightData，由客户端本地重算。"
                             + "出现光照异常时可关闭。详见 docs/mod-compat.md（默认 true）")
-                    .translation("hassium.configuration.clientNetwork.lightStripEnabled")
-                    .define("lightStripEnabled", true);
-            networkBackgroundThreads = builder
-                    .comment("客户端后台线程池大小（默认 8）")
-                    .translation("hassium.configuration.clientNetwork.backgroundThreads")
-                    .defineInRange("backgroundThreads", 8, 1, 64);
-            networkMaxChunksPerFrame = builder
-                    .comment("=== 主线程限流 ===")
+                    .translation("hassium.configuration.clientCache.lightStrip")
+                    .define("lightStrip", true);
+            cacheMaxChunksPerFrame = builder
                     .comment("每帧应用缓存区块的安全硬顶（主限流为时间预算；默认 32）")
-                    .translation("hassium.configuration.clientNetwork.maxChunksPerFrame")
+                    .translation("hassium.configuration.clientCache.maxChunksPerFrame")
                     .defineInRange("maxChunksPerFrame", 32, 1, 512);
-            networkMaxCallbacksPerFrame = builder
-                    .comment("每帧主线程异步回调安全硬顶（默认 32）")
-                    .translation("hassium.configuration.clientNetwork.maxCallbacksPerFrame")
-                    .defineInRange("maxCallbacksPerFrame", 32, 1, 512);
-            networkMainThreadChunkBudgetMs = builder
+            cacheMainThreadChunkBudgetMs = builder
                     .comment("每帧主线程应用区块的时间预算（毫秒；默认 10；进服 JoinBoost 期间可临时提高）")
-                    .translation("hassium.configuration.clientNetwork.mainThreadChunkBudgetMs")
+                    .translation("hassium.configuration.clientCache.mainThreadChunkBudgetMs")
                     .defineInRange("mainThreadChunkBudgetMs", 10, 1, 50);
+            builder.pop();
+
+            builder.comment("客户端网络配置")
+                    .translation("hassium.configuration.clientNetwork")
+                    .push("network");
+            networkEnabled = builder
+                    .comment("是否启用客户端 Hassium 自定义通道（chunkHash / hassium:* 推送）。"
+                            + "关闭后回退原版区块包。默认 true。【改后建议重连】")
+                    .translation("hassium.configuration.clientNetwork.enabled")
+                    .define("enabled", true);
+            networkMetricsEnabled = builder
+                    .comment("是否启用客户端网络指标收集（默认 true）")
+                    .translation("hassium.configuration.clientNetwork.metricsEnabled")
+                    .define("metricsEnabled", true);
             builder.pop();
         }
     }
 
-    public static final class Common {
+    // ─────────────────────────────────────────────────────
+    //  SERVER inner class（存储 + 网络 + 兼容 + 调试）
+    // ─────────────────────────────────────────────────────
+
+    public static final class Server {
 #if MC_VER < MC_1_20_2
+        // ---- storage.* ----
         public final ForgeConfigSpec.BooleanValue storageEnabled;
         public final ForgeConfigSpec.ConfigValue<String> storageMode;
         public final ForgeConfigSpec.IntValue storageZstdLevel;
 
+        // ---- network.* ----
         public final ForgeConfigSpec.BooleanValue networkEnabled;
         public final ForgeConfigSpec.IntValue networkCompressionLevel;
+        public final ForgeConfigSpec.BooleanValue networkMagiclessZstd;
         public final ForgeConfigSpec.BooleanValue networkGlobalPacketCompression;
         public final ForgeConfigSpec.IntValue networkGlobalCompressionLevel;
         public final ForgeConfigSpec.IntValue networkGlobalCompressionThreshold;
-        public final ForgeConfigSpec.ConfigValue<List<? extends String>> networkCompressionBlacklist;
         public final ForgeConfigSpec.BooleanValue networkUseContextCompression;
-        public final ForgeConfigSpec.BooleanValue networkMagiclessZstd;
         public final ForgeConfigSpec.BooleanValue networkEnablePacketAggregation;
         public final ForgeConfigSpec.IntValue networkAggregationMinBatchSize;
         public final ForgeConfigSpec.IntValue networkAggregationMaxWaitTimeMs;
         public final ForgeConfigSpec.IntValue networkAggregationMaxSize;
         public final ForgeConfigSpec.BooleanValue networkEnableCompactHeader;
+        public final ForgeConfigSpec.ConfigValue<List<? extends String>> networkCompressionBlacklist;
         public final ForgeConfigSpec.BooleanValue networkMetricsEnabled;
+        public final ForgeConfigSpec.IntValue networkMaxChunksPerTick;
+        public final ForgeConfigSpec.IntValue networkServerChunkPushThreads;
+        public final ForgeConfigSpec.BooleanValue networkDynamicThreadPoolEnabled;
+        public final ForgeConfigSpec.IntValue networkMinPushThreads;
+        public final ForgeConfigSpec.IntValue networkMaxPushThreads;
+        public final ForgeConfigSpec.BooleanValue networkLightStrip;
 
+        // ---- compat.* ----
+        public final ForgeConfigSpec.BooleanValue compatRequireClientMod;
         public final ForgeConfigSpec.BooleanValue compatAutoDowngradeOnError;
 
+        // ---- debug.* ----
         public final ForgeConfigSpec.BooleanValue debugMetadataLogging;
         public final ForgeConfigSpec.BooleanValue debugDispatcherLogging;
         public final ForgeConfigSpec.BooleanValue debugAsyncLogging;
@@ -429,29 +429,40 @@ public final class HassiumConfigSpec {
         public final ForgeConfigSpec.BooleanValue debugNetworkLogging;
         public final ForgeConfigSpec.BooleanValue debugCacheLogging;
 
-        Common(ForgeConfigSpec.Builder builder) {
+        Server(ForgeConfigSpec.Builder builder) {
 #else
+        // ---- storage.* ----
         public final ModConfigSpec.BooleanValue storageEnabled;
         public final ModConfigSpec.ConfigValue<String> storageMode;
         public final ModConfigSpec.IntValue storageZstdLevel;
 
+        // ---- network.* ----
         public final ModConfigSpec.BooleanValue networkEnabled;
         public final ModConfigSpec.IntValue networkCompressionLevel;
+        public final ModConfigSpec.BooleanValue networkMagiclessZstd;
         public final ModConfigSpec.BooleanValue networkGlobalPacketCompression;
         public final ModConfigSpec.IntValue networkGlobalCompressionLevel;
         public final ModConfigSpec.IntValue networkGlobalCompressionThreshold;
-        public final ModConfigSpec.ConfigValue<List<? extends String>> networkCompressionBlacklist;
         public final ModConfigSpec.BooleanValue networkUseContextCompression;
-        public final ModConfigSpec.BooleanValue networkMagiclessZstd;
         public final ModConfigSpec.BooleanValue networkEnablePacketAggregation;
         public final ModConfigSpec.IntValue networkAggregationMinBatchSize;
         public final ModConfigSpec.IntValue networkAggregationMaxWaitTimeMs;
         public final ModConfigSpec.IntValue networkAggregationMaxSize;
         public final ModConfigSpec.BooleanValue networkEnableCompactHeader;
+        public final ModConfigSpec.ConfigValue<List<? extends String>> networkCompressionBlacklist;
         public final ModConfigSpec.BooleanValue networkMetricsEnabled;
+        public final ModConfigSpec.IntValue networkMaxChunksPerTick;
+        public final ModConfigSpec.IntValue networkServerChunkPushThreads;
+        public final ModConfigSpec.BooleanValue networkDynamicThreadPoolEnabled;
+        public final ModConfigSpec.IntValue networkMinPushThreads;
+        public final ModConfigSpec.IntValue networkMaxPushThreads;
+        public final ModConfigSpec.BooleanValue networkLightStrip;
 
+        // ---- compat.* ----
+        public final ModConfigSpec.BooleanValue compatRequireClientMod;
         public final ModConfigSpec.BooleanValue compatAutoDowngradeOnError;
 
+        // ---- debug.* ----
         public final ModConfigSpec.BooleanValue debugMetadataLogging;
         public final ModConfigSpec.BooleanValue debugDispatcherLogging;
         public final ModConfigSpec.BooleanValue debugAsyncLogging;
@@ -460,8 +471,9 @@ public final class HassiumConfigSpec {
         public final ModConfigSpec.BooleanValue debugNetworkLogging;
         public final ModConfigSpec.BooleanValue debugCacheLogging;
 
-        Common(ModConfigSpec.Builder builder) {
+        Server(ModConfigSpec.Builder builder) {
 #endif
+            // ====== storage ======
             builder.comment("区块存储配置（改存档压缩格式；【高风险】启用前请备份世界）")
                     .translation("hassium.configuration.storage")
                     .push("storage");
@@ -480,7 +492,8 @@ public final class HassiumConfigSpec {
                     .defineInRange("zstdLevel", 9, 1, 22);
             builder.pop();
 
-            builder.comment("网络与区块推送配置（双端共享项；部分仅服务端生效）")
+            // ====== network ======
+            builder.comment("网络与区块推送配置（服务端共享项 + 服务端专属推送）")
                     .translation("hassium.configuration.network")
                     .push("network");
             networkEnabled = builder
@@ -493,75 +506,108 @@ public final class HassiumConfigSpec {
                     .comment("自定义通道 ZSTD 压缩等级（默认 3，速度优先；算法固定为 hassium:zstd）")
                     .translation("hassium.configuration.network.compressionLevel")
                     .defineInRange("compressionLevel", 3, 1, 22);
+            networkMagiclessZstd = builder
+                    .comment("是否使用无 magic 的 ZSTD 帧格式（默认 true）")
+                    .translation("hassium.configuration.network.magiclessZstd")
+                    .define("magiclessZstd", true);
             networkGlobalPacketCompression = builder
-                    .comment("=== 全局包压缩（替换原版 Zlib） ===")
-                    .comment("【高风险】是否用 ZSTD 替换原版 Zlib 全局包压缩（影响几乎所有数据包）。"
+                    .comment("=== 全局包压缩（替换原版 Zlib）[实验性] ===")
+                    .comment("【高风险/实验性】是否用 ZSTD 替换原版 Zlib 全局包压缩（影响几乎所有数据包）。"
                             + "与同类压缩/Via 同进程叠用可能冲突。默认 true。【改后建议重启】")
                     .translation("hassium.configuration.network.globalPacketCompression")
                     .define("globalPacketCompression", true);
             networkGlobalCompressionLevel = builder
-                    .comment("全局包压缩等级（默认 3）")
+                    .comment("全局包压缩等级 [实验性]（默认 3）")
                     .translation("hassium.configuration.network.globalCompressionLevel")
                     .defineInRange("globalCompressionLevel", 3, 1, 22);
             networkGlobalCompressionThreshold = builder
-                    .comment("全局压缩阈值（字节；小于此值不压；默认 256，与原版一致）")
+                    .comment("全局压缩阈值（字节；小于此值不压；默认 256，与原版一致）[实验性]")
                     .translation("hassium.configuration.network.globalCompressionThreshold")
                     .defineInRange("globalCompressionThreshold", 256, 0, 65536);
+            networkUseContextCompression = builder
+                    .comment("=== 上下文压缩 ===")
+                    .comment("是否使用上下文压缩（默认 true）")
+                    .translation("hassium.configuration.network.useContextCompression")
+                    .define("useContextCompression", true);
+            networkEnablePacketAggregation = builder
+                    .comment("=== 包聚合 [实验性] ===")
+                    .comment("【高风险/兼容逃生】是否启用包聚合。与第三方自定义通道冲突时可关闭。"
+                            + "详见 docs/mod-compat.md（默认 true）")
+                    .translation("hassium.configuration.network.enablePacketAggregation")
+                    .define("enablePacketAggregation", true);
+            networkAggregationMinBatchSize = builder
+                    .comment("聚合最小批量大小 [实验性]（默认 4）")
+                    .translation("hassium.configuration.network.aggregationMinBatchSize")
+                    .defineInRange("aggregationMinBatchSize", 4, 1, 256);
+            networkAggregationMaxWaitTimeMs = builder
+                    .comment("聚合最大等待时间（毫秒；默认 20）[实验性]")
+                    .translation("hassium.configuration.network.aggregationMaxWaitTimeMs")
+                    .defineInRange("aggregationMaxWaitTimeMs", 20, 1, 5000);
+            networkAggregationMaxSize = builder
+                    .comment("聚合最大大小（字节；默认 262144 = 256KB）[实验性]")
+                    .translation("hassium.configuration.network.aggregationMaxSize")
+                    .defineInRange("aggregationMaxSize", 256 * 1024, 1024, 8 * 1024 * 1024);
+            networkEnableCompactHeader = builder
+                    .comment("是否启用紧凑包头（主要用于聚合包内部；默认 true）[实验性]")
+                    .translation("hassium.configuration.network.enableCompactHeader")
+                    .define("enableCompactHeader", true);
             networkCompressionBlacklist = builder
                     .comment("压缩/聚合黑名单：包 ID 或命名空间前缀字符串列表。"
                             + "示例：distant_horizons:xxx、某伴生 mod 的 namespace:path。"
                             + "第三方通道被聚合拖慢时可加入。详见 docs/mod-compat.md")
                     .translation("hassium.configuration.network.compressionBlacklist")
                     .defineList("compressionBlacklist",
-                            () -> new ArrayList<>(HassiumConfig.NetworkConfig.DEFAULT_COMPRESSION_BLACKLIST),
+                            () -> new ArrayList<>(HassiumConfig.ServerNetworkConfig.DEFAULT_COMPRESSION_BLACKLIST),
                             o -> o instanceof String);
-            networkUseContextCompression = builder
-                    .comment("=== 上下文压缩 ===")
-                    .comment("是否使用上下文压缩（默认 true）")
-                    .translation("hassium.configuration.network.useContextCompression")
-                    .define("useContextCompression", true);
-            networkMagiclessZstd = builder
-                    .comment("是否使用无 magic 的 ZSTD 帧格式（默认 true）")
-                    .translation("hassium.configuration.network.magiclessZstd")
-                    .define("magiclessZstd", true);
-            networkEnablePacketAggregation = builder
-                    .comment("=== 包聚合 ===")
-                    .comment("【高风险/兼容逃生】是否启用包聚合。与第三方自定义通道冲突时可关闭。"
-                            + "详见 docs/mod-compat.md（默认 true）")
-                    .translation("hassium.configuration.network.enablePacketAggregation")
-                    .define("enablePacketAggregation", true);
-            networkAggregationMinBatchSize = builder
-                    .comment("聚合最小批量大小（默认 4）")
-                    .translation("hassium.configuration.network.aggregationMinBatchSize")
-                    .defineInRange("aggregationMinBatchSize", 4, 1, 256);
-            networkAggregationMaxWaitTimeMs = builder
-                    .comment("聚合最大等待时间（毫秒；默认 20）")
-                    .translation("hassium.configuration.network.aggregationMaxWaitTimeMs")
-                    .defineInRange("aggregationMaxWaitTimeMs", 20, 1, 5000);
-            networkAggregationMaxSize = builder
-                    .comment("聚合最大大小（字节；默认 262144 = 256KB）")
-                    .translation("hassium.configuration.network.aggregationMaxSize")
-                    .defineInRange("aggregationMaxSize", 256 * 1024, 1024, 8 * 1024 * 1024);
-            networkEnableCompactHeader = builder
-                    .comment("是否启用紧凑包头（主要用于聚合包内部；默认 true）")
-                    .translation("hassium.configuration.network.enableCompactHeader")
-                    .define("enableCompactHeader", true);
             networkMetricsEnabled = builder
                     .comment("=== 指标 ===")
                     .comment("是否启用网络指标收集（流量、缓存命中等；默认 true）")
                     .translation("hassium.configuration.network.metricsEnabled")
                     .define("metricsEnabled", true);
+            networkMaxChunksPerTick = builder
+                    .comment("=== 服务端推送 ===")
+                    .comment("每玩家每 server tick 最多序列化/推送区块数（默认 32；仅服务端）")
+                    .translation("hassium.configuration.network.maxChunksPerTick")
+                    .defineInRange("maxChunksPerTick", 32, 1, 256);
+            networkServerChunkPushThreads = builder
+                    .comment("服务端区块推送线程数（动态池关闭时的基准；默认 8；仅服务端）")
+                    .translation("hassium.configuration.network.serverChunkPushThreads")
+                    .defineInRange("serverChunkPushThreads", 8, 1, 64);
+            networkDynamicThreadPoolEnabled = builder
+                    .comment("=== 动态线程池 ===")
+                    .comment("是否按队列负载动态调整推送线程数（默认 true；仅服务端）")
+                    .translation("hassium.configuration.network.dynamicThreadPoolEnabled")
+                    .define("dynamicThreadPoolEnabled", true);
+            networkMinPushThreads = builder
+                    .comment("动态线程池最小推送线程数（默认 2；仅服务端）")
+                    .translation("hassium.configuration.network.minPushThreads")
+                    .defineInRange("minPushThreads", 2, 1, 64);
+            networkMaxPushThreads = builder
+                    .comment("动态线程池最大推送线程数（默认 8；仅服务端）")
+                    .translation("hassium.configuration.network.maxPushThreads")
+                    .defineInRange("maxPushThreads", 8, 1, 64);
+            networkLightStrip = builder
+                    .comment("光照剥离：服务端控制是否发包时剥离 LightData（默认 true）")
+                    .translation("hassium.configuration.network.lightStrip")
+                    .define("lightStrip", true);
             builder.pop();
 
+            // ====== compat ======
             builder.comment("兼容性配置")
                     .translation("hassium.configuration.compat")
                     .push("compat");
+            compatRequireClientMod = builder
+                    .comment("是否强制要求客户端安装 Hassium。"
+                            + "false（默认）时无模组客户端仍可进服并走原版包。详见 docs/mod-compat.md")
+                    .translation("hassium.configuration.compat.requireClientMod")
+                    .define("requireClientMod", false);
             compatAutoDowngradeOnError = builder
                     .comment("出错时是否自动降级到原版行为（默认 true）")
                     .translation("hassium.configuration.compat.autoDowngradeOnError")
                     .define("autoDowngradeOnError", true);
             builder.pop();
 
+            // ====== debug ======
             builder.comment("调试日志（【仅排障】开启后热路径会大量刷屏，生产环境请保持 false）")
                     .translation("hassium.configuration.debug")
                     .push("debug");
@@ -593,68 +639,6 @@ public final class HassiumConfigSpec {
                     .comment("缓存读写日志（默认 false）")
                     .translation("hassium.configuration.debug.cacheLogging")
                     .define("cacheLogging", false);
-            builder.pop();
-        }
-    }
-
-    /**
-     * 服务端专用配置（仅专用服加载）。
-     */
-    public static final class Server {
-#if MC_VER < MC_1_20_2
-        public final ForgeConfigSpec.IntValue networkMaxChunksPerTick;
-        public final ForgeConfigSpec.IntValue networkServerChunkPushThreads;
-        public final ForgeConfigSpec.BooleanValue networkDynamicThreadPoolEnabled;
-        public final ForgeConfigSpec.IntValue networkMinPushThreads;
-        public final ForgeConfigSpec.IntValue networkMaxPushThreads;
-        public final ForgeConfigSpec.BooleanValue compatRequireClientMod;
-
-        Server(ForgeConfigSpec.Builder builder) {
-#else
-        public final ModConfigSpec.IntValue networkMaxChunksPerTick;
-        public final ModConfigSpec.IntValue networkServerChunkPushThreads;
-        public final ModConfigSpec.BooleanValue networkDynamicThreadPoolEnabled;
-        public final ModConfigSpec.IntValue networkMinPushThreads;
-        public final ModConfigSpec.IntValue networkMaxPushThreads;
-        public final ModConfigSpec.BooleanValue compatRequireClientMod;
-
-        Server(ModConfigSpec.Builder builder) {
-#endif
-            builder.comment("服务端推送配置（仅专用服生效）")
-                    .translation("hassium.configuration.server")
-                    .push("network");
-            networkMaxChunksPerTick = builder
-                    .comment("每玩家每 server tick 最多序列化/推送区块数（默认 32；仅服务端）")
-                    .translation("hassium.configuration.server.maxChunksPerTick")
-                    .defineInRange("maxChunksPerTick", 32, 1, 256);
-            networkServerChunkPushThreads = builder
-                    .comment("=== 服务端推送线程 ===")
-                    .comment("服务端区块推送线程数（动态池关闭时的基准；默认 8；仅服务端）")
-                    .translation("hassium.configuration.server.serverChunkPushThreads")
-                    .defineInRange("serverChunkPushThreads", 8, 1, 64);
-            networkDynamicThreadPoolEnabled = builder
-                    .comment("=== 动态线程池 ===")
-                    .comment("是否按队列负载动态调整推送线程数（默认 true；仅服务端）")
-                    .translation("hassium.configuration.server.dynamicThreadPoolEnabled")
-                    .define("dynamicThreadPoolEnabled", true);
-            networkMinPushThreads = builder
-                    .comment("动态线程池最小推送线程数（默认 2；仅服务端）")
-                    .translation("hassium.configuration.server.minPushThreads")
-                    .defineInRange("minPushThreads", 2, 1, 64);
-            networkMaxPushThreads = builder
-                    .comment("动态线程池最大推送线程数（默认 8；仅服务端）")
-                    .translation("hassium.configuration.server.maxPushThreads")
-                    .defineInRange("maxPushThreads", 8, 1, 64);
-            builder.pop();
-
-            builder.comment("兼容性配置")
-                    .translation("hassium.configuration.compat")
-                    .push("compat");
-            compatRequireClientMod = builder
-                    .comment("是否强制要求客户端安装 Hassium。"
-                            + "false（默认）时无模组客户端仍可进服并走原版包。详见 docs/mod-compat.md")
-                    .translation("hassium.configuration.compat.requireClientMod")
-                    .define("requireClientMod", false);
             builder.pop();
         }
     }

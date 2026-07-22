@@ -51,6 +51,8 @@ public class MixinClientPacketListener {
     private void hassium$onDisconnect(net.minecraft.network.chat.Component reason, CallbackInfo ci) {
         ClientLifecycleHelper.cleanupOnDisconnect();
     }
+
+
 #endif
 
     /**

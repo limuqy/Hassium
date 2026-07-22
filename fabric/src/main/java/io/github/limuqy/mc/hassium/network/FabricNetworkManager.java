@@ -159,6 +159,13 @@ ResourceLocation
 Identifier
 #endif
 INDEX_SYNC_S2C = ResourceLocationCompat.create(Constants.MOD_ID, "index_sync_s2c");
+    public static final
+#if MC_VER < MC_1_21_11
+ResourceLocation
+#else
+Identifier
+#endif
+LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
 
     @Override
     public void registerChannels() {
@@ -501,6 +508,30 @@ INDEX_SYNC_S2C = ResourceLocationCompat.create(Constants.MOD_ID, "index_sync_s2c
             }
         });
 #endif
+
+        // 注册光照增量通知接收
+#if MC_VER < MC_1_20_5
+        ClientPlayNetworking.registerGlobalReceiver(LIGHT_DELTA_S2C, (client, handler, buf, responseSender) -> {
+            try {
+                LightDeltaS2CPacket packet = LightDeltaS2CPacket.decode(buf);
+                client.execute(() -> ClientMetadataHandler.handleLightDeltaPacket(packet));
+            } catch (Exception e) {
+                LOGGER.error("[CLIENT] Failed to handle light delta packet", e);
+            }
+        });
+#else
+        ClientPlayNetworking.registerGlobalReceiver(FabricPayloadRegistry.LIGHT_DELTA_S2C_TYPE, (payload, context) -> {
+            FriendlyByteBuf buf = FabricPayloadRegistry.fromPayload(payload);
+            try {
+                LightDeltaS2CPacket packet = LightDeltaS2CPacket.decode(buf);
+                context.client().execute(() -> ClientMetadataHandler.handleLightDeltaPacket(packet));
+            } catch (Exception e) {
+                LOGGER.error("[CLIENT] Failed to handle light delta packet", e);
+            } finally {
+                buf.release();
+            }
+        });
+#endif
     }
 
     @Override
@@ -603,6 +634,15 @@ INDEX_SYNC_S2C = ResourceLocationCompat.create(Constants.MOD_ID, "index_sync_s2c
         ServerPlayNetworking.send(player, BLOCK_ENTITY_DATA_S2C, buf);
 #else
         ServerPlayNetworking.send(player, FabricPayloadRegistry.toPayload(FabricPayloadRegistry.BLOCK_ENTITY_DATA_S2C_TYPE, buf));
+#endif
+    }
+
+    @Override
+    public void sendLightDeltaPacket(ServerPlayer player, FriendlyByteBuf buf) {
+#if MC_VER < MC_1_20_5
+        ServerPlayNetworking.send(player, LIGHT_DELTA_S2C, buf);
+#else
+        ServerPlayNetworking.send(player, FabricPayloadRegistry.toPayload(FabricPayloadRegistry.LIGHT_DELTA_S2C_TYPE, buf));
 #endif
     }
 

@@ -885,7 +885,7 @@ public class ServerChunkPushManager {
                 return;
             }
 
-            int maxPerTick = HassiumConfigService.getInstance().getConfig().network().maxChunksPerTick();
+            int maxPerTick = HassiumConfigService.getInstance().getConfig().serverNetwork().maxChunksPerTick();
             if (maxPerTick <= 0) {
                 maxPerTick = 10;
             }
@@ -976,7 +976,7 @@ public class ServerChunkPushManager {
      */
     private ClientboundLevelChunkWithLightPacket buildChunkPacket(LevelChunk chunk, ServerLevel level) {
         try {
-            boolean stripLight = HassiumConfigService.getInstance().isLightStripEnabled();
+            boolean stripLight = HassiumConfigService.getInstance().isServerLightStrip();
             java.util.BitSet lightMask = stripLight ? new java.util.BitSet() : null;
             return new ClientboundLevelChunkWithLightPacket(
                     chunk, level.getLightEngine(), lightMask, lightMask);

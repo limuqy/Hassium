@@ -26,15 +26,11 @@ public class HassiumMod {
         net.minecraftforge.fml.ModLoadingContext.get().registerConfig(
                 ModConfig.Type.CLIENT, HassiumConfigSpec.CLIENT_SPEC, Constants.CONFIG_CLIENT_FILE);
         net.minecraftforge.fml.ModLoadingContext.get().registerConfig(
-                ModConfig.Type.COMMON, HassiumConfigSpec.COMMON_SPEC, Constants.CONFIG_COMMON_FILE);
-        net.minecraftforge.fml.ModLoadingContext.get().registerConfig(
                 ModConfig.Type.SERVER, HassiumConfigSpec.SERVER_SPEC, Constants.CONFIG_SERVER_FILE);
 #else
         // 1.20.6：ModConfigSpec 来自 FCAP Forge；Type 仍用 Forge ModConfig.Type
         fuzs.forgeconfigapiport.forge.api.neoforge.v4.NeoForgeConfigRegistry.INSTANCE.register(
                 Constants.MOD_ID, ModConfig.Type.CLIENT, HassiumConfigSpec.CLIENT_SPEC, Constants.CONFIG_CLIENT_FILE);
-        fuzs.forgeconfigapiport.forge.api.neoforge.v4.NeoForgeConfigRegistry.INSTANCE.register(
-                Constants.MOD_ID, ModConfig.Type.COMMON, HassiumConfigSpec.COMMON_SPEC, Constants.CONFIG_COMMON_FILE);
         fuzs.forgeconfigapiport.forge.api.neoforge.v4.NeoForgeConfigRegistry.INSTANCE.register(
                 Constants.MOD_ID, ModConfig.Type.SERVER, HassiumConfigSpec.SERVER_SPEC, Constants.CONFIG_SERVER_FILE);
 #endif

@@ -29,7 +29,7 @@ public class MixinLightRecompute {
 
     @Inject(method = "handleLevelChunkWithLight", at = @At("TAIL"))
     private void hassium$onHandleChunkWithLight(ClientboundLevelChunkWithLightPacket packet, CallbackInfo ci) {
-        if (!HassiumConfigService.getInstance().isLightStripEnabled()) {
+        if (!HassiumConfigService.getInstance().isLightStrip()) {
             return;
         }
         if (level == null) {

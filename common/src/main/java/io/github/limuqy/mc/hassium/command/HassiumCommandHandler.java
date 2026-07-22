@@ -75,12 +75,20 @@ public class HassiumCommandHandler {
 
         ViewDistanceExtensionService ovd = ViewDistanceExtensionService.getInstance();
 
+        // 光照缓存指标
+        long lightHit = metrics.getLightCacheHitCount();
+        long lightMiss = metrics.getLightCacheMissCount();
+        double lightRecomputeMs = metrics.getLightRecomputeTimeMs();
+
         return String.format(
                 "§6=== Hassium 客户端统计 ===§r\n" +
                 "§e带宽压缩：§r%s（当前 %s，原版 %s，压缩比 %s）\n" +
-                "§e缓存命中：§r%s（命中 %s，增量 %s）\n" +
+                "§e区块缓存：§r%s（命中 %s，增量 %s）\n" +
                 "§e区块加载：§r%d（新增 %d/%s，过期 %d/%s）\n" +
-                "§e超视渲染：§r%s（已加载 %d，缺失 %d）",
+                "§e超视渲染：§r%s（已加载 %d，缺失 %d）\n" +
+                "§6--- §e光照缓存 §6---§r\n" +
+                "§7缓存命中：§a%d §7| 需重算：§c%d§r\n" +
+                "§7重算耗时：§e%.1fms §7| 命中率：§a%s§r",
                 MetricsTextFormatter.formatPercent(currentBandwidthPercent),
                 MetricsTextFormatter.formatBytes(actualRecv), MetricsTextFormatter.formatBytes(vanillaRecv),
                 MetricsTextFormatter.formatCompressionRatio(vanillaRecv, actualRecv),
@@ -90,7 +98,9 @@ public class HassiumCommandHandler {
                 staleRequests, MetricsTextFormatter.formatBytes(staleRequestBytes),
                 ovd.isEnabled() ? "§aON§r" : "§7OFF§r",
                 ovd.getLoadedCount(),
-                ovd.getPendingMissCount()
+                ovd.getPendingMissCount(),
+                lightHit, lightMiss, lightRecomputeMs,
+                MetricsTextFormatter.formatPercent(metrics.getLightCacheHitRate() * 100.0)
         );
     }
 

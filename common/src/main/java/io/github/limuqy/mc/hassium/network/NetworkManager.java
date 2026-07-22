@@ -53,4 +53,9 @@ public interface NetworkManager {
      * 发送 blockEntity 数据响应到客户端（服务端调用）
      */
     void sendBlockEntityData(ServerPlayer player, FriendlyByteBuf buf);
+
+    /**
+     * 发送光照增量通知到客户端（服务端调用）
+     */
+    void sendLightDeltaPacket(ServerPlayer player, FriendlyByteBuf buf);
 }

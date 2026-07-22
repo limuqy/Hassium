@@ -1,7 +1,6 @@
 package io.github.limuqy.mc.hassium.network;
 
 import io.github.limuqy.mc.hassium.Constants;
-import io.github.limuqy.mc.hassium.cache.ChunkContentHashUtil;
 import io.github.limuqy.mc.hassium.cache.client.ChunkDiskCodec;
 import io.github.limuqy.mc.hassium.cache.client.ClientHassiumStorage;
 import io.github.limuqy.mc.hassium.cache.client.ClientLightRecomputeService;
@@ -13,10 +12,10 @@ import io.github.limuqy.mc.hassium.concurrent.TaskCategory;
 import io.github.limuqy.mc.hassium.platform.Services;
 import io.github.limuqy.mc.hassium.utils.DebugLogger;
 import io.github.limuqy.mc.hassium.utils.DebugLogger.LogType;
-import io.github.limuqy.mc.hassium.compat.RegistryCompat;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.world.level.ChunkPos;
+import net.minecraft.nbt.CompoundTag;
 
 import java.nio.file.Path;
 import java.util.Map;
@@ -188,7 +187,7 @@ public class ClientChunkHandler {
                 DebugLogger.info(LogType.COMPRESSION, "[HANDLE_COMPRESSED] Decompressed chunk [{}, {}] ({} -> {} bytes)",
                     chunkX, chunkZ, compData.length, decompressed.length);
 
-                // 先回主线程应用区块，再写缓存——缓存失败（含 Error）不得阻断加载
+                // 回主线程应用区块（缓存由卸载路径统一处理）
                 MainThreadDispatcher.execute(() -> {
                     DebugLogger.info(LogType.COMPRESSION, "[HANDLE_COMPRESSED] Applying chunk [{}, {}] to world", chunkX, chunkZ);
                     if (applyChunkData(chunkX, chunkZ, decompressed, false)) {
@@ -197,12 +196,6 @@ public class ClientChunkHandler {
                         DebugLogger.warn(LogType.COMPRESSION, "[HANDLE_COMPRESSED] Failed to apply chunk [{}, {}] from server", chunkX, chunkZ);
                     }
                 }, new ChunkPos(chunkX, chunkZ), TaskCategory.SAFE_TO_CANCEL);
-
-                try {
-                    persistDecompressedChunk(chunkX, chunkZ, decompressed);
-                } catch (Throwable t) {
-                    Constants.LOG.warn("Hassium: Failed to persist chunk [{}, {}] after apply", chunkX, chunkZ, t);
-                }
 
             } catch (Exception e) {
                 DebugLogger.error("[HANDLE_COMPRESSED] Error in background decompress for chunk [{}, {}]", e, chunkX, chunkZ);
@@ -225,14 +218,8 @@ public class ClientChunkHandler {
             Constants.LOG.debug("Hassium: Decompressed chunk [{}, {}] on main thread (fallback), size: {} -> {} bytes",
                 compressed.chunkX, compressed.chunkZ, compressed.compressedData.length, decompressed.length);
 
-            // 先应用再写缓存，避免缓存路径 Error 阻断加载
+            // 应用区块（缓存由卸载路径统一处理）
             boolean applied = applyChunkData(compressed.chunkX, compressed.chunkZ, decompressed, false);
-            try {
-                persistDecompressedChunk(compressed.chunkX, compressed.chunkZ, decompressed);
-            } catch (Throwable t) {
-                Constants.LOG.warn("Hassium: Failed to persist chunk [{}, {}] after apply (fallback)",
-                        compressed.chunkX, compressed.chunkZ, t);
-            }
             if (applied) {
                 Constants.LOG.debug("Hassium: Applied chunk [{}, {}] from server",
                         compressed.chunkX, compressed.chunkZ);
@@ -262,6 +249,25 @@ public class ClientChunkHandler {
      * @param renderOnly true=仅渲染不参与逻辑tick
      */
     public static boolean applyChunkData(int chunkX, int chunkZ, byte[] chunkData, boolean renderOnly) {
+        return applyChunkDataInternal(chunkX, chunkZ, chunkData, renderOnly, null);
+    }
+
+    /**
+     * 将解压后的区块数据应用到客户端世界（接受预构建的 NBT 以避免光照回写时重复读盘）。
+     *
+     * @param chunkX     区块X坐标
+     * @param chunkZ     区块Z坐标
+     * @param chunkData  NBT 字节或 packet 字节
+     * @param renderOnly true=仅渲染不参与逻辑tick
+     * @param cachedNbt  内存中的缓存 NBT（可为 null，null 时回退磁盘读取）
+     */
+    public static boolean applyChunkData(int chunkX, int chunkZ, byte[] chunkData,
+                                         boolean renderOnly, CompoundTag cachedNbt) {
+        return applyChunkDataInternal(chunkX, chunkZ, chunkData, renderOnly, cachedNbt);
+    }
+
+    private static boolean applyChunkDataInternal(int chunkX, int chunkZ, byte[] chunkData,
+                                                  boolean renderOnly, CompoundTag cachedNbt) {
         DebugLogger.info(LogType.CHUNK_APPLY, "[APPLY_CHUNK] Applying chunk [{}, {}] (dataSize={}, renderOnly={})",
                 chunkX, chunkZ, chunkData.length, renderOnly);
 
@@ -304,7 +310,7 @@ public class ClientChunkHandler {
             } else {
                 // 超视渲染：磁盘 NBT 无 LightData，本地重算避免黑块
                 // 合并 pipeline：同一主线程时间片内完成光照重算，避免跨帧黑块
-                ClientLightRecomputeService.applyLightEngineNow(pos);
+                ClientLightRecomputeService.applyLightEngineNow(pos, cachedNbt);
                 ViewDistanceExtensionService.getInstance().onRenderOnlyApplied(pos);
             }
             return true;
@@ -412,114 +418,4 @@ public class ClientChunkHandler {
         return bytes != null ? ChunkDiskCodec.bytesToNbt(bytes) : null;
     }
 
-    /**
-     * 将解压后的区块数据持久化到本地缓存（后台线程安全）。
-     * <p>
-     * 收包路径：packet 字节 → {@link ChunkDiskCodec#packetBytesToNbt} → NBT 字节 → persist。
-     * MetadataTable / 命中比对使用的 contentHash 必须与服务端 chunkHash 一致：
-     * {@code combine(sectionHashes)}。
-     */
-    private static void persistDecompressedChunk(int chunkX, int chunkZ, byte[] data) {
-        if (clientStorage == null) {
-            return;
-        }
-
-        try {
-            net.minecraft.client.Minecraft mc = net.minecraft.client.Minecraft.getInstance();
-            net.minecraft.client.multiplayer.ClientLevel level = mc.level;
-            if (level == null) return;
-
-            // packet 字节 → NBT（传入世界 section 数，避免 guess 多读尾部残字节）
-            net.minecraft.nbt.CompoundTag nbt = ChunkDiskCodec.packetBytesToNbt(
-                    data, level.registryAccess(), level.getSectionsCount());
-            if (nbt == null) {
-                Constants.LOG.debug("Hassium: Failed to convert packet to NBT for chunk [{}, {}]", chunkX, chunkZ);
-                return;
-            }
-
-            // 计算 section 哈希（从 packet 字节，与服务端同算法）
-            long[] sectionHashes = null;
-            long contentHash;
-            try {
-                sectionHashes = computeSectionHashesFromData(data);
-                if (sectionHashes != null) {
-                    storePendingSectionHashes(chunkX, chunkZ, sectionHashes);
-                    contentHash = ChunkContentHashUtil.combineSectionHashesFromArray(sectionHashes);
-                } else {
-                    contentHash = consumePendingContentHash(chunkX, chunkZ);
-                }
-            } catch (Throwable t) {
-                Constants.LOG.debug("Hassium: Failed to compute section hashes for chunk [{}, {}]", chunkX, chunkZ, t);
-                contentHash = consumePendingContentHash(chunkX, chunkZ);
-            }
-
-            // NBT → 字节 → 落盘
-            byte[] nbtBytes = ChunkDiskCodec.nbtToBytes(nbt);
-            if (nbtBytes == null) {
-                Constants.LOG.debug("Hassium: Failed to encode NBT bytes for chunk [{}, {}]", chunkX, chunkZ);
-                return;
-            }
-
-            ChunkPos pos = new ChunkPos(chunkX, chunkZ);
-            boolean saved = persistToCache(pos, nbtBytes, contentHash, sectionHashes);
-            if (saved) {
-                Constants.LOG.debug("Hassium: Cached chunk [{}, {}] as NBT (hash={})",
-                        chunkX, chunkZ, Long.toHexString(contentHash));
-            }
-        } catch (Exception e) {
-            Constants.LOG.debug("Hassium: Failed to persist chunk [{}, {}] to cache", chunkX, chunkZ, e);
-        }
-    }
-
-    /**
-     * 从解压后的 packet 字节计算 section 哈希。
-     * <p>
-     * 在后台线程调用，用于持久化 section 哈希到缓存。
-     * 使用与服务端相同的 section 序列化格式，确保哈希一致性。
-     *
-     * @param data 解压后的 packet 字节
-     * @return section 哈希数组（索引 = sectionIndex），失败返回 null
-     */
-    private static long[] computeSectionHashesFromData(byte[] data) {
-        io.netty.buffer.ByteBuf buf = io.netty.buffer.Unpooled.wrappedBuffer(data);
-        try {
-            buf.readerIndex(0);
-            net.minecraft.network.FriendlyByteBuf friendlyBuf = new net.minecraft.network.FriendlyByteBuf(buf);
-
-            // 读取完整的 chunk packet 数据
-            // packet 格式：chunkX(4) + chunkZ(4) + chunkData + lightData
-            // chunkData 格式：heightmaps + sectionsBytes(varint) + sections + blockEntities
-            int chunkX = friendlyBuf.readInt();
-            int chunkZ = friendlyBuf.readInt();
-
-            // 跳过 heightmaps（1.21.5+ 为 StreamCodec，此前为 NBT）
-            io.github.limuqy.mc.hassium.compat.ChunkPacketDataCompat.skipHeightmaps(friendlyBuf);
-
-            // 读取 sections 数据大小（varint）
-            int sectionsSize = friendlyBuf.readVarInt();
-            if (sectionsSize <= 0 || sectionsSize > friendlyBuf.readableBytes()) {
-                return null;
-            }
-
-            // 读取 sections 字节
-            byte[] sectionsBytes = new byte[sectionsSize];
-            friendlyBuf.readBytes(sectionsBytes);
-
-            // 使用 ChunkContentHashUtil 计算 per-section 哈希
-            net.minecraft.client.Minecraft mc = net.minecraft.client.Minecraft.getInstance();
-            if (mc.level == null) {
-                return null;
-            }
-            int sectionCount = mc.level.getSectionsCount();
-            java.util.Map<Integer, Long> sectionHashes =
-                    ChunkContentHashUtil.computeSectionHashesFromBytes(sectionsBytes, sectionCount, mc.level.registryAccess());
-
-            return ChunkContentHashUtil.sectionHashesToArray(sectionHashes);
-        } catch (Exception e) {
-            Constants.LOG.debug("Hassium: Failed to parse packet for section hashes", e);
-            return null;
-        } finally {
-            buf.release();
-        }
-    }
 }

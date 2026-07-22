@@ -1,156 +1,157 @@
 package io.github.limuqy.mc.hassium.config;
 
 import io.github.limuqy.mc.hassium.network.HassiumPacketIds;
-
 import java.util.Set;
 
 /**
- * Hassium 配置
+ * Hassium 配置（运行时快照）。
+ * <p>
+ * 物理客户端从 client.toml 加载：ClientCacheConfig + ClientNetworkConfig + DebugConfig。
+ * 专用服从 server.toml 加载：StorageConfig + ServerNetworkConfig + CompatConfig + DebugConfig。
  */
 public record HassiumConfig(
         StorageConfig storage,
         ClientCacheConfig clientCache,
-        NetworkConfig network,
+        ClientNetworkConfig clientNetwork,
+        ServerNetworkConfig serverNetwork,
         CompatConfig compat,
         DebugConfig debug
 ) {
-    /**
-     * 默认配置
-     */
     public static final HassiumConfig DEFAULT = new HassiumConfig(
             StorageConfig.DEFAULT,
             ClientCacheConfig.DEFAULT,
-            NetworkConfig.DEFAULT,
+            ClientNetworkConfig.DEFAULT,
+            ServerNetworkConfig.DEFAULT,
             CompatConfig.DEFAULT,
             DebugConfig.DEFAULT
     );
 
     /**
-     * 存储配置
+     * 存储配置（仅专用服；server.toml storage.*）
      */
     public record StorageConfig(
             boolean enabled,
             String mode,
             int zstdLevel
     ) {
-        public static final StorageConfig DEFAULT = new StorageConfig(
-                true,    // enabled: 默认开启
-                "mirror", // mode: 镜像模式
-                9        // zstdLevel: 默认等级 9
-        );
+        public static final StorageConfig DEFAULT = new StorageConfig(true, "mirror", 9);
     }
 
     /**
-     * 客户端缓存配置
+     * 客户端缓存配置（仅物理客户端；client.toml clientCache.*）
+     * <p>
+     * 吸收了原 NetworkConfig 中客户端专属字段：loadThreads、lightStrip、maxChunksPerFrame、mainThreadChunkBudgetMs。
+     * Bloom filter 参数硬编码（enabled=true, insertions=10000, fpp=0.01）。
+     * maxAgeDays 已删除（热度评分隐式覆盖）。
      */
     public record ClientCacheConfig(
             boolean enabled,
             int maxSizeMb,
-            int maxAgeDays,
-            // === 热度清理相关配置 ===
+            int cacheCompressionLevel,
+            // === 热度清理 ===
             double hotScoreThreshold,
             double recencyWeight,
             double frequencyWeight,
             int cleanupIntervalTicks,
             int targetCacheSizeMb,
             int minCleanupBatchSize,
-            // === Bloom Filter 配置 ===
-            boolean bloomFilterEnabled,
-            int bloomFilterExpectedInsertions,
-            double bloomFilterFpp,
-            // === 超视渲染配置 ===
+            // === 超视渲染 ===
             boolean viewDistanceExtensionEnabled,
             int maxRenderDistance,
             int ovdUnloadDelaySecs,
-            // === 分段增量（缓存过期时仅补变更分段）===
+            // === 分段增量 ===
             boolean sectionDeltaEnabled,
-            // === JoinBoost（进服后短时提高主线程预算，加速加载）===
+            // === JoinBoost ===
             boolean joinBoostEnabled,
-            // === 可选实体快照（仅卸载冷路径捕获）===
-            boolean entitySnapshotsEnabled
+            // === 实体快照 ===
+            boolean entitySnapshotsEnabled,
+            // === 从原 NetworkConfig 吸收的客户端字段 ===
+            int loadThreads,
+            boolean lightStrip,
+            int maxChunksPerFrame,
+            int mainThreadChunkBudgetMs
     ) {
         public static final ClientCacheConfig DEFAULT = new ClientCacheConfig(
-                true,   // enabled: 默认启用
-                2048,   // maxSizeMb: 2GB
-                30,     // maxAgeDays: 30天
-                // === 热度清理默认配置 ===
-                0.3,    // hotScoreThreshold: 热度阈值，低于此值视为冷区块
-                0.7,    // recencyWeight: 最近访问权重
-                0.3,    // frequencyWeight: 访问频率权重
-                6000,   // cleanupIntervalTicks: 清理检查间隔 ticks (5分钟)
-                0,      // targetCacheSizeMb: 目标缓存大小 (0=自动计算为maxSizeMb*0.8)
-                100,    // minCleanupBatchSize: 每次最少清理区块数
-                // === Bloom Filter 默认配置 ===
-                true,   // bloomFilterEnabled: 默认启用 Bloom Filter 预筛
-                10000,  // bloomFilterExpectedInsertions: 预期插入元素数量
-                0.01,   // bloomFilterFpp: 期望假阳性率 1%
-                // === 超视渲染默认配置 ===
-                true,   // viewDistanceExtensionEnabled: 超视渲染总开关
-                32,     // maxRenderDistance: 超视渲染/有效 RD 上限 min(滑块, 此值)
-                5,      // ovdUnloadDelaySecs: 离开环带后延迟卸载秒数
-                // === 分段增量默认配置 ===
-                true,   // sectionDeltaEnabled: 缓存过期时走分段增量（默认开）
-                // === JoinBoost 默认配置 ===
-                true,   // joinBoostEnabled: 进服后 5s 内提高主线程预算加速加载（默认开）
-                // === 实体快照默认配置 ===
-                false   // entitySnapshotsEnabled: 默认关闭
+                true,    // enabled
+                4096,    // maxSizeMb
+                9,       // cacheCompressionLevel
+                0.3,     // hotScoreThreshold
+                0.7,     // recencyWeight
+                0.3,     // frequencyWeight
+                6000,    // cleanupIntervalTicks
+                0,       // targetCacheSizeMb (auto)
+                100,     // minCleanupBatchSize
+                true,    // viewDistanceExtensionEnabled
+                32,      // maxRenderDistance
+                5,       // ovdUnloadDelaySecs
+                true,    // sectionDeltaEnabled
+                true,    // joinBoostEnabled
+                false,   // entitySnapshotsEnabled
+                10,      // loadThreads
+                true,    // lightStrip
+                32,      // maxChunksPerFrame
+                10       // mainThreadChunkBudgetMs
         );
 
-        /**
-         * 获取最大缓存大小（字节）
-         */
         public long maxCacheSizeBytes() {
             return (long) maxSizeMb * 1024 * 1024;
         }
 
-        /**
-         * 解析后的目标缓存大小（MB；配置为 0 时取 maxSizeMb×0.8）
-         */
         public int resolvedTargetCacheSizeMb() {
             return targetCacheSizeMb > 0 ? targetCacheSizeMb : (int) (maxSizeMb * 0.8);
         }
 
-        /**
-         * 获取目标缓存大小（字节）
-         */
         public long targetCacheSizeBytes() {
             return (long) resolvedTargetCacheSizeMb() * 1024 * 1024;
         }
     }
 
     /**
-     * 网络配置
+     * 客户端网络配置（仅物理客户端；client.toml network.*）
      */
-    public record NetworkConfig(
+    public record ClientNetworkConfig(
+            boolean enabled,
+            boolean metricsEnabled
+    ) {
+        public static final ClientNetworkConfig DEFAULT = new ClientNetworkConfig(true, true);
+    }
+
+    /**
+     * 服务端网络配置（仅专用服；server.toml network.*）
+     * <p>
+     * 包含共享网络行为（压缩/聚合）和服务端专属推送设置。
+     * 标记"实验性"的字段当前未生效（ZstdPipelineSwitcher.switchToZstd 无调用者）。
+     */
+    public record ServerNetworkConfig(
             boolean enabled,
             int compressionLevel,
-            int maxChunksPerTick,
+            boolean magiclessZstd,
+            // === 实验性：全局包压缩（管线未安装）===
             boolean globalPacketCompression,
             int globalCompressionLevel,
             int globalCompressionThreshold,
-            Set<String> compressionBlacklist,
+            // === 上下文压缩 ===
             boolean useContextCompression,
-            boolean magiclessZstd,
+            // === 实验性：包聚合（管线未安装）===
             boolean enablePacketAggregation,
             int aggregationMinBatchSize,
             long aggregationMaxWaitTimeMs,
             int aggregationMaxSize,
+            // === 实验性：紧凑包头（管线未安装）===
             boolean enableCompactHeader,
-            int serverChunkPushThreads,
-            int clientChunkLoadThreads,
-            boolean lightStripEnabled,
-            int backgroundThreads,
-            int maxChunksPerFrame,
-            int maxCallbacksPerFrame,
+            // === 黑名单 ===
+            Set<String> compressionBlacklist,
+            // === 指标 ===
             boolean metricsEnabled,
-            int mainThreadChunkBudgetMs,
+            // === 服务端推送 ===
+            int maxChunksPerTick,
+            int serverChunkPushThreads,
             boolean dynamicThreadPoolEnabled,
             int minPushThreads,
-            int maxPushThreads
+            int maxPushThreads,
+            // === 光照剥离（服务端控制是否发包时剥离 LightData）===
+            boolean lightStrip
     ) {
-        /**
-         * 默认压缩黑名单（与硬编码黑名单对齐的配置侧副本）
-         */
         public static final Set<String> DEFAULT_COMPRESSION_BLACKLIST = Set.of(
                 HassiumPacketIds.CHUNK_PAYLOAD_S2C,
                 HassiumPacketIds.SECTION_DELTA_S2C,
@@ -158,50 +159,42 @@ public record HassiumConfig(
                 "hassium:aggregation"
         );
 
-        public static final NetworkConfig DEFAULT = new NetworkConfig(
+        public static final ServerNetworkConfig DEFAULT = new ServerNetworkConfig(
                 true,              // enabled
-                3,                 // compressionLevel（速度优先）
-                32,                // maxChunksPerTick
-                true,              // globalPacketCompression
-                3,                 // globalCompressionLevel
-                256,               // globalCompressionThreshold
-                DEFAULT_COMPRESSION_BLACKLIST,
-                true,              // useContextCompression
+                3,                 // compressionLevel
                 true,              // magiclessZstd
-                true,              // enablePacketAggregation
-                4,                 // aggregationMinBatchSize
-                20,                // aggregationMaxWaitTimeMs
-                256 * 1024,        // aggregationMaxSize
-                true,              // enableCompactHeader
-                8,                 // serverChunkPushThreads
-                10,                // clientChunkLoadThreads
-                true,              // lightStripEnabled
-                8,                 // backgroundThreads
-                32,                // maxChunksPerFrame
-                32,                // maxCallbacksPerFrame
+                true,              // globalPacketCompression (experimental)
+                3,                 // globalCompressionLevel (experimental)
+                256,               // globalCompressionThreshold (experimental)
+                true,              // useContextCompression
+                true,              // enablePacketAggregation (experimental)
+                4,                 // aggregationMinBatchSize (experimental)
+                20,                // aggregationMaxWaitTimeMs (experimental)
+                256 * 1024,        // aggregationMaxSize (experimental)
+                true,              // enableCompactHeader (experimental)
+                DEFAULT_COMPRESSION_BLACKLIST,
                 true,              // metricsEnabled
-                10,                 // mainThreadChunkBudgetMs
+                32,                // maxChunksPerTick
+                8,                 // serverChunkPushThreads
                 true,              // dynamicThreadPoolEnabled
                 2,                 // minPushThreads
-                8                  // maxPushThreads
+                8,                 // maxPushThreads
+                true               // lightStrip
         );
     }
 
     /**
-     * 兼容性配置
+     * 兼容性配置（仅专用服；server.toml compat.*）
      */
     public record CompatConfig(
             boolean requireClientMod,
             boolean autoDowngradeOnError
     ) {
-        public static final CompatConfig DEFAULT = new CompatConfig(
-                false,       // requireClientMod: 不强制要求客户端
-                true         // autoDowngradeOnError: 错误时自动降级
-        );
+        public static final CompatConfig DEFAULT = new CompatConfig(false, true);
     }
 
     /**
-     * 调试配置
+     * 调试配置（双端各自 toml debug.*）
      */
     public record DebugConfig(
             boolean metadataLogging,
@@ -213,13 +206,7 @@ public record HassiumConfig(
             boolean cacheLogging
     ) {
         public static final DebugConfig DEFAULT = new DebugConfig(
-                false,  // metadataLogging: 元数据相关日志（CLIENT_METADATA, COMPARE_METADATA, APPLY_METADATA）
-                false,  // dispatcherLogging: 主线程调度器日志（MAIN_DISPATCHER）
-                false,  // asyncLogging: 异步任务日志（ASYNC）
-                false,  // compressionLogging: 压缩/解压日志（HANDLE_COMPRESSED）
-                false,  // chunkApplyLogging: 区块应用日志（APPLY_CHUNK）
-                false,  // networkLogging: 网络传输日志（SEND_CHUNK, RECEIVED）
-                false   // cacheLogging: 缓存操作日志（CACHE_LOAD, CACHE_APPLY）
+                false, false, false, false, false, false, false
         );
     }
 }

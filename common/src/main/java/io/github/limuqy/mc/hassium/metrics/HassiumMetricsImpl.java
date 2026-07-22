@@ -58,6 +58,12 @@ public class HassiumMetricsImpl implements HassiumMetrics {
     /** 客户端收到并计入流量的分段增量区块数 */
     private final AtomicLong sectionDeltaChunksReceived = new AtomicLong(0);
 
+    // 光照缓存指标
+    private final AtomicLong lightCacheHitCount = new AtomicLong(0);
+    private final AtomicLong lightCacheMissCount = new AtomicLong(0);
+    private final AtomicLong lightRecomputeTimeNs = new AtomicLong(0);
+    private final AtomicLong lightDeltaReceivedCount = new AtomicLong(0);
+
     // 错误指标
     private final AtomicLong storageErrors = new AtomicLong(0);
     private final AtomicLong networkErrors = new AtomicLong(0);
@@ -245,6 +251,28 @@ public class HassiumMetricsImpl implements HassiumMetrics {
         return chunksDecompressed.get();
     }
 
+    // ===== 光照缓存指标 =====
+
+    @Override
+    public long getLightCacheHitCount() {
+        return lightCacheHitCount.get();
+    }
+
+    @Override
+    public long getLightCacheMissCount() {
+        return lightCacheMissCount.get();
+    }
+
+    @Override
+    public long getLightRecomputeTimeNs() {
+        return lightRecomputeTimeNs.get();
+    }
+
+    @Override
+    public long getLightDeltaReceivedCount() {
+        return lightDeltaReceivedCount.get();
+    }
+
     @Override
     public long getStorageErrors() {
         return storageErrors.get();
@@ -300,6 +328,10 @@ public class HassiumMetricsImpl implements HassiumMetrics {
         chunksDecompressed.set(0);
         sectionDeltaRequestsSent.set(0);
         sectionDeltaChunksReceived.set(0);
+        lightCacheHitCount.set(0);
+        lightCacheMissCount.set(0);
+        lightRecomputeTimeNs.set(0);
+        lightDeltaReceivedCount.set(0);
         storageErrors.set(0);
         networkErrors.set(0);
         compressionErrors.set(0);
@@ -452,6 +484,40 @@ public class HassiumMetricsImpl implements HassiumMetrics {
      */
     public void recordNetworkDecompress(long timeNs) {
         networkDecompressTimeNs.addAndGet(timeNs);
+    }
+
+    // ===== 光照缓存记录方法 =====
+
+    /**
+     * 记录光照缓存命中（缓存含光照数据）
+     */
+    public void recordLightCacheHit() {
+        lightCacheHitCount.incrementAndGet();
+    }
+
+    /**
+     * 记录光照缓存未命中（缓存不含光照数据，需重算）
+     */
+    public void recordLightCacheMiss() {
+        lightCacheMissCount.incrementAndGet();
+    }
+
+    /**
+     * 记录光照重算耗时
+     */
+    public void recordLightRecomputeTime(long timeNs) {
+        if (timeNs > 0) {
+            lightRecomputeTimeNs.addAndGet(timeNs);
+        }
+    }
+
+    /**
+     * 记录收到 LightDeltaS2CPacket 条目
+     */
+    public void recordLightDeltaReceived(long count) {
+        if (count > 0) {
+            lightDeltaReceivedCount.addAndGet(count);
+        }
     }
 
     /**

@@ -2,6 +2,7 @@ package io.github.limuqy.mc.hassium.config;
 
 import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.metrics.NetworkStats;
+import io.github.limuqy.mc.hassium.platform.Services;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -13,7 +14,7 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 /**
  * Hassium 配置服务。
  * <p>
- * Forge/NeoForge：真相源为 {@link HassiumConfigSpec}；Fabric：{@link HassiumTomlConfigIO}。
+ * Forge/NeoForge：真相源为 {@link HassiumConfigSpec}；Fabric：{@link FabricTomlConfigIO}。
  * 本类维护运行时快照与热路径门闩。
  */
 public class HassiumConfigService {
@@ -36,7 +37,7 @@ public class HassiumConfigService {
 
     public HassiumConfigService(HassiumConfig config) {
         this.config = config;
-        this.networkCompressionEnabled.set(config.network().enabled());
+        this.networkCompressionEnabled.set(config.clientNetwork().enabled() || config.serverNetwork().enabled());
         this.storageEnabled.set(config.storage().enabled());
     }
 
@@ -56,12 +57,12 @@ public class HassiumConfigService {
         lock.writeLock().lock();
         try {
             this.tomlBackend.set(true);
-            HassiumConfig loaded = HassiumTomlConfigIO.load();
+            HassiumConfig loaded = FabricTomlConfigIO.load();
             this.config = loaded;
-            this.networkCompressionEnabled.set(loaded.network().enabled());
+            this.networkCompressionEnabled.set(loaded.clientNetwork().enabled() || loaded.serverNetwork().enabled());
             this.storageEnabled.set(loaded.storage().enabled());
             this.configLoaded.set(true);
-            NetworkStats.setEnabled(loaded.network().metricsEnabled());
+            NetworkStats.setEnabled(resolveMetricsEnabled(loaded));
             LOGGER.info("Hassium: Configuration loaded from Toml");
         } catch (Exception e) {
             LOGGER.error("Hassium: Failed to load Toml configuration", e);
@@ -84,7 +85,7 @@ public class HassiumConfigService {
         } finally {
             lock.readLock().unlock();
         }
-        HassiumTomlConfigIO.save(snapshot);
+        FabricTomlConfigIO.save(snapshot);
     }
 
     public boolean isTomlBackend() {
@@ -103,10 +104,10 @@ public class HassiumConfigService {
         try {
             HassiumConfig loaded = HassiumConfigSpec.toHassiumConfig();
             this.config = loaded;
-            this.networkCompressionEnabled.set(loaded.network().enabled());
+            this.networkCompressionEnabled.set(loaded.clientNetwork().enabled() || loaded.serverNetwork().enabled());
             this.storageEnabled.set(loaded.storage().enabled());
             this.configLoaded.set(true);
-            NetworkStats.setEnabled(loaded.network().metricsEnabled());
+            NetworkStats.setEnabled(resolveMetricsEnabled(loaded));
             LOGGER.info("Hassium: Configuration synced from ConfigSpec");
         } catch (Exception e) {
             // NeoForge 1.20.2–1.20.4 上 FileWatcher 可能在 Spec 未 setConfig 时并发 reload，
@@ -194,9 +195,9 @@ public class HassiumConfigService {
         lock.writeLock().lock();
         try {
             this.config = newConfig;
-            this.networkCompressionEnabled.set(newConfig.network().enabled());
+            this.networkCompressionEnabled.set(newConfig.clientNetwork().enabled() || newConfig.serverNetwork().enabled());
             this.storageEnabled.set(newConfig.storage().enabled());
-            NetworkStats.setEnabled(newConfig.network().metricsEnabled());
+            NetworkStats.setEnabled(resolveMetricsEnabled(newConfig));
         } finally {
             lock.writeLock().unlock();
         }
@@ -238,7 +239,7 @@ public class HassiumConfigService {
     }
 
     public int getCompressionLevel() {
-        return config.network().compressionLevel();
+        return config.serverNetwork().compressionLevel();
     }
 
     public static int getNetworkCompressionLevel() {
@@ -257,8 +258,8 @@ public class HassiumConfigService {
         return config.clientCache().maxSizeMb();
     }
 
-    public int getCacheMaxAgeDays() {
-        return config.clientCache().maxAgeDays();
+    public int getCacheCompressionLevel() {
+        return config.clientCache().cacheCompressionLevel();
     }
 
     public double getHotScoreThreshold() {
@@ -318,113 +319,100 @@ public class HassiumConfigService {
     }
 
     public boolean isGlobalPacketCompressionEnabled() {
-        return config.network().globalPacketCompression();
-    }
-
-    public int getGlobalCompressionLevel() {
-        return config.network().globalCompressionLevel();
-    }
-
-    public int getGlobalCompressionThreshold() {
-        return config.network().globalCompressionThreshold();
+        return config.serverNetwork().globalPacketCompression();
     }
 
     public Set<String> getCompressionBlacklist() {
-        return config.network().compressionBlacklist();
+        return config.serverNetwork().compressionBlacklist();
     }
 
     public boolean isPacketCompressible(String packetType) {
-        return !config.network().compressionBlacklist().contains(packetType);
+        return !config.serverNetwork().compressionBlacklist().contains(packetType);
     }
 
     public boolean isUseContextCompression() {
-        return config.network().useContextCompression();
+        return config.serverNetwork().useContextCompression();
     }
 
     public boolean isMagiclessZstd() {
-        return config.network().magiclessZstd();
+        return config.serverNetwork().magiclessZstd();
     }
 
     public boolean isPacketAggregationEnabled() {
-        return config.network().enablePacketAggregation();
+        return config.serverNetwork().enablePacketAggregation();
     }
 
     public int getAggregationMinBatchSize() {
-        return config.network().aggregationMinBatchSize();
+        return config.serverNetwork().aggregationMinBatchSize();
     }
 
     public long getAggregationMaxWaitTimeMs() {
-        return config.network().aggregationMaxWaitTimeMs();
+        return config.serverNetwork().aggregationMaxWaitTimeMs();
     }
 
     public int getAggregationMaxSize() {
-        return config.network().aggregationMaxSize();
+        return config.serverNetwork().aggregationMaxSize();
     }
 
     public boolean isCompactHeaderEnabled() {
-        return config.network().enableCompactHeader();
+        return config.serverNetwork().enableCompactHeader();
     }
 
     public int getServerChunkPushThreads() {
-        return config.network().serverChunkPushThreads();
+        return config.serverNetwork().serverChunkPushThreads();
     }
 
-    public int getClientChunkLoadThreads() {
-        return config.network().clientChunkLoadThreads();
+    public int getLoadThreads() {
+        return config.clientCache().loadThreads();
     }
 
-    public boolean isLightStripEnabled() {
-        return config.network().lightStripEnabled();
+    public boolean isLightStrip() {
+        return config.clientCache().lightStrip();
     }
 
-    public int getBackgroundThreads() {
-        return config.network().backgroundThreads();
+    public boolean isServerLightStrip() {
+        return config.serverNetwork().lightStrip();
+    }
+
+    /**
+     * 是否拦截 ClientboundLightUpdatePacket，发送轻量光照增量通知。
+     * 默认 true（剥离光照数据，客户端本地重算）。
+     */
+    public boolean isLightDeltaStrip() {
+        // 随 serverNetwork.lightStrip 一起控制
+        return config.serverNetwork().lightStrip();
     }
 
     public int getMaxChunksPerFrame() {
-        return Math.max(1, config.network().maxChunksPerFrame());
-    }
-
-    public int getMaxCallbacksPerFrame() {
-        return Math.max(1, config.network().maxCallbacksPerFrame());
+        return Math.max(1, config.clientCache().maxChunksPerFrame());
     }
 
     public int getMainThreadChunkBudgetMs() {
-        int value = config.network().mainThreadChunkBudgetMs();
+        int value = config.clientCache().mainThreadChunkBudgetMs();
         if (value <= 0) {
             return 10;
         }
         return Math.min(50, value);
     }
 
+    /**
+     * 是否启用指标收集：客户端从 clientNetwork 读取，服务端从 serverNetwork 读取。
+     */
     public boolean isMetricsEnabled() {
-        return config.network().metricsEnabled();
+        return resolveMetricsEnabled(config);
     }
 
     public boolean isDynamicThreadPoolEnabled() {
-        return config.network().dynamicThreadPoolEnabled();
+        return config.serverNetwork().dynamicThreadPoolEnabled();
     }
 
     public int getMinPushThreads() {
-        return Math.max(1, config.network().minPushThreads());
+        return Math.max(1, config.serverNetwork().minPushThreads());
     }
 
     public int getMaxPushThreads() {
-        int value = config.network().maxPushThreads();
+        int value = config.serverNetwork().maxPushThreads();
         return Math.max(getMinPushThreads(), value);
-    }
-
-    public boolean isBloomFilterEnabled() {
-        return config.clientCache().bloomFilterEnabled();
-    }
-
-    public int getBloomFilterExpectedInsertions() {
-        return Math.max(1000, config.clientCache().bloomFilterExpectedInsertions());
-    }
-
-    public double getBloomFilterFpp() {
-        double value = config.clientCache().bloomFilterFpp();
-        return Math.max(0.001, Math.min(0.1, value));
     }
 
     /** 是否启用超视渲染；仍依赖 clientCache.enabled */
@@ -454,5 +442,17 @@ public class HassiumConfigService {
      */
     public boolean isSectionDeltaEnabled() {
         return isClientCacheEnabled() && config.clientCache().sectionDeltaEnabled();
+    }
+
+    // --- internal helpers ---
+
+    /**
+     * 根据物理端解析 metricsEnabled：客户端读 clientNetwork，服务端读 serverNetwork。
+     */
+    private static boolean resolveMetricsEnabled(HassiumConfig cfg) {
+        if (Services.PLATFORM.isPhysicalClient()) {
+            return cfg.clientNetwork().metricsEnabled();
+        }
+        return cfg.serverNetwork().metricsEnabled();
     }
 }

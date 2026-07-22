@@ -210,6 +210,28 @@ public interface HassiumMetrics {
      */
     long getCompressionErrors();
 
+    // ===== 光照缓存指标 =====
+
+    /**
+     * 获取缓存含光照数据的区块数（is_light_on=1）
+     */
+    long getLightCacheHitCount();
+
+    /**
+     * 获取缓存不含光照数据需重算的区块数（is_light_on=0）
+     */
+    long getLightCacheMissCount();
+
+    /**
+     * 获取光照重算总耗时（纳秒）
+     */
+    long getLightRecomputeTimeNs();
+
+    /**
+     * 获取收到 LightDeltaS2CPacket 的条目数
+     */
+    long getLightDeltaReceivedCount();
+
     // ===== 统计方法 =====
 
     /**
@@ -286,6 +308,24 @@ public interface HassiumMetrics {
         long vanilla = getVanillaBytesSent();
         if (vanilla == 0) return 0.0;
         return (double) getMetadataBytesSent() / vanilla * 100.0;
+    }
+
+    /**
+     * 计算光照缓存命中率
+     */
+    default double getLightCacheHitRate() {
+        long hit = getLightCacheHitCount();
+        long miss = getLightCacheMissCount();
+        long total = hit + miss;
+        if (total == 0) return 0.0;
+        return (double) hit / total;
+    }
+
+    /**
+     * 获取光照重算耗时（毫秒）
+     */
+    default double getLightRecomputeTimeMs() {
+        return getLightRecomputeTimeNs() / 1_000_000.0;
     }
 
     /**

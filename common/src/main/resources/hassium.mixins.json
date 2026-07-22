@@ -14,7 +14,8 @@
         "MixinConnectionSetupCompression",
         "MixinChunkHolder",
         "MixinServerPlayer",
-        "MixinPlayerChunkSender"
+        "MixinPlayerChunkSender",
+        "LightUpdatePacketAccessor"
     ],
     "client": [
       "MixinMinecraft",
