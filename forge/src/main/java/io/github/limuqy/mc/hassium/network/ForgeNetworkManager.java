@@ -361,26 +361,22 @@ public class ForgeNetworkManager implements NetworkManager {
                 useGlobalCompression,
                 useCompactHeader
         );
-        reply.accept(response);
-        LOGGER.info("Hassium: Server handshake for {}: accepted={}, globalCompression={}, compactHeader={}",
-                player.getName().getString(), accepted, useGlobalCompression, useCompactHeader);
-
-        // HandshakeResponse 先经 Zlib 出站；再在 EventLoop 切换 ZSTD，随后发 Dict/Index
+        // 暂停出站压缩后延迟切 ZSTD（Forge 无 CompressionReady ACK；未压缩帧窗口保证安全）
         if (useGlobalCompression) {
             DictionaryManager.init();
+            IndexSyncManager.getInstance().initializeServerIndex();
             Connection connection = getPlayerConnection(player);
             Channel channel = connection != null ? getConnectionChannel(connection) : null;
             if (channel != null) {
                 int level = HassiumConfigService.getInstance().getGlobalCompressionLevel();
                 int threshold = HassiumConfigService.getInstance().getGlobalCompressionThreshold();
                 var server = io.github.limuqy.mc.hassium.compat.PlayerCompat.getMinecraftServer(player);
-                channel.eventLoop().execute(() -> {
-                    ZstdNegotiationTracker.markNegotiated(channel);
+                ZstdPipelineSwitcher.pauseOutboundCompression(channel);
+                channel.eventLoop().schedule(() -> {
                     ZstdPipelineSwitcher.switchToZstdWhenReady(channel, threshold, level, () -> {
+                        ZstdNegotiationTracker.markNegotiated(channel);
                         Runnable afterSwitch = () -> {
                             sendDictionarySyncPacket(player);
-                            IndexSyncManager indexSyncManager = IndexSyncManager.getInstance();
-                            indexSyncManager.initializeServerIndex();
                             sendIndexSyncPacket(player);
                             if (connection != null) {
                                 HassiumConnectionRegistry.markPending(connection);
@@ -393,9 +389,12 @@ public class ForgeNetworkManager implements NetworkManager {
                             afterSwitch.run();
                         }
                     });
-                });
+                }, 500, java.util.concurrent.TimeUnit.MILLISECONDS);
             }
         }
+        reply.accept(response);
+        LOGGER.info("Hassium: Server handshake for {}: accepted={}, globalCompression={}, compactHeader={}",
+                player.getName().getString(), accepted, useGlobalCompression, useCompactHeader);
     }
 
     private static void handleHandshakeS2C(HandshakeResponsePacket msg) {
@@ -407,11 +406,12 @@ public class ForgeNetworkManager implements NetworkManager {
             if (conn != null) {
                 Channel channel = getConnectionChannel(conn.getConnection());
                 if (channel != null) {
-                    // 尽快切管线（switchToZstd 会投递到 EventLoop）
-                    ZstdNegotiationTracker.markNegotiated(channel);
                     int level = HassiumConfigService.getInstance().getGlobalCompressionLevel();
                     int threshold = HassiumConfigService.getInstance().getGlobalCompressionThreshold();
-                    ZstdPipelineSwitcher.switchToZstdWhenReady(channel, threshold, level);
+                    ZstdPipelineSwitcher.switchToZstdWhenReady(channel, threshold, level, () -> {
+                        ZstdNegotiationTracker.markNegotiated(channel);
+                        LOGGER.info("Hassium: Client ZSTD pipeline installed");
+                    });
                 }
             }
         }

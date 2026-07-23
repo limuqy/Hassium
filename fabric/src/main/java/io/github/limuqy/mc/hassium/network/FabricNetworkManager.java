@@ -304,10 +304,13 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
                 if (conn != null) {
                     Channel channel = getConnectionChannel(conn.getConnection());
                     if (channel != null) {
-                        ZstdNegotiationTracker.markNegotiated(channel);
                         int level = HassiumConfigService.getInstance().getGlobalCompressionLevel();
                         int threshold = HassiumConfigService.getInstance().getGlobalCompressionThreshold();
-                        ZstdPipelineSwitcher.switchToZstdWhenReady(channel, threshold, level);
+                        ZstdPipelineSwitcher.switchToZstdWhenReady(channel, threshold, level, () -> {
+                            ZstdNegotiationTracker.markNegotiated(channel);
+                            sendCompressionReadyToServer();
+                            LOGGER.info("Hassium: Client ZSTD pipeline installed, sent ready ACK");
+                        });
                     }
                 }
             }
@@ -327,10 +330,13 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
                     if (conn != null) {
                         Channel channel = getConnectionChannel(conn.getConnection());
                         if (channel != null) {
-                            ZstdNegotiationTracker.markNegotiated(channel);
                             int level = HassiumConfigService.getInstance().getGlobalCompressionLevel();
                             int threshold = HassiumConfigService.getInstance().getGlobalCompressionThreshold();
-                            ZstdPipelineSwitcher.switchToZstdWhenReady(channel, threshold, level);
+                            ZstdPipelineSwitcher.switchToZstdWhenReady(channel, threshold, level, () -> {
+                                ZstdNegotiationTracker.markNegotiated(channel);
+                                sendCompressionReadyToServer();
+                                LOGGER.info("Hassium: Client ZSTD pipeline installed, sent ready ACK");
+                            });
                         }
                     }
                 }
@@ -770,7 +776,7 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
     }
 
     /**
-     * 完成服务端握手：先发 HandshakeResponse（Zlib），再在 EventLoop 切换 ZSTD，最后发 Dict/Index。
+     * 完成服务端握手：发 HandshakeResponse，暂停出站压缩，等客户端 ready ACK 后再切 ZSTD。
      */
     private void completeServerHandshake(
             net.minecraft.server.MinecraftServer server,
@@ -778,6 +784,19 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
             boolean accepted,
             boolean useGlobalCompression,
             boolean useCompactHeader) {
+        if (useGlobalCompression) {
+            DictionaryManager.init();
+            IndexSyncManager.getInstance().initializeServerIndex();
+            Connection connection = getPlayerConnection(player);
+            Channel channel = connection != null ? getConnectionChannel(connection) : null;
+            if (channel == null) {
+                LOGGER.warn("Hassium: No channel for {}, cannot prepare ZSTD pipeline", player.getName().getString());
+            } else {
+                // 先暂停出站压缩，再发 HandshakeResponse
+                ZstdPipelineSwitcher.pauseOutboundCompression(channel);
+            }
+        }
+
         FriendlyByteBuf response = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
         response.writeVarInt(Constants.CURRENT_PROTOCOL_VERSION);
         response.writeBoolean(accepted);
@@ -790,26 +809,24 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
 #endif
         LOGGER.info("Hassium: Server handshake for {}: accepted={}, globalCompression={}, compactHeader={}",
                 player.getName().getString(), accepted, useGlobalCompression, useCompactHeader);
+    }
 
-        if (!useGlobalCompression) {
-            return;
-        }
-
-        DictionaryManager.init();
-        Connection connection = getPlayerConnection(player);
-        Channel channel = connection != null ? getConnectionChannel(connection) : null;
-        if (channel == null) {
-            LOGGER.warn("Hassium: No channel for {}, cannot install ZSTD pipeline", player.getName().getString());
-            return;
-        }
-
+    /**
+     * 客户端 ZSTD ready ACK 后：服务端切管线并发送 Dict/Index。
+     */
+    private void installServerZstdAfterClientReady(ServerPlayer player, Connection connection, Channel channel) {
         int level = HassiumConfigService.getInstance().getGlobalCompressionLevel();
         int threshold = HassiumConfigService.getInstance().getGlobalCompressionThreshold();
-        // 投递到 EventLoop：保证排在 HandshakeResponse 的 encode 之后执行
-        channel.eventLoop().execute(() -> {
+        ZstdPipelineSwitcher.switchToZstdWhenReady(channel, threshold, level, () -> {
             ZstdNegotiationTracker.markNegotiated(channel);
-            ZstdPipelineSwitcher.switchToZstdWhenReady(channel, threshold, level,
-                    () -> server.execute(() -> enableAggregationAfterZstdSwitch(player, connection)));
+            var server = io.github.limuqy.mc.hassium.compat.PlayerCompat.getMinecraftServer(player);
+            Runnable after = () -> enableAggregationAfterZstdSwitch(player, connection);
+            if (server != null) {
+                server.execute(after);
+            } else {
+                after.run();
+            }
+            LOGGER.info("Hassium: Server ZSTD pipeline installed for {}", player.getName().getString());
         });
     }
 
@@ -827,6 +844,7 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
             return;
         }
         HassiumConnectionRegistry.markPending(connection);
+        ServerChunkPushManager.getInstance().resyncTrackedChunks(player);
         HassiumAggregationManager.init();
         DebugLogger.debug(LogType.NETWORK,
                 "Hassium: Marked connection as PENDING for player {}", player.getName().getString());
@@ -871,8 +889,6 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
 
             // 启用该玩家的压缩
             PlayerCompressionTracker.enableCompression(player);
-            // 初始 trackChunk 常早于握手：主线程补发视距内 chunkHash
-            server.execute(() -> ServerChunkPushManager.getInstance().resyncTrackedChunks(player));
 
             // 检查是否支持全局压缩
             boolean serverSupportsGlobalCompression = HassiumConfigService.getInstance().isGlobalPacketCompressionEnabled();
@@ -918,8 +934,6 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
 
                 // 启用该玩家的压缩
                 PlayerCompressionTracker.enableCompression(player);
-                // 初始 trackChunk 常早于握手：主线程补发视距内 chunkHash
-                server.execute(() -> ServerChunkPushManager.getInstance().resyncTrackedChunks(player));
 
                 // 检查是否支持全局压缩
                 boolean serverSupportsGlobalCompression = HassiumConfigService.getInstance().isGlobalPacketCompressionEnabled();
@@ -948,14 +962,7 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
                     player.getName().getString(), payload.isReady());
 
             if (payload.isReady()) {
-                Connection connection = getPlayerConnection(player);
-                if (connection != null) {
-                    HassiumConnectionRegistry.markEnabled(connection);
-                    HassiumAggregationManager.flushConnection(connection);
-                    DebugLogger.debug(LogType.NETWORK,
-                            "Hassium: Marked connection as ENABLED for player {}, flushing buffered packets",
-                            player.getName().getString());
-                }
+                handleCompressionReadyServer(player);
             }
         });
 #else
@@ -967,14 +974,7 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
                         context.player().getName().getString(), readyPayload.isReady());
 
                 if (readyPayload.isReady()) {
-                    Connection connection = getPlayerConnection(context.player());
-                    if (connection != null) {
-                        HassiumConnectionRegistry.markEnabled(connection);
-                        HassiumAggregationManager.flushConnection(connection);
-                        DebugLogger.debug(LogType.NETWORK,
-                                "Hassium: Marked connection as ENABLED for player {}, flushing buffered packets",
-                                context.player().getName().getString());
-                    }
+                    handleCompressionReadyServer(context.player());
                 }
             } catch (Exception e) {
                 LOGGER.error("Failed to handle compression ready packet", e);
@@ -1120,5 +1120,39 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
             }
         });
 #endif
+    }
+
+    private void handleCompressionReadyServer(ServerPlayer player) {
+        Connection connection = getPlayerConnection(player);
+        Channel channel = connection != null ? getConnectionChannel(connection) : null;
+        if (channel != null && !ZstdPipelineSwitcher.isZstdInstalled(channel)) {
+            installServerZstdAfterClientReady(player, connection, channel);
+            return;
+        }
+        if (connection != null) {
+            HassiumConnectionRegistry.markEnabled(connection);
+            HassiumAggregationManager.flushConnection(connection);
+            DebugLogger.debug(LogType.NETWORK,
+                    "Hassium: Marked connection as ENABLED for player {}, flushing buffered packets",
+                    player.getName().getString());
+        }
+    }
+
+    private void sendCompressionReadyToServer() {
+        try {
+            FriendlyByteBuf readyBuf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
+            new CompressionReadyPayload(true).encode(readyBuf);
+#if MC_VER < MC_1_20_5
+            ClientPlayNetworking.send(CompressionReadyPayload.CHANNEL, readyBuf);
+#else
+            byte[] readyData = new byte[readyBuf.readableBytes()];
+            readyBuf.readBytes(readyData);
+            readyBuf.release();
+            ClientPlayNetworking.send(FabricPayloadRegistry.createPayload(
+                    FabricPayloadRegistry.COMPRESSION_READY_C2S_TYPE, readyData));
+#endif
+        } catch (Exception e) {
+            LOGGER.error("Hassium: Failed to send compression ready", e);
+        }
     }
 }

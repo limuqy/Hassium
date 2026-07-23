@@ -225,8 +225,44 @@ public class ZstdPipelineSwitcher {
     }
 
     public static boolean isZstdInstalled(Channel channel) {
+        if (channel == null) {
+            return false;
+        }
         ChannelPipeline pipeline = channel.pipeline();
         return pipeline.get(COMPRESS_HANDLER_NAME) instanceof ZstdContextEncoder;
+    }
+
+    /**
+     * 暂停出站压缩（阈值抬到极大）：后续帧走 {@code VarInt(0)+明文}。
+     * <p>
+     * Zlib / ZSTD 解码器都能吃这种未压缩帧，用于握手后、双方切 ZSTD 之前的安全窗口，
+     * 避免一边已切算法、另一边仍按旧算法解压。
+     */
+    public static void pauseOutboundCompression(Channel channel) {
+        setOutboundCompressionThreshold(channel, Integer.MAX_VALUE);
+    }
+
+    /**
+     * 设置出站压缩阈值（Zlib {@link CompressionEncoder} 或 ZSTD 编码器均可）。
+     */
+    public static void setOutboundCompressionThreshold(Channel channel, int threshold) {
+        if (channel == null) {
+            return;
+        }
+        if (!channel.eventLoop().inEventLoop()) {
+            channel.eventLoop().execute(() -> setOutboundCompressionThreshold(channel, threshold));
+            return;
+        }
+        ChannelHandler compress = channel.pipeline().get(COMPRESS_HANDLER_NAME);
+        if (compress instanceof CompressionEncoder encoder) {
+            encoder.setThreshold(threshold);
+            LOGGER.info("Paused/updated Zlib outbound compression threshold={}", threshold);
+        } else if (compress instanceof ZstdContextEncoder encoder) {
+            encoder.setThreshold(threshold);
+            LOGGER.info("Updated ZSTD outbound compression threshold={}", threshold);
+        } else {
+            LOGGER.debug("No compress handler to update threshold (pipeline={})", channel.pipeline().names());
+        }
     }
 
     public static int getCurrentThreshold(Channel channel) {

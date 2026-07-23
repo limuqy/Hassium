@@ -108,10 +108,34 @@ public class NeoForgeNetworkManager implements NetworkManager {
             LOGGER.warn("Hassium: Cannot install client ZSTD pipeline — no channel");
             return;
         }
-        ZstdNegotiationTracker.markNegotiated(channel);
         int level = HassiumConfigService.getInstance().getGlobalCompressionLevel();
         int threshold = HassiumConfigService.getInstance().getGlobalCompressionThreshold();
-        ZstdPipelineSwitcher.switchToZstdWhenReady(channel, threshold, level);
+        // 安装成功后再 markNegotiated + ACK：服务端仍发未压缩帧，双方可安全对齐
+        ZstdPipelineSwitcher.switchToZstdWhenReady(channel, threshold, level, () -> {
+            ZstdNegotiationTracker.markNegotiated(channel);
+            sendCompressionReadyToServer();
+            LOGGER.info("Hassium: Client ZSTD pipeline installed, sent ready ACK");
+        });
+    }
+
+    /**
+     * 服务端在收到客户端 ZSTD ready ACK 后安装管线并同步 Dict/Index/chunkHash。
+     */
+    private static void installServerZstdAfterClientReady(ServerPlayer player, Connection connection, Channel channel) {
+        int level = HassiumConfigService.getInstance().getGlobalCompressionLevel();
+        int threshold = HassiumConfigService.getInstance().getGlobalCompressionThreshold();
+        ZstdPipelineSwitcher.switchToZstdWhenReady(channel, threshold, level, () -> {
+            ZstdNegotiationTracker.markNegotiated(channel);
+            sendDictionarySyncPacket(player);
+            sendIndexSyncPacket(player);
+            ServerChunkPushManager.getInstance().resyncTrackedChunks(player);
+            if (connection != null) {
+                HassiumConnectionRegistry.markPending(connection);
+                HassiumAggregationManager.init();
+                schedulePendingTimeout(connection, player.getName().getString());
+            }
+            LOGGER.info("Hassium: Server ZSTD pipeline installed for {}", player.getName().getString());
+        });
     }
 
 #if MC_VER < MC_1_20_4
@@ -1334,13 +1358,6 @@ public class NeoForgeNetworkManager implements NetworkManager {
 
     private void handleHandshakeSimple(ServerPlayer player, HandshakeWrapper msg) {
         PlayerCompressionTracker.enableCompression(player);
-        // 初始 trackChunk 常早于握手：主线程补发视距内 chunkHash
-        var server = io.github.limuqy.mc.hassium.compat.PlayerCompat.getMinecraftServer(player);
-        if (server != null) {
-            server.execute(() -> ServerChunkPushManager.getInstance().resyncTrackedChunks(player));
-        } else {
-            ServerChunkPushManager.getInstance().resyncTrackedChunks(player);
-        }
 
         boolean serverSupportsGlobalCompression = HassiumConfigService.getInstance().isGlobalPacketCompressionEnabled();
         boolean useGlobalCompression = serverSupportsGlobalCompression && msg.globalPacketCompressionSupported();
@@ -1354,6 +1371,16 @@ public class NeoForgeNetworkManager implements NetworkManager {
                 useGlobalCompression,
                 useCompactHeader
         );
+        if (useGlobalCompression) {
+            DictionaryManager.init();
+            IndexSyncManager.getInstance().initializeServerIndex();
+            Connection connection = getPlayerConnection(player);
+            Channel channel = connection != null ? getConnectionChannel(connection) : null;
+            if (channel != null) {
+                // 先暂停出站压缩，再发 HandshakeResponse，避免响应后的包仍走 Zlib
+                ZstdPipelineSwitcher.pauseOutboundCompression(channel);
+            }
+        }
 #if MC_VER < MC_1_20_2
         CHANNEL.sendTo(response, player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
 #else
@@ -1361,36 +1388,6 @@ public class NeoForgeNetworkManager implements NetworkManager {
 #endif
         LOGGER.info("Hassium: Server handshake for {}: accepted={}, globalCompression={}, compactHeader={}",
                 player.getName().getString(), accepted, useGlobalCompression, useCompactHeader);
-
-        if (useGlobalCompression) {
-            DictionaryManager.init();
-            IndexSyncManager.getInstance().initializeServerIndex();
-            Connection connection = getPlayerConnection(player);
-            Channel channel = connection != null ? getConnectionChannel(connection) : null;
-            if (channel != null) {
-                int level = HassiumConfigService.getInstance().getGlobalCompressionLevel();
-                int threshold = HassiumConfigService.getInstance().getGlobalCompressionThreshold();
-                channel.eventLoop().execute(() -> {
-                    ZstdNegotiationTracker.markNegotiated(channel);
-                    ZstdPipelineSwitcher.switchToZstdWhenReady(channel, threshold, level, () -> {
-                        Runnable after = () -> {
-                            sendDictionarySyncPacket(player);
-                            sendIndexSyncPacket(player);
-                            if (connection != null) {
-                                HassiumConnectionRegistry.markPending(connection);
-                                HassiumAggregationManager.init();
-                                schedulePendingTimeout(connection, player.getName().getString());
-                            }
-                        };
-                        if (server != null) {
-                            server.execute(after);
-                        } else {
-                            after.run();
-                        }
-                    });
-                });
-            }
-        }
     }
 
     private void handleHandshakeResponseSimple(HandshakeResponseWrapper msg) {
@@ -1480,7 +1477,6 @@ public class NeoForgeNetworkManager implements NetworkManager {
         context.workHandler().execute(() -> {
             if (context.player().orElse(null) instanceof ServerPlayer player) {
                 PlayerCompressionTracker.enableCompression(player);
-                ServerChunkPushManager.getInstance().resyncTrackedChunks(player);
                 boolean useGlobalCompression = HassiumConfigService.getInstance().isGlobalPacketCompressionEnabled()
                         && payload.globalPacketCompressionSupported();
                 boolean useCompactHeader = HassiumConfigService.getInstance().isCompactHeaderEnabled()
@@ -1489,39 +1485,25 @@ public class NeoForgeNetworkManager implements NetworkManager {
 
                 HandshakeResponsePayload response = new HandshakeResponsePayload(
                         Constants.CURRENT_PROTOCOL_VERSION, accepted, useGlobalCompression, useCompactHeader);
-                player.connection.send(new ClientboundCustomPayloadPacket(response));
-                LOGGER.info("Hassium: Server handshake for {}: accepted={}, globalCompression={}, compactHeader={}",
-                        player.getName().getString(), accepted, useGlobalCompression, useCompactHeader);
-
-                // HandshakeResponse 先经 Zlib 出站；再在 EventLoop 切换 ZSTD
+                // 先暂停出站压缩，再发 HandshakeResponse，避免响应后的包仍走 Zlib
                 if (useGlobalCompression) {
                     DictionaryManager.init();
                     IndexSyncManager.getInstance().initializeServerIndex();
                     Connection connection = getPlayerConnection(player);
                     Channel channel = connection != null ? getConnectionChannel(connection) : null;
                     if (channel != null) {
-                        int level = HassiumConfigService.getInstance().getGlobalCompressionLevel();
-                        int threshold = HassiumConfigService.getInstance().getGlobalCompressionThreshold();
-                        channel.eventLoop().execute(() -> {
-                            ZstdNegotiationTracker.markNegotiated(channel);
-                            ZstdPipelineSwitcher.switchToZstdWhenReady(channel, threshold, level, () -> {
-                                sendDictionarySyncPacket(player);
-                                sendIndexSyncPacket(player);
-                                if (connection != null) {
-                                    HassiumConnectionRegistry.markPending(connection);
-                                    HassiumAggregationManager.init();
-                                    schedulePendingTimeout(connection, player.getName().getString());
-                                }
-                            });
-                        });
+                        ZstdPipelineSwitcher.pauseOutboundCompression(channel);
                     }
                 }
+                player.connection.send(new ClientboundCustomPayloadPacket(response));
+                LOGGER.info("Hassium: Server handshake for {}: accepted={}, globalCompression={}, compactHeader={}",
+                        player.getName().getString(), accepted, useGlobalCompression, useCompactHeader);
             }
         });
     }
 
     private static void handleHandshakeResponse(HandshakeResponsePayload payload, PlayPayloadContext context) {
-        // 必须在收包线程/尽快切管线，不能先 enqueue 到主线程，否则后续 ZSTD 包会撞上仍在的 Zlib decoder
+        // 服务端已暂停压缩；此处装 ZSTD 后发 ACK，即使在主线程也安全
         if (payload.accepted() && payload.globalCompressionAccepted()) {
             tryInstallClientZstdPipeline();
         }
@@ -1731,7 +1713,6 @@ public class NeoForgeNetworkManager implements NetworkManager {
         context.enqueueWork(() -> {
             if (context.player() instanceof ServerPlayer player) {
                 PlayerCompressionTracker.enableCompression(player);
-                ServerChunkPushManager.getInstance().resyncTrackedChunks(player);
                 boolean useGlobalCompression = HassiumConfigService.getInstance().isGlobalPacketCompressionEnabled()
                         && payload.globalPacketCompressionSupported();
                 boolean useCompactHeader = HassiumConfigService.getInstance().isCompactHeaderEnabled()
@@ -1740,39 +1721,25 @@ public class NeoForgeNetworkManager implements NetworkManager {
 
                 HandshakeResponsePayload response = new HandshakeResponsePayload(
                         Constants.CURRENT_PROTOCOL_VERSION, accepted, useGlobalCompression, useCompactHeader);
-                player.connection.send(response);
-                LOGGER.info("Hassium: Server handshake for {}: accepted={}, globalCompression={}, compactHeader={}",
-                        player.getName().getString(), accepted, useGlobalCompression, useCompactHeader);
-
-                // HandshakeResponse 先经 Zlib 出站；再在 EventLoop 切换 ZSTD
+                // 先暂停出站压缩，再发 HandshakeResponse，避免响应后的包仍走 Zlib
                 if (useGlobalCompression) {
                     DictionaryManager.init();
                     IndexSyncManager.getInstance().initializeServerIndex();
                     Connection connection = getPlayerConnection(player);
                     Channel channel = connection != null ? getConnectionChannel(connection) : null;
                     if (channel != null) {
-                        int level = HassiumConfigService.getInstance().getGlobalCompressionLevel();
-                        int threshold = HassiumConfigService.getInstance().getGlobalCompressionThreshold();
-                        channel.eventLoop().execute(() -> {
-                            ZstdNegotiationTracker.markNegotiated(channel);
-                            ZstdPipelineSwitcher.switchToZstdWhenReady(channel, threshold, level, () -> {
-                                sendDictionarySyncPacket(player);
-                                sendIndexSyncPacket(player);
-                                if (connection != null) {
-                                    HassiumConnectionRegistry.markPending(connection);
-                                    HassiumAggregationManager.init();
-                                    schedulePendingTimeout(connection, player.getName().getString());
-                                }
-                            });
-                        });
+                        ZstdPipelineSwitcher.pauseOutboundCompression(channel);
                     }
                 }
+                player.connection.send(response);
+                LOGGER.info("Hassium: Server handshake for {}: accepted={}, globalCompression={}, compactHeader={}",
+                        player.getName().getString(), accepted, useGlobalCompression, useCompactHeader);
             }
         });
     }
 
     private static void handleHandshakeResponse(HandshakeResponsePayload payload, IPayloadContext context) {
-        // 必须在收包线程/尽快切管线，不能先 enqueue 到主线程，否则后续 ZSTD 包会撞上仍在的 Zlib decoder
+        // 服务端已暂停压缩；装 ZSTD 后发 ACK，主线程处理也安全
         if (payload.accepted() && payload.globalCompressionAccepted()) {
             tryInstallClientZstdPipeline();
         }
@@ -2280,6 +2247,13 @@ public class NeoForgeNetworkManager implements NetworkManager {
             return;
         }
         Connection connection = getPlayerConnection(player);
+        Channel channel = connection != null ? getConnectionChannel(connection) : null;
+        // 第一次 ready：客户端已装 ZSTD → 服务端切管线并同步 Dict/Index
+        if (channel != null && !ZstdPipelineSwitcher.isZstdInstalled(channel)) {
+            installServerZstdAfterClientReady(player, connection, channel);
+            return;
+        }
+        // 第二次 ready：IndexSync 已处理 → 启用聚合
         if (connection != null) {
             HassiumConnectionRegistry.markEnabled(connection);
             HassiumAggregationManager.flushConnection(connection);
