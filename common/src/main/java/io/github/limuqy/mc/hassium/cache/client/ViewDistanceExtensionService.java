@@ -1,6 +1,7 @@
 package io.github.limuqy.mc.hassium.cache.client;
 
 import io.github.limuqy.mc.hassium.Constants;
+import io.github.limuqy.mc.hassium.concurrent.MainThreadDispatcher;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.mixin.ClientLevelAccessor;
 import io.github.limuqy.mc.hassium.mixin.OptionsAccessor;
@@ -11,9 +12,12 @@ import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.chunk.LevelChunk;
 
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -282,10 +286,9 @@ public class ViewDistanceExtensionService {
         // 加载新的 renderOnly（跳过已 apply / 已排队 / 未到期 miss）
         // 负载高时静默：优先保证 serverVD 内权威区块（chunkHash 比对后的缓存加载），
         // 避免超视渲染环带（数千区块）压垮 executor 导致权威区块延迟。
-        // JoinBoost 窗口内（进服 5s）暂停限制：让超视距环带立即 enqueue，与权威区块并行加载，
-        // 避免进服时环带空洞与不连贯。权威区块距离玩家更近（serverVD 内），PriorityBlockingQueue
-        // 按距离排序会优先出队，不会被 renderOnly 饿死。
-        // 不更新 lastPlayerPos → 下一 tick geometryChanged 仍为 true → 自动重试。
+        // JoinBoost 窗口内暂停队列深度门槛；renderOnly 使用 ChunkDistancePriority.RENDER_ONLY 层。
+        // 每 tick 入队上限 = maxChunksPerFrame，按距离升序，近的先 enqueue。
+        // 未完成时不更新 lastPlayerPos → 下一 tick geometryChanged 仍为 true → 继续灌队。
         if (!ClientMainThreadBudget.isJoinBoostActive()) {
             int pendingLoad = ClientCacheLoadQueue.getInstance().getPendingSize()
                     + ClientCacheLoadQueue.getInstance().getReadySize();
@@ -296,15 +299,43 @@ public class ViewDistanceExtensionService {
             }
         }
 
-        Set<ChunkPos> toLoad = new HashSet<>(needed);
-        toLoad.removeAll(loadedRenderOnly);
-        toLoad.removeAll(pendingRenderOnly);
-        for (ChunkPos pos : toLoad) {
+        List<ChunkPos> toLoad = new ArrayList<>(needed.size());
+        for (ChunkPos pos : needed) {
+            if (loadedRenderOnly.contains(pos) || pendingRenderOnly.contains(pos)) {
+                continue;
+            }
             Long retryAt = missRetryAt.get(pos);
             if (retryAt != null && System.currentTimeMillis() < retryAt) {
                 continue;
             }
-            loadRenderOnlyChunk(pos);
+            toLoad.add(pos);
+        }
+        // 切比雪夫距离升序：环带内层先入队（与方形 client 渲染范围一致；同距时欧氏次键）
+        int px = playerPos.x;
+        int pz = playerPos.z;
+        toLoad.sort(Comparator
+                .comparingInt((ChunkPos p) -> Math.max(Math.abs(p.x - px), Math.abs(p.z - pz)))
+                .thenComparingLong(p -> {
+                    long dx = (long) p.x - px;
+                    long dz = (long) p.z - pz;
+                    return dx * dx + dz * dz;
+                }));
+
+        int budget = HassiumConfigService.getInstance().getMaxChunksPerFrame();
+        int enqueued = 0;
+        int cursor = 0;
+        for (; cursor < toLoad.size() && enqueued < budget; cursor++) {
+            if (loadRenderOnlyChunk(toLoad.get(cursor))) {
+                enqueued++;
+            }
+        }
+
+        // 本 tick 未扫完 toLoad（预算打满）→ 不写 last*，下 tick geometryChanged 继续近距灌队
+        // storage 未就绪时 load 全失败会扫完列表并更新 last*；就绪后由 onClientStorageReady 强制 rescan
+        if (cursor < toLoad.size()) {
+            Constants.LOG.debug("Hassium: OVD enqueue {}/{} this tick (cap={}), defer rest",
+                    enqueued, toLoad.size(), budget);
+            return;
         }
 
         lastPlayerPos = playerPos;
@@ -455,31 +486,34 @@ public class ViewDistanceExtensionService {
         return chunks;
     }
 
-    private void loadRenderOnlyChunk(ChunkPos pos) {
+    /**
+     * @return true 若已成功登记 pending 并 enqueue 到 {@link ClientCacheLoadQueue}
+     */
+    private boolean loadRenderOnlyChunk(ChunkPos pos) {
         Minecraft mc = Minecraft.getInstance();
         ClientLevel level = mc.level;
         if (level == null || mc.player == null) {
-            return;
+            return false;
         }
 
         // storage 未就绪：不要进队列烧 miss 次数（异步 onLogin 窗口）
         if (ClientChunkHandler.getClientStorage() == null) {
             Constants.LOG.debug("Hassium: OVD skip enqueue {} (client storage not ready)", pos);
-            return;
+            return false;
         }
 
         IClientLevelExtension accessor = (IClientLevelExtension) level;
         if (accessor.hassium$isRenderOnly(pos)) {
-            return;
+            return false;
         }
         ClientChunkCache cache = ((ClientLevelAccessor) level).hassium$getChunkSource();
         if (cache.hasChunk(pos.x, pos.z)) {
-            return;
+            return false;
         }
 
-        double dx = pos.x - (mc.player.getX() / 16.0);
-        double dz = pos.z - (mc.player.getZ() / 16.0);
-        double priority = Math.sqrt(dx * dx + dz * dz);
+        // 刷新坐标缓存后冻结 RENDER_ONLY 键；坐标未知时仍为环带层 base+0（权威 > 未知任务 > 环带）
+        MainThreadDispatcher.updatePlayerPosition(mc.player.getX(), mc.player.getZ());
+        double priority = MainThreadDispatcher.renderOnlyPriority(pos);
         // 仅 pending；apply 成功后再进 loaded，避免 miss 后 loaded 语义错误 / 负向感知
         pendingRenderOnly.add(pos);
         loadedRenderOnly.remove(pos);
@@ -488,6 +522,7 @@ public class ViewDistanceExtensionService {
         // 重试路径：清掉旧 miss 时间戳，保留 count 供下次 miss 退避
         missRetryAt.remove(pos);
         Constants.LOG.debug("Hassium: Queued render-only chunk {} for async loading", pos);
+        return true;
     }
 
     /**

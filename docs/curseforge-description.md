@@ -176,7 +176,7 @@ With `network.lightStripEnabled = true` (default on server), the server omits li
 With `clientCache.lightCacheEnabled = true` (default), light data is stored in the local disk cache after the first recomputation. Subsequent cache hits apply pre-computed lighting directly, skipping the expensive synchronous recomputation.
 
 **Smooth loading**  
-`network.mainThreadChunkBudgetMs` (default `3`) limits how much chunk-apply work runs per client frame. During the first ~5 seconds after join, a short “JoinBoost” raises the budget so the world fills in faster without long freezes. On the server, `maxChunksPerTick` caps how many chunks are serialized per player per tick.
+`clientCache.mainThreadChunkBudgetMs` (default `15`) limits how much chunk-apply work runs per client frame. During the first ~10 seconds after join, a short “JoinBoost” raises the budget (from ~30ms, linearly down to the normal budget) so the world fills in faster without long freezes. On the server, `maxChunksPerTick` caps how many chunks are serialized per player per tick.
 
 ### Config summary
 
@@ -195,7 +195,7 @@ Files: `config/hassium/hassium-client.toml`, `config/hassium/hassium-common.toml
 | `network.globalPacketCompression` | `true` | Global ZSTD pipeline |
 | `network.compressionLevel` | `3` | Network level (speed-biased) |
 | `network.maxChunksPerTick` | `10` | Per-player serialize cap per server tick |
-| `network.mainThreadChunkBudgetMs` | `3` | Client apply budget per frame (ms) |
+| `clientCache.mainThreadChunkBudgetMs` | `15` | Client apply budget per frame (ms) |
 | `clientCache.lightCacheEnabled` | `true` | Cache light data; hits skip recomputation |
 | `network.maxLightRecomputePerFrame` | `10` | Max light recomputes per frame |
 | `network.metricsEnabled` | `true` | Metrics collection |
@@ -324,7 +324,7 @@ Hassium 用 **ZSTD** 替代原版 Zlib，主要优化三件事：
 `clientCache.lightCacheEnabled = true`（默认）时，首次加载的光照重算结果会存入本地缓存。后续缓存命中直接应用预计算光照，跳过耗时的同步重算。
 
 **平滑加载**  
-`network.mainThreadChunkBudgetMs`（默认 `3`）限制客户端每帧用于 apply 的时间。进服约前 5 秒有短暂 JoinBoost，提高预算以加快填图、减少长时间卡死。服务端用 `maxChunksPerTick` 限制每玩家每 tick 序列化区块数。
+`clientCache.mainThreadChunkBudgetMs`（默认 `15`）限制客户端每帧用于 apply 的时间。进服约前 10 秒有短暂 JoinBoost（从约 30ms 线性退坡到正常预算），以加快填图、减少长时间卡死。服务端用 `maxChunksPerTick` 限制每玩家每 tick 序列化区块数。
 
 ### 配置摘要
 
@@ -343,7 +343,7 @@ Hassium 用 **ZSTD** 替代原版 Zlib，主要优化三件事：
 | `network.globalPacketCompression` | `true` | 全局 ZSTD |
 | `network.compressionLevel` | `3` | 网络压缩等级（偏速度） |
 | `network.maxChunksPerTick` | `10` | 每玩家每 tick 序列化上限 |
-| `network.mainThreadChunkBudgetMs` | `3` | 客户端每帧 apply 预算（ms） |
+| `clientCache.mainThreadChunkBudgetMs` | `15` | 客户端每帧 apply 预算（ms） |
 | `clientCache.lightCacheEnabled` | `true` | 光照缓存，命中跳过重算 |
 | `network.maxLightRecomputePerFrame` | `10` | 每帧最多重算光照的区块数 |
 | `network.metricsEnabled` | `true` | 指标收集 |

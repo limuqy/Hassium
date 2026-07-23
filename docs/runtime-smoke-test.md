@@ -47,7 +47,7 @@ Hassium 跨版本（1.20.1–1.21.11）× 多加载器（fabric / neoforge）的
 | `-Loader` | 是 | — | `fabric` 或 `neoforge` |
 | `-Phase` | 是 | — | `I`（初始轮）或 `R`（回归轮），仅用于命名 |
 | `-SessionId` | 是 | — | 会话 ID，用于日志文件命名，如 `1.20.1_fabric_I` |
-| `-CleanWorld` | 否 | false | 删除服务端存档（batch 脚本默认强制 true） |
+| `-CleanWorld` | 否 | false | 删除服务端存档；batch 按 loader 策略决定（见下） |
 | `-SmokeHost` | 否 | 空 | 客户端连服完整地址（如 `127.0.0.1:25566`）；指定后优先于 `-ServerPort` |
 | `-ServerPort` | 否 | `25565` | 服务端监听端口（并行模式由 batch 脚本分配：fabric=BasePort, neoforge=BasePort+1） |
 | `-DelayMs` | 否 | `10000` | 进世界后等待毫秒，再 dump 统计 |
@@ -63,8 +63,17 @@ Hassium 跨版本（1.20.1–1.21.11）× 多加载器（fabric / neoforge）的
 | `-Versions` | 否 | 全部 17 版 | 指定版本子集 |
 | `-Loaders` | 否 | `fabric,neoforge` | 加载器子集 |
 | `-MaxRetries` | 否 | `3` | 单会话失败重试次数上限 |
-| `-Parallel` | 否 | false | 同版本 fabric+neoforge 并行跑（Start-Job） |
+| `-Parallel` | 否 | false | 同版本 fabric+neoforge 并行跑（Start-Process） |
 | `-BasePort` | 否 | `25565` | 起始端口；fabric 用此端口，neoforge 自动 +1（仅并行模式生效） |
+
+**batch `CleanWorld` 策略**（按 loader 独立跟踪，因为 fabric/neoforge 各有 `run/server`）：
+
+| 场景 | 是否清理 |
+|------|----------|
+| 该 loader 的第一个版本 | 清理 |
+| 后续升版本 / 同向 | **不清理**（复用存档，加快启动） |
+| 退版本（高→低） | 强制清理（高版本存档无法被低版本读取） |
+| 同会话失败重试 | 强制清理 |
 
 ## 测试流程
 

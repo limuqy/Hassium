@@ -3,6 +3,7 @@ package io.github.limuqy.mc.hassium.cache.client;
 import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.concurrent.HassiumTaskExecutor;
 import io.github.limuqy.mc.hassium.concurrent.TaskCategory;
+import io.github.limuqy.mc.hassium.metrics.NetworkStats;
 import io.github.limuqy.mc.hassium.network.ChunkDataRequestC2SPacket;
 import io.github.limuqy.mc.hassium.network.ClientChunkHandler;
 import io.github.limuqy.mc.hassium.platform.Services;
@@ -175,6 +176,14 @@ public class ClientCacheLoadQueue {
                 CompoundTag writeback = (!hasLight && nbt != null) ? nbt : null;
                 readyQueue.offer(new ReadyChunk(task.pos(), packetBytes, task.priority(), task.renderOnly(),
                         hasLight, writeback));
+                // OVD(renderOnly) 不经 chunkHash 比对，需在磁盘命中时单独记入缓存指标；
+                // 权威路径已在 ClientMetadataHandler 记过，避免双重计数。
+                if (task.renderOnly() && packetBytes.length > 0) {
+                    long bytes = packetBytes.length;
+                    NetworkStats.recordCacheLoadEligible(bytes);
+                    NetworkStats.recordCacheHit(bytes);
+                    NetworkStats.recordCacheFullHit(bytes);
+                }
                 DebugLogger.info(LogType.CACHE,
                         "[CACHE_LOAD] Chunk {} loaded from disk ({} bytes, hasLight={}, readySize={})",
                         task.pos(), packetBytes.length, hasLight, readyQueue.size());

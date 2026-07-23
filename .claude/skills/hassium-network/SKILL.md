@@ -28,7 +28,7 @@ Mixin 拦截 broadcast/trackChunk/PlayerChunkSender
   → 客户端 readChunkHash（MetadataTable / SectionHashStore）比对
   → 命中：ClientCacheLoadQueue；未命中：全量 ChunkDataRequestC2S
   → onServerTick 主线程序列化 ≤ maxChunksPerTick → pushPool 压缩发送
-  → 客户端 MainThreadBudget apply（JoinBoost ~5s）
+  → 客户端 MainThreadBudget apply（JoinBoost ~10s）
   → persist：contentHash=combine(sectionHashes) + SectionHashStore
 ```
 
@@ -54,11 +54,11 @@ Mixin 拦截 broadcast/trackChunk/PlayerChunkSender
 
 ## 限流配置
 
-| 项 | 含义 |
-|----|------|
-| `maxChunksPerTick` | 每玩家每 **server tick** 序列化上限 |
-| `mainThreadChunkBudgetMs` | 客户端每帧预算（默认 3；JoinBoost ~10） |
-| `maxChunksPerFrame` / `maxCallbacksPerFrame` | 硬顶，非主限流 |
+| 项 | 含义                                             |
+|----|------------------------------------------------|
+| `maxChunksPerTick` | 每玩家每 **server tick** 序列化上限                     |
+| `mainThreadChunkBudgetMs` | 客户端每帧预算（默认 15；JoinBoost ~30）                   |
+| `maxChunksPerFrame` / `maxCallbacksPerFrame` | 硬顶，非主限流                                        |
 | `maxLightRecomputePerFrame` | 客户端每帧光照重算区块上限；超额进溢出队列；重算与 apply 解耦（Dispatcher） |
 
 ## 日志

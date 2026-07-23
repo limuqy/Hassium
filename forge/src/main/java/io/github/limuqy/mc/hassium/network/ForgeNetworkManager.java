@@ -382,6 +382,8 @@ public class ForgeNetworkManager implements NetworkManager {
                                 HassiumConnectionRegistry.markPending(connection);
                                 HassiumAggregationManager.init();
                             }
+                            // 与 Fabric/NeoForge 对齐：ZSTD 就绪后补发视距内 chunkHash
+                            ServerChunkPushManager.getInstance().resyncTrackedChunks(player);
                         };
                         if (server != null) {
                             server.execute(afterSwitch);
@@ -395,6 +397,10 @@ public class ForgeNetworkManager implements NetworkManager {
         reply.accept(response);
         LOGGER.info("Hassium: Server handshake for {}: accepted={}, globalCompression={}, compactHeader={}",
                 player.getName().getString(), accepted, useGlobalCompression, useCompactHeader);
+        // globalCompression=false 时不会走延迟 ZSTD 路径，直接补发 chunkHash
+        if (accepted && !useGlobalCompression) {
+            ServerChunkPushManager.getInstance().resyncTrackedChunks(player);
+        }
     }
 
     private static void handleHandshakeS2C(HandshakeResponsePacket msg) {

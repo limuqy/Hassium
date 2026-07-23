@@ -90,7 +90,7 @@ public record HassiumConfig(
                 10,      // loadThreads
                 true,    // lightCacheEnabled
                 32,      // maxChunksPerFrame
-                10       // mainThreadChunkBudgetMs
+                15       // mainThreadChunkBudgetMs
         );
 
         public long maxCacheSizeBytes() {
@@ -154,8 +154,14 @@ public record HassiumConfig(
         public static final Set<String> DEFAULT_COMPRESSION_BLACKLIST = Set.of(
                 HassiumPacketIds.CHUNK_PAYLOAD_S2C,
                 HassiumPacketIds.SECTION_DELTA_S2C,
-                "hassium:main",
-                "hassium:aggregation"
+                HassiumPacketIds.HANDSHAKE_S2C,
+                HassiumPacketIds.DICTIONARY_SYNC_S2C,
+                HassiumPacketIds.INDEX_SYNC_S2C,
+                HassiumPacketIds.CHUNK_HASH_S2C,
+                HassiumPacketIds.LIGHT_DELTA_S2C,
+                HassiumPacketIds.BLOCK_ENTITY_DATA_S2C,
+                HassiumPacketIds.MAIN_CHANNEL,
+                HassiumPacketIds.AGGREGATION_S2C
         );
 
         public static final ServerNetworkConfig DEFAULT = new ServerNetworkConfig(

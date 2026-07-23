@@ -86,7 +86,7 @@
 | `network.enabled` | `true` | 自定义通道 |
 | `network.globalPacketCompression` | `true` | 全局 ZSTD |
 | `network.maxChunksPerTick` | `10` | 每玩家每 tick 序列化上限 |
-| `network.mainThreadChunkBudgetMs` | `3` | 客户端每帧 apply 预算（ms） |
+| `clientCache.mainThreadChunkBudgetMs` | `15` | 客户端每帧 apply 预算（ms） |
 | `network.metricsEnabled` | `true` | 指标收集 |
 | `debug.*` | `false` | 分类调试日志（默认安静） |
 

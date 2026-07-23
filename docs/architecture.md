@@ -94,7 +94,7 @@ Sector 3+:    [length(4)][type=126][ZSTD 压缩数据]
 | `network.globalPacketCompression` | true | 全局 ZSTD |
 | `network.compressionLevel` | 3 | 网络压缩等级（速度优先） |
 | `network.maxChunksPerTick` | 10 | 每玩家每 server tick 序列化上限 |
-| `network.mainThreadChunkBudgetMs` | 3 | 客户端主线程 apply 预算（ms） |
+| `clientCache.mainThreadChunkBudgetMs` | 15 | 客户端主线程 apply 预算（ms） |
 | `clientCache.lightCacheEnabled` | true | 光照缓存：首次加载重算后存储光照，缓存命中直接应用 |
 | `network.maxLightRecomputePerFrame` | 10 | 每帧最多重算光照的区块数 |
 | `network.metricsEnabled` | true | 指标收集 |

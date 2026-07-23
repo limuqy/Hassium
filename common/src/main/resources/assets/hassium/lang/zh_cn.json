@@ -54,7 +54,7 @@
     "hassium.configuration.clientCache.maxChunksPerFrame":  "每帧最大区块数",
     "hassium.configuration.clientCache.maxChunksPerFrame.tooltip":  "应用缓存区块的安全硬顶；主限流为时间预算。默认 32。",
     "hassium.configuration.clientCache.mainThreadChunkBudgetMs":  "主线程预算",
-    "hassium.configuration.clientCache.mainThreadChunkBudgetMs.tooltip":  "每帧主线程应用区块的时间预算（毫秒，默认 10）",
+    "hassium.configuration.clientCache.mainThreadChunkBudgetMs.tooltip":  "每帧主线程应用区块的时间预算（毫秒，默认 15）",
     "hassium.configuration.storage":  "存储",
     "hassium.configuration.storage.button":  "存储…",
     "hassium.configuration.storage.enabled":  "启用存档压缩",

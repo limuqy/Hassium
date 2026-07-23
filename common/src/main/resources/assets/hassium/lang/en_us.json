@@ -54,7 +54,7 @@
     "hassium.configuration.clientCache.maxChunksPerFrame":  "Max chunks per frame",
     "hassium.configuration.clientCache.maxChunksPerFrame.tooltip":  "Hard cap when applying cached chunks; time budget is the main limiter. Default: 32.",
     "hassium.configuration.clientCache.mainThreadChunkBudgetMs":  "Main Thread Budget",
-    "hassium.configuration.clientCache.mainThreadChunkBudgetMs.tooltip":  "Per-frame main thread chunk apply budget in ms (default 10)",
+    "hassium.configuration.clientCache.mainThreadChunkBudgetMs.tooltip":  "Per-frame main thread chunk apply budget in ms (default 15)",
     "hassium.configuration.storage":  "Storage",
     "hassium.configuration.storage.button":  "Storage…",
     "hassium.configuration.storage.enabled":  "Enable world compression",

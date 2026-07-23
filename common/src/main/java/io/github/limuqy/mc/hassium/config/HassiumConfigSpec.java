@@ -338,7 +338,7 @@ public final class HassiumConfigSpec {
                     .define("sectionDeltaEnabled", true);
             cacheJoinBoostEnabled = builder
                     .comment("=== JoinBoost ===")
-                    .comment("进服后短时（5秒）提高主线程预算加速区块加载，预算从 10ms 线性退坡到 mainThreadChunkBudgetMs。"
+                    .comment("进服后短时（10秒）提高主线程预算加速区块加载，预算从 30ms 线性退坡到 mainThreadChunkBudgetMs。"
                             + "关闭后进服不提速，但避免高负载时的节奏波动。默认 true。")
                     .translation("hassium.configuration.clientCache.joinBoostEnabled")
                     .define("joinBoostEnabled", true);
@@ -362,9 +362,9 @@ public final class HassiumConfigSpec {
                     .translation("hassium.configuration.clientCache.maxChunksPerFrame")
                     .defineInRange("maxChunksPerFrame", 32, 1, 512);
             cacheMainThreadChunkBudgetMs = builder
-                    .comment("每帧主线程应用区块的时间预算（毫秒；默认 10；进服 JoinBoost 期间可临时提高）")
+                    .comment("每帧主线程应用区块的时间预算（毫秒；默认 15；进服 JoinBoost 期间可临时提高）")
                     .translation("hassium.configuration.clientCache.mainThreadChunkBudgetMs")
-                    .defineInRange("mainThreadChunkBudgetMs", 10, 1, 50);
+                    .defineInRange("mainThreadChunkBudgetMs", 15, 1, 50);
             builder.pop();
 
             builder.comment("客户端网络配置")

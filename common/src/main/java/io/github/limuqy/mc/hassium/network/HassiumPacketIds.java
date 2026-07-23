@@ -26,6 +26,31 @@ public final class HassiumPacketIds {
      */
     public static final String HANDSHAKE_S2C = "hassium:handshake_s2c";
 
+    /**
+     * 服务端 -> 客户端：字典同步
+     */
+    public static final String DICTIONARY_SYNC_S2C = "hassium:dictionary_sync";
+
+    /**
+     * 服务端 -> 客户端：包类型索引同步
+     */
+    public static final String INDEX_SYNC_S2C = "hassium:index_sync_s2c";
+
+    /**
+     * 服务端 -> 客户端：聚合包
+     */
+    public static final String AGGREGATION_S2C = "hassium:aggregation";
+
+    /**
+     * 服务端 -> 客户端：方块实体数据
+     */
+    public static final String BLOCK_ENTITY_DATA_S2C = "hassium:block_entity_data_s2c";
+
+    /**
+     * Forge/NeoForge SimpleChannel 共用通道
+     */
+    public static final String MAIN_CHANNEL = "hassium:main";
+
     // ===== 缓存相关包 =====
 
     /**

@@ -1388,6 +1388,10 @@ public class NeoForgeNetworkManager implements NetworkManager {
 #endif
         LOGGER.info("Hassium: Server handshake for {}: accepted={}, globalCompression={}, compactHeader={}",
                 player.getName().getString(), accepted, useGlobalCompression, useCompactHeader);
+        // globalCompression=false 时不会走 ZSTD ready→Dict/Index 路径，直接补发 chunkHash
+        if (accepted && !useGlobalCompression) {
+            ServerChunkPushManager.getInstance().resyncTrackedChunks(player);
+        }
     }
 
     private void handleHandshakeResponseSimple(HandshakeResponseWrapper msg) {
@@ -1498,6 +1502,10 @@ public class NeoForgeNetworkManager implements NetworkManager {
                 player.connection.send(new ClientboundCustomPayloadPacket(response));
                 LOGGER.info("Hassium: Server handshake for {}: accepted={}, globalCompression={}, compactHeader={}",
                         player.getName().getString(), accepted, useGlobalCompression, useCompactHeader);
+                // globalCompression=false 时不会走 ZSTD ready→Dict/Index 路径，直接补发 chunkHash
+                if (accepted && !useGlobalCompression) {
+                    ServerChunkPushManager.getInstance().resyncTrackedChunks(player);
+                }
             }
         });
     }
@@ -1734,6 +1742,10 @@ public class NeoForgeNetworkManager implements NetworkManager {
                 player.connection.send(response);
                 LOGGER.info("Hassium: Server handshake for {}: accepted={}, globalCompression={}, compactHeader={}",
                         player.getName().getString(), accepted, useGlobalCompression, useCompactHeader);
+                // globalCompression=false 时不会走 ZSTD ready→Dict/Index 路径，直接补发 chunkHash
+                if (accepted && !useGlobalCompression) {
+                    ServerChunkPushManager.getInstance().resyncTrackedChunks(player);
+                }
             }
         });
     }

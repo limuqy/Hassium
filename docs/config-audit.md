@@ -76,7 +76,7 @@ Forge/NeoForge 端注册 3 个 spec（CLIENT / COMMON / SERVER），物理客户
 | `network.backgroundThreads` | `8` | **客户端** | **❌ 死代码** — getter 存在但无业务逻辑调用 | ⚠️ |
 | `network.maxChunksPerFrame` | `32` | **客户端** | `ClientMainThreadBudget:78` | ✅ 正常 |
 | `network.maxCallbacksPerFrame` | `32` | **客户端** | **❌ 死代码** — getter 存在但无业务逻辑调用 | ⚠️ |
-| `network.mainThreadChunkBudgetMs` | `10` | **客户端** | `ClientMainThreadBudget:59` | ✅ 正常 |
+| `clientCache.mainThreadChunkBudgetMs` | `15` | **客户端** | `ClientMainThreadBudget:59` | ✅ 正常 |
 
 ### E. Network — 服务端专属（5 项）→ `server.toml`
 

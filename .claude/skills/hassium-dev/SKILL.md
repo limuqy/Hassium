@@ -67,6 +67,25 @@ compat 类索引（完整表见 version-segments）：`PacketPayloadCompat`、`R
 
 `zstd-jni` 已在 `common/build.gradle`；注意 native 在两加载器 jar-in-jar 打包。
 
+## 修复红线
+
+改 bug、过编译、过冒烟时 **硬约束**（违反即错误修复）：
+
+1. **功能不可降级**  
+   禁止为“先绿再说”而关闭/削弱已实现能力，例如关掉 `lightCache`、`sectionDelta`、`viewDistanceExtension`、`globalPacketCompression`，或改默认配置、放宽协议/缓存语义。必须在功能完整前提下修根因。
+
+2. **已验证路径不可覆盖**  
+   多版本/多加载器兼容时，禁止改写、折叠、删除已在旧版本验证通过的代码路径。版本差异用 `#if MC_VER` 或 `compat/` **叠加隔离**；老路径保持行为不变。新版本适配不得“统一重写”吞掉旧锚点逻辑。
+
+**禁止借口：**
+
+| 借口 | 现实 |
+|------|------|
+| “关掉 X 测试就过了” | 测试绿 ≠ 功能在；关功能不算修复 |
+| “先统一写法再调旧版” | 旧版已验证路径是基线，只能旁路适配 |
+| “这个版本特殊所以重写整段” | 用版本门/compat 包住差异，不覆盖公共已通过路径 |
+| “命中率差一点可以接受，先关缓存” | 卖点功能不得以指标或便利为由下线 |
+
 ## 常用命令
 
 ```bash
@@ -96,7 +115,7 @@ compat 类索引（完整表见 version-segments）：`PacketPayloadCompat`、`R
 关键真相源（避免重蹈覆辙）：
 - **Loom runDir 在子项目目录**：`fabric/run/client/`、`neoforge/run/client/`，不是根目录 `run/`
 - **缓存清理要删整个 `hassium_cache` 目录** + `config/hassium/`，不是单个 `heat.idx`
-- **退版本必须 `-CleanWorld`**：高版本存档无法被低版本读取
+- **batch CleanWorld 策略**：每个 loader 首轮清档，后续默认复用；退版本与失败重试强制清档
 - **`$projectRoot` 由 `$PSScriptRoot` 推导**，脚本不依赖工作目录
 - **并行模式 `-Parallel`**：fabric 用 25565、neoforge 用 25566，版本间仍串行；至少 16G RAM
 

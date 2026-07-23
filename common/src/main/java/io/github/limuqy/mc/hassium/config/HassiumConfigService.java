@@ -407,7 +407,7 @@ public class HassiumConfigService {
     public int getMainThreadChunkBudgetMs() {
         int value = config.clientCache().mainThreadChunkBudgetMs();
         if (value <= 0) {
-            return 10;
+            return 15;
         }
         return Math.min(50, value);
     }

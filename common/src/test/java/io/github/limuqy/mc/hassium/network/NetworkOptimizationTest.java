@@ -143,4 +143,71 @@ public class NetworkOptimizationTest {
         // 清理
         syncManager.removeClientIndexManager(connectionId);
     }
+
+    @Test
+    @DisplayName("控制面 S2C 必须硬编码黑名单，禁止进聚合")
+    void testControlPlaneHardcodedBlacklist() {
+        // 文档约定：handshake / index sync / chunkHash 等控制面不进 PENDING 聚合缓冲。
+        // 聚合拆包走 RawCustomPayload.handle 会绕开 Fabric/NeoForge receiver。
+        String[] controlPlane = {
+                HassiumPacketIds.HANDSHAKE_S2C,
+                HassiumPacketIds.DICTIONARY_SYNC_S2C,
+                HassiumPacketIds.INDEX_SYNC_S2C,
+                HassiumPacketIds.CHUNK_HASH_S2C,
+                HassiumPacketIds.LIGHT_DELTA_S2C,
+                HassiumPacketIds.BLOCK_ENTITY_DATA_S2C,
+                HassiumPacketIds.CHUNK_PAYLOAD_S2C,
+                HassiumPacketIds.SECTION_DELTA_S2C,
+                HassiumPacketIds.MAIN_CHANNEL,
+                HassiumPacketIds.AGGREGATION_S2C
+        };
+        for (String id : controlPlane) {
+            assertTrue(PacketCompressionBlacklist.isHardcodedBlacklist(id),
+                    "control-plane must be hardcoded blacklist: " + id);
+            assertFalse(PacketCompressionBlacklist.shouldCompress(id),
+                    "control-plane must not compress: " + id);
+            assertFalse(PacketCompressionBlacklist.shouldAggregate(id),
+                    "control-plane must not aggregate: " + id);
+        }
+        // 原版包默认仍可压缩/聚合
+        assertTrue(PacketCompressionBlacklist.shouldCompress("minecraft:keep_alive"));
+        assertTrue(PacketCompressionBlacklist.shouldAggregate("minecraft:keep_alive"));
+    }
+
+    @Test
+    @DisplayName("高频实体/跟踪包禁止应用层聚合，但仍可进管线压缩语义")
+    void testHighFrequencyNoAggregate() {
+        // 1.20.1 嵌套类短 path
+        assertTrue(PacketCompressionBlacklist.isHighFrequencyNoAggregate("minecraft:pos"));
+        assertTrue(PacketCompressionBlacklist.isHighFrequencyNoAggregate("minecraft:pos_rot"));
+        assertTrue(PacketCompressionBlacklist.isHighFrequencyNoAggregate("minecraft:rot"));
+        // 1.20.1 snake_case 全名
+        assertTrue(PacketCompressionBlacklist.isHighFrequencyNoAggregate(
+                "minecraft:clientbound_set_entity_motion_packet"));
+        assertTrue(PacketCompressionBlacklist.isHighFrequencyNoAggregate(
+                "minecraft:clientbound_rotate_head_packet"));
+        assertTrue(PacketCompressionBlacklist.isHighFrequencyNoAggregate(
+                "minecraft:clientbound_forget_level_chunk_packet"));
+        assertTrue(PacketCompressionBlacklist.isHighFrequencyNoAggregate(
+                "minecraft:clientbound_set_chunk_cache_center_packet"));
+        // 1.20.5+ PacketType id 形态
+        assertTrue(PacketCompressionBlacklist.isHighFrequencyNoAggregate(
+                "minecraft:set_entity_motion"));
+        assertTrue(PacketCompressionBlacklist.isHighFrequencyNoAggregate(
+                "minecraft:move_entity_pos"));
+
+        // 聚合入口必须拒绝；管线压缩语义仍允许（小包会低于 threshold）
+        assertFalse(PacketCompressionBlacklist.shouldAggregate("minecraft:pos"));
+        assertFalse(PacketCompressionBlacklist.shouldAggregate(
+                "minecraft:clientbound_set_entity_motion_packet"));
+        assertTrue(PacketCompressionBlacklist.shouldCompress("minecraft:pos"));
+        assertTrue(PacketCompressionBlacklist.shouldCompress(
+                "minecraft:clientbound_set_entity_motion_packet"));
+
+        // 非高频包仍可聚合
+        assertFalse(PacketCompressionBlacklist.isHighFrequencyNoAggregate(
+                "minecraft:clientbound_block_update_packet"));
+        assertTrue(PacketCompressionBlacklist.shouldAggregate(
+                "minecraft:clientbound_block_update_packet"));
+    }
 }

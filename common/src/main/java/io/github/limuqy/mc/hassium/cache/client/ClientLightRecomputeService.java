@@ -5,6 +5,10 @@ import io.github.limuqy.mc.hassium.compat.CompoundTagCompat;
 import io.github.limuqy.mc.hassium.network.ClientChunkHandler;
 import io.github.limuqy.mc.hassium.metrics.NetworkStats;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
+import io.github.limuqy.mc.hassium.mixin.LevelLightEngineAccessor;
+import io.github.limuqy.mc.hassium.mixin.LightEngineAccessor;
+import it.unimi.dsi.fastutil.longs.LongArrayFIFOQueue;
+import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.core.BlockPos;
@@ -13,9 +17,9 @@ import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.LightLayer;
 import net.minecraft.world.level.chunk.DataLayer;
 import net.minecraft.world.level.chunk.LevelChunk;
-import net.minecraft.world.level.chunk.LevelChunkSection;
 import net.minecraft.world.level.lighting.LayerLightEventListener;
 import net.minecraft.world.level.lighting.LevelLightEngine;
+import net.minecraft.world.level.lighting.LightEngine;
 
 /**
  * 客户端光照重算服务（从 Mixin 抽出，避免 Mixin 类上出现 public static）。
@@ -180,23 +184,106 @@ public final class ClientLightRecomputeService {
             LevelLightEngine lightEngine = level.getLightEngine();
             lightEngine.setLightEnabled(chunkPos, true);
 
-            for (int sectionY = bottomSection; sectionY < topSection; sectionY++) {
-                SectionPos sectionPos = SectionPos.of(chunkPos.x, sectionY, chunkPos.z);
-                LevelChunkSection section = chunk.getSection(chunk.getSectionIndexFromSectionY(sectionY));
-                lightEngine.updateSectionStatus(sectionPos, section.hasOnlyAir());
-                level.setSectionDirtyWithNeighbors(chunkPos.x, sectionY, chunkPos.z);
-            }
+            // 本块全 section 建 DataLayer（含 hasOnlyAir）。
+            // 空气 section 也需要 sky light；且 pullLightFromNeighborEdges 的 checkBlock
+            // 会入队边缘空气格。若 updateSectionStatus(true) 则无 DataLayer，
+            // 渲染线程 runLightUpdates → getStoredLevel NPE（1.21.3/1.21.5 NeoForge 已复现）。
+            ensureColumnDataLayers(level, lightEngine, chunkPos, bottomSection, topSection);
+
+            // 邻居也建层：propagateIncreases 会读邻居 section 的 DataLayer。
+            // 1.21.10 双端 R2 已复现：邻居无层 → runLightUpdates NPE → residual 留给 LevelRenderer 崩溃。
+            ensureNeighborDataLayers(level, lightEngine, chunkPos, bottomSection, topSection);
 
             // 只重算本块。禁止对邻居 propagateLightSources：邻居若已从缓存注入正确光照，
             // 再 propagate 会先清空再不全量重建 → 「闪一下又灭」（二次进服相邻块互踩）。
             lightEngine.propagateLightSources(chunkPos);
             pullLightFromNeighborEdges(level, chunkPos, bottomSection, topSection);
+            // 同步清空 deferred 队列；失败则清 residual，避免 LevelRenderer 未捕获崩溃。
+            safeRunLightUpdates(lightEngine);
             Constants.LOG.debug("Hassium: Recomputed light for chunk {}", chunkPos);
         } catch (Exception e) {
             Constants.LOG.error("Hassium: Failed to apply light engine for chunk {}", chunkPos, e);
+            try {
+                clearLightQueues(level.getLightEngine());
+            } catch (Exception ignored) {
+                // best-effort
+            }
         } finally {
             long elapsedNs = System.nanoTime() - startNs;
             NetworkStats.recordLightRecomputeTime(elapsedNs);
+        }
+    }
+
+    /** 为本 chunk 全部 section 分配 DataLayer。 */
+    private static void ensureColumnDataLayers(ClientLevel level, LevelLightEngine lightEngine,
+                                              ChunkPos chunkPos, int bottomSection, int topSection) {
+        for (int sectionY = bottomSection; sectionY < topSection; sectionY++) {
+            SectionPos sectionPos = SectionPos.of(chunkPos.x, sectionY, chunkPos.z);
+            lightEngine.updateSectionStatus(sectionPos, false);
+            level.setSectionDirtyWithNeighbors(chunkPos.x, sectionY, chunkPos.z);
+        }
+    }
+
+    /** 为已加载邻居 chunk 全 section 分配 DataLayer，供边缘传播读层。 */
+    private static void ensureNeighborDataLayers(ClientLevel level, LevelLightEngine lightEngine,
+                                                 ChunkPos chunkPos, int bottomSection, int topSection) {
+        ensureNeighborColumnIfLoaded(level, lightEngine, chunkPos.x + 1, chunkPos.z, bottomSection, topSection);
+        ensureNeighborColumnIfLoaded(level, lightEngine, chunkPos.x - 1, chunkPos.z, bottomSection, topSection);
+        ensureNeighborColumnIfLoaded(level, lightEngine, chunkPos.x, chunkPos.z + 1, bottomSection, topSection);
+        ensureNeighborColumnIfLoaded(level, lightEngine, chunkPos.x, chunkPos.z - 1, bottomSection, topSection);
+    }
+
+    private static void ensureNeighborColumnIfLoaded(ClientLevel level, LevelLightEngine lightEngine,
+                                                     int chunkX, int chunkZ,
+                                                     int bottomSection, int topSection) {
+        if (level.getChunkSource().getChunkNow(chunkX, chunkZ) == null) {
+            return;
+        }
+        for (int sectionY = bottomSection; sectionY < topSection; sectionY++) {
+            SectionPos sectionPos = SectionPos.of(chunkX, sectionY, chunkZ);
+            lightEngine.updateSectionStatus(sectionPos, false);
+        }
+    }
+
+    /**
+     * 同步 drain light deferred 队列；任何失败都清空 residual，
+     * 防止下一帧 {@code LevelRenderer.renderLevel} 未捕获 NPE 崩端。
+     */
+    public static void safeRunLightUpdates(LevelLightEngine lightEngine) {
+        try {
+            lightEngine.runLightUpdates();
+        } catch (Throwable t) {
+            Constants.LOG.error("Hassium: runLightUpdates failed; clearing residual light queues", t);
+            clearLightQueues(lightEngine);
+        }
+    }
+
+    /** 清空 sky/block engine 的 deferred 队列（失败兜底，避免渲染线程再崩）。 */
+    public static void clearLightQueues(LevelLightEngine lightEngine) {
+        if (lightEngine == null) {
+            return;
+        }
+        LevelLightEngineAccessor accessor = (LevelLightEngineAccessor) lightEngine;
+        clearEngineQueues(accessor.hassium$getBlockEngine());
+        clearEngineQueues(accessor.hassium$getSkyEngine());
+    }
+
+    private static void clearEngineQueues(LightEngine<?, ?> engine) {
+        if (engine == null) {
+            return;
+        }
+        LightEngineAccessor acc = (LightEngineAccessor) engine;
+        LongOpenHashSet nodes = acc.hassium$getBlockNodesToCheck();
+        if (nodes != null) {
+            nodes.clear();
+        }
+        LongArrayFIFOQueue decrease = acc.hassium$getDecreaseQueue();
+        if (decrease != null) {
+            decrease.clear();
+        }
+        LongArrayFIFOQueue increase = acc.hassium$getIncreaseQueue();
+        if (increase != null) {
+            increase.clear();
         }
     }
 

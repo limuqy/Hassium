@@ -86,7 +86,7 @@ Files: `config/hassium/hassium-client.toml`, `config/hassium/hassium-common.toml
 | `network.enabled` | `true` | Custom channels |
 | `network.globalPacketCompression` | `true` | Global ZSTD |
 | `network.maxChunksPerTick` | `10` | Per-player serialize cap per server tick |
-| `network.mainThreadChunkBudgetMs` | `3` | Client apply budget per frame (ms) |
+| `clientCache.mainThreadChunkBudgetMs` | `15` | Client apply budget per frame (ms) |
 | `network.metricsEnabled` | `true` | Metrics |
 | `debug.*` | `false` | Category debug logs (quiet by default) |
 

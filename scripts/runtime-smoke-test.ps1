@@ -13,7 +13,7 @@ param(
     [switch]$CleanWorld,
     [string]$SmokeHost = "",
     [int]$ServerPort = 25565,
-    [int]$DelayMs = 6000,
+    [int]$DelayMs = 10000,
     [int]$ReconnectDelayMs = 3000,
     [int]$ServerReadyTimeoutSec = 160,
     [int]$ClientTimeoutSec = 100
@@ -114,7 +114,7 @@ Set-Content -Path (Join-Path $serverRunDir "server.properties") -Value $props
 # 创建 world\serverconfig 目录（部分 neoforge 版本不会自动创建）
 New-Item -ItemType Directory -Force -Path (Join-Path $serverRunDir "world\serverconfig") -ErrorAction SilentlyContinue | Out-Null
 
-# 3. 清理存档（默认开启；避免跨版本/跨加载器 world 不兼容）
+# 3. 清理存档（batch：loader 首轮 / 退版本 / 失败重试 会传 -CleanWorld；单会话默认不清理）
 if ($CleanWorld) {
     Write-Host "[$SessionId] [3/9] 清理服务端存档 ($Loader/run/server/world/)..."
     Remove-Item -Recurse -Force (Join-Path $serverRunDir "world") -ErrorAction SilentlyContinue
@@ -123,7 +123,7 @@ if ($CleanWorld) {
     Remove-Item -Recurse -Force (Join-Path $serverRunDir "cache") -ErrorAction SilentlyContinue
     New-Item -ItemType Directory -Force -Path (Join-Path $serverRunDir "world\serverconfig") -ErrorAction SilentlyContinue | Out-Null
 } else {
-    Write-Host "[$SessionId] [3/9] 跳过存档清理 (-CleanWorld 未指定)"
+    Write-Host "[$SessionId] [3/9] 跳过存档清理（复用已有 world）"
 }
 
 # 4. 释放 $ServerPort 端口（可能被上次会话残留进程占用）

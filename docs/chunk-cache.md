@@ -78,7 +78,7 @@ CacheLoadQueue   全量请求     分段增量（默认开）
 后台磁盘+解压    ChunkPayload    → SectionDelta → NBT merge
    └────────┬────────┘              │（失败/skipped/超时 → 全量）
             └───────────┬───────────┘
-主线程时间预算 apply（JoinBoost：进服约 5s 提高预算）
+主线程时间预算 apply（JoinBoost：进服约 10s 提高预算）
         │
 HIT apply 后再请求 blockEntity
 ```
@@ -86,8 +86,8 @@ HIT apply 后再请求 blockEntity
 
 | 机制 | 说明 |
 |------|------|
-| `mainThreadChunkBudgetMs` | 每帧 apply/回调共享预算（默认 3ms） |
-| JoinBoost | 进服约 5s 预算约 10ms |
+| `mainThreadChunkBudgetMs` | 每帧 apply/回调共享预算（默认 15ms） |
+| JoinBoost | 进服约 10s，预算从约 30ms 线性退坡到 `mainThreadChunkBudgetMs` |
 | `maxChunksPerFrame` / `maxCallbacksPerFrame` | 安全硬顶（默认 32） |
 
 控制面包（hash / 握手 / index sync 等）在 `PacketCompressionBlacklist`，避免进 PENDING 聚合窗口。
@@ -166,8 +166,11 @@ MixinClientTick.tick
   → ViewDistanceExtensionService.update()（单例）
     → serverVD = OptionsAccessor.getServerRenderDistance()
     → 环带 = {pos : serverVD < dist(pos,player) ≤ clientVD}（圆形）
-    → toLoad：跳过 ClientChunkCache.hasChunk 的真实区块 + 已 renderOnly 的
-    → ClientCacheLoadQueue.enqueue(pos, dist, renderOnly=true)
+    → toLoad：跳过已 loaded/pending/未到期 miss；按切比雪夫(+欧氏次键)近距排序
+    → 每 tick 最多 enqueue maxChunksPerFrame 个（与主线程 apply 硬顶共用配置）
+    → ClientCacheLoadQueue.enqueue(pos, MainThreadDispatcher.renderOnlyPriority(pos), renderOnly=true)
+      // RENDER_ONLY 层（tier*BIAS+distSq）；层序恒为 权威 > 未知任务 > 环带；priority 越小越优先
+    → 未扫完 toLoad 不更新 lastPlayerPos → 下 tick 继续灌；另有 pendingLoad>128 门槛（JoinBoost 跳过）
         ├ 命中：applyChunkData(renderOnly=true)
         │   → applier.applyToLevelFromByteBuf → handleLevelChunkWithLight + addRenderOnlyChunk
         │   → 跳过 ClientMetadataHandler.onChunkApplied（不请求 BE）

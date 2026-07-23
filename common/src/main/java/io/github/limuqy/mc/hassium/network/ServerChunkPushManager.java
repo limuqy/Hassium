@@ -2,6 +2,7 @@ package io.github.limuqy.mc.hassium.network;
 
 import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.cache.ChunkContentHashUtil;
+import io.github.limuqy.mc.hassium.concurrent.ChunkDistancePriority;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.metrics.NetworkStats;
 import io.github.limuqy.mc.hassium.platform.Services;
@@ -430,16 +431,21 @@ public class ServerChunkPushManager {
 #endif
                 .toString();
 
-        // 收集所有需要补发的 pos，入队待分批处理（避免一次性提交数百个任务卡住主线程）
-        Deque<ResyncEntry> queue = new ArrayDeque<>();
+        // 按距玩家欧氏距离升序入队，使每 tick RESYNC_PER_TICK 优先补发近处 hash
+        // （原 dx/dz 扫掠会让远离出生点的边缘块先进入客户端请求流）
+        List<ResyncEntry> entries = new ArrayList<>((radius * 2 + 1) * (radius * 2 + 1));
         for (int dx = -radius; dx <= radius; dx++) {
             for (int dz = -radius; dz <= radius; dz++) {
                 if (!isServerChunkInRange(centerX + dx, centerZ + dz, centerX, centerZ, viewDistance)) {
                     continue;
                 }
-                queue.add(new ResyncEntry(new ChunkPos(centerX + dx, centerZ + dz), dimension));
+                entries.add(new ResyncEntry(new ChunkPos(centerX + dx, centerZ + dz), dimension));
             }
         }
+        entries.sort(Comparator.comparingDouble(e ->
+                ChunkDistancePriority.distSq(e.pos(), centerX, centerZ)));
+        Deque<ResyncEntry> queue = new ArrayDeque<>(entries.size());
+        queue.addAll(entries);
         if (!queue.isEmpty()) {
             pendingResync.put(player.getUUID(), queue);
             Constants.LOG.info("Hassium: Queued {} chunkHashes for resync (player={}, vd={}, perTick={})",
@@ -836,10 +842,9 @@ public class ServerChunkPushManager {
 
         List<DataRequestTask> tasks = new ArrayList<>(chunks.size());
         for (ChunkPos pos : chunks) {
-            double dx = pos.x - playerChunkX;
-            double dz = pos.z - playerChunkZ;
-            double distance = Math.sqrt(dx * dx + dz * dz);
-            tasks.add(new DataRequestTask(pos, dimension, distance));
+            // 入队瞬间冻结 distSq（层内排序键；无 renderOnly 层）
+            double priority = ChunkDistancePriority.distSq(pos, playerChunkX, playerChunkZ);
+            tasks.add(new DataRequestTask(pos, dimension, priority));
         }
 //        if (tasks.size() > room) {
 //            tasks.sort(Comparator.comparingDouble(DataRequestTask::priority));

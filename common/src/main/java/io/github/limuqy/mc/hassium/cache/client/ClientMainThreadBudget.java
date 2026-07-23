@@ -11,7 +11,7 @@ import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 public final class ClientMainThreadBudget {
 
     /** 进服加速窗口时长（毫秒） */
-    private static final long JOIN_BOOST_DURATION_MS = 5_000;
+    private static final long JOIN_BOOST_DURATION_MS = 10_000;
 
     /** JoinBoost 期间的预算（毫秒） */
     private static final int JOIN_BOOST_BUDGET_MS = 30;

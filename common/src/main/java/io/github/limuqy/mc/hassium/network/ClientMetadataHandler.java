@@ -6,7 +6,9 @@ import io.github.limuqy.mc.hassium.cache.client.ClientCacheLoadQueue;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.metrics.NetworkStats;
 import io.github.limuqy.mc.hassium.cache.client.ClientHassiumStorage;
+import io.github.limuqy.mc.hassium.concurrent.ChunkDistancePriority;
 import io.github.limuqy.mc.hassium.concurrent.HassiumTaskExecutor;
+import io.github.limuqy.mc.hassium.concurrent.MainThreadDispatcher;
 import io.github.limuqy.mc.hassium.concurrent.TaskCategory;
 import io.github.limuqy.mc.hassium.platform.Services;
 import io.github.limuqy.mc.hassium.utils.DebugLogger;
@@ -18,6 +20,7 @@ import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.world.level.ChunkPos;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -280,12 +283,12 @@ public class ClientMetadataHandler {
             DebugLogger.info(LogType.METADATA, "[CHUNK_HASH] {} cache hits, loading from cache",
                     result.hitChunks().size());
             ClientCacheLoadQueue loadQueue = ClientCacheLoadQueue.getInstance();
+            // 同步刷新坐标缓存后冻结权威层 priority（未知时与 renderOnly 同为 LOWEST）
+            MainThreadDispatcher.updatePlayerPosition(mc.player.getX(), mc.player.getZ());
             for (ChunkPos pos : result.hitChunks()) {
-                double dx = pos.x - mc.player.getX() / 16.0;
-                double dz = pos.z - mc.player.getZ() / 16.0;
-                double distance = Math.sqrt(dx * dx + dz * dz);
+                double priority = MainThreadDispatcher.authoritativePriority(pos);
                 PENDING_BE_REQUESTS.put(ChunkPos.asLong(pos.x, pos.z), dimension);
-                loadQueue.enqueue(pos, distance);
+                loadQueue.enqueue(pos, priority);
             }
         }
 
@@ -384,7 +387,18 @@ public class ClientMetadataHandler {
                     chunks.size());
             return;
         }
-        ChunkDataRequestC2SPacket request = new ChunkDataRequestC2SPacket(dimension, chunks);
+        // 同步刷新主线程调度器的玩家坐标（hash 结果可能在首 tick 前到达）
+        MainThreadDispatcher.updatePlayerPosition(mc.player.getX(), mc.player.getZ());
+        // 按距玩家距离排序：近处先请求，配合服务端 data 队列距离优先
+        List<ChunkPos> ordered = chunks;
+        if (chunks.size() > 1) {
+            double playerChunkX = mc.player.getX() / 16.0;
+            double playerChunkZ = mc.player.getZ() / 16.0;
+            ordered = new ArrayList<>(chunks);
+            ordered.sort(Comparator.comparingDouble(
+                    p -> ChunkDistancePriority.distSq(p, playerChunkX, playerChunkZ)));
+        }
+        ChunkDataRequestC2SPacket request = new ChunkDataRequestC2SPacket(dimension, ordered);
         FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
         boolean sent = false;
         try {
@@ -392,8 +406,8 @@ public class ClientMetadataHandler {
             Services.NETWORK_MANAGER.sendChunkDataRequest(buf);
             sent = true;
             // 按区块数计，避免一批多块只记 1 次导致「全量请求」与日志对不上
-            NetworkStats.recordDataRequestsSent(chunks.size());
-            NetworkStats.recordFullChunkRequests(chunks.size(), chunks.size() * ESTIMATED_CHUNK_BYTES, staleOrFallback);
+            NetworkStats.recordDataRequestsSent(ordered.size());
+            NetworkStats.recordFullChunkRequests(ordered.size(), ordered.size() * ESTIMATED_CHUNK_BYTES, staleOrFallback);
         } catch (Exception e) {
             DebugLogger.error("[CHUNK_HASH] Failed to request full chunks", e);
         } finally {
@@ -810,21 +824,15 @@ public class ClientMetadataHandler {
         if (mc.level == null) return;
 
         net.minecraft.world.level.lighting.LevelLightEngine lightEngine = mc.level.getLightEngine();
-        int minSection = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMinSection(mc.level);
+        int bottomSection = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMinSection(mc.level);
+        int topSection = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMaxSectionExclusive(mc.level);
 
         for (LightDeltaS2CPacket.Entry entry : packet.entries()) {
             ChunkPos chunkPos = new ChunkPos(entry.chunkX(), entry.chunkZ());
 
-            // 标记 dirty sections
-            for (int i = entry.skyYMask().nextSetBit(0); i >= 0; i = entry.skyYMask().nextSetBit(i + 1)) {
-                int sectionY = minSection + i;
-                net.minecraft.core.SectionPos sectionPos =
-                        net.minecraft.core.SectionPos.of(entry.chunkX(), sectionY, entry.chunkZ());
-                lightEngine.updateSectionStatus(sectionPos, false);
-                mc.level.setSectionDirtyWithNeighbors(entry.chunkX(), sectionY, entry.chunkZ());
-            }
-            for (int i = entry.blockYMask().nextSetBit(0); i >= 0; i = entry.blockYMask().nextSetBit(i + 1)) {
-                int sectionY = minSection + i;
+            // 全 column 建层（不仅 mask bit）。propagateLightSources / 边缘传播会读相邻 section；
+            // 仅 mask 建层在 1.21.10 上仍会撞 null DataLayer。
+            for (int sectionY = bottomSection; sectionY < topSection; sectionY++) {
                 net.minecraft.core.SectionPos sectionPos =
                         net.minecraft.core.SectionPos.of(entry.chunkX(), sectionY, entry.chunkZ());
                 lightEngine.updateSectionStatus(sectionPos, false);
@@ -833,6 +841,8 @@ public class ClientMetadataHandler {
 
             // 本地重算光照（仅目标区块，跳过 pullLightFromNeighborEdges）
             lightEngine.propagateLightSources(chunkPos);
+            // 不在此路径全局 drain：邻居可能尚未建层。
+            // residual 由后续 applyLightEngine 的 safeRunLightUpdates / 渲染帧 drain。
 
             // 记录指标
             NetworkStats.recordLightDeltaReceived(1);

@@ -27,7 +27,9 @@
       "MixinLightRecompute",
       "MixinOptions",
       "OptionsAccessor",
-      "ClientLevelAccessor"
+      "ClientLevelAccessor",
+      "LevelLightEngineAccessor",
+      "LightEngineAccessor"
     ],
     "server": [
     ],

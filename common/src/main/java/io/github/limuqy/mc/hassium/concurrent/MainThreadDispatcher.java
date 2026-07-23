@@ -3,7 +3,7 @@ package io.github.limuqy.mc.hassium.concurrent;
 import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.utils.DebugLogger;
 import io.github.limuqy.mc.hassium.utils.DebugLogger.LogType;
-import net.minecraft.core.BlockPos;
+import net.minecraft.client.Minecraft;
 import net.minecraft.world.level.ChunkPos;
 
 import java.util.concurrent.PriorityBlockingQueue;
@@ -15,8 +15,9 @@ import java.util.function.Predicate;
  * 后台线程通过 {@link #execute(Runnable)} 提交回调，
  * 主线程在 {@link #flushClient()} 中按优先级批量执行。
  * <p>
- * 优先级基于玩家到 chunk 的欧几里得距离（距离越小越优先），
- * 与 {@code ClientCacheLoadQueue} 的排序策略一致。
+ * 优先级由 {@link ChunkDistancePriority} 在入队瞬间冻结（数值越小越优先），
+ * 与 {@code ClientCacheLoadQueue} 一致；玩家移动不改写已入队 key。
+ * 层序恒为：权威 &gt; 未知任务（无锚点） &gt; 环带（renderOnly）。
  * <p>
  * 在客户端由 MixinClientTick 每帧调用 flushClient()，
  * 在服务端由 MinecraftServer tick 调用 flushServer()。
@@ -26,8 +27,18 @@ public final class MainThreadDispatcher {
     /** 默认单帧最大回调数 */
     static final int DEFAULT_MAX_CALLBACKS_PER_FRAME = 5;
 
-    /** 最低优先级（距离未知或全局任务） */
-    public static final double PRIORITY_LOWEST = Double.MAX_VALUE;
+    /**
+     * 无 chunk 锚点的全局任务优先级（{@link ChunkDistancePriority.Tier#UNKNOWN}）。
+     * 层序：权威 &lt; 未知任务 &lt; 环带（数值越小越优先）。
+     */
+    public static final double PRIORITY_UNKNOWN = ChunkDistancePriority.unknown();
+
+    /**
+     * @deprecated 语义已变为「未知层」而非绝对垫底；请用 {@link #PRIORITY_UNKNOWN}。
+     *             保留别名避免外部/历史调用编译失败。
+     */
+    @Deprecated
+    public static final double PRIORITY_LOWEST = PRIORITY_UNKNOWN;
 
     private static final PriorityBlockingQueue<CallbackTask> CLIENT_QUEUE =
             new PriorityBlockingQueue<>(64);
@@ -35,20 +46,78 @@ public final class MainThreadDispatcher {
     private static final PriorityBlockingQueue<CallbackTask> SERVER_QUEUE =
             new PriorityBlockingQueue<>(64);
 
-    /** 玩家原始坐标引用，由 MixinClientTick 每帧更新 */
+    /** 玩家原始坐标缓存（login / tick / 收包路径写入） */
     private static volatile double hassium$playerX = 0.0;
     private static volatile double hassium$playerZ = 0.0;
+    private static volatile boolean hassium$playerPosKnown = false;
 
     private MainThreadDispatcher() {}
 
     // ============== 玩家位置更新 ==============
 
     /**
-     * 更新玩家坐标（由 MixinClientTick 每帧调用），用于距离优先级计算
+     * 更新玩家坐标（由 MixinClientTick 每帧 / login 路径调用），用于距离优先级计算
      */
     public static void updatePlayerPosition(double x, double z) {
         hassium$playerX = x;
         hassium$playerZ = z;
+        hassium$playerPosKnown = true;
+    }
+
+    public static void updatePlayerPosition() {
+        // 首波 payload 可能在首个 client tick 前到达：此处刷新玩家坐标供距离优先级使用
+        // 单测 / 无客户端环境时 getInstance() 可能为 null
+        Minecraft mcEarly = Minecraft.getInstance();
+        if (mcEarly != null && mcEarly.player != null) {
+            MainThreadDispatcher.updatePlayerPosition(mcEarly.player.getX(), mcEarly.player.getZ());
+        }
+    }
+
+    /**
+     * 清除玩家坐标缓存（断连时调用），避免下次进服用旧坐标。
+     */
+    public static void clearPlayerPosition() {
+        hassium$playerX = 0.0;
+        hassium$playerZ = 0.0;
+        hassium$playerPosKnown = false;
+    }
+
+    /**
+     * 玩家坐标缓存是否已写入（login / tick / 收包路径）。
+     */
+    public static boolean isPlayerPositionKnown() {
+        return hassium$playerPosKnown;
+    }
+
+    /**
+     * 权威层优先级。坐标未知时仍为 {@link ChunkDistancePriority.Tier#AUTHORITATIVE} 层
+     *（{@code base+0}，不伪装原点），保证<strong>权威始终先于未知任务与环带</strong>。
+     */
+    public static double authoritativePriority(ChunkPos chunkPos) {
+        return priorityOf(ChunkDistancePriority.Tier.AUTHORITATIVE, chunkPos);
+    }
+
+    /**
+     * renderOnly 层优先级。坐标未知时仍为 {@link ChunkDistancePriority.Tier#RENDER_ONLY} 层
+     *（{@code base+0}），保证<strong>环带始终晚于权威与未知任务</strong>。
+     */
+    public static double renderOnlyPriority(ChunkPos chunkPos) {
+        return priorityOf(ChunkDistancePriority.Tier.RENDER_ONLY, chunkPos);
+    }
+
+    private static double priorityOf(ChunkDistancePriority.Tier tier, ChunkPos chunkPos) {
+        if (chunkPos == null || tier == null) {
+            // 无锚点：UNKNOWN 层（夹在权威与环带之间），勿用绝对 MAX
+            return ChunkDistancePriority.unknown();
+        }
+        if (!hassium$playerPosKnown) {
+            updatePlayerPosition();
+        }
+        if (!hassium$playerPosKnown) {
+            // 保留所属层，仅无距离分量 → 权威 > 未知任务 > 环带 的层序不破
+            return ChunkDistancePriority.ofUnknownDistance(tier);
+        }
+        return ChunkDistancePriority.ofWorld(tier, chunkPos, hassium$playerX, hassium$playerZ);
     }
 
     // ============== 提交 API ==============
@@ -56,10 +125,10 @@ public final class MainThreadDispatcher {
     /**
      * 提交回调到客户端主线程（可在任意线程调用）
      * <p>
-     * 默认最低优先级，类别 = MISSION_CRITICAL。
+     * 默认 {@link #PRIORITY_UNKNOWN}（无锚点），类别 = MISSION_CRITICAL。
      */
     public static void execute(Runnable task) {
-        execute(task, PRIORITY_LOWEST, TaskCategory.MISSION_CRITICAL);
+        execute(task, PRIORITY_UNKNOWN, TaskCategory.MISSION_CRITICAL);
     }
 
     /**
@@ -97,7 +166,7 @@ public final class MainThreadDispatcher {
      * 提交回调到服务端主线程（可在任意线程调用）
      */
     public static void executeOnServer(Runnable task) {
-        SERVER_QUEUE.offer(new CallbackTask(task, PRIORITY_LOWEST, TaskCategory.MISSION_CRITICAL));
+        SERVER_QUEUE.offer(new CallbackTask(task, PRIORITY_UNKNOWN, TaskCategory.MISSION_CRITICAL));
     }
 
     // ============== 刷新（主线程调用） ==============
@@ -252,12 +321,14 @@ public final class MainThreadDispatcher {
     // ============== 内部 ==============
 
     /**
-     * 计算 chunk 到玩家的欧几里得距离
+     * 计算 chunk 优先级键并在入队时冻结（权威层）。
+     * <p>
+     * 依赖 {@link #updatePlayerPosition} 缓存（login / 每 tick / 收包路径写入）。
+     * 坐标未知时仍为权威层 {@code base+0}（不伪装 (0,0)），
+     * 层序恒为：权威 &gt; 未知任务 &gt; 环带。
      */
     private static double calcDistancePriority(ChunkPos chunkPos) {
-        double dx = chunkPos.x - hassium$playerX / 16.0;
-        double dz = chunkPos.z - hassium$playerZ / 16.0;
-        return Math.sqrt(dx * dx + dz * dz);
+        return authoritativePriority(chunkPos);
     }
 
     /**

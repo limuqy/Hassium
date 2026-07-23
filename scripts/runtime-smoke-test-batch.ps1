@@ -6,8 +6,12 @@
 #   .\scripts\runtime-smoke-test-batch.ps1 -Phase R                              # 回归轮
 #   .\scripts\runtime-smoke-test-batch.ps1 -Phase I -Loaders fabric              # 仅 fabric
 #   .\scripts\runtime-smoke-test-batch.ps1 -Phase I -Parallel -BasePort 25570    # 并行 + 自定义起始端口
-# 每个版本×加载器 1 个会话（客户端自动两轮：VD=20 + VD=8）
-# 退版本时自动清理服务端存档；失败最多重试 MaxRetries 次
+# 每个版本×加载器 1 个会话（客户端自动两轮：VD=16 + VD=8）
+# CleanWorld 策略（按 loader 独立，fabric/neoforge 各有 run/server）:
+#   - 该 loader 的第一个版本：清理服务端存档
+#   - 后续版本：默认不清理（复用存档加快启动）
+#   - 退版本（高→低）：强制清理（高版本存档无法被低版本读取）
+#   - 同会话失败重试：强制清理（干净重试）
 # 并行模式: 同版本 fabric+neoforge 同时跑，端口分配 fabric=BasePort, neoforge=BasePort+1
 #           版本间仍串行（避免跨版本存档冲突）；不调用会话间 gradlew --stop，batch 结束后统一 stop
 param(
@@ -60,7 +64,25 @@ function IsVersionDowngrade($current, $previous) {
     return $false
 }
 
-# 单会话执行函数（封装重试逻辑，供串行/并行路径共用）
+# 按 loader 决定是否清理服务端存档（fabric/neoforge 各有独立 run/server）
+# 返回: $true=清理, $false=复用
+function Get-ShouldCleanWorld {
+    param(
+        [string]$Ver,
+        [string]$Loader,
+        [hashtable]$PrevVerByLoader
+    )
+    if (-not $PrevVerByLoader.ContainsKey($Loader)) {
+        return $true  # 该 loader 第一个版本：清理
+    }
+    $prev = $PrevVerByLoader[$Loader]
+    if (IsVersionDowngrade $Ver $prev) {
+        return $true  # 退版本：强制清理
+    }
+    return $false  # 后续同向/升版本：不清理
+}
+
+# 单会话执行函数（封装重试逻辑，供串行路径共用）
 # 返回 [PSCustomObject]@{ Ver; Loader; Phase; Result; SessionId; Attempts; Reason }
 function Invoke-Session {
     param(
@@ -69,11 +91,11 @@ function Invoke-Session {
         [string]$Phase,
         [int]$ServerPort,
         [int]$MaxRetries,
+        [switch]$CleanWorld,
         [int]$ServerReadyTimeoutSec = 180,
         [int]$ClientTimeoutSec = 300
     )
     $sessionId = "${Ver}_${Loader}_${Phase}"
-    $cleanWorld = $true
     $sessionResult = $null
     $attempt = 0
     $lastReason = ""
@@ -81,11 +103,14 @@ function Invoke-Session {
 
     while ($attempt -lt $MaxRetries) {
         $attempt++
-        Write-Host "[$sessionId] 尝试 $attempt/$MaxRetries (port=$ServerPort)..."
+        # 首试遵循 batch 策略；失败重试强制清档，避免脏存档导致连环失败
+        $doClean = $CleanWorld -or ($attempt -gt 1)
+        $cleanLabel = if ($doClean) { "CleanWorld" } else { "ReuseWorld" }
+        Write-Host "[$sessionId] 尝试 $attempt/$MaxRetries (port=$ServerPort, $cleanLabel)..."
 
         $result = & $scriptPath `
             -Ver $Ver -Loader $Loader -Phase $Phase `
-            -SessionId $sessionId -CleanWorld:$cleanWorld `
+            -SessionId $sessionId -CleanWorld:$doClean `
             -ServerPort $ServerPort `
             -ServerReadyTimeoutSec $ServerReadyTimeoutSec `
             -ClientTimeoutSec $ClientTimeoutSec
@@ -130,18 +155,10 @@ function Invoke-Session {
 }
 
 $results = @()
-$prevVer = $null
+# 每个 loader 上次成功调度的版本（用于首轮清档 / 退版本强制清档）
+$prevVerByLoader = @{}
 
 foreach ($ver in $targetVersions) {
-    # 检测退版本
-    $isDowngrade = $false
-    if ($prevVer -and (IsVersionDowngrade $ver $prevVer)) {
-        $isDowngrade = $true
-        Write-Host ""
-        Write-Host "=== 检测到退版本: $prevVer -> $ver，将清理服务端存档 ===" -ForegroundColor Yellow
-    }
-    $prevVer = $ver
-
     Write-Host ""
     Write-Host "============================================"
     Write-Host "=== Testing: $ver (loaders: $($Loaders -join ','))"
@@ -197,17 +214,25 @@ foreach ($ver in $targetVersions) {
             $loaderIndex = [Array]::IndexOf($Loaders, $loader)
             $port = $BasePort + $loaderIndex
             $jobName = "${ver}_${loader}_${Phase}"
-            Write-Host "[$jobName] 启动进程 (port=$port)..."
+            $cleanWorld = Get-ShouldCleanWorld -Ver $ver -Loader $loader -PrevVerByLoader $prevVerByLoader
+            $cleanLabel = if ($cleanWorld) { "CleanWorld" } else { "ReuseWorld" }
+            if ($cleanWorld -and $prevVerByLoader.ContainsKey($loader)) {
+                Write-Host "=== [$loader] 退版本 $($prevVerByLoader[$loader]) -> $ver，清理服务端存档 ===" -ForegroundColor Yellow
+            }
+            Write-Host "[$jobName] 启动进程 (port=$port, $cleanLabel)..."
 
             $procArgs = @(
                 "-NoProfile", "-ExecutionPolicy", "Bypass",
                 "-File", $scriptPath,
                 "-Ver", $ver, "-Loader", $loader, "-Phase", $Phase,
-                "-SessionId", $jobName, "-CleanWorld",
+                "-SessionId", $jobName,
                 "-ServerPort", $port,
                 "-ServerReadyTimeoutSec", $ServerReadyTimeoutSec,
                 "-ClientTimeoutSec", $ClientTimeoutSec
             )
+            if ($cleanWorld) {
+                $procArgs += "-CleanWorld"
+            }
 
             $procOutLog = Join-Path $logDir "parallel_${jobName}.log"
             $procErrLog = Join-Path $logDir "parallel_${jobName}_err.log"
@@ -219,6 +244,8 @@ foreach ($ver in $targetVersions) {
                 -PassThru -WindowStyle Hidden
 
             $processes += [PSCustomObject]@{ Name=$jobName; Process=$proc; Loader=$loader; Port=$port; OutLog=$procOutLog }
+            # 调度后即记录该 loader 的上一版本（不论成败，下一轮按策略决定是否清档）
+            $prevVerByLoader[$loader] = $ver
 
             # 启动后等 3 秒再启动下一个，避免同时启动竞争资源；最后一个不用等
             if ($i -lt $activeLoaders.Count - 1) {
@@ -291,14 +318,21 @@ foreach ($ver in $targetVersions) {
         } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
         Start-Sleep -Seconds 3
     } else {
-        # ===== 串行模式（默认）：保持原有行为 =====
+        # ===== 串行模式（默认）=====
         foreach ($loader in $Loaders) {
             $sessionId = "${ver}_${loader}_${Phase}"
+            $cleanWorld = Get-ShouldCleanWorld -Ver $ver -Loader $loader -PrevVerByLoader $prevVerByLoader
+            $cleanLabel = if ($cleanWorld) { "CleanWorld" } else { "ReuseWorld" }
+            if ($cleanWorld -and $prevVerByLoader.ContainsKey($loader)) {
+                Write-Host "=== [$loader] 退版本 $($prevVerByLoader[$loader]) -> $ver，清理服务端存档 ===" -ForegroundColor Yellow
+            }
             Write-Host ""
-            Write-Host "--- $sessionId ---"
+            Write-Host "--- $sessionId ($cleanLabel) ---"
 
-            $r = Invoke-Session -Ver $ver -Loader $loader -Phase $Phase -ServerPort $BasePort -MaxRetries $MaxRetries -ServerReadyTimeoutSec $ServerReadyTimeoutSec -ClientTimeoutSec $ClientTimeoutSec
+            $r = Invoke-Session -Ver $ver -Loader $loader -Phase $Phase -ServerPort $BasePort -MaxRetries $MaxRetries `
+                -CleanWorld:$cleanWorld -ServerReadyTimeoutSec $ServerReadyTimeoutSec -ClientTimeoutSec $ClientTimeoutSec
             $results += $r
+            $prevVerByLoader[$loader] = $ver
 
             # 杀残留 Minecraft java 进程（不杀 gradle daemon）
             Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {

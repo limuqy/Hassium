@@ -2,6 +2,7 @@ package io.github.limuqy.mc.hassium.platform;
 
 import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.cache.client.IClientLevelExtension;
+import io.github.limuqy.mc.hassium.cache.client.ChunkOutOfViewException;
 import io.github.limuqy.mc.hassium.cache.client.ViewDistanceExtensionService;
 import io.github.limuqy.mc.hassium.mixin.ClientLevelAccessor;
 import io.github.limuqy.mc.hassium.platform.services.IClientChunkApplier;
@@ -62,8 +63,7 @@ public class ForgeClientChunkApplier implements IClientChunkApplier {
                     // 不在此处调用 onRenderOnlyMiss；抛异常让 applyChunkData 的 catch 块统一处理。
                     // 否则 applyChunkData 会继续调用 onRenderOnlyApplied，把未入缓存的 pos 加入
                     // loadedRenderOnly，触发 reconcileMissingLoadedChunks 死循环（虚空根因）。
-                    throw new IllegalStateException(
-                            "Chunk apply ignored by ClientChunkCache (out of view range): " + pos);
+                    throw new ChunkOutOfViewException(pos);
                 }
 
                 if (renderOnly) {
@@ -80,6 +80,9 @@ public class ForgeClientChunkApplier implements IClientChunkApplier {
                 Constants.LOG.warn("Hassium: ClientPacketListener is null, cannot apply chunk");
             }
 
+        } catch (ChunkOutOfViewException e) {
+            // 预期竞态（异步 apply / 视距窗口），不刷 ERROR 堆栈
+            throw e;
         } catch (Exception e) {
             Constants.LOG.error("Hassium: Failed to apply chunk [{}, {}] from ByteBuf", pos.x, pos.z, e);
             if (e instanceof RuntimeException re) {

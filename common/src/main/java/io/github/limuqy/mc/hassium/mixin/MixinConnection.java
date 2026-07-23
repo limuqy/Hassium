@@ -86,10 +86,10 @@ public class MixinConnection {
             return;
         }
 
-        // 检查黑名单：已在别处压缩的包不聚合，避免双重压缩
+        // 检查黑名单 / 高频排除：控制面、独立压缩通道、实体高频包不聚合
         String packetTypeId = packetType.toString();
-        if (!PacketCompressionBlacklist.shouldCompress(packetTypeId)) {
-            Constants.LOG.debug("Packet {} is in compression blacklist, skipping aggregation", packetTypeId);
+        if (!PacketCompressionBlacklist.shouldAggregate(packetTypeId)) {
+            Constants.LOG.debug("Packet {} skipped aggregation (blacklist or high-freq)", packetTypeId);
             return;
         }
 

@@ -809,6 +809,13 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
 #endif
         LOGGER.info("Hassium: Server handshake for {}: accepted={}, globalCompression={}, compactHeader={}",
                 player.getName().getString(), accepted, useGlobalCompression, useCompactHeader);
+
+        // globalCompression=false 时不会走 CompressionReady→enableAggregation 路径，
+        // 必须在此补发视距内 chunkHash，否则握手前 trackChunk 放行的原版包永不进入缓存主链路，
+        // 客户端 stats 带宽/区块缓存长期为 0。
+        if (accepted && !useGlobalCompression) {
+            ServerChunkPushManager.getInstance().resyncTrackedChunks(player);
+        }
     }
 
     /**

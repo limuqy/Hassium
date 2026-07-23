@@ -32,12 +32,6 @@ public class MixinClientTick {
             // 冒烟失败不阻断正常 tick
         }
 
-        try {
-            ViewDistanceExtensionService.getInstance().update();
-        } catch (Exception e) {
-            // 忽略更新错误
-        }
-
         // 更新玩家坐标，用于 MainThreadDispatcher 距离优先级计算
         // 同时跟踪 ClientLevel，供断连时 bulk-enqueue（此时 mc.level 可能已 null）
         try {
@@ -52,6 +46,12 @@ public class MixinClientTick {
             // 忽略
         }
 
+        try {
+            ViewDistanceExtensionService.getInstance().update();
+        } catch (Exception e) {
+            // 忽略更新错误
+        }
+
         // storage 就绪门控：冲刷暂存 hash / 检查超时
         try {
             ClientMetadataHandler.tickPendingHashGate();
@@ -59,24 +59,34 @@ public class MixinClientTick {
             // 忽略
         }
 
-        // 主线程时间预算拆分：网络回调占 1/3，缓存 apply 占 2/3。
-        // 避免 resyncTrackedChunks 等场景下服务器推送占满预算，导致 processQueueUntil 被饿死、
-        // readyQueue 堆积与 reconcile 死循环（虚空根因之一）。
+        // 主线程时间预算：网络回调 vs 缓存 apply 动态分配。
+        // 两边都有活时保持 1/3:2/3，防止服务器推送饿死 readyQueue（虚空根因之一）；
+        // 任一侧空闲时把整帧预算给另一侧，避免全局压缩后的纯推送路径被卡在 forceOne≈1/帧。
         long budgetNs = ClientMainThreadBudget.getBudgetNs();
         int hardCap = ClientMainThreadBudget.getHardCap();
-        long flushBudgetNs = budgetNs / 3;
-        long applyBudgetNs = budgetNs - flushBudgetNs;
+        long frameStartNs = System.nanoTime();
+        long frameDeadlineNs = frameStartNs + budgetNs;
+
+        boolean hasFlush = MainThreadDispatcher.getClientQueueSize() > 0;
+        boolean hasCache = ClientCacheLoadQueue.getInstance().getReadySize() > 0;
 
         try {
-            long flushDeadlineNs = System.nanoTime() + flushBudgetNs;
-            MainThreadDispatcher.flushClientUntil(flushDeadlineNs, hardCap);
+            if (hasFlush) {
+                // 两侧都忙：flush 先吃 1/3；仅 flush 有活：给满整帧
+                long flushDeadlineNs = hasCache
+                        ? (frameStartNs + budgetNs / 3)
+                        : frameDeadlineNs;
+                MainThreadDispatcher.flushClientUntil(flushDeadlineNs, hardCap);
+            }
         } catch (Exception e) {
             MainThreadDispatcher.flushClient();
         }
 
         try {
-            long applyDeadlineNs = System.nanoTime() + applyBudgetNs;
-            ClientCacheLoadQueue.getInstance().processQueueUntil(applyDeadlineNs);
+            // 缓存侧拿剩余墙钟预算（含 flush 提前结束时的回收）
+            if (hasCache || ClientCacheLoadQueue.getInstance().getReadySize() > 0) {
+                ClientCacheLoadQueue.getInstance().processQueueUntil(frameDeadlineNs);
+            }
         } catch (Exception e) {
             // 忽略加载错误
         }

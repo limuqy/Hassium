@@ -4,6 +4,7 @@ import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.cache.client.ChunkDiskCodec;
 import io.github.limuqy.mc.hassium.cache.client.ClientHassiumStorage;
 import io.github.limuqy.mc.hassium.cache.client.ClientLightRecomputeService;
+import io.github.limuqy.mc.hassium.cache.client.ChunkOutOfViewException;
 import io.github.limuqy.mc.hassium.cache.client.ViewDistanceExtensionService;
 import io.github.limuqy.mc.hassium.metrics.NetworkStats;
 import io.github.limuqy.mc.hassium.concurrent.HassiumTaskExecutor;
@@ -266,7 +267,7 @@ public class ClientChunkHandler {
                 // 推送即入库：后台转 NBT 并投入 CacheSaveQueue（与主线程 apply 并行摊销写盘）
                 scheduleAsyncCacheIngest(chunkX, chunkZ, decompressed);
 
-                // 回主线程应用区块
+                // 回主线程应用区块（距离优先级依赖 updatePlayerPosition）
                 MainThreadDispatcher.execute(() -> {
                     DebugLogger.info(LogType.COMPRESSION, "[HANDLE_COMPRESSED] Applying chunk [{}, {}] to world", chunkX, chunkZ);
                     if (applyChunkData(chunkX, chunkZ, decompressed, false)) {
@@ -423,6 +424,14 @@ public class ClientChunkHandler {
             }
             return true;
 
+        } catch (ChunkOutOfViewException e) {
+            // 预期竞态：异步解压/主线程预算/视距缩窗导致 apply 时已 out of range
+            DebugLogger.debug(LogType.CHUNK_APPLY,
+                    "[APPLY_CHUNK] Out of view range, skipped [{}, {}]", chunkX, chunkZ);
+            if (renderOnly) {
+                ViewDistanceExtensionService.getInstance().onRenderOnlyMiss(new ChunkPos(chunkX, chunkZ));
+            }
+            return false;
         } catch (Exception e) {
             DebugLogger.error("[APPLY_CHUNK] Failed to apply chunk data for [{}, {}]", e, chunkX, chunkZ);
             // renderOnly：登记 miss 退避重试

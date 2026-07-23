@@ -44,6 +44,13 @@ public final class ClientLifecycleHelper {
         int threads = HassiumConfigService.getInstance().getLoadThreads();
         HassiumTaskExecutor.initClient(threads);
 
+        // 尽早写入玩家坐标，避免首波 hash/payload 在首 tick 前用 (0,0) 算优先级
+        try {
+            MainThreadDispatcher.updatePlayerPosition();
+        } catch (Exception ignored) {
+            // ignore
+        }
+
         // 进服吞吐加速：临时提高主线程时间预算
         ClientMainThreadBudget.startJoinBoost();
 
@@ -91,8 +98,9 @@ public final class ClientLifecycleHelper {
             clientExecutor.cancelAll(TaskCategory.SAFE_TO_CANCEL);
         }
 
-        // ⑤ 清空主线程回调队列
+        // ⑤ 清空主线程回调队列 + 玩家坐标缓存
         MainThreadDispatcher.clearClient(false);
+        MainThreadDispatcher.clearPlayerPosition();
         ClientLightRecomputeService.clear();
         ClientMetadataHandler.clearPendingState();
 
@@ -145,6 +153,17 @@ public final class ClientLifecycleHelper {
         ClientCacheLoadQueue loadQueue = ClientCacheLoadQueue.getInstance();
         int pending = loadQueue.getPendingSize() + loadQueue.getReadySize();
         if (pending <= 0) {
+            return;
+        }
+
+        // 1.21.11 Fabric：onDisconnect 可能在 Netty IO 线程触发。
+        // applyChunkData → handleLevelChunkWithLight 要求主线程，否则
+        // RunningOnDifferentThreadException（冒烟 R2 已复现）。非主线程只放弃 apply。
+        Minecraft mc = Minecraft.getInstance();
+        if (!mc.isSameThread()) {
+            Constants.LOG.info(
+                    "Hassium: Disconnect drain skipped off main thread (pending={}, thread={})",
+                    pending, Thread.currentThread().getName());
             return;
         }
 
