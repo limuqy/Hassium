@@ -264,8 +264,8 @@ public final class ChunkDiskCodec {
         net.minecraft.world.level.lighting.LayerLightEventListener blockListener =
                 lightEngine.getLayerListener(net.minecraft.world.level.LightLayer.BLOCK);
 
-        int minSection = level.getMinSection();
-        int maxSection = level.getMaxSection();
+        int minSection = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMinSection(level);
+        int maxSection = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMaxSectionExclusive(level);
         ListTag sectionsList = CompoundTagCompat.getList(nbt, "sections");
         boolean hasAnyLight = false;
 
@@ -470,7 +470,7 @@ public final class ChunkDiskCodec {
     public static boolean isLightOn(CompoundTag nbt) {
         if (nbt == null) return false;
         Tag lightOnTag = nbt.get("is_light_on");
-        return lightOnTag instanceof net.minecraft.nbt.ByteTag bt && bt.getAsByte() != 0;
+        return lightOnTag instanceof net.minecraft.nbt.ByteTag bt && CompoundTagCompat.getByte(bt) != 0;
     }
 
     /**

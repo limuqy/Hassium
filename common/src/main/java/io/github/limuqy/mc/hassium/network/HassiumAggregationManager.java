@@ -283,6 +283,8 @@ public class HassiumAggregationManager {
             aggregationPacket.encode(buf);
 
             if (sender != null) {
+                // 聚合包内部已有字典 ZSTD：标记下一帧跳过管线压缩
+                ZstdPipelineSwitcher.markSkipNextPipelineCompression(connection);
                 sender.send(connection, buf);
             } else {
                 Constants.LOG.error("AggregationSender not set, dropping {} packets", batch.size());

@@ -59,10 +59,35 @@ public class MixinMinecraft {
     }
 
     /**
-     * clearLevel TAIL：执行断连最终清理（drain 残余 + shutdown）。
+     * 断连最终清理（drain 残余 + shutdown），在世界拆除之后触发。
+     * <p>
+     * <ul>
+     *   <li>1.20.1：{@code clearLevel}</li>
+     *   <li>1.20.2–1.20.4：{@code disconnect(Screen)}</li>
+     *   <li>1.20.5+：{@code disconnect(Screen, boolean)}；部分 NeoForge 仍保留 {@code clearLevel}（require=0）</li>
+     * </ul>
+     * 与各加载器 DISCONNECT / LoggingOut 延后到下一 tick 的 finalize 互为兜底（{@code AtomicBoolean} 幂等）。
      */
+#if MC_VER < MC_1_20_2
     @Inject(method = "clearLevel", at = @At("TAIL"))
     private void hassium$onClearLevel(CallbackInfo ci) {
         ClientLifecycleHelper.finalizeDisconnect();
     }
+#elif MC_VER < MC_1_20_5
+    @Inject(method = "disconnect(Lnet/minecraft/client/gui/screens/Screen;)V", at = @At("TAIL"))
+    private void hassium$onDisconnect(net.minecraft.client.gui.screens.Screen screen, CallbackInfo ci) {
+        ClientLifecycleHelper.finalizeDisconnect();
+    }
+#else
+    @Inject(method = "disconnect(Lnet/minecraft/client/gui/screens/Screen;Z)V", at = @At("TAIL"))
+    private void hassium$onDisconnect(net.minecraft.client.gui.screens.Screen screen, boolean keepResourcePacks,
+                                      CallbackInfo ci) {
+        ClientLifecycleHelper.finalizeDisconnect();
+    }
+
+    @Inject(method = "clearLevel", at = @At("TAIL"), require = 0)
+    private void hassium$onClearLevelCompat(CallbackInfo ci) {
+        ClientLifecycleHelper.finalizeDisconnect();
+    }
+#endif
 }

@@ -92,8 +92,8 @@ public final class ClientLightRecomputeService {
             net.minecraft.world.level.lighting.LayerLightEventListener blockListener =
                     lightEngine.getLayerListener(net.minecraft.world.level.LightLayer.BLOCK);
 
-            int minSection = level.getMinSection();
-            int maxSection = level.getMaxSection();
+            int minSection = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMinSection(level);
+            int maxSection = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMaxSectionExclusive(level);
             net.minecraft.nbt.ListTag sectionsList = CompoundTagCompat.getList(nbt, "sections");
 
             boolean hasAnyLight = false;
@@ -174,13 +174,8 @@ public final class ClientLightRecomputeService {
     private static void applyLightEngine(ClientLevel level, LevelChunk chunk, ChunkPos chunkPos) {
         long startNs = System.nanoTime();
         try {
-#if MC_VER < MC_1_21_2
-            int bottomSection = level.getMinSection();
-            int topSection = level.getMaxSection();
-#else
-            int bottomSection = level.getMinSectionY();
-            int topSection = level.getMaxSectionY() + 1;
-#endif
+            int bottomSection = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMinSection(level);
+            int topSection = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMaxSectionExclusive(level);
 
             LevelLightEngine lightEngine = level.getLightEngine();
             lightEngine.setLightEnabled(chunkPos, true);

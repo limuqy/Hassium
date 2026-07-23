@@ -84,7 +84,8 @@ final class VanillaChunkNbtCompat {
         put(result, "block_states", PalettedContainer.codecRW(Block.BLOCK_STATE_REGISTRY,
                 BlockState.CODEC, PalettedContainer.Strategy.SECTION_STATES, Blocks.AIR.defaultBlockState()), section.getStates());
         put(result, "biomes", PalettedContainer.codecRO(biomes.asHolderIdMap(), biomes.holderByNameCodec(),
-                PalettedContainer.Strategy.SECTION_BIOMES, biomes.getHolderOrThrow(net.minecraft.world.level.biome.Biomes.PLAINS)),
+                PalettedContainer.Strategy.SECTION_BIOMES,
+                RegistryCompat.getHolderOrThrow(biomes, net.minecraft.world.level.biome.Biomes.PLAINS)),
                 section.getBiomes());
 #else
         PalettedContainerFactory factory = PalettedContainerFactory.create(registryAccess);

@@ -92,8 +92,9 @@ public class HassiumForgeClient {
 
         @SubscribeEvent
         public void onPlayerLoggedOut(ClientPlayerNetworkEvent.LoggingOut event) {
-            // 统一走 ClientLifecycleHelper.cleanupOnDisconnect（与 Fabric / NeoForge 一致）
             ClientLifecycleHelper.cleanupOnDisconnect();
+            // 延后到下一 tick：等世界拆除；与 MixinMinecraft TAIL 幂等兜底
+            net.minecraft.client.Minecraft.getInstance().execute(ClientLifecycleHelper::finalizeDisconnect);
         }
     }
 }

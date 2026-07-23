@@ -810,7 +810,7 @@ public class ClientMetadataHandler {
         if (mc.level == null) return;
 
         net.minecraft.world.level.lighting.LevelLightEngine lightEngine = mc.level.getLightEngine();
-        int minSection = mc.level.getMinSection();
+        int minSection = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMinSection(mc.level);
 
         for (LightDeltaS2CPacket.Entry entry : packet.entries()) {
             ChunkPos chunkPos = new ChunkPos(entry.chunkX(), entry.chunkZ());

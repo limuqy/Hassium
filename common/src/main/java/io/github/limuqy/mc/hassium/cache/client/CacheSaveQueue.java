@@ -6,13 +6,17 @@ import io.github.limuqy.mc.hassium.concurrent.HassiumTaskExecutor;
 import io.github.limuqy.mc.hassium.concurrent.TaskCategory;
 import io.github.limuqy.mc.hassium.mixin.ClientLevelAccessor;
 import io.github.limuqy.mc.hassium.network.ClientChunkHandler;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientChunkCache;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.world.level.ChunkPos;
+#if MC_VER < MC_1_20_5
 import net.minecraft.world.level.chunk.ChunkStatus;
+#else
+import net.minecraft.world.level.chunk.status.ChunkStatus;
+#endif
 import net.minecraft.world.level.chunk.LevelChunk;
-
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -86,6 +90,14 @@ public class CacheSaveQueue {
      */
     public void enqueue(LevelChunk chunk, boolean skipIfUnchanged) {
         if (chunk == null) return;
+        // PalettedContainer / LightEngine 受 ThreadingDetector 保护：必须在主线程序列化
+        Minecraft mc = Minecraft.getInstance();
+        if (mc != null && !mc.isSameThread()) {
+            LevelChunk chunkRef = chunk;
+            boolean skip = skipIfUnchanged;
+            mc.execute(() -> enqueue(chunkRef, skip));
+            return;
+        }
         ChunkPos pos = chunk.getPos();
         Constants.LOG.debug("Hassium: [CACHE SAVE] enqueue called for chunk {} (skipIfUnchanged={})",
                 pos, skipIfUnchanged);

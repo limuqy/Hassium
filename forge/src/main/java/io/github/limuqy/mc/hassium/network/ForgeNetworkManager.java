@@ -376,22 +376,23 @@ public class ForgeNetworkManager implements NetworkManager {
                 var server = io.github.limuqy.mc.hassium.compat.PlayerCompat.getMinecraftServer(player);
                 channel.eventLoop().execute(() -> {
                     ZstdNegotiationTracker.markNegotiated(channel);
-                    ZstdPipelineSwitcher.switchToZstd(channel, threshold, level);
-                    Runnable afterSwitch = () -> {
-                        sendDictionarySyncPacket(player);
-                        IndexSyncManager indexSyncManager = IndexSyncManager.getInstance();
-                        indexSyncManager.initializeServerIndex();
-                        sendIndexSyncPacket(player);
-                        if (connection != null) {
-                            HassiumConnectionRegistry.markPending(connection);
-                            HassiumAggregationManager.init();
+                    ZstdPipelineSwitcher.switchToZstdWhenReady(channel, threshold, level, () -> {
+                        Runnable afterSwitch = () -> {
+                            sendDictionarySyncPacket(player);
+                            IndexSyncManager indexSyncManager = IndexSyncManager.getInstance();
+                            indexSyncManager.initializeServerIndex();
+                            sendIndexSyncPacket(player);
+                            if (connection != null) {
+                                HassiumConnectionRegistry.markPending(connection);
+                                HassiumAggregationManager.init();
+                            }
+                        };
+                        if (server != null) {
+                            server.execute(afterSwitch);
+                        } else {
+                            afterSwitch.run();
                         }
-                    };
-                    if (server != null) {
-                        server.execute(afterSwitch);
-                    } else {
-                        afterSwitch.run();
-                    }
+                    });
                 });
             }
         }
@@ -410,7 +411,7 @@ public class ForgeNetworkManager implements NetworkManager {
                     ZstdNegotiationTracker.markNegotiated(channel);
                     int level = HassiumConfigService.getInstance().getGlobalCompressionLevel();
                     int threshold = HassiumConfigService.getInstance().getGlobalCompressionThreshold();
-                    ZstdPipelineSwitcher.switchToZstd(channel, threshold, level);
+                    ZstdPipelineSwitcher.switchToZstdWhenReady(channel, threshold, level);
                 }
             }
         }

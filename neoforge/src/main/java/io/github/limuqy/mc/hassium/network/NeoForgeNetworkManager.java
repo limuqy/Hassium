@@ -93,8 +93,8 @@ public class NeoForgeNetworkManager implements NetworkManager {
     }
 
     /**
-     * 客户端收到 HandshakeResponse(globalCompression=true) 后立即安装 ZSTD 管线。
-     * 必须尽快执行（最好在收包线程），避免后续 S2C ZSTD 帧被 Zlib decoder 误解析。
+     * 客户端收到 HandshakeResponse(globalCompression=true) 后安装 ZSTD 管线。
+     * 管线未就绪时由 {@link ZstdPipelineSwitcher#switchToZstdWhenReady} 短间隔重试。
      */
     private static void tryInstallClientZstdPipeline() {
         var mc = net.minecraft.client.Minecraft.getInstance();
@@ -111,7 +111,7 @@ public class NeoForgeNetworkManager implements NetworkManager {
         ZstdNegotiationTracker.markNegotiated(channel);
         int level = HassiumConfigService.getInstance().getGlobalCompressionLevel();
         int threshold = HassiumConfigService.getInstance().getGlobalCompressionThreshold();
-        ZstdPipelineSwitcher.switchToZstd(channel, threshold, level);
+        ZstdPipelineSwitcher.switchToZstdWhenReady(channel, threshold, level);
     }
 
 #if MC_VER < MC_1_20_4
@@ -178,6 +178,41 @@ public class NeoForgeNetworkManager implements NetworkManager {
             byte[] data = new byte[length];
             buf.readBytes(data);
             return new LightDeltaWrapper(data);
+        }
+    }
+
+    public record DictionarySyncWrapper(byte[] data) {
+        public void encode(FriendlyByteBuf buf) {
+            buf.writeVarInt(data.length);
+            buf.writeBytes(data);
+        }
+        public static DictionarySyncWrapper decode(FriendlyByteBuf buf) {
+            int length = buf.readVarInt();
+            byte[] data = new byte[length];
+            buf.readBytes(data);
+            return new DictionarySyncWrapper(data);
+        }
+    }
+
+    public record IndexSyncWrapper(byte[] data) {
+        public void encode(FriendlyByteBuf buf) {
+            buf.writeVarInt(data.length);
+            buf.writeBytes(data);
+        }
+        public static IndexSyncWrapper decode(FriendlyByteBuf buf) {
+            int length = buf.readVarInt();
+            byte[] data = new byte[length];
+            buf.readBytes(data);
+            return new IndexSyncWrapper(data);
+        }
+    }
+
+    public record CompressionReadyWrapper(boolean ready) {
+        public void encode(FriendlyByteBuf buf) {
+            buf.writeBoolean(ready);
+        }
+        public static CompressionReadyWrapper decode(FriendlyByteBuf buf) {
+            return new CompressionReadyWrapper(buf.readBoolean());
         }
     }
 
@@ -550,6 +585,53 @@ public class NeoForgeNetworkManager implements NetworkManager {
         }
     }
 
+    public record DictionarySyncNeoPayload(byte[] data) implements CustomPacketPayload {
+        public static final ResourceLocation ID = DictionarySyncPayload.CHANNEL;
+        @Override
+        public void write(FriendlyByteBuf buf) {
+            buf.writeVarInt(data.length);
+            buf.writeBytes(data);
+        }
+        @Override
+        public ResourceLocation id() { return ID; }
+        public static DictionarySyncNeoPayload decode(FriendlyByteBuf buf) {
+            int length = buf.readVarInt();
+            byte[] data = new byte[length];
+            buf.readBytes(data);
+            return new DictionarySyncNeoPayload(data);
+        }
+    }
+
+    public record IndexSyncNeoPayload(byte[] data) implements CustomPacketPayload {
+        public static final ResourceLocation ID = ResourceLocationCompat.create(Constants.MOD_ID, "index_sync_s2c");
+        @Override
+        public void write(FriendlyByteBuf buf) {
+            buf.writeVarInt(data.length);
+            buf.writeBytes(data);
+        }
+        @Override
+        public ResourceLocation id() { return ID; }
+        public static IndexSyncNeoPayload decode(FriendlyByteBuf buf) {
+            int length = buf.readVarInt();
+            byte[] data = new byte[length];
+            buf.readBytes(data);
+            return new IndexSyncNeoPayload(data);
+        }
+    }
+
+    public record CompressionReadyNeoPayload(boolean ready) implements CustomPacketPayload {
+        public static final ResourceLocation ID = CompressionReadyPayload.CHANNEL;
+        @Override
+        public void write(FriendlyByteBuf buf) {
+            buf.writeBoolean(ready);
+        }
+        @Override
+        public ResourceLocation id() { return ID; }
+        public static CompressionReadyNeoPayload decode(FriendlyByteBuf buf) {
+            return new CompressionReadyNeoPayload(buf.readBoolean());
+        }
+    }
+
 #else
     // 1.20.5+: 使用 Payload + StreamCodec
     public static final Object CHANNEL = null;
@@ -798,6 +880,44 @@ public class NeoForgeNetworkManager implements NetworkManager {
 
         @Override
         public Type<LightDeltaPayload> type() {
+            return TYPE;
+        }
+    }
+
+    public record DictionarySyncNeoPayload(byte[] data) implements CustomPacketPayload {
+        public static final Type<DictionarySyncNeoPayload> TYPE = new Type<>(DictionarySyncPayload.CHANNEL);
+        public static final StreamCodec<FriendlyByteBuf, DictionarySyncNeoPayload> STREAM_CODEC = StreamCodec.composite(
+                ByteBufCodecs.BYTE_ARRAY, DictionarySyncNeoPayload::data,
+                DictionarySyncNeoPayload::new
+        );
+        @Override
+        public Type<DictionarySyncNeoPayload> type() {
+            return TYPE;
+        }
+    }
+
+    public record IndexSyncNeoPayload(byte[] data) implements CustomPacketPayload {
+        public static final Type<IndexSyncNeoPayload> TYPE = new Type<>(
+                ResourceLocationCompat.create(Constants.MOD_ID, "index_sync_s2c")
+        );
+        public static final StreamCodec<FriendlyByteBuf, IndexSyncNeoPayload> STREAM_CODEC = StreamCodec.composite(
+                ByteBufCodecs.BYTE_ARRAY, IndexSyncNeoPayload::data,
+                IndexSyncNeoPayload::new
+        );
+        @Override
+        public Type<IndexSyncNeoPayload> type() {
+            return TYPE;
+        }
+    }
+
+    public record CompressionReadyNeoPayload(boolean ready) implements CustomPacketPayload {
+        public static final Type<CompressionReadyNeoPayload> TYPE = new Type<>(CompressionReadyPayload.CHANNEL);
+        public static final StreamCodec<FriendlyByteBuf, CompressionReadyNeoPayload> STREAM_CODEC = StreamCodec.of(
+                (buf, p) -> buf.writeBoolean(p.ready()),
+                buf -> new CompressionReadyNeoPayload(buf.readBoolean())
+        );
+        @Override
+        public Type<CompressionReadyNeoPayload> type() {
             return TYPE;
         }
     }
@@ -1115,6 +1235,100 @@ public class NeoForgeNetworkManager implements NetworkManager {
                 java.util.Optional.of(PlayNetworkDirection.PLAY_TO_CLIENT));
 #endif
 
+        // 10: 光照增量更新 S2C
+        CHANNEL.registerMessage(packetId++, LightDeltaWrapper.class,
+                LightDeltaWrapper::encode, LightDeltaWrapper::decode,
+#if MC_VER < MC_1_20_2
+                (msg, ctx) -> {
+                    ctx.get().enqueueWork(() -> {
+                        try {
+                            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data()));
+                            LightDeltaS2CPacket packet = LightDeltaS2CPacket.decode(buf);
+                            ClientMetadataHandler.handleLightDeltaPacket(packet);
+                        } catch (Exception e) {
+                            LOGGER.error("[CLIENT] Failed to handle light delta", e);
+                        }
+                    });
+                    ctx.get().setPacketHandled(true);
+                },
+                java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT));
+#else
+                (msg, ctx) -> {
+                    ctx.enqueueWork(() -> {
+                        try {
+                            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data()));
+                            LightDeltaS2CPacket packet = LightDeltaS2CPacket.decode(buf);
+                            ClientMetadataHandler.handleLightDeltaPacket(packet);
+                        } catch (Exception e) {
+                            LOGGER.error("[CLIENT] Failed to handle light delta", e);
+                        }
+                    });
+                    ctx.setPacketHandled(true);
+                },
+                java.util.Optional.of(PlayNetworkDirection.PLAY_TO_CLIENT));
+#endif
+
+        // 11: 字典同步 S2C
+        CHANNEL.registerMessage(packetId++, DictionarySyncWrapper.class,
+                DictionarySyncWrapper::encode, DictionarySyncWrapper::decode,
+#if MC_VER < MC_1_20_2
+                (msg, ctx) -> {
+                    ctx.get().enqueueWork(() -> handleDictionarySyncClient(msg.data()));
+                    ctx.get().setPacketHandled(true);
+                },
+                java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT));
+#else
+                (msg, ctx) -> {
+                    ctx.enqueueWork(() -> handleDictionarySyncClient(msg.data()));
+                    ctx.setPacketHandled(true);
+                },
+                java.util.Optional.of(PlayNetworkDirection.PLAY_TO_CLIENT));
+#endif
+
+        // 12: 索引同步 S2C
+        CHANNEL.registerMessage(packetId++, IndexSyncWrapper.class,
+                IndexSyncWrapper::encode, IndexSyncWrapper::decode,
+#if MC_VER < MC_1_20_2
+                (msg, ctx) -> {
+                    ctx.get().enqueueWork(() -> handleIndexSyncClient(msg.data()));
+                    ctx.get().setPacketHandled(true);
+                },
+                java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT));
+#else
+                (msg, ctx) -> {
+                    ctx.enqueueWork(() -> handleIndexSyncClient(msg.data()));
+                    ctx.setPacketHandled(true);
+                },
+                java.util.Optional.of(PlayNetworkDirection.PLAY_TO_CLIENT));
+#endif
+
+        // 13: CompressionReady C2S
+        CHANNEL.registerMessage(packetId++, CompressionReadyWrapper.class,
+                CompressionReadyWrapper::encode, CompressionReadyWrapper::decode,
+#if MC_VER < MC_1_20_2
+                (msg, ctx) -> {
+                    ctx.get().enqueueWork(() -> {
+                        ServerPlayer player = ctx.get().getSender();
+                        if (player != null) {
+                            handleCompressionReadyServer(player, msg.ready());
+                        }
+                    });
+                    ctx.get().setPacketHandled(true);
+                },
+                java.util.Optional.of(NetworkDirection.PLAY_TO_SERVER));
+#else
+                (msg, ctx) -> {
+                    ctx.enqueueWork(() -> {
+                        ServerPlayer player = ctx.getSender();
+                        if (player != null) {
+                            handleCompressionReadyServer(player, msg.ready());
+                        }
+                    });
+                    ctx.setPacketHandled(true);
+                },
+                java.util.Optional.of(PlayNetworkDirection.PLAY_TO_SERVER));
+#endif
+
         LOGGER.info("Hassium: Registered {} SimpleChannel packets", packetId);
     }
 
@@ -1149,6 +1363,8 @@ public class NeoForgeNetworkManager implements NetworkManager {
                 player.getName().getString(), accepted, useGlobalCompression, useCompactHeader);
 
         if (useGlobalCompression) {
+            DictionaryManager.init();
+            IndexSyncManager.getInstance().initializeServerIndex();
             Connection connection = getPlayerConnection(player);
             Channel channel = connection != null ? getConnectionChannel(connection) : null;
             if (channel != null) {
@@ -1156,7 +1372,22 @@ public class NeoForgeNetworkManager implements NetworkManager {
                 int threshold = HassiumConfigService.getInstance().getGlobalCompressionThreshold();
                 channel.eventLoop().execute(() -> {
                     ZstdNegotiationTracker.markNegotiated(channel);
-                    ZstdPipelineSwitcher.switchToZstd(channel, threshold, level);
+                    ZstdPipelineSwitcher.switchToZstdWhenReady(channel, threshold, level, () -> {
+                        Runnable after = () -> {
+                            sendDictionarySyncPacket(player);
+                            sendIndexSyncPacket(player);
+                            if (connection != null) {
+                                HassiumConnectionRegistry.markPending(connection);
+                                HassiumAggregationManager.init();
+                                schedulePendingTimeout(connection, player.getName().getString());
+                            }
+                        };
+                        if (server != null) {
+                            server.execute(after);
+                        } else {
+                            after.run();
+                        }
+                    });
                 });
             }
         }
@@ -1229,6 +1460,19 @@ public class NeoForgeNetworkManager implements NetworkManager {
         registrar.play(BlockEntityDataPayload.ID, BlockEntityDataPayload::decode, builder -> builder
                 .client(NeoForgeNetworkManager::handleBlockEntityData));
 
+        registrar.play(DictionarySyncNeoPayload.ID, DictionarySyncNeoPayload::decode, builder -> builder
+                .client((payload, ctx) -> ctx.workHandler().execute(() -> handleDictionarySyncClient(payload.data()))));
+
+        registrar.play(IndexSyncNeoPayload.ID, IndexSyncNeoPayload::decode, builder -> builder
+                .client((payload, ctx) -> ctx.workHandler().execute(() -> handleIndexSyncClient(payload.data()))));
+
+        registrar.play(CompressionReadyNeoPayload.ID, CompressionReadyNeoPayload::decode, builder -> builder
+                .server((payload, ctx) -> ctx.workHandler().execute(() -> {
+                    if (ctx.player().orElse(null) instanceof ServerPlayer player) {
+                        handleCompressionReadyServer(player, payload.ready());
+                    }
+                })));
+
         LOGGER.info("Hassium: Registered all NeoForge payload handlers (1.20.4)");
     }
 
@@ -1260,11 +1504,15 @@ public class NeoForgeNetworkManager implements NetworkManager {
                         int threshold = HassiumConfigService.getInstance().getGlobalCompressionThreshold();
                         channel.eventLoop().execute(() -> {
                             ZstdNegotiationTracker.markNegotiated(channel);
-                            ZstdPipelineSwitcher.switchToZstd(channel, threshold, level);
-                            if (connection != null) {
-                                HassiumConnectionRegistry.markPending(connection);
-                                HassiumAggregationManager.init();
-                            }
+                            ZstdPipelineSwitcher.switchToZstdWhenReady(channel, threshold, level, () -> {
+                                sendDictionarySyncPacket(player);
+                                sendIndexSyncPacket(player);
+                                if (connection != null) {
+                                    HassiumConnectionRegistry.markPending(connection);
+                                    HassiumAggregationManager.init();
+                                    schedulePendingTimeout(connection, player.getName().getString());
+                                }
+                            });
                         });
                     }
                 }
@@ -1447,6 +1695,35 @@ public class NeoForgeNetworkManager implements NetworkManager {
                 NeoForgeNetworkManager::handleBlockEntityData
         );
 
+        // 注册光照增量 (S2C)
+        registrar.playToClient(
+                LightDeltaPayload.TYPE,
+                LightDeltaPayload.STREAM_CODEC,
+                NeoForgeNetworkManager::handleLightDelta
+        );
+
+        registrar.playToClient(
+                DictionarySyncNeoPayload.TYPE,
+                DictionarySyncNeoPayload.STREAM_CODEC,
+                (payload, ctx) -> ctx.enqueueWork(() -> handleDictionarySyncClient(payload.data()))
+        );
+
+        registrar.playToClient(
+                IndexSyncNeoPayload.TYPE,
+                IndexSyncNeoPayload.STREAM_CODEC,
+                (payload, ctx) -> ctx.enqueueWork(() -> handleIndexSyncClient(payload.data()))
+        );
+
+        registrar.playToServer(
+                CompressionReadyNeoPayload.TYPE,
+                CompressionReadyNeoPayload.STREAM_CODEC,
+                (payload, ctx) -> ctx.enqueueWork(() -> {
+                    if (ctx.player() instanceof ServerPlayer player) {
+                        handleCompressionReadyServer(player, payload.ready());
+                    }
+                })
+        );
+
         LOGGER.info("Hassium: Registered all NeoForge payload handlers");
     }
 
@@ -1478,11 +1755,15 @@ public class NeoForgeNetworkManager implements NetworkManager {
                         int threshold = HassiumConfigService.getInstance().getGlobalCompressionThreshold();
                         channel.eventLoop().execute(() -> {
                             ZstdNegotiationTracker.markNegotiated(channel);
-                            ZstdPipelineSwitcher.switchToZstd(channel, threshold, level);
-                            if (connection != null) {
-                                HassiumConnectionRegistry.markPending(connection);
-                                HassiumAggregationManager.init();
-                            }
+                            ZstdPipelineSwitcher.switchToZstdWhenReady(channel, threshold, level, () -> {
+                                sendDictionarySyncPacket(player);
+                                sendIndexSyncPacket(player);
+                                if (connection != null) {
+                                    HassiumConnectionRegistry.markPending(connection);
+                                    HassiumAggregationManager.init();
+                                    schedulePendingTimeout(connection, player.getName().getString());
+                                }
+                            });
                         });
                     }
                 }
@@ -1587,6 +1868,18 @@ public class NeoForgeNetworkManager implements NetworkManager {
             }
         });
     }
+
+    private static void handleLightDelta(LightDeltaPayload payload, IPayloadContext context) {
+        context.enqueueWork(() -> {
+            try {
+                FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(payload.data()));
+                LightDeltaS2CPacket packet = LightDeltaS2CPacket.decode(buf);
+                ClientMetadataHandler.handleLightDeltaPacket(packet);
+            } catch (Exception e) {
+                LOGGER.error("[CLIENT] Failed to handle light delta", e);
+            }
+        });
+    }
 #endif
 
     // ========== 发送方法实现 ==========
@@ -1601,6 +1894,7 @@ public class NeoForgeNetworkManager implements NetworkManager {
         if (net.minecraft.client.Minecraft.getInstance().getConnection() != null) {
             String compressionAlgorithm = HassiumConfigService.getInstance().getCompressionAlgorithm();
             String dictAlgorithm = compressionAlgorithm + "_dict";
+            // 管线未就绪时由 switchToZstdWhenReady 延后安装，不在此关闭能力
             CHANNEL.sendToServer(new HandshakeWrapper(
                     Constants.CURRENT_PROTOCOL_VERSION,
                     Constants.MOD_VERSION,
@@ -1869,10 +2163,140 @@ public class NeoForgeNetworkManager implements NetworkManager {
     }
 
     private static void sendDictionarySyncPacket(ServerPlayer player) {
-        // Dictionary sync sent via platform-specific payload; see handshake handler init calls.
+        try {
+            byte[] aggregationDict = DictionaryManager.getAggregationDict();
+            if (aggregationDict == null) {
+                aggregationDict = new byte[0];
+            }
+            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
+            new DictionarySyncPayload(aggregationDict, false).encode(buf);
+            byte[] data = new byte[buf.readableBytes()];
+            buf.readBytes(data);
+            buf.release();
+#if MC_VER < MC_1_20_4
+#if MC_VER < MC_1_20_2
+            CHANNEL.sendTo(new DictionarySyncWrapper(data), player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
+#else
+            CHANNEL.sendTo(new DictionarySyncWrapper(data), player.connection.connection, PlayNetworkDirection.PLAY_TO_CLIENT);
+#endif
+#elif MC_VER < MC_1_20_5
+            player.connection.send(new ClientboundCustomPayloadPacket(new DictionarySyncNeoPayload(data)));
+#else
+            player.connection.send(new DictionarySyncNeoPayload(data));
+#endif
+            LOGGER.debug("Hassium: Sent dictionary sync ({} bytes) to {}", aggregationDict.length, player.getName().getString());
+        } catch (Exception e) {
+            LOGGER.error("Hassium: Failed to send dictionary sync packet", e);
+        }
     }
 
     private static void sendIndexSyncPacket(ServerPlayer player) {
-        // Index sync sent via platform-specific payload; see handshake handler init calls.
+        try {
+            IndexSyncManager indexSyncManager = IndexSyncManager.getInstance();
+            indexSyncManager.initializeServerIndex();
+            IndexSyncPacket syncPacket = indexSyncManager.createSyncPacket();
+            byte[] encoded = syncPacket.encode();
+            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
+            buf.writeVarInt(encoded.length);
+            buf.writeBytes(encoded);
+            byte[] data = new byte[buf.readableBytes()];
+            buf.readBytes(data);
+            buf.release();
+#if MC_VER < MC_1_20_4
+#if MC_VER < MC_1_20_2
+            CHANNEL.sendTo(new IndexSyncWrapper(data), player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
+#else
+            CHANNEL.sendTo(new IndexSyncWrapper(data), player.connection.connection, PlayNetworkDirection.PLAY_TO_CLIENT);
+#endif
+#elif MC_VER < MC_1_20_5
+            player.connection.send(new ClientboundCustomPayloadPacket(new IndexSyncNeoPayload(data)));
+#else
+            player.connection.send(new IndexSyncNeoPayload(data));
+#endif
+            LOGGER.debug("Hassium: Sent index sync to {}", player.getName().getString());
+        } catch (Exception e) {
+            LOGGER.error("Hassium: Failed to send index sync packet", e);
+        }
+    }
+
+    private static void handleDictionarySyncClient(byte[] data) {
+        try {
+            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(data));
+            DictionarySyncPayload payload = DictionarySyncPayload.decode(buf);
+            DictionaryManager.setAggregationDict(payload.dictionary());
+            LOGGER.debug("Hassium: Received aggregation dictionary ({} bytes)",
+                    payload.dictionary() != null ? payload.dictionary().length : 0);
+        } catch (Exception e) {
+            LOGGER.error("Hassium: Failed to handle dictionary sync", e);
+        }
+    }
+
+    private static void handleIndexSyncClient(byte[] data) {
+        try {
+            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(data));
+            int dataLength = buf.readVarInt();
+            byte[] packetData = new byte[dataLength];
+            buf.readBytes(packetData);
+            IndexSyncPacket syncPacket = IndexSyncPacket.decode(packetData);
+            IndexSyncManager indexSyncManager = IndexSyncManager.getInstance();
+            NamespaceIndexManager clientIndexManager = indexSyncManager.handleSyncPacket("client", syncPacket);
+
+            var conn = net.minecraft.client.Minecraft.getInstance().getConnection();
+            if (conn != null) {
+                Connection connection = conn.getConnection();
+                HassiumConnectionRegistry.markEnabled(connection);
+                HassiumAggregationManager.init();
+                sendCompressionReadyToServer();
+            }
+            LOGGER.debug("Hassium: Received index sync ({} types), sent compression ready",
+                    clientIndexManager.size());
+        } catch (Exception e) {
+            LOGGER.error("Hassium: Failed to handle index sync", e);
+        }
+    }
+
+    private static void sendCompressionReadyToServer() {
+        try {
+#if MC_VER < MC_1_20_4
+            CHANNEL.sendToServer(new CompressionReadyWrapper(true));
+#elif MC_VER < MC_1_20_5
+            var connection = net.minecraft.client.Minecraft.getInstance().getConnection();
+            if (connection != null) {
+                connection.send(new ServerboundCustomPayloadPacket(new CompressionReadyNeoPayload(true)));
+            }
+#else
+            var connection = net.minecraft.client.Minecraft.getInstance().getConnection();
+            if (connection != null) {
+                connection.send(new CompressionReadyNeoPayload(true));
+            }
+#endif
+        } catch (Exception e) {
+            LOGGER.error("Hassium: Failed to send compression ready", e);
+        }
+    }
+
+    private static void handleCompressionReadyServer(ServerPlayer player, boolean ready) {
+        if (!ready) {
+            return;
+        }
+        Connection connection = getPlayerConnection(player);
+        if (connection != null) {
+            HassiumConnectionRegistry.markEnabled(connection);
+            HassiumAggregationManager.flushConnection(connection);
+            LOGGER.debug("Hassium: Marked connection ENABLED for {}", player.getName().getString());
+        }
+    }
+
+    private static void schedulePendingTimeout(Connection connection, String playerName) {
+        java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "Hassium-PendingTimeout");
+            t.setDaemon(true);
+            return t;
+        }).schedule(() -> {
+            if (HassiumConnectionRegistry.tryDemoteFromPending(connection)) {
+                HassiumAggregationManager.discardConnection(connection);
+                LOGGER.warn("Hassium: Ack timeout for {}, disabling aggregation", playerName);
+            }
+        }, 5, java.util.concurrent.TimeUnit.SECONDS);
     }
 }

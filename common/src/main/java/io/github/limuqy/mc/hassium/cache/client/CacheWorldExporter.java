@@ -198,11 +198,7 @@ public final class CacheWorldExporter {
             return;
         }
         RegistryAccess registryAccess = level.registryAccess();
-#if MC_VER < MC_1_21_2
-        int minSection = level.getMinSection();
-#else
-        int minSection = level.getMinSectionY();
-#endif
+        int minSection = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMinSection(level);
         Path gameDir = mc.gameDirectory.toPath();
         String worldName = "HassiumCache_" + System.currentTimeMillis();
         Path outputDir = gameDir.resolve("saves").resolve(worldName);
@@ -425,7 +421,13 @@ public final class CacheWorldExporter {
         // Version 信息
         CompoundTag version = new CompoundTag();
         version.putInt("Id", dataVersion);
-        version.putString("Name", net.minecraft.SharedConstants.getCurrentVersion().getName());
+        version.putString("Name",
+#if MC_VER < MC_1_21_6
+                net.minecraft.SharedConstants.getCurrentVersion().getName()
+#else
+                net.minecraft.SharedConstants.getCurrentVersion().name()
+#endif
+        );
         version.putBoolean("Snapshot", false);
         levelData.put("Version", version);
 

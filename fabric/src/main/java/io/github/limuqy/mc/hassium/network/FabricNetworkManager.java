@@ -307,7 +307,7 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
                         ZstdNegotiationTracker.markNegotiated(channel);
                         int level = HassiumConfigService.getInstance().getGlobalCompressionLevel();
                         int threshold = HassiumConfigService.getInstance().getGlobalCompressionThreshold();
-                        ZstdPipelineSwitcher.switchToZstd(channel, threshold, level);
+                        ZstdPipelineSwitcher.switchToZstdWhenReady(channel, threshold, level);
                     }
                 }
             }
@@ -330,7 +330,7 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
                             ZstdNegotiationTracker.markNegotiated(channel);
                             int level = HassiumConfigService.getInstance().getGlobalCompressionLevel();
                             int threshold = HassiumConfigService.getInstance().getGlobalCompressionThreshold();
-                            ZstdPipelineSwitcher.switchToZstd(channel, threshold, level);
+                            ZstdPipelineSwitcher.switchToZstdWhenReady(channel, threshold, level);
                         }
                     }
                 }
@@ -577,9 +577,8 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
             buf.writeBoolean(true);  // clientCacheSupported
             buf.writeBoolean(true);  // chunkRevisionSupported
             buf.writeBoolean(false); // scheme127Supported
-            buf.writeBoolean(true);  // globalPacketCompressionSupported
+            buf.writeBoolean(true);  // globalPacketCompressionSupported（管线未就绪时延后安装）
             buf.writeBoolean(true);  // compactHeaderSupported
-
 #if MC_VER < MC_1_20_5
             ClientPlayNetworking.send(HANDSHAKE_C2S, buf);
 #else
@@ -809,8 +808,8 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
         // 投递到 EventLoop：保证排在 HandshakeResponse 的 encode 之后执行
         channel.eventLoop().execute(() -> {
             ZstdNegotiationTracker.markNegotiated(channel);
-            ZstdPipelineSwitcher.switchToZstd(channel, threshold, level);
-            server.execute(() -> enableAggregationAfterZstdSwitch(player, connection));
+            ZstdPipelineSwitcher.switchToZstdWhenReady(channel, threshold, level,
+                    () -> server.execute(() -> enableAggregationAfterZstdSwitch(player, connection)));
         });
     }
 

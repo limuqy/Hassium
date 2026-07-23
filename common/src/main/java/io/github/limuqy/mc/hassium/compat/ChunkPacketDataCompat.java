@@ -313,8 +313,8 @@ public final class ChunkPacketDataCompat {
         BitSet emptySkyYMask = buf.readBitSet();
         BitSet emptyBlockYMask = buf.readBitSet();
 
-        List<byte[]> skyUpdates = buf.readCollection(java.util.ArrayList::new, FriendlyByteBuf::readByteArray);
-        List<byte[]> blockUpdates = buf.readCollection(java.util.ArrayList::new, FriendlyByteBuf::readByteArray);
+        List<byte[]> skyUpdates = buf.readCollection(java.util.ArrayList::new, ChunkPacketDataCompat::readLightArray);
+        List<byte[]> blockUpdates = buf.readCollection(java.util.ArrayList::new, ChunkPacketDataCompat::readLightArray);
 
         int skyIdx = 0;
         int blockIdx = 0;
@@ -344,6 +344,11 @@ public final class ChunkPacketDataCompat {
             if (b != 0) return false;
         }
         return true;
+    }
+
+    /** 读取光照数组（varint-length-prefixed byte array），避免 1.20.5+ 的 readByteArray 重载歧义。 */
+    private static byte[] readLightArray(FriendlyByteBuf buf) {
+        return buf.readByteArray();
     }
 
     private static CompoundTag toBlockEntityNbt(int packedXZ, int y, BlockEntityType<?> type,

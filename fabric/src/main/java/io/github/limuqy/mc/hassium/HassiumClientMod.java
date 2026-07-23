@@ -40,6 +40,8 @@ public class HassiumClientMod implements ClientModInitializer {
         //  必须在此主动清理，否则 initialized 标志残留导致重连后 onLogin early-return）
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
             ClientLifecycleHelper.cleanupOnDisconnect();
+            // 延后到下一 tick：等 Minecraft.disconnect / clearLevel 拆除完成；与 Mixin TAIL 幂等
+            client.execute(ClientLifecycleHelper::finalizeDisconnect);
         });
 
         // 注册客户端命令

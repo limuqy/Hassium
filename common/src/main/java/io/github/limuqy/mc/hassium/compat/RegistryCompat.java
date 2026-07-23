@@ -1,8 +1,10 @@
 package io.github.limuqy.mc.hassium.compat;
 
+import net.minecraft.core.Holder;
 import net.minecraft.core.Registry;
 import net.minecraft.core.RegistryAccess;
 import net.minecraft.core.registries.Registries;
+import net.minecraft.resources.ResourceKey;
 import net.minecraft.world.level.biome.Biome;
 
 /**
@@ -23,6 +25,17 @@ public final class RegistryCompat {
         return access.registryOrThrow(Registries.BIOME);
 #else
         return (Registry<Biome>) access.lookupOrThrow(Registries.BIOME);
+#endif
+    }
+
+    /**
+     * 按 ResourceKey 取 Holder.Reference（1.21.2+ {@code getOrThrow}）。
+     */
+    public static <T> Holder.Reference<T> getHolderOrThrow(Registry<T> registry, ResourceKey<T> key) {
+#if MC_VER < MC_1_21_2
+        return registry.getHolderOrThrow(key);
+#else
+        return registry.getOrThrow(key);
 #endif
     }
 }

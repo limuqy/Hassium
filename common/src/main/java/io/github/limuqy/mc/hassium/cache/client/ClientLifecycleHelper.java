@@ -53,11 +53,10 @@ public final class ClientLifecycleHelper {
     }
 
     /**
-     * 断开连接时清理（HEAD 注入，vanilla clearLevel 之前）。
+     * 断开连接时清理（{@code onDisconnect} HEAD，世界拆除之前）。
      * <p>
      * 轻量清理：拉高预算消费加载队列，排空已有 save 队列，取消后台任务。
-     * 保留 save 线程和 executor 存活——vanilla clearLevel() 会触发所有 chunk 的 unload，
-     * unload Mixin 会 enqueue 到 save 队列，由仍在运行的 save 线程消费。
+     * 保留 save 线程和 executor 存活，供随后的 unload / 批量 enqueue 消费。
      * <p>
      * 重量清理（executor shutdown、storage close）推迟到 {@link #finalizeDisconnect()}。
      */
@@ -70,7 +69,7 @@ public final class ClientLifecycleHelper {
         drainLoadQueueWithRaisedBudget();
 
         // ② 批量 enqueue 所有已加载区块并 flush。
-        // clearLevel() 不保证逐个 unload，不能依赖 unload Mixin 落盘。
+        // 断连路径不保证逐个 unload，不能依赖 unload Mixin 落盘。
         // mc.level 此时可能已 null，优先用 tick 跟踪的 trackedLevel。
         CacheSaveQueue saveQueue = CacheSaveQueue.getInstance();
         Minecraft mc = Minecraft.getInstance();
@@ -97,22 +96,22 @@ public final class ClientLifecycleHelper {
         ClientLightRecomputeService.clear();
         ClientMetadataHandler.clearPendingState();
 
-        // ⑥ finalizeDisconnect 由 MixinMinecraft.clearLevel TAIL 触发
+        // ⑥ finalizeDisconnect：MixinMinecraft disconnect/clearLevel TAIL，或加载器 DISCONNECT 兜底
 
-        Constants.LOG.info("Hassium: Disconnect cleanup done (chunks enqueued + flushed before clearLevel)");
+        Constants.LOG.info("Hassium: Disconnect cleanup done (chunks enqueued + flushed before teardown)");
     }
 
     /**
-     * 断开连接最终清理（主线程下一 tick，vanilla clearLevel 之后）。
+     * 断开连接最终清理（vanilla 世界拆除之后）。
      * <p>
-     * 由 {@link #cleanupOnDisconnect()} 通过 {@link MainThreadDispatcher} 调度，
-     * 确保在 vanilla clearLevel() 触发的 chunk unload → enqueue 之后执行。
+     * 由 {@link io.github.limuqy.mc.hassium.mixin.MixinMinecraft}（clearLevel / disconnect TAIL）
+     * 与各加载器 DISCONNECT / LoggingOut 事件共同触发；{@code AtomicBoolean} 保证幂等。
      * <p>
-     * 排空 clearLevel() 触发的 unload → enqueue 的 save 任务，然后关闭所有基础设施。
+     * 排空残余 save 任务，然后关闭所有基础设施。
      */
     public static void finalizeDisconnect() {
         if (!finalized.compareAndSet(false, true)) return;
-        // ⑥ finalDrain：排空 clearLevel 产生的 save 任务
+        // ⑥ finalDrain：排空拆除阶段产生的 save 任务
         CacheSaveQueue.getInstance().drainRemaining(5000);
 
         // ⑦ 关闭 executor
