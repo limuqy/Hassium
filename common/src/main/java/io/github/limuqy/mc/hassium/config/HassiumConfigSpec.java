@@ -285,9 +285,9 @@ public final class HassiumConfigSpec {
                     .translation("hassium.configuration.clientCache.maxSizeMb")
                     .defineInRange("maxSizeMb", 4096, 64, 1024 * 1024);
             cacheCompressionLevel = builder
-                    .comment("客户端缓存 ZSTD 压缩等级（1–22；默认 9，越高压缩比越好但越慢）")
+                    .comment("客户端缓存 ZSTD 压缩等级（1–22；默认 3，越高压缩比越好但越慢）")
                     .translation("hassium.configuration.clientCache.compressionLevel")
-                    .defineInRange("compressionLevel", 9, 1, 22);
+                    .defineInRange("compressionLevel", 3, 1, 22);
             cacheHotScoreThreshold = builder
                     .comment("=== 热度清理 ===")
                     .comment("热点分数阈值：低于此值视为冷区块，清理时优先淘汰（默认 0.3）")
@@ -487,9 +487,9 @@ public final class HassiumConfigSpec {
                     .translation("hassium.configuration.storage.mode")
                     .define("mode", "mirror");
             storageZstdLevel = builder
-                    .comment("存储 ZSTD 压缩等级（1–22；默认 9，越高压缩比越好但越慢）")
+                    .comment("存储 ZSTD 压缩等级（1–22；默认 3，越高压缩比越好但越慢）")
                     .translation("hassium.configuration.storage.zstdLevel")
-                    .defineInRange("zstdLevel", 9, 1, 22);
+                    .defineInRange("zstdLevel", 3, 1, 22);
             builder.pop();
 
             // ====== network ======

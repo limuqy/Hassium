@@ -52,8 +52,8 @@ Hassium 跨版本（1.20.1–1.21.11）× 多加载器（fabric / neoforge）的
 | `-ServerPort` | 否 | `25565` | 服务端监听端口（并行模式由 batch 脚本分配：fabric=BasePort, neoforge=BasePort+1） |
 | `-DelayMs` | 否 | `10000` | 进世界后等待毫秒，再 dump 统计 |
 | `-ReconnectDelayMs` | 否 | `3000` | 第一轮断开后到重连的毫秒 |
-| `-ServerReadyTimeoutSec` | 否 | `180` | 服务端 `Done!` 出现超时 |
-| `-ClientTimeoutSec` | 否 | `480` | 客户端退出超时 |
+| `-ServerReadyTimeoutSec` | 否 | `160` | 服务端 `Done!` 出现超时 |
+| `-ClientTimeoutSec` | 否 | `100` | 客户端退出超时 |
 
 ### 批量参数
 
@@ -79,7 +79,7 @@ Hassium 跨版本（1.20.1–1.21.11）× 多加载器（fabric / neoforge）的
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│  1. 清理 <loader>/run/client/hassium_cache + config/hassium             │
+│  1. 清理 <loader>/run/client/hassium_cache + crash-reports             │
 │  2. 写 <loader>/run/server/server.properties (VD=20, online-mode=false) │
 │  3. (CleanWorld) 删 <loader>/run/server/world*                          │
 │  4. 启动 :<loader>:runServer  →  ServerSmokeTest 设置 VD=20            │
@@ -114,7 +114,7 @@ Hassium 跨版本（1.20.1–1.21.11）× 多加载器（fabric / neoforge）的
 |--------|------|
 | `0` | PASS：两轮统计均 OK 且客户端正常退出 |
 | `2` | FAIL：统计校验失败、客户端崩溃或非 0 退出 |
-| `3` | server_not_ready：服务端 180s 内未出现 `Done!` |
+| `3` | server_not_ready：服务端 160s 内未出现 `Done!` |
 
 ## 统计字段说明
 
@@ -122,20 +122,20 @@ Hassium 跨版本（1.20.1–1.21.11）× 多加载器（fabric / neoforge）的
 
 | 字段 | 含义 |
 |------|------|
-| **网络接收** | 客户端从服务端接收的字节数（含全量压缩 + 分段增量，不含缓存命中）；括号内为原版等价字节数与节省百分比 |
-| **压缩比** | 全量压缩通道的解压前后比值，如 `5.13:1` |
-| **缓存命中率** | `(hits / (hits + misses)) * 100%`，括号内含命中数 / 未命中数 / 过期数 |
-| **缓存命中节省** | 缓存命中避免的网络字节数估算 |
-| **元数据接收** | ChunkHashS2CPacket 等元数据包字节数 |
-| **全量数据请求** | 客户端请求服务端全量推送的区块数 |
-| **分段增量** | section-delta 请求/接收数（仅过期分段，非整块重传） |
-| **区块解压** | 全量压缩通道解压的区块数（不含缓存命中） |
-| **超视渲染（OVD）** | `loaded / pendingLoad / pendingMiss / missTotal / retry / forgetRetain / unloadSub`；ROUND2 应非 0 |
+| **带宽压缩(Zlib→ZSTD)** | 百分比 = 当前/原版Zlib × 100%（越小越省）；括号内为 Hassium ZSTD 线缆实测字节与原版 Zlib 管线估算字节 |
+| **压缩比** | Zlib 估算 ÷ ZSTD 实测，如 `1.76:1` 表示 ZSTD 比 Zlib 少 43% |
+| **区块缓存** | 命中率 + 命中字节（从本地缓存加载）+ 增量字节（section-delta 避免的完整加载） |
+| **区块加载** | 总数（新增数/新增字节 + 过期数/过期字节） |
+| **超视渲染（OVD）** | `已加载 / 缺失`；ROUND2 应非 0 |
+| **光照缓存** | 命中率 + 命中数 + 重算数 |
 
-**典型健康指标**（1.20.1 fabric 参考）：
+> **注意：**"原版Zlib" 是 `VanillaZlibEstimator.estimate()` 对同负载模拟 `Deflater(level=6)` + 阈值 256 帧格式的输出估算值，并非真实原版管线实测。`estimate(int)`（无实际字节时使用）基于 MC 区块 NBT 典型压缩率 25–35% 校准。详见 `VanillaZlibEstimator` 和 `VanillaZlibVsZstdBenchmarkTest`。
 
-- ROUND1（VD=20，无缓存）：网络接收 6.7 MB（原版 34.6 MB），节省 80.5%，压缩比 5.13:1
-- ROUND2（VD=8，已有缓存）：缓存命中率 >80%，OVD loaded >800
+**典型健康指标**（1.20.1 fabric ROUND1 VD=20 参考）：
+
+- 带宽压缩(Zlib→ZSTD)：56.9%（当前 7.0 MB，原版Zlib 12.3 MB），压缩比 1.76:1
+- 区块加载：~1600 新增 / ~25 MB
+- ROUND2（VD=8，已有缓存）：缓存命中率 >99%，OVD loaded >1100，光照缓存命中率 >95%
 
 ## 日志位置
 
@@ -257,8 +257,9 @@ build/smoke-test/
 
 | 版本 | 加载器 | 问题 |
 |------|--------|------|
-| 1.21.5 / 1.21.7–1.21.11 | fabric | `setViewDistance` 切换后区块包序列化出现 `readerIndex out of bounds`，客户端崩溃；neoforge 不受影响 |
-| 慢加载版本 | 全部 | 部分版本首次进服需要区块替换，10s 不够；可调 `-DelayMs 20000` |
+| 1.21.5 / 1.21.7–1.21.11 | fabric | `setViewDistance` 切换后区块包序列化出现 `readerIndex out of bounds`，客户端崩溃；ROUND2 大概率 FAIL |
+| 高 ZSTD 级别（≥9） | 全部 | ZSTD-9 压缩速度远慢于 ZSTD-3（~50% @16KB, ~95% @256KB+），导致服务端无法在超时前推送完初始区块；客户端 100s 超时 FAIL；默认 ZSTD-3 稳定 |
+| 慢加载版本 | 全部 | 部分版本首次进服需要区块替换，8s 不够；可调 `-DelayMs 20000` |
 | Forge 1.20.1 / 1.20.6 | forge | 当前脚本未单独跑 forge 子项目；用 neoforge 子项目 + `loom.platform='forge'` 覆盖（见 `settings.gradle`） |
 
 ## Java 侧开关参考
@@ -293,6 +294,9 @@ build/smoke-test/
 | `common/src/main/java/io/github/limuqy/mc/hassium/server/ServerSmokeTest.java` | 服务端视距切换（启动 VD=20，玩家退出后 VD=8） |
 | `common/.../mixin/MixinClientTick.java` | 每帧调用 `ClientSmokeTest.onClientTick` |
 | `common/.../mixin/MixinMinecraftServer.java` | 服务端 tick + init 钩子 |
+| `common/.../metrics/VanillaZlibEstimator.java` | Zlib 管线帧大小估算器（`estimate(byte[])` 精确 + `estimate(int)` 近似） |
+| `common/.../metrics/NetworkStats.java` | 指标门面（metrics 默认 false；冒烟 JVM flag 强制开启） |
+| `common/.../config/HassiumConfigService.java` | `resolveMetricsEnabled`：冒烟 flag 优先于 toml 配置 |
 | `fabric/.../HassiumClientMod.java`、`forge/.../HassiumForgeClient.java`、`neoforge/.../HassiumNeoForgeClient.java` | 加载器客户端入口，调用 `ClientSmokeTest.initIfEnabled()` |
 | `buildSrc/src/main/groovy/loom-fabric.gradle`、`loom-neoforge.gradle` | `-PhassiumSmokeTest=true` 时注入 JVM 属性 |
 | `scripts/runtime-smoke-test.ps1` | 单次会话脚本 |

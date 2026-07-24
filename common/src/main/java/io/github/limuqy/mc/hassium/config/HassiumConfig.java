@@ -34,7 +34,7 @@ public record HassiumConfig(
             String mode,
             int zstdLevel
     ) {
-        public static final StorageConfig DEFAULT = new StorageConfig(true, "mirror", 9);
+        public static final StorageConfig DEFAULT = new StorageConfig(true, "mirror", 3);
     }
 
     /**
@@ -74,7 +74,7 @@ public record HassiumConfig(
         public static final ClientCacheConfig DEFAULT = new ClientCacheConfig(
                 true,    // enabled
                 4096,    // maxSizeMb
-                9,       // cacheCompressionLevel
+                3,       // cacheCompressionLevel
                 0.3,     // hotScoreThreshold
                 0.7,     // recencyWeight
                 0.3,     // frequencyWeight
