@@ -77,6 +77,7 @@ public final class ClientSmokeTest {
         disconnectAtMs = -1L;
         round1Pass = false;
         round2Pass = false;
+        io.github.limuqy.mc.hassium.metrics.NetworkStats.setEnabled(true);
         LOGGER.info("HassiumSmokeTest: enabled delayMs={} reconnectDelayMs={} joinTimeoutMs={} host={}",
                 delayMs, reconnectDelayMs, joinTimeoutMs, host);
     }

@@ -464,9 +464,15 @@ public class HassiumConfigService {
     // --- internal helpers ---
 
     /**
-     * 根据物理端解析 metricsEnabled：客户端读 clientNetwork，服务端读 serverNetwork。
+     * 根据物理端解析 metricsEnabled：
+     * 冒烟测试 {@code hassium.smokeTest=true} 或 {@code hassium.serverSmokeTest=true} 时强开；
+     * 否则客户端读 clientNetwork，服务端读 serverNetwork。
      */
     private static boolean resolveMetricsEnabled(HassiumConfig cfg) {
+        if (Boolean.parseBoolean(System.getProperty("hassium.smokeTest", "false"))
+                || Boolean.parseBoolean(System.getProperty("hassium.serverSmokeTest", "false"))) {
+            return true;
+        }
         if (Services.PLATFORM.isPhysicalClient()) {
             return cfg.clientNetwork().metricsEnabled();
         }

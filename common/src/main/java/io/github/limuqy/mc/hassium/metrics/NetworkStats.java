@@ -32,7 +32,7 @@ package io.github.limuqy.mc.hassium.metrics;
  */
 public class NetworkStats {
 
-    private static volatile boolean enabled = true;
+    private static volatile boolean enabled = false;
     private static final HassiumMetricsImpl metrics = new HassiumMetricsImpl();
 
     private NetworkStats() {}

@@ -113,7 +113,7 @@ public record HassiumConfig(
             boolean enabled,
             boolean metricsEnabled
     ) {
-        public static final ClientNetworkConfig DEFAULT = new ClientNetworkConfig(true, true);
+        public static final ClientNetworkConfig DEFAULT = new ClientNetworkConfig(true, false);
     }
 
     /**
@@ -178,7 +178,7 @@ public record HassiumConfig(
                 256 * 1024,        // aggregationMaxSize
                 true,              // enableCompactHeader
                 DEFAULT_COMPRESSION_BLACKLIST,
-                true,              // metricsEnabled
+                false,              // metricsEnabled
                 32,                // maxChunksPerTick
                 8,                 // serverChunkPushThreads
                 true,              // dynamicThreadPoolEnabled

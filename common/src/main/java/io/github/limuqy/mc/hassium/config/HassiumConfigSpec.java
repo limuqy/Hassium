@@ -376,9 +376,9 @@ public final class HassiumConfigSpec {
                     .translation("hassium.configuration.clientNetwork.enabled")
                     .define("enabled", true);
             networkMetricsEnabled = builder
-                    .comment("是否启用客户端网络指标收集（默认 true）")
+                    .comment("是否启用客户端网络指标收集（默认 false）")
                     .translation("hassium.configuration.clientNetwork.metricsEnabled")
-                    .define("metricsEnabled", true);
+                    .define("metricsEnabled", false);
             builder.pop();
         }
     }
@@ -561,9 +561,9 @@ public final class HassiumConfigSpec {
                             o -> o instanceof String);
             networkMetricsEnabled = builder
                     .comment("=== 指标 ===")
-                    .comment("是否启用网络指标收集（流量、缓存命中等；默认 true）")
+                    .comment("是否启用网络指标收集（流量、缓存命中等；默认 false）")
                     .translation("hassium.configuration.network.metricsEnabled")
-                    .define("metricsEnabled", true);
+                    .define("metricsEnabled", false);
             networkMaxChunksPerTick = builder
                     .comment("=== 服务端推送 ===")
                     .comment("每玩家每 server tick 最多序列化/推送区块数（默认 32；仅服务端）")

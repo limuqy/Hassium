@@ -1,5 +1,6 @@
 package io.github.limuqy.mc.hassium.server;
 
+import io.github.limuqy.mc.hassium.metrics.NetworkStats;
 import net.minecraft.server.MinecraftServer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -47,6 +48,7 @@ public final class ServerSmokeTest {
         initialVdSet = false;
         switched = false;
         lastPlayerCount = 0;
+        NetworkStats.setEnabled(true);
         LOGGER.info("{} enabled vd1={} vd2={}", MARKER, vd1, vd2);
         // 初始视距在 onServerTick 中设置（此时 PlayerList 可能还未初始化）
     }
