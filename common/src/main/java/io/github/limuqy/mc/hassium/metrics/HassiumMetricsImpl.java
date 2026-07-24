@@ -618,22 +618,19 @@ public class HassiumMetricsImpl implements HassiumMetrics {
     }
 
     /**
-     * 记录分段增量接收：计入网络接收字节，不计入「区块解压」
+     * 记录分段增量接收：计入 vanilla 字节 + sectionDelta 区块计数；禁止写 actualBytesReceived。
      *
      * @param chunks       收到 delta 的区块数
      * @param vanillaBytes 若走全量时的原版等价字节（估算）
-     * @param actualBytes  实际 delta 载荷字节
      */
-    public void recordSectionDeltaReceived(long chunks, long vanillaBytes, long actualBytes) {
+    public void recordSectionDeltaReceived(long chunks, long vanillaBytes) {
         if (chunks > 0) {
             sectionDeltaChunksReceived.addAndGet(chunks);
         }
         if (vanillaBytes > 0) {
             vanillaBytesReceived.addAndGet(vanillaBytes);
         }
-        if (actualBytes > 0) {
-            actualBytesReceived.addAndGet(actualBytes);
-        }
+        // 禁止再写 actualBytesReceived（管线层 recordWireBytesReceived 统一写）
     }
 
     public long getSectionDeltaRequestsSent() {

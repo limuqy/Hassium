@@ -491,9 +491,8 @@ public class ClientMetadataHandler {
 
         int receivedChunkCount = packet.entries().size() + packet.skipped().size();
         if (receivedChunkCount > 0) {
-            long actualBytes = estimateSectionDeltaPayloadBytes(packet);
             long vanillaBytes = (long) receivedChunkCount * ESTIMATED_CHUNK_BYTES;
-            NetworkStats.recordSectionDeltaReceived(receivedChunkCount, vanillaBytes, actualBytes);
+            NetworkStats.recordSectionDeltaReceived(receivedChunkCount, vanillaBytes);
         }
 
         for (int i = 0; i < packet.entries().size(); i++) {

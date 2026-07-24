@@ -235,7 +235,7 @@ public class ClientChunkHandler {
                 compressed.originalSize, compressed.algorithm);
 
         // 记录收到压缩区块数据
-        NetworkStats.recordChunkReceived(compressed.originalSize, compressed.compressedData.length);
+        NetworkStats.recordChunkReceived(compressed.originalSize);
 
         HassiumTaskExecutor executor = HassiumTaskExecutor.getClient();
         if (executor == null) {

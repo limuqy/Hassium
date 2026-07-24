@@ -6,13 +6,28 @@ package io.github.limuqy.mc.hassium.metrics;
  * 所有方法均为静态，通过 volatile boolean 控制开关。
  * 关闭时仅一次 boolean 读取（~5ns），开启时一次 CAS 操作（~15ns）。
  * <p>
+ * 单一口径：
+ * <ul>
+ *   <li>{@code vanillaBytes*} — 仅由应用层（区块 / 聚合子包 / section-delta）写入</li>
+ *   <li>{@code actualBytes*} — 仅由 Netty 管线（{@code ZstdContextEncoder} /
+ *       {@code SkipAwareZstdEncoder} / {@code ZstdContextDecoder}）的 {@code recordWire*}
+ *       写入</li>
+ * </ul>
+ * 应用层禁止再写 actual，避免双重计数。紧凑包头不单独埋点（体现在聚合 vanilla vs 线缆 actual 之差）。
+ * <p>
  * 使用方式：
  * <pre>
- * // 在服务端区块发送后
- * NetworkStats.recordChunkSent(originalSize, compressedSize);
+ * // 在服务端区块发送后（仅记 vanilla；actual 由管线层 recordWireBytes* 写入）
+ * NetworkStats.recordChunkSent(vanillaSize);
  *
- * // 在客户端缓存比对时
- * NetworkStats.recordCacheHit();
+ * // 管线编码后记录线缆字节（ZstdContextEncoder.encode 结尾）
+ * NetworkStats.recordWireBytesSent(out.writerIndex() - outStart);
+ *
+ * // 客户端收到压缩区块后（仅记 vanilla；actual 由管线层写入）
+ * NetworkStats.recordChunkReceived(compressed.originalSize);
+ *
+ * // 聚合包编码后记录原版等价总字节（encode 循环累加后调用一次）
+ * NetworkStats.recordVanillaBytesSent(vanillaTotal);
  * </pre>
  */
 public class NetworkStats {
@@ -48,15 +63,13 @@ public class NetworkStats {
     // ===== 服务端埋点 =====
 
     /**
-     * 记录区块发送（压缩前后对比）
+     * 记录区块发送（仅记原版等价字节 + 区块计数；actual 由管线层 recordWireBytes* 写入）
      *
-     * @param originalSize   原始区块大小（字节）
-     * @param compressedSize 压缩后大小（字节）
+     * @param vanillaSize 原版等价区块大小（字节；lightStrip 时须用 unstripped 编码大小）
      */
-    public static void recordChunkSent(int originalSize, int compressedSize) {
+    public static void recordChunkSent(int vanillaSize) {
         if (!enabled) return;
-        metrics.recordVanillaBytesSent(originalSize);
-        metrics.recordActualBytesSent(compressedSize);
+        if (vanillaSize > 0) metrics.recordVanillaBytesSent(vanillaSize);
         metrics.incrementChunksCompressed();
     }
 
@@ -81,16 +94,50 @@ public class NetworkStats {
     // ===== 客户端埋点 =====
 
     /**
-     * 记录收到压缩区块数据
+     * 记录收到压缩区块数据（仅记原版等价字节 + 区块计数；actual 由管线层 recordWireBytes* 写入）
      *
-     * @param originalSize   原始区块大小（字节，从包头解码）
-     * @param compressedSize 实际接收的压缩大小（字节）
+     * @param vanillaSize 原版等价区块大小（字节，从包头解码；strip 后）
      */
-    public static void recordChunkReceived(int originalSize, int compressedSize) {
+    public static void recordChunkReceived(int vanillaSize) {
         if (!enabled) return;
-        metrics.recordVanillaBytesReceived(originalSize);
-        metrics.recordActualBytesReceived(compressedSize);
+        if (vanillaSize > 0) metrics.recordVanillaBytesReceived(vanillaSize);
         metrics.incrementChunksDecompressed();
+    }
+
+    /**
+     * 线缆出站帧字节（管线 encode 后 out 增量）。
+     * 仅应被 {@code ZstdContextEncoder} / {@code SkipAwareZstdEncoder} 调用。
+     */
+    public static void recordWireBytesSent(int wireBytes) {
+        if (!enabled) return;
+        if (wireBytes > 0) metrics.recordActualBytesSent(wireBytes);
+    }
+
+    /**
+     * 线缆入站帧字节（管线 decode 消费的 in 增量）。
+     * 仅应被 {@code ZstdContextDecoder} 调用。
+     */
+    public static void recordWireBytesReceived(int wireBytes) {
+        if (!enabled) return;
+        if (wireBytes > 0) metrics.recordActualBytesReceived(wireBytes);
+    }
+
+    /**
+     * 应用层原版等价字节（服务端聚合子包等）。
+     * 不含紧凑包头（由 {@link HassiumAggregationPacket} 在 encode 时调用）。
+     */
+    public static void recordVanillaBytesSent(long bytes) {
+        if (!enabled) return;
+        if (bytes > 0) metrics.recordVanillaBytesSent(bytes);
+    }
+
+    /**
+     * 应用层原版等价字节（客户端聚合子包等）。
+     * 不含紧凑包头（由 {@link HassiumAggregationPacket} 在 decode 时调用）。
+     */
+    public static void recordVanillaBytesReceived(long bytes) {
+        if (!enabled) return;
+        if (bytes > 0) metrics.recordVanillaBytesReceived(bytes);
     }
 
     /**
@@ -218,15 +265,14 @@ public class NetworkStats {
     }
 
     /**
-     * 记录收到的分段增量（计入网络接收，不计入区块解压）
+     * 记录收到的分段增量（仅记 vanilla + 计数；actual 由管线统一记）。
      *
      * @param chunks       区块数
      * @param vanillaBytes 若走全量时的原版等价字节（估算）
-     * @param actualBytes  实际 delta 载荷字节
      */
-    public static void recordSectionDeltaReceived(int chunks, long vanillaBytes, long actualBytes) {
+    public static void recordSectionDeltaReceived(int chunks, long vanillaBytes) {
         if (!enabled) return;
-        metrics.recordSectionDeltaReceived(chunks, vanillaBytes, actualBytes);
+        metrics.recordSectionDeltaReceived(chunks, vanillaBytes);
     }
 
     // ===== 光照缓存埋点 =====

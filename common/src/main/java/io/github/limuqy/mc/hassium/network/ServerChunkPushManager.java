@@ -965,7 +965,7 @@ public class ServerChunkPushManager {
                 return;
             }
             sender.sendCompressedChunk(player, compressed);
-            NetworkStats.recordChunkSent(work.chunkData().length, compressed.compressedData.length);
+            NetworkStats.recordChunkSent(work.chunkData().length);
             DebugLogger.info(LogType.NETWORK, "[PROCESS_QUEUE] Sent chunk {} to player {} ({} -> {} bytes, ratio={})",
                     work.pos(), player.getName().getString(),
                     work.chunkData().length, compressed.compressedData.length,
