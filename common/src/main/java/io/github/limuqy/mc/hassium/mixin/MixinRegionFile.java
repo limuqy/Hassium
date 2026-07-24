@@ -1,12 +1,6 @@
 package io.github.limuqy.mc.hassium.mixin;
 
-import com.github.luben.zstd.Zstd;
-import com.github.luben.zstd.ZstdDictCompress;
-import com.github.luben.zstd.ZstdDictDecompress;
-import io.github.limuqy.mc.hassium.compression.CompressionAlgorithmId;
-import io.github.limuqy.mc.hassium.compression.CompressionException;
 import io.github.limuqy.mc.hassium.compression.CompressionService;
-import io.github.limuqy.mc.hassium.compression.DictionaryRegistry;
 import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.storage.HassiumChunkWriteBuffer;
@@ -196,7 +190,7 @@ public abstract class MixinRegionFile {
         // 使用 ZSTD 字典解压
         byte[] decompressed;
         try {
-            decompressed = hassium$decompressWithDictionary(compressedData);
+            decompressed = CompressionService.getInstance().decompressWithDictionary(compressedData);
         } catch (Exception e) {
             hassium$LOGGER.error("ZSTD dictionary decompression failed for chunk {}", pos, e);
             if (HassiumConfigService.getInstance().isAutoDowngradeEnabled()) {
@@ -219,7 +213,7 @@ public abstract class MixinRegionFile {
         // 使用 ZSTD 字典压缩
         byte[] compressedData;
         try {
-            compressedData = hassium$compressWithDictionary(rawNbtData, level);
+            compressedData = CompressionService.getInstance().compressWithDictionary(rawNbtData, level);
         } catch (Exception e) {
             hassium$LOGGER.error("ZSTD dictionary compression failed for chunk {}, falling back to vanilla", pos, e);
             if (configService.isAutoDowngradeEnabled()) {
@@ -265,55 +259,5 @@ public abstract class MixinRegionFile {
         sectorBuf.flip();
 
         hassium$self().invokeWrite(pos, sectorBuf);
-    }
-
-    /**
-     * 使用 ZSTD 字典压缩数据
-     */
-    @Unique
-    private byte[] hassium$compressWithDictionary(byte[] data, int level) throws CompressionException {
-        CompressionService compressionService = CompressionService.getInstance();
-        DictionaryRegistry registry = compressionService.getDictionaryRegistry()
-                .orElseThrow(() -> new CompressionException("Dictionary registry not available"));
-
-        String dictionaryId = Constants.DEFAULT_ZSTD_DICTIONARY_ID;
-        byte[] dictionary = registry.findDictionary(dictionaryId)
-                .orElseThrow(() -> new CompressionException("Dictionary not found: " + dictionaryId));
-
-        ZstdDictCompress dict = new ZstdDictCompress(dictionary, level);
-        return Zstd.compress(data, dict);
-    }
-
-    /**
-     * 使用 ZSTD 字典解压数据
-     */
-    @Unique
-    private byte[] hassium$decompressWithDictionary(byte[] compressedData) throws CompressionException {
-        CompressionService compressionService = CompressionService.getInstance();
-        DictionaryRegistry registry = compressionService.getDictionaryRegistry()
-                .orElseThrow(() -> new CompressionException("Dictionary registry not available"));
-
-        String dictionaryId = Constants.DEFAULT_ZSTD_DICTIONARY_ID;
-        byte[] dictionary = registry.findDictionary(dictionaryId)
-                .orElseThrow(() -> new CompressionException("Dictionary not found: " + dictionaryId));
-
-        ZstdDictDecompress dict = new ZstdDictDecompress(dictionary);
-        // 使用推荐的解压方法：decompressFastDict
-        int decompressedSize = (int) Zstd.decompressedSize(compressedData);
-        if (decompressedSize <= 0) {
-            decompressedSize = compressedData.length * 4; // 估算值
-        }
-        byte[] result = new byte[decompressedSize];
-        long actualSize = Zstd.decompressFastDict(result, 0, compressedData, 0, compressedData.length, dict);
-        if (actualSize <= 0) {
-            throw new CompressionException.DecompressionFailedException("ZSTD dictionary decompression failed: invalid output");
-        }
-        // 如果实际大小与预估不同，截取实际大小
-        if (actualSize < decompressedSize) {
-            byte[] trimmed = new byte[(int) actualSize];
-            System.arraycopy(result, 0, trimmed, 0, (int) actualSize);
-            return trimmed;
-        }
-        return result;
     }
 }

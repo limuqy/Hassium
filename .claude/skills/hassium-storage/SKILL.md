@@ -1,6 +1,6 @@
 ---
 name: hassium-storage
-description: Hassium 存储与压缩技能。涉及 Region/type 126、ChunkPayloadCodec、HassiumRegionFile、MetadataTable、CompressionCodec/字典、MixinRegionFile、存档安全或 compression/storage 包任务时使用。
+description: Hassium 存储与压缩技能。涉及 Region/type 126、HassiumRegionFile、MetadataTable、CompressionCodec/字典、MixinRegionFile、存档安全或 compression/storage 包任务时使用。
 ---
 
 # Hassium 存储与压缩
@@ -27,12 +27,11 @@ description: Hassium 存储与压缩技能。涉及 Region/type 126、ChunkPaylo
 
 | 类 | 职责 |
 |----|------|
-| `ChunkPayloadCodec` / `EncodedChunkPayload` | type 字节 + ZSTD 编解码 |
 | `HassiumRegionFile` | 客户端/独立 Region 读写 |
 | `MetadataTable` | contentHash64（= chunkHash） |
 | `ClientHeatIndex` / `SectionHashStore` | 热度索引 / section 哈希辅存 |
 | `ChunkContentHashUtil` | sectionHash / combine → chunkHash |
-| `CompressionService` + `CompressionCodec` | 算法注册与调用 |
+| `CompressionService` + `CompressionCodec` + `ZstdDictionaryCompressionCodec` | 算法注册、字典句柄缓存、编解码调用 |
 | `HassiumCompression` | 初始化；字典 codec 在此注册 |
 | `SimpleDictionaryRegistry` / `ResourceDictionaryLoader` | 字典加载 |
 | `CompressionAlgorithmId` | `hassium:zstd` 等命名空间 |

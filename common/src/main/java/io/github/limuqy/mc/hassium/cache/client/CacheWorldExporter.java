@@ -14,9 +14,6 @@ import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.NbtIo;
 import net.minecraft.world.level.ChunkPos;
 
-import io.github.limuqy.mc.hassium.compression.CompressionService;
-import io.github.limuqy.mc.hassium.compression.DictionaryRegistry;
-
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
@@ -322,7 +319,14 @@ public final class CacheWorldExporter {
                     if (chunkData == null || chunkData.length < 1 || chunkData[0] != (byte) 126) continue;
                     byte[] compressed = new byte[chunkData.length - 1];
                     System.arraycopy(chunkData, 1, compressed, 0, compressed.length);
-                    byte[] nbtBytes = decompressForExport(compressed);
+                    byte[] nbtBytes;
+                    try {
+                        nbtBytes = io.github.limuqy.mc.hassium.compression.CompressionService.getInstance()
+                                .decompressWithDictionary(compressed);
+                    } catch (io.github.limuqy.mc.hassium.compression.CompressionException e) {
+                        Constants.LOG.debug("Hassium: Decompress failed chunk {}", pos, e);
+                        continue;
+                    }
                     if (nbtBytes == null) continue;
                     CompoundTag cachedNbt = ChunkDiskCodec.bytesToNbt(nbtBytes);
                     if (cachedNbt == null) throw new VanillaChunkNbtCompat.ConversionException("invalid cache NBT");
@@ -337,29 +341,6 @@ public final class CacheWorldExporter {
             }
         }
         return failedChunks;
-    }
-
-    /** 使用内置 ZSTD 字典解压缓存数据。 */
-    private static byte[] decompressForExport(byte[] compressedData) {
-        CompressionService service = CompressionService.getInstance();
-        DictionaryRegistry registry = service.getDictionaryRegistry().orElse(null);
-        if (registry == null) return null;
-
-        byte[] dictionary = registry.findDictionary(Constants.DEFAULT_ZSTD_DICTIONARY_ID).orElse(null);
-        if (dictionary == null) return null;
-
-        com.github.luben.zstd.ZstdDictDecompress dict = new com.github.luben.zstd.ZstdDictDecompress(dictionary);
-        int decompressedSize = (int) com.github.luben.zstd.Zstd.decompressedSize(compressedData);
-        if (decompressedSize <= 0) {
-            decompressedSize = compressedData.length * 4;
-        }
-        byte[] result = new byte[decompressedSize];
-        long actualSize = com.github.luben.zstd.Zstd.decompressFastDict(result, 0, compressedData, 0, compressedData.length, dict);
-        if (actualSize < 0) return null;
-        if (actualSize == result.length) return result;
-        byte[] trimmed = new byte[(int) actualSize];
-        System.arraycopy(result, 0, trimmed, 0, (int) actualSize);
-        return trimmed;
     }
 
     /** Serialize raw, uncompressed NBT for Anvil's type-2 zlib payload. */

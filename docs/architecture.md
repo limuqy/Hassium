@@ -31,7 +31,7 @@ Hassium/
 
 | 包 | 职责 |
 |----|------|
-| `storage/` | Region 读写、`ChunkPayloadCodec`、type 126、`HassiumRegionFile`、`MetadataTable` |
+| `storage/` | `HassiumRegionFile`、`MetadataTable`、`RegionBitmap`、`HassiumChunkWriteBuffer`；type 126 压缩由 `compression/CompressionService` 收口 |
 | `compression/` | `CompressionCodec` / `CompressionService`、字典注册 |
 | `network/` | 握手、ZSTD Pipeline、聚合、chunkHash 推送、`ServerChunkPushManager` |
 | `cache/` | 客户端缓存、Bloom、`ClientHeatIndex` / `SectionHashStore`、淘汰 |

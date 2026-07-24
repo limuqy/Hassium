@@ -245,7 +245,7 @@ Config 读取：`HassiumConfigService.isGlobalPacketCompressionEnabled()`、`isP
 |----|------|
 | `maxChunksPerTick` | 每玩家每 **server tick** 序列化上限 |
 | `mainThreadChunkBudgetMs` | 客户端每帧预算（默认 15；JoinBoost ~30） |
-| `maxChunksPerFrame` / `maxCallbacksPerFrame` | 硬顶，非主限流 |
+| `maxChunksPerFrame` | 硬顶，非主限流 |
 | `maxLightRecomputePerFrame` | 客户端每帧光照重算区块上限；超额进溢出队列 |
 
 ## 日志

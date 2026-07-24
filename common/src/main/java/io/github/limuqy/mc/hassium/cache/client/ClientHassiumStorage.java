@@ -1,11 +1,7 @@
 package io.github.limuqy.mc.hassium.cache.client;
 
-import com.github.luben.zstd.Zstd;
-import com.github.luben.zstd.ZstdDictCompress;
-import com.github.luben.zstd.ZstdDictDecompress;
 import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.compression.CompressionService;
-import io.github.limuqy.mc.hassium.compression.DictionaryRegistry;
 import io.github.limuqy.mc.hassium.cache.ChunkContentHashUtil;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.storage.HassiumRegionFile;
@@ -145,7 +141,7 @@ public class ClientHassiumStorage {
     public boolean persist(ChunkPos pos, byte[] nbtData, long contentHash, long[] sectionHashes) {
         try {
             int level = HassiumConfigService.getInstance().getCacheCompressionLevel();
-            byte[] compressed = compressWithDictionary(nbtData, level);
+            byte[] compressed = CompressionService.getInstance().compressWithDictionary(nbtData, level);
 
             byte[] chunkData = new byte[1 + compressed.length];
             chunkData[0] = (byte) 126;
@@ -297,7 +293,7 @@ public class ClientHassiumStorage {
 
             updateAccessInfo(pos);
 
-            return decompressWithDictionary(compressedData);
+            return CompressionService.getInstance().decompressWithDictionary(compressedData);
 
         } catch (Exception e) {
             Constants.LOG.error("Failed to load cached chunk [{}, {}]", pos.x, pos.z, e);
@@ -529,48 +525,12 @@ public class ClientHassiumStorage {
         return ((long) rx << 32) | (rz & 0xFFFFFFFFL);
     }
 
-    private byte[] compressWithDictionary(byte[] data, int level) throws Exception {
-        CompressionService service = CompressionService.getInstance();
-        DictionaryRegistry registry = service.getDictionaryRegistry()
-                .orElseThrow(() -> new RuntimeException("Dictionary registry not available"));
-
-        String dictionaryId = Constants.DEFAULT_ZSTD_DICTIONARY_ID;
-        byte[] dictionary = registry.findDictionary(dictionaryId)
-                .orElseThrow(() -> new RuntimeException("Dictionary not found: " + dictionaryId));
-
-        ZstdDictCompress dict = new ZstdDictCompress(dictionary, level);
-        return Zstd.compress(data, dict);
-    }
-
     /** 供 {@link CacheWorldExporter} 复用的 ZSTD 字典解压入口。 */
     public byte[] decompressForExport(byte[] compressedData) {
-        return decompressWithDictionary(compressedData);
-    }
-
-    private byte[] decompressWithDictionary(byte[] compressedData) {
-        CompressionService service = CompressionService.getInstance();
-        DictionaryRegistry registry = service.getDictionaryRegistry()
-                .orElseThrow(() -> new RuntimeException("Dictionary registry not available"));
-
-        String dictionaryId = Constants.DEFAULT_ZSTD_DICTIONARY_ID;
-        byte[] dictionary = registry.findDictionary(dictionaryId)
-                .orElseThrow(() -> new RuntimeException("Dictionary not found: " + dictionaryId));
-
-        ZstdDictDecompress dict = new ZstdDictDecompress(dictionary);
-        int decompressedSize = (int) Zstd.decompressedSize(compressedData);
-        if (decompressedSize <= 0) {
-            decompressedSize = compressedData.length * 4;
+        try {
+            return CompressionService.getInstance().decompressWithDictionary(compressedData);
+        } catch (io.github.limuqy.mc.hassium.compression.CompressionException e) {
+            throw new RuntimeException("ZSTD dictionary decompression failed", e);
         }
-        byte[] result = new byte[decompressedSize];
-        long actualSize = Zstd.decompressFastDict(result, 0, compressedData, 0, compressedData.length, dict);
-        if (actualSize <= 0) {
-            throw new RuntimeException("ZSTD dictionary decompression failed: invalid output");
-        }
-        if (actualSize < decompressedSize) {
-            byte[] trimmed = new byte[(int) actualSize];
-            System.arraycopy(result, 0, trimmed, 0, (int) actualSize);
-            return trimmed;
-        }
-        return result;
     }
 }

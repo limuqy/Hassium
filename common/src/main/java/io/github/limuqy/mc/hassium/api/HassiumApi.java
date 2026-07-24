@@ -3,7 +3,6 @@ package io.github.limuqy.mc.hassium.api;
 import io.github.limuqy.mc.hassium.compression.CompressionCodec;
 import io.github.limuqy.mc.hassium.config.HassiumConfig;
 import io.github.limuqy.mc.hassium.metrics.HassiumMetrics;
-import io.github.limuqy.mc.hassium.storage.HassiumRegionStorage;
 
 import java.util.Optional;
 
@@ -31,14 +30,6 @@ public interface HassiumApi {
      * 获取性能指标
      */
     HassiumMetrics getMetrics();
-
-    /**
-     * 获取指定维度的存储实例
-     *
-     * @param dimension 维度标识符，例如 "minecraft:overworld"
-     * @return 存储实例，如果该维度未启用存储则返回空
-     */
-    Optional<HassiumRegionStorage> getStorage(String dimension);
 
     /**
      * 获取压缩编解码器

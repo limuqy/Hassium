@@ -81,7 +81,7 @@ public class HassiumCommandHandler {
 
         return String.format(
                 "§6=== Hassium 客户端统计 ===§r\n" +
-                "§e带宽压缩(Zlib→ZSTD)：§r%s（当前 %s，原版Zlib %s，压缩比 %s）\n" +
+                "§e带宽压缩：§r%s（当前 %s，原版 %s，压缩比 %s）\n" +
                 "§e区块缓存：§r%s（命中 %s，增量 %s）\n" +
                 "§e区块加载：§r%d（新增 %d/%s，过期 %d/%s）\n" +
                 "§e超视渲染：§r%s（已加载 %d，缺失 %d）\n" +

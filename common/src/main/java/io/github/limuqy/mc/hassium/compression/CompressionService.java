@@ -1,5 +1,7 @@
 package io.github.limuqy.mc.hassium.compression;
 
+import io.github.limuqy.mc.hassium.Constants;
+
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
@@ -57,7 +59,7 @@ public class CompressionService {
     }
 
     /**
-     * 压缩数据
+     * 压缩数据（无字典）
      *
      * @param data        原始数据
      * @param algorithmId 算法 ID
@@ -75,7 +77,7 @@ public class CompressionService {
     }
 
     /**
-     * 解压数据
+     * 解压数据（无字典）
      *
      * @param data        压缩数据
      * @param algorithmId 算法 ID
@@ -89,6 +91,49 @@ public class CompressionService {
         }
         CompressionOptions options = CompressionOptions.DEFAULT;
         return codec.decompress(data, options);
+    }
+
+    /**
+     * 使用内置 ZSTD 字典压缩数据
+     * <p>
+     * 固定使用 {@link Constants#DEFAULT_ZSTD_DICTIONARY_ID} 字典，
+     * 经已注册的 {@link ZstdDictionaryCompressionCodec} 完成压缩。
+     *
+     * @param data  原始数据
+     * @param level 压缩等级 (1–22)
+     * @return 压缩后的数据
+     * @throws CompressionException 压缩失败（codec 未注册 / 字典缺失 / zstd 内部错误）
+     */
+    public byte[] compressWithDictionary(byte[] data, int level) throws CompressionException {
+        CompressionCodec codec = getCodec(CompressionAlgorithmId.HASSIUM_ZSTD_DICT);
+        if (codec == null) {
+            throw new CompressionException.CompressionFailedException(
+                    "Dictionary compression codec not registered: " + CompressionAlgorithmId.HASSIUM_ZSTD_DICT);
+        }
+        CompressionOptions options = CompressionOptions.withDictionary(Constants.DEFAULT_ZSTD_DICTIONARY_ID, level);
+        return codec.compress(data, options);
+    }
+
+    /**
+     * 使用内置 ZSTD 字典解压数据
+     * <p>
+     * 固定使用 {@link Constants#DEFAULT_ZSTD_DICTIONARY_ID} 字典，
+     * 经已注册的 {@link ZstdDictionaryCompressionCodec} 完成解压。
+     *
+     * @param compressedData ZSTD 字典压缩的数据
+     * @return 解压后的原始数据
+     * @throws CompressionException 解压失败（codec 未注册 / 字典缺失 / zstd 内部错误）
+     */
+    public byte[] decompressWithDictionary(byte[] compressedData) throws CompressionException {
+        CompressionCodec codec = getCodec(CompressionAlgorithmId.HASSIUM_ZSTD_DICT);
+        if (codec == null) {
+            throw new CompressionException.DecompressionFailedException(
+                    "Dictionary compression codec not registered: " + CompressionAlgorithmId.HASSIUM_ZSTD_DICT);
+        }
+        // level 对解压无意义，传推荐等级即可
+        CompressionOptions options = CompressionOptions.withDictionary(
+                Constants.DEFAULT_ZSTD_DICTIONARY_ID, codec.getRecommendedLevel());
+        return codec.decompress(compressedData, options);
     }
 
     /**

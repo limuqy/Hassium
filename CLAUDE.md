@@ -32,7 +32,7 @@ fabric/ forge/ neoforge/  ← ServiceLoader 实现 + 入口
 
 | 包 | 职责 |
 |----|------|
-| `storage/` | type 126、`ChunkPayloadCodec`、`HassiumRegionFile`、`MetadataTable` |
+| `storage/` | `HassiumRegionFile`、`MetadataTable`、`RegionBitmap`、`HassiumChunkWriteBuffer`；type 126 压缩由 `compression/CompressionService` 收口 |
 | `compression/` | codec / 字典 |
 | `network/` | 握手、Pipeline、聚合、`ServerChunkPushManager`、chunkHash |
 | `cache/` | 客户端缓存、Bloom、淘汰 |

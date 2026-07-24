@@ -6,7 +6,7 @@
 
 | 文件名 | 加载方 | 包含分类 |
 |--------|--------|----------|
-| `hassium/hassium-client.toml` | 仅物理客户端 | `clientCache.*` + `network.client*` + `network.background*` + `network.maxChunks*` + `network.maxCallbacks*` + `network.mainThread*` |
+| `hassium/hassium-client.toml` | 仅物理客户端 | `clientCache.*` + `clientNetwork.*` + `network.maxChunks*` + `network.mainThread*` |
 | `hassium/hassium-common.toml` | 客户端 + 专用服 | `storage.*` + `network.enabled/compression/aggregate/compact/metrics` + `compat.autoDowngradeOnError` + `debug.*` |
 | `hassium/hassium-server.toml` | 仅专用服 | `network.maxChunksPerTick` + `network.serverChunkPush*` + `network.dynamicThread*` + `network.minPush*` + `network.maxPush*` + `compat.requireClientMod` |
 
@@ -23,15 +23,14 @@ Forge/NeoForge 端注册 3 个 spec（CLIENT / COMMON / SERVER），物理客户
 |--------|--------|---------------------|----------|------|
 | `storage.enabled` | `true` | **双端** | `MixinRegionFile:116,133` 门控存储操作 | ✅ 正常 |
 | `storage.mode` | `"mirror"` | **双端** | `MixinRegionFile:137` 决定 mirror/readonly_vanilla/hassium_only | ✅ 正常 |
-| `storage.zstdLevel` | `9` | **双端** | `HassiumRegionStorageImpl:42` 初始化压缩 codec | ✅ 正常 |
+| `storage.zstdLevel` | `3` | **双端** | `MixinRegionFile:211` 通过 `HassiumConfigService.getStorageCompressionLevel()` 读取；压缩调用收口至 `CompressionService.compressWithDictionary` | ✅ 正常 |
 
-### B. ClientCache（18 项）→ `client.toml`
+### B. ClientCache（17 项）→ `client.toml`
 
 | 配置项 | 默认值 | 客户端/服务端/双端 | 实际调用 | 状态 |
 |--------|--------|---------------------|----------|------|
 | `clientCache.enabled` | `true` | **客户端** | 多处门控 | ✅ 正常 |
 | `clientCache.maxSizeMb` | `2048` | **客户端** | 缓存容量上限 | ✅ 正常 |
-| `clientCache.maxAgeDays` | `30` | **客户端** | **❌ 死代码** — getter 存在但无业务逻辑调用 | ⚠️ |
 | `clientCache.hotScoreThreshold` | `0.3` | **客户端** | `CacheEvictionManager:94` 保护热区块 | ✅ 正常 |
 | `clientCache.recencyWeight` | `0.7` | **客户端** | `CacheEvictionManager:49-53` 热度计算 | ✅ 正常 |
 | `clientCache.frequencyWeight` | `0.3` | **客户端** | `CacheEvictionManager:49-53` 热度计算 | ✅ 正常 |
@@ -67,15 +66,13 @@ Forge/NeoForge 端注册 3 个 spec（CLIENT / COMMON / SERVER），物理客户
 | `network.enableCompactHeader` | `true` | **双端** | `ZstdPipelineSwitcher:92` + 各 loader 握手协商 | ✅ 正常 |
 | `network.metricsEnabled` | `true` | **双端** | `CommonClass:46` 开关指标 + 命令门控 | ✅ 正常 |
 
-### D. Network — 客户端专属（6 项）→ `client.toml`
+### D. Network — 客户端专属（4 项）→ `client.toml`
 
 | 配置项 | 默认值 | 客户端/服务端/双端 | 实际调用 | 状态 |
 |--------|--------|---------------------|----------|------|
 | `network.clientChunkLoadThreads` | `10` | **客户端** | `ClientLifecycleHelper` 初始化线程池 | ✅ 正常 |
 | `clientCache.lightCacheEnabled` | `true` | **客户端** | 光照缓存：首次重算后存储光照，缓存命中跳过重算 | ✅ 正常 |
-| `network.backgroundThreads` | `8` | **客户端** | **❌ 死代码** — getter 存在但无业务逻辑调用 | ⚠️ |
 | `network.maxChunksPerFrame` | `32` | **客户端** | `ClientMainThreadBudget:78` | ✅ 正常 |
-| `network.maxCallbacksPerFrame` | `32` | **客户端** | **❌ 死代码** — getter 存在但无业务逻辑调用 | ⚠️ |
 | `clientCache.mainThreadChunkBudgetMs` | `15` | **客户端** | `ClientMainThreadBudget:59` | ✅ 正常 |
 
 ### E. Network — 服务端专属（5 项）→ `server.toml`
@@ -109,25 +106,20 @@ Forge/NeoForge 端注册 3 个 spec（CLIENT / COMMON / SERVER），物理客户
 
 ## 三、问题总结
 
-### 🔴 死代码配置项（3 项）
+### 🔴 死代码配置项（0 项）
 
-| 配置项 | 位置 | 问题 |
-|--------|------|------|
-| `clientCache.maxAgeDays` | `client.toml` | `HassiumConfigService.getCacheMaxAgeDays()` 存在但**无任何业务代码调用**。清理逻辑只用 `hotScoreThreshold` + `targetCacheSizeMb`，从未检查过期天数 |
-| `network.backgroundThreads` | `client.toml` | `HassiumConfigService.getBackgroundThreads()` 存在但**无任何业务代码调用**。`ClientLifecycleHelper` 用的是 `getClientChunkLoadThreads()` |
-| `network.maxCallbacksPerFrame` | `client.toml` | `HassiumConfigService.getMaxCallbacksPerFrame()` 存在但**无任何业务代码调用**。限流只用了 `maxChunksPerFrame` + `mainThreadChunkBudgetMs` |
+**已全部清理。** 在 2026-07-24 的 storage-format-unification 整理中，3 个死代码配置项（`clientCache.maxAgeDays`、`network.backgroundThreads`、`network.maxCallbacksPerFrame`）的字段定义和 getter 已从 `HassiumConfig` 和 `HassiumConfigService` 中完全移除。
 
 ### 🟡 分类问题
 
-#### 1. `NetworkConfig` 是个巨型混合 record（25 字段）
+#### 1. `NetworkConfig` 已拆分为 `ClientNetworkConfig` + `ServerNetworkConfig`
 
-运行时 `HassiumConfig.NetworkConfig` 把客户端、共享、服务端的网络字段全塞进一个 record。拆分来源：
+原审计中 `NetworkConfig` 是个巨型混合 record（25 字段）。在 config-restructure 中已经拆分为：
 
-- 客户端 6 字段 → 从 `client.toml` 读
-- 共享 14 字段 → 从 `common.toml` 读
-- 服务端 5 字段 → 从 `server.toml` 读
+- `ClientNetworkConfig`：客户端专属字段 → 从 `client.toml` 读
+- `ServerNetworkConfig`：共享网络行为 + 服务端推送设置 → 从 `common.toml` + `server.toml` 读
 
-`HassiumTomlConfigIO` 用内部 record `ClientNet` / `CommonNet` / `ServerNet` 做了拆分再 merge，但 `HassiumConfigSpec` 和 `HassiumConfig` 层面仍是单个 `NetworkConfig`，**概念上不清晰**。
+`HassiumConfig` 层面现在是两个独立 record，概念清晰。
 
 #### 2. `CompatConfig` 字段物理分布不一致
 
@@ -145,19 +137,19 @@ Forge/NeoForge 端注册 3 个 spec（CLIENT / COMMON / SERVER），物理客户
 
 ## 四、建议
 
-1. **清理 3 个死代码配置项**：要么实现 `maxAgeDays` 过期清理逻辑、`backgroundThreads` 线程池初始化、`maxCallbacksPerFrame` 限流；要么移除这些配置定义和 getter
-2. **考虑拆分 `NetworkConfig` record** 为 `ClientNetworkConfig` + `SharedNetworkConfig` + `ServerNetworkConfig`，与 toml 文件结构对齐
-3. **`serverNetwork.lightStrip` 服务端可达性**：当前专用服无法配置此项，如果需要可将其移到 `common.toml`
+1. ~~**清理 3 个死代码配置项**~~ → ✅ 已完成（2026-07-24 storage-format-unification 整理）
+2. ~~**考虑拆分 `NetworkConfig` record**~~ → ✅ 已完成（config-restructure 已拆分为 `ClientNetworkConfig` + `ServerNetworkConfig`）
+3. **`serverNetwork.lightStrip` 服务端可达性**：当前专用服 `server.toml` 中包含此字段，已可配置；客户端 `clientCache.lightCacheEnabled` 单独控制客户端光照缓存行为
 
 ## 五、统计汇总
 
 | 分类 | 总字段数 | 正常 | 死代码 |
 |------|----------|------|--------|
 | Storage | 3 | 3 | 0 |
-| ClientCache | 18 | 17 | 1 |
+| ClientCache | 17 | 17 | 0 |
 | Network（共享） | 14 | 14 | 0 |
-| Network（客户端） | 6 | 4 | 2 |
+| Network（客户端） | 4 | 4 | 0 |
 | Network（服务端） | 5 | 5 | 0 |
 | Compat | 2 | 2 | 0 |
 | Debug | 7 | 7 | 0 |
-| **合计** | **55** | **52** | **3** |
+| **合计** | **52** | **52** | **0** |
