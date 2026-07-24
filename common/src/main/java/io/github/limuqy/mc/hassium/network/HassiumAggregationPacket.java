@@ -6,6 +6,7 @@ import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.compat.PacketCodecCompat;
 import io.github.limuqy.mc.hassium.compat.PacketPayloadCompat;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
+import io.github.limuqy.mc.hassium.metrics.NetworkStats;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import net.minecraft.network.Connection;
@@ -62,8 +63,10 @@ public class HassiumAggregationPacket {
             // 写入子包数量
             rawBuf.writeVarInt(subPackets.size());
 
-            // 写入每个子包
+            // 写入每个子包，同时累加原版等价字节
+            int vanillaTotal = 0;
             for (AggregatedSubPacket subPacket : subPackets) {
+                vanillaTotal += AggregatedSubPacket.estimateVanillaSubPacketBytes(subPacket);
                 subPacket.encode(rawBuf, indexManager);
             }
 
@@ -115,6 +118,7 @@ public class HassiumAggregationPacket {
                 buf.writeByte(NOT_COMPRESSED_FLAG);
                 buf.writeBytes(rawBuf);
             }
+            NetworkStats.recordVanillaBytesSent(vanillaTotal);
         } finally {
             rawBuf.release();
         }
@@ -164,11 +168,15 @@ public class HassiumAggregationPacket {
         try {
             int packetCount = rawBuf.readVarInt();
             List<AggregatedSubPacket> subPackets = new ArrayList<>(packetCount);
+            int vanillaTotal = 0;
 
             for (int i = 0; i < packetCount; i++) {
-                subPackets.add(AggregatedSubPacket.decode(rawBuf, indexManager));
+                AggregatedSubPacket sp = AggregatedSubPacket.decode(rawBuf, indexManager);
+                subPackets.add(sp);
+                vanillaTotal += AggregatedSubPacket.estimateVanillaSubPacketBytes(sp);
             }
 
+            NetworkStats.recordVanillaBytesReceived(vanillaTotal);
             return new HassiumAggregationPacket(subPackets, indexManager);
         } finally {
             rawBuf.release();
