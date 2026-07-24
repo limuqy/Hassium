@@ -69,7 +69,7 @@ class HassiumMetricsImplTest {
         metrics.recordFullChunkRequests(1, 16_384, false);
         metrics.recordFullChunkRequests(1, 16_384, true);
         metrics.addSectionDeltaRequestsSent(1);
-        metrics.recordSectionDeltaReceived(1, 16_384, 1_024);
+        metrics.recordSectionDeltaReceived(1, 16_384);
 
         metrics.reset();
 
