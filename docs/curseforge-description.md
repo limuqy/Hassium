@@ -100,12 +100,10 @@ Vanilla clients can still connect by default. Install Hassium on **both** client
 | **Section delta** | On cache mismatch, pull only changed sections instead of the whole chunk |
 | **Beyond-view render** | When client render distance exceeds server view distance (multiplayer), fill the outer ring from local history (render-only; no out-of-range server requests) |
 | **World export** | `/hassiumc export` turns the local cache into a vanilla Anvil singleplayer world under `saves/` |
-| **Light stripping** | Server can omit light data; the client recomputes lighting locally to save more bandwidth |
-| **Light cache** | Light data is cached after first recompute; cache hits apply pre-computed lighting directly |
+| **Light optimization** | Server can strip light data from payloads; client recomputes locally and caches results — saves bandwidth and skips repeated recomputation on cache hits |
 | **Smooth loading** | Caps main-thread work during join and view expansion to reduce hitch spikes |
 | **Client-friendly** | Clients without the mod can connect by default; both sides needed for full benefits |
 | **Traffic metrics** | `/hassium stats` (server) and `/hassiumc stats` (client) to inspect compression and cache results |
-
 ### Support matrix
 
 | Minecraft | Fabric | Forge | NeoForge |
@@ -169,15 +167,26 @@ On multiplayer, if your client render distance is larger than the server’s `vi
 **World export**  
 `/hassiumc export [serverIp] [seed]` writes a minimal vanilla Anvil world under `saves/` from your client cache (blocks + BE NBT you have visited). No entities, no player inventory; empty holes regenerate. Same mods / similar MC version recommended for modded blocks.
 
-**Light stripping**
-With `network.lightStripEnabled = true` (default on server), the server omits light data in the payload; the client recomputes lighting locally (rate-limited by `maxLightRecomputePerFrame`).
-
-**Light cache**
-With `clientCache.lightCacheEnabled = true` (default), light data is stored in the local disk cache after the first recomputation. Subsequent cache hits apply pre-computed lighting directly, skipping the expensive synchronous recomputation.
+**Light optimization**
+With `network.lightStrip = true` (default on server), the server omits light data from chunk payloads. When `clientCache.lightCacheEnabled = true` (default), the client recomputes lighting locally on first load and caches the result. Subsequent cache hits apply pre-computed lighting directly, skipping the expensive synchronous recomputation. Both switches work independently: server-side stripping saves bandwidth, client-side caching saves CPU.
 
 **Smooth loading**  
 `clientCache.mainThreadChunkBudgetMs` (default `15`) limits how much chunk-apply work runs per client frame. During the first ~10 seconds after join, a short “JoinBoost” raises the budget (from ~30ms, linearly down to the normal budget) so the world fills in faster without long freezes. On the server, `maxChunksPerTick` caps how many chunks are serialized per player per tick.
 
+
+### Benchmark
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/limuqy/Hassium/refs/heads/master/docs/bandwidth-comparison-en.svg" alt="Bandwidth comparison chart">
+</p>
+
+ROUND1 (VD=20, cold cache): Hassium ZSTD saves **~43%** bandwidth vs vanilla Zlib on 1.20.1 (12.3 MB Zlib est. → 7.0 MB ZSTD wire); **~20–21%** on 1.21.x (7.1–7.3 MB Zlib → 5.7 MB ZSTD). Fabric and NeoForge show consistent results.
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/limuqy/Hassium/refs/heads/master/docs/zstd-vs-zlib-performance-en.svg" alt="ZSTD vs Zlib speed benchmark">
+</p>
+
+ZSTD level 3 (Hassium default) compresses **4–17× faster** than vanilla Zlib level 6, with decompression **20–40% faster**, while delivering better compression ratios on real chunk data.
 ### Config summary
 
 Files: `config/hassium/hassium-client.toml`, `config/hassium/hassium-common.toml`
@@ -185,25 +194,22 @@ Files: `config/hassium/hassium-client.toml`, `config/hassium/hassium-common.toml
 | Key | Default | Notes |
 | --- | --- | --- |
 | `storage.enabled` | `true` | World ZSTD — **back up first** |
-| `storage.zstdLevel` | `9` | Storage compression level |
+| `storage.zstdLevel` | `3` | Storage compression level |
+| `network.enabled` | `true` | Custom Hassium channels |
+| `network.globalPacketCompression` | `true` | Global ZSTD pipeline |
+| `network.compressionLevel` | `3` | Network level (speed-biased) |
+| `network.maxChunksPerTick` | `10` | Per-player serialize cap per server tick |
+| `network.lightStrip` | `true` | Server omits light data from payloads |
 | `clientCache.enabled` | `true` | Client cache |
 | `clientCache.sectionDeltaEnabled` | `true` | Section delta on mismatch |
 | `clientCache.viewDistanceExtensionEnabled` | `true` | Beyond-view render (multiplayer; exclusive with Bobby) |
 | `clientCache.maxRenderDistance` | `32` | Beyond-view / effective RD cap (2–64) |
 | `clientCache.ovdUnloadDelaySecs` | `5` | Delay unload after leaving beyond-view ring (s) |
-| `network.enabled` | `true` | Custom Hassium channels |
-| `network.globalPacketCompression` | `true` | Global ZSTD pipeline |
-| `network.compressionLevel` | `3` | Network level (speed-biased) |
-| `network.maxChunksPerTick` | `10` | Per-player serialize cap per server tick |
 | `clientCache.mainThreadChunkBudgetMs` | `15` | Client apply budget per frame (ms) |
 | `clientCache.lightCacheEnabled` | `true` | Cache light data; hits skip recomputation |
-| `network.maxLightRecomputePerFrame` | `10` | Max light recomputes per frame |
-| `network.metricsEnabled` | `true` | Metrics collection |
+| `network.metricsEnabled` | `false` | Metrics collection |
 | `compat.requireClientMod` | `false` | Allow vanilla clients |
 | `debug.*` | `false` | Category debug logs (quiet by default) |
-
-Hot-path logs (packet sizes, cache hits/misses, etc.) stay off unless you enable the matching `debug.*` flags. ERROR / WARN always print.
-
 ### Commands
 
 | Command | Side | Description |
@@ -245,11 +251,11 @@ Hassium 用 **ZSTD** 替代原版 Zlib，主要优化三件事：
 | --- | --- |
 | **高效存储** | 世界区块更高压缩率落盘，显著减小存档体积；仍兼容原版 Region（`.mca`）布局 |
 | **网络压缩** | 区块与（可选）全局数据包使用更高效压缩，降低带宽与等待 |
-| **光照剥离** | 服务端可不传光照数据，由客户端本地重算，进一步省流量 |
-| **光照缓存** | 首次加载重算后缓存光照数据，后续命中直接应用，跳过同步重算 |
+| **区块缓存** | 曾加载的区块写入本地；再次进入同一区域时优先用本地数据，少传全量包 |
 | **分段增量** | 缓存过期时仅拉取变更分段，避免整块重传 |
 | **超视渲染** | 多人客户端 RD 大于服务端视距时，用本地历史回填环带（仅渲染、不向服索要视距外区块） |
 | **世界导出** | `/hassiumc export` 将本地缓存导出为可进单机的原版 Anvil 世界 |
+| **光照优化** | 服务端可剥离光照数据省带宽，客户端本地重算后缓存；后续命中跳过同步重算，双端开关独立控制 |
 | **平滑加载** | 进服与视野扩展时限制主线程压力，减少卡顿尖峰 |
 | **兼容友好** | 未装模组的客户端默认可连；双端都装才能吃满压缩与缓存 |
 | **流量监控** | `/hassium stats`（服务端）、`/hassiumc stats`（客户端）查看效果 |
@@ -317,14 +323,25 @@ Hassium 用 **ZSTD** 替代原版 Zlib，主要优化三件事：
 **世界导出**  
 `/hassiumc export [服务器IP] [seed]` 把客户端缓存写成 `saves/` 下可进单机的最小 Anvil 世界（方块 + 已缓存的 BE）。无实体、无玩家背包；空洞由世界生成补全。模组方块需相同模组与相近 MC 版本。
 
-**光照剥离**
-`network.lightStripEnabled = true`（默认）时，服务端发包可剥离光照数据，由客户端本地重算（受 `maxLightRecomputePerFrame` 限流）。
-
-**光照缓存**
-`clientCache.lightCacheEnabled = true`（默认）时，首次加载的光照重算结果会存入本地缓存。后续缓存命中直接应用预计算光照，跳过耗时的同步重算。
+**光照优化**
+`network.lightStrip = true`（默认）时，服务端发包可剥离光照数据。`clientCache.lightCacheEnabled = true`（默认）时，客户端首次加载本地重算光照并缓存结果。后续缓存命中直接应用预计算光照，跳过耗时的同步重算。两个开关独立控制：服务端剥离省带宽，客户端缓存省 CPU。
 
 **平滑加载**  
 `clientCache.mainThreadChunkBudgetMs`（默认 `15`）限制客户端每帧用于 apply 的时间。进服约前 10 秒有短暂 JoinBoost（从约 30ms 线性退坡到正常预算），以加快填图、减少长时间卡死。服务端用 `maxChunksPerTick` 限制每玩家每 tick 序列化区块数。
+
+### 基准测试
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/limuqy/Hassium/refs/heads/master/docs/bandwidth-comparison-zh.svg" alt="带宽节省对比柱形图">
+</p>
+
+ROUND1（VD=20，冷缓存）：1.20.1 上 Hassium ZSTD 比原版 Zlib 节省 **~43%** 带宽（Zlib 估算 12.3 MB → ZSTD 线缆实测 7.0 MB）；1.21.x 节省 **~20–21%**（7.1–7.3 MB Zlib → 5.7 MB ZSTD）。Fabric 与 NeoForge 表现一致。
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/limuqy/Hassium/refs/heads/master/docs/zstd-vs-zlib-performance.svg" alt="ZSTD vs Zlib 速度基准">
+</p>
+
+Hassium 默认 ZSTD 级别 3 的压缩速度比原版 Zlib 级别 6 快 **4–17 倍**，解压快 **20–40%**，同时在实际区块数据上压缩率更优。
 
 ### 配置摘要
 
@@ -333,20 +350,20 @@ Hassium 用 **ZSTD** 替代原版 Zlib，主要优化三件事：
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
 | `storage.enabled` | `true` | 世界存档 ZSTD（**请先备份**） |
-| `storage.zstdLevel` | `9` | 存储压缩等级 |
+| `storage.zstdLevel` | `3` | 存储压缩等级 |
+| `network.enabled` | `true` | 自定义 Hassium 通道 |
+| `network.globalPacketCompression` | `true` | 全局 ZSTD |
+| `network.compressionLevel` | `3` | 网络压缩等级（偏速度） |
+| `network.maxChunksPerTick` | `10` | 每玩家每 tick 序列化上限 |
+| `network.lightStrip` | `true` | 服务端剥离光照数据 |
 | `clientCache.enabled` | `true` | 客户端缓存 |
 | `clientCache.sectionDeltaEnabled` | `true` | 缓存过期时分段增量 |
 | `clientCache.viewDistanceExtensionEnabled` | `true` | 超视渲染（多人；与 Bobby 互斥） |
 | `clientCache.maxRenderDistance` | `32` | 超视渲染 / 有效 RD 上限（2–64） |
 | `clientCache.ovdUnloadDelaySecs` | `5` | 离开超视渲染环带后延迟卸载（秒） |
-| `network.enabled` | `true` | 自定义 Hassium 通道 |
-| `network.globalPacketCompression` | `true` | 全局 ZSTD |
-| `network.compressionLevel` | `3` | 网络压缩等级（偏速度） |
-| `network.maxChunksPerTick` | `10` | 每玩家每 tick 序列化上限 |
 | `clientCache.mainThreadChunkBudgetMs` | `15` | 客户端每帧 apply 预算（ms） |
 | `clientCache.lightCacheEnabled` | `true` | 光照缓存，命中跳过重算 |
-| `network.maxLightRecomputePerFrame` | `10` | 每帧最多重算光照的区块数 |
-| `network.metricsEnabled` | `true` | 指标收集 |
+| `network.metricsEnabled` | `false` | 指标收集 |
 | `compat.requireClientMod` | `false` | 允许无模组客户端 |
 | `debug.*` | `false` | 分类调试日志（默认安静） |
 
