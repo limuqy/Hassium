@@ -1,6 +1,7 @@
 package io.github.limuqy.mc.hassium.network;
 
 import com.github.luben.zstd.ZstdDecompressCtx;
+import io.github.limuqy.mc.hassium.metrics.NetworkStats;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelHandlerContext;
@@ -60,7 +61,9 @@ public class ZstdContextDecoder extends ByteToMessageDecoder {
     @Override
     protected void decode(ChannelHandlerContext ctx, ByteBuf in, List<Object> out) throws Exception {
         if (closed) {
+            int inStart = in.readerIndex();
             out.add(in.readBytes(in.readableBytes()));
+            NetworkStats.recordWireBytesReceived(in.readerIndex() - inStart);
             return;
         }
 
@@ -68,6 +71,7 @@ public class ZstdContextDecoder extends ByteToMessageDecoder {
             return;
         }
 
+        int inStart = in.readerIndex();
         FriendlyByteBuf friendlyBuf = new FriendlyByteBuf(in);
         int uncompressedLength = friendlyBuf.readVarInt();
 
@@ -102,6 +106,7 @@ public class ZstdContextDecoder extends ByteToMessageDecoder {
             }
             out.add(Unpooled.wrappedBuffer(result));
         }
+        NetworkStats.recordWireBytesReceived(in.readerIndex() - inStart);
     }
 
     public void setThreshold(int threshold, boolean validateDecompressed) {

@@ -1,6 +1,7 @@
 package io.github.limuqy.mc.hassium.network;
 
 import com.github.luben.zstd.ZstdCompressCtx;
+import io.github.limuqy.mc.hassium.metrics.NetworkStats;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.handler.codec.MessageToByteEncoder;
@@ -60,8 +61,10 @@ public class ZstdContextEncoder extends MessageToByteEncoder<ByteBuf> {
 
     @Override
     protected void encode(ChannelHandlerContext ctx, ByteBuf in, ByteBuf out) throws Exception {
+        int outStart = out.writerIndex();
         if (closed) {
             out.writeBytes(in);
+            NetworkStats.recordWireBytesSent(out.writerIndex() - outStart);
             return;
         }
 
@@ -88,6 +91,7 @@ public class ZstdContextEncoder extends MessageToByteEncoder<ByteBuf> {
                         input.length, compressed.length, String.format("%.1f", ratio));
             }
         }
+        NetworkStats.recordWireBytesSent(out.writerIndex() - outStart);
     }
 
     public void setThreshold(int threshold) {

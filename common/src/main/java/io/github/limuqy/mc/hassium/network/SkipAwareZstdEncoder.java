@@ -1,5 +1,6 @@
 package io.github.limuqy.mc.hassium.network;
 
+import io.github.limuqy.mc.hassium.metrics.NetworkStats;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelHandlerContext;
 import net.minecraft.network.FriendlyByteBuf;
@@ -22,11 +23,13 @@ public class SkipAwareZstdEncoder extends ZstdContextEncoder {
     protected void encode(ChannelHandlerContext ctx, ByteBuf in, ByteBuf out) throws Exception {
         Boolean skip = ctx.channel().attr(HassiumPipelineAttributes.SKIP_PIPELINE_COMPRESSION).getAndSet(false);
         if (Boolean.TRUE.equals(skip)) {
+            int outStart = out.writerIndex();
             FriendlyByteBuf friendlyBuf = new FriendlyByteBuf(out);
             friendlyBuf.writeVarInt(0);
             friendlyBuf.writeBytes(in);
+            NetworkStats.recordWireBytesSent(out.writerIndex() - outStart);
             return;
         }
-        super.encode(ctx, in, out);
+        super.encode(ctx, in, out); // 父类已记，禁止双重调用
     }
 }
