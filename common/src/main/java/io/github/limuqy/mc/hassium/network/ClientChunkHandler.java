@@ -7,6 +7,7 @@ import io.github.limuqy.mc.hassium.cache.client.ClientLightRecomputeService;
 import io.github.limuqy.mc.hassium.cache.client.ChunkOutOfViewException;
 import io.github.limuqy.mc.hassium.cache.client.ViewDistanceExtensionService;
 import io.github.limuqy.mc.hassium.metrics.NetworkStats;
+import io.github.limuqy.mc.hassium.metrics.VanillaZlibEstimator;
 import io.github.limuqy.mc.hassium.concurrent.HassiumTaskExecutor;
 import io.github.limuqy.mc.hassium.concurrent.MainThreadDispatcher;
 import io.github.limuqy.mc.hassium.concurrent.TaskCategory;
@@ -235,7 +236,7 @@ public class ClientChunkHandler {
                 compressed.originalSize, compressed.algorithm);
 
         // 记录收到压缩区块数据
-        NetworkStats.recordChunkReceived(compressed.originalSize);
+        NetworkStats.recordChunkReceived(VanillaZlibEstimator.estimate(compressed.originalSize));
 
         HassiumTaskExecutor executor = HassiumTaskExecutor.getClient();
         if (executor == null) {

@@ -5,6 +5,7 @@ import io.github.limuqy.mc.hassium.cache.ChunkContentHashUtil;
 import io.github.limuqy.mc.hassium.cache.client.ClientCacheLoadQueue;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.metrics.NetworkStats;
+import io.github.limuqy.mc.hassium.metrics.VanillaZlibEstimator;
 import io.github.limuqy.mc.hassium.cache.client.ClientHassiumStorage;
 import io.github.limuqy.mc.hassium.concurrent.ChunkDistancePriority;
 import io.github.limuqy.mc.hassium.concurrent.HassiumTaskExecutor;
@@ -491,7 +492,7 @@ public class ClientMetadataHandler {
 
         int receivedChunkCount = packet.entries().size() + packet.skipped().size();
         if (receivedChunkCount > 0) {
-            long vanillaBytes = (long) receivedChunkCount * ESTIMATED_CHUNK_BYTES;
+            long vanillaBytes = (long) receivedChunkCount * VanillaZlibEstimator.estimate((int) ESTIMATED_CHUNK_BYTES);
             NetworkStats.recordSectionDeltaReceived(receivedChunkCount, vanillaBytes);
         }
 

@@ -5,6 +5,7 @@ import io.github.limuqy.mc.hassium.cache.ChunkContentHashUtil;
 import io.github.limuqy.mc.hassium.concurrent.ChunkDistancePriority;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.metrics.NetworkStats;
+import io.github.limuqy.mc.hassium.metrics.VanillaZlibEstimator;
 import io.github.limuqy.mc.hassium.platform.Services;
 import io.github.limuqy.mc.hassium.compat.PlayerCompat;
 import io.github.limuqy.mc.hassium.compat.RegistryCompat;
@@ -95,9 +96,9 @@ public class ServerChunkPushManager {
     private record ResyncEntry(ChunkPos pos, String dimension) {}
 
     /**
-     * 已编码包字节 + metrics 时的原版大小（metrics 关则为 0）。
+     * 已编码包字节（与 chunkHash / 反透视视图一致的包数据）。
      */
-    private record PreparedChunk(byte[] data, int vanillaSize) {}
+    private record PreparedChunk(byte[] data) {}
 
     /**
      * 每玩家：chunkPosLong → 已编码的 ClientboundLevelChunkWithLightPacket 线格式字节。
@@ -197,9 +198,8 @@ public class ServerChunkPushManager {
         // 主线程编码并缓存：保留反透视等 mod 已改写的包视图
         byte[] encoded = encodeChunkPacket(packet, registryAccess);
         if (encoded != null) {
-            int vanillaSize = vanillaSizeForEncoded(encoded.length);
             for (ServerPlayer player : players) {
-                putPreparedChunkPacket(player.getUUID(), pos, encoded, vanillaSize);
+                putPreparedChunkPacket(player.getUUID(), pos, encoded);
             }
         }
         pushPool.submit(() -> {
@@ -241,8 +241,7 @@ public class ServerChunkPushManager {
         if (chunkPacket instanceof ClientboundLevelChunkWithLightPacket lightPacket) {
             byte[] encoded = encodeChunkPacket(lightPacket, registryAccess);
             if (encoded != null) {
-                int vanillaSize = vanillaSizeForEncoded(encoded.length);
-                putPreparedChunkPacket(player.getUUID(), pos, encoded, vanillaSize);
+                putPreparedChunkPacket(player.getUUID(), pos, encoded);
             }
         }
         pushPool.submit(() -> {
@@ -304,15 +303,7 @@ public class ServerChunkPushManager {
         }
         byte[] encoded = encodeChunkPacket(packet, registryAccess);
         if (encoded != null) {
-            int vanillaSize = 0;
-            if (NetworkStats.isEnabled()) {
-                if (!HassiumConfigService.getInstance().isServerLightStrip()) {
-                    vanillaSize = encoded.length;
-                } else {
-                    vanillaSize = measureVanillaChunkPacketBytes(chunk, level);
-                }
-            }
-            putPreparedChunkPacket(player.getUUID(), pos, encoded, vanillaSize);
+            putPreparedChunkPacket(player.getUUID(), pos, encoded);
         }
 
         pushPool.submit(() -> {
@@ -929,7 +920,6 @@ public class ServerChunkPushManager {
                     // 优先使用拦截时缓存的包字节（与 chunkHash / 反透视视图一致）
                     PreparedChunk prepared = takePreparedChunkPacket(playerId, task.pos());
                     byte[] chunkData = prepared != null ? prepared.data() : null;
-                    int vanillaSize = prepared != null ? prepared.vanillaSize() : 0;
                     if (chunkData == null) {
                         LevelChunk chunk = level.getChunk(task.pos().x, task.pos().z);
                         if (chunk == null) {
@@ -937,20 +927,13 @@ public class ServerChunkPushManager {
                             continue;
                         }
                         chunkData = serializeChunk(chunk, level);
-                        if (NetworkStats.isEnabled()) {
-                            if (!HassiumConfigService.getInstance().isServerLightStrip()) {
-                                vanillaSize = chunkData.length;
-                            } else {
-                                vanillaSize = measureVanillaChunkPacketBytes(chunk, level);
-                            }
-                        }
                     }
                     if (chunkData == null) {
                         Constants.LOG.warn("[PROCESS_QUEUE] Failed to serialize chunk {}", task.pos());
                         continue;
                     }
 
-                    works.add(new SerializedChunkWork(player, task.pos(), chunkData, vanillaSize));
+                    works.add(new SerializedChunkWork(player, task.pos(), chunkData));
                     processed++;
                     DebugLogger.info(LogType.NETWORK, "[PROCESS_QUEUE] Serialized chunk {} ({} bytes, remaining={})",
                             task.pos(), chunkData.length, queue.size());
@@ -989,7 +972,7 @@ public class ServerChunkPushManager {
                 return;
             }
             sender.sendCompressedChunk(player, compressed);
-            NetworkStats.recordChunkSent(work.vanillaSize());
+            NetworkStats.recordChunkSent(VanillaZlibEstimator.estimate(work.chunkData()));
             DebugLogger.info(LogType.NETWORK, "[PROCESS_QUEUE] Sent chunk {} to player {} ({} -> {} bytes, ratio={})",
                     work.pos(), player.getName().getString(),
                     work.chunkData().length, compressed.compressedData.length,
@@ -1013,28 +996,6 @@ public class ServerChunkPushManager {
             Constants.LOG.error("Hassium: Failed to build chunk packet {}", chunk.getPos(), e);
             return null;
         }
-    }
-
-    /**
-     * 度量「无 lightStrip」时的原版 ClientboundLevelChunkWithLightPacket 编码大小。
-     * 仅应在 {@link NetworkStats#isEnabled()} 为 true 时调用。
-     */
-    private int measureVanillaChunkPacketBytes(LevelChunk chunk, ServerLevel level) {
-        ClientboundLevelChunkWithLightPacket full =
-                new ClientboundLevelChunkWithLightPacket(chunk, level.getLightEngine(), null, null);
-        byte[] encoded = encodeChunkPacket(full, level.registryAccess());
-        return encoded != null ? encoded.length : 0;
-    }
-
-    /**
-     * 当仅有已编码包字节（无 LevelChunk）时的 vanilla 大小推断。
-     * metrics 关 → 0；metrics 开 + 未 lightStrip → encoded 本身即原版；
-     * metrics 开 + lightStrip → 0（宁可漏记也不用 strip 后字节冒充原版）。
-     */
-    private static int vanillaSizeForEncoded(int encodedLength) {
-        if (!NetworkStats.isEnabled()) return 0;
-        if (!HassiumConfigService.getInstance().isServerLightStrip()) return encodedLength;
-        return 0;
     }
 
     /**
@@ -1085,10 +1046,10 @@ public class ServerChunkPushManager {
         return encodeChunkPacket(chunkPacket, level.registryAccess());
     }
 
-    private void putPreparedChunkPacket(UUID playerId, ChunkPos pos, byte[] data, int vanillaSize) {
+    private void putPreparedChunkPacket(UUID playerId, ChunkPos pos, byte[] data) {
         ConcurrentHashMap<Long, PreparedChunk> map =
                 preparedChunkPackets.computeIfAbsent(playerId, k -> new ConcurrentHashMap<>());
-        map.put(ChunkPos.asLong(pos.x, pos.z), new PreparedChunk(data, vanillaSize));
+        map.put(ChunkPos.asLong(pos.x, pos.z), new PreparedChunk(data));
         if (map.size() > MAX_PREPARED_PER_PLAYER) {
             int toRemove = map.size() - MAX_PREPARED_PER_PLAYER;
             var it = map.keySet().iterator();
@@ -1201,7 +1162,7 @@ public class ServerChunkPushManager {
     /**
      * 主线程已序列化、待后台压缩发送的工作项
      */
-    private record SerializedChunkWork(ServerPlayer player, ChunkPos pos, byte[] chunkData, int vanillaSize) {}
+    private record SerializedChunkWork(ServerPlayer player, ChunkPos pos, byte[] chunkData) {}
 
     /**
      * 短窗口 ChunkHash 批次

@@ -7,6 +7,7 @@ import io.github.limuqy.mc.hassium.compat.PacketCodecCompat;
 import io.github.limuqy.mc.hassium.compat.PacketPayloadCompat;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.metrics.NetworkStats;
+import io.github.limuqy.mc.hassium.metrics.VanillaZlibEstimator;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import net.minecraft.network.Connection;
@@ -63,14 +64,14 @@ public class HassiumAggregationPacket {
             // 写入子包数量
             rawBuf.writeVarInt(subPackets.size());
 
-            // 写入每个子包，同时累加原版等价字节
-            int vanillaTotal = 0;
+            // 写入每个子包
             for (AggregatedSubPacket subPacket : subPackets) {
-                vanillaTotal += AggregatedSubPacket.estimateVanillaSubPacketBytes(subPacket);
                 subPacket.encode(rawBuf, indexManager);
             }
 
             int rawSize = rawBuf.readableBytes();
+            byte[] rawBytes = new byte[rawSize];
+            rawBuf.readBytes(rawBytes);
 
             // 检查是否需要压缩
             HassiumConfigService config = HassiumConfigService.getInstance();
@@ -94,9 +95,6 @@ public class HassiumAggregationPacket {
                     compressCtx.loadDict(dict);
                 }
 
-                byte[] rawBytes = new byte[rawSize];
-                rawBuf.readBytes(rawBytes);
-
                 // 收集训练样本（仅用于聚合包字典）
                 if (DictionaryManager.isSampling()) {
                     DictionaryManager.collectSample(rawBytes);
@@ -116,9 +114,9 @@ public class HassiumAggregationPacket {
             } else {
                 // 不压缩
                 buf.writeByte(NOT_COMPRESSED_FLAG);
-                buf.writeBytes(rawBuf);
+                buf.writeBytes(rawBytes);
             }
-            NetworkStats.recordVanillaBytesSent(vanillaTotal);
+            NetworkStats.recordVanillaBytesSent(VanillaZlibEstimator.estimate(rawBytes));
         } finally {
             rawBuf.release();
         }
@@ -168,15 +166,12 @@ public class HassiumAggregationPacket {
         try {
             int packetCount = rawBuf.readVarInt();
             List<AggregatedSubPacket> subPackets = new ArrayList<>(packetCount);
-            int vanillaTotal = 0;
 
             for (int i = 0; i < packetCount; i++) {
-                AggregatedSubPacket sp = AggregatedSubPacket.decode(rawBuf, indexManager);
-                subPackets.add(sp);
-                vanillaTotal += AggregatedSubPacket.estimateVanillaSubPacketBytes(sp);
+                subPackets.add(AggregatedSubPacket.decode(rawBuf, indexManager));
             }
 
-            NetworkStats.recordVanillaBytesReceived(vanillaTotal);
+            NetworkStats.recordVanillaBytesReceived(VanillaZlibEstimator.estimate(rawData));
             return new HassiumAggregationPacket(subPackets, indexManager);
         } finally {
             rawBuf.release();

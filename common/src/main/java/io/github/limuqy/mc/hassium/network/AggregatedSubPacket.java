@@ -98,19 +98,4 @@ public class AggregatedSubPacket {
     public ByteBuf getDataBuf() {
         return Unpooled.wrappedBuffer(data);
     }
-
-    /**
-     * 若走原版独立包：writeUtf(type) + VarInt(len) + data 的近似线大小。
-     * 不含外层 Connection 帧；与紧凑头对比即可体现 compact header 节省。
-     */
-    static int estimateVanillaSubPacketBytes(AggregatedSubPacket sp) {
-        FriendlyByteBuf tmp = new FriendlyByteBuf(Unpooled.buffer());
-        try {
-            tmp.writeUtf(sp.getType().toString());
-            tmp.writeVarInt(sp.getData().length);
-            return tmp.readableBytes() + sp.getData().length;
-        } finally {
-            tmp.release();
-        }
-    }
 }
