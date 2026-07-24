@@ -49,12 +49,12 @@ public final class VanillaZlibEstimator {
 
     /**
      * 粗估 Zlib 帧大小（仅有原始 size 数字时）。
-     * 公式基于真实 MC 区块 NBT 数据剖面校准：
+     * 公式基于真实 MC 区块 NBT 数据剖面（典型 Zlib 压缩率 25-40%），略保守以不夸大 ZSTD 优势：
      * <ul>
      *   <li>&lt;256 → VarInt(0) + raw（不压缩）</li>
-     *   <li>256-4095 → ~30% of raw (Zlib ~70% saving)</li>
-     *   <li>4096-65535 → ~15% of raw (Zlib ~85% saving)</li>
-     *   <li>&gt;65536 → ~10% of raw (Zlib ~90% saving)</li>
+     *   <li>256-4095 → ~35% of raw</li>
+     *   <li>4096-65535 → ~30% of raw（区块包体范围）</li>
+     *   <li>&gt;65536 → ~25% of raw（大型聚合）</li>
      * </ul>
      *
      * @param rawSize 未压缩负载字节数
@@ -67,11 +67,11 @@ public final class VanillaZlibEstimator {
         }
         double ratio;
         if (rawSize <= 4095) {
-            ratio = 0.30;
+            ratio = 0.35;
         } else if (rawSize <= 65535) {
-            ratio = 0.15;
+            ratio = 0.30;
         } else {
-            ratio = 0.10;
+            ratio = 0.25;
         }
         return (int) (rawSize * ratio) + varIntBytes(rawSize);
     }
