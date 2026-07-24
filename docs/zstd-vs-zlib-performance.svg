@@ -1,0 +1,116 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="840" height="520" role="img" aria-label="Zlib vs ZSTD 压缩/解压性能基准">
+<title>ZSTD vs Zlib 压缩解压速度基准 · MC 结构化数据 · Java Deflater/Zstd-jni · Windows x64</title>
+<defs>
+  <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0%" stop-color="#fafafa"/>
+    <stop offset="100%" stop-color="#f0f0f0"/>
+  </linearGradient>
+</defs>
+<rect width="840" height="520" fill="url(#bg)" rx="4"/>
+
+<!-- Title -->
+<text x="420" y="28" text-anchor="middle" font-family="Verdana,Geneva,sans-serif" font-size="14" font-weight="bold" fill="#333">
+  ZSTD vs Zlib 压缩 &amp; 解压速度基准
+</text>
+<text x="420" y="46" text-anchor="middle" font-family="Verdana,sans-serif" font-size="9" fill="#999">
+  MC 结构化剖面 (20%随机 30%零跑 30%模式 20%重复) · 50 轮中位数 · Zlib(nowrap level=6) · ZSTD-jni 1.5.5
+</text>
+
+<!-- ===== PANEL 1: Compress ===== -->
+<text x="420" y="72" text-anchor="middle" font-family="Verdana,sans-serif" font-size="12" font-weight="bold" fill="#555">压缩速度对比 (MB/s, 越高越好)</text>
+
+<!-- Y-axis lines and labels (compress) -->
+<line x1="75" y1="90" x2="75" y2="260" stroke="#666" stroke-width="1"/>
+<line x1="75" y1="260" x2="815" y2="260" stroke="#e0e0e0" stroke-width="0.5"/>
+<text x="67" y="264" text-anchor="end" font-family="Verdana,sans-serif" font-size="9" fill="#999">0</text>
+<line x1="75" y1="235" x2="815" y2="235" stroke="#e8e8e8" stroke-width="0.5"/>
+<text x="67" y="239" text-anchor="end" font-family="Verdana,sans-serif" font-size="9" fill="#bbb">500</text>
+<line x1="75" y1="210" x2="815" y2="210" stroke="#e8e8e8" stroke-width="0.5"/>
+<text x="67" y="214" text-anchor="end" font-family="Verdana,sans-serif" font-size="9" fill="#bbb">1,000</text>
+<line x1="75" y1="185" x2="815" y2="185" stroke="#e8e8e8" stroke-width="0.5"/>
+<text x="67" y="189" text-anchor="end" font-family="Verdana,sans-serif" font-size="9" fill="#bbb">1,500</text>
+<line x1="75" y1="160" x2="815" y2="160" stroke="#e8e8e8" stroke-width="0.5"/>
+<text x="67" y="164" text-anchor="end" font-family="Verdana,sans-serif" font-size="9" fill="#bbb">2,000</text>
+<line x1="75" y1="135" x2="815" y2="135" stroke="#e8e8e8" stroke-width="0.5"/>
+<text x="67" y="139" text-anchor="end" font-family="Verdana,sans-serif" font-size="9" fill="#bbb">2,500</text>
+<line x1="75" y1="110" x2="815" y2="110" stroke="#e8e8e8" stroke-width="0.5"/>
+<text x="67" y="114" text-anchor="end" font-family="Verdana,sans-serif" font-size="9" fill="#bbb">3,000</text>
+
+<!-- Group labels (compress) -->
+<text x="210" y="280" text-anchor="middle" font-family="Verdana,sans-serif" font-size="10" fill="#555">4 KB</text>
+<text x="395" y="280" text-anchor="middle" font-family="Verdana,sans-serif" font-size="10" fill="#555">16 KB (≈区块)</text>
+<text x="580" y="280" text-anchor="middle" font-family="Verdana,sans-serif" font-size="10" fill="#555">64 KB</text>
+
+<!-- 4K group compress -->
+<rect x="150" y="231.8" width="28" height="28.2" fill="#E57373" rx="2"/>
+<text x="164" y="226.8" text-anchor="middle" font-family="Verdana,sans-serif" font-size="8" fill="#C62828">281</text>
+<rect x="182" y="138.6" width="28" height="121.4" fill="#64B5F6" rx="2"/>
+<text x="196" y="133.6" text-anchor="middle" font-family="Verdana,sans-serif" font-size="8" fill="#1565C0">1,221</text>
+<rect x="214" y="138.6" width="28" height="121.4" fill="#4CAF50" rx="2"/>
+<text x="228" y="133.6" text-anchor="middle" font-family="Verdana,sans-serif" font-size="8" fill="#2E7D32">1,221</text>
+
+<!-- 16K group compress -->
+<rect x="335" y="224.0" width="28" height="36.0" fill="#E57373" rx="2"/>
+<text x="349" y="219.0" text-anchor="middle" font-family="Verdana,sans-serif" font-size="8" fill="#C62828">378</text>
+<rect x="367" y="93.9" width="28" height="166.1" fill="#64B5F6" rx="2"/>
+<text x="381" y="88.9" text-anchor="middle" font-family="Verdana,sans-serif" font-size="8" fill="#1565C0">3,064</text>
+<rect x="399" y="95.7" width="28" height="164.3" fill="#4CAF50" rx="2"/>
+<text x="413" y="90.7" text-anchor="middle" font-family="Verdana,sans-serif" font-size="8" fill="#2E7D32">2,893</text>
+
+<!-- 64K group compress -->
+<rect x="520" y="226.7" width="28" height="33.3" fill="#E57373" rx="2"/>
+<text x="534" y="221.7" text-anchor="middle" font-family="Verdana,sans-serif" font-size="8" fill="#C62828">343</text>
+<rect x="552" y="90.0" width="28" height="170.0" fill="#64B5F6" rx="2"/>
+<text x="566" y="85.0" text-anchor="middle" font-family="Verdana,sans-serif" font-size="8" fill="#1565C0">7,622</text>
+<rect x="584" y="97.5" width="28" height="162.5" fill="#4CAF50" rx="2"/>
+<text x="598" y="92.5" text-anchor="middle" font-family="Verdana,sans-serif" font-size="8" fill="#2E7D32">5,682</text>
+
+<!-- ===== PANEL 2: Decompress ===== -->
+<text x="420" y="308" text-anchor="middle" font-family="Verdana,sans-serif" font-size="12" font-weight="bold" fill="#555">解压速度对比 (MB/s, 越高越好)</text>
+
+<!-- Y-axis lines and labels (decompress, scale up to 2000) -->
+<line x1="75" y1="325" x2="75" y2="495" stroke="#666" stroke-width="1"/>
+<line x1="75" y1="495" x2="815" y2="495" stroke="#e0e0e0" stroke-width="0.5"/>
+<text x="67" y="499" text-anchor="end" font-family="Verdana,sans-serif" font-size="9" fill="#999">0</text>
+<line x1="75" y1="460" x2="815" y2="460" stroke="#e8e8e8" stroke-width="0.5"/>
+<text x="67" y="464" text-anchor="end" font-family="Verdana,sans-serif" font-size="9" fill="#bbb">500</text>
+<line x1="75" y1="425" x2="815" y2="425" stroke="#e8e8e8" stroke-width="0.5"/>
+<text x="67" y="429" text-anchor="end" font-family="Verdana,sans-serif" font-size="9" fill="#bbb">1,000</text>
+
+<!-- Group labels (decompress) -->
+<text x="210" y="520" text-anchor="middle" font-family="Verdana,sans-serif" font-size="10" fill="#555">4 KB</text>
+<text x="395" y="520" text-anchor="middle" font-family="Verdana,sans-serif" font-size="10" fill="#555">16 KB (≈区块)</text>
+<text x="580" y="520" text-anchor="middle" font-family="Verdana,sans-serif" font-size="10" fill="#555">64 KB</text>
+
+<!-- 4K group decompress -->
+<rect x="150" y="433.0" width="28" height="62.0" fill="#E57373" rx="2"/>
+<text x="164" y="428.0" text-anchor="middle" font-family="Verdana,sans-serif" font-size="8" fill="#C62828">1,028</text>
+<rect x="182" y="417.6" width="28" height="77.4" fill="#64B5F6" rx="2"/>
+<text x="196" y="412.6" text-anchor="middle" font-family="Verdana,sans-serif" font-size="8" fill="#1565C0">1,149</text>
+<rect x="214" y="417.6" width="28" height="77.4" fill="#4CAF50" rx="2"/>
+<text x="228" y="412.6" text-anchor="middle" font-family="Verdana,sans-serif" font-size="8" fill="#2E7D32">1,149</text>
+
+<!-- 16K group decompress -->
+<rect x="335" y="416.8" width="28" height="78.2" fill="#E57373" rx="2"/>
+<text x="349" y="411.8" text-anchor="middle" font-family="Verdana,sans-serif" font-size="8" fill="#C62828">1,260</text>
+<rect x="367" y="395.0" width="28" height="100.0" fill="#64B5F6" rx="2"/>
+<text x="381" y="390.0" text-anchor="middle" font-family="Verdana,sans-serif" font-size="8" fill="#1565C0">1,578</text>
+<rect x="399" y="393.8" width="28" height="101.2" fill="#4CAF50" rx="2"/>
+<text x="413" y="388.8" text-anchor="middle" font-family="Verdana,sans-serif" font-size="8" fill="#2E7D32">1,594</text>
+
+<!-- 64K group decompress -->
+<rect x="520" y="405.9" width="28" height="89.1" fill="#E57373" rx="2"/>
+<text x="534" y="400.9" text-anchor="middle" font-family="Verdana,sans-serif" font-size="8" fill="#C62828">1,447</text>
+<rect x="552" y="384.9" width="28" height="110.1" fill="#64B5F6" rx="2"/>
+<text x="566" y="379.9" text-anchor="middle" font-family="Verdana,sans-serif" font-size="8" fill="#1565C0">1,746</text>
+<rect x="584" y="384.9" width="28" height="110.1" fill="#4CAF50" rx="2"/>
+<text x="598" y="379.9" text-anchor="middle" font-family="Verdana,sans-serif" font-size="8" fill="#2E7D32">1,746</text>
+
+<!-- Legend -->
+<rect x="180" y="76" width="12" height="12" fill="#E57373" rx="1"/>
+<text x="196" y="86" font-family="Verdana,sans-serif" font-size="9" fill="#666">Zlib level 6</text>
+<rect x="290" y="76" width="12" height="12" fill="#64B5F6" rx="1"/>
+<text x="306" y="86" font-family="Verdana,sans-serif" font-size="9" fill="#666">ZSTD level 1 (最快)</text>
+<rect x="420" y="76" width="12" height="12" fill="#4CAF50" rx="1"/>
+<text x="436" y="86" font-family="Verdana,sans-serif" font-size="9" fill="#666">ZSTD level 3 (Hassium 默认)</text>
+</svg>
