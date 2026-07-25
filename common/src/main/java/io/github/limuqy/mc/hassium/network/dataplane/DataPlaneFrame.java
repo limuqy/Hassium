@@ -1,0 +1,79 @@
+package io.github.limuqy.mc.hassium.network.dataplane;
+
+import java.io.ByteArrayOutputStream;
+import java.io.ByteArrayInputStream;
+
+public class DataPlaneFrame {
+
+    public static final int TYPE_BIND_REQUEST = 1;
+    public static final int TYPE_BIND_ACK = 2;
+    public static final int TYPE_BULK_COMPRESSED_CHUNK = 3;
+    public static final int TYPE_BULK_SECTION_DELTA = 4;
+    public static final int TYPE_KEEPALIVE = 5;
+    public static final int TYPE_KEEPALIVE_ACK = 6;
+    public static final int TYPE_CLOSE = 7;
+
+    private static final int MIN_TYPE = 1;
+    private static final int MAX_TYPE = 7;
+
+    /** 编码：VarInt(frameLen) + type(u8) + payload。frameLen = 1 + payload.length */
+    public static byte[] encode(int type, byte[] payload) {
+        if (type < MIN_TYPE || type > MAX_TYPE) throw new IllegalArgumentException("Invalid frame type: " + type);
+        int payloadLen = payload != null ? payload.length : 0;
+        int frameLen = 1 + payloadLen; // type byte + payload
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        writeVarInt(out, frameLen);
+        out.write(type);
+        if (payloadLen > 0) out.writeBytes(payload);
+        return out.toByteArray();
+    }
+
+    /** 从完整帧中提取 type */
+    public static int decodeType(byte[] frame) {
+        java.nio.ByteBuffer buf = java.nio.ByteBuffer.wrap(frame);
+        int frameLen = readVarInt(buf);
+        if (frame.length < frameLen + varIntSize(frameLen)) throw new IllegalArgumentException("Truncated frame");
+        return buf.get() & 0xFF;
+    }
+
+    /** 从完整帧中提取 payload */
+    public static byte[] decodePayload(byte[] frame) {
+        java.nio.ByteBuffer buf = java.nio.ByteBuffer.wrap(frame);
+        int frameLen = readVarInt(buf);
+        int headerSize = varIntSize(frameLen);
+        // 整帧必须至少含 headerSize + frameLen 字节；frameLen = type(1) + payload
+        if (frame.length < headerSize + frameLen) throw new IllegalArgumentException("Truncated frame");
+        buf.get(); // 跳过 type 字节
+        int dataLen = frameLen - 1; // payload 长度
+        byte[] payload = new byte[dataLen];
+        if (dataLen > 0) buf.get(payload);
+        return payload;
+    }
+
+    // ---- VarInt helpers (MC-compatible 7-bit encoding) ----
+
+    static void writeVarInt(ByteArrayOutputStream out, int value) {
+        while ((value & ~0x7F) != 0) {
+            out.write((value & 0x7F) | 0x80);
+            value >>>= 7;
+        }
+        out.write(value);
+    }
+
+    static int readVarInt(java.nio.ByteBuffer buf) {
+        int value = 0, shift = 0;
+        byte b;
+        do {
+            b = buf.get();
+            value |= (b & 0x7F) << shift;
+            shift += 7;
+        } while ((b & 0x80) != 0);
+        return value;
+    }
+
+    static int varIntSize(int value) {
+        int n = 1;
+        while ((value & ~0x7F) != 0) { n++; value >>>= 7; }
+        return n;
+    }
+}
