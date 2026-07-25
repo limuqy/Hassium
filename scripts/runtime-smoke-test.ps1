@@ -136,9 +136,13 @@ if ($conns) {
 }
 
 # 5. 启动服务端（后台，启用 ServerSmokeTest）
-Write-Host "[$SessionId] [4/9] 启动服务端 ($Loader / $Ver)..."
 $gradlew = Join-Path $projectRoot "gradlew.bat"
-$serverArgs = @(":${Loader}:runServer", "-PhassiumSmokeTest=true", "-PhassiumSmokePhases=${SmokePhases}", "-Pmc_ver=${Ver}")
+# 5.0 预备 gradle daemon：先停掉残留 daemon，避免 reuse 一个卡住 / 正在 init 的旧 daemon
+# （残留 daemon 经常卡 wrapper，runServer/runClient 反复 wating ready 直至超时）。
+& $gradlew --stop *> $null 2>&1
+# 5.1 再起服务端 —— 显式 --no-daemon 确保不复用任何 daemon
+Write-Host "[$SessionId] [4/9] 启动服务端 ($Loader / $Ver)..."
+$serverArgs = @("--no-daemon", ":${Loader}:runServer", "-PhassiumSmokeTest=true", "-PhassiumSmokePhases=${SmokePhases}", "-Pmc_ver=${Ver}")
 $server = Start-Process -FilePath $gradlew `
     -ArgumentList $serverArgs `
     -RedirectStandardOutput $serverLog `
@@ -189,6 +193,7 @@ if (-not $serverReady) {
 # 7. 启动客户端（前台阻塞，自动两轮连服）
 Write-Host "[$SessionId] [6/9] 启动客户端连服（两轮自动）..."
 $clientArgs = @(
+    "--no-daemon",
     ":${Loader}:runClient",
     "-PhassiumSmokeTest=true",
     "-PhassiumSmokeHost=$effectiveHost",

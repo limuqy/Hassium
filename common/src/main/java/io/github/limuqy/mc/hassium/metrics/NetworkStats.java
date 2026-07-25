@@ -304,10 +304,10 @@ public class NetworkStats {
     }
 
     /**
-     * 记录收到的分段增量（仅记 vanilla + 计数；actual 由管线统一记）。
+     * 记录收到的分段增量（仅记 vanilla 等价 + 计数；actual 由管线层 recordWireBytesReceived 统一记）。
      *
      * @param chunks       区块数
-     * @param vanillaBytes 若走全量时的原版等价字节（估算）
+     * @param vanillaBytes 若走全量时的原版等价字节（估算 = vanilla Zlib 全量推等价 wire）
      */
     public static void recordSectionDeltaReceived(int chunks, long vanillaBytes) {
         if (!enabled) return;

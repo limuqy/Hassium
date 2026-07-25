@@ -39,6 +39,8 @@ public class ClientMetadataHandler {
 
     /** 区块平均大小估算（字节），用于缓存命中率/带宽节省按内容计算。与 {@link NetworkStats#ESTIMATED_CHUNK_BYTES} 同源。 */
     private static final long ESTIMATED_CHUNK_BYTES = NetworkStats.ESTIMATED_CHUNK_BYTES; // 16KB
+    /** 光照等价字节估算（字节），与 {@link NetworkStats#ESTIMATED_LIGHT_BYTES} 同源；LightDelta 入站 vanilla 等价 wire 累点使用。 */
+    private static final long ESTIMATED_LIGHT_BYTES = NetworkStats.ESTIMATED_LIGHT_BYTES; // 16KB
 
     /**
      * 区块已应用到世界后才发送的 BE 请求（chunkKey → dimension）。
@@ -844,8 +846,10 @@ public class ClientMetadataHandler {
             // 不在此路径全局 drain：邻居可能尚未建层。
             // residual 由后续 applyLightEngine 的 safeRunLightUpdates / 渲染帧 drain。
 
-            // 记录指标
+            // 记录指标 + vanilla 等价入站 wire（vanilla 不会发 delta，会随 chunk packet 携带光照字节走 Zlib 压缩入站）
             NetworkStats.recordLightDeltaReceived(1);
+            NetworkStats.recordVanillaBytesReceived(
+                    VanillaZlibEstimator.estimate((int) ESTIMATED_LIGHT_BYTES));
 
             // 标记缓存光照过时（is_light_on=0）
             markCacheLightStale(chunkPos);

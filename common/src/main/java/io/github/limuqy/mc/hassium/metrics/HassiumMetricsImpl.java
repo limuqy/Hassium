@@ -697,7 +697,11 @@ public class HassiumMetricsImpl implements HassiumMetrics {
     }
 
     /**
-     * 记录分段增量接收：计入 vanilla 字节 + sectionDelta 区块计数；禁止写 actualBytesReceived。
+     * 记录分段增量接收：计入 vanilla 等价字节（vanilla 不发 delta，会发整 chunk Zlib wire）+ sectionDelta 区块计数；
+     * 与 actual（管线层 recordWireBytesReceived 累得 SectionDelta 入站 wire ZSTD 字节）口径一致。
+     * <p>
+     * SectionDelta 在 vanilla 等价 = vanilla 不发 delta，只会在 chunk 变化时发完整 chunk packet（含 light）
+     * 走 Zlib 压缩入站，每 chunk 等价 wire = {@link VanillaZlibEstimator#estimate}(16KB)。
      *
      * @param chunks       收到 delta 的区块数
      * @param vanillaBytes 若走全量时的原版等价字节（估算）
