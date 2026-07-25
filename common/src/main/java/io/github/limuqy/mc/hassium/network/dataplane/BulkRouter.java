@@ -51,6 +51,43 @@ public class BulkRouter {
         return false;
     }
 
+    /**
+     * 选择一个 Data 通道用于 bulk 发送（与 {@link #sendBulk} 同逻辑，但返回选中的通道）。
+     *
+     * @return 选中的 Data {@link PlayerChannel}；null 表示 caller 应走 Primary。
+     */
+    public static PlayerChannel selectChannel(PlayerChannelBundle bundle, String mode, int primaryWeight, int degradeAfterDrops) {
+        if (bundle == null) return null;
+        if (bundle.degraded) return null;
+
+        List<Candidate> candidates = new ArrayList<>();
+        if ("share".equals(mode)) {
+            candidates.add(new Candidate(Candidate.Type.PRIMARY, primaryWeight, null));
+        }
+        for (PlayerChannel ch : bundle.getDataChannels()) {
+            if (ch.isActive() && ch.isWritable()) {
+                candidates.add(new Candidate(Candidate.Type.DATA, ch.weight, ch));
+            }
+        }
+
+        if (candidates.isEmpty()) {
+            boolean drop = handleNoCandidate(bundle, mode, degradeAfterDrops);
+            // drop=true 已经丢弃（exclusive 阈值内），caller 不发 Primary，但也没有 channel 可写；
+            // drop=false 走 Primary。两种情况都返回 null（无 Data channel 可写）。
+            return null;
+        }
+
+        Candidate target = weightedRoundRobin(candidates, bundle);
+        if (target.type == Candidate.Type.PRIMARY) {
+            return null; // caller 走 Primary
+        }
+        if (target.channel != null) {
+            bundle.consecutiveDrops = 0;
+            return target.channel;
+        }
+        return null;
+    }
+
     private static boolean handleNoCandidate(PlayerChannelBundle bundle, String mode, int degradeAfterDrops) {
         if ("share".equals(mode)) {
             return false; // Primary fallback

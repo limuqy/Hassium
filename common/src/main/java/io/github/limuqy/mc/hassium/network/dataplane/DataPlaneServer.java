@@ -101,6 +101,41 @@ public class DataPlaneServer {
 
     public static boolean isBound() { return bound; }
 
+    /**
+     * 尝试把 bulk payload 路由到玩家的 Data 通道（加密写入）。
+     *
+     * @param playerId 玩家 UUID（PoC 客户端层用真实 UUID 服务端拦截；bundle 由 Bind 时建立）
+     * @param frameType {@link DataPlaneFrame} 帧类型（BULK_COMPRESSED_CHUNK / BULK_SECTION_DELTA）
+     * @param payload 帧业务 payload（未经 DataPlaneCodec 加密）
+     * @param channelKeyMaterial 用于派生每帧写密钥的信息（PoC: BIND_TOKEN + frameType + 通道序号）
+     * @return true = 已写入 Data 通道或已丢弃（caller 不应再走 Primary）；false = 走 Primary
+     */
+    public static boolean tryRouteBulk(UUID playerId, int frameType, byte[] payload, byte[] channelKeyMaterial) {
+        PlayerChannelBundle bundle = getBundle(playerId);
+        if (bundle == null) return false; // 未绑定 Data 通道, 走 Primary
+        PlayerChannel target = BulkRouter.selectChannel(
+                bundle, DataPlanePoCConfig.BULK_ROUTE_MODE,
+                DataPlanePoCConfig.PRIMARY_WEIGHT, DataPlanePoCConfig.DEGRADE_AFTER_DROPS);
+        if (target == null) return false; // 路由到 Primary 或 degraded
+        try {
+            byte[] key = deriveFrameKey(channelKeyMaterial);
+            byte[] frame = DataPlaneCodec.encrypt(key, frameType, payload);
+            target.channel.writeAndFlush(io.netty.buffer.Unpooled.wrappedBuffer(frame));
+            return true;
+        } catch (Exception e) {
+            LOGGER.warn("DataPlaneServer: encrypt/write failed, falling back to Primary", e);
+            return false;
+        }
+    }
+
+    /** 每帧派生密钥: HKDF(BIND_TOKEN, info=frameType||channelKeyMaterial, len=16) */
+    private static byte[] deriveFrameKey(byte[] channelKeyMaterial) {
+        byte[] info = new byte[4 + channelKeyMaterial.length];
+        info[0] = (byte) DataPlanePoCConfig.FRAME_KEY_INFO_TAG;
+        System.arraycopy(channelKeyMaterial, 0, info, 4, channelKeyMaterial.length);
+        return Hkdf.extractAndExpand(DataPlanePoCConfig.BIND_TOKEN, DataPlanePoCConfig.BIND_TOKEN, info, 16);
+    }
+
     /** ChannelInitializer: 读超时 → Bind 校验 → 帧编解码 */
     static class DataPlaneChannelInitializer extends ChannelInitializer<SocketChannel> {
         private final long channelId;
