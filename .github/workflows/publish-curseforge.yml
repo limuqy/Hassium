@@ -1,0 +1,164 @@
+# 从 GitHub Actions 海外 CI 出口发布到 CurseForge。
+#
+# 本机发布会被 Cloudflare 对 CurseForge API 的 managed challenge 持续质询
+#（直连 / 香港代理出口都拦），GitHub runner IP 信誉好、质询概率低。
+# 手动触发，绝不挂在 push/tag 上——发布是对外动作。
+#
+# 用法：仓库 Actions → Publish CurseForge → Run workflow →
+#   - versions：逗号分隔，如 1.20.1（留空=全 17 个）
+#   - release_type：release / beta / alpha（默认 release）
+#   - dry_run：勾上则全程只 DryRun（-Pcurseforge_debug=true 只打印 URI 不真传）
+#
+# 一次性仓库配置：
+#   Settings → Secrets → Actions → New secret：CURSEFORGE_TOKEN（勿提交进 gradle.properties）
+name: Publish CurseForge
+
+on:
+  workflow_dispatch:
+    inputs:
+      versions:
+        description: '逗号分隔的 MC 版本，如 1.20.1,1.20.6；留空=全 17 个'
+        required: false
+        default: ''
+      release_type:
+        description: 'release / beta / alpha'
+        required: false
+        default: 'release'
+      dry_run:
+        description: '勾上则全程只 DryRun（不真传，验证链路用）'
+        required: false
+        type: boolean
+        default: false
+
+# 显式最小权限。workflow 只需读仓库（checkout）+ 用 secret 上传到外部 CurseForge，
+# 不需要在仓库里写文件 / 触发其它 workflow，故 contents: read、无 actions/id-token 权限。
+permissions:
+  contents: read
+
+# 同一版本并发跑只会重复上传；整批串行更稳（也利于 Cloudflare 不被并发触发）。
+concurrency:
+  group: publish-curseforge
+  cancel-in-progress: false
+
+jobs:
+  # 把 input.versions 解析成 [{ver, jdk}] 的 JSON 矩阵。
+  # JDK 档取自 versionProperties/<ver>.properties 的 java_version：
+  #   1.20.1–1.20.4 → 17；1.20.5 及之后 → 21。
+  # 留空时默认全部 17 个版本。
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.gen.outputs.matrix }}
+    steps:
+      - id: gen
+        shell: bash
+        run: |
+          set -euo pipefail
+          # 静态全量表：ver → jdk。新增 MC 版本时在此追加一项即可。
+          # 必须写在同一行，单引号串里的反斜杠是字面字符不是行续，会导致 $ALL 拆出非法 token。
+          ALL='1.20.1:17 1.20.2:17 1.20.3:17 1.20.4:17 1.20.5:21 1.20.6:21 1.21.1:21 1.21.2:21 1.21.3:21 1.21.4:21 1.21.5:21 1.21.6:21 1.21.7:21 1.21.8:21 1.21.9:21 1.21.10:21 1.21.11:21'
+
+          input='${{ github.event.inputs.versions }}'
+          if [[ -z "$input" || "$input" == "null" ]]; then
+            wanted="$ALL"
+          else
+            wanted=""
+            for v in $(echo "$input" | tr ',' ' '); do
+              v="$(echo "$v" | xargs)"
+              [[ -z "$v" ]] && continue
+              match=""
+              for entry in $ALL; do
+                if [[ "${entry%%:*}" == "$v" ]]; then match="$entry"; break; fi
+              done
+              if [[ -z "$match" ]]; then
+                echo "::error::未知版本 $v（不在支持列表里）"
+                exit 1
+              fi
+              wanted="$wanted $match"
+            done
+          fi
+
+          # 生成 JSON 数组：[{"ver":"1.20.1","jdk":"17"}, ...]
+          json='['
+          first=1
+          for entry in $wanted; do
+            ver="${entry%%:*}"
+            jdk="${entry##*:}"
+            [[ $first -eq 0 ]] && json+=','
+            json+="{\"ver\":\"$ver\",\"jdk\":\"$jdk\"}"
+            first=0
+          done
+          json+=']'
+          echo "matrix=$json" >> "$GITHUB_OUTPUT"
+          echo "Resolved matrix: $json"
+
+  build-and-publish:
+    needs: resolve
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        include: ${{ fromJSON(needs.resolve.outputs.matrix) }}
+    env:
+      CURSEFORGE_TOKEN: ${{ secrets.CURSEFORGE_TOKEN }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Point wrapper distributionUrl at official source (海外 CI 不走阿里云镜像)
+        shell: bash
+        run: |
+          # wrapper 里 distributionUrl 被转义成 https\://mirrors.aliyun.com/...，海外 CI 走阿里云慢且不稳。
+          # 须在 setup-gradle 之前改，否则它会按阿里云源拉 Gradle。工作区临时改动，build 后 checkout 恢复、不污染 git。
+          sed -i 's#mirrors\.aliyun\.com/gradle/distributions#services.gradle.org/distributions#' \
+            gradle/wrapper/gradle-wrapper.properties
+          grep '^distributionUrl' gradle/wrapper/gradle-wrapper.properties
+
+      - name: Set up JDK ${{ matrix.jdk }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.jdk }}
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-disabled: false
+
+      - name: Build & DryRun probe (verify token/CF link)
+        env:
+          MC_VER: ${{ matrix.ver }}
+          REL_TYPE: ${{ github.event.inputs.release_type }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "=== DryRun probe: $MC_VER (JDK ${{ matrix.jdk }}) ==="
+          # -Pcurseforge_debug=true：插件只打印上传 URI、不真传；验证 token+Cloudflare 链路。
+          # DryRun 失败（403/质询/缺 game-version）就终止，不进真传，避免空耗上传配额。
+          ./gradlew --no-daemon build publishCurseForge "-Pmc_ver=$MC_VER" -x test \
+            -Pcurseforge_debug=true "-Pcurseforge_release_type=$REL_TYPE"
+
+      - name: Publish (real upload) — skip if dry_run
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        env:
+          MC_VER: ${{ matrix.ver }}
+          REL_TYPE: ${{ github.event.inputs.release_type }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "=== Real publish: $MC_VER ==="
+          # 最多重试 3 次，对冲偶发的 Cloudflare 质询窗口（GitHub 较稳但仍可能间歇命中）。
+          for attempt in 1 2 3; do
+            if ./gradlew --no-daemon build publishCurseForge "-Pmc_ver=$MC_VER" -x test \
+                 "-Pcurseforge_release_type=$REL_TYPE"; then
+              echo "OK: $MC_VER (attempt $attempt)"
+              exit 0
+            fi
+            echo "attempt $attempt failed, backing off $((attempt*20))s …"
+            [[ $attempt -lt 3 ]] && sleep $((attempt*20)) || { echo "FAILED: $MC_VER after 3 attempts"; exit 1; }
+          done
+
+      - name: DryRun-only notice
+        if: ${{ github.event.inputs.dry_run == 'true' }}
+        run: echo "::notice::dry_run=true，已跳过真传。验证链路通过后，重跑时取消勾选 dry_run 即真传 ${{ matrix.ver }}。"

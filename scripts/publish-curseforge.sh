@@ -72,7 +72,9 @@ for ver in "${version_list[@]}"; do
   builds_for="$(grep -E '^builds_for=' "$props" | cut -d= -f2- || echo fabric)"
   echo ""
   echo "=== Publish $ver ($builds_for) ==="
-  if ! ./gradlew --no-daemon build publishCurseForge "-Pmc_ver=${ver}" "${extra[@]+"${extra[@]}"}"; then
+  # -x test：发布验证由 scripts/runtime-smoke-test-batch.sh 那条运行时冒烟覆盖（全版本已过），
+  #         common 的 plain JUnit 是开发期单元片段且依赖 MC runtime/原版 API，让它挡 build 只会误伤产线产物。
+  if ! ./gradlew --no-daemon build publishCurseForge "-Pmc_ver=${ver}" -x test "${extra[@]+"${extra[@]}"}"; then
     failed+=("$ver")
     echo "FAILED: $ver"
   else
