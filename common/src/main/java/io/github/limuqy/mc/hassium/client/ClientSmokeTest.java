@@ -153,13 +153,23 @@ public final class ClientSmokeTest {
 
         long delayMs;
         if (state == State.WAIT_JOIN_1) {
-            delayMs = ClientSmokeTest.delayMs * 2;
+            // ROUND1：classic（含 classic+dataplane 并跑）需完整下载 ~1681 chunk 进缓存 → delayMs*2；
+            //   dataplane-only 不下载缓存（只验证数据面路由），delayMs 即可。
+            delayMs = runClassic ? ClientSmokeTest.delayMs * 2 : ClientSmokeTest.delayMs;
         } else {
             // ROUND2：classic+dataplane 同跑时，服务端 dataplane 状态机（3+8+1+5+4+6=27s 最小 + up to 15s step5 超时 ≈ 42s）
             // 在玩家第二次进服后才开始驱动 DP_IDLE→DP_DONE，而 ROUND2 join 与 DP_IDLE 触发（switched=true）几乎同步。
             // 默认 delayMs（15s）远不够 → 等满后客户端 scheduleExit ≈9s 即退服，状态机会被打断。
             // 故 ROUND2 在 dataplane 模式下一致地拿到 PASS/FAIL marker，必须把 ROUND2 窗口扩展到覆盖最坏 42s +5s 余量。
-            delayMs = (runDataplane && runClassic) ? Math.max(ClientSmokeTest.delayMs, 50_000L) : ClientSmokeTest.delayMs;
+            // classic-only 只验证 Bloom filter 命中走完 → delayMs/2 即可，floor 3000ms 防止用户传极小值导致 ROUND2 短到断开尚未重连完。
+            if (runDataplane && runClassic) {
+                delayMs = Math.max(ClientSmokeTest.delayMs, 50_000L);
+            } else if (runClassic) {
+                delayMs = Math.max(3_000L, ClientSmokeTest.delayMs / 2);
+            } else {
+                // dataplane-only 不进入 ROUND2（初始化即 disallow），仅防御兜底
+                delayMs = ClientSmokeTest.delayMs;
+            }
         }
         if (joinAtMs < 0L) {
             joinAtMs = now;
@@ -206,6 +216,16 @@ public final class ClientSmokeTest {
                 long primaryDelta = total - dataDelta;
                 LOGGER.info("HassiumSmokeTest:DATAPLANE_CLIENT_STATS {} dataFrames={} dataBytes={} total={} dataDelta={} primaryDelta={}",
                         roundLabel, dataFrames, dataBytes, total, dataDelta, primaryDelta);
+                // 按 portIdx 区分各 Data 通道实际到达率（PoC share WRR 下两通道观测独立）
+                java.util.SortedMap<Integer, long[]> perPort =
+                        io.github.limuqy.mc.hassium.network.dataplane.DataPlaneClientBundle.snapshotPerPort();
+                StringBuilder perPortLog = new StringBuilder();
+                for (java.util.Map.Entry<Integer, long[]> e : perPort.entrySet()) {
+                    perPortLog.append("port").append(e.getKey()).append('=').append(e.getValue()[0]);
+                    perPortLog.append('f').append('/').append(io.github.limuqy.mc.hassium.metrics.MetricsTextFormatter.formatBytes(e.getValue()[1]));
+                }
+                LOGGER.info("HassiumSmokeTest:DATAPLANE_PER_PORT {} {}",
+                        roundLabel, perPortLog.length() == 0 ? "(no Data frames)" : perPortLog.toString());
             }
 
             boolean ok = validateStats(plain);

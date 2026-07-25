@@ -193,6 +193,10 @@ public class DataPlaneServer {
                         "DataPlaneServer: routed portIdx={} frameType={} payloadSize={} -> encFrameSize={} weight={} addr={}",
                         target.portIdx, frameType, payload.length, frame.length, target.weight, target.channel.remoteAddress());
             }
+            target.channel.writeAndFlush(io.netty.buffer.Unpooled.wrappedBuffer(frame))
+                    .addListener(ChannelFutureListener.FIRE_EXCEPTION_ON_FAILURE);
+            // 记录 Data 路由分流（口径 = payload 等价字节，与 Primary 侧对齐）
+            io.github.limuqy.mc.hassium.metrics.NetworkStats.recordBulkSentData(payload.length);
             return true;
         } catch (Exception e) {
             LOGGER.warn("DataPlaneServer: encrypt/write failed, falling back to Primary", e);

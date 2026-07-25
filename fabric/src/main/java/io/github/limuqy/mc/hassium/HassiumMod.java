@@ -27,14 +27,17 @@ public class HassiumMod implements ModInitializer {
         // 设置区块发送器
         ChunkSender.setInstance((player, compressed) -> {
             // PoC 多通道数据面: 先尝试经 Data 通道路由 bulk；命中/丢弃则不再走 Primary
-            if (DataPlanePoCConfig.isEnabled()) {
-                byte[] payload = compressed.encode();
-                boolean routed = DataPlaneServer.tryRouteBulk(
-                        DataPlanePoCConfig.pseudoPlayerId(),
-                        DataPlaneFrame.TYPE_BULK_COMPRESSED_CHUNK,
-                        payload);
-                if (routed) return;
+            byte[] payload = DataPlanePoCConfig.isEnabled() ? compressed.encode() : null;
+            if (payload != null
+                    && DataPlaneServer.tryRouteBulk(
+                            DataPlanePoCConfig.pseudoPlayerId(),
+                            DataPlaneFrame.TYPE_BULK_COMPRESSED_CHUNK,
+                            payload)) {
+                return; // 已走 Data 通道
             }
+            // 未走 Data 通道 → 走 Primary，记分流统计（口径 = encode() 总长度，与 Data 侧对齐）
+            int primaryBytes = payload != null ? payload.length : (compressed.compressedData == null ? 0 : compressed.compressedData.length);
+            io.github.limuqy.mc.hassium.metrics.NetworkStats.recordBulkSentPrimary(primaryBytes);
             FabricNetworkManager.sendCompressedChunk(player, compressed);
         });
 

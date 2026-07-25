@@ -91,6 +91,28 @@ public class NetworkStats {
         metrics.incrementDataRequestsReceived();
     }
 
+    // ===== 数据面分流埋点 =====
+
+    /**
+     * 记录经 Primary 路径发送的 bulk 帧（PoC 多通道路由统计）。
+     *
+     * @param bytes CompressedChunkData.encode() 输出长度
+     */
+    public static void recordBulkSentPrimary(long bytes) {
+        if (!enabled) return;
+        metrics.recordBulkSentPrimary(bytes);
+    }
+
+    /**
+     * 记录经 Data 通道发送的 bulk 帧（tryRouteBulk 写出成功时累加）。
+     *
+     * @param bytes 同 Primary 侧口径的 payload 长度
+     */
+    public static void recordBulkSentData(long bytes) {
+        if (!enabled) return;
+        metrics.recordBulkSentData(bytes);
+    }
+
     // ===== 客户端埋点 =====
 
     /**

@@ -41,9 +41,18 @@ public class DataPlaneClientBundle {
      * bulk 经 Primary 到达绝不会进该路径，故「Data 通道来的 bulk」与「total − Data」可分离。
      * <p>
      * 冒烟断言用 delta（结束快照 − 起始快照），跨轮前显式 {@link #resetDataBulkCounters()}。
+     * <p>
+     * 1.2.0 起在聚合 {@code bulkFramesData/bulkBytesData} 之外，再加 per-portIdx（1-based 端点序号）
+     * 帧计数 Map，便于冒烟区分各 Data 通道的实际到达率（PoC share WRR 下两通道观测独立）。
      */
     public static volatile long bulkFramesData = 0;
     public static volatile long bulkBytesData = 0;
+    /** per-portIdx → 帧数；key=portIdx(1-based)，value=累计到达帧数。 */
+    private static final java.util.concurrent.ConcurrentHashMap<Integer, java.util.concurrent.atomic.AtomicLong>
+            perPortFrames = new java.util.concurrent.ConcurrentHashMap<>();
+    /** per-portIdx → 累计 payload 字节数。 */
+    private static final java.util.concurrent.ConcurrentHashMap<Integer, java.util.concurrent.atomic.AtomicLong>
+            perPortBytes = new java.util.concurrent.ConcurrentHashMap<>();
 
     /** 当前 Data 通道 bulk 帧累计数。 */
     public static long getBulkFramesData() { return bulkFramesData; }
@@ -51,8 +60,40 @@ public class DataPlaneClientBundle {
     /** 当前 Data 通道 bulk 累计字节。 */
     public static long getBulkBytesData() { return bulkBytesData; }
 
+    /** 取 per-portIdx 累计帧数；不存在则为 0。 */
+    public static long getBulkFramesByPort(int portIdx) {
+        java.util.concurrent.atomic.AtomicLong v = perPortFrames.get(portIdx);
+        return v == null ? 0L : v.get();
+    }
+
+    /** 取 per-portIdx 累计字节数；不存在则为 0。 */
+    public static long getBulkBytesByPort(int portIdx) {
+        java.util.concurrent.atomic.AtomicLong v = perPortBytes.get(portIdx);
+        return v == null ? 0L : v.get();
+    }
+
+    /** per-portIdx 视图快照（按 key 升序），冒烟 {@code DATAPLANE_CLIENT_STATS} 输出用。 */
+    public static java.util.SortedMap<Integer, long[]> snapshotPerPort() {
+        java.util.TreeMap<Integer, long[]> snap = new java.util.TreeMap<>();
+        for (Integer k : perPortFrames.keySet()) snap.put(k, new long[]{getBulkFramesByPort(k), getBulkBytesByPort(k)});
+        return snap;
+    }
+
+    /** 记录一条 bulk 帧（聚合 + per-portIdx）到达；handleBulkChunk 调用。 */
+    private static void onBulkArrived(int portIdx, long payloadLen) {
+        bulkFramesData++;
+        if (payloadLen > 0) bulkBytesData += payloadLen;
+        perPortFrames.computeIfAbsent(portIdx, k -> new java.util.concurrent.atomic.AtomicLong()).incrementAndGet();
+        if (payloadLen > 0) perPortBytes.computeIfAbsent(portIdx, k -> new java.util.concurrent.atomic.AtomicLong()).addAndGet(payloadLen);
+    }
+
     /** 复位 Data 帧/字节计数（冒烟跨轮/跨阶段边界调用，避免污染）。 */
-    public static void resetDataBulkCounters() { bulkFramesData = 0; bulkBytesData = 0; }
+    public static void resetDataBulkCounters() {
+        bulkFramesData = 0;
+        bulkBytesData = 0;
+        perPortFrames.clear();
+        perPortBytes.clear();
+    }
 
 
     /** 连接到所有 PoC 端点并发送 BindRequest */
@@ -231,9 +272,8 @@ public class DataPlaneClientBundle {
         private void handleBulkChunk(byte[] plaintextPayload) {
             // plaintextPayload = CompressedChunkData.encode() 输出
             // 交给 ClientChunkHandler 走标准路径: 解压 → 入库 → apply
-            // 累加 PoC 临时 Data 帧计数（bulk 经 Data 到达必经此路径；经 Primary 到达不累加）
-            bulkFramesData++;
-            if (plaintextPayload != null) bulkBytesData += plaintextPayload.length;
+            // 累加 PoC 临时 Data 帧计数（聚合 + per-portIdx）；bulk 经 Data 到达必经此路径；经 Primary 到达不累加
+            onBulkArrived(portIdx, plaintextPayload == null ? 0L : plaintextPayload.length);
             if (DataPlanePoCConfig.isDataplaneLogEnabled()) {
                 DebugLogger.info(DebugLogger.LogType.DATAPLANE,
                         "DataPlaneClient: handleBulkChunk portIdx={} payloadLen={}", portIdx, plaintextPayload.length);

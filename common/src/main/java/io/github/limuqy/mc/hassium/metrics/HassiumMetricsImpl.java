@@ -64,6 +64,12 @@ public class HassiumMetricsImpl implements HassiumMetrics {
     private final AtomicLong lightRecomputeTimeNs = new AtomicLong(0);
     private final AtomicLong lightDeltaReceivedCount = new AtomicLong(0);
 
+    // 数据面分流指标（PoC 多通道路由统计；口径 = 服务端发出帧 payload 等价字节数）
+    private final AtomicLong bulkFramesPrimary = new AtomicLong(0);
+    private final AtomicLong bulkBytesPrimary = new AtomicLong(0);
+    private final AtomicLong bulkFramesData = new AtomicLong(0);
+    private final AtomicLong bulkBytesData = new AtomicLong(0);
+
     // 错误指标
     private final AtomicLong storageErrors = new AtomicLong(0);
     private final AtomicLong networkErrors = new AtomicLong(0);
@@ -273,6 +279,28 @@ public class HassiumMetricsImpl implements HassiumMetrics {
         return lightDeltaReceivedCount.get();
     }
 
+    // ===== 数据面分流量指标 =====
+
+    @Override
+    public long getBulkFramesPrimary() {
+        return bulkFramesPrimary.get();
+    }
+
+    @Override
+    public long getBulkBytesPrimary() {
+        return bulkBytesPrimary.get();
+    }
+
+    @Override
+    public long getBulkFramesData() {
+        return bulkFramesData.get();
+    }
+
+    @Override
+    public long getBulkBytesData() {
+        return bulkBytesData.get();
+    }
+
     @Override
     public long getStorageErrors() {
         return storageErrors.get();
@@ -322,6 +350,10 @@ public class HassiumMetricsImpl implements HassiumMetrics {
         actualBytesReceived.set(0);
         metadataBytesSent.set(0);
         metadataBytesReceived.set(0);
+        bulkFramesPrimary.set(0);
+        bulkBytesPrimary.set(0);
+        bulkFramesData.set(0);
+        bulkBytesData.set(0);
         dataRequestsSent.set(0);
         dataRequestsReceived.set(0);
         chunksCompressed.set(0);
@@ -655,6 +687,28 @@ public class HassiumMetricsImpl implements HassiumMetrics {
         chunksDecompressed.incrementAndGet();
     }
 
+    // ===== 数据面分流记录方法 =====
+
+    /**
+     * 记录经 Primary 路径发送的 bulk 帧（PoC 多通道路由统计）。
+     *
+     * @param bytes CompressedChunkData.encode() 输出长度（与 Data 侧口径一致）
+     */
+    public void recordBulkSentPrimary(long bytes) {
+        bulkFramesPrimary.incrementAndGet();
+        if (bytes > 0) bulkBytesPrimary.addAndGet(bytes);
+    }
+
+    /**
+     * 记录经 Data 通道发送的 bulk 帧（tryRouteBulk 写出成功时累加）。
+     *
+     * @param bytes 同 Primary 侧的 payload 长度（不含 Data 加密帧 nonce/meta）
+     */
+    public void recordBulkSentData(long bytes) {
+        bulkFramesData.incrementAndGet();
+        if (bytes > 0) bulkBytesData.addAndGet(bytes);
+    }
+
     /**
      * 获取压缩统计信息
      */
@@ -696,6 +750,10 @@ public class HassiumMetricsImpl implements HassiumMetrics {
                         "  数据请求: 发送 %d, 接收 %d\n" +
                         "  分段增量: 请求 %d, 接收 %d\n" +
                         "  区块: 压缩 %d, 解压 %d\n" +
+                        "数据面分流:\n" +
+                        "  Primary: %d 帧 (%s)\n" +
+                        "  Data: %d 帧 (%s)\n" +
+                        "  分流比: %s\n" +
                         "错误:\n" +
                         "  存储: %d\n" +
                         "  网络: %d\n" +
@@ -717,9 +775,19 @@ public class HassiumMetricsImpl implements HassiumMetrics {
                 dataRequestsSent.get(), dataRequestsReceived.get(),
                 sectionDeltaRequestsSent.get(), sectionDeltaChunksReceived.get(),
                 chunksCompressed.get(), chunksDecompressed.get(),
+                bulkFramesPrimary.get(), MetricsTextFormatter.formatBytes(bulkBytesPrimary.get()),
+                bulkFramesData.get(), MetricsTextFormatter.formatBytes(bulkBytesData.get()),
+                MetricsTextFormatter.formatPercent(getBulkDataSharePercent()),
                 storageErrors.get(),
                 networkErrors.get(),
                 compressionErrors.get()
         );
+    }
+
+    /** Data 通道分流比例（share/exclusive 模式下 Data 帧占总帧数的百分比；PoC 关注 Primary vs Data 走向）。 */
+    public double getBulkDataSharePercent() {
+        long total = bulkFramesPrimary.get() + bulkFramesData.get();
+        if (total == 0) return 0.0;
+        return (double) bulkFramesData.get() / total * 100.0;
     }
 }

@@ -232,6 +232,26 @@ public interface HassiumMetrics {
      */
     long getLightDeltaReceivedCount();
 
+    // ===== 数据面分流指标 =====
+
+    /** 经 Primary 路径发送的 bulk 帧总数。 */
+    long getBulkFramesPrimary();
+
+    /** 经 Primary 路径发送的 bulk 帧累计字节数。 */
+    long getBulkBytesPrimary();
+
+    /** 经 Data 通道发送的 bulk 帧总数。 */
+    long getBulkFramesData();
+
+    /** 经 Data 通道发送的 bulk 帧累计字节数。 */
+    long getBulkBytesData();
+    /** Data 通道分流比例（占总帧数的百分比）。 */
+    default double getBulkDataSharePercent() {
+        long total = getBulkFramesPrimary() + getBulkFramesData();
+        if (total == 0) return 0.0;
+        return (double) getBulkFramesData() / total * 100.0;
+    }
+
     // ===== 统计方法 =====
 
     /**
