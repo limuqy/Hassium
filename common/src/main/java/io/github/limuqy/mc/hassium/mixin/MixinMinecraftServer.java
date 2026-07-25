@@ -4,6 +4,7 @@ import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.concurrent.MainThreadDispatcher;
 import io.github.limuqy.mc.hassium.network.PlayerCompressionTracker;
 import io.github.limuqy.mc.hassium.network.ServerChunkPushManager;
+import io.github.limuqy.mc.hassium.network.dataplane.DataPlaneServer;
 import io.github.limuqy.mc.hassium.server.ServerSmokeTest;
 import net.minecraft.server.MinecraftServer;
 import org.spongepowered.asm.mixin.Mixin;
@@ -45,6 +46,8 @@ public class MixinMinecraftServer {
         }
         // 初始化服务端冒烟测试（设置初始 VD=20）
         ServerSmokeTest.initIfEnabled(server);
+        // 绑定 PoC 数据端口（多通道数据平面）
+        DataPlaneServer.bind();
     }
 
     @Inject(method = "stopServer", at = @At("HEAD"))
@@ -52,6 +55,8 @@ public class MixinMinecraftServer {
         // 服务器关闭时清理推送管理器
         ServerChunkPushManager.getInstance().shutdown();
         Constants.LOG.info("Hassium: ServerChunkPushManager shutdown");
+        // 关闭 PoC 数据端口（多通道数据平面）
+        DataPlaneServer.shutdown();
         // 清理玩家压缩状态追踪
         PlayerCompressionTracker.clear();
         Constants.LOG.info("Hassium: PlayerCompressionTracker cleared");
