@@ -1530,6 +1530,43 @@ MTF 校验由服务端 `ServerSmokeTest.driveDataplane` 自驱（无需新增 C2
 
 ---
 
+## 端到端首次冒烟（2026-07-26）：dataplane 阶段真连跑 + 缺陷发现
+
+此前 §7 三项硬断言**从未端到端跑通**——单测通过但运行时未验证。根因：`buildSrc/src/main/groovy/loom-fabric.gradle` 的 **server runConfig 漏传 `-Dhassium.smokePhases`**，仅 client 分支传了 phases；结果服务端 `ServerSmokeTest.initIfEnabled` 读默认 `classic`，`runDataplane=false`，`dpState` 永停 `DP_IDLE`，永远不输出 dataplane marker。
+
+本次修 loom（server 分支补 `def phases = project.findProperty('hassiumSmokePhases') ?: 'classic'` 与 `-Dhassium.smokePhases=${phases}`），并在 `scripts/runtime-smoke-test.ps1` 加 `-SmokePhases` 参数（默认 `classic,dataplane`）后，真跑 1.20.1 fabric：
+`runtime-smoke-test.ps1 -Ver 1.20.1 -Loader fabric -Phase I -SessionId 1.20.1_fabric_dp -CleanWorld -SmokePhases classic,dataplane -ClientTimeoutSec 360`
+
+### ✅ 通过项
+- **loom server phases 接线生效**：server stats 首行 `HassiumSmokeTest:SERVER enabled vd1=20 vd2=8 phases=classic,dataplane` —— 服务端真的进 dataplane 阶段。
+- **HKDF + AES/CFB8 + 帧分帧端到端贯通**：客户端日志 `connected to 127.0.0.1:25566/25567` + `BindAck result=OK` + 几十条 `enc frame in → dec ok type=3 → handleBulkChunk`，Data 通道两条均正常承载并解密 bulk 流量。
+- **classic 双轮不回归**：`Round1Pass=true` `Round2Pass=true` `ServerSwitched=true` `HasPass=true` `ClientExitCode=0`，统计正常（ROUND1 VD20 加载 1666 chunk 压缩 2.58:1；ROUND2 VD8 缓存命中 99.7%）。
+
+### ❌ dataplane 硬断言未拿到 PASS —— 根因非先前预估的 primaryDelta
+- 服务端 dataplane marker 全序列：
+  - `00:52:03 DATAPLANE warmup begin baseline chunksDecompressed=0 dataFrames=0`
+  - `00:52:05 nioEventLoopGroup DataPlaneServer: exception io.netty.handler.timeout.ReadTimeoutException` ×2（两条 Data 通道同时被 5s 读超时踢掉）
+  - `00:52:11 DATAPLANE warmup: no Data frames received in window (lenient)`
+  - `00:52:12 DATAPLANE step4 verify bundle.size=0 degraded=false (expect size==1)` ❌ 期望 1，实际 0
+  - `00:52:17 DATAPLANE step5 setRuntimeMode=exclusive`
+  - `00:52:21 DATAPLANE step5 kill portIdx=2 result=false (无候选)`
+  - **之后无 `DATAPLANE_PASS` / `DATAPLANE_FAIL` marker**：状态机卡在 `DP_KILL_ALL→DP_WAIT_DEGRADED` 的 6s/15s 等待中，进程已被脚本 `Stop-Process` 在客户端退出后强制收尾，未走到 `DP_DONE`。
+- `> Task :fabric:runServer FAILED` 为误报：服务端业务全程正常，gradle 把脚本强杀的非零退出码当 FAILED；客户端侧 `BUILD SUCCESSFUL`。
+
+### 真实根因：Data 通道空闲 5s ReadTimeout 踢链路
+- `DataPlaneServer.DataPlaneChannelInitializer` 给每条 Data 通道装了 `ReadTimeoutHandler(5s)`，但 PoC **没有 KeepAlive/空闲保活**。bulk 流量在 ROUND1 玩家进服那一刻激喷一阵（`00:51:26` 几十条 routed），随后 chunkHash 增量推送 perTick=32 节流，Data 通道转入低载/空闲；ROUND2 玩家 `00:52:00` 重连后 Data 帧更稀疏，5s 内无入帧即被服务端 `ReadTimeout` 关闭。
+- 状态机 `DP_WARMUP` 8s 窗口结束时（`00:52:11`），两条 Data 通道已于 `00:52:05` 被踢 → `bundle.dataChannels` 已空 → `step4 bundle.size=0`、后续 `kill portIdx=2 result=false` 都在测空 bundle。
+- 与先前文档预估的「分离 JVM primaryDelta=0 卡 PASS」不同：实际卡点在**更早的 step4/通道存活**。primaryDelta 计数溯源缺陷理论上仍存在，但本次未被触达。
+
+### 待办（PoC 真实缺陷，非本次冒烟回归点）
+1. **Data 通道保活**：在 `DataPlaneServer` / `DataPlaneClientBundle` 加 KEEPALIVE（type=5）/ KEEPALIVE_ACK（type=6）双向心跳（帧类型常量已定义但未发），或把 `ReadTimeoutHandler(5s)` 调大到 30s+ 并配合心跳；否则空闲场景 Data 通道不可用。
+2. **dataplane 状态机抗压**：`DP_WARMUP` 在 Data 帧计数恒 0（分离 JVM 反射 -1）时只走 lenient，但 `DP_KILL_ONE→DP_VERIFY_ONE` 期望 `bundle.size==1` 的硬断言会在通道被踢后恒为 0 → 永远 FAIL。应让状态机在 `bundle.size` 异常时显式 `DATAPLANE_FAIL` 而非静默卡 15s 超时。
+3. **warmup baseline `dataFrames` 在分离 JVM 取不到**：`readCDataFrameCount()` 反射同 JVM 才有值；分离进程下 warmup 判定退化为 lenient，建议服务端自记 `DataPlaneServer` 侧已路由帧计数替代反射。
+
+
+
+---
+
 **Plan complete. Two execution options:**
 
 **1. Subagent-Driven (recommended)** — I dispatch a fresh subagent per task with isolated worktree, review between tasks, fast iteration

@@ -16,7 +16,8 @@ param(
     [int]$DelayMs = 15000,
     [int]$ReconnectDelayMs = 3000,
     [int]$ServerReadyTimeoutSec = 160,
-    [int]$ClientTimeoutSec = 100
+    [int]$ClientTimeoutSec = 100,
+    [string]$SmokePhases = "classic,dataplane"
 )
 
 $ErrorActionPreference = "Continue"
@@ -137,7 +138,7 @@ if ($conns) {
 # 5. 启动服务端（后台，启用 ServerSmokeTest）
 Write-Host "[$SessionId] [4/9] 启动服务端 ($Loader / $Ver)..."
 $gradlew = Join-Path $projectRoot "gradlew.bat"
-$serverArgs = @(":${Loader}:runServer", "-PhassiumSmokeTest=true", "-Pmc_ver=${Ver}")
+$serverArgs = @(":${Loader}:runServer", "-PhassiumSmokeTest=true", "-PhassiumSmokePhases=${SmokePhases}", "-Pmc_ver=${Ver}")
 $server = Start-Process -FilePath $gradlew `
     -ArgumentList $serverArgs `
     -RedirectStandardOutput $serverLog `
@@ -193,6 +194,7 @@ $clientArgs = @(
     "-PhassiumSmokeHost=$effectiveHost",
     "-PhassiumSmokeDelayMs=$DelayMs",
     "-PhassiumSmokeReconnectDelayMs=$ReconnectDelayMs",
+    "-PhassiumSmokePhases=$SmokePhases",
     "-Pmc_ver=${Ver}"
 )
 $clientProc = Start-Process -FilePath $gradlew `

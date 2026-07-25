@@ -36,8 +36,10 @@ loom {
                 // 无 GUI，避免头少环境挂起
                 programArgs.add('nogui')
                 // 服务端冒烟：启动 VD=20，玩家退出后切 VD=8
+                def phases = project.findProperty('hassiumSmokePhases') ?: 'classic'
                 vmArgs.addAll([
-                        "-Dhassium.serverSmokeTest=true"
+                        "-Dhassium.serverSmokeTest=true",
+                        "-Dhassium.smokePhases=${phases}"
                 ])
             }
         }
