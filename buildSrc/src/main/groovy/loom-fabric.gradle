@@ -18,11 +18,13 @@ loom {
                 def host = project.findProperty('hassiumSmokeHost') ?: '127.0.0.1:25565'
                 def delayMs = project.findProperty('hassiumSmokeDelayMs') ?: '10000'
                 def reconnectDelayMs = project.findProperty('hassiumSmokeReconnectDelayMs') ?: '3000'
+                def phases = project.findProperty('hassiumSmokePhases') ?: 'classic'
                 vmArgs.addAll([
                         "-Dhassium.smokeTest=true",
                         "-Dhassium.smokeTest.delayMs=${delayMs}",
                         "-Dhassium.smokeTest.reconnectDelayMs=${reconnectDelayMs}",
-                        "-Dhassium.smokeTest.host=${host}"
+                        "-Dhassium.smokeTest.host=${host}",
+                        "-Dhassium.smokePhases=${phases}"
                 ])
                 programArgs.addAll([
                         '--quickPlayMultiplayer', host.toString()

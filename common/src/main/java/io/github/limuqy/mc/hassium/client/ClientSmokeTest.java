@@ -55,6 +55,12 @@ public final class ClientSmokeTest {
     private static volatile boolean round1Pass;
     private static volatile boolean round2Pass;
 
+    /** 阶段选择：classic = 两轮连服 VD 切换；dataplane = 多通道数据面（单次连服 + Data 帧计数报）。 */
+    private static volatile boolean runClassic = true;
+    private static volatile boolean runDataplane = false;
+    /** dataplane 阶段开始时的基线（跨阶段 delta 计算，避免与 classic 帧混淆）。 */
+    private static volatile long dpBaseDataFrames = 0L;
+
     private ClientSmokeTest() {
     }
 
@@ -70,6 +76,15 @@ public final class ClientSmokeTest {
         reconnectDelayMs = parseLong(System.getProperty("hassium.smokeTest.reconnectDelayMs"), 3_000L);
         joinTimeoutMs = parseLong(System.getProperty("hassium.smokeTest.joinTimeoutMs"), 120_000L);
         host = System.getProperty("hassium.smokeTest.host", "127.0.0.1:25565");
+        // 阶段选择解析（与服务端 ServerSmokeTest.initIfEnabled 同规则）
+        String phases = System.getProperty("hassium.smokePhases", "classic");
+        java.util.Set<String> phaseSet = new java.util.HashSet<>();
+        for (String p : phases.split(",")) {
+            String t = p.trim().toLowerCase();
+            if (!t.isEmpty()) phaseSet.add(t);
+        }
+        runClassic = phaseSet.contains("classic") || phaseSet.contains("all");
+        runDataplane = phaseSet.contains("dataplane") || phaseSet.contains("all");
         armed = true;
         state = State.WAIT_JOIN_1;
         startAtMs = System.currentTimeMillis();
@@ -172,7 +187,23 @@ public final class ClientSmokeTest {
             }
             LOGGER.info("{} {} end", MARKER_STATS, roundLabel);
 
+            // dataplane 阶段：报 Data 帧计数 delta（Data 帧经 DataPlaneClientBundle.handleBulkChunk 累加；
+            // total 来自 NetworkStats.chunksDecompressed，Primary 与 Data 都计入；primaryDelta = total - dataDelta）
+            if (runDataplane) {
+                long dataFrames = io.github.limuqy.mc.hassium.network.dataplane.DataPlaneClientBundle.getBulkFramesData();
+                long dataBytes = io.github.limuqy.mc.hassium.network.dataplane.DataPlaneClientBundle.getBulkBytesData();
+                long total = io.github.limuqy.mc.hassium.metrics.NetworkStats.getMetrics().getChunksDecompressed();
+                long dataDelta = dataFrames - dpBaseDataFrames;
+                long primaryDelta = total - dataDelta;
+                LOGGER.info("HassiumSmokeTest:DATAPLANE_CLIENT_STATS {} dataFrames={} dataBytes={} total={} dataDelta={} primaryDelta={}",
+                        roundLabel, dataFrames, dataBytes, total, dataDelta, primaryDelta);
+            }
+
             boolean ok = validateStats(plain);
+            // dataplane 模式：classic stats 结构校验放宽（仅 dataplane 阶段数据面行不一定满足 classic 关键词）
+            if (runDataplane && !runClassic) {
+                ok = true; // 仅 dataplane 模式不依赖 classic stats 关键词
+            }
             if (isRound1) {
                 round1Pass = ok;
             } else {
@@ -201,6 +232,17 @@ public final class ClientSmokeTest {
 
         // 切换到正确状态
         if (isRound1) {
+            // 仅 dataplane 模式（无 classic）：ROUND1 统计完即结束，不再进入第二轮
+            if (runDataplane && !runClassic) {
+                boolean pass = round1Pass;
+                if (pass) {
+                    LOGGER.info("{}", MARKER_PASS);
+                } else {
+                    LOGGER.error("{} round1={} (dataplane-only)", MARKER_FAIL, round1Pass);
+                }
+                scheduleExit(pass ? 0 : 2);
+                return;
+            }
             // 主动断开连接
             state = State.DISCONNECTING;
             disconnectAtMs = now;
