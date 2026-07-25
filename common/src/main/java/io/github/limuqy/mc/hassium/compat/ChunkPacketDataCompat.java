@@ -197,6 +197,7 @@ public final class ChunkPacketDataCompat {
      * @param chunkZ         区块 Z
      * @param registryAccess 1.20.5+ 注册表（解码 BE type）
      */
+    @SuppressWarnings("deprecation") // Forge: BuiltInRegistries 全体字段在 Forge patched jar 中被标记 @Deprecated
     public static ListTag readBlockEntitiesAsNbt(FriendlyByteBuf buf, int chunkX, int chunkZ,
                                                  RegistryAccess registryAccess) {
         ListTag list = new ListTag();
@@ -351,6 +352,7 @@ public final class ChunkPacketDataCompat {
         return buf.readByteArray();
     }
 
+    @SuppressWarnings("deprecation") // Forge: BuiltInRegistries 字段在 Forge patched jar 中被标记 @Deprecated
     private static CompoundTag toBlockEntityNbt(int packedXZ, int y, BlockEntityType<?> type,
                                                 CompoundTag tag, int chunkX, int chunkZ) {
         if (type == null) {

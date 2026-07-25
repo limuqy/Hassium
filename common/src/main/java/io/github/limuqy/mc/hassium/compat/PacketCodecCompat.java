@@ -193,6 +193,7 @@ public final class PacketCodecCompat {
             PacketFlow flow,
             RegistryAccess registryAccess
     ) {
+        @SuppressWarnings("deprecation") // NeoForge 1.21.11+: decorator(1-param) deprecated; 2-param 需 ConnectionType.OTHER(仅 NeoForge classpath)
         var decorator = net.minecraft.network.RegistryFriendlyByteBuf.decorator(registryAccess);
 #if MC_VER < MC_1_21_5
         return playUnbound(flow).bind(decorator);
@@ -306,6 +307,7 @@ public final class PacketCodecCompat {
         if (registryAccess == null) {
             registryAccess = RegistryAccess.EMPTY;
         }
+        @SuppressWarnings("deprecation") // NeoForge 1.21.11+: RegistryFriendlyByteBuf(2-param) deprecated; 3-param 需 ConnectionType.OTHER(仅 NeoForge classpath)
         net.minecraft.network.RegistryFriendlyByteBuf buf =
                 new net.minecraft.network.RegistryFriendlyByteBuf(Unpooled.buffer(), registryAccess);
         try {

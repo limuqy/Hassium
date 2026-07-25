@@ -700,6 +700,7 @@ public class ServerChunkPushManager {
      * <p>
      * 收集指定区块的所有 blockEntity 数据并发送，不传输完整区块。
      */
+    @SuppressWarnings("deprecation") // Forge: BuiltInRegistries 字段在 Forge patched jar 中被标记 @Deprecated
     public void handleBlockEntityRequest(ServerPlayer player, BlockEntityRequestC2SPacket request) {
         if (!player.isAlive() || player.hasDisconnected()) { return; }
 
@@ -783,6 +784,7 @@ public class ServerChunkPushManager {
     /**
      * 收集 chunk 中所有 blockEntity 的数据
      */
+    @SuppressWarnings("deprecation") // Forge: BuiltInRegistries 字段在 Forge patched jar 中被标记 @Deprecated
     private List<SectionDeltaS2CPacket.BlockEntityData> collectBlockEntities(LevelChunk chunk) {
         List<SectionDeltaS2CPacket.BlockEntityData> result = new ArrayList<>();
         for (Map.Entry<BlockPos, BlockEntity> entry : chunk.getBlockEntities().entrySet()) {
@@ -1001,6 +1003,7 @@ public class ServerChunkPushManager {
     /**
      * 将区块包编码为线格式字节（须在持有 RegistryAccess 的线程调用，通常为主线程）。
      */
+    @SuppressWarnings("deprecation") // NeoForge 1.21.11+: RegistryFriendlyByteBuf(2-param) deprecated; 3-param 需 ConnectionType.OTHER(仅 NeoForge)
     private byte[] encodeChunkPacket(ClientboundLevelChunkWithLightPacket chunkPacket,
                                      RegistryAccess registryAccess) {
 #if MC_VER < MC_1_20_5

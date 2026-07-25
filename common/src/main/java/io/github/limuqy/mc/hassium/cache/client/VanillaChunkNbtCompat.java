@@ -75,6 +75,7 @@ final class VanillaChunkNbtCompat {
         return result;
     }
 
+    @SuppressWarnings("deprecation") // Forge: Block.BLOCK_STATE_REGISTRY 在 Forge patched jar 中被标记 @Deprecated
     private static CompoundTag encodeSection(LevelChunkSection section, int y, RegistryAccess registryAccess)
             throws ConversionException {
         CompoundTag result = new CompoundTag();

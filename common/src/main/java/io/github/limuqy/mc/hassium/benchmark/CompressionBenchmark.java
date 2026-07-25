@@ -52,7 +52,7 @@ public final class CompressionBenchmark {
                 // 测试解压
                 long decompressStart = System.nanoTime();
                 for (int i = 0; i < ITERATIONS; i++) {
-                    Zstd.decompress(compressed, (int) Zstd.decompressedSize(compressed));
+                    Zstd.decompress(compressed, (int) Zstd.getFrameContentSize(compressed));
                 }
                 long decompressTime = System.nanoTime() - decompressStart;
 

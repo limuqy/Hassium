@@ -28,9 +28,8 @@ public class ZstdCompressionCodec implements CompressionCodec {
     @Override
     public byte[] decompress(byte[] input, CompressionOptions options) throws CompressionException {
         try {
-            // 使用推荐的解压方法
-            // Zstd.decompress(byte[], int) 会自动处理大小
-            byte[] result = Zstd.decompress(input, (int) Zstd.decompressedSize(input));
+            // Zstd.getFrameContentSize(byte[]) 获取未压缩大小，等价于已过时的 decompressedSize
+            byte[] result = Zstd.decompress(input, (int) Zstd.getFrameContentSize(input));
             if (result == null || result.length == 0) {
                 throw new CompressionException.DecompressionFailedException("ZSTD decompression failed: empty output");
             }

@@ -206,7 +206,9 @@ public final class ChunkDiskCodec {
      * @param level 客户端世界
      * @return chunk NBT；失败返回 null
      */
+    @SuppressWarnings("deprecation") // NeoForge 1.21.11+: RegistryFriendlyByteBuf(2-param) deprecated; 3-param 需 ConnectionType.OTHER(仅 NeoForge)
     public static CompoundTag levelChunkToNbt(LevelChunk chunk, ClientLevel level) {
+        if (chunk == null || level == null) return null;
         if (chunk == null || level == null) return null;
         try {
             net.minecraft.world.level.lighting.LevelLightEngine lightEngine = level.getLightEngine();

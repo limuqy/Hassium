@@ -80,7 +80,7 @@ public class ZstdDictionaryCompressionCodec implements CompressionCodec {
         }
 
         try {
-            int decompressedSize = (int) Zstd.decompressedSize(input);
+            int decompressedSize = (int) Zstd.getFrameContentSize(input);
             if (decompressedSize <= 0) {
                 decompressedSize = input.length * 4; // 估算值
             }

@@ -111,9 +111,10 @@ public class ZstdContextEncoder extends MessageToByteEncoder<ByteBuf> {
     }
 
     @Override
+    @SuppressWarnings("deprecation") // ChannelHandlerAdapter.exceptionCaught deprecated in Netty 4.1.97+
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) throws Exception {
         LOGGER.error("ZSTD encoder error", cause);
-        super.exceptionCaught(ctx, cause);
+        ctx.fireExceptionCaught(cause);
     }
 
     public synchronized void close() {

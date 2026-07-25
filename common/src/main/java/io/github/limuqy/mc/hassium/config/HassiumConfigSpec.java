@@ -551,7 +551,8 @@ public final class HassiumConfigSpec {
                     .comment("是否启用紧凑包头（主要用于聚合包内部；默认 true）[实验性]")
                     .translation("hassium.configuration.network.enableCompactHeader")
                     .define("enableCompactHeader", true);
-            networkCompressionBlacklist = builder
+            @SuppressWarnings("deprecation") // Forge/NeoForge 1.21.11+: defineList 3-param 已过时，需 4-param；1.20.1 Forge 无 4-param 签名
+            var compressionBlacklistHolder = builder
                     .comment("压缩/聚合黑名单：包 ID 或命名空间前缀字符串列表。"
                             + "示例：distant_horizons:xxx、某伴生 mod 的 namespace:path。"
                             + "第三方通道被聚合拖慢时可加入。详见 docs/mod-compat.md")
@@ -559,6 +560,7 @@ public final class HassiumConfigSpec {
                     .defineList("compressionBlacklist",
                             () -> new ArrayList<>(HassiumConfig.ServerNetworkConfig.DEFAULT_COMPRESSION_BLACKLIST),
                             o -> o instanceof String);
+            networkCompressionBlacklist = compressionBlacklistHolder;
             networkMetricsEnabled = builder
                     .comment("=== 指标 ===")
                     .comment("是否启用网络指标收集（流量、缓存命中等；默认 false）")

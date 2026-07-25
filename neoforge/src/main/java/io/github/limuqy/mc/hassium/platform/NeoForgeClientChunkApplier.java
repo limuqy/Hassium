@@ -27,8 +27,14 @@ public class NeoForgeClientChunkApplier implements IClientChunkApplier {
 #if MC_VER < MC_1_20_5
             ClientboundLevelChunkWithLightPacket packet = new ClientboundLevelChunkWithLightPacket(buf);
 #else
+#if MC_VER >= MC_1_21_11
+            ClientboundLevelChunkWithLightPacket packet = ClientboundLevelChunkWithLightPacket.STREAM_CODEC
+                    .decode(new net.minecraft.network.RegistryFriendlyByteBuf(buf, level.registryAccess(),
+                            net.neoforged.neoforge.network.connection.ConnectionType.OTHER));
+#else
             ClientboundLevelChunkWithLightPacket packet = ClientboundLevelChunkWithLightPacket.STREAM_CODEC
                     .decode(new net.minecraft.network.RegistryFriendlyByteBuf(buf, level.registryAccess()));
+#endif
 #endif
 
             if (packet.getX() != pos.x || packet.getZ() != pos.z) {
