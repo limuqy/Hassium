@@ -519,9 +519,11 @@ public final class HassiumConfigSpec {
                     .translation("hassium.configuration.network.globalPacketCompression")
                     .define("globalPacketCompression", true);
             networkGlobalCompressionLevel = builder
-                    .comment("全局包压缩等级 [实验性]（默认 3）")
+                    .comment("全局包压缩等级 [实验性]（默认 6；实测 ROUND1 actualRecv 较 3 级 -23%、节省率 34.1%→46.7%。"
+                            + "小包 ≤256B 上 Zlib lvl6 反占用率更低，但 ZSTD6 在管线大包（>1KB）上压缩比 1.52→1.88 优势覆盖；"
+                            + "chunk 自定义通道仍用 compressionLevel=3 不变——见 GlobalCompressionLevelBenchmarkTest。）")
                     .translation("hassium.configuration.network.globalCompressionLevel")
-                    .defineInRange("globalCompressionLevel", 3, 1, 22);
+                    .defineInRange("globalCompressionLevel", 6, 1, 22);
             networkGlobalCompressionThreshold = builder
                     .comment("全局压缩阈值（字节；小于此值不压；默认 256，与原版一致）[实验性]")
                     .translation("hassium.configuration.network.globalCompressionThreshold")

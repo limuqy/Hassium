@@ -801,6 +801,46 @@ public class ViewDistanceExtensionService {
         return missRetryAt.size();
     }
 
+    /** 上一次 update 解析的服务端视距（环带下界，反映 Options.serverRenderDistance / simulationDistance 兜底）。 */
+    public int getLastServerVD() {
+        return lastServerVD;
+    }
+
+    /** 上一次 update 解析的客户端有效视距（环带上界，含 maxRenderDistance 上限钳制）。 */
+    public int getLastClientVD() {
+        return lastClientVD;
+    }
+
+    /**
+     * 理论环带区块总数（面积法：方形渲染区 - 服务器推送椭圆近似）。
+     * <p>客户端渲染方形面积 {@code (2*clientVD+1)^2} 减去 {@link #countServerPushedArea(int)} 椭圆内近似。
+     * 用于 stats 与 {@code loaded + pending + miss} 对照，定量诊断客户端/服务端视野是否对齐：
+     * 若 {@code (loaded + pending + miss) << theoretical}，说明 OVD 几何未扫完或 VD 不一致。
+     */
+    public int getTheoreticalRingCount() {
+        if (!isEnabled() || lastServerVD <= 0 || lastClientVD <= lastServerVD) {
+            return 0;
+        }
+        int clientArea = (2 * lastClientVD + 1) * (2 * lastClientVD + 1);
+        return clientArea - countServerPushedArea(lastServerVD);
+    }
+
+    /**
+     * 服务器实际推送近似面积——与 {@link #isChunkInServerRange} 收益守恒：
+     * 对每个 {@code (dx, dz)} 在切比雪夫 {@code |dx|, |dz| <= serverVD} 的方形内，
+     * 计数 {@code isChunkInServerRange(dx, dz, serverVD) == true} 的格子。
+     */
+    private static int countServerPushedArea(int serverVD) {
+        if (serverVD <= 0) return 0;
+        int sum = 0;
+        for (int dx = -serverVD; dx <= serverVD; dx++) {
+            for (int dz = -serverVD; dz <= serverVD; dz++) {
+                if (isChunkInServerRange(dx, dz, serverVD)) sum++;
+            }
+        }
+        return sum;
+    }
+
     public long getMissTotal() {
         return missTotal.get();
     }

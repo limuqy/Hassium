@@ -90,9 +90,19 @@ public interface HassiumMetrics {
     long getCacheHitFullChunkBytes();
 
     /**
+     * 获取直接从本地缓存加载完整区块的区块数（与 {@link #getCacheHitFullChunkBytes()} 同步累加）。
+     */
+    long getCacheHitFullChunkCount();
+
+    /**
      * 获取成功应用分段增量后避免加载完整区块的字节数。
      */
     long getCacheDeltaSavedBytes();
+
+    /**
+     * 获取分段增量命中区块数（与 {@link #getCacheDeltaSavedBytes()} 同步累加）。
+     */
+    long getCacheDeltaCount();
 
     /**
      * 获取客户端成功发出的完整区块请求数。
@@ -218,9 +228,19 @@ public interface HassiumMetrics {
     long getLightCacheHitCount();
 
     /**
+     * 获取缓存含光照数据的等价字节数（每 chunk N sections × 4096B 累计）
+     */
+    long getLightCacheHitBytes();
+
+    /**
      * 获取缓存不含光照数据需重算的区块数（is_light_on=0）
      */
     long getLightCacheMissCount();
+
+    /**
+     * 获取缓存不含光照数据的等价字节数
+     */
+    long getLightCacheMissBytes();
 
     /**
      * 获取光照重算总耗时（纳秒）

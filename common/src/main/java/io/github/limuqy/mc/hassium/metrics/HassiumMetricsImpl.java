@@ -28,7 +28,9 @@ public class HassiumMetricsImpl implements HassiumMetrics {
     // 客户端缓存加载展示指标（统一使用完整区块等价值）
     private final AtomicLong cacheLoadEligibleBytes = new AtomicLong(0);
     private final AtomicLong cacheHitFullChunkBytes = new AtomicLong(0);
+    private final AtomicLong cacheHitFullChunkCount = new AtomicLong(0);
     private final AtomicLong cacheDeltaSavedBytes = new AtomicLong(0);
+    private final AtomicLong cacheDeltaCount = new AtomicLong(0);
     private final AtomicLong fullChunkRequestCount = new AtomicLong(0);
     private final AtomicLong fullChunkRequestBytes = new AtomicLong(0);
     private final AtomicLong newFullChunkRequestCount = new AtomicLong(0);
@@ -58,9 +60,10 @@ public class HassiumMetricsImpl implements HassiumMetrics {
     /** 客户端收到并计入流量的分段增量区块数 */
     private final AtomicLong sectionDeltaChunksReceived = new AtomicLong(0);
 
-    // 光照缓存指标
     private final AtomicLong lightCacheHitCount = new AtomicLong(0);
+    private final AtomicLong lightCacheHitBytes = new AtomicLong(0);
     private final AtomicLong lightCacheMissCount = new AtomicLong(0);
+    private final AtomicLong lightCacheMissBytes = new AtomicLong(0);
     private final AtomicLong lightRecomputeTimeNs = new AtomicLong(0);
     private final AtomicLong lightDeltaReceivedCount = new AtomicLong(0);
 
@@ -156,8 +159,18 @@ public class HassiumMetricsImpl implements HassiumMetrics {
     }
 
     @Override
+    public long getCacheHitFullChunkCount() {
+        return cacheHitFullChunkCount.get();
+    }
+
+    @Override
     public long getCacheDeltaSavedBytes() {
         return cacheDeltaSavedBytes.get();
+    }
+
+    @Override
+    public long getCacheDeltaCount() {
+        return cacheDeltaCount.get();
     }
 
     @Override
@@ -265,8 +278,18 @@ public class HassiumMetricsImpl implements HassiumMetrics {
     }
 
     @Override
+    public long getLightCacheHitBytes() {
+        return lightCacheHitBytes.get();
+    }
+
+    @Override
     public long getLightCacheMissCount() {
         return lightCacheMissCount.get();
+    }
+
+    @Override
+    public long getLightCacheMissBytes() {
+        return lightCacheMissBytes.get();
     }
 
     @Override
@@ -334,7 +357,9 @@ public class HassiumMetricsImpl implements HassiumMetrics {
         cacheStaleBytes.set(0);
         cacheLoadEligibleBytes.set(0);
         cacheHitFullChunkBytes.set(0);
+        cacheHitFullChunkCount.set(0);
         cacheDeltaSavedBytes.set(0);
+        cacheDeltaCount.set(0);
         fullChunkRequestCount.set(0);
         fullChunkRequestBytes.set(0);
         newFullChunkRequestCount.set(0);
@@ -358,10 +383,10 @@ public class HassiumMetricsImpl implements HassiumMetrics {
         dataRequestsReceived.set(0);
         chunksCompressed.set(0);
         chunksDecompressed.set(0);
-        sectionDeltaRequestsSent.set(0);
-        sectionDeltaChunksReceived.set(0);
         lightCacheHitCount.set(0);
+        lightCacheHitBytes.set(0);
         lightCacheMissCount.set(0);
+        lightCacheMissBytes.set(0);
         lightRecomputeTimeNs.set(0);
         lightDeltaReceivedCount.set(0);
         storageErrors.set(0);
@@ -462,18 +487,20 @@ public class HassiumMetricsImpl implements HassiumMetrics {
     }
 
     /**
-     * 记录直接从本地缓存加载的完整区块等价值。
+     * 记录直接从本地缓存加载的完整区块等价值。每调用 1 次计 1 chunk。
      */
     public void recordCacheFullHit(long bytes) {
+        cacheHitFullChunkCount.incrementAndGet();
         if (bytes > 0) {
             cacheHitFullChunkBytes.addAndGet(bytes);
         }
     }
 
     /**
-     * 记录成功应用分段增量后避免加载完整区块的字节数。
+     * 记录成功应用分段增量后避免加载完整区块的字节数。每调用 1 次计 1 delta chunk。
      */
     public void recordCacheDeltaSaved(long bytes) {
+        cacheDeltaCount.incrementAndGet();
         if (bytes > 0) {
             cacheDeltaSavedBytes.addAndGet(bytes);
         }
@@ -521,17 +548,37 @@ public class HassiumMetricsImpl implements HassiumMetrics {
     // ===== 光照缓存记录方法 =====
 
     /**
-     * 记录光照缓存命中（缓存含光照数据）
+     * 记录光照缓存命中（缓存含光照数据）。仅累加 count，不计字节；字节用 {@link #recordLightCacheHit(long)}。
      */
     public void recordLightCacheHit() {
         lightCacheHitCount.incrementAndGet();
     }
 
     /**
-     * 记录光照缓存未命中（缓存不含光照数据，需重算）
+     * 记录光照缓存命中及等价字节数（常用于 honors {@code level.getSectionsCount() × 4096}）
+     */
+    public void recordLightCacheHit(long bytes) {
+        lightCacheHitCount.incrementAndGet();
+        if (bytes > 0) {
+            lightCacheHitBytes.addAndGet(bytes);
+        }
+    }
+
+    /**
+     * 记录光照缓存未命中（缓存不含光照数据，需重算）。仅累加 count。
      */
     public void recordLightCacheMiss() {
         lightCacheMissCount.incrementAndGet();
+    }
+
+    /**
+     * 记录光照缓存未命中及等价字节数。
+     */
+    public void recordLightCacheMiss(long bytes) {
+        lightCacheMissCount.incrementAndGet();
+        if (bytes > 0) {
+            lightCacheMissBytes.addAndGet(bytes);
+        }
     }
 
     /**

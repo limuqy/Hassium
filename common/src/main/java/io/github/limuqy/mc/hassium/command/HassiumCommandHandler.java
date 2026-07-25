@@ -58,48 +58,83 @@ public class HassiumCommandHandler {
      */
     public static String getClientStatsMessage() {
         HassiumMetricsImpl metrics = NetworkStats.getMetrics();
+        StringBuilder sb = new StringBuilder();
+        sb.append("§6=== Hassium 客户端统计 ===§r\n");
+        sb.append(formatBandwidthLine(metrics)).append('\n');
+        sb.append(formatChunkCacheLine(metrics)).append('\n');
+        sb.append(formatChunkLoadLine(metrics)).append('\n');
+        sb.append(formatLightCacheLine(metrics)).append('\n');
+        sb.append(formatOvdLine()).append('\n');
+        sb.append(formatSavingsLine(metrics)).append('\n');
+        // 每行末尾统一带 \n；冒烟 strip 后用 split("\\R", -1) 已能容忍空末行。
+        return sb.toString();
+    }
 
-        long vanillaRecv = metrics.getVanillaBytesReceived();
-        long actualRecv = metrics.getActualBytesReceived();
-        long fullHitBytes = metrics.getCacheHitFullChunkBytes();
-        long deltaSavedBytes = metrics.getCacheDeltaSavedBytes();
-        long fullRequests = metrics.getFullChunkRequestCount();
-        long newRequests = metrics.getNewFullChunkRequestCount();
-        long staleRequests = metrics.getStaleFullChunkRequestCount();
-        long newRequestBytes = metrics.getNewFullChunkRequestBytes();
-        long staleRequestBytes = metrics.getStaleFullChunkRequestBytes();
+    private static String formatBandwidthLine(HassiumMetricsImpl m) {
+        long vanillaRecv = m.getVanillaBytesReceived();
+        long actualRecv = m.getActualBytesReceived();
+        double ratio = vanillaRecv > 0 ? (double) actualRecv / vanillaRecv * 100.0 : 0.0;
+        return String.format("§e带宽压缩：§r%s（当前 %s，原版 %s，压缩比 %s）",
+                MetricsTextFormatter.formatPercent(ratio),
+                MetricsTextFormatter.formatBytes(actualRecv),
+                MetricsTextFormatter.formatBytes(vanillaRecv),
+                MetricsTextFormatter.formatCompressionRatio(vanillaRecv, actualRecv));
+    }
 
-        double currentBandwidthPercent = vanillaRecv > 0
-                ? (double) actualRecv / vanillaRecv * 100.0
-                : 0.0;
+    private static String formatChunkCacheLine(HassiumMetricsImpl m) {
+        // 命中：完整区块本地缓存直接提供（count + bytes）；增量：分段增量补齐节省（count + bytes）
+        long fullHitCount = m.getCacheHitFullChunkCount();
+        long fullHitBytes = m.getCacheHitFullChunkBytes();
+        long deltaCount = m.getCacheDeltaCount();
+        long deltaBytes = m.getCacheDeltaSavedBytes();
+        return String.format("§e区块缓存：§r%s（全命中 %d/%s，增量 %d/%s）",
+                MetricsTextFormatter.formatPercent(m.getEffectiveCacheHitRate() * 100.0),
+                fullHitCount, MetricsTextFormatter.formatBytes(fullHitBytes),
+                deltaCount, MetricsTextFormatter.formatBytes(deltaBytes));
+    }
 
+    private static String formatChunkLoadLine(HassiumMetricsImpl m) {
+        long fullRequests = m.getFullChunkRequestCount();
+        long newRequests = m.getNewFullChunkRequestCount();
+        long staleRequests = m.getStaleFullChunkRequestCount();
+        long newRequestBytes = m.getNewFullChunkRequestBytes();
+        long staleRequestBytes = m.getStaleFullChunkRequestBytes();
+        return String.format("§e区块加载：§r%d（新增 %d/%s，过期 %d/%s）",
+                fullRequests,
+                newRequests, MetricsTextFormatter.formatBytes(newRequestBytes),
+                staleRequests, MetricsTextFormatter.formatBytes(staleRequestBytes));
+    }
+
+    private static String formatOvdLine() {
         ViewDistanceExtensionService ovd = ViewDistanceExtensionService.getInstance();
+        if (!ovd.isEnabled()) {
+            return "§e超视渲染：§r§7OFF§r";
+        }
+        // 拆分"渲染 N/M"与"已加载/缺失"两段，一目了然区分客户端渲染半径 vs 服务端推送半径
+        return String.format("§e超视渲染：§r§aON§r（§a渲染 %d/%d§r，已加载 %d，缺失 %d）",
+                ovd.getLastClientVD(), ovd.getLastServerVD(),
+                ovd.getLoadedCount(), ovd.getPendingMissCount());
+    }
 
-        // 光照缓存指标
-        long lightHit = metrics.getLightCacheHitCount();
-        long lightMiss = metrics.getLightCacheMissCount();
+    private static String formatLightCacheLine(HassiumMetricsImpl m) {
+        long lightHit = m.getLightCacheHitCount();
+        long lightMiss = m.getLightCacheMissCount();
+        return String.format("§e光照缓存：§r%s（命中 %d/%s，重算 %d/%s）",
+                MetricsTextFormatter.formatPercent(m.getLightCacheHitRate() * 100.0),
+                lightHit, MetricsTextFormatter.formatBytes(m.getLightCacheHitBytes()),
+                lightMiss, MetricsTextFormatter.formatBytes(m.getLightCacheMissBytes()));
+    }
 
-        return String.format(
-                "§6=== Hassium 客户端统计 ===§r\n" +
-                "§e带宽压缩：§r%s（当前 %s，原版 %s，压缩比 %s）\n" +
-                "§e区块缓存：§r%s（命中 %s，增量 %s）\n" +
-                "§e区块加载：§r%d（新增 %d/%s，过期 %d/%s）\n" +
-                "§e超视渲染：§r%s（已加载 %d，缺失 %d）\n" +
-                "§e光照缓存：§r%s（命中 %s，重算 %s）",
-                MetricsTextFormatter.formatPercent(currentBandwidthPercent),
-                MetricsTextFormatter.formatBytes(actualRecv), MetricsTextFormatter.formatBytes(vanillaRecv),
-                MetricsTextFormatter.formatCompressionRatio(vanillaRecv, actualRecv),
-                MetricsTextFormatter.formatPercent(metrics.getEffectiveCacheHitRate() * 100.0),
-                MetricsTextFormatter.formatBytes(fullHitBytes), MetricsTextFormatter.formatBytes(deltaSavedBytes),
-                fullRequests, newRequests, MetricsTextFormatter.formatBytes(newRequestBytes),
-                staleRequests, MetricsTextFormatter.formatBytes(staleRequestBytes),
-                ovd.isEnabled() ? "§aON§r" : "§7OFF§r",
-                ovd.getLoadedCount(),
-                ovd.getPendingMissCount(),
-                MetricsTextFormatter.formatPercent(metrics.getLightCacheHitRate() * 100.0),
-                lightHit,
-                lightMiss
-        );
+    private static String formatSavingsLine(HassiumMetricsImpl m) {
+        // 已包含全部入站路径：Primary ZstdContextDecoder + 数据通道 DataPlaneClientBundle + 分段增量 + OVD 缓存渲染。
+        // 不区分路径，仅在线协议层汇总当前/原版字节，避免与各 hit/miss 列表分项重复。
+        long current = m.getActualBytesReceived();
+        long original = m.getVanillaBytesReceived();
+        double saving = m.getReceiveBandwidthSavingPercent();
+        return String.format("§e带宽节省：§r%s（当前 %s，原版 %s）",
+                MetricsTextFormatter.formatPercent(saving),
+                MetricsTextFormatter.formatBytes(current),
+                MetricsTextFormatter.formatBytes(original));
     }
 
     /**

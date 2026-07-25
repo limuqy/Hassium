@@ -409,12 +409,12 @@ public class ClientChunkHandler {
             // 空光照重算由 MixinLightRecompute 在 handleLevelChunkWithLight TAIL 完成，此处勿重复调用
             if (!renderOnly) {
                 if (hasCachedLight) {
-                    NetworkStats.recordLightCacheHit();
+                    NetworkStats.recordLightCacheHit(getLightBytesPerChunk(level));
                 }
                 ClientMetadataHandler.onChunkApplied(pos);
             } else if (hasCachedLight) {
                 // 缓存已含光照：packet 已写入真实 LightData，Mixin 跳过重算
-                NetworkStats.recordLightCacheHit();
+                NetworkStats.recordLightCacheHit(getLightBytesPerChunk(level));
                 ViewDistanceExtensionService.getInstance().onRenderOnlyApplied(pos);
             } else {
                 // Mixin 已同步重算；用内存 NBT 补回写，避免仅依赖读盘
@@ -441,6 +441,15 @@ public class ClientChunkHandler {
             }
             return false;
         }
+    }
+
+    /**
+     * 光照缓存等价值字节估算（与 {@code ClientMetadataHandler.ESTIMATED_CHUNK_BYTES} 同口径，16KB/chunk）。
+     * 见 {@link NetworkStats#ESTIMATED_LIGHT_BYTES} 注释。
+     */
+    private static long getLightBytesPerChunk(ClientLevel level) {
+        // level 参数保留以便未来按 sectionsCount 动态估算；当前与区块口径一致用常量
+        return NetworkStats.ESTIMATED_LIGHT_BYTES;
     }
 
     /**

@@ -35,6 +35,13 @@ public class NetworkStats {
     private static volatile boolean enabled = false;
     private static final HassiumMetricsImpl metrics = new HassiumMetricsImpl();
 
+    /**
+     * 光照缓存等价值字节估算常量（与 {@code ClientMetadataHandler.ESTIMATED_CHUNK_BYTES} 同口径 16KB/chunk）。
+     * 仅用于 stats 显示对齐区块缓存字节数量级，避免 {@code sectionsCount × 4096B} 让光照字段显示为区块 2-3 倍。
+     * 不参与命中率计算（光照命中率走 count 比对）。
+     */
+    public static final long ESTIMATED_LIGHT_BYTES = 16 * 1024L;
+
     private NetworkStats() {}
 
     // ===== 开关控制 =====
@@ -303,7 +310,7 @@ public class NetworkStats {
     // ===== 光照缓存埋点 =====
 
     /**
-     * 记录光照缓存命中（缓存含光照数据）
+     * 记录光照缓存命中（仅累加 count）。
      */
     public static void recordLightCacheHit() {
         if (!enabled) return;
@@ -311,11 +318,27 @@ public class NetworkStats {
     }
 
     /**
-     * 记录光照缓存未命中（缓存不含光照数据，需重算）
+     * 记录光照缓存命中及等价字节数。每 chunk 通常 = level.getSectionsCount() × 4096B。
+     */
+    public static void recordLightCacheHit(long bytes) {
+        if (!enabled) return;
+        metrics.recordLightCacheHit(bytes);
+    }
+
+    /**
+     * 记录光照缓存未命中（仅累加 count）。
      */
     public static void recordLightCacheMiss() {
         if (!enabled) return;
         metrics.recordLightCacheMiss();
+    }
+
+    /**
+     * 记录光照缓存未命中及等价字节数。
+     */
+    public static void recordLightCacheMiss(long bytes) {
+        if (!enabled) return;
+        metrics.recordLightCacheMiss(bytes);
     }
 
     /**

@@ -169,7 +169,7 @@ public record HassiumConfig(
                 3,                 // compressionLevel
                 true,              // magiclessZstd
                 true,              // globalPacketCompression
-                3,                 // globalCompressionLevel
+                6,                 // globalCompressionLevel（实测 ROUND1 actualRecv -23%、节省率 34.1%→46.7%；小包 ≤256B Zlib lvl6 反占优但全局管线包跨 size 桶合并，6 在大包收益覆盖）
                 256,               // globalCompressionThreshold
                 true,              // useContextCompression
                 true,              // enablePacketAggregation

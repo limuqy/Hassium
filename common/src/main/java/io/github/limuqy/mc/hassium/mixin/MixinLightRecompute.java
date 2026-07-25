@@ -41,7 +41,8 @@ public class MixinLightRecompute {
 
         // 空光照：需同步重算（服务端剥离网络光照 / 缓存 is_light_on=0）
         // 不受 lightCacheEnabled 控制——重算是渲染必需
-        NetworkStats.recordLightCacheMiss();
+        // 字节口径与 ClientChunkHandler.getLightBytesPerChunk 一致：用 NetworkStats.ESTIMATED_LIGHT_BYTES
+        NetworkStats.recordLightCacheMiss(NetworkStats.ESTIMATED_LIGHT_BYTES);
         ClientLightRecomputeService.applyLightEngineNow(new ChunkPos(packet.getX(), packet.getZ()));
     }
 }
