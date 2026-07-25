@@ -79,7 +79,7 @@ public class DataPlaneClientBundle {
                         .handler(new ChannelInitializer<SocketChannel>() {
                             @Override protected void initChannel(SocketChannel ch) {
                                 ch.pipeline()
-                                        .addLast("timeout", new ReadTimeoutHandler(5, TimeUnit.SECONDS))
+                                        .addLast("timeout", new ReadTimeoutHandler(DataPlanePoCConfig.READ_TIMEOUT_SECS, TimeUnit.SECONDS))
                                         .addLast("frameSplitter", new VarIntLengthFrameSplitter())
                                         .addLast("dataHandler", new DataPlaneClientHandler(portIdx, aesKey));
                             }
@@ -182,7 +182,7 @@ public class DataPlaneClientBundle {
                 }
                 switch (dec.type) {
                     case DataPlaneFrame.TYPE_BULK_COMPRESSED_CHUNK -> handleBulkChunk(dec.payload);
-                    case DataPlaneFrame.TYPE_KEEPALIVE -> { /* PoC 忽略 */ }
+                    case DataPlaneFrame.TYPE_KEEPALIVE -> sendKeepaliveAck(ctx);
                     case DataPlaneFrame.TYPE_CLOSE -> ctx.close();
                     default -> LOGGER.warn("DataPlaneClient: unknown frame type {} portIdx={}", dec.type, portIdx);
                 }
@@ -193,8 +193,21 @@ public class DataPlaneClientBundle {
             }
         }
 
-        private void handleBindAck(ChannelHandlerContext ctx, int type, byte[] payload) {
-            if (type != DataPlaneFrame.TYPE_BIND_ACK) {
+        /**
+         * 回明文 KEEPALIVE_ACK（C→S）刷新服务端读超时。
+         * <p>
+         * 设计稿：ACK 不携敏感数据，明文发送可接受（仅保活语义）；服务端 {@code BindHandshakeHandler}
+         * bound 分支按明文 {@code decodeType} 读 type=6 后忽略，方向匹配。
+         */
+        private void sendKeepaliveAck(ChannelHandlerContext ctx) {
+            byte[] frame = DataPlaneFrame.encode(DataPlaneFrame.TYPE_KEEPALIVE_ACK, new byte[0]);
+            ctx.writeAndFlush(Unpooled.wrappedBuffer(frame)).addListener(ChannelFutureListener.FIRE_EXCEPTION_ON_FAILURE);
+            if (DataPlanePoCConfig.DEBUG_DATAPLANE) {
+                LOGGER.info("DataPlaneClient: sent KeepaliveAck portIdx={} frameLen={}", portIdx, frame.length);
+            }
+        }
+
+        private void handleBindAck(ChannelHandlerContext ctx, int type, byte[] payload) {            if (type != DataPlaneFrame.TYPE_BIND_ACK) {
                 LOGGER.warn("DataPlaneClient: expected BindAck, got type {} portIdx={}", type, portIdx);
                 ctx.close();
                 return;

@@ -29,6 +29,21 @@ public class DataPlanePoCConfig {
     public static final boolean CLIENT_ENABLE_DATA_PLANE = true;
 
     /**
+     * Data 通道读超时（秒）。Bind 后空闲无入帧即断。
+     * <p>
+     * 由 {@link #KEEPALIVE_INTERVAL_SECS} 双向心跳刷新（间隔 < 读超时）；
+     * 心跳关闭时退化为短超时检测。原 PoC 硬编码 5s 在 bulk 稀疏阶段（chunkHash 增量
+     * perTick=32 节流）会误踢健康通道，已调大为 30s 并配合心跳（见 2026-07-26 端到端首跑回写）。
+     */
+    public static final int READ_TIMEOUT_SECS = 30;
+
+    /** KEEPALIVE/ACK 双向心跳间隔（秒）；须严格小于 {@link #READ_TIMEOUT_SECS}。 */
+    public static final int KEEPALIVE_INTERVAL_SECS = 2;
+
+    /** 心跳总开关。关时两端不发心跳，仅靠 READ_TIMEOUT_SECS 超时检测。 */
+    public static final boolean KEEPALIVE_ENABLED = true;
+
+    /**
      * PoC 专属 debug 日志总开关（独立于全局 debug.networkLogging）。
      * 默认 true —— PoC 阶段需观察绑定 / 路由 / 解密链路；生产化阶段迁移到 server.toml 后默认关。
      * 热路径受此开关保护，避免无条件打日志。

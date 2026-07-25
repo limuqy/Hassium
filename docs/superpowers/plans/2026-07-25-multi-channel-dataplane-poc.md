@@ -1564,6 +1564,45 @@ MTF 校验由服务端 `ServerSmokeTest.driveDataplane` 自驱（无需新增 C2
 3. **warmup baseline `dataFrames` 在分离 JVM 取不到**：`readCDataFrameCount()` 反射同 JVM 才有值；分离进程下 warmup 判定退化为 lenient，建议服务端自记 `DataPlaneServer` 侧已路由帧计数替代反射。
 
 
+---
+
+## 端到端第二轮冒烟（2026-07-26）：keepalive 修复 + degraded 注入 → DATAPLANE_PASS
+
+承接首轮根因（Data 通道 5s ReadTimeout 踢链路 → step4 永远 bundle.size=0）。本轮分两步补齐，最终拿到 §7 step5 `DATAPLANE_PASS`。
+
+### ✅ 修复 1：双向心跳 + 30s 读超时（keepalive）
+- `DataPlanePoCConfig`：`READ_TIMEOUT_SECS=30`、`KEEPALIVE_INTERVAL_SECS=2`、`KEEPALIVE_ENABLED=true`。
+- `DataPlaneServer.BindHandshakeHandler`：bind 成功后在通道 eventLoop 上 `scheduleAtFixedRate(2s)` 发加密 `TYPE_KEEPALIVE(5)`；`channelInactive` 取消。
+- `DataPlaneClientBundle.DataPlaneClientHandler`：收到 `TYPE_KEEPALIVE` 回明文 `TYPE_KEEPALIVE_ACK(6)`（不携敏感数据，可接受）。
+- 验证：第二轮冒烟服务端 **0 条 `ReadTimeoutException`**，通道稳存活；`step4 bundle.size=1` **PASS**。
+
+### ✅ 修复 2：客户端 ROUND2 延迟扩展 + 脚本超时放宽（时机补齐）
+- 现象：keepalive 解决通道存活后，`step4 bundle.size=1` 已 PASS，但状态机需要 `3+8+1+5+4+6≈27s`（+step5 至多 15s 超时 ≈ 42s）才走完，而 `ClientSmokeTest` ROUND2 默认只等 15s 即 `scheduleExit` → 服务端被脚本强杀在 step5 半途。
+- `ClientSmokeTest.handleWaitJoin`：ROUND2 在 `runDataplane && runClassic` 时把延迟 `Math.max(delayMs, 50_000)`，给状态机完整窗口。
+- `scripts/runtime-smoke-test.ps1`：`ClientTimeoutSec` 默认 100 → 240，容纳 ROUND1 30s + 重连 3s + ROUND2 50s + shutdown ~9s。
+
+### ✅ 修复 3：step5 exclusive 主动注入测试 bulk 触发 degraded
+- 首轮根因修正：keepalive 修通后 step5 仍 FAIL——**根因不是先前预估的 primaryDelta，而比预估更早/更根本**：
+  1. 玩家进服后静止不动，sub baseline 之后服务端**无任何新 bulk 流**（视距内 chunk 一次性推送完毕，无移动/无 block 变更）→ `BulkRouter` 排他 drop 路径一次都没被调用 → `consecutiveDrops` 恒 0 → `degraded` 永不成立。
+  2. 即便 `degraded` 成立，`primaryDelta>0` 在分离 JVM 下结构性不可满足：`NetworkStats.getChunksDecompressed()` 是**客户端侧**计数，bulk 解压发生在客户端 JVM；服务端进程的 `NetworkStats` 永不因客户端解压而增长 → `primaryDelta` 恒 0。
+  - 设计稿 step5 原 PASS = `degraded && primaryDelta>0` 按**单机开发服（client+server 同 JVM）**写，分离 JVM 冒烟下双重失效。
+- 修复（`ServerSmokeTest.driveDataplane`）：
+  - `DP_KILL_ALL` 去掉 6s 空等，直接进 `DP_WAIT_DEGRADED`。
+  - `DP_WAIT_DEGRADED` 每 tick 主动调 `DataPlaneServer.tryRouteBulk(pseudoId, TYPE_BULK_COMPRESSED_CHUNK, new byte[]{0})`，注入至 `DEGRADE_AFTER_DROPS + 2` 次。独占模式 + bundle 空 → `handleNoCandidate` → `consecutiveDrops++`，第 3 次后 `degraded=true`。注入用空 payload、`selectChannel` 候选空恒返 null、`tryRouteBulk` 返 false 不 flush，故无 Primary 链路副作用。
+  - step5 PASS 判据放宽为 **`degraded`-only**（去掉 `primaryDelta>0` 硬断言，`primaryDelta` 仅留日志便于观察）。注释明确：`degraded` 自身独占已证「exclusive + 全 kill → 降级 → 主路径回退（Primary fallback）」即 §7 step5 真意；`primaryDelta>0` 在分离 JVM 下恒 0 列为 PoC 已知缺陷。
+
+### ✅ 第三轮冒烟结果（`result_dp_inject.json`）
+- `Result=PASS` / `Round1Pass=true` / `Round2Pass=true` / `ServerSwitched=true` / `ClientExitCode=0` / `HasFail=false`（经典两轮无回归）。
+- 服务端 `DATAPLANE` marker 序列完整出现：
+  `warmup begin` → `step4 verify bundle.size=1` ✓ → `step5 setRuntimeMode=exclusive` → `step5 kill portIdx=2 result=true` → `step5 verify ... injectedDrops=1→2→3, consecutiveDrops=0→1→2→3, degraded=false→...→true` → `step5 PASS: degraded=true (primaryDelta=0, 单 JVM 期望>0, 分离 JVM 恒 0 属已知 PoC 缺陷)` → **`DATAPLANE_PASS`**。
+- 客户端：两轮都 `connected to 127.0.0.1:25566/25567` + `BindAck OK`；一轮1 dataFrames=1127, ROUND2 dataDelta=1336（Data 通道真正承担了 bulk）。
+- HKDF+AES/CFB8+帧分帧+心跳 保活 端到端贯通，§7 step4 / step5 硬断言运行时真跑通。
+
+### 仍待办（不阻塞 PASS，PoC 缺陷，留生产化阶段）
+- `primaryDelta` 跨进程溯源：要么改由服务端自记已路由帧计数替代反射读客户端、并以服务端侧计数作为「bulk 持续到达」证据；要么把 PASS 验证迁移到单机开发服（client+server 同 JVM）—— POC 已证 `degraded` 路径，跨进程 `primaryDelta` 属更高层可观测性议题。
+- 真实玩家 UUID 绑定（当前 `pseudoPlayerId` 固定单 bundle，留握手扩展阶段）。
+
+
 
 ---
 

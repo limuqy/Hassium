@@ -225,7 +225,7 @@ public class DataPlaneServer {
         @Override
         protected void initChannel(SocketChannel ch) {
             ch.pipeline()
-                .addLast("timeout", new ReadTimeoutHandler(5, TimeUnit.SECONDS))
+                .addLast("timeout", new ReadTimeoutHandler(DataPlanePoCConfig.READ_TIMEOUT_SECS, TimeUnit.SECONDS))
                 .addLast("frameSplitter", new VarIntLengthFrameSplitter())
                 .addLast("bindHandler", new BindHandshakeHandler(portIdx));
         }
@@ -237,6 +237,8 @@ public class DataPlaneServer {
         private final int portIdx;
         private boolean bound = false;
         private UUID playerId;
+        /** per-channel keepalive 调度句柄；bind 成功后启动，channelInactive 时取消以免泄露。 */
+        private java.util.concurrent.ScheduledFuture<?> keepaliveTask;
 
         BindHandshakeHandler(int portIdx) { this.portIdx = portIdx; }
 
@@ -312,6 +314,29 @@ public class DataPlaneServer {
             sendBindAck(ctx, true, "");
             LOGGER.info("DataPlaneServer: bind successful from {} playerId={} portIdx={} reqChannelId={} weight={} dataChannels={}",
                 ctx.channel().remoteAddress(), this.playerId, portIdx, reqChannelId, endpointWeightFor(reqChannelId), bundle.getDataChannels().size());
+            startKeepalive(ctx, aesKey);
+        }
+
+        /**
+         * 在该 Data 通道 eventLoop 上周期性发加密 KEEPALIVE（S→C）刷新客户端读超时。
+         * 客户端收到后回明文 KEEPALIVE_ACK 刷新本侧读超时。心跳挂 per-channel，channelInactive 取消。
+         */
+        private void startKeepalive(ChannelHandlerContext ctx, byte[] aesKey) {
+            if (!DataPlanePoCConfig.KEEPALIVE_ENABLED || aesKey == null) return;
+            final Channel ch = ctx.channel();
+            final int interval = DataPlanePoCConfig.KEEPALIVE_INTERVAL_SECS;
+            keepaliveTask = ch.eventLoop().scheduleAtFixedRate(() -> {
+                if (!ch.isOpen()) return;
+                try {
+                    byte[] frame = DataPlaneCodec.encrypt(aesKey, DataPlaneFrame.TYPE_KEEPALIVE, new byte[0]);
+                    ch.writeAndFlush(Unpooled.wrappedBuffer(frame)).addListener(ChannelFutureListener.FIRE_EXCEPTION_ON_FAILURE);
+                } catch (Throwable t) {
+                    LOGGER.warn("DataPlaneServer: keepalive encrypt/send failed portIdx={}", portIdx, t);
+                }
+            }, interval, interval, TimeUnit.SECONDS);
+            if (DataPlanePoCConfig.DEBUG_DATAPLANE) {
+                LOGGER.info("DataPlaneServer: keepalive started portIdx={} interval={}s", portIdx, interval);
+            }
         }
 
         private int endpointWeightFor(int channelId) {
@@ -333,6 +358,10 @@ public class DataPlaneServer {
 
         @Override
         public void channelInactive(ChannelHandlerContext ctx) {
+            if (keepaliveTask != null) {
+                keepaliveTask.cancel(false);
+                keepaliveTask = null;
+            }
             if (playerId != null) {
                 PlayerChannelBundle bundle = getBundle(playerId);
                 if (bundle != null) {

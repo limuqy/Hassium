@@ -151,7 +151,16 @@ public final class ClientSmokeTest {
             return;
         }
 
-        long delayMs = state == State.WAIT_JOIN_1 ? ClientSmokeTest.delayMs * 2 : ClientSmokeTest.delayMs;
+        long delayMs;
+        if (state == State.WAIT_JOIN_1) {
+            delayMs = ClientSmokeTest.delayMs * 2;
+        } else {
+            // ROUND2：classic+dataplane 同跑时，服务端 dataplane 状态机（3+8+1+5+4+6=27s 最小 + up to 15s step5 超时 ≈ 42s）
+            // 在玩家第二次进服后才开始驱动 DP_IDLE→DP_DONE，而 ROUND2 join 与 DP_IDLE 触发（switched=true）几乎同步。
+            // 默认 delayMs（15s）远不够 → 等满后客户端 scheduleExit ≈9s 即退服，状态机会被打断。
+            // 故 ROUND2 在 dataplane 模式下一致地拿到 PASS/FAIL marker，必须把 ROUND2 窗口扩展到覆盖最坏 42s +5s 余量。
+            delayMs = (runDataplane && runClassic) ? Math.max(ClientSmokeTest.delayMs, 50_000L) : ClientSmokeTest.delayMs;
+        }
         if (joinAtMs < 0L) {
             joinAtMs = now;
             LOGGER.info("HassiumSmokeTest: {} player entered world at y={}, waiting {} ms before stats",
