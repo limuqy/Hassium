@@ -21,52 +21,9 @@
   <img src="https://raw.githubusercontent.com/limuqy/Hassium/refs/heads/master/docs/logo.svg" alt="Hassium Logo" width="200">
 </p>
 
-<p align="center">
-<svg xmlns="http://www.w3.org/2000/svg" width="118" height="20" role="img" aria-label="License: GPL-3.0">
-  <title>License: GPL-3.0</title>
-  <linearGradient id="hsBadgeA" x2="0" y2="100%"><stop offset="0" stop-color="#bbb" stop-opacity=".1"/><stop offset="1" stop-opacity=".1"/></linearGradient>
-  <clipPath id="hsBadgeClipA"><rect width="118" height="20" rx="3" fill="#fff"/></clipPath>
-  <g clip-path="url(#hsBadgeClipA)">
-    <rect width="55" height="20" fill="#555"/>
-    <rect x="55" width="63" height="20" fill="#007ec6"/>
-    <rect width="118" height="20" fill="url(#hsBadgeA)"/>
-  </g>
-  <g fill="#fff" text-anchor="middle" font-family="Verdana,Geneva,DejaVu Sans,sans-serif" font-size="11">
-    <text x="27.5" y="14">License</text>
-    <text x="86.5" y="14">GPL-3.0</text>
-  </g>
-</svg>
-&#160;
-<svg xmlns="http://www.w3.org/2000/svg" width="168" height="20" role="img" aria-label="Minecraft 1.20.1-1.21.11">
-  <title>Minecraft 1.20.1–1.21.11</title>
-  <linearGradient id="hsBadgeB" x2="0" y2="100%"><stop offset="0" stop-color="#bbb" stop-opacity=".1"/><stop offset="1" stop-opacity=".1"/></linearGradient>
-  <clipPath id="hsBadgeClipB"><rect width="168" height="20" rx="3" fill="#fff"/></clipPath>
-  <g clip-path="url(#hsBadgeClipB)">
-    <rect width="69" height="20" fill="#555"/>
-    <rect x="69" width="99" height="20" fill="#4c1"/>
-    <rect width="168" height="20" fill="url(#hsBadgeB)"/>
-  </g>
-  <g fill="#fff" text-anchor="middle" font-family="Verdana,Geneva,DejaVu Sans,sans-serif" font-size="11">
-    <text x="34.5" y="14">Minecraft</text>
-    <text x="118.5" y="14">1.20.1–1.21.11</text>
-  </g>
-</svg>
-&#160;
-<svg xmlns="http://www.w3.org/2000/svg" width="214" height="20" role="img" aria-label="Loaders: Fabric | Forge | NeoForge">
-  <title>Loaders: Fabric | Forge | NeoForge</title>
-  <linearGradient id="hsBadgeC" x2="0" y2="100%"><stop offset="0" stop-color="#bbb" stop-opacity=".1"/><stop offset="1" stop-opacity=".1"/></linearGradient>
-  <clipPath id="hsBadgeClipC"><rect width="214" height="20" rx="3" fill="#fff"/></clipPath>
-  <g clip-path="url(#hsBadgeClipC)">
-    <rect width="55" height="20" fill="#555"/>
-    <rect x="55" width="159" height="20" fill="#fe7d37"/>
-    <rect width="214" height="20" fill="url(#hsBadgeC)"/>
-  </g>
-  <g fill="#fff" text-anchor="middle" font-family="Verdana,Geneva,DejaVu Sans,sans-serif" font-size="11">
-    <text x="27.5" y="14">Loaders</text>
-    <text x="134.5" y="14">Fabric | Forge | NeoForge</text>
-  </g>
-</svg>
-</p>
+[![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](https://raw.githubusercontent.com/limuqy/Hassium/refs/heads/master/LICENSE)
+[![Minecraft](https://img.shields.io/badge/Minecraft-1.20.1%E2%80%931.21.11-green.svg)](https://www.minecraft.net/)
+[![Loaders](https://img.shields.io/badge/Loaders-Fabric%20%7C%20Forge%20%7C%20NeoForge-orange.svg)](#支持的版本)
 
 **Hassium** — high-performance chunk compression and client-side caching for Minecraft.  
 Smaller world saves and bandwidth than vanilla, local chunk reuse, and smoother joins. Supports Fabric / Forge / NeoForge across Minecraft 1.20.1–1.21.11.
