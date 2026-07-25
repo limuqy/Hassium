@@ -114,9 +114,12 @@ jobs:
       - name: Point wrapper distributionUrl at official source (海外 CI 不走阿里云镜像)
         shell: bash
         run: |
-          # wrapper 里 distributionUrl 被转义成 https\://mirrors.aliyun.com/...，海外 CI 走阿里云慢且不稳。
-          # 须在 setup-gradle 之前改，否则它会按阿里云源拉 Gradle。工作区临时改动，build 后 checkout 恢复、不污染 git。
-          sed -i 's#mirrors\.aliyun\.com/gradle/distributions#services.gradle.org/distributions#' \
+          # 阿里云路径是 /gradle/distributions/v8.14.5/gradle-8.14.5-bin.zip（带 v 版本子目录）。
+          # 官方源目录结构不同：/distributions/gradle-8.14.5-bin.zip 直接在根下，没有 v<ver>/ 子目录。
+          # 故 sed 须把整段「/gradle/distributions/v8.14.5/」换成「/distributions/」，
+          # 只换 host 会让 URL 变成 services.gradle.org/distributions/v8.14.5/... → 404。
+          # 须在 setup-gradle 之前改，否则它会按阿里云源拉 Gradle。工作区临时改动，不污染 git。
+          sed -i 's#mirrors\.aliyun\.com/gradle/distributions/v[0-9.]*#services.gradle.org/distributions#' \
             gradle/wrapper/gradle-wrapper.properties
           grep '^distributionUrl' gradle/wrapper/gradle-wrapper.properties
 
