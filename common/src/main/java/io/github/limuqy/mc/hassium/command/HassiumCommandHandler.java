@@ -5,6 +5,7 @@ import io.github.limuqy.mc.hassium.cache.client.ViewDistanceExtensionService;
 import io.github.limuqy.mc.hassium.metrics.HassiumMetricsImpl;
 import io.github.limuqy.mc.hassium.metrics.MetricsTextFormatter;
 import io.github.limuqy.mc.hassium.metrics.NetworkStats;
+import io.github.limuqy.mc.hassium.metrics.VanillaZlibEstimator;
 import net.minecraft.client.Minecraft;
 
 import java.nio.file.Files;
@@ -73,9 +74,16 @@ public class HassiumCommandHandler {
     private static String formatBandwidthLine(HassiumMetricsImpl m) {
         long vanillaRecv = m.getVanillaBytesReceived();
         long actualRecv = m.getActualBytesReceived();
-        double ratio = vanillaRecv > 0 ? (double) actualRecv / vanillaRecv * 100.0 : 0.0;
+        // 「压缩」行只看压缩算法本身带来的节省（不含缓存/光照/OVD）：
+        //   压缩节省 = (vanilla_Zlib_wire - actual_ZSTD_wire) / vanilla_Zlib_wire × 100
+        // 当 actual > vanilla（Hassium ZSTD 反而比 vanilla Zlib 多用字节）→ 节省为负，
+        // 由 formatPercent 下限 0% 体现「无压缩优势」，不再 ratio>100 clamp 假性 100% 误导。
+        // 同时压缩比 1.X:1 = vanilla/actual 保留：>1 表示 ZSTD 比 Zlib 省，<1 表示反而膨胀。
+        double saving = vanillaRecv > 0
+                ? (double) (vanillaRecv - actualRecv) / vanillaRecv * 100.0
+                : 0.0;
         return String.format("§e带宽压缩：§r%s（当前 %s，原版 %s，压缩比 %s）",
-                MetricsTextFormatter.formatPercent(ratio),
+                MetricsTextFormatter.formatPercent(saving),
                 MetricsTextFormatter.formatBytes(actualRecv),
                 MetricsTextFormatter.formatBytes(vanillaRecv),
                 MetricsTextFormatter.formatCompressionRatio(vanillaRecv, actualRecv));
@@ -126,28 +134,39 @@ public class HassiumCommandHandler {
     }
 
     private static String formatSavingsLine(HassiumMetricsImpl m) {
-        // 合并所有优化口径的「带宽节省」line：
-        //   current                = actual recieved (Primary + Data 多通道 + 聚合)
-        //   savedByCacheFullHit    = cacheHitFullChunkBytes  (缓存全命中省去从服务端重发)
-        //   savedByCacheDelta      = cacheDeltaSavedBytes     (分段增量只发差异省去全量)
-        //   savedByLightHit        = lightCacheHitBytes       (光照命中省去 chunk packet 内携带光照字节)
-        //   savedByOvd              = OVD 已加载 chunks × ESTIMATED_CHUNK_BYTES
-        //                          (vanilla 等价为让玩家看到 clientVD 视野，需 serverVD=clientVD，多推的 chunks)
-        //   original = current + 全部 saved；saving% = saved/original × 100
-        // 所有 saved 字段已统一为 NetworkStats.ESTIMATED_*_BYTES 口径 (16KB/chunk)。
+        // 「带宽节省」line 合并所有 Hassium 优化（含压缩）相对纯 vanilla Zlib 等价总 wire 的节省。
+        // 口径：所有按 wire 字节同源——vanilla Zlib 压缩后等价 wire，
+        //      current = actualBytesReceived 是 Hassium ZSTD 实际 wire。
+        //
+        // 公式：
+        //   total_vanilla_wire = vanillaBytesReceived (实际发出 chunk 包的 vanilla Zlib 等价 wire，已由 recordChunkReceived 累计)
+        //                     + savedByCacheFullHit    (vanilla 等价为走全量推这些 chunk，VanillaZlibEstimator.estimate(16KB) × count)
+        //                     + savedByCacheDelta       (同上，分段增量对应 vanilla 全量 wire)
+        //                     + savedByLightHit          (光照命中时 vanilla 等价随 chunk packet 携带光照字节)
+        //                     + savedByOvd                (OVD 拿到的 chunks 在 vanilla 要 serverVD=clientVD 才能推)
+        //   current  = actualBytesReceived  (Hassium ZSTD wire)
+        //   saved    = total_vanilla_wire - current
+        //              (= 各优化 wire 节省 + 压缩节省自带；ZSTD 比 Zlib 更省的部分)
+        //   saving%  = saved / total_vanilla_wire × 100
+        //
+        // ROUND1 命中：saved 仅含压缩节省，saving% ≈ 带宽压缩 saving%（≈40%）。
+        // ROUND2 OVD+cache 全开：saved 同时含压缩/缓存/光照/OVD 全套优化，saving% 高 → 99% 区间。
+        long chunkWireEstimate = VanillaZlibEstimator.estimate((int) NetworkStats.ESTIMATED_CHUNK_BYTES);
+        long lightWireEstimate = VanillaZlibEstimator.estimate((int) NetworkStats.ESTIMATED_LIGHT_BYTES);
+        long savedByCacheFullHit = chunkWireEstimate * m.getCacheHitFullChunkCount();
+        long savedByCacheDelta = chunkWireEstimate * m.getCacheDeltaCount();
+        long savedByLightHit = lightWireEstimate * m.getLightCacheHitCount();
+        long savedByOvd = chunkWireEstimate
+                * ViewDistanceExtensionService.getInstance().getLoadedCount();
+        long totalVanillaWire = m.getVanillaBytesReceived()
+                + savedByCacheFullHit + savedByCacheDelta + savedByLightHit + savedByOvd;
         long current = m.getActualBytesReceived();
-        long savedByCacheFullHit = m.getCacheHitFullChunkBytes();
-        long savedByCacheDelta = m.getCacheDeltaSavedBytes();
-        long savedByLightHit = m.getLightCacheHitBytes();
-        long savedByOvd = (long) ViewDistanceExtensionService.getInstance().getLoadedCount()
-                * NetworkStats.ESTIMATED_CHUNK_BYTES;
-        long saved = savedByCacheFullHit + savedByCacheDelta + savedByLightHit + savedByOvd;
-        long original = current + saved;
-        double saving = original > 0 ? (double) saved / original * 100.0 : 0.0;
+        long saved = Math.max(0L, totalVanillaWire - current);
+        double saving = totalVanillaWire > 0 ? (double) saved / totalVanillaWire * 100.0 : 0.0;
         return String.format("§e带宽节省：§r%s（当前 %s，原版 %s）",
                 MetricsTextFormatter.formatPercent(saving),
                 MetricsTextFormatter.formatBytes(current),
-                MetricsTextFormatter.formatBytes(original));
+                MetricsTextFormatter.formatBytes(totalVanillaWire));
     }
 
     /**
