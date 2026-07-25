@@ -10,6 +10,7 @@ import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioSocketChannel;
 import io.netty.handler.timeout.ReadTimeoutHandler;
 import org.slf4j.Logger;
+import io.github.limuqy.mc.hassium.utils.DebugLogger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
@@ -57,8 +58,9 @@ public class DataPlaneClientBundle {
     /** 连接到所有 PoC 端点并发送 BindRequest */
     public void connectAndBind() {
         if (!DataPlanePoCConfig.isEnabled() || !DataPlanePoCConfig.CLIENT_ENABLE_DATA_PLANE) return;
-        if (DataPlanePoCConfig.DEBUG_DATAPLANE) {
-            LOGGER.info("DataPlaneClient: connecting endpoints={} reqChannelId={} protocol={}",
+        if (DataPlanePoCConfig.isDataplaneLogEnabled()) {
+            DebugLogger.info(DebugLogger.LogType.DATAPLANE,
+                    "DataPlaneClient: connecting endpoints={} reqChannelId={} protocol={}",
                     DataPlanePoCConfig.endpointsSummary(), REQ_CHANNEL_ID, REQ_PROTOCOL);
         } else {
             LOGGER.info("DataPlaneClient: connecting to {} endpoint(s)...", DataPlanePoCConfig.ENDPOINTS.length);
@@ -69,9 +71,10 @@ public class DataPlaneClientBundle {
             // 与服务端同源派生读密钥（服务端用同一 portIdx + reqChannelId 加密）
             byte[] aesKey = DataPlaneServer.deriveChannelKey(portIdx, REQ_CHANNEL_ID);
             try {
-                if (DataPlanePoCConfig.DEBUG_DATAPLANE) {
+                if (DataPlanePoCConfig.isDataplaneLogEnabled()) {
                     String keyHex = String.format("%02X%02X%02X%02X…(%d)", aesKey[0] & 0xFF, aesKey[1] & 0xFF, aesKey[2] & 0xFF, aesKey[3] & 0xFF, aesKey.length);
-                    LOGGER.info("DataPlaneClient: connecting #{} {}:{} reqChannelId={} keyPrefix={}", portIdx, ep.address, ep.port, REQ_CHANNEL_ID, keyHex);
+                    DebugLogger.info(DebugLogger.LogType.DATAPLANE,
+                            "DataPlaneClient: connecting #{} {}:{} reqChannelId={} keyPrefix={}", portIdx, ep.address, ep.port, REQ_CHANNEL_ID, keyHex);
                 }
                 ChannelFuture f = new Bootstrap()
                         .group(workerGroup)
@@ -115,8 +118,9 @@ public class DataPlaneClientBundle {
         byte[] payload = out.toByteArray();
         byte[] frame = DataPlaneFrame.encode(DataPlaneFrame.TYPE_BIND_REQUEST, payload);
         channel.writeAndFlush(Unpooled.wrappedBuffer(frame));
-        if (DataPlanePoCConfig.DEBUG_DATAPLANE) {
-            LOGGER.info("DataPlaneClient: sent BindRequest frameLen={} tokenBytes={} reqChannelId={} protocol={}",
+        if (DataPlanePoCConfig.isDataplaneLogEnabled()) {
+            DebugLogger.info(DebugLogger.LogType.DATAPLANE,
+                    "DataPlaneClient: sent BindRequest frameLen={} tokenBytes={} reqChannelId={} protocol={}",
                     frame.length, DataPlanePoCConfig.BIND_TOKEN.length, REQ_CHANNEL_ID, REQ_PROTOCOL);
         }
     }
@@ -159,16 +163,17 @@ public class DataPlaneClientBundle {
                     // 未 Bind 完成前收到的应是 BindAck（明文帧）
                     int ackType = DataPlaneFrame.decodeType(frame);
                     byte[] ackPayload = DataPlaneFrame.decodePayload(frame);
-                    if (DataPlanePoCConfig.DEBUG_DATAPLANE) {
-                        LOGGER.info("DataPlaneClient: pre-bind frame portIdx={} ackType={} payloadLen={}", portIdx, ackType, ackPayload.length);
+                    if (DataPlanePoCConfig.isDataplaneLogEnabled()) {
+                        DebugLogger.info(DebugLogger.LogType.DATAPLANE,
+                                "DataPlaneClient: pre-bind frame portIdx={} ackType={} payloadLen={}", portIdx, ackType, ackPayload.length);
                     }
                     handleBindAck(ctx, ackType, ackPayload);
                     return;
                 }
 
-                // Bind 后业务帧为加密帧：先解密再 demux
-                if (DataPlanePoCConfig.DEBUG_DATAPLANE) {
-                    LOGGER.info("DataPlaneClient: enc frame in portIdx={} frameLen={}", portIdx, frame.length);
+                if (DataPlanePoCConfig.isDataplaneLogEnabled()) {
+                    DebugLogger.info(DebugLogger.LogType.DATAPLANE,
+                            "DataPlaneClient: enc frame in portIdx={} frameLen={}", portIdx, frame.length);
                 }
                 DataPlaneCodec.FrameDecryptResult dec;
                 try {
@@ -177,8 +182,9 @@ public class DataPlaneClientBundle {
                     LOGGER.warn("DataPlaneClient: decrypt failed (key mismatch?) portIdx={} frameLen={} dropping frame", portIdx, frame.length, e);
                     return;
                 }
-                if (DataPlanePoCConfig.DEBUG_DATAPLANE) {
-                    LOGGER.info("DataPlaneClient: dec ok portIdx={} type={} payloadLen={}", portIdx, dec.type, dec.payload.length);
+                if (DataPlanePoCConfig.isDataplaneLogEnabled()) {
+                    DebugLogger.info(DebugLogger.LogType.DATAPLANE,
+                            "DataPlaneClient: dec ok portIdx={} type={} payloadLen={}", portIdx, dec.type, dec.payload.length);
                 }
                 switch (dec.type) {
                     case DataPlaneFrame.TYPE_BULK_COMPRESSED_CHUNK -> handleBulkChunk(dec.payload);
@@ -202,8 +208,9 @@ public class DataPlaneClientBundle {
         private void sendKeepaliveAck(ChannelHandlerContext ctx) {
             byte[] frame = DataPlaneFrame.encode(DataPlaneFrame.TYPE_KEEPALIVE_ACK, new byte[0]);
             ctx.writeAndFlush(Unpooled.wrappedBuffer(frame)).addListener(ChannelFutureListener.FIRE_EXCEPTION_ON_FAILURE);
-            if (DataPlanePoCConfig.DEBUG_DATAPLANE) {
-                LOGGER.info("DataPlaneClient: sent KeepaliveAck portIdx={} frameLen={}", portIdx, frame.length);
+            if (DataPlanePoCConfig.isDataplaneLogEnabled()) {
+                DebugLogger.info(DebugLogger.LogType.DATAPLANE,
+                        "DataPlaneClient: sent KeepaliveAck portIdx={} frameLen={}", portIdx, frame.length);
             }
         }
 
@@ -227,8 +234,9 @@ public class DataPlaneClientBundle {
             // 累加 PoC 临时 Data 帧计数（bulk 经 Data 到达必经此路径；经 Primary 到达不累加）
             bulkFramesData++;
             if (plaintextPayload != null) bulkBytesData += plaintextPayload.length;
-            if (DataPlanePoCConfig.DEBUG_DATAPLANE) {
-                LOGGER.info("DataPlaneClient: handleBulkChunk portIdx={} payloadLen={}", portIdx, plaintextPayload.length);
+            if (DataPlanePoCConfig.isDataplaneLogEnabled()) {
+                DebugLogger.info(DebugLogger.LogType.DATAPLANE,
+                        "DataPlaneClient: handleBulkChunk portIdx={} payloadLen={}", portIdx, plaintextPayload.length);
             }
             try {
                 ClientChunkHandler.handleCompressedChunk(plaintextPayload);

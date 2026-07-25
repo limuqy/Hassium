@@ -117,7 +117,8 @@ public final class HassiumConfigSpec {
                         SERVER.debugCompressionLogging.get(),
                         SERVER.debugChunkApplyLogging.get(),
                         SERVER.debugNetworkLogging.get(),
-                        SERVER.debugCacheLogging.get()
+                        SERVER.debugCacheLogging.get(),
+                        SERVER.debugDataplaneLogging.get()
                 )
         );
     }
@@ -197,6 +198,7 @@ public final class HassiumConfigSpec {
         SERVER.debugChunkApplyLogging.set(debug.chunkApplyLogging());
         SERVER.debugNetworkLogging.set(debug.networkLogging());
         SERVER.debugCacheLogging.set(debug.cacheLogging());
+        SERVER.debugDataplaneLogging.set(debug.dataplaneLogging());
 
         if (CLIENT_SPEC.isLoaded()) {
             CLIENT_SPEC.save();
@@ -419,8 +421,6 @@ public final class HassiumConfigSpec {
         // ---- compat.* ----
         public final ForgeConfigSpec.BooleanValue compatRequireClientMod;
         public final ForgeConfigSpec.BooleanValue compatAutoDowngradeOnError;
-
-        // ---- debug.* ----
         public final ForgeConfigSpec.BooleanValue debugMetadataLogging;
         public final ForgeConfigSpec.BooleanValue debugDispatcherLogging;
         public final ForgeConfigSpec.BooleanValue debugAsyncLogging;
@@ -428,6 +428,7 @@ public final class HassiumConfigSpec {
         public final ForgeConfigSpec.BooleanValue debugChunkApplyLogging;
         public final ForgeConfigSpec.BooleanValue debugNetworkLogging;
         public final ForgeConfigSpec.BooleanValue debugCacheLogging;
+        public final ForgeConfigSpec.BooleanValue debugDataplaneLogging;
 
         Server(ForgeConfigSpec.Builder builder) {
 #else
@@ -470,6 +471,7 @@ public final class HassiumConfigSpec {
         public final ModConfigSpec.BooleanValue debugChunkApplyLogging;
         public final ModConfigSpec.BooleanValue debugNetworkLogging;
         public final ModConfigSpec.BooleanValue debugCacheLogging;
+        public final ModConfigSpec.BooleanValue debugDataplaneLogging;
 
         Server(ModConfigSpec.Builder builder) {
 #endif
@@ -641,6 +643,10 @@ public final class HassiumConfigSpec {
                     .comment("缓存读写日志（默认 false）")
                     .translation("hassium.configuration.debug.cacheLogging")
                     .define("cacheLogging", false);
+            debugDataplaneLogging = builder
+                    .comment("数据面热路径日志：bind/路由/解密/keepalive/帧计数（默认 false — 高频，仅排障时开）")
+                    .translation("hassium.configuration.debug.dataplaneLogging")
+                    .define("dataplaneLogging", false);
             builder.pop();
         }
     }

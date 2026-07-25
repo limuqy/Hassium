@@ -208,10 +208,11 @@ public record HassiumConfig(
             boolean compressionLogging,
             boolean chunkApplyLogging,
             boolean networkLogging,
-            boolean cacheLogging
+            boolean cacheLogging,
+            boolean dataplaneLogging
     ) {
         public static final DebugConfig DEFAULT = new DebugConfig(
-                false, false, false, false, false, false, false
+                false, false, false, false, false, false, false, false
         );
     }
 }

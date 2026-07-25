@@ -54,6 +54,7 @@ Hassium 跨版本（1.20.1–1.21.11）× 多加载器（fabric / neoforge）的
 | `-ReconnectDelayMs` | 否 | `3000` | 第一轮断开后到重连的毫秒 |
 | `-ServerReadyTimeoutSec` | 否 | `160` | 服务端 `Done!` 出现超时 |
 | `-ClientTimeoutSec` | 否 | `100` | 客户端退出超时 |
+| `-SmokePhases` | 否 | `classic,dataplane` | smoke 阶段选择：`classic`（仅经典两轮）/ `dataplane`（仅数据面阶段）/ `classic,dataplane` / `all`（两者） |
 
 ### 批量参数
 
@@ -285,13 +286,14 @@ build/smoke-test/
 | `hassium.serverSmokeTest` | `false` | 服务端启用 `ServerSmokeTest` |
 | `hassium.serverSmokeTest.vd1` | `20` | 第一轮视距 |
 | `hassium.serverSmokeTest.vd2` | `8` | 第二轮视距 |
+| `hassium.smokePhases` | `classic` | smoke 阶段选择（`classic` / `dataplane` / `all` 多值逗号分隔）；服务端 `ServerSmokeTest` 据此进 dataplane 状态机（11 个 DP state 自驱 kill/mode 切换/降级断言） |
 
 ## 相关代码
 
 | 路径 | 作用 |
 |------|------|
 | `common/src/main/java/io/github/limuqy/mc/hassium/client/ClientSmokeTest.java` | 客户端状态机 + 反射重连 + 统计校验 |
-| `common/src/main/java/io/github/limuqy/mc/hassium/server/ServerSmokeTest.java` | 服务端视距切换（启动 VD=20，玩家退出后 VD=8） |
+| `common/src/main/java/io/github/limuqy/mc/hassium/server/ServerSmokeTest.java` | 服务端视距切换（VD=20→8）；`hassium.smokePhases` 含 `dataplane` 时自驱 dataplane 状态机（DP_WARMUP → DP_KILL_ONE/MODE/DONE），主动注入测试 bulk 触发 `degraded` 降级硬断言，输出 `HassiumSmokeTest:DATAPLANE(_PASS/_FAIL)` marker |
 | `common/.../mixin/MixinClientTick.java` | 每帧调用 `ClientSmokeTest.onClientTick` |
 | `common/.../mixin/MixinMinecraftServer.java` | 服务端 tick + init 钩子 |
 | `common/.../metrics/VanillaZlibEstimator.java` | Zlib 管线帧大小估算器（`estimate(byte[])` 精确 + `estimate(int)` 近似） |
@@ -299,5 +301,7 @@ build/smoke-test/
 | `common/.../config/HassiumConfigService.java` | `resolveMetricsEnabled`：冒烟 flag 优先于 toml 配置 |
 | `fabric/.../HassiumClientMod.java`、`forge/.../HassiumForgeClient.java`、`neoforge/.../HassiumNeoForgeClient.java` | 加载器客户端入口，调用 `ClientSmokeTest.initIfEnabled()` |
 | `buildSrc/src/main/groovy/loom-fabric.gradle`、`loom-neoforge.gradle` | `-PhassiumSmokeTest=true` 时注入 JVM 属性 |
+| `common/.../network/dataplane/DataPlaneServer.java` / `DataPlanePoCConfig.java` / `BulkRouter.java` / `DataPlaneClientBundle.java` / `VarIntLengthFrameSplitter.java` | 多通道数据面 PoC 实现；服务端 accept/Bind/kill/mode 切换/主动注入 `tryRouteBulk` 触发 `degraded`，客户端 JOIN 后直连两个副端口 + 解密 demux bulk 帧 |
+| `loom-fabric.gradle` / `loom-neoforge.gradle` 服务端 runConfig 分支 | `-PhassiumSmokePhases` 在服务端分支也补 `-Dhassium.smokePhases`（原仅 client 分支传 phases，是 dataplane 阶段的常见漏接线点） |
 | `scripts/runtime-smoke-test.ps1` | 单次会话脚本 |
 | `scripts/runtime-smoke-test-batch.ps1` | 批量脚本 |

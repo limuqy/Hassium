@@ -33,7 +33,7 @@ Hassium/
 |----|------|
 | `storage/` | `HassiumRegionFile`、`MetadataTable`、`RegionBitmap`、`HassiumChunkWriteBuffer`；type 126 压缩由 `compression/CompressionService` 收口 |
 | `compression/` | `CompressionCodec` / `CompressionService`、字典注册 |
-| `network/` | 握手、ZSTD Pipeline、聚合、chunkHash 推送、`ServerChunkPushManager` |
+| `network/` | 握手、ZSTD Pipeline、聚合、chunkHash 推送、`ServerChunkPushManager`；`network/dataplane/` 多通道数据面（1.20.1 fabric PoC：`DataPlaneFrame` / `Hkdf` / `DataPlaneCodec` / `BulkRouter` / `DataPlaneServer` / `DataPlaneClientBundle` 等，见 [`multi-channel_network_research.md`](multi-channel_network_research.md)） |
 | `cache/` | 客户端缓存、Bloom、`ClientHeatIndex` / `SectionHashStore`、淘汰 |
 | `config/` | `HassiumConfigService` 门面；Fabric：`HassiumTomlConfigIO`；Forge/NeoForge：`HassiumConfigSpec` |
 | `metrics/` | `NetworkStats` 零分配指标 |
@@ -65,8 +65,9 @@ Sector 3+:    [length(4)][type=126][ZSTD 压缩数据]
 | 全局包压缩 | Pipeline 替换原版 Zlib | `globalPacketCompression=true` |
 | 上下文 / magicless / 聚合 | 提升压缩比 | 均默认启用 |
 | 紧凑包头 | 聚合包内 `CompactHeaderCodec` | 默认启用 |
+| 多通道数据面（PoC） | 1.20.1 fabric：双裸 TCP 端口 + Bind + HKDF/AES-CFB8；bulk 走 `BulkRouter`；`share`/`exclusive` 路由 + `degraded` 降级 | `DataPlanePoCConfig.ENABLED`（PoC 静态常量，待迁移 toml `network.dataPlane`） |
 
-控制面（握手、index sync、chunkHash 等）在压缩黑名单，不进 PENDING 聚合缓冲。
+控制面（握手、index sync、chunkHash 等）在压缩黑名单，不进 PENDING 聚合缓冲，亦不进数据面（数据面 Bind 后仅 S2C bulk）。多通道设计见 [`multi-channel_network_research.md`](multi-channel_network_research.md) 与 [`superpowers/specs/2026-07-25-multi-channel-dataplane-poc-design.md`](superpowers/specs/2026-07-25-multi-channel-dataplane-poc-design.md)。
 
 ## 5. 配置默认值（安全与行为）
 
@@ -152,6 +153,7 @@ ERROR / WARN 始终输出。
 | **分段增量** | `clientCache.sectionDeltaEnabled`（默认 true） | MISMATCH 时按 section 比对，仅补变更分段 + BE 覆盖；失败/超时回退全量 | [`chunk-cache.md`](chunk-cache.md) §11.5、[`disk-nbt-cache.md`](disk-nbt-cache.md) |
 | **超视渲染** | `viewDistanceExtensionEnabled`、`maxRenderDistance`、`ovdUnloadDelaySecs` | 多人、clientVD>serverVD 时本地缓存回填环带；Forget 原地 renderOnly；不向服索要视距外区块/BE | [`ovd.md`](ovd.md)、[`chunk-cache.md`](chunk-cache.md) §10 |
 | **世界导出** | `/hassiumc export [<服务器IP>] [seed]` | 客户端缓存 → 原版 Anvil（type2 zlib）；无实体/仅去过的区块快照 | [`chunk-cache.md`](chunk-cache.md) §12、[`disk-nbt-cache.md`](disk-nbt-cache.md) |
+| **多通道数据面（PoC）** | `DataPlanePoCConfig.ENABLED`（1.20.1 fabric） | 服务端双裸 TCP 端口 + Bind + HKDF-SHA256/AES-CFB8；`BulkRouter` 做加权 WRR，`share`（Primary+Data）或 `exclusive`（仅 Data）；无候选 drop → 3 次 `degraded` 降级 Primary | [`multi-channel_network_research.md`](multi-channel_network_research.md) §14.1、[`superpowers/specs/2026-07-25-multi-channel-dataplane-poc-design.md`](superpowers/specs/2026-07-25-multi-channel-dataplane-poc-design.md)、[`superpowers/plans/2026-07-25-multi-channel-dataplane-poc.md`](superpowers/plans/2026-07-25-multi-channel-dataplane-poc.md) |
 
 客户端磁盘缓存 payload 为 NBT（`"HBT1"` + CompoundTag），主一致性路径为 **Live-Unload Snapshot**（renderOnly 跳过落盘）。旧 packet 字节缓存读到即删并全量请求。
 
@@ -161,6 +163,7 @@ ERROR / WARN 始终输出。
 - **分段增量接回超视渲染**：超视渲染 miss 路径仍不走 sectionDelta（需可靠 merge + 集成测试）
 - **`migration/` / `HassiumApi`**：公共 API / 世界迁移工具桩，尚未落地
 - **Fog / Sodium 条件 Mixin**：仅在 RD>32 穿帮或实测 mesh 不建时按需补
+- **数据面生产化**：握手扩展（`HandshakeS2C` 下发 endpoints/token/mode）+ toml 配置 `network.dataPlane`；SectionDelta 接入 `BulkRouter`；分通道 `NetworkStats` 指标；Forge / NeoForge 同构（PoC 已落地 1.20.1 fabric，端到端冒烟 PASS）
 
 ## 11. 相关文档
 
@@ -169,5 +172,8 @@ ERROR / WARN 始终输出。
 - [`disk-nbt-cache.md`](disk-nbt-cache.md) — 磁盘 NBT 缓存、Live-Unload、分段增量、导出细节
 - [`version-segments.md`](version-segments.md) — 九段适配真相源
 - [`mod-compat.md`](mod-compat.md) — 多 Mod 兼容边界与配置逃生
+- [`multi-channel_network_research.md`](multi-channel_network_research.md) — 多通道数据面设计稿（PoC §14 第 1 步已落地）
+- [`superpowers/specs/2026-07-25-multi-channel-dataplane-poc-design.md`](superpowers/specs/2026-07-25-multi-channel-dataplane-poc-design.md) — PoC 设计 spec
+- [`superpowers/plans/2026-07-25-multi-channel-dataplane-poc.md`](superpowers/plans/2026-07-25-multi-channel-dataplane-poc.md) — PoC 实现计划 + 端到端冒烟记录
 - 根目录 `README.md` — 用户安装与特性
 - `CLAUDE.md` / `AGENTS.md` — 开发者与 Agent 入口

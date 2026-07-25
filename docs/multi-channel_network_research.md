@@ -1,13 +1,14 @@
 ---
 name: Multi-channel network research
-overview: 数据面 S2C 大包设计定稿：默认 Primary+Data 加权分流；可 exclusive 完全不走 Primary。endpoint 分离宣告地址（域名/IPv4/IPv6）与可定制 bindPort。C2S/控制面始终 Primary。
+overview: 数据面 S2C 大包设计定稿：默认 Primary+Data 加权分流；可 exclusive 完全不走 Primary。endpoint 分离宣告地址（域名/IPv4/IPv6）与可定制 bindPort。C2S/控制面始终 Primary。PoC（§14 第 1 步）已在 1.20.1 fabric 落地并端到端冒烟通过（见 spec/plan + 现版 §14）。
 todos:
   - id: design-doc
     content: 数据面完整设计稿（本文件；帧/Bind/分流模式/回退）
     status: completed
   - id: poc-dual-port
     content: PoC：双 port + share/exclusive 两种路由 + CompressedPayload WRR
-    status: pending
+    status: completed
+    note: 2026-07-25/26 在 1.20.1 fabric 落地；见 docs/superpowers/specs/2026-07-25-multi-channel-dataplane-poc-design.md 与 docs/superpowers/plans/2026-07-25-multi-channel-dataplane-poc.md；端到端冒烟拿到 DATAPLANE_PASS（commit 6aa36f4）
   - id: handshake-config
     content: HandshakeS2C endpoints/token + server.toml dataPlane 配置
     status: pending
@@ -297,17 +298,26 @@ sendBulk(player, frameType, bytes):
 - `dataPlane.enabled=false`：零行为变化
 - 旧客户端无 multiChannel：服务端不发 endpoints / `useDataPlane=false`
 - 协议 bump 后新旧握手字段向后兼容解码（缺省字段 = 关闭数据面）
-
 ## 14. 实现顺序
 
 1. **PoC**：单机双 port，仅 `BulkCompressedChunk`；先实现 `share`（含 Primary weight），再测 `exclusive` 排队/降级
-2. **配置 + 握手**：toml + HandshakeS2C + 能力位
-3. **SectionDelta** 接入同一 `BulkRouter`
-4. **指标 + 文档**（`docs/` 短文：部署与代理注意）
-5. 三端 NetworkManager / 启动 bind 钩齐
+   - ✅ **已完成（2026-07-25/26，1.20.1 fabric）**：9 个子任务全部落地，端到端冒烟拿到 `DATAPLANE_PASS`；见 spec（[`superpowers/specs/2026-07-25-multi-channel-dataplane-poc-design.md`](superpowers/specs/2026-07-25-multi-channel-dataplane-poc-design.md)）与 plan（[`superpowers/plans/2026-07-25-multi-channel-dataplane-poc.md`](superpowers/plans/2026-07-25-multi-channel-dataplane-poc.md)）。
+   - 实现位置：`common/.../network/dataplane/`（`DataPlaneFrame` / `Hkdf` / `DataPlaneCodec` / `DataPlanePoCConfig` / `PlayerChannel` / `PlayerChannelBundle` / `BulkRouter` / `DataPlaneServer` / `DataPlaneClientBundle` + `VarIntLengthFrameSplitter`）；fabric 侧钩子在 `HassiumMod`（拦截 `sendCompressedChunk`）、`HassiumClientMod`（JOIN 启动 / DISCONNECT 清理）、`MixinMinecraftServer`（生命周期）。
+   - 加密：纯 JDK HKDF-SHA256 + AES/CFB8，**零第三方加密依赖**。HKDF 输入在 PoC 退化为 `ikm=salt=BIND_TOKEN`、`info=FRAME_KEY_INFO_TAG("DPL1")||portIdx||reqChannelId`（per-channel 而非 per-player；spec §4 已注实现偏差，恢复 per-player 需握手传 UUID）。
+   - 简化项：`exclusive` 无候选立即 drop（非真异步排队）+ 连续 3 次 → `degraded=true` 本会话恒走 Primary；真实玩家 UUID 用 `pseudoPlayerId()` 占位，单 bundle；token 全 0、无 TTL。
+2. **配置 + 握手**：toml + HandshakeS2C + 能力位 _（pending：见本稿 §4/§5，PoC 阶段未扩展握手，配置固定在 `DataPlanePoCConfig` 静态常量，待本步迁移 toml）_
+3. **SectionDelta** 接入同一 `BulkRouter` _（pending：PoC 仅跑 `BulkCompressedChunk`；type 4 常量已就位，路由路径暂未挂）_
+4. **指标 + 文档**（`docs/` 短文：部署与代理注意） _（pending：PoC 阶段日志-only，分通道 `NetworkStats` 字节/帧计数留本步）_
+5. 三端 NetworkManager / 启动 bind 钩齐 _（pending：PoC 仅 1.20.1 fabric；Forge/NeoForge 同构留本步）_
+
+### 14.1 PoC 遗留缺陷（不阻塞 §14 第 1 步完成，登记到后续步骤）
+
+- `primaryDelta` 跨进程溯源：`NetworkStats.chunksDecompressed` 是客户端侧计数，分离 JVM 冒烟下结构性恒 0；step5 PASS 放宽为 `degraded`-only。`primaryDelta>0` 留到 §14 第 4 步接入服务端侧已路由帧计数替代反射读客户端。
+- 真实玩家 UUID 绑定：留握手扩展（§14 第 2 步）。
 
 ## 15. 结论摘要
 
 - 默认 **`bulkRouteMode=share`**：Primary 与 Data 按 weight 分流大包
 - 可选 **`exclusive`**：区块大包完全不走 Primary；无通道则短等后 drop + 可会话降级，绝不偷偷打回 Primary（除非降级开关触发）
 - C2S 与控制面始终 Primary；数据面 Bind 后只下行 bulk
+- **PoC（§14 第 1 步）已落地并冒烟通过**；握手扩展 / SectionDelta 接入 / 分通道指标 / 三端同构为后续四步，待 §14 第 2–5 步推进

@@ -103,7 +103,7 @@ public final class HassiumClothConfigScreen {
         render.addEntry(bool(entries, "hassium.configuration.network.metricsEnabled",
                 draft.metricsEnabled, dClientNet.metricsEnabled(), v -> draft.metricsEnabled = v));
 
-        // === Category 3: 调试（7 项）===
+        // === Category 3: 调试（8 项）===
         ConfigCategory debugCat = builder.getOrCreateCategory(
                 Component.translatable("hassium.configuration.category.debug"));
         debugCat.addEntry(bool(entries, "hassium.configuration.debug.metadataLogging",
@@ -120,7 +120,8 @@ public final class HassiumClothConfigScreen {
                 draft.networkLogging, dDebug.networkLogging(), v -> draft.networkLogging = v));
         debugCat.addEntry(bool(entries, "hassium.configuration.debug.cacheLogging",
                 draft.cacheLogging, dDebug.cacheLogging(), v -> draft.cacheLogging = v));
-
+        debugCat.addEntry(bool(entries, "hassium.configuration.debug.dataplaneLogging",
+                draft.dataplaneLogging, dDebug.dataplaneLogging(), v -> draft.dataplaneLogging = v));
         return builder.build();
     }
 
@@ -208,6 +209,7 @@ public final class HassiumClothConfigScreen {
         boolean chunkApplyLogging;
         boolean networkLogging;
         boolean cacheLogging;
+        boolean dataplaneLogging;
 
         static Draft from(HassiumConfig c) {
             Draft d = new Draft();
@@ -245,6 +247,7 @@ public final class HassiumClothConfigScreen {
             d.chunkApplyLogging = debug.chunkApplyLogging();
             d.networkLogging = debug.networkLogging();
             d.cacheLogging = debug.cacheLogging();
+            d.dataplaneLogging = debug.dataplaneLogging();
             return d;
         }
 
@@ -264,7 +267,7 @@ public final class HassiumClothConfigScreen {
                     HassiumConfig.CompatConfig.DEFAULT,
                     new HassiumConfig.DebugConfig(
                             metadataLogging, dispatcherLogging, asyncLogging, compressionLogging,
-                            chunkApplyLogging, networkLogging, cacheLogging
+                            chunkApplyLogging, networkLogging, cacheLogging, dataplaneLogging
                     )
             );
         }

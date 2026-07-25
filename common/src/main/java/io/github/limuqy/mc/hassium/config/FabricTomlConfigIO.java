@@ -332,7 +332,8 @@ public final class FabricTomlConfigIO {
                 getBool(cfg, "debug.compressionLogging", d.compressionLogging()),
                 getBool(cfg, "debug.chunkApplyLogging", d.chunkApplyLogging()),
                 getBool(cfg, "debug.networkLogging", d.networkLogging()),
-                getBool(cfg, "debug.cacheLogging", d.cacheLogging())
+                getBool(cfg, "debug.cacheLogging", d.cacheLogging()),
+                getBool(cfg, "debug.dataplaneLogging", d.dataplaneLogging())
         );
     }
 
@@ -344,6 +345,7 @@ public final class FabricTomlConfigIO {
         set(cfg, "debug.chunkApplyLogging", d.chunkApplyLogging(), "区块 apply 调试日志");
         set(cfg, "debug.networkLogging", d.networkLogging(), "网络调试日志");
         set(cfg, "debug.cacheLogging", d.cacheLogging(), "缓存调试日志");
+        set(cfg, "debug.dataplaneLogging", d.dataplaneLogging(), "数据面（多通道 Data Plane）热路径日志 — 默认 false 以避免高频刷屏");
     }
 
     // --- value helpers ---

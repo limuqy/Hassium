@@ -44,11 +44,19 @@ public class DataPlanePoCConfig {
     public static final boolean KEEPALIVE_ENABLED = true;
 
     /**
-     * PoC 专属 debug 日志总开关（独立于全局 debug.networkLogging）。
-     * 默认 true —— PoC 阶段需观察绑定 / 路由 / 解密链路；生产化阶段迁移到 server.toml 后默认关。
-     * 热路径受此开关保护，避免无条件打日志。
+     * 数据面热路径日志开关（PoC 已落地，1.1.0 起合并进 {@code debug.dataplaneLogging}）。
+     * <p>
+     * 旧 PoC 阶段曾以 {@code public static final boolean DEBUG_DATAPLANE = true} 硬编码开启，
+     * 1.1.0 后改为通过 {@link io.github.limuqy.mc.hassium.utils.DebugLogger#isEnabled} 查
+     * {@link io.github.limuqy.mc.hassium.config.HassiumConfig.DebugConfig#dataplaneLogging()}，
+     * 与其它 7 个 {@code debug.*} 开关保持同一控制面。Hot path 调用点统一改用
+     * {@link io.github.limuqy.mc.hassium.utils.DebugLogger#info(LogType, String, Object...)}，
+     * 调用点判断分支用本方法。
      */
-    public static final boolean DEBUG_DATAPLANE = true;
+    public static boolean isDataplaneLogEnabled() {
+        return io.github.limuqy.mc.hassium.utils.DebugLogger.isEnabled(
+                io.github.limuqy.mc.hassium.utils.DebugLogger.LogType.DATAPLANE);
+    }
 
     public static final byte[] BIND_TOKEN = new byte[16]; // 全零 PoC
 

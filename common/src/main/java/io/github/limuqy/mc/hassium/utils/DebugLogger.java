@@ -22,7 +22,8 @@ public class DebugLogger {
         COMPRESSION,    // 压缩/解压 (HANDLE_COMPRESSED)
         CHUNK_APPLY,    // 区块应用 (APPLY_CHUNK)
         NETWORK,        // 网络传输
-        CACHE           // 缓存操作
+        CACHE,          // 缓存操作
+        DATAPLANE       // 多通道数据面 (Data Plane PoC: bind/路由/解密/keepalive/帧计数)
     }
 
     /**
@@ -43,6 +44,7 @@ public class DebugLogger {
                 case CHUNK_APPLY -> debug.chunkApplyLogging();
                 case NETWORK -> debug.networkLogging();
                 case CACHE -> debug.cacheLogging();
+                case DATAPLANE -> debug.dataplaneLogging();
             };
         } catch (Exception e) {
             return false;

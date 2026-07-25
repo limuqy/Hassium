@@ -10,6 +10,7 @@ import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.handler.timeout.ReadTimeoutHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import io.github.limuqy.mc.hassium.utils.DebugLogger;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -84,8 +85,9 @@ public class DataPlaneServer {
         }
         bossGroup = new NioEventLoopGroup(1);
         workerGroup = new NioEventLoopGroup(4);
-        if (DataPlanePoCConfig.DEBUG_DATAPLANE) {
-            LOGGER.info("DataPlaneServer: binding {} data port(s) {} mode={} primaryWeight={} degradeAfterDrops={}",
+        if (DataPlanePoCConfig.isDataplaneLogEnabled()) {
+            DebugLogger.info(DebugLogger.LogType.DATAPLANE,
+                    "DataPlaneServer: binding {} data port(s) {} mode={} primaryWeight={} degradeAfterDrops={}",
                     DataPlanePoCConfig.ENDPOINTS.length, DataPlanePoCConfig.endpointsSummary(),
                     DataPlanePoCConfig.BULK_ROUTE_MODE, DataPlanePoCConfig.PRIMARY_WEIGHT, DataPlanePoCConfig.DEGRADE_AFTER_DROPS);
         } else {
@@ -162,8 +164,9 @@ public class DataPlaneServer {
     public static boolean tryRouteBulk(UUID playerId, int frameType, byte[] payload) {
         PlayerChannelBundle bundle = getBundle(playerId);
         if (bundle == null) {
-            if (DataPlanePoCConfig.DEBUG_DATAPLANE) {
-                LOGGER.info("DataPlaneServer: tryRouteBulk no bundle playerId={} frameType={} payloadSize={} -> Primary", playerId, frameType, payload.length);
+            if (DataPlanePoCConfig.isDataplaneLogEnabled()) {
+                DebugLogger.info(DebugLogger.LogType.DATAPLANE,
+                        "DataPlaneServer: tryRouteBulk no bundle playerId={} frameType={} payloadSize={} -> Primary", playerId, frameType, payload.length);
             }
             return false; // 未绑定 Data 通道, 走 Primary
         }
@@ -172,8 +175,9 @@ public class DataPlaneServer {
                 bundle, mode,
                 DataPlanePoCConfig.PRIMARY_WEIGHT, DataPlanePoCConfig.DEGRADE_AFTER_DROPS);
         if (target == null) {
-            if (DataPlanePoCConfig.DEBUG_DATAPLANE) {
-                LOGGER.info("DataPlaneServer: tryRouteBulk no Data target (degraded={} mode={}) -> Primary, payloadSize={} frameType={}",
+            if (DataPlanePoCConfig.isDataplaneLogEnabled()) {
+                DebugLogger.info(DebugLogger.LogType.DATAPLANE,
+                        "DataPlaneServer: tryRouteBulk no Data target (degraded={} mode={}) -> Primary, payloadSize={} frameType={}",
                         bundle.degraded, mode, payload.length, frameType);
             }
             return false; // 路由到 Primary 或 degraded
@@ -184,9 +188,9 @@ public class DataPlaneServer {
         }
         try {
             byte[] frame = DataPlaneCodec.encrypt(target.aesKey, frameType, payload);
-            target.channel.writeAndFlush(io.netty.buffer.Unpooled.wrappedBuffer(frame));
-            if (DataPlanePoCConfig.DEBUG_DATAPLANE) {
-                LOGGER.info("DataPlaneServer: routed portIdx={} frameType={} payloadSize={} -> encFrameSize={} weight={} addr={}",
+            if (DataPlanePoCConfig.isDataplaneLogEnabled()) {
+                DebugLogger.info(DebugLogger.LogType.DATAPLANE,
+                        "DataPlaneServer: routed portIdx={} frameType={} payloadSize={} -> encFrameSize={} weight={} addr={}",
                         target.portIdx, frameType, payload.length, frame.length, target.weight, target.channel.remoteAddress());
             }
             return true;
@@ -203,9 +207,10 @@ public class DataPlaneServer {
         writeTagInt(info, 4, portIdx);
         writeTagInt(info, 8, reqChannelId);
         byte[] key = Hkdf.extractAndExpand(DataPlanePoCConfig.BIND_TOKEN, DataPlanePoCConfig.BIND_TOKEN, info, 16);
-        if (DataPlanePoCConfig.DEBUG_DATAPLANE) {
+        if (DataPlanePoCConfig.isDataplaneLogEnabled()) {
             String keyHex = String.format("%02X%02X%02X%02X…(%d)", key[0] & 0xFF, key[1] & 0xFF, key[2] & 0xFF, key[3] & 0xFF, key.length);
-            LOGGER.info("DataPlaneServer: deriveChannelKey portIdx={} reqChannelId={} keyPrefix={} ", portIdx, reqChannelId, keyHex);
+            DebugLogger.info(DebugLogger.LogType.DATAPLANE,
+                    "DataPlaneServer: deriveChannelKey portIdx={} reqChannelId={} keyPrefix={} ", portIdx, reqChannelId, keyHex);
         }
         return key;
     }
@@ -334,8 +339,9 @@ public class DataPlaneServer {
                     LOGGER.warn("DataPlaneServer: keepalive encrypt/send failed portIdx={}", portIdx, t);
                 }
             }, interval, interval, TimeUnit.SECONDS);
-            if (DataPlanePoCConfig.DEBUG_DATAPLANE) {
-                LOGGER.info("DataPlaneServer: keepalive started portIdx={} interval={}s", portIdx, interval);
+            if (DataPlanePoCConfig.isDataplaneLogEnabled()) {
+                DebugLogger.info(DebugLogger.LogType.DATAPLANE,
+                        "DataPlaneServer: keepalive started portIdx={} interval={}s", portIdx, interval);
             }
         }
 
