@@ -1512,6 +1512,24 @@ git commit -m "feat(poc/dataplane): DataPlaneClientBundle — connect, bind, dem
 
 ---
 
+## Post-PoC 补强（2026-07-26）：冒烟测试补齐设计稿 §7 遗漏
+
+审计发现原 plan 未覆盖设计稿 §7 的三项硬断言（kill 单 Data / exclusive 降级 / ENABLED=false 回归）。
+在 master 上新增三个 commit 补齐：
+
+| Commit | 范围 | 对应 §7 |
+|--------|------|--------|
+| `e30d3ce` | `DataPlaneServer` 加 `runtimeMode`/`killDataChannelByPortIdx`；`DataPlanePoCConfig` `ENABLED` → `volatile` + `isEnabled/setEnabled`；`DataPlaneClientBundle` 加 Data 帧计数器；新增 `DataPlaneEnabledGuardTest`（5 用例） | §7 step 7（enabled=false 回归） |
+| `90c249d` | `ServerSmokeTest` 加 dataplane 阶段状态机（11 个 DP state，自驱 kill/mode 切换/降级断言）；`ClientSmokeTest` 加阶段选择 + Data 帧计数上报；`loom-fabric.gradle` 加 `-Dhassium.smokePhases` | §7 step 4（kill 单 Data → bundle.size=1）、step 5（exclusive + 全 kill → degraded → Primary fallback） |
+| `6f81846` | 文档跟踪 commit | doc hygiene |
+
+**烟雾触发变化：** classic 默认行为完全不变；显式 `-Dhassium.smokePhases=dataplane`（或 `classic,dataplane` / `all`）才切入新阶段状态机。
+MTF 校验由服务端 `ServerSmokeTest.driveDataplane` 自驱（无需新增 C2S 通道，符合 §3「不扩展握手」约束），客户端只提供流量 + 日志 Data 帧计数 delta。
+
+**附带文档偏差（已回写 spec）：** HKDF 派生参数与父协议 §6.4 不一致 —— PoC 实现为 `ikm=salt=BIND_TOKEN`、`info=FRAME_KEY_INFO_TAG||portIdx||reqChannelId`（per-channel 而非 per-player），已在 `docs/superpowers/specs/2026-07-25-multi-channel-dataplane-poc-design.md` §4（Key derivation）补「实现偏差」说明。
+
+---
+
 **Plan complete. Two execution options:**
 
 **1. Subagent-Driven (recommended)** — I dispatch a fresh subagent per task with isolated worktree, review between tasks, fast iteration

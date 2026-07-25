@@ -120,11 +120,18 @@ After Bind: encrypt `type||payload` with AES/CFB8; `frameLen` remains cleartext.
 
 ```
 dataKey = HKDF-SHA256(
-  ikm  = bindToken,                 # 16 bytes from PoC config
-  salt = playerUUID bytes,          # 16 bytes
-  info = "hassium-dataplane-v1" || channelId
+  ikm  = BIND_TOKEN,               # 16 bytes from PoC config (PoC 全 0)
+  salt = BIND_TOKEN,               # PoC 复用 BIND_TOKEN 作为 salt
+  info = FRAME_KEY_INFO_TAG || portIdx || reqChannelId
 )[16]
 ```
+
+> **实现偏差（PoC vs 父协议 §6.4）**
+> 父协议 §6.4 规定 `salt = playerUUID bytes`、`info = "hassium-dataplane-v1" || channelId`。
+> PoC 因「不扩展握手、无法绑定真实玩家 UUID」约束（见 §3 `pseudoPlayerId`），统一用 `DataPlanePoCConfig.pseudoPlayerId()` 归入同一 bundle，
+> 故 HKDF 输入改为全玩家共用的常量：`ikm = salt = BIND_TOKEN`，`info = FRAME_KEY_INFO_TAG("DPL1") || portIdx(int32 BE) || reqChannelId(int32 BE)`。
+> 即**单密钥派生策略退化为「per-channel 而非 per-player」**，PoC 安全性下限可接受（BIND_TOKEN 本身 PoC 为全 0）；
+> 后续若恢复 `salt=playerUUID`，需先将 bundle 绑定回真实玩家（握手传 UUID），见 §11 post-PoC。
 
 - No reuse of main connection Cipher state
 - No second pipeline ZSTD on Data path (payload already application-compressed)
