@@ -34,9 +34,29 @@ public class DataPlaneClientBundle {
     private final NioEventLoopGroup workerGroup = new NioEventLoopGroup(2);
     private volatile boolean bound = false;
 
+    /**
+     * 客户端经 Data 通道收到的 bulk 帧计数（PoC 临时指标，不入 {@code NetworkStats}，
+     * 设计稿 §11 把分通道指标列为 post-PoC）。仅 {@link DataPlaneClientHandler#handleBulkChunk} 累加 ——
+     * bulk 经 Primary 到达绝不会进该路径，故「Data 通道来的 bulk」与「total − Data」可分离。
+     * <p>
+     * 冒烟断言用 delta（结束快照 − 起始快照），跨轮前显式 {@link #resetDataBulkCounters()}。
+     */
+    public static volatile long bulkFramesData = 0;
+    public static volatile long bulkBytesData = 0;
+
+    /** 当前 Data 通道 bulk 帧累计数。 */
+    public static long getBulkFramesData() { return bulkFramesData; }
+
+    /** 当前 Data 通道 bulk 累计字节。 */
+    public static long getBulkBytesData() { return bulkBytesData; }
+
+    /** 复位 Data 帧/字节计数（冒烟跨轮/跨阶段边界调用，避免污染）。 */
+    public static void resetDataBulkCounters() { bulkFramesData = 0; bulkBytesData = 0; }
+
+
     /** 连接到所有 PoC 端点并发送 BindRequest */
     public void connectAndBind() {
-        if (!DataPlanePoCConfig.ENABLED || !DataPlanePoCConfig.CLIENT_ENABLE_DATA_PLANE) return;
+        if (!DataPlanePoCConfig.isEnabled() || !DataPlanePoCConfig.CLIENT_ENABLE_DATA_PLANE) return;
         if (DataPlanePoCConfig.DEBUG_DATAPLANE) {
             LOGGER.info("DataPlaneClient: connecting endpoints={} reqChannelId={} protocol={}",
                     DataPlanePoCConfig.endpointsSummary(), REQ_CHANNEL_ID, REQ_PROTOCOL);
@@ -191,6 +211,9 @@ public class DataPlaneClientBundle {
         private void handleBulkChunk(byte[] plaintextPayload) {
             // plaintextPayload = CompressedChunkData.encode() 输出
             // 交给 ClientChunkHandler 走标准路径: 解压 → 入库 → apply
+            // 累加 PoC 临时 Data 帧计数（bulk 经 Data 到达必经此路径；经 Primary 到达不累加）
+            bulkFramesData++;
+            if (plaintextPayload != null) bulkBytesData += plaintextPayload.length;
             if (DataPlanePoCConfig.DEBUG_DATAPLANE) {
                 LOGGER.info("DataPlaneClient: handleBulkChunk portIdx={} payloadLen={}", portIdx, plaintextPayload.length);
             }

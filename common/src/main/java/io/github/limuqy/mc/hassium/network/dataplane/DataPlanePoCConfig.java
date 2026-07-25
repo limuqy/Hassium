@@ -6,7 +6,23 @@ package io.github.limuqy.mc.hassium.network.dataplane;
  */
 public class DataPlanePoCConfig {
 
-    public static final boolean ENABLED = true;
+    /**
+     * PoC 数据面总开关。
+     * <p>
+     * 由 {@link #isEnabled()} / {@link #setEnabled(boolean)} 读写，故非 {@code final}；
+     * {@code volatile} 保证多线程可见。改非 final 的目的：单测可 {@code setEnabled(false)}
+     * 验证「关闭即零副作用、走 vanilla Primary 路径」（设计稿 §7 step 7 回归守护），
+     * 避免 {@code static final} 编译期内联进 {@code HassiumMod} 字节码后反射改不动。
+     * 默认值仍为 {@code true}。
+     */
+    private static volatile boolean ENABLED = true;
+
+    /** PoC 数据面总开关读取入口（call site 一律走此方法，便于将来迁移到 server.toml）。 */
+    public static boolean isEnabled() { return ENABLED; }
+
+    /** 供单测/冒烟在线翻转总开关；true=启用 Data 通道路由。生产化阶段迁移到 server.toml 后此方法废弃。 */
+    public static void setEnabled(boolean enabled) { ENABLED = enabled; }
+
     public static final String BULK_ROUTE_MODE = "share"; // "share" | "exclusive"
     public static final int PRIMARY_WEIGHT = 100;
     public static final int DEGRADE_AFTER_DROPS = 3;

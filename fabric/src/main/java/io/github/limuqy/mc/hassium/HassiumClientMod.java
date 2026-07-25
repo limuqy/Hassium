@@ -39,7 +39,7 @@ public class HassiumClientMod implements ClientModInitializer {
             }
             networkManager.sendHandshakeRequest();
             // 启动 PoC 多通道数据面（与服务端 Data 端口建立连接并 Bind）
-            if (DataPlanePoCConfig.ENABLED && DataPlanePoCConfig.CLIENT_ENABLE_DATA_PLANE) {
+            if (DataPlanePoCConfig.isEnabled() && DataPlanePoCConfig.CLIENT_ENABLE_DATA_PLANE) {
                 if (dataPlane != null) {
                     try { dataPlane.shutdown(); } catch (Exception ignored) {}
                 }

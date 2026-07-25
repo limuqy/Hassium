@@ -27,7 +27,7 @@ public class HassiumMod implements ModInitializer {
         // 设置区块发送器
         ChunkSender.setInstance((player, compressed) -> {
             // PoC 多通道数据面: 先尝试经 Data 通道路由 bulk；命中/丢弃则不再走 Primary
-            if (DataPlanePoCConfig.ENABLED) {
+            if (DataPlanePoCConfig.isEnabled()) {
                 byte[] payload = compressed.encode();
                 boolean routed = DataPlaneServer.tryRouteBulk(
                         DataPlanePoCConfig.pseudoPlayerId(),

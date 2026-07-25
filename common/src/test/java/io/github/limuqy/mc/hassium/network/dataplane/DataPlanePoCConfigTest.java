@@ -8,8 +8,29 @@ class DataPlanePoCConfigTest {
 
     @Test @DisplayName("默认启用了 data plane")
     void defaultEnabled() {
-        assertTrue(DataPlanePoCConfig.ENABLED);
+        // 默认 true；用 try/finally 防止 EnabledGuardTest 等并发用例 setEnabled(false) 污染全局。
+        boolean prev = DataPlanePoCConfig.isEnabled();
+        try {
+            DataPlanePoCConfig.setEnabled(true);
+            assertTrue(DataPlanePoCConfig.isEnabled());
+        } finally {
+            DataPlanePoCConfig.setEnabled(prev);
+        }
     }
+
+    @Test @DisplayName("setEnabled(false) 可在线关闭（volatile，非编译期内联）")
+    void setEnabledFalseTakesEffect() {
+        boolean prev = DataPlanePoCConfig.isEnabled();
+        try {
+            DataPlanePoCConfig.setEnabled(false);
+            assertFalse(DataPlanePoCConfig.isEnabled());
+            DataPlanePoCConfig.setEnabled(true);
+            assertTrue(DataPlanePoCConfig.isEnabled());
+        } finally {
+            DataPlanePoCConfig.setEnabled(prev);
+        }
+    }
+
 
     @Test @DisplayName("两个 endpoint")
     void twoEndpoints() {

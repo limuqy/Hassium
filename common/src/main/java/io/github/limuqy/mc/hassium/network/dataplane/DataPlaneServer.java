@@ -30,10 +30,55 @@ public class DataPlaneServer {
     private static volatile NioEventLoopGroup workerGroup;
     private static volatile boolean bound = false;
 
+    /**
+     * 运行时可覆盖的 bulk 路由模式（share ↔ exclusive）。
+     * <p>
+     * 为 null 时回退到 {@link DataPlanePoCConfig#BULK_ROUTE_MODE}（编译期常量默认 share），
+     * 非空时由 {@link #setRuntimeMode(String)} 在线设置 —— 用于冒烟在不改 {@code static final}
+     * 常量的前提下切换 exclusive 验证降级路径。冒烟结束必须 {@link #clearRuntimeMode()} 复位。
+     */
+    private static volatile String runtimeMode = null;
+
+    /** 设置运行时 bulk 路由模式覆盖；传入 "share" / "exclusive"。传 null 等同 clearRuntimeMode。 */
+    public static void setRuntimeMode(String mode) {
+        runtimeMode = mode;
+    }
+
+    /** 清除运行时模式覆盖，回退到 {@link DataPlanePoCConfig#BULK_ROUTE_MODE}。 */
+    public static void clearRuntimeMode() {
+        runtimeMode = null;
+    }
+
+    /** 读取当前生效的 bulk 路由模式（运行时覆盖优先于常量默认）。 */
+    public static String getRuntimeMode() {
+        return runtimeMode != null ? runtimeMode : DataPlanePoCConfig.BULK_ROUTE_MODE;
+    }
+
+    /**
+     * 主动关闭指定玩家的某条 Data 通道（按 1-based 端点序号 portIdx 匹配）。
+     * <p>
+     * 通道关闭后由 {@link BindHandshakeHandler#channelInactive} 自动从 bundle 移除，
+     * 故 bundle.dataChannels.size() 之后会自动减 1，无需调用方手动 removeChannel。
+     *
+     * @return true = 找到并已触发关闭；false = 该玩家无 bundle 或无匹配 portIdx 的通道。
+     */
+    public static boolean killDataChannelByPortIdx(UUID playerId, int portIdx) {
+        PlayerChannelBundle bundle = getBundle(playerId);
+        if (bundle == null) return false;
+        for (PlayerChannel pc : bundle.getDataChannels()) {
+            if (pc != null && pc.portIdx == portIdx) {
+                pc.close();
+                return true;
+            }
+        }
+        return false;
+    }
+
+
     /** 绑定所有 PoC 数据端口 */
     public static synchronized void bind() {
         if (bound) return;
-        if (!DataPlanePoCConfig.ENABLED) {
+        if (!DataPlanePoCConfig.isEnabled()) {
             LOGGER.info("DataPlaneServer: disabled by config");
             return;
         }
@@ -122,7 +167,7 @@ public class DataPlaneServer {
             }
             return false; // 未绑定 Data 通道, 走 Primary
         }
-        String mode = DataPlanePoCConfig.BULK_ROUTE_MODE;
+        String mode = getRuntimeMode();
         PlayerChannel target = BulkRouter.selectChannel(
                 bundle, mode,
                 DataPlanePoCConfig.PRIMARY_WEIGHT, DataPlanePoCConfig.DEGRADE_AFTER_DROPS);
