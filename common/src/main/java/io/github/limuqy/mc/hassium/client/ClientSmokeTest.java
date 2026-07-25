@@ -58,8 +58,6 @@ public final class ClientSmokeTest {
     /** 阶段选择：classic = 两轮连服 VD 切换；dataplane = 多通道数据面（单次连服 + Data 帧计数报）。 */
     private static volatile boolean runClassic = true;
     private static volatile boolean runDataplane = false;
-    /** dataplane 阶段开始时的基线（跨阶段 delta 计算，避免与 classic 帧混淆）。 */
-    private static volatile long dpBaseDataFrames = 0L;
 
     private ClientSmokeTest() {
     }
@@ -209,11 +207,13 @@ public final class ClientSmokeTest {
             // dataplane 阶段：报 Data 帧计数 delta（Data 帧经 DataPlaneClientBundle.handleBulkChunk 累加；
             // total 来自 NetworkStats.chunksDecompressed，Primary 与 Data 都计入；primaryDelta = total - dataDelta）
             if (runDataplane) {
+                // ROUND2 入口处 NetworkStats.reset() + DataPlaneClientBundle.resetDataBulkCounters()
+                // 已清零两端累加器，故 dataFrames / total 直接代表本轮增量，无需手动减 dpBase。
                 long dataFrames = io.github.limuqy.mc.hassium.network.dataplane.DataPlaneClientBundle.getBulkFramesData();
                 long dataBytes = io.github.limuqy.mc.hassium.network.dataplane.DataPlaneClientBundle.getBulkBytesData();
                 long total = io.github.limuqy.mc.hassium.metrics.NetworkStats.getMetrics().getChunksDecompressed();
-                long dataDelta = dataFrames - dpBaseDataFrames;
-                long primaryDelta = total - dataDelta;
+                long dataDelta = dataFrames; // reset 后基线为 0
+                long primaryDelta = total - dataDelta; // total = Primary+Data 解压帧数和；dataDelta = Data 帧 → primaryDelta = Primary 帧
                 LOGGER.info("HassiumSmokeTest:DATAPLANE_CLIENT_STATS {} dataFrames={} dataBytes={} total={} dataDelta={} primaryDelta={}",
                         roundLabel, dataFrames, dataBytes, total, dataDelta, primaryDelta);
                 // 按 portIdx 区分各 Data 通道实际到达率（PoC share WRR 下两通道观测独立）
@@ -221,6 +221,9 @@ public final class ClientSmokeTest {
                         io.github.limuqy.mc.hassium.network.dataplane.DataPlaneClientBundle.snapshotPerPort();
                 StringBuilder perPortLog = new StringBuilder();
                 for (java.util.Map.Entry<Integer, long[]> e : perPort.entrySet()) {
+                    if (perPortLog.length() > 0) {
+                        perPortLog.append(' ');
+                    }
                     perPortLog.append("port").append(e.getKey()).append('=').append(e.getValue()[0]);
                     perPortLog.append('f').append('/').append(io.github.limuqy.mc.hassium.metrics.MetricsTextFormatter.formatBytes(e.getValue()[1]));
                 }
@@ -318,6 +321,7 @@ public final class ClientSmokeTest {
                 // 重置网络统计，使 ROUND2 的数据独立于 ROUND1
                 try {
                     io.github.limuqy.mc.hassium.metrics.NetworkStats.reset();
+                    io.github.limuqy.mc.hassium.network.dataplane.DataPlaneClientBundle.resetDataBulkCounters();
                     LOGGER.info("HassiumSmokeTest: network stats reset for ROUND2");
                 } catch (Throwable t) {
                     LOGGER.warn("HassiumSmokeTest: failed to reset network stats", t);
