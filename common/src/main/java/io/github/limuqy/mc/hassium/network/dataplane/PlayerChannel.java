@@ -9,11 +9,18 @@ import io.netty.channel.Channel;
 public class PlayerChannel {
     public final Channel channel;
     public final int weight;
+    /** 该连接的派生写密钥（AES-128 key, 来自 HKDF）。服务端写、客户端读需一致。 */
+    public final byte[] aesKey;
     private boolean active = true;
 
     public PlayerChannel(Channel channel, int weight) {
+        this(channel, weight, null);
+    }
+
+    public PlayerChannel(Channel channel, int weight, byte[] aesKey) {
         this.channel = channel;
         this.weight = weight;
+        this.aesKey = aesKey;
     }
 
     public boolean isActive() { return active && channel != null && channel.isActive(); }

@@ -14,7 +14,6 @@ import org.slf4j.LoggerFactory;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Data Plane 服务端。
@@ -27,7 +26,6 @@ public class DataPlaneServer {
     private static final Map<Integer, Channel> SERVER_CHANNELS = new LinkedHashMap<>();
     private static final ConcurrentHashMap<Channel, UUID> CHANNEL_TO_PLAYER = new ConcurrentHashMap<>();
     private static final ConcurrentHashMap<UUID, PlayerChannelBundle> PLAYER_BUNDLES = new ConcurrentHashMap<>();
-    private static final AtomicLong CHANNEL_ID_GEN = new AtomicLong(0);
     private static volatile NioEventLoopGroup bossGroup;
     private static volatile NioEventLoopGroup workerGroup;
     private static volatile boolean bound = false;
@@ -42,17 +40,18 @@ public class DataPlaneServer {
         bossGroup = new NioEventLoopGroup(1);
         workerGroup = new NioEventLoopGroup(4);
         LOGGER.info("DataPlaneServer: binding {} data port(s)...", DataPlanePoCConfig.ENDPOINTS.length);
-        for (DataPlanePoCConfig.Endpoint ep : DataPlanePoCConfig.ENDPOINTS) {
-            long channelId = CHANNEL_ID_GEN.incrementAndGet();
+        for (int idx = 0; idx < DataPlanePoCConfig.ENDPOINTS.length; idx++) {
+            DataPlanePoCConfig.Endpoint ep = DataPlanePoCConfig.ENDPOINTS[idx];
+            int portIdx = idx + 1; // 1-based，客户端用同样序号派生密钥
             ServerBootstrap b = new ServerBootstrap()
                 .group(bossGroup, workerGroup)
                 .channel(NioServerSocketChannel.class)
-                .childHandler(new DataPlaneChannelInitializer(channelId))
+                .childHandler(new DataPlaneChannelInitializer(portIdx))
                 .childOption(ChannelOption.TCP_NODELAY, true);
             try {
                 Channel ch = b.bind(ep.bindHost, ep.bindPort).sync().channel();
                 SERVER_CHANNELS.put(ep.bindPort, ch);
-                LOGGER.info("DataPlaneServer: bound to {}:{} (weight={})", ep.bindHost, ep.bindPort, ep.weight);
+                LOGGER.info("DataPlaneServer: bound to {}:{} (weight={}, portIdx={})", ep.bindHost, ep.bindPort, ep.weight, portIdx);
             } catch (Exception e) {
                 LOGGER.error("DataPlaneServer: failed to bind {}:{}", ep.bindHost, ep.bindPort, e);
             }
@@ -102,24 +101,26 @@ public class DataPlaneServer {
     public static boolean isBound() { return bound; }
 
     /**
-     * 尝试把 bulk payload 路由到玩家的 Data 通道（加密写入）。
+     * 尝试把 bulk payload 路由到玩家的 Data 通道（用其 per-channel 派生密钥加密写入）。
      *
-     * @param playerId 玩家 UUID（PoC 客户端层用真实 UUID 服务端拦截；bundle 由 Bind 时建立）
+     * @param playerId 玩家 UUID（PoC 服务端用 {@link DataPlanePoCConfig#pseudoPlayerId()}）
      * @param frameType {@link DataPlaneFrame} 帧类型（BULK_COMPRESSED_CHUNK / BULK_SECTION_DELTA）
      * @param payload 帧业务 payload（未经 DataPlaneCodec 加密）
-     * @param channelKeyMaterial 用于派生每帧写密钥的信息（PoC: BIND_TOKEN + frameType + 通道序号）
      * @return true = 已写入 Data 通道或已丢弃（caller 不应再走 Primary）；false = 走 Primary
      */
-    public static boolean tryRouteBulk(UUID playerId, int frameType, byte[] payload, byte[] channelKeyMaterial) {
+    public static boolean tryRouteBulk(UUID playerId, int frameType, byte[] payload) {
         PlayerChannelBundle bundle = getBundle(playerId);
         if (bundle == null) return false; // 未绑定 Data 通道, 走 Primary
         PlayerChannel target = BulkRouter.selectChannel(
                 bundle, DataPlanePoCConfig.BULK_ROUTE_MODE,
                 DataPlanePoCConfig.PRIMARY_WEIGHT, DataPlanePoCConfig.DEGRADE_AFTER_DROPS);
         if (target == null) return false; // 路由到 Primary 或 degraded
+        if (target.aesKey == null) {
+            LOGGER.warn("DataPlaneServer: target channel has no derived key, falling back to Primary");
+            return false;
+        }
         try {
-            byte[] key = deriveFrameKey(channelKeyMaterial);
-            byte[] frame = DataPlaneCodec.encrypt(key, frameType, payload);
+            byte[] frame = DataPlaneCodec.encrypt(target.aesKey, frameType, payload);
             target.channel.writeAndFlush(io.netty.buffer.Unpooled.wrappedBuffer(frame));
             return true;
         } catch (Exception e) {
@@ -128,35 +129,43 @@ public class DataPlaneServer {
         }
     }
 
-    /** 每帧派生密钥: HKDF(BIND_TOKEN, info=frameType||channelKeyMaterial, len=16) */
-    private static byte[] deriveFrameKey(byte[] channelKeyMaterial) {
-        byte[] info = new byte[4 + channelKeyMaterial.length];
-        info[0] = (byte) DataPlanePoCConfig.FRAME_KEY_INFO_TAG;
-        System.arraycopy(channelKeyMaterial, 0, info, 4, channelKeyMaterial.length);
+    /** 派生 per-channel 写密钥: HKDF(BIND_TOKEN, salt=BIND_TOKEN, info=FRAME_KEY_INFO_TAG||portIdx||reqChannelId, 16) */
+    static byte[] deriveChannelKey(int portIdx, int reqChannelId) {
+        byte[] info = new byte[4 + 4 + 4];
+        writeTagInt(info, 0, DataPlanePoCConfig.FRAME_KEY_INFO_TAG);
+        writeTagInt(info, 4, portIdx);
+        writeTagInt(info, 8, reqChannelId);
         return Hkdf.extractAndExpand(DataPlanePoCConfig.BIND_TOKEN, DataPlanePoCConfig.BIND_TOKEN, info, 16);
+    }
+
+    private static void writeTagInt(byte[] buf, int off, int v) {
+        buf[off]     = (byte) (v >>> 24);
+        buf[off + 1] = (byte) (v >>> 16);
+        buf[off + 2] = (byte) (v >>> 8);
+        buf[off + 3] = (byte) v;
     }
 
     /** ChannelInitializer: 读超时 → Bind 校验 → 帧编解码 */
     static class DataPlaneChannelInitializer extends ChannelInitializer<SocketChannel> {
-        private final long channelId;
-        DataPlaneChannelInitializer(long channelId) { this.channelId = channelId; }
+        private final int portIdx; // 1-based 端点序号，用作派生密钥的子组分
+        DataPlaneChannelInitializer(int portIdx) { this.portIdx = portIdx; }
 
         @Override
         protected void initChannel(SocketChannel ch) {
             ch.pipeline()
                 .addLast("timeout", new ReadTimeoutHandler(5, TimeUnit.SECONDS))
-                .addLast("bindHandler", new BindHandshakeHandler(channelId));
+                .addLast("bindHandler", new BindHandshakeHandler(portIdx));
         }
     }
 
     /** Bind 握手 Handler：接受 BindRequest → 验证 token → BindAck → 加入 PlayerChannelBundle */
     @ChannelHandler.Sharable
     static class BindHandshakeHandler extends ChannelInboundHandlerAdapter {
-        private final long channelId;
+        private final int portIdx;
         private boolean bound = false;
         private UUID playerId;
 
-        BindHandshakeHandler(long channelId) { this.channelId = channelId; }
+        BindHandshakeHandler(int portIdx) { this.portIdx = portIdx; }
 
         @Override
         public void channelActive(ChannelHandlerContext ctx) {
@@ -216,20 +225,20 @@ public class DataPlaneServer {
             int reqChannelId = readVarInt(rest);
             int reqProtocol = readVarInt(rest);
 
-            // PoC: 玩家身份来自客户端的 UUID，但 PoC 不扩展握手故无法绑 UUID；
-            // 使用 channelId 作为伪 player 标识，保证同 player 多通道归到同一 bundle。
-            // 真正绑定 UUID 留到握手扩展阶段。此处用 channelId 的低64位作为 playerId 桶键。
-            long pseudoId = reqChannelId & 0xFFFFFFFFL;
-            playerId = new UUID(0L, pseudoId);
-            PlayerChannelBundle bundle = getOrCreateBundle(playerId);
-            PlayerChannel pc = new PlayerChannel(ctx.channel(), endpointWeightFor(reqChannelId));
+            // PoC 用固定伪 player（无握手扩展，无法绑定真实玩家 UUID）。
+            // 所有 Data 通道归入同一 bundle，便于拦截处用 pseudoPlayerId() 查询路由。
+            this.playerId = DataPlanePoCConfig.pseudoPlayerId();
+            PlayerChannelBundle bundle = getOrCreateBundle(this.playerId);
+            // 派生 per-channel 写密钥：HKDF(BIND_TOKEN, salt=BIND_TOKEN, info=FRAME_KEY_INFO_TAG||portIdx||reqChannelId, 16)
+            byte[] aesKey = deriveChannelKey(portIdx, reqChannelId);
+            PlayerChannel pc = new PlayerChannel(ctx.channel(), endpointWeightFor(reqChannelId), aesKey);
             bundle.addChannel(pc);
-            CHANNEL_TO_PLAYER.put(ctx.channel(), playerId);
+            CHANNEL_TO_PLAYER.put(ctx.channel(), this.playerId);
             bound = true;
 
             sendBindAck(ctx, true, "");
-            LOGGER.info("DataPlaneServer: bind successful from {} playerId={} channelId={}",
-                ctx.channel().remoteAddress(), playerId, reqChannelId);
+            LOGGER.info("DataPlaneServer: bind successful from {} playerId={} portIdx={} reqChannelId={}",
+                ctx.channel().remoteAddress(), this.playerId, portIdx, reqChannelId);
         }
 
         private int endpointWeightFor(int channelId) {

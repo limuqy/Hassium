@@ -29,15 +29,10 @@ public class HassiumMod implements ModInitializer {
             // PoC 多通道数据面: 先尝试经 Data 通道路由 bulk；命中/丢弃则不再走 Primary
             if (DataPlanePoCConfig.ENABLED) {
                 byte[] payload = compressed.encode();
-                byte[] keyMaterial = new byte[8];
-                keyMaterial[0] = (byte) (compressed.chunkX & 0xFF);
-                keyMaterial[1] = (byte) ((compressed.chunkX >> 8) & 0xFF);
-                keyMaterial[2] = (byte) (compressed.chunkZ & 0xFF);
-                keyMaterial[3] = (byte) ((compressed.chunkZ >> 8) & 0xFF);
                 boolean routed = DataPlaneServer.tryRouteBulk(
                         DataPlanePoCConfig.pseudoPlayerId(),
                         DataPlaneFrame.TYPE_BULK_COMPRESSED_CHUNK,
-                        payload, keyMaterial);
+                        payload);
                 if (routed) return;
             }
             FabricNetworkManager.sendCompressedChunk(player, compressed);
