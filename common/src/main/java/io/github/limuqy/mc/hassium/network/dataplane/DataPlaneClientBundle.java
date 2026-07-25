@@ -60,6 +60,7 @@ public class DataPlaneClientBundle {
                             @Override protected void initChannel(SocketChannel ch) {
                                 ch.pipeline()
                                         .addLast("timeout", new ReadTimeoutHandler(5, TimeUnit.SECONDS))
+                                        .addLast("frameSplitter", new VarIntLengthFrameSplitter())
                                         .addLast("dataHandler", new DataPlaneClientHandler(portIdx, aesKey));
                             }
                         })

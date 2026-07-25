@@ -181,6 +181,7 @@ public class DataPlaneServer {
         protected void initChannel(SocketChannel ch) {
             ch.pipeline()
                 .addLast("timeout", new ReadTimeoutHandler(5, TimeUnit.SECONDS))
+                .addLast("frameSplitter", new VarIntLengthFrameSplitter())
                 .addLast("bindHandler", new BindHandshakeHandler(portIdx));
         }
     }
