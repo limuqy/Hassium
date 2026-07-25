@@ -39,7 +39,13 @@ public class DataPlaneServer {
         }
         bossGroup = new NioEventLoopGroup(1);
         workerGroup = new NioEventLoopGroup(4);
-        LOGGER.info("DataPlaneServer: binding {} data port(s)...", DataPlanePoCConfig.ENDPOINTS.length);
+        if (DataPlanePoCConfig.DEBUG_DATAPLANE) {
+            LOGGER.info("DataPlaneServer: binding {} data port(s) {} mode={} primaryWeight={} degradeAfterDrops={}",
+                    DataPlanePoCConfig.ENDPOINTS.length, DataPlanePoCConfig.endpointsSummary(),
+                    DataPlanePoCConfig.BULK_ROUTE_MODE, DataPlanePoCConfig.PRIMARY_WEIGHT, DataPlanePoCConfig.DEGRADE_AFTER_DROPS);
+        } else {
+            LOGGER.info("DataPlaneServer: binding {} data port(s)...", DataPlanePoCConfig.ENDPOINTS.length);
+        }
         for (int idx = 0; idx < DataPlanePoCConfig.ENDPOINTS.length; idx++) {
             DataPlanePoCConfig.Endpoint ep = DataPlanePoCConfig.ENDPOINTS[idx];
             int portIdx = idx + 1; // 1-based，客户端用同样序号派生密钥
@@ -110,11 +116,23 @@ public class DataPlaneServer {
      */
     public static boolean tryRouteBulk(UUID playerId, int frameType, byte[] payload) {
         PlayerChannelBundle bundle = getBundle(playerId);
-        if (bundle == null) return false; // 未绑定 Data 通道, 走 Primary
+        if (bundle == null) {
+            if (DataPlanePoCConfig.DEBUG_DATAPLANE) {
+                LOGGER.info("DataPlaneServer: tryRouteBulk no bundle playerId={} frameType={} payloadSize={} -> Primary", playerId, frameType, payload.length);
+            }
+            return false; // 未绑定 Data 通道, 走 Primary
+        }
+        String mode = DataPlanePoCConfig.BULK_ROUTE_MODE;
         PlayerChannel target = BulkRouter.selectChannel(
-                bundle, DataPlanePoCConfig.BULK_ROUTE_MODE,
+                bundle, mode,
                 DataPlanePoCConfig.PRIMARY_WEIGHT, DataPlanePoCConfig.DEGRADE_AFTER_DROPS);
-        if (target == null) return false; // 路由到 Primary 或 degraded
+        if (target == null) {
+            if (DataPlanePoCConfig.DEBUG_DATAPLANE) {
+                LOGGER.info("DataPlaneServer: tryRouteBulk no Data target (degraded={} mode={}) -> Primary, payloadSize={} frameType={}",
+                        bundle.degraded, mode, payload.length, frameType);
+            }
+            return false; // 路由到 Primary 或 degraded
+        }
         if (target.aesKey == null) {
             LOGGER.warn("DataPlaneServer: target channel has no derived key, falling back to Primary");
             return false;
@@ -122,6 +140,10 @@ public class DataPlaneServer {
         try {
             byte[] frame = DataPlaneCodec.encrypt(target.aesKey, frameType, payload);
             target.channel.writeAndFlush(io.netty.buffer.Unpooled.wrappedBuffer(frame));
+            if (DataPlanePoCConfig.DEBUG_DATAPLANE) {
+                LOGGER.info("DataPlaneServer: routed portIdx={} frameType={} payloadSize={} -> encFrameSize={} weight={} addr={}",
+                        target.portIdx, frameType, payload.length, frame.length, target.weight, target.channel.remoteAddress());
+            }
             return true;
         } catch (Exception e) {
             LOGGER.warn("DataPlaneServer: encrypt/write failed, falling back to Primary", e);
@@ -135,7 +157,12 @@ public class DataPlaneServer {
         writeTagInt(info, 0, DataPlanePoCConfig.FRAME_KEY_INFO_TAG);
         writeTagInt(info, 4, portIdx);
         writeTagInt(info, 8, reqChannelId);
-        return Hkdf.extractAndExpand(DataPlanePoCConfig.BIND_TOKEN, DataPlanePoCConfig.BIND_TOKEN, info, 16);
+        byte[] key = Hkdf.extractAndExpand(DataPlanePoCConfig.BIND_TOKEN, DataPlanePoCConfig.BIND_TOKEN, info, 16);
+        if (DataPlanePoCConfig.DEBUG_DATAPLANE) {
+            String keyHex = String.format("%02X%02X%02X%02X…(%d)", key[0] & 0xFF, key[1] & 0xFF, key[2] & 0xFF, key[3] & 0xFF, key.length);
+            LOGGER.info("DataPlaneServer: deriveChannelKey portIdx={} reqChannelId={} keyPrefix={} ", portIdx, reqChannelId, keyHex);
+        }
+        return key;
     }
 
     private static void writeTagInt(byte[] buf, int off, int v) {
@@ -231,14 +258,14 @@ public class DataPlaneServer {
             PlayerChannelBundle bundle = getOrCreateBundle(this.playerId);
             // 派生 per-channel 写密钥：HKDF(BIND_TOKEN, salt=BIND_TOKEN, info=FRAME_KEY_INFO_TAG||portIdx||reqChannelId, 16)
             byte[] aesKey = deriveChannelKey(portIdx, reqChannelId);
-            PlayerChannel pc = new PlayerChannel(ctx.channel(), endpointWeightFor(reqChannelId), aesKey);
+            PlayerChannel pc = new PlayerChannel(ctx.channel(), endpointWeightFor(reqChannelId), aesKey, portIdx);
             bundle.addChannel(pc);
             CHANNEL_TO_PLAYER.put(ctx.channel(), this.playerId);
             bound = true;
 
             sendBindAck(ctx, true, "");
-            LOGGER.info("DataPlaneServer: bind successful from {} playerId={} portIdx={} reqChannelId={}",
-                ctx.channel().remoteAddress(), this.playerId, portIdx, reqChannelId);
+            LOGGER.info("DataPlaneServer: bind successful from {} playerId={} portIdx={} reqChannelId={} weight={} dataChannels={}",
+                ctx.channel().remoteAddress(), this.playerId, portIdx, reqChannelId, endpointWeightFor(reqChannelId), bundle.getDataChannels().size());
         }
 
         private int endpointWeightFor(int channelId) {
@@ -283,10 +310,11 @@ public class DataPlaneServer {
             int value = 0, shift = 0;
             byte b;
             do {
-                if (!buf.hasRemaining()) return value;
+                if (!buf.hasRemaining()) break;
                 b = buf.get();
                 value |= (b & 0x7F) << shift;
                 shift += 7;
+                if (shift >= 35) break;
             } while ((b & 0x80) != 0);
             return value;
         }

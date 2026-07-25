@@ -64,9 +64,16 @@ public class DataPlaneFrame {
         int value = 0, shift = 0;
         byte b;
         do {
+            if (!buf.hasRemaining()) {
+                // CFB8 错误密钥解出乱码时，连续 0x80 会使循环无法终止 → 这里截断保护。
+                // 返回已读到的 value（截断），调用方据此判断帧不完整。
+                break;
+            }
             b = buf.get();
             value |= (b & 0x7F) << shift;
             shift += 7;
+            // VarInt 最多 5 字节（int32）；超长视为损坏帧，截断保护。
+            if (shift >= 35) break;
         } while ((b & 0x80) != 0);
         return value;
     }

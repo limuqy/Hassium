@@ -12,10 +12,30 @@ public class DataPlanePoCConfig {
     public static final int DEGRADE_AFTER_DROPS = 3;
     public static final boolean CLIENT_ENABLE_DATA_PLANE = true;
 
+    /**
+     * PoC 专属 debug 日志总开关（独立于全局 debug.networkLogging）。
+     * 默认 true —— PoC 阶段需观察绑定 / 路由 / 解密链路；生产化阶段迁移到 server.toml 后默认关。
+     * 热路径受此开关保护，避免无条件打日志。
+     */
+    public static final boolean DEBUG_DATAPLANE = true;
+
     public static final byte[] BIND_TOKEN = new byte[16]; // 全零 PoC
 
-    /** HKDF info 区分标签（PoC 固定；用于每帧写密钥派生） */
+    /** HKDF info 区分标签（PoC 固定；用于每渠道写密钥派生） */
     public static final int FRAME_KEY_INFO_TAG = 0x44_50_4C_31; // "DPL1"
+
+    /** 端点摘要（供 init 日志打印，不重复构造字符串） */
+    public static String endpointsSummary() {
+        StringBuilder sb = new StringBuilder("[");
+        for (int i = 0; i < ENDPOINTS.length; i++) {
+            if (i > 0) sb.append(", ");
+            Endpoint ep = ENDPOINTS[i];
+            sb.append("#{").append(i + 1).append("} ")
+              .append(ep.address).append(':').append(ep.port)
+              .append("(w=").append(ep.weight).append(')');
+        }
+        return sb.append(']').toString();
+    }
 
     public static class Endpoint {
         public final String address;
