@@ -37,8 +37,8 @@ import java.util.concurrent.ConcurrentLinkedQueue;
  */
 public class ClientMetadataHandler {
 
-    /** 区块平均大小估算（字节），用于缓存命中率按内容计算 */
-    private static final long ESTIMATED_CHUNK_BYTES = 16 * 1024; // 16KB
+    /** 区块平均大小估算（字节），用于缓存命中率/带宽节省按内容计算。与 {@link NetworkStats#ESTIMATED_CHUNK_BYTES} 同源。 */
+    private static final long ESTIMATED_CHUNK_BYTES = NetworkStats.ESTIMATED_CHUNK_BYTES; // 16KB
 
     /**
      * 区块已应用到世界后才发送的 BE 请求（chunkKey → dimension）。

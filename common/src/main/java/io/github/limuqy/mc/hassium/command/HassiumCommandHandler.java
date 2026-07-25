@@ -126,11 +126,24 @@ public class HassiumCommandHandler {
     }
 
     private static String formatSavingsLine(HassiumMetricsImpl m) {
-        // 已包含全部入站路径：Primary ZstdContextDecoder + 数据通道 DataPlaneClientBundle + 分段增量 + OVD 缓存渲染。
-        // 不区分路径，仅在线协议层汇总当前/原版字节，避免与各 hit/miss 列表分项重复。
+        // 合并所有优化口径的「带宽节省」line：
+        //   current                = actual recieved (Primary + Data 多通道 + 聚合)
+        //   savedByCacheFullHit    = cacheHitFullChunkBytes  (缓存全命中省去从服务端重发)
+        //   savedByCacheDelta      = cacheDeltaSavedBytes     (分段增量只发差异省去全量)
+        //   savedByLightHit        = lightCacheHitBytes       (光照命中省去 chunk packet 内携带光照字节)
+        //   savedByOvd              = OVD 已加载 chunks × ESTIMATED_CHUNK_BYTES
+        //                          (vanilla 等价为让玩家看到 clientVD 视野，需 serverVD=clientVD，多推的 chunks)
+        //   original = current + 全部 saved；saving% = saved/original × 100
+        // 所有 saved 字段已统一为 NetworkStats.ESTIMATED_*_BYTES 口径 (16KB/chunk)。
         long current = m.getActualBytesReceived();
-        long original = m.getVanillaBytesReceived();
-        double saving = m.getReceiveBandwidthSavingPercent();
+        long savedByCacheFullHit = m.getCacheHitFullChunkBytes();
+        long savedByCacheDelta = m.getCacheDeltaSavedBytes();
+        long savedByLightHit = m.getLightCacheHitBytes();
+        long savedByOvd = (long) ViewDistanceExtensionService.getInstance().getLoadedCount()
+                * NetworkStats.ESTIMATED_CHUNK_BYTES;
+        long saved = savedByCacheFullHit + savedByCacheDelta + savedByLightHit + savedByOvd;
+        long original = current + saved;
+        double saving = original > 0 ? (double) saved / original * 100.0 : 0.0;
         return String.format("§e带宽节省：§r%s（当前 %s，原版 %s）",
                 MetricsTextFormatter.formatPercent(saving),
                 MetricsTextFormatter.formatBytes(current),

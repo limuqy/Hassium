@@ -42,6 +42,13 @@ public class NetworkStats {
      */
     public static final long ESTIMATED_LIGHT_BYTES = 16 * 1024L;
 
+    /**
+     * 区块平均大小估算常量（16KB），用于缓存命中率/带宽节省按内容折算的统一口径。
+     * 与 {@code ClientMetadataHandler.ESTIMATED_CHUNK_BYTES} 同源；OVD/数据通道等所有
+     * 「vanilla 等价」字节估算都汇到这个常量，确保 bandwidth saving 单一来源。
+     */
+    public static final long ESTIMATED_CHUNK_BYTES = 16 * 1024L;
+
     private NetworkStats() {}
 
     // ===== 开关控制 =====

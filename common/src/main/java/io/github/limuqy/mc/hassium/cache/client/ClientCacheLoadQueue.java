@@ -178,11 +178,11 @@ public class ClientCacheLoadQueue {
                         hasLight, writeback));
                 // OVD(renderOnly) 不经 chunkHash 比对，需在磁盘命中时单独记入缓存指标；
                 // 权威路径已在 ClientMetadataHandler 记过，避免双重计数。
+                // 使用 ESTIMATED_CHUNK_BYTES 与权威路径口径一致（不依赖 packetBytes 实际长度）。
                 if (task.renderOnly() && packetBytes.length > 0) {
-                    long bytes = packetBytes.length;
-                    NetworkStats.recordCacheLoadEligible(bytes);
-                    NetworkStats.recordCacheHit(bytes);
-                    NetworkStats.recordCacheFullHit(bytes);
+                    NetworkStats.recordCacheLoadEligible(NetworkStats.ESTIMATED_CHUNK_BYTES);
+                    NetworkStats.recordCacheHit(NetworkStats.ESTIMATED_CHUNK_BYTES);
+                    NetworkStats.recordCacheFullHit(NetworkStats.ESTIMATED_CHUNK_BYTES);
                 }
                 DebugLogger.info(LogType.CACHE,
                         "[CACHE_LOAD] Chunk {} loaded from disk ({} bytes, hasLight={}, readySize={})",
