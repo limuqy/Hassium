@@ -137,7 +137,10 @@ public class NetworkStats {
 
     /**
      * 线缆入站帧字节（管线 decode 消费的 in 增量）。
-     * 仅应被 {@code ZstdContextDecoder} 调用。
+     * <p>主链由 {@code ZstdContextDecoder} 调用；Data 通道 bulk chunk 由
+     * {@code DataPlaneClientBundle.DataPlaneClientHandler} 在解出 TYPE_BULK 后调用相同 wire 口径，
+     * 保证多通道场景下 {@code actualBytesReceived} 覆盖 Primary + Data 两路 actual wire 字节,
+     * 让 {@code getReceiveBandwidthSavingPercent} 公式 (vanilla - actual) / vanilla 不再漏算。
      */
     public static void recordWireBytesReceived(int wireBytes) {
         if (!enabled) return;

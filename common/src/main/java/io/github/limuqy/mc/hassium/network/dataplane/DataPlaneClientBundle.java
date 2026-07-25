@@ -228,7 +228,11 @@ public class DataPlaneClientBundle {
                             "DataPlaneClient: dec ok portIdx={} type={} payloadLen={}", portIdx, dec.type, dec.payload.length);
                 }
                 switch (dec.type) {
-                    case DataPlaneFrame.TYPE_BULK_COMPRESSED_CHUNK -> handleBulkChunk(dec.payload);
+                    case DataPlaneFrame.TYPE_BULK_COMPRESSED_CHUNK -> {
+                        // 与 Primary 管线 ZstdContextDecoder 的 recordWireBytesReceived 对齐：Data 通道
+                        io.github.limuqy.mc.hassium.metrics.NetworkStats.recordWireBytesReceived(frame.length);
+                        handleBulkChunk(dec.payload);
+                    }
                     case DataPlaneFrame.TYPE_KEEPALIVE -> sendKeepaliveAck(ctx);
                     case DataPlaneFrame.TYPE_CLOSE -> ctx.close();
                     default -> LOGGER.warn("DataPlaneClient: unknown frame type {} portIdx={}", dec.type, portIdx);
