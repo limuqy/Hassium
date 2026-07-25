@@ -28,6 +28,7 @@ public class BulkRouter {
             candidates.add(new Candidate(Candidate.Type.PRIMARY, primaryWeight, null));
         }
         for (PlayerChannel ch : bundle.getDataChannels()) {
+            if (ch == null) continue; // 防御：COW 快照可能含历史残留
             if (ch.isActive() && ch.isWritable()) {
                 candidates.add(new Candidate(Candidate.Type.DATA, ch.weight, ch));
             }
@@ -65,6 +66,7 @@ public class BulkRouter {
             candidates.add(new Candidate(Candidate.Type.PRIMARY, primaryWeight, null));
         }
         for (PlayerChannel ch : bundle.getDataChannels()) {
+            if (ch == null) continue; // 防御：COW 快照可能含历史残留
             if (ch.isActive() && ch.isWritable()) {
                 candidates.add(new Candidate(Candidate.Type.DATA, ch.weight, ch));
             }

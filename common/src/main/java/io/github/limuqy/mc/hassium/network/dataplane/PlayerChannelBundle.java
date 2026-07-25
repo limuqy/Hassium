@@ -1,20 +1,25 @@
 package io.github.limuqy.mc.hassium.network.dataplane;
 
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * per-player Data 通道列表 + WRR 状态 + degraded 标志。
- * 线程安全：add/remove 在 server event loop 中调用，无需额外同步。
+ * <p>
+ * 线程模型：add/remove 在各自 data channel 的 event loop 中调用，
+ * read/遍历在 {@code Hassium-ChunkPush} 推送线程中发生 —— 三线程并发，
+ * 故 {@link #dataChannels} 用 {@link CopyOnWriteArrayList}（写少读多，迭代快照稳定），
+ * 避免并发写导致 ArrayList 内部数组损坏（曾出现 null 元素致 BulkRouter NPE）。
  */
 public class PlayerChannelBundle {
 
-    private final List<PlayerChannel> dataChannels = new ArrayList<>();
+    private final List<PlayerChannel> dataChannels = new CopyOnWriteArrayList<>();
     public volatile int consecutiveDrops = 0;
     public volatile boolean degraded = false;
 
     /** 当前 WRR 累积权重（per-bundle 状态） */
-    final java.util.concurrent.atomic.AtomicInteger wrrAccum = new java.util.concurrent.atomic.AtomicInteger(0);
+    final AtomicInteger wrrAccum = new AtomicInteger(0);
 
     public void addChannel(PlayerChannel ch) { dataChannels.add(ch); }
 
@@ -26,7 +31,9 @@ public class PlayerChannelBundle {
 
     /** 清理所有 Data 通道 */
     public void closeAll() {
-        for (PlayerChannel ch : dataChannels) ch.close();
+        for (PlayerChannel ch : dataChannels) {
+            if (ch != null) ch.close();
+        }
         dataChannels.clear();
     }
 }
