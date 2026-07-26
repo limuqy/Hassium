@@ -40,7 +40,7 @@ import java.util.function.Consumer;
  *   <li>本类 MUST NOT 从 UDP 事件循环调用任何 Minecraft handler —— 只能回调注入的 {@link Consumer}。</li>
  * </ul>
  */
-public final class ReliableDatagramSession {
+public final class ReliableDatagramSession implements BulkRouteTarget {
 
     /** 投递单个 KCP 线字节的发送口；本类持有 {@code ByteBuf} 的所有权以保持显式释放语义。 */
     public interface DatagramSink {
@@ -66,6 +66,9 @@ public final class ReliableDatagramSession {
     private final int maxReassemblyBytes;
     private final int maxQueuedAppBytes;
     private final long hardRttMs;
+    // Task 4 — bulk router 所需的身份/权重；旧构造默认 endpointId=-1, weight=1（兼容 Task 2 测试）。
+    private final int endpointId;
+    private final int weight;
     /**
      * 仅供同包测试覆盖的 Allocator 缝隙：非空时使用它，否则用 {@link PooledByteBufAllocator#DEFAULT}。
      * 包私有（非 public surface），不影响 Task 3 公共接口；生产路径恒为 null。
@@ -89,6 +92,16 @@ public final class ReliableDatagramSession {
 
     public ReliableDatagramSession(UUID playerId, long epoch, UdpEndpoint endpoint,
                                    InetSocketAddress remote, byte[] key, DatagramSink sink) {
+        this(playerId, epoch, endpoint, remote, key, sink, -1, 1);
+    }
+
+    /**
+     * Task 4 完整构造：注入 {@code endpointId}/{@code weight}（由 {@link DataPlaneUdpServer} dispatcher
+     * 在 Bind 成功路径传入），供 {@link UdpBulkRouter} 作 WRR base weight。
+     */
+    public ReliableDatagramSession(UUID playerId, long epoch, UdpEndpoint endpoint,
+                                   InetSocketAddress remote, byte[] key, DatagramSink sink,
+                                   int endpointId, int weight) {
         this.playerId = Objects.requireNonNull(playerId, "playerId");
         this.epoch = epoch;
         this.endpoint = Objects.requireNonNull(endpoint, "endpoint");
@@ -103,6 +116,8 @@ public final class ReliableDatagramSession {
         this.maxReassemblyBytes = endpoint.maxReassemblyBytes();
         this.maxQueuedAppBytes = endpoint.maxQueuedAppBytes();
         this.hardRttMs = endpoint.hardRttMs();
+        this.endpointId = endpointId;
+        this.weight = weight < 1 ? 1 : weight;
 
         this.kcpOutput = this::onKcpOutput;
         this.kcp = new Kcp(conv, kcpOutput);
@@ -145,13 +160,19 @@ public final class ReliableDatagramSession {
         drainReceived();
     }
 
-    /** 入队一条已加密待发应用帧：先 seal，再 kcp.send。 */
-    public synchronized void enqueueAuthenticated(int type, byte[] payload) {
+    /**
+     * 入队一条已加密待发应用帧：先 seal，再 kcp.send。
+     *
+     * <p>Task 4 起返回 boolean：{@code true} 已入队；{@code false} 在已关闭、不可写或 KCP 拒收时
+     * 返回（不抛）。原 throws-IllegalState 语义在 router 路径下会污染 bulk 主路径；改成显式 false 后
+     * 由 {@link UdpBulkRouter} 视为一次 drop。
+     */
+    public synchronized boolean enqueueAuthenticated(int type, byte[] payload) {
         if (closed) {
-            throw new IllegalStateException("session closed");
+            return false;
         }
         if (!isWritable()) {
-            throw new IllegalStateException("session is not writable (queued app bytes bound exceeded)");
+            return false;
         }
         byte[] ownedPayload = payload == null ? new byte[0] : payload;
         long seq = sealSequence++;
@@ -163,10 +184,11 @@ public final class ReliableDatagramSession {
             if (code < 0) {
                 // KCP 发送队列拒收：不再回退 sealSequence —— 哪怕该帧未出门也绝不复用该序列号/nonce
                 // （GCM nonce 复用是不可接受的灾难。重试时分配新的 seq 即可）。
-                throw new IllegalStateException("kcp.send rejected frame (" + code + ")");
+                return false;
             }
             outstandingAppBytes += ownedPayload.length;
             drainReceived();
+            return true;
         } finally {
             buf.release();
         }
@@ -395,6 +417,12 @@ public final class ReliableDatagramSession {
     long epoch() { return epoch; }
     UdpEndpoint endpoint() { return endpoint; }
     InetSocketAddress remote() { return remote; }
+
+    // ---------- BulkRouteTarget ----------
+    // isHealthy / isWritable / metrics / enqueueAuthenticated / isLeaseActive 与本类 public 同签名方法自动实现接口；
+    // 仅 endpointId / weight 需新增。
+    @Override public int endpointId() { return endpointId; }
+    @Override public int weight() { return weight; }
 
     /** 会话是否已关闭（独立于 isWritable，幂等 close 后为 true）。 */
     public boolean isClosed() { return closed; }

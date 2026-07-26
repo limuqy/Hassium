@@ -14,6 +14,8 @@ class DataPlaneFrameTest {
         assertEquals(5, DataPlaneFrame.TYPE_KEEPALIVE);
         assertEquals(6, DataPlaneFrame.TYPE_KEEPALIVE_ACK);
         assertEquals(7, DataPlaneFrame.TYPE_CLOSE);
+        assertEquals(8, DataPlaneFrame.TYPE_FAILOVER_REQUEST);
+        assertEquals(9, DataPlaneFrame.TYPE_FAILOVER_PERMIT);
     }
 
     @Test @DisplayName("encode/decode 往返——payload 非空")
@@ -41,9 +43,9 @@ class DataPlaneFrameTest {
     @Test @DisplayName("非法 type 抛出 IllegalArgumentException")
     void invalidType() {
         assertThrows(IllegalArgumentException.class,
-            () -> DataPlaneFrame.encode(0, new byte[1]));
+            () -> DataPlaneFrame.encode(0, new byte[1]));     // 0 < MIN_TYPE
         assertThrows(IllegalArgumentException.class,
-            () -> DataPlaneFrame.encode(8, new byte[1]));
+            () -> DataPlaneFrame.encode(99, new byte[1]));    // 99 > MAX_TYPE
     }
 
     @Test @DisplayName("截断输入抛出异常")

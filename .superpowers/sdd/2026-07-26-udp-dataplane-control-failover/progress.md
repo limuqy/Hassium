@@ -99,10 +99,40 @@ polls. The host is fine.
     → BUILD SUCCESSFUL (RED=failed compile→GREEN=all pass), +
     `common:compileJava` → BUILD SUCCESSFUL.
   - **Task 3: complete (commit 6a8f615, no subagent review — controller path)**
-- Task 4: Health-aware UDP WRR — pending
-- Task 5: Handshake tail + client UDP lifecycle — pending
-- Task 6: Control failover handler + lease — pending
-- Task 7: Client recovery state + endpoint manager — pending
-- Task 8: SectionDelta over UDP — pending
-- Task 9: Fabric reconnect orchestrator + smoke — pending
-- Task 10: TCP dataplane removal + docs — pending
+- Task 4: Health-aware UDP WRR — complete
+  - Controller RED→GREEN direct (no subagent: prior subagents unresponsive).
+  - `BulkRouteTarget` interface (endpointId/weight/isHealthy/isWritable/isClosed/
+    isLeaseActive/metrics/enqueueAuthenticated) lets router tests inject fakes
+    without instantiating `ReliableDatagramSession` (avoids KCP server setup).
+  - `ReliableDatagramSession` now `implements BulkRouteTarget`; `enqueueAuthenticated`
+    returns boolean (false on failure, was void that threw); endpointId/weight fields
+    with backward-compat `-1 / 1` default constructor.
+  - `UdpBulkRouter` classical interleaved WRR (cumulative current-weights + argmax -
+    total); share mode treats PRIMARY as virtual candidate (idx==sessions.size());
+    candidates weight 100 vs PRIMARY 50 → exactly 2/3 DATA ratio (verified).
+    **Critical fix**: original `acc%total` mod-* step always fell under PRIMARY slot
+    when `acc` was < primaryWeight, returning PRIMARY 50/50 calls. Replaced with the
+    classical WRR cycle (acc monotonic no longer moduloed); verified share ratio 2/3
+    and full-99% hitting DATA when candidate weight=10000/PRIMARY=100.
+  - HEALTH_FILTER excludes closed/!writable/!healthy/!leaseActive; `effectiveWeight`
+    linearly penalises SRTT (SRTT=hardRtt → weight 1).
+  - exclusive mode: >=threshold bug corrected to `>` threshold — N drops still
+    DROPPED, N+1th call flips to PRIMARY+degraded=true.
+  - `DataPlaneUdpServer.tryRouteBulk` wired to `ROUTER` singleton, per-player
+    `PlayerSessions` cached in `Instance.worksets` `ConcurrentHashMap<UUID, ...>`;
+    holds `BULK_ROUTE_MODE`/`PRIMARY_WEIGHT`/`DEGRADE_AFTER_DROPS` from `DataPlanePoCConfig`.
+  - Test seams: `injectBoundSessionsForTest(UUID, List)`, `removeSessionsForTest(UUID)`;
+    `shutdown()` clears `TEST_INJECTION`.
+  - Tests: `UdpBulkRouterTest` (5), `UdpTryRouteBulkTest` (2), `DataPlaneFrameTest`
+    (updated: FAILOVER_REQUEST/PERMIT=8/9 legal; invalidType uses 0/99). All BUILD
+    SUCCESSFUL across Task1–Task4 regression (`UdpFrameCodec`, `UdpBindRequestCodec`,
+    `ReliableDatagramSession`, `DataPlaneSessionRegistry`, `DataPlaneUdpServer`,
+    `UdpBulkRouter`, `UdpTryRouteBulk`, `DataPlaneFrame`).
+  - **Accepted baseline failures** (pre-existing, NOT introduced here): 7×
+    DeltaMergeTest/ResourceKey NoClassDefFoundError + `HassiumMetricsImplTest
+    resetClearsClientDisplayMetrics` (reset() never clears sectionDelta* counters) +
+    `ChunkDiskCodecTest` / `CompressionServiceDictionaryTest` (`mods.toml ${mod_id}
+    placeholder substitution fails when invoked as a single test outside full fabric
+    runtime resource pipeline`). All reproduce independently of UDP code path; not
+    blocking Task 4 acceptance.
+  - **Task 4: complete (no subagent review — controller path)**

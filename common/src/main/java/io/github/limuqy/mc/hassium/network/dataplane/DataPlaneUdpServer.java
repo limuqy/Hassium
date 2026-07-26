@@ -117,6 +117,7 @@ public final class DataPlaneUdpServer {
             inst.shutdown();
             INSTANCE = null;
             testEndpoints = null;
+            TEST_INJECTION = null;
         } finally {
             LOCK.unlock();
         }
@@ -141,9 +142,97 @@ public final class DataPlaneUdpServer {
         return inst.sessionToken;
     }
 
-    /** Task 4 router 接管；占位：不路由，bulk 全走 Primary TCP。 */
+    /** 单例 {@link UdpBulkRouter}；hardRttMs 取自首个 endpoint 或默认 1000。 */
+    private static volatile UdpBulkRouter ROUTER;
+
+    private static UdpBulkRouter router() {
+        UdpBulkRouter r = ROUTER;
+        if (r == null) {
+            synchronized (DataPlaneUdpServer.class) {
+                r = ROUTER;
+                if (r == null) {
+                    long hard = 1_000L;
+                    DataPlanePoCConfig.Endpoint[] eps = (INSTANCE != null) ? INSTANCE.configured : DataPlanePoCConfig.ENDPOINTS;
+                    if (eps != null && eps.length > 0) {
+                        // ENDPOINTS 不暴露 hardRttMs；用默认 1000ms。留作 Task 6 配置覆盖。
+                        hard = 1_000L;
+                    }
+                    r = new UdpBulkRouter(hard);
+                    ROUTER = r;
+                }
+            }
+        }
+        return r;
+    }
+
+    /**
+     * Task 4 — 把 bulk payload 路由到健康 UDP 会话。返回：
+     * <ul>
+     *   <li>{@code true} = 已入队 DATA 子帧，caller 跳过 Primary；</li>
+     *   <li>{@code false} = 路由器决策为 PRIMARY（share 命中 PRIMARY 或 exclusive degrade）/ 无会话 / 无服务实例。
+     *       caller 应在 Primary 上发本帧，并 {@link io.github.limuqy.mc.hassium.metrics.NetworkStats#recordBulkSentPrimary}。</li>
+     * </ul>
+     */
     public static boolean tryRouteBulk(UUID playerId, int frameType, byte[] payload) {
+        Instance inst = INSTANCE;
+        if (inst == null) return false;
+        List<? extends BulkRouteTarget> snapshot;
+        if (TEST_INJECTION != null && TEST_INJECTION.containsKey(playerId)) {
+            List<BulkRouteTarget> inj = TEST_INJECTION.get(playerId);
+            snapshot = inj == null ? List.of() : inj;
+        } else {
+            List<ReliableDatagramSession> rs = inst.registry.sessionsByPlayer(playerId);
+            if (rs.isEmpty()) return false;
+            snapshot = rs; // ReliableDatagramSession is BulkRouteTarget；保留 OrderByPlayer 健康快照由 router 现场过滤
+        }
+        if (snapshot.isEmpty()) return false;
+        UdpBulkRouter.PlayerSessions ps = inst.worksetsFor(playerId, new ArrayList<>(snapshot));
+        UdpBulkRouter.RouteDecision d = router().route(ps,
+                DataPlanePoCConfig.BULK_ROUTE_MODE.trim().isEmpty() ? "share" : DataPlanePoCConfig.BULK_ROUTE_MODE,
+                DataPlanePoCConfig.PRIMARY_WEIGHT,
+                DataPlanePoCConfig.DEGRADE_AFTER_DROPS,
+                frameType, payload);
+        if (d == UdpBulkRouter.RouteDecision.DATA_SENT) {
+            io.github.limuqy.mc.hassium.metrics.NetworkStats.recordBulkSentData(payload == null ? 0 : payload.length);
+            return true;
+        }
         return false;
+    }
+
+    // ----- 测试 seam（生产路径不调用） -----
+    private static volatile java.util.Map<UUID, List<BulkRouteTarget>> TEST_INJECTION = null;
+
+    /** 测试注入：把一组 fake {@link BulkRouteTarget} 挂到 server 让 {@link #tryRouteBulk(UUID, int, byte[])} 直接路由。
+     *  生产路径透传 null。传入空列表表示"无会话"场景。 */
+    static void injectBoundSessionsForTest(UUID playerId, List<BulkRouteTarget> targets) {
+        if (TEST_INJECTION == null) {
+            TEST_INJECTION = new java.util.concurrent.ConcurrentHashMap<>();
+        }
+        TEST_INJECTION.put(playerId, List.copyOf(targets));
+    }
+
+    /**
+     * 服务端从 KCP 拿到完整应用帧后的回调占位。Task 5/8 接客户端→服务端业务（failover request 等）；
+     * 普通上行 bulk frame（chunk/section delta）目前无服务端业务逻辑——客户端→服务端不走 bulk。
+     */
+    private static void dispatchReceivedOnServer(ReliableDatagramSession session, ReliableDatagramSession.Received r) {
+        // Task 6 将在此识别 TYPE_FAILOVER_REQUEST 并转 ControlFailoverHandler。
+        if (DataPlanePoCConfig.isDataplaneLogEnabled()) {
+            DebugLogger.info(DebugLogger.LogType.DATAPLANE,
+                    "UdpServer: received frame from player={} epoch={} type={} bytes={}",
+                    session.playerId(), session.epoch(), r.type(), r.payload() == null ? 0 : r.payload().length);
+        }
+    }
+
+    /** Task 4 测试 hook：清理该玩家所有会话，模拟无 session 场景。生产路径不调用。 */
+    static void removeSessionsForTest(UUID playerId) {
+        Instance inst = INSTANCE;
+        if (inst == null) return;
+        for (ReliableDatagramSession s : inst.registry.sessionsByPlayer(playerId)) {
+            s.close();
+        }
+        if (TEST_INJECTION != null) TEST_INJECTION.remove(playerId);
+        inst.worksets.remove(playerId);
     }
 
     /** 主 TCP 断开 → 由 {@code ControlFailoverHandler}（Task 6）转发的子调用。 */
@@ -200,6 +289,9 @@ public final class DataPlaneUdpServer {
         final List<BoundEndpoint> boundEndpoints = new ArrayList<>();
         /** remote → session；event loop 单线程访问，无需同步。 */
         final Map<InetSocketAddress, ReliableDatagramSession> byRemote = new LinkedHashMap<>();
+        /** per-player bulk 路由 WRR 状态；tick/bulk 路径单线程读，bind/replaceEpoch 路径清。 */
+        final java.util.concurrent.ConcurrentHashMap<UUID, UdpBulkRouter.PlayerSessions> worksets =
+                new java.util.concurrent.ConcurrentHashMap<>();
         final AtomicInteger dispatchedCount = new AtomicInteger();
         volatile boolean bound = false;
 
@@ -207,6 +299,14 @@ public final class DataPlaneUdpServer {
             this.configured = eps;
             this.sessionToken = new byte[16];
             new SecureRandom().nextBytes(this.sessionToken);
+        }
+
+        /** 取/构造 per-player WRR 状态；每次刷新 sessions 快照以反映新 bind/lease/关闭。 */
+        UdpBulkRouter.PlayerSessions worksetsFor(UUID playerId, List<? extends BulkRouteTarget> snapshot) {
+            UdpBulkRouter.PlayerSessions ps = worksets.computeIfAbsent(playerId,
+                    u -> UdpBulkRouter.PlayerSessions.of(List.of()));
+            ps.refresh(snapshot);
+            return ps;
         }
 
         void bind() {
@@ -335,8 +435,8 @@ public final class DataPlaneUdpServer {
                     }
                 };
                 ReliableDatagramSession session = new ReliableDatagramSession(
-                        req.playerId(), req.connectionEpoch(), ep, peer, key, sink);
-                session.receiveHandler(r -> {/* Task 5/8 接管业务投递 */});
+                        req.playerId(), req.connectionEpoch(), ep, peer, key, sink, endpointId, weight);
+                session.receiveHandler(r -> DataPlaneUdpServer.dispatchReceivedOnServer(session, r));
                 registry.register(session);
                 byRemote.put(peer, session);
                 LOGGER.info("UdpServer: bound session player={} epoch={} endpoint={} from {}",

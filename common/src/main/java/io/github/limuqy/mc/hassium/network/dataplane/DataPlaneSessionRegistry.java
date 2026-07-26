@@ -68,6 +68,21 @@ public final class DataPlaneSessionRegistry {
     }
 
     /**
+     * 返回该 {@code playerId} 下所有 epoch 的会话快照（用于 bulk router 在不知当前 epoch 时扫活集）。
+     * 排除已 closed；可能含 lease active（router 用 {@link BulkRouteTarget#isLeaseActive(long)} 过滤）。
+     */
+    public synchronized List<ReliableDatagramSession> sessionsByPlayer(UUID playerId) {
+        List<ReliableDatagramSession> out = new ArrayList<>();
+        for (Map.Entry<Key, List<ReliableDatagramSession>> e : sessions.entrySet()) {
+            if (!Objects.equals(e.getKey().playerId, playerId)) continue;
+            for (ReliableDatagramSession s : e.getValue()) {
+                if (!s.isClosed()) out.add(s);
+            }
+        }
+        return List.copyOf(out);
+    }
+
+    /**
      * 重登/epoch 推进：立即关闭旧 epoch 的所有会话（无线 lease）并移除该键；
      * 调用方随后可对新 epoch 调用 {@link #register}。未知 {@code playerId}/{@code epoch} 为无害 no-op。
      */
