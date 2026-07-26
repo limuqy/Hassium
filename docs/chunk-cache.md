@@ -147,6 +147,8 @@ SectionDeltaS2CPacket        // 服务端 → 客户端（变更分段 + BE）
 - 方向性区块预加载（提高推送优先级，不改变协议）
 - warm-stash 优化（收包后暂存 NBT，卸载时 dirty=false 则 flush warm 跳过 live 重算）
 
+- 章节 11.6 将补 `SectionDeltaS2CPacket` 经 UDP 数据面 dispatch 的细节；Task 8（commit `27a3678`）已接入 `DataPlaneClientBundle.safeDispatch` → `SectionDeltaDispatcher` seam。Task 7+9 让 disk 缓存在恢复态保留（`ClientRecoveryState` gate）；恢复期内缓存命中率不降。
+
 ## 10. 超视渲染（renderOnly）
 
 ### 10.1 目标

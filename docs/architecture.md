@@ -153,7 +153,8 @@ ERROR / WARN 始终输出。
 | **分段增量** | `clientCache.sectionDeltaEnabled`（默认 true） | MISMATCH 时按 section 比对，仅补变更分段 + BE 覆盖；失败/超时回退全量 | [`chunk-cache.md`](chunk-cache.md) §11.5、[`disk-nbt-cache.md`](disk-nbt-cache.md) |
 | **超视渲染** | `viewDistanceExtensionEnabled`、`maxRenderDistance`、`ovdUnloadDelaySecs` | 多人、clientVD>serverVD 时本地缓存回填环带；Forget 原地 renderOnly；不向服索要视距外区块/BE | [`ovd.md`](ovd.md)、[`chunk-cache.md`](chunk-cache.md) §10 |
 | **世界导出** | `/hassiumc export [<服务器IP>] [seed]` | 客户端缓存 → 原版 Anvil（type2 zlib）；无实体/仅去过的区块快照 | [`chunk-cache.md`](chunk-cache.md) §12、[`disk-nbt-cache.md`](disk-nbt-cache.md) |
-| **多通道数据面（PoC）** | `DataPlanePoCConfig.ENABLED`（1.20.1 fabric） | 服务端双裸 TCP 端口 + Bind + HKDF-SHA256/AES-CFB8；`BulkRouter` 做加权 WRR，`share`（Primary+Data）或 `exclusive`（仅 Data）；无候选 drop → 3 次 `degraded` 降级 Primary | [`multi-channel_network_research.md`](multi-channel_network_research.md) §14.1、[`superpowers/specs/2026-07-25-multi-channel-dataplane-poc-design.md`](superpowers/specs/2026-07-25-multi-channel-dataplane-poc-design.md)、[`superpowers/plans/2026-07-25-multi-channel-dataplane-poc.md`](superpowers/plans/2026-07-25-multi-channel-dataplane-poc.md) |
+| **UDP 数据面 + TCP 控制 Failover** | `network.dataPlane.udpEndpoints`、`network.dataPlane.enabled`（默认 1.20.1 fabric） | TCP 控制面 + UDP 数据面分离；服务端每个 `(host,port)` 独立 KCP/UDP endpoint；BulkRouter WRR share/exclusive；硬断连 / TCP stalled + UDP 健康 → FailoverPermit 重连候选；客户端 disk cache / executor 在恢复态保留 | 该任务 commit `22c9c3f`（Task 1-9）|
+| **多通道数据面（PoC 历史）** | `DataPlanePoCConfig.ENABLED`（1.20.1 fabric） | **已退役**：服务端双裸 TCP 端口 + Bind + HKDF-SHA256/AES-CFB8 路径已被 UDP 数据面替代；保留 `tryRouteBulk` faade 与 `DataPlaneServer.tryRouteBulk` 转发到 `DataPlaneUdpServer`，legacy 测试仍可用 | [`multi-channel_network_research.md`](multi-channel_network_research.md) §14.1、原 PoC spec/plan |
 
 客户端磁盘缓存 payload 为 NBT（`"HBT1"` + CompoundTag），主一致性路径为 **Live-Unload Snapshot**（renderOnly 跳过落盘）。旧 packet 字节缓存读到即删并全量请求。
 
@@ -163,7 +164,37 @@ ERROR / WARN 始终输出。
 - **分段增量接回超视渲染**：超视渲染 miss 路径仍不走 sectionDelta（需可靠 merge + 集成测试）
 - **`migration/` / `HassiumApi`**：公共 API / 世界迁移工具桩，尚未落地
 - **Fog / Sodium 条件 Mixin**：仅在 RD>32 穿帮或实测 mesh 不建时按需补
-- **数据面生产化**：握手扩展（`HandshakeS2C` 下发 endpoints/token/mode）+ toml 配置 `network.dataPlane`；SectionDelta 接入 `BulkRouter`；分通道 `NetworkStats` 指标；Forge / NeoForge 同构（PoC 已落地 1.20.1 fabric，端到端冒烟 PASS）
+- **UDP 数据面 production toml 配置**：`network.dataPlane.udpEndpoints` / token lifecycle 在 `hassium.toml` 正式落地（当前由 `DataPlanePoCConfig` 临时驱动）；多版本 (1.20.6+) Adapter 验证；NeoForge/Forge 同构；TCP 数据面遗留类（`BulkRouter`/`DataPlaneCodec`/`VarIntLengthFrameSplitter`/`PlayerChannelBundle` 等老 PoC 生产路径）在 `ServerSmokeTest` 退役 dataplane phase 后删除（详见 Task 10 followup）
+
+## 9.5. UDP 数据面 + TCP 控制 Failover 运维
+
+**网络拓扑**：
+- **控制面（Master TCP）**：原版 Minecraft login + Play Connection；由服务端发出 `FailoverPermit` 允许客户端在 master stalled 时切备份控制端点。备份候选列表由 S2C `UdpDataPlaneHandshakeTail.controlEndpoints`（host:port + priority）下发；客户端混合 bootstrap + advertised，按 priority 降序，最多 4 个候选（`ControlEndpointManager.MAX_CANDIDATES`）。
+- **数据面（UDP/KCP）**：服务端每个配置的 `(host, port)` UDP 端点绑一个独立 KCP `ReliableDatagramSession`；客户端 `DataPlaneClientBundle.connectAndBind` 对每个 advertised endpoint 单独 BindRequest + HKDF-erived AES-GCM key。
+
+**触发条件**：
+1. **硬断连**：Master TCP `channelInactive` 时 → `ControlReconnectOrchestrator.onPrimaryDisconnected(active, "channel_inactive")` 立刻 launch 下一个候选；客户端进入 60 秒恢复窗口。
+2. **Master stalled + UDP healthy**：服务端 `ControlFailoverHandler` 检测 control stall（默认 6 秒）。Stalled 期间 `DataPlaneUdpServer.recordControlActivity` 推进；若 UDP session 健康（epoch 一致）服务端下发 `FailoverPermit(expiryMs default 30s)`，客户端 `attemptConnectOnlyIfPermitValid`。
+
+**恢复期保留资源**：`ClientRecoveryState.shouldSuppressFinalization()` true 时 `ClientLifecycleHelper.finalizeDisconnectIfTerminal` 短路 `finalizeDisconnect`，磁盘缓存/`CacheSaveQueue`/`HassiumTaskExecutor` 与 dirty 标志保留以承接下一候选会话。`ClientPlayConnectionEvents.DISCONNECT` 路径调 `DataPlaneClientLifecycle.stopUdp(/*keepLease*/ true)`，UDP bundle 不立即释放。
+
+**候选耗尽 → terminal finalize exactly once**：`ControlReconnectOrchestrator.performTerminalFinalization` 调 `ClientLifecycleHelper.finalizeDisconnectIfTerminal`，单例 `ClientRecoveryState.consumeTerminalCleanup` 保证只触发一次磁盘资源关闭。
+
+**配置（生产化未完成项，当前 `DataPlanePoCConfig` 临时驱动）**：
+
+- `network.dataPlane.enabled`：默认 `true`（1.20.1 fabric）。
+- `network.dataPlane.udpEndpoints`：候选 plan §1086 落地后存为 toml；当前 advertises 通过 S2C tail 下发。
+- TCP 控制 endpoints 与 UDP endpoints 分开列表，可能有 differing 公网端口。
+- 每个 `udpEndpoints` 项需要 公网 UDP 防火墙/NAT 规则（§1089）。
+- 10 秒 UDP `lease` 仅 drain in-flight data；login 完成前不产生新玩家数据（§1092）。
+- `controlStallMs` 要求 服务端 issue FailoverPermit；客户端不会因 latency 单独创建第二条 master Play 连接（§1093）。
+
+**Smoke 标记（plan §1020，Task 10 followup 退役 `dataplane` phase 后接入）**：
+
+- `UDP_BIND_OK`、`UDP_WRR_OK`、`FAILOVER_PERMIT_OK`、`FAILOVER_RECONNECT_OK`、`CACHE_RESUME_HIT`、`FAILOVER_TERMINAL_OK`
+- `network.dataPlane.enabled=false` 时无 UDP listener/bind/failover 行为（regression guard）。
+
+**Spec/Plan**：[`docs/superpowers/specs/2026-07-26-udp-dataplane-control-failover-design.md`](superpowers/specs/2026-07-26-udp-dataplane-control-failover-design.md)、[`docs/superpowers/plans/2026-07-26-udp-dataplane-control-failover.md`](superpowers/plans/2026-07-26-udp-dataplane-control-failover.md)。
 
 ## 11. 相关文档
 

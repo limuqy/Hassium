@@ -54,7 +54,7 @@ Hassium 跨版本（1.20.1–1.21.11）× 多加载器（fabric / neoforge）的
 | `-ReconnectDelayMs` | 否 | `3000` | 第一轮断开后到重连的毫秒 |
 | `-ServerReadyTimeoutSec` | 否 | `160` | 服务端 `Done!` 出现超时 |
 | `-ClientTimeoutSec` | 否 | `100` | 客户端退出超时 |
-| `-SmokePhases` | 否 | `classic,dataplane` | smoke 阶段选择：`classic`（仅经典两轮）/ `dataplane`（仅数据面阶段）/ `classic,dataplane` / `all`（两者） |
+| `-SmokePhases` | 否 | `classic,dataplane` | smoke 阶段选择：`classic`（仅经典两轮）/ `dataplane`（PoC TCP 数据面，**Task 10 followup 计划退役**）/ `udp-failover`（**Task 10 followup 接入**，plan §1020 六个 markers）/ `all`（除 `udp-failover` 外两者皆跑）|
 
 ### 批量参数
 
@@ -253,6 +253,21 @@ build/smoke-test/
 **Job 超时**：总超时 = `ServerReadyTimeoutSec + ClientTimeoutSec + 120s` 兜底；内部已有服务端 300s + 客户端 600s 超时，正常情况下不会触发外层超时。
 
 **单 loader 模式**：若 `-Loaders fabric` 只指定一个加载器，`-Parallel` 仍生效但无并行意义，逻辑保持统一。
+
+## `udp-failover` Phase Markers（plan §1020，Task 10 followup 接入）
+
+`-SmokePhases udp-failover` 会驱动端到端 UDP 控制 Failover 端到端冒烟，验证以下日志 marker（跨进程日志必须全部出现才算 PASS；`FAILOVER_TERMINAL_OK` 仅在候选耗尽 sub-case 出现）：
+
+| Marker | 含义 |
+|--------|------|
+| `UDP_BIND_OK` | 客户端 BindRequest 被服务端某 endpoint 接受，KCP `ReliableDatagramSession` 进入 ESTABLISHED |
+| `UDP_WRR_OK` | `UdpBulkRouter` 成功送一帧 bulk → Primary/UDP 分流计数累加 |
+| `FAILOVER_PERMIT_OK` | 服务端 `ControlFailoverHandler.requestFailover` 返回 `PERMITTED`，并通过 KCP `TYPE_FAILOVER_PERMIT` 回执客户端；客户端 epoch 匹配 + 未过期 |
+| `FAILOVER_RECONNECT_OK` | 客户端 `ControlReconnectOrchestrator.onPrimaryDisconnected` 后 launch 候选 B，新一轮 S2C 握手成功 + `ClientRecoveryState.markRecovered()` 退出恢复态 |
+| `CACHE_RESUME_HIT` | 重连后 ChunkHashS2C 触发至少一次缓存命中（`cacheHitFullChunkBytes > 0`）；恢复期未开 final disconnect UI |
+| `FAILOVER_TERMINAL_OK` | 所有候选耗尽 → `ControlReconnectOrchestrator.performTerminalFinalization` → `ClientLifecycleHelper.finalizeDisconnectIfTerminal` 一次性 terminal 关闭 |
+
+`network.dataPlane.enabled=false` 子用例：必须 **零** UDP listener / Bind / permit 标记，与 TCP revert 路径对齐；`DataPlaneEnabledGuard` 在单测中已覆盖。
 
 ## 已知限制
 
