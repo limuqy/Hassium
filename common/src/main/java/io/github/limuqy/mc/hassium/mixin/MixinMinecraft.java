@@ -71,23 +71,23 @@ public class MixinMinecraft {
 #if MC_VER < MC_1_20_2
     @Inject(method = "clearLevel", at = @At("TAIL"))
     private void hassium$onClearLevel(CallbackInfo ci) {
-        ClientLifecycleHelper.finalizeDisconnect();
+        ClientLifecycleHelper.finalizeDisconnectIfTerminal();
     }
 #elif MC_VER < MC_1_20_5
     @Inject(method = "disconnect(Lnet/minecraft/client/gui/screens/Screen;)V", at = @At("TAIL"))
     private void hassium$onDisconnect(net.minecraft.client.gui.screens.Screen screen, CallbackInfo ci) {
-        ClientLifecycleHelper.finalizeDisconnect();
+        ClientLifecycleHelper.finalizeDisconnectIfTerminal();
     }
 #else
     @Inject(method = "disconnect(Lnet/minecraft/client/gui/screens/Screen;Z)V", at = @At("TAIL"))
     private void hassium$onDisconnect(net.minecraft.client.gui.screens.Screen screen, boolean keepResourcePacks,
                                       CallbackInfo ci) {
-        ClientLifecycleHelper.finalizeDisconnect();
+        ClientLifecycleHelper.finalizeDisconnectIfTerminal();
     }
 
     @Inject(method = "clearLevel", at = @At("TAIL"), require = 0)
     private void hassium$onClearLevelCompat(CallbackInfo ci) {
-        ClientLifecycleHelper.finalizeDisconnect();
+        ClientLifecycleHelper.finalizeDisconnectIfTerminal();
     }
 #endif
 }

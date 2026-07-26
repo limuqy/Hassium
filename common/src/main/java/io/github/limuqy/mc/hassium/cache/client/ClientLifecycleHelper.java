@@ -141,7 +141,32 @@ public final class ClientLifecycleHelper {
         ClientHassiumStorage.closeSharedDatabase();
         ClientChunkHandler.resetStorage();
         ClientChunkDirtyTracker.clearAll();
-        Constants.LOG.info("Hassium: Client disconnected, cache cleaned up");
+    }
+
+    /**
+     * 恢复感知的 finalizer：仅在 {@link ClientRecoveryState#isRecovering()} 返回 false
+     * 时执行真正的最终清理；否则保留磁盘缓存 / executor / save 线程不动 —— 这些资源
+     * 仍需要承接重连后的回首会话（plan §793）。
+     * <p>
+     * 一旦恢复状态进入 TERMINAL，{@link ClientRecoveryState#consumeTerminalCleanup()}
+     * 返回恰好一次 true 来允许 {@link #finalizeDisconnect()} 跑一次性关闭；正常 logout (
+     * recovery 状态保持 NONE) 时直接执行 finalize。
+     */
+    public static void finalizeDisconnectIfTerminal() {
+        io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState state =
+                io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState.getInstance();
+        if (state.isRecovering()) {
+            Constants.LOG.debug("Hassium: finalize suppressed — client in recovery phase {}", state.phase());
+            return;
+        }
+        if (state.phase() == io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState.Phase.TERMINAL) {
+            if (!state.consumeTerminalCleanup()) {
+                // 已被并行 caller 一次性消费
+                return;
+            }
+        }
+        finalizeDisconnect();
+        // 进入 TERMINAL 后 finalize 已落地：恢复终态由后续 begin 重新进入 NONE 的语义清理
     }
 
     /**

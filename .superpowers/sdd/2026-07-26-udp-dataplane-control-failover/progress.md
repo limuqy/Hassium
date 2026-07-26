@@ -257,3 +257,52 @@ polls. The host is fine.
     `FabricNetworkManager` to keep the Fabric diff minimal.
   - **Task 6: complete (no subagent review — controller path)**
 
+
+- Task 7: Preserve cache infrastructure during automatic client recovery — complete
+  - Controller RED→GREEN direct (no subagent: environment caveat per Task 2; controller is the only
+    confirmed-producing entity).
+  - **Step 1 — `ClientRecoveryState`** (plan §758-790): thread-safe singleton phase state machine
+    `NONE → RECOVERING → RECOVERED → TERMINAL` (single-sided; from any phase `markTerminal`).
+    `shouldSuppressFinalization` / `isRecovering` true in RECOVERING/RECOVERED (callers gate
+    terminal cleanup there); `consumeTerminalCleanup()` returns true exactly once after TERMINAL
+    so normal logout AND recovery exhaustion get exactly one finalize.
+    `begin(deadlineMs)` cannot revive TERMINAL (terminal is single-sided); tested idempotency +
+    `markTerminalFromNoneProducesOneCleanup` + `terminalIsIdempotentAndResistantToBegin`.
+  - **Step 2 — `ControlEndpoint`** + **`ControlEndpointManager`** (plan §797-838):
+    - `ControlEndpoint` record with validation (host non-blank, port 1..65535, priority >=0);
+      `coordinateKey` = lowercased `host:port` so dedup is case-insensitive.
+    - `mergeBootstrapAndAdvertised(bootstrap, advertised)`: bootstrap wins same-coordinate
+      collisions; advertised duplicates dropped; remaining sorted by `priority` descending;
+      truncated to `MAX_CANDIDATES = 4`.
+    - `nextCandidate()` is idempotent (returns current top without consuming); removal happens
+      via `recordAttemptFailure(ControlEndpoint)` by coordinate key. Recoverable before
+      `startRecovery` is called so a lookup/merge without kicking recovery still works.
+    - `startRecovery(long deadlineInMs)` takes a RELATIVE window length (not absolute ms),
+      converting to absolute deadline = `clock + max(0, deadlineInMs)`. Test-reachable via
+      package-private `startRecoveryWithClock(long deadlineInMs, LongSupplier clock)`.
+      `nextCandidate()` returns `Optional.empty()` once the deadline passes (regardless of
+      remaining candidates).
+    - `markConnected(endpoint)` is a placeholder so the caller can later persist advertised
+      candidates via Hassium metadata keyed to the multiplayer entry.
+  - **Step 3 — ClientLifecycleHelper split gate** (plan §793): added
+    `finalizeDisconnectIfTerminal()`:
+    - When `ClientRecoveryState.getInstance().isRecovering()` is true → return WITHOUT touching
+      `ClientHassiumStorage`, `CacheSaveQueue`, `HassiumTaskExecutor`, dirty/cache state.
+    - When phase is TERMINAL, the helper consumes `consumeTerminalCleanup()` exactly once
+      and proceeds to the existing `finalizeDisconnect()` body.
+    - When phase is NONE, falls through to `finalizeDisconnect()` directly for normal logout.
+    The internal `AtomicBoolean finalized` is still the multi-caller idempotency shield inside
+    `finalizeDisconnect()`; the recovery-state gate wraps it.
+  - **Step 4 — MixinMinecraft terminal suppress**: replaced all three
+    `ClientLifecycleHelper.finalizeDisconnect()` calls (1.20.1 `clearLevel`,
+    1.20.2-1.20.4 `disconnect(Screen)`, 1.20.5+ `disconnect(Screen, boolean)` + the NeoForge
+    `clearLevel` compat injector) with `finalizeDisconnectIfTerminal()`. The unconditional
+    teardown now never runs during the recovery window so disk cache + executor survive.
+  - **ClientMetadataHandler**: no source changes needed — existing `clearPendingState()` only
+    clears transient in-memory maps (PENDING_BE_REQUESTS, PENDING_BLOCK_ENTITIES,
+    PENDING_HASH_PACKETS, PENDING_DELTA_REQUESTS); it never touches disk-backed hashes or
+    storage. The plan §795 invariant is naturally satisfied; documented in ledger.
+  - Tests: `ClientRecoveryStateTest` (4 cases), `ControlEndpointManagerTest` (4 cases) → 8/8
+    green under `-Pmc_ver=1.20.1`. `common:compileJava` + `fabric:compileJava` green; no
+    regressions to Task 1-6 test suites.
+  - **Task 7: complete (no subagent review — controller path)**
