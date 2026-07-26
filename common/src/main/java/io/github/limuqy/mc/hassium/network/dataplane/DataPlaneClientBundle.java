@@ -27,13 +27,20 @@ public class DataPlaneClientBundle {
 
     private static final Logger LOGGER = LoggerFactory.getLogger("Hassium/DataPlaneClient");
 
-    /** BindRequest 里固定写入的 channelId（与 pseudoPlayerId 对应 PoC 单玩家演示） */
+    /** BindRequest 里固定写入的 channelId（v2 保留字段） */
     private static final int REQ_CHANNEL_ID = 1;
-    private static final int REQ_PROTOCOL = 1;
+    /** BindRequest 协议版本；v2 硬切换，含真实玩家 UUID。 */
+    private static final int REQ_PROTOCOL = BindRequestCodec.PROTOCOL_VERSION;
 
     private final List<Channel> channels = new ArrayList<>();
     private final NioEventLoopGroup workerGroup = new NioEventLoopGroup(2);
     private volatile boolean bound = false;
+    /** 本次 connect 使用的握手下发 token（16B）；sendBindRequest 写入、Handler 派生密钥。 */
+    private volatile byte[] bindToken;
+    /** 本次 connect 使用的玩家 UUID；v2 BindRequest 必带。生产由握手响应处理取 client.player.getUUID() 注入；smoke/单测可用 pseudoPlayerId()。 */
+    private volatile java.util.UUID playerUuid;
+    /** 本次 connect 目标端点（覆盖静态 PoC 配置；为 null 时回退静态 ENDPOINTS，仅旧路径/单测用）。 */
+    private DataPlanePoCConfig.Endpoint[] endpoints;
 
     /**
      * 客户端经 Data 通道收到的 bulk 帧计数（PoC 临时指标，不入 {@code NetworkStats}，
@@ -96,21 +103,46 @@ public class DataPlaneClientBundle {
     }
 
 
-    /** 连接到所有 PoC 端点并发送 BindRequest */
+    /**
+     * 旧路径/单测：用静态 {@link DataPlanePoCConfig#ENDPOINTS} + 全零 {@link DataPlanePoCConfig#BIND_TOKEN} 连接。
+     * Bind 用 {@link DataPlanePoCConfig#pseudoPlayerId()}；生产路径不调本方法。
+     */
     public void connectAndBind() {
+        connectAndBind(DataPlanePoCConfig.pseudoPlayerId(),
+                DataPlanePoCConfig.BIND_TOKEN, DataPlanePoCConfig.ENDPOINTS);
+    }
+
+    /**
+     * 握手 S2C 确认 hasDataPlane 后用下发 token + endpoints 建立所有 Data 通道。
+     * @param playerUuid 玩家 UUID；BindRequest v2 必带。生产由握手响应处理取 client.player.getUUID()，smoke 用 pseudoPlayerId()。
+     * @param token 16 字节握手下发 token
+     * @param endpoints 客户端连接地址（非 bindHost）
+     */
+    public void connectAndBind(java.util.UUID playerUuid, byte[] token, DataPlanePoCConfig.Endpoint[] endpoints) {
         if (!DataPlanePoCConfig.isEnabled() || !DataPlanePoCConfig.CLIENT_ENABLE_DATA_PLANE) return;
+        if (token == null || token.length != 16 || endpoints == null || endpoints.length == 0) {
+            LOGGER.warn("DataPlaneClient: connectAndBind skipped (invalid token/endpoints)");
+            return;
+        }
+        if (playerUuid == null) {
+            LOGGER.warn("DataPlaneClient: connectAndBind skipped (playerUuid null)");
+            return;
+        }
+        this.bindToken = token;
+        this.playerUuid = playerUuid;
+        this.endpoints = endpoints;
         if (DataPlanePoCConfig.isDataplaneLogEnabled()) {
             DebugLogger.info(DebugLogger.LogType.DATAPLANE,
                     "DataPlaneClient: connecting endpoints={} reqChannelId={} protocol={}",
-                    DataPlanePoCConfig.endpointsSummary(), REQ_CHANNEL_ID, REQ_PROTOCOL);
+                    endpoints.length, REQ_CHANNEL_ID, REQ_PROTOCOL);
         } else {
-            LOGGER.info("DataPlaneClient: connecting to {} endpoint(s)...", DataPlanePoCConfig.ENDPOINTS.length);
+            LOGGER.info("DataPlaneClient: connecting to {} endpoint(s)...", endpoints.length);
         }
-        for (int idx = 0; idx < DataPlanePoCConfig.ENDPOINTS.length; idx++) {
-            DataPlanePoCConfig.Endpoint ep = DataPlanePoCConfig.ENDPOINTS[idx];
+        for (int idx = 0; idx < endpoints.length; idx++) {
+            DataPlanePoCConfig.Endpoint ep = endpoints[idx];
             int portIdx = idx + 1;
-            // 与服务端同源派生读密钥（服务端用同一 portIdx + reqChannelId 加密）
-            byte[] aesKey = DataPlaneServer.deriveChannelKey(portIdx, REQ_CHANNEL_ID);
+            // 与服务端同源派生读密钥：用握手下发 token（服务端用同一 sessionToken 派生写密钥）
+            byte[] aesKey = DataPlaneServer.deriveChannelKey(token, portIdx, REQ_CHANNEL_ID);
             try {
                 if (DataPlanePoCConfig.isDataplaneLogEnabled()) {
                     String keyHex = String.format("%02X%02X%02X%02X…(%d)", aesKey[0] & 0xFF, aesKey[1] & 0xFF, aesKey[2] & 0xFF, aesKey[3] & 0xFF, aesKey.length);
@@ -146,23 +178,18 @@ public class DataPlaneClientBundle {
     }
 
     private void sendBindRequest(Channel channel) {
-        // BindRequest: token[16] + channelId(VarInt) + protocol(VarInt)
-        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
-        try {
-            out.write(DataPlanePoCConfig.BIND_TOKEN);
-            DataPlaneFrame.writeVarInt(out, REQ_CHANNEL_ID);
-            DataPlaneFrame.writeVarInt(out, REQ_PROTOCOL);
-        } catch (java.io.IOException e) {
-            LOGGER.error("DataPlaneClient: encode BindRequest failed", e);
-            return;
+        byte[] token = bindToken;
+        if (token == null) {
+            token = DataPlanePoCConfig.BIND_TOKEN;
         }
-        byte[] payload = out.toByteArray();
+        java.util.UUID uuid = playerUuid != null ? playerUuid : DataPlanePoCConfig.pseudoPlayerId();
+        byte[] payload = BindRequestCodec.encode(token, uuid, REQ_PROTOCOL, REQ_CHANNEL_ID);
         byte[] frame = DataPlaneFrame.encode(DataPlaneFrame.TYPE_BIND_REQUEST, payload);
         channel.writeAndFlush(Unpooled.wrappedBuffer(frame));
         if (DataPlanePoCConfig.isDataplaneLogEnabled()) {
             DebugLogger.info(DebugLogger.LogType.DATAPLANE,
-                    "DataPlaneClient: sent BindRequest frameLen={} tokenBytes={} reqChannelId={} protocol={}",
-                    frame.length, DataPlanePoCConfig.BIND_TOKEN.length, REQ_CHANNEL_ID, REQ_PROTOCOL);
+                    "DataPlaneClient: sent BindRequest v2 frameLen={} tokenBytes={} playerId={} reqChannelId={} protocol={}",
+                    frame.length, token.length, uuid, REQ_CHANNEL_ID, REQ_PROTOCOL);
         }
     }
 
@@ -233,6 +260,12 @@ public class DataPlaneClientBundle {
                         io.github.limuqy.mc.hassium.metrics.NetworkStats.recordWireBytesReceived(frame.length);
                         handleBulkChunk(dec.payload);
                     }
+                    case DataPlaneFrame.TYPE_BULK_SECTION_DELTA -> {
+                        // §14 第 3 步：Data 通道分流 SectionDelta，与 Primary demux 等同。
+                        // wire 口径归一：与 BulkCompressedChunk 路径互补，frame 整长计入 actual wire
+                        io.github.limuqy.mc.hassium.metrics.NetworkStats.recordWireBytesReceived(frame.length);
+                        handleBulkSectionDelta(dec.payload);
+                    }
                     case DataPlaneFrame.TYPE_KEEPALIVE -> sendKeepaliveAck(ctx);
                     case DataPlaneFrame.TYPE_CLOSE -> ctx.close();
                     default -> LOGGER.warn("DataPlaneClient: unknown frame type {} portIdx={}", dec.type, portIdx);
@@ -287,6 +320,29 @@ public class DataPlaneClientBundle {
             } catch (Exception e) {
                 LOGGER.error("DataPlaneClient: handleCompressedChunk failed portIdx={}", portIdx, e);
             }
+        }
+
+        private void handleBulkSectionDelta(byte[] plaintextPayload) {
+            // plaintextPayload = SectionDeltaS2CPacket.encode() 输出（已独立压缩，不再进 ZSTD）
+            // 与 Primary demux 等同：decode 后交 ClientMetadataHandler；MainThreadDispatcher 切主线程，与 fabric/neoforge Primary handler 一致
+            if (DataPlanePoCConfig.isDataplaneLogEnabled()) {
+                DebugLogger.info(DebugLogger.LogType.DATAPLANE,
+                        "DataPlaneClient: handleBulkSectionDelta portIdx={} payloadLen={}", portIdx, plaintextPayload.length);
+            }
+            // 主线程执行：applyDeltaEntry 系列不自带线程契约，且会触碰 LevelChunk / PENDING_DELTA_REQUESTS
+            io.github.limuqy.mc.hassium.concurrent.MainThreadDispatcher.execute(() -> {
+                try {
+                    net.minecraft.network.FriendlyByteBuf buf = new net.minecraft.network.FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(plaintextPayload));
+                    try {
+                        io.github.limuqy.mc.hassium.network.SectionDeltaS2CPacket packet = io.github.limuqy.mc.hassium.network.SectionDeltaS2CPacket.decode(buf);
+                        io.github.limuqy.mc.hassium.network.ClientMetadataHandler.handleSectionDeltaPacket(packet);
+                    } finally {
+                        buf.release();
+                    }
+                } catch (Exception e) {
+                    LOGGER.error("DataPlaneClient: handleBulkSectionDelta failed portIdx={}", portIdx, e);
+                }
+            });
         }
     }
 }

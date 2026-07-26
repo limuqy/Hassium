@@ -30,7 +30,7 @@ public class HassiumMod implements ModInitializer {
             byte[] payload = DataPlanePoCConfig.isEnabled() ? compressed.encode() : null;
             if (payload != null
                     && DataPlaneServer.tryRouteBulk(
-                            DataPlanePoCConfig.pseudoPlayerId(),
+                            player.getUUID(),
                             DataPlaneFrame.TYPE_BULK_COMPRESSED_CHUNK,
                             payload)) {
                 return; // 已走 Data 通道

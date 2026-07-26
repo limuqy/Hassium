@@ -72,6 +72,11 @@ public class HassiumMetricsImpl implements HassiumMetrics {
     private final AtomicLong bulkBytesPrimary = new AtomicLong(0);
     private final AtomicLong bulkFramesData = new AtomicLong(0);
     private final AtomicLong bulkBytesData = new AtomicLong(0);
+    /** 服务端 send-side per-portIdx bulk 帧/字节计数（与 client receive `perPortFrames/perPortBytes` 对称）。 */
+    private final java.util.concurrent.ConcurrentHashMap<Integer, java.util.concurrent.atomic.AtomicLong>
+            sendBulkFramesByPort = new java.util.concurrent.ConcurrentHashMap<>();
+    private final java.util.concurrent.ConcurrentHashMap<Integer, java.util.concurrent.atomic.AtomicLong>
+            sendBulkBytesByPort = new java.util.concurrent.ConcurrentHashMap<>();
 
     // 错误指标
     private final AtomicLong storageErrors = new AtomicLong(0);
@@ -374,6 +379,8 @@ public class HassiumMetricsImpl implements HassiumMetrics {
         vanillaBytesReceived.set(0);
         actualBytesReceived.set(0);
         metadataBytesSent.set(0);
+        sendBulkFramesByPort.clear();
+        sendBulkBytesByPort.clear();
         metadataBytesReceived.set(0);
         bulkFramesPrimary.set(0);
         bulkBytesPrimary.set(0);
@@ -761,6 +768,40 @@ public class HassiumMetricsImpl implements HassiumMetrics {
     }
 
     /**
+     * 记录经 Data 通道某端口发送的 bulk 帧（§14 第 4 步 send-side per-portIdx）。
+     * 与 {@link #recordBulkSentData(long)} 同触发点；aggregate 字段已在该方法累加，本方法只补 per-portIdx 维度。
+     *
+     * @param portIdx 1-based Data 端点序号（与 PlayerChannel.portIdx 一致）
+     * @param bytes payload 长度（与 recordBulkSentData 一致口径）
+     */
+    public void recordBulkSentDataByPort(int portIdx, long bytes) {
+        if (portIdx <= 0) return;
+        sendBulkFramesByPort.computeIfAbsent(portIdx, k -> new java.util.concurrent.atomic.AtomicLong()).incrementAndGet();
+        if (bytes > 0) sendBulkBytesByPort.computeIfAbsent(portIdx, k -> new java.util.concurrent.atomic.AtomicLong()).addAndGet(bytes);
+    }
+
+    /** 取 send-side per-portIdx 累计帧数；不存在则 0。 */
+    public long getBulkSentFramesByPort(int portIdx) {
+        java.util.concurrent.atomic.AtomicLong v = sendBulkFramesByPort.get(portIdx);
+        return v == null ? 0L : v.get();
+    }
+
+    /** 取 send-side per-portIdx 累计字节数；不存在则 0。 */
+    public long getBulkSentBytesByPort(int portIdx) {
+        java.util.concurrent.atomic.AtomicLong v = sendBulkBytesByPort.get(portIdx);
+        return v == null ? 0L : v.get();
+    }
+
+    /** send-side per-portIdx 视图快照（按 key 升序），指标命令文本用。 */
+    public java.util.SortedMap<Integer, long[]> snapshotSendPerPort() {
+        java.util.TreeMap<Integer, long[]> snap = new java.util.TreeMap<>();
+        for (Integer k : sendBulkFramesByPort.keySet()) {
+            snap.put(k, new long[]{getBulkSentFramesByPort(k), getBulkSentBytesByPort(k)});
+        }
+        return snap;
+    }
+
+    /**
      * 获取压缩统计信息
      */
     public CompressionStats getCompressionStats() {
@@ -779,7 +820,7 @@ public class HassiumMetricsImpl implements HassiumMetrics {
      * 获取格式化的统计信息
      */
     public String toFormattedString() {
-        return String.format(
+        String base = String.format(
                 "=== Hassium 性能统计 ===\n" +
                         "存储:\n" +
                         "  原版读取: %d bytes (%d 次)\n" +
@@ -805,6 +846,8 @@ public class HassiumMetricsImpl implements HassiumMetrics {
                         "  Primary: %d 帧 (%s)\n" +
                         "  Data: %d 帧 (%s)\n" +
                         "  分流比: %s\n" +
+                        "  Data per-port send (portIdx -> frames,bytes):\n" +
+                        "%s" +
                         "错误:\n" +
                         "  存储: %d\n" +
                         "  网络: %d\n" +
@@ -829,10 +872,24 @@ public class HassiumMetricsImpl implements HassiumMetrics {
                 bulkFramesPrimary.get(), MetricsTextFormatter.formatBytes(bulkBytesPrimary.get()),
                 bulkFramesData.get(), MetricsTextFormatter.formatBytes(bulkBytesData.get()),
                 MetricsTextFormatter.formatPercent(getBulkDataSharePercent()),
+                formatPerPortSend(),
                 storageErrors.get(),
                 networkErrors.get(),
                 compressionErrors.get()
         );
+        return base;
+    }
+
+    /** 渲染 send-side per-portIdx 视图为多行文本（每行 4-space 缩进，结尾带 \n）；空视图输出 "    (none)\n"。 */
+    private String formatPerPortSend() {
+        java.util.SortedMap<Integer, long[]> snap = snapshotSendPerPort();
+        if (snap.isEmpty()) return "    (none)\n";
+        StringBuilder sb = new StringBuilder();
+        for (java.util.Map.Entry<Integer, long[]> e : snap.entrySet()) {
+            sb.append(String.format("    portIdx=%d: %d 帧 (%s)\n",
+                    e.getKey(), e.getValue()[0], MetricsTextFormatter.formatBytes(e.getValue()[1])));
+        }
+        return sb.toString();
     }
 
     /** Data 通道分流比例（share/exclusive 模式下 Data 帧占总帧数的百分比；PoC 关注 Primary vs Data 走向）。 */

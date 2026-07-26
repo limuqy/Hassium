@@ -31,9 +31,7 @@ public class MixinServerGamePacketListenerImpl {
         Constants.LOG.info("Hassium: Player {} disconnected, push queue cleaned up", player.getName().getString());
         PlayerCompressionTracker.removePlayer(player);
         ServerChunkPushManager.getInstance().removePlayer(player.getUUID());
-        // 关闭该玩家 PoC 数据面 bundle（PoC 单玩家：清 pseudoPlayerId bundle）。
-        // 避免重连时旧 data channel 残留在 bundle 中，导致 BulkRouter 选到已 inactive 的 channel。
-        io.github.limuqy.mc.hassium.network.dataplane.DataPlaneServer.onPrimaryDisconnect(
-                io.github.limuqy.mc.hassium.network.dataplane.DataPlanePoCConfig.pseudoPlayerId());
+        // 关闭该玩家真实 UUID 的 PoC 数据面 bundle（避免重连旧 channel 残留致 BulkRouter 选到 inactive channel）。
+        io.github.limuqy.mc.hassium.network.dataplane.DataPlaneServer.onPrimaryDisconnect(player.getUUID());
     }
 }

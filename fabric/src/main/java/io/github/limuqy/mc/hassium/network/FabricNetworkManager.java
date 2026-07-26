@@ -4,6 +4,10 @@ import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.compat.ResourceLocationCompat;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.network.ServerChunkPushManager;
+import io.github.limuqy.mc.hassium.network.dataplane.DataPlaneHandshakeTail;
+import io.github.limuqy.mc.hassium.network.dataplane.DataPlaneClientLifecycle;
+import io.github.limuqy.mc.hassium.network.dataplane.DataPlanePoCConfig;
+import io.github.limuqy.mc.hassium.network.dataplane.DataPlaneServer;
 import io.github.limuqy.mc.hassium.utils.DebugLogger;
 import io.github.limuqy.mc.hassium.utils.DebugLogger.LogType;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
@@ -297,8 +301,11 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
             boolean accepted = buf.readBoolean();
             boolean globalCompressionAccepted = buf.readBoolean();
             boolean compactHeaderAccepted = buf.readBoolean();
-            LOGGER.info("Hassium: Client handshake response: accepted={}, globalCompression={}, compactHeader={}",
-                    accepted, globalCompressionAccepted, compactHeaderAccepted);
+            DataPlaneHandshakeTail.S2CTail dpTail = DataPlaneHandshakeTail.readS2C(buf);
+            LOGGER.info("Hassium: Client handshake response: accepted={}, globalCompression={}, compactHeader={}, hasDataPlane={}",
+                    accepted, globalCompressionAccepted, compactHeaderAccepted, dpTail.hasDataPlane());
+            java.util.UUID dpUuid = (client.player != null) ? client.player.getUUID() : null;
+            client.execute(() -> DataPlaneClientLifecycle.startFromHandshake(dpTail, dpUuid));
             if (accepted && globalCompressionAccepted) {
                 var conn = client.getConnection();
                 if (conn != null) {
@@ -323,8 +330,11 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
                 boolean accepted = buf.readBoolean();
                 boolean globalCompressionAccepted = buf.readBoolean();
                 boolean compactHeaderAccepted = buf.readBoolean();
-                LOGGER.info("Hassium: Client handshake response: accepted={}, globalCompression={}, compactHeader={}",
-                        accepted, globalCompressionAccepted, compactHeaderAccepted);
+                DataPlaneHandshakeTail.S2CTail dpTail = DataPlaneHandshakeTail.readS2C(buf);
+                LOGGER.info("Hassium: Client handshake response: accepted={}, globalCompression={}, compactHeader={}, hasDataPlane={}",
+                        accepted, globalCompressionAccepted, compactHeaderAccepted, dpTail.hasDataPlane());
+                java.util.UUID dpUuid = (context.client().player != null) ? context.client().player.getUUID() : null;
+                context.client().execute(() -> DataPlaneClientLifecycle.startFromHandshake(dpTail, dpUuid));
                 if (accepted && globalCompressionAccepted) {
                     var conn = context.client().getConnection();
                     if (conn != null) {
@@ -585,6 +595,8 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
             buf.writeBoolean(false); // scheme127Supported
             buf.writeBoolean(true);  // globalPacketCompressionSupported（管线未就绪时延后安装）
             buf.writeBoolean(true);  // compactHeaderSupported
+            // 尾部 append：multiChannelSupported（多通道数据面）；旧服务端忽略 leftover
+            DataPlaneHandshakeTail.writeC2S(buf, true);
 #if MC_VER < MC_1_20_5
             ClientPlayNetworking.send(HANDSHAKE_C2S, buf);
 #else
@@ -783,7 +795,8 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
             ServerPlayer player,
             boolean accepted,
             boolean useGlobalCompression,
-            boolean useCompactHeader) {
+            boolean useCompactHeader,
+            boolean clientMultiChannel) {
         if (useGlobalCompression) {
             DictionaryManager.init();
             IndexSyncManager.getInstance().initializeServerIndex();
@@ -797,18 +810,24 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
             }
         }
 
+        // 数据面尾部：hasDataPlane + endpoints + sessionToken（仅 offer 成立时下发）
+        boolean hasDataPlane = DataPlaneHandshakeTail.shouldOfferDataPlane(accepted, clientMultiChannel);
+        DataPlanePoCConfig.Endpoint[] clientEndpoints = hasDataPlane ? DataPlanePoCConfig.ENDPOINTS : null;
+        byte[] sessionToken = hasDataPlane ? DataPlaneServer.getSessionToken() : null;
+
         FriendlyByteBuf response = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
         response.writeVarInt(Constants.CURRENT_PROTOCOL_VERSION);
         response.writeBoolean(accepted);
         response.writeBoolean(useGlobalCompression);
         response.writeBoolean(useCompactHeader);
+        DataPlaneHandshakeTail.writeS2C(response, hasDataPlane, clientEndpoints, sessionToken);
 #if MC_VER < MC_1_20_5
         ServerPlayNetworking.send(player, HANDSHAKE_S2C, response);
 #else
         ServerPlayNetworking.send(player, FabricPayloadRegistry.toPayload(FabricPayloadRegistry.HANDSHAKE_S2C_TYPE, response));
 #endif
-        LOGGER.info("Hassium: Server handshake for {}: accepted={}, globalCompression={}, compactHeader={}",
-                player.getName().getString(), accepted, useGlobalCompression, useCompactHeader);
+        LOGGER.info("Hassium: Server handshake for {}: accepted={}, globalCompression={}, compactHeader={}, hasDataPlane={}",
+                player.getName().getString(), accepted, useGlobalCompression, useCompactHeader, hasDataPlane);
 
         // globalCompression=false 时不会走 CompressionReady→enableAggregation 路径，
         // 必须在此补发视距内 chunkHash，否则握手前 trackChunk 放行的原版包永不进入缓存主链路，
@@ -888,6 +907,7 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
             boolean scheme127 = buf.readBoolean();
             boolean globalPacketCompression = buf.readBoolean();
             boolean compactHeader = buf.readBoolean();
+            boolean multiChannel = DataPlaneHandshakeTail.readC2SMultiChannel(buf);
 
             DebugLogger.debug(LogType.NETWORK,
                     "[HANDSHAKE] Details from {}: protocol={}, modVersion={}, algorithms={}, clientCache={}, globalCompression={}, compactHeader={}",
@@ -912,7 +932,7 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
             // 1) HandshakeResponse 先经 Zlib 出站
             // 2) 再在 EventLoop 上切换 ZSTD（排在已排队的 encode 之后）
             // 3) 随后再发 Dict/Index（走 ZSTD）；客户端在收到 HandshakeResponse 后切换
-            server.execute(() -> completeServerHandshake(server, player, accepted, useGlobalCompression, useCompactHeader));
+            server.execute(() -> completeServerHandshake(server, player, accepted, useGlobalCompression, useCompactHeader, multiChannel));
         });
 #else
         ServerPlayNetworking.registerGlobalReceiver(FabricPayloadRegistry.HANDSHAKE_C2S_TYPE, (payload, context) -> {
@@ -930,6 +950,7 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
                 boolean scheme127 = buf.readBoolean();
                 boolean globalPacketCompression = buf.readBoolean();
                 boolean compactHeader = buf.readBoolean();
+                boolean multiChannel = DataPlaneHandshakeTail.readC2SMultiChannel(buf);
 
                 ServerPlayer player = context.player();
                 net.minecraft.server.MinecraftServer server = io.github.limuqy.mc.hassium.compat.PlayerCompat.getMinecraftServer(player);
@@ -952,7 +973,7 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
 
                 boolean accepted = true;
 
-                server.execute(() -> completeServerHandshake(server, player, accepted, useGlobalCompression, useCompactHeader));
+                server.execute(() -> completeServerHandshake(server, player, accepted, useGlobalCompression, useCompactHeader, multiChannel));
             } catch (Exception e) {
                 LOGGER.error("[HANDSHAKE] Failed to handle handshake packet", e);
             } finally {

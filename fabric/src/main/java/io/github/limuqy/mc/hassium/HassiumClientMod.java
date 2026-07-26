@@ -6,8 +6,7 @@ import io.github.limuqy.mc.hassium.command.FabricHassiumCommand;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.network.DictionaryManager;
 import io.github.limuqy.mc.hassium.network.FabricNetworkManager;
-import io.github.limuqy.mc.hassium.network.dataplane.DataPlaneClientBundle;
-import io.github.limuqy.mc.hassium.network.dataplane.DataPlanePoCConfig;
+import io.github.limuqy.mc.hassium.network.dataplane.DataPlaneClientLifecycle;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import org.slf4j.Logger;
@@ -17,9 +16,6 @@ public class HassiumClientMod implements ClientModInitializer {
 
     private static final Logger LOGGER = LoggerFactory.getLogger("Hassium/ClientMod");
     private static final FabricNetworkManager networkManager = new FabricNetworkManager();
-
-    /** PoC 多通道数据面客户端 bundle（每次进服重建、断开时关闭） */
-    private static volatile DataPlaneClientBundle dataPlane;
 
     @Override
     public void onInitializeClient() {
@@ -31,21 +27,14 @@ public class HassiumClientMod implements ClientModInitializer {
         // 注册客户端网络通道
         networkManager.registerClientChannels();
 
-        // 监听客户端加入服务器事件，发送握手请求
+        // 监听客户端加入服务器事件：仅发握手；数据面由 HandshakeS2C 携 token/endpoints 触发
+        // （DataPlaneClientLifecycle.startFromHandshake 在握手响应里执行，二不在 JOIN 立即连接）
         ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> {
             if (!HassiumConfigService.getInstance().isNetworkCompressionEnabled()) {
                 LOGGER.debug("Hassium: Client joined server, network disabled — skip handshake");
                 return;
             }
             networkManager.sendHandshakeRequest();
-            // 启动 PoC 多通道数据面（与服务端 Data 端口建立连接并 Bind）
-            if (DataPlanePoCConfig.isEnabled() && DataPlanePoCConfig.CLIENT_ENABLE_DATA_PLANE) {
-                if (dataPlane != null) {
-                    try { dataPlane.shutdown(); } catch (Exception ignored) {}
-                }
-                dataPlane = new DataPlaneClientBundle();
-                dataPlane.connectAndBind();
-            }
         });
 
         // 监听客户端断开连接事件，统一走 ClientLifecycleHelper.cleanupOnDisconnect
@@ -53,11 +42,8 @@ public class HassiumClientMod implements ClientModInitializer {
         //  必须在此主动清理，否则 initialized 标志残留导致重连后 onLogin early-return）
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
             ClientLifecycleHelper.cleanupOnDisconnect();
-            // 关闭 PoC 多通道数据面
-            if (dataPlane != null) {
-                try { dataPlane.shutdown(); } catch (Exception ignored) {}
-                dataPlane = null;
-            }
+            // 关闭多通道数据面（由握手建立的 bundle）
+            DataPlaneClientLifecycle.stop();
             // 延后到下一 tick：等 Minecraft.disconnect / clearLevel 拆除完成；与 Mixin TAIL 幂等
             client.execute(ClientLifecycleHelper::finalizeDisconnect);
         });

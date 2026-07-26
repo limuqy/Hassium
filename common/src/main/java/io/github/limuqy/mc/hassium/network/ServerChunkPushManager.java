@@ -676,20 +676,44 @@ public class ServerChunkPushManager {
         // 始终回包，避免客户端悬等（含 entries/skipped 皆空的边界）
         FriendlyByteBuf buf = null;
         boolean sent = false;
+        boolean routedViaData = false;
         try {
             SectionDeltaS2CPacket deltaPacket = new SectionDeltaS2CPacket(
                     request.dimension(), deltas, skipped);
             buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
             deltaPacket.encode(buf);
-            Services.NETWORK_MANAGER.sendSectionDeltaPacket(player, buf);
-            sent = true;
-            DebugLogger.info(LogType.NETWORK,
-                    "[SECTION_DELTA] Sent response: {} deltas, {} skipped (dimension={})",
-                    deltas.size(), skipped.size(), request.dimension());
+
+            // §14 第 3 步：Data 通道优先分流（与 ChunkSender BulkCompressedChunk 路径同构）
+            // 口径等价 Primary：delta 已独立压缩，本路径不再进 ZSTD；payload = encode 后原始字节
+            int payloadLen = buf.readableBytes();
+            byte[] bulkPayload = new byte[payloadLen];
+            buf.getBytes(buf.readerIndex(), bulkPayload);
+            routedViaData = io.github.limuqy.mc.hassium.network.dataplane.DataPlanePoCConfig.isEnabled()
+                    && io.github.limuqy.mc.hassium.network.dataplane.DataPlaneServer.tryRouteBulk(
+                            player.getUUID(),
+                            io.github.limuqy.mc.hassium.network.dataplane.DataPlaneFrame.TYPE_BULK_SECTION_DELTA,
+                            bulkPayload);
+            if (routedViaData) {
+                // tryRouteBulk 内部已 recordBulkSentData + recordBulkSentDataByPort；此处不再二次累加
+                sent = true;
+                DebugLogger.info(LogType.NETWORK,
+                        "[SECTION_DELTA] Sent via Data plane (frameType=4) deltas={} skipped={} (dimension={})",
+                        deltas.size(), skipped.size(), request.dimension());
+            } else {
+                // 走 Primary：口径与 ChunkSender Primary fallback 一致
+                io.github.limuqy.mc.hassium.metrics.NetworkStats.recordBulkSentPrimary(payloadLen);
+                Services.NETWORK_MANAGER.sendSectionDeltaPacket(player, buf);
+                sent = true;
+                DebugLogger.info(LogType.NETWORK,
+                        "[SECTION_DELTA] Sent via Primary: {} deltas, {} skipped (dimension={})",
+                        deltas.size(), skipped.size(), request.dimension());
+            }
         } catch (Exception e) {
             Constants.LOG.error("[SECTION_DELTA] Failed to send delta response", e);
         } finally {
-            if (!sent && buf != null) {
+            // sendSectionDeltaPacket 会 release buf；Data 路径未消费 buf，需主动释放
+            // Primary 路径（sendSectionDeltaPacket）内部 release buf；Data 路径未消费 buf，需兜底 release；异常路径同样需兜底
+            if (buf != null && (!sent || routedViaData)) {
                 buf.release();
             }
         }

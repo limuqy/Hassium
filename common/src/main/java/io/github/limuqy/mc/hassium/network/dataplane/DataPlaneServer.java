@@ -12,6 +12,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import io.github.limuqy.mc.hassium.utils.DebugLogger;
 
+import java.security.SecureRandom;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
@@ -30,6 +31,13 @@ public class DataPlaneServer {
     private static volatile NioEventLoopGroup bossGroup;
     private static volatile NioEventLoopGroup workerGroup;
     private static volatile boolean bound = false;
+
+    /**
+     * 本次 bind 会话 token（16 字节 SecureRandom）。
+     * Bind 校验 + HKDF 派生均用此值；握手 S2C 下发给客户端。
+     * {@code null} 表示未 bind / 已 shutdown。
+     */
+    private static volatile byte[] sessionToken = null;
 
     /**
      * 运行时可覆盖的 bulk 路由模式（share ↔ exclusive）。
@@ -82,6 +90,12 @@ public class DataPlaneServer {
         if (!DataPlanePoCConfig.isEnabled()) {
             LOGGER.info("DataPlaneServer: disabled by config");
             return;
+        }
+        if (sessionToken == null) {
+            byte[] tok = new byte[16];
+            new SecureRandom().nextBytes(tok);
+            sessionToken = tok;
+            LOGGER.info("DataPlaneServer: generated session token");
         }
         bossGroup = new NioEventLoopGroup(1);
         workerGroup = new NioEventLoopGroup(4);
@@ -153,10 +167,32 @@ public class DataPlaneServer {
 
     public static boolean isBound() { return bound; }
 
+    /** 当前会话 token 副本；未 bind 时返回 null。握手 S2C 下发用。 */
+    public static byte[] getSessionToken() {
+        byte[] t = sessionToken;
+        if (t == null) return null;
+        return Arrays.copyOf(t, t.length);
+    }
+
+    /**
+     * 单测/冒烟注入固定 token；须在 {@link #bind()} 之前调用。
+     * 传入 null 清除注入，下次 bind 重新 SecureRandom。
+     */
+    public static void setSessionTokenForTest(byte[] token) {
+        if (token == null) {
+            sessionToken = null;
+            return;
+        }
+        if (token.length != 16) {
+            throw new IllegalArgumentException("session token must be 16 bytes");
+        }
+        sessionToken = Arrays.copyOf(token, 16);
+    }
+
     /**
      * 尝试把 bulk payload 路由到玩家的 Data 通道（用其 per-channel 派生密钥加密写入）。
      *
-     * @param playerId 玩家 UUID（PoC 服务端用 {@link DataPlanePoCConfig#pseudoPlayerId()}）
+     * @param playerId 玩家 UUID（生产=BindRequest 携带的 uuid；测试可用 {@link DataPlanePoCConfig#pseudoPlayerId()}）
      * @param frameType {@link DataPlaneFrame} 帧类型（BULK_COMPRESSED_CHUNK / BULK_SECTION_DELTA）
      * @param payload 帧业务 payload（未经 DataPlaneCodec 加密）
      * @return true = 已写入 Data 通道或已丢弃（caller 不应再走 Primary）；false = 走 Primary
@@ -195,8 +231,9 @@ public class DataPlaneServer {
             }
             target.channel.writeAndFlush(io.netty.buffer.Unpooled.wrappedBuffer(frame))
                     .addListener(ChannelFutureListener.FIRE_EXCEPTION_ON_FAILURE);
-            // 记录 Data 路由分流（口径 = payload 等价字节，与 Primary 侧对齐）
+            // 记录 Data 路由分流（口径 = payload 等价字节，与 Primary 侧对齐）+ §14 第 4 步 send-side per-portIdx
             io.github.limuqy.mc.hassium.metrics.NetworkStats.recordBulkSentData(payload.length);
+            io.github.limuqy.mc.hassium.metrics.NetworkStats.recordBulkSentDataByPort(target.portIdx, payload.length);
             return true;
         } catch (Exception e) {
             LOGGER.warn("DataPlaneServer: encrypt/write failed, falling back to Primary", e);
@@ -204,19 +241,35 @@ public class DataPlaneServer {
         }
     }
 
-    /** 派生 per-channel 写密钥: HKDF(BIND_TOKEN, salt=BIND_TOKEN, info=FRAME_KEY_INFO_TAG||portIdx||reqChannelId, 16) */
+    /**
+     * 派生 per-channel 写密钥: HKDF(sessionToken, salt=sessionToken, info=FRAME_KEY_INFO_TAG||portIdx||reqChannelId, 16)。
+     * sessionToken 未就绪时回退 {@link DataPlanePoCConfig#BIND_TOKEN}（单测/旧路径）。
+     */
     static byte[] deriveChannelKey(int portIdx, int reqChannelId) {
+        return deriveChannelKey(effectiveToken(), portIdx, reqChannelId);
+    }
+
+    /** 用指定 token 派生密钥（客户端用握手下发 token）。 */
+    public static byte[] deriveChannelKey(byte[] token, int portIdx, int reqChannelId) {
+        if (token == null || token.length != 16) {
+            throw new IllegalArgumentException("token must be 16 bytes");
+        }
         byte[] info = new byte[4 + 4 + 4];
         writeTagInt(info, 0, DataPlanePoCConfig.FRAME_KEY_INFO_TAG);
         writeTagInt(info, 4, portIdx);
         writeTagInt(info, 8, reqChannelId);
-        byte[] key = Hkdf.extractAndExpand(DataPlanePoCConfig.BIND_TOKEN, DataPlanePoCConfig.BIND_TOKEN, info, 16);
+        byte[] key = Hkdf.extractAndExpand(token, token, info, 16);
         if (DataPlanePoCConfig.isDataplaneLogEnabled()) {
             String keyHex = String.format("%02X%02X%02X%02X…(%d)", key[0] & 0xFF, key[1] & 0xFF, key[2] & 0xFF, key[3] & 0xFF, key.length);
             DebugLogger.info(DebugLogger.LogType.DATAPLANE,
                     "DataPlaneServer: deriveChannelKey portIdx={} reqChannelId={} keyPrefix={} ", portIdx, reqChannelId, keyHex);
         }
         return key;
+    }
+
+    private static byte[] effectiveToken() {
+        byte[] t = sessionToken;
+        return t != null ? t : DataPlanePoCConfig.BIND_TOKEN;
     }
 
     private static void writeTagInt(byte[] buf, int off, int v) {
@@ -292,37 +345,38 @@ public class DataPlaneServer {
         }
 
         private void handleBindRequest(ChannelHandlerContext ctx, byte[] payload) {
-            if (payload.length < 16) {
-                LOGGER.warn("DataPlaneServer: bind request too short");
-                sendBindAck(ctx, false, "Bad request length");
+            BindRequestCodec.Parsed parsed;
+            try {
+                parsed = BindRequestCodec.decode(payload);
+            } catch (IllegalArgumentException e) {
+                LOGGER.warn("DataPlaneServer: bind request rejected: {}", e.getMessage());
+                sendBindAck(ctx, false, e.getMessage());
                 return;
             }
-            byte[] token = new byte[16];
-            System.arraycopy(payload, 0, token, 0, 16);
-            if (!Arrays.equals(token, DataPlanePoCConfig.BIND_TOKEN)) {
+            if (!Arrays.equals(parsed.token(), effectiveToken())) {
                 LOGGER.warn("DataPlaneServer: bind token mismatch");
                 sendBindAck(ctx, false, "Token mismatch");
                 return;
             }
-            // 解析 channelId + protocol（PoC 仅读取，不做强校验）
-            java.nio.ByteBuffer rest = java.nio.ByteBuffer.wrap(payload, 16, payload.length - 16);
-            int reqChannelId = readVarInt(rest);
-            int reqProtocol = readVarInt(rest);
-
-            // PoC 用固定伪 player（无握手扩展，无法绑定真实玩家 UUID）。
-            // 所有 Data 通道归入同一 bundle，便于拦截处用 pseudoPlayerId() 查询路由。
-            this.playerId = DataPlanePoCConfig.pseudoPlayerId();
+            if (parsed.protocol() != BindRequestCodec.PROTOCOL_VERSION) {
+                LOGGER.warn("DataPlaneServer: unsupported bind protocol {}", parsed.protocol());
+                sendBindAck(ctx, false, "Unsupported bind protocol");
+                return;
+            }
+            int reqChannelId = parsed.channelId();
+            // 真实玩家 UUID 绑定：bundle key 用 BindRequest 携带的 uuid。
+            // 多个玩家分别落独立 bundle；A 的 bulk 绝不进 B 的 channel。
+            this.playerId = parsed.playerId();
             PlayerChannelBundle bundle = getOrCreateBundle(this.playerId);
-            // 派生 per-channel 写密钥：HKDF(BIND_TOKEN, salt=BIND_TOKEN, info=FRAME_KEY_INFO_TAG||portIdx||reqChannelId, 16)
             byte[] aesKey = deriveChannelKey(portIdx, reqChannelId);
-            PlayerChannel pc = new PlayerChannel(ctx.channel(), endpointWeightFor(reqChannelId), aesKey, portIdx);
+            PlayerChannel pc = new PlayerChannel(ctx.channel(), endpointWeightForPortIdx(portIdx), aesKey, portIdx);
             bundle.addChannel(pc);
             CHANNEL_TO_PLAYER.put(ctx.channel(), this.playerId);
             bound = true;
 
             sendBindAck(ctx, true, "");
             LOGGER.info("DataPlaneServer: bind successful from {} playerId={} portIdx={} reqChannelId={} weight={} dataChannels={}",
-                ctx.channel().remoteAddress(), this.playerId, portIdx, reqChannelId, endpointWeightFor(reqChannelId), bundle.getDataChannels().size());
+                ctx.channel().remoteAddress(), this.playerId, portIdx, reqChannelId, endpointWeightForPortIdx(portIdx), bundle.getDataChannels().size());
             startKeepalive(ctx, aesKey);
         }
 
@@ -349,9 +403,9 @@ public class DataPlaneServer {
             }
         }
 
-        private int endpointWeightFor(int channelId) {
-            int idx = (int) (channelId - 1);
+        private int endpointWeightForPortIdx(int portIdx) {
             DataPlanePoCConfig.Endpoint[] eps = DataPlanePoCConfig.ENDPOINTS;
+            int idx = portIdx - 1; // portIdx 1-based
             if (idx >= 0 && idx < eps.length) return eps[idx].weight;
             return 50;
         }

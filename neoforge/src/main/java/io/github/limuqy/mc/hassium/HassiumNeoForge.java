@@ -4,6 +4,9 @@ import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.config.HassiumConfigSpec;
 import io.github.limuqy.mc.hassium.network.ChunkSender;
 import io.github.limuqy.mc.hassium.network.NeoForgeNetworkManager;
+import io.github.limuqy.mc.hassium.network.dataplane.DataPlaneFrame;
+import io.github.limuqy.mc.hassium.network.dataplane.DataPlanePoCConfig;
+import io.github.limuqy.mc.hassium.network.dataplane.DataPlaneServer;
 
 #if MC_VER < MC_1_20_2
 import net.minecraftforge.fml.ModLoadingContext;
@@ -67,7 +70,21 @@ public class HassiumNeoForge {
 
         CommonClass.init();
 
-        ChunkSender.setInstance(NeoForgeNetworkManager::sendCompressedChunk);
+        ChunkSender.setInstance((player, compressed) -> {
+            // 多通道数据面: 先尝试经 Data 通道路由 bulk；命中/丢弃则不再走 Primary
+            byte[] payload = DataPlanePoCConfig.isEnabled() ? compressed.encode() : null;
+            if (payload != null
+                    && DataPlaneServer.tryRouteBulk(
+                            player.getUUID(),
+                            DataPlaneFrame.TYPE_BULK_COMPRESSED_CHUNK,
+                            payload)) {
+                return; // 已走 Data 通道
+            }
+            // 未走 Data 通道 → 走 Primary，记分流统计（口径 = encode() 总长度，与 Data 侧对齐）
+            int primaryBytes = payload != null ? payload.length : (compressed.compressedData == null ? 0 : compressed.compressedData.length);
+            io.github.limuqy.mc.hassium.metrics.NetworkStats.recordBulkSentPrimary(primaryBytes);
+            NeoForgeNetworkManager.sendCompressedChunk(player, compressed);
+        });
         LOGGER.info("Hassium: ChunkSender registered for NeoForge");
 
 #if MC_VER < MC_1_20_4
