@@ -1,330 +1,61 @@
 package io.github.limuqy.mc.hassium.network.dataplane;
 
-import io.netty.bootstrap.ServerBootstrap;
-import io.netty.buffer.ByteBuf;
-import io.netty.buffer.Unpooled;
-import io.netty.channel.*;
-import io.netty.channel.nio.NioEventLoopGroup;
-import io.netty.channel.socket.SocketChannel;
-import io.netty.channel.socket.nio.NioServerSocketChannel;
-import io.netty.handler.timeout.ReadTimeoutHandler;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import io.github.limuqy.mc.hassium.utils.DebugLogger;
-
-import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.TimeUnit;
+import java.util.UUID;
 
 /**
- * Data Plane 服务端。
- * 管理多端口 accept、Bind 校验、per-player PlayerChannelBundle。
+ * 数据面 façade —— histórico 接口保留；Task 3/4 UDP 切换后，本类仅作转发壳。
+ *
+ * <p>旧 PoC TCP 多通道 server（{@code ServerBootstrap} + {@code BindHandshakeHandler} +
+ * {@code PlayerChannelBundle}）已在 Task 10b §2.1/§2.2 完成删除：实际 transport 是
+ * {@link DataPlaneUdpServer} 的 KCP-over-UDP（NioDatagramChannel）；本类仅保留调用方契约
+ * （{@link MixinMinecraftServer} 生命周期、{@code HassiumMod}/{@code FabricNetworkManager}
+ * {@code tryRouteBulk}）所必需的转发方法。
+ *
+ * <p>调用方仍可继续使用本 façade 以减小迁移面，或直接走 {@link DataPlaneUdpServer} 的对应方法；
+ * 两者的语义与线程边界由 UDP server 单点保证。
  */
-public class DataPlaneServer {
+public final class DataPlaneServer {
 
-    private static final Logger LOGGER = LoggerFactory.getLogger("Hassium/DataPlaneServer");
-
-    private static final Map<Integer, Channel> SERVER_CHANNELS = new LinkedHashMap<>();
-    private static final ConcurrentHashMap<Channel, UUID> CHANNEL_TO_PLAYER = new ConcurrentHashMap<>();
-    private static final ConcurrentHashMap<UUID, PlayerChannelBundle> PLAYER_BUNDLES = new ConcurrentHashMap<>();
-    private static volatile NioEventLoopGroup bossGroup;
-    private static volatile NioEventLoopGroup workerGroup;
-    private static volatile boolean bound = false;
-
-    /**
-     * 运行时可覆盖的 bulk 路由模式（share ↔ exclusive）。
-     * <p>
-     * 为 null 时回退到 {@link DataPlanePoCConfig#BULK_ROUTE_MODE}（编译期常量默认 share），
-     * 非空时由 {@link #setRuntimeMode(String)} 在线设置 —— 用于冒烟在不改 {@code static final}
-     * 常量的前提下切换 exclusive 验证降级路径。冒烟结束必须 {@link #clearRuntimeMode()} 复位。
-     */
-    private static volatile String runtimeMode = null;
-
-    /** 设置运行时 bulk 路由模式覆盖；传入 "share" / "exclusive"。传 null 等同 clearRuntimeMode。 */
-    public static void setRuntimeMode(String mode) {
-        runtimeMode = mode;
+    private DataPlaneServer() {
     }
 
-    /** 清除运行时模式覆盖，回退到 {@link DataPlanePoCConfig#BULK_ROUTE_MODE}。 */
-    public static void clearRuntimeMode() {
-        runtimeMode = null;
-    }
-
-    /** 读取当前生效的 bulk 路由模式（运行时覆盖优先于常量默认）。 */
-    public static String getRuntimeMode() {
-        return runtimeMode != null ? runtimeMode : DataPlanePoCConfig.BULK_ROUTE_MODE;
-    }
-
-    /**
-     * 主动关闭指定玩家的某条 Data 通道（按 1-based 端点序号 portIdx 匹配）。
-     * <p>
-     * 通道关闭后由 {@link BindHandshakeHandler#channelInactive} 自动从 bundle 移除，
-     * 故 bundle.dataChannels.size() 之后会自动减 1，无需调用方手动 removeChannel。
-     *
-     * @return true = 找到并已触发关闭；false = 该玩家无 bundle 或无匹配 portIdx 的通道。
-     */
-    public static boolean killDataChannelByPortIdx(UUID playerId, int portIdx) {
-        PlayerChannelBundle bundle = getBundle(playerId);
-        if (bundle == null) return false;
-        for (PlayerChannel pc : bundle.getDataChannels()) {
-            if (pc != null && pc.portIdx == portIdx) {
-                pc.close();
-                return true;
-            }
-        }
-        return false;
-    }
-
-
-    /** 绑定所有 PoC 数据端口 */
-    public static synchronized void bind() {
-        // Task 3 UDP cutover: TCP listener 已退役；forwarding façade 委托到 {@link DataPlaneUdpServer}。
-        // 保留 synchronized 前缀以维持既有调用方契约；内部状态 {@code bound} 不再本类管理。
+    /** 绑定所有数据面端点（委托 {@link DataPlaneUdpServer#bind()}）。 */
+    public static void bind() {
         DataPlaneUdpServer.bind();
     }
 
-    /** 关闭所有 Data 端口 */
-    public static synchronized void shutdown() {
-        // Task 3: 委托 {@link DataPlaneUdpServer}; TCP listener 资源已不再启动。
+    /** 关闭所有数据面端点（委托 {@link DataPlaneUdpServer#shutdown()}）。 */
+    public static void shutdown() {
         DataPlaneUdpServer.shutdown();
     }
 
-    public static PlayerChannelBundle getOrCreateBundle(UUID playerId) {
-        return PLAYER_BUNDLES.computeIfAbsent(playerId, k -> new PlayerChannelBundle());
+    /** @return 数据面是否已绑定（委托 {@link DataPlaneUdpServer#isBound()}）。 */
+    public static boolean isBound() {
+        return DataPlaneUdpServer.isBound();
     }
-
-    public static PlayerChannelBundle getBundle(UUID playerId) {
-        return PLAYER_BUNDLES.get(playerId);
-    }
-
-    public static void removeBundle(UUID playerId) {
-        PlayerChannelBundle b = PLAYER_BUNDLES.remove(playerId);
-        if (b != null) b.closeAll();
-    }
-
-    /** 关闭指定玩家所有 Data 通道并清理 bundle（主连接断开时调用） */
-    public static void onPrimaryDisconnect(UUID playerId) {
-        // Task 3: 旧 PoC 仅以 playerId 清 bundle；新 UDP 路径 epoch 由 {@link DataPlaneUdpServer#onPrimaryDisconnect} 接管。
-        // Task 3 占位参数 epoch=0，Task 6 failover handler 用真实 epoch 调用；保留旧签名兼容 PoC caller。
-        DataPlaneUdpServer.onPrimaryDisconnect(playerId, 0L, System.currentTimeMillis());
-        // 同时清旧 PoC bundle：兼容 {@link TryRouteBulkWriteRegressionTest} 的导出通道；Task 10 删。
-        removeBundle(playerId);
-    }
-
-    public static boolean isBound() { return DataPlaneUdpServer.isBound(); }
 
     /**
-     * 尝试把 bulk payload 路由到玩家的 Data 通道（用其 per-channel 派生密钥加密写入）。
+     * 主连接断开时调用（PoC 旧签名，仅以 UUID 触发 session 关闭）。
      *
-     * @param playerId 玩家 UUID（PoC 服务端用 {@link DataPlanePoCConfig#pseudoPlayerId()}）
+     * <p>新 UDP 路径以 (playerId, epoch) 关键 session；本 façade 以 epoch=0 调 {@link
+     * DataPlaneUdpServer#onPrimaryDisconnect(UUID, long, long)} 用于历史调用方，
+     * 真实 epoch 由 mixin / failover handler 直接调用 {@code DataPlaneUdpServer}。
+     *
+     * @param playerId 玩家 UUID
+     */
+    public static void onPrimaryDisconnect(UUID playerId) {
+        DataPlaneUdpServer.onPrimaryDisconnect(playerId, 0L, System.currentTimeMillis());
+    }
+
+    /**
+     * 尝试把 bulk payload 路由到数据面。
+     *
+     * @param playerId  玩家 UUID
      * @param frameType {@link DataPlaneFrame} 帧类型（BULK_COMPRESSED_CHUNK / BULK_SECTION_DELTA）
-     * @param payload 帧业务 payload（未经 DataPlaneCodec 加密）
-     * @return true = 已写入 Data 通道或已丢弃（caller 不应再走 Primary）；false = 走 Primary
+     * @param payload   帧业务 payload
+     * @return true = 已写入 UDP/KCP 或已丢弃（caller 不应再走 Primary）；false = 走 Primary
      */
     public static boolean tryRouteBulk(UUID playerId, int frameType, byte[] payload) {
-        // Task 3 UDP cutover: 旧 TCP bundle 路由已退役；委托到 {@link DataPlaneUdpServer#tryRouteBulk}。
-        // 当前返回 false 永回退 Primary；Task 4 router 接入并改其行为。
         return DataPlaneUdpServer.tryRouteBulk(playerId, frameType, payload);
-    }
-
-    /** 派生 per-channel 写密钥: HKDF(BIND_TOKEN, salt=BIND_TOKEN, info=FRAME_KEY_INFO_TAG||portIdx||reqChannelId, 16) */
-    static byte[] deriveChannelKey(int portIdx, int reqChannelId) {
-        byte[] info = new byte[4 + 4 + 4];
-        writeTagInt(info, 0, DataPlanePoCConfig.FRAME_KEY_INFO_TAG);
-        writeTagInt(info, 4, portIdx);
-        writeTagInt(info, 8, reqChannelId);
-        byte[] key = Hkdf.extractAndExpand(DataPlanePoCConfig.BIND_TOKEN, DataPlanePoCConfig.BIND_TOKEN, info, 16);
-        if (DataPlanePoCConfig.isDataplaneLogEnabled()) {
-            String keyHex = String.format("%02X%02X%02X%02X…(%d)", key[0] & 0xFF, key[1] & 0xFF, key[2] & 0xFF, key[3] & 0xFF, key.length);
-            DebugLogger.info(DebugLogger.LogType.DATAPLANE,
-                    "DataPlaneServer: deriveChannelKey portIdx={} reqChannelId={} keyPrefix={} ", portIdx, reqChannelId, keyHex);
-        }
-        return key;
-    }
-
-    private static void writeTagInt(byte[] buf, int off, int v) {
-        buf[off]     = (byte) (v >>> 24);
-        buf[off + 1] = (byte) (v >>> 16);
-        buf[off + 2] = (byte) (v >>> 8);
-        buf[off + 3] = (byte) v;
-    }
-
-    /** ChannelInitializer: 读超时 → Bind 校验 → 帧编解码 */
-    static class DataPlaneChannelInitializer extends ChannelInitializer<SocketChannel> {
-        private final int portIdx; // 1-based 端点序号，用作派生密钥的子组分
-        DataPlaneChannelInitializer(int portIdx) { this.portIdx = portIdx; }
-
-        @Override
-        protected void initChannel(SocketChannel ch) {
-            ch.pipeline()
-                .addLast("timeout", new ReadTimeoutHandler(DataPlanePoCConfig.READ_TIMEOUT_SECS, TimeUnit.SECONDS))
-                .addLast("frameSplitter", new VarIntLengthFrameSplitter())
-                .addLast("bindHandler", new BindHandshakeHandler(portIdx));
-        }
-    }
-
-    /** Bind 握手 Handler：接受 BindRequest → 验证 token → BindAck → 加入 PlayerChannelBundle */
-    @ChannelHandler.Sharable
-    static class BindHandshakeHandler extends ChannelInboundHandlerAdapter {
-        private final int portIdx;
-        private boolean bound = false;
-        private UUID playerId;
-        /** per-channel keepalive 调度句柄；bind 成功后启动，channelInactive 时取消以免泄露。 */
-        private java.util.concurrent.ScheduledFuture<?> keepaliveTask;
-
-        BindHandshakeHandler(int portIdx) { this.portIdx = portIdx; }
-
-        @Override
-        public void channelActive(ChannelHandlerContext ctx) {
-            LOGGER.debug("DataPlaneServer: new connection from {}", ctx.channel().remoteAddress());
-        }
-
-        @Override
-        public void channelRead(ChannelHandlerContext ctx, Object msg) {
-            if (!(msg instanceof ByteBuf buf)) return;
-            try {
-                int readable = buf.readableBytes();
-                if (readable < 1) return;
-                byte[] frame = new byte[readable];
-                buf.readBytes(frame);
-
-                if (bound) {
-                    // Bind 后只接受 KeepAliveAck（PoC 忽略业务 C→S）
-                    int type = DataPlaneFrame.decodeType(frame);
-                    if (type == DataPlaneFrame.TYPE_KEEPALIVE_ACK) {
-                        return; // PoC 不处理
-                    }
-                    LOGGER.debug("DataPlaneServer: unexpected post-bind frame type {}", type);
-                    return;
-                }
-
-                int type = DataPlaneFrame.decodeType(frame);
-                if (type != DataPlaneFrame.TYPE_BIND_REQUEST) {
-                    LOGGER.warn("DataPlaneServer: unexpected frame type {} before bind", type);
-                    ctx.close();
-                    return;
-                }
-                byte[] payload = DataPlaneFrame.decodePayload(frame);
-                handleBindRequest(ctx, payload);
-            } catch (Exception e) {
-                LOGGER.error("DataPlaneServer: error reading frame", e);
-                ctx.close();
-            } finally {
-                buf.release();
-            }
-        }
-
-        private void handleBindRequest(ChannelHandlerContext ctx, byte[] payload) {
-            if (payload.length < 16) {
-                LOGGER.warn("DataPlaneServer: bind request too short");
-                sendBindAck(ctx, false, "Bad request length");
-                return;
-            }
-            byte[] token = new byte[16];
-            System.arraycopy(payload, 0, token, 0, 16);
-            if (!Arrays.equals(token, DataPlanePoCConfig.BIND_TOKEN)) {
-                LOGGER.warn("DataPlaneServer: bind token mismatch");
-                sendBindAck(ctx, false, "Token mismatch");
-                return;
-            }
-            // 解析 channelId + protocol（PoC 仅读取，不做强校验）
-            java.nio.ByteBuffer rest = java.nio.ByteBuffer.wrap(payload, 16, payload.length - 16);
-            int reqChannelId = readVarInt(rest);
-            int reqProtocol = readVarInt(rest);
-
-            // PoC 用固定伪 player（无握手扩展，无法绑定真实玩家 UUID）。
-            // 所有 Data 通道归入同一 bundle，便于拦截处用 pseudoPlayerId() 查询路由。
-            this.playerId = DataPlanePoCConfig.pseudoPlayerId();
-            PlayerChannelBundle bundle = getOrCreateBundle(this.playerId);
-            // 派生 per-channel 写密钥：HKDF(BIND_TOKEN, salt=BIND_TOKEN, info=FRAME_KEY_INFO_TAG||portIdx||reqChannelId, 16)
-            byte[] aesKey = deriveChannelKey(portIdx, reqChannelId);
-            PlayerChannel pc = new PlayerChannel(ctx.channel(), endpointWeightFor(reqChannelId), aesKey, portIdx);
-            bundle.addChannel(pc);
-            CHANNEL_TO_PLAYER.put(ctx.channel(), this.playerId);
-            bound = true;
-
-            sendBindAck(ctx, true, "");
-            LOGGER.info("DataPlaneServer: bind successful from {} playerId={} portIdx={} reqChannelId={} weight={} dataChannels={}",
-                ctx.channel().remoteAddress(), this.playerId, portIdx, reqChannelId, endpointWeightFor(reqChannelId), bundle.getDataChannels().size());
-            startKeepalive(ctx, aesKey);
-        }
-
-        /**
-         * 在该 Data 通道 eventLoop 上周期性发加密 KEEPALIVE（S→C）刷新客户端读超时。
-         * 客户端收到后回明文 KEEPALIVE_ACK 刷新本侧读超时。心跳挂 per-channel，channelInactive 取消。
-         */
-        private void startKeepalive(ChannelHandlerContext ctx, byte[] aesKey) {
-            if (!DataPlanePoCConfig.KEEPALIVE_ENABLED || aesKey == null) return;
-            final Channel ch = ctx.channel();
-            final int interval = DataPlanePoCConfig.KEEPALIVE_INTERVAL_SECS;
-            keepaliveTask = ch.eventLoop().scheduleAtFixedRate(() -> {
-                if (!ch.isOpen()) return;
-                try {
-                    byte[] frame = DataPlaneCodec.encrypt(aesKey, DataPlaneFrame.TYPE_KEEPALIVE, new byte[0]);
-                    ch.writeAndFlush(Unpooled.wrappedBuffer(frame)).addListener(ChannelFutureListener.FIRE_EXCEPTION_ON_FAILURE);
-                } catch (Throwable t) {
-                    LOGGER.warn("DataPlaneServer: keepalive encrypt/send failed portIdx={}", portIdx, t);
-                }
-            }, interval, interval, TimeUnit.SECONDS);
-            if (DataPlanePoCConfig.isDataplaneLogEnabled()) {
-                DebugLogger.info(DebugLogger.LogType.DATAPLANE,
-                        "DataPlaneServer: keepalive started portIdx={} interval={}s", portIdx, interval);
-            }
-        }
-
-        private int endpointWeightFor(int channelId) {
-            int idx = (int) (channelId - 1);
-            DataPlanePoCConfig.Endpoint[] eps = DataPlanePoCConfig.ENDPOINTS;
-            if (idx >= 0 && idx < eps.length) return eps[idx].weight;
-            return 50;
-        }
-
-        private void sendBindAck(ChannelHandlerContext ctx, boolean ok, String reason) {
-            byte[] reasonBytes = reason.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-            byte[] ackPayload = new byte[1 + reasonBytes.length];
-            ackPayload[0] = (byte) (ok ? 1 : 0);
-            if (reasonBytes.length > 0) System.arraycopy(reasonBytes, 0, ackPayload, 1, reasonBytes.length);
-            byte[] frame = DataPlaneFrame.encode(DataPlaneFrame.TYPE_BIND_ACK, ackPayload);
-            ctx.writeAndFlush(Unpooled.wrappedBuffer(frame));
-            if (!ok) ctx.close();
-        }
-
-        @Override
-        public void channelInactive(ChannelHandlerContext ctx) {
-            if (keepaliveTask != null) {
-                keepaliveTask.cancel(false);
-                keepaliveTask = null;
-            }
-            if (playerId != null) {
-                PlayerChannelBundle bundle = getBundle(playerId);
-                if (bundle != null) {
-                    PlayerChannel toRemove = null;
-                    for (PlayerChannel pc : bundle.getDataChannels()) {
-                        if (pc.channel == ctx.channel()) { toRemove = pc; break; }
-                    }
-                    if (toRemove != null) bundle.removeChannel(toRemove);
-                    CHANNEL_TO_PLAYER.remove(ctx.channel());
-                }
-            }
-        }
-
-        @Override
-        public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
-            LOGGER.error("DataPlaneServer: exception", cause);
-            ctx.close();
-        }
-
-        private static int readVarInt(java.nio.ByteBuffer buf) {
-            int value = 0, shift = 0;
-            byte b;
-            do {
-                if (!buf.hasRemaining()) break;
-                b = buf.get();
-                value |= (b & 0x7F) << shift;
-                shift += 7;
-                if (shift >= 35) break;
-            } while ((b & 0x80) != 0);
-            return value;
-        }
     }
 }

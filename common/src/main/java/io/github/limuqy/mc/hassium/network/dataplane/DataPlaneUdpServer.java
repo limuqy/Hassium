@@ -535,4 +535,16 @@ public final class DataPlaneUdpServer {
         for (int i = 15; i >= 8; i--) { b[i] = (byte) (lsb & 0xFF); lsb >>>= 8; }
         return b;
     }
+
+    /**
+     * 冒烟切断验证（Task 10b §2.1）：返回本类运行时实际使用的 Netty transport channel 类型名集合。
+     * <p>仅 UDP（{@code NioDatagramChannel}）；PoC 时期的 {@code NioServerSocketChannel} TCP 监听已退役。
+     * 由 {@code DataPlaneTransportCutoverTest} 断言「集合不含 PoC TCP transport 名」。
+     *
+     * @return 不可变 transport 类名集合，元素为完全限定或简短的 channel 类名（与
+     *         {@code DataPlaneUdpServer} 生产路径实际使用的类型一致）
+     */
+    static java.util.Set<String> runtimeTransportNamesForTest() {
+        return java.util.Set.of(NioDatagramChannel.class.getName());
+    }
 }

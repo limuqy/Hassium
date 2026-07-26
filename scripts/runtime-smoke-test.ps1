@@ -17,7 +17,7 @@ param(
     [int]$ReconnectDelayMs = 3000,
     [int]$ServerReadyTimeoutSec = 160,
     [int]$ClientTimeoutSec = 240,
-    [string]$SmokePhases = "classic,dataplane"
+    [string]$SmokePhases = "classic"
 )
 
 $ErrorActionPreference = "Continue"

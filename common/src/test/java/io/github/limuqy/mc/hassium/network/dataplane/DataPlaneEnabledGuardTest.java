@@ -49,38 +49,6 @@ class DataPlaneEnabledGuardTest {
         }
     }
 
-    @Test @DisplayName("enabled=false 不影响运行时模式覆盖 API（setRuntimeMode 与 enabled 正交）")
-    void runtimeModeIndependentOfEnabled() {
-        String prevMode = DataPlaneServer.getRuntimeMode();
-        boolean prevEnabled = DataPlanePoCConfig.isEnabled();
-        try {
-            DataPlanePoCConfig.setEnabled(false);
-            DataPlaneServer.setRuntimeMode("exclusive");
-            assertEquals("exclusive", DataPlaneServer.getRuntimeMode(),
-                    "runtimeMode 覆盖独立于 enabled 开关");
-            DataPlaneServer.clearRuntimeMode();
-            assertEquals(DataPlanePoCConfig.BULK_ROUTE_MODE, DataPlaneServer.getRuntimeMode(),
-                    "清除运行时覆盖后回退到常量默认");
-        } finally {
-            DataPlaneServer.clearRuntimeMode();
-            DataPlaneServer.setRuntimeMode(prevMode);
-            DataPlanePoCConfig.setEnabled(prevEnabled);
-        }
-    }
-
-    @Test @DisplayName("killDataChannelByPortIdx 无 bundle 时返回 false（不抛异常）")
-    void killChannelNoBundleReturnsFalse() {
-        // 用一个不存在的伪玩家 UUID（不等于 pseudoPlayerId），保证无 bundle。
-        java.util.UUID ghostId = new java.util.UUID(0L, 999999L);
-        boolean prevEnabled = DataPlanePoCConfig.isEnabled();
-        try {
-            DataPlanePoCConfig.setEnabled(false);
-            assertFalse(DataPlaneServer.killDataChannelByPortIdx(ghostId, 1),
-                    "玩家无 bundle 时 kill 不应找到通道");
-        } finally {
-            DataPlanePoCConfig.setEnabled(prevEnabled);
-        }
-    }
 
     @Test @DisplayName("DataPlaneClientBundle Data 帧计数器可复位（冒烟跨阶段边界保护）")
     void clientBulkCountersReset() {
