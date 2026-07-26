@@ -382,7 +382,7 @@ public final class DataPlaneUdpServer {
                     Channel ch = b.bind(ep.bindHost, ep.bindPort).sync().channel();
                     channels.add(ch);
                     InetSocketAddress la = (InetSocketAddress) ch.localAddress();
-                    boundEndpoints.add(new BoundEndpoint(ep.bindHost, la.getPort(), endpointId, ep.weight));
+                    boundEndpoints.add(new BoundEndpoint(ep.address, la.getPort(), endpointId, ep.weight));
                     LOGGER.info("DataPlaneUdpServer: bound UDP {}/{} weight={} endpointId={}",
                             ep.bindHost, la.getPort(), ep.weight, endpointId);
                 }

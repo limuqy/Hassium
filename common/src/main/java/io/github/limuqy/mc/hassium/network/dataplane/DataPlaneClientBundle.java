@@ -209,7 +209,18 @@ public final class DataPlaneClientBundle {
         b.group(workerGroup)
          .channel(NioDatagramChannel.class)
          .option(ChannelOption.SO_BROADCAST, false)
-         .option(ChannelOption.ALLOCATOR, PooledByteBufAllocator.DEFAULT);
+         .option(ChannelOption.ALLOCATOR, PooledByteBufAllocator.DEFAULT)
+         .handler(new SimpleChannelInboundHandler<DatagramPacket>() {
+             @Override
+             protected void channelRead0(ChannelHandlerContext ctx, DatagramPacket packet) {
+                 // 服务端经 KCP 线字节回流：直接喂 ReliableDatagramSession
+                 sess.receive(packet.content().retainedDuplicate(), System.currentTimeMillis());
+             }
+             @Override
+             public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
+                 LOGGER.warn("DataPlaneClient: dispatcher error eid={} {}", info.endpointId(), cause.toString());
+             }
+         });
         Channel ch;
         try {
             ch = b.bind(0).sync().channel();
