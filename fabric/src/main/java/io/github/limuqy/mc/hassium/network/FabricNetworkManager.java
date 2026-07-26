@@ -678,6 +678,23 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
 
     @Override
     public void sendSectionDeltaPacket(ServerPlayer player, FriendlyByteBuf buf) {
+        // Task 8: 先尝试经 UDP 数据面路由；命中则丢弃 Primary send 并释放 buf。
+        // 命中判定的非破坏抽取：拷贝 readable 字节而保持 reader index，以便失败时
+        // Primary 路径仍能读到完整 payload（plan §923：不改 ServerChunkPushManager）。
+        if (io.github.limuqy.mc.hassium.network.dataplane.DataPlanePoCConfig.isEnabled()) {
+            int len = buf.readableBytes();
+            byte[] payload = new byte[len];
+            if (len > 0) {
+                buf.getBytes(buf.readerIndex(), payload);
+            }
+            if (io.github.limuqy.mc.hassium.network.dataplane.DataPlaneServer.tryRouteBulk(
+                    player.getUUID(),
+                    io.github.limuqy.mc.hassium.network.dataplane.DataPlaneFrame.TYPE_BULK_SECTION_DELTA,
+                    payload)) {
+                buf.release();
+                return; // 已走 UDP 数据面
+            }
+        }
 #if MC_VER < MC_1_20_5
         ServerPlayNetworking.send(player, SECTION_DELTA_S2C, buf);
 #else

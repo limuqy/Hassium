@@ -1,6 +1,7 @@
 package io.github.limuqy.mc.hassium.network.dataplane;
 
 import io.github.limuqy.mc.hassium.network.ClientChunkHandler;
+import io.github.limuqy.mc.hassium.network.ClientMetadataHandler;
 import io.github.limuqy.mc.hassium.utils.DebugLogger;
 import io.github.limuqy.mc.hassium.utils.DebugLogger.LogType;
 import io.netty.bootstrap.Bootstrap;
@@ -115,11 +116,25 @@ public final class DataPlaneClientBundle {
     private final ConcurrentHashMap<Integer, InetSocketAddress> remotes = new ConcurrentHashMap<>();
 
     private volatile ChunkDispatcher chunkDispatcher = DEFAULT_DISPATCHER;
+    private volatile SectionDeltaDispatcher sectionDeltaDispatcher = DEFAULT_SECTION_DELTA_CONSUMER;
     private volatile boolean bound = false;
+
+    /** Task 8 — section delta decoder/handler seam；缺省直调 Common {@link ClientMetadataHandler}。 */
+    public interface SectionDeltaDispatcher {
+        void dispatch(io.github.limuqy.mc.hassium.network.SectionDeltaS2CPacket packet);
+    }
+
+    private static final SectionDeltaDispatcher DEFAULT_SECTION_DELTA_CONSUMER =
+            ClientMetadataHandler::handleSectionDeltaPacket;
 
     /** 测试用 seam：替换 chunk 派发器（默认 PoC 主线程调度策略保留）。 */
     public void setChunkDispatcherForTest(ChunkDispatcher d) {
         this.chunkDispatcher = (d == null) ? DEFAULT_DISPATCHER : d;
+    }
+
+    /** 测试用 seam：替换 section delta 派发器；null 还原默认。 */
+    public void setSectionDeltaDispatcherForTest(SectionDeltaDispatcher d) {
+        this.sectionDeltaDispatcher = (d == null) ? DEFAULT_SECTION_DELTA_CONSUMER : d;
     }
 
     public boolean isBound() { return bound; }
@@ -240,6 +255,18 @@ public final class DataPlaneClientBundle {
                 LOGGER.error("DataPlaneClient: chunk dispatch failed eid={} {}", endpointId, t.toString());
             }
             onBulkArrived(endpointId, p.length);
+        } else if (type == DataPlaneFrame.TYPE_BULK_SECTION_DELTA) {
+            final byte[] pp = payload == null ? new byte[0] : payload;
+            try {
+                net.minecraft.network.FriendlyByteBuf fb =
+                        new net.minecraft.network.FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(pp));
+                io.github.limuqy.mc.hassium.network.SectionDeltaS2CPacket pkt =
+                        io.github.limuqy.mc.hassium.network.SectionDeltaS2CPacket.decode(fb);
+                sectionDeltaDispatcher.dispatch(pkt);
+            } catch (Throwable t) {
+                LOGGER.error("DataPlaneClient: section-delta decode/dispatch failed eid={} {}", endpointId, t.toString());
+            }
+            onBulkArrived(endpointId, pp.length);
         } else if (type == DataPlaneFrame.TYPE_FAILOVER_REQUEST
                 || type == DataPlaneFrame.TYPE_FAILOVER_PERMIT) {
             // Task 6/9 owns these; client handler hooks in HassiumClientMod.

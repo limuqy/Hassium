@@ -29,8 +29,8 @@ public class HassiumMod implements ModInitializer {
             // PoC 多通道数据面: 先尝试经 Data 通道路由 bulk；命中/丢弃则不再走 Primary
             byte[] payload = DataPlanePoCConfig.isEnabled() ? compressed.encode() : null;
             if (payload != null
-                    && DataPlaneServer.tryRouteBulk(
-                            DataPlanePoCConfig.pseudoPlayerId(),
+                    && io.github.limuqy.mc.hassium.network.dataplane.DataPlaneServer.tryRouteBulk(
+                            player.getUUID(),
                             DataPlaneFrame.TYPE_BULK_COMPRESSED_CHUNK,
                             payload)) {
                 return; // 已走 Data 通道

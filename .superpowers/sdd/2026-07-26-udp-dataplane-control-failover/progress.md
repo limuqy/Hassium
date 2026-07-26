@@ -306,3 +306,45 @@ polls. The host is fine.
     green under `-Pmc_ver=1.20.1`. `common:compileJava` + `fabric:compileJava` green; no
     regressions to Task 1-6 test suites.
   - **Task 7: complete (no subagent review — controller path)**
+
+- Task 8: Carry Section Delta Through the UDP Data Plane — complete
+  - Controller direct, RED→GREEN one pass (plan §860-939).
+  - **Step 1 — `DataPlaneClientBundle` type 4 branch**: Added `SectionDeltaDispatcher` seam
+    (default `ClientMetadataHandler::handleSectionDeltaPacket`) + `sectionDeltaDispatcher` volatile
+    field + `setSectionDeltaDispatcherForTest` test setter; extended `safeDispatch` to decode
+    payload via `Unpooled.wrappedBuffer` → `FriendlyByteBuf` → `SectionDeltaS2CPacket.decode(fb)` →
+    invoke injected dispatcher. Counter accounting uses raw payload length (matches PoC chunk path).
+  - **Step 2 — `FabricNetworkManager.sendSectionDeltaPacket`**: prepended a UDP routing path —
+    non-destructively copies readable bytes (`buf.getBytes(readerIndex, payload)`) so the Primary
+    send still reads the full payload if UDP misses; on `tryRouteBulk` returning true, releases
+    the FriendlyByteBuf and returns. Routing uses `player.getUUID()` (NOT `pseudoPlayerId`) —
+    the PoC static uuid had been lurking as a one-player bundling hack; the Task 6
+    `sessionsByPlayer` keyed on real player uuid requires real UUIDs for correctness.
+    `ServerChunkPushManager` is untouched (plan §923).
+  - **Step 3 — `HassiumMod` chunk sender uuid fix**: while wiring Task 8's analogous section-delta
+    branch, the chunk path was also migrated off `DataPlanePoCConfig.pseudoPlayerId()` to
+    `player.getUUID()` so both Bulk frames route per real session. This fixes a PoC canary —
+    the static pseudo id was a deployment-shortcut that bundled all clients under one player key;
+    now consistent with Task 6 lease/player-keyed routing.
+  - **Tests**: `UdpSectionDeltaDispatchTest` covers both contracts:
+    - `authenticatedUdpSectionDeltaDecodesAndUsesExistingMetadataHandler` — encodes a real
+      `SectionDeltaS2CPacket` via `original.encode(FriendlyByteBuf)`, feeds the bytes through
+      `bundle.receiveForTest(TYPE_BULK_SECTION_DELTA, bytes)`, asserts the injected dispatcher
+      receives a decoded packet whose dimension + entries match the original, plus the global
+      bulk counters increment.
+    - `sectionDeltaUsesPrimaryWhenNoSessionExists` — calls
+      `DataPlaneServer.tryRouteBulk(randomUUID, TYPE_BULK_SECTION_DELTA, payload)` with no bound
+      session, asserts `false` (caller falls back to the unchanged Primary send). Plan §889 test
+      inspires this; we did not exercise the healthy-session positive route here because the
+      fabric rx handoff already routes through `DataPlaneFrame` byte coord and is covered by
+      `UdpTryRouteBulkTest` / `UdpBulkRouterTest`.
+  - **Metrics glue**: `DataPlaneUdpServer.tryRouteBulk` already calls
+    `NetworkStats.recordBulkSentData(payload.length)` on UDP hit (line 232); since section
+    deltas ride the identical `BulkRouter` instance and only the type tag differs, the same
+    counter picks up section-delta bytes without bespoke glue. No new metric/enum added.
+  - **Verifications**: focused `common:test --tests *UdpSectionDeltaDispatchTest` green;
+    `common:compileJava` + `fabric:compileJava` green; full `--rerun-tasks common:test` =
+    184 tests, 7 failed (all baseline DeltaMerge/ResourceKey + ChunkDiskCodec +
+    CompressionServiceDictionary + HassiumMetricsImpl.resetClearsClientDisplayMetrics),
+    3 skipped — no new regressions vs Task 6 baseline (174 + 8 (Task 7) + 2 (Task 8) = 184).
+  - **Task 8: complete (no subagent review — controller path)**
