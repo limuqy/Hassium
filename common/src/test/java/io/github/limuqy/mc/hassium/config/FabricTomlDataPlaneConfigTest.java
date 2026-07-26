@@ -69,6 +69,23 @@ class FabricTomlDataPlaneConfigTest {
                 loaded.dataPlane().controlStallMs());
     }
 
+    @Test
+    void disabledDataPlanePreservesAnEmptyListenerList(@TempDir Path root) throws IOException {
+        Path config = root.resolve("hassium/hassium-server.toml");
+        Files.createDirectories(config.getParent());
+        Files.writeString(config, """
+                [network.dataPlane]
+                enabled = false
+                udpListeners = []
+                """);
+
+        HassiumConfig.DataPlaneConfig dataPlane = FabricTomlConfigIO.loadServer(root).serverNetwork().dataPlane();
+
+        assertTrue(!dataPlane.enabled());
+        assertEquals(List.of(), dataPlane.udpListeners());
+    }
+
+
     private static HassiumConfig.ServerNetworkConfig withEndpoints(
             List<HassiumConfig.ReachableEndpoint> controlEndpoints,
             HassiumConfig.DataPlaneConfig dataPlane

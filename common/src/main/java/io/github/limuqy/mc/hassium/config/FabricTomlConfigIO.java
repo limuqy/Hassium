@@ -458,12 +458,9 @@ public final class FabricTomlConfigIO {
         long failoverExpiryMs = getPositiveLong(cfg, "network.dataPlane.failoverExpiryMs", defaults.failoverExpiryMs());
         long recoveryWindowMs = getPositiveLong(cfg, "network.dataPlane.recoveryWindowMs", defaults.recoveryWindowMs());
         List<HassiumConfig.UdpListenerConfig> listeners = readUdpListeners(cfg);
-        if (listeners.isEmpty()) {
-            if (enabled) {
-                LOGGER.warn("Hassium: UDP data-plane 没有有效 listener，回退默认 data-plane 配置");
-                return defaults;
-            }
-            listeners = defaults.udpListeners();
+        if (listeners.isEmpty() && enabled) {
+            LOGGER.warn("Hassium: UDP data-plane 没有有效 listener，回退默认 data-plane 配置");
+            return defaults;
         }
         try {
             return new HassiumConfig.DataPlaneConfig(enabled, listeners, controlStallMs, failoverExpiryMs, recoveryWindowMs);
