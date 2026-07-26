@@ -1,6 +1,8 @@
 package io.github.limuqy.mc.hassium.network.dataplane;
 
 import io.netty.buffer.ByteBuf;
+import io.netty.buffer.ByteBufAllocator;
+import io.netty.buffer.PooledByteBufAllocator;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
@@ -18,6 +20,7 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 
 /**
  * Task 2 — 端到端校验 {@link ReliableDatagramSession}。
@@ -264,5 +267,234 @@ class ReliableDatagramSessionTest {
         byte[] payload = new byte[16 * 1024];
         for (int i = 0; i < payload.length; i++) payload[i] = (byte) (i & 0xFF);
         return payload;
+    }
+
+    // ---------- Task 2 fix tests (F1, F2) ----------
+
+    /**
+     * F1 — KCP flush 回调 {@code KcpOutput.out(ByteBuf, Kcp)} 返回后不 release 原 buf（已由 javap 确认），
+     * 故 {@link ReliableDatagramSession#onKcpOutput} 必须释放之。本测试用「零缓存专用 {@link PooledByteBufAllocator}」
+     * 的 direct arena {@code numActiveAllocations()} 精确统计当前未释放的 direct buffer：
+     * 零缓存使每次 alloc/dealloc 都落 arena，{@code numActiveAllocations == alloc - dealloc} 即泄漏计数；
+     * 通过 {@code kcp.setByteBufAllocator(alloc)}（构造期已 wire 进会话）把 KCP flush 累加 buf 也纳入观测。
+     *
+     * <p>为什么不沿用 brief 字面推荐的「sample dup refCnt」：Netty 4.1.x 起 pooled {@code retainedDuplicate()}
+     * 采用 per-branch refCnt，sink 收到的 dup 其 refCnt 始终为 1，泄漏/正确两实现不可区分；改用
+     * arena {@code numActiveAllocations} 直接观测「原 buf 是否被 release」，确定性且无 OS 缓存噪声。
+     */
+    @Test
+    void kcpOutputReleasesOriginalBuffer() {
+        // 零缓存的专用 pooled direct allocator：cache 全 0 → 每次 alloc/dealloc 都触及 arena；
+        // directArenas().get(0).numActiveAllocations() = 当前尚未 dealloc 的 direct buffer 数（即「泄漏」计数）。
+        PooledByteBufAllocator leakProbe =
+                new PooledByteBufAllocator(true, 1, 1, 8192, 11, 0, 0, 0);
+        ReliableDatagramSession.ALLOC_OVERRIDE = leakProbe;
+        try {
+            AtomicInteger deliverCount = new AtomicInteger();
+            Wire s2c = new Wire();
+            Wire c2s = new Wire();
+            ReliableDatagramSession server = serverSession(defaultEndpoint(UdpEndpoint.Role.SERVER), s2c);
+            ReliableDatagramSession client = clientSession(defaultEndpoint(UdpEndpoint.Role.CLIENT), c2s);
+            server.receiveHandler(r -> deliverCount.incrementAndGet());
+
+            // 连续入队若干条小帧，强制触发多次 KCP flush（每次 flush 至少产出一个累加 buf）。
+            for (int i = 0; i < 16; i++) {
+                byte[] p = new byte[64];
+                Arrays.fill(p, (byte) (i & 0xFF));
+                client.enqueueAuthenticated(DataPlaneFrame.TYPE_KEEPALIVE, p);
+            }
+
+            // pump loopback to idle；期望 16 条全部投递。step 会对线字节 retainedDuplicate 后交给对端 receive
+            // 并释放本侧 dup（dup 是走服务端 ByteBufAllocator.DEFAULT 的裸 pooled buffer，与 leakProbe 无关）。
+            long nowMs = 0L;
+            for (int step = 0; step < 6000 && deliverCount.get() < 16; step++, nowMs += STEP_MS) {
+                step(server, s2c, client, c2s, nowMs);
+            }
+            assertEquals(16, deliverCount.get(),
+                "16 small frames must all arrive exactly once before checking live buffer count");
+
+            // 让 in-flight 重传/ACK 收敛，再双端 close（close 调 kcp.release() 释放记录队列里的 segment data buffer，
+            // 这些都会被 arena 计为 dealloc，不计入泄漏）。
+            for (int step = 0; step < 300; step++, nowMs += STEP_MS) {
+                step(server, s2c, client, c2s, nowMs);
+                if (c2s.pending.isEmpty() && s2c.pending.isEmpty()) break;
+            }
+            server.close();
+            client.close();
+            drainWire(s2c);
+            drainWire(c2s);
+            long active = leakProbe.metric().directArenas().get(0).numActiveAllocations();
+
+            // 关键断言：正确实现下每个 flush 累加 buf 都被 onKcpOutput 内 release（外加 segment data 被 close 释放）
+            // → direct arena active == 0；泄漏实现（不 release buf）下这些 flush 累加 buf 永远 live → active > 0。
+            assertEquals(0L, active,
+                "every KCP flush accumulator buffer must be released by onKcpOutput "
+                    + "(leaked direct buffers still active in probe arena: " + active + ")");
+        } finally {
+            ReliableDatagramSession.ALLOC_OVERRIDE = null;
+        }
+    }
+
+    /** 释放 Wire 残留线字节，避免误计。 */
+    private static void drainWire(Wire w) {
+        ByteBuf b;
+        while ((b = w.poll()) != null) {
+            try { b.release(); } catch (Throwable ignored) {}
+        }
+    }
+
+
+    /**
+     * 围绕 {@link PooledByteBufAllocator#DEFAULT} 的计数包装：统计 {@code initialCapacity >= bigThreshold}
+     * 的 direct 申请次数。F2 测试用其区分「丢弃路径 {@code alloc.buffer(peek)}（leaky 多一次）」与
+     * 「入队时 seal 帧 buffer（固定一次/每帧）」——两者 initialCapacity 同为 sealed 长度，故按「超限次数」
+     * 二选一计数：fixed 下每帧只产生 1 次（seal buffer）；leaky 下每帧 2 次（seal buffer + discard buffer）。
+     * direct-only 计数是因为 F1 已把 KCP 分片 buffer 也路由进 {@code alloc}，
+     * {@code alloc.buffer()} 仍是 default-heap。
+     */
+    private static final class CountingAllocator implements ByteBufAllocator {
+        private final ByteBufAllocator delegate;
+        private final int bigThreshold;
+        private int bigDirectAllocations = 0;
+        private int maxRequestedCapacity = 0;
+
+        CountingAllocator(ByteBufAllocator delegate, int bigThreshold) {
+            this.delegate = delegate;
+            this.bigThreshold = bigThreshold;
+        }
+
+        int bigDirectAllocations() { return bigDirectAllocations; }
+        int maxRequestedCapacity() { return maxRequestedCapacity; }
+
+        private ByteBuf record(int initialCapacity, int maxCapacity, boolean direct) {
+            maxRequestedCapacity = Math.max(maxRequestedCapacity, initialCapacity);
+            if (direct && initialCapacity >= bigThreshold) {
+                bigDirectAllocations++;
+            }
+            return direct ? delegate.directBuffer(initialCapacity, maxCapacity)
+                          : delegate.heapBuffer(initialCapacity, maxCapacity);
+        }
+
+        // 仅 direct 路径计入「超大」统计；heap 路径（sealed frame working buffer）透传默认 heap allocator。
+        // PooledByteBufAllocator.DEFAULT 默认 preferDirect=true → alloc.buffer(int) 返回 direct，故 buffer() 也走 direct 计数与发行。
+        @Override public ByteBuf buffer() { return record(256, Integer.MAX_VALUE, delegate.isDirectBufferPooled()); }
+        @Override public ByteBuf buffer(int initialCapacity) {
+            return record(initialCapacity, Math.max(initialCapacity, Integer.MAX_VALUE - 8), delegate.isDirectBufferPooled());
+        }
+        @Override public ByteBuf buffer(int initialCapacity, int maxCapacity) {
+            return record(initialCapacity, maxCapacity, delegate.isDirectBufferPooled());
+        }
+        @Override public ByteBuf ioBuffer() { return record(256, Integer.MAX_VALUE, true); }
+        @Override public ByteBuf ioBuffer(int initialCapacity) {
+            return record(initialCapacity, Math.max(initialCapacity, Integer.MAX_VALUE - 8), true);
+        }
+        @Override public ByteBuf ioBuffer(int initialCapacity, int maxCapacity) {
+            return record(initialCapacity, maxCapacity, true);
+        }
+        @Override public ByteBuf heapBuffer() { return record(256, Integer.MAX_VALUE, false); }
+        @Override public ByteBuf heapBuffer(int initialCapacity) {
+            return record(initialCapacity, Math.max(initialCapacity, Integer.MAX_VALUE - 8), false);
+        }
+        @Override public ByteBuf heapBuffer(int initialCapacity, int maxCapacity) {
+            return record(initialCapacity, maxCapacity, false);
+        }
+        @Override public ByteBuf directBuffer() { return record(256, Integer.MAX_VALUE, true); }
+        @Override public ByteBuf directBuffer(int initialCapacity) {
+            return record(initialCapacity, Math.max(initialCapacity, Integer.MAX_VALUE - 8), true);
+        }
+        @Override public ByteBuf directBuffer(int initialCapacity, int maxCapacity) {
+            return record(initialCapacity, maxCapacity, true);
+        }
+        @Override public io.netty.buffer.CompositeByteBuf compositeBuffer() { return delegate.compositeBuffer(); }
+        @Override public io.netty.buffer.CompositeByteBuf compositeBuffer(int maxNumComponents) {
+            return delegate.compositeBuffer(maxNumComponents);
+        }
+        @Override public io.netty.buffer.CompositeByteBuf compositeHeapBuffer() { return delegate.compositeHeapBuffer(); }
+        @Override public io.netty.buffer.CompositeByteBuf compositeHeapBuffer(int maxNumComponents) {
+            return delegate.compositeHeapBuffer(maxNumComponents);
+        }
+        @Override public io.netty.buffer.CompositeByteBuf compositeDirectBuffer() { return delegate.compositeDirectBuffer(); }
+        @Override public io.netty.buffer.CompositeByteBuf compositeDirectBuffer(int maxNumComponents) {
+            return delegate.compositeDirectBuffer(maxNumComponents);
+        }
+        @Override public boolean isDirectBufferPooled() { return delegate.isDirectBufferPooled(); }
+        @Override public int calculateNewCapacity(int minNewCapacity, int maxCapacity) {
+            return delegate.calculateNewCapacity(minNewCapacity, maxCapacity);
+        }
+    }
+
+    /**
+     * F2 — 重组上限 PREVENTIVE：拒绝超大消息时绝不先申请 peek-sized buffer。
+     * 配 maxReassemblyBytes=1024，投递 8 条 4096 字节已鉴权（超限）帧，断言：
+     * (a) 无一条投递给 Consumer；
+     * (b) 「>= 4096 字节」的 direct 申请次数恰好等于入队次数 8 —— 即每帧只产生 seal 工作分配，
+     *     而 leaky 路径每帧多一次 {@code alloc.buffer(peek)} 的丢弃分配（= 16，测试失败）；
+     *     fixed 丢弃路径走 {@code kcp.recv(List)} 不新增 direct 分配；
+     * (c) 会话仍可写、健康，且后续一条正常帧仍被投递。
+     */
+    @Test
+    void oversizedReassemblyIsDrainedWithoutLargeAllocation() {
+        // bigThreshold=4096：4096B payload 经 seal 后约 4129B（>=4096），sealBuffer 与 leaky discardBuffer 都命中阈值；
+        // fixed 的 discard 走 kcp.recv(List) 不 alloc.buffer(peek)，故只数到 1 次（seal）/帧；leaky 每帧 2 次 → 测试失败。
+        CountingAllocator counting = new CountingAllocator(PooledByteBufAllocator.DEFAULT, 4096);
+        ReliableDatagramSession.ALLOC_OVERRIDE = counting;
+        try {
+            final int frames = 8;
+            AtomicInteger deliverCount = new AtomicInteger();
+            UdpEndpoint overszEp = UdpEndpoint.builder()
+                    .role(UdpEndpoint.Role.CLIENT)
+                    .localAddress(LOCAL)
+                    .mtu(1200)
+                    .sndWindow(128)
+                    .rcvWindow(128)
+                    .maxQueuedAppBytes(1 << 20)
+                    .maxReassemblyBytes(1024)
+                    .hardRttMs(1000)
+                    .build();
+            Wire s2c = new Wire();
+            Wire c2s = new Wire();
+            ReliableDatagramSession client = clientSession(overszEp, c2s);
+            ReliableDatagramSession server = serverSession(overszEp.toRole(UdpEndpoint.Role.SERVER), s2c);
+            server.receiveHandler(r -> deliverCount.incrementAndGet());
+
+            byte[] big = new byte[4096];
+            for (int i = 0; i < big.length; i++) big[i] = (byte) (i & 0xFF);
+            for (int i = 0; i < frames; i++) {
+                client.enqueueAuthenticated(DataPlaneFrame.TYPE_BULK_COMPRESSED_CHUNK, big);
+            }
+
+            // pump loopback：超大消息被分片经 KCP 到达 server 后 drainReceived 应识别超限并丢弃而绝不投递。
+            long nowMs = 0L;
+            for (int step = 0; step < 6000 && deliverCount.get() == 0; step++, nowMs += STEP_MS) {
+                step(server, s2c, client, c2s, nowMs);
+            }
+            assertEquals(0, deliverCount.get(),
+                "8 oversized 4096-byte messages must NOT be delivered under maxReassemblyBytes=1024");
+
+            // (b) 关键断言：fixed 丢弃路径走 kcp.recv(List) 不再 alloc.buffer(peek)→ 每帧 direct「超大」申请仅 1 次（sealBuffer）；
+            // leaky 路径每帧多 1 次 alloc.buffer(peek) 的丢弃分配 → 2 倍于 frames，断言失败。
+            assertEquals(frames, counting.bigDirectAllocations(),
+                "discard path must not allocate a peek-sized direct buffer (expected " + frames
+                    + " seal allocations, got " + counting.bigDirectAllocations()
+                    + " — each oversized message leaked one alloc.buffer(peek) in the discard path)");
+
+            // (c) 会话仍可写、健康，且后续一条正常帧仍被投递。
+            assertTrue(client.isWritable(), "session must remain writable after oversized drain");
+            assertTrue(client.isHealthy(), "session must remain healthy after oversized drain");
+
+            AtomicInteger secondCount = new AtomicInteger();
+            server.receiveHandler(r -> secondCount.incrementAndGet());
+            byte[] tiny = new byte[32];
+            Arrays.fill(tiny, (byte) 0x33);
+            client.enqueueAuthenticated(DataPlaneFrame.TYPE_KEEPALIVE, tiny);
+            long nowMs2 = nowMs;
+            for (int step = 0; step < 4000 && secondCount.get() == 0; step++, nowMs2 += STEP_MS) {
+                step(server, s2c, client, c2s, nowMs2);
+            }
+            assertEquals(1, secondCount.get(),
+                "a subsequent normal frame must still be delivered after oversized drain");
+        } finally {
+            ReliableDatagramSession.ALLOC_OVERRIDE = null;
+        }
     }
 }

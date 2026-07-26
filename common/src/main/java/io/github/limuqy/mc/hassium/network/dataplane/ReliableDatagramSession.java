@@ -8,6 +8,8 @@ import io.netty.buffer.ByteBufAllocator;
 import io.netty.buffer.PooledByteBufAllocator;
 
 import java.net.InetSocketAddress;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.function.Consumer;
@@ -64,7 +66,12 @@ public final class ReliableDatagramSession {
     private final int maxReassemblyBytes;
     private final int maxQueuedAppBytes;
     private final long hardRttMs;
-    private final ByteBufAllocator alloc = PooledByteBufAllocator.DEFAULT;
+    /**
+     * 仅供同包测试覆盖的 Allocator 缝隙：非空时使用它，否则用 {@link PooledByteBufAllocator#DEFAULT}。
+     * 包私有（非 public surface），不影响 Task 3 公共接口；生产路径恒为 null。
+     */
+    static volatile ByteBufAllocator ALLOC_OVERRIDE = null;
+    private final ByteBufAllocator alloc = (ALLOC_OVERRIDE != null) ? ALLOC_OVERRIDE : PooledByteBufAllocator.DEFAULT;
 
     private final Kcp kcp;
     private final KcpOutput kcpOutput;
@@ -98,6 +105,9 @@ public final class ReliableDatagramSession {
         this.kcpOutput = this::onKcpOutput;
         this.kcp = new Kcp(conv, kcpOutput);
         configureKcp(kcp, endpoint);
+        // KCP 的输出/分段 buffer 统一走本类的 alloc（生产恒为 PooledByteBufAllocator.DEFAULT，与 KCP 默认一致；
+        // 测试可经 ALLOC_OVERRIDE 注入计数包装以观测 F1 输出 buffer 泄漏）。
+        kcp.setByteBufAllocator(alloc);
     }
 
     private static void configureKcp(Kcp kcp, UdpEndpoint ep) {
@@ -218,16 +228,30 @@ public final class ReliableDatagramSession {
 
     // ---------- internals ----------
 
-    /** KCP 通过本回调把「待发往 wire」的 datagram 交给 {@link DatagramSink}；KCP 在回调返回后会 release 原 buf，故先 retainedDuplicate。 */
+    /**
+     * KCP flush 回调：把「待发往 wire」的 datagram 交给 {@link DatagramSink}。
+     * <p><b>所有权（已由 javap 确认）</b>：KCP {@code output(ByteBuf,Kcp)} 在回调返回后
+     * <b>不会</b> release 原 {@code buf}——它只是把内存交给回调。故本类对 {@code buf} 负责显式释放。
+     * 规则：先 {@code retainedDuplicate()} 给 sink 一份独立 retain（sink 自行处置该 dup），
+     * {@code sink.send} 返回后无论成败一律 {@code buf.release()} 释放本类持有的原 buf，
+     * 避免 KCP 不释放导致每个发出的 datagram 泄漏一个 pool direct buffer（直内存耗尽）。
+     * dup 的所有权在 {@link DatagramSink}：sink 若不再持有须自行 release。
+     */
     private void onKcpOutput(ByteBuf buf, Kcp k) {
         if (closed) {
+            // 会话已关闭：直接释放 KCP 交来的 buf，避免泄漏。
+            buf.release();
             return;
         }
         ByteBuf dup = buf.retainedDuplicate();
         try {
             sink.send(dup);
         } catch (Throwable ignored) {
+            // sink 异常：dup 未被 sink 接管，本类负责释放 dup 自身的 retain。
             dup.release();
+        } finally {
+            // KCP 不 release 原 buf（javap 确认），本类统一释放，杜绝单 datagram 直内存泄漏。
+            buf.release();
         }
     }
 
@@ -244,15 +268,11 @@ public final class ReliableDatagramSession {
                 break;
             }
             if (peek > maxReassemblyBytes) {
-                // 超出重组预算：丢弃整条以防止内存放大。丢弃单条而非整会话。
-                ByteBuf sink2 = alloc.buffer(peek);
-                try {
-                    kcp.recv(sink2);
-                } catch (Throwable ignored) {
-                    sink2.release();
-                    break;
-                }
-                sink2.release();
+                // 超出重组预算：PREVENTIVE 丢弃整条，绝不先申请 peek-sized buffer（否则恶意对端可用
+                // 单条超长帧触发 maxReassemblyBytes 级直内存放大）。KCP 在重组完成前其每个分片已是
+                // per-MTU(~1200) 的 pooled buffer；这里用 kcp.recv(List)「移交既有分片」而非 alloc.buffer(peek)
+                // 「重申请整块」——逐分片接收后立即 release，回收 KCP 已占用的分片直内存，不新增任何分配。
+                drainOversizedMessage();
                 continue;
             }
             ByteBuf recvBuf = alloc.buffer(peek);
@@ -286,6 +306,33 @@ public final class ReliableDatagramSession {
             } catch (Throwable ignored) {
                 // 消费者异常不得阻断接收循环
             }
+        }
+    }
+
+    /**
+     * 丢弃 KCP 已重组但超出 {@code maxReassemblyBytes} 的单条超大消息——PREVENTIVE：不申请任何
+     * {@code peek}-sized buffer。借助 {@code kcp.recv(List<ByteBuf>)}（kcp-netty 1.6.2）从 KCP 接收队列
+     * 「移交」该消息已有的 per-MTU 分片 buffer，逐片立即 {@code release()} 回收其直内存，再清空 CPU-side
+     * list。如此既把消息从 KCP 接收窗口移走（防止阻塞后续正常帧），又绝不触发 {@code alloc.buffer(peek)}
+     * 这类在恶意峰值（最高 {@code rcvWnd * mss}）上的大块直内存放大。
+     *
+     * <p>正确性依据（已由 javap 确认）：{@code kcp.recv(List<ByteBuf>)} 不校验 buffer 容量（无 -3 路径），
+     * 只是把 head 处完整消息对应的各分片 {@code Segment.data} ByteBuf {@code add} 进 list 并把它们从队列移除、
+     * 回收回 KCP 内部对象池；返回首个 {@code frg==0} 时累积的 readableByte 数 (= peek)。
+     */
+    private void drainOversizedMessage() {
+        java.util.List<ByteBuf> fragments = new ArrayList<>();
+        try {
+            kcp.recv(fragments);
+        } catch (Throwable ignored) {
+            // KCP recv 异常：尽力释放已取出的分片，避免二次泄漏；丢弃并继续接收循环。
+        } finally {
+            for (ByteBuf frag : fragments) {
+                try {
+                    frag.release();
+                } catch (Throwable ignored) {}
+            }
+            fragments.clear();
         }
     }
 
