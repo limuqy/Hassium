@@ -65,7 +65,8 @@ public final class UdpDataPlaneHandshakeTail {
             int protocol,
             byte[] token,                                  // exactly TOKEN_BYTES
             List<ControlEndpoint> controlEndpoints,         // immutable; may be empty
-            List<UdpEndpointInfo> udpEndpoints              // immutable; may be empty
+            List<UdpEndpointInfo> udpEndpoints,             // legacy projection; may be empty
+            List<UdpListenerGroup> udpListenerGroups        // append-only candidate groups; may be empty
     ) {
         public S2CTail {
             Objects.requireNonNull(token, "token");
@@ -74,12 +75,22 @@ public final class UdpDataPlaneHandshakeTail {
             }
             controlEndpoints = controlEndpoints == null ? List.of() : List.copyOf(controlEndpoints);
             udpEndpoints = udpEndpoints == null ? List.of() : List.copyOf(udpEndpoints);
+            udpListenerGroups = udpListenerGroups == null ? List.of() : List.copyOf(udpListenerGroups);
+            validateCrossProjection(udpEndpoints, udpListenerGroups);
+        }
+
+        /** 保持已有七参数调用点的 source compatibility。 */
+        public S2CTail(boolean hasUdpDataplane, boolean hasControlFailover, long connectionEpoch,
+                       int protocol, byte[] token, List<ControlEndpoint> controlEndpoints,
+                       List<UdpEndpointInfo> udpEndpoints) {
+            this(hasUdpDataplane, hasControlFailover, connectionEpoch, protocol, token,
+                    controlEndpoints, udpEndpoints, List.of());
         }
 
         /** disabled 默认（旧客户端读到包尾不可读时使用）。 */
         public static S2CTail disabled() {
             return new S2CTail(false, false, 0L, PROTOCOL_VERSION,
-                    new byte[TOKEN_BYTES], List.of(), List.of());
+                    new byte[TOKEN_BYTES], List.of(), List.of(), List.of());
         }
     }
 
@@ -115,6 +126,41 @@ public final class UdpDataPlaneHandshakeTail {
             }
         }
     }
+    /** 单一 listener 的客户端可达 UDP candidate。 */
+    public record UdpReachableEndpoint(String host, int port, int priority) {
+        public UdpReachableEndpoint {
+            validateReachableHost(host);
+            if (port < 1 || port > 65535) {
+                throw new IllegalArgumentException("invalid reachable udp port: " + port);
+            }
+            if (priority < 0) {
+                throw new IllegalArgumentException("invalid reachable udp priority: " + priority);
+            }
+        }
+    }
+
+    /** 对应一个 UDP listener 的加权 candidate 集。 */
+    public record UdpListenerGroup(int endpointId, int weight, List<UdpReachableEndpoint> reachableEndpoints) {
+        public UdpListenerGroup {
+            if (endpointId < 0) {
+                throw new IllegalArgumentException("invalid endpointId: " + endpointId);
+            }
+            if (weight < 0) {
+                throw new IllegalArgumentException("invalid udp listener weight: " + weight);
+            }
+            reachableEndpoints = reachableEndpoints == null ? List.of() : List.copyOf(reachableEndpoints);
+            if (reachableEndpoints.isEmpty() || reachableEndpoints.size() > MAX_ENDPOINTS) {
+                throw new IllegalArgumentException("reachable udp endpoint count out of range: " + reachableEndpoints.size());
+            }
+            java.util.HashSet<String> seen = new java.util.HashSet<>();
+            for (UdpReachableEndpoint endpoint : reachableEndpoints) {
+                if (!seen.add(endpoint.host() + '\u0000' + endpoint.port())) {
+                    throw new IllegalArgumentException("duplicate reachable udp endpoint: "
+                            + endpoint.host() + ":" + endpoint.port());
+                }
+            }
+        }
+    }
 
     public static void writeS2C(ByteBuf out, S2CTail tail) {
         int flags = (tail.hasUdpDataplane() ? 0x01 : 0)
@@ -136,6 +182,17 @@ public final class UdpDataPlaneHandshakeTail {
             out.writeShort(e.port());
             writeVarInt(out, e.weight());
             writeVarInt(out, e.endpointId());
+        }
+        writeVarInt(out, tail.udpListenerGroups().size());
+        for (UdpListenerGroup group : tail.udpListenerGroups()) {
+            writeVarInt(out, group.endpointId());
+            writeVarInt(out, group.weight());
+            writeVarInt(out, group.reachableEndpoints().size());
+            for (UdpReachableEndpoint endpoint : group.reachableEndpoints()) {
+                writeHost(out, endpoint.host());
+                out.writeShort(endpoint.port());
+                writeVarInt(out, endpoint.priority());
+            }
         }
     }
 
@@ -196,11 +253,75 @@ public final class UdpDataPlaneHandshakeTail {
             udp.add(ep);
         }
 
+        if (!in.isReadable()) {
+            return new S2CTail(hasUdp, hasFailover, epoch, protocol, token,
+                    Collections.unmodifiableList(ctrl), Collections.unmodifiableList(udp), List.of());
+        }
+        int groupCount = readVarInt(in);
+        if (groupCount < 0 || groupCount > MAX_ENDPOINTS) {
+            throw new IllegalArgumentException("udpListenerGroups count out of range: " + groupCount);
+        }
+        List<UdpListenerGroup> groups = new ArrayList<>(groupCount);
+        for (int i = 0; i < groupCount; i++) {
+            int endpointId = readVarInt(in);
+            int weight = readVarInt(in);
+            int candidateCount = readVarInt(in);
+            if (candidateCount < 1 || candidateCount > MAX_ENDPOINTS) {
+                throw new IllegalArgumentException("udp reachable candidate count out of range: " + candidateCount);
+            }
+            List<UdpReachableEndpoint> candidates = new ArrayList<>(candidateCount);
+            for (int j = 0; j < candidateCount; j++) {
+                candidates.add(new UdpReachableEndpoint(readHost(in), in.readUnsignedShort(), readVarInt(in)));
+            }
+            groups.add(new UdpListenerGroup(endpointId, weight, candidates));
+        }
         return new S2CTail(hasUdp, hasFailover, epoch, protocol, token,
-                Collections.unmodifiableList(ctrl), Collections.unmodifiableList(udp));
+                Collections.unmodifiableList(ctrl), Collections.unmodifiableList(udp),
+                Collections.unmodifiableList(groups));
     }
 
     // ===== helpers =====
+
+    private static void validateCrossProjection(List<UdpEndpointInfo> legacyEndpoints,
+                                                List<UdpListenerGroup> groups) {
+        if (groups.isEmpty()) {
+            return;
+        }
+        if (groups.size() > MAX_ENDPOINTS) {
+            throw new IllegalArgumentException("udp listener group count out of range: " + groups.size());
+        }
+        if (legacyEndpoints.size() != groups.size()) {
+            throw new IllegalArgumentException("legacy UDP projection must contain one endpoint per listener group");
+        }
+        java.util.Map<Integer, UdpEndpointInfo> legacyById = new java.util.HashMap<>();
+        for (UdpEndpointInfo endpoint : legacyEndpoints) {
+            if (legacyById.putIfAbsent(endpoint.endpointId(), endpoint) != null) {
+                throw new IllegalArgumentException("duplicate legacy udp endpointId: " + endpoint.endpointId());
+            }
+        }
+        java.util.HashSet<Integer> groupIds = new java.util.HashSet<>();
+        for (UdpListenerGroup group : groups) {
+            if (!groupIds.add(group.endpointId())) {
+                throw new IllegalArgumentException("duplicate udp listener group endpointId: " + group.endpointId());
+            }
+            UdpEndpointInfo projection = legacyById.get(group.endpointId());
+            if (projection == null || projection.weight() != group.weight()) {
+                throw new IllegalArgumentException("legacy UDP projection mismatches listener group: " + group.endpointId());
+            }
+            UdpReachableEndpoint preferred = group.reachableEndpoints().get(0);
+            if (!projection.host().equals(preferred.host()) || projection.port() != preferred.port()) {
+                throw new IllegalArgumentException("legacy UDP projection must use first reachable candidate: "
+                        + group.endpointId());
+            }
+        }
+    }
+
+    private static void validateReachableHost(String host) {
+        if (host == null || host.isEmpty() || host.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > MAX_HOST_BYTES
+                || "0.0.0.0".equals(host) || "::".equals(host) || "[::]".equals(host)) {
+            throw new IllegalArgumentException("invalid reachable udp host: " + host);
+        }
+    }
 
     private static void writeHost(ByteBuf out, String host) {
         byte[] utf8 = host.getBytes(java.nio.charset.StandardCharsets.UTF_8);
