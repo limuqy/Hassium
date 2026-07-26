@@ -12,9 +12,11 @@ public class DataPlaneFrame {
     public static final int TYPE_KEEPALIVE = 5;
     public static final int TYPE_KEEPALIVE_ACK = 6;
     public static final int TYPE_CLOSE = 7;
+    public static final int TYPE_FAILOVER_REQUEST = 8;
+    public static final int TYPE_FAILOVER_PERMIT = 9;
 
     private static final int MIN_TYPE = 1;
-    private static final int MAX_TYPE = 7;
+    private static final int MAX_TYPE = 9;
 
     /** 编码：VarInt(frameLen) + type(u8) + payload。frameLen = 1 + payload.length */
     public static byte[] encode(int type, byte[] payload) {

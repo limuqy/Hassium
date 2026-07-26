@@ -8,6 +8,8 @@ dependencies {
     implementation 'com.github.luben:zstd-jni:1.5.5-7'
     implementation 'org.lz4:lz4-java:1.8.0'
     implementation 'com.google.code.findbugs:jsr305:3.0.1'
+    // UDP data plane reliable transport (KCP-over-UDP message mode), wrapped behind ReliableDatagramSession -- must not leak its API into routing/Minecraft/loader layers.
+    implementation 'moe.sdl.kcp:kcp-netty:1.6.2'
     // Fabric 自管 toml（Forge/NeoForge 走 Spec，不依赖此路径）
     implementation 'com.electronwill.night-config:core:3.6.7'
     implementation 'com.electronwill.night-config:toml:3.6.7'
