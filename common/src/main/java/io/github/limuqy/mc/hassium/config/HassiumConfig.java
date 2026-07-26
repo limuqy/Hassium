@@ -1,8 +1,9 @@
 package io.github.limuqy.mc.hassium.config;
 
 import io.github.limuqy.mc.hassium.network.HassiumPacketIds;
-import java.util.Set;
 
+import java.util.List;
+import java.util.Set;
 /**
  * Hassium 配置（运行时快照）。
  * <p>
@@ -117,6 +118,44 @@ public record HassiumConfig(
     }
 
     /**
+     * 客户端可达地址。bind 地址绝不使用本类型，避免 wildcard 被下发给客户端。
+     */
+    public record ReachableEndpoint(String host, int port, int priority) {
+        public ReachableEndpoint {
+            host = DataPlaneEndpointConfig.validateReachableHost(host, "reachable endpoint");
+            DataPlaneEndpointConfig.validatePort(port, "reachable endpoint");
+            DataPlaneEndpointConfig.validateNonNegative(priority, "reachable endpoint priority");
+        }
+    }
+
+    /**
+     * 一个本地 UDP socket 与其按优先级尝试的客户端可达地址。
+     */
+    public record UdpListenerConfig(String bindHost, int bindPort, int weight,
+                                    List<ReachableEndpoint> reachableEndpoints) {
+        public UdpListenerConfig {
+            bindHost = DataPlaneEndpointConfig.validateBindHost(bindHost);
+            DataPlaneEndpointConfig.validatePort(bindPort, "UDP bind port");
+            DataPlaneEndpointConfig.validateNonNegative(weight, "UDP listener weight");
+            reachableEndpoints = DataPlaneEndpointConfig.normalizeReachableEndpoints(
+                    reachableEndpoints, 8, "UDP listener reachableEndpoints");
+        }
+    }
+
+    /**
+     * UDP data plane 与控制面恢复共用的服务端配置快照。
+     */
+    public record DataPlaneConfig(boolean enabled, List<UdpListenerConfig> udpListeners,
+                                  long controlStallMs, long failoverExpiryMs, long recoveryWindowMs) {
+        public DataPlaneConfig {
+            udpListeners = DataPlaneEndpointConfig.normalizeUdpListeners(enabled, udpListeners);
+            DataPlaneEndpointConfig.validatePositive(controlStallMs, "controlStallMs");
+            DataPlaneEndpointConfig.validatePositive(failoverExpiryMs, "failoverExpiryMs");
+            DataPlaneEndpointConfig.validatePositive(recoveryWindowMs, "recoveryWindowMs");
+        }
+    }
+
+    /**
      * 服务端网络配置（仅专用服；server.toml network.*）
      * <p>
      * 包含共享网络行为（压缩/聚合）和服务端专属推送设置。
@@ -149,8 +188,45 @@ public record HassiumConfig(
             int minPushThreads,
             int maxPushThreads,
             // === 光照剥离（服务端控制是否发包时剥离 LightData）===
-            boolean lightStrip
+            boolean lightStrip,
+            // === 控制面重连与 UDP data plane ===
+            List<ReachableEndpoint> controlReachableEndpoints,
+            DataPlaneConfig dataPlane
     ) {
+        public ServerNetworkConfig {
+            compressionBlacklist = Set.copyOf(compressionBlacklist);
+            controlReachableEndpoints = DataPlaneEndpointConfig.normalizeReachableEndpoints(
+                    controlReachableEndpoints, 4, "control reachable endpoints");
+        }
+        /**
+         * 保持现有配置后端的构造签名；端点持久化将在相应 adapter 中显式接入。
+         */
+        public ServerNetworkConfig(boolean enabled, int compressionLevel, boolean magiclessZstd,
+                                   boolean globalPacketCompression, int globalCompressionLevel,
+                                   int globalCompressionThreshold, boolean useContextCompression,
+                                   boolean enablePacketAggregation, int aggregationMinBatchSize,
+                                   long aggregationMaxWaitTimeMs, int aggregationMaxSize,
+                                   boolean enableCompactHeader, Set<String> compressionBlacklist,
+                                   boolean metricsEnabled, int maxChunksPerTick,
+                                   int serverChunkPushThreads, boolean dynamicThreadPoolEnabled,
+                                   int minPushThreads, int maxPushThreads, boolean lightStrip) {
+            this(enabled, compressionLevel, magiclessZstd, globalPacketCompression,
+                    globalCompressionLevel, globalCompressionThreshold, useContextCompression,
+                    enablePacketAggregation, aggregationMinBatchSize, aggregationMaxWaitTimeMs,
+                    aggregationMaxSize, enableCompactHeader, compressionBlacklist, metricsEnabled,
+                    maxChunksPerTick, serverChunkPushThreads, dynamicThreadPoolEnabled,
+                    minPushThreads, maxPushThreads, lightStrip, List.of(), DEFAULT_DATA_PLANE);
+        }
+
+        private static final DataPlaneConfig DEFAULT_DATA_PLANE = new DataPlaneConfig(
+                true,
+                List.of(new UdpListenerConfig(
+                        "0.0.0.0", 25565, 100,
+                        List.of(new ReachableEndpoint("127.0.0.1", 25565, 100)))),
+                6_000L,
+                30_000L,
+                60_000L
+        );
         public static final Set<String> DEFAULT_COMPRESSION_BLACKLIST = Set.of(
                 HassiumPacketIds.CHUNK_PAYLOAD_S2C,
                 HassiumPacketIds.SECTION_DELTA_S2C,
@@ -184,7 +260,9 @@ public record HassiumConfig(
                 true,              // dynamicThreadPoolEnabled
                 2,                 // minPushThreads
                 8,                 // maxPushThreads
-                true               // lightStrip
+                true,              // lightStrip
+                List.of(),         // controlReachableEndpoints
+                DEFAULT_DATA_PLANE
         );
     }
 
