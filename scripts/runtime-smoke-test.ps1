@@ -8,7 +8,7 @@
 param(
     [Parameter(Mandatory=$true)][string]$Ver,
     [Parameter(Mandatory=$true)][ValidateSet("fabric","neoforge")][string]$Loader,
-    [Parameter(Mandatory=$true)][ValidateSet("I","R")][string]$Phase,
+    [Parameter(Mandatory=$true)][ValidateSet("I","R","UdpFailover")][string]$Phase,
     [Parameter(Mandatory=$true)][string]$SessionId,
     [switch]$CleanWorld,
     [string]$SmokeHost = "",
@@ -27,6 +27,15 @@ if ($SmokeHost -and $SmokeHost -ne "") {
     $effectiveHost = $SmokeHost
 } else {
     $effectiveHost = "127.0.0.1:$ServerPort"
+}
+
+# §2.3 -Phase UdpFailover：未显式 -SmokePhases 时强制 udp-failover。udp-failover 经典两轮
+# classic 状态机驱动断开→重连 cycle，但比 classic 多出 recovery 窗口（最多 60s），故
+# 默认 ClientTimeoutSec 不够时由 phase 触发扩容。
+if ($Phase -eq "UdpFailover") {
+    if ($SmokePhases -eq "classic") { $SmokePhases = "udp-failover" }
+    if ($ClientTimeoutSec -lt 300) { $ClientTimeoutSec = 300 }
+    Write-Host "[$SessionId] Phase=UdpFailover: SmokePhases=$SmokePhases, ClientTimeoutSec=$ClientTimeoutSec"
 }
 
 # 路径自推导（脚本位于 <repo>/scripts/，项目根是父目录）
@@ -262,7 +271,36 @@ $serverSwitched = if (Test-Path $serverLog) {
     (Get-Content $serverLog -Raw) -match "view-distance switched to 8"
 } else { $false }
 
-$result = if ($hasPass -and $clientExit -eq 0) { "PASS" } else { "FAIL" }
+# §2.3 UDP_FAILOVER marker 提取（聚合 server/client 双端日志，跨进程替代直接断主控 TCP）
+$udpFailoverIsPhase = ($Phase -eq "UdpFailover")
+$serverContentForUdp = if ($udpFailoverIsPhase -and (Test-Path $serverLog)) {
+    Get-Content $serverLog -Raw
+} else { "" }
+$udpFailoverMarkers = @(
+    "UDP_BIND_OK",
+    "UDP_WRR_OK",
+    "FAILOVER_PERMIT_OK",
+    "FAILOVER_RECONNECT_OK",
+    "FAILOVER_TERMINAL_OK",
+    "CACHE_RESUME_HIT"
+)
+$udpFailoverFound = @{}
+foreach ($m in $udpFailoverMarkers) {
+    $pat = "HassiumSmokeTest:UDP_FAILOVER\s+$m"
+    $hitClient = $clientContent -match $pat
+    $hitServer = $serverContentForUdp -match $pat
+    $udpFailoverFound[$m] = ($hitClient -or $hitServer)
+}
+# 关键 PASS markers：UDP_BIND_OK + CACHE_RESUME_HIT 须同时出现（数据面建立且缓存命中）
+$udpFailoverCorePass = $udpFailoverFound["UDP_BIND_OK"] -and $udpFailoverFound["CACHE_RESUME_HIT"]
+# Pass 决策：udp-failover 阶段不要求 client 两轮 PASS（仅要求关键 markers + client 退出 0）。
+# classic / R / I 阶段沿袭原 hasPass+exit==0 逻辑。
+
+if ($udpFailoverIsPhase) {
+    $result = if ($udpFailoverCorePass -and $clientExit -eq 0) { "PASS" } else { "FAIL" }
+} else {
+    $result = if ($hasPass -and $clientExit -eq 0) { "PASS" } else { "FAIL" }
+}
 
 # 10. 停止服务端 + 残留 java
 Write-Host "[$SessionId] [9/9] 停止服务端..."
@@ -286,6 +324,8 @@ $resultObj = @{
     ServerSwitched = $serverSwitched
     HasPass = $hasPass
     HasFail = $hasFail
+    UdpFailoverMarkers = $udpFailoverFound
+    UdpFailoverCorePass = $udpFailoverCorePass
     StatsFiles = @(
         if ($round1StatsFound) { "build/smoke-test/stats/${SessionId}_round1_VD20.txt" }
         if ($round2StatsFound) { "build/smoke-test/stats/${SessionId}_round2_VD8.txt" }
@@ -297,4 +337,7 @@ Write-Host "[$SessionId] === RESULT: $result ==="
 Write-Host "[$SessionId] Round1: stats=$round1StatsFound pass=$round1Pass"
 Write-Host "[$SessionId] Round2: stats=$round2StatsFound pass=$round2Pass"
 Write-Host "[$SessionId] ServerSwitched: $serverSwitched Exit: $clientExit"
+if ($udpFailoverIsPhase) {
+    Write-Host "[$SessionId] UdpFailover markers: UDP_BIND_OK=$($udpFailoverFound['UDP_BIND_OK']) UDP_WRR_OK=$($udpFailoverFound['UDP_WRR_OK']) FAILOVER_PERMIT_OK=$($udpFailoverFound['FAILOVER_PERMIT_OK']) FAILOVER_RECONNECT_OK=$($udpFailoverFound['FAILOVER_RECONNECT_OK']) FAILOVER_TERMINAL_OK=$($udpFailoverFound['FAILOVER_TERMINAL_OK']) CACHE_RESUME_HIT=$($udpFailoverFound['CACHE_RESUME_HIT'])"
+}
 return $result

@@ -269,6 +269,8 @@ public final class DataPlaneUdpServer {
                     }
                     session.enqueueAuthenticated(DataPlaneFrame.TYPE_FAILOVER_PERMIT,
                             FailoverFrameCodec.encodePermit(session.epoch(), expiryMs));
+                    LOGGER.info("HassiumSmokeTest:UDP_FAILOVER FAILOVER_PERMIT_OK player={} epoch={} requestedEndpoint={} permitExpiryMs={}",
+                            session.playerId(), session.epoch(), request.requestedEndpointId(), expiryMs);
                 }
             } catch (IllegalArgumentException ignored) {
                 // 已认证但非法的 control payload 不得影响 session 或服务器 event loop。
@@ -500,6 +502,8 @@ public final class DataPlaneUdpServer {
                 byRemote.put(peer, session);
                 LOGGER.info("UdpServer: bound session player={} epoch={} endpoint={} from {}",
                         req.playerId(), req.connectionEpoch(), endpointId, peer);
+                LOGGER.info("HassiumSmokeTest:UDP_FAILOVER UDP_BIND_OK player={} epoch={} endpoint={}",
+                        req.playerId(), req.connectionEpoch(), endpointId);
             }
 
             @Override

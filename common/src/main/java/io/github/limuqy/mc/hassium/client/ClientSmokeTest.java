@@ -58,6 +58,9 @@ public final class ClientSmokeTest {
     /** 阶段选择：classic = 两轮连服 VD 切换；dataplane = 多通道数据面（单次连服 + Data 帧计数报）。 */
     private static volatile boolean runClassic = true;
     private static volatile boolean runDataplane = false;
+    /** §2.3 UDP failover phase：复用 classic 两轮连服状态机；不切 VD（server 不切）；
+     *  仅在客户端进入联服时打 phase accepted marker，由 ps1 聚合 UDP_FAILOVER* markers 判 PASS。 */
+    private static volatile boolean runUdpFailover = false;
 
     private ClientSmokeTest() {
     }
@@ -83,7 +86,15 @@ public final class ClientSmokeTest {
         }
         runClassic = phaseSet.contains("classic") || phaseSet.contains("all");
         runDataplane = phaseSet.contains("dataplane") || phaseSet.contains("all");
-        armed = true;
+        runUdpFailover = phaseSet.contains("udp-failover");
+        // udp-failover 不自动叠加 classic；若用户未显式带 classic，仍需 classic 两轮连服
+        // 的状态机驱动断开→重连 cycle，因此 fallback 视作 classic。
+        if (runUdpFailover && !runClassic) {
+            runClassic = true;
+        }
+        if (runUdpFailover) {
+            LOGGER.info("HassiumSmokeTest:UDP_FAILOVER phase accepted: 复用 classic 两轮状态机");
+        }
         state = State.WAIT_JOIN_1;
         startAtMs = System.currentTimeMillis();
         joinAtMs = -1L;

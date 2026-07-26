@@ -269,6 +269,10 @@ public class ClientMetadataHandler {
                 "[CHUNK_HASH] Result: {} hits, {} new full-request, {} stale full-request, {} delta-request (total {})",
                 hitChunks.size(), newFullRequestChunks.size(), staleFullRequestChunks.size(),
                 deltaRequestChunks.size(), packet.entries().size());
+        if (!hitChunks.isEmpty()) {
+            Constants.LOG.info("HassiumSmokeTest:UDP_FAILOVER CACHE_RESUME_HIT hits={} dimension={}",
+                    hitChunks.size(), packet.dimension());
+        }
 
         return new ChunkHashResult(hitChunks, newFullRequestChunks, staleFullRequestChunks,
                 deltaRequestChunks, packet.dimension());

@@ -1,6 +1,8 @@
 package io.github.limuqy.mc.hassium.network.dataplane;
 
 import io.github.limuqy.mc.hassium.cache.client.ClientLifecycleHelper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -29,6 +31,7 @@ import java.util.Objects;
  * Fabric channel callbacks.
  */
 public final class ControlReconnectOrchestrator {
+    private static final Logger SMOKE_LOG = LoggerFactory.getLogger("HassiumSmokeTest");
 
     /** 相对音频窗口：默认 60 秒，由 §1093 "controlStallMs requires server-issued FailoverPermit" 推导。 */
     static final long DEFAULT_RECOVERY_WINDOW_MS = 60_000L;
@@ -110,6 +113,7 @@ public final class ControlReconnectOrchestrator {
         recovering = false;
         terminalFinalized = false;
         // connectionEpoch 保持本轮，便于客户端据此 BindRequest 新一代 UDP
+        SMOKE_LOG.info("HassiumSmokeTest:UDP_FAILOVER FAILOVER_RECONNECT_OK epoch={}", connectionEpoch);
     }
 
     /** 一候选 reconnect 失败：移除并尝试下一个；若耗尽 → terminal finalize 一次。 */
@@ -196,6 +200,7 @@ public final class ControlReconnectOrchestrator {
         recovering = false;
         terminalFinalizations++;
         ClientLifecycleHelper.finalizeDisconnectIfTerminal();
+        SMOKE_LOG.info("HassiumSmokeTest:UDP_FAILOVER FAILOVER_TERMINAL_OK finalizations={}", terminalFinalizations);
     }
 
     /** 单调 + 的 epoch 候选：以 1 起步，0 reserved for "no recovery"。 */

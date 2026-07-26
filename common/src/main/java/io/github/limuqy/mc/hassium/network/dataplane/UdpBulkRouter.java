@@ -46,6 +46,8 @@ public final class UdpBulkRouter {
         long wrrAccum = 0L;
         private int consecutiveDrops = 0;
         private boolean degraded = false;
+        /** smoke marker：每 per-player workspace 第一个成功 DATA_SENT 仅打一次，避免热路径刷日志。 */
+        boolean dataSentMarkerEmitted = false;
         /** Interleaved WRR 每候选 current-weight；与 {@link #sessions} 列表对齐（idx 相同）。 */
         long[] curWeights = new long[0];
 
@@ -125,6 +127,11 @@ public final class UdpBulkRouter {
             boolean ok = picked.enqueueAuthenticated(type, payload);
             if (ok) {
                 ps.consecutiveDrops = 0;
+                if (!ps.dataSentMarkerEmitted) {
+                    ps.dataSentMarkerEmitted = true;
+                    org.slf4j.LoggerFactory.getLogger("HassiumSmokeTest")
+                            .info("HassiumSmokeTest:UDP_FAILOVER UDP_WRR_OK player-mode=share decision=DATA_SENT");
+                }
                 return RouteDecision.DATA_SENT;
             }
             // enqueue 失败：等价 drop。share 模式下，本帧也退到 Primary（保守策略，不丢业务）。
@@ -136,6 +143,11 @@ public final class UdpBulkRouter {
         boolean ok = target.enqueueAuthenticated(type, payload);
         if (ok) {
             ps.consecutiveDrops = 0;
+            if (!ps.dataSentMarkerEmitted) {
+                ps.dataSentMarkerEmitted = true;
+                org.slf4j.LoggerFactory.getLogger("HassiumSmokeTest")
+                        .info("HassiumSmokeTest:UDP_FAILOVER UDP_WRR_OK player-mode=exclusive decision=DATA_SENT");
+            }
             return RouteDecision.DATA_SENT;
         }
         return exclusiveDropOrDegrade(ps, degradeAfterDrops);
