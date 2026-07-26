@@ -178,3 +178,82 @@ polls. The host is fine.
     `fabric:compileJava -Pmc_ver=1.20.1` → BUILD SUCCESSFUL；
     Task1-5 regression run → BUILD SUCCESSFUL.
   - **Task 5: complete (no subagent review — controller path)**
+
+- Task 6: Control failover authorization + lease — complete
+  - Controller RED→GREEN direct (no subagent: prior subagents unresponsive, per
+    environment caveat; controller is the only confirmed-producing entity).
+  - **Step 1 — wire contract** (`FailoverFrameCodec`, plan §660-672):
+    `Request(connectionEpoch, requestedEndpointId)` encoded as `i64 + varint`
+    (canonical-varint check rejects non-minimal encoding); `Permit(connectionEpoch,
+    expiryMs)` as `i64 + i64`; both reject null/truncated/trailing bytes.
+    `FailoverFrameCodecTest` (2 cases) — round-trip with `epoch = 0x0123_..._CDEF`
+    and `Long.MAX_VALUE - 3` expiry; malformed payload (≤7-byte request, negative
+    endpointId, 15-byte permit) raises `IllegalArgumentException`.
+  - **Step 2 — authorization state machine** (`ControlFailoverHandler`, plan §651-675):
+    per-player `PlayerState { epoch, lastControlActivityMs, masterClose,
+    udpSessionPresent }`; decision order `NO_CONNECTION → NO_UDP_SESSION →
+    EPOCH_MISMATCH → REJECTED_ACTIVE → PERMITTED`. PERMITTED invokes the master-close
+    `Runnable` exactly once (`masterClose = null` after), appends to `permits()`.
+    Constants: `DEFAULT_CONTROL_STALL_MS = 6_000`, `DEFAULT_FAILOVER_PERMIT_TTL_MS =
+    30_000`. Production callbacks `onUdpSessionEstablished/onUdpSessionClosed` gate
+    UDP authorization by epoch; stale-epoch bind cannot roll back current master.
+    `beginControlConnection` mints strictly-increasing epoch (Long.MAX_VALUE wraps to
+    1) and `replaceEpoch`-declared downstream in DataPlaneUdpServer revokes old
+    leases atomically with new epoch.
+  - **Step 3 — registry lease** (`DataPlaneSessionRegistry`, plan §701-727):
+    refactored `onPrimaryDisconnect` into shared `beginLease(playerId, epoch,
+    expiryMs)`; new `beginFailoverLease` (called by UdpServer after PERMITTED) reuses
+    it; same-key deadline is overwritten with the latest permit so a new permit
+    cannot be prematurely closed. `sessionsByPlayer` filters out
+    `isLeaseDraining() == true` sessions, so lease sessions stop receiving new bulk
+    immediately while keeping their accepted KCP queue.
+  - **Step 4 — ReliableDatagramSession lease accessor**: added package-private
+    `markLeaseUntil(expireAtMs)` and `isLeaseDraining()` (the legacy `markLease(now,
+    leaseMs)` is retained — still used by `DataPlaneClientBundle.retainLeaseUntil`
+    migration path).
+  - **Step 5 — server-side wiring** (`DataPlaneUdpServer`):
+    - `beginControlConnection(UUID, Runnable)` static façade forwards to
+      `ControlFailoverHandler` + `registry.replaceEpoch` (returns new epoch for
+      handshake emission).
+    - `recordControlActivity(UUID, long, long)` and `currentControlEpoch(UUID)`
+      static forwarders for the tick mixin.
+    - `dispatchReceivedOnServer` now recognizes `TYPE_FAILOVER_REQUEST`: decode →
+      epoch match (drop if mismatch) → `requestFailover` → on PERMITTED call
+      `registry.beginFailoverLease` and reply `TYPE_FAILOVER_PERMIT` over same KCP
+      session. Malformed payload swallowed silently to protect the event loop.
+    - bind path calls `ControlFailoverHandler.onUdpSessionEstablished` after
+      `registry.register` so the handler sees real authorization state, not just
+      `declareUdpSessionForTest`.
+  - **Step 6 — Mixin tick & disconnect** (`MixinServerGamePacketListenerImpl`):
+    new `@Inject(method="tick", at=@At("HEAD")) hassium$recordControlActivity`
+    reads `currentControlEpoch(player.getUUID())` and forwards when non-zero;
+    `onDisconnect` injection replaces the old PoC `DataPlaneServer.onPrimaryDisconnect
+    (pseudoPlayerId)` block with a real player UUID/epoch call to
+    `DataPlaneUdpServer.onPrimaryDisconnect` when epoch!=0, followed by
+    `ControlFailoverHandler.getInstance().remove(playerId)`. `#if MC_VER < MC_1_21_1`
+    keeps the 1.20.x `Component reason` vs 1.21.1+ `DisconnectionDetails` signature.
+  - **Step 7 — Fabric wired** (`FabricNetworkManager.completeServerHandshake`):
+    `accepted && DataPlaneUdpServer.isBound()` path now resolves the player's real
+    `Connection` via existing `getPlayerConnection(ServerPlayer)` helper and calls
+    `beginControlConnection(uuid, () -> master.disconnect(Component.empty()))` to
+    mint the per-handshake epoch + master-close handle. The returned `epoch` is
+    written into the S2C tail (was a hardcoded `1L`). Removed the unused
+    `FailoverFrameCodec` import this path no longer needs.
+  - Verifications run on the worktree under `-Pmc_ver=1.20.1 --console=plain`:
+    - `common:test --tests *ControlFailoverHandlerTest --tests *UdpLeaseRoutingTest
+      --rerun-tasks` → BUILD SUCCESSFUL, 11 actionable tasks (8 ControlFailover +
+      1 lease test cases executed).
+    - `fabric:compileJava` → BUILD SUCCESSFUL (mixin + FabricNetworkManager
+      compile clean against 1.20.1 mappings).
+    - Full `common:test` → 174 tests, 7 failed, 3 skipped; the 7 are the long-
+      standing accepted baseline (5× `DeltaMergeTest`/`ResourceKey`
+      `NoClassDefFoundError` + `HassiumMetricsImplTest
+      resetClearsClientDisplayMetrics` + `ChunkDiskCodecTest` +
+      `CompressionServiceDictionaryTest`) — all pre-existing and reproducible
+      independently of the UDP code path, no new regressions introduced.
+  - Workspace hygiene check: legacy `markLease(now, leaseMs)` retained on
+    `ReliableDatagramSession` (still used by `DataPlaneClientBundle:257`); new
+    `markLeaseUntil` is additive. `FailoverFrameCodec` import removed from
+    `FabricNetworkManager` to keep the Fabric diff minimal.
+  - **Task 6: complete (no subagent review — controller path)**
+

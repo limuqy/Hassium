@@ -76,7 +76,8 @@ public final class DataPlaneSessionRegistry {
         for (Map.Entry<Key, List<ReliableDatagramSession>> e : sessions.entrySet()) {
             if (!Objects.equals(e.getKey().playerId, playerId)) continue;
             for (ReliableDatagramSession s : e.getValue()) {
-                if (!s.isClosed()) out.add(s);
+                // Lease 会话只排干 bind 前已接受的 KCP 发送队列，绝不重新承接 bulk 路由。
+                if (!s.isClosed() && !s.isLeaseDraining()) out.add(s);
             }
         }
         return List.copyOf(out);
@@ -107,15 +108,31 @@ public final class DataPlaneSessionRegistry {
      * {@link ReliableDatagramSession#isLeaseActive(long)} 做拒绝决策）。
      */
     public synchronized void onPrimaryDisconnect(UUID playerId, long epoch, long nowMs, long leaseMs) {
+        if (leaseMs <= 0L) {
+            return;
+        }
+        beginLease(playerId, epoch, nowMs + leaseMs);
+    }
+
+    /**
+     * Failover permit 已签发：把该 {@code (playerId, epoch)} 切入排干，直到绝对 deadline。
+     * 新 bulk 会被 {@link #sessionsByPlayer(UUID)} 排除；既有 KCP 队列留到
+     * {@link #expireLeases(long)} 在 deadline 关闭。
+     */
+    public synchronized void beginFailoverLease(UUID playerId, long epoch, long expiryMs) {
+        beginLease(playerId, epoch, expiryMs);
+    }
+
+    private void beginLease(UUID playerId, long epoch, long expiryMs) {
         List<ReliableDatagramSession> bucket = sessions.get(new Key(playerId, epoch));
         if (bucket == null) {
             return;
         }
-        if (leaseMs > 0L) {
-            pendingLeases.add(new PendingLease(playerId, epoch, nowMs + leaseMs));
-        }
+        // 同键 lease 必须以最新 permit 覆盖，避免旧 deadline 提前关闭新 lease。
+        pendingLeases.removeIf(pl -> Objects.equals(pl.playerId, playerId) && pl.epoch == epoch);
+        pendingLeases.add(new PendingLease(playerId, epoch, expiryMs));
         for (ReliableDatagramSession s : bucket) {
-            s.markLease(nowMs, leaseMs);
+            s.markLeaseUntil(expiryMs);
         }
     }
 

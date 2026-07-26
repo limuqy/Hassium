@@ -3,6 +3,8 @@ package io.github.limuqy.mc.hassium.mixin;
 import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.network.PlayerCompressionTracker;
 import io.github.limuqy.mc.hassium.network.ServerChunkPushManager;
+import io.github.limuqy.mc.hassium.network.dataplane.ControlFailoverHandler;
+import io.github.limuqy.mc.hassium.network.dataplane.DataPlaneUdpServer;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.network.ServerGamePacketListenerImpl;
 import org.spongepowered.asm.mixin.Mixin;
@@ -20,6 +22,14 @@ public class MixinServerGamePacketListenerImpl {
     @Shadow
     public ServerPlayer player;
 
+    @Inject(method = "tick", at = @At("HEAD"))
+    private void hassium$recordControlActivity(CallbackInfo ci) {
+        long epoch = DataPlaneUdpServer.currentControlEpoch(player.getUUID());
+        if (epoch != 0L) {
+            DataPlaneUdpServer.recordControlActivity(player.getUUID(), epoch, System.currentTimeMillis());
+        }
+    }
+
     @Inject(method = "onDisconnect", at = @At("HEAD"))
     private void onPlayerDisconnect(
 #if MC_VER < MC_1_21_1
@@ -31,9 +41,10 @@ public class MixinServerGamePacketListenerImpl {
         Constants.LOG.info("Hassium: Player {} disconnected, push queue cleaned up", player.getName().getString());
         PlayerCompressionTracker.removePlayer(player);
         ServerChunkPushManager.getInstance().removePlayer(player.getUUID());
-        // 关闭该玩家 PoC 数据面 bundle（PoC 单玩家：清 pseudoPlayerId bundle）。
-        // 避免重连时旧 data channel 残留在 bundle 中，导致 BulkRouter 选到已 inactive 的 channel。
-        io.github.limuqy.mc.hassium.network.dataplane.DataPlaneServer.onPrimaryDisconnect(
-                io.github.limuqy.mc.hassium.network.dataplane.DataPlanePoCConfig.pseudoPlayerId());
+        long epoch = DataPlaneUdpServer.currentControlEpoch(player.getUUID());
+        if (epoch != 0L) {
+            DataPlaneUdpServer.onPrimaryDisconnect(player.getUUID(), epoch, System.currentTimeMillis());
+        }
+        ControlFailoverHandler.getInstance().remove(player.getUUID());
     }
 }

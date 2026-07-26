@@ -155,6 +155,29 @@ public final class DataPlaneUdpServer {
         return List.copyOf(inst.boundEndpoints);
     }
 
+    /**
+     * 一个新的 Minecraft TCP master 被服务器接受。递增 epoch 并立即淘汰该玩家旧 epoch 的 UDP 会话，
+     * 防止旧 KCP lease 在重连后接管新控制连接。
+     */
+    public static long beginControlConnection(UUID playerId, Runnable masterClose) {
+        long epoch = ControlFailoverHandler.getInstance().beginControlConnection(playerId, masterClose);
+        Instance inst = INSTANCE;
+        if (inst != null) {
+            inst.registry.replaceEpoch(playerId, epoch);
+        }
+        return epoch;
+    }
+
+    /** 记录来自当前 TCP master 的真实入站控制活动。 */
+    public static void recordControlActivity(UUID playerId, long epoch, long nowMs) {
+        ControlFailoverHandler.getInstance().recordControlActivity(playerId, epoch, nowMs);
+    }
+
+    /** 当前 TCP master epoch；无已注册 master 返回 0。 */
+    public static long currentControlEpoch(UUID playerId) {
+        return ControlFailoverHandler.getInstance().currentEpoch(playerId);
+    }
+
     /** 单例 {@link UdpBulkRouter}；hardRttMs 取自首个 endpoint 或默认 1000。 */
     private static volatile UdpBulkRouter ROUTER;
 
@@ -225,11 +248,33 @@ public final class DataPlaneUdpServer {
     }
 
     /**
-     * 服务端从 KCP 拿到完整应用帧后的回调占位。Task 5/8 接客户端→服务端业务（failover request 等）；
-     * 普通上行 bulk frame（chunk/section delta）目前无服务端业务逻辑——客户端→服务端不走 bulk。
+     * 服务端从 KCP 拿到完整应用帧后的回调。仅接受已认证的 failover request；所有其它
+     * client→server 类型在此层无业务语义，故静默忽略。
      */
     private static void dispatchReceivedOnServer(ReliableDatagramSession session, ReliableDatagramSession.Received r) {
-        // Task 6 将在此识别 TYPE_FAILOVER_REQUEST 并转 ControlFailoverHandler。
+        if (r.type() == DataPlaneFrame.TYPE_FAILOVER_REQUEST) {
+            try {
+                FailoverFrameCodec.Request request = FailoverFrameCodec.decodeRequest(r.payload());
+                if (request.connectionEpoch() != session.epoch()) {
+                    return;
+                }
+                ControlFailoverHandler handler = ControlFailoverHandler.getInstance();
+                ControlFailoverHandler.FailoverResult result = handler.requestFailover(
+                        session.playerId(), request.connectionEpoch(), request.requestedEndpointId(), System.currentTimeMillis());
+                if (result == ControlFailoverHandler.FailoverResult.PERMITTED) {
+                    long expiryMs = System.currentTimeMillis() + handler.failoverPermitTtlMs();
+                    Instance inst = INSTANCE;
+                    if (inst != null) {
+                        inst.registry.beginFailoverLease(session.playerId(), session.epoch(), expiryMs);
+                    }
+                    session.enqueueAuthenticated(DataPlaneFrame.TYPE_FAILOVER_PERMIT,
+                            FailoverFrameCodec.encodePermit(session.epoch(), expiryMs));
+                }
+            } catch (IllegalArgumentException ignored) {
+                // 已认证但非法的 control payload 不得影响 session 或服务器 event loop。
+            }
+            return;
+        }
         if (DataPlanePoCConfig.isDataplaneLogEnabled()) {
             DebugLogger.info(DebugLogger.LogType.DATAPLANE,
                     "UdpServer: received frame from player={} epoch={} type={} bytes={}",
@@ -451,6 +496,7 @@ public final class DataPlaneUdpServer {
                         req.playerId(), req.connectionEpoch(), ep, peer, key, sink, endpointId, weight);
                 session.receiveHandler(r -> DataPlaneUdpServer.dispatchReceivedOnServer(session, r));
                 registry.register(session);
+                ControlFailoverHandler.getInstance().onUdpSessionEstablished(req.playerId(), req.connectionEpoch());
                 byRemote.put(peer, session);
                 LOGGER.info("UdpServer: bound session player={} epoch={} endpoint={} from {}",
                         req.playerId(), req.connectionEpoch(), endpointId, peer);

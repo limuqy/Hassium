@@ -841,10 +841,15 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
         response.writeBoolean(accepted);
         response.writeBoolean(useGlobalCompression);
         response.writeBoolean(useCompactHeader);
-        // Task 5 — S2C 握手尾部：如 server UDP 已 bound 且本次 accept，播发 endpoints + token + epoch。
-        // 旧客户端见无 readable 字节则 decode 得 disabled()，仍兼容。
+        // Task 5-6 — 仅追加尾部。每个成功 TCP master 都签发新 epoch；旧 UDP epoch 会同时关闭。
         if (accepted && DataPlaneUdpServer.isBound()) {
             try {
+                Connection master = getPlayerConnection(player);
+                if (master == null) {
+                    throw new IllegalStateException("missing player connection");
+                }
+                long epoch = DataPlaneUdpServer.beginControlConnection(player.getUUID(),
+                        () -> master.disconnect(net.minecraft.network.chat.Component.empty()));
                 byte[] token = DataPlaneUdpServer.getSessionToken();
                 java.util.List<DataPlaneUdpServer.BoundEndpoint> eps = DataPlaneUdpServer.boundEndpoints();
                 java.util.List<UdpDataPlaneHandshakeTail.ControlEndpoint> ctl = java.util.List.of();
@@ -852,9 +857,8 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
                 for (DataPlaneUdpServer.BoundEndpoint be : eps) {
                     udp.add(new UdpDataPlaneHandshakeTail.UdpEndpointInfo(be.host(), be.bindPort(), be.weight(), be.endpointId()));
                 }
-                // Task 6 接入后补 controlEndpoints；当前仅 UDP 数据面
                 UdpDataPlaneHandshakeTail.S2CTail s2cTail = new UdpDataPlaneHandshakeTail.S2CTail(
-                        true, false, 1L, Constants.CURRENT_PROTOCOL_VERSION, token, ctl, udp);
+                        true, false, epoch, Constants.CURRENT_PROTOCOL_VERSION, token, ctl, udp);
                 UdpDataPlaneHandshakeTail.writeS2C(response, s2cTail);
             } catch (Exception ex) {
                 LOGGER.warn("Hassium: Failed to append UDP dataplane tail to handshake response for {}", player.getName().getString(), ex);

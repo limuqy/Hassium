@@ -435,6 +435,19 @@ public final class ReliableDatagramSession implements BulkRouteTarget {
         leaseExpireAt = (leaseMs <= 0L) ? Long.MAX_VALUE : nowMs + leaseMs;
     }
 
+    /**
+     * 进入排干状态直到绝对截止时刻。排干会话仍可由 KCP 投递已接受的帧，但不得再承接新的 bulk。
+     * 仅 {@link DataPlaneSessionRegistry} 调用，确保 deadline 由单一注册表维护。
+     */
+    void markLeaseUntil(long expireAtMs) {
+        leaseExpireAt = expireAtMs;
+    }
+
+    /** 是否已进入 lease 排干状态（无论 deadline 是否已经过期；过期关闭由 registry 统一执行）。 */
+    boolean isLeaseDraining() {
+        return leaseExpireAt != Long.MAX_VALUE;
+    }
+
     /** 当前时刻是否处于 lease 期（主 TCP 已断但已 accepted 的帧仍可排干的窗口内）。 */
     public boolean isLeaseActive(long nowMs) {
         return nowMs < leaseExpireAt;
