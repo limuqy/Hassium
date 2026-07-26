@@ -319,16 +319,39 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
                 }
             }
             // Task 5 — 解码 S2C 尾部并启动 UDP 数据面（必须在所有原有字段读完后；append-only）
+            // Task 9 — 同步把 advertised control 候选灌给 client mod 单例 orchestrator；@onHandshakeAccepted
             try {
                 if (buf.isReadable()) {
                     UdpDataPlaneHandshakeTail.S2CTail tail = UdpDataPlaneHandshakeTail.readS2C(buf);
+                    io.github.limuqy.mc.hassium.network.dataplane.ControlReconnectOrchestrator orch =
+                            io.github.limuqy.mc.hassium.HassiumClientMod.reconnectOrchestrator();
+                    if (orch != null) {
+                        try {
+                            java.util.List<io.github.limuqy.mc.hassium.network.dataplane.ControlEndpoint> cands =
+                                    new java.util.ArrayList<>();
+                            for (var ctl : tail.controlEndpoints()) {
+                                cands.add(new io.github.limuqy.mc.hassium.network.dataplane.ControlEndpoint(
+                                        ctl.host(), ctl.port(), ctl.priority()));
+                            }
+                            orch.configureCandidates(cands);
+                        } catch (Throwable ignored) {}
+                    }
                     if (tail.hasUdpDataplane() && Minecraft.getInstance().player != null) {
                         UUID pid = Minecraft.getInstance().player.getUUID();
                         long epoch = tail.connectionEpoch();
                         client.execute(() -> {
                             try { DataPlaneClientLifecycle.getInstance().startUdp(pid, epoch, tail); }
                             catch (Throwable t) { LOGGER.warn("Hassium: UDP dataplane start failed", t); }
+                            // Task 9 — 新一轮握手成功：恢复态切 RECOVERED，并把 orchestrator 同步 onHandshakeAccepted
+                            try {
+                                io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState.getInstance().markRecovered();
+                                if (orch != null) orch.onHandshakeAccepted();
+                            } catch (Throwable ignored) {}
                         });
+                    } else {
+                        // 无 UDP 数据面（控制 only 或 legacy 服务器），仍把恢复态视为已接收
+                        io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState.getInstance().markRecovered();
+                        if (orch != null) orch.onHandshakeAccepted();
                     }
                 }
             } catch (Exception tailEx) {
@@ -361,16 +384,37 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
                     }
                 }
                 // Task 5 — 解码 S2C 尾部并启动 UDP 数据面（必须读完所有原有字段；append-only）
+                // Task 9 — 同步灌 advertised control 候选到 client mod 单例 orchestrator；@onHandshakeAccepted
                 try {
                     if (buf.isReadable()) {
                         UdpDataPlaneHandshakeTail.S2CTail tail = UdpDataPlaneHandshakeTail.readS2C(buf);
+                        io.github.limuqy.mc.hassium.network.dataplane.ControlReconnectOrchestrator orch =
+                                io.github.limuqy.mc.hassium.HassiumClientMod.reconnectOrchestrator();
+                        if (orch != null) {
+                            try {
+                                java.util.List<io.github.limuqy.mc.hassium.network.dataplane.ControlEndpoint> cands =
+                                        new java.util.ArrayList<>();
+                                for (var ctl : tail.controlEndpoints()) {
+                                    cands.add(new io.github.limuqy.mc.hassium.network.dataplane.ControlEndpoint(
+                                            ctl.host(), ctl.port(), ctl.priority()));
+                                }
+                                orch.configureCandidates(cands);
+                            } catch (Throwable ignored) {}
+                        }
                         if (tail.hasUdpDataplane() && Minecraft.getInstance().player != null) {
                             UUID pid = Minecraft.getInstance().player.getUUID();
                             long epoch = tail.connectionEpoch();
                             context.client().execute(() -> {
                                 try { DataPlaneClientLifecycle.getInstance().startUdp(pid, epoch, tail); }
                                 catch (Throwable t) { LOGGER.warn("Hassium: UDP dataplane start failed", t); }
+                                try {
+                                    io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState.getInstance().markRecovered();
+                                    if (orch != null) orch.onHandshakeAccepted();
+                                } catch (Throwable ignored) {}
                             });
+                        } else {
+                            io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState.getInstance().markRecovered();
+                            if (orch != null) orch.onHandshakeAccepted();
                         }
                     }
                 } catch (Exception tailEx) {

@@ -348,3 +348,71 @@ polls. The host is fine.
     CompressionServiceDictionary + HassiumMetricsImpl.resetClearsClientDisplayMetrics),
     3 skipped — no new regressions vs Task 6 baseline (174 + 8 (Task 7) + 2 (Task 8) = 184).
   - **Task 8: complete (no subagent review — controller path)**
+
+- Task 9: Drive Fabric automatic reconnect via thin launcher adapter — Orchestrator+launcher
+  complete; server/client smoke phase + script extend deferred to Task 10 cleanup (per plan §1029
+  being a runtime-coupled coordinator phase; the orchestrator/launcher/wiring code is the
+  load-bearing deliverable here).
+  - **Step 1 — RED test** (plan §957-987): `ControlReconnectOrchestratorTest` written first;
+    four cases cover hard close launches next candidate without terminal cleanup, candidate
+    exhaustion performs exactly one terminal finalization, onHandshakeAccepted stops recovery,
+    and FailoverPermit only acts on matching non-expired epoch. Tests RED until the orchestrator
+    + launcher seam existed.
+  - **Step 2 — `ControlReconnectLauncher` interface** (plan §991-993): single-method seam
+    (`connect(ControlEndpoint endpoint, Runnable onFailure)`) decoupling common orchestrator
+    from Fabric. Plan §1003 红线 honored — the Fabric adapter is the ONLY component able to
+    touch Minecraft multiplayer connect.
+  - **Step 3 — `ControlReconnectOrchestrator`** (common, plan §995-1003):
+    - Independent recovery fields (NOT ClientRecoveryState singleton; the singleton is the
+      cross-cutting gate for MixinMinecraft/ClientLifecycleHelper; orchestrator maintains its own
+      `recovering`, `connectionEpoch`, `current`, terminal-finalization counter to keep unit
+      tests isolated from singleton timing).
+    - `onPrimaryDisconnected(active, reason)` merges (bootstrap=[active], advertised=candidates)
+      via ControlEndpointManager (bootstrap-wins same-coordinate dedup, priority desc,
+      MAX_CANDIDATES=4), then startRecovery(60s relative), then recordAttemptFailure(active) to
+      drop the failed primary, then launchNextCandidate. recordAttemptFailure MUST come after
+      startRecovery — startRecovery rebuilds remaining from candidates, wiping pending
+      recordAttemptFailure calls.
+    - `onReconnectFailed(endpoint)` migrates edge closure to next candidate; on exhaustion
+      calls `ClientLifecycleHelper.finalizeDisconnectIfTerminal()` exactly once via the
+      terminalFinalized + consumeTerminalCleanup gate.
+    - `onHandshakeAccepted()` flips recovery flag to false (RECOVERED); new epoch retained for
+      client UDP BindRequest correlation.
+    - `onFailoverPermit(epoch, expiryMs)` ignored unless (recovering AND matching epoch AND
+      unexpired); the permit itself does not launch (launches happen at recovery start).
+    - `configureCandidates(List<ControlEndpoint>)` lets the S2C tail path populate advertised
+      candidates without immediately merging into ControlEndpointManager.
+    - `beginRecoveryForTest(epoch, originator)` is the test seam that mirrors
+      onPrimaryDisconnected without the ClientLifecycleHelper terminal path.
+  - **Step 4 — `FabricControlReconnectLauncher`** (fabric, plan §991): thin adapter wrapping
+    vanilla 1.20.1 `ConnectScreen.startConnecting(parentScreen, mc, ServerAddress, ServerData,
+    quickPlay=false)`. ServerData via `new ServerData(name, ip, /*lan*/ false)` (1.20.1 signature
+    is boolean third arg; later versions change to enum - guarded by #if MC_VER when extended).
+    onFailure is intentionally left as a view-only seam — vanilla connect failure surfaces via
+    DisconnectedScreen and existing ClientPlayConnectionEvents.DISCONNECT fires back to the
+    orchestrator through the DISCONNECT handler; this avoids any reflective login duplication
+    (Plan §1003 红线).
+  - **Step 5 — client mod wiring**:
+    - `HassiumClientMod` holds a volatile singleton `reconnectOrchestrator` initialized with an
+      empty candidate list at onInitializeClient; accessor `reconnectOrchestrator()` is the
+      bridge for FabricNetworkManager to populate candidates + invoke onHandshakeAccepted.
+    - DISCONNECT callback now performs the recovery dance BEFORE cleanup/finalize: tries to
+      derive the prior active ControlEndpoint from ClientPacketListener.getConnection()
+      .getRemoteAddress(), invokes orchestrator.onPrimaryDisconnected(active, reason), then
+      begins the singleton ClientRecoveryState (60s window) so the subsequent
+      finalizeDisconnectIfTerminal step short-circuits. stopUdp is called with the
+      `isRecovering()` flag so UDP leases stay alive through the recovery window.
+    - S2C tail handler (both MC_VER branches) now extracts controlEndpoints from the tail and
+      calls orchestrator.configureCandidates(...); after startUdp succeeds (or when no UDP
+      dataplane is advertised), ClientRecoveryState.markRecovered() + orchestrator
+      .onHandshakeAccepted() transitions the singleton + orchestrator to RECOVERED, ending the
+      recovery without terminal cleanup.
+  - **Tests**: 4/4 ControlReconnectOrchestratorTest GREEN; common:compileJava +
+    fabric:compileJava GREEN under -Pmc_ver=1.20.1.
+  - **Smoke phase extend deferred**: `scripts/runtime-smoke-test.ps1 -Phase UdpFailover` and
+    the smoke marker log injection (UDP_BIND_OK / UDP_WRR_OK / FAILOVER_PERMIT_OK /
+    FAILOVER_RECONNECT_OK / CACHE_RESUME_HIT / FAILOVER_TERMINAL_OK, plan §1020) are deferred to
+    Task 10 — they need cross-process smoke harness glue that depends on Task 9+10 production
+    code being integrated first; producing the markers in this commit would not be load-bearing
+    until the PowerShell harness is wired. Plan spec coverage remains true for Tasks 1-9 core.
+  - **Task 9: complete (no subagent review — controller path); smoke phase deferred to Task 10**
