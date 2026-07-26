@@ -4,6 +4,9 @@ import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.compat.ResourceLocationCompat;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.network.ServerChunkPushManager;
+import io.github.limuqy.mc.hassium.network.dataplane.DataPlaneClientLifecycle;
+import io.github.limuqy.mc.hassium.network.dataplane.DataPlaneUdpServer;
+import io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail;
 import io.github.limuqy.mc.hassium.utils.DebugLogger;
 import io.github.limuqy.mc.hassium.utils.DebugLogger.LogType;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
@@ -21,6 +24,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.lang.reflect.Field;
+import java.util.UUID;
 import io.netty.channel.Channel;
 
 /**
@@ -314,6 +318,22 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
                     }
                 }
             }
+            // Task 5 — 解码 S2C 尾部并启动 UDP 数据面（必须在所有原有字段读完后；append-only）
+            try {
+                if (buf.isReadable()) {
+                    UdpDataPlaneHandshakeTail.S2CTail tail = UdpDataPlaneHandshakeTail.readS2C(buf);
+                    if (tail.hasUdpDataplane() && Minecraft.getInstance().player != null) {
+                        UUID pid = Minecraft.getInstance().player.getUUID();
+                        long epoch = tail.connectionEpoch();
+                        client.execute(() -> {
+                            try { DataPlaneClientLifecycle.getInstance().startUdp(pid, epoch, tail); }
+                            catch (Throwable t) { LOGGER.warn("Hassium: UDP dataplane start failed", t); }
+                        });
+                    }
+                }
+            } catch (Exception tailEx) {
+                LOGGER.debug("Hassium: failed to decode UDP dataplane tail (legacy server?)", tailEx);
+            }
         });
 #else
         ClientPlayNetworking.registerGlobalReceiver(FabricPayloadRegistry.HANDSHAKE_S2C_TYPE, (payload, context) -> {
@@ -339,6 +359,22 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
                             });
                         }
                     }
+                }
+                // Task 5 — 解码 S2C 尾部并启动 UDP 数据面（必须读完所有原有字段；append-only）
+                try {
+                    if (buf.isReadable()) {
+                        UdpDataPlaneHandshakeTail.S2CTail tail = UdpDataPlaneHandshakeTail.readS2C(buf);
+                        if (tail.hasUdpDataplane() && Minecraft.getInstance().player != null) {
+                            UUID pid = Minecraft.getInstance().player.getUUID();
+                            long epoch = tail.connectionEpoch();
+                            context.client().execute(() -> {
+                                try { DataPlaneClientLifecycle.getInstance().startUdp(pid, epoch, tail); }
+                                catch (Throwable t) { LOGGER.warn("Hassium: UDP dataplane start failed", t); }
+                            });
+                        }
+                    }
+                } catch (Exception tailEx) {
+                    LOGGER.debug("Hassium: failed to decode UDP dataplane tail (legacy server?)", tailEx);
                 }
             } finally {
                 buf.release();
@@ -585,6 +621,10 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
             buf.writeBoolean(false); // scheme127Supported
             buf.writeBoolean(true);  // globalPacketCompressionSupported（管线未就绪时延后安装）
             buf.writeBoolean(true);  // compactHeaderSupported
+            // Task 5 — C2S 握手尾部：声明 UDP 数据面 + 控制 failover 能力（append-only；旧服务端忽略）
+            UdpDataPlaneHandshakeTail.C2STail c2sTail =
+                    new UdpDataPlaneHandshakeTail.C2STail(true, true);
+            UdpDataPlaneHandshakeTail.writeC2S(buf, c2sTail);
 #if MC_VER < MC_1_20_5
             ClientPlayNetworking.send(HANDSHAKE_C2S, buf);
 #else
@@ -796,12 +836,30 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
                 ZstdPipelineSwitcher.pauseOutboundCompression(channel);
             }
         }
-
         FriendlyByteBuf response = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
         response.writeVarInt(Constants.CURRENT_PROTOCOL_VERSION);
         response.writeBoolean(accepted);
         response.writeBoolean(useGlobalCompression);
         response.writeBoolean(useCompactHeader);
+        // Task 5 — S2C 握手尾部：如 server UDP 已 bound 且本次 accept，播发 endpoints + token + epoch。
+        // 旧客户端见无 readable 字节则 decode 得 disabled()，仍兼容。
+        if (accepted && DataPlaneUdpServer.isBound()) {
+            try {
+                byte[] token = DataPlaneUdpServer.getSessionToken();
+                java.util.List<DataPlaneUdpServer.BoundEndpoint> eps = DataPlaneUdpServer.boundEndpoints();
+                java.util.List<UdpDataPlaneHandshakeTail.ControlEndpoint> ctl = java.util.List.of();
+                java.util.List<UdpDataPlaneHandshakeTail.UdpEndpointInfo> udp = new java.util.ArrayList<>(eps.size());
+                for (DataPlaneUdpServer.BoundEndpoint be : eps) {
+                    udp.add(new UdpDataPlaneHandshakeTail.UdpEndpointInfo(be.host(), be.bindPort(), be.weight(), be.endpointId()));
+                }
+                // Task 6 接入后补 controlEndpoints；当前仅 UDP 数据面
+                UdpDataPlaneHandshakeTail.S2CTail s2cTail = new UdpDataPlaneHandshakeTail.S2CTail(
+                        true, false, 1L, Constants.CURRENT_PROTOCOL_VERSION, token, ctl, udp);
+                UdpDataPlaneHandshakeTail.writeS2C(response, s2cTail);
+            } catch (Exception ex) {
+                LOGGER.warn("Hassium: Failed to append UDP dataplane tail to handshake response for {}", player.getName().getString(), ex);
+            }
+        }
 #if MC_VER < MC_1_20_5
         ServerPlayNetworking.send(player, HANDSHAKE_S2C, response);
 #else

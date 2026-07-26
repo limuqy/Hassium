@@ -142,6 +142,19 @@ public final class DataPlaneUdpServer {
         return inst.sessionToken;
     }
 
+    /**
+     * Task 5 — 为 S2C 握手尾部导出当前已 bound 的 UDP 端点清单（含 OS 实际端口）。
+     * <p>Fabric/服务器侧握手响应会通过 {@link UdpDataPlaneHandshakeTail} 将这些信息播发给客户端。
+     * 未 bind 时返回空列表（caller 应跳过尾部，保持旧客户端兼容）。
+     */
+    public static List<BoundEndpoint> boundEndpoints() {
+        Instance inst = INSTANCE;
+        if (inst == null) {
+            return List.of();
+        }
+        return List.copyOf(inst.boundEndpoints);
+    }
+
     /** 单例 {@link UdpBulkRouter}；hardRttMs 取自首个 endpoint 或默认 1000。 */
     private static volatile UdpBulkRouter ROUTER;
 

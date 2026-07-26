@@ -136,3 +136,45 @@ polls. The host is fine.
     runtime resource pipeline`). All reproduce independently of UDP code path; not
     blocking Task 4 acceptance.
   - **Task 4: complete (no subagent review — controller path)**
+- Task 5: Append-only 握手尾部 + 客户端 UDP 生命周期 — complete
+  - Controller RED→GREEN direct.
+  - **Step 1-2**: `UdpDataPlaneHandshakeTailTest` 5 tests green
+    （`oldHandshakeWithNoTailDecodesAsDisabled` / roundtrip / failover tail flag /
+    malformed token length / endpointId uniqueness）。Codec 用纯 Netty ByteBuf，
+    不触碰 `FriendlyByteBuf`；read 只在 `buf.isReadable()` 时执行。
+  - **Step 3**: `DataPlaneClientBundle` 重写为 UDP 门面；PoC 静态计数器
+    （`getBulkFramesData` / `getBulkBytesData` / `snapshotPerPort` / `resetDataBulkCounters`）保留；
+    新增 `connectAndBind(UUID, long, byte[], List<UdpEndpointInfo>)`、
+    `setChunkDispatcherForTest`、`receiveForTest`、`retainLeaseUntil`、`tick`、`shutdown`、
+    `isBound`。
+  - **Step 4**: `UdpClientBundleTest` 3 tests green（chunk frame → injected dispatcher + 计数；
+    non-chunk frame 不进 dispatcher；`resetDataBulkCounters` 清零所有静态计数）。
+  - **Step 5**: 新建 `DataPlaneClientLifecycle`（`startUdp/stopUdp/tick/retainLeaseUntil/isBound/currentEpoch`）。
+  - **Step 6 — Fabric 接线**：
+    - `sendHandshakeRequest` 在 `compactHeaderSupported` 之后追加 `C2STail(true,true)`。
+    - `completeServerHandshake` 在 `writeBoolean(useCompactHeader)` 之后、send 之前，
+      仅当 `accepted && DataPlaneUdpServer.isBound()` 时追加 `S2CTail`（token、epoch=1、
+      BoundEndpoint 转子端点记录、protocol=Constants.CURRENT_PROTOCOL_VERSION）。
+      Failures warn，不影响主握手语义。
+    - Pre-1.20.5 和 1.20.5+ 两个 S2C receiver 中：读完原 4 字段后用
+      `buf.isReadable()` 判尾部存在，`UdpDataPlaneHandshakeTail.readS2C` 解码后
+      经 `client.execute(...)` 调用 `DataPlaneClientLifecycle.startUdp`，主线程 executor。
+    - `HassiumClientMod.JOIN` 删除旧 PoC `connectAndBind()` 硬编码；`DISCONNECT` 改为
+      `DataPlaneClientLifecycle.getInstance().stopUdp(false)`，保留全局静态计数器兼容。
+    - `DataPlaneUdpServer` 新增 public static `boundEndpoints()`：
+      返回 `List.copyOf(inst.boundEndpoints)`（未 bind 返回空列表），包私有版本保留供测试。
+    - `common/build.gradle` 中 `implementation 'moe.sdl.kcp:kcp-netty:1.6.2'` 不传递至
+      fabric（architectury-loom common 源码合并模型）；同步在 `fabric/build.gradle`
+      添加 `implementation 'moe.sdl.kcp:kcp-netty:1.6.2'`。
+    - Fix loop 1/1：`DataPlaneUdpServer.getSessionToken/boundEndpoints` 编辑误处导致
+      代码顺序错乱（INS.POST 137 破坏 getSessionToken 主体）→ 用 SWAP 重建 + DEL
+      重复段，最后精确放置新公共 API 在 getSessionToken 与 ROUTER 之间。
+      `S2CTail` 构造参数顺序是 (hasUdpDataplane, hasControlFailover, connectionEpoch,
+      protocol, token, controlEndpoints, udpEndpoints)，Fabric 端初次构造按此顺序修正。
+    - `S2C` 两个 receiver 中 `UUID` 缺导入 → 添加 `import java.util.UUID;`。
+  - Verified:
+    `common:test --tests *UdpClientBundleTest --tests *UdpDataPlaneHandshakeTailTest`
+    → BUILD SUCCESSFUL；
+    `fabric:compileJava -Pmc_ver=1.20.1` → BUILD SUCCESSFUL；
+    Task1-5 regression run → BUILD SUCCESSFUL.
+  - **Task 5: complete (no subagent review — controller path)**

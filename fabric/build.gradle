@@ -15,6 +15,7 @@ dependencies {
     implementation 'com.github.luben:zstd-jni:1.5.5-7'
     implementation 'org.lz4:lz4-java:1.8.0'
     implementation 'com.google.code.findbugs:jsr305:3.0.1'
+    implementation 'moe.sdl.kcp:kcp-netty:1.6.2'
 
     // Night Config：编译 + jiJ（Fabric 自管 toml；common 源码合并进本模块编译）
     modCompileOnly "com.electronwill.night-config:core:3.6.7"
