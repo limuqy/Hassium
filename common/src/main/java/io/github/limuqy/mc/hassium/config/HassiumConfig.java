@@ -218,6 +218,7 @@ public record HassiumConfig(
                     minPushThreads, maxPushThreads, lightStrip, List.of(), DEFAULT_DATA_PLANE);
         }
 
+        // 127.0.0.1 仅供本地开发；公网部署必须配置客户端实际可达的地址。
         private static final DataPlaneConfig DEFAULT_DATA_PLANE = new DataPlaneConfig(
                 true,
                 List.of(new UdpListenerConfig(
