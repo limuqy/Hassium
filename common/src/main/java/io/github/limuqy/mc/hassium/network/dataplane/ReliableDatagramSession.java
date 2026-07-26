@@ -84,6 +84,8 @@ public final class ReliableDatagramSession {
     private long packetsLost = 0L;         // 累计重传次数代理丢包
     private long lastXmitSnap = -1L;
     private boolean closed = false;
+    // Task 3 UDP lease：主 TCP 断开后保留会话以排干已 accepted 的帧；非 lease 期恒 false。
+    private volatile long leaseExpireAt = Long.MAX_VALUE;
 
     public ReliableDatagramSession(UUID playerId, long epoch, UdpEndpoint endpoint,
                                    InetSocketAddress remote, byte[] key, DatagramSink sink) {
@@ -393,4 +395,20 @@ public final class ReliableDatagramSession {
     long epoch() { return epoch; }
     UdpEndpoint endpoint() { return endpoint; }
     InetSocketAddress remote() { return remote; }
+
+    /** 会话是否已关闭（独立于 isWritable，幂等 close 后为 true）。 */
+    public boolean isClosed() { return closed; }
+
+    /**
+     * 标记 lease 起算与时长；非 lease 期恒为 {@code Long.MAX_VALUE}，{@code isLeaseActive} 返回 false。
+     * 务实并发读：leaseExpireAt 用 volatile，{@code markLease} 由 registry 单线程（event loop）串行调用。
+     */
+    public void markLease(long nowMs, long leaseMs) {
+        leaseExpireAt = (leaseMs <= 0L) ? Long.MAX_VALUE : nowMs + leaseMs;
+    }
+
+    /** 当前时刻是否处于 lease 期（主 TCP 已断但已 accepted 的帧仍可排干的窗口内）。 */
+    public boolean isLeaseActive(long nowMs) {
+        return nowMs < leaseExpireAt;
+    }
 }

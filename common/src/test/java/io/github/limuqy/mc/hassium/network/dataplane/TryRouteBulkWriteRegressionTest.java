@@ -20,6 +20,7 @@ import static org.junit.jupiter.api.Assertions.*;
  * </ol>
  * 任一断言失败 = 33d1cf2 类回归——纯日志重构再次吃掉相邻非日志副作用。
  */
+@org.junit.jupiter.api.Disabled("Task 3 UDP cutover: TCP PlayerChannelBundle routing 已退役；tryRouteBulk 走 DataPlaneUdpServer 占位返回 false。Task 4 router + Task 10 删除前不再是有效回归。")
 class TryRouteBulkWriteRegressionTest {
 
     private boolean prevNetworkStats;

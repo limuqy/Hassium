@@ -78,59 +78,15 @@ public class DataPlaneServer {
 
     /** 绑定所有 PoC 数据端口 */
     public static synchronized void bind() {
-        if (bound) return;
-        if (!DataPlanePoCConfig.isEnabled()) {
-            LOGGER.info("DataPlaneServer: disabled by config");
-            return;
-        }
-        bossGroup = new NioEventLoopGroup(1);
-        workerGroup = new NioEventLoopGroup(4);
-        if (DataPlanePoCConfig.isDataplaneLogEnabled()) {
-            DebugLogger.info(DebugLogger.LogType.DATAPLANE,
-                    "DataPlaneServer: binding {} data port(s) {} mode={} primaryWeight={} degradeAfterDrops={}",
-                    DataPlanePoCConfig.ENDPOINTS.length, DataPlanePoCConfig.endpointsSummary(),
-                    DataPlanePoCConfig.BULK_ROUTE_MODE, DataPlanePoCConfig.PRIMARY_WEIGHT, DataPlanePoCConfig.DEGRADE_AFTER_DROPS);
-        } else {
-            LOGGER.info("DataPlaneServer: binding {} data port(s)...", DataPlanePoCConfig.ENDPOINTS.length);
-        }
-        for (int idx = 0; idx < DataPlanePoCConfig.ENDPOINTS.length; idx++) {
-            DataPlanePoCConfig.Endpoint ep = DataPlanePoCConfig.ENDPOINTS[idx];
-            int portIdx = idx + 1; // 1-based，客户端用同样序号派生密钥
-            ServerBootstrap b = new ServerBootstrap()
-                .group(bossGroup, workerGroup)
-                .channel(NioServerSocketChannel.class)
-                .childHandler(new DataPlaneChannelInitializer(portIdx))
-                .childOption(ChannelOption.TCP_NODELAY, true);
-            try {
-                Channel ch = b.bind(ep.bindHost, ep.bindPort).sync().channel();
-                SERVER_CHANNELS.put(ep.bindPort, ch);
-                LOGGER.info("DataPlaneServer: bound to {}:{} (weight={}, portIdx={})", ep.bindHost, ep.bindPort, ep.weight, portIdx);
-            } catch (Exception e) {
-                LOGGER.error("DataPlaneServer: failed to bind {}:{}", ep.bindHost, ep.bindPort, e);
-            }
-        }
-        bound = !SERVER_CHANNELS.isEmpty();
-        LOGGER.info("DataPlaneServer: {} port(s) active", SERVER_CHANNELS.size());
+        // Task 3 UDP cutover: TCP listener 已退役；forwarding façade 委托到 {@link DataPlaneUdpServer}。
+        // 保留 synchronized 前缀以维持既有调用方契约；内部状态 {@code bound} 不再本类管理。
+        DataPlaneUdpServer.bind();
     }
 
     /** 关闭所有 Data 端口 */
     public static synchronized void shutdown() {
-        if (!bound) return;
-        LOGGER.info("DataPlaneServer: shutting down...");
-        // 关闭所有玩家 bundle
-        for (PlayerChannelBundle bundle : PLAYER_BUNDLES.values()) bundle.closeAll();
-        PLAYER_BUNDLES.clear();
-        CHANNEL_TO_PLAYER.clear();
-        // 关闭所有 server socket
-        for (Channel ch : SERVER_CHANNELS.values()) {
-            if (ch.isOpen()) ch.close();
-        }
-        SERVER_CHANNELS.clear();
-        // 关闭 event loop
-        if (workerGroup != null) workerGroup.shutdownGracefully(0, 1, TimeUnit.SECONDS);
-        if (bossGroup != null) bossGroup.shutdownGracefully(0, 1, TimeUnit.SECONDS);
-        bound = false;
-        LOGGER.info("DataPlaneServer: shutdown complete");
+        // Task 3: 委托 {@link DataPlaneUdpServer}; TCP listener 资源已不再启动。
+        DataPlaneUdpServer.shutdown();
     }
 
     public static PlayerChannelBundle getOrCreateBundle(UUID playerId) {
@@ -148,10 +104,14 @@ public class DataPlaneServer {
 
     /** 关闭指定玩家所有 Data 通道并清理 bundle（主连接断开时调用） */
     public static void onPrimaryDisconnect(UUID playerId) {
+        // Task 3: 旧 PoC 仅以 playerId 清 bundle；新 UDP 路径 epoch 由 {@link DataPlaneUdpServer#onPrimaryDisconnect} 接管。
+        // Task 3 占位参数 epoch=0，Task 6 failover handler 用真实 epoch 调用；保留旧签名兼容 PoC caller。
+        DataPlaneUdpServer.onPrimaryDisconnect(playerId, 0L, System.currentTimeMillis());
+        // 同时清旧 PoC bundle：兼容 {@link TryRouteBulkWriteRegressionTest} 的导出通道；Task 10 删。
         removeBundle(playerId);
     }
 
-    public static boolean isBound() { return bound; }
+    public static boolean isBound() { return DataPlaneUdpServer.isBound(); }
 
     /**
      * 尝试把 bulk payload 路由到玩家的 Data 通道（用其 per-channel 派生密钥加密写入）。
@@ -162,46 +122,9 @@ public class DataPlaneServer {
      * @return true = 已写入 Data 通道或已丢弃（caller 不应再走 Primary）；false = 走 Primary
      */
     public static boolean tryRouteBulk(UUID playerId, int frameType, byte[] payload) {
-        PlayerChannelBundle bundle = getBundle(playerId);
-        if (bundle == null) {
-            if (DataPlanePoCConfig.isDataplaneLogEnabled()) {
-                DebugLogger.info(DebugLogger.LogType.DATAPLANE,
-                        "DataPlaneServer: tryRouteBulk no bundle playerId={} frameType={} payloadSize={} -> Primary", playerId, frameType, payload.length);
-            }
-            return false; // 未绑定 Data 通道, 走 Primary
-        }
-        String mode = getRuntimeMode();
-        PlayerChannel target = BulkRouter.selectChannel(
-                bundle, mode,
-                DataPlanePoCConfig.PRIMARY_WEIGHT, DataPlanePoCConfig.DEGRADE_AFTER_DROPS);
-        if (target == null) {
-            if (DataPlanePoCConfig.isDataplaneLogEnabled()) {
-                DebugLogger.info(DebugLogger.LogType.DATAPLANE,
-                        "DataPlaneServer: tryRouteBulk no Data target (degraded={} mode={}) -> Primary, payloadSize={} frameType={}",
-                        bundle.degraded, mode, payload.length, frameType);
-            }
-            return false; // 路由到 Primary 或 degraded
-        }
-        if (target.aesKey == null) {
-            LOGGER.warn("DataPlaneServer: target channel has no derived key, falling back to Primary");
-            return false;
-        }
-        try {
-            byte[] frame = DataPlaneCodec.encrypt(target.aesKey, frameType, payload);
-            if (DataPlanePoCConfig.isDataplaneLogEnabled()) {
-                DebugLogger.info(DebugLogger.LogType.DATAPLANE,
-                        "DataPlaneServer: routed portIdx={} frameType={} payloadSize={} -> encFrameSize={} weight={} addr={}",
-                        target.portIdx, frameType, payload.length, frame.length, target.weight, target.channel.remoteAddress());
-            }
-            target.channel.writeAndFlush(io.netty.buffer.Unpooled.wrappedBuffer(frame))
-                    .addListener(ChannelFutureListener.FIRE_EXCEPTION_ON_FAILURE);
-            // 记录 Data 路由分流（口径 = payload 等价字节，与 Primary 侧对齐）
-            io.github.limuqy.mc.hassium.metrics.NetworkStats.recordBulkSentData(payload.length);
-            return true;
-        } catch (Exception e) {
-            LOGGER.warn("DataPlaneServer: encrypt/write failed, falling back to Primary", e);
-            return false;
-        }
+        // Task 3 UDP cutover: 旧 TCP bundle 路由已退役；委托到 {@link DataPlaneUdpServer#tryRouteBulk}。
+        // 当前返回 false 永回退 Primary；Task 4 router 接入并改其行为。
+        return DataPlaneUdpServer.tryRouteBulk(playerId, frameType, payload);
     }
 
     /** 派生 per-channel 写密钥: HKDF(BIND_TOKEN, salt=BIND_TOKEN, info=FRAME_KEY_INFO_TAG||portIdx||reqChannelId, 16) */
