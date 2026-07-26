@@ -86,14 +86,29 @@ public final class FabricTomlConfigIO {
     }
 
     private static HassiumConfig loadServer() throws java.io.IOException {
+        return loadServerFile(serverPath());
+    }
+    static HassiumConfig loadServer(Path configRoot) throws java.io.IOException {
+        return loadServerFile(configRoot.resolve(Constants.CONFIG_SERVER_FILE));
+    }
+
+    static void saveServer(Path configRoot, HassiumConfig config) {
+        try {
+            Files.createDirectories(configRoot.resolve(Constants.CONFIG_SERVER_FILE).getParent());
+        } catch (java.io.IOException e) {
+            throw new IllegalStateException("无法创建临时服务端配置目录", e);
+        }
+        writeServer(configRoot.resolve(Constants.CONFIG_SERVER_FILE), config.storage(), config.serverNetwork(),
+                config.compat(), config.debug());
+    }
+
+    private static HassiumConfig loadServerFile(Path server) throws java.io.IOException {
         HassiumConfig.StorageConfig storage = HassiumConfig.StorageConfig.DEFAULT;
         HassiumConfig.ServerNetworkConfig serverNet = HassiumConfig.ServerNetworkConfig.DEFAULT;
         HassiumConfig.CompatConfig compat = HassiumConfig.CompatConfig.DEFAULT;
         HassiumConfig.DebugConfig debug = HassiumConfig.DebugConfig.DEFAULT;
 
-        Path server = serverPath();
         Files.createDirectories(server.getParent());
-
         if (Files.isRegularFile(server)) {
             try (CommentedFileConfig cfg = open(server)) {
                 cfg.load();
@@ -107,15 +122,8 @@ public final class FabricTomlConfigIO {
         } else {
             writeServer(server, storage, serverNet, compat, debug);
         }
-
-        return new HassiumConfig(
-                storage,
-                HassiumConfig.ClientCacheConfig.DEFAULT,
-                HassiumConfig.ClientNetworkConfig.DEFAULT,
-                serverNet,
-                compat,
-                debug
-        );
+        return new HassiumConfig(storage, HassiumConfig.ClientCacheConfig.DEFAULT,
+                HassiumConfig.ClientNetworkConfig.DEFAULT, serverNet, compat, debug);
     }
 
     /**
@@ -283,7 +291,9 @@ public final class FabricTomlConfigIO {
                 getBool(cfg, "network.dynamicThreadPoolEnabled", d.dynamicThreadPoolEnabled()),
                 getInt(cfg, "network.minPushThreads", d.minPushThreads()),
                 getInt(cfg, "network.maxPushThreads", d.maxPushThreads()),
-                getBool(cfg, "network.lightStrip", d.lightStrip())
+                getBool(cfg, "network.lightStrip", d.lightStrip()),
+                readReachableEndpoints(cfg, "network.controlReachableEndpoints", "network.controlReachableEndpoints"),
+                readDataPlane(cfg, d.dataPlane())
         );
     }
 
@@ -308,6 +318,9 @@ public final class FabricTomlConfigIO {
         set(cfg, "network.minPushThreads", n.minPushThreads(), "动态池最小线程数（仅服务端）");
         set(cfg, "network.maxPushThreads", n.maxPushThreads(), "动态池最大线程数（仅服务端）");
         set(cfg, "network.lightStrip", n.lightStrip(), "是否启用光照剥离");
+        writeReachableEndpoints(cfg, "network.controlReachableEndpoints", n.controlReachableEndpoints(),
+                "TCP 重连可达端点；仅用于客户端重连候选");
+        writeDataPlane(cfg, n.dataPlane());
     }
 
     private static HassiumConfig.CompatConfig readCompat(CommentedConfig cfg) {
@@ -407,5 +420,121 @@ public final class FabricTomlConfigIO {
             return Set.copyOf(out);
         }
         return def;
+    }
+    private static List<HassiumConfig.ReachableEndpoint> readReachableEndpoints(
+            CommentedConfig cfg, String path, String fieldName
+    ) {
+        Object value = cfg.get(path);
+        if (!(value instanceof List<?> entries)) {
+            return List.of();
+        }
+        List<HassiumConfig.ReachableEndpoint> endpoints = new ArrayList<>();
+        for (Object entry : entries) {
+            if (!(entry instanceof CommentedConfig endpoint)) {
+                LOGGER.warn("Hassium: 忽略 {} 中的非表端点", fieldName);
+                continue;
+            }
+            try {
+                endpoints.add(new HassiumConfig.ReachableEndpoint(
+                        getString(endpoint, "host", ""), getInt(endpoint, "port", -1),
+                        getInt(endpoint, "priority", -1)));
+            } catch (IllegalArgumentException e) {
+                LOGGER.warn("Hassium: 忽略 {} 中的无效端点: {}", fieldName, e.getMessage());
+            }
+        }
+        try {
+            return DataPlaneEndpointConfig.normalizeReachableEndpoints(endpoints, 8, fieldName);
+        } catch (IllegalArgumentException e) {
+            LOGGER.warn("Hassium: 忽略 {}: {}", fieldName, e.getMessage());
+            return List.of();
+        }
+    }
+
+    private static HassiumConfig.DataPlaneConfig readDataPlane(
+            CommentedConfig cfg, HassiumConfig.DataPlaneConfig defaults
+    ) {
+        boolean enabled = getBool(cfg, "network.dataPlane.enabled", defaults.enabled());
+        long controlStallMs = getPositiveLong(cfg, "network.dataPlane.controlStallMs", defaults.controlStallMs());
+        long failoverExpiryMs = getPositiveLong(cfg, "network.dataPlane.failoverExpiryMs", defaults.failoverExpiryMs());
+        long recoveryWindowMs = getPositiveLong(cfg, "network.dataPlane.recoveryWindowMs", defaults.recoveryWindowMs());
+        List<HassiumConfig.UdpListenerConfig> listeners = readUdpListeners(cfg);
+        if (listeners.isEmpty()) {
+            if (enabled) {
+                LOGGER.warn("Hassium: UDP data-plane 没有有效 listener，回退默认 data-plane 配置");
+                return defaults;
+            }
+            listeners = defaults.udpListeners();
+        }
+        try {
+            return new HassiumConfig.DataPlaneConfig(enabled, listeners, controlStallMs, failoverExpiryMs, recoveryWindowMs);
+        } catch (IllegalArgumentException e) {
+            LOGGER.warn("Hassium: UDP data-plane 配置无效，回退默认: {}", e.getMessage());
+            return defaults;
+        }
+    }
+
+    private static List<HassiumConfig.UdpListenerConfig> readUdpListeners(CommentedConfig cfg) {
+        Object value = cfg.get("network.dataPlane.udpListeners");
+        if (!(value instanceof List<?> entries)) {
+            return List.of();
+        }
+        List<HassiumConfig.UdpListenerConfig> listeners = new ArrayList<>();
+        for (Object entry : entries) {
+            if (!(entry instanceof CommentedConfig listener)) {
+                LOGGER.warn("Hassium: 忽略 network.dataPlane.udpListeners 中的非表 listener");
+                continue;
+            }
+            try {
+                listeners.add(new HassiumConfig.UdpListenerConfig(
+                        getString(listener, "bindHost", ""), getInt(listener, "bindPort", -1),
+                        getInt(listener, "weight", -1),
+                        readReachableEndpoints(listener, "reachableEndpoints",
+                                "network.dataPlane.udpListeners.reachableEndpoints")));
+            } catch (IllegalArgumentException e) {
+                LOGGER.warn("Hassium: 忽略无效 UDP listener: {}", e.getMessage());
+            }
+        }
+        return listeners;
+    }
+
+    private static long getPositiveLong(CommentedConfig cfg, String path, long defaults) {
+        long value = getLong(cfg, path, defaults);
+        return value > 0 ? value : defaults;
+    }
+
+    private static void writeDataPlane(CommentedConfig cfg, HassiumConfig.DataPlaneConfig dataPlane) {
+        set(cfg, "network.dataPlane.enabled", dataPlane.enabled(), "是否启用 UDP/KCP Data Plane");
+        set(cfg, "network.dataPlane.controlStallMs", dataPlane.controlStallMs(), "控制 TCP 静默多久后允许申请 failover（ms）");
+        set(cfg, "network.dataPlane.failoverExpiryMs", dataPlane.failoverExpiryMs(), "服务端 failover permit 有效期（ms）");
+        set(cfg, "network.dataPlane.recoveryWindowMs", dataPlane.recoveryWindowMs(), "客户端候选重连窗口（ms）");
+        cfg.remove("network.dataPlane.udpListeners");
+        List<CommentedConfig> listeners = new ArrayList<>();
+        for (HassiumConfig.UdpListenerConfig listener : dataPlane.udpListeners()) {
+            CommentedConfig table = cfg.createSubConfig();
+            table.set("bindHost", listener.bindHost());
+            table.set("bindPort", listener.bindPort());
+            table.set("weight", listener.weight());
+            writeReachableEndpoints(table, "reachableEndpoints", listener.reachableEndpoints(),
+                    "客户端可达 UDP 端点；bindHost 绝不下发");
+            listeners.add(table);
+        }
+        cfg.setComment("network.dataPlane.udpListeners", "UDP listener；bind 仅限服务端本机，reachable 用于客户端连接");
+        cfg.set("network.dataPlane.udpListeners", listeners);
+    }
+
+    private static void writeReachableEndpoints(
+            CommentedConfig cfg, String path, List<HassiumConfig.ReachableEndpoint> endpoints, String comment
+    ) {
+        cfg.remove(path);
+        List<CommentedConfig> tables = new ArrayList<>();
+        for (HassiumConfig.ReachableEndpoint endpoint : endpoints) {
+            CommentedConfig table = cfg.createSubConfig();
+            table.set("host", endpoint.host());
+            table.set("port", endpoint.port());
+            table.set("priority", endpoint.priority());
+            tables.add(table);
+        }
+        cfg.setComment(path, comment);
+        cfg.set(path, tables);
     }
 }

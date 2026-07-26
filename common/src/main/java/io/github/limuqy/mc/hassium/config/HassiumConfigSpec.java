@@ -3,6 +3,8 @@ package io.github.limuqy.mc.hassium.config;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 #if MC_VER < MC_1_20_2
 import net.minecraftforge.common.ForgeConfigSpec;
@@ -31,6 +33,7 @@ public final class HassiumConfigSpec {
 
     public static final Client CLIENT;
     public static final Server SERVER;
+    private static final Logger LOGGER = LoggerFactory.getLogger("Hassium/Config");
 
     static {
 #if MC_VER < MC_1_20_2
@@ -104,7 +107,9 @@ public final class HassiumConfigSpec {
                         SERVER.networkDynamicThreadPoolEnabled.get(),
                         SERVER.networkMinPushThreads.get(),
                         SERVER.networkMaxPushThreads.get(),
-                        SERVER.networkLightStrip.get()
+                        SERVER.networkLightStrip.get(),
+                        decodeReachableEndpoints(SERVER.networkControlReachableEndpoints.get()),
+                        decodeDataPlaneConfig()
                 ),
                 new HassiumConfig.CompatConfig(
                         SERVER.compatRequireClientMod.get(),
@@ -185,6 +190,14 @@ public final class HassiumConfigSpec {
         SERVER.networkMinPushThreads.set(serverNet.minPushThreads());
         SERVER.networkMaxPushThreads.set(serverNet.maxPushThreads());
         SERVER.networkLightStrip.set(serverNet.lightStrip());
+        SERVER.networkControlReachableEndpoints.set(serverNet.controlReachableEndpoints().stream()
+                .map(DataPlaneEndpointConfig::encodeReachable).toList());
+        SERVER.networkDataPlaneEnabled.set(serverNet.dataPlane().enabled());
+        SERVER.networkDataPlaneUdpListeners.set(serverNet.dataPlane().udpListeners().stream()
+                .map(DataPlaneEndpointConfig::encodeListener).toList());
+        SERVER.networkDataPlaneControlStallMs.set(serverNet.dataPlane().controlStallMs());
+        SERVER.networkDataPlaneFailoverExpiryMs.set(serverNet.dataPlane().failoverExpiryMs());
+        SERVER.networkDataPlaneRecoveryWindowMs.set(serverNet.dataPlane().recoveryWindowMs());
 
         // ---- SERVER: compat.* ----
         SERVER.compatRequireClientMod.set(compat.requireClientMod());
@@ -205,6 +218,44 @@ public final class HassiumConfigSpec {
         }
         if (SERVER_SPEC.isLoaded()) {
             SERVER_SPEC.save();
+        }
+    }
+    private static List<HassiumConfig.ReachableEndpoint> decodeReachableEndpoints(List<? extends String> encoded) {
+        List<HassiumConfig.ReachableEndpoint> endpoints = new ArrayList<>();
+        for (String entry : encoded) {
+            try {
+                endpoints.add(DataPlaneEndpointConfig.decodeReachable(entry));
+            } catch (IllegalArgumentException e) {
+                LOGGER.warn("Hassium: 忽略无效 control reachable endpoint: {}", e.getMessage());
+            }
+        }
+        return DataPlaneEndpointConfig.normalizeReachableEndpoints(endpoints, 4, "control reachable endpoints");
+    }
+
+    private static HassiumConfig.DataPlaneConfig decodeDataPlaneConfig() {
+        HassiumConfig.DataPlaneConfig defaults = HassiumConfig.ServerNetworkConfig.DEFAULT.dataPlane();
+        boolean enabled = SERVER.networkDataPlaneEnabled.get();
+        List<HassiumConfig.UdpListenerConfig> listeners = new ArrayList<>();
+        for (String entry : SERVER.networkDataPlaneUdpListeners.get()) {
+            try {
+                listeners.add(DataPlaneEndpointConfig.decodeListener(entry));
+            } catch (IllegalArgumentException e) {
+                LOGGER.warn("Hassium: 忽略无效 UDP listener: {}", e.getMessage());
+            }
+        }
+        if (enabled && listeners.isEmpty()) {
+            LOGGER.warn("Hassium: UDP data-plane 没有有效 listener，回退默认配置");
+            return defaults;
+        }
+        try {
+            return new HassiumConfig.DataPlaneConfig(enabled,
+                    listeners.isEmpty() ? defaults.udpListeners() : listeners,
+                    SERVER.networkDataPlaneControlStallMs.get(),
+                    SERVER.networkDataPlaneFailoverExpiryMs.get(),
+                    SERVER.networkDataPlaneRecoveryWindowMs.get());
+        } catch (IllegalArgumentException e) {
+            LOGGER.warn("Hassium: UDP data-plane 配置无效，回退默认: {}", e.getMessage());
+            return defaults;
         }
     }
 
@@ -417,6 +468,12 @@ public final class HassiumConfigSpec {
         public final ForgeConfigSpec.IntValue networkMinPushThreads;
         public final ForgeConfigSpec.IntValue networkMaxPushThreads;
         public final ForgeConfigSpec.BooleanValue networkLightStrip;
+        public final ForgeConfigSpec.ConfigValue<List<? extends String>> networkControlReachableEndpoints;
+        public final ForgeConfigSpec.BooleanValue networkDataPlaneEnabled;
+        public final ForgeConfigSpec.ConfigValue<List<? extends String>> networkDataPlaneUdpListeners;
+        public final ForgeConfigSpec.LongValue networkDataPlaneControlStallMs;
+        public final ForgeConfigSpec.LongValue networkDataPlaneFailoverExpiryMs;
+        public final ForgeConfigSpec.LongValue networkDataPlaneRecoveryWindowMs;
 
         // ---- compat.* ----
         public final ForgeConfigSpec.BooleanValue compatRequireClientMod;
@@ -458,6 +515,12 @@ public final class HassiumConfigSpec {
         public final ModConfigSpec.IntValue networkMinPushThreads;
         public final ModConfigSpec.IntValue networkMaxPushThreads;
         public final ModConfigSpec.BooleanValue networkLightStrip;
+        public final ModConfigSpec.ConfigValue<List<? extends String>> networkControlReachableEndpoints;
+        public final ModConfigSpec.BooleanValue networkDataPlaneEnabled;
+        public final ModConfigSpec.ConfigValue<List<? extends String>> networkDataPlaneUdpListeners;
+        public final ModConfigSpec.LongValue networkDataPlaneControlStallMs;
+        public final ModConfigSpec.LongValue networkDataPlaneFailoverExpiryMs;
+        public final ModConfigSpec.LongValue networkDataPlaneRecoveryWindowMs;
 
         // ---- compat.* ----
         public final ModConfigSpec.BooleanValue compatRequireClientMod;
@@ -596,6 +659,26 @@ public final class HassiumConfigSpec {
                     .comment("光照剥离：服务端控制是否发包时剥离 LightData（默认 true）")
                     .translation("hassium.configuration.network.lightStrip")
                     .define("lightStrip", true);
+            networkControlReachableEndpoints = builder
+                    .comment("TCP 重连可达端点：host,port,priority；仅下发给客户端重连候选")
+                    .defineList("controlReachableEndpoints", ArrayList::new, o -> o instanceof String);
+            HassiumConfig.DataPlaneConfig dataPlaneDefaults = HassiumConfig.ServerNetworkConfig.DEFAULT.dataPlane();
+            networkDataPlaneEnabled = builder
+                    .comment("是否启用 UDP/KCP Data Plane")
+                    .define("dataPlane.enabled", dataPlaneDefaults.enabled());
+            networkDataPlaneUdpListeners = builder
+                    .comment("UDP listener：bindHost,bindPort,weight;reachableHost,reachablePort,priority;...")
+                    .defineList("dataPlane.udpListeners", () -> dataPlaneDefaults.udpListeners().stream()
+                            .map(DataPlaneEndpointConfig::encodeListener).toList(), o -> o instanceof String);
+            networkDataPlaneControlStallMs = builder
+                    .comment("控制 TCP 静默多久后允许申请 failover（ms）")
+                    .defineInRange("dataPlane.controlStallMs", dataPlaneDefaults.controlStallMs(), 1L, Long.MAX_VALUE);
+            networkDataPlaneFailoverExpiryMs = builder
+                    .comment("服务端 failover permit 有效期（ms）")
+                    .defineInRange("dataPlane.failoverExpiryMs", dataPlaneDefaults.failoverExpiryMs(), 1L, Long.MAX_VALUE);
+            networkDataPlaneRecoveryWindowMs = builder
+                    .comment("客户端候选重连窗口（ms）")
+                    .defineInRange("dataPlane.recoveryWindowMs", dataPlaneDefaults.recoveryWindowMs(), 1L, Long.MAX_VALUE);
             builder.pop();
 
             // ====== compat ======

@@ -303,6 +303,14 @@ public class HassiumConfigService {
         return config.clientCache().targetCacheSizeBytes();
     }
 
+    public HassiumConfig.DataPlaneConfig getDataPlaneConfig() {
+        return config.serverNetwork().dataPlane();
+    }
+
+    public java.util.List<HassiumConfig.ReachableEndpoint> getControlReachableEndpoints() {
+        return config.serverNetwork().controlReachableEndpoints();
+    }
+
     public int getMinCleanupBatchSize() {
         return config.clientCache().minCleanupBatchSize();
     }
