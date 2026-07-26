@@ -94,5 +94,12 @@ class UdpFrameCodecTest {
         assertThrows(IllegalArgumentException.class,
                 () -> UdpFrameCodec.seal(key, UdpFrameCodec.Direction.SERVER_TO_CLIENT,
                         -1L, DataPlaneFrame.TYPE_BIND_ACK, new byte[0]));
+
+        assertThrows(IllegalArgumentException.class,
+                () -> UdpFrameCodec.seal(key, UdpFrameCodec.Direction.SERVER_TO_CLIENT,
+                        1L, 256, new byte[0]));
+        assertThrows(IllegalArgumentException.class,
+                () -> UdpFrameCodec.seal(key, UdpFrameCodec.Direction.SERVER_TO_CLIENT,
+                        1L, 0, new byte[0]));
     }
 }
