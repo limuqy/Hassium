@@ -10,6 +10,7 @@ Smaller world saves and bandwidth than vanilla, local chunk reuse, and smoother 
 [简体中文](README.md) · **English**
 
 > Repository: [github.com/limuqy/Hassium](https://github.com/limuqy/Hassium)
+> User documentation: [GitHub Wiki](https://github.com/limuqy/Hassium/wiki/Home-en) · [简体中文 Wiki](https://github.com/limuqy/Hassium/wiki)
 
 ![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)
 ![Minecraft](https://img.shields.io/badge/Minecraft-1.20.1--1.21.11-green.svg)
@@ -142,8 +143,24 @@ JDK 17+ (newer MC versions may need a higher JDK — see `versionProperties`).
 Developer entry points: [`CLAUDE.md`](CLAUDE.md), [`AGENTS.md`](AGENTS.md).
 
 ---
+## User documentation
 
-## Docs
+For installation, every configuration option, commands, feature guides, compatibility, and diagnostics, see the [GitHub Wiki](https://github.com/limuqy/Hassium/wiki/Home-en).
+
+| Page | Content |
+| --- | --- |
+| [Installation](https://github.com/limuqy/Hassium/wiki/Installation-en) | Download, dependencies, and loader notes |
+| [Configuration](https://github.com/limuqy/Hassium/wiki/Configuration-en) | Complete option reference and GUI paths |
+| [Commands](https://github.com/limuqy/Hassium/wiki/Commands-en) | `/hassium` and `/hassiumc` reference |
+| [Features](https://github.com/limuqy/Hassium/wiki/Features-en) | Cache, section delta, light optimization, and more |
+| [Beyond-view render](https://github.com/limuqy/Hassium/wiki/Beyond-View-Render-en) · [World export](https://github.com/limuqy/Hassium/wiki/World-Export-en) | Guides for both client features |
+| [Compatibility](https://github.com/limuqy/Hassium/wiki/Compatibility-en) · [Troubleshooting](https://github.com/limuqy/Hassium/wiki/Troubleshooting-en) | Coexistence with other mods and diagnostic paths |
+| [Data Plane and Failover](https://github.com/limuqy/Hassium/wiki/Data-Plane-and-Failover-en) | Server operations for UDP/KCP data plane |
+
+---
+
+
+## Developer documentation
 
 | Doc | Content |
 | --- | --- |
