@@ -4,6 +4,7 @@ import io.github.limuqy.mc.hassium.cache.client.ClientLifecycleHelper;
 import io.github.limuqy.mc.hassium.client.ClientSmokeTest;
 import io.github.limuqy.mc.hassium.network.DictionaryManager;
 import io.github.limuqy.mc.hassium.network.NeoForgeNetworkManager;
+import io.github.limuqy.mc.hassium.network.dataplane.DataPlaneClientLifecycle;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -110,6 +111,9 @@ public class HassiumNeoForgeClient {
         @SubscribeEvent
         public void onPlayerLoggedOut(ClientPlayerNetworkEvent.LoggingOut event) {
             ClientLifecycleHelper.cleanupOnDisconnect();
+            // 关闭多通道数据面（由握手响应建立的 ClientBundle）— feature 侧 lifecycle 改为 instance API
+            // §14 v2 后续重建：此处 LoggingOut 不在 failover 恢复场景，传 false 完全掉线/收尾
+            io.github.limuqy.mc.hassium.network.dataplane.DataPlaneClientLifecycle.getInstance().stopUdp(false);
             // 延后到下一 tick：等世界拆除；与 MixinMinecraft TAIL 幂等兜底
             net.minecraft.client.Minecraft.getInstance().execute(ClientLifecycleHelper::finalizeDisconnect);
         }

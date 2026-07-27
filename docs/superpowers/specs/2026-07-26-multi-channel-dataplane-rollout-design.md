@@ -27,8 +27,8 @@ Scope: **Post-PoC 全面铺开**（Fabric + NeoForge × 九段锚点）
 | 真异步 exclusive 排队 | 保持 PoC 的 drop+degraded 简化 |
 | 改 `MixinConnection` 全包分流 | 永不做 |
 | 改 `ServerChunkPushManager` 方法体 | 路由仍在各加载器 `ChunkSender` 入口 |
-| bump `CURRENT_PROTOCOL_VERSION` | 用尾部 append + `buf.isReadable()` 向后兼容，不 bump |
-| 真实玩家 UUID 绑定 | 仍用 `pseudoPlayerId()`；多玩家绑定另期 |
+| ~~bump `CURRENT_PROTOCOL_VERSION`~~ → **[SUPERSEDED 2026-07-26]** 本轮改为 Goal：见 §14 supersede 项；硬切换不兼容，protocol 1→2 | 后续 §14 第 2 步要做硬版本协商，兼容靠双方都升 |
+| ~~真实玩家 UUID 绑定~~ → **[SUPERSEDED 2026-07-26]** 本轮改为 Goal：见 §14 supersede 项；BindRequest 携带 16B UUID，`Bundle key` 用真实玩家 UUID | 后续 §14 第 2 步要做多玩家 bundle 隔离 |
 
 ## 2. Locked decisions（用户拍板）
 
@@ -37,7 +37,7 @@ Scope: **Post-PoC 全面铺开**（Fabric + NeoForge × 九段锚点）
 | 范围矩阵 | 仅 Fabric + NeoForge 九段锚点（约 18 组合） |
 | 端点协商 | 端点仍 `DataPlanePoCConfig.ENDPOINTS` 静态；token 服务端启动随机生成，经 HandshakeS2C 尾部下发 |
 | 冒烟覆盖 | **全版本全跑 DataplanePhase**（bind / WRR / kill / degraded / Primary fallback） |
-| 协议兼容 | **不 bump** protocolVersion；HandshakeC2S/S2C 仅尾部 append；旧端 `isReadable()==false` 时数据面关闭 |
+| 协议兼容 | ~~不 bump~~ protocolVersion ~~；HandshakeC2S/S2C 仅尾部 append~~ **[SUPERSEDED 2026-07-26]**：本轮 bump `Constants.CURRENT_PROTOCOL_VERSION` 1→2，HandshakeC2S/S2C 仍尾部 append；新 BindRequest payload 含真实玩家 UUID。旧客户端（protocol=1）握手被拒。见 §14 supersede 项 |
 | Primary 路径 | `BulkRouter` / `tryRouteBulk` 返回 false → 继续原版 Primary 发送，行为不变 |
 
 ## 3. Architecture
@@ -196,7 +196,9 @@ if (hasDataPlane && token != null) {
 | 新 | 新 + multiChannel 双方 true | 数据面启用 |
 | 新 | 新 + 任一方 false / enabled=false | hasDataPlane=false → Primary only |
 
-**不 bump `Constants.CURRENT_PROTOCOL_VERSION`。** 旧字段顺序与语义零改动。
+~~**不 bump `Constants.CURRENT_PROTOCOL_VERSION`。** 旧字段顺序与语义零改动。~~
+
+**[SUPERSEDED 2026-07-26]** 本轮 bump `Constants.CURRENT_PROTOCOL_VERSION` 1→2，旧端 protocol=1 被 Handshake 双向版本协商拒掉。HandshakeC2S/S2C 字段顺序维持不变（尾部 append 不破坏旧主连接握手前 5 字段），但 BindRequest payload schema 改为 `token[16] + uuid[16] + protocol(VarInt=2) + channelId(VarInt)`——旧 Data 客户端不知道写 UUID、服务端按短长度直接 BindFail 关 Data。仅「新版客户端 + 新版服务端」可上数据面；旧↔旧、旧↔新、新↔旧都退化为「无数据面 + Primary」。见 §14 supersede 项。
 
 ### 4.4 hasDataPlane 判定
 
@@ -392,10 +394,8 @@ Forge 不在矩阵内。
 | 客户端 multiChannelSupported=false | 握手 hasDataPlane=false |
 | token 未下发 / Bind mismatch | Bind fail → close Data channel；Primary 继续 |
 | 全部 Data down + share | tryRouteBulk false → Primary |
-| 全部 Data down + exclusive | drop×3 → degraded → Primary |
-| Primary disconnect | 清 bundle；客户端 shutdown |
-| 旧客户端连新服务端 | 忽略尾部；无数据面；Primary 正常 |
-| 新客户端连旧服务端 | 无尾部；无数据面；Primary 正常 |
+| ~~旧客户端连新服务端~~ → **[SUPERSEDED]** protocol=1 被新服务端 HandshakeVersionCheck 拒，握手失败 | ~~忽略尾部；无数据面；Primary 正常~~ |
+| ~~新客户端连旧服务端~~ → **[SUPERSEDED]** protocol=2 被旧服务端拒绝，握手失败 | ~~无尾部；无数据面；Primary 正常~~ |
 | Data 端口全部 bind 失败 | hasDataPlane=false；Primary only |
 
 ## 12. Red lines（继承项目硬约束）
@@ -419,10 +419,10 @@ Forge 不在矩阵内。
 
 - Forge 同构
 - `server.toml [network.dataPlane]` 正式配置
-- 真实 player UUID ↔ bundle 绑定
+- ~~真实 player UUID ↔ bundle 绑定~~ **[SUPERSEDED 2026-07-26，本轮已纳入 Goal]**
 - SectionDelta → BulkRouter
 - 公网 endpoint 发现 / NAT
-- protocol version bump 与严格版本协商
+- ~~protocol version bump 与严格版本协商~~ **[SUPERSEDED 2026-07-26，本轮已纳入 Goal]**
 - exclusive 真异步排队
 
 ---
@@ -432,7 +432,6 @@ Forge 不在矩阵内。
 Brainstorming 2026-07-26:
 
 1. 范围：仅 Fabric + NeoForge 九段  
-2. 端点：静态配置；token 服务端启动随机 + 握手下发  
+4. ~~协议：尾部 append，不 bump protocolVersion~~ **[SUPERSEDED 2026-07-26]**：本轮 bump ~Constants.CURRENT_PROTOCOL_VERSION~ 1→2 + BindRequest payload 含真实玩家 UUID（硬切换不兼容）；详见后续 §14 supersede 设计差分文档 `2026-07-26-multi-channel-dataplane-uuid-rollout-design.md` |
 3. 冒烟：全版本全跑 DataplanePhase  
-4. 协议：尾部 append，不 bump protocolVersion  
 5. HKDF/Bind 全链路迁出静态 `BIND_TOKEN`，统一 sessionToken  

@@ -265,6 +265,12 @@ public interface HassiumMetrics {
 
     /** 经 Data 通道发送的 bulk 帧累计字节数。 */
     long getBulkBytesData();
+
+    /** §14 第 4 步：send-side per-portIdx 累计帧数（1-based 端点序号）；不存在则 0。 */
+    long getBulkSentFramesByPort(int portIdx);
+
+    /** §14 第 4 步：send-side per-portIdx 累计字节数；不存在则 0。 */
+    long getBulkSentBytesByPort(int portIdx);
     /** Data 通道分流比例（占总帧数的百分比）。 */
     default double getBulkDataSharePercent() {
         long total = getBulkFramesPrimary() + getBulkFramesData();

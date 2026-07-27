@@ -127,6 +127,28 @@ public class NetworkStats {
         metrics.recordBulkSentData(bytes);
     }
 
+    /**
+     * 记录经 Data 通道某端口发送的 bulk 帧（§14 第 4 步 send-side per-portIdx）。
+     * 与 {@link #recordBulkSentData(long)} 同触发点，仅补 per-portIdx 维度。
+     *
+     * @param portIdx 1-based Data 端点序号
+     * @param bytes   payload 长度（与 recordBulkSentData 同口径）
+     */
+    public static void recordBulkSentDataByPort(int portIdx, long bytes) {
+        if (!enabled) return;
+        metrics.recordBulkSentDataByPort(portIdx, bytes);
+    }
+
+    /** 取 send-side per-portIdx 累计帧数；不存在则 0。 */
+    public static long getBulkSentFramesByPort(int portIdx) {
+        return enabled ? metrics.getBulkSentFramesByPort(portIdx) : 0L;
+    }
+
+    /** 取 send-side per-portIdx 累计字节数；不存在则 0。 */
+    public static long getBulkSentBytesByPort(int portIdx) {
+        return enabled ? metrics.getBulkSentBytesByPort(portIdx) : 0L;
+    }
+
     // ===== 客户端埋点 =====
 
     /**

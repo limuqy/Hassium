@@ -4,6 +4,8 @@ import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.config.HassiumConfigSpec;
 import io.github.limuqy.mc.hassium.network.ChunkSender;
 import io.github.limuqy.mc.hassium.network.NeoForgeNetworkManager;
+import io.github.limuqy.mc.hassium.network.dataplane.DataPlaneFrame;
+import io.github.limuqy.mc.hassium.network.dataplane.DataPlaneServer;
 
 #if MC_VER < MC_1_20_2
 import net.minecraftforge.fml.ModLoadingContext;
@@ -67,7 +69,19 @@ public class HassiumNeoForge {
 
         CommonClass.init();
 
-        ChunkSender.setInstance(NeoForgeNetworkManager::sendCompressedChunk);
+        ChunkSender.setInstance((player, compressed) -> {
+            // 路由器在数据面未启用、未绑定或无可用会话时返回 false，保持 Primary 回退。
+            byte[] payload = compressed.encode();
+            if (DataPlaneServer.tryRouteBulk(
+                    player.getUUID(),
+                    DataPlaneFrame.TYPE_BULK_COMPRESSED_CHUNK,
+                    payload)) {
+                return; // 已走 Data 通道
+            }
+            // 未走 Data 通道 → 走 Primary，记分流统计（口径 = encode() 总长度，与 Data 侧对齐）
+            io.github.limuqy.mc.hassium.metrics.NetworkStats.recordBulkSentPrimary(payload.length);
+            NeoForgeNetworkManager.sendCompressedChunk(player, compressed);
+        });
         LOGGER.info("Hassium: ChunkSender registered for NeoForge");
 
 #if MC_VER < MC_1_20_4
