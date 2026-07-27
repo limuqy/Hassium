@@ -24,17 +24,30 @@ import org.junit.jupiter.api.Test;
  */
 final class DataPlaneUdpServerBindTest {
 
-    private static DataPlanePoCConfig.Endpoint ep(String bindHost, int bindPort, int weight) {
-        // address 仅用于客户端连接的「对外标识」，本测试不验证客户端反连，故与 bindHost 一致
-        return new DataPlanePoCConfig.Endpoint(bindHost, bindPort, weight, bindHost, bindPort);
+    private static io.github.limuqy.mc.hassium.config.HassiumConfig.UdpListenerConfig listener(
+            String bindHost, int bindPort, int weight,
+            io.github.limuqy.mc.hassium.config.HassiumConfig.ReachableEndpoint... endpoints
+    ) {
+        return new io.github.limuqy.mc.hassium.config.HassiumConfig.UdpListenerConfig(
+                bindHost, bindPort == 0 ? reserveFreeUdpPort() : bindPort, weight, java.util.List.of(endpoints));
     }
 
-    /** 用端口 0 全部绑定；server 的 NioDatagramChannel 解析出实际端口后写入 endpointId。 */
-    private DataPlanePoCConfig.Endpoint[] eps() {
-        return new DataPlanePoCConfig.Endpoint[]{
-                ep("127.0.0.1", 0, 10),
-                ep("127.0.0.1", 0, 20),
-        };
+    private static int reserveFreeUdpPort() {
+        try (DatagramSocket socket = new DatagramSocket(0)) {
+            return socket.getLocalPort();
+        } catch (java.net.SocketException e) {
+            throw new AssertionError("cannot reserve UDP test port", e);
+        }
+    }
+
+    /** 测试夹具先保留临时 UDP 端口；服务端 bind 后以实际端口发布，但绝不泄露 bindHost。 */
+    private java.util.List<io.github.limuqy.mc.hassium.config.HassiumConfig.UdpListenerConfig> listeners() {
+        return java.util.List.of(
+                listener("127.0.0.1", 0, 10,
+                        new io.github.limuqy.mc.hassium.config.HassiumConfig.ReachableEndpoint("edge-a.example", 41001, 100),
+                        new io.github.limuqy.mc.hassium.config.HassiumConfig.ReachableEndpoint("edge-b.example", 42001, 80)),
+                listener("127.0.0.1", 0, 20,
+                        new io.github.limuqy.mc.hassium.config.HassiumConfig.ReachableEndpoint("edge-c.example", 42001, 100)));
     }
 
     private static byte[] validBindRequest(byte[] token, UUID player, long epoch, int endpointId, int channelId) {
@@ -44,7 +57,7 @@ final class DataPlaneUdpServerBindTest {
     /** 端口 0 由 OS 分配；实际 bound port 从 {@link DataPlaneUdpServer#getBoundEndpoints()} 拿。 */
     @Test
     void everyConfiguredEndpointBindsAndAcceptsOnlyMatchingBindEndpoint() throws Exception {
-        DataPlaneUdpServer server = DataPlaneUdpServer.forTest(eps());
+        DataPlaneUdpServer server = DataPlaneUdpServer.forTest(listeners());
         try {
             server.bind();
             assertTrue(server.isBound());
@@ -53,17 +66,17 @@ final class DataPlaneUdpServerBindTest {
             DataPlaneUdpServer.BoundEndpoint first = server.getBoundEndpoints().get(0);
             DataPlaneUdpServer.BoundEndpoint second = server.getBoundEndpoints().get(1);
             // 实际 bind port 由 OS 决定，不全是 0
-            assertTrue(first.bindPort() > 0, "OS-assigned port must be positive");
-            assertTrue(second.bindPort() > 0);
+            assertTrue(first.boundPort() > 0, "OS-assigned port must be positive");
+            assertTrue(second.boundPort() > 0);
 
             // 对每个 endpoint 发一封「正确 endpointId」的 BindRequest，server 应建立会话
             byte[] token = server.getSessionToken();
             UUID alice = new UUID(0xA11CE_A11CEL, 7L);
             long epoch = 1L;
 
-            sendDatagram("127.0.0.1", first.bindPort(),
+            sendDatagram("127.0.0.1", first.boundPort(),
                     validBindRequest(token, alice, epoch, first.endpointId(), 1));
-            sendDatagram("127.0.0.1", second.bindPort(),
+            sendDatagram("127.0.0.1", second.boundPort(),
                     validBindRequest(token, alice, epoch, second.endpointId(), 1));
 
             server.awaitDispatchedFrames(2, 1500);
@@ -74,9 +87,9 @@ final class DataPlaneUdpServerBindTest {
 
             // 错配 endpointId 的 BindRequest 必须被丢弃——endpointId=99 不在配置中
             UUID bob = new UUID(0xB0B_B0BL, 9L);
-            sendDatagram("127.0.0.1", first.bindPort(),
+            sendDatagram("127.0.0.1", first.boundPort(),
                     validBindRequest(token, bob, epoch, 99, 1));
-            sendDatagram("127.0.0.1", second.bindPort(),
+            sendDatagram("127.0.0.1", second.boundPort(),
                     validBindRequest(token, bob, epoch, 99, 1));
             // 唯一匹配留有 99 的配置 (不要 by accident 把 0 算成匹配)
             server.awaitDispatchedFrames(4, 1500);
@@ -86,10 +99,34 @@ final class DataPlaneUdpServerBindTest {
             server.shutdown();
         }
     }
+    @Test
+    void boundEndpointPublishesReachableCandidatesButNeverBindHost() {
+        DataPlaneUdpServer server = DataPlaneUdpServer.forTest(java.util.List.of(
+                listener("0.0.0.0", 0, 50,
+                        new io.github.limuqy.mc.hassium.config.HassiumConfig.ReachableEndpoint("edge-a.example", 41001, 100),
+                        new io.github.limuqy.mc.hassium.config.HassiumConfig.ReachableEndpoint("edge-b.example", 42001, 80))));
+        try {
+            server.bind();
+            DataPlaneUdpServer.BoundEndpoint bound = server.getBoundEndpoints().get(0);
+
+            assertEquals(0, bound.endpointId());
+            assertEquals(50, bound.weight());
+            assertTrue(bound.boundPort() > 0);
+            assertEquals(java.util.List.of(
+                    new io.github.limuqy.mc.hassium.config.HassiumConfig.ReachableEndpoint("edge-a.example", 41001, 100),
+                    new io.github.limuqy.mc.hassium.config.HassiumConfig.ReachableEndpoint("edge-b.example", 42001, 80)),
+                    bound.reachableEndpoints());
+            assertFalse(bound.reachableEndpoints().stream()
+                    .map(io.github.limuqy.mc.hassium.config.HassiumConfig.ReachableEndpoint::host)
+                    .anyMatch("0.0.0.0"::equals));
+        } finally {
+            server.shutdown();
+        }
+    }
 
     @Test
     void shutdownReleasesAllChannelsAndTokenAndRegistry() {
-        DataPlaneUdpServer server = DataPlaneUdpServer.forTest(eps());
+        DataPlaneUdpServer server = DataPlaneUdpServer.forTest(listeners());
         server.bind();
         assertTrue(server.isBound());
 

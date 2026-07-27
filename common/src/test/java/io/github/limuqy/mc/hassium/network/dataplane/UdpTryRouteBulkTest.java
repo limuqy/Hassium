@@ -31,10 +31,9 @@ class UdpTryRouteBulkTest {
 
     @BeforeEach
     void setUp() {
-        DataPlaneUdpServer.forTest(new DataPlanePoCConfig.Endpoint[] {
-                new DataPlanePoCConfig.Endpoint("127.0.0.1", 0, 50, "127.0.0.1", 0),
-                new DataPlanePoCConfig.Endpoint("127.0.0.1", 0, 50, "127.0.0.1", 0),
-        });
+        DataPlaneUdpServer.forTest(List.of(new io.github.limuqy.mc.hassium.config.HassiumConfig.UdpListenerConfig(
+                "127.0.0.1", 25568, 50,
+                List.of(new io.github.limuqy.mc.hassium.config.HassiumConfig.ReachableEndpoint("127.0.0.1", 25565, 100)))));
         DataPlaneUdpServer.bind();
         statsWasOn = NetworkStats.isEnabled();
         NetworkStats.setEnabled(true);

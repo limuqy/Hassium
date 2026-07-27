@@ -83,6 +83,19 @@ public final class DataPlaneSessionRegistry {
         return List.copyOf(out);
     }
 
+    /** 返回所有未关闭会话的不可变快照，供服务器时钟推进 KCP。 */
+    public synchronized List<ReliableDatagramSession> allSessions() {
+        List<ReliableDatagramSession> out = new ArrayList<>();
+        for (List<ReliableDatagramSession> bucket : sessions.values()) {
+            for (ReliableDatagramSession session : bucket) {
+                if (!session.isClosed()) {
+                    out.add(session);
+                }
+            }
+        }
+        return List.copyOf(out);
+    }
+
     /**
      * 重登/epoch 推进：立即关闭旧 epoch 的所有会话（无线 lease）并移除该键；
      * 调用方随后可对新 epoch 调用 {@link #register}。未知 {@code playerId}/{@code epoch} 为无害 no-op。

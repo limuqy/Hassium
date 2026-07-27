@@ -3,7 +3,6 @@ package io.github.limuqy.mc.hassium;
 import io.github.limuqy.mc.hassium.command.FabricHassiumCommand;
 import io.github.limuqy.mc.hassium.network.ChunkSender;
 import io.github.limuqy.mc.hassium.network.FabricNetworkManager;
-import io.github.limuqy.mc.hassium.network.dataplane.DataPlanePoCConfig;
 import io.github.limuqy.mc.hassium.network.dataplane.DataPlaneFrame;
 import io.github.limuqy.mc.hassium.network.dataplane.DataPlaneServer;
 import net.fabricmc.api.ModInitializer;
@@ -26,18 +25,16 @@ public class HassiumMod implements ModInitializer {
 
         // 设置区块发送器
         ChunkSender.setInstance((player, compressed) -> {
-            // PoC 多通道数据面: 先尝试经 Data 通道路由 bulk；命中/丢弃则不再走 Primary
-            byte[] payload = DataPlanePoCConfig.isEnabled() ? compressed.encode() : null;
-            if (payload != null
-                    && io.github.limuqy.mc.hassium.network.dataplane.DataPlaneServer.tryRouteBulk(
-                            player.getUUID(),
-                            DataPlaneFrame.TYPE_BULK_COMPRESSED_CHUNK,
-                            payload)) {
+            // 路由器在数据面未启用、未绑定或无可用会话时返回 false，保持 Primary 回退。
+            byte[] payload = compressed.encode();
+            if (io.github.limuqy.mc.hassium.network.dataplane.DataPlaneServer.tryRouteBulk(
+                    player.getUUID(),
+                    DataPlaneFrame.TYPE_BULK_COMPRESSED_CHUNK,
+                    payload)) {
                 return; // 已走 Data 通道
             }
             // 未走 Data 通道 → 走 Primary，记分流统计（口径 = encode() 总长度，与 Data 侧对齐）
-            int primaryBytes = payload != null ? payload.length : (compressed.compressedData == null ? 0 : compressed.compressedData.length);
-            io.github.limuqy.mc.hassium.metrics.NetworkStats.recordBulkSentPrimary(primaryBytes);
+            io.github.limuqy.mc.hassium.metrics.NetworkStats.recordBulkSentPrimary(payload.length);
             FabricNetworkManager.sendCompressedChunk(player, compressed);
         });
 

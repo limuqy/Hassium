@@ -1,5 +1,7 @@
 package io.github.limuqy.mc.hassium.network.dataplane;
 
+import io.github.limuqy.mc.hassium.config.HassiumConfig;
+import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.utils.DebugLogger;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.buffer.ByteBuf;
@@ -59,21 +61,26 @@ public final class DataPlaneUdpServer {
 
     private static final ReentrantLock LOCK = new ReentrantLock();
     private static Instance INSTANCE = null;
-    private static DataPlanePoCConfig.Endpoint[] testEndpoints = null;
+    private static List<HassiumConfig.UdpListenerConfig> testListeners = null;
 
-    public record BoundEndpoint(String host, int bindPort, int endpointId, int weight) {}
+    public record BoundEndpoint(
+            int endpointId,
+            int weight,
+            int boundPort,
+            List<HassiumConfig.ReachableEndpoint> reachableEndpoints
+    ) {}
 
     // ====================== 测试入口 ======================
 
     /**
-     * 测试工厂：注入 endpoints，配合 static {@link #bind()}。返回 handle 仅作 finally 中
+     * 测试工厂：注入 immutable listener groups，配合 static {@link #bind()}。返回 handle 仅作 finally 中
      * {@code server.shutdown()} 的句柄——所有实际行为通过 static facade 操作。
      */
-    static DataPlaneUdpServer forTest(DataPlanePoCConfig.Endpoint[] endpoints) {
+    static DataPlaneUdpServer forTest(List<HassiumConfig.UdpListenerConfig> listeners) {
         LOCK.lock();
         try {
-            testEndpoints = endpoints;
-            INSTANCE = null;  // 重置便于多次 bind
+            testListeners = List.copyOf(listeners);
+            INSTANCE = null;
             return SHARED_HANDLE;
         } finally {
             LOCK.unlock();
@@ -90,18 +97,17 @@ public final class DataPlaneUdpServer {
     public static void bind() {
         LOCK.lock();
         try {
-            if (INSTANCE != null) return;  // 已 bound
-            DataPlanePoCConfig.Endpoint[] eps = (testEndpoints != null)
-                    ? testEndpoints : DataPlanePoCConfig.ENDPOINTS;
-            if (eps == null) {
-                LOGGER.warn("DataPlaneUdpServer: no endpoints configured; bind skipped");
+            if (INSTANCE != null) return;
+            List<HassiumConfig.UdpListenerConfig> listeners = testListeners != null
+                    ? testListeners
+                    : HassiumConfigService.getInstance().getDataPlaneConfig().udpListeners();
+            boolean enabled = testListeners != null
+                    || HassiumConfigService.getInstance().getDataPlaneConfig().enabled();
+            if (!enabled) {
+                LOGGER.info("DataPlaneUdpServer: disabled by network.dataPlane.enabled");
                 return;
             }
-            if (!DataPlanePoCConfig.isEnabled() && testEndpoints == null) {
-                LOGGER.info("DataPlaneUdpServer: disabled by config");
-                return;
-            }
-            Instance inst = new Instance(eps);
+            Instance inst = new Instance(listeners);
             inst.bind();
             INSTANCE = inst;
         } finally {
@@ -113,10 +119,14 @@ public final class DataPlaneUdpServer {
         LOCK.lock();
         try {
             Instance inst = INSTANCE;
-            if (inst == null) return;
+            if (inst == null) {
+                testListeners = null;
+                TEST_INJECTION = null;
+                return;
+            }
             inst.shutdown();
             INSTANCE = null;
-            testEndpoints = null;
+            testListeners = null;
             TEST_INJECTION = null;
         } finally {
             LOCK.unlock();
@@ -156,6 +166,17 @@ public final class DataPlaneUdpServer {
     }
 
     /**
+     * 将服务端配置中的 TCP control 可达地址投影为握手尾部记录。
+     * bootstrap 地址由客户端从当前 vanilla TCP 连接取得，不能在此处混入。
+     */
+    public static List<UdpDataPlaneHandshakeTail.ControlEndpoint> advertisedControlEndpoints() {
+        return HassiumConfigService.getInstance().getControlReachableEndpoints().stream()
+                .map(endpoint -> new UdpDataPlaneHandshakeTail.ControlEndpoint(
+                        endpoint.host(), endpoint.port(), endpoint.priority()))
+                .toList();
+    }
+
+    /**
      * 一个新的 Minecraft TCP master 被服务器接受。递增 epoch 并立即淘汰该玩家旧 epoch 的 UDP 会话，
      * 防止旧 KCP lease 在重连后接管新控制连接。
      */
@@ -178,7 +199,27 @@ public final class DataPlaneUdpServer {
         return ControlFailoverHandler.getInstance().currentEpoch(playerId);
     }
 
-    /** 单例 {@link UdpBulkRouter}；hardRttMs 取自首个 endpoint 或默认 1000。 */
+    /**
+     * 由服务器主时钟推进全部 KCP session 的重传、ACK 与输出，并回收过期 lease。
+     * Netty UDP event loop 与本方法可并发：单个 session 自身同步，registry 维护快照。
+     */
+    public static void tick(long nowMs) {
+        Instance inst = INSTANCE;
+        if (inst == null) {
+            return;
+        }
+        for (ReliableDatagramSession session : inst.registry.allSessions()) {
+            try {
+                session.tick(nowMs);
+            } catch (Throwable t) {
+                LOGGER.warn("DataPlaneUdpServer: session tick failed player={} epoch={}",
+                        session.playerId(), session.epoch(), t);
+            }
+        }
+        inst.registry.expireLeases(nowMs);
+    }
+
+    /** 单例 {@link UdpBulkRouter}；hardRttMs 暂维持协议默认 1000ms。 */
     private static volatile UdpBulkRouter ROUTER;
 
     private static UdpBulkRouter router() {
@@ -187,13 +228,7 @@ public final class DataPlaneUdpServer {
             synchronized (DataPlaneUdpServer.class) {
                 r = ROUTER;
                 if (r == null) {
-                    long hard = 1_000L;
-                    DataPlanePoCConfig.Endpoint[] eps = (INSTANCE != null) ? INSTANCE.configured : DataPlanePoCConfig.ENDPOINTS;
-                    if (eps != null && eps.length > 0) {
-                        // ENDPOINTS 不暴露 hardRttMs；用默认 1000ms。留作 Task 6 配置覆盖。
-                        hard = 1_000L;
-                    }
-                    r = new UdpBulkRouter(hard);
+                    r = new UdpBulkRouter(1_000L);
                     ROUTER = r;
                 }
             }
@@ -262,7 +297,7 @@ public final class DataPlaneUdpServer {
                 ControlFailoverHandler.FailoverResult result = handler.requestFailover(
                         session.playerId(), request.connectionEpoch(), request.requestedEndpointId(), System.currentTimeMillis());
                 if (result == ControlFailoverHandler.FailoverResult.PERMITTED) {
-                    long expiryMs = System.currentTimeMillis() + handler.failoverPermitTtlMs();
+                    long expiryMs = System.currentTimeMillis() + handler.failoverPermitTtlMs(session.playerId());
                     Instance inst = INSTANCE;
                     if (inst != null) {
                         inst.registry.beginFailoverLease(session.playerId(), session.epoch(), expiryMs);
@@ -341,7 +376,7 @@ public final class DataPlaneUdpServer {
     private static final byte[] HKDF_INFO_PREFIX = "hassium-udp-v1".getBytes(java.nio.charset.StandardCharsets.US_ASCII);
 
     private static final class Instance {
-        final DataPlanePoCConfig.Endpoint[] configured;
+        final List<HassiumConfig.UdpListenerConfig> configured;
         final DataPlaneSessionRegistry registry = new DataPlaneSessionRegistry();
         final byte[] sessionToken;
         final NioEventLoopGroup group = new NioEventLoopGroup(EVENT_LOOP_THREADS);
@@ -355,8 +390,8 @@ public final class DataPlaneUdpServer {
         final AtomicInteger dispatchedCount = new AtomicInteger();
         volatile boolean bound = false;
 
-        Instance(DataPlanePoCConfig.Endpoint[] eps) {
-            this.configured = eps;
+        Instance(List<HassiumConfig.UdpListenerConfig> listeners) {
+            this.configured = List.copyOf(listeners);
             this.sessionToken = new byte[16];
             new SecureRandom().nextBytes(this.sessionToken);
         }
@@ -371,20 +406,21 @@ public final class DataPlaneUdpServer {
 
         void bind() {
             try {
-                for (int endpointId = 0; endpointId < configured.length; endpointId++) {
-                    DataPlanePoCConfig.Endpoint ep = configured[endpointId];
+                for (int endpointId = 0; endpointId < configured.size(); endpointId++) {
+                    HassiumConfig.UdpListenerConfig listener = configured.get(endpointId);
                     Bootstrap b = new Bootstrap();
                     b.group(group)
                             .channel(NioDatagramChannel.class)
                             .option(ChannelOption.SO_BROADCAST, false)
                             .option(ChannelOption.ALLOCATOR, PooledByteBufAllocator.DEFAULT)
-                            .handler(new DatagramDispatcher(endpointId, ep.weight));
-                    Channel ch = b.bind(ep.bindHost, ep.bindPort).sync().channel();
+                            .handler(new DatagramDispatcher(endpointId, listener.weight()));
+                    Channel ch = b.bind(listener.bindHost(), listener.bindPort()).sync().channel();
                     channels.add(ch);
-                    InetSocketAddress la = (InetSocketAddress) ch.localAddress();
-                    boundEndpoints.add(new BoundEndpoint(ep.address, la.getPort(), endpointId, ep.weight));
+                    InetSocketAddress localAddress = (InetSocketAddress) ch.localAddress();
+                    boundEndpoints.add(new BoundEndpoint(
+                            endpointId, listener.weight(), localAddress.getPort(), listener.reachableEndpoints()));
                     LOGGER.info("DataPlaneUdpServer: bound UDP {}/{} weight={} endpointId={}",
-                            ep.bindHost, la.getPort(), ep.weight, endpointId);
+                            listener.bindHost(), localAddress.getPort(), listener.weight(), endpointId);
                 }
                 bound = true;
             } catch (Throwable t) {
@@ -423,9 +459,9 @@ public final class DataPlaneUdpServer {
 
             @Override
             protected void channelRead0(ChannelHandlerContext ctx, DatagramPacket packet) {
-                dispatchedCount.incrementAndGet();
                 ByteBuf buf = packet.content();
                 int readable = buf.readableBytes();
+                try {
 
                 // 既有 remote 的 KCP 线字节路径：先快速判别是否「看起来像 BindRequest」，
                 // 否则转给既有会话处理（KCP 内部去重/重组都会拒绝非 KCP 字节，安全）。
@@ -472,13 +508,8 @@ public final class DataPlaneUdpServer {
                     return;
                 }
 
-                // HKDF per-session key: info = "hassium-udp-v1" (15B) || endpointId(1B) || channelId(1B)
-                byte[] info = new byte[HKDF_INFO_PREFIX.length + 2];
-                System.arraycopy(HKDF_INFO_PREFIX, 0, info, 0, HKDF_INFO_PREFIX.length);
-                info[HKDF_INFO_PREFIX.length] = (byte) endpointId;
-                info[HKDF_INFO_PREFIX.length + 1] = (byte) req.channelId();
-                byte[] salt = uuidBytes(req.playerId());
-                byte[] key = Hkdf.extractAndExpand(sessionToken, salt, info, 16);
+                byte[] key = UdpSessionKey.derive(sessionToken, req.playerId(), req.connectionEpoch(),
+                        endpointId, req.channelId());
 
                 UdpEndpoint ep = UdpEndpoint.builder()
                         .role(UdpEndpoint.Role.SERVER)
@@ -487,9 +518,9 @@ public final class DataPlaneUdpServer {
                 Channel chan = ctx.channel();
                 InetSocketAddress peer = packet.sender();
                 ReliableDatagramSession.DatagramSink sink = datagram -> {
-                    // retainedDuplicate 由 netty pipeline 释放；writeAndFlush 失败则手动 release
+                    // sink 接管 KCP output 的 duplicate；Netty write 完成后释放。
                     try {
-                        chan.writeAndFlush(new DatagramPacket(datagram.retainedDuplicate(), peer));
+                        chan.writeAndFlush(new DatagramPacket(datagram, peer));
                     } catch (Throwable t) {
                         datagram.release();
                     }
@@ -497,6 +528,11 @@ public final class DataPlaneUdpServer {
                 ReliableDatagramSession session = new ReliableDatagramSession(
                         req.playerId(), req.connectionEpoch(), ep, peer, key, sink, endpointId, weight);
                 session.receiveHandler(r -> DataPlaneUdpServer.dispatchReceivedOnServer(session, r));
+                if (!session.enqueueAuthenticated(DataPlaneFrame.TYPE_BIND_ACK,
+                        UdpBindRequestCodec.encodeAck(req.connectionEpoch(), endpointId))) {
+                    session.close();
+                    return;
+                }
                 registry.register(session);
                 ControlFailoverHandler.getInstance().onUdpSessionEstablished(req.playerId(), req.connectionEpoch());
                 byRemote.put(peer, session);
@@ -504,6 +540,10 @@ public final class DataPlaneUdpServer {
                         req.playerId(), req.connectionEpoch(), endpointId, peer);
                 LOGGER.info("HassiumSmokeTest:UDP_FAILOVER UDP_BIND_OK player={} epoch={} endpoint={}",
                         req.playerId(), req.connectionEpoch(), endpointId);
+                } finally {
+                    // 测试同步计数必须代表本帧完整处理完毕；否则 await 会在 register 前返回。
+                    dispatchedCount.incrementAndGet();
+                }
             }
 
             @Override

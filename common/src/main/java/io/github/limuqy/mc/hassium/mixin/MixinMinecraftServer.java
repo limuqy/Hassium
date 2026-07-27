@@ -31,6 +31,7 @@ public class MixinMinecraftServer {
         ServerChunkPushManager.getInstance().onServerTick(server);
         // 服务端冒烟测试：检测玩家退出后切换视距
         ServerSmokeTest.onServerTick(server);
+        DataPlaneUdpServer.tick(System.currentTimeMillis());
     }
 
     @Inject(method = "runServer", at = @At(value = "INVOKE", target = "Lnet/minecraft/server/MinecraftServer;initServer()Z"))
