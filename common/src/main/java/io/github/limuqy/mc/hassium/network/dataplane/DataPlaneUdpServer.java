@@ -258,13 +258,24 @@ public final class DataPlaneUdpServer {
         }
         if (snapshot.isEmpty()) return false;
         UdpBulkRouter.PlayerSessions ps = inst.worksetsFor(playerId, new ArrayList<>(snapshot));
-        UdpBulkRouter.RouteDecision d = router().route(ps,
+        UdpBulkRouter.RouteOutcome outcome = router().routeAndPick(ps,
                 DataPlanePoCConfig.BULK_ROUTE_MODE.trim().isEmpty() ? "share" : DataPlanePoCConfig.BULK_ROUTE_MODE,
                 DataPlanePoCConfig.PRIMARY_WEIGHT,
                 DataPlanePoCConfig.DEGRADE_AFTER_DROPS,
                 frameType, payload);
-        if (d == UdpBulkRouter.RouteDecision.DATA_SENT) {
-            io.github.limuqy.mc.hassium.metrics.NetworkStats.recordBulkSentData(payload == null ? 0 : payload.length);
+        if (outcome.decision() == UdpBulkRouter.RouteDecision.DATA_SENT) {
+            int payloadLen = payload == null ? 0 : payload.length;
+            io.github.limuqy.mc.hassium.metrics.NetworkStats.recordBulkSentData(payloadLen);
+            // §14 v2 step 4 重建：router 选中的 BulkRouteTarget 暴露 endpointId（0-based）。
+            // NetworkStats.recordBulkSentDataByPort 接口要求 portIdx > 0（1-based），故 +1。
+            // chosenOrNull 兜底：DATA_SENT 路径 router 保证非 null，但仍防御 null 避免 metrics 误记。
+            BulkRouteTarget chosen = outcome.chosenOrNull();
+            if (chosen != null) {
+                int portIdxForMetrics = chosen.endpointId() + 1;
+                if (portIdxForMetrics > 0) {
+                    io.github.limuqy.mc.hassium.metrics.NetworkStats.recordBulkSentDataByPort(portIdxForMetrics, payloadLen);
+                }
+            }
             return true;
         }
         return false;

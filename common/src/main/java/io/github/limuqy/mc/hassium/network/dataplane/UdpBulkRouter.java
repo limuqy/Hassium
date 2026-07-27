@@ -99,11 +99,27 @@ public final class UdpBulkRouter {
     /**
      * 计算路由决策并（若选到 DATA）执行入队。{@code mode}/{@code primaryWeight}/{@code degradeAfterDrops}
      * 与 PoC {@link BulkRouter#sendBulk} 一致语义。{@code type}/{@code payload} 仅在 DATA_SENT 路径入队。
+     *
+     * <p>仅返回决策枚举，丢失选中 target；若 caller 需要 endpoint 上下文（如 §14 step 4 的
+     * per-portIdx 发送指标），请用 {@link #routeAndPick}，返回 {@link RouteOutcome} 含选中 target。
      */
     public RouteDecision route(PlayerSessions ps, String mode, int primaryWeight,
                                int degradeAfterDrops, int type, byte[] payload) {
+        return routeAndPick(ps, mode, primaryWeight, degradeAfterDrops, type, payload).decision();
+    }
+
+    /**
+     * 与 {@link #route} 同语义，但返回 {@link RouteOutcome}，暴露命中 DATA 时的 chosen target
+     * （DATA_SENT 时非 null；PRIMARY/DROPPED 时为 null），供 caller（{@code DataPlaneUdpServer.tryRouteBulk}）
+     * 在调用站点记 per-portIdx 发送指标（§14 v2 step 4 重建）。
+     *
+     * <p>不变量：router 自身仍在 javadoc「不动 NetworkStats」原则下，仅 {@code enqueueAuthenticated}
+     * 与 WRR 计数副作用；metrics 埋点由 caller 负责。
+     */
+    public RouteOutcome routeAndPick(PlayerSessions ps, String mode, int primaryWeight,
+                                    int degradeAfterDrops, int type, byte[] payload) {
         if (ps.degraded) {
-            return RouteDecision.PRIMARY;
+            return new RouteOutcome(RouteDecision.PRIMARY, null);
         }
         boolean share = "share".equals(mode);
         List<BulkRouteTarget> healthy = healthySessions(ps);
@@ -111,10 +127,10 @@ public final class UdpBulkRouter {
         if (healthy.isEmpty()) {
             // 无候选
             if (share) {
-                return RouteDecision.PRIMARY; // share 走 Primary 而不 drop
+                return new RouteOutcome(RouteDecision.PRIMARY, null); // share 走 Primary 而不 drop
             }
             // exclusive: 累加 drop，达阈值降级
-            return exclusiveDropOrDegrade(ps, degradeAfterDrops);
+            return new RouteOutcome(exclusiveDropOrDegrade(ps, degradeAfterDrops), null);
         }
 
         if (share) {
@@ -122,7 +138,7 @@ public final class UdpBulkRouter {
             // 为保证稳定：累计权重每 tick 重整；命中 PRIMARY → PRIMARY 决策；命中 DATA → 入队。
             BulkRouteTarget picked = wrrPickShared(ps, healthy, primaryWeight);
             if (picked == null) {
-                return RouteDecision.PRIMARY; // 命中 Primary
+                return new RouteOutcome(RouteDecision.PRIMARY, null); // 命中 Primary
             }
             boolean ok = picked.enqueueAuthenticated(type, payload);
             if (ok) {
@@ -132,10 +148,10 @@ public final class UdpBulkRouter {
                     org.slf4j.LoggerFactory.getLogger("HassiumSmokeTest")
                             .info("HassiumSmokeTest:UDP_FAILOVER UDP_WRR_OK player-mode=share decision=DATA_SENT");
                 }
-                return RouteDecision.DATA_SENT;
+                return new RouteOutcome(RouteDecision.DATA_SENT, picked);
             }
             // enqueue 失败：等价 drop。share 模式下，本帧也退到 Primary（保守策略，不丢业务）。
-            return RouteDecision.PRIMARY;
+            return new RouteOutcome(RouteDecision.PRIMARY, null);
         }
 
         // exclusive
@@ -148,10 +164,16 @@ public final class UdpBulkRouter {
                 org.slf4j.LoggerFactory.getLogger("HassiumSmokeTest")
                         .info("HassiumSmokeTest:UDP_FAILOVER UDP_WRR_OK player-mode=exclusive decision=DATA_SENT");
             }
-            return RouteDecision.DATA_SENT;
+            return new RouteOutcome(RouteDecision.DATA_SENT, target);
         }
-        return exclusiveDropOrDegrade(ps, degradeAfterDrops);
+        return new RouteOutcome(exclusiveDropOrDegrade(ps, degradeAfterDrops), null);
     }
+
+    /**
+     * routeAndPick 的返回 carrier：决策 + 命中 target（仅在 {@link RouteDecision#DATA_SENT} 时非 null）。
+     * 用于让 caller 在调用站点取 endpointId 以记 §14 step 4 per-portIdx 发送指标。
+     */
+    public record RouteOutcome(RouteDecision decision, BulkRouteTarget chosenOrNull) {}
 
     /** exclusive 路径下：drop 累计；达到 {@code degradeAfterDrops} 当次仍返回 DROPPED，下一次返回 PRIMARY + degraded=true。 */
     private RouteDecision exclusiveDropOrDegrade(PlayerSessions ps, int degradeAfterDrops) {

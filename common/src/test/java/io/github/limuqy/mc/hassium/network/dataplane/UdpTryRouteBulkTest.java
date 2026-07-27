@@ -54,11 +54,21 @@ class UdpTryRouteBulkTest {
         DataPlaneUdpServer.injectBoundSessionsForTest(PLAYER, List.of(heavy));
 
         boolean anyTrue = false;
+        int hitsBefore = (int) NetworkStats.getBulkSentFramesByPort(1);
+        long bytesBefore = NetworkStats.getBulkSentBytesByPort(1);
         for (int i = 0; i < 50; i++) {
             if (DataPlaneUdpServer.tryRouteBulk(PLAYER, TYPE, PAY)) anyTrue = true;
         }
         assertTrue(anyTrue, "至少一次 DATA_SENT 必须发生");
         assertTrue(heavy.enqueuedBytes >= 3, "至少一次 enqueue 已写入 payload bytes");
+        // §14 v2 step 4 重建回归：tryRouteBulk 内部必须记 per-portIdx 发送指标。
+        // 若 tryRouteBulk 漏调 recordBulkSentDataByPort，此处 delta 应为 0 → 失败暴露回归。
+        int hitsAfter = (int) NetworkStats.getBulkSentFramesByPort(1);
+        long bytesAfter = NetworkStats.getBulkSentBytesByPort(1);
+        long framesDelta = hitsAfter - hitsBefore;
+        long bytesDelta = bytesAfter - bytesBefore;
+        assertTrue(framesDelta >= 1, "至少一次 DATA_SENT 必在 portIdx=1 (endpointId=0 +1) 累计 frames");
+        assertTrue(bytesDelta >= framesDelta * 3L, "per-port bytes 增量应 >= 命中帧数 × 3B PAY");
 
         DataPlaneUdpServer.removeSessionsForTest(PLAYER);
         for (int i = 0; i < 5; i++) {

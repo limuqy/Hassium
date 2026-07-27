@@ -5,6 +5,21 @@ Parent rollout: [`2026-07-26-multi-channel-dataplane-rollout-design.md`](2026-07
 Parent research: [`docs/multi-channel_network_research.md`](../../multi-channel_network_research.md)  
 Scope: **§14 第 2 步补全** — 真实玩家 UUID 绑定 + BindRequest 硬切换
 
+> **[SUPERSEDED 2026-07-27 — implementation moved to UDP/KCP stack]** 本设计稿描述的 PoC TCP
+> 多通道实现（`PlayerChannelBundle` / `BindRequestCodec` / `DataPlaneServer.getOrCreateBundle` 等）
+> 已在合并 commit `7ba824c`（merge master → feature/udp-dataplane-failover）由 feature 侧的新 UDP/KCP
+> 体系替代：传输改为 `DataPlaneUdpServer`（`NioDatagramChannel` + KCP），会话注册移至
+> `DataPlaneSessionRegistry`（按 `(playerId, epoch)` 分桶），BindRequest codec 由 `UdpBindRequestCodec`
+> 承担（实含 player UUID + HKDF 含 UUID），握手尾部由 `UdpDataPlaneHandshakeTail` 播发 endpoint group。
+> 读者对照实现请取舍：本文 §3 wire 格式与 §4 call-site 表的 master 类名仅作为**语义参考**；feature
+> 侧等价物见 `2026-07-27-unified-endpoint-status-and-pause.md` §8 续作 commit 链说明。
+>
+> §14 第 2 步（真实 UUID 绑定 + 多玩家隔离）的运行时语义**已由 feature 等价实现并测试覆盖**
+>（`DataPlaneSessionRegistryTest.disconnectOnePlayerDoesNotAffectAnother` + `UdpLeaseRoutingTest`）；
+> §14 第 4 步 per-portIdx 发送指标生产者也已在 `DataPlaneUdpServer.tryRouteBulk` 经
+> `UdpBulkRouter.routeAndPick` 暴露 `chosen.endpointId()` 后重建（覆盖见 `UdpTryRouteBulkTest`
+> per-portIdx 增量断言 + `SendPerPortMetricsTest`）。
+
 ## 1. Goal and non-goals
 
 ### Goal

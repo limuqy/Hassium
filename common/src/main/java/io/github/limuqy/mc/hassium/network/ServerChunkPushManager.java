@@ -695,7 +695,8 @@ public class ServerChunkPushManager {
             // §14 v2 后续重建：feature 侧 DataPlaneServer.tryRouteBulk façade 内部自检未启用/未 bound/无会话
             // → 直接调用；去掉 master 旧 DataPlanePoCConfig.isEnabled() 短路守卫（方法已不存在）。
             if (routedViaData) {
-                // tryRouteBulk 内部已 recordBulkSentData + recordBulkSentDataByPort；此处不再二次累加
+                // tryRouteBulk 内部已 recordBulkSentData + recordBulkSentDataByPort(endpointIdx+1, payloadLen)；
+                // 端点维度累加由 router routeAndPick 暴露 chosen.target.endpointId() 后在调用站点记。此处不再二次累加。
                 sent = true;
                 DebugLogger.info(LogType.NETWORK,
                         "[SECTION_DELTA] Sent via Data plane (frameType=4) deltas={} skipped={} (dimension={})",

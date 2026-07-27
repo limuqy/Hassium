@@ -1,6 +1,7 @@
 package io.github.limuqy.mc.hassium.network.dataplane;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.net.InetSocketAddress;
@@ -86,5 +87,32 @@ final class DataPlaneSessionRegistryTest {
         // 未知 UUID 不得抛异常，也不触发任何会话关闭
         registry.onPrimaryDisconnect(UUID.randomUUID(), 7L, 0L, 5_000L);
         registry.expireLeases(6_000L);
+    }
+    @Test
+    void disconnectOnePlayerDoesNotAffectAnother() {
+        DataPlaneSessionRegistry registry = new DataPlaneSessionRegistry();
+        UUID a = UUID.fromString("00000000-0000-0000-0000-0000000000a1");
+        UUID b = UUID.fromString("00000000-0000-0000-0000-0000000000b2");
+        ReliableDatagramSession sa = session(a, 1L, 1);
+        ReliableDatagramSession sb = session(b, 1L, 1);
+        registry.register(sa);
+        registry.register(sb);
+
+        // 断言 1：A/B 各自独立分桶，互不为对方注册副作用
+        assertEquals(List.of(sa), registry.sessions(a, 1L), "A 的 session 仅自己");
+        assertEquals(List.of(sb), registry.sessions(b, 1L), "B 的 session 仅自己，且建 B 不影响 A");
+
+        // 断言 2：A 主连接断开只起 A 该 epoch 的 lease，不影响 B 已注册会话与可路由性
+        registry.onPrimaryDisconnect(a, 1L, 100L, 1_000L);
+        assertTrue(sa.isLeaseActive(500L), "A 起算 lease");
+        assertEquals(List.of(sb), registry.sessions(b, 1L), "B 会话未受 A disconnect 影响");
+        assertFalse(sb.isLeaseDraining(), "B 未起 lease → 不应处于排干状态");
+        assertFalse(sb.isClosed(), "B 仍可路由（未关闭）");
+
+        // 断言 3：A lease 到期关闭后，B 仍存活
+        registry.expireLeases(1_100L);
+        assertTrue(sa.isClosed(), "A lease 到期关闭");
+        assertFalse(sb.isClosed(), "B 不受影响");
+        assertEquals(List.of(sb), registry.sessions(b, 1L));
     }
 }

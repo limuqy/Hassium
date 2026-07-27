@@ -399,6 +399,8 @@ public class HassiumMetricsImpl implements HassiumMetrics {
         storageErrors.set(0);
         networkErrors.set(0);
         compressionErrors.set(0);
+        sectionDeltaRequestsSent.set(0);
+        sectionDeltaChunksReceived.set(0);
     }
 
     // ===== 记录方法 =====
