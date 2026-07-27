@@ -15,9 +15,21 @@ param(
     [int]$ServerPort = 25565,
     [int]$DelayMs = 15000,
     [int]$ReconnectDelayMs = 3000,
-    [int]$ServerReadyTimeoutSec = 160,
     [int]$ClientTimeoutSec = 240,
-    [string]$SmokePhases = "classic"
+    [string]$SmokePhases = "classic",
+    # -Phase UdpFailover：经 Nginx stream 代理 TCP 主控；UDP 仍直连 server。
+    # 默认 nginx 1.31.3 在 D:\app；行内可传 -NginxExePath 覆盖。$ProxyPort=0 时
+    # 由 phase 触发自动采用 $ServerPort+5，避免与 server 端口冲突。
+    [string]$NginxExePath = "D:\app\nginx-1.31.3\nginx.exe",
+    [int]$ProxyPort = 0,
+    # -DryRun：UdpFailover phase 时只起 nginx + 验 listen，跳过 server/client；
+    # 用于 Pester 验证 harness 启停序列而不起游戏。其他 phase 下 -DryRun 无效。
+    [switch]$DryRun,
+    # -InjectTcpClose：UdpFailover phase 时在 Round1 之后通过 nginx -s quit 注入
+    # 真实 TCP close 触发 client channelInactive→orchestrator，验证 production 在
+    # 真实 RST 下仍工作。默认 false：plan §2.3 走 client 内部模拟 disconnect，
+    # production onPrimaryDisconnected 由 ClientSmokeTest.disconnect 间接触发。
+    [switch]$InjectTcpClose
 )
 
 $ErrorActionPreference = "Continue"
@@ -35,7 +47,17 @@ if ($SmokeHost -and $SmokeHost -ne "") {
 if ($Phase -eq "UdpFailover") {
     if ($SmokePhases -eq "classic") { $SmokePhases = "udp-failover" }
     if ($ClientTimeoutSec -lt 300) { $ClientTimeoutSec = 300 }
-    Write-Host "[$SessionId] Phase=UdpFailover: SmokePhases=$SmokePhases, ClientTimeoutSec=$ClientTimeoutSec"
+}
+
+# §3.1 -Phase UdpFailover：经 Nginx stream 代理 TCP 主控；UDP 仍直连 server。
+# 当 ProxyPort 未显式指定时默认 $ServerPort + 5；避免与本会话 Minecraft server 端口冲突。
+# -SmokeHost 若显式给出优先被使用；仅在 -Phase UdpFailover 且 -SmokeHost 空时由 nginx
+# ProxyPort 替代 effectiveHost。classic / R / I phases 不受影响。
+if ($Phase -eq "UdpFailover") {
+    if ($ProxyPort -eq 0) { $ProxyPort = $ServerPort + 5 }
+    if (-not ($SmokeHost -and $SmokeHost -ne "")) {
+        $effectiveHost = "127.0.0.1:$ProxyPort"
+    }
 }
 
 # 路径自推导（脚本位于 <repo>/scripts/，项目根是父目录）
@@ -97,6 +119,88 @@ function Stop-SessionJava {
     }
 }
 
+# Nginx helpers for UdpFailover phase. Module lives under scripts/smoke/.
+# Logged via HassiumSmokeTest:UDP_FAILOVER_HARNESS <event> at=<unix-ms> lines so the
+# reviewer can correlate harness-driven Nginx reloads with production markers.
+$smokeModulePath = Join-Path $PSScriptRoot "smoke\UdpFailoverSmoke.psm1"
+if ($Phase -eq "UdpFailover" -and (Test-Path $smokeModulePath)) {
+    Import-Module -Name $smokeModulePath -Force -ErrorAction Stop
+}
+
+# Per-session Nginx prefix/work dirs (kept under build/smoke-test/nginx/<SessionId>/).
+function Get-FailoverNginxDirs {
+    param([string]$SessId)
+    $base = Join-Path $logRoot "nginx\$SessId"
+    New-Item -ItemType Directory -Force -Path $base | Out-Null
+    $conf    = Join-Path $base "nginx.conf"
+    $prefix  = Join-Path $base "prefix"
+    $logFile = Join-Path $base "harness_timeline.log"
+    New-Item -ItemType Directory -Force -Path $prefix  | Out-Null
+    New-Item -ItemType Directory -Force -Path (Join-Path $prefix "logs") | Out-Null
+    return [pscustomobject]@{ Conf = $conf; Prefix = $prefix; LogFile = $logFile }
+}
+
+# Write a harness timeline line for later Get-UdpFailoverHarnessTimeline parsing.
+function Write-HarnessEvent {
+    param([Parameter(Mandatory=$true)][string]$Event, [Parameter(Mandatory=$true)][string]$LogFile)
+    $now = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+    $line = "HassiumSmokeTest:UDP_FAILOVER_HARNESS $Event at=$now"
+    Add-Content -Path $LogFile -Value $line -ErrorAction SilentlyContinue
+    Write-Host "[$SessionId] $line"
+}
+
+# Write the nginx stream config from the helper module and launch nginx.exe with
+# `-c <conf> -p <prefix>`. Spawn-only; subsequent Wait-NginxListen validates listen.
+function Start-FailoverNginxProxy {
+    param(
+        [Parameter(Mandatory=$true)][string]$NginxExe,
+        [Parameter(Mandatory=$true)][int]$ListenPort,
+        [Parameter(Mandatory=$true)][int]$PrimaryPort,
+        [Parameter(Mandatory=$true)][string]$ConfPath,
+        [Parameter(Mandatory=$true)][string]$PrefixPath
+    )
+    if (-not (Test-Path $NginxExe)) { throw "NginxExe not found: $NginxExe" }
+    $conf = New-UdpFailoverNginxConfig -ListenPort $ListenPort -PrimaryPort $PrimaryPort
+    Set-Content -Path $ConfPath -Value $conf -Encoding ASCII
+    # Start nginx detached (Windows nginx runs foreground by default, so use
+    # Start-Process with -WindowStyle Hidden to return immediately).
+    Start-Process -FilePath $NginxExe `
+        -ArgumentList @("-c", $ConfPath, "-p", $PrefixPath) `
+        -WindowStyle Hidden -PassThru -ErrorAction Stop | Out-Null
+}
+# Wait up to $TimeoutSec for the nginx stream listen port to accept TCP.
+function Wait-NginxListen {
+    param(
+        [Parameter(Mandatory=$true)][int]$ListenPort,
+        [int]$TimeoutSec = 15
+    )
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    while ((Get-Date) -lt $deadline) {
+        $conn = Get-NetTCPConnection -LocalPort $ListenPort -State Listen -ErrorAction SilentlyContinue
+        if ($conn) { return $true }
+        Start-Sleep -Milliseconds 200
+    }
+    return $false
+}
+
+# Stop the nginx master bound to $PrefixPath. `-s quit` lets in-flight stream
+# connections finish; `-s stop` drops them. Use quit by default (graceful).
+function Stop-FailoverNginxProxy {
+    param(
+        [Parameter(Mandatory=$true)][string]$NginxExe,
+        [Parameter(Mandatory=$true)][string]$ConfPath,
+        [Parameter(Mandatory=$true)][string]$PrefixPath,
+        [string]$Signal = "quit"
+    )
+    if (-not (Test-Path $NginxExe)) { return }
+    try { & $NginxExe -s $Signal -c $ConfPath -p $PrefixPath 2>&1 | Out-Null } catch { }
+    Start-Sleep -Milliseconds 500
+    # 兜底：若 nginx master 已死但 worker 进程残留（其 PID 不在 prefix 里），按名强杀。
+    # 在 smoke harness 内本会话独立 prefix/独立 conf，全命名杀是安全的。
+    try { Stop-Process -Name "nginx" -Force -ErrorAction SilentlyContinue } catch { }
+    Start-Sleep -Milliseconds 200
+}
+
 # 1. 清理客户端缓存（整个 hassium_cache 目录 + config/hassium 整个目录 + crash-reports）
 Write-Host "[$SessionId] [1/9] 清理客户端缓存 ($Loader/run/client/)..."
 Remove-Item -Recurse -Force (Join-Path $clientRunDir "hassium_cache") -ErrorAction SilentlyContinue
@@ -136,14 +240,62 @@ if ($CleanWorld) {
     Write-Host "[$SessionId] [3/9] 跳过存档清理（复用已有 world）"
 }
 
-# 4. 释放 $ServerPort 端口（可能被上次会话残留进程占用）
-$conns = Get-NetTCPConnection -LocalPort $ServerPort -ErrorAction SilentlyContinue
-if ($conns) {
-    Write-Host "[$SessionId] 端口 $ServerPort 占用，尝试释放..."
-    $conns | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }
-    Start-Sleep -Seconds 2
+# 4. 释放 $ServerPort 端口 + UdpFailover phase 时也释放 $ProxyPort (可能被上次会话残留 nginx 占用)
+$portsToFree = @($ServerPort)
+if ($Phase -eq "UdpFailover" -and $ProxyPort -gt 0) { $portsToFree += $ProxyPort }
+foreach ($p in $portsToFree) {
+    $conns = Get-NetTCPConnection -LocalPort $p -ErrorAction SilentlyContinue
+    if ($conns) {
+        Write-Host "[$SessionId] 端口 $p 占用，尝试释放..."
+        $conns | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }
+        Start-Sleep -Seconds 2
+    }
 }
 
+# §3.2 UdpFailover phase：在 §5 server 启动前先起 nginx stream proxy。
+# UDP 数据面仍直连 server。client 连的就是 effectiveHost=127.0.0.1:$ProxyPort。
+$nginxDirHandle = $null
+$nginxReady = $false
+if ($Phase -eq "UdpFailover") {
+    if (-not (Test-Path $NginxExePath)) {
+        Write-Host "[$SessionId] NginxExePath 不存在: $NginxExePath；UdpFailover phase 缺不可降级，标记 FAIL"
+        $resultObj = @{ SessionId = $SessionId; Ver = $Ver; Loader = $Loader; Phase = $Phase; Result = "FAIL"; Reason = "nginx_exe_missing"; ClientExitCode = -1; UdpFailoverCorePass = $false }
+        $resultObj | ConvertTo-Json -Depth 3 | Out-File (Join-Path $resultsDir "result_${SessionId}.json")
+        exit 4
+    }
+    $nginxDirHandle = Get-FailoverNginxDirs -SessId $SessionId
+    Write-Host "[$SessionId] [4.5/9] 启动 nginx stream proxy listen=127.0.0.1:$ProxyPort upstream=127.0.0.1:$ServerPort..."
+    try {
+        Start-FailoverNginxProxy -NginxExe $NginxExePath -ListenPort $ProxyPort -PrimaryPort $ServerPort `
+                                 -ConfPath $nginxDirHandle.Conf -PrefixPath $nginxDirHandle.Prefix
+        $nginxReady = Wait-NginxListen -ListenPort $ProxyPort -TimeoutSec 15
+        Write-HarnessEvent -Event "nginxStarted" -LogFile $nginxDirHandle.LogFile
+    } catch {
+        Write-Host "[$SessionId] nginx 启动失败: $($_.Exception.Message)"
+    }
+    if (-not $nginxReady) {
+        Write-Host "[$SessionId] nginx listen 未就绪；标记 FAIL"
+        if ($nginxDirHandle) { Stop-FailoverNginxProxy -NginxExe $NginxExePath -ConfPath $nginxDirHandle.Conf -PrefixPath $nginxDirHandle.Prefix -Signal stop }
+        $resultObj = @{ SessionId = $SessionId; Ver = $Ver; Loader = $Loader; Phase = $Phase; Result = "FAIL"; Reason = "nginx_listen_failed"; ClientExitCode = -1; UdpFailoverCorePass = $false }
+        $resultObj | ConvertTo-Json -Depth 3 | Out-File (Join-Path $resultsDir "result_${SessionId}.json")
+        exit 5
+    }
+    Write-Host "[$SessionId] nginx 已 listen on 127.0.0.1:$ProxyPort"
+
+    # -DryRun：仅起 nginx + 验 listen + stop + exit；不起 server/client。
+    if ($DryRun) {
+        Write-Host "[$SessionId] -DryRun：nginx 启停序列已验证；不起 server/client。"
+        Stop-FailoverNginxProxy -NginxExe $NginxExePath -ConfPath $nginxDirHandle.Conf -PrefixPath $nginxDirHandle.Prefix -Signal stop
+        $resultObj = @{
+            SessionId = $SessionId; Ver = $Ver; Loader = $Loader; Phase = $Phase; Result = "PASS"
+            DryRun = $true; NginxProxyPort = $ProxyPort; NginxListenReady = $true
+            HarnessTimeline = (Get-UdpFailoverHarnessTimeline -HarnessLog $nginxDirHandle.LogFile)
+        }
+        $resultObj | ConvertTo-Json -Depth 4 | Out-File (Join-Path $resultsDir "result_${SessionId}.json")
+        Write-Host "[$SessionId] === RESULT: PASS (DryRun) ==="
+        exit 0
+    }
+}
 # 5. 启动服务端（后台，启用 ServerSmokeTest）
 $gradlew = Join-Path $projectRoot "gradlew.bat"
 # 5.0 预备 gradle daemon：先停掉残留 daemon，避免 reuse 一个卡住 / 正在 init 的旧 daemon
@@ -199,6 +351,7 @@ if (-not $serverReady) {
     exit 3
 }
 
+
 # 7. 启动客户端（前台阻塞，自动两轮连服）
 Write-Host "[$SessionId] [6/9] 启动客户端连服（两轮自动）..."
 $clientArgs = @(
@@ -220,7 +373,38 @@ $clientProc = Start-Process -FilePath $gradlew `
 # 8. 等待客户端退出（最长 ClientTimeoutSec 秒）
 Write-Host "[$SessionId] [7/9] 等待客户端退出 (超时 ${ClientTimeoutSec}s)..."
 $clientDeadline = (Get-Date).AddSeconds($ClientTimeoutSec)
+# -InjectTcpClose：仅 UdpFailover + nginx 已就绪时使用。
+# 在客户进入 Round1 后等待约 DelayMs*1.2 + 5s（保证进世界稳定），再 nginx -s quit
+# 真实关闭 client 已建立的 stream 连接 → 触发 channelInactive → orchestrator →
+# FAILOVER_PERMIT/RECONNECT marker；重启 nginx 等待 listen 重开后再继续等待 client。
+# 默认 false 时 harness 不触发外部断链，由 ClientSmokeTest 内部 disconnect 与 vanilla
+# 重连流程触发（plan §2.3 已说明：mono-JVM 不可真断 socket，内部模拟即真实断开语义）。
+$tcpCloseInjected = $false
 while (-not $clientProc.HasExited -and (Get-Date) -lt $clientDeadline) {
+    if ($Phase -eq "UdpFailover" -and $InjectTcpClose -and $nginxReady -and -not $tcpCloseInjected) {
+        $injectAtMs = ($DelayMs * 1.2 + 5000)
+        $waitDeadline = (Get-Date).AddMilliseconds($injectAtMs)
+        while (-not $clientProc.HasExited -and (Get-Date) -lt $waitDeadline -and (Get-Date) -lt $clientDeadline) {
+            Start-Sleep -Milliseconds 500
+        }
+        if ($clientProc.HasExited) { break }
+        Write-Host "[$SessionId] InjectTcpClose: nginx -s quit 注入主控 TCP 关闭"
+        Write-HarnessEvent -Event "primaryCloseInjected" -LogFile $nginxDirHandle.LogFile
+        Stop-FailoverNginxProxy -NginxExe $NginxExePath -ConfPath $nginxDirHandle.Conf -PrefixPath $nginxDirHandle.Prefix -Signal stop
+        Start-Sleep -Milliseconds 500
+        Write-HarnessEvent -Event "nginxQuit" -LogFile $nginxDirHandle.LogFile
+        # 重启 nginx（同一 conf 仍指向 primary）
+        Start-FailoverNginxProxy -NginxExe $NginxExePath -ListenPort $ProxyPort -PrimaryPort $ServerPort `
+                                 -ConfPath $nginxDirHandle.Conf -PrefixPath $nginxDirHandle.Prefix
+        $restartReady = Wait-NginxListen -ListenPort $ProxyPort -TimeoutSec 15
+        if ($restartReady) {
+            Write-HarnessEvent -Event "primaryRestored" -LogFile $nginxDirHandle.LogFile
+            Write-Host "[$SessionId] nginx 已恢复 listen on 127.0.0.1:$ProxyPort"
+        } else {
+            Write-Host "[$SessionId] 注：nginx 重启后 listen 未及时就绪；client 可能 round2 重连失败"
+        }
+        $tcpCloseInjected = $true
+    }
     Start-Sleep -Seconds 5
 }
 if (-not $clientProc.HasExited) {
@@ -300,6 +484,12 @@ if ($udpFailoverIsPhase) {
     $result = if ($udpFailoverCorePass -and $clientExit -eq 0) { "PASS" } else { "FAIL" }
 } else {
     $result = if ($hasPass -and $clientExit -eq 0) { "PASS" } else { "FAIL" }
+}
+
+# 清理 nginx stream proxy（仅 UdpFailover phase 启动过）
+if ($Phase -eq "UdpFailover" -and $nginxDirHandle) {
+    Write-Host "[$SessionId] 停止 nginx stream proxy..."
+    Stop-FailoverNginxProxy -NginxExe $NginxExePath -ConfPath $nginxDirHandle.Conf -PrefixPath $nginxDirHandle.Prefix -Signal stop
 }
 
 # 10. 停止服务端 + 残留 java

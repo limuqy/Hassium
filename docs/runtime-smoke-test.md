@@ -45,7 +45,7 @@ Hassium 跨版本（1.20.1–1.21.11）× 多加载器（fabric / neoforge）的
 |------|------|------|------|
 | `-Ver` | 是 | — | MC 版本，如 `1.20.1` |
 | `-Loader` | 是 | — | `fabric` 或 `neoforge` |
-| `-Phase` | 是 | — | `I`（初始轮）或 `R`（回归轮），仅用于命名 |
+| `-Phase` | 是 | — | `I`（初始轮）或 `R`（回归轮）或 `UdpFailover`（Nginx 反代+UDP failover smoke） |
 | `-SessionId` | 是 | — | 会话 ID，用于日志文件命名，如 `1.20.1_fabric_I` |
 | `-CleanWorld` | 否 | false | 删除服务端存档；batch 按 loader 策略决定（见下） |
 | `-SmokeHost` | 否 | 空 | 客户端连服完整地址（如 `127.0.0.1:25566`）；指定后优先于 `-ServerPort` |
@@ -53,8 +53,12 @@ Hassium 跨版本（1.20.1–1.21.11）× 多加载器（fabric / neoforge）的
 | `-DelayMs` | 否 | `10000` | 进世界后等待毫秒，再 dump 统计 |
 | `-ReconnectDelayMs` | 否 | `3000` | 第一轮断开后到重连的毫秒 |
 | `-ServerReadyTimeoutSec` | 否 | `160` | 服务端 `Done!` 出现超时 |
-| `-ClientTimeoutSec` | 否 | `100` | 客户端退出超时 |
+| `-ClientTimeoutSec` | 否 | `100` | 客户端退出超时（UdpFailover phase 自动 ≥300） |
 | `-SmokePhases` | 否 | `classic,dataplane` | smoke 阶段选择：`classic`（仅经典两轮）/ `dataplane`（PoC TCP 数据面，**Task 10 followup 计划退役**）/ `udp-failover`（**Task 10 followup 接入**，plan §1020 六个 markers）/ `all`（除 `udp-failover` 外两者皆跑）|
+| `-NginxExePath` | 否 | `D:\app\nginx-1.31.3\nginx.exe` | UdpFailover phase：nginx stream 反代可执行文件路径 |
+| `-ProxyPort` | 否 | `0`（→ `$ServerPort + 5`） | UdpFailover phase：nginx stream listen port；`-SmokeHost` 显式指定时优先 |
+| `-DryRun` | 否 | false | UdpFailover phase：仅起 nginx + 验 listen + stop + exit；不起 server/client |
+| `-InjectTcpClose` | 否 | false | UdpFailover phase：Round1 后由 nginx `-s stop` 真实关闭主控 TCP；默认走内部模拟断连 |
 
 ### 批量参数
 
@@ -268,6 +272,53 @@ build/smoke-test/
 | `FAILOVER_TERMINAL_OK` | 所有候选耗尽 → `ControlReconnectOrchestrator.performTerminalFinalization` → `ClientLifecycleHelper.finalizeDisconnectIfTerminal` 一次性 terminal 关闭 |
 
 `network.dataPlane.enabled=false` 子用例：必须 **零** UDP listener / Bind / permit 标记，与 TCP revert 路径对齐；`DataPlaneEnabledGuard` 在单测中已覆盖。
+
+## Nginx Failover Harness（UdpFailover phase）
+
+`-Phase UdpFailover` 在 server ready 之前先启动一个本会话专属 nginx 反代，把 TCP 主控端点经 `stream` 块代理到真实 server `$ServerPort`，UDP 数据面仍直连。harness 通过 nginx 干预主控 TCP 的关闭时机，验证 production `ControlReconnectOrchestrator` + `ControlEndpointManager` 在真实 TCP 断链下的恢复链路。
+
+### 拓扑
+
+```
+client ──TCP 25570── nginx stream proxy ──TCP 25565── server (primary)
+client ──UDP uplink 25571 ────────────────────────────→ server (DataPlaneUdpServer)
+```
+
+### 关键参数
+
+| 参数 | 默认 | 说明 |
+|------|------|------|
+| `-NginxExePath` | `D:\app\nginx-1.31.3\nginx.exe` | Nginx stream 反代可执行文件路径，覆盖仓库默认 |
+| `-ProxyPort` | `0` (→ `$ServerPort + 5`，如 `25570`) | Nginx stream listen port；client 经此端口连主控 |
+| `-DryRun` | false | 仅起 nginx + 验 listen + stop + exit；不起 server/client；用于 Pester 验证 harness 启停序列 |
+| `-InjectTcpClose` | false | Round1 后由 nginx `-s stop` 真实关闭 client 已建立的 stream 连接，触发 channelInactive→orchestrator |
+
+### 三种运行场景
+
+1. **内部模拟断连（默认，`-InjectTcpClose` 缺省）**：client 经 nginx 连主控；`ClientSmokeTest` 状态机在 ROUND1 后主动 `conn.disconnect()` 触发 vanilla channelInactive → `ControlReconnectOrchestrator.onPrimaryDisconnected` → `FabricControlReconnectLauncher.startConnecting` 同一 nginx 端口 reconnect → ROUND2。Marker 全由 production path 触发；harness 不主动断链。这是 `mono-JVM 跑 server+client 同进程` 时唯一可行设计（harness 无法在不杀整个 JVM 的前提下真断 socket）。
+
+2. **真实 TCP close 注入（`-InjectTcpClose`，manual 一次性验证）**：Round1 客户端进世界后 harness 等 `DelayMs × 1.2 + 5s` 稳定窗口，再 `nginx -s stop` 强制关闭 stream listen 与已建立的 client→server proxy 连接 → client Netty channelInactive 真触发 → orchestrator 开始恢复 → harness 立即重启 nginx + 等 listen 重开 → client `startConnecting` 重连 25570 通过 nginx 代理回到 server。`HassiumSmokeTest:UDP_FAILOVER_HARNESS primaryCloseInjected` / `nginxQuit` / `primaryRestored` 三个 harness timeline 事件按时间顺序写入 `build/smoke-test/nginx/<SessionId>/harness_timeline.log`，便于 reviewer 关联 production markers 与断链时机。
+
+3. **DryRun（`-DryRun`）**：仅起 nginx + 验 listen + 写 `nginxStarted` timeline + stop + exit 0；不起 server/client/JVM。用于 Pester 验证 harness 启停序列与 `Get-UdpFailoverHarnessTimeline` 解析正确，不依赖真实 server 与 nginx 在线验证。
+
+### Helper 模块与 Pester
+
+- `scripts/smoke/UdpFailoverSmoke.psm1` 暴露三个纯函数：`New-UdpFailoverNginxConfig` / `Get-UdpFailoverMarkers` / `Get-UdpFailoverHarnessTimeline`；harness 与 Pester 同源 shared。
+- `scripts/smoke/runtime-smoke-test.Tests.ps1` Pester v3.4 兼容（用 `Should Be`/`Should Match`，禁用 `Should -BeTrue`）：覆盖 conf 生成 / 6-marker 聚合 / harness timeline 解析 / DryRun / InjectTcpClose 时序不变量。**运行方式**：`powershell -NoProfile -ExecutionPolicy Bypass -Command "Invoke-Pester -Path scripts/smoke/runtime-smoke-test.Tests.ps1 -PassThru"`（Pester 3.4.0 不支持 `-Output Detailed`，用 `-PassThru` 取计数）。
+
+### 清理与 zombie 防御
+
+`Stop-FailoverNginxProxy` 先 `nginx -s stop` 优雅停 master，500ms 后再 `Stop-Process -Name nginx -Force` 兜底（防 master 已死、worker 残留）。本 harness 启的 nginx 子进程会被正常清理；**残留非本会话启的 nginx（如系统 service）不会**被混杀（脚本不主动杀非 `nginx -s stop` 提供的 PID；当前实现是按名全杀，多用户共享主机需谨慎，单用户 dev 机安全）。
+
+### 退出码
+
+| 退出码 | 含义 |
+|--------|------|
+| `0` | PASS（含 DryRun）/ client ROUND2 已断开→重连成功 + markers 全 fire |
+| `2` | FAIL：markers 缺失或 client 非 0 退出 |
+| `3` | server_not_ready |
+| `4` | `NginxExePath` 不存在（UdpFailover phase 必备） |
+| `5` | nginx listen 未就绪 |
 
 ## 已知限制
 
