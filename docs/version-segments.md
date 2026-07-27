@@ -114,7 +114,7 @@ MC_1_21_11
 
 | 分界 | 动作 |
 |------|------|
-| 1.20.1 | 基准：现有网络实现；**UDP 数据面 + TCP 控制 Failover 落地点**（Task 1-9 commit `22c9c3f`，仅 fabric 1.20.1 已编译验证；NeoForge/Forge 多版本适配为 Task 10+ followup）|
+| 1.20.1 | 基准：现有网络实现；**UDP 数据面 + TCP 控制 Failover（主控热切 + 加权分流）落地点**（Task 1-9 commit `22c9c3f`）；后续九锚适配由 `931b393`（Fabric launcher 跨版本守卫）与 `e9a9e69`（NeoForge 主控热切 + 加权分流接线 + kcp io.netty split-package 剥离）完成，Fabric + NeoForge × 九锚点 compile 矩阵全 BUILD SUCCESSFUL |
 | 1.20.2 | CustomPayload 路径；段内无 Forge；1.20.6+ Forge 用 ChannelBuilder play() |
 | 1.20.4 | **仅 NeoForge**：SimpleChannel 被移除，改用 `RegisterPayloadHandlerEvent` + `CustomPacketPayload.write/id`（1.20.5+ 才有 StreamCodec） |
 | 1.20.5 | STREAM_CODEC / `type()`；聚合写包、原版包枚举等 common 能力 |
