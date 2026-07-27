@@ -10,6 +10,7 @@
 [English](README-en.md) · **简体中文**
 
 > 仓库：[github.com/limuqy/Hassium](https://github.com/limuqy/Hassium)
+> 用户文档：[GitHub Wiki](https://github.com/limuqy/Hassium/wiki) · [English Wiki](https://github.com/limuqy/Hassium/wiki/Home-en)
 
 ![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)
 ![Minecraft](https://img.shields.io/badge/Minecraft-1.20.1--1.21.11-green.svg)
@@ -146,8 +147,24 @@ flowchart TD
 开发者入口：[`CLAUDE.md`](CLAUDE.md)、[`AGENTS.md`](AGENTS.md)。
 
 ---
+## 用户文档
 
-## 文档
+安装、完整配置、命令、功能说明、兼容性与排查见 [GitHub Wiki](https://github.com/limuqy/Hassium/wiki)。
+
+| 页面 | 内容 |
+| --- | --- |
+| [安装](https://github.com/limuqy/Hassium/wiki/Installation) | 下载、前置和各加载器差异 |
+| [配置](https://github.com/limuqy/Hassium/wiki/Configuration) | 完整配置项表与 GUI 路径 |
+| [命令](https://github.com/limuqy/Hassium/wiki/Commands) | `/hassium` 与 `/hassiumc` 命令参考 |
+| [特性](https://github.com/limuqy/Hassium/wiki/Features) | 缓存、分段增量、光照优化等功能详解 |
+| [超视渲染](https://github.com/limuqy/Hassium/wiki/Beyond-View-Render) · [世界导出](https://github.com/limuqy/Hassium/wiki/World-Export) | 两项客户端功能的使用说明 |
+| [兼容性](https://github.com/limuqy/Hassium/wiki/Compatibility) · [排查](https://github.com/limuqy/Hassium/wiki/Troubleshooting) | 与其他模组并用和诊断路径 |
+| [数据面与主控 Failover](https://github.com/limuqy/Hassium/wiki/Data-Plane-and-Failover) | UDP/KCP 数据面服务端运维说明 |
+
+---
+
+
+## 开发文档
 
 | 文档 | 内容 |
 | --- | --- |
