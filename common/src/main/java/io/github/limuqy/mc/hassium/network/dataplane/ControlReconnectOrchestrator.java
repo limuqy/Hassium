@@ -1,6 +1,8 @@
 package io.github.limuqy.mc.hassium.network.dataplane;
 
 import io.github.limuqy.mc.hassium.cache.client.ClientLifecycleHelper;
+import io.github.limuqy.mc.hassium.config.HassiumConfig;
+import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -8,6 +10,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Objects;
+import java.util.function.LongSupplier;
 
 /**
  * Task 9 — 控制面自动重连编排（plan §995-1003）。
@@ -33,13 +36,12 @@ import java.util.Objects;
 public final class ControlReconnectOrchestrator {
     private static final Logger SMOKE_LOG = LoggerFactory.getLogger("HassiumSmokeTest");
 
-    /** 相对音频窗口：默认 60 秒，由 §1093 "controlStallMs requires server-issued FailoverPermit" 推导。 */
-    static final long DEFAULT_RECOVERY_WINDOW_MS = 60_000L;
 
     private final ControlReconnectLauncher launcher;
     /** bootstrap + advertised 合并后的候选，按 priority 降序（merge 时已 cap） */
     private final List<ControlEndpoint> candidates;
     private final ControlEndpointManager manager = new ControlEndpointManager();
+    private final LongSupplier recoveryWindowMs;
 
     private boolean recovering = false;
     private long connectionEpoch = 0L;
@@ -47,28 +49,40 @@ public final class ControlReconnectOrchestrator {
     private int terminalFinalizations = 0;
     /** 当前 launch 在 flight 中的候选；onReconnectFailed 会以这个为参数被调用 */
     private ControlEndpoint current;
+    private long recoveryStartedAtMs;
+    private long recoveryDeadlineMs;
 
     public ControlReconnectOrchestrator(ControlReconnectLauncher launcher,
                                         List<ControlEndpoint> bootstrap,
                                         List<ControlEndpoint> advertised) {
+        this(launcher, bootstrap, advertised,
+                () -> HassiumConfigService.getInstance().getDataPlaneConfig().recoveryWindowMs());
+    }
+
+    ControlReconnectOrchestrator(ControlReconnectLauncher launcher,
+                                 List<ControlEndpoint> bootstrap,
+                                 List<ControlEndpoint> advertised,
+                                 LongSupplier recoveryWindowMs) {
         this.launcher = Objects.requireNonNull(launcher);
+        this.recoveryWindowMs = Objects.requireNonNull(recoveryWindowMs);
         this.candidates = new ArrayList<>();
-        // 候选合并 idempotent — 复用 ControlEndpointManager 的 dedup + cap 逻辑
         this.manager.mergeBootstrapAndAdvertised(bootstrap, advertised);
     }
 
     /** 测试便捷构造：直接给定合并后候选列表。 */
     static ControlReconnectOrchestrator forTest(ControlReconnectLauncher launcher,
                                                 List<ControlEndpoint> candidates) {
-        ControlReconnectOrchestrator o =
-                new ControlReconnectOrchestrator(launcher, candidates, java.util.List.of());
-        // forTest 跳过 manager.merge，直接把候选灌入内部 list
-        o.candidates.clear();
-        for (ControlEndpoint c : candidates) {
-            if (c != null) o.candidates.add(c);
-        }
-        // 用 manager.startRecovery 立即把 deduped candidates 浮起来；窗口设为大值，不会 expiry 烦扰测试
-        o.manager.mergeBootstrapAndAdvertised(candidates, java.util.List.of());
+        return forTest(launcher, candidates, HassiumConfig.DEFAULT.serverNetwork().dataPlane());
+    }
+
+    /** 测试便捷构造：以不可变数据面配置固定恢复窗口。 */
+    static ControlReconnectOrchestrator forTest(ControlReconnectLauncher launcher,
+                                                List<ControlEndpoint> candidates,
+                                                HassiumConfig.DataPlaneConfig dataPlaneConfig) {
+        ControlReconnectOrchestrator o = new ControlReconnectOrchestrator(
+                launcher, candidates, List.of(), dataPlaneConfig::recoveryWindowMs);
+        o.candidates.addAll(candidates.stream().filter(Objects::nonNull).toList());
+        o.manager.mergeBootstrapAndAdvertised(candidates, List.of());
         return o;
     }
 
@@ -82,7 +96,7 @@ public final class ControlReconnectOrchestrator {
         if (active != null) bootstrap.add(active);
         // candidates（构造时已有）作为 advertised
         manager.mergeBootstrapAndAdvertised(bootstrap, candidates);
-        manager.startRecovery(DEFAULT_RECOVERY_WINDOW_MS);
+        startRecoveryWindow();
         // 注意：startRecovery 内部 rebuildRemaining 会从 candidates 重建 remaining，
         // 所以 active 的剔除必须放在它之后才能生效。
         if (active != null) {
@@ -108,12 +122,20 @@ public final class ControlReconnectOrchestrator {
         // 仍在新轮存活 → candidate 已被 recordAttemptFailure 剔除，下一候选由下一 onReconnectFailed 链路触发。
     }
 
-    /** 新握手 S2C tail 收到，恢复成功：clients 标 RECOVERED + 停止 launch。 */
-    public synchronized void onHandshakeAccepted() {
+    /**
+     * 新握手 S2C tail 收到时结束一轮真实恢复。
+     *
+     * @return {@code true} 仅表示本调用完成了已启动的 failover 恢复；首次连接返回 {@code false}。
+     */
+    public synchronized boolean onHandshakeAccepted() {
+        if (!recovering) {
+            return false;
+        }
         recovering = false;
         terminalFinalized = false;
         // connectionEpoch 保持本轮，便于客户端据此 BindRequest 新一代 UDP
         SMOKE_LOG.info("HassiumSmokeTest:UDP_FAILOVER FAILOVER_RECONNECT_OK epoch={}", connectionEpoch);
+        return true;
     }
 
     /** 一候选 reconnect 失败：移除并尝试下一个；若耗尽 → terminal finalize 一次。 */
@@ -161,6 +183,14 @@ public final class ControlReconnectOrchestrator {
         return current;
     }
 
+    synchronized long recoveryStartedAtMs() {
+        return recoveryStartedAtMs;
+    }
+
+    synchronized long recoveryDeadlineMs() {
+        return recoveryDeadlineMs;
+    }
+
     // ===== test injection =====
 
     /** 测试 hook：以指定 epoch + 起点 begin recovery，不经 onPrimaryDisconnected 路径。 */
@@ -169,9 +199,15 @@ public final class ControlReconnectOrchestrator {
         connectionEpoch = epoch;
         List<ControlEndpoint> bootstrap = originator != null ? List.of(originator) : List.of();
         manager.mergeBootstrapAndAdvertised(bootstrap, candidates);
-        manager.startRecovery(DEFAULT_RECOVERY_WINDOW_MS);
+        startRecoveryWindow();
         if (originator != null) manager.recordAttemptFailure(originator);
         launchNextCandidate();
+    }
+
+    private void startRecoveryWindow() {
+        manager.startRecovery(recoveryWindowMs.getAsLong());
+        recoveryStartedAtMs = manager.recoveryStartedAtMs();
+        recoveryDeadlineMs = manager.recoveryDeadlineMs();
     }
 
     // ===== internal =====

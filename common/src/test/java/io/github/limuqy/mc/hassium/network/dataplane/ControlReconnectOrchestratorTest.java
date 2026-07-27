@@ -1,6 +1,7 @@
 package io.github.limuqy.mc.hassium.network.dataplane;
 
 import org.junit.jupiter.api.AfterEach;
+import io.github.limuqy.mc.hassium.config.HassiumConfig;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -82,6 +83,15 @@ class ControlReconnectOrchestratorTest {
     }
 
     @Test
+    @DisplayName("初始握手不是 failover 恢复")
+    void initialHandshakeIsNotReportedAsRecovery() {
+        ControlReconnectOrchestrator orchestrator =
+                ControlReconnectOrchestrator.forTest(new RecordingLauncher(), List.of());
+
+        assertFalse(orchestrator.onHandshakeAccepted(), "没有断开上下文的首次握手不得报告恢复成功");
+    }
+
+    @Test
     @DisplayName("FailoverPermit 同 epoch 触发 attempts next candidate；过期/不匹配忽略")
     void failoverPermitOnlyLaunchesOnMatchingNonExpiredEpoch() {
         RecordingLauncher launcher = new RecordingLauncher();
@@ -108,6 +118,30 @@ class ControlReconnectOrchestratorTest {
         long past = System.currentTimeMillis() - 5_000L;
         orchestrator.onFailoverPermit(1L, past);
         assertTrue(orchestrator.isRecovering(), "过期 permit 不终止恢复");
+    }
+
+    @Test
+    @DisplayName("恢复窗口在恢复开始时从配置固定")
+    void reconnectUsesConfiguredRecoveryWindow() {
+        RecordingLauncher launcher = new RecordingLauncher();
+        ControlReconnectOrchestrator orchestrator = ControlReconnectOrchestrator.forTest(
+                launcher,
+                List.of(endpoint("backup.example", 25565, 100)),
+                dataPlaneConfig(1_234L));
+
+        orchestrator.onPrimaryDisconnected(endpoint("primary.example", 25565, 100), "closed");
+
+        assertEquals(1_234L, orchestrator.recoveryDeadlineMs() - orchestrator.recoveryStartedAtMs());
+    }
+
+
+    private static HassiumConfig.DataPlaneConfig dataPlaneConfig(long recoveryWindowMs) {
+        return new HassiumConfig.DataPlaneConfig(
+                true,
+                HassiumConfig.ServerNetworkConfig.DEFAULT.dataPlane().udpListeners(),
+                6_000L,
+                30_000L,
+                recoveryWindowMs);
     }
 
     // ===== fixture helpers =====

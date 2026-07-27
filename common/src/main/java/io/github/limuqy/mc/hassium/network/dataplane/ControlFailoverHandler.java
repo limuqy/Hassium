@@ -1,4 +1,6 @@
 package io.github.limuqy.mc.hassium.network.dataplane;
+import io.github.limuqy.mc.hassium.config.HassiumConfig;
+import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -63,6 +65,8 @@ public final class ControlFailoverHandler {
         long lastControlActivityMs;
         Runnable masterClose;
         boolean udpSessionPresent;
+        long controlStallMs;
+        long failoverExpiryMs;
         PlayerState(UUID playerId) { this.playerId = playerId; }
     }
 
@@ -72,19 +76,32 @@ public final class ControlFailoverHandler {
 
     private final Map<UUID, PlayerState> states = new ConcurrentHashMap<>();
     private final List<Permit> permits = Collections.synchronizedList(new ArrayList<>());
-    private volatile long controlStallMs = DEFAULT_CONTROL_STALL_MS;
-    private volatile long failoverPermitTtlMs = DEFAULT_FAILOVER_PERMIT_TTL_MS;
+    private final java.util.function.Supplier<HassiumConfig.DataPlaneConfig> dataPlaneConfigSupplier;
+    private ControlFailoverHandler() {
+        this(() -> HassiumConfigService.getInstance().getDataPlaneConfig());
+    }
 
-    private ControlFailoverHandler() {}
+    private ControlFailoverHandler(HassiumConfig.DataPlaneConfig dataPlaneConfig) {
+        this(() -> dataPlaneConfig);
+    }
+
+    private ControlFailoverHandler(java.util.function.Supplier<HassiumConfig.DataPlaneConfig> dataPlaneConfigSupplier) {
+        this.dataPlaneConfigSupplier = dataPlaneConfigSupplier;
+    }
 
     /** 测试便利工厂：返回隔离实例，由 caller 自行 registerControlConnection。 */
     static ControlFailoverHandler forTest() {
-        return new ControlFailoverHandler();
+        return new ControlFailoverHandler(HassiumConfig.DEFAULT.serverNetwork().dataPlane());
+    }
+
+    /** 测试便利工厂：将不可变数据面配置固定到该 handler。 */
+    static ControlFailoverHandler forTest(HassiumConfig.DataPlaneConfig dataPlaneConfig) {
+        return new ControlFailoverHandler(dataPlaneConfig);
     }
 
     /** 测试便利工厂：直接绑定玩家 master close 句柄。 */
     static ControlFailoverHandler forTest(UUID playerId, long epoch, Runnable masterClose) {
-        ControlFailoverHandler h = new ControlFailoverHandler();
+        ControlFailoverHandler h = forTest();
         if (masterClose != null) {
             h.registerControlConnection(playerId, epoch, masterClose);
         }
@@ -102,6 +119,7 @@ public final class ControlFailoverHandler {
             st.lastControlActivityMs = System.currentTimeMillis();
             st.masterClose = masterClose;
             st.udpSessionPresent = false;
+            snapshotTiming(st);
             return st.epoch;
         }
     }
@@ -124,6 +142,7 @@ public final class ControlFailoverHandler {
         synchronized (st) {
             st.epoch = epoch;
             st.masterClose = masterClose;
+            snapshotTiming(st);
         }
     }
 
@@ -177,9 +196,18 @@ public final class ControlFailoverHandler {
         return List.copyOf(permits);
     }
 
-    public void setControlStallMs(long ms) { this.controlStallMs = Math.max(0L, ms); }
-    public void setFailoverPermitTtlMs(long ms) { this.failoverPermitTtlMs = Math.max(0L, ms); }
-    public long failoverPermitTtlMs() { return failoverPermitTtlMs; }
+    public long failoverPermitTtlMs() {
+        return dataPlaneConfigSupplier.get().failoverExpiryMs();
+    }
+
+    /** 返回当前玩家 session 固定的 permit TTL，避免 reload 改写恢复周期。 */
+    public long failoverPermitTtlMs(UUID playerId) {
+        PlayerState st = states.get(playerId);
+        if (st == null) return failoverPermitTtlMs();
+        synchronized (st) {
+            return st.failoverExpiryMs;
+        }
+    }
 
     /**
      * 客户端经 UDP 发出 TYPE_FAILOVER_REQUEST 时服务端入口。
@@ -200,7 +228,7 @@ public final class ControlFailoverHandler {
                 return FailoverResult.EPOCH_MISMATCH;
             }
             long elapsed = nowMs - st.lastControlActivityMs;
-            if (elapsed < controlStallMs) {
+            if (elapsed < st.controlStallMs) {
                 return FailoverResult.REJECTED_ACTIVE;
             }
             Runnable close = st.masterClose;
@@ -213,5 +241,11 @@ public final class ControlFailoverHandler {
             st.masterClose = null; // 单次生效，避免重复关闭
             return FailoverResult.PERMITTED;
         }
+    }
+
+    private void snapshotTiming(PlayerState st) {
+        HassiumConfig.DataPlaneConfig dataPlaneConfig = dataPlaneConfigSupplier.get();
+        st.controlStallMs = dataPlaneConfig.controlStallMs();
+        st.failoverExpiryMs = dataPlaneConfig.failoverExpiryMs();
     }
 }

@@ -36,6 +36,7 @@ public final class ControlEndpointManager {
     private final LinkedHashMap<String, ControlEndpoint> remaining = new LinkedHashMap<>();
     private boolean recoveryStarted = false;
     private long deadlineMs = Long.MAX_VALUE;
+    private long recoveryStartedAtMs;
     private LongSupplier clock = System::currentTimeMillis;
 
     public void mergeBootstrapAndAdvertised(List<ControlEndpoint> bootstrap,
@@ -75,7 +76,8 @@ public final class ControlEndpointManager {
     void startRecoveryWithClock(long deadlineInMs, LongSupplier clock) {
         this.clock = clock;
         this.recoveryStarted = true;
-        this.deadlineMs = clock.getAsLong() + Math.max(0L, deadlineInMs);
+        this.recoveryStartedAtMs = clock.getAsLong();
+        this.deadlineMs = recoveryStartedAtMs + Math.max(0L, deadlineInMs);
         rebuildRemaining();
         // 恢复窗口为非正时立即清空 remaining — nextCandidate 自然空
         if (deadlineInMs <= 0L) {
@@ -111,6 +113,14 @@ public final class ControlEndpointManager {
 
     public boolean isRecoveryActive() {
         return recoveryStarted && clock.getAsLong() < deadlineMs && !remaining.isEmpty();
+    }
+
+    long recoveryStartedAtMs() {
+        return recoveryStartedAtMs;
+    }
+
+    long recoveryDeadlineMs() {
+        return deadlineMs;
     }
 
     private void rebuildRemaining() {

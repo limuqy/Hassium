@@ -1,10 +1,12 @@
 package io.github.limuqy.mc.hassium.network.dataplane;
 
 import org.junit.jupiter.api.BeforeEach;
+import io.github.limuqy.mc.hassium.config.HassiumConfig;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import java.util.UUID;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -34,6 +36,22 @@ class ControlFailoverHandlerTest {
     void setUp() {
         connection = new FakeConnection();
         handler = ControlFailoverHandler.forTest(PLAYER, 7L, connection);
+    }
+
+    @Test
+    @DisplayName("配置的 stall 和 permit expiry 控制授权时序")
+    void permitUsesConfiguredStallAndExpiry() {
+        var config = dataPlaneConfig(50L, 700L, 900L);
+        var configuredHandler = ControlFailoverHandler.forTest(config);
+        configuredHandler.registerControlConnection(PLAYER, 9L, () -> { });
+        configuredHandler.onUdpSessionEstablished(PLAYER, 9L);
+        configuredHandler.recordControlActivity(PLAYER, 9L, 1_000L);
+
+        assertEquals(ControlFailoverHandler.FailoverResult.REJECTED_ACTIVE,
+                configuredHandler.requestFailover(PLAYER, 9L, 0, 1_049L));
+        assertEquals(ControlFailoverHandler.FailoverResult.PERMITTED,
+                configuredHandler.requestFailover(PLAYER, 9L, 0, 1_050L));
+        assertEquals(700L, configuredHandler.failoverPermitTtlMs());
     }
 
     @Test
@@ -137,6 +155,17 @@ class ControlFailoverHandlerTest {
         assertEquals(ControlFailoverHandler.FailoverResult.NO_CONNECTION,
                 handler.requestFailover(PLAYER, 7L, 1, 10_000L));
         assertTrue(handler.permits().isEmpty());
+    }
+
+    private static HassiumConfig.DataPlaneConfig dataPlaneConfig(long controlStallMs,
+                                                                  long failoverExpiryMs,
+                                                                  long recoveryWindowMs) {
+        return new HassiumConfig.DataPlaneConfig(
+                true,
+                HassiumConfig.ServerNetworkConfig.DEFAULT.dataPlane().udpListeners(),
+                controlStallMs,
+                failoverExpiryMs,
+                recoveryWindowMs);
     }
 
     /** Fake connection：仅记录是否被关闭。 */
