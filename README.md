@@ -15,6 +15,7 @@
 ![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)
 ![Minecraft](https://img.shields.io/badge/Minecraft-1.20.1--1.21.11-green.svg)
 ![Loaders](https://img.shields.io/badge/Loaders-Fabric%20%7C%20Forge%20%7C%20NeoForge-orange.svg)
+[![CurseForge](https://img.shields.io/badge/CurseForge-Hassium-644DF4.svg?logo=curseforge)](https://www.curseforge.com/minecraft/mc-mods/hassium)
 
 ---
 
@@ -55,7 +56,7 @@
 
 1. 从 [Releases](https://github.com/limuqy/Hassium/releases) 下载对应加载器的 JAR。
 2. 放入客户端或服务端 `mods/`。
-3. 启动后生成 `config/hassium/hassium-client.toml` 与 `config/hassium/hassium-common.toml`（Fabric：Mod Menu + Cloth；Forge/NeoForge：模组列表 Cloth 配置屏，亦可手改 toml）。
+3. 启动后生成 `config/hassium/hassium-client.toml` 与 `config/hassium/hassium-server.toml`（Fabric：Mod Menu + Cloth；Forge/NeoForge：模组列表 Cloth 配置屏，亦可手改 toml）。
 
 **依赖：** Fabric 需 Fabric API（Cloth 已 jiJ）；Forge / NeoForge 无额外前置。建议双端均安装以启用协商压缩与缓存。
 
@@ -75,7 +76,7 @@
 
 ## 配置摘要
 
-文件：`config/hassium/hassium-client.toml`、`config/hassium/hassium-common.toml`
+文件：`config/hassium/hassium-client.toml`、`config/hassium/hassium-server.toml`
 
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
@@ -88,10 +89,10 @@
 | `clientCache.ovdUnloadDelaySecs` | `5` | 离开超视渲染环带后延迟卸载（秒；0=同步） |
 | `network.enabled` | `true` | 自定义通道 |
 | `network.globalPacketCompression` | `true` | 全局 ZSTD |
-| `network.maxChunksPerTick` | `10` | 每玩家每 tick 序列化上限 |
+| `network.maxChunksPerTick` | `32` | 每玩家每 tick 序列化上限 |
 | `clientCache.mainThreadChunkBudgetMs` | `15` | 客户端每帧 apply 预算（ms） |
 | `network.metricsEnabled` | `false` | 指标收集（默认关闭；冒烟测试自动强开） |
-| `network.dataPlane.enabled` | `false` | 数据面 UDP/KCP（默认关，开启请先确认 6 marker 冒烟） |
+| `network.dataPlane.enabled` | `true` | 数据面 UDP/KCP 与 TCP 主控恢复；默认端点仅适合本机开发，公网部署前请配置可达端点并确认 6 marker 冒烟 |
 | `network.dataPlane.controlStallMs` | `6000` | TCP 主控卡顿多久后触发 `FailoverRequest` |
 | `debug.*` | `false` | 分类调试日志（默认安静） |
 

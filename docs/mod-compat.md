@@ -88,7 +88,7 @@ Sodium / Iris / Lithium / FerriteCore / EntityCulling / ImmediatelyFast 等通�
 | **Configured** | Forge/NeoForge 可选；Fabric 不依赖 |
 | **Forge Config API Port** | Fabric **不使用**（Night Config 自管 toml）；仅 Forge **1.20.6** jiJ（ModConfigSpec 桥接）；NeoForge 原生 Spec |
 
-配置文件：物理客户端为 `config/hassium/hassium-client.toml` + `hassium-common.toml`；专用服仅 `hassium-common.toml`。
+配置文件：物理客户端为 `config/hassium/hassium-client.toml` + `hassium-server.toml`；专用服仅 `hassium-server.toml`。
 
 | 配置 | 作用 |
 |------|------|
@@ -97,12 +97,15 @@ Sodium / Iris / Lithium / FerriteCore / EntityCulling / ImmediatelyFast 等通�
 | `network.globalPacketCompression` | 关全局 ZSTD |
 | `network.enablePacketAggregation` | 关包聚合 |
 | `network.compressionBlacklist` | 排除指定包 ID（第三方通道） |
+| `network.dataPlane.enabled` | 关 UDP/KCP bulk 与 TCP 主控恢复；用于隔离 UDP 防火墙、NAT 或代理问题，仍保留 TCP 主控与普通网络路径 |
 | `clientCache.lightCacheEnabled` | 关光照缓存（每次加载触发重算） |
 | `clientCache.sectionDeltaEnabled` | 关分段增量（过期改走全量） |
 | `clientCache.viewDistanceExtensionEnabled` | 关 超视渲染（恢复原版 RD 钳制） |
 | `clientCache.maxRenderDistance` | 超视渲染 / 有效 RD 上限（2–64） |
 | `clientCache.ovdUnloadDelaySecs` | 离开超视渲染环带后延迟卸载（秒） |
 | `compat.requireClientMod` | 是否强制客户端装模组 |
+
+UDP 数据面部署时，`udpListeners[*].bindHost` 只用于服务器本机监听，`reachableEndpoints` 才下发给客户端。公网部署必须填写客户端可达地址并放行 UDP 端口；禁止把 `0.0.0.0`、`::` 或内网 bind 地址写为 reachable endpoint。控制 TCP 重连候选使用独立的 `network.controlReachableEndpoints`，不与 UDP 列表混用。详见 [`architecture.md`](architecture.md) §9.5。
 
 ## 10. Mixin refmap（`hassium.refmap.json`）
 

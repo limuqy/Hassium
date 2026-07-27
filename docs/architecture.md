@@ -65,16 +65,17 @@ Sector 3+:    [length(4)][type=126][ZSTD 压缩数据]
 | 全局包压缩 | Pipeline 替换原版 Zlib | `globalPacketCompression=true` |
 | 上下文 / magicless / 聚合 | 提升压缩比 | 均默认启用 |
 | 紧凑包头 | 聚合包内 `CompactHeaderCodec` | 默认启用 |
-| 多通道数据面（PoC） | 1.20.1 fabric：双裸 TCP 端口 + Bind + HKDF/AES-CFB8；bulk 走 `BulkRouter`；`share`/`exclusive` 路由 + `degraded` 降级 | `DataPlanePoCConfig.ENABLED`（PoC 静态常量，待迁移 toml `network.dataPlane`） |
+| UDP/KCP 数据面 | 每个 `udpListeners` 项建立独立 KCP session；按 `weight` 加权轮询发送 S2C bulk，异常时自动回落 TCP | `network.dataPlane.enabled=true`（默认端点仅本机可用） |
+| TCP 控制恢复 | 数据面健康时允许经 `FailoverPermit` 迁移主控 TCP；候选耗尽后只执行一次终态清理 | 默认 6 s stall、30 s permit、60 s 恢复窗口 |
 
-控制面（握手、index sync、chunkHash 等）在压缩黑名单，不进 PENDING 聚合缓冲，亦不进数据面（数据面 Bind 后仅 S2C bulk）。多通道设计见 [`multi-channel_network_research.md`](multi-channel_network_research.md) 与 [`superpowers/specs/2026-07-25-multi-channel-dataplane-poc-design.md`](superpowers/specs/2026-07-25-multi-channel-dataplane-poc-design.md)。
+控制面（握手、index sync、chunkHash 等）在压缩黑名单，不进 PENDING 聚合缓冲，也不走 UDP 数据面；UDP 只承载 Bind 后的 S2C bulk。多通道的早期裸 TCP PoC 已退役；运行时验证见 [`runtime-smoke-test.md`](runtime-smoke-test.md) 的 `UdpFailover` phase。
 
 ## 5. 配置默认值（安全与行为）
 
 配置文件：
 
 - `config/hassium/hassium-client.toml` — 仅物理客户端（缓存与客户端网络应用项）
-- `config/hassium/hassium-common.toml` — 客户端与专用服（存储、共享网络、兼容与调试）
+- `config/hassium/hassium-server.toml` — 客户端与专用服（存储、服务端网络、兼容与调试）
 
 游戏内编辑：
 - **Fabric**：Night Config 自管 toml + jiJ **Cloth**；安装 **Mod Menu** 即可打开。不依赖 FCAP / Configured。
@@ -94,13 +95,19 @@ Sector 3+:    [length(4)][type=126][ZSTD 压缩数据]
 | `network.enabled` | true | Hassium 通道 |
 | `network.globalPacketCompression` | true | 全局 ZSTD |
 | `network.compressionLevel` | 3 | 网络压缩等级（速度优先） |
-| `network.maxChunksPerTick` | 10 | 每玩家每 server tick 序列化上限 |
+| `network.maxChunksPerTick` | 32 | 每玩家每 server tick 序列化上限 |
+| `network.dataPlane.enabled` | true | 启用 UDP/KCP 数据面和控制恢复；关后不启动 UDP listener、不广告端点、不处理 failover |
+| `network.dataPlane.controlStallMs` | 6000 | 控制 TCP 静默多久后可申请 failover（ms） |
+| `network.dataPlane.failoverExpiryMs` | 30000 | 服务端 `FailoverPermit` 有效期（ms） |
+| `network.dataPlane.recoveryWindowMs` | 60000 | 客户端候选重连窗口（ms） |
 | `clientCache.mainThreadChunkBudgetMs` | 15 | 客户端主线程 apply 预算（ms） |
 | `clientCache.lightCacheEnabled` | true | 光照缓存：首次加载重算后存储光照，缓存命中直接应用 |
 | `network.maxLightRecomputePerFrame` | 10 | 每帧最多重算光照的区块数 |
-| `network.metricsEnabled` | true | 指标收集 |
+| `network.metricsEnabled` | false | 指标收集 |
 | `compat.requireClientMod` | false | 无模组客户端可连 |
 | `debug.*` | 全 false | 调试分类日志，见下 |
+
+`network.controlReachableEndpoints` 是客户端主控 TCP 重连候选；每项为 `{ host, port, priority }`，最多 4 项。`network.dataPlane.udpListeners` 是服务端 UDP socket 与其客户端可达地址的列表；每项为 `{ bindHost, bindPort, weight, reachableEndpoints }`，其中 `reachableEndpoints` 同样使用 `{ host, port, priority }`，最多 8 项。`bindHost` 只在服务端绑定，绝不下发给客户端；公网服必须把默认的 `127.0.0.1:25565` 改成客户端实际可达的 UDP 地址，并放行对应 UDP 端口。
 
 ## 6. 日志策略
 
@@ -153,49 +160,21 @@ ERROR / WARN 始终输出。
 | **分段增量** | `clientCache.sectionDeltaEnabled`（默认 true） | MISMATCH 时按 section 比对，仅补变更分段 + BE 覆盖；失败/超时回退全量 | [`chunk-cache.md`](chunk-cache.md) §11.5、[`disk-nbt-cache.md`](disk-nbt-cache.md) |
 | **超视渲染** | `viewDistanceExtensionEnabled`、`maxRenderDistance`、`ovdUnloadDelaySecs` | 多人、clientVD>serverVD 时本地缓存回填环带；Forget 原地 renderOnly；不向服索要视距外区块/BE | [`ovd.md`](ovd.md)、[`chunk-cache.md`](chunk-cache.md) §10 |
 | **世界导出** | `/hassiumc export [<服务器IP>] [seed]` | 客户端缓存 → 原版 Anvil（type2 zlib）；无实体/仅去过的区块快照 | [`chunk-cache.md`](chunk-cache.md) §12、[`disk-nbt-cache.md`](disk-nbt-cache.md) |
-| **主控热切** | `network.dataPlane.enabled`、`controlStallMs`、`failoverPermitTtlMs` | TCP 主控 `channelInactive` 或控制面 stalled（UDP 健康时）→ 客户端发 `FailoverRequest`、服务端校验后 `FailoverPermit` 关旧 master；候选串行重连；隐藏断连 UI、保留 disk cache/executor；候选耗尽一次性 finalize | 该任务 commit `22c9c3f`（Task 1-9）|
-| **加权分流** | `network.dataPlane.udpEndpoints`、每 endpoint `weight`（WRR） | 多 UDP/KCP endpoint 独立 session、按 `weight` 加权轮询承载区块 bulk；`share`/`exclusive` 模式 + UDP 健康度调权；控制面留原版 TCP | 该任务 commit `22c9c3f`（Task 1-9）|
-| **多通道数据面（PoC 历史）** | `DataPlanePoCConfig.ENABLED`（1.20.1 fabric） | **已退役**：服务端双裸 TCP 端口 + Bind + HKDF-SHA256/AES-CFB8 路径已被 UDP 数据面替代；保留 `tryRouteBulk` faade 与 `DataPlaneServer.tryRouteBulk` 转发到 `DataPlaneUdpServer`，legacy 测试仍可用 | [`multi-channel_network_research.md`](multi-channel_network_research.md) §14.1、原 PoC spec/plan |
+| **主控热切** | `network.controlReachableEndpoints`、`network.dataPlane.controlStallMs` | TCP 主控 `channelInactive`，或控制面 stalled 且 UDP 健康时，客户端进入恢复态并按 priority 串行重连；服务端许可路径以 `FailoverPermit` 限定时效；候选耗尽后终态清理只执行一次 | [`runtime-smoke-test.md`](runtime-smoke-test.md) §`udp-failover` |
+| **加权分流** | `network.dataPlane.udpListeners`、每 listener `weight` | 每个 UDP/KCP listener 建独立 session，S2C bulk 按权重加权轮询；不健康或无可用 session 时回落 TCP，控制面始终保留 TCP | [`runtime-smoke-test.md`](runtime-smoke-test.md) §`udp-failover` |
+| **多通道数据面（历史）** | 早期 `DataPlanePoCConfig` | 1.20.1 Fabric 的双裸 TCP PoC 已退役，不是生产配置或运维入口 | [`multi-channel_network_research.md`](multi-channel_network_research.md) |
 
-客户端磁盘缓存 payload 为 NBT（`"HBT1"` + CompoundTag），主一致性路径为 **Live-Unload Snapshot**（renderOnly 跳过落盘）。旧 packet 字节缓存读到即删并全量请求。
-
-## 10. 路线图（未实现）
-
-- **方向性预加载**：按移动方向提高推送优先级（不改协议；方案写入 `chunk-cache.md` 时同步）
-- **分段增量接回超视渲染**：超视渲染 miss 路径仍不走 sectionDelta（需可靠 merge + 集成测试）
-- **`migration/` / `HassiumApi`**：公共 API / 世界迁移工具桩，尚未落地
-- **Fog / Sodium 条件 Mixin**：仅在 RD>32 穿帮或实测 mesh 不建时按需补
-- **UDP 数据面 production toml 配置**：`network.dataPlane.udpEndpoints` / token lifecycle 在 `hassium.toml` 正式落地（当前由 `DataPlanePoCConfig` 临时驱动）；多版本 (1.20.6+) Adapter 验证；NeoForge/Forge 同构；TCP 数据面遗留类（`BulkRouter`/`DataPlaneCodec`/`VarIntLengthFrameSplitter`/`PlayerChannelBundle` 等老 PoC 生产路径）在 `ServerSmokeTest` 退役 dataplane phase 后删除（详见 Task 10 followup）
+客户端磁盘缓存 payload 为 NBT（`"HBT1"` + CompoundTag），主一致性路径为 **Live-Unload Snapshot**（renderOnly 跳过落盘）。控制恢复期间缓存写队列与执行器保持可用，重连成功后继续命中既有缓存；旧 packet 字节缓存读到即删并全量请求。
 
 ## 9.5. UDP 数据面 + TCP 控制 Failover 运维
 
-**网络拓扑**：
-- **控制面（Master TCP）**：原版 Minecraft login + Play Connection；由服务端发出 `FailoverPermit` 允许客户端在 master stalled 时切备份控制端点。备份候选列表由 S2C `UdpDataPlaneHandshakeTail.controlEndpoints`（host:port + priority）下发；客户端混合 bootstrap + advertised，按 priority 降序，最多 4 个候选（`ControlEndpointManager.MAX_CANDIDATES`）。
-- **数据面（UDP/KCP）**：服务端每个配置的 `(host, port)` UDP 端点绑一个独立 KCP `ReliableDatagramSession`；客户端 `DataPlaneClientBundle.connectAndBind` 对每个 advertised endpoint 单独 BindRequest + HKDF-erived AES-GCM key。
+**拓扑与职责**：原版 Minecraft TCP 连接仍是 login、控制与兼容回退路径；UDP/KCP 只承载已 Bind session 的 S2C bulk。服务端从 `network.dataPlane.udpListeners` 向客户端广告可达 UDP 地址，并从 `network.controlReachableEndpoints` 广告备用 TCP 主控地址。两类地址必须分别配置：前者需要 UDP 防火墙/NAT 放行，后者必须能建立完整 Minecraft TCP 会话。
 
-**触发条件**：
-1. **硬断连**：Master TCP `channelInactive` 时 → `ControlReconnectOrchestrator.onPrimaryDisconnected(active, "channel_inactive")` 立刻 launch 下一个候选；客户端进入 60 秒恢复窗口。
-2. **Master stalled + UDP healthy**：服务端 `ControlFailoverHandler` 检测 control stall（默认 6 秒）。Stalled 期间 `DataPlaneUdpServer.recordControlActivity` 推进；若 UDP session 健康（epoch 一致）服务端下发 `FailoverPermit(expiryMs default 30s)`，客户端 `attemptConnectOnlyIfPermitValid`。
+**恢复触发**：主控 TCP `channelInactive` 立即进入候选重连；控制面静默达到 `controlStallMs` 时，仅在 UDP session 健康且服务端签发未过期 `FailoverPermit` 的情况下允许迁移。客户端在 `recoveryWindowMs` 内按 priority 串行尝试候选；期间抑制最终断连并保留磁盘缓存、保存队列、任务执行器。所有候选失败后才执行一次 terminal cleanup。
 
-**恢复期保留资源**：`ClientRecoveryState.shouldSuppressFinalization()` true 时 `ClientLifecycleHelper.finalizeDisconnectIfTerminal` 短路 `finalizeDisconnect`，磁盘缓存/`CacheSaveQueue`/`HassiumTaskExecutor` 与 dirty 标志保留以承接下一候选会话。`ClientPlayConnectionEvents.DISCONNECT` 路径调 `DataPlaneClientLifecycle.stopUdp(/*keepLease*/ true)`，UDP bundle 不立即释放。
+**配置原则**：默认 listener `0.0.0.0:25565` 仅将 `127.0.0.1:25565` 作为客户端可达地址，适合本机开发，不能直接用于公网服。公网部署必须为每个 listener 填写可从客户端访问的 `reachableEndpoints`，避免把 wildcard 或内网 bind 地址下发；使用不同公网端口时，TCP 控制候选与 UDP 可达端点应分别写入。
 
-**候选耗尽 → terminal finalize exactly once**：`ControlReconnectOrchestrator.performTerminalFinalization` 调 `ClientLifecycleHelper.finalizeDisconnectIfTerminal`，单例 `ClientRecoveryState.consumeTerminalCleanup` 保证只触发一次磁盘资源关闭。
-
-**配置（生产化未完成项，当前 `DataPlanePoCConfig` 临时驱动）**：
-
-- `network.dataPlane.enabled`：默认 `true`（1.20.1 fabric）。
-- `network.dataPlane.udpEndpoints`：候选 plan §1086 落地后存为 toml；当前 advertises 通过 S2C tail 下发。
-- TCP 控制 endpoints 与 UDP endpoints 分开列表，可能有 differing 公网端口。
-- 每个 `udpEndpoints` 项需要 公网 UDP 防火墙/NAT 规则（§1089）。
-- 10 秒 UDP `lease` 仅 drain in-flight data；login 完成前不产生新玩家数据（§1092）。
-- `controlStallMs` 要求 服务端 issue FailoverPermit；客户端不会因 latency 单独创建第二条 master Play 连接（§1093）。
-
-**Smoke 标记（plan §1020，Task 10 followup 退役 `dataplane` phase 后接入）**：
-
-- `UDP_BIND_OK`、`UDP_WRR_OK`、`FAILOVER_PERMIT_OK`、`FAILOVER_RECONNECT_OK`、`CACHE_RESUME_HIT`、`FAILOVER_TERMINAL_OK`
-- `network.dataPlane.enabled=false` 时无 UDP listener/bind/failover 行为（regression guard）。
-
-**Spec/Plan**：[`docs/superpowers/specs/2026-07-26-udp-dataplane-control-failover-design.md`](superpowers/specs/2026-07-26-udp-dataplane-control-failover-design.md)、[`docs/superpowers/plans/2026-07-26-udp-dataplane-control-failover.md`](superpowers/plans/2026-07-26-udp-dataplane-control-failover.md)。
+**冒烟验证**：运行 `UdpFailover` phase 可核验 `UDP_BIND_OK`、`UDP_WRR_OK`、`FAILOVER_PERMIT_OK`、`FAILOVER_RECONNECT_OK`、`CACHE_RESUME_HIT` 与候选耗尽时的 `FAILOVER_TERMINAL_OK`。`network.dataPlane.enabled=false` 时必须不存在 UDP listener、Bind 或 permit marker。Nginx stream harness 仅代理 TCP 主控，UDP 仍直连，详见 [`runtime-smoke-test.md`](runtime-smoke-test.md) §`udp-failover`。
 
 ## 11. 相关文档
 
@@ -204,8 +183,7 @@ ERROR / WARN 始终输出。
 - [`disk-nbt-cache.md`](disk-nbt-cache.md) — 磁盘 NBT 缓存、Live-Unload、分段增量、导出细节
 - [`version-segments.md`](version-segments.md) — 九段适配真相源
 - [`mod-compat.md`](mod-compat.md) — 多 Mod 兼容边界与配置逃生
-- [`multi-channel_network_research.md`](multi-channel_network_research.md) — 多通道数据面设计稿（PoC §14 第 1 步已落地）
-- [`superpowers/specs/2026-07-25-multi-channel-dataplane-poc-design.md`](superpowers/specs/2026-07-25-multi-channel-dataplane-poc-design.md) — PoC 设计 spec
-- [`superpowers/plans/2026-07-25-multi-channel-dataplane-poc.md`](superpowers/plans/2026-07-25-multi-channel-dataplane-poc.md) — PoC 实现计划 + 端到端冒烟记录
+- [`multi-channel_network_research.md`](multi-channel_network_research.md) — 多通道设计与已退役裸 TCP PoC 的历史记录
+- [`runtime-smoke-test.md`](runtime-smoke-test.md) — 多版本 runtime smoke 与 UDP failover harness
 - 根目录 `README.md` — 用户安装与特性
 - `CLAUDE.md` / `AGENTS.md` — 开发者与 Agent 入口

@@ -53,12 +53,12 @@ Hassium 跨版本（1.20.1–1.21.11）× 多加载器（fabric / neoforge）的
 | `-DelayMs` | 否 | `10000` | 进世界后等待毫秒，再 dump 统计 |
 | `-ReconnectDelayMs` | 否 | `3000` | 第一轮断开后到重连的毫秒 |
 | `-ServerReadyTimeoutSec` | 否 | `160` | 服务端 `Done!` 出现超时 |
-| `-ClientTimeoutSec` | 否 | `100` | 客户端退出超时（UdpFailover phase 自动 ≥300） |
-| `-SmokePhases` | 否 | `classic,dataplane` | smoke 阶段选择：`classic`（仅经典两轮）/ `dataplane`（PoC TCP 数据面，**Task 10 followup 计划退役**）/ `udp-failover`（**Task 10 followup 接入**，plan §1020 六个 markers）/ `all`（除 `udp-failover` 外两者皆跑）|
+| `-ClientTimeoutSec` | 否 | `240` | 客户端退出超时（UdpFailover phase 自动至少 300） |
+| `-SmokePhases` | 否 | `classic` | Java 侧阶段：`classic`（经典两轮）或 `udp-failover`（复用两轮连服，聚合六个生产 marker）。旧 `dataplane` / `all` 值仅为脚本与 JVM 参数兼容而解析，数据面 PoC 状态机已退役，不应作为验证入口 |
 | `-NginxExePath` | 否 | `D:\app\nginx-1.31.3\nginx.exe` | UdpFailover phase：nginx stream 反代可执行文件路径 |
 | `-ProxyPort` | 否 | `0`（→ `$ServerPort + 5`） | UdpFailover phase：nginx stream listen port；`-SmokeHost` 显式指定时优先 |
 | `-DryRun` | 否 | false | UdpFailover phase：仅起 nginx + 验 listen + stop + exit；不起 server/client |
-| `-InjectTcpClose` | 否 | false | UdpFailover phase：Round1 后由 nginx `-s stop` 真实关闭主控 TCP；默认走内部模拟断连 |
+| `-InjectTcpClose` | 否 | false | UdpFailover phase：Round1 后由 nginx `-s stop` 真实关闭主控 TCP；默认走客户端模拟断连 |
 
 ### 批量参数
 
@@ -258,9 +258,9 @@ build/smoke-test/
 
 **单 loader 模式**：若 `-Loaders fabric` 只指定一个加载器，`-Parallel` 仍生效但无并行意义，逻辑保持统一。
 
-## `udp-failover` Phase Markers（plan §1020，Task 10 followup 接入）
+## `udp-failover` Phase Markers
 
-`-SmokePhases udp-failover` 会驱动端到端 UDP 控制 Failover 端到端冒烟，验证以下日志 marker（跨进程日志必须全部出现才算 PASS；`FAILOVER_TERMINAL_OK` 仅在候选耗尽 sub-case 出现）：
+`-Phase UdpFailover` 未显式传 `-SmokePhases` 时会自动启用 `udp-failover`。该阶段驱动 UDP 控制 Failover 端到端冒烟，跨进程日志必须包含下列 marker 才算 PASS；`FAILOVER_TERMINAL_OK` 仅在候选耗尽子用例出现：
 
 | Marker | 含义 |
 |--------|------|
@@ -352,22 +352,18 @@ client ──UDP uplink 25571 ────────────────�
 | `hassium.serverSmokeTest` | `false` | 服务端启用 `ServerSmokeTest` |
 | `hassium.serverSmokeTest.vd1` | `20` | 第一轮视距 |
 | `hassium.serverSmokeTest.vd2` | `8` | 第二轮视距 |
-| `hassium.smokePhases` | `classic` | smoke 阶段选择（`classic` / `dataplane` / `all` 多值逗号分隔）；服务端 `ServerSmokeTest` 据此进 dataplane 状态机（11 个 DP state 自驱 kill/mode 切换/降级断言） |
+| `hassium.smokePhases` | `classic` | Java 侧阶段选择（`classic` / `udp-failover`，可逗号组合）；旧 `dataplane` / `all` 只为兼容旧调用，服务端忽略已退役的 PoC 状态机 |
 
 ## 相关代码
 
 | 路径 | 作用 |
 |------|------|
-| `common/src/main/java/io/github/limuqy/mc/hassium/client/ClientSmokeTest.java` | 客户端状态机 + 反射重连 + 统计校验 |
-| `common/src/main/java/io/github/limuqy/mc/hassium/server/ServerSmokeTest.java` | 服务端视距切换（VD=20→8）；`hassium.smokePhases` 含 `dataplane` 时自驱 dataplane 状态机（DP_WARMUP → DP_KILL_ONE/MODE/DONE），主动注入测试 bulk 触发 `degraded` 降级硬断言，输出 `HassiumSmokeTest:DATAPLANE(_PASS/_FAIL)` marker |
-| `common/.../mixin/MixinClientTick.java` | 每帧调用 `ClientSmokeTest.onClientTick` |
-| `common/.../mixin/MixinMinecraftServer.java` | 服务端 tick + init 钩子 |
-| `common/.../metrics/VanillaZlibEstimator.java` | Zlib 管线帧大小估算器（`estimate(byte[])` 精确 + `estimate(int)` 近似） |
-| `common/.../metrics/NetworkStats.java` | 指标门面（metrics 默认 false；冒烟 JVM flag 强制开启） |
-| `common/.../config/HassiumConfigService.java` | `resolveMetricsEnabled`：冒烟 flag 优先于 toml 配置 |
-| `fabric/.../HassiumClientMod.java`、`forge/.../HassiumForgeClient.java`、`neoforge/.../HassiumNeoForgeClient.java` | 加载器客户端入口，调用 `ClientSmokeTest.initIfEnabled()` |
-| `buildSrc/src/main/groovy/loom-fabric.gradle`、`loom-neoforge.gradle` | `-PhassiumSmokeTest=true` 时注入 JVM 属性 |
-| `common/.../network/dataplane/DataPlaneServer.java` / `DataPlanePoCConfig.java` / `BulkRouter.java` / `DataPlaneClientBundle.java` / `VarIntLengthFrameSplitter.java` | 多通道数据面 PoC 实现；服务端 accept/Bind/kill/mode 切换/主动注入 `tryRouteBulk` 触发 `degraded`，客户端 JOIN 后直连两个副端口 + 解密 demux bulk 帧 |
-| `loom-fabric.gradle` / `loom-neoforge.gradle` 服务端 runConfig 分支 | `-PhassiumSmokePhases` 在服务端分支也补 `-Dhassium.smokePhases`（原仅 client 分支传 phases，是 dataplane 阶段的常见漏接线点） |
+| `common/src/main/java/io/github/limuqy/mc/hassium/client/ClientSmokeTest.java` | 客户端两轮状态机、跨版本反射重连、统计校验；`udp-failover` 复用该断开→重连周期 |
+| `common/src/main/java/io/github/limuqy/mc/hassium/server/ServerSmokeTest.java` | 服务端视距切换；识别 `udp-failover` marker 聚合场景；旧裸 TCP PoC dataplane phase 已退役 |
+| `common/.../network/dataplane/DataPlaneUdpServer.java` / `ReliableDatagramSession.java` / `DataPlaneClientBundle.java` / `ControlReconnectOrchestrator.java` | UDP/KCP listener、按权重 bulk 路由、客户端 Bind/dispatch 与 TCP 主控恢复 |
+| `common/.../network/dataplane/ControlFailoverHandler.java` / `ClientRecoveryState.java` | permit 签发、恢复窗口和候选耗尽时的一次性终态清理 |
+| `common/.../config/HassiumConfigService.java` | 提供统一的 UDP listener、控制候选和 failover 时限配置快照 |
+| `scripts/smoke/UdpFailoverSmoke.psm1` | Nginx stream 配置、六 marker 聚合和 harness timeline 解析 |
+| `scripts/smoke/runtime-smoke-test.Tests.ps1` | 上述 PowerShell helper 的 Pester 覆盖 |
 | `scripts/runtime-smoke-test.ps1` | 单次会话脚本 |
-| `scripts/runtime-smoke-test-batch.ps1` | 批量脚本 |
+| `scripts/runtime-smoke-test-batch.ps1` | 批量经典 smoke 脚本 |

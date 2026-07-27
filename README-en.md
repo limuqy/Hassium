@@ -15,6 +15,7 @@ Smaller world saves and bandwidth than vanilla, local chunk reuse, and smoother 
 ![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)
 ![Minecraft](https://img.shields.io/badge/Minecraft-1.20.1--1.21.11-green.svg)
 ![Loaders](https://img.shields.io/badge/Loaders-Fabric%20%7C%20Forge%20%7C%20NeoForge-orange.svg)
+[![CurseForge](https://img.shields.io/badge/CurseForge-Hassium-644DF4.svg?logo=curseforge)](https://www.curseforge.com/minecraft/mc-mods/hassium)
 
 ---
 
@@ -53,7 +54,7 @@ See [`docs/version-segments.md`](docs/version-segments.md) for the nine adaptati
 
 1. Download the loader-specific JAR from [Releases](https://github.com/limuqy/Hassium/releases).
 2. Place it in `mods/` on client and/or server.
-3. Config is created at `config/hassium/hassium-client.toml` and `config/hassium/hassium-common.toml` (Fabric: Mod Menu + Cloth; Forge/NeoForge: Cloth from the mods list, or edit toml).
+3. Config is created at `config/hassium/hassium-client.toml` and `config/hassium/hassium-server.toml` (Fabric: Mod Menu + Cloth; Forge/NeoForge: Cloth from the mods list, or edit toml).
 
 **Dependencies:** Fabric needs Fabric API; Forge / NeoForge have no required extras. Install on both sides for negotiated compression and caching.
 
@@ -73,7 +74,7 @@ Enabled by default:
 
 ## Config (summary)
 
-Files: `config/hassium/hassium-client.toml`, `config/hassium/hassium-common.toml`
+Files: `config/hassium/hassium-client.toml`, `config/hassium/hassium-server.toml`
 
 | Key | Default | Notes |
 | --- | --- | --- |
@@ -86,9 +87,10 @@ Files: `config/hassium/hassium-client.toml`, `config/hassium/hassium-common.toml
 | `clientCache.ovdUnloadDelaySecs` | `5` | Delay unload after leaving beyond-view ring (s; 0=sync) |
 | `network.enabled` | `true` | Custom channels |
 | `network.globalPacketCompression` | `true` | Global ZSTD |
-| `network.maxChunksPerTick` | `10` | Per-player serialize cap per server tick |
+| `network.maxChunksPerTick` | `32` | Per-player serialize cap per server tick |
 | `clientCache.mainThreadChunkBudgetMs` | `15` | Client apply budget per frame (ms) |
 | `network.metricsEnabled` | `true` | Metrics |
+| `network.dataPlane.enabled` | `true` | UDP/KCP data plane and TCP control recovery; default endpoints are local-development only, so configure reachable endpoints and run the six-marker smoke test before public deployment |
 | `debug.*` | `false` | Category debug logs (quiet by default) |
 
 Full reference: [`docs/architecture.md`](docs/architecture.md).

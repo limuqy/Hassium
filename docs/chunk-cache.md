@@ -140,14 +140,18 @@ SectionDeltaS2CPacket        // 服务端 → 客户端（变更分段 + BE）
 
 ## 8. 调试
 
-默认无热路径 INFO。排查时打开 `config/hassium/hassium-common.toml` 的 `debug.metadataLogging` / `debug.networkLogging` / `debug.cacheLogging` 等（见 architecture）。运行时统计：`/hassiumc stats`。
+默认无热路径 INFO。排查时打开 `config/hassium/hassium-server.toml` 的 `debug.metadataLogging` / `debug.networkLogging` / `debug.cacheLogging` 等（见 architecture）。运行时统计：`/hassiumc stats`。
 
 ## 9. 待实现
 
 - 方向性区块预加载（提高推送优先级，不改变协议）
 - warm-stash 优化（收包后暂存 NBT，卸载时 dirty=false 则 flush warm 跳过 live 重算）
 
-- 章节 11.6 将补 `SectionDeltaS2CPacket` 经 UDP 数据面 dispatch 的细节；Task 8（commit `27a3678`）已接入 `DataPlaneClientBundle.safeDispatch` → `SectionDeltaDispatcher` seam。Task 7+9 让 disk 缓存在恢复态保留（`ClientRecoveryState` gate）；恢复期内缓存命中率不降。
+## 9.1 数据面与恢复态
+
+`ChunkHashS2C`、握手、index sync 与 `SectionHashRequest` 都是 TCP 控制面：它们在压缩黑名单中，不进入聚合 PENDING 缓冲，也不走 UDP。`ChunkPayloadS2C` 与 `SectionDeltaS2CPacket` 在已 Bind 的 UDP/KCP session 可用时经 `DataPlaneClientBundle.safeDispatch` 送入既有 `SectionDeltaDispatcher` / chunk apply 路径；无 session 或路由失败时仍由 TCP 发送，缓存一致性协议不变。
+
+TCP 主控发生恢复时，`ClientRecoveryState` 会保留 `ClientHassiumStorage`、`CacheSaveQueue` 与 `HassiumTaskExecutor`，避免候选重连期间清空缓存或取消写入；恢复后的 `ChunkHashS2C` 继续按正常 HIT/MISS/MISMATCH 分支处理。候选全部耗尽才执行一次终态资源清理。UDP/KCP 的拓扑、地址配置和验证方法见 [`architecture.md`](architecture.md) §9.5 与 [`runtime-smoke-test.md`](runtime-smoke-test.md) §`udp-failover`。
 
 ## 10. 超视渲染（renderOnly）
 
