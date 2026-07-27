@@ -28,10 +28,26 @@ public final class DataPlaneClientLifecycle {
     private DataPlaneClientBundle bundle;
     private long leaseDeadlineMs;
     private volatile long epoch;
+    private UdpDataPlaneHandshakeTail.S2CTail pendingUdpStart;
 
     private DataPlaneClientLifecycle() {}
 
     public static DataPlaneClientLifecycle getInstance() { return INSTANCE; }
+    /** 保存早于 client player 创建到达的握手尾部；由主线程在 player 就绪后消费一次。 */
+    public void deferUdpStart(UdpDataPlaneHandshakeTail.S2CTail tail) {
+        synchronized (lock) {
+            pendingUdpStart = tail;
+        }
+    }
+
+    /** 原子取走尚未启动的握手尾部；无待处理尾部时返回 {@code null}。 */
+    public UdpDataPlaneHandshakeTail.S2CTail takePendingUdpStart() {
+        synchronized (lock) {
+            UdpDataPlaneHandshakeTail.S2CTail pending = pendingUdpStart;
+            pendingUdpStart = null;
+            return pending;
+        }
+    }
 
     /**
      * 启动 UDP 数据面；若已存在 bundle 则先 shutdown 并替换（新 epoch 即重连）。
@@ -141,6 +157,10 @@ public final class DataPlaneClientLifecycle {
         // lease 过期 → 主动 shutdown
         if (nowMs >= leaseDeadline) {
             stopUdp(false);
+            return;
+        }
+        // stopUdp(keepLease=true) 会清空 bundle 但保留 lease；无 bundle 时跳过，避免 NPE 刷屏拖垮主线程。
+        if (b == null) {
             return;
         }
         try {

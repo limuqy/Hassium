@@ -47,8 +47,13 @@ public class MixinMinecraftServer {
         }
         // 初始化服务端冒烟测试（设置初始 VD=20）
         ServerSmokeTest.initIfEnabled(server);
-        // 绑定 UDP 数据端口（Task 3 cutover：旧 PoC TCP DataPlaneServer 已退役为 façade）
-        DataPlaneUdpServer.bind();
+        // 绑定 UDP 数据端口（Task 3 cutover：旧 PoC TCP DataPlaneServer 已退役为 façade）。
+        // 绑定失败不得拖垮 vanilla TCP——主控/缓存路径仍可用；UDP 数据面与加权分流降级。
+        try {
+            DataPlaneUdpServer.bind();
+        } catch (Throwable t) {
+            Constants.LOG.warn("Hassium: Failed to bind UDP dataplane, server will run without it", t);
+        }
     }
 
     @Inject(method = "stopServer", at = @At("HEAD"))

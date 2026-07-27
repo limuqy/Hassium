@@ -1,3 +1,7 @@
+import java.util.zip.ZipEntry
+import java.util.zip.ZipInputStream
+import java.util.zip.ZipOutputStream
+
 plugins {
     id 'loom-neoforge'
 }
@@ -12,6 +16,8 @@ sourceSets {
 
 configurations {
     library
+    // 原始 kcp 坐标；剥离 io.netty.bootstrap 后再进 game layer（见 stripKcpNettyBootstrapPackage）
+    kcpIncoming
 }
 // Keep these libs on the compile/shade classpath...
 configurations.implementation.extendsFrom(configurations.library)
@@ -20,12 +26,83 @@ configurations.implementation.extendsFrom(configurations.library)
 configurations.minecraftLibraries.extendsFrom(configurations.library)
 configurations.minecraftRuntimeLibraries.extendsFrom(configurations.library)
 
+// common 的 implementation kcp 会经 project(':common') 透传；必须挡住未剥离副本，
+// 否则与 library 的剥离 jar 并存时，仍可能由未剥离 jar 抢占 io.netty.bootstrap。
+configurations.implementation {
+    exclude group: 'moe.sdl.kcp', module: 'kcp-netty'
+}
+configurations.runtimeClasspath {
+    exclude group: 'moe.sdl.kcp', module: 'kcp-netty'
+}
+
+/**
+ * kcp-netty 自带 {@code io.netty.bootstrap.UkcpServerBootstrap}，与 MC 的
+ * {@code Bootstrap}/{@code ServerBootstrap} 同包。Forge SecureJarHandler 的 PackageTracker
+ * 按「先到的 jar 独占包」处理——kcp 先占 {@code io.netty.bootstrap} 后，MC/mod 侧
+ * {@code Class.forName(Bootstrap)} 直接 ClassNotFoundException（vanilla TCP 监听也会挂）。
+ * Hassium 只用 {@code io.jpower.kcp.netty.Kcp}，不需要 Ukcp* Bootstrap；剥离整个 {@code io/netty/}。
+ */
+def hassiumStripKcpNettyBootstrap = { File src, File out ->
+    out.parentFile.mkdirs()
+    out.withOutputStream { fos ->
+        def zos = new ZipOutputStream(fos)
+        src.withInputStream { fis ->
+            def zis = new ZipInputStream(fis)
+            ZipEntry entry
+            while ((entry = zis.nextEntry) != null) {
+                if (entry.name.startsWith('io/netty/')) {
+                    zis.closeEntry()
+                    continue
+                }
+                if (!entry.isDirectory()) {
+                    zos.putNextEntry(new ZipEntry(entry.name))
+                    zis.transferTo(zos)
+                    zos.closeEntry()
+                }
+                zis.closeEntry()
+            }
+            zis.close()
+        }
+        zos.close()
+    }
+    return out
+}
+
+def patchedKcpJar = layout.buildDirectory.file('patched-kcp/kcp-netty-1.6.2-no-netty-bootstrap.jar')
+
+def stripKcpTask = tasks.register('stripKcpNettyBootstrapPackage') {
+    description = 'Strip io.netty.bootstrap.* from kcp-netty so Forge JPMS package ownership stays with MC Netty'
+    inputs.files(configurations.kcpIncoming)
+    outputs.file(patchedKcpJar)
+    doLast {
+        def src = configurations.kcpIncoming.files.find { it.name.startsWith('kcp-netty-') }
+        if (src == null) {
+            throw new GradleException("kcp-netty jar not found in kcpIncoming: ${configurations.kcpIncoming.files}")
+        }
+        def out = patchedKcpJar.get().asFile
+        def stamp = new File(out.parentFile, out.name + '.stamp')
+        def stampVal = "${src.canonicalPath}|${src.lastModified()}|${src.length()}"
+        if (out.exists() && stamp.exists() && stamp.text.trim() == stampVal) {
+            return
+        }
+        hassiumStripKcpNettyBootstrap(src, out)
+        stamp.text = stampVal
+    }
+}
+
 dependencies {
     library 'com.github.luben:zstd-jni:1.5.5-7'
     library 'org.lz4:lz4-java:1.8.0'
     library 'com.google.code.findbugs:jsr305:3.0.1'
-    // UDP 数据面可靠传输；library 同时提供编译、dev game-layer 和生产 jar-in-jar 路径。
-    library 'moe.sdl.kcp:kcp-netty:1.6.2'
+
+    // 原始坐标仅用于剥离任务输入；真正进 compile / game layer / JiJ 的是剥离后的 jar。
+    kcpIncoming('moe.sdl.kcp:kcp-netty:1.6.2') {
+        exclude group: 'io.netty'
+    }
+    // files(task) 会把 task outputs 挂到依赖图，compile/run 自动 dependsOn 剥离任务。
+    library files(stripKcpTask)
+    // 生产 jar-in-jar 同样用剥离版，否则玩家侧 Forge 复现 Bootstrap CNFE。
+    include files(stripKcpTask)
 
     // Cloth Config：编译期需要；可选依赖，不 jiJ
     if (gradle.ext.has('cloth_config_version')) {

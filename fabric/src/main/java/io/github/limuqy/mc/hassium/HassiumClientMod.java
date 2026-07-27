@@ -67,15 +67,15 @@ public class HassiumClientMod implements ClientModInitializer {
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
             try {
                 ControlReconnectOrchestrator orch = reconnectOrchestrator;
-                if (orch != null) {
+                if (orch != null && orch.hasAdvertisedCandidates()) {
                     ControlEndpoint active = activeControlEndpoint(handler);
-                    // active == null 且 orchestrator 无 advertised 候选 → onPrimaryDisconnected 即刻耗尽
-                    // → performTerminalFinalization 把 ClientRecoveryState 推入 TERMINAL 一次。
                     orch.onPrimaryDisconnected(active, "channel_inactive");
-                    // 把全局 recovery state 切到 RECOVERING，与 orchestrator 内的 recovering 同步。
-                    // 若 orchestrator 已 terminal（无候选 + 已 finalize），begin 不再起作用（TERMINAL 单边）。
-                    ClientRecoveryState.getInstance().begin(
-                            java.lang.System.currentTimeMillis() + 60_000L);
+                    // 仅当 orchestrator 仍持有可 launch 的恢复态时进入 ClientRecoveryState；
+                    // 候选耗尽走 terminal，不再 begin（避免 stopUdp(keepLease) 空 bundle）。
+                    if (orch.isRecovering()) {
+                        ClientRecoveryState.getInstance().begin(
+                                java.lang.System.currentTimeMillis() + 60_000L);
+                    }
                 }
             } catch (Throwable t) {
                 LOGGER.warn("Hassium: reconnect orchestrator begin failed", t);

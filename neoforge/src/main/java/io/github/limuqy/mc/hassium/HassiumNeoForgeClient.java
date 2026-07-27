@@ -2,8 +2,12 @@ package io.github.limuqy.mc.hassium;
 
 import io.github.limuqy.mc.hassium.cache.client.ClientLifecycleHelper;
 import io.github.limuqy.mc.hassium.client.ClientSmokeTest;
+import io.github.limuqy.mc.hassium.client.NeoForgeControlReconnectLauncher;
 import io.github.limuqy.mc.hassium.network.DictionaryManager;
 import io.github.limuqy.mc.hassium.network.NeoForgeNetworkManager;
+import io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState;
+import io.github.limuqy.mc.hassium.network.dataplane.ControlEndpoint;
+import io.github.limuqy.mc.hassium.network.dataplane.ControlReconnectOrchestrator;
 import io.github.limuqy.mc.hassium.network.dataplane.DataPlaneClientLifecycle;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -52,11 +56,30 @@ public class HassiumNeoForgeClient {
     private static final Logger LOGGER = LoggerFactory.getLogger("Hassium/NeoForgeClient");
     private static final NeoForgeNetworkManager networkManager = new NeoForgeNetworkManager();
 
+    // Task 9 — control-reconnect orchestrator singleton; launcher 与 Fabric 同形（vanilla ConnectScreen 入口）。
+    // advertised candidates are populated from the S2C handshake tail; bootstrap active comes
+    // from the prior live Connection's remote address on disconnect.
+    private static volatile ControlReconnectOrchestrator reconnectOrchestrator;
+
+    /** 客户端 access — NeoForgeNetworkManager S2C handshake tail handler 用以灌候选与 onHandshakeAccepted 回调。 */
+    public static ControlReconnectOrchestrator reconnectOrchestrator() {
+        return reconnectOrchestrator;
+    }
+
     /**
      * 客户端设置事件处理
      */
     @SubscribeEvent
     public static void onClientSetup(FMLClientSetupEvent event) {
+        // Task 9 — control-reconnect orchestrator (singleton; launcher wired here, candidates
+        // populated from S2C handshake tails as advertised backup endpoints arrive).
+        if (reconnectOrchestrator == null) {
+            reconnectOrchestrator = new ControlReconnectOrchestrator(
+                    new NeoForgeControlReconnectLauncher(),
+                    java.util.List.of(),
+                    java.util.List.of());
+        }
+
         ClientSmokeTest.initIfEnabled();
 
         // 加载内置区块字典
@@ -110,12 +133,49 @@ public class HassiumNeoForgeClient {
          */
         @SubscribeEvent
         public void onPlayerLoggedOut(ClientPlayerNetworkEvent.LoggingOut event) {
+            // Task 9 — 客户端断开时先让 orchestrator 把恢复态开起来，然后 cleanup / finalize。
+            // 恢复中 finalizeDisconnectIfTerminal 会短路 one-time terminal；磁盘缓存/executor
+            // 留待下一候选握手成功 markRecovered；候选耗尽时 orchestrator 自身触发一次 terminal.
+            try {
+                ControlReconnectOrchestrator orch = reconnectOrchestrator;
+                if (orch != null && orch.hasAdvertisedCandidates()) {
+                    ControlEndpoint active = activeControlEndpoint(event);
+                    orch.onPrimaryDisconnected(active, "channel_inactive");
+                    // 仅当 orchestrator 仍持有可 launch 的恢复态时进入 ClientRecoveryState；
+                    // 候选耗尽走 terminal，不再 begin（避免 stopUdp(keepLease) 空 bundle）。
+                    if (orch.isRecovering()) {
+                        ClientRecoveryState.getInstance().begin(
+                                java.lang.System.currentTimeMillis() + 60_000L);
+                    }
+                }
+            } catch (Throwable t) {
+                LOGGER.warn("Hassium: reconnect orchestrator begin failed", t);
+            }
+
             ClientLifecycleHelper.cleanupOnDisconnect();
-            // 关闭多通道数据面（由握手响应建立的 ClientBundle）— feature 侧 lifecycle 改为 instance API
-            // §14 v2 后续重建：此处 LoggingOut 不在 failover 恢复场景，传 false 完全掉线/收尾
-            io.github.limuqy.mc.hassium.network.dataplane.DataPlaneClientLifecycle.getInstance().stopUdp(false);
-            // 延后到下一 tick：等世界拆除；与 MixinMinecraft TAIL 幂等兜底
-            net.minecraft.client.Minecraft.getInstance().execute(ClientLifecycleHelper::finalizeDisconnect);
+            // 关闭 UDP 数据面 bundle；恢复态下用温和关闭（保留磁盘缓存/executor）
+            try {
+                DataPlaneClientLifecycle.getInstance().stopUdp(
+                        ClientRecoveryState.getInstance().isRecovering());
+            } catch (Throwable ignored) {}
+            // 延后到下一 tick：等 Minecraft.disconnect / clearLevel 拆除完成；与 Mixin TAIL 幂等
+            // 但仅在非恢复态下真跑 finalize；恢复态交给 MixinMinecraft TAIL 在 markTerminal 后触发一次
+            net.minecraft.client.Minecraft.getInstance().execute(ClientLifecycleHelper::finalizeDisconnectIfTerminal);
         }
+    }
+
+    /** 从 LoggingOut 事件的当前 Connection remote 提取主控 endpoint，作为 orchestrator 的 bootstrap active 候选。 */
+    private static ControlEndpoint activeControlEndpoint(ClientPlayerNetworkEvent.LoggingOut event) {
+        try {
+            net.minecraft.network.Connection conn = event.getConnection();
+            if (conn == null) {
+                return null;
+            }
+            java.net.SocketAddress addr = conn.getRemoteAddress();
+            if (addr instanceof java.net.InetSocketAddress isa) {
+                return new ControlEndpoint(isa.getHostString(), isa.getPort(), /*priority*/ 0);
+            }
+        } catch (Throwable ignored) {}
+        return null;
     }
 }

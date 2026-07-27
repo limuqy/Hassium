@@ -52,18 +52,19 @@ class ControlReconnectOrchestratorTest {
     }
 
     @Test
-    @DisplayName("候选耗尽 → 恰好一次 terminal 清理")
-    void exhaustedCandidatesPerformsOneTerminalFinalization() {
+    @DisplayName("仅 active 且无其它候选 → onPrimaryDisconnected 立即 terminal（不悬挂 recovering）")
+    void soleActiveEndpointExhaustsImmediately() {
         RecordingLauncher launcher = new RecordingLauncher();
         ControlEndpoint a = endpoint("a.com", 25565, 100);
         ControlReconnectOrchestrator orchestrator =
                 ControlReconnectOrchestrator.forTest(launcher, List.of(a));
 
         orchestrator.onPrimaryDisconnected(a, "closed");
-        orchestrator.onReconnectFailed(a);
 
-        assertEquals(1, orchestrator.terminalFinalizations(), "仅发起一次 terminal finalize");
-        assertFalse(orchestrator.isRecovering(), "恢复结束");
+        assertTrue(launcher.launched().isEmpty(), "无下一候选可 launch");
+        assertEquals(1, orchestrator.terminalFinalizations(), "立刻 terminal");
+        assertFalse(orchestrator.isRecovering(), "不得悬挂 recovering");
+        assertFalse(orchestrator.onHandshakeAccepted(), "后续普通握手不得误报 failover 恢复");
     }
 
     @Test
@@ -71,12 +72,14 @@ class ControlReconnectOrchestratorTest {
     void handshakeAcceptedStopsRecovery() {
         RecordingLauncher launcher = new RecordingLauncher();
         ControlEndpoint a = endpoint("a.com", 25565, 100);
+        ControlEndpoint b = endpoint("b.com", 25565, 80);
         ControlReconnectOrchestrator orchestrator =
-                ControlReconnectOrchestrator.forTest(launcher, List.of(a));
+                ControlReconnectOrchestrator.forTest(launcher, List.of(a, b));
 
         orchestrator.onPrimaryDisconnected(a, "closed");
-        // 假装 reconnect 到下一候选并成功（这里用 single-endpoint 测试，触发 exhausted 之前先 mark）
-        orchestrator.onHandshakeAccepted();
+        assertEquals(List.of(b), launcher.launched(), "应立刻 launch 下一候选 b");
+        // 假装 reconnect 到 b 并成功
+        assertTrue(orchestrator.onHandshakeAccepted(), "恢复中的握手应记为 failover 恢复");
 
         assertFalse(orchestrator.isRecovering(), "handshake 接收立即结束恢复态");
         assertEquals(0, orchestrator.terminalFinalizations(), "成功不触发 terminal");

@@ -39,6 +39,19 @@ public class MixinClientTick {
             // 数据面可选；时钟故障不得中断客户端 tick。
         }
 
+        try {
+            Minecraft mc = Minecraft.getInstance();
+            if (mc.player != null) {
+                var lifecycle = io.github.limuqy.mc.hassium.network.dataplane.DataPlaneClientLifecycle.getInstance();
+                var pending = lifecycle.takePendingUdpStart();
+                if (pending != null) {
+                    lifecycle.startUdp(mc.player.getUUID(), pending.connectionEpoch(), pending);
+                }
+            }
+        } catch (Exception e) {
+            // UDP 数据面可选；延迟启动失败不得中断客户端 tick。
+        }
+
         // 更新玩家坐标，用于 MainThreadDispatcher 距离优先级计算
         // 同时跟踪 ClientLevel，供断连时 bulk-enqueue（此时 mc.level 可能已 null）
         try {

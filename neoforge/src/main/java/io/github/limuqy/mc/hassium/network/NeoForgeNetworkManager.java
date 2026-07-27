@@ -190,19 +190,55 @@ public class NeoForgeNetworkManager implements NetworkManager {
             LOGGER.warn("Hassium: Invalid dataplane tail in handshake response", ex);
             return;
         }
+        LOGGER.info("Hassium: Client dataplane handshake tail: udp={}, controlFailover={}, groups={}, playerReady={}",
+                tail.hasUdpDataplane(), tail.hasControlFailover(), tail.udpListenerGroups().size(),
+                net.minecraft.client.Minecraft.getInstance().player != null);
+        // Task 9 — 同步把 advertised control 候选灌给 client mod 单例 orchestrator（无论是否含 UDP，
+        // 便于 control-only / legacy 服务器场景下 orchestrator 仍可基于 advertised 候选恢复）。
+        io.github.limuqy.mc.hassium.network.dataplane.ControlReconnectOrchestrator orch = null;
+        try {
+            orch = io.github.limuqy.mc.hassium.HassiumNeoForgeClient.reconnectOrchestrator();
+            if (orch != null) {
+                java.util.List<io.github.limuqy.mc.hassium.network.dataplane.ControlEndpoint> cands =
+                        new java.util.ArrayList<>();
+                for (var ctl : tail.controlEndpoints()) {
+                    cands.add(new io.github.limuqy.mc.hassium.network.dataplane.ControlEndpoint(
+                            ctl.host(), ctl.port(), ctl.priority()));
+                }
+                orch.configureCandidates(cands);
+            }
+        } catch (Throwable ignored) {}
+        // 客户端主线程已通过此入口；ClientRecoveryState.markRecovered + onHandshakeAccepted 必须在主线程执行
+        // —— caller 已 enqueueWork，此处同步调用安全。
         if (!tail.hasUdpDataplane()) {
+            // 无 UDP 数据面（control only 或 legacy 服务器）—— 仍在恢复态时确认真实恢复。
+            try {
+                if (io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState.getInstance().isRecovering()) {
+                    io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState.getInstance().markRecovered();
+                    if (orch != null) orch.onHandshakeAccepted();
+                }
+            } catch (Throwable ignored) {}
             return;
         }
         var player = net.minecraft.client.Minecraft.getInstance().player;
         if (player == null) {
-            LOGGER.debug("Hassium: Skip UDP dataplane start before client player exists");
+            io.github.limuqy.mc.hassium.network.dataplane.DataPlaneClientLifecycle.getInstance().deferUdpStart(tail);
+            LOGGER.debug("Hassium: Deferred UDP dataplane start until client player exists");
             return;
         }
         try {
             io.github.limuqy.mc.hassium.network.dataplane.DataPlaneClientLifecycle.getInstance()
                     .startUdp(player.getUUID(), tail.connectionEpoch(), tail);
+            // 只有 DISCONNECT 已建立恢复态的握手才能确认恢复；首次登录只启动 UDP。
+            if (io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState.getInstance().isRecovering()) {
+                io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState.getInstance().markRecovered();
+                if (orch != null) orch.onHandshakeAccepted();
+            }
         } catch (RuntimeException ex) {
             LOGGER.warn("Hassium: UDP dataplane start failed", ex);
+        }
+        catch (LinkageError ex) {
+            LOGGER.warn("Hassium: UDP dataplane linkage failed; keeping primary transport", ex);
         }
     }
 
@@ -296,6 +332,19 @@ public class NeoForgeNetworkManager implements NetworkManager {
             byte[] data = new byte[length];
             buf.readBytes(data);
             return new IndexSyncWrapper(data);
+        }
+    }
+
+    public record AggregationWrapper(byte[] data) {
+        public void encode(FriendlyByteBuf buf) {
+            buf.writeVarInt(data.length);
+            buf.writeBytes(data);
+        }
+        public static AggregationWrapper decode(FriendlyByteBuf buf) {
+            int length = buf.readVarInt();
+            byte[] data = new byte[length];
+            buf.readBytes(data);
+            return new AggregationWrapper(data);
         }
     }
 
@@ -1549,6 +1598,58 @@ public class NeoForgeNetworkManager implements NetworkManager {
                 java.util.Optional.of(PlayNetworkDirection.PLAY_TO_SERVER));
 #endif
 
+        // 14: 应用层聚合 S2C
+        CHANNEL.registerMessage(packetId++, AggregationWrapper.class,
+                AggregationWrapper::encode, AggregationWrapper::decode,
+#if MC_VER < MC_1_20_2
+                (msg, ctx) -> {
+                    ctx.get().enqueueWork(() -> handleAggregationClient(msg.data()));
+                    ctx.get().setPacketHandled(true);
+                },
+                java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT));
+#else
+                (msg, ctx) -> {
+                    ctx.enqueueWork(() -> handleAggregationClient(msg.data()));
+                    ctx.setPacketHandled(true);
+                },
+                java.util.Optional.of(PlayNetworkDirection.PLAY_TO_CLIENT));
+#endif
+
+        HassiumAggregationManager.setSender((connection, buf) -> {
+            try {
+                if (connection.getPacketListener() instanceof net.minecraft.server.network.ServerGamePacketListenerImpl handler) {
+                    byte[] data = new byte[buf.readableBytes()];
+                    buf.readBytes(data);
+#if MC_VER < MC_1_20_2
+                    CHANNEL.sendTo(new AggregationWrapper(data), handler.getPlayer().connection.connection,
+                            NetworkDirection.PLAY_TO_CLIENT);
+#else
+                    CHANNEL.sendTo(new AggregationWrapper(data), handler.getPlayer().connection.connection,
+                            PlayNetworkDirection.PLAY_TO_CLIENT);
+#endif
+                } else {
+                    LOGGER.error("Cannot send aggregation packet: connection has no player-side packet listener");
+                }
+            } catch (Exception e) {
+                LOGGER.error("Hassium: Failed to send aggregation packet", e);
+            } finally {
+                buf.release();
+            }
+        });
+
+        DictionaryManager.setPushCallback(dictionary -> {
+            try {
+                net.minecraft.server.MinecraftServer server = cachedServer;
+                if (server != null) {
+                    for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+                        sendDictionarySyncPacket(player);
+                    }
+                }
+            } catch (Exception e) {
+                LOGGER.error("Failed to push dictionary to clients", e);
+            }
+        });
+
         LOGGER.info("Hassium: Registered {} SimpleChannel packets", packetId);
     }
 
@@ -1561,11 +1662,14 @@ public class NeoForgeNetworkManager implements NetworkManager {
         boolean useCompactHeader = serverSupportsCompactHeader && msg.compactHeaderSupported();
 
         boolean accepted = true;
+        var advertisedTail = createDataPlaneHandshakeTail(player, accepted, msg.dataplaneCapabilities());
         io.netty.buffer.ByteBuf tailBuffer = io.netty.buffer.Unpooled.buffer();
-        io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail.writeS2C(tailBuffer,
-                createDataPlaneHandshakeTail(player, accepted, msg.dataplaneCapabilities()));
+        io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail.writeS2C(tailBuffer, advertisedTail);
         byte[] dataplaneTail = new byte[tailBuffer.readableBytes()];
         tailBuffer.readBytes(dataplaneTail);
+        LOGGER.info("Hassium: Server dataplane handshake tail for {}: udp={}, controlFailover={}, groups={}, bytes={}",
+                player.getName().getString(), advertisedTail.hasUdpDataplane(), advertisedTail.hasControlFailover(),
+                advertisedTail.udpListenerGroups().size(), dataplaneTail.length);
         HandshakeResponseWrapper response = new HandshakeResponseWrapper(
                 Constants.CURRENT_PROTOCOL_VERSION,
                 accepted,
@@ -2103,7 +2207,7 @@ public class NeoForgeNetworkManager implements NetworkManager {
                     Constants.MOD_VERSION,
                     new String[]{compressionAlgorithm, dictAlgorithm},
                     true, true, false, true, true,
-                    new io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail.C2STail(true, false)
+                    new io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail.C2STail(true, true)
             ));
             LOGGER.debug("Hassium: Sent handshake request to server");
         } else {
@@ -2118,7 +2222,7 @@ public class NeoForgeNetworkManager implements NetworkManager {
                     Constants.MOD_VERSION,
                     new String[]{compressionAlgorithm, dictAlgorithm},
                     true, true, false, true, true,
-                    new io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail.C2STail(true, false)
+                    new io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail.C2STail(true, true)
             );
             net.minecraft.client.Minecraft.getInstance().getConnection().send(new ServerboundCustomPayloadPacket(payload));
             LOGGER.debug("Hassium: Sent handshake request (Payload 1.20.4)");
@@ -2132,7 +2236,7 @@ public class NeoForgeNetworkManager implements NetworkManager {
                     Constants.MOD_VERSION,
                     new String[]{compressionAlgorithm, dictAlgorithm},
                     true, true, false, true, true,
-                    new io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail.C2STail(true, false)
+                    new io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail.C2STail(true, true)
             );
             net.minecraft.client.Minecraft.getInstance().getConnection().send(payload);
             LOGGER.debug("Hassium: Sent handshake request (Payload)");
@@ -2458,6 +2562,27 @@ public class NeoForgeNetworkManager implements NetworkManager {
                     clientIndexManager.size());
         } catch (Exception e) {
             LOGGER.error("Hassium: Failed to handle index sync", e);
+        }
+    }
+
+    private static void handleAggregationClient(byte[] data) {
+        FriendlyByteBuf packetBuf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(data));
+        try {
+            var clientConn = net.minecraft.client.Minecraft.getInstance().getConnection();
+            if (clientConn == null) {
+                LOGGER.error("Received aggregation packet but no client connection");
+                return;
+            }
+            NamespaceIndexManager indexManager = IndexSyncManager.getInstance().getClientIndexManager();
+            if (indexManager == null) {
+                LOGGER.error("Received aggregation packet but client index manager not initialized");
+                return;
+            }
+            HassiumAggregationPacket.decode(packetBuf, indexManager).handle(clientConn.getConnection());
+        } catch (Exception e) {
+            LOGGER.error("Failed to handle aggregation packet", e);
+        } finally {
+            packetBuf.release();
         }
     }
 

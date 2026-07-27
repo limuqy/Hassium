@@ -104,7 +104,11 @@ public final class ControlReconnectOrchestrator {
         }
         recovering = true;
         connectionEpoch = nextEpoch();
-        launchNextCandidate();
+        if (!launchNextCandidate()) {
+            // 无剩余候选（含仅 active 已被剔除）：立刻 terminal，避免 recovering 悬挂导致
+            // 下一次普通握手误报 FAILOVER_RECONNECT_OK，以及 stopUdp(keepLease) 空 bundle NPE。
+            performTerminalFinalization();
+        }
     }
 
     /** FailoverPermit：仅当对应本轮 epoch 且未过期时被认为有效 —— 不直接 launch（候选已 launch at begin）。 */
@@ -169,6 +173,11 @@ public final class ControlReconnectOrchestrator {
     public synchronized void configureCandidates(List<ControlEndpoint> advertised) {
         this.candidates.clear();
         this.candidates.addAll(advertised);
+    }
+
+    /** 是否已有握手下发的热切候选（空则普通断开由 ClientSmokeTest/用户自行重连）。 */
+    public synchronized boolean hasAdvertisedCandidates() {
+        return !candidates.isEmpty();
     }
 
     public synchronized int terminalFinalizations() {
