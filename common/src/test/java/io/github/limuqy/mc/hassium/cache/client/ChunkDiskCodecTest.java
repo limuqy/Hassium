@@ -74,12 +74,21 @@ class ChunkDiskCodecTest {
     }
 
     @Test
-    void computeSectionHashesFromNbtShouldSkipEmptySections() {
-        CompoundTag nbt = buildSampleChunkNbt();
+    void computeSectionHashesFromNbtShouldShortCircuitOnAllAirSections() {
+        // 边界：所有 section 都 has_only_air → computeSectionHashesFromNbt 全短路，不触发
+        // scratch.read/bootstrap（本测试不引导 MC），返回长度匹配、值全 0
+        CompoundTag nbt = buildSampleChunkNbt();  // buildSampleChunkNbt 里 s0 has_only_air、s1 非
+        // 让 s1 也变空气，使全 section 短路（避免触发 1.20.1 的 RegistryCompat bootstrap）
+        ListTag sections = (ListTag) nbt.get("sections");
+        ((CompoundTag) sections.get(1)).putBoolean("has_only_air", true);
+        ((CompoundTag) sections.get(1)).putByteArray("data", new byte[0]);
+
         long[] hashes = ChunkDiskCodec.computeSectionHashesFromNbt(nbt, 24, null);
         assertNotNull(hashes);
-        // section 0 是空（has_only_air=true），hash 应为 0
-        assertEquals(0L, hashes[0], "空 section hash 应为 0");
+        assertEquals(24, hashes.length, "hash 数组长度应为 max(sectionCount, sections.size())");
+        for (int i = 0; i < hashes.length; i++) {
+            assertEquals(0L, hashes[i], "全空气 section hash 应为 0 (idx=" + i + ")");
+        }
     }
 
     @Test

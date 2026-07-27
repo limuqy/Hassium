@@ -81,13 +81,22 @@ public class ZstdDictionaryCompressionCodec implements CompressionCodec {
 
         try {
             int decompressedSize = (int) Zstd.getFrameContentSize(input);
-            if (decompressedSize <= 0) {
-                decompressedSize = input.length * 4; // 估算值
+            if (decompressedSize < 0) {
+                // content size 未知：按压缩块估算
+                decompressedSize = input.length * 4;
+            }
+            // decompressFastDict 对空内容帧返回 0（合法），故按预估大小分配；零长度走短路
+            if (decompressedSize == 0) {
+                return new byte[0];
             }
             byte[] result = new byte[decompressedSize];
             long actualSize = Zstd.decompressFastDict(result, 0, input, 0, input.length, dict);
-            if (actualSize <= 0) {
+            if (actualSize < 0) {
+                // 负值才是真错误（0 表示空内容合法解压结果）
                 throw new CompressionException.DecompressionFailedException("ZSTD dictionary decompression failed: invalid output");
+            }
+            if (actualSize == 0) {
+                return new byte[0];
             }
             // 如果实际大小与预估不同，截取实际大小
             if (actualSize < decompressedSize) {
