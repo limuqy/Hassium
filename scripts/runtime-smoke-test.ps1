@@ -15,6 +15,7 @@ param(
     [int]$ServerPort = 25565,
     [int]$DelayMs = 15000,
     [int]$ReconnectDelayMs = 3000,
+    [int]$ServerReadyTimeoutSec = 160,
     [int]$ClientTimeoutSec = 240,
     [string]$SmokePhases = "classic",
     # -Phase UdpFailover：经 Nginx stream 代理 TCP 主控；UDP 仍直连 server。
