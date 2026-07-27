@@ -29,6 +29,8 @@
 | **世界导出** | `/hassiumc export` 将本地缓存导出为可进单机的原版 Anvil 世界     |
 | **光照剥离** | 服务端可不传光照数据，由客户端本地重算，进一步省流量 |
 | **光照缓存** | 首次加载重算后缓存光照数据，后续缓存命中直接应用，跳过同步重算 |
+| **主控热切** | TCP 主控断或卡时按候选自动重连，缓存暖续、隐藏断连界面（数据面 failover） |
+| **加权分流** | 多 UDP/KCP endpoint 按 weight 加权轮询承载数据面，控制面留原版 TCP |
 | **平滑加载** | 进服与视野扩展时限制主线程压力，减少卡顿尖峰                                |
 | **兼容友好** | 未安装本模组的客户端默认可连接；双端都装才能吃满压缩与缓存                         |
 | **流量监控** | `/hassium stats`（服务端）、`/hassiumc stats`（客户端）查看压缩与缓存效果 |
@@ -88,6 +90,8 @@
 | `network.maxChunksPerTick` | `10` | 每玩家每 tick 序列化上限 |
 | `clientCache.mainThreadChunkBudgetMs` | `15` | 客户端每帧 apply 预算（ms） |
 | `network.metricsEnabled` | `false` | 指标收集（默认关闭；冒烟测试自动强开） |
+| `network.dataPlane.enabled` | `false` | 数据面 UDP/KCP（默认关，开启请先确认 6 marker 冒烟） |
+| `network.dataPlane.controlStallMs` | `6000` | TCP 主控卡顿多久后触发 `FailoverRequest` |
 | `debug.*` | `false` | 分类调试日志（默认安静） |
 
 完整说明见 [`docs/architecture.md`](docs/architecture.md)。

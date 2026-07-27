@@ -58,6 +58,8 @@ Vanilla clients can still connect by default. Install Hassium on **both** client
 | **Beyond-view render** | When client render distance exceeds server view distance (multiplayer), fill the outer ring from local history (render-only; no out-of-range server requests) |
 | **World export** | `/hassiumc export` turns the local cache into a vanilla Anvil singleplayer world under `saves/` |
 | **Light optimization** | Server can strip light data from payloads; client recomputes locally and caches results — saves bandwidth and skips repeated recomputation on cache hits |
+| **Master hot-swap** | On TCP master close or stall, the client fails over to the next candidate, keeps the disk cache warm, and hides the terminal-disconnect UI (data-plane failover; off by default) |
+| **Weighted multipath** | Multiple UDP/KCP endpoints carry chunk bulk under weighted round-robin, while the vanilla TCP connection stays as control plane (off by default; pass the 6-marker smoke first) |
 | **Smooth loading** | Caps main-thread work during join and view expansion to reduce hitch spikes |
 | **Client-friendly** | Clients without the mod can connect by default; both sides needed for full benefits |
 | **Traffic metrics** | `/hassium stats` (server) and `/hassiumc stats` (client) to inspect compression and cache results |
@@ -213,6 +215,8 @@ Hassium 用 **ZSTD** 替代原版 Zlib，主要优化三件事：
 | **超视渲染** | 多人客户端 RD 大于服务端视距时，用本地历史回填环带（仅渲染、不向服索要视距外区块） |
 | **世界导出** | `/hassiumc export` 将本地缓存导出为可进单机的原版 Anvil 世界 |
 | **光照优化** | 服务端可剥离光照数据省带宽，客户端本地重算后缓存；后续命中跳过同步重算，双端开关独立控制 |
+| **主控热切** | TCP 主控断或卡时按候选自动重连，缓存暖续、隐藏断连界面（数据面 failover；默认关） |
+| **加权分流** | 多 UDP/KCP endpoint 按 weight 加权轮询承载数据面，控制面留原版 TCP（默认关，需先过 6 marker 冒烟） |
 | **平滑加载** | 进服与视野扩展时限制主线程压力，减少卡顿尖峰 |
 | **兼容友好** | 未装模组的客户端默认可连；双端都装才能吃满压缩与缓存 |
 | **流量监控** | `/hassium stats`（服务端）、`/hassiumc stats`（客户端）查看效果 |

@@ -153,7 +153,8 @@ ERROR / WARN 始终输出。
 | **分段增量** | `clientCache.sectionDeltaEnabled`（默认 true） | MISMATCH 时按 section 比对，仅补变更分段 + BE 覆盖；失败/超时回退全量 | [`chunk-cache.md`](chunk-cache.md) §11.5、[`disk-nbt-cache.md`](disk-nbt-cache.md) |
 | **超视渲染** | `viewDistanceExtensionEnabled`、`maxRenderDistance`、`ovdUnloadDelaySecs` | 多人、clientVD>serverVD 时本地缓存回填环带；Forget 原地 renderOnly；不向服索要视距外区块/BE | [`ovd.md`](ovd.md)、[`chunk-cache.md`](chunk-cache.md) §10 |
 | **世界导出** | `/hassiumc export [<服务器IP>] [seed]` | 客户端缓存 → 原版 Anvil（type2 zlib）；无实体/仅去过的区块快照 | [`chunk-cache.md`](chunk-cache.md) §12、[`disk-nbt-cache.md`](disk-nbt-cache.md) |
-| **UDP 数据面 + TCP 控制 Failover** | `network.dataPlane.udpEndpoints`、`network.dataPlane.enabled`（默认 1.20.1 fabric） | TCP 控制面 + UDP 数据面分离；服务端每个 `(host,port)` 独立 KCP/UDP endpoint；BulkRouter WRR share/exclusive；硬断连 / TCP stalled + UDP 健康 → FailoverPermit 重连候选；客户端 disk cache / executor 在恢复态保留 | 该任务 commit `22c9c3f`（Task 1-9）|
+| **主控热切** | `network.dataPlane.enabled`、`controlStallMs`、`failoverPermitTtlMs` | TCP 主控 `channelInactive` 或控制面 stalled（UDP 健康时）→ 客户端发 `FailoverRequest`、服务端校验后 `FailoverPermit` 关旧 master；候选串行重连；隐藏断连 UI、保留 disk cache/executor；候选耗尽一次性 finalize | 该任务 commit `22c9c3f`（Task 1-9）|
+| **加权分流** | `network.dataPlane.udpEndpoints`、每 endpoint `weight`（WRR） | 多 UDP/KCP endpoint 独立 session、按 `weight` 加权轮询承载区块 bulk；`share`/`exclusive` 模式 + UDP 健康度调权；控制面留原版 TCP | 该任务 commit `22c9c3f`（Task 1-9）|
 | **多通道数据面（PoC 历史）** | `DataPlanePoCConfig.ENABLED`（1.20.1 fabric） | **已退役**：服务端双裸 TCP 端口 + Bind + HKDF-SHA256/AES-CFB8 路径已被 UDP 数据面替代；保留 `tryRouteBulk` faade 与 `DataPlaneServer.tryRouteBulk` 转发到 `DataPlaneUdpServer`，legacy 测试仍可用 | [`multi-channel_network_research.md`](multi-channel_network_research.md) §14.1、原 PoC spec/plan |
 
 客户端磁盘缓存 payload 为 NBT（`"HBT1"` + CompoundTag），主一致性路径为 **Live-Unload Snapshot**（renderOnly 跳过落盘）。旧 packet 字节缓存读到即删并全量请求。
