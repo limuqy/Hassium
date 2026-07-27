@@ -45,19 +45,19 @@ Full instructions: [Installation](https://github.com/limuqy/Hassium/wiki/Install
 
 ### Features
 
-| Feature | What it does |
+| Feature | Description |
 | --- | --- |
-| **Efficient storage** | Higher-ratio world chunk compression for smaller saves; keeps the vanilla Region (`.mca`) layout |
-| **Network compression** | ZSTD for chunks and optional global packet compression — less bandwidth and waiting |
-| **Chunk cache** | Loaded chunks are kept locally; revisiting an area can avoid a full download |
-| **Section delta** | On cache mismatch, transfer only changed sections instead of the whole chunk |
-| **Beyond-view render** | Fill the multiplayer outer ring from local history when client RD exceeds server view distance (render-only; no out-of-range requests) |
+| **Efficient storage** | Higher-ratio world chunk compression for smaller saves; keeps vanilla Region (`.mca`) layout |
+| **Network compression** | More efficient compression for chunks and packets — less bandwidth and wait time |
+| **Chunk cache** | Loaded chunks are kept locally; revisiting an area prefers the cache instead of full downloads |
+| **Section delta** | On cache mismatch, fetch only changed sections (`sectionDelta`) instead of the whole chunk |
+| **Beyond-view render** | When client RD exceeds server view distance (multiplayer), fill the outer ring from local cache (render-only; no out-of-range server requests) |
 | **World export** | `/hassiumc export` writes the local cache as a vanilla Anvil singleplayer world |
-| **Light optimization** | Server-side light stripping saves traffic; cached client lighting avoids repeat recomputation on cache hits |
-| **Smooth loading** | Limits main-thread work during join and view expansion to reduce hitch spikes |
-| **Optional data plane** | Weighted UDP/KCP bulk transfer while vanilla TCP remains the control plane, with master failover support |
-| **Client-friendly** | Clients without Hassium can join by default; both sides unlock the full compression and cache path |
-| **Traffic metrics** | `/hassium stats` and `/hassiumc stats` show compression and cache results |
+| **Light stripping** | Server can omit light data; the client recomputes lighting locally to save more bandwidth |
+| **Light cache** | Light data is cached after first recompute; cache hits apply pre-computed lighting directly, skipping expensive recomputation |
+| **Smooth loading** | Caps main-thread work during join and view expansion to reduce hitch spikes |
+| **Client-friendly** | Clients without the mod can connect by default; install on both sides for full compression and cache benefits |
+| **Traffic metrics** | `/hassium stats` (server) and `/hassiumc stats` (client) to inspect compression and cache results |
 
 ### Supported versions
 
@@ -97,19 +97,21 @@ Complete matrix: [Support Matrix](https://github.com/limuqy/Hassium/wiki/Support
 
 ### 功能
 
-| 能力 | 说明 |
-| --- | --- |
-| **高效存储** | 世界区块用更高压缩率落盘，缩小存档体积；仍保持原版 Region（`.mca`）布局 |
-| **网络压缩** | 区块与可选全局数据包使用 ZSTD，降低带宽和等待 |
-| **区块缓存** | 曾加载的区块写入本地；再次进入同一区域可避免全量下载 |
-| **分段增量** | 缓存过期时仅传输变更分段，避免整块重传 |
-| **超视渲染** | 多人客户端 RD 大于服务端视距时，用本地历史回填外环（仅渲染，不请求视距外区块） |
-| **世界导出** | `/hassiumc export` 将本地缓存导出为可进单机的原版 Anvil 世界 |
-| **光照优化** | 服务端剥离光照数据省带宽；客户端缓存光照使后续命中跳过重复重算 |
-| **平滑加载** | 进服与视野扩展时限制主线程工作，减少卡顿尖峰 |
-| **可选数据面** | UDP/KCP 按权重承载大包数据，原版 TCP 保留为控制面，并支持主控 Failover |
-| **兼容友好** | 未装 Hassium 的客户端默认可连；双端安装可获得完整压缩和缓存收益 |
-| **流量监控** | `/hassium stats` 与 `/hassiumc stats` 查看压缩和缓存效果 |
+| 能力 | 说明                                                    |
+| --- |-------------------------------------------------------|
+| **高效存储** | 世界区块用更高压缩率落盘，显著减小存档体积；仍兼容原版 Region（`.mca`）布局          |
+| **网络压缩** | 区块与数据包用更高效压缩传输，降低带宽占用与下载等待                            |
+| **区块缓存** | 曾加载过的区块写入本地；再次进入同一区域时优先用本地数据，少传全量包                    |
+| **分段增量** | 缓存过期时仅拉取变更分段（`sectionDelta`），避免整块重传                   |
+| **超视渲染** | 多人服客户端 RD 大于服务端视距时，用本地缓存回填视距外地形（仅渲染、不向服索要视距外区块）       |
+| **世界导出** | `/hassiumc export` 将本地缓存导出为可进单机的原版 Anvil 世界     |
+| **光照剥离** | 服务端可不传光照数据，由客户端本地重算，进一步省流量 |
+| **光照缓存** | 首次加载重算后缓存光照数据，后续缓存命中直接应用，跳过同步重算 |
+| **主控热切** | TCP 主控断或卡时按候选自动重连，缓存暖续、隐藏断连界面（数据面 failover） |
+| **加权分流** | 多 UDP/KCP endpoint 按 weight 加权轮询承载数据面，控制面留原版 TCP |
+| **平滑加载** | 进服与视野扩展时限制主线程压力，减少卡顿尖峰                                |
+| **兼容友好** | 未安装本模组的客户端默认可连接；双端都装才能吃满压缩与缓存                         |
+| **流量监控** | `/hassium stats`（服务端）、`/hassiumc stats`（客户端）查看压缩与缓存效果 |
 
 ### 支持版本
 
