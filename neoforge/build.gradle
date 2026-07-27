@@ -24,6 +24,8 @@ dependencies {
     library 'com.github.luben:zstd-jni:1.5.5-7'
     library 'org.lz4:lz4-java:1.8.0'
     library 'com.google.code.findbugs:jsr305:3.0.1'
+    // UDP 数据面可靠传输；library 同时提供编译、dev game-layer 和生产 jar-in-jar 路径。
+    library 'moe.sdl.kcp:kcp-netty:1.6.2'
 
     // Cloth Config：编译期需要；可选依赖，不 jiJ
     if (gradle.ext.has('cloth_config_version')) {
