@@ -47,11 +47,11 @@ public final class DataPlaneClientLifecycle {
             DebugLogger.debug(LogType.NETWORK, "DataPlaneClient: tail disabled, skip UDP start");
             return;
         }
-        if (tail.udpEndpoints().isEmpty() || tail.token() == null || tail.token().length != 16) {
+        List<UdpDataPlaneHandshakeTail.UdpListenerGroup> groups = groupsForTail(tail);
+        if (groups.isEmpty() || tail.token() == null || tail.token().length != 16) {
             DebugLogger.info(LogType.NETWORK,
-                    "DataPlaneClient: tail accepted but missing endpoints/token (ep={} token={})",
-                    tail.udpEndpoints().size(),
-                    tail.token() == null ? -1 : tail.token().length);
+                    "DataPlaneClient: tail accepted but missing listener groups/token (groups={} token={})",
+                    groups.size(), tail.token() == null ? -1 : tail.token().length);
             return;
         }
 
@@ -66,17 +66,34 @@ public final class DataPlaneClientLifecycle {
                 existing.shutdown();
             }
 
-            // BareList<UdpEndpointInfo> → 复制为可重复迭代视图
-            List<UdpDataPlaneHandshakeTail.UdpEndpointInfo> eps = new ArrayList<>(tail.udpEndpoints());
             DataPlaneClientBundle nb = new DataPlaneClientBundle();
-            nb.connectAndBind(playerId, epoch, tail.token(), eps);
+            nb.connectAndBind(playerId, epoch, tail.token(), groups);
             this.bundle = nb;
             this.epoch = epoch;
             // 服务端口 lease 默认全程；Task 7 接入后将由 ControlReconnect 复写
             this.leaseDeadlineMs = Long.MAX_VALUE;
-            LOGGER.info("DataPlaneClient: UDP data-plane bound player={} epoch={} endpoints={}",
-                    playerId, epoch, eps.size());
+            LOGGER.info("DataPlaneClient: UDP data-plane binding player={} epoch={} listenerGroups={}",
+                    playerId, epoch, groups.size());
         }
+    }
+
+    /** 新尾部优先使用 listener groups；旧尾部每个 legacy endpoint 退化为一个单 candidate group。 */
+    static List<UdpDataPlaneHandshakeTail.UdpListenerGroup> groupsForTail(
+            UdpDataPlaneHandshakeTail.S2CTail tail) {
+        if (tail == null) {
+            return List.of();
+        }
+        if (!tail.udpListenerGroups().isEmpty()) {
+            return List.copyOf(tail.udpListenerGroups());
+        }
+        List<UdpDataPlaneHandshakeTail.UdpListenerGroup> groups = new ArrayList<>();
+        for (UdpDataPlaneHandshakeTail.UdpEndpointInfo endpoint : tail.udpEndpoints()) {
+            groups.add(new UdpDataPlaneHandshakeTail.UdpListenerGroup(
+                    endpoint.endpointId(), endpoint.weight(), List.of(
+                    new UdpDataPlaneHandshakeTail.UdpReachableEndpoint(
+                            endpoint.host(), endpoint.port(), 0))));
+        }
+        return List.copyOf(groups);
     }
 
     /**

@@ -32,6 +32,13 @@ public class MixinClientTick {
             // 冒烟失败不阻断正常 tick
         }
 
+        try {
+            io.github.limuqy.mc.hassium.network.dataplane.DataPlaneClientLifecycle.getInstance()
+                    .tick(System.currentTimeMillis());
+        } catch (Exception e) {
+            // 数据面可选；时钟故障不得中断客户端 tick。
+        }
+
         // 更新玩家坐标，用于 MainThreadDispatcher 距离优先级计算
         // 同时跟踪 ClientLevel，供断连时 bulk-enqueue（此时 mc.level 可能已 null）
         try {

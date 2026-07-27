@@ -19,20 +19,22 @@ import org.slf4j.LoggerFactory;
 
 import java.net.InetSocketAddress;
 import java.util.ArrayList;
-import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicLong;
-import java.util.function.Consumer;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Task 5 — 客户端 UDP 数据面 bundle（替换 PoC TCP {@code DataPlaneClientBundle}）。
  *
- * <p><b>职责不变量</b>：每条 advertised server {@link UdpDataPlaneHandshakeTail.UdpEndpointInfo}
- * 对应一个 {@link ReliableDatagramSession}（{@code Role.CLIENT}），先发绑定 BindRequest 走 AES-GCM
+ * <p><b>职责不变量</b>：每个 advertised listener group 最多对应一个 {@link ReliableDatagramSession}。
+ * 同组 reachable candidates 严格串行；只有收到经 session 加密且 epoch/endpointId 匹配的
+ * {@link DataPlaneFrame#TYPE_BIND_ACK} 后才可路由 bulk。
  * 双向认证；解出的 {@link DataPlaneFrame#TYPE_BULK_COMPRESSED_CHUNK} 在 UDP 事件循环上仅在注入的
  * chunk 消费者上调度 {@link ClientChunkHandler#handleCompressedChunk(byte[])}，绝不直接进入 MC 主线程。
  *
@@ -108,12 +110,18 @@ public final class DataPlaneClientBundle {
     private static final ChunkDispatcher DEFAULT_DISPATCHER =
             payload -> ClientChunkHandler.handleCompressedChunk(payload);
 
+    private static final long BIND_ACK_TIMEOUT_MS = 2_000L;
+
     private final NioEventLoopGroup workerGroup = new NioEventLoopGroup(2);
-    private final List<Channel> channels = new ArrayList<>();
-    /** endpointId → ReliableDatagramSession，单线程只读访问由 worker 守。 */
+    private final Set<Channel> channels = ConcurrentHashMap.newKeySet();
+    /** 已认证 endpointId → ReliableDatagramSession；仅这些 session 可接收 bulk。 */
     private final ConcurrentHashMap<Integer, ReliableDatagramSession> sessions = new ConcurrentHashMap<>();
-    /** endpointId → InetSocketAddress remote，回程 dispatch 用。 */
+    /** 已认证 endpointId → InetSocketAddress remote，回程 dispatch 用。 */
     private final ConcurrentHashMap<Integer, InetSocketAddress> remotes = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<Integer, Channel> workerChannelMap = new ConcurrentHashMap<>();
+    private final Object attemptLock = new Object();
+    /** 每个 listener group 在任意时刻仅有一个候选正等待认证 ACK。 */
+    private final java.util.Map<Integer, PendingAttempt> pendingAttempts = new java.util.HashMap<>();
 
     private volatile ChunkDispatcher chunkDispatcher = DEFAULT_DISPATCHER;
     private volatile SectionDeltaDispatcher sectionDeltaDispatcher = DEFAULT_SECTION_DELTA_CONSUMER;
@@ -141,124 +149,168 @@ public final class DataPlaneClientBundle {
 
     /** 仅用于同包测试的 seam：把 fake 帧直接灌给 dispatcher，绕开 bind。 */
     void receiveForTest(int type, byte[] payload) {
-        safeDispatch(type, payload, /*endpointId*/ 0);
+        safeDispatch(type, payload, /*endpointId*/ 0, null);
     }
 
     // ----- connectAndBind -----
 
-    /** Task 5 main entry — 连接所有 advertised server UDP endpoints 并发 BindRequest。 */
+    /**
+     * 为每个 listener group 启动首个 candidate。每个 group 内只允许一个等待认证确认的 UDP socket。
+     */
     public void connectAndBind(UUID playerId, long epoch, byte[] token,
-                              List<UdpDataPlaneHandshakeTail.UdpEndpointInfo> endpoints) {
+                               List<UdpDataPlaneHandshakeTail.UdpListenerGroup> groups) {
         Objects.requireNonNull(playerId, "playerId");
         Objects.requireNonNull(token, "token");
         if (token.length != 16) throw new IllegalArgumentException("token must be 16 bytes");
-        if (endpoints == null || endpoints.isEmpty()) {
-            LOGGER.debug("DataPlaneClient: no UDP endpoints advertised; staying Primary-only");
-            bound = false;
+        if (groups == null || groups.isEmpty()) {
+            LOGGER.debug("DataPlaneClient: no UDP listener groups advertised; staying Primary-only");
             return;
         }
-        String pid = pid(playerId);
-        for (UdpDataPlaneHandshakeTail.UdpEndpointInfo e : endpoints) {
-            try {
-                bindOneEndpoint(pid, playerId, epoch, token, e);
-            } catch (Throwable t) {
-                LOGGER.error("DataPlaneClient: bind failed endpointId={} {}: {}", e.endpointId(), e.host() + ":" + e.port(), t.toString());
+        Set<Integer> endpointIds = new HashSet<>();
+        synchronized (attemptLock) {
+            for (UdpDataPlaneHandshakeTail.UdpListenerGroup group : groups) {
+                if (!endpointIds.add(group.endpointId())) {
+                    throw new IllegalArgumentException("duplicate UDP listener group endpointId=" + group.endpointId());
+                }
+                startCandidate(playerId, epoch, token, group, 0);
             }
         }
-        bound = !sessions.isEmpty();
     }
 
-    private void bindOneEndpoint(String pid, UUID playerId, long epoch, byte[] token,
-                                 UdpDataPlaneHandshakeTail.UdpEndpointInfo info) {
-        InetSocketAddress remote = new InetSocketAddress(info.host(), info.port());
-        // key derived exactly the same wire contract as DataPlaneUdpServer:
-        // HKDF(token, uuidBytes(playerId) || epochBytes, info="hassium-udp-v1" || endpointId || channelId, 16)
-        byte[] key = Hkdf.extractAndExpand(
-                token,
-                concat(uuidBytes(playerId), longBytes(epoch)),
-                concat("hassium-udp-v1".getBytes(java.nio.charset.StandardCharsets.UTF_8),
-                        new byte[] { (byte) info.endpointId(), (byte) (info.endpointId() & 0xFF) }),
-                16);
+    private void startCandidate(UUID playerId, long epoch, byte[] token,
+                                UdpDataPlaneHandshakeTail.UdpListenerGroup group, int candidateIndex) {
+        if (candidateIndex >= group.reachableEndpoints().size()) {
+            return;
+        }
+        UdpDataPlaneHandshakeTail.UdpReachableEndpoint candidate = group.reachableEndpoints().get(candidateIndex);
+        int endpointId = group.endpointId();
+        InetSocketAddress remote = new InetSocketAddress(candidate.host(), candidate.port());
+        AtomicReference<Channel> channelRef = new AtomicReference<>();
+        ReliableDatagramSession session = new ReliableDatagramSession(playerId, epoch,
+                UdpEndpoint.builder().role(UdpEndpoint.Role.CLIENT).localAddress(new InetSocketAddress(0)).build(),
+                remote, UdpSessionKey.derive(token, playerId, epoch, endpointId, endpointId),
+                datagram -> {
+                    Channel channel = channelRef.get();
+                    if (channel == null || !channel.isOpen()) {
+                        datagram.release();
+                        return;
+                    }
+                    channel.writeAndFlush(new DatagramPacket(datagram, remote));
+                }, endpointId, group.weight());
+        PendingAttempt attempt = new PendingAttempt(playerId, epoch, token.clone(), group, candidateIndex,
+                remote, session, channelRef, System.currentTimeMillis() + BIND_ACK_TIMEOUT_MS);
+        session.receiveHandler(received -> safeDispatch(
+                received.type(), received.payload(), endpointId, session));
 
-        UdpEndpoint ep = UdpEndpoint.builder()
-                .role(UdpEndpoint.Role.CLIENT)
-                .localAddress(new InetSocketAddress(0))
-                .build();
-        ReliableDatagramSession sess = new ReliableDatagramSession(playerId, epoch, ep, remote, key,
-                new ReliableDatagramSession.DatagramSink() {
+        Bootstrap bootstrap = new Bootstrap();
+        bootstrap.group(workerGroup)
+                .channel(NioDatagramChannel.class)
+                .option(ChannelOption.SO_BROADCAST, false)
+                .option(ChannelOption.ALLOCATOR, PooledByteBufAllocator.DEFAULT)
+                .handler(new SimpleChannelInboundHandler<DatagramPacket>() {
                     @Override
-                    public void send(ByteBuf datagram) {
-                        Channel ch = workerChannelForEndpoint(info.endpointId());
-                        if (ch == null || !ch.isOpen()) {
-                            datagram.release();
-                            return;
-                        }
-                        ch.writeAndFlush(new DatagramPacket(datagram, remote))
-                          .addListener(f -> {
-                              if (!f.isSuccess() && DebugLogger.isEnabled(LogType.NETWORK)) {
-                                  DebugLogger.warn(LogType.NETWORK,
-                                          "[DataPlaneC] send failed eid={} {}", info.endpointId(), f.cause().toString());
-                              }
-                          });
+                    protected void channelRead0(ChannelHandlerContext context, DatagramPacket packet) {
+                        session.receive(packet.content().retainedDuplicate(), System.currentTimeMillis());
+                    }
+
+                    @Override
+                    public void exceptionCaught(ChannelHandlerContext context, Throwable cause) {
+                        failAttempt(endpointId, session, "UDP receive failure: " + cause);
                     }
                 });
-        sess.receiveHandler(r -> safeDispatch(r.type(), r.payload(), info.endpointId()));
-
-        // Open a disconnected UDP datagram channel owned by this bundle.
-        Bootstrap b = new Bootstrap();
-        b.group(workerGroup)
-         .channel(NioDatagramChannel.class)
-         .option(ChannelOption.SO_BROADCAST, false)
-         .option(ChannelOption.ALLOCATOR, PooledByteBufAllocator.DEFAULT)
-         .handler(new SimpleChannelInboundHandler<DatagramPacket>() {
-             @Override
-             protected void channelRead0(ChannelHandlerContext ctx, DatagramPacket packet) {
-                 // 服务端经 KCP 线字节回流：直接喂 ReliableDatagramSession
-                 sess.receive(packet.content().retainedDuplicate(), System.currentTimeMillis());
-             }
-             @Override
-             public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
-                 LOGGER.warn("DataPlaneClient: dispatcher error eid={} {}", info.endpointId(), cause.toString());
-             }
-         });
-        Channel ch;
         try {
-            ch = b.bind(0).sync().channel();
-            channels.add(ch);
-            workerChannelMap.put(info.endpointId(), ch);
-            sessions.put(info.endpointId(), sess);
-            remotes.put(info.endpointId(), remote);
-        } catch (InterruptedException ie) {
+            Channel channel = bootstrap.bind(0).sync().channel();
+            channelRef.set(channel);
+            channels.add(channel);
+            pendingAttempts.put(endpointId, attempt);
+            channel.eventLoop().schedule(() -> failAttempt(endpointId, session, "BindAck timeout"),
+                    BIND_ACK_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+            ByteBuf request = encodeBindRequest(token, playerId, epoch, endpointId);
+            channel.writeAndFlush(new DatagramPacket(request, remote)).addListener(result -> {
+                if (!result.isSuccess()) {
+                    failAttempt(endpointId, session, "BindRequest write failed");
+                }
+            });
+            DebugLogger.info(LogType.NETWORK, "[DataPlaneClient] bind candidate eid={} → {}:{}",
+                    endpointId, candidate.host(), candidate.port());
+        } catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt();
-            throw new RuntimeException("interrupted while binding UDP client channel", ie);
+            closeAttempt(attempt);
+            throw new IllegalStateException("interrupted while binding UDP client channel", interrupted);
+        } catch (Throwable failure) {
+            closeAttempt(attempt);
+            startCandidate(playerId, epoch, token, group, candidateIndex + 1);
         }
-
-        // Send authenticated BindRequest.
-        try {
-            ByteBuf req = encodeBindRequest(token, playerId, epoch, info.endpointId());
-            ch.writeAndFlush(new DatagramPacket(req, remote));
-        } catch (Throwable t) {
-            LOGGER.error("DataPlaneClient: bind send failed eid={} {}", info.endpointId(), t.toString());
-        }
-        DebugLogger.info(LogType.NETWORK, "[DataPlaneClient] bind fired eid={} → {}:{}",
-                info.endpointId(), info.host(), info.port());
     }
 
-    private final ConcurrentHashMap<Integer, Channel> workerChannelMap = new ConcurrentHashMap<>();
+    private void failAttempt(int endpointId, ReliableDatagramSession session, String reason) {
+        synchronized (attemptLock) {
+            PendingAttempt attempt = pendingAttempts.get(endpointId);
+            if (attempt == null || attempt.session() != session) {
+                return;
+            }
+            pendingAttempts.remove(endpointId);
+            closeAttempt(attempt);
+            DebugLogger.debug(LogType.NETWORK,
+                    "DataPlaneClient: candidate failed endpointId={} reason={}", endpointId, reason);
+            startCandidate(attempt.playerId(), attempt.epoch(), attempt.token(), attempt.group(),
+                    attempt.candidateIndex() + 1);
+        }
+    }
 
-    private Channel workerChannelForEndpoint(int endpointId) {
-        return workerChannelMap.get(endpointId);
+    private void acknowledgeAttempt(int endpointId, ReliableDatagramSession session, byte[] payload) {
+        UdpBindRequestCodec.Ack ack;
+        try {
+            ack = UdpBindRequestCodec.decodeAck(payload);
+        } catch (IllegalArgumentException invalid) {
+            failAttempt(endpointId, session, "malformed BindAck");
+            return;
+        }
+        synchronized (attemptLock) {
+            PendingAttempt attempt = pendingAttempts.get(endpointId);
+            if (attempt == null || attempt.session() != session
+                    || ack.endpointId() != endpointId || ack.connectionEpoch() != attempt.epoch()) {
+                failAttempt(endpointId, session, "mismatched BindAck");
+                return;
+            }
+            pendingAttempts.remove(endpointId);
+            Channel channel = attempt.channelRef().get();
+            if (channel == null || !channel.isOpen()) {
+                closeAttempt(attempt);
+                startCandidate(attempt.playerId(), attempt.epoch(), attempt.token(), attempt.group(),
+                        attempt.candidateIndex() + 1);
+                return;
+            }
+            sessions.put(endpointId, session);
+            remotes.put(endpointId, attempt.remote());
+            workerChannelMap.put(endpointId, channel);
+            bound = true;
+            LOGGER.info("DataPlaneClient: authenticated UDP bind endpointId={} remote={}", endpointId, attempt.remote());
+        }
+    }
+
+    private void closeAttempt(PendingAttempt attempt) {
+        try { attempt.session().close(); } catch (Throwable ignored) {}
+        Channel channel = attempt.channelRef().get();
+        if (channel != null) {
+            channels.remove(channel);
+            try { channel.close(); } catch (Throwable ignored) {}
+        }
     }
 
     private ByteBuf encodeBindRequest(byte[] token, UUID playerId, long epoch, int endpointId) {
-        byte[] body = UdpBindRequestCodec.encodeRequest(token, playerId, epoch, endpointId, /*channelId=*/ endpointId);
-        ByteBuf buf = PooledByteBufAllocator.DEFAULT.buffer(body.length);
-        buf.writeBytes(body);
-        return buf;
+        byte[] body = UdpBindRequestCodec.encodeRequest(token, playerId, epoch, endpointId, endpointId);
+        ByteBuf buffer = PooledByteBufAllocator.DEFAULT.buffer(body.length);
+        buffer.writeBytes(body);
+        return buffer;
     }
 
-    private void safeDispatch(int type, byte[] payload, int endpointId) {
-        if (type == DataPlaneFrame.TYPE_BULK_COMPRESSED_CHUNK) {
+    private void safeDispatch(int type, byte[] payload, int endpointId, ReliableDatagramSession session) {
+        if (type == DataPlaneFrame.TYPE_BIND_ACK) {
+            if (session != null) {
+                acknowledgeAttempt(endpointId, session, payload);
+            }
+        } else if (type == DataPlaneFrame.TYPE_BULK_COMPRESSED_CHUNK) {
             final byte[] p = payload == null ? new byte[0] : payload;
             try {
                 chunkDispatcher.dispatch(p);
@@ -280,10 +332,7 @@ public final class DataPlaneClientBundle {
             onBulkArrived(endpointId, pp.length);
         } else if (type == DataPlaneFrame.TYPE_FAILOVER_REQUEST
                 || type == DataPlaneFrame.TYPE_FAILOVER_PERMIT) {
-            // Task 6/9 owns these; client handler hooks in HassiumClientMod.
             DebugLogger.info(LogType.NETWORK, "[DataPlaneClient] control frame type={} eid={}", type, endpointId);
-        } else if (type == DataPlaneFrame.TYPE_KEEPALIVE) {
-            // PoC retained keepalive acknowledgement per session; no-op here.
         }
     }
 
@@ -296,52 +345,39 @@ public final class DataPlaneClientBundle {
         }
     }
 
-    /** Tick all sessions. */
+    /** Tick 已认证会话；ACK timeout 在 UDP event loop 上调度，避免依赖 Minecraft tick。 */
     public void tick(long nowMs) {
-        for (var e : sessions.values()) {
-            try { e.tick(nowMs); } catch (Throwable ignored) {}
+        for (ReliableDatagramSession session : sessions.values()) {
+            try { session.tick(nowMs); } catch (Throwable ignored) {}
         }
     }
 
-    /** 幂等关闭：channels + sessions + worker group；不清零全局计数器（caller 显式 reset）。 */
+    /** 幂等关闭：pending/已认证 channels + sessions + worker group；不清零全局计数器。 */
     public void shutdown() {
-        for (ReliableDatagramSession s : sessions.values()) {
-            try { s.close(); } catch (Throwable ignored) {}
+        synchronized (attemptLock) {
+            for (PendingAttempt attempt : pendingAttempts.values()) {
+                closeAttempt(attempt);
+            }
+            pendingAttempts.clear();
+        }
+        for (ReliableDatagramSession session : sessions.values()) {
+            try { session.close(); } catch (Throwable ignored) {}
         }
         sessions.clear();
         remotes.clear();
         workerChannelMap.clear();
-        for (Channel ch : channels) {
-            try { ch.close().await(200, TimeUnit.MILLISECONDS); } catch (Throwable ignored) {}
+        for (Channel channel : channels) {
+            try { channel.close().await(200, TimeUnit.MILLISECONDS); } catch (Throwable ignored) {}
         }
         channels.clear();
         try { workerGroup.shutdownGracefully(0, 200, TimeUnit.MILLISECONDS).await(500, TimeUnit.MILLISECONDS); } catch (Throwable ignored) {}
         bound = false;
     }
 
-    // ----- channel dispatcher -----
-
-    private final class ClientDatagramDispatcher extends SimpleChannelInboundHandler<DatagramPacket> {
-        private final int endpointId;
-        ClientDatagramDispatcher(int eid) { this.endpointId = eid; }
-
-        @Override
-        protected void channelRead0(ChannelHandlerContext ctx, DatagramPacket packet) {
-            ReliableDatagramSession sess = sessions.get(endpointId);
-            if (sess == null) return;
-            ByteBuf buf = packet.content();
-            try {
-                sess.receive(buf.retainedDuplicate(), System.currentTimeMillis());
-            } catch (Throwable t) {
-                LOGGER.error("DataPlaneClient: receive failed eid={} {}", endpointId, t.toString());
-            }
-        }
-
-        @Override
-        public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
-            LOGGER.error("DataPlaneClient: channel exception eid={} {}", endpointId, cause.toString());
-        }
-    }
+    private record PendingAttempt(UUID playerId, long epoch, byte[] token,
+                                  UdpDataPlaneHandshakeTail.UdpListenerGroup group, int candidateIndex,
+                                  InetSocketAddress remote, ReliableDatagramSession session,
+                                  AtomicReference<Channel> channelRef, long deadlineMs) {}
 
     // ===== helpers =====
 
