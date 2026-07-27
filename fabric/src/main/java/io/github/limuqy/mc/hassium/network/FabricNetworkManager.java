@@ -5,6 +5,7 @@ import io.github.limuqy.mc.hassium.compat.ResourceLocationCompat;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.network.ServerChunkPushManager;
 import io.github.limuqy.mc.hassium.network.dataplane.DataPlaneClientLifecycle;
+import io.github.limuqy.mc.hassium.network.dataplane.DataPlaneHandshakeAdvertisement;
 import io.github.limuqy.mc.hassium.network.dataplane.DataPlaneUdpServer;
 import io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail;
 import io.github.limuqy.mc.hassium.utils.DebugLogger;
@@ -342,14 +343,18 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
                         client.execute(() -> {
                             try { DataPlaneClientLifecycle.getInstance().startUdp(pid, epoch, tail); }
                             catch (Throwable t) { LOGGER.warn("Hassium: UDP dataplane start failed", t); }
-                            // Task 9 — 新一轮握手成功：恢复态切 RECOVERED，并把 orchestrator 同步 onHandshakeAccepted
-                            try {
-                                io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState.getInstance().markRecovered();
+                            // 只有 DISCONNECT 已建立恢复态的握手才能确认恢复；首次登录只启动 UDP。
+                            boolean recovering = io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState
+                                    .getInstance().isRecovering();
+                            if (recovering) {
+                                io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState.getInstance()
+                                        .markRecovered();
                                 if (orch != null) orch.onHandshakeAccepted();
-                            } catch (Throwable ignored) {}
+                            }
                         });
-                    } else {
-                        // 无 UDP 数据面（控制 only 或 legacy 服务器），仍把恢复态视为已接收
+                    } else if (io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState.getInstance()
+                            .isRecovering()) {
+                        // 无 UDP 数据面（控制 only 或 legacy 服务器）同样只确认真实恢复。
                         io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState.getInstance().markRecovered();
                         if (orch != null) orch.onHandshakeAccepted();
                     }
@@ -407,12 +412,18 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
                             context.client().execute(() -> {
                                 try { DataPlaneClientLifecycle.getInstance().startUdp(pid, epoch, tail); }
                                 catch (Throwable t) { LOGGER.warn("Hassium: UDP dataplane start failed", t); }
-                                try {
-                                    io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState.getInstance().markRecovered();
+                                // 只有 DISCONNECT 已建立恢复态的握手才能确认恢复；首次登录只启动 UDP。
+                                boolean recovering = io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState
+                                        .getInstance().isRecovering();
+                                if (recovering) {
+                                    io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState.getInstance()
+                                            .markRecovered();
                                     if (orch != null) orch.onHandshakeAccepted();
-                                } catch (Throwable ignored) {}
+                                }
                             });
-                        } else {
+                        } else if (io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState.getInstance()
+                                .isRecovering()) {
+                            // 无 UDP 数据面（控制 only 或 legacy 服务器）同样只确认真实恢复。
                             io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState.getInstance().markRecovered();
                             if (orch != null) orch.onHandshakeAccepted();
                         }
@@ -722,22 +733,19 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
 
     @Override
     public void sendSectionDeltaPacket(ServerPlayer player, FriendlyByteBuf buf) {
-        // Task 8: 先尝试经 UDP 数据面路由；命中则丢弃 Primary send 并释放 buf。
-        // 命中判定的非破坏抽取：拷贝 readable 字节而保持 reader index，以便失败时
-        // Primary 路径仍能读到完整 payload（plan §923：不改 ServerChunkPushManager）。
-        if (io.github.limuqy.mc.hassium.network.dataplane.DataPlanePoCConfig.isEnabled()) {
-            int len = buf.readableBytes();
-            byte[] payload = new byte[len];
-            if (len > 0) {
-                buf.getBytes(buf.readerIndex(), payload);
-            }
-            if (io.github.limuqy.mc.hassium.network.dataplane.DataPlaneServer.tryRouteBulk(
-                    player.getUUID(),
-                    io.github.limuqy.mc.hassium.network.dataplane.DataPlaneFrame.TYPE_BULK_SECTION_DELTA,
-                    payload)) {
-                buf.release();
-                return; // 已走 UDP 数据面
-            }
+        // 路由器在数据面未启用、未绑定或无可用会话时返回 false；保留 Primary 路径。
+        // 非破坏抽取保持 reader index，以便回退时 Primary 仍能读到完整 payload。
+        int len = buf.readableBytes();
+        byte[] payload = new byte[len];
+        if (len > 0) {
+            buf.getBytes(buf.readerIndex(), payload);
+        }
+        if (io.github.limuqy.mc.hassium.network.dataplane.DataPlaneServer.tryRouteBulk(
+                player.getUUID(),
+                io.github.limuqy.mc.hassium.network.dataplane.DataPlaneFrame.TYPE_BULK_SECTION_DELTA,
+                payload)) {
+            buf.release();
+            return; // 已走 UDP 数据面
         }
 #if MC_VER < MC_1_20_5
         ServerPlayNetworking.send(player, SECTION_DELTA_S2C, buf);
@@ -884,7 +892,9 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
             ServerPlayer player,
             boolean accepted,
             boolean useGlobalCompression,
-            boolean useCompactHeader) {
+            boolean useCompactHeader,
+            boolean clientUdpDataplaneSupported,
+            boolean clientControlFailoverSupported) {
         if (useGlobalCompression) {
             DictionaryManager.init();
             IndexSyncManager.getInstance().initializeServerIndex();
@@ -902,8 +912,8 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
         response.writeBoolean(accepted);
         response.writeBoolean(useGlobalCompression);
         response.writeBoolean(useCompactHeader);
-        // Task 5-6 — 仅追加尾部。每个成功 TCP master 都签发新 epoch；旧 UDP epoch 会同时关闭。
-        if (accepted && DataPlaneUdpServer.isBound()) {
+        // 追加端点尾部。control 恢复不依赖 UDP bind，因此 control-only 服务器同样创建 epoch 并下发候选。
+        if (accepted) {
             try {
                 Connection master = getPlayerConnection(player);
                 if (master == null) {
@@ -911,18 +921,18 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
                 }
                 long epoch = DataPlaneUdpServer.beginControlConnection(player.getUUID(),
                         () -> master.disconnect(net.minecraft.network.chat.Component.empty()));
-                byte[] token = DataPlaneUdpServer.getSessionToken();
-                java.util.List<DataPlaneUdpServer.BoundEndpoint> eps = DataPlaneUdpServer.boundEndpoints();
-                java.util.List<UdpDataPlaneHandshakeTail.ControlEndpoint> ctl = java.util.List.of();
-                java.util.List<UdpDataPlaneHandshakeTail.UdpEndpointInfo> udp = new java.util.ArrayList<>(eps.size());
-                for (DataPlaneUdpServer.BoundEndpoint be : eps) {
-                    udp.add(new UdpDataPlaneHandshakeTail.UdpEndpointInfo(be.host(), be.bindPort(), be.weight(), be.endpointId()));
-                }
-                UdpDataPlaneHandshakeTail.S2CTail s2cTail = new UdpDataPlaneHandshakeTail.S2CTail(
-                        true, false, epoch, Constants.CURRENT_PROTOCOL_VERSION, token, ctl, udp);
+                boolean udpBound = DataPlaneUdpServer.isBound();
+                UdpDataPlaneHandshakeTail.S2CTail s2cTail = DataPlaneHandshakeAdvertisement.create(
+                        DataPlaneUdpServer.advertisedControlEndpoints(),
+                        DataPlaneUdpServer.boundEndpoints(),
+                        udpBound ? DataPlaneUdpServer.getSessionToken() : null,
+                        epoch,
+                        clientUdpDataplaneSupported && udpBound,
+                        clientControlFailoverSupported);
                 UdpDataPlaneHandshakeTail.writeS2C(response, s2cTail);
             } catch (Exception ex) {
-                LOGGER.warn("Hassium: Failed to append UDP dataplane tail to handshake response for {}", player.getName().getString(), ex);
+                LOGGER.warn("Hassium: Failed to append dataplane tail to handshake response for {}",
+                        player.getName().getString(), ex);
             }
         }
 #if MC_VER < MC_1_20_5
@@ -1011,6 +1021,7 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
             boolean scheme127 = buf.readBoolean();
             boolean globalPacketCompression = buf.readBoolean();
             boolean compactHeader = buf.readBoolean();
+            UdpDataPlaneHandshakeTail.C2STail dataplaneCapabilities = UdpDataPlaneHandshakeTail.readC2S(buf);
 
             DebugLogger.debug(LogType.NETWORK,
                     "[HANDSHAKE] Details from {}: protocol={}, modVersion={}, algorithms={}, clientCache={}, globalCompression={}, compactHeader={}",
@@ -1035,7 +1046,8 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
             // 1) HandshakeResponse 先经 Zlib 出站
             // 2) 再在 EventLoop 上切换 ZSTD（排在已排队的 encode 之后）
             // 3) 随后再发 Dict/Index（走 ZSTD）；客户端在收到 HandshakeResponse 后切换
-            server.execute(() -> completeServerHandshake(server, player, accepted, useGlobalCompression, useCompactHeader));
+            server.execute(() -> completeServerHandshake(server, player, accepted, useGlobalCompression, useCompactHeader,
+                    dataplaneCapabilities.udpDataplaneSupported(), dataplaneCapabilities.controlFailoverSupported()));
         });
 #else
         ServerPlayNetworking.registerGlobalReceiver(FabricPayloadRegistry.HANDSHAKE_C2S_TYPE, (payload, context) -> {
@@ -1055,6 +1067,7 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
                 boolean compactHeader = buf.readBoolean();
 
                 ServerPlayer player = context.player();
+                UdpDataPlaneHandshakeTail.C2STail dataplaneCapabilities = UdpDataPlaneHandshakeTail.readC2S(buf);
                 net.minecraft.server.MinecraftServer server = io.github.limuqy.mc.hassium.compat.PlayerCompat.getMinecraftServer(player);
 
                 DebugLogger.debug(LogType.NETWORK,
@@ -1075,7 +1088,8 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
 
                 boolean accepted = true;
 
-                server.execute(() -> completeServerHandshake(server, player, accepted, useGlobalCompression, useCompactHeader));
+                server.execute(() -> completeServerHandshake(server, player, accepted, useGlobalCompression, useCompactHeader,
+                        dataplaneCapabilities.udpDataplaneSupported(), dataplaneCapabilities.controlFailoverSupported()));
             } catch (Exception e) {
                 LOGGER.error("[HANDSHAKE] Failed to handle handshake packet", e);
             } finally {

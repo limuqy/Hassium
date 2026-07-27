@@ -147,6 +147,50 @@ class UdpDataPlaneHandshakeTailTest {
         assertThrows(IllegalArgumentException.class, () ->
             new UdpDataPlaneHandshakeTail.UdpEndpointInfo("a", 70000, 1, 1));
     }
+
+    @Test
+    @DisplayName("握手广告为每个 listener 生成一条 legacy endpoint 与完整候选组")
+    void advertisesControlEndpointsAndOneLegacyEndpointPerListener() {
+        var bound = List.of(
+                new DataPlaneUdpServer.BoundEndpoint(1, 40, 31002, List.of(
+                        new io.github.limuqy.mc.hassium.config.HassiumConfig.ReachableEndpoint("edge-c.example", 43001, 100))),
+                new DataPlaneUdpServer.BoundEndpoint(0, 60, 31001, List.of(
+                        new io.github.limuqy.mc.hassium.config.HassiumConfig.ReachableEndpoint("edge-a.example", 41001, 100),
+                        new io.github.limuqy.mc.hassium.config.HassiumConfig.ReachableEndpoint("edge-b.example", 42001, 80))));
+        var control = List.of(new UdpDataPlaneHandshakeTail.ControlEndpoint("play.example", 25565, 100));
+
+        var advertisement = DataPlaneHandshakeAdvertisement.create(control, bound, new byte[16], 7L, true, true);
+
+        assertTrue(advertisement.hasUdpDataplane());
+        assertTrue(advertisement.hasControlFailover());
+        assertEquals(control, advertisement.controlEndpoints());
+        assertEquals(List.of(
+                new UdpDataPlaneHandshakeTail.UdpEndpointInfo("edge-a.example", 41001, 60, 0),
+                new UdpDataPlaneHandshakeTail.UdpEndpointInfo("edge-c.example", 43001, 40, 1)),
+                advertisement.udpEndpoints());
+        assertEquals(List.of(
+                new UdpDataPlaneHandshakeTail.UdpListenerGroup(0, 60, List.of(
+                        new UdpDataPlaneHandshakeTail.UdpReachableEndpoint("edge-a.example", 41001, 100),
+                        new UdpDataPlaneHandshakeTail.UdpReachableEndpoint("edge-b.example", 42001, 80))),
+                new UdpDataPlaneHandshakeTail.UdpListenerGroup(1, 40, List.of(
+                        new UdpDataPlaneHandshakeTail.UdpReachableEndpoint("edge-c.example", 43001, 100)))),
+                advertisement.udpListenerGroups());
+    }
+
+    @Test
+    @DisplayName("disabled UDP 保留 control candidates 但不暴露 UDP token 或 endpoint")
+    void disabledUdpProducesNoUdpFlagOrTokenButKeepsControlCandidates() {
+        var control = List.of(new UdpDataPlaneHandshakeTail.ControlEndpoint("play.example", 25565, 100));
+
+        var advertisement = DataPlaneHandshakeAdvertisement.create(control, List.of(), new byte[16], 7L, false, true);
+
+        assertFalse(advertisement.hasUdpDataplane());
+        assertTrue(advertisement.hasControlFailover());
+        assertEquals(control, advertisement.controlEndpoints());
+        assertTrue(advertisement.udpEndpoints().isEmpty());
+        assertTrue(advertisement.udpListenerGroups().isEmpty());
+        assertArrayEquals(new byte[16], advertisement.token());
+    }
     private static void writePreGroupS2C(ByteBuf out, List<UdpDataPlaneHandshakeTail.UdpEndpointInfo> endpoints) {
         out.writeByte(0x01);
         out.writeLong(7777L);

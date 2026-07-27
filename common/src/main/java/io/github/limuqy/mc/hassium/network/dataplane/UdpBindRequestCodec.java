@@ -26,6 +26,8 @@ public final class UdpBindRequestCodec {
     /** 解析后的 BindRequest。 */
     public record Request(byte[] token, UUID playerId, long connectionEpoch,
                           int endpointId, int channelId) {}
+    /** 已认证 BIND_ACK 的 payload；加密帧仍携带 epoch 与 endpointId，拒绝迟到或串线确认。 */
+    public record Ack(long connectionEpoch, int endpointId) {}
 
     /**
      * 编码 BindRequest。
@@ -81,6 +83,31 @@ public final class UdpBindRequestCodec {
             throw new IllegalArgumentException("BindRequest endpointId/channelId must be non-negative");
         }
         return new Request(token, playerId, epoch, endpointId, channelId);
+    }
+
+    /** 编码经 {@link DataPlaneFrame#TYPE_BIND_ACK} 可靠加密传输的绑定确认。 */
+    public static byte[] encodeAck(long epoch, int endpointId) {
+        if (endpointId < 0) {
+            throw new IllegalArgumentException("endpointId must be non-negative");
+        }
+        return ByteBuffer.allocate(Long.BYTES + Integer.BYTES)
+                .putLong(epoch)
+                .putInt(endpointId)
+                .array();
+    }
+
+    /** 解码固定长度的绑定确认，畸形 payload 绝不能被视为成功。 */
+    public static Ack decodeAck(byte[] bytes) {
+        if (bytes == null || bytes.length != Long.BYTES + Integer.BYTES) {
+            throw new IllegalArgumentException("invalid BindAck length");
+        }
+        ByteBuffer buffer = ByteBuffer.wrap(bytes);
+        long epoch = buffer.getLong();
+        int endpointId = buffer.getInt();
+        if (endpointId < 0) {
+            throw new IllegalArgumentException("BindAck endpointId must be non-negative");
+        }
+        return new Ack(epoch, endpointId);
     }
 
     private static void writeLong(ByteArrayOutputStream out, long v) {

@@ -29,6 +29,21 @@ class UdpBindRequestCodecTest {
     }
 
     @Test
+    void authenticatedBindAckRoundTripsEpochAndEndpoint() {
+        UdpBindRequestCodec.Ack decoded = UdpBindRequestCodec.decodeAck(
+                UdpBindRequestCodec.encodeAck(42L, 3));
+
+        assertEquals(42L, decoded.connectionEpoch());
+        assertEquals(3, decoded.endpointId());
+    }
+
+    @Test
+    void bindAckRejectsMalformedPayloadAndNegativeEndpoint() {
+        assertThrows(IllegalArgumentException.class, () -> UdpBindRequestCodec.decodeAck(new byte[11]));
+        assertThrows(IllegalArgumentException.class, () -> UdpBindRequestCodec.encodeAck(42L, -1));
+    }
+
+    @Test
     void requestRejectsTruncatedPayload() {
         assertThrows(IllegalArgumentException.class,
                 () -> UdpBindRequestCodec.decodeRequest(new byte[33]));

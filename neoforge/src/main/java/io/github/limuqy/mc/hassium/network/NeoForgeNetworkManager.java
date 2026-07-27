@@ -138,6 +138,74 @@ public class NeoForgeNetworkManager implements NetworkManager {
         });
     }
 
+    /**
+     * 从当前已绑定 listener 与当前 TCP master 构造 append-only 数据面握手尾部。
+     * 控制恢复与 UDP bind 独立协商，因此即使 UDP 未绑定也为 control-only 会话分配 epoch。
+     */
+    private static io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail.S2CTail
+    createDataPlaneHandshakeTail(
+            ServerPlayer player,
+            boolean accepted,
+            io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail.C2STail clientCapabilities) {
+        if (!accepted) {
+            return io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail.S2CTail.disabled();
+        }
+        io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail.C2STail capabilities =
+                clientCapabilities == null
+                        ? new io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail.C2STail(false, false)
+                        : clientCapabilities;
+        try {
+            Connection master = getPlayerConnection(player);
+            if (master == null) {
+                throw new IllegalStateException("missing player connection");
+            }
+            long epoch = io.github.limuqy.mc.hassium.network.dataplane.DataPlaneUdpServer.beginControlConnection(
+                    player.getUUID(), () -> master.disconnect(net.minecraft.network.chat.Component.empty()));
+            boolean udpBound = io.github.limuqy.mc.hassium.network.dataplane.DataPlaneUdpServer.isBound();
+            return io.github.limuqy.mc.hassium.network.dataplane.DataPlaneHandshakeAdvertisement.create(
+                    io.github.limuqy.mc.hassium.network.dataplane.DataPlaneUdpServer.advertisedControlEndpoints(),
+                    io.github.limuqy.mc.hassium.network.dataplane.DataPlaneUdpServer.boundEndpoints(),
+                    udpBound
+                            ? io.github.limuqy.mc.hassium.network.dataplane.DataPlaneUdpServer.getSessionToken()
+                            : null,
+                    epoch,
+                    capabilities.udpDataplaneSupported() && udpBound,
+                    capabilities.controlFailoverSupported());
+        } catch (RuntimeException ex) {
+            LOGGER.warn("Hassium: Failed to append dataplane tail for {}", player.getName().getString(), ex);
+            return io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail.S2CTail.disabled();
+        }
+    }
+
+    /** 在各 NeoForge payload context 的主线程执行；非法 tail 绝不作为部分 UDP 配置继续使用。 */
+    private static void startUdpFromHandshakeTail(byte[] rawTail) {
+        if (rawTail == null || rawTail.length == 0) {
+            return;
+        }
+        final io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail.S2CTail tail;
+        try {
+            tail = io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail.readS2C(
+                    io.netty.buffer.Unpooled.wrappedBuffer(rawTail));
+        } catch (IllegalArgumentException ex) {
+            LOGGER.warn("Hassium: Invalid dataplane tail in handshake response", ex);
+            return;
+        }
+        if (!tail.hasUdpDataplane()) {
+            return;
+        }
+        var player = net.minecraft.client.Minecraft.getInstance().player;
+        if (player == null) {
+            LOGGER.debug("Hassium: Skip UDP dataplane start before client player exists");
+            return;
+        }
+        try {
+            io.github.limuqy.mc.hassium.network.dataplane.DataPlaneClientLifecycle.getInstance()
+                    .startUdp(player.getUUID(), tail.connectionEpoch(), tail);
+        } catch (RuntimeException ex) {
+            LOGGER.warn("Hassium: UDP dataplane start failed", ex);
+        }
+    }
+
 #if MC_VER < MC_1_20_4
     // 1.20.1–1.20.3: SimpleChannel（包名随加载器切换）
     public static final SimpleChannel CHANNEL = NetworkRegistry.newSimpleChannel(
@@ -300,8 +368,18 @@ public class NeoForgeNetworkManager implements NetworkManager {
             boolean chunkRevisionSupported,
             boolean scheme127Supported,
             boolean globalPacketCompressionSupported,
-            boolean compactHeaderSupported
+            boolean compactHeaderSupported,
+            io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail.C2STail dataplaneCapabilities
     ) {
+        public HandshakeWrapper(int protocolVersion, String modVersion, String[] supportedAlgorithms,
+                                boolean clientCacheSupported, boolean chunkRevisionSupported,
+                                boolean scheme127Supported, boolean globalPacketCompressionSupported,
+                                boolean compactHeaderSupported) {
+            this(protocolVersion, modVersion, supportedAlgorithms, clientCacheSupported, chunkRevisionSupported,
+                    scheme127Supported, globalPacketCompressionSupported, compactHeaderSupported,
+                    new io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail.C2STail(false, false));
+        }
+
         public void encode(FriendlyByteBuf buf) {
             buf.writeVarInt(protocolVersion);
             buf.writeUtf(modVersion);
@@ -314,7 +392,9 @@ public class NeoForgeNetworkManager implements NetworkManager {
             buf.writeBoolean(scheme127Supported);
             buf.writeBoolean(globalPacketCompressionSupported);
             buf.writeBoolean(compactHeaderSupported);
+            io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail.writeC2S(buf, dataplaneCapabilities);
         }
+
         public static HandshakeWrapper decode(FriendlyByteBuf buf) {
             int protocolVersion = buf.readVarInt();
             String modVersion = buf.readUtf();
@@ -328,7 +408,9 @@ public class NeoForgeNetworkManager implements NetworkManager {
             boolean scheme127 = buf.readBoolean();
             boolean globalPacketCompression = buf.readBoolean();
             boolean compactHeader = buf.readBoolean();
-            return new HandshakeWrapper(protocolVersion, modVersion, algorithms, clientCache, chunkRevision, scheme127, globalPacketCompression, compactHeader);
+            return new HandshakeWrapper(protocolVersion, modVersion, algorithms, clientCache, chunkRevision,
+                    scheme127, globalPacketCompression, compactHeader,
+                    io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail.readC2S(buf));
         }
     }
 
@@ -336,20 +418,35 @@ public class NeoForgeNetworkManager implements NetworkManager {
             int protocolVersion,
             boolean accepted,
             boolean globalCompressionAccepted,
-            boolean compactHeaderAccepted
+            boolean compactHeaderAccepted,
+            byte[] dataplaneTail
     ) {
+        public HandshakeResponseWrapper {
+            dataplaneTail = dataplaneTail == null ? new byte[0] : dataplaneTail.clone();
+        }
+
+        public HandshakeResponseWrapper(int protocolVersion, boolean accepted,
+                                        boolean globalCompressionAccepted, boolean compactHeaderAccepted) {
+            this(protocolVersion, accepted, globalCompressionAccepted, compactHeaderAccepted, new byte[0]);
+        }
+
         public void encode(FriendlyByteBuf buf) {
             buf.writeVarInt(protocolVersion);
             buf.writeBoolean(accepted);
             buf.writeBoolean(globalCompressionAccepted);
             buf.writeBoolean(compactHeaderAccepted);
+            buf.writeBytes(dataplaneTail);
         }
+
         public static HandshakeResponseWrapper decode(FriendlyByteBuf buf) {
             int protocolVersion = buf.readVarInt();
             boolean accepted = buf.readBoolean();
             boolean globalCompressionAccepted = buf.readBoolean();
             boolean compactHeaderAccepted = buf.readBoolean();
-            return new HandshakeResponseWrapper(protocolVersion, accepted, globalCompressionAccepted, compactHeaderAccepted);
+            byte[] dataplaneTail = new byte[buf.readableBytes()];
+            buf.readBytes(dataplaneTail);
+            return new HandshakeResponseWrapper(protocolVersion, accepted, globalCompressionAccepted,
+                    compactHeaderAccepted, dataplaneTail);
         }
     }
 
@@ -368,10 +465,20 @@ public class NeoForgeNetworkManager implements NetworkManager {
             boolean chunkRevisionSupported,
             boolean scheme127Supported,
             boolean globalPacketCompressionSupported,
-            boolean compactHeaderSupported
+            boolean compactHeaderSupported,
+            io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail.C2STail dataplaneCapabilities
     ) implements CustomPacketPayload {
 
         public static final ResourceLocation ID = ResourceLocationCompat.create(Constants.MOD_ID, "handshake_c2s");
+
+        public HandshakePayload(int protocolVersion, String modVersion, String[] supportedAlgorithms,
+                                boolean clientCacheSupported, boolean chunkRevisionSupported,
+                                boolean scheme127Supported, boolean globalPacketCompressionSupported,
+                                boolean compactHeaderSupported) {
+            this(protocolVersion, modVersion, supportedAlgorithms, clientCacheSupported, chunkRevisionSupported,
+                    scheme127Supported, globalPacketCompressionSupported, compactHeaderSupported,
+                    new io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail.C2STail(false, false));
+        }
 
         @Override
         public void write(FriendlyByteBuf buf) {
@@ -386,6 +493,7 @@ public class NeoForgeNetworkManager implements NetworkManager {
             buf.writeBoolean(scheme127Supported);
             buf.writeBoolean(globalPacketCompressionSupported);
             buf.writeBoolean(compactHeaderSupported);
+            io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail.writeC2S(buf, dataplaneCapabilities);
         }
 
         @Override
@@ -401,16 +509,67 @@ public class NeoForgeNetworkManager implements NetworkManager {
             for (int i = 0; i < algCount; i++) {
                 algorithms[i] = buf.readUtf();
             }
-            return new HandshakePayload(
-                    protocolVersion,
-                    modVersion,
-                    algorithms,
-                    buf.readBoolean(),
-                    buf.readBoolean(),
-                    buf.readBoolean(),
-                    buf.readBoolean(),
-                    buf.readBoolean()
-            );
+            boolean clientCache = buf.readBoolean();
+            boolean chunkRevision = buf.readBoolean();
+            boolean scheme127 = buf.readBoolean();
+            boolean globalCompression = buf.readBoolean();
+            boolean compactHeader = buf.readBoolean();
+            return new HandshakePayload(protocolVersion, modVersion, algorithms, clientCache, chunkRevision,
+                    scheme127, globalCompression, compactHeader,
+                    io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail.readC2S(buf));
+        }
+    }
+
+    /**
+     * 握手响应 Payload (S2C)
+     */
+    public record HandshakeResponsePayload(
+            int protocolVersion,
+            boolean accepted,
+            boolean globalCompressionAccepted,
+            boolean compactHeaderAccepted,
+            byte[] dataplaneTail
+    ) implements CustomPacketPayload {
+
+        public static final ResourceLocation ID = ResourceLocationCompat.create(Constants.MOD_ID, "handshake_s2c");
+
+        public HandshakeResponsePayload {
+            dataplaneTail = dataplaneTail == null ? new byte[0] : dataplaneTail.clone();
+        }
+
+        public HandshakeResponsePayload(int protocolVersion, boolean accepted,
+                                        boolean globalCompressionAccepted, boolean compactHeaderAccepted) {
+            this(protocolVersion, accepted, globalCompressionAccepted, compactHeaderAccepted, new byte[0]);
+        }
+
+        @Override
+        public byte[] dataplaneTail() {
+            return dataplaneTail.clone();
+        }
+
+        @Override
+        public void write(FriendlyByteBuf buf) {
+            buf.writeVarInt(protocolVersion);
+            buf.writeBoolean(accepted);
+            buf.writeBoolean(globalCompressionAccepted);
+            buf.writeBoolean(compactHeaderAccepted);
+            buf.writeBytes(dataplaneTail);
+        }
+
+        @Override
+        public ResourceLocation id() {
+            return ID;
+        }
+
+        public static HandshakeResponsePayload decode(FriendlyByteBuf buf) {
+            int protocolVersion = buf.readVarInt();
+            boolean accepted = buf.readBoolean();
+            boolean globalCompressionAccepted = buf.readBoolean();
+            boolean compactHeaderAccepted = buf.readBoolean();
+            byte[] dataplaneTail = new byte[buf.readableBytes()];
+            buf.readBytes(dataplaneTail);
+            return new HandshakeResponsePayload(protocolVersion, accepted, globalCompressionAccepted,
+                    compactHeaderAccepted, dataplaneTail);
         }
     }
 
@@ -671,14 +830,15 @@ public class NeoForgeNetworkManager implements NetworkManager {
             boolean chunkRevisionSupported,
             boolean scheme127Supported,
             boolean globalPacketCompressionSupported,
-            boolean compactHeaderSupported
+            boolean compactHeaderSupported,
+            io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail.C2STail dataplaneCapabilities
     ) implements CustomPacketPayload {
 
         public static final Type<HandshakePayload> TYPE = new Type<>(
                 ResourceLocationCompat.create(Constants.MOD_ID, "handshake_c2s")
         );
 
-        // StreamCodec.composite 最多 6 字段；握手有 8 字段，用手写编解码
+        // StreamCodec.composite 最多 6 字段；握手有附加 capability tail，使用手写编解码。
         public static final StreamCodec<FriendlyByteBuf, HandshakePayload> STREAM_CODEC = StreamCodec.of(
                 (buf, p) -> {
                     buf.writeVarInt(p.protocolVersion());
@@ -692,6 +852,8 @@ public class NeoForgeNetworkManager implements NetworkManager {
                     buf.writeBoolean(p.scheme127Supported());
                     buf.writeBoolean(p.globalPacketCompressionSupported());
                     buf.writeBoolean(p.compactHeaderSupported());
+                    io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail.writeC2S(
+                            buf, p.dataplaneCapabilities());
                 },
                 buf -> {
                     int protocolVersion = buf.readVarInt();
@@ -701,18 +863,25 @@ public class NeoForgeNetworkManager implements NetworkManager {
                     for (int i = 0; i < algCount; i++) {
                         algorithms[i] = buf.readUtf();
                     }
-                    return new HandshakePayload(
-                            protocolVersion,
-                            modVersion,
-                            algorithms,
-                            buf.readBoolean(),
-                            buf.readBoolean(),
-                            buf.readBoolean(),
-                            buf.readBoolean(),
-                            buf.readBoolean()
-                    );
+                    boolean clientCache = buf.readBoolean();
+                    boolean chunkRevision = buf.readBoolean();
+                    boolean scheme127 = buf.readBoolean();
+                    boolean globalCompression = buf.readBoolean();
+                    boolean compactHeader = buf.readBoolean();
+                    return new HandshakePayload(protocolVersion, modVersion, algorithms, clientCache, chunkRevision,
+                            scheme127, globalCompression, compactHeader,
+                            io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail.readC2S(buf));
                 }
         );
+
+        public HandshakePayload(int protocolVersion, String modVersion, String[] supportedAlgorithms,
+                                boolean clientCacheSupported, boolean chunkRevisionSupported,
+                                boolean scheme127Supported, boolean globalPacketCompressionSupported,
+                                boolean compactHeaderSupported) {
+            this(protocolVersion, modVersion, supportedAlgorithms, clientCacheSupported, chunkRevisionSupported,
+                    scheme127Supported, globalPacketCompressionSupported, compactHeaderSupported,
+                    new io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail.C2STail(false, false));
+        }
 
         @Override
         public Type<HandshakePayload> type() {
@@ -727,20 +896,47 @@ public class NeoForgeNetworkManager implements NetworkManager {
             int protocolVersion,
             boolean accepted,
             boolean globalCompressionAccepted,
-            boolean compactHeaderAccepted
+            boolean compactHeaderAccepted,
+            byte[] dataplaneTail
     ) implements CustomPacketPayload {
 
         public static final Type<HandshakeResponsePayload> TYPE = new Type<>(
                 ResourceLocationCompat.create(Constants.MOD_ID, "handshake_s2c")
         );
 
-        public static final StreamCodec<FriendlyByteBuf, HandshakeResponsePayload> STREAM_CODEC = StreamCodec.composite(
-                ByteBufCodecs.VAR_INT, HandshakeResponsePayload::protocolVersion,
-                ByteBufCodecs.BOOL, HandshakeResponsePayload::accepted,
-                ByteBufCodecs.BOOL, HandshakeResponsePayload::globalCompressionAccepted,
-                ByteBufCodecs.BOOL, HandshakeResponsePayload::compactHeaderAccepted,
-                HandshakeResponsePayload::new
+        public static final StreamCodec<FriendlyByteBuf, HandshakeResponsePayload> STREAM_CODEC = StreamCodec.of(
+                (buf, p) -> {
+                    buf.writeVarInt(p.protocolVersion());
+                    buf.writeBoolean(p.accepted());
+                    buf.writeBoolean(p.globalCompressionAccepted());
+                    buf.writeBoolean(p.compactHeaderAccepted());
+                    buf.writeBytes(p.dataplaneTail());
+                },
+                buf -> {
+                    int protocolVersion = buf.readVarInt();
+                    boolean accepted = buf.readBoolean();
+                    boolean globalCompressionAccepted = buf.readBoolean();
+                    boolean compactHeaderAccepted = buf.readBoolean();
+                    byte[] dataplaneTail = new byte[buf.readableBytes()];
+                    buf.readBytes(dataplaneTail);
+                    return new HandshakeResponsePayload(protocolVersion, accepted, globalCompressionAccepted,
+                            compactHeaderAccepted, dataplaneTail);
+                }
         );
+
+        public HandshakeResponsePayload {
+            dataplaneTail = dataplaneTail == null ? new byte[0] : dataplaneTail.clone();
+        }
+
+        public HandshakeResponsePayload(int protocolVersion, boolean accepted,
+                                        boolean globalCompressionAccepted, boolean compactHeaderAccepted) {
+            this(protocolVersion, accepted, globalCompressionAccepted, compactHeaderAccepted, new byte[0]);
+        }
+
+        @Override
+        public byte[] dataplaneTail() {
+            return dataplaneTail.clone();
+        }
 
         @Override
         public Type<HandshakeResponsePayload> type() {
@@ -1365,11 +1561,17 @@ public class NeoForgeNetworkManager implements NetworkManager {
         boolean useCompactHeader = serverSupportsCompactHeader && msg.compactHeaderSupported();
 
         boolean accepted = true;
+        io.netty.buffer.ByteBuf tailBuffer = io.netty.buffer.Unpooled.buffer();
+        io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail.writeS2C(tailBuffer,
+                createDataPlaneHandshakeTail(player, accepted, msg.dataplaneCapabilities()));
+        byte[] dataplaneTail = new byte[tailBuffer.readableBytes()];
+        tailBuffer.readBytes(dataplaneTail);
         HandshakeResponseWrapper response = new HandshakeResponseWrapper(
                 Constants.CURRENT_PROTOCOL_VERSION,
                 accepted,
                 useGlobalCompression,
-                useCompactHeader
+                useCompactHeader,
+                dataplaneTail
         );
         if (useGlobalCompression) {
             DictionaryManager.init();
@@ -1395,10 +1597,14 @@ public class NeoForgeNetworkManager implements NetworkManager {
     }
 
     private void handleHandshakeResponseSimple(HandshakeResponseWrapper msg) {
+
         LOGGER.info("Hassium: Client handshake response: accepted={}, globalCompression={}, compactHeader={}",
                 msg.accepted(), msg.globalCompressionAccepted(), msg.compactHeaderAccepted());
         if (msg.accepted() && msg.globalCompressionAccepted()) {
             tryInstallClientZstdPipeline();
+        }
+        if (msg.accepted()) {
+            startUdpFromHandshakeTail(msg.dataplaneTail());
         }
     }
 
@@ -1487,8 +1693,13 @@ public class NeoForgeNetworkManager implements NetworkManager {
                         && payload.compactHeaderSupported();
                 boolean accepted = true;
 
+                io.netty.buffer.ByteBuf tailBuffer = io.netty.buffer.Unpooled.buffer();
+                io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail.writeS2C(tailBuffer,
+                        createDataPlaneHandshakeTail(player, accepted, payload.dataplaneCapabilities()));
+                byte[] dataplaneTail = new byte[tailBuffer.readableBytes()];
+                tailBuffer.readBytes(dataplaneTail);
                 HandshakeResponsePayload response = new HandshakeResponsePayload(
-                        Constants.CURRENT_PROTOCOL_VERSION, accepted, useGlobalCompression, useCompactHeader);
+                        Constants.CURRENT_PROTOCOL_VERSION, accepted, useGlobalCompression, useCompactHeader, dataplaneTail);
                 // 先暂停出站压缩，再发 HandshakeResponse，避免响应后的包仍走 Zlib
                 if (useGlobalCompression) {
                     DictionaryManager.init();
@@ -1515,9 +1726,13 @@ public class NeoForgeNetworkManager implements NetworkManager {
         if (payload.accepted() && payload.globalCompressionAccepted()) {
             tryInstallClientZstdPipeline();
         }
-        context.workHandler().execute(() ->
-                LOGGER.info("Hassium: Client handshake response: accepted={}, globalCompression={}, compactHeader={}",
-                        payload.accepted(), payload.globalCompressionAccepted(), payload.compactHeaderAccepted()));
+        context.workHandler().execute(() -> {
+            LOGGER.info("Hassium: Client handshake response: accepted={}, globalCompression={}, compactHeader={}",
+                    payload.accepted(), payload.globalCompressionAccepted(), payload.compactHeaderAccepted());
+            if (payload.accepted()) {
+                startUdpFromHandshakeTail(payload.dataplaneTail());
+            }
+        });
     }
 
     private static void handleCompressedChunk(CompressedChunkPayload payload, PlayPayloadContext context) {
@@ -1727,8 +1942,13 @@ public class NeoForgeNetworkManager implements NetworkManager {
                         && payload.compactHeaderSupported();
                 boolean accepted = true;
 
+                io.netty.buffer.ByteBuf tailBuffer = io.netty.buffer.Unpooled.buffer();
+                io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail.writeS2C(tailBuffer,
+                        createDataPlaneHandshakeTail(player, accepted, payload.dataplaneCapabilities()));
+                byte[] dataplaneTail = new byte[tailBuffer.readableBytes()];
+                tailBuffer.readBytes(dataplaneTail);
                 HandshakeResponsePayload response = new HandshakeResponsePayload(
-                        Constants.CURRENT_PROTOCOL_VERSION, accepted, useGlobalCompression, useCompactHeader);
+                        Constants.CURRENT_PROTOCOL_VERSION, accepted, useGlobalCompression, useCompactHeader, dataplaneTail);
                 // 先暂停出站压缩，再发 HandshakeResponse，避免响应后的包仍走 Zlib
                 if (useGlobalCompression) {
                     DictionaryManager.init();
@@ -1755,9 +1975,13 @@ public class NeoForgeNetworkManager implements NetworkManager {
         if (payload.accepted() && payload.globalCompressionAccepted()) {
             tryInstallClientZstdPipeline();
         }
-        context.enqueueWork(() ->
-                LOGGER.info("Hassium: Client handshake response: accepted={}, globalCompression={}, compactHeader={}",
-                        payload.accepted(), payload.globalCompressionAccepted(), payload.compactHeaderAccepted()));
+        context.enqueueWork(() -> {
+            LOGGER.info("Hassium: Client handshake response: accepted={}, globalCompression={}, compactHeader={}",
+                    payload.accepted(), payload.globalCompressionAccepted(), payload.compactHeaderAccepted());
+            if (payload.accepted()) {
+                startUdpFromHandshakeTail(payload.dataplaneTail());
+            }
+        });
     }
 
     private static void handleCompressedChunk(CompressedChunkPayload payload, IPayloadContext context) {
@@ -1878,7 +2102,8 @@ public class NeoForgeNetworkManager implements NetworkManager {
                     Constants.CURRENT_PROTOCOL_VERSION,
                     Constants.MOD_VERSION,
                     new String[]{compressionAlgorithm, dictAlgorithm},
-                    true, true, false, true, true
+                    true, true, false, true, true,
+                    new io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail.C2STail(true, false)
             ));
             LOGGER.debug("Hassium: Sent handshake request to server");
         } else {
@@ -1892,7 +2117,8 @@ public class NeoForgeNetworkManager implements NetworkManager {
                     Constants.CURRENT_PROTOCOL_VERSION,
                     Constants.MOD_VERSION,
                     new String[]{compressionAlgorithm, dictAlgorithm},
-                    true, true, false, true, true
+                    true, true, false, true, true,
+                    new io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail.C2STail(true, false)
             );
             net.minecraft.client.Minecraft.getInstance().getConnection().send(new ServerboundCustomPayloadPacket(payload));
             LOGGER.debug("Hassium: Sent handshake request (Payload 1.20.4)");
@@ -1905,7 +2131,8 @@ public class NeoForgeNetworkManager implements NetworkManager {
                     Constants.CURRENT_PROTOCOL_VERSION,
                     Constants.MOD_VERSION,
                     new String[]{compressionAlgorithm, dictAlgorithm},
-                    true, true, false, true, true
+                    true, true, false, true, true,
+                    new io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail.C2STail(true, false)
             );
             net.minecraft.client.Minecraft.getInstance().getConnection().send(payload);
             LOGGER.debug("Hassium: Sent handshake request (Payload)");
