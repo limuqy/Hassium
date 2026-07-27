@@ -152,3 +152,92 @@ HEAD: c15f611 (clean — endpoint 模型 + tail 已 commit)
 - Version segments 真相源: `docs/version-segments.md`
 - Anchor 脚本: `scripts/compile-anchors.sh`(bash 直接调用;`compileAnchors` gradle task 因 daemon stop 处理冲突未跑通)
 - Smoke harness(待开工): `scripts/runtime-smoke-test.ps1`
+
+---
+
+## 8. 完结记录(2026-07-27,后续会话续作)
+
+沿用用户在暂停后指定的方向(全九锚适配 + 归并评估后逐处提交),本会话续作完成剩余 Task 9 与 Task 10 §2-§4,head 链推进至:
+
+```
+b531f55 fix(smoke): restore -ServerReadyTimeoutSec param lost in DryRun refactor
+20a5d8f feat(smoke): add UdpFailover phase with Nginx stream proxy harness   ← Task 9 §3
+1f81f6c chore: merge multi-channel PoC SDD progress state                    ← 归并 G
+d7fd53b docs: add unified endpoint plan, design, and status docs             ← 归并 F
+023a72c chore(build): add kcp-netty to neoforge compile libs                 ← 归并 E
+2495a2f feat(client): one KCP session per listener with candidate fallback   ← 归并 D = Task 7
+a218432 feat(handshake): advertise configured endpoint groups via Fabric/NeoForge ← 归并 C = Task 5+6
+1101dd9 feat(failover): drive permit/stall/recovery from config, gate reconnect marker ← 归并 B = Task 4+8
+cc3dcd0 feat(dataplane): bind from immutable config, drop PoC hardcoded endpoints ← 归并 A = Task 3
+931b393 fix(client): cross-version guards for FabricControlReconnectLauncher ← 九锚适配
+```
+
+### 8.1 Task 9 实际交付
+
+- `scripts/smoke/UdpFailoverSmoke.psm1`:3 个纯函数 `New-UdpFailoverNginxConfig` / `Get-UdpFailoverMarkers` / `Get-UdpFailoverHarnessTimeline`。here-string 用 `${var}` 形式以避开 PowerShell `$var:` drive-scope 解析;`Get-UdpFailoverMarkers` 用**按行 split + 锚定 regex** 避开 `\s+` 跨行匹配陷阱(此前 Pester `Should Be $false` 在跨行 match 上挂掉 5/14)。
+- `scripts/smoke/runtime-smoke-test.Tests.ps1`:16 个 test,Pester v3.4 双兼容(`Should Be`/`Should Match` 而非 `Should -BeTrue`),覆盖 config 生成 / 6-marker 聚合 / harness timeline / DryRun 时空不变性 / InjectTcpClose 时序。
+- `scripts/runtime-smoke-test.ps1`:UdpFailover phase 在 §4 端口释放后启 nginx stream proxy(透明代理 TCP 主控);UDP 数据面直连 server。**三场景**:
+  1. 内部模拟(`-InjectTcpClose` 缺省,mono-JVM 唯一可行)——`ClientSmokeTest.disconnect` 间接触发 `ControlReconnectOrchestrator.onPrimaryDisconnected`,候选用同一个 nginx port 重连。
+  2. `-InjectTcpClose` 真实 RST 注入——Round1 后 nginx `-s stop` 强关 proxy 连接 → client channelInactive → 重启 nginx → 重连。
+  3. `-DryRun` 仅起 nginx + 验 listen + stop + exit 0,不起 server/client。
+- `docs/runtime-smoke-test.md`:新增「Nginx Failover Harness」节,加 `-NginxExePath`/`-ProxyPort`/`-DryRun`/`-InjectTcpClose` 参数表,三场景描述,helper + Pester v3.4 兼容说明,exit 码 4/5 含义。
+
+**验证**:
+- Pester 16/16 PASS(包含 here-string 解析修复 + 跨行 match 修复 + DryRun/InjectTcpClose new cases)
+- `-DryRun` 真跑 PASS(`nginxStarted at=1785118706639` 写入 timeline log + result JSON;nginx listen 25570 ready;Stop-FailoverNginxProxy 清理本会话启的 worker)
+
+### 8.2 Task 10 §3 真实端到端 smoke 结果
+
+```
+$ ./scripts/runtime-smoke-test.ps1 -Ver 1.20.1 -Loader fabric -Phase UdpFailover -SessionId smoke_1_20_1_fabric_002
+[...] nginx 已 listen on 127.0.0.1:25570
+[...] 等待客户端退出(超时 600s)
+[...] === RESULT: PASS ===
+[...] Round1: stats=True pass=True
+[...] Round2: stats=True pass=True
+[...] Exit: 0
+[...] UdpFailover markers:
+  UDP_BIND_OK=True ✅
+  UDP_WRR_OK=True ✅
+  FAILOVER_PERMIT_OK=False (预期:内部模拟 path 不发 FailoverRequest 帧)
+  FAILOVER_RECONNECT_OK=True ✅
+  FAILOVER_TERMINAL_OK=False (预期:单候选且重连成功 → 候选不耗尽)
+  CACHE_RESUME_HIT=True ✅
+```
+
+PASS 判据:`UdpFailoverCorePass = UDP_BIND_OK && CACHE_RESUME_HIT` 与 `client exit 0`,实现 plan §3 §6 step 1 的 corePass 表述(内部模拟变体——四核心 marker PASS,无需 RST 注入)。**这一跑即用户要求的"实际做一次 nginx 验证"**——nginx 透明代理 TCP 主控、UDP 直连数据面、mono-JVM 内部模拟断连与恢复全链路打通。
+
+### 8.3 Task 10 §4 数据面不变量审核
+
+逐项核对 plan §1199-§1202 的四类不变量,全部 PASS:
+
+| 不变量 | 证据 |
+|--------|------|
+| `DataPlanePoCConfig.ENDPOINTS` 与硬编码 25566/25567 已删除 | `DataPlanePoCConfig.java` 无 `ENDPOINTS` 字段,仅协议常量;`grep 25566/25567` 仅在测试 fixture 命中,production 路径零命中 |
+| `0.0.0.0`/`::` 从不进入 S2C tail | `validateReachableHost`(DataPlaneEndpointConfig#L24)拒绝 wildcard;`ReachableEndpoint` record ctor(L125)与 `UdpReachableEndpoint` ctor(L132)经 validate;`advertisedControlEndpoints` 从已验证 config 拉取 |
+| 每组一条 `ReliableDatagramSession`,候选失败只在同组切换 | `DataPlaneClientBundle` L35-37 职责不变量明示;`sessions` map endpointId keyed |
+| 首次握手不发 `FAILOVER_RECONNECT_OK` | `ControlReconnectOrchestrator.onHandshakeAccepted` 门控 `recovering==true` 才返回 true;initial `recovering=false` |
+| 不发生 recovery 时无 terminal marker | `performTerminalFinalization` 仅在 `onReconnectFailed` 全候选耗尽 |
+| marker 无法被 harness 伪造 | `HassiumSmokeTest:UDP_FAILOVER*` 由 production emit;harness 仅写 `HASS_HARNESS <event>` timeline;helper 注释明"never writes markers" |
+| `common` 没 loader/MC import | dataplane 子包 `^import net\.minecraft|net\.neoforged|net\.fabricmc|com\.mojang|org\.spongepowered` 0 hits |
+| 协议版本没 bump | `PROTOCOL_VERSION=3` 自 `2513c3b` 至今未变(`UdpBindRequestCodec` + `UdpDataPlaneHandshakeTail`) |
+| Primary fallback / `tryRouteBulk` 契约未回归 | smoke 实测 `UDP_WRR_OK=True` → `UdpBulkRouter.route()` 返回 `DATA_SENT` 与 baseline 一致 |
+
+### 8.4 Plan Task 9 §1 "六 markers 全 True"
+
+用户已在本会话次轮明确改写默认期望:"smoke 可内部模拟断连选举,只是要实际做一次 nginx 验证就行了"。所以 §8.2 的内部模拟 4 核心 markers(True)+ FAILOVER_PERMIT/TERMINAL(False) 即满足新版合约;不必跑 `-InjectTcpClose` 验真实 RST 全 markers六 True 路径(plan 原始 §3 step 3 step 4 描述的所有 6 个 markers True 需要真 RST 注入触发 PERMIT,内部模拟不触发——这是预期行为)。
+
+### 8.5 主要交付提交序
+
+```
+A-G 归并  (cc3dcd0 → 1f81f6c)        由 SettlementCommitter 子代理完成,每组 taskkill + common/fabric 1.20.1 compile BUILD SUCCESSFUL
+931b393  九锚适配                       FabricControlReconnectLauncher #if MC_VER 两段守卫,九锚点 compile 矩阵全 BUILD SUCCESSFUL
+20a5d8f  Task 9 §1-§3 Nginx harness
+b531f55  Task 9 hotfix                    补回 -ServerReadyTimeoutSec 参(20a5d8f 重写 param 块时漏掉)
+```
+
+### 8.6 验证证据可复查路径
+
+- Pester:`powershell -NoProfile -ExecutionPolicy Bypass -Command "Invoke-Pester -Path scripts/smoke/runtime-smoke-test.Tests.ps1 -PassThru"`
+- DryRun:`-Phase UdpFailover -DryRun` 退出 0,`build/smoke-test/results/result_<id>.json` 含 `HarnessTimeline`
+- 真实 smoke:`-Phase UdpFailover` 72s PASS,markers 见 `result_<id>.json.UdpFailoverMarkers`
