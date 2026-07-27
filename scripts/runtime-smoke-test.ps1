@@ -228,6 +228,18 @@ Set-Content -Path (Join-Path $serverRunDir "server.properties") -Value $props
 
 # 创建 world\serverconfig 目录（部分 neoforge 版本不会自动创建）
 New-Item -ItemType Directory -Force -Path (Join-Path $serverRunDir "world\serverconfig") -ErrorAction SilentlyContinue | Out-Null
+# NeoForge 21.5+ FML ConfigTracker.writeConfig 在 world/serverconfig/hassium/ 内存在残留 *.toml.bak 时，
+# 把整套 parent 路径重复拼到 tmp 文件名前导致 java.nio.file.NoSuchFileException
+# (\.\world\serverconfig\hassium\.\world\serverconfig\hassium\hassium-server.new.tmp.toml)。
+# server 启动前清空 Hassium own serverconfig 残留，让 ConfigTracker 从干净状态写入。
+if ($Loader -eq "neoforge") {
+    $hassiumServerConfig = Join-Path $serverRunDir "world\serverconfig\hassium"
+    if (Test-Path $hassiumServerConfig) {
+        Get-ChildItem -Path $hassiumServerConfig -File -Filter "*.toml*" -ErrorAction SilentlyContinue |
+            Remove-Item -Force -ErrorAction SilentlyContinue
+        Write-Host "[$SessionId] 清理 neoforge world/serverconfig/hassium 残留 toml（绕过 FML 7.0.13 ConfigTracker 路径拼接 bug）"
+    }
+}
 
 # 3. 清理存档（batch：loader 首轮 / 退版本 / 失败重试 会传 -CleanWorld；单会话默认不清理）
 if ($CleanWorld) {
