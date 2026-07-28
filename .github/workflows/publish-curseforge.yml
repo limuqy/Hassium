@@ -5,9 +5,17 @@
 # 手动触发，绝不挂在 push/tag 上——发布是对外动作。
 #
 # 用法：仓库 Actions → Publish CurseForge → Run workflow →
-#   - versions：逗号分隔，如 1.20.1（留空=全 17 个）
+#   - versions：逗号分隔，如 1.20.1,1.20.6；留空=全 17 个
 #   - release_type：release / beta / alpha（默认 release）
 #   - dry_run：勾上则全程只 DryRun（-Pcurseforge_debug=true 只打印 URI 不真传）
+#
+# Loader 标签规则（由 buildSrc/publish-curseforge.gradle 落地，本 workflow 不感知）：
+#   - 各 MC 版本按 versionProperties/<ver>.properties 的 builds_for 决定 include 哪些子项目
+#     → ./gradlew build publishCurseForge 自动跑对应 loader 的上传 task
+#   - 1.20.1 例外：builds_for=fabric,neoforge（无独立 forge 子项目）；
+#     neoforge 产物以 loom.platform='forge' 编译，上传时同一 jar 双标 NeoForge + Forge
+#   - 1.20.6：builds_for 含 forge → 独立 forge 子项目单标 Forge 上传
+#   - 1.21+：无 Forge（仅 fabric + neoforge）
 #
 # 一次性仓库配置：
 #   Settings → Secrets → Actions → New secret：CURSEFORGE_TOKEN（勿提交进 gradle.properties）
