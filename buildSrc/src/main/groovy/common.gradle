@@ -14,18 +14,6 @@ manifold {
 }
 
 repositories {
-    // FCAP 仅在 Fuzs Maven；exclusive 避免到 NeoForged/Aliyun 上空转超时
-    exclusiveContent {
-        forRepository {
-            maven {
-                name = 'Fuzs Mod Resources'
-                url = 'https://raw.githubusercontent.com/Fuzss/modresources/main/maven/'
-            }
-        }
-        filter {
-            includeGroup('fuzs.forgeconfigapiport')
-        }
-    }
     maven {
         name = 'Aliyun Maven Public'
         url = uri('https://maven.aliyun.com/repository/public')
