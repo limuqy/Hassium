@@ -22,8 +22,8 @@
 
 | 端 | 配置文件 |
 | --- | --- |
-| 客户端 | `config/hassium/hassium-client.toml` 与 `config/hassium/hassium-common.toml` |
-| 专用服务器 | `config/hassium/hassium-common.toml` |
+| 客户端 | `config/hassium/hassium-client.toml` |
+| 专用服务器 | `config/hassium/hassium-server.toml` |
 
 ## 前置依赖
 
@@ -45,7 +45,7 @@
 
 - Fabric：安装 **Mod Menu** 与 **Cloth** 后，在 Mod Menu 中打开配置。
 - Forge / NeoForge：在模组列表中点击「配置」按钮；需要安装 **Cloth**。
-- 也可以直接编辑 `config/hassium/hassium-client.toml` 或 `config/hassium/hassium-common.toml` 中的 TOML 配置。
+- 也可以直接编辑 `config/hassium/hassium-client.toml` 或 `config/hassium/hassium-server.toml` 中的 TOML 配置。
 
 ## 首次启用存储
 

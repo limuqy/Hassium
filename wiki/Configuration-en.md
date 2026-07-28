@@ -9,7 +9,7 @@ Hassium generates two TOML files under `config/hassium/` on startup:
 | File | Side | Contents |
 | --- | --- | --- |
 | `hassium-client.toml` | Physical client only | Client cache, beyond-view render, client-side network |
-| `hassium-common.toml` | Client and dedicated server | Storage compression, shared network, compat, debug |
+| `hassium-server.toml` | Dedicated server only | Storage compression, shared network, compat, debug |
 
 In-game config screen entry points:
 

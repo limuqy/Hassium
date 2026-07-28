@@ -22,8 +22,8 @@ Download the JAR matching the Minecraft version and loader from [GitHub Releases
 
 | Side | Configuration files |
 | --- | --- |
-| Client | `config/hassium/hassium-client.toml` and `config/hassium/hassium-common.toml` |
-| Dedicated server | `config/hassium/hassium-common.toml` |
+| Client | `config/hassium/hassium-client.toml` |
+| Dedicated server | `config/hassium/hassium-server.toml` |
 
 ## Required dependencies
 
@@ -45,7 +45,7 @@ Download the JAR matching the Minecraft version and loader from [GitHub Releases
 
 - Fabric: install **Mod Menu** and **Cloth**, then open the configuration from Mod Menu.
 - Forge / NeoForge: click the **Configure** button in the mods list; **Cloth** is required.
-- TOML files can also be edited directly: `config/hassium/hassium-client.toml` or `config/hassium/hassium-common.toml`.
+- TOML files can also be edited directly: `config/hassium/hassium-client.toml` or `config/hassium/hassium-server.toml`.
 
 ## Before enabling storage for the first time
 

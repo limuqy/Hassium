@@ -9,7 +9,7 @@ Hassium 启动时在 `config/hassium/` 自动生成两份 TOML：
 | 文件 | 适用端 | 主要内容 |
 | --- | --- | --- |
 | `hassium-client.toml` | 仅物理客户端 | 客户端缓存、超视渲染、客户端网络应用 |
-| `hassium-common.toml` | 客户端与专用服 | 存储压缩、共享网络、兼容、调试 |
+| `hassium-server.toml` | 仅专用服 | 存储压缩、共享网络、兼容、调试 |
 
 游戏内编辑入口：
 
