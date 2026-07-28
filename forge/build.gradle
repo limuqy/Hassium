@@ -179,21 +179,6 @@ dependencies {
     library files(stripKcpTask)
     include files(stripKcpTask)
 
-    // 1.20.6：common Spec 使用 NeoForge ModConfigSpec，经 FCAP Forge 提供并 jiJ。
-    // FCAP 自带 JiJ mixinextras-forge（内嵌 MixinExtras-*.jar），同时 pom 又传递
-    // mixinextras-common → Forge 50 JPMS 双模块同包导出 ResolutionException。
-    // 剥除 FCAP 内嵌 JiJ，只保留单一 mixinextras-common。
-    if (gradle.ext.minecraft_version == '1.20.6' && gradle.ext.has('forge_config_api_port_version')) {
-        fcapIncoming("fuzs.forgeconfigapiport:forgeconfigapiport-forge:${gradle.ext.forge_config_api_port_version}") {
-            exclude group: 'io.github.llamalad7', module: 'mixinextras-common'
-            exclude group: 'io.github.llamalad7', module: 'mixinextras-forge'
-        }
-        implementation files(stripFcapTask)
-        include files(stripFcapTask)
-        // 恢复原先 FCAP 传递的 common（单一副本，进 game layer + 生产 JiJ）
-        library 'io.github.llamalad7:mixinextras-common:0.3.5'
-        include 'io.github.llamalad7:mixinextras-common:0.3.5'
-    }
 
     // Cloth Config：编译期需要；可选依赖，不 jiJ
     if (gradle.ext.has('cloth_config_version')) {

@@ -1,18 +1,14 @@
 package io.github.limuqy.mc.hassium;
 
+import io.github.limuqy.mc.hassium.config.ForgeConfigBackend;
+import io.github.limuqy.mc.hassium.config.ForgeConfigRegistration;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
-import io.github.limuqy.mc.hassium.config.HassiumConfigSpec;
 import io.github.limuqy.mc.hassium.network.ChunkSender;
 import io.github.limuqy.mc.hassium.network.ForgeNetworkManager;
+import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
-import net.minecraftforge.fml.config.ModConfig;
 import net.minecraftforge.fml.event.config.ModConfigEvent;
 import net.minecraftforge.fml.event.lifecycle.FMLCommonSetupEvent;
-#if MC_VER < MC_1_21_6
-import net.minecraftforge.eventbus.api.SubscribeEvent;
-#else
-import net.minecraftforge.eventbus.api.listener.SubscribeEvent;
-#endif
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -20,20 +16,10 @@ import org.slf4j.LoggerFactory;
 public class HassiumMod {
 
     private static final Logger LOGGER = LoggerFactory.getLogger("Hassium/Mod");
+    private static final ForgeConfigBackend CONFIG = new ForgeConfigBackend();
 
     public HassiumMod() {
-#if MC_VER < MC_1_20_5
-        net.minecraftforge.fml.ModLoadingContext.get().registerConfig(
-                ModConfig.Type.CLIENT, HassiumConfigSpec.CLIENT_SPEC, Constants.CONFIG_CLIENT_FILE);
-        net.minecraftforge.fml.ModLoadingContext.get().registerConfig(
-                ModConfig.Type.SERVER, HassiumConfigSpec.SERVER_SPEC, Constants.CONFIG_SERVER_FILE);
-#else
-        // 1.20.6：ModConfigSpec 来自 FCAP Forge；Type 仍用 Forge ModConfig.Type
-        fuzs.forgeconfigapiport.forge.api.neoforge.v4.NeoForgeConfigRegistry.INSTANCE.register(
-                Constants.MOD_ID, ModConfig.Type.CLIENT, HassiumConfigSpec.CLIENT_SPEC, Constants.CONFIG_CLIENT_FILE);
-        fuzs.forgeconfigapiport.forge.api.neoforge.v4.NeoForgeConfigRegistry.INSTANCE.register(
-                Constants.MOD_ID, ModConfig.Type.SERVER, HassiumConfigSpec.SERVER_SPEC, Constants.CONFIG_SERVER_FILE);
-#endif
+        ForgeConfigRegistration.register(CONFIG, Constants.CONFIG_CLIENT_FILE, Constants.CONFIG_SERVER_FILE);
         CommonClass.init();
 
         ChunkSender.setInstance(ForgeNetworkManager::sendCompressedChunk);
@@ -44,7 +30,9 @@ public class HassiumMod {
     public static class ModBusEvents {
         @SubscribeEvent
         public static void commonSetup(FMLCommonSetupEvent event) {
-            onCommonSetup();
+            LOGGER.info("Hassium: Initializing Forge network channels");
+            ForgeNetworkManager networkManager = new ForgeNetworkManager();
+            networkManager.registerChannels();
         }
 
         @SubscribeEvent
@@ -60,11 +48,5 @@ public class HassiumMod {
                 HassiumConfigService.getInstance().syncFromSpec();
             }
         }
-    }
-
-    private static void onCommonSetup() {
-        LOGGER.info("Hassium: Initializing Forge network channels");
-        ForgeNetworkManager networkManager = new ForgeNetworkManager();
-        networkManager.registerChannels();
     }
 }
