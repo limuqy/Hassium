@@ -10,7 +10,15 @@ plugins {
 sourceSets {
     main {
         java {
-            srcDir rootProject.file('cloth-ui/src/main/java')
+            // cloth-ui 源码仅在 forge 子项目引了 cloth-config-forge 时纳入。
+            // 1.21.5+（cloth_config_version 18+）上游停发 forge 变体，forge 不引 cloth，
+            // HassiumClothConfigScreen 直接引用 Cloth API 类会编译失败 -> 排除整个 cloth-ui srcDir。
+            // 为保留 forge 1.21.1（cloth 15）构建路径不变，这里仅在 clothMajor > 17 时跳过 srcDir。
+            if (!(gradle.ext.has('cloth_config_version')
+                    && (gradle.ext.cloth_config_version as String).tokenize('.')[0].isInteger()
+                    && ((gradle.ext.cloth_config_version as String).tokenize('.')[0].toInteger() > 17))) {
+                srcDir rootProject.file('cloth-ui/src/main/java')
+            }
         }
     }
 }
@@ -422,7 +430,29 @@ afterEvaluate {
                 task.classpath = project.files(onlyJar) + task.classpath
             }
         }
-
+        // 1.21.5+ architectury-loom 1.13.469 在 launch.cfg 里加了 `clientdataArgs` section，
+        // 但旧版 dev-launch-injector 0.2.1+build.8 的 parseConfig 只认 `Args`/`Properties` 后缀
+        // （startsWith("client") + substring=="dataArgs" -> IOException "invalid attribute"）
+        // 一旦抛错 dli 就整段进入 pass-through mode，连 clientArgs 里的 --launchTarget 都丢失，
+        // ModLauncher args 不再含 --launchTarget -> ImmediateWindowHandler.load 收到 null -> NPE 启动即崩。
+        // 修：doFirst 在启动 Java 进程之前重命名 clientdataArgs 行为非 common/非 client 前缀，
+        // 让 dli 把该 section 当作环境不匹配 -> STATE_SKIP，整段 clientArgs 仍正常注入。
+        task.doFirst {
+            def cfg = new File(rootProject.projectDir, 'forge/.gradle/loom-cache/launch.cfg')
+            println "HASSIUM_DEBUG doFirst cfg path=" + cfg.absolutePath + " exists=" + cfg.exists() + " length=" + (cfg.exists() ? cfg.length() : -1)
+            if (cfg.exists()) {
+                def content = cfg.text
+                if (content.contains('clientdataArgs') && !content.contains('xclientdataArgs')) {
+                    def newContent = content.replaceFirst('(?m)^clientdataArgs\\s*$', 'xclientdataArgs')
+                    cfg.write(newContent)
+                    println "HASSIUM_DEBUG rewrote launch.cfg clientdataArgs -> xclientdataArgs; new length=" + cfg.length()
+                    def verify = cfg.text
+                    println "HASSIUM_DEBUG after write: xclientdataArgs=" + verify.contains('xclientdataArgs') + " clientdataArgs=" + verify.contains('clientdataArgs')
+                } else {
+                    println "HASSIUM_DEBUG launch.cfg no rewrite (hasC=" + content.contains('clientdataArgs') + " hasX=" + content.contains('xclientdataArgs') + ")"
+                }
+            }
+        }
         task.doFirst {
             // DIAG: print task.classpath files containing forge-universal or merged
             println 'HASSIUM_DEBUG task.classpath files (forge-related):'
