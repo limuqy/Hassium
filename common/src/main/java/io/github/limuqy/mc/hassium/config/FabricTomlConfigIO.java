@@ -54,6 +54,146 @@ public final class FabricTomlConfigIO {
         }
     }
 
+    /** Loads a complete loader-neutral snapshot from the physical client/server TOML file. */
+    public static ConfigValues loadValues() {
+        return loadValues(Services.PLATFORM.isPhysicalClient() ? ConfigScope.CLIENT : ConfigScope.SERVER);
+    }
+
+    /** Loads the snapshot entries for {@code scope} from the matching client/server TOML file. */
+    public static ConfigValues loadValues(ConfigScope scope) {
+        ConfigValues values = ConfigValues.defaults(ConfigSchema.entries());
+        try {
+            Path path = scope == ConfigScope.CLIENT ? clientPath() : serverPath();
+            return readValuesFile(path, scope, values);
+        } catch (Exception e) {
+            LOGGER.error("Hassium: TOML 配置快照加载失败，使用默认值", e);
+            return values;
+        }
+    }
+
+    /** Saves the supplied snapshot to the TOML file for the current physical side. */
+    public static void saveValues(ConfigValues values) {
+        saveValues(values, Services.PLATFORM.isPhysicalClient() ? ConfigScope.CLIENT : ConfigScope.SERVER);
+    }
+
+    /** Saves the snapshot entries for {@code scope} to the matching client/server TOML file. */
+    public static void saveValues(ConfigValues values, ConfigScope scope) {
+        Path path = scope == ConfigScope.CLIENT ? clientPath() : serverPath();
+        try {
+            Files.createDirectories(path.getParent());
+            try (CommentedFileConfig cfg = open(path)) {
+                for (ConfigEntry<?> entry : entries(scope)) {
+                    writeSchemaValue(cfg, entry, values.get(entry.key()));
+                }
+                cfg.save();
+            }
+            LOGGER.info("Hassium: Toml 配置已保存 ({})", scope);
+        } catch (Exception e) {
+            LOGGER.error("Hassium: Toml 配置保存失败", e);
+        }
+    }
+
+    private static ConfigValues readValuesFile(Path path, ConfigScope scope, ConfigValues values)
+            throws java.io.IOException {
+        Files.createDirectories(path.getParent());
+        if (!Files.isRegularFile(path)) {
+            try (CommentedFileConfig cfg = open(path)) {
+                for (ConfigEntry<?> entry : entries(scope)) {
+                    writeSchemaValue(cfg, entry, entry.defaultValue());
+                }
+                cfg.save();
+            }
+            return values;
+        }
+        try (CommentedFileConfig cfg = open(path)) {
+            cfg.load();
+            for (ConfigEntry<?> entry : entries(scope)) {
+                Object value = readSchemaValue(cfg, entry);
+                if (value != null) {
+                    values = withSchemaValue(values, entry, value);
+                }
+            }
+        } catch (Exception e) {
+            LOGGER.warn("Hassium: 读取 {} 失败，使用默认配置", path, e);
+        }
+        return values;
+    }
+
+    private static List<ConfigEntry<?>> entries(ConfigScope scope) {
+        return scope == ConfigScope.CLIENT ? ConfigSchema.clientEntries() : ConfigSchema.serverEntries();
+    }
+
+    private static Object readSchemaValue(CommentedConfig cfg, ConfigEntry<?> entry) {
+        if (entry.key() == ConfigSchema.NETWORK_CONTROL_ENDPOINTS) {
+            return readReachableEndpoints(cfg, entry.path(), entry.path()).stream()
+                    .map(DataPlaneEndpointConfig::encodeReachable).toList();
+        }
+        if (entry.key() == ConfigSchema.DATAPLANE_UDP_LISTENERS) {
+            return readUdpListeners(cfg).stream().map(DataPlaneEndpointConfig::encodeListener).toList();
+        }
+        return coerceSchemaValue(cfg.get(entry.path()), entry);
+    }
+
+    private static Object coerceSchemaValue(Object raw, ConfigEntry<?> entry) {
+        if (raw == null) return null;
+        Object value;
+        switch (entry.type()) {
+            case BOOLEAN -> value = raw instanceof Boolean ? raw : null;
+            case STRING -> value = raw instanceof String ? raw : null;
+            case STRING_LIST -> {
+                if (!(raw instanceof List<?> list)) return null;
+                List<String> strings = new ArrayList<>();
+                for (Object item : list) {
+                    if (!(item instanceof String string)) return null;
+                    strings.add(string);
+                }
+                value = List.copyOf(strings);
+            }
+            case INT -> value = raw instanceof Number number ? number.intValue() : null;
+            case LONG -> value = raw instanceof Number number ? number.longValue() : null;
+            case DOUBLE -> value = raw instanceof Number number ? number.doubleValue() : null;
+            default -> throw new IllegalStateException("Unsupported configuration type: " + entry.type());
+        }
+        if (value == null || !inRange(value, entry)) return null;
+        return value;
+    }
+
+    private static boolean inRange(Object value, ConfigEntry<?> entry) {
+        if (!(value instanceof Number number) || entry.min() == null || entry.max() == null) return true;
+        double numeric = number.doubleValue();
+        return numeric >= entry.min().doubleValue() && numeric <= entry.max().doubleValue();
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <T> ConfigValues withSchemaValue(ConfigValues values, ConfigEntry<T> entry, Object value) {
+        return values.with(entry.key(), (T) value);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void writeSchemaValue(CommentedConfig cfg, ConfigEntry<?> entry, Object value) {
+        if (entry.key() == ConfigSchema.NETWORK_CONTROL_ENDPOINTS) {
+            writeReachableEndpoints(cfg, entry.path(), ((List<String>) value).stream()
+                    .map(DataPlaneEndpointConfig::decodeReachable).toList(), entry.comment());
+        } else if (entry.key() == ConfigSchema.DATAPLANE_UDP_LISTENERS) {
+            cfg.remove(entry.path());
+            List<CommentedConfig> listeners = new ArrayList<>();
+            for (String encoded : (List<String>) value) {
+                HassiumConfig.UdpListenerConfig listener = DataPlaneEndpointConfig.decodeListener(encoded);
+                CommentedConfig table = cfg.createSubConfig();
+                table.set("bindHost", listener.bindHost());
+                table.set("bindPort", listener.bindPort());
+                table.set("weight", listener.weight());
+                writeReachableEndpoints(table, "reachableEndpoints", listener.reachableEndpoints(), entry.comment());
+                listeners.add(table);
+            }
+            cfg.setComment(entry.path(), entry.comment());
+            cfg.set(entry.path(), listeners);
+        } else {
+            set(cfg, entry.path(), value, entry.comment());
+        }
+    }
+
+
     private static HassiumConfig loadClient() throws java.io.IOException {
         HassiumConfig.ClientCacheConfig cache = HassiumConfig.ClientCacheConfig.DEFAULT;
         HassiumConfig.ClientNetworkConfig clientNet = HassiumConfig.ClientNetworkConfig.DEFAULT;

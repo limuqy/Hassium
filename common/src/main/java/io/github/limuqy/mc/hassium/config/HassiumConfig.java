@@ -26,6 +26,13 @@ public record HassiumConfig(
             CompatConfig.DEFAULT,
             DebugConfig.DEFAULT
     );
+    public HassiumConfig withClientNetwork(ClientNetworkConfig clientNetwork) {
+        return new HassiumConfig(storage, clientCache, clientNetwork, serverNetwork, compat, debug);
+    }
+
+    public HassiumConfig withDebug(DebugConfig debug) {
+        return new HassiumConfig(storage, clientCache, clientNetwork, serverNetwork, compat, debug);
+    }
 
     /**
      * 存储配置（仅专用服；server.toml storage.*）

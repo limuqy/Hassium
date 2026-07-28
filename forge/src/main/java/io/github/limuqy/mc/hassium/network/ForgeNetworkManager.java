@@ -71,14 +71,17 @@ public class ForgeNetworkManager implements NetworkManager {
         registerModernChannels();
 #endif
 
-        // 设置聚合包发送器
         HassiumAggregationManager.setSender((connection, buf) -> {
             if (connection.getPacketListener() instanceof net.minecraft.server.network.ServerGamePacketListenerImpl handler) {
                 ServerPlayer player = handler.getPlayer();
                 byte[] data = new byte[buf.readableBytes()];
                 buf.readBytes(data);
                 buf.release();
+#if MC_VER < MC_1_20_2
+                CHANNEL.sendTo(new CompressedPayloadWrapper(data), player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
+#else
                 sendToPlayer(player, new CompressedPayloadWrapper(data));
+#endif
             } else {
                 LOGGER.error("Cannot send aggregation packet: connection has no player");
                 buf.release();

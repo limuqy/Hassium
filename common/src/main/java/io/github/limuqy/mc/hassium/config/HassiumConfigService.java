@@ -14,7 +14,7 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 /**
  * Hassium 配置服务。
  * <p>
- * Forge/NeoForge：真相源为 {@link HassiumConfigSpec}；Fabric：{@link FabricTomlConfigIO}。
+ * 配置后端由 {@link io.github.limuqy.mc.hassium.platform.Services#CONFIG} 提供；Fabric 使用 {@link FabricTomlConfigIO}。
  * 本类维护运行时快照与热路径门闩。
  */
 public class HassiumConfigService {
@@ -52,31 +52,29 @@ public class HassiumConfigService {
         return instance;
     }
 
-    /** Fabric：从 toml 加载并启用 toml 后端。 */
+    /** Fabric：经 schema 后端从 toml 加载并启用 toml 后端。 */
     public void loadFromToml() {
         lock.writeLock().lock();
         try {
             this.tomlBackend.set(true);
-            HassiumConfig loaded = FabricTomlConfigIO.load();
-            this.config = loaded;
-            this.networkCompressionEnabled.set(loaded.clientNetwork().enabled() || loaded.serverNetwork().enabled());
-            this.storageEnabled.set(loaded.storage().enabled());
-            this.configLoaded.set(true);
-            NetworkStats.setEnabled(resolveMetricsEnabled(loaded));
+            boolean physicalClient = io.github.limuqy.mc.hassium.platform.Services.PLATFORM.isPhysicalClient();
+            io.github.limuqy.mc.hassium.config.ConfigScope scope =
+                    physicalClient ? io.github.limuqy.mc.hassium.config.ConfigScope.CLIENT
+                                   : io.github.limuqy.mc.hassium.config.ConfigScope.SERVER;
+            HassiumConfig loaded = ConfigSnapshotAdapter.fromValues(
+                    Services.CONFIG.load(scope), physicalClient);
+            applyLoaded(loaded);
             LOGGER.info("Hassium: Configuration loaded from Toml");
         } catch (Exception e) {
             LOGGER.error("Hassium: Failed to load Toml configuration", e);
-            this.config = HassiumConfig.DEFAULT;
-            this.networkCompressionEnabled.set(true);
-            this.storageEnabled.set(true);
-            this.configLoaded.set(true);
+            applyLoaded(HassiumConfig.DEFAULT);
             this.tomlBackend.set(true);
         } finally {
             lock.writeLock().unlock();
         }
     }
 
-    /** Fabric：将当前快照写入 toml。 */
+    /** Fabric：经 schema 后端将当前快照写入 toml。 */
     public void saveToToml() {
         lock.readLock().lock();
         HassiumConfig snapshot;
@@ -85,7 +83,11 @@ public class HassiumConfigService {
         } finally {
             lock.readLock().unlock();
         }
-        FabricTomlConfigIO.save(snapshot);
+        io.github.limuqy.mc.hassium.config.ConfigScope scope =
+                io.github.limuqy.mc.hassium.platform.Services.PLATFORM.isPhysicalClient()
+                        ? io.github.limuqy.mc.hassium.config.ConfigScope.CLIENT
+                        : io.github.limuqy.mc.hassium.config.ConfigScope.SERVER;
+        Services.CONFIG.save(scope, ConfigSnapshotAdapter.toValues(snapshot));
     }
 
     public boolean isTomlBackend() {
@@ -102,26 +104,29 @@ public class HassiumConfigService {
         }
         lock.writeLock().lock();
         try {
-            HassiumConfig loaded = HassiumConfigSpec.toHassiumConfig();
-            this.config = loaded;
-            this.networkCompressionEnabled.set(loaded.clientNetwork().enabled() || loaded.serverNetwork().enabled());
-            this.storageEnabled.set(loaded.storage().enabled());
-            this.configLoaded.set(true);
-            NetworkStats.setEnabled(resolveMetricsEnabled(loaded));
-            LOGGER.info("Hassium: Configuration synced from ConfigSpec");
+            boolean physicalClient = io.github.limuqy.mc.hassium.platform.Services.PLATFORM.isPhysicalClient();
+            io.github.limuqy.mc.hassium.config.ConfigScope scope =
+                    physicalClient ? io.github.limuqy.mc.hassium.config.ConfigScope.CLIENT
+                                   : io.github.limuqy.mc.hassium.config.ConfigScope.SERVER;
+            HassiumConfig loaded = ConfigSnapshotAdapter.fromValues(
+                    Services.CONFIG.load(scope), physicalClient);
+            applyLoaded(loaded);
         } catch (Exception e) {
-            // NeoForge 1.20.2–1.20.4 上 FileWatcher 可能在 Spec 未 setConfig 时并发 reload，
-            // get() 会抛 IllegalStateException；保留已有快照并记 debug 即可。
             if (!configLoaded.get()) {
-                this.config = HassiumConfig.DEFAULT;
-                this.networkCompressionEnabled.set(true);
-                this.storageEnabled.set(true);
-                this.configLoaded.set(true);
+                applyLoaded(HassiumConfig.DEFAULT);
             }
-            LOGGER.debug("Hassium: ConfigSpec sync skipped (spec not ready yet): {}", e.toString());
+            LOGGER.debug("Hassium: Config backend sync skipped: {}", e.toString());
         } finally {
             lock.writeLock().unlock();
         }
+    }
+
+    private void applyLoaded(HassiumConfig loaded) {
+        this.config = loaded;
+        this.networkCompressionEnabled.set(loaded.clientNetwork().enabled() || loaded.serverNetwork().enabled());
+        this.storageEnabled.set(loaded.storage().enabled());
+        this.configLoaded.set(true);
+        NetworkStats.setEnabled(resolveMetricsEnabled(loaded));
     }
 
     /**
@@ -151,10 +156,14 @@ public class HassiumConfigService {
         } finally {
             lock.readLock().unlock();
         }
+        io.github.limuqy.mc.hassium.config.ConfigScope scope =
+                io.github.limuqy.mc.hassium.platform.Services.PLATFORM.isPhysicalClient()
+                        ? io.github.limuqy.mc.hassium.config.ConfigScope.CLIENT
+                        : io.github.limuqy.mc.hassium.config.ConfigScope.SERVER;
         try {
-            HassiumConfigSpec.applyFrom(snapshot);
+            Services.CONFIG.save(scope, ConfigSnapshotAdapter.toValues(snapshot));
         } catch (Exception e) {
-            LOGGER.error("Hassium: Failed to persist configuration to ConfigSpec", e);
+            LOGGER.error("Hassium: Failed to persist configuration", e);
         }
     }
 

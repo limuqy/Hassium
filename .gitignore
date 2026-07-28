@@ -33,3 +33,6 @@ run
 /.claude/settings.json
 /.claude/settings.local.json
 .worktrees/
+
+.wiki-publish/
+.wiki-worktree/

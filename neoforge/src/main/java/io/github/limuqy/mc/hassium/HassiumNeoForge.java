@@ -1,7 +1,8 @@
 package io.github.limuqy.mc.hassium;
 
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
-import io.github.limuqy.mc.hassium.config.HassiumConfigSpec;
+import io.github.limuqy.mc.hassium.platform.NeoForgeConfigBackend;
+import io.github.limuqy.mc.hassium.platform.NeoForgeConfigRegistration;
 import io.github.limuqy.mc.hassium.network.ChunkSender;
 import io.github.limuqy.mc.hassium.network.NeoForgeNetworkManager;
 import io.github.limuqy.mc.hassium.network.dataplane.DataPlaneFrame;
@@ -15,7 +16,7 @@ import net.minecraftforge.fml.event.config.ModConfigEvent;
 import net.minecraftforge.fml.event.lifecycle.FMLCommonSetupEvent;
 import net.minecraftforge.eventbus.api.IEventBus;
 #elif MC_VER < MC_1_21_1
-import net.neoforged.fml.ModLoadingContext;
+import net.neoforged.fml.ModContainer;
 import net.neoforged.fml.common.Mod;
 import net.neoforged.fml.config.ModConfig;
 import net.neoforged.fml.event.config.ModConfigEvent;
@@ -43,26 +44,21 @@ import org.slf4j.LoggerFactory;
 @Mod(Constants.MOD_ID)
 public class HassiumNeoForge {
 
-    private static final Logger LOGGER = LoggerFactory.getLogger("Hassium/NeoForge");
 
-#if MC_VER < MC_1_21_1
+    private static final Logger LOGGER = LoggerFactory.getLogger("Hassium/NeoForge");
+    private static final NeoForgeConfigBackend CONFIG = (NeoForgeConfigBackend) io.github.limuqy.mc.hassium.platform.Services.CONFIG;
+
+#if MC_VER < MC_1_20_2
     public HassiumNeoForge(IEventBus modEventBus) {
-        ModLoadingContext.get().registerConfig(
-                ModConfig.Type.CLIENT, HassiumConfigSpec.CLIENT_SPEC, Constants.CONFIG_CLIENT_FILE);
-        ModLoadingContext.get().registerConfig(
-                ModConfig.Type.SERVER, HassiumConfigSpec.SERVER_SPEC, Constants.CONFIG_SERVER_FILE);
+        NeoForgeConfigRegistration.register(CONFIG, Constants.CONFIG_CLIENT_FILE, Constants.CONFIG_SERVER_FILE);
         hassium$init(modEventBus);
     }
 #else
     public HassiumNeoForge(IEventBus modEventBus, ModContainer modContainer) {
-        modContainer.registerConfig(
-                ModConfig.Type.CLIENT, HassiumConfigSpec.CLIENT_SPEC, Constants.CONFIG_CLIENT_FILE);
-        modContainer.registerConfig(
-                ModConfig.Type.SERVER, HassiumConfigSpec.SERVER_SPEC, Constants.CONFIG_SERVER_FILE);
+        NeoForgeConfigRegistration.register(modContainer, CONFIG, Constants.CONFIG_CLIENT_FILE, Constants.CONFIG_SERVER_FILE);
         hassium$init(modEventBus);
     }
 #endif
-
     private void hassium$init(IEventBus modEventBus) {
         modEventBus.addListener(this::onConfigLoad);
         modEventBus.addListener(this::onConfigReload);

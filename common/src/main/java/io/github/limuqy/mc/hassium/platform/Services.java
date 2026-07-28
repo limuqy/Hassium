@@ -2,6 +2,7 @@ package io.github.limuqy.mc.hassium.platform;
 
 import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.platform.services.IClientChunkApplier;
+import io.github.limuqy.mc.hassium.platform.services.IConfigBackend;
 import io.github.limuqy.mc.hassium.platform.services.INetworkManagerService;
 import io.github.limuqy.mc.hassium.platform.services.IPlatformHelper;
 
@@ -22,6 +23,7 @@ public class Services {
     private static IClientChunkApplier clientChunkApplier;
 
     // 网络管理器：发送 chunkHash / 区块数据请求等
+    public static final IConfigBackend CONFIG = load(IConfigBackend.class);
     public static final INetworkManagerService NETWORK_MANAGER = load(INetworkManagerService.class);
 
     /**

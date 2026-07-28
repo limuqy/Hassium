@@ -19,8 +19,6 @@ configurations {
     library
     // 原始 kcp 坐标；剥离 io.netty.bootstrap 后再进 game layer（见 stripKcpNettyBootstrapPackage）
     kcpIncoming
-    // 原始 FCAP 坐标；剥除其 JiJ MixinExtras 后再进 classpath / include（见 stripFcapMixinExtrasJij）
-    fcapIncoming
 }
 // Keep these libs on the compile/shade classpath...
 configurations.implementation.extendsFrom(configurations.library)
@@ -95,69 +93,6 @@ def stripKcpTask = tasks.register('stripKcpNettyBootstrapPackage') {
     }
 }
 
-/**
- * FCAP Forge 内嵌 {@code META-INF/jars/mixinextras-forge-*.jar}，而该 jar 又嵌
- * {@code MixinExtras-*.jar}。JarInJarDependencyLocator 会把两层都展开成独立模块
- * （{@code MixinExtras} + 传递依赖 {@code mixinextras.common}），Forge 50 JPMS 报
- * 同包双导出 ResolutionException，dev / 生产均无法启动。
- * 剥除 FCAP 的 JiJ 条目并清空 jarjar metadata，只保留 classpath 上单一的
- * mixinextras-common。
- */
-def hassiumStripFcapMixinExtrasJij = { File src, File out ->
-    out.parentFile.mkdirs()
-    out.withOutputStream { fos ->
-        def zos = new ZipOutputStream(fos)
-        src.withInputStream { fis ->
-            def zis = new ZipInputStream(fis)
-            ZipEntry entry
-            while ((entry = zis.nextEntry) != null) {
-                if (entry.name.startsWith('META-INF/jars/')) {
-                    zis.closeEntry()
-                    continue
-                }
-                if (entry.name == 'META-INF/jarjar/metadata.json') {
-                    zos.putNextEntry(new ZipEntry(entry.name))
-                    zos.write('{"jars":[]}'.getBytes('UTF-8'))
-                    zos.closeEntry()
-                    zis.closeEntry()
-                    continue
-                }
-                if (!entry.isDirectory()) {
-                    zos.putNextEntry(new ZipEntry(entry.name))
-                    zis.transferTo(zos)
-                    zos.closeEntry()
-                }
-                zis.closeEntry()
-            }
-            zis.close()
-        }
-        zos.close()
-    }
-    return out
-}
-
-def patchedFcapJar = layout.buildDirectory.file('patched-fcap/forgeconfigapiport-forge-no-mixinextras-jij.jar')
-
-def stripFcapTask = tasks.register('stripFcapMixinExtrasJij') {
-    description = 'Strip MixinExtras Jar-in-Jar from FCAP Forge to avoid Forge 50 JPMS duplicate package export'
-    onlyIf { gradle.ext.minecraft_version == '1.20.6' && gradle.ext.has('forge_config_api_port_version') }
-    inputs.files(configurations.fcapIncoming)
-    outputs.file(patchedFcapJar)
-    doLast {
-        def src = configurations.fcapIncoming.files.find { it.name.startsWith('forgeconfigapiport-forge-') }
-        if (src == null) {
-            throw new GradleException("FCAP forge jar not found in fcapIncoming: ${configurations.fcapIncoming.files}")
-        }
-        def out = patchedFcapJar.get().asFile
-        def stamp = new File(out.parentFile, out.name + '.stamp')
-        def stampVal = "${src.canonicalPath}|${src.lastModified()}|${src.length()}"
-        if (out.exists() && stamp.exists() && stamp.text.trim() == stampVal) {
-            return
-        }
-        hassiumStripFcapMixinExtrasJij(src, out)
-        stamp.text = stampVal
-    }
-}
 
 // Mixin AP 配置：禁用目标验证（architectury-loom 的 remapping 会在运行时处理）
 tasks.withType(JavaCompile).configureEach {
