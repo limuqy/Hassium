@@ -16,7 +16,7 @@ import org.slf4j.LoggerFactory;
 public class HassiumMod {
 
     private static final Logger LOGGER = LoggerFactory.getLogger("Hassium/Mod");
-    private static final ForgeConfigBackend CONFIG = new ForgeConfigBackend();
+    private static final ForgeConfigBackend CONFIG = (ForgeConfigBackend) io.github.limuqy.mc.hassium.platform.Services.CONFIG;
 
     public HassiumMod() {
         ForgeConfigRegistration.register(CONFIG, Constants.CONFIG_CLIENT_FILE, Constants.CONFIG_SERVER_FILE);
