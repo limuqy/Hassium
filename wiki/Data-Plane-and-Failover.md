@@ -1,16 +1,57 @@
-# 数据面与主控 Failover
+# 主控热切与加权分流
 
 ---
 
 > **English**: [Data-Plane-and-Failover-en](Data-Plane-and-Failover-en) · 中文
 
-高级网络特性：UDP/KCP 数据面 + TCP 控制 failover。**默认关闭**，主打有运维能力的服主。启用前请先跑 6 个 smoke marker。
+## 这是什么
 
-> ⚠️ 该特性的生产 env 配置仍在迁移过程中，目前由 `DataPlanePoCConfig` 临时驱动；启用前请确认你已具备 Nginx / 公网防火墙 / NAT 规则的运维能力。
+**主控热切**和**加权分流**是 Hassium 的两项网络能力，专门解决多人服在主连接抖动时玩家"卡死/掉线/重进"的体验问题，以及高人数服带宽吃紧时的负载分担问题。二者配合使用：主控热切保证"主连接出问题时玩家几乎无感知"，加权分流负责"把区块下载流量分散到多条线路"。
+
+对应 Home 能力列表中的两条：
+
+| 能力 | 说明 |
+| --- | --- |
+| **主控热切** | TCP 主控断或卡时按候选自动重连，缓存暖续、隐藏断连界面（数据面 failover） |
+| **加权分流** | 多 UDP/KCP endpoint 按 weight 加权轮询承载数据面，控制面留原版 TCP |
 
 ---
 
-## 拓扑总览
+## 解决什么问题（举例）
+
+**问题一：主连接抖一下，全员掉线回主菜单。**
+
+原版 Minecraft 的登录、聊天、命令、实体同步走一条 TCP 主连接（master Play connection）。区块下载也挤在同一条线上。当主连接卡顿几秒（网络抖动、服主重启、机器迁移）或断开，客户端会弹"连接丢失"界面、踢玩家回主菜单、缓存丢失，重进又要重新下载所有区块——几个玩家正在地心探索，服主例行维护重启，全员进度看起来"白走了"。
+
+**主控热切**做的：主连接断或卡时，客户端按服务端预先下发的候选列表自动连下一个可达端点，**不弹断连界面**。已下载的区块缓存和任务执行器都保留下来，切到新会话直接续上——探索过的地形仍在缓存里，命中率不掉。
+
+**问题二：几百人同时进服，主连接带宽被打满。**
+
+高人数服的瓶颈常是区块下行：每人都拉一片地形，单条线扛不住。扩容还要担心线路不稳那一边出问题。
+
+**加权分流**做的：区块下载走 UDP/KCP 数据面，可以配多个 endpoint（多条线路），按 `weight` 加权轮询分担。一条线路满或降级，流量自动压到其余线路。登录命令等"控制类"流量仍走原版 TCP，不受数据线路波动影响。
+
+---
+
+## 谁适合启用
+
+这两项能力**默认关闭**——`network.dataPlane.enabled = false`，模组默认走原版 TCP 单连接，普通联机行为不受影响。需要主控热切或公网分流时，按以下步骤启用：
+
+1. 服主具备 Nginx / 公网防火墙 / NAT 规则的运维能力；
+2. 在 `hassium-server.toml` 中设 `network.dataPlane.enabled = true`，并配置可达的公网端点；
+3. 依次确认 6 个自检标记（见文末）。
+
+> ⚠️ 生产环境配置仍在迁移过程中，目前由 `DataPlanePoCConfig` 临时驱动。不具备上述运维能力的服主保持默认关闭即可，不影响其它能力。
+
+对**单个朋友联机**或**小型私服**的普通玩家：保持默认关闭即可，无需关心本页后续内容。本页技术细节面向有运维需求的服主。
+
+---
+
+## 技术细节
+
+以下内容面向有运维能力的服主。普通玩家可跳至 [FAQ](FAQ) 查看常见问题。
+
+### 拓扑总览
 
 | 平面 | 用途 | 协议 |
 | --- | --- | --- |
@@ -22,21 +63,13 @@
 - 每个 `(host, port)` UDP 端点绑一个独立 KCP `ReliableDatagramSession`
 - 客户端对每个 advertised endpoint 单独 BindRequest + HKDF 派生 AES-GCM key
 
----
+### 触发条件
 
-## 触发条件
+**硬断连**：Master TCP `channelInactive` → `ControlReconnectOrchestrator.onPrimaryDisconnected` 立刻 launch 下一个候选；客户端进入 60 秒恢复窗口。
 
-### 硬断连
+**Master stalled + UDP healthy**：服务端检测 control stall（默认 6 秒）。stalled 期间 `DataPlaneUdpServer.recordControlActivity` 推进；若 UDP session 健康（epoch 一致）服务端下发 `FailoverPermit`（`expiryMs` 默认 30 秒），客户端 `attemptConnectOnlyIfPermitValid` 才连接。
 
-Master TCP `channelInactive` → `ControlReconnectOrchestrator.onPrimaryDisconnected` 立刻 launch 下一个候选；客户端进入 60 秒恢复窗口。
-
-### Master stalled + UDP healthy
-
-服务端检测 control stall（默认 6 秒）。stalled 期间 `DataPlaneUdpServer.recordControlActivity` 推进；若 UDP session 健康（epoch 一致）服务端下发 `FailoverPermit`（`expiryMs` 默认 30 秒），客户端 `attemptConnectOnlyIfPermitValid` 才连接。
-
----
-
-## 恢复期保留资源
+### 恢复期保留资源
 
 `ClientRecoveryState.shouldSuppressFinalization()` 为真时，`ClientLifecycleHelper.finalizeDisconnectIfTerminal` 短路 `finalizeDisconnect`：
 
@@ -49,17 +82,13 @@ Master TCP `channelInactive` → `ControlReconnectOrchestrator.onPrimaryDisconne
 
 `ClientPlayConnectionEvents.DISCONNECT` 路径调 `DataPlaneClientLifecycle.stopUdp(/*keepLease*/ true)`，UDP bundle 不立即释放。
 
----
-
-## 候选耗尽
+### 候选耗尽
 
 `ControlReconnectOrchestrator.performTerminalFinalization` 调 `ClientLifecycleHelper.finalizeDisconnectIfTerminal`，单例 `ClientRecoveryState.consumeTerminalCleanup` 保证只触发一次磁盘资源关闭。
 
----
+### 加权分流
 
-## 加权分流
-
-数据面支持多个 UDP endpoint 按 `weight` 加权轮询承载:
+数据面支持多个 UDP endpoint 按 `weight` 加权轮询承载：
 
 - 每个端点一个 `ReliableDatagramSession`
 - 按 `weight` 跑 WRR
@@ -72,7 +101,7 @@ Master TCP `channelInactive` → `ControlReconnectOrchestrator.onPrimaryDisconne
 
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
-| `network.dataPlane.enabled` | `false` | 数据面总开关（默认关；1.20.1 Fabric PoC 阶段 true） |
+| `network.dataPlane.enabled` | `false` | 数据面总开关（默认关；启用前请配置可达端点并依次确认 6 个自检标记） |
 | `network.dataPlane.controlStallMs` | `6000` | Master TCP 卡顿多久触发 `FailoverRequest` |
 | `network.dataPlane.failoverPermitTtlMs` | `30000` | 服务端 `FailoverPermit` 有效期 |
 | `network.dataPlane.udpEndpoints` | （待 toml 化） | 候选列表，每项 `host`、`port`、`weight`、可选 `priority` |
@@ -87,11 +116,11 @@ Master TCP `channelInactive` → `ControlReconnectOrchestrator.onPrimaryDisconne
 2. 10 秒 UDP `lease` 仅用于 drain in-flight data；login 完成前不产生新玩家数据
 3. `controlStallMs` 要求服务端 issue `FailoverPermit`；客户端不会因 latency 单独创建第二条 master Play 连接
 4. TCP 控制 endpoints 与 UDP endpoints 分开列表，公网端口可能不同
-5. Nginx `stream` 反代可承载 TCP 主控 + UDP 直连 failover（见下方 smoke harness）
+5. Nginx `stream` 反代可承载 TCP 主控 + UDP 直连 failover（见下方自检流程）
 
 ---
 
-## Smoke markers（启用前必跑）
+## 自检标记（公网部署前必跑）
 
 | 标记 | 含义 |
 | --- | --- |

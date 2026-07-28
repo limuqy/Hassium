@@ -58,7 +58,7 @@ Toggle the relevant category only; the hot path is quiet by default and enabling
 
 ## Data-plane debugging
 
-After enabling `network.dataPlane.enabled`, verify the six smoke markers in order:
+After enabling `network.dataPlane.enabled`, verify the six self-check markers in order:
 
 1. `UDP_BIND_OK` fails: check UDP port in use / firewall rules
 2. `UDP_WRR_OK` fails: validate `weight` values

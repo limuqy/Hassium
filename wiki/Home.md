@@ -60,7 +60,7 @@
 | [World-Export](World-Export) | 缓存世界导出 |
 | [Compatibility](Compatibility) | 多 Mod 兼容对照表 |
 | [Support-Matrix](Support-Matrix) | 版本 × 加载器支持矩阵 |
-| [Data-Plane-and-Failover](Data-Plane-and-Failover) | UDP 数据面 + 主控热切（服主向） |
+| [Data-Plane-and-Failover](Data-Plane-and-Failover) | 主控热切与加权分流（服主向） |
 | [FAQ](FAQ) | 常见问题 |
 | [Troubleshooting](Troubleshooting) | 排查路径与日志 |
 

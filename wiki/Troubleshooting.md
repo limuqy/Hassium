@@ -58,7 +58,7 @@
 
 ## 数据面排查
 
-启用 `network.dataPlane.enabled` 后，依次确认 6 个 smoke marker：
+启用 `network.dataPlane.enabled` 后，依次确认 6 个自检标记：
 
 1. `UDP_BIND_OK` 失败：检查 UDP 端口是否被占用 / 防火墙是否放行
 2. `UDP_WRR_OK` 失败：检查 `weight` 配置是否合法

@@ -20,7 +20,7 @@ Hassium exposes two command groups:
 | `/hassium metrics on` | Runtime-enable metrics collection | OP 2 |
 | `/hassium metrics off` | Runtime-disable metrics collection | OP 2 |
 
-> `/hassium metrics off` also disables `/hassium stats`. The smoke test harness forces metrics on.
+> `/hassium metrics off` also disables `/hassium stats`. Self-checks auto-enable metrics.
 
 ---
 

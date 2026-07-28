@@ -20,7 +20,7 @@ Hassium compatibility with common optimization mods, plus escape hatches. Every 
 | **Anti-x-ray (rewrites the outbound chunk packet)** | ✅ Likely compatible | miss path reuses the already-built packet bytes; if the rewriter only patches `Connection.send` after Hassium cancels, it may bypass |
 | **Distant Horizons / Voxy** | ✅ Likely compatible | Independent LOD channels; aggregation mishaps handled as above |
 | **ViaVersion** | ⚠️ Conditional | See below |
-| **Sodium / Iris / Lithium / FerriteCore / EntityCulling / ImmediatelyFast** | ✅ Smoke-tested | Fabric 1.20.1 record in [Support-Matrix](Support-Matrix-en) |
+| **Sodium / Iris / Lithium / FerriteCore / EntityCulling / ImmediatelyFast** | ✅ Compatibility-tested | Fabric 1.20.1 record in [Support-Matrix](Support-Matrix-en) |
 | **C2ME** | ✅ Soft compatible | Default modules pass; chunkio rewrite fully on is not promised; `storage.enabled = false` is the escape hatch |
 | **File-level server backup (incl. InstantBackup)** | ✅ Compatible | type 126 is transparent to backup tools |
 | **Tools that semantically unpack Anvil** | ❌ Incompatible | Won't recognize type 126 |
@@ -76,7 +76,7 @@ Hassium compatibility with common optimization mods, plus escape hatches. Every 
 
 ---
 
-## Smoke-tested (2026-07, Fabric 1.20.1)
+## Compatibility test (2026-07, Fabric 1.20.1)
 
 Environment: ~50 optimization-oriented mods (FO-style: Sodium / Iris / Lithium / FerriteCore / C2ME / EntityCulling / ImmediatelyFast / Mod Menu / Cloth etc.; **no** Bobby / ViaFabric / Immersive Portals installed).
 
@@ -94,7 +94,7 @@ Environment: ~50 optimization-oriented mods (FO-style: Sodium / Iris / Lithium /
 - [ ] Via: vanilla clients connect; same-version Hassium clients have full features
 - [ ] C2ME chunkio rewrite on/off × `storage` on/off matrix
 - [ ] Sodium + `lightCacheEnabled` on/off (light glitches)
-- [ ] Forge / NeoForge equivalent opt-pack smoke
+- [ ] Forge / NeoForge equivalent opt-pack compatibility test
 - [ ] Beyond-view in-circuit: multiplayer with `view-distance=8`, client RD=16, the visited ring is visible; F3 shows no large out-of-range requests
 - [ ] Beyond-view + Sodium: meshing stays correct as the ViewArea expands
 

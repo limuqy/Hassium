@@ -20,7 +20,7 @@ Hassium 提供两组命令：
 | `/hassium metrics on` | 运行时打开指标收集 | 同上 |
 | `/hassium metrics off` | 运行时关闭指标收集 | 同上 |
 
-> `/hassium metrics off` 会同时让 `/hassium stats` 不可用；冒烟测试默认会强制开启。
+> `/hassium metrics off` 会同时让 `/hassium stats` 不可用；自检时自动开启。
 
 ---
 

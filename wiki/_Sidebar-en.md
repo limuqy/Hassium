@@ -9,7 +9,7 @@
 - [World-Export](World-Export-en)
 - [Compatibility](Compatibility-en)
 - [Support-Matrix](Support-Matrix-en)
-- [Data-Plane-and-Failover](Data-Plane-and-Failover-en)
+- [Control failover and weighted routing](Data-Plane-and-Failover-en)
 - [FAQ](FAQ-en)
 - [Troubleshooting](Troubleshooting-en)
 

@@ -220,7 +220,7 @@ public record HassiumConfig(
 
         // 127.0.0.1 仅供本地开发；公网部署必须配置客户端实际可达的地址。
         private static final DataPlaneConfig DEFAULT_DATA_PLANE = new DataPlaneConfig(
-                true,
+                false,
                 List.of(new UdpListenerConfig(
                         "0.0.0.0", 25565, 100,
                         List.of(new ReachableEndpoint("127.0.0.1", 25565, 100)))),

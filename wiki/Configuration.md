@@ -61,7 +61,7 @@ Hassium 启动时在 `config/hassium/` 自动生成两份 TOML：
 
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
-| `network.dataPlane.enabled` | `false` | UDP/KCP 数据面（开启请先跑 6 marker 冒烟） |
+| `network.dataPlane.enabled` | `false` | UDP/KCP 数据面与 TCP 主控热切/加权分流（默认关闭；启用前请配置可达端点并依次确认 6 个自检标记） |
 | `network.dataPlane.controlStallMs` | `6000` | TCP 主控卡顿多久后客户端触发 `FailoverRequest` |
 | `network.dataPlane.failoverPermitTtlMs` | `30000` | 服务端下发 `FailoverPermit` 有效期 |
 

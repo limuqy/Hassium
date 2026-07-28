@@ -64,7 +64,7 @@ A: Ring size depends on the gap between client RD and server view distance. Lowe
 
 ### Q: Is the UDP data plane on by default?
 
-A: No. `network.dataPlane.enabled = false` by default. Run the six smoke markers before enabling; see [Data-Plane-and-Failover](Data-Plane-and-Failover-en).
+A: Off by default (`network.dataPlane.enabled = false`). Both features (control failover, weighted routing) are disabled by default; opt in by enabling and configuring reachable endpoints, then verify the six self-check markers in order. See [Data-Plane-and-Failover](Data-Plane-and-Failover-en).
 
 ### Q: Will the client disconnect when the TCP master stalls?
 

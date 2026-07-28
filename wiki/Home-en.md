@@ -58,7 +58,7 @@ Details: [Installation](Installation-en).
 | [World-Export](World-Export-en) | Cache world export |
 | [Compatibility](Compatibility-en) | Multi-mod compatibility table |
 | [Support-Matrix](Support-Matrix-en) | Version × loader matrix |
-| [Data-Plane-and-Failover](Data-Plane-and-Failover-en) | UDP data plane + control failover (server ops) |
+| [Data-Plane-and-Failover](Data-Plane-and-Failover-en) | Control failover and weighted routing (server ops) |
 | [FAQ](FAQ-en) | Frequently asked questions |
 | [Troubleshooting](Troubleshooting-en) | Debug paths and logs |
 

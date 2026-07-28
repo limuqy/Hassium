@@ -38,7 +38,7 @@ Hassium covers Minecraft **1.20.1–1.21.11**, adapted as **9 version segments �
 
 ## Nine-segment anchors (compile matrix)
 
-Each segment is represented by one anchor that participates in compile and smoke testing:
+Each segment is represented by one anchor that participates in compile and self-checks:
 
 | Segment | Anchor | Other versions in segment | Key change (summary) |
 | --- | --- | --- | --- |
@@ -52,7 +52,7 @@ Each segment is represented by one anchor that participates in compile and smoke
 | H | **1.21.9** | 1.21.10 | LevelChunkSection; `getServer()` removed; `setLevel` one-arg |
 | I | **1.21.11** | — | `ResourceLocation` → `Identifier` |
 
-Each anchor participates in compile + short smoke; the rest of the segment ships as releases, segmented via Manifold `#if MC_VER` in a single source tree.
+Each anchor participates in compile and self-checks; the rest of the segment ships as releases, segmented via Manifold `#if MC_VER` in a single source tree.
 
 ---
 

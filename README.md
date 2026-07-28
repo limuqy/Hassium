@@ -91,8 +91,8 @@
 | `network.globalPacketCompression` | `true` | 全局 ZSTD |
 | `network.maxChunksPerTick` | `32` | 每玩家每 tick 序列化上限 |
 | `clientCache.mainThreadChunkBudgetMs` | `15` | 客户端每帧 apply 预算（ms） |
-| `network.metricsEnabled` | `false` | 指标收集（默认关闭；冒烟测试自动强开） |
-| `network.dataPlane.enabled` | `true` | 数据面 UDP/KCP 与 TCP 主控恢复；默认端点仅适合本机开发，公网部署前请配置可达端点并确认 6 marker 冒烟 |
+| `network.metricsEnabled` | `false` | 指标收集（默认关闭；自检时自动开启） |
+| `network.dataPlane.enabled` | `false` | UDP/KCP 数据面与 TCP 主控热切/加权分流；默认关闭，启用前请配置可达端点并依次确认 6 个自检标记 |
 | `network.dataPlane.controlStallMs` | `6000` | TCP 主控卡顿多久后触发 `FailoverRequest` |
 | `debug.*` | `false` | 分类调试日志（默认安静） |
 

@@ -31,6 +31,8 @@ Smaller world saves and bandwidth than vanilla, local chunk reuse, and smoother 
 | **World export** | `/hassiumc export` writes the local cache as a vanilla Anvil singleplayer world |
 | **Light stripping** | Server can omit light data; the client recomputes lighting locally to save more bandwidth |
 | **Light cache** | Light data is cached after first recompute; cache hits apply pre-computed lighting directly, skipping expensive recomputation |
+| **Control failover** | On TCP-control stall or drop, auto-reconnect via candidate endpoints with warm cache and hidden disconnect screen (data-plane failover) |
+| **Weighted routing** | Multiple UDP/KCP endpoints carry the data plane by weighted round-robin; control plane stays on vanilla TCP |
 | **Smooth loading** | Caps main-thread work during join and view expansion to reduce hitch spikes |
 | **Client-friendly** | Clients without the mod can connect by default; install on both sides for full compression and cache benefits |
 | **Traffic metrics** | `/hassium stats` (server) and `/hassiumc stats` (client) to inspect compression and cache results |
@@ -89,8 +91,9 @@ Files: `config/hassium/hassium-client.toml`, `config/hassium/hassium-server.toml
 | `network.globalPacketCompression` | `true` | Global ZSTD |
 | `network.maxChunksPerTick` | `32` | Per-player serialize cap per server tick |
 | `clientCache.mainThreadChunkBudgetMs` | `15` | Client apply budget per frame (ms) |
-| `network.metricsEnabled` | `true` | Metrics |
-| `network.dataPlane.enabled` | `true` | UDP/KCP data plane and TCP control recovery; default endpoints are local-development only, so configure reachable endpoints and run the six-marker smoke test before public deployment |
+| `network.metricsEnabled` | `false` | Metrics collection (off by default; auto-enabled during self-checks) |
+| `network.dataPlane.enabled` | `false` | UDP/KCP data plane, control failover, and weighted routing; off by default, configure reachable endpoints and verify the six self-check markers in order before enabling |
+| `network.dataPlane.controlStallMs` | `6000` | How long TCP control can stall before triggering `FailoverRequest` |
 | `debug.*` | `false` | Category debug logs (quiet by default) |
 
 Full reference: [`docs/architecture.md`](docs/architecture.md).

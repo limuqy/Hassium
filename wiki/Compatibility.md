@@ -20,8 +20,8 @@ Hassium 与常见优化 mod 的兼容性概览与配置逃生口。每条结论�
 | **反透视（改即将发送的区块包）** | ✅ 希望兼容 | miss 路径复用已构建包字节；若只在 `Connection.send` 上改写且发生在 Hassium 取消之后可能旁路 |
 | **Distant Horizons / Voxy** | ✅ 希望兼容 | 独立 LOD 通道；聚合误伤同上处理 |
 | **ViaVersion** | ⚠️ 有条件 | 见下表 |
-| **Sodium / Iris / Lithium / FerriteCore / EntityCulling / ImmediatelyFast** | ✅ 冒烟通过 | Fabric 1.20.1 联调记录见 [Support-Matrix](Support-Matrix) |
-| **C2ME** | ✅ Soft Compatible | 默认模块冒烟通过；chunkio rewrite 全开时不承诺；关 `storage.enabled` 作为逃生 |
+| **Sodium / Iris / Lithium / FerriteCore / EntityCulling / ImmediatelyFast** | ✅ 兼容测试通过 | Fabric 1.20.1 联调记录见 [Support-Matrix](Support-Matrix) |
+| **C2ME** | ✅ Soft Compatible | 默认模块兼容测试通过；chunkio rewrite 全开时不承诺；关 `storage.enabled` 作为逃生 |
 | **文件级服务端备份（含 InstantBackup）** | ✅ 兼容 | 126 对备份器透明 |
 | **语义级解压 Anvil 工具** | ❌ 不兼容 | 不认 type 126 |
 
@@ -76,7 +76,7 @@ Hassium 与常见优化 mod 的兼容性概览与配置逃生口。每条结论�
 
 ---
 
-## 已冒烟（2026-07，Fabric 1.20.1）
+## 兼容测试记录（2026-07，Fabric 1.20.1）
 
 环境：约 50 个优化向模组（FO 风格：Sodium / Iris / Lithium / FerriteCore / C2ME / EntityCulling / ImmediatelyFast / Mod Menu / Cloth 等；**未**装 Bobby / ViaFabric / Immersive Portals）。
 
@@ -94,7 +94,7 @@ Hassium 与常见优化 mod 的兼容性概览与配置逃生口。每条结论�
 - [ ] Via：无 Hassium 旧客户端能进服；同版本 Hassium 客户端功能完整
 - [ ] C2ME chunkio rewrite 开/关 × `storage` 开/关 对照
 - [ ] Sodium + `lightCacheEnabled` 开/关（光照异常）
-- [ ] Forge / NeoForge 同等优化包冒烟
+- [ ] Forge / NeoForge 同等优化包兼容测试
 - [ ] 超视渲染实机：多人服 `view-distance=8`、客户端 RD=16，走过的环带地形可见；F3 无大量视距外请求
 - [ ] 超视渲染 + Sodium：ViewArea 扩大后 mesh 正常
 

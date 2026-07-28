@@ -64,7 +64,7 @@ A: 环带规模由客户端 RD 与服务端视距之差决定；可通过降低 
 
 ### Q: 数据面 UDP 默认开吗？
 
-A: 默认关。`network.dataPlane.enabled = false`。启用前请跑 6 个 smoke marker，详见 [Data-Plane-and-Failover](Data-Plane-and-Failover)。
+A: 默认关。`network.dataPlane.enabled = false`。这两项能力（主控热切、加权分流）默认禁用；想用需手动开启并配置可达端点、依次确认 6 个自检标记，详见 [Data-Plane-and-Failover](Data-Plane-and-Failover)。
 
 ### Q: TCP 主控卡顿后客户端会断连吗？
 

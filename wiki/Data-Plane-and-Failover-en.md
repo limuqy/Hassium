@@ -1,16 +1,57 @@
-# Data Plane and Control Failover
+# Control Failover and Weighted Routing
 
 ---
 
 > **简体中文**: [Data-Plane-and-Failover](Data-Plane-and-Failover) · English
 
-Advanced networking: UDP/KCP data plane + TCP control failover. **Disabled by default**, intended for server operators with ops capability. Run the six smoke markers before enabling.
+## What this is
 
-> ⚠️ Production env config for this feature is still being migrated; it is currently driven by `DataPlanePoCConfig` as a stopgap. Before enabling, make sure you can operate Nginx / public-firewall / NAT rules.
+**Control failover** and **weighted routing** are two Hassium networking features that solve the "freeze / disconnect / rejoin" experience players hit when the master connection hiccups on multiplayer servers, and share the chunk-download load when a busy server saturates its bandwidth. The two work together: failover keeps players almost unaware when the master connection has issues, and weighted routing spreads chunk-download traffic across multiple lines.
+
+These are two of the capabilities listed on the Home page:
+
+| Feature | Description |
+| --- | --- |
+| **Control failover** | On TCP-control stall or drop, auto-reconnect via candidate endpoints with warm cache and hidden disconnect screen (data-plane failover) |
+| **Weighted routing** | Multiple UDP/KCP endpoints carry the data plane by weighted round-robin; control plane stays on vanilla TCP |
 
 ---
 
-## Topology
+## The problems this solves (examples)
+
+**Problem 1: The master connection hiccups, everyone drops to the main menu.**
+
+In vanilla Minecraft, login, chat, commands, and entity sync all ride one TCP master Play connection, and chunk downloads share that same line. When the master connection stalls for a few seconds (network jitter, server restart, machine migration) or drops, the client shows a "Connection lost" screen, kicks players to the main menu, loses cache, and rejoining means re-downloading every chunk. A few players are deep in a cave; the owner restarts for routine maintenance; everyone's progress looks "wasted".
+
+**Control failover** does this: when the master connection stalls or drops, the client follows the candidate list the server pre-delivered and auto-connects to the next reachable endpoint, **without showing a disconnect screen**. Already-downloaded chunk cache and the task executor are kept; the new session resumes directly — the explored terrain is still in cache, hit ratio does not drop.
+
+**Problem 2: Hundreds of players log in at once and the master connection saturates.**
+
+The bottleneck on high-population servers is often chunk downstream: every player pulls a patch of terrain and one line cannot keep up. Scaling out also means worrying that one flaky line will take the server with it.
+
+**Weighted routing** does this: chunk downloads run on a UDP/KCP data plane that can be configured with multiple endpoints (multiple lines), sharing load by `weight` (weighted round-robin). If one line fills or degrades, traffic shifts onto the rest. Login and commands — "control-class" traffic — stay on vanilla TCP and are untouched by data-line issues.
+
+---
+
+## Who should enable this
+
+These two features are **off by default** — `network.dataPlane.enabled = false`, and the mod uses vanilla single-TCP behavior with normal co-op untouched. When you need control failover or public weighted routing, enable them as follows:
+
+1. Server-operator capability with Nginx / public-firewall / NAT rules;
+2. Set `network.dataPlane.enabled = true` in `hassium-server.toml` and configure reachable public endpoints;
+3. Verify the six self-check markers in order (see the bottom of this page).
+
+> ⚠️ The production env config for this feature is still being migrated; it is currently driven by `DataPlanePoCConfig` as a stopgap. Operators without these capabilities can leave it off — the other features are unaffected.
+
+For **solo friend co-op** or **small private servers**: leave it off and skip the rest of this page. The technical details below target server operators with ops needs.
+
+---
+
+## Technical details
+
+The following targets server operators with ops capability. Regular players can skip to [FAQ](FAQ-en) for common questions.
+
+### Topology
 
 | Plane | Purpose | Protocol |
 | --- | --- | --- |
@@ -22,21 +63,13 @@ Advanced networking: UDP/KCP data plane + TCP control failover. **Disabled by de
 - Each `(host, port)` UDP endpoint binds an independent KCP `ReliableDatagramSession`
 - The client issues a separate BindRequest per advertised endpoint with an HKDF-derived AES-GCM key
 
----
+### Triggers
 
-## Triggers
+**Hard disconnect**: the Master TCP `channelInactive` → `ControlReconnectOrchestrator.onPrimaryDisconnected` immediately launches the next candidate; the client enters a 60-second recovery window.
 
-### Hard disconnect
+**Master stalled + UDP healthy**: the server detects a control stall (default 6 seconds). During the stall, `DataPlaneUdpServer.recordControlActivity` advances; if the UDP session is healthy (matching epoch) the server issues a `FailoverPermit` (`expiryMs` default 30 seconds). The client only connects via `attemptConnectOnlyIfPermitValid`.
 
-The Master TCP `channelInactive` → `ControlReconnectOrchestrator.onPrimaryDisconnected` immediately launches the next candidate; the client enters a 60-second recovery window.
-
-### Master stalled + UDP healthy
-
-The server detects a control stall (default 6 seconds). During the stall, `DataPlaneUdpServer.recordControlActivity` advances; if the UDP session is healthy (matching epoch) the server issues a `FailoverPermit` (`expiryMs` default 30 seconds). The client only connects via `attemptConnectOnlyIfPermitValid`.
-
----
-
-## Recovery retention
+### Recovery retention
 
 When `ClientRecoveryState.shouldSuppressFinalization()` is true, `ClientLifecycleHelper.finalizeDisconnectIfTerminal` short-circuits `finalizeDisconnect`, preserving:
 
@@ -49,17 +82,13 @@ When the next candidate session starts, the cache is ready to use and the hit ra
 
 `ClientPlayConnectionEvents.DISCONNECT` calls `DataPlaneClientLifecycle.stopUdp(/*keepLease*/ true)`, so the UDP bundle is not released immediately.
 
----
-
-## Candidate exhaustion
+### Candidate exhaustion
 
 `ControlReconnectOrchestrator.performTerminalFinalization` calls `ClientLifecycleHelper.finalizeDisconnectIfTerminal`; the singleton `ClientRecoveryState.consumeTerminalCleanup` guarantees exactly-once disk-resource cleanup.
 
----
+### Weighted routing
 
-## Weighted routing
-
-The data plane supports multiple UDP endpoints sharing chunk bulk traffic by `weight` (weighted round-robin):
+The data plane supports multiple UDP endpoints sharing chunk-bulk traffic by `weight` (weighted round-robin):
 
 - One `ReliableDatagramSession` per endpoint
 - WRR over `weight`
@@ -72,7 +101,7 @@ The data plane supports multiple UDP endpoints sharing chunk bulk traffic by `we
 
 | Key | Default | Notes |
 | --- | --- | --- |
-| `network.dataPlane.enabled` | `false` | Data-plane master switch (default off; true during 1.20.1 Fabric PoC) |
+| `network.dataPlane.enabled` | `false` | Data-plane master switch (off by default; configure reachable endpoints and verify the six self-check markers in order before enabling) |
 | `network.dataPlane.controlStallMs` | `6000` | Stalled-master duration before the client sends `FailoverRequest` |
 | `network.dataPlane.failoverPermitTtlMs` | `30000` | Validity window for the server-issued `FailoverPermit` |
 | `network.dataPlane.udpEndpoints` | (pending toml) | Candidate list; each item has `host`, `port`, `weight`, optional `priority` |
@@ -87,11 +116,11 @@ The data plane supports multiple UDP endpoints sharing chunk bulk traffic by `we
 2. The 10-second UDP `lease` only drains in-flight data; no new player data is produced before login completes
 3. `controlStallMs` requires the server to issue `FailoverPermit`; the client does not open a second master Play connection based on latency alone
 4. TCP control endpoints and UDP endpoints are separate lists; their public ports may differ
-5. Nginx `stream` reverse proxy can carry TCP master + UDP-direct failover (see the smoke harness below)
+5. Nginx `stream` reverse proxy can carry TCP master + UDP-direct failover (see the self-check procedure below)
 
 ---
 
-## Smoke markers (must run before enabling)
+## Self-check markers (must run before public deployment)
 
 | Marker | Meaning |
 | --- | --- |

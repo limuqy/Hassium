@@ -81,22 +81,23 @@ Hassium 用一套客户端 + 服务端配合，从存档体积、网络带宽、
 
 ---
 
-## 主控热切（TCP 控制 Failover）
+## 主控热切
 
 - **目标**：TCP 主控断或卡时按候选自动重连，缓存暖续、隐藏断连界面
-- **拓扑**：控制面（Master TCP，原版 login + Play）+ 数据面（UDP/KCP，多端点加权）
-- **触发**：硬断连立即切下一候选；Master stall 6s + UDP 健康时服务端下发 `FailoverPermit`，客户端连接下一端点
-- **恢复期保留**：磁盘缓存、`CacheSaveQueue`、`HassiumTaskExecutor` 与 dirty 标志全保留以承接下一候选会话
-- **配置**：`network.dataPlane.controlStallMs`（默认 `6000`）、`failoverPermitTtlMs`（默认 `30000`）
-- **专文**：[Data-Plane-and-Failover](Data-Plane-and-Failover)
+- **怎么做的**：服务端预先把控制面候选端点列表随握手下发客户端；主控硬断或卡顿超过阈值且 UDP 数据面健康时，客户端按候选自动连下一个可达端点，不弹"连接丢失"。切会话期间磁盘缓存、保存队列、任务执行器全保留，新会话直接续上——命中率不掉、地形不需重下
+- **默认**：关闭（`network.dataPlane.enabled = false`，模组默认走原版 TCP 单连接）。需运维能力，启用前请确认 Nginx / 公网防火墙 / NAT 规则
+- **配置**：`network.dataPlane.controlStallMs`（默认 `6000`，主控卡顿多久触发 failover）、`failoverPermitTtlMs`（默认 `30000`，服务端下发 FailoverPermit 有效期）
+- **专文**：[主控热切与加权分流](Data-Plane-and-Failover)
 
 ---
 
 ## 加权分流
 
-- **目标**：多 UDP/KCP endpoint 按 weight 加权轮询承载区块 bulk
-- **配置**：每 endpoint 在 `network.dataPlane.udpEndpoints` 配置 `weight`
-- **专文**：[Data-Plane-and-Failover](Data-Plane-and-Failover)
+- **目标**：高人数服区块下行的带宽瓶颈，用多线路分担
+- **怎么做的**：区块下载走 UDP/KCP 数据面，可配多个 endpoint（多条线路），按 `weight` 加权轮询承载。一条线路打满或降级时流量自动压到其余线路；登录、命令、实体同步等"控制类"流量仍走原版 TCP，不受数据线路波动影响
+- **默认**：关闭（与主控热切同开关 `network.dataPlane.enabled = false`）。需按线路配公网 UDP 端点
+- **配置**：每个 endpoint 在 `network.dataPlane.udpEndpoints` 配置 `weight`（默认 `100`），可设 `priority` 控制候选顺序
+- **专文**：[主控热切与加权分流](Data-Plane-and-Failover)
 
 ---
 

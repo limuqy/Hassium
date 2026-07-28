@@ -61,7 +61,7 @@ In-game config screen entry points:
 
 | Key | Default | Notes |
 | --- | --- | --- |
-| `network.dataPlane.enabled` | `false` | UDP/KCP data plane (run the six-marker smoke test first) |
+| `network.dataPlane.enabled` | `false` | UDP/KCP data plane, control failover, and weighted routing (off by default; configure reachable endpoints and verify the six self-check markers in order before enabling) |
 | `network.dataPlane.controlStallMs` | `6000` | Stalled-master duration before the client sends `FailoverRequest` |
 | `network.dataPlane.failoverPermitTtlMs` | `30000` | Validity window for the server-issued `FailoverPermit` |
 
