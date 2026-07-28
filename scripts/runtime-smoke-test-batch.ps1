@@ -4,20 +4,19 @@
 #   .\scripts\runtime-smoke-test-batch.ps1 -Phase I -Parallel                    # 全量初始轮（并行，fabric+neoforge 同时）
 #   .\scripts\runtime-smoke-test-batch.ps1 -Phase I -Versions @("1.20.1","1.20.2")
 #   .\scripts\runtime-smoke-test-batch.ps1 -Phase R                              # 回归轮
-#   .\scripts\runtime-smoke-test-batch.ps1 -Phase I -Loaders fabric              # 仅 fabric
-#   .\scripts\runtime-smoke-test-batch.ps1 -Phase I -Parallel -BasePort 25570    # 并行 + 自定义起始端口
+#   .\scripts\runtime-smoke-test-batch.ps1 -Phase I -Loaders fabric,forge,neoforge  # 含 Forge（仅 1.20.1/1.20.6 有 builds_for=forge，其它版本自动 SKIP）
 # 每个版本×加载器 1 个会话（客户端自动两轮：VD=16 + VD=8）
-# CleanWorld 策略（按 loader 独立，fabric/neoforge 各有 run/server）:
+# CleanWorld 策略（按 loader 独立，fabric/forge/neoforge 各有 run/server）:
 #   - 该 loader 的第一个版本：清理服务端存档
 #   - 后续版本：默认不清理（复用存档加快启动）
 #   - 退版本（高→低）：强制清理（高版本存档无法被低版本读取）
 #   - 同会话失败重试：强制清理（干净重试）
-# 并行模式: 同版本 fabric+neoforge 同时跑，端口分配 fabric=BasePort, neoforge=BasePort+1
+# 并行模式: 同版本多 loader 同时跑，端口按 -Loaders 顺序 fabric=BasePort, forge=+1, neoforge=+2
 #           版本间仍串行（避免跨版本存档冲突）；不调用会话间 gradlew --stop，batch 结束后统一 stop
 param(
     [Parameter(Mandatory=$true)][ValidateSet("I","R")][string]$Phase,
     [string[]]$Versions,
-    [ValidateSet("fabric","neoforge")][string[]]$Loaders = @("fabric","neoforge"),
+    [ValidateSet("fabric","forge","neoforge")][string[]]$Loaders = @("fabric","neoforge"),
     [int]$MaxRetries = 3,
     [switch]$Parallel,
     [int]$BasePort = 25565,
@@ -164,6 +163,43 @@ foreach ($ver in $targetVersions) {
     Write-Host "=== Testing: $ver (loaders: $($Loaders -join ','))"
     Write-Host "============================================"
 
+    # Forge 仅段 A(1.20.1)/段 C 段尾(1.20.6)有 builds_for；其它版本强行跑 :forge:runServer
+    # 会因 settings.gradle 未 include forge 子项目而直接失败。读 versionProperties/<ver>.properties
+    # 的 builds_for，按它过滤 -Loaders，只跑该版本真正构建的 loader。
+    $propsPath = Join-Path $projectRoot "versionProperties\${ver}.properties"
+    $supportedLoaders = @()
+    if (Test-Path $propsPath) {
+        $propsText = Get-Content $propsPath -Raw
+        $m = [regex]::Match($propsText, '(?im)^builds_for\s*=\s*(.+)$')
+        if ($m.Success) {
+            $supportedLoaders = ($m.Groups[1].Value -split ',') | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+        }
+    }
+    if ($supportedLoaders.Count -gt 0) {
+        $activeLoadersForVer = $Loaders | Where-Object { $supportedLoaders -contains $_ }
+    } else {
+        # 没读到 builds_for（极少见，如缺失 properties）：保留原 Loaders，由后续编译失败兜底
+        $activeLoadersForVer = $Loaders
+    }
+    # 端口分配仍按原 -Loaders 顺序取下标，保证 fabric=BasePort, forge/neoforge 按位偏移
+    $loaderPortIndex = @{}
+    for ($li = 0; $li -lt $Loaders.Count; $li++) { $loaderPortIndex[$Loaders[$li]] = $li }
+
+    # 跳过该版本不支持的 loader（典型：1.20.2 等段内无 Forge）
+    $skippedLoaders = $Loaders | Where-Object { -not ($activeLoadersForVer -contains $_) }
+    foreach ($sk in $skippedLoaders) {
+        $skipSessionId = "${ver}_${sk}_${Phase}"
+        Write-Host "[$skipSessionId] 跳过：versionProperties/${ver}.properties builds_for 不含 ${sk}" -ForegroundColor DarkGray
+        $results += [PSCustomObject]@{
+            Ver=$ver; Loader=$sk; Phase=$Phase; Result="SKIP"
+            SessionId=$skipSessionId; Attempts=0; Reason="not_in_builds_for"
+        }
+    }
+    if ($activeLoadersForVer.Count -eq 0) {
+        Write-Host "[$ver] 无匹配 loader（-Loaders 与 builds_for 无交集），跳过该版本" -ForegroundColor Yellow
+        continue
+    }
+
     if ($Parallel -and $Loaders.Count -gt 1) {
         # ===== 并行模式：同版本多 loader 用 Start-Process 同时跑 =====
         # 注意：不能用 Start-Job（Job 内 Start-Process gradlew.bat 会静默失败）
@@ -181,7 +217,7 @@ foreach ($ver in $targetVersions) {
             Write-Host "[$ver] 预编译成功 (classes)" -ForegroundColor Green
         } else {
             Write-Host "[$ver] :classes 失败 (exit $LASTEXITCODE)，回退到逐 loader 编译以隔离错误" -ForegroundColor Yellow
-            foreach ($loader in $Loaders) {
+            foreach ($loader in $activeLoadersForVer) {
                 Write-Host "[$ver/${loader}] 预编译 (compileJava)..."
                 & $gradlew ":${loader}:compileJava" "-Pmc_ver=${ver}" 2>&1 | Out-Host
                 if ($LASTEXITCODE -ne 0) {
@@ -192,10 +228,10 @@ foreach ($ver in $targetVersions) {
         }
 
         # 过滤掉预编译失败的 loader
-        $activeLoaders = $Loaders | Where-Object { -not $precompileFailed[$_] }
+        $activeLoaders = $activeLoadersForVer | Where-Object { -not $precompileFailed[$_] }
         if ($activeLoaders.Count -eq 0) {
             Write-Host "[$ver] 所有 loader 预编译失败，跳过该版本" -ForegroundColor Red
-            foreach ($loader in $Loaders) {
+            foreach ($loader in $activeLoadersForVer) {
                 $skipSessionId = "${ver}_${loader}_${Phase}"
                 $results += [PSCustomObject]@{
                     Ver=$ver; Loader=$loader; Phase=$Phase; Result="FAIL"
@@ -210,8 +246,8 @@ foreach ($ver in $targetVersions) {
         $scriptPath = Join-Path $PSScriptRoot "runtime-smoke-test.ps1"
         for ($i = 0; $i -lt $activeLoaders.Count; $i++) {
             $loader = $activeLoaders[$i]
-            # 端口分配：原 Loaders 顺序保持不变，确保 fabric=BasePort, neoforge=BasePort+1
-            $loaderIndex = [Array]::IndexOf($Loaders, $loader)
+            # 端口分配：按 -Loaders 原顺序取下标（确保 fabric=BasePort, forge=+1, neoforge=+2 等）
+            $loaderIndex = $loaderPortIndex[$loader]
             $port = $BasePort + $loaderIndex
             $jobName = "${ver}_${loader}_${Phase}"
             $cleanWorld = Get-ShouldCleanWorld -Ver $ver -Loader $loader -PrevVerByLoader $prevVerByLoader
@@ -319,7 +355,7 @@ foreach ($ver in $targetVersions) {
         Start-Sleep -Seconds 3
     } else {
         # ===== 串行模式（默认）=====
-        foreach ($loader in $Loaders) {
+        foreach ($loader in $activeLoadersForVer) {
             $sessionId = "${ver}_${loader}_${Phase}"
             $cleanWorld = Get-ShouldCleanWorld -Ver $ver -Loader $loader -PrevVerByLoader $prevVerByLoader
             $cleanLabel = if ($cleanWorld) { "CleanWorld" } else { "ReuseWorld" }
@@ -362,10 +398,11 @@ $csvPath = Join-Path $logRoot "batch-results-${Phase}.csv"
 $results | Export-Csv $csvPath -NoTypeInformation
 Write-Host "Results saved to: $csvPath"
 
-# 统计
+# 统计（SKIP = 该版本的 builds_for 不含该 loader，不去占 BUILD）
 $pass = @($results | Where-Object { $_.Result -eq "PASS" }).Count
 $fail = @($results | Where-Object { $_.Result -eq "FAIL" }).Count
-Write-Host "PASS: $pass / FAIL: $fail / TOTAL: $($results.Count)" -ForegroundColor Cyan
+$skip = @($results | Where-Object { $_.Result -eq "SKIP" }).Count
+Write-Host "PASS: $pass / FAIL: $fail / SKIP: $skip / TOTAL: $($results.Count)" -ForegroundColor Cyan
 if ($fail -gt 0) {
     Write-Host "Failures log: $failuresLog" -ForegroundColor Yellow
 }

@@ -4,7 +4,7 @@ Hassium 跨版本（1.20.1–1.21.11）× 多加载器（fabric / neoforge）的
 
 ## 概述
 
-- **测试矩阵**：17 个 MC 版本 × 2 个加载器 = 34 个会话（fabric / neoforge；Forge 仅 1.20.1 / 1.20.6，由 neoforge 子项目以 `loom.platform='forge'` 覆盖）
+- **测试矩阵**：17 个 MC 版本 × 2 个加载器（fabric / neoforge）= 34 个默认会话；额外可显式 `-Loaders fabric,forge,neoforge` 跑 Forge，**Forge 仅有 1.20.1 / 1.20.6 有 `builds_for`**（`forge` 子项目独立、经 `loom-forge.gradle`），其它版本会自动 SKIP。批量脚本读取每版本 `versionProperties/<ver>.properties` 的 `builds_for` 决定是否跳过该 loader，未列入 `builds_for` 的不会强行起 `:forge:runServer`（否则 `settings.gradle` 未 include forge 子项目会直接失败）。
 - **执行方式**：PowerShell 脚本驱动 Gradle `runServer` / `runClient`，注入 `-Dhassium.smokeTest=true` 等 JVM 属性
 - **dev 专用**：测试代码（`ClientSmokeTest` / `ServerSmokeTest`）只在 dev 环境启用，正常生产 jar 不受影响
 - **输出位置**：`build/smoke-test/`（已在 `.gitignore` 范围内）

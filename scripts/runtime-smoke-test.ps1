@@ -1,5 +1,6 @@
 # 运行时冒烟测试 — 单次会话脚本（两轮连服版）
 # 用法: .\scripts\runtime-smoke-test.ps1 -Ver 1.20.1 -Loader fabric -Phase I -SessionId "1.20.1_fabric_I"
+#       .\scripts\runtime-smoke-test.ps1 -Ver 1.20.6 -Loader forge -Phase I -SessionId "1.20.6_forge_I"   # forge 仅 1.20.1/1.20.6 有 builds_for
 # 流程: 服务端启动 VD=20 → 客户端连服 → 进世界后等 DelayMs → ROUND1 统计 → 主动断开 → 服务端切 VD=8 → 等 ReconnectDelayMs → 重连 → 进世界后等 DelayMs → ROUND2 统计 → 退出
 # 关键真相源：Loom runDir 在子项目目录下（fabric/run/client、neoforge/run/server 等），不是根目录 run/
 # 退出码: 0=PASS / 2=FAIL / 3=server_not_ready
@@ -7,7 +8,7 @@
 # 向后兼容: -SmokeHost 仍可用，但 -ServerPort 优先（若同时指定 -SmokeHost 则 -SmokeHost 完整地址优先）
 param(
     [Parameter(Mandatory=$true)][string]$Ver,
-    [Parameter(Mandatory=$true)][ValidateSet("fabric","neoforge")][string]$Loader,
+    [Parameter(Mandatory=$true)][ValidateSet("fabric","forge","neoforge")][string]$Loader,
     [Parameter(Mandatory=$true)][ValidateSet("I","R","UdpFailover")][string]$Phase,
     [Parameter(Mandatory=$true)][string]$SessionId,
     [switch]$CleanWorld,
@@ -226,18 +227,20 @@ spawn-protection=0
 "@
 Set-Content -Path (Join-Path $serverRunDir "server.properties") -Value $props
 
-# 创建 world\serverconfig 目录（部分 neoforge 版本不会自动创建）
+# 创建 world\serverconfig 目录（部分 neoforge / forge 50 版本不会自动创建）
 New-Item -ItemType Directory -Force -Path (Join-Path $serverRunDir "world\serverconfig") -ErrorAction SilentlyContinue | Out-Null
-# NeoForge 21.5+ FML ConfigTracker.writeConfig 在 world/serverconfig/hassium/ 内存在残留 *.toml.bak 时，
-# 把整套 parent 路径重复拼到 tmp 文件名前导致 java.nio.file.NoSuchFileException
+# NeoForge 21.5+ 与 Forge 50 (1.20.6) 都经 FML ConfigTracker.writeConfig 写 world/serverconfig/hassium/；
+# 残留 *.toml.bak 时会把整套 parent 路径重复拼到 tmp 文件名前，导致 java.nio.file.NoSuchFileException
 # (\.\world\serverconfig\hassium\.\world\serverconfig\hassium\hassium-server.new.tmp.toml)。
 # server 启动前清空 Hassium own serverconfig 残留，让 ConfigTracker 从干净状态写入。
-if ($Loader -eq "neoforge") {
+# Forge 1.20.1 用老 ForgeConfigSpec，serverconfig 路径不同且无此 bug，不在此分支清理。
+$needConfigTrackerClean = ($Loader -eq "neoforge") -or ($Loader -eq "forge" -and $Ver -ge "1.20.6")
+if ($needConfigTrackerClean) {
     $hassiumServerConfig = Join-Path $serverRunDir "world\serverconfig\hassium"
     if (Test-Path $hassiumServerConfig) {
         Get-ChildItem -Path $hassiumServerConfig -File -Filter "*.toml*" -ErrorAction SilentlyContinue |
             Remove-Item -Force -ErrorAction SilentlyContinue
-        Write-Host "[$SessionId] 清理 neoforge world/serverconfig/hassium 残留 toml（绕过 FML 7.0.13 ConfigTracker 路径拼接 bug）"
+        Write-Host "[$SessionId] 清理 $Loader world/serverconfig/hassium 残留 toml（绕过 FML ConfigTracker 路径拼接 bug）"
     }
 }
 
