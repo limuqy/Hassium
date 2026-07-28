@@ -78,9 +78,9 @@ public class ForgeNetworkManager implements NetworkManager {
                 buf.readBytes(data);
                 buf.release();
 #if MC_VER < MC_1_20_2
-                CHANNEL.sendTo(new CompressedPayloadWrapper(data), player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
+                CHANNEL.sendTo(new AggregationWrapper(data), player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
 #else
-                sendToPlayer(player, new CompressedPayloadWrapper(data));
+                sendToPlayer(player, new AggregationWrapper(data));
 #endif
             } else {
                 LOGGER.error("Cannot send aggregation packet: connection has no player");
@@ -127,6 +127,18 @@ public class ForgeNetworkManager implements NetworkManager {
                 CompressedPayloadWrapper::decode,
                 (msg, ctx) -> {
                     ctx.get().enqueueWork(() -> handleCompressedPayload(msg));
+                    ctx.get().setPacketHandled(true);
+                },
+                java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT)
+        );
+
+        CHANNEL.<AggregationWrapper>registerMessage(
+                packetId++,
+                AggregationWrapper.class,
+                AggregationWrapper::encode,
+                AggregationWrapper::decode,
+                (msg, ctx) -> {
+                    ctx.get().enqueueWork(() -> handleAggregationClient(msg));
                     ctx.get().setPacketHandled(true);
                 },
                 java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT)
@@ -288,6 +300,9 @@ public class ForgeNetworkManager implements NetworkManager {
                         .addMain(CompressedPayloadWrapper.class,
                                 playCodec(CompressedPayloadWrapper::encode, CompressedPayloadWrapper::decode),
                                 ForgeNetworkManager::onCompressedPayload)
+                        .addMain(AggregationWrapper.class,
+                                playCodec(AggregationWrapper::encode, AggregationWrapper::decode),
+                                ForgeNetworkManager::onAggregationClient)
                         .addMain(ChunkHashWrapper.class, playCodec(ChunkHashWrapper::encode, ChunkHashWrapper::decode),
                                 ForgeNetworkManager::onChunkHash)
                         .addMain(SectionDeltaWrapper.class, playCodec(SectionDeltaWrapper::encode, SectionDeltaWrapper::decode),
@@ -304,7 +319,7 @@ public class ForgeNetworkManager implements NetworkManager {
                                 ForgeNetworkManager::onIndexSync)
                 .build();
 
-        LOGGER.info("Hassium: Registered Forge 50+ ChannelBuilder play channel (5 C2S + 8 S2C)");
+        LOGGER.info("Hassium: Registered Forge 50+ ChannelBuilder play channel (5 C2S + 9 S2C)");
     }
 
     private static <M> StreamCodec<RegistryFriendlyByteBuf, M> playCodec(
@@ -327,6 +342,10 @@ public class ForgeNetworkManager implements NetworkManager {
 
     private static void onCompressedPayload(CompressedPayloadWrapper msg, CustomPayloadEvent.Context ctx) {
         handleCompressedPayload(msg);
+    }
+
+    private static void onAggregationClient(AggregationWrapper msg, CustomPayloadEvent.Context ctx) {
+        handleAggregationClient(msg);
     }
 
     private static void onDataRequest(DataRequestWrapper msg, CustomPayloadEvent.Context ctx) {
@@ -562,6 +581,27 @@ public class ForgeNetworkManager implements NetworkManager {
             ClientChunkHandler.handleCompressedChunk(msg.data());
         } catch (Exception e) {
             LOGGER.error("Hassium: Failed to handle compressed payload", e);
+        }
+    }
+
+    private static void handleAggregationClient(AggregationWrapper msg) {
+        FriendlyByteBuf packetBuf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data()));
+        try {
+            var clientConn = net.minecraft.client.Minecraft.getInstance().getConnection();
+            if (clientConn == null) {
+                LOGGER.error("Hassium: Received aggregation packet but no client connection");
+                return;
+            }
+            NamespaceIndexManager indexManager = IndexSyncManager.getInstance().getClientIndexManager();
+            if (indexManager == null) {
+                LOGGER.error("Hassium: Received aggregation packet but client index manager not initialized");
+                return;
+            }
+            HassiumAggregationPacket.decode(packetBuf, indexManager).handle(clientConn.getConnection());
+        } catch (Exception e) {
+            LOGGER.error("Hassium: Failed to handle aggregation packet", e);
+        } finally {
+            packetBuf.release();
         }
     }
 
@@ -860,6 +900,20 @@ public class ForgeNetworkManager implements NetworkManager {
             byte[] data = new byte[length];
             buf.readBytes(data);
             return new CompressedPayloadWrapper(data);
+        }
+    }
+
+    public record AggregationWrapper(byte[] data) {
+        public void encode(FriendlyByteBuf buf) {
+            buf.writeVarInt(data.length);
+            buf.writeBytes(data);
+        }
+
+        public static AggregationWrapper decode(FriendlyByteBuf buf) {
+            int length = buf.readVarInt();
+            byte[] data = new byte[length];
+            buf.readBytes(data);
+            return new AggregationWrapper(data);
         }
     }
 

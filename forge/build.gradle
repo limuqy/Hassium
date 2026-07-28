@@ -15,6 +15,16 @@ sourceSets {
     }
 }
 
+dependencies {
+    testImplementation 'org.junit.jupiter:junit-jupiter-api:5.10.1'
+    testRuntimeOnly 'org.junit.jupiter:junit-jupiter-engine:5.10.1'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher:1.10.1'
+}
+
+test {
+    useJUnitPlatform()
+}
+
 configurations {
     library
     // 原始 kcp 坐标；剥离 io.netty.bootstrap 后再进 game layer（见 stripKcpNettyBootstrapPackage）
@@ -116,8 +126,16 @@ dependencies {
 
 
     // Cloth Config：编译期需要；可选依赖，不 jiJ
+    // cloth-config-forge 变体最高仅 17.0.144（对应 MC 1.21.4）；1.21.5+（cloth_config_version 18+）
+    // 上游停发 forge 变体。forge 子项目在无 forge 变体的版本上直接不引 cloth-config，
+    // HassiumForgeConfigScreens 用反射探测 cloth 是否存在 → 不可用时 GUI 退化为无 GUI，核心功能不受影响。
+    // fabric / neoforge 子项目各自 build.gradle 独立引对应变体，1.21.5+ 仍有 cloth 不受影响。
     if (gradle.ext.has('cloth_config_version')) {
-        modCompileOnly("me.shedaniel.cloth:cloth-config-forge:${gradle.ext.cloth_config_version}")
+        def clothVer = gradle.ext.cloth_config_version as String
+        def clothMajor = clothVer.tokenize('.')[0].isInteger() ? clothVer.tokenize('.')[0].toInteger() : 0
+        if (clothMajor <= 17) {
+            modCompileOnly("me.shedaniel.cloth:cloth-config-forge:${clothVer}")
+        }
     }
 }
 
@@ -163,6 +181,126 @@ def hassiumStripGuavaAmn = { File src ->
     return out
 }
 
+/**
+ * 去掉 minecraft-merged-patched forge jar 的 Automatic-Module-Name（net.minecraftforge.forge）。
+ * Loom 把 task.classpath 里的 merged jar 与 ForgeUserdevLocator 注入的 forge-universal.jar 同时
+ * 送进 SecureModuleFinder → 后到的 merged jar 被 Ignoring duplicate 丢掉；但 forge-universal.jar
+ * 自身在 userdev 模块层下 Class.forName(module, "net.minecraftforge.client.loading.NoVizFallback")
+ * 返回 null（package visibility / reobf 限制），触发 ImmediateWindowHandler.DummyProvider
+ * .orElseThrow → server 启动即崩。
+ * 剥 merged jar 的 AMN：merged jar 不再占据模块名，与 forge-universal 不冲突；merged jar 字节仍在
+ * 类路径上供类加载器使用；net.minecraftforge.forge 模块退回由 forge-universal 独占但其字节仍可见。
+ * 注意：此 patch 仅在 forge 1.21.x（forgeMajor >= 52）有 ImmediateWindowHandler 致命加载路径时需要；
+ * 对 forge 50 / 1.20.6 无害。
+ */
+def hassiumStripMergedForgeAmn = { File src ->
+    def outDir = layout.buildDirectory.dir('patched-forge-merged').get().asFile
+    outDir.mkdirs()
+    def out = new File(outDir, src.name)
+    def stamp = new File(outDir, src.name + '.stamp')
+    def stampVal = "${src.canonicalPath}|${src.lastModified()}|${src.length()}"
+    if (out.exists() && stamp.exists() && stamp.text.trim() == stampVal) {
+        return out
+    }
+    out.withOutputStream { fos ->
+        def zos = new ZipOutputStream(fos)
+        src.withInputStream { fis ->
+            def zis = new ZipInputStream(fis)
+            ZipEntry entry
+            while ((entry = zis.nextEntry) != null) {
+                if (entry.name == 'META-INF/MANIFEST.MF') {
+                    def mf = new Manifest(zis)
+                    mf.mainAttributes.remove(new java.util.jar.Attributes.Name('Automatic-Module-Name'))
+                    zos.putNextEntry(new ZipEntry(entry.name))
+                    mf.write(zos)
+                    zos.closeEntry()
+                } else if (!entry.isDirectory()) {
+                    zos.putNextEntry(new ZipEntry(entry.name))
+                    zis.transferTo(zos)
+                    zos.closeEntry()
+                }
+                zis.closeEntry()
+            }
+            zis.close()
+        }
+        zos.close()
+    }
+    stamp.text = stampVal
+    return out
+}
+
+/**
+ * 把 minecraft-merged-patched forge jar（loom cache 原始 named mapping）拆成两份：
+ *  - hassiumStripMergedForgeAmn 还返回一份「剥 AMN」的副本（供 Task.classpath 上的 mcjar 使用，
+ *   minecraft 模块名=minecraft，不独占 net.minecraftforge.forge）
+ *  - 同时构造 hassium-forge-only.jar：仅保留 net/minecraftforge/ + META-INF/{services,coremods.json,
+ *    mods.toml, MANIFEST.MF}（含 AMN=net.minecraftforge.forge）——一份「只含 forge classes 的精简 jar」。
+ *
+ * R22 策略：client 把 hassium-forge-only.jar 前置到 task.classpath。它含 MinecraftForge.class 但
+ * **不含 Minecraft.class**，于是：
+ *  - ForgeUserdevLocator.getPathFromResource(MinecraftForge.class) 命中它 → getForgeOnly(filter) 取得
+ *    名为 net.minecraftforge.forge、packages 仅 net.minecraftforge.* 的 forge mod
+ *  - ForgeDevLaunchHandler.getPathFromResource(Minecraft.class) 命中 strip'd merged jar → minecraft !=
+ *    forge → getMinecraftPaths 返回 [minecraft=merged, extra] → mcjar 是 strip'd merged jar（AMN 剥离、
+ *    module 名 minecraft、packages 含 net.minecraft.* + net.minecraftforge.*）
+ *  - ClasspathLocator.getPathFromResource(DontObfuscate.class) 命中 strip'd merged jar（forge-only.jar 不含
+ *    DontObfuscate）→ minecraft 路径等于 ForgeDev 的 minecraft → ClasspathLocator 跳过 merged jar 的
+ *    mods.toml，不会额外创建 module 'forge'（packages 全套 → 与 minecraft 重复 export net.minecraft.*
+ *    触发 ResolutionException）
+ *
+ * R21 早期方案直接前置完整 merged jar 副本（含 Minecraft.class 与 DontObfuscate.class），导致
+ * ClasspathLocator.minecraft 路径被前置 jar 抢走，merged jar 反被误认为 forge mod ——ResolutionException
+ * "Modules minecraft and forge export package net.minecraft.world.entity.player to module mixin.synthetic"。
+ */
+def hassiumExtractForgeOnlyJar = { File src ->
+    def stripOut = hassiumStripMergedForgeAmn(src)
+    def odir = layout.buildDirectory.dir('patched-forge-merged-only').get().asFile
+    odir.mkdirs()
+    def out = new File(odir, "hassium-forge-only.jar")
+    def stamp = new File(odir, out.name + '.stamp')
+    def stampVal = "${src.canonicalPath}|${src.lastModified()}|${src.length()}"
+    def pkgPrefixes = ['net/minecraftforge/', 'META-INF/services/',
+                       'META-INF/coremods.json', 'META-INF/mods.toml']
+    if (!(out.exists() && stamp.exists() && stamp.text.trim() == stampVal)) {
+        out.withOutputStream { fos ->
+            def zos = new ZipOutputStream(fos)
+            src.withInputStream { fis ->
+                def zis = new ZipInputStream(fis)
+                ZipEntry entry
+                while ((entry = zis.nextEntry) != null) {
+                    def keep = false
+                    if (entry.name == 'META-INF/MANIFEST.MF') {
+                        keep = true
+                    } else if (!entry.isDirectory()) {
+                        // 复刻 ForgeUserdevLocator.getForgeOnly 的 filter：非 .class 一律保留
+                        // (由此 forge 的 assets/forge/** 资源路径全部 keep)，.class 仅保留 forge packages +
+                        // META-INF/{services/,coremods.json,mods.toml}（与 getForgeOnly.getPackages() 一致）。
+                        if (!entry.name.endsWith('.class')) {
+                            keep = true
+                        } else {
+                            for (def p : pkgPrefixes) {
+                                if (entry.name.startsWith(p)) { keep = true; break }
+                            }
+                        }
+                    }
+                    if (keep && !entry.isDirectory()) {
+                        zos.putNextEntry(new ZipEntry(entry.name))
+                        zis.transferTo(zos)
+                        zos.closeEntry()
+                    }
+                    zis.closeEntry()
+                }
+                zis.close()
+            }
+            zos.close()
+        }
+        stamp.text = stampVal
+    }
+    gradle.ext.hassiumForgeOnlyJar = out.absolutePath
+    gradle.ext.hassiumForgeNamedJar = out.absolutePath   // 兼容旧变量名（R21 的 prepend 块仍读 named jar 路径）
+    return stripOut
+}
+
 // Forge 模块仅构建 1.20.1 / 1.20.6（1.21+ 已从 builds_for 移除）。
 // Forge 50+ / architectury-loom 开发环境 module path 冲突：
 // 1) loom#191：classpath 仅有 LWJGL natives → 服务端整段移除
@@ -179,7 +317,65 @@ afterEvaluate {
     if (forgeMajor < 50) {
         return
     }
-    tasks.matching { it.name.startsWith('run') }.configureEach { task ->
+    // forge 52+ SecureJarHandler duplicate-module: forge-universal.jar（Loom cache, ForgeUserdevLocator 注入游戏层）
+    // 与 minecraft-merged-patched.jar（task.classpath, MinecraftLocator 注入）同持 AMN=net.minecraftforge.forge。
+    // 两份后到者被 Ignoring duplicate；forge-universal 是 reobf srg 字节，Class.forName(module, "NoVizFallback")
+    // 在 named mapping 模块层下返回 null → ImmediateWindowHandler $DummyProvider / fmlearlywindow DisplayWindow
+    // .updateModuleReads 触发 NPE / IllegalStateException → 启动即崩。
+    // 修：剥 forge-universal.jar 的 AMN，使其成 unnamed module；merged-patched.jar（named，含 NoVizFallback 可反射）
+    // 独占 net.minecraftforge.forge 模块。server 不调 updateModuleReads 无害，client/真 provider 必须这一步。
+    def gradleUserHome = gradle.gradleUserHomeDir
+    def mcVer = gradle.ext.has('minecraft_version') ? (gradle.ext.minecraft_version as String) : (gradle.ext.has('mc_ver') ? (gradle.ext.mc_ver as String) : '')
+    def universalJar = new File(gradleUserHome, "caches/fabric-loom/${mcVer}/forge/${mcVer}-${forgeLoader}/forge-universal.jar")
+    gradle.ext.hassiumUniversalJar = universalJar.absolutePath
+    if (universalJar.exists() && forgeMajor >= 52) {
+        try {
+            def repr = "${universalJar.absolutePath}|${universalJar.lastModified()}|${universalJar.length()}"
+            def outJar = new File(layout.buildDirectory.dir('patched-forge-universal').get().asFile, universalJar.name)
+            def stamp = new File(outJar.parentFile, outJar.name + '.stamp')
+            outJar.parentFile.mkdirs()
+            if (!(outJar.exists() && stamp.exists() && stamp.text.trim() == repr)) {
+                def sigNames = ['META-INF/FORGE.SF', 'META-INF/FORGE.RSA', 'META-INF/FORGE.DSA', 'META-INF/FORGE.EC', 'META-INF/SIGNATURE.SF', 'META-INF/SIGNATURE.RSA', 'META-INF/SIGNATURE.DSA', 'META-INF/SIGNATURE.EC'] as Set
+                outJar.withOutputStream { fos ->
+                    def zos = new ZipOutputStream(fos)
+                    universalJar.withInputStream { fis ->
+                        def zis = new ZipInputStream(fis)
+                        ZipEntry entry
+                        while ((entry = zis.nextEntry) != null) {
+                            if (sigNames.contains(entry.name)) {
+                                zis.closeEntry()
+                                continue
+                            }
+                            if (entry.name == 'META-INF/MANIFEST.MF') {
+                                def mf = new Manifest(zis)
+                                def amnName = new java.util.jar.Attributes.Name('Automatic-Module-Name')
+                                if (mf.mainAttributes.getValue(amnName) == null) {
+                                    mf.mainAttributes.putValue('Automatic-Module-Name', 'net.minecraftforge.forge')
+                                }
+                                zos.putNextEntry(new ZipEntry(entry.name))
+                                mf.write(zos)
+                                zos.closeEntry()
+                            } else if (!entry.isDirectory()) {
+                                zos.putNextEntry(new ZipEntry(entry.name))
+                                zis.transferTo(zos)
+                                zos.closeEntry()
+                            }
+                            zis.closeEntry()
+                        }
+                        zis.close()
+                    }
+                    zos.close()
+                }
+                stamp.text = repr
+            }
+            // 直接覆盖 loom cache 中的 forge-universal.jar（loom 不按 AMN/签名校验重建）
+            ant.copy(file: outJar.absolutePath, tofile: universalJar.absolutePath, overwrite: true)
+            println "Injected Automatic-Module-Name=net.minecraftforge.forge (and stripped signatures) into forge-universal.jar: ${universalJar.name}"
+        } catch (Exception e) {
+            println "WARN: failed to inject forge-universal.jar AMN: ${e.message}"
+        }
+    }
+        tasks.matching { it.name.startsWith('run') }.configureEach { task ->
         if (!task.hasProperty('classpath')) {
             return
         }
@@ -197,10 +393,46 @@ afterEvaluate {
             if (path.contains('/com.google.guava/guava/') && file.name.contains('guava-32')) {
                 return hassiumStripGuavaAmn(file)
             }
+            // 剥 merge jar 的 AMN（避免与 forge mod 重复命名），同时产出一份仅含 forge classes 的精简 jar
+            // (hassium-forge-only.jar, 保留 AMN=net.minecraftforge.forge)，路径存 gradle.ext.hassiumForgeOnlyJar。
+            // client 端 prepend 精简 jar 到 task.classpath：让 ForgeUserdevLocator.getPathFromResource(MinecraftForge.class)
+            // 先命中它（仅 forge packages，不含 Minecraft.class/DontObfuscate.class），由此创建的 forge mod 名为
+            // net.minecraftforge.forge、packages 仅 net.minecraftforge.*（不含 net.minecraft.*），不与 minecraft
+            // 模块重复 export。详见 hassiumExtractForgeOnlyJar 注释。返回 strip'd merged jar 供 mcjar 使用。
+            if (file.name.contains('forge-') && file.name.contains('minecraft-merged') && !file.name.contains('-sources')) {
+                return hassiumExtractForgeOnlyJar(file)
+            }
             return file
         }
         task.classpath = project.files(rewritten)
 
+        // client 关键：把 hassium-forge-only.jar 精简版（只含 forge classes + mods.toml + AMN=net.minecraftforge.forge）
+        // 前置到 task.classpath。ForgeUserdevLocator.getPathFromResource(MinecraftForge.class) 先命中它（仅 forge 包），
+        // 由此 forge mod 模块名=net.minecraftforge.forge、packages 仅 net.minecraftforge.*；
+        // 同时 ForgeDevLaunchHandler.getPathFromResource(Minecraft.class) 与 ClasspathLocator.getPathFromResource(DontObfuscate.class)
+        // 均命中 strip'd merged jar（forge-only 不含 mc 类）→ minecraft 路径一致 → ClasspathLocator 跳过 merged jar mods.toml，
+        // 不会额外创建 module 'forge'（packages 全套 → 与 minecraft 重复 export 触发 ResolutionException）。
+        if (!server) {
+            def onlyPath = gradle.ext.has('hassiumForgeOnlyJar') ? (gradle.ext.hassiumForgeOnlyJar as String) : null
+            def onlyJar = onlyPath ? new File(onlyPath) : null
+            if (onlyJar == null || !onlyJar.exists()) {
+                println "WARN: hassium-forge-only jar not found (merged not prepped?), skipping prepend"
+            } else {
+                println "HASSIUM_DEBUG prepending hassium-forge-only jar to classpath: ${onlyJar.absolutePath}"
+                task.classpath = project.files(onlyJar) + task.classpath
+            }
+        }
+
+        task.doFirst {
+            // DIAG: print task.classpath files containing forge-universal or merged
+            println 'HASSIUM_DEBUG task.classpath files (forge-related):'
+            task.classpath.files.each { f ->
+                def n = f.name
+                if (n.contains('forge-universal') || n.contains('minecraft-merged') || (n.contains('forge-') && n.toLowerCase().contains('forge'))) {
+                    println '  ' + f.absolutePath
+                }
+            }
+        }
         task.doFirst {
             // IDEA/Loom 会把 out/production 写进 MOD_CLASSES；Gradle 输出只在 build/。
             def modClasses = environment.get('MOD_CLASSES')
@@ -216,4 +448,3 @@ afterEvaluate {
         }
     }
 }
-
