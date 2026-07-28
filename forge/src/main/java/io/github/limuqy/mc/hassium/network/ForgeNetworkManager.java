@@ -201,6 +201,54 @@ public class ForgeNetworkManager implements NetworkManager {
                 java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT)
         );
 
+        CHANNEL.<LightDeltaWrapper>registerMessage(
+                packetId++,
+                LightDeltaWrapper.class,
+                LightDeltaWrapper::encode,
+                LightDeltaWrapper::decode,
+                (msg, ctx) -> {
+                    ctx.get().enqueueWork(() -> handleLightDelta(msg));
+                    ctx.get().setPacketHandled(true);
+                },
+                java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT)
+        );
+
+        CHANNEL.<DictionarySyncWrapper>registerMessage(
+                packetId++,
+                DictionarySyncWrapper.class,
+                DictionarySyncWrapper::encode,
+                DictionarySyncWrapper::decode,
+                (msg, ctx) -> {
+                    ctx.get().enqueueWork(() -> handleDictionarySyncClient(msg.data()));
+                    ctx.get().setPacketHandled(true);
+                },
+                java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT)
+        );
+
+        CHANNEL.<IndexSyncWrapper>registerMessage(
+                packetId++,
+                IndexSyncWrapper.class,
+                IndexSyncWrapper::encode,
+                IndexSyncWrapper::decode,
+                (msg, ctx) -> {
+                    ctx.get().enqueueWork(() -> handleIndexSyncClient(msg.data()));
+                    ctx.get().setPacketHandled(true);
+                },
+                java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT)
+        );
+
+        CHANNEL.<CompressionReadyWrapper>registerMessage(
+                packetId++,
+                CompressionReadyWrapper.class,
+                CompressionReadyWrapper::encode,
+                CompressionReadyWrapper::decode,
+                (msg, ctx) -> {
+                    ctx.get().enqueueWork(() -> handleCompressionReadyServer(ctx.get().getSender(), msg.ready()));
+                    ctx.get().setPacketHandled(true);
+                },
+                java.util.Optional.of(NetworkDirection.PLAY_TO_SERVER)
+        );
+
         LOGGER.info("Hassium: Registered {} network packets", packetId);
     }
 #else
@@ -227,6 +275,9 @@ public class ForgeNetworkManager implements NetworkManager {
                         .addMain(BlockEntityRequestWrapper.class,
                                 playCodec(BlockEntityRequestWrapper::encode, BlockEntityRequestWrapper::decode),
                                 ForgeNetworkManager::onBlockEntityRequest)
+                        .addMain(CompressionReadyWrapper.class,
+                                playCodec(CompressionReadyWrapper::encode, CompressionReadyWrapper::decode),
+                                ForgeNetworkManager::onCompressionReady)
                     .clientbound()
                         .addMain(HandshakeResponsePacket.class,
                                 playCodec(HandshakeResponsePacket::encode, HandshakeResponsePacket::decode),
@@ -241,9 +292,16 @@ public class ForgeNetworkManager implements NetworkManager {
                         .addMain(BlockEntityDataWrapper.class,
                                 playCodec(BlockEntityDataWrapper::encode, BlockEntityDataWrapper::decode),
                                 ForgeNetworkManager::onBlockEntityData)
+                        .addMain(LightDeltaWrapper.class, playCodec(LightDeltaWrapper::encode, LightDeltaWrapper::decode),
+                                ForgeNetworkManager::onLightDelta)
+                        .addMain(DictionarySyncWrapper.class,
+                                playCodec(DictionarySyncWrapper::encode, DictionarySyncWrapper::decode),
+                                ForgeNetworkManager::onDictionarySync)
+                        .addMain(IndexSyncWrapper.class, playCodec(IndexSyncWrapper::encode, IndexSyncWrapper::decode),
+                                ForgeNetworkManager::onIndexSync)
                 .build();
 
-        LOGGER.info("Hassium: Registered Forge 50+ ChannelBuilder play channel (4 C2S + 5 S2C)");
+        LOGGER.info("Hassium: Registered Forge 50+ ChannelBuilder play channel (5 C2S + 8 S2C)");
     }
 
     private static <M> StreamCodec<RegistryFriendlyByteBuf, M> playCodec(
@@ -292,6 +350,22 @@ public class ForgeNetworkManager implements NetworkManager {
         handleBlockEntityData(msg);
     }
 
+    private static void onLightDelta(LightDeltaWrapper msg, CustomPayloadEvent.Context ctx) {
+        handleLightDelta(msg);
+    }
+
+    private static void onDictionarySync(DictionarySyncWrapper msg, CustomPayloadEvent.Context ctx) {
+        handleDictionarySyncClient(msg.data());
+    }
+
+    private static void onIndexSync(IndexSyncWrapper msg, CustomPayloadEvent.Context ctx) {
+        handleIndexSyncClient(msg.data());
+    }
+
+    private static void onCompressionReady(CompressionReadyWrapper msg, CustomPayloadEvent.Context ctx) {
+        handleCompressionReadyServer(ctx.getSender(), msg.ready());
+    }
+
     private static void sendToPlayer(ServerPlayer player, Object msg) {
         if (CHANNEL == null) {
             LOGGER.warn("Hassium: CHANNEL not registered, drop packet to {}", player.getName().getString());
@@ -307,6 +381,8 @@ public class ForgeNetworkManager implements NetworkManager {
         }
         CHANNEL.send(msg, PacketDistributor.SERVER.noArg());
     }
+#endif
+
     // ========== 辅助方法 ==========
 
     /**
@@ -361,43 +437,20 @@ public class ForgeNetworkManager implements NetworkManager {
                 useGlobalCompression,
                 useCompactHeader
         );
-        // 暂停出站压缩后延迟切 ZSTD（Forge 无 CompressionReady ACK；未压缩帧窗口保证安全）
+        // 暂停出站压缩，等客户端 CompressionReady ACK 后再切 ZSTD（与 Fabric/NeoForge 对齐）
         if (useGlobalCompression) {
             DictionaryManager.init();
             IndexSyncManager.getInstance().initializeServerIndex();
             Connection connection = getPlayerConnection(player);
-            Channel channel = connection != null ? getConnectionChannel(connection) : null;
+            io.netty.channel.Channel channel = connection != null ? getConnectionChannel(connection) : null;
             if (channel != null) {
-                int level = HassiumConfigService.getInstance().getGlobalCompressionLevel();
-                int threshold = HassiumConfigService.getInstance().getGlobalCompressionThreshold();
-                var server = io.github.limuqy.mc.hassium.compat.PlayerCompat.getMinecraftServer(player);
                 ZstdPipelineSwitcher.pauseOutboundCompression(channel);
-                channel.eventLoop().schedule(() -> {
-                    ZstdPipelineSwitcher.switchToZstdWhenReady(channel, threshold, level, () -> {
-                        ZstdNegotiationTracker.markNegotiated(channel);
-                        Runnable afterSwitch = () -> {
-                            sendDictionarySyncPacket(player);
-                            sendIndexSyncPacket(player);
-                            if (connection != null) {
-                                HassiumConnectionRegistry.markPending(connection);
-                                HassiumAggregationManager.init();
-                            }
-                            // 与 Fabric/NeoForge 对齐：ZSTD 就绪后补发视距内 chunkHash
-                            ServerChunkPushManager.getInstance().resyncTrackedChunks(player);
-                        };
-                        if (server != null) {
-                            server.execute(afterSwitch);
-                        } else {
-                            afterSwitch.run();
-                        }
-                    });
-                }, 500, java.util.concurrent.TimeUnit.MILLISECONDS);
             }
         }
         reply.accept(response);
         LOGGER.info("Hassium: Server handshake for {}: accepted={}, globalCompression={}, compactHeader={}",
                 player.getName().getString(), accepted, useGlobalCompression, useCompactHeader);
-        // globalCompression=false 时不会走延迟 ZSTD 路径，直接补发 chunkHash
+        // globalCompression=false 时不会走 CompressionReady→ZSTD 路径，直接补发 chunkHash
         if (accepted && !useGlobalCompression) {
             ServerChunkPushManager.getInstance().resyncTrackedChunks(player);
         }
@@ -410,17 +463,95 @@ public class ForgeNetworkManager implements NetworkManager {
             var mc = net.minecraft.client.Minecraft.getInstance();
             var conn = mc.getConnection();
             if (conn != null) {
-                Channel channel = getConnectionChannel(conn.getConnection());
+                io.netty.channel.Channel channel = getConnectionChannel(conn.getConnection());
                 if (channel != null) {
                     int level = HassiumConfigService.getInstance().getGlobalCompressionLevel();
                     int threshold = HassiumConfigService.getInstance().getGlobalCompressionThreshold();
+                    // 安装成功后再 markNegotiated + 暂停出站 + ACK：
+                    // 服务端仍为 zlib 解码器，客户端大包若立刻 ZSTD 压缩会触发 incorrect header check。
+                    // 出站阈值抬到 MAX，Ready/握手窗口内只发未压缩帧；IndexSync 后再恢复阈值。
                     ZstdPipelineSwitcher.switchToZstdWhenReady(channel, threshold, level, () -> {
                         ZstdNegotiationTracker.markNegotiated(channel);
-                        LOGGER.info("Hassium: Client ZSTD pipeline installed");
+                        ZstdPipelineSwitcher.pauseOutboundCompression(channel);
+                        sendCompressionReadyToServer();
+                        LOGGER.info("Hassium: Client ZSTD pipeline installed, sent ready ACK (outbound paused)");
                     });
                 }
             }
         }
+    }
+
+    /**
+     * 服务端在收到客户端 ZSTD ready ACK 后安装管线并同步 Dict/Index/chunkHash。
+     */
+    private static void installServerZstdAfterClientReady(
+            ServerPlayer player, Connection connection, io.netty.channel.Channel channel) {
+        int level = HassiumConfigService.getInstance().getGlobalCompressionLevel();
+        int threshold = HassiumConfigService.getInstance().getGlobalCompressionThreshold();
+        ZstdPipelineSwitcher.switchToZstdWhenReady(channel, threshold, level, () -> {
+            ZstdNegotiationTracker.markNegotiated(channel);
+            var server = io.github.limuqy.mc.hassium.compat.PlayerCompat.getMinecraftServer(player);
+            Runnable afterSwitch = () -> {
+                sendDictionarySyncPacket(player);
+                sendIndexSyncPacket(player);
+                ServerChunkPushManager.getInstance().resyncTrackedChunks(player);
+                if (connection != null) {
+                    HassiumConnectionRegistry.markPending(connection);
+                    HassiumAggregationManager.init();
+                    schedulePendingTimeout(connection, player.getName().getString());
+                }
+            };
+            if (server != null) {
+                server.execute(afterSwitch);
+            } else {
+                afterSwitch.run();
+            }
+            LOGGER.info("Hassium: Server ZSTD pipeline installed for {}", player.getName().getString());
+        });
+    }
+
+    private static void handleCompressionReadyServer(ServerPlayer player, boolean ready) {
+        if (!ready || player == null) {
+            return;
+        }
+        Connection connection = getPlayerConnection(player);
+        io.netty.channel.Channel channel = connection != null ? getConnectionChannel(connection) : null;
+        // 第一次 ready：客户端已装 ZSTD → 服务端切管线并同步 Dict/Index
+        if (channel != null && !ZstdPipelineSwitcher.isZstdInstalled(channel)) {
+            installServerZstdAfterClientReady(player, connection, channel);
+            return;
+        }
+        // 第二次 ready：IndexSync 已处理 → 启用聚合
+        if (connection != null) {
+            HassiumConnectionRegistry.markEnabled(connection);
+            HassiumAggregationManager.flushConnection(connection);
+            LOGGER.debug("Hassium: Marked connection ENABLED for {}", player.getName().getString());
+        }
+    }
+
+    private static void sendCompressionReadyToServer() {
+        try {
+#if MC_VER < MC_1_20_2
+            CHANNEL.sendToServer(new CompressionReadyWrapper(true));
+#else
+            sendToServer(new CompressionReadyWrapper(true));
+#endif
+        } catch (Exception e) {
+            LOGGER.error("Hassium: Failed to send compression ready", e);
+        }
+    }
+
+    private static void schedulePendingTimeout(Connection connection, String playerName) {
+        java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "Hassium-PendingTimeout");
+            t.setDaemon(true);
+            return t;
+        }).schedule(() -> {
+            if (HassiumConnectionRegistry.tryDemoteFromPending(connection)) {
+                HassiumAggregationManager.discardConnection(connection);
+                LOGGER.warn("Hassium: Ack timeout for {}, disabling aggregation", playerName);
+            }
+        }, 5, java.util.concurrent.TimeUnit.SECONDS);
     }
 
     private static void handleCompressedPayload(CompressedPayloadWrapper msg) {
@@ -498,6 +629,16 @@ public class ForgeNetworkManager implements NetworkManager {
             ClientMetadataHandler.handleBlockEntityDataPacket(packet);
         } catch (Exception e) {
             LOGGER.error("Hassium: Failed to handle block entity data packet", e);
+        }
+    }
+
+    private static void handleLightDelta(LightDeltaWrapper msg) {
+        try {
+            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data()));
+            LightDeltaS2CPacket packet = LightDeltaS2CPacket.decode(buf);
+            ClientMetadataHandler.handleLightDeltaPacket(packet);
+        } catch (Exception e) {
+            LOGGER.error("Hassium: Failed to handle light delta packet", e);
         }
     }
 
@@ -817,20 +958,62 @@ public class ForgeNetworkManager implements NetworkManager {
         }
     }
 
+    public record DictionarySyncWrapper(byte[] data) {
+        public void encode(FriendlyByteBuf buf) {
+            buf.writeVarInt(data.length);
+            buf.writeBytes(data);
+        }
+
+        public static DictionarySyncWrapper decode(FriendlyByteBuf buf) {
+            int length = buf.readVarInt();
+            byte[] data = new byte[length];
+            buf.readBytes(data);
+            return new DictionarySyncWrapper(data);
+        }
+    }
+
+    public record IndexSyncWrapper(byte[] data) {
+        public void encode(FriendlyByteBuf buf) {
+            buf.writeVarInt(data.length);
+            buf.writeBytes(data);
+        }
+
+        public static IndexSyncWrapper decode(FriendlyByteBuf buf) {
+            int length = buf.readVarInt();
+            byte[] data = new byte[length];
+            buf.readBytes(data);
+            return new IndexSyncWrapper(data);
+        }
+    }
+
+    public record CompressionReadyWrapper(boolean ready) {
+        public void encode(FriendlyByteBuf buf) {
+            buf.writeBoolean(ready);
+        }
+
+        public static CompressionReadyWrapper decode(FriendlyByteBuf buf) {
+            return new CompressionReadyWrapper(buf.readBoolean());
+        }
+    }
 
     private static void sendDictionarySyncPacket(ServerPlayer player) {
         try {
             byte[] aggregationDict = DictionaryManager.getAggregationDict();
-            if (aggregationDict != null && aggregationDict.length > 0) {
-                DictionarySyncPayload payload = new DictionarySyncPayload(aggregationDict, false);
-                FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
-                payload.encode(buf);
-                byte[] data = new byte[buf.readableBytes()];
-                buf.readBytes(data);
-                buf.release();
-                sendToPlayer(player, new CompressedPayloadWrapper(data));
-                LOGGER.debug("Hassium: Sent dictionary sync packet ({} bytes)", aggregationDict.length);
+            if (aggregationDict == null) {
+                aggregationDict = new byte[0];
             }
+            DictionarySyncPayload payload = new DictionarySyncPayload(aggregationDict, false);
+            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
+            payload.encode(buf);
+            byte[] data = new byte[buf.readableBytes()];
+            buf.readBytes(data);
+            buf.release();
+#if MC_VER < MC_1_20_2
+            CHANNEL.sendTo(new DictionarySyncWrapper(data), player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
+#else
+            sendToPlayer(player, new DictionarySyncWrapper(data));
+#endif
+            LOGGER.debug("Hassium: Sent dictionary sync packet ({} bytes)", aggregationDict.length);
         } catch (Exception e) {
             LOGGER.error("Hassium: Failed to send dictionary sync packet", e);
         }
@@ -839,19 +1022,65 @@ public class ForgeNetworkManager implements NetworkManager {
     private static void sendIndexSyncPacket(ServerPlayer player) {
         try {
             IndexSyncManager indexSyncManager = IndexSyncManager.getInstance();
-            NamespaceIndexManager indexManager = indexSyncManager.getServerIndexManager();
-            IndexSyncPacket syncPacket = indexManager.createSyncPacket();
-            byte[] data = syncPacket.encode();
+            indexSyncManager.initializeServerIndex();
+            IndexSyncPacket syncPacket = indexSyncManager.createSyncPacket();
+            byte[] encoded = syncPacket.encode();
             FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
-            buf.writeVarInt(data.length);
-            buf.writeBytes(data);
-            byte[] wrapperData = new byte[buf.readableBytes()];
-            buf.readBytes(wrapperData);
+            buf.writeVarInt(encoded.length);
+            buf.writeBytes(encoded);
+            byte[] data = new byte[buf.readableBytes()];
+            buf.readBytes(data);
             buf.release();
-            sendToPlayer(player, new CompressedPayloadWrapper(wrapperData));
-            LOGGER.debug("Hassium: Sent index sync packet ({} bytes)", data.length);
+#if MC_VER < MC_1_20_2
+            CHANNEL.sendTo(new IndexSyncWrapper(data), player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
+#else
+            sendToPlayer(player, new IndexSyncWrapper(data));
+#endif
+            LOGGER.debug("Hassium: Sent index sync packet ({} bytes)", encoded.length);
         } catch (Exception e) {
             LOGGER.error("Hassium: Failed to send index sync packet", e);
+        }
+    }
+
+    private static void handleDictionarySyncClient(byte[] data) {
+        try {
+            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(data));
+            DictionarySyncPayload payload = DictionarySyncPayload.decode(buf);
+            DictionaryManager.setAggregationDict(payload.dictionary());
+            LOGGER.debug("Hassium: Received aggregation dictionary ({} bytes)",
+                    payload.dictionary() != null ? payload.dictionary().length : 0);
+        } catch (Exception e) {
+            LOGGER.error("Hassium: Failed to handle dictionary sync", e);
+        }
+    }
+
+    private static void handleIndexSyncClient(byte[] data) {
+        try {
+            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(data));
+            int dataLength = buf.readVarInt();
+            byte[] packetData = new byte[dataLength];
+            buf.readBytes(packetData);
+            IndexSyncPacket syncPacket = IndexSyncPacket.decode(packetData);
+            IndexSyncManager indexSyncManager = IndexSyncManager.getInstance();
+            NamespaceIndexManager clientIndexManager = indexSyncManager.handleSyncPacket("client", syncPacket);
+
+            var conn = net.minecraft.client.Minecraft.getInstance().getConnection();
+            if (conn != null) {
+                Connection connection = conn.getConnection();
+                HassiumConnectionRegistry.markEnabled(connection);
+                HassiumAggregationManager.init();
+                // 服务端已装 ZSTD（才能发来 IndexSync），恢复客户端出站压缩阈值
+                io.netty.channel.Channel channel = getConnectionChannel(connection);
+                if (channel != null) {
+                    int threshold = HassiumConfigService.getInstance().getGlobalCompressionThreshold();
+                    ZstdPipelineSwitcher.setOutboundCompressionThreshold(channel, threshold);
+                }
+                sendCompressionReadyToServer();
+            }
+            LOGGER.debug("Hassium: Received index sync ({} types), sent compression ready",
+                    clientIndexManager.size());
+        } catch (Exception e) {
+            LOGGER.error("Hassium: Failed to handle index sync", e);
         }
     }
 }

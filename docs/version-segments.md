@@ -168,10 +168,21 @@ MC_1_21_11
 
 ---
 
-## 附录：九段适配状态（2026-07-19）
+## 附录：九段适配状态（2026-07-28）
 
 **九段适配已全部完成。** 关键运行时回归：1.20.1 / 1.20.5 / 1.21.1 / 1.21.11 通过。  
 多 Mod 冒烟（Fabric 1.20.1 优化包 + C2ME）见 [`mod-compat.md`](mod-compat.md) §11。
+
+### Forge 1.20.6 重新兼容（2026-07-28）
+
+Forge 1.20.6（段 C 段尾）此前因 kcp-netty 依赖未接入与 `ForgeNetworkManager` 的 Manifold `#endif` 缺失等问题从 `builds_for` 暂时移除，今已重新兼容并通过 `forge:compileJava -Pmc_ver=1.20.6`。修复点：
+
+- `versionProperties/1.20.6.properties`：`builds_for` 恢复 `fabric,neoforge,forge`
+- `ForgeNetworkManager.java`：补齐 89 行 `#if MC_VER < MC_1_20_2` 块缺失的 `#endif`（1.20.6 走 `#else` 方暴露 EOF 报错，即当初"一直解决不了"的根因）；`Channel` 局部变量改 `io.netty.channel.Channel` 全限定名，避免与新 import 的 `net.minecraftforge.network.Channel` 歧义；`sendIndexSyncPacket` 改用 `IndexSyncManager.createSyncPacket()` 对齐 fabric/neoforge
+- `ForgeNetworkManagerService.java`：补 `sendLightDeltaPacket` 委托实现接口
+- `ForgeNetworkManager.java`：补齐 `LightDeltaWrapper` / `DictionarySyncWrapper` / `IndexSyncWrapper` / `CompressionReadyWrapper` 通道；握手改为与 Fabric/NeoForge 同构的 CompressionReady ACK（客户端装 ZSTD 后暂停出站，待 IndexSync 再恢复），修复重连 `incorrect header check` 断连
+- `forge/build.gradle`：移植 neoforge 的 `kcpIncoming` 配置 + `stripKcpNettyBootstrapPackage` 剥离任务，剥除 `io.netty.bootstrap.*` 后进 compile/game-layer/JiJ，规避 Forge 50+ SecureJarHandler 包占有冲突
+- `forge/build.gradle`：FCAP Forge JiJ 的 `mixinextras-forge`（内嵌 `MixinExtras`）与传递依赖 `mixinextras-common` 在 Forge 50 JPMS 下双模块同包导出 → `ResolutionException`；`stripFcapMixinExtrasJij` 剥除 FCAP 内嵌 JiJ，只保留单一 `mixinextras-common`
 
 | 段 | 锚点 | 状态 |
 |----|------|------|

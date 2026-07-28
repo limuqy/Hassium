@@ -17,6 +17,10 @@ sourceSets {
 
 configurations {
     library
+    // 原始 kcp 坐标；剥离 io.netty.bootstrap 后再进 game layer（见 stripKcpNettyBootstrapPackage）
+    kcpIncoming
+    // 原始 FCAP 坐标；剥除其 JiJ MixinExtras 后再进 classpath / include（见 stripFcapMixinExtrasJij）
+    fcapIncoming
 }
 // Keep these libs on the compile/shade classpath...
 configurations.implementation.extendsFrom(configurations.library)
@@ -26,6 +30,134 @@ configurations.minecraftLibraries.extendsFrom(configurations.library)
 // Also put them on the JVM runtime classpath so the Mixin transformer (modlauncher)
 // can resolve classes like ZstdDictCompress during transformation.
 configurations.minecraftRuntimeLibraries.extendsFrom(configurations.library)
+
+// common 的 implementation kcp 会经 project(':common') 透传；必须挡住未剥离副本，
+// 否则与 library 的剥离 jar 并存时，仍可能由未剥离 jar 抢占 io.netty.bootstrap。
+configurations.implementation {
+    exclude group: 'moe.sdl.kcp', module: 'kcp-netty'
+}
+configurations.runtimeClasspath {
+    exclude group: 'moe.sdl.kcp', module: 'kcp-netty'
+}
+
+/**
+ * kcp-netty 自带 {@code io.netty.bootstrap.UkcpServerBootstrap}，与 MC 的
+ * {@code Bootstrap}/{@code ServerBootstrap} 同包。Forge SecureJarHandler 的 PackageTracker
+ * 按「先到的 jar 独占包」处理——kcp 先占 {@code io.netty.bootstrap} 后，MC/mod 侧
+ * {@code Class.forName(Bootstrap)} 直接 ClassNotFoundException（vanilla TCP 监听也会挂）。
+ * Hassium 只用 {@code io.jpower.kcp.netty.Kcp}，不需要 Ukcp* Bootstrap；剥离整个 {@code io/netty/}。
+ */
+def hassiumStripKcpNettyBootstrap = { File src, File out ->
+    out.parentFile.mkdirs()
+    out.withOutputStream { fos ->
+        def zos = new ZipOutputStream(fos)
+        src.withInputStream { fis ->
+            def zis = new ZipInputStream(fis)
+            ZipEntry entry
+            while ((entry = zis.nextEntry) != null) {
+                if (entry.name.startsWith('io/netty/')) {
+                    zis.closeEntry()
+                    continue
+                }
+                if (!entry.isDirectory()) {
+                    zos.putNextEntry(new ZipEntry(entry.name))
+                    zis.transferTo(zos)
+                    zos.closeEntry()
+                }
+                zis.closeEntry()
+            }
+            zis.close()
+        }
+        zos.close()
+    }
+    return out
+}
+
+def patchedKcpJar = layout.buildDirectory.file('patched-kcp/kcp-netty-1.6.2-no-netty-bootstrap.jar')
+
+def stripKcpTask = tasks.register('stripKcpNettyBootstrapPackage') {
+    description = 'Strip io.netty.bootstrap.* from kcp-netty so Forge JPMS package ownership stays with MC Netty'
+    inputs.files(configurations.kcpIncoming)
+    outputs.file(patchedKcpJar)
+    doLast {
+        def src = configurations.kcpIncoming.files.find { it.name.startsWith('kcp-netty-') }
+        if (src == null) {
+            throw new GradleException("kcp-netty jar not found in kcpIncoming: ${configurations.kcpIncoming.files}")
+        }
+        def out = patchedKcpJar.get().asFile
+        def stamp = new File(out.parent, out.name + '.stamp')
+        def stampVal = "${src.canonicalPath}|${src.lastModified()}|${src.length()}"
+        if (out.exists() && stamp.exists() && stamp.text.trim() == stampVal) {
+            return
+        }
+        hassiumStripKcpNettyBootstrap(src, out)
+        stamp.text = stampVal
+    }
+}
+
+/**
+ * FCAP Forge 内嵌 {@code META-INF/jars/mixinextras-forge-*.jar}，而该 jar 又嵌
+ * {@code MixinExtras-*.jar}。JarInJarDependencyLocator 会把两层都展开成独立模块
+ * （{@code MixinExtras} + 传递依赖 {@code mixinextras.common}），Forge 50 JPMS 报
+ * 同包双导出 ResolutionException，dev / 生产均无法启动。
+ * 剥除 FCAP 的 JiJ 条目并清空 jarjar metadata，只保留 classpath 上单一的
+ * mixinextras-common。
+ */
+def hassiumStripFcapMixinExtrasJij = { File src, File out ->
+    out.parentFile.mkdirs()
+    out.withOutputStream { fos ->
+        def zos = new ZipOutputStream(fos)
+        src.withInputStream { fis ->
+            def zis = new ZipInputStream(fis)
+            ZipEntry entry
+            while ((entry = zis.nextEntry) != null) {
+                if (entry.name.startsWith('META-INF/jars/')) {
+                    zis.closeEntry()
+                    continue
+                }
+                if (entry.name == 'META-INF/jarjar/metadata.json') {
+                    zos.putNextEntry(new ZipEntry(entry.name))
+                    zos.write('{"jars":[]}'.getBytes('UTF-8'))
+                    zos.closeEntry()
+                    zis.closeEntry()
+                    continue
+                }
+                if (!entry.isDirectory()) {
+                    zos.putNextEntry(new ZipEntry(entry.name))
+                    zis.transferTo(zos)
+                    zos.closeEntry()
+                }
+                zis.closeEntry()
+            }
+            zis.close()
+        }
+        zos.close()
+    }
+    return out
+}
+
+def patchedFcapJar = layout.buildDirectory.file('patched-fcap/forgeconfigapiport-forge-no-mixinextras-jij.jar')
+
+def stripFcapTask = tasks.register('stripFcapMixinExtrasJij') {
+    description = 'Strip MixinExtras Jar-in-Jar from FCAP Forge to avoid Forge 50 JPMS duplicate package export'
+    onlyIf { gradle.ext.minecraft_version == '1.20.6' && gradle.ext.has('forge_config_api_port_version') }
+    inputs.files(configurations.fcapIncoming)
+    outputs.file(patchedFcapJar)
+    doLast {
+        def src = configurations.fcapIncoming.files.find { it.name.startsWith('forgeconfigapiport-forge-') }
+        if (src == null) {
+            throw new GradleException("FCAP forge jar not found in fcapIncoming: ${configurations.fcapIncoming.files}")
+        }
+        def out = patchedFcapJar.get().asFile
+        def stamp = new File(out.parentFile, out.name + '.stamp')
+        def stampVal = "${src.canonicalPath}|${src.lastModified()}|${src.length()}"
+        if (out.exists() && stamp.exists() && stamp.text.trim() == stampVal) {
+            return
+        }
+        hassiumStripFcapMixinExtrasJij(src, out)
+        stamp.text = stampVal
+    }
+}
 
 // Mixin AP 配置：禁用目标验证（architectury-loom 的 remapping 会在运行时处理）
 tasks.withType(JavaCompile).configureEach {
@@ -38,9 +170,29 @@ dependencies {
     library 'org.lz4:lz4-java:1.8.0'
     library 'com.google.code.findbugs:jsr305:3.0.1'
 
-    // 1.20.6：common Spec 使用 NeoForge ModConfigSpec，经 FCAP Forge 提供并 jiJ
+    // UDP 数据面 (KCP-over-UDP)；原始坐标仅用于剥离任务输入，
+    // 真正进 compile / game layer / JiJ 的是剥离后的 jar（避免 io.netty.bootstrap 包冲突）。
+    kcpIncoming('moe.sdl.kcp:kcp-netty:1.6.2') {
+        exclude group: 'io.netty'
+    }
+    // files(task) 会把 task outputs 挂到依赖图，compile/run 自动 dependsOn 剥离任务。
+    library files(stripKcpTask)
+    include files(stripKcpTask)
+
+    // 1.20.6：common Spec 使用 NeoForge ModConfigSpec，经 FCAP Forge 提供并 jiJ。
+    // FCAP 自带 JiJ mixinextras-forge（内嵌 MixinExtras-*.jar），同时 pom 又传递
+    // mixinextras-common → Forge 50 JPMS 双模块同包导出 ResolutionException。
+    // 剥除 FCAP 内嵌 JiJ，只保留单一 mixinextras-common。
     if (gradle.ext.minecraft_version == '1.20.6' && gradle.ext.has('forge_config_api_port_version')) {
-        implementation include("fuzs.forgeconfigapiport:forgeconfigapiport-forge:${gradle.ext.forge_config_api_port_version}")
+        fcapIncoming("fuzs.forgeconfigapiport:forgeconfigapiport-forge:${gradle.ext.forge_config_api_port_version}") {
+            exclude group: 'io.github.llamalad7', module: 'mixinextras-common'
+            exclude group: 'io.github.llamalad7', module: 'mixinextras-forge'
+        }
+        implementation files(stripFcapTask)
+        include files(stripFcapTask)
+        // 恢复原先 FCAP 传递的 common（单一副本，进 game layer + 生产 JiJ）
+        library 'io.github.llamalad7:mixinextras-common:0.3.5'
+        include 'io.github.llamalad7:mixinextras-common:0.3.5'
     }
 
     // Cloth Config：编译期需要；可选依赖，不 jiJ

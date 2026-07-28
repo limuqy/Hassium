@@ -95,7 +95,7 @@ Connection.send()
 |--------|------|
 | Fabric | 完整 ACK：`pause` → 客户端装 ZSTD + Ready → 服务端装 ZSTD → Dict/Index → PENDING → Ready 升 ENABLED |
 | NeoForge | 同 Fabric 主路径；`tryInstallClientZstdPipeline` / `installServerZstdAfterClientReady` |
-| Forge | **无 CompressionReady ACK**；握手后 `pause` + 延迟 `switchToZstdWhenReady`，装好后直接 Dict/Index + markPending + init；客户端 HandshakeS2C 后自行装管线 |
+| Forge | 与 Fabric 同构 ACK：`pause` → 客户端装 ZSTD（出站阈值 MAX）+ Ready → 服务端装 ZSTD → Dict/Index → PENDING → Ready 升 ENABLED；客户端收 IndexSync 后恢复出站阈值 |
 
 ### 关键时序工具
 

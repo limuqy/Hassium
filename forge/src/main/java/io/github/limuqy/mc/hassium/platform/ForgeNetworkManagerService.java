@@ -41,4 +41,8 @@ public class ForgeNetworkManagerService implements INetworkManagerService {
     public void sendBlockEntityData(ServerPlayer player, FriendlyByteBuf buf) {
         NETWORK_MANAGER.sendBlockEntityData(player, buf);
     }
+    @Override
+    public void sendLightDeltaPacket(ServerPlayer player, FriendlyByteBuf buf) {
+        NETWORK_MANAGER.sendLightDeltaPacket(player, buf);
+    }
 }
