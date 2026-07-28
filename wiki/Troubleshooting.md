@@ -24,7 +24,7 @@
 
 ## 调试日志开关
 
-`config/hassium/hassium-common.toml` 末尾的 `debug.*`：
+`config/hassium/hassium-client.toml` 或 `config/hassium/hassium-server.toml` 末尾的 `debug.*`：
 
 | 配置键 | 含义 |
 | --- | --- |

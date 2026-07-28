@@ -24,7 +24,7 @@ After starting the client or server, search `latest.log` for `Hassium`, `ERROR`,
 
 ## Debug toggles
 
-The `debug.*` block near the bottom of `config/hassium/hassium-common.toml`:
+The `debug.*` block near the bottom of `config/hassium/hassium-client.toml` or `config/hassium/hassium-server.toml`:
 
 | Key | Meaning |
 | --- | --- |

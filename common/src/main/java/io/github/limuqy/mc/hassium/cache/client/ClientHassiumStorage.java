@@ -21,7 +21,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * 热度索引（{@link ClientHeatIndex}）与 section 哈希（{@link SectionHashStore}）分离存储。
  * <p>
  * 目录结构：
- * - 配置：config/hassium/hassium-client.toml / config/hassium/hassium-common.toml
+ * - 配置：config/hassium/hassium-client.toml / config/hassium/hassium-server.toml
  * - 热度索引：config/hassium/heat.idx
  * - 缓存文件：hassium_cache/&lt;serverId&gt;/&lt;dimension&gt;/r.&lt;x&gt;.&lt;z&gt;.mca
  * - section 哈希：hassium_cache/&lt;serverId&gt;/&lt;dimension&gt;/section_hashes.bin
