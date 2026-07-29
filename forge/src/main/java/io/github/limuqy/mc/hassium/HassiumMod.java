@@ -5,7 +5,11 @@ import io.github.limuqy.mc.hassium.config.ForgeConfigRegistration;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.network.ChunkSender;
 import io.github.limuqy.mc.hassium.network.ForgeNetworkManager;
+#if MC_VER < MC_1_21_6
 import net.minecraftforge.eventbus.api.SubscribeEvent;
+#else
+import net.minecraftforge.eventbus.api.listener.SubscribeEvent;
+#endif
 import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.fml.event.config.ModConfigEvent;
 import net.minecraftforge.fml.event.lifecycle.FMLCommonSetupEvent;

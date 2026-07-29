@@ -1,8 +1,8 @@
+
 import java.util.jar.Manifest
 import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
-
 plugins {
     id 'loom-forge'
 }
@@ -190,6 +190,71 @@ def hassiumStripGuavaAmn = { File src ->
 }
 
 /**
+ * Forge 61+ 重映射时会遗漏 `ByteBufCodecs` 外层类及 Forge Items patch 引入的 `Items$1`。
+ * 同版本 vanilla named merged jar 提供 ByteBufCodecs；Items$1 则依据 Forge patch 的 SRG 签名直接生成，
+ * 以保留其对 Forge `BlockItem#m_6192_` 的覆盖。
+ */
+def hassiumFindVanillaNamedMergedJar = { File forgeNamedJar ->
+    def forgeSuffix = "-forge-${gradle.ext.minecraft_version}-${gradle.ext.forge_loader}"
+    def mappingDir = forgeNamedJar.parentFile.name.replace(forgeSuffix, '')
+    return new File(forgeNamedJar.parentFile.parentFile.parentFile,
+            "minecraft-merged/${mappingDir}/minecraft-merged-${mappingDir}.jar")
+}
+
+def hassiumForgeItemsAnonymousClass = { File forgeNamedJar ->
+    def outDir = layout.buildDirectory.dir('generated-forge-classes').get().asFile
+    def sourceDir = new File(outDir, 'source/net/minecraft/world/item')
+    def classFile = new File(outDir, 'classes/net/minecraft/world/item/Items$1.class')
+    def stamp = new File(outDir, 'Items$1.stamp')
+    def stampVal = "${forgeNamedJar.canonicalPath}|${forgeNamedJar.lastModified()}|${forgeNamedJar.length()}"
+    if (classFile.isFile() && stamp.isFile() && stamp.text.trim() == stampVal) {
+        return classFile
+    }
+    sourceDir.mkdirs()
+    def sourceFile = new File(sourceDir, 'Items$1.java')
+    sourceFile.text = '''package net.minecraft.world.item;
+
+import java.util.Map;
+import net.minecraft.world.level.block.Block;
+
+class Items$1 extends BlockItem {
+    private final Block[] blocks;
+
+    Items$1(Block block, Item.Properties properties, Block[] blocks) {
+        super(block, properties);
+        this.blocks = blocks;
+    }
+
+    @Override
+    public void registerBlocks(Map<Block, Item> map, Item self) {
+        super.registerBlocks(map, self);
+        for (Block block : blocks) {
+            map.put(block, self);
+        }
+    }
+}
+'''
+    def compiler = javax.tools.ToolProvider.systemJavaCompiler
+    if (compiler == null) {
+        throw new GradleException('JDK compiler is required to generate Forge Items$1')
+    }
+    classFile.parentFile.mkdirs()
+    def fileManager = compiler.getStandardFileManager(null, null, java.nio.charset.StandardCharsets.UTF_8)
+    try {
+        def units = fileManager.getJavaFileObjects(sourceFile)
+        def options = ['--release', '21', '-classpath', forgeNamedJar.absolutePath,
+                '-d', new File(outDir, 'classes').absolutePath]
+        if (!compiler.getTask(null, fileManager, null, options, null, units).call()) {
+            throw new GradleException('Failed to generate Forge Items$1 class')
+        }
+    } finally {
+        fileManager.close()
+    }
+    stamp.text = stampVal
+    return classFile
+}
+
+/**
  * 去掉 minecraft-merged-patched forge jar 的 Automatic-Module-Name（net.minecraftforge.forge）。
  * Loom 把 task.classpath 里的 merged jar 与 ForgeUserdevLocator 注入的 forge-universal.jar 同时
  * 送进 SecureModuleFinder → 后到的 merged jar 被 Ignoring duplicate 丢掉；但 forge-universal.jar
@@ -206,34 +271,69 @@ def hassiumStripMergedForgeAmn = { File src ->
     outDir.mkdirs()
     def out = new File(outDir, src.name)
     def stamp = new File(outDir, src.name + '.stamp')
-    def stampVal = "${src.canonicalPath}|${src.lastModified()}|${src.length()}"
+    File vanillaNamedJar = null
+    if (gradle.ext.has('forgeMajor') && (gradle.ext.forgeMajor as int) >= 61) {
+        vanillaNamedJar = hassiumFindVanillaNamedMergedJar(src)
+        if (!vanillaNamedJar.isFile()) {
+            throw new GradleException("Vanilla named merged jar was not generated: ${vanillaNamedJar}")
+        }
+    }
+    def stampVal = "items-anonymous-v1|${src.canonicalPath}|${src.lastModified()}|${src.length()}" +
+            (vanillaNamedJar == null ? '' : "|${vanillaNamedJar.canonicalPath}|${vanillaNamedJar.lastModified()}|${vanillaNamedJar.length()}")
     if (out.exists() && stamp.exists() && stamp.text.trim() == stampVal) {
+        gradle.ext.hassiumForgeMergedJar = out.absolutePath
+        gradle.ext.hassiumVanillaNamedJar = vanillaNamedJar?.absolutePath
         return out
     }
-    out.withOutputStream { fos ->
-        def zos = new ZipOutputStream(fos)
-        src.withInputStream { fis ->
-            def zis = new ZipInputStream(fis)
-            ZipEntry entry
-            while ((entry = zis.nextEntry) != null) {
-                if (entry.name == 'META-INF/MANIFEST.MF') {
-                    def mf = new Manifest(zis)
-                    mf.mainAttributes.remove(new java.util.jar.Attributes.Name('Automatic-Module-Name'))
-                    zos.putNextEntry(new ZipEntry(entry.name))
-                    mf.write(zos)
-                    zos.closeEntry()
-                } else if (!entry.isDirectory()) {
-                    zos.putNextEntry(new ZipEntry(entry.name))
-                    zis.transferTo(zos)
-                    zos.closeEntry()
+    def vanillaZip = vanillaNamedJar == null ? null : new java.util.zip.ZipFile(vanillaNamedJar)
+    try {
+        out.withOutputStream { fos ->
+            def zos = new ZipOutputStream(fos)
+            try {
+                src.withInputStream { fis ->
+                    def zis = new ZipInputStream(fis)
+                    ZipEntry entry
+                    while ((entry = zis.nextEntry) != null) {
+                        if (entry.name == 'META-INF/MANIFEST.MF') {
+                            def mf = new Manifest(zis)
+                            mf.mainAttributes.remove(new java.util.jar.Attributes.Name('Automatic-Module-Name'))
+                            zos.putNextEntry(new ZipEntry(entry.name))
+                            mf.write(zos)
+                            zos.closeEntry()
+                        } else if (entry.name == 'net/minecraft/network/codec/ByteBufCodecs.class' && vanillaZip != null) {
+                            def vanillaEntry = vanillaZip.getEntry(entry.name)
+                            if (vanillaEntry == null) {
+                                throw new GradleException("${entry.name} missing from vanilla named merged jar: ${vanillaNamedJar}")
+                            }
+                            zos.putNextEntry(new ZipEntry(entry.name))
+                            vanillaZip.getInputStream(vanillaEntry).transferTo(zos)
+                            zos.closeEntry()
+                        } else if (entry.name == 'net/minecraft/world/item/Items.class' && vanillaZip != null) {
+                            zos.putNextEntry(new ZipEntry(entry.name))
+                            zis.transferTo(zos)
+                            zos.closeEntry()
+                            zos.putNextEntry(new ZipEntry('net/minecraft/world/item/Items$1.class'))
+                            hassiumForgeItemsAnonymousClass(src).withInputStream { it.transferTo(zos) }
+                            zos.closeEntry()
+                        } else if (!entry.isDirectory()) {
+                            zos.putNextEntry(new ZipEntry(entry.name))
+                            zis.transferTo(zos)
+                            zos.closeEntry()
+                        }
+                        zis.closeEntry()
+                    }
+                    zis.close()
                 }
-                zis.closeEntry()
+            } finally {
+                zos.close()
             }
-            zis.close()
         }
-        zos.close()
+    } finally {
+        vanillaZip?.close()
     }
     stamp.text = stampVal
+    gradle.ext.hassiumForgeMergedJar = out.absolutePath
+    gradle.ext.hassiumVanillaNamedJar = vanillaNamedJar?.absolutePath
     return out
 }
 
@@ -322,6 +422,7 @@ def hassiumExtractForgeOnlyJar = { File src ->
 afterEvaluate {
     def forgeLoader = gradle.ext.has('forge_loader') ? (gradle.ext.forge_loader as String) : ''
     def forgeMajor = forgeLoader.tokenize('.')[0]?.isInteger() ? (forgeLoader.tokenize('.')[0] as int) : 0
+    gradle.ext.forgeMajor = forgeMajor
     if (forgeMajor < 50) {
         return
     }
@@ -336,6 +437,45 @@ afterEvaluate {
     def mcVer = gradle.ext.has('minecraft_version') ? (gradle.ext.minecraft_version as String) : (gradle.ext.has('mc_ver') ? (gradle.ext.mc_ver as String) : '')
     def universalJar = new File(gradleUserHome, "caches/fabric-loom/${mcVer}/forge/${mcVer}-${forgeLoader}/forge-universal.jar")
     gradle.ext.hassiumUniversalJar = universalJar.absolutePath
+    tasks.register('verifyForgeRuntimeByteBufCodecs') {
+        group = 'verification'
+        description = 'Verifies the actual Forge 61+ named runtime ByteBufCodecs outer class matches vanilla.'
+        dependsOn(tasks.named('configureLaunch'))
+        doLast {
+            if (forgeMajor < 61) {
+                return
+            }
+            tasks.named('runServer').get().classpath.files
+            def runtimePath = gradle.ext.has('hassiumForgeMergedJar') ? (gradle.ext.hassiumForgeMergedJar as String) : null
+            def vanillaPath = gradle.ext.has('hassiumVanillaNamedJar') ? (gradle.ext.hassiumVanillaNamedJar as String) : null
+            def runtimeJar = runtimePath == null ? null : new File(runtimePath)
+            def vanillaJar = vanillaPath == null ? null : new File(vanillaPath)
+            if (runtimeJar == null || vanillaJar == null || !runtimeJar.isFile() || !vanillaJar.isFile()) {
+                throw new GradleException("Forge named runtime jars were not prepared: runtime=${runtimeJar}, vanilla=${vanillaJar}")
+            }
+            def entryName = 'net/minecraft/network/codec/ByteBufCodecs.class'
+            def runtimeZip = new java.util.zip.ZipFile(runtimeJar)
+            def vanillaZip = new java.util.zip.ZipFile(vanillaJar)
+            try {
+                def runtimeEntry = runtimeZip.getEntry(entryName)
+                def vanillaEntry = vanillaZip.getEntry(entryName)
+                if (runtimeEntry == null || vanillaEntry == null) {
+                    throw new GradleException("${entryName} missing from Forge named runtime jars")
+                }
+                if (!java.util.Arrays.equals(runtimeZip.getInputStream(runtimeEntry).readAllBytes(),
+                        vanillaZip.getInputStream(vanillaEntry).readAllBytes())) {
+                    throw new GradleException("Forge runtime ${entryName} differs from matching vanilla named source")
+                }
+                def itemsAnonymousEntry = runtimeZip.getEntry('net/minecraft/world/item/Items$1.class')
+                if (itemsAnonymousEntry == null) {
+                    throw new GradleException('Forge runtime is missing Items$1.class required by the Forge Items patch')
+                }
+            } finally {
+                vanillaZip.close()
+                runtimeZip.close()
+            }
+        }
+    }
     if (universalJar.exists() && forgeMajor >= 52) {
         try {
             def repr = "${universalJar.absolutePath}|${universalJar.lastModified()}|${universalJar.length()}"
@@ -390,6 +530,7 @@ afterEvaluate {
         boolean server = task.name.toLowerCase().contains('server')
         def original = task.classpath
         // 显式依赖 classes：eager project.files([...]) 会丢掉 FileCollection 的编译依赖
+        task.dependsOn(tasks.named('verifyForgeRuntimeByteBufCodecs'))
         task.dependsOn(tasks.named('classes'))
         def rewritten = original.files.findAll { file ->
             def path = file.absolutePath.replace('\\', '/')

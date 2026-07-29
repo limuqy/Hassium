@@ -76,14 +76,14 @@ MC_1_21_11
 | 1.20.1 | fabric, forge, neoforge |
 | 1.20.2 | fabric, neoforge |
 | 1.20.5 | fabric, neoforge |
-| 1.21.1 | fabric, neoforge |
+| 1.21.1 | fabric, neoforge, forge |
 | 1.21.2 | fabric, neoforge |
-| 1.21.5 | fabric, neoforge |
+| 1.21.5 | fabric, neoforge, forge |
 | 1.21.6 | fabric, neoforge |
 | 1.21.9 | fabric, neoforge |
 | 1.21.11 | fabric, neoforge |
 
-> **Forge 仅支持 1.20.1 与 1.20.6**（段 A / 段 C 段尾）。**1.21+ 不构建 Forge**（Loom SecureJar / Automatic-Module-Name 冲突适配成本过高；1.21 请用 NeoForge）。
+> **Forge 支持 1.20.1 / 1.20.6 / 1.21.1 / 1.21.5**；**1.21.11 暂时搁置**（architectury-loom 在 merged jar 中 ByteBufCodecs$N inner class 与 `<clinit>` 调用签名全局错位，需 loom remap 链路级修复，详见附录「Forge 1.21.x 适配」）。其余 1.21.x 小版本不构建 Forge，1.21 请用 NeoForge。
 >
 > **Fabric 配置**：自管 toml + Cloth/Mod Menu，**不依赖 FCAP**。FCAP 仅 Forge 1.20.6 桥接保留。
 
@@ -162,7 +162,7 @@ MC_1_21_11
 - 不引入按版本的 Gradle source set / 子模块复制
 - 不追求每个小版本手测
 - 不在 `builds_for` 不含 forge 的版本上硬撑 Forge 网络
-- **不构建 Forge 1.21+**（已正式取消）
+- **不在 1.21.11 上构建 Forge**（暂时搁置，根因见附录「Forge 1.21.x 适配」）
 - **Fabric 不引入 FCAP**（自管 toml + Cloth）；不在 Forge 1.20.6 以外硬撑 FCAP
 - 不把 Identifier rename 散落到业务文件
 
@@ -188,6 +188,26 @@ Forge 1.20.6（段 C 段尾）此前因 kcp-netty 依赖未接入与 `ForgeNetwo
 |----|------|------|
 | A–I | 见上表 | 已完成 / 已联调 |
 
+### Forge 1.21.x 适配（1.21.1 / 1.21.5 通过；1.21.11 搁置）
+
+Forge 自 1.21.x 起仍为 Forge 风格 API，与 NeoForge 不兼容；Hassium 通过 `neoforge` 子项目以 `loom.platform = 'forge'` 覆盖承载 Forge 构建（Forge 仅 1.20.1 / 1.20.6 / 1.21.1 / 1.21.5 有 userdev）。
+
+**1.21.1（段 D，commit 1461705）**：`HassiumMod.java` 改用 `ForgeConfigRegistration.register(...)` + 原生 `ModConfigEvent`；forge-only jar prepend 策略（仅 forge packages + 资源 + AMN，不含 mc class）让 ClasspathLocator 不抢 minecraft 路径。
+
+**1.21.5（段 F，commit 6114071）**：`forge/build.gradle` 在 `cloth_config_version` major > 17 时跳过 `cloth-ui/src/main/java` srcDir（cloth-config-forge 18+ 缺失，反射探测 fallback）；`HassiumForgeConfigScreens` 改用反射调 `HassiumClothConfigScreen.create`；architectury-loom 1.13.469 `launch.cfg` 新增 `clientdataArgs` section 但 dev-launch-injector 0.2.1+build.8 `parseConfig` 只认 `Args`/`Properties` 后缀 → `IOException` pass-through → 客户端 args 丢失，`task.doFirst` 将 `clientdataArgs` 重命名为 `xclientdataArgs` 规避。
+
+**1.21.11（段 I，暂时搁置）**：`compileJava` + `@Mod` 迁移（EventBus 7 将 `SubscribeEvent` 从 `net.minecraftforge.eventbus.api` 移到 `.api.listener`，条件编译 `#if MC_VER < MC_1_21_6` 处理）已完成；**runServer 启动崩溃根因**为 architectury-loom 在 forge 1.21.11 merged jar 中 `ByteBufCodecs$N` inner class 与 `<clinit>` 调用签名全局错位：
+
+- `<clinit>` 期望 `ByteBufCodecs$11.<init>()V`（BYTE_ARRAY 无参 anon，vanilla 1.21.11 源码 L150 `new StreamCodec<ByteBuf,byte[]>(){...}` 无 `maxSize`），但 merged jar `$11` 是 `byte[]` `(int)` ctor + `val$maxSize` field（1.21.5 `byteArray(int)` 风格）
+- 修 `$11` 后崩 `ByteBufCodecs$20.<init>(int)`（`stringUtf8(int)` 期望 `(int)` anon），但 merged jar `$20` 是 `Vector3fc` `()` anon
+- vanilla obf `aam$N` 编号与 merged `ByteBufCodecs$N` 完全不一致；Forge `patches/.../codec/ByteBufCodecs.java.patch` 只改局部变量名（SRG `f_315847_` 等），不引入 `maxSize`/重排编号
+- 结论：系 loom SRG remap/merge 阶段混入 1.21.5 风格 inner class 布局导致，非 Forge userdev 自身 bug；需 loom remap 链路级修复或从 vanilla obf jar 重映射整套 `ByteBufCodecs$N.class` 覆盖 merged jar，逐个 ASM patch `$N` ctor 不可持续（编号会随上游重排再次错位）
+
+已落地但暂未激活的 1.21.11 forge 适配资产（保留在工作区，待 loom 侧修复后重新启用 `builds_for`）：
+
+- `forge/build.gradle`：`hassiumPatchByteBufCodecs11Ctor`（`forgeMajor >= 61` 时 ASM 给 `$11` 加 `<init>()V`，MAX_SIZE 让 encode/decode 不误报）、`hassiumStripMergedForgeAmn` / `hassiumExtractForgeOnlyJar`、`gradle.ext.forgeMajor`、`launch.cfg` clientdataArgs → xclientdataArgs doFirst
+- `HassiumMod.java`：`#if MC_VER < MC_1_21_6` 处理 EventBus 7 `SubscribeEvent` 包名迁移
+
 ### 客户端缓存跨版本策略（自段 F / 1.21.5）
 
 客户端区块缓存存的是当前 MC 的 chunk packet 线格式，**不保证跨 MC 大版本读写兼容**。
@@ -202,7 +222,10 @@ Forge 1.20.6（段 C 段尾）此前因 kcp-netty 依赖未接入与 `ForgeNetwo
 |---------|-------|
 | 1.20.1 | ✅ `builds_for` 含 forge |
 | 1.20.6 | ✅（段 C 段尾） |
-| 1.21+ | ❌ 使用 NeoForge |
+| 1.21.1 | ✅（Phase R pass，commit 1461705） |
+| 1.21.5 | ✅（Phase R pass，commit 6114071） |
+| 1.21.11 | ⏸ 暂时搁置（ByteBufCodecs$N inner-class 错位，见附录） |
+| 其余 1.21.x | ❌ 使用 NeoForge |
 
 ### Fabric / FCAP 配置策略
 
