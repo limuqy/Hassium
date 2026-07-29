@@ -70,41 +70,30 @@ jar {
 各端差异见 build.gradle 实际代码,要点:
 - **neoforge** (neoforge/build.gradle):删 L105 `include` 行,末尾加 jar shade 块。`library files(stripKcpTask)`
   保留(dev game-layer),common 透传 exclude 保留。
-- **forge** (forge/build.gradle):kcp 同款;另见七节。
+- **forge** (forge/build.gradle):kcp 同款(同节末尾 jar shade 块)。**FCAP 配套拆分已在合并回
+  master 时整段丢弃**(master config 重构已弃用 FCAP 路线),详见七节。
 - **fabric** (fabric/build.gradle):此前 kcp 在 `implementation`(零剥离零内嵌),现补完整剥离任务
   (`kcpIncoming`/`patchedKcpJar`/`stripKcpTask`)+ `implementation files(stripKcpTask)` + 末尾 jar 块。
   fabric 无 SecureJarHandler 本不强制剥离,但为三端一致并修暗错,统一走剥离版 shade。
 
-## 七、FCAP 连带问题(forge 1.20.6 同根问题)
+## 七、历史注:FCAP 曾触发同根问题(master 已弃用 FCAP 路线)
 
-forge 1.20.6 此前用 `include files(stripFcapTask)` 把 FCAP 剥离 jar(剔 MixinExtras JiJ)走 JiJ。
-它与 kcp 是同型裸 File artifact,**同样会触发** `NestableJarGenerationTask.from` 的 module-component
-校验错。此前没暴露是因为 kcp 在 include 序列里先被校验报错,挡住了 FCAP 那条路径;修完 kcp 后 FCAP
-错误立刻浮出(`forgeconfigapiport-forge-no-mixinextras-jij.jar which is not a module component`)。
+本卡点最初在 master-old 分支落地时,forge 1.20.6 段还用 `include files(stripFcapTask)` 把 FCAP
+剥离 jar(剔 MixinExtras JiJ)走 JiJ——与 kcp 同型裸 File artifact,同样会触发
+`NestableJarGenerationTask.from` 的 module-component 校验错。当时没暴露是因为 kcp 在 include
+序列里先被校验报错挡住了 FCAP 那条路径,修完 kcp 后 FCAP 错误立刻浮出
+(`forgeconfigapiport-forge-no-mixinextras-jij.jar which is not a module component`)。当时的修法
+与 kcp 同款:删 `include files(stripFcapTask)`,jar shade 块追加 1.20.6 条件段 shade FCAP 主类;
+`mixinextras-common` 的 `include`(有坐标)保留 JiJ。
 
-证 forge 端确用 FCAP:`forge/src/main/java/io/github/limuqy/mc/hassium/HassiumMod.java` 实调
-`fuzs.forgeconfigapiport.forge.api.neoforge.v4.NeoForgeConfigRegistry.INSTANCE.register(...)`,
-非废弃。与用户确认 FCAP 同款改 shade:
-- `implementation files(stripFcapTask)` 保留(dev game-layer);`include files(stripFcapTask)` 删。
-- jar shade 块追加条件段(仅 1.20.6 + `forge_config_api_port_version`):
+**但 master 分支已不再走 FCAP 路线**:config 重构(`bed6af6`/`e50fc43`/`926cfeb`/`dd54c9f` 等)
+改在 `forge/src/main/java/io/github/limuqy/mc/hassium/config/ForgeConfigRegistration.java` 直接
+实现配置注册,源码再无 `fuzs.forgeconfigapiport` / `NeoForgeConfigRegistry` 引用,build.gradle
+也无 `fcapIncoming`/`stripFcapTask`/`patchedFcapJar`/`mixinextras` 任何字样。把 master-old 合并回
+master 时故**整段丢弃 FCAP 增加/拆分**(冲突取 ours),只保留 kcp shade 主修复。合并后 forge 1.20.6
+产物实测 `META-INF/jars/` 为空(无 mixinextras JiJ),`builds_for=1.20.6` 仍正常升 `:build`。
 
-```groovy
-jar {
-    // ... kcp shade 块 ...
-    if (gradle.ext.has('minecraft_version') && gradle.ext.minecraft_version == '1.20.6'
-            && gradle.ext.has('forge_config_api_port_version')) {
-        dependsOn stripFcapTask
-        from(zipTree(patchedFcapJar.get().asFile)) {
-            exclude 'META-INF/jars/**'
-            exclude 'META-INF/jarjar/**'
-        }
-    }
-}
-```
-
-`mixinextras-common` 的 `include`(有坐标)Loom 仍接受,继续走 JiJ —— 即 FCAP 主类 shade 进主 jar,
-mixinextras-common 仍作独立 JiJ 内嵌,这恰符合源码注释"剥除 FCAP 内嵌 JiJ,只保留单一 mixinextras-common"
-的拆分设计,只是载体从"两个都 JiJ"变成"主类 shade + mixinextras-common JiJ"。
+本节留存作历史记录,说明这条"同根问题"曾存在及为何合并后消失,不再代表 master 当前状态。
 
 ## 八、实测验证(2026-07-29)
 
@@ -113,7 +102,7 @@ mixinextras-common 仍作独立 JiJ 内嵌,这恰符合源码注释"剥除 FCAP 
 | 段 | 命令 | 结果 | kcp 类 | io/netty 残留 | JiJ 剩余 |
 |---|---|---|---|---|---|
 | neoforge 1.20.1 | `neoforge:build -Pmc_ver=1.20.1` | **BUILD SUCCESSFUL** | 55 | 0 | 无(不走 JiJ) |
-| forge 1.20.6 | `forge:build -Pmc_ver=1.20.6` | **BUILD SUCCESSFUL** | 55 | 0 | `META-INF/jars/mixinextras-common-0.3.5.jar`(有坐标 JiJ) |
+| forge 1.20.6 | `forge:build -Pmc_ver=1.20.6` | **BUILD SUCCESSFUL** | 55 | 0 | 无(master 已弃 FCAP 路线,`META-INF/jars/` 实测为空) |
 | fabric 1.20.1 | `fabric:build -Pmc_ver=1.20.1` | **BUILD SUCCESSFUL** | 修缮前 0 → 修缮后 55 | 0 | night-config core/toml(JiJ) |
 
 fabric 暗错实证修复:`Kcp.class` 在 `io/jpower/kcp/netty/Kcp.class` 见到,玩家 UDP 数据面不再 `NoClassDefFoundError`。
