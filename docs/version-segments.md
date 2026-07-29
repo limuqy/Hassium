@@ -83,7 +83,7 @@ MC_1_21_11
 | 1.21.9 | fabric, neoforge |
 | 1.21.11 | fabric, neoforge |
 
-> **Forge 支持 1.20.1 / 1.20.6 / 1.21.1 / 1.21.5**；**1.21.11 暂时搁置**（architectury-loom 在 merged jar 中 ByteBufCodecs$N inner class 与 `<clinit>` 调用签名全局错位，需 loom remap 链路级修复，详见附录「Forge 1.21.x 适配」）。其余 1.21.x 小版本不构建 Forge，1.21 请用 NeoForge。
+> **Forge 支持 1.20.1 / 1.20.6 / 1.21.1 / 1.21.3 / 1.21.4 / 1.21.5 / 1.21.6 / 1.21.7 / 1.21.8 / 1.21.9 / 1.21.10**；**1.21.11 起 sunset**（architectury-loom 在 merged jar 重映射阶段打散 anonymous inner class `$N` 编号，outer class `<clinit>` 调用方与实际 class 文件名错位：loom 1.13.469 崩点在 `ByteBufCodecs$N`，loom 1.17.491（2026-07-29 验证 + Gradle 9.6.1）漂移到 `CompoundTag$N` 且 1.21.10 runServer 证实到 `Done`，root cause 同源未修复，详见附录「Forge 1.21.x 适配」）。**1.21.2 上游未发布 Forge userdev**（官方跳过），1.21.11 及后续不构建 Forge，1.21.x 请用 NeoForge。
 >
 > **Fabric 配置**：自管 toml + Cloth/Mod Menu，**不依赖 FCAP**。FCAP 仅 Forge 1.20.6 桥接保留。
 
@@ -203,6 +203,8 @@ Forge 自 1.21.x 起仍为 Forge 风格 API，与 NeoForge 不兼容；Hassium �
 - vanilla obf `aam$N` 编号与 merged `ByteBufCodecs$N` 完全不一致；Forge `patches/.../codec/ByteBufCodecs.java.patch` 只改局部变量名（SRG `f_315847_` 等），不引入 `maxSize`/重排编号
 - 结论：系 loom SRG remap/merge 阶段混入 1.21.5 风格 inner class 布局导致，非 Forge userdev 自身 bug；需 loom remap 链路级修复或从 vanilla obf jar 重映射整套 `ByteBufCodecs$N.class` 覆盖 merged jar，逐个 ASM patch `$N` ctor 不可持续（编号会随上游重排再次错位）
 
+**2026-07-29 loom 1.17.491 + Gradle 9.6.1 实测补充**：loom release notes 虽含 "Forge 1.21.x + 26.x support (#343/#349)"，但未根治 inner-class 重映射 bug——崩点从 `ByteBufCodecs$N`（loom 1.13.469）漂移到 `CompoundTag$2.<init>()V not found`（loom 1.17.491，崩于 `CustomData.<clinit>` → `CompoundTag.<clinit>` 链；javap 实证 merged jar 里 `CompoundTag$1` 是 `TagType$VariableSize` 真匿名、`CompoundTag$2` 是 `$SwitchMap$StreamTagVisitor$*` 合成类，`<clinit>` 字节码引用 `$2` 期望匿名但实际是合成，编号错位机制同 ByteBufCodecs）。对照实测 1.21.10 forge runServer（loom 1.17.491）到 `Done (0.293s)` 全 bootStrap 安然通过，证明 sunset 边界就在 1.21.10↔1.21.11，1.21.11 段 I CompoundTag API 重排触发该沉淀已久的 loom bug。Forge 兼容意愿低，不逐类打补丁；待 loom 上游修或 MC 26.x 自然绕开。
+
 已落地但暂未激活的 1.21.11 forge 适配资产（保留在工作区，待 loom 侧修复后重新启用 `builds_for`）：
 
 - `forge/build.gradle`：`hassiumPatchByteBufCodecs11Ctor`（`forgeMajor >= 61` 时 ASM 给 `$11` 加 `<init>()V`，MAX_SIZE 让 encode/decode 不误报）、`hassiumStripMergedForgeAmn` / `hassiumExtractForgeOnlyJar`、`gradle.ext.forgeMajor`、`launch.cfg` clientdataArgs → xclientdataArgs doFirst
@@ -224,7 +226,11 @@ Forge 自 1.21.x 起仍为 Forge 风格 API，与 NeoForge 不兼容；Hassium �
 | 1.20.6 | ✅（段 C 段尾） |
 | 1.21.1 | ✅（Phase R pass，commit 1461705） |
 | 1.21.5 | ✅（Phase R pass，commit 6114071） |
-| 1.21.11 | ⏸ 暂时搁置（ByteBufCodecs$N inner-class 错位，见附录） |
+| 1.21.3 / 1.21.4 | ✅ `builds_for` 含 forge（loom 1.17.491 `:forge:compileJava` 通过 2026-07-29） |
+| 1.21.6 / 1.21.7 / 1.21.8 / 1.21.9 | ✅ `builds_for` 含 forge（loom 1.17.491 `:forge:compileJava` 通过 2026-07-29） |
+| 1.21.10 | ✅ runServer `Done (0.293s)`（loom 1.17.491，2026-07-29） |
+| 1.21.11 | ⏸ sunset（CompoundTag$2 `<init>()` 错位，loom 1.17.491 同源未修，见附录） |
+| 1.21.2 | ❌ **上游未发布 Forge userdev**（官方跳过） |
 | 其余 1.21.x | ❌ 使用 NeoForge |
 
 ### Fabric / FCAP 配置策略
