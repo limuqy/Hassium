@@ -130,7 +130,9 @@ dependencies {
     }
     // files(task) 会把 task outputs 挂到依赖图，compile/run 自动 dependsOn 剥离任务。
     library files(stripKcpTask)
-    include files(stripKcpTask)
+    // 生产 jar 内嵌剥离版 kcp：不再用 include（Loom processIncludeJars 拒收裸 File
+    // artifact），改走 zstd-jni 同款 shade——见本文件末尾 jar {} 的 from(zipTree(patchedKcpJar)) 块。
+
 
 
     // Cloth Config：编译期需要；可选依赖，不 jiJ
@@ -617,5 +619,13 @@ afterEvaluate {
                 }
             }
         }
+    }
+}
+
+
+jar {
+    dependsOn stripKcpTask
+    from(zipTree(patchedKcpJar.get().asFile)) {
+        exclude 'META-INF/**'
     }
 }
