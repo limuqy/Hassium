@@ -101,8 +101,9 @@ dependencies {
     }
     // files(task) 会把 task outputs 挂到依赖图，compile/run 自动 dependsOn 剥离任务。
     library files(stripKcpTask)
-    // 生产 jar-in-jar 同样用剥离版，否则玩家侧 Forge 复现 Bootstrap CNFE。
-    include files(stripKcpTask)
+    // 生产 jar 内嵌剥离版 kcp：不再用 include（Loom processIncludeJars 拒收裸 File
+    // artifact），改走 zstd-jni 同款 shade——直接把剥离 jar 解包合并进主 jar 任务的产物。
+    // 见本文件末尾 jar {} 的 from(zipTree(patchedKcpJar)) 块。
 
     // Cloth Config：编译期需要；可选依赖，不 jiJ
     if (gradle.ext.has('cloth_config_version')) {
@@ -117,4 +118,16 @@ dependencies {
 tasks.withType(JavaCompile).configureEach {
     options.compilerArgs.add('-Arequires=0')
     options.compilerArgs.add('-AdefaultObfuscationEnv=mojang')
+}
+
+// 生产 jar 内嵌剥离版 kcp（zstd-jni 同款 shade，非 Loom JiJ）：把剥离后的 kcp jar
+// 解包合并进主 jar 任务，随 Hassium mod 类一起被 mod loader 加载。绕开 Loom
+// processIncludeJars 对裸 File artifact 的 module-component 校验（见 docs/findings-kcp-jij-stuck.md）。
+// patchedKcpJar 是 stripKcpNettyBootstrapPackage 任务的 outputs.file，from(zipTree(...))
+// 会让 jar 任务自动 dependsOn 剥离任务；显式声明一次以求稳。
+jar {
+    dependsOn stripKcpTask
+    from(zipTree(patchedKcpJar.get().asFile)) {
+        exclude 'META-INF/**'
+    }
 }

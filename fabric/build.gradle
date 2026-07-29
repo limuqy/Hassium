@@ -1,3 +1,7 @@
+import java.util.zip.ZipEntry
+import java.util.zip.ZipInputStream
+import java.util.zip.ZipOutputStream
+
 plugins {
     id 'loom-fabric'
 }
@@ -10,12 +14,76 @@ sourceSets {
     }
 }
 
+configurations {
+    // 原始 kcp 坐标；剥离 io.netty.* 后再 shade 进主 jar（见 stripKcpNettyBootstrapPackage）
+    kcpIncoming
+}
+
+/**
+ * kcp-netty 自带 {@code io.netty.bootstrap.UkcpServerBootstrap}，与 MC 的
+ * {@code Bootstrap}/{@code ServerBootstrap} 同包。Fabric 无 SecureJarHandler，
+ * 不会触发 Forge 那种包独占 CNFE；但为与 neoforge/forge 三端一致，统一剥离
+ * {@code io/netty/} 一并 shade 进主 jar（io.jpower.kcp.netty.* 保留）。
+ */
+def hassiumStripKcpNettyBootstrap = { File src, File out ->
+    out.parentFile.mkdirs()
+    out.withOutputStream { fos ->
+        def zos = new ZipOutputStream(fos)
+        src.withInputStream { fis ->
+            def zis = new ZipInputStream(fis)
+            ZipEntry entry
+            while ((entry = zis.nextEntry) != null) {
+                if (entry.name.startsWith('io/netty/')) {
+                    zis.closeEntry()
+                    continue
+                }
+                if (!entry.isDirectory()) {
+                    zos.putNextEntry(new ZipEntry(entry.name))
+                    zis.transferTo(zos)
+                    zos.closeEntry()
+                }
+                zis.closeEntry()
+            }
+            zis.close()
+        }
+        zos.close()
+    }
+    return out
+}
+
+def patchedKcpJar = layout.buildDirectory.file('patched-kcp/kcp-netty-1.6.2-no-netty-bootstrap.jar')
+
+def stripKcpTask = tasks.register('stripKcpNettyBootstrapPackage') {
+    description = 'Strip io.netty.* from kcp-netty for fabric; io.jpower.kcp.* retained'
+    inputs.files(configurations.kcpIncoming)
+    outputs.file(patchedKcpJar)
+    doLast {
+        def src = configurations.kcpIncoming.files.find { it.name.startsWith('kcp-netty-') }
+        if (src == null) {
+            throw new GradleException("kcp-netty jar not found in kcpIncoming: ${configurations.kcpIncoming.files}")
+        }
+        def out = patchedKcpJar.get().asFile
+        def stamp = new File(out.parentFile, out.name + '.stamp')
+        def stampVal = "${src.canonicalPath}|${src.lastModified()}|${src.length()}"
+        if (out.exists() && stamp.exists() && stamp.text.trim() == stampVal) {
+            return
+        }
+        hassiumStripKcpNettyBootstrap(src, out)
+        stamp.text = stampVal
+    }
+}
 dependencies {
     modImplementation "net.fabricmc.fabric-api:fabric-api:${gradle.ext.fabric_api_version}"
     implementation 'com.github.luben:zstd-jni:1.5.5-7'
     implementation 'org.lz4:lz4-java:1.8.0'
     implementation 'com.google.code.findbugs:jsr305:3.0.1'
-    implementation 'moe.sdl.kcp:kcp-netty:1.6.2'
+    // kcp 走剥离版：zstd-jni 同款 shade 进主 jar；不再裸 implementation
+    // （否则生产 jar 零 kcp，玩家装 UDP 数据面 NoClassDefFoundError，见 docs/findings-kcp-jij-stuck.md）。
+    implementation files(stripKcpTask)
+    // 原始坐标仅用于剥离任务输入；真正进 compile / 运行 的是剥离后的 jar（见末尾 jar {} shade）。
+    kcpIncoming('moe.sdl.kcp:kcp-netty:1.6.2') {
+        exclude group: 'io.netty'
+    }
 
     // Night Config：编译 + jiJ（Fabric 自管 toml；common 源码合并进本模块编译）
     modCompileOnly "com.electronwill.night-config:core:3.6.7"
@@ -47,5 +115,17 @@ dependencies {
     if (gradle.ext.has('cloth_config_version')) {
         modCompileOnly("me.shedaniel.cloth:cloth-config-fabric:${gradle.ext.cloth_config_version}")
         modLocalRuntime("me.shedaniel.cloth:cloth-config-fabric:${gradle.ext.cloth_config_version}")
+    }
+}
+
+// 生产 jar 内嵌剥离版 kcp（zstd-jni 同款 shade，非 Loom JiJ）：把剥离后的 kcp jar
+// 解包合并进主 jar 任务，随 Hassium mod 类一起被 Fabric Loader 加载。这同时修掉
+// 先前 fabric 生产 jar 零 kcp 的暗错（见 docs/findings-kcp-jij-stuck.md）。
+// patchedKcpJar 是 stripKcpNettyBootstrapPackage 任务的 outputs.file，from(zipTree(...))
+// 会让 jar 任务自动 dependsOn 剥离任务；显式声明一次以求稳。
+jar {
+    dependsOn stripKcpTask
+    from(zipTree(patchedKcpJar.get().asFile)) {
+        exclude 'META-INF/**'
     }
 }

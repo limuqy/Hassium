@@ -177,7 +177,8 @@ dependencies {
     }
     // files(task) 会把 task outputs 挂到依赖图，compile/run 自动 dependsOn 剥离任务。
     library files(stripKcpTask)
-    include files(stripKcpTask)
+    // 生产 jar 内嵌剥离版 kcp：不再用 include（Loom processIncludeJars 拒收裸 File
+    // artifact），改走 zstd-jni 同款 shade——见本文件末尾 jar {} 的 from(zipTree(patchedKcpJar)) 块。
 
     // 1.20.6：common Spec 使用 NeoForge ModConfigSpec，经 FCAP Forge 提供并 jiJ。
     // FCAP 自带 JiJ mixinextras-forge（内嵌 MixinExtras-*.jar），同时 pom 又传递
@@ -189,7 +190,8 @@ dependencies {
             exclude group: 'io.github.llamalad7', module: 'mixinextras-forge'
         }
         implementation files(stripFcapTask)
-        include files(stripFcapTask)
+        // FCAP 剥离版进主 jar 走 shade（见本文件末尾 jar {} 块），不再 include 裸 File
+        // 触发 Loom processIncludeJars module-component 校验错。
         // 恢复原先 FCAP 传递的 common（单一副本，进 game layer + 生产 JiJ）
         library 'io.github.llamalad7:mixinextras-common:0.3.5'
         include 'io.github.llamalad7:mixinextras-common:0.3.5'
@@ -293,6 +295,23 @@ afterEvaluate {
                     environment('MOD_CLASSES', kept.join(';'))
                 }
             }
+        }
+    }
+}
+
+
+jar {
+    dependsOn stripKcpTask
+    from(zipTree(patchedKcpJar.get().asFile)) {
+        exclude 'META-INF/**'
+    }
+    // 1.20.6：FCAP 剥离版（剔 MixinExtras JiJ）一并 shade 进主 jar。
+    if (gradle.ext.has('minecraft_version') && gradle.ext.minecraft_version == '1.20.6'
+            && gradle.ext.has('forge_config_api_port_version')) {
+        dependsOn stripFcapTask
+        from(zipTree(patchedFcapJar.get().asFile)) {
+            exclude 'META-INF/jars/**'
+            exclude 'META-INF/jarjar/**'
         }
     }
 }
