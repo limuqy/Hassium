@@ -46,6 +46,22 @@ public class MixinClientTick {
                 var pending = lifecycle.takePendingUdpStart();
                 if (pending != null) {
                     lifecycle.startUdp(mc.player.getUUID(), pending.connectionEpoch(), pending);
+                    // 延迟续接点必须补齐 onHandshakeAccepted + notifyFallback —— 否则
+                    // player==null 握手延迟的场景会跳过 failover 身份确认与缓存身份映射。
+                    try {
+                        if (io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState.getInstance().isRecovering()) {
+                            io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState.getInstance().markRecovered();
+                            io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.onPrimaryHandshakeAccepted(null);
+                        } else {
+                            io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.onHandshakeAccepted();
+                }
+                        io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.consumeSuccessfulFallback()
+                                .ifPresent(endpoint -> mc.gui.getChat().addMessage(
+                                        net.minecraft.network.chat.Component.literal("[Hassium] 主地址 "
+                                                + io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.primaryAddress()
+                                                + " 不可用，已通过备用端点 " + endpoint.host() + ":" + endpoint.port()
+                                                + " 连接；服务器列表地址和缓存身份仍为主地址。")));
+                    } catch (Throwable ignored) {}
                 }
             }
         } catch (Exception e) {

@@ -195,18 +195,15 @@ public class NeoForgeNetworkManager implements NetworkManager {
                 net.minecraft.client.Minecraft.getInstance().player != null);
         // Task 9 — 同步把 advertised control 候选灌给 client mod 单例 orchestrator（无论是否含 UDP，
         // 便于 control-only / legacy 服务器场景下 orchestrator 仍可基于 advertised 候选恢复）。
-        io.github.limuqy.mc.hassium.network.dataplane.ControlReconnectOrchestrator orch = null;
         try {
-            orch = io.github.limuqy.mc.hassium.HassiumNeoForgeClient.reconnectOrchestrator();
-            if (orch != null) {
-                java.util.List<io.github.limuqy.mc.hassium.network.dataplane.ControlEndpoint> cands =
-                        new java.util.ArrayList<>();
-                for (var ctl : tail.controlEndpoints()) {
-                    cands.add(new io.github.limuqy.mc.hassium.network.dataplane.ControlEndpoint(
-                            ctl.host(), ctl.port(), ctl.priority()));
-                }
-                orch.configureCandidates(cands);
+            java.util.List<io.github.limuqy.mc.hassium.network.dataplane.ControlEndpoint> cands =
+                    new java.util.ArrayList<>();
+            for (var ctl : tail.controlEndpoints()) {
+                cands.add(new io.github.limuqy.mc.hassium.network.dataplane.ControlEndpoint(
+                        ctl.host(), ctl.port(), ctl.priority()));
             }
+            io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity
+                    .mergeAdvertisedCandidates(cands);
         } catch (Throwable ignored) {}
         // 客户端主线程已通过此入口；ClientRecoveryState.markRecovered + onHandshakeAccepted 必须在主线程执行
         // —— caller 已 enqueueWork，此处同步调用安全。
@@ -215,8 +212,12 @@ public class NeoForgeNetworkManager implements NetworkManager {
             try {
                 if (io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState.getInstance().isRecovering()) {
                     io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState.getInstance().markRecovered();
-                    if (orch != null) orch.onHandshakeAccepted();
+                    io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.onHandshakeAccepted();
                 }
+                else {
+                    io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.onHandshakeAccepted();
+                }
+                notifyFallback();
             } catch (Throwable ignored) {}
             return;
         }
@@ -232,14 +233,27 @@ public class NeoForgeNetworkManager implements NetworkManager {
             // 只有 DISCONNECT 已建立恢复态的握手才能确认恢复；首次登录只启动 UDP。
             if (io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState.getInstance().isRecovering()) {
                 io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState.getInstance().markRecovered();
-                if (orch != null) orch.onHandshakeAccepted();
+                io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.onHandshakeAccepted();
             }
+            else {
+                io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.onHandshakeAccepted();
+            }
+            notifyFallback();
         } catch (RuntimeException ex) {
             LOGGER.warn("Hassium: UDP dataplane start failed", ex);
         }
         catch (LinkageError ex) {
             LOGGER.warn("Hassium: UDP dataplane linkage failed; keeping primary transport", ex);
         }
+    }
+
+    private static void notifyFallback() {
+        io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.consumeSuccessfulFallback()
+                .ifPresent(endpoint -> net.minecraft.client.Minecraft.getInstance().gui.getChat().addMessage(
+                        net.minecraft.network.chat.Component.literal("[Hassium] 主地址 "
+                                + io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.primaryAddress()
+                                + " 不可用，已通过备用端点 " + endpoint.host() + ":" + endpoint.port()
+                                + " 连接；服务器列表地址和缓存身份仍为主地址。")));
     }
 
 #if MC_VER < MC_1_20_4

@@ -247,8 +247,10 @@ public final class ClientLifecycleHelper {
             }
 
             final String serverIp = mc.getConnection().getServerData().ip;
+            final String cacheAddress = io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity
+                    .cacheIdentity(serverIp);
             final Path gameDir = mc.gameDirectory.toPath();
-            final String serverId = "server_" + serverIp.replaceAll("[^a-zA-Z0-9._-]", "_");
+            final String serverId = "server_" + cacheAddress.replaceAll("[^a-zA-Z0-9._-]", "_");
 
             String dimension = "minecraft:overworld";
             if (mc.player.level() != null) {
@@ -271,8 +273,8 @@ public final class ClientLifecycleHelper {
                     ClientMetadataHandler.onStorageReady();
                     // 超视渲染：清 miss 耗尽状态并强制下一 tick 全环带重扫
                     ViewDistanceExtensionService.getInstance().onClientStorageReady();
-                    Constants.LOG.info("Hassium: Async initialized client cache for server {} dim {}",
-                            serverIp, finalDimension);
+                    Constants.LOG.info("Hassium: Async initialized client cache for server {} (connected {}) dim {}",
+                            cacheAddress, serverIp, finalDimension);
                 }, TaskCategory.BEST_EFFORT);
             } else {
                 // 回退：同步初始化
@@ -280,7 +282,8 @@ public final class ClientLifecycleHelper {
                 initializeEntitySnapshots(gameDir, serverId, finalDimension);
                 ClientMetadataHandler.onStorageReady();
                 ViewDistanceExtensionService.getInstance().onClientStorageReady();
-                Constants.LOG.info("Hassium: Initialized client cache for server {} dim {}", serverIp, finalDimension);
+                Constants.LOG.info("Hassium: Initialized client cache for server {} (connected {}) dim {}",
+                        cacheAddress, serverIp, finalDimension);
             }
         } catch (Exception e) {
             Constants.LOG.error("Hassium: Failed to initialize client cache", e);

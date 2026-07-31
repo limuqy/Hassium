@@ -46,24 +46,27 @@ loom {
                 def delayMs = project.findProperty('hassiumSmokeDelayMs') ?: '10000'
                 def reconnectDelayMs = project.findProperty('hassiumSmokeReconnectDelayMs') ?: '3000'
                 def phases = project.findProperty('hassiumSmokePhases') ?: 'classic'
-                vmArgs.addAll([
+                // loom 1.17+: RunConfiguration 用 ListProperty<String>；旧版裸 List getter 已 @Deprecated 且
+                // getJvmArguments().get() 在配置阶段未 finalize 抛 UnsupportedOperationException。改用
+                // ListProperty 原生 addAll/add。
+                jvmArguments.addAll([
                         "-Dhassium.smokeTest=true",
                         "-Dhassium.smokeTest.delayMs=${delayMs}",
                         "-Dhassium.smokeTest.reconnectDelayMs=${reconnectDelayMs}",
                         "-Dhassium.smokeTest.host=${host}",
                         "-Dhassium.smokePhases=${phases}"
                 ])
-                programArgs.addAll([
+                programArguments.addAll([
                         '--quickPlayMultiplayer', host.toString()
                 ])
             }
         } else if (name == 'server') {
             runDir = 'run/server'
             if (project.hasProperty('hassiumSmokeTest') && project.property('hassiumSmokeTest').toString() == 'true') {
-                programArgs.add('nogui')
+                programArguments.add('nogui')
                 def phases = project.findProperty('hassiumSmokePhases') ?: 'classic'
                 // 服务端冒烟：启动 VD=20，玩家退出后切 VD=8；phases 含 dataplane/udp-failover 时驱动对应状态机
-                vmArgs.addAll([
+                jvmArguments.addAll([
                         "-Dhassium.serverSmokeTest=true",
                         "-Dhassium.smokePhases=${phases}"
                 ])

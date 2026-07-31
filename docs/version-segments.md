@@ -209,6 +209,19 @@ Forge 自 1.21.x 起仍为 Forge 风格 API，与 NeoForge 不兼容；Hassium �
 
 - `forge/build.gradle`：`hassiumPatchByteBufCodecs11Ctor`（`forgeMajor >= 61` 时 ASM 给 `$11` 加 `<init>()V`，MAX_SIZE 让 encode/decode 不误报）、`hassiumStripMergedForgeAmn` / `hassiumExtractForgeOnlyJar`、`gradle.ext.forgeMajor`、`launch.cfg` clientdataArgs → xclientdataArgs doFirst
 - `HassiumMod.java`：`#if MC_VER < MC_1_21_6` 处理 EventBus 7 `SubscribeEvent` 包名迁移
+### buildSrc loom-*.gradle ListProperty API 改造（loom 1.13.469 → 1.17.491，2026-07-29）
+
+`f8ec29b` 升 loom 1.13.469 → 1.17.491 + Gradle 8.14.5 → 9.6.1 时漏改了三份 precompiled script plugin（`loom-fabric.gradle` / `loom-forge.gradle` / `loom-neoforge.gradle`），导致任何带 `-PhassiumSmokeTest=true` 的 `runServer`/`runClient` 在 4s 内 BUILD FAILED（`loom-fabric` apply `UnsupportedOperationException`），1.21.1–1.21.10 九连 Phase R 全部 exit 3 server_not_ready。根因与修复：
+
+| API 位 | loom 1.13.469 | loom 1.17.491 |
+|---|---|---|
+| 单条 run config 类 | `RunConfig`（含 `public List<String> vmArgs/programArgs = new ArrayList<>()` 裸字段）| `RunConfig` 删，换为 `RunConfiguration`（`ListProperty<String> getJvmArguments()/getProgramArguments()`）+ `RunConfigSettings` 实现 |
+| `getVmArgs()` / `getProgramArgs()` | 无 | `@Deprecated` facade，内部 `getJvmArguments().get()`——配置阶段 property 未 finalize 拋 `UnsupportedOperationException` |
+| DSL 合法调用 | `vmArgs.addAll([...])` / `programArgs.add(...)` | `jvmArguments.addAll([...])` / `programArguments.add(...)`（ListProperty 原生 addAll/add，不 `.get()`）|
+
+修改点（三份同构）：`buildSrc/src/main/groovy/loom-fabric.gradle` / `loom-forge.gradle` / `loom-neoforge.gradle`，把 `runConfigs.configureEach { ... }` 内的 `vmArgs.*` → `jvmArguments.*`、`programArgs.*` → `programArguments.*`；修复后九连 Phase R runtime smoke 全 PASS。
+
+> **升级 loom 的硬约束**：未来升 architectury-loom 时必须同步检查这三份 `loom-*.gradle` 给 `runConfigs.configureEach` 内赋的值是否调到 deleted/改名/走 Provider 阀的 API。grep `vmArgs\.` / `programArgs\.` 是快速检查点；发现即需重写为 ListProperty 原生 path 或带 varargs 的 deprecated method（`vmArgs(String...)` 直接走 `getJvmArguments().addAll(...)` 不 `.get()`）。
 
 ### 客户端缓存跨版本策略（自段 F / 1.21.5）
 
@@ -232,6 +245,7 @@ Forge 自 1.21.x 起仍为 Forge 风格 API，与 NeoForge 不兼容；Hassium �
 | 1.21.11 | ⏸ sunset（CompoundTag$2 `<init>()` 错位，loom 1.17.491 同源未修，见附录） |
 | 1.21.2 | ❌ **上游未发布 Forge userdev**（官方跳过） |
 | 其余 1.21.x | ❌ 使用 NeoForge |
+> **2026-07-29 补充：1.21.1 / 1.21.3 / 1.21.4 / 1.21.5 / 1.21.6 / 1.21.7 / 1.21.8 / 1.21.9 / 1.21.10 九连 Phase R runtime smoke 全 PASS**（loom 1.17.491 + Gradle 9.6.1，仅在同步修 `buildSrc/src/main/groovy/loom-{fabric,forge,neoforge}.gradle` 的 `runConfigs.configureEach { ... }` 内 `vmArgs/programArgs` 从 deprecated 裸 List getter 改为 `ListProperty<String>` 原生 `jvmArguments/programArguments.addAll/add` 后，见附录「buildSrc loom-*.gradle ListProperty API 改造」）；每个会话均上 `Done` → 客户端两轮连服 → round1/round2 统计真出 + `ServerSwitched=True` + 客户端 `exit=0`，结果 CSV 见 `build/smoke-test/forge-21x-smoke-results.csv`。
 
 ### Fabric / FCAP 配置策略
 

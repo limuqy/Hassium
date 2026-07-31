@@ -51,6 +51,8 @@ public final class ControlReconnectOrchestrator {
     private ControlEndpoint current;
     private long recoveryStartedAtMs;
     private long recoveryDeadlineMs;
+    private String primaryAddress;
+    private boolean initialConnection;
 
     public ControlReconnectOrchestrator(ControlReconnectLauncher launcher,
                                         List<ControlEndpoint> bootstrap,
@@ -137,9 +139,65 @@ public final class ControlReconnectOrchestrator {
         }
         recovering = false;
         terminalFinalized = false;
+        initialConnection = false;
         // connectionEpoch 保持本轮，便于客户端据此 BindRequest 新一代 UDP
         SMOKE_LOG.info("HassiumSmokeTest:UDP_FAILOVER FAILOVER_RECONNECT_OK epoch={}", connectionEpoch);
         return true;
+    }
+
+    /** Prepare the original ServerData.ip as the stable logical identity for a new connection. */
+    public synchronized void prepareInitialConnection(String primaryAddress,
+                                                       List<ControlEndpoint> persisted) {
+        this.primaryAddress = Objects.requireNonNull(primaryAddress, "primaryAddress");
+        this.initialConnection = true;
+        this.recovering = false;
+        this.terminalFinalized = false;
+        this.current = null;
+        this.candidates.clear();
+        List<ControlEndpoint> safe = persisted == null ? List.of() : persisted;
+        this.candidates.addAll(safe.stream().filter(Objects::nonNull).toList());
+        this.manager.mergeBootstrapAndAdvertised(List.of(), this.candidates);
+    }
+
+    /** Refresh persisted/advertised candidates without changing the primary address. */
+    public synchronized void mergeAdvertisedCandidates(List<ControlEndpoint> advertised) {
+        if (primaryAddress == null) return;
+        this.candidates.clear();
+        if (advertised != null) {
+            this.candidates.addAll(advertised.stream().filter(Objects::nonNull).toList());
+        }
+        this.manager.mergeBootstrapAndAdvertised(List.of(), this.candidates);
+    }
+
+    /** Handle the original ConnectScreen's DNS/TCP failure only. */
+    public synchronized boolean onInitialTcpConnectionFailed() {
+        if (terminalFinalized) return false;
+        if (recovering) {
+            if (current != null) {
+                manager.recordAttemptFailure(current);
+                current = null;
+            }
+            if (launchNextCandidate()) return true;
+            recovering = false;
+            return false;
+        }
+        if (!initialConnection) return false;
+        initialConnection = false;
+        startRecoveryWindow();
+        recovering = true;
+        connectionEpoch = nextEpoch();
+        if (launchNextCandidate()) return true;
+        recovering = false;
+        return false;
+    }
+
+    /** Return the stable primary address for a currently active fallback connection. */
+    public synchronized String cacheIdentity(String connectedAddress) {
+        if (primaryAddress != null && current != null
+                && connectedAddress.equals(current.host() + ":" + current.port())) {
+            return primaryAddress;
+        }
+        return connectedAddress;
     }
 
     /** 一候选 reconnect 失败：移除并尝试下一个；若耗尽 → terminal finalize 一次。 */
@@ -171,8 +229,7 @@ public final class ControlReconnectOrchestrator {
      * 等到真正启动恢复才走瘦身 dedup + cap。
      */
     public synchronized void configureCandidates(List<ControlEndpoint> advertised) {
-        this.candidates.clear();
-        this.candidates.addAll(advertised);
+        mergeAdvertisedCandidates(advertised);
     }
 
     /** 是否已有握手下发的热切候选（空则普通断开由 ClientSmokeTest/用户自行重连）。 */
@@ -244,7 +301,15 @@ public final class ControlReconnectOrchestrator {
         terminalFinalized = true;
         recovering = false;
         terminalFinalizations++;
-        ClientLifecycleHelper.finalizeDisconnectIfTerminal();
+        if (!initialConnection) {
+            try {
+                ClientLifecycleHelper.finalizeDisconnectIfTerminal();
+            } catch (ExceptionInInitializerError e) {
+                // Pure common tests do not bootstrap Minecraft registries; the terminal
+                // state is still recorded and the client lifecycle hook will retry in-game.
+                SMOKE_LOG.debug("Hassium: terminal cleanup unavailable before Minecraft bootstrap", e);
+            }
+        }
         SMOKE_LOG.info("HassiumSmokeTest:UDP_FAILOVER FAILOVER_TERMINAL_OK finalizations={}", terminalFinalizations);
     }
 

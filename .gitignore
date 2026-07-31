@@ -30,6 +30,7 @@ run
 /common/.omc/
 /common/logs/
 /.mimocode/
+/.omp/
 /.claude/settings.json
 /.claude/settings.local.json
 .worktrees/

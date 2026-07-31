@@ -8,6 +8,9 @@ import io.github.limuqy.mc.hassium.utils.DebugLogger.LogType;
 import net.minecraft.network.Connection;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.server.level.ServerPlayer;
+import io.github.limuqy.mc.hassium.network.dataplane.DataPlaneHandshakeAdvertisement;
+import io.github.limuqy.mc.hassium.network.dataplane.DataPlaneUdpServer;
+import io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -457,7 +460,8 @@ public class ForgeNetworkManager implements NetworkManager {
                 Constants.CURRENT_PROTOCOL_VERSION,
                 accepted,
                 useGlobalCompression,
-                useCompactHeader
+                useCompactHeader,
+                createServerTail(player, msg)
         );
         // 暂停出站压缩，等客户端 CompressionReady ACK 后再切 ZSTD（与 Fabric/NeoForge 对齐）
         if (useGlobalCompression) {
@@ -478,9 +482,64 @@ public class ForgeNetworkManager implements NetworkManager {
         }
     }
 
+    private static byte[] createServerTail(ServerPlayer player, HandshakePacket msg) {
+        if (msg.dataplaneTail().length == 0
+                || !UdpDataPlaneHandshakeTail.readC2S(
+                        io.netty.buffer.Unpooled.wrappedBuffer(msg.dataplaneTail()))
+                        .controlFailoverSupported()) {
+            return new byte[0];
+        }
+        try {
+            UdpDataPlaneHandshakeTail.S2CTail tail = DataPlaneHandshakeAdvertisement.create(
+                    DataPlaneUdpServer.advertisedControlEndpoints(),
+                    DataPlaneUdpServer.boundEndpoints(),
+                    DataPlaneUdpServer.isBound() ? DataPlaneUdpServer.getSessionToken() : null,
+                    System.nanoTime(),
+                    false,
+                    true);
+            io.netty.buffer.ByteBuf buffer = io.netty.buffer.Unpooled.buffer();
+            UdpDataPlaneHandshakeTail.writeS2C(buffer, tail);
+            byte[] data = new byte[buffer.readableBytes()];
+            buffer.readBytes(data);
+            buffer.release();
+            return data;
+        } catch (Throwable e) {
+            LOGGER.warn("Hassium: Failed to create Forge failover handshake tail", e);
+            return new byte[0];
+        }
+    }
+
     private static void handleHandshakeS2C(HandshakeResponsePacket msg) {
         LOGGER.info("Hassium: Client handshake response: accepted={}, globalCompression={}, compactHeader={}",
                 msg.accepted(), msg.globalCompressionAccepted(), msg.compactHeaderAccepted());
+        if (msg.dataplaneTail().length > 0) {
+            try {
+                UdpDataPlaneHandshakeTail.S2CTail tail = UdpDataPlaneHandshakeTail.readS2C(
+                        io.netty.buffer.Unpooled.wrappedBuffer(msg.dataplaneTail()));
+                java.util.List<io.github.limuqy.mc.hassium.network.dataplane.ControlEndpoint> candidates =
+                        new java.util.ArrayList<>();
+                for (var endpoint : tail.controlEndpoints()) {
+                    candidates.add(new io.github.limuqy.mc.hassium.network.dataplane.ControlEndpoint(
+                            endpoint.host(), endpoint.port(), endpoint.priority()));
+                }
+                io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity
+                        .mergeAdvertisedCandidates(candidates);
+                if (io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState.getInstance().isRecovering()) {
+                    io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState.getInstance().markRecovered();
+                    io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.onPrimaryHandshakeAccepted(null);
+                } else {
+                io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.onHandshakeAccepted();
+                }
+                io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.consumeSuccessfulFallback()
+                        .ifPresent(endpoint -> net.minecraft.client.Minecraft.getInstance().gui.getChat().addMessage(
+                                net.minecraft.network.chat.Component.literal("[Hassium] 主地址 "
+                                        + io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.primaryAddress()
+                                        + " 不可用，已通过备用端点 " + endpoint.host() + ":" + endpoint.port()
+                                        + " 连接；服务器列表地址和缓存身份仍为主地址。")));
+            } catch (Throwable e) {
+                LOGGER.warn("Hassium: Failed to decode Forge failover handshake tail", e);
+            }
+        }
         if (msg.accepted() && msg.globalCompressionAccepted()) {
             var mc = net.minecraft.client.Minecraft.getInstance();
             var conn = mc.getConnection();
@@ -701,7 +760,8 @@ public class ForgeNetworkManager implements NetworkManager {
                 true,
                 false,
                 true,
-                true
+                true,
+                new byte[] { 0x03 }
         );
 #if MC_VER < MC_1_20_2
         CHANNEL.sendToServer(packet);
@@ -829,7 +889,8 @@ public class ForgeNetworkManager implements NetworkManager {
             boolean chunkRevisionSupported,
             boolean scheme127Supported,
             boolean globalPacketCompressionSupported,
-            boolean compactHeaderSupported
+            boolean compactHeaderSupported,
+            byte[] dataplaneTail
     ) {
         public void encode(FriendlyByteBuf buf) {
             buf.writeVarInt(protocolVersion);
@@ -843,6 +904,8 @@ public class ForgeNetworkManager implements NetworkManager {
             buf.writeBoolean(scheme127Supported);
             buf.writeBoolean(globalPacketCompressionSupported);
             buf.writeBoolean(compactHeaderSupported);
+            buf.writeVarInt(dataplaneTail.length);
+            buf.writeBytes(dataplaneTail);
         }
 
         public static HandshakePacket decode(FriendlyByteBuf buf) {
@@ -861,7 +924,8 @@ public class ForgeNetworkManager implements NetworkManager {
                     buf.readBoolean(),
                     buf.readBoolean(),
                     buf.readBoolean(),
-                    buf.readBoolean()
+                    buf.readBoolean(),
+                    readTail(buf)
             );
         }
     }
@@ -870,13 +934,16 @@ public class ForgeNetworkManager implements NetworkManager {
             int protocolVersion,
             boolean accepted,
             boolean globalCompressionAccepted,
-            boolean compactHeaderAccepted
+            boolean compactHeaderAccepted,
+            byte[] dataplaneTail
     ) {
         public void encode(FriendlyByteBuf buf) {
             buf.writeVarInt(protocolVersion);
             buf.writeBoolean(accepted);
             buf.writeBoolean(globalCompressionAccepted);
             buf.writeBoolean(compactHeaderAccepted);
+            buf.writeVarInt(dataplaneTail.length);
+            buf.writeBytes(dataplaneTail);
         }
 
         public static HandshakeResponsePacket decode(FriendlyByteBuf buf) {
@@ -884,9 +951,21 @@ public class ForgeNetworkManager implements NetworkManager {
                     buf.readVarInt(),
                     buf.readBoolean(),
                     buf.readBoolean(),
-                    buf.readBoolean()
+                    buf.readBoolean(),
+                    readTail(buf)
             );
         }
+    }
+
+    private static byte[] readTail(FriendlyByteBuf buf) {
+        if (!buf.isReadable()) return new byte[0];
+        int length = buf.readVarInt();
+        if (length < 0 || length > buf.readableBytes()) {
+            throw new IllegalArgumentException("invalid handshake tail length: " + length);
+        }
+        byte[] data = new byte[length];
+        buf.readBytes(data);
+        return data;
     }
 
     public record CompressedPayloadWrapper(byte[] data) {

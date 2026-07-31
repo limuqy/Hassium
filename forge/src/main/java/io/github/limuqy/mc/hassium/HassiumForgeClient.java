@@ -2,9 +2,11 @@ package io.github.limuqy.mc.hassium;
 
 import io.github.limuqy.mc.hassium.cache.client.ClientLifecycleHelper;
 import io.github.limuqy.mc.hassium.client.ClientSmokeTest;
+import io.github.limuqy.mc.hassium.client.ForgeControlReconnectLauncher;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.network.DictionaryManager;
 import io.github.limuqy.mc.hassium.network.ForgeNetworkManager;
+import io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity;
 import net.minecraftforge.client.event.ClientPlayerNetworkEvent;
 import net.minecraftforge.common.MinecraftForge;
 import net.minecraftforge.fml.common.Mod;
@@ -45,6 +47,10 @@ public class HassiumForgeClient {
 
     @SubscribeEvent
     public static void onClientSetup(FMLClientSetupEvent event) {
+        ClientFailoverIdentity.initialize(
+                io.github.limuqy.mc.hassium.platform.Services.PLATFORM.getConfigDirectory()
+                        .resolve("hassium").resolve("failover-endpoints.properties"),
+                new ForgeControlReconnectLauncher());
         ClientSmokeTest.initIfEnabled();
 
         DictionaryManager.loadChunkDictionary();
@@ -92,6 +98,9 @@ public class HassiumForgeClient {
 
         @SubscribeEvent
         public void onPlayerLoggedOut(ClientPlayerNetworkEvent.LoggingOut event) {
+            // 走 ClientFailoverIdentity 包装（非 orchestrator 直调）：即维护 activeFallback 与
+            // attempt marker，使 MixinMinecraft 能拦截候选 DNS/TCP 失败、cacheIdentity 回主地址。
+            ClientFailoverIdentity.onPrimaryDisconnected(null, "channel_inactive");
             ClientLifecycleHelper.cleanupOnDisconnect();
             // 延后到下一 tick：等世界拆除；与 MixinMinecraft TAIL 幂等兜底
             net.minecraft.client.Minecraft.getInstance().execute(ClientLifecycleHelper::finalizeDisconnect);

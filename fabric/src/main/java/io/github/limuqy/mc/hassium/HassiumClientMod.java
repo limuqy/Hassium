@@ -2,12 +2,14 @@ package io.github.limuqy.mc.hassium;
 
 import io.github.limuqy.mc.hassium.cache.client.ClientLifecycleHelper;
 import io.github.limuqy.mc.hassium.client.ClientSmokeTest;
+import io.github.limuqy.mc.hassium.client.FabricControlReconnectLauncher;
 import io.github.limuqy.mc.hassium.command.FabricHassiumCommand;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.network.DictionaryManager;
 import io.github.limuqy.mc.hassium.network.FabricNetworkManager;
 import io.github.limuqy.mc.hassium.network.dataplane.ControlEndpoint;
 import io.github.limuqy.mc.hassium.network.dataplane.ControlReconnectOrchestrator;
+import io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity;
 import io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState;
 import io.github.limuqy.mc.hassium.network.dataplane.DataPlaneClientLifecycle;
 import net.fabricmc.api.ClientModInitializer;
@@ -35,10 +37,11 @@ public class HassiumClientMod implements ClientModInitializer {
         // Task 9 — control-reconnect orchestrator (singleton; launcher wired here, candidates
         // populated from S2C handshake tails as advertised backup endpoints arrive).
         if (reconnectOrchestrator == null) {
-            reconnectOrchestrator = new ControlReconnectOrchestrator(
-                    new io.github.limuqy.mc.hassium.client.FabricControlReconnectLauncher(),
-                    java.util.List.of(),
-                    java.util.List.of());
+            ClientFailoverIdentity.initialize(
+                    io.github.limuqy.mc.hassium.platform.Services.PLATFORM.getConfigDirectory()
+                            .resolve("hassium").resolve("failover-endpoints.properties"),
+                    new FabricControlReconnectLauncher());
+            reconnectOrchestrator = ClientFailoverIdentity.orchestrator();
         }
 
         ClientSmokeTest.initIfEnabled();
@@ -69,7 +72,7 @@ public class HassiumClientMod implements ClientModInitializer {
                 ControlReconnectOrchestrator orch = reconnectOrchestrator;
                 if (orch != null && orch.hasAdvertisedCandidates()) {
                     ControlEndpoint active = activeControlEndpoint(handler);
-                    orch.onPrimaryDisconnected(active, "channel_inactive");
+                    ClientFailoverIdentity.onPrimaryDisconnected(active, "channel_inactive");
                     // 仅当 orchestrator 仍持有可 launch 的恢复态时进入 ClientRecoveryState；
                     // 候选耗尽走 terminal，不再 begin（避免 stopUdp(keepLease) 空 bundle）。
                     if (orch.isRecovering()) {

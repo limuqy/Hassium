@@ -324,19 +324,16 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
             try {
                 if (buf.isReadable()) {
                     UdpDataPlaneHandshakeTail.S2CTail tail = UdpDataPlaneHandshakeTail.readS2C(buf);
-                    io.github.limuqy.mc.hassium.network.dataplane.ControlReconnectOrchestrator orch =
-                            io.github.limuqy.mc.hassium.HassiumClientMod.reconnectOrchestrator();
-                    if (orch != null) {
-                        try {
-                            java.util.List<io.github.limuqy.mc.hassium.network.dataplane.ControlEndpoint> cands =
-                                    new java.util.ArrayList<>();
-                            for (var ctl : tail.controlEndpoints()) {
-                                cands.add(new io.github.limuqy.mc.hassium.network.dataplane.ControlEndpoint(
-                                        ctl.host(), ctl.port(), ctl.priority()));
-                            }
-                            orch.configureCandidates(cands);
-                        } catch (Throwable ignored) {}
-                    }
+                    try {
+                        java.util.List<io.github.limuqy.mc.hassium.network.dataplane.ControlEndpoint> cands =
+                                new java.util.ArrayList<>();
+                        for (var ctl : tail.controlEndpoints()) {
+                            cands.add(new io.github.limuqy.mc.hassium.network.dataplane.ControlEndpoint(
+                                    ctl.host(), ctl.port(), ctl.priority()));
+                        }
+                        io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity
+                                .mergeAdvertisedCandidates(cands);
+                    } catch (Throwable ignored) {}
                     if (tail.hasUdpDataplane() && Minecraft.getInstance().player != null) {
                         UUID pid = Minecraft.getInstance().player.getUUID();
                         long epoch = tail.connectionEpoch();
@@ -349,19 +346,26 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
                             if (recovering) {
                                 io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState.getInstance()
                                         .markRecovered();
-                                if (orch != null) orch.onHandshakeAccepted();
+                                io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.onPrimaryHandshakeAccepted(null);
+                    } else {
+                            io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.onHandshakeAccepted();
                             }
+                            notifyFallback();
                         });
                     } else if (io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState.getInstance()
                             .isRecovering()) {
                         // 无 UDP 数据面（控制 only 或 legacy 服务器）同样只确认真实恢复。
                         io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState.getInstance().markRecovered();
-                        if (orch != null) orch.onHandshakeAccepted();
+                        io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.onPrimaryHandshakeAccepted(null);
+                        client.execute(FabricNetworkManager::notifyFallback);
+                    } else {
+                        io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.onHandshakeAccepted();
+                        client.execute(FabricNetworkManager::notifyFallback);
+                            }
                     }
-                }
             } catch (Exception tailEx) {
                 LOGGER.debug("Hassium: failed to decode UDP dataplane tail (legacy server?)", tailEx);
-            }
+                }
         });
 #else
         ClientPlayNetworking.registerGlobalReceiver(FabricPayloadRegistry.HANDSHAKE_S2C_TYPE, (payload, context) -> {
@@ -393,19 +397,16 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
                 try {
                     if (buf.isReadable()) {
                         UdpDataPlaneHandshakeTail.S2CTail tail = UdpDataPlaneHandshakeTail.readS2C(buf);
-                        io.github.limuqy.mc.hassium.network.dataplane.ControlReconnectOrchestrator orch =
-                                io.github.limuqy.mc.hassium.HassiumClientMod.reconnectOrchestrator();
-                        if (orch != null) {
-                            try {
-                                java.util.List<io.github.limuqy.mc.hassium.network.dataplane.ControlEndpoint> cands =
-                                        new java.util.ArrayList<>();
-                                for (var ctl : tail.controlEndpoints()) {
-                                    cands.add(new io.github.limuqy.mc.hassium.network.dataplane.ControlEndpoint(
-                                            ctl.host(), ctl.port(), ctl.priority()));
-                                }
-                                orch.configureCandidates(cands);
-                            } catch (Throwable ignored) {}
-                        }
+                        try {
+                            java.util.List<io.github.limuqy.mc.hassium.network.dataplane.ControlEndpoint> cands =
+                                    new java.util.ArrayList<>();
+                            for (var ctl : tail.controlEndpoints()) {
+                                cands.add(new io.github.limuqy.mc.hassium.network.dataplane.ControlEndpoint(
+                                        ctl.host(), ctl.port(), ctl.priority()));
+                            }
+                            io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity
+                                    .mergeAdvertisedCandidates(cands);
+                        } catch (Throwable ignored) {}
                         if (tail.hasUdpDataplane() && Minecraft.getInstance().player != null) {
                             UUID pid = Minecraft.getInstance().player.getUUID();
                             long epoch = tail.connectionEpoch();
@@ -418,14 +419,21 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
                                 if (recovering) {
                                     io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState.getInstance()
                                             .markRecovered();
-                                    if (orch != null) orch.onHandshakeAccepted();
+                                    io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.onPrimaryHandshakeAccepted(null);
+                        } else {
+                                    io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.onHandshakeAccepted();
                                 }
+                                notifyFallback();
                             });
                         } else if (io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState.getInstance()
                                 .isRecovering()) {
                             // 无 UDP 数据面（控制 only 或 legacy 服务器）同样只确认真实恢复。
                             io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState.getInstance().markRecovered();
-                            if (orch != null) orch.onHandshakeAccepted();
+                            io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.onPrimaryHandshakeAccepted(null);
+                            context.client().execute(FabricNetworkManager::notifyFallback);
+                        } else {
+                                    io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.onHandshakeAccepted();
+                            context.client().execute(FabricNetworkManager::notifyFallback);
                         }
                     }
                 } catch (Exception tailEx) {
@@ -1298,5 +1306,15 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
         } catch (Exception e) {
             LOGGER.error("Hassium: Failed to send compression ready", e);
         }
+    }
+
+    /** Task 9 — 统一消费备用端点成功切换提示;无备用成功时空操作。必须在客户端主线程调用。 */
+    private static void notifyFallback() {
+        io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.consumeSuccessfulFallback()
+                .ifPresent(endpoint -> Minecraft.getInstance().gui.getChat().addMessage(
+                        net.minecraft.network.chat.Component.literal("[Hassium] 主地址 "
+                                + io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.primaryAddress()
+                                + " 不可用，已通过备用端点 " + endpoint.host() + ":" + endpoint.port()
+                                + " 连接；服务器列表地址和缓存身份仍为主地址。")));
     }
 }

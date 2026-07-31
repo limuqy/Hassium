@@ -19,6 +19,8 @@
     ],
     "client": [
       "MixinMinecraft",
+      "MixinConnectScreen",
+      "ConnectScreenAccessor",
       "MixinClientPacketListener",
       "MixinClientCommonPacketListenerImpl",
       "MixinClientLevel",
