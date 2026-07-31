@@ -98,12 +98,58 @@ public class HassiumForgeClient {
 
         @SubscribeEvent
         public void onPlayerLoggedOut(ClientPlayerNetworkEvent.LoggingOut event) {
-            // 走 ClientFailoverIdentity 包装（非 orchestrator 直调）：即维护 activeFallback 与
-            // attempt marker，使 MixinMinecraft 能拦截候选 DNS/TCP 失败、cacheIdentity 回主地址。
-            ClientFailoverIdentity.onPrimaryDisconnected(null, "channel_inactive");
+            // 对齐 fabric/neoforge 的 DISCONNECT 回调：仅在 orchestrator 持有可 launch 的候选时
+            // 才进入 failover 恢复态（smoke 主动断开无候选 → 不 launch）。
+            // 关键：Forge 的 LoggingOut 事件跑在 Minecraft.disconnect() 栈内，而
+            // ForgeControlReconnectLauncher.connect 的 mc.execute 在主线程是同步执行的，
+            // startConnecting 内部又会 disconnect() → firePlayerLogout → 无限递归（StackOverflow）。
+            // 因此恢复触发必须脱离当前栈：新线程 sleep 后再回主线程执行。
+            try {
+                io.github.limuqy.mc.hassium.network.dataplane.ControlReconnectOrchestrator orch =
+                        io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity
+                                .orchestrator();
+                if (orch != null && orch.hasAdvertisedCandidates()) {
+                    io.github.limuqy.mc.hassium.network.dataplane.ControlEndpoint active = null;
+                    try {
+                        var conn = event.getConnection();
+                        if (conn != null
+                                && conn.getRemoteAddress() instanceof java.net.InetSocketAddress isa) {
+                            active = new io.github.limuqy.mc.hassium.network.dataplane.ControlEndpoint(
+                                    isa.getHostString(), isa.getPort(), 0);
+                        }
+                    } catch (Throwable ignored) {}
+                    final io.github.limuqy.mc.hassium.network.dataplane.ControlEndpoint act = active;
+                    new Thread(() -> {
+                        try {
+                            Thread.sleep(200L);
+                        } catch (InterruptedException ignored) {}
+                        try {
+                            ClientFailoverIdentity.onPrimaryDisconnected(act, "channel_inactive");
+                            if (orch.isRecovering()) {
+                                io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState
+                                        .getInstance().begin(java.lang.System.currentTimeMillis() + 60_000L);
+                            }
+                        } catch (Throwable t) {
+                            LOGGER.warn("Hassium: reconnect orchestrator begin failed", t);
+                        }
+                    }, "hassium-failover-defer").start();
+                }
+            } catch (Throwable t) {
+                LOGGER.warn("Hassium: reconnect orchestrator begin failed", t);
+            }
+            // cleanup + UDP 数据面关闭 + 延后 finalize（见上方恢复触发注释）
             ClientLifecycleHelper.cleanupOnDisconnect();
-            // 延后到下一 tick：等世界拆除；与 MixinMinecraft TAIL 幂等兜底
-            net.minecraft.client.Minecraft.getInstance().execute(ClientLifecycleHelper::finalizeDisconnect);
+            // 关闭 UDP 数据面 bundle；恢复态下用温和关闭（保留磁盘缓存/executor）
+            try {
+                io.github.limuqy.mc.hassium.network.dataplane.DataPlaneClientLifecycle
+                        .getInstance().stopUdp(
+                                io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState
+                                        .getInstance().isRecovering());
+            } catch (Throwable ignored) {}
+            // 延后到下一 tick：等世界拆除；与 MixinMinecraft TAIL 幂等兜底；
+            // 恢复态下短路 finalize（磁盘缓存/executor 留待重连回首）
+            net.minecraft.client.Minecraft.getInstance()
+                    .execute(ClientLifecycleHelper::finalizeDisconnectIfTerminal);
         }
     }
 }

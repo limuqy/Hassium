@@ -24,16 +24,28 @@ public abstract class MixinConnectScreen {
 #else
 #if MC_VER < MC_1_21_6
     @Inject(method = "startConnecting(Lnet/minecraft/client/gui/screens/Screen;Lnet/minecraft/client/Minecraft;Lnet/minecraft/client/multiplayer/resolver/ServerAddress;Lnet/minecraft/client/multiplayer/ServerData;ZLnet/minecraft/client/multiplayer/TransferState;)V", at = @At("HEAD"))
+    // mixin 的 @Inject handler 必须与目标方法描述符精确匹配，不能用 Object 占位
+    // （否则 1.20.5~1.21.5 启动即 InvalidInjectionException）。类型不同仅存于未编译分支。
     private static void hassium$prepareInitialConnection(Screen screen, Minecraft minecraft,
                                                            ServerAddress address, ServerData serverData,
-#else
-    @Inject(method = "startConnecting(Lnet/minecraft/client/gui/screens/Screen;Lnet/minecraft/client/Minecraft;Lnet/minecraft/client/multiplayer/resolver/ServerAddress;Lnet/minecraft/client/multiplayer/ServerData;ZLnet/minecraft/client/multiplayer/transfer/TransferState;)V", at = @At("HEAD"))
-    private static void hassium$prepareInitialConnection(Screen screen, Minecraft minecraft,
-                                                           ServerAddress address, ServerData serverData,
-#endif
-                                                           boolean quickPlay, Object transferState, CallbackInfo ci) {
+                                                           boolean quickPlay,
+                                                           net.minecraft.client.multiplayer.TransferState transferState,
+                                                           CallbackInfo ci) {
         hassium$capture(serverData);
     }
+#else
+    // 1.21.6~1.21.11 的 TransferState 仍在 net.minecraft.client.multiplayer 包
+    // （mojmap 1.21.6/1.21.7/1.21.8/1.21.10/1.21.11 验证；无 transfer 子包）。
+    // 签名与 <1.21.6 完全相同，保留分支仅为未来迁移预留。
+    @Inject(method = "startConnecting(Lnet/minecraft/client/gui/screens/Screen;Lnet/minecraft/client/Minecraft;Lnet/minecraft/client/multiplayer/resolver/ServerAddress;Lnet/minecraft/client/multiplayer/ServerData;ZLnet/minecraft/client/multiplayer/TransferState;)V", at = @At("HEAD"))
+    private static void hassium$prepareInitialConnection(Screen screen, Minecraft minecraft,
+                                                           ServerAddress address, ServerData serverData,
+                                                           boolean quickPlay,
+                                                           net.minecraft.client.multiplayer.TransferState transferState,
+                                                           CallbackInfo ci) {
+        hassium$capture(serverData);
+    }
+#endif
 #endif
 
     private static void hassium$capture(ServerData serverData) {

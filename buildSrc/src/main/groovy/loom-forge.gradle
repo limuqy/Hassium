@@ -33,7 +33,11 @@ loom {
                         "-Dhassium.smokeTest.delayMs=${delayMs}",
                         "-Dhassium.smokeTest.reconnectDelayMs=${reconnectDelayMs}",
                         "-Dhassium.smokeTest.host=${host}",
-                        "-Dhassium.smokePhases=${phases}"
+                        "-Dhassium.smokePhases=${phases}",
+                        // forge 端 log4j StatusConsoleListener 解析反斜杠 URI 失败后
+                        // 在 Console appender 输出时递归（Recursive call to appender Console）
+                        // 叠加渲染线程 1024K 栈 → EXCEPTION_STACK_OVERFLOW；关闭 status 输出根治
+                        "-Dlog4j2.status=OFF"
                 ])
                 programArguments.addAll([
                         '--quickPlayMultiplayer', host.toString()

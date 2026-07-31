@@ -483,20 +483,23 @@ public class ForgeNetworkManager implements NetworkManager {
     }
 
     private static byte[] createServerTail(ServerPlayer player, HandshakePacket msg) {
-        if (msg.dataplaneTail().length == 0
-                || !UdpDataPlaneHandshakeTail.readC2S(
-                        io.netty.buffer.Unpooled.wrappedBuffer(msg.dataplaneTail()))
-                        .controlFailoverSupported()) {
+        if (msg.dataplaneTail().length == 0) {
+            return new byte[0];
+        }
+        UdpDataPlaneHandshakeTail.C2STail c2s = UdpDataPlaneHandshakeTail.readC2S(
+                io.netty.buffer.Unpooled.wrappedBuffer(msg.dataplaneTail()));
+        if (!c2s.controlFailoverSupported()) {
             return new byte[0];
         }
         try {
+            boolean udpBound = DataPlaneUdpServer.isBound();
             UdpDataPlaneHandshakeTail.S2CTail tail = DataPlaneHandshakeAdvertisement.create(
                     DataPlaneUdpServer.advertisedControlEndpoints(),
                     DataPlaneUdpServer.boundEndpoints(),
-                    DataPlaneUdpServer.isBound() ? DataPlaneUdpServer.getSessionToken() : null,
+                    udpBound ? DataPlaneUdpServer.getSessionToken() : null,
                     System.nanoTime(),
-                    false,
-                    true);
+                    c2s.udpDataplaneSupported() && udpBound,
+                    c2s.controlFailoverSupported());
             io.netty.buffer.ByteBuf buffer = io.netty.buffer.Unpooled.buffer();
             UdpDataPlaneHandshakeTail.writeS2C(buffer, tail);
             byte[] data = new byte[buffer.readableBytes()];
@@ -536,6 +539,28 @@ public class ForgeNetworkManager implements NetworkManager {
                                         + io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.primaryAddress()
                                         + " 不可用，已通过备用端点 " + endpoint.host() + ":" + endpoint.port()
                                         + " 连接；服务器列表地址和缓存身份仍为主地址。")));
+                // UDP 数据面启动：与 fabric 对齐（FabricNetworkManager 同位置 startUdp）。
+                // 漏掉则 forge 客户端永不发 BindRequest → 服务端不打 UDP_BIND_OK / UDP_WRR_OK。
+                if (tail.hasUdpDataplane()) {
+                    var mc = net.minecraft.client.Minecraft.getInstance();
+                    if (mc.player != null) {
+                        java.util.UUID pid = mc.player.getUUID();
+                        long epoch = tail.connectionEpoch();
+                        mc.execute(() -> {
+                            try {
+                                io.github.limuqy.mc.hassium.network.dataplane.DataPlaneClientLifecycle
+                                        .getInstance().startUdp(pid, epoch, tail);
+                            } catch (Throwable t) {
+                                LOGGER.warn("Hassium: UDP dataplane start failed", t);
+                            }
+                        });
+                    } else {
+                        // 握手早于 player 初始化（PlayerJoin 前）：defer，由 MixinClientTick 主线程续接
+                        // （takePendingUdpStart → startUdp + onHandshakeAccepted 补齐；二次调用幂等）。
+                        io.github.limuqy.mc.hassium.network.dataplane.DataPlaneClientLifecycle
+                                .getInstance().deferUdpStart(tail);
+                    }
+                }
             } catch (Throwable e) {
                 LOGGER.warn("Hassium: Failed to decode Forge failover handshake tail", e);
             }
