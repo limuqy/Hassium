@@ -182,6 +182,17 @@ public class ClientChunkHandler {
                     contentHash = io.github.limuqy.mc.hassium.cache.ChunkContentHashUtil
                             .combineSectionHashesFromArray(sectionHashes);
                 }
+                if (contentHash == 0L) {
+                    // 兜底：chunkHash 包未先于 chunk 到达（或已过期）时，从服务端数据重算，
+                    // 避免 contentHash=0 被 MetadataTable 翻转成 1 → 次回 compare 全 MISMATCH。
+                    // 与 SectionDelta 的 applyDeltaEntry 重算路径一致（方块数据同源，hash 相同）。
+                    int sectionCount = level.getSectionsCount();
+                    long[] nbtSectionHashes = io.github.limuqy.mc.hassium.cache.client.ChunkDiskCodec
+                            .computeSectionHashesFromNbt(nbt, sectionCount, level.registryAccess());
+                    sectionHashes = nbtSectionHashes;
+                    contentHash = io.github.limuqy.mc.hassium.cache.ChunkContentHashUtil
+                            .combineSectionHashesFromArray(nbtSectionHashes);
+                }
                 io.github.limuqy.mc.hassium.cache.client.CacheSaveQueue.getInstance()
                         .enqueueSerialized(pos, nbtBytes, contentHash, sectionHashes);
                 consumePendingContentHash(chunkX, chunkZ);

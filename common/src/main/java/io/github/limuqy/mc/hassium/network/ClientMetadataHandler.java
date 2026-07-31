@@ -244,13 +244,17 @@ public class ClientMetadataHandler {
                 DebugLogger.info(LogType.METADATA, "[CHUNK_HASH] HIT chunk {} (hash={})",
                         pos, Long.toHexString(entry.chunkHash()));
             } else if (cachedChunkHash == 0L) {
-                // MISS：无缓存，走全量
+                // MISS：无缓存，走全量。暂存服务端 hash，供 chunk 数据到达时写入缓存，
+                // 否则 ingest 保存的 contentHash=0 会被 MetadataTable 翻转成 1，次回 compare 全 MISMATCH。
+                ClientChunkHandler.storePendingContentHash(pos.x, pos.z, entry.chunkHash());
+                // 无 section hash：服务端未下发，chunk 到达后由 ingest 兜底重算
                 NetworkStats.recordCacheMiss(ESTIMATED_CHUNK_BYTES);
                 DebugLogger.info(LogType.METADATA, "[CHUNK_HASH] MISS chunk {}", pos);
                 newFullRequestChunks.add(pos);
             } else {
                 // MISMATCH：开关开启走分段增量，否则全量（见 clientCache.sectionDeltaEnabled）
                 NetworkStats.recordCacheStale(ESTIMATED_CHUNK_BYTES);
+                ClientChunkHandler.storePendingContentHash(pos.x, pos.z, entry.chunkHash());
                 if (HassiumConfigService.getInstance().isSectionDeltaEnabled()) {
                     DebugLogger.info(LogType.METADATA,
                             "[CHUNK_HASH] MISMATCH chunk {} (cached={}, server={}) -> delta",

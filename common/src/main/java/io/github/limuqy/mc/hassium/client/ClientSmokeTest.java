@@ -77,6 +77,12 @@ public final class ClientSmokeTest {
         reconnectDelayMs = parseLong(System.getProperty("hassium.smokeTest.reconnectDelayMs"), 3_000L);
         joinTimeoutMs = parseLong(System.getProperty("hassium.smokeTest.joinTimeoutMs"), 120_000L);
         host = System.getProperty("hassium.smokeTest.host", "127.0.0.1:25565");
+        // 首次连接由 loom 以 --quickPlayMultiplayer 发起，绕过 ConnectScreen.startConnecting，
+        // MixinConnectScreen 捕获不到 primary 身份 → ClientFailoverIdentity.primaryAddress 保持 null，
+        // S2C 握手通告的 advertised 候选被 merge gate（primaryAddress==null）丢弃，
+        // 断链后 hasAdvertisedCandidates()==false 使 failover 恢复链路完全不启动。
+        // smoke 里显式建立与真实用户（ConnectScreen 进入）等价的 primary 身份。
+        io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.prepareInitialConnection(host);
         // 阶段选择解析（与服务端 ServerSmokeTest.initIfEnabled 同规则）
         String phases = System.getProperty("hassium.smokePhases", "classic");
         java.util.Set<String> phaseSet = new java.util.HashSet<>();
@@ -309,10 +315,14 @@ public final class ClientSmokeTest {
             return;
         }
 
-        // 确保已断开
+        // 玩家仍在游戏：两种可能 —— (a) ROUND1 断开未生效；(b) failover 恢复链路已把玩家
+        // 重新接回（orchestrator 经候选端点进服）。(b) 下强制断开会打断恢复后的连接，并把缓存
+        // 身份从主地址分裂到候选地址（failover marker 已清后 cacheIdentity 不再映射回主地址），
+        // 导致 ROUND2 缓存命中归零。统一转 WAIT_JOIN_2：恢复进服后由该状态正常等待并统计；
+        // 若断开确实未生效（player 持续在场且无恢复），stats 数据仍为当前连接，不影响判定。
         if (mc.player != null) {
-            // 仍然在游戏中，强制断开
-            triggerDisconnect(mc);
+            state = State.WAIT_JOIN_2;
+            joinAtMs = -1L;
             return;
         }
 
