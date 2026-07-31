@@ -16,6 +16,9 @@ public final class ForgeConfigRegistration {
         CLIENT_SPEC = backend.clientSpec();
         SERVER_SPEC = backend.serverSpec();
         ModLoadingContext.get().registerConfig(ModConfig.Type.CLIENT, CLIENT_SPEC, clientFile);
-        ModLoadingContext.get().registerConfig(ModConfig.Type.SERVER, SERVER_SPEC, serverFile);
+        // SERVER 级会被 FML 写到 world/serverconfig（随存档删除、每次启动被 ConfigTracker 重写）；
+        // 改 COMMON 级写到 config/，与其他加载器（fabric 自定义 IO）的 config/hassium/ 位置统一。
+        // Hassium 自己的 ConfigScope.SERVER 仍由 ForgeConfigBackend.load(SERVER) 消费，不受影响。
+        ModLoadingContext.get().registerConfig(ModConfig.Type.COMMON, SERVER_SPEC, serverFile);
     }
 }

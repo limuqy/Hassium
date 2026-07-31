@@ -1,6 +1,6 @@
 # 运行时冒烟测试 — 单次会话脚本（两轮连服版）
 # 用法: .\scripts\runtime-smoke-test.ps1 -Ver 1.20.1 -Loader fabric -Phase I -SessionId "1.20.1_fabric_I"
-#       .\scripts\runtime-smoke-test.ps1 -Ver 1.20.6 -Loader forge -Phase I -SessionId "1.20.6_forge_I"   # forge 仅 1.20.1/1.20.6 有 builds_for
+#       .\scripts\runtime-smoke-test.ps1 -Ver 1.20.6 -Loader forge -Phase I -SessionId "1.20.6_forge_I"   # forge 支持范围见 versionProperties/{Ver}.properties 的 builds_for
 # 流程: 服务端启动 VD=20 → 客户端连服 → 进世界后等 DelayMs → ROUND1 统计 → 主动断开 → 服务端切 VD=8 → 等 ReconnectDelayMs → 重连 → 进世界后等 DelayMs → ROUND2 统计 → 退出
 # 关键真相源：Loom runDir 在子项目目录下（fabric/run/client、neoforge/run/server 等），不是根目录 run/
 # 退出码: 0=PASS / 2=FAIL / 3=server_not_ready
@@ -78,6 +78,23 @@ $clientErr = Join-Path $logDir "client_${SessionId}_err.log"
 $loaderRunDir = Join-Path $projectRoot "$Loader\run"
 $clientRunDir = Join-Path $loaderRunDir "client"
 $serverRunDir = Join-Path $loaderRunDir "server"
+
+# Loader × MC 版本支持校验：真相源是 versionProperties/{Ver}.properties 的 builds_for
+# （settings.gradle 从这里 include 模块）。提前报错，避免 gradle "project not found" 模糊失败。
+$versionProps = Join-Path $projectRoot "versionProperties\${Ver}.properties"
+$supportedLoaders = @()
+if (Test-Path $versionProps) {
+    $line = Get-Content $versionProps | Where-Object { $_ -match '^\s*builds_for\s*=' } | Select-Object -First 1
+    if ($line) {
+        $supportedLoaders = (($line -split '=', 2)[1].Trim()) -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" }
+    }
+}
+if ($supportedLoaders.Count -gt 0 -and ($supportedLoaders -notcontains $Loader)) {
+    $resultObj = @{ SessionId = $SessionId; Ver = $Ver; Loader = $Loader; Phase = $Phase; Result = "FAIL"; Reason = "loader_not_supported"; SupportedLoaders = ($supportedLoaders -join ","); ClientExitCode = -1 }
+    $resultObj | ConvertTo-Json -Depth 3 | Out-File (Join-Path $resultsDir "result_${SessionId}.json")
+    Write-Host "[$SessionId] === RESULT: FAIL === $Loader 不支持 MC $Ver（builds_for=$($supportedLoaders -join ',' )）；可用: $($supportedLoaders -join ' / ')"
+    exit 2
+}
 
 # 确保输出目录存在
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
