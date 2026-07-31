@@ -79,8 +79,8 @@ MC_1_21_11
 | 1.21.1 | fabric, neoforge, forge |
 | 1.21.2 | fabric, neoforge |
 | 1.21.5 | fabric, neoforge, forge |
-| 1.21.6 | fabric, neoforge |
-| 1.21.9 | fabric, neoforge |
+| 1.21.6 | fabric, neoforge, forge |
+| 1.21.9 | fabric, neoforge, forge |
 | 1.21.11 | fabric, neoforge |
 
 > **Forge 支持 1.20.1 / 1.20.6 / 1.21.1 / 1.21.3 / 1.21.4 / 1.21.5 / 1.21.6 / 1.21.7 / 1.21.8 / 1.21.9 / 1.21.10**；**1.21.11 起 sunset**（architectury-loom 在 merged jar 重映射阶段打散 anonymous inner class `$N` 编号，outer class `<clinit>` 调用方与实际 class 文件名错位：loom 1.13.469 崩点在 `ByteBufCodecs$N`，loom 1.17.491（2026-07-29 验证 + Gradle 9.6.1）漂移到 `CompoundTag$N` 且 1.21.10 runServer 证实到 `Done`，root cause 同源未修复，详见附录「Forge 1.21.x 适配」）。**1.21.2 上游未发布 Forge userdev**（官方跳过），1.21.11 及后续不构建 Forge，1.21.x 请用 NeoForge。
@@ -188,9 +188,9 @@ Forge 1.20.6（段 C 段尾）此前因 kcp-netty 依赖未接入与 `ForgeNetwo
 |----|------|------|
 | A–I | 见上表 | 已完成 / 已联调 |
 
-### Forge 1.21.x 适配（1.21.1 / 1.21.5 通过；1.21.11 搁置）
+### Forge 1.21.x 适配（1.21.1–1.21.10 通过；1.21.11 搁置）
 
-Forge 自 1.21.x 起仍为 Forge 风格 API，与 NeoForge 不兼容；Hassium 通过 `neoforge` 子项目以 `loom.platform = 'forge'` 覆盖承载 Forge 构建（Forge 仅 1.20.1 / 1.20.6 / 1.21.1 / 1.21.5 有 userdev）。
+Forge 自 1.21.x 起仍为 Forge 风格 API，与 NeoForge 不兼容；Hassium 通过 `neoforge` 子项目以 `loom.platform = 'forge'` 覆盖承载 Forge 构建（1.21.2 上游无 Forge userdev；1.21.3–1.21.10 均有 userdev，loom 1.17.491 + Gradle 9.6.1 下 `:forge:compileJava` 通过，2026-07-29 九连 Phase R smoke 全 PASS）。
 
 **1.21.1（段 D，commit 1461705）**：`HassiumMod.java` 改用 `ForgeConfigRegistration.register(...)` + 原生 `ModConfigEvent`；forge-only jar prepend 策略（仅 forge packages + 资源 + AMN，不含 mc class）让 ClasspathLocator 不抢 minecraft 路径。
 

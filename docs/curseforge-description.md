@@ -64,9 +64,12 @@ Full instructions: [Installation](https://github.com/limuqy/Hassium/wiki/Install
 | Minecraft | Fabric | Forge | NeoForge |
 | --- | --- | --- | --- |
 | 1.20.1 | Yes | Yes | Yes |
-| 1.20.2–1.20.4 | Yes | — | Yes |
-| 1.20.5–1.20.6 | Yes | Yes (1.20.6 only) | Yes |
-| 1.21.1–1.21.11 | Yes | — | Yes |
+| 1.20.2–1.20.5 | Yes | — | Yes |
+| 1.20.6 | Yes | Yes | Yes |
+| 1.21.1 | Yes | Yes | Yes |
+| 1.21.2 | Yes | — | Yes |
+| 1.21.3–1.21.10 | Yes | Yes | Yes |
+| 1.21.11 | Yes | — | Yes |
 
 Complete matrix: [Support Matrix](https://github.com/limuqy/Hassium/wiki/Support-Matrix-en)
 
@@ -118,9 +121,12 @@ Complete matrix: [Support Matrix](https://github.com/limuqy/Hassium/wiki/Support
 | Minecraft | Fabric | Forge | NeoForge |
 | --- | --- | --- | --- |
 | 1.20.1 | ✅ | ✅ | ✅ |
-| 1.20.2–1.20.4 | ✅ | — | ✅ |
-| 1.20.5–1.20.6 | ✅ | ✅（仅 1.20.6） | ✅ |
-| 1.21.1–1.21.11 | ✅ | — | ✅ |
+| 1.20.2–1.20.5 | ✅ | — | ✅ |
+| 1.20.6 | ✅ | ✅ | ✅ |
+| 1.21.1 | ✅ | ✅ | ✅ |
+| 1.21.2 | ✅ | — | ✅ |
+| 1.21.3–1.21.10 | ✅ | ✅ | ✅ |
+| 1.21.11 | ✅ | — | ✅ |
 
 完整矩阵见：[支持矩阵](https://github.com/limuqy/Hassium/wiki/Support-Matrix)
 

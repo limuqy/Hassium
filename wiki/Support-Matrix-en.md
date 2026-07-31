@@ -18,20 +18,20 @@ Hassium covers Minecraft **1.20.1–1.21.11**, adapted as **9 version segments �
 | 1.20.4 | ✅ | — | ✅ |
 | 1.20.5 | ✅ | — | ✅ |
 | 1.20.6 | ✅ | ✅ | ✅ |
-| 1.21.1 | ✅ | — | ✅ |
+| 1.21.1 | ✅ | ✅ | ✅ |
 | 1.21.2 | ✅ | — | ✅ |
-| 1.21.3 | ✅ | — | ✅ |
-| 1.21.4 | ✅ | — | ✅ |
-| 1.21.5 | ✅ | — | ✅ |
-| 1.21.6 | ✅ | — | ✅ |
-| 1.21.7 | ✅ | — | ✅ |
-| 1.21.8 | ✅ | — | ✅ |
-| 1.21.9 | ✅ | — | ✅ |
-| 1.21.10 | ✅ | — | ✅ |
+| 1.21.3 | ✅ | ✅ | ✅ |
+| 1.21.4 | ✅ | ✅ | ✅ |
+| 1.21.5 | ✅ | ✅ | ✅ |
+| 1.21.6 | ✅ | ✅ | ✅ |
+| 1.21.7 | ✅ | ✅ | ✅ |
+| 1.21.8 | ✅ | ✅ | ✅ |
+| 1.21.9 | ✅ | ✅ | ✅ |
+| 1.21.10 | ✅ | ✅ | ✅ |
 | 1.21.11 | ✅ | — | ✅ |
 
-- **Forge is only available on 1.20.1 / 1.20.6** (segment A / segment C tail); no Forge builds for 1.21+
-- Use NeoForge for 1.21+
+- **Forge is available on 1.20.1 / 1.20.6 / 1.21.1 / 1.21.3–1.21.10**; 1.21.2 is skipped upstream (no official Forge userdev), **1.21.11 is sunset** — use NeoForge for 1.21.x
+- Forge support on 1.20.1 is provided by the neoforge subproject (`loom.platform=forge`); the standalone forge subproject builds only 1.20.6 / 1.21.x
 - Forge 1.20.6 keeps a one-off Forge Config API Port bridge because it shares `ModConfigSpec` with NeoForge
 
 ---

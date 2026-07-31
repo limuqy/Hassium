@@ -41,10 +41,13 @@
 
 | Minecraft | Fabric | Forge | NeoForge |
 | --- | --- |-------| --- |
-| 1.20.1 | ✅ | ✅     | ✅ |
-| 1.20.2–1.20.4 | ✅ | —     | ✅ |
-| 1.20.5–1.20.6 | ✅ | —     | ✅ |
-| 1.21.1–1.21.11 | ✅ | —     | ✅ |
+| 1.20.1 | ✅ | ✅ | ✅ |
+| 1.20.2–1.20.5 | ✅ | — | ✅ |
+| 1.20.6 | ✅ | ✅ | ✅ |
+| 1.21.1 | ✅ | ✅ | ✅ |
+| 1.21.2 | ✅ | — | ✅ |
+| 1.21.3–1.21.10 | ✅ | ✅ | ✅ |
+| 1.21.11 | ✅ | — | ✅ |
 
 Fabric 需 Fabric API（Cloth 已打包）；Forge / NeoForge 无额外前置。从 [Releases](https://github.com/limuqy/Hassium/releases) 选对应**加载器 + MC 版本**的 JAR。
 
@@ -111,9 +114,12 @@ Vanilla clients can connect by default. Install Hassium on **both** client and s
 | Minecraft | Fabric | Forge | NeoForge |
 | --- | --- | --- | --- |
 | 1.20.1 | Yes | Yes | Yes |
-| 1.20.2–1.20.4 | Yes | — | Yes |
-| 1.20.5–1.20.6 | Yes | Yes (1.20.6 only) | Yes |
-| 1.21.1–1.21.11 | Yes | — | Yes |
+| 1.20.2–1.20.5 | Yes | — | Yes |
+| 1.20.6 | Yes | Yes | Yes |
+| 1.21.1 | Yes | Yes | Yes |
+| 1.21.2 | Yes | — | Yes |
+| 1.21.3–1.21.10 | Yes | Yes | Yes |
+| 1.21.11 | Yes | — | Yes |
 
 Fabric needs Fabric API (Cloth is bundled); Forge / NeoForge have no required extras. Pick the jar matching your **loader + MC version** from [Releases](https://github.com/limuqy/Hassium/releases).
 
