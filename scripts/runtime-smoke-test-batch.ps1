@@ -14,7 +14,7 @@
 # 并行模式: 同版本多 loader 同时跑，端口按 -Loaders 顺序 fabric=BasePort, forge=+1, neoforge=+2
 #           版本间仍串行（避免跨版本存档冲突）；不调用会话间 gradlew --stop，batch 结束后统一 stop
 param(
-    [Parameter(Mandatory=$true)][ValidateSet("I","R")][string]$Phase,
+    [Parameter(Mandatory=$true)][ValidateSet("I","R","UdpFailover")][string]$Phase,
     [string[]]$Versions,
     [ValidateSet("fabric","forge","neoforge")][string[]]$Loaders = @("fabric","neoforge"),
     [int]$MaxRetries = 3,

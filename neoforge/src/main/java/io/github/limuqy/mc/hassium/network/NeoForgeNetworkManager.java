@@ -637,41 +637,6 @@ public class NeoForgeNetworkManager implements NetworkManager {
     }
 
     /**
-     * 握手响应 Payload (S2C)
-     */
-    public record HandshakeResponsePayload(
-            int protocolVersion,
-            boolean accepted,
-            boolean globalCompressionAccepted,
-            boolean compactHeaderAccepted
-    ) implements CustomPacketPayload {
-
-        public static final ResourceLocation ID = ResourceLocationCompat.create(Constants.MOD_ID, "handshake_s2c");
-
-        @Override
-        public void write(FriendlyByteBuf buf) {
-            buf.writeVarInt(protocolVersion);
-            buf.writeBoolean(accepted);
-            buf.writeBoolean(globalCompressionAccepted);
-            buf.writeBoolean(compactHeaderAccepted);
-        }
-
-        @Override
-        public ResourceLocation id() {
-            return ID;
-        }
-
-        public static HandshakeResponsePayload decode(FriendlyByteBuf buf) {
-            return new HandshakeResponsePayload(
-                    buf.readVarInt(),
-                    buf.readBoolean(),
-                    buf.readBoolean(),
-                    buf.readBoolean()
-            );
-        }
-    }
-
-    /**
      * 压缩区块数据 Payload (S2C)
      */
     public record CompressedChunkPayload(byte[] data) implements CustomPacketPayload {
