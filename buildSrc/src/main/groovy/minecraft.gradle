@@ -14,6 +14,17 @@ dependencies {
 
 if (project.name == "common") return // Don't apply the code below to the common project
 
+// loom 1.17.491 + Gradle 9.6：fabric 平台 remapJar 任务依赖计算会解析 compileClasspath 的构建依赖图，
+// 途中需实例化 compileJava；compileJava 创建时又以 compileClasspath 为 classpath 再次解析其构建依赖图，
+// Gradle 9 的 markAsObserved 检测到该重入直接抛 "Cannot observe dependencies before markAsObserved"，
+// 导致 build/remapJar 失败（smoke 只跑 classes/runServer，不碰 remapJar，故此前未暴露）。
+// 配置阶段提前实例化 compileJava：任务图阶段不再 tryCreate，打破死锁。
+// forge/neoforge 平台未触发，统一提前实例化无副作用（compileJava 本就要执行），
+// 兼防其他平台在 loom 后续版本中触发同类重入。
+afterEvaluate {
+    tasks.named('compileJava').get()
+}
+
 dependencies {
     implementation(project(":common"))
 }
