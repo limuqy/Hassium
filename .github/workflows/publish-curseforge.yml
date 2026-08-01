@@ -14,8 +14,9 @@
 #     → ./gradlew build publishCurseForge 自动跑对应 loader 的上传 task
 #   - 1.20.1 例外：builds_for=fabric,neoforge（无独立 forge 子项目）；
 #     neoforge 产物以 loom.platform='forge' 编译，上传时同一 jar 双标 NeoForge + Forge
-#   - 1.20.6：builds_for 含 forge → 独立 forge 子项目单标 Forge 上传
-#   - 1.21+：无 Forge（仅 fabric + neoforge）
+#   - Forge 发布范围（与 docs/version-segments.md 一致）：1.20.6、1.21.1、1.21.3–1.21.10
+#     的 builds_for 含 forge → 独立 forge 子项目单标 Forge 上传；
+#     1.21.2 上游无 Forge userdev、1.21.11 loom inner-class 错位 sunset，均无 Forge
 #
 # 一次性仓库配置：
 #   Settings → Secrets → Actions → New secret：CURSEFORGE_TOKEN（勿提交进 gradle.properties）
