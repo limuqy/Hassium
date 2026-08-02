@@ -136,5 +136,6 @@
     "hassium.command.export.singleplayer_error":  "Cannot export cache from singleplayer world, please specify a server IP",
     "hassium.command.export.usage":  "Usage: /hassiumc export <serverIp> [seed]",
     "hassium.command.export.server_not_found":  "Cache directory not found for server %s",
-    "hassium.command.export.no_connection":  "Not connected to server, cannot export current world"
+    "hassium.command.export.no_connection":  "Not connected to server, cannot export current world",
+    "hassium.failover.backup_status":  " [backup]"
 }

@@ -77,6 +77,11 @@ public final class ClientFailoverIdentity {
         if (current != null) current.merge(advertised);
     }
 
+    public static List<ControlEndpoint> findBackupFor(String ip) {
+        ClientFailoverIdentity current = instance;
+        return current == null || ip == null ? List.of() : current.store.load(ip);
+    }
+
     public static boolean onInitialTcpConnectionFailed() {
         ClientFailoverIdentity current = instance;
         return current != null && current.initialFailure();

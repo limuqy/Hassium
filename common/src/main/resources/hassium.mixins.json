@@ -26,6 +26,7 @@
       "MixinClientLevel",
       "MixinLevel",
       "MixinClientTick",
+      "MixinServerStatusPinger",
       "MixinGui",
       "MixinGameRenderer",
       "MixinLightRecompute",

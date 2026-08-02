@@ -136,5 +136,6 @@
     "hassium.command.export.singleplayer_error":  "单人世界无法导出缓存，请指定要导出的服务器 IP",
     "hassium.command.export.usage":  "用法: /hassiumc export <serverIp> [seed]",
     "hassium.command.export.server_not_found":  "未找到服务器 %s 的缓存目录",
-    "hassium.command.export.no_connection":  "未连接到服务器，无法导出当前世界"
+    "hassium.command.export.no_connection":  "未连接到服务器，无法导出当前世界",
+    "hassium.failover.backup_status":  " [备用]"
 }
