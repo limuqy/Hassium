@@ -37,6 +37,7 @@ import java.util.function.LongSupplier;
  */
 public final class ControlReconnectOrchestrator {
     private static final Logger SMOKE_LOG = LoggerFactory.getLogger("HassiumSmokeTest");
+    private static final Logger LOG = LoggerFactory.getLogger("Hassium/Orchestrator");
 
 
     private final ControlReconnectLauncher launcher;
@@ -102,6 +103,11 @@ public final class ControlReconnectOrchestrator {
 
     /** 主控连接断开（通道 inactive 或 stall 触发 FailoverRequest 被拒）。立刻尝试下一候选。 */
     public synchronized void onPrimaryDisconnected(ControlEndpoint active, String reason) {
+        if (HassiumConfigService.getInstance().isDataplaneLogging()) {
+            LOG.info("[diag] onPrimaryDisconnected active={} reason={} recovering={} terminalFinalized={} userInitiated={} advertisedConfigured={}",
+                    active == null ? "null" : active.coordinateKey(), reason, recovering, terminalFinalized,
+                    userInitiatedDisconnect, advertisedConfigured);
+        }
         if (terminalFinalized) {
             return; // 已经在 terminal；不再 launch
         }
@@ -235,8 +241,11 @@ public final class ControlReconnectOrchestrator {
             return false;
         }
         if (!initialConnection) return false;
-        if (!canStartRecovery(null)) {
-            // 未通告 / 主动退出 / 端点不足：初始连接失败不自动切换主控。
+        // 初始连接失败（DNS/TCP 未建立）：没有握手可言，advertisedConfigured 在 prepare 时
+        // 已被重置为 false，不能复用 canStartRecovery 的 advertised gate（否则初始失败
+        // fallback 永不触发）。fallback 依据是 persisted store 的历史候选（仅由真实握手
+        // merge 写入，等价于“历史上通告过”）：主地址之外至少 1 个候选才自动切换。
+        if (candidates.isEmpty() || distinctEndpointCount(null) <= 1) {
             initialConnection = false;
             return false;
         }
@@ -344,6 +353,11 @@ public final class ControlReconnectOrchestrator {
      * 非用户主动退出，且候选与主地址去重后客户端控制端点总数 &gt; 2（至少主地址 + 2 个候选）。
      */
     private boolean canStartRecovery(ControlEndpoint active) {
+        if (HassiumConfigService.getInstance().isDataplaneLogging()) {
+            LOG.info("[diag] canStartRecovery active={} advertisedConfigured={} userInitiated={} distinct={}",
+                    active == null ? "null" : active.coordinateKey(), advertisedConfigured, userInitiatedDisconnect,
+                    distinctEndpointCount(active));
+        }
         if (!advertisedConfigured) {
             return false;
         }

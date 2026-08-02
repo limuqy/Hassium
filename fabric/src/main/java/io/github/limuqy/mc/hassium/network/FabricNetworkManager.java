@@ -344,27 +344,41 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
                             try { DataPlaneClientLifecycle.getInstance().startUdp(pid, epoch, tail); }
                             catch (Throwable t) { LOGGER.warn("Hassium: UDP dataplane start failed", t); }
                             // 只有 DISCONNECT 已建立恢复态的握手才能确认恢复；首次登录只启动 UDP。
+                            // recovered 判定：onHandshakeAccepted 仅当 orchestrator 处于恢复中才返回 true
+                            // （第二次回调/首次登录返回 false），避免 acceptHandshake 坐标相等分支
+                            // 重复设置 successfulFallback → 聊天栏切换消息出现两次。
                             boolean recovering = io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState
                                     .getInstance().isRecovering();
+                            boolean recovered;
                             if (recovering) {
                                 io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState.getInstance()
                                         .markRecovered();
-                                io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.onPrimaryHandshakeAccepted(null);
-                    } else {
-                            io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.onHandshakeAccepted();
+                                recovered = io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity
+                                        .onPrimaryHandshakeAccepted(null);
+                            } else {
+                                recovered = io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity
+                                        .onHandshakeAccepted();
                             }
-                            notifyFallback();
+                            if (recovered) {
+                                notifyFallback();
+                            }
                         });
                     } else if (io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState.getInstance()
                             .isRecovering()) {
                         // 无 UDP 数据面（控制 only 或 legacy 服务器）同样只确认真实恢复。
                         io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState.getInstance().markRecovered();
-                        io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.onPrimaryHandshakeAccepted(null);
-                        client.execute(FabricNetworkManager::notifyFallback);
+                        boolean r = io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity
+                                .onPrimaryHandshakeAccepted(null);
+                        if (r) {
+                            client.execute(FabricNetworkManager::notifyFallback);
+                        }
                     } else {
-                        io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.onHandshakeAccepted();
-                        client.execute(FabricNetworkManager::notifyFallback);
-                            }
+                        boolean r = io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity
+                                .onHandshakeAccepted();
+                        if (r) {
+                            client.execute(FabricNetworkManager::notifyFallback);
+                        }
+                    }
                     }
             } catch (Exception tailEx) {
                 LOGGER.debug("Hassium: failed to decode UDP dataplane tail (legacy server?)", tailEx);
@@ -417,26 +431,40 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
                                 try { DataPlaneClientLifecycle.getInstance().startUdp(pid, epoch, tail); }
                                 catch (Throwable t) { LOGGER.warn("Hassium: UDP dataplane start failed", t); }
                                 // 只有 DISCONNECT 已建立恢复态的握手才能确认恢复；首次登录只启动 UDP。
+                                // recovered 判定：onHandshakeAccepted 仅当 orchestrator 处于恢复中才返回 true
+                                // （第二次回调/首次登录返回 false），避免 acceptHandshake 坐标相等分支
+                                // 重复设置 successfulFallback → 聊天栏切换消息出现两次。
                                 boolean recovering = io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState
                                         .getInstance().isRecovering();
+                                boolean recovered;
                                 if (recovering) {
                                     io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState.getInstance()
                                             .markRecovered();
-                                    io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.onPrimaryHandshakeAccepted(null);
-                        } else {
-                                    io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.onHandshakeAccepted();
+                                    recovered = io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity
+                                            .onPrimaryHandshakeAccepted(null);
+                                } else {
+                                    recovered = io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity
+                                            .onHandshakeAccepted();
                                 }
-                                notifyFallback();
+                                if (recovered) {
+                                    notifyFallback();
+                                }
                             });
                         } else if (io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState.getInstance()
                                 .isRecovering()) {
                             // 无 UDP 数据面（控制 only 或 legacy 服务器）同样只确认真实恢复。
                             io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState.getInstance().markRecovered();
-                            io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.onPrimaryHandshakeAccepted(null);
-                            context.client().execute(FabricNetworkManager::notifyFallback);
+                            boolean r = io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity
+                                    .onPrimaryHandshakeAccepted(null);
+                            if (r) {
+                                context.client().execute(FabricNetworkManager::notifyFallback);
+                            }
                         } else {
-                                    io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.onHandshakeAccepted();
-                            context.client().execute(FabricNetworkManager::notifyFallback);
+                            boolean r = io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity
+                                    .onHandshakeAccepted();
+                            if (r) {
+                                context.client().execute(FabricNetworkManager::notifyFallback);
+                            }
                         }
                     }
                 } catch (Exception tailEx) {

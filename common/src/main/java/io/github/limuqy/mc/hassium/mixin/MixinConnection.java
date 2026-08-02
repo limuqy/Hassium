@@ -140,6 +140,12 @@ public class MixinConnection {
     @Inject(method = "disconnect(Lnet/minecraft/network/chat/Component;)V", at = @At("HEAD"))
     private void hassium$onControlDisconnect(CallbackInfo ci) {
         Connection self = (Connection) (Object) this;
+        if (io.github.limuqy.mc.hassium.config.HassiumConfigService.getInstance().isDataplaneLogging()) {
+            io.github.limuqy.mc.hassium.Constants.LOG.info(
+                    "[diag] Connection.disconnect(Component) thread={} connected={} channelNull={} inEventLoop={}",
+                    Thread.currentThread().getName(), self.isConnected(), this.channel == null,
+                    this.channel != null && this.channel.eventLoop().inEventLoop());
+        }
         if (self.isConnected() && this.channel != null && !this.channel.eventLoop().inEventLoop()) {
             io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.markUserInitiatedDisconnect();
             return;

@@ -1,5 +1,6 @@
 package io.github.limuqy.mc.hassium.mixin;
 
+import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverAttemptMarker;
 import io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity;
 import net.minecraft.client.Minecraft;
@@ -49,10 +50,20 @@ public abstract class MixinConnectScreen {
 #endif
 
     private static void hassium$capture(ServerData serverData) {
+        if (io.github.limuqy.mc.hassium.config.HassiumConfigService.getInstance().isDataplaneLogging()) {
+            io.github.limuqy.mc.hassium.Constants.LOG.info("[diag] ConnectScreen.capture serverData={} marked={} namePrefix={}",
+                    serverData == null ? "null" : serverData.ip,
+                    ClientFailoverAttemptMarker.isMarked(),
+                    serverData == null ? "-" : serverData.name.startsWith("hassium-failover:"));
+        }
         if (serverData == null || ClientFailoverAttemptMarker.isMarked()
                 || serverData.name.startsWith("hassium-failover:")) {
             return;
         }
         ClientFailoverIdentity.prepareInitialConnection(serverData.ip);
+        if (io.github.limuqy.mc.hassium.config.HassiumConfigService.getInstance().isDataplaneLogging()) {
+            io.github.limuqy.mc.hassium.Constants.LOG.info("[diag] ConnectScreen.capture after prepare marked={}",
+                    ClientFailoverAttemptMarker.isMarked());
+        }
     }
 }

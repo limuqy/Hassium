@@ -210,18 +210,34 @@ class ControlReconnectOrchestratorTest {
     }
 
     @Test
-    @DisplayName("初始 TCP 失败但本次未通告 → 拒绝自动切换主控")
-    void initialTcpFailureWithoutAdvertisementRejects() {
+    @DisplayName("初始 TCP 失败但无任何候选 → 拒绝自动切换主控")
+    void initialTcpFailureWithoutCandidateRejects() {
         RecordingLauncher launcher = new RecordingLauncher();
         ControlReconnectOrchestrator orchestrator =
                 new ControlReconnectOrchestrator(launcher, List.of(), List.of());
-        orchestrator.prepareInitialConnection("primary.com:25565", List.of(
-                endpoint("a.com", 25565, 10), endpoint("b.com", 25565, 9)));
-        // 未调 mergeAdvertisedCandidates
+        // 无 persisted 候选（从未成功握手通告过）：初始失败没有备用可切。
+        orchestrator.prepareInitialConnection("primary.com:25565", List.of());
 
-        assertFalse(orchestrator.onInitialTcpConnectionFailed(), "未通告 → 不自动切换");
+        assertFalse(orchestrator.onInitialTcpConnectionFailed(), "无候选 → 不自动切换");
         assertTrue(launcher.launched().isEmpty());
         assertFalse(orchestrator.isRecovering());
+    }
+
+    @Test
+    @DisplayName("初始 TCP 失败但 persisted 有历史候选（本次未通告）→ 切备用进服")
+    void initialTcpFailureWithPersistedCandidatesLaunchesFallback() {
+        RecordingLauncher launcher = new RecordingLauncher();
+        ControlReconnectOrchestrator orchestrator =
+                new ControlReconnectOrchestrator(launcher, List.of(), List.of());
+        // 热切/上次会话握手已把候选写入 persisted store；本次新连接未及握手即失败。
+        orchestrator.prepareInitialConnection("primary.com:25565", List.of(
+                endpoint("a.com", 25565, 10), endpoint("b.com", 25565, 9)));
+        // 未调 mergeAdvertisedCandidates（TCP 都没连上，无握手）
+
+        assertTrue(orchestrator.onInitialTcpConnectionFailed(), "persisted 候选存在 → 切备用");
+        assertEquals(List.of(endpoint("a.com", 25565, 10)), launcher.launched(),
+                "按 priority 优先 launch a");
+        assertTrue(orchestrator.isRecovering());
     }
 
     @Test

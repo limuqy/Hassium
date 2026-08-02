@@ -94,6 +94,11 @@ public class HassiumConfigService {
         return tomlBackend.get();
     }
 
+    /** 客户端 debug.dataplaneLogging：数据面/主控热切诊断日志（默认 false，需要时打开）。 */
+    public boolean isDataplaneLogging() {
+        return config.debug().dataplaneLogging();
+    }
+
     /**
      * 从 ConfigSpec 同步快照与门闩（ModConfig load/reload 与初始化时调用）。
      * Fabric toml 后端下为空操作。

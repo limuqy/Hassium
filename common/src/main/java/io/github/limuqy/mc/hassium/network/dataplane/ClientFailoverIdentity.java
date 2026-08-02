@@ -137,6 +137,10 @@ public final class ClientFailoverIdentity {
     }
 
     private synchronized void prepare(String primary) {
+        if (io.github.limuqy.mc.hassium.config.HassiumConfigService.getInstance().isDataplaneLogging()) {
+            org.slf4j.LoggerFactory.getLogger("Hassium/Identity").info(
+                    "[diag] ClientFailoverIdentity.prepare primary={} (markPrimary + resetForNewSession + orchestrator.prepareInitialConnection)", primary);
+        }
         primaryAddress = Objects.requireNonNull(primary, "primaryAddress");
         activeFallback = null;
         successfulFallback = null;

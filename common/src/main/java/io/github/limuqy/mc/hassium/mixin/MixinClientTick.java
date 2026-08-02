@@ -92,6 +92,13 @@ public class MixinClientTick {
                 var pending = lifecycle.takePendingUdpStart();
                 if (pending != null) {
                     lifecycle.startUdp(mc.player.getUUID(), pending.connectionEpoch(), pending);
+                    if (io.github.limuqy.mc.hassium.config.HassiumConfigService.getInstance().isDataplaneLogging()) {
+                        io.github.limuqy.mc.hassium.Constants.LOG.info(
+                                "[diag] MixinClientTick pendingUdpStart epoch={} recovering={} phase={}",
+                                pending.connectionEpoch(),
+                                io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState.getInstance().isRecovering(),
+                                io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState.getInstance().phase());
+                    }
                     // 延迟续接点必须补齐 onHandshakeAccepted + notifyFallback —— 否则
                     // player==null 握手延迟的场景会跳过 failover 身份确认与缓存身份映射。
                     try {

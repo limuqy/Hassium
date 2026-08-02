@@ -7,11 +7,13 @@ import io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.gui.screens.ConnectScreen;
+import net.minecraft.client.gui.screens.ProgressScreen;
 import net.minecraft.client.gui.screens.DisconnectedScreen;
 import net.minecraft.client.gui.screens.Screen;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
@@ -26,9 +28,26 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public class MixinMinecraft {
     private static final Logger LOGGER = LoggerFactory.getLogger("Hassium/MixinMinecraft");
 
+    /**
+     * 初始失败 fallback 时让开屏幕槽位：vanilla startConnecting 开头拒绝
+     * {@code screen instanceof ConnectScreen} 的二次连接（Attempt to connect while
+     * already connecting），直接字段赋值避免 setScreen 触发 UI 闪烁。
+     */
+    @Shadow
+    private Screen screen;
+
     @Inject(method = "setScreen", at = @At("HEAD"), cancellable = true)
     private void hassium$onDisconnectedScreen(Screen screen, CallbackInfo ci) {
         Minecraft minecraft = (Minecraft) (Object) this;
+        if (io.github.limuqy.mc.hassium.config.HassiumConfigService.getInstance().isDataplaneLogging()) {
+            if (screen instanceof DisconnectedScreen) {
+                io.github.limuqy.mc.hassium.Constants.LOG.info(
+                        "[diag] Minecraft.setScreen target=DisconnectedScreen current={} marked={} recovering={}",
+                        minecraft.screen == null ? "null" : minecraft.screen.getClass().getSimpleName(),
+                        ClientFailoverAttemptMarker.isMarked(),
+                        io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.isRecovering());
+            }
+        }
 #if MC_VER < MC_1_20_2
         // L2 定格：恢复窗口内过渡画面不绘制（渲染层由 MixinGameRenderer 隐藏），但 setScreen
         // 必须放行——Fabric ClientNetworkingImpl.getLoginConnection 依赖
@@ -56,7 +75,19 @@ public class MixinMinecraft {
         if (!(screen instanceof DisconnectedScreen)
                 || !(minecraft.screen instanceof ConnectScreen)
                 || !ClientFailoverAttemptMarker.isMarked()) {
-            if (!(screen instanceof ConnectScreen)) {
+            if (io.github.limuqy.mc.hassium.config.HassiumConfigService.getInstance().isDataplaneLogging()
+                    && !(screen instanceof ConnectScreen)
+                    && !(screen instanceof DisconnectedScreen)) {
+                io.github.limuqy.mc.hassium.Constants.LOG.info(
+                        "[diag] MixinMinecraft bypass setScreen({}) current={} marked={} (clear marker if not ConnectScreen)",
+                        screen == null ? "null" : screen.getClass().getSimpleName(),
+                        minecraft.screen == null ? "null" : minecraft.screen.getClass().getSimpleName(),
+                        ClientFailoverAttemptMarker.isMarked());
+            }
+            // 连接流程中的过渡屏（ProgressScreen 等）不清 marker：vanilla startConnecting
+            // 先切 ProgressScreen 再切 ConnectScreen，若在此清掉标记，主地址 TCP 失败弹
+            // DisconnectedScreen 时拦截链因 marked=false 失效，初始 fallback 永不触发。
+            if (!(screen instanceof ConnectScreen) && !(screen instanceof ProgressScreen)) {
                 ClientFailoverAttemptMarker.clear();
             }
             return;
@@ -65,6 +96,10 @@ public class MixinMinecraft {
         net.minecraft.network.Connection connection =
                 ((ConnectScreenAccessor) connectScreen).hassium$getConnection();
         if (connection == null && ClientFailoverIdentity.onInitialTcpConnectionFailed()) {
+            // 让开屏幕槽位：vanilla startConnecting 会拒绝 screen 仍为 ConnectScreen 的
+            // 二次连接（"Attempt to connect while already connecting"）。直接字段赋值，
+            // 不触发 setScreen（无 UI 闪烁）；launch 的合成连接下帧接管。
+            this.screen = null;
             ci.cancel();
         } else {
             ClientFailoverAttemptMarker.clear();

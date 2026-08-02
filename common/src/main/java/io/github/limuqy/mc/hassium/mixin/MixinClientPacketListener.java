@@ -41,6 +41,25 @@ public class MixinClientPacketListener {
     @Inject(method = "handleLogin", at = @At("RETURN"))
     private void hassium$onLogin(net.minecraft.network.protocol.game.ClientboundLoginPacket packet, CallbackInfo ci) {
         ClientLifecycleHelper.onLogin();
+        // L2 恢复成功收敛（幂等）：热切握手 accepted 后新 player 在 handleLogin 建立（主线程），
+        // 此为主控热切成功的统一收敛点。MixinClientTick 的 pendingUdpStart 分支是死代码
+        // （deferUdpStart 无调用点），恢复收敛此前永不执行，导致 orchestrator.recovering 悬挂：
+        // 无感模式 C2S 拦截持续吞包、AttemptMarker 不清理、fallback 通知延迟到下次进服。
+        // orchestrator.recovering==false（首次进服/普通重连）时 onHandshakeAccepted 返回 false，no-op。
+        try {
+            boolean recovered = io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity
+                    .onHandshakeAccepted();
+            if (recovered) {
+                io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.consumeSuccessfulFallback()
+                        .ifPresent(endpoint -> net.minecraft.client.Minecraft.getInstance().gui.getChat().addMessage(
+                                net.minecraft.network.chat.Component.literal("[Hassium] 主地址 "
+                                        + io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.primaryAddress()
+                                        + " 不可用，已通过备用端点 " + endpoint.host() + ":" + endpoint.port()
+                                        + " 连接；服务器列表地址和缓存身份仍为主地址。")));
+            }
+        } catch (Throwable ignored) {
+            // 收敛失败不阻断登录
+        }
     }
 
 #if MC_VER < MC_1_20_2
