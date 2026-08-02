@@ -19,7 +19,7 @@ class ConfigSnapshotAdapterClientScopeTest {
 
     @Test
     void clientNetworkSettingsRoundTripThroughValues() {
-        HassiumConfig.ClientNetworkConfig clientNet = new HassiumConfig.ClientNetworkConfig(false, true, true);
+        HassiumConfig.ClientNetworkConfig clientNet = new HassiumConfig.ClientNetworkConfig(false, true, true, false);
         HassiumConfig original = HassiumConfig.DEFAULT.withClientNetwork(clientNet);
 
         ConfigValues values = ConfigSnapshotAdapter.toValues(original);
@@ -27,6 +27,11 @@ class ConfigSnapshotAdapterClientScopeTest {
         assertEquals(false, values.get(ConfigSchema.CLIENT_NETWORK_ENABLED));
         assertEquals(true, values.get(ConfigSchema.CLIENT_NETWORK_METRICS_ENABLED));
         assertEquals(true, values.get(ConfigSchema.CLIENT_NETWORK_METRICS_AUTO_RESET));
+        assertEquals(false, values.get(ConfigSchema.DATAPLANE_RECOVERY_FREEZE));
+
+        // fromValues 还原（CLIENT scope）必须带回 recoveryFreeze
+        HassiumConfig restored = ConfigSnapshotAdapter.fromValues(values, true);
+        assertEquals(false, restored.clientNetwork().recoveryFreeze());
     }
 
     @Test

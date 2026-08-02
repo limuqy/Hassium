@@ -104,6 +104,8 @@ public final class HassiumClothConfigScreen {
                 draft.metricsEnabled, dClientNet.metricsEnabled(), v -> draft.metricsEnabled = v));
         render.addEntry(bool(entries, "hassium.configuration.network.metricsAutoReset",
                 draft.metricsAutoReset, dClientNet.metricsAutoReset(), v -> draft.metricsAutoReset = v));
+        render.addEntry(bool(entries, "hassium.configuration.network.dataPlane.recoveryFreeze",
+                draft.recoveryFreeze, dClientNet.recoveryFreeze(), v -> draft.recoveryFreeze = v));
 
         // === Category 3: 调试（8 项）===
         ConfigCategory debugCat = builder.getOrCreateCategory(
@@ -204,6 +206,7 @@ public final class HassiumClothConfigScreen {
         boolean networkEnabled;
         boolean metricsEnabled;
         boolean metricsAutoReset;
+        boolean recoveryFreeze;
         // 调试
         boolean metadataLogging;
         boolean dispatcherLogging;
@@ -243,6 +246,7 @@ public final class HassiumClothConfigScreen {
             d.networkEnabled = clientNet.enabled();
             d.metricsEnabled = clientNet.metricsEnabled();
             d.metricsAutoReset = clientNet.metricsAutoReset();
+            d.recoveryFreeze = clientNet.recoveryFreeze();
 
             d.metadataLogging = debug.metadataLogging();
             d.dispatcherLogging = debug.dispatcherLogging();
@@ -266,7 +270,7 @@ public final class HassiumClothConfigScreen {
                             cacheSectionDeltaEnabled, cacheJoinBoostEnabled, cacheEntitySnapshotsEnabled,
                             loadThreads, lightCacheEnabled, maxChunksPerFrame, mainThreadChunkBudgetMs
                     ),
-                    new HassiumConfig.ClientNetworkConfig(networkEnabled, metricsEnabled, metricsAutoReset),
+                    new HassiumConfig.ClientNetworkConfig(networkEnabled, metricsEnabled, metricsAutoReset, recoveryFreeze),
                     HassiumConfig.ServerNetworkConfig.DEFAULT,
                     HassiumConfig.CompatConfig.DEFAULT,
                     new HassiumConfig.DebugConfig(

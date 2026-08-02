@@ -62,6 +62,7 @@ public final class ConfigSchema {
     public static final ConfigKey<Long> DATAPLANE_CONTROL_STALL_MS = longValue("network.dataPlane.controlStallMs", ConfigScope.SERVER, 6000L, 1L, Long.MAX_VALUE, "控制 TCP 静默时间（ms）");
     public static final ConfigKey<Long> DATAPLANE_FAILOVER_EXPIRY_MS = longValue("network.dataPlane.failoverExpiryMs", ConfigScope.SERVER, 30000L, 1L, Long.MAX_VALUE, "failover permit 有效期（ms）");
     public static final ConfigKey<Long> DATAPLANE_RECOVERY_WINDOW_MS = longValue("network.dataPlane.recoveryWindowMs", ConfigScope.SERVER, 60000L, 1L, Long.MAX_VALUE, "候选重连窗口（ms）");
+    public static final ConfigKey<Boolean> DATAPLANE_RECOVERY_FREEZE = bool("network.dataPlane.recoveryFreeze", ConfigScope.CLIENT, true, "主控热切恢复期画面定格（false=无感切换：不显示切换 UI，世界继续运行，恢复后回退）");
     public static final ConfigKey<Boolean> COMPAT_REQUIRE_CLIENT_MOD = bool("compat.requireClientMod", ConfigScope.SERVER, false, "是否强制要求客户端安装 Hassium");
     public static final ConfigKey<Boolean> COMPAT_AUTO_DOWNGRADE = bool("compat.autoDowngradeOnError", ConfigScope.SERVER, true, "出错时是否自动降级");
 

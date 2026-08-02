@@ -384,7 +384,8 @@ public final class FabricTomlConfigIO {
         return new HassiumConfig.ClientNetworkConfig(
                 getBool(cfg, "network.enabled", d.enabled()),
                 getBool(cfg, "network.metricsEnabled", d.metricsEnabled()),
-                getBool(cfg, "network.metricsAutoReset", d.metricsAutoReset())
+                getBool(cfg, "network.metricsAutoReset", d.metricsAutoReset()),
+                getBool(cfg, "network.dataPlane.recoveryFreeze", d.recoveryFreeze())
         );
     }
 
@@ -392,6 +393,8 @@ public final class FabricTomlConfigIO {
         set(cfg, "network.enabled", n.enabled(), "是否启用 Hassium 自定义通道");
         set(cfg, "network.metricsEnabled", n.metricsEnabled(), "是否启用指标收集");
         set(cfg, "network.metricsAutoReset", n.metricsAutoReset(), "登出服务器时自动重置指标计数（默认 true）");
+        set(cfg, "network.dataPlane.recoveryFreeze", n.recoveryFreeze(),
+                "主控热切恢复期画面定格（默认 true；false=无感切换：不显示切换 UI，世界继续运行，恢复后位置/方块回退）");
     }
 
     // --- SERVER ---

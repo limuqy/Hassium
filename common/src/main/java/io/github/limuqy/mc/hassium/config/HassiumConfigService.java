@@ -443,6 +443,14 @@ public class HassiumConfigService {
         return config.clientNetwork().metricsAutoReset();
     }
 
+    /**
+     * 主控热切恢复期画面定格（仅客户端字段）：true=世界 tick 冻结 + 「正在切换主控…」浮层；
+     * false=无感切换（仅 1.20.1 段）：世界继续运行、输入被吞、无任何切换 UI，恢复后回退。
+     */
+    public boolean isRecoveryFreeze() {
+        return config.clientNetwork().recoveryFreeze();
+    }
+
     public boolean isDynamicThreadPoolEnabled() {
         return config.serverNetwork().dynamicThreadPoolEnabled();
     }
