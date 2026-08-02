@@ -32,7 +32,8 @@ class ClientFailoverIdentityTest {
         ClientFailoverIdentity.initialize(tempDir.resolve("endpoints.properties"), launcher);
         ClientFailoverIdentity.prepareInitialConnection("primary.example:25565");
         ClientFailoverIdentity.mergeAdvertisedCandidates(List.of(
-                new ControlEndpoint("backup.example", 25565, 10)));
+                new ControlEndpoint("backup.example", 25565, 10),
+                new ControlEndpoint("backup2.example", 25565, 9)));
         assertTrue(ClientFailoverIdentity.onInitialTcpConnectionFailed());
 
         assertTrue(ClientFailoverIdentity.onPrimaryHandshakeAccepted(
@@ -49,7 +50,8 @@ class ClientFailoverIdentityTest {
         ClientFailoverIdentity.initialize(tempDir.resolve("endpoints.properties"), launcher);
         ClientFailoverIdentity.prepareInitialConnection("primary.example:25565");
         ClientFailoverIdentity.mergeAdvertisedCandidates(List.of(
-                new ControlEndpoint("backup.example", 25565, 10)));
+                new ControlEndpoint("backup.example", 25565, 10),
+                new ControlEndpoint("backup2.example", 25565, 9)));
 
         assertTrue(ClientFailoverIdentity.onInitialTcpConnectionFailed());
         assertTrue(ClientFailoverIdentity.onPrimaryHandshakeAccepted(

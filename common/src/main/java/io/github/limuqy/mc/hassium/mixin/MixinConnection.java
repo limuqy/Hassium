@@ -125,4 +125,20 @@ public class MixinConnection {
             ZstdNegotiationTracker.removeChannel(this.channel);
         }
     }
+
+    /**
+     * 用户主动退出标记：主线程调 {@code disconnect(Component)}（channel 仍 open）→ 标记，
+     * failover gate 据此拦截"正常退出"误触发自动重连。
+     *
+     * <p>被踢（handleDisconnect）/ 超时 / 被动 channelInactive 都在 netty event loop 线程走同方法，
+     * {@code inEventLoop()} 为 true 且 channel 已关 → 不标记。带签名注入：1.21.5+ 的
+     * {@code disconnect(DisconnectionDetails)} 重载不标记（exceptionCaught 非 timeout 走它）。
+     */
+    @Inject(method = "disconnect(Lnet/minecraft/network/chat/Component;)V", at = @At("HEAD"))
+    private void hassium$markUserInitiatedDisconnect(CallbackInfo ci) {
+        Connection self = (Connection) (Object) this;
+        if (self.isConnected() && this.channel != null && !this.channel.eventLoop().inEventLoop()) {
+            io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.markUserInitiatedDisconnect();
+        }
+    }
 }

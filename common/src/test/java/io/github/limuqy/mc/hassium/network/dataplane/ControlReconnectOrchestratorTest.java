@@ -41,8 +41,9 @@ class ControlReconnectOrchestratorTest {
         RecordingLauncher launcher = new RecordingLauncher();
         ControlEndpoint a = endpoint("a.com", 25565, 80);
         ControlEndpoint b = endpoint("b.com", 25565, 80);
+        ControlEndpoint c = endpoint("c.com", 25565, 80);
         ControlReconnectOrchestrator orchestrator =
-                ControlReconnectOrchestrator.forTest(launcher, List.of(a, b));
+                ControlReconnectOrchestrator.forTest(launcher, List.of(a, b, c));
 
         orchestrator.onPrimaryDisconnected(a, "closed");
 
@@ -52,8 +53,8 @@ class ControlReconnectOrchestratorTest {
     }
 
     @Test
-    @DisplayName("仅 active 且无其它候选 → onPrimaryDisconnected 立即 terminal（不悬挂 recovering）")
-    void soleActiveEndpointExhaustsImmediately() {
+    @DisplayName("去重后端点不足（仅 active）→ gate 拒绝，不 launch 不 terminal")
+    void soleActiveEndpointRejectedByGate() {
         RecordingLauncher launcher = new RecordingLauncher();
         ControlEndpoint a = endpoint("a.com", 25565, 100);
         ControlReconnectOrchestrator orchestrator =
@@ -61,8 +62,8 @@ class ControlReconnectOrchestratorTest {
 
         orchestrator.onPrimaryDisconnected(a, "closed");
 
-        assertTrue(launcher.launched().isEmpty(), "无下一候选可 launch");
-        assertEquals(1, orchestrator.terminalFinalizations(), "立刻 terminal");
+        assertTrue(launcher.launched().isEmpty(), "端点去重后仅 1 个 → 不 launch");
+        assertEquals(0, orchestrator.terminalFinalizations(), "gate 拒绝不触发 terminal");
         assertFalse(orchestrator.isRecovering(), "不得悬挂 recovering");
         assertFalse(orchestrator.onHandshakeAccepted(), "后续普通握手不得误报 failover 恢复");
     }
@@ -73,8 +74,9 @@ class ControlReconnectOrchestratorTest {
         RecordingLauncher launcher = new RecordingLauncher();
         ControlEndpoint a = endpoint("a.com", 25565, 100);
         ControlEndpoint b = endpoint("b.com", 25565, 80);
+        ControlEndpoint c = endpoint("c.com", 25565, 80);
         ControlReconnectOrchestrator orchestrator =
-                ControlReconnectOrchestrator.forTest(launcher, List.of(a, b));
+                ControlReconnectOrchestrator.forTest(launcher, List.of(a, b, c));
 
         orchestrator.onPrimaryDisconnected(a, "closed");
         assertEquals(List.of(b), launcher.launched(), "应立刻 launch 下一候选 b");
@@ -124,12 +126,116 @@ class ControlReconnectOrchestratorTest {
     }
 
     @Test
+    @DisplayName("未通告候选（controlReachableEndpoints 未配置）→ 拒绝自动 failover")
+    void unadvertisedCandidatesRejectRecovery() {
+        RecordingLauncher launcher = new RecordingLauncher();
+        ControlReconnectOrchestrator orchestrator =
+                new ControlReconnectOrchestrator(launcher, List.of(), List.of());
+        orchestrator.prepareInitialConnection("primary.com:25565", List.of(
+                endpoint("a.com", 25565, 10), endpoint("b.com", 25565, 9)));
+        // 未调 mergeAdvertisedCandidates：本次握手未通告
+
+        orchestrator.onPrimaryDisconnected(endpoint("primary.com", 25565, 100), "closed");
+
+        assertTrue(launcher.launched().isEmpty(), "未通告 → 不 launch");
+        assertEquals(0, orchestrator.terminalFinalizations(), "gate 拒绝不触发 terminal");
+        assertFalse(orchestrator.isRecovering(), "未通告 → 不进入恢复态");
+    }
+
+    @Test
+    @DisplayName("用户主动退出 → 拒绝自动 failover（正常退出不重连）")
+    void userInitiatedDisconnectRejectsRecovery() {
+        RecordingLauncher launcher = new RecordingLauncher();
+        ControlReconnectOrchestrator orchestrator =
+                ControlReconnectOrchestrator.forTest(launcher, List.of(
+                        endpoint("a.com", 25565, 100),
+                        endpoint("b.com", 25565, 90),
+                        endpoint("c.com", 25565, 80)));
+
+        orchestrator.markUserInitiatedDisconnect();
+        orchestrator.onPrimaryDisconnected(endpoint("a.com", 25565, 100), "closed");
+
+        assertTrue(launcher.launched().isEmpty(), "主动退出 → 不 launch");
+        assertEquals(0, orchestrator.terminalFinalizations());
+        assertFalse(orchestrator.isRecovering(), "主动退出 → 不进入恢复态");
+    }
+
+    @Test
+    @DisplayName("端点去重后总数 ≤ 2 → 拒绝自动 failover")
+    void insufficientDistinctEndpointsRejectRecovery() {
+        RecordingLauncher launcher = new RecordingLauncher();
+        // 仅主地址 + 1 候选
+        ControlReconnectOrchestrator orchestrator =
+                ControlReconnectOrchestrator.forTest(launcher, List.of(
+                        endpoint("a.com", 25565, 100),
+                        endpoint("b.com", 25565, 90)));
+
+        orchestrator.onPrimaryDisconnected(endpoint("a.com", 25565, 100), "closed");
+
+        assertTrue(launcher.launched().isEmpty(), "去重后仅 2 端点 → 不 launch");
+        assertEquals(0, orchestrator.terminalFinalizations());
+        assertFalse(orchestrator.isRecovering());
+    }
+
+    @Test
+    @DisplayName("候选与主地址同坐标时按去重后计数（重复不算端点）")
+    void duplicateCandidatesAgainstPrimaryRejectRecovery() {
+        RecordingLauncher launcher = new RecordingLauncher();
+        ControlReconnectOrchestrator orchestrator =
+                new ControlReconnectOrchestrator(launcher, List.of(), List.of());
+        orchestrator.prepareInitialConnection("a.com:25565", List.of());
+        orchestrator.mergeAdvertisedCandidates(List.of(
+                endpoint("a.com", 25565, 10),   // 与主地址同坐标
+                endpoint("b.com", 25565, 9)));  // 去重后只有 2 个端点
+
+        orchestrator.onPrimaryDisconnected(endpoint("a.com", 25565, 100), "closed");
+
+        assertTrue(launcher.launched().isEmpty(), "去重后端点数 2 → 拒绝");
+        assertEquals(0, orchestrator.terminalFinalizations());
+        assertFalse(orchestrator.isRecovering());
+    }
+
+    @Test
+    @DisplayName("通告 + 非主动退出 + 去重端点 > 2 → 放行自动 failover")
+    void sufficientDistinctEndpointsAllowRecovery() {
+        RecordingLauncher launcher = new RecordingLauncher();
+        ControlReconnectOrchestrator orchestrator =
+                new ControlReconnectOrchestrator(launcher, List.of(), List.of());
+        orchestrator.prepareInitialConnection("primary.com:25565", List.of());
+        orchestrator.mergeAdvertisedCandidates(List.of(
+                endpoint("a.com", 25565, 10),
+                endpoint("b.com", 25565, 9)));
+
+        orchestrator.onPrimaryDisconnected(endpoint("primary.com", 25565, 100), "closed");
+
+        assertEquals(List.of(endpoint("a.com", 25565, 10)), launcher.launched(),
+                "放行 → launch 高优先级候选");
+        assertTrue(orchestrator.isRecovering(), "放行 → 进入恢复态");
+    }
+
+    @Test
+    @DisplayName("初始 TCP 失败但本次未通告 → 拒绝自动切换主控")
+    void initialTcpFailureWithoutAdvertisementRejects() {
+        RecordingLauncher launcher = new RecordingLauncher();
+        ControlReconnectOrchestrator orchestrator =
+                new ControlReconnectOrchestrator(launcher, List.of(), List.of());
+        orchestrator.prepareInitialConnection("primary.com:25565", List.of(
+                endpoint("a.com", 25565, 10), endpoint("b.com", 25565, 9)));
+        // 未调 mergeAdvertisedCandidates
+
+        assertFalse(orchestrator.onInitialTcpConnectionFailed(), "未通告 → 不自动切换");
+        assertTrue(launcher.launched().isEmpty());
+        assertFalse(orchestrator.isRecovering());
+    }
+
+    @Test
     @DisplayName("恢复窗口在恢复开始时从配置固定")
     void reconnectUsesConfiguredRecoveryWindow() {
         RecordingLauncher launcher = new RecordingLauncher();
         ControlReconnectOrchestrator orchestrator = ControlReconnectOrchestrator.forTest(
                 launcher,
-                List.of(endpoint("backup.example", 25565, 100)),
+                List.of(endpoint("backup.example", 25565, 100),
+                        endpoint("backup2.example", 25565, 90)),
                 dataPlaneConfig(1_234L));
 
         orchestrator.onPrimaryDisconnected(endpoint("primary.example", 25565, 100), "closed");

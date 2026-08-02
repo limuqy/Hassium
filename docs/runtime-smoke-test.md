@@ -273,6 +273,18 @@ build/smoke-test/
 
 `network.dataPlane.enabled=false` 子用例：必须 **零** UDP listener / Bind / permit 标记，与 TCP revert 路径对齐；`DataPlaneEnabledGuard` 在单测中已覆盖。
 
+### 自动 Failover Gate（候选配置要求）
+
+客户端自动切换主控有三道门槛（`ControlReconnectOrchestrator.canStartRecovery`）：
+
+1. 本次握手必须通告过非空候选 —— 服务端 toml 须配置 `controlReachableEndpoints`（仅靠上次会话持久化候选不算）。
+2. 非用户主动退出（主线程 `Connection.disconnect(Component)` 由 MixinConnection 标记；被踢/超时在 netty 线程不标记）。
+3. 候选与主地址按坐标去重后，客户端控制端点总数 **> 2**（至少主地址 + 2 个候选）。
+
+因此 UdpFailover smoke 的服务端 `hassium-server.toml` 里 `controlReachableEndpoints` 必须给出 **≥ 2 个**候选端点，否则 `FAILOVER_RECONNECT_OK` 不会出现。
+
+另外 smoke 内部模拟断连（`ClientSmokeTest.triggerDisconnect`）已改为反射拿 `Connection.channel` 后直接 `channel.close()` 模拟被动 `channelInactive` —— 不能改用 `disconnect(Component)`，否则会被判为用户主动退出而拦截恢复链路。
+
 ## Nginx Failover Harness（UdpFailover phase）
 
 `-Phase UdpFailover` 在 server ready 之前先启动一个本会话专属 nginx 反代，把 TCP 主控端点经 `stream` 块代理到真实 server `$ServerPort`，UDP 数据面仍直连。harness 通过 nginx 干预主控 TCP 的关闭时机，验证 production `ControlReconnectOrchestrator` + `ControlEndpointManager` 在真实 TCP 断链下的恢复链路。

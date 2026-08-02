@@ -7,9 +7,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 import java.util.function.LongSupplier;
 
 /**
@@ -53,6 +55,10 @@ public final class ControlReconnectOrchestrator {
     private long recoveryDeadlineMs;
     private String primaryAddress;
     private boolean initialConnection;
+    /** 本次握手是否真实通告过非空候选（服务端 controlReachableEndpoints 配置的客户端真相源）。 */
+    private boolean advertisedConfigured = false;
+    /** 用户主动退出（主线程 disconnect(Component) 时由 MixinConnection 标记）→ 不自动 failover。 */
+    private volatile boolean userInitiatedDisconnect = false;
 
     public ControlReconnectOrchestrator(ControlReconnectLauncher launcher,
                                         List<ControlEndpoint> bootstrap,
@@ -85,6 +91,8 @@ public final class ControlReconnectOrchestrator {
                 launcher, candidates, List.of(), dataPlaneConfig::recoveryWindowMs);
         o.candidates.addAll(candidates.stream().filter(Objects::nonNull).toList());
         o.manager.mergeBootstrapAndAdvertised(candidates, List.of());
+        // 测试直接给定候选：视为服务端已通告（advertisedConfigured 为 gate 前提）。
+        o.advertisedConfigured = true;
         return o;
     }
 
@@ -92,6 +100,9 @@ public final class ControlReconnectOrchestrator {
     public synchronized void onPrimaryDisconnected(ControlEndpoint active, String reason) {
         if (terminalFinalized) {
             return; // 已经在 terminal；不再 launch
+        }
+        if (!canStartRecovery(active)) {
+            return; // 未通告 / 用户主动退出 / 去重后端点不足 → 不自动切换主控
         }
         // 用 (active, advertised-candidates-merged) 把候选灌进 manager，bootstrap 替换为 active
         List<ControlEndpoint> bootstrap = new ArrayList<>();
@@ -152,6 +163,8 @@ public final class ControlReconnectOrchestrator {
         this.initialConnection = true;
         this.recovering = false;
         this.terminalFinalized = false;
+        this.advertisedConfigured = false;
+        this.userInitiatedDisconnect = false;
         this.current = null;
         this.candidates.clear();
         List<ControlEndpoint> safe = persisted == null ? List.of() : persisted;
@@ -161,7 +174,18 @@ public final class ControlReconnectOrchestrator {
 
     /** Refresh persisted/advertised candidates without changing the primary address. */
     public synchronized void mergeAdvertisedCandidates(List<ControlEndpoint> advertised) {
+        mergeAdvertisedCandidates(advertised, advertised != null && !advertised.isEmpty());
+    }
+
+    /**
+     * Refresh persisted/advertised candidates without changing the primary address.
+     *
+     * @param configured 本次握手是否真实通告候选（仅握手 tail 置 true；store 合并出的历史候选不算）。
+     */
+    public synchronized void mergeAdvertisedCandidates(List<ControlEndpoint> advertised,
+                                                      boolean configured) {
         if (primaryAddress == null) return;
+        this.advertisedConfigured = configured;
         this.candidates.clear();
         if (advertised != null) {
             this.candidates.addAll(advertised.stream().filter(Objects::nonNull).toList());
@@ -182,6 +206,11 @@ public final class ControlReconnectOrchestrator {
             return false;
         }
         if (!initialConnection) return false;
+        if (!canStartRecovery(null)) {
+            // 未通告 / 主动退出 / 端点不足：初始连接失败不自动切换主控。
+            initialConnection = false;
+            return false;
+        }
         initialConnection = false;
         startRecoveryWindow();
         recovering = true;
@@ -274,6 +303,62 @@ public final class ControlReconnectOrchestrator {
         manager.startRecovery(recoveryWindowMs.getAsLong());
         recoveryStartedAtMs = manager.recoveryStartedAtMs();
         recoveryDeadlineMs = manager.recoveryDeadlineMs();
+    }
+
+    // ===== failover gate =====
+
+    /**
+     * 自动切换主控的门槛：服务端在本次握手通告过非空候选（controlReachableEndpoints）、
+     * 非用户主动退出，且候选与主地址去重后客户端控制端点总数 &gt; 2（至少主地址 + 2 个候选）。
+     */
+    private boolean canStartRecovery(ControlEndpoint active) {
+        if (!advertisedConfigured) {
+            return false;
+        }
+        if (userInitiatedDisconnect) {
+            return false;
+        }
+        return distinctEndpointCount(active) > 2;
+    }
+
+    /** 端点集合 = 主地址 ∪ active ∪ 各候选，按坐标去重后的数量。 */
+    private int distinctEndpointCount(ControlEndpoint active) {
+        Set<String> keys = new HashSet<>();
+        String primaryKey = primaryCoordinateKey();
+        if (primaryKey != null) {
+            keys.add(primaryKey);
+        }
+        if (active != null) {
+            keys.add(active.coordinateKey());
+        }
+        for (ControlEndpoint c : candidates) {
+            if (c != null) {
+                keys.add(c.coordinateKey());
+            }
+        }
+        return keys.size();
+    }
+
+    /** "host:port" → 坐标 key；无法解析（如测试构造未设主地址）返回 null。 */
+    private String primaryCoordinateKey() {
+        if (primaryAddress == null) {
+            return null;
+        }
+        int idx = primaryAddress.lastIndexOf(':');
+        if (idx <= 0 || idx >= primaryAddress.length() - 1) {
+            return null;
+        }
+        try {
+            int port = Integer.parseInt(primaryAddress.substring(idx + 1));
+            return primaryAddress.substring(0, idx).toLowerCase() + ":" + port;
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    /** 用户主动退出标记：MixinConnection 在主线程 disconnect(Component) 时调用。 */
+    public synchronized void markUserInitiatedDisconnect() {
+        this.userInitiatedDisconnect = true;
     }
 
     // ===== internal =====

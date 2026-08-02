@@ -76,6 +76,14 @@ public final class ClientFailoverIdentity {
         return current != null && current.acceptHandshake(null);
     }
 
+    /** 用户主动退出标记（MixinConnection 在主线程 disconnect(Component) 时调用）。 */
+    public static void markUserInitiatedDisconnect() {
+        ClientFailoverIdentity current = instance;
+        if (current != null) {
+            current.orchestrator.markUserInitiatedDisconnect();
+        }
+    }
+
     /** Test-visible handshake hook; loader handlers call the public orchestrator hook below. */
     public static boolean onPrimaryHandshakeAccepted(ControlEndpoint active) {
         ClientFailoverIdentity current = instance;
@@ -98,7 +106,8 @@ public final class ClientFailoverIdentity {
     private synchronized void merge(List<ControlEndpoint> advertised) {
         if (primaryAddress == null) return;
         List<ControlEndpoint> merged = store.merge(primaryAddress, advertised);
-        orchestrator.mergeAdvertisedCandidates(merged);
+        // configured 只看本次握手真实通告；store 合并出的历史候选不算（未配置 controlReachableEndpoints 时不允许自动切换）。
+        orchestrator.mergeAdvertisedCandidates(merged, advertised != null && !advertised.isEmpty());
     }
 
     private synchronized boolean initialFailure() {

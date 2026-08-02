@@ -339,7 +339,24 @@ public final class ClientSmokeTest {
             ClientPacketListener conn = mc.getConnection();
             if (conn != null) {
                 LOGGER.info("HassiumSmokeTest: disconnecting from server");
-                conn.getConnection().disconnect(Component.literal("HassiumSmokeTest: round1 done"));
+                // 直接关 netty channel 模拟被动断连（channelInactive），而不是调
+                // Connection.disconnect(Component) —— 后者在主线程 + channel open 会被
+                // MixinConnection 标记为用户主动退出，从而被 failover gate 拦截，
+                // udp-failover phase 的恢复链路将不再启动。
+                net.minecraft.network.Connection netConn = conn.getConnection();
+                io.netty.channel.Channel ch = null;
+                try {
+                    java.lang.reflect.Field f = net.minecraft.network.Connection.class.getDeclaredField("channel");
+                    f.setAccessible(true);
+                    ch = (io.netty.channel.Channel) f.get(netConn);
+                } catch (ReflectiveOperationException ignored) {
+                    // 字段缺失（版本差异）时退回 disconnect 路径
+                }
+                if (ch != null) {
+                    ch.close();
+                } else {
+                    netConn.disconnect(Component.literal("HassiumSmokeTest: round1 done"));
+                }
                 // 重置网络统计，使 ROUND2 的数据独立于 ROUND1
                 try {
                     io.github.limuqy.mc.hassium.metrics.NetworkStats.reset();
