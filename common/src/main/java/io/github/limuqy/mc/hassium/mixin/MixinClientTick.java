@@ -150,6 +150,13 @@ public class MixinClientTick {
             // 忽略更新错误
         }
 
+        // 恢复期预填充（无感切换恢复成功后从磁盘缓存回填权威区，权威数据到达后覆盖）
+        try {
+            io.github.limuqy.mc.hassium.cache.client.RecoveryChunkPrefill.getInstance().tick();
+        } catch (Exception e) {
+            // 预填充失败不阻断客户端 tick
+        }
+
         // storage 就绪门控：冲刷暂存 hash / 检查超时
         try {
             ClientMetadataHandler.tickPendingHashGate();

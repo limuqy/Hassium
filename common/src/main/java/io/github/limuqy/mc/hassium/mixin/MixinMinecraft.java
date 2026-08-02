@@ -120,6 +120,9 @@ public class MixinMinecraft {
     @Inject(method = "setLevel", at = @At("HEAD"))
     private void hassium$onSetLevel(ClientLevel newLevel, CallbackInfo ci) {
         hassium$flushCacheSaveQueue();
+        // 无感切换恢复成功：新 level 即将接管，先把旧 level 内存区块快照入队（零磁盘 IO），
+        // 消除恢复后区块重新加载的空窗；非恢复场景内部判定后直接返回。
+        io.github.limuqy.mc.hassium.cache.client.RecoveryChunkPrefill.getInstance().captureAndStart(newLevel);
         io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.markFreezeActive(false);
     }
 #elif MC_VER < MC_1_21_9
@@ -128,12 +131,18 @@ public class MixinMinecraft {
                                      net.minecraft.client.gui.screens.ReceivingLevelScreen.Reason reason,
                                      CallbackInfo ci) {
         hassium$flushCacheSaveQueue();
+        // 无感切换恢复成功：新 level 即将接管，先把旧 level 内存区块快照入队（零磁盘 IO），
+        // 消除恢复后区块重新加载的空窗；非恢复场景内部判定后直接返回。
+        io.github.limuqy.mc.hassium.cache.client.RecoveryChunkPrefill.getInstance().captureAndStart(newLevel);
         io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.markFreezeActive(false);
     }
 #else
     @Inject(method = "setLevel", at = @At("HEAD"))
     private void hassium$onSetLevel(ClientLevel newLevel, CallbackInfo ci) {
         hassium$flushCacheSaveQueue();
+        // 无感切换恢复成功：新 level 即将接管，先把旧 level 内存区块快照入队（零磁盘 IO），
+        // 消除恢复后区块重新加载的空窗；非恢复场景内部判定后直接返回。
+        io.github.limuqy.mc.hassium.cache.client.RecoveryChunkPrefill.getInstance().captureAndStart(newLevel);
         io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.markFreezeActive(false);
     }
 #endif

@@ -56,6 +56,9 @@ public class MixinClientPacketListener {
                                         + io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.primaryAddress()
                                         + " 不可用，已通过备用端点 " + endpoint.host() + ":" + endpoint.port()
                                         + " 连接；服务器列表地址和缓存身份仍为主地址。")));
+                // 无感切换：新 level 区块缓存全空，服务端会重发全部权威区块（秒级下载）。
+                // 区块预填充已在 setLevel HEAD（handleLogin 内部，更早）由 RecoveryChunkPrefill
+                // captureAndStart 完成——内存快照旧 level 区块 + 磁盘兜底，权威数据到达后覆盖。
             }
         } catch (Throwable ignored) {
             // 收敛失败不阻断登录

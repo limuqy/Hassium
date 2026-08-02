@@ -287,6 +287,19 @@ public class ClientCacheLoadQueue {
             if (chunk == null) {
                 break;
             }
+            // 恢复预填充 / OVD：renderOnly 落地前权威区块可能已到达（hasChunk=true）。
+            // 跳过而非覆盖 —— 权威数据优先，过期磁盘快照不得回写（预填充的旧数据会
+            // 覆盖刚到的权威区块，造成方块闪烁回退）。
+            if (chunk.renderOnly()) {
+                net.minecraft.client.Minecraft mc = net.minecraft.client.Minecraft.getInstance();
+                net.minecraft.client.multiplayer.ClientLevel level = mc.level;
+                if (level != null && level.getChunkSource().hasChunk(chunk.pos().x, chunk.pos().z)) {
+                    DebugLogger.debug(LogType.CACHE,
+                            "[CACHE_APPLY] Skip stale renderOnly chunk {} (authority already applied)",
+                            chunk.pos());
+                    continue;
+                }
+            }
             Constants.LOG.debug("[CACHE_APPLY] Applying chunk {} to world (renderOnly={}, hasLight={}, remaining={})",
                     chunk.pos(), chunk.renderOnly(), chunk.hasCachedLight(), readyQueue.size());
             boolean appliedToWorld = ClientChunkHandler.applyChunkData(
