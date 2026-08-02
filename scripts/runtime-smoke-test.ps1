@@ -31,7 +31,11 @@ param(
     # 真实 TCP close 触发 client channelInactive→orchestrator，验证 production 在
     # 真实 RST 下仍工作。默认 false：plan §2.3 走 client 内部模拟 disconnect，
     # production onPrimaryDisconnected 由 ClientSmokeTest.disconnect 间接触发。
-    [switch]$InjectTcpClose
+    [switch]$InjectTcpClose,
+    # -SeamlessMode：客户端 recoveryFreeze=false 跑无感切换冒烟（世界不冻结、无切换 UI、
+    # 恢复窗口吞 C2S）。与 -Phase UdpFailover 组合验证无感恢复链路；§6 前 patch 客户端
+    # hassium-client.toml（追加 [network.dataPlane] 段），客户端退出后立即恢复默认（true）。
+    [switch]$SeamlessMode
 )
 
 $ErrorActionPreference = "Continue"
@@ -385,6 +389,29 @@ if (-not $serverReady) {
 }
 
 
+# 6.5 -SeamlessMode：客户端 recoveryFreeze=false（无感切换冒烟）
+# 客户端 toml 由各加载器 run 目录共享；追加 [network.dataPlane] 段（TOML 表格位置无关），
+# 带 #SeamlessMode-smoke-injected 标记供退出后精确回滚（不触碰用户真实配置段）。
+$seamlessClientToml = Join-Path $clientRunDir "config\hassium\hassium-client.toml"
+if ($SeamlessMode) {
+    if (Test-Path $seamlessClientToml) {
+        # PS5.1 的 -Encoding UTF8 会写 BOM，tomlj 解析会失败 → 用无 BOM UTF-8 追加
+        $seamlessBlock = @(
+            "",
+            "[network.dataPlane]",
+            "`t#主控恢复时定格画面（false=无感切换；SeamlessMode 冒烟注入）",
+            "`trecoveryFreeze = false",
+            "`t#SeamlessMode-smoke-injected",
+            ""
+        ) -join [Environment]::NewLine
+        [System.IO.File]::AppendAllText($seamlessClientToml, $seamlessBlock,
+            (New-Object System.Text.UTF8Encoding($false)))
+        Write-Host "[$SessionId] SeamlessMode: 客户端 hassium-client.toml 已设 recoveryFreeze=false"
+    } else {
+        Write-Host "[$SessionId] [WARN] SeamlessMode: 找不到 $seamlessClientToml，跳过 patch"
+    }
+}
+
 # 7. 启动客户端（前台阻塞，自动两轮连服）
 Write-Host "[$SessionId] [6/9] 启动客户端连服（两轮自动）..."
 $clientArgs = @(
@@ -445,6 +472,32 @@ if (-not $clientProc.HasExited) {
     Stop-Process -Id $clientProc.Id -Force -ErrorAction SilentlyContinue
 }
 $clientExit = if ($clientProc.ExitCode) { $clientProc.ExitCode } else { 0 }
+
+# §7.5 -SeamlessMode 回滚：恢复客户端 toml（移除注入段），任何客户端退出路径都经过这里。
+if ($SeamlessMode -and (Test-Path $seamlessClientToml)) {
+    $seamlessLines = @(Get-Content $seamlessClientToml)
+    $injectIdx = -1
+    for ($i = 0; $i -lt $seamlessLines.Count; $i++) {
+        if ($seamlessLines[$i] -match '^\[network\.dataPlane\]$') {
+            $followEnd = [Math]::Min($seamlessLines.Count - 1, $i + 3)
+            if (($seamlessLines[($i + 1)..$followEnd] -join "`n") -match "SeamlessMode-smoke-injected") {
+                $injectIdx = $i
+                break
+            }
+        }
+    }
+    if ($injectIdx -ge 0) {
+        $trimmed = @($seamlessLines[0..($injectIdx - 1)])
+        while ($trimmed.Count -gt 1 -and [string]::IsNullOrWhiteSpace($trimmed[$trimmed.Count - 1])) {
+            $trimmed = @($trimmed[0..($trimmed.Count - 2)])
+        }
+        [System.IO.File]::WriteAllText($seamlessClientToml, ($trimmed -join [Environment]::NewLine) + [Environment]::NewLine,
+            (New-Object System.Text.UTF8Encoding($false)))
+        Write-Host "[$SessionId] SeamlessMode: 客户端 hassium-client.toml 已恢复（移除注入段）"
+    } else {
+        Write-Host "[$SessionId] [WARN] SeamlessMode: 未在 toml 尾部找到注入段，跳过回滚"
+    }
+}
 
 # 9. 解析结果 + 提取统计
 Write-Host "[$SessionId] [8/9] 解析结果 (客户端退出码: $clientExit)..."
@@ -510,11 +563,18 @@ foreach ($m in $udpFailoverMarkers) {
 }
 # 关键 PASS markers：UDP_BIND_OK + CACHE_RESUME_HIT 须同时出现（数据面建立且缓存命中）
 $udpFailoverCorePass = $udpFailoverFound["UDP_BIND_OK"] -and $udpFailoverFound["CACHE_RESUME_HIT"]
+# 恢复表现模式证据：客户端实际 recoveryFreeze 值（-SeamlessMode 时必须为 false，
+# 否则 toml patch 失效 → 无感链路未被验证 → FAIL）。函数来自 UdpFailoverSmoke 模块，
+# 仅 UdpFailover 阶段导入，其它阶段直接置 unknown。
+$clientRecoveryFreeze = if ($udpFailoverIsPhase) {
+    Get-UdpFailoverClientMode -ClientLog $clientContent
+} else { "unknown" }
+$seamlessModeVerified = (-not $SeamlessMode) -or ($clientRecoveryFreeze -eq "false")
 # Pass 决策：udp-failover 阶段不要求 client 两轮 PASS（仅要求关键 markers + client 退出 0）。
 # classic / R / I 阶段沿袭原 hasPass+exit==0 逻辑。
 
 if ($udpFailoverIsPhase) {
-    $result = if ($udpFailoverCorePass -and $clientExit -eq 0) { "PASS" } else { "FAIL" }
+    $result = if ($udpFailoverCorePass -and $clientExit -eq 0 -and $seamlessModeVerified) { "PASS" } else { "FAIL" }
 } else {
     $result = if ($hasPass -and $clientExit -eq 0) { "PASS" } else { "FAIL" }
 }
@@ -549,6 +609,8 @@ $resultObj = @{
     HasFail = $hasFail
     UdpFailoverMarkers = $udpFailoverFound
     UdpFailoverCorePass = $udpFailoverCorePass
+    SeamlessMode = $SeamlessMode
+    ClientRecoveryFreeze = $clientRecoveryFreeze
     StatsFiles = @(
         if ($round1StatsFound) { "build/smoke-test/stats/${SessionId}_round1_VD20.txt" }
         if ($round2StatsFound) { "build/smoke-test/stats/${SessionId}_round2_VD8.txt" }
@@ -563,4 +625,5 @@ Write-Host "[$SessionId] ServerSwitched: $serverSwitched Exit: $clientExit"
 if ($udpFailoverIsPhase) {
     Write-Host "[$SessionId] UdpFailover markers: UDP_BIND_OK=$($udpFailoverFound['UDP_BIND_OK']) UDP_WRR_OK=$($udpFailoverFound['UDP_WRR_OK']) FAILOVER_PERMIT_OK=$($udpFailoverFound['FAILOVER_PERMIT_OK']) FAILOVER_RECONNECT_OK=$($udpFailoverFound['FAILOVER_RECONNECT_OK']) FAILOVER_TERMINAL_OK=$($udpFailoverFound['FAILOVER_TERMINAL_OK']) CACHE_RESUME_HIT=$($udpFailoverFound['CACHE_RESUME_HIT'])"
 }
+Write-Host "[$SessionId] Client recoveryFreeze=$clientRecoveryFreeze (SeamlessMode=$SeamlessMode)"
 return $result

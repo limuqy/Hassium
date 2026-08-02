@@ -4,7 +4,11 @@ import io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity;
 import io.github.limuqy.mc.hassium.network.dataplane.ControlEndpoint;
 import net.minecraft.ChatFormatting;
 import net.minecraft.SharedConstants;
+#if MC_VER < MC_1_21_11
 import net.minecraft.Util;
+#else
+import net.minecraft.util.Util;
+#endif
 import net.minecraft.client.multiplayer.ServerData;
 import net.minecraft.client.multiplayer.ServerStatusPinger;
 import net.minecraft.client.multiplayer.resolver.ResolvedServerAddress;
@@ -83,9 +87,14 @@ public class MixinServerStatusPinger {
 #if MC_VER < MC_1_20_5
     @Inject(method = "pingServer", at = @At("HEAD"), cancellable = true)
     private void hassium$onPingServer(ServerData serverData, Runnable refresh, CallbackInfo ci) {
-#else
+#elif MC_VER < MC_1_21_11
     @Inject(method = "pingServer", at = @At("HEAD"), cancellable = true)
     private void hassium$onPingServer(ServerData serverData, Runnable iconRefresh, Runnable statusRefresh, CallbackInfo ci) {
+#else
+    // 1.21.11 的 pingServer 增加了 EventLoopGroupHolder 参数，mixin 描述符须对齐
+    @Inject(method = "pingServer", at = @At("HEAD"), cancellable = true)
+    private void hassium$onPingServer(ServerData serverData, Runnable iconRefresh, Runnable statusRefresh,
+                                      net.minecraft.server.network.EventLoopGroupHolder eventLoopGroupHolder, CallbackInfo ci) {
 #endif
         if (serverData == null || serverData.name.startsWith("hassium-failover:")) {
             return;
@@ -145,10 +154,14 @@ public class MixinServerStatusPinger {
                 return;
             }
             InetSocketAddress socket = resolved.get();
-#if MC_VER < MC_1_20_5
+#if MC_VER < MC_1_20_2
             Connection connection = Connection.connectToServer(socket, false);
-#else
+#elif MC_VER < MC_1_21_11
             Connection connection = Connection.connectToServer(socket, false, null);
+#else
+            // 1.21.11+ 第二参数由 boolean useEpoll 改为 EventLoopGroupHolder
+            Connection connection = Connection.connectToServer(
+                    socket, net.minecraft.server.network.EventLoopGroupHolder.remote(false), null);
 #endif
             ClientStatusPacketListener listener = new ClientStatusPacketListener() {
                 private boolean success;
@@ -197,9 +210,15 @@ public class MixinServerStatusPinger {
                     return connection.isConnected();
                 }
             };
-#if MC_VER < MC_1_20_5
+#if MC_VER < MC_1_20_2
             connection.setListener(listener);
             connection.send(new ClientIntentionPacket(endpoint.host(), endpoint.port(), ConnectionProtocol.STATUS));
+            connection.send(new ServerboundStatusRequestPacket());
+#elif MC_VER < MC_1_20_5
+            // 1.20.2–1.20.4：connectToServer 已改 3 参，ClientIntentionPacket 改 (protocolVersion, host, port, intent)
+            connection.setListener(listener);
+            connection.send(new ClientIntentionPacket(SharedConstants.getProtocolVersion(),
+                    endpoint.host(), endpoint.port(), net.minecraft.network.protocol.handshake.ClientIntent.STATUS));
             connection.send(new ServerboundStatusRequestPacket());
 #else
             connection.initiateServerboundStatusConnection(endpoint.host(), endpoint.port(), listener);
@@ -245,8 +264,13 @@ public class MixinServerStatusPinger {
             target.players = players;
         }, () -> target.status = Component.translatable("multiplayer.status.unknown")
                 .withStyle(ChatFormatting.DARK_GRAY));
-#if MC_VER >= MC_1_20_5
+#if MC_VER >= MC_1_20_5 && MC_VER < MC_1_21_6
         target.setState(target.protocol == SharedConstants.getCurrentVersion().getProtocolVersion()
+                ? ServerData.State.SUCCESSFUL
+                : ServerData.State.INCOMPATIBLE);
+#elif MC_VER >= MC_1_21_6
+        // 1.21.6+ yarn 把 WorldVersion.getProtocolVersion 改为 protocolVersion
+        target.setState(target.protocol == SharedConstants.getCurrentVersion().protocolVersion()
                 ? ServerData.State.SUCCESSFUL
                 : ServerData.State.INCOMPATIBLE);
 #endif

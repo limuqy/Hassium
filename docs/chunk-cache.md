@@ -151,7 +151,7 @@ SectionDeltaS2CPacket        // 服务端 → 客户端（变更分段 + BE）
 
 `ChunkHashS2C`、握手、index sync 与 `SectionHashRequest` 都是 TCP 控制面：它们在压缩黑名单中，不进入聚合 PENDING 缓冲，也不走 UDP。`ChunkPayloadS2C` 与 `SectionDeltaS2CPacket` 在已 Bind 的 UDP/KCP session 可用时经 `DataPlaneClientBundle.safeDispatch` 送入既有 `SectionDeltaDispatcher` / chunk apply 路径；无 session 或路由失败时仍由 TCP 发送，缓存一致性协议不变。
 
-TCP 主控发生恢复时，`ClientRecoveryState` 会保留 `ClientHassiumStorage`、`CacheSaveQueue` 与 `HassiumTaskExecutor`，避免候选重连期间清空缓存或取消写入；恢复后的 `ChunkHashS2C` 继续按正常 HIT/MISS/MISMATCH 分支处理。候选全部耗尽才执行一次终态资源清理。1.20.1 段恢复期间客户端世界定格（tick 暂停 + 过渡画面仅隐藏渲染），画面保持冻结世界与缓存可见性，重连成功后既有缓存直接命中；UDP/KCP 的拓扑、地址配置和验证方法见 [`architecture.md`](architecture.md) §9.5 与 [`runtime-smoke-test.md`](runtime-smoke-test.md) §`udp-failover`。
+TCP 主控发生恢复时，`ClientRecoveryState` 会保留 `ClientHassiumStorage`、`CacheSaveQueue` 与 `HassiumTaskExecutor`，避免候选重连期间清空缓存或取消写入；恢复后的 `ChunkHashS2C` 继续按正常 HIT/MISS/MISMATCH 分支处理。候选全部耗尽才执行一次终态资源清理。恢复期间客户端世界定格（tick 暂停 + 过渡画面仅隐藏渲染），画面保持冻结世界与缓存可见性，重连成功后既有缓存直接命中；UDP/KCP 的拓扑、地址配置和验证方法见 [`architecture.md`](architecture.md) §9.5 与 [`runtime-smoke-test.md`](runtime-smoke-test.md) §`udp-failover`。
 
 ## 10. 超视渲染（renderOnly）
 

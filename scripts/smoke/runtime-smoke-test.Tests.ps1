@@ -120,6 +120,31 @@ HassiumSmokeTest:UDP_FAILOVER FAILOVER_RECONNECT_OK epoch=7
     }
 }
 
+Describe 'UdpFailoverSmoke.Get-UdpFailoverClientMode' {
+    $modeTrue = @"
+[12:00:00] [main/INFO] (Hassium/SmokeTest) HassiumSmokeTest: enabled delayMs=8000 reconnectDelayMs=15000 joinTimeoutMs=120000 host=127.0.0.1:25570
+[12:00:01] [main/INFO] (Hassium/SmokeTest) HassiumSmokeTest:CLIENT_MODE recoveryFreeze=true
+"@
+    $modeFalse = "HassiumSmokeTest:CLIENT_MODE recoveryFreeze=false"
+
+    It 'returns unknown for empty/missing logs' {
+        Get-UdpFailoverClientMode -ClientLog '' | Should Be 'unknown'
+        Get-UdpFailoverClientMode -ClientLog $null | Should Be 'unknown'
+    }
+
+    It 'extracts recoveryFreeze=true from the init line' {
+        Get-UdpFailoverClientMode -ClientLog $modeTrue | Should Be 'true'
+    }
+
+    It 'extracts recoveryFreeze=false (seamless) even without prefix noise' {
+        Get-UdpFailoverClientMode -ClientLog $modeFalse | Should Be 'false'
+    }
+
+    It 'returns unknown when the CLIENT_MODE marker is absent' {
+        Get-UdpFailoverClientMode -ClientLog 'HassiumSmokeTest:CLIENT_STATS ROUND1 begin' | Should Be 'unknown'
+    }
+}
+
 Describe 'UdpFailoverSmoke.Get-UdpFailoverHarnessTimeline' {
     $harnessSample = @"
 HassiumSmokeTest:UDP_FAILOVER_HARNESS nginxStarted at=1750000000000

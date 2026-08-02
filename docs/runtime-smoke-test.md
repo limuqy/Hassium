@@ -59,6 +59,7 @@ Hassium 跨版本（1.20.1–1.21.11）× 多加载器（fabric / neoforge）的
 | `-ProxyPort` | 否 | `0`（→ `$ServerPort + 5`） | UdpFailover phase：nginx stream listen port；`-SmokeHost` 显式指定时优先 |
 | `-DryRun` | 否 | false | UdpFailover phase：仅起 nginx + 验 listen + stop + exit；不起 server/client |
 | `-InjectTcpClose` | 否 | false | UdpFailover phase：Round1 后由 nginx `-s stop` 真实关闭主控 TCP；默认走客户端模拟断连 |
+| `-SeamlessMode` | 否 | false | UdpFailover phase：§6.5 在客户端 `hassium-client.toml` 追加 `[network.dataPlane] recoveryFreeze=false`（无感切换），§7.5 客户端退出后回滚；PASS 要求客户端日志出现 `HassiumSmokeTest:CLIENT_MODE recoveryFreeze=false`，否则 patch 未生效按 FAIL 计 |
 
 ### 批量参数
 
@@ -267,7 +268,7 @@ build/smoke-test/
 | `UDP_BIND_OK` | 客户端 BindRequest 被服务端某 endpoint 接受，KCP `ReliableDatagramSession` 进入 ESTABLISHED |
 | `UDP_WRR_OK` | `UdpBulkRouter` 成功送一帧 bulk → Primary/UDP 分流计数累加 |
 | `FAILOVER_PERMIT_OK` | 服务端 `ControlFailoverHandler.requestFailover` 返回 `PERMITTED`，并通过 KCP `TYPE_FAILOVER_PERMIT` 回执客户端；客户端 epoch 匹配 + 未过期 |
-| `FAILOVER_RECONNECT_OK` | 客户端 `ControlReconnectOrchestrator.onPrimaryDisconnected` 后 launch 候选 B，新一轮 S2C 握手成功 + `ClientRecoveryState.markRecovered()` 退出恢复态；1.20.1 段恢复期画面定格（无过渡画面/断连 UI 呈现） |
+| `FAILOVER_RECONNECT_OK` | 客户端 `ControlReconnectOrchestrator.onPrimaryDisconnected` 后 launch 候选 B，新一轮 S2C 握手成功 + `ClientRecoveryState.markRecovered()` 退出恢复态；恢复期画面定格（无过渡画面/断连 UI 呈现） |
 | `CACHE_RESUME_HIT` | 重连后 ChunkHashS2C 触发至少一次缓存命中（`cacheHitFullChunkBytes > 0`）；恢复期未开 final disconnect UI |
 | `FAILOVER_TERMINAL_OK` | 所有候选耗尽 → `ControlReconnectOrchestrator.performTerminalFinalization` → `ClientLifecycleHelper.finalizeDisconnectIfTerminal` 一次性 terminal 关闭 |
 
@@ -285,7 +286,7 @@ build/smoke-test/
 
 另外 smoke 内部模拟断连（`ClientSmokeTest.triggerDisconnect`）已改为反射拿 `Connection.channel` 后直接 `channel.close()` 模拟被动 `channelInactive` —— 不能改用 `disconnect(Component)`，否则会被判为用户主动退出而拦截恢复链路。
 
-### 无缝定格 / 无感切换恢复（1.20.1 段）
+### 无缝定格 / 无感切换恢复（全版本）
 
 恢复期间（`isRecovering()`）vanilla 断连画面（`clearLevel`/DisconnectedScreen）被抑制，过渡画面（ConnectScreen/ProgressScreen/ReceivingLevelScreen）保持 vanilla 驱动但渲染层隐藏。两种客户端表现由 `network.dataPlane.recoveryFreeze`（CLIENT，默认 true）选择：
 
@@ -313,6 +314,7 @@ client ──UDP uplink 25571 ────────────────�
 | `-ProxyPort` | `0` (→ `$ServerPort + 5`，如 `25570`) | Nginx stream listen port；client 经此端口连主控 |
 | `-DryRun` | false | 仅起 nginx + 验 listen + stop + exit；不起 server/client；用于 Pester 验证 harness 启停序列 |
 | `-InjectTcpClose` | false | Round1 后由 nginx `-s stop` 真实关闭 client 已建立的 stream 连接，触发 channelInactive→orchestrator |
+| `-SeamlessMode` | false | 客户端以无感切换模式跑（`recoveryFreeze=false`）：§6.5 patch `fabric/run/client/config/hassium/hassium-client.toml` 追加 `[network.dataPlane]` 段（尾行 `#SeamlessMode-smoke-injected` 标记），§7.5 客户端退出后按标记回滚；PASS 门禁含 `HassiumSmokeTest:CLIENT_MODE recoveryFreeze=false` |
 
 ### 三种运行场景
 
@@ -322,10 +324,12 @@ client ──UDP uplink 25571 ────────────────�
 
 3. **DryRun（`-DryRun`）**：仅起 nginx + 验 listen + 写 `nginxStarted` timeline + stop + exit 0；不起 server/client/JVM。用于 Pester 验证 harness 启停序列与 `Get-UdpFailoverHarnessTimeline` 解析正确，不依赖真实 server 与 nginx 在线验证。
 
+4. **无感切换（`-SeamlessMode`，可与 `-InjectTcpClose` 叠加）**：与场景 1/2 相同链路，唯一差异是客户端以 `recoveryFreeze=false` 运行 —— 断连期间世界不定格、无切换浮层，恢复后回退。harness 在 §6.5 追加 `[network.dataPlane] recoveryFreeze=false` 到客户端 toml（无 BOM UTF-8，PS5.1 `-Encoding UTF8` 会写 BOM 导致 tomlj 解析失败回退默认值），客户端退出后 §7.5 按 `#SeamlessMode-smoke-injected` 标记回滚。验证证据：客户端启动日志 `HassiumSmokeTest:CLIENT_MODE recoveryFreeze=false`（`ClientSmokeTest` 从生产配置读取），此 marker 同时是 PASS 门禁 —— 若 patch 未生效（值仍为 `true`/`unknown`），即使其余 markers 全绿也按 FAIL 计，防止“名义无感、实际定格”的假阳性。结果 JSON 含 `SeamlessMode` 与 `ClientRecoveryFreeze` 字段。
+
 ### Helper 模块与 Pester
 
-- `scripts/smoke/UdpFailoverSmoke.psm1` 暴露三个纯函数：`New-UdpFailoverNginxConfig` / `Get-UdpFailoverMarkers` / `Get-UdpFailoverHarnessTimeline`；harness 与 Pester 同源 shared。
-- `scripts/smoke/runtime-smoke-test.Tests.ps1` Pester v3.4 兼容（用 `Should Be`/`Should Match`，禁用 `Should -BeTrue`）：覆盖 conf 生成 / 6-marker 聚合 / harness timeline 解析 / DryRun / InjectTcpClose 时序不变量。**运行方式**：`powershell -NoProfile -ExecutionPolicy Bypass -Command "Invoke-Pester -Path scripts/smoke/runtime-smoke-test.Tests.ps1 -PassThru"`（Pester 3.4.0 不支持 `-Output Detailed`，用 `-PassThru` 取计数）。
+- `scripts/smoke/UdpFailoverSmoke.psm1` 暴露四个纯函数：`New-UdpFailoverNginxConfig` / `Get-UdpFailoverMarkers` / `Get-UdpFailoverHarnessTimeline` / `Get-UdpFailoverClientMode`；harness 与 Pester 同源 shared。
+- `scripts/smoke/runtime-smoke-test.Tests.ps1` Pester v3.4 兼容（用 `Should Be`/`Should Match`，禁用 `Should -BeTrue`）：覆盖 conf 生成 / 6-marker 聚合 / harness timeline 解析 / `CLIENT_MODE` 提取（true/false/unknown）/ DryRun / InjectTcpClose 时序不变量。**运行方式**：`powershell -NoProfile -ExecutionPolicy Bypass -Command "Invoke-Pester -Path scripts/smoke/runtime-smoke-test.Tests.ps1 -PassThru"`（Pester 3.4.0 不支持 `-Output Detailed`，用 `-PassThru` 取计数）。
 
 ### 清理与 zombie 防御
 

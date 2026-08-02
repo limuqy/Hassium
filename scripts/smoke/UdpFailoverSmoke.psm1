@@ -215,4 +215,44 @@ function Get-UdpFailoverHarnessTimeline {
     return $events
 }
 
-Export-ModuleMember -Function New-UdpFailoverNginxConfig, Get-UdpFailoverMarkers, Get-UdpFailoverHarnessTimeline
+<#
+.SYNOPSIS
+  Extract the client recovery mode evidence from the smoke client log.
+
+.DESCRIPTION
+  The client emits `HassiumSmokeTest:CLIENT_MODE recoveryFreeze=<bool>` at
+  init (production config path only). In seamless runs the harness requires
+  the value to be `false` — otherwise the toml patch failed and the run did
+  not exercise the seamless code path. Returns 'true' / 'false' / 'unknown'.
+
+.PARAMETER ClientLog
+  Client log path or pre-read content. Empty/missing logs yield 'unknown'.
+
+.OUTPUTS
+  [string] — 'true', 'false', or 'unknown'.
+#>
+function Get-UdpFailoverClientMode {
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Position = 0)][AllowNull()]$ClientLog
+    )
+    $text = if ([string]::IsNullOrEmpty($ClientLog)) {
+        ''
+    } elseif ($ClientLog -is [string] -and (Test-Path $ClientLog -ErrorAction SilentlyContinue)) {
+        (Get-Content $ClientLog -Raw -ErrorAction SilentlyContinue) -as [string]
+    } elseif ($ClientLog -is [string]) {
+        $ClientLog
+    } else {
+        ($ClientLog | Out-String)
+    }
+    if ([string]::IsNullOrEmpty($text)) { return 'unknown' }
+    if ($text -match '^HassiumSmokeTest:CLIENT_MODE recoveryFreeze=(\w+)$' -or
+        $text -match 'HassiumSmokeTest:CLIENT_MODE recoveryFreeze=(\w+)') {
+        $value = $matches[1]
+        if ($value -eq 'true' -or $value -eq 'false') { return $value }
+    }
+    return 'unknown'
+}
+
+Export-ModuleMember -Function New-UdpFailoverNginxConfig, Get-UdpFailoverMarkers, Get-UdpFailoverHarnessTimeline, Get-UdpFailoverClientMode

@@ -527,18 +527,24 @@ public class ForgeNetworkManager implements NetworkManager {
                 }
                 io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity
                         .mergeAdvertisedCandidates(candidates);
+                boolean recovered;
                 if (io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState.getInstance().isRecovering()) {
                     io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState.getInstance().markRecovered();
-                    io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.onPrimaryHandshakeAccepted(null);
+                    recovered = io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.onPrimaryHandshakeAccepted(null);
                 } else {
-                io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.onHandshakeAccepted();
+                    recovered = io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.onHandshakeAccepted();
                 }
-                io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.consumeSuccessfulFallback()
-                        .ifPresent(endpoint -> net.minecraft.client.Minecraft.getInstance().gui.getChat().addMessage(
-                                net.minecraft.network.chat.Component.literal("[Hassium] 主地址 "
-                                        + io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.primaryAddress()
-                                        + " 不可用，已通过备用端点 " + endpoint.host() + ":" + endpoint.port()
-                                        + " 连接；服务器列表地址和缓存身份仍为主地址。")));
+                // 仅在真实恢复（orchestrator 曾进入恢复态且握手成功）时消费备用端点提示，
+                // 与 fabric 对齐（commit 4067a3e）：普通重连/首次登录不弹「已通过备用端点连接」；
+                // 否则 consumeSuccessfulFallback 会把上次会话遗留的 fallback 标记误报。
+                if (recovered) {
+                    io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.consumeSuccessfulFallback()
+                            .ifPresent(endpoint -> net.minecraft.client.Minecraft.getInstance().gui.getChat().addMessage(
+                                    net.minecraft.network.chat.Component.literal("[Hassium] 主地址 "
+                                            + io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.primaryAddress()
+                                            + " 不可用，已通过备用端点 " + endpoint.host() + ":" + endpoint.port()
+                                            + " 连接；服务器列表地址和缓存身份仍为主地址。")));
+                }
                 // UDP 数据面启动：与 fabric 对齐（FabricNetworkManager 同位置 startUdp）。
                 // 漏掉则 forge 客户端永不发 BindRequest → 服务端不打 UDP_BIND_OK / UDP_WRR_OK。
                 if (tail.hasUdpDataplane()) {

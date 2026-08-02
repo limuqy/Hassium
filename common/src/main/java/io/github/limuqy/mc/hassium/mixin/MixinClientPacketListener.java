@@ -62,7 +62,6 @@ public class MixinClientPacketListener {
         }
     }
 
-#if MC_VER < MC_1_20_2
     /**
      * L2 定格恢复：新世界接管前拆除冻结的旧 player。
      * <p>
@@ -79,6 +78,8 @@ public class MixinClientPacketListener {
      * {@code PacketUtils.ensureRunningOnSameThread} 之前；Netty 首分发时绝不能做
      * 渲染/UI 操作（clearLevel→setScreen 会抛 RenderSystem wrong thread，候选连接崩溃）。
      * 非主线程直接 return，交给 ensure 排队到主线程重跑后本注入再执行。
+     * （≥1.20.2 的 handleLogin 开头即 ensureRunningOnSameThread，HEAD 注入等价于主线程，
+     * 该 return 分支自然不触发。）
      * <p>
      * 主线程只置 {@code player=null}，不调 clearLevel：旧 level 由 vanilla setLevel 直接替换
      * （数据已在断连 dump 落盘），且 clearLevel 的 dropAllTasks 会清掉排队中的握手确认任务。
@@ -96,7 +97,6 @@ public class MixinClientPacketListener {
         }
         mc.player = null;
     }
-#endif
 
 #if MC_VER < MC_1_20_2
     /**

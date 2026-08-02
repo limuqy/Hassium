@@ -100,7 +100,7 @@
     "hassium.configuration.network.metricsAutoReset":  "Auto-reset metrics",
     "hassium.configuration.network.metricsAutoReset.tooltip":  "Reset metric counters when leaving a server. Default: true.",
     "hassium.configuration.network.dataPlane.recoveryFreeze":  "Freeze world during failover",
-    "hassium.configuration.network.dataPlane.recoveryFreeze.tooltip":  "During master recovery, pause world tick and show a 'Switching master…' overlay. Set false for seamless switching: the world keeps running (actions roll back after recovery) with no switching UI. Default: true; 1.20.1 segment.",
+    "hassium.configuration.network.dataPlane.recoveryFreeze.tooltip":  "During master recovery, pause world tick and show a 'Switching master…' overlay. Set false for seamless switching: the world keeps running (actions roll back after recovery) with no switching UI. Default: true.",
     "hassium.configuration.network.dynamicThreadPoolEnabled":  "Dynamic push thread pool",
     "hassium.configuration.network.dynamicThreadPoolEnabled.tooltip":  "Scale threads by queue load. Default: true; server-side only.",
     "hassium.configuration.network.minPushThreads":  "Min push threads",

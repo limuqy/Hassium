@@ -13,8 +13,8 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 /**
  * L2 主控热切定格浮层：恢复窗口内（世界画面定格）绘制半透明遮罩 + 「正在切换主控…」提示。
  * <p>
- * 仅 1.20.1 段生效（{@code #if MC_VER < MC_1_20_2}）；其他版本类体为空（无注入），
- * mixins.json 无条件登记——与 {@link MixinClientCommonPacketListenerImpl} 同款模式。
+ * 全版本生效；{@code Gui.render} 签名在 1.21.1 由 {@code (GuiGraphics,float)} 改为
+ * {@code (GuiGraphics,DeltaTracker)}，按段分流。mixins.json 无条件登记。
  */
 @Mixin(Gui.class)
 public class MixinGui {
@@ -22,9 +22,13 @@ public class MixinGui {
     @Shadow
     private Minecraft minecraft;
 
-#if MC_VER < MC_1_20_2
+#if MC_VER < MC_1_21_1
     @Inject(method = "render(Lnet/minecraft/client/gui/GuiGraphics;F)V", at = @At("TAIL"))
     private void hassium$renderFailoverOverlay(GuiGraphics guiGraphics, float partialTick, CallbackInfo ci) {
+#else
+    @Inject(method = "render(Lnet/minecraft/client/gui/GuiGraphics;Lnet/minecraft/client/DeltaTracker;)V", at = @At("TAIL"))
+    private void hassium$renderFailoverOverlay(GuiGraphics guiGraphics, net.minecraft.client.DeltaTracker deltaTracker, CallbackInfo ci) {
+#endif
         // 无感切换（recoveryFreeze=false）不绘制任何切换 UI：用户体感为延迟变高+回退
         if (!io.github.limuqy.mc.hassium.config.HassiumConfigService.getInstance().isRecoveryFreeze()
                 || !io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.isRecovering()) {
@@ -46,5 +50,4 @@ public class MixinGui {
                     0xFFFFFF);
         }
     }
-#endif
 }

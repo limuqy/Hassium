@@ -210,14 +210,20 @@ public class NeoForgeNetworkManager implements NetworkManager {
         if (!tail.hasUdpDataplane()) {
             // 无 UDP 数据面（control only 或 legacy 服务器）—— 仍在恢复态时确认真实恢复。
             try {
+                boolean recovered;
                 if (io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState.getInstance().isRecovering()) {
                     io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState.getInstance().markRecovered();
-                    io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.onHandshakeAccepted();
+                    recovered = io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.onHandshakeAccepted();
                 }
                 else {
-                    io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.onHandshakeAccepted();
+                    recovered = io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.onHandshakeAccepted();
                 }
-                notifyFallback();
+                // 仅在真实恢复（orchestrator 曾进入恢复态且握手成功）时消费备用端点提示，
+                // 与 fabric 对齐（commit 4067a3e）：普通重连/首次登录不弹「已通过备用端点连接」；
+                // 否则 consumeSuccessfulFallback 会把上次会话遗留的 fallback 标记误报。
+                if (recovered) {
+                    notifyFallback();
+                }
             } catch (Throwable ignored) {}
             return;
         }
@@ -231,14 +237,18 @@ public class NeoForgeNetworkManager implements NetworkManager {
             io.github.limuqy.mc.hassium.network.dataplane.DataPlaneClientLifecycle.getInstance()
                     .startUdp(player.getUUID(), tail.connectionEpoch(), tail);
             // 只有 DISCONNECT 已建立恢复态的握手才能确认恢复；首次登录只启动 UDP。
+            boolean recovered;
             if (io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState.getInstance().isRecovering()) {
                 io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState.getInstance().markRecovered();
-                io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.onHandshakeAccepted();
+                recovered = io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.onHandshakeAccepted();
             }
             else {
-                io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.onHandshakeAccepted();
+                recovered = io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.onHandshakeAccepted();
             }
-            notifyFallback();
+            // 仅在真实恢复时消费备用端点提示（与 fabric 对齐，见上方 no-UDP 分支注释）。
+            if (recovered) {
+                notifyFallback();
+            }
         } catch (RuntimeException ex) {
             LOGGER.warn("Hassium: UDP dataplane start failed", ex);
         }

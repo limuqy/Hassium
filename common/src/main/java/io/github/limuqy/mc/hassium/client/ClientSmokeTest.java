@@ -111,6 +111,10 @@ public final class ClientSmokeTest {
         io.github.limuqy.mc.hassium.metrics.NetworkStats.setEnabled(true);
         LOGGER.info("HassiumSmokeTest: enabled delayMs={} reconnectDelayMs={} joinTimeoutMs={} host={}",
                 delayMs, reconnectDelayMs, joinTimeoutMs, host);
+        // 恢复表现模式证据：无感切换（recoveryFreeze=false）与定格模式的 smoke 结果同构，
+        // 仅凭 markers 无法区分 → 显式打标，harness/人工可从日志确认跑的是哪条链路。
+        LOGGER.info("HassiumSmokeTest:CLIENT_MODE recoveryFreeze={}",
+                io.github.limuqy.mc.hassium.config.HassiumConfigService.getInstance().isRecoveryFreeze());
     }
 
     /** 在客户端 tick 中驱动；未进服超时会强制失败退出。 */

@@ -20,12 +20,15 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 @Mixin(Minecraft.class)
 public class MixinClientTick {
 
-#if MC_VER < MC_1_20_2
     /**
      * L2 定格终态回退：候选全部失败（phase==TERMINAL）时解除定格并回到断开画面。
      * <p>
      * 必须用 {@code phase()==TERMINAL} 精确限定：成功路径 onHandshakeAccepted 先置
      * recovering=false 再 setLevel，若仅看 !isRecovering() 会把成功的短暂窗口误判为终态。
+     * <p>
+     * 拆除入口各段不同：1.20.1 = {@code clearLevel()+setScreen}（该签名在 1.20.1 断连路径不可靠）；
+     * 1.20.2~1.20.4 = {@code Minecraft.disconnect(Screen)}；≥1.20.5 = {@code disconnect(Screen,false)}。
+     * 此刻 {@code isRecovering()==false}（TERMINAL），MixinMinecraft 的冻结 cancel 不会拦截。
      */
     @Inject(method = "tick", at = @At("TAIL"))
     private void hassium$onTickTerminalUnfreeze(CallbackInfo ci) {
@@ -37,12 +40,19 @@ public class MixinClientTick {
         }
         io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.markFreezeActive(false);
         Minecraft mc = Minecraft.getInstance();
-        // 1.20.1 用 clearLevel + setScreen 而非 disconnect(Screen)（该签名在 1.20.1 断连路径不可靠）
-        mc.clearLevel();
-        mc.setScreen(new net.minecraft.client.gui.screens.DisconnectedScreen(
+        net.minecraft.client.gui.screens.DisconnectedScreen screen = new net.minecraft.client.gui.screens.DisconnectedScreen(
                 mc.screen,
                 net.minecraft.network.chat.Component.translatable("disconnect.lost"),
-                net.minecraft.network.chat.Component.literal("主控切换失败，已断开连接")));
+                net.minecraft.network.chat.Component.literal("主控切换失败，已断开连接"));
+#if MC_VER < MC_1_20_2
+        // 1.20.1 用 clearLevel + setScreen 而非 disconnect(Screen)（该签名在 1.20.1 断连路径不可靠）
+        mc.clearLevel();
+        mc.setScreen(screen);
+#elif MC_VER < MC_1_20_5
+        mc.disconnect(screen);
+#else
+        mc.disconnect(screen, false);
+#endif
     }
 
     /**
@@ -64,7 +74,6 @@ public class MixinClientTick {
             io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.markRecoverySession(false);
         }
     }
-#endif
 
     /**
      * 在客户端 tick 中更新视距扩展和处理缓存加载队列

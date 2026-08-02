@@ -160,7 +160,7 @@ ERROR / WARN 始终输出。
 | **分段增量** | `clientCache.sectionDeltaEnabled`（默认 true） | MISMATCH 时按 section 比对，仅补变更分段 + BE 覆盖；失败/超时回退全量 | [`chunk-cache.md`](chunk-cache.md) §11.5、[`disk-nbt-cache.md`](disk-nbt-cache.md) |
 | **超视渲染** | `viewDistanceExtensionEnabled`、`maxRenderDistance`、`ovdUnloadDelaySecs` | 多人、clientVD>serverVD 时本地缓存回填环带；Forget 原地 renderOnly；不向服索要视距外区块/BE | [`ovd.md`](ovd.md)、[`chunk-cache.md`](chunk-cache.md) §10 |
 | **世界导出** | `/hassiumc export [<服务器IP>] [seed]` | 客户端缓存 → 原版 Anvil（type2 zlib）；无实体/仅去过的区块快照 | [`chunk-cache.md`](chunk-cache.md) §12、[`disk-nbt-cache.md`](disk-nbt-cache.md) |
-| **主控热切** | `network.controlReachableEndpoints`、`network.dataPlane.controlStallMs` | TCP 主控 `channelInactive`，或控制面 stalled 且 UDP 健康时，客户端进入恢复态并按 priority 串行重连；恢复期（1.20.1 段）世界定格（tick 暂停、断连画面抑制、过渡画面仅隐藏渲染），画面保持冻结世界 + 切换浮层；服务端许可路径以 `FailoverPermit` 限定时效；候选耗尽后终态清理只执行一次 | [`runtime-smoke-test.md`](runtime-smoke-test.md) §`udp-failover` |
+| **主控热切** | `network.controlReachableEndpoints`、`network.dataPlane.controlStallMs` | TCP 主控 `channelInactive`，或控制面 stalled 且 UDP 健康时，客户端进入恢复态并按 priority 串行重连；恢复期世界定格（tick 暂停、断连画面抑制、过渡画面仅隐藏渲染；可切无感模式），画面保持冻结世界 + 切换浮层；服务端许可路径以 `FailoverPermit` 限定时效；候选耗尽后终态清理只执行一次 | [`runtime-smoke-test.md`](runtime-smoke-test.md) §`udp-failover` |
 | **加权分流** | `network.dataPlane.udpListeners`、每 listener `weight` | 每个 UDP/KCP listener 建独立 session，S2C bulk 按权重加权轮询；不健康或无可用 session 时回落 TCP，控制面始终保留 TCP | [`runtime-smoke-test.md`](runtime-smoke-test.md) §`udp-failover` |
 | **多通道数据面（历史）** | 早期 `DataPlanePoCConfig` | 1.20.1 Fabric 的双裸 TCP PoC 已退役，不是生产配置或运维入口 | [`multi-channel_network_research.md`](multi-channel_network_research.md) |
 
@@ -170,7 +170,7 @@ ERROR / WARN 始终输出。
 
 **拓扑与职责**：原版 Minecraft TCP 连接仍是 login、控制与兼容回退路径；UDP/KCP 只承载已 Bind session 的 S2C bulk。服务端从 `network.dataPlane.udpListeners` 向客户端广告可达 UDP 地址，并从 `network.controlReachableEndpoints` 广告备用 TCP 主控地址。两类地址必须分别配置：前者需要 UDP 防火墙/NAT 放行，后者必须能建立完整 Minecraft TCP 会话。
 
-**恢复触发**：主控 TCP `channelInactive` 立即进入候选重连；控制面静默达到 `controlStallMs` 时，仅在 UDP session 健康且服务端签发未过期 `FailoverPermit` 的情况下允许迁移。客户端在 `recoveryWindowMs` 内按 priority 串行尝试候选；期间抑制最终断连并保留磁盘缓存、保存队列、任务执行器。**无缝定格（1.20.1 段，`#if MC_VER < MC_1_20_2`）**：恢复期间世界 tick/实体 tick 暂停（画面定格），vanilla 断连流程（`clearLevel`/DisconnectedScreen）与过渡画面（ConnectScreen/ProgressScreen/ReceivingLevelScreen）均不呈现——过渡 screen 保持 vanilla 逻辑驱动（ConnectScreen 必须可见，Fabric 经 `screen instanceof ConnectScreen` 取回候选连接的 Login listener），仅渲染层跳过其绘制，画面保持冻结世界 + 「正在切换主控…」浮层；恢复成功 `setLevel` 换新世界，候选耗尽才执行一次 terminal cleanup。其他版本段保留非无缝路径（断连画面短暂出现，缓存秒回）。
+**恢复触发**：主控 TCP `channelInactive` 立即进入候选重连；控制面静默达到 `controlStallMs` 时，仅在 UDP session 健康且服务端签发未过期 `FailoverPermit` 的情况下允许迁移。客户端在 `recoveryWindowMs` 内按 priority 串行尝试候选；期间抑制最终断连并保留磁盘缓存、保存队列、任务执行器。**无缝定格（全版本，`network.dataPlane.recoveryFreeze`）**：恢复期间世界 tick/实体 tick 暂停（画面定格），vanilla 断连流程（`clearLevel`/DisconnectedScreen）与过渡画面（ConnectScreen/ProgressScreen/ReceivingLevelScreen）均不呈现——过渡 screen 保持 vanilla 逻辑驱动（ConnectScreen 必须可见，Fabric 经 `screen instanceof ConnectScreen` 取回候选连接的 Login listener），仅渲染层跳过其绘制，画面保持冻结世界 + 「正在切换主控…」浮层；恢复成功 `setLevel` 换新世界，候选耗尽才执行一次 terminal cleanup。其他版本段保留非无缝路径（断连画面短暂出现，缓存秒回）。
 
 **配置原则**：默认 listener `0.0.0.0:25565` 仅将 `127.0.0.1:25565` 作为客户端可达地址，适合本机开发，不能直接用于公网服。公网部署必须为每个 listener 填写可从客户端访问的 `reachableEndpoints`，避免把 wildcard 或内网 bind 地址下发；使用不同公网端口时，TCP 控制候选与 UDP 可达端点应分别写入。
 

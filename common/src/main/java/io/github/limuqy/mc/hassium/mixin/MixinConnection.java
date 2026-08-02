@@ -158,7 +158,6 @@ public class MixinConnection {
                 .onPrimaryDisconnected(active, "channel_inactive");
     }
 
-#if MC_VER < MC_1_20_2
     /**
      * L2 无感切换（{@code network.dataPlane.recoveryFreeze=false}）：恢复窗口内吞掉旧连接的全部 C2S 包。
      * <p>
@@ -170,12 +169,21 @@ public class MixinConnection {
      * <p>
      * 只拦 {@code mc.getConnection()}（=旧 player.connection）：候选连接（ConnectScreen 持有）
      * 不受影响；handleLogin 拆 player 后 getConnection() 先变 null、再指向新连接，均放行。
+     * 全版本生效（≥1.21.6 的 send 第二参数为 {@code ChannelFutureListener}，签名分流）。
      */
+#if MC_VER < MC_1_21_6
     @Inject(method = "send(Lnet/minecraft/network/protocol/Packet;Lnet/minecraft/network/PacketSendListener;)V",
             at = @At("HEAD"), cancellable = true)
     private void hassium$suppressC2SWhileSeamlessRecovery(
             Packet<?> packet, net.minecraft.network.PacketSendListener listener,
             CallbackInfo ci) {
+#else
+    @Inject(method = "send(Lnet/minecraft/network/protocol/Packet;Lio/netty/channel/ChannelFutureListener;)V",
+            at = @At("HEAD"), cancellable = true)
+    private void hassium$suppressC2SWhileSeamlessRecovery(
+            Packet<?> packet, io.netty.channel.ChannelFutureListener listener,
+            CallbackInfo ci) {
+#endif
         if (io.github.limuqy.mc.hassium.config.HassiumConfigService.getInstance().isRecoveryFreeze()) {
             return;
         }
@@ -188,5 +196,4 @@ public class MixinConnection {
         }
         ci.cancel();
     }
-#endif
 }

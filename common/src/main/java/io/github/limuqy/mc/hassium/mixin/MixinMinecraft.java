@@ -48,7 +48,6 @@ public class MixinMinecraft {
                         io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.isRecovering());
             }
         }
-#if MC_VER < MC_1_20_2
         // L2 定格：恢复窗口内过渡画面不绘制（渲染层由 MixinGameRenderer 隐藏），但 setScreen
         // 必须放行——Fabric ClientNetworkingImpl.getLoginConnection 依赖
         // {@code mc.screen instanceof ConnectScreen} 取回候选连接做 registerReceiver 检查，
@@ -56,6 +55,7 @@ public class MixinMinecraft {
         //  - DisconnectedScreen：候选失败 vanilla 直设，会破坏定格 → 拦截 + 推进轮转
         //  - ConnectScreen / ProgressScreen / ReceivingLevelScreen：放行（显示状态完整，
         //    vanilla tick 驱动 ConnectScreen 推进 login；渲染被隐藏，画面保持定格世界 + HUD）
+        // 全版本生效（≥1.20.2 候选失败路径同样由 vanilla 直设 DisconnectedScreen）。
         if (io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.isRecovering()) {
             if (screen instanceof DisconnectedScreen) {
                 // 候选 TCP/DNS 失败（ConnectScreen.connect 异常 → vanilla 弹 DisconnectedScreen）：
@@ -71,7 +71,6 @@ public class MixinMinecraft {
                 return;
             }
         }
-#endif
         if (!(screen instanceof DisconnectedScreen)
                 || !(minecraft.screen instanceof ConnectScreen)
                 || !ClientFailoverAttemptMarker.isMarked()) {
@@ -114,11 +113,14 @@ public class MixinMinecraft {
      * <p>
      * 1.20.5–1.21.8：{@code setLevel(ClientLevel, ReceivingLevelScreen.Reason)}；
      * 1.21.9+：Reason 参数移除，恢复为单参数。
+     * <p>
+     * L2 定格复位：新世界接管时清除冻结（恢复成功 setLevel / 正常新会话均放行）。
      */
 #if MC_VER < MC_1_20_5
     @Inject(method = "setLevel", at = @At("HEAD"))
     private void hassium$onSetLevel(ClientLevel newLevel, CallbackInfo ci) {
         hassium$flushCacheSaveQueue();
+        io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.markFreezeActive(false);
     }
 #elif MC_VER < MC_1_21_9
     @Inject(method = "setLevel", at = @At("HEAD"))
@@ -126,18 +128,12 @@ public class MixinMinecraft {
                                      net.minecraft.client.gui.screens.ReceivingLevelScreen.Reason reason,
                                      CallbackInfo ci) {
         hassium$flushCacheSaveQueue();
+        io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.markFreezeActive(false);
     }
 #else
     @Inject(method = "setLevel", at = @At("HEAD"))
     private void hassium$onSetLevel(ClientLevel newLevel, CallbackInfo ci) {
         hassium$flushCacheSaveQueue();
-    }
-#endif
-
-    /** L2 定格复位：新世界接管时清除冻结（恢复成功 setLevel / 正常新会话均放行）。 */
-#if MC_VER < MC_1_20_2
-    @Inject(method = "setLevel", at = @At("HEAD"))
-    private void hassium$clearFreezeOnNewLevel(ClientLevel newLevel, CallbackInfo ci) {
         io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.markFreezeActive(false);
     }
 #endif
@@ -152,12 +148,75 @@ public class MixinMinecraft {
     }
 
     /**
-     * L2 定格兜底：其他 clearLevel 路径（如 launcher startConnecting 内部的 clearLevel）
-     * 在恢复窗口内同样取消，保证世界不卸载。
+     * L2 定格兜底：恢复窗口内取消世界拆除路径，保证世界不卸载。
+     * <p>
+     * 各段拆除入口：1.20.1 = {@code clearLevel}；1.20.2~1.21.5 = {@code Minecraft.disconnect()}
+     * （launcher startConnecting 用，展示 ProgressScreen）；1.21.6+ = {@code disconnectWithProgressScreen()}
+     * /（1.21.11）{@code disconnectWithProgressScreen(Z)}；listener 侧 {@code disconnect(Screen[,Z])}
+     * 在恢复窗口内同样取消。此兜底仅当 listener 侧 onDisconnect 取消失效时触发，
+     * 均以 {@code isRecovering()} 门控 —— TERMINAL 后恒 false，不再拦截。
      */
 #if MC_VER < MC_1_20_2
     @Inject(method = "clearLevel", at = @At("HEAD"), cancellable = true)
     private void hassium$freezeClearLevel(CallbackInfo ci) {
+        if (io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.isRecovering()) {
+            io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.markFreezeActive(true);
+            ci.cancel();
+        }
+    }
+#elif MC_VER < MC_1_20_5
+    @Inject(method = "disconnect", at = @At("HEAD"), cancellable = true)
+    private void hassium$freezeDisconnectNoScreen(CallbackInfo ci) {
+        if (io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.isRecovering()) {
+            io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.markFreezeActive(true);
+            ci.cancel();
+        }
+    }
+
+    @Inject(method = "disconnect(Lnet/minecraft/client/gui/screens/Screen;)V", at = @At("HEAD"), cancellable = true)
+    private void hassium$freezeDisconnectScreen(net.minecraft.client.gui.screens.Screen screen, CallbackInfo ci) {
+        if (io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.isRecovering()) {
+            io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.markFreezeActive(true);
+            ci.cancel();
+        }
+    }
+#elif MC_VER < MC_1_21_6
+    @Inject(method = "disconnect", at = @At("HEAD"), cancellable = true)
+    private void hassium$freezeDisconnectNoScreen(CallbackInfo ci) {
+        if (io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.isRecovering()) {
+            io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.markFreezeActive(true);
+            ci.cancel();
+        }
+    }
+
+    @Inject(method = "disconnect(Lnet/minecraft/client/gui/screens/Screen;Z)V", at = @At("HEAD"), cancellable = true)
+    private void hassium$freezeDisconnectScreen(net.minecraft.client.gui.screens.Screen screen,
+                                                boolean keepResourcePacks, CallbackInfo ci) {
+        if (io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.isRecovering()) {
+            io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.markFreezeActive(true);
+            ci.cancel();
+        }
+    }
+#else
+    @Inject(method = "disconnectWithProgressScreen", at = @At("HEAD"), cancellable = true)
+    private void hassium$freezeDisconnectWithProgress(CallbackInfo ci) {
+        if (io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.isRecovering()) {
+            io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.markFreezeActive(true);
+            ci.cancel();
+        }
+    }
+#if MC_VER >= MC_1_21_11
+    @Inject(method = "disconnectWithProgressScreen(Z)V", at = @At("HEAD"), cancellable = true)
+    private void hassium$freezeDisconnectWithProgressBool(boolean keepResourcePacks, CallbackInfo ci) {
+        if (io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.isRecovering()) {
+            io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.markFreezeActive(true);
+            ci.cancel();
+        }
+    }
+#endif
+    @Inject(method = "disconnect(Lnet/minecraft/client/gui/screens/Screen;Z)V", at = @At("HEAD"), cancellable = true)
+    private void hassium$freezeDisconnectScreen(net.minecraft.client.gui.screens.Screen screen,
+                                                boolean keepResourcePacks, CallbackInfo ci) {
         if (io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.isRecovering()) {
             io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.markFreezeActive(true);
             ci.cancel();

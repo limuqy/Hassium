@@ -114,7 +114,7 @@ MC_1_21_11
 
 | 分界 | 动作 |
 |------|------|
-| 1.20.1 | 基准：现有网络实现；**UDP 数据面 + TCP 控制 Failover（主控热切 + 加权分流）落地点**（Task 1-9 commit `22c9c3f`）；后续九锚适配由 `931b393`（Fabric launcher 跨版本守卫）与 `e9a9e69`（NeoForge 主控热切 + 加权分流接线 + kcp io.netty split-package 剥离）完成，Fabric + NeoForge × 九锚点 compile 矩阵全 BUILD SUCCESSFUL |
+| 1.20.1 | 基准：现有网络实现；**UDP 数据面 + TCP 控制 Failover（主控热切 + 加权分流）落地点**（Task 1-9 commit `22c9c3f`）；后续九锚适配由 `931b393`（Fabric launcher 跨版本守卫）与 `e9a9e69`（NeoForge 主控热切 + 加权分流接线 + kcp io.netty split-package 剥离）完成，Fabric + NeoForge × 九锚点 compile 矩阵全 BUILD SUCCESSFUL。L2 恢复表现（`recoveryFreeze` 定格/无感切换）原限 1.20.1 段，后铺开全版本：冻结注入（tick/teardown/overlay）与终端拆除按段适配（1.20.1 `clearLevel`；1.20.2~1.20.4 `disconnect(Screen)`；≥1.20.5 `disconnect(Screen,Z)`；1.21.6+ launcher 走 `disconnectWithProgressScreen[(Z)]`） |
 | 1.20.2 | CustomPayload 路径；段内无 Forge；1.20.6+ Forge 用 ChannelBuilder play() |
 | 1.20.4 | **仅 NeoForge**：SimpleChannel 被移除，改用 `RegisterPayloadHandlerEvent` + `CustomPacketPayload.write/id`（1.20.5+ 才有 StreamCodec） |
 | 1.20.5 | STREAM_CODEC / `type()`；聚合写包、原版包枚举等 common 能力 |
@@ -133,7 +133,7 @@ MC_1_21_11
 - 各加载器 `registerChannels` / 握手入口仍尊重配置项 `HassiumConfigService.isNetworkCompressionEnabled()`
 - 实现细节见 `PacketCodecCompat`（StreamCodec / GameProtocols / IdDispatchCodec）
 
-运行时验证优先级：**1.20.1 → 1.20.5 → 1.21.11**；其余锚点以编译 + 短冒烟为主。
+运行时验证优先级：**1.20.1 → 1.21.1 → 1.21.11**（均要求真实 nginx 断主控 UdpFailover 冒烟通过）；其余锚点以编译 + 短冒烟为主。
 
 ---
 
