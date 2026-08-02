@@ -9,6 +9,47 @@ import java.util.Optional;
 public final class ClientFailoverIdentity {
     private static volatile ClientFailoverIdentity instance;
 
+    /** L2 世界定格标志：F1/F2 在恢复窗口置位，F3（新世界 setLevel）/F8（terminal 回退）复位。 */
+    private static volatile boolean freezeActive = false;
+
+    public static boolean isFreezeActive() {
+        return freezeActive;
+    }
+
+    public static void markFreezeActive(boolean active) {
+        freezeActive = active;
+    }
+
+    /** L2 恢复会话渲染遮挡：从恢复启动到新世界正常渲染（ReceivingLevelScreen 移除）保持置位，
+     * 期间过渡画面（ConnectScreen/ProgressScreen/ReceivingLevelScreen）不绘制，画面保持冻结世界
+     * + HUD 浮层。置位在 orchestrator 恢复启动，清除在 MixinClientTick（新世界 screen==null）/
+     * terminal finalize。 */
+    private static volatile boolean recoverySessionActive = false;
+
+    public static boolean isRecoverySessionActive() {
+        return recoverySessionActive;
+    }
+
+    public static void markRecoverySession(boolean active) {
+        recoverySessionActive = active;
+    }
+
+    /** 从断开的控制连接通道解析 active 端点（host/port，priority 0），供恢复轮转剔除；
+     * 无 remoteAddress（LocalChannel/内存连接）时返回 null。
+     * <p>host 必须用 {@code getHostAddress()}（IP 字面量）：{@code getHostString()} 在
+     * Windows/Netty 上返回 DNS 主机名（如 localhost.sangfor.com.cn），与候选列表里的
+     * 127.0.0.1 坐标不一致会导致 recordAttemptFailure 剔除失效、永远重试同一候选。 */
+    public static ControlEndpoint activeEndpointFromChannel(io.netty.channel.Channel channel) {
+        if (channel == null) {
+            return null;
+        }
+        java.net.SocketAddress addr = channel.remoteAddress();
+        if (addr instanceof java.net.InetSocketAddress isa) {
+            return new ControlEndpoint(isa.getAddress().getHostAddress(), isa.getPort(), 0);
+        }
+        return null;
+    }
+
     private final ClientFailoverEndpointStore store;
     private final ControlReconnectOrchestrator orchestrator;
     private String primaryAddress;
@@ -100,6 +141,8 @@ public final class ClientFailoverIdentity {
         activeFallback = null;
         successfulFallback = null;
         ClientFailoverAttemptMarker.markPrimary(primary);
+        // 全新会话：复位恢复状态机（TERMINAL 单边终态只在一个会话内有效）。
+        ClientRecoveryState.getInstance().resetForNewSession();
         orchestrator.prepareInitialConnection(primary, store.load(primary));
     }
 

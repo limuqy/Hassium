@@ -59,6 +59,10 @@ public final class ControlReconnectOrchestrator {
     private boolean advertisedConfigured = false;
     /** 用户主动退出（主线程 disconnect(Component) 时由 MixinConnection 标记）→ 不自动 failover。 */
     private volatile boolean userInitiatedDisconnect = false;
+    /** 同一次断连事件的重复回调防抖（exceptionCaught + channelInactive 双路径会触发两次 disconnect）。 */
+    private ControlEndpoint lastDisconnected;
+    private long lastDisconnectedAtMs;
+    private static final long DISCONNECT_DEBOUNCE_MS = 1000L;
 
     public ControlReconnectOrchestrator(ControlReconnectLauncher launcher,
                                         List<ControlEndpoint> bootstrap,
@@ -101,7 +105,21 @@ public final class ControlReconnectOrchestrator {
         if (terminalFinalized) {
             return; // 已经在 terminal；不再 launch
         }
+        // 同一次断连事件的重复回调（exceptionCaught→disconnect + channelInactive→disconnect）
+        // 会重复 launch 同一候选；1s 窗口内同坐标只处理一次。
+        if (active != null && lastDisconnected != null
+                && System.currentTimeMillis() - lastDisconnectedAtMs < DISCONNECT_DEBOUNCE_MS
+                && active.coordinateKey().equals(lastDisconnected.coordinateKey())) {
+            return;
+        }
+        lastDisconnected = active;
+        lastDisconnectedAtMs = System.currentTimeMillis();
         if (!canStartRecovery(active)) {
+            // 候选耗尽且 gate 拒绝（如恢复窗口内再次被动断连）时恢复窗口必须正常终结，
+            // 否则 freezeActive 定格标志卡死（L2 F8 终态观察依赖 TERMINAL phase）。
+            if (recovering) {
+                performTerminalFinalization();
+            }
             return; // 未通告 / 用户主动退出 / 去重后端点不足 → 不自动切换主控
         }
         // 用 (active, advertised-candidates-merged) 把候选灌进 manager，bootstrap 替换为 active
@@ -114,9 +132,16 @@ public final class ControlReconnectOrchestrator {
         // 所以 active 的剔除必须放在它之后才能生效。
         if (active != null) {
             manager.recordAttemptFailure(active);
+        } else if (current != null) {
+            // 候选连接 connect 失败（channel 从未激活 → 无 remoteAddress 可解析 active）：
+            // 回退剔除当前在途候选，否则 nextCandidate 永远返回同一候选形成重试风暴。
+            manager.recordAttemptFailure(current);
+            current = null;
         }
         recovering = true;
         connectionEpoch = nextEpoch();
+        // L2 渲染遮挡：恢复启动 → 新世界接管（MixinClientTick 清除）期间隐藏过渡画面
+        io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.markRecoverySession(true);
         if (!launchNextCandidate()) {
             // 无剩余候选（含仅 active 已被剔除）：立刻 terminal，避免 recovering 悬挂导致
             // 下一次普通握手误报 FAILOVER_RECONNECT_OK，以及 stopUdp(keepLease) 空 bundle NPE。
@@ -201,8 +226,12 @@ public final class ControlReconnectOrchestrator {
                 manager.recordAttemptFailure(current);
                 current = null;
             }
-            if (launchNextCandidate()) return true;
-            recovering = false;
+            if (launchNextCandidate()) {
+                return true;
+            }
+            // 候选耗尽：统一走 terminal finalize（recovering=false + markTerminal + 磁盘清理），
+            // 避免 recovering 悬挂 / freezeActive 卡死。
+            performTerminalFinalization();
             return false;
         }
         if (!initialConnection) return false;
@@ -215,8 +244,11 @@ public final class ControlReconnectOrchestrator {
         startRecoveryWindow();
         recovering = true;
         connectionEpoch = nextEpoch();
-        if (launchNextCandidate()) return true;
-        recovering = false;
+        if (launchNextCandidate()) {
+            return true;
+        }
+        // 初始分支耗尽（如恢复窗口即刻过期）：同样走 terminal finalize。
+        performTerminalFinalization();
         return false;
     }
 
@@ -386,9 +418,21 @@ public final class ControlReconnectOrchestrator {
         terminalFinalized = true;
         recovering = false;
         terminalFinalizations++;
+        // L2 渲染遮挡终结：terminal 后恢复普通画面渲染（断连/主菜单可见）
+        io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.markRecoverySession(false);
+        // L2 F8 终态观察依赖 TERMINAL phase（此前生产代码从不 markTerminal 是缺陷）。
+        ClientRecoveryState.getInstance().markTerminal();
         if (!initialConnection) {
             try {
-                ClientLifecycleHelper.finalizeDisconnectIfTerminal();
+                // L2 后 onPrimaryDisconnected 由 MixinConnection 在 netty 线程驱动；
+                // 磁盘清理（drain/shutdown/storage close）会阻塞调用线程数秒，必须回主线程执行，
+                // 不能卡共享 event loop（候选连接仍在同一 loop 上）。
+                net.minecraft.client.Minecraft mc = net.minecraft.client.Minecraft.getInstance();
+                if (mc == null || mc.isSameThread()) {
+                    ClientLifecycleHelper.finalizeDisconnectIfTerminal();
+                } else {
+                    mc.execute(ClientLifecycleHelper::finalizeDisconnectIfTerminal);
+                }
             } catch (ExceptionInInitializerError e) {
                 // Pure common tests do not bootstrap Minecraft registries; the terminal
                 // state is still recorded and the client lifecycle hook will retry in-game.

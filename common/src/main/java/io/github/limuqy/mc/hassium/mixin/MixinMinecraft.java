@@ -29,6 +29,30 @@ public class MixinMinecraft {
     @Inject(method = "setScreen", at = @At("HEAD"), cancellable = true)
     private void hassium$onDisconnectedScreen(Screen screen, CallbackInfo ci) {
         Minecraft minecraft = (Minecraft) (Object) this;
+#if MC_VER < MC_1_20_2
+        // L2 定格：恢复窗口内过渡画面不绘制（渲染层由 MixinGameRenderer 隐藏），但 setScreen
+        // 必须放行——Fabric ClientNetworkingImpl.getLoginConnection 依赖
+        // {@code mc.screen instanceof ConnectScreen} 取回候选连接做 registerReceiver 检查，
+        // 拦截显示会让候选连接在 Login 阶段被 IllegalStateException 杀死：
+        //  - DisconnectedScreen：候选失败 vanilla 直设，会破坏定格 → 拦截 + 推进轮转
+        //  - ConnectScreen / ProgressScreen / ReceivingLevelScreen：放行（显示状态完整，
+        //    vanilla tick 驱动 ConnectScreen 推进 login；渲染被隐藏，画面保持定格世界 + HUD）
+        if (io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.isRecovering()) {
+            if (screen instanceof DisconnectedScreen) {
+                // 候选 TCP/DNS 失败（ConnectScreen.connect 异常 → vanilla 弹 DisconnectedScreen）：
+                // launcher 的 onFailure 是 noop，推进必须在此完成，否则 current 悬挂、
+                // 恢复窗口永远不结束（overlay 卡死）。onInitialTcpConnectionFailed 的
+                // recovering 分支剔除 current 并 launch 下一候选，耗尽则 terminal。
+                if (minecraft.screen instanceof ConnectScreen
+                        && io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverAttemptMarker.isMarked()) {
+                    io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity
+                            .onInitialTcpConnectionFailed();
+                }
+                ci.cancel();
+                return;
+            }
+        }
+#endif
         if (!(screen instanceof DisconnectedScreen)
                 || !(minecraft.screen instanceof ConnectScreen)
                 || !ClientFailoverAttemptMarker.isMarked()) {
@@ -75,6 +99,14 @@ public class MixinMinecraft {
     }
 #endif
 
+    /** L2 定格复位：新世界接管时清除冻结（恢复成功 setLevel / 正常新会话均放行）。 */
+#if MC_VER < MC_1_20_2
+    @Inject(method = "setLevel", at = @At("HEAD"))
+    private void hassium$clearFreezeOnNewLevel(ClientLevel newLevel, CallbackInfo ci) {
+        io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.markFreezeActive(false);
+    }
+#endif
+
     @Unique
     private void hassium$flushCacheSaveQueue() {
         try {
@@ -83,6 +115,20 @@ public class MixinMinecraft {
             LOGGER.error("Hassium: Failed to flush cache save queue on level change", e);
         }
     }
+
+    /**
+     * L2 定格兜底：其他 clearLevel 路径（如 launcher startConnecting 内部的 clearLevel）
+     * 在恢复窗口内同样取消，保证世界不卸载。
+     */
+#if MC_VER < MC_1_20_2
+    @Inject(method = "clearLevel", at = @At("HEAD"), cancellable = true)
+    private void hassium$freezeClearLevel(CallbackInfo ci) {
+        if (io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.isRecovering()) {
+            io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.markFreezeActive(true);
+            ci.cancel();
+        }
+    }
+#endif
 
     /**
      * 断连最终清理（drain 残余 + shutdown），在世界拆除之后触发。

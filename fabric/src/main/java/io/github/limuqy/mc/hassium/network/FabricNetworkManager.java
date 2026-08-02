@@ -305,15 +305,18 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
             LOGGER.info("Hassium: Client handshake response: accepted={}, globalCompression={}, compactHeader={}",
                     accepted, globalCompressionAccepted, compactHeaderAccepted);
             if (accepted && globalCompressionAccepted) {
-                var conn = client.getConnection();
+                // L2：必须用包所属连接（handler.getConnection()）而非 client.getConnection()——
+                // 恢复期间 client.getConnection() 仍指向旧 player 的 ROUND1 断连连接，
+                // 会把 ZSTD 装到死连接、压缩 ready 发到死连接，候选连接实际未装 ZSTD。
+                var conn = handler.getConnection();
                 if (conn != null) {
-                    Channel channel = getConnectionChannel(conn.getConnection());
+                    Channel channel = getConnectionChannel(conn);
                     if (channel != null) {
                         int level = HassiumConfigService.getInstance().getGlobalCompressionLevel();
                         int threshold = HassiumConfigService.getInstance().getGlobalCompressionThreshold();
                         ZstdPipelineSwitcher.switchToZstdWhenReady(channel, threshold, level, () -> {
                             ZstdNegotiationTracker.markNegotiated(channel);
-                            sendCompressionReadyToServer();
+                            sendCompressionReadyToServer(conn);
                             LOGGER.info("Hassium: Client ZSTD pipeline installed, sent ready ACK");
                         });
                     }
@@ -1307,6 +1310,25 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
             LOGGER.error("Hassium: Failed to send compression ready", e);
         }
     }
+
+#if MC_VER < MC_1_20_5
+    /**
+     * 通过指定连接发送压缩确认（1.20.1–1.20.4 分支）。
+     * <p>
+     * L2 恢复场景必须发到候选连接本身：{@code ClientPlayNetworking.send} 走
+     * {@code mc.connection}，恢复期间仍指向旧 player 的 ROUND1 断连连接，
+     * 候选连接的 ready 会发丢，服务端永远不装 ZSTD。
+     */
+    private static void sendCompressionReadyToServer(Connection connection) {
+        try {
+            FriendlyByteBuf readyBuf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
+            new CompressionReadyPayload(true).encode(readyBuf);
+            connection.send(ClientPlayNetworking.createC2SPacket(CompressionReadyPayload.CHANNEL, readyBuf));
+        } catch (Exception e) {
+            LOGGER.error("Hassium: Failed to send compression ready", e);
+        }
+    }
+#endif
 
     /** Task 9 — 统一消费备用端点成功切换提示;无备用成功时空操作。必须在客户端主线程调用。 */
     private static void notifyFallback() {

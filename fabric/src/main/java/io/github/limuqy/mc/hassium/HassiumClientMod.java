@@ -7,7 +7,6 @@ import io.github.limuqy.mc.hassium.command.FabricHassiumCommand;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.network.DictionaryManager;
 import io.github.limuqy.mc.hassium.network.FabricNetworkManager;
-import io.github.limuqy.mc.hassium.network.dataplane.ControlEndpoint;
 import io.github.limuqy.mc.hassium.network.dataplane.ControlReconnectOrchestrator;
 import io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity;
 import io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState;
@@ -64,17 +63,17 @@ public class HassiumClientMod implements ClientModInitializer {
             networkManager.sendHandshakeRequest();
         });
 
-        // 客户端断开事件：先让 orchestrator 把恢复态开起来，然后 cleanup / finalize。
+        // 客户端断开事件：恢复启动已前移到 MixinConnection.disconnect(Component) HEAD
+        // （被动断连判定，先于 fabric DISCONNECT 必然执行），此处仅保留恢复态 begin 与清理。
         // 恢复中 finalizeDisconnectIfTerminal 会短路 one-time terminal；磁盘缓存/executor
         // 留待下一候选握手成功 markRecovered；候选耗尽时 orchestrator 自身触发一次 terminal.
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
             try {
                 ControlReconnectOrchestrator orch = reconnectOrchestrator;
                 if (orch != null && orch.hasAdvertisedCandidates()) {
-                    ControlEndpoint active = activeControlEndpoint(handler);
-                    ClientFailoverIdentity.onPrimaryDisconnected(active, "channel_inactive");
-                    // 仅当 orchestrator 仍持有可 launch 的恢复态时进入 ClientRecoveryState；
-                    // 候选耗尽走 terminal，不再 begin（避免 stopUdp(keepLease) 空 bundle）。
+                    // begin 的 isRecovering() 此时已由 MixinConnection 置位（disconnect(Component)
+                    // 先于 onDisconnect / fabric DISCONNECT 触发）；候选耗尽走 terminal，不再 begin
+                    // （避免 stopUdp(keepLease) 空 bundle）。
                     if (orch.isRecovering()) {
                         ClientRecoveryState.getInstance().begin(
                                 java.lang.System.currentTimeMillis() + 60_000L);
@@ -98,19 +97,5 @@ public class HassiumClientMod implements ClientModInitializer {
         // 注册客户端命令
         FabricHassiumCommand.registerClientCommands();
         LOGGER.info("Hassium: Fabric client-side initialization complete");
-    }
-
-    private static ControlEndpoint activeControlEndpoint(
-            net.minecraft.client.multiplayer.ClientPacketListener handler) {
-        try {
-            if (handler == null) return null;
-            net.minecraft.network.Connection conn = handler.getConnection();
-            if (conn == null) return null;
-            java.net.SocketAddress addr = conn.getRemoteAddress();
-            if (addr instanceof java.net.InetSocketAddress isa) {
-                return new ControlEndpoint(isa.getHostString(), isa.getPort(), /*priority*/ 0);
-            }
-        } catch (Throwable ignored) {}
-        return null;
     }
 }

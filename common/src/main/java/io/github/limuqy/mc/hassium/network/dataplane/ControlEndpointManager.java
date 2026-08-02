@@ -99,7 +99,12 @@ public final class ControlEndpointManager {
 
     public void recordAttemptFailure(ControlEndpoint endpoint) {
         if (endpoint == null) return;
-        remaining.remove(endpoint.coordinateKey());
+        if (remaining.remove(endpoint.coordinateKey()) != null) {
+            return;
+        }
+        // host 别名兜底：同一地址的 127.0.0.1 / localhost / DNS 名（getHostAddress 修复后
+        // 主路径已一致，但 S2C 通告可能用域名）——按端口匹配剔除，避免风暴重试同一端口。
+        remaining.entrySet().removeIf(e -> e.getValue().port() == endpoint.port());
     }
 
     public void markConnected(ControlEndpoint endpoint) {

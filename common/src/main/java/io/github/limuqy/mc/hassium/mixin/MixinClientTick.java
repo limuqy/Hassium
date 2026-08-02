@@ -20,6 +20,52 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 @Mixin(Minecraft.class)
 public class MixinClientTick {
 
+#if MC_VER < MC_1_20_2
+    /**
+     * L2 定格终态回退：候选全部失败（phase==TERMINAL）时解除定格并回到断开画面。
+     * <p>
+     * 必须用 {@code phase()==TERMINAL} 精确限定：成功路径 onHandshakeAccepted 先置
+     * recovering=false 再 setLevel，若仅看 !isRecovering() 会把成功的短暂窗口误判为终态。
+     */
+    @Inject(method = "tick", at = @At("TAIL"))
+    private void hassium$onTickTerminalUnfreeze(CallbackInfo ci) {
+        if (!io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.isFreezeActive()
+                || io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.isRecovering()
+                || io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState.getInstance().phase()
+                        != io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState.Phase.TERMINAL) {
+            return;
+        }
+        io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.markFreezeActive(false);
+        Minecraft mc = Minecraft.getInstance();
+        // 1.20.1 用 clearLevel + setScreen 而非 disconnect(Screen)（该签名在 1.20.1 断连路径不可靠）
+        mc.clearLevel();
+        mc.setScreen(new net.minecraft.client.gui.screens.DisconnectedScreen(
+                mc.screen,
+                net.minecraft.network.chat.Component.translatable("disconnect.lost"),
+                net.minecraft.network.chat.Component.literal("主控切换失败，已断开连接")));
+    }
+
+    /**
+     * L2 恢复会话渲染遮挡终结：新世界接管完成（候选连接 handleLogin 的 ReceivingLevelScreen
+     * 已被 vanilla 移除 → screen==null）且恢复已成功（!isRecovering）后清除 session 标记，
+     * 后续画面渲染恢复正常。
+     * <p>
+     * vanilla Minecraft.tick 仅在 {@code level==null} 时驱动 pendingConnection；恢复期间
+     * ConnectScreen 已显示（setScreen 放行），由 vanilla tick 驱动，无需手动驱动。
+     */
+    @Inject(method = "tick", at = @At("TAIL"))
+    private void hassium$clearRecoverySession(CallbackInfo ci) {
+        if (!io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.isRecoverySessionActive()) {
+            return;
+        }
+        Minecraft mc = Minecraft.getInstance();
+        if (!io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.isRecovering()
+                && mc.screen == null && mc.level != null && mc.player != null) {
+            io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.markRecoverySession(false);
+        }
+    }
+#endif
+
     /**
      * 在客户端 tick 中更新视距扩展和处理缓存加载队列
      */

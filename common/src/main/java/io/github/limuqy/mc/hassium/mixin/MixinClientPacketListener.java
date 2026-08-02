@@ -45,6 +45,42 @@ public class MixinClientPacketListener {
 
 #if MC_VER < MC_1_20_2
     /**
+     * L2 定格恢复：新世界接管前拆除冻结的旧 player。
+     * <p>
+     * vanilla handleLogin 依赖 {@code minecraft.player == null} 才会创建新 LocalPlayer，
+     * 而 {@code Minecraft.getConnection()} 返回的正是 {@code player.connection}。
+     * 定格期间旧 player（connection=已断开的 ROUND1 连接）被 F1/F2 保留，若不拆除：
+     * <ul>
+     *   <li>新 player 永不创建，{@code mc.getConnection()} 永远指向断连的 ROUND1 连接</li>
+     *   <li>候选连接在 ConnectScreen 退场（setScreen(ReceivingLevelScreen)）后无人 tick，
+     *       后续包（chunks、Hassium 握手 S2C）永不处理，恢复永久卡死</li>
+     * </ul>
+     * <p>
+     * 线程约束（关键）：1.20.1 包在 Netty 线程首次分发，HEAD 注入位于
+     * {@code PacketUtils.ensureRunningOnSameThread} 之前；Netty 首分发时绝不能做
+     * 渲染/UI 操作（clearLevel→setScreen 会抛 RenderSystem wrong thread，候选连接崩溃）。
+     * 非主线程直接 return，交给 ensure 排队到主线程重跑后本注入再执行。
+     * <p>
+     * 主线程只置 {@code player=null}，不调 clearLevel：旧 level 由 vanilla setLevel 直接替换
+     * （数据已在断连 dump 落盘），且 clearLevel 的 dropAllTasks 会清掉排队中的握手确认任务。
+     */
+    @Inject(method = "handleLogin", at = @At("HEAD"))
+    private void hassium$teardownFrozenWorld(net.minecraft.network.protocol.game.ClientboundLoginPacket packet,
+                                             CallbackInfo ci) {
+        if (!io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.isFreezeActive()
+                && !io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.isRecovering()) {
+            return;
+        }
+        net.minecraft.client.Minecraft mc = net.minecraft.client.Minecraft.getInstance();
+        if (!mc.isSameThread()) {
+            return;
+        }
+        mc.player = null;
+    }
+#endif
+
+#if MC_VER < MC_1_20_2
+    /**
      * 断开连接时清理（仅 1.20.1：onDisconnect 仍在 ClientPacketListener）
      */
     @Inject(method = "onDisconnect", at = @At("HEAD"))
@@ -52,6 +88,35 @@ public class MixinClientPacketListener {
         ClientLifecycleHelper.cleanupOnDisconnect();
     }
 
+    /**
+     * L2 恢复窗口 begin / UDP keepLease（在冻结 cancel 之前声明执行）。
+     * <p>
+     * fabric 的 ClientPlayConnectionEvents.DISCONNECT 也注入 onDisconnect HEAD（priority 999），
+     * 与我们的取消注入同点竞争——无论哪边先跑，恢复态 begin 与 stopUdp(keepLease=true) 都必须
+     * 已就位（stopUdp keepLease 幂等，双调安全），否则恢复窗口内 finalize 不被抑制、UDP 束被硬关。
+     */
+    @Inject(method = "onDisconnect", at = @At("HEAD"))
+    private void hassium$beginRecoveryState(net.minecraft.network.chat.Component reason, CallbackInfo ci) {
+        if (!io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.isRecovering()) {
+            return;
+        }
+        io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState.getInstance().begin(
+                java.lang.System.currentTimeMillis() + 60_000L);
+        io.github.limuqy.mc.hassium.network.dataplane.DataPlaneClientLifecycle.getInstance()
+                .stopUdp(true);
+    }
+
+    /**
+     * L2 世界定格：恢复窗口中取消 vanilla onDisconnect 方法体（clearLevel + setScreen 均不执行），
+     * 世界画面保持冻结；恢复成功 setLevel 或 terminal 回退后再放行。
+     */
+    @Inject(method = "onDisconnect", at = @At("HEAD"), cancellable = true)
+    private void hassium$freezeOnDisconnect(net.minecraft.network.chat.Component reason, CallbackInfo ci) {
+        if (io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.isRecovering()) {
+            io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.markFreezeActive(true);
+            ci.cancel();
+        }
+    }
 
 #endif
 

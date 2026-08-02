@@ -26,13 +26,9 @@ class ControlReconnectOrchestratorTest {
     @BeforeEach
     @AfterEach
     void resetRecoverySingleton() {
-        // 直接进入 TERMINAL + consume，把单例状态吹回 NONE 风格的"已清理" -- 单例没有 reset 接口，
-        // 但测试关心的只有 RECOVERING / RECOVERED / TERMINAL 流；用 markTerminal + consume 做一次
-        // cleanup 然后下次 begin 又会自然从 TERMINAL 退出（begin 对 TERMINAL 是 no-op，OK）。
-        ClientRecoveryState s = ClientRecoveryState.getInstance();
-        s.markTerminal();
-        // 单例不再可被 begin 拉回；测试期望独立新实例时用 `new ControlReconnectOrchestrator`
-        // + 内部 record 自己的 phase（见 orchestrator 实现说明：用单例仅作 cross-cutting gate）。
+        // 直接复位到 NONE（L2 新增 resetForNewSession）；此前用 markTerminal + consume 逼近
+        // 是因为单例没有公开 reset —— 每次测试从干净状态开始。
+        ClientRecoveryState.getInstance().resetForNewSession();
     }
 
     @Test
@@ -241,6 +237,84 @@ class ControlReconnectOrchestratorTest {
         orchestrator.onPrimaryDisconnected(endpoint("primary.example", 25565, 100), "closed");
 
         assertEquals(1_234L, orchestrator.recoveryDeadlineMs() - orchestrator.recoveryStartedAtMs());
+    }
+
+    @Test
+    @DisplayName("recovering 分支候选耗尽 → TERMINAL + terminalFinalizations 递增（L2 不再悬挂 recovering）")
+    void recoveringBranchExhaustionReachesTerminal() {
+        RecordingLauncher launcher = new RecordingLauncher();
+        ControlReconnectOrchestrator orchestrator =
+                new ControlReconnectOrchestrator(launcher, List.of(), List.of());
+        orchestrator.prepareInitialConnection("primary.com:25565", List.of(
+                endpoint("b.com", 25565, 90), endpoint("c.com", 25565, 80)));
+        orchestrator.mergeAdvertisedCandidates(List.of(
+                endpoint("b.com", 25565, 90), endpoint("c.com", 25565, 80)));
+
+        // 初始分支：首连失败 → launch b
+        assertTrue(orchestrator.onInitialTcpConnectionFailed(), "初始失败应启动恢复并 launch b");
+        assertEquals(List.of(endpoint("b.com", 25565, 90)), launcher.launched());
+        // recovering 分支：候选 b 失败 → 轮转 c
+        assertTrue(orchestrator.onInitialTcpConnectionFailed(), "候选 b 失败应轮转到 c");
+        assertEquals(List.of(endpoint("b.com", 25565, 90), endpoint("c.com", 25565, 80)),
+                launcher.launched());
+        // recovering 分支：候选 c 失败 → 耗尽 → terminal（而非仅 recovering=false 悬挂）
+        assertFalse(orchestrator.onInitialTcpConnectionFailed(), "候选耗尽应返回 false");
+
+        assertEquals(ClientRecoveryState.Phase.TERMINAL, ClientRecoveryState.getInstance().phase(),
+                "耗尽后恢复状态机必须进入 TERMINAL（L2 F8 终态观察依赖）");
+        assertEquals(1, orchestrator.terminalFinalizations(), "terminal finalize 恰好一次");
+        assertFalse(orchestrator.isRecovering(), "耗尽后不得悬挂 recovering");
+    }
+
+    @Test
+    @DisplayName("initial 分支耗尽（恢复窗口即刻过期）→ TERMINAL")
+    void initialBranchExhaustionReachesTerminal() {
+        RecordingLauncher launcher = new RecordingLauncher();
+        // 窗口 0ms：startRecovery 立即清空 remaining → launchNextCandidate 失败 → 初始分支耗尽。
+        // （DataPlaneConfig 校验要求正窗口，直接经包内构造注入 LongSupplier。）
+        ControlReconnectOrchestrator orchestrator =
+                new ControlReconnectOrchestrator(launcher, List.of(), List.of(), () -> 0L);
+        orchestrator.prepareInitialConnection("primary.com:25565", List.of(
+                endpoint("b.com", 25565, 90), endpoint("c.com", 25565, 80)));
+        orchestrator.mergeAdvertisedCandidates(List.of(
+                endpoint("b.com", 25565, 90), endpoint("c.com", 25565, 80)));
+
+        // 窗口 0ms：startRecovery 立即清空 remaining → launchNextCandidate 失败 → 初始分支耗尽
+        assertFalse(orchestrator.onInitialTcpConnectionFailed());
+        assertEquals(0, launcher.launched().size(), "窗口过期不得 launch");
+
+        assertEquals(ClientRecoveryState.Phase.TERMINAL, ClientRecoveryState.getInstance().phase());
+        assertEquals(1, orchestrator.terminalFinalizations());
+        assertFalse(orchestrator.isRecovering());
+    }
+
+    @Test
+    @DisplayName("恢复中 gate 拒绝（用户主动退出标记）→ terminal 终结恢复窗口")
+    void gateRejectWhileRecoveringTerminates() {
+        RecordingLauncher launcher = new RecordingLauncher();
+        ControlReconnectOrchestrator orchestrator = ControlReconnectOrchestrator.forTest(
+                launcher,
+                List.of(endpoint("a.com", 25565, 100), endpoint("b.com", 25565, 90),
+                        endpoint("c.com", 25565, 80)));
+        orchestrator.prepareInitialConnection("primary.com:25565", List.of(
+                endpoint("a.com", 25565, 100), endpoint("b.com", 25565, 90),
+                endpoint("c.com", 25565, 80)));
+        orchestrator.mergeAdvertisedCandidates(List.of(
+                endpoint("a.com", 25565, 100), endpoint("b.com", 25565, 90),
+                endpoint("c.com", 25565, 80)));
+
+        // 主控断开 → 恢复启动并 launch 高优先级候选
+        orchestrator.onPrimaryDisconnected(endpoint("primary.com", 25565, 100), "closed");
+        assertEquals(1, launcher.launched().size(), "应启动恢复");
+        assertTrue(orchestrator.isRecovering());
+
+        // 恢复中用户主动退出标记 → 后续被动断连被 gate 拒绝 → 恢复窗口正常终结（不卡 freezeActive）
+        orchestrator.markUserInitiatedDisconnect();
+        orchestrator.onPrimaryDisconnected(endpoint("b.com", 25565, 90), "closed");
+
+        assertEquals(ClientRecoveryState.Phase.TERMINAL, ClientRecoveryState.getInstance().phase());
+        assertEquals(1, orchestrator.terminalFinalizations());
+        assertFalse(orchestrator.isRecovering());
     }
 
 

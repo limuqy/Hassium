@@ -71,6 +71,20 @@ public final class ClientRecoveryState {
     }
 
     /**
+     * 新会话开始（用户经 ConnectScreen 发起新连接）时复位状态机。
+     *
+     * <p>TERMINAL 是会话内单边终态：恢复耗尽 markTerminal 后，若不复位，下一次正常断连
+     * 会因 consumeTerminalCleanup 已被消费而跳过 finalize，且 F8 终态观察会在后续成功
+     * 恢复窗口误判（phase 仍为 TERMINAL）。prepareInitialConnection 是「全新会话」的
+     * 唯一入口（failover 候选连接的 ServerData 以 hassium-failover: 前缀跳过），故在此复位。
+     */
+    public synchronized void resetForNewSession() {
+        phase = Phase.NONE;
+        cleanupConsumed = false;
+        deadlineMs = 0L;
+    }
+
+    /**
      * 返回 true 恰好一次。允许 {@code ClientLifecycleHelper.finalizeDisconnectIfTerminal()}
      * 在 TERMINAL 后做一次性的磁盘资源关闭。
      */

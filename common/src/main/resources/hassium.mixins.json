@@ -26,6 +26,8 @@
       "MixinClientLevel",
       "MixinLevel",
       "MixinClientTick",
+      "MixinGui",
+      "MixinGameRenderer",
       "MixinLightRecompute",
       "MixinOptions",
       "OptionsAccessor",

@@ -161,6 +161,14 @@ public final class ClientSmokeTest {
             return;
         }
 
+        // L2 定格恢复：ROUND1 断连后 player/level 不再卸载（世界定格），恢复窗口内必须等待
+        // 恢复握手完成（isRecovering=false）再计时 ROUND2 —— 否则 joinAtMs 在重连前启动，
+        // 统计可能在候选连接 / 新世界 setLevel 尚未完成时触发。
+        if (state == State.WAIT_JOIN_2 && runUdpFailover
+                && io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.isRecovering()) {
+            return;
+        }
+
         // 等到玩家位置被服务端确认（收到 ClientboundPlayerPositionPacket 后 y > 0）
         // 而不是 player 对象刚创建就开始计时
         if (mc.player.getY() <= 0) {
