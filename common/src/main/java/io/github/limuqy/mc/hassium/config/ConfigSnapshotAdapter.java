@@ -33,7 +33,8 @@ public final class ConfigSnapshotAdapter {
 
         HassiumConfig.ClientNetworkConfig clientNet = config.clientNetwork();
         values = values.with(ConfigSchema.CLIENT_NETWORK_ENABLED, clientNet.enabled())
-                .with(ConfigSchema.CLIENT_NETWORK_METRICS_ENABLED, clientNet.metricsEnabled());
+                .with(ConfigSchema.CLIENT_NETWORK_METRICS_ENABLED, clientNet.metricsEnabled())
+                .with(ConfigSchema.CLIENT_NETWORK_METRICS_AUTO_RESET, clientNet.metricsAutoReset());
 
         HassiumConfig.DebugConfig debug = config.debug();
         values = values.with(ConfigSchema.CLIENT_DEBUG_METADATA, debug.metadataLogging())
@@ -145,7 +146,8 @@ public final class ConfigSnapshotAdapter {
         return new HassiumConfig(new HassiumConfig.StorageConfig(
                 values.get(ConfigSchema.STORAGE_ENABLED), values.get(ConfigSchema.STORAGE_MODE), values.get(ConfigSchema.STORAGE_ZSTD_LEVEL)),
                 cache, new HassiumConfig.ClientNetworkConfig(
-                        values.get(ConfigSchema.CLIENT_NETWORK_ENABLED), values.get(ConfigSchema.CLIENT_NETWORK_METRICS_ENABLED)),
+                        values.get(ConfigSchema.CLIENT_NETWORK_ENABLED), values.get(ConfigSchema.CLIENT_NETWORK_METRICS_ENABLED),
+                        values.get(ConfigSchema.CLIENT_NETWORK_METRICS_AUTO_RESET)),
                 network, compat, debug);
     }
     private static boolean debugValue(ConfigValues values, boolean physicalClient,

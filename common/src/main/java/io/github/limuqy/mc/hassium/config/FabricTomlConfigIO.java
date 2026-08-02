@@ -383,13 +383,15 @@ public final class FabricTomlConfigIO {
         var d = HassiumConfig.ClientNetworkConfig.DEFAULT;
         return new HassiumConfig.ClientNetworkConfig(
                 getBool(cfg, "network.enabled", d.enabled()),
-                getBool(cfg, "network.metricsEnabled", d.metricsEnabled())
+                getBool(cfg, "network.metricsEnabled", d.metricsEnabled()),
+                getBool(cfg, "network.metricsAutoReset", d.metricsAutoReset())
         );
     }
 
     private static void writeClientNetwork(CommentedConfig cfg, HassiumConfig.ClientNetworkConfig n) {
         set(cfg, "network.enabled", n.enabled(), "是否启用 Hassium 自定义通道");
         set(cfg, "network.metricsEnabled", n.metricsEnabled(), "是否启用指标收集");
+        set(cfg, "network.metricsAutoReset", n.metricsAutoReset(), "登出服务器时自动重置指标计数（默认 true）");
     }
 
     // --- SERVER ---

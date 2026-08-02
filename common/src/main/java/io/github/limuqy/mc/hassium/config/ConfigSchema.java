@@ -31,6 +31,7 @@ public final class ConfigSchema {
     public static final ConfigKey<Integer> CACHE_MAIN_THREAD_BUDGET_MS = integer("clientCache.mainThreadChunkBudgetMs", ConfigScope.CLIENT, 15, 1, 50, "主线程 apply 预算（ms）");
     public static final ConfigKey<Boolean> CLIENT_NETWORK_ENABLED = bool("network.enabled", ConfigScope.CLIENT, true, "是否启用客户端 Hassium 自定义通道");
     public static final ConfigKey<Boolean> CLIENT_NETWORK_METRICS_ENABLED = bool("network.metricsEnabled", ConfigScope.CLIENT, false, "是否启用客户端网络指标");
+    public static final ConfigKey<Boolean> CLIENT_NETWORK_METRICS_AUTO_RESET = bool("network.metricsAutoReset", ConfigScope.CLIENT, true, "登出服务器时自动重置指标计数");
 
     public static final ConfigKey<Boolean> STORAGE_ENABLED = bool("storage.enabled", ConfigScope.SERVER, true, "是否启用存档压缩");
     public static final ConfigKey<String> STORAGE_MODE = string("storage.mode", ConfigScope.SERVER, "mirror", "存储模式");

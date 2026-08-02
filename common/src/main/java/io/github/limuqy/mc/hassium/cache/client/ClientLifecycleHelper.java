@@ -119,6 +119,13 @@ public final class ClientLifecycleHelper {
      */
     public static void finalizeDisconnect() {
         if (!finalized.compareAndSet(false, true)) return;
+        // ⑩ 登出自动重置指标：恢复中此方法被短路，故仅在真正终止时清零；
+        // failover 恢复成功后计数跨断线保留，符合「同一会话」语义。
+        // 与冒烟测试 ROUND2 入口的重置保持一致：NetworkStats + DataPlane PoC 计数器一并清。
+        if (HassiumConfigService.getInstance().isMetricsAutoResetEnabled()) {
+            io.github.limuqy.mc.hassium.metrics.NetworkStats.reset();
+            io.github.limuqy.mc.hassium.network.dataplane.DataPlaneClientBundle.resetDataBulkCounters();
+        }
         // ⑥ finalDrain：排空拆除阶段产生的 save 任务
         CacheSaveQueue.getInstance().drainRemaining(5000);
 

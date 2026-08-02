@@ -436,6 +436,13 @@ public class HassiumConfigService {
         return resolveMetricsEnabled(config);
     }
 
+    /**
+     * 登出服务器时是否自动重置指标计数（仅客户端字段）。
+     */
+    public boolean isMetricsAutoResetEnabled() {
+        return config.clientNetwork().metricsAutoReset();
+    }
+
     public boolean isDynamicThreadPoolEnabled() {
         return config.serverNetwork().dynamicThreadPoolEnabled();
     }

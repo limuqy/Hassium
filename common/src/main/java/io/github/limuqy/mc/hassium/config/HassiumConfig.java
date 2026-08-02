@@ -119,9 +119,10 @@ public record HassiumConfig(
      */
     public record ClientNetworkConfig(
             boolean enabled,
-            boolean metricsEnabled
+            boolean metricsEnabled,
+            boolean metricsAutoReset
     ) {
-        public static final ClientNetworkConfig DEFAULT = new ClientNetworkConfig(true, false);
+        public static final ClientNetworkConfig DEFAULT = new ClientNetworkConfig(true, false, true);
     }
 
     /**
