@@ -83,8 +83,8 @@ Hassium is a single client + server suite that optimizes Minecraft from three an
 
 ## Control failover
 
-- **Goal**: On TCP master disconnect or stall, auto-reconnect to a backup endpoint with the cache retained and disconnect UI hidden
-- **How**: The server pre-delivers a control-plane candidate list to the client during handshake; on a hard disconnect or a stall past the threshold with the UDP data plane healthy, the client auto-connects the next reachable candidate without showing "Connection lost". Disk cache, save queue, and task executor are all preserved across the switch, and the new session resumes directly — hit ratio holds, terrain does not re-download
+- **Goal**: On TCP master disconnect or stall, auto-reconnect to a backup endpoint with the cache retained, disconnect UI hidden, and — on the 1.20.1 segment — the world frozen on screen during recovery (tick paused, transition screens hidden at the render layer), so players barely notice
+- **How**: The server pre-delivers a control-plane candidate list to the client during handshake; on a hard disconnect or a stall past the threshold with the UDP data plane healthy, the client auto-connects the next reachable candidate without showing "Connection lost". Disk cache, save queue, and task executor are all preserved across the switch, and the new session resumes directly — hit ratio holds, terrain does not re-download. On the 1.20.1 segment the world tick pauses during recovery, transition screens (connect/loading/receiving-world) keep vanilla driving but are hidden from rendering, the screen keeps the frozen world plus a "Switching master…" overlay, and motion resumes once recovery succeeds
 - **Default**: Off (`network.dataPlane.enabled = false`; the mod uses vanilla single-TCP by default). Requires ops capability — confirm Nginx / public-firewall / NAT rules before enabling
 - **Config**: `network.dataPlane.controlStallMs` (default `6000`, how long a master stall triggers failover), `failoverPermitTtlMs` (default `30000`, validity of the server-issued FailoverPermit)
 - **Deep dive**: [Control failover and weighted routing](Data-Plane-and-Failover-en)

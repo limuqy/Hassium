@@ -55,7 +55,7 @@ Full instructions: [Installation](https://github.com/limuqy/Hassium/wiki/Install
 | **World export** | `/hassiumc export` writes the local cache as a vanilla Anvil singleplayer world |
 | **Light stripping** | Server can omit light data; the client recomputes lighting locally to save more bandwidth |
 | **Light cache** | Light data is cached after first recompute; cache hits apply pre-computed lighting directly, skipping expensive recomputation |
-| **Control failover** | If the TCP control connection stalls or drops, reconnect automatically through candidate endpoints; the cache stays warm and the disconnect screen is hidden (data-plane failover) |
+| **Control failover** | If the TCP control connection stalls or drops, reconnect automatically through candidate endpoints; during recovery the world freezes on screen by default (tick paused, transition screens hidden, 1.20.1 segment; optional seamless mode keeps the world running and rolls back after recovery), the cache stays warm, and the disconnect screen is suppressed (data-plane failover) |
 | **Weighted distribution** | Multiple UDP/KCP endpoints carry the data plane with weight-based round-robin; the control plane stays on vanilla TCP |
 | **Smooth loading** | Caps main-thread work during join and view expansion to reduce hitch spikes |
 | **Client-friendly** | Clients without the mod can connect by default; install on both sides for full compression and cache benefits |
@@ -112,7 +112,7 @@ Complete matrix: [Support Matrix](https://github.com/limuqy/Hassium/wiki/Support
 | **世界导出** | `/hassiumc export` 将本地缓存导出为可进单机的原版 Anvil 世界     |
 | **光照剥离** | 服务端可不传光照数据，由客户端本地重算，进一步省流量 |
 | **光照缓存** | 首次加载重算后缓存光照数据，后续缓存命中直接应用，跳过同步重算 |
-| **主控热切** | TCP 主控断或卡时按候选自动重连，缓存暖续、隐藏断连界面（数据面 failover） |
+| **主控热切** | TCP 主控断或卡时按候选自动重连；恢复期间默认画面定格（tick 暂停、过渡画面隐藏，1.20.1 段；可选无感切换：世界继续运行、恢复后位置/方块回退），缓存暖续、隐藏断连界面（数据面 failover） |
 | **加权分流** | 多 UDP/KCP endpoint 按 weight 加权轮询承载数据面，控制面留原版 TCP |
 | **平滑加载** | 进服与视野扩展时限制主线程压力，减少卡顿尖峰                                |
 | **兼容友好** | 未安装本模组的客户端默认可连接；双端都装才能吃满压缩与缓存                         |

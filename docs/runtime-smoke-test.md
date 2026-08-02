@@ -267,7 +267,7 @@ build/smoke-test/
 | `UDP_BIND_OK` | 客户端 BindRequest 被服务端某 endpoint 接受，KCP `ReliableDatagramSession` 进入 ESTABLISHED |
 | `UDP_WRR_OK` | `UdpBulkRouter` 成功送一帧 bulk → Primary/UDP 分流计数累加 |
 | `FAILOVER_PERMIT_OK` | 服务端 `ControlFailoverHandler.requestFailover` 返回 `PERMITTED`，并通过 KCP `TYPE_FAILOVER_PERMIT` 回执客户端；客户端 epoch 匹配 + 未过期 |
-| `FAILOVER_RECONNECT_OK` | 客户端 `ControlReconnectOrchestrator.onPrimaryDisconnected` 后 launch 候选 B，新一轮 S2C 握手成功 + `ClientRecoveryState.markRecovered()` 退出恢复态 |
+| `FAILOVER_RECONNECT_OK` | 客户端 `ControlReconnectOrchestrator.onPrimaryDisconnected` 后 launch 候选 B，新一轮 S2C 握手成功 + `ClientRecoveryState.markRecovered()` 退出恢复态；1.20.1 段恢复期画面定格（无过渡画面/断连 UI 呈现） |
 | `CACHE_RESUME_HIT` | 重连后 ChunkHashS2C 触发至少一次缓存命中（`cacheHitFullChunkBytes > 0`）；恢复期未开 final disconnect UI |
 | `FAILOVER_TERMINAL_OK` | 所有候选耗尽 → `ControlReconnectOrchestrator.performTerminalFinalization` → `ClientLifecycleHelper.finalizeDisconnectIfTerminal` 一次性 terminal 关闭 |
 
@@ -284,6 +284,15 @@ build/smoke-test/
 因此 UdpFailover smoke 的服务端 `hassium-server.toml` 里 `controlReachableEndpoints` 必须给出 **≥ 2 个**候选端点，否则 `FAILOVER_RECONNECT_OK` 不会出现。
 
 另外 smoke 内部模拟断连（`ClientSmokeTest.triggerDisconnect`）已改为反射拿 `Connection.channel` 后直接 `channel.close()` 模拟被动 `channelInactive` —— 不能改用 `disconnect(Component)`，否则会被判为用户主动退出而拦截恢复链路。
+
+### 无缝定格 / 无感切换恢复（1.20.1 段）
+
+恢复期间（`isRecovering()`）vanilla 断连画面（`clearLevel`/DisconnectedScreen）被抑制，过渡画面（ConnectScreen/ProgressScreen/ReceivingLevelScreen）保持 vanilla 驱动但渲染层隐藏。两种客户端表现由 `network.dataPlane.recoveryFreeze`（CLIENT，默认 true）选择：
+
+- **定格**（默认）：世界与实体 tick 暂停，画面保持冻结世界 + 「正在切换主控…」浮层（`MixinGui`），直到候选握手成功 `setLevel` 换新世界或候选耗尽 terminal 回退。
+- **无感切换**（false）：世界不冻结、照常 tick，玩家本地操作/预测照常生效；恢复窗口内旧连接（`mc.getConnection()`）的全部 C2S 包被 `MixinConnection` 吞掉（服务器已无该玩家，包到不了也不该发）；恢复成功后 `setLevel` 以服务器状态重置——位置回退到断线点、刚挖的方块还原，体感如同突然延迟变高卡了一下，全程无任何切换 UI。
+
+实现约束（改动时注意）：过渡 screen 必须显示在 `mc.screen`（不能拦截 setScreen）——fabric-networking-api-v1 的 `ClientNetworkingImpl.getLoginConnection()` 依赖 `screen instanceof ConnectScreen` 取回候选连接的 Login listener，拦截会导致候选连接在 Login 阶段被 `Cannot register receiver while client is not logging in!` 断开（1.20.1 实测）。画面级效果无头 smoke 不可见，需手动验证：定格模式断主控后应无任何加载画面闪现，仅世界定格 + 浮层，成功后画面恢复可动；无感模式断主控后世界继续可动、输入无响应（被吞），成功后位置/方块回退。
 
 ## Nginx Failover Harness（UdpFailover phase）
 

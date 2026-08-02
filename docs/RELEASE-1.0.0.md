@@ -103,7 +103,7 @@ Vanilla clients can connect by default. Install Hassium on **both** client and s
 | **Beyond-view render** | When client RD > server view distance (multiplayer), fill the outer ring from local history (render-only; no out-of-range server requests) |
 | **World export** | `/hassiumc export` turns the local cache into a vanilla Anvil singleplayer world |
 | Light optimization | Server can strip light data; client recomputes and caches, hits skip recomputation |
-| **Master hot-swap** | On TCP master close or stall, the client fails over to the next candidate, keeps the disk cache warm, and hides the terminal-disconnect UI (data-plane failover) |
+| **Master hot-swap** | On TCP master close or stall, the client fails over to the next candidate with the world frozen on screen during recovery (tick paused, transition screens hidden, 1.20.1 segment); the disk cache stays warm and the terminal-disconnect UI is suppressed (data-plane failover) |
 | **Weighted multipath** | Multiple UDP/KCP endpoints carry chunk bulk under weighted round-robin; the vanilla TCP connection stays as control plane |
 | Smooth loading | Caps main-thread work during join / view expansion (with a ~10s JoinBoost) |
 | Client-friendly | Vanilla clients join by default; both sides needed for full benefits |

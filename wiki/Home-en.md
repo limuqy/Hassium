@@ -27,6 +27,8 @@
 | **World export** | `/hassiumc export` writes the local cache as a vanilla Anvil singleplayer world |
 | **Light stripping** | Server can omit light data; the client recomputes lighting locally to save more bandwidth |
 | **Light cache** | Light data is cached after first recompute; cache hits apply pre-computed lighting directly, skipping expensive recomputation |
+| **Control failover** | On TCP master disconnect or stall, auto-reconnect through candidate endpoints; during recovery the world freezes on screen by default (optional seamless mode keeps the world running and rolls back after recovery; freeze recovery is 1.20.1-segment) with the cache kept warm and the disconnect screen hidden (data-plane failover) |
+| **Weighted distribution** | Multiple UDP/KCP endpoints carry the data plane by weight-based round-robin; the control plane stays on vanilla TCP |
 | **Smooth loading** | Caps main-thread work during join and view expansion to reduce hitch spikes |
 | **Client-friendly** | Clients without the mod can connect by default; install on both sides for full compression and cache benefits |
 | **Traffic metrics** | `/hassium stats` (server) and `/hassiumc stats` (client) to inspect compression and cache results |

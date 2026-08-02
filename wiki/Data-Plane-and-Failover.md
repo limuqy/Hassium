@@ -12,7 +12,7 @@
 
 | 能力 | 说明 |
 | --- | --- |
-| **主控热切** | TCP 主控断或卡时按候选自动重连，缓存暖续、隐藏断连界面（数据面 failover） |
+| **主控热切** | TCP 主控断或卡时按候选自动重连，恢复期画面定格、缓存暖续、隐藏断连界面（数据面 failover） |
 | **加权分流** | 多 UDP/KCP endpoint 按 weight 加权轮询承载数据面，控制面留原版 TCP |
 
 ---
@@ -23,7 +23,7 @@
 
 原版 Minecraft 的登录、聊天、命令、实体同步走一条 TCP 主连接（master Play connection）。区块下载也挤在同一条线上。当主连接卡顿几秒（网络抖动、服主重启、机器迁移）或断开，客户端会弹"连接丢失"界面、踢玩家回主菜单、缓存丢失，重进又要重新下载所有区块——几个玩家正在地心探索，服主例行维护重启，全员进度看起来"白走了"。
 
-**主控热切**做的：主连接断或卡时，客户端按服务端预先下发的候选列表自动连下一个可达端点，**不弹断连界面**。已下载的区块缓存和任务执行器都保留下来，切到新会话直接续上——探索过的地形仍在缓存里，命中率不掉。
+**主控热切**做的：主连接断或卡时，客户端按服务端预先下发的候选列表自动连下一个可达端点，**不弹断连界面**。已下载的区块缓存和任务执行器都保留下来，切到新会话直接续上——探索过的地形仍在缓存里，命中率不掉。**1.20.1 段有两种恢复表现**（`network.dataPlane.recoveryFreeze`，客户端默认 true）：定格模式——世界 tick 暂停、过渡画面（连接/加载/接收世界）仅隐藏渲染，屏幕保持冻结世界 + 「正在切换主控…」浮层，恢复成功画面直接续动，全程看不到加载画面；无感模式（false）——世界照常运行，玩家操作本地照常生效但发不到服务器，恢复成功后位置回退到断线点、刚挖的方块还原，体感如同突然延迟变高卡了一下，全程无任何切换 UI。
 
 **问题二：几百人同时进服，主连接带宽被打满。**
 
@@ -65,7 +65,7 @@
 
 ### 触发条件
 
-**硬断连**：Master TCP `channelInactive` → `ControlReconnectOrchestrator.onPrimaryDisconnected` 立刻 launch 下一个候选；客户端进入 60 秒恢复窗口。
+**硬断连**：Master TCP `channelInactive` → `ControlReconnectOrchestrator.onPrimaryDisconnected` 立刻 launch 下一个候选；客户端进入 60 秒恢复窗口。恢复期（1.20.1 段）世界 tick/实体 tick 暂停、断连画面与过渡画面均不呈现，仅显示切换浮层。
 
 **Master stalled + UDP healthy**：服务端检测 control stall（默认 6 秒）。stalled 期间 `DataPlaneUdpServer.recordControlActivity` 推进；若 UDP session 健康（epoch 一致）服务端下发 `FailoverPermit`（`expiryMs` 默认 30 秒），客户端 `attemptConnectOnlyIfPermitValid` 才连接。
 

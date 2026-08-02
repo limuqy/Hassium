@@ -12,7 +12,7 @@ These are two of the capabilities listed on the Home page:
 
 | Feature | Description |
 | --- | --- |
-| **Control failover** | On TCP-control stall or drop, auto-reconnect via candidate endpoints with warm cache and hidden disconnect screen (data-plane failover) |
+| **Control failover** | On TCP-control stall or drop, auto-reconnect via candidate endpoints with a frozen on-screen world during recovery (tick paused, transition screens hidden, 1.20.1 segment), warm cache, and hidden disconnect screen (data-plane failover) |
 | **Weighted routing** | Multiple UDP/KCP endpoints carry the data plane by weighted round-robin; control plane stays on vanilla TCP |
 
 ---
@@ -23,7 +23,7 @@ These are two of the capabilities listed on the Home page:
 
 In vanilla Minecraft, login, chat, commands, and entity sync all ride one TCP master Play connection, and chunk downloads share that same line. When the master connection stalls for a few seconds (network jitter, server restart, machine migration) or drops, the client shows a "Connection lost" screen, kicks players to the main menu, loses cache, and rejoining means re-downloading every chunk. A few players are deep in a cave; the owner restarts for routine maintenance; everyone's progress looks "wasted".
 
-**Control failover** does this: when the master connection stalls or drops, the client follows the candidate list the server pre-delivered and auto-connects to the next reachable endpoint, **without showing a disconnect screen**. Already-downloaded chunk cache and the task executor are kept; the new session resumes directly — the explored terrain is still in cache, hit ratio does not drop.
+**Control failover** does this: when the master connection stalls or drops, the client follows the candidate list the server pre-delivered and auto-connects to the next reachable endpoint, **without showing a disconnect screen**. Already-downloaded chunk cache and the task executor are kept; the new session resumes directly — the explored terrain is still in cache, hit ratio does not drop. **The 1.20.1 segment offers two recovery styles** (`network.dataPlane.recoveryFreeze`, client-side, default true): freeze mode — world tick pauses, transition screens (connect/loading/receiving-world) are hidden at the render layer, the screen keeps the frozen world plus a "Switching master…" overlay, and motion resumes once recovery succeeds, no loading screen ever visible; seamless mode (false) — the world keeps running, player actions take effect locally but never reach the server, and after recovery the position snaps back to the disconnect point and freshly-mined blocks revert — it feels like a sudden latency spike with a small rollback, no switching UI at all.
 
 **Problem 2: Hundreds of players log in at once and the master connection saturates.**
 
