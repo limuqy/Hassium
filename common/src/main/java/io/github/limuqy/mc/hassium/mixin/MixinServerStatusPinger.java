@@ -113,6 +113,18 @@ public class MixinServerStatusPinger {
         serverData.ping = -1L;
         serverData.playerList = List.of();
         HASSIUM_BACKUP_CHAINS.put(serverData.ip, new BackupChain(candidates, serverData));
+        // 先 ping 主地址本身：健康 → 正常显示（无备用标记）；失败 → 候选链（备用标记）
+        try {
+            ServerAddress address = ServerAddress.parseString(serverData.ip);
+            Optional<InetSocketAddress> resolved =
+                    ServerNameResolver.DEFAULT.resolveAddress(address).map(ResolvedServerAddress::asInetSocketAddress);
+            if (resolved.isPresent()) {
+                hassium$startStatusPing(serverData, resolved.get(), PRIMARY_PING);
+                return;
+            }
+        } catch (Exception ignored) {
+            // 主地址不可解析：落候选链
+        }
         hassium$pingCandidate(serverData, candidates.get(0), 0);
     }
 
@@ -153,7 +165,20 @@ public class MixinServerStatusPinger {
                 hassium$onCandidateFailed(target, index);
                 return;
             }
-            InetSocketAddress socket = resolved.get();
+            hassium$startStatusPing(target, resolved.get(), index);
+        } catch (Exception e) {
+            hassium$onCandidateFailed(target, index);
+        }
+    }
+
+    /** 主地址 ping 的标记值（backupIndex < 0 表示主地址：成功不加备用标记，失败转候选链）。 */
+    @Unique
+    private static final int PRIMARY_PING = -1;
+
+    /** 对指定地址发起一次最小 status ping；成功/失败回调按 backupIndex 区分主/备语义。 */
+    @Unique
+    private static void hassium$startStatusPing(ServerData target, InetSocketAddress socket, int backupIndex) {
+        try {
 #if MC_VER < MC_1_20_2
             Connection connection = Connection.connectToServer(socket, false);
 #elif MC_VER < MC_1_21_11
@@ -173,7 +198,7 @@ public class MixinServerStatusPinger {
                         return;
                     }
                     success = true;
-                    hassium$applyStatus(target, packet.status());
+                    hassium$applyStatus(target, packet.status(), backupIndex >= 0);
                     pingStart = Util.getMillis();
                     connection.send(new ServerboundPingRequestPacket(pingStart));
                 }
@@ -193,14 +218,14 @@ public class MixinServerStatusPinger {
                 @Override
                 public void onDisconnect(Component disconnectReason) {
                     if (!success) {
-                        hassium$onCandidateFailed(target, index);
+                        hassium$onPingClosed(target, backupIndex);
                     }
                 }
 #else
                 @Override
                 public void onDisconnect(DisconnectionDetails details) {
                     if (!success) {
-                        hassium$onCandidateFailed(target, index);
+                        hassium$onPingClosed(target, backupIndex);
                     }
                 }
 #endif
@@ -212,20 +237,36 @@ public class MixinServerStatusPinger {
             };
 #if MC_VER < MC_1_20_2
             connection.setListener(listener);
-            connection.send(new ClientIntentionPacket(endpoint.host(), endpoint.port(), ConnectionProtocol.STATUS));
+            connection.send(new ClientIntentionPacket(socket.getHostString(), socket.getPort(), ConnectionProtocol.STATUS));
             connection.send(new ServerboundStatusRequestPacket());
 #elif MC_VER < MC_1_20_5
             // 1.20.2–1.20.4：connectToServer 已改 3 参，ClientIntentionPacket 改 (protocolVersion, host, port, intent)
             connection.setListener(listener);
             connection.send(new ClientIntentionPacket(SharedConstants.getProtocolVersion(),
-                    endpoint.host(), endpoint.port(), net.minecraft.network.protocol.handshake.ClientIntent.STATUS));
+                    socket.getHostString(), socket.getPort(), net.minecraft.network.protocol.handshake.ClientIntent.STATUS));
             connection.send(new ServerboundStatusRequestPacket());
 #else
-            connection.initiateServerboundStatusConnection(endpoint.host(), endpoint.port(), listener);
+            connection.initiateServerboundStatusConnection(socket.getHostString(), socket.getPort(), listener);
             connection.send(ServerboundStatusRequestPacket.INSTANCE);
 #endif
         } catch (Exception e) {
-            hassium$onCandidateFailed(target, index);
+            hassium$onPingClosed(target, backupIndex);
+        }
+    }
+
+    /** ping 连接关闭（失败）：主地址 → 转候选链；候选 → 推进下一候选。 */
+    @Unique
+    private static void hassium$onPingClosed(ServerData target, int backupIndex) {
+        if (backupIndex >= 0) {
+            hassium$onCandidateFailed(target, backupIndex);
+            return;
+        }
+        BackupChain chain = HASSIUM_BACKUP_CHAINS.get(target.ip);
+        if (chain == null || chain.candidates.isEmpty()) {
+            HASSIUM_BACKUP_CHAINS.remove(target.ip);
+            hassium$restoreFailure(target);
+        } else {
+            hassium$pingCandidate(target, chain.candidates.get(0), 0);
         }
     }
 
@@ -245,9 +286,9 @@ public class MixinServerStatusPinger {
         }
     }
 
-    /** 把候选 ServerStatus 复制到主条目，人数行附加「备用」标记。 */
+    /** 把 ping 到的 ServerStatus 复制到主条目；markBackup（备用节点）时人数行附加「备用」标记。 */
     @Unique
-    private static void hassium$applyStatus(ServerData target, ServerStatus status) {
+    private static void hassium$applyStatus(ServerData target, ServerStatus status, boolean markBackup) {
         target.motd = status.description();
         status.version().ifPresentOrElse(version -> {
             target.version = Component.literal(version.name());
@@ -257,10 +298,11 @@ public class MixinServerStatusPinger {
             target.protocol = 0;
         });
         status.players().ifPresentOrElse(players -> {
-            target.status = hassium$formatPlayerCount(players.online(), players.max())
-                    .copy()
-                    .append(Component.translatable("hassium.failover.backup_status")
-                            .withStyle(ChatFormatting.YELLOW));
+            Component count = hassium$formatPlayerCount(players.online(), players.max());
+            target.status = markBackup
+                    ? count.copy().append(Component.translatable("hassium.failover.backup_status")
+                            .withStyle(ChatFormatting.YELLOW))
+                    : count;
             target.players = players;
         }, () -> target.status = Component.translatable("multiplayer.status.unknown")
                 .withStyle(ChatFormatting.DARK_GRAY));
