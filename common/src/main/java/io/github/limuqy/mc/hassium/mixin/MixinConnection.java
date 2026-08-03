@@ -190,8 +190,10 @@ public class MixinConnection {
         if (!io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.isRecovering()) {
             return;
         }
-        net.minecraft.client.Minecraft mc = net.minecraft.client.Minecraft.getInstance();
-        if (mc == null || (Object) this != mc.getConnection()) {
+        // 判断逻辑抽到普通类（ClientFailoverIdentity）：mixin handler 方法体直接引用
+        // 客户端类会在服务端变换时崩溃（ClassMetadataNotFoundException: net.minecraft.client.Minecraft）
+        if (!io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity
+                .isCurrentClientConnection((Object) this)) {
             return;
         }
         ci.cancel();

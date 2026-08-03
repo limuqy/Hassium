@@ -130,6 +130,18 @@ public final class ClientFailoverIdentity {
         }
     }
 
+    /**
+     * 当前连接是否为客户端主连接（{@code Minecraft.getConnection()}）。
+     * <p>
+     * 必须实现在普通类而非 MixinConnection 方法体内：MixinConnection 是 common 段 mixin，
+     * 服务端变换时 transformMethod 会解析 handler 方法体引用的每个 owner 类；直接引用
+     * {@code Minecraft} 会在 DEDICATED_SERVER 下被 dist 检查拒绝 → ClassMetadataNotFoundException。
+     */
+    public static boolean isCurrentClientConnection(Object connection) {
+        net.minecraft.client.Minecraft mc = net.minecraft.client.Minecraft.getInstance();
+        return mc != null && mc.getConnection() == connection;
+    }
+
     /** Test-visible handshake hook; loader handlers call the public orchestrator hook below. */
     public static boolean onPrimaryHandshakeAccepted(ControlEndpoint active) {
         ClientFailoverIdentity current = instance;
