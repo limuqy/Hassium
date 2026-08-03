@@ -9,6 +9,7 @@ import io.github.limuqy.mc.hassium.network.ClientChunkHandler;
 import io.github.limuqy.mc.hassium.network.ClientMetadataHandler;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.client.multiplayer.ClientPacketListener;
 
 import java.nio.file.Path;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -198,6 +199,18 @@ public final class ClientLifecycleHelper {
             Constants.LOG.info(
                     "Hassium: Disconnect drain skipped off main thread (pending={}, thread={})",
                     pending, Thread.currentThread().getName());
+            return;
+        }
+
+        // 断连时序防护（neoforge 1.20.2+ NPE 根因）：Minecraft 的断开流程先执行
+        // connection.close()（ClientPacketListener.level=null），而 mc.level 尚未清空。
+        // 此时队列中的缓存区块已无法进入世界（apply 必失败），且 updateLevelChunk 会因
+        // this.level 为 null 抛 NPE —— 直接放弃 drain（队列随后由 cleanupOnDisconnect 清空）。
+        ClientPacketListener connection = mc.getConnection();
+        if (connection == null || connection.getLevel() == null) {
+            Constants.LOG.info(
+                    "Hassium: Disconnect drain skipped - ClientPacketListener level already torn down (pending={})",
+                    pending);
             return;
         }
 
