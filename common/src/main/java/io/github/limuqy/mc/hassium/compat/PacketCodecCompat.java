@@ -259,7 +259,9 @@ public final class PacketCodecCompat {
                 LOGGER.error("ProtocolInfo.codec() 不是 IdDispatchCodec: {}", codec.getClass().getName());
                 return Collections.emptyList();
             }
-            Field byIdField = net.minecraft.network.codec.IdDispatchCodec.class.getDeclaredField("byId");
+            // 按类型匹配而非字段名：Fabric（intermediary）/ Forge（SRG）生产运行时字段名不是 "byId"
+            Field byIdField = ReflectionCompat.findFieldByType(
+                    net.minecraft.network.codec.IdDispatchCodec.class, List.class, false);
             byIdField.setAccessible(true);
             List<?> byId = (List<?>) byIdField.get(idCodec);
             List<PlayPacketEntry> result = new ArrayList<>(byId.size());

@@ -81,16 +81,8 @@ public final class PlayerCompat {
     }
 
     private static Field findConnectionField(Class<?> clazz) throws NoSuchFieldException {
-        Class<?> cursor = clazz;
-        while (cursor != null && cursor != Object.class) {
-            try {
-                Field field = cursor.getDeclaredField("connection");
-                field.setAccessible(true);
-                return field;
-            } catch (NoSuchFieldException ignored) {
-                cursor = cursor.getSuperclass();
-            }
-        }
-        throw new NoSuchFieldException("connection not found on " + clazz.getName() + " hierarchy");
+        // 按类型匹配而非字段名：Forge（SRG）/ Fabric（intermediary）生产运行时的字段名
+        // 不是 mojmap 名 "connection"，名字反射在 1.20.1 段全线失败。
+        return ReflectionCompat.findFieldByType(clazz, Connection.class, true);
     }
 }

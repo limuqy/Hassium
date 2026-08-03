@@ -415,9 +415,7 @@ public class ForgeNetworkManager implements NetworkManager {
      */
     private static io.netty.channel.Channel getConnectionChannel(Connection connection) {
         try {
-            Field channelField = Connection.class.getDeclaredField("channel");
-            channelField.setAccessible(true);
-            return (io.netty.channel.Channel) channelField.get(connection);
+            return ZstdPipelineSwitcher.getConnectionChannel(connection);
         } catch (Exception e) {
             LOGGER.error("Hassium: Failed to get channel from connection", e);
             return null;

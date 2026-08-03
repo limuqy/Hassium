@@ -681,10 +681,10 @@ public class ViewDistanceExtensionService {
             cache.drop(pos);
 #endif
         } catch (Exception e) {
-            // 回退反射（部分版本 / 映射差异）
+            // 回退反射（部分版本 / 映射差异）；按结构特征匹配而非字段名（SRG/intermediary 安全）
             try {
                 ClientChunkCache cache = ((ClientLevelAccessor) level).hassium$getChunkSource();
-                java.lang.reflect.Field storageField = ClientChunkCache.class.getDeclaredField("storage");
+                java.lang.reflect.Field storageField = io.github.limuqy.mc.hassium.compat.ReflectionCompat.findMemberClassField(ClientChunkCache.class);
                 storageField.setAccessible(true);
                 Object storage = storageField.get(cache);
                 if (storage == null) {

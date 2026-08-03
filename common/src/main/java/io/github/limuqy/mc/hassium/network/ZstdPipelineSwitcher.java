@@ -139,13 +139,18 @@ public class ZstdPipelineSwitcher {
 
     /**
      * 反射获取 Connection.channel（加载器侧共用）。
+     * <p>
+     * 按字段类型匹配而非字段名：Forge（SRG）/ Fabric（intermediary）生产运行时的字段名
+     * 不是 mojmap 名 "channel"，名字反射在 1.20.1 段全线失败。
+     * Connection 在 1.20.1–1.21.11 中 Channel 类型字段唯一，类型匹配安全。
      */
     public static Channel getConnectionChannel(Connection connection) {
         if (connection == null) {
             return null;
         }
         try {
-            Field channelField = Connection.class.getDeclaredField("channel");
+            Field channelField = io.github.limuqy.mc.hassium.compat.ReflectionCompat.findFieldByType(
+                    Connection.class, Channel.class, false);
             channelField.setAccessible(true);
             return (Channel) channelField.get(connection);
         } catch (Exception e) {

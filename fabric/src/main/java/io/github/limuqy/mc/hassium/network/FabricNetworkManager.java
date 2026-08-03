@@ -53,17 +53,10 @@ public class FabricNetworkManager implements NetworkManager {
     }
 
     /**
-     * 通过反射获取 Connection 的 channel 字段
+     * 通过反射获取 Connection 的 channel 字段（委托 common 类型匹配实现，SRG/intermediary 安全）
      */
     private static io.netty.channel.Channel getConnectionChannel(Connection connection) {
-        try {
-            Field channelField = Connection.class.getDeclaredField("channel");
-            channelField.setAccessible(true);
-            return (io.netty.channel.Channel) channelField.get(connection);
-        } catch (Exception e) {
-            LOGGER.error("Hassium: Failed to get channel from connection", e);
-            return null;
-        }
+        return ZstdPipelineSwitcher.getConnectionChannel(connection);
     }
 
     /**
