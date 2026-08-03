@@ -4,8 +4,14 @@ import io.github.limuqy.mc.hassium.cache.ChunkContentHashUtil;
 import io.github.limuqy.mc.hassium.compat.CompoundTagCompat;
 import io.github.limuqy.mc.hassium.compression.HassiumCompression;
 import io.github.limuqy.mc.hassium.network.DictionaryManager;
+import net.minecraft.core.RegistryAccess;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.core.registries.Registries;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
+import net.minecraft.server.Bootstrap;
+import net.minecraft.SharedConstants;
+import net.minecraft.DetectedVersion;
 import net.minecraft.world.level.ChunkPos;
 import org.junit.jupiter.api.Test;
 
@@ -23,6 +29,21 @@ class CacheDiskDiagnoseTest {
         Path cacheRoot = gameDir.resolve("hassium_cache/server_127.0.0.1_25565/minecraft_overworld");
         if (!Files.isDirectory(cacheRoot)) {
             System.out.println("SKIP: no cache at " + cacheRoot);
+            return;
+        }
+
+#if MC_VER < MC_1_21_2
+        // 1.20.x 的 MappedRegistry 构造器要求 Bootstrap 已启动，否则 Registries.<clinit> 抛
+        // IllegalArgumentException: Not bootstrapped。1.21+ 不再检查。
+        SharedConstants.setVersion(DetectedVersion.BUILT_IN);
+        Bootstrap.bootStrap();
+#endif
+
+        // biome 注册表在 1.20.x 由 RegistryDataLoader 从 datapack 资源加载，gradle test 环境
+        // 没有 datapack → 无法重建 LevelChunkSection，只能 SKIP（诊断测试保持手动运行）。
+        RegistryAccess registryAccess = RegistryAccess.fromRegistryOfRegistries(BuiltInRegistries.REGISTRY);
+        if (registryAccess.registry(Registries.BIOME).isEmpty()) {
+            System.out.println("SKIP: biome registry unavailable without datapack resources");
             return;
         }
 
@@ -54,7 +75,8 @@ class CacheDiskDiagnoseTest {
             }
             CompoundTag nbt = ChunkDiskCodec.bytesToNbt(raw);
             ListTag sections = CompoundTagCompat.getList(nbt, "sections");
-            long[] fromNbt = ChunkDiskCodec.computeSectionHashesFromNbt(nbt, sections.size(), null);
+            long[] fromNbt = ChunkDiskCodec.computeSectionHashesFromNbt(
+                    nbt, sections.size(), registryAccess);
             long nbtHash = ChunkContentHashUtil.combineSectionHashesFromArray(fromNbt);
             long storedCombine = storedSections == null ? 0L
                     : ChunkContentHashUtil.combineSectionHashesFromArray(storedSections);

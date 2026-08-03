@@ -5,7 +5,7 @@ import org.junit.jupiter.api.Test;
 import java.util.HashSet;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 
 class ConfigSchemaTest {
     @Test
@@ -24,7 +24,8 @@ class ConfigSchemaTest {
     void defaultsContainCoreConfigurationKeys() {
         ConfigValues values = ConfigValues.defaults(ConfigSchema.entries());
 
-        assertTrue(values.get(ConfigSchema.STORAGE_ENABLED));
+        // storage.enabled 默认关（专用服务器才写 type-126；单人/局域网保持原版格式）
+        assertFalse(values.get(ConfigSchema.STORAGE_ENABLED));
         assertEquals(3, values.get(ConfigSchema.STORAGE_ZSTD_LEVEL));
         assertEquals(3, values.get(ConfigSchema.NETWORK_COMPRESSION_LEVEL));
     }
