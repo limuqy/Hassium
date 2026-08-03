@@ -107,6 +107,96 @@ New-Item -ItemType Directory -Force -Path $resultsDir | Out-Null
 
 Set-Location $projectRoot
 
+# ===== 生产映射字段预检 =====
+# loom runServer/runClient 运行在 named（mojmap 可读名）环境，永远测不出生产
+# SRG/intermediary jar 下硬编码字段名反射失败的问题（1.20.1 Forge 世界不加载
+# 的根因：Connection.channel / ServerGamePacketListenerImpl.connection 等字段在
+# SRG 下叫 f_xxx_，按 mojmap 名 getDeclaredField 必抛 NoSuchFieldException）。
+# 这里直接对 loom 缓存中的生产映射 jar（forge: minecraft-merged-srg.jar）做 javap
+# 结构检查，验证 Hassium "按类型找字段"（common/compat/ReflectionCompat）反射点
+# 在混淆名环境下可命中，防回归。预检失败即 FAIL 会话。
+# 检查项：
+#   Connection 存在 io.netty.channel.Channel 类型字段      → ZstdPipelineSwitcher.getConnectionChannel
+#   ServerGamePacketListenerImpl(1.20.1) / ServerCommonPacketListenerImpl(1.20.2+)
+#     存在 net.minecraft.network.Connection 类型字段       → PlayerCompat.findConnectionField
+#   ClientChunkCache 存在 $Storage 成员类字段              → ViewDistanceExtensionService drop fallback
+#   IdDispatchCodec(1.20.2+) 存在 java.util.List 类型字段  → PacketCodecCompat.byId
+function Invoke-MappingFieldPrecheck {
+    param([string]$PreVer, [string]$PreLoader)
+    $check = [ordered]@{
+        Version = $PreVer; Loader = $PreLoader; Checked = $false; Ok = $true
+        Skipped = $false; Detail = ""; Failures = @()
+    }
+    # fabric 运行时为 intermediary：loom 缓存无生产 jar，且 intermediary 只改字段名
+    # 不改类型，类型匹配天然免疫；SRG 检查已覆盖同一查找逻辑。跳过 fabric。
+    if ($PreLoader -eq "fabric") {
+        $check.Skipped = $true
+        $check.Detail = "fabric=intermediary 仅改字段名，类型匹配免疫（SRG 已覆盖）"
+        return [pscustomobject]$check
+    }
+    $cacheRoot = Join-Path $env:USERPROFILE ".gradle\caches\fabric-loom\$PreVer\forge"
+    if (-not (Test-Path $cacheRoot)) {
+        $check.Skipped = $true
+        $check.Detail = "未找到 loom forge 缓存: $cacheRoot"
+        return [pscustomobject]$check
+    }
+    $srgJar = Get-ChildItem -Path $cacheRoot -Recurse -Filter "minecraft-merged-srg.jar" |
+        Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    if (-not $srgJar) {
+        $check.Skipped = $true
+        $check.Detail = "未找到 minecraft-merged-srg.jar: $cacheRoot"
+        return [pscustomobject]$check
+    }
+    $check.Checked = $true
+    $check.Detail = $srgJar.FullName
+    function Get-JavapOutput([string]$Class) {
+        (& javap -p -classpath $srgJar.FullName $Class 2>&1) -join "`n"
+    }
+    # 1. Connection.channel（ZstdPipelineSwitcher.getConnectionChannel）
+    $connOut = Get-JavapOutput "net.minecraft.network.Connection"
+    if ($connOut -notmatch "io\.netty\.channel\.Channel") {
+        $check.Ok = $false
+        $check.Failures += "Connection 无 Channel 类型字段（getConnectionChannel 会 NoSuchField）"
+    }
+    # 2. player connection 字段所在类：1.20.2+ 上移到 ServerCommonPacketListenerImpl
+    $listenerClass = if ([version]$PreVer -ge [version]"1.20.2") { "net.minecraft.server.network.ServerCommonPacketListenerImpl" } else { "net.minecraft.server.network.ServerGamePacketListenerImpl" }
+    $listenerOut = Get-JavapOutput $listenerClass
+    if ($listenerOut -notmatch "net\.minecraft\.network\.Connection") {
+        $check.Ok = $false
+        $check.Failures += "$listenerClass 无 Connection 类型字段（findConnectionField 会 NoSuchField）"
+    }
+    # 3. ClientChunkCache.storage（成员类字段，ViewDistanceExtensionService drop fallback）
+    $cccOut = Get-JavapOutput "net.minecraft.client.multiplayer.ClientChunkCache"
+    if ($cccOut -notmatch 'ClientChunkCache\$Storage') {
+        $check.Ok = $false
+        $check.Failures += 'ClientChunkCache 无 $Storage 成员类字段（drop fallback 会 NoSuchField）'
+    }
+    # 4. IdDispatchCodec.byId（1.20.2+ 引入；1.20.1 无此类，跳过）
+    if ([version]$PreVer -ge [version]"1.20.2") {
+        $idcOut = Get-JavapOutput "net.minecraft.network.codec.IdDispatchCodec"
+        if ($idcOut -notmatch "java\.util\.List") {
+            $check.Ok = $false
+            $check.Failures += "IdDispatchCodec 无 List 类型字段（PacketCodecCompat.byId 会 NoSuchField）"
+        }
+    }
+    return [pscustomobject]$check
+}
+
+$precheck = Invoke-MappingFieldPrecheck -PreVer $Ver -PreLoader $Loader
+if (-not $precheck.Skipped) {
+    $precheckFile = Join-Path $logDir "precheck_${SessionId}.json"
+    $precheck | ConvertTo-Json -Depth 3 | Out-File $precheckFile -Encoding UTF8
+    if ($precheck.Ok) {
+        Write-Host "[$SessionId] 生产映射预检 PASS（SRG 字段结构可命中全部反射点）"
+    } else {
+        Write-Host "[$SessionId] 生产映射预检 FAIL:" -ForegroundColor Red
+        $precheck.Failures | ForEach-Object { Write-Host "  - $_" -ForegroundColor Red }
+        $resultObj = @{ SessionId = $SessionId; Ver = $Ver; Loader = $Loader; Phase = $Phase; Result = "FAIL"; Reason = "mapping_precheck: $($precheck.Failures -join '; ')"; ClientExitCode = -1 }
+        $resultObj | ConvertTo-Json -Depth 3 | Out-File (Join-Path $resultsDir "result_${SessionId}.json")
+        exit 2
+    }
+}
+
 # 仅清理本会话相关的 java 进程，避免在并行模式下误杀另一会话。
 # 服务端通过端口定位；客户端/兜底服务端通过 $Loader\run\{client,server} 目录在命令行中的出现来定位。
 # 不会杀掉 gradle daemon（其命令行不含 run/server 或 run/client）。
