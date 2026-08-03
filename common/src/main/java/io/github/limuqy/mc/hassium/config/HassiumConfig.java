@@ -42,7 +42,7 @@ public record HassiumConfig(
             String mode,
             int zstdLevel
     ) {
-        public static final StorageConfig DEFAULT = new StorageConfig(true, "mirror", 3);
+        public static final StorageConfig DEFAULT = new StorageConfig(false, "mirror", 3);
     }
 
     /**

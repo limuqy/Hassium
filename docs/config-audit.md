@@ -21,9 +21,9 @@ Forge/NeoForge 端注册 3 个 spec（CLIENT / COMMON / SERVER），物理客户
 
 | 配置项 | 默认值 | 客户端/服务端/双端 | 实际调用 | 状态 |
 |--------|--------|---------------------|----------|------|
-| `storage.enabled` | `true` | **双端** | `MixinRegionFile:116,133` 门控存储操作 | ✅ 正常 |
-| `storage.mode` | `"mirror"` | **双端** | `MixinRegionFile:137` 决定 mirror/readonly_vanilla/hassium_only | ✅ 正常 |
-| `storage.zstdLevel` | `3` | **双端** | `MixinRegionFile:211` 通过 `HassiumConfigService.getStorageCompressionLevel()` 读取；压缩调用收口至 `CompressionService.compressWithDictionary` | ✅ 正常 |
+| `storage.enabled` | `false` | **双端** | `MixinRegionFile:132,149` 门控存储操作；写路径另受 `RuntimeServerContext.isDedicatedServerContext()` 门控（仅专用服务器写 type 126，单人/局域网保持原版格式，读兼容）；客户端缓存独立不受影响 | ✅ 正常 |
+| `storage.mode` | `"mirror"` | **双端** | `MixinRegionFile:159` 决定 mirror/readonly_vanilla/hassium_only | ✅ 正常 |
+| `storage.zstdLevel` | `3` | **双端** | `MixinRegionFile:238` 通过 `HassiumConfigService.getStorageCompressionLevel()` 读取；压缩调用收口至 `CompressionService.compressWithDictionary` | ✅ 正常 |
 
 ### B. ClientCache（17 项）→ `client.toml`
 

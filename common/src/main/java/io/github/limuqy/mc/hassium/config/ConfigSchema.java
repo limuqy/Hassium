@@ -33,7 +33,7 @@ public final class ConfigSchema {
     public static final ConfigKey<Boolean> CLIENT_NETWORK_METRICS_ENABLED = bool("network.metricsEnabled", ConfigScope.CLIENT, false, "是否启用客户端网络指标");
     public static final ConfigKey<Boolean> CLIENT_NETWORK_METRICS_AUTO_RESET = bool("network.metricsAutoReset", ConfigScope.CLIENT, true, "登出服务器时自动重置指标计数");
 
-    public static final ConfigKey<Boolean> STORAGE_ENABLED = bool("storage.enabled", ConfigScope.SERVER, true, "是否启用存档压缩");
+    public static final ConfigKey<Boolean> STORAGE_ENABLED = bool("storage.enabled", ConfigScope.SERVER, false, "是否启用存档压缩（默认关；客户端缓存独立不受影响）");
     public static final ConfigKey<String> STORAGE_MODE = string("storage.mode", ConfigScope.SERVER, "mirror", "存储模式");
     public static final ConfigKey<Integer> STORAGE_ZSTD_LEVEL = integer("storage.zstdLevel", ConfigScope.SERVER, 3, 1, 22, "存储 ZSTD 压缩等级");
     public static final ConfigKey<Boolean> SERVER_NETWORK_ENABLED = bool("network.enabled", ConfigScope.SERVER, true, "是否启用 Hassium 自定义通道");

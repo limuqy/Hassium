@@ -85,6 +85,11 @@ public class HassiumForgeClient {
                 return;
             }
 #endif
+            // 单人/局域网房主：integrated server 是本地进程，压缩握手无收益，跳过
+            if (net.minecraft.client.Minecraft.getInstance().getSingleplayerServer() != null) {
+                LOGGER.debug("Hassium: Single-player/LAN host, skip handshake");
+                return;
+            }
             if (!HassiumConfigService.getInstance().isNetworkCompressionEnabled()) {
                 LOGGER.debug("Hassium: Client joined server, network disabled — skip handshake");
                 return;

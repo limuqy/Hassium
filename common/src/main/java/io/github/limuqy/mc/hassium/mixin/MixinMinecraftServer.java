@@ -5,6 +5,7 @@ import io.github.limuqy.mc.hassium.concurrent.MainThreadDispatcher;
 import io.github.limuqy.mc.hassium.network.PlayerCompressionTracker;
 import io.github.limuqy.mc.hassium.network.ServerChunkPushManager;
 import io.github.limuqy.mc.hassium.network.dataplane.DataPlaneUdpServer;
+import io.github.limuqy.mc.hassium.server.RuntimeServerContext;
 import io.github.limuqy.mc.hassium.server.ServerSmokeTest;
 import net.minecraft.server.MinecraftServer;
 import org.spongepowered.asm.mixin.Mixin;
@@ -38,6 +39,8 @@ public class MixinMinecraftServer {
     private void onServerInit(CallbackInfo ci) {
         // 服务器初始化时设置服务器实例（用于 Fabric 网络管理器）
         MinecraftServer server = (MinecraftServer) (Object) this;
+        // 记录服务器类型：存储格式等仅专用服务器功能需要（单人/局域网 integrated server 不启用）
+        RuntimeServerContext.setDedicatedServer(server.isDedicatedServer());
         try {
             Class<?> fabricNetworkManager = Class.forName("io.github.limuqy.mc.hassium.network.FabricNetworkManager");
             java.lang.reflect.Method setServer = fabricNetworkManager.getMethod("setServerInstance", MinecraftServer.class);

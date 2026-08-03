@@ -121,6 +121,11 @@ public class HassiumNeoForgeClient {
                 return;
             }
 #endif
+            // 单人/局域网房主：integrated server 是本地进程，压缩握手无收益，跳过
+            if (net.minecraft.client.Minecraft.getInstance().getSingleplayerServer() != null) {
+                LOGGER.debug("Hassium: Single-player/LAN host, skip handshake");
+                return;
+            }
             // 段 C 门控关闭网络时通道未注册，发握手会导致断连
             if (!io.github.limuqy.mc.hassium.config.HassiumConfigService.getInstance()
                     .isNetworkCompressionEnabled()) {

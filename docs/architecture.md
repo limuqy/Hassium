@@ -84,7 +84,7 @@ Sector 3+:    [length(4)][type=126][ZSTD 压缩数据]
 
 | 项 | 默认 | 说明 |
 |----|------|------|
-| `storage.enabled` | **true** | 存档 ZSTD；**启用前请备份世界** |
+| `storage.enabled` | **false** | 默认关；开启后存档 ZSTD（type 126）；**启用前请备份世界**。仅专用服务器写（单人/局域网保持原版格式，读兼容） |
 | `storage.mode` | `mirror` | 镜像模式 |
 | `storage.zstdLevel` | 9 | 存储压缩等级 |
 | `clientCache.enabled` | true | 客户端缓存 |

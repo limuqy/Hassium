@@ -53,7 +53,7 @@ fabric/ | forge/ | neoforge/
 
 | 项 | 默认 | 注意 |
 |----|------|------|
-| `storage.enabled` | **true** | 改存档格式 → 提醒备份 |
+| `storage.enabled` | **false** | 默认关；开启后改存档格式（type 126）→ 提醒备份；仅专用服务器写，单人/局域网保持原版格式（读兼容；客户端缓存独立不受影响） |
 | `network.enabled` | true | |
 | `globalPacketCompression` | true | |
 | `clientCache.enabled` | true | |

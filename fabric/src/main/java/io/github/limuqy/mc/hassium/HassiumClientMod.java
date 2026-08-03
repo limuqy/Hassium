@@ -56,6 +56,11 @@ public class HassiumClientMod implements ClientModInitializer {
         // 通过 DataPlaneClientLifecycle.startUdp 在 accepted 响应中自动启动；
         // 此处不再硬编码直连 PoC Data 副端口（旧 PoC connectAndBind() 已移除）。
         ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> {
+            // 单人/局域网房主：integrated server 是本地进程，压缩握手无收益，跳过
+            if (client.getSingleplayerServer() != null) {
+                LOGGER.debug("Hassium: Single-player/LAN host, skip handshake");
+                return;
+            }
             if (!HassiumConfigService.getInstance().isNetworkCompressionEnabled()) {
                 LOGGER.debug("Hassium: Client joined server, network disabled — skip handshake");
                 return;

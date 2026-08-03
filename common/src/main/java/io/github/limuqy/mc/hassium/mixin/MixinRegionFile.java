@@ -53,6 +53,28 @@ public abstract class MixinRegionFile {
     private boolean hassium$timestampsLoaded = false;
 
     @Unique
+    private boolean hassium$dedicatedServerContext = false;
+
+    @Unique
+    private boolean hassium$serverTypeResolved = false;
+
+    /**
+     * 存储格式只服务专用服务器：integrated server（单人/局域网）不写 Hassium type-126，
+     * 存档保持原版格式。判定结果缓存——服务器类型在进程生命周期内不变。
+     * 标志未写入（客户端上下文 / 启动早期）时保守走原版，绝不改写存档。
+     * 读路径不做此判定：旧 Hassium 区块仍需兼容读取。
+     */
+    @Unique
+    private boolean hassium$isDedicatedServerContext() {
+        if (!hassium$serverTypeResolved) {
+            hassium$serverTypeResolved = true;
+            hassium$dedicatedServerContext =
+                    io.github.limuqy.mc.hassium.server.RuntimeServerContext.isDedicatedServerContext();
+        }
+        return hassium$dedicatedServerContext;
+    }
+
+    @Unique
     private RegionFileAccessor hassium$self() {
         return (RegionFileAccessor) (Object) this;
     }
@@ -125,6 +147,11 @@ public abstract class MixinRegionFile {
     private void hassium$onGetChunkDataOutputStream(ChunkPos pos, CallbackInfoReturnable<DataOutputStream> cir) {
         HassiumConfigService configService = HassiumConfigService.getInstance();
         if (!configService.isStorageEnabled()) {
+            return;
+        }
+
+        // 单人/局域网（integrated server）不写 Hassium 格式，放行原版输出流
+        if (!hassium$isDedicatedServerContext()) {
             return;
         }
 
