@@ -13,6 +13,9 @@ public final class ClientMainThreadBudget {
     /** 进服加速窗口时长（毫秒） */
     private static final long JOIN_BOOST_DURATION_MS = 10_000;
 
+    /** 窗口内区块 apply 活跃时的续期时长（毫秒）：全量加载 >10s 时预算不中途退坡 */
+    private static final long RENEW_WINDOW_MS = 5_000;
+
     /** JoinBoost 期间的预算（毫秒） */
     private static final int JOIN_BOOST_BUDGET_MS = 30;
 
@@ -42,6 +45,21 @@ public final class ClientMainThreadBudget {
     }
 
     /**
+     * 区块 apply 活跃时续期 JoinBoost 窗口。
+     * <p>
+     * 进服全量加载（1021 块 × ~11ms）超过固定 10s 窗口时，后段预算会线性退坡到 normal
+     * → 实测 16s 后加载速率从 70/s 掉到 33/s。加载洪峰期间每次 apply 续期 5s，
+     * 让高预算持续到加载完成；窗口过期后不再续期（移动/飞行环带不会永久占用高预算）。
+     * 预算只是上限：零星 apply 用不满，不会凭空占用帧时间。
+     */
+    public static void noteChunkApplyActivity() {
+        long until = joinBoostUntilMs;
+        if (until > 0L && System.currentTimeMillis() < until) {
+            joinBoostUntilMs = System.currentTimeMillis() + RENEW_WINDOW_MS;
+        }
+    }
+
+    /**
      * 当前是否处于 JoinBoost 窗口。
      */
     public static boolean isJoinBoostActive() {
@@ -52,21 +70,20 @@ public final class ClientMainThreadBudget {
     /**
      * 本帧可用的时间预算（纳秒）。
      * <p>
-     * JoinBoost 窗口内线性退坡：boostBudgetMs → normalBudgetMs（over JOIN_BOOST_DURATION_MS），
-     * 避免窗口结束时预算突降导致加载节奏断崖（快-慢-快波动）。
+     * JoinBoost 窗口内恒用高预算（不线性退坡）：
+     * 续期机制（{@link #noteChunkApplyActivity}）保证窗口只在加载空闲后过期，
+     * 窗口内退坡反而会把续期后的预算砍到中间值（remaining/10s 比例）→
+     * 实测 1021 块全量加载后段速率从 70/s 掉到 33/s。
+     * 窗口到期瞬间的降档只发生在加载已结束/空闲时，无感知。
      */
     public static long getBudgetNs() {
         int normalBudgetMs = HassiumConfigService.getInstance().getMainThreadChunkBudgetMs();
         long now = System.currentTimeMillis();
         long until = joinBoostUntilMs;
         if (until > 0 && now < until) {
-            // JoinBoost 线性退坡：boostBudgetMs → normalBudgetMs
             // boostBudgetMs 至少不低于 normalBudgetMs（用户调高 normalBudgetMs 时 JoinBoost 不反向降预算）
             int boostBudgetMs = Math.max(JOIN_BOOST_BUDGET_MS, normalBudgetMs);
-            long remaining = until - now;
-            double ratio = (double) remaining / JOIN_BOOST_DURATION_MS; // 1.0 → 0.0（窗口内递减）
-            int budgetMs = (int) Math.round(normalBudgetMs + (boostBudgetMs - normalBudgetMs) * ratio);
-            return budgetMs * 1_000_000L;
+            return boostBudgetMs * 1_000_000L;
         }
         return normalBudgetMs * 1_000_000L;
     }

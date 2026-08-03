@@ -415,6 +415,9 @@ public class ClientChunkHandler {
 
             DebugLogger.info(LogType.CHUNK_APPLY, "[APPLY_CHUNK] Successfully applied chunk [{}, {}] to client world", chunkX, chunkZ);
 
+            // 加载活跃：续期 JoinBoost 窗口（含 hasLight 无重算块，重算块在 applyLightEngineNow 续期）
+            io.github.limuqy.mc.hassium.cache.client.ClientMainThreadBudget.noteChunkApplyActivity();
+
             // 区块就绪：发送延后的 BE 请求 + 冲刷暂存 BE
             // renderOnly（超视渲染）不向服务器请求 BE，避免视距外流量
             // 空光照重算由 MixinLightRecompute 在 handleLevelChunkWithLight TAIL 完成，此处勿重复调用

@@ -448,8 +448,18 @@ public class ServerChunkPushManager {
                 entries.add(new ResyncEntry(new ChunkPos(centerX + dx, centerZ + dz), dimension));
             }
         }
-        entries.sort(Comparator.comparingDouble(e ->
-                ChunkDistancePriority.distSq(e.pos(), centerX, centerZ)));
+        // 距离升序；同距（同环）时按角度扫，且每环起点旋转 45°（ring*π/4），
+        // 避免 stable sort 保留 dx/dz 扫掠序 → 负方向（西/南）恒早于正方向（东/北）2-3s。
+        entries.sort(Comparator.comparingDouble((ResyncEntry e) ->
+                        ChunkDistancePriority.distSq(e.pos(), centerX, centerZ))
+                .thenComparingDouble(e -> {
+                    ChunkPos p = e.pos();
+                    double dx = p.x - (double) centerX;
+                    double dz = p.z - (double) centerZ;
+                    double ring = Math.round(Math.sqrt(dx * dx + dz * dz));
+                    double angle = Math.atan2(dz, dx) + ring * (Math.PI / 4.0);
+                    return angle - 2 * Math.PI * Math.floor(angle / (2 * Math.PI));
+                }));
         Deque<ResyncEntry> queue = new ArrayDeque<>(entries.size());
         queue.addAll(entries);
         if (!queue.isEmpty()) {

@@ -63,6 +63,8 @@ public final class ClientLightRecomputeService {
         if (chunk == null) {
             return;
         }
+        // 加载活跃：续期 JoinBoost 窗口（固定 10s 窗口在 1021 块全量加载下会中途退坡 → 后段掉速）
+        ClientMainThreadBudget.noteChunkApplyActivity();
         applyLightEngine(level, chunk, chunkPos);
         // 仅光照缓存开启时回写磁盘；关闭时只重算不存储
         if (HassiumConfigService.getInstance().isLightCacheEnabled()) {
@@ -143,6 +145,8 @@ public final class ClientLightRecomputeService {
                     long[] sectionHashes = storage.readSectionHashes(chunkPos);
                     storage.persist(chunkPos, updatedBytes, contentHash, sectionHashes);
                     ClientChunkDirtyTracker.clear(chunkPos);
+                    // 记录写回：队列中同 hash 的无光照 ingest 任务不得倒退覆盖磁盘光照版
+                    CacheSaveQueue.getInstance().noteLightWriteback(chunkPos, contentHash);
                     Constants.LOG.debug("Hassium: Updated cache with light data for {}", chunkPos);
                 }
             }

@@ -44,7 +44,28 @@ public class CacheSaveQueue {
 
     private final LinkedBlockingQueue<SaveTask> taskQueue = new LinkedBlockingQueue<>();
 
+    /**
+     * 主线程光照写回记录：pos → contentHash。
+     * <p>
+     * 光照写回（{@code ClientLightRecomputeService}）在主线程同步 persist，而网络 ingest 任务
+     * 在 Cache-Saver 队列中积压——若 ingest 任务稍后执行，会用无光照 NBT 倒退覆盖磁盘上
+     * 「同 hash + 光照」的版本，导致次回进服恢复 hasLight=false 白重算（540 块实测）。
+     * 保存前若任务无光照且 hash 与写回记录一致，说明磁盘已是同内容+光照，跳过本次覆盖。
+     */
+    private final java.util.concurrent.ConcurrentHashMap<ChunkPos, Long> lightWritebackHashes =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
     private volatile Thread saveThread;
+
+    /**
+     * 记录某块已完成光照写回（主线程 persist 成功后调用）。
+     */
+    public void noteLightWriteback(ChunkPos pos, long contentHash) {
+        if (pos == null || contentHash == 0L || contentHash == 1L) {
+            return;
+        }
+        lightWritebackHashes.put(pos, contentHash);
+    }
 
     private final AtomicBoolean initialized = new AtomicBoolean(false);
     private final AtomicBoolean stopping = new AtomicBoolean(false);
@@ -280,6 +301,17 @@ public class CacheSaveQueue {
                 return;
             }
 
+            // 竞态防护：无光照 ingest 任务若与主线程光照写回同 hash（内容相同），
+            // 磁盘已是最新「同内容+光照」版本，覆盖只会倒退（次回恢复 hasLight=false）。
+            Long writtenHash = lightWritebackHashes.get(task.pos());
+            if (writtenHash != null && writtenHash.longValue() == task.contentHash()
+                    && !task.fromLiveUnload()
+                    && !ChunkDiskCodec.isLightOn(ChunkDiskCodec.bytesToNbt(task.serializedData()))) {
+                Constants.LOG.debug("Hassium: [CACHE SAVE] Skip stale no-light save for {} (hash={}, light already written back)",
+                        task.pos(), Long.toHexString(task.contentHash()));
+                return;
+            }
+
             boolean saved = storage.persist(task.pos(), task.serializedData(), task.contentHash(), task.sectionHashes());
             if (saved) {
                 Constants.LOG.debug("Hassium: [CACHE SAVE] Saved chunk {} ({} bytes, hash={}, live={})",
@@ -434,6 +466,7 @@ public class CacheSaveQueue {
     public void clear() {
         stopSaveThread();
         taskQueue.clear();
+        lightWritebackHashes.clear();
         stopping.set(false);
         Constants.LOG.debug("Hassium: Cleared cache save queue");
     }
@@ -441,6 +474,7 @@ public class CacheSaveQueue {
     public void shutdown() {
         stopSaveThread();
         taskQueue.clear();
+        lightWritebackHashes.clear();
         stopping.set(false);
         trackedLevel = null;
     }
