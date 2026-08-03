@@ -54,7 +54,7 @@ public class MixinMinecraft {
         // 拦截显示会让候选连接在 Login 阶段被 IllegalStateException 杀死：
         //  - DisconnectedScreen：候选失败 vanilla 直设，会破坏定格 → 拦截 + 推进轮转
         //  - ConnectScreen / ProgressScreen / ReceivingLevelScreen：放行（显示状态完整，
-        //    vanilla tick 驱动 ConnectScreen 推进 login；渲染被隐藏，画面保持定格世界 + HUD）
+        //    vanilla tick 驱动 ConnectScreen 推进 login；渲染被隐藏，画面保持冻结世界 + HUD）
         // 全版本生效（≥1.20.2 候选失败路径同样由 vanilla 直设 DisconnectedScreen）。
         if (io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.isRecovering()) {
             if (screen instanceof DisconnectedScreen) {
@@ -67,6 +67,11 @@ public class MixinMinecraft {
                     io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity
                             .onInitialTcpConnectionFailed();
                 }
+                // 定格标志补充置位：freezeDisconnect*/freezeOnDisconnect 只在拆除入口被拦时
+                // markFreezeActive；forge LoggingOut defer 恢复启动与 onDisconnect 拆除重叠的
+                // 竞态下拆除已开始（player 已置 null），此处拦截 DisconnectedScreen 显示时补置位，
+                // 供 handleKeybinds 冻结防护（hassium$skipKeybindsWhileFrozen）识别窗口。
+                io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.markFreezeActive(true);
                 ci.cancel();
                 return;
             }
@@ -102,6 +107,28 @@ public class MixinMinecraft {
             ci.cancel();
         } else {
             ClientFailoverAttemptMarker.clear();
+        }
+    }
+
+    /**
+     * L2 冻结/恢复窗口按键防护：恢复窗口内 vanilla 断连拆除可能已把 player 置 null
+     * （forge LoggingOut 的 200ms defer 恢复启动与 Render thread onDisconnect 拆除重叠的
+     * 竞态窗口），而恢复窗口的 setScreen 拦截又取消了 DisconnectedScreen 显示（screen 保持
+     * null）→ vanilla tick 在 {@code screen==null && player==null} 下仍会调 handleKeybinds
+     * → NPE（1.21.1 forge UdpFailover 冒烟崩溃）。冻结窗口内跳过按键处理，其余 tick 继续
+     * 驱动渲染/网络；正常游戏 / 无感恢复（player 非 null）与普通断连（screen 接管）不受影响。
+     * <p>
+     * 条件与 freeze 状态联动：freezeActive（拆除入口被拦）或 isRecovering（竞态窗口）期间
+     * 且 player 已拆除才跳过；恢复成功后（markFreezeActive(false) / recovering=false）恢复
+     * 正常按键处理。全版本签名一致（{@code private void handleKeybinds()}），无需分段。
+     */
+    @Inject(method = "handleKeybinds", at = @At("HEAD"), cancellable = true)
+    private void hassium$skipKeybindsWhileFrozen(CallbackInfo ci) {
+        Minecraft minecraft = (Minecraft) (Object) this;
+        if (minecraft.player == null
+                && (io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.isFreezeActive()
+                        || io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.isRecovering())) {
+            ci.cancel();
         }
     }
 
