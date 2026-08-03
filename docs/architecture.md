@@ -6,7 +6,7 @@
 
 Hassium 是 Minecraft 多加载器模组（Fabric / Forge / NeoForge），用 **ZSTD** 替代原版 Zlib，优化：
 
-1. **世界存档压缩**（Region 外层不变，payload type `126`）
+1. **世界存档压缩**（Region 外层不变，payload type `126`；默认关，仅专用服务器）
 2. **网络传输压缩**（自定义 `hassium:*` 通道 + 可选全局包压缩）
 3. **客户端区块缓存**（本地 Region + `chunkHash` 命中跳过全量下载）
 4. **分段增量**（缓存过期时仅补变更 section，默认开）
@@ -52,7 +52,7 @@ Sector 3+:    [length(4)][type=126][ZSTD 压缩数据]
 ```
 
 - **无** HassiumEnvelope / HSM1 / type 127 运行时写入（127 仅作未来原版 scheme 迁移规划）
-- 服务端：`MixinRegionFile`（需 `storage.enabled`）
+- 服务端：`MixinRegionFile`（需 `storage.enabled`；仅专用服务器写，单人/局域网保持原版格式，读兼容）
 - 客户端缓存：`HassiumRegionFile` 同构；`contentHash` = `combine(sectionHashes)`（与网络 chunkHash 一致）
 - 客户端辅存：`heat.idx`（热度）、`section_hashes.bin`（per-section 哈希）
 - 字典缺失时拒绝写入 Hassium payload，回退原版

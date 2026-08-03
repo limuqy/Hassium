@@ -41,7 +41,7 @@ fabric/ forge/ neoforge/  ← ServiceLoader 实现 + 入口
 
 ## 配置默认（须与代码一致）
 
-- `storage.enabled = true`（备份世界）
+- `storage.enabled = false`（默认关；仅专用服务器可开启，开启前备份世界）
 - `network.enabled = true`，`globalPacketCompression = true`
 - `clientCache.enabled = true`
 - `clientCache.sectionDeltaEnabled = true`

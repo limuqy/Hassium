@@ -71,9 +71,8 @@
 
 - Hassium 通道压缩与全局包压缩
 - 客户端区块缓存
-- **存档存储压缩**（`storage.enabled = true`）
 
-> 启用存储会改写区块落盘格式。首次使用前请**备份世界**。未装模组的客户端默认可连接（`compat.requireClientMod = false`）。
+> 存档存储压缩（`storage.enabled`）默认关闭，仅专用服务器可开启；开启会改写区块落盘格式，请先**备份世界**。未装模组的客户端默认可连接（`compat.requireClientMod = false`）。
 
 ---
 
@@ -83,7 +82,7 @@
 
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
-| `storage.enabled` | `true` | 世界存档 ZSTD（请备份） |
+| `storage.enabled` | `false` | 世界存档 ZSTD（默认关；仅专用服务器，请备份） |
 | `clientCache.enabled` | `true` | 客户端缓存 |
 | `clientCache.sectionDeltaEnabled` | `true` | 缓存过期时分段增量 |
 | `clientCache.lightCacheEnabled` | `true` | 光照缓存（命中跳过重算） |

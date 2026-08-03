@@ -67,7 +67,7 @@ Sodium / Iris / Lithium / FerriteCore / EntityCulling / ImmediatelyFast 等通�
 - 若开启 **chunkio rewrite** 且自实现 MCA 读写、只认 type 1/2/3 → 读 126 可能失败。  
 - 并发 IO 存在理论竞态；默认模块下 Fabric 1.20.1 冒烟已通过（见 §11），**不承诺** chunkio rewrite 全开时的官方兼容。  
 
-**逃生：** `storage.enabled = false`（保留网络优化）。
+**逃生：** `storage.enabled = false`（默认已关；保留网络优化）。
 
 ## 8. 服务端备份
 
