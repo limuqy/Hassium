@@ -71,6 +71,9 @@ public final class PlayerCompat {
             Field field = connectionField;
             if (field == null) {
                 field = findConnectionField(player.connection.getClass());
+                // 1.20.1 段 Connection 字段为 private final，必须 setAccessible
+                // （1.21.1+ 在父类为 public，无需；对 public 字段调用无害）
+                field.setAccessible(true);
                 connectionField = field;
             }
             return (Connection) field.get(player.connection);
