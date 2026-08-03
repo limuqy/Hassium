@@ -14,6 +14,7 @@ import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.fml.config.ModConfig;
 import net.minecraftforge.fml.event.config.ModConfigEvent;
 import net.minecraftforge.fml.event.lifecycle.FMLCommonSetupEvent;
+import net.minecraftforge.fml.javafmlmod.FMLJavaModLoadingContext;
 import net.minecraftforge.eventbus.api.IEventBus;
 #elif MC_VER < MC_1_21_1
 import net.neoforged.fml.ModContainer;
@@ -49,7 +50,11 @@ public class HassiumNeoForge {
     private static final NeoForgeConfigBackend CONFIG = (NeoForgeConfigBackend) io.github.limuqy.mc.hassium.platform.Services.CONFIG;
 
 #if MC_VER < MC_1_20_2
-    public HassiumNeoForge(IEventBus modEventBus) {
+    // 1.20.1 的 FML（javafmllanguage 47.x）只反射无参构造器（clazz.getDeclaredConstructor()），
+    // 带 IEventBus/ModContainer 注入是 NeoForge 1.20.2+ FancyModLoader 才支持；
+    // 1.20.1 的 mod 事件总线从 FMLJavaModLoadingContext 获取。
+    public HassiumNeoForge() {
+        IEventBus modEventBus = FMLJavaModLoadingContext.get().getModEventBus();
         NeoForgeConfigRegistration.register(CONFIG, Constants.CONFIG_CLIENT_FILE, Constants.CONFIG_SERVER_FILE);
         hassium$init(modEventBus);
     }
