@@ -943,7 +943,7 @@ public class ServerChunkPushManager {
 
             int maxPerTick = HassiumConfigService.getInstance().getConfig().serverNetwork().maxChunksPerTick();
             if (maxPerTick <= 0) {
-                maxPerTick = 10;
+                maxPerTick = 8;
             }
 
             ServerLevel level = PlayerCompat.getServerLevel(player);

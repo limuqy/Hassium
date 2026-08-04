@@ -52,7 +52,7 @@ public final class ConfigSchema {
     public static final ConfigKey<Boolean> NETWORK_COMPACT_HEADER = bool("network.enableCompactHeader", ConfigScope.SERVER, true, "是否启用紧凑包头");
     public static final ConfigKey<List<String>> NETWORK_COMPRESSION_BLACKLIST = stringList("network.compressionBlacklist", ConfigScope.SERVER, () -> new ArrayList<>(HassiumConfig.ServerNetworkConfig.DEFAULT_COMPRESSION_BLACKLIST), "压缩/聚合黑名单");
     public static final ConfigKey<Boolean> SERVER_NETWORK_METRICS_ENABLED = bool("network.metricsEnabled", ConfigScope.SERVER, false, "是否启用服务端网络指标");
-    public static final ConfigKey<Integer> NETWORK_MAX_CHUNKS_PER_TICK = integer("network.maxChunksPerTick", ConfigScope.SERVER, 32, 1, 256, "每玩家每 tick 推送上限");
+    public static final ConfigKey<Integer> NETWORK_MAX_CHUNKS_PER_TICK = integer("network.maxChunksPerTick", ConfigScope.SERVER, 8, 1, 256, "每玩家每 tick 主线程序列化上限（建议 ≥ smoothChunkSendRate/20，否则会成为发送瓶颈）");
     public static final ConfigKey<Integer> NETWORK_SMOOTH_SEND_RATE = integer("network.smoothChunkSendRate", ConfigScope.SERVER, 150, 1, 1000, "服务端每玩家区块平滑发送速率（块/秒，摊平 tick 级脉冲防网络峰值）");
     public static final ConfigKey<Integer> NETWORK_SERVER_PUSH_THREADS = integer("network.serverChunkPushThreads", ConfigScope.SERVER, 8, 1, 64, "服务端推送线程数");
     public static final ConfigKey<Boolean> NETWORK_DYNAMIC_THREADS = bool("network.dynamicThreadPoolEnabled", ConfigScope.SERVER, true, "是否动态调整推送线程");

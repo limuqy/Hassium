@@ -272,7 +272,7 @@ public record HassiumConfig(
                 true,              // enableCompactHeader
                 DEFAULT_COMPRESSION_BLACKLIST,
                 false,              // metricsEnabled
-                32,                // maxChunksPerTick
+                8,                 // maxChunksPerTick（20 tick × 8 = 160/s ≥ 平滑速率 150/s）
                 150,               // smoothChunkSendRate（块/秒/玩家）
                 8,                 // serverChunkPushThreads
                 true,              // dynamicThreadPoolEnabled

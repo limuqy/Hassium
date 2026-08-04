@@ -345,11 +345,9 @@ Set-Content -Path (Join-Path $serverRunDir "server.properties") -Value $props
 
 # 创建 world\serverconfig 目录（部分 neoforge / forge 50 版本不会自动创建）
 New-Item -ItemType Directory -Force -Path (Join-Path $serverRunDir "world\serverconfig") -ErrorAction SilentlyContinue | Out-Null
-# NeoForge 21.5+ 与 Forge 50 (1.20.6) 都经 FML ConfigTracker.writeConfig 写 world/serverconfig/hassium/；
-# 残留 *.toml.bak 时会把整套 parent 路径重复拼到 tmp 文件名前，导致 java.nio.file.NoSuchFileException
-# (\.\world\serverconfig\hassium\.\world\serverconfig\hassium\hassium-server.new.tmp.toml)。
-# server 启动前清空 Hassium own serverconfig 残留，让 ConfigTracker 从干净状态写入。
-# Forge 1.20.1 用老 ForgeConfigSpec，serverconfig 路径不同且无此 bug，不在此分支清理。
+# 防御性清理（仅旧存档）：Hassium 服务端配置早已迁移 COMMON 级（config/hassium/，不写 world/serverconfig/），
+# 但历史存档可能残留 world/serverconfig/hassium/*.toml.bak——FML ConfigTracker 会把整套 parent 路径
+# 重复拼到 tmp 文件名前导致起服崩溃。此处仅清理旧存档残留，新存档不会触发。
 $needConfigTrackerClean = ($Loader -eq "neoforge") -or ($Loader -eq "forge" -and $Ver -ge "1.20.6")
 if ($needConfigTrackerClean) {
     $hassiumServerConfig = Join-Path $serverRunDir "world\serverconfig\hassium"
@@ -374,7 +372,8 @@ if ($CleanWorld) {
         Remove-Item -Recurse -Force (Join-Path $serverRunDir "cache") -ErrorAction SilentlyContinue
         New-Item -ItemType Directory -Force -Path (Join-Path $serverRunDir "world") | Out-Null
         Copy-Item -Path $pregenSrc -Destination (Join-Path $serverRunDir "world") -Recurse -Force
-        # 排除 serverconfig 残留（NeoForge/Forge 50 ConfigTracker 残留 toml 拼接 bug）
+        # serverconfig 不随预生成存档复制（Hassium 配置在 config/hassium/；
+        # NeoForge/Forge 自身的 serverconfig 由服务端启动自动重建，复制反而带旧配置）
         Remove-Item -Recurse -Force (Join-Path $serverRunDir "world\serverconfig") -ErrorAction SilentlyContinue
         New-Item -ItemType Directory -Force -Path (Join-Path $serverRunDir "world\serverconfig") -ErrorAction SilentlyContinue | Out-Null
     } else {
@@ -492,7 +491,8 @@ if ($PregenOnly) {
         Remove-Item -Recurse -Force $pregenDest -ErrorAction SilentlyContinue
         New-Item -ItemType Directory -Force -Path $pregenDest | Out-Null
         Copy-Item -Path (Join-Path $serverRunDir "world") -Destination (Join-Path $pregenDest "world") -Recurse -Force
-        # 排除 serverconfig 残留（NeoForge/Forge 50 ConfigTracker 残留 toml 拼接 bug）
+        # serverconfig 不随预生成存档复制（Hassium 配置在 config/hassium/；
+        # NeoForge/Forge 自身的 serverconfig 由服务端启动自动重建，复制反而带旧配置）
         Remove-Item -Recurse -Force (Join-Path $pregenDest "world\serverconfig") -ErrorAction SilentlyContinue
         Write-Host "[$SessionId] [PregenOnly] 预生成完成，存档已保存到 $pregenDest"
         $resultObj = @{ SessionId = $SessionId; Ver = $Ver; Loader = $Loader; Phase = "pregen"; Result = "PASS"; Reason = "pregen_done" }

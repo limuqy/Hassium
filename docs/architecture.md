@@ -95,7 +95,7 @@ Sector 3+:    [length(4)][type=126][ZSTD 压缩数据]
 | `network.enabled` | true | Hassium 通道 |
 | `network.globalPacketCompression` | true | 全局 ZSTD |
 | `network.compressionLevel` | 3 | 网络压缩等级（速度优先） |
-| `network.maxChunksPerTick` | 32 | 每玩家每 server tick 序列化上限 |
+| `network.maxChunksPerTick` | 8 | 每玩家每 tick 主线程序列化上限（20 tick × 8 = 160/s ≥ 默认平滑速率 150/s；调高 `smoothChunkSendRate` 时需同步调高） |
 | `network.dataPlane.enabled` | true | 启用 UDP/KCP 数据面和控制恢复；关后不启动 UDP listener、不广告端点、不处理 failover |
 | `network.dataPlane.controlStallMs` | 6000 | 控制 TCP 静默多久后可申请 failover（ms） |
 | `network.dataPlane.failoverExpiryMs` | 30000 | 服务端 `FailoverPermit` 有效期（ms） |
