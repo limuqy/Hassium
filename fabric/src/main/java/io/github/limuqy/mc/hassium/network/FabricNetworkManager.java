@@ -241,13 +241,15 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
                 int length = buf.readVarInt();
                 byte[] data = new byte[length];
                 buf.readBytes(data);
-                context.client().execute(() -> {
-                    try {
-                        ClientChunkHandler.handleCompressedChunk(data);
-                    } catch (Exception e) {
-                        LOGGER.error("[CLIENT] Failed to handle compressed chunk data", e);
-                    }
-                });
+                // 直接在回调线程（netty 事件循环）处理：handleCompressedChunk 本身无主线程依赖
+                // （decode + 后台解压 + MainThreadDispatcher 回主线程 apply），dataplane 已在 UDP
+                // 线程直接调用。绕开 client().execute 主线程队列——1.21.x 新 payload API 回调经
+                // execute 后主线程吞吐受帧时间挤压，chunk 风暴下收到速率掉到 ~35/s。
+                try {
+                    ClientChunkHandler.handleCompressedChunk(data);
+                } catch (Exception e) {
+                    LOGGER.error("[CLIENT] Failed to handle compressed chunk data", e);
+                }
             } finally {
                 buf.release();
             }
