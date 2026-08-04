@@ -1007,10 +1007,35 @@ public class ServerChunkPushManager {
         double playerChunkX = player.getX() / 16.0;
         double playerChunkZ = player.getZ() / 16.0;
 
+        // 移动方向加权：纯 distSq 升序（近先推）会把飞行方向前方的块（距离最远）
+        // 永远排到队尾——飞行时前方出现锥形虚空（~30° 扇区），转弯后新前方继续滞后
+        // （实测：前方块迟推数秒、已加载块在视距圆移动时正常卸载 → 视觉跳变）。
+        // 按玩家速度方向把前方块提前：priority = distSq - BIAS * dot(pos-player, dir)。
+        // 仅对前方（dot>0）加权，后方不加权不惩罚；速度阈值防原地抖动/转视角误判。
+        net.minecraft.world.phys.Vec3 vel = player.getDeltaMovement();
+        double dirX = 0.0;
+        double dirZ = 0.0;
+        double velLenSq = vel.x * vel.x + vel.z * vel.z;
+        if (velLenSq > 0.01) {
+            double len = Math.sqrt(velLenSq);
+            dirX = vel.x / len;
+            dirZ = vel.z / len;
+        }
+        // 前方每格优先 ~BIAS² 距离平方（BIAS=6 → 前方 8 格 ≈ 距离 4 格的优先级）
+        double FORWARD_BIAS = 6.0;
+
         List<DataRequestTask> tasks = new ArrayList<>(chunks.size());
         for (ChunkPos pos : chunks) {
             // 入队瞬间冻结 distSq（层内排序键；无 renderOnly 层）
             double priority = ChunkDistancePriority.distSq(pos, playerChunkX, playerChunkZ);
+            if (dirX != 0.0) {
+                double dx = pos.x - playerChunkX;
+                double dz = pos.z - playerChunkZ;
+                double dot = dx * dirX + dz * dirZ;
+                if (dot > 0.0) {
+                    priority -= FORWARD_BIAS * dot;
+                }
+            }
             tasks.add(new DataRequestTask(pos, dimension, priority));
         }
 //        if (tasks.size() > room) {
