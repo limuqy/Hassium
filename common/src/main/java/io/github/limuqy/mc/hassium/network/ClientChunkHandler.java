@@ -20,6 +20,9 @@ import net.minecraft.world.level.ChunkPos;
 import net.minecraft.nbt.CompoundTag;
 
 import java.nio.file.Path;
+import java.util.Collections;
+import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -382,6 +385,7 @@ public class ClientChunkHandler {
         DebugLogger.info(LogType.CHUNK_APPLY,
                 "[APPLY_CHUNK] Applying chunk [{}, {}] (dataSize={}, renderOnly={}, hasCachedLight={})",
                 chunkX, chunkZ, chunkData.length, renderOnly, hasCachedLight);
+        long applyStartNs = System.nanoTime();
 
         ChunkPos pos = new ChunkPos(chunkX, chunkZ);
         Minecraft mc = Minecraft.getInstance();
@@ -413,7 +417,8 @@ public class ClientChunkHandler {
             // 通过平台抽象注入区块（需要传入 FriendlyByteBuf）
             Services.getClientChunkApplier().applyToLevelFromByteBuf(level, pos, friendlyBuf, renderOnly);
 
-            DebugLogger.info(LogType.CHUNK_APPLY, "[APPLY_CHUNK] Successfully applied chunk [{}, {}] to client world", chunkX, chunkZ);
+            DebugLogger.info(LogType.CHUNK_APPLY, "[APPLY_CHUNK] Successfully applied chunk [{}, {}] to client world in {} ms",
+                    chunkX, chunkZ, String.format("%.2f", (System.nanoTime() - applyStartNs) / 1_000_000.0));
 
             // 加载活跃：续期 JoinBoost 窗口（含 hasLight 无重算块，重算块在 applyLightEngineNow 续期）
             io.github.limuqy.mc.hassium.cache.client.ClientMainThreadBudget.noteChunkApplyActivity();
@@ -484,6 +489,47 @@ public class ClientChunkHandler {
             Constants.LOG.debug("Hassium: Applied chunk {} from cache (renderOnly={})", pos, renderOnly);
         }
         return applied;
+    }
+
+    /**
+     * 批量加载缓存区块（region 级批量读，语义与单块路径一致）。
+     * <p>
+     * 同 region 的块一次锁持有顺序读，锁外解压；无效 NBT 校验与删盘行为同
+     * {@link #loadChunkDataFromCache(ChunkPos)}。
+     *
+     * @param positions 区块坐标列表（可跨 region，内部按 region 分组）
+     * @return 校验通过的区块坐标 → HBT1 字节
+     */
+    public static Map<ChunkPos, byte[]> loadChunkDataBatchFromCache(List<ChunkPos> positions) {
+        if (clientStorage == null) {
+            return Collections.emptyMap();
+        }
+        Map<ChunkPos, byte[]> loaded = clientStorage.loadRegionBatch(positions);
+        if (loaded.isEmpty()) {
+            return loaded;
+        }
+        Iterator<Map.Entry<ChunkPos, byte[]>> it = loaded.entrySet().iterator();
+        while (it.hasNext()) {
+            Map.Entry<ChunkPos, byte[]> e = it.next();
+            byte[] chunkData = e.getValue();
+            if (ChunkDiskCodec.isValidChunkNbt(chunkData)) {
+                continue;
+            }
+            if (ChunkDiskCodec.stripMagicPrefix(chunkData) == null) {
+                Constants.LOG.debug("Hassium: Cache invalid (non-NBT) for chunk {}, removing", e.getKey());
+                try {
+                    clientStorage.remove(e.getKey());
+                } catch (Throwable t) {
+                    Constants.LOG.debug("Hassium: Failed to remove invalid cache for {}", e.getKey(), t);
+                }
+            } else {
+                Constants.LOG.warn("Hassium: Cache has HBT1 magic but invalid chunk NBT for {}, keeping on disk",
+                        e.getKey());
+            }
+            NetworkStats.recordCacheMiss();
+            it.remove();
+        }
+        return loaded;
     }
 
     /**

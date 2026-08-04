@@ -10,6 +10,10 @@ import net.minecraft.world.level.ChunkPos;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -265,6 +269,70 @@ public class ClientHassiumStorage {
             Constants.LOG.debug("Failed to read section hashes for chunk [{}, {}]", pos.x, pos.z, e);
             return null;
         }
+    }
+
+    /**
+     * 批量加载并解压区块数据（region 级批量读）。
+     * <p>
+     * 锁内按 region 顺序读取原始字节（整批一次持有锁，避免每块单独抢锁排队），
+     * 锁外逐个 ZSTD 解压（CPU 密集，可并行）。未命中/异常块不出现在结果 Map。
+     */
+    public Map<ChunkPos, byte[]> loadRegionBatch(List<ChunkPos> positions) {
+        Map<ChunkPos, byte[]> result = new HashMap<>();
+        if (positions.isEmpty()) {
+            return result;
+        }
+        // 按 region 文件分组（调用方已尽量同 region，这里兜底分组）
+        Map<HassiumRegionFile, List<ChunkPos>> byRegion = new LinkedHashMap<>();
+        for (ChunkPos pos : positions) {
+            HassiumRegionFile region = getRegionFileOrNull(pos);
+            if (region != null) {
+                byRegion.computeIfAbsent(region, k -> new ArrayList<>()).add(pos);
+            }
+        }
+        for (Map.Entry<HassiumRegionFile, List<ChunkPos>> entry : byRegion.entrySet()) {
+            HassiumRegionFile region = entry.getKey();
+            // 锁内顺序读：synchronized(region) 与 region 方法锁同 monitor（可重入），整批一次持有
+            Map<ChunkPos, byte[]> raw = new HashMap<>();
+            synchronized (region) {
+                for (ChunkPos pos : entry.getValue()) {
+                    try {
+                        if (!region.hasChunk(pos)) {
+                            continue;
+                        }
+                        byte[] chunkData = region.readChunk(pos);
+                        if (chunkData == null || chunkData.length < 2) {
+                            continue;
+                        }
+                        byte compressionType = chunkData[0];
+                        if (compressionType != 126) {
+                            Constants.LOG.debug("Unknown compression type {} for cached chunk [{}, {}]",
+                                    compressionType, pos.x, pos.z);
+                            continue;
+                        }
+                        byte[] compressedData = new byte[chunkData.length - 1];
+                        System.arraycopy(chunkData, 1, compressedData, 0, compressedData.length);
+                        raw.put(pos, compressedData);
+                    } catch (Exception e) {
+                        Constants.LOG.error("Failed to read cached chunk [{}, {}] in batch", pos.x, pos.z, e);
+                    }
+                }
+            }
+            // 锁外解压 + 热度更新
+            for (Map.Entry<ChunkPos, byte[]> e : raw.entrySet()) {
+                try {
+                    byte[] decompressed = CompressionService.getInstance().decompressWithDictionary(e.getValue());
+                    if (decompressed != null) {
+                        result.put(e.getKey(), decompressed);
+                        updateAccessInfo(e.getKey());
+                    }
+                } catch (Exception ex) {
+                    Constants.LOG.error("Failed to decompress cached chunk [{}, {}]",
+                            e.getKey().x, e.getKey().z, ex);
+                }
+            }
+        }
+        return result;
     }
 
     /**
