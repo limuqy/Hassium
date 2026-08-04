@@ -40,17 +40,18 @@ public class CacheSaveQueue {
     private static final SaveTask POISON = new SaveTask(
             new ChunkPos(Integer.MAX_VALUE, Integer.MAX_VALUE),
             Integer.MAX_VALUE, Integer.MAX_VALUE,
-            new byte[0], 0L, null, false);
+            new byte[0], 0L, null, false, false);
 
     private final LinkedBlockingQueue<SaveTask> taskQueue = new LinkedBlockingQueue<>();
 
     /**
      * 主线程光照写回记录：pos → contentHash。
      * <p>
-     * 光照写回（{@code ClientLightRecomputeService}）在主线程同步 persist，而网络 ingest 任务
-     * 在 Cache-Saver 队列中积压——若 ingest 任务稍后执行，会用无光照 NBT 倒退覆盖磁盘上
-     * 「同 hash + 光照」的版本，导致次回进服恢复 hasLight=false 白重算（540 块实测）。
-     * 保存前若任务无光照且 hash 与写回记录一致，说明磁盘已是同内容+光照，跳过本次覆盖。
+     * 光照写回（{@code ClientLightRecomputeService}）经 {@link #enqueueLightWriteback} 由
+     * 后台 Cache-Saver 顺序 persist，而网络 ingest 任务同在队列中——若 ingest 任务稍后执行，
+     * 会用无光照 NBT 倒退覆盖磁盘上「同 hash + 光照」的版本，导致次回进服恢复 hasLight=false
+     * 白重算（540 块实测）。保存前若任务无光照且 hash 与写回记录一致，说明磁盘已是同内容+
+     * 光照版本，跳过本次覆盖。
      */
     private final java.util.concurrent.ConcurrentHashMap<ChunkPos, Long> lightWritebackHashes =
             new java.util.concurrent.ConcurrentHashMap<>();
@@ -58,7 +59,7 @@ public class CacheSaveQueue {
     private volatile Thread saveThread;
 
     /**
-     * 记录某块已完成光照写回（主线程 persist 成功后调用）。
+     * 记录某块已完成光照写回（persist 成功后调用，后台线程）。
      */
     public void noteLightWriteback(ChunkPos pos, long contentHash) {
         if (pos == null || contentHash == 0L || contentHash == 1L) {
@@ -83,7 +84,9 @@ public class CacheSaveQueue {
             byte[] serializedData,
             long contentHash,
             long[] sectionHashes,
-            boolean fromLiveUnload
+            boolean fromLiveUnload,
+            /** 光照写回任务：persist 成功后登记写回记录（防同 hash 无光照 ingest 倒退覆盖）。 */
+            boolean lightWriteback
     ) {}
 
     private CacheSaveQueue() {}
@@ -186,7 +189,7 @@ public class CacheSaveQueue {
             if (nbtBytes == null) {
                 return;
             }
-            taskQueue.offer(new SaveTask(pos, pos.x, pos.z, nbtBytes, diskHash, diskSectionHashes, true));
+            taskQueue.offer(new SaveTask(pos, pos.x, pos.z, nbtBytes, diskHash, diskSectionHashes, true, false));
             Constants.LOG.debug("Hassium: [CACHE SAVE QUEUED] light-patch {} (hash={}, queue: {})",
                     pos, Long.toHexString(diskHash), taskQueue.size());
             return;
@@ -203,7 +206,7 @@ public class CacheSaveQueue {
             return;
         }
 
-        taskQueue.offer(new SaveTask(pos, pos.x, pos.z, nbtBytes, contentHash, sectionHashes, true));
+        taskQueue.offer(new SaveTask(pos, pos.x, pos.z, nbtBytes, contentHash, sectionHashes, true, false));
         Constants.LOG.debug("Hassium: [CACHE SAVE QUEUED] chunk {} ({} NBT bytes, hash={}, queue: {})",
                 pos, nbtBytes.length, Long.toHexString(contentHash), taskQueue.size());
     }
@@ -216,8 +219,24 @@ public class CacheSaveQueue {
             return;
         }
         ensureInitialized();
-        taskQueue.offer(new SaveTask(pos, pos.x, pos.z, nbtBytes, contentHash, sectionHashes, false));
+        taskQueue.offer(new SaveTask(pos, pos.x, pos.z, nbtBytes, contentHash, sectionHashes, false, false));
         Constants.LOG.debug("Hassium: [CACHE SAVE] Enqueued serialized {} ({} bytes, hash={}, queue={})",
+                pos, nbtBytes.length, Long.toHexString(contentHash), taskQueue.size());
+    }
+
+    /**
+     * 光照写回异步入库（主线程光照应用尾部调用）：NBT 已序列化，压缩 + 写盘由
+     * 后台单消费者顺序执行。FIFO 与 ingest 任务的最终一致性：先入队的无光照 ingest
+     * 先写、光照任务后写覆盖；后入队的 ingest 在防护检查时命中 {@link #noteLightWriteback}
+     * 记录被跳过——任何顺序下磁盘终态都是光照版。
+     */
+    public void enqueueLightWriteback(ChunkPos pos, byte[] nbtBytes, long contentHash, long[] sectionHashes) {
+        if (pos == null || nbtBytes == null) {
+            return;
+        }
+        ensureInitialized();
+        taskQueue.offer(new SaveTask(pos, pos.x, pos.z, nbtBytes, contentHash, sectionHashes, false, true));
+        Constants.LOG.debug("Hassium: [CACHE SAVE] Enqueued light writeback {} ({} bytes, hash={}, queue={})",
                 pos, nbtBytes.length, Long.toHexString(contentHash), taskQueue.size());
     }
 
@@ -317,12 +336,16 @@ public class CacheSaveQueue {
                 Constants.LOG.debug("Hassium: [CACHE SAVE] Saved chunk {} ({} bytes, hash={}, live={})",
                         task.pos(), task.serializedData().length, Long.toHexString(task.contentHash()),
                         task.fromLiveUnload());
+                if (task.lightWriteback()) {
+                    // 光照写回已落盘：登记写回记录，后续同 hash 无光照 ingest 任务将被防护跳过
+                    noteLightWriteback(task.pos(), task.contentHash());
+                }
                 if (task.fromLiveUnload()) {
                     ClientChunkDirtyTracker.clear(task.pos());
                 } else if (ChunkDiskCodec.isLightOn(ChunkDiskCodec.bytesToNbt(task.serializedData()))) {
                     ClientChunkDirtyTracker.clear(task.pos());
                 }
-                // 全量入库且 is_light_on=0：保持 dirty，等光照回写 clear
+                // 全量入库且 is_light_on=0：保持 dirty，等光照写回 clear
             } else {
                 Constants.LOG.warn("Hassium: [CACHE SAVE] Failed to persist chunk {}", task.pos());
             }

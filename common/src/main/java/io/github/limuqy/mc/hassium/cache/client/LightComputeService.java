@@ -31,10 +31,11 @@ import java.util.concurrent.ExecutorService;
  * 光源与遮挡；任务域 = 核心柱 + 每方向 1 个柱（16 格）halo（= 3×3 区块），域外不可能
  * 影响核心柱结果 → 任务间无依赖、无需迭代、无需合并，可完全并行。
  * <p>
- * 主线程 {@link #drainCompletions} 提交结果：建层 + {@code queueSectionData} + 官方校准
- * pass（propagateLightSources + pullLightFromNeighborEdges + runLightUpdates，吸收快照
- * 陈旧与任何残余语义偏差）+ 缓存写回；{@code debug.lightVerify} 开启时改为官方权威重算
- * 后逐格对照 BFS 结果（内芯 x/z ∈ [1,14]，边界差异属输入范围差异非错误）。
+ * 主线程 {@link #drainCompletions} 批量提交（预算内两阶段）：建层 + {@code queueSectionData}
+ * + 官方校准（propagateLightSources + pullLightFromNeighborEdges，吸收快照陈旧与任何残余
+ * 语义偏差）逐结果入批，批尾统一一次 runLightUpdates 落地；然后逐结果验算对比（
+ * {@code debug.lightVerify}，内芯 x/z ∈ [1,14]，边界差异属输入范围差异非错误）+ 缓存写回
+ * （写回经 CacheSaveQueue 后台化：主线程只组 NBT，压缩与写盘由后台单消费者执行）。
  * <p>
  * 默认关闭（{@code clientCache.parallelLightEngineEnabled}），现有同步路径为默认。
  */
@@ -131,17 +132,48 @@ public final class LightComputeService {
         });
     }
 
-    /** 主线程在帧预算内逐结果提交（超预算提前退出，剩余留待下帧）。 */
+    /**
+     * 主线程在帧预算内批量提交（超预算提前退出，剩余留待下帧）。
+     * <p>
+     * 两阶段：预算内循环对每个结果做「建层 + 入队 + 光源校准」（不含落地），收集入批；
+     * 批尾统一执行一次官方 {@code runLightUpdates} 落地——N 个结果共享一次 swapSectionMap
+     * 全 map 遍历与空 checkNode（逐结果提交是 N 次）。传播队列在引擎内全局累积，稳态与
+     * 逐结果提交一致；且同批邻居先落地后 checkNode 按新层评估，校准反而更准。落地后
+     * 逐结果做验算对比 + 缓存写回（写回本身已后台化，见 CacheSaveQueue）。
+     */
     public void drainCompletions(long deadlineNs) {
+        ClientLevel level = Minecraft.getInstance().level;
+        if (level == null) {
+            return; // 断连/未进服：结果由 clear() 清理，不消费
+        }
+        LevelLightEngine lightEngine = level.getLightEngine();
+        java.util.List<LightComputeResult> batch = new java.util.ArrayList<>();
         while (System.nanoTime() < deadlineNs) {
             LightComputeResult r = results.poll();
             if (r == null) {
-                return;
+                break;
             }
             try {
-                applyResult(r);
+                if (applyResultEnqueue(level, lightEngine, r)) {
+                    batch.add(r);
+                }
             } catch (Throwable t) {
-                Constants.LOG.error("Hassium: Failed to apply parallel light result for {}", r.corePos(), t);
+                Constants.LOG.error("Hassium: Failed to enqueue parallel light result for {}", r.corePos(), t);
+            }
+        }
+        if (batch.isEmpty()) {
+            return;
+        }
+        try {
+            ClientLightRecomputeService.safeRunLightUpdates(lightEngine);
+        } catch (Throwable t) {
+            Constants.LOG.error("Hassium: Failed to run batched light updates", t);
+        }
+        for (LightComputeResult r : batch) {
+            try {
+                applyResultPost(level, lightEngine, r);
+            } catch (Throwable t) {
+                Constants.LOG.error("Hassium: Failed to finalize parallel light result for {}", r.corePos(), t);
             }
         }
     }
@@ -159,63 +191,32 @@ public final class LightComputeService {
         }
     }
 
-    private void applyResult(LightComputeResult r) {
-        ClientLevel level = Minecraft.getInstance().level;
-        if (level == null) {
-            return;
-        }
+    /** 阶段一（预算内）：校验 + 建层 + 入队 + 光源校准，不含落地。返回是否入批。 */
+    private boolean applyResultEnqueue(ClientLevel level, LevelLightEngine lightEngine, LightComputeResult r) {
         LevelChunk chunk = level.getChunkSource().getChunkNow(r.corePos().x, r.corePos().z);
         if (chunk == null) {
-            return; // 卸载竞态：丢弃
+            return false; // 卸载竞态：丢弃
         }
-        // 主线程光照应用耗时（同步路径同口径：applyLightEngine 的 finally 记录同一指标）
+        // 主线程光照应用耗时（同步路径同口径：applyLightEngine 的 finally 记录同一指标；
+        // 批量共享的 runLightUpdates 与后台化写回不计入单结果）
         long mainThreadStartNs = System.nanoTime();
         try {
-            applyResultInner(r);
+            applyResultEnqueueInner(level, lightEngine, r);
         } finally {
             NetworkStats.recordLightRecomputeTime(System.nanoTime() - mainThreadStartNs);
         }
+        return true;
     }
 
-    private void applyResultInner(LightComputeResult r) {
-        ClientLevel level = Minecraft.getInstance().level;
-        HassiumConfigService cfg = HassiumConfigService.getInstance();
+    private void applyResultEnqueueInner(ClientLevel level, LevelLightEngine lightEngine, LightComputeResult r) {
         int minSection = LevelHeightCompat.getMinSection(level);
         int maxSection = LevelHeightCompat.getMaxSectionExclusive(level);
-        LevelLightEngine lightEngine = level.getLightEngine();
-
-        if (cfg.isLightVerifyEnabled()) {
-            // 验算（稳态对照）：与正常路径完全一致——BFS 提交 + 官方校准（propagateLightSources
-            // + pull + runLightUpdates），然后对照「官方校准后的稳态」vs「BFS 输入」。
-            // 不采用官方从零重算作参照：客户端无 ChunkSkyLightSources（sky 参照失真），且
-            // 空层队列/发光源 increase 的交互在从零场景下不可复现（实测官方参照在发光源处为 0，
-            // 而 findBlockLightSources 明确能找到源）——从零参照产生系统性伪差异。
-            // 校准吸收的修正量 = BFS 的真实错误：BFS 正确时校准零成本，稳态 == BFS 输入。
-            ClientLightRecomputeService.ensureColumnDataLayers(level, lightEngine, r.corePos(), minSection, maxSection);
-            ClientLightRecomputeService.ensureNeighborDataLayers(level, lightEngine, r.corePos(), minSection, maxSection);
-            int sectionCount = Math.min(r.skySections().length, maxSection - minSection);
-            for (int s = 0; s < sectionCount; s++) {
-                int sectionY = minSection + s;
-                SectionPos sp = SectionPos.of(r.corePos().x, sectionY, r.corePos().z);
-                lightEngine.queueSectionData(LightLayer.SKY, sp, new DataLayer(r.skySections()[s]));
-                lightEngine.queueSectionData(LightLayer.BLOCK, sp, new DataLayer(r.blockSections()[s]));
-                level.setSectionDirtyWithNeighbors(r.corePos().x, sectionY, r.corePos().z);
-            }
-            lightEngine.propagateLightSources(r.corePos());
-            ClientLightRecomputeService.pullLightFromNeighborEdges(level, r.corePos(), minSection, maxSection);
-            ClientLightRecomputeService.safeRunLightUpdates(lightEngine);
-            compareAndRecord(level, lightEngine, r, minSection, maxSection);
-            if (cfg.isLightCacheEnabled()) {
-                ClientLightRecomputeService.updateCacheWithLightData(level, r.corePos(), r.cachedNbt());
-            }
-            return;
-        }
 
         // 1. 建层（storage 未建层的 section 在 queueSectionData 后不生效）
         ClientLightRecomputeService.ensureColumnDataLayers(level, lightEngine, r.corePos(), minSection, maxSection);
         ClientLightRecomputeService.ensureNeighborDataLayers(level, lightEngine, r.corePos(), minSection, maxSection);
 
-        // 2. 原子提交 BFS 结果（官方 queueSectionData 签名全版本一致）
+        // 2. 原子提交 BFS 结果（官方 queueSectionData 签名全版本一致；只入队，落地在批尾统一 runLightUpdates）
         int sectionCount = Math.min(r.skySections().length, maxSection - minSection);
         for (int s = 0; s < sectionCount; s++) {
             int sectionY = minSection + s;
@@ -225,12 +226,21 @@ public final class LightComputeService {
             level.setSectionDirtyWithNeighbors(r.corePos().x, sectionY, r.corePos().z);
         }
 
-        // 3. 校准 pass：基态正确时官方 drain 近乎零成本；同时吸收快照陈旧/残余语义偏差
+        // 3. 校准：基态正确时官方 drain 近乎零成本；同时吸收快照陈旧/残余语义偏差
         lightEngine.propagateLightSources(r.corePos());
         ClientLightRecomputeService.pullLightFromNeighborEdges(level, r.corePos(), minSection, maxSection);
-        ClientLightRecomputeService.safeRunLightUpdates(lightEngine);
+    }
 
-        // 4. 缓存写回
+    /** 阶段二（批尾统一落地后）：验算对比 + 缓存写回（写回入后台队列）。 */
+    private void applyResultPost(ClientLevel level, LevelLightEngine lightEngine, LightComputeResult r) {
+        HassiumConfigService cfg = HassiumConfigService.getInstance();
+        int minSection = LevelHeightCompat.getMinSection(level);
+        int maxSection = LevelHeightCompat.getMaxSectionExclusive(level);
+        if (cfg.isLightVerifyEnabled()) {
+            // 验算（稳态对照）：校准吸收的修正量 = BFS 的真实错误；BFS 正确时校准零成本，
+            // 稳态 == BFS 输入。批量落地后读层，内芯 x/z∈[1,14] 不依赖邻居落地态，结论不变。
+            compareAndRecord(level, lightEngine, r, minSection, maxSection);
+        }
         if (cfg.isLightCacheEnabled()) {
             ClientLightRecomputeService.updateCacheWithLightData(level, r.corePos(), r.cachedNbt());
         }

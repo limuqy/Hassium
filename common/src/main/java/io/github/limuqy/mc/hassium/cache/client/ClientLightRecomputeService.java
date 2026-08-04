@@ -148,11 +148,11 @@ public final class ClientLightRecomputeService {
                         return;
                     }
                     long[] sectionHashes = storage.readSectionHashes(chunkPos);
-                    storage.persist(chunkPos, updatedBytes, contentHash, sectionHashes);
-                    ClientChunkDirtyTracker.clear(chunkPos);
-                    // 记录写回：队列中同 hash 的无光照 ingest 任务不得倒退覆盖磁盘光照版
-                    CacheSaveQueue.getInstance().noteLightWriteback(chunkPos, contentHash);
-                    Constants.LOG.debug("Hassium: Updated cache with light data for {}", chunkPos);
+                    // 后台化：压缩 + 写盘由 Cache-Saver 单消费者顺序执行（FIFO 保证与 ingest
+                    // 任务最终一致：先入队的无光照 ingest 先写、光照任务后写覆盖；后入队的 ingest
+                    // 在防护检查时命中写回记录被跳过）；persist 成功后由后台线程登记写回记录并 clear dirty
+                    CacheSaveQueue.getInstance().enqueueLightWriteback(chunkPos, updatedBytes, contentHash, sectionHashes);
+                    Constants.LOG.debug("Hassium: Enqueued light writeback for {}", chunkPos);
                 }
             }
             // 引擎尚无光照可写：保持 dirty，留给卸载光照补丁
