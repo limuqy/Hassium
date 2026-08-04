@@ -65,6 +65,7 @@ Sector 3+:    [length(4)][type=126][ZSTD 压缩数据]
 | 全局包压缩 | Pipeline 替换原版 Zlib | `globalPacketCompression=true` |
 | 上下文 / magicless / 聚合 | 提升压缩比 | 均默认启用 |
 | 紧凑包头 | 聚合包内 `CompactHeaderCodec` | 默认启用 |
+| 平滑推送 | 每玩家令牌桶恒定速率放行（`smoothChunkSendRate=150`）摊平 tick 脉冲；每 tick 主线程序列化上限 `maxChunksPerTick=8`；encode/压缩/hash/发送全后台（1.21.2+ 主线程仅 build，<1.21.2 全后台） | 默认启用 |
 | UDP/KCP 数据面 | 每个 `udpListeners` 项建立独立 KCP session；按 `weight` 加权轮询发送 S2C bulk，异常时自动回落 TCP | `network.dataPlane.enabled=true`（默认端点仅本机可用） |
 | TCP 控制恢复 | 数据面健康时允许经 `FailoverPermit` 迁移主控 TCP；候选耗尽后只执行一次终态清理 | 默认 6 s stall、30 s permit、60 s 恢复窗口 |
 
@@ -96,12 +97,16 @@ Sector 3+:    [length(4)][type=126][ZSTD 压缩数据]
 | `network.globalPacketCompression` | true | 全局 ZSTD |
 | `network.compressionLevel` | 3 | 网络压缩等级（速度优先） |
 | `network.maxChunksPerTick` | 8 | 每玩家每 tick 区块处理上限（1.21.2+ 为主线程序列化上限，1.20.x/1.21.1 为后台提交上限；建议 ≥ `smoothChunkSendRate`/20） |
+| `network.smoothChunkSendRate` | 150 | 每玩家区块平滑发送速率（块/秒；令牌桶恒定速率，摊平 tick 级脉冲防网络峰值） |
 | `network.dataPlane.enabled` | true | 启用 UDP/KCP 数据面和控制恢复；关后不启动 UDP listener、不广告端点、不处理 failover |
 | `network.dataPlane.controlStallMs` | 6000 | 控制 TCP 静默多久后可申请 failover（ms） |
 | `network.dataPlane.failoverExpiryMs` | 30000 | 服务端 `FailoverPermit` 有效期（ms） |
 | `network.dataPlane.recoveryWindowMs` | 60000 | 客户端候选重连窗口（ms） |
 | `clientCache.mainThreadChunkBudgetMs` | 15 | 客户端主线程 apply 预算（ms） |
+| `clientCache.parallelLightEngineEnabled` | true | 并行光照：重算在后台线程池执行，主线程只提交快照 |
+| `clientCache.parallelLightEngineThreads` | 4 | 并行光照线程数（虚拟线程模式忽略） |
 | `clientCache.lightCacheEnabled` | true | 光照缓存：首次加载重算后存储光照，缓存命中直接应用 |
+| `network.lightStrip` | true | 光照剥离：服务端发包带空 lightMask，客户端本地重算 |
 | `network.maxLightRecomputePerFrame` | 10 | 每帧最多重算光照的区块数 |
 | `network.metricsEnabled` | false | 指标收集 |
 | `compat.requireClientMod` | false | 无模组客户端可连 |
@@ -155,14 +160,38 @@ ERROR / WARN 始终输出。
 
 ## 9. 卖点特性（已实现摘要）
 
+按大类组织：**存储优化 / 网络优化 / 区块缓存 / 超视渲染 / 光照优化 / 实用工具**。
+
+### 9.1 网络优化
+
 | 特性 | 配置 / 命令 | 要点 | 详文 |
 |------|-------------|------|------|
+| **平滑推送** | `network.smoothChunkSendRate`（150）、`network.maxChunksPerTick`（8）、`serverChunkPushThreads` | 每玩家令牌桶恒定速率放行摊平 tick 脉冲；每 tick 主线程序列化上限 8（主线程峰值 ≤16ms/tick）；encode/压缩/hash/发送全在推送池——1.21.2+ 主线程仅 build（对齐原版，ThreadingDetector 约束），<1.21.2 全后台 | [`chunk-cache.md`](chunk-cache.md)、[`runtime-smoke-test.md`](runtime-smoke-test.md) |
 | **分段增量** | `clientCache.sectionDeltaEnabled`（默认 true） | MISMATCH 时按 section 比对，仅补变更分段 + BE 覆盖；失败/超时回退全量 | [`chunk-cache.md`](chunk-cache.md) §11.5、[`disk-nbt-cache.md`](disk-nbt-cache.md) |
-| **超视渲染** | `viewDistanceExtensionEnabled`、`maxRenderDistance`、`ovdUnloadDelaySecs` | 多人、clientVD>serverVD 时本地缓存回填环带；Forget 原地 renderOnly；不向服索要视距外区块/BE | [`ovd.md`](ovd.md)、[`chunk-cache.md`](chunk-cache.md) §10 |
-| **世界导出** | `/hassiumc export [<服务器IP>] [seed]` | 客户端缓存 → 原版 Anvil（type2 zlib）；无实体/仅去过的区块快照 | [`chunk-cache.md`](chunk-cache.md) §12、[`disk-nbt-cache.md`](disk-nbt-cache.md) |
 | **主控热切** | `network.controlReachableEndpoints`、`network.dataPlane.controlStallMs` | TCP 主控 `channelInactive`，或控制面 stalled 且 UDP 健康时，客户端进入恢复态并按 priority 串行重连；恢复期世界定格（tick 暂停、断连画面抑制、过渡画面仅隐藏渲染；可切无感模式），画面保持冻结世界 + 切换浮层；服务端许可路径以 `FailoverPermit` 限定时效；候选耗尽后终态清理只执行一次 | [`runtime-smoke-test.md`](runtime-smoke-test.md) §`udp-failover` |
 | **加权分流** | `network.dataPlane.udpListeners`、每 listener `weight` | 每个 UDP/KCP listener 建独立 session，S2C bulk 按权重加权轮询；不健康或无可用 session 时回落 TCP，控制面始终保留 TCP | [`runtime-smoke-test.md`](runtime-smoke-test.md) §`udp-failover` |
 | **多通道数据面（历史）** | 早期 `DataPlanePoCConfig` | 1.20.1 Fabric 的双裸 TCP PoC 已退役，不是生产配置或运维入口 | [`multi-channel_network_research.md`](multi-channel_network_research.md) |
+
+### 9.2 区块缓存
+
+| 特性 | 配置 / 命令 | 要点 | 详文 |
+|------|-------------|------|------|
+| **客户端区块缓存** | `clientCache.enabled`（默认 true） | chunkHash 比对命中即本地 apply；磁盘 NBT（`HBT1`）按热度淘汰 | [`chunk-cache.md`](chunk-cache.md)、[`disk-nbt-cache.md`](disk-nbt-cache.md) |
+| **世界导出** | `/hassiumc export [<服务器IP>] [seed]` | 客户端缓存 → 原版 Anvil（type2 zlib）；无实体/仅去过的区块快照 | [`chunk-cache.md`](chunk-cache.md) §12、[`disk-nbt-cache.md`](disk-nbt-cache.md) |
+
+### 9.3 超视渲染
+
+| 特性 | 配置 / 命令 | 要点 | 详文 |
+|------|-------------|------|------|
+| **超视渲染** | `viewDistanceExtensionEnabled`、`maxRenderDistance`、`ovdUnloadDelaySecs` | 多人、clientVD>serverVD 时本地缓存回填环带；Forget 原地 renderOnly；不向服索要视距外区块/BE | [`ovd.md`](ovd.md)、[`chunk-cache.md`](chunk-cache.md) §10 |
+
+### 9.4 光照优化
+
+| 特性 | 配置 / 命令 | 要点 | 详文 |
+|------|-------------|------|------|
+| **光照剥离** | `network.lightStrip`（默认 true） | 服务端发包带空 lightMask（构造近零成本）；客户端本地重算并回写缓存 | [`chunk-cache.md`](chunk-cache.md)、[`runtime-smoke-test.md`](runtime-smoke-test.md) |
+| **光照缓存** | `clientCache.lightCacheEnabled`（默认 true） | 首次重算后缓存光照，命中直接 apply 跳过同步重算；SectionDelta 合并强制失效 | [`chunk-cache.md`](chunk-cache.md)、[`disk-nbt-cache.md`](disk-nbt-cache.md) |
+| **并行光照** | `clientCache.parallelLightEngineEnabled`（默认 true）、`parallelLightEngineThreads`（4） | 重算在后台线程池并行，主线程只做 9 柱快照捕获与提交；完成回调在预算内排程 | [`chunk-cache.md`](chunk-cache.md)、[`runtime-smoke-test.md`](runtime-smoke-test.md) |
 
 客户端磁盘缓存 payload 为 NBT（`"HBT1"` + CompoundTag），主一致性路径为 **Live-Unload Snapshot**（renderOnly 跳过落盘）。控制恢复期间缓存写队列与执行器保持可用，重连成功后继续命中既有缓存；旧 packet 字节缓存读到即删并全量请求。
 
