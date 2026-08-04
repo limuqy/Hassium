@@ -302,6 +302,13 @@ public class ClientCacheLoadQueue {
             }
             Constants.LOG.debug("[CACHE_APPLY] Applying chunk {} to world (renderOnly={}, hasLight={}, remaining={})",
                     chunk.pos(), chunk.renderOnly(), chunk.hasCachedLight(), readyQueue.size());
+            // 缓存无光照（is_light_on=0）：apply 前预提交重算。solve（~3ms，后台池）与 packet
+            // 解码/渲染构建并行，渲染时光照大概率已落地 —— 消除「渲染先于光照落地」的跨帧黑块
+            // （MixinLightRecompute TAIL 的精确提交仍会执行并覆盖粗结果，双算成本可忽略）。
+            // renderOnly 走 VDES 自己的路径，不预提交。
+            if (!chunk.renderOnly() && !chunk.hasCachedLight()) {
+                LightComputeService.getInstance().submitRecompute(chunk.pos(), chunk.lightWritebackNbt());
+            }
             boolean appliedToWorld = ClientChunkHandler.applyChunkData(
                     chunk.pos().x, chunk.pos().z, chunk.data(), chunk.renderOnly(),
                     chunk.lightWritebackNbt(), chunk.hasCachedLight());

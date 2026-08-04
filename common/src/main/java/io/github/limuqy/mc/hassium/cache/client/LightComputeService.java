@@ -73,14 +73,14 @@ public final class LightComputeService {
 
     /**
      * 主线程提交重算（输入一致性：9 柱快照同一时刻捕获）。
+     * <p>
+     * core chunk 允许尚未入世界（缓存读回预提交场景：apply 前启动 solve，与 packet 解码/
+     * 渲染构建并行，消除「渲染先于光照落地」的跨帧黑块）。域组装对未加载柱用空占位；
+     * 结果落地时 drainCompletions 校验 chunk 已入世界，未入则丢弃（TAIL 提交会补）。
      */
     public void submitRecompute(ChunkPos corePos, CompoundTag cachedNbt) {
         ClientLevel level = Minecraft.getInstance().level;
         if (level == null) {
-            return;
-        }
-        LevelChunk chunk = level.getChunkSource().getChunkNow(corePos.x, corePos.z);
-        if (chunk == null) {
             return;
         }
         int minSection = LevelHeightCompat.getMinSection(level);
