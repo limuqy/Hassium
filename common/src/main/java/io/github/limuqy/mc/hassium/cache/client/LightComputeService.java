@@ -393,7 +393,11 @@ public final class LightComputeService {
             synchronized (this) {
                 p = pool;
                 if (p == null || p.isShutdown()) {
-                    p = ExecutorFactory.create("hassium-light",
+                    // 光照 solve 是纯 CPU 密集任务：固定平台线程池（parallelLightEngineThreads，FIFO）。
+                    // 虚拟线程（每任务一线程、无并发上限）在进服 chunk 风暴下瞬时并发数百个 solve
+                    // 互相抢核超订，单任务 wall 时间膨胀数倍（实测 1.21.11 R1 均值 29.6ms vs
+                    // 平台池 ~5ms）；排队等待不计入后台耗时统计，FIFO 队列反而更可预测。
+                    p = ExecutorFactory.createPlatform("hassium-light",
                             HassiumConfigService.getInstance().getParallelLightEngineThreads());
                     pool = p;
                 }
