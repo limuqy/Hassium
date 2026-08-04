@@ -17,7 +17,9 @@ import net.minecraft.world.level.lighting.LevelLightEngine;
 import net.minecraft.world.phys.shapes.Shapes;
 import net.minecraft.world.phys.shapes.VoxelShape;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -45,6 +47,26 @@ public final class LightComputeService {
     private static final int W = DOMAIN_CHUNKS * 16;
     private static final int CORE_OFFSET = 16;
     private static final int SNAPSHOT_CACHE_MAX = 128;
+    /**
+     * 主线程单帧最多捕获的 16×16 柱数。每块完整域需 9 柱；按切片采样避免一个区块 apply
+     * 同步占用整个帧，同时后台仍可并行处理已完成的不可变快照。
+     */
+    private static final int MAX_CAPTURE_COLUMNS_PER_FRAME = 12;
+    private static final int MAX_COLUMNS_PER_CAPTURE_SLICE = 3;
+    private static final long CAPTURE_BUDGET_NS = 2_000_000L;
+    /**
+     * 捕获等待邻居就绪的最大帧数。超过后该柱降级为空占位（视距边缘等永不到达场景），
+     * 代价仅为边界 1 格可能偏暗；避免任务无限挂起。
+     */
+    private static final int NEIGHBOR_WAIT_FRAMES = 20;
+    /**
+     * 单帧最大入批结果数。批尾 {@code runLightUpdates} 全量传播不受帧预算约束（预算循环
+     * 只限制 poll），风暴期单帧 poll 可入队 18+ 块 → 批尾一次传播数十块，主线程帧时间爆炸
+     * （实测加载期 9/10 采样主线程卡在传播链）。限批 = 限传播量：每帧传播成本与入批数线性。
+     */
+    private static final int MAX_RESULTS_PER_FRAME = 8;
+    private static final int[][] DOMAIN_OFFSETS = {{-1, -1}, {0, -1}, {1, -1}, {-1, 0},
+            {0, 0}, {1, 0}, {-1, 1}, {0, 1}, {1, 1}};
     private static final int[] OPPOSITE_DIR = {LightFloodFill.UP, LightFloodFill.DOWN,
             LightFloodFill.SOUTH, LightFloodFill.NORTH, LightFloodFill.EAST, LightFloodFill.WEST};
 
@@ -55,86 +77,240 @@ public final class LightComputeService {
     }
 
     private final ConcurrentLinkedQueue<LightComputeResult> results = new ConcurrentLinkedQueue<>();
-    private final LinkedHashMap<Long, LightColumnSnapshot> snapshotCache = new LinkedHashMap<>(256, 0.75f, true) {
+    /** 仅 Render thread 访问：把昂贵的世界快照分散到多个 tick。 */
+    private final ArrayDeque<CaptureTask> pendingCaptures = new ArrayDeque<>();
+    private final Map<Long, CaptureTask> pendingByCore = new HashMap<>();
+    private final LinkedHashMap<Long, SnapshotCacheEntry> snapshotCache = new LinkedHashMap<>(256, 0.75f, true) {
         @Override
-        protected boolean removeEldestEntry(Map.Entry<Long, LightColumnSnapshot> eldest) {
+        protected boolean removeEldestEntry(Map.Entry<Long, SnapshotCacheEntry> eldest) {
             return size() > SNAPSHOT_CACHE_MAX;
         }
     };
     private volatile ExecutorService pool;
+    /** 断连后拒绝仍在运行的旧会话任务及其结果。 */
+    private volatile long generation;
+    private final java.util.concurrent.atomic.AtomicInteger diagCapture = new java.util.concurrent.atomic.AtomicInteger();
+    private final java.util.concurrent.atomic.AtomicInteger diagBg = new java.util.concurrent.atomic.AtomicInteger();
+    private final java.util.concurrent.atomic.AtomicInteger diagApply = new java.util.concurrent.atomic.AtomicInteger();
 
     private LightComputeService() {
     }
 
+    /** 限频诊断日志（定位并行引擎断链用，定位后移除）。 */
+    private void diagCapture(String msg, Object... args) {
+        if (diagCapture.getAndIncrement() < 10) {
+            Constants.LOG.info("[LIGHT-DIAG-CAPTURE] " + msg, args);
+        }
+    }
+
+    private void diagBg(String msg, Object... args) {
+        if (diagBg.getAndIncrement() < 10) {
+            Constants.LOG.info("[LIGHT-DIAG-BG] " + msg, args);
+        }
+    }
+
+    private void diagApply(String msg, Object... args) {
+        if (diagApply.getAndIncrement() < 10) {
+            Constants.LOG.info("[LIGHT-DIAG-APPLY] " + msg, args);
+        }
+    }
+
     /** 后台任务产物：核心柱各 section 的 sky/block 半字节数组（DataLayer 布局，2048 字节）。 */
-    public record LightComputeResult(ChunkPos corePos, byte[][] skySections, byte[][] blockSections,
-                                     CompoundTag cachedNbt) {
+    public record LightComputeResult(ChunkPos corePos, LevelChunk expectedCoreChunk,
+                                     byte[][] skySections, byte[][] blockSections,
+                                     CompoundTag cachedNbt, long generation, long captureNanos) {
+    }
+
+    private record SnapshotCacheEntry(LevelChunk chunk, LightColumnSnapshot snapshot) {
+    }
+
+    /** 一个核心块的 9 柱主线程采样状态；填满后只传递不可变快照到后台。 */
+    private static final class CaptureTask {
+        private final ChunkPos corePos;
+        private final int minSection;
+        private final int sectionCount;
+        private final int minY;
+        private final int height;
+        private final long generation;
+        private final LightColumnSnapshot[] snapshots = new LightColumnSnapshot[DOMAIN_OFFSETS.length];
+        private LevelChunk expectedCoreChunk;
+        private CompoundTag cachedNbt;
+        private int nextColumn;
+        private int waitFrames;
+        private long captureNanos;
+
+        private CaptureTask(ChunkPos corePos, int minSection, int sectionCount, int minY, int height,
+                            LevelChunk expectedCoreChunk, CompoundTag cachedNbt, long generation) {
+            this.corePos = corePos;
+            this.minSection = minSection;
+            this.sectionCount = sectionCount;
+            this.minY = minY;
+            this.height = height;
+            this.expectedCoreChunk = expectedCoreChunk;
+            this.cachedNbt = cachedNbt;
+            this.generation = generation;
+        }
+
+        private void retainNbt(CompoundTag nbt) {
+            if (cachedNbt == null && nbt != null) {
+                cachedNbt = nbt;
+            }
+        }
+
+        private void restart(LevelChunk coreChunk) {
+            java.util.Arrays.fill(snapshots, null);
+            expectedCoreChunk = coreChunk;
+            nextColumn = 0;
+            waitFrames = 0;
+            captureNanos = 0L;
+        }
     }
 
     /**
-     * 主线程提交重算（输入一致性：9 柱快照同一时刻捕获）。
+     * 登记一次重算。世界读取始终留在 Render thread；9 柱采样由 {@link #drainCompletions}
+     * 按帧预算完成，随后后台执行域组装与 BFS。
      * <p>
-     * core chunk 允许尚未入世界（缓存读回预提交场景：apply 前启动 solve，与 packet 解码/
-     * 渲染构建并行，消除「渲染先于光照落地」的跨帧黑块）。域组装对未加载柱用空占位；
-     * 结果落地时 drainCompletions 校验 chunk 已入世界，未入则丢弃（TAIL 提交会补）。
+     * 缓存预提交时 core chunk 尚未入世界也允许登记；TAIL 再次提交时检测到 chunk 身份变化，
+     * 会丢弃预提交的部分采样并从权威 chunk 重启。
      */
     public void submitRecompute(ChunkPos corePos, CompoundTag cachedNbt) {
         ClientLevel level = Minecraft.getInstance().level;
         if (level == null) {
             return;
         }
+        long key = ChunkPos.asLong(corePos.x, corePos.z);
+        LevelChunk coreChunk = level.getChunkSource().getChunkNow(corePos.x, corePos.z);
+        CaptureTask task = pendingByCore.get(key);
+        if (task != null) {
+            task.retainNbt(cachedNbt);
+            if (task.expectedCoreChunk != coreChunk) {
+                task.restart(coreChunk);
+            }
+            return;
+        }
         int minSection = LevelHeightCompat.getMinSection(level);
         int maxSection = LevelHeightCompat.getMaxSectionExclusive(level);
-        int sectionCount = maxSection - minSection;
-        int minY = LevelHeightCompat.getMinBlockY(level);
-        int height = level.getHeight();
+        task = new CaptureTask(corePos, minSection, maxSection - minSection,
+                LevelHeightCompat.getMinBlockY(level), level.getHeight(), coreChunk, cachedNbt, generation);
+        pendingByCore.put(key, task);
+        pendingCaptures.add(task);
+    }
 
-        // ---- 主线程域组装（9 柱；未加载邻居用空占位）----
-        int cells = W * W * height;
-        byte[] domainLightBlock = new byte[cells];
-        int[] domainShapeIds = new int[cells];
-        int[] domainSourceY = new int[W * W];
-        java.util.Arrays.fill(domainSourceY, LightFloodFill.NO_COLUMN);
-        List<Integer> emitters = new ArrayList<>();
-        List<VoxelShape[]> allShapes = new ArrayList<>();
-        int[][] offsets = {{-1, -1}, {0, -1}, {1, -1}, {-1, 0}, {0, 0}, {1, 0}, {-1, 1}, {0, 1}, {1, 1}};
-
-        for (int[] off : offsets) {
-            int cx = corePos.x + off[0];
-            int cz = corePos.z + off[1];
-            LightColumnSnapshot snap;
-            if (level.getChunkSource().getChunkNow(cx, cz) == null) {
-                snap = LightColumnSnapshot.empty(minY, height);
-            } else {
-                snap = snapshotOrCapture(level, cx, cz);
+    /**
+     * 在 Render thread 采样少量柱。每一柱完整读取，因而不会把 {@link ClientLevel}/{@code BlockState}
+     * 访问泄漏到后台；完整 3×3 域一旦就绪，之后的数组组装、BFS、NBT 回读全在 CPU 池完成。
+     */
+    private void capturePending(ClientLevel level, long outerDeadlineNs) {
+        long captureDeadlineNs = Math.min(outerDeadlineNs, System.nanoTime() + CAPTURE_BUDGET_NS);
+        int captured = 0;
+        while (captured < MAX_CAPTURE_COLUMNS_PER_FRAME && System.nanoTime() < captureDeadlineNs) {
+            CaptureTask task = pendingCaptures.poll();
+            if (task == null) {
+                return;
             }
-            assemble(snap, off[0], off[1], height,
-                    domainLightBlock, domainShapeIds, domainSourceY, emitters, allShapes);
+            if (task.generation != generation) {
+                pendingByCore.remove(ChunkPos.asLong(task.corePos.x, task.corePos.z), task);
+                continue;
+            }
+            LevelChunk coreChunk = level.getChunkSource().getChunkNow(task.corePos.x, task.corePos.z);
+            if (task.expectedCoreChunk != coreChunk) {
+                task.restart(coreChunk);
+            }
+            int slice = 0;
+            while (task.nextColumn < DOMAIN_OFFSETS.length && slice < MAX_COLUMNS_PER_CAPTURE_SLICE
+                    && captured < MAX_CAPTURE_COLUMNS_PER_FRAME && System.nanoTime() < captureDeadlineNs) {
+                int[] off = DOMAIN_OFFSETS[task.nextColumn];
+                int cx = task.corePos.x + off[0];
+                int cz = task.corePos.z + off[1];
+                LevelChunk chunk = level.getChunkSource().getChunkNow(cx, cz);
+                if (chunk == null) {
+                    // 邻居（或核心块）未加载：等待而非空柱占位。3×3 域缺角会让
+                    // BFS 边界 1 格固化暗值（视觉环带），且结果会被写回缓存永久固化。
+                    // 任务放回队尾轮转，waitFrames 超时后用 empty 兜底（视距边缘）。
+                    if (task.waitFrames < NEIGHBOR_WAIT_FRAMES) {
+                        task.waitFrames++;
+                        pendingCaptures.add(task);
+                        break;
+                    }
+                }
+                long captureStartNs = System.nanoTime();
+                try {
+                    task.snapshots[task.nextColumn] = chunk == null
+                            ? LightColumnSnapshot.empty(task.minY, task.height)
+                            : snapshotOrCapture(level, chunk, cx, cz);
+                } catch (Throwable t) {
+                    // 单柱采样失败：作废整个任务（该 core 稍后 TAIL 提交会重建），不得静默卡死队列
+                    diagCapture("capture FAIL {} col={} off={},{} err={}", task.corePos, task.nextColumn, off[0], off[1], t);
+                    pendingByCore.remove(ChunkPos.asLong(task.corePos.x, task.corePos.z), task);
+                    task = null;
+                    break;
+                }
+                task.captureNanos += System.nanoTime() - captureStartNs;
+                task.nextColumn++;
+                slice++;
+                captured++;
+            }
+            if (task == null) {
+                continue;
+            }
+            if (task.nextColumn == DOMAIN_OFFSETS.length) {
+                pendingByCore.remove(ChunkPos.asLong(task.corePos.x, task.corePos.z), task);
+                diagCapture("capture done {} gen={} queue={} caps={}us", task.corePos, task.generation,
+                        pendingCaptures.size(), task.captureNanos / 1000);
+                submitCapturedTask(task);
+            } else {
+                pendingCaptures.add(task);
+            }
         }
-        int[] emitterArr = emitters.stream().mapToInt(Integer::intValue).toArray();
-        VoxelShape[][] shapeTable = allShapes.toArray(new VoxelShape[0][]);
-        LightFloodFill.Occlusion occlusion = (srcShape, dstShape, dir) -> Shapes.faceShapeOccludes(
-                shapeTable[srcShape][dir], shapeTable[dstShape][OPPOSITE_DIR[dir]]);
+    }
 
+    /** 所有输入已不可变；该任务不得再触碰 ClientLevel、chunk source 或 light engine。 */
+    private void submitCapturedTask(CaptureTask task) {
         ExecutorService p = ensurePool();
         p.execute(() -> {
             try {
-                // 后台线程补充缓存 NBT（主线程调用方可能未携带）：读盘+ZSTD 解压
-                // 在后台线程完成，避免 updateCacheWithLightData 的 fallback 在主线程读盘。
-                net.minecraft.nbt.CompoundTag nbt = cachedNbt;
+                if (task.generation != generation) {
+                    diagBg("drop {} gen={} current={}", task.corePos, task.generation, generation);
+                    return;
+                }
+                diagBg("start {}", task.corePos);
+                long backgroundStartNs = System.nanoTime();
+                int cells = W * W * task.height;
+                byte[] domainLightBlock = new byte[cells];
+                int[] domainShapeIds = new int[cells];
+                int[] domainSourceY = new int[W * W];
+                java.util.Arrays.fill(domainSourceY, LightFloodFill.NO_COLUMN);
+                List<Integer> emitters = new ArrayList<>();
+                List<VoxelShape[]> allShapes = new ArrayList<>();
+                for (int i = 0; i < DOMAIN_OFFSETS.length; i++) {
+                    int[] off = DOMAIN_OFFSETS[i];
+                    assemble(task.snapshots[i], off[0], off[1], task.height,
+                            domainLightBlock, domainShapeIds, domainSourceY, emitters, allShapes);
+                }
+                int[] emitterArr = emitters.stream().mapToInt(Integer::intValue).toArray();
+                VoxelShape[][] shapeTable = allShapes.toArray(new VoxelShape[0][]);
+                LightFloodFill.Occlusion occlusion = (srcShape, dstShape, dir) -> Shapes.faceShapeOccludes(
+                        shapeTable[srcShape - 1][dir], shapeTable[dstShape - 1][OPPOSITE_DIR[dir]]);
+                CompoundTag nbt = task.cachedNbt;
                 if (nbt == null) {
                     nbt = io.github.limuqy.mc.hassium.network.ClientChunkHandler
-                            .loadChunkNbtFromCache(corePos);
+                            .loadChunkNbtFromCache(task.corePos);
                 }
-                long backgroundStartNs = System.nanoTime();
-                LightFloodFill.Result r = LightFloodFill.solve(W, height,
+                LightFloodFill.Result r = LightFloodFill.solve(W, task.height,
                         domainLightBlock, emitterArr, domainSourceY, domainShapeIds, occlusion);
-                byte[][] skySections = extractCore(r.skyLight(), minSection, sectionCount, height);
-                byte[][] blockSections = extractCore(r.blockLight(), minSection, sectionCount, height);
+                byte[][] skySections = extractCore(r.skyLight(), task.minSection, task.sectionCount, task.height);
+                byte[][] blockSections = extractCore(r.blockLight(), task.minSection, task.sectionCount, task.height);
                 NetworkStats.recordLightRecomputeBackgroundTime(System.nanoTime() - backgroundStartNs);
-                results.add(new LightComputeResult(corePos, skySections, blockSections, nbt));
+                diagBg("done {} elapsed={}us", task.corePos, (System.nanoTime() - backgroundStartNs) / 1000);
+                if (task.generation == generation) {
+                    results.add(new LightComputeResult(task.corePos, task.expectedCoreChunk, skySections, blockSections,
+                            nbt, task.generation, task.captureNanos));
+                }
             } catch (Throwable t) {
-                Constants.LOG.error("Hassium: Parallel light recompute failed for {}", corePos, t);
+                diagBg("error {}: {}", task.corePos, t);
+                if (task.generation == generation) {
+                    Constants.LOG.error("Hassium: Parallel light recompute failed for {}", task.corePos, t);
+                }
             }
         });
     }
@@ -153,9 +329,10 @@ public final class LightComputeService {
         if (level == null) {
             return; // 断连/未进服：结果由 clear() 清理，不消费
         }
+        capturePending(level, deadlineNs);
         LevelLightEngine lightEngine = level.getLightEngine();
         java.util.List<LightComputeResult> batch = new java.util.ArrayList<>();
-        while (System.nanoTime() < deadlineNs) {
+        while (System.nanoTime() < deadlineNs && batch.size() < MAX_RESULTS_PER_FRAME) {
             LightComputeResult r = results.poll();
             if (r == null) {
                 break;
@@ -185,9 +362,12 @@ public final class LightComputeService {
         }
     }
 
-    /** 断连清理：清空结果队列、快照缓存并关闭线程池（下次提交重建）。 */
+    /** 断连清理：拒绝旧会话任务、清空全部队列与快照缓存并关闭线程池（下次提交重建）。 */
     public void clear() {
+        generation++;
         results.clear();
+        pendingCaptures.clear();
+        pendingByCore.clear();
         synchronized (snapshotCache) {
             snapshotCache.clear();
         }
@@ -200,17 +380,25 @@ public final class LightComputeService {
 
     /** 阶段一（预算内）：校验 + 建层 + 入队 + 光源校准，不含落地。返回是否入批。 */
     private boolean applyResultEnqueue(ClientLevel level, LevelLightEngine lightEngine, LightComputeResult r) {
-        LevelChunk chunk = level.getChunkSource().getChunkNow(r.corePos().x, r.corePos().z);
-        if (chunk == null) {
-            return false; // 卸载竞态：丢弃
+        if (r.generation() != generation) {
+            diagApply("drop {} reason=generation {}!={}", r.corePos(), r.generation(), generation);
+            return false;
         }
+        LevelChunk chunk = level.getChunkSource().getChunkNow(r.corePos().x, r.corePos().z);
+        if (chunk == null || chunk != r.expectedCoreChunk()) {
+            diagApply("drop {} reason=chunk {}!={}", r.corePos(),
+                    chunk == null ? "null" : System.identityHashCode(chunk),
+                    r.expectedCoreChunk() == null ? "null" : System.identityHashCode(r.expectedCoreChunk()));
+            return false; // 卸载/刷新竞态：旧快照不得覆盖新权威 chunk
+        }
+        diagApply("ok {} gen={} capture={}us", r.corePos(), r.generation(), r.captureNanos() / 1000);
         // 主线程光照应用耗时（同步路径同口径：applyLightEngine 的 finally 记录同一指标；
-        // 批量共享的 runLightUpdates 与后台化写回不计入单结果）
+        // 分帧 capture 时间在此合并，批量共享的 runLightUpdates 与后台化写回不计入单结果）
         long mainThreadStartNs = System.nanoTime();
         try {
             applyResultEnqueueInner(level, lightEngine, r);
         } finally {
-            NetworkStats.recordLightRecomputeTime(System.nanoTime() - mainThreadStartNs);
+            NetworkStats.recordLightRecomputeTime(System.nanoTime() - mainThreadStartNs + r.captureNanos());
         }
         return true;
     }
@@ -261,6 +449,9 @@ public final class LightComputeService {
         long mismatch = 0;
         long skyMismatch = 0;
         long blockMismatch = 0;
+        long edgeMismatch = 0;
+        long edgeSky = 0;
+        long edgeBlock = 0;
         StringBuilder samples = new StringBuilder();
         int sectionCount = Math.min(r.skySections().length, maxSection - minSection);
         for (int s = 0; s < sectionCount; s++) {
@@ -270,8 +461,11 @@ public final class LightComputeService {
             DataLayer blockOfficial = lightEngine.getLayerListener(LightLayer.BLOCK).getDataLayerData(sp);
             skyMismatch += compareLayer("sky", samples, sectionY, skyOfficial, r.skySections()[s]);
             blockMismatch += compareLayer("block", samples, sectionY, blockOfficial, r.blockSections()[s]);
+            edgeSky += compareEdge("sky", sectionY, skyOfficial, r.skySections()[s]);
+            edgeBlock += compareEdge("block", sectionY, blockOfficial, r.blockSections()[s]);
         }
         mismatch = skyMismatch + blockMismatch;
+        edgeMismatch = edgeSky + edgeBlock;
         NetworkStats.recordLightVerifyMismatch(mismatch);
         if (mismatch > 0) {
             Constants.LOG.error("[LIGHT_VERIFY] chunk {} mismatch={} (sky={} block={})", r.corePos(), mismatch, skyMismatch, blockMismatch);
@@ -280,6 +474,10 @@ public final class LightComputeService {
             }
         } else {
             Constants.LOG.debug("[LIGHT_VERIFY] chunk {} ok", r.corePos());
+        }
+        if (edgeMismatch > 0) {
+            Constants.LOG.error("[LIGHT_VERIFY-EDGE] chunk {} edgeMismatch={} (sky={} block={})",
+                    r.corePos(), edgeMismatch, edgeSky, edgeBlock);
         }
     }
 
@@ -305,20 +503,47 @@ public final class LightComputeService {
     }
 
 
+    /** 边界格（x/z ∈ {0,15}）对比：邻居缺失导致的边缘暗值在此暴露。 */
+    private static long compareEdge(String layer, int sectionY, DataLayer official, byte[] bfs) {
+        long mismatch = 0;
+        for (int y = 0; y < 16; y++) {
+            for (int x = 0; x < 16; x += 15) {
+                for (int z = 0; z < 16; z++) {
+                    int officialValue = official == null ? 0 : official.get(x, y, z);
+                    int bfsValue = nibbleAt(bfs, x, y, z);
+                    if (officialValue != bfsValue) {
+                        mismatch++;
+                    }
+                }
+            }
+            for (int z = 0; z < 16; z += 15) {
+                for (int x = 1; x < 15; x++) {
+                    int officialValue = official == null ? 0 : official.get(x, y, z);
+                    int bfsValue = nibbleAt(bfs, x, y, z);
+                    if (officialValue != bfsValue) {
+                        mismatch++;
+                    }
+                }
+            }
+        }
+        return mismatch;
+    }
+
     private static int nibbleAt(byte[] data, int x, int y, int z) {
         int index = (y << 8) | (z << 4) | x;
         return (data[index >> 1] >> ((index & 1) * 4)) & 0xF;
     }
 
-    private LightColumnSnapshot snapshotOrCapture(ClientLevel level, int cx, int cz) {
+    private LightColumnSnapshot snapshotOrCapture(ClientLevel level, LevelChunk chunk, int cx, int cz) {
         long key = ChunkPos.asLong(cx, cz);
         synchronized (snapshotCache) {
-            LightColumnSnapshot s = snapshotCache.get(key);
-            if (s == null) {
-                s = LightColumnSnapshot.capture(level, cx, cz);
-                snapshotCache.put(key, s);
+            SnapshotCacheEntry entry = snapshotCache.get(key);
+            if (entry == null || entry.chunk() != chunk) {
+                LightColumnSnapshot snapshot = LightColumnSnapshot.capture(level, cx, cz);
+                entry = new SnapshotCacheEntry(chunk, snapshot);
+                snapshotCache.put(key, entry);
             }
-            return s;
+            return entry.snapshot();
         }
     }
 
@@ -358,7 +583,9 @@ public final class LightComputeService {
             int z = (cell >> 4) & 0xF;
             int x = cell & 0xF;
             int dst = (y * W + (baseZ + z)) * W + (baseX + x);
-            domainShapeIds[dst] = allShapes.size();
+            // 0 是 LightFloodFill 的「无形状」哨兵；真实形状编号必须从 1 开始。
+            // 否则域中的第一个遮挡方块会被当成空气，BFS 与官方引擎产生系统性偏差。
+            domainShapeIds[dst] = allShapes.size() + 1;
             allShapes.add(shapeFaces[i]);
         }
     }

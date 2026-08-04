@@ -25,7 +25,7 @@ Smaller world saves and bandwidth than vanilla, local chunk reuse, and smoother 
 | --- | --- | --- |
 | **Efficient compression** | Storage compression | World chunk ZSTD on disk (type 126) for smaller saves; keeps vanilla Region (`.mca`) layout |
 | | Network compression | More efficient compression for chunks and packets (custom channels + global pipeline + packet aggregation) — less bandwidth and wait time |
-| **Network optimization** | Smooth push | Constant-rate server throttling (150 chunks/s token bucket) + per-tick serialization cap with background encoding; join and view expansion never saturate the main thread |
+| **Network optimization** | Smooth push | Constant-rate server throttling (64 chunks/s token bucket) + per-tick serialization cap with background encoding; join and view expansion never saturate the main thread |
 | | Control failover | On TCP-control stall or drop, auto-reconnect via candidate endpoints with warm cache and hidden disconnect screen (data-plane failover) |
 | | Weighted routing | Multiple UDP/KCP endpoints carry the data plane by weighted round-robin; control plane stays on vanilla TCP |
 | **Chunk caching** | Client chunk cache | Loaded chunks are kept locally; revisiting an area hits via contentHash comparison instead of full downloads |
@@ -93,8 +93,8 @@ Files: `config/hassium/hassium-client.toml`, `config/hassium/hassium-server.toml
 | `clientCache.ovdUnloadDelaySecs` | `5` | Delay unload after leaving beyond-view ring (s; 0=sync) |
 | `network.enabled` | `true` | Custom channels |
 | `network.globalPacketCompression` | `true` | Global ZSTD |
-| `network.maxChunksPerTick` | `8` | Per-player main-thread serialization cap per tick (recommend ≥ `smoothChunkSendRate`/20) |
-| `network.smoothChunkSendRate` | `150` | Per-player smooth chunk send rate (chunks/s; token-bucket constant rate, flattens tick bursts) |
+| `network.maxChunksPerTick` | `4` | Per-player main-thread serialization cap per tick (recommend ≥ `smoothChunkSendRate`/20) |
+| `network.smoothChunkSendRate` | `64` | Per-player smooth chunk send rate (chunks/s; token-bucket constant rate, flattens tick bursts) |
 | `clientCache.mainThreadChunkBudgetMs` | `15` | Client apply budget per frame (ms) |
 | `clientCache.parallelLightEngineEnabled` | `true` | Parallel light (recompute on a background pool; main thread only submits snapshots) |
 | `clientCache.parallelLightEngineThreads` | `4` | Parallel light thread count (ignored in virtual-thread mode) |

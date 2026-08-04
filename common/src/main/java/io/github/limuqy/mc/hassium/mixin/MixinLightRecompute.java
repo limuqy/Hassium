@@ -36,6 +36,9 @@ public class MixinLightRecompute {
         var lightData = packet.getLightData();
         if (!lightData.getSkyYMask().isEmpty() || !lightData.getBlockYMask().isEmpty()
                 || !lightData.getEmptySkyYMask().isEmpty() || !lightData.getEmptyBlockYMask().isEmpty()) {
+            // 服务端带光块：仍须校准已落地邻居。先落地的内圈块重算时缺少本块，
+            // 边界 1 格固化暗值；本块到达后必须把它们补亮，否则形成视觉暗环。
+            ClientLightRecomputeService.calibrateLoadedNeighbors(level, new ChunkPos(packet.getX(), packet.getZ()));
             return;
         }
 

@@ -203,5 +203,13 @@ public class MixinClientTick {
         } catch (Exception e) {
             // 忽略提交错误
         }
+
+        // 帧尾合并校准传播：加载期每帧几十块落地，逐块 runLightUpdates 会占满主线程
+        // （profiler：calibrate 内 runLightUpdates ~10%）；此处渲染前统一跑一次。
+        try {
+            io.github.limuqy.mc.hassium.cache.client.ClientLightRecomputeService.flushPendingCalibrations();
+        } catch (Exception e) {
+            // 忽略
+        }
     }
 }

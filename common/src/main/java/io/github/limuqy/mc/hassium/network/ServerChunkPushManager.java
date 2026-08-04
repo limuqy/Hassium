@@ -1030,11 +1030,10 @@ public class ServerChunkPushManager {
     }
 
     /**
-     * 每 tick 提交最多 maxChunksPerTick 个区块到发送链。
+     * 每 tick 构建最多 maxChunksPerTick 个区块包快照，并将编码、压缩、限速与发送下推 pushPool。
      * <p>
-     * 1.21.2+（区块系统重构引入 PalettedContainer ThreadingDetector，禁止跨线程读 chunk）：
-     * 序列化必须在主线程/原版 ChunkSender 线程，本方法在主线程序列化后压缩发送下推 pushPool；
-     * 1.20.x / 1.21.1（无检测）：序列化/压缩/限速/发送全部在 pushPool，主线程只出队 + 提交。
+     * 任何版本都不能让 pushPool 读取 {@link LevelChunk}：1.20.1 已证实其
+     * {@code PalettedContainer} 会与服务端主线程并发访问并抛出 ThreadingDetector 异常。
      */
     private void drainPlayerQueueTick(ServerPlayer player) {
         UUID playerId = player.getUUID();
@@ -1070,65 +1069,14 @@ public class ServerChunkPushManager {
             List<SerializedChunkWork> works = new ArrayList<>(maxPerTick);
             int processed = 0;
 
-#if MC_VER < MC_1_21_2
-            // 后台序列化：主线程只出队 + getChunk（确认已加载）+ 提交；
-            // prepared 缓存命中与否在后台判定（take 为 ConcurrentHashMap 操作）。
-            while (processed < maxPerTick && !queue.isEmpty()) {
-                if (!player.isAlive() || player.hasDisconnected()) {
-                    removePlayer(playerId);
-                    return;
-                }
+            // 所有版本主线程构建 packet 快照：1.20.1 的 ThreadingDetector 是信号量互斥，
+            // 主线程 tick 写 chunk 与后台 build 并发即引爆（本次 01:09:04 [10,3] 崩溃实测），
+            // 无合法后台读路径；packet 内部数据已脱离世界对象，encode/压缩/限速/发送在 pushPool。
 
-                DataRequestTask task = queue.poll();
-                if (task == null) {
-                    break;
-                }
-
-                try {
-                    LevelChunk chunk = level.getChunk(task.pos().x, task.pos().z);
-                    if (chunk == null) {
-                        Constants.LOG.warn("[PROCESS_QUEUE] Chunk {} not loaded, skipping", task.pos());
-                        continue;
-                    }
-
-                    works.add(new SerializedChunkWork(player, task.pos(), chunk, null,
-                            level.registryAccess()));
-                    processed++;
-                    DebugLogger.info(LogType.NETWORK, "[PROCESS_QUEUE] Queued chunk {} (remaining={})",
-                            task.pos(), queue.size());
-                } catch (Exception e) {
-                    Constants.LOG.error("[PROCESS_QUEUE] Failed to queue chunk {} for player {}",
-                            task.pos(), player.getName().getString(), e);
-                }
-            }
-
-            if (!works.isEmpty()) {
-                DebugLogger.info(LogType.NETWORK, "[PROCESS_QUEUE] Tick drain for {}: queued={}, remaining={}",
-                        player.getName().getString(), works.size(), queue.size());
-                for (SerializedChunkWork work : works) {
-                    pushPool.submit(() -> {
-                        PreparedChunk prepared = takePreparedChunkPacket(work.player().getUUID(), work.pos());
-                        byte[] chunkData = prepared != null ? prepared.data() : null;
-                        if (chunkData == null) {
-                            if (prepared != null) {
-                                // 拦截路径缓存的 packet（主线程已 build）：后台 encode（纯数据）
-                                chunkData = encodeChunkPacket(prepared.packet(), work.registryAccess());
-                            } else {
-                                chunkData = serializeChunk(work.chunk(), level);
-                            }
-                        }
-                        if (chunkData == null) {
-                            Constants.LOG.warn("[PROCESS_QUEUE] Failed to serialize chunk {}", work.pos());
-                            return;
-                        }
-                        compressAndSend(work.player(), work.pos(), chunkData, sender);
-                    });
-                }
-            }
-#else
-            // 主线程只做 prepared 命中判定 + getChunk + buildChunkPacket（读 chunk 受 ThreadingDetector 限制必须主线程）；
-            // encode（packet 构造后为纯数据：内部 buffer 已含全部 section 字节）下推 pushPool，
-            // 与压缩/限速/发送同一后台任务——主线程序列化成本减半。
+            // 1.21.2+ 的 PalettedContainer ThreadingDetector 禁止跨线程读 chunk：
+            // 主线程构建完整 packet 快照，encode/压缩/限速/发送在 pushPool。
+            // <1.21.2 无检测：主线程只取 chunk 引用，build/encode 全后台（恢复 1.20.1 已验证的 150/s 路径）。
+            // packet 的内部 chunk/light 数据已脱离世界对象，线格式 encode、压缩、限速与发送仍在 pushPool。
             while (processed < maxPerTick && !queue.isEmpty()) {
                 if (!player.isAlive() || player.hasDisconnected()) {
                     removePlayer(playerId);
@@ -1156,14 +1104,15 @@ public class ServerChunkPushManager {
                                 continue;
                             }
                             packet = buildChunkPacket(chunk, level);
-                        }
-                        if (packet == null) {
-                            Constants.LOG.warn("[PROCESS_QUEUE] Failed to build chunk packet {}", task.pos());
-                            continue;
+                            if (packet == null) {
+                                Constants.LOG.warn("[PROCESS_QUEUE] Failed to build chunk packet {}", task.pos());
+                                continue;
+                            }
                         }
                     }
 
-                    works.add(new SerializedChunkWork(player, task.pos(), chunkData, packet, level.registryAccess()));
+                    works.add(new SerializedChunkWork(player, task.pos(), chunkData,
+                            packet, level.registryAccess()));
                     processed++;
                     DebugLogger.info(LogType.NETWORK, "[PROCESS_QUEUE] Built chunk packet {} (remaining={})",
                             task.pos(), queue.size());
@@ -1190,7 +1139,6 @@ public class ServerChunkPushManager {
                     });
                 }
             }
-#endif
         } finally {
             flag.set(false);
         }
@@ -1230,8 +1178,8 @@ public class ServerChunkPushManager {
     }
 
     /**
-     * 按原版构造路径构建区块包（pushPool 后台；读 chunk/光照快照，同原版 1.21.2+ ChunkSender 模式；
-     * 反透视等可在构造/写路径注入）。
+     * 按原版构造路径构建区块包。必须在拥有 LevelChunk 的调用线程执行；packet 构造完成后
+     * 已持有 section/light 的序列化快照，可安全地在 pushPool 编码、压缩并发送。
      */
     private ClientboundLevelChunkWithLightPacket buildChunkPacket(LevelChunk chunk, ServerLevel level) {
         try {
@@ -1283,16 +1231,6 @@ public class ServerChunkPushManager {
 #endif
     }
 
-    /**
-     * 序列化区块为字节数组（prepared 缓存未命中时的回退路径；pushPool 后台执行）。
-     */
-    private byte[] serializeChunk(LevelChunk chunk, ServerLevel level) {
-        ClientboundLevelChunkWithLightPacket chunkPacket = buildChunkPacket(chunk, level);
-        if (chunkPacket == null) {
-            return null;
-        }
-        return encodeChunkPacket(chunkPacket, level.registryAccess());
-    }
 
     private void putPreparedChunkPacket(UUID playerId, ChunkPos pos, byte[] data) {
         putPreparedChunkPacket(playerId, pos, new PreparedChunk(data, null));
@@ -1421,24 +1359,13 @@ public class ServerChunkPushManager {
      */
     private record DataRequestTask(ChunkPos pos, String dimension, double priority) {}
 
-#if MC_VER < MC_1_21_2
     /**
-     * 后台序列化工作项（<1.21.2 无 ThreadingDetector，后台读 chunk 合法）。
-     * chunk 为主线程 getChunk 确认已加载的引用；prepared 命中判定在后台，
-     * registryAccess 构建时冻结（服务端启动后只读），后台 encode 安全。
-     */
-    private record SerializedChunkWork(ServerPlayer player, ChunkPos pos, LevelChunk chunk,
-                                       ClientboundLevelChunkWithLightPacket packet,
-                                       RegistryAccess registryAccess) {}
-#else
-    /**
-     * 1.21.2+ 工作项：prepared 命中带已编码字节，miss 带主线程构建的 packet（纯数据，后台 encode）。
-     * registryAccess 构建时冻结（服务端启动后只读），后台 encode 安全。
+     * 工作项携带已构建 packet 或已编码字节；二者均不再读取世界对象，后台 encode 安全。
+     * registryAccess 在服务端启动后只读。
      */
     private record SerializedChunkWork(ServerPlayer player, ChunkPos pos,
                                        byte[] chunkData, ClientboundLevelChunkWithLightPacket packet,
                                        RegistryAccess registryAccess) {}
-#endif
 
     /**
      * 短窗口 ChunkHash 批次

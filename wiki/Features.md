@@ -37,7 +37,7 @@ Hassium 用一套客户端 + 服务端配合，从**高效压缩、网络优化�
 - **目标**：进服与视野扩展时服务端不把主线程压满、客户端不出现卡顿尖峰
 - **服务端怎么做**（推送侧）：
   - **恒定速率限速**：每玩家令牌桶按 `network.smoothChunkSendRate`（默认 `150` 块/秒）均匀放行，摊平每 tick 的批次脉冲，网络出口不再突刺
-  - **主线程预算**：`network.maxChunksPerTick`（默认 `8`）限制每玩家每 tick 主线程序列化上限（8×20 = 160/s ≥ 平滑速率），主线程峰值 ≤ ~16ms/tick
+  - **主线程预算**：`network.maxChunksPerTick`（默认 `4`）限制每玩家每 tick 主线程序列化上限（4×20 = 80/s ≥ 平滑速率），主线程峰值 ≤ ~8ms/tick
   - **序列化后台化**：encode / ZSTD 压缩 / hash 计算 / 发送全部在推送线程池（`serverChunkPushThreads` 默认 8，可动态伸缩）；主线程只做 packet 构建——与原版对齐（原版也是主线程构建 + netty 线程编码），1.20.x/1.21.1 甚至整条序列化链都在后台
 - **客户端怎么做**（加载侧）：
   - 每帧主线程 apply 预算 `clientCache.mainThreadChunkBudgetMs`（默认 `15`）

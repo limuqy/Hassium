@@ -25,7 +25,7 @@
 | --- | --- | --- |
 | **高效压缩** | 存储压缩 | 世界区块 ZSTD 落盘（type 126），存档体积显著减小；仍兼容原版 Region（`.mca`）布局 |
 | | 网络压缩 | 区块与数据包 ZSTD 传输（自定义通道 + 全局管道 + 包聚合），降低带宽与下载等待 |
-| **网络优化** | 平滑推送 | 服务端恒定速率限速（150 块/s 令牌桶）+ 主线程序列化上限与后台化；进服/扩展视野不卡主线程 |
+| **网络优化** | 平滑推送 | 服务端恒定速率限速（64 块/s 令牌桶）+ 主线程序列化上限与后台化；进服/扩展视野不卡主线程 |
 | | 主控热切 | TCP 主控断或卡时按候选自动重连，恢复期画面定格（tick 暂停、过渡画面隐藏；可选无感切换），缓存暖续、隐藏断连界面（数据面 failover） |
 | | 加权分流 | 多 UDP/KCP endpoint 按 weight 加权轮询承载数据面，控制面留原版 TCP |
 | **区块缓存** | 客户端缓存 | 曾加载过的区块写入本地；再次进入同一区域时用 contentHash 比对命中，少传全量包 |
@@ -93,8 +93,8 @@
 | `clientCache.ovdUnloadDelaySecs` | `5` | 离开超视渲染环带后延迟卸载（秒；0=同步） |
 | `network.enabled` | `true` | 自定义通道 |
 | `network.globalPacketCompression` | `true` | 全局 ZSTD |
-| `network.maxChunksPerTick` | `8` | 每玩家每 tick 主线程序列化上限（建议 ≥ `smoothChunkSendRate`/20） |
-| `network.smoothChunkSendRate` | `150` | 每玩家区块平滑发送速率（块/秒；令牌桶恒定速率放行，摊平 tick 脉冲） |
+| `network.maxChunksPerTick` | `4` | 每玩家每 tick 主线程序列化上限（建议 ≥ `smoothChunkSendRate`/20） |
+| `network.smoothChunkSendRate` | `64` | 每玩家区块平滑发送速率（块/秒；令牌桶恒定速率放行，摊平 tick 脉冲） |
 | `clientCache.mainThreadChunkBudgetMs` | `15` | 客户端每帧 apply 预算（ms） |
 | `clientCache.parallelLightEngineEnabled` | `true` | 并行光照（重算在后台线程池，主线程只提交快照） |
 | `clientCache.parallelLightEngineThreads` | `4` | 并行光照线程数（虚拟线程模式忽略） |

@@ -181,7 +181,53 @@ public final class ClientLightRecomputeService {
      * 供 {@code ClientLifecycleHelper} 调用，保持调用方不变。
      */
     public static void clear() {
-        // 无状态需清空
+        // 无状态需清空（校准集合仅主线程访问，断连同线程）
+        PENDING_CALIBRATIONS.clear();
+    }
+
+    /**
+     * 本块落地后，校准已加载的邻居：它们可能先于本块重算（当时缺本块），
+     * 边界 1 格固化暗值。双向 checkBlock + 一次落地即可补亮。
+     * <p>
+     * 只 pull 本块一次：{@code pullLightFromNeighborEdges(pos)} 检查本块 4 面，
+     * 每个边界面与邻居共享（旧实现是对 4 个已落地邻居各调一次 = 4×4=16 面，
+     * 有效边界面只 4 个，重复 4 倍，加载期每块 ~10 万格 getLightValue+checkBlock，
+     * profiler 实测 runLightUpdates 占主线程 34%）。未加载邻居到达时由它自己触发本逻辑。
+     * <p>
+     * 传播延迟到帧尾（{@link #flushPendingCalibrations}，渲染前）合并执行一次：
+     * 加载期每帧几十块落地，若每块都跑全局 runLightUpdates，主线程 tick 被占
+     * （profiler：calibrate 内 runLightUpdates ~10%）。checkBlock 入队是轻量的，
+     * 传播合并后补亮延迟一帧（50ms），视觉无感。
+     */
+    public static void calibrateLoadedNeighbors(ClientLevel level, ChunkPos pos) {
+        try {
+            int bottomSection = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMinSection(level);
+            int topSection = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMaxSectionExclusive(level);
+            pullLightFromNeighborEdges(level, pos, bottomSection, topSection);
+            PENDING_CALIBRATIONS.add(pos.toLong());
+        } catch (Exception e) {
+            Constants.LOG.error("Hassium: Failed to calibrate neighbors for chunk {}", pos, e);
+        }
+    }
+
+    /** 待帧尾合并传播的校准块（chunk long）。仅主线程访问。 */
+    private static final it.unimi.dsi.fastutil.longs.LongOpenHashSet PENDING_CALIBRATIONS =
+            new it.unimi.dsi.fastutil.longs.LongOpenHashSet();
+
+    /**
+     * 帧尾（Minecraft.tick TAIL、渲染前）合并执行一次校准传播。
+     * 队列中未完成的 checkBlock 由这一次 runLightUpdates 全部处理。
+     */
+    public static void flushPendingCalibrations() {
+        if (PENDING_CALIBRATIONS.isEmpty()) {
+            return;
+        }
+        PENDING_CALIBRATIONS.clear();
+        ClientLevel level = Minecraft.getInstance().level;
+        if (level == null) {
+            return;
+        }
+        safeRunLightUpdates(level.getLightEngine());
     }
 
     static void applyLightEngine(ClientLevel level, LevelChunk chunk, ChunkPos chunkPos) {
@@ -207,7 +253,6 @@ public final class ClientLightRecomputeService {
             // 再 propagate 会先清空再不全量重建 → 「闪一下又灭」（二次进服相邻块互踩）。
             lightEngine.propagateLightSources(chunkPos);
             pullLightFromNeighborEdges(level, chunkPos, bottomSection, topSection);
-            // 同步清空 deferred 队列；失败则清 residual，避免 LevelRenderer 未捕获崩溃。
             safeRunLightUpdates(lightEngine);
             Constants.LOG.debug("Hassium: Recomputed light for chunk {}", chunkPos);
         } catch (Exception e) {
@@ -309,7 +354,8 @@ public final class ClientLightRecomputeService {
 
         if (level.getChunkSource().getChunkNow(chunkPos.x + 1, chunkPos.z) != null) {
             for (int sectionY = bottomSection; sectionY < topSection; sectionY++) {
-                if (neighborSectionDark(sky, block, chunkPos.x + 1, sectionY, chunkPos.z)) {
+                if (neighborSectionDark(sky, block, chunkPos.x + 1, sectionY, chunkPos.z)
+                        && neighborSectionDark(sky, block, chunkPos.x, sectionY, chunkPos.z)) {
                     continue;
                 }
                 int y0 = sectionY << 4;
@@ -317,9 +363,11 @@ public final class ClientLightRecomputeService {
                 for (int z = 0; z < 16; z++) {
                     for (int y = y0; y < y1; y++) {
                         neighborPos.set(minX + 16, y, minZ + z);
-                        if (sky.getLightValue(neighborPos) > 0 || block.getLightValue(neighborPos) > 0) {
-                            ourPos.set(minX + 15, y, minZ + z);
+                        if (sky.getLightValue(neighborPos) > 0 || block.getLightValue(neighborPos) > 0
+                                || sky.getLightValue(ourPos.set(minX + 15, y, minZ + z)) > 0
+                                || block.getLightValue(ourPos) > 0) {
                             lightEngine.checkBlock(ourPos);
+                            lightEngine.checkBlock(neighborPos);
                         }
                     }
                 }
@@ -327,7 +375,8 @@ public final class ClientLightRecomputeService {
         }
         if (level.getChunkSource().getChunkNow(chunkPos.x - 1, chunkPos.z) != null) {
             for (int sectionY = bottomSection; sectionY < topSection; sectionY++) {
-                if (neighborSectionDark(sky, block, chunkPos.x - 1, sectionY, chunkPos.z)) {
+                if (neighborSectionDark(sky, block, chunkPos.x - 1, sectionY, chunkPos.z)
+                        && neighborSectionDark(sky, block, chunkPos.x, sectionY, chunkPos.z)) {
                     continue;
                 }
                 int y0 = sectionY << 4;
@@ -335,9 +384,11 @@ public final class ClientLightRecomputeService {
                 for (int z = 0; z < 16; z++) {
                     for (int y = y0; y < y1; y++) {
                         neighborPos.set(minX - 1, y, minZ + z);
-                        if (sky.getLightValue(neighborPos) > 0 || block.getLightValue(neighborPos) > 0) {
-                            ourPos.set(minX, y, minZ + z);
+                        if (sky.getLightValue(neighborPos) > 0 || block.getLightValue(neighborPos) > 0
+                                || sky.getLightValue(ourPos.set(minX, y, minZ + z)) > 0
+                                || block.getLightValue(ourPos) > 0) {
                             lightEngine.checkBlock(ourPos);
+                            lightEngine.checkBlock(neighborPos);
                         }
                     }
                 }
@@ -345,7 +396,8 @@ public final class ClientLightRecomputeService {
         }
         if (level.getChunkSource().getChunkNow(chunkPos.x, chunkPos.z + 1) != null) {
             for (int sectionY = bottomSection; sectionY < topSection; sectionY++) {
-                if (neighborSectionDark(sky, block, chunkPos.x, sectionY, chunkPos.z + 1)) {
+                if (neighborSectionDark(sky, block, chunkPos.x, sectionY, chunkPos.z + 1)
+                        && neighborSectionDark(sky, block, chunkPos.x, sectionY, chunkPos.z)) {
                     continue;
                 }
                 int y0 = sectionY << 4;
@@ -353,9 +405,11 @@ public final class ClientLightRecomputeService {
                 for (int x = 0; x < 16; x++) {
                     for (int y = y0; y < y1; y++) {
                         neighborPos.set(minX + x, y, minZ + 16);
-                        if (sky.getLightValue(neighborPos) > 0 || block.getLightValue(neighborPos) > 0) {
-                            ourPos.set(minX + x, y, minZ + 15);
+                        if (sky.getLightValue(neighborPos) > 0 || block.getLightValue(neighborPos) > 0
+                                || sky.getLightValue(ourPos.set(minX + x, y, minZ + 15)) > 0
+                                || block.getLightValue(ourPos) > 0) {
                             lightEngine.checkBlock(ourPos);
+                            lightEngine.checkBlock(neighborPos);
                         }
                     }
                 }
@@ -363,7 +417,8 @@ public final class ClientLightRecomputeService {
         }
         if (level.getChunkSource().getChunkNow(chunkPos.x, chunkPos.z - 1) != null) {
             for (int sectionY = bottomSection; sectionY < topSection; sectionY++) {
-                if (neighborSectionDark(sky, block, chunkPos.x, sectionY, chunkPos.z - 1)) {
+                if (neighborSectionDark(sky, block, chunkPos.x, sectionY, chunkPos.z - 1)
+                        && neighborSectionDark(sky, block, chunkPos.x, sectionY, chunkPos.z)) {
                     continue;
                 }
                 int y0 = sectionY << 4;
@@ -371,9 +426,11 @@ public final class ClientLightRecomputeService {
                 for (int x = 0; x < 16; x++) {
                     for (int y = y0; y < y1; y++) {
                         neighborPos.set(minX + x, y, minZ - 1);
-                        if (sky.getLightValue(neighborPos) > 0 || block.getLightValue(neighborPos) > 0) {
-                            ourPos.set(minX + x, y, minZ);
+                        if (sky.getLightValue(neighborPos) > 0 || block.getLightValue(neighborPos) > 0
+                                || sky.getLightValue(ourPos.set(minX + x, y, minZ)) > 0
+                                || block.getLightValue(ourPos) > 0) {
                             lightEngine.checkBlock(ourPos);
+                            lightEngine.checkBlock(neighborPos);
                         }
                     }
                 }

@@ -79,7 +79,7 @@ Forge/NeoForge 端注册 3 个 spec（CLIENT / COMMON / SERVER），物理客户
 
 | 配置项 | 默认值 | 客户端/服务端/双端 | 实际调用 | 状态 |
 |--------|--------|---------------------|----------|------|
-| `network.maxChunksPerTick` | `8` | **服务端** | `ServerChunkPushManager:888` | ✅ 正常 |
+** **服务端** | `ServerChunkPushManager:888` | ✅ 正常 |
 | `network.serverChunkPushThreads` | `8` | **服务端** | `ServerChunkPushManager:146` | ✅ 正常 |
 | `network.dynamicThreadPoolEnabled` | `true` | **服务端** | `ServerChunkPushManager:1063` | ✅ 正常 |
 | `network.minPushThreads` | `2` | **服务端** | `ServerChunkPushManager:147` | ✅ 正常 |

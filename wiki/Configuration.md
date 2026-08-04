@@ -54,8 +54,8 @@ Hassium 启动时在 `config/hassium/` 自动生成两份 TOML：
 | `network.enabled` | `true` | 自定义 `hassium:*` 通道（关后回退原版全量包） |
 | `network.globalPacketCompression` | `true` | 全局管道用 ZSTD 替换原版 Zlib（关闭可与同类协议替换类 mod 共存） |
 | `network.compressionLevel` | `3` | 网络压缩等级（速度优先） |
-| `network.maxChunksPerTick` | `8` | 每玩家每 tick 主线程序列化上限（建议 ≥ `smoothChunkSendRate`/20） |
-| `network.smoothChunkSendRate` | `150` | 每玩家区块平滑发送速率（块/秒；令牌桶恒定速率放行，摊平 tick 脉冲） |
+| `network.maxChunksPerTick` | `4` | 每玩家每 tick 主线程序列化上限（建议 ≥ `smoothChunkSendRate`/20） |
+| `network.smoothChunkSendRate` | `64` | 每玩家区块平滑发送速率（块/秒；令牌桶恒定速率放行，摊平 tick 脉冲） |
 | `network.metricsEnabled` | `true` | 指标收集（关闭后 `/hassium stats` 等命令不可用） |
 | `network.enablePacketAggregation` | 默认开 | 包聚合；第三方通道被拦截异常时关掉 |
 | `network.compressionBlacklist` | 空 | 包 ID 列表，命中的包不进压缩/聚合 |
