@@ -93,9 +93,12 @@ dependencies {
 
 
     // Mod Menu：仅编译期；玩家可选安装
+    // 源用 Modrinth Maven（CDN，快且稳）而非 maven.terraformersmc.com：
+    // 自建 maven 在 GitHub Actions 上频繁 Read timed out（见 publish-curseforge CI 报错）。
+    // 坐标 maven.modrinth:modmenu:<ver>；terraformersmc 仓库保留在 common.gradle 作后备。
     if (gradle.ext.has('modmenu_version')) {
-        modCompileOnly "com.terraformersmc:modmenu:${gradle.ext.modmenu_version}"
-        modLocalRuntime "com.terraformersmc:modmenu:${gradle.ext.modmenu_version}"
+        modCompileOnly "maven.modrinth:modmenu:${gradle.ext.modmenu_version}"
+        modLocalRuntime "maven.modrinth:modmenu:${gradle.ext.modmenu_version}"
     }
 
     // Cloth Config：编译期需要（HassiumClothConfigScreen）；可选依赖，不 jiJ

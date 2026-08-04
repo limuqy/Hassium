@@ -159,8 +159,17 @@ jobs:
           echo "=== DryRun probe: $MC_VER (JDK ${{ matrix.jdk }}) ==="
           # -Pcurseforge_debug=true：插件只打印上传 URI、不真传；验证 token+Cloudflare 链路。
           # DryRun 失败（403/质询/缺 game-version）就终止，不进真传，避免空耗上传配额。
-          ./gradlew --no-daemon build publishCurseForge "-Pmc_ver=$MC_VER" -x test \
-            -Pcurseforge_debug=true "-Pcurseforge_release_type=$REL_TYPE"
+          # 与下方 Real publish 对称，最多重试 3 次：build 阶段要拉 modmenu/cloth 等
+          # 自建 maven 依赖，terraformersmc 偶发慢/抖（Read timed out），重试对冲。
+          for attempt in 1 2 3; do
+            if ./gradlew --no-daemon build publishCurseForge "-Pmc_ver=$MC_VER" -x test \
+                 -Pcurseforge_debug=true "-Pcurseforge_release_type=$REL_TYPE"; then
+              echo "OK: $MC_VER DryRun probe (attempt $attempt)"
+              exit 0
+            fi
+            echo "attempt $attempt failed, backing off $((attempt*20))s …"
+            [[ $attempt -lt 3 ]] && sleep $((attempt*20)) || { echo "FAILED: $MC_VER DryRun probe after 3 attempts"; exit 1; }
+          done
 
       - name: Publish (real upload) — skip if dry_run
         if: ${{ github.event.inputs.dry_run != 'true' }}
