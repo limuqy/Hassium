@@ -105,7 +105,11 @@ public class ServerChunkPushManager {
     /**
      * 已编码包字节（与 chunkHash / 反透视视图一致的包数据）。
      */
-    private record PreparedChunk(byte[] data) {}
+    /**
+     * 已准备的区块数据：拦截路径缓存 {@code packet}（纯数据，后台 encode）或广播路径缓存线格式 {@code data}；
+     * 二选一，另一为 null。
+     */
+    private record PreparedChunk(byte[] data, ClientboundLevelChunkWithLightPacket packet) {}
 
     /**
      * 每玩家：chunkPosLong → 已编码的 ClientboundLevelChunkWithLightPacket 线格式字节。
@@ -311,10 +315,18 @@ public class ServerChunkPushManager {
             Constants.LOG.warn("[ASYNC_METADATA] Failed to build chunk packet for {}", pos);
             return;
         }
+#if MC_VER < MC_1_21_2
+        // <1.21.2：保持同步 encode（调用线程主线程；drain 消费方只认 byte[]）
         byte[] encoded = encodeChunkPacket(packet, registryAccess);
         if (encoded != null) {
             putPreparedChunkPacket(player.getUUID(), pos, encoded);
         }
+#else
+        // 1.21.2+：只同步 build（ThreadingDetector 要求主线程读 chunk），
+        // encode 留给消费方后台执行——主线程不再付线格式编码成本；
+        // packet 为纯数据（构造后不碰 chunk），后台 hash/encode 并发读安全。
+        putPreparedChunkPacket(player.getUUID(), pos, packet);
+#endif
 
         pushPool.submit(() -> {
             try {
@@ -1130,17 +1142,22 @@ public class ServerChunkPushManager {
                 }
 
                 try {
-                    // 优先使用拦截时缓存的包字节（与 chunkHash / 反透视视图一致）
+                    // 优先使用拦截时缓存的包字节或 packet（与 chunkHash / 反透视视图一致）
                     PreparedChunk prepared = takePreparedChunkPacket(playerId, task.pos());
                     byte[] chunkData = prepared != null ? prepared.data() : null;
                     ClientboundLevelChunkWithLightPacket packet = null;
                     if (chunkData == null) {
-                        LevelChunk chunk = level.getChunk(task.pos().x, task.pos().z);
-                        if (chunk == null) {
-                            Constants.LOG.warn("[PROCESS_QUEUE] Chunk {} not loaded, skipping", task.pos());
-                            continue;
+                        if (prepared != null) {
+                            // 拦截路径已同步 build：直接后台 encode，主线程零序列化
+                            packet = prepared.packet();
+                        } else {
+                            LevelChunk chunk = level.getChunk(task.pos().x, task.pos().z);
+                            if (chunk == null) {
+                                Constants.LOG.warn("[PROCESS_QUEUE] Chunk {} not loaded, skipping", task.pos());
+                                continue;
+                            }
+                            packet = buildChunkPacket(chunk, level);
                         }
-                        packet = buildChunkPacket(chunk, level);
                         if (packet == null) {
                             Constants.LOG.warn("[PROCESS_QUEUE] Failed to build chunk packet {}", task.pos());
                             continue;
@@ -1279,9 +1296,21 @@ public class ServerChunkPushManager {
     }
 
     private void putPreparedChunkPacket(UUID playerId, ChunkPos pos, byte[] data) {
+        putPreparedChunkPacket(playerId, pos, new PreparedChunk(data, null));
+    }
+
+    /**
+     * 拦截路径：同步缓存已构建的 packet（主线程零 encode），消费方（drain）后台 encode。
+     */
+    private void putPreparedChunkPacket(UUID playerId, ChunkPos pos,
+                                        ClientboundLevelChunkWithLightPacket packet) {
+        putPreparedChunkPacket(playerId, pos, new PreparedChunk(null, packet));
+    }
+
+    private void putPreparedChunkPacket(UUID playerId, ChunkPos pos, PreparedChunk prepared) {
         ConcurrentHashMap<Long, PreparedChunk> map =
                 preparedChunkPackets.computeIfAbsent(playerId, k -> new ConcurrentHashMap<>());
-        map.put(ChunkPos.asLong(pos.x, pos.z), new PreparedChunk(data));
+        map.put(ChunkPos.asLong(pos.x, pos.z), prepared);
         if (map.size() > MAX_PREPARED_PER_PLAYER) {
             int toRemove = map.size() - MAX_PREPARED_PER_PLAYER;
             var it = map.keySet().iterator();
