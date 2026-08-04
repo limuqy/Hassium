@@ -197,6 +197,7 @@ public record HassiumConfig(
             boolean metricsEnabled,
             // === 服务端推送 ===
             int maxChunksPerTick,
+            int smoothChunkSendRate,
             int serverChunkPushThreads,
             boolean dynamicThreadPoolEnabled,
             int minPushThreads,
@@ -222,13 +223,14 @@ public record HassiumConfig(
                                    long aggregationMaxWaitTimeMs, int aggregationMaxSize,
                                    boolean enableCompactHeader, Set<String> compressionBlacklist,
                                    boolean metricsEnabled, int maxChunksPerTick,
+                                   int smoothChunkSendRate,
                                    int serverChunkPushThreads, boolean dynamicThreadPoolEnabled,
                                    int minPushThreads, int maxPushThreads, boolean lightStrip) {
             this(enabled, compressionLevel, magiclessZstd, globalPacketCompression,
                     globalCompressionLevel, globalCompressionThreshold, useContextCompression,
                     enablePacketAggregation, aggregationMinBatchSize, aggregationMaxWaitTimeMs,
                     aggregationMaxSize, enableCompactHeader, compressionBlacklist, metricsEnabled,
-                    maxChunksPerTick, serverChunkPushThreads, dynamicThreadPoolEnabled,
+                    maxChunksPerTick, smoothChunkSendRate, serverChunkPushThreads, dynamicThreadPoolEnabled,
                     minPushThreads, maxPushThreads, lightStrip, List.of(), DEFAULT_DATA_PLANE);
         }
 
@@ -271,6 +273,7 @@ public record HassiumConfig(
                 DEFAULT_COMPRESSION_BLACKLIST,
                 false,              // metricsEnabled
                 32,                // maxChunksPerTick
+                150,               // smoothChunkSendRate（块/秒/玩家）
                 8,                 // serverChunkPushThreads
                 true,              // dynamicThreadPoolEnabled
                 2,                 // minPushThreads

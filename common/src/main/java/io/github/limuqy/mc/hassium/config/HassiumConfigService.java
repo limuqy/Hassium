@@ -401,6 +401,17 @@ public class HassiumConfigService {
         return config.serverNetwork().serverChunkPushThreads();
     }
 
+    /**
+     * 服务端每玩家区块平滑发送速率（块/秒）：令牌桶摊平 tick 级脉冲，防网络峰值。
+     */
+    public int getSmoothChunkSendRate() {
+        int value = config.serverNetwork().smoothChunkSendRate();
+        if (value <= 0) {
+            return 150;
+        }
+        return value;
+    }
+
     public int getLoadThreads() {
         return config.clientCache().loadThreads();
     }

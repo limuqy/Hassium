@@ -76,6 +76,13 @@ public class ServerChunkPushManager {
     private final Map<UUID, PriorityBlockingQueue<DataRequestTask>> dataQueues = new ConcurrentHashMap<>();
 
     /**
+     * 每玩家平滑发送限速器（令牌桶）：恒定速率摊平 tick 级脉冲，防网络峰值占用。
+     * 与 maxChunksPerTick（每 tick 硬上限）正交：后者管主线程串行化批次，
+     * 本桶在压缩后发送前按秒级恒定速率放行。
+     */
+    private final Map<UUID, SmoothSendLimiter> sendLimiters = new ConcurrentHashMap<>();
+
+    /**
      * 每玩家是否正在本 tick 序列化（防重复 drain）
      */
     private final Map<UUID, AtomicBoolean> processingFlags = new ConcurrentHashMap<>();
@@ -1009,6 +1016,12 @@ public class ServerChunkPushManager {
                 Constants.LOG.warn("[PROCESS_QUEUE] Failed to compress chunk {}", work.pos());
                 return;
             }
+            // 平滑发送：每玩家令牌桶按秒级恒定速率放行，摊平 drain 批次的 tick 级脉冲
+            // （压缩在令牌获取前完成，CPU 并行不受限速；仅网络出口被均匀化）
+            int rate = HassiumConfigService.getInstance().getSmoothChunkSendRate();
+            SmoothSendLimiter limiter = sendLimiters.computeIfAbsent(player.getUUID(),
+                    k -> new SmoothSendLimiter(rate));
+            limiter.acquire();
             sender.sendCompressedChunk(player, compressed);
             NetworkStats.recordChunkSent(VanillaZlibEstimator.estimate(work.chunkData()));
             DebugLogger.info(LogType.NETWORK, "[PROCESS_QUEUE] Sent chunk {} to player {} ({} -> {} bytes, ratio={})",
@@ -1162,6 +1175,7 @@ public class ServerChunkPushManager {
         hashBatches.remove(playerId);
         preparedChunkPackets.remove(playerId);
         pendingResync.remove(playerId);
+        sendLimiters.remove(playerId);
     }
 
     /**
@@ -1173,6 +1187,7 @@ public class ServerChunkPushManager {
         hashBatches.clear();
         preparedChunkPackets.clear();
         pendingResync.clear();
+        sendLimiters.clear();
         if (pushPool != null) {
             pushPool.shutdownNow();
         }
@@ -1213,6 +1228,41 @@ public class ServerChunkPushManager {
 
         PendingHashBatch(String dimension) {
             this.dimension = dimension;
+        }
+    }
+
+    /**
+     * 每玩家平滑发送令牌桶（恒定速率）
+     * <p>
+     * 令牌按 1/rate 秒间隔产生，上限 rate（突发上限一个窗口），
+     * acquire 阻塞至令牌可用；sleep 期间令牌继续积累，循环重算。
+     */
+    private static final class SmoothSendLimiter {
+        private final double ratePerSec;
+        private double tokens;
+        private long lastMs;
+
+        SmoothSendLimiter(double ratePerSec) {
+            this.ratePerSec = ratePerSec;
+            this.tokens = ratePerSec; // 首窗口允许立即启动，避免初始停顿
+            this.lastMs = System.currentTimeMillis();
+        }
+
+        /**
+         * 阻塞至获得一个发送令牌。
+         */
+        synchronized void acquire() throws InterruptedException {
+            while (true) {
+                long now = System.currentTimeMillis();
+                tokens = Math.min(ratePerSec, tokens + (now - lastMs) / 1000.0 * ratePerSec);
+                lastMs = now;
+                if (tokens >= 1.0) {
+                    tokens -= 1.0;
+                    return;
+                }
+                long waitMs = (long) Math.ceil((1.0 - tokens) / ratePerSec * 1000.0);
+                Thread.sleep(waitMs);
+            }
         }
     }
 }

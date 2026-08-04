@@ -56,7 +56,7 @@ class DataPlaneEnabledGuardTest {
                 network.enablePacketAggregation(), network.aggregationMinBatchSize(),
                 network.aggregationMaxWaitTimeMs(), network.aggregationMaxSize(),
                 network.enableCompactHeader(), network.compressionBlacklist(), network.metricsEnabled(),
-                network.maxChunksPerTick(), network.serverChunkPushThreads(), network.dynamicThreadPoolEnabled(),
+                network.maxChunksPerTick(), network.smoothChunkSendRate(), network.serverChunkPushThreads(), network.dynamicThreadPoolEnabled(),
                 network.minPushThreads(), network.maxPushThreads(), network.lightStrip(),
                 network.controlReachableEndpoints(), replacement);
         return new HassiumConfig(config.storage(), config.clientCache(), config.clientNetwork(), updatedNetwork,
@@ -100,7 +100,7 @@ class DataPlaneEnabledGuardTest {
                 network.enablePacketAggregation(), network.aggregationMinBatchSize(),
                 network.aggregationMaxWaitTimeMs(), network.aggregationMaxSize(),
                 network.enableCompactHeader(), network.compressionBlacklist(), network.metricsEnabled(),
-                network.maxChunksPerTick(), network.serverChunkPushThreads(), network.dynamicThreadPoolEnabled(),
+                network.maxChunksPerTick(), network.smoothChunkSendRate(), network.serverChunkPushThreads(), network.dynamicThreadPoolEnabled(),
                 network.minPushThreads(), network.maxPushThreads(), network.lightStrip(),
                 endpoints, network.dataPlane());
         return new HassiumConfig(config.storage(), config.clientCache(), config.clientNetwork(), updatedNetwork,
