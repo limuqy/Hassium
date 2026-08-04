@@ -426,6 +426,21 @@ public class HassiumConfigService {
         return Math.max(1, config.clientCache().maxChunksPerFrame());
     }
 
+    /** 是否启用多线程光照引擎（后台并行重算；默认关）。 */
+    public boolean isParallelLightEngineEnabled() {
+        return config.clientCache().parallelLightEngineEnabled();
+    }
+
+    /** 多线程光照引擎线程数（虚拟线程模式忽略）。 */
+    public int getParallelLightEngineThreads() {
+        return Math.max(1, config.clientCache().parallelLightEngineThreads());
+    }
+
+    /** 光照验算（官方引擎对照 BFS 结果；默认关）。 */
+    public boolean isLightVerifyEnabled() {
+        return config.debug().lightVerify();
+    }
+
     public int getMainThreadChunkBudgetMs() {
         int value = config.clientCache().mainThreadChunkBudgetMs();
         if (value <= 0) {

@@ -77,7 +77,10 @@ public record HassiumConfig(
             int loadThreads,
             boolean lightCacheEnabled,
             int maxChunksPerFrame,
-            int mainThreadChunkBudgetMs
+            int mainThreadChunkBudgetMs,
+            // === 并行光照引擎（默认关；后台线程池全量重算 + 主线程原子提交）===
+            boolean parallelLightEngineEnabled,
+            int parallelLightEngineThreads
     ) {
         public static final ClientCacheConfig DEFAULT = new ClientCacheConfig(
                 true,    // enabled
@@ -98,7 +101,9 @@ public record HassiumConfig(
                 10,      // loadThreads
                 true,    // lightCacheEnabled
                 32,      // maxChunksPerFrame
-                15       // mainThreadChunkBudgetMs
+                15,      // mainThreadChunkBudgetMs
+                false,   // parallelLightEngineEnabled
+                4        // parallelLightEngineThreads
         );
 
         public long maxCacheSizeBytes() {
@@ -297,10 +302,11 @@ public record HassiumConfig(
             boolean chunkApplyLogging,
             boolean networkLogging,
             boolean cacheLogging,
-            boolean dataplaneLogging
+            boolean dataplaneLogging,
+            boolean lightVerify
     ) {
         public static final DebugConfig DEFAULT = new DebugConfig(
-                false, false, false, false, false, false, false, false
+                false, false, false, false, false, false, false, false, false
         );
     }
 }

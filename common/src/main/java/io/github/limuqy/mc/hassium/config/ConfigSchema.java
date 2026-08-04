@@ -29,6 +29,8 @@ public final class ConfigSchema {
     public static final ConfigKey<Boolean> CACHE_LIGHT_CACHE_ENABLED = bool("clientCache.lightCacheEnabled", ConfigScope.CLIENT, true, "是否启用光照缓存");
     public static final ConfigKey<Integer> CACHE_MAX_CHUNKS_PER_FRAME = integer("clientCache.maxChunksPerFrame", ConfigScope.CLIENT, 32, 1, 512, "每帧应用缓存区块硬顶");
     public static final ConfigKey<Integer> CACHE_MAIN_THREAD_BUDGET_MS = integer("clientCache.mainThreadChunkBudgetMs", ConfigScope.CLIENT, 15, 1, 50, "主线程 apply 预算（ms）");
+    public static final ConfigKey<Boolean> CACHE_PARALLEL_LIGHT_ENGINE_ENABLED = bool("clientCache.parallelLightEngineEnabled", ConfigScope.CLIENT, false, "是否启用多线程光照引擎（后台并行重算光照；默认关）");
+    public static final ConfigKey<Integer> CACHE_PARALLEL_LIGHT_ENGINE_THREADS = integer("clientCache.parallelLightEngineThreads", ConfigScope.CLIENT, 4, 1, 64, "多线程光照引擎线程数（虚拟线程模式忽略）");
     public static final ConfigKey<Boolean> CLIENT_NETWORK_ENABLED = bool("network.enabled", ConfigScope.CLIENT, true, "是否启用客户端 Hassium 自定义通道");
     public static final ConfigKey<Boolean> CLIENT_NETWORK_METRICS_ENABLED = bool("network.metricsEnabled", ConfigScope.CLIENT, false, "是否启用客户端网络指标");
     public static final ConfigKey<Boolean> CLIENT_NETWORK_METRICS_AUTO_RESET = bool("network.metricsAutoReset", ConfigScope.CLIENT, true, "登出服务器时自动重置指标计数");
@@ -74,6 +76,7 @@ public final class ConfigSchema {
     public static final ConfigKey<Boolean> CLIENT_DEBUG_NETWORK = bool("debug.networkLogging", ConfigScope.CLIENT, false, "网络调试日志");
     public static final ConfigKey<Boolean> CLIENT_DEBUG_CACHE = bool("debug.cacheLogging", ConfigScope.CLIENT, false, "缓存调试日志");
     public static final ConfigKey<Boolean> CLIENT_DEBUG_DATAPLANE = bool("debug.dataplaneLogging", ConfigScope.CLIENT, false, "数据面调试日志");
+    public static final ConfigKey<Boolean> CLIENT_DEBUG_LIGHT_VERIFY = bool("debug.lightVerify", ConfigScope.CLIENT, false, "光照验算（官方引擎对照 BFS 结果）");
     public static final ConfigKey<Boolean> SERVER_DEBUG_METADATA = bool("debug.metadataLogging", ConfigScope.SERVER, false, "元数据调试日志");
     public static final ConfigKey<Boolean> SERVER_DEBUG_DISPATCHER = bool("debug.dispatcherLogging", ConfigScope.SERVER, false, "主线程调度调试日志");
     public static final ConfigKey<Boolean> SERVER_DEBUG_ASYNC = bool("debug.asyncLogging", ConfigScope.SERVER, false, "异步调试日志");
@@ -82,6 +85,7 @@ public final class ConfigSchema {
     public static final ConfigKey<Boolean> SERVER_DEBUG_NETWORK = bool("debug.networkLogging", ConfigScope.SERVER, false, "网络调试日志");
     public static final ConfigKey<Boolean> SERVER_DEBUG_CACHE = bool("debug.cacheLogging", ConfigScope.SERVER, false, "缓存调试日志");
     public static final ConfigKey<Boolean> SERVER_DEBUG_DATAPLANE = bool("debug.dataplaneLogging", ConfigScope.SERVER, false, "数据面调试日志");
+    public static final ConfigKey<Boolean> SERVER_DEBUG_LIGHT_VERIFY = bool("debug.lightVerify", ConfigScope.SERVER, false, "光照验算（官方引擎对照 BFS 结果）");
 
     static {
         validateUniquePaths();

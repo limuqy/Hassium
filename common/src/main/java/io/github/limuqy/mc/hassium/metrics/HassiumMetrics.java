@@ -248,9 +248,19 @@ public interface HassiumMetrics {
     long getLightRecomputeTimeNs();
 
     /**
+     * 获取后台并行光照重算总耗时（纳秒；同步路径恒 0）
+     */
+    long getLightRecomputeBackgroundTimeNs();
+
+    /**
      * 获取收到 LightDeltaS2CPacket 的条目数
      */
     long getLightDeltaReceivedCount();
+
+    /**
+     * 获取光照验算差异格数（debug.lightVerify 开启时 BFS vs 官方引擎）
+     */
+    long getLightVerifyMismatchCount();
 
     // ===== 数据面分流指标 =====
 
@@ -372,6 +382,13 @@ public interface HassiumMetrics {
      */
     default double getLightRecomputeTimeMs() {
         return getLightRecomputeTimeNs() / 1_000_000.0;
+    }
+
+    /**
+     * 获取后台并行光照重算耗时（毫秒）
+     */
+    default double getLightRecomputeBackgroundTimeMs() {
+        return getLightRecomputeBackgroundTimeNs() / 1_000_000.0;
     }
 
     /**

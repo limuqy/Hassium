@@ -349,7 +349,9 @@ public final class FabricTomlConfigIO {
                 getInt(cfg, "clientCache.loadThreads", d.loadThreads()),
                 getBool(cfg, "clientCache.lightCacheEnabled", d.lightCacheEnabled()),
                 getInt(cfg, "clientCache.maxChunksPerFrame", d.maxChunksPerFrame()),
-                getInt(cfg, "clientCache.mainThreadChunkBudgetMs", d.mainThreadChunkBudgetMs())
+                getInt(cfg, "clientCache.mainThreadChunkBudgetMs", d.mainThreadChunkBudgetMs()),
+                getBool(cfg, "clientCache.parallelLightEngineEnabled", d.parallelLightEngineEnabled()),
+                getInt(cfg, "clientCache.parallelLightEngineThreads", d.parallelLightEngineThreads())
         );
     }
 
@@ -377,6 +379,8 @@ public final class FabricTomlConfigIO {
         set(cfg, "clientCache.lightCacheEnabled", c.lightCacheEnabled(), "是否启用光照缓存");
         set(cfg, "clientCache.maxChunksPerFrame", c.maxChunksPerFrame(), "每帧应用缓存区块硬顶");
         set(cfg, "clientCache.mainThreadChunkBudgetMs", c.mainThreadChunkBudgetMs(), "主线程 apply 预算（ms）");
+        set(cfg, "clientCache.parallelLightEngineEnabled", c.parallelLightEngineEnabled(), "是否启用多线程光照引擎（后台并行重算光照；默认关）");
+        set(cfg, "clientCache.parallelLightEngineThreads", c.parallelLightEngineThreads(), "多线程光照引擎线程数（虚拟线程模式忽略）");
     }
 
     private static HassiumConfig.ClientNetworkConfig readClientNetwork(CommentedConfig cfg) {
@@ -491,7 +495,8 @@ public final class FabricTomlConfigIO {
                 getBool(cfg, "debug.chunkApplyLogging", d.chunkApplyLogging()),
                 getBool(cfg, "debug.networkLogging", d.networkLogging()),
                 getBool(cfg, "debug.cacheLogging", d.cacheLogging()),
-                getBool(cfg, "debug.dataplaneLogging", d.dataplaneLogging())
+                getBool(cfg, "debug.dataplaneLogging", d.dataplaneLogging()),
+                getBool(cfg, "debug.lightVerify", d.lightVerify())
         );
     }
 
@@ -504,6 +509,7 @@ public final class FabricTomlConfigIO {
         set(cfg, "debug.networkLogging", d.networkLogging(), "网络调试日志");
         set(cfg, "debug.cacheLogging", d.cacheLogging(), "缓存调试日志");
         set(cfg, "debug.dataplaneLogging", d.dataplaneLogging(), "数据面（多通道 Data Plane）热路径日志 — 默认 false 以避免高频刷屏");
+        set(cfg, "debug.lightVerify", d.lightVerify(), "光照验算（官方引擎对照 BFS 结果）");
     }
 
     // --- value helpers ---

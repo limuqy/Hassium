@@ -65,6 +65,11 @@ public final class ClientLightRecomputeService {
         }
         // 加载活跃：续期 JoinBoost 窗口（固定 10s 窗口在 1021 块全量加载下会中途退坡 → 后段掉速）
         ClientMainThreadBudget.noteChunkApplyActivity();
+        // 并行光照引擎（默认关）：分流到后台全量重算 + 主线程原子提交，本方法立即返回
+        if (HassiumConfigService.getInstance().isParallelLightEngineEnabled()) {
+            LightComputeService.getInstance().submitRecompute(chunkPos, cachedNbt);
+            return;
+        }
         applyLightEngine(level, chunk, chunkPos);
         // 仅光照缓存开启时回写磁盘；关闭时只重算不存储
         if (HassiumConfigService.getInstance().isLightCacheEnabled()) {
@@ -75,8 +80,8 @@ public final class ClientLightRecomputeService {
     /**
      * 从光照引擎提取光照数据，更新缓存（优先使用内存 NBT）。
      */
-    private static void updateCacheWithLightData(ClientLevel level, ChunkPos chunkPos,
-                                                  net.minecraft.nbt.CompoundTag cachedNbt) {
+    static void updateCacheWithLightData(ClientLevel level, ChunkPos chunkPos,
+                                         net.minecraft.nbt.CompoundTag cachedNbt) {
         try {
             ClientHassiumStorage storage = ClientChunkHandler.getClientStorage();
             if (storage == null) return;
@@ -179,7 +184,7 @@ public final class ClientLightRecomputeService {
         // 无状态需清空
     }
 
-    private static void applyLightEngine(ClientLevel level, LevelChunk chunk, ChunkPos chunkPos) {
+    static void applyLightEngine(ClientLevel level, LevelChunk chunk, ChunkPos chunkPos) {
         long startNs = System.nanoTime();
         try {
             int bottomSection = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMinSection(level);
@@ -219,8 +224,8 @@ public final class ClientLightRecomputeService {
     }
 
     /** 为本 chunk 全部 section 分配 DataLayer。 */
-    private static void ensureColumnDataLayers(ClientLevel level, LevelLightEngine lightEngine,
-                                              ChunkPos chunkPos, int bottomSection, int topSection) {
+    static void ensureColumnDataLayers(ClientLevel level, LevelLightEngine lightEngine,
+                                       ChunkPos chunkPos, int bottomSection, int topSection) {
         for (int sectionY = bottomSection; sectionY < topSection; sectionY++) {
             SectionPos sectionPos = SectionPos.of(chunkPos.x, sectionY, chunkPos.z);
             lightEngine.updateSectionStatus(sectionPos, false);
@@ -229,8 +234,8 @@ public final class ClientLightRecomputeService {
     }
 
     /** 为已加载邻居 chunk 全 section 分配 DataLayer，供边缘传播读层。 */
-    private static void ensureNeighborDataLayers(ClientLevel level, LevelLightEngine lightEngine,
-                                                 ChunkPos chunkPos, int bottomSection, int topSection) {
+    static void ensureNeighborDataLayers(ClientLevel level, LevelLightEngine lightEngine,
+                                         ChunkPos chunkPos, int bottomSection, int topSection) {
         ensureNeighborColumnIfLoaded(level, lightEngine, chunkPos.x + 1, chunkPos.z, bottomSection, topSection);
         ensureNeighborColumnIfLoaded(level, lightEngine, chunkPos.x - 1, chunkPos.z, bottomSection, topSection);
         ensureNeighborColumnIfLoaded(level, lightEngine, chunkPos.x, chunkPos.z + 1, bottomSection, topSection);
@@ -291,8 +296,8 @@ public final class ClientLightRecomputeService {
         }
     }
 
-    private static void pullLightFromNeighborEdges(ClientLevel level, ChunkPos chunkPos,
-                                                   int bottomSection, int topSection) {
+    static void pullLightFromNeighborEdges(ClientLevel level, ChunkPos chunkPos,
+                                           int bottomSection, int topSection) {
         LevelLightEngine lightEngine = level.getLightEngine();
         LayerLightEventListener sky = lightEngine.getLayerListener(LightLayer.SKY);
         LayerLightEventListener block = lightEngine.getLayerListener(LightLayer.BLOCK);
