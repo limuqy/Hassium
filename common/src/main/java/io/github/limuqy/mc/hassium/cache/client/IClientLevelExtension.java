@@ -1,7 +1,5 @@
 package io.github.limuqy.mc.hassium.cache.client;
 
-import net.minecraft.world.level.ChunkPos;
-
 import java.util.Set;
 
 /**
@@ -11,22 +9,22 @@ import java.util.Set;
 public interface IClientLevelExtension {
 
     /**
-     * 获取仅渲染的区块集合
+     * 获取仅渲染的区块集合（long 键 = ChunkPos.asLong）
      */
-    Set<ChunkPos> hassium$getRenderOnlyChunks();
+    Set<Long> hassium$getRenderOnlyChunks();
 
     /**
      * 检查指定区块是否为仅渲染区块（超视渲染）
      */
-    boolean hassium$isRenderOnly(ChunkPos pos);
+    boolean hassium$isRenderOnly(long pos);
 
     /**
      * 添加仅渲染区块标记
      */
-    void hassium$addRenderOnlyChunk(ChunkPos pos);
+    void hassium$addRenderOnlyChunk(long pos);
 
     /**
      * 移除仅渲染区块标记
      */
-    void hassium$removeRenderOnlyChunk(ChunkPos pos);
+    void hassium$removeRenderOnlyChunk(long pos);
 }

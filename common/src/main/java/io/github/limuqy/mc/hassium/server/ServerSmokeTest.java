@@ -3,11 +3,19 @@ package io.github.limuqy.mc.hassium.server;
 import io.github.limuqy.mc.hassium.metrics.NetworkStats;
 import io.github.limuqy.mc.hassium.network.dataplane.DataPlanePoCConfig;
 import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.level.Level;
+#if MC_VER < MC_1_20_5
+import net.minecraft.world.level.chunk.ChunkStatus;
+#else
+import net.minecraft.world.level.chunk.status.ChunkStatus;
+#endif
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.HashSet;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 
 /**
  * 开发环境服务端冒烟测试：启动时 VD=20，第一个玩家退出后切换 VD=8。
@@ -46,6 +54,16 @@ public final class ServerSmokeTest {
      *  客户端主动 disconnect 间接触发，smoke 仅聚合 production 注入的 UDP_FAILOVER* markers
      *  作为 PASS 判据。 */
     private static volatile boolean runUdpFailover = false;
+    /** 阶段选择：pregen = 预生成大片区块后停服（冒烟前一次性执行，消除 worldgen 供给波动）。 */
+    private static volatile boolean runPregen = false;
+    /** 预生成半径（块）：49×49 覆盖 VD20（41×41）首轮需求 */
+    private static final int PREGEN_RADIUS = 24;
+    /** 每 tick 提交的区块生成请求数（主线程轻量：future 异步） */
+    private static final int PREGEN_BATCH = 64;
+    private static volatile boolean pregenDone = false;
+    private static volatile int pregenCursor = 0;
+    private static volatile int pregenDoneCount = 0;
+    private static volatile CompletableFuture<?>[] pregenFutures;
     private ServerSmokeTest() {
     }
 
@@ -71,6 +89,18 @@ public final class ServerSmokeTest {
         boolean dataplaneRequested = phaseSet.contains("dataplane") || phaseSet.contains("all");
         runClassic = phaseSet.contains("classic") || phaseSet.contains("all");
         runUdpFailover = phaseSet.contains("udp-failover");
+        runPregen = phaseSet.contains("pregen");
+        if (runPregen) {
+            // 预生成阶段：不起玩家相关逻辑，只加载区块
+            runClassic = false;
+            runUdpFailover = false;
+            int total = (2 * PREGEN_RADIUS + 1) * (2 * PREGEN_RADIUS + 1);
+            pregenFutures = new CompletableFuture[total];
+            pregenCursor = 0;
+            pregenDoneCount = 0;
+            pregenDone = false;
+            LOGGER.info("{} PREGEN phase accepted: radius={} total={} chunks", MARKER, PREGEN_RADIUS, total);
+        }
         if (dataplaneRequested && !phaseSet.contains("classic") && !runUdpFailover) {
             // 用户显式传 dataplane 但未带 classic —— 仍默认跑 classic 以保证后续能切换 VD。
             runClassic = true;
@@ -116,6 +146,13 @@ public final class ServerSmokeTest {
                 }
             }
 
+            if (runPregen && !pregenDone && server.getPlayerList() != null) {
+                ServerLevel overworld = server.getLevel(Level.OVERWORLD);
+                if (overworld != null) {
+                    tickPregen(overworld);
+                }
+            }
+
             if (runClassic && !switched) {
                 int currentCount = server.getPlayerList() != null ? server.getPlayerList().getPlayerCount() : 0;
                 if (lastPlayerCount > 0 && currentCount == 0) {
@@ -130,6 +167,34 @@ public final class ServerSmokeTest {
             }
         } catch (Throwable t) {
             LOGGER.error("{} tick error", MARKER, t);
+        }
+    }
+
+    /**
+     * pregen 阶段：按行扫描逐批提交区块生成请求（future 异步），全部完成后输出 PREGEN_DONE。
+     */
+    private static void tickPregen(ServerLevel overworld) {
+        if (pregenCursor < pregenFutures.length) {
+            int end = Math.min(pregenCursor + PREGEN_BATCH, pregenFutures.length);
+            for (int i = pregenCursor; i < end; i++) {
+                int dz = i / (2 * PREGEN_RADIUS + 1) - PREGEN_RADIUS;
+                int dx = i % (2 * PREGEN_RADIUS + 1) - PREGEN_RADIUS;
+                pregenFutures[i] = overworld.getChunkSource().getChunkFuture(
+                        dx, dz, ChunkStatus.FULL, true);
+            }
+            pregenCursor = end;
+            LOGGER.info("{} PREGEN submitted {}/{} chunks", MARKER, pregenCursor, pregenFutures.length);
+        } else {
+            int done = 0;
+            for (CompletableFuture<?> f : pregenFutures) {
+                if (f.isDone()) {
+                    done++;
+                }
+            }
+            if (done >= pregenFutures.length) {
+                pregenDone = true;
+                LOGGER.info("{} PREGEN_DONE total={} chunks", MARKER, pregenFutures.length);
+            }
         }
     }
 

@@ -349,7 +349,9 @@ public final class FabricTomlConfigIO {
                 getInt(cfg, "clientCache.loadThreads", d.loadThreads()),
                 getBool(cfg, "clientCache.lightCacheEnabled", d.lightCacheEnabled()),
                 getInt(cfg, "clientCache.maxChunksPerFrame", d.maxChunksPerFrame()),
-                getInt(cfg, "clientCache.mainThreadChunkBudgetMs", d.mainThreadChunkBudgetMs())
+                getInt(cfg, "clientCache.mainThreadChunkBudgetMs", d.mainThreadChunkBudgetMs()),
+                getBool(cfg, "clientCache.parallelLightEngineEnabled", d.parallelLightEngineEnabled()),
+                getInt(cfg, "clientCache.parallelLightEngineThreads", d.parallelLightEngineThreads())
         );
     }
 
@@ -377,6 +379,8 @@ public final class FabricTomlConfigIO {
         set(cfg, "clientCache.lightCacheEnabled", c.lightCacheEnabled(), "是否启用光照缓存");
         set(cfg, "clientCache.maxChunksPerFrame", c.maxChunksPerFrame(), "每帧应用缓存区块硬顶");
         set(cfg, "clientCache.mainThreadChunkBudgetMs", c.mainThreadChunkBudgetMs(), "主线程 apply 预算（ms）");
+        set(cfg, "clientCache.parallelLightEngineEnabled", c.parallelLightEngineEnabled(), "是否启用多线程光照引擎（后台并行重算光照；默认开启）");
+        set(cfg, "clientCache.parallelLightEngineThreads", c.parallelLightEngineThreads(), "多线程光照引擎线程数（虚拟线程模式忽略）");
     }
 
     private static HassiumConfig.ClientNetworkConfig readClientNetwork(CommentedConfig cfg) {
@@ -432,6 +436,7 @@ public final class FabricTomlConfigIO {
                 getStringSet(cfg, "network.compressionBlacklist", d.compressionBlacklist()),
                 getBool(cfg, "network.metricsEnabled", d.metricsEnabled()),
                 getInt(cfg, "network.maxChunksPerTick", d.maxChunksPerTick()),
+                getInt(cfg, "network.smoothChunkSendRate", d.smoothChunkSendRate()),
                 getInt(cfg, "network.serverChunkPushThreads", d.serverChunkPushThreads()),
                 getBool(cfg, "network.dynamicThreadPoolEnabled", d.dynamicThreadPoolEnabled()),
                 getInt(cfg, "network.minPushThreads", d.minPushThreads()),
@@ -457,7 +462,8 @@ public final class FabricTomlConfigIO {
         set(cfg, "network.enableCompactHeader", n.enableCompactHeader(), "是否启用紧凑包头");
         set(cfg, "network.compressionBlacklist", new ArrayList<>(n.compressionBlacklist()), "压缩/聚合黑名单");
         set(cfg, "network.metricsEnabled", n.metricsEnabled(), "是否启用指标收集");
-        set(cfg, "network.maxChunksPerTick", n.maxChunksPerTick(), "每玩家每 tick 推送上限（仅服务端）");
+        set(cfg, "network.maxChunksPerTick", n.maxChunksPerTick(), "每玩家每 tick 提交到后台序列化的区块上限（序列化/压缩/发送全在推送线程池；建议 ≥ smoothChunkSendRate/20，仅服务端）");
+        set(cfg, "network.smoothChunkSendRate", n.smoothChunkSendRate(), "每玩家区块平滑发送速率（块/秒，仅服务端）");
         set(cfg, "network.serverChunkPushThreads", n.serverChunkPushThreads(), "服务端推送线程数（仅服务端）");
         set(cfg, "network.dynamicThreadPoolEnabled", n.dynamicThreadPoolEnabled(), "是否动态调整推送线程（仅服务端）");
         set(cfg, "network.minPushThreads", n.minPushThreads(), "动态池最小线程数（仅服务端）");
@@ -491,7 +497,8 @@ public final class FabricTomlConfigIO {
                 getBool(cfg, "debug.chunkApplyLogging", d.chunkApplyLogging()),
                 getBool(cfg, "debug.networkLogging", d.networkLogging()),
                 getBool(cfg, "debug.cacheLogging", d.cacheLogging()),
-                getBool(cfg, "debug.dataplaneLogging", d.dataplaneLogging())
+                getBool(cfg, "debug.dataplaneLogging", d.dataplaneLogging()),
+                getBool(cfg, "debug.lightVerify", d.lightVerify())
         );
     }
 
@@ -504,6 +511,7 @@ public final class FabricTomlConfigIO {
         set(cfg, "debug.networkLogging", d.networkLogging(), "网络调试日志");
         set(cfg, "debug.cacheLogging", d.cacheLogging(), "缓存调试日志");
         set(cfg, "debug.dataplaneLogging", d.dataplaneLogging(), "数据面（多通道 Data Plane）热路径日志 — 默认 false 以避免高频刷屏");
+        set(cfg, "debug.lightVerify", d.lightVerify(), "光照验算（官方引擎对照 BFS 结果）");
     }
 
     // --- value helpers ---

@@ -2,7 +2,6 @@ package io.github.limuqy.mc.hassium.mixin;
 
 import io.github.limuqy.mc.hassium.cache.client.IClientLevelExtension;
 import net.minecraft.client.multiplayer.ClientLevel;
-import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import org.spongepowered.asm.mixin.Mixin;
@@ -29,8 +28,8 @@ public class MixinLevel {
             return;
         }
         IClientLevelExtension ext = (IClientLevelExtension) self;
-        ChunkPos pos = new ChunkPos(blockEntity.getBlockPos());
-        if (ext.hassium$isRenderOnly(pos)) {
+        // long 键（ChunkPos.asLong）：热路径避免每 BE 每 tick 分配 ChunkPos
+        if (ext.hassium$isRenderOnly(blockEntity.getBlockPos().asLong())) {
             ci.cancel();
         }
     }

@@ -100,6 +100,12 @@ public final class HassiumClothConfigScreen {
         render.addEntry(intRange(entries, "hassium.configuration.clientCache.mainThreadChunkBudgetMs",
                 draft.mainThreadChunkBudgetMs, dCache.mainThreadChunkBudgetMs(), 1, 50,
                 v -> draft.mainThreadChunkBudgetMs = v));
+        render.addEntry(bool(entries, "hassium.configuration.clientCache.parallelLightEngineEnabled",
+                draft.cacheParallelLightEngineEnabled, dCache.parallelLightEngineEnabled(),
+                v -> draft.cacheParallelLightEngineEnabled = v));
+        render.addEntry(intRange(entries, "hassium.configuration.clientCache.parallelLightEngineThreads",
+                draft.cacheParallelLightEngineThreads, dCache.parallelLightEngineThreads(), 1, 64,
+                v -> draft.cacheParallelLightEngineThreads = v));
         render.addEntry(bool(entries, "hassium.configuration.network.metricsEnabled",
                 draft.metricsEnabled, dClientNet.metricsEnabled(), v -> draft.metricsEnabled = v));
         render.addEntry(bool(entries, "hassium.configuration.network.metricsAutoReset",
@@ -126,6 +132,8 @@ public final class HassiumClothConfigScreen {
                 draft.cacheLogging, dDebug.cacheLogging(), v -> draft.cacheLogging = v));
         debugCat.addEntry(bool(entries, "hassium.configuration.debug.dataplaneLogging",
                 draft.dataplaneLogging, dDebug.dataplaneLogging(), v -> draft.dataplaneLogging = v));
+        debugCat.addEntry(bool(entries, "hassium.configuration.debug.lightVerify",
+                draft.lightVerify, dDebug.lightVerify(), v -> draft.lightVerify = v));
         return builder.build();
     }
 
@@ -202,6 +210,9 @@ public final class HassiumClothConfigScreen {
         boolean lightCacheEnabled;
         int maxChunksPerFrame;
         int mainThreadChunkBudgetMs;
+        // 并行光照引擎
+        boolean cacheParallelLightEngineEnabled;
+        int cacheParallelLightEngineThreads;
         // 网络开关
         boolean networkEnabled;
         boolean metricsEnabled;
@@ -216,6 +227,7 @@ public final class HassiumClothConfigScreen {
         boolean networkLogging;
         boolean cacheLogging;
         boolean dataplaneLogging;
+        boolean lightVerify;
 
         static Draft from(HassiumConfig c) {
             Draft d = new Draft();
@@ -242,6 +254,8 @@ public final class HassiumClothConfigScreen {
             d.lightCacheEnabled = cache.lightCacheEnabled();
             d.maxChunksPerFrame = cache.maxChunksPerFrame();
             d.mainThreadChunkBudgetMs = cache.mainThreadChunkBudgetMs();
+            d.cacheParallelLightEngineEnabled = cache.parallelLightEngineEnabled();
+            d.cacheParallelLightEngineThreads = cache.parallelLightEngineThreads();
 
             d.networkEnabled = clientNet.enabled();
             d.metricsEnabled = clientNet.metricsEnabled();
@@ -256,6 +270,7 @@ public final class HassiumClothConfigScreen {
             d.networkLogging = debug.networkLogging();
             d.cacheLogging = debug.cacheLogging();
             d.dataplaneLogging = debug.dataplaneLogging();
+            d.lightVerify = debug.lightVerify();
             return d;
         }
 
@@ -268,14 +283,15 @@ public final class HassiumClothConfigScreen {
                             cacheCleanupIntervalTicks, cacheTargetCacheSizeMb, cacheMinCleanupBatchSize,
                             cacheViewDistanceExtensionEnabled, cacheMaxRenderDistance, cacheOvdUnloadDelaySecs,
                             cacheSectionDeltaEnabled, cacheJoinBoostEnabled, cacheEntitySnapshotsEnabled,
-                            loadThreads, lightCacheEnabled, maxChunksPerFrame, mainThreadChunkBudgetMs
+                            loadThreads, lightCacheEnabled, maxChunksPerFrame, mainThreadChunkBudgetMs,
+                            cacheParallelLightEngineEnabled, cacheParallelLightEngineThreads
                     ),
                     new HassiumConfig.ClientNetworkConfig(networkEnabled, metricsEnabled, metricsAutoReset, recoveryFreeze),
                     HassiumConfig.ServerNetworkConfig.DEFAULT,
                     HassiumConfig.CompatConfig.DEFAULT,
                     new HassiumConfig.DebugConfig(
                             metadataLogging, dispatcherLogging, asyncLogging, compressionLogging,
-                            chunkApplyLogging, networkLogging, cacheLogging, dataplaneLogging
+                            chunkApplyLogging, networkLogging, cacheLogging, dataplaneLogging, lightVerify
                     )
             );
         }

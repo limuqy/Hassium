@@ -65,7 +65,10 @@ public class HassiumMetricsImpl implements HassiumMetrics {
     private final AtomicLong lightCacheMissCount = new AtomicLong(0);
     private final AtomicLong lightCacheMissBytes = new AtomicLong(0);
     private final AtomicLong lightRecomputeTimeNs = new AtomicLong(0);
+    /** 后台并行光照重算（LightComputeService solve）总耗时；同步路径恒 0。 */
+    private final AtomicLong lightRecomputeBackgroundTimeNs = new AtomicLong(0);
     private final AtomicLong lightDeltaReceivedCount = new AtomicLong(0);
+    private final AtomicLong lightVerifyMismatchCount = new AtomicLong(0);
 
     // 数据面分流指标（PoC 多通道路由统计；口径 = 服务端发出帧 payload 等价字节数）
     private final AtomicLong bulkFramesPrimary = new AtomicLong(0);
@@ -303,8 +306,18 @@ public class HassiumMetricsImpl implements HassiumMetrics {
     }
 
     @Override
+    public long getLightRecomputeBackgroundTimeNs() {
+        return lightRecomputeBackgroundTimeNs.get();
+    }
+
+    @Override
     public long getLightDeltaReceivedCount() {
         return lightDeltaReceivedCount.get();
+    }
+
+    @Override
+    public long getLightVerifyMismatchCount() {
+        return lightVerifyMismatchCount.get();
     }
 
     // ===== 数据面分流量指标 =====
@@ -395,7 +408,9 @@ public class HassiumMetricsImpl implements HassiumMetrics {
         lightCacheMissCount.set(0);
         lightCacheMissBytes.set(0);
         lightRecomputeTimeNs.set(0);
+        lightRecomputeBackgroundTimeNs.set(0);
         lightDeltaReceivedCount.set(0);
+        lightVerifyMismatchCount.set(0);
         storageErrors.set(0);
         networkErrors.set(0);
         compressionErrors.set(0);
@@ -600,11 +615,29 @@ public class HassiumMetricsImpl implements HassiumMetrics {
     }
 
     /**
+     * 记录后台并行光照重算耗时（主线程外执行；同步路径不调用）
+     */
+    public void recordLightRecomputeBackgroundTime(long timeNs) {
+        if (timeNs > 0) {
+            lightRecomputeBackgroundTimeNs.addAndGet(timeNs);
+        }
+    }
+
+    /**
      * 记录收到 LightDeltaS2CPacket 条目
      */
     public void recordLightDeltaReceived(long count) {
         if (count > 0) {
             lightDeltaReceivedCount.addAndGet(count);
+        }
+    }
+
+    /**
+     * 记录光照验算差异格数（debug.lightVerify）
+     */
+    public void recordLightVerifyMismatch(long count) {
+        if (count > 0) {
+            lightVerifyMismatchCount.addAndGet(count);
         }
     }
 
@@ -844,6 +877,8 @@ public class HassiumMetricsImpl implements HassiumMetrics {
                         "  数据请求: 发送 %d, 接收 %d\n" +
                         "  分段增量: 请求 %d, 接收 %d\n" +
                         "  区块: 压缩 %d, 解压 %d\n" +
+                        "光照:\n" +
+                        "  重算耗时: %.1f ms, 后台重算: %.1f ms, 验算差异: %d\n" +
                         "数据面分流:\n" +
                         "  Primary: %d 帧 (%s)\n" +
                         "  Data: %d 帧 (%s)\n" +
@@ -871,6 +906,8 @@ public class HassiumMetricsImpl implements HassiumMetrics {
                 dataRequestsSent.get(), dataRequestsReceived.get(),
                 sectionDeltaRequestsSent.get(), sectionDeltaChunksReceived.get(),
                 chunksCompressed.get(), chunksDecompressed.get(),
+                lightRecomputeTimeNs.get() / 1_000_000.0,
+                lightRecomputeBackgroundTimeNs.get() / 1_000_000.0, lightVerifyMismatchCount.get(),
                 bulkFramesPrimary.get(), MetricsTextFormatter.formatBytes(bulkBytesPrimary.get()),
                 bulkFramesData.get(), MetricsTextFormatter.formatBytes(bulkBytesData.get()),
                 MetricsTextFormatter.formatPercent(getBulkDataSharePercent()),

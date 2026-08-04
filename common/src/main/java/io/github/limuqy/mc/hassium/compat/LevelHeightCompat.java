@@ -28,4 +28,13 @@ public final class LevelHeightCompat {
         return accessor.getMaxSectionY() + 1;
 #endif
     }
+
+    /** 世界最低格 Y（inclusive）。 */
+    public static int getMinBlockY(LevelHeightAccessor accessor) {
+#if MC_VER < MC_1_21_2
+        return accessor.getMinBuildHeight();
+#else
+        return accessor.getMinY();
+#endif
+    }
 }

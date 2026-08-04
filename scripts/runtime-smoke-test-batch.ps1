@@ -107,6 +107,22 @@ function Invoke-Session {
         $cleanLabel = if ($doClean) { "CleanWorld" } else { "ReuseWorld" }
         Write-Host "[$sessionId] 尝试 $attempt/$MaxRetries (port=$ServerPort, $cleanLabel)..."
 
+        # CleanWorld 且预生成存档缺失时，先跑一次预生成（49×49 区域），
+        # 让首轮供给曲线由令牌桶+充足区块决定，而非 worldgen 节奏。
+        # 预生成失败不阻断冒烟（降级为正常 worldgen）。
+        if ($doClean) {
+            $pregenSrc = Join-Path $projectRoot "build\smoke-test\pregen-world\${Loader}-${Ver}\world"
+            if (-not (Test-Path $pregenSrc)) {
+                Write-Host "[$sessionId] 预生成存档缺失，先执行预生成 (${Loader}/${Ver})..."
+                & $scriptPath -Ver $Ver -Loader $Loader -Phase $Phase `
+                    -SessionId "${sessionId}_pregen" -PregenOnly `
+                    -ServerPort $ServerPort -ServerReadyTimeoutSec $ServerReadyTimeoutSec
+                if ($LASTEXITCODE -ne 0) {
+                    Write-Host "[$sessionId] 预生成失败，降级为正常 worldgen 冒烟" -ForegroundColor Yellow
+                }
+            }
+        }
+
         $result = & $scriptPath `
             -Ver $Ver -Loader $Loader -Phase $Phase `
             -SessionId $sessionId -CleanWorld:$doClean `

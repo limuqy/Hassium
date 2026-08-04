@@ -103,6 +103,7 @@ public final class ClientLifecycleHelper {
         MainThreadDispatcher.clearClient(false);
         MainThreadDispatcher.clearPlayerPosition();
         ClientLightRecomputeService.clear();
+        io.github.limuqy.mc.hassium.cache.client.LightComputeService.getInstance().clear();
         ClientMetadataHandler.clearPendingState();
 
         // ⑥ finalizeDisconnect：MixinMinecraft disconnect/clearLevel TAIL，或加载器 DISCONNECT 兜底

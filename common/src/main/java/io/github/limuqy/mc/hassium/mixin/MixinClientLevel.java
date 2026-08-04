@@ -32,7 +32,7 @@ import java.util.Set;
 public class MixinClientLevel implements IClientLevelExtension {
 
     @Unique
-    private final Set<ChunkPos> hassium$renderOnlyChunks = new HashSet<>();
+    private final Set<Long> hassium$renderOnlyChunks = new HashSet<>();
 
     /**
      * L2 世界定格：恢复窗口内暂停世界 tick（区块加载/时间推进等），画面保持定格。
@@ -63,7 +63,7 @@ public class MixinClientLevel implements IClientLevelExtension {
      * 检查区块是否为仅渲染区块
      */
     @Override
-    public boolean hassium$isRenderOnly(ChunkPos pos) {
+    public boolean hassium$isRenderOnly(long pos) {
         return hassium$renderOnlyChunks.contains(pos);
     }
 
@@ -71,7 +71,7 @@ public class MixinClientLevel implements IClientLevelExtension {
      * 添加仅渲染区块
      */
     @Override
-    public void hassium$addRenderOnlyChunk(ChunkPos pos) {
+    public void hassium$addRenderOnlyChunk(long pos) {
         hassium$renderOnlyChunks.add(pos);
         Constants.LOG.debug("Hassium: Added render-only chunk {}", pos);
     }
@@ -80,7 +80,7 @@ public class MixinClientLevel implements IClientLevelExtension {
      * 移除仅渲染区块
      */
     @Override
-    public void hassium$removeRenderOnlyChunk(ChunkPos pos) {
+    public void hassium$removeRenderOnlyChunk(long pos) {
         hassium$renderOnlyChunks.remove(pos);
     }
 
@@ -88,7 +88,7 @@ public class MixinClientLevel implements IClientLevelExtension {
      * 获取所有仅渲染区块
      */
     @Override
-    public Set<ChunkPos> hassium$getRenderOnlyChunks() {
+    public Set<Long> hassium$getRenderOnlyChunks() {
         return hassium$renderOnlyChunks;
     }
 
@@ -105,7 +105,7 @@ public class MixinClientLevel implements IClientLevelExtension {
     @Inject(method = "unload", at = @At("HEAD"))
     private void hassium$onUnload(LevelChunk chunk, CallbackInfo ci) {
         ChunkPos pos = chunk.getPos();
-        boolean wasRenderOnly = hassium$renderOnlyChunks.contains(pos)
+        boolean wasRenderOnly = hassium$renderOnlyChunks.contains(pos.toLong())
                 || ViewDistanceExtensionService.getInstance().isRenderOnly(pos);
 
         // 真实区块：先排队落盘（此时 isRenderOnly 仍为 false）
@@ -126,7 +126,7 @@ public class MixinClientLevel implements IClientLevelExtension {
 
         // 成功替换时 apply 已 addRenderOnly；勿再摘掉
         if (!substituted) {
-            hassium$renderOnlyChunks.remove(pos);
+            hassium$renderOnlyChunks.remove(pos.toLong());
         }
     }
 

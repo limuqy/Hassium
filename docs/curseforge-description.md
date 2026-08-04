@@ -8,9 +8,9 @@
 
 # Summary（项目简介，建议粘贴到 CurseForge Summary）
 
-**EN:** **Hassium** is a high-performance Minecraft optimization mod providing **efficient storage, network optimization, chunk caching, beyond-view rendering, and lighting optimization**. Covers Minecraft **1.20.1–1.21.11** on **Fabric / Forge / NeoForge**.
+**EN:** **Hassium** is a high-performance Minecraft optimization mod providing **efficient compression, network optimization, chunk caching, beyond-view rendering, and lighting optimization**. Covers Minecraft **1.20.1–1.21.11** on **Fabric / Forge / NeoForge**.
 
-**中文：** **Hassium** 是 Minecraft 的高性能优化模组，提供**高效存储、网络优化、区块缓存、超视渲染与光照优化**。覆盖 Minecraft **1.20.1–1.21.11**，支持 **Fabric / Forge / NeoForge**。
+**中文：** **Hassium** 是 Minecraft 的高性能优化模组，提供**高效压缩、网络优化、区块缓存、超视渲染与光照优化**。覆盖 Minecraft **1.20.1–1.21.11**，支持 **Fabric / Forge / NeoForge**。
 
 ---
 
@@ -24,9 +24,9 @@
 [![Minecraft](https://img.shields.io/badge/Minecraft-1.20.1--1.21.11-green.svg)](https://www.minecraft.net/)
 [![Loaders](https://img.shields.io/badge/Loaders-Fabric%20%7C%20Forge%20%7C%20NeoForge-orange.svg)](https://github.com/limuqy/Hassium/wiki/Support-Matrix)
 
-**Hassium** is a high-performance Minecraft optimization mod providing **efficient storage, network optimization, chunk caching, beyond-view rendering, and lighting optimization**. Covers Minecraft **1.20.1–1.21.11** on **Fabric / Forge / NeoForge**.
+**Hassium** is a high-performance Minecraft optimization mod providing **efficient compression, network optimization, chunk caching, beyond-view rendering, and lighting optimization**. Covers Minecraft **1.20.1–1.21.11** on **Fabric / Forge / NeoForge**.
 
-**Hassium** 是 Minecraft 的高性能优化模组，提供**高效存储、网络优化、区块缓存、超视渲染与光照优化**。覆盖 Minecraft **1.20.1–1.21.11**，支持 **Fabric / Forge / NeoForge**。
+**Hassium** 是 Minecraft 的高性能优化模组，提供**高效压缩、网络优化、区块缓存、超视渲染与光照优化**。覆盖 Minecraft **1.20.1–1.21.11**，支持 **Fabric / Forge / NeoForge**。
 
 [GitHub Repository](https://github.com/limuqy/Hassium) · [Wiki 中文](https://github.com/limuqy/Hassium/wiki) · [Wiki English](https://github.com/limuqy/Hassium/wiki/Home-en)
 
@@ -45,21 +45,23 @@ Full instructions: [Installation](https://github.com/limuqy/Hassium/wiki/Install
 
 ### Features
 
-| Feature | Description |
-| --- | --- |
-| **Efficient storage** | Higher-ratio world chunk compression for smaller saves; keeps vanilla Region (`.mca`) layout |
-| **Network compression** | More efficient compression for chunks and packets — less bandwidth and wait time |
-| **Chunk cache** | Loaded chunks are kept locally; revisiting an area prefers the cache instead of full downloads |
-| **Section delta** | On cache mismatch, fetch only changed sections (`sectionDelta`) instead of the whole chunk |
-| **Beyond-view render** | When client RD exceeds server view distance (multiplayer), fill the outer ring from local cache (render-only; no out-of-range server requests) |
-| **World export** | `/hassiumc export` writes the local cache as a vanilla Anvil singleplayer world |
-| **Light stripping** | Server can omit light data; the client recomputes lighting locally to save more bandwidth |
-| **Light cache** | Light data is cached after first recompute; cache hits apply pre-computed lighting directly, skipping expensive recomputation |
-| **Control failover** | If the TCP control connection stalls or drops, reconnect automatically through candidate endpoints; during recovery the world freezes on screen by default (tick paused, transition screens hidden, 1.20.1 segment; optional seamless mode keeps the world running and rolls back after recovery), the cache stays warm, and the disconnect screen is suppressed (data-plane failover) |
-| **Weighted distribution** | Multiple UDP/KCP endpoints carry the data plane with weight-based round-robin; the control plane stays on vanilla TCP |
-| **Smooth loading** | Caps main-thread work during join and view expansion to reduce hitch spikes |
-| **Client-friendly** | Clients without the mod can connect by default; install on both sides for full compression and cache benefits |
-| **Traffic metrics** | `/hassium stats` (server) and `/hassiumc stats` (client) to inspect compression and cache results |
+| Category | Feature | Description                                                                                                                                                               |
+| --- | --- |---------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| **Efficient compression** | Storage compression | World chunk ZSTD on disk (type 126) for smaller saves; keeps vanilla Region (`.mca`) layout                                                                               |
+| | Network compression | More efficient compression for chunks and packets (custom channels + global pipeline + packet aggregation) — less bandwidth and wait time                                 |
+| **Network optimization** | Smooth push | Constant-rate server throttling (150 chunks/s token bucket) + per-tick serialization cap with background encoding; join and view expansion never saturate the main thread |
+| | Control failover | On TCP-control stall or drop, auto-reconnect via candidate endpoints with warm cache and hidden disconnect screen (data-plane failover)                                   |
+| | Weighted distribution | Multiple UDP/KCP endpoints carry the data plane with weight-based round-robin; the control plane stays on vanilla TCP                                                     |
+| **Chunk caching** | Chunk cache | Loaded chunks are kept locally; revisiting an area prefers the cache instead of full downloads                                                                            |
+| | Section delta | On cache mismatch (MISMATCH), fetch only changed sections (`sectionDelta`) and merge locally instead of the whole chunk                                                   |
+| | **Beyond-view render** | When client RD exceeds server view distance (multiplayer), fill the outer ring from local cache (render-only; no out-of-range server requests); incompatible with Bobby   |
+| | World export | `/hassiumc export` writes the local cache as a vanilla Anvil singleplayer world                                                                                           |
+| **Lighting optimization** | Light stripping | Server can omit light data; the client recomputes lighting locally to save more bandwidth                                                                                 |
+| | Light cache | Light data is cached after first recompute; cache hits apply pre-computed lighting directly, skipping expensive recomputation                                             |
+| | Parallel light engine | Light recomputation runs on a background thread pool; the main thread only submits snapshots (on by default)                                                              |
+| **Utilities** | Traffic metrics | `/hassium stats` (server) and `/hassiumc stats` (client) to inspect compression and cache results                                                                         |
+
+Clients without the mod can connect by default (`compat.requireClientMod = false`); install on both sides for full compression and cache benefits.
 
 ### Supported versions
 
@@ -102,21 +104,23 @@ Complete matrix: [Support Matrix](https://github.com/limuqy/Hassium/wiki/Support
 
 ### 功能
 
-| 能力 | 说明                                                    |
-| --- |-------------------------------------------------------|
-| **高效存储** | 世界区块用更高压缩率落盘，显著减小存档体积；仍兼容原版 Region（`.mca`）布局          |
-| **网络压缩** | 区块与数据包用更高效压缩传输，降低带宽占用与下载等待                            |
-| **区块缓存** | 曾加载过的区块写入本地；再次进入同一区域时优先用本地数据，少传全量包                    |
-| **分段增量** | 缓存过期时仅拉取变更分段（`sectionDelta`），避免整块重传                   |
-| **超视渲染** | 多人服客户端 RD 大于服务端视距时，用本地缓存回填视距外地形（仅渲染、不向服索要视距外区块）       |
-| **世界导出** | `/hassiumc export` 将本地缓存导出为可进单机的原版 Anvil 世界     |
-| **光照剥离** | 服务端可不传光照数据，由客户端本地重算，进一步省流量 |
-| **光照缓存** | 首次加载重算后缓存光照数据，后续缓存命中直接应用，跳过同步重算 |
-| **主控热切** | TCP 主控断或卡时按候选自动重连；恢复期间默认画面定格（tick 暂停、过渡画面隐藏；可选无感切换：世界继续运行、恢复后位置/方块回退），缓存暖续、隐藏断连界面（数据面 failover） |
-| **加权分流** | 多 UDP/KCP endpoint 按 weight 加权轮询承载数据面，控制面留原版 TCP |
-| **平滑加载** | 进服与视野扩展时限制主线程压力，减少卡顿尖峰                                |
-| **兼容友好** | 未安装本模组的客户端默认可连接；双端都装才能吃满压缩与缓存                         |
-| **流量监控** | `/hassium stats`（服务端）、`/hassiumc stats`（客户端）查看压缩与缓存效果 |
+| 分类 | 能力 | 说明 |
+| --- | --- | --- |
+| **高效压缩** | 存储压缩 | 世界区块 ZSTD 落盘（type 126），存档体积显著减小；仍兼容原版 Region（`.mca`）布局 |
+| | 网络压缩 | 区块与数据包 ZSTD 传输（自定义通道 + 全局管道 + 包聚合），降低带宽与下载等待 |
+| **网络优化** | 平滑推送 | 服务端恒定速率限速（150 块/s 令牌桶）+ 主线程序列化上限与后台化；进服/扩展视野不卡主线程 |
+| | 主控热切 | TCP 主控断或卡时按候选自动重连，恢复期画面定格（tick 暂停、过渡画面隐藏；可选无感切换），缓存暖续、隐藏断连界面（数据面 failover） |
+| | 加权分流 | 多 UDP/KCP endpoint 按 weight 加权轮询承载数据面，控制面留原版 TCP |
+| **区块缓存** | 客户端缓存 | 曾加载过的区块写入本地；再次进入同一区域时优先用本地数据，少传全量包 |
+| | 分段增量 | 缓存过期（MISMATCH）时仅拉取变更分段（`sectionDelta`）本地合并，避免整块重传 |
+| | **超视渲染** | 多人服客户端 RD 大于服务端视距时，用本地缓存回填视距外地形（仅渲染、不向服索要视距外区块）；与 Bobby 互斥 |
+| | 世界导出 | `/hassiumc export` 将本地缓存导出为可进单机的原版 Anvil 世界 |
+| **光照优化** | 光照剥离 | 服务端可不传光照数据，由客户端本地重算，进一步省流量 |
+| | 光照缓存 | 首次加载重算后缓存光照数据，后续缓存命中直接应用，跳过同步重算 |
+| | 并行光照 | 光照重算在后台线程池并行执行，主线程只提交快照（默认开启） |
+| **实用工具** | 流量监控 | `/hassium stats`（服务端）、`/hassiumc stats`（客户端）查看压缩与缓存效果 |
+
+未安装本模组的客户端默认可连接（`compat.requireClientMod = false`）；双端都装才能吃满压缩与缓存。
 
 ### 支持版本
 

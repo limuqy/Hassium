@@ -76,6 +76,13 @@ public class ServerChunkPushManager {
     private final Map<UUID, PriorityBlockingQueue<DataRequestTask>> dataQueues = new ConcurrentHashMap<>();
 
     /**
+     * 每玩家平滑发送限速器（令牌桶）：恒定速率摊平 tick 级脉冲，防网络峰值占用。
+     * 与 maxChunksPerTick（每 tick 硬上限）正交：后者管主线程串行化批次，
+     * 本桶在压缩后发送前按秒级恒定速率放行。
+     */
+    private final Map<UUID, SmoothSendLimiter> sendLimiters = new ConcurrentHashMap<>();
+
+    /**
      * 每玩家是否正在本 tick 序列化（防重复 drain）
      */
     private final Map<UUID, AtomicBoolean> processingFlags = new ConcurrentHashMap<>();
@@ -98,7 +105,11 @@ public class ServerChunkPushManager {
     /**
      * 已编码包字节（与 chunkHash / 反透视视图一致的包数据）。
      */
-    private record PreparedChunk(byte[] data) {}
+    /**
+     * 已准备的区块数据：拦截路径缓存 {@code packet}（纯数据，后台 encode）或广播路径缓存线格式 {@code data}；
+     * 二选一，另一为 null。
+     */
+    private record PreparedChunk(byte[] data, ClientboundLevelChunkWithLightPacket packet) {}
 
     /**
      * 每玩家：chunkPosLong → 已编码的 ClientboundLevelChunkWithLightPacket 线格式字节。
@@ -195,15 +206,16 @@ public class ServerChunkPushManager {
         final ServerLevel firstLevel = PlayerCompat.getServerLevel(players.get(0));
         final int sectionCount = firstLevel.getSectionsCount();
         final RegistryAccess registryAccess = firstLevel.registryAccess();
-        // 主线程编码并缓存：保留反透视等 mod 已改写的包视图
-        byte[] encoded = encodeChunkPacket(packet, registryAccess);
-        if (encoded != null) {
-            for (ServerPlayer player : players) {
-                putPreparedChunkPacket(player.getUUID(), pos, encoded);
-            }
-        }
+        // 包字节编码挪 pushPool 后台：packet 为已构建完的纯数据（只读编码线程安全，
+        // 反透视等 mod 已在拦截时改写好包视图），不再占用主线程。
         pushPool.submit(() -> {
             try {
+                byte[] encoded = encodeChunkPacket(packet, registryAccess);
+                if (encoded != null) {
+                    for (ServerPlayer player : players) {
+                        putPreparedChunkPacket(player.getUUID(), pos, encoded);
+                    }
+                }
                 // 从已序列化的 packet 数据计算 section 哈希（线程安全，无需读取世界）
                 Map<Integer, Long> sectionHashes = ChunkContentHashUtil.computeSectionHashesFromPacket(
                         packet.getChunkData(), sectionCount, registryAccess);
@@ -238,14 +250,15 @@ public class ServerChunkPushManager {
         final ServerLevel playerLevel = PlayerCompat.getServerLevel(player);
         final int sectionCount = playerLevel.getSectionsCount();
         final RegistryAccess registryAccess = playerLevel.registryAccess();
-        if (chunkPacket instanceof ClientboundLevelChunkWithLightPacket lightPacket) {
-            byte[] encoded = encodeChunkPacket(lightPacket, registryAccess);
-            if (encoded != null) {
-                putPreparedChunkPacket(player.getUUID(), pos, encoded);
-            }
-        }
+        // 编码 + hash 计算 + 发送全部在 pushPool（packet 纯数据只读编码，线程安全）
         pushPool.submit(() -> {
             try {
+                if (chunkPacket instanceof ClientboundLevelChunkWithLightPacket lightPacket) {
+                    byte[] encoded = encodeChunkPacket(lightPacket, registryAccess);
+                    if (encoded != null) {
+                        putPreparedChunkPacket(player.getUUID(), pos, encoded);
+                    }
+                }
                 Map<Integer, Long> sectionHashes;
                 int sectionBitmap;
 
@@ -281,12 +294,15 @@ public class ServerChunkPushManager {
      * 异步计算 sectionHashes → chunkHash 并发送阶段一元数据（从 PlayerChunkSender.sendChunk 调用，1.20.2+）。
      * <p>
      * 1.20.2+ 移除了 {@code ServerPlayer.trackChunk}，初始区块发送改走
-     * {@code PlayerChunkSender.sendChunk}。主线程先按原版路径构建包并缓存字节（供反透视注入），
-     * 再在 pushPool 上从包数据计算 hash。
+     * {@code PlayerChunkSender.sendChunk}。packet 构建在**调用线程**同步完成：
+     * 1.21.2+ 的 PalettedContainer ThreadingDetector 禁止跨线程读 chunk，只有主线程/
+     * 原版 ChunkSender 线程合法（拦截点正是这两个线程之一）；<1.21.2 无检测但同样
+     * 在调用线程构建（拦截点即主线程）。编码不再占用调用线程：packet 为纯数据，
+     * 由 drain 消费方在 pushPool 后台 encode；hash 计算同样下推 pushPool。
      *
      * @param player    目标玩家
      * @param pos       区块位置
-     * @param chunk     区块对象（须在主线程调用）
+     * @param chunk     区块对象（须在主线程或原版 ChunkSender 线程调用）
      * @param dimension 维度标识
      */
     public void submitMetadataTaskFromChunk(ServerPlayer player, ChunkPos pos,
@@ -301,10 +317,9 @@ public class ServerChunkPushManager {
             Constants.LOG.warn("[ASYNC_METADATA] Failed to build chunk packet for {}", pos);
             return;
         }
-        byte[] encoded = encodeChunkPacket(packet, registryAccess);
-        if (encoded != null) {
-            putPreparedChunkPacket(player.getUUID(), pos, encoded);
-        }
+        // 同步缓存已构建的 packet：encode 留给 drain 消费方后台执行，主线程不再付线格式编码成本；
+        // packet 为纯数据（构造后不碰 chunk），后台 hash/encode 并发读安全。
+        putPreparedChunkPacket(player.getUUID(), pos, packet);
 
         pushPool.submit(() -> {
             try {
@@ -607,12 +622,44 @@ public class ServerChunkPushManager {
     /**
      * 处理客户端的 section 哈希请求（阶段二）。
      * <p>
-     * 比对客户端的 section 哈希与服务端当前数据，只发送变更的 section 和 blockEntity。
+     * 1.21.2+（PalettedContainer ThreadingDetector）：比对/序列化必须在主线程，全量主线程处理；
+     * 1.20.x / 1.21.1：主线程只做距离校验 + 取 chunk 引用，比对/序列化/组包/发送在 pushPool。
      * 每次请求都回包：可服务的进 {@code entries}，超距/失败的进 {@code skipped}（客户端回退全量）。
      */
     public void handleSectionHashRequest(ServerPlayer player, SectionHashRequestC2SPacket request) {
         if (!player.isAlive() || player.hasDisconnected()) { return; }
+#if MC_VER < MC_1_21_2
+        ensureInitialized();
 
+        ServerLevel level = PlayerCompat.getServerLevel(player);
+        int maxDist = PlayerCompat.getViewDistance(player) + SECTION_DELTA_VIEW_MARGIN;
+        ChunkPos playerChunkPos = player.chunkPosition();
+        List<SectionDeltaS2CPacket.SkippedChunk> skipped = new ArrayList<>();
+        List<DeltaWork> works = new ArrayList<>();
+
+        for (var entry : request.entries()) {
+            int dx = Math.abs(entry.chunkX() - playerChunkPos.x);
+            int dz = Math.abs(entry.chunkZ() - playerChunkPos.z);
+            if (dx > maxDist || dz > maxDist) {
+                DebugLogger.info(LogType.NETWORK,
+                        "[SECTION_DELTA] Skip [{}, {}] out of range (dx={}, dz={}, maxDist={}, player=[{}, {}])",
+                        entry.chunkX(), entry.chunkZ(), dx, dz, maxDist,
+                        playerChunkPos.x, playerChunkPos.z);
+                skipped.add(new SectionDeltaS2CPacket.SkippedChunk(entry.chunkX(), entry.chunkZ()));
+                continue;
+            }
+
+            LevelChunk chunk = level.getChunk(entry.chunkX(), entry.chunkZ());
+            if (chunk == null) {
+                skipped.add(new SectionDeltaS2CPacket.SkippedChunk(entry.chunkX(), entry.chunkZ()));
+                continue;
+            }
+
+            works.add(new DeltaWork(chunk, entry.sectionHashes(), entry.chunkX(), entry.chunkZ()));
+        }
+
+        pushPool.submit(() -> processSectionDelta(player, request.dimension(), works, skipped));
+#else
         ServerLevel level = PlayerCompat.getServerLevel(player);
         int maxDist = PlayerCompat.getViewDistance(player) + SECTION_DELTA_VIEW_MARGIN;
         ChunkPos playerChunkPos = player.chunkPosition();
@@ -683,13 +730,88 @@ public class ServerChunkPushManager {
             }
         }
 
+        sendSectionDeltaResponse(player, request.dimension(), deltas, skipped);
+#endif
+    }
+
+#if MC_VER < MC_1_21_2
+    /**
+     * 后台执行 section 比对 + 序列化 + 回包（单请求单回包语义，顺序按请求顺序保持）。
+     */
+    private void processSectionDelta(ServerPlayer player, String dimension,
+                                     List<DeltaWork> works,
+                                     List<SectionDeltaS2CPacket.SkippedChunk> skipped) {
+        if (player.hasDisconnected()) {
+            return; // 断线无需回包
+        }
+        List<SectionDeltaS2CPacket.DeltaEntry> deltas = new ArrayList<>();
+        for (DeltaWork w : works) {
+            try {
+                // 计算当前 section 哈希（不含 blockEntity；空气 section 不在 map 中，视为 0）
+                Map<Integer, Long> currentHashes = ChunkContentHashUtil.computeSectionHashes(w.chunk());
+                long[] clientHashes = w.clientHashes();
+
+                // 按完整索引比对：避免「服务端变空气」时漏发清除（非空 map 扫不到该 idx）
+                List<SectionDeltaS2CPacket.SectionData> changedSections = new ArrayList<>();
+                int sectionCount = w.chunk().getSectionsCount();
+                for (int idx = 0; idx < sectionCount; idx++) {
+                    long serverHash = currentHashes.getOrDefault(idx, 0L);
+                    long clientHash = idx < clientHashes.length ? clientHashes[idx] : 0L;
+                    if (serverHash != clientHash) {
+                        byte[] data = serializeSection(w.chunk(), idx);
+                        changedSections.add(new SectionDeltaS2CPacket.SectionData(idx, data));
+                    }
+                }
+
+                // 退化保护：变更 section 占非空 section 的占比达阈值时回退全量，避免分段增量比全量包更大。
+                // 用非空 section 数（currentHashes.size()）而非总 section 数做分母：
+                // 空 section 不进 delta，用总数会稀释占比，导致该回退时不回退。
+                int nonEmptyCount = currentHashes.size();
+                if (nonEmptyCount > 0 && !changedSections.isEmpty()
+                        && changedSections.size() * 100 / nonEmptyCount >= SECTION_DELTA_FALLBACK_THRESHOLD_PCT) {
+                    DebugLogger.info(LogType.NETWORK,
+                            "[SECTION_DELTA] Fallback to full for [{}, {}]: {}/{} non-empty sections changed (>= {}%)",
+                            w.x(), w.z(), changedSections.size(), nonEmptyCount,
+                            SECTION_DELTA_FALLBACK_THRESHOLD_PCT);
+                    skipped.add(new SectionDeltaS2CPacket.SkippedChunk(w.x(), w.z()));
+                    continue;
+                }
+
+                // 收集 blockEntity 数据：仅在有变更 section 时发送。
+                // 若 changedSections 为空（section hash 全部匹配），客户端缓存 BE 仍有效，无需重发。
+                List<SectionDeltaS2CPacket.BlockEntityData> blockEntities = changedSections.isEmpty()
+                        ? List.of()
+                        : collectBlockEntities(w.chunk());
+
+                deltas.add(new SectionDeltaS2CPacket.DeltaEntry(
+                        w.x(), w.z(), changedSections, blockEntities));
+            } catch (Exception e) {
+                Constants.LOG.error("[SECTION_DELTA] Failed to process chunk [{}, {}]",
+                        w.x(), w.z(), e);
+                skipped.add(new SectionDeltaS2CPacket.SkippedChunk(w.x(), w.z()));
+            }
+        }
+
+        sendSectionDeltaResponse(player, dimension, deltas, skipped);
+    }
+
+    /** 阶段二后台工作项：chunk 引用 + 客户端 section 哈希快照 */
+    private record DeltaWork(LevelChunk chunk, long[] clientHashes, int x, int z) {}
+#endif
+
+    /**
+     * 组包并发送阶段二响应（Data 通道优先，回退 Primary）。
+     */
+    private void sendSectionDeltaResponse(ServerPlayer player, String dimension,
+                                          List<SectionDeltaS2CPacket.DeltaEntry> deltas,
+                                          List<SectionDeltaS2CPacket.SkippedChunk> skipped) {
         // 始终回包，避免客户端悬等（含 entries/skipped 皆空的边界）
         FriendlyByteBuf buf = null;
         boolean sent = false;
         boolean routedViaData = false;
         try {
             SectionDeltaS2CPacket deltaPacket = new SectionDeltaS2CPacket(
-                    request.dimension(), deltas, skipped);
+                    dimension, deltas, skipped);
             buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
             deltaPacket.encode(buf);
 
@@ -710,7 +832,7 @@ public class ServerChunkPushManager {
                 sent = true;
                 DebugLogger.info(LogType.NETWORK,
                         "[SECTION_DELTA] Sent via Data plane (frameType=4) deltas={} skipped={} (dimension={})",
-                        deltas.size(), skipped.size(), request.dimension());
+                        deltas.size(), skipped.size(), dimension);
             } else {
                 // 走 Primary：口径与 ChunkSender Primary fallback 一致
                 io.github.limuqy.mc.hassium.metrics.NetworkStats.recordBulkSentPrimary(payloadLen);
@@ -718,7 +840,7 @@ public class ServerChunkPushManager {
                 sent = true;
                 DebugLogger.info(LogType.NETWORK,
                         "[SECTION_DELTA] Sent via Primary: {} deltas, {} skipped (dimension={})",
-                        deltas.size(), skipped.size(), request.dimension());
+                        deltas.size(), skipped.size(), dimension);
             }
         } catch (Exception e) {
             Constants.LOG.error("[SECTION_DELTA] Failed to send delta response", e);
@@ -734,7 +856,8 @@ public class ServerChunkPushManager {
     /**
      * 处理客户端的 blockEntity 数据请求。
      * <p>
-     * 收集指定区块的所有 blockEntity 数据并发送，不传输完整区块。
+     * 低频路径，且 BE 收集需遍历 chunk BE map（1.21.2+ 跨线程读 chunk 结构被 ThreadingDetector 拦截），
+     * 保持主线程处理。
      */
     @SuppressWarnings("deprecation") // Forge: BuiltInRegistries 字段在 Forge patched jar 中被标记 @Deprecated
     public void handleBlockEntityRequest(ServerPlayer player, BlockEntityRequestC2SPacket request) {
@@ -907,7 +1030,11 @@ public class ServerChunkPushManager {
     }
 
     /**
-     * 每 tick 在主线程序列化最多 maxChunksPerTick 个区块，压缩发送下推到 pushPool。
+     * 每 tick 提交最多 maxChunksPerTick 个区块到发送链。
+     * <p>
+     * 1.21.2+（区块系统重构引入 PalettedContainer ThreadingDetector，禁止跨线程读 chunk）：
+     * 序列化必须在主线程/原版 ChunkSender 线程，本方法在主线程序列化后压缩发送下推 pushPool；
+     * 1.20.x / 1.21.1（无检测）：序列化/压缩/限速/发送全部在 pushPool，主线程只出队 + 提交。
      */
     private void drainPlayerQueueTick(ServerPlayer player) {
         UUID playerId = player.getUUID();
@@ -936,13 +1063,16 @@ public class ServerChunkPushManager {
 
             int maxPerTick = HassiumConfigService.getInstance().getConfig().serverNetwork().maxChunksPerTick();
             if (maxPerTick <= 0) {
-                maxPerTick = 10;
+                maxPerTick = 8;
             }
 
             ServerLevel level = PlayerCompat.getServerLevel(player);
             List<SerializedChunkWork> works = new ArrayList<>(maxPerTick);
             int processed = 0;
 
+#if MC_VER < MC_1_21_2
+            // 后台序列化：主线程只出队 + getChunk（确认已加载）+ 提交；
+            // prepared 缓存命中与否在后台判定（take 为 ConcurrentHashMap 操作）。
             while (processed < maxPerTick && !queue.isEmpty()) {
                 if (!player.isAlive() || player.hasDisconnected()) {
                     removePlayer(playerId);
@@ -955,39 +1085,112 @@ public class ServerChunkPushManager {
                 }
 
                 try {
-                    // 优先使用拦截时缓存的包字节（与 chunkHash / 反透视视图一致）
-                    PreparedChunk prepared = takePreparedChunkPacket(playerId, task.pos());
-                    byte[] chunkData = prepared != null ? prepared.data() : null;
-                    if (chunkData == null) {
-                        LevelChunk chunk = level.getChunk(task.pos().x, task.pos().z);
-                        if (chunk == null) {
-                            Constants.LOG.warn("[PROCESS_QUEUE] Chunk {} not loaded, skipping", task.pos());
-                            continue;
-                        }
-                        chunkData = serializeChunk(chunk, level);
-                    }
-                    if (chunkData == null) {
-                        Constants.LOG.warn("[PROCESS_QUEUE] Failed to serialize chunk {}", task.pos());
+                    LevelChunk chunk = level.getChunk(task.pos().x, task.pos().z);
+                    if (chunk == null) {
+                        Constants.LOG.warn("[PROCESS_QUEUE] Chunk {} not loaded, skipping", task.pos());
                         continue;
                     }
 
-                    works.add(new SerializedChunkWork(player, task.pos(), chunkData));
+                    works.add(new SerializedChunkWork(player, task.pos(), chunk, null,
+                            level.registryAccess()));
                     processed++;
-                    DebugLogger.info(LogType.NETWORK, "[PROCESS_QUEUE] Serialized chunk {} ({} bytes, remaining={})",
-                            task.pos(), chunkData.length, queue.size());
+                    DebugLogger.info(LogType.NETWORK, "[PROCESS_QUEUE] Queued chunk {} (remaining={})",
+                            task.pos(), queue.size());
                 } catch (Exception e) {
-                    Constants.LOG.error("[PROCESS_QUEUE] Failed to serialize chunk {} for player {}",
+                    Constants.LOG.error("[PROCESS_QUEUE] Failed to queue chunk {} for player {}",
                             task.pos(), player.getName().getString(), e);
                 }
             }
 
             if (!works.isEmpty()) {
-                DebugLogger.info(LogType.NETWORK, "[PROCESS_QUEUE] Tick drain for {}: serialized={}, remaining={}",
+                DebugLogger.info(LogType.NETWORK, "[PROCESS_QUEUE] Tick drain for {}: queued={}, remaining={}",
                         player.getName().getString(), works.size(), queue.size());
                 for (SerializedChunkWork work : works) {
-                    pushPool.submit(() -> compressAndSend(work, sender));
+                    pushPool.submit(() -> {
+                        PreparedChunk prepared = takePreparedChunkPacket(work.player().getUUID(), work.pos());
+                        byte[] chunkData = prepared != null ? prepared.data() : null;
+                        if (chunkData == null) {
+                            if (prepared != null) {
+                                // 拦截路径缓存的 packet（主线程已 build）：后台 encode（纯数据）
+                                chunkData = encodeChunkPacket(prepared.packet(), work.registryAccess());
+                            } else {
+                                chunkData = serializeChunk(work.chunk(), level);
+                            }
+                        }
+                        if (chunkData == null) {
+                            Constants.LOG.warn("[PROCESS_QUEUE] Failed to serialize chunk {}", work.pos());
+                            return;
+                        }
+                        compressAndSend(work.player(), work.pos(), chunkData, sender);
+                    });
                 }
             }
+#else
+            // 主线程只做 prepared 命中判定 + getChunk + buildChunkPacket（读 chunk 受 ThreadingDetector 限制必须主线程）；
+            // encode（packet 构造后为纯数据：内部 buffer 已含全部 section 字节）下推 pushPool，
+            // 与压缩/限速/发送同一后台任务——主线程序列化成本减半。
+            while (processed < maxPerTick && !queue.isEmpty()) {
+                if (!player.isAlive() || player.hasDisconnected()) {
+                    removePlayer(playerId);
+                    return;
+                }
+
+                DataRequestTask task = queue.poll();
+                if (task == null) {
+                    break;
+                }
+
+                try {
+                    // 优先使用拦截时缓存的包字节或 packet（与 chunkHash / 反透视视图一致）
+                    PreparedChunk prepared = takePreparedChunkPacket(playerId, task.pos());
+                    byte[] chunkData = prepared != null ? prepared.data() : null;
+                    ClientboundLevelChunkWithLightPacket packet = null;
+                    if (chunkData == null) {
+                        if (prepared != null) {
+                            // 拦截路径已同步 build：直接后台 encode，主线程零序列化
+                            packet = prepared.packet();
+                        } else {
+                            LevelChunk chunk = level.getChunk(task.pos().x, task.pos().z);
+                            if (chunk == null) {
+                                Constants.LOG.warn("[PROCESS_QUEUE] Chunk {} not loaded, skipping", task.pos());
+                                continue;
+                            }
+                            packet = buildChunkPacket(chunk, level);
+                        }
+                        if (packet == null) {
+                            Constants.LOG.warn("[PROCESS_QUEUE] Failed to build chunk packet {}", task.pos());
+                            continue;
+                        }
+                    }
+
+                    works.add(new SerializedChunkWork(player, task.pos(), chunkData, packet, level.registryAccess()));
+                    processed++;
+                    DebugLogger.info(LogType.NETWORK, "[PROCESS_QUEUE] Built chunk packet {} (remaining={})",
+                            task.pos(), queue.size());
+                } catch (Exception e) {
+                    Constants.LOG.error("[PROCESS_QUEUE] Failed to prepare chunk {} for player {}",
+                            task.pos(), player.getName().getString(), e);
+                }
+            }
+
+            if (!works.isEmpty()) {
+                DebugLogger.info(LogType.NETWORK, "[PROCESS_QUEUE] Tick drain for {}: prepared={}, remaining={}",
+                        player.getName().getString(), works.size(), queue.size());
+                for (SerializedChunkWork work : works) {
+                    pushPool.submit(() -> {
+                        byte[] chunkData = work.chunkData();
+                        if (chunkData == null) {
+                            chunkData = encodeChunkPacket(work.packet(), work.registryAccess());
+                        }
+                        if (chunkData == null) {
+                            Constants.LOG.warn("[PROCESS_QUEUE] Failed to encode chunk {}", work.pos());
+                            return;
+                        }
+                        compressAndSend(work.player(), work.pos(), chunkData, sender);
+                    });
+                }
+            }
+#endif
         } finally {
             flag.set(false);
         }
@@ -996,33 +1199,39 @@ public class ServerChunkPushManager {
     /**
      * 后台压缩并发送（不访问世界对象）。
      */
-    private void compressAndSend(SerializedChunkWork work, ChunkSender sender) {
-        ServerPlayer player = work.player();
+    private void compressAndSend(ServerPlayer player, ChunkPos pos, byte[] chunkData, ChunkSender sender) {
         if (!player.isAlive() || player.hasDisconnected()) {
             return;
         }
         try {
             ChunkCompressionHandler.CompressedChunkData compressed =
                     ChunkCompressionHandler.compressChunkData(
-                            work.chunkData(), work.pos().x, work.pos().z);
+                            chunkData, pos.x, pos.z);
             if (compressed == null) {
-                Constants.LOG.warn("[PROCESS_QUEUE] Failed to compress chunk {}", work.pos());
+                Constants.LOG.warn("[PROCESS_QUEUE] Failed to compress chunk {}", pos);
                 return;
             }
+            // 平滑发送：每玩家令牌桶按秒级恒定速率放行，摊平 drain 批次的 tick 级脉冲
+            // （压缩在令牌获取前完成，CPU 并行不受限速；仅网络出口被均匀化）
+            int rate = HassiumConfigService.getInstance().getSmoothChunkSendRate();
+            SmoothSendLimiter limiter = sendLimiters.computeIfAbsent(player.getUUID(),
+                    k -> new SmoothSendLimiter(rate));
+            limiter.acquire();
             sender.sendCompressedChunk(player, compressed);
-            NetworkStats.recordChunkSent(VanillaZlibEstimator.estimate(work.chunkData()));
+            NetworkStats.recordChunkSent(VanillaZlibEstimator.estimate(chunkData));
             DebugLogger.info(LogType.NETWORK, "[PROCESS_QUEUE] Sent chunk {} to player {} ({} -> {} bytes, ratio={})",
-                    work.pos(), player.getName().getString(),
-                    work.chunkData().length, compressed.compressedData.length,
-                    String.format("%.2f", (double) work.chunkData().length / compressed.compressedData.length));
+                    pos, player.getName().getString(),
+                    chunkData.length, compressed.compressedData.length,
+                    String.format("%.2f", (double) chunkData.length / compressed.compressedData.length));
         } catch (Exception e) {
             Constants.LOG.error("[PROCESS_QUEUE] Failed to compress/send chunk {} for player {}",
-                    work.pos(), player.getName().getString(), e);
+                    pos, player.getName().getString(), e);
         }
     }
 
     /**
-     * 按原版构造路径构建区块包（主线程；反透视等可在构造/写路径注入）。
+     * 按原版构造路径构建区块包（pushPool 后台；读 chunk/光照快照，同原版 1.21.2+ ChunkSender 模式；
+     * 反透视等可在构造/写路径注入）。
      */
     private ClientboundLevelChunkWithLightPacket buildChunkPacket(LevelChunk chunk, ServerLevel level) {
         try {
@@ -1037,7 +1246,7 @@ public class ServerChunkPushManager {
     }
 
     /**
-     * 将区块包编码为线格式字节（须在持有 RegistryAccess 的线程调用，通常为主线程）。
+     * 将区块包编码为线格式字节（RegistryAccess 服务端启动后只读，任意线程编码安全）。
      */
     @SuppressWarnings("deprecation") // NeoForge 1.21.11+: RegistryFriendlyByteBuf(2-param) deprecated; 3-param 需 ConnectionType.OTHER(仅 NeoForge)
     private byte[] encodeChunkPacket(ClientboundLevelChunkWithLightPacket chunkPacket,
@@ -1075,7 +1284,7 @@ public class ServerChunkPushManager {
     }
 
     /**
-     * 序列化区块为字节数组（缓存未命中时的回退路径）。
+     * 序列化区块为字节数组（prepared 缓存未命中时的回退路径；pushPool 后台执行）。
      */
     private byte[] serializeChunk(LevelChunk chunk, ServerLevel level) {
         ClientboundLevelChunkWithLightPacket chunkPacket = buildChunkPacket(chunk, level);
@@ -1086,9 +1295,21 @@ public class ServerChunkPushManager {
     }
 
     private void putPreparedChunkPacket(UUID playerId, ChunkPos pos, byte[] data) {
+        putPreparedChunkPacket(playerId, pos, new PreparedChunk(data, null));
+    }
+
+    /**
+     * 拦截路径：同步缓存已构建的 packet（主线程零 encode），消费方（drain）后台 encode。
+     */
+    private void putPreparedChunkPacket(UUID playerId, ChunkPos pos,
+                                        ClientboundLevelChunkWithLightPacket packet) {
+        putPreparedChunkPacket(playerId, pos, new PreparedChunk(null, packet));
+    }
+
+    private void putPreparedChunkPacket(UUID playerId, ChunkPos pos, PreparedChunk prepared) {
         ConcurrentHashMap<Long, PreparedChunk> map =
                 preparedChunkPackets.computeIfAbsent(playerId, k -> new ConcurrentHashMap<>());
-        map.put(ChunkPos.asLong(pos.x, pos.z), new PreparedChunk(data));
+        map.put(ChunkPos.asLong(pos.x, pos.z), prepared);
         if (map.size() > MAX_PREPARED_PER_PLAYER) {
             int toRemove = map.size() - MAX_PREPARED_PER_PLAYER;
             var it = map.keySet().iterator();
@@ -1162,6 +1383,7 @@ public class ServerChunkPushManager {
         hashBatches.remove(playerId);
         preparedChunkPackets.remove(playerId);
         pendingResync.remove(playerId);
+        sendLimiters.remove(playerId);
     }
 
     /**
@@ -1173,6 +1395,7 @@ public class ServerChunkPushManager {
         hashBatches.clear();
         preparedChunkPackets.clear();
         pendingResync.clear();
+        sendLimiters.clear();
         if (pushPool != null) {
             pushPool.shutdownNow();
         }
@@ -1198,10 +1421,24 @@ public class ServerChunkPushManager {
      */
     private record DataRequestTask(ChunkPos pos, String dimension, double priority) {}
 
+#if MC_VER < MC_1_21_2
     /**
-     * 主线程已序列化、待后台压缩发送的工作项
+     * 后台序列化工作项（<1.21.2 无 ThreadingDetector，后台读 chunk 合法）。
+     * chunk 为主线程 getChunk 确认已加载的引用；prepared 命中判定在后台，
+     * registryAccess 构建时冻结（服务端启动后只读），后台 encode 安全。
      */
-    private record SerializedChunkWork(ServerPlayer player, ChunkPos pos, byte[] chunkData) {}
+    private record SerializedChunkWork(ServerPlayer player, ChunkPos pos, LevelChunk chunk,
+                                       ClientboundLevelChunkWithLightPacket packet,
+                                       RegistryAccess registryAccess) {}
+#else
+    /**
+     * 1.21.2+ 工作项：prepared 命中带已编码字节，miss 带主线程构建的 packet（纯数据，后台 encode）。
+     * registryAccess 构建时冻结（服务端启动后只读），后台 encode 安全。
+     */
+    private record SerializedChunkWork(ServerPlayer player, ChunkPos pos,
+                                       byte[] chunkData, ClientboundLevelChunkWithLightPacket packet,
+                                       RegistryAccess registryAccess) {}
+#endif
 
     /**
      * 短窗口 ChunkHash 批次
@@ -1213,6 +1450,41 @@ public class ServerChunkPushManager {
 
         PendingHashBatch(String dimension) {
             this.dimension = dimension;
+        }
+    }
+
+    /**
+     * 每玩家平滑发送令牌桶（恒定速率）
+     * <p>
+     * 令牌按 1/rate 秒间隔产生，上限 rate（突发上限一个窗口），
+     * acquire 阻塞至令牌可用；sleep 期间令牌继续积累，循环重算。
+     */
+    private static final class SmoothSendLimiter {
+        private final double ratePerSec;
+        private double tokens;
+        private long lastMs;
+
+        SmoothSendLimiter(double ratePerSec) {
+            this.ratePerSec = ratePerSec;
+            this.tokens = ratePerSec; // 首窗口允许立即启动，避免初始停顿
+            this.lastMs = System.currentTimeMillis();
+        }
+
+        /**
+         * 阻塞至获得一个发送令牌。
+         */
+        synchronized void acquire() throws InterruptedException {
+            while (true) {
+                long now = System.currentTimeMillis();
+                tokens = Math.min(ratePerSec, tokens + (now - lastMs) / 1000.0 * ratePerSec);
+                lastMs = now;
+                if (tokens >= 1.0) {
+                    tokens -= 1.0;
+                    return;
+                }
+                long waitMs = (long) Math.ceil((1.0 - tokens) / ratePerSec * 1000.0);
+                Thread.sleep(waitMs);
+            }
         }
     }
 }

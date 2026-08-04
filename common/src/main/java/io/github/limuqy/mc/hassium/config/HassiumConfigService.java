@@ -401,6 +401,17 @@ public class HassiumConfigService {
         return config.serverNetwork().serverChunkPushThreads();
     }
 
+    /**
+     * 服务端每玩家区块平滑发送速率（块/秒）：令牌桶摊平 tick 级脉冲，防网络峰值。
+     */
+    public int getSmoothChunkSendRate() {
+        int value = config.serverNetwork().smoothChunkSendRate();
+        if (value <= 0) {
+            return 150;
+        }
+        return value;
+    }
+
     public int getLoadThreads() {
         return config.clientCache().loadThreads();
     }
@@ -424,6 +435,21 @@ public class HassiumConfigService {
 
     public int getMaxChunksPerFrame() {
         return Math.max(1, config.clientCache().maxChunksPerFrame());
+    }
+
+    /** 是否启用多线程光照引擎（后台并行重算；默认关）。 */
+    public boolean isParallelLightEngineEnabled() {
+        return config.clientCache().parallelLightEngineEnabled();
+    }
+
+    /** 多线程光照引擎线程数（虚拟线程模式忽略）。 */
+    public int getParallelLightEngineThreads() {
+        return Math.max(1, config.clientCache().parallelLightEngineThreads());
+    }
+
+    /** 光照验算（官方引擎对照 BFS 结果；默认关）。 */
+    public boolean isLightVerifyEnabled() {
+        return config.debug().lightVerify();
     }
 
     public int getMainThreadChunkBudgetMs() {

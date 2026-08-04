@@ -12,6 +12,10 @@ param(
     [Parameter(Mandatory=$true)][ValidateSet("I","R","UdpFailover")][string]$Phase,
     [Parameter(Mandatory=$true)][string]$SessionId,
     [switch]$CleanWorld,
+    # -PregenOnly：只跑服务端预生成（SmokePhases=pregen，49×49 区域），
+    # 等 PREGEN_DONE marker 后停服并把 world 复制到 build/smoke-test/pregen-world/<Loader>-<Ver>/，
+    # 供后续冒烟 CleanWorld 时恢复（消除 worldgen 供给波动）。不启客户端。
+    [switch]$PregenOnly,
     [string]$SmokeHost = "",
     [int]$ServerPort = 25565,
     [int]$DelayMs = 15000,
@@ -330,6 +334,7 @@ view-distance=16
 online-mode=false
 gamemode=creative
 level-type=minecraft\:normal
+level-seed=42
 motd=Hassium Smoke Test
 max-players=20
 white-list=false
@@ -340,11 +345,9 @@ Set-Content -Path (Join-Path $serverRunDir "server.properties") -Value $props
 
 # 创建 world\serverconfig 目录（部分 neoforge / forge 50 版本不会自动创建）
 New-Item -ItemType Directory -Force -Path (Join-Path $serverRunDir "world\serverconfig") -ErrorAction SilentlyContinue | Out-Null
-# NeoForge 21.5+ 与 Forge 50 (1.20.6) 都经 FML ConfigTracker.writeConfig 写 world/serverconfig/hassium/；
-# 残留 *.toml.bak 时会把整套 parent 路径重复拼到 tmp 文件名前，导致 java.nio.file.NoSuchFileException
-# (\.\world\serverconfig\hassium\.\world\serverconfig\hassium\hassium-server.new.tmp.toml)。
-# server 启动前清空 Hassium own serverconfig 残留，让 ConfigTracker 从干净状态写入。
-# Forge 1.20.1 用老 ForgeConfigSpec，serverconfig 路径不同且无此 bug，不在此分支清理。
+# 防御性清理（仅旧存档）：Hassium 服务端配置早已迁移 COMMON 级（config/hassium/，不写 world/serverconfig/），
+# 但历史存档可能残留 world/serverconfig/hassium/*.toml.bak——FML ConfigTracker 会把整套 parent 路径
+# 重复拼到 tmp 文件名前导致起服崩溃。此处仅清理旧存档残留，新存档不会触发。
 $needConfigTrackerClean = ($Loader -eq "neoforge") -or ($Loader -eq "forge" -and $Ver -ge "1.20.6")
 if ($needConfigTrackerClean) {
     $hassiumServerConfig = Join-Path $serverRunDir "world\serverconfig\hassium"
@@ -356,13 +359,31 @@ if ($needConfigTrackerClean) {
 }
 
 # 3. 清理存档（batch：loader 首轮 / 退版本 / 失败重试 会传 -CleanWorld；单会话默认不清理）
+#    CleanWorld 时优先从预生成存档恢复（build/smoke-test/pregen-world/<Loader>-<Ver>/），
+#    消除 worldgen 供给波动；无预生成存档则删空从头生成。
 if ($CleanWorld) {
-    Write-Host "[$SessionId] [3/9] 清理服务端存档 ($Loader/run/server/world/)..."
-    Remove-Item -Recurse -Force (Join-Path $serverRunDir "world") -ErrorAction SilentlyContinue
-    Remove-Item -Recurse -Force (Join-Path $serverRunDir "world_nether") -ErrorAction SilentlyContinue
-    Remove-Item -Recurse -Force (Join-Path $serverRunDir "world_the_end") -ErrorAction SilentlyContinue
-    Remove-Item -Recurse -Force (Join-Path $serverRunDir "cache") -ErrorAction SilentlyContinue
-    New-Item -ItemType Directory -Force -Path (Join-Path $serverRunDir "world\serverconfig") -ErrorAction SilentlyContinue | Out-Null
+    $pregenRoot = Join-Path $logRoot "pregen-world"
+    $pregenSrc = Join-Path $pregenRoot "${Loader}-${Ver}\world"
+    if (-not $PregenOnly -and (Test-Path $pregenSrc)) {
+        Write-Host "[$SessionId] [3/9] 恢复预生成存档 ($pregenSrc)..."
+        Remove-Item -Recurse -Force (Join-Path $serverRunDir "world") -ErrorAction SilentlyContinue
+        Remove-Item -Recurse -Force (Join-Path $serverRunDir "world_nether") -ErrorAction SilentlyContinue
+        Remove-Item -Recurse -Force (Join-Path $serverRunDir "world_the_end") -ErrorAction SilentlyContinue
+        Remove-Item -Recurse -Force (Join-Path $serverRunDir "cache") -ErrorAction SilentlyContinue
+        New-Item -ItemType Directory -Force -Path (Join-Path $serverRunDir "world") | Out-Null
+        Copy-Item -Path $pregenSrc -Destination (Join-Path $serverRunDir "world") -Recurse -Force
+        # serverconfig 不随预生成存档复制（Hassium 配置在 config/hassium/；
+        # NeoForge/Forge 自身的 serverconfig 由服务端启动自动重建，复制反而带旧配置）
+        Remove-Item -Recurse -Force (Join-Path $serverRunDir "world\serverconfig") -ErrorAction SilentlyContinue
+        New-Item -ItemType Directory -Force -Path (Join-Path $serverRunDir "world\serverconfig") -ErrorAction SilentlyContinue | Out-Null
+    } else {
+        Write-Host "[$SessionId] [3/9] 清理服务端存档 ($Loader/run/server/world/)..."
+        Remove-Item -Recurse -Force (Join-Path $serverRunDir "world") -ErrorAction SilentlyContinue
+        Remove-Item -Recurse -Force (Join-Path $serverRunDir "world_nether") -ErrorAction SilentlyContinue
+        Remove-Item -Recurse -Force (Join-Path $serverRunDir "world_the_end") -ErrorAction SilentlyContinue
+        Remove-Item -Recurse -Force (Join-Path $serverRunDir "cache") -ErrorAction SilentlyContinue
+        New-Item -ItemType Directory -Force -Path (Join-Path $serverRunDir "world\serverconfig") -ErrorAction SilentlyContinue | Out-Null
+    }
 } else {
     Write-Host "[$SessionId] [3/9] 跳过存档清理（复用已有 world）"
 }
@@ -423,6 +444,66 @@ if ($Phase -eq "UdpFailover") {
         exit 0
     }
 }
+# 4.5 -PregenOnly：只跑服务端预生成（49×49 区域），不启客户端。
+# 等 PREGEN_DONE marker 后停服并复制 world 到 build/smoke-test/pregen-world/<Loader>-<Ver>/。
+if ($PregenOnly) {
+    Write-Host "[$SessionId] [PregenOnly] 预生成模式：起服 → 等 PREGEN_DONE → 停服 → 复制存档"
+    # 全新世界（预生成一次后存档复用）
+    Remove-Item -Recurse -Force (Join-Path $serverRunDir "world") -ErrorAction SilentlyContinue
+    Remove-Item -Recurse -Force (Join-Path $serverRunDir "world_nether") -ErrorAction SilentlyContinue
+    Remove-Item -Recurse -Force (Join-Path $serverRunDir "world_the_end") -ErrorAction SilentlyContinue
+    Remove-Item -Recurse -Force (Join-Path $serverRunDir "cache") -ErrorAction SilentlyContinue
+    New-Item -ItemType Directory -Force -Path (Join-Path $serverRunDir "world\serverconfig") -ErrorAction SilentlyContinue | Out-Null
+
+    $pregenGradlew = Join-Path $projectRoot "gradlew.bat"
+    & $pregenGradlew --stop *> $null 2>&1
+    Write-Host "[$SessionId] [PregenOnly] 启动服务端 ($Loader / $Ver)..."
+    $pregenArgs = @("--no-daemon", ":${Loader}:runServer", "-PhassiumSmokeTest=true", "-PhassiumSmokePhases=pregen", "-Pmc_ver=${Ver}")
+    $server = Start-Process -FilePath $pregenGradlew `
+        -ArgumentList $pregenArgs `
+        -RedirectStandardOutput $serverLog `
+        -RedirectStandardError $serverErr `
+        -PassThru -WindowStyle Hidden
+
+    Write-Host "[$SessionId] [PregenOnly] 等待 PREGEN_DONE (超时 ${ServerReadyTimeoutSec}s)..."
+    $pregenDeadline = (Get-Date).AddSeconds($ServerReadyTimeoutSec)
+    $pregenOk = $false
+    while ((Get-Date) -lt $pregenDeadline) {
+        if ($server.HasExited) {
+            Write-Host "[$SessionId] [PregenOnly] 服务端提前退出，退出码: $($server.ExitCode)"
+            break
+        }
+        if (Test-Path $serverLog) {
+            if (Select-String -Path $serverLog -Pattern 'PREGEN_DONE' -Quiet -ErrorAction SilentlyContinue) {
+                $pregenOk = $true
+                break
+            }
+        }
+        Start-Sleep -Seconds 3
+    }
+
+    if (-not $server.HasExited) { Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue }
+    Stop-SessionJava -ServerPort $ServerPort -Loader $Loader
+
+    if ($pregenOk) {
+        $pregenRoot = Join-Path $logRoot "pregen-world"
+        $pregenDest = Join-Path $pregenRoot "${Loader}-${Ver}"
+        Remove-Item -Recurse -Force $pregenDest -ErrorAction SilentlyContinue
+        New-Item -ItemType Directory -Force -Path $pregenDest | Out-Null
+        Copy-Item -Path (Join-Path $serverRunDir "world") -Destination (Join-Path $pregenDest "world") -Recurse -Force
+        # serverconfig 不随预生成存档复制（Hassium 配置在 config/hassium/；
+        # NeoForge/Forge 自身的 serverconfig 由服务端启动自动重建，复制反而带旧配置）
+        Remove-Item -Recurse -Force (Join-Path $pregenDest "world\serverconfig") -ErrorAction SilentlyContinue
+        Write-Host "[$SessionId] [PregenOnly] 预生成完成，存档已保存到 $pregenDest"
+        $resultObj = @{ SessionId = $SessionId; Ver = $Ver; Loader = $Loader; Phase = "pregen"; Result = "PASS"; Reason = "pregen_done" }
+    } else {
+        Write-Host "[$SessionId] [PregenOnly] 预生成超时或失败" -ForegroundColor Red
+        $resultObj = @{ SessionId = $SessionId; Ver = $Ver; Loader = $Loader; Phase = "pregen"; Result = "FAIL"; Reason = "pregen_timeout" }
+    }
+    $resultObj | ConvertTo-Json -Depth 3 | Out-File (Join-Path $resultsDir "result_${SessionId}.json")
+    if ($pregenOk) { exit 0 } else { exit 2 }
+}
+
 # 5. 启动服务端（后台，启用 ServerSmokeTest）
 $gradlew = Join-Path $projectRoot "gradlew.bat"
 # 5.0 预备 gradle daemon：先停掉残留 daemon，避免 reuse 一个卡住 / 正在 init 的旧 daemon

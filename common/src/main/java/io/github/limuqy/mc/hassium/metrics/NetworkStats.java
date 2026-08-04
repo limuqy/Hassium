@@ -379,11 +379,27 @@ public class NetworkStats {
     }
 
     /**
+     * 记录后台并行光照重算耗时
+     */
+    public static void recordLightRecomputeBackgroundTime(long timeNs) {
+        if (!enabled) return;
+        metrics.recordLightRecomputeBackgroundTime(timeNs);
+    }
+
+    /**
      * 记录收到 LightDeltaS2CPacket 条目
      */
     public static void recordLightDeltaReceived(long count) {
         if (!enabled) return;
         metrics.recordLightDeltaReceived(count);
+    }
+
+    /**
+     * 记录光照验算差异格数（debug.lightVerify）
+     */
+    public static void recordLightVerifyMismatch(long count) {
+        if (!enabled) return;
+        metrics.recordLightVerifyMismatch(count);
     }
 
     // ===== 便捷查询 =====

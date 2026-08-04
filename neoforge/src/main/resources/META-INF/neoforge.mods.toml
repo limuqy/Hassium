@@ -4,30 +4,30 @@ loaderVersion = "${javafml_loader_version_range}" #mandatory
 license = "${license}"
 
 [[mods]] #mandatory
-modId = "${mod_id}" #mandatory
+modId = "hassium" #mandatory
 version = "${version}" #mandatory
 displayName = "${mod_name}" #mandatory
-logoFile = "assets/${mod_id}/logo.png"
+logoFile = "assets/hassium/logo.png"
 authors = "${mod_author}" #optional
 description = '''${description}''' #mandatory
 
-[modproperties.${mod_id}]
+[modproperties.hassium]
 configuredBackground = "minecraft:textures/block/deepslate.png"
 
 [[mixins]]
-config = "${mod_id}.mixins.json"
+config = "hassium.mixins.json"
 [[mixins]]
-config = "${mod_id}.neoforge.mixins.json"
+config = "hassium.neoforge.mixins.json"
 
 # 1.20.5+：dependency 使用 type=required，禁止 mandatory=
-[[dependencies.${mod_id}]] #optional
+[[dependencies.hassium]] #optional
 modId = "neoforge" #mandatory
 type = "required"
 versionRange = "${neoforge_loader_version_range}" #mandatory
 ordering = "NONE"
 side = "BOTH"
 
-[[dependencies.${mod_id}]]
+[[dependencies.hassium]]
 modId = "minecraft"
 type = "required"
 versionRange = "${minecraft_version_range}"

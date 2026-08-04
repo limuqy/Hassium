@@ -512,9 +512,17 @@ public class ClientMetadataHandler {
             try {
                 long deltaSavedBytes = Math.max(0L,
                         ESTIMATED_CHUNK_BYTES - estimateSectionDeltaEntryPayloadBytes(packet, entry, i));
-                applyDeltaEntry(entry, packet.dimension(), deltaSavedBytes);
+                HassiumTaskExecutor executor = HassiumTaskExecutor.getClient();
+                if (executor != null && executor.isRunning()) {
+                    // 后台 merge 链（读盘/解压/NBT merge/hash/压缩）→ 主线程 apply；
+                    // 写盘与 full ingest 共用单消费者 FIFO（见 applyDeltaEntryBackground javadoc）。
+                    executor.submit(() -> applyDeltaEntryBackground(entry, packet.dimension(), deltaSavedBytes),
+                            TaskCategory.SAFE_TO_CANCEL);
+                } else {
+                    applyDeltaEntryBackground(entry, packet.dimension(), deltaSavedBytes); // 回退：当前线程
+                }
             } catch (Exception e) {
-                DebugLogger.error("[SECTION_DELTA] Failed to apply delta for chunk [{}, {}]",
+                DebugLogger.error("[SECTION_DELTA] Failed to submit delta for chunk [{}, {}]",
                         entry.chunkX(), entry.chunkZ(), e);
             }
         }
@@ -575,25 +583,33 @@ public class ClientMetadataHandler {
     }
 
     /**
-     * 应用单个 chunk 的 delta 数据（NBT merge）。
+     * 后台应用单个 chunk 的 delta 数据（NBT merge），完成后主线程 apply。
+     * <p>
+     * 由 {@link HassiumTaskExecutor} 后台池执行：磁盘读 / ZSTD 解压 / NBT 解析 / section merge /
+     * hash 重算 / 压缩写盘全部移出包处理线程与主线程；仅最后一步 {@code applyChunkData} 必须主线程
+     * （经 {@link MainThreadDispatcher} 回主线程）。
+     * <p>
+     * 写盘经 {@code CacheSaveQueue#enqueueSerialized} 与 full ingest 共用单消费者 FIFO：平台线程池
+     * FIFO 下 full 先入队→delta 后入队→写盘序正确（终态 = full+增量）；虚拟线程并发模式下与现状
+     * 同级（delta 增量可能被 full 覆盖，服务器 hash 校验不匹配 → 重请求全量自愈）。
      * <p>
      * 步骤：
      * <ol>
      *   <li>读缓存 NBT（{@link ClientChunkHandler#loadChunkNbtFromCache}）</li>
      *   <li>对每个 changedSection：替换 {@code sections[idx].data}，更新 {@code has_only_air}</li>
      *   <li>BE 全量覆盖：delta 的 BE 列表替换 {@code block_entities}</li>
-     *   <li>重算 {@code sectionHashes} + {@code chunkHash} → persist</li>
+     *   <li>重算 {@code sectionHashes} + {@code chunkHash} → 入队 persist</li>
      *   <li>{@code nbtToPacketBytes} → 主线程 apply</li>
      * </ol>
-     * 任一步失败 → {@code requestFullChunks}（保底，不比现在差）。
+     * 任一步失败 → 回主线程 {@code requestFullChunks}（保底，不比现在差）。
      */
-    private static boolean applyDeltaEntry(SectionDeltaS2CPacket.DeltaEntry entry, String dimension, long deltaSavedBytes) {
+    private static void applyDeltaEntryBackground(SectionDeltaS2CPacket.DeltaEntry entry, String dimension, long deltaSavedBytes) {
         ChunkPos pos = new ChunkPos(entry.chunkX(), entry.chunkZ());
         try {
             Minecraft mc = Minecraft.getInstance();
             if (mc.level == null) {
-                requestFullChunks(dimension, List.of(pos), true);
-                return false;
+                MainThreadDispatcher.execute(() -> requestFullChunks(dimension, List.of(pos), true), pos);
+                return;
             }
 
             // 1. 读缓存 NBT
@@ -601,8 +617,8 @@ public class ClientMetadataHandler {
             if (nbt == null) {
                 DebugLogger.info(LogType.METADATA,
                         "[SECTION_DELTA] No cached NBT for {}, fallback to full", pos);
-                requestFullChunks(dimension, List.of(pos), true);
-                return false;
+                MainThreadDispatcher.execute(() -> requestFullChunks(dimension, List.of(pos), true), pos);
+                return;
             }
 
             // 2. 替换变更的 sections
@@ -634,7 +650,7 @@ public class ClientMetadataHandler {
                 nbt.put("block_entities", beList);
             }
 
-            // 4. 重算 hash + persist（is_light_on=0 → 保持 dirty，等光照回写/卸载）
+            // 4. 重算 hash + 入队 persist（is_light_on=0 → 保持 dirty，等光照回写/卸载）
             int sectionCount = mc.level.getSectionsCount();
             nbt.putInt("section_count", sectionCount);
             long[] newSectionHashes = io.github.limuqy.mc.hassium.cache.client.ChunkDiskCodec
@@ -642,10 +658,12 @@ public class ClientMetadataHandler {
             long newChunkHash = ChunkContentHashUtil.combineSectionHashesFromArray(newSectionHashes);
             byte[] nbtBytes = io.github.limuqy.mc.hassium.cache.client.ChunkDiskCodec.nbtToBytes(nbt);
             if (nbtBytes == null) {
-                requestFullChunks(dimension, List.of(pos), true);
-                return false;
+                MainThreadDispatcher.execute(() -> requestFullChunks(dimension, List.of(pos), true), pos);
+                return;
             }
-            ClientChunkHandler.persistToCache(pos, nbtBytes, newChunkHash, newSectionHashes);
+            // 与 full ingest 共用单消费者 FIFO，region 写不再有两路并发
+            io.github.limuqy.mc.hassium.cache.client.CacheSaveQueue.getInstance()
+                    .enqueueSerialized(pos, nbtBytes, newChunkHash, newSectionHashes);
 
             DebugLogger.info(LogType.METADATA,
                     "[SECTION_DELTA] Merged {} sections for {} (newHash={})",
@@ -655,8 +673,8 @@ public class ClientMetadataHandler {
             byte[] packetBytes = io.github.limuqy.mc.hassium.cache.client.ChunkDiskCodec
                     .nbtToPacketBytes(nbt, registryAccess, sectionCount);
             if (packetBytes == null) {
-                requestFullChunks(dimension, List.of(pos), true);
-                return false;
+                MainThreadDispatcher.execute(() -> requestFullChunks(dimension, List.of(pos), true), pos);
+                return;
             }
             final byte[] finalPacketBytes = packetBytes;
             final List<SectionDeltaS2CPacket.BlockEntityData> bes = entry.blockEntities();
@@ -671,13 +689,11 @@ public class ClientMetadataHandler {
                     requestFullChunks(dimension, List.of(pos), true);
                 }
             }, pos);
-            return true;
 
         } catch (Throwable t) {
             DebugLogger.warn(LogType.METADATA,
                     "[SECTION_DELTA] Merge failed for {}, fallback to full", pos, t);
-            requestFullChunks(dimension, List.of(pos), true);
-            return false;
+            MainThreadDispatcher.execute(() -> requestFullChunks(dimension, List.of(pos), true), pos);
         }
     }
 

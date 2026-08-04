@@ -37,7 +37,7 @@ class ConfigSnapshotAdapterClientScopeTest {
     @Test
     void clientDebugFlagsRoundTripThroughValues() {
         HassiumConfig.DebugConfig debug = new HassiumConfig.DebugConfig(
-                true, false, true, false, true, false, true, false);
+                true, false, true, false, true, false, true, false, true);
         HassiumConfig original = HassiumConfig.DEFAULT.withDebug(debug);
 
         ConfigValues values = ConfigSnapshotAdapter.toValues(original);
@@ -55,7 +55,7 @@ class ConfigSnapshotAdapterClientScopeTest {
     @Test
     void fromValuesOnClientSideReadsClientDebugFlags() {
         HassiumConfig.DebugConfig debug = new HassiumConfig.DebugConfig(
-                true, false, true, false, true, false, true, false);
+                true, false, true, false, true, false, true, false, true);
         HassiumConfig original = HassiumConfig.DEFAULT.withDebug(debug);
 
         ConfigValues values = ConfigSnapshotAdapter.toValues(original);
@@ -67,7 +67,7 @@ class ConfigSnapshotAdapterClientScopeTest {
     @Test
     void fromValuesOnServerSideReadsServerDebugFlags() {
         HassiumConfig.DebugConfig debug = new HassiumConfig.DebugConfig(
-                false, true, false, true, false, true, false, true);
+                false, true, false, true, false, true, false, true, false);
         HassiumConfig original = HassiumConfig.DEFAULT.withDebug(debug);
 
         ConfigValues values = ConfigSnapshotAdapter.toValues(original);

@@ -5,23 +5,23 @@ loaderVersion = "${javafml_loader_version_range}" #mandatory
 license = "${license}"
 
 [[mods]] #mandatory
-modId = "${mod_id}" #mandatory
+modId = "hassium" #mandatory
 version = "${version}" #mandatory
 displayName = "${mod_name}" #mandatory
-logoFile = "assets/${mod_id}/logo.png"
+logoFile = "assets/hassium/logo.png"
 authors = "${mod_author}" #optional
 description = '''${description}''' #mandatory
 
-[modproperties.${mod_id}]
+[modproperties.hassium]
 configuredBackground = "minecraft:textures/block/deepslate.png"
 
 # 1.20.2+ NeoForge 必须在此声明；1.20.1 的 loom forge.mixinConfig 也会注册，重复声明安全
 [[mixins]]
-config = "${mod_id}.mixins.json"
+config = "hassium.mixins.json"
 [[mixins]]
-config = "${mod_id}.neoforge.mixins.json"
+config = "hassium.neoforge.mixins.json"
 
-[[dependencies.${mod_id}]] #optional
+[[dependencies.hassium]] #optional
 # 1.20.1=forge，1.20.2–1.20.4=neoforge（由 gradle expand）
 modId = "${neoforge_dependency_mod_id}" #mandatory
 ${dependency_required_field}
@@ -29,7 +29,7 @@ versionRange = "${neoforge_loader_version_range}" #mandatory
 ordering = "NONE"
 side = "BOTH"
 
-[[dependencies.${mod_id}]]
+[[dependencies.hassium]]
 modId = "minecraft"
 ${dependency_required_field}
 versionRange = "${minecraft_version_range}"

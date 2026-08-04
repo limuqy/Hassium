@@ -29,7 +29,9 @@ public final class ConfigSnapshotAdapter {
                 .with(ConfigSchema.CACHE_LOAD_THREADS, cache.loadThreads())
                 .with(ConfigSchema.CACHE_LIGHT_CACHE_ENABLED, cache.lightCacheEnabled())
                 .with(ConfigSchema.CACHE_MAX_CHUNKS_PER_FRAME, cache.maxChunksPerFrame())
-                .with(ConfigSchema.CACHE_MAIN_THREAD_BUDGET_MS, cache.mainThreadChunkBudgetMs());
+                .with(ConfigSchema.CACHE_MAIN_THREAD_BUDGET_MS, cache.mainThreadChunkBudgetMs())
+                .with(ConfigSchema.CACHE_PARALLEL_LIGHT_ENGINE_ENABLED, cache.parallelLightEngineEnabled())
+                .with(ConfigSchema.CACHE_PARALLEL_LIGHT_ENGINE_THREADS, cache.parallelLightEngineThreads());
 
         HassiumConfig.ClientNetworkConfig clientNet = config.clientNetwork();
         values = values.with(ConfigSchema.CLIENT_NETWORK_ENABLED, clientNet.enabled())
@@ -45,7 +47,8 @@ public final class ConfigSnapshotAdapter {
                 .with(ConfigSchema.CLIENT_DEBUG_CHUNK_APPLY, debug.chunkApplyLogging())
                 .with(ConfigSchema.CLIENT_DEBUG_NETWORK, debug.networkLogging())
                 .with(ConfigSchema.CLIENT_DEBUG_CACHE, debug.cacheLogging())
-                .with(ConfigSchema.CLIENT_DEBUG_DATAPLANE, debug.dataplaneLogging());
+                .with(ConfigSchema.CLIENT_DEBUG_DATAPLANE, debug.dataplaneLogging())
+                .with(ConfigSchema.CLIENT_DEBUG_LIGHT_VERIFY, debug.lightVerify());
         HassiumConfig.ServerNetworkConfig network = config.serverNetwork();
         values = values.with(ConfigSchema.STORAGE_ENABLED, config.storage().enabled())
                 .with(ConfigSchema.STORAGE_MODE, config.storage().mode())
@@ -65,6 +68,7 @@ public final class ConfigSnapshotAdapter {
                 .with(ConfigSchema.NETWORK_COMPRESSION_BLACKLIST, new ArrayList<>(network.compressionBlacklist()))
                 .with(ConfigSchema.SERVER_NETWORK_METRICS_ENABLED, network.metricsEnabled())
                 .with(ConfigSchema.NETWORK_MAX_CHUNKS_PER_TICK, network.maxChunksPerTick())
+                .with(ConfigSchema.NETWORK_SMOOTH_SEND_RATE, network.smoothChunkSendRate())
                 .with(ConfigSchema.NETWORK_SERVER_PUSH_THREADS, network.serverChunkPushThreads())
                 .with(ConfigSchema.NETWORK_DYNAMIC_THREADS, network.dynamicThreadPoolEnabled())
                 .with(ConfigSchema.NETWORK_MIN_PUSH_THREADS, network.minPushThreads())
@@ -87,7 +91,8 @@ public final class ConfigSnapshotAdapter {
                 .with(ConfigSchema.SERVER_DEBUG_CHUNK_APPLY, debug.chunkApplyLogging())
                 .with(ConfigSchema.SERVER_DEBUG_NETWORK, debug.networkLogging())
                 .with(ConfigSchema.SERVER_DEBUG_CACHE, debug.cacheLogging())
-                .with(ConfigSchema.SERVER_DEBUG_DATAPLANE, debug.dataplaneLogging());
+                .with(ConfigSchema.SERVER_DEBUG_DATAPLANE, debug.dataplaneLogging())
+                .with(ConfigSchema.SERVER_DEBUG_LIGHT_VERIFY, debug.lightVerify());
     }
 
     public static HassiumConfig fromValues(ConfigValues values) {
@@ -112,7 +117,8 @@ public final class ConfigSnapshotAdapter {
                 values.get(ConfigSchema.CACHE_SECTION_DELTA_ENABLED), values.get(ConfigSchema.CACHE_JOIN_BOOST_ENABLED),
                 values.get(ConfigSchema.CACHE_ENTITY_SNAPSHOTS_ENABLED), values.get(ConfigSchema.CACHE_LOAD_THREADS),
                 values.get(ConfigSchema.CACHE_LIGHT_CACHE_ENABLED), values.get(ConfigSchema.CACHE_MAX_CHUNKS_PER_FRAME),
-                values.get(ConfigSchema.CACHE_MAIN_THREAD_BUDGET_MS));
+                values.get(ConfigSchema.CACHE_MAIN_THREAD_BUDGET_MS),
+                values.get(ConfigSchema.CACHE_PARALLEL_LIGHT_ENGINE_ENABLED), values.get(ConfigSchema.CACHE_PARALLEL_LIGHT_ENGINE_THREADS));
 
         List<HassiumConfig.ReachableEndpoint> controlEndpoints = values.get(ConfigSchema.NETWORK_CONTROL_ENDPOINTS).stream()
                 .map(DataPlaneEndpointConfig::decodeReachable).toList();
@@ -130,7 +136,7 @@ public final class ConfigSnapshotAdapter {
                 values.get(ConfigSchema.NETWORK_AGGREGATION_MIN_BATCH), values.get(ConfigSchema.NETWORK_AGGREGATION_MAX_WAIT),
                 values.get(ConfigSchema.NETWORK_AGGREGATION_MAX_SIZE), values.get(ConfigSchema.NETWORK_COMPACT_HEADER),
                 SetCopy.copy(values.get(ConfigSchema.NETWORK_COMPRESSION_BLACKLIST)), values.get(ConfigSchema.SERVER_NETWORK_METRICS_ENABLED),
-                values.get(ConfigSchema.NETWORK_MAX_CHUNKS_PER_TICK), values.get(ConfigSchema.NETWORK_SERVER_PUSH_THREADS),
+                values.get(ConfigSchema.NETWORK_MAX_CHUNKS_PER_TICK), values.get(ConfigSchema.NETWORK_SMOOTH_SEND_RATE), values.get(ConfigSchema.NETWORK_SERVER_PUSH_THREADS),
                 values.get(ConfigSchema.NETWORK_DYNAMIC_THREADS), values.get(ConfigSchema.NETWORK_MIN_PUSH_THREADS),
                 values.get(ConfigSchema.NETWORK_MAX_PUSH_THREADS), values.get(ConfigSchema.NETWORK_LIGHT_STRIP), controlEndpoints, dataPlane);
         HassiumConfig.CompatConfig compat = new HassiumConfig.CompatConfig(
@@ -143,7 +149,8 @@ public final class ConfigSnapshotAdapter {
                 debugValue(values, physicalClient, ConfigSchema.CLIENT_DEBUG_CHUNK_APPLY, ConfigSchema.SERVER_DEBUG_CHUNK_APPLY),
                 debugValue(values, physicalClient, ConfigSchema.CLIENT_DEBUG_NETWORK, ConfigSchema.SERVER_DEBUG_NETWORK),
                 debugValue(values, physicalClient, ConfigSchema.CLIENT_DEBUG_CACHE, ConfigSchema.SERVER_DEBUG_CACHE),
-                debugValue(values, physicalClient, ConfigSchema.CLIENT_DEBUG_DATAPLANE, ConfigSchema.SERVER_DEBUG_DATAPLANE));
+                debugValue(values, physicalClient, ConfigSchema.CLIENT_DEBUG_DATAPLANE, ConfigSchema.SERVER_DEBUG_DATAPLANE),
+                debugValue(values, physicalClient, ConfigSchema.CLIENT_DEBUG_LIGHT_VERIFY, ConfigSchema.SERVER_DEBUG_LIGHT_VERIFY));
         return new HassiumConfig(new HassiumConfig.StorageConfig(
                 values.get(ConfigSchema.STORAGE_ENABLED), values.get(ConfigSchema.STORAGE_MODE), values.get(ConfigSchema.STORAGE_ZSTD_LEVEL)),
                 cache, new HassiumConfig.ClientNetworkConfig(

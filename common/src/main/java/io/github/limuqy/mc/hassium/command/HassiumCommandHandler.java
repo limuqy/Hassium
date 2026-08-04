@@ -65,6 +65,7 @@ public class HassiumCommandHandler {
         sb.append(formatChunkCacheLine(metrics)).append('\n');
         sb.append(formatChunkLoadLine(metrics)).append('\n');
         sb.append(formatLightCacheLine(metrics)).append('\n');
+        sb.append(formatLightRecomputeLine(metrics)).append('\n');
         sb.append(formatOvdLine()).append('\n');
         sb.append(formatSavingsLine(metrics)).append('\n');
         // 每行末尾统一带 \n；冒烟 strip 后用 split("\\R", -1) 已能容忍空末行。
@@ -131,6 +132,17 @@ public class HassiumCommandHandler {
                 MetricsTextFormatter.formatPercent(m.getLightCacheHitRate() * 100.0),
                 lightHit, MetricsTextFormatter.formatBytes(m.getLightCacheHitBytes()),
                 lightMiss, MetricsTextFormatter.formatBytes(m.getLightCacheMissBytes()));
+    }
+
+    /** 光照重算耗时行：主线程 = 玩家感知的世界应用阻塞；后台 = 并行引擎 BFS（同步路径恒 0）。 */
+    private static String formatLightRecomputeLine(HassiumMetricsImpl m) {
+        long miss = m.getLightCacheMissCount();
+        double mainThreadMs = m.getLightRecomputeTimeMs();
+        double backgroundMs = m.getLightRecomputeBackgroundTimeMs();
+        return String.format("§e光照重算：§r主线程 %.1f ms，后台 %.1f ms（%d 次，平均 %.2f/%.2f ms）",
+                mainThreadMs, backgroundMs, miss,
+                miss == 0 ? 0.0 : mainThreadMs / miss,
+                miss == 0 ? 0.0 : backgroundMs / miss);
     }
 
     private static String formatSavingsLine(HassiumMetricsImpl m) {

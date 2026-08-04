@@ -92,11 +92,13 @@ public final class ExecutorFactory {
     }
 
     /**
-     * 创建平台线程池（Java 17）
+     * 创建平台线程池（Java 17+）
      * <p>
      * daemon 线程，线程数由配置控制。
+     * 强制平台线程：供纯 CPU 密集任务使用（如光照 solve）——虚拟线程每任务一线程、
+     * 无并发上限，突发提交下互相抢核超订，固定池 FIFO 排队更可预测。
      */
-    private static ExecutorService createPlatform(String name, int threads) {
+    public static ExecutorService createPlatform(String name, int threads) {
         int poolSize = Math.max(threads, 1);
         ThreadFactory factory = new HassiumThreadFactory(name);
         return Executors.newFixedThreadPool(poolSize, factory);

@@ -13,7 +13,13 @@ import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.world.level.ChunkPos;
 
+import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.PriorityQueue;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.PriorityBlockingQueue;
 
 /**
@@ -26,9 +32,11 @@ public class ClientCacheLoadQueue {
 
     private static final ClientCacheLoadQueue INSTANCE = new ClientCacheLoadQueue();
 
-    /** 待加载任务（缓存命中） */
-    private final PriorityBlockingQueue<LoadTask> pendingTasks =
-            new PriorityBlockingQueue<>(100, (a, b) -> Double.compare(a.priority, b.priority));
+    /** 待加载任务（缓存命中）：按 region 分桶，每桶一个后台任务串行处理（避免多线程并发 drain 同一队列） */
+    private final ConcurrentHashMap<Long, PriorityQueue<LoadTask>> pendingByRegion = new ConcurrentHashMap<>();
+
+    /** 正在运行的后台任务（region → 任务），保证每 region 最多一个加载任务 */
+    private final Set<Long> activeRegions = ConcurrentHashMap.newKeySet();
 
     /** 就绪队列（后台线程加载完成后放入，主线程取出应用） */
     private final PriorityBlockingQueue<ReadyChunk> readyQueue =
@@ -36,6 +44,25 @@ public class ClientCacheLoadQueue {
 
     /** 加载任务 */
     private record LoadTask(ChunkPos pos, double priority, boolean renderOnly) {}
+
+    /** 单批最大区块数（region 批量读上限，控制单批内存与锁持有时间） */
+    private static final int MAX_BATCH_SIZE = 256;
+
+    private static long regionKey(int regionX, int regionZ) {
+        return ((long) regionX << 32) | (regionZ & 0xFFFFFFFFL);
+    }
+
+    private static long regionKey(ChunkPos pos) {
+        return regionKey(pos.x >> 5, pos.z >> 5);
+    }
+
+    private int pendingTotal() {
+        int n = 0;
+        for (PriorityQueue<LoadTask> q : pendingByRegion.values()) {
+            n += q.size();
+        }
+        return n;
+    }
 
     /**
      * 已加载完成的区块。
@@ -62,10 +89,15 @@ public class ClientCacheLoadQueue {
      */
     public void enqueue(ChunkPos pos, double priority, boolean renderOnly) {
         DebugLogger.info(LogType.CACHE, "[CACHE_LOAD_QUEUE] Enqueuing chunk {} (priority={}, renderOnly={}, pendingSize={})",
-                pos, String.format("%.1f", priority), renderOnly, pendingTasks.size());
-        pendingTasks.offer(new LoadTask(pos, priority, renderOnly));
-        // 提交加载任务到统一后台执行器（Phase 6）
-        submitNextTask();
+                pos, String.format("%.1f", priority), renderOnly, pendingTotal());
+        long rk = regionKey(pos);
+        PriorityQueue<LoadTask> q = pendingByRegion.computeIfAbsent(rk,
+                k -> new PriorityQueue<>((a, b) -> Double.compare(a.priority, b.priority)));
+        synchronized (q) {
+            q.offer(new LoadTask(pos, priority, renderOnly));
+        }
+        // 提交该 region 的加载任务（每 region 最多一个在跑）
+        scheduleRegion(rk);
     }
 
     /**
@@ -86,14 +118,20 @@ public class ClientCacheLoadQueue {
             throw new IllegalArgumentException("Positions and priorities must have the same size");
         }
 
+        Set<Long> touched = new HashSet<>();
         for (int i = 0; i < positions.size(); i++) {
-            pendingTasks.offer(new LoadTask(positions.get(i), priorities.get(i), false));
+            long rk = regionKey(positions.get(i));
+            PriorityQueue<LoadTask> q = pendingByRegion.computeIfAbsent(rk,
+                    k -> new PriorityQueue<>((a, b) -> Double.compare(a.priority, b.priority)));
+            synchronized (q) {
+                q.offer(new LoadTask(positions.get(i), priorities.get(i), false));
+            }
+            touched.add(rk);
         }
 
-        // 批量提交后，提交多个加载任务
-        int batchSize = Math.min(positions.size(), 5);
-        for (int i = 0; i < batchSize; i++) {
-            submitNextTask();
+        // 每个涉及的 region 提交一个加载任务
+        for (long rk : touched) {
+            scheduleRegion(rk);
         }
     }
 
@@ -130,75 +168,140 @@ public class ClientCacheLoadQueue {
     }
 
     /**
-     * 提交下一个待加载任务到 HassiumTaskExecutor（Phase 6）
+     * 提交一个 region 的加载任务到 HassiumTaskExecutor（每 region 最多一个在跑）
      */
-    private void submitNextTask() {
+    private void scheduleRegion(long rk) {
+        if (!activeRegions.add(rk)) {
+            return;
+        }
         HassiumTaskExecutor executor = HassiumTaskExecutor.getClient();
         if (executor != null && executor.isRunning()) {
-            executor.submit(this::processNextTask, TaskCategory.SAFE_TO_CANCEL);
+            executor.submit(() -> processRegion(rk), TaskCategory.SAFE_TO_CANCEL);
         } else {
             // 回退：直接在当前线程处理（HassiumTaskExecutor 未初始化时）
-            processNextTask();
+            processRegion(rk);
+        }
+    }
+
+    /** 攒批等待窗口：任务尾部的 region 桶为空时等一等，让后续 enqueue 积累成批 */
+    private static final long BATCH_WAIT_MS = 10;
+
+    /**
+     * 处理一个 region 的全部待加载任务（在 HassiumTaskExecutor 线程池中执行）
+     * <p>
+     * 同一 region 的块分批顺序读（每批一次锁持有，最多 {@link #MAX_BATCH_SIZE} 块），
+     * 锁外解压/解析并行；不同 region 的任务互不阻塞（各自 region 锁）。
+     * 就绪队列仍按距离优先级排序，主线程 apply 顺序不受批次影响。
+     */
+    private void processRegion(long rk) {
+        int regionX = (int) (rk >> 32);
+        int regionZ = (int) rk;
+        try {
+            while (true) {
+                PriorityQueue<LoadTask> q = pendingByRegion.get(rk);
+                if (q == null) {
+                    break;
+                }
+                // 取一批（桶锁内 poll，串行消费，无多线程 drain 冲突）
+                List<LoadTask> batch = new ArrayList<>();
+                synchronized (q) {
+                    while (batch.size() < MAX_BATCH_SIZE) {
+                        LoadTask t = q.poll();
+                        if (t == null) {
+                            break;
+                        }
+                        batch.add(t);
+                    }
+                    if (q.isEmpty()) {
+                        pendingByRegion.remove(rk, q);
+                    }
+                }
+                if (batch.isEmpty()) {
+                    // 攒批窗口：enqueue 逐个到来时，等一批积累后再处理（任务占着 activeRegions，
+                    // 期间同 region 的 enqueue 不会重复调度）；超时仍空则退出
+                    try {
+                        Thread.sleep(BATCH_WAIT_MS);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        break;
+                    }
+                    continue;
+                }
+                processBatch(rk, regionX, regionZ, batch);
+            }
+        } finally {
+            activeRegions.remove(rk);
+            // 处理期间可能又有同 region 入队（scheduleRegion 被 activeRegions 挡住），补调度
+            PriorityQueue<LoadTask> q = pendingByRegion.get(rk);
+            if (q != null && !q.isEmpty()) {
+                scheduleRegion(rk);
+            }
         }
     }
 
     /**
-     * 处理下一个待加载任务（在 HassiumTaskExecutor 线程池中执行）
+     * 处理一批同 region 任务（region 批量读 + 逐块就绪入队）
      */
-    private void processNextTask() {
-        LoadTask task = pendingTasks.poll();
-        if (task == null) {
-            Constants.LOG.debug("[CACHE_LOAD] No pending tasks to process");
-            return;
+    private void processBatch(long rk, int regionX, int regionZ, List<LoadTask> batch) {
+        DebugLogger.info(LogType.CACHE,
+                "[CACHE_LOAD] Processing batch of {} chunks (region {},{}, pendingSize={})",
+                batch.size(), regionX, regionZ, pendingTotal());
+
+        List<ChunkPos> positions = new ArrayList<>(batch.size());
+        for (LoadTask task : batch) {
+            positions.add(task.pos());
         }
+        Map<ChunkPos, byte[]> loaded = ClientChunkHandler.loadChunkDataBatchFromCache(positions);
 
-        DebugLogger.info(LogType.CACHE, "[CACHE_LOAD] Processing chunk {} (priority={}, pendingSize={})",
-                task.pos(), String.format("%.1f", task.priority()), pendingTasks.size());
-
-        try {
-            // 从缓存加载（磁盘 I/O + ZSTD 解压，在后台线程安全执行）
-            byte[] data = ClientChunkHandler.loadChunkDataFromCache(task.pos());
+        for (LoadTask task : batch) {
+            byte[] data = loaded.get(task.pos());
             if (data != null) {
-                CompoundTag nbt = ChunkDiskCodec.bytesToNbt(data);
-                boolean hasLight = ChunkDiskCodec.isLightOn(nbt);
-                // 后台线程重组 NBT→packet 字节（CPU 密集，前移出主线程）
-                // maybeNbtToPacketBytes 幂等：NBT 字节重组为 packet，packet 字节原样返回
-                net.minecraft.client.Minecraft mc = net.minecraft.client.Minecraft.getInstance();
-                net.minecraft.client.multiplayer.ClientLevel level = mc.level;
-                byte[] packetBytes;
-                if (level != null) {
-                    packetBytes = ChunkDiskCodec.maybeNbtToPacketBytes(
-                            data, level.registryAccess(), level.getSectionsCount());
-                } else {
-                    // level 未就绪：直接存 NBT，主线程 applyChunkData 的 maybeNbtToPacketBytes 兜底重组
-                    packetBytes = data;
-                }
-                CompoundTag writeback = (!hasLight && nbt != null) ? nbt : null;
-                readyQueue.offer(new ReadyChunk(task.pos(), packetBytes, task.priority(), task.renderOnly(),
-                        hasLight, writeback));
-                // OVD(renderOnly) 不经 chunkHash 比对，需在磁盘命中时单独记入缓存指标；
-                // 权威路径已在 ClientMetadataHandler 记过，避免双重计数。
-                // 使用 ESTIMATED_CHUNK_BYTES 与权威路径口径一致（不依赖 packetBytes 实际长度）。
-                if (task.renderOnly() && packetBytes.length > 0) {
-                    NetworkStats.recordCacheLoadEligible(NetworkStats.ESTIMATED_CHUNK_BYTES);
-                    NetworkStats.recordCacheHit(NetworkStats.ESTIMATED_CHUNK_BYTES);
-                    NetworkStats.recordCacheFullHit(NetworkStats.ESTIMATED_CHUNK_BYTES);
-                }
+                handleLoaded(task, data);
+            } else if (task.renderOnly()) {
+                // 超视渲染：缓存 miss 静默，不向服务器请求，回滚 loadedRenderOnly 标记
                 DebugLogger.info(LogType.CACHE,
-                        "[CACHE_LOAD] Chunk {} loaded from disk ({} bytes, hasLight={}, readySize={})",
-                        task.pos(), packetBytes.length, hasLight, readyQueue.size());
+                        "[CACHE_LOAD] renderOnly miss for {} (no cache, no server request)", task.pos());
+                ViewDistanceExtensionService.getInstance().onRenderOnlyMiss(task.pos());
             } else {
-                if (task.renderOnly()) {
-                    // 超视渲染：缓存 miss 静默，不向服务器请求，回滚 loadedRenderOnly 标记
-                    DebugLogger.info(LogType.CACHE,
-                            "[CACHE_LOAD] renderOnly miss for {} (no cache, no server request)", task.pos());
-                    ViewDistanceExtensionService.getInstance().onRenderOnlyMiss(task.pos());
-                } else {
-                    Constants.LOG.warn("[CACHE_LOAD] Failed to load chunk {} from cache, requesting from server",
-                            task.pos());
-                    requestChunkFromServer(task.pos());
-                }
+                Constants.LOG.warn("[CACHE_LOAD] Failed to load chunk {} from cache, requesting from server",
+                        task.pos());
+                requestChunkFromServer(task.pos());
             }
+        }
+    }
+
+    /**
+     * 单块加载成功后的就绪入队（后台线程执行；NBT 重组 packet 字节 CPU 密集前移）
+     */
+    private void handleLoaded(LoadTask task, byte[] data) {
+        try {
+            CompoundTag nbt = ChunkDiskCodec.bytesToNbt(data);
+            boolean hasLight = ChunkDiskCodec.isLightOn(nbt);
+            // maybeNbtToPacketBytes 幂等：NBT 字节重组为 packet，packet 字节原样返回
+            net.minecraft.client.Minecraft mc = net.minecraft.client.Minecraft.getInstance();
+            net.minecraft.client.multiplayer.ClientLevel level = mc.level;
+            byte[] packetBytes;
+            if (level != null) {
+                packetBytes = ChunkDiskCodec.maybeNbtToPacketBytes(
+                        data, level.registryAccess(), level.getSectionsCount());
+            } else {
+                // level 未就绪：直接存 NBT，主线程 applyChunkData 的 maybeNbtToPacketBytes 兜底重组
+                packetBytes = data;
+            }
+            CompoundTag writeback = (!hasLight && nbt != null) ? nbt : null;
+            readyQueue.offer(new ReadyChunk(task.pos(), packetBytes, task.priority(), task.renderOnly(),
+                    hasLight, writeback));
+            // OVD(renderOnly) 不经 chunkHash 比对，需在磁盘命中时单独记入缓存指标；
+            // 权威路径已在 ClientMetadataHandler 记过，避免双重计数。
+            // 使用 ESTIMATED_CHUNK_BYTES 与权威路径口径一致（不依赖 packetBytes 实际长度）。
+            if (task.renderOnly() && packetBytes.length > 0) {
+                NetworkStats.recordCacheLoadEligible(NetworkStats.ESTIMATED_CHUNK_BYTES);
+                NetworkStats.recordCacheHit(NetworkStats.ESTIMATED_CHUNK_BYTES);
+                NetworkStats.recordCacheFullHit(NetworkStats.ESTIMATED_CHUNK_BYTES);
+            }
+            DebugLogger.info(LogType.CACHE,
+                    "[CACHE_LOAD] Chunk {} loaded from disk ({} bytes, hasLight={}, readySize={})",
+                    task.pos(), packetBytes.length, hasLight, readyQueue.size());
         } catch (Exception e) {
             if (task.renderOnly()) {
                 DebugLogger.error("[CACHE_LOAD] renderOnly load error for {}", task.pos(), e);
@@ -207,11 +310,6 @@ public class ClientCacheLoadQueue {
                 Constants.LOG.error("[CACHE_LOAD] Error loading chunk {} from cache", task.pos(), e);
                 requestChunkFromServer(task.pos());
             }
-        }
-
-        // 继续处理队列中剩余任务
-        if (!pendingTasks.isEmpty()) {
-            submitNextTask();
         }
     }
 
@@ -302,6 +400,13 @@ public class ClientCacheLoadQueue {
             }
             Constants.LOG.debug("[CACHE_APPLY] Applying chunk {} to world (renderOnly={}, hasLight={}, remaining={})",
                     chunk.pos(), chunk.renderOnly(), chunk.hasCachedLight(), readyQueue.size());
+            // 缓存无光照（is_light_on=0）：apply 前预提交重算。solve（~3ms，后台池）与 packet
+            // 解码/渲染构建并行，渲染时光照大概率已落地 —— 消除「渲染先于光照落地」的跨帧黑块
+            // （MixinLightRecompute TAIL 的精确提交仍会执行并覆盖粗结果，双算成本可忽略）。
+            // renderOnly 走 VDES 自己的路径，不预提交。
+            if (!chunk.renderOnly() && !chunk.hasCachedLight()) {
+                LightComputeService.getInstance().submitRecompute(chunk.pos(), chunk.lightWritebackNbt());
+            }
             boolean appliedToWorld = ClientChunkHandler.applyChunkData(
                     chunk.pos().x, chunk.pos().z, chunk.data(), chunk.renderOnly(),
                     chunk.lightWritebackNbt(), chunk.hasCachedLight());
@@ -323,7 +428,7 @@ public class ClientCacheLoadQueue {
      * 获取待加载队列大小
      */
     public int getPendingSize() {
-        return pendingTasks.size();
+        return pendingTotal();
     }
 
     /**
@@ -337,7 +442,8 @@ public class ClientCacheLoadQueue {
      * 清空所有队列（断开连接时调用）
      */
     public void clear() {
-        pendingTasks.clear();
+        pendingByRegion.clear();
+        activeRegions.clear();
         readyQueue.clear();
         Constants.LOG.debug("Hassium: Cleared cache load queue");
     }
