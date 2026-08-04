@@ -401,7 +401,7 @@ public class ViewDistanceExtensionService {
             // 从 loaded 摘出再 load，否则 loadRenderOnlyChunk 会因 contains 直接 return
             loadedRenderOnly.remove(pos);
             if (level != null) {
-                ((IClientLevelExtension) level).hassium$removeRenderOnlyChunk(pos);
+                ((IClientLevelExtension) level).hassium$removeRenderOnlyChunk(pos.toLong());
             }
             missRetryAt.remove(pos);
             Constants.LOG.debug("Hassium: OVD reconcile re-queue missing {}", pos);
@@ -503,7 +503,7 @@ public class ViewDistanceExtensionService {
         }
 
         IClientLevelExtension accessor = (IClientLevelExtension) level;
-        if (accessor.hassium$isRenderOnly(pos)) {
+        if (accessor.hassium$isRenderOnly(pos.toLong())) {
             return false;
         }
         ClientChunkCache cache = ((ClientLevelAccessor) level).hassium$getChunkSource();
@@ -546,7 +546,7 @@ public class ViewDistanceExtensionService {
         ClientLevel level = mc.level;
 
         // 已是 renderOnly：仍应吞掉 Forget，避免服务端卸载把超视渲染块打穿
-        if (isRenderOnly(pos) || ((IClientLevelExtension) level).hassium$isRenderOnly(pos)) {
+        if (isRenderOnly(pos) || ((IClientLevelExtension) level).hassium$isRenderOnly(pos.toLong())) {
             delayedUnloadAt.remove(pos);
             forgetRetainTotal.incrementAndGet();
             Constants.LOG.debug("Hassium: OVD forget retain (already renderOnly) {}", pos);
@@ -569,7 +569,7 @@ public class ViewDistanceExtensionService {
             delayedUnloadAt.remove(pos);
             missRetryAt.remove(pos);
             missRetryCount.remove(pos);
-            ((IClientLevelExtension) level).hassium$addRenderOnlyChunk(pos);
+            ((IClientLevelExtension) level).hassium$addRenderOnlyChunk(pos.toLong());
             forgetRetainTotal.incrementAndGet();
             Constants.LOG.debug("Hassium: OVD forget retain in-place {}", pos);
             return true;
@@ -656,14 +656,14 @@ public class ViewDistanceExtensionService {
         }
         IClientLevelExtension accessor = (IClientLevelExtension) level;
         // 仅 drop 当前仍标为 renderOnly 的块；真实区块留给 vanilla Forget 路径
-        if (accessor.hassium$isRenderOnly(pos) || loadedRenderOnly.contains(pos) || pendingRenderOnly.contains(pos)) {
+        if (accessor.hassium$isRenderOnly(pos.toLong()) || loadedRenderOnly.contains(pos) || pendingRenderOnly.contains(pos)) {
             // 先清标记，避免 drop→unload 再触发 substitute / 写盘短路误判
-            accessor.hassium$removeRenderOnlyChunk(pos);
+            accessor.hassium$removeRenderOnlyChunk(pos.toLong());
             loadedRenderOnly.remove(pos);
             pendingRenderOnly.remove(pos);
             dropChunkFromClientCache(level, pos);
         } else {
-            accessor.hassium$removeRenderOnlyChunk(pos);
+            accessor.hassium$removeRenderOnlyChunk(pos.toLong());
             loadedRenderOnly.remove(pos);
             pendingRenderOnly.remove(pos);
         }
@@ -712,7 +712,7 @@ public class ViewDistanceExtensionService {
         loadedRenderOnly.remove(pos);
         delayedUnloadAt.remove(pos);
         if (mc.level != null) {
-            ((IClientLevelExtension) mc.level).hassium$removeRenderOnlyChunk(pos);
+            ((IClientLevelExtension) mc.level).hassium$removeRenderOnlyChunk(pos.toLong());
         }
         if (pos == null) {
             return;
@@ -765,10 +765,10 @@ public class ViewDistanceExtensionService {
         if (mc.level != null) {
             IClientLevelExtension accessor = (IClientLevelExtension) mc.level;
             for (ChunkPos pos : new HashSet<>(loadedRenderOnly)) {
-                accessor.hassium$removeRenderOnlyChunk(pos);
+                accessor.hassium$removeRenderOnlyChunk(pos.toLong());
             }
             for (ChunkPos pos : new HashSet<>(pendingRenderOnly)) {
-                accessor.hassium$removeRenderOnlyChunk(pos);
+                accessor.hassium$removeRenderOnlyChunk(pos.toLong());
             }
         }
         int cleared = loadedRenderOnly.size() + pendingRenderOnly.size();

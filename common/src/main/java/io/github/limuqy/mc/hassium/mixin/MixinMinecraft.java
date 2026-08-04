@@ -1,6 +1,5 @@
 package io.github.limuqy.mc.hassium.mixin;
 
-import io.github.limuqy.mc.hassium.cache.client.CacheSaveQueue;
 import io.github.limuqy.mc.hassium.cache.client.ClientLifecycleHelper;
 import io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverAttemptMarker;
 import io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity;
@@ -133,10 +132,14 @@ public class MixinMinecraft {
     }
 
     /**
-     * 在 level 切换前刷新缓存保存队列。
-     * <p>
-     * 断连路径上 {@link ClientLifecycleHelper#cleanupOnDisconnect()} 已在更早阶段
-     * 批量 enqueue；此处仅 flush 残余任务（维度切换等路径也受益）。
+     * setLevel 不再主动 flush 缓存保存队列（历史 flush 最坏主线程阻塞 ~5.2s）：
+     * <ul>
+     *   <li>重连/登录：断连路径已由 {@link ClientLifecycleHelper#cleanupOnDisconnect()} 的
+     *       {@code enqueueAllFromLevel + flushAsync(5000)} 与 {@code finalizeDisconnect} 的
+     *       {@code drainRemaining(5000)} 排空，setLevel 时队列为空；</li>
+     *   <li>维度切换：storage 不重建（仅登录时 init），旧任务写旧维度 region 文件
+     *       （HassiumRegionFile 方法 synchronized），与新会话无冲突，后台自然完成。</li>
+     * </ul>
      * <p>
      * 1.20.5–1.21.8：{@code setLevel(ClientLevel, ReceivingLevelScreen.Reason)}；
      * 1.21.9+：Reason 参数移除，恢复为单参数。
@@ -146,7 +149,6 @@ public class MixinMinecraft {
 #if MC_VER < MC_1_20_5
     @Inject(method = "setLevel", at = @At("HEAD"))
     private void hassium$onSetLevel(ClientLevel newLevel, CallbackInfo ci) {
-        hassium$flushCacheSaveQueue();
         // 无感切换恢复成功：新 level 即将接管，先把旧 level 内存区块快照入队（零磁盘 IO），
         // 消除恢复后区块重新加载的空窗；非恢复场景内部判定后直接返回。
         io.github.limuqy.mc.hassium.cache.client.RecoveryChunkPrefill.getInstance().captureAndStart(newLevel);
@@ -157,7 +159,6 @@ public class MixinMinecraft {
     private void hassium$onSetLevel(ClientLevel newLevel,
                                      net.minecraft.client.gui.screens.ReceivingLevelScreen.Reason reason,
                                      CallbackInfo ci) {
-        hassium$flushCacheSaveQueue();
         // 无感切换恢复成功：新 level 即将接管，先把旧 level 内存区块快照入队（零磁盘 IO），
         // 消除恢复后区块重新加载的空窗；非恢复场景内部判定后直接返回。
         io.github.limuqy.mc.hassium.cache.client.RecoveryChunkPrefill.getInstance().captureAndStart(newLevel);
@@ -166,22 +167,12 @@ public class MixinMinecraft {
 #else
     @Inject(method = "setLevel", at = @At("HEAD"))
     private void hassium$onSetLevel(ClientLevel newLevel, CallbackInfo ci) {
-        hassium$flushCacheSaveQueue();
         // 无感切换恢复成功：新 level 即将接管，先把旧 level 内存区块快照入队（零磁盘 IO），
         // 消除恢复后区块重新加载的空窗；非恢复场景内部判定后直接返回。
         io.github.limuqy.mc.hassium.cache.client.RecoveryChunkPrefill.getInstance().captureAndStart(newLevel);
         io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.markFreezeActive(false);
     }
 #endif
-
-    @Unique
-    private void hassium$flushCacheSaveQueue() {
-        try {
-            CacheSaveQueue.getInstance().flush();
-        } catch (Exception e) {
-            LOGGER.error("Hassium: Failed to flush cache save queue on level change", e);
-        }
-    }
 
     /**
      * L2 定格兜底：恢复窗口内取消世界拆除路径，保证世界不卸载。

@@ -51,7 +51,7 @@ public class ForgeClientChunkApplier implements IClientChunkApplier {
                 IClientLevelExtension mixinAccessor = (IClientLevelExtension) level;
                 if (!renderOnly) {
                     // 真实区块到达：apply 前清除可能的 renderOnly 标记（边界替换）
-                    mixinAccessor.hassium$removeRenderOnlyChunk(pos);
+                    mixinAccessor.hassium$removeRenderOnlyChunk(pos.toLong());
                 } else {
                     ViewDistanceExtensionService.getInstance().ensureExpandedRadius();
                 }
@@ -68,7 +68,7 @@ public class ForgeClientChunkApplier implements IClientChunkApplier {
 
                 if (renderOnly) {
                     // renderOnly 区块：apply 后标记
-                    mixinAccessor.hassium$addRenderOnlyChunk(pos);
+                    mixinAccessor.hassium$addRenderOnlyChunk(pos.toLong());
                 } else {
                     // 真实区块：从 loadedRenderOnly 摘除，防止后续 update 误 enqueue
                     ViewDistanceExtensionService.getInstance().onRealChunkApplied(pos);
@@ -117,7 +117,7 @@ public class ForgeClientChunkApplier implements IClientChunkApplier {
             // 如果是仅渲染区块，标记它
             if (renderOnly) {
                 IClientLevelExtension mixinAccessor = (IClientLevelExtension) level;
-                mixinAccessor.hassium$addRenderOnlyChunk(pos);
+                mixinAccessor.hassium$addRenderOnlyChunk(pos.toLong());
             }
 
             Constants.LOG.debug("Hassium: Forge applied chunk [{}, {}] (renderOnly={}) [PLACEHOLDER]",

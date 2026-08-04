@@ -102,7 +102,7 @@ public record HassiumConfig(
                 true,    // lightCacheEnabled
                 32,      // maxChunksPerFrame
                 15,      // mainThreadChunkBudgetMs
-                false,   // parallelLightEngineEnabled
+                true,    // parallelLightEngineEnabled
                 4        // parallelLightEngineThreads
         );
 

@@ -47,13 +47,8 @@ public class MixinChunkSerializer {
 #endif
     void hassium$onWrite(CallbackInfoReturnable<CompoundTag> cir) {
         hassium$totalWriteOperations.incrementAndGet();
-
-        CompoundTag nbt = cir.getReturnValue();
-        if (nbt != null) {
-            int size = nbt.toString().length();
-            Constants.LOG.debug("Chunk serialized, size: {} bytes (total writes: {})",
-                    size, hassium$totalWriteOperations.get());
-        }
+        // 只记计数：size 需整树 toString()（每块保存一次 O(N) 字符串化），仅服务 debug 日志，已移除
+        Constants.LOG.debug("Chunk serialized (total writes: {})", hassium$totalWriteOperations.get());
     }
 
     /**

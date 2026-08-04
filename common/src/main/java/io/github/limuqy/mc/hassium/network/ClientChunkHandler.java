@@ -467,33 +467,6 @@ public class ClientChunkHandler {
     }
 
     /**
-     * 将区块数据压缩并保存到缓存
-     *
-     * @param pos           区块坐标
-     * @param data          区块数据（FriendlyByteBuf 格式的 packet 数据）
-     * @param contentHash   内容哈希
-     * @param sectionHashes per-section 哈希数组（可为 null）
-     * @return 是否成功保存
-     */
-    public static boolean persistToCache(ChunkPos pos, byte[] data, long contentHash, long[] sectionHashes) {
-        if (clientStorage == null) {
-            Constants.LOG.warn("Hassium: Client storage not initialized");
-            return false;
-        }
-        boolean ok = clientStorage.persist(pos, data, contentHash, sectionHashes);
-        if (ok) {
-            // contentHash 不含光照：仅 is_light_on=1 才标净；否则等光照回写 / 卸载快照
-            CompoundTag nbt = ChunkDiskCodec.bytesToNbt(data);
-            if (ChunkDiskCodec.isLightOn(nbt)) {
-                io.github.limuqy.mc.hassium.cache.client.ClientChunkDirtyTracker.clear(pos);
-            } else {
-                io.github.limuqy.mc.hassium.cache.client.ClientChunkDirtyTracker.markDirty(pos);
-            }
-        }
-        return ok;
-    }
-
-    /**
      * 从缓存加载区块并应用到世界
      *
      * @param pos        区块坐标

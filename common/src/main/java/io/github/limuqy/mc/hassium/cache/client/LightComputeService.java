@@ -119,13 +119,20 @@ public final class LightComputeService {
         ExecutorService p = ensurePool();
         p.execute(() -> {
             try {
+                // 后台线程补充缓存 NBT（主线程调用方可能未携带）：读盘+ZSTD 解压
+                // 在后台线程完成，避免 updateCacheWithLightData 的 fallback 在主线程读盘。
+                net.minecraft.nbt.CompoundTag nbt = cachedNbt;
+                if (nbt == null) {
+                    nbt = io.github.limuqy.mc.hassium.network.ClientChunkHandler
+                            .loadChunkNbtFromCache(corePos);
+                }
                 long backgroundStartNs = System.nanoTime();
                 LightFloodFill.Result r = LightFloodFill.solve(W, height,
                         domainLightBlock, emitterArr, domainSourceY, domainShapeIds, occlusion);
                 byte[][] skySections = extractCore(r.skyLight(), minSection, sectionCount, height);
                 byte[][] blockSections = extractCore(r.blockLight(), minSection, sectionCount, height);
                 NetworkStats.recordLightRecomputeBackgroundTime(System.nanoTime() - backgroundStartNs);
-                results.add(new LightComputeResult(corePos, skySections, blockSections, cachedNbt));
+                results.add(new LightComputeResult(corePos, skySections, blockSections, nbt));
             } catch (Throwable t) {
                 Constants.LOG.error("Hassium: Parallel light recompute failed for {}", corePos, t);
             }
