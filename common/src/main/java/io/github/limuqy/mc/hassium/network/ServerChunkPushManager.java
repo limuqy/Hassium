@@ -1115,7 +1115,9 @@ public class ServerChunkPushManager {
                 }
             }
 #else
-            // 主线程序列化（ThreadingDetector：chunk 数据只能主线程读），压缩发送下推 pushPool
+            // 主线程只做 prepared 命中判定 + getChunk + buildChunkPacket（读 chunk 受 ThreadingDetector 限制必须主线程）；
+            // encode（packet 构造后为纯数据：内部 buffer 已含全部 section 字节）下推 pushPool，
+            // 与压缩/限速/发送同一后台任务——主线程序列化成本减半。
             while (processed < maxPerTick && !queue.isEmpty()) {
                 if (!player.isAlive() || player.hasDisconnected()) {
                     removePlayer(playerId);
@@ -1131,34 +1133,45 @@ public class ServerChunkPushManager {
                     // 优先使用拦截时缓存的包字节（与 chunkHash / 反透视视图一致）
                     PreparedChunk prepared = takePreparedChunkPacket(playerId, task.pos());
                     byte[] chunkData = prepared != null ? prepared.data() : null;
+                    ClientboundLevelChunkWithLightPacket packet = null;
                     if (chunkData == null) {
                         LevelChunk chunk = level.getChunk(task.pos().x, task.pos().z);
                         if (chunk == null) {
                             Constants.LOG.warn("[PROCESS_QUEUE] Chunk {} not loaded, skipping", task.pos());
                             continue;
                         }
-                        chunkData = serializeChunk(chunk, level);
-                    }
-                    if (chunkData == null) {
-                        Constants.LOG.warn("[PROCESS_QUEUE] Failed to serialize chunk {}", task.pos());
-                        continue;
+                        packet = buildChunkPacket(chunk, level);
+                        if (packet == null) {
+                            Constants.LOG.warn("[PROCESS_QUEUE] Failed to build chunk packet {}", task.pos());
+                            continue;
+                        }
                     }
 
-                    works.add(new SerializedChunkWork(player, task.pos(), chunkData));
+                    works.add(new SerializedChunkWork(player, task.pos(), chunkData, packet, level.registryAccess()));
                     processed++;
-                    DebugLogger.info(LogType.NETWORK, "[PROCESS_QUEUE] Serialized chunk {} ({} bytes, remaining={})",
-                            task.pos(), chunkData.length, queue.size());
+                    DebugLogger.info(LogType.NETWORK, "[PROCESS_QUEUE] Built chunk packet {} (remaining={})",
+                            task.pos(), queue.size());
                 } catch (Exception e) {
-                    Constants.LOG.error("[PROCESS_QUEUE] Failed to serialize chunk {} for player {}",
+                    Constants.LOG.error("[PROCESS_QUEUE] Failed to prepare chunk {} for player {}",
                             task.pos(), player.getName().getString(), e);
                 }
             }
 
             if (!works.isEmpty()) {
-                DebugLogger.info(LogType.NETWORK, "[PROCESS_QUEUE] Tick drain for {}: serialized={}, remaining={}",
+                DebugLogger.info(LogType.NETWORK, "[PROCESS_QUEUE] Tick drain for {}: prepared={}, remaining={}",
                         player.getName().getString(), works.size(), queue.size());
                 for (SerializedChunkWork work : works) {
-                    pushPool.submit(() -> compressAndSend(work.player(), work.pos(), work.chunkData(), sender));
+                    pushPool.submit(() -> {
+                        byte[] chunkData = work.chunkData();
+                        if (chunkData == null) {
+                            chunkData = encodeChunkPacket(work.packet(), work.registryAccess());
+                        }
+                        if (chunkData == null) {
+                            Constants.LOG.warn("[PROCESS_QUEUE] Failed to encode chunk {}", work.pos());
+                            return;
+                        }
+                        compressAndSend(work.player(), work.pos(), chunkData, sender);
+                    });
                 }
             }
 #endif
@@ -1387,9 +1400,12 @@ public class ServerChunkPushManager {
     private record SerializedChunkWork(ServerPlayer player, ChunkPos pos, LevelChunk chunk) {}
 #else
     /**
-     * 主线程已序列化、待后台压缩发送的工作项（1.21.2+ ThreadingDetector）
+     * 1.21.2+ 工作项：prepared 命中带已编码字节，miss 带主线程构建的 packet（纯数据，后台 encode）。
+     * registryAccess 构建时冻结（服务端启动后只读），后台 encode 安全。
      */
-    private record SerializedChunkWork(ServerPlayer player, ChunkPos pos, byte[] chunkData) {}
+    private record SerializedChunkWork(ServerPlayer player, ChunkPos pos,
+                                       byte[] chunkData, ClientboundLevelChunkWithLightPacket packet,
+                                       RegistryAccess registryAccess) {}
 #endif
 
     /**
