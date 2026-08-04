@@ -32,17 +32,21 @@ class CacheDiskDiagnoseTest {
             return;
         }
 
-#if MC_VER < MC_1_21_2
-        // 1.20.x 的 MappedRegistry 构造器要求 Bootstrap 已启动，否则 Registries.<clinit> 抛
-        // IllegalArgumentException: Not bootstrapped。1.21+ 不再检查。
+        // MappedRegistry/BuiltInRegistries 构造器要求 Bootstrap 已启动（1.20.x 与 1.21.11 的
+        // internalRegister 均调 checkBootstrapCalled，反编译核实），否则抛 IllegalArgumentException:
+        // Not bootstrapped。gradle test 环境无 datapack → biome 缺失，bootstrap 仍需先跑。
         SharedConstants.setVersion(DetectedVersion.BUILT_IN);
         Bootstrap.bootStrap();
-#endif
 
         // biome 注册表在 1.20.x 由 RegistryDataLoader 从 datapack 资源加载，gradle test 环境
         // 没有 datapack → 无法重建 LevelChunkSection，只能 SKIP（诊断测试保持手动运行）。
         RegistryAccess registryAccess = RegistryAccess.fromRegistryOfRegistries(BuiltInRegistries.REGISTRY);
+#if MC_VER < MC_1_21_2
         if (registryAccess.registry(Registries.BIOME).isEmpty()) {
+#else
+        // 1.21.2+ RegistryAccess.registry 移除，改用 lookup（RegistryCompat 同款分界）
+        if (registryAccess.lookup(Registries.BIOME).isEmpty()) {
+#endif
             System.out.println("SKIP: biome registry unavailable without datapack resources");
             return;
         }

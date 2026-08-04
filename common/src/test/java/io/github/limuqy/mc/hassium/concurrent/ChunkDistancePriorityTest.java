@@ -1,6 +1,7 @@
 package io.github.limuqy.mc.hassium.concurrent;
 
 import net.minecraft.world.level.ChunkPos;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -15,6 +16,17 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * {@link ChunkDistancePriority} 分层 + distSq 冻结键回归。
  */
 class ChunkDistancePriorityTest {
+
+#if MC_VER >= MC_1_21_2
+    // 1.21.2+ ChunkPos.<clinit> 经 ChunkPyramid → ChunkStatus.register 触碰 BuiltInRegistries，
+    // 而 BuiltInRegistries.internalRegister 各版本均调 Bootstrap.checkBootstrapCalled → gradle test
+    // 未 bootstrap 直接 ExceptionInInitializerError。1.20.1/1.21.1 的 ChunkPos 无此链条，无需前置。
+    @BeforeAll
+    static void bootstrapRegistries() {
+        net.minecraft.SharedConstants.setVersion(net.minecraft.DetectedVersion.BUILT_IN);
+        net.minecraft.server.Bootstrap.bootStrap();
+    }
+#endif
 
     @Test
     @DisplayName("同层：近处 distSq 小于远处")

@@ -2,6 +2,7 @@ package io.github.limuqy.mc.hassium.concurrent;
 
 import net.minecraft.world.level.ChunkPos;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -20,6 +21,15 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * 以及层序：权威 &gt; 未知任务 &gt; 环带。
  */
 class MainThreadDispatcherPriorityTest {
+
+#if MC_VER >= MC_1_21_2
+    // 同 ChunkDistancePriorityTest：1.21.2+ ChunkPos.<clinit> 触碰 BuiltInRegistries 需先 bootstrap。
+    @BeforeAll
+    static void bootstrapRegistries() {
+        net.minecraft.SharedConstants.setVersion(net.minecraft.DetectedVersion.BUILT_IN);
+        net.minecraft.server.Bootstrap.bootStrap();
+    }
+#endif
 
     @BeforeEach
     void setUp() {
