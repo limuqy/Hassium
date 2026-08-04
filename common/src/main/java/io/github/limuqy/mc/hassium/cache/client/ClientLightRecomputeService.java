@@ -363,11 +363,18 @@ public final class ClientLightRecomputeService {
                 for (int z = 0; z < 16; z++) {
                     for (int y = y0; y < y1; y++) {
                         neighborPos.set(minX + 16, y, minZ + z);
-                        if (sky.getLightValue(neighborPos) > 0 || block.getLightValue(neighborPos) > 0
-                                || sky.getLightValue(ourPos.set(minX + 15, y, minZ + z)) > 0
-                                || block.getLightValue(ourPos) > 0) {
+                        int skyN = sky.getLightValue(neighborPos);
+                        int skyO = sky.getLightValue(ourPos.set(minX + 15, y, minZ + z));
+                        if (skyN > skyO + 1 || skyO > skyN + 1) {
                             lightEngine.checkBlock(ourPos);
                             lightEngine.checkBlock(neighborPos);
+                        } else {
+                            int blockN = block.getLightValue(neighborPos);
+                            int blockO = block.getLightValue(ourPos);
+                            if (blockN > blockO + 1 || blockO > blockN + 1) {
+                                lightEngine.checkBlock(ourPos);
+                                lightEngine.checkBlock(neighborPos);
+                            }
                         }
                     }
                 }
@@ -384,11 +391,18 @@ public final class ClientLightRecomputeService {
                 for (int z = 0; z < 16; z++) {
                     for (int y = y0; y < y1; y++) {
                         neighborPos.set(minX - 1, y, minZ + z);
-                        if (sky.getLightValue(neighborPos) > 0 || block.getLightValue(neighborPos) > 0
-                                || sky.getLightValue(ourPos.set(minX, y, minZ + z)) > 0
-                                || block.getLightValue(ourPos) > 0) {
+                        int skyN = sky.getLightValue(neighborPos);
+                        int skyO = sky.getLightValue(ourPos.set(minX, y, minZ + z));
+                        if (skyN > skyO + 1 || skyO > skyN + 1) {
                             lightEngine.checkBlock(ourPos);
                             lightEngine.checkBlock(neighborPos);
+                        } else {
+                            int blockN = block.getLightValue(neighborPos);
+                            int blockO = block.getLightValue(ourPos);
+                            if (blockN > blockO + 1 || blockO > blockN + 1) {
+                                lightEngine.checkBlock(ourPos);
+                                lightEngine.checkBlock(neighborPos);
+                            }
                         }
                     }
                 }
@@ -405,11 +419,18 @@ public final class ClientLightRecomputeService {
                 for (int x = 0; x < 16; x++) {
                     for (int y = y0; y < y1; y++) {
                         neighborPos.set(minX + x, y, minZ + 16);
-                        if (sky.getLightValue(neighborPos) > 0 || block.getLightValue(neighborPos) > 0
-                                || sky.getLightValue(ourPos.set(minX + x, y, minZ + 15)) > 0
-                                || block.getLightValue(ourPos) > 0) {
+                        int skyN = sky.getLightValue(neighborPos);
+                        int skyO = sky.getLightValue(ourPos.set(minX + x, y, minZ + 15));
+                        if (skyN > skyO + 1 || skyO > skyN + 1) {
                             lightEngine.checkBlock(ourPos);
                             lightEngine.checkBlock(neighborPos);
+                        } else {
+                            int blockN = block.getLightValue(neighborPos);
+                            int blockO = block.getLightValue(ourPos);
+                            if (blockN > blockO + 1 || blockO > blockN + 1) {
+                                lightEngine.checkBlock(ourPos);
+                                lightEngine.checkBlock(neighborPos);
+                            }
                         }
                     }
                 }
@@ -426,11 +447,18 @@ public final class ClientLightRecomputeService {
                 for (int x = 0; x < 16; x++) {
                     for (int y = y0; y < y1; y++) {
                         neighborPos.set(minX + x, y, minZ - 1);
-                        if (sky.getLightValue(neighborPos) > 0 || block.getLightValue(neighborPos) > 0
-                                || sky.getLightValue(ourPos.set(minX + x, y, minZ)) > 0
-                                || block.getLightValue(ourPos) > 0) {
+                        int skyN = sky.getLightValue(neighborPos);
+                        int skyO = sky.getLightValue(ourPos.set(minX + x, y, minZ));
+                        if (skyN > skyO + 1 || skyO > skyN + 1) {
                             lightEngine.checkBlock(ourPos);
                             lightEngine.checkBlock(neighborPos);
+                        } else {
+                            int blockN = block.getLightValue(neighborPos);
+                            int blockO = block.getLightValue(ourPos);
+                            if (blockN > blockO + 1 || blockO > blockN + 1) {
+                                lightEngine.checkBlock(ourPos);
+                                lightEngine.checkBlock(neighborPos);
+                            }
                         }
                     }
                 }
