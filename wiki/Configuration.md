@@ -29,7 +29,7 @@ Hassium 启动时在 `config/hassium/` 自动生成两份 TOML：
 
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
-| `storage.enabled` | `true` | 世界存档改用 ZSTD type 126（**首次启用前请备份世界**） |
+| `storage.enabled` | `false` | 世界存档改用 ZSTD type 126（默认关；仅专用服务器可开启，**首次启用前请备份世界**） |
 | `storage.mode` | `mirror` | 存储模式（仅 `mirror` 生效） |
 | `storage.zstdLevel` | `9` | 存储压缩等级；越高省磁盘越多、CPU 越重 |
 
@@ -40,6 +40,8 @@ Hassium 启动时在 `config/hassium/` 自动生成两份 TOML：
 | `clientCache.enabled` | `true` | 客户端区块缓存总开关 |
 | `clientCache.sectionDeltaEnabled` | `true` | 缓存过期时只补变更分段；关闭则过期走全量重传 |
 | `clientCache.lightCacheEnabled` | `true` | 光照优化；命中跳过同步重算；与 Sodium 等有光照异常时关掉即可 |
+| `clientCache.parallelLightEngineEnabled` | `true` | 并行光照：重算在后台线程池执行，主线程只提交快照 |
+| `clientCache.parallelLightEngineThreads` | `4` | 并行光照线程数（虚拟线程模式忽略） |
 | `clientCache.viewDistanceExtensionEnabled` | `true` | 超视渲染（多人服 clientVD > serverVD 时回填环带；**与 Bobby 互斥**） |
 | `clientCache.maxRenderDistance` | `32` | 超视渲染环带与有效 RD 上限（范围 2–64） |
 | `clientCache.ovdUnloadDelaySecs` | `5` | 离开超视渲染环带后延迟卸载秒数（0=同步卸载） |
@@ -52,7 +54,8 @@ Hassium 启动时在 `config/hassium/` 自动生成两份 TOML：
 | `network.enabled` | `true` | 自定义 `hassium:*` 通道（关后回退原版全量包） |
 | `network.globalPacketCompression` | `true` | 全局管道用 ZSTD 替换原版 Zlib（关闭可与同类协议替换类 mod 共存） |
 | `network.compressionLevel` | `3` | 网络压缩等级（速度优先） |
-| `network.maxChunksPerTick` | `10` | 每玩家每 server tick 序列化上限 |
+| `network.maxChunksPerTick` | `8` | 每玩家每 tick 主线程序列化上限（建议 ≥ `smoothChunkSendRate`/20） |
+| `network.smoothChunkSendRate` | `150` | 每玩家区块平滑发送速率（块/秒；令牌桶恒定速率放行，摊平 tick 脉冲） |
 | `network.metricsEnabled` | `true` | 指标收集（关闭后 `/hassium stats` 等命令不可用） |
 | `network.enablePacketAggregation` | 默认开 | 包聚合；第三方通道被拦截异常时关掉 |
 | `network.compressionBlacklist` | 空 | 包 ID 列表，命中的包不进压缩/聚合 |

@@ -17,21 +17,21 @@
 
 ## Core capabilities
 
-| Feature | Description |
-| --- | --- |
-| **Efficient storage** | Higher-ratio world chunk compression for smaller saves; keeps vanilla Region (`.mca`) layout |
-| **Network compression** | More efficient compression for chunks and packets — less bandwidth and wait time |
-| **Chunk cache** | Loaded chunks are kept locally; revisiting an area prefers the cache instead of full downloads |
-| **Section delta** | On cache mismatch, fetch only changed sections (`sectionDelta`) instead of the whole chunk |
-| **Beyond-view render** | When client RD exceeds server view distance (multiplayer), fill the outer ring from local cache (render-only; no out-of-range server requests) |
-| **World export** | `/hassiumc export` writes the local cache as a vanilla Anvil singleplayer world |
-| **Light stripping** | Server can omit light data; the client recomputes lighting locally to save more bandwidth |
-| **Light cache** | Light data is cached after first recompute; cache hits apply pre-computed lighting directly, skipping expensive recomputation |
-| **Control failover** | On TCP master disconnect or stall, auto-reconnect through candidate endpoints; during recovery the world freezes on screen by default (optional seamless mode keeps the world running and rolls back after recovery; freeze recovery is 1.20.1-segment) with the cache kept warm and the disconnect screen hidden (data-plane failover) |
-| **Weighted distribution** | Multiple UDP/KCP endpoints carry the data plane by weight-based round-robin; the control plane stays on vanilla TCP |
-| **Smooth loading** | Caps main-thread work during join and view expansion to reduce hitch spikes |
-| **Client-friendly** | Clients without the mod can connect by default; install on both sides for full compression and cache benefits |
-| **Traffic metrics** | `/hassium stats` (server) and `/hassiumc stats` (client) to inspect compression and cache results |
+| Category | Feature | Description |
+| --- | --- | --- |
+| **Efficient compression** | Storage compression | World chunk ZSTD on disk (type 126) for smaller saves; keeps vanilla Region (`.mca`) layout |
+| | Network compression | More efficient compression for chunks and packets (custom channels + optional global pipeline + aggregation) — less bandwidth and wait time |
+| **Network optimization** | Smooth push | Constant-rate server throttling (150 chunks/s token bucket) + per-tick serialization cap with background encoding; join and view expansion never saturate the main thread |
+| | Control failover | On TCP master disconnect or stall, auto-reconnect through candidate endpoints; during recovery the world freezes on screen by default (optional seamless mode keeps the world running and rolls back after recovery) with the cache kept warm and the disconnect screen hidden (off by default) |
+| | Weighted routing | Multiple UDP/KCP lines share chunk downloads by weight; control stays on vanilla TCP (off by default) |
+| **Chunk caching** | Client chunk cache | Loaded chunks are kept locally; revisiting an area hits via contentHash comparison instead of full downloads |
+| | Section delta | On cache mismatch (MISMATCH), fetch only changed sections (`sectionDelta`) and merge locally instead of the whole chunk |
+| | **Beyond-view render** | When client RD exceeds server view distance (multiplayer), fill the outer ring from local cache (render-only; no out-of-range server requests); incompatible with Bobby |
+| | World export | `/hassiumc export` writes the local cache as a vanilla Anvil singleplayer world |
+| **Lighting optimization** | Light stripping | Server can omit light data; the client recomputes lighting locally to save more bandwidth |
+| | Light cache | Light data is cached after first recompute; cache hits apply pre-computed lighting directly, skipping expensive recomputation |
+| | Parallel light engine | Light recomputation runs on a background thread pool; the main thread only submits snapshots (on by default) |
+| **Utilities** | Traffic metrics | `/hassium stats` (server) and `/hassiumc stats` (client) to inspect compression and cache results |
 
 Feature details: [Features](Features-en).
 

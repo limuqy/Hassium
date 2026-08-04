@@ -29,7 +29,7 @@ In-game config screen entry points:
 
 | Key | Default | Notes |
 | --- | --- | --- |
-| `storage.enabled` | `true` | World save uses ZSTD type 126 (**back up worlds before first enable**) |
+| `storage.enabled` | `false` | World save uses ZSTD type 126 (off by default; dedicated servers only — **back up worlds before first enable**) |
 | `storage.mode` | `mirror` | Storage mode (only `mirror` is wired) |
 | `storage.zstdLevel` | `9` | Storage compression level; higher = smaller saves, more CPU |
 
@@ -40,6 +40,8 @@ In-game config screen entry points:
 | `clientCache.enabled` | `true` | Master switch for client chunk cache |
 | `clientCache.sectionDeltaEnabled` | `true` | On cache mismatch, fetch only changed sections; off = full re-fetch |
 | `clientCache.lightCacheEnabled` | `true` | Light cache; hits skip recomputation; turn off if you see light glitches with Sodium etc. |
+| `clientCache.parallelLightEngineEnabled` | `true` | Parallel light: recomputation runs on a background pool; the main thread only submits snapshots |
+| `clientCache.parallelLightEngineThreads` | `4` | Parallel light thread count (ignored in virtual-thread mode) |
 | `clientCache.viewDistanceExtensionEnabled` | `true` | Beyond-view render (multiplayer, clientVD > serverVD ring fill; **incompatible with Bobby**) |
 | `clientCache.maxRenderDistance` | `32` | Beyond-view ring and effective RD cap (range 2–64) |
 | `clientCache.ovdUnloadDelaySecs` | `5` | Seconds of delayed unload after leaving the beyond-view ring (0 = sync) |
@@ -52,7 +54,8 @@ In-game config screen entry points:
 | `network.enabled` | `true` | Custom `hassium:*` channels (off = revert to vanilla full packets) |
 | `network.globalPacketCompression` | `true` | Replace the vanilla Netty Zlib with ZSTD globally (off = coexist with protocol-replacement mods) |
 | `network.compressionLevel` | `3` | Network compression level (speed-biased) |
-| `network.maxChunksPerTick` | `10` | Per-player serialize cap per server tick |
+| `network.maxChunksPerTick` | `8` | Per-player main-thread serialization cap per tick (recommend ≥ `smoothChunkSendRate`/20) |
+| `network.smoothChunkSendRate` | `150` | Per-player smooth chunk send rate (chunks/s; token-bucket constant rate, flattens tick bursts) |
 | `network.metricsEnabled` | `true` | Metrics collection (turn off disables `/hassium stats` etc.) |
 | `network.enablePacketAggregation` | on by default | Packet aggregation; turn off if a third-party channel misbehaves |
 | `network.compressionBlacklist` | empty | Packet ID list; matched packets bypass compression/aggregation |
