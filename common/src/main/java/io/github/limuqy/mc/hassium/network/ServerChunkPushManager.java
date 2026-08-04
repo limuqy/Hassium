@@ -294,9 +294,11 @@ public class ServerChunkPushManager {
      * 异步计算 sectionHashes → chunkHash 并发送阶段一元数据（从 PlayerChunkSender.sendChunk 调用，1.20.2+）。
      * <p>
      * 1.20.2+ 移除了 {@code ServerPlayer.trackChunk}，初始区块发送改走
-     * {@code PlayerChunkSender.sendChunk}。构建包 + 编码在**调用线程**同步完成：
+     * {@code PlayerChunkSender.sendChunk}。packet 构建在**调用线程**同步完成：
      * 1.21.2+ 的 PalettedContainer ThreadingDetector 禁止跨线程读 chunk，只有主线程/
-     * 原版 ChunkSender 线程合法（拦截点正是这两个线程之一）；hash 计算下推 pushPool。
+     * 原版 ChunkSender 线程合法（拦截点正是这两个线程之一）；<1.21.2 无检测但同样
+     * 在调用线程构建（拦截点即主线程）。编码不再占用调用线程：packet 为纯数据，
+     * 由 drain 消费方在 pushPool 后台 encode；hash 计算同样下推 pushPool。
      *
      * @param player    目标玩家
      * @param pos       区块位置
@@ -315,18 +317,9 @@ public class ServerChunkPushManager {
             Constants.LOG.warn("[ASYNC_METADATA] Failed to build chunk packet for {}", pos);
             return;
         }
-#if MC_VER < MC_1_21_2
-        // <1.21.2：保持同步 encode（调用线程主线程；drain 消费方只认 byte[]）
-        byte[] encoded = encodeChunkPacket(packet, registryAccess);
-        if (encoded != null) {
-            putPreparedChunkPacket(player.getUUID(), pos, encoded);
-        }
-#else
-        // 1.21.2+：只同步 build（ThreadingDetector 要求主线程读 chunk），
-        // encode 留给消费方后台执行——主线程不再付线格式编码成本；
+        // 同步缓存已构建的 packet：encode 留给 drain 消费方后台执行，主线程不再付线格式编码成本；
         // packet 为纯数据（构造后不碰 chunk），后台 hash/encode 并发读安全。
         putPreparedChunkPacket(player.getUUID(), pos, packet);
-#endif
 
         pushPool.submit(() -> {
             try {
@@ -1098,7 +1091,8 @@ public class ServerChunkPushManager {
                         continue;
                     }
 
-                    works.add(new SerializedChunkWork(player, task.pos(), chunk));
+                    works.add(new SerializedChunkWork(player, task.pos(), chunk, null,
+                            level.registryAccess()));
                     processed++;
                     DebugLogger.info(LogType.NETWORK, "[PROCESS_QUEUE] Queued chunk {} (remaining={})",
                             task.pos(), queue.size());
@@ -1116,7 +1110,12 @@ public class ServerChunkPushManager {
                         PreparedChunk prepared = takePreparedChunkPacket(work.player().getUUID(), work.pos());
                         byte[] chunkData = prepared != null ? prepared.data() : null;
                         if (chunkData == null) {
-                            chunkData = serializeChunk(work.chunk(), level);
+                            if (prepared != null) {
+                                // 拦截路径缓存的 packet（主线程已 build）：后台 encode（纯数据）
+                                chunkData = encodeChunkPacket(prepared.packet(), work.registryAccess());
+                            } else {
+                                chunkData = serializeChunk(work.chunk(), level);
+                            }
                         }
                         if (chunkData == null) {
                             Constants.LOG.warn("[PROCESS_QUEUE] Failed to serialize chunk {}", work.pos());
@@ -1424,9 +1423,13 @@ public class ServerChunkPushManager {
 
 #if MC_VER < MC_1_21_2
     /**
-     * 后台序列化工作项（<1.21.2 无 ThreadingDetector，后台读 chunk 合法）
+     * 后台序列化工作项（<1.21.2 无 ThreadingDetector，后台读 chunk 合法）。
+     * chunk 为主线程 getChunk 确认已加载的引用；prepared 命中判定在后台，
+     * registryAccess 构建时冻结（服务端启动后只读），后台 encode 安全。
      */
-    private record SerializedChunkWork(ServerPlayer player, ChunkPos pos, LevelChunk chunk) {}
+    private record SerializedChunkWork(ServerPlayer player, ChunkPos pos, LevelChunk chunk,
+                                       ClientboundLevelChunkWithLightPacket packet,
+                                       RegistryAccess registryAccess) {}
 #else
     /**
      * 1.21.2+ 工作项：prepared 命中带已编码字节，miss 带主线程构建的 packet（纯数据，后台 encode）。
