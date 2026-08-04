@@ -4,7 +4,7 @@
   <img src="common/src/main/resources/assets/hassium/logo.png" alt="Hassium Logo" width="200">
 </p>
 
-**Hassium** — high-performance chunk compression and client-side caching for Minecraft.  
+**Hassium** — high-performance chunk compression and client-side caching for Minecraft, providing **efficient compression, network optimization, chunk caching, beyond-view rendering, and lighting optimization**.  
 Smaller world saves and bandwidth than vanilla, local chunk reuse, and smoother joins. Supports Fabric / Forge / NeoForge across Minecraft 1.20.1–1.21.11.
 
 [简体中文](README.md) · **English**
@@ -23,16 +23,16 @@ Smaller world saves and bandwidth than vanilla, local chunk reuse, and smoother 
 
 | Category | Feature | Description |
 | --- | --- | --- |
-| **Storage** | Efficient storage | Higher-ratio world chunk compression for smaller saves; keeps vanilla Region (`.mca`) layout |
-| **Network** | Network compression | More efficient compression for chunks and packets — less bandwidth and wait time |
-| | Smooth push | Constant-rate server throttling (150 chunks/s token bucket) + per-tick serialization cap with background encoding; join and view expansion never saturate the main thread |
-| | Section delta | On cache mismatch, fetch only changed sections (`sectionDelta`) instead of the whole chunk |
+| **Efficient compression** | Storage compression | World chunk ZSTD on disk (type 126) for smaller saves; keeps vanilla Region (`.mca`) layout |
+| | Network compression | More efficient compression for chunks and packets (custom channels + global pipeline + packet aggregation) — less bandwidth and wait time |
+| **Network optimization** | Smooth push | Constant-rate server throttling (150 chunks/s token bucket) + per-tick serialization cap with background encoding; join and view expansion never saturate the main thread |
 | | Control failover | On TCP-control stall or drop, auto-reconnect via candidate endpoints with warm cache and hidden disconnect screen (data-plane failover) |
 | | Weighted routing | Multiple UDP/KCP endpoints carry the data plane by weighted round-robin; control plane stays on vanilla TCP |
-| **Chunk caching** | Chunk cache | Loaded chunks are kept locally; revisiting an area prefers the cache instead of full downloads |
+| **Chunk caching** | Client chunk cache | Loaded chunks are kept locally; revisiting an area hits via contentHash comparison instead of full downloads |
+| | Section delta | On cache mismatch (MISMATCH), fetch only changed sections (`sectionDelta`) and merge locally instead of the whole chunk |
+| | **Beyond-view render** | When client RD exceeds server view distance (multiplayer), fill the outer ring from local cache (render-only; no out-of-range server requests); incompatible with Bobby |
 | | World export | `/hassiumc export` writes the local cache as a vanilla Anvil singleplayer world |
-| **Beyond-view render** | Beyond-view render | When client RD exceeds server view distance (multiplayer), fill the outer ring from local cache (render-only; no out-of-range server requests) |
-| **Lighting** | Light stripping | Server can omit light data; the client recomputes lighting locally to save more bandwidth |
+| **Lighting optimization** | Light stripping | Server can omit light data; the client recomputes lighting locally to save more bandwidth |
 | | Light cache | Light data is cached after first recompute; cache hits apply pre-computed lighting directly, skipping expensive recomputation |
 | | Parallel light engine | Light recomputation runs on a background thread pool; the main thread only submits snapshots (on by default) |
 | **Utilities** | Traffic metrics | `/hassium stats` (server) and `/hassiumc stats` (client) to inspect compression and cache results |
