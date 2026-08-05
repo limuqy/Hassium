@@ -20,6 +20,9 @@ param(
     [int]$ServerPort = 25565,
     [int]$DelayMs = 15000,
     [int]$ReconnectDelayMs = 3000,
+    # 客户端进服后飞行移动秒数（先爬升 2s 再平飞；0=不动）。仅验证用途：驱动
+    # 「进服即移动」区块补给顺序场景，非标准冒烟默认行为。
+    [int]$MoveSeconds = 0,
     [int]$ServerReadyTimeoutSec = 160,
     [int]$ClientTimeoutSec = 240,
     [string]$SmokePhases = "classic",
@@ -592,6 +595,7 @@ $clientArgs = @(
     "-PhassiumSmokeHost=$effectiveHost",
     "-PhassiumSmokeDelayMs=$DelayMs",
     "-PhassiumSmokeReconnectDelayMs=$ReconnectDelayMs",
+    "-PhassiumSmokeMoveSeconds=$MoveSeconds",
     "-PhassiumSmokePhases=$SmokePhases",
     "-Pmc_ver=${Ver}"
 )

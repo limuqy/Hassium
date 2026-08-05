@@ -93,8 +93,7 @@ Files: `config/hassium/hassium-client.toml`, `config/hassium/hassium-server.toml
 | `clientCache.ovdUnloadDelaySecs` | `5` | Delay unload after leaving beyond-view ring (s; 0=sync) |
 | `network.enabled` | `true` | Custom channels |
 | `network.globalPacketCompression` | `true` | Global ZSTD |
-| `network.maxChunksPerTick` | `4` | Per-player main-thread serialization cap per tick (recommend ≥ `smoothChunkSendRate`/20) |
-| `network.smoothChunkSendRate` | `64` | Per-player smooth chunk send rate (chunks/s; token-bucket constant rate, flattens tick bursts) |
+| `network.maxChunksPerTick` | `4` | Per-player submit cap per tick (send rate = cap × tick rhythm; ≈ 4×20/s at full tick, naturally slows on lag) |
 | `clientCache.mainThreadChunkBudgetMs` | `15` | Client apply budget per frame (ms) |
 | `clientCache.parallelLightEngineEnabled` | `true` | Parallel light (recompute on a background pool; main thread only submits snapshots) |
 | `clientCache.parallelLightEngineThreads` | `4` | Parallel light thread count (ignored in virtual-thread mode) |

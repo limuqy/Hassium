@@ -400,6 +400,16 @@ public class ClientChunkHandler {
         }
 
         try {
+            // 权威数据到货时玩家已移出服务端视距（apply 决策点主动分流）：
+            // 数据是最新服务器数据，不丢弃——若仍在 OVD 环带则原地转 renderOnly 渲染，
+            // 省掉「skip → OVD 重扫 → 磁盘 reload → renderOnly apply」的绕路与虚空窗口；
+            // OVD 未开或已出环带（>clientVD）则走原路径：平台 applier 的 inRange 判定
+            // 丢弃（数据已推送即入库，等于直接入客户端缓存）。判定与 apply 之间仍有
+            // 竞态窗口，由下方 ChunkOutOfViewException 兜底。
+            if (!renderOnly && ViewDistanceExtensionService.getInstance().shouldKeepAsRenderOnly(pos)) {
+                return applyChunkDataInternal(chunkX, chunkZ, chunkData, true, cachedNbt, hasCachedLight);
+            }
+
             // 超视渲染 / 缓存 apply 前先保证 Storage 半径 ≥ clientVD（防 server 缩半径窗口）
             if (renderOnly) {
                 ViewDistanceExtensionService.getInstance().ensureExpandedRadius();

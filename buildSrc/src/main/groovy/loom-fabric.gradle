@@ -18,6 +18,7 @@ loom {
                 def host = project.findProperty('hassiumSmokeHost') ?: '127.0.0.1:25565'
                 def delayMs = project.findProperty('hassiumSmokeDelayMs') ?: '10000'
                 def reconnectDelayMs = project.findProperty('hassiumSmokeReconnectDelayMs') ?: '3000'
+                def moveSeconds = project.findProperty('hassiumSmokeMoveSeconds') ?: '0'
                 def phases = project.findProperty('hassiumSmokePhases') ?: 'classic'
                 // loom 1.17+: RunConfiguration 用 ListProperty<String>，旧版裸 ArrayList getter 已 @Deprecated 且
                 // 内部 getJvmArguments().get() 在配置阶段未 finalize 时抛 UnsupportedOperationException。
@@ -26,6 +27,7 @@ loom {
                         "-Dhassium.smokeTest=true",
                         "-Dhassium.smokeTest.delayMs=${delayMs}",
                         "-Dhassium.smokeTest.reconnectDelayMs=${reconnectDelayMs}",
+                        "-Dhassium.smokeTest.moveSeconds=${moveSeconds}",
                         "-Dhassium.smokeTest.host=${host}",
                         "-Dhassium.smokePhases=${phases}"
                 ])

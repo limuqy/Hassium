@@ -297,7 +297,14 @@ public class ClientCacheLoadQueue {
                 packetBytes = data;
             }
             CompoundTag writeback = (!hasLight && nbt != null) ? nbt : null;
-            readyQueue.offer(new ReadyChunk(task.pos(), packetBytes, task.priority(), task.renderOnly(),
+            // 磁盘读期间玩家可能已移动：用加载完成时刻的实时距离重算（而非入队快照），
+            // 与收包路径（解压完成时刻算优先级）语义对齐——避免「进服即移动」时身边块
+            // 按出生点快照垫底、身后块先 apply。readyQueue 是优先队列，offer 时新 key
+            // 自动插队。renderOnly 用 RENDER_ONLY 层、权威用 AUTHORITATIVE 层，层序不破。
+            double priority = task.renderOnly()
+                    ? io.github.limuqy.mc.hassium.concurrent.MainThreadDispatcher.renderOnlyPriority(task.pos())
+                    : io.github.limuqy.mc.hassium.concurrent.MainThreadDispatcher.authoritativePriority(task.pos());
+            readyQueue.offer(new ReadyChunk(task.pos(), packetBytes, priority, task.renderOnly(),
                     hasLight, writeback));
             // OVD(renderOnly) 不经 chunkHash 比对，需在磁盘命中时单独记入缓存指标；
             // 权威路径已在 ClientMetadataHandler 记过，避免双重计数。

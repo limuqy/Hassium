@@ -108,7 +108,7 @@ function Invoke-Session {
         Write-Host "[$sessionId] 尝试 $attempt/$MaxRetries (port=$ServerPort, $cleanLabel)..."
 
         # CleanWorld 且预生成存档缺失时，先跑一次预生成（49×49 区域），
-        # 让首轮供给曲线由令牌桶+充足区块决定，而非 worldgen 节奏。
+        # 让首轮供给曲线由提交上限+充足区块决定，而非 worldgen 节奏。
         # 预生成失败不阻断冒烟（降级为正常 worldgen）。
         if ($doClean) {
             $pregenSrc = Join-Path $projectRoot "build\smoke-test\pregen-world\${Loader}-${Ver}\world"

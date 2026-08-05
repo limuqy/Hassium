@@ -54,6 +54,11 @@ public final class ClientSmokeTest {
     private static volatile String host = "127.0.0.1:25565";
     private static volatile boolean round1Pass;
     private static volatile boolean round2Pass;
+    /** 进服后飞行移动秒数（0=不动）：先爬升 2s 再平飞，验证「进服即移动」场景区块补给顺序 */
+    private static volatile int moveSeconds = 0;
+    private static volatile long moveUntilMs = -1L;
+    /** 1=爬升（按住跳跃）2=平飞（按住前进） */
+    private static volatile int movePhase = 0;
 
     /** 阶段选择：classic = 两轮连服 VD 切换；dataplane = 多通道数据面（单次连服 + Data 帧计数报）。 */
     private static volatile boolean runClassic = true;
@@ -76,6 +81,7 @@ public final class ClientSmokeTest {
         delayMs = parseLong(System.getProperty("hassium.smokeTest.delayMs"), 10_000L);
         reconnectDelayMs = parseLong(System.getProperty("hassium.smokeTest.reconnectDelayMs"), 3_000L);
         joinTimeoutMs = parseLong(System.getProperty("hassium.smokeTest.joinTimeoutMs"), 120_000L);
+        moveSeconds = (int) parseLong(System.getProperty("hassium.smokeTest.moveSeconds"), 0L);
         host = System.getProperty("hassium.smokeTest.host", "127.0.0.1:25565");
         // 首次连接由 loom 以 --quickPlayMultiplayer 发起，绕过 ConnectScreen.startConnecting，
         // MixinConnectScreen 捕获不到 primary 身份 → ClientFailoverIdentity.primaryAddress 保持 null，
@@ -124,6 +130,34 @@ public final class ClientSmokeTest {
         }
 
         long now = System.currentTimeMillis();
+
+        // 飞行注入：爬升阶段到期 → 转平飞；平飞到期或玩家消失（断开/重连）→ 复位按键
+        if (moveUntilMs > 0L) {
+            if (mc.player == null) {
+                moveUntilMs = -1L;
+                mc.options.keyJump.setDown(false);
+                mc.options.keyUp.setDown(false);
+                mc.options.keySprint.setDown(false);
+            } else if (now >= moveUntilMs) {
+                if (movePhase == 1) {
+                    // 爬升结束：松开跳跃，按住前进+疾跑平飞（creative 飞行疾跑 zza×2，规避地形阻挡）
+                    movePhase = 2;
+                    mc.options.keyJump.setDown(false);
+                    mc.options.keyUp.setDown(true);
+                    mc.options.keySprint.setDown(true);
+                    moveUntilMs = now + (long) moveSeconds * 1000L;
+                    LOGGER.info("HassiumSmokeTest:MOVE_CRUISE_START pos=({}, {})",
+                            mc.player.blockPosition().getX(), mc.player.blockPosition().getZ());
+                } else {
+                    mc.options.keyUp.setDown(false);
+                    mc.options.keySprint.setDown(false);
+                    moveUntilMs = -1L;
+                    movePhase = 0;
+                    LOGGER.info("HassiumSmokeTest:MOVE_END pos=({}, {})",
+                            mc.player.blockPosition().getX(), mc.player.blockPosition().getZ());
+                }
+            }
+        }
 
         // 全局超时检查（从启动开始）
         if (startAtMs > 0L && now - startAtMs > joinTimeoutMs * 2 + delayMs * 2 + reconnectDelayMs) {
@@ -203,6 +237,15 @@ public final class ClientSmokeTest {
             joinAtMs = now;
             LOGGER.info("HassiumSmokeTest: {} player entered world at y={}, waiting {} ms before stats",
                     state, mc.player.getY(), delayMs);
+            if (moveSeconds > 0 && moveUntilMs < 0L) {
+                // creative 冒烟：本地激活飞行 + 按住跳跃爬升 2s（规避地形阻挡），再平飞
+                mc.player.getAbilities().flying = true;
+                mc.options.keyJump.setDown(true);
+                movePhase = 1;
+                moveUntilMs = now + 2000L;
+                LOGGER.info("HassiumSmokeTest:MOVE_START climb 2s + cruise {}s pos=({}, {})", moveSeconds,
+                        mc.player.blockPosition().getX(), mc.player.blockPosition().getZ());
+            }
         }
         if (now - joinAtMs >= delayMs) {
             // 进入统计阶段
