@@ -78,16 +78,6 @@ public class ServerChunkPushManager {
     private final Map<UUID, PriorityBlockingQueue<DataRequestTask>> dataQueues = new ConcurrentHashMap<>();
 
     /**
-     * 每玩家平滑发送限速器（令牌桶）：恒定速率摊平 tick 级脉冲，防网络峰值占用。
-     * 与 maxChunksPerTick（每 tick 硬上限）正交：后者管主线程串行化批次，
-     * 本桶在压缩后发送前按秒级恒定速率放行。
-     */
-    private final Map<UUID, SmoothSendLimiter> sendLimiters = new ConcurrentHashMap<>();
-
-    /** 令牌延迟重提交调度器（1 线程，仅做 pushPool.submit，微秒级；不占 pushPool 工作线程）。 */
-    private volatile ScheduledExecutorService sendScheduler;
-
-    /**
      * 每玩家是否正在本 tick 序列化（防重复 drain）
      */
     private final Map<UUID, AtomicBoolean> processingFlags = new ConcurrentHashMap<>();
@@ -187,12 +177,6 @@ public class ServerChunkPushManager {
                     }
             );
             pushPool.allowCoreThreadTimeOut(true);
-
-            sendScheduler = Executors.newScheduledThreadPool(1, r -> {
-                Thread t = new Thread(r, "Hassium-SendScheduler");
-                t.setDaemon(true);
-                return t;
-            });
 
             Constants.LOG.info("Hassium: ServerChunkPushManager initialized with {} threads (min={}, max={})",
                     initialThreads, minThreads, maxThreads);
@@ -490,7 +474,8 @@ public class ServerChunkPushManager {
         queue.addAll(entries);
         if (!queue.isEmpty()) {
             pendingResync.put(player.getUUID(), queue);
-            Constants.LOG.info("Hassium: Queued {} chunkHashes for resync (player={}, vd={}, perTick={})",
+            DebugLogger.info(LogType.CHUNK_APPLY,
+                    "Hassium: Queued {} chunkHashes for resync (player={}, vd={}, perTick={})",
                     queue.size(), player.getName().getString(), viewDistance, RESYNC_PER_TICK);
         }
     }
@@ -527,7 +512,8 @@ public class ServerChunkPushManager {
                     processed++;
                 }
                 if (processed > 0) {
-                    Constants.LOG.info("Hassium: Resync drain for {} — submitted {}, skipped {}, remaining {}",
+                    DebugLogger.info(LogType.CHUNK_APPLY,
+                            "Hassium: Resync drain for {} — submitted {}, skipped {}, remaining {}",
                             player.getName().getString(), processed, skipped, queue.size());
                 }
                 if (queue.isEmpty()) {
@@ -1101,10 +1087,13 @@ public class ServerChunkPushManager {
 
             int maxPerTick = HassiumConfigService.getInstance().getConfig().serverNetwork().maxChunksPerTick();
             if (maxPerTick <= 0) {
-                maxPerTick = 8;
+                maxPerTick = 5;
             }
 
             ServerLevel level = PlayerCompat.getServerLevel(player);
+            // 本 tick 玩家锚点与视距（服务端 tick 内位置不变）：drain 前快照，供出界丢弃判定
+            ChunkPos playerChunk = player.chunkPosition();
+            int serverVD = PlayerCompat.getViewDistance(player);
             List<SerializedChunkWork> works = new ArrayList<>(maxPerTick);
             int processed = 0;
 
@@ -1114,7 +1103,7 @@ public class ServerChunkPushManager {
 
             // 1.21.2+ 的 PalettedContainer ThreadingDetector 禁止跨线程读 chunk：
             // 主线程构建完整 packet 快照，encode/压缩/限速/发送在 pushPool。
-            // <1.21.2 无检测：主线程只取 chunk 引用，build/encode 全后台（恢复 1.20.1 已验证的 150/s 路径）。
+            // <1.21.2 无检测：主线程只取 chunk 引用，build/encode 全后台（恢复 1.20.1 已验证的全后台路径）。
             // packet 的内部 chunk/light 数据已脱离世界对象，线格式 encode、压缩、限速与发送仍在 pushPool。
             while (processed < maxPerTick && !queue.isEmpty()) {
                 if (!player.isAlive() || player.hasDisconnected()) {
@@ -1125,6 +1114,15 @@ public class ServerChunkPushManager {
                 DataRequestTask task = queue.poll();
                 if (task == null) {
                     break;
+                }
+
+                // 任务排队期间玩家可能已移出权威视距：过期任务直接丢弃（原版 ChunkMap 语义：
+                // 离开视距的块不再推送）。白推挤占每 tick 提交预算与网络资源，客户端收到
+                // 后也只会 apply skip。折返场景由客户端原版重新请求覆盖（重新 enqueueDataRequest）。
+                if (!isServerChunkInRange(task.pos().x, task.pos().z, playerChunk.x, playerChunk.z, serverVD)) {
+                    DebugLogger.info(LogType.NETWORK, "[PROCESS_QUEUE] Dropping chunk {} (out of range, vd={})",
+                            task.pos(), serverVD);
+                    continue;
                 }
 
                 try {
@@ -1197,7 +1195,7 @@ public class ServerChunkPushManager {
                 Constants.LOG.warn("[PROCESS_QUEUE] Failed to compress chunk {}", pos);
                 return;
             }
-            scheduleSend(player, pos, chunkData, compressed, sender);
+            sendCompressed(player, pos, chunkData, compressed, sender);
         } catch (Exception e) {
             Constants.LOG.error("[PROCESS_QUEUE] Failed to compress/send chunk {} for player {}",
                     pos, player.getName().getString(), e);
@@ -1205,31 +1203,13 @@ public class ServerChunkPushManager {
     }
 
     /**
-     * 平滑发送：每玩家令牌桶按秒级恒定速率放行。令牌不足时延迟重提交到 pushPool
-     * （sendScheduler 只做 submit，不占池线程）——原阻塞式 acquire 在池线程 sleep，
-     * 单一积压玩家可占满全部 8 线程，饿死其他玩家的 encode/压缩/hash 任务。
+     * 发送：速率由 maxChunksPerTick（每 tick 提交上限）× tick 节奏决定，不做秒级限速——
+     * 掉刻时每 tick 提交量不变、每秒总量自然下降，即保护主线程。无令牌桶后
+     * 无需延迟重提交，压缩完成后直接发送（全在 pushPool，不占主线程）。
      */
-    private void scheduleSend(ServerPlayer player, ChunkPos pos, byte[] chunkData,
-                              ChunkCompressionHandler.CompressedChunkData compressed, ChunkSender sender) {
-        int rate = HassiumConfigService.getInstance().getSmoothChunkSendRate();
-        SmoothSendLimiter limiter = sendLimiters.computeIfAbsent(player.getUUID(),
-                k -> new SmoothSendLimiter(rate));
-        long delayMs = limiter.tryAcquire();
-        if (delayMs > 0) {
-            try {
-                sendScheduler.schedule(() -> {
-                    try {
-                        pushPool.submit(() -> scheduleSend(player, pos, chunkData, compressed, sender));
-                    } catch (java.util.concurrent.RejectedExecutionException e) {
-                        // pushPool 已关闭（shutdown）：任务丢弃
-                    }
-                }, delayMs, java.util.concurrent.TimeUnit.MILLISECONDS);
-            } catch (java.util.concurrent.RejectedExecutionException e) {
-                // sendScheduler 已关闭（shutdown）：任务丢弃
-            }
-            return;
-        }
-        // 延迟重提交期间玩家可能断开：发送前再校验
+    private void sendCompressed(ServerPlayer player, ChunkPos pos, byte[] chunkData,
+                                ChunkCompressionHandler.CompressedChunkData compressed, ChunkSender sender) {
+        // 压缩完成与发送之间玩家可能断开：发送前校验
         if (!player.isAlive() || player.hasDisconnected()) {
             return;
         }
@@ -1385,7 +1365,6 @@ public class ServerChunkPushManager {
         hashBatches.remove(playerId);
         preparedChunkPackets.remove(playerId);
         pendingResync.remove(playerId);
-        sendLimiters.remove(playerId);
     }
 
     /**
@@ -1397,12 +1376,8 @@ public class ServerChunkPushManager {
         hashBatches.clear();
         preparedChunkPackets.clear();
         pendingResync.clear();
-        sendLimiters.clear();
         if (pushPool != null) {
             pushPool.shutdownNow();
-        }
-        if (sendScheduler != null) {
-            sendScheduler.shutdownNow();
         }
         initialized.set(false);
     }
@@ -1444,40 +1419,6 @@ public class ServerChunkPushManager {
 
         PendingHashBatch(String dimension) {
             this.dimension = dimension;
-        }
-    }
-
-    /**
-     * 每玩家平滑发送令牌桶（恒定速率）
-     * <p>
-     * 令牌按 1/rate 秒间隔产生，上限 rate（突发上限一个窗口），
-     * tryAcquire 非阻塞：返回 0 = 已扣令牌，>0 = 预计等待毫秒（未扣）。
-     * 调用方在失败时延迟重提交，不在池线程 sleep。
-     */
-    private static final class SmoothSendLimiter {
-        private final double ratePerSec;
-        private double tokens;
-        private long lastMs;
-
-        SmoothSendLimiter(double ratePerSec) {
-            this.ratePerSec = ratePerSec;
-            this.tokens = ratePerSec; // 首窗口允许立即启动，避免初始停顿
-            this.lastMs = System.currentTimeMillis();
-        }
-
-        /**
-         * 尝试取 1 个发送令牌：返回 0 = 成功（已扣）；>0 = 预计等待毫秒（失败，未扣）。
-         * 非阻塞——调用方在失败时延迟重提交，不在池线程 sleep。
-         */
-        synchronized long tryAcquire() {
-            long now = System.currentTimeMillis();
-            tokens = Math.min(ratePerSec, tokens + (now - lastMs) / 1000.0 * ratePerSec);
-            lastMs = now;
-            if (tokens >= 1.0) {
-                tokens -= 1.0;
-                return 0L;
-            }
-            return Math.max(1L, (long) Math.ceil((1.0 - tokens) / ratePerSec * 1000.0));
         }
     }
 }

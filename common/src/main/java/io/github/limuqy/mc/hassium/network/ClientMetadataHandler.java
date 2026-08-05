@@ -3,6 +3,7 @@ package io.github.limuqy.mc.hassium.network;
 import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.cache.ChunkContentHashUtil;
 import io.github.limuqy.mc.hassium.cache.client.ClientCacheLoadQueue;
+import io.github.limuqy.mc.hassium.client.ClientSmokeTest;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.metrics.NetworkStats;
 import io.github.limuqy.mc.hassium.metrics.VanillaZlibEstimator;
@@ -273,7 +274,7 @@ public class ClientMetadataHandler {
                 "[CHUNK_HASH] Result: {} hits, {} new full-request, {} stale full-request, {} delta-request (total {})",
                 hitChunks.size(), newFullRequestChunks.size(), staleFullRequestChunks.size(),
                 deltaRequestChunks.size(), packet.entries().size());
-        if (!hitChunks.isEmpty()) {
+        if (!hitChunks.isEmpty() && ClientSmokeTest.isEnabled()) {
             Constants.LOG.info("HassiumSmokeTest:UDP_FAILOVER CACHE_RESUME_HIT hits={} dimension={}",
                     hitChunks.size(), packet.dimension());
         }

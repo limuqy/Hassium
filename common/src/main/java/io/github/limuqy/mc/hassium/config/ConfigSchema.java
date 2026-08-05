@@ -24,13 +24,13 @@ public final class ConfigSchema {
     public static final ConfigKey<Integer> CACHE_OVD_UNLOAD_DELAY_SECS = integer("clientCache.ovdUnloadDelaySecs", ConfigScope.CLIENT, 5, 0, 60, "超视渲染卸载延迟秒数");
     public static final ConfigKey<Boolean> CACHE_SECTION_DELTA_ENABLED = bool("clientCache.sectionDeltaEnabled", ConfigScope.CLIENT, true, "是否启用分段增量");
     public static final ConfigKey<Boolean> CACHE_JOIN_BOOST_ENABLED = bool("clientCache.joinBoostEnabled", ConfigScope.CLIENT, true, "是否启用进服加速");
-    public static final ConfigKey<Boolean> CACHE_ENTITY_SNAPSHOTS_ENABLED = bool("clientCache.entitySnapshotsEnabled", ConfigScope.CLIENT, false, "是否保存实体快照");
-    public static final ConfigKey<Integer> CACHE_LOAD_THREADS = integer("clientCache.loadThreads", ConfigScope.CLIENT, 10, 1, 64, "客户端区块加载线程数");
+    public static final ConfigKey<Boolean> CACHE_ENTITY_SNAPSHOTS_ENABLED = bool("clientCache.entitySnapshotsEnabled", ConfigScope.CLIENT, true, "是否保存实体快照");
+    public static final ConfigKey<Integer> CACHE_LOAD_THREADS = integer("clientCache.loadThreads", ConfigScope.CLIENT, 4, 1, 64, "客户端区块加载线程数");
     public static final ConfigKey<Boolean> CACHE_LIGHT_CACHE_ENABLED = bool("clientCache.lightCacheEnabled", ConfigScope.CLIENT, true, "是否启用光照缓存");
     public static final ConfigKey<Integer> CACHE_MAX_CHUNKS_PER_FRAME = integer("clientCache.maxChunksPerFrame", ConfigScope.CLIENT, 32, 1, 512, "每帧应用缓存区块硬顶");
     public static final ConfigKey<Integer> CACHE_MAIN_THREAD_BUDGET_MS = integer("clientCache.mainThreadChunkBudgetMs", ConfigScope.CLIENT, 15, 1, 50, "主线程 apply 预算（ms）");
     public static final ConfigKey<Boolean> CACHE_PARALLEL_LIGHT_ENGINE_ENABLED = bool("clientCache.parallelLightEngineEnabled", ConfigScope.CLIENT, true, "是否启用多线程光照引擎（后台并行重算光照；默认开启）");
-    public static final ConfigKey<Integer> CACHE_PARALLEL_LIGHT_ENGINE_THREADS = integer("clientCache.parallelLightEngineThreads", ConfigScope.CLIENT, 6, 1, 64, "多线程光照引擎线程数（虚拟线程模式忽略）；天空光 BFS 占重算成本 ~90%，默认 6 线程 + 低优先级平衡吞吐与帧率");
+    public static final ConfigKey<Integer> CACHE_PARALLEL_LIGHT_ENGINE_THREADS = integer("clientCache.parallelLightEngineThreads", ConfigScope.CLIENT, 4, 1, 64, "多线程光照引擎线程数（虚拟线程模式忽略）；天空光 BFS 占重算成本 ~90%，默认 4 线程 + 低优先级平衡吞吐与帧率");
     public static final ConfigKey<Boolean> CLIENT_NETWORK_ENABLED = bool("network.enabled", ConfigScope.CLIENT, true, "是否启用客户端 Hassium 自定义通道");
     public static final ConfigKey<Boolean> CLIENT_NETWORK_METRICS_ENABLED = bool("network.metricsEnabled", ConfigScope.CLIENT, false, "是否启用客户端网络指标");
     public static final ConfigKey<Boolean> CLIENT_NETWORK_METRICS_AUTO_RESET = bool("network.metricsAutoReset", ConfigScope.CLIENT, true, "登出服务器时自动重置指标计数");
@@ -42,7 +42,7 @@ public final class ConfigSchema {
     public static final ConfigKey<Integer> NETWORK_COMPRESSION_LEVEL = integer("network.compressionLevel", ConfigScope.SERVER, 3, 1, 22, "自定义通道 ZSTD 压缩等级");
     public static final ConfigKey<Boolean> NETWORK_MAGICLESS_ZSTD = bool("network.magiclessZstd", ConfigScope.SERVER, true, "是否使用无 magic 的 ZSTD");
     public static final ConfigKey<Boolean> NETWORK_GLOBAL_PACKET_COMPRESSION = bool("network.globalPacketCompression", ConfigScope.SERVER, true, "是否启用全局包压缩");
-    public static final ConfigKey<Integer> NETWORK_GLOBAL_COMPRESSION_LEVEL = integer("network.globalCompressionLevel", ConfigScope.SERVER, 6, 1, 22, "全局压缩等级");
+    public static final ConfigKey<Integer> NETWORK_GLOBAL_COMPRESSION_LEVEL = integer("network.globalCompressionLevel", ConfigScope.SERVER, 3, 1, 22, "全局压缩等级");
     public static final ConfigKey<Integer> NETWORK_GLOBAL_COMPRESSION_THRESHOLD = integer("network.globalCompressionThreshold", ConfigScope.SERVER, 256, 0, 65536, "全局压缩阈值");
     public static final ConfigKey<Boolean> NETWORK_USE_CONTEXT_COMPRESSION = bool("network.useContextCompression", ConfigScope.SERVER, true, "是否使用上下文压缩");
     public static final ConfigKey<Boolean> NETWORK_PACKET_AGGREGATION = bool("network.enablePacketAggregation", ConfigScope.SERVER, true, "是否启用包聚合");
@@ -52,9 +52,8 @@ public final class ConfigSchema {
     public static final ConfigKey<Boolean> NETWORK_COMPACT_HEADER = bool("network.enableCompactHeader", ConfigScope.SERVER, true, "是否启用紧凑包头");
     public static final ConfigKey<List<String>> NETWORK_COMPRESSION_BLACKLIST = stringList("network.compressionBlacklist", ConfigScope.SERVER, () -> new ArrayList<>(HassiumConfig.ServerNetworkConfig.DEFAULT_COMPRESSION_BLACKLIST), "压缩/聚合黑名单");
     public static final ConfigKey<Boolean> SERVER_NETWORK_METRICS_ENABLED = bool("network.metricsEnabled", ConfigScope.SERVER, false, "是否启用服务端网络指标");
-    public static final ConfigKey<Integer> NETWORK_MAX_CHUNKS_PER_TICK = integer("network.maxChunksPerTick", ConfigScope.SERVER, 8, 1, 256, "每玩家每 tick 提交到后台序列化的区块上限（序列化/压缩/发送全在推送线程池；建议 ≥ smoothChunkSendRate/20）");
-    public static final ConfigKey<Integer> NETWORK_SMOOTH_SEND_RATE = integer("network.smoothChunkSendRate", ConfigScope.SERVER, 100, 1, 1000, "服务端每玩家区块平滑发送速率（块/秒，摊平 tick 级脉冲防网络峰值）");
-    public static final ConfigKey<Integer> NETWORK_SERVER_PUSH_THREADS = integer("network.serverChunkPushThreads", ConfigScope.SERVER, 8, 1, 64, "服务端推送线程数");
+    public static final ConfigKey<Integer> NETWORK_MAX_CHUNKS_PER_TICK = integer("network.maxChunksPerTick", ConfigScope.SERVER, 5, 1, 256, "每玩家每 tick 提交到后台序列化的区块上限（序列化/压缩/发送全在推送线程池；发送速率由本值 × tick 节奏决定，满 tick ≈ 本值×20/s）");
+    public static final ConfigKey<Integer> NETWORK_SERVER_PUSH_THREADS = integer("network.serverChunkPushThreads", ConfigScope.SERVER, 2, 1, 64, "服务端推送线程数");
     public static final ConfigKey<Boolean> NETWORK_DYNAMIC_THREADS = bool("network.dynamicThreadPoolEnabled", ConfigScope.SERVER, true, "是否动态调整推送线程");
     public static final ConfigKey<Integer> NETWORK_MIN_PUSH_THREADS = integer("network.minPushThreads", ConfigScope.SERVER, 2, 1, 64, "动态池最小线程数");
     public static final ConfigKey<Integer> NETWORK_MAX_PUSH_THREADS = integer("network.maxPushThreads", ConfigScope.SERVER, 8, 1, 64, "动态池最大线程数");

@@ -37,7 +37,7 @@ class GlobalCompressionLevelBenchmarkTest {
 
     /** 真实进入压缩分支的 size 桶（≥256B）；passthrough 段不参与对比 */
     private static final int[] WIRE_SIZES = {256, 512, 1024, 4096, 16384, 65536};
-    /** 候选 ZSTD 全局级别：3（旧默认）/ 6（建议）/ 9（高代价上限） */
+    /** 候选 ZSTD 全局级别：3（默认流畅档）/ 6（高压缩档）/ 9（高代价上限） */
     private static final int[] ZSTD_LEVELS = {3, 6, 9};
 
     /**

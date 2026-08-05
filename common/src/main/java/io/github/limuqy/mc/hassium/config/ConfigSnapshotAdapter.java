@@ -68,7 +68,6 @@ public final class ConfigSnapshotAdapter {
                 .with(ConfigSchema.NETWORK_COMPRESSION_BLACKLIST, new ArrayList<>(network.compressionBlacklist()))
                 .with(ConfigSchema.SERVER_NETWORK_METRICS_ENABLED, network.metricsEnabled())
                 .with(ConfigSchema.NETWORK_MAX_CHUNKS_PER_TICK, network.maxChunksPerTick())
-                .with(ConfigSchema.NETWORK_SMOOTH_SEND_RATE, network.smoothChunkSendRate())
                 .with(ConfigSchema.NETWORK_SERVER_PUSH_THREADS, network.serverChunkPushThreads())
                 .with(ConfigSchema.NETWORK_DYNAMIC_THREADS, network.dynamicThreadPoolEnabled())
                 .with(ConfigSchema.NETWORK_MIN_PUSH_THREADS, network.minPushThreads())
@@ -136,7 +135,7 @@ public final class ConfigSnapshotAdapter {
                 values.get(ConfigSchema.NETWORK_AGGREGATION_MIN_BATCH), values.get(ConfigSchema.NETWORK_AGGREGATION_MAX_WAIT),
                 values.get(ConfigSchema.NETWORK_AGGREGATION_MAX_SIZE), values.get(ConfigSchema.NETWORK_COMPACT_HEADER),
                 SetCopy.copy(values.get(ConfigSchema.NETWORK_COMPRESSION_BLACKLIST)), values.get(ConfigSchema.SERVER_NETWORK_METRICS_ENABLED),
-                values.get(ConfigSchema.NETWORK_MAX_CHUNKS_PER_TICK), values.get(ConfigSchema.NETWORK_SMOOTH_SEND_RATE), values.get(ConfigSchema.NETWORK_SERVER_PUSH_THREADS),
+                values.get(ConfigSchema.NETWORK_MAX_CHUNKS_PER_TICK), values.get(ConfigSchema.NETWORK_SERVER_PUSH_THREADS),
                 values.get(ConfigSchema.NETWORK_DYNAMIC_THREADS), values.get(ConfigSchema.NETWORK_MIN_PUSH_THREADS),
                 values.get(ConfigSchema.NETWORK_MAX_PUSH_THREADS), values.get(ConfigSchema.NETWORK_LIGHT_STRIP), controlEndpoints, dataPlane);
         HassiumConfig.CompatConfig compat = new HassiumConfig.CompatConfig(

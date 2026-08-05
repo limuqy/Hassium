@@ -374,7 +374,7 @@ public final class FabricTomlConfigIO {
         set(cfg, "clientCache.joinBoostEnabled", c.joinBoostEnabled(),
                 "进服后短时提高主线程预算加速加载（默认 true）");
         set(cfg, "clientCache.entitySnapshotsEnabled", c.entitySnapshotsEnabled(),
-                "区块卸载时保存非玩家实体快照（默认 false）");
+                "区块卸载时保存非玩家实体快照（默认 true）");
         set(cfg, "clientCache.loadThreads", c.loadThreads(), "客户端区块加载线程数");
         set(cfg, "clientCache.lightCacheEnabled", c.lightCacheEnabled(), "是否启用光照缓存");
         set(cfg, "clientCache.maxChunksPerFrame", c.maxChunksPerFrame(), "每帧应用缓存区块硬顶");
@@ -436,7 +436,6 @@ public final class FabricTomlConfigIO {
                 getStringSet(cfg, "network.compressionBlacklist", d.compressionBlacklist()),
                 getBool(cfg, "network.metricsEnabled", d.metricsEnabled()),
                 getInt(cfg, "network.maxChunksPerTick", d.maxChunksPerTick()),
-                getInt(cfg, "network.smoothChunkSendRate", d.smoothChunkSendRate()),
                 getInt(cfg, "network.serverChunkPushThreads", d.serverChunkPushThreads()),
                 getBool(cfg, "network.dynamicThreadPoolEnabled", d.dynamicThreadPoolEnabled()),
                 getInt(cfg, "network.minPushThreads", d.minPushThreads()),
@@ -462,8 +461,7 @@ public final class FabricTomlConfigIO {
         set(cfg, "network.enableCompactHeader", n.enableCompactHeader(), "是否启用紧凑包头");
         set(cfg, "network.compressionBlacklist", new ArrayList<>(n.compressionBlacklist()), "压缩/聚合黑名单");
         set(cfg, "network.metricsEnabled", n.metricsEnabled(), "是否启用指标收集");
-        set(cfg, "network.maxChunksPerTick", n.maxChunksPerTick(), "每玩家每 tick 提交到后台序列化的区块上限（序列化/压缩/发送全在推送线程池；建议 ≥ smoothChunkSendRate/20，仅服务端）");
-        set(cfg, "network.smoothChunkSendRate", n.smoothChunkSendRate(), "每玩家区块平滑发送速率（块/秒，仅服务端）");
+        set(cfg, "network.maxChunksPerTick", n.maxChunksPerTick(), "每玩家每 tick 提交到后台序列化的区块上限（发送速率 = 本值 × tick 节奏，满 tick ≈ 本值×20/s，仅服务端）");
         set(cfg, "network.serverChunkPushThreads", n.serverChunkPushThreads(), "服务端推送线程数（仅服务端）");
         set(cfg, "network.dynamicThreadPoolEnabled", n.dynamicThreadPoolEnabled(), "是否动态调整推送线程（仅服务端）");
         set(cfg, "network.minPushThreads", n.minPushThreads(), "动态池最小线程数（仅服务端）");

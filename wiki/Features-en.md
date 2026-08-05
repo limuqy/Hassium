@@ -36,9 +36,8 @@ Hassium is a single client + server suite that optimizes Minecraft from five dir
 
 - **Goal**: The server keeps the main thread under control during join and view expansion; the client avoids hitch spikes
 - **Server side** (push):
-  - **Constant-rate throttling**: a per-player token bucket releases at `network.smoothChunkSendRate` (default `150` chunks/s), flattening per-tick batch bursts — no more network spikes
-  - **Main-thread budget**: `network.maxChunksPerTick` (default `4`) caps per-player main-thread serialization per tick (4×20 = 80/s ≥ the smooth rate); main-thread peak ≤ ~8 ms/tick
-  - **Background serialization**: encode / ZSTD compression / hash computation / send all run on the push pool (`serverChunkPushThreads` default 8, dynamically resizable); the main thread only builds the packet — aligned with vanilla (which also builds on the main thread and encodes on netty). On 1.20.x/1.21.1 the whole serialization chain runs off-thread
+  - **Tick-granularity throttling**: `network.maxChunksPerTick` (default `5`) caps per-player submits per tick (5×20 = 100/s at full tick); the per-tick submit count stays fixed during lag so the per-second rate naturally drops — protecting the server main thread; main-thread peak ≤ ~8 ms/tick
+  - **Background serialization**: encode / ZSTD compression / hash computation / send all run on the push pool (`serverChunkPushThreads` default 2, dynamically resizable); the main thread only builds the packet — aligned with vanilla (which also builds on the main thread and encodes on netty). On 1.20.x/1.21.1 the whole serialization chain runs off-thread
 - **Client side** (loading):
   - Per-frame main-thread apply budget `clientCache.mainThreadChunkBudgetMs` (default `15`)
   - JoinBoost temporarily raises the budget for ~10s after join, then linearly ramps down

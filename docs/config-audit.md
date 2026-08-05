@@ -45,7 +45,7 @@ Forge/NeoForge 端注册 3 个 spec（CLIENT / COMMON / SERVER），物理客户
 | `clientCache.ovdUnloadDelaySecs` | `5` | **客户端** | `ViewDistanceExtensionService:255` | ✅ 正常 |
 | `clientCache.sectionDeltaEnabled` | `true` | **客户端** | `ClientMetadataHandler:248` | ✅ 正常 |
 | `clientCache.joinBoostEnabled` | `true` | **客户端** | `ClientMainThreadBudget:31` | ✅ 正常 |
-| `clientCache.entitySnapshotsEnabled` | `false` | **客户端** | `MixinClientLevel:110`, `ClientLifecycleHelper:172` | ✅ 正常 |
+| `clientCache.entitySnapshotsEnabled` | `true` | **客户端** | `MixinClientLevel:110`, `ClientLifecycleHelper:172` | ✅ 正常 |
 
 ### C. Network — 共享部分（14 项）→ `common.toml`
 
@@ -80,7 +80,7 @@ Forge/NeoForge 端注册 3 个 spec（CLIENT / COMMON / SERVER），物理客户
 | 配置项 | 默认值 | 客户端/服务端/双端 | 实际调用 | 状态 |
 |--------|--------|---------------------|----------|------|
 ** **服务端** | `ServerChunkPushManager:888` | ✅ 正常 |
-| `network.serverChunkPushThreads` | `8` | **服务端** | `ServerChunkPushManager:146` | ✅ 正常 |
+| `network.serverChunkPushThreads` | `2` | **服务端** | `ServerChunkPushManager:146` | ✅ 正常 |
 | `network.dynamicThreadPoolEnabled` | `true` | **服务端** | `ServerChunkPushManager:1063` | ✅ 正常 |
 | `network.minPushThreads` | `2` | **服务端** | `ServerChunkPushManager:147` | ✅ 正常 |
 | `network.maxPushThreads` | `8` | **服务端** | `ServerChunkPushManager:148,1079` | ✅ 正常 |

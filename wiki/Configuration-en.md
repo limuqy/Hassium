@@ -54,8 +54,7 @@ In-game config screen entry points:
 | `network.enabled` | `true` | Custom `hassium:*` channels (off = revert to vanilla full packets) |
 | `network.globalPacketCompression` | `true` | Replace the vanilla Netty Zlib with ZSTD globally (off = coexist with protocol-replacement mods) |
 | `network.compressionLevel` | `3` | Network compression level (speed-biased) |
-| `network.maxChunksPerTick` | `4` | Per-player main-thread serialization cap per tick (recommend ≥ `smoothChunkSendRate`/20) |
-| `network.smoothChunkSendRate` | `64` | Per-player smooth chunk send rate (chunks/s; token-bucket constant rate, flattens tick bursts) |
+| `network.maxChunksPerTick` | `5` | Per-player submit cap per tick (send rate = cap × tick rhythm; ≈ 5×20/s at full tick, naturally slows on lag) |
 | `network.metricsEnabled` | `true` | Metrics collection (turn off disables `/hassium stats` etc.) |
 | `network.enablePacketAggregation` | on by default | Packet aggregation; turn off if a third-party channel misbehaves |
 | `network.compressionBlacklist` | empty | Packet ID list; matched packets bypass compression/aggregation |
