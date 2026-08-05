@@ -99,8 +99,18 @@ public final class ExecutorFactory {
      * 无并发上限，突发提交下互相抢核超订，固定池 FIFO 排队更可预测。
      */
     public static ExecutorService createPlatform(String name, int threads) {
+        return createPlatform(name, threads, Thread.NORM_PRIORITY);
+    }
+
+    /**
+     * 创建平台线程池（指定线程优先级）。
+     * <p>
+     * 低优先级供 CPU 密集后台任务（如光照 solve）使用：渲染/主线程在 CPU 竞争时
+     * 优先调度，避免后台 BFS 抢核拖低帧率（Windows 时间片按优先级分配）。
+     */
+    public static ExecutorService createPlatform(String name, int threads, int priority) {
         int poolSize = Math.max(threads, 1);
-        ThreadFactory factory = new HassiumThreadFactory(name);
+        ThreadFactory factory = new HassiumThreadFactory(name, priority);
         return Executors.newFixedThreadPool(poolSize, factory);
     }
 
@@ -131,15 +141,22 @@ public final class ExecutorFactory {
     private static final class HassiumThreadFactory implements ThreadFactory {
         private final AtomicInteger counter = new AtomicInteger(0);
         private final String namePrefix;
+        private final int priority;
 
         HassiumThreadFactory(String name) {
+            this(name, Thread.NORM_PRIORITY);
+        }
+
+        HassiumThreadFactory(String name, int priority) {
             this.namePrefix = "hassium-" + name + "-";
+            this.priority = priority;
         }
 
         @Override
         public Thread newThread(Runnable r) {
             Thread t = new Thread(r, namePrefix + counter.getAndIncrement());
             t.setDaemon(true);
+            t.setPriority(priority);
             return t;
         }
     }

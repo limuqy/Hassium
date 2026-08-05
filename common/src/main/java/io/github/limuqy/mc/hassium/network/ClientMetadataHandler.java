@@ -605,10 +605,18 @@ public class ClientMetadataHandler {
      */
     private static void applyDeltaEntryBackground(SectionDeltaS2CPacket.DeltaEntry entry, String dimension, long deltaSavedBytes) {
         ChunkPos pos = new ChunkPos(entry.chunkX(), entry.chunkZ());
+        // 任务开始时的会话 level（可能 null=断连中）：回调执行时若已切换（断连/重连/维度切换），
+        // 旧会话的 apply/请求必须丢弃，否则旧 chunk 泄入新 world、旧 dimension 请求发到新会话
+        net.minecraft.client.multiplayer.ClientLevel submittedLevel = Minecraft.getInstance().level;
         try {
             Minecraft mc = Minecraft.getInstance();
             if (mc.level == null) {
-                MainThreadDispatcher.execute(() -> requestFullChunks(dimension, List.of(pos), true), pos);
+                MainThreadDispatcher.execute(() -> {
+                    if (!isSameSession(submittedLevel)) {
+                        return; // 旧会话回调：丢弃
+                    }
+                    requestFullChunks(dimension, List.of(pos), true);
+                }, pos);
                 return;
             }
 
@@ -617,7 +625,12 @@ public class ClientMetadataHandler {
             if (nbt == null) {
                 DebugLogger.info(LogType.METADATA,
                         "[SECTION_DELTA] No cached NBT for {}, fallback to full", pos);
-                MainThreadDispatcher.execute(() -> requestFullChunks(dimension, List.of(pos), true), pos);
+                MainThreadDispatcher.execute(() -> {
+                    if (!isSameSession(submittedLevel)) {
+                        return; // 旧会话回调：丢弃
+                    }
+                    requestFullChunks(dimension, List.of(pos), true);
+                }, pos);
                 return;
             }
 
@@ -658,7 +671,12 @@ public class ClientMetadataHandler {
             long newChunkHash = ChunkContentHashUtil.combineSectionHashesFromArray(newSectionHashes);
             byte[] nbtBytes = io.github.limuqy.mc.hassium.cache.client.ChunkDiskCodec.nbtToBytes(nbt);
             if (nbtBytes == null) {
-                MainThreadDispatcher.execute(() -> requestFullChunks(dimension, List.of(pos), true), pos);
+                MainThreadDispatcher.execute(() -> {
+                    if (!isSameSession(submittedLevel)) {
+                        return; // 旧会话回调：丢弃
+                    }
+                    requestFullChunks(dimension, List.of(pos), true);
+                }, pos);
                 return;
             }
             // 与 full ingest 共用单消费者 FIFO，region 写不再有两路并发
@@ -673,12 +691,20 @@ public class ClientMetadataHandler {
             byte[] packetBytes = io.github.limuqy.mc.hassium.cache.client.ChunkDiskCodec
                     .nbtToPacketBytes(nbt, registryAccess, sectionCount);
             if (packetBytes == null) {
-                MainThreadDispatcher.execute(() -> requestFullChunks(dimension, List.of(pos), true), pos);
+                MainThreadDispatcher.execute(() -> {
+                    if (!isSameSession(submittedLevel)) {
+                        return; // 旧会话回调：丢弃
+                    }
+                    requestFullChunks(dimension, List.of(pos), true);
+                }, pos);
                 return;
             }
             final byte[] finalPacketBytes = packetBytes;
             final List<SectionDeltaS2CPacket.BlockEntityData> bes = entry.blockEntities();
             io.github.limuqy.mc.hassium.concurrent.MainThreadDispatcher.execute(() -> {
+                if (!isSameSession(submittedLevel)) {
+                    return; // 旧会话回调：丢弃
+                }
                 boolean applied = ClientChunkHandler.applyChunkData(entry.chunkX(), entry.chunkZ(), finalPacketBytes, false);
                 if (applied) {
                     if (!bes.isEmpty()) {
@@ -693,8 +719,18 @@ public class ClientMetadataHandler {
         } catch (Throwable t) {
             DebugLogger.warn(LogType.METADATA,
                     "[SECTION_DELTA] Merge failed for {}, fallback to full", pos, t);
-            MainThreadDispatcher.execute(() -> requestFullChunks(dimension, List.of(pos), true), pos);
+            MainThreadDispatcher.execute(() -> {
+                if (!isSameSession(submittedLevel)) {
+                    return; // 旧会话回调：丢弃
+                }
+                requestFullChunks(dimension, List.of(pos), true);
+            }, pos);
         }
+    }
+
+    /** 回调执行时校验会话未切换（断连/重连/维度切换后 level 对象必变）。 */
+    private static boolean isSameSession(net.minecraft.client.multiplayer.ClientLevel submittedLevel) {
+        return Minecraft.getInstance().level == submittedLevel;
     }
 
     /**

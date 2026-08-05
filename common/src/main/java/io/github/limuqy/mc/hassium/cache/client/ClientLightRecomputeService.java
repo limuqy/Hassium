@@ -176,59 +176,43 @@ public final class ClientLightRecomputeService {
     }
 
     /**
-     * 断连时清空（保留占位，OVERFLOW 已删除，无状态需清空）。
+     * 断连时清空（自研传播域无跨线程状态需清空；保留占位，断连由 generation 拒绝旧任务）。
      * <p>
      * 供 {@code ClientLifecycleHelper} 调用，保持调用方不变。
      */
     public static void clear() {
-        // 无状态需清空（校准集合仅主线程访问，断连同线程）
-        PENDING_CALIBRATIONS.clear();
+        // 无状态需清空（官方校准链已退役，传播域在后台任务内）
     }
 
     /**
-     * 本块落地后，校准已加载的邻居：它们可能先于本块重算（当时缺本块），
-     * 边界 1 格固化暗值。双向 checkBlock + 一次落地即可补亮。
-     * <p>
-     * 只 pull 本块一次：{@code pullLightFromNeighborEdges(pos)} 检查本块 4 面，
-     * 每个边界面与邻居共享（旧实现是对 4 个已落地邻居各调一次 = 4×4=16 面，
-     * 有效边界面只 4 个，重复 4 倍，加载期每块 ~10 万格 getLightValue+checkBlock，
-     * profiler 实测 runLightUpdates 占主线程 34%）。未加载邻居到达时由它自己触发本逻辑。
-     * <p>
-     * 传播延迟到帧尾（{@link #flushPendingCalibrations}，渲染前）合并执行一次：
-     * 加载期每帧几十块落地，若每块都跑全局 runLightUpdates，主线程 tick 被占
-     * （profiler：calibrate 内 runLightUpdates ~10%）。checkBlock 入队是轻量的，
-     * 传播合并后补亮延迟一帧（50ms），视觉无感。
+     * 邻居吸收已由自研传播域完成（后台传播域 = 核心柱 ±16 格，覆盖邻居柱全宽；主线程只做
+     * memcpy 落地）。本方法为空实现，仅为兼容调用点（{@code MixinLightRecompute}）保留。
      */
     public static void calibrateLoadedNeighbors(ClientLevel level, ChunkPos pos) {
-        try {
-            int bottomSection = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMinSection(level);
-            int topSection = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMaxSectionExclusive(level);
-            pullLightFromNeighborEdges(level, pos, bottomSection, topSection);
-            PENDING_CALIBRATIONS.add(pos.toLong());
-        } catch (Exception e) {
-            Constants.LOG.error("Hassium: Failed to calibrate neighbors for chunk {}", pos, e);
-        }
+        // 官方校准链退役：邻居吸收由 LightComputeService 后台传播域承担
     }
 
-    /** 待帧尾合并传播的校准块（chunk long）。仅主线程访问。 */
-    private static final it.unimi.dsi.fastutil.longs.LongOpenHashSet PENDING_CALIBRATIONS =
-            new it.unimi.dsi.fastutil.longs.LongOpenHashSet();
-
     /**
-     * 帧尾（Minecraft.tick TAIL、渲染前）合并执行一次校准传播。
-     * 队列中未完成的 checkBlock 由这一次 runLightUpdates 全部处理。
+     * 帧尾（Minecraft.tick TAIL、渲染前）兜底清空官方光照传播队列：
+     * 自研传播域任务不再入官方队列，这里只处理原版方块变化 / 数据包 delta 路径触发的
+     * 低频传播（nodes 应接近 0，对比自研铺开前 parsort 轮峰值 32 万）。
      */
     public static void flushPendingCalibrations() {
-        if (PENDING_CALIBRATIONS.isEmpty()) {
-            return;
-        }
-        PENDING_CALIBRATIONS.clear();
         ClientLevel level = Minecraft.getInstance().level;
         if (level == null) {
             return;
         }
-        safeRunLightUpdates(level.getLightEngine());
+        long t0 = System.nanoTime();
+        int nodes = safeRunLightUpdates(level.getLightEngine());
+        // 限频诊断：量化官方兜底工作量（每 60 次 flush 打印一次）。
+        if (FLUSH_DIAG_COUNT++ % 60 == 0) {
+            Constants.LOG.info("[LIGHT-FLUSH] elapsed={}ms nodes={}",
+                    (System.nanoTime() - t0) / 1_000_000, nodes);
+        }
     }
+
+    /** 帧尾传播诊断限频计数（仅主线程访问）。 */
+    private static int FLUSH_DIAG_COUNT = 0;
 
     static void applyLightEngine(ClientLevel level, LevelChunk chunk, ChunkPos chunkPos) {
         long startNs = System.nanoTime();
@@ -302,13 +286,17 @@ public final class ClientLightRecomputeService {
     /**
      * 同步 drain light deferred 队列；任何失败都清空 residual，
      * 防止下一帧 {@code LevelRenderer.renderLevel} 未捕获 NPE 崩端。
+     *
+     * @return 官方 runLightUpdates 处理的传播节点数（propagateIncreases + propagateDecreases 计数，
+     * 用于量化校准传播工作量；失败返回 0）
      */
-    public static void safeRunLightUpdates(LevelLightEngine lightEngine) {
+    public static int safeRunLightUpdates(LevelLightEngine lightEngine) {
         try {
-            lightEngine.runLightUpdates();
+            return lightEngine.runLightUpdates();
         } catch (Throwable t) {
             Constants.LOG.error("Hassium: runLightUpdates failed; clearing residual light queues", t);
             clearLightQueues(lightEngine);
+            return 0;
         }
     }
 

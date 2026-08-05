@@ -41,8 +41,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.PriorityBlockingQueue;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -81,6 +83,9 @@ public class ServerChunkPushManager {
      * 本桶在压缩后发送前按秒级恒定速率放行。
      */
     private final Map<UUID, SmoothSendLimiter> sendLimiters = new ConcurrentHashMap<>();
+
+    /** 令牌延迟重提交调度器（1 线程，仅做 pushPool.submit，微秒级；不占 pushPool 工作线程）。 */
+    private volatile ScheduledExecutorService sendScheduler;
 
     /**
      * 每玩家是否正在本 tick 序列化（防重复 drain）
@@ -182,6 +187,12 @@ public class ServerChunkPushManager {
                     }
             );
             pushPool.allowCoreThreadTimeOut(true);
+
+            sendScheduler = Executors.newScheduledThreadPool(1, r -> {
+                Thread t = new Thread(r, "Hassium-SendScheduler");
+                t.setDaemon(true);
+                return t;
+            });
 
             Constants.LOG.info("Hassium: ServerChunkPushManager initialized with {} threads (min={}, max={})",
                     initialThreads, minThreads, maxThreads);
@@ -622,8 +633,10 @@ public class ServerChunkPushManager {
     /**
      * 处理客户端的 section 哈希请求（阶段二）。
      * <p>
-     * 1.21.2+（PalettedContainer ThreadingDetector）：比对/序列化必须在主线程，全量主线程处理；
-     * 1.20.x / 1.21.1：主线程只做距离校验 + 取 chunk 引用，比对/序列化/组包/发送在 pushPool。
+     * 全版本主线程处理：1.21.2+（PalettedContainer ThreadingDetector）比对/序列化必须在主线程；
+     * 1.20.x / 1.21.1 的 ThreadingDetector 为信号量版（tryAcquire 失败阻塞、持有方 checkAndUnlock
+     * 抛 ReportedException），后台读 chunk 与主线程 tick 写并发即崩服（drain 路径 5bf3c6b 已实测
+     * 回退，阶段二同理由）——<1.21.2 同样全主线程执行，正确性优先。
      * 每次请求都回包：可服务的进 {@code entries}，超距/失败的进 {@code skipped}（客户端回退全量）。
      */
     public void handleSectionHashRequest(ServerPlayer player, SectionHashRequestC2SPacket request) {
@@ -658,7 +671,8 @@ public class ServerChunkPushManager {
             works.add(new DeltaWork(chunk, entry.sectionHashes(), entry.chunkX(), entry.chunkZ()));
         }
 
-        pushPool.submit(() -> processSectionDelta(player, request.dimension(), works, skipped));
+        // 主线程直接执行：ThreadingDetector 信号量版（<1.21.2）后台读 chunk 与主线程 tick 写并发即崩服
+        processSectionDelta(player, request.dimension(), works, skipped);
 #else
         ServerLevel level = PlayerCompat.getServerLevel(player);
         int maxDist = PlayerCompat.getViewDistance(player) + SECTION_DELTA_VIEW_MARGIN;
@@ -736,7 +750,7 @@ public class ServerChunkPushManager {
 
 #if MC_VER < MC_1_21_2
     /**
-     * 后台执行 section 比对 + 序列化 + 回包（单请求单回包语义，顺序按请求顺序保持）。
+     * 主线程执行 section 比对 + 序列化 + 回包（单请求单回包语义，顺序按请求顺序保持）。
      */
     private void processSectionDelta(ServerPlayer player, String dimension,
                                      List<DeltaWork> works,
@@ -1178,28 +1192,53 @@ public class ServerChunkPushManager {
         }
         try {
             ChunkCompressionHandler.CompressedChunkData compressed =
-                    ChunkCompressionHandler.compressChunkData(
-                            chunkData, pos.x, pos.z);
+                    ChunkCompressionHandler.compressChunkData(chunkData, pos.x, pos.z);
             if (compressed == null) {
                 Constants.LOG.warn("[PROCESS_QUEUE] Failed to compress chunk {}", pos);
                 return;
             }
-            // 平滑发送：每玩家令牌桶按秒级恒定速率放行，摊平 drain 批次的 tick 级脉冲
-            // （压缩在令牌获取前完成，CPU 并行不受限速；仅网络出口被均匀化）
-            int rate = HassiumConfigService.getInstance().getSmoothChunkSendRate();
-            SmoothSendLimiter limiter = sendLimiters.computeIfAbsent(player.getUUID(),
-                    k -> new SmoothSendLimiter(rate));
-            limiter.acquire();
-            sender.sendCompressedChunk(player, compressed);
-            NetworkStats.recordChunkSent(VanillaZlibEstimator.estimate(chunkData));
-            DebugLogger.info(LogType.NETWORK, "[PROCESS_QUEUE] Sent chunk {} to player {} ({} -> {} bytes, ratio={})",
-                    pos, player.getName().getString(),
-                    chunkData.length, compressed.compressedData.length,
-                    String.format("%.2f", (double) chunkData.length / compressed.compressedData.length));
+            scheduleSend(player, pos, chunkData, compressed, sender);
         } catch (Exception e) {
             Constants.LOG.error("[PROCESS_QUEUE] Failed to compress/send chunk {} for player {}",
                     pos, player.getName().getString(), e);
         }
+    }
+
+    /**
+     * 平滑发送：每玩家令牌桶按秒级恒定速率放行。令牌不足时延迟重提交到 pushPool
+     * （sendScheduler 只做 submit，不占池线程）——原阻塞式 acquire 在池线程 sleep，
+     * 单一积压玩家可占满全部 8 线程，饿死其他玩家的 encode/压缩/hash 任务。
+     */
+    private void scheduleSend(ServerPlayer player, ChunkPos pos, byte[] chunkData,
+                              ChunkCompressionHandler.CompressedChunkData compressed, ChunkSender sender) {
+        int rate = HassiumConfigService.getInstance().getSmoothChunkSendRate();
+        SmoothSendLimiter limiter = sendLimiters.computeIfAbsent(player.getUUID(),
+                k -> new SmoothSendLimiter(rate));
+        long delayMs = limiter.tryAcquire();
+        if (delayMs > 0) {
+            try {
+                sendScheduler.schedule(() -> {
+                    try {
+                        pushPool.submit(() -> scheduleSend(player, pos, chunkData, compressed, sender));
+                    } catch (java.util.concurrent.RejectedExecutionException e) {
+                        // pushPool 已关闭（shutdown）：任务丢弃
+                    }
+                }, delayMs, java.util.concurrent.TimeUnit.MILLISECONDS);
+            } catch (java.util.concurrent.RejectedExecutionException e) {
+                // sendScheduler 已关闭（shutdown）：任务丢弃
+            }
+            return;
+        }
+        // 延迟重提交期间玩家可能断开：发送前再校验
+        if (!player.isAlive() || player.hasDisconnected()) {
+            return;
+        }
+        sender.sendCompressedChunk(player, compressed);
+        NetworkStats.recordChunkSent(VanillaZlibEstimator.estimate(chunkData));
+        DebugLogger.info(LogType.NETWORK, "[PROCESS_QUEUE] Sent chunk {} to player {} ({} -> {} bytes, ratio={})",
+                pos, player.getName().getString(),
+                chunkData.length, compressed.compressedData.length,
+                String.format("%.2f", (double) chunkData.length / compressed.compressedData.length));
     }
 
     /**
@@ -1362,6 +1401,9 @@ public class ServerChunkPushManager {
         if (pushPool != null) {
             pushPool.shutdownNow();
         }
+        if (sendScheduler != null) {
+            sendScheduler.shutdownNow();
+        }
         initialized.set(false);
     }
 
@@ -1409,7 +1451,8 @@ public class ServerChunkPushManager {
      * 每玩家平滑发送令牌桶（恒定速率）
      * <p>
      * 令牌按 1/rate 秒间隔产生，上限 rate（突发上限一个窗口），
-     * acquire 阻塞至令牌可用；sleep 期间令牌继续积累，循环重算。
+     * tryAcquire 非阻塞：返回 0 = 已扣令牌，>0 = 预计等待毫秒（未扣）。
+     * 调用方在失败时延迟重提交，不在池线程 sleep。
      */
     private static final class SmoothSendLimiter {
         private final double ratePerSec;
@@ -1423,20 +1466,18 @@ public class ServerChunkPushManager {
         }
 
         /**
-         * 阻塞至获得一个发送令牌。
+         * 尝试取 1 个发送令牌：返回 0 = 成功（已扣）；>0 = 预计等待毫秒（失败，未扣）。
+         * 非阻塞——调用方在失败时延迟重提交，不在池线程 sleep。
          */
-        synchronized void acquire() throws InterruptedException {
-            while (true) {
-                long now = System.currentTimeMillis();
-                tokens = Math.min(ratePerSec, tokens + (now - lastMs) / 1000.0 * ratePerSec);
-                lastMs = now;
-                if (tokens >= 1.0) {
-                    tokens -= 1.0;
-                    return;
-                }
-                long waitMs = (long) Math.ceil((1.0 - tokens) / ratePerSec * 1000.0);
-                Thread.sleep(waitMs);
+        synchronized long tryAcquire() {
+            long now = System.currentTimeMillis();
+            tokens = Math.min(ratePerSec, tokens + (now - lastMs) / 1000.0 * ratePerSec);
+            lastMs = now;
+            if (tokens >= 1.0) {
+                tokens -= 1.0;
+                return 0L;
             }
+            return Math.max(1L, (long) Math.ceil((1.0 - tokens) / ratePerSec * 1000.0));
         }
     }
 }

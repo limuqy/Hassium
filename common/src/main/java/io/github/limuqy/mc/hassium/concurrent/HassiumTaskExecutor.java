@@ -68,14 +68,15 @@ public class HassiumTaskExecutor implements AutoCloseable, Executor {
         TrackedTask tracked = new TrackedTask(category);
         String taskId = tracked.id;
         taskRegistry.put(taskId, tracked);
-
-        executor.execute(() -> {
+        Future<?> future = executor.submit(() -> {
             try {
                 task.run();
             } finally {
                 taskRegistry.remove(taskId);
             }
         });
+        // 记录 Future：cancelAll(category) 可取消排队中的任务（cancel(true) 直接移除）
+        tracked.future = future;
     }
 
     /**

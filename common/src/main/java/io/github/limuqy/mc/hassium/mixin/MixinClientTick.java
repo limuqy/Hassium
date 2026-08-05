@@ -7,6 +7,7 @@ import io.github.limuqy.mc.hassium.cache.client.ViewDistanceExtensionService;
 import io.github.limuqy.mc.hassium.client.ClientSmokeTest;
 import io.github.limuqy.mc.hassium.concurrent.MainThreadDispatcher;
 import io.github.limuqy.mc.hassium.network.ClientMetadataHandler;
+import io.github.limuqy.mc.hassium.utils.TickMonitor;
 import net.minecraft.client.Minecraft;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
@@ -19,6 +20,15 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
  */
 @Mixin(Minecraft.class)
 public class MixinClientTick {
+
+    /**
+     * mspt 采样：Minecraft.tick() HEAD 记录本 tick 起始。
+     * 对应 TAIL 的 hassium$tickEnd 结算（声明在文件末尾，最后执行，覆盖全部本 tick 工作）。
+     */
+    @Inject(method = "tick", at = @At("HEAD"))
+    private void hassium$tickStart(CallbackInfo ci) {
+        TickMonitor.beginClientTick();
+    }
 
     /**
      * L2 定格终态回退：候选全部失败（phase==TERMINAL）时解除定格并回到断开画面。
@@ -211,5 +221,14 @@ public class MixinClientTick {
         } catch (Exception e) {
             // 忽略
         }
+    }
+
+    /**
+     * mspt 采样结算：声明在文件末尾，作为最后一个 TAIL handler 执行，
+     * 覆盖本 tick 全部工作（含上方 apply 预算/光照/调度回调）。
+     */
+    @Inject(method = "tick", at = @At("TAIL"))
+    private void hassium$tickEnd(CallbackInfo ci) {
+        TickMonitor.endClientTick();
     }
 }

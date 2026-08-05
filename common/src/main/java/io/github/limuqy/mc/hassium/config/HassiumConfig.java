@@ -103,7 +103,7 @@ public record HassiumConfig(
                 32,      // maxChunksPerFrame
                 15,      // mainThreadChunkBudgetMs
                 true,    // parallelLightEngineEnabled
-                4        // parallelLightEngineThreads
+                6        // parallelLightEngineThreads
         );
 
         public long maxCacheSizeBytes() {

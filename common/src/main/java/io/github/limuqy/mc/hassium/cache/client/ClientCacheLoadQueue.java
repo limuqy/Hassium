@@ -202,7 +202,8 @@ public class ClientCacheLoadQueue {
                 if (q == null) {
                     break;
                 }
-                // 取一批（桶锁内 poll，串行消费，无多线程 drain 冲突）
+                // 取一批（桶锁内 poll，串行消费）；不再摘除桶——空桶保留在 map，
+                // enqueue 的 computeIfAbsent 永远拿到同一桶对象，孤儿桶窗口消除
                 List<LoadTask> batch = new ArrayList<>();
                 synchronized (q) {
                     while (batch.size() < MAX_BATCH_SIZE) {
@@ -212,18 +213,21 @@ public class ClientCacheLoadQueue {
                         }
                         batch.add(t);
                     }
-                    if (q.isEmpty()) {
-                        pendingByRegion.remove(rk, q);
-                    }
                 }
                 if (batch.isEmpty()) {
-                    // 攒批窗口：enqueue 逐个到来时，等一批积累后再处理（任务占着 activeRegions，
-                    // 期间同 region 的 enqueue 不会重复调度）；超时仍空则退出
+                    // 攒批窗口（原语义：一次 10ms）；锁内最终判定空才退出。
+                    // 退出后 activeRegions 释放：此后 producer 的 offer → scheduleRegion 必成功；
+                    // 退出前 producer 的 offer → 本循环下一轮或 finally 补调度接手，无悬挂窗口。
                     try {
                         Thread.sleep(BATCH_WAIT_MS);
                     } catch (InterruptedException e) {
                         Thread.currentThread().interrupt();
                         break;
+                    }
+                    synchronized (q) {
+                        if (q.isEmpty()) {
+                            break;
+                        }
                     }
                     continue;
                 }
@@ -231,10 +235,14 @@ public class ClientCacheLoadQueue {
             }
         } finally {
             activeRegions.remove(rk);
-            // 处理期间可能又有同 region 入队（scheduleRegion 被 activeRegions 挡住），补调度
+            // 处理期间可能又有同 region 入队（scheduleRegion 被 activeRegions 挡住），锁内检查后补调度
             PriorityQueue<LoadTask> q = pendingByRegion.get(rk);
-            if (q != null && !q.isEmpty()) {
-                scheduleRegion(rk);
+            if (q != null) {
+                synchronized (q) {
+                    if (!q.isEmpty()) {
+                        scheduleRegion(rk);
+                    }
+                }
             }
         }
     }

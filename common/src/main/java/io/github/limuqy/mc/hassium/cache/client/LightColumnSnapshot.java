@@ -8,6 +8,7 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.chunk.LevelChunk;
 import net.minecraft.world.phys.shapes.Shapes;
 import net.minecraft.world.phys.shapes.VoxelShape;
 
@@ -101,10 +102,16 @@ public final class LightColumnSnapshot {
 
     /**
      * 主线程捕获柱快照（输入一致性：全部格数据同一时刻读取）。
+     * <p>
+     * 调用方已持有 {@code chunk}（getChunkNow 结果）：块内读取直接走 {@code LevelChunk.getBlockState}
+     * 直取 section，不再经 {@code ClientLevel.getBlockState} 的 chunk map 查表（profiler 实测
+     * capture 栈中 getChunk 查表占主线程样本 ~20%，为加载期并行光照路径头号主线程热点）。
      */
-    public static LightColumnSnapshot capture(ClientLevel level, int chunkX, int chunkZ) {
+    public static LightColumnSnapshot capture(ClientLevel level, LevelChunk chunk) {
         int minY = LevelHeightCompat.getMinBlockY(level);
-        int height = level.getHeight();
+        int height = chunk.getHeight();
+        int chunkX = chunk.getPos().x;
+        int chunkZ = chunk.getPos().z;
         byte[] lb = new byte[256 * height];
         IntArrayList emitters = new IntArrayList();
         IntArrayList shapeCells = new IntArrayList();
@@ -124,7 +131,7 @@ public final class LightColumnSnapshot {
                     int y = minY + yLocal;
                     int cell = yLocal * 256 + z * 16 + x;
                     pos.set(baseX, y, baseZ);
-                    BlockState state = level.getBlockState(pos);
+                    BlockState state = chunk.getBlockState(pos);
                     int lbv = LightAccessCompat.getLightBlock(state, level, pos);
                     lb[cell] = (byte) lbv;
 

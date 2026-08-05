@@ -47,7 +47,8 @@ public final class LightFloodFill {
     public static final int WEST = 4;
     public static final int EAST = 5;
 
-    private static final int ALL_DIRS = 0b111111;
+    /** 全部 6 方向掩码（增量传播种子默认方向；排除回源方向由 BFS 自身处理）。 */
+    public static final int ALL_DIRS = 0b111111;
     private static final int[] OPPOSITE = {UP, DOWN, SOUTH, NORTH, EAST, WEST};
 
     /** 形状遮挡判定（src 面 dir 与 dst 面 -dir）；两个 shapeId 均非 0 时才会被调用。 */
@@ -64,7 +65,9 @@ public final class LightFloodFill {
     }
 
     /**
-     * 全量重算域内 block/sky 光照。
+     * 全量重算域内 block/sky 光照（包装：分别调用 {@link #solveBlock} 与 {@link #solveSky}）。
+     * block 与 sky 相互独立（不同数组、不同种子、队列无交互），分离计算与合并计算等价，
+     * 分离后可独立计时与独立调度（sky 优先落地，区块先亮，观感优先）。
      *
      * @param width     域宽/深（格数；= 3 柱 = 48）
      * @param height    域高（世界格数）
@@ -80,12 +83,25 @@ public final class LightFloodFill {
                                int[] sourceY,
                                int[] shapeIds,
                                Occlusion occlusion) {
+        return new Result(
+                solveBlock(width, height, lightBlock, emitters, shapeIds, occlusion),
+                solveSky(width, height, lightBlock, sourceY, shapeIds, occlusion));
+    }
+
+    /**
+     * 仅重算方块光：发光源种子 BFS（官方 increaseLightFromEmission 语义）。
+     * 无光源（emitters 空/仅自然地形）时只做数组分配，成本近似为零。
+     *
+     * @return 域内 block 光数组（布局 {@code (y*W+z)*W+x}，默认全 0）
+     */
+    public static byte[] solveBlock(int width, int height,
+                                    byte[] lightBlock,
+                                    int[] emitters,
+                                    int[] shapeIds,
+                                    Occlusion occlusion) {
         int ww = width * width;
         byte[] block = new byte[ww * height];
-        byte[] sky = new byte[ww * height];
         LongArrayFIFOQueue queue = new LongArrayFIFOQueue();
-
-        // ---- block light：发光源种子（官方 increaseLightFromEmission(emission, isEmptyShape)）----
         if (emitters != null) {
             for (int e : emitters) {
                 int idx = e & 0xFFFFF;
@@ -99,9 +115,26 @@ public final class LightFloodFill {
                 queue.enqueue(entry(idx, emission, ALL_DIRS, shapeIds[idx] == 0, 0));
             }
         }
+        bfs(width, height, block, lightBlock, shapeIds, occlusion, queue, 0);
+        return block;
+    }
 
-        // ---- sky light：列注入填充（官方 propagateLightSources 的 $$13.set(..., 15) 循环）----
+    /**
+     * 仅重算天空光：列注入填充 + 天空种子 BFS（官方 propagateLightSources /
+     * increaseSkySourceInDirections 语义；不含空 section 加速，只影响工作量不影响结果）。
+     *
+     * @return 域内 sky 光数组（布局 {@code (y*W+z)*W+x}）
+     */
+    public static byte[] solveSky(int width, int height,
+                                  byte[] lightBlock,
+                                  int[] sourceY,
+                                  int[] shapeIds,
+                                  Occlusion occlusion) {
+        int ww = width * width;
+        byte[] sky = new byte[ww * height];
+        LongArrayFIFOQueue queue = new LongArrayFIFOQueue();
         if (sourceY != null) {
+            // 列注入填充（官方 propagateLightSources 的 $$13.set(..., 15) 循环）
             for (int x = 0; x < width; x++) {
                 for (int z = 0; z < width; z++) {
                     int sy = sourceY[z * width + x];
@@ -135,16 +168,26 @@ public final class LightFloodFill {
                 }
             }
         }
+        bfs(width, height, sky, lightBlock, shapeIds, occlusion, queue, 1);
+        return sky;
+    }
 
-        // ---- BFS（block/sky 共用传播逻辑；FIFO + candidate > stored 单调写保证收敛）----
+    /**
+
+    /**
+     * 单层 BFS 主循环（block/sky 共用传播逻辑；FIFO + candidate > stored 单调写保证收敛）。
+     *
+     * @param layer 0 = block / 1 = sky（写入 arr 与入队条目，层间无交互）
+     */
+    private static void bfs(int width, int height, byte[] arr, byte[] lightBlock, int[] shapeIds,
+                            Occlusion occlusion, LongArrayFIFOQueue queue, int layer) {
+        int ww = width * width;
         while (!queue.isEmpty()) {
             long e = queue.dequeueLong();
             int idx = (int) (e >>> 12);
             int level = (int) (e & 0xF);
             int dirMask = (int) ((e >>> 5) & 0x3F);
             boolean fromEmpty = ((e >>> 4) & 1) != 0;
-            int layer = (int) ((e >>> 11) & 1);
-            byte[] arr = layer == 0 ? block : sky;
             if ((arr[idx] & 0xFF) != level) {
                 continue; // 过期条目（值已被更高写入）：官方 propagateIncreases 的 stored == level 检查
             }
@@ -171,8 +214,6 @@ public final class LightFloodFill {
                 spread(idx, idx + 1, level, fromEmpty, EAST, arr, lightBlock, shapeIds, occlusion, queue, layer);
             }
         }
-
-        return new Result(block, sky);
     }
 
     /** 官方 propagateIncrease 单方向扩散。 */
@@ -238,5 +279,46 @@ public final class LightFloodFill {
     private static long entry(int idx, int level, int dirMask, boolean fromEmpty, int layer) {
         return ((long) idx << 12) | ((long) layer << 11) | ((long) dirMask << 5)
                 | ((long) (fromEmpty ? 1 : 0) << 4) | level;
+    }
+
+    /**
+     * 增量传播（官方 {@code propagateIncrease} 语义，只增不减）：预写好的种子格 BFS 扩散。
+     * <p>
+     * 用于后台传播域：核心柱 BFS 结果已预写进域数组（arr），与旧值 diff 出的增加种子在此
+     * 扩散到邻居柱区域（传播半径 15，域 = 核心柱 ±16 格全覆盖）。
+     * <p>
+     * 刻意不实现 decrease：整体变暗场景（缓存修正）由调用方按 decrease 计数判定走全域重算
+     * 兜底；局部 decrease 残留偏亮 ≤ 数级，由邻居柱自身下一轮重算单调自愈。
+     *
+     * @param width      域宽/深（格数）
+     * @param height     域高
+     * @param arr        stored 光值数组（已含预写种子格与旧值），原地增写
+     * @param lightBlock 每格原始 lightBlock（0–15）
+     * @param shapeIds   每格形状 id（0 = 空形状）
+     * @param occlusion  形状遮挡判定
+     * @param seeds      传播种子（{@link #buildSeed} 构造；种子格值必须已写入 arr，
+     *                   bfs 的 {@code (arr[idx]&0xFF)!=level} 过期检查要求逐位相等）
+     * @param layer      0 = block / 1 = sky
+     */
+    public static void propagate(int width, int height, byte[] arr, byte[] lightBlock, int[] shapeIds,
+                                 Occlusion occlusion, long[] seeds, int layer) {
+        LongArrayFIFOQueue queue = new LongArrayFIFOQueue();
+        for (long s : seeds) {
+            queue.enqueue(s);
+        }
+        bfs(width, height, arr, lightBlock, shapeIds, occlusion, queue, layer);
+    }
+
+    /**
+     * 构造传播种子（{@link #propagate} 用）。
+     *
+     * @param idx       域内格索引
+     * @param level     该格已预写的 stored 值（0–15）
+     * @param dirMask   扩散方向掩码（通常 {@link #ALL_DIRS}；排除回源方向由 BFS 自身处理）
+     * @param fromEmpty 种子格是否无形状（空形状不参与遮挡判定）
+     * @param layer     0 = block / 1 = sky
+     */
+    public static long buildSeed(int idx, int level, int dirMask, boolean fromEmpty, int layer) {
+        return entry(idx, level, dirMask, fromEmpty, layer);
     }
 }
