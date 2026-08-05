@@ -30,6 +30,7 @@
       "MixinGui",
       "MixinGameRenderer",
       "MixinLightRecompute",
+      "MixinVanillaChunkApplyBudget",
       "MixinOptions",
       "OptionsAccessor",
       "ClientLevelAccessor",
