@@ -280,45 +280,4 @@ public final class LightFloodFill {
         return ((long) idx << 12) | ((long) layer << 11) | ((long) dirMask << 5)
                 | ((long) (fromEmpty ? 1 : 0) << 4) | level;
     }
-
-    /**
-     * 增量传播（官方 {@code propagateIncrease} 语义，只增不减）：预写好的种子格 BFS 扩散。
-     * <p>
-     * 用于后台传播域：核心柱 BFS 结果已预写进域数组（arr），与旧值 diff 出的增加种子在此
-     * 扩散到邻居柱区域（传播半径 15，域 = 核心柱 ±16 格全覆盖）。
-     * <p>
-     * 刻意不实现 decrease：整体变暗场景（缓存修正）由调用方按 decrease 计数判定走全域重算
-     * 兜底；局部 decrease 残留偏亮 ≤ 数级，由邻居柱自身下一轮重算单调自愈。
-     *
-     * @param width      域宽/深（格数）
-     * @param height     域高
-     * @param arr        stored 光值数组（已含预写种子格与旧值），原地增写
-     * @param lightBlock 每格原始 lightBlock（0–15）
-     * @param shapeIds   每格形状 id（0 = 空形状）
-     * @param occlusion  形状遮挡判定
-     * @param seeds      传播种子（{@link #buildSeed} 构造；种子格值必须已写入 arr，
-     *                   bfs 的 {@code (arr[idx]&0xFF)!=level} 过期检查要求逐位相等）
-     * @param layer      0 = block / 1 = sky
-     */
-    public static void propagate(int width, int height, byte[] arr, byte[] lightBlock, int[] shapeIds,
-                                 Occlusion occlusion, long[] seeds, int layer) {
-        LongArrayFIFOQueue queue = new LongArrayFIFOQueue();
-        for (long s : seeds) {
-            queue.enqueue(s);
-        }
-        bfs(width, height, arr, lightBlock, shapeIds, occlusion, queue, layer);
-    }
-
-    /**
-     * 构造传播种子（{@link #propagate} 用）。
-     *
-     * @param idx       域内格索引
-     * @param level     该格已预写的 stored 值（0–15）
-     * @param dirMask   扩散方向掩码（通常 {@link #ALL_DIRS}；排除回源方向由 BFS 自身处理）
-     * @param fromEmpty 种子格是否无形状（空形状不参与遮挡判定）
-     * @param layer     0 = block / 1 = sky
-     */
-    public static long buildSeed(int idx, int level, int dirMask, boolean fromEmpty, int layer) {
-        return entry(idx, level, dirMask, fromEmpty, layer);
-    }
 }

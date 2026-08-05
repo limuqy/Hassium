@@ -43,12 +43,13 @@ import java.util.concurrent.ExecutorService;
  * 影响核心柱结果 → 任务间无依赖、无需迭代、无需合并，可完全并行。
  * <p>
  * 主线程 {@link #drainCompletions} 批量提交（预算内）：建层 + 核心柱/邻柱差异 memcpy 落地
- * （后台自研传播域 W=48 = 核心柱 ±16 格，传播半径 15 全覆盖；邻居吸收不再走官方
- * 校准链 propagateLightSources/pullLightFromNeighborEdges/runLightUpdates，官方引擎仅保留
- * 低频原版触发兜底）；然后逐结果官方验算（{@code debug.lightVerify}：核心柱层清零后走
- * 官方引擎从零重算，官方结果 vs BFS 逐格对比，内芯 x/z ∈ [1,14]，边界差异属输入范围差异
- * 非错误；纯观察，验算后恢复世界）+ 缓存写回（写回经 CacheSaveQueue 后台化：主线程只组
- * NBT，压缩与写盘由后台单消费者执行）。
+ * （后台 W=48 solve = 核心柱 ±16 格，传播半径 15 全覆盖，结果与全量重算一致），随后
+ * propagateLightSources 把官方种子入队、批尾 runLightUpdates 一次收敛（solve 值基于
+ * capture 时刻快照，与官方在最终邻柱值上的不动点有竞态差，官方传播补亮偏暗格）；
+ * 然后逐结果官方验算（{@code debug.lightVerify}：核心柱层清零后走官方引擎从零重算，
+ * 官方结果 vs BFS 逐格对比，内芯 x/z ∈ [1,14]，边界差异属输入范围差异非错误；纯观察，
+ * 验算后恢复世界）+ 缓存写回（写回经 CacheSaveQueue 后台化：主线程只组 NBT，压缩与
+ * 写盘由后台单消费者执行）。
  * <p>
  * 默认关闭（{@code clientCache.parallelLightEngineEnabled}），现有同步路径为默认。
  * <p>
@@ -58,32 +59,20 @@ import java.util.concurrent.ExecutorService;
 public final class LightComputeService {
 
     /**
-     * BFS 域宽（柱）。3 柱（48 格）时核心柱边界裕量 16 格 ≥ sky 传播半径 15 → 结果与
-     * 全量重算一致；2 柱（32 格）时裕量 8 格 < 15，核心柱边缘 ~7 格受域外影响产生偏差
-     * （落地时由 pullLightFromNeighborEdges 差 1 校准吸收，代价是校准级联略增）。
-     * sky BFS 占重算成本 ~90%，域面积 ×0.44 → 后台吞吐 ×2.3，黑块窗口显著缩短。
-     * 2026-08-05 对照实验：2 柱域 + 校准吸收验证中（lightVerify 会报边缘偏差属预期）。
-     */
-    private static final int DOMAIN_CHUNKS = 2;
-    private static final int W = DOMAIN_CHUNKS * 16;
-    /**
-     * W=32 求解域 = 世界 [core-8, core+24)，core 柱 = 域 [8,24)（两侧 halo 各 8 格）。
-     * 2026-08-05 修正：此前 core 柱误置于 [16,32)，与 E/S halo [24,32) 重叠，
-     * 提取出的核心柱 3/4 被邻柱数据覆盖（传播域落地改造时经覆盖算术验证发现）。
-     */
-    private static final int CORE_OFFSET = 8;
-    /**
-     * 传播域 = 核心柱 ±16 格（3 柱全宽，覆盖传播半径 15 + 1 格余量）。
-     * 域布局：核心柱 [16,32)²；N 柱 z∈[0,16)；S 柱 z∈[32,48)；W 柱 x∈[0,16)；E 柱 x∈[32,48)。
-     * 对角柱区域留空（对角柱距核心柱边缘 ≥16 格 > 传播半径 15，其影响由各自任务覆盖）。
+     * 求解域 == 传播域：W=48 = 核心柱 ±16 格（3 柱全宽，覆盖传播半径 15 + 1 格余量）。
+     * 域布局：核心柱 [16,32)²；N 柱 z∈[0,16)；S 柱 z∈[32,48)；W 柱 x∈[0,16)；E 柱 x∈[32,48)；
+     * 对角柱全宽装入 4 角 [0,16)²/[32,48)²（对角柱内距核心柱角 ≤15 格的光源/天空柱
+     * 会照进核心柱角区，留空即永久暗角）。
+     * 历史教训：W=32（halo 8 格 < 半径 15）时 core 柱整体受域截断影响（边缘 ~7 格最重），
+     * 而 modeA 落地只写 BFS 结果、校准链（pullLightFromNeighborEdges 差 1）已随传播域
+     * 落地移除 → 每块四周环带永久黑块（实测用户报告）。升 W=48 后核心柱结果与全量
+     * 重算一致，不再依赖校准吸收。
      */
     private static final int PROP_W = 48;
-    /** 传播域核心柱起点（两侧 halo 各 16 格 = 传播半径全覆盖）。 */
+    /** 核心柱起点（两侧 halo 各 16 格 = 传播半径全覆盖）。 */
     private static final int PROP_CORE_OFFSET = 16;
     /** 传播域组装序：N/S/W/E（索引 0–3 = 结果邻柱掩码序）+ 核心柱（索引 4）。 */
     private static final int[][] PROP_OFFSETS = {{0, -1}, {0, 1}, {-1, 0}, {1, 0}, {0, 0}};
-    /** PROP_OFFSETS 各项在 DOMAIN_OFFSETS 中的下标（N/S/W/E/core → 1/7/3/5/4），capture 顺序固定。 */
-    private static final int[] PROP_SNAPSHOT_INDEX = {1, 7, 3, 5, 4};
     /**
      * 3×3 域共享柱缓存容量。加载期 1700+ 块螺旋序 apply，邻任务提交时间相近（螺旋环
      * 相邻）→ 缓存需覆盖近期 1-2 环 ≈ 256 柱；实测 128 容量命中率仅 28-33%（每柱
@@ -152,10 +141,45 @@ public final class LightComputeService {
     private volatile long generation;
     private final java.util.concurrent.atomic.AtomicInteger diagCapture = new java.util.concurrent.atomic.AtomicInteger();
     private final java.util.concurrent.atomic.AtomicInteger diagBg = new java.util.concurrent.atomic.AtomicInteger();
+    /**
+     * 会话内区块数据版本：chunk 数据被替换（handleLevelChunkWithLight → replaceWithPacketData，
+     * 同一 chunk 对象上 delta/全量/缓存 apply）时 bump。快照失效 + 任务重启 + 结果落地校验
+     * 共用同一基准：旧地形 solve 结果不得覆盖新地形（实测深水区区块间亮度跳变根因——
+     * 快照缓存按 chunk 对象命中，数据替换后旧快照继续产出浅水亮值，copyMasked 只增亮
+     * 把亮值写进深水邻块，形成亮暗分明的区块跳变；暗值才是正确物理）。
+     */
+    private static final java.util.concurrent.ConcurrentHashMap<Long, Integer> dataVersions =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+    private static int dataVersionOf(long chunkKey) {
+        return dataVersions.getOrDefault(chunkKey, 0);
+    }
+
+    /**
+     * chunk 数据已替换（MixinLightRecompute TAIL 调用，数据替换后、重算提交前）：
+     * 失效该柱快照、bump 版本、重启未完成任务（capture 阶段重采样新地形）。
+     * 已提交后台的旧任务（solve 基于旧地形）由结果落地版本校验丢弃。
+     */
+    public void onChunkDataReplaced(ClientLevel level, ChunkPos pos) {
+        long key = ChunkPos.asLong(pos.x, pos.z);
+        synchronized (snapshotCache) {
+            snapshotCache.remove(key);
+        }
+        dataVersions.merge(key, 1, Integer::sum);
+        CaptureTask task = pendingByCore.get(key);
+        if (task != null) {
+            // 同对象数据替换：只重采样核心柱（邻柱地形未变）。全清 restart 在
+            // 连续 delta 下每次被打断 → capture 饿死 → 重算永不落地（黑块持久）。
+            task.restartCoreOnly();
+        }
+    }
+
     private final java.util.concurrent.atomic.AtomicInteger diagApply = new java.util.concurrent.atomic.AtomicInteger();
     private final java.util.concurrent.atomic.AtomicInteger diagSplit = new java.util.concurrent.atomic.AtomicInteger();
     private final java.util.concurrent.atomic.AtomicInteger diagProp = new java.util.concurrent.atomic.AtomicInteger();
     private static final java.util.concurrent.atomic.AtomicInteger verifyInputSample = new java.util.concurrent.atomic.AtomicInteger();
+    /** 最终收敛探针一次性标志（队列全空后只跑一次，见 drainCompletions）。 */
+    private boolean finalProbeDone;
 
     private LightComputeService() {
     }
@@ -195,7 +219,8 @@ public final class LightComputeService {
                                      byte[][] skySections, byte[][] blockSections,
                                      long[] neighborSkyMasks, byte[][][] neighborSkySections,
                                      long[] neighborBlockMasks, byte[][][] neighborBlockSections,
-                                     CompoundTag cachedNbt, long generation, long captureNanos) {
+                                     CompoundTag cachedNbt, long generation, long captureNanos,
+                                     int coreDataVersion, int[] neighborDataVersions) {
     }
 
     private record SnapshotCacheEntry(LevelChunk chunk, LightColumnSnapshot snapshot) {
@@ -210,10 +235,9 @@ public final class LightComputeService {
         private final int height;
         private final long generation;
         private final LightColumnSnapshot[] snapshots = new LightColumnSnapshot[DOMAIN_OFFSETS.length];
-        /** 核心柱 + 4 邻柱旧光照（DataLayer 打包 2048B/section × 2 层），供后台 diff 种子与传播域初始值。
-         *  邻柱数组在 sectionCount > 64 时为 null（邻柱传播降级，掩码 long 装不下）。 */
-        private final byte[][] coreOldSky;
-        private final byte[][] coreOldBlock;
+        /** 4 邻柱旧光照（DataLayer 打包 2048B/section × 2 层），供后台 diff 邻柱差异 section。
+         *  邻柱数组在 sectionCount > 64 时为 null（邻柱传播降级，掩码 long 装不下）。
+         *  核心柱不再抓旧值：W=48 求解域直接产出完整核心柱结果，无需 diff 种子。 */
         private final byte[][][] neighborOldSky;   // [4] × [sectionCount] × 2048，PROP_OFFSETS 0–3 序（N/S/W/E）
         private final byte[][][] neighborOldBlock;
         private LevelChunk expectedCoreChunk;
@@ -223,6 +247,10 @@ public final class LightComputeService {
         private long captureNanos;
         /** 本帧轮转过的时间戳（缺邻居放回队尾后，同帧重 poll 直接跳过，防轮转烧光预算）。 */
         private long lastRotatedNs;
+        /** 核心柱数据版本（创建/重启时记录）：结果落地时与当前版本比对，旧地形结果丢弃。 */
+        private int coreDataVersion;
+        /** 4 邻柱捕获时刻数据版本（PROP_OFFSETS 0–3 序；sectionCount > 64 时为 null）。 */
+        private int[] neighborDataVersions;
 
         private CaptureTask(ChunkPos corePos, int minSection, int sectionCount, int minY, int height,
                             LevelChunk expectedCoreChunk, CompoundTag cachedNbt, long generation) {
@@ -234,14 +262,15 @@ public final class LightComputeService {
             this.expectedCoreChunk = expectedCoreChunk;
             this.cachedNbt = cachedNbt;
             this.generation = generation;
-            this.coreOldSky = new byte[sectionCount][];
-            this.coreOldBlock = new byte[sectionCount][];
+            this.coreDataVersion = dataVersionOf(ChunkPos.asLong(corePos.x, corePos.z));
             if (sectionCount <= 64) {
                 this.neighborOldSky = new byte[4][sectionCount][];
                 this.neighborOldBlock = new byte[4][sectionCount][];
+                this.neighborDataVersions = new int[4];
             } else {
                 this.neighborOldSky = null;
                 this.neighborOldBlock = null;
+                this.neighborDataVersions = null;
             }
         }
 
@@ -258,6 +287,22 @@ public final class LightComputeService {
             waitFrames = 0;
             captureNanos = 0L;
             lastRotatedNs = 0L;
+            coreDataVersion = dataVersionOf(ChunkPos.asLong(corePos.x, corePos.z));
+        }
+
+        /**
+         * 数据替换（同对象，onChunkDataReplaced）时只重采样核心柱：邻柱地形未变，
+         * 旧快照仍有效。全清从头 capture 在连续 delta（放方块/水流）下每次都被打断
+         * → 任务永远 capture 不完 → 重算永不落地（引擎旧光/错光持久 = 黑块）。
+         * 核心柱重采样 1/9 柱，连续变化下也能收敛到最后一个 delta 之后。
+         */
+        private void restartCoreOnly() {
+            // DOMAIN_OFFSETS[4] == {0, 0}：核心柱（见 DOMAIN_OFFSETS 定义）
+            snapshots[4] = null;
+            if (nextColumn > 4) {
+                nextColumn = 4; // 重采样核心柱；其后邻柱已捕获且未变，重复采样幂等无害
+            }
+            coreDataVersion = dataVersionOf(ChunkPos.asLong(corePos.x, corePos.z));
         }
     }
 
@@ -402,14 +447,17 @@ public final class LightComputeService {
                     task.snapshots[task.nextColumn] = chunk == null
                             ? LightColumnSnapshot.empty(task.minY, task.height)
                             : snapshotOrCapture(level, chunk, cx, cz);
-                    // 核心柱 / 4 邻柱：立即抓旧光照（克隆防后台读与官方写竞态；缓存命中仍重抓，无害）。
-                    // 对角柱不需旧光照：传播域不含对角柱区域。null 层 = 全 0（无光）。
+                    // 4 邻柱：立即抓旧光照（克隆防后台读与官方写竞态；缓存命中仍重抓，无害）。
+                    // 对角柱不需旧光照（非落地目标柱）；核心柱结果由 W=48 求解域直接产出，
+                    // 不再抓核心柱旧值。null 层 = 全 0（无光）。
                     // sectionCount > 64 时邻柱传播降级（掩码 long 装不下），不抓邻柱旧值。
                     int nbIdx = neighborIndexFor(off);
-                    boolean needOldLight = (off[0] == 0 && off[1] == 0)
-                            || (nbIdx >= 0 && task.neighborOldSky != null);
+                    boolean needOldLight = nbIdx >= 0 && task.neighborOldSky != null;
                     if (needOldLight) {
                         captureOldLight(level, task, cx, cz, nbIdx);
+                        // 邻柱捕获时刻版本：落地时校验，邻柱数据在捕获后变化则跳过该柱写入
+                        // （旧地形 solve 的邻柱区值不得写进新地形，防 copyMasked 只增亮扩散错值）
+                        task.neighborDataVersions[nbIdx] = dataVersionOf(ChunkPos.asLong(cx, cz));
                     }
                 } catch (Throwable t) {
                     // 单柱采样失败：作废整个任务（该 core 稍后 TAIL 提交会重建），不得静默卡死队列
@@ -454,57 +502,18 @@ public final class LightComputeService {
                 }
                 diagBg("start {}", task.corePos);
                 long backgroundStartNs = System.nanoTime();
-                int cells = W * W * task.height;
-                byte[] domainLightBlock = new byte[cells];
-                int[] domainShapeIds = new int[cells];
-                int[] domainSourceY = new int[W * W];
-                java.util.Arrays.fill(domainSourceY, LightFloodFill.NO_COLUMN);
-                List<Integer> emitters = new ArrayList<>();
-                List<VoxelShape[]> allShapes = new ArrayList<>();
-                for (int i = 0; i < DOMAIN_OFFSETS.length; i++) {
-                    int[] off = DOMAIN_OFFSETS[i];
-                    assemble(task.snapshots[i], off[0], off[1], task.height,
-                            domainLightBlock, domainShapeIds, domainSourceY, emitters, allShapes);
-                }
-                int[] emitterArr = emitters.stream().mapToInt(Integer::intValue).toArray();
-                VoxelShape[][] shapeTable = allShapes.toArray(new VoxelShape[0][]);
-                LightFloodFill.Occlusion occlusion = (srcShape, dstShape, dir) -> Shapes.faceShapeOccludes(
-                        shapeTable[srcShape - 1][dir], shapeTable[dstShape - 1][OPPOSITE_DIR[dir]]);
-                CompoundTag nbt = task.cachedNbt;
-                if (nbt == null) {
-                    nbt = io.github.limuqy.mc.hassium.network.ClientChunkHandler
-                            .loadChunkNbtFromCache(task.corePos);
-                }
-                // block/sky 分离计算（等价合并计算，独立计时；数据支持 sky 优先落地的分离提交方案）
-                long splitT0 = System.nanoTime();
-                byte[] blockLight = LightFloodFill.solveBlock(W, task.height,
-                        domainLightBlock, emitterArr, domainShapeIds, occlusion);
-                long splitT1 = System.nanoTime();
-                byte[] skyLight = LightFloodFill.solveSky(W, task.height,
-                        domainLightBlock, domainSourceY, domainShapeIds, occlusion);
-                long splitT2 = System.nanoTime();
-                if (diagSplit.getAndIncrement() < 20) {
-                    Constants.LOG.info("[LIGHT-DIAG-SPLIT] block={}us sky={}us total={}us",
-                            (splitT1 - splitT0) / 1000, (splitT2 - splitT1) / 1000, (splitT2 - splitT0) / 1000);
-                }
-                // --- 传播阶段：核心柱 BFS 结果向邻居柱的后台传播（主线程落地只做 memcpy）---
-                // 传播域 W=48 = 核心柱 ±16 格（传播半径 15 + 1 格余量），9 柱全宽组装（含对角柱）；
-                // 邻柱旧值装域 + 核心柱新值 diff → 种子 → 增量传播（官方 propagateIncrease 语义，
-                // 只增不减）；整体变暗（decrease 主导）走模式 B：W=48 全域重算兜底。
-                long propT0 = System.nanoTime();
-                int ww32 = W * W;
+                // W=48 求解域 == 传播域：9 柱全宽组装（含对角柱——光按曼哈顿距离传播，
+                // 对角柱内距核心柱内格 ≤15 的光源（如 (16,16) 距 (14,14) 仅 4 格）会照进
+                // 核心柱；缺角会系统性偏暗）。核心柱 [16,32)² 两侧 halo 16 格 ≥ 传播半径
+                // 15 → solve 结果与全量重算一致，无需校准吸收（历史：W=32 halo 8 格截断
+                // → core 柱整体偏暗，落地为永久黑块，见常量注释）。
                 int ww48 = PROP_W * PROP_W;
-                byte[] propSky = new byte[ww48 * task.height];
-                byte[] propBlock = new byte[ww48 * task.height];
                 byte[] propLight = new byte[ww48 * task.height];   // 遮挡（每格 lightBlock）
                 int[] propShape = new int[ww48 * task.height];
                 int[] propSourceY = new int[ww48];
                 Arrays.fill(propSourceY, LightFloodFill.NO_COLUMN);
                 List<Integer> propEmitters = new ArrayList<>();
                 List<VoxelShape[]> propShapes = new ArrayList<>();
-                // 9 柱全宽组装：核心柱 ±16 格全域。必须含对角柱——光按曼哈顿距离传播，
-                // 对角柱内距离核心柱内格 ≤15 的光源（如 (16,16) 距 (14,14) 仅 4 格）
-                // 会照进核心柱；5 柱域缺角会系统性偏暗（官方验算实测：缺角时 ~17% 内芯格偏暗）。
                 for (int i = 0; i < DOMAIN_OFFSETS.length; i++) {
                     int[] off = DOMAIN_OFFSETS[i];
                     assembleFull(task.snapshots[i], off[0], off[1], task.height,
@@ -512,101 +521,31 @@ public final class LightComputeService {
                 }
                 int[] emitter48 = propEmitters.stream().mapToInt(Integer::intValue).toArray();
                 VoxelShape[][] shapeTable48 = propShapes.toArray(new VoxelShape[0][]);
-                LightFloodFill.Occlusion occlusion48 = (srcShape, dstShape, dir) -> false; // 实验：禁形状遮挡
-
-                long[] skySeeds = new long[0];
-                long[] blockSeeds = new long[0];
-                // 实验（验算归因）：强制全域重算，验证 W=32 2 柱域 halo 截断是误差主因
-                boolean modeB = true;
-                if (task.sectionCount <= 64) {
-                    // 邻柱旧值解码装域（4bit → 8bit，柱区原点 ox/oz）
-                    for (int nb = 0; nb < 4; nb++) {
-                        int[] off = PROP_OFFSETS[nb];
-                        int ox = off[0] == 0 ? PROP_CORE_OFFSET : (off[0] < 0 ? 0 : 32);
-                        int oz = off[1] == 0 ? PROP_CORE_OFFSET : (off[1] < 0 ? 0 : 32);
-                        decodeOldColumn(task.neighborOldSky[nb], propSky, ox, oz, task, ww48);
-                        decodeOldColumn(task.neighborOldBlock[nb], propBlock, ox, oz, task, ww48);
-                    }
-                    // 核心柱 diff：newVal > oldVal → 种子（新值预写后传播）；< → decrease 计数
-                    List<Long> skySeedList = new ArrayList<>();
-                    List<Long> blockSeedList = new ArrayList<>();
-                    int increase = 0;
-                    int decrease = 0;
-                    for (int s = 0; s < task.sectionCount; s++) {
-                        int y0 = s * 16;
-                        for (int ly = 0; ly < 16; ly++) {
-                            int y = y0 + ly;
-                            if (y >= task.height) {
-                                break;
-                            }
-                            for (int x = 0; x < 16; x++) {
-                                for (int z = 0; z < 16; z++) {
-                                    int di = (ly << 8) | (z << 4) | x;
-                                    int idx32 = y * ww32 + (CORE_OFFSET + z) * W + (CORE_OFFSET + x);
-                                    int idx48 = y * ww48 + (PROP_CORE_OFFSET + z) * PROP_W + (PROP_CORE_OFFSET + x);
-                                    int oldS = (task.coreOldSky[s][di >> 1] >> ((di & 1) * 4)) & 0xF;
-                                    int newS = skyLight[idx32] & 0xFF;
-                                    if (newS > oldS) {
-                                        skySeedList.add(LightFloodFill.buildSeed(idx48, newS,
-                                                LightFloodFill.ALL_DIRS, propShape[idx48] == 0, 1));
-                                        increase++;
-                                    } else if (newS < oldS) {
-                                        decrease++;
-                                    }
-                                    int oldB = (task.coreOldBlock[s][di >> 1] >> ((di & 1) * 4)) & 0xF;
-                                    int newB = blockLight[idx32] & 0xFF;
-                                    if (newB > oldB) {
-                                        blockSeedList.add(LightFloodFill.buildSeed(idx48, newB,
-                                                LightFloodFill.ALL_DIRS, propShape[idx48] == 0, 0));
-                                        increase++;
-                                    } else if (newB < oldB) {
-                                        decrease++;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    skySeeds = skySeedList.stream().mapToLong(Long::longValue).toArray();
-                    blockSeeds = blockSeedList.stream().mapToLong(Long::longValue).toArray();
-                    // 模式判定：整体变暗（decrease 主导，缓存修正等罕见场景）→ 全域重算兜底；
-                    // 日常 BFS 与官方 1 级边缘偏差 → 模式 A 增量传播（只增不减，残留偏亮单调自愈）
-                    modeB = decrease > increase;
+                LightFloodFill.Occlusion occlusion48 = (srcShape, dstShape, dir) -> Shapes.faceShapeOccludes(
+                        shapeTable48[srcShape - 1][dir], shapeTable48[dstShape - 1][OPPOSITE_DIR[dir]]);
+                CompoundTag nbt = task.cachedNbt;
+                if (nbt == null) {
+                    nbt = io.github.limuqy.mc.hassium.network.ClientChunkHandler
+                            .loadChunkNbtFromCache(task.corePos);
                 }
-                if (modeB) {
-                    // 全域重算：5 柱全宽 solve（邻柱区已由 solve 算出，旧值无需装域）
-                    propSky = LightFloodFill.solveSky(PROP_W, task.height, propLight, propSourceY, propShape, occlusion48);
-                    propBlock = LightFloodFill.solveBlock(PROP_W, task.height, propLight, emitter48, propShape, occlusion48);
-                } else {
-                    // 模式 A：核心柱新值预写（种子格值必须与种子 level 逐位相等）+ 增量传播
-                    for (int s = 0; s < task.sectionCount; s++) {
-                        int y0 = s * 16;
-                        for (int ly = 0; ly < 16; ly++) {
-                            int y = y0 + ly;
-                            if (y >= task.height) {
-                                break;
-                            }
-                            for (int x = 0; x < 16; x++) {
-                                for (int z = 0; z < 16; z++) {
-                                    int idx32 = y * ww32 + (CORE_OFFSET + z) * W + (CORE_OFFSET + x);
-                                    int idx48 = y * ww48 + (PROP_CORE_OFFSET + z) * PROP_W + (PROP_CORE_OFFSET + x);
-                                    propSky[idx48] = skyLight[idx32];
-                                    propBlock[idx48] = blockLight[idx32];
-                                }
-                            }
-                        }
-                    }
-                    if (skySeeds.length > 0) {
-                        LightFloodFill.propagate(PROP_W, task.height, propSky, propLight, propShape, occlusion48, skySeeds, 1);
-                    }
-                    if (blockSeeds.length > 0) {
-                        LightFloodFill.propagate(PROP_W, task.height, propBlock, propLight, propShape, occlusion48, blockSeeds, 0);
-                    }
+                // 全域 solve（block/sky 独立计时）：核心柱与邻柱区的最终值一步到位。
+                // 无增量传播/无模式判定：solve 已含 decrease 与邻柱旧值无关的全部语义。
+                long splitT0 = System.nanoTime();
+                byte[] blockLight = LightFloodFill.solveBlock(PROP_W, task.height,
+                        propLight, emitter48, propShape, occlusion48);
+                long splitT1 = System.nanoTime();
+                byte[] skyLight = LightFloodFill.solveSky(PROP_W, task.height,
+                        propLight, propSourceY, propShape, occlusion48);
+                long splitT2 = System.nanoTime();
+                if (diagSplit.getAndIncrement() < 20) {
+                    Constants.LOG.info("[LIGHT-DIAG-SPLIT] block={}us sky={}us total={}us",
+                            (splitT1 - splitT0) / 1000, (splitT2 - splitT1) / 1000, (splitT2 - splitT0) / 1000);
                 }
-                long propT1 = System.nanoTime();
-                // 提取：核心柱 + 邻柱差异（掩码位 = 变化 section）
-                byte[][] skySections = extractRegion(propSky, PROP_CORE_OFFSET, PROP_CORE_OFFSET,
+                // 提取：核心柱全 section + 邻柱差异 section（掩码位 = 变化 section）
+                long propT0 = System.nanoTime();
+                byte[][] skySections = extractRegion(skyLight, PROP_CORE_OFFSET, PROP_CORE_OFFSET,
                         task.minSection, task.sectionCount, task.height);
-                byte[][] blockSections = extractRegion(propBlock, PROP_CORE_OFFSET, PROP_CORE_OFFSET,
+                byte[][] blockSections = extractRegion(blockLight, PROP_CORE_OFFSET, PROP_CORE_OFFSET,
                         task.minSection, task.sectionCount, task.height);
                 long[] neighborSkyMasks = null;
                 long[] neighborBlockMasks = null;
@@ -621,9 +560,9 @@ public final class LightComputeService {
                         int[] off = PROP_OFFSETS[nb];
                         int ox = off[0] == 0 ? PROP_CORE_OFFSET : (off[0] < 0 ? 0 : 32);
                         int oz = off[1] == 0 ? PROP_CORE_OFFSET : (off[1] < 0 ? 0 : 32);
-                        neighborSkySections[nb] = diffNeighborColumn(propSky, ox, oz, task,
+                        neighborSkySections[nb] = diffNeighborColumn(skyLight, ox, oz, task,
                                 task.neighborOldSky[nb], neighborSkyMasks, nb);
-                        neighborBlockSections[nb] = diffNeighborColumn(propBlock, ox, oz, task,
+                        neighborBlockSections[nb] = diffNeighborColumn(blockLight, ox, oz, task,
                                 task.neighborOldBlock[nb], neighborBlockMasks, nb);
                     }
                 }
@@ -640,13 +579,12 @@ public final class LightComputeService {
                     for (int y = y0; y < y1; y++) {
                         int base = y * ww48;
                         for (int i = 0; i < ww48; i++) {
-                            blockNonZero += (propBlock[base + i] & 0xFF) != 0 ? 1 : 0;
+                            blockNonZero += (blockLight[base + i] & 0xFF) != 0 ? 1 : 0;
                         }
                     }
                 }
-                diagProp("mode={} skySeeds={} blockSeeds={} prop={}us extract={}us neighSections={} emitN={} blockNonZero={}",
-                        modeB ? "B" : "A", skySeeds.length, blockSeeds.length,
-                        (propT1 - propT0) / 1000, (propT2 - propT1) / 1000,
+                diagProp("solve={}us extract={}us neighSections={} emitN={} blockNonZero={}",
+                        (splitT2 - splitT0) / 1000, (propT2 - propT0) / 1000,
                         neighborSectionCount(neighborSkyMasks, neighborBlockMasks), emitN, blockNonZero);
                 NetworkStats.recordLightRecomputeBackgroundTime(System.nanoTime() - backgroundStartNs);
                 diagBg("done {} elapsed={}us", task.corePos, (System.nanoTime() - backgroundStartNs) / 1000);
@@ -655,7 +593,8 @@ public final class LightComputeService {
                             skySections, blockSections,
                             neighborSkyMasks, neighborSkySections,
                             neighborBlockMasks, neighborBlockSections,
-                            nbt, task.generation, task.captureNanos))) {
+                            nbt, task.generation, task.captureNanos,
+                            task.coreDataVersion, task.neighborDataVersions))) {
                         diagBg("results full, dropped {}", task.corePos);
                     }
                 }
@@ -671,11 +610,10 @@ public final class LightComputeService {
     /**
      * 主线程在帧预算内批量提交（超预算提前退出，剩余留待下帧）。
      * <p>
-     * 单阶段：预算内循环对每个结果做「建层 + 主线程 memcpy 落地」（自研传播域已在后台完成，
-     * 含核心柱全 section 与邻柱差异 section），逐结果入批；批尾无官方 runLightUpdates——
-     * 自研任务不再入官方传播队列，官方队列仅剩原版触发兜底（帧尾
-     * {@code ClientLightRecomputeService.flushPendingCalibrations}）。落地后逐结果做
-     * 验算对比 + 缓存写回（写回本身已后台化，见 CacheSaveQueue）。
+     * 预算内循环对每个结果做「建层 + 主线程 memcpy 落地 + 官方传播种子入队」
+     * （自研 W=48 solve 已在后台完成，含核心柱全 section 与邻柱差异 section），逐结果入批；
+     * 批尾 {@code safeRunLightUpdates} 一次收敛官方队列（种子 = 注入点/发射源，增量小——
+     * solve 已正确，仅补竞态偏暗格），然后逐结果做验算对比 + 缓存写回（写回后台化）。
      */
     public void drainCompletions(long deadlineNs) {
         ClientLevel level = Minecraft.getInstance().level;
@@ -701,6 +639,73 @@ public final class LightComputeService {
         if (batch.isEmpty()) {
             return;
         }
+        // 批尾统一传播：官方队列种子（第 4 步入队的注入点/发射源/边界光）在此收敛到不动点，
+        // 补亮竞态偏暗格（solve 已正确，增量小；实测 safeRunLightUpdates 空队列 ~0.1ms）。
+        // 帧预算外执行（同旧架构批尾 runLightUpdates 语义：预算循环只限 poll）。
+        try {
+            ClientLightRecomputeService.safeRunLightUpdates(lightEngine);
+        } catch (Throwable t) {
+            Constants.LOG.error("Hassium: Failed to run light updates for parallel batch", t);
+        }
+        // 最终收敛探针（诊断，跑一次）：队列全空 = 加载结束，官方在最后落地值上继续传播的
+        // 增量 > 0 即最终状态仍有暗格残留（黑块等待不消的量化）。纯观察：先 clone、后恢复。
+        if (pendingCaptures.isEmpty() && results.isEmpty() && !finalProbeDone && !batch.isEmpty()) {
+            finalProbeDone = true;
+            try {
+                LightComputeResult r = batch.get(batch.size() - 1);
+                int minSection = LevelHeightCompat.getMinSection(level);
+                int maxSection = LevelHeightCompat.getMaxSectionExclusive(level);
+                int sectionCount = Math.min(r.skySections().length, maxSection - minSection);
+                LayerLightEventListener skyListener = lightEngine.getLayerListener(LightLayer.SKY);
+                LayerLightEventListener blockListener = lightEngine.getLayerListener(LightLayer.BLOCK);
+                byte[][] snapSky = snapshotColumn(skyListener, r.corePos().x, r.corePos().z, minSection, sectionCount);
+                byte[][] snapBlock = snapshotColumn(blockListener, r.corePos().x, r.corePos().z, minSection, sectionCount);
+                lightEngine.setLightEnabled(r.corePos(), true);
+                lightEngine.propagateLightSources(r.corePos());
+                ClientLightRecomputeService.safeRunLightUpdates(lightEngine);
+                long increased = 0;
+                for (int s = 0; s < sectionCount; s++) {
+                    SectionPos sp = SectionPos.of(r.corePos().x, minSection + s, r.corePos().z);
+                    DataLayer sky = skyListener.getDataLayerData(sp);
+                    DataLayer block = blockListener.getDataLayerData(sp);
+                    byte[] skyArr = sky == null ? null : sky.getData();
+                    byte[] blockArr = block == null ? null : block.getData();
+                    if (skyArr != null) {
+                        for (int i = 0; i < 2048; i++) {
+                            int before = snapSky[s][i] & 0xFF;
+                            int now = skyArr[i] & 0xFF;
+                            if ((now & 0x0F) > (before & 0x0F)) {
+                                increased++;
+                            }
+                            if ((now >> 4) > (before >> 4)) {
+                                increased++;
+                            }
+                        }
+                    }
+                    if (blockArr != null) {
+                        for (int i = 0; i < 2048; i++) {
+                            int before = snapBlock[s][i] & 0xFF;
+                            int now = blockArr[i] & 0xFF;
+                            if ((now & 0x0F) > (before & 0x0F)) {
+                                increased++;
+                            }
+                            if ((now >> 4) > (before >> 4)) {
+                                increased++;
+                            }
+                        }
+                    }
+                    if (skyArr != null) {
+                        System.arraycopy(snapSky[s], 0, skyArr, 0, 2048);
+                    }
+                    if (blockArr != null) {
+                        System.arraycopy(snapBlock[s], 0, blockArr, 0, 2048);
+                    }
+                }
+                Constants.LOG.info("[LIGHT-PROBE-FINAL] chunk {} increased={} (0 = 最终无暗格残留)", r.corePos(), increased);
+            } catch (Throwable t) {
+                Constants.LOG.warn("Hassium: final light probe failed", t);
+            }
+        }
         for (LightComputeResult r : batch) {
             try {
                 applyResultPost(level, lightEngine, r);
@@ -716,6 +721,7 @@ public final class LightComputeService {
         results.clear();
         pendingCaptures.clear();
         pendingByCore.clear();
+        dataVersions.clear();
         synchronized (snapshotCache) {
             snapshotCache.clear();
         }
@@ -738,6 +744,14 @@ public final class LightComputeService {
                     chunk == null ? "null" : System.identityHashCode(chunk),
                     r.expectedCoreChunk() == null ? "null" : System.identityHashCode(r.expectedCoreChunk()));
             return false; // 卸载/刷新竞态：旧快照不得覆盖新权威 chunk
+        }
+        if (r.coreDataVersion() != dataVersionOf(ChunkPos.asLong(r.corePos().x, r.corePos().z))) {
+            // 数据替换（delta/全量/缓存 apply 同对象 replaceWithPacketData）后旧任务结果作废：
+            // solve 基于旧地形，落地会覆盖新地形（深水区亮暗跳变根因）。替换时 TAIL 已
+            // 重新 submit，本块由新任务收敛。
+            diagApply("drop {} reason=dataVersion {}!={}", r.corePos(),
+                    r.coreDataVersion(), dataVersionOf(ChunkPos.asLong(r.corePos().x, r.corePos().z)));
+            return false;
         }
         diagApply("ok {} gen={} capture={}us", r.corePos(), r.generation(), r.captureNanos() / 1000);
         // 主线程光照应用耗时（同步路径同口径：applyLightEngine 的 finally 记录同一指标；
@@ -786,15 +800,32 @@ public final class LightComputeService {
             for (int nb = 0; nb < 4; nb++) {
                 int nx = r.corePos().x + PROP_OFFSETS[nb][0];
                 int nz = r.corePos().z + PROP_OFFSETS[nb][1];
+                if (r.neighborDataVersions() == null
+                        || r.neighborDataVersions()[nb] != dataVersionOf(ChunkPos.asLong(nx, nz))) {
+                    // 邻柱数据在捕获后已替换：本任务算出的该柱区基于旧地形，不得落地
+                    // （copyMasked 只增亮会把旧地形亮值写进新地形）；该柱由自身新任务收敛。
+                    continue;
+                }
                 copyMasked(r.neighborSkySections()[nb], skyMasks[nb], nx, nz, skyListener, minSection, level);
                 copyMasked(r.neighborBlockSections()[nb], blockMasks[nb], nx, nz, blockListener, minSection, level);
             }
         }
-        // 无 queueSectionData / 无 propagateLightSources / 无 pullLightFromNeighborEdges：
-        // 官方传播队列不再有自研任务，批尾 runLightUpdates 已从 drainCompletions 移除。
+        // 4. 官方传播种子入队（成本 ~0.1-0.4ms/块，批尾 runLightUpdates 统一收敛）：
+        //    a) propagateLightSources：sky 注入 + block 发射源种子（覆盖 solve 快照过期；
+        //       实测 stabilityIncreased 395→0，落地值成为官方不动点）
+        //    b) pullLightFromNeighborEdges：8 邻柱边界光拉进核心柱边缘（差 >1 入队）——
+        //       修复 solve 输入缺邻居（empty 兜底 / 邻居后落地）导致的边缘暗格，
+        //       批尾传播后收敛。缺此步则边缘暗格永久（黑块等待不消）。
+        lightEngine.setLightEnabled(r.corePos(), true);
+        lightEngine.propagateLightSources(r.corePos());
+        ClientLightRecomputeService.pullLightFromNeighborEdges(level, r.corePos(), minSection, maxSection);
     }
 
-    /** 掩码位 → 变化 section 的 memcpy（null 层防御：邻柱未加载/未建层时跳过，加载时自会重算）。 */
+    /** 掩码位 → 变化 section 的「只增亮」合并（邻柱差异落地策略）。
+     *  邻柱最终正确值由邻柱自身任务（W=48 solve 全 section memcpy）保证；本任务算出的
+     *  邻柱区在 48 域边界截断 1-2 格可能偏暗，若整段覆盖会与邻柱任务落地顺序形成竞态
+     *  黑线。逐 nibble max 合并 → 提前点亮、永不写暗；decrease 由邻柱自身任务落地。
+     *  null 层防御：邻柱未加载/未建层时跳过，加载时自会重算。 */
     private static void copyMasked(byte[][] sections, long mask, int chunkX, int chunkZ,
                                    LayerLightEventListener listener, int minSection, ClientLevel level) {
         for (int s = 0; s < sections.length; s++) {
@@ -802,7 +833,17 @@ public final class LightComputeService {
                 SectionPos sp = SectionPos.of(chunkX, minSection + s, chunkZ);
                 DataLayer layer = listener.getDataLayerData(sp);
                 if (layer != null) {
-                    System.arraycopy(sections[s], 0, layer.getData(), 0, 2048);
+                    byte[] dst = layer.getData();
+                    byte[] src = sections[s];
+                    for (int i = 0; i < 2048; i++) {
+                        int d = dst[i] & 0xFF;
+                        int v = src[i] & 0xFF;
+                        int dl = d & 0x0F;
+                        int dh = d >> 4;
+                        int sl = v & 0x0F;
+                        int sh = v >> 4;
+                        dst[i] = (byte) ((Math.max(dh, sh) << 4) | Math.max(dl, sl));
+                    }
                     level.setSectionDirtyWithNeighbors(chunkX, minSection + s, chunkZ);
                 }
             }
@@ -1705,16 +1746,15 @@ public final class LightComputeService {
     }
 
     /**
-     * 主线程抓取旧光照：核心柱（nbIdx < 0）或 4 邻柱（nbIdx 0–3）全 section × 2 层，
+     * 主线程抓取 4 邻柱旧光照（nbIdx 0–3）全 section × 2 层，
      * DataLayer 打包 2048B 克隆（clone 后数组即私有，后台线程只读，与官方写无竞态）。
-     * null 层 = 全 0（无光；未加载块或未建层 section）。成本 ~96KB×5 柱 ≈ 0.5ms/任务。
+     * null 层 = 全 0（无光；未加载块或未建层 section）。成本 ~96KB×4 柱 ≈ 0.4ms/任务。
      */
-    private void captureOldLight(ClientLevel level, CaptureTask task, int cx, int cz, int nbIdx) {
-        LevelLightEngine lightEngine = level.getLightEngine();
+    private void captureOldLight(ClientLevel level, CaptureTask task, int cx, int cz, int nbIdx) {        LevelLightEngine lightEngine = level.getLightEngine();
         LayerLightEventListener skyListener = lightEngine.getLayerListener(LightLayer.SKY);
         LayerLightEventListener blockListener = lightEngine.getLayerListener(LightLayer.BLOCK);
-        byte[][] skyTarget = nbIdx < 0 ? task.coreOldSky : task.neighborOldSky[nbIdx];
-        byte[][] blockTarget = nbIdx < 0 ? task.coreOldBlock : task.neighborOldBlock[nbIdx];
+        byte[][] skyTarget = task.neighborOldSky[nbIdx];
+        byte[][] blockTarget = task.neighborOldBlock[nbIdx];
         for (int s = 0; s < task.sectionCount; s++) {
             SectionPos sp = SectionPos.of(cx, task.minSection + s, cz);
             DataLayer sky = skyListener.getDataLayerData(sp);
@@ -1725,71 +1765,8 @@ public final class LightComputeService {
     }
 
     /**
-     * 把柱快照拷入 W=32 求解域数组（chunkOffset = 相对核心柱的 -1/0/+1）。
-     * <p>
-     * W=32 域 = 世界 [core-8, core+24)：快照 (dx,dz) 与域的交叉裁剪——
-     * dx=-1（west 柱东半）→ 柱内 [8,16) → 域 [0,8)；dx=0（core 柱）→ 柱内 [0,16) → 域 [8,24)；
-     * dx=+1（east 柱西半）→ 柱内 [0,8) → 域 [24,32)。z 方向同理。
-     */
-    private static void assemble(LightColumnSnapshot snap, int dx, int dz, int height,
-                                 byte[] domainLightBlock, int[] domainShapeIds, int[] domainSourceY,
-                                 List<Integer> emitters, List<VoxelShape[]> allShapes) {
-        int sx0 = dx < 0 ? 8 : 0;
-        int bx0 = dx < 0 ? 0 : (dx == 0 ? CORE_OFFSET : 24);
-        int lenX = dx == 0 ? 16 : 8;
-        int sz0 = dz < 0 ? 8 : 0;
-        int bz0 = dz < 0 ? 0 : (dz == 0 ? CORE_OFFSET : 24);
-        int lenZ = dz == 0 ? 16 : 8;
-        byte[] lb = snap.getLightBlock();
-        int[] sy = snap.getSourceY();
-        for (int xi = 0; xi < lenX; xi++) {
-            int x = sx0 + xi;
-            int bx = bx0 + xi;
-            for (int zi = 0; zi < lenZ; zi++) {
-                int z = sz0 + zi;
-                int bz = bz0 + zi;
-                int domCol = bz * W + bx;
-                domainSourceY[domCol] = sy[z * 16 + x];
-                for (int y = 0; y < height; y++) {
-                    int src = y * 256 + z * 16 + x;
-                    int dst = (y * W + bz) * W + bx;
-                    domainLightBlock[dst] = lb[src];
-                }
-            }
-        }
-        for (int e : snap.getEmitters()) {
-            int emission = e >>> 20;
-            int cell = e & 0xFFFFF;
-            int y = cell >> 8;
-            int z = (cell >> 4) & 0xF;
-            int x = cell & 0xF;
-            if (x < sx0 || x >= sx0 + lenX || z < sz0 || z >= sz0 + lenZ) {
-                continue; // 快照柱内不在域交叉区的格（W=32 时半柱裁剪）
-            }
-            int dst = (y * W + (bz0 + (z - sz0))) * W + (bx0 + (x - sx0));
-            emitters.add((emission << 20) | dst);
-        }
-        int[] shapeCells = snap.getShapeCells();
-        VoxelShape[][] shapeFaces = snap.getShapeFaces();
-        for (int i = 0; i < shapeCells.length; i++) {
-            int cell = shapeCells[i];
-            int y = cell >> 8;
-            int z = (cell >> 4) & 0xF;
-            int x = cell & 0xF;
-            if (x < sx0 || x >= sx0 + lenX || z < sz0 || z >= sz0 + lenZ) {
-                continue;
-            }
-            int dst = (y * W + (bz0 + (z - sz0))) * W + (bx0 + (x - sx0));
-            // 0 是 LightFloodFill 的「无形状」哨兵；真实形状编号必须从 1 开始。
-            // 否则域中的第一个遮挡方块会被当成空气，BFS 与官方引擎产生系统性偏差。
-            domainShapeIds[dst] = allShapes.size() + 1;
-            allShapes.add(shapeFaces[i]);
-        }
-    }
-
-    /**
-     * 全宽柱拷贝（传播域用）：柱内全 16×16 → 域 [16+dx*16, 32+dx*16)²。
-     * emitters/shapeCells 无裁剪（传播域需要邻柱全宽数据）。
+     * 全宽柱拷贝（求解/传播域共用）：柱内全 16×16 → 域 [16+dx*16, 32+dx*16)²。
+     * emitters/shapeCells 无裁剪（W=48 域需要邻柱/对角柱全宽数据）。
      */
     private static void assembleFull(LightColumnSnapshot snap, int dx, int dz, int height,
                                      byte[] domainLightBlock, int[] domainShapeIds, int[] domainSourceY,
@@ -1854,28 +1831,6 @@ public final class LightComputeService {
             out[s] = data;
         }
         return out;
-    }
-
-    /** 邻柱旧光照（DataLayer 打包 4bit）解码为传播域 8bit 值（柱区原点 ox/oz）。 */
-    private static void decodeOldColumn(byte[][] oldSections, byte[] domain, int ox, int oz,
-                                        CaptureTask task, int ww48) {
-        for (int s = 0; s < task.sectionCount; s++) {
-            byte[] old = oldSections[s];
-            int y0 = s * 16;
-            for (int ly = 0; ly < 16; ly++) {
-                int y = y0 + ly;
-                if (y >= task.height) {
-                    break;
-                }
-                for (int x = 0; x < 16; x++) {
-                    for (int z = 0; z < 16; z++) {
-                        int di = (ly << 8) | (z << 4) | x;
-                        int v = (old[di >> 1] >> ((di & 1) * 4)) & 0xF;
-                        domain[y * ww48 + (oz + z) * PROP_W + (ox + x)] = (byte) v;
-                    }
-                }
-            }
-        }
     }
 
     /** 邻柱区提取 + 与旧值打包对比：返回变化 section（掩码位 1 对应），并写入 masks[nb]。 */
