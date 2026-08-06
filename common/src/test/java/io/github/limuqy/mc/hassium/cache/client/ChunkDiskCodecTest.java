@@ -1,7 +1,7 @@
 package io.github.limuqy.mc.hassium.cache.client;
 
 import io.github.limuqy.mc.hassium.cache.ChunkContentHashUtil;
-import io.github.limuqy.mc.promethium.compat.CompoundTagCompat;
+import io.github.limuqy.mc.hassium.compat.CompoundTagCompat;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import org.junit.jupiter.api.Test;

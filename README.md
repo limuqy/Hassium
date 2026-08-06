@@ -34,7 +34,7 @@
 | | 世界导出 | `/hassiumc export` 将本地缓存导出为可进单机的原版 Anvil 世界 |
 | **光照优化** | 光照剥离 | 服务端可不传光照数据，由客户端本地重算，进一步省流量 |
 | | 光照缓存 | 首次加载重算后缓存光照数据，后续缓存命中直接应用，跳过同步重算 |
-| | 并行光照 | 光照重算在后台线程池并行执行，主线程只提交快照（默认开启） |
+| | 并行光照 | 可选：安装 Promethium MOD 后开启，光照重算在后台线程池并行执行；默认官方引擎（统一异步缓冲队列，帧尾预算消费，不阻塞主线程） |
 | **实用工具** | 流量监控 | `/hassium stats`（服务端）、`/hassiumc stats`（客户端）查看压缩与缓存效果 |
 
 未安装本模组的客户端默认可连接（`compat.requireClientMod = false`）；双端都装才能吃满压缩与缓存。
@@ -95,7 +95,7 @@
 | `network.globalPacketCompression` | `true` | 全局 ZSTD |
 | `network.maxChunksPerTick` | `5` | 每玩家每 tick 提交上限（发送速率 = 本值 × tick 节奏，满 tick ≈ 5×20/s；掉刻自然降速） |
 | `clientCache.mainThreadChunkBudgetMs` | `15` | 客户端每帧 apply 预算（ms） |
-| `clientCache.parallelLightEngineEnabled` | `true` | 并行光照（重算在后台线程池，主线程只提交快照） |
+| `clientCache.parallelLightEngineEnabled` | `false` | 并行光照（可选，需安装 Promethium MOD；开启后重算在后台线程池，主线程只提交快照；MOD 缺席自动回退官方引擎） |
 | `clientCache.parallelLightEngineThreads` | `4` | 并行光照线程数（虚拟线程模式忽略） |
 | `network.metricsEnabled` | `false` | 指标收集（默认关闭；自检时自动开启） |
 | `network.dataPlane.enabled` | `false` | UDP/KCP 数据面与 TCP 主控热切/加权分流；默认关闭，启用前请配置可达端点并依次确认 6 个自检标记 |

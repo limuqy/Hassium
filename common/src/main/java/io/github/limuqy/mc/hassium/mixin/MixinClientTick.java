@@ -206,12 +206,20 @@ public class MixinClientTick {
             // 忽略加载错误
         }
 
-        // 并行光照引擎结果提交（默认关；同预算内逐结果原子提交，超预算留待下帧）
+        // 并行光照引擎结果提交（默认关=官方引擎；同预算内逐结果原子提交，超预算留待下帧；
+        // Promethium MOD 缺席时零开销）
         try {
-            io.github.limuqy.mc.promethium.light.ParallelLightEngine.getInstance()
-                    .drainCompletions(frameDeadlineNs);
+            io.github.limuqy.mc.hassium.cache.client.PromethiumLightBridge.drainCompletions(frameDeadlineNs);
         } catch (Exception e) {
             // 忽略提交错误
+        }
+
+        // 官方引擎统一缓冲队列：帧内收集的光照重算按预算消费（每帧部分预算，到点即停，
+        // 剩余留帧；并行引擎路径内部空转）
+        try {
+            io.github.limuqy.mc.hassium.cache.client.ClientLightBufferQueue.getInstance().drainFrame();
+        } catch (Exception e) {
+            // 忽略消费错误
         }
 
         // 帧尾合并校准传播：加载期每帧几十块落地，逐块 runLightUpdates 会占满主线程

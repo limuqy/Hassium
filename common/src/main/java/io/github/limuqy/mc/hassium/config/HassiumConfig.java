@@ -78,7 +78,7 @@ public record HassiumConfig(
             boolean lightCacheEnabled,
             int maxChunksPerFrame,
             int mainThreadChunkBudgetMs,
-            // === 并行光照引擎（默认关；后台线程池全量重算 + 主线程原子提交）===
+            // === 光照计算引擎（默认官方引擎；接入 Promethium 后可选并行）===
             boolean parallelLightEngineEnabled,
             int parallelLightEngineThreads
     ) {
@@ -102,7 +102,7 @@ public record HassiumConfig(
                 true,    // lightCacheEnabled
                 32,      // maxChunksPerFrame
                 15,      // mainThreadChunkBudgetMs
-                true,    // parallelLightEngineEnabled
+                false,   // parallelLightEngineEnabled（默认官方引擎，光照经统一异步缓冲队列预算消费）
                 4        // parallelLightEngineThreads
         );
 

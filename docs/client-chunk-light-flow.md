@@ -38,16 +38,16 @@ flowchart TD
         G2["② processQueueUntil<br/>预算内 apply 缓存读回"]
         H["applyChunkData<br/>→ Services.getClientChunkApplier<br/>.applyToLevelFromByteBuf<br/>区块落地（此刻可见）"]
         I{"包带光?"}
-        J["calibrateLoadedNeighbors<br/>校准已落地邻居，防暗环"]
+        J["权威光随包落地<br/>无需重算（帧尾兜底）"]
         K["applyLightEngineNow<br/>（三入口汇合）"]
-        L{"并行光照引擎<br/>parallelLightEngineEnabled<br/>默认开"}
+        L{"并行光照引擎<br/>parallelLightEngineEnabled<br/>默认关"}
         M["submitRecompute 异步入队<br/>立即返回"]
-        N["同步 applyLightEngine<br/>主线程直接重算（无后台）"]
+        N["ClientLightBufferQueue<br/>统一异步缓冲队列<br/>帧尾预算消费（每帧部分预算）"]
         O["restoreCachedLightToEngine<br/>R2: 磁盘旧光先灌引擎（防黑块）"]
         P["handleLightDeltaPacket<br/>建层 + propagateLightSources 本地重算<br/>+ 标缓存脏"]
     end
 
-    subgraph LIGHT["并行光照引擎 (LightComputeService)"]
+    subgraph LIGHT["并行光照引擎 (Promethium ParallelLightEngineImpl)"]
         Q["capturePending<br/>帧预算 CAPTURE_BUDGET_NS=5ms<br/>MAX_CAPTURE_COLUMNS_PER_FRAME=24 柱<br/>从已 apply 区块读 blockState 采 3×3=9 柱<br/>等邻居 NEIGHBOR_WAIT_FRAMES=10 + 距离重排"]
         R["hassium-light 后台固定池<br/>（parallelLightEngineThreads 线程，NORM-1）<br/>纯数据 BFS solve (FIFO)"]
         S["drainCompletions<br/>帧预算内原子落地<br/>建层 + 核心柱/邻柱差异 memcpy"]
@@ -82,9 +82,10 @@ flowchart TD
 | 主线程调度 | `PriorityBlockingQueue`（按玩家距离） | — | `MainThreadDispatcher.execute` |
 | 区块 apply | `ClientMainThreadBudget`（JoinBoost 30ms 窗口 / normal `mainThreadChunkBudgetMs`）+ `maxChunksPerFrame` 硬顶 | Render thread | `MixinClientTick` + `MixinVanillaChunkApplyBudget` |
 | R2 读盘 | region 级任务（每 region 至多一个在跑）→ `readyQueue` | 后台虚拟线程 + 主线程 | `ClientCacheLoadQueue` |
-| 光照 capture | `CAPTURE_BUDGET_NS`=5ms、24 柱/帧 | Render thread（独占） | `LightComputeService.capturePending` |
-| 光照 solve | `hassium-light` 固定平台池，FIFO | 后台（NORM-1） | `LightComputeService.ensurePool` |
-| 光照落地 | `drainCompletions(frameDeadlineNs)` | Render thread | `LightComputeService.drainCompletions` |
+| 光照重算（官方引擎，默认） | `ClientLightBufferQueue` 统一异步缓冲：帧内收集、帧尾 `FRAME_BUDGET_NS`=5ms 预算消费（~2-3 块/帧），剩余留帧 | Render thread（入队任意线程） | `ClientLightBufferQueue` + `ClientLightRecomputeService.applyLightEngine` |
+| 光照 capture | `CAPTURE_BUDGET_NS`=5ms、24 柱/帧 | Render thread（独占） | `ParallelLightEngineImpl.capturePending` |
+| 光照 solve | `hassium-light` 固定平台池，FIFO | 后台（NORM-1） | `ParallelLightEngineImpl.ensurePool` |
+| 光照落地 | `drainCompletions(frameDeadlineNs)` | Render thread | `ParallelLightEngineImpl.drainCompletions` |
 
 ## 3. 三条数据入口
 
@@ -101,8 +102,9 @@ flowchart TD
 ```
 flushClientUntil(帧预算)   →  MainThreadDispatcher 出队 apply
 processQueueUntil(帧预算)  →  R2 缓存读回 apply
-drainCompletions(帧预算)   →  capture 采样 + 已完成 solve 落地
-flushPendingCalibrations   →  渲染前合并校准传播
+drainCompletions(帧预算)   →  并行引擎：capture 采样 + 已完成 solve 落地
+bufferQueue.drainFrame()   →  官方引擎：统一异步缓冲队列预算消费
+flushPendingCalibrations   →  渲染前兜底官方传播队列（原版方块变化）
 ```
 
 光照永远排在区块 apply 之后、渲染之前——这是"区块先出现、光后到"的时序根源。
@@ -111,11 +113,11 @@ flushPendingCalibrations   →  渲染前合并校准传播
 
 `MixinLightRecompute`（`handleLevelChunkWithLight` TAIL）判定包是否带光：
 
-- **带光**（`network.lightStrip=false` 或原版）：只需 `calibrateLoadedNeighbors`——先落地的内圈块重算时缺少本块，边界 1 格固化暗值，本块到达后必须补亮，否则形成视觉暗环。
+- **带光**（`network.lightStrip=false` 或原版）：权威光照随包落地（apply 时 queueSectionData 生效），无需重算；先落地内圈块重算时缺失本块的边界差值——官方路径由帧尾 `flushPendingCalibrations` 兜底（官方队列跨块传播天然合并），并行路径由引擎后台传播域（核心柱 ±16 格）承担。
 - **无光**（`network.lightStrip=true` 默认 / 缓存 `is_light_on=0`）：`applyLightEngineNow`：
   1. `restoreCachedLightToEngine`：R2 缓存有光时先灌旧光（内容过期没关系），重算完成前渲染不黑块；无缓存（R1）跳过。
-  2. 并行引擎开（默认）→ `submitRecompute` 异步入队，立即返回。
-  3. 并行引擎关 → 同步 `applyLightEngine` 主线程重算（卡顿路径，仅调试用）。
+  2. 并行引擎开 → `submitRecompute` 异步入队，立即返回。
+  3. 并行引擎关（默认）→ 入 `ClientLightBufferQueue` 统一异步缓冲队列，帧尾按预算消费（每帧 5ms，~2-3 块；剩余留帧，不阻塞 apply 链路）。
 
 `LightDelta` 是旁路：`handleLightDeltaPacket` 建层 + `propagateLightSources` 本地重算（跳过跨块传播），标缓存脏；residual 由后续渲染帧 drain。
 
@@ -131,6 +133,8 @@ capture 排队（~240 帧，R1 625 块 × 9 柱 ÷ 24 柱/帧）
   + NEIGHBOR_WAIT_FRAMES=10（0.5s，等螺旋序邻居 1-5 帧到达）
   + drain 落地（帧预算内）
 ```
+
+官方引擎路径（默认）：缓冲队列 5ms/帧预算 → 加载风暴（32 块/帧）下积压多帧消化，暗块窗口随队列积压增长（每帧 ~2-3 块，625 块 ≈ 4-5s）；预算为部分主线程占用，帧时间不被单帧峰值击穿。
 
 优化杠杆（已落地，R1 完成率 30%→98%）：`MAX_CAPTURE_COLUMNS_PER_FRAME=24`、`CAPTURE_BUDGET_NS=5ms`、`SNAPSHOT_CACHE_MAX=256`（命中 62%）、`NEIGHBOR_WAIT_FRAMES=10`。
 
@@ -148,7 +152,9 @@ capture 排队（~240 帧，R1 625 块 × 9 柱 ÷ 24 柱/帧）
 | `ClientMainThreadBudget` | apply 帧预算（JoinBoost / normal / hardCap） |
 | `MixinVanillaChunkApplyBudget` | 原版 chunk 包 apply 预算化 |
 | `ClientCacheLoadQueue` | R2 磁盘读回（region 级并发） |
-| `ClientLightRecomputeService` | 光照入口：预灌旧光、同步/并行分流、邻居校准 |
-| `LightComputeService` | 并行光照引擎：capture / solve / drain |
+| `ClientLightRecomputeService` | 光照编排：预灌旧光、并行/官方分派、同步重算实现（缓冲队列消费用） |
+| `ClientLightBufferQueue` | 官方引擎统一异步缓冲队列：帧内收集、帧尾预算消费 |
+| `PromethiumLightBridge` | 并行光照引擎运行时桥接（反射发现 Promethium MOD；MOD 缺席自动降级官方引擎） |
+| `ParallelLightEngine`（Promethium MOD 内） | 并行光照引擎：capture / solve / drain（`parallelLightEngineEnabled=true` 且 MOD 安装时） |
 | `ClientMetadataHandler.handleLightDeltaPacket` | LightDelta 旁路本地重算 |
 | `CacheSaveQueue` | 后台写盘（含光照回写） |

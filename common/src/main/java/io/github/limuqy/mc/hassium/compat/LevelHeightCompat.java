@@ -1,4 +1,4 @@
-package io.github.limuqy.mc.promethium.compat;
+package io.github.limuqy.mc.hassium.compat;
 
 import net.minecraft.world.level.LevelHeightAccessor;
 

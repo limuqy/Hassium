@@ -420,7 +420,14 @@ public class ClientCacheLoadQueue {
             // （MixinLightRecompute TAIL 的精确提交仍会执行并覆盖粗结果，双算成本可忽略）。
             // renderOnly 走 VDES 自己的路径，不预提交。
             if (!chunk.renderOnly() && !chunk.hasCachedLight()) {
-                io.github.limuqy.mc.promethium.light.ParallelLightEngine.getInstance().submitRecompute(chunk.pos(), chunk.lightWritebackNbt());
+                if (PromethiumLightBridge.isEnabled()) {
+                    PromethiumLightBridge
+                            .submitRecompute(chunk.pos(), chunk.lightWritebackNbt());
+                } else {
+                    // 官方引擎：预入统一缓冲队列（内存 NBT，省 TAIL 读盘）；
+                    // TAIL 的 applyLightEngineNow 重复入队去重，不会双算。
+                    ClientLightBufferQueue.getInstance().enqueue(chunk.pos(), chunk.lightWritebackNbt());
+                }
             }
             boolean appliedToWorld = ClientChunkHandler.applyChunkData(
                     chunk.pos().x, chunk.pos().z, chunk.data(), chunk.renderOnly(),

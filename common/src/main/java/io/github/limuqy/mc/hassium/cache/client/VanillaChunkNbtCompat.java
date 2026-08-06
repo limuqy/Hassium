@@ -2,7 +2,7 @@ package io.github.limuqy.mc.hassium.cache.client;
 
 import com.mojang.serialization.Codec;
 import io.github.limuqy.mc.hassium.compat.ChunkPacketDataCompat;
-import io.github.limuqy.mc.promethium.compat.CompoundTagCompat;
+import io.github.limuqy.mc.hassium.compat.CompoundTagCompat;
 import io.github.limuqy.mc.hassium.compat.LevelChunkSectionCompat;
 import io.github.limuqy.mc.hassium.compat.RegistryCompat;
 import net.minecraft.core.Holder;

@@ -1,11 +1,9 @@
 package io.github.limuqy.mc.hassium.cache.client;
 
 import io.github.limuqy.mc.hassium.Constants;
-import io.github.limuqy.mc.promethium.compat.CompoundTagCompat;
+import io.github.limuqy.mc.hassium.compat.CompoundTagCompat;
 import io.github.limuqy.mc.hassium.network.ClientChunkHandler;
 import io.github.limuqy.mc.hassium.metrics.NetworkStats;
-import io.github.limuqy.mc.hassium.config.HassiumConfigService;
-import io.github.limuqy.mc.promethium.light.ParallelLightEngine;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.core.SectionPos;
@@ -16,18 +14,19 @@ import net.minecraft.world.level.chunk.LevelChunk;
 import net.minecraft.world.level.lighting.LevelLightEngine;
 
 /**
- * 客户端光照重算服务（从 Mixin 抽出，避免 Mixin 类上出现 public static）。
+ * 客户端光照重算编排（从 Mixin 抽出，避免 Mixin 类上出现 public static）。
  * <p>
- * 合并 apply+光照 pipeline：剥离光照包到达或超视渲染 renderOnly apply 后，
- * 由调用方在主线程同步调 {@link #applyLightEngineNow}，
- * 不再经过 {@code MainThreadDispatcher} 延迟调度，避免跨帧黑块。
- * <p>
- * 限流由 {@code ClientCacheLoadQueue.processQueueUntil} 的时间预算自然约束
- * （apply+光照作为一个整体受预算限制）。
- * <p>
+ * 剥离光照包到达或超视渲染 renderOnly apply 后，调用方经 {@link #applyLightEngineNow}
+ * 分派重算：
+ * <ul>
+ *   <li>并行引擎（默认关）：转交 {@code ParallelLightEngine.submitRecompute}，后台 BFS
+ *       重算 + 主线程帧尾预算落地（本方法立即返回）。</li>
+ *   <li>官方引擎（默认）：入 {@link ClientLightBufferQueue}，帧尾预算内消费
+ *       （每帧部分预算，不阻塞 apply 链路）。</li>
+ * </ul>
  * 官方引擎原语（safeRunLightUpdates / 建层 / 邻居拉光 / 缓存写回）已迁往
  * {@link HassiumLightHooks}（Promethium 引擎经 {@code LightEngineHooks} 消费）；
- * 本类只保留编排逻辑与同步路径。
+ * 本类只保留编排逻辑与两路径共用的同步重算实现（{@link #applyLightEngine}）。
  */
 public final class ClientLightRecomputeService {
 
@@ -72,16 +71,15 @@ public final class ClientLightRecomputeService {
         // 先用磁盘缓存光填充引擎（缓存有光时）：内容虽过期，但重算完成前渲染不再黑块。
         // 并行引擎后台提交期间旧光持续可见，提交后原子换成新光。
         restoreCachedLightToEngine(level, chunkPos, nbt);
-        // 并行光照引擎（默认关）：分流到后台全量重算 + 主线程原子提交，本方法立即返回
-        if (HassiumConfigService.getInstance().isParallelLightEngineEnabled()) {
-            ParallelLightEngine.getInstance().submitRecompute(chunkPos, nbt);
+        // 并行光照引擎（默认关；Promethium MOD 缺席自动回退）：分流到后台全量重算 + 主线程
+        // 原子提交，本方法立即返回
+        if (PromethiumLightBridge.isEnabled()) {
+            PromethiumLightBridge.submitRecompute(chunkPos, nbt);
             return;
         }
-        applyLightEngine(level, chunk, chunkPos);
-        // 仅光照缓存开启时回写磁盘；关闭时只重算不存储
-        if (HassiumConfigService.getInstance().isLightCacheEnabled()) {
-            HassiumLightHooks.INSTANCE.updateCacheWithLightData(level, chunkPos, nbt);
-        }
+        // 官方引擎：入统一缓冲队列，帧尾预算内消费（每帧部分预算；缓存写回在消费时完成）。
+        // 不在此同步重算——逐块立即重算会挤占 chunk apply 预算造成帧时间锯齿。
+        ClientLightBufferQueue.getInstance().enqueue(chunkPos, nbt);
     }
 
     /**
@@ -133,8 +131,8 @@ public final class ClientLightRecomputeService {
             // 「新地形 + 引擎无光」的黑块窗口，重算完成后原子覆盖。
             // 剥光缓存（is_light_on=0 且全 section 无光字段）循环后 anyRestored=false 自然跳过。
             LevelLightEngine lightEngine = level.getLightEngine();
-            int minSection = io.github.limuqy.mc.promethium.compat.LevelHeightCompat.getMinSection(level);
-            int maxSection = io.github.limuqy.mc.promethium.compat.LevelHeightCompat.getMaxSectionExclusive(level);
+            int minSection = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMinSection(level);
+            int maxSection = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMaxSectionExclusive(level);
             net.minecraft.nbt.ListTag sectionsList = CompoundTagCompat.getList(cachedNbt, "sections");
 
             boolean anyRestored = false;
@@ -195,26 +193,9 @@ public final class ClientLightRecomputeService {
     }
 
     /**
-     * 断连时清空（自研传播域无跨线程状态需清空；保留占位，断连由 generation 拒绝旧任务）。
-     * <p>
-     * 供 {@code ClientLifecycleHelper} 调用，保持调用方不变。
-     */
-    public static void clear() {
-        // 无状态需清空（官方校准链已退役，传播域在后台任务内）
-    }
-
-    /**
-     * 邻居吸收已由自研传播域完成（后台传播域 = 核心柱 ±16 格，覆盖邻居柱全宽；主线程只做
-     * memcpy 落地）。本方法为空实现，仅为兼容调用点（{@code MixinLightRecompute}）保留。
-     */
-    public static void calibrateLoadedNeighbors(ClientLevel level, ChunkPos pos) {
-        // 官方校准链退役：邻居吸收由 ParallelLightEngineImpl 后台传播域承担
-    }
-
-    /**
      * 帧尾（Minecraft.tick TAIL、渲染前）兜底清空官方光照传播队列：
-     * 自研传播域任务不再入官方队列，这里只处理原版方块变化 / 数据包 delta 路径触发的
-     * 低频传播（nodes 应接近 0，对比自研铺开前 parsort 轮峰值 32 万）。
+     * 缓冲队列消费（chunk 重算）已处理自己入队的传播节点；这里只兜底原版方块变化 /
+     * 数据包 delta 路径触发的低频传播（nodes 应接近 0，对比自研铺开前 parsort 轮峰值 32 万）。
      */
     public static void flushPendingCalibrations() {
         ClientLevel level = Minecraft.getInstance().level;
@@ -236,8 +217,8 @@ public final class ClientLightRecomputeService {
     static void applyLightEngine(ClientLevel level, LevelChunk chunk, ChunkPos chunkPos) {
         long startNs = System.nanoTime();
         try {
-            int bottomSection = io.github.limuqy.mc.promethium.compat.LevelHeightCompat.getMinSection(level);
-            int topSection = io.github.limuqy.mc.promethium.compat.LevelHeightCompat.getMaxSectionExclusive(level);
+            int bottomSection = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMinSection(level);
+            int topSection = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMaxSectionExclusive(level);
 
             LevelLightEngine lightEngine = level.getLightEngine();
             lightEngine.setLightEnabled(chunkPos, true);

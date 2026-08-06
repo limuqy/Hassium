@@ -180,7 +180,7 @@ class DeltaMergeTest {
         Tag idTag = be0.get("id");
         assertTrue(idTag instanceof net.minecraft.nbt.StringTag, "id 应为 StringTag");
         assertEquals("new_be_1",
-                io.github.limuqy.mc.promethium.compat.CompoundTagCompat.getString(
+                io.github.limuqy.mc.hassium.compat.CompoundTagCompat.getString(
                         (net.minecraft.nbt.StringTag) idTag));
     }
 

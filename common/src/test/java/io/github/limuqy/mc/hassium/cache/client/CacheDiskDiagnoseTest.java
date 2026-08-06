@@ -1,7 +1,7 @@
 package io.github.limuqy.mc.hassium.cache.client;
 
 import io.github.limuqy.mc.hassium.cache.ChunkContentHashUtil;
-import io.github.limuqy.mc.promethium.compat.CompoundTagCompat;
+import io.github.limuqy.mc.hassium.compat.CompoundTagCompat;
 import io.github.limuqy.mc.hassium.compression.HassiumCompression;
 import io.github.limuqy.mc.hassium.network.DictionaryManager;
 import net.minecraft.core.RegistryAccess;

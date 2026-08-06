@@ -4,9 +4,8 @@ import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.mixin.LevelLightEngineAccessor;
 import io.github.limuqy.mc.hassium.mixin.LightEngineAccessor;
 import io.github.limuqy.mc.hassium.network.ClientChunkHandler;
-import io.github.limuqy.mc.promethium.compat.CompoundTagCompat;
-import io.github.limuqy.mc.promethium.compat.LevelHeightCompat;
-import io.github.limuqy.mc.promethium.light.LightEngineHooks;
+import io.github.limuqy.mc.hassium.compat.CompoundTagCompat;
+import io.github.limuqy.mc.hassium.compat.LevelHeightCompat;
 import it.unimi.dsi.fastutil.longs.LongArrayFIFOQueue;
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import net.minecraft.client.multiplayer.ClientLevel;
@@ -23,16 +22,16 @@ import net.minecraft.world.level.lighting.LightEngine;
 /**
  * Promethium 光照引擎的 Hassium 侧钩子实现。
  * <p>
- * 官方引擎原语（依赖 hassium.mixin accessor）与磁盘缓存读写全部留在此处，
- * 引擎包通过 {@link LightEngineHooks} 消费，不反向依赖 Hassium。
+ * 官方引擎原语（依赖 hassium.mixin accessor）与磁盘缓存读写全部留在此处；
+ * 引擎接口（LightEngineHooks）在 Promethium MOD 内，Hassium 无编译依赖——本类不
+ * implements 接口，由 {@link PromethiumLightBridge} 经反射 Proxy 包装注入，不反向依赖。
  */
-public final class HassiumLightHooks implements LightEngineHooks {
+public final class HassiumLightHooks {
 
     public static final HassiumLightHooks INSTANCE = new HassiumLightHooks();
 
     private HassiumLightHooks() {}
 
-    @Override
     public int safeRunLightUpdates(LevelLightEngine lightEngine) {
         try {
             return lightEngine.runLightUpdates();
@@ -72,7 +71,6 @@ public final class HassiumLightHooks implements LightEngineHooks {
         }
     }
 
-    @Override
     public void ensureColumnDataLayers(ClientLevel level, LevelLightEngine lightEngine,
                                        ChunkPos chunkPos, int bottomSection, int topSection) {
         for (int sectionY = bottomSection; sectionY < topSection; sectionY++) {
@@ -82,7 +80,6 @@ public final class HassiumLightHooks implements LightEngineHooks {
         }
     }
 
-    @Override
     public void ensureNeighborDataLayers(ClientLevel level, LevelLightEngine lightEngine,
                                          ChunkPos chunkPos, int bottomSection, int topSection) {
         ensureNeighborColumnIfLoaded(level, lightEngine, chunkPos.x + 1, chunkPos.z, bottomSection, topSection);
@@ -103,7 +100,6 @@ public final class HassiumLightHooks implements LightEngineHooks {
         }
     }
 
-    @Override
     public void pullLightFromNeighborEdges(ClientLevel level, ChunkPos chunkPos,
                                            int bottomSection, int topSection) {
         LevelLightEngine lightEngine = level.getLightEngine();
@@ -240,7 +236,6 @@ public final class HassiumLightHooks implements LightEngineHooks {
         return layer == null || layer.isEmpty();
     }
 
-    @Override
     public void updateCacheWithLightData(ClientLevel level, ChunkPos chunkPos, CompoundTag cachedNbt) {
         try {
             ClientHassiumStorage storage = ClientChunkHandler.getClientStorage();
@@ -320,7 +315,6 @@ public final class HassiumLightHooks implements LightEngineHooks {
         }
     }
 
-    @Override
     public CompoundTag loadChunkNbtFromCache(ChunkPos pos) {
         return ClientChunkHandler.loadChunkNbtFromCache(pos);
     }

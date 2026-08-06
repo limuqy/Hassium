@@ -379,8 +379,8 @@ public final class FabricTomlConfigIO {
         set(cfg, "clientCache.lightCacheEnabled", c.lightCacheEnabled(), "是否启用光照缓存");
         set(cfg, "clientCache.maxChunksPerFrame", c.maxChunksPerFrame(), "每帧应用缓存区块硬顶");
         set(cfg, "clientCache.mainThreadChunkBudgetMs", c.mainThreadChunkBudgetMs(), "主线程 apply 预算（ms）");
-        set(cfg, "clientCache.parallelLightEngineEnabled", c.parallelLightEngineEnabled(), "是否启用多线程光照引擎（后台并行重算光照；默认开启）");
-        set(cfg, "clientCache.parallelLightEngineThreads", c.parallelLightEngineThreads(), "多线程光照引擎线程数（虚拟线程模式忽略）");
+        set(cfg, "clientCache.parallelLightEngineEnabled", c.parallelLightEngineEnabled(), "是否启用并行光照引擎（需接入 Promethium 光照引擎；默认 false=官方光照计算，光照重算经统一异步缓冲队列预算消费）");
+        set(cfg, "clientCache.parallelLightEngineThreads", c.parallelLightEngineThreads(), "并行光照引擎线程数（虚拟线程模式忽略）");
     }
 
     private static HassiumConfig.ClientNetworkConfig readClientNetwork(CommentedConfig cfg) {

@@ -55,6 +55,8 @@
     "hassium.configuration.clientCache.maxChunksPerFrame.tooltip":  "Hard cap when applying cached chunks; time budget is the main limiter. Default: 32.",
     "hassium.configuration.clientCache.mainThreadChunkBudgetMs":  "Main Thread Budget",
     "hassium.configuration.clientCache.mainThreadChunkBudgetMs.tooltip":  "Per-frame main thread chunk apply budget in ms (default 15)",
+    "hassium.configuration.clientCache.parallelLightEngineEnabled":  "Parallel Light Engine",
+    "hassium.configuration.clientCache.parallelLightEngineEnabled.tooltip":  "Enable background parallel recompute once the Promethium light engine is integrated. Default: false (vanilla light computation via the unified async buffer queue with per-frame budget).",
     "hassium.configuration.storage":  "Storage",
     "hassium.configuration.storage.button":  "Storage…",
     "hassium.configuration.storage.enabled":  "Enable world compression",

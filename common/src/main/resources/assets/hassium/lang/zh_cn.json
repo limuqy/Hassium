@@ -55,6 +55,8 @@
     "hassium.configuration.clientCache.maxChunksPerFrame.tooltip":  "应用缓存区块的安全硬顶；主限流为时间预算。默认 32。",
     "hassium.configuration.clientCache.mainThreadChunkBudgetMs":  "主线程预算",
     "hassium.configuration.clientCache.mainThreadChunkBudgetMs.tooltip":  "每帧主线程应用区块的时间预算（毫秒，默认 15）",
+    "hassium.configuration.clientCache.parallelLightEngineEnabled":  "并行光照引擎",
+    "hassium.configuration.clientCache.parallelLightEngineEnabled.tooltip":  "接入 Promethium 光照引擎后启用后台并行重算。默认 false（官方光照计算，光照重算经统一异步缓冲队列预算消费）。",
     "hassium.configuration.storage":  "存储",
     "hassium.configuration.storage.button":  "存储…",
     "hassium.configuration.storage.enabled":  "启用存档压缩",

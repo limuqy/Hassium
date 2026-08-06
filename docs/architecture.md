@@ -102,7 +102,7 @@ Sector 3+:    [length(4)][type=126][ZSTD 压缩数据]
 | `network.dataPlane.failoverExpiryMs` | 30000 | 服务端 `FailoverPermit` 有效期（ms） |
 | `network.dataPlane.recoveryWindowMs` | 60000 | 客户端候选重连窗口（ms） |
 | `clientCache.mainThreadChunkBudgetMs` | 15 | 客户端主线程 apply 预算（ms） |
-| `clientCache.parallelLightEngineEnabled` | true | 并行光照：重算在后台线程池执行，主线程只提交快照 |
+| `clientCache.parallelLightEngineEnabled` | false | 并行光照（需接入 Promethium）：默认官方引擎——光照重算经统一异步缓冲队列，帧尾按预算消费（每帧部分预算，剩余留帧）；开启后转 Promethium 后台线程池重算 + 主线程帧预算原子落地 |
 | `clientCache.parallelLightEngineThreads` | 4 | 并行光照线程数（虚拟线程模式忽略） |
 | `clientCache.lightCacheEnabled` | true | 光照缓存：首次加载重算后存储光照，缓存命中直接应用 |
 | `network.lightStrip` | true | 光照剥离：服务端发包带空 lightMask，客户端本地重算 |
@@ -192,7 +192,7 @@ ERROR / WARN 始终输出。
 |------|-------------|------|------|
 | **光照剥离** | `network.lightStrip`（默认 true） | 服务端发包带空 lightMask（构造近零成本）；客户端本地重算并回写缓存 | [`chunk-cache.md`](chunk-cache.md)、[`runtime-smoke-test.md`](runtime-smoke-test.md) |
 | **光照缓存** | `clientCache.lightCacheEnabled`（默认 true） | 首次重算后缓存光照，命中直接 apply 跳过同步重算；SectionDelta 合并强制失效 | [`chunk-cache.md`](chunk-cache.md)、[`disk-nbt-cache.md`](disk-nbt-cache.md) |
-| **并行光照** | `clientCache.parallelLightEngineEnabled`（默认 true）、`parallelLightEngineThreads`（4） | 重算在后台线程池并行，主线程只做 9 柱快照捕获与提交；完成回调在预算内排程 | [`chunk-cache.md`](chunk-cache.md)、[`runtime-smoke-test.md`](runtime-smoke-test.md) |
+| **并行光照** | `clientCache.parallelLightEngineEnabled`（默认 false）、`parallelLightEngineThreads`（4） | 可选：需安装 Promethium MOD（客户端运行时经 `PromethiumLightBridge` 反射发现，零编译依赖；MOD 缺席自动降级官方引擎）。开启后重算在后台线程池并行，主线程只做快照捕获与帧预算内原子落地；默认官方引擎——光照重算经统一异步缓冲队列（帧尾预算消费，每帧部分预算） | [`chunk-cache.md`](chunk-cache.md)、[`runtime-smoke-test.md`](runtime-smoke-test.md) |
 
 客户端磁盘缓存 payload 为 NBT（`"HBT1"` + CompoundTag），主一致性路径为 **Live-Unload Snapshot**（renderOnly 跳过落盘）。控制恢复期间缓存写队列与执行器保持可用，重连成功后继续命中既有缓存；旧 packet 字节缓存读到即删并全量请求。
 
