@@ -2,9 +2,12 @@ package io.github.limuqy.mc.hassium.server;
 
 import io.github.limuqy.mc.hassium.metrics.NetworkStats;
 import io.github.limuqy.mc.hassium.network.dataplane.DataPlanePoCConfig;
+import net.minecraft.core.BlockPos;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.state.BlockState;
 #if MC_VER < MC_1_20_5
 import net.minecraft.world.level.chunk.ChunkStatus;
 #else
@@ -46,6 +49,8 @@ public final class ServerSmokeTest {
     private static volatile int vd1 = 20;
     private static volatile int vd2 = 8;
     private static volatile int lastPlayerCount = 0;
+    /** R2 方块变化注入已执行（离线窗口一次性） */
+    private static volatile boolean blockChangeInjected = false;
 
     /** 阶段选择：classic = 现有两轮连服（VD 切换）。Task 10b §2.1 退役 dataplane 后仅剩 classic。 */
     private static volatile boolean runClassic = true;
@@ -162,11 +167,48 @@ public final class ServerSmokeTest {
                             MARKER, vd1, vd2);
                     server.getPlayerList().setViewDistance(vd2);
                     LOGGER.info("{} view-distance switched to {}", MARKER, vd2);
+                    // 玩家离线窗口注入方块变化：R2 客户端缓存 hash mismatch → section delta →
+                    // 客户端增量分段光照重算路径（[LIGHT-SEG]）真实触发（无变化时该路径不会走）。
+                    injectR2BlockChange(server);
                 }
                 lastPlayerCount = currentCount;
             }
         } catch (Throwable t) {
             LOGGER.error("{} tick error", MARKER, t);
+        }
+    }
+
+    /**
+     * R2 方块变化注入：第一个玩家退出后（离线窗口）在世界出生点上方放置一堵 4 格高的
+     * 石墙（横跨 VD8 全宽）。R2 客户端缓存读回时该区域 chunkHash 不一致 →
+     * section hash 请求 → 服务端回 SectionDeltaS2CPacket → 客户端 merge 后 NBT 中变化
+     * section 缺光字段 → 增量分段光照重算（[LIGHT-SEG]）。仅冒烟（hassium.serverSmokeTest）启用。
+     */
+    private static void injectR2BlockChange(MinecraftServer server) {
+        if (blockChangeInjected) {
+            return;
+        }
+        blockChangeInjected = true;
+        try {
+            ServerLevel overworld = server.getLevel(Level.OVERWORLD);
+            if (overworld == null) {
+                return;
+            }
+            BlockState stone = Blocks.STONE.defaultBlockState();
+            BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
+            // 墙：x ∈ [-128, 128)（VD8 半径内全部 chunk），z ∈ [2, 4)（避开出生点 z≈0.5），y ∈ [64, 68)
+            for (int x = -128; x < 128; x++) {
+                for (int z = 2; z < 4; z++) {
+                    for (int y = 64; y < 68; y++) {
+                        pos.set(x, y, z);
+                        overworld.setBlock(pos, stone, 3);
+                    }
+                }
+            }
+            LOGGER.info("{} injected stone wall x=[-128,128) y=[64,68) z=[2,4) for R2 section-delta light path",
+                    MARKER);
+        } catch (Throwable t) {
+            LOGGER.error("{} block-change injection failed", MARKER, t);
         }
     }
 

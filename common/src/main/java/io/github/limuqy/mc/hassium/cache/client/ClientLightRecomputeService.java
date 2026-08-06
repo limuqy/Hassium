@@ -65,18 +65,49 @@ public final class ClientLightRecomputeService {
         }
         // 加载活跃：续期 JoinBoost 窗口（固定 10s 窗口在 1021 块全量加载下会中途退坡 → 后段掉速）
         ClientMainThreadBudget.noteChunkApplyActivity();
+        // 读盘一次：重算用缓存 NBT（先灌旧光，再供并行引擎域推断/壳光/写回复用）。
+        // 磁盘 hash 有效才读（R1 空缓存归零），返回 null = 无缓存/不可信。
+        net.minecraft.nbt.CompoundTag nbt = cachedNbt;
+        if (nbt == null) {
+            nbt = loadCachedNbtForRecompute(chunkPos);
+        }
         // 先用磁盘缓存光填充引擎（缓存有光时）：内容虽过期，但重算完成前渲染不再黑块。
         // 并行引擎后台提交期间旧光持续可见，提交后原子换成新光。
-        restoreCachedLightToEngine(level, chunkPos, cachedNbt);
+        restoreCachedLightToEngine(level, chunkPos, nbt);
         // 并行光照引擎（默认关）：分流到后台全量重算 + 主线程原子提交，本方法立即返回
         if (HassiumConfigService.getInstance().isParallelLightEngineEnabled()) {
-            LightComputeService.getInstance().submitRecompute(chunkPos, cachedNbt);
+            LightComputeService.getInstance().submitRecompute(chunkPos, nbt);
             return;
         }
         applyLightEngine(level, chunk, chunkPos);
         // 仅光照缓存开启时回写磁盘；关闭时只重算不存储
         if (HassiumConfigService.getInstance().isLightCacheEnabled()) {
-            updateCacheWithLightData(level, chunkPos, cachedNbt);
+            updateCacheWithLightData(level, chunkPos, nbt);
+        }
+    }
+
+    /**
+     * 重算用缓存 NBT：磁盘 hash 有效才读（R1 空缓存归零），返回 null = 无缓存/不可信。
+     */
+    private static net.minecraft.nbt.CompoundTag loadCachedNbtForRecompute(ChunkPos chunkPos) {
+        try {
+            ClientHassiumStorage storage = ClientChunkHandler.getClientStorage();
+            if (storage == null) {
+                return null;
+            }
+            // 轻量前置检查：元数据无有效 hash = 无缓存（或不可信），跳过读盘。
+            // R1 缓存为空场景（每块白读盘）与 hash 未写回场景都靠此 gate 归零开销。
+            long diskHash = storage.readChunkHash(chunkPos);
+            if (diskHash == 0L || diskHash == 1L) {
+                return null;
+            }
+            byte[] cachedData = storage.loadAndDecompress(chunkPos);
+            if (cachedData == null) {
+                return null;
+            }
+            return ChunkDiskCodec.bytesToNbt(cachedData);
+        } catch (Exception e) {
+            return null;
         }
     }
 
@@ -89,30 +120,15 @@ public final class ClientLightRecomputeService {
      * <p>
      * 无缓存 / 缓存无光（is_light_on=0）/ 解析失败 → 静默跳过，行为与改造前一致。
      * 不记 cache hit 统计：内容已过期，重算照常发生。
+     * <p>
+     * 读盘由 {@link #applyLightEngineNow} 的 {@code loadCachedNbtForRecompute} 统一完成
+     * （hash gate 在彼处）；本方法只消费已解析 NBT（null = 无缓存/不可信，跳过）。
      */
     private static void restoreCachedLightToEngine(ClientLevel level, ChunkPos chunkPos,
                                                    net.minecraft.nbt.CompoundTag cachedNbt) {
         try {
-            ClientHassiumStorage storage = ClientChunkHandler.getClientStorage();
-            if (storage == null) {
+            if (cachedNbt == null) {
                 return;
-            }
-            // 轻量前置检查：元数据无有效 hash = 无缓存（或不可信），跳过读盘。
-            // R1 缓存为空场景（每块白读盘）与 hash 未写回场景都靠此 gate 归零开销。
-            long diskHash = storage.readChunkHash(chunkPos);
-            if (diskHash == 0L || diskHash == 1L) {
-                return;
-            }
-            net.minecraft.nbt.CompoundTag nbt = cachedNbt;
-            if (nbt == null) {
-                byte[] cachedData = storage.loadAndDecompress(chunkPos);
-                if (cachedData == null) {
-                    return;
-                }
-                nbt = ChunkDiskCodec.bytesToNbt(cachedData);
-                if (nbt == null) {
-                    return;
-                }
             }
             // 不 gate is_light_on：SectionDelta merge 后写盘 is_light_on=0，但未变 section
             // 的旧光字段保留——delta 块重算（并行引擎异步）完成前灌旧光显示，消除
@@ -121,7 +137,7 @@ public final class ClientLightRecomputeService {
             LevelLightEngine lightEngine = level.getLightEngine();
             int minSection = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMinSection(level);
             int maxSection = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMaxSectionExclusive(level);
-            net.minecraft.nbt.ListTag sectionsList = CompoundTagCompat.getList(nbt, "sections");
+            net.minecraft.nbt.ListTag sectionsList = CompoundTagCompat.getList(cachedNbt, "sections");
 
             boolean anyRestored = false;
             for (int sectionY = minSection; sectionY < maxSection; sectionY++) {

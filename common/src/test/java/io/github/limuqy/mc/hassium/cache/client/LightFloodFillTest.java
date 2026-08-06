@@ -168,4 +168,199 @@ class LightFloodFillTest {
         assertEquals(0, at(r.blockLight(), 25, 24, 24), "遮挡阻断传播");
         assertEquals(0, at(r.blockLight(), 24, 25, 24), "遮挡阻断传播（上方）");
     }
+
+    // ---- 分段重算（壳层种子）对照 ----
+
+    /** 从全量解提取一层壳种子：(level<<20)|((layerWorldY-domBaseY)*W+z)*W+x；level>0 才收。 */
+    private static int[] shellLayer(byte[] full, int layerWorldY, int domBaseY) {
+        int[] seeds = new int[WW];
+        int n = 0;
+        for (int z = 0; z < W; z++) {
+            for (int x = 0; x < W; x++) {
+                int level = full[layerWorldY * WW + z * W + x] & 0xFF;
+                if (level > 0) {
+                    seeds[n++] = (level << 20) | ((layerWorldY - domBaseY) * W + z) * W + x;
+                }
+            }
+        }
+        return java.util.Arrays.copyOf(seeds, n);
+    }
+
+    private static int[] concat(int[] a, int[] b) {
+        int[] r = java.util.Arrays.copyOf(a, a.length + b.length);
+        System.arraycopy(b, 0, r, a.length, b.length);
+        return r;
+    }
+
+    /** 随机域（固定 seed 42）：lightBlock 每格 0–15、6 个 emission=8 光源、sourceY 随机 NEG_INF 或 [0,96)。 */
+    private static void randomWorld(java.util.Random rnd, int fullH,
+                                    byte[] lb, int[] shapeIds, int[] emitters, int[] sourceY) {
+        int fullSize = WW * fullH;
+        for (int i = 0; i < fullSize; i++) {
+            lb[i] = (byte) rnd.nextInt(16);
+            shapeIds[i] = rnd.nextInt(2);
+        }
+        for (int i = 0; i < emitters.length; i++) {
+            emitters[i] = (8 << 20) | rnd.nextInt(fullSize);
+        }
+        for (int c = 0; c < WW; c++) {
+            sourceY[c] = rnd.nextBoolean() ? LightFloodFill.NEG_INF : rnd.nextInt(fullH);
+        }
+    }
+
+    /** 子域逐格对比断言：分段解（域内 y = 世界 y - domBase）与全量解在 D=[domMin,domMax) 相等。 */
+    private static void assertSubdomainEquals(byte[] full, byte[] seg, int domBase, int domMin, int domMax, String layer) {
+        for (int y = domMin; y < domMax; y++) {
+            int ly = y - domBase;
+            for (int z = 0; z < W; z++) {
+                for (int x = 0; x < W; x++) {
+                    int fullIdx = y * WW + z * W + x;
+                    int segIdx = ly * WW + z * W + x;
+                    assertEquals(full[fullIdx] & 0xFF, seg[segIdx] & 0xFF,
+                            layer + " mismatch at (" + x + "," + y + "," + z + ")");
+                }
+            }
+        }
+    }
+
+    /** 分段 solve ≡ 全量 solve：H=96 随机域，D=[16,64)，双壳（y=15/y=64 层值做种子）。 */
+    @Test
+    void segmentedSolveMatchesFullSolve() {
+        java.util.Random rnd = new java.util.Random(42L);
+        int fullH = 96;
+        int fullSize = WW * fullH;
+        byte[] lb = new byte[fullSize];
+        int[] shapeIds = new int[fullSize];
+        int[] emitters = new int[6];
+        int[] sourceY = new int[WW];
+        randomWorld(rnd, fullH, lb, shapeIds, emitters, sourceY);
+
+        LightFloodFill.Occlusion occ = neverOccludes();
+        byte[] fullSky = LightFloodFill.solveSky(W, fullH, lb, sourceY, shapeIds, occ, null, 0, 0);
+        byte[] fullBlock = LightFloodFill.solveBlock(W, fullH, lb, emitters, shapeIds, occ, null, 0, 0);
+
+        int domBase = 15; // 底壳世界 y；域内 y = 世界 y - 15
+        int domMin = 16, domMax = 64;
+        int segH = domMax - domMin + 2; // D 48 + 底壳 + 顶壳
+        int segSize = WW * segH;
+        byte[] segLb = new byte[segSize];
+        int[] segShape = new int[segSize];
+        int[] segSy = new int[WW];
+        int[] segEmitters = new int[emitters.length];
+        int nEmit = 0;
+        for (int c = 0; c < WW; c++) {
+            int sy = sourceY[c];
+            segSy[c] = (sy == LightFloodFill.NEG_INF || sy == LightFloodFill.NO_COLUMN) ? sy : sy - domBase;
+        }
+        for (int ly = 0; ly < segH; ly++) {
+            System.arraycopy(lb, (domBase + ly) * WW, segLb, ly * WW, WW);
+            System.arraycopy(shapeIds, (domBase + ly) * WW, segShape, ly * WW, WW);
+        }
+        for (int e : emitters) {
+            int cell = e & 0xFFFFF;
+            int y = cell / WW;
+            if (y < domMin || y >= domMax) {
+                continue; // 壳层内发射源已含在壳层光值里
+            }
+            int z = (cell / W) % W;
+            int x = cell % W;
+            segEmitters[nEmit++] = (e & ~0xFFFFF) | ((y - domBase) * W + z) * W + x;
+        }
+        int[] skyShell = concat(shellLayer(fullSky, domBase, domBase), shellLayer(fullSky, domMax, domBase));
+        int[] blockShell = concat(shellLayer(fullBlock, domBase, domBase), shellLayer(fullBlock, domMax, domBase));
+
+        byte[] segSky = LightFloodFill.solveSky(W, segH, segLb, segSy, segShape, occ, skyShell, 1, 1);
+        byte[] segBlock = LightFloodFill.solveBlock(W, segH, segLb,
+                java.util.Arrays.copyOf(segEmitters, nEmit), segShape, occ, blockShell, 1, 1);
+        assertSubdomainEquals(fullSky, segSky, domBase, domMin, domMax, "sky");
+        assertSubdomainEquals(fullBlock, segBlock, domBase, domMin, domMax, "block");
+    }
+
+    /** 底边贴世界底（无底壳）：D=[0,48)，只有顶壳（y=48 层），shellBottomLayers=0。 */
+    @Test
+    void segmentedAtBottomEdgeWithoutBottomShell() {
+        java.util.Random rnd = new java.util.Random(7L);
+        int fullH = 96;
+        int fullSize = WW * fullH;
+        byte[] lb = new byte[fullSize];
+        int[] shapeIds = new int[fullSize];
+        int[] emitters = new int[6];
+        int[] sourceY = new int[WW];
+        randomWorld(rnd, fullH, lb, shapeIds, emitters, sourceY);
+
+        LightFloodFill.Occlusion occ = neverOccludes();
+        byte[] fullSky = LightFloodFill.solveSky(W, fullH, lb, sourceY, shapeIds, occ, null, 0, 0);
+        byte[] fullBlock = LightFloodFill.solveBlock(W, fullH, lb, emitters, shapeIds, occ, null, 0, 0);
+
+        int domBase = 0; // 世界底即域底：无底壳
+        int domMin = 0, domMax = 48;
+        int segH = domMax - domMin + 1; // D 48 + 顶壳
+        int segSize = WW * segH;
+        byte[] segLb = new byte[segSize];
+        int[] segShape = new int[segSize];
+        int[] segEmitters = new int[emitters.length];
+        int nEmit = 0;
+        for (int ly = 0; ly < segH; ly++) {
+            System.arraycopy(lb, ly * WW, segLb, ly * WW, WW);
+            System.arraycopy(shapeIds, ly * WW, segShape, ly * WW, WW);
+        }
+        for (int e : emitters) {
+            int cell = e & 0xFFFFF;
+            int y = cell / WW;
+            if (y < domMin || y >= domMax) {
+                continue;
+            }
+            int z = (cell / W) % W;
+            int x = cell % W;
+            segEmitters[nEmit++] = (e & ~0xFFFFF) | (y * W + z) * W + x;
+        }
+        int[] skyShell = shellLayer(fullSky, domMax, domBase);
+        int[] blockShell = shellLayer(fullBlock, domMax, domBase);
+
+        byte[] segSky = LightFloodFill.solveSky(W, segH, segLb, sourceY, segShape, occ, skyShell, 0, 1);
+        byte[] segBlock = LightFloodFill.solveBlock(W, segH, segLb,
+                java.util.Arrays.copyOf(segEmitters, nEmit), segShape, occ, blockShell, 0, 1);
+        assertSubdomainEquals(fullSky, segSky, domBase, domMin, domMax, "sky");
+        assertSubdomainEquals(fullBlock, segBlock, domBase, domMin, domMax, "block");
+    }
+
+    /** 注入点恰在顶壳层（sy = 世界 64）：壳层预置值不被列注入覆盖，子域与全量一致。 */
+    @Test
+    void segmentedSkyShellNotOverwrittenByColumnInjection() {
+        java.util.Random rnd = new java.util.Random(99L);
+        int fullH = 96;
+        int fullSize = WW * fullH;
+        byte[] lb = new byte[fullSize];
+        int[] shapeIds = new int[fullSize];
+        int[] emitters = new int[6];
+        int[] sourceY = new int[WW];
+        randomWorld(rnd, fullH, lb, shapeIds, emitters, sourceY);
+        int colX = 24, colZ = 31;
+        sourceY[colZ * W + colX] = 64; // 注入点位于顶壳层（世界 y=64 = 域内 y=49）
+
+        LightFloodFill.Occlusion occ = neverOccludes();
+        byte[] fullSky = LightFloodFill.solveSky(W, fullH, lb, sourceY, shapeIds, occ, null, 0, 0);
+        assertEquals(15, fullSky[64 * WW + colZ * W + colX] & 0xFF, "全量解壳层格 = 15（列注入覆盖）");
+
+        int domBase = 15;
+        int domMin = 16, domMax = 64;
+        int segH = domMax - domMin + 2;
+        int segSize = WW * segH;
+        byte[] segLb = new byte[segSize];
+        int[] segShape = new int[segSize];
+        int[] segSy = new int[WW];
+        for (int c = 0; c < WW; c++) {
+            int sy = sourceY[c];
+            segSy[c] = (sy == LightFloodFill.NEG_INF || sy == LightFloodFill.NO_COLUMN) ? sy : sy - domBase;
+        }
+        for (int ly = 0; ly < segH; ly++) {
+            System.arraycopy(lb, (domBase + ly) * WW, segLb, ly * WW, WW);
+            System.arraycopy(shapeIds, (domBase + ly) * WW, segShape, ly * WW, WW);
+        }
+        int[] skyShell = concat(shellLayer(fullSky, domBase, domBase), shellLayer(fullSky, domMax, domBase));
+        byte[] segSky = LightFloodFill.solveSky(W, segH, segLb, segSy, segShape, occ, skyShell, 1, 1);
+        // 壳层预置值保留（列注入/种子循环跳过壳层格，未被覆盖或改写）
+        assertEquals(15, segSky[49 * WW + colZ * W + colX] & 0xFF, "顶壳格值 = 预置值");
+        assertSubdomainEquals(fullSky, segSky, domBase, domMin, domMax, "sky");
+    }
 }

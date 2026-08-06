@@ -701,11 +701,18 @@ public class ClientMetadataHandler {
                 return;
             }
             final byte[] finalPacketBytes = packetBytes;
+            final net.minecraft.nbt.CompoundTag finalNbt = nbt;
             final List<SectionDeltaS2CPacket.BlockEntityData> bes = entry.blockEntities();
             io.github.limuqy.mc.hassium.concurrent.MainThreadDispatcher.execute(() -> {
                 if (!isSameSession(submittedLevel)) {
                     return; // 旧会话回调：丢弃
                 }
+                // delta 变化 section 已知（merge 后 NBT 无光字段 section）：预提交分段重算，
+                // 避免 TAIL 读盘（可能仍是 merge 前旧 NBT）推断失败退化为整 chunk。
+                // 预提交与 apply 同主线程回合，capture 在后续帧才开始 → 采样到的是新地形；
+                // TAIL 再提交命中已有任务（retainNbt 不覆盖），restartCoreOnly 重采样核心柱。
+                io.github.limuqy.mc.hassium.cache.client.LightComputeService.getInstance()
+                        .submitRecompute(pos, finalNbt);
                 boolean applied = ClientChunkHandler.applyChunkData(entry.chunkX(), entry.chunkZ(), finalPacketBytes, false);
                 if (applied) {
                     if (!bes.isEmpty()) {

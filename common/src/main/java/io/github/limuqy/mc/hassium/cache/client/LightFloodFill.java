@@ -84,21 +84,27 @@ public final class LightFloodFill {
                                int[] shapeIds,
                                Occlusion occlusion) {
         return new Result(
-                solveBlock(width, height, lightBlock, emitters, shapeIds, occlusion),
-                solveSky(width, height, lightBlock, sourceY, shapeIds, occlusion));
+                solveBlock(width, height, lightBlock, emitters, shapeIds, occlusion, null, 0, 0),
+                solveSky(width, height, lightBlock, sourceY, shapeIds, occlusion, null, 0, 0));
     }
 
     /**
      * 仅重算方块光：发光源种子 BFS（官方 increaseLightFromEmission 语义）。
      * 无光源（emitters 空/仅自然地形）时只做数组分配，成本近似为零。
      *
+     * @param shellSeeds       壳层种子，packed {@code (level << 20) | index}（域内线性索引；null = 无壳）。
+     *                         壳格值 = 全量解（不动点），BFS 传播 candidate ≤ stored 恒成立，
+     *                         壳格不会被域内光改写，无需额外保护。
+     * @param shellBottomLayers 底部壳层格数（0/1）：solveBlock 无列注入，不参与任何判断，仅对称签名。
+     * @param shellTopLayers   顶部壳层格数（0/1）：同上。
      * @return 域内 block 光数组（布局 {@code (y*W+z)*W+x}，默认全 0）
      */
     public static byte[] solveBlock(int width, int height,
                                     byte[] lightBlock,
                                     int[] emitters,
                                     int[] shapeIds,
-                                    Occlusion occlusion) {
+                                    Occlusion occlusion,
+                                    int[] shellSeeds, int shellBottomLayers, int shellTopLayers) {
         int ww = width * width;
         byte[] block = new byte[ww * height];
         LongArrayFIFOQueue queue = new LongArrayFIFOQueue();
@@ -115,6 +121,19 @@ public final class LightFloodFill {
                 queue.enqueue(entry(idx, emission, ALL_DIRS, shapeIds[idx] == 0, 0));
             }
         }
+        if (shellSeeds != null) {
+            for (int e : shellSeeds) {
+                int idx = e & 0xFFFFF;
+                int level = e >>> 20;
+                if (level <= 0 || level > MAX_LEVEL) {
+                    continue;
+                }
+                if ((block[idx] & 0xFF) < level) {
+                    block[idx] = (byte) level;
+                }
+                queue.enqueue(entry(idx, level, ALL_DIRS, shapeIds[idx] == 0, 0));
+            }
+        }
         bfs(width, height, block, lightBlock, shapeIds, occlusion, queue, 0);
         return block;
     }
@@ -123,13 +142,20 @@ public final class LightFloodFill {
      * 仅重算天空光：列注入填充 + 天空种子 BFS（官方 propagateLightSources /
      * increaseSkySourceInDirections 语义；不含空 section 加速，只影响工作量不影响结果）。
      *
+     * @param shellSeeds       壳层种子，packed {@code (level << 20) | index}（域内线性索引；null = 无壳）。
+     *                         壳格值 = 全量解（不动点），BFS 传播 candidate ≤ stored 恒成立，
+     *                         壳格不会被域内光改写，无需额外保护。
+     * @param shellBottomLayers 底部壳层格数（0/1）：列注入填充与种子循环跳过这些层
+     *                         （壳层格由预置值承载，列注入强制 15 会覆盖预置值）。
+     * @param shellTopLayers   顶部壳层格数（0/1）：同上。
      * @return 域内 sky 光数组（布局 {@code (y*W+z)*W+x}）
      */
     public static byte[] solveSky(int width, int height,
                                   byte[] lightBlock,
                                   int[] sourceY,
                                   int[] shapeIds,
-                                  Occlusion occlusion) {
+                                  Occlusion occlusion,
+                                  int[] shellSeeds, int shellBottomLayers, int shellTopLayers) {
         int ww = width * width;
         byte[] sky = new byte[ww * height];
         LongArrayFIFOQueue queue = new LongArrayFIFOQueue();
@@ -144,6 +170,9 @@ public final class LightFloodFill {
                     int colBase = z * width + x;
                     int y0 = Math.max(0, sy); // NEG_INF → 整列填充
                     for (int y = y0; y < height; y++) {
+                        if (y < shellBottomLayers || y >= height - shellTopLayers) {
+                            continue; // 壳层格由预置值承载，列注入强制 15 会覆盖预置值
+                        }
                         sky[y * ww + colBase] = MAX_LEVEL;
                     }
                 }
@@ -158,6 +187,9 @@ public final class LightFloodFill {
                     int y0 = Math.max(0, sy);
                     int maxN = maxNeighborSourceY(sourceY, width, x, z);
                     for (int y = y0; y < height; y++) {
+                        if (y < shellBottomLayers || y >= height - shellTopLayers) {
+                            continue; // 壳层格种子由 shellSeeds 承载
+                        }
                         if (y == sy || y < maxN) {
                             int mask = skySeedMask(sourceY, width, x, z, y, sy);
                             if (mask != 0) {
@@ -166,6 +198,19 @@ public final class LightFloodFill {
                         }
                     }
                 }
+            }
+        }
+        if (shellSeeds != null) {
+            for (int e : shellSeeds) {
+                int idx = e & 0xFFFFF;
+                int level = e >>> 20;
+                if (level <= 0 || level > MAX_LEVEL) {
+                    continue;
+                }
+                if ((sky[idx] & 0xFF) < level) {
+                    sky[idx] = (byte) level;
+                }
+                queue.enqueue(entry(idx, level, ALL_DIRS, shapeIds[idx] == 0, 1));
             }
         }
         bfs(width, height, sky, lightBlock, shapeIds, occlusion, queue, 1);

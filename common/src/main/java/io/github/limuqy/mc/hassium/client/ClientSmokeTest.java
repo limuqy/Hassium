@@ -223,11 +223,13 @@ public final class ClientSmokeTest {
             // 在玩家第二次进服后才开始驱动 DP_IDLE→DP_DONE，而 ROUND2 join 与 DP_IDLE 触发（switched=true）几乎同步。
             // 默认 delayMs（15s）远不够 → 等满后客户端 scheduleExit ≈9s 即退服，状态机会被打断。
             // 故 ROUND2 在 dataplane 模式下一致地拿到 PASS/FAIL marker，必须把 ROUND2 窗口扩展到覆盖最坏 42s +5s 余量。
-            // classic-only 只验证 Bloom filter 命中走完 → delayMs/2 即可，floor 3000ms 防止用户传极小值导致 ROUND2 短到断开尚未重连完。
+            // classic-only：lightVerify 开启时 R2 光照重算显著变慢，delayMs/2 的窗口在重算完成前就
+            // 触发统计（stats 抓到半途状态）；R2 窗口延长到与 ROUND1 相同（delayMs*2），
+            // 保证 R2 覆盖完整加载/重算后再统计。floor 3000ms 防止用户传极小值导致 ROUND2 短到断开尚未重连完。
             if (runDataplane && runClassic) {
                 delayMs = Math.max(ClientSmokeTest.delayMs, 50_000L);
             } else if (runClassic) {
-                delayMs = Math.max(3_000L, ClientSmokeTest.delayMs / 2);
+                delayMs = Math.max(3_000L, ClientSmokeTest.delayMs * 2);
             } else {
                 // dataplane-only 不进入 ROUND2（初始化即 disallow），仅防御兜底
                 delayMs = ClientSmokeTest.delayMs;
