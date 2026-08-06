@@ -31,6 +31,7 @@
       "MixinGameRenderer",
       "MixinLightRecompute",
       "MixinVanillaChunkApplyBudget",
+      "MixinLevelLightEngine",
       "MixinOptions",
       "OptionsAccessor",
       "ClientLevelAccessor",

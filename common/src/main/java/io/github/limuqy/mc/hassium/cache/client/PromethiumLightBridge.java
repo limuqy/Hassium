@@ -36,6 +36,7 @@ public final class PromethiumLightBridge {
     private static volatile Object engine;
     private static volatile Method mSubmitRecompute;
     private static volatile Method mSubmitRecomputeExplicit;
+    private static volatile Method mSubmitLocalUpdate;
     private static volatile Method mDrainCompletions;
     private static volatile Method mClear;
     private static volatile Method mOnChunkDataReplaced;
@@ -44,7 +45,54 @@ public final class PromethiumLightBridge {
     private static volatile Object statsProxy;
     private static volatile Object hooksProxy;
 
+    /**
+     * 引擎消费深度（{@link #drainCompletions} 进入期间 &gt; 0）。
+     * 引擎落地 / 钩子原语内对官方引擎的 checkBlock 直通调用靠它豁免
+     * {@link MixinLevelLightEngine} 的重定向——同一消费者内部的原语不重新入队。
+     */
+    private static final java.util.concurrent.atomic.AtomicInteger consumingDepth =
+            new java.util.concurrent.atomic.AtomicInteger();
+
     private PromethiumLightBridge() {}
+
+    /**
+     * 原版 checkBlock 是否应重定向到引擎统一队列（仅主线程方块更新路径查询）。
+     * 引擎缺席 / 配置关闭 / 引擎旧版无 submitLocalUpdate / 引擎消费窗口内 → false（直通原版）。
+     */
+    public static boolean deferLocalLightUpdate() {
+        if (!isEnabled() || consumingDepth.get() > 0) {
+            return false;
+        }
+        return mSubmitLocalUpdate != null || discoverSubmitLocalUpdate();
+    }
+
+    /**
+     * 登记原版局部光照更新（任意线程；引擎未生效时 no-op）。
+     * 方法发现失败（引擎版本过旧）→ 不重定向（直通原版），更新永不丢失。
+     */
+    public static void submitLocalUpdate(net.minecraft.core.BlockPos pos) {
+        if (!isEnabled()) {
+            return;
+        }
+        try {
+            if (mSubmitLocalUpdate == null && !discoverSubmitLocalUpdate()) {
+                return;
+            }
+            mSubmitLocalUpdate.invoke(engine(), pos);
+        } catch (Throwable t) {
+            Constants.LOG.warn("Hassium: Promethium submitLocalUpdate failed for {}", pos, t);
+        }
+    }
+
+    private static boolean discoverSubmitLocalUpdate() {
+        try {
+            mSubmitLocalUpdate = engine().getClass().getMethod("submitLocalUpdate",
+                    net.minecraft.core.BlockPos.class);
+            return true;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
 
     /** Promethium MOD 是否可用（懒检测一次；类在 classpath 即可用）。 */
     public static boolean isAvailable() {
@@ -147,6 +195,7 @@ public final class PromethiumLightBridge {
         if (!isEnabled()) {
             return;
         }
+        consumingDepth.incrementAndGet();
         try {
             if (mDrainCompletions == null) {
                 mDrainCompletions = engine().getClass().getMethod("drainCompletions", long.class);
@@ -154,6 +203,8 @@ public final class PromethiumLightBridge {
             mDrainCompletions.invoke(engine(), deadlineNs);
         } catch (Throwable t) {
             Constants.LOG.warn("Hassium: Promethium drainCompletions failed", t);
+        } finally {
+            consumingDepth.decrementAndGet();
         }
     }
 

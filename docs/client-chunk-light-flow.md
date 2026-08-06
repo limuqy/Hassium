@@ -10,7 +10,6 @@
 | 服务端推送 / chunkHash / 缓存命中 | [`chunk-cache.md`](chunk-cache.md) |
 | 并行光照引擎调优（capture 吞吐/完成率） | 见 hassium-parallel-light-capture-tuning skill |
 | 虚拟线程超订（为什么光照用固定平台池） | hassium-virtual-thread-oversubscription skill |
-| 缓存旧光预灌（R2 防黑块） | hassium-client-cached-light-restore skill |
 
 ## 1. 总览图
 
@@ -43,14 +42,13 @@ flowchart TD
         L{"并行光照引擎<br/>parallelLightEngineEnabled<br/>默认关"}
         M["submitRecompute 异步入队<br/>立即返回"]
         N["ClientLightBufferQueue<br/>统一异步缓冲队列<br/>帧尾预算消费（每帧部分预算）"]
-        O["restoreCachedLightToEngine<br/>R2: 磁盘旧光先灌引擎（防黑块）"]
         P["handleLightDeltaPacket<br/>建层 + propagateLightSources 本地重算<br/>+ 标缓存脏"]
     end
 
     subgraph LIGHT["并行光照引擎 (Promethium ParallelLightEngineImpl)"]
         Q["capturePending<br/>帧预算 CAPTURE_BUDGET_NS=5ms<br/>MAX_CAPTURE_COLUMNS_PER_FRAME=24 柱<br/>从已 apply 区块读 blockState 采 3×3=9 柱<br/>等邻居 NEIGHBOR_WAIT_FRAMES=10 + 距离重排"]
         R["hassium-light 后台固定池<br/>（parallelLightEngineThreads 线程，NORM-1）<br/>纯数据 BFS solve (FIFO)"]
-        S["drainCompletions<br/>帧预算内原子落地<br/>建层 + 核心柱/邻柱差异 memcpy"]
+        S["drainCompletions<br/>帧预算内原子落地<br/>建层 + 核心柱/邻柱差异 swap 交换"]
     end
 
     A --> D --> E
@@ -86,6 +84,7 @@ flowchart TD
 | 光照 capture | `CAPTURE_BUDGET_NS`=5ms、24 柱/帧 | Render thread（独占） | `ParallelLightEngineImpl.capturePending` |
 | 光照 solve | `hassium-light` 固定平台池，FIFO | 后台（NORM-1） | `ParallelLightEngineImpl.ensurePool` |
 | 光照落地 | `drainCompletions(frameDeadlineNs)` | Render thread | `ParallelLightEngineImpl.drainCompletions` |
+| 局部光照更新（方块变化 checkBlock） | 引擎统一队列：同柱在飞任务挂载 / 独立队列；`drainCompletions` 预算内应用 | 入队：任意线程（主线程方块更新）；消费：Render thread | `MixinLevelLightEngine` + `PromethiumLightBridge.submitLocalUpdate` |
 
 ## 3. 三条数据入口
 
@@ -115,15 +114,36 @@ flushPendingCalibrations   →  渲染前兜底官方传播队列（原版方块
 
 - **带光**（`network.lightStrip=false` 或原版）：权威光照随包落地（apply 时 queueSectionData 生效），无需重算；先落地内圈块重算时缺失本块的边界差值——官方路径由帧尾 `flushPendingCalibrations` 兜底（官方队列跨块传播天然合并），并行路径由引擎后台传播域（核心柱 ±16 格）承担。
 - **无光**（`network.lightStrip=true` 默认 / 缓存 `is_light_on=0`）：`applyLightEngineNow`：
-  1. `restoreCachedLightToEngine`：R2 缓存有光时先灌旧光（内容过期没关系），重算完成前渲染不黑块；无缓存（R1）跳过。
-  2. 并行引擎开 → `submitRecompute` 异步入队，立即返回。
-  3. 并行引擎关（默认）→ 入 `ClientLightBufferQueue` 统一异步缓冲队列，帧尾按预算消费（每帧 5ms，~2-3 块；剩余留帧，不阻塞 apply 链路）。
+  1. 并行引擎开 → `submitRecompute` 异步入队，立即返回。
+  2. 并行引擎关（默认）→ 入 `ClientLightBufferQueue` 统一异步缓冲队列，帧尾按预算消费（每帧 5ms，~2-3 块；剩余留帧，不阻塞 apply 链路）。
+
+  注：曾有的 `restoreCachedLightToEngine`（R2 磁盘旧光预灌防黑块）已移除——磁盘缓存光可能是未收敛 / 空光字段（SectionDelta 残缺 light、empty-mask 全 0），灌入引擎显示错误亮度；重算完成原子落地新光即最终画面。
 
 `LightDelta` 是旁路：`handleLightDeltaPacket` 建层 + `propagateLightSources` 本地重算（跳过跨块传播），标缓存脏；residual 由后续渲染帧 drain。
 
+### 原版局部光照更新（方块放置/破坏 → `LevelLightEngine.checkBlock`）
+
+`LevelChunk.setBlockState`（含服务端方块包、流体、红石等全部客户端方块变化）在光属性变化
+时调用 `LevelLightEngine.checkBlock`——此前在主线程任意时刻内联写官方引擎。
+
+- **并行引擎开启**：`MixinLevelLightEngine` HEAD 拦截重定向到引擎统一队列
+  （`submitLocalUpdate`）——同柱有在飞重算任务时挂载到任务上、结果落地后立即应用
+  （消除「局部更新先传播、旧快照重算后落地覆盖修正」的陈旧光竞态），无在飞任务时入
+  独立队列、下一次 drain 应用；官方引擎写入因此收敛到单一消费者（异步写引擎的前提）。
+  引擎消费窗口内（drain 中）与单机集成服务端引擎身份直通原版。
+
+落地方式（阶段二，主线程税降一个数量级）：后台 solve 产物字节数组零复制包成
+`DataLayer`（引用包装），主线程只做**双缓冲 map 交换**——`LightEngine.storage` 的
+`visibleSectionData`（渲染读）与 `updatingSectionData`（传播写）同时 `setLayer` + 清缓存
+（官方传播 swap 时 visible = updating 浅拷贝共享 DataLayer 对象，单 map 交换会被传播覆盖；
+字段反射经 `HassiumLightHooks.swapDataLayer`，SRG/字段缺失自动降级 memcpy 功能保真）。
+`copyMasked`（邻柱差异只增亮合并）保持逐字节合并语义。
+- **并行引擎关闭 / MOD 缺席**：直通原版，帧尾 `flushPendingCalibrations` 兜底传播，
+  行为与改造前一致。
+
 ## 6. 暗块窗口
 
-"暗块窗口" = 区块落地（可见）→ 引擎有光（变亮）之间的墙钟延迟，**只出现在 R1 首次进服 + 网络剥离光照**的组合（无旧光可灌）。R2/重连有 `restoreCachedLightToEngine` 预灌，无感。
+"暗块窗口" = 区块落地（可见）→ 引擎有光（变亮）之间的墙钟延迟，**出现在剥离光照的所有加载**（R1 无缓存 / R2 无预灌）：重算完成前引擎无光。R2 与 R1 行为一致，不再预灌旧光（旧光可能是未收敛/空光字段，显示错误亮度）。
 
 窗口由三个独立预算队列串行构成，主瓶颈是 capture：
 
@@ -152,9 +172,10 @@ capture 排队（~240 帧，R1 625 块 × 9 柱 ÷ 24 柱/帧）
 | `ClientMainThreadBudget` | apply 帧预算（JoinBoost / normal / hardCap） |
 | `MixinVanillaChunkApplyBudget` | 原版 chunk 包 apply 预算化 |
 | `ClientCacheLoadQueue` | R2 磁盘读回（region 级并发） |
-| `ClientLightRecomputeService` | 光照编排：预灌旧光、并行/官方分派、同步重算实现（缓冲队列消费用） |
+| `ClientLightRecomputeService` | 光照编排：并行/官方分派、同步重算实现（缓冲队列消费用） |
 | `ClientLightBufferQueue` | 官方引擎统一异步缓冲队列：帧内收集、帧尾预算消费 |
 | `PromethiumLightBridge` | 并行光照引擎运行时桥接（反射发现 Promethium MOD；MOD 缺席自动降级官方引擎） |
+| `MixinLevelLightEngine` | 原版局部光照更新重定向：并行引擎开启时 checkBlock 入引擎统一队列（客户端引擎身份门控 + 消费窗口豁免） |
 | `ParallelLightEngine`（Promethium MOD 内） | 并行光照引擎：capture / solve / drain（`parallelLightEngineEnabled=true` 且 MOD 安装时） |
 | `ClientMetadataHandler.handleLightDeltaPacket` | LightDelta 旁路本地重算 |
 | `CacheSaveQueue` | 后台写盘（含光照回写） |

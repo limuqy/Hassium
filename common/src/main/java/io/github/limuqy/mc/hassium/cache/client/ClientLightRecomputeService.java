@@ -1,15 +1,11 @@
 package io.github.limuqy.mc.hassium.cache.client;
 
 import io.github.limuqy.mc.hassium.Constants;
-import io.github.limuqy.mc.hassium.compat.CompoundTagCompat;
 import io.github.limuqy.mc.hassium.network.ClientChunkHandler;
 import io.github.limuqy.mc.hassium.metrics.NetworkStats;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
-import net.minecraft.core.SectionPos;
 import net.minecraft.world.level.ChunkPos;
-import net.minecraft.world.level.LightLayer;
-import net.minecraft.world.level.chunk.DataLayer;
 import net.minecraft.world.level.chunk.LevelChunk;
 import net.minecraft.world.level.lighting.LevelLightEngine;
 
@@ -62,15 +58,15 @@ public final class ClientLightRecomputeService {
         }
         // 加载活跃：续期 JoinBoost 窗口（固定 10s 窗口在 1021 块全量加载下会中途退坡 → 后段掉速）
         ClientMainThreadBudget.noteChunkApplyActivity();
-        // 读盘一次：重算用缓存 NBT（先灌旧光，再供并行引擎域推断/壳光/写回复用）。
+        // 读盘一次：重算用缓存 NBT（供并行引擎域推断/壳光/写回复用）。
         // 磁盘 hash 有效才读（R1 空缓存归零），返回 null = 无缓存/不可信。
         net.minecraft.nbt.CompoundTag nbt = cachedNbt;
         if (nbt == null) {
             nbt = loadCachedNbtForRecompute(chunkPos);
         }
-        // 先用磁盘缓存光填充引擎（缓存有光时）：内容虽过期，但重算完成前渲染不再黑块。
-        // 并行引擎后台提交期间旧光持续可见，提交后原子换成新光。
-        restoreCachedLightToEngine(level, chunkPos, nbt);
+        // 不预灌缓存旧光（restoreCachedLightToEngine 已移除）：磁盘缓存光可能是未收敛/
+        // 空光字段（SectionDelta 残缺 light、empty-mask 全 0），灌入引擎显示错误亮度；
+        // 重算完成原子落地新光即最终画面，预灌只增加主线程开销与脏显示窗口。
         // 并行光照引擎（默认关；Promethium MOD 缺席自动回退）：分流到后台全量重算 + 主线程
         // 原子提交，本方法立即返回
         if (PromethiumLightBridge.isEnabled()) {
@@ -104,77 +100,6 @@ public final class ClientLightRecomputeService {
             return ChunkDiskCodec.bytesToNbt(cachedData);
         } catch (Exception e) {
             return null;
-        }
-    }
-
-    /**
-     * 重算前把磁盘缓存的旧光照灌进光照引擎（queueSectionData 同步生效，渲染立即可见）。
-     * <p>
-     * 适用场景：R2 重连 MISMATCH/全量路径拿到无光数据，磁盘缓存仍有旧内容的光
-     * （is_light_on=1）。重算（尤其并行引擎异步提交）完成前引擎无光 → 渲染黑块；
-     * 先灌旧光可让画面立即亮起，重算完成后原子覆盖为新光。
-     * <p>
-     * 无缓存 / 缓存无光（is_light_on=0）/ 解析失败 → 静默跳过，行为与改造前一致。
-     * 不记 cache hit 统计：内容已过期，重算照常发生。
-     * <p>
-     * 读盘由 {@link #applyLightEngineNow} 的 {@code loadCachedNbtForRecompute} 统一完成
-     * （hash gate 在彼处）；本方法只消费已解析 NBT（null = 无缓存/不可信，跳过）。
-     */
-    private static void restoreCachedLightToEngine(ClientLevel level, ChunkPos chunkPos,
-                                                   net.minecraft.nbt.CompoundTag cachedNbt) {
-        try {
-            if (cachedNbt == null) {
-                return;
-            }
-            // 不 gate is_light_on：SectionDelta merge 后写盘 is_light_on=0，但未变 section
-            // 的旧光字段保留——delta 块重算（并行引擎异步完成）前灌旧光显示，消除
-            // 「新地形 + 引擎无光」的黑块窗口，重算完成后原子覆盖。
-            // 剥光缓存（is_light_on=0 且全 section 无光字段）循环后 anyRestored=false 自然跳过。
-            LevelLightEngine lightEngine = level.getLightEngine();
-            int minSection = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMinSection(level);
-            int maxSection = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMaxSectionExclusive(level);
-            net.minecraft.nbt.ListTag sectionsList = CompoundTagCompat.getList(cachedNbt, "sections");
-
-            boolean anyRestored = false;
-            for (int sectionY = minSection; sectionY < maxSection; sectionY++) {
-                int idx = sectionY - minSection;
-                if (idx >= sectionsList.size()) {
-                    break;
-                }
-                net.minecraft.nbt.Tag t = sectionsList.get(idx);
-                if (!(t instanceof net.minecraft.nbt.CompoundTag sectionTag)) {
-                    continue;
-                }
-                SectionPos sectionPos = SectionPos.of(chunkPos.x, sectionY, chunkPos.z);
-
-                net.minecraft.nbt.Tag skyTag = sectionTag.get("sky_light");
-                if (skyTag instanceof net.minecraft.nbt.ByteArrayTag bat
-                        && bat.getAsByteArray().length == DataLayer.SIZE) {
-                    DataLayer layer = new DataLayer();
-                    System.arraycopy(bat.getAsByteArray(), 0, layer.getData(), 0, DataLayer.SIZE);
-                    lightEngine.queueSectionData(LightLayer.SKY, sectionPos, layer);
-                    anyRestored = true;
-                }
-
-                net.minecraft.nbt.Tag blockTag = sectionTag.get("block_light");
-                if (blockTag instanceof net.minecraft.nbt.ByteArrayTag bbat
-                        && bbat.getAsByteArray().length == DataLayer.SIZE) {
-                    DataLayer layer = new DataLayer();
-                    System.arraycopy(bbat.getAsByteArray(), 0, layer.getData(), 0, DataLayer.SIZE);
-                    lightEngine.queueSectionData(LightLayer.BLOCK, sectionPos, layer);
-                    anyRestored = true;
-                }
-            }
-            if (anyRestored) {
-                // queueSectionData 直接落 storage 并清空该 section 的传播节点
-                // （原版 LightUpdate packet 同路径，渲染立即可见），无需 runLightUpdates；
-                // 残留的邻居传播节点由帧尾 flushPendingCalibrations 兜底。
-                // 实测在此处 safeRunLightUpdates 会触发旧光向邻居传播，每块数 ms 主线程
-                // 开销挤占 apply 预算，R2 加载完成率从 ~100% 掉到 ~22%。
-            }
-        } catch (Exception e) {
-            // 恢复失败不阻断重算：行为退化为改造前（重算完成前短暂无光）
-            Constants.LOG.debug("Hassium: Failed to restore cached light for {}", chunkPos, e);
         }
     }
 
