@@ -12,7 +12,8 @@
 #   - 退版本（高→低）：强制清理（高版本存档无法被低版本读取）
 #   - 同会话失败重试：强制清理（干净重试）
 # 并行模式: 同版本多 loader 同时跑，端口按 -Loaders 顺序 fabric=BasePort, forge=+1, neoforge=+2
-#           版本间仍串行（避免跨版本存档冲突）；不调用会话间 gradlew --stop，batch 结束后统一 stop
+#           版本间仍串行（避免跨版本存档冲突）；全程不调 gradlew --stop（全局停 daemon 会误杀
+#           并行会话/其他项目的构建；runServer/runClient 均为 --no-daemon，不依赖 daemon）
 param(
     [Parameter(Mandatory=$true)][ValidateSet("I","R","UdpFailover")][string]$Phase,
     [string[]]$Versions,
@@ -364,9 +365,13 @@ foreach ($ver in $targetVersions) {
         }
 
         # 并行模式：每版本结束后清理残留 Minecraft java 进程，保留 gradle daemon 供下一版本复用
-        # 仅杀命令行包含 "run\server" 或 "run\client" 的 java（即 Minecraft 实例），不杀 gradle daemon
+        # 仅杀本工程 loom dev 实例（dli.config 指向本工程 + env 标记），不杀 gradle daemon，
+        # 也不匹配其他项目/会话的实例
+        $rootEsc = [regex]::Escape($projectRoot)
+        $dliConfig = "-Dfabric\.dli\.config=$rootEsc"
         Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
-            $_.Name -eq "java.exe" -and $_.CommandLine -and $_.CommandLine -match "run[\\/]+(server|client)"
+            $_.Name -eq "java.exe" -and $_.CommandLine -and $_.CommandLine -match $dliConfig -and
+            $_.CommandLine -match "-Dfabric\.dli\.env=(server|client)"
         } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
         Start-Sleep -Seconds 3
     } else {
@@ -386,25 +391,23 @@ foreach ($ver in $targetVersions) {
             $results += $r
             $prevVerByLoader[$loader] = $ver
 
-            # 杀残留 Minecraft java 进程（不杀 gradle daemon）
+            # 杀残留 Minecraft java 进程（仅本工程 loom dev 实例：dli.config + env 标记；
+            # 不杀 gradle daemon，不误杀其他项目/会话）
+            $rootEsc = [regex]::Escape($projectRoot)
+            $dliConfig = "-Dfabric\.dli\.config=$rootEsc"
             Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
-                $_.Name -eq "java.exe" -and $_.CommandLine -and $_.CommandLine -match "run[\\/]+(server|client)"
+                $_.Name -eq "java.exe" -and $_.CommandLine -and $_.CommandLine -match $dliConfig -and
+                $_.CommandLine -match "-Dfabric\.dli\.env=(server|client)"
             } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
             Start-Sleep -Seconds 3
 
-            # Gradle daemon 清理（避免 loom 锁）
-            & (Join-Path $projectRoot "gradlew.bat") --stop 2>&1 | Out-Null
-            Start-Sleep -Seconds 2
+            # 不调 gradlew --stop：全局停 daemon 会误杀并行会话/其他项目的构建（loom 锁问题由 --no-daemon 规避）
         }
     }
 }
 
-# 并行模式：batch 结束后统一调用一次 gradlew --stop
-if ($Parallel) {
-    Write-Host ""
-    Write-Host "=== batch 结束，统一清理 Gradle daemon ===" -ForegroundColor Cyan
-    & (Join-Path $projectRoot "gradlew.bat") --stop 2>&1 | Out-Null
-}
+# 并行模式收尾：不再统一 gradlew --stop——全局停 daemon 会误杀其他项目/会话的构建；
+# 残留 daemon 由后续构建自然复用。
 
 # 最终汇总
 Write-Host ""

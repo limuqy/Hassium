@@ -231,7 +231,7 @@ build/smoke-test/
 - 检查 `parallel_<SessionId>.log` 是否显示 `Round2: stats=False pass=False`
 - 检查 `client_<SessionId>.log` 末尾是否停在 `WAIT_JOIN_2 ... waiting N ms before stats`（说明客户端在 ROUND2 等待期间被杀）
 - **根因**：单会话清理逻辑误杀了另一会话的 java 进程
-- **修复后**：`Stop-SessionJava` 只通过端口和 `<loader>\run\{client,server}` 目录定位本会话 java 进程，不影响另一会话
+- **修复后**：`Stop-SessionJava` 只杀命令行命中本工程 loom 特征（`-Dfabric.dli.config=<projectRoot>` + `-Dfabric.dli.env=server|client`）的 java；端口占用者非本工程时仅告警跳过，不影响另一会话/另一项目
 - 若仍出现：检查是否有其他脚本/工具调用了 `Get-Process -Name java | Stop-Process`
 
 ## 并行模式
@@ -246,12 +246,12 @@ build/smoke-test/
 
 **预编译**：并行模式下，先同步编译所有 loader（`compileJava`），避免两个并行进程同时触发编译冲突。若某 loader 预编译失败，该 loader 会话会被跳过（结果记录为 `precompile_failed`），不影响其他 loader。
 
-**进程清理（关键）**：并行模式下，单会话结束时的清理**只杀本会话相关的 java 进程**，不会杀掉另一会话的 java：
-- 服务端：通过 `Get-NetTCPConnection -LocalPort $ServerPort` 定位占用端口的 java 进程
-- 客户端/兜底服务端：通过 `Get-CimInstance Win32_Process` 匹配命令行中包含 `<loader>\run\client` 或 `<loader>\run\server` 的 java 进程
-- **不杀 gradle daemon**（其命令行不含 `run/server` 或 `run/client`），保留给下一版本复用
+**进程清理（关键）**：并行模式下，单会话结束时的清理**只杀本工程 loom dev 实例**，不会杀掉另一会话/另一项目的 java：
+- 服务端：`Get-NetTCPConnection -LocalPort $ServerPort -State Listen` 定位占用端口的进程，**且命令行须命中本工程 loom 特征**（`-Dfabric.dli.config=<projectRoot>` + `-Dfabric.dli.env=server`，或 `:<loader>:runServer`）才杀；他人进程仅告警跳过
+- 客户端/兜底服务端：`Get-CimInstance Win32_Process` 匹配命令行含 `-Dfabric.dli.config=<projectRoot>` 且 `-Dfabric.dli.env=(server|client)` 的 java（loom devlaunchinjector 特征，fabric/forge/neoforge 通用）
+- **不杀 gradle daemon**（命令行无 dli 特征），保留给下一版本复用
 
-**`gradlew --stop` 策略**：并行模式下每版本结束后**不调用** `gradlew --stop`（会杀掉共享 daemon，影响下一版本预编译）；仅清理残留 Minecraft java 进程（命令行匹配 `run[/\\](server|client)` 的 java）+ sleep 3s；整个 batch 结束后统一调用一次 `gradlew --stop`。
+**`gradlew --stop` 策略**：全程**不调用** `gradlew --stop`（该命令全局停所有 daemon，会误杀并行会话/其他项目正在跑的构建）；runServer/runClient 均显式 `--no-daemon`，不依赖 daemon。仅清理残留 Minecraft java 进程（本工程 dli 特征）+ sleep 3s。
 
 **失败重试**：并行模式下单次失败**不重试**（`Attempts=1`），与串行模式（`MaxRetries=3`）不同。如需重试，跑完一轮后对失败的会话单独跑回归轮（`-Phase R -Versions @(...)`）。
 
@@ -333,7 +333,7 @@ client ──UDP uplink 25571 ────────────────�
 
 ### 清理与 zombie 防御
 
-`Stop-FailoverNginxProxy` 先 `nginx -s stop` 优雅停 master，500ms 后再 `Stop-Process -Name nginx -Force` 兜底（防 master 已死、worker 残留）。本 harness 启的 nginx 子进程会被正常清理；**残留非本会话启的 nginx（如系统 service）不会**被混杀（脚本不主动杀非 `nginx -s stop` 提供的 PID；当前实现是按名全杀，多用户共享主机需谨慎，单用户 dev 机安全）。
+`Stop-FailoverNginxProxy` 先 `nginx -s stop` 优雅停 master，500ms 后再按「命令行含本会话 prefix」定位残留 worker 清理（防 master 已死、worker 残留）。**不按名全杀 nginx**——其他会话/项目启的 nginx（如系统 service）不会被误杀。
 
 ### 退出码
 

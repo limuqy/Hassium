@@ -204,8 +204,9 @@ if (-not $precheck.Skipped) {
     }
 }
 
-# 仅清理本会话相关的 java 进程，避免在并行模式下误杀另一会话。
-# 服务端通过端口定位；客户端/兜底服务端通过 $Loader\run\{client,server} 目录在命令行中的出现来定位。
+# 仅清理本会话相关的 java 进程，避免在并行模式下误杀另一会话 / 另一项目。
+# 服务端通过端口定位（只杀 Listen 连接，且验证命令行属本工程）；客户端/兜底服务端
+# 通过命令行中「本工程根 + $Loader\run\{client,server}」路径的出现来定位。
 # 不会杀掉 gradle daemon（其命令行不含 run/server 或 run/client）。
 function Stop-SessionJava {
     param(
@@ -213,25 +214,47 @@ function Stop-SessionJava {
         [string]$Loader
     )
 
-    # 1. 通过端口定位服务端 java 进程（最精确）
+    $rootEsc = [regex]::Escape($projectRoot)
+
+    # 本工程 loom dev 实例判定：devlaunchinjector 命令行含本工程 dli.config + env 标记
+    # （fabric/forge/neoforge 通用）；GradleMain/老路径作为兜底。
+    $dliAny = "-Dfabric\.dli\.config=$rootEsc"
+    $isOursServer = {
+        param($cmd)
+        return $cmd -and (($cmd -match $dliAny -and $cmd -match "-Dfabric\.dli\.env=server") -or
+                          ($cmd -match ":${Loader}:runServer") -or
+                          ($cmd -match "$rootEsc[\\/]+$([regex]::Escape($Loader))[\\/]+run[\\/]+server"))
+    }
+    $isOursClient = {
+        param($cmd)
+        return $cmd -and (($cmd -match $dliAny -and $cmd -match "-Dfabric\.dli\.env=client") -or
+                          ($cmd -match ":${Loader}:runClient") -or
+                          ($cmd -match "$rootEsc[\\/]+$([regex]::Escape($Loader))[\\/]+run[\\/]+client"))
+    }
+
+    # 1. 通过端口定位服务端 java 进程：只杀 Listen 连接（= 服务端本尊），
+    #    且命令行必须命中本工程特征，否则视为他人进程不动。
     if ($ServerPort -gt 0) {
-        $serverConns = Get-NetTCPConnection -LocalPort $ServerPort -ErrorAction SilentlyContinue
+        $serverConns = Get-NetTCPConnection -LocalPort $ServerPort -State Listen -ErrorAction SilentlyContinue
         if ($serverConns) {
-            $serverConns | ForEach-Object {
-                Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue
+            foreach ($conn in $serverConns) {
+                $owner = Get-CimInstance Win32_Process -Filter "ProcessId=$($conn.OwningProcess)" -ErrorAction SilentlyContinue
+                if (-not $owner) { continue }
+                $cmd = $owner.CommandLine
+                if (& $isOursServer $cmd) {
+                    Stop-Process -Id $conn.OwningProcess -Force -ErrorAction SilentlyContinue
+                } else {
+                    Write-Host "[$SessionId] 端口 $ServerPort 占用者非本工程服务端（PID $($conn.OwningProcess)），跳过不动"
+                }
             }
             Start-Sleep -Milliseconds 500
         }
     }
 
-    # 2. 通过 run 目录定位本 loader 的客户端/服务端 java 进程（兜底）
-    # 匹配命令行中包含 "<loader>\run\client" 或 "<loader>\run\server" 的 java 进程
-    $clientPattern = "$([regex]::Escape($Loader))[\\/]+run[\\/]+client"
-    $serverPattern = "$([regex]::Escape($Loader))[\\/]+run[\\/]+server"
+    # 2. 通过本工程 loom dev 实例特征定位客户端/服务端 java 进程（兜底，杀残留）。
     $sessionJava = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
-        $_.Name -eq "java.exe" -and (
-            ($_.CommandLine -and $_.CommandLine -match $clientPattern) -or
-            ($_.CommandLine -and $_.CommandLine -match $serverPattern)
+        $_.Name -eq "java.exe" -and $_.CommandLine -and (
+            (& $isOursServer $_.CommandLine) -or (& $isOursClient $_.CommandLine)
         )
     }
     foreach ($proc in $sessionJava) {
@@ -315,9 +338,12 @@ function Stop-FailoverNginxProxy {
     if (-not (Test-Path $NginxExe)) { return }
     try { & $NginxExe -s $Signal -c $ConfPath -p $PrefixPath 2>&1 | Out-Null } catch { }
     Start-Sleep -Milliseconds 500
-    # 兜底：若 nginx master 已死但 worker 进程残留（其 PID 不在 prefix 里），按名强杀。
-    # 在 smoke harness 内本会话独立 prefix/独立 conf，全命名杀是安全的。
-    try { Stop-Process -Name "nginx" -Force -ErrorAction SilentlyContinue } catch { }
+    # 兜底：若 nginx master 已死但 worker 进程残留（其 PID 不在 prefix 里），
+    # 按「命令行含本会话 prefix」定位清理——禁止全命名杀，避免误杀其他会话/项目的 nginx。
+    $prefixEsc = [regex]::Escape($PrefixPath)
+    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+        $_.Name -eq "nginx.exe" -and $_.CommandLine -and $_.CommandLine -match $prefixEsc
+    } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
     Start-Sleep -Milliseconds 200
 }
 
@@ -392,14 +418,33 @@ if ($CleanWorld) {
 }
 
 # 4. 释放 $ServerPort 端口 + UdpFailover phase 时也释放 $ProxyPort (可能被上次会话残留 nginx 占用)
+#    只杀「本工程 loom 服务端或本工程 nginx」占用者；他人进程（其他会话/项目）占用时
+#    仅告警不杀，避免误杀并行会话。
+$rootEsc = [regex]::Escape($projectRoot)
+$dliConfig = "-Dfabric\.dli\.config=$rootEsc"
 $portsToFree = @($ServerPort)
 if ($Phase -eq "UdpFailover" -and $ProxyPort -gt 0) { $portsToFree += $ProxyPort }
 foreach ($p in $portsToFree) {
-    $conns = Get-NetTCPConnection -LocalPort $p -ErrorAction SilentlyContinue
+    $conns = Get-NetTCPConnection -LocalPort $p -State Listen -ErrorAction SilentlyContinue
     if ($conns) {
-        Write-Host "[$SessionId] 端口 $p 占用，尝试释放..."
-        $conns | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }
-        Start-Sleep -Seconds 2
+        $ours = @()
+        $theirs = @()
+        foreach ($c in $conns) {
+            $owner = Get-CimInstance Win32_Process -Filter "ProcessId=$($c.OwningProcess)" -ErrorAction SilentlyContinue
+            $cmd = $owner.CommandLine
+            if ($cmd -and $cmd -match $dliConfig -and $cmd -match "-Dfabric\.dli\.env=server") { $ours += $c.OwningProcess; continue }
+            if ($cmd -and $cmd -match "$rootEsc.*run[\\/]+server") { $ours += $c.OwningProcess; continue }
+            if ($cmd -and $cmd -match "(^| )-p .*$([regex]::Escape($logRoot)).*nginx") { $ours += $c.OwningProcess; continue }
+            $theirs += $c.OwningProcess
+        }
+        foreach ($pid_ in ($ours | Select-Object -Unique)) {
+            Write-Host "[$SessionId] 端口 $p 由本工程进程 PID $pid_ 占用，释放..."
+            Stop-Process -Id $pid_ -Force -ErrorAction SilentlyContinue
+        }
+        foreach ($pid_ in ($theirs | Select-Object -Unique)) {
+            Write-Host "[$SessionId] 端口 $p 被非本工程进程 PID $pid_ 占用，跳过不动（可能是并行会话）"
+        }
+        if ($ours) { Start-Sleep -Seconds 2 }
     }
 }
 
@@ -459,7 +504,7 @@ if ($PregenOnly) {
     New-Item -ItemType Directory -Force -Path (Join-Path $serverRunDir "world\serverconfig") -ErrorAction SilentlyContinue | Out-Null
 
     $pregenGradlew = Join-Path $projectRoot "gradlew.bat"
-    & $pregenGradlew --stop *> $null 2>&1
+    # 不调 gradlew --stop：全局停 daemon 会误杀并行会话/其他项目的构建；--no-daemon 不依赖 daemon。
     Write-Host "[$SessionId] [PregenOnly] 启动服务端 ($Loader / $Ver)..."
     $pregenArgs = @("--no-daemon", ":${Loader}:runServer", "-PhassiumSmokeTest=true", "-PhassiumSmokePhases=pregen", "-Pmc_ver=${Ver}")
     $server = Start-Process -FilePath $pregenGradlew `
@@ -509,9 +554,8 @@ if ($PregenOnly) {
 
 # 5. 启动服务端（后台，启用 ServerSmokeTest）
 $gradlew = Join-Path $projectRoot "gradlew.bat"
-# 5.0 预备 gradle daemon：先停掉残留 daemon，避免 reuse 一个卡住 / 正在 init 的旧 daemon
-# （残留 daemon 经常卡 wrapper，runServer/runClient 反复 wating ready 直至超时）。
-& $gradlew --stop *> $null 2>&1
+# 5.0 不再调 gradlew --stop：该命令全局停所有 daemon，会误杀并行会话 / 其他项目正在跑的构建。
+#    runServer/runClient 均显式 --no-daemon（见 5.1），不依赖 daemon；残留 daemon 由下次构建自然复用。
 # 5.1 再起服务端 —— 显式 --no-daemon 确保不复用任何 daemon
 Write-Host "[$SessionId] [4/9] 启动服务端 ($Loader / $Ver)..."
 $serverArgs = @("--no-daemon", ":${Loader}:runServer", "-PhassiumSmokeTest=true", "-PhassiumSmokePhases=${SmokePhases}", "-Pmc_ver=${Ver}")
