@@ -84,6 +84,7 @@ fabric/ | forge/ | neoforge/
 
 - [`docs/architecture.md`](docs/architecture.md)
 - [`docs/chunk-cache.md`](docs/chunk-cache.md)
+- [`docs/client-chunk-light-flow.md`](docs/client-chunk-light-flow.md)
 - [`docs/ovd.md`](docs/ovd.md)
 - [`docs/disk-nbt-cache.md`](docs/disk-nbt-cache.md)
 - [`docs/version-segments.md`](docs/version-segments.md)

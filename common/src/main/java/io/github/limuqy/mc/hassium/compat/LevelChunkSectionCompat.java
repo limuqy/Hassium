@@ -65,7 +65,9 @@ public final class LevelChunkSectionCompat {
             }
         }));
 #else
-        // 1.20.1-1.21.8: section.write() 字节
+        // 1.20.1-1.21.8: section.write() 字节（palette 排列稳定，命中率正常）。
+        // 注：曾实验逐位置写 blockState id 规范化（对齐 1.21.9+ pack 语义），
+        // 冒烟实测对 R2 MISMATCH 无收益（内容真变为主因，非 palette 表示），已回滚。
         FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
         try {
             section.write(buf);

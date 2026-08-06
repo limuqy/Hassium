@@ -9,6 +9,7 @@
 | 超视渲染 | [`ovd.md`](ovd.md) | §10 |
 | 磁盘 NBT / Live-Unload / 分段增量 | [`disk-nbt-cache.md`](disk-nbt-cache.md) | §11 |
 | 世界导出 | 同上 + 本文 §12 | §12 |
+| 客户端收包 → apply → 光照落地全链路 | [`client-chunk-light-flow.md`](client-chunk-light-flow.md) | §3 客户端侧延伸 |
 
 **卖点特性（已实现）：** 分段增量（§3 阶段二 / §11）、超视渲染（§10）、`/hassiumc export`（§12）。
 
