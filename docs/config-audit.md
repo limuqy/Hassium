@@ -72,7 +72,7 @@ Forge/NeoForge 端注册 3 个 spec（CLIENT / COMMON / SERVER），物理客户
 |--------|--------|---------------------|----------|------|
 | `network.clientChunkLoadThreads` | `10` | **客户端** | `ClientLifecycleHelper` 初始化线程池 | ✅ 正常 |
 | `clientCache.lightCacheEnabled` | `true` | **客户端** | 光照缓存：首次重算后存储光照，缓存命中跳过重算 | ✅ 正常 |
-| `network.maxChunksPerFrame` | `32` | **客户端** | `ClientMainThreadBudget:78` | ✅ 正常 |
+| `network.maxChunksPerFrame` | `12` | **客户端** | `ClientMainThreadBudget:78` | ✅ 正常 |
 | `clientCache.mainThreadChunkBudgetMs` | `15` | **客户端** | `ClientMainThreadBudget:59` | ✅ 正常 |
 
 ### E. Network — 服务端专属（5 项）→ `server.toml`

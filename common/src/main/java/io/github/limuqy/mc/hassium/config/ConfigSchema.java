@@ -27,7 +27,7 @@ public final class ConfigSchema {
     public static final ConfigKey<Boolean> CACHE_ENTITY_SNAPSHOTS_ENABLED = bool("clientCache.entitySnapshotsEnabled", ConfigScope.CLIENT, true, "是否保存实体快照");
     public static final ConfigKey<Integer> CACHE_LOAD_THREADS = integer("clientCache.loadThreads", ConfigScope.CLIENT, 4, 1, 64, "客户端区块加载线程数");
     public static final ConfigKey<Boolean> CACHE_LIGHT_CACHE_ENABLED = bool("clientCache.lightCacheEnabled", ConfigScope.CLIENT, true, "是否启用光照缓存");
-    public static final ConfigKey<Integer> CACHE_MAX_CHUNKS_PER_FRAME = integer("clientCache.maxChunksPerFrame", ConfigScope.CLIENT, 32, 1, 512, "每帧应用缓存区块硬顶");
+    public static final ConfigKey<Integer> CACHE_MAX_CHUNKS_PER_FRAME = integer("clientCache.maxChunksPerFrame", ConfigScope.CLIENT, 12, 1, 512, "每帧应用缓存区块硬顶");
     public static final ConfigKey<Integer> CACHE_MAIN_THREAD_BUDGET_MS = integer("clientCache.mainThreadChunkBudgetMs", ConfigScope.CLIENT, 15, 1, 50, "主线程 apply 预算（ms）");
     public static final ConfigKey<Boolean> CACHE_PARALLEL_LIGHT_ENGINE_ENABLED = bool("clientCache.parallelLightEngineEnabled", ConfigScope.CLIENT, false, "是否启用并行光照引擎（需接入 Promethium 光照引擎；默认 false=官方光照计算，光照重算经统一异步缓冲队列预算消费）");
     public static final ConfigKey<Integer> CACHE_PARALLEL_LIGHT_ENGINE_THREADS = integer("clientCache.parallelLightEngineThreads", ConfigScope.CLIENT, 4, 1, 64, "并行光照引擎线程数（虚拟线程模式忽略）；天空光 BFS 占重算成本 ~90%，默认 4 线程 + 低优先级平衡吞吐与帧率");

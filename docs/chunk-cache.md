@@ -89,7 +89,7 @@ HIT apply 后再请求 blockEntity
 |------|------|
 | `mainThreadChunkBudgetMs` | 每帧 apply/回调共享预算（默认 15ms） |
 | JoinBoost | 进服约 10s，预算从约 30ms 线性退坡到 `mainThreadChunkBudgetMs` |
-| `maxChunksPerFrame` | 安全硬顶（默认 32） |
+| `maxChunksPerFrame` | 安全硬顶（默认 12） |
 
 控制面包（hash / 握手 / index sync 等）在 `PacketCompressionBlacklist`，避免进 PENDING 聚合窗口。
 

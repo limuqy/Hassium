@@ -52,7 +52,7 @@
     "hassium.configuration.clientCache.lightCacheEnabled":  "光照缓存",
     "hassium.configuration.clientCache.lightCacheEnabled.tooltip":  "首次加载重算后缓存光照数据，后续命中直接应用，跳过同步重算。光照异常时可关闭。默认 true。",
     "hassium.configuration.clientCache.maxChunksPerFrame":  "每帧最大区块数",
-    "hassium.configuration.clientCache.maxChunksPerFrame.tooltip":  "应用缓存区块的安全硬顶；主限流为时间预算。默认 32。",
+    "hassium.configuration.clientCache.maxChunksPerFrame.tooltip":  "应用缓存区块的安全硬顶；主限流为时间预算。默认 12。",
     "hassium.configuration.clientCache.mainThreadChunkBudgetMs":  "主线程预算",
     "hassium.configuration.clientCache.mainThreadChunkBudgetMs.tooltip":  "每帧主线程应用区块的时间预算（毫秒，默认 15）",
     "hassium.configuration.clientCache.parallelLightEngineEnabled":  "并行光照引擎",

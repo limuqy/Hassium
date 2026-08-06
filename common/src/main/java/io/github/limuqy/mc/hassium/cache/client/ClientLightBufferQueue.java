@@ -32,7 +32,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class ClientLightBufferQueue {
 
     /**
-     * 每帧消费预算：官方重算 ~1-3ms/块，5ms ≈ 2-3 块/帧；加载风暴（maxChunksPerFrame=32）
+     * 每帧消费预算：官方重算 ~1-3ms/块，5ms ≈ 2-3 块/帧；加载风暴（maxChunksPerFrame=12）
      * 下自然积压、多帧消化——「光照只占部分主线程预算」的落点，帧时间不会被单帧峰值
      * 击穿。预算耗尽剩余留帧，无阻塞。
      */

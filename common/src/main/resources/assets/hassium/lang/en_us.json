@@ -52,7 +52,7 @@
     "hassium.configuration.clientCache.lightCacheEnabled":  "Light cache",
     "hassium.configuration.clientCache.lightCacheEnabled.tooltip":  "Cache light data after first recompute; cache hits apply pre-computed lighting directly. Disable if lighting looks wrong. Default: true.",
     "hassium.configuration.clientCache.maxChunksPerFrame":  "Max chunks per frame",
-    "hassium.configuration.clientCache.maxChunksPerFrame.tooltip":  "Hard cap when applying cached chunks; time budget is the main limiter. Default: 32.",
+    "hassium.configuration.clientCache.maxChunksPerFrame.tooltip":  "Hard cap when applying cached chunks; time budget is the main limiter. Default: 12.",
     "hassium.configuration.clientCache.mainThreadChunkBudgetMs":  "Main Thread Budget",
     "hassium.configuration.clientCache.mainThreadChunkBudgetMs.tooltip":  "Per-frame main thread chunk apply budget in ms (default 15)",
     "hassium.configuration.clientCache.parallelLightEngineEnabled":  "Parallel Light Engine",

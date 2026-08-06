@@ -30,7 +30,7 @@ public final class ClientMainThreadBudget {
      */
     private static int frameCacheApplies = 0;
 
-    private static int frameCacheHardCap = 32;
+    private static int frameCacheHardCap = 12;
 
     private ClientMainThreadBudget() {
     }

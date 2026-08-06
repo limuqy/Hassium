@@ -100,7 +100,7 @@ public record HassiumConfig(
                 true,    // entitySnapshotsEnabled
                 4,       // loadThreads
                 true,    // lightCacheEnabled
-                32,      // maxChunksPerFrame
+                12,      // maxChunksPerFrame
                 15,      // mainThreadChunkBudgetMs
                 false,   // parallelLightEngineEnabled（默认官方引擎，光照经统一异步缓冲队列预算消费）
                 4        // parallelLightEngineThreads
