@@ -379,6 +379,23 @@ public class ClientChunkHandler {
         return applyChunkDataInternal(chunkX, chunkZ, chunkData, renderOnly, cachedNbt, hasCachedLight);
     }
 
+    /**
+     * Hassium 内部 apply 进行中标志（缓存读回 / OVD / 压缩通道）。
+     * <p>
+     * {@code MixinVanillaChunkApplyBudget}（1.20.1~1.21.10 段）把 {@code handleLevelChunkWithLight}
+     * 统一路由到 MainThreadDispatcher 预算队列；但 Hassium 的 applyToLevelFromByteBuf 内部
+     * 也会调用该方法，且调用方（processQueueUntil / HANDLE_COMPRESSED 回调）本身已在主线程
+     * 预算内——再次拦截会造成「入队后立即 hasChunk 校验失败 → 假失败 → 缓存路径重请求风暴、
+     * OVD 全量失败」的恶性循环。此标志让 Mixin 放行 Hassium 预算内的 apply。
+     */
+    private static final ThreadLocal<Boolean> HASSIUM_APPLY_IN_PROGRESS =
+            ThreadLocal.withInitial(() -> Boolean.FALSE);
+
+    /** 是否正在 Hassium 预算内的 apply（MixinVanillaChunkApplyBudget 豁免判定）。 */
+    public static boolean isHassiumApplyInProgress() {
+        return HASSIUM_APPLY_IN_PROGRESS.get();
+    }
+
     private static boolean applyChunkDataInternal(int chunkX, int chunkZ, byte[] chunkData,
                                                   boolean renderOnly, CompoundTag cachedNbt,
                                                   boolean hasCachedLight) {
@@ -425,13 +442,24 @@ public class ClientChunkHandler {
             net.minecraft.network.FriendlyByteBuf friendlyBuf = new net.minecraft.network.FriendlyByteBuf(nettyBuf);
 
             // 通过平台抽象注入区块（需要传入 FriendlyByteBuf）
-            Services.getClientChunkApplier().applyToLevelFromByteBuf(level, pos, friendlyBuf, renderOnly);
+            // HASSIUM_APPLY_IN_PROGRESS：本调用在 Hassium 主线程预算内，MixinVanillaChunkApplyBudget
+            // 不得再次拦截（否则入队 dispatcher 后 hasChunk 校验立即失败 → 假失败/重请求风暴）。
+            HASSIUM_APPLY_IN_PROGRESS.set(Boolean.TRUE);
+            try {
+                Services.getClientChunkApplier().applyToLevelFromByteBuf(level, pos, friendlyBuf, renderOnly);
+            } finally {
+                HASSIUM_APPLY_IN_PROGRESS.set(Boolean.FALSE);
+            }
 
             DebugLogger.info(LogType.CHUNK_APPLY, "[APPLY_CHUNK] Successfully applied chunk [{}, {}] to client world in {} ms",
                     chunkX, chunkZ, String.format("%.2f", (System.nanoTime() - applyStartNs) / 1_000_000.0));
 
-            // 加载活跃：续期 JoinBoost 窗口（含 hasLight 无重算块，重算块在 applyLightEngineNow 续期）
-            io.github.limuqy.mc.hassium.cache.client.ClientMainThreadBudget.noteChunkApplyActivity();
+            // 加载活跃：续期 JoinBoost 窗口（含 hasLight 无重算块，重算块在 applyLightEngineNow 续期）。
+            // 仅权威块续期：renderOnly（OVD）不续期，避免超视渲染灌队把 JoinBoost 窗口永久续期
+            // （高预算被 OVD 吃满、VDES 的 JoinBoost 门控失效）。
+            if (!renderOnly) {
+                io.github.limuqy.mc.hassium.cache.client.ClientMainThreadBudget.noteChunkApplyActivity();
+            }
 
             // 区块就绪：发送延后的 BE 请求 + 冲刷暂存 BE
             // renderOnly（超视渲染）不向服务器请求 BE，避免视距外流量

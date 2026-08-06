@@ -42,6 +42,25 @@ public class ClientCacheLoadQueue {
     private final PriorityBlockingQueue<ReadyChunk> readyQueue =
             new PriorityBlockingQueue<>(100, (a, b) -> Double.compare(a.priority, b.priority));
 
+    /**
+     * 未完成权威（renderOnly=false）加载数 = pending + ready。
+     * <p>
+     * OVD 门控依据：权威加载未归零时超视渲染不得 enqueue（权威块独占每帧配额）；
+     * 归零后 OVD 才能启动（配额内权威优先，权威轮空才轮到 OVD）。
+     */
+    private final java.util.concurrent.atomic.AtomicInteger authorityLoad = new java.util.concurrent.atomic.AtomicInteger();
+
+    /** 权威加载是否已完成（pending + ready 均无权威块）。 */
+    public int getAuthorityLoad() {
+        return authorityLoad.get();
+    }
+
+    /** readyQueue 中是否还有权威块（层序保证：peek 非 renderOnly 即含权威）。 */
+    public boolean hasAuthorityReady() {
+        ReadyChunk head = readyQueue.peek();
+        return head != null && !head.renderOnly();
+    }
+
     /** 加载任务 */
     private record LoadTask(ChunkPos pos, double priority, boolean renderOnly) {}
 
@@ -96,6 +115,9 @@ public class ClientCacheLoadQueue {
         synchronized (q) {
             q.offer(new LoadTask(pos, priority, renderOnly));
         }
+        if (!renderOnly) {
+            authorityLoad.incrementAndGet();
+        }
         // 提交该 region 的加载任务（每 region 最多一个在跑）
         scheduleRegion(rk);
     }
@@ -128,6 +150,7 @@ public class ClientCacheLoadQueue {
             }
             touched.add(rk);
         }
+        authorityLoad.addAndGet(positions.size());
 
         // 每个涉及的 region 提交一个加载任务
         for (long rk : touched) {
@@ -389,16 +412,26 @@ public class ClientCacheLoadQueue {
         // 至少应用 1 个，避免预算过紧饿死
         boolean forceOne = true;
 
-        while (!readyQueue.isEmpty() && applied < hardCap) {
+        // 帧配额（maxChunksPerFrame）覆盖全部缓存块；PriorityBlockingQueue 层序天然保证
+        // 权威（AUTHORITATIVE < RENDER_ONLY）先 poll——配额满时 break 即「权威优先，
+        // 权威轮空才轮到 OVD」，无需额外判据。
+        while (!readyQueue.isEmpty()) {
             long now = System.nanoTime();
             if (!forceOne && now >= deadlineNs) {
                 break;
             }
             forceOne = false;
+            if (!ClientMainThreadBudget.tryAcquireCacheApply()) {
+                break; // 本帧配额已满（含 OVD substitute 消耗）；权威/OVD 同受 maxChunksPerFrame 硬顶
+            }
 
             ReadyChunk chunk = readyQueue.poll();
             if (chunk == null) {
                 break;
+            }
+            if (!chunk.renderOnly()) {
+                // 缓存侧职责结束（成功落地或转网络重取），权威未完成计数相应减少
+                authorityLoad.decrementAndGet();
             }
             // 恢复预填充 / OVD：renderOnly 落地前权威区块可能已到达（hasChunk=true）。
             // 跳过而非覆盖 —— 权威数据优先，过期磁盘快照不得回写（预填充的旧数据会
@@ -467,6 +500,7 @@ public class ClientCacheLoadQueue {
         pendingByRegion.clear();
         activeRegions.clear();
         readyQueue.clear();
+        authorityLoad.set(0);
         Constants.LOG.debug("Hassium: Cleared cache load queue");
     }
 }

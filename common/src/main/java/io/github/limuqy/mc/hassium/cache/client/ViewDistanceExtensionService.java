@@ -284,11 +284,15 @@ public class ViewDistanceExtensionService {
         }
 
         // 加载新的 renderOnly（跳过已 apply / 已排队 / 未到期 miss）
-        // 负载高时静默：优先保证 serverVD 内权威区块（chunkHash 比对后的缓存加载），
-        // 避免超视渲染环带（数千区块）压垮 executor 导致权威区块延迟。
-        // JoinBoost 窗口内暂停队列深度门槛；renderOnly 使用 ChunkDistancePriority.RENDER_ONLY 层。
-        // 每 tick 入队上限 = maxChunksPerFrame，按距离升序，近的先 enqueue。
-        // 未完成时不更新 lastPlayerPos → 下一 tick geometryChanged 仍为 true → 继续灌队。
+        // 权威加载未完成（pending + ready 含权威块）：OVD 完全暂停，权威块独占每帧配额。
+        // 用户场景：正常 VD 加载完成后再加载超视距，避免 OVD 读盘/apply 挤占权威。
+        if (ClientCacheLoadQueue.getInstance().getAuthorityLoad() > 0) {
+            Constants.LOG.debug("Hassium: OVD paused (authorityLoad={}), waiting for authority chunks",
+                    ClientCacheLoadQueue.getInstance().getAuthorityLoad());
+            return;
+        }
+        // JoinBoost 窗口内跳过队列深度门槛（权威已完成，OVD 可以积极灌队）；
+        // 窗口过期后按阈值限流，防止 OVD 数千区块压垮 executor。
         if (!ClientMainThreadBudget.isJoinBoostActive()) {
             int pendingLoad = ClientCacheLoadQueue.getInstance().getPendingSize()
                     + ClientCacheLoadQueue.getInstance().getReadySize();
@@ -606,6 +610,14 @@ public class ViewDistanceExtensionService {
         }
 
         try {
+            // 帧配额：OVD unload substitute 与 readyQueue 消费共用 maxChunksPerFrame 硬顶。
+            // 权威块在队时本帧不替换（权威优先，轮空才轮到 OVD）；配额满同样 defer——
+            // 延迟几帧由 OVD rescan 正常路径补上，不绕过帧限速。
+            if (ClientCacheLoadQueue.getInstance().hasAuthorityReady()
+                    || !io.github.limuqy.mc.hassium.cache.client.ClientMainThreadBudget.tryAcquireCacheApply()) {
+                Constants.LOG.debug("Hassium: OVD unload substitute deferred (authority in queue or frame budget full)");
+                return false;
+            }
             // 扩大半径，避免随后 apply 被 inRange 丢弃
             Minecraft mc = Minecraft.getInstance();
             if (mc != null) {

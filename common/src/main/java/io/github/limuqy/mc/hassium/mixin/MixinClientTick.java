@@ -28,6 +28,8 @@ public class MixinClientTick {
     @Inject(method = "tick", at = @At("HEAD"))
     private void hassium$tickStart(CallbackInfo ci) {
         TickMonitor.beginClientTick();
+        // 渲染帧粒度重置缓存 apply 配额（readyQueue 消费 + OVD substitute 共用 maxChunksPerFrame）
+        ClientMainThreadBudget.beginFrameCacheBudget();
     }
 
     /**

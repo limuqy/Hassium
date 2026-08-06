@@ -46,6 +46,9 @@ public abstract class MixinVanillaChunkApplyBudget {
         if (BUDGETED_APPLY.get()) {
             return; // 预算任务内调用原方法：放行
         }
+        if (io.github.limuqy.mc.hassium.network.ClientChunkHandler.isHassiumApplyInProgress()) {
+            return; // Hassium 预算内 apply（缓存读回/OVD/压缩通道）：放行，避免入队后 hasChunk 假失败
+        }
         if (!hassium$shouldBudgetVanillaApply()) {
             return;
         }
