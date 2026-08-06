@@ -94,7 +94,11 @@ public final class ClientLightBufferQueue {
             }
             ClientLightRecomputeService.applyLightEngine(level, chunk, e.pos);
             if (HassiumConfigService.getInstance().isLightCacheEnabled()) {
-                HassiumLightHooks.INSTANCE.updateCacheWithLightData(level, e.pos, e.nbt);
+                // 重算后不立即写盘：此刻引擎光可能未收敛——加载风暴中传播域不完整时，
+                // 海底 section 会被 sky 15 灌满（R1 写回即铁证），写回 = 落盘污染光，
+                // R2 带光 apply 信任缓存光 → 「清澈见底」。只登记 dirty，等卸载/断连
+                // dump 统一写引擎收敛光（用户方案：丢光可接受，R2 重算兜底）。
+                ClientChunkDirtyTracker.markDirty(e.pos);
             }
             it.remove();
             done++;

@@ -247,8 +247,29 @@ public class CacheSaveQueue {
         if (level == null) {
             return;
         }
+        // 断连事件常在 Netty 线程触发；enqueue 强制主线程序列化（ThreadingDetector 约束），
+        // 若异步转移会晚于 clearLevel/clearAll 而全部丢弃。这里同步等主线程执行完。
+        Minecraft mc = Minecraft.getInstance();
+        if (mc != null && !mc.isSameThread()) {
+            ClientLevel levelRef = level;
+            java.util.concurrent.CountDownLatch latch = new java.util.concurrent.CountDownLatch(1);
+            mc.execute(() -> {
+                try {
+                    enqueueAllFromLevel(levelRef);
+                } finally {
+                    latch.countDown();
+                }
+            });
+            try {
+                latch.await(10, java.util.concurrent.TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            return;
+        }
         int count = 0;
         int skippedClean = 0;
+        Throwable firstErr = null;
         try {
             ClientChunkCache cache = ((ClientLevelAccessor) level).hassium$getChunkSource();
             int radius = 33;
@@ -271,11 +292,17 @@ public class CacheSaveQueue {
                             skippedClean++;
                         }
                     } catch (Exception ignored) {
+                        if (firstErr == null) {
+                            firstErr = ignored;
+                        }
                     }
                 }
             }
         } catch (Exception e) {
             Constants.LOG.warn("Hassium: [CACHE SAVE] Failed to iterate loaded chunks", e);
+        }
+        if (firstErr != null) {
+            Constants.LOG.warn("Hassium: [CACHE SAVE] Disconnect dump first enqueue error", firstErr);
         }
         if (count > 0 || skippedClean > 0) {
             Constants.LOG.info("Hassium: [CACHE SAVE] Disconnect dump: queued={}, skippedClean={}, dirtyLeft={}",
