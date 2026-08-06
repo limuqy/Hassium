@@ -57,6 +57,9 @@ public final class ClientLifecycleHelper {
 
         // M2: 异步初始化存储（热度索引 / section 哈希在后台线程）
         initializeCacheAsync();
+        // 并行光照引擎装配（幂等，重复登录无害）：配置 / 指标 / 官方引擎原语钩子
+        io.github.limuqy.mc.promethium.light.ParallelLightEngine.getInstance().configure(
+                HassiumLightBindings.INSTANCE, HassiumLightBindings.INSTANCE, HassiumLightHooks.INSTANCE);
         initialized = true;
     }
 
@@ -103,7 +106,7 @@ public final class ClientLifecycleHelper {
         MainThreadDispatcher.clearClient(false);
         MainThreadDispatcher.clearPlayerPosition();
         ClientLightRecomputeService.clear();
-        io.github.limuqy.mc.hassium.cache.client.LightComputeService.getInstance().clear();
+        io.github.limuqy.mc.promethium.light.ParallelLightEngine.getInstance().clear();
         ClientMetadataHandler.clearPendingState();
 
         // ⑥ finalizeDisconnect：MixinMinecraft disconnect/clearLevel TAIL，或加载器 DISCONNECT 兜底

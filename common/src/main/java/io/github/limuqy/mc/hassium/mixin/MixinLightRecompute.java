@@ -37,7 +37,7 @@ public class MixinLightRecompute {
         // 缓存 apply（applyChunkData → handleLevelChunkWithLight）与网络全量包共用此路径；
         // 不失效则同 chunk 对象的旧快照继续产出旧地形光（深水区亮暗跳变同根因），
         // 预提交任务（ClientCacheLoadQueue / delta merge）的核心柱也会采样到旧数据。
-        io.github.limuqy.mc.hassium.cache.client.LightComputeService.getInstance()
+        io.github.limuqy.mc.promethium.light.ParallelLightEngine.getInstance()
                 .onChunkDataReplaced(level, new ChunkPos(packet.getX(), packet.getZ()));
 
         var lightData = packet.getLightData();

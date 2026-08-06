@@ -420,7 +420,7 @@ public class ClientCacheLoadQueue {
             // （MixinLightRecompute TAIL 的精确提交仍会执行并覆盖粗结果，双算成本可忽略）。
             // renderOnly 走 VDES 自己的路径，不预提交。
             if (!chunk.renderOnly() && !chunk.hasCachedLight()) {
-                LightComputeService.getInstance().submitRecompute(chunk.pos(), chunk.lightWritebackNbt());
+                io.github.limuqy.mc.promethium.light.ParallelLightEngine.getInstance().submitRecompute(chunk.pos(), chunk.lightWritebackNbt());
             }
             boolean appliedToWorld = ClientChunkHandler.applyChunkData(
                     chunk.pos().x, chunk.pos().z, chunk.data(), chunk.renderOnly(),

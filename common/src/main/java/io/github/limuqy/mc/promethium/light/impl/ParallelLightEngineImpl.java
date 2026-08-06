@@ -1,17 +1,21 @@
-package io.github.limuqy.mc.hassium.cache.client;
+package io.github.limuqy.mc.promethium.light.impl;
 
-import io.github.limuqy.mc.hassium.Constants;
-import io.github.limuqy.mc.hassium.compat.CompoundTagCompat;
-import io.github.limuqy.mc.hassium.compat.LevelHeightCompat;
-import io.github.limuqy.mc.hassium.compat.LightAccessCompat;
-import io.github.limuqy.mc.hassium.concurrent.ExecutorFactory;
-import io.github.limuqy.mc.hassium.config.HassiumConfigService;
-import io.github.limuqy.mc.hassium.metrics.NetworkStats;
+import io.github.limuqy.mc.promethium.compat.CompoundTagCompat;
+import io.github.limuqy.mc.promethium.compat.LevelHeightCompat;
+import io.github.limuqy.mc.promethium.compat.LightAccessCompat;
+import io.github.limuqy.mc.promethium.concurrent.ExecutorFactory;
+import io.github.limuqy.mc.promethium.light.LightColumnSnapshot;
+import io.github.limuqy.mc.promethium.light.LightEngineConfig;
+import io.github.limuqy.mc.promethium.light.LightEngineHooks;
+import io.github.limuqy.mc.promethium.light.LightEngineStats;
+import io.github.limuqy.mc.promethium.light.LightFloodFill;
+import io.github.limuqy.mc.promethium.light.ParallelLightEngine;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.SectionPos;
 import net.minecraft.nbt.ByteArrayTag;
+import net.minecraft.nbt.ByteTag;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.Tag;
@@ -29,6 +33,9 @@ import net.minecraft.world.phys.shapes.VoxelShape;
 import it.unimi.dsi.fastutil.ints.IntArrayList;
 import it.unimi.dsi.fastutil.longs.LongArrayFIFOQueue;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
@@ -38,6 +45,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * 并行光照引擎（方案 D）：后台线程池全量 BFS 重算 + 主线程原子提交。
@@ -60,7 +68,14 @@ import java.util.concurrent.ExecutorService;
  * {@link #clear()} 可跨线程调用（断连清理在 1.21.11 Fabric 可能在 Netty IO 线程触发）：
  * 全部队列与映射使用并发容器。
  */
-public final class LightComputeService {
+public final class ParallelLightEngineImpl implements ParallelLightEngine {
+
+    private static final Logger LOG = LoggerFactory.getLogger("Promethium/Light");
+    /** 装配状态：configure 前 submit/drain 直接丢弃（仅防编程错误；装配保证在登录后）。 */
+    private volatile LightEngineConfig cfg;
+    private volatile LightEngineStats stats;
+    private volatile LightEngineHooks hooks;
+    private final AtomicBoolean configured = new AtomicBoolean();
 
     /**
      * 求解域 == 传播域：W=48 = 核心柱 ±16 格（3 柱全宽，覆盖传播半径 15 + 1 格余量）。
@@ -117,10 +132,18 @@ public final class LightComputeService {
     private static final int[] OPPOSITE_DIR = {LightFloodFill.UP, LightFloodFill.DOWN,
             LightFloodFill.SOUTH, LightFloodFill.NORTH, LightFloodFill.EAST, LightFloodFill.WEST};
 
-    private static final LightComputeService INSTANCE = new LightComputeService();
+    private static final ParallelLightEngineImpl INSTANCE = new ParallelLightEngineImpl();
 
-    public static LightComputeService getInstance() {
+    public static ParallelLightEngineImpl getInstance() {
         return INSTANCE;
+    }
+
+    @Override
+    public void configure(LightEngineConfig config, LightEngineStats stats, LightEngineHooks hooks) {
+        this.cfg = config;
+        this.stats = stats;
+        this.hooks = hooks;
+        configured.set(true);
     }
 
     /** 后台结果积压上限：结果含 expectedCoreChunk 强引用（阻止卸载块回收），容量即内存上界。 */
@@ -168,6 +191,7 @@ public final class LightComputeService {
      * 失效该柱快照、bump 版本、重启未完成任务（capture 阶段重采样新地形）。
      * 已提交后台的旧任务（solve 基于旧地形）由结果落地版本校验丢弃。
      */
+    @Override
     public void onChunkDataReplaced(ClientLevel level, ChunkPos pos) {
         long key = ChunkPos.asLong(pos.x, pos.z);
         synchronized (snapshotCache) {
@@ -191,32 +215,32 @@ public final class LightComputeService {
     /** 最终收敛探针一次性标志（队列全空后只跑一次，见 drainCompletions）。 */
     private boolean finalProbeDone;
 
-    private LightComputeService() {
+    private ParallelLightEngineImpl() {
     }
 
     /** 限频诊断日志（定位并行引擎断链用，定位后移除）。 */
     private void diagCapture(String msg, Object... args) {
         if (diagCapture.getAndIncrement() < 10) {
-            Constants.LOG.info("[LIGHT-DIAG-CAPTURE] " + msg, args);
+            LOG.info("[LIGHT-DIAG-CAPTURE] " + msg, args);
         }
     }
 
     private void diagBg(String msg, Object... args) {
         if (diagBg.getAndIncrement() < 10) {
-            Constants.LOG.info("[LIGHT-DIAG-BG] " + msg, args);
+            LOG.info("[LIGHT-DIAG-BG] " + msg, args);
         }
     }
 
     private void diagApply(String msg, Object... args) {
         if (diagApply.getAndIncrement() < 10) {
-            Constants.LOG.info("[LIGHT-DIAG-APPLY] " + msg, args);
+            LOG.info("[LIGHT-DIAG-APPLY] " + msg, args);
         }
     }
 
     /** 传播阶段限频诊断（自研传播域工作量化，定位后移除）。 */
     private void diagProp(String msg, Object... args) {
         if (diagProp.getAndIncrement() < 20) {
-            Constants.LOG.info("[LIGHT-PROP] " + msg, args);
+            LOG.info("[LIGHT-PROP] " + msg, args);
         }
     }
 
@@ -230,7 +254,7 @@ public final class LightComputeService {
      * 未变 section 保留旧光字段）。is_light_on=1 / 全部有光 / 跨度超阈值 → null（整 chunk）。
      */
     private static SectionDomain inferChangeSpan(CompoundTag nbt, int minSection, int maxSection) {
-        if (nbt == null || ChunkDiskCodec.isLightOn(nbt)) {
+        if (nbt == null || isLightOn(nbt)) {
             return null;
         }
         ListTag sections = CompoundTagCompat.getList(nbt, "sections");
@@ -262,6 +286,12 @@ public final class LightComputeService {
             return null;
         }
         return new SectionDomain(minSy, maxSyEx);
+    }
+
+    /** 缓存 NBT 的 is_light_on 标志（语义同 Hassium ChunkDiskCodec.isLightOn；引擎自持免宿主依赖）。 */
+    private static boolean isLightOn(CompoundTag nbt) {
+        Tag lightOnTag = nbt.get("is_light_on");
+        return lightOnTag instanceof ByteTag bt && CompoundTagCompat.getByte(bt) != 0;
     }
 
     /** DOMAIN_OFFSETS 偏移 → 下标（0–8）；非 3×3 偏移返回 -1。 */
@@ -392,9 +422,14 @@ public final class LightComputeService {
      * 缓存预提交时 core chunk 尚未入世界也允许登记；TAIL 再次提交时检测到 chunk 身份变化，
      * 会丢弃预提交的部分采样并从权威 chunk 重启。
      */
+    @Override
     public void submitRecompute(ChunkPos corePos, CompoundTag cachedNbt) {
         ClientLevel level = Minecraft.getInstance().level;
         if (level == null) {
+            return;
+        }
+        if (hooks == null || cfg == null) {
+            LOG.warn("Promethium: engine not configured; dropping {}", corePos);
             return;
         }
         long key = ChunkPos.asLong(corePos.x, corePos.z);
@@ -638,8 +673,7 @@ public final class LightComputeService {
                 int[] skyShellSeeds = null, blockShellSeeds = null;
                 CompoundTag nbt = task.cachedNbt;
                 if (nbt == null) {
-                    nbt = io.github.limuqy.mc.hassium.network.ClientChunkHandler
-                            .loadChunkNbtFromCache(task.corePos);
+                    nbt = hooks.loadChunkNbtFromCache(task.corePos);
                 }
                 if (segmented) {
                     int minSection = task.minSection;
@@ -696,7 +730,7 @@ public final class LightComputeService {
                 LightFloodFill.Occlusion occlusion48 = (srcShape, dstShape, dir) -> Shapes.faceShapeOccludes(
                         shapeTable48[srcShape - 1][dir], shapeTable48[dstShape - 1][OPPOSITE_DIR[dir]]);
                 if (segmented && segLog.getAndIncrement() < 10) {
-                    Constants.LOG.info("[LIGHT-SEG] chunk {} dMin={} dCount={} H={} shellB={} shellT={}",
+                    LOG.info("[LIGHT-SEG] chunk {} dMin={} dCount={} H={} shellB={} shellT={}",
                             task.corePos, dMin, dCount, solveHeight, shellBottom, shellTop);
                 }
                 // 全域 solve（block/sky 独立计时）：核心柱与邻柱区的最终值一步到位。
@@ -709,7 +743,7 @@ public final class LightComputeService {
                         propLight, propSourceY, propShape, occlusion48, skyShellSeeds, shellBottom, shellTop);
                 long splitT2 = System.nanoTime();
                 if (diagSplit.getAndIncrement() < 20) {
-                    Constants.LOG.info("[LIGHT-DIAG-SPLIT] block={}us sky={}us total={}us",
+                    LOG.info("[LIGHT-DIAG-SPLIT] block={}us sky={}us total={}us",
                             (splitT1 - splitT0) / 1000, (splitT2 - splitT1) / 1000, (splitT2 - splitT0) / 1000);
                 }
                 // 提取：核心柱全 section + 邻柱差异 section（掩码位 = 变化 section）
@@ -813,7 +847,7 @@ public final class LightComputeService {
                 diagProp("solve={}us extract={}us neighSections={} emitN={} blockNonZero={}",
                         (splitT2 - splitT0) / 1000, (propT2 - propT0) / 1000,
                         neighborSectionCount(neighborSkyMasks, neighborBlockMasks), emitN, blockNonZero);
-                NetworkStats.recordLightRecomputeBackgroundTime(System.nanoTime() - backgroundStartNs);
+                stats.recordBackgroundTime(System.nanoTime() - backgroundStartNs);
                 diagBg("done {} elapsed={}us", task.corePos, (System.nanoTime() - backgroundStartNs) / 1000);
                 if (task.generation == generation) {
                     if (!results.offer(new LightComputeResult(task.corePos, task.expectedCoreChunk,
@@ -831,7 +865,7 @@ public final class LightComputeService {
             } catch (Throwable t) {
                 diagBg("error {}: {}", task.corePos, t);
                 if (task.generation == generation) {
-                    Constants.LOG.error("Hassium: Parallel light recompute failed for {}", task.corePos, t);
+                    LOG.error("Hassium: Parallel light recompute failed for {}", task.corePos, t);
                 }
             }
         });
@@ -845,10 +879,15 @@ public final class LightComputeService {
      * 批尾 {@code safeRunLightUpdates} 一次收敛官方队列（种子 = 注入点/发射源，增量小——
      * solve 已正确，仅补竞态偏暗格），然后逐结果做验算对比 + 缓存写回（写回后台化）。
      */
+    @Override
     public void drainCompletions(long deadlineNs) {
         ClientLevel level = Minecraft.getInstance().level;
         if (level == null) {
             return; // 断连/未进服：结果由 clear() 清理，不消费
+        }
+        if (hooks == null || cfg == null) {
+            LOG.warn("Promethium: engine not configured; dropping drainCompletions");
+            return;
         }
         capturePending(level, deadlineNs);
         LevelLightEngine lightEngine = level.getLightEngine();
@@ -863,7 +902,7 @@ public final class LightComputeService {
                     batch.add(r);
                 }
             } catch (Throwable t) {
-                Constants.LOG.error("Hassium: Failed to enqueue parallel light result for {}", r.corePos(), t);
+                LOG.error("Hassium: Failed to enqueue parallel light result for {}", r.corePos(), t);
             }
         }
         if (batch.isEmpty()) {
@@ -873,9 +912,9 @@ public final class LightComputeService {
         // 补亮竞态偏暗格（solve 已正确，增量小；实测 safeRunLightUpdates 空队列 ~0.1ms）。
         // 帧预算外执行（同旧架构批尾 runLightUpdates 语义：预算循环只限 poll）。
         try {
-            ClientLightRecomputeService.safeRunLightUpdates(lightEngine);
+            hooks.safeRunLightUpdates(lightEngine);
         } catch (Throwable t) {
-            Constants.LOG.error("Hassium: Failed to run light updates for parallel batch", t);
+            LOG.error("Hassium: Failed to run light updates for parallel batch", t);
         }
         // 最终收敛探针（诊断，跑一次）：队列全空 = 加载结束，官方在最后落地值上继续传播的
         // 增量 > 0 即最终状态仍有暗格残留（黑块等待不消的量化）。纯观察：先 clone、后恢复。
@@ -895,7 +934,7 @@ public final class LightComputeService {
                 byte[][] snapBlock = snapshotColumn(blockListener, r.corePos().x, r.corePos().z, minSection, sectionCount);
                 lightEngine.setLightEnabled(r.corePos(), true);
                 lightEngine.propagateLightSources(r.corePos());
-                ClientLightRecomputeService.safeRunLightUpdates(lightEngine);
+                hooks.safeRunLightUpdates(lightEngine);
                 long increased = 0;
                 for (int s = 0; s < sectionCount; s++) {
                     SectionPos sp = SectionPos.of(r.corePos().x, minSection + s, r.corePos().z);
@@ -934,9 +973,9 @@ public final class LightComputeService {
                         System.arraycopy(snapBlock[s], 0, blockArr, 0, 2048);
                     }
                 }
-                Constants.LOG.info("[LIGHT-PROBE-FINAL] chunk {} increased={} (0 = 最终无暗格残留)", r.corePos(), increased);
+                LOG.info("[LIGHT-PROBE-FINAL] chunk {} increased={} (0 = 最终无暗格残留)", r.corePos(), increased);
                 } catch (Throwable t) {
-                    Constants.LOG.warn("Hassium: final light probe failed", t);
+                    LOG.warn("Hassium: final light probe failed", t);
                 }
             }
         }
@@ -944,12 +983,13 @@ public final class LightComputeService {
             try {
                 applyResultPost(level, lightEngine, r);
             } catch (Throwable t) {
-                Constants.LOG.error("Hassium: Failed to finalize parallel light result for {}", r.corePos(), t);
+                LOG.error("Hassium: Failed to finalize parallel light result for {}", r.corePos(), t);
             }
         }
     }
 
     /** 断连清理：拒绝旧会话任务、清空全部队列与快照缓存并关闭线程池（下次提交重建）。 */
+    @Override
     public void clear() {
         generation++;
         results.clear();
@@ -1006,7 +1046,7 @@ public final class LightComputeService {
         try {
             applyResultEnqueueInner(level, lightEngine, r);
         } finally {
-            NetworkStats.recordLightRecomputeTime(System.nanoTime() - mainThreadStartNs + r.captureNanos());
+            stats.recordMainThreadTime(System.nanoTime() - mainThreadStartNs + r.captureNanos());
         }
         return true;
     }
@@ -1028,11 +1068,11 @@ public final class LightComputeService {
                         continue;
                     }
                 }
-                ClientLightRecomputeService.ensureColumnDataLayers(level, lightEngine,
+                hooks.ensureColumnDataLayers(level, lightEngine,
                         new ChunkPos(cx, cz), dMin, dMin + dCount);
             }
             // 传播会读 4 邻柱全列 DataLayer（官方 runLightUpdates 路径，缺层有 NPE 先例 1.21.10）
-            ClientLightRecomputeService.ensureNeighborDataLayers(level, lightEngine, r.corePos(), minSection, maxSection);
+            hooks.ensureNeighborDataLayers(level, lightEngine, r.corePos(), minSection, maxSection);
             // 2. 写入：核心柱全写 + 4 邻柱全写 + 4 对角全写（覆盖式）
             LayerLightEventListener skyListener = lightEngine.getLayerListener(LightLayer.SKY);
             LayerLightEventListener blockListener = lightEngine.getLayerListener(LightLayer.BLOCK);
@@ -1056,13 +1096,13 @@ public final class LightComputeService {
             //    旧光正确值，increase-only 传播无净变化（stability 论证），批尾 runLightUpdates 收敛。
             lightEngine.setLightEnabled(r.corePos(), true);
             lightEngine.propagateLightSources(r.corePos());
-            ClientLightRecomputeService.pullLightFromNeighborEdges(level, r.corePos(), minSection, maxSection);
+            hooks.pullLightFromNeighborEdges(level, r.corePos(), minSection, maxSection);
             return;
         }
 
         // 1. 建层（storage 未建层的 section 在 memcpy 后不生效）
-        ClientLightRecomputeService.ensureColumnDataLayers(level, lightEngine, r.corePos(), minSection, maxSection);
-        ClientLightRecomputeService.ensureNeighborDataLayers(level, lightEngine, r.corePos(), minSection, maxSection);
+        hooks.ensureColumnDataLayers(level, lightEngine, r.corePos(), minSection, maxSection);
+        hooks.ensureNeighborDataLayers(level, lightEngine, r.corePos(), minSection, maxSection);
 
         // 2. 核心柱全 section memcpy（DataLayer.getData() 返回内部数组，覆盖内容即官方 swap 落地；
         //    渲染/缓存/序列化全部读这份数组。原 queueSectionData+批尾 runLightUpdates 已由
@@ -1109,7 +1149,7 @@ public final class LightComputeService {
         //       批尾传播后收敛。缺此步则边缘暗格永久（黑块等待不消）。
         lightEngine.setLightEnabled(r.corePos(), true);
         lightEngine.propagateLightSources(r.corePos());
-        ClientLightRecomputeService.pullLightFromNeighborEdges(level, r.corePos(), minSection, maxSection);
+        hooks.pullLightFromNeighborEdges(level, r.corePos(), minSection, maxSection);
     }
 
     /** 单柱 D y section 覆盖写（分段落地）：DataLayer 非 null 时整段覆盖 + 脏标记（核心柱 memcpy 循环同款）。 */
@@ -1162,16 +1202,15 @@ public final class LightComputeService {
 
     /** 阶段二（批尾统一落地后）：官方验算（可选）+ 缓存写回（写回入后台队列）。 */
     private void applyResultPost(ClientLevel level, LevelLightEngine lightEngine, LightComputeResult r) {
-        HassiumConfigService cfg = HassiumConfigService.getInstance();
         int minSection = LevelHeightCompat.getMinSection(level);
         int maxSection = LevelHeightCompat.getMaxSectionExclusive(level);
-        if (cfg.isLightVerifyEnabled()) {
+        if (cfg.lightVerifyEnabled()) {
             // 官方引擎从零重算对照（纯观察，验算后恢复世界 = 我们的输出）：
             // memcpy 落地后读层 == 输入（恒等），必须让官方算法独立算一遍才有对比意义。
             verifyWithOfficial(level, lightEngine, r, minSection, maxSection);
         }
-        if (cfg.isLightCacheEnabled()) {
-            ClientLightRecomputeService.updateCacheWithLightData(level, r.corePos(), r.cachedNbt());
+        if (cfg.lightCacheEnabled()) {
+            hooks.updateCacheWithLightData(level, r.corePos(), r.cachedNbt());
         }
     }
 
@@ -1232,11 +1271,11 @@ public final class LightComputeService {
             } else {
                 lightEngine.setLightEnabled(r.corePos(), true);
                 lightEngine.propagateLightSources(r.corePos());
-                ClientLightRecomputeService.pullLightFromNeighborEdges(level, r.corePos(), minSection, maxSection);
+                hooks.pullLightFromNeighborEdges(level, r.corePos(), minSection, maxSection);
             }
-            ClientLightRecomputeService.safeRunLightUpdates(lightEngine);
+            hooks.safeRunLightUpdates(lightEngine);
         } catch (Throwable t) {
-            Constants.LOG.warn("Hassium: light verify oracle failed for {}", r.corePos(), t);
+            LOG.warn("Hassium: light verify oracle failed for {}", r.corePos(), t);
         }
         // 4. 读回官方结果（null 层 = 全 0）
         byte[][] officialSky = new byte[sectionCount][];
@@ -1280,7 +1319,7 @@ public final class LightComputeService {
                         }
                     }
                 }
-                Constants.LOG.error("[LIGHT_VERIFY-ZERO3X3] chunk {} sky={} block={} {}", r.corePos(), zs, zb, zsamples);
+                LOG.error("[LIGHT_VERIFY-ZERO3X3] chunk {} sky={} block={} {}", r.corePos(), zs, zb, zsamples);
             } else {
                 // 邻柱（W）读回：官方传播在 W 柱的值（对比自研 W 柱解算值）
                 offW = new byte[sectionCount][];
@@ -1317,7 +1356,7 @@ public final class LightComputeService {
                         }
                     }
                 }
-                Constants.LOG.error("[LIGHT_VERIFY-ZERO3X3] chunk {} sky={} block={} {}", r.corePos(), zs, zb, zsamples);
+                LOG.error("[LIGHT_VERIFY-ZERO3X3] chunk {} sky={} block={} {}", r.corePos(), zs, zb, zsamples);
             }
             // 差异格现场：官方 vs 自研 vs LIVE 方块 lightBlock（澄清 opacity 输入是否一致）
             StringBuilder ctx = new StringBuilder();
@@ -1345,7 +1384,7 @@ public final class LightComputeService {
                 }
             }
             if (ctx.length() > 0) {
-                Constants.LOG.error("[LIGHT_VERIFY-CTX] chunk {} {}", r.corePos(), ctx);
+                LOG.error("[LIGHT_VERIFY-CTX] chunk {} {}", r.corePos(), ctx);
             }
             // 发射源探针：官方 vs 自研 在发射源格 + 6 邻域的值——分歧起点在种子还是传播路径
             StringBuilder probe = new StringBuilder();
@@ -1383,7 +1422,7 @@ public final class LightComputeService {
                     probe.append(' ');
                 }
             }
-            Constants.LOG.error("[LIGHT_VERIFY-EMITTERS] chunk {} {}", r.corePos(), probe);
+            LOG.error("[LIGHT_VERIFY-EMITTERS] chunk {} {}", r.corePos(), probe);
             // 柱状剖面：W 柱发射源沿 y 方向 8 格——官方 vs 自研（找传播分歧起点）。
             // 分段模式跳过：neighborBlockSections = D 覆盖写（非差异），且 offW 未读回。
             if (r.domainSectionCount() == 0
@@ -1417,7 +1456,7 @@ public final class LightComputeService {
                         }
                     }
                 }
-                Constants.LOG.error("[LIGHT_VERIFY-SHAFT] chunk {} {}", r.corePos(), shaft);
+                LOG.error("[LIGHT_VERIFY-SHAFT] chunk {} {}", r.corePos(), shaft);
             }
         }
         // 4b. 重放对比（仅第 1 块）：主线程用【全新】9 柱捕获重跑同一 solve——区分
@@ -1437,10 +1476,10 @@ public final class LightComputeService {
                     so += diffLayers(replaySky[s], officialSky[s]);
                     bo += diffLayers(replayBlock[s], officialBlock[s]);
                 }
-                Constants.LOG.error("[LIGHT_VERIFY-REPLAY] chunk {} replayVsR sky={} block={} replayVsOfficial sky={} block={}",
+                LOG.error("[LIGHT_VERIFY-REPLAY] chunk {} replayVsR sky={} block={} replayVsOfficial sky={} block={}",
                         r.corePos(), rs, rb, so, bo);
             } else {
-                Constants.LOG.error("[LIGHT_VERIFY-REPLAY] chunk {} FAILED (neighbor not loaded at verify time)", r.corePos());
+                LOG.error("[LIGHT_VERIFY-REPLAY] chunk {} FAILED (neighbor not loaded at verify time)", r.corePos());
             }
         }
         // 4c. 稳定性对比（不置零）：官方机制在【我们的值】之上继续增长——增长数 > 0 即我们的
@@ -1491,17 +1530,17 @@ public final class LightComputeService {
         }
         long mismatch = skyMismatch + blockMismatch;
         long edgeMismatch = edgeSky + edgeBlock;
-        NetworkStats.recordLightVerifyMismatch(mismatch);
+        stats.recordVerifyMismatch(mismatch);
         if (mismatch > 0) {
-            Constants.LOG.error("[LIGHT_VERIFY] chunk {} mismatch={} (sky={} block={})", r.corePos(), mismatch, skyMismatch, blockMismatch);
+            LOG.error("[LIGHT_VERIFY] chunk {} mismatch={} (sky={} block={})", r.corePos(), mismatch, skyMismatch, blockMismatch);
             if (samples.length() > 0) {
-                Constants.LOG.error("[LIGHT_VERIFY-SAMPLE] {}", samples);
+                LOG.error("[LIGHT_VERIFY-SAMPLE] {}", samples);
             }
         } else {
-            Constants.LOG.debug("[LIGHT_VERIFY] chunk {} ok", r.corePos());
+            LOG.debug("[LIGHT_VERIFY] chunk {} ok", r.corePos());
         }
         if (edgeMismatch > 0) {
-            Constants.LOG.error("[LIGHT_VERIFY-EDGE] chunk {} edgeMismatch={} (sky={} block={})",
+            LOG.error("[LIGHT_VERIFY-EDGE] chunk {} edgeMismatch={} (sky={} block={})",
                     r.corePos(), edgeMismatch, edgeSky, edgeBlock);
         }
     }
@@ -1590,16 +1629,16 @@ public final class LightComputeService {
     }
 
     /** 稳定性对比：不置零，官方机制在【我们的值】之上继续传播；返回官方增亮的格数。 */
-    private static long stabilityPass(ClientLevel level, LevelLightEngine lightEngine,
-                                      LayerLightEventListener skyListener, LayerLightEventListener blockListener,
-                                      LightComputeResult r, byte[][] officialSky, byte[][] officialBlock,
-                                      int minSection, int sectionCount) {
+    private long stabilityPass(ClientLevel level, LevelLightEngine lightEngine,
+                               LayerLightEventListener skyListener, LayerLightEventListener blockListener,
+                               LightComputeResult r, byte[][] officialSky, byte[][] officialBlock,
+                               int minSection, int sectionCount) {
         try {
             lightEngine.setLightEnabled(r.corePos(), true);
             lightEngine.propagateLightSources(r.corePos());
-            ClientLightRecomputeService.safeRunLightUpdates(lightEngine);
+            hooks.safeRunLightUpdates(lightEngine);
         } catch (Throwable t) {
-            Constants.LOG.warn("Hassium: light verify stability pass failed for {}", r.corePos(), t);
+            LOG.warn("Hassium: light verify stability pass failed for {}", r.corePos(), t);
         }
         long increased = 0;
         for (int s = 0; s < sectionCount; s++) {
@@ -1941,7 +1980,7 @@ public final class LightComputeService {
                 shownCells++;
             }
         }
-        Constants.LOG.error("[LIGHT_VERIFY-SIM] chunk {} sky={} block={} {} {}", r.corePos(), skyMech, blockMech, simLog, mech);
+        LOG.error("[LIGHT_VERIFY-SIM] chunk {} sky={} block={} {} {}", r.corePos(), skyMech, blockMech, simLog, mech);
         // 模拟器核心柱 vs 官方 oracle（验算真正关心的对比：vanilla 忠实 BFS 是否与引擎一致）
         // 分段结果：核心柱 section 数组 = D y，replay 域 = 全高 → 提取偏移 = D 底相对 minSection 的格数。
         int oracleStart = r.domainSectionCount() > 0 ? r.domainMinSection() : minSection;
@@ -1954,7 +1993,7 @@ public final class LightComputeService {
             simVsOffSky += diffLayers(simSkySec[s], officialSky[s]);
             simVsOffBlock += diffLayers(simBlockSec[s], officialBlock[s]);
         }
-        Constants.LOG.error("[LIGHT_VERIFY-SIMVSORACLE] chunk {} sky={} block={}",
+        LOG.error("[LIGHT_VERIFY-SIMVSORACLE] chunk {} sky={} block={}",
                 r.corePos(), simVsOffSky, simVsOffBlock);
         byte[][] skySec = extractRegion(sky, PROP_CORE_OFFSET, PROP_CORE_OFFSET, yOffset, sectionCount, height);
         byte[][] blockSec = extractRegion(block, PROP_CORE_OFFSET, PROP_CORE_OFFSET, yOffset, sectionCount, height);
@@ -1968,7 +2007,7 @@ public final class LightComputeService {
         verifyInputSample.incrementAndGet();
         LevelChunk chunk = level.getChunk(pos.x, pos.z);
         if (chunk == null || !level.isLoaded(pos.getWorldPosition())) {
-            Constants.LOG.error("[LIGHT_VERIFY-INPUT] chunk {} not loaded, skip", pos);
+            LOG.error("[LIGHT_VERIFY-INPUT] chunk {} not loaded, skip", pos);
             return;
         }
         IntArrayList offEmitters = new IntArrayList();
@@ -2069,7 +2108,7 @@ public final class LightComputeService {
             }
         }
         sb.append(" fillChecked=").append(fillChecked).append(" fillBad=").append(fillBad);
-        Constants.LOG.error("{}", sb);
+        LOG.error("{}", sb);
     }
 
     private LightColumnSnapshot snapshotOrCapture(ClientLevel level, LevelChunk chunk, int cx, int cz) {
@@ -2355,8 +2394,8 @@ public final class LightComputeService {
                     // 平台池 ~5ms）；排队等待不计入后台耗时统计，FIFO 队列反而更可预测。
                     // 低优先级（NORM-1）：加载期 BFS 与渲染/主线程抢核时让位，保护帧率
                     // （CPU 密集 solve 实测单任务最高 266ms，6 线程满载会挤占渲染调度）。
-                    int lightThreads = HassiumConfigService.getInstance().getParallelLightEngineThreads();
-                    Constants.LOG.info("Hassium: Created light compute pool threads={} priority={}",
+                    int lightThreads = cfg.lightThreads();
+                    LOG.info("Hassium: Created light compute pool threads={} priority={}",
                             lightThreads, Thread.NORM_PRIORITY - 1);
                     p = ExecutorFactory.createPlatform("hassium-light", lightThreads,
                             Thread.NORM_PRIORITY - 1);

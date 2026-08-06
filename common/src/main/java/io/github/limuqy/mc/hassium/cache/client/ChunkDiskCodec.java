@@ -3,7 +3,7 @@ package io.github.limuqy.mc.hassium.cache.client;
 import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.cache.ChunkContentHashUtil;
 import io.github.limuqy.mc.hassium.compat.ChunkPacketDataCompat;
-import io.github.limuqy.mc.hassium.compat.CompoundTagCompat;
+import io.github.limuqy.mc.promethium.compat.CompoundTagCompat;
 import io.github.limuqy.mc.hassium.compat.LevelChunkSectionCompat;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.core.RegistryAccess;
@@ -266,8 +266,8 @@ public final class ChunkDiskCodec {
         net.minecraft.world.level.lighting.LayerLightEventListener blockListener =
                 lightEngine.getLayerListener(net.minecraft.world.level.LightLayer.BLOCK);
 
-        int minSection = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMinSection(level);
-        int maxSection = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMaxSectionExclusive(level);
+        int minSection = io.github.limuqy.mc.promethium.compat.LevelHeightCompat.getMinSection(level);
+        int maxSection = io.github.limuqy.mc.promethium.compat.LevelHeightCompat.getMaxSectionExclusive(level);
         ListTag sectionsList = CompoundTagCompat.getList(nbt, "sections");
         boolean hasAnyLight = false;
 

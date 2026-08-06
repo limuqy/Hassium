@@ -638,7 +638,7 @@ public class ClientMetadataHandler {
             // 2. 替换变更的 sections
             var registryAccess = mc.level.registryAccess();
             net.minecraft.nbt.ListTag sections =
-                    io.github.limuqy.mc.hassium.compat.CompoundTagCompat.getList(nbt, "sections");
+                    io.github.limuqy.mc.promethium.compat.CompoundTagCompat.getList(nbt, "sections");
             for (SectionDeltaS2CPacket.SectionData sd : entry.changedSections()) {
                 int idx = sd.sectionIndex();
                 ensureSectionsSize(sections, idx + 1, registryAccess);
@@ -711,7 +711,7 @@ public class ClientMetadataHandler {
                 // 避免 TAIL 读盘（可能仍是 merge 前旧 NBT）推断失败退化为整 chunk。
                 // 预提交与 apply 同主线程回合，capture 在后续帧才开始 → 采样到的是新地形；
                 // TAIL 再提交命中已有任务（retainNbt 不覆盖），restartCoreOnly 重采样核心柱。
-                io.github.limuqy.mc.hassium.cache.client.LightComputeService.getInstance()
+                io.github.limuqy.mc.promethium.light.ParallelLightEngine.getInstance()
                         .submitRecompute(pos, finalNbt);
                 boolean applied = ClientChunkHandler.applyChunkData(entry.chunkX(), entry.chunkZ(), finalPacketBytes, false);
                 if (applied) {
@@ -894,8 +894,8 @@ public class ClientMetadataHandler {
         if (mc.level == null) return;
 
         net.minecraft.world.level.lighting.LevelLightEngine lightEngine = mc.level.getLightEngine();
-        int bottomSection = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMinSection(mc.level);
-        int topSection = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMaxSectionExclusive(mc.level);
+        int bottomSection = io.github.limuqy.mc.promethium.compat.LevelHeightCompat.getMinSection(mc.level);
+        int topSection = io.github.limuqy.mc.promethium.compat.LevelHeightCompat.getMaxSectionExclusive(mc.level);
 
         for (LightDeltaS2CPacket.Entry entry : packet.entries()) {
             ChunkPos chunkPos = new ChunkPos(entry.chunkX(), entry.chunkZ());

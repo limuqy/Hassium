@@ -65,7 +65,7 @@ public class HassiumMetricsImpl implements HassiumMetrics {
     private final AtomicLong lightCacheMissCount = new AtomicLong(0);
     private final AtomicLong lightCacheMissBytes = new AtomicLong(0);
     private final AtomicLong lightRecomputeTimeNs = new AtomicLong(0);
-    /** 后台并行光照重算（LightComputeService solve）总耗时；同步路径恒 0。 */
+    /** 后台并行光照重算（ParallelLightEngineImpl solve）总耗时；同步路径恒 0。 */
     private final AtomicLong lightRecomputeBackgroundTimeNs = new AtomicLong(0);
     private final AtomicLong lightDeltaReceivedCount = new AtomicLong(0);
     private final AtomicLong lightVerifyMismatchCount = new AtomicLong(0);

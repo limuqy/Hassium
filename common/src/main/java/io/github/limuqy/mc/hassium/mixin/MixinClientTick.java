@@ -208,7 +208,7 @@ public class MixinClientTick {
 
         // 并行光照引擎结果提交（默认关；同预算内逐结果原子提交，超预算留待下帧）
         try {
-            io.github.limuqy.mc.hassium.cache.client.LightComputeService.getInstance()
+            io.github.limuqy.mc.promethium.light.ParallelLightEngine.getInstance()
                     .drainCompletions(frameDeadlineNs);
         } catch (Exception e) {
             // 忽略提交错误

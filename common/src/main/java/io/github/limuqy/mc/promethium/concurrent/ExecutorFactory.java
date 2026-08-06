@@ -1,4 +1,4 @@
-package io.github.limuqy.mc.hassium.concurrent;
+package io.github.limuqy.mc.promethium.concurrent;
 
 import java.lang.reflect.Method;
 import java.util.concurrent.ExecutorService;

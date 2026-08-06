@@ -1,4 +1,4 @@
-package io.github.limuqy.mc.hassium.cache.client;
+package io.github.limuqy.mc.promethium.light;
 
 import org.junit.jupiter.api.Test;
 

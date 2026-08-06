@@ -2,7 +2,7 @@ package io.github.limuqy.mc.hassium.cache;
 
 import com.google.common.hash.Hashing;
 import io.github.limuqy.mc.hassium.Constants;
-import io.github.limuqy.mc.hassium.compat.CompoundTagCompat;
+import io.github.limuqy.mc.promethium.compat.CompoundTagCompat;
 import io.github.limuqy.mc.hassium.compat.LevelChunkSectionCompat;
 import net.jpountz.xxhash.StreamingXXHash64;
 import net.jpountz.xxhash.XXHash64;

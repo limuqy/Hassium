@@ -195,7 +195,7 @@ public final class CacheWorldExporter {
             return;
         }
         RegistryAccess registryAccess = level.registryAccess();
-        int minSection = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMinSection(level);
+        int minSection = io.github.limuqy.mc.promethium.compat.LevelHeightCompat.getMinSection(level);
         Path gameDir = mc.gameDirectory.toPath();
         String worldName = "HassiumCache_" + System.currentTimeMillis();
         Path outputDir = gameDir.resolve("saves").resolve(worldName);

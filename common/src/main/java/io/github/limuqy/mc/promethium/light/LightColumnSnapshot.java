@@ -1,7 +1,7 @@
-package io.github.limuqy.mc.hassium.cache.client;
+package io.github.limuqy.mc.promethium.light;
 
-import io.github.limuqy.mc.hassium.compat.LevelHeightCompat;
-import io.github.limuqy.mc.hassium.compat.LightAccessCompat;
+import io.github.limuqy.mc.promethium.compat.LevelHeightCompat;
+import io.github.limuqy.mc.promethium.compat.LightAccessCompat;
 import it.unimi.dsi.fastutil.ints.IntArrayList;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.core.BlockPos;
