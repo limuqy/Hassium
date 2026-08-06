@@ -4,8 +4,6 @@ import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.mixin.LevelLightEngineAccessor;
 import io.github.limuqy.mc.hassium.mixin.LightEngineAccessor;
 import io.github.limuqy.mc.hassium.network.ClientChunkHandler;
-import io.github.limuqy.mc.hassium.compat.CompoundTagCompat;
-import io.github.limuqy.mc.hassium.compat.LevelHeightCompat;
 import it.unimi.dsi.fastutil.longs.LongArrayFIFOQueue;
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import java.lang.reflect.Field;
@@ -240,83 +238,18 @@ public final class HassiumLightHooks {
         return layer == null || layer.isEmpty();
     }
 
+    /**
+     * 引擎重算完成回调（并行引擎经 LightEngineHooks 代理调用；官方引擎在帧尾
+     * {@code ClientLightBufferQueue.drainFrame} 直接登记）：只标脏，不写盘。
+     * <p>
+     * 此刻引擎光 = 刚重算/刚落地的结果，加载风暴中传播域不完整时未收敛（海底 section
+     * 会被 sky 15 灌满，R1 写回即铁证）——立即写盘 = 落盘污染光。磁盘光照只在卸载 /
+     * 断连 dump 时从引擎收敛态捕获（{@link ChunkDiskCodec#copyLightEngineToNbt}），
+     * 这里仅保证该块进入 dirty 集合、dump 会写它。
+     */
     public void updateCacheWithLightData(ClientLevel level, ChunkPos chunkPos, CompoundTag cachedNbt) {
-        try {
-            ClientHassiumStorage storage = ClientChunkHandler.getClientStorage();
-            if (storage == null) return;
-
-            CompoundTag nbt = cachedNbt;
-            if (nbt == null) {
-                // fallback：从磁盘读取
-                byte[] cachedData = storage.loadAndDecompress(chunkPos);
-                if (cachedData == null) return;
-                nbt = ChunkDiskCodec.bytesToNbt(cachedData);
-                if (nbt == null) return;
-            }
-
-            // 刚重算完：始终用引擎态覆盖磁盘（勿因旧 is_light_on=1 提前 return，
-            // SectionDelta 曾留下「flag=1 + 残缺 light」时会永久跳过回写）
-            LevelLightEngine lightEngine = level.getLightEngine();
-            LayerLightEventListener skyListener =
-                    lightEngine.getLayerListener(LightLayer.SKY);
-            LayerLightEventListener blockListener =
-                    lightEngine.getLayerListener(LightLayer.BLOCK);
-
-            int minSection = LevelHeightCompat.getMinSection(level);
-            int maxSection = LevelHeightCompat.getMaxSectionExclusive(level);
-            net.minecraft.nbt.ListTag sectionsList = CompoundTagCompat.getList(nbt, "sections");
-
-            boolean hasAnyLight = false;
-            for (int sectionY = minSection; sectionY < maxSection; sectionY++) {
-                int idx = sectionY - minSection;
-                if (idx >= sectionsList.size()) break;
-
-                net.minecraft.nbt.Tag t = sectionsList.get(idx);
-                if (!(t instanceof net.minecraft.nbt.CompoundTag sectionTag)) continue;
-
-                SectionPos sectionPos = SectionPos.of(chunkPos.x, sectionY, chunkPos.z);
-
-                DataLayer skyData = skyListener.getDataLayerData(sectionPos);
-                if (skyData != null && !skyData.isEmpty()) {
-                    sectionTag.putByteArray("sky_light", skyData.getData().clone());
-                    hasAnyLight = true;
-                } else {
-                    sectionTag.remove("sky_light");
-                }
-
-                DataLayer blockData = blockListener.getDataLayerData(sectionPos);
-                if (blockData != null && !blockData.isEmpty()) {
-                    sectionTag.putByteArray("block_light", blockData.getData().clone());
-                    hasAnyLight = true;
-                } else {
-                    sectionTag.remove("block_light");
-                }
-            }
-
-            if (hasAnyLight) {
-                nbt.putByte("is_light_on", (byte) 1);
-                byte[] updatedBytes = ChunkDiskCodec.nbtToBytes(nbt);
-                if (updatedBytes != null) {
-                    // 保留原 contentHash / sectionHashes，避免 persist(0) 被 MetadataTable 写成 1
-                    long contentHash = storage.readChunkHash(chunkPos);
-                    if (contentHash == 0L || contentHash == 1L) {
-                        // 入库尚未完成或元数据不可信：勿覆盖 hash，保持 dirty 等卸载补丁
-                        Constants.LOG.debug("Hassium: Skip light writeback for {} (hash={})",
-                                chunkPos, Long.toHexString(contentHash));
-                        return;
-                    }
-                    long[] sectionHashes = storage.readSectionHashes(chunkPos);
-                    // 后台化：压缩 + 写盘由 Cache-Saver 单消费者顺序执行（FIFO 保证与 ingest
-                    // 任务最终一致：先入队的无光照 ingest 先写、光照任务后写覆盖；后入队的 ingest
-                    // 在防护检查时命中写回记录被跳过）；persist 成功后由后台线程登记写回记录并 clear dirty
-                    CacheSaveQueue.getInstance().enqueueLightWriteback(chunkPos, updatedBytes, contentHash, sectionHashes);
-                    Constants.LOG.debug("Hassium: Enqueued light writeback for {}", chunkPos);
-                }
-            }
-            // 引擎尚无光照可写：保持 dirty，留给卸载光照补丁
-        } catch (Exception e) {
-            Constants.LOG.debug("Hassium: Failed to update cache with light data for {}", chunkPos, e);
-        }
+        ClientChunkDirtyTracker.markDirty(chunkPos);
+        Constants.LOG.debug("Hassium: Light recompute complete for {}, marked dirty (writeback deferred)", chunkPos);
     }
 
     public CompoundTag loadChunkNbtFromCache(ChunkPos pos) {

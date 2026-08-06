@@ -104,20 +104,6 @@ public final class ClientLightRecomputeService {
     }
 
     /**
-     * 公开入口：使用内存 NBT 更新光照缓存（供外部调用方使用）。
-     *
-     * @param chunkPos  区块坐标
-     * @param cachedNbt 内存中的缓存 NBT（可为 null）
-     */
-    public static void updateCacheWithLightNbt(ChunkPos chunkPos, net.minecraft.nbt.CompoundTag cachedNbt) {
-        ClientLevel level = Minecraft.getInstance().level;
-        if (level == null) {
-            return;
-        }
-        HassiumLightHooks.INSTANCE.updateCacheWithLightData(level, chunkPos, cachedNbt);
-    }
-
-    /**
      * 帧尾（Minecraft.tick TAIL、渲染前）兜底清空官方光照传播队列：
      * 缓冲队列消费（chunk 重算）已处理自己入队的传播节点；这里只兜底原版方块变化 /
      * 数据包 delta 路径触发的低频传播（nodes 应接近 0，对比自研铺开前 parsort 轮峰值 32 万）。
