@@ -12,6 +12,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -148,16 +150,19 @@ public class SectionHashStore implements Closeable {
         synchronized (flushLock) {
             Path tmp = filePath.resolveSibling(FILE_NAME + ".tmp");
             try {
-                int count = entries.size();
+                // 一致性快照：entries 可被并发 put（dirty 置位与 flush 不在同一线程），
+                // 两次迭代（算大小/写入）基于同一快照，避免分配不足 BufferOverflowException。
+                List<Map.Entry<Long, long[]>> snapshot = new ArrayList<>(entries.entrySet());
+                int count = snapshot.size();
                 int payload = 0;
-                for (long[] h : entries.values()) {
-                    payload += 10 + h.length * 8;
+                for (Map.Entry<Long, long[]> e : snapshot) {
+                    payload += 10 + e.getValue().length * 8;
                 }
                 ByteBuffer buf = ByteBuffer.allocate(10 + payload).order(ByteOrder.BIG_ENDIAN);
                 buf.putInt(MAGIC);
                 buf.putShort(VERSION);
                 buf.putInt(count);
-                for (Map.Entry<Long, long[]> e : entries.entrySet()) {
+                for (Map.Entry<Long, long[]> e : snapshot) {
                     long key = e.getKey();
                     long[] hashes = e.getValue();
                     buf.putInt(ChunkPos.getX(key));
