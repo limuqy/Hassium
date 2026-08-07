@@ -16,7 +16,8 @@ import net.minecraft.world.level.ChunkPos;
  * <p>
  * <b>冻结语义</b>：调用方在入队瞬间算出 {@code double} 后写入任务记录；
  * 之后玩家移动<strong>不会</strong>改写已入队任务的优先级（{@link java.util.concurrent.PriorityBlockingQueue}
- * 也不支持 key 变化后自动堆调整）。需要更近的块优先时，应在入队前用最新坐标计算。
+ * 也不支持 key 变化后自动堆调整）。需要更近的块优先时，应在入队前用最新坐标计算；
+ * 需要随移动自愈的队列请用 {@link KeyedPriorityQueue}（消费时按当前锚点重算键）。
  * <p>
  * 玩家坐标缓存见 {@link MainThreadDispatcher#updatePlayerPosition}；客户端路径应先刷新缓存再算。
  * 门控入口见 {@link MainThreadDispatcher#authoritativePriority} /

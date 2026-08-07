@@ -40,12 +40,10 @@ import java.util.Comparator;
 import java.util.Deque;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
-import java.util.concurrent.PriorityBlockingQueue;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
@@ -75,9 +73,10 @@ public class ServerChunkPushManager {
     private static final int RESYNC_PER_TICK = 32;
 
     /**
-     * 每玩家区块数据请求队列
+     * 每玩家区块数据请求队列（{@link io.github.limuqy.mc.hassium.concurrent.KeyedPriorityQueue}：
+     * 同区块重复请求 REPLACE 取代 + 消费时按当前玩家位置重算优先级）
      */
-    private final Map<UUID, PriorityBlockingQueue<DataRequestTask>> dataQueues = new ConcurrentHashMap<>();
+    private final Map<UUID, io.github.limuqy.mc.hassium.concurrent.KeyedPriorityQueue<DataRequestTask>> dataQueues = new ConcurrentHashMap<>();
 
     /**
      * 每玩家是否正在本 tick 序列化（防重复 drain）
@@ -108,12 +107,6 @@ public class ServerChunkPushManager {
 
     /** Bloom 层数上限：超出丢弃最旧层（保守 miss → 直推，正确性不受影响，仅多花一次直推流量） */
     private static final int BLOOM_MAX_LAYERS = 64;
-
-    /**
-     * 每玩家已在队区块 key 集合（ChunkPos.asLong）：直推 + 客户端请求去重，防重复推送。
-     * poll 出队即移除（构建失败/出界待命后允许重新入队）。
-     */
-    private final Map<UUID, Set<Long>> queuedChunkKeys = new ConcurrentHashMap<>();
 
     /**
      * 每玩家出界待命任务：drain 时已出视距的任务不静默丢弃（原 bug 根因），
@@ -740,6 +733,30 @@ public class ServerChunkPushManager {
         }
     }
 
+    /** 前向加权：前方每格优先 ~BIAS² 距离平方（BIAS=6 → 前方 8 格 ≈ 距离 4 格的优先级） */
+    private static final double FORWARD_BIAS = 6.0;
+
+    /** drain 时消费侧重算优先级的最大重插次数（防移动振荡导致任务永不被消费） */
+    private static final int DRAIN_REPRIORITIZE_MAX_REINSERTS = 8;
+
+    /**
+     * 消费时按当前玩家位置 + 移动方向重算优先级（与 {@code enqueueInternal} 入队公式一致）。
+     */
+    private static double refreshPriority(long posLong, double playerChunkX, double playerChunkZ,
+                                          double dirX, double dirZ, double forwardBias) {
+        ChunkPos pos = new ChunkPos(ChunkPos.getX(posLong), ChunkPos.getZ(posLong));
+        double priority = ChunkDistancePriority.distSq(pos, playerChunkX, playerChunkZ);
+        if (dirX != 0.0) {
+            double dx = pos.x - playerChunkX;
+            double dz = pos.z - playerChunkZ;
+            double dot = dx * dirX + dz * dirZ;
+            if (dot > 0.0) {
+                priority -= forwardBias * dot;
+            }
+        }
+        return priority;
+    }
+
     /**
      * 与原版 {@code ChunkMap.isChunkInRange} 一致的视距判定（圆柱近似）。
      */
@@ -1268,9 +1285,8 @@ public class ServerChunkPushManager {
         }
 
         UUID playerId = player.getUUID();
-        PriorityBlockingQueue<DataRequestTask> queue = dataQueues.computeIfAbsent(
-                playerId, k -> new PriorityBlockingQueue<>(100, Comparator.comparingDouble(DataRequestTask::priority))
-        );
+        io.github.limuqy.mc.hassium.concurrent.KeyedPriorityQueue<DataRequestTask> queue = dataQueues.computeIfAbsent(
+                playerId, k -> new io.github.limuqy.mc.hassium.concurrent.KeyedPriorityQueue<>(100));
 
         double playerChunkX = player.getX() / 16.0;
         double playerChunkZ = player.getZ() / 16.0;
@@ -1289,8 +1305,6 @@ public class ServerChunkPushManager {
             dirX = vel.x / len;
             dirZ = vel.z / len;
         }
-        // 前方每格优先 ~BIAS² 距离平方（BIAS=6 → 前方 8 格 ≈ 距离 4 格的优先级）
-        double FORWARD_BIAS = 6.0;
 
         List<DataRequestTask> tasks = new ArrayList<>(chunks.size());
         for (ChunkPos pos : chunks) {
@@ -1307,19 +1321,24 @@ public class ServerChunkPushManager {
             tasks.add(new DataRequestTask(pos, dimension, priority));
         }
 
-        // 去重：已在队任务不重复入队（直推 + 客户端请求同块、多路径并发时防重复推送）
-        Set<Long> keys = queuedChunkKeys.computeIfAbsent(playerId, k -> ConcurrentHashMap.newKeySet());
-        int dupes = 0;
+        // 去重/取代：同区块已在队时用新任务（最新优先级）替换旧任务——
+        // 直推 + 客户端请求同块、多路径并发时仍只推送一次，且玩家折返时的
+        // 重复请求能刷新冻结的优先级键（原 queuedChunkKeys 仅丢弃新请求）。
+        int replaced = 0;
         for (DataRequestTask task : tasks) {
-            if (keys.add(ChunkPos.asLong(task.pos().x, task.pos().z))) {
-                queue.offer(task);
-            } else {
-                dupes++;
+            io.github.limuqy.mc.hassium.concurrent.KeyedPriorityQueue.OfferResult result = queue.offer(
+                    task,
+                    new io.github.limuqy.mc.hassium.concurrent.KeyedPriorityQueue.Key(
+                            ChunkPos.asLong(task.pos().x, task.pos().z), 0),
+                    task.priority(),
+                    io.github.limuqy.mc.hassium.concurrent.KeyedPriorityQueue.OfferPolicy.REPLACE);
+            if (result == io.github.limuqy.mc.hassium.concurrent.KeyedPriorityQueue.OfferResult.REPLACED) {
+                replaced++;
             }
         }
 
-        DebugLogger.info(LogType.NETWORK, "[ENQUEUE_DATA] Player {} queued {} chunks (queueSize={}, dupes={}, playerPos=({}, {}))",
-                player.getName().getString(), tasks.size() - dupes, queue.size(), dupes, playerChunkX, playerChunkZ);
+        DebugLogger.info(LogType.NETWORK, "[ENQUEUE_DATA] Player {} queued {} chunks (queueSize={}, replaced={}, playerPos=({}, {}))",
+                player.getName().getString(), tasks.size(), queue.size(), replaced, playerChunkX, playerChunkZ);
         // 实际 drain 由 onServerTick 按真实每 tick 上限处理，避免连环 submit 卡主线程
     }
 
@@ -1331,7 +1350,7 @@ public class ServerChunkPushManager {
      */
     private void drainPlayerQueueTick(ServerPlayer player) {
         UUID playerId = player.getUUID();
-        PriorityBlockingQueue<DataRequestTask> queue = dataQueues.get(playerId);
+        io.github.limuqy.mc.hassium.concurrent.KeyedPriorityQueue<DataRequestTask> queue = dataQueues.get(playerId);
         if (queue == null || queue.isEmpty()) {
             return;
         }
@@ -1366,6 +1385,29 @@ public class ServerChunkPushManager {
             List<SerializedChunkWork> works = new ArrayList<>(maxPerTick);
             int processed = 0;
 
+            // 消费时重算优先级：冻结键按本 tick 玩家位置 + 移动方向刷新（同 enqueueInternal
+            // 的前向加权公式）。玩家排队期间移动 → 近处块不再被「入队时远、现在近」的旧键
+            // 压在队尾；重插有界（防移动振荡导致任务永不被消费）。
+            double playerChunkX = player.getX() / 16.0;
+            double playerChunkZ = player.getZ() / 16.0;
+            net.minecraft.world.phys.Vec3 vel = player.getDeltaMovement();
+            double dirX = 0.0;
+            double dirZ = 0.0;
+            double velLenSq = vel.x * vel.x + vel.z * vel.z;
+            if (velLenSq > 0.01) {
+                double len = Math.sqrt(velLenSq);
+                dirX = vel.x / len;
+                dirZ = vel.z / len;
+            }
+            // lambda 需捕获 effectively-final 副本
+            final double anchorX = playerChunkX;
+            final double anchorZ = playerChunkZ;
+            final double fwdX = dirX;
+            final double fwdZ = dirZ;
+            io.github.limuqy.mc.hassium.concurrent.KeyedPriorityQueue.PriorityRefresher refresher =
+                    (key, old) -> key == null ? old
+                            : refreshPriority(key.posLong(), anchorX, anchorZ, fwdX, fwdZ, FORWARD_BIAS);
+
             // 所有版本主线程构建 packet 快照：1.20.1 的 ThreadingDetector 是信号量互斥，
             // 主线程 tick 写 chunk 与后台 build 并发即引爆（本次 01:09:04 [10,3] 崩溃实测），
             // 无合法后台读路径；packet 内部数据已脱离世界对象，encode/压缩/限速/发送在 pushPool。
@@ -1380,15 +1422,14 @@ public class ServerChunkPushManager {
                     return;
                 }
 
-                DataRequestTask task = queue.poll();
-                if (task == null) {
+                io.github.limuqy.mc.hassium.concurrent.KeyedPriorityQueue.Entry<DataRequestTask> entry =
+                        queue.pollBest(refresher, DRAIN_REPRIORITIZE_MAX_REINSERTS);
+                if (entry == null) {
                     break;
                 }
-                // 出队即释放去重登记（允许客户端重试/直推重新入队）
-                Set<Long> keys = queuedChunkKeys.get(playerId);
-                if (keys != null) {
-                    keys.remove(ChunkPos.asLong(task.pos().x, task.pos().z));
-                }
+                DataRequestTask task = entry.item();
+                // 出队即释放 key 登记（允许客户端重试/直推重新入队；原 queuedChunkKeys.remove 语义）
+                queue.release(entry);
 
                 // 任务排队期间玩家可能已移出权威视距：不静默丢弃（客户端无重试 → 永久虚空 bug 根因），
                 // 转入待命集合，玩家折返/静止后重新在视距内时恢复入队；超时（10s）才真丢弃。
@@ -1603,7 +1644,7 @@ public class ServerChunkPushManager {
         lastAdjustmentTime = now;
 
         int totalPending = dataQueues.values().stream()
-                .mapToInt(PriorityBlockingQueue::size)
+                .mapToInt(io.github.limuqy.mc.hassium.concurrent.KeyedPriorityQueue::size)
                 .sum();
 
         int coreThreads = pushPool.getCorePoolSize();
@@ -1635,7 +1676,7 @@ public class ServerChunkPushManager {
      * 移除玩家的所有队列
      */
     public void removePlayer(UUID playerId) {
-        PriorityBlockingQueue<DataRequestTask> queue = dataQueues.remove(playerId);
+        io.github.limuqy.mc.hassium.concurrent.KeyedPriorityQueue<DataRequestTask> queue = dataQueues.remove(playerId);
         if (queue != null) {
             queue.clear();
         }
@@ -1644,7 +1685,6 @@ public class ServerChunkPushManager {
         preparedChunkPackets.remove(playerId);
         pendingResync.remove(playerId);
         bloomLayers.remove(playerId);
-        queuedChunkKeys.remove(playerId);
         deferredChunks.remove(playerId);
         resyncQueuedAt.remove(playerId);
         initialPlayerChunkPos.remove(playerId);
@@ -1660,7 +1700,6 @@ public class ServerChunkPushManager {
         preparedChunkPackets.clear();
         pendingResync.clear();
         bloomLayers.clear();
-        queuedChunkKeys.clear();
         deferredChunks.clear();
         resyncQueuedAt.clear();
         initialPlayerChunkPos.clear();
@@ -1676,7 +1715,7 @@ public class ServerChunkPushManager {
     public String getStats() {
         int totalQueues = dataQueues.size();
         int totalPending = dataQueues.values().stream()
-                .mapToInt(PriorityBlockingQueue::size)
+                .mapToInt(io.github.limuqy.mc.hassium.concurrent.KeyedPriorityQueue::size)
                 .sum();
         int poolSize = pushPool != null ? pushPool.getPoolSize() : 0;
         int activeThreads = pushPool != null ? pushPool.getActiveCount() : 0;

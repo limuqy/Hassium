@@ -17,30 +17,38 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.PriorityQueue;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.PriorityBlockingQueue;
 
 /**
  * 客户端缓存加载队列
  * <p>
  * 异步加载缓存命中区块，按距离优先级排序；主线程按时间预算 apply，避免 FPS 负反馈。
  * Phase 6: 后台加载任务通过 HassiumTaskExecutor 提交，不再维护独立的线程池。
+ * <p>
+ * 两级队列均为 {@link io.github.limuqy.mc.hassium.concurrent.KeyedPriorityQueue}：
+ * 同区块重复入队时新任务取代旧任务（REPLACE），避免重复磁盘读 / 重复 apply，
+ * 并保证消费侧按最新数据落地（防老数据覆盖）。
  */
 public class ClientCacheLoadQueue {
 
     private static final ClientCacheLoadQueue INSTANCE = new ClientCacheLoadQueue();
 
+    /** 队列键（op 恒 0：本类所有条目均为「缓存加载」语义） */
+    private static io.github.limuqy.mc.hassium.concurrent.KeyedPriorityQueue.Key keyOf(ChunkPos pos) {
+        return new io.github.limuqy.mc.hassium.concurrent.KeyedPriorityQueue.Key(
+                ChunkPos.asLong(pos.x, pos.z), 0);
+    }
+
     /** 待加载任务（缓存命中）：按 region 分桶，每桶一个后台任务串行处理（避免多线程并发 drain 同一队列） */
-    private final ConcurrentHashMap<Long, PriorityQueue<LoadTask>> pendingByRegion = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<Long, io.github.limuqy.mc.hassium.concurrent.KeyedPriorityQueue<LoadTask>> pendingByRegion = new ConcurrentHashMap<>();
 
     /** 正在运行的后台任务（region → 任务），保证每 region 最多一个加载任务 */
     private final Set<Long> activeRegions = ConcurrentHashMap.newKeySet();
 
     /** 就绪队列（后台线程加载完成后放入，主线程取出应用） */
-    private final PriorityBlockingQueue<ReadyChunk> readyQueue =
-            new PriorityBlockingQueue<>(100, (a, b) -> Double.compare(a.priority, b.priority));
+    private final io.github.limuqy.mc.hassium.concurrent.KeyedPriorityQueue<ReadyChunk> readyQueue =
+            new io.github.limuqy.mc.hassium.concurrent.KeyedPriorityQueue<>(100);
 
     /**
      * 未完成权威（renderOnly=false）加载数 = pending + ready。
@@ -57,12 +65,12 @@ public class ClientCacheLoadQueue {
 
     /** readyQueue 中是否还有权威块（层序保证：peek 非 renderOnly 即含权威）。 */
     public boolean hasAuthorityReady() {
-        ReadyChunk head = readyQueue.peek();
-        return head != null && !head.renderOnly();
+        io.github.limuqy.mc.hassium.concurrent.KeyedPriorityQueue.Entry<ReadyChunk> head = readyQueue.peek();
+        return head != null && !head.item().renderOnly();
     }
 
-    /** 加载任务 */
-    private record LoadTask(ChunkPos pos, double priority, boolean renderOnly) {}
+    /** 加载任务（优先级由队列键承载；就绪后按加载完成时刻实时距离重算） */
+    private record LoadTask(ChunkPos pos, boolean renderOnly) {}
 
     /** 单批最大区块数（region 批量读上限，控制单批内存与锁持有时间） */
     private static final int MAX_BATCH_SIZE = 256;
@@ -77,7 +85,7 @@ public class ClientCacheLoadQueue {
 
     private int pendingTotal() {
         int n = 0;
-        for (PriorityQueue<LoadTask> q : pendingByRegion.values()) {
+        for (io.github.limuqy.mc.hassium.concurrent.KeyedPriorityQueue<LoadTask> q : pendingByRegion.values()) {
             n += q.size();
         }
         return n;
@@ -110,12 +118,15 @@ public class ClientCacheLoadQueue {
         DebugLogger.info(LogType.CACHE, "[CACHE_LOAD_QUEUE] Enqueuing chunk {} (priority={}, renderOnly={}, pendingSize={})",
                 pos, String.format("%.1f", priority), renderOnly, pendingTotal());
         long rk = regionKey(pos);
-        PriorityQueue<LoadTask> q = pendingByRegion.computeIfAbsent(rk,
-                k -> new PriorityQueue<>((a, b) -> Double.compare(a.priority, b.priority)));
-        synchronized (q) {
-            q.offer(new LoadTask(pos, priority, renderOnly));
-        }
-        if (!renderOnly) {
+        io.github.limuqy.mc.hassium.concurrent.KeyedPriorityQueue<LoadTask> q = pendingByRegion.computeIfAbsent(rk,
+                k -> new io.github.limuqy.mc.hassium.concurrent.KeyedPriorityQueue<>(16));
+        // REPLACE：同区块重复入队（预填充/全量请求/重试多路径并发）用新任务取代旧任务，
+        // 新任务带最新优先级；仅真正新插入的任务计入 authorityLoad（取代不重复计数，
+        // 否则 OVD 门控的「权威未完成数」永久泄漏）。
+        io.github.limuqy.mc.hassium.concurrent.KeyedPriorityQueue.OfferResult result =
+                q.offer(new LoadTask(pos, renderOnly), keyOf(pos), priority,
+                        io.github.limuqy.mc.hassium.concurrent.KeyedPriorityQueue.OfferPolicy.REPLACE);
+        if (result == io.github.limuqy.mc.hassium.concurrent.KeyedPriorityQueue.OfferResult.INSERTED && !renderOnly) {
             authorityLoad.incrementAndGet();
         }
         // 提交该 region 的加载任务（每 region 最多一个在跑）
@@ -141,16 +152,21 @@ public class ClientCacheLoadQueue {
         }
 
         Set<Long> touched = new HashSet<>();
+        int inserted = 0;
         for (int i = 0; i < positions.size(); i++) {
-            long rk = regionKey(positions.get(i));
-            PriorityQueue<LoadTask> q = pendingByRegion.computeIfAbsent(rk,
-                    k -> new PriorityQueue<>((a, b) -> Double.compare(a.priority, b.priority)));
-            synchronized (q) {
-                q.offer(new LoadTask(positions.get(i), priorities.get(i), false));
+            ChunkPos pos = positions.get(i);
+            long rk = regionKey(pos);
+            io.github.limuqy.mc.hassium.concurrent.KeyedPriorityQueue<LoadTask> q = pendingByRegion.computeIfAbsent(rk,
+                    k -> new io.github.limuqy.mc.hassium.concurrent.KeyedPriorityQueue<>(16));
+            io.github.limuqy.mc.hassium.concurrent.KeyedPriorityQueue.OfferResult result =
+                    q.offer(new LoadTask(pos, false), keyOf(pos), priorities.get(i),
+                            io.github.limuqy.mc.hassium.concurrent.KeyedPriorityQueue.OfferPolicy.REPLACE);
+            if (result == io.github.limuqy.mc.hassium.concurrent.KeyedPriorityQueue.OfferResult.INSERTED) {
+                inserted++;
             }
             touched.add(rk);
         }
-        authorityLoad.addAndGet(positions.size());
+        authorityLoad.addAndGet(inserted);
 
         // 每个涉及的 region 提交一个加载任务
         for (long rk : touched) {
@@ -184,7 +200,11 @@ public class ClientCacheLoadQueue {
         CompoundTag nbt = ChunkDiskCodec.bytesToNbt(data);
         boolean hasLight = ChunkDiskCodec.isLightOn(nbt);
         CompoundTag writeback = (!hasLight && nbt != null) ? nbt : null;
-        readyQueue.offer(new ReadyChunk(pos, data, priority, renderOnly, hasLight, writeback));
+        // REPLACE：同 pos 已有就绪数据（缓存加载完成 / 服务端推送）时，新数据取代旧数据
+        //（旧数据摘出堆不再 apply）——防「旧磁盘快照在服务端新数据之后落地」覆盖。
+        readyQueue.offer(new ReadyChunk(pos, data, priority, renderOnly, hasLight, writeback),
+                keyOf(pos), priority,
+                io.github.limuqy.mc.hassium.concurrent.KeyedPriorityQueue.OfferPolicy.REPLACE);
         DebugLogger.info(LogType.CACHE,
                 "[CACHE_LOAD_QUEUE] Enqueued with data {} (priority={}, renderOnly={}, hasLight={}, readySize={})",
                 pos, String.format("%.1f", priority), renderOnly, hasLight, readyQueue.size());
@@ -221,24 +241,23 @@ public class ClientCacheLoadQueue {
         int regionZ = (int) rk;
         try {
             while (true) {
-                PriorityQueue<LoadTask> q = pendingByRegion.get(rk);
+                io.github.limuqy.mc.hassium.concurrent.KeyedPriorityQueue<LoadTask> q = pendingByRegion.get(rk);
                 if (q == null) {
                     break;
                 }
-                // 取一批（桶锁内 poll，串行消费）；不再摘除桶——空桶保留在 map，
-                // enqueue 的 computeIfAbsent 永远拿到同一桶对象，孤儿桶窗口消除
+                // 取一批（串行 poll，KeyedPriorityQueue 内部线程安全；同区块被取代的任务自动跳过）；
+                // 不再摘除桶——空桶保留在 map，enqueue 的 computeIfAbsent 永远拿到同一桶对象，
+                // 孤儿桶窗口消除
                 List<LoadTask> batch = new ArrayList<>();
-                synchronized (q) {
-                    while (batch.size() < MAX_BATCH_SIZE) {
-                        LoadTask t = q.poll();
-                        if (t == null) {
-                            break;
-                        }
-                        batch.add(t);
+                while (batch.size() < MAX_BATCH_SIZE) {
+                    io.github.limuqy.mc.hassium.concurrent.KeyedPriorityQueue.Entry<LoadTask> e = q.poll();
+                    if (e == null) {
+                        break;
                     }
+                    batch.add(e.item());
                 }
                 if (batch.isEmpty()) {
-                    // 攒批窗口（原语义：一次 10ms）；锁内最终判定空才退出。
+                    // 攒批窗口（原语义：一次 10ms）；最终判定空才退出。
                     // 退出后 activeRegions 释放：此后 producer 的 offer → scheduleRegion 必成功；
                     // 退出前 producer 的 offer → 本循环下一轮或 finally 补调度接手，无悬挂窗口。
                     try {
@@ -247,10 +266,8 @@ public class ClientCacheLoadQueue {
                         Thread.currentThread().interrupt();
                         break;
                     }
-                    synchronized (q) {
-                        if (q.isEmpty()) {
-                            break;
-                        }
+                    if (q.isEmpty()) {
+                        break;
                     }
                     continue;
                 }
@@ -259,12 +276,10 @@ public class ClientCacheLoadQueue {
         } finally {
             activeRegions.remove(rk);
             // 处理期间可能又有同 region 入队（scheduleRegion 被 activeRegions 挡住），锁内检查后补调度
-            PriorityQueue<LoadTask> q = pendingByRegion.get(rk);
+            io.github.limuqy.mc.hassium.concurrent.KeyedPriorityQueue<LoadTask> q = pendingByRegion.get(rk);
             if (q != null) {
-                synchronized (q) {
-                    if (!q.isEmpty()) {
-                        scheduleRegion(rk);
-                    }
+                if (!q.isEmpty()) {
+                    scheduleRegion(rk);
                 }
             }
         }
@@ -328,7 +343,8 @@ public class ClientCacheLoadQueue {
                     ? io.github.limuqy.mc.hassium.concurrent.MainThreadDispatcher.renderOnlyPriority(task.pos())
                     : io.github.limuqy.mc.hassium.concurrent.MainThreadDispatcher.authoritativePriority(task.pos());
             readyQueue.offer(new ReadyChunk(task.pos(), packetBytes, priority, task.renderOnly(),
-                    hasLight, writeback));
+                    hasLight, writeback), keyOf(task.pos()), priority,
+                    io.github.limuqy.mc.hassium.concurrent.KeyedPriorityQueue.OfferPolicy.REPLACE);
             // OVD(renderOnly) 不经 chunkHash 比对，需在磁盘命中时单独记入缓存指标；
             // 权威路径已在 ClientMetadataHandler 记过，避免双重计数。
             // 使用 ESTIMATED_CHUNK_BYTES 与权威路径口径一致（不依赖 packetBytes 实际长度）。
@@ -383,7 +399,9 @@ public class ClientCacheLoadQueue {
             } catch (Exception e) {
                 Constants.LOG.error("[CACHE_LOAD] Failed to request chunk {} from server", pos, e);
             }
-        }, pos);
+            // OP_REQUEST：网络请求任务，不与 OP_CHUNK_APPLY（数据 apply）互相取代
+        }, io.github.limuqy.mc.hassium.concurrent.MainThreadDispatcher.chunkKey(
+                pos, io.github.limuqy.mc.hassium.concurrent.MainThreadDispatcher.OP_REQUEST));
     }
 
     /**
@@ -412,7 +430,7 @@ public class ClientCacheLoadQueue {
         // 至少应用 1 个，避免预算过紧饿死
         boolean forceOne = true;
 
-        // 帧配额（maxChunksPerFrame）覆盖全部缓存块；PriorityBlockingQueue 层序天然保证
+        // 帧配额（maxChunksPerFrame）覆盖全部缓存块；KeyedPriorityQueue 层序天然保证
         // 权威（AUTHORITATIVE < RENDER_ONLY）先 poll——配额满时 break 即「权威优先，
         // 权威轮空才轮到 OVD」，无需额外判据。
         while (!readyQueue.isEmpty()) {
@@ -425,13 +443,21 @@ public class ClientCacheLoadQueue {
                 break; // 本帧配额已满（含 OVD substitute 消耗）；权威/OVD 同受 maxChunksPerFrame 硬顶
             }
 
-            ReadyChunk chunk = readyQueue.poll();
-            if (chunk == null) {
+            io.github.limuqy.mc.hassium.concurrent.KeyedPriorityQueue.Entry<ReadyChunk> entry = readyQueue.poll();
+            if (entry == null) {
                 break;
             }
+            ReadyChunk chunk = entry.item();
             if (!chunk.renderOnly()) {
                 // 缓存侧职责结束（成功落地或转网络重取），权威未完成计数相应减少
                 authorityLoad.decrementAndGet();
+            }
+            // 消费侧版本校验：poll 与执行之间同 pos 更新数据入队（如服务端推送）→
+            // 丢弃旧数据，防「旧磁盘快照覆盖新数据」
+            if (!readyQueue.isCurrent(entry)) {
+                DebugLogger.debug(LogType.CACHE,
+                        "[CACHE_APPLY] Skip superseded chunk {} (newer data arrived)", chunk.pos());
+                continue;
             }
             // 恢复预填充 / OVD：renderOnly 落地前权威区块可能已到达（hasChunk=true）。
             // 跳过而非覆盖 —— 权威数据优先，过期磁盘快照不得回写（预填充的旧数据会
@@ -470,6 +496,8 @@ public class ClientCacheLoadQueue {
             } else if (!chunk.renderOnly()) {
                 requestChunkFromServer(chunk.pos());
             }
+            // 消费完成：释放 key 登记（同 pos 后续入队获得全新版本号）
+            readyQueue.release(entry);
         }
 
         if (applied > 0) {

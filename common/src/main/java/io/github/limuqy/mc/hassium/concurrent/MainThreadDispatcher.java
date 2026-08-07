@@ -6,7 +6,8 @@ import io.github.limuqy.mc.hassium.utils.DebugLogger.LogType;
 import net.minecraft.client.Minecraft;
 import net.minecraft.world.level.ChunkPos;
 
-import java.util.concurrent.PriorityBlockingQueue;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.function.Predicate;
 
 /**
@@ -18,6 +19,12 @@ import java.util.function.Predicate;
  * 优先级由 {@link ChunkDistancePriority} 在入队瞬间冻结（数值越小越优先），
  * 与 {@code ClientCacheLoadQueue} 一致；玩家移动不改写已入队 key。
  * 层序恒为：权威 &gt; 未知任务（无锚点） &gt; 环带（renderOnly）。
+ * <p>
+ * 队列为 {@link KeyedPriorityQueue}：同 chunk 位置同语义（op）的新任务入队时
+ * <b>取代</b>旧任务（旧任务从堆中摘除、新任务带最新优先级），消费侧执行前做
+ * {@link KeyedPriorityQueue#isCurrent} 版本校验——玩家来回移动导致同区块多次
+ * 入队时，杜绝「老数据覆盖新数据」与重复 apply；预算放回（reoffer）时按当前
+ * 玩家位置重算优先级。
  * <p>
  * 在客户端由 MixinClientTick 每帧调用 flushClient()，
  * 在服务端由 MinecraftServer tick 调用 flushServer()。
@@ -40,11 +47,31 @@ public final class MainThreadDispatcher {
     @Deprecated
     public static final double PRIORITY_LOWEST = PRIORITY_UNKNOWN;
 
-    private static final PriorityBlockingQueue<CallbackTask> CLIENT_QUEUE =
-            new PriorityBlockingQueue<>(64);
+    // ============== 任务语义 op（KeyedPriorityQueue.Key.op）==============
 
-    private static final PriorityBlockingQueue<CallbackTask> SERVER_QUEUE =
-            new PriorityBlockingQueue<>(64);
+    /** 全量区块数据 apply（压缩通道 / 原版 packet 预算化）。同位置互取代。 */
+    public static final int OP_CHUNK_APPLY = 0;
+    /** 向服务端请求区块数据（无数据负载）。同位置互取代。 */
+    public static final int OP_REQUEST = 1;
+    /** 区块 BE（block entity）数据 apply。同位置互取代，不与 OP_CHUNK_APPLY 互相取代。 */
+    public static final int OP_BLOCK_ENTITY = 2;
+
+    /**
+     * 构造队列键：{@code pos} + 任务语义 {@code op}。
+     * 同一 chunk 位置、不同语义的任务必须使用不同 op，避免互相取代。
+     */
+    public static KeyedPriorityQueue.Key chunkKey(ChunkPos pos, int op) {
+        if (pos == null) {
+            return null;
+        }
+        return new KeyedPriorityQueue.Key(ChunkPos.asLong(pos.x, pos.z), op);
+    }
+
+    private static final KeyedPriorityQueue<CallbackTask> CLIENT_QUEUE =
+            new KeyedPriorityQueue<>(64);
+
+    private static final KeyedPriorityQueue<CallbackTask> SERVER_QUEUE =
+            new KeyedPriorityQueue<>(64);
 
     /** 玩家原始坐标缓存（login / tick / 收包路径写入） */
     private static volatile double hassium$playerX = 0.0;
@@ -134,39 +161,70 @@ public final class MainThreadDispatcher {
     /**
      * 提交带 chunk 位置的回调（可在任意线程调用）
      * <p>
-     * 基于玩家坐标自动计算距离优先级。
+     * 基于玩家坐标自动计算距离优先级；语义 op = {@link #OP_CHUNK_APPLY}（同位置
+     * 新任务入队时取代旧任务，防止重复 apply / 老数据覆盖）。
      * 类别 = SAFE_TO_CANCEL（默认，连接断开时取消）。
      */
     public static void execute(Runnable task, ChunkPos chunkPos) {
-        execute(task, calcDistancePriority(chunkPos), TaskCategory.SAFE_TO_CANCEL);
+        execute(task, chunkPos, TaskCategory.SAFE_TO_CANCEL);
     }
 
     /**
-     * 提交带 chunk 位置和类别的回调
+     * 提交带 chunk 位置和类别的回调（语义 op = {@link #OP_CHUNK_APPLY}）
      */
     public static void execute(Runnable task, ChunkPos chunkPos, TaskCategory category) {
-        execute(task, calcDistancePriority(chunkPos), category);
+        execute(task, chunkKey(chunkPos, OP_CHUNK_APPLY), category);
     }
 
     /**
-     * 提交带指定优先级和类别的回调（可在任意线程调用）
+     * 提交带队列键的回调（可在任意线程调用）。
+     * <p>
+     * key 由 {@link #chunkKey(ChunkPos, int)} 构造；同 key 新任务取代旧任务。
+     * 类别 = SAFE_TO_CANCEL（默认）。
+     */
+    public static void execute(Runnable task, KeyedPriorityQueue.Key key) {
+        execute(task, key, TaskCategory.SAFE_TO_CANCEL);
+    }
+
+    /**
+     * 提交带队列键和类别的回调。优先级按 key 的 chunk 位置以当前玩家坐标计算（权威层）。
+     */
+    public static void execute(Runnable task, KeyedPriorityQueue.Key key, TaskCategory category) {
+        double priority = PRIORITY_UNKNOWN;
+        if (key != null) {
+            ChunkPos pos = new ChunkPos(ChunkPos.getX(key.posLong()), ChunkPos.getZ(key.posLong()));
+            priority = authoritativePriority(pos);
+        }
+        execute(task, priority, category, key);
+    }
+
+    /**
+     * 提交带指定优先级和类别的回调（可在任意线程调用，无取代语义）
      *
      * @param task     回调任务
      * @param priority 优先级（越小越优先）
      * @param category 任务类别
      */
     public static void execute(Runnable task, double priority, TaskCategory category) {
-        DebugLogger.info(LogType.DISPATCHER, "[MAIN_DISPATCHER] Adding callback to queue (priority={}, category={}, queueSize={})",
-                priority, category, CLIENT_QUEUE.size());
-        CLIENT_QUEUE.offer(new CallbackTask(task, priority, category));
-        DebugLogger.info(LogType.DISPATCHER, "[MAIN_DISPATCHER] Callback added, new queueSize={}", CLIENT_QUEUE.size());
+        execute(task, priority, category, null);
+    }
+
+    private static void execute(Runnable task, double priority, TaskCategory category,
+                                KeyedPriorityQueue.Key key) {
+        KeyedPriorityQueue.OfferResult result = CLIENT_QUEUE.offer(
+                new CallbackTask(task, priority, category), key, priority,
+                KeyedPriorityQueue.OfferPolicy.REPLACE);
+        DebugLogger.info(LogType.DISPATCHER,
+                "[MAIN_DISPATCHER] Adding callback to queue (priority={}, category={}, key={}, result={}, queueSize={})",
+                priority, category, key, result, CLIENT_QUEUE.size());
     }
 
     /**
      * 提交回调到服务端主线程（可在任意线程调用）
      */
     public static void executeOnServer(Runnable task) {
-        SERVER_QUEUE.offer(new CallbackTask(task, PRIORITY_UNKNOWN, TaskCategory.MISSION_CRITICAL));
+        SERVER_QUEUE.offer(new CallbackTask(task, PRIORITY_UNKNOWN, TaskCategory.MISSION_CRITICAL),
+                null, PRIORITY_UNKNOWN, KeyedPriorityQueue.OfferPolicy.REPLACE);
     }
 
     // ============== 刷新（主线程调用） ==============
@@ -207,24 +265,34 @@ public final class MainThreadDispatcher {
 
         int processed = 0;
         boolean forceOne = true;
-        CallbackTask task;
+        KeyedPriorityQueue.Entry<CallbackTask> task;
         while (processed < maxPerFrame && (task = CLIENT_QUEUE.poll()) != null) {
             long now = System.nanoTime();
             if (!forceOne && now >= deadlineNs) {
-                // 预算用尽：把任务放回队列头部语义由优先级队列保证，重新 offer
-                CLIENT_QUEUE.offer(task);
+                // 预算用尽：仍有效则按当前玩家位置重算优先级放回（已被取代的旧任务直接丢弃）
+                if (!CLIENT_QUEUE.reoffer(task, refreshPriority(task))) {
+                    DebugLogger.info(LogType.DISPATCHER,
+                            "[MAIN_DISPATCHER] Dropping superseded callback on budget reoffer (key={})", task.key());
+                }
                 break;
             }
             forceOne = false;
+            // 消费侧版本校验：poll 与执行之间同 key 新任务入队 → 丢弃旧任务，防老数据覆盖
+            if (!CLIENT_QUEUE.isCurrent(task)) {
+                DebugLogger.info(LogType.DISPATCHER,
+                        "[MAIN_DISPATCHER] Skipping superseded callback (key={})", task.key());
+                continue;
+            }
             try {
                 DebugLogger.info(LogType.DISPATCHER, "[MAIN_DISPATCHER] Executing callback (priority={}, category={})",
-                        task.priority(), task.category());
-                task.action.run();
+                        task.item().priority(), task.item().category());
+                task.item().action().run();
                 processed++;
                 DebugLogger.info(LogType.DISPATCHER, "[MAIN_DISPATCHER] Callback executed successfully");
             } catch (Exception e) {
                 DebugLogger.error("[MAIN_DISPATCHER] Client task failed", e);
             }
+            CLIENT_QUEUE.release(task);
         }
         DebugLogger.info(LogType.DISPATCHER, "[MAIN_DISPATCHER] Flushed {} callbacks, remaining={}",
                 processed, CLIENT_QUEUE.size());
@@ -232,16 +300,28 @@ public final class MainThreadDispatcher {
     }
 
     /**
+     * 预算放回时按当前玩家位置重算优先级（无锚点任务保持原键）。
+     */
+    private static double refreshPriority(KeyedPriorityQueue.Entry<CallbackTask> task) {
+        if (task.key() == null) {
+            return task.priority();
+        }
+        ChunkPos pos = new ChunkPos(ChunkPos.getX(task.key().posLong()), ChunkPos.getZ(task.key().posLong()));
+        return authoritativePriority(pos);
+    }
+
+    /**
      * 刷新服务端主线程回调队列（每 tick 调用）
      */
     public static void flushServer() {
-        CallbackTask task;
+        KeyedPriorityQueue.Entry<CallbackTask> task;
         while ((task = SERVER_QUEUE.poll()) != null) {
             try {
-                task.action.run();
+                task.item().action().run();
             } catch (Exception e) {
                 Constants.LOG.error("Hassium: MainThreadDispatcher server task failed", e);
             }
+            SERVER_QUEUE.release(task);
         }
     }
 
@@ -284,11 +364,18 @@ public final class MainThreadDispatcher {
      */
     public static int cancelTasks(Predicate<CallbackTask> predicate) {
         int removed = 0;
-        CallbackTask task;
+        List<KeyedPriorityQueue.Entry<CallbackTask>> kept = new ArrayList<>();
+        KeyedPriorityQueue.Entry<CallbackTask> task;
         while ((task = CLIENT_QUEUE.poll()) != null) {
-            if (!predicate.test(task)) {
-                CLIENT_QUEUE.offer(task); // 放回
+            if (!predicate.test(task.item())) {
+                kept.add(task); // 放回
             } else {
+                removed++;
+            }
+        }
+        for (KeyedPriorityQueue.Entry<CallbackTask> keptEntry : kept) {
+            // 仍有效才放回：已被同 key 新任务取代的旧任务丢弃
+            if (!CLIENT_QUEUE.reoffer(keptEntry, keptEntry.priority())) {
                 removed++;
             }
         }
@@ -321,24 +408,7 @@ public final class MainThreadDispatcher {
     // ============== 内部 ==============
 
     /**
-     * 计算 chunk 优先级键并在入队时冻结（权威层）。
-     * <p>
-     * 依赖 {@link #updatePlayerPosition} 缓存（login / 每 tick / 收包路径写入）。
-     * 坐标未知时仍为权威层 {@code base+0}（不伪装 (0,0)），
-     * 层序恒为：权威 &gt; 未知任务 &gt; 环带。
-     */
-    private static double calcDistancePriority(ChunkPos chunkPos) {
-        return authoritativePriority(chunkPos);
-    }
-
-    /**
      * 回调任务，按优先级排序
      */
-    public record CallbackTask(Runnable action, double priority, TaskCategory category)
-            implements Comparable<CallbackTask> {
-        @Override
-        public int compareTo(CallbackTask other) {
-            return Double.compare(this.priority, other.priority);
-        }
-    }
+    public record CallbackTask(Runnable action, double priority, TaskCategory category) {}
 }

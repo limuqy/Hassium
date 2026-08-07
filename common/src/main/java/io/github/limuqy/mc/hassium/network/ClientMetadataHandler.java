@@ -877,9 +877,12 @@ public class ClientMetadataHandler {
 
         for (BlockEntityDataS2CPacket.ChunkBlockEntities entry : packet.entries()) {
             if (!entry.blockEntities().isEmpty()) {
+                // OP_BLOCK_ENTITY：与 OP_CHUNK_APPLY 同位置互不取代（BE 数据不得顶掉全量 apply）
                 io.github.limuqy.mc.hassium.concurrent.MainThreadDispatcher.execute(() -> {
                     applyBlockEntityDataEntries(entry.chunkX(), entry.chunkZ(), entry.blockEntities());
-                }, new ChunkPos(entry.chunkX(), entry.chunkZ()));
+                }, io.github.limuqy.mc.hassium.concurrent.MainThreadDispatcher.chunkKey(
+                        new ChunkPos(entry.chunkX(), entry.chunkZ()),
+                        io.github.limuqy.mc.hassium.concurrent.MainThreadDispatcher.OP_BLOCK_ENTITY));
             }
         }
     }

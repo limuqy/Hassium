@@ -144,4 +144,71 @@ class MainThreadDispatcherPriorityTest {
         MainThreadDispatcher.flushClient(10);
         assertEquals(List.of("authNear", "authFar", "unknown", "ovd"), applied);
     }
+
+    @Test
+    @DisplayName("同位置重复入队：新任务取代旧任务，只执行一次")
+    void samePosSupersedesOldApply() {
+        MainThreadDispatcher.updatePlayerPosition(6 * 16 + 8.0, -37 * 16 + 8.0);
+
+        List<String> applied = new ArrayList<>();
+        ChunkPos pos = new ChunkPos(6, -37);
+        MainThreadDispatcher.execute(() -> applied.add("old-data"), pos);
+        MainThreadDispatcher.execute(() -> applied.add("new-data"), pos);
+        MainThreadDispatcher.flushClient(10);
+
+        assertEquals(0, MainThreadDispatcher.getClientQueueSize());
+        // 旧任务被取代：只有新数据落地，无重复 apply
+        assertEquals(List.of("new-data"), applied);
+    }
+
+    @Test
+    @DisplayName("同位置不同语义（apply vs BE）互不取代")
+    void samePosDifferentOpDoNotSupersede() {
+        MainThreadDispatcher.updatePlayerPosition(6 * 16 + 8.0, -37 * 16 + 8.0);
+
+        List<String> applied = new ArrayList<>();
+        ChunkPos pos = new ChunkPos(6, -37);
+        MainThreadDispatcher.execute(() -> applied.add("chunk"), pos);
+        MainThreadDispatcher.execute(() -> applied.add("be"),
+                MainThreadDispatcher.chunkKey(pos, MainThreadDispatcher.OP_BLOCK_ENTITY));
+        MainThreadDispatcher.flushClient(10);
+
+        assertEquals(0, MainThreadDispatcher.getClientQueueSize());
+        assertEquals(List.of("chunk", "be"), applied);
+    }
+
+    @Test
+    @DisplayName("网络请求任务不取代同位置 apply 任务")
+    void requestDoesNotSupersedeApply() {
+        MainThreadDispatcher.updatePlayerPosition(6 * 16 + 8.0, -37 * 16 + 8.0);
+
+        List<String> applied = new ArrayList<>();
+        ChunkPos pos = new ChunkPos(6, -37);
+        MainThreadDispatcher.execute(() -> applied.add("apply"), pos);
+        MainThreadDispatcher.execute(() -> applied.add("request"),
+                MainThreadDispatcher.chunkKey(pos, MainThreadDispatcher.OP_REQUEST));
+        MainThreadDispatcher.flushClient(10);
+
+        assertEquals(0, MainThreadDispatcher.getClientQueueSize());
+        assertEquals(List.of("apply", "request"), applied);
+    }
+
+    @Test
+    @DisplayName("同位置三连入队：只保留最新，且最新优先级按最新玩家位置计算")
+    void tripleEnqueueKeepsNewestWithFreshPriority() {
+        // 玩家在 (0,0) 入队 A（近键）；移到远处再入队 A'（远键）——A' 取代 A
+        MainThreadDispatcher.updatePlayerPosition(0, 0);
+        ChunkPos pos = new ChunkPos(0, 0);
+
+        List<String> applied = new ArrayList<>();
+        MainThreadDispatcher.execute(() -> applied.add("first"), pos);
+        MainThreadDispatcher.execute(() -> applied.add("second"), pos);
+        // 玩家移到 (10,0)，再入队第三个
+        MainThreadDispatcher.updatePlayerPosition(10 * 16 + 8.0, 0);
+        MainThreadDispatcher.execute(() -> applied.add("third"), pos);
+
+        MainThreadDispatcher.flushClient(10);
+        assertEquals(0, MainThreadDispatcher.getClientQueueSize());
+        assertEquals(List.of("third"), applied);
+    }
 }
