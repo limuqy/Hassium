@@ -284,13 +284,7 @@ public class ServerChunkPushManager {
                     sectionBitmap |= (1 << idx);
                 }
 
-                sendChunkHash(players, pos, chunkHash, sectionBitmap, dimension);
-                // Bloom miss（确定无缓存）→ 主动直推数据；hit/未就绪 → 只发 hash（客户端决定）
-                for (ServerPlayer player : players) {
-                    if (shouldPushFull(player, pos, dimension)) {
-                        enqueueDirectPush(player, dimension, List.of(pos));
-                    }
-                }
+                sendChunkHashAndMaybePush(players, pos, chunkHash, sectionBitmap, dimension);
             } catch (Exception e) {
                 Constants.LOG.error("[ASYNC_METADATA] Failed to compute chunkHash for chunk {}", pos, e);
             }
@@ -345,11 +339,7 @@ public class ServerChunkPushManager {
                 long chunkHash = ChunkContentHashUtil.combineSectionHashes(sectionHashes);
 
                 if (player.isAlive() && !player.hasDisconnected()) {
-                    sendChunkHash(List.of(player), pos, chunkHash, sectionBitmap, dimension);
-                    // Bloom miss（确定无缓存）→ 主动直推数据（hash 先行已保证客户端能暂存 contentHash）
-                    if (shouldPushFull(player, pos, dimension)) {
-                        enqueueDirectPush(player, dimension, List.of(pos));
-                    }
+                    sendChunkHashAndMaybePush(List.of(player), pos, chunkHash, sectionBitmap, dimension);
                 }
             } catch (Exception e) {
                 Constants.LOG.error("[ASYNC_METADATA] Failed to compute chunkHash for chunk {} (player={})",
@@ -400,11 +390,7 @@ public class ServerChunkPushManager {
                 long chunkHash = ChunkContentHashUtil.combineSectionHashes(sectionHashes);
 
                 if (player.isAlive() && !player.hasDisconnected()) {
-                    sendChunkHash(List.of(player), pos, chunkHash, sectionBitmap, dimension);
-                    // Bloom miss（确定无缓存）→ 主动直推数据（resync 补发场景同 trackChunk）
-                    if (shouldPushFull(player, pos, dimension)) {
-                        enqueueDirectPush(player, dimension, List.of(pos));
-                    }
+                    sendChunkHashAndMaybePush(List.of(player), pos, chunkHash, sectionBitmap, dimension);
                 }
             } catch (Exception e) {
                 Constants.LOG.error("[ASYNC_METADATA] Failed to compute chunkHash for chunk {} (player={})",
@@ -414,7 +400,12 @@ public class ServerChunkPushManager {
     }
 
     /**
-     * 将阶段一 chunkHash 加入短窗口批次（由 server tick 或凑满后发送）。
+     * 将阶段一 chunkHash 加入短窗口批次（由 server tick 限流发送；维度切换时立即冲刷）。
+     * <p>
+     * 批次不因凑满而立即发送：flush 由 {@link #flushPlayerHashBatchIfDue} 按每 tick
+     * {@code maxChunksPerTick} 条预算限流，避免 resync 一次性向客户端倾泻数百个 hash
+     * 触发缓存比对风暴（读盘-计算 hash）。直推块走 {@link #sendChunkHashAndMaybePush}
+     * 的直发路径（与数据同节奏），不受此限流。
      */
     private void sendChunkHash(List<ServerPlayer> players, ChunkPos pos,
                                 long chunkHash, int sectionBitmap, String dimension) {
@@ -426,7 +417,6 @@ public class ServerChunkPushManager {
             }
             UUID playerId = player.getUUID();
             PendingHashBatch flushDueToDimension = null;
-            PendingHashBatch flushDueToSize = null;
             synchronized (hashBatches) {
                 PendingHashBatch batch = hashBatches.get(playerId);
                 if (batch != null && !batch.dimension.equals(dimension)) {
@@ -439,36 +429,77 @@ public class ServerChunkPushManager {
                     hashBatches.put(playerId, batch);
                 }
                 batch.entries.add(entry);
-                if (batch.entries.size() >= HASH_BATCH_MAX_ENTRIES) {
-                    flushDueToSize = batch;
-                    hashBatches.remove(playerId);
-                }
             }
             if (flushDueToDimension != null) {
-                flushHashBatch(player, flushDueToDimension);
-            }
-            if (flushDueToSize != null) {
-                flushHashBatch(player, flushDueToSize);
+                flushHashBatch(player, flushDueToDimension.entries, flushDueToDimension.dimension);
             }
         }
     }
 
     /**
-     * 冲刷单个玩家的 hash 批次。
+     * 统一 hash 发送入口：per-player 按 Bloom 分流。
+     * <p>
+     * Bloom miss（确定无缓存）→ hash 立即直发 + 主动入队直推（hash 先行，客户端可暂存
+     * contentHash；直发与数据同受 drain 的 maxChunksPerTick 节奏约束，hash 不晚于数据）。
+     * hit/未就绪 → 入批次，由每 tick 限流发送（防客户端缓存比对风暴）。
      */
-    private void flushHashBatch(ServerPlayer player, PendingHashBatch batch) {
-        if (batch == null || batch.entries.isEmpty()) {
+    private void sendChunkHashAndMaybePush(List<ServerPlayer> players, ChunkPos pos,
+                                           long chunkHash, int sectionBitmap, String dimension) {
+        for (ServerPlayer player : players) {
+            if (!player.isAlive() || player.hasDisconnected()) {
+                continue;
+            }
+            if (shouldPushFull(player, pos, dimension)) {
+                sendChunkHashDirect(player, pos, chunkHash, sectionBitmap, dimension);
+                enqueueDirectPush(player, dimension, List.of(pos));
+            } else {
+                sendChunkHash(List.of(player), pos, chunkHash, sectionBitmap, dimension);
+            }
+        }
+    }
+
+    /**
+     * 直推场景的 hash 直发（单玩家单块，不走限流批次——与直推数据同节奏）。
+     */
+    private void sendChunkHashDirect(ServerPlayer player, ChunkPos pos,
+                                     long chunkHash, int sectionBitmap, String dimension) {
+        ChunkHashS2CPacket packet = new ChunkHashS2CPacket(dimension,
+                List.of(new ChunkHashS2CPacket.Entry(pos.x, pos.z, chunkHash, sectionBitmap)));
+        FriendlyByteBuf buf = null;
+        boolean sent = false;
+        try {
+            buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
+            packet.encode(buf);
+            int bytes = buf.readableBytes();
+            Services.NETWORK_MANAGER.sendChunkHashPacket(player, buf);
+            sent = true;
+            NetworkStats.recordMetadataSent(bytes);
+        } catch (Exception e) {
+            Constants.LOG.error("[CHUNK_HASH] Failed to send direct chunkHash to player {}",
+                    player.getName().getString(), e);
+        } finally {
+            if (!sent && buf != null) {
+                buf.release();
+            }
+        }
+    }
+
+    /**
+     * 冲刷指定 hash 条目列表（单个玩家的单个包）。
+     */
+    private void flushHashBatch(ServerPlayer player, List<ChunkHashS2CPacket.Entry> entries, String dimension) {
+        if (entries == null || entries.isEmpty()) {
             return;
         }
         if (!player.isAlive() || player.hasDisconnected()) {
             return;
         }
         DebugLogger.info(LogType.NETWORK, "[SEND_HASH] Flushing {} chunkHashes to player {} (dimension={})",
-                batch.entries.size(), player.getName().getString(), batch.dimension);
+                entries.size(), player.getName().getString(), dimension);
         FriendlyByteBuf buf = null;
         boolean sent = false;
         try {
-            ChunkHashS2CPacket packet = new ChunkHashS2CPacket(batch.dimension, new ArrayList<>(batch.entries));
+            ChunkHashS2CPacket packet = new ChunkHashS2CPacket(dimension, new ArrayList<>(entries));
             buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
             packet.encode(buf);
             int bytes = buf.readableBytes();
@@ -791,6 +822,7 @@ public class ServerChunkPushManager {
     private void flushPlayerHashBatchIfDue(ServerPlayer player, long nowMs) {
         UUID playerId = player.getUUID();
         PendingHashBatch batch;
+        List<ChunkHashS2CPacket.Entry> toSend;
         synchronized (hashBatches) {
             batch = hashBatches.get(playerId);
             if (batch == null || batch.entries.isEmpty()) {
@@ -800,9 +832,18 @@ public class ServerChunkPushManager {
                     && batch.entries.size() < HASH_BATCH_MAX_ENTRIES) {
                 return;
             }
-            hashBatches.remove(playerId, batch);
+            // 到期：本 tick 最多发 maxChunksPerTick 条（与数据直推同节奏），剩余留批次下 tick 续发。
+            // 客户端比对（读盘-计算 hash）速率由此受限，避免 resync 一次性倾泻数百 hash。
+            int perTick = HassiumConfigService.getInstance().getConfig()
+                    .serverNetwork().maxChunksPerTick();
+            int take = Math.min(Math.max(1, perTick), batch.entries.size());
+            toSend = new ArrayList<>(batch.entries.subList(0, take));
+            batch.entries.subList(0, take).clear();
+            if (batch.entries.isEmpty()) {
+                hashBatches.remove(playerId, batch);
+            }
         }
-        flushHashBatch(player, batch);
+        flushHashBatch(player, toSend, batch.dimension);
     }
 
     /**
