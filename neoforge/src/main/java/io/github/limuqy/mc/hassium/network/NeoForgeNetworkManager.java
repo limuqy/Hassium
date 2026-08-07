@@ -106,8 +106,12 @@ public class NeoForgeNetworkManager implements NetworkManager {
         // 安装成功后再 markNegotiated + ACK：服务端仍发未压缩帧，双方可安全对齐
         ZstdPipelineSwitcher.switchToZstdWhenReady(channel, threshold, level, () -> {
             ZstdNegotiationTracker.markNegotiated(channel);
+            // 对齐 forge：装 ZSTD 后暂停出站压缩（只发明文帧），服务端装好
+            // ZSTD 并发 IndexSync 后恢复——防客户端压缩大包（bloom manifest 等）
+            // 在服务端就绪前到达被 zlib 解炸（1.21.11 fabric R2 已复现）
+            ZstdPipelineSwitcher.pauseOutboundCompression(channel);
             sendCompressionReadyToServer();
-            LOGGER.info("Hassium: Client ZSTD pipeline installed, sent ready ACK");
+            LOGGER.info("Hassium: Client ZSTD pipeline installed, sent ready ACK (outbound paused)");
         });
     }
 
@@ -2784,6 +2788,13 @@ public class NeoForgeNetworkManager implements NetworkManager {
                 Connection connection = conn.getConnection();
                 HassiumConnectionRegistry.markEnabled(connection);
                 HassiumAggregationManager.init();
+                // 服务端已装 ZSTD（能发来 IndexSync）：恢复客户端出站压缩阈值
+                //（装 ZSTD 时暂停，见 tryInstallClientZstdPipeline；对齐 forge）
+                io.netty.channel.Channel channel = getConnectionChannel(connection);
+                if (channel != null) {
+                    int threshold = HassiumConfigService.getInstance().getGlobalCompressionThreshold();
+                    ZstdPipelineSwitcher.setOutboundCompressionThreshold(channel, threshold);
+                }
                 sendCompressionReadyToServer();
             }
             LOGGER.debug("Hassium: Received index sync ({} types), sent compression ready",
