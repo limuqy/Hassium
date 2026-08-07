@@ -36,7 +36,7 @@ Hassium 用一套客户端 + 服务端配合，从**高效压缩、网络优化�
 
 - **目标**：进服与视野扩展时服务端不把主线程压满、客户端不出现卡顿尖峰
 - **服务端怎么做**（推送侧）：
-  - **tick 粒度限速**：`network.maxChunksPerTick`（默认 `5`）限制每玩家每 tick 提交上限（5×20 = 100/s 满 tick）；掉刻时每 tick 提交量不变、每秒总量自然下降，即保护主线程，主线程峰值 ≤ ~8ms/tick
+  - **tick 粒度限速**：`network.maxChunksPerTick`（默认 `4`）限制每玩家每 tick 提交上限（4×20 = 80/s 满 tick）；掉刻时每 tick 提交量不变、每秒总量自然下降，即保护主线程，主线程峰值 ≤ ~8ms/tick
   - **序列化后台化**：encode / ZSTD 压缩 / hash 计算 / 发送全部在推送线程池（`serverChunkPushThreads` 默认 2，可动态伸缩）；主线程只做 packet 构建——与原版对齐（原版也是主线程构建 + netty 线程编码），1.20.x/1.21.1 甚至整条序列化链都在后台
 - **客户端怎么做**（加载侧）：
   - 每帧主线程 apply 预算 `clientCache.mainThreadChunkBudgetMs`（默认 `15`）
@@ -94,7 +94,7 @@ Hassium 用一套客户端 + 服务端配合，从**高效压缩、网络优化�
 
 - **目标**：多人服客户端 RD > 服务端视距时，本地缓存回填视距外环带，**仅渲染不参与模拟**
 - **怎么做的**：解锁客户端滑块的 serverVD 钳制；本地缓存命中区块以 renderOnly 标记装配，不向服请求视距外区块/BE；真实区块到达时覆盖回正常
-- **配置**：`clientCache.viewDistanceExtensionEnabled`（默认 `true`）、`clientCache.maxRenderDistance`（默认 `32`，范围 2–64）、`clientCache.ovdUnloadDelaySecs`（默认 `5`）
+- **配置**：`clientCache.viewDistanceExtensionEnabled`（默认 `true`）、`clientCache.maxRenderDistance`（默认 `16`，范围 2–64）、`clientCache.ovdUnloadDelaySecs`（默认 `5`）
 - **限制**：与 Bobby 互斥；单人服不启用；RD>32 时雾距跟随扩大可能穿帮（Fog Mixin 未实现）
 - **专文**：[Beyond-View-Render](Beyond-View-Render)
 
@@ -131,7 +131,7 @@ Hassium 用一套客户端 + 服务端配合，从**高效压缩、网络优化�
 - **目标**：重算光照不再占用主线程
 - **怎么做的**：重算提交到后台线程池并行执行（默认 4 线程，虚拟线程模式不限），主线程只做 9 柱快照捕获与提交；完成回调在主线程预算内排程
 - **配置**：`clientCache.parallelLightEngineEnabled`（默认 `false`）、`clientCache.parallelLightEngineThreads`（默认 `4`）
-- **同步光照（可选）**：`clientCache.lightSyncMode`（默认 `false`）开启后光照重算走双帧缓冲——本帧收集无光照区块，下一帧尾阻塞全部落地，黑块窗口 ≤1 帧；默认异步预算消费（每帧部分预算，黑块随重算逐帧消减）
+- **同步光照（默认）**：`clientCache.lightSyncMode`（默认 `true`）开启后光照重算走双帧缓冲——本帧收集无光照区块，下一帧尾阻塞全部落地，黑块窗口 ≤1 帧；false=异步预算消费（每帧部分预算，黑块随重算逐帧消减）
 - **指标**：`/hassiumc stats` 显示 `光照优化：xx%（命中 N，重算 M）`
 
 ---

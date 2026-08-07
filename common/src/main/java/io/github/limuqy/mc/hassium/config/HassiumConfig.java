@@ -81,7 +81,7 @@ public record HassiumConfig(
             // === 光照计算引擎（默认官方引擎；接入 Promethium 后可选并行）===
             boolean parallelLightEngineEnabled,
             int parallelLightEngineThreads,
-            // === 光照重算模式（默认异步预算消费；true=同步双帧缓冲）===
+            // === 光照重算模式（默认同步双帧缓冲；false=异步预算消费）===
             boolean lightSyncMode
     ) {
         public static final ClientCacheConfig DEFAULT = new ClientCacheConfig(
@@ -95,18 +95,18 @@ public record HassiumConfig(
                 0,       // targetCacheSizeMb (auto)
                 100,     // minCleanupBatchSize
                 true,    // viewDistanceExtensionEnabled
-                32,      // maxRenderDistance
+                16,      // maxRenderDistance
                 5,       // ovdUnloadDelaySecs
                 true,    // sectionDeltaEnabled
                 true,    // joinBoostEnabled
                 true,    // entitySnapshotsEnabled
                 4,       // loadThreads
                 true,    // lightCacheEnabled
-                12,      // maxChunksPerFrame
+                6,       // maxChunksPerFrame
                 15,      // mainThreadChunkBudgetMs
                 false,   // parallelLightEngineEnabled（默认官方引擎，光照经统一异步缓冲队列预算消费）
                 4,       // parallelLightEngineThreads
-                false    // lightSyncMode（默认异步预算消费；true=同步双帧缓冲：本帧收集、下一帧尾阻塞全量落地）
+                true     // lightSyncMode（默认同步双帧缓冲：本帧收集、下一帧尾阻塞全量落地；false=异步预算消费）
         );
 
         public long maxCacheSizeBytes() {
@@ -273,7 +273,7 @@ public record HassiumConfig(
                 true,              // enableCompactHeader
                 DEFAULT_COMPRESSION_BLACKLIST,
                 false,              // metricsEnabled
-                5,                 // maxChunksPerTick（满 tick ≈ 100/s；发送速率 = 本值 × tick 节奏，掉刻自然降速保护主线程）
+                4,                 // maxChunksPerTick（满 tick ≈ 80/s；发送速率 = 本值 × tick 节奏，掉刻自然降速保护主线程）
                 2,                 // serverChunkPushThreads
                 true,              // dynamicThreadPoolEnabled
                 2,                 // minPushThreads

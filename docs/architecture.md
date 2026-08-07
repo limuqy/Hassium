@@ -65,7 +65,7 @@ Sector 3+:    [length(4)][type=126][ZSTD 压缩数据]
 | 全局包压缩 | Pipeline 替换原版 Zlib | `globalPacketCompression=true` |
 | 上下文 / magicless / 聚合 | 提升压缩比 | 均默认启用 |
 | 紧凑包头 | 聚合包内 `CompactHeaderCodec` | 默认启用 |
-| 平滑推送 | 每 tick 提交上限限速（`maxChunksPerTick=5`，满 tick ≈ 100/s，掉刻时每 tick 提交量不变、每秒总量自然下降保护主线程）；encode/压缩/hash/发送全后台（1.21.2+ 主线程仅 build，<1.21.2 全后台） | 默认启用 |
+| 平滑推送 | 每 tick 提交上限限速（`maxChunksPerTick=4`，满 tick ≈ 80/s，掉刻时每 tick 提交量不变、每秒总量自然下降保护主线程）；encode/压缩/hash/发送全后台（1.21.2+ 主线程仅 build，<1.21.2 全后台） | 默认启用 |
 | UDP/KCP 数据面 | 每个 `udpListeners` 项建立独立 KCP session；按 `weight` 加权轮询发送 S2C bulk，异常时自动回落 TCP | `network.dataPlane.enabled=true`（默认端点仅本机可用） |
 | TCP 控制恢复 | 数据面健康时允许经 `FailoverPermit` 迁移主控 TCP；候选耗尽后只执行一次终态清理 | 默认 6 s stall、30 s permit、60 s 恢复窗口 |
 
@@ -91,12 +91,12 @@ Sector 3+:    [length(4)][type=126][ZSTD 压缩数据]
 | `clientCache.enabled` | true | 客户端缓存 |
 | `clientCache.sectionDeltaEnabled` | true | 缓存过期时分段增量（关则过期走全量） |
 | `clientCache.viewDistanceExtensionEnabled` | true | 超视渲染（依赖 clientCache.enabled；与 Bobby 互斥） |
-| `clientCache.maxRenderDistance` | 32 | 运行时有效 RD / 超视渲染环带上限（2–64；默认对齐 vanilla 滑块） |
+| `clientCache.maxRenderDistance` | 16 | 运行时有效 RD / 超视渲染环带上限（2–64） |
 | `clientCache.ovdUnloadDelaySecs` | 5 | 超视渲染离开环带后延迟卸载秒数（0=同步卸载） |
 | `network.enabled` | true | Hassium 通道 |
 | `network.globalPacketCompression` | true | 全局 ZSTD |
 | `network.compressionLevel` | 3 | 网络压缩等级（速度优先） |
-| `network.maxChunksPerTick` | 5 | 每玩家每 tick 提交上限（1.21.2+ 为主线程序列化上限，1.20.x/1.21.1 为后台提交上限；发送速率 = 本值 × tick 节奏，满 tick ≈ 5×20/s） |
+| `network.maxChunksPerTick` | 4 | 每玩家每 tick 提交上限（1.21.2+ 为主线程序列化上限，1.20.x/1.21.1 为后台提交上限；发送速率 = 本值 × tick 节奏，满 tick ≈ 4×20/s） |
 | `network.dataPlane.enabled` | true | 启用 UDP/KCP 数据面和控制恢复；关后不启动 UDP listener、不广告端点、不处理 failover |
 | `network.dataPlane.controlStallMs` | 6000 | 控制 TCP 静默多久后可申请 failover（ms） |
 | `network.dataPlane.failoverExpiryMs` | 30000 | 服务端 `FailoverPermit` 有效期（ms） |
@@ -104,7 +104,7 @@ Sector 3+:    [length(4)][type=126][ZSTD 压缩数据]
 | `clientCache.mainThreadChunkBudgetMs` | 15 | 客户端主线程 apply 预算（ms） |
 | `clientCache.parallelLightEngineEnabled` | false | 并行光照（需接入 Promethium）：默认官方引擎——光照重算经统一异步缓冲队列，帧尾按预算消费（每帧部分预算，剩余留帧）；开启后转 Promethium 后台线程池重算 + 主线程帧预算原子落地 |
 | `clientCache.parallelLightEngineThreads` | 4 | 并行光照线程数（虚拟线程模式忽略） |
-| `clientCache.lightSyncMode` | false | 光照重算同步模式（双帧缓冲）：默认官方引擎异步预算消费（黑块随重算逐帧消减）；开启后本帧收集无光照区块、下一帧尾阻塞全量落地（黑块窗口 ≤1 帧；落地量受 chunk apply 限流约束；与并行光照同开时本项优先） |
+| `clientCache.lightSyncMode` | true | 光照重算同步模式（双帧缓冲）：默认同步双帧缓冲（本帧收集无光照区块、下一帧尾阻塞全量落地，黑块窗口 ≤1 帧；落地量受 chunk apply 限流约束；与并行光照同开时本项优先）；false=异步预算消费（黑块随重算逐帧消减） |
 | `clientCache.lightCacheEnabled` | true | 光照缓存：首次加载重算后存储光照，缓存命中直接应用 |
 | `network.lightStrip` | true | 光照剥离：服务端发包带空 lightMask，客户端本地重算 |
 | `network.maxLightRecomputePerFrame` | 10 | 每帧最多重算光照的区块数 |
@@ -173,7 +173,7 @@ ERROR / WARN 始终输出。
 
 | 特性 | 配置 / 命令 | 要点 | 详文 |
 |------|-------------|------|------|
-| **平滑推送** | `network.maxChunksPerTick`（5）、`serverChunkPushThreads` | 每 tick 提交上限限速（满 tick ≈ 5×20/s，掉刻自然降速保护主线程；主线程峰值 ≤8ms/tick）；encode/压缩/hash/发送全在推送池——1.21.2+ 主线程仅 build（对齐原版，ThreadingDetector 约束），<1.21.2 全后台 | [`chunk-cache.md`](chunk-cache.md)、[`runtime-smoke-test.md`](runtime-smoke-test.md) |
+| **平滑推送** | `network.maxChunksPerTick`（4）、`serverChunkPushThreads` | 每 tick 提交上限限速（满 tick ≈ 4×20/s，掉刻自然降速保护主线程；主线程峰值 ≤8ms/tick）；encode/压缩/hash/发送全在推送池——1.21.2+ 主线程仅 build（对齐原版，ThreadingDetector 约束），<1.21.2 全后台 | [`chunk-cache.md`](chunk-cache.md)、[`runtime-smoke-test.md`](runtime-smoke-test.md) |
 | **主控热切** | `network.controlReachableEndpoints`、`network.dataPlane.controlStallMs` | TCP 主控 `channelInactive`，或控制面 stalled 且 UDP 健康时，客户端进入恢复态并按 priority 串行重连；恢复期世界定格（tick 暂停、断连画面抑制、过渡画面仅隐藏渲染；可切无感模式），画面保持冻结世界 + 切换浮层；服务端许可路径以 `FailoverPermit` 限定时效；候选耗尽后终态清理只执行一次 | [`runtime-smoke-test.md`](runtime-smoke-test.md) §`udp-failover` |
 | **加权分流** | `network.dataPlane.udpListeners`、每 listener `weight` | 每个 UDP/KCP listener 建独立 session，S2C bulk 按权重加权轮询；不健康或无可用 session 时回落 TCP，控制面始终保留 TCP | [`runtime-smoke-test.md`](runtime-smoke-test.md) §`udp-failover` |
 | **多通道数据面（历史）** | 早期 `DataPlanePoCConfig` | 1.20.1 Fabric 的双裸 TCP PoC 已退役，不是生产配置或运维入口 | [`multi-channel_network_research.md`](multi-channel_network_research.md) |
@@ -194,7 +194,7 @@ ERROR / WARN 始终输出。
 | **光照剥离** | `network.lightStrip`（默认 true） | 服务端发包带空 lightMask（构造近零成本）；客户端本地重算并回写缓存 | [`chunk-cache.md`](chunk-cache.md)、[`runtime-smoke-test.md`](runtime-smoke-test.md) |
 | **光照缓存** | `clientCache.lightCacheEnabled`（默认 true） | 首次重算后缓存光照，命中直接 apply 跳过同步重算；SectionDelta 合并强制失效 | [`chunk-cache.md`](chunk-cache.md)、[`disk-nbt-cache.md`](disk-nbt-cache.md) |
 | **并行光照** | `clientCache.parallelLightEngineEnabled`（默认 false）、`parallelLightEngineThreads`（4） | 可选：需安装 Promethium MOD（客户端运行时经 `PromethiumLightBridge` 反射发现，零编译依赖；MOD 缺席自动降级官方引擎）。开启后重算在后台线程池并行，主线程只做快照捕获与帧预算内原子落地；默认官方引擎——光照重算经统一异步缓冲队列（帧尾预算消费，每帧部分预算） | [`chunk-cache.md`](chunk-cache.md)、[`runtime-smoke-test.md`](runtime-smoke-test.md) |
-| **同步光照** | `clientCache.lightSyncMode`（默认 false） | 可选：官方引擎光照重算同步模式（双帧缓冲）——本帧收集无光照区块，下一帧尾阻塞全部重算落地，黑块窗口 ≤1 帧；默认异步预算消费（每帧部分预算，剩余留帧）；与并行光照同开时本项优先 | [`client-chunk-light-flow.md`](client-chunk-light-flow.md) |
+| **同步光照** | `clientCache.lightSyncMode`（默认 true） | 官方引擎光照重算同步模式（双帧缓冲）——本帧收集无光照区块，下一帧尾阻塞全部重算落地，黑块窗口 ≤1 帧；false=异步预算消费（每帧部分预算，剩余留帧）；与并行光照同开时本项优先 | [`client-chunk-light-flow.md`](client-chunk-light-flow.md) |
 
 客户端磁盘缓存 payload 为 NBT（`"HBT1"` + CompoundTag），主一致性路径为 **Live-Unload Snapshot**（renderOnly 跳过落盘）。控制恢复期间缓存写队列与执行器保持可用，重连成功后继续命中既有缓存；旧 packet 字节缓存读到即删并全量请求。
 

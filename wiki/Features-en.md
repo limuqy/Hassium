@@ -36,7 +36,7 @@ Hassium is a single client + server suite that optimizes Minecraft from five dir
 
 - **Goal**: The server keeps the main thread under control during join and view expansion; the client avoids hitch spikes
 - **Server side** (push):
-  - **Tick-granularity throttling**: `network.maxChunksPerTick` (default `5`) caps per-player submits per tick (5×20 = 100/s at full tick); the per-tick submit count stays fixed during lag so the per-second rate naturally drops — protecting the server main thread; main-thread peak ≤ ~8 ms/tick
+  - **Tick-granularity throttling**: `network.maxChunksPerTick` (default `4`) caps per-player submits per tick (4×20 = 80/s at full tick); the per-tick submit count stays fixed during lag so the per-second rate naturally drops — protecting the server main thread; main-thread peak ≤ ~8 ms/tick
   - **Background serialization**: encode / ZSTD compression / hash computation / send all run on the push pool (`serverChunkPushThreads` default 2, dynamically resizable); the main thread only builds the packet — aligned with vanilla (which also builds on the main thread and encodes on netty). On 1.20.x/1.21.1 the whole serialization chain runs off-thread
 - **Client side** (loading):
   - Per-frame main-thread apply budget `clientCache.mainThreadChunkBudgetMs` (default `15`)
@@ -94,7 +94,7 @@ Hassium is a single client + server suite that optimizes Minecraft from five dir
 
 - **Goal**: When the client RD exceeds the server view distance (multiplayer), fill the outer ring from the local cache — **render only, not simulated**
 - **How**: The client slider is unclamped from the serverVD limit; cached chunks are applied with a renderOnly marker; the client never asks the server for chunks/BE beyond the server side; when a real chunk arrives it overrides the renderOnly stub
-- **Config**: `clientCache.viewDistanceExtensionEnabled` (default `true`), `clientCache.maxRenderDistance` (default `32`, range 2–64), `clientCache.ovdUnloadDelaySecs` (default `5`)
+- **Config**: `clientCache.viewDistanceExtensionEnabled` (default `true`), `clientCache.maxRenderDistance` (default `16`, range 2–64), `clientCache.ovdUnloadDelaySecs` (default `5`)
 - **Limits**: Incompatible with Bobby; disabled in singleplayer; with RD > 32 the fog distance also widens and may show artifacts (Fog Mixin not implemented)
 - **Deep dive**: [Beyond-View-Render](Beyond-View-Render-en)
 
@@ -131,7 +131,7 @@ Hassium is a single client + server suite that optimizes Minecraft from five dir
 - **Goal**: Light recomputation no longer blocks the main thread
 - **How**: Recomputation runs on a background thread pool (default 4 threads; virtual-thread mode unbounded); the main thread only captures the 9-column snapshot and submits; completion callbacks are scheduled within the main-thread budget
 - **Config**: `clientCache.parallelLightEngineEnabled` (default `false`), `clientCache.parallelLightEngineThreads` (default `4`)
-- **Sync light (optional)**: `clientCache.lightSyncMode` (default `false`) enables double-frame buffering — no-light chunks collected this frame are fully applied at the next frame tail, dark-chunk window ≤1 frame; default is async budgeted consumption (a few chunks per frame, dark chunks fade as recompute lands)
+- **Sync light (default)**: `clientCache.lightSyncMode` (default `true`) enables double-frame buffering — no-light chunks collected this frame are fully applied at the next frame tail, dark-chunk window ≤1 frame; false = async budgeted consumption (a few chunks per frame, dark chunks fade as recompute lands)
 - **Metric**: `/hassiumc stats` shows `lighting optimization: xx% (hits N, recompute M)`
 
 ---

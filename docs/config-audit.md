@@ -41,7 +41,7 @@ Forge/NeoForge 端注册 3 个 spec（CLIENT / COMMON / SERVER），物理客户
 | `clientCache.bloomFilterExpectedInsertions` | `10000` | **客户端** | `ChunkBloomFilter:71` 配置 Bloom | ✅ 正常 |
 | `clientCache.bloomFilterFpp` | `0.01` | **客户端** | `ChunkBloomFilter:72` 配置 Bloom | ✅ 正常 |
 | `clientCache.viewDistanceExtensionEnabled` | `true` | **客户端** | `MixinClientPacketListener:92`, `MixinOptions:38`, `ViewDistanceExtensionService:212,790` | ✅ 正常 |
-| `clientCache.maxRenderDistance` | `32` | **客户端** | `MixinOptions:44`, `ViewDistanceExtensionService:121` | ✅ 正常 |
+| `clientCache.maxRenderDistance` | `16` | **客户端** | `MixinOptions:44`, `ViewDistanceExtensionService:121` | ✅ 正常 |
 | `clientCache.ovdUnloadDelaySecs` | `5` | **客户端** | `ViewDistanceExtensionService:255` | ✅ 正常 |
 | `clientCache.sectionDeltaEnabled` | `true` | **客户端** | `ClientMetadataHandler:248` | ✅ 正常 |
 | `clientCache.joinBoostEnabled` | `true` | **客户端** | `ClientMainThreadBudget:31` | ✅ 正常 |
@@ -72,9 +72,9 @@ Forge/NeoForge 端注册 3 个 spec（CLIENT / COMMON / SERVER），物理客户
 |--------|--------|---------------------|----------|------|
 | `network.clientChunkLoadThreads` | `10` | **客户端** | `ClientLifecycleHelper` 初始化线程池 | ✅ 正常 |
 | `clientCache.lightCacheEnabled` | `true` | **客户端** | 光照缓存：首次重算后存储光照，缓存命中跳过重算 | ✅ 正常 |
-| `network.maxChunksPerFrame` | `12` | **客户端** | `ClientMainThreadBudget:78` | ✅ 正常 |
+| `clientCache.maxChunksPerFrame` | `6` | **客户端** | `ClientMainThreadBudget:78` | ✅ 正常 |
 | `clientCache.mainThreadChunkBudgetMs` | `15` | **客户端** | `ClientMainThreadBudget:59` | ✅ 正常 |
-| `clientCache.lightSyncMode` | `false` | **客户端** | `ClientLightBufferQueue:69`（同步模式双帧缓冲全量消费） | ✅ 正常 |
+| `clientCache.lightSyncMode` | `true` | **客户端** | `ClientLightBufferQueue:69`（同步模式双帧缓冲全量消费） | ✅ 正常 |
 
 ### E. Network — 服务端专属（5 项）→ `server.toml`
 

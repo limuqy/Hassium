@@ -89,7 +89,7 @@ HIT apply 后再请求 blockEntity
 |------|------|
 | `mainThreadChunkBudgetMs` | 每帧 apply/回调共享预算（默认 15ms） |
 | JoinBoost | 进服约 10s，预算从约 30ms 线性退坡到 `mainThreadChunkBudgetMs` |
-| `maxChunksPerFrame` | 安全硬顶（默认 12） |
+| `maxChunksPerFrame` | 安全硬顶（默认 6） |
 
 控制面包（hash / 握手 / index sync 等）在 `PacketCompressionBlacklist`，避免进 PENDING 聚合窗口。
 
@@ -224,7 +224,7 @@ MixinClientTick.tick
 
 `maxRenderDistance < clientVD` 时钳制雾距的 MixinFogRenderer **未实现**。理由：
 
-- 默认配置（`maxRenderDistance=32`，vanilla 滑块上限 32）下为 no-op
+- 默认配置（`maxRenderDistance=16`，vanilla 滑块上限 32）下客户端滑块 >16 时有效 RD 被钳 16、雾距仍按滑块渲染，存在穿帮可能（默认 32 时本为 no-op）
 - `FogRenderer.setupFog` 跨 9 段签名差异大（1.20.1 vs 1.21.x 参数列表重构）
 - `RenderSystem` fog API 在 1.20.1（`fogEnd` field）与 1.21+（`setShaderFogEnd` method）间不兼容
 
@@ -401,7 +401,7 @@ saves/MyCacheWorld/
 
 ### 13.1 背景：永久虚空根因
 
-服务端数据队列（`ServerChunkPushManager.enqueueDataRequest`）在 drain 时对已出视距的任务**静默丢弃**：飞行中队列积压（`maxChunksPerTick` 默认 5）时，轮到处理时玩家已前移，任务被丢弃；客户端请求无超时重试，且静止后不再触发新的 `trackChunk`（块已在视距内），→ 前方 30° 扇形虚空永久存在。方向加权（`FORWARD_BIAS`）只改变优先级，堵不住丢弃漏洞。
+服务端数据队列（`ServerChunkPushManager.enqueueDataRequest`）在 drain 时对已出视距的任务**静默丢弃**：飞行中队列积压（`maxChunksPerTick` 默认 4）时，轮到处理时玩家已前移，任务被丢弃；客户端请求无超时重试，且静止后不再触发新的 `trackChunk`（块已在视距内），→ 前方 30° 扇形虚空永久存在。方向加权（`FORWARD_BIAS`）只改变优先级，堵不住丢弃漏洞。
 
 ### 13.2 机制
 

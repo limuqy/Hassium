@@ -45,7 +45,7 @@ flowchart TD
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
 | `clientCache.viewDistanceExtensionEnabled` | `true` | 总开关 |
-| `clientCache.maxRenderDistance` | `32` | 超视渲染环带与有效 RD 上限（范围 2–64） |
+| `clientCache.maxRenderDistance` | `16` | 超视渲染环带与有效 RD 上限（范围 2–64） |
 | `clientCache.ovdUnloadDelaySecs` | `5` | 离开环带后延迟卸载秒数（0=同步卸载） |
 
 ---

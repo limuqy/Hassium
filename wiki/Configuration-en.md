@@ -40,11 +40,11 @@ In-game config screen entry points:
 | `clientCache.enabled` | `true` | Master switch for client chunk cache |
 | `clientCache.sectionDeltaEnabled` | `true` | On cache mismatch, fetch only changed sections; off = full re-fetch |
 | `clientCache.lightCacheEnabled` | `true` | Light cache; hits skip recomputation; turn off if you see light glitches with Sodium etc. |
-| `clientCache.parallelLightEngineEnabled` | `true` | Parallel light: recomputation runs on a background pool; the main thread only submits snapshots |
+| `clientCache.parallelLightEngineEnabled` | `false` | Parallel light: recomputation runs on a background pool; the main thread only submits snapshots |
 | `clientCache.parallelLightEngineThreads` | `4` | Parallel light thread count (ignored in virtual-thread mode) |
-| `clientCache.lightSyncMode` | `false` | Light recompute sync mode (double-frame buffering): no-light chunks collected this frame are fully applied at the next frame tail, dark-chunk window ≤1 frame (default false = async budgeted consumption) |
+| `clientCache.lightSyncMode` | `true` | Light recompute sync mode (double-frame buffering): no-light chunks collected this frame are fully applied at the next frame tail, dark-chunk window ≤1 frame (default true = sync double-frame buffering; false = async budgeted consumption) |
 | `clientCache.viewDistanceExtensionEnabled` | `true` | Beyond-view render (multiplayer, clientVD > serverVD ring fill; **incompatible with Bobby**) |
-| `clientCache.maxRenderDistance` | `32` | Beyond-view ring and effective RD cap (range 2–64) |
+| `clientCache.maxRenderDistance` | `16` | Beyond-view ring and effective RD cap (range 2–64) |
 | `clientCache.ovdUnloadDelaySecs` | `5` | Seconds of delayed unload after leaving the beyond-view ring (0 = sync) |
 | `clientCache.mainThreadChunkBudgetMs` | `15` | Per-frame chunk apply budget on the client (ms); JoinBoost temporarily raises it for ~10s after join |
 
@@ -55,7 +55,7 @@ In-game config screen entry points:
 | `network.enabled` | `true` | Custom `hassium:*` channels (off = revert to vanilla full packets) |
 | `network.globalPacketCompression` | `true` | Replace the vanilla Netty Zlib with ZSTD globally (off = coexist with protocol-replacement mods) |
 | `network.compressionLevel` | `3` | Network compression level (speed-biased) |
-| `network.maxChunksPerTick` | `5` | Per-player submit cap per tick (send rate = cap × tick rhythm; ≈ 5×20/s at full tick, naturally slows on lag) |
+| `network.maxChunksPerTick` | `4` | Per-player submit cap per tick (send rate = cap × tick rhythm; ≈ 4×20/s at full tick, naturally slows on lag) |
 | `network.metricsEnabled` | `true` | Metrics collection (turn off disables `/hassium stats` etc.) |
 | `network.enablePacketAggregation` | on by default | Packet aggregation; turn off if a third-party channel misbehaves |
 | `network.compressionBlacklist` | empty | Packet ID list; matched packets bypass compression/aggregation |

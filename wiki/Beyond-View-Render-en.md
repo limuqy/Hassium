@@ -45,7 +45,7 @@ flowchart TD
 | Key | Default | Notes |
 | --- | --- | --- |
 | `clientCache.viewDistanceExtensionEnabled` | `true` | Master switch |
-| `clientCache.maxRenderDistance` | `32` | Beyond-view ring and effective RD cap (range 2–64) |
+| `clientCache.maxRenderDistance` | `16` | Beyond-view ring and effective RD cap (range 2–64) |
 | `clientCache.ovdUnloadDelaySecs` | `5` | Seconds of delayed unload after leaving the ring (0 = sync) |
 
 ---

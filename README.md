@@ -89,15 +89,15 @@
 | `clientCache.sectionDeltaEnabled` | `true` | 缓存过期时分段增量 |
 | `clientCache.lightCacheEnabled` | `true` | 光照缓存（命中跳过重算） |
 | `clientCache.viewDistanceExtensionEnabled` | `true` | 超视渲染（多人；与 Bobby 互斥） |
-| `clientCache.maxRenderDistance` | `32` | 超视渲染 / 有效 RD 上限（2–64） |
+| `clientCache.maxRenderDistance` | `16` | 超视渲染 / 有效 RD 上限（2–64） |
 | `clientCache.ovdUnloadDelaySecs` | `5` | 离开超视渲染环带后延迟卸载（秒；0=同步） |
 | `network.enabled` | `true` | 自定义通道 |
 | `network.globalPacketCompression` | `true` | 全局 ZSTD |
-| `network.maxChunksPerTick` | `5` | 每玩家每 tick 提交上限（发送速率 = 本值 × tick 节奏，满 tick ≈ 5×20/s；掉刻自然降速） |
+| `network.maxChunksPerTick` | `4` | 每玩家每 tick 提交上限（发送速率 = 本值 × tick 节奏，满 tick ≈ 4×20/s；掉刻自然降速） |
 | `clientCache.mainThreadChunkBudgetMs` | `15` | 客户端每帧 apply 预算（ms） |
 | `clientCache.parallelLightEngineEnabled` | `false` | 并行光照（可选，需安装 Promethium MOD；开启后重算在后台线程池，主线程只提交快照；MOD 缺席自动回退官方引擎） |
 | `clientCache.parallelLightEngineThreads` | `4` | 并行光照线程数（虚拟线程模式忽略） |
-| `clientCache.lightSyncMode` | `false` | 光照重算同步模式（双帧缓冲：本帧收集无光照区块，下一帧尾阻塞全部重算落地，黑块窗口≤1帧；代价为加载期单帧开销集中） |
+| `clientCache.lightSyncMode` | `true` | 光照重算同步模式（双帧缓冲：本帧收集无光照区块，下一帧尾阻塞全部重算落地，黑块窗口≤1帧；代价为加载期单帧开销集中） |
 | `network.metricsEnabled` | `false` | 指标收集（默认关闭；自检时自动开启） |
 | `network.dataPlane.enabled` | `false` | UDP/KCP 数据面与 TCP 主控热切/加权分流；默认关闭，启用前请配置可达端点并依次确认 6 个自检标记 |
 | `network.dataPlane.controlStallMs` | `6000` | TCP 主控卡顿多久后触发 `FailoverRequest` |

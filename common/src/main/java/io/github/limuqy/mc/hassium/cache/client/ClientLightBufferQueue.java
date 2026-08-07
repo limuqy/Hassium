@@ -19,9 +19,9 @@ import java.util.concurrent.ConcurrentHashMap;
  * 预提交）从 apply 链路剥离：帧内收集、帧尾消费，收集与消费解耦。消费模式由
  * {@code clientCache.lightSyncMode} 决定：
  * <ul>
- *   <li>异步模式（默认）：单缓冲，帧尾按预算消费（{@link #FRAME_BUDGET_NS}，到点即停），
+ *   <li>异步模式（{@code lightSyncMode=false}）：单缓冲，帧尾按预算消费（{@link #FRAME_BUDGET_NS}，到点即停），
  *       剩余自然留帧消化——加载风暴下黑块随重算落地逐帧消减。</li>
- *   <li>同步模式（{@code lightSyncMode=true}）：双帧缓冲——本帧 chunk apply（已限流：
+ *   <li>同步模式（默认，{@code lightSyncMode=true}）：双帧缓冲——本帧 chunk apply（已限流：
  *       maxChunksPerFrame + 时间预算）产生的无光照任务入「当前」缓冲，帧尾交换缓冲并对
  *       上一帧收集的队列<b>预算内消费</b>（{@link #SYNC_FRAME_BUDGET_NS} 封顶，剩余任务
  *       放回下一帧，不丢）；每块光照在 apply 后 1-3 帧内落地（黑块窗口 ≤2-3 帧），
@@ -40,7 +40,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class ClientLightBufferQueue {
 
     /**
-     * 每帧消费预算：官方重算 ~1-3ms/块，5ms ≈ 2-3 块/帧；加载风暴（maxChunksPerFrame=12）
+     * 每帧消费预算：官方重算 ~1-3ms/块，5ms ≈ 2-3 块/帧；加载风暴（maxChunksPerFrame=6）
      * 下自然积压、多帧消化——「光照只占部分主线程预算」的落点，帧时间不会被单帧峰值
      * 击穿。预算耗尽剩余留帧，无阻塞。
      */

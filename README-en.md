@@ -89,13 +89,13 @@ Files: `config/hassium/hassium-client.toml`, `config/hassium/hassium-server.toml
 | `clientCache.sectionDeltaEnabled` | `true` | Section delta on cache mismatch |
 | `clientCache.lightCacheEnabled` | `true` | Light cache (hits skip recomputation) |
 | `clientCache.viewDistanceExtensionEnabled` | `true` | Beyond-view render (multiplayer; exclusive with Bobby) |
-| `clientCache.maxRenderDistance` | `32` | Beyond-view / effective RD cap (2–64) |
+| `clientCache.maxRenderDistance` | `16` | Beyond-view / effective RD cap (2–64) |
 | `clientCache.ovdUnloadDelaySecs` | `5` | Delay unload after leaving beyond-view ring (s; 0=sync) |
 | `network.enabled` | `true` | Custom channels |
 | `network.globalPacketCompression` | `true` | Global ZSTD |
 | `network.maxChunksPerTick` | `4` | Per-player submit cap per tick (send rate = cap × tick rhythm; ≈ 4×20/s at full tick, naturally slows on lag) |
 | `clientCache.mainThreadChunkBudgetMs` | `15` | Client apply budget per frame (ms) |
-| `clientCache.parallelLightEngineEnabled` | `true` | Parallel light (recompute on a background pool; main thread only submits snapshots) |
+| `clientCache.parallelLightEngineEnabled` | `false` | Parallel light (optional, requires the Promethium MOD; recompute runs on a background pool, main thread only submits snapshots; falls back to the vanilla engine without the MOD) |
 | `clientCache.parallelLightEngineThreads` | `4` | Parallel light thread count (ignored in virtual-thread mode) |
 | `network.metricsEnabled` | `false` | Metrics collection (off by default; auto-enabled during self-checks) |
 | `network.dataPlane.enabled` | `false` | UDP/KCP data plane, control failover, and weighted routing; off by default, configure reachable endpoints and verify the six self-check markers in order before enabling |

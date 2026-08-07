@@ -47,7 +47,7 @@ flowchart TD
 
     subgraph LIGHT["并行光照引擎 (Promethium ParallelLightEngineImpl)"]
         Q["capturePending<br/>帧预算 CAPTURE_BUDGET_NS=5ms<br/>MAX_CAPTURE_COLUMNS_PER_FRAME=24 柱<br/>从已 apply 区块读 blockState 采 3×3=9 柱<br/>等邻居 NEIGHBOR_WAIT_FRAMES=10 + 距离重排"]
-        R["hassium-light 后台固定池<br/>（parallelLightEngineThreads 线程，NORM-1）<br/>纯数据 BFS solve (FIFO)"]
+        R["hassium-light 后台固定池<br/>（parallelLightEngineThreads 线程）<br/>纯数据 BFS solve (FIFO)"]
         S["drainCompletions<br/>帧预算内原子落地<br/>建层 + 核心柱/邻柱差异 swap 交换"]
     end
 
@@ -82,7 +82,7 @@ flowchart TD
 | R2 读盘 | region 级任务（每 region 至多一个在跑）→ `readyQueue` | 后台虚拟线程 + 主线程 | `ClientCacheLoadQueue` |
 | 光照重算（官方引擎，默认） | `ClientLightBufferQueue` 统一缓冲：帧内收集、帧尾消费——异步 `FRAME_BUDGET_NS`=5ms 预算（~2-3 块/帧）剩余留帧；同步（`lightSyncMode=true`）双帧缓冲、帧尾 `SYNC_FRAME_BUDGET_NS`=12ms 预算内消费（~4-5 块/帧，剩余放回下一帧不丢，黑块窗口 ≤2-3 帧） | Render thread（入队任意线程） | `ClientLightBufferQueue` + `ClientLightRecomputeService.applyLightEngine` |
 | 光照 capture | `CAPTURE_BUDGET_NS`=5ms、24 柱/帧 | Render thread（独占） | `ParallelLightEngineImpl.capturePending` |
-| 光照 solve | `hassium-light` 固定平台池，FIFO | 后台（NORM-1） | `ParallelLightEngineImpl.ensurePool` |
+| 光照 solve | `hassium-light` 固定平台池，FIFO | 后台 | `ParallelLightEngineImpl.ensurePool` |
 | 光照落地 | `drainCompletions(frameDeadlineNs)` | Render thread | `ParallelLightEngineImpl.drainCompletions` |
 | 局部光照更新（方块变化 checkBlock） | 引擎统一队列：同柱在飞任务挂载 / 独立队列；`drainCompletions` 预算内应用 | 入队：任意线程（主线程方块更新）；消费：Render thread | `MixinLevelLightEngine` + `PromethiumLightBridge.submitLocalUpdate` |
 

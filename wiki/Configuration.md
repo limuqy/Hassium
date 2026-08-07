@@ -40,11 +40,11 @@ Hassium 启动时在 `config/hassium/` 自动生成两份 TOML：
 | `clientCache.enabled` | `true` | 客户端区块缓存总开关 |
 | `clientCache.sectionDeltaEnabled` | `true` | 缓存过期时只补变更分段；关闭则过期走全量重传 |
 | `clientCache.lightCacheEnabled` | `true` | 光照优化；命中跳过同步重算；与 Sodium 等有光照异常时关掉即可 |
-| `clientCache.parallelLightEngineEnabled` | `true` | 并行光照：重算在后台线程池执行，主线程只提交快照 |
+| `clientCache.parallelLightEngineEnabled` | `false` | 并行光照：重算在后台线程池执行，主线程只提交快照 |
 | `clientCache.parallelLightEngineThreads` | `4` | 并行光照线程数（虚拟线程模式忽略） |
-| `clientCache.lightSyncMode` | `false` | 光照重算同步模式（双帧缓冲）：本帧收集无光照区块，下一帧尾阻塞全部重算落地，黑块窗口 ≤1 帧；默认 false=异步预算消费 |
+| `clientCache.lightSyncMode` | `true` | 光照重算同步模式（双帧缓冲）：本帧收集无光照区块，下一帧尾阻塞全部重算落地，黑块窗口 ≤1 帧；默认 true=同步双帧缓冲，false=异步预算消费 |
 | `clientCache.viewDistanceExtensionEnabled` | `true` | 超视渲染（多人服 clientVD > serverVD 时回填环带；**与 Bobby 互斥**） |
-| `clientCache.maxRenderDistance` | `32` | 超视渲染环带与有效 RD 上限（范围 2–64） |
+| `clientCache.maxRenderDistance` | `16` | 超视渲染环带与有效 RD 上限（范围 2–64） |
 | `clientCache.ovdUnloadDelaySecs` | `5` | 离开超视渲染环带后延迟卸载秒数（0=同步卸载） |
 | `clientCache.mainThreadChunkBudgetMs` | `15` | 客户端每帧 apply 区块的预算（ms）；进服前 10 秒走 JoinBoost 临时抬高 |
 
@@ -55,7 +55,7 @@ Hassium 启动时在 `config/hassium/` 自动生成两份 TOML：
 | `network.enabled` | `true` | 自定义 `hassium:*` 通道（关后回退原版全量包） |
 | `network.globalPacketCompression` | `true` | 全局管道用 ZSTD 替换原版 Zlib（关闭可与同类协议替换类 mod 共存） |
 | `network.compressionLevel` | `3` | 网络压缩等级（速度优先） |
-| `network.maxChunksPerTick` | `5` | 每玩家每 tick 提交上限（发送速率 = 本值 × tick 节奏，满 tick ≈ 5×20/s；掉刻自然降速保护主线程） |
+| `network.maxChunksPerTick` | `4` | 每玩家每 tick 提交上限（发送速率 = 本值 × tick 节奏，满 tick ≈ 4×20/s；掉刻自然降速保护主线程） |
 | `network.metricsEnabled` | `true` | 指标收集（关闭后 `/hassium stats` 等命令不可用） |
 | `network.enablePacketAggregation` | 默认开 | 包聚合；第三方通道被拦截异常时关掉 |
 | `network.compressionBlacklist` | 空 | 包 ID 列表，命中的包不进压缩/聚合 |
