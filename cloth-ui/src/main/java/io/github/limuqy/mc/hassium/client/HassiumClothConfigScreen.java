@@ -109,6 +109,9 @@ public final class HassiumClothConfigScreen {
         render.addEntry(bool(entries, "hassium.configuration.clientCache.lightSyncMode",
                 draft.lightSyncMode, dCache.lightSyncMode(),
                 v -> draft.lightSyncMode = v));
+        render.addEntry(intRange(entries, "hassium.configuration.clientCache.seedGenThreads",
+                draft.seedGenThreads, dCache.seedGenThreads(), 0, 64,
+                v -> draft.seedGenThreads = v));
         render.addEntry(bool(entries, "hassium.configuration.network.metricsEnabled",
                 draft.metricsEnabled, dClientNet.metricsEnabled(), v -> draft.metricsEnabled = v));
         render.addEntry(bool(entries, "hassium.configuration.network.metricsAutoReset",
@@ -220,6 +223,8 @@ public final class HassiumClothConfigScreen {
         int cacheParallelLightEngineThreads;
         // 同步光照（双帧缓冲）
         boolean lightSyncMode;
+        // SeedGen 本地生成
+        int seedGenThreads;
         // 网络开关
         boolean networkEnabled;
         boolean metricsEnabled;
@@ -265,6 +270,7 @@ public final class HassiumClothConfigScreen {
             d.cacheParallelLightEngineEnabled = cache.parallelLightEngineEnabled();
             d.cacheParallelLightEngineThreads = cache.parallelLightEngineThreads();
             d.lightSyncMode = cache.lightSyncMode();
+            d.seedGenThreads = cache.seedGenThreads();
 
             d.networkEnabled = clientNet.enabled();
             d.metricsEnabled = clientNet.metricsEnabled();
@@ -294,7 +300,8 @@ public final class HassiumClothConfigScreen {
                             cacheViewDistanceExtensionEnabled, cacheMaxRenderDistance, cacheOvdUnloadDelaySecs,
                             cacheSectionDeltaEnabled, cacheJoinBoostEnabled, cacheEntitySnapshotsEnabled,
                             loadThreads, lightCacheEnabled, maxChunksPerFrame, mainThreadChunkBudgetMs,
-                            cacheParallelLightEngineEnabled, cacheParallelLightEngineThreads, lightSyncMode
+                            cacheParallelLightEngineEnabled, cacheParallelLightEngineThreads, lightSyncMode,
+                            seedGenThreads
                     ),
                     new HassiumConfig.ClientNetworkConfig(networkEnabled, metricsEnabled, metricsAutoReset, recoveryFreeze, seedGenEnabled),
                     HassiumConfig.ServerNetworkConfig.DEFAULT,

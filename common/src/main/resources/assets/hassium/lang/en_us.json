@@ -59,6 +59,8 @@
     "hassium.configuration.clientCache.parallelLightEngineEnabled.tooltip":  "Enable background parallel recompute once the Promethium light engine is integrated. Default: false (vanilla light computation via the unified async buffer queue with per-frame budget).",
     "hassium.configuration.clientCache.lightSyncMode":  "Light Sync Mode",
     "hassium.configuration.clientCache.lightSyncMode.tooltip":  "Sync light recompute mode (double-frame buffering): no-light chunks are collected during this frame's chunk apply and fully applied at the next frame tail, so dark chunks clear within one frame. Default: true (sync double-frame buffering; false = async budgeted consumption, a few chunks per frame). Takes precedence over the parallel light engine when both are enabled.",
+    "hassium.configuration.clientCache.seedGenThreads":  "SeedGen Threads",
+    "hassium.configuration.clientCache.seedGenThreads.tooltip":  "Worker threads for local pristine chunk generation (fixed platform pool). 0 = disable local generation; SeedRef requests always fall back to full chunk requests. Default: 2.",
     "hassium.configuration.storage":  "Storage",
     "hassium.configuration.storage.button":  "Storage…",
     "hassium.configuration.storage.enabled":  "Enable world compression",

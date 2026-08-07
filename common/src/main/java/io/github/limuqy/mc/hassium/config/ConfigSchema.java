@@ -32,6 +32,7 @@ public final class ConfigSchema {
     public static final ConfigKey<Boolean> CACHE_PARALLEL_LIGHT_ENGINE_ENABLED = bool("clientCache.parallelLightEngineEnabled", ConfigScope.CLIENT, false, "是否启用并行光照引擎（需接入 Promethium 光照引擎；默认 false=官方光照计算，光照重算经统一异步缓冲队列预算消费）");
     public static final ConfigKey<Integer> CACHE_PARALLEL_LIGHT_ENGINE_THREADS = integer("clientCache.parallelLightEngineThreads", ConfigScope.CLIENT, 4, 1, 64, "并行光照引擎线程数（虚拟线程模式忽略）；天空光 BFS 占重算成本 ~90%，默认 4 线程平衡吞吐与帧率");
     public static final ConfigKey<Boolean> CACHE_LIGHT_SYNC_MODE = bool("clientCache.lightSyncMode", ConfigScope.CLIENT, true, "是否启用光照重算同步模式（双帧缓冲：本帧收集无光照区块，下一帧尾阻塞全部重算落地，黑块窗口≤1帧；默认 true=同步双帧缓冲，false=异步预算消费；与 parallelLightEngineEnabled 同开时本项优先）");
+    public static final ConfigKey<Integer> CACHE_SEED_GEN_THREADS = integer("clientCache.seedGenThreads", ConfigScope.CLIENT, 2, 0, 64, "SeedGen 本地生成线程数（固定平台线程池；0=禁用本地生成，SeedRef 一律回退全量）");
     public static final ConfigKey<Boolean> CLIENT_NETWORK_ENABLED = bool("network.enabled", ConfigScope.CLIENT, true, "是否启用客户端 Hassium 自定义通道");
     public static final ConfigKey<Boolean> CLIENT_NETWORK_METRICS_ENABLED = bool("network.metricsEnabled", ConfigScope.CLIENT, false, "是否启用客户端网络指标");
     public static final ConfigKey<Boolean> CLIENT_NETWORK_METRICS_AUTO_RESET = bool("network.metricsAutoReset", ConfigScope.CLIENT, true, "登出服务器时自动重置指标计数");

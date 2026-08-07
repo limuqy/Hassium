@@ -352,7 +352,8 @@ public final class FabricTomlConfigIO {
                 getInt(cfg, "clientCache.mainThreadChunkBudgetMs", d.mainThreadChunkBudgetMs()),
                 getBool(cfg, "clientCache.parallelLightEngineEnabled", d.parallelLightEngineEnabled()),
                 getInt(cfg, "clientCache.parallelLightEngineThreads", d.parallelLightEngineThreads()),
-                getBool(cfg, "clientCache.lightSyncMode", d.lightSyncMode())
+                getBool(cfg, "clientCache.lightSyncMode", d.lightSyncMode()),
+                getInt(cfg, "clientCache.seedGenThreads", d.seedGenThreads())
         );
     }
 
@@ -384,6 +385,8 @@ public final class FabricTomlConfigIO {
         set(cfg, "clientCache.parallelLightEngineThreads", c.parallelLightEngineThreads(), "并行光照引擎线程数（虚拟线程模式忽略）");
         set(cfg, "clientCache.lightSyncMode", c.lightSyncMode(),
                 "是否启用光照重算同步模式（双帧缓冲：本帧收集无光照区块，下一帧尾阻塞全部重算落地，黑块窗口≤1帧；默认 true=同步双帧缓冲，false=异步预算消费；与 parallelLightEngineEnabled 同开时本项优先）");
+        set(cfg, "clientCache.seedGenThreads", c.seedGenThreads(),
+                "SeedGen 本地生成线程数（固定平台线程池；0=禁用本地生成，SeedRef 一律回退全量）");
     }
 
     private static HassiumConfig.ClientNetworkConfig readClientNetwork(CommentedConfig cfg) {

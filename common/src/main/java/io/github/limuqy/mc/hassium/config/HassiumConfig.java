@@ -82,7 +82,9 @@ public record HassiumConfig(
             boolean parallelLightEngineEnabled,
             int parallelLightEngineThreads,
             // === 光照重算模式（默认同步双帧缓冲；false=异步预算消费）===
-            boolean lightSyncMode
+            boolean lightSyncMode,
+            // === SeedGen 本地生成线程数（Phase 2；0=禁用本地生成）===
+            int seedGenThreads
     ) {
         public static final ClientCacheConfig DEFAULT = new ClientCacheConfig(
                 true,    // enabled
@@ -106,7 +108,8 @@ public record HassiumConfig(
                 15,      // mainThreadChunkBudgetMs
                 false,   // parallelLightEngineEnabled（默认官方引擎，光照经统一异步缓冲队列预算消费）
                 4,       // parallelLightEngineThreads
-                true     // lightSyncMode（默认同步双帧缓冲：本帧收集、下一帧尾阻塞全量落地；false=异步预算消费）
+                true,    // lightSyncMode（默认同步双帧缓冲：本帧收集、下一帧尾阻塞全量落地；false=异步预算消费）
+                2        // seedGenThreads（本地生成线程数；0=禁用）
         );
 
         public long maxCacheSizeBytes() {

@@ -441,6 +441,11 @@ public class HassiumConfigService {
         return Math.max(1, config.clientCache().parallelLightEngineThreads());
     }
 
+    /** SeedGen 本地生成线程数（0=禁用本地生成，SeedRef 一律回退全量）。 */
+    public int getSeedGenThreads() {
+        return Math.max(0, config.clientCache().seedGenThreads());
+    }
+
     /** 光照验算（官方引擎对照 BFS 结果；默认关）。 */
     public boolean isLightVerifyEnabled() {
         return config.debug().lightVerify();
