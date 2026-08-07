@@ -56,6 +56,11 @@ public class NeoForgeNetworkManagerService implements INetworkManagerService {
         networkManager.sendLightDeltaPacket(player, buf);
     }
 
+    @Override
+    public void sendClientBloomSync(FriendlyByteBuf buf) {
+        networkManager.sendClientBloomSync(buf);
+    }
+
     /**
      * 获取底层的 NetworkManager 实例
      */

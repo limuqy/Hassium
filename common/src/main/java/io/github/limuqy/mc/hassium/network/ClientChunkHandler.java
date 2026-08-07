@@ -248,6 +248,9 @@ public class ClientChunkHandler {
                 compressed.chunkX, compressed.chunkZ, compressed.compressedData.length,
                 compressed.originalSize, compressed.algorithm);
 
+        // 清除全量请求超时登记（数据已到达，服务端丢弃/积压兜底结束）
+        ClientMetadataHandler.onChunkDataReceived(compressed.chunkX, compressed.chunkZ);
+
         // 记录收到压缩区块数据
         NetworkStats.recordChunkReceived(VanillaZlibEstimator.estimate(compressed.originalSize));
 

@@ -90,4 +90,13 @@ public class FabricNetworkManagerService implements INetworkManagerService {
         ServerPlayNetworking.send(player, FabricPayloadRegistry.toPayload(FabricPayloadRegistry.LIGHT_DELTA_S2C_TYPE, buf));
 #endif
     }
+
+    @Override
+    public void sendClientBloomSync(FriendlyByteBuf buf) {
+#if MC_VER < MC_1_20_5
+        ClientPlayNetworking.send(io.github.limuqy.mc.hassium.network.ClientBloomSyncPacket.CHANNEL, buf);
+#else
+        ClientPlayNetworking.send(FabricPayloadRegistry.toPayload(FabricPayloadRegistry.CLIENT_BLOOM_SYNC_C2S_TYPE, buf));
+#endif
+    }
 }

@@ -22,7 +22,9 @@ param(
     [switch]$Parallel,
     [int]$BasePort = 25565,
     [int]$ServerReadyTimeoutSec = 300,
-    [int]$ClientTimeoutSec = 600
+    [int]$ClientTimeoutSec = 600,
+    [int]$DelayMs = 6000,
+    [int]$ReconnectDelayMs = 3000
 )
 
 $ErrorActionPreference = "Continue"
@@ -93,7 +95,9 @@ function Invoke-Session {
         [int]$MaxRetries,
         [switch]$CleanWorld,
         [int]$ServerReadyTimeoutSec = 180,
-        [int]$ClientTimeoutSec = 300
+        [int]$ClientTimeoutSec = 300,
+        [int]$DelayMs = 6000,
+        [int]$ReconnectDelayMs = 3000
     )
     $sessionId = "${Ver}_${Loader}_${Phase}"
     $sessionResult = $null
@@ -129,7 +133,8 @@ function Invoke-Session {
             -SessionId $sessionId -CleanWorld:$doClean `
             -ServerPort $ServerPort `
             -ServerReadyTimeoutSec $ServerReadyTimeoutSec `
-            -ClientTimeoutSec $ClientTimeoutSec
+            -ClientTimeoutSec $ClientTimeoutSec `
+            -DelayMs $DelayMs -ReconnectDelayMs $ReconnectDelayMs
 
         if ($result -eq "PASS") {
             $sessionResult = "PASS"
@@ -173,8 +178,22 @@ function Invoke-Session {
 $results = @()
 # 每个 loader 上次成功调度的版本（用于首轮清档 / 退版本强制清档）
 $prevVerByLoader = @{}
+$gradlewPath = Join-Path $projectRoot "gradlew.bat"
+$prevVersion = $null
 
 foreach ($ver in $targetVersions) {
+    # Manifold #if MC_VER 宏在 javac 阶段求值：切换 mc_ver 后 Gradle 增量缓存
+    # 不感知宏值变化，会在 common 报"包不存在"类假错误。版本切换时先 clean
+    # 全部模块，确保按新版本宏全量重编（同版本内多 loader 共享 common 产物，不 clean）。
+    if ($prevVersion -ne $null -and $prevVersion -ne $ver) {
+        Write-Host "[clean] 版本 $prevVersion -> $ver，先清理各模块编译产物（Manifold 宏防污染）..." -ForegroundColor Yellow
+        $cleanModules = @("common") + ($Loaders | ForEach-Object { $_ })
+        & $gradlewPath ($cleanModules | ForEach-Object { "${_}:clean" }) "--no-daemon" 2>&1 | Out-Host
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "[clean] 清理失败 (exit $LASTEXITCODE)，继续（可能产生假编译错误）" -ForegroundColor Yellow
+        }
+    }
+    $prevVersion = $ver
     Write-Host ""
     Write-Host "============================================"
     Write-Host "=== Testing: $ver (loaders: $($Loaders -join ','))"

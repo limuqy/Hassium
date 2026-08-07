@@ -157,6 +157,8 @@ public class ClientHassiumStorage {
             updateIndexEntries(pos, chunkData.length, sectionHashes);
 
             bloomFilter.put(pos.x, pos.z, dimension);
+            // 同步给服务端（增量批次收集；全量由 storage 就绪时发送）
+            io.github.limuqy.mc.hassium.network.ClientBloomSyncTracker.onChunkCached(pos.x, pos.z, dimension);
 
             Constants.LOG.debug("Cached chunk [{}, {}] to region ({} bytes, contentHash={})",
                     pos.x, pos.z, chunkData.length, Long.toHexString(contentHash));
@@ -197,6 +199,13 @@ public class ClientHassiumStorage {
                 Constants.LOG.warn("Failed to update section hashes for chunk [{}, {}]", pos.x, pos.z, e);
             }
         }
+    }
+
+    /**
+     * 序列化缓存存在性 Bloom 位图（供同步给服务端分流）。
+     */
+    public byte[] serializeBloomFilter() {
+        return bloomFilter.toByteArray();
     }
 
     /**

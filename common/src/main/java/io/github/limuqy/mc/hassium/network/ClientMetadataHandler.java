@@ -83,6 +83,18 @@ public class ClientMetadataHandler {
     /** 分段增量无响应超时（毫秒） */
     private static final long DELTA_RESPONSE_TIMEOUT_MS = 3_000L;
 
+    /**
+     * 已发出、尚未收到数据的全量请求（chunkKey → 维度 + 截止时间）。
+     * 服务端出界丢弃/队列积压导致请求石沉大海时兜底重发，杜绝「永久虚空」。
+     */
+    private static final ConcurrentHashMap<Long, PendingFullRequest> PENDING_FULL_REQUESTS =
+            new ConcurrentHashMap<>();
+
+    private record PendingFullRequest(String dimension, long deadlineMs) {}
+
+    /** 全量请求无响应超时（毫秒） */
+    private static final long FULL_REQUEST_TIMEOUT_MS = 8_000L;
+
     // ===== 阶段一：chunkHash 比对 =====
 
     /**
@@ -156,6 +168,9 @@ public class ClientMetadataHandler {
             }
         }
         tickPendingDeltaTimeouts();
+        tickPendingFullRequestTimeouts();
+        // 缓存 Bloom 位图同步：全量一次 + 增量批次（阈值/冷却）
+        ClientBloomSyncTracker.tick();
     }
 
     /**
@@ -180,6 +195,37 @@ public class ClientMetadataHandler {
                     "[SECTION_DELTA] Timeout waiting for {} chunks, fallback to full", e.getValue().size());
             requestFullChunks(e.getKey(), e.getValue(), true);
         }
+    }
+
+    /**
+     * 超时未收到区块数据的全量请求 → 重发（服务端出界丢弃/积压兜底）。
+     */
+    private static void tickPendingFullRequestTimeouts() {
+        if (PENDING_FULL_REQUESTS.isEmpty()) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        Map<String, List<ChunkPos>> timedOut = new HashMap<>();
+        for (var it = PENDING_FULL_REQUESTS.entrySet().iterator(); it.hasNext(); ) {
+            var e = it.next();
+            if (now >= e.getValue().deadlineMs()) {
+                ChunkPos pos = new ChunkPos(e.getKey());
+                timedOut.computeIfAbsent(e.getValue().dimension(), k -> new ArrayList<>()).add(pos);
+                it.remove();
+            }
+        }
+        for (var e : timedOut.entrySet()) {
+            DebugLogger.warn(LogType.METADATA,
+                    "[CHUNK_HASH] {} full requests timed out, retrying", e.getValue().size());
+            requestFullChunks(e.getKey(), e.getValue(), true);
+        }
+    }
+
+    /**
+     * 区块数据到达后清除对应全量请求登记（handleCompressedChunk 解码后调用）。
+     */
+    public static void onChunkDataReceived(int chunkX, int chunkZ) {
+        PENDING_FULL_REQUESTS.remove(ChunkPos.asLong(chunkX, chunkZ));
     }
 
     /**
@@ -384,7 +430,10 @@ public class ClientMetadataHandler {
         PENDING_BLOCK_ENTITIES.clear();
         PENDING_HASH_PACKETS.clear();
         PENDING_DELTA_REQUESTS.clear();
+        PENDING_FULL_REQUESTS.clear();
         pendingHashWaitStartedAtMs = 0L;
+        // 重连后需要重发全量 Bloom（新连接的服务端没有本玩家 Bloom 层）
+        ClientBloomSyncTracker.onDisconnect();
     }
 
     /**
@@ -422,6 +471,13 @@ public class ClientMetadataHandler {
             // 按区块数计，避免一批多块只记 1 次导致「全量请求」与日志对不上
             NetworkStats.recordDataRequestsSent(ordered.size());
             NetworkStats.recordFullChunkRequests(ordered.size(), ordered.size() * ESTIMATED_CHUNK_BYTES, staleOrFallback);
+            // 登记超时重试（服务端出界丢弃/积压时兜底）；收到数据由 onChunkDataReceived 清除
+            long deadline = System.currentTimeMillis() + FULL_REQUEST_TIMEOUT_MS;
+            for (ChunkPos pos : ordered) {
+                PENDING_FULL_REQUESTS.put(
+                        ChunkPos.asLong(pos.x, pos.z),
+                        new PendingFullRequest(dimension, deadline));
+            }
         } catch (Exception e) {
             DebugLogger.error("[CHUNK_HASH] Failed to request full chunks", e);
         } finally {

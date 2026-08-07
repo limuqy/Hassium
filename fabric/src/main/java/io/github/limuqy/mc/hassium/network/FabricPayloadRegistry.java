@@ -61,6 +61,8 @@ public final class FabricPayloadRegistry {
             type("section_hash_request_c2s");
     public static final CustomPacketPayload.Type<RawPayload> BLOCK_ENTITY_REQUEST_C2S_TYPE =
             type("block_entity_request_c2s");
+    public static final CustomPacketPayload.Type<RawPayload> CLIENT_BLOOM_SYNC_C2S_TYPE =
+            type("client_bloom_sync_c2s");
 
     // ===== Helper methods =====
 
@@ -128,8 +130,9 @@ public final class FabricPayloadRegistry {
         PayloadTypeRegistry.playC2S().register(CHUNK_DATA_REQUEST_C2S_TYPE, codec(CHUNK_DATA_REQUEST_C2S_TYPE));
         PayloadTypeRegistry.playC2S().register(SECTION_HASH_REQUEST_C2S_TYPE, codec(SECTION_HASH_REQUEST_C2S_TYPE));
         PayloadTypeRegistry.playC2S().register(BLOCK_ENTITY_REQUEST_C2S_TYPE, codec(BLOCK_ENTITY_REQUEST_C2S_TYPE));
+        PayloadTypeRegistry.playC2S().register(CLIENT_BLOOM_SYNC_C2S_TYPE, codec(CLIENT_BLOOM_SYNC_C2S_TYPE));
 
-        LOGGER.info("Hassium: Registered 9 S2C and 5 C2S payload types for 1.20.5+");
+        LOGGER.info("Hassium: Registered 9 S2C and 6 C2S payload types for 1.20.5+");
     }
 
     /**

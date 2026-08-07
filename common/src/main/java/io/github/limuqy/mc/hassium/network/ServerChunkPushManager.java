@@ -2,6 +2,7 @@ package io.github.limuqy.mc.hassium.network;
 
 import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.cache.ChunkContentHashUtil;
+import io.github.limuqy.mc.hassium.cache.client.ChunkBloomFilter;
 import io.github.limuqy.mc.hassium.concurrent.ChunkDistancePriority;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.metrics.NetworkStats;
@@ -39,6 +40,7 @@ import java.util.Comparator;
 import java.util.Deque;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
@@ -96,6 +98,67 @@ public class ServerChunkPushManager {
 
     /** resync 待补发条目 */
     private record ResyncEntry(ChunkPos pos, String dimension) {}
+
+    /**
+     * 每玩家缓存 Bloom 层（进服全量 + 会话增量位图；查询 = 任一层命中 OR）。
+     * 服务端据此分流：miss（确定无缓存）→ 直推数据；hit（可能有）→ 发 hash 客户端对比。
+     * 只增不减（客户端淘汰/过期由 hash 对比 MISS/MISMATCH 兜底），进服全量覆盖旧层。
+     */
+    private final Map<UUID, PlayerBloomLayers> bloomLayers = new ConcurrentHashMap<>();
+
+    /** Bloom 层数上限：超出丢弃最旧层（保守 miss → 直推，正确性不受影响，仅多花一次直推流量） */
+    private static final int BLOOM_MAX_LAYERS = 64;
+
+    /**
+     * 每玩家已在队区块 key 集合（ChunkPos.asLong）：直推 + 客户端请求去重，防重复推送。
+     * poll 出队即移除（构建失败/出界待命后允许重新入队）。
+     */
+    private final Map<UUID, Set<Long>> queuedChunkKeys = new ConcurrentHashMap<>();
+
+    /**
+     * 每玩家出界待命任务：drain 时已出视距的任务不静默丢弃（原 bug 根因），
+     * 转入待命，玩家折返/静止后重新在视距内时恢复入队；超时（10s）才真丢弃。
+     */
+    private final Map<UUID, Map<Long, DeferredTask>> deferredChunks = new ConcurrentHashMap<>();
+
+    /** 待命任务（含原始 priority 供重入队参考，实际重入队时按当前位置重算） */
+    private record DeferredTask(ChunkPos pos, String dimension, long deferredAtMs) {}
+
+    /** 待命检查周期（毫秒） */
+    private static final long DEFER_CHECK_INTERVAL_MS = 1000L;
+    /** 待命任务最大等待（毫秒），超时真丢弃（玩家不再回来） */
+    private static final long DEFER_MAX_WAIT_MS = 10_000L;
+
+    /**
+     * resync 队列入队时间（playerId → epoch ms）：resync 等待客户端首个 Bloom 到达，
+     * 超时（无 Bloom 的旧客户端/未启用缓存）则无 Bloom 兜底启动（fallback 发 hash）。
+     */
+    private final Map<UUID, Long> resyncQueuedAt = new ConcurrentHashMap<>();
+
+    /** resync 等待 Bloom 的最长时间（毫秒） */
+    private static final long RESYNC_BLOOM_WAIT_MS = 5_000L;
+
+    /**
+     * 握手上报的玩家初始 chunk 位置（playerId → ChunkPos）。
+     * 服务端玩家对象在 failover/重连场景位置滞后（新对象在出生点），resync 视距中心
+     * 先用客户端上报的真实位置校正；消费（resync 中心计算）后移除，后续用玩家对象实时位置。
+     */
+    private final Map<UUID, ChunkPos> initialPlayerChunkPos = new ConcurrentHashMap<>();
+
+    /**
+     * 握手时客户端上报的玩家位置（方块坐标），校正 resync 视距中心。
+     * 服务端玩家位置同步前（首个移动包到达前），客户端坐标是最新鲜的来源。
+     */
+    public void setInitialPlayerPosition(ServerPlayer player, double x, double z) {
+        if (player == null) {
+            return;
+        }
+        ChunkPos pos = new ChunkPos((int) Math.floor(x / 16.0), (int) Math.floor(z / 16.0));
+        initialPlayerChunkPos.put(player.getUUID(), pos);
+        DebugLogger.info(LogType.NETWORK,
+                "[HANDSHAKE] Player {} reported initial position ({}, {}) → chunk ({}, {})",
+                player.getName().getString(), x, z, pos.x, pos.z);
+    }
 
     /**
      * 已编码包字节（与 chunkHash / 反透视视图一致的包数据）。
@@ -222,6 +285,12 @@ public class ServerChunkPushManager {
                 }
 
                 sendChunkHash(players, pos, chunkHash, sectionBitmap, dimension);
+                // Bloom miss（确定无缓存）→ 主动直推数据；hit/未就绪 → 只发 hash（客户端决定）
+                for (ServerPlayer player : players) {
+                    if (shouldPushFull(player, pos, dimension)) {
+                        enqueueDirectPush(player, dimension, List.of(pos));
+                    }
+                }
             } catch (Exception e) {
                 Constants.LOG.error("[ASYNC_METADATA] Failed to compute chunkHash for chunk {}", pos, e);
             }
@@ -277,6 +346,10 @@ public class ServerChunkPushManager {
 
                 if (player.isAlive() && !player.hasDisconnected()) {
                     sendChunkHash(List.of(player), pos, chunkHash, sectionBitmap, dimension);
+                    // Bloom miss（确定无缓存）→ 主动直推数据（hash 先行已保证客户端能暂存 contentHash）
+                    if (shouldPushFull(player, pos, dimension)) {
+                        enqueueDirectPush(player, dimension, List.of(pos));
+                    }
                 }
             } catch (Exception e) {
                 Constants.LOG.error("[ASYNC_METADATA] Failed to compute chunkHash for chunk {} (player={})",
@@ -328,6 +401,10 @@ public class ServerChunkPushManager {
 
                 if (player.isAlive() && !player.hasDisconnected()) {
                     sendChunkHash(List.of(player), pos, chunkHash, sectionBitmap, dimension);
+                    // Bloom miss（确定无缓存）→ 主动直推数据（resync 补发场景同 trackChunk）
+                    if (shouldPushFull(player, pos, dimension)) {
+                        enqueueDirectPush(player, dimension, List.of(pos));
+                    }
                 }
             } catch (Exception e) {
                 Constants.LOG.error("[ASYNC_METADATA] Failed to compute chunkHash for chunk {} (player={})",
@@ -409,6 +486,94 @@ public class ServerChunkPushManager {
     }
 
     /**
+     * 每玩家 Bloom 层容器：full 覆盖、append 追加、查询 OR。
+     */
+    private static final class PlayerBloomLayers {
+        private final List<ChunkBloomFilter> layers = new ArrayList<>();
+
+        void reset(ChunkBloomFilter filter) {
+            synchronized (layers) {
+                layers.clear();
+                layers.add(filter);
+            }
+        }
+
+        void append(ChunkBloomFilter filter) {
+            synchronized (layers) {
+                if (layers.size() >= BLOOM_MAX_LAYERS) {
+                    layers.remove(0);
+                }
+                layers.add(filter);
+            }
+        }
+
+        boolean isEmpty() {
+            synchronized (layers) {
+                return layers.isEmpty();
+            }
+        }
+
+        boolean mightContain(int chunkX, int chunkZ, String dimension) {
+            synchronized (layers) {
+                for (ChunkBloomFilter layer : layers) {
+                    if (layer.mightContain(chunkX, chunkZ, dimension)) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+        }
+    }
+
+    /**
+     * 处理客户端的缓存 Bloom 位图同步包。
+     * <p>
+     * {@code full=true} 覆盖旧层（进服全量）；{@code full=false} 追加一层（会话增量）。
+     * 首个 Bloom 到达后，{@link #drainPendingResync} 自动恢复 resync 提交（无需额外动作）。
+     * 必须在主线程调用（三端 receiver 均 enqueueWork）。
+     */
+    public void handleClientBloomSync(ServerPlayer player, ClientBloomSyncPacket packet) {
+        if (player == null || !player.isAlive() || player.hasDisconnected()) {
+            return;
+        }
+        try {
+            ChunkBloomFilter filter = ChunkBloomFilter.fromByteArray(packet.bloomBytes());
+            if (filter == null) {
+                Constants.LOG.warn("[BLOOM_SYNC] Invalid bloom bytes from player {} ({} bytes)",
+                        player.getName().getString(), packet.bloomBytes() == null ? -1 : packet.bloomBytes().length);
+                return;
+            }
+            UUID playerId = player.getUUID();
+            PlayerBloomLayers layers = bloomLayers.computeIfAbsent(playerId, k -> new PlayerBloomLayers());
+            if (packet.full()) {
+                layers.reset(filter);
+                DebugLogger.info(LogType.NETWORK,
+                        "[BLOOM_SYNC] Full bloom from {} ({} bytes) — resync unblocked",
+                        player.getName().getString(), packet.bloomBytes().length);
+            } else {
+                layers.append(filter);
+                DebugLogger.info(LogType.NETWORK,
+                        "[BLOOM_SYNC] Incremental bloom from {} ({} bytes)", player.getName().getString(),
+                        packet.bloomBytes().length);
+            }
+        } catch (Exception e) {
+            Constants.LOG.error("[BLOOM_SYNC] Failed to handle bloom sync from player {}",
+                    player.getName().getString(), e);
+        }
+    }
+
+    /**
+     * Bloom 分流判定：有 Bloom 且 miss（确定无缓存）→ 直推；否则发 hash（hit 或 Bloom 未就绪）。
+     */
+    private boolean shouldPushFull(ServerPlayer player, ChunkPos pos, String dimension) {
+        PlayerBloomLayers layers = bloomLayers.get(player.getUUID());
+        if (layers == null || layers.isEmpty()) {
+            return false;
+        }
+        return !layers.mightContain(pos.x, pos.z, dimension);
+    }
+
+    /**
      * 握手成功后补发玩家当前视距内已加载区块的 chunkHash。
      * <p>
      * 初始 {@code trackChunk}/{@code sendChunk} 往往发生在握手完成之前，
@@ -437,8 +602,10 @@ public class ServerChunkPushManager {
         int viewDistance = PlayerCompat.getViewDistance(player);
         // 与 ChunkMap 扫描余量一致，略扩一圈避免边界遗漏
         int radius = Math.max(2, viewDistance + 1);
-        int centerX = player.chunkPosition().x;
-        int centerZ = player.chunkPosition().z;
+        // 握手上报位置优先（failover/重连时服务端玩家对象位置滞后于客户端真实位置）；消费后移除
+        ChunkPos reportedPos = initialPlayerChunkPos.remove(player.getUUID());
+        int centerX = reportedPos != null ? reportedPos.x : player.chunkPosition().x;
+        int centerZ = reportedPos != null ? reportedPos.z : player.chunkPosition().z;
         String dimension = level.dimension()
 #if MC_VER < MC_1_21_11
                 .location()
@@ -474,6 +641,7 @@ public class ServerChunkPushManager {
         queue.addAll(entries);
         if (!queue.isEmpty()) {
             pendingResync.put(player.getUUID(), queue);
+            resyncQueuedAt.put(player.getUUID(), System.currentTimeMillis());
             DebugLogger.info(LogType.CHUNK_APPLY,
                     "Hassium: Queued {} chunkHashes for resync (player={}, vd={}, perTick={})",
                     queue.size(), player.getName().getString(), viewDistance, RESYNC_PER_TICK);
@@ -497,6 +665,20 @@ public class ServerChunkPushManager {
                 ServerLevel level = PlayerCompat.getServerLevel(player);
                 if (level == null) {
                     continue;
+                }
+                // resync 等待客户端首个 Bloom：Bloom 未到则先不提交（避免首圈全部 miss 直推、
+                // Bloom 收益归零）。无 Bloom 的旧客户端/未启用缓存 → 超时后无 Bloom 兜底启动。
+                PlayerBloomLayers layers = bloomLayers.get(player.getUUID());
+                boolean bloomReady = layers != null && !layers.isEmpty();
+                if (!bloomReady) {
+                    Long queuedAt = resyncQueuedAt.get(player.getUUID());
+                    if (queuedAt == null
+                            || System.currentTimeMillis() - queuedAt < RESYNC_BLOOM_WAIT_MS) {
+                        continue;
+                    }
+                    DebugLogger.info(LogType.CHUNK_APPLY,
+                            "Hassium: Resync bloom wait timeout ({}ms), proceeding without bloom (player={})",
+                            RESYNC_BLOOM_WAIT_MS, player.getName().getString());
                 }
                 int processed = 0;
                 int skipped = 0;
@@ -559,12 +741,51 @@ public class ServerChunkPushManager {
             drainPlayerQueueTick(player);
         }
 
+        // 出界待命任务周期重评估（玩家折返/静止后恢复入队，防永久虚空）
+        if (now - lastDeferredCheckMs >= DEFER_CHECK_INTERVAL_MS) {
+            lastDeferredCheckMs = now;
+            for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+                requeueDeferredChunks(player, now);
+            }
+        }
+
         // 分批补发握手后 resync 队列（每 tick 最多 RESYNC_PER_TICK 个/玩家）
         drainPendingResync(server);
 
         // 清理已离线玩家的批次
         hashBatches.keySet().removeIf(id -> server.getPlayerList().getPlayer(id) == null);
         adjustThreadPool();
+    }
+
+    /** 上次出界待命检查时间（毫秒） */
+    private volatile long lastDeferredCheckMs = 0L;
+
+    /**
+     * 出界待命任务重评估：重新在视距内 → 恢复入队（优先级按当前位置重算）；
+     * 超时未回来 → 真丢弃（玩家已远离，无再推意义）。
+     */
+    private void requeueDeferredChunks(ServerPlayer player, long nowMs) {
+        Map<Long, DeferredTask> deferred = deferredChunks.get(player.getUUID());
+        if (deferred == null || deferred.isEmpty()) {
+            return;
+        }
+        ChunkPos playerChunk = player.chunkPosition();
+        int serverVD = PlayerCompat.getViewDistance(player);
+        var it = deferred.entrySet().iterator();
+        while (it.hasNext()) {
+            DeferredTask task = it.next().getValue();
+            if (nowMs - task.deferredAtMs() > DEFER_MAX_WAIT_MS) {
+                it.remove();
+                continue;
+            }
+            if (isServerChunkInRange(task.pos().x, task.pos().z, playerChunk.x, playerChunk.z, serverVD)) {
+                it.remove();
+                DebugLogger.info(LogType.NETWORK,
+                        "[PROCESS_QUEUE] Re-enqueueing deferred chunk {} (back in range)",
+                        task.pos());
+                enqueueDirectPush(player, task.dimension(), List.of(task.pos()));
+            }
+        }
     }
 
     private void flushPlayerHashBatchIfDue(ServerPlayer player, long nowMs) {
@@ -981,6 +1202,21 @@ public class ServerChunkPushManager {
         DebugLogger.info(LogType.NETWORK, "[ENQUEUE_DATA] Player {} requested {} chunks (dimension={})",
                 player.getName().getString(), chunks.size(), dimension);
 
+        enqueueInternal(player, dimension, chunks);
+    }
+
+    /**
+     * Bloom miss 主动直推入队（服务端驱动，不计入客户端请求统计）。
+     * 与客户端请求共用同一队列/去重/出界待命语义。
+     */
+    public void enqueueDirectPush(ServerPlayer player, String dimension, List<ChunkPos> chunks) {
+        DebugLogger.info(LogType.NETWORK, "[ENQUEUE_DATA] Direct push {} chunks to player {} (dimension={})",
+                chunks.size(), player.getName().getString(), dimension);
+
+        enqueueInternal(player, dimension, chunks);
+    }
+
+    private void enqueueInternal(ServerPlayer player, String dimension, List<ChunkPos> chunks) {
         ensureInitialized();
 
         // 检查玩家是否仍然在线
@@ -994,15 +1230,6 @@ public class ServerChunkPushManager {
         PriorityBlockingQueue<DataRequestTask> queue = dataQueues.computeIfAbsent(
                 playerId, k -> new PriorityBlockingQueue<>(100, Comparator.comparingDouble(DataRequestTask::priority))
         );
-
-        // 限制队列大小，防止内存溢出；超限时按距离只填剩余容量，勿整批丢弃
-//        int maxQueueSize = 2048;
-//        int room = maxQueueSize - queue.size();
-//        if (room <= 0) {
-//            Constants.LOG.warn("[ENQUEUE_DATA] Queue full for player {} (size={}, max={}), dropping {} chunks",
-//                    player.getName().getString(), queue.size(), maxQueueSize, chunks.size());
-//            return;
-//        }
 
         double playerChunkX = player.getX() / 16.0;
         double playerChunkZ = player.getZ() / 16.0;
@@ -1038,19 +1265,20 @@ public class ServerChunkPushManager {
             }
             tasks.add(new DataRequestTask(pos, dimension, priority));
         }
-//        if (tasks.size() > room) {
-//            tasks.sort(Comparator.comparingDouble(DataRequestTask::priority));
-//            int dropped = tasks.size() - room;
-//            tasks = tasks.subList(0, room);
-//            Constants.LOG.warn("[ENQUEUE_DATA] Queue near limit for player {} ({} + {} > {}), queued nearest {} dropped {}",
-//                    player.getName().getString(), queue.size(), chunks.size(), maxQueueSize, room, dropped);
-//        }
+
+        // 去重：已在队任务不重复入队（直推 + 客户端请求同块、多路径并发时防重复推送）
+        Set<Long> keys = queuedChunkKeys.computeIfAbsent(playerId, k -> ConcurrentHashMap.newKeySet());
+        int dupes = 0;
         for (DataRequestTask task : tasks) {
-            queue.offer(task);
+            if (keys.add(ChunkPos.asLong(task.pos().x, task.pos().z))) {
+                queue.offer(task);
+            } else {
+                dupes++;
+            }
         }
 
-        DebugLogger.info(LogType.NETWORK, "[ENQUEUE_DATA] Player {} queued {} chunks (queueSize={}, playerPos=({}, {}))",
-                player.getName().getString(), tasks.size(), queue.size(), playerChunkX, playerChunkZ);
+        DebugLogger.info(LogType.NETWORK, "[ENQUEUE_DATA] Player {} queued {} chunks (queueSize={}, dupes={}, playerPos=({}, {}))",
+                player.getName().getString(), tasks.size() - dupes, queue.size(), dupes, playerChunkX, playerChunkZ);
         // 实际 drain 由 onServerTick 按真实每 tick 上限处理，避免连环 submit 卡主线程
     }
 
@@ -1115,12 +1343,21 @@ public class ServerChunkPushManager {
                 if (task == null) {
                     break;
                 }
+                // 出队即释放去重登记（允许客户端重试/直推重新入队）
+                Set<Long> keys = queuedChunkKeys.get(playerId);
+                if (keys != null) {
+                    keys.remove(ChunkPos.asLong(task.pos().x, task.pos().z));
+                }
 
-                // 任务排队期间玩家可能已移出权威视距：过期任务直接丢弃（原版 ChunkMap 语义：
-                // 离开视距的块不再推送）。白推挤占每 tick 提交预算与网络资源，客户端收到
-                // 后也只会 apply skip。折返场景由客户端原版重新请求覆盖（重新 enqueueDataRequest）。
+                // 任务排队期间玩家可能已移出权威视距：不静默丢弃（客户端无重试 → 永久虚空 bug 根因），
+                // 转入待命集合，玩家折返/静止后重新在视距内时恢复入队；超时（10s）才真丢弃。
                 if (!isServerChunkInRange(task.pos().x, task.pos().z, playerChunk.x, playerChunk.z, serverVD)) {
-                    DebugLogger.info(LogType.NETWORK, "[PROCESS_QUEUE] Dropping chunk {} (out of range, vd={})",
+                    Map<Long, DeferredTask> deferred = deferredChunks.computeIfAbsent(
+                            playerId, k -> new ConcurrentHashMap<>());
+                    deferred.putIfAbsent(ChunkPos.asLong(task.pos().x, task.pos().z),
+                            new DeferredTask(task.pos(), task.dimension(), System.currentTimeMillis()));
+                    DebugLogger.info(LogType.NETWORK,
+                            "[PROCESS_QUEUE] Deferring chunk {} (out of range, vd={}) — retry when back in range",
                             task.pos(), serverVD);
                     continue;
                 }
@@ -1365,6 +1602,11 @@ public class ServerChunkPushManager {
         hashBatches.remove(playerId);
         preparedChunkPackets.remove(playerId);
         pendingResync.remove(playerId);
+        bloomLayers.remove(playerId);
+        queuedChunkKeys.remove(playerId);
+        deferredChunks.remove(playerId);
+        resyncQueuedAt.remove(playerId);
+        initialPlayerChunkPos.remove(playerId);
     }
 
     /**
@@ -1376,6 +1618,11 @@ public class ServerChunkPushManager {
         hashBatches.clear();
         preparedChunkPackets.clear();
         pendingResync.clear();
+        bloomLayers.clear();
+        queuedChunkKeys.clear();
+        deferredChunks.clear();
+        resyncQueuedAt.clear();
+        initialPlayerChunkPos.clear();
         if (pushPool != null) {
             pushPool.shutdownNow();
         }

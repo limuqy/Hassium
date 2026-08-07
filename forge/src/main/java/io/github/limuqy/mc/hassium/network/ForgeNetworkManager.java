@@ -159,6 +159,18 @@ public class ForgeNetworkManager implements NetworkManager {
                 java.util.Optional.of(NetworkDirection.PLAY_TO_SERVER)
         );
 
+        CHANNEL.<ClientBloomSyncWrapper>registerMessage(
+                packetId++,
+                ClientBloomSyncWrapper.class,
+                ClientBloomSyncWrapper::encode,
+                ClientBloomSyncWrapper::decode,
+                (msg, ctx) -> {
+                    ctx.get().enqueueWork(() -> handleClientBloomSync(msg, ctx.get().getSender()));
+                    ctx.get().setPacketHandled(true);
+                },
+                java.util.Optional.of(NetworkDirection.PLAY_TO_SERVER)
+        );
+
         CHANNEL.<ChunkHashWrapper>registerMessage(
                 packetId++,
                 ChunkHashWrapper.class,
@@ -296,6 +308,9 @@ public class ForgeNetworkManager implements NetworkManager {
                         .addMain(CompressionReadyWrapper.class,
                                 playCodec(CompressionReadyWrapper::encode, CompressionReadyWrapper::decode),
                                 ForgeNetworkManager::onCompressionReady)
+                        .addMain(ClientBloomSyncWrapper.class,
+                                playCodec(ClientBloomSyncWrapper::encode, ClientBloomSyncWrapper::decode),
+                                ForgeNetworkManager::onClientBloomSync)
                     .clientbound()
                         .addMain(HandshakeResponsePacket.class,
                                 playCodec(HandshakeResponsePacket::encode, HandshakeResponsePacket::decode),
@@ -322,7 +337,7 @@ public class ForgeNetworkManager implements NetworkManager {
                                 ForgeNetworkManager::onIndexSync)
                 .build();
 
-        LOGGER.info("Hassium: Registered Forge 50+ ChannelBuilder play channel (5 C2S + 9 S2C)");
+        LOGGER.info("Hassium: Registered Forge 50+ ChannelBuilder play channel (6 C2S + 9 S2C)");
     }
 
     private static <M> StreamCodec<RegistryFriendlyByteBuf, M> playCodec(
@@ -353,6 +368,10 @@ public class ForgeNetworkManager implements NetworkManager {
 
     private static void onDataRequest(DataRequestWrapper msg, CustomPayloadEvent.Context ctx) {
         handleDataRequest(msg, ctx.getSender());
+    }
+
+    private static void onClientBloomSync(ClientBloomSyncWrapper msg, CustomPayloadEvent.Context ctx) {
+        handleClientBloomSync(msg, ctx.getSender());
     }
 
     private static void onChunkHash(ChunkHashWrapper msg, CustomPayloadEvent.Context ctx) {
@@ -440,6 +459,9 @@ public class ForgeNetworkManager implements NetworkManager {
             LOGGER.error("Hassium: Received handshake from non-player");
             return;
         }
+
+        // 客户端上报位置：校正 resync 视距中心（failover/重连时服务端玩家对象位置滞后）
+        ServerChunkPushManager.getInstance().setInitialPlayerPosition(player, msg.playerX(), msg.playerZ());
 
         DebugLogger.debug(LogType.NETWORK,
                 "[HANDSHAKE] Received from client {}, protocol={}, globalCompression={}, compactHeader={}",
@@ -707,6 +729,19 @@ public class ForgeNetworkManager implements NetworkManager {
         }
     }
 
+    private static void handleClientBloomSync(ClientBloomSyncWrapper msg, ServerPlayer player) {
+        try {
+            if (player == null) {
+                return;
+            }
+            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data()));
+            ClientBloomSyncPacket packet = ClientBloomSyncPacket.decode(buf);
+            ServerChunkPushManager.getInstance().handleClientBloomSync(player, packet);
+        } catch (Exception e) {
+            LOGGER.error("Hassium: Failed to handle client bloom sync", e);
+        }
+    }
+
     private static void handleChunkHash(ChunkHashWrapper msg) {
         try {
             FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data()));
@@ -781,6 +816,15 @@ public class ForgeNetworkManager implements NetworkManager {
         }
         String compressionAlgorithm = HassiumConfigService.getInstance().getCompressionAlgorithm();
         String dictAlgorithm = compressionAlgorithm + "_dict";
+        // 玩家坐标（服务端校正 resync 视距中心）；同时立即刷新位置缓存（不等首帧 tick）
+        net.minecraft.client.Minecraft mc = net.minecraft.client.Minecraft.getInstance();
+        double playerX = 0.0;
+        double playerZ = 0.0;
+        if (mc.player != null) {
+            playerX = mc.player.getX();
+            playerZ = mc.player.getZ();
+            io.github.limuqy.mc.hassium.concurrent.MainThreadDispatcher.updatePlayerPosition(playerX, playerZ);
+        }
         HandshakePacket packet = new HandshakePacket(
                 Constants.CURRENT_PROTOCOL_VERSION,
                 Constants.MOD_VERSION,
@@ -790,7 +834,9 @@ public class ForgeNetworkManager implements NetworkManager {
                 false,
                 true,
                 true,
-                new byte[] { 0x03 }
+                new byte[] { 0x03 },
+                playerX,
+                playerZ
         );
 #if MC_VER < MC_1_20_2
         CHANNEL.sendToServer(packet);
@@ -811,6 +857,19 @@ public class ForgeNetworkManager implements NetworkManager {
         sendToServer(new DataRequestWrapper(data));
 #endif
         LOGGER.debug("Hassium: Sent chunk data request");
+    }
+
+    @Override
+    public void sendClientBloomSync(FriendlyByteBuf buf) {
+        byte[] data = new byte[buf.readableBytes()];
+        buf.readBytes(data);
+        buf.release();
+#if MC_VER < MC_1_20_2
+        CHANNEL.sendToServer(new ClientBloomSyncWrapper(data));
+#else
+        sendToServer(new ClientBloomSyncWrapper(data));
+#endif
+        LOGGER.debug("Hassium: Sent client bloom sync");
     }
 
     @Override
@@ -919,7 +978,9 @@ public class ForgeNetworkManager implements NetworkManager {
             boolean scheme127Supported,
             boolean globalPacketCompressionSupported,
             boolean compactHeaderSupported,
-            byte[] dataplaneTail
+            byte[] dataplaneTail,
+            double playerX,
+            double playerZ
     ) {
         public void encode(FriendlyByteBuf buf) {
             buf.writeVarInt(protocolVersion);
@@ -935,6 +996,8 @@ public class ForgeNetworkManager implements NetworkManager {
             buf.writeBoolean(compactHeaderSupported);
             buf.writeVarInt(dataplaneTail.length);
             buf.writeBytes(dataplaneTail);
+            buf.writeDouble(playerX);
+            buf.writeDouble(playerZ);
         }
 
         public static HandshakePacket decode(FriendlyByteBuf buf) {
@@ -945,16 +1008,34 @@ public class ForgeNetworkManager implements NetworkManager {
             for (int i = 0; i < algoCount; i++) {
                 algorithms[i] = buf.readUtf();
             }
+            boolean clientCache = buf.readBoolean();
+            boolean chunkRevision = buf.readBoolean();
+            boolean scheme127 = buf.readBoolean();
+            boolean globalPacketCompression = buf.readBoolean();
+            boolean compactHeader = buf.readBoolean();
+            byte[] tail = readTail(buf);
+            // 坐标在握手尾部（append-only；旧客户端无此字段）
+            double playerX = 0.0;
+            double playerZ = 0.0;
+            if (buf.isReadable()) {
+                try {
+                    playerX = buf.readDouble();
+                    playerZ = buf.readDouble();
+                } catch (Exception ignored) {
+                }
+            }
             return new HandshakePacket(
                     protocolVersion,
                     modVersion,
                     algorithms,
-                    buf.readBoolean(),
-                    buf.readBoolean(),
-                    buf.readBoolean(),
-                    buf.readBoolean(),
-                    buf.readBoolean(),
-                    readTail(buf)
+                    clientCache,
+                    chunkRevision,
+                    scheme127,
+                    globalPacketCompression,
+                    compactHeader,
+                    tail,
+                    playerX,
+                    playerZ
             );
         }
     }
@@ -1036,6 +1117,20 @@ public class ForgeNetworkManager implements NetworkManager {
             byte[] data = new byte[length];
             buf.readBytes(data);
             return new DataRequestWrapper(data);
+        }
+    }
+
+    public record ClientBloomSyncWrapper(byte[] data) {
+        public void encode(FriendlyByteBuf buf) {
+            buf.writeVarInt(data.length);
+            buf.writeBytes(data);
+        }
+
+        public static ClientBloomSyncWrapper decode(FriendlyByteBuf buf) {
+            int length = buf.readVarInt();
+            byte[] data = new byte[length];
+            buf.readBytes(data);
+            return new ClientBloomSyncWrapper(data);
         }
     }
 

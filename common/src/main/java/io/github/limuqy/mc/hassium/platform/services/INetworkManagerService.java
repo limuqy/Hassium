@@ -43,4 +43,9 @@ public interface INetworkManagerService {
      * 发送光照增量通知到客户端（服务端调用）
      */
     void sendLightDeltaPacket(ServerPlayer player, FriendlyByteBuf buf);
+
+    /**
+     * 发送客户端缓存 Bloom 位图同步包到服务端（客户端调用）
+     */
+    void sendClientBloomSync(FriendlyByteBuf buf);
 }

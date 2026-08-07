@@ -45,4 +45,9 @@ public class ForgeNetworkManagerService implements INetworkManagerService {
     public void sendLightDeltaPacket(ServerPlayer player, FriendlyByteBuf buf) {
         NETWORK_MANAGER.sendLightDeltaPacket(player, buf);
     }
+
+    @Override
+    public void sendClientBloomSync(FriendlyByteBuf buf) {
+        NETWORK_MANAGER.sendClientBloomSync(buf);
+    }
 }

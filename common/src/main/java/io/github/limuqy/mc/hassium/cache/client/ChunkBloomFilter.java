@@ -63,6 +63,60 @@ public class ChunkBloomFilter {
     }
 
     /**
+     * 反序列化上限保护：位数组 1M 位（≈125KB）足以容纳十万级元素位图，防恶意包内存放大。
+     */
+    private static final int MAX_SERIALIZED_SIZE_BITS = 1_000_000;
+    private static final int MAX_HASH_COUNT = 32;
+
+    /**
+     * 内部构造：直接指定位数组大小与哈希函数数量（序列化恢复用）。
+     */
+    private ChunkBloomFilter(int size, int hashCount, BitSet bitSet) {
+        this.size = size;
+        this.hashCount = hashCount;
+        this.bitSet = bitSet;
+        this.insertCount = 0;
+    }
+
+    /**
+     * 序列化为线格式字节：{@code [4B size][4B hashCount][N B bitSet]}。
+     * <p>
+     * 位数组与哈希函数是 Bloom 的全部状态（hash 算法固定），反序列化后可等价查询。
+     * 供客户端将缓存 Bloom 同步给服务端分流使用。
+     */
+    public synchronized byte[] toByteArray() {
+        byte[] bits = bitSet.toByteArray();
+        java.nio.ByteBuffer buf = java.nio.ByteBuffer.allocate(8 + bits.length);
+        buf.putInt(size);
+        buf.putInt(hashCount);
+        buf.put(bits);
+        return buf.array();
+    }
+
+    /**
+     * 反序列化 Bloom Filter；格式非法或超限时返回 null。
+     */
+    public static ChunkBloomFilter fromByteArray(byte[] data) {
+        if (data == null || data.length < 8) {
+            return null;
+        }
+        try {
+            java.nio.ByteBuffer buf = java.nio.ByteBuffer.wrap(data);
+            int size = buf.getInt();
+            int hashCount = buf.getInt();
+            if (size <= 0 || size > MAX_SERIALIZED_SIZE_BITS
+                    || hashCount <= 0 || hashCount > MAX_HASH_COUNT) {
+                return null;
+            }
+            byte[] bits = new byte[buf.remaining()];
+            buf.get(bits);
+            return new ChunkBloomFilter(size, hashCount, BitSet.valueOf(bits));
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
      * 向 Bloom Filter 添加元素
      *
      * @param chunkX 区块 X 坐标

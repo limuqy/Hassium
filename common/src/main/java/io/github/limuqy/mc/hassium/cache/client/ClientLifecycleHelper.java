@@ -297,6 +297,7 @@ public final class ClientLifecycleHelper {
                     ClientChunkHandler.initStorage(gameDir, serverId, finalDimension);
                     initializeEntitySnapshots(gameDir, serverId, finalDimension);
                     ClientMetadataHandler.onStorageReady();
+                    io.github.limuqy.mc.hassium.network.ClientBloomSyncTracker.onStorageReady();
                     // 超视渲染：清 miss 耗尽状态并强制下一 tick 全环带重扫
                     ViewDistanceExtensionService.getInstance().onClientStorageReady();
                     Constants.LOG.info("Hassium: Async initialized client cache for server {} (connected {}) dim {}",
@@ -307,6 +308,7 @@ public final class ClientLifecycleHelper {
                 ClientChunkHandler.initStorage(gameDir, serverId, finalDimension);
                 initializeEntitySnapshots(gameDir, serverId, finalDimension);
                 ClientMetadataHandler.onStorageReady();
+                io.github.limuqy.mc.hassium.network.ClientBloomSyncTracker.onStorageReady();
                 ViewDistanceExtensionService.getInstance().onClientStorageReady();
                 Constants.LOG.info("Hassium: Initialized client cache for server {} (connected {}) dim {}",
                         cacheAddress, serverIp, finalDimension);

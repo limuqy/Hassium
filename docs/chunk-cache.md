@@ -396,3 +396,47 @@ saves/MyCacheWorld/
 ```
 
 完成后在单机主菜单可见 `MyCacheWorld`，进入后可浏览去过的区块。
+
+## 13. 客户端 Bloom 同步与服务端直推（永久虚空修复）
+
+### 13.1 背景：永久虚空根因
+
+服务端数据队列（`ServerChunkPushManager.enqueueDataRequest`）在 drain 时对已出视距的任务**静默丢弃**：飞行中队列积压（`maxChunksPerTick` 默认 5）时，轮到处理时玩家已前移，任务被丢弃；客户端请求无超时重试，且静止后不再触发新的 `trackChunk`（块已在视距内），→ 前方 30° 扇形虚空永久存在。方向加权（`FORWARD_BIAS`）只改变优先级，堵不住丢弃漏洞。
+
+### 13.2 机制
+
+```
+客户端（ClientBloomSyncTracker）
+  ├─ storage 就绪 → 发全量位图（本地 ChunkBloomFilter 序列化，full=true）
+  ├─ 新缓存落盘（persist）→ 攒增量 → ≥64 块且冷却 5s → 按批构建独立位图（full=false）
+  └─ 断连（clearPendingState）→ 重置，重连后重发全量
+
+服务端（ServerChunkPushManager）
+  ├─ per-player Bloom 层列表：full → 覆盖；append → 追加（上限 64 层，溢出丢最旧）
+  ├─ 分流（trackChunk / sendChunk / resync 提交点）：
+  │    mightContain(pos, dim) == false（确定无缓存）→ 发 hash（contentHash 先行）+ 主动入队直推
+  │    命中或 Bloom 未就绪 → 仅发 hash（客户端对比 HIT/MISS/MISMATCH）
+  ├─ 入队去重（per-player 在队集合）：直推与客户端请求同块不重复推
+  ├─ 出界不丢弃 → 待命集合，折返/静止后重新在视距内时恢复入队；10s 超时才真丢
+  └─ resync 等待首个 Bloom（≤5s，旧客户端无 Bloom 则超时后原路径 fallback）
+```
+
+### 13.3 为什么正确
+
+- Bloom 无假阴性：miss = 确定客户端无缓存 → 直推不会浪费（hash 先行保证客户端能暂存 contentHash，避免 0→1 翻转）
+- 假阳性由客户端 hash 对比 MISS/MISMATCH 兜底：MISS → 请求 → 服务端直推链路；MISMATCH → section delta
+- 位图只增不减：客户端淘汰/过期不通知服务端（假 hit 成本 = 一次 hash 包，无害）
+- 增量丢失无害：服务端 miss → 直推（正确性兜底）
+- 直推任务出界丢弃无害：trackChunk 触发时机与丢弃判定一致，丢弃 = 客户端不再需要
+
+### 13.4 协议
+
+`ClientBloomSyncPacket`（C2S，`client_bloom_sync_c2s`）：`boolean full + byte[] bloomBytes`（`[4B size][4B hashCount][bitSet]`）。
+
+握手包（C2S）尾部追加客户端坐标（`double x, double z`，append-only 兼容旧服务端）：服务端校正 resync 视距中心（failover/重连时服务端玩家对象位置滞后在出生点）；客户端发送握手时同步刷新 `MainThreadDispatcher` 位置缓存（不等首帧 tick）。
+
+### 13.5 兜底
+
+- 客户端全量请求超时重试（8s）：`PENDING_FULL_REQUESTS`，收到数据（`onChunkDataReceived`）清除
+- 服务端 resync 等 Bloom 超时 5s → 无 Bloom 原路径（发 hash）
+- 出界任务待命 10s 超时 → 真丢弃（玩家已远离）

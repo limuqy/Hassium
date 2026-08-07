@@ -143,6 +143,13 @@ ResourceLocation
 #else
 Identifier
 #endif
+CLIENT_BLOOM_SYNC_C2S = ClientBloomSyncPacket.CHANNEL;
+    public static final
+#if MC_VER < MC_1_21_11
+ResourceLocation
+#else
+Identifier
+#endif
 BLOCK_ENTITY_DATA_S2C = BlockEntityDataS2CPacket.CHANNEL;
     public static final
 #if MC_VER < MC_1_21_11
@@ -714,6 +721,18 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
             UdpDataPlaneHandshakeTail.C2STail c2sTail =
                     new UdpDataPlaneHandshakeTail.C2STail(true, true);
             UdpDataPlaneHandshakeTail.writeC2S(buf, c2sTail);
+            // 握手尾部：玩家坐标（服务端校正 resync 视距中心；append-only 兼容旧服务端）。
+            // 同时立即刷新位置缓存（不等首帧 tick），进服早期 apply 优先级即可用真实位置。
+            Minecraft mc = Minecraft.getInstance();
+            if (mc.player != null) {
+                buf.writeDouble(mc.player.getX());
+                buf.writeDouble(mc.player.getZ());
+                io.github.limuqy.mc.hassium.concurrent.MainThreadDispatcher.updatePlayerPosition(
+                        mc.player.getX(), mc.player.getZ());
+            } else {
+                buf.writeDouble(0.0);
+                buf.writeDouble(0.0);
+            }
 #if MC_VER < MC_1_20_5
             ClientPlayNetworking.send(HANDSHAKE_C2S, buf);
 #else
@@ -732,6 +751,21 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
             ClientPlayNetworking.send(FabricPayloadRegistry.toPayload(FabricPayloadRegistry.CHUNK_DATA_REQUEST_C2S_TYPE, buf));
 #endif
             LOGGER.debug("Hassium: Sent chunk data request");
+        } else {
+            // 连接不存在，释放缓冲区
+            buf.release();
+        }
+    }
+
+    @Override
+    public void sendClientBloomSync(FriendlyByteBuf buf) {
+        if (Minecraft.getInstance().getConnection() != null) {
+#if MC_VER < MC_1_20_5
+            ClientPlayNetworking.send(CLIENT_BLOOM_SYNC_C2S, buf);
+#else
+            ClientPlayNetworking.send(FabricPayloadRegistry.toPayload(FabricPayloadRegistry.CLIENT_BLOOM_SYNC_C2S_TYPE, buf));
+#endif
+            LOGGER.debug("Hassium: Sent client bloom sync");
         } else {
             // 连接不存在，释放缓冲区
             buf.release();
@@ -1057,6 +1091,17 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
             boolean compactHeader = buf.readBoolean();
             UdpDataPlaneHandshakeTail.C2STail dataplaneCapabilities = UdpDataPlaneHandshakeTail.readC2S(buf);
 
+            // 握手尾部：客户端上报位置（新版客户端；旧客户端无此字段）
+            double reportedX = 0.0;
+            double reportedZ = 0.0;
+            if (buf.isReadable()) {
+                try {
+                    reportedX = buf.readDouble();
+                    reportedZ = buf.readDouble();
+                } catch (Exception ignored) {
+                }
+            }
+
             DebugLogger.debug(LogType.NETWORK,
                     "[HANDSHAKE] Details from {}: protocol={}, modVersion={}, algorithms={}, clientCache={}, globalCompression={}, compactHeader={}",
                     player.getName().getString(), protocolVersion, modVersion, String.join(", ", algorithms),
@@ -1074,14 +1119,19 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
             boolean useCompactHeader = serverSupportsCompactHeader && compactHeader;
 
             boolean accepted = true;
+            final double finalReportedX = reportedX;
+            final double finalReportedZ = reportedZ;
 
             // 发送握手响应
             // 时序（对齐原版 SetCompression）：
             // 1) HandshakeResponse 先经 Zlib 出站
             // 2) 再在 EventLoop 上切换 ZSTD（排在已排队的 encode 之后）
             // 3) 随后再发 Dict/Index（走 ZSTD）；客户端在收到 HandshakeResponse 后切换
-            server.execute(() -> completeServerHandshake(server, player, accepted, useGlobalCompression, useCompactHeader,
-                    dataplaneCapabilities.udpDataplaneSupported(), dataplaneCapabilities.controlFailoverSupported()));
+            server.execute(() -> {
+                ServerChunkPushManager.getInstance().setInitialPlayerPosition(player, finalReportedX, finalReportedZ);
+                completeServerHandshake(server, player, accepted, useGlobalCompression, useCompactHeader,
+                        dataplaneCapabilities.udpDataplaneSupported(), dataplaneCapabilities.controlFailoverSupported());
+            });
         });
 #else
         ServerPlayNetworking.registerGlobalReceiver(FabricPayloadRegistry.HANDSHAKE_C2S_TYPE, (payload, context) -> {
@@ -1104,6 +1154,17 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
                 UdpDataPlaneHandshakeTail.C2STail dataplaneCapabilities = UdpDataPlaneHandshakeTail.readC2S(buf);
                 net.minecraft.server.MinecraftServer server = io.github.limuqy.mc.hassium.compat.PlayerCompat.getMinecraftServer(player);
 
+                // 握手尾部：客户端上报位置（新版客户端；旧客户端无此字段）
+                double reportedX = 0.0;
+                double reportedZ = 0.0;
+                if (buf.isReadable()) {
+                    try {
+                        reportedX = buf.readDouble();
+                        reportedZ = buf.readDouble();
+                    } catch (Exception ignored) {
+                    }
+                }
+
                 DebugLogger.debug(LogType.NETWORK,
                         "[HANDSHAKE] Details from {}: protocol={}, modVersion={}, algorithms={}, clientCache={}, globalCompression={}, compactHeader={}",
                         player.getName().getString(), protocolVersion, modVersion, String.join(", ", algorithms),
@@ -1121,9 +1182,14 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
                 boolean useCompactHeader = serverSupportsCompactHeader && compactHeader;
 
                 boolean accepted = true;
+                final double finalReportedX = reportedX;
+                final double finalReportedZ = reportedZ;
 
-                server.execute(() -> completeServerHandshake(server, player, accepted, useGlobalCompression, useCompactHeader,
-                        dataplaneCapabilities.udpDataplaneSupported(), dataplaneCapabilities.controlFailoverSupported()));
+                server.execute(() -> {
+                    ServerChunkPushManager.getInstance().setInitialPlayerPosition(player, finalReportedX, finalReportedZ);
+                    completeServerHandshake(server, player, accepted, useGlobalCompression, useCompactHeader,
+                            dataplaneCapabilities.udpDataplaneSupported(), dataplaneCapabilities.controlFailoverSupported());
+                });
             } catch (Exception e) {
                 LOGGER.error("[HANDSHAKE] Failed to handle handshake packet", e);
             } finally {
@@ -1293,6 +1359,47 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
                 });
             } catch (Exception e) {
                 LOGGER.error("[SERVER] Failed to decode block entity request", e);
+            } finally {
+                buf.release();
+            }
+        });
+#endif
+
+        // 注册客户端缓存 Bloom 位图同步（C2S）
+#if MC_VER < MC_1_20_5
+        ServerPlayNetworking.registerGlobalReceiver(CLIENT_BLOOM_SYNC_C2S, (server, player, handler, buf, sender) -> {
+            try {
+                ClientBloomSyncPacket packet = ClientBloomSyncPacket.decode(
+                        new net.minecraft.network.FriendlyByteBuf(buf.copy()));
+
+                server.execute(() -> {
+                    try {
+                        ServerChunkPushManager.getInstance().handleClientBloomSync(player, packet);
+                    } catch (Exception e) {
+                        LOGGER.error("[SERVER] Failed to handle client bloom sync", e);
+                    }
+                });
+            } catch (Exception e) {
+                LOGGER.error("[SERVER] Failed to decode client bloom sync", e);
+            }
+        });
+#else
+        ServerPlayNetworking.registerGlobalReceiver(FabricPayloadRegistry.CLIENT_BLOOM_SYNC_C2S_TYPE, (payload, context) -> {
+            FriendlyByteBuf buf = FabricPayloadRegistry.fromPayload(payload);
+            try {
+                ServerPlayer player = context.player();
+                net.minecraft.server.MinecraftServer server = io.github.limuqy.mc.hassium.compat.PlayerCompat.getMinecraftServer(player);
+                ClientBloomSyncPacket packet = ClientBloomSyncPacket.decode(buf);
+
+                server.execute(() -> {
+                    try {
+                        ServerChunkPushManager.getInstance().handleClientBloomSync(player, packet);
+                    } catch (Exception e) {
+                        LOGGER.error("[SERVER] Failed to handle client bloom sync", e);
+                    }
+                });
+            } catch (Exception e) {
+                LOGGER.error("[SERVER] Failed to decode client bloom sync", e);
             } finally {
                 buf.release();
             }
