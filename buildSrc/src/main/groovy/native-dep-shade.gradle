@@ -1,17 +1,21 @@
 /**
- * 将 zstd-jni shade 进 loader jar，并按主流平台裁剪 native。
+ * 将 zstd-jni / lz4-java shade 进 loader jar，并按主流平台裁剪 native。
  *
- * 保留：
+ * zstd-jni 保留：
  * - Windows: amd64 / aarch64
  * - Linux: amd64 / aarch64 / arm
  * - macOS: darwin x86_64 / aarch64
  *
  * 去掉：IA-32、armv6、FreeBSD、Android、Musl、ppc/riscv/s390x/mips/loongarch 等。
+ *
+ * lz4-java：保留全部平台 native（net.jpountz.xxhash 的 XXHashFactory.fastestInstance()
+ * 生产路径依赖它；缺类会导致 ChunkContentHashUtil.<clinit> 抛
+ * NoClassDefFoundError，见 docs/findings-xxhash-missing-in-prod.md）。
  */
 jar {
     from({
         configurations.runtimeClasspath.filter {
-            it.name.contains('zstd-jni')
+            it.name.contains('zstd-jni') || it.name.contains('lz4-java')
         }.collect { zipTree(it) }
     }) {
         exclude 'META-INF/**'

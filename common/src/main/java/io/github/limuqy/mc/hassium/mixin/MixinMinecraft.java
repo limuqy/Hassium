@@ -252,6 +252,45 @@ public class MixinMinecraft {
 #endif
 
     /**
+     * 断连缓存落盘（dump），在世界拆除之前触发——手动登出（PauseScreen 保存并退出 →
+     * 主线程 {@code Minecraft.disconnect(Screen[,Z])} / {@code clearLevel}）时同步执行，
+     * 解决「onDisconnect（Netty 线程）→ mc.execute 排队」晚于 {@code disconnect} TAIL
+     * 的 {@code finalizeDisconnect}（dirty clearAll + storage close）→ 排队 dump 全被
+     * dirty gate 挡住（queued=0，光照/方块不落盘）。
+     * <p>
+     * 声明在 freeze 注入之后：恢复窗口内 freeze cancel 方法体 → 本注入一并跳过。
+     * 被动断开（服务器踢/断网）不经过此入口，仍走 listener onDisconnect 注入
+     * （Netty 线程 execute 排队先于 vanilla handleDisconnection，无此竞态）。
+     */
+#if MC_VER < MC_1_20_2
+    @Inject(method = "clearLevel", at = @At("HEAD"))
+    private void hassium$dumpCacheOnDisconnect(CallbackInfo ci) {
+        ClientLifecycleHelper.cleanupOnDisconnect();
+    }
+#elif MC_VER < MC_1_20_5
+    @Inject(method = "disconnect()V", at = @At("HEAD"), require = 0)
+    private void hassium$dumpCacheOnDisconnectNoScreen(CallbackInfo ci) {
+        ClientLifecycleHelper.cleanupOnDisconnect();
+    }
+
+    @Inject(method = "disconnect(Lnet/minecraft/client/gui/screens/Screen;)V", at = @At("HEAD"))
+    private void hassium$dumpCacheOnDisconnect(net.minecraft.client.gui.screens.Screen screen, CallbackInfo ci) {
+        ClientLifecycleHelper.cleanupOnDisconnect();
+    }
+#else
+    @Inject(method = "disconnect()V", at = @At("HEAD"), require = 0)
+    private void hassium$dumpCacheOnDisconnectNoScreen(CallbackInfo ci) {
+        ClientLifecycleHelper.cleanupOnDisconnect();
+    }
+
+    @Inject(method = "disconnect(Lnet/minecraft/client/gui/screens/Screen;Z)V", at = @At("HEAD"))
+    private void hassium$dumpCacheOnDisconnect(net.minecraft.client.gui.screens.Screen screen,
+                                               boolean keepResourcePacks, CallbackInfo ci) {
+        ClientLifecycleHelper.cleanupOnDisconnect();
+    }
+#endif
+
+    /**
      * 断连最终清理（drain 残余 + shutdown），在世界拆除之后触发。
      * <p>
      * <ul>

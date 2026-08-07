@@ -63,6 +63,11 @@ public final class ClientLifecycleHelper {
         initialized = true;
     }
 
+    /** 手动登出双触发防重入冷却（MixinMinecraft.disconnect HEAD 主线程 + listener onDisconnect Netty 线程各自注入）。 */
+    private static final long CLEANUP_COOLDOWN_NS = 1_000_000_000L;
+    private static final java.util.concurrent.atomic.AtomicLong LAST_CLEANUP_NANO =
+            new java.util.concurrent.atomic.AtomicLong(0);
+
     /**
      * 断开连接时清理（{@code onDisconnect} HEAD，世界拆除之前）。
      * <p>
@@ -70,28 +75,54 @@ public final class ClientLifecycleHelper {
      * 保留 save 线程和 executor 存活，供随后的 unload / 批量 enqueue 消费。
      * <p>
      * 重量清理（executor shutdown、storage close）推迟到 {@link #finalizeDisconnect()}。
+     * <p>
+     * 手动登出（PauseScreen 保存并退出）由 {@code MixinMinecraft.disconnect(Screen[,Z])} /
+     * {@code clearLevel} HEAD 注入触发，主线程同步执行——必须早于 vanilla 拆除流程：
+     * 否则经 {@code mc.execute} 排队会晚于 {@code disconnect} TAIL 的
+     * {@code finalizeDisconnect}（dirty clearAll + storage close），dump 全被 dirty gate
+     * 挡住（曾实测 {@code queued=0, skippedClean=1452, dirtyLeft=0}，光照/方块不落盘）。
      */
     public static void cleanupOnDisconnect() {
+        // 手动登出会经两条路径触发（主线程 disconnect HEAD + Netty onDisconnect），
+        // 冷却防二次 dump/flush 与 save 线程停启竞态。
+        long now = System.nanoTime();
+        long prev = LAST_CLEANUP_NANO.get();
+        if (now - prev < CLEANUP_COOLDOWN_NS) {
+            Constants.LOG.debug("Hassium: cleanupOnDisconnect skipped (cooldown, last={}ms ago)",
+                    (now - prev) / 1_000_000);
+            return;
+        }
+        if (!LAST_CLEANUP_NANO.compareAndSet(prev, now)) {
+            return;
+        }
+
         initialized = false;
         finalized.set(false);
         ClientMainThreadBudget.clearJoinBoost();
 
-        // ① 拉高预算，尽可能消费加载队列中的缓存区块
-        drainLoadQueueWithRaisedBudget();
-
-        // ② 批量 enqueue 所有已加载区块并 flush。
-        // 断连路径不保证逐个 unload，不能依赖 unload Mixin 落盘。
-        // mc.level 此时可能已 null，优先用 tick 跟踪的 trackedLevel。
-        CacheSaveQueue saveQueue = CacheSaveQueue.getInstance();
         Minecraft mc = Minecraft.getInstance();
-        ClientLevel level = mc.level != null ? mc.level : saveQueue.getTrackedLevel();
-        if (level != null) {
-            saveQueue.enqueueAllFromLevel(level);
+        if (mc != null && !mc.isSameThread()) {
+            // 被动断开（服务器踢/断网）：onDisconnect 在 Netty 线程触发。dump 必须同步等
+            // 主线程完成（enqueue 强制主线程序列化），否则异步转移晚于 clearLevel/clearAll 全丢。
+            java.util.concurrent.CountDownLatch latch = new java.util.concurrent.CountDownLatch(1);
+            mc.execute(() -> {
+                try {
+                    cleanupOnDisconnectMainThread();
+                } finally {
+                    latch.countDown();
+                }
+            });
+            try {
+                latch.await(15, java.util.concurrent.TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
         } else {
-            Constants.LOG.warn("Hassium: No ClientLevel available on disconnect — chunks may not be cached");
+            // 手动登出：MixinMinecraft.disconnect(Screen[,Z])/clearLevel HEAD，主线程同步执行
+            cleanupOnDisconnectMainThread();
         }
-        saveQueue.flushAsync(5000);
 
+        // 主线程无关的清理（线程安全容器）
         // ③ 清空加载队列（不再有新区块需要加载）
         ClientCacheLoadQueue.getInstance().clear();
         ViewDistanceExtensionService.getInstance().clearAllRenderOnly();
@@ -105,13 +136,39 @@ public final class ClientLifecycleHelper {
         // ⑤ 清空主线程回调队列 + 玩家坐标缓存
         MainThreadDispatcher.clearClient(false);
         MainThreadDispatcher.clearPlayerPosition();
-        ClientLightBufferQueue.getInstance().clear();
         PromethiumLightBridge.clear();
         ClientMetadataHandler.clearPendingState();
 
         // ⑥ finalizeDisconnect：MixinMinecraft disconnect/clearLevel TAIL，或加载器 DISCONNECT 兜底
 
         Constants.LOG.info("Hassium: Disconnect cleanup done (chunks enqueued + flushed before teardown)");
+    }
+
+    /**
+     * 主线程上的断连落盘：① 消费加载队列 → ② 排空光照缓冲（消费 = 引擎重算 + markDirty，
+     * 否则缓冲在清理时被直接丢弃，已重算块不会入队写盘）→ ③ 批量入队 + 等待写盘完成。
+     */
+    private static void cleanupOnDisconnectMainThread() {
+        // ① 拉高预算，尽可能消费加载队列中的缓存区块
+        drainLoadQueueWithRaisedBudget();
+
+        // ② 排空光照缓冲：把「已重算待消费」任务全部落地（每块 = 引擎传播 + markDirty），
+        // 预算 2s 封顶；超时残余丢弃（缓存无光 → R2 重算兜底，与既有策略一致）。
+        ClientLightBufferQueue.getInstance().drainAll(2_000_000_000L);
+
+        // ③ 批量 enqueue 所有已加载区块并等待写盘完成。
+        CacheSaveQueue saveQueue = CacheSaveQueue.getInstance();
+        Minecraft mc = Minecraft.getInstance();
+        ClientLevel level = mc.level != null ? mc.level : saveQueue.getTrackedLevel();
+        if (level != null) {
+            saveQueue.enqueueAllFromLevel(level);
+        } else {
+            Constants.LOG.warn("Hassium: No ClientLevel available on disconnect — chunks may not be cached");
+        }
+        saveQueue.flushAsync(5000);
+
+        // ④ 清光照缓冲残余（未消费的直接丢弃——重连后由数据包路径重新提交）
+        ClientLightBufferQueue.getInstance().clear();
     }
 
     /**

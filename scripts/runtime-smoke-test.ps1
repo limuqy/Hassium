@@ -20,6 +20,9 @@ param(
     [int]$ServerPort = 25565,
     [int]$DelayMs = 6000,
     [int]$ReconnectDelayMs = 3000,
+    # 客户端进服等待超时（0=不覆盖，用 ClientSmokeTest 默认 120s）。调长 -DelayMs
+    # 时必须同步调大（classic 模式 ROUND1 等待 delayMs*2，超时从客户端启动算起）。
+    [int]$JoinTimeoutMs = 0,
     # 客户端进服后飞行移动秒数（先爬升 2s 再平飞；0=不动）。仅验证用途：驱动
     # 「进服即移动」区块补给顺序场景，非标准冒烟默认行为。
     [int]$MoveSeconds = 0,
@@ -42,7 +45,10 @@ param(
     # -SeamlessMode：客户端 recoveryFreeze=false 跑无感切换冒烟（世界不冻结、无切换 UI、
     # 恢复窗口吞 C2S）。与 -Phase UdpFailover 组合验证无感恢复链路；§6 前 patch 客户端
     # hassium-client.toml（追加 [network.dataPlane] 段），客户端退出后立即恢复默认（true）。
-    [switch]$SeamlessMode
+    [switch]$SeamlessMode,
+    # -ManualLogout：ROUND1 断开改走真实手动登出路径（Minecraft.disconnect(Screen[,Z])/
+    # clearLevel，MixinMinecraft HEAD 注入 dump 同步执行），验证「手动登出光照/方块落盘」。
+    [switch]$ManualLogout
 )
 
 $ErrorActionPreference = "Continue"
@@ -643,6 +649,12 @@ $clientArgs = @(
     "-PhassiumSmokePhases=$SmokePhases",
     "-Pmc_ver=${Ver}"
 )
+if ($ManualLogout) {
+    $clientArgs += "-PhassiumSmokeManualLogout=true"
+}
+if ($JoinTimeoutMs -gt 0) {
+    $clientArgs += "-PhassiumSmokeJoinTimeoutMs=$JoinTimeoutMs"
+}
 $clientProc = Start-Process -FilePath $gradlew `
     -ArgumentList $clientArgs `
     -RedirectStandardOutput $clientLog `

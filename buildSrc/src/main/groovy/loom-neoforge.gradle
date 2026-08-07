@@ -45,7 +45,9 @@ loom {
                 def host = project.findProperty('hassiumSmokeHost') ?: '127.0.0.1:25565'
                 def delayMs = project.findProperty('hassiumSmokeDelayMs') ?: '10000'
                 def reconnectDelayMs = project.findProperty('hassiumSmokeReconnectDelayMs') ?: '3000'
+                def joinTimeoutMs = project.findProperty('hassiumSmokeJoinTimeoutMs') ?: '120000'
                 def phases = project.findProperty('hassiumSmokePhases') ?: 'classic'
+                def manualLogout = project.findProperty('hassiumSmokeManualLogout')
                 // loom 1.17+: RunConfiguration 用 ListProperty<String>；旧版裸 List getter 已 @Deprecated 且
                 // getJvmArguments().get() 在配置阶段未 finalize 抛 UnsupportedOperationException。改用
                 // ListProperty 原生 addAll/add。
@@ -53,9 +55,13 @@ loom {
                         "-Dhassium.smokeTest=true",
                         "-Dhassium.smokeTest.delayMs=${delayMs}",
                         "-Dhassium.smokeTest.reconnectDelayMs=${reconnectDelayMs}",
+                        "-Dhassium.smokeTest.joinTimeoutMs=${joinTimeoutMs}",
                         "-Dhassium.smokeTest.host=${host}",
                         "-Dhassium.smokePhases=${phases}"
                 ])
+                if (manualLogout != null && manualLogout.toString() == 'true') {
+                    jvmArguments.add("-Dhassium.smokeTest.manualLogout=true")
+                }
                 programArguments.addAll([
                         '--quickPlayMultiplayer', host.toString()
                 ])

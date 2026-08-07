@@ -332,10 +332,16 @@ public class CacheSaveQueue {
         return taskQueue.isEmpty() && !inflight.get();
     }
 
+    /**
+     * 等待后台保存队列排空（断连落盘用）。
+     * <p>
+     * 只等待，不停止保存线程、不清队列——停止/清理由 {@link #shutdown()}
+     * （finalizeDisconnect）统一负责。历史版本在这里 stopSaveThread + taskQueue.clear()，
+     * 与主线程 clearLevel 的 unload 兜底入队并发时会把新任务清掉（光照/方块丢失）。
+     */
     public void flushAsync(long timeoutMs) {
         if (isIdle()) {
             Constants.LOG.debug("Hassium: [CACHE SAVE FLUSH] No pending tasks");
-            stopSaveThread();
             return;
         }
 
@@ -354,14 +360,9 @@ public class CacheSaveQueue {
         }
 
         if (!isIdle()) {
-            int dropped = taskQueue.size();
-            Constants.LOG.warn("Hassium: [CACHE SAVE FLUSH] Timeout after {}ms, dropping {} queued (inflight={})",
-                    timeoutMs, dropped, inflight.get());
+            Constants.LOG.warn("Hassium: [CACHE SAVE FLUSH] Timeout after {}ms, {} tasks still queued (inflight={})",
+                    timeoutMs, taskQueue.size(), inflight.get());
         }
-
-        stopSaveThread();
-        taskQueue.clear();
-        stopping.set(false);
     }
 
     public void drainRemaining(long timeoutMs) {

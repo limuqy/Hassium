@@ -391,6 +391,32 @@ public final class ClientSmokeTest {
 
     /** 主动断开连接：模拟玩家退出服务器（不停客户端）。 */
     private static void triggerDisconnect(Minecraft mc) {
+        // -Dhassium.smokeTest.manualLogout=true：模拟真实手动登出（PauseScreen 保存并退出）——
+        // 走 Minecraft.disconnect(Screen[,Z]) / clearLevel 主线程路径（MixinMinecraft HEAD 注入
+        // dump 同步执行），用于验证「手动登出光照/方块落盘」修复；默认 false 保持既有断连语义。
+        if (Boolean.getBoolean("hassium.smokeTest.manualLogout")) {
+            LOGGER.info("HassiumSmokeTest: manual logout (Minecraft.disconnect/clearLevel path)");
+            try {
+#if MC_VER < MC_1_20_2
+                mc.clearLevel();
+#elif MC_VER < MC_1_20_5
+                mc.disconnect(new net.minecraft.client.gui.screens.TitleScreen());
+#else
+                mc.disconnect(new net.minecraft.client.gui.screens.TitleScreen(), false);
+#endif
+            } catch (Throwable t) {
+                LOGGER.error("HassiumSmokeTest: manual logout failed", t);
+            }
+            try {
+                io.github.limuqy.mc.hassium.metrics.NetworkStats.reset();
+                io.github.limuqy.mc.hassium.network.dataplane.DataPlaneClientBundle.resetDataBulkCounters();
+                LOGGER.info("HassiumSmokeTest: network stats reset for ROUND2");
+            } catch (Throwable t) {
+                LOGGER.warn("HassiumSmokeTest: failed to reset network stats", t);
+            }
+            return;
+        }
+
         try {
             ClientPacketListener conn = mc.getConnection();
             if (conn != null) {

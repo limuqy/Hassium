@@ -396,7 +396,7 @@ public class ServerChunkPushManager {
                 if (player.isAlive() && !player.hasDisconnected()) {
                     sendChunkHashAndMaybePush(List.of(player), pos, chunkHash, sectionBitmap, dimension);
                 }
-            } catch (Exception e) {
+            } catch (Throwable e) {
                 Constants.LOG.error("[ASYNC_METADATA] Failed to compute chunkHash for chunk {} (player={})",
                         pos, player.getName().getString(), e);
             }

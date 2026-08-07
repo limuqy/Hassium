@@ -198,6 +198,40 @@ public final class ClientLightBufferQueue {
         previous.clear();
     }
 
+    /**
+     * 断连排空（主线程）：预算内全量消费 pending/current/previous 缓冲（含同步模式双帧
+     * 缓冲），每块消费 = 引擎重算 + markDirty，随后由断连 dump 统一落盘。与
+     * {@link #drainFrame} 的区别：无「剩余留帧」语义，一次性尽量消费；预算耗尽停止，
+     * 残余放回当前缓冲（断连清理随后 {@link #clear()} 丢弃，重连后由数据包路径重新提交）。
+     */
+    public void drainAll(long maxTimeNs) {
+        ClientLevel level = Minecraft.getInstance().level;
+        if (level == null) {
+            clear();
+            return;
+        }
+        long deadline = System.nanoTime() + maxTimeNs;
+        while (System.nanoTime() < deadline) {
+            Map<Long, Entry> batch = new ConcurrentHashMap<>();
+            batch.putAll(pending);
+            pending.clear();
+            batch.putAll(current);
+            current.clear();
+            batch.putAll(previous);
+            previous.clear();
+            if (batch.isEmpty()) {
+                return;
+            }
+            for (Entry e : batch.values()) {
+                if (System.nanoTime() > deadline) {
+                    current.putIfAbsent(e.pos.toLong(), e);
+                    continue;
+                }
+                consume(level, e);
+            }
+        }
+    }
+
     /** 队列条目（nbt 仅消费时使用；enqueue 后不再变更）。 */
     private static final class Entry {
         final ChunkPos pos;
