@@ -20,7 +20,7 @@ import org.slf4j.LoggerFactory;
  * 启用方式（JVM 系统属性）：
  * <ul>
  *   <li>{@code -Dhassium.smokeTest=true} 开启</li>
- *   <li>{@code -Dhassium.smokeTest.delayMs=10000} 每轮进服后等待毫秒（默认 10000）</li>
+ *   <li>{@code -Dhassium.smokeTest.delayMs=6000} 每轮进服后等待毫秒（默认 6000；ROUND1 窗口=delayMs×2，ROUND2=delayMs）</li>
  *   <li>{@code -Dhassium.smokeTest.reconnectDelayMs=3000} 两轮间隔毫秒（默认 3000）</li>
  *   <li>{@code -Dhassium.smokeTest.joinTimeoutMs=120000} 未进服超时（默认 120s）</li>
  *   <li>{@code -Dhassium.smokeTest.host=127.0.0.1:25565} 重连目标地址</li>
@@ -48,7 +48,7 @@ public final class ClientSmokeTest {
     private static volatile long startAtMs = -1L;
     private static volatile long joinAtMs = -1L;
     private static volatile long disconnectAtMs = -1L;
-    private static volatile long delayMs = 10_000L;
+    private static volatile long delayMs = 6_000L;
     private static volatile long reconnectDelayMs = 3_000L;
     private static volatile long joinTimeoutMs = 120_000L;
     private static volatile String host = "127.0.0.1:25565";
@@ -78,7 +78,7 @@ public final class ClientSmokeTest {
         if (!isEnabled()) {
             return;
         }
-        delayMs = parseLong(System.getProperty("hassium.smokeTest.delayMs"), 10_000L);
+        delayMs = parseLong(System.getProperty("hassium.smokeTest.delayMs"), 6_000L);
         reconnectDelayMs = parseLong(System.getProperty("hassium.smokeTest.reconnectDelayMs"), 3_000L);
         joinTimeoutMs = parseLong(System.getProperty("hassium.smokeTest.joinTimeoutMs"), 120_000L);
         moveSeconds = (int) parseLong(System.getProperty("hassium.smokeTest.moveSeconds"), 0L);
@@ -223,13 +223,12 @@ public final class ClientSmokeTest {
             // 在玩家第二次进服后才开始驱动 DP_IDLE→DP_DONE，而 ROUND2 join 与 DP_IDLE 触发（switched=true）几乎同步。
             // 默认 delayMs（15s）远不够 → 等满后客户端 scheduleExit ≈9s 即退服，状态机会被打断。
             // 故 ROUND2 在 dataplane 模式下一致地拿到 PASS/FAIL marker，必须把 ROUND2 窗口扩展到覆盖最坏 42s +5s 余量。
-            // classic-only：lightVerify 开启时 R2 光照重算显著变慢，delayMs/2 的窗口在重算完成前就
-            // 触发统计（stats 抓到半途状态）；R2 窗口延长到与 ROUND1 相同（delayMs*2），
-            // 保证 R2 覆盖完整加载/重算后再统计。floor 3000ms 防止用户传极小值导致 ROUND2 短到断开尚未重连完。
+            // classic-only：R2 以客户端缓存命中为主（VD=8，无全量下载），窗口 = delayMs 即可
+            // 覆盖增量加载/光照重算完成后再统计。floor 3000ms 防止用户传极小值导致 ROUND2 短到断开尚未重连完。
             if (runDataplane && runClassic) {
                 delayMs = Math.max(ClientSmokeTest.delayMs, 50_000L);
             } else if (runClassic) {
-                delayMs = Math.max(3_000L, ClientSmokeTest.delayMs * 2);
+                delayMs = Math.max(3_000L, ClientSmokeTest.delayMs);
             } else {
                 // dataplane-only 不进入 ROUND2（初始化即 disallow），仅防御兜底
                 delayMs = ClientSmokeTest.delayMs;

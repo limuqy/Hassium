@@ -18,7 +18,7 @@ param(
     [switch]$PregenOnly,
     [string]$SmokeHost = "",
     [int]$ServerPort = 25565,
-    [int]$DelayMs = 15000,
+    [int]$DelayMs = 6000,
     [int]$ReconnectDelayMs = 3000,
     # 客户端进服后飞行移动秒数（先爬升 2s 再平飞；0=不动）。仅验证用途：驱动
     # 「进服即移动」区块补给顺序场景，非标准冒烟默认行为。
@@ -178,8 +178,8 @@ function Invoke-MappingFieldPrecheck {
         $check.Ok = $false
         $check.Failures += 'ClientChunkCache 无 $Storage 成员类字段（drop fallback 会 NoSuchField）'
     }
-    # 4. IdDispatchCodec.byId（1.20.2+ 引入；1.20.1 无此类，跳过）
-    if ([version]$PreVer -ge [version]"1.20.2") {
+    # 4. IdDispatchCodec.byId（1.20.5+ 引入；1.20.1–1.20.4 无此类，跳过）
+    if ([version]$PreVer -ge [version]"1.20.5") {
         $idcOut = Get-JavapOutput "net.minecraft.network.codec.IdDispatchCodec"
         if ($idcOut -notmatch "java\.util\.List") {
             $check.Ok = $false
