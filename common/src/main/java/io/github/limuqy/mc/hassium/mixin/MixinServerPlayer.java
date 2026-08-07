@@ -35,6 +35,10 @@ public abstract class MixinServerPlayer extends Player {
     private void hassium$onPlayerInit(CallbackInfo ci) {
         ServerPlayer self = (ServerPlayer) (Object) this;
         PlayerCompressionTracker.setConnected(self);
+        // login/配置阶段预握手的玩家在此提升：placeNewPlayer 创建 ServerPlayer 时
+        // 立即启用压缩，进服第一圈 trackChunk/sendChunk 全部走 Hassium 链
+        // （剥光 + maxChunksPerTick 限流 + chunkHash 元数据），消灭握手前原版直发窗口。
+        PlayerCompressionTracker.tryEnableOnPlayerJoin(self);
     }
 
 #if MC_VER < MC_1_20_2

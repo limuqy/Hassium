@@ -27,6 +27,14 @@ public final class HassiumPacketIds {
     public static final String HANDSHAKE_S2C = "hassium:handshake_s2c";
 
     /**
+     * 客户端 -> 服务端：预握手（login / 配置阶段声明 Hassium 能力）。
+     * <p>
+     * 提前到进服前完成，使 {@code ServerPlayer} 创建时即可启用压缩，
+     * 消灭 1.20.1 trackChunk / 1.20.2+ sendChunk 握手前原版直发窗口。
+     */
+    public static final String PRE_HANDSHAKE_C2S = "hassium:prehandshake_c2s";
+
+    /**
      * 服务端 -> 客户端：字典同步
      */
     public static final String DICTIONARY_SYNC_S2C = "hassium:dictionary_sync";

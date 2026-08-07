@@ -88,4 +88,33 @@ public final class PlayerCompat {
         // 不是 mojmap 名 "connection"，名字反射在 1.20.1 段全线失败。
         return ReflectionCompat.findFieldByType(clazz, Connection.class, true);
     }
+
+    /**
+     * GameProfile UUID 访问器跨版本兼容：1.21.9+ 的 authlib 7.0.61 record 化，
+     * {@code getId()} 改 {@code id()}。
+     */
+    public static java.util.UUID getProfileId(com.mojang.authlib.GameProfile profile) {
+        if (profile == null) {
+            return null;
+        }
+#if MC_VER < MC_1_21_9
+        return profile.getId();
+#else
+        return profile.id();
+#endif
+    }
+
+    /**
+     * GameProfile name 访问器跨版本兼容：1.21.9+ record 化后 {@code getName()} 改 {@code name()}。
+     */
+    public static String getProfileName(com.mojang.authlib.GameProfile profile) {
+        if (profile == null) {
+            return null;
+        }
+#if MC_VER < MC_1_21_9
+        return profile.getName();
+#else
+        return profile.name();
+#endif
+    }
 }

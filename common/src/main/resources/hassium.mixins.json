@@ -24,6 +24,7 @@
       "ConnectScreenAccessor",
       "MixinClientPacketListener",
       "MixinClientCommonPacketListenerImpl",
+      "MixinClientConfigurationPacketListenerImpl",
       "MixinClientLevel",
       "MixinLevel",
       "MixinClientTick",

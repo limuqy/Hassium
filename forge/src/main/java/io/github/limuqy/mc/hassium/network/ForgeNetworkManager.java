@@ -26,6 +26,7 @@ import net.minecraft.network.codec.StreamCodec;
 import net.minecraftforge.event.network.CustomPayloadEvent;
 import net.minecraftforge.network.Channel;
 import net.minecraftforge.network.ChannelBuilder;
+import net.minecraftforge.network.NetworkDirection;
 import net.minecraftforge.network.PacketDistributor;
 import net.minecraftforge.network.SimpleChannel;
 
@@ -337,6 +338,13 @@ public class ForgeNetworkManager implements NetworkManager {
                                 ForgeNetworkManager::onIndexSync)
                 .build();
 
+        // 配置阶段预握手（CONFIGURATION_TO_SERVER）：提前标记 Hassium 客户端，
+        // ServerPlayer 创建时自动提升压缩 → 进服第一圈 sendChunk 全走 Hassium 链
+        CHANNEL.messageBuilder(PreHandshakePayload.class, NetworkDirection.CONFIGURATION_TO_SERVER)
+                .codec(PreHandshakePayload.STREAM_CODEC)
+                .consumer(ForgeNetworkManager::onPreHandshake)
+                .add();
+
         LOGGER.info("Hassium: Registered Forge 50+ ChannelBuilder play channel (6 C2S + 9 S2C)");
     }
 
@@ -348,6 +356,18 @@ public class ForgeNetworkManager implements NetworkManager {
                 (buf, msg) -> encode.accept(msg, buf),
                 buf -> decode.apply(buf)
         );
+    }
+
+    private static void onPreHandshake(PreHandshakePayload msg, CustomPayloadEvent.Context ctx) {
+        // 配置阶段无 ServerPlayer：按 listener owner（GameProfile）UUID 标记，
+        // ServerPlayer 创建时（MixinServerPlayer TAIL）自动提升为压缩启用。
+        // 完整协商（ZSTD/聚合/数据面/位置）仍在 Play 阶段 onHandshakeC2S 完成。
+        java.util.UUID playerId = null;
+        if (ctx.getConnection().getPacketListener()
+                instanceof net.minecraft.server.network.ServerConfigurationPacketListenerImpl configListener) {
+            playerId = io.github.limuqy.mc.hassium.compat.PlayerCompat.getProfileId(configListener.getOwner());
+        }
+        io.github.limuqy.mc.hassium.network.PreHandshakeProtocol.handlePreHandshake(playerId, msg);
     }
 
     private static void onHandshakeC2S(HandshakePacket msg, CustomPayloadEvent.Context ctx) {

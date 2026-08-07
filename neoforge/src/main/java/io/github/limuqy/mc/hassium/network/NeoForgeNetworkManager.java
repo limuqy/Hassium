@@ -39,6 +39,7 @@ import net.neoforged.neoforge.network.handling.IPayloadContext;
 #endif
 
 import java.lang.reflect.Field;
+import java.util.UUID;
 import io.github.limuqy.mc.hassium.network.HassiumConnectionRegistry;
 import io.github.limuqy.mc.hassium.network.HassiumAggregationManager;
 import io.github.limuqy.mc.hassium.network.ZstdNegotiationTracker;
@@ -2070,6 +2071,17 @@ public class NeoForgeNetworkManager implements NetworkManager {
     /**
      * 注册所有 Payload (1.20.5+)
      */
+    private static void handlePreHandshake(PreHandshakePayload payload, net.neoforged.neoforge.network.handling.IPayloadContext context) {
+        // 配置阶段无 ServerPlayer：按 listener owner（GameProfile）UUID 标记，
+        // ServerPlayer 创建时（MixinServerPlayer TAIL）自动提升为压缩启用。
+        // 完整协商（ZSTD/聚合/数据面/位置）仍在 Play 阶段 handleHandshake 完成。
+        UUID playerId = null;
+        if (context.listener() instanceof net.minecraft.server.network.ServerConfigurationPacketListenerImpl configListener) {
+            playerId = io.github.limuqy.mc.hassium.compat.PlayerCompat.getProfileId(configListener.getOwner());
+        }
+        PreHandshakeProtocol.handlePreHandshake(playerId, payload);
+    }
+
     @SubscribeEvent
     public static void registerPayloads(RegisterPayloadHandlersEvent event) {
         if (!HassiumConfigService.getInstance().isNetworkCompressionEnabled()) {
@@ -2079,6 +2091,14 @@ public class NeoForgeNetworkManager implements NetworkManager {
         LOGGER.debug("Hassium: Registering NeoForge Payload handlers");
 
         var registrar = event.registrar(PROTOCOL_VERSION);
+
+        // 注册预握手 (C2S, 配置阶段)：提前标记 Hassium 客户端，
+        // ServerPlayer 创建时自动提升压缩 → 进服第一圈 sendChunk 全走 Hassium 链
+        registrar.configurationToServer(
+                PreHandshakePayload.TYPE,
+                PreHandshakePayload.STREAM_CODEC,
+                (payload, context) -> handlePreHandshake(payload, context)
+        );
 
         // 注册握手请求 (C2S)
         registrar.playToServer(

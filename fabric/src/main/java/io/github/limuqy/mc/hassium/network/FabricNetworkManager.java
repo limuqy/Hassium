@@ -11,6 +11,14 @@ import io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail;
 import io.github.limuqy.mc.hassium.utils.DebugLogger;
 import io.github.limuqy.mc.hassium.utils.DebugLogger.LogType;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
+import net.fabricmc.fabric.api.client.networking.v1.ClientLoginNetworking;
+#if MC_VER >= MC_1_20_2
+import net.fabricmc.fabric.api.client.networking.v1.ClientConfigurationNetworking;
+import net.fabricmc.fabric.api.client.networking.v1.C2SConfigurationChannelEvents;
+import net.fabricmc.fabric.api.networking.v1.ServerConfigurationNetworking;
+#endif
+import net.fabricmc.fabric.api.networking.v1.ServerLoginConnectionEvents;
+import net.fabricmc.fabric.api.networking.v1.ServerLoginNetworking;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.minecraft.client.Minecraft;
 import net.minecraft.network.Connection;
@@ -74,6 +82,13 @@ ResourceLocation
 Identifier
 #endif
 HANDSHAKE_C2S = ResourceLocationCompat.create(Constants.MOD_ID, "handshake_c2s");
+    public static final
+#if MC_VER < MC_1_21_11
+ResourceLocation
+#else
+Identifier
+#endif
+PRE_HANDSHAKE_C2S = ResourceLocationCompat.create(Constants.MOD_ID, "prehandshake_c2s");
     public static final
 #if MC_VER < MC_1_21_11
 ResourceLocation
@@ -216,6 +231,44 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
     }
 
     /**
+     * 客户端预握手注册：1.20.1 login query 回复；1.20.2+ 配置阶段 C2S。
+     * <p>
+     * 预握手使服务端在 {@code ServerPlayer} 创建前即标记 Hassium 客户端，
+     * 进服第一圈 trackChunk/sendChunk 全部走 Hassium 链（剥光 + 限流 + hash 元数据）。
+     */
+    private void registerPreHandshakeClient() {
+#if MC_VER < MC_1_20_2
+        // 1.20.1：服务端 login query 驱动的 reply（fabric login 通道机制）
+        ClientLoginNetworking.registerGlobalReceiver(PRE_HANDSHAKE_C2S,
+                (client, handler, buf, listenerConsumer) -> {
+                    FriendlyByteBuf reply = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
+                    PreHandshakeProtocol.encodeFields(reply);
+                    return java.util.concurrent.CompletableFuture.completedFuture(reply);
+                });
+        LOGGER.debug("Hassium: Registered login pre-handshake reply (client)");
+#elif MC_VER < MC_1_20_5
+        // 1.20.2-1.20.4：配置阶段 REGISTER 声明后发送（legacy Identifier 通道）
+        C2SConfigurationChannelEvents.REGISTER.register((handler, sender, client, channels) -> {
+            if (channels.contains(PRE_HANDSHAKE_C2S)) {
+                FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
+                PreHandshakeProtocol.encodeFields(buf);
+                ClientConfigurationNetworking.send(PRE_HANDSHAKE_C2S, buf);
+                LOGGER.debug("Hassium: Sent pre-handshake (configuration, legacy)");
+            }
+        });
+#else
+        // 1.20.5+：配置阶段 payload（CustomPacketPayload）。
+        // payload type 注册统一在 FabricPayloadRegistry.registerAll（registerChannels 时调用，幂等）
+        C2SConfigurationChannelEvents.REGISTER.register((handler, sender, client, channels) -> {
+            if (channels.contains(PRE_HANDSHAKE_C2S)) {
+                ClientConfigurationNetworking.send(PreHandshakePayload.create());
+                LOGGER.debug("Hassium: Sent pre-handshake (configuration, payload)");
+            }
+        });
+#endif
+    }
+
+    /**
      * 注册客户端网络通道
      */
     public void registerClientChannels() {
@@ -223,6 +276,8 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
             LOGGER.warn("Hassium: network.enabled=false, skipping Fabric client channel registration");
             return;
         }
+        // ===== 预握手（login/配置阶段）：提前声明 Hassium 能力，消灭进服直发窗口 =====
+        registerPreHandshakeClient();
         // 注册客户端接收压缩区块数据
 #if MC_VER < MC_1_20_5
         ClientPlayNetworking.registerGlobalReceiver(CHUNK_PAYLOAD_S2C, (client, handler, buf, responseSender) -> {
@@ -1093,9 +1148,107 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
     }
 
     /**
+     * 1.20.1 login 阶段取 GameProfile（预握手标记需要玩家 UUID，但此时尚无 ServerPlayer）。
+     * <p>
+     * 为什么必须反射：
+     * <ul>
+     *   <li>1.20.1 的 {@code ServerLoginPacketListenerImpl} 把 profile 存在 package-private
+     *       字段 {@code gameProfile}，无任何 public 访问器（{@code getGameProfile()} 是
+     *       1.20.2 重构才加的）——fabric 0.92.9 的 login API 回调也只给 loginListener，不暴露 profile。</li>
+     *   <li>客户端自报 UUID 不可信（在线服必须用服务端认证后的 profile），不能走握手 payload 上报。</li>
+     * </ul>
+     * 为什么安全：
+     * <ul>
+     *   <li>按<b>类型</b>匹配（{@link ReflectionCompat#findFieldByType}）而非字段名——
+     *       SRG/intermediary 生产运行时字段名变化免疫（同 {@link PlayerCompat#getConnection} 先例）。</li>
+     *   <li>该类的 GameProfile 类型字段唯一，无歧义。</li>
+     *   <li>QUERY_START 在 login 完成前触发（fabric 会等待 query 回复）。此时：
+     *       在线服——认证线程已完成（state 已到 READY_TO_ACCEPT），profile 带认证 UUID；
+     *       离线服——handleHello 只设了 {@code new GameProfile(null, name)}，UUID 派生
+     *       （{@code createFakeProfile}）要等 {@code handleAcceptedLogin} 才执行（fabric
+     *       queryTick 恰好注入在它 HEAD 之前）——这里按原版同款逻辑提前派生
+     *       OfflinePlayer UUID，与 placeNewPlayer 后的 ServerPlayer UUID 一致。</li>
+     * </ul>
+     */
+    private static UUID resolveLoginPlayerId(net.minecraft.server.network.ServerLoginPacketListenerImpl loginListener) {
+        try {
+            com.mojang.authlib.GameProfile profile = (com.mojang.authlib.GameProfile)
+                    io.github.limuqy.mc.hassium.compat.ReflectionCompat.getFieldByType(
+                            loginListener, com.mojang.authlib.GameProfile.class, true);
+            if (profile == null) {
+                return null;
+            }
+            UUID id = io.github.limuqy.mc.hassium.compat.PlayerCompat.getProfileId(profile);
+            if (id != null) {
+                return id;
+            }
+            // 离线模式：profile 不完整（id=null），派生 OfflinePlayer UUID（原版 createFakeProfile 同款）
+            String name = io.github.limuqy.mc.hassium.compat.PlayerCompat.getProfileName(profile);
+            if (name != null) {
+                return net.minecraft.core.UUIDUtil.createOfflinePlayerUUID(name);
+            }
+        } catch (Exception e) {
+            LOGGER.warn("Hassium: Failed to resolve login player profile (pre-handshake)", e);
+        }
+        return null;
+    }
+
+    /**
+     * 服务端预握手注册：1.20.1 login query；1.20.2+ 配置阶段接收。
+     * <p>
+     * 收到后仅 {@code PlayerCompressionTracker.markPreHandshake(UUID)}；
+     * {@code ServerPlayer} 创建时（{@code MixinServerPlayer} TAIL）自动提升为
+     * 压缩启用，完整协商（ZSTD/聚合/数据面/位置）仍在 Play 阶段握手。
+     */
+    private void registerPreHandshakeServer() {
+#if MC_VER < MC_1_20_2
+        // 1.20.1：login query 阶段发 query，收到回复后按 UUID 标记预握手。
+        // vanilla / 无 mod 客户端对未知 channel 回空（understood=false），不标记。
+        ServerLoginConnectionEvents.QUERY_START.register((loginListener, server, sender, synchronizer) -> {
+            try {
+                // 必须用 sender.createPacket() 让 fabric 的 QueryIdFactory 分配递增 queryId：
+                // fabric 内部 early_registration 的 id 从 0 起，硬编码 0 会覆盖其登记，
+                // 服务端收到回复时 channels.remove(0) 取不到 → "no query has been associated" 断连。
+                // Unpooled 堆缓冲无引用计数；协议层编码时拷贝，无泄漏
+                FriendlyByteBuf queryBuf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
+                sender.sendPacket(sender.createPacket(PRE_HANDSHAKE_C2S, queryBuf));
+            } catch (Exception e) {
+                LOGGER.warn("Hassium: Failed to send login pre-handshake query", e);
+            }
+        });
+        ServerLoginNetworking.registerGlobalReceiver(PRE_HANDSHAKE_C2S,
+                (server, loginListener, understood, buf, synchronizer, sender) -> {
+                    if (!understood) {
+                        return; // vanilla / 无 mod 客户端：空回复
+                    }
+                    // 1.20.1 无 getGameProfile() 访问器，按类型反射取（见 resolveLoginPlayerId javadoc）
+                    UUID playerId = resolveLoginPlayerId(loginListener);
+                    PreHandshakeProtocol.handlePreHandshake(playerId, buf);
+                });
+#elif MC_VER < MC_1_20_5
+        // 1.20.2-1.20.4：配置阶段 legacy Identifier 通道接收
+        ServerConfigurationNetworking.registerGlobalReceiver(PRE_HANDSHAKE_C2S,
+                (server, handler, buf, sender) -> {
+                    UUID playerId = io.github.limuqy.mc.hassium.compat.PlayerCompat.getProfileId(handler.getOwner());
+                    PreHandshakeProtocol.handlePreHandshake(playerId, buf);
+                });
+#else
+        // 1.20.5+：配置阶段 payload 接收。
+        // payload type 注册统一在 FabricPayloadRegistry.registerAll（registerChannels 时调用，幂等）
+        ServerConfigurationNetworking.registerGlobalReceiver(PreHandshakePayload.TYPE,
+                (payload, context) -> {
+                    UUID playerId = io.github.limuqy.mc.hassium.compat.PlayerCompat.getProfileId(context.networkHandler().getOwner());
+                    PreHandshakeProtocol.handlePreHandshake(playerId, payload);
+                });
+#endif
+    }
+
+    /**
      * 注册服务端网络通道
      */
     private void registerServerChannels() {
+        // ===== 预握手（login/配置阶段）：提前标记 Hassium 客户端 =====
+        registerPreHandshakeServer();
         // 注册握手请求
 #if MC_VER < MC_1_20_5
         ServerPlayNetworking.registerGlobalReceiver(HANDSHAKE_C2S, (server, player, handler, buf, sender) -> {

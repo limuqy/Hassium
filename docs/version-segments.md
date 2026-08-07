@@ -133,6 +133,21 @@ MC_1_21_11
 - 各加载器 `registerChannels` / 握手入口仍尊重配置项 `HassiumConfigService.isNetworkCompressionEnabled()`
 - 实现细节见 `PacketCodecCompat`（StreamCodec / GameProtocols / IdDispatchCodec）
 
+### 预握手（login / 配置阶段声明 Hassium 能力）
+
+1.20.1 进服初始区块 88%（1614/1842）在 Play 握手完成前经 `trackChunk` 原版直发（真实 light、不受 `maxChunksPerTick` 限流、无 chunkHash 元数据）。治本方案：客户端在 **login（1.20.1）/ 配置阶段（1.20.2+）** 提前发送预握手（`hassium:prehandshake_c2s`），服务端仅 `PlayerCompressionTracker.markPreHandshake(UUID)`；`ServerPlayer` 创建时（`MixinServerPlayer` `<init>` TAIL）自动提升压缩 → 进服第一圈 `trackChunk`/`sendChunk` 100% 走 Hassium 链（剥光 + 限流 + hash 元数据）。ZSTD/聚合/数据面/位置协商仍在 Play 完整握手（幂等）。
+
+| 段 | 客户端发送 | 服务端接收 |
+|----|-----------|-----------|
+| fabric 1.20.1 | `ClientLoginNetworking` 回复 login query（`CompletableFuture` 回能力位） | `ServerLoginConnectionEvents.QUERY_START` 发 query + `ServerLoginNetworking` 收；UUID 按类型反射取 `gameProfile`（1.20.1 无访问器；离线服 login 阶段已派生 OfflinePlayer UUID） |
+| fabric 1.20.2–1.20.4 | `C2SConfigurationChannelEvents.REGISTER` → `ClientConfigurationNetworking.send`（legacy Identifier 通道） | `ServerConfigurationNetworking.registerGlobalReceiver` |
+| fabric 1.20.5+ | 同上（`PreHandshakePayload`，CustomPacketPayload） | `ServerConfigurationNetworking.registerGlobalReceiver(PayloadType)` |
+| neoforge 1.20.5+ | `MixinClientConfigurationPacketListenerImpl`（配置 listener 构造 TAIL，fabric 平台跳过） | `PayloadRegistrar.configurationToServer` |
+| forge 1.20.6 | 同 mixin | `SimpleChannel.messageBuilder(..., NetworkDirection.CONFIGURATION_TO_SERVER)` |
+| neoforge 1.20.2–1.20.4 / forge 1.20.1 | **无 login/配置阶段通道 API，不预握手**（保留 Play 握手；1.20.2+ 原版 batch ack 节流使窗口本就 ≤ 前几批 ~9 块/tick） | — |
+
+共用载体：`PreHandshakeProtocol`（legacy buf 编解码）/ `PreHandshakePayload`（1.20.5+ payload，StreamCodec 为 FriendlyByteBuf 级，无 registry 依赖）。能力字段：协议版本、mod 版本、clientCache、globalCompression、compactHeader。客户端侧 hash 处理已有 storage 未就绪缓冲（`PENDING_HASH_PACKETS`），提前推 hash 安全。
+
 运行时验证优先级：**1.20.1 → 1.21.1 → 1.21.11**（均要求真实 nginx 断主控 UdpFailover 冒烟通过）；其余锚点以编译 + 短冒烟为主。
 
 ---

@@ -257,11 +257,14 @@ public class ServerChunkPushManager {
         final ServerLevel firstLevel = PlayerCompat.getServerLevel(players.get(0));
         final int sectionCount = firstLevel.getSectionsCount();
         final RegistryAccess registryAccess = firstLevel.registryAccess();
+        // 统一剥光：broadcast 传入的是原版带光包，按配置重建空 mask 剥光包
+        // （主线程调用；1.21.2+ ThreadingDetector 允许主线程读 chunk）
+        final ClientboundLevelChunkWithLightPacket strippedPacket = stripLightIfConfigured(players.get(0), pos, packet);
         // 包字节编码挪 pushPool 后台：packet 为已构建完的纯数据（只读编码线程安全，
         // 反透视等 mod 已在拦截时改写好包视图），不再占用主线程。
         pushPool.submit(() -> {
             try {
-                byte[] encoded = encodeChunkPacket(packet, registryAccess);
+                byte[] encoded = encodeChunkPacket(strippedPacket, registryAccess);
                 if (encoded != null) {
                     for (ServerPlayer player : players) {
                         putPreparedChunkPacket(player.getUUID(), pos, encoded);
@@ -269,7 +272,7 @@ public class ServerChunkPushManager {
                 }
                 // 从已序列化的 packet 数据计算 section 哈希（线程安全，无需读取世界）
                 Map<Integer, Long> sectionHashes = ChunkContentHashUtil.computeSectionHashesFromPacket(
-                        packet.getChunkData(), sectionCount, registryAccess);
+                        strippedPacket.getChunkData(), sectionCount, registryAccess);
                 long chunkHash = ChunkContentHashUtil.combineSectionHashes(sectionHashes);
                 // 从 sectionHashes 推导 bitmap：有 hash 的 section = 有方块数据
                 int sectionBitmap = 0;
@@ -298,13 +301,21 @@ public class ServerChunkPushManager {
     public void submitMetadataTask(ServerPlayer player, ChunkPos pos,
                                    Packet<?> chunkPacket, String dimension) {
         ensureInitialized();
+        final Packet<?> effectivePacket;
+        if (chunkPacket instanceof ClientboundLevelChunkWithLightPacket lightPacket) {
+            // 统一剥光：trackChunk 传入的是原版带光包，按配置重建空 mask 剥光包
+            // （主线程调用；1.21.2+ ThreadingDetector 允许主线程读 chunk）
+            effectivePacket = stripLightIfConfigured(player, pos, lightPacket);
+        } else {
+            effectivePacket = chunkPacket;
+        }
         final ServerLevel playerLevel = PlayerCompat.getServerLevel(player);
         final int sectionCount = playerLevel.getSectionsCount();
         final RegistryAccess registryAccess = playerLevel.registryAccess();
         // 编码 + hash 计算 + 发送全部在 pushPool（packet 纯数据只读编码，线程安全）
         pushPool.submit(() -> {
             try {
-                if (chunkPacket instanceof ClientboundLevelChunkWithLightPacket lightPacket) {
+                if (effectivePacket instanceof ClientboundLevelChunkWithLightPacket lightPacket) {
                     byte[] encoded = encodeChunkPacket(lightPacket, registryAccess);
                     if (encoded != null) {
                         putPreparedChunkPacket(player.getUUID(), pos, encoded);
@@ -313,7 +324,7 @@ public class ServerChunkPushManager {
                 Map<Integer, Long> sectionHashes;
                 int sectionBitmap;
 
-                if (chunkPacket instanceof ClientboundLevelChunkWithLightPacket lightPacket) {
+                if (effectivePacket instanceof ClientboundLevelChunkWithLightPacket lightPacket) {
                     // 从已序列化的 packet 数据计算（线程安全）
                     sectionHashes = ChunkContentHashUtil.computeSectionHashesFromPacket(
                             lightPacket.getChunkData(), sectionCount, registryAccess);
@@ -1551,6 +1562,30 @@ public class ServerChunkPushManager {
                 pos, player.getName().getString(),
                 chunkData.length, compressed.compressedData.length,
                 String.format("%.2f", (double) chunkData.length / compressed.compressedData.length));
+    }
+
+    /**
+     * 拦截路径统一剥光：原版 trackChunk/broadcast 传入的 packet 带真实 light，
+     * 此处按配置在主线程重建空 mask 剥光包，保证 Hassium 客户端全链路
+     * （剥光 + 限流 + hash 元数据）一致生效。重建失败或 lightStrip 关闭时回退原包。
+     */
+    private ClientboundLevelChunkWithLightPacket stripLightIfConfigured(
+            ServerPlayer player, ChunkPos pos, ClientboundLevelChunkWithLightPacket packet) {
+        if (!HassiumConfigService.getInstance().isServerLightStrip()) {
+            return packet;
+        }
+        try {
+            ServerLevel level = PlayerCompat.getServerLevel(player);
+            LevelChunk chunk = level.getChunk(pos.x, pos.z);
+            if (chunk == null) {
+                return packet;
+            }
+            ClientboundLevelChunkWithLightPacket stripped = buildChunkPacket(chunk, level);
+            return stripped != null ? stripped : packet;
+        } catch (Exception e) {
+            Constants.LOG.warn("[LIGHT-STRIP] Failed to rebuild stripped chunk packet at {}", pos, e);
+            return packet;
+        }
     }
 
     /**

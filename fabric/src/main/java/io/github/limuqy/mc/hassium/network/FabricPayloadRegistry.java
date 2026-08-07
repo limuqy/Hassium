@@ -131,6 +131,10 @@ public final class FabricPayloadRegistry {
         PayloadTypeRegistry.playC2S().register(SECTION_HASH_REQUEST_C2S_TYPE, codec(SECTION_HASH_REQUEST_C2S_TYPE));
         PayloadTypeRegistry.playC2S().register(BLOCK_ENTITY_REQUEST_C2S_TYPE, codec(BLOCK_ENTITY_REQUEST_C2S_TYPE));
         PayloadTypeRegistry.playC2S().register(CLIENT_BLOOM_SYNC_C2S_TYPE, codec(CLIENT_BLOOM_SYNC_C2S_TYPE));
+        // 预握手（login/配置阶段声明能力）：configuration 阶段 C2S payload
+        PayloadTypeRegistry.configurationC2S().register(
+                io.github.limuqy.mc.hassium.network.PreHandshakePayload.TYPE,
+                io.github.limuqy.mc.hassium.network.PreHandshakePayload.STREAM_CODEC);
 
         LOGGER.info("Hassium: Registered 9 S2C and 6 C2S payload types for 1.20.5+");
     }
