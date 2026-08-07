@@ -38,3 +38,7 @@ logs
 
 .wiki-publish/
 .wiki-worktree/
+
+# eclipse factorypath / python cache
+.factorypath
+__pycache__/

@@ -1,7 +1,7 @@
 # 运行时冒烟测试 — 单次会话脚本（两轮连服版）
 # 用法: .\scripts\runtime-smoke-test.ps1 -Ver 1.20.1 -Loader fabric -Phase I -SessionId "1.20.1_fabric_I"
 #       .\scripts\runtime-smoke-test.ps1 -Ver 1.20.6 -Loader forge -Phase I -SessionId "1.20.6_forge_I"   # forge 支持范围见 versionProperties/{Ver}.properties 的 builds_for
-# 流程: 服务端启动 VD=20 → 客户端连服 → 进世界后等 DelayMs → ROUND1 统计 → 主动断开 → 服务端切 VD=8 → 等 ReconnectDelayMs → 重连 → 进世界后等 DelayMs → ROUND2 统计 → 退出
+# 流程: 服务端启动 VD=20 → 客户端连服 → 进世界后等 DelayMs → ROUND1 统计 → 主动断开 → 服务端切 VD=10 → 等 ReconnectDelayMs → 重连 → 进世界后等 DelayMs → ROUND2 统计 → 退出
 # 关键真相源：Loom runDir 在子项目目录下（fabric/run/client、neoforge/run/server 等），不是根目录 run/
 # 退出码: 0=PASS / 2=FAIL / 3=server_not_ready
 # 端口: 默认 25565；并行模式由 batch 脚本传 -ServerPort 25566 等避免冲突
@@ -18,7 +18,7 @@ param(
     [switch]$PregenOnly,
     [string]$SmokeHost = "",
     [int]$ServerPort = 25565,
-    [int]$DelayMs = 6000,
+    [int]$DelayMs = 10000,
     [int]$ReconnectDelayMs = 3000,
     # 客户端进服等待超时（0=不覆盖，用 ClientSmokeTest 默认 120s）。调长 -DelayMs
     # 时必须同步调大（classic 模式 ROUND1 等待 delayMs*2，超时从客户端启动算起）。
@@ -746,8 +746,8 @@ if ($round1Match.Success) {
 $round2Match = [regex]::Match($clientContent, "HassiumSmokeTest:CLIENT_STATS ROUND2 begin(.+?)HassiumSmokeTest:CLIENT_STATS ROUND2 end", [System.Text.RegularExpressions.RegexOptions]::Singleline)
 if ($round2Match.Success) {
     $round2Stats = $round2Match.Groups[1].Value.Trim()
-    $round2Stats | Out-File (Join-Path $statsDir "${SessionId}_round2_VD8.txt") -Encoding UTF8
-    Write-Host "[$SessionId] ROUND2 统计已保存到 stats/${SessionId}_round2_VD8.txt"
+    $round2Stats | Out-File (Join-Path $statsDir "${SessionId}_round2_VD10.txt") -Encoding UTF8
+    Write-Host "[$SessionId] ROUND2 统计已保存到 stats/${SessionId}_round2_VD10.txt"
 }
 
 # 提取服务端视距切换日志
@@ -769,7 +769,7 @@ $hasFail = $clientContent -match "HassiumSmokeTest:FAIL"
 
 # 服务端视距切换检查
 $serverSwitched = if (Test-Path $serverLog) {
-    (Get-Content $serverLog -Raw) -match "view-distance switched to 8"
+    (Get-Content $serverLog -Raw) -match "view-distance switched to 10"
 } else { $false }
 
 # §2.3 UDP_FAILOVER marker 提取（聚合 server/client 双端日志，跨进程替代直接断主控 TCP）
@@ -844,7 +844,7 @@ $resultObj = @{
     ClientRecoveryFreeze = $clientRecoveryFreeze
     StatsFiles = @(
         if ($round1StatsFound) { "build/smoke-test/stats/${SessionId}_round1_VD20.txt" }
-        if ($round2StatsFound) { "build/smoke-test/stats/${SessionId}_round2_VD8.txt" }
+        if ($round2StatsFound) { "build/smoke-test/stats/${SessionId}_round2_VD10.txt" }
     )
 }
 $resultObj | ConvertTo-Json -Depth 3 | Out-File (Join-Path $resultsDir "result_${SessionId}.json")

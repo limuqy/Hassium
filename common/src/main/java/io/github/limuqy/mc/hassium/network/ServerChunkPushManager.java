@@ -48,6 +48,8 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicLongArray;
 
 /**
  * 服务端区块推送管理器
@@ -207,6 +209,32 @@ public class ServerChunkPushManager {
     private static final long HASH_BATCH_MAX_WAIT_MS = 10;
 
     /**
+     * 服务端推送管线计时诊断（R1 供给版本差异排查：1.20.1 80/s vs 1.21.x 32/s）。
+     * 每 256 块打印一次各段均值（build=主线程重建 packet / hash=pushPool 哈希 /
+     * encode=线格式编码 / send=压缩+发送），打印后清零。热路径仅加 Atomic 累加。
+     */
+    private static final int D_BUILD = 0, D_HASH = 1, D_ENCODE = 2, D_SEND = 3;
+    private static final AtomicLongArray DIAG_NS = new AtomicLongArray(4);
+    private static final AtomicLong DIAG_COUNT = new AtomicLong();
+
+    private static void diag(int slot, long ns) {
+        DIAG_NS.addAndGet(slot, ns);
+        long c = DIAG_COUNT.incrementAndGet();
+        if ((c & 0xFF) == 0L) {
+            Constants.LOG.info(
+                    "[SERVE-DIAG] chunks={} build={}ms hash={}ms encode={}ms send={}ms",
+                    c,
+                    String.format("%.2f", DIAG_NS.get(D_BUILD) / 1e6 / 256.0),
+                    String.format("%.2f", DIAG_NS.get(D_HASH) / 1e6 / 256.0),
+                    String.format("%.2f", DIAG_NS.get(D_ENCODE) / 1e6 / 256.0),
+                    String.format("%.2f", DIAG_NS.get(D_SEND) / 1e6 / 256.0));
+            for (int i = 0; i < 4; i++) {
+                DIAG_NS.set(i, 0L);
+            }
+        }
+    }
+
+    /**
      * 初始化线程池（懒加载）
      */
     private void ensureInitialized() {
@@ -259,7 +287,9 @@ public class ServerChunkPushManager {
         final RegistryAccess registryAccess = firstLevel.registryAccess();
         // 统一剥光：broadcast 传入的是原版带光包，按配置重建空 mask 剥光包
         // （主线程调用；1.21.2+ ThreadingDetector 允许主线程读 chunk）
+        long tBuild = System.nanoTime();
         final ClientboundLevelChunkWithLightPacket strippedPacket = stripLightIfConfigured(players.get(0), pos, packet);
+        diag(D_BUILD, System.nanoTime() - tBuild);
         // 包字节编码挪 pushPool 后台：packet 为已构建完的纯数据（只读编码线程安全，
         // 反透视等 mod 已在拦截时改写好包视图），不再占用主线程。
         pushPool.submit(() -> {
@@ -271,8 +301,10 @@ public class ServerChunkPushManager {
                     }
                 }
                 // 从已序列化的 packet 数据计算 section 哈希（线程安全，无需读取世界）
+                long tHash = System.nanoTime();
                 Map<Integer, Long> sectionHashes = ChunkContentHashUtil.computeSectionHashesFromPacket(
                         strippedPacket.getChunkData(), sectionCount, registryAccess);
+                diag(D_HASH, System.nanoTime() - tHash);
                 long chunkHash = ChunkContentHashUtil.combineSectionHashes(sectionHashes);
                 // 从 sectionHashes 推导 bitmap：有 hash 的 section = 有方块数据
                 int sectionBitmap = 0;
@@ -305,7 +337,9 @@ public class ServerChunkPushManager {
         if (chunkPacket instanceof ClientboundLevelChunkWithLightPacket lightPacket) {
             // 统一剥光：trackChunk 传入的是原版带光包，按配置重建空 mask 剥光包
             // （主线程调用；1.21.2+ ThreadingDetector 允许主线程读 chunk）
+            long tBuild = System.nanoTime();
             effectivePacket = stripLightIfConfigured(player, pos, lightPacket);
+            diag(D_BUILD, System.nanoTime() - tBuild);
         } else {
             effectivePacket = chunkPacket;
         }
@@ -326,8 +360,10 @@ public class ServerChunkPushManager {
 
                 if (effectivePacket instanceof ClientboundLevelChunkWithLightPacket lightPacket) {
                     // 从已序列化的 packet 数据计算（线程安全）
+                    long tHash = System.nanoTime();
                     sectionHashes = ChunkContentHashUtil.computeSectionHashesFromPacket(
                             lightPacket.getChunkData(), sectionCount, registryAccess);
+                    diag(D_HASH, System.nanoTime() - tHash);
                     sectionBitmap = 0;
                     for (int idx : sectionHashes.keySet()) {
                         sectionBitmap |= (1 << idx);
@@ -374,7 +410,10 @@ public class ServerChunkPushManager {
         final int sectionCount = level.getSectionsCount();
         final RegistryAccess registryAccess = level.registryAccess();
 
-        ClientboundLevelChunkWithLightPacket packet = buildChunkPacket(chunk, level);
+        ClientboundLevelChunkWithLightPacket packet;
+        long tBuild = System.nanoTime();
+        packet = buildChunkPacket(chunk, level);
+        diag(D_BUILD, System.nanoTime() - tBuild);
         if (packet == null) {
             Constants.LOG.warn("[ASYNC_METADATA] Failed to build chunk packet for {}", pos);
             return;
@@ -385,8 +424,10 @@ public class ServerChunkPushManager {
 
         pushPool.submit(() -> {
             try {
+                long tHash = System.nanoTime();
                 Map<Integer, Long> sectionHashes = ChunkContentHashUtil.computeSectionHashesFromPacket(
                         packet.getChunkData(), sectionCount, registryAccess);
+                diag(D_HASH, System.nanoTime() - tHash);
                 int sectionBitmap = 0;
                 for (int idx : sectionHashes.keySet()) {
                     sectionBitmap |= (1 << idx);
@@ -1470,7 +1511,9 @@ public class ServerChunkPushManager {
                                 Constants.LOG.warn("[PROCESS_QUEUE] Chunk {} not loaded, skipping", task.pos());
                                 continue;
                             }
+                            long tBuild = System.nanoTime();
                             packet = buildChunkPacket(chunk, level);
+                            diag(D_BUILD, System.nanoTime() - tBuild);
                             if (packet == null) {
                                 Constants.LOG.warn("[PROCESS_QUEUE] Failed to build chunk packet {}", task.pos());
                                 continue;
@@ -1496,13 +1539,17 @@ public class ServerChunkPushManager {
                     pushPool.submit(() -> {
                         byte[] chunkData = work.chunkData();
                         if (chunkData == null) {
+                            long tEnc = System.nanoTime();
                             chunkData = encodeChunkPacket(work.packet(), work.registryAccess());
+                            diag(D_ENCODE, System.nanoTime() - tEnc);
                         }
                         if (chunkData == null) {
                             Constants.LOG.warn("[PROCESS_QUEUE] Failed to encode chunk {}", work.pos());
                             return;
                         }
+                        long tSend = System.nanoTime();
                         compressAndSend(work.player(), work.pos(), chunkData, sender);
+                        diag(D_SEND, System.nanoTime() - tSend);
                     });
                 }
             }

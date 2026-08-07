@@ -23,126 +23,47 @@ import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * 客户端区块处理器，负责将解压后的区块数据应用到客户端世界
+ * 客户端区块处理器门面（Phase 0 隔离重构后）。
+ * <p>
+ * 全部可变状态（storage、pending hash 表、apply 重入标志）已迁入
+ * {@link ClientChunkPipeline} 实例字段；本类保留既有 public static 签名
+ * 供调用方零改动转发，处理逻辑经 {@link ClientChunkPipeline#getInstance()} 访问状态。
+ * Phase 4 完成后删除本门面，调用方直指 pipeline 实例。
  */
 public class ClientChunkHandler {
 
-    private static final int DEFAULT_COMPRESSION_LEVEL = 9;
-    private static volatile ClientHassiumStorage clientStorage;
-
-    /** 元数据 contentHash 暂存：chunkPos -> (hash, timestamp)，用于收到数据后写入缓存 */
-    private static final Map<Long, PendingHash> pendingContentHashes = new ConcurrentHashMap<>();
-
-    /** section 哈希暂存：chunkPos -> (sectionHashes, timestamp)，用于 persist 时一起写入 */
-    private static final Map<Long, PendingSectionHashes> pendingSectionHashes = new ConcurrentHashMap<>();
-
-    /** 条目过期时间（30秒） */
-    private static final long PENDING_HASH_TTL_MS = 30_000;
-
-    /** 上次清理时间 */
-    private static volatile long lastPendingCleanupTime = 0;
-
-    /** 清理间隔（5秒） */
-    private static final long PENDING_CLEANUP_INTERVAL_MS = 5_000;
-
-    private record PendingHash(long hash, long timestamp) {}
-    private record PendingSectionHashes(long[] hashes, long timestamp) {}
-
     /**
-     * 初始化客户端缓存存储
+     * 初始化客户端缓存存储（转发 pipeline）
      *
      * @param gameDir     游戏目录
      * @param serverId    服务器标识（如 server_127.0.0.1_25565）
      * @param dimension   维度标识（如 minecraft:overworld）
      */
     public static void initStorage(Path gameDir, String serverId, String dimension) {
-        // 维度目录名：将冒号替换为下划线
-        String dimDir = dimension.replaceAll("[^a-zA-Z0-9._-]", "_");
-        clientStorage = new ClientHassiumStorage(gameDir, serverId, dimDir);
-        Constants.LOG.info("Hassium: Initialized client chunk cache for server {} dimension {}", serverId, dimension);
+        ClientChunkPipeline.getInstance().initStorage(gameDir, serverId, dimension);
     }
 
     /**
-     * 获取客户端缓存存储实例
+     * 获取客户端缓存存储实例（转发 pipeline）
      */
     public static ClientHassiumStorage getClientStorage() {
-        return clientStorage;
+        return ClientChunkPipeline.getInstance().getClientStorage();
     }
 
     /**
-     * 重置客户端缓存存储（断开连接时调用）
+     * 重置客户端缓存存储（断开连接时调用，转发 pipeline）
      */
     public static void resetStorage() {
-        clientStorage = null;
-        pendingContentHashes.clear();
-        pendingSectionHashes.clear();
-        io.github.limuqy.mc.hassium.cache.client.ClientChunkDirtyTracker.clearAll();
+        ClientChunkPipeline.getInstance().resetStorage();
     }
 
     /**
-     * 暂存 contentHash，供后续收到区块数据时使用
+     * 暂存 contentHash，供后续收到区块数据时使用（转发 pipeline）
      */
     public static void storePendingContentHash(int chunkX, int chunkZ, long contentHash) {
-        evictExpiredEntries();
-        pendingContentHashes.put(chunkPosKey(chunkX, chunkZ), new PendingHash(contentHash, System.currentTimeMillis()));
-    }
-
-    /**
-     * 取出并移除暂存的 contentHash
-     */
-    private static long consumePendingContentHash(int chunkX, int chunkZ) {
-        PendingHash entry = pendingContentHashes.remove(chunkPosKey(chunkX, chunkZ));
-        return entry != null ? entry.hash() : 0L;
-    }
-
-    /**
-     * 窥视暂存 contentHash（不移除），供异步入库与 apply 共用。
-     */
-    private static long peekPendingContentHash(int chunkX, int chunkZ) {
-        PendingHash entry = pendingContentHashes.get(chunkPosKey(chunkX, chunkZ));
-        return entry != null ? entry.hash() : 0L;
-    }
-
-    /**
-     * 暂存 section 哈希，供后续 persist 时一起写入缓存
-     */
-    public static void storePendingSectionHashes(int chunkX, int chunkZ, long[] sectionHashes) {
-        evictExpiredEntries();
-        pendingSectionHashes.put(chunkPosKey(chunkX, chunkZ),
-                new PendingSectionHashes(sectionHashes, System.currentTimeMillis()));
-    }
-
-    /**
-     * 取出并移除暂存的 section 哈希
-     */
-    private static long[] consumePendingSectionHashes(int chunkX, int chunkZ) {
-        PendingSectionHashes entry = pendingSectionHashes.remove(chunkPosKey(chunkX, chunkZ));
-        return entry != null ? entry.hashes() : null;
-    }
-
-    private static long[] peekPendingSectionHashes(int chunkX, int chunkZ) {
-        PendingSectionHashes entry = pendingSectionHashes.get(chunkPosKey(chunkX, chunkZ));
-        return entry != null ? entry.hashes() : null;
-    }
-
-    /**
-     * 懒清理过期条目（定期调用，避免无限增长）
-     */
-    private static void evictExpiredEntries() {
-        long now = System.currentTimeMillis();
-        if (now - lastPendingCleanupTime < PENDING_CLEANUP_INTERVAL_MS) {
-            return;
-        }
-        lastPendingCleanupTime = now;
-        pendingContentHashes.entrySet().removeIf(e -> now - e.getValue().timestamp() > PENDING_HASH_TTL_MS);
-        pendingSectionHashes.entrySet().removeIf(e -> now - e.getValue().timestamp() > PENDING_HASH_TTL_MS);
-    }
-
-    private static long chunkPosKey(int x, int z) {
-        return ((long) x << 32) | (z & 0xFFFFFFFFL);
+        ClientChunkPipeline.getInstance().storePendingContentHash(chunkX, chunkZ, contentHash);
     }
 
     /**
@@ -157,7 +78,7 @@ public class ClientChunkHandler {
         HassiumTaskExecutor executor = HassiumTaskExecutor.getClient();
         Runnable ingest = () -> {
             try {
-                if (clientStorage == null) {
+                if (ClientChunkPipeline.getInstance().getClientStorage() == null) {
                     return;
                 }
                 Minecraft mc = Minecraft.getInstance();
@@ -178,8 +99,9 @@ public class ClientChunkHandler {
                 if (nbtBytes == null) {
                     return;
                 }
-                long contentHash = peekPendingContentHash(chunkX, chunkZ);
-                long[] sectionHashes = peekPendingSectionHashes(chunkX, chunkZ);
+                ClientChunkPipeline pipeline = ClientChunkPipeline.getInstance();
+                long contentHash = pipeline.peekPendingContentHash(chunkX, chunkZ);
+                long[] sectionHashes = pipeline.peekPendingSectionHashes(chunkX, chunkZ);
                 if (contentHash == 0L && sectionHashes != null && sectionHashes.length > 0) {
                     contentHash = io.github.limuqy.mc.hassium.cache.ChunkContentHashUtil
                             .combineSectionHashesFromArray(sectionHashes);
@@ -197,8 +119,8 @@ public class ClientChunkHandler {
                 }
                 io.github.limuqy.mc.hassium.cache.client.CacheSaveQueue.getInstance()
                         .enqueueSerialized(pos, nbtBytes, contentHash, sectionHashes);
-                consumePendingContentHash(chunkX, chunkZ);
-                consumePendingSectionHashes(chunkX, chunkZ);
+                pipeline.consumePendingContentHash(chunkX, chunkZ);
+                pipeline.consumePendingSectionHashes(chunkX, chunkZ);
             } catch (Exception e) {
                 DebugLogger.debug(LogType.COMPRESSION,
                         "[CACHE_INGEST] Failed for [{}, {}]: {}", chunkX, chunkZ, e.getMessage());
@@ -382,21 +304,8 @@ public class ClientChunkHandler {
     }
 
     /**
-     * Hassium 内部 apply 进行中标志（缓存读回 / OVD / 压缩通道）。
-     * <p>
-     * {@code MixinVanillaChunkApplyBudget}（1.20.1~1.21.10 段）把 {@code handleLevelChunkWithLight}
-     * 统一路由到 MainThreadDispatcher 预算队列；但 Hassium 的 applyToLevelFromByteBuf 内部
-     * 也会调用该方法，且调用方（processQueueUntil / HANDLE_COMPRESSED 回调）本身已在主线程
-     * 预算内——再次拦截会造成「入队后立即 hasChunk 校验失败 → 假失败 → 缓存路径重请求风暴、
-     * OVD 全量失败」的恶性循环。此标志让 Mixin 放行 Hassium 预算内的 apply。
+     * Hassium 内部 apply 进行中标志已迁 {@link ClientChunkPipeline#isApplyInProgress()}。
      */
-    private static final ThreadLocal<Boolean> HASSIUM_APPLY_IN_PROGRESS =
-            ThreadLocal.withInitial(() -> Boolean.FALSE);
-
-    /** 是否正在 Hassium 预算内的 apply（MixinVanillaChunkApplyBudget 豁免判定）。 */
-    public static boolean isHassiumApplyInProgress() {
-        return HASSIUM_APPLY_IN_PROGRESS.get();
-    }
 
     private static boolean applyChunkDataInternal(int chunkX, int chunkZ, byte[] chunkData,
                                                   boolean renderOnly, CompoundTag cachedNbt,
@@ -444,13 +353,14 @@ public class ClientChunkHandler {
             net.minecraft.network.FriendlyByteBuf friendlyBuf = new net.minecraft.network.FriendlyByteBuf(nettyBuf);
 
             // 通过平台抽象注入区块（需要传入 FriendlyByteBuf）
-            // HASSIUM_APPLY_IN_PROGRESS：本调用在 Hassium 主线程预算内，MixinVanillaChunkApplyBudget
+            // hassiumApplyInProgress：本调用在 Hassium 主线程预算内，MixinVanillaChunkApplyBudget
             // 不得再次拦截（否则入队 dispatcher 后 hasChunk 校验立即失败 → 假失败/重请求风暴）。
-            HASSIUM_APPLY_IN_PROGRESS.set(Boolean.TRUE);
+            ClientChunkPipeline pipeline = ClientChunkPipeline.getInstance();
+            pipeline.setApplyInProgress(true);
             try {
                 Services.getClientChunkApplier().applyToLevelFromByteBuf(level, pos, friendlyBuf, renderOnly);
             } finally {
-                HASSIUM_APPLY_IN_PROGRESS.set(Boolean.FALSE);
+                pipeline.setApplyInProgress(false);
             }
 
             DebugLogger.info(LogType.CHUNK_APPLY, "[APPLY_CHUNK] Successfully applied chunk [{}, {}] to client world in {} ms",
@@ -513,26 +423,6 @@ public class ClientChunkHandler {
     }
 
     /**
-     * 从缓存加载区块并应用到世界
-     *
-     * @param pos        区块坐标
-     * @param renderOnly true=仅渲染不参与逻辑tick
-     * @return 是否成功加载
-     */
-    public static boolean loadFromCacheAndApply(ChunkPos pos, boolean renderOnly) {
-        byte[] chunkData = loadChunkDataFromCache(pos);
-        if (chunkData == null) {
-            return false;
-        }
-
-        boolean applied = applyChunkData(pos.x, pos.z, chunkData, renderOnly);
-        if (applied) {
-            Constants.LOG.debug("Hassium: Applied chunk {} from cache (renderOnly={})", pos, renderOnly);
-        }
-        return applied;
-    }
-
-    /**
      * 批量加载缓存区块（region 级批量读，语义与单块路径一致）。
      * <p>
      * 同 region 的块一次锁持有顺序读，锁外解压；无效 NBT 校验与删盘行为同
@@ -542,10 +432,11 @@ public class ClientChunkHandler {
      * @return 校验通过的区块坐标 → HBT1 字节
      */
     public static Map<ChunkPos, byte[]> loadChunkDataBatchFromCache(List<ChunkPos> positions) {
-        if (clientStorage == null) {
+        ClientHassiumStorage storage = ClientChunkPipeline.getInstance().getClientStorage();
+        if (storage == null) {
             return Collections.emptyMap();
         }
-        Map<ChunkPos, byte[]> loaded = clientStorage.loadRegionBatch(positions);
+        Map<ChunkPos, byte[]> loaded = storage.loadRegionBatch(positions);
         if (loaded.isEmpty()) {
             return loaded;
         }
@@ -559,7 +450,7 @@ public class ClientChunkHandler {
             if (ChunkDiskCodec.stripMagicPrefix(chunkData) == null) {
                 Constants.LOG.debug("Hassium: Cache invalid (non-NBT) for chunk {}, removing", e.getKey());
                 try {
-                    clientStorage.remove(e.getKey());
+                    storage.remove(e.getKey());
                 } catch (Throwable t) {
                     Constants.LOG.debug("Hassium: Failed to remove invalid cache for {}", e.getKey(), t);
                 }
@@ -585,12 +476,13 @@ public class ClientChunkHandler {
      * @return NBT 字节（含 magic 前缀）；不存在或非法返回 null
      */
     public static byte[] loadChunkDataFromCache(ChunkPos pos) {
-        if (clientStorage == null) {
+        ClientHassiumStorage storage = ClientChunkPipeline.getInstance().getClientStorage();
+        if (storage == null) {
             return null;
         }
 
         try {
-            byte[] chunkData = clientStorage.loadAndDecompress(pos);
+            byte[] chunkData = storage.loadAndDecompress(pos);
             if (chunkData == null) {
                 return null;
             }
@@ -599,7 +491,7 @@ public class ClientChunkHandler {
                 if (ChunkDiskCodec.stripMagicPrefix(chunkData) == null) {
                     Constants.LOG.debug("Hassium: Cache invalid (non-NBT) for chunk {}, removing", pos);
                     try {
-                        clientStorage.remove(pos);
+                        storage.remove(pos);
                     } catch (Throwable t) {
                         Constants.LOG.debug("Hassium: Failed to remove invalid cache for {}", pos, t);
                     }

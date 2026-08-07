@@ -48,4 +48,14 @@ public interface INetworkManagerService {
      * 发送客户端缓存 Bloom 位图同步包到服务端（客户端调用）
      */
     void sendClientBloomSync(FriendlyByteBuf buf);
+
+    /**
+     * 客户端配置阶段发送预握手（1.20.5+）。default 空实现：仅 forge 覆盖
+     * （fabric 走 C2SConfigurationChannelEvents.REGISTER，neoforge 服务端
+     * 只收不发）。
+     *
+     * @param connection 当前连接（forge 需要；fabric/neoforge 忽略）
+     */
+    default void sendPreHandshake(net.minecraft.network.Connection connection) {
+    }
 }

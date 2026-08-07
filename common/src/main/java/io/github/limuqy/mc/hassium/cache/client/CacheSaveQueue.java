@@ -53,6 +53,161 @@ public class CacheSaveQueue {
     private volatile ClientLevel trackedLevel;
 
     /**
+     * 会话中收敛写回：加载风暴停止后，把脏块的光照 light-patch 落盘。
+     * <p>
+     * 背景：38e297e 把「重算后立即写盘」改为 markDirty + 卸载/断连 dump 统一写引擎收敛光，
+     * 修复 R2 海底异常亮（未收敛光污染缓存）。但会话中唯一写光路径是卸载（客户端环带块
+     * 超出 render distance 触发）——1.20.1 全量加载 969 块时环带卸载写了 ~890 块光，
+     * R2 命中率 54.6%；1.21.x 只加载 479 块（≈RD 内，几乎无卸载）→ 会话中零写光，
+     * R2 只有 dump 的 79 块光 → 命中率 24% → 黑块风暴。本扫描在「权威加载完成 + 光照
+     * 队列排空 + 无新 apply 安静窗口」后周期性把脏块入队写盘（与断连 dump 同一条
+     * {@link #enqueueAllFromLevel} 幂等路径，引擎收敛态 = dump 同款，不引入 38e297e
+     * 修掉的未收敛污染）。
+     */
+    private static final long SETTLE_QUIET_NS = 2_500_000_000L;
+
+    /** settle 扫描节流：每 20 tick（1s）最多一次门控检查。 */
+    private static final int SETTLE_SCAN_INTERVAL_TICKS = 20;
+
+    /** settle 单次预算：light-patch 每块 ~1ms，10ms ≈ 8-10 块/次，帧时间不可感知。 */
+    private static final long SETTLE_SCAN_BUDGET_NS = 10_000_000L;
+
+    private static int settleTickCounter = 0;
+
+    /**
+     * 主线程每 tick 调用（Minecraft.tick TAIL）：周期性检查加载是否已收敛，
+     * 收敛则把所有脏块 light-patch 落盘。幂等：非脏块被 {@link #enqueue} 短路。
+     */
+    public static void tickSettleWriteback() {
+        if (++settleTickCounter < SETTLE_SCAN_INTERVAL_TICKS) {
+            return;
+        }
+        settleTickCounter = 0;
+        if (!INSTANCE.initialized.get()) {
+            return;
+        }
+        Minecraft mc = Minecraft.getInstance();
+        ClientLevel level = mc != null ? mc.level : null;
+        if (level == null) {
+            return;
+        }
+        if (ClientChunkHandler.getClientStorage() == null) {
+            return;
+        }
+        // 光照未收敛（队列非空）→ 等下一轮：重算风暴中的光不得落盘（38e297e 教训）。
+        if (!ClientLightBufferQueue.getInstance().isEmpty()) {
+            return;
+        }
+        // 权威加载未完成 → 等下一轮：加载风暴仍在灌 readyQueue。
+        if (ClientCacheLoadQueue.getInstance().getAuthorityLoad() > 0
+                || ClientCacheLoadQueue.getInstance().getReadySize() > 0) {
+            return;
+        }
+        // 安静窗口：距上次权威 apply 需 ≥2.5s，确认风暴已停（队列排空与 apply 间
+        // 可能隔帧，安静窗口防止把「两帧之间的空档」误判为收敛）。
+        if (System.nanoTime() - ClientMainThreadBudget.getLastApplyNano() < SETTLE_QUIET_NS) {
+            return;
+        }
+        if (ClientChunkDirtyTracker.size() == 0) {
+            return;
+        }
+        INSTANCE.processSettledDirty(System.nanoTime() + SETTLE_SCAN_BUDGET_NS);
+    }
+
+    /**
+     * 预算内把脏块 light-patch 入队（主线程；幂等，重复入队同 NBT 无害）。
+     * <p>
+     * 与 {@link #enqueue(LevelChunk, boolean)} 的差异：跳过 section 哈希复算
+     * （~1-2ms/块，主线程大户），直接用磁盘 NBT + 引擎收敛光 patching。方块变化的
+     * 极端场景（随机 tick）会把旧方块 + 新光写盘 —— 客户端 apply 前仍会与服务端
+     * chunkHash 比对，MISMATCH 自动走网络重取自愈，不渲染错误快照。
+     * 元数据（contentHash/sectionHashes）沿用磁盘原值，与 NBT 内容一致。
+     * 无磁盘快照的块（理论仅 OVD 缺口）走全量序列化（含光）并复算哈希。
+     */
+    private void processSettledDirty(long deadlineNs) {
+        ClientLevel level = Minecraft.getInstance().level;
+        if (level == null) {
+            return;
+        }
+        ClientHassiumStorage storage = ClientChunkHandler.getClientStorage();
+        if (storage == null) {
+            return;
+        }
+        ClientChunkCache cache = ((ClientLevelAccessor) level).hassium$getChunkSource();
+        int processed = 0;
+        for (long key : ClientChunkDirtyTracker.snapshot()) {
+            if (System.nanoTime() > deadlineNs) {
+                break;
+            }
+            ChunkPos pos = new ChunkPos(ChunkPos.getX(key), ChunkPos.getZ(key));
+            LevelChunk chunk = (LevelChunk) cache.getChunk(pos.x, pos.z, ChunkStatus.FULL, false);
+            if (chunk == null) {
+                continue;
+            }
+            if (enqueueSettled(chunk, level, storage)) {
+                processed++;
+            }
+        }
+        if (processed > 0) {
+            Constants.LOG.info("Hassium: [CACHE SAVE] Settle writeback: +{} enqueued (dirty={}, queue={})",
+                    processed, ClientChunkDirtyTracker.size(), taskQueue.size());
+        }
+    }
+
+    /**
+     * settle 单块写回：磁盘 NBT 存在 → 引擎光 light-patch；否则全量（含光）。
+     *
+     * @return true=已入队写盘
+     */
+    private boolean enqueueSettled(LevelChunk chunk, ClientLevel level, ClientHassiumStorage storage) {
+        ChunkPos pos = chunk.getPos();
+        if (!ClientChunkDirtyTracker.isDirty(pos)) {
+            return false;
+        }
+        long diskHash = storage.readChunkHash(pos);
+        long[] diskSectionHashes = storage.readSectionHashes(pos);
+        CompoundTag nbt = null;
+        if (diskHash != 0L && diskHash != 1L) {
+            byte[] diskBytes = storage.loadAndDecompress(pos);
+            if (diskBytes != null) {
+                nbt = ChunkDiskCodec.bytesToNbt(diskBytes);
+            }
+        }
+        if (nbt == null) {
+            // 无磁盘快照：全量序列化（levelChunkToNbt 内含引擎光）+ 复算哈希保元数据正确
+            nbt = ChunkDiskCodec.levelChunkToNbt(chunk, level);
+            if (nbt == null) {
+                return false;
+            }
+            long[] sectionHashes;
+            long contentHash;
+            try {
+                Map<Integer, Long> hashesMap = ChunkContentHashUtil.computeSectionHashes(chunk);
+                sectionHashes = ChunkContentHashUtil.sectionHashesToArray(hashesMap);
+                contentHash = ChunkContentHashUtil.combineSectionHashesFromArray(sectionHashes);
+            } catch (Throwable t) {
+                Constants.LOG.debug("Hassium: [CACHE SAVE] Settle hash compute failed for {}", pos, t);
+                sectionHashes = new long[0];
+                contentHash = 0L;
+            }
+            byte[] nbtBytes = ChunkDiskCodec.nbtToBytes(nbt);
+            if (nbtBytes == null) {
+                return false;
+            }
+            taskQueue.offer(new SaveTask(pos, pos.x, pos.z, nbtBytes, contentHash, sectionHashes, true));
+            return true;
+        }
+        // 磁盘快照 + 引擎收敛光（拷贝失败仍保留磁盘 NBT，等断连 dump 兜底）
+        ChunkDiskCodec.copyLightEngineToNbt(nbt, pos, level);
+        byte[] nbtBytes = ChunkDiskCodec.nbtToBytes(nbt);
+        if (nbtBytes == null) {
+            return false;
+        }
+        taskQueue.offer(new SaveTask(pos, pos.x, pos.z, nbtBytes, diskHash, diskSectionHashes, true));
+        return true;
+    }
+
+    /**
      * {@code serializedData} 为 {@link ChunkDiskCodec#nbtToBytes} 产出的 NBT 字节（含 magic）。
      */
     public record SaveTask(

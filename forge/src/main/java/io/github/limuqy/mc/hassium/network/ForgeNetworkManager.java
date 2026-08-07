@@ -289,11 +289,25 @@ public class ForgeNetworkManager implements NetworkManager {
             return;
         }
 
-        CHANNEL = ChannelBuilder
+        SimpleChannel channel = ChannelBuilder
                 .named(ResourceLocationCompat.create(Constants.MOD_ID, "main"))
                 .networkProtocolVersion(PROTOCOL_VERSION_INT)
                 .acceptedVersions(Channel.VersionTest.exact(PROTOCOL_VERSION_INT))
-                .simpleChannel()
+                .simpleChannel();
+
+        // 配置阶段预握手（CONFIGURATION_TO_SERVER）：提前标记 Hassium 客户端，
+        // ServerPlayer 创建时自动提升压缩 → 进服第一圈 sendChunk 全走 Hassium 链。
+        // 必须在 build() 之前注册：Forge 52.1.15 SimpleChannel.build() 会置 built=true，
+        // 之后 messageBuilder 抛 IllegalStateException("SimpleChannel builder is fully built")。
+        // 发送必须走 CHANNEL.send（forge 消息路径 → ForgePayload 包装）：客户端直接发
+        // vanilla ServerboundCustomPayloadPacket 会因 forge 配置阶段 custom_payload 统一
+        // 由 ForgePayload 接管而抛 ClassCastException（1.21.1 实测），见 sendPreHandshake()。
+        channel.messageBuilder(PreHandshakePayload.class, NetworkDirection.CONFIGURATION_TO_SERVER)
+                .codec(PreHandshakePayload.STREAM_CODEC)
+                .consumer(ForgeNetworkManager::onPreHandshake)
+                .add();
+
+        CHANNEL = channel
                 .play()
                     .serverbound()
                         .addMain(HandshakePacket.class, playCodec(HandshakePacket::encode, HandshakePacket::decode),
@@ -338,13 +352,6 @@ public class ForgeNetworkManager implements NetworkManager {
                                 ForgeNetworkManager::onIndexSync)
                 .build();
 
-        // 配置阶段预握手（CONFIGURATION_TO_SERVER）：提前标记 Hassium 客户端，
-        // ServerPlayer 创建时自动提升压缩 → 进服第一圈 sendChunk 全走 Hassium 链
-        CHANNEL.messageBuilder(PreHandshakePayload.class, NetworkDirection.CONFIGURATION_TO_SERVER)
-                .codec(PreHandshakePayload.STREAM_CODEC)
-                .consumer(ForgeNetworkManager::onPreHandshake)
-                .add();
-
         LOGGER.info("Hassium: Registered Forge 50+ ChannelBuilder play channel (6 C2S + 9 S2C)");
     }
 
@@ -356,6 +363,32 @@ public class ForgeNetworkManager implements NetworkManager {
                 (buf, msg) -> encode.accept(msg, buf),
                 buf -> decode.apply(buf)
         );
+    }
+
+    /**
+     * 客户端配置阶段发送预握手（1.20.5+，{@code MixinClientConfigurationPacketListenerImpl}
+     * 在 handleGameProfile TAIL 调用，此时出站协议已切 CONFIGURATION）。
+     * <p>
+     * 必须走 {@code CHANNEL.send}（forge 消息路径 → ForgePayload 包装）：forge 配置阶段
+     * 的 custom_payload 统一由 ForgePayload 接管，直接发 vanilla
+     * {@code ServerboundCustomPayloadPacket} 会抛
+     * {@code PreHandshakePayload cannot be cast to ForgePayload}（1.21.1 实测）。
+     */
+    public void sendPreHandshake(net.minecraft.network.Connection connection) {
+#if MC_VER >= MC_1_20_5
+        if (CHANNEL == null) {
+            LOGGER.warn("Hassium: Forge channel not registered, skip pre-handshake");
+            return;
+        }
+        try {
+            CHANNEL.send(PreHandshakePayload.create(), connection);
+            DebugLogger.info(LogType.NETWORK, "[PRE_HANDSHAKE] Sent pre-handshake (configuration phase)");
+        } catch (Exception e) {
+            DebugLogger.warn(LogType.NETWORK, "[PRE_HANDSHAKE] Failed to send pre-handshake: {}", e.toString());
+        }
+#else
+        // 1.20.1：无配置阶段（forge 1.20.1 无通道 API，登录 query 由 fabric 实现）
+#endif
     }
 
     private static void onPreHandshake(PreHandshakePayload msg, CustomPayloadEvent.Context ctx) {

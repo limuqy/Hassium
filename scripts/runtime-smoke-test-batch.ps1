@@ -5,7 +5,7 @@
 #   .\scripts\runtime-smoke-test-batch.ps1 -Phase I -Versions @("1.20.1","1.20.2")
 #   .\scripts\runtime-smoke-test-batch.ps1 -Phase R                              # 回归轮
 #   .\scripts\runtime-smoke-test-batch.ps1 -Phase I -Loaders fabric,forge,neoforge  # 含 Forge（仅 1.20.1/1.20.6 有 builds_for=forge，其它版本自动 SKIP）
-# 每个版本×加载器 1 个会话（客户端自动两轮：VD=16 + VD=8）
+# 每个版本×加载器 1 个会话（客户端自动两轮：VD=20 + VD=10）
 # CleanWorld 策略（按 loader 独立，fabric/forge/neoforge 各有 run/server）:
 #   - 该 loader 的第一个版本：清理服务端存档
 #   - 后续版本：默认不清理（复用存档加快启动）
@@ -23,7 +23,7 @@ param(
     [int]$BasePort = 25565,
     [int]$ServerReadyTimeoutSec = 300,
     [int]$ClientTimeoutSec = 600,
-    [int]$DelayMs = 6000,
+    [int]$DelayMs = 10000,
     [int]$ReconnectDelayMs = 3000
 )
 
@@ -96,7 +96,7 @@ function Invoke-Session {
         [switch]$CleanWorld,
         [int]$ServerReadyTimeoutSec = 180,
         [int]$ClientTimeoutSec = 300,
-        [int]$DelayMs = 6000,
+        [int]$DelayMs = 10000,
         [int]$ReconnectDelayMs = 3000
     )
     $sessionId = "${Ver}_${Loader}_${Phase}"

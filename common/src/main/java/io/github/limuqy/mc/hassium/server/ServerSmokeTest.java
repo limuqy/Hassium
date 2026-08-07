@@ -27,7 +27,7 @@ import java.util.concurrent.CompletableFuture;
  * <ul>
  *   <li>{@code -Dhassium.serverSmokeTest=true} 开启</li>
  *   <li>{@code -Dhassium.serverSmokeTest.vd1=20} 第一轮视距（默认 20）</li>
- *   <li>{@code -Dhassium.serverSmokeTest.vd2=8} 第二轮视距（默认 8）</li>
+ *   <li>{@code -Dhassium.serverSmokeTest.vd2=10} 第二轮视距（默认 10）</li>
  *   <li>{@code -Dhassium.smokePhases=classic} 阶段选择（默认 classic）；PoC 时期的
  *       {@code dataplane} phase 已在 Task 10b §2.1 退役，多通道数据面已切换到 UDP/KCP
  *       （见 {@link io.github.limuqy.mc.hassium.network.dataplane.DataPlaneUdpServer}），
@@ -47,7 +47,7 @@ public final class ServerSmokeTest {
     private static volatile boolean initialVdSet;
     private static volatile boolean switched;
     private static volatile int vd1 = 20;
-    private static volatile int vd2 = 8;
+    private static volatile int vd2 = 10;
     private static volatile int lastPlayerCount = 0;
     /** R2 方块变化注入已执行（离线窗口一次性） */
     private static volatile boolean blockChangeInjected = false;
@@ -81,7 +81,7 @@ public final class ServerSmokeTest {
             return;
         }
         vd1 = parseInt(System.getProperty("hassium.serverSmokeTest.vd1"), 20);
-        vd2 = parseInt(System.getProperty("hassium.serverSmokeTest.vd2"), 8);
+        vd2 = parseInt(System.getProperty("hassium.serverSmokeTest.vd2"), 10);
         // 阶段选择解析（逗号分隔；classic 缺省）。PoC 期间的 dataplane/all 取值已退役：
         // Task 10b §2.1 把多通道数据面 phase 下线（数据面生产路径切到 UDP/KCP），
         // 保留 classic 视距切换 phase。`dataplane` / `all` 中除 classic 外被忽略并告警。
@@ -180,7 +180,7 @@ public final class ServerSmokeTest {
 
     /**
      * R2 方块变化注入：第一个玩家退出后（离线窗口）在世界出生点上方放置一堵 4 格高的
-     * 石墙（横跨 VD8 全宽）。R2 客户端缓存读回时该区域 chunkHash 不一致 →
+     * 石墙（横跨 VD10 全宽）。R2 客户端缓存读回时该区域 chunkHash 不一致 →
      * section hash 请求 → 服务端回 SectionDeltaS2CPacket → 客户端 merge 后 NBT 中变化
      * section 缺光字段 → 增量分段光照重算（[LIGHT-SEG]）。仅冒烟（hassium.serverSmokeTest）启用。
      */
@@ -196,8 +196,8 @@ public final class ServerSmokeTest {
             }
             BlockState stone = Blocks.STONE.defaultBlockState();
             BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
-            // 墙：x ∈ [-128, 128)（VD8 半径内全部 chunk），z ∈ [2, 4)（避开出生点 z≈0.5），y ∈ [64, 68)
-            for (int x = -128; x < 128; x++) {
+            // 墙：x ∈ [-160, 160)（VD10 半径内全部 chunk），z ∈ [2, 4)（避开出生点 z≈0.5），y ∈ [64, 68)
+            for (int x = -160; x < 160; x++) {
                 for (int z = 2; z < 4; z++) {
                     for (int y = 64; y < 68; y++) {
                         pos.set(x, y, z);
@@ -205,7 +205,7 @@ public final class ServerSmokeTest {
                     }
                 }
             }
-            LOGGER.info("{} injected stone wall x=[-128,128) y=[64,68) z=[2,4) for R2 section-delta light path",
+            LOGGER.info("{} injected stone wall x=[-160,160) y=[64,68) z=[2,4) for R2 section-delta light path",
                     MARKER);
         } catch (Throwable t) {
             LOGGER.error("{} block-change injection failed", MARKER, t);

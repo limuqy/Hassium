@@ -231,6 +231,16 @@ public class MixinClientTick {
         } catch (Exception e) {
             // 忽略
         }
+
+        // 会话中收敛写回：加载风暴停止（光照队列排空 + 权威加载完 + 安静窗口）后，
+        // 周期性把脏块 light-patch 落盘——1.20.1 靠环带卸载写光（R2 命中 54.6%），
+        // 1.21.x 无卸载只靠 dump（命中 24% → 黑块风暴）。放在光照消费/校准之后，
+        // 保证门控看到的是本帧的收敛终态。
+        try {
+            io.github.limuqy.mc.hassium.cache.client.CacheSaveQueue.tickSettleWriteback();
+        } catch (Exception e) {
+            // 忽略
+        }
     }
 
     /**

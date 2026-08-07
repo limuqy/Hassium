@@ -52,4 +52,11 @@ public final class ClientChunkDirtyTracker {
     public static int size() {
         return DIRTY.size();
     }
+
+    /**
+     * 当前脏位置集合的快照（弱一致；settle 写回逐块处理用）。
+     */
+    public static Set<Long> snapshot() {
+        return Set.copyOf(DIRTY);
+    }
 }

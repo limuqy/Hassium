@@ -21,6 +21,9 @@ public final class ClientMainThreadBudget {
 
     private static volatile long joinBoostUntilMs = 0L;
 
+    /** 最近一次权威区块 apply 的时间戳（settle 写回判定：加载风暴停止的安静窗口）。 */
+    private static volatile long lastApplyNano = 0L;
+
     /**
      * 本帧已消耗的缓存区块 apply 名额。
      * <p>
@@ -85,10 +88,18 @@ public final class ClientMainThreadBudget {
      * 预算只是上限：零星 apply 用不满，不会凭空占用帧时间。
      */
     public static void noteChunkApplyActivity() {
+        lastApplyNano = System.nanoTime();
         long until = joinBoostUntilMs;
         if (until > 0L && System.currentTimeMillis() < until) {
             joinBoostUntilMs = System.currentTimeMillis() + RENEW_WINDOW_MS;
         }
+    }
+
+    /**
+     * 最近一次权威区块 apply 的时间（纳秒）；从未 apply 返回 0。
+     */
+    public static long getLastApplyNano() {
+        return lastApplyNano;
     }
 
     /**

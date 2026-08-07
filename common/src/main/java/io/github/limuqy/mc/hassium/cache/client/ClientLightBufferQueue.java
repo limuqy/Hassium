@@ -71,6 +71,16 @@ public final class ClientLightBufferQueue {
         return INSTANCE;
     }
 
+    /**
+     * 全部缓冲（异步 pending / 同步双帧缓冲）是否已排空。
+     * <p>
+     * settle 写回判定用：只有光照队列排空（所有已入队重算都消费完）才认为
+     * 引擎光照处于收敛态，允许把 dirty 块 light-patch 落盘。
+     */
+    public boolean isEmpty() {
+        return pending.isEmpty() && current.isEmpty() && previous.isEmpty();
+    }
+
     private ClientLightBufferQueue() {}
 
     /** 同步模式开关（配置 {@code clientCache.lightSyncMode}；与并行引擎同开时本项优先）。 */

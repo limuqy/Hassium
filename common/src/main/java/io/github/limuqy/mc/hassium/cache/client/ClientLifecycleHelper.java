@@ -69,6 +69,18 @@ public final class ClientLifecycleHelper {
             new java.util.concurrent.atomic.AtomicLong(0);
 
     /**
+     * Netty 线程断连（被动断开/服务器踢）时，cleanupMain 经 {@code mc.execute} 排队、
+     * 由主线程 pollTask 执行——与主线程 tick 链（onDisconnect → clearLevel TAIL 的
+     * {@link #finalizeDisconnectIfTerminal()}）存在帧序竞态：若主线程先完成 finalize
+     * （storage close + dirty clearAll）再 pollTask cleanupMain，dump 全被 dirty gate
+     * 挡掉（实测 fabric R1 断连 R2 光照 0%）。此标志在 cleanupMain 排队期间置位，
+     * 让 clearLevel TAIL 的同步 finalize 让位，等 pollTask 的 cleanupMain 完成、
+     * 由断连方随后排队的 finalizeIfTerminal 收尾（15s 兜底防主线程永不执行）。
+     */
+    private static final java.util.concurrent.atomic.AtomicLong CLEANUP_MAIN_PENDING_NANO =
+            new java.util.concurrent.atomic.AtomicLong(0L);
+
+    /**
      * 断开连接时清理（{@code onDisconnect} HEAD，世界拆除之前）。
      * <p>
      * 轻量清理：拉高预算消费加载队列，排空已有 save 队列，取消后台任务。
@@ -105,10 +117,12 @@ public final class ClientLifecycleHelper {
             // 被动断开（服务器踢/断网）：onDisconnect 在 Netty 线程触发。dump 必须同步等
             // 主线程完成（enqueue 强制主线程序列化），否则异步转移晚于 clearLevel/clearAll 全丢。
             java.util.concurrent.CountDownLatch latch = new java.util.concurrent.CountDownLatch(1);
+            CLEANUP_MAIN_PENDING_NANO.set(System.nanoTime());
             mc.execute(() -> {
                 try {
                     cleanupOnDisconnectMainThread();
                 } finally {
+                    CLEANUP_MAIN_PENDING_NANO.set(0L);
                     latch.countDown();
                 }
             });
@@ -224,6 +238,17 @@ public final class ClientLifecycleHelper {
      * recovery 状态保持 NONE) 时直接执行 finalize。
      */
     public static void finalizeDisconnectIfTerminal() {
+        // Netty 断连路径的 cleanupMain 排队期间让位：主线程 tick 链（onDisconnect →
+        // clearLevel TAIL）的同步 finalize 若抢先执行会关 storage + clearAll dirty，
+        // 使随后 pollTask 的 cleanupMain dump 全部落空（fabric R1 断连 R2 光照 0%）。
+        // 让位后由断连方在 cleanupMain 完成后排队的 finalizeIfTerminal 收尾；
+        // 15s 兜底：主线程 pollTask 异常/卡死时不永久丢失 finalize。
+        long pendingSince = CLEANUP_MAIN_PENDING_NANO.get();
+        if (pendingSince != 0L && System.nanoTime() - pendingSince < 15_000_000_000L) {
+            Constants.LOG.debug("Hassium: finalize deferred — cleanup main pending ({}ms ago)",
+                    (System.nanoTime() - pendingSince) / 1_000_000);
+            return;
+        }
         io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState state =
                 io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState.getInstance();
         if (state.isRecovering()) {

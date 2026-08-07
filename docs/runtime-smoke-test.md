@@ -50,7 +50,7 @@ Hassium 跨版本（1.20.1–1.21.11）× 多加载器（fabric / neoforge）的
 | `-CleanWorld` | 否 | false | 删除服务端存档；batch 按 loader 策略决定（见下） |
 | `-SmokeHost` | 否 | 空 | 客户端连服完整地址（如 `127.0.0.1:25566`）；指定后优先于 `-ServerPort` |
 | `-ServerPort` | 否 | `25565` | 服务端监听端口（并行模式由 batch 脚本分配：fabric=BasePort, neoforge=BasePort+1） |
-| `-DelayMs` | 否 | `6000` | 进世界后等待毫秒，再 dump 统计（ROUND1 窗口=DelayMs×2=12s，ROUND2=DelayMs=6s） |
+| `-DelayMs` | 否 | `10000` | 进世界后等待毫秒，再 dump 统计（ROUND1 窗口=DelayMs×2=20s，ROUND2=DelayMs=10s） |
 | `-ReconnectDelayMs` | 否 | `3000` | 第一轮断开后到重连的毫秒 |
 | `-ServerReadyTimeoutSec` | 否 | `160` | 服务端 `Done!` 出现超时 |
 | `-ClientTimeoutSec` | 否 | `240` | 客户端退出超时（UdpFailover phase 自动至少 300） |
@@ -98,7 +98,7 @@ Hassium 跨版本（1.20.1–1.21.11）× 多加载器（fabric / neoforge）的
 │     │      ↓                                                         │  │
 │     │  DISCONNECTING  →  conn.disconnect + NetworkStats.reset       │  │
 │     │      ↓ (ReconnectDelayMs)                                      │  │
-│     │  等服务端检测玩家数 0→切 VD=8                                  │  │
+│     │  等服务端检测玩家数 0→切 VD=10                                  │  │
 │     │      ↓                                                         │  │
 │     │  WAIT_JOIN_2  →  反射 ConnectScreen.startConnecting            │  │
 │     │      ↓ (DelayMs)                                              │  │
@@ -141,7 +141,7 @@ Hassium 跨版本（1.20.1–1.21.11）× 多加载器（fabric / neoforge）的
 
 - 带宽压缩(Zlib→ZSTD)：56.9%（当前 7.0 MB，原版Zlib 12.3 MB），压缩比 1.76:1
 - 区块加载：~1600 新增 / ~25 MB
-- ROUND2（VD=8，已有缓存）：缓存命中率 >99%，OVD loaded >1100，光照缓存命中率 >95%
+- ROUND2（VD=10，已有缓存）：缓存命中率 >99%，OVD loaded >1100，光照缓存命中率 >95%
 
 ## 日志位置
 
@@ -154,7 +154,7 @@ build/smoke-test/
 │   └── client_<SessionId>_err.log       # 客户端 stderr
 ├── stats/
 │   ├── <SessionId>_round1_VD20.txt      # 提取后的 ROUND1 统计（VD=20 场景）
-│   ├── <SessionId>_round2_VD8.txt       # 提取后的 ROUND2 统计（VD=8 + OVD 场景）
+│   ├── <SessionId>_round2_VD10.txt       # 提取后的 ROUND2 统计（VD=10 + OVD 场景）
 │   └── <SessionId>_server.txt           # 服务端视距切换日志
 ├── results/
 │   ├── result_<SessionId>.json          # 单会话结构化结果
@@ -181,7 +181,7 @@ build/smoke-test/
     "HasFail": false,
     "StatsFiles": [
         "build/smoke-test/stats/1.20.1_fabric_I_round1_VD20.txt",
-        "build/smoke-test/stats/1.20.1_fabric_I_round2_VD8.txt"
+        "build/smoke-test/stats/1.20.1_fabric_I_round2_VD10.txt"
     ]
 }
 ```
@@ -362,7 +362,7 @@ client ──UDP uplink 25571 ────────────────�
 |------|----|----|
 | `hassiumSmokeTest` | `true` | 触发 loom-fabric / loom-neoforge 注入 smoke test JVM 属性 |
 | `hassiumSmokeHost` | `127.0.0.1:25565` | 客户端 quickPlayMultiplayer 目标地址 |
-| `hassiumSmokeDelayMs` | `6000` | 每轮进服后等待毫秒 |
+| `hassiumSmokeDelayMs` | `10000` | 每轮进服后等待毫秒 |
 | `hassiumSmokeReconnectDelayMs` | `3000` | 第一轮断开后到重连的毫秒 |
 
 ### JVM 系统属性（`-D`，由 loom 自动注入）
@@ -370,7 +370,7 @@ client ──UDP uplink 25571 ────────────────�
 | 属性 | 默认 | 作用 |
 |------|------|------|
 | `hassium.smokeTest` | `false` | 客户端启用 `ClientSmokeTest` |
-| `hassium.smokeTest.delayMs` | `6000` | 同上 DelayMs |
+| `hassium.smokeTest.delayMs` | `10000` | 同上 DelayMs |
 | `hassium.smokeTest.reconnectDelayMs` | `3000` | 同上 ReconnectDelayMs |
 | `hassium.smokeTest.joinTimeoutMs` | `120000` | 单轮进服超时 |
 | `hassium.smokeTest.host` | `127.0.0.1:25565` | 重连目标 |
