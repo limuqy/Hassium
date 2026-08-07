@@ -1534,6 +1534,19 @@ public class ServerChunkPushManager {
         }
         sender.sendCompressedChunk(player, compressed);
         NetworkStats.recordChunkSent(VanillaZlibEstimator.estimate(chunkData));
+        // [LIGHT-DATA] 观测锚点：每 512 块打印一次出站光照实测（校准 ESTIMATED_LIGHT_BYTES=16KB；
+        // MixinLightDataWrite 按包实测线格式字节——含握手前原版直发真实 light 与剥光空包，
+        // 均值 ≈ 每块 light 实际线格式字节；与 lightStrip=false 对照可量化剥光收益）
+        if (NetworkStats.isEnabled()
+                && (NetworkStats.getMetrics().getChunksCompressed() & 511) == 0) {
+            long lightBytes = NetworkStats.getLightDataBytesWritten();
+            long lightChunks = NetworkStats.getLightDataWriteCount();
+            Constants.LOG.info(
+                    "[LIGHT-DATA] 实测 outbound light: {} bytes / {} chunks = {}/chunk（估算 {}）",
+                    lightBytes, lightChunks,
+                    lightChunks == 0 ? 0 : lightBytes / lightChunks,
+                    NetworkStats.ESTIMATED_LIGHT_BYTES);
+        }
         DebugLogger.info(LogType.NETWORK, "[PROCESS_QUEUE] Sent chunk {} to player {} ({} -> {} bytes, ratio={})",
                 pos, player.getName().getString(),
                 chunkData.length, compressed.compressedData.length,

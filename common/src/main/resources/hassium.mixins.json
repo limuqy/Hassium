@@ -15,6 +15,7 @@
         "MixinChunkHolder",
         "MixinServerPlayer",
         "MixinPlayerChunkSender",
+        "MixinLightDataWrite",
         "LightUpdatePacketAccessor"
     ],
     "client": [

@@ -69,6 +69,9 @@ public class HassiumMetricsImpl implements HassiumMetrics {
     private final AtomicLong lightRecomputeBackgroundTimeNs = new AtomicLong(0);
     private final AtomicLong lightDeltaReceivedCount = new AtomicLong(0);
     private final AtomicLong lightVerifyMismatchCount = new AtomicLong(0);
+    /** 服务端出站 chunk 包光照数据线格式字节实测（MixinLightDataWrite 累计；剥光时接近 0）。 */
+    private final AtomicLong lightDataBytesWritten = new AtomicLong(0);
+    private final AtomicLong lightDataWriteCount = new AtomicLong(0);
 
     // 数据面分流指标（PoC 多通道路由统计；口径 = 服务端发出帧 payload 等价字节数）
     private final AtomicLong bulkFramesPrimary = new AtomicLong(0);
@@ -315,6 +318,28 @@ public class HassiumMetricsImpl implements HassiumMetrics {
         return lightDeltaReceivedCount.get();
     }
 
+    /**
+     * 记录服务端出站 chunk 包光照数据线格式字节（MixinLightDataWrite 调用）。
+     *
+     * @param bytes LightData.write 前后 writerIndex 差值
+     */
+    public void recordLightDataBytes(int bytes) {
+        if (bytes > 0) {
+            lightDataBytesWritten.addAndGet(bytes);
+            lightDataWriteCount.incrementAndGet();
+        }
+    }
+
+    /** 出站光照数据实测累计字节数。 */
+    public long getLightDataBytesWritten() {
+        return lightDataBytesWritten.get();
+    }
+
+    /** 出站光照数据实测写入次数（= 携带 LightData 的 chunk 包数）。 */
+    public long getLightDataWriteCount() {
+        return lightDataWriteCount.get();
+    }
+
     @Override
     public long getLightVerifyMismatchCount() {
         return lightVerifyMismatchCount.get();
@@ -411,6 +436,8 @@ public class HassiumMetricsImpl implements HassiumMetrics {
         lightRecomputeBackgroundTimeNs.set(0);
         lightDeltaReceivedCount.set(0);
         lightVerifyMismatchCount.set(0);
+        lightDataBytesWritten.set(0);
+        lightDataWriteCount.set(0);
         storageErrors.set(0);
         networkErrors.set(0);
         compressionErrors.set(0);
@@ -879,6 +906,7 @@ public class HassiumMetricsImpl implements HassiumMetrics {
                         "  区块: 压缩 %d, 解压 %d\n" +
                         "光照:\n" +
                         "  重算耗时: %.1f ms, 后台重算: %.1f ms, 验算差异: %d\n" +
+                        "  出站 light 实测: %s（%d 块，平均 %s/块，估算 16KB/块）\n" +
                         "数据面分流:\n" +
                         "  Primary: %d 帧 (%s)\n" +
                         "  Data: %d 帧 (%s)\n" +
@@ -908,6 +936,8 @@ public class HassiumMetricsImpl implements HassiumMetrics {
                 chunksCompressed.get(), chunksDecompressed.get(),
                 lightRecomputeTimeNs.get() / 1_000_000.0,
                 lightRecomputeBackgroundTimeNs.get() / 1_000_000.0, lightVerifyMismatchCount.get(),
+                MetricsTextFormatter.formatBytes(lightDataBytesWritten.get()), lightDataWriteCount.get(),
+                MetricsTextFormatter.formatBytes(lightDataWriteCount.get() == 0 ? 0 : lightDataBytesWritten.get() / lightDataWriteCount.get()),
                 bulkFramesPrimary.get(), MetricsTextFormatter.formatBytes(bulkBytesPrimary.get()),
                 bulkFramesData.get(), MetricsTextFormatter.formatBytes(bulkBytesData.get()),
                 MetricsTextFormatter.formatPercent(getBulkDataSharePercent()),

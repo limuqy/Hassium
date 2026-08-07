@@ -402,6 +402,32 @@ public class NetworkStats {
         metrics.recordLightVerifyMismatch(count);
     }
 
+    /**
+     * 记录服务端出站 chunk 包光照数据线格式字节实测
+     * （{@code ClientboundLightUpdatePacketData.write} 前后 writerIndex 差值）。
+     * 仅服务端 encode 路径调用；用于校准 {@link #ESTIMATED_LIGHT_BYTES} 估算。
+     *
+     * @param bytes LightData.write 实际写出的字节数（剥光时空 BitSet 接近 0）
+     */
+    public static void recordLightDataBytes(int bytes) {
+        if (!enabled) return;
+        metrics.recordLightDataBytes(bytes);
+    }
+
+    /**
+     * 服务端出站光照数据实测累计字节数。
+     */
+    public static long getLightDataBytesWritten() {
+        return enabled ? metrics.getLightDataBytesWritten() : 0L;
+    }
+
+    /**
+     * 服务端出站光照数据实测写入次数（= 携带 LightData 的 chunk 包数）。
+     */
+    public static long getLightDataWriteCount() {
+        return enabled ? metrics.getLightDataWriteCount() : 0L;
+    }
+
     // ===== 便捷查询 =====
 
     /**
