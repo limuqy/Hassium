@@ -392,7 +392,8 @@ public final class FabricTomlConfigIO {
                 getBool(cfg, "network.enabled", d.enabled()),
                 getBool(cfg, "network.metricsEnabled", d.metricsEnabled()),
                 getBool(cfg, "network.metricsAutoReset", d.metricsAutoReset()),
-                getBool(cfg, "network.dataPlane.recoveryFreeze", d.recoveryFreeze())
+                getBool(cfg, "network.dataPlane.recoveryFreeze", d.recoveryFreeze()),
+                getBool(cfg, "network.seedGen.enabled", d.seedGenEnabled())
         );
     }
 
@@ -402,6 +403,8 @@ public final class FabricTomlConfigIO {
         set(cfg, "network.metricsAutoReset", n.metricsAutoReset(), "登出服务器时自动重置指标计数（默认 true）");
         set(cfg, "network.dataPlane.recoveryFreeze", n.recoveryFreeze(),
                 "主控热切恢复期画面定格（默认 true；false=无感切换：不显示切换 UI，世界继续运行，恢复后位置/方块回退）");
+        set(cfg, "network.seedGen.enabled", n.seedGenEnabled(),
+                "是否启用 SeedGen（本地生成 pristine 区块；需双端同版本，默认关）");
     }
 
     // --- SERVER ---
@@ -444,6 +447,7 @@ public final class FabricTomlConfigIO {
                 getInt(cfg, "network.minPushThreads", d.minPushThreads()),
                 getInt(cfg, "network.maxPushThreads", d.maxPushThreads()),
                 getBool(cfg, "network.lightStrip", d.lightStrip()),
+                getBool(cfg, "network.seedGen.enabled", d.seedGenEnabled()),
                 readReachableEndpoints(cfg, "network.controlReachableEndpoints", "network.controlReachableEndpoints"),
                 readDataPlane(cfg, d.dataPlane())
         );
@@ -470,6 +474,8 @@ public final class FabricTomlConfigIO {
         set(cfg, "network.minPushThreads", n.minPushThreads(), "动态池最小线程数（仅服务端）");
         set(cfg, "network.maxPushThreads", n.maxPushThreads(), "动态池最大线程数（仅服务端）");
         set(cfg, "network.lightStrip", n.lightStrip(), "是否启用光照剥离");
+        set(cfg, "network.seedGen.enabled", n.seedGenEnabled(),
+                "是否启用 SeedGen（服务端对 pristine 区块发 SeedRef 替代区块数据；客户端本地生成，hash 校验兜底；需双端同版本，默认关）");
         writeReachableEndpoints(cfg, "network.controlReachableEndpoints", n.controlReachableEndpoints(),
                 "TCP 重连可达端点；仅用于客户端重连候选");
         writeDataPlane(cfg, n.dataPlane());

@@ -19,7 +19,7 @@ class ConfigSnapshotAdapterClientScopeTest {
 
     @Test
     void clientNetworkSettingsRoundTripThroughValues() {
-        HassiumConfig.ClientNetworkConfig clientNet = new HassiumConfig.ClientNetworkConfig(false, true, true, false);
+        HassiumConfig.ClientNetworkConfig clientNet = new HassiumConfig.ClientNetworkConfig(false, true, true, false, false);
         HassiumConfig original = HassiumConfig.DEFAULT.withClientNetwork(clientNet);
 
         ConfigValues values = ConfigSnapshotAdapter.toValues(original);

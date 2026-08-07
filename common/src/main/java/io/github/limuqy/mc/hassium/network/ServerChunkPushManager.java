@@ -107,6 +107,37 @@ public class ServerChunkPushManager {
      */
     private final Map<UUID, PlayerBloomLayers> bloomLayers = new ConcurrentHashMap<>();
 
+    /**
+     * 每玩家 SeedGen 能力（握手 C2S 上报 seedGenSupported；默认 false）。
+     */
+    private final Map<UUID, Boolean> playerSeedGenSupported = new ConcurrentHashMap<>();
+
+    /**
+     * 握手 C2S 能力上报后调用：记录玩家是否支持 SeedGen。
+     */
+    public void setPlayerSeedGenSupported(UUID playerId, boolean supported) {
+        if (supported) {
+            playerSeedGenSupported.put(playerId, Boolean.TRUE);
+        } else {
+            playerSeedGenSupported.remove(playerId);
+        }
+    }
+
+    /**
+     * 该玩家 + 该区块是否走 SeedGen（SeedRef 替代区块数据）。
+     * <p>
+     * gate：客户端上报能力 && 服务端配置开启 && 区块 pristine（本会话生成且未修改）。
+     */
+    public boolean isSeedGenFor(UUID playerId, ChunkPos pos) {
+        if (!HassiumConfigService.getInstance().isSeedGenEnabled()) {
+            return false;
+        }
+        if (!Boolean.TRUE.equals(playerSeedGenSupported.get(playerId))) {
+            return false;
+        }
+        return PristineRegistry.isPristine(pos);
+    }
+
     /** Bloom 层数上限：超出丢弃最旧层（保守 miss → 直推，正确性不受影响，仅多花一次直推流量） */
     private static final int BLOOM_MAX_LAYERS = 64;
 
@@ -285,6 +316,8 @@ public class ServerChunkPushManager {
         final ServerLevel firstLevel = PlayerCompat.getServerLevel(players.get(0));
         final int sectionCount = firstLevel.getSectionsCount();
         final RegistryAccess registryAccess = firstLevel.registryAccess();
+        // 主线程登记 pristine（生成完成 → 首次推送时机；此后 setBlockState 修改即移除）
+        PristineRegistry.markIfPristine(firstLevel, pos);
         // 统一剥光：broadcast 传入的是原版带光包，按配置重建空 mask 剥光包
         // （主线程调用；1.21.2+ ThreadingDetector 允许主线程读 chunk）
         long tBuild = System.nanoTime();
@@ -297,6 +330,10 @@ public class ServerChunkPushManager {
                 byte[] encoded = encodeChunkPacket(strippedPacket, registryAccess);
                 if (encoded != null) {
                     for (ServerPlayer player : players) {
+                        // SeedGen 玩家：不发数据任务（本地生成），只发 SeedRef
+                        if (isSeedGenFor(player.getUUID(), pos)) {
+                            continue;
+                        }
                         putPreparedChunkPacket(player.getUUID(), pos, encoded);
                     }
                 }
@@ -306,13 +343,14 @@ public class ServerChunkPushManager {
                         strippedPacket.getChunkData(), sectionCount, registryAccess);
                 diag(D_HASH, System.nanoTime() - tHash);
                 long chunkHash = ChunkContentHashUtil.combineSectionHashes(sectionHashes);
+                long[] sectionHashArray = ChunkContentHashUtil.sectionHashesToArray(sectionHashes);
                 // 从 sectionHashes 推导 bitmap：有 hash 的 section = 有方块数据
                 int sectionBitmap = 0;
                 for (int idx : sectionHashes.keySet()) {
                     sectionBitmap |= (1 << idx);
                 }
 
-                sendChunkHashAndMaybePush(players, pos, chunkHash, sectionBitmap, dimension);
+                sendChunkHashAndMaybePush(players, pos, chunkHash, sectionHashArray, sectionBitmap, dimension);
             } catch (Exception e) {
                 Constants.LOG.error("[ASYNC_METADATA] Failed to compute chunkHash for chunk {}", pos, e);
             }
@@ -333,6 +371,11 @@ public class ServerChunkPushManager {
     public void submitMetadataTask(ServerPlayer player, ChunkPos pos,
                                    Packet<?> chunkPacket, String dimension) {
         ensureInitialized();
+        // 主线程登记 pristine（trackChunk 时机 = 生成完成 → 首次推送）
+        ServerLevel playerLevel0 = PlayerCompat.getServerLevel(player);
+        if (playerLevel0 != null) {
+            PristineRegistry.markIfPristine(playerLevel0, pos);
+        }
         final Packet<?> effectivePacket;
         if (chunkPacket instanceof ClientboundLevelChunkWithLightPacket lightPacket) {
             // 统一剥光：trackChunk 传入的是原版带光包，按配置重建空 mask 剥光包
@@ -350,9 +393,12 @@ public class ServerChunkPushManager {
         pushPool.submit(() -> {
             try {
                 if (effectivePacket instanceof ClientboundLevelChunkWithLightPacket lightPacket) {
-                    byte[] encoded = encodeChunkPacket(lightPacket, registryAccess);
-                    if (encoded != null) {
-                        putPreparedChunkPacket(player.getUUID(), pos, encoded);
+                    // SeedGen 玩家：不发数据任务（本地生成），只发 SeedRef
+                    if (!isSeedGenFor(player.getUUID(), pos)) {
+                        byte[] encoded = encodeChunkPacket(lightPacket, registryAccess);
+                        if (encoded != null) {
+                            putPreparedChunkPacket(player.getUUID(), pos, encoded);
+                        }
                     }
                 }
                 Map<Integer, Long> sectionHashes;
@@ -377,9 +423,10 @@ public class ServerChunkPushManager {
                 }
 
                 long chunkHash = ChunkContentHashUtil.combineSectionHashes(sectionHashes);
+                long[] sectionHashArray = ChunkContentHashUtil.sectionHashesToArray(sectionHashes);
 
                 if (player.isAlive() && !player.hasDisconnected()) {
-                    sendChunkHashAndMaybePush(List.of(player), pos, chunkHash, sectionBitmap, dimension);
+                    sendChunkHashAndMaybePush(List.of(player), pos, chunkHash, sectionHashArray, sectionBitmap, dimension);
                 }
             } catch (Exception e) {
                 Constants.LOG.error("[ASYNC_METADATA] Failed to compute chunkHash for chunk {} (player={})",
@@ -418,9 +465,14 @@ public class ServerChunkPushManager {
             Constants.LOG.warn("[ASYNC_METADATA] Failed to build chunk packet for {}", pos);
             return;
         }
+        // 主线程登记 pristine（resync 时区块可能早已生成且未被修改——登记语义：会话内生成完成
+        // 且未修改；已是 FULL 的旧块 inhabitedTime==0 同样满足候选，登记无副作用）
+        PristineRegistry.markIfPristine(level, pos);
         // 同步缓存已构建的 packet：encode 留给 drain 消费方后台执行，主线程不再付线格式编码成本；
         // packet 为纯数据（构造后不碰 chunk），后台 hash/encode 并发读安全。
-        putPreparedChunkPacket(player.getUUID(), pos, packet);
+        if (!isSeedGenFor(player.getUUID(), pos)) {
+            putPreparedChunkPacket(player.getUUID(), pos, packet);
+        }
 
         pushPool.submit(() -> {
             try {
@@ -433,9 +485,10 @@ public class ServerChunkPushManager {
                     sectionBitmap |= (1 << idx);
                 }
                 long chunkHash = ChunkContentHashUtil.combineSectionHashes(sectionHashes);
+                long[] sectionHashArray = ChunkContentHashUtil.sectionHashesToArray(sectionHashes);
 
                 if (player.isAlive() && !player.hasDisconnected()) {
-                    sendChunkHashAndMaybePush(List.of(player), pos, chunkHash, sectionBitmap, dimension);
+                    sendChunkHashAndMaybePush(List.of(player), pos, chunkHash, sectionHashArray, sectionBitmap, dimension);
                 }
             } catch (Throwable e) {
                 Constants.LOG.error("[ASYNC_METADATA] Failed to compute chunkHash for chunk {} (player={})",
@@ -484,14 +537,19 @@ public class ServerChunkPushManager {
     /**
      * 统一 hash 发送入口：per-player 按 Bloom 分流。
      * <p>
-     * Bloom miss（确定无缓存）→ hash 立即直发 + 主动入队直推（hash 先行，客户端可暂存
-     * contentHash；直发与数据同受 drain 的 maxChunksPerTick 节奏约束，hash 不晚于数据）。
+     * SeedGen 玩家（能力 + 配置 + pristine）→ 只发 SeedRef（本地生成，零区块数据流量）；
+     * 其余玩家按 Bloom 分流：miss（确定无缓存）→ hash 立即直发 + 主动入队直推（hash 先行，
+     * 客户端可暂存 contentHash；直发与数据同受 drain 的 maxChunksPerTick 节奏约束，hash 不晚于数据）；
      * hit/未就绪 → 入批次，由每 tick 限流发送（防客户端缓存比对风暴）。
      */
     private void sendChunkHashAndMaybePush(List<ServerPlayer> players, ChunkPos pos,
-                                           long chunkHash, int sectionBitmap, String dimension) {
+                                           long chunkHash, long[] sectionHashes, int sectionBitmap, String dimension) {
         for (ServerPlayer player : players) {
             if (!player.isAlive() || player.hasDisconnected()) {
+                continue;
+            }
+            if (isSeedGenFor(player.getUUID(), pos)) {
+                sendSeedRef(player, pos, chunkHash, sectionHashes);
                 continue;
             }
             if (shouldPushFull(player, pos, dimension)) {
@@ -499,6 +557,33 @@ public class ServerChunkPushManager {
                 enqueueDirectPush(player, dimension, List.of(pos));
             } else {
                 sendChunkHash(List.of(player), pos, chunkHash, sectionBitmap, dimension);
+            }
+        }
+    }
+
+    /**
+     * SeedRef 直发（SeedGen 玩家）：替代 chunkHash+区块数据，几十字节引用。
+     */
+    private void sendSeedRef(ServerPlayer player, ChunkPos pos, long chunkHash, long[] sectionHashes) {
+        SeedRefS2CPacket packet = new SeedRefS2CPacket(pos.x, pos.z, chunkHash,
+                sectionHashes != null ? sectionHashes : new long[0]);
+        FriendlyByteBuf buf = null;
+        boolean sent = false;
+        try {
+            buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
+            packet.encode(buf);
+            int bytes = buf.readableBytes();
+            Services.NETWORK_MANAGER.sendSeedRef(player, buf);
+            sent = true;
+            NetworkStats.recordMetadataSent(bytes);
+            Constants.LOG.info("[SEED_REF] Sent ({}, {}) hash={} bytes={} to {}", pos.x, pos.z,
+                    Long.toHexString(chunkHash), bytes, player.getName().getString());
+        } catch (Exception e) {
+            Constants.LOG.error("[SEED_REF] Failed to send SeedRef to player {}",
+                    player.getName().getString(), e);
+        } finally {
+            if (!sent && buf != null) {
+                buf.release();
             }
         }
     }

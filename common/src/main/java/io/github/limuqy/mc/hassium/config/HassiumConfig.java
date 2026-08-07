@@ -129,9 +129,10 @@ public record HassiumConfig(
             boolean enabled,
             boolean metricsEnabled,
             boolean metricsAutoReset,
-            boolean recoveryFreeze
+            boolean recoveryFreeze,
+            boolean seedGenEnabled
     ) {
-        public static final ClientNetworkConfig DEFAULT = new ClientNetworkConfig(true, false, true, true);
+        public static final ClientNetworkConfig DEFAULT = new ClientNetworkConfig(true, false, true, true, false);
     }
 
     /**
@@ -206,6 +207,8 @@ public record HassiumConfig(
             int maxPushThreads,
             // === 光照剥离（服务端控制是否发包时剥离 LightData）===
             boolean lightStrip,
+            // === SeedGen（服务端对 pristine 区块发 SeedRef 替代区块数据）===
+            boolean seedGenEnabled,
             // === 控制面重连与 UDP data plane ===
             List<ReachableEndpoint> controlReachableEndpoints,
             DataPlaneConfig dataPlane
@@ -232,7 +235,7 @@ public record HassiumConfig(
                     enablePacketAggregation, aggregationMinBatchSize, aggregationMaxWaitTimeMs,
                     aggregationMaxSize, enableCompactHeader, compressionBlacklist, metricsEnabled,
                     maxChunksPerTick, serverChunkPushThreads, dynamicThreadPoolEnabled,
-                    minPushThreads, maxPushThreads, lightStrip, List.of(), DEFAULT_DATA_PLANE);
+                    minPushThreads, maxPushThreads, lightStrip, false, List.of(), DEFAULT_DATA_PLANE);
         }
 
         // 127.0.0.1 仅供本地开发；公网部署必须配置客户端实际可达的地址。
@@ -279,6 +282,7 @@ public record HassiumConfig(
                 2,                 // minPushThreads
                 8,                 // maxPushThreads
                 true,              // lightStrip
+                false,             // seedGenEnabled（默认关；Phase 3 hash 闭环完成后才允许开）
                 List.of(),         // controlReachableEndpoints
                 DEFAULT_DATA_PLANE
         );

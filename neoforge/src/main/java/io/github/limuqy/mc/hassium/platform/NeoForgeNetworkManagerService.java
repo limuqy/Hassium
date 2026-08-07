@@ -32,6 +32,11 @@ public class NeoForgeNetworkManagerService implements INetworkManagerService {
     }
 
     @Override
+    public void sendSeedRef(ServerPlayer player, FriendlyByteBuf buf) {
+        networkManager.sendSeedRef(player, buf);
+    }
+
+    @Override
     public void sendSectionHashRequest(FriendlyByteBuf buf) {
         networkManager.sendSectionHashRequest(buf);
     }

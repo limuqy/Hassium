@@ -103,6 +103,8 @@
     "hassium.configuration.network.metricsEnabled.tooltip":  "流量、缓存命中等。默认 true。",
     "hassium.configuration.network.metricsAutoReset":  "自动重置指标",
     "hassium.configuration.network.metricsAutoReset.tooltip":  "登出服务器时自动清零本次会话的指标计数。默认 true。",
+    "hassium.configuration.network.seedGen.enabled":  "SeedGen（本地区块再生）",
+    "hassium.configuration.network.seedGen.enabled.tooltip":  "服务端：对 pristine（本会话生成且未修改）区块只发 SeedRef 引用，客户端本地复算（hash 校验兜底）。客户端：启用本地生成。需双端同版本。默认 false。",
     "hassium.configuration.network.dataPlane.recoveryFreeze":  "主控切换时定格画面",
     "hassium.configuration.network.dataPlane.recoveryFreeze.tooltip":  "主控恢复期间暂停世界 tick 并显示「正在切换主控…」浮层。设 false 启用无感切换：世界继续运行、无任何切换 UI，恢复后位置/方块回退（体感像突然延迟变高卡了一下）。默认 true。",
     "hassium.configuration.network.dynamicThreadPoolEnabled":  "动态推送线程池",

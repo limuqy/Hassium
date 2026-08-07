@@ -38,7 +38,8 @@ public final class ConfigSnapshotAdapter {
         values = values.with(ConfigSchema.CLIENT_NETWORK_ENABLED, clientNet.enabled())
                 .with(ConfigSchema.CLIENT_NETWORK_METRICS_ENABLED, clientNet.metricsEnabled())
                 .with(ConfigSchema.CLIENT_NETWORK_METRICS_AUTO_RESET, clientNet.metricsAutoReset())
-                .with(ConfigSchema.DATAPLANE_RECOVERY_FREEZE, clientNet.recoveryFreeze());
+                .with(ConfigSchema.DATAPLANE_RECOVERY_FREEZE, clientNet.recoveryFreeze())
+                .with(ConfigSchema.CLIENT_SEED_GEN_ENABLED, clientNet.seedGenEnabled());
 
         HassiumConfig.DebugConfig debug = config.debug();
         values = values.with(ConfigSchema.CLIENT_DEBUG_METADATA, debug.metadataLogging())
@@ -74,6 +75,7 @@ public final class ConfigSnapshotAdapter {
                 .with(ConfigSchema.NETWORK_MIN_PUSH_THREADS, network.minPushThreads())
                 .with(ConfigSchema.NETWORK_MAX_PUSH_THREADS, network.maxPushThreads())
                 .with(ConfigSchema.NETWORK_LIGHT_STRIP, network.lightStrip())
+                .with(ConfigSchema.SERVER_SEED_GEN_ENABLED, network.seedGenEnabled())
                 .with(ConfigSchema.NETWORK_CONTROL_ENDPOINTS, network.controlReachableEndpoints().stream().map(DataPlaneEndpointConfig::encodeReachable).toList())
                 .with(ConfigSchema.DATAPLANE_ENABLED, network.dataPlane().enabled())
                 .with(ConfigSchema.DATAPLANE_UDP_LISTENERS, network.dataPlane().udpListeners().stream().map(DataPlaneEndpointConfig::encodeListener).toList())
@@ -139,7 +141,8 @@ public final class ConfigSnapshotAdapter {
                 SetCopy.copy(values.get(ConfigSchema.NETWORK_COMPRESSION_BLACKLIST)), values.get(ConfigSchema.SERVER_NETWORK_METRICS_ENABLED),
                 values.get(ConfigSchema.NETWORK_MAX_CHUNKS_PER_TICK), values.get(ConfigSchema.NETWORK_SERVER_PUSH_THREADS),
                 values.get(ConfigSchema.NETWORK_DYNAMIC_THREADS), values.get(ConfigSchema.NETWORK_MIN_PUSH_THREADS),
-                values.get(ConfigSchema.NETWORK_MAX_PUSH_THREADS), values.get(ConfigSchema.NETWORK_LIGHT_STRIP), controlEndpoints, dataPlane);
+                values.get(ConfigSchema.NETWORK_MAX_PUSH_THREADS), values.get(ConfigSchema.NETWORK_LIGHT_STRIP),
+                values.get(ConfigSchema.SERVER_SEED_GEN_ENABLED), controlEndpoints, dataPlane);
         HassiumConfig.CompatConfig compat = new HassiumConfig.CompatConfig(
                 values.get(ConfigSchema.COMPAT_REQUIRE_CLIENT_MOD), values.get(ConfigSchema.COMPAT_AUTO_DOWNGRADE));
         HassiumConfig.DebugConfig debug = new HassiumConfig.DebugConfig(
@@ -157,7 +160,8 @@ public final class ConfigSnapshotAdapter {
                 cache, new HassiumConfig.ClientNetworkConfig(
                         values.get(ConfigSchema.CLIENT_NETWORK_ENABLED), values.get(ConfigSchema.CLIENT_NETWORK_METRICS_ENABLED),
                         values.get(ConfigSchema.CLIENT_NETWORK_METRICS_AUTO_RESET),
-                        values.get(ConfigSchema.DATAPLANE_RECOVERY_FREEZE)),
+                        values.get(ConfigSchema.DATAPLANE_RECOVERY_FREEZE),
+                        values.get(ConfigSchema.CLIENT_SEED_GEN_ENABLED)),
                 network, compat, debug);
     }
     private static boolean debugValue(ConfigValues values, boolean physicalClient,

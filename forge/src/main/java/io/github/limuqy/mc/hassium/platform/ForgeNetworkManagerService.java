@@ -23,6 +23,11 @@ public class ForgeNetworkManagerService implements INetworkManagerService {
     }
 
     @Override
+    public void sendSeedRef(ServerPlayer player, FriendlyByteBuf buf) {
+        NETWORK_MANAGER.sendSeedRef(player, buf);
+    }
+
+    @Override
     public void sendSectionHashRequest(FriendlyByteBuf buf) {
         NETWORK_MANAGER.sendSectionHashRequest(buf);
     }

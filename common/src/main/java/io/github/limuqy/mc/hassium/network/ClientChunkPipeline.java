@@ -40,6 +40,11 @@ public final class ClientChunkPipeline {
     /** 清理间隔（5秒） */
     private static final long PENDING_CLEANUP_INTERVAL_MS = 5_000;
 
+    // === SeedGen 握手信息（服务端 S2C 下发；断连清空） ===
+    private volatile long serverSeed = 0L;
+    private volatile byte[] serverLevelStemNbt = null;
+    private volatile boolean serverSeedGenEnabled = false;
+
     private record PendingHash(long hash, long timestamp) {}
     private record PendingSectionHashes(long[] hashes, long timestamp) {}
 
@@ -100,7 +105,37 @@ public final class ClientChunkPipeline {
         clientStorage = null;
         pendingContentHashes.clear();
         pendingSectionHashes.clear();
+        serverSeed = 0L;
+        serverLevelStemNbt = null;
+        serverSeedGenEnabled = false;
         ClientChunkDirtyTracker.clearAll();
+    }
+
+    /**
+     * 握手 S2C 下发 SeedGen 信息后调用（客户端）。
+     */
+    public void setServerSeedInfo(long seed, byte[] levelStemNbt, boolean enabled) {
+        this.serverSeed = seed;
+        this.serverLevelStemNbt = levelStemNbt;
+        this.serverSeedGenEnabled = enabled;
+        if (enabled) {
+            Constants.LOG.info("Hassium: Server SeedGen enabled (seed={})", seed);
+        }
+    }
+
+    /** 服务端主世界 seed（握手下发；未下发为 0）。 */
+    public long getServerSeed() {
+        return serverSeed;
+    }
+
+    /** 服务端主世界 LevelStem NBT（握手下发；未下发为 null）。 */
+    public byte[] getServerLevelStemNbt() {
+        return serverLevelStemNbt;
+    }
+
+    /** 服务端是否启用 SeedGen（握手下发）。 */
+    public boolean isServerSeedGenEnabled() {
+        return serverSeedGenEnabled;
     }
 
     /**

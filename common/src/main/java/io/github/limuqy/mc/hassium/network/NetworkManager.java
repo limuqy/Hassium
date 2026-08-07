@@ -35,6 +35,11 @@ public interface NetworkManager {
     void sendChunkHashPacket(ServerPlayer player, FriendlyByteBuf buf);
 
     /**
+     * 发送 SeedRef（SeedGen 区块引用）到客户端（服务端调用）
+     */
+    void sendSeedRef(ServerPlayer player, FriendlyByteBuf buf);
+
+    /**
      * 发送 section 哈希请求到服务端（阶段二，客户端调用）
      */
     void sendSectionHashRequest(FriendlyByteBuf buf);

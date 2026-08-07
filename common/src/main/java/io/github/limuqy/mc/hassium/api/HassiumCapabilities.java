@@ -13,7 +13,8 @@ public record HassiumCapabilities(
         boolean chunkRevisionSupported,
         boolean scheme127Supported,
         boolean globalPacketCompressionSupported,
-        boolean compactHeaderSupported
+        boolean compactHeaderSupported,
+        boolean seedGenSupported
 ) {
     /**
      * 当前协议版本
@@ -35,7 +36,8 @@ public record HassiumCapabilities(
                 true,
                 false, // 1.20.1 暂不支持 scheme 127
                 true,  // 支持全局包压缩
-                true   // 支持紧凑包头
+                true,  // 支持紧凑包头
+                false  // SeedGen 能力由握手发送方按配置/上下文置位
         );
     }
 
@@ -54,7 +56,8 @@ public record HassiumCapabilities(
                 true,
                 false,
                 true,  // 支持全局包压缩
-                true   // 支持紧凑包头
+                true,  // 支持紧凑包头
+                false  // 服务端默认不声明 SeedGen（由配置开启）
         );
     }
 }

@@ -292,6 +292,19 @@ public class NeoForgeNetworkManager implements NetworkManager {
         }
     }
 
+    public record SeedRefWrapper(byte[] data) {
+        public void encode(FriendlyByteBuf buf) {
+            buf.writeVarInt(data.length);
+            buf.writeBytes(data);
+        }
+        public static SeedRefWrapper decode(FriendlyByteBuf buf) {
+            int length = buf.readVarInt();
+            byte[] data = new byte[length];
+            buf.readBytes(data);
+            return new SeedRefWrapper(data);
+        }
+    }
+
     public record SectionDeltaWrapper(byte[] data) {
         public void encode(FriendlyByteBuf buf) {
             buf.writeVarInt(data.length);
@@ -455,7 +468,8 @@ public class NeoForgeNetworkManager implements NetworkManager {
             boolean compactHeaderSupported,
             io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail.C2STail dataplaneCapabilities,
             double playerX,
-            double playerZ
+            double playerZ,
+            boolean seedGenSupported
     ) {
         public HandshakeWrapper(int protocolVersion, String modVersion, String[] supportedAlgorithms,
                                 boolean clientCacheSupported, boolean chunkRevisionSupported,
@@ -464,7 +478,7 @@ public class NeoForgeNetworkManager implements NetworkManager {
             this(protocolVersion, modVersion, supportedAlgorithms, clientCacheSupported, chunkRevisionSupported,
                     scheme127Supported, globalPacketCompressionSupported, compactHeaderSupported,
                     new io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail.C2STail(false, false),
-                    0.0, 0.0);
+                    0.0, 0.0, false);
         }
 
         public void encode(FriendlyByteBuf buf) {
@@ -482,6 +496,7 @@ public class NeoForgeNetworkManager implements NetworkManager {
             io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail.writeC2S(buf, dataplaneCapabilities);
             buf.writeDouble(playerX);
             buf.writeDouble(playerZ);
+            buf.writeBoolean(seedGenSupported);
         }
 
         public static HandshakeWrapper decode(FriendlyByteBuf buf) {
@@ -509,8 +524,16 @@ public class NeoForgeNetworkManager implements NetworkManager {
                 } catch (Exception ignored) {
                 }
             }
+            // SeedGen 能力（append-only；旧客户端无此字段）
+            boolean seedGenSupported = false;
+            if (buf.isReadable()) {
+                try {
+                    seedGenSupported = buf.readBoolean();
+                } catch (Exception ignored) {
+                }
+            }
             return new HandshakeWrapper(protocolVersion, modVersion, algorithms, clientCache, chunkRevision,
-                    scheme127, globalPacketCompression, compactHeader, tail, playerX, playerZ);
+                    scheme127, globalPacketCompression, compactHeader, tail, playerX, playerZ, seedGenSupported);
         }
     }
 
@@ -519,15 +542,21 @@ public class NeoForgeNetworkManager implements NetworkManager {
             boolean accepted,
             boolean globalCompressionAccepted,
             boolean compactHeaderAccepted,
-            byte[] dataplaneTail
+            byte[] dataplaneTail,
+            long worldSeed,
+            byte[] seedGenTail,
+            boolean seedGenEnabled,
+            boolean newFormat
     ) {
         public HandshakeResponseWrapper {
             dataplaneTail = dataplaneTail == null ? new byte[0] : dataplaneTail.clone();
+            seedGenTail = seedGenTail == null ? new byte[0] : seedGenTail.clone();
         }
 
         public HandshakeResponseWrapper(int protocolVersion, boolean accepted,
                                         boolean globalCompressionAccepted, boolean compactHeaderAccepted) {
-            this(protocolVersion, accepted, globalCompressionAccepted, compactHeaderAccepted, new byte[0]);
+            this(protocolVersion, accepted, globalCompressionAccepted, compactHeaderAccepted, new byte[0],
+                    0L, new byte[0], false, false);
         }
 
         public void encode(FriendlyByteBuf buf) {
@@ -535,7 +564,19 @@ public class NeoForgeNetworkManager implements NetworkManager {
             buf.writeBoolean(accepted);
             buf.writeBoolean(globalCompressionAccepted);
             buf.writeBoolean(compactHeaderAccepted);
-            buf.writeBytes(dataplaneTail);
+            if (newFormat) {
+                // 新格式（仅当客户端 C2S 上报 seedGenSupported=true 时使用）：
+                // varint tailLen + tail + worldSeed + varint seedLen + seed + enabled
+                buf.writeVarInt(dataplaneTail.length);
+                buf.writeBytes(dataplaneTail);
+                buf.writeLong(worldSeed);
+                buf.writeVarInt(seedGenTail.length);
+                buf.writeBytes(seedGenTail);
+                buf.writeBoolean(seedGenEnabled);
+            } else {
+                // 旧格式：tail 无长度前缀（旧客户端读剩余全部）
+                buf.writeBytes(dataplaneTail);
+            }
         }
 
         public static HandshakeResponseWrapper decode(FriendlyByteBuf buf) {
@@ -543,10 +584,40 @@ public class NeoForgeNetworkManager implements NetworkManager {
             boolean accepted = buf.readBoolean();
             boolean globalCompressionAccepted = buf.readBoolean();
             boolean compactHeaderAccepted = buf.readBoolean();
-            byte[] dataplaneTail = new byte[buf.readableBytes()];
-            buf.readBytes(dataplaneTail);
+            byte[] dataplaneTail;
+            long worldSeed = 0L;
+            byte[] seedGenTail = new byte[0];
+            boolean seedGenEnabled = false;
+            // 本客户端上报 true 时服务端保证用新格式；解析失败/旧服务端 → 回退旧格式
+            if (io.github.limuqy.mc.hassium.config.HassiumConfigService.getInstance().isClientSeedGenEnabled()) {
+                try {
+                    int tailLen = buf.readVarInt();
+                    if (tailLen >= 0 && tailLen <= buf.readableBytes()) {
+                        dataplaneTail = new byte[tailLen];
+                        buf.readBytes(dataplaneTail);
+                        worldSeed = buf.readLong();
+                        int seedLen = buf.readVarInt();
+                        if (seedLen > 0 && seedLen <= buf.readableBytes()) {
+                            seedGenTail = new byte[seedLen];
+                            buf.readBytes(seedGenTail);
+                        }
+                        if (buf.readableBytes() >= 1) {
+                            seedGenEnabled = buf.readBoolean();
+                        }
+                    } else {
+                        dataplaneTail = new byte[buf.readableBytes()];
+                        buf.readBytes(dataplaneTail);
+                    }
+                } catch (Exception e) {
+                    dataplaneTail = new byte[buf.readableBytes()];
+                    buf.readBytes(dataplaneTail);
+                }
+            } else {
+                dataplaneTail = new byte[buf.readableBytes()];
+                buf.readBytes(dataplaneTail);
+            }
             return new HandshakeResponseWrapper(protocolVersion, accepted, globalCompressionAccepted,
-                    compactHeaderAccepted, dataplaneTail);
+                    compactHeaderAccepted, dataplaneTail, worldSeed, seedGenTail, seedGenEnabled, true);
         }
     }
 
@@ -568,7 +639,8 @@ public class NeoForgeNetworkManager implements NetworkManager {
             boolean compactHeaderSupported,
             io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail.C2STail dataplaneCapabilities,
             double playerX,
-            double playerZ
+            double playerZ,
+            boolean seedGenSupported
     ) implements CustomPacketPayload {
 
         public static final ResourceLocation ID = ResourceLocationCompat.create(Constants.MOD_ID, "handshake_c2s");
@@ -580,7 +652,7 @@ public class NeoForgeNetworkManager implements NetworkManager {
             this(protocolVersion, modVersion, supportedAlgorithms, clientCacheSupported, chunkRevisionSupported,
                     scheme127Supported, globalPacketCompressionSupported, compactHeaderSupported,
                     new io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail.C2STail(false, false),
-                    0.0, 0.0);
+                    0.0, 0.0, false);
         }
 
         @Override
@@ -599,6 +671,7 @@ public class NeoForgeNetworkManager implements NetworkManager {
             io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail.writeC2S(buf, dataplaneCapabilities);
             buf.writeDouble(playerX);
             buf.writeDouble(playerZ);
+            buf.writeBoolean(seedGenSupported);
         }
 
         @Override
@@ -631,8 +704,16 @@ public class NeoForgeNetworkManager implements NetworkManager {
                 } catch (Exception ignored) {
                 }
             }
+            // SeedGen 能力（append-only；旧客户端无此字段）
+            boolean seedGenSupported = false;
+            if (buf.isReadable()) {
+                try {
+                    seedGenSupported = buf.readBoolean();
+                } catch (Exception ignored) {
+                }
+            }
             return new HandshakePayload(protocolVersion, modVersion, algorithms, clientCache, chunkRevision,
-                    scheme127, globalCompression, compactHeader, tail, playerX, playerZ);
+                    scheme127, globalCompression, compactHeader, tail, playerX, playerZ, seedGenSupported);
         }
     }
 
@@ -644,18 +725,24 @@ public class NeoForgeNetworkManager implements NetworkManager {
             boolean accepted,
             boolean globalCompressionAccepted,
             boolean compactHeaderAccepted,
-            byte[] dataplaneTail
+            byte[] dataplaneTail,
+            long worldSeed,
+            byte[] seedGenTail,
+            boolean seedGenEnabled,
+            boolean newFormat
     ) implements CustomPacketPayload {
 
         public static final ResourceLocation ID = ResourceLocationCompat.create(Constants.MOD_ID, "handshake_s2c");
 
         public HandshakeResponsePayload {
             dataplaneTail = dataplaneTail == null ? new byte[0] : dataplaneTail.clone();
+            seedGenTail = seedGenTail == null ? new byte[0] : seedGenTail.clone();
         }
 
         public HandshakeResponsePayload(int protocolVersion, boolean accepted,
                                         boolean globalCompressionAccepted, boolean compactHeaderAccepted) {
-            this(protocolVersion, accepted, globalCompressionAccepted, compactHeaderAccepted, new byte[0]);
+            this(protocolVersion, accepted, globalCompressionAccepted, compactHeaderAccepted, new byte[0],
+                    0L, new byte[0], false, false);
         }
 
         @Override
@@ -669,7 +756,16 @@ public class NeoForgeNetworkManager implements NetworkManager {
             buf.writeBoolean(accepted);
             buf.writeBoolean(globalCompressionAccepted);
             buf.writeBoolean(compactHeaderAccepted);
-            buf.writeBytes(dataplaneTail);
+            if (newFormat) {
+                buf.writeVarInt(dataplaneTail.length);
+                buf.writeBytes(dataplaneTail);
+                buf.writeLong(worldSeed);
+                buf.writeVarInt(seedGenTail.length);
+                buf.writeBytes(seedGenTail);
+                buf.writeBoolean(seedGenEnabled);
+            } else {
+                buf.writeBytes(dataplaneTail);
+            }
         }
 
         @Override
@@ -682,10 +778,39 @@ public class NeoForgeNetworkManager implements NetworkManager {
             boolean accepted = buf.readBoolean();
             boolean globalCompressionAccepted = buf.readBoolean();
             boolean compactHeaderAccepted = buf.readBoolean();
-            byte[] dataplaneTail = new byte[buf.readableBytes()];
-            buf.readBytes(dataplaneTail);
+            byte[] dataplaneTail;
+            long worldSeed = 0L;
+            byte[] seedGenTail = new byte[0];
+            boolean seedGenEnabled = false;
+            if (io.github.limuqy.mc.hassium.config.HassiumConfigService.getInstance().isClientSeedGenEnabled()) {
+                try {
+                    int tailLen = buf.readVarInt();
+                    if (tailLen >= 0 && tailLen <= buf.readableBytes()) {
+                        dataplaneTail = new byte[tailLen];
+                        buf.readBytes(dataplaneTail);
+                        worldSeed = buf.readLong();
+                        int seedLen = buf.readVarInt();
+                        if (seedLen > 0 && seedLen <= buf.readableBytes()) {
+                            seedGenTail = new byte[seedLen];
+                            buf.readBytes(seedGenTail);
+                        }
+                        if (buf.readableBytes() >= 1) {
+                            seedGenEnabled = buf.readBoolean();
+                        }
+                    } else {
+                        dataplaneTail = new byte[buf.readableBytes()];
+                        buf.readBytes(dataplaneTail);
+                    }
+                } catch (Exception e) {
+                    dataplaneTail = new byte[buf.readableBytes()];
+                    buf.readBytes(dataplaneTail);
+                }
+            } else {
+                dataplaneTail = new byte[buf.readableBytes()];
+                buf.readBytes(dataplaneTail);
+            }
             return new HandshakeResponsePayload(protocolVersion, accepted, globalCompressionAccepted,
-                    compactHeaderAccepted, dataplaneTail);
+                    compactHeaderAccepted, dataplaneTail, worldSeed, seedGenTail, seedGenEnabled, true);
         }
     }
 
@@ -766,6 +891,26 @@ public class NeoForgeNetworkManager implements NetworkManager {
             byte[] data = new byte[length];
             buf.readBytes(data);
             return new ChunkHashPayload(data);
+        }
+    }
+
+    /**
+     * SeedRef Payload (S2C，1.20.4)
+     */
+    public record SeedRefPayload(byte[] data) implements CustomPacketPayload {
+        public static final ResourceLocation ID = ResourceLocationCompat.create(Constants.MOD_ID, "seed_ref_s2c");
+        @Override
+        public void write(FriendlyByteBuf buf) {
+            buf.writeVarInt(data.length);
+            buf.writeBytes(data);
+        }
+        @Override
+        public ResourceLocation id() { return ID; }
+        public static SeedRefPayload decode(FriendlyByteBuf buf) {
+            int length = buf.readVarInt();
+            byte[] data = new byte[length];
+            buf.readBytes(data);
+            return new SeedRefPayload(data);
         }
     }
 
@@ -934,7 +1079,8 @@ public class NeoForgeNetworkManager implements NetworkManager {
             boolean compactHeaderSupported,
             io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail.C2STail dataplaneCapabilities,
             double playerX,
-            double playerZ
+            double playerZ,
+            boolean seedGenSupported
     ) implements CustomPacketPayload {
 
         public static final Type<HandshakePayload> TYPE = new Type<>(
@@ -959,6 +1105,7 @@ public class NeoForgeNetworkManager implements NetworkManager {
                             buf, p.dataplaneCapabilities());
                     buf.writeDouble(p.playerX());
                     buf.writeDouble(p.playerZ());
+                    buf.writeBoolean(p.seedGenSupported());
                 },
                 buf -> {
                     int protocolVersion = buf.readVarInt();
@@ -985,8 +1132,16 @@ public class NeoForgeNetworkManager implements NetworkManager {
                         } catch (Exception ignored) {
                         }
                     }
+                    // SeedGen 能力（append-only；旧客户端无此字段）
+                    boolean seedGenSupported = false;
+                    if (buf.isReadable()) {
+                        try {
+                            seedGenSupported = buf.readBoolean();
+                        } catch (Exception ignored) {
+                        }
+                    }
                     return new HandshakePayload(protocolVersion, modVersion, algorithms, clientCache, chunkRevision,
-                            scheme127, globalCompression, compactHeader, tail, playerX, playerZ);
+                            scheme127, globalCompression, compactHeader, tail, playerX, playerZ, seedGenSupported);
                 }
         );
 
@@ -997,7 +1152,7 @@ public class NeoForgeNetworkManager implements NetworkManager {
             this(protocolVersion, modVersion, supportedAlgorithms, clientCacheSupported, chunkRevisionSupported,
                     scheme127Supported, globalPacketCompressionSupported, compactHeaderSupported,
                     new io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail.C2STail(false, false),
-                    0.0, 0.0);
+                    0.0, 0.0, false);
         }
 
         @Override
@@ -1014,7 +1169,11 @@ public class NeoForgeNetworkManager implements NetworkManager {
             boolean accepted,
             boolean globalCompressionAccepted,
             boolean compactHeaderAccepted,
-            byte[] dataplaneTail
+            byte[] dataplaneTail,
+            long worldSeed,
+            byte[] seedGenTail,
+            boolean seedGenEnabled,
+            boolean newFormat
     ) implements CustomPacketPayload {
 
         public static final Type<HandshakeResponsePayload> TYPE = new Type<>(
@@ -1027,27 +1186,67 @@ public class NeoForgeNetworkManager implements NetworkManager {
                     buf.writeBoolean(p.accepted());
                     buf.writeBoolean(p.globalCompressionAccepted());
                     buf.writeBoolean(p.compactHeaderAccepted());
-                    buf.writeBytes(p.dataplaneTail());
+                    if (p.newFormat()) {
+                        buf.writeVarInt(p.dataplaneTail().length);
+                        buf.writeBytes(p.dataplaneTail());
+                        buf.writeLong(p.worldSeed());
+                        buf.writeVarInt(p.seedGenTail().length);
+                        buf.writeBytes(p.seedGenTail());
+                        buf.writeBoolean(p.seedGenEnabled());
+                    } else {
+                        buf.writeBytes(p.dataplaneTail());
+                    }
                 },
                 buf -> {
                     int protocolVersion = buf.readVarInt();
                     boolean accepted = buf.readBoolean();
                     boolean globalCompressionAccepted = buf.readBoolean();
                     boolean compactHeaderAccepted = buf.readBoolean();
-                    byte[] dataplaneTail = new byte[buf.readableBytes()];
-                    buf.readBytes(dataplaneTail);
+                    byte[] dataplaneTail;
+                    long worldSeed = 0L;
+                    byte[] seedGenTail = new byte[0];
+                    boolean seedGenEnabled = false;
+                    if (io.github.limuqy.mc.hassium.config.HassiumConfigService.getInstance().isClientSeedGenEnabled()) {
+                        try {
+                            int tailLen = buf.readVarInt();
+                            if (tailLen >= 0 && tailLen <= buf.readableBytes()) {
+                                dataplaneTail = new byte[tailLen];
+                                buf.readBytes(dataplaneTail);
+                                worldSeed = buf.readLong();
+                                int seedLen = buf.readVarInt();
+                                if (seedLen > 0 && seedLen <= buf.readableBytes()) {
+                                    seedGenTail = new byte[seedLen];
+                                    buf.readBytes(seedGenTail);
+                                }
+                                if (buf.readableBytes() >= 1) {
+                                    seedGenEnabled = buf.readBoolean();
+                                }
+                            } else {
+                                dataplaneTail = new byte[buf.readableBytes()];
+                                buf.readBytes(dataplaneTail);
+                            }
+                        } catch (Exception e) {
+                            dataplaneTail = new byte[buf.readableBytes()];
+                            buf.readBytes(dataplaneTail);
+                        }
+                    } else {
+                        dataplaneTail = new byte[buf.readableBytes()];
+                        buf.readBytes(dataplaneTail);
+                    }
                     return new HandshakeResponsePayload(protocolVersion, accepted, globalCompressionAccepted,
-                            compactHeaderAccepted, dataplaneTail);
+                            compactHeaderAccepted, dataplaneTail, worldSeed, seedGenTail, seedGenEnabled, true);
                 }
         );
 
         public HandshakeResponsePayload {
             dataplaneTail = dataplaneTail == null ? new byte[0] : dataplaneTail.clone();
+            seedGenTail = seedGenTail == null ? new byte[0] : seedGenTail.clone();
         }
 
         public HandshakeResponsePayload(int protocolVersion, boolean accepted,
                                         boolean globalCompressionAccepted, boolean compactHeaderAccepted) {
-            this(protocolVersion, accepted, globalCompressionAccepted, compactHeaderAccepted, new byte[0]);
+            this(protocolVersion, accepted, globalCompressionAccepted, compactHeaderAccepted, new byte[0],
+                    0L, new byte[0], false, false);
         }
 
         @Override
@@ -1135,6 +1334,26 @@ public class NeoForgeNetworkManager implements NetworkManager {
 
         @Override
         public Type<ChunkHashPayload> type() {
+            return TYPE;
+        }
+    }
+
+    /**
+     * SeedRef Payload (S2C，1.20.5+)
+     */
+    public record SeedRefPayload(byte[] data) implements CustomPacketPayload {
+
+        public static final Type<SeedRefPayload> TYPE = new Type<>(
+                ResourceLocationCompat.create(Constants.MOD_ID, "seed_ref_s2c")
+        );
+
+        public static final StreamCodec<FriendlyByteBuf, SeedRefPayload> STREAM_CODEC = StreamCodec.composite(
+                ByteBufCodecs.BYTE_ARRAY, SeedRefPayload::data,
+                SeedRefPayload::new
+        );
+
+        @Override
+        public Type<SeedRefPayload> type() {
             return TYPE;
         }
     }
@@ -1443,6 +1662,39 @@ public class NeoForgeNetworkManager implements NetworkManager {
                             ClientMetadataHandler.handleChunkHashPacket(packet);
                         } catch (Exception e) {
                             LOGGER.error("[CLIENT] Failed to handle chunk hash", e);
+                        }
+                    });
+                    ctx.setPacketHandled(true);
+                },
+                java.util.Optional.of(PlayNetworkDirection.PLAY_TO_CLIENT));
+#endif
+
+        // 5b: SeedRef S2C
+        CHANNEL.registerMessage(packetId++, SeedRefWrapper.class,
+                SeedRefWrapper::encode, SeedRefWrapper::decode,
+#if MC_VER < MC_1_20_2
+                (msg, ctx) -> {
+                    ctx.get().enqueueWork(() -> {
+                        try {
+                            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data()));
+                            SeedRefS2CPacket packet = SeedRefS2CPacket.decode(buf);
+                            ClientMetadataHandler.handleSeedRefPacket(packet);
+                        } catch (Exception e) {
+                            LOGGER.error("[CLIENT] Failed to handle seed ref", e);
+                        }
+                    });
+                    ctx.get().setPacketHandled(true);
+                },
+                java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT));
+#else
+                (msg, ctx) -> {
+                    ctx.enqueueWork(() -> {
+                        try {
+                            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data()));
+                            SeedRefS2CPacket packet = SeedRefS2CPacket.decode(buf);
+                            ClientMetadataHandler.handleSeedRefPacket(packet);
+                        } catch (Exception e) {
+                            LOGGER.error("[CLIENT] Failed to handle seed ref", e);
                         }
                     });
                     ctx.setPacketHandled(true);
@@ -1775,6 +2027,8 @@ public class NeoForgeNetworkManager implements NetworkManager {
     private void handleHandshakeSimple(ServerPlayer player, HandshakeWrapper msg) {
         // 客户端上报位置：校正 resync 视距中心（failover/重连时服务端玩家对象位置滞后）
         ServerChunkPushManager.getInstance().setInitialPlayerPosition(player, msg.playerX(), msg.playerZ());
+        // SeedGen 能力记录
+        ServerChunkPushManager.getInstance().setPlayerSeedGenSupported(player.getUUID(), msg.seedGenSupported());
         PlayerCompressionTracker.enableCompression(player);
         boolean serverSupportsGlobalCompression = HassiumConfigService.getInstance().isGlobalPacketCompressionEnabled();
         boolean useGlobalCompression = serverSupportsGlobalCompression && msg.globalPacketCompressionSupported();
@@ -1782,6 +2036,24 @@ public class NeoForgeNetworkManager implements NetworkManager {
         boolean useCompactHeader = serverSupportsCompactHeader && msg.compactHeaderSupported();
 
         boolean accepted = true;
+        // SeedGen 尾部：仅当客户端上报能力时用新格式（带长度前缀），旧客户端保持旧格式
+        long worldSeed = 0L;
+        byte[] seedGenTail = new byte[0];
+        boolean seedGenEnabled = false;
+        if (msg.seedGenSupported()) {
+            try {
+                net.minecraft.server.level.ServerLevel seedLevel = player.serverLevel();
+                seedGenEnabled = HassiumConfigService.getInstance().isSeedGenEnabled();
+                worldSeed = seedLevel.getSeed();
+                io.netty.buffer.ByteBuf sb = io.netty.buffer.Unpooled.buffer();
+                SeedGenTail.writeS2C(new FriendlyByteBuf(sb), seedLevel, seedGenEnabled);
+                seedGenTail = new byte[sb.readableBytes()];
+                sb.readBytes(seedGenTail);
+                sb.release();
+            } catch (Throwable e) {
+                LOGGER.warn("Hassium: Failed to create NeoForge seedGen handshake tail", e);
+            }
+        }
         var advertisedTail = createDataPlaneHandshakeTail(player, accepted, msg.dataplaneCapabilities());
         io.netty.buffer.ByteBuf tailBuffer = io.netty.buffer.Unpooled.buffer();
         io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail.writeS2C(tailBuffer, advertisedTail);
@@ -1795,7 +2067,11 @@ public class NeoForgeNetworkManager implements NetworkManager {
                 accepted,
                 useGlobalCompression,
                 useCompactHeader,
-                dataplaneTail
+                dataplaneTail,
+                worldSeed,
+                seedGenTail,
+                seedGenEnabled,
+                msg.seedGenSupported()
         );
         if (useGlobalCompression) {
             DictionaryManager.init();
@@ -1824,6 +2100,25 @@ public class NeoForgeNetworkManager implements NetworkManager {
 
         LOGGER.info("Hassium: Client handshake response: accepted={}, globalCompression={}, compactHeader={}",
                 msg.accepted(), msg.globalCompressionAccepted(), msg.compactHeaderAccepted());
+        // SeedGen 信息（新格式下服务端保证带尾部；旧服务端默认不启用）
+        if (msg.seedGenTail().length > 0) {
+            try {
+                io.netty.buffer.ByteBuf sb = io.netty.buffer.Unpooled.wrappedBuffer(msg.seedGenTail());
+                FriendlyByteBuf seedBuf = new FriendlyByteBuf(sb);
+                seedBuf.readLong(); // 布局内 worldSeed（与 msg.worldSeed() 相同，跳过）
+                long stemLen = seedBuf.readVarInt();
+                byte[] stemNbt = null;
+                if (stemLen > 0 && stemLen <= seedBuf.readableBytes()) {
+                    stemNbt = new byte[(int) stemLen];
+                    seedBuf.readBytes(stemNbt);
+                }
+                boolean seedGenEnabled = seedBuf.readableBytes() >= 1 && seedBuf.readBoolean();
+                ClientChunkPipeline.getInstance().setServerSeedInfo(msg.worldSeed(), stemNbt, seedGenEnabled);
+                sb.release();
+            } catch (Throwable e) {
+                LOGGER.debug("Hassium: failed to decode SeedGen tail (legacy server?)", e);
+            }
+        }
         if (msg.accepted() && msg.globalCompressionAccepted()) {
             tryInstallClientZstdPipeline();
         }
@@ -1879,6 +2174,10 @@ public class NeoForgeNetworkManager implements NetworkManager {
         registrar.play(ChunkHashPayload.ID, ChunkHashPayload::decode, builder -> builder
                 .client(NeoForgeNetworkManager::handleChunkHash));
 
+        // 注册 SeedRef (S2C：客户端处理)
+        registrar.play(SeedRefPayload.ID, SeedRefPayload::decode, builder -> builder
+                .client(NeoForgeNetworkManager::handleSeedRef));
+
         // 注册 Section 哈希请求 (C2S：服务器处理)
         registrar.play(SectionHashRequestPayload.ID, SectionHashRequestPayload::decode, builder -> builder
                 .server(NeoForgeNetworkManager::handleSectionHashRequest));
@@ -1916,6 +2215,10 @@ public class NeoForgeNetworkManager implements NetworkManager {
             if (context.player().orElse(null) instanceof ServerPlayer player) {
                 // 客户端上报位置：校正 resync 视距中心（failover/重连时服务端玩家对象位置滞后）
                 ServerChunkPushManager.getInstance().setInitialPlayerPosition(player, payload.playerX(), payload.playerZ());
+                // SeedGen 能力记录
+                ServerChunkPushManager.getInstance().setPlayerSeedGenSupported(player.getUUID(), payload.seedGenSupported());
+                // 客户端上报位置：校正 resync 视距中心（failover/重连时服务端玩家对象位置滞后）
+                ServerChunkPushManager.getInstance().setInitialPlayerPosition(player, payload.playerX(), payload.playerZ());
                 PlayerCompressionTracker.enableCompression(player);
                 boolean useGlobalCompression = HassiumConfigService.getInstance().isGlobalPacketCompressionEnabled()
                         && payload.globalPacketCompressionSupported();
@@ -1923,13 +2226,33 @@ public class NeoForgeNetworkManager implements NetworkManager {
                         && payload.compactHeaderSupported();
                 boolean accepted = true;
 
+                // SeedGen 尾部：仅当客户端上报能力时用新格式（带长度前缀），旧客户端保持旧格式
+                long worldSeed = 0L;
+                byte[] seedGenTail = new byte[0];
+                boolean seedGenEnabled = false;
+                if (payload.seedGenSupported()) {
+                    try {
+                        net.minecraft.server.level.ServerLevel seedLevel =
+                                io.github.limuqy.mc.hassium.compat.PlayerCompat.getServerLevel(player);
+                        seedGenEnabled = HassiumConfigService.getInstance().isSeedGenEnabled();
+                        worldSeed = seedLevel.getSeed();
+                        io.netty.buffer.ByteBuf sb = io.netty.buffer.Unpooled.buffer();
+                        SeedGenTail.writeS2C(new FriendlyByteBuf(sb), seedLevel, seedGenEnabled);
+                        seedGenTail = new byte[sb.readableBytes()];
+                        sb.readBytes(seedGenTail);
+                        sb.release();
+                    } catch (Throwable e) {
+                        LOGGER.warn("Hassium: Failed to create NeoForge seedGen handshake tail", e);
+                    }
+                }
                 io.netty.buffer.ByteBuf tailBuffer = io.netty.buffer.Unpooled.buffer();
                 io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail.writeS2C(tailBuffer,
                         createDataPlaneHandshakeTail(player, accepted, payload.dataplaneCapabilities()));
                 byte[] dataplaneTail = new byte[tailBuffer.readableBytes()];
                 tailBuffer.readBytes(dataplaneTail);
                 HandshakeResponsePayload response = new HandshakeResponsePayload(
-                        Constants.CURRENT_PROTOCOL_VERSION, accepted, useGlobalCompression, useCompactHeader, dataplaneTail);
+                        Constants.CURRENT_PROTOCOL_VERSION, accepted, useGlobalCompression, useCompactHeader,
+                        dataplaneTail, worldSeed, seedGenTail, seedGenEnabled, payload.seedGenSupported());
                 // 先暂停出站压缩，再发 HandshakeResponse，避免响应后的包仍走 Zlib
                 if (useGlobalCompression) {
                     DictionaryManager.init();
@@ -1959,6 +2282,25 @@ public class NeoForgeNetworkManager implements NetworkManager {
         context.workHandler().execute(() -> {
             LOGGER.info("Hassium: Client handshake response: accepted={}, globalCompression={}, compactHeader={}",
                     payload.accepted(), payload.globalCompressionAccepted(), payload.compactHeaderAccepted());
+            // SeedGen 信息（新格式下服务端保证带尾部；旧服务端默认不启用）
+            if (payload.seedGenTail().length > 0) {
+                try {
+                    io.netty.buffer.ByteBuf sb = io.netty.buffer.Unpooled.wrappedBuffer(payload.seedGenTail());
+                    FriendlyByteBuf seedBuf = new FriendlyByteBuf(sb);
+                    seedBuf.readLong(); // 布局内 worldSeed（与 payload.worldSeed() 相同，跳过）
+                    long stemLen = seedBuf.readVarInt();
+                    byte[] stemNbt = null;
+                    if (stemLen > 0 && stemLen <= seedBuf.readableBytes()) {
+                        stemNbt = new byte[(int) stemLen];
+                        seedBuf.readBytes(stemNbt);
+                    }
+                    boolean seedGenEnabled = seedBuf.readableBytes() >= 1 && seedBuf.readBoolean();
+                    ClientChunkPipeline.getInstance().setServerSeedInfo(payload.worldSeed(), stemNbt, seedGenEnabled);
+                    sb.release();
+                } catch (Throwable e) {
+                    LOGGER.debug("Hassium: failed to decode SeedGen tail (legacy server?)", e);
+                }
+            }
             if (payload.accepted()) {
                 startUdpFromHandshakeTail(payload.dataplaneTail());
             }
@@ -2011,6 +2353,18 @@ public class NeoForgeNetworkManager implements NetworkManager {
                 ClientMetadataHandler.handleChunkHashPacket(packet);
             } catch (Exception e) {
                 LOGGER.error("[CLIENT] Failed to handle chunk hash", e);
+            }
+        });
+    }
+
+    private static void handleSeedRef(SeedRefPayload payload, PlayPayloadContext context) {
+        context.workHandler().execute(() -> {
+            try {
+                FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(payload.data()));
+                SeedRefS2CPacket packet = SeedRefS2CPacket.decode(buf);
+                ClientMetadataHandler.handleSeedRefPacket(packet);
+            } catch (Exception e) {
+                LOGGER.error("[CLIENT] Failed to handle seed ref", e);
             }
         });
     }
@@ -2142,6 +2496,13 @@ public class NeoForgeNetworkManager implements NetworkManager {
                 NeoForgeNetworkManager::handleChunkHash
         );
 
+        // 注册 SeedRef (S2C)
+        registrar.playToClient(
+                SeedRefPayload.TYPE,
+                SeedRefPayload.STREAM_CODEC,
+                NeoForgeNetworkManager::handleSeedRef
+        );
+
         // 注册 Section 哈希请求 (C2S)
         registrar.playToServer(
                 SectionHashRequestPayload.TYPE,
@@ -2207,6 +2568,8 @@ public class NeoForgeNetworkManager implements NetworkManager {
             if (context.player() instanceof ServerPlayer player) {
                 // 客户端上报位置：校正 resync 视距中心（failover/重连时服务端玩家对象位置滞后）
                 ServerChunkPushManager.getInstance().setInitialPlayerPosition(player, payload.playerX(), payload.playerZ());
+                // SeedGen 能力记录
+                ServerChunkPushManager.getInstance().setPlayerSeedGenSupported(player.getUUID(), payload.seedGenSupported());
                 PlayerCompressionTracker.enableCompression(player);
                 boolean useGlobalCompression = HassiumConfigService.getInstance().isGlobalPacketCompressionEnabled()
                         && payload.globalPacketCompressionSupported();
@@ -2214,13 +2577,33 @@ public class NeoForgeNetworkManager implements NetworkManager {
                         && payload.compactHeaderSupported();
                 boolean accepted = true;
 
+                // SeedGen 尾部：仅当客户端上报能力时用新格式（带长度前缀），旧客户端保持旧格式
+                long worldSeed = 0L;
+                byte[] seedGenTail = new byte[0];
+                boolean seedGenEnabled = false;
+                if (payload.seedGenSupported()) {
+                    try {
+                        net.minecraft.server.level.ServerLevel seedLevel =
+                                io.github.limuqy.mc.hassium.compat.PlayerCompat.getServerLevel(player);
+                        seedGenEnabled = HassiumConfigService.getInstance().isSeedGenEnabled();
+                        worldSeed = seedLevel.getSeed();
+                        io.netty.buffer.ByteBuf sb = io.netty.buffer.Unpooled.buffer();
+                        SeedGenTail.writeS2C(new FriendlyByteBuf(sb), seedLevel, seedGenEnabled);
+                        seedGenTail = new byte[sb.readableBytes()];
+                        sb.readBytes(seedGenTail);
+                        sb.release();
+                    } catch (Throwable e) {
+                        LOGGER.warn("Hassium: Failed to create NeoForge seedGen handshake tail", e);
+                    }
+                }
                 io.netty.buffer.ByteBuf tailBuffer = io.netty.buffer.Unpooled.buffer();
                 io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail.writeS2C(tailBuffer,
                         createDataPlaneHandshakeTail(player, accepted, payload.dataplaneCapabilities()));
                 byte[] dataplaneTail = new byte[tailBuffer.readableBytes()];
                 tailBuffer.readBytes(dataplaneTail);
                 HandshakeResponsePayload response = new HandshakeResponsePayload(
-                        Constants.CURRENT_PROTOCOL_VERSION, accepted, useGlobalCompression, useCompactHeader, dataplaneTail);
+                        Constants.CURRENT_PROTOCOL_VERSION, accepted, useGlobalCompression, useCompactHeader,
+                        dataplaneTail, worldSeed, seedGenTail, seedGenEnabled, payload.seedGenSupported());
                 // 先暂停出站压缩，再发 HandshakeResponse，避免响应后的包仍走 Zlib
                 if (useGlobalCompression) {
                     DictionaryManager.init();
@@ -2250,6 +2633,25 @@ public class NeoForgeNetworkManager implements NetworkManager {
         context.enqueueWork(() -> {
             LOGGER.info("Hassium: Client handshake response: accepted={}, globalCompression={}, compactHeader={}",
                     payload.accepted(), payload.globalCompressionAccepted(), payload.compactHeaderAccepted());
+            // SeedGen 信息（新格式下服务端保证带尾部；旧服务端默认不启用）
+            if (payload.seedGenTail().length > 0) {
+                try {
+                    io.netty.buffer.ByteBuf sb = io.netty.buffer.Unpooled.wrappedBuffer(payload.seedGenTail());
+                    FriendlyByteBuf seedBuf = new FriendlyByteBuf(sb);
+                    seedBuf.readLong(); // 布局内 worldSeed（与 payload.worldSeed() 相同，跳过）
+                    long stemLen = seedBuf.readVarInt();
+                    byte[] stemNbt = null;
+                    if (stemLen > 0 && stemLen <= seedBuf.readableBytes()) {
+                        stemNbt = new byte[(int) stemLen];
+                        seedBuf.readBytes(stemNbt);
+                    }
+                    boolean seedGenEnabled = seedBuf.readableBytes() >= 1 && seedBuf.readBoolean();
+                    ClientChunkPipeline.getInstance().setServerSeedInfo(payload.worldSeed(), stemNbt, seedGenEnabled);
+                    sb.release();
+                } catch (Throwable e) {
+                    LOGGER.debug("Hassium: failed to decode SeedGen tail (legacy server?)", e);
+                }
+            }
             if (payload.accepted()) {
                 startUdpFromHandshakeTail(payload.dataplaneTail());
             }
@@ -2302,6 +2704,18 @@ public class NeoForgeNetworkManager implements NetworkManager {
                 ClientMetadataHandler.handleChunkHashPacket(packet);
             } catch (Exception e) {
                 LOGGER.error("[CLIENT] Failed to handle chunk hash", e);
+            }
+        });
+    }
+
+    private static void handleSeedRef(SeedRefPayload payload, IPayloadContext context) {
+        context.enqueueWork(() -> {
+            try {
+                FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(payload.data()));
+                SeedRefS2CPacket packet = SeedRefS2CPacket.decode(buf);
+                ClientMetadataHandler.handleSeedRefPacket(packet);
+            } catch (Exception e) {
+                LOGGER.error("[CLIENT] Failed to handle seed ref", e);
             }
         });
     }
@@ -2400,7 +2814,8 @@ public class NeoForgeNetworkManager implements NetworkManager {
                     true, true, false, true, true,
                     new io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail.C2STail(true, true),
                     playerX,
-                    playerZ
+                    playerZ,
+                    HassiumConfigService.getInstance().isClientSeedGenEnabled()
             ));
             LOGGER.debug("Hassium: Sent handshake request to server");
         } else {
@@ -2426,7 +2841,8 @@ public class NeoForgeNetworkManager implements NetworkManager {
                     true, true, false, true, true,
                     new io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail.C2STail(true, true),
                     playerX,
-                    playerZ
+                    playerZ,
+                    HassiumConfigService.getInstance().isClientSeedGenEnabled()
             );
             net.minecraft.client.Minecraft.getInstance().getConnection().send(new ServerboundCustomPayloadPacket(payload));
             LOGGER.debug("Hassium: Sent handshake request (Payload 1.20.4)");
@@ -2451,7 +2867,8 @@ public class NeoForgeNetworkManager implements NetworkManager {
                     true, true, false, true, true,
                     new io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail.C2STail(true, true),
                     playerX,
-                    playerZ
+                    playerZ,
+                    HassiumConfigService.getInstance().isClientSeedGenEnabled()
             );
             net.minecraft.client.Minecraft.getInstance().getConnection().send(payload);
             LOGGER.debug("Hassium: Sent handshake request (Payload)");
@@ -2556,6 +2973,27 @@ public class NeoForgeNetworkManager implements NetworkManager {
         ChunkHashPayload payload = new ChunkHashPayload(data);
         player.connection.send(payload);
         LOGGER.debug("Hassium: Sent chunk hash packet to {}", player.getName().getString());
+#endif
+    }
+
+    @Override
+    public void sendSeedRef(ServerPlayer player, FriendlyByteBuf buf) {
+        byte[] data = new byte[buf.readableBytes()];
+        buf.readBytes(data);
+        buf.release();
+#if MC_VER < MC_1_20_4
+#if MC_VER < MC_1_20_2
+        CHANNEL.sendTo(new SeedRefWrapper(data), player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
+#else
+        CHANNEL.sendTo(new SeedRefWrapper(data), player.connection.connection, PlayNetworkDirection.PLAY_TO_CLIENT);
+#endif
+#elif MC_VER < MC_1_20_5
+        player.connection.send(new ClientboundCustomPayloadPacket(new SeedRefPayload(data)));
+        LOGGER.debug("Hassium: Sent seed ref to {} (1.20.4)", player.getName().getString());
+#else
+        SeedRefPayload payload = new SeedRefPayload(data);
+        player.connection.send(payload);
+        LOGGER.debug("Hassium: Sent seed ref to {}", player.getName().getString());
 #endif
     }
 

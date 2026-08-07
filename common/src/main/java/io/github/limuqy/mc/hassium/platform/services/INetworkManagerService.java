@@ -50,6 +50,11 @@ public interface INetworkManagerService {
     void sendClientBloomSync(FriendlyByteBuf buf);
 
     /**
+     * 发送 SeedRef 到客户端（SeedGen：pristine 区块引用替代区块数据；服务端调用）
+     */
+    void sendSeedRef(ServerPlayer player, FriendlyByteBuf buf);
+
+    /**
      * 客户端配置阶段发送预握手（1.20.5+）。default 空实现：仅 forge 覆盖
      * （fabric 走 C2SConfigurationChannelEvents.REGISTER，neoforge 服务端
      * 只收不发）。

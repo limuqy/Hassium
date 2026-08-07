@@ -13,6 +13,7 @@
         "MixinConnection",
         "MixinConnectionSetupCompression",
         "MixinChunkHolder",
+        "MixinChunkAccess",
         "MixinServerPlayer",
         "MixinPlayerChunkSender",
         "MixinLightDataWrite",

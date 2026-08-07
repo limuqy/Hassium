@@ -489,7 +489,18 @@ public class HassiumConfigService {
         return Math.max(getMinPushThreads(), value);
     }
 
-    /** 是否启用超视渲染；仍依赖 clientCache.enabled */
+    /** 是否启用 SeedGen（服务端：对 pristine 区块发 SeedRef 替代区块数据；默认关）。 */
+    public boolean isSeedGenEnabled() {
+        return config.serverNetwork().seedGenEnabled();
+    }
+
+    /** 客户端是否启用 SeedGen（上报握手能力 + 本地生成开关；默认关）。 */
+    public boolean isClientSeedGenEnabled() {
+        return config.clientNetwork().seedGenEnabled();
+    }
+
+    /**
+     * 是否启用超视渲染；仍依赖 clientCache.enabled */
     public boolean isViewDistanceExtensionEnabled() {
         return config.clientCache().viewDistanceExtensionEnabled();
     }

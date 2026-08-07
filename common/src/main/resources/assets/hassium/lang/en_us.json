@@ -103,6 +103,8 @@
     "hassium.configuration.network.metricsEnabled.tooltip":  "Traffic, cache hits, etc. Default: true.",
     "hassium.configuration.network.metricsAutoReset":  "Auto-reset metrics",
     "hassium.configuration.network.metricsAutoReset.tooltip":  "Reset metric counters when leaving a server. Default: true.",
+    "hassium.configuration.network.seedGen.enabled":  "SeedGen (local chunk regen)",
+    "hassium.configuration.network.seedGen.enabled.tooltip":  "Server: send SeedRef instead of chunk data for pristine chunks (client regenerates locally, hash-checked). Client: enable local regeneration. Requires matching version on both sides. Default: false.",
     "hassium.configuration.network.dataPlane.recoveryFreeze":  "Freeze world during failover",
     "hassium.configuration.network.dataPlane.recoveryFreeze.tooltip":  "During master recovery, pause world tick and show a 'Switching master…' overlay. Set false for seamless switching: the world keeps running (actions roll back after recovery) with no switching UI. Default: true.",
     "hassium.configuration.network.dynamicThreadPoolEnabled":  "Dynamic push thread pool",

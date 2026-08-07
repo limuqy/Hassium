@@ -97,6 +97,7 @@ class FabricTomlDataPlaneConfigTest {
                 d.enablePacketAggregation(), d.aggregationMinBatchSize(), d.aggregationMaxWaitTimeMs(),
                 d.aggregationMaxSize(), d.enableCompactHeader(), d.compressionBlacklist(), d.metricsEnabled(),
                 d.maxChunksPerTick(), d.serverChunkPushThreads(), d.dynamicThreadPoolEnabled(),
-                d.minPushThreads(), d.maxPushThreads(), d.lightStrip(), controlEndpoints, dataPlane);
+                d.minPushThreads(), d.maxPushThreads(), d.lightStrip(), d.seedGenEnabled(),
+                controlEndpoints, dataPlane);
     }
 }

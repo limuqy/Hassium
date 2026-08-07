@@ -115,6 +115,8 @@ public final class HassiumClothConfigScreen {
                 draft.metricsAutoReset, dClientNet.metricsAutoReset(), v -> draft.metricsAutoReset = v));
         render.addEntry(bool(entries, "hassium.configuration.network.dataPlane.recoveryFreeze",
                 draft.recoveryFreeze, dClientNet.recoveryFreeze(), v -> draft.recoveryFreeze = v));
+        render.addEntry(bool(entries, "hassium.configuration.network.seedGen.enabled",
+                draft.seedGenEnabled, dClientNet.seedGenEnabled(), v -> draft.seedGenEnabled = v));
 
         // === Category 3: 调试（8 项）===
         ConfigCategory debugCat = builder.getOrCreateCategory(
@@ -223,6 +225,7 @@ public final class HassiumClothConfigScreen {
         boolean metricsEnabled;
         boolean metricsAutoReset;
         boolean recoveryFreeze;
+        boolean seedGenEnabled;
         // 调试
         boolean metadataLogging;
         boolean dispatcherLogging;
@@ -267,6 +270,7 @@ public final class HassiumClothConfigScreen {
             d.metricsEnabled = clientNet.metricsEnabled();
             d.metricsAutoReset = clientNet.metricsAutoReset();
             d.recoveryFreeze = clientNet.recoveryFreeze();
+            d.seedGenEnabled = clientNet.seedGenEnabled();
 
             d.metadataLogging = debug.metadataLogging();
             d.dispatcherLogging = debug.dispatcherLogging();
@@ -292,7 +296,7 @@ public final class HassiumClothConfigScreen {
                             loadThreads, lightCacheEnabled, maxChunksPerFrame, mainThreadChunkBudgetMs,
                             cacheParallelLightEngineEnabled, cacheParallelLightEngineThreads, lightSyncMode
                     ),
-                    new HassiumConfig.ClientNetworkConfig(networkEnabled, metricsEnabled, metricsAutoReset, recoveryFreeze),
+                    new HassiumConfig.ClientNetworkConfig(networkEnabled, metricsEnabled, metricsAutoReset, recoveryFreeze, seedGenEnabled),
                     HassiumConfig.ServerNetworkConfig.DEFAULT,
                     HassiumConfig.CompatConfig.DEFAULT,
                     new HassiumConfig.DebugConfig(

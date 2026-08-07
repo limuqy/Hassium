@@ -42,6 +42,8 @@ public final class FabricPayloadRegistry {
             type("aggregation");
     public static final CustomPacketPayload.Type<RawPayload> CHUNK_HASH_S2C_TYPE =
             type("chunk_hash_s2c");
+    public static final CustomPacketPayload.Type<RawPayload> SEED_REF_S2C_TYPE =
+            type("seed_ref_s2c");
     public static final CustomPacketPayload.Type<RawPayload> SECTION_DELTA_S2C_TYPE =
             type("section_delta_s2c");
     public static final CustomPacketPayload.Type<RawPayload> BLOCK_ENTITY_DATA_S2C_TYPE =
@@ -120,6 +122,7 @@ public final class FabricPayloadRegistry {
         PayloadTypeRegistry.playS2C().register(INDEX_SYNC_S2C_TYPE, codec(INDEX_SYNC_S2C_TYPE));
         PayloadTypeRegistry.playS2C().register(AGGREGATION_S2C_TYPE, codec(AGGREGATION_S2C_TYPE));
         PayloadTypeRegistry.playS2C().register(CHUNK_HASH_S2C_TYPE, codec(CHUNK_HASH_S2C_TYPE));
+        PayloadTypeRegistry.playS2C().register(SEED_REF_S2C_TYPE, codec(SEED_REF_S2C_TYPE));
         PayloadTypeRegistry.playS2C().register(SECTION_DELTA_S2C_TYPE, codec(SECTION_DELTA_S2C_TYPE));
         PayloadTypeRegistry.playS2C().register(BLOCK_ENTITY_DATA_S2C_TYPE, codec(BLOCK_ENTITY_DATA_S2C_TYPE));
         PayloadTypeRegistry.playS2C().register(LIGHT_DELTA_S2C_TYPE, codec(LIGHT_DELTA_S2C_TYPE));

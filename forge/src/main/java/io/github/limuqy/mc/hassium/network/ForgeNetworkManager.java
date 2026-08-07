@@ -184,6 +184,18 @@ public class ForgeNetworkManager implements NetworkManager {
                 java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT)
         );
 
+        CHANNEL.<SeedRefWrapper>registerMessage(
+                packetId++,
+                SeedRefWrapper.class,
+                SeedRefWrapper::encode,
+                SeedRefWrapper::decode,
+                (msg, ctx) -> {
+                    ctx.get().enqueueWork(() -> handleSeedRef(msg));
+                    ctx.get().setPacketHandled(true);
+                },
+                java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT)
+        );
+
         CHANNEL.<SectionHashRequestWrapper>registerMessage(
                 packetId++,
                 SectionHashRequestWrapper.class,
@@ -345,6 +357,8 @@ public class ForgeNetworkManager implements NetworkManager {
                                 ForgeNetworkManager::onBlockEntityData)
                         .addMain(LightDeltaWrapper.class, playCodec(LightDeltaWrapper::encode, LightDeltaWrapper::decode),
                                 ForgeNetworkManager::onLightDelta)
+                        .addMain(SeedRefWrapper.class, playCodec(SeedRefWrapper::encode, SeedRefWrapper::decode),
+                                ForgeNetworkManager::onSeedRef)
                         .addMain(DictionarySyncWrapper.class,
                                 playCodec(DictionarySyncWrapper::encode, DictionarySyncWrapper::decode),
                                 ForgeNetworkManager::onDictionarySync)
@@ -431,6 +445,10 @@ public class ForgeNetworkManager implements NetworkManager {
         handleChunkHash(msg);
     }
 
+    private static void onSeedRef(SeedRefWrapper msg, CustomPayloadEvent.Context ctx) {
+        handleSeedRef(msg);
+    }
+
     private static void onSectionHashRequest(SectionHashRequestWrapper msg, CustomPayloadEvent.Context ctx) {
         handleSectionHashRequest(msg, ctx.getSender());
     }
@@ -515,6 +533,8 @@ public class ForgeNetworkManager implements NetworkManager {
 
         // 客户端上报位置：校正 resync 视距中心（failover/重连时服务端玩家对象位置滞后）
         ServerChunkPushManager.getInstance().setInitialPlayerPosition(player, msg.playerX(), msg.playerZ());
+        // SeedGen 能力记录
+        ServerChunkPushManager.getInstance().setPlayerSeedGenSupported(player.getUUID(), msg.seedGenSupported());
 
         DebugLogger.debug(LogType.NETWORK,
                 "[HANDSHAKE] Received from client {}, protocol={}, globalCompression={}, compactHeader={}",
@@ -529,12 +549,30 @@ public class ForgeNetworkManager implements NetworkManager {
         boolean useCompactHeader = serverSupportsCompactHeader && msg.compactHeaderSupported();
 
         boolean accepted = true;
+        // SeedGen 尾部（append-only；旧客户端忽略尾字节）
+        long worldSeed = 0L;
+        byte[] seedGenTail = new byte[0];
+        boolean seedGenEnabled = HassiumConfigService.getInstance().isSeedGenEnabled();
+        try {
+            net.minecraft.server.level.ServerLevel seedLevel = player.serverLevel();
+            worldSeed = seedLevel.getSeed();
+            io.netty.buffer.ByteBuf sb = io.netty.buffer.Unpooled.buffer();
+            SeedGenTail.writeS2C(new FriendlyByteBuf(sb), seedLevel, seedGenEnabled);
+            seedGenTail = new byte[sb.readableBytes()];
+            sb.readBytes(seedGenTail);
+            sb.release();
+        } catch (Throwable e) {
+            LOGGER.warn("Hassium: Failed to create Forge seedGen handshake tail", e);
+        }
         HandshakeResponsePacket response = new HandshakeResponsePacket(
                 Constants.CURRENT_PROTOCOL_VERSION,
                 accepted,
                 useGlobalCompression,
                 useCompactHeader,
-                createServerTail(player, msg)
+                createServerTail(player, msg),
+                worldSeed,
+                seedGenTail,
+                seedGenEnabled
         );
         // 暂停出站压缩，等客户端 CompressionReady ACK 后再切 ZSTD（与 Fabric/NeoForge 对齐）
         if (useGlobalCompression) {
@@ -588,6 +626,26 @@ public class ForgeNetworkManager implements NetworkManager {
     private static void handleHandshakeS2C(HandshakeResponsePacket msg) {
         LOGGER.info("Hassium: Client handshake response: accepted={}, globalCompression={}, compactHeader={}",
                 msg.accepted(), msg.globalCompressionAccepted(), msg.compactHeaderAccepted());
+        // SeedGen 信息（append-only；旧服务端 worldSeed==0 / seedGenTail 空 → 不启用）
+        try {
+            if (msg.worldSeed() != 0L && msg.seedGenTail().length > 0) {
+                io.netty.buffer.ByteBuf sb = io.netty.buffer.Unpooled.wrappedBuffer(msg.seedGenTail());
+                FriendlyByteBuf seedBuf = new FriendlyByteBuf(sb);
+                seedBuf.readLong(); // 布局内 worldSeed（与 msg.worldSeed() 相同，跳过）
+                long stemLen = seedBuf.readVarInt();
+                byte[] stemNbt = null;
+                if (stemLen > 0 && stemLen <= seedBuf.readableBytes()) {
+                    stemNbt = new byte[(int) stemLen];
+                    seedBuf.readBytes(stemNbt);
+                }
+                boolean seedGenEnabled = seedBuf.readableBytes() >= 1 && seedBuf.readBoolean();
+                io.github.limuqy.mc.hassium.network.ClientChunkPipeline.getInstance()
+                        .setServerSeedInfo(msg.worldSeed(), stemNbt, seedGenEnabled);
+                sb.release();
+            }
+        } catch (Throwable e) {
+            LOGGER.debug("Hassium: failed to decode SeedGen tail (legacy server?)", e);
+        }
         if (msg.dataplaneTail().length > 0) {
             try {
                 UdpDataPlaneHandshakeTail.S2CTail tail = UdpDataPlaneHandshakeTail.readS2C(
@@ -805,6 +863,16 @@ public class ForgeNetworkManager implements NetworkManager {
         }
     }
 
+    private static void handleSeedRef(SeedRefWrapper msg) {
+        try {
+            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data()));
+            SeedRefS2CPacket packet = SeedRefS2CPacket.decode(buf);
+            ClientMetadataHandler.handleSeedRefPacket(packet);
+        } catch (Exception e) {
+            LOGGER.error("Hassium: Failed to handle seed ref packet", e);
+        }
+    }
+
     private static void handleSectionHashRequest(SectionHashRequestWrapper msg, ServerPlayer player) {
         try {
             if (player == null) {
@@ -889,7 +957,8 @@ public class ForgeNetworkManager implements NetworkManager {
                 true,
                 new byte[] { 0x03 },
                 playerX,
-                playerZ
+                playerZ,
+                HassiumConfigService.getInstance().isClientSeedGenEnabled()
         );
 #if MC_VER < MC_1_20_2
         CHANNEL.sendToServer(packet);
@@ -939,6 +1008,18 @@ public class ForgeNetworkManager implements NetworkManager {
         CHANNEL.sendTo(new ChunkHashWrapper(data), player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
 #else
         sendToPlayer(player, new ChunkHashWrapper(data));
+#endif
+    }
+
+    @Override
+    public void sendSeedRef(ServerPlayer player, FriendlyByteBuf buf) {
+        byte[] data = new byte[buf.readableBytes()];
+        buf.readBytes(data);
+        buf.release();
+#if MC_VER < MC_1_20_2
+        CHANNEL.sendTo(new SeedRefWrapper(data), player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
+#else
+        sendToPlayer(player, new SeedRefWrapper(data));
 #endif
     }
 
@@ -1033,7 +1114,8 @@ public class ForgeNetworkManager implements NetworkManager {
             boolean compactHeaderSupported,
             byte[] dataplaneTail,
             double playerX,
-            double playerZ
+            double playerZ,
+            boolean seedGenSupported
     ) {
         public void encode(FriendlyByteBuf buf) {
             buf.writeVarInt(protocolVersion);
@@ -1051,6 +1133,7 @@ public class ForgeNetworkManager implements NetworkManager {
             buf.writeBytes(dataplaneTail);
             buf.writeDouble(playerX);
             buf.writeDouble(playerZ);
+            buf.writeBoolean(seedGenSupported);
         }
 
         public static HandshakePacket decode(FriendlyByteBuf buf) {
@@ -1077,6 +1160,14 @@ public class ForgeNetworkManager implements NetworkManager {
                 } catch (Exception ignored) {
                 }
             }
+            // SeedGen 能力（append-only；旧客户端无此字段）
+            boolean seedGenSupported = false;
+            if (buf.isReadable()) {
+                try {
+                    seedGenSupported = buf.readBoolean();
+                } catch (Exception ignored) {
+                }
+            }
             return new HandshakePacket(
                     protocolVersion,
                     modVersion,
@@ -1088,7 +1179,8 @@ public class ForgeNetworkManager implements NetworkManager {
                     compactHeader,
                     tail,
                     playerX,
-                    playerZ
+                    playerZ,
+                    seedGenSupported
             );
         }
     }
@@ -1098,7 +1190,10 @@ public class ForgeNetworkManager implements NetworkManager {
             boolean accepted,
             boolean globalCompressionAccepted,
             boolean compactHeaderAccepted,
-            byte[] dataplaneTail
+            byte[] dataplaneTail,
+            long worldSeed,
+            byte[] seedGenTail,
+            boolean seedGenEnabled
     ) {
         public void encode(FriendlyByteBuf buf) {
             buf.writeVarInt(protocolVersion);
@@ -1107,15 +1202,46 @@ public class ForgeNetworkManager implements NetworkManager {
             buf.writeBoolean(compactHeaderAccepted);
             buf.writeVarInt(dataplaneTail.length);
             buf.writeBytes(dataplaneTail);
+            // SeedGen 尾部（append-only；旧客户端忽略尾字节）
+            buf.writeLong(worldSeed);
+            buf.writeVarInt(seedGenTail.length);
+            buf.writeBytes(seedGenTail);
+            buf.writeBoolean(seedGenEnabled);
         }
 
         public static HandshakeResponsePacket decode(FriendlyByteBuf buf) {
+            int protocolVersion = buf.readVarInt();
+            boolean accepted = buf.readBoolean();
+            boolean globalCompressionAccepted = buf.readBoolean();
+            boolean compactHeaderAccepted = buf.readBoolean();
+            byte[] dataplaneTail = readTail(buf);
+            // SeedGen 尾部（append-only；旧服务端无此字段时取默认）
+            long worldSeed = 0L;
+            byte[] seedGenTail = new byte[0];
+            boolean seedGenEnabled = false;
+            if (buf.isReadable() && buf.readableBytes() >= 8) {
+                try {
+                    worldSeed = buf.readLong();
+                    int tailLen = buf.readVarInt();
+                    if (tailLen > 0 && tailLen <= buf.readableBytes()) {
+                        seedGenTail = new byte[tailLen];
+                        buf.readBytes(seedGenTail);
+                    }
+                    if (buf.readableBytes() >= 1) {
+                        seedGenEnabled = buf.readBoolean();
+                    }
+                } catch (Exception ignored) {
+                }
+            }
             return new HandshakeResponsePacket(
-                    buf.readVarInt(),
-                    buf.readBoolean(),
-                    buf.readBoolean(),
-                    buf.readBoolean(),
-                    readTail(buf)
+                    protocolVersion,
+                    accepted,
+                    globalCompressionAccepted,
+                    compactHeaderAccepted,
+                    dataplaneTail,
+                    worldSeed,
+                    seedGenTail,
+                    seedGenEnabled
             );
         }
     }
@@ -1226,6 +1352,20 @@ public class ForgeNetworkManager implements NetworkManager {
             byte[] data = new byte[length];
             buf.readBytes(data);
             return new SectionDeltaWrapper(data);
+        }
+    }
+
+    public record SeedRefWrapper(byte[] data) {
+        public void encode(FriendlyByteBuf buf) {
+            buf.writeVarInt(data.length);
+            buf.writeBytes(data);
+        }
+
+        public static SeedRefWrapper decode(FriendlyByteBuf buf) {
+            int length = buf.readVarInt();
+            byte[] data = new byte[length];
+            buf.readBytes(data);
+            return new SeedRefWrapper(data);
         }
     }
 

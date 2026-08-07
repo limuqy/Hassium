@@ -35,11 +35,13 @@ public final class ConfigSchema {
     public static final ConfigKey<Boolean> CLIENT_NETWORK_ENABLED = bool("network.enabled", ConfigScope.CLIENT, true, "是否启用客户端 Hassium 自定义通道");
     public static final ConfigKey<Boolean> CLIENT_NETWORK_METRICS_ENABLED = bool("network.metricsEnabled", ConfigScope.CLIENT, false, "是否启用客户端网络指标");
     public static final ConfigKey<Boolean> CLIENT_NETWORK_METRICS_AUTO_RESET = bool("network.metricsAutoReset", ConfigScope.CLIENT, true, "登出服务器时自动重置指标计数");
+    public static final ConfigKey<Boolean> CLIENT_SEED_GEN_ENABLED = bool("network.seedGen.enabled", ConfigScope.CLIENT, false, "是否启用 SeedGen（本地生成 pristine 区块；需双端同版本，默认关）");
 
     public static final ConfigKey<Boolean> STORAGE_ENABLED = bool("storage.enabled", ConfigScope.SERVER, false, "是否启用存档压缩（默认关；客户端缓存独立不受影响）");
     public static final ConfigKey<String> STORAGE_MODE = string("storage.mode", ConfigScope.SERVER, "mirror", "存储模式");
     public static final ConfigKey<Integer> STORAGE_ZSTD_LEVEL = integer("storage.zstdLevel", ConfigScope.SERVER, 3, 1, 22, "存储 ZSTD 压缩等级");
     public static final ConfigKey<Boolean> SERVER_NETWORK_ENABLED = bool("network.enabled", ConfigScope.SERVER, true, "是否启用 Hassium 自定义通道");
+    public static final ConfigKey<Boolean> SERVER_SEED_GEN_ENABLED = bool("network.seedGen.enabled", ConfigScope.SERVER, false, "是否启用 SeedGen（服务端对 pristine 区块发 SeedRef 替代区块数据；客户端本地生成，hash 校验兜底；需双端同版本，默认关）");
     public static final ConfigKey<Integer> NETWORK_COMPRESSION_LEVEL = integer("network.compressionLevel", ConfigScope.SERVER, 3, 1, 22, "自定义通道 ZSTD 压缩等级");
     public static final ConfigKey<Boolean> NETWORK_MAGICLESS_ZSTD = bool("network.magiclessZstd", ConfigScope.SERVER, true, "是否使用无 magic 的 ZSTD");
     public static final ConfigKey<Boolean> NETWORK_GLOBAL_PACKET_COMPRESSION = bool("network.globalPacketCompression", ConfigScope.SERVER, true, "是否启用全局包压缩");

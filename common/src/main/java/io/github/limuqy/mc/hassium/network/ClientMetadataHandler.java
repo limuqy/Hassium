@@ -98,6 +98,52 @@ public class ClientMetadataHandler {
     // ===== 阶段一：chunkHash 比对 =====
 
     /**
+     * 处理 SeedRef（SeedGen 区块引用，Phase 1）。
+     * <p>
+     * Phase 1 语义：客户端本地生成尚未实现——收到 SeedRef 一律回退全量请求
+     * （正确性优先，SeedRef 只为减少流量；回退保证画面完整）。
+     * Phase 3 将替换为：本地 shadow 复算 → hash 校验 → 不匹配回退。
+     */
+    public static void handleSeedRefPacket(SeedRefS2CPacket packet) {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.player == null || mc.level == null) {
+            return;
+        }
+        int estimatedSize = 4 + 4 + 8 + 4 + packet.sectionHashes().length * 8;
+        NetworkStats.recordMetadataReceived(estimatedSize);
+
+        // 门控：无缓存存储 / 服务端未启用 SeedGen / 客户端配置未开启 → 直接回退
+        ClientHassiumStorage storage = ClientChunkHandler.getClientStorage();
+        if (storage == null
+                || !io.github.limuqy.mc.hassium.config.HassiumConfigService.getInstance().isClientSeedGenEnabled()
+                || !io.github.limuqy.mc.hassium.network.ClientChunkPipeline.getInstance().isServerSeedGenEnabled()) {
+            Constants.LOG.info("[SEED_REF] Received ({}, {}) but SeedGen inactive -> fallback full request",
+                    packet.chunkX(), packet.chunkZ());
+            fallbackToFullRequest(mc, packet);
+            return;
+        }
+
+        // Phase 1：本地生成未实现，先记录并回退全量请求
+        Constants.LOG.info("[SEED_REF] Received ({}, {}) hash={} -> fallback full request (Phase 1)",
+                packet.chunkX(), packet.chunkZ(), Long.toHexString(packet.contentHash()));
+        fallbackToFullRequest(mc, packet);
+    }
+
+    /**
+     * SeedRef 回退：按当前维度全量请求该区块。
+     */
+    private static void fallbackToFullRequest(Minecraft mc, SeedRefS2CPacket packet) {
+        String dimension = mc.level.dimension()
+#if MC_VER < MC_1_21_11
+                .location()
+#else
+                .identifier()
+#endif
+                .toString();
+        requestFullChunks(dimension, List.of(new ChunkPos(packet.chunkX(), packet.chunkZ())), true);
+    }
+
+    /**
      * 处理阶段一 chunkHash 广播包。
      * <p>
      * 比对本地缓存的 chunkHash：

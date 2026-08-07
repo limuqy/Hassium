@@ -50,6 +50,8 @@ public final class HassiumHandshake {
             buffer.put((byte) (clientCapabilities.scheme127Supported() ? 1 : 0));
             buffer.put((byte) (clientCapabilities.globalPacketCompressionSupported() ? 1 : 0));
             buffer.put((byte) (clientCapabilities.compactHeaderSupported() ? 1 : 0));
+            // SeedGen 能力（append-only；旧服务端忽略尾字节）
+            buffer.put((byte) (clientCapabilities.seedGenSupported() ? 1 : 0));
 
             buffer.flip();
             byte[] result = new byte[buffer.remaining()];
@@ -85,6 +87,8 @@ public final class HassiumHandshake {
             boolean scheme127Supported = buffer.get() == 1;
             boolean globalPacketCompressionSupported = buffer.get() == 1;
             boolean compactHeaderSupported = buffer.get() == 1;
+            // SeedGen 能力（append-only；旧客户端字节流无此字段）
+            boolean seedGenSupported = buffer.remaining() >= 1 && buffer.get() == 1;
 
             HassiumCapabilities capabilities = new HassiumCapabilities(
                     modVersion,
@@ -94,7 +98,8 @@ public final class HassiumHandshake {
                     chunkRevisionSupported,
                     scheme127Supported,
                     globalPacketCompressionSupported,
-                    compactHeaderSupported
+                    compactHeaderSupported,
+                    seedGenSupported
             );
 
             return new ClientRequest(capabilities);
@@ -103,25 +108,32 @@ public final class HassiumHandshake {
 
     /**
      * 服务端握手响应
+     * <p>
+     * SeedGen 字段（worldSeed/levelStemNbt/seedGenEnabled）为 append-only 尾部扩展：
+     * 旧客户端解码时在固定字段后忽略尾字节，新字段取默认（0/null/false）。
      */
     public record ServerResponse(
             HassiumCapabilities serverCapabilities,
             String worldId,
             boolean accepted,
-            String rejectReason
+            String rejectReason,
+            long worldSeed,
+            byte[] levelStemNbt,
+            boolean seedGenEnabled
     ) {
         /**
          * 创建接受响应
          */
-        public static ServerResponse accept(HassiumCapabilities serverCapabilities, String worldId) {
-            return new ServerResponse(serverCapabilities, worldId, true, null);
+        public static ServerResponse accept(HassiumCapabilities serverCapabilities, String worldId,
+                                            long worldSeed, byte[] levelStemNbt, boolean seedGenEnabled) {
+            return new ServerResponse(serverCapabilities, worldId, true, null, worldSeed, levelStemNbt, seedGenEnabled);
         }
 
         /**
          * 创建拒绝响应
          */
         public static ServerResponse reject(String reason) {
-            return new ServerResponse(null, null, false, reason);
+            return new ServerResponse(null, null, false, reason, 0L, null, false);
         }
 
         /**
@@ -158,6 +170,14 @@ public final class HassiumHandshake {
                 buffer.put((byte) (serverCapabilities.scheme127Supported() ? 1 : 0));
                 buffer.put((byte) (serverCapabilities.globalPacketCompressionSupported() ? 1 : 0));
                 buffer.put((byte) (serverCapabilities.compactHeaderSupported() ? 1 : 0));
+                // SeedGen 尾部（append-only；旧客户端忽略尾字节）
+                buffer.putLong(worldSeed);
+                byte[] stem = levelStemNbt;
+                buffer.putInt(stem != null ? stem.length : 0);
+                if (stem != null && stem.length > 0) {
+                    buffer.put(stem);
+                }
+                buffer.put((byte) (seedGenEnabled ? 1 : 0));
             } else {
                 // 拒绝原因
                 writeString(buffer, rejectReason != null ? rejectReason : "");
@@ -213,14 +233,33 @@ public final class HassiumHandshake {
                         chunkRevisionSupported,
                         scheme127Supported,
                         globalPacketCompressionSupported,
-                        compactHeaderSupported
+                        compactHeaderSupported,
+                        false
                 );
 
-                return new ServerResponse(capabilities, worldId, true, null);
+                // SeedGen 尾部（append-only；旧服务端字节流无此字段时取默认）
+                long worldSeed = 0L;
+                byte[] levelStemNbt = null;
+                boolean seedGenEnabled = false;
+                if (buffer.remaining() >= 8) {
+                    worldSeed = buffer.getLong();
+                    if (buffer.remaining() >= 4) {
+                        int stemLen = buffer.getInt();
+                        if (stemLen > 0 && stemLen <= buffer.remaining()) {
+                            levelStemNbt = new byte[stemLen];
+                            buffer.get(levelStemNbt);
+                        }
+                        if (buffer.remaining() >= 1) {
+                            seedGenEnabled = buffer.get() == 1;
+                        }
+                    }
+                }
+
+                return new ServerResponse(capabilities, worldId, true, null, worldSeed, levelStemNbt, seedGenEnabled);
             } else {
                 // 拒绝原因
                 String rejectReason = readString(buffer);
-                return new ServerResponse(null, null, false, rejectReason);
+                return new ServerResponse(null, null, false, rejectReason, 0L, null, false);
             }
         }
     }

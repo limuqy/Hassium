@@ -28,6 +28,7 @@ import net.minecraft.resources.ResourceLocation;
 #else
 import net.minecraft.resources.Identifier;
 #endif
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -131,6 +132,13 @@ ResourceLocation
 Identifier
 #endif
 CHUNK_HASH_S2C = ChunkHashS2CPacket.CHANNEL;
+    public static final
+#if MC_VER < MC_1_21_11
+ResourceLocation
+#else
+Identifier
+#endif
+SEED_REF_S2C = SeedRefS2CPacket.CHANNEL;
     public static final
 #if MC_VER < MC_1_21_11
 ResourceLocation
@@ -388,6 +396,22 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
             try {
                 if (buf.isReadable()) {
                     UdpDataPlaneHandshakeTail.S2CTail tail = UdpDataPlaneHandshakeTail.readS2C(buf);
+                    // SeedGen 尾部（append-only；旧服务端无此字段时忽略）
+                    try {
+                        if (buf.isReadable()) {
+                            long worldSeed = buf.readLong();
+                            int stemLen = buf.readVarInt();
+                            byte[] stemNbt = null;
+                            if (stemLen > 0 && stemLen <= buf.readableBytes()) {
+                                stemNbt = new byte[stemLen];
+                                buf.readBytes(stemNbt);
+                            }
+                            boolean seedGenEnabled = buf.readableBytes() >= 1 && buf.readBoolean();
+                            ClientChunkPipeline.getInstance().setServerSeedInfo(worldSeed, stemNbt, seedGenEnabled);
+                        }
+                    } catch (Exception seedEx) {
+                        LOGGER.debug("Hassium: failed to decode SeedGen tail (legacy server?)", seedEx);
+                    }
                     try {
                         java.util.List<io.github.limuqy.mc.hassium.network.dataplane.ControlEndpoint> cands =
                                 new java.util.ArrayList<>();
@@ -479,6 +503,22 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
                 try {
                     if (buf.isReadable()) {
                         UdpDataPlaneHandshakeTail.S2CTail tail = UdpDataPlaneHandshakeTail.readS2C(buf);
+                        // SeedGen 尾部（append-only；旧服务端无此字段时忽略）
+                        try {
+                            if (buf.isReadable()) {
+                                long worldSeed = buf.readLong();
+                                int stemLen = buf.readVarInt();
+                                byte[] stemNbt = null;
+                                if (stemLen > 0 && stemLen <= buf.readableBytes()) {
+                                    stemNbt = new byte[stemLen];
+                                    buf.readBytes(stemNbt);
+                                }
+                                boolean seedGenEnabled = buf.readableBytes() >= 1 && buf.readBoolean();
+                                ClientChunkPipeline.getInstance().setServerSeedInfo(worldSeed, stemNbt, seedGenEnabled);
+                            }
+                        } catch (Exception seedEx) {
+                            LOGGER.debug("Hassium: failed to decode SeedGen tail (legacy server?)", seedEx);
+                        }
                         try {
                             java.util.List<io.github.limuqy.mc.hassium.network.dataplane.ControlEndpoint> cands =
                                     new java.util.ArrayList<>();
@@ -701,6 +741,30 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
         });
 #endif
 
+        // 注册 SeedRef 接收（SeedGen 区块引用）
+#if MC_VER < MC_1_20_5
+        ClientPlayNetworking.registerGlobalReceiver(SEED_REF_S2C, (client, handler, buf, responseSender) -> {
+            try {
+                SeedRefS2CPacket packet = SeedRefS2CPacket.decode(buf);
+                client.execute(() -> ClientMetadataHandler.handleSeedRefPacket(packet));
+            } catch (Exception e) {
+                LOGGER.error("[CLIENT] Failed to handle seed ref packet", e);
+            }
+        });
+#else
+        ClientPlayNetworking.registerGlobalReceiver(FabricPayloadRegistry.SEED_REF_S2C_TYPE, (payload, context) -> {
+            FriendlyByteBuf buf = FabricPayloadRegistry.fromPayload(payload);
+            try {
+                SeedRefS2CPacket packet = SeedRefS2CPacket.decode(buf);
+                context.client().execute(() -> ClientMetadataHandler.handleSeedRefPacket(packet));
+            } catch (Exception e) {
+                LOGGER.error("[CLIENT] Failed to handle seed ref packet", e);
+            } finally {
+                buf.release();
+            }
+        });
+#endif
+
         // 注册分段增量响应接收（阶段二）
 #if MC_VER < MC_1_20_5
         ClientPlayNetworking.registerGlobalReceiver(SECTION_DELTA_S2C, (client, handler, buf, responseSender) -> {
@@ -810,6 +874,8 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
                 buf.writeDouble(0.0);
                 buf.writeDouble(0.0);
             }
+            // SeedGen 能力上报（append-only；旧服务端忽略尾字节）
+            buf.writeBoolean(HassiumConfigService.getInstance().isClientSeedGenEnabled());
 #if MC_VER < MC_1_20_5
             ClientPlayNetworking.send(HANDSHAKE_C2S, buf);
 #else
@@ -860,6 +926,15 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
         ServerPlayNetworking.send(player, CHUNK_HASH_S2C, buf);
 #else
         ServerPlayNetworking.send(player, FabricPayloadRegistry.toPayload(FabricPayloadRegistry.CHUNK_HASH_S2C_TYPE, buf));
+#endif
+    }
+
+    @Override
+    public void sendSeedRef(ServerPlayer player, FriendlyByteBuf buf) {
+#if MC_VER < MC_1_20_5
+        ServerPlayNetworking.send(player, SEED_REF_S2C, buf);
+#else
+        ServerPlayNetworking.send(player, FabricPayloadRegistry.toPayload(FabricPayloadRegistry.SEED_REF_S2C_TYPE, buf));
 #endif
     }
 
@@ -1075,6 +1150,10 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
                         clientUdpDataplaneSupported && udpBound,
                         clientControlFailoverSupported);
                 UdpDataPlaneHandshakeTail.writeS2C(response, s2cTail);
+                // SeedGen 尾部（append-only；旧客户端忽略尾字节）
+                ServerLevel seedLevel = server.overworld();
+                SeedGenTail.writeS2C(response, seedLevel,
+                        HassiumConfigService.getInstance().isSeedGenEnabled());
             } catch (Exception ex) {
                 LOGGER.warn("Hassium: Failed to append dataplane tail to handshake response for {}",
                         player.getName().getString(), ex);
@@ -1276,6 +1355,15 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
                 } catch (Exception ignored) {
                 }
             }
+            // SeedGen 能力（append-only；旧客户端无此字段）
+            boolean seedGenSupported = false;
+            if (buf.isReadable()) {
+                try {
+                    seedGenSupported = buf.readBoolean();
+                } catch (Exception ignored) {
+                }
+            }
+            ServerChunkPushManager.getInstance().setPlayerSeedGenSupported(player.getUUID(), seedGenSupported);
 
             DebugLogger.debug(LogType.NETWORK,
                     "[HANDSHAKE] Details from {}: protocol={}, modVersion={}, algorithms={}, clientCache={}, globalCompression={}, compactHeader={}",
