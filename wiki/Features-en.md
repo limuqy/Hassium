@@ -130,7 +130,8 @@ Hassium is a single client + server suite that optimizes Minecraft from five dir
 
 - **Goal**: Light recomputation no longer blocks the main thread
 - **How**: Recomputation runs on a background thread pool (default 4 threads; virtual-thread mode unbounded); the main thread only captures the 9-column snapshot and submits; completion callbacks are scheduled within the main-thread budget
-- **Config**: `clientCache.parallelLightEngineEnabled` (default `true`), `clientCache.parallelLightEngineThreads` (default `4`)
+- **Config**: `clientCache.parallelLightEngineEnabled` (default `false`), `clientCache.parallelLightEngineThreads` (default `4`)
+- **Sync light (optional)**: `clientCache.lightSyncMode` (default `false`) enables double-frame buffering — no-light chunks collected this frame are fully applied at the next frame tail, dark-chunk window ≤1 frame; default is async budgeted consumption (a few chunks per frame, dark chunks fade as recompute lands)
 - **Metric**: `/hassiumc stats` shows `lighting optimization: xx% (hits N, recompute M)`
 
 ---

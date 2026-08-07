@@ -97,6 +97,7 @@
 | `clientCache.mainThreadChunkBudgetMs` | `15` | 客户端每帧 apply 预算（ms） |
 | `clientCache.parallelLightEngineEnabled` | `false` | 并行光照（可选，需安装 Promethium MOD；开启后重算在后台线程池，主线程只提交快照；MOD 缺席自动回退官方引擎） |
 | `clientCache.parallelLightEngineThreads` | `4` | 并行光照线程数（虚拟线程模式忽略） |
+| `clientCache.lightSyncMode` | `false` | 光照重算同步模式（双帧缓冲：本帧收集无光照区块，下一帧尾阻塞全部重算落地，黑块窗口≤1帧；代价为加载期单帧开销集中） |
 | `network.metricsEnabled` | `false` | 指标收集（默认关闭；自检时自动开启） |
 | `network.dataPlane.enabled` | `false` | UDP/KCP 数据面与 TCP 主控热切/加权分流；默认关闭，启用前请配置可达端点并依次确认 6 个自检标记 |
 | `network.dataPlane.controlStallMs` | `6000` | TCP 主控卡顿多久后触发 `FailoverRequest` |

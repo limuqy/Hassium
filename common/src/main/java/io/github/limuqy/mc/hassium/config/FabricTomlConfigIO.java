@@ -351,7 +351,8 @@ public final class FabricTomlConfigIO {
                 getInt(cfg, "clientCache.maxChunksPerFrame", d.maxChunksPerFrame()),
                 getInt(cfg, "clientCache.mainThreadChunkBudgetMs", d.mainThreadChunkBudgetMs()),
                 getBool(cfg, "clientCache.parallelLightEngineEnabled", d.parallelLightEngineEnabled()),
-                getInt(cfg, "clientCache.parallelLightEngineThreads", d.parallelLightEngineThreads())
+                getInt(cfg, "clientCache.parallelLightEngineThreads", d.parallelLightEngineThreads()),
+                getBool(cfg, "clientCache.lightSyncMode", d.lightSyncMode())
         );
     }
 
@@ -381,6 +382,8 @@ public final class FabricTomlConfigIO {
         set(cfg, "clientCache.mainThreadChunkBudgetMs", c.mainThreadChunkBudgetMs(), "主线程 apply 预算（ms）");
         set(cfg, "clientCache.parallelLightEngineEnabled", c.parallelLightEngineEnabled(), "是否启用并行光照引擎（需接入 Promethium 光照引擎；默认 false=官方光照计算，光照重算经统一异步缓冲队列预算消费）");
         set(cfg, "clientCache.parallelLightEngineThreads", c.parallelLightEngineThreads(), "并行光照引擎线程数（虚拟线程模式忽略）");
+        set(cfg, "clientCache.lightSyncMode", c.lightSyncMode(),
+                "是否启用光照重算同步模式（双帧缓冲：本帧收集无光照区块，下一帧尾阻塞全部重算落地，黑块窗口≤1帧；默认 false=异步预算消费；与 parallelLightEngineEnabled 同开时本项优先）");
     }
 
     private static HassiumConfig.ClientNetworkConfig readClientNetwork(CommentedConfig cfg) {

@@ -42,6 +42,7 @@ Hassium 启动时在 `config/hassium/` 自动生成两份 TOML：
 | `clientCache.lightCacheEnabled` | `true` | 光照优化；命中跳过同步重算；与 Sodium 等有光照异常时关掉即可 |
 | `clientCache.parallelLightEngineEnabled` | `true` | 并行光照：重算在后台线程池执行，主线程只提交快照 |
 | `clientCache.parallelLightEngineThreads` | `4` | 并行光照线程数（虚拟线程模式忽略） |
+| `clientCache.lightSyncMode` | `false` | 光照重算同步模式（双帧缓冲）：本帧收集无光照区块，下一帧尾阻塞全部重算落地，黑块窗口 ≤1 帧；默认 false=异步预算消费 |
 | `clientCache.viewDistanceExtensionEnabled` | `true` | 超视渲染（多人服 clientVD > serverVD 时回填环带；**与 Bobby 互斥**） |
 | `clientCache.maxRenderDistance` | `32` | 超视渲染环带与有效 RD 上限（范围 2–64） |
 | `clientCache.ovdUnloadDelaySecs` | `5` | 离开超视渲染环带后延迟卸载秒数（0=同步卸载） |

@@ -31,7 +31,8 @@ public final class ConfigSnapshotAdapter {
                 .with(ConfigSchema.CACHE_MAX_CHUNKS_PER_FRAME, cache.maxChunksPerFrame())
                 .with(ConfigSchema.CACHE_MAIN_THREAD_BUDGET_MS, cache.mainThreadChunkBudgetMs())
                 .with(ConfigSchema.CACHE_PARALLEL_LIGHT_ENGINE_ENABLED, cache.parallelLightEngineEnabled())
-                .with(ConfigSchema.CACHE_PARALLEL_LIGHT_ENGINE_THREADS, cache.parallelLightEngineThreads());
+                .with(ConfigSchema.CACHE_PARALLEL_LIGHT_ENGINE_THREADS, cache.parallelLightEngineThreads())
+                .with(ConfigSchema.CACHE_LIGHT_SYNC_MODE, cache.lightSyncMode());
 
         HassiumConfig.ClientNetworkConfig clientNet = config.clientNetwork();
         values = values.with(ConfigSchema.CLIENT_NETWORK_ENABLED, clientNet.enabled())
@@ -117,7 +118,8 @@ public final class ConfigSnapshotAdapter {
                 values.get(ConfigSchema.CACHE_ENTITY_SNAPSHOTS_ENABLED), values.get(ConfigSchema.CACHE_LOAD_THREADS),
                 values.get(ConfigSchema.CACHE_LIGHT_CACHE_ENABLED), values.get(ConfigSchema.CACHE_MAX_CHUNKS_PER_FRAME),
                 values.get(ConfigSchema.CACHE_MAIN_THREAD_BUDGET_MS),
-                values.get(ConfigSchema.CACHE_PARALLEL_LIGHT_ENGINE_ENABLED), values.get(ConfigSchema.CACHE_PARALLEL_LIGHT_ENGINE_THREADS));
+                values.get(ConfigSchema.CACHE_PARALLEL_LIGHT_ENGINE_ENABLED), values.get(ConfigSchema.CACHE_PARALLEL_LIGHT_ENGINE_THREADS),
+                values.get(ConfigSchema.CACHE_LIGHT_SYNC_MODE));
 
         List<HassiumConfig.ReachableEndpoint> controlEndpoints = values.get(ConfigSchema.NETWORK_CONTROL_ENDPOINTS).stream()
                 .map(DataPlaneEndpointConfig::decodeReachable).toList();

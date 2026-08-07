@@ -42,6 +42,7 @@ In-game config screen entry points:
 | `clientCache.lightCacheEnabled` | `true` | Light cache; hits skip recomputation; turn off if you see light glitches with Sodium etc. |
 | `clientCache.parallelLightEngineEnabled` | `true` | Parallel light: recomputation runs on a background pool; the main thread only submits snapshots |
 | `clientCache.parallelLightEngineThreads` | `4` | Parallel light thread count (ignored in virtual-thread mode) |
+| `clientCache.lightSyncMode` | `false` | Light recompute sync mode (double-frame buffering): no-light chunks collected this frame are fully applied at the next frame tail, dark-chunk window ≤1 frame (default false = async budgeted consumption) |
 | `clientCache.viewDistanceExtensionEnabled` | `true` | Beyond-view render (multiplayer, clientVD > serverVD ring fill; **incompatible with Bobby**) |
 | `clientCache.maxRenderDistance` | `32` | Beyond-view ring and effective RD cap (range 2–64) |
 | `clientCache.ovdUnloadDelaySecs` | `5` | Seconds of delayed unload after leaving the beyond-view ring (0 = sync) |

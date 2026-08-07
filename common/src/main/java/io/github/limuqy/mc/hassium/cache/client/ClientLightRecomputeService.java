@@ -17,8 +17,8 @@ import net.minecraft.world.level.lighting.LevelLightEngine;
  * <ul>
  *   <li>并行引擎（默认关）：转交 {@code ParallelLightEngine.submitRecompute}，后台 BFS
  *       重算 + 主线程帧尾预算落地（本方法立即返回）。</li>
- *   <li>官方引擎（默认）：入 {@link ClientLightBufferQueue}，帧尾预算内消费
- *       （每帧部分预算，不阻塞 apply 链路）。</li>
+ *   <li>官方引擎（默认）：入 {@link ClientLightBufferQueue}，帧尾消费——异步模式每帧
+ *       部分预算；同步模式（{@code lightSyncMode=true}）双帧缓冲，下一帧尾阻塞全量落地。</li>
  * </ul>
  * 官方引擎原语（safeRunLightUpdates / 建层 / 邻居拉光 / 缓存写回）已迁往
  * {@link HassiumLightHooks}（Promethium 引擎经 {@code LightEngineHooks} 消费）；
@@ -29,11 +29,11 @@ public final class ClientLightRecomputeService {
     private ClientLightRecomputeService() {}
 
     /**
-     * 同步执行光照重算（主线程调用）。
+     * 分派光照重算（主线程调用；chunk apply 完成后立即调用）。
      * <p>
-     * 合并 apply+光照 pipeline：{@code applyToLevelFromByteBuf} 后立即调用，
-     * 不再经过 {@code MainThreadDispatcher} 延迟调度，避免跨帧黑块。
-     * 限流由 {@code ClientCacheLoadQueue.processQueueUntil} 的时间预算自然约束。
+     * 并行引擎（默认关）→ 后台 BFS；官方引擎 → 入统一缓冲队列帧尾消费：异步模式
+     * 预算内逐帧消化（黑块随重算落地逐帧消减），同步模式（{@code lightSyncMode=true}）
+     * 双帧缓冲——下一帧尾阻塞全量落地（黑块窗口 ≤1 帧）。
      *
      * @param chunkPos 区块坐标
      */
@@ -42,7 +42,7 @@ public final class ClientLightRecomputeService {
     }
 
     /**
-     * 同步执行光照重算，使用内存中的 NBT（避免从磁盘读取）。
+     * 分派光照重算，使用内存中的 NBT（避免从磁盘读取）。
      *
      * @param chunkPos  区块坐标
      * @param cachedNbt 内存中的缓存 NBT（可为 null，null 时回退磁盘读取）
@@ -68,13 +68,15 @@ public final class ClientLightRecomputeService {
         // 空光字段（SectionDelta 残缺 light、empty-mask 全 0），灌入引擎显示错误亮度；
         // 重算完成原子落地新光即最终画面，预灌只增加主线程开销与脏显示窗口。
         // 并行光照引擎（默认关；Promethium MOD 缺席自动回退）：分流到后台全量重算 + 主线程
-        // 原子提交，本方法立即返回
-        if (PromethiumLightBridge.isEnabled()) {
+        // 原子提交，本方法立即返回。同步模式（lightSyncMode）强制官方引擎路径：
+        // 入双帧缓冲队列，下一帧尾阻塞全量落地。
+        if (!ClientLightBufferQueue.isSyncMode() && PromethiumLightBridge.isEnabled()) {
             PromethiumLightBridge.submitRecompute(chunkPos, nbt);
             return;
         }
-        // 官方引擎：入统一缓冲队列，帧尾预算内消费（每帧部分预算；缓存写回在消费时完成）。
-        // 不在此同步重算——逐块立即重算会挤占 chunk apply 预算造成帧时间锯齿。
+        // 官方引擎：入统一缓冲队列，帧尾消费（异步=预算内每帧部分，同步=下一帧尾阻塞全量；
+        // 缓存写回在消费时完成）。不在此同步重算——逐块立即重算会挤占 chunk apply
+        // 预算造成帧时间锯齿。
         ClientLightBufferQueue.getInstance().enqueue(chunkPos, nbt);
     }
 

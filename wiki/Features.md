@@ -130,7 +130,8 @@ Hassium 用一套客户端 + 服务端配合，从**高效压缩、网络优化�
 
 - **目标**：重算光照不再占用主线程
 - **怎么做的**：重算提交到后台线程池并行执行（默认 4 线程，虚拟线程模式不限），主线程只做 9 柱快照捕获与提交；完成回调在主线程预算内排程
-- **配置**：`clientCache.parallelLightEngineEnabled`（默认 `true`）、`clientCache.parallelLightEngineThreads`（默认 `4`）
+- **配置**：`clientCache.parallelLightEngineEnabled`（默认 `false`）、`clientCache.parallelLightEngineThreads`（默认 `4`）
+- **同步光照（可选）**：`clientCache.lightSyncMode`（默认 `false`）开启后光照重算走双帧缓冲——本帧收集无光照区块，下一帧尾阻塞全部落地，黑块窗口 ≤1 帧；默认异步预算消费（每帧部分预算，黑块随重算逐帧消减）
 - **指标**：`/hassiumc stats` 显示 `光照优化：xx%（命中 N，重算 M）`
 
 ---

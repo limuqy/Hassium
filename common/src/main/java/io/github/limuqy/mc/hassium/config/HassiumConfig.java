@@ -80,7 +80,9 @@ public record HassiumConfig(
             int mainThreadChunkBudgetMs,
             // === 光照计算引擎（默认官方引擎；接入 Promethium 后可选并行）===
             boolean parallelLightEngineEnabled,
-            int parallelLightEngineThreads
+            int parallelLightEngineThreads,
+            // === 光照重算模式（默认异步预算消费；true=同步双帧缓冲）===
+            boolean lightSyncMode
     ) {
         public static final ClientCacheConfig DEFAULT = new ClientCacheConfig(
                 true,    // enabled
@@ -103,7 +105,8 @@ public record HassiumConfig(
                 12,      // maxChunksPerFrame
                 15,      // mainThreadChunkBudgetMs
                 false,   // parallelLightEngineEnabled（默认官方引擎，光照经统一异步缓冲队列预算消费）
-                4        // parallelLightEngineThreads
+                4,       // parallelLightEngineThreads
+                false    // lightSyncMode（默认异步预算消费；true=同步双帧缓冲：本帧收集、下一帧尾阻塞全量落地）
         );
 
         public long maxCacheSizeBytes() {

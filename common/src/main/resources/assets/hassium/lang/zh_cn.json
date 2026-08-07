@@ -57,6 +57,8 @@
     "hassium.configuration.clientCache.mainThreadChunkBudgetMs.tooltip":  "每帧主线程应用区块的时间预算（毫秒，默认 15）",
     "hassium.configuration.clientCache.parallelLightEngineEnabled":  "并行光照引擎",
     "hassium.configuration.clientCache.parallelLightEngineEnabled.tooltip":  "接入 Promethium 光照引擎后启用后台并行重算。默认 false（官方光照计算，光照重算经统一异步缓冲队列预算消费）。",
+    "hassium.configuration.clientCache.lightSyncMode":  "光照同步模式",
+    "hassium.configuration.clientCache.lightSyncMode.tooltip":  "光照重算同步模式（双帧缓冲）：本帧应用区块时收集无光照区块，下一帧尾阻塞全部重算落地，黑块窗口 ≤1 帧。默认 false（异步预算消费，每帧只重算少量区块）。与并行光照引擎同时开启时本项优先。",
     "hassium.configuration.storage":  "存储",
     "hassium.configuration.storage.button":  "存储…",
     "hassium.configuration.storage.enabled":  "启用存档压缩",

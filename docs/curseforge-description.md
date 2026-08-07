@@ -58,7 +58,8 @@ Full instructions: [Installation](https://github.com/limuqy/Hassium/wiki/Install
 | | World export | `/hassiumc export` writes the local cache as a vanilla Anvil singleplayer world                                                                                           |
 | **Lighting optimization** | Light stripping | Server can omit light data; the client recomputes lighting locally to save more bandwidth                                                                                 |
 | | Light cache | Light data is cached after first recompute; cache hits apply pre-computed lighting directly, skipping expensive recomputation                                             |
-| | Parallel light engine | Light recomputation runs on a background thread pool; the main thread only submits snapshots (on by default)                                                              |
+| | Parallel light engine | Light recomputation runs on a background thread pool; the main thread only submits snapshots (on by default)                                                             |
+| | Light sync mode | Optional double-frame buffering (`clientCache.lightSyncMode`): no-light chunks collected this frame are fully applied at the next frame tail, dark chunks clear within one frame     |
 | **Utilities** | Traffic metrics | `/hassium stats` (server) and `/hassiumc stats` (client) to inspect compression and cache results                                                                         |
 
 Clients without the mod can connect by default (`compat.requireClientMod = false`); install on both sides for full compression and cache benefits.
@@ -118,6 +119,7 @@ Complete matrix: [Support Matrix](https://github.com/limuqy/Hassium/wiki/Support
 | **光照优化** | 光照剥离 | 服务端可不传光照数据，由客户端本地重算，进一步省流量 |
 | | 光照缓存 | 首次加载重算后缓存光照数据，后续缓存命中直接应用，跳过同步重算 |
 | | 并行光照 | 可选：安装 Promethium MOD 后开启，光照重算在后台线程池并行执行；默认官方引擎（统一异步缓冲队列，帧尾预算消费，不阻塞主线程） |
+| | 同步光照 | 可选：`clientCache.lightSyncMode` 双帧缓冲——本帧收集无光照区块，下一帧尾阻塞全部重算落地，黑块窗口 ≤1 帧 |
 | **实用工具** | 流量监控 | `/hassium stats`（服务端）、`/hassiumc stats`（客户端）查看压缩与缓存效果 |
 
 未安装本模组的客户端默认可连接（`compat.requireClientMod = false`）；双端都装才能吃满压缩与缓存。

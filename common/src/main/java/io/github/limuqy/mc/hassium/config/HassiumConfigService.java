@@ -431,6 +431,11 @@ public class HassiumConfigService {
         return config.clientCache().parallelLightEngineEnabled();
     }
 
+    /** 光照重算同步模式（双帧缓冲：本帧收集、下一帧尾阻塞全部落地；默认关）。 */
+    public boolean isLightSyncMode() {
+        return config.clientCache().lightSyncMode();
+    }
+
     /** 多线程光照引擎线程数（虚拟线程模式忽略）。 */
     public int getParallelLightEngineThreads() {
         return Math.max(1, config.clientCache().parallelLightEngineThreads());
