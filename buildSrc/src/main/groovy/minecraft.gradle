@@ -26,7 +26,16 @@ afterEvaluate {
 }
 
 dependencies {
-    implementation(project(":common"))
+    // 仅编译期 API：运行期类由本模块合并编译产物提供（源码 srcDirs 合并 + jar from output）。
+    // 不能 implementation：loom 会把 project 依赖解析为 build/libs 的 remap 产物
+    // （intermediary 映射），dev 运行（runClient/runServer）加载后 mixin 签名/目标名错配崩溃。
+    compileOnly(project(":common"))
+    // compileOnly 不传递 common 的 runtime 依赖，这里显式透传（与 common/build.gradle 同坐标；
+    // fabric 自声明的同坐标自动去重）。
+    implementation 'com.github.luben:zstd-jni:1.5.5-7'
+    implementation 'org.lz4:lz4-java:1.8.0'
+    implementation 'com.electronwill.night-config:core:3.6.7'
+    implementation 'com.electronwill.night-config:toml:3.6.7'
 }
 
 // loader 模块合并 common 源码，随 loader jar 一起编译
