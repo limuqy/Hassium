@@ -112,6 +112,27 @@ dependencies {
                 : 'cloth-config-neoforge'
         modCompileOnly("me.shedaniel.cloth:${clothArtifact}:${gradle.ext.cloth_config_version}")
     }
+
+    // IMBlocker：仅开发环境 runClient 体验（中文输入法自动阻断）。modLocalRuntime 只进本地
+    // dev 运行时，不进生产 jar。1.20.1 的 neoforge 子项目实为 forge 平台（loom.platform=forge），
+    // 必须用 forge 变体（neoforge 变体最低 1.20.6）；1.20.2+ 用 neoforge 变体。
+    // 坐标用 project ID WMDesFsZ（slug "imblocker" 在 Modrinth Maven 上指向旧项目 1.0.x）。
+    if (gradle.ext.has('imblocker_version')) {
+        def imFilter = gradle.ext.minecraft_version == '1.20.1' ? 'forge' : 'neoforge'
+        modLocalRuntime("maven.modrinth:WMDesFsZ:${gradle.ext.imblocker_version}-${imFilter}")
+    }
+}
+
+// IMBlocker 为 client-only mod：neoforge 变体无 environment 声明，dev runServer（merged jar
+// 含客户端类）会加载并执行其 @Mod 构造器/静态初始化（引 net.minecraft.client.*），实测
+// ExceptionInInitializerError → ModLoadingException 崩启动（1.21.1 runServer 验证）。
+// runServer 从 classpath 排除 IMBlocker remap 产物（loom 命名 WMDesFsZ-<hash>-<ver>-<loader>.jar）。
+afterEvaluate {
+    tasks.named('runServer').configure { t ->
+        if (t instanceof JavaExec) {
+            t.classpath = t.classpath.filter { f -> !f.name.startsWith('WMDesFsZ-') }
+        }
+    }
 }
 
 // Mixin AP 配置：禁用目标验证（architectury-loom 的 remapping 会在运行时处理）

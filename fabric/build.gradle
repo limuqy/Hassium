@@ -107,6 +107,14 @@ dependencies {
         modCompileOnly("me.shedaniel.cloth:cloth-config-fabric:${gradle.ext.cloth_config_version}")
         modLocalRuntime("me.shedaniel.cloth:cloth-config-fabric:${gradle.ext.cloth_config_version}")
     }
+
+    // IMBlocker：仅开发环境 runClient 体验（中文输入法自动阻断）。modLocalRuntime 只进本地
+    // dev 运行时，不进生产 jar；fabric.mod.json environment=client，runServer 不加载。
+    // 注意：IMBlocker 新项目 slug 为 imblocker-original / project ID WMDesFsZ（slug "imblocker"
+    // 在 Modrinth Maven 上仍指向旧项目 1.0.x），故坐标用 project ID。
+    if (gradle.ext.has('imblocker_version')) {
+        modLocalRuntime("maven.modrinth:WMDesFsZ:${gradle.ext.imblocker_version}-fabric")
+    }
 }
 
 // 生产 jar 内嵌剥离版 kcp（zstd-jni 同款 shade，非 Loom JiJ）：把剥离后的 kcp jar

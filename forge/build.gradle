@@ -147,6 +147,11 @@ dependencies {
             modCompileOnly("me.shedaniel.cloth:cloth-config-forge:${clothVer}")
         }
     }
+
+    // IMBlocker（开发环境输入法阻断）：forge 子项目整体不接入——
+    // - 1.20.1 为已撤销组合（由 neoforge 子项目 loom.platform=forge 承担），且 dev runServer
+    //   本就崩于 loom MinecraftLocator mods.toml（既有问题）；
+    // - 1.20.6+ 维护版本中 IMBlocker forge 变体上游最高支持 1.20.4，无可用变体。
 }
 
 /**
