@@ -24,6 +24,9 @@ import java.util.List;
  *
  * <p>不变量：本类无状态（{@code hardRttMs} 是只读配置），可被多玩家并发调用；
  * {@link PlayerSessions} 由 caller 在 per-player 上下文持有，router 仅接收并修改其可变计数。
+ * 同一 {@code PlayerSessions} 的决策与 {@code refresh} 以 ps monitor 互斥——调用方
+ * （{@code DataPlaneUdpServer#tryRouteBulk}）会从 {@code ServerChunkPushManager} 的多线程
+ * pushPool 并发到达，无锁时 {@code curWeights} 的 check-then-act 会产生 AIOOBE。
  */
 public final class UdpBulkRouter {
 
@@ -60,11 +63,22 @@ public final class UdpBulkRouter {
             return new PlayerSessions(new ArrayList<>(sessions));
         }
 
-        /** router 调用前刷新 sessions 快照（保留 wrrAccum / drops / degraded；curWeights 按新长度重整）。 */
-        public void refresh(List<? extends BulkRouteTarget> fresh) {
+        /**
+         * router 调用前刷新 sessions 快照（保留 wrrAccum / drops / degraded；curWeights 按新长度重整）。
+         *
+         * <p>与 {@link UdpBulkRouter} 的决策方法共用 ps monitor：{@code tryRouteBulk} 会从
+         * {@code ServerChunkPushManager} 的多线程 pushPool 并发到达（同一玩家的多个 chunk 任务），
+         * 若 refresh 与 wrrPickShared 的 curWeights check-then-act 不互斥，会踩到数组长度
+         * 被并发替换导致的 AIOOBE。
+         *
+         * <p>curWeights 按 {@code size + 1} 分配：share 模式的 {@code wrrPickShared} 需要
+         * PRIMARY 虚拟槽位（检查 {@code length != n + 1}），exclusive 的 {@code wrrPick} 只要
+         * {@code length >= n}——两个消费方都免重分配，避免每 chunk 的数组抖动。
+         */
+        public synchronized void refresh(List<? extends BulkRouteTarget> fresh) {
             this.sessions = List.copyOf(fresh);
-            if (this.curWeights.length != fresh.size()) {
-                this.curWeights = new long[fresh.size()];
+            if (this.curWeights.length != fresh.size() + 1) {
+                this.curWeights = new long[fresh.size() + 1];
             }
         }
 
@@ -84,16 +98,18 @@ public final class UdpBulkRouter {
      * 返回 null 表示无健康 DATA 候选（caller 视 §498 决定走 share 的 PRIMARY 或 exclusive 的 drop）。
      */
     public BulkRouteTarget select(PlayerSessions ps, String mode, int primaryWeight, int degradeAfterDrops) {
-        if (ps.degraded) return null;
-        List<BulkRouteTarget> healthy = healthySessions(ps);
-        if (healthy.isEmpty()) return null;
-        if ("share".equals(mode)) {
-            // PRIMARY + DATA 同时按权重 WRR；这里只返回 DATA 选中（PRIMARY 路径由 route 决策）。
-            BulkRouteTarget pick = wrrPickShared(ps, healthy, primaryWeight);
-            return pick == null ? null : pick;
+        synchronized (ps) {
+            if (ps.degraded) return null;
+            List<BulkRouteTarget> healthy = healthySessions(ps);
+            if (healthy.isEmpty()) return null;
+            if ("share".equals(mode)) {
+                // PRIMARY + DATA 同时按权重 WRR；这里只返回 DATA 选中（PRIMARY 路径由 route 决策）。
+                BulkRouteTarget pick = wrrPickShared(ps, healthy, primaryWeight);
+                return pick == null ? null : pick;
+            }
+            // exclusive：仅候选间 WRR（无 PRIMARY）
+            return wrrPick(healthy, ps);
         }
-        // exclusive：仅候选间 WRR（无 PRIMARY）
-        return wrrPick(healthy, ps);
     }
 
     /**
@@ -118,55 +134,58 @@ public final class UdpBulkRouter {
      */
     public RouteOutcome routeAndPick(PlayerSessions ps, String mode, int primaryWeight,
                                     int degradeAfterDrops, int type, byte[] payload) {
-        if (ps.degraded) {
-            return new RouteOutcome(RouteDecision.PRIMARY, null);
-        }
-        boolean share = "share".equals(mode);
-        List<BulkRouteTarget> healthy = healthySessions(ps);
+        // ps monitor：refresh 与同一玩家的并发 bulk 决策互斥（见 PlayerSessions.refresh javadoc）。
+        synchronized (ps) {
+            if (ps.degraded) {
+                return new RouteOutcome(RouteDecision.PRIMARY, null);
+            }
+            boolean share = "share".equals(mode);
+            List<BulkRouteTarget> healthy = healthySessions(ps);
 
-        if (healthy.isEmpty()) {
-            // 无候选
+            if (healthy.isEmpty()) {
+                // 无候选
+                if (share) {
+                    return new RouteOutcome(RouteDecision.PRIMARY, null); // share 走 Primary 而不 drop
+                }
+                // exclusive: 累加 drop，达阈值降级
+                return new RouteOutcome(exclusiveDropOrDegrade(ps, degradeAfterDrops), null);
+            }
+
             if (share) {
-                return new RouteOutcome(RouteDecision.PRIMARY, null); // share 走 Primary 而不 drop
+                // 把 PRIMARY 当一个隐式虚拟候选 weight=primaryWeight，与 DATA 候选一同 WRR。
+                // 为保证稳定：累计权重每 tick 重整；命中 PRIMARY → PRIMARY 决策；命中 DATA → 入队。
+                BulkRouteTarget picked = wrrPickShared(ps, healthy, primaryWeight);
+                if (picked == null) {
+                    return new RouteOutcome(RouteDecision.PRIMARY, null); // 命中 Primary
+                }
+                boolean ok = picked.enqueueAuthenticated(type, payload);
+                if (ok) {
+                    ps.consecutiveDrops = 0;
+                    if (!ps.dataSentMarkerEmitted) {
+                        ps.dataSentMarkerEmitted = true;
+                        org.slf4j.LoggerFactory.getLogger("HassiumSmokeTest")
+                                .info("HassiumSmokeTest:UDP_FAILOVER UDP_WRR_OK player-mode=share decision=DATA_SENT");
+                    }
+                    return new RouteOutcome(RouteDecision.DATA_SENT, picked);
+                }
+                // enqueue 失败：等价 drop。share 模式下，本帧也退到 Primary（保守策略，不丢业务）。
+                return new RouteOutcome(RouteDecision.PRIMARY, null);
             }
-            // exclusive: 累加 drop，达阈值降级
-            return new RouteOutcome(exclusiveDropOrDegrade(ps, degradeAfterDrops), null);
-        }
 
-        if (share) {
-            // 把 PRIMARY 当一个隐式虚拟候选 weight=primaryWeight，与 DATA 候选一同 WRR。
-            // 为保证稳定：累计权重每 tick 重整；命中 PRIMARY → PRIMARY 决策；命中 DATA → 入队。
-            BulkRouteTarget picked = wrrPickShared(ps, healthy, primaryWeight);
-            if (picked == null) {
-                return new RouteOutcome(RouteDecision.PRIMARY, null); // 命中 Primary
-            }
-            boolean ok = picked.enqueueAuthenticated(type, payload);
+            // exclusive
+            BulkRouteTarget target = wrrPick(healthy, ps);
+            boolean ok = target.enqueueAuthenticated(type, payload);
             if (ok) {
                 ps.consecutiveDrops = 0;
                 if (!ps.dataSentMarkerEmitted) {
                     ps.dataSentMarkerEmitted = true;
                     org.slf4j.LoggerFactory.getLogger("HassiumSmokeTest")
-                            .info("HassiumSmokeTest:UDP_FAILOVER UDP_WRR_OK player-mode=share decision=DATA_SENT");
+                            .info("HassiumSmokeTest:UDP_FAILOVER UDP_WRR_OK player-mode=exclusive decision=DATA_SENT");
                 }
-                return new RouteOutcome(RouteDecision.DATA_SENT, picked);
+                return new RouteOutcome(RouteDecision.DATA_SENT, target);
             }
-            // enqueue 失败：等价 drop。share 模式下，本帧也退到 Primary（保守策略，不丢业务）。
-            return new RouteOutcome(RouteDecision.PRIMARY, null);
+            return new RouteOutcome(exclusiveDropOrDegrade(ps, degradeAfterDrops), null);
         }
-
-        // exclusive
-        BulkRouteTarget target = wrrPick(healthy, ps);
-        boolean ok = target.enqueueAuthenticated(type, payload);
-        if (ok) {
-            ps.consecutiveDrops = 0;
-            if (!ps.dataSentMarkerEmitted) {
-                ps.dataSentMarkerEmitted = true;
-                org.slf4j.LoggerFactory.getLogger("HassiumSmokeTest")
-                        .info("HassiumSmokeTest:UDP_FAILOVER UDP_WRR_OK player-mode=exclusive decision=DATA_SENT");
-            }
-            return new RouteOutcome(RouteDecision.DATA_SENT, target);
-        }
-        return new RouteOutcome(exclusiveDropOrDegrade(ps, degradeAfterDrops), null);
     }
 
     /**

@@ -3,7 +3,14 @@ package io.github.limuqy.mc.hassium.network.dataplane;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -111,6 +118,74 @@ class UdpBulkRouterTest {
         UdpBulkRouter.PlayerSessions ps = UdpBulkRouter.PlayerSessions.of(List.of(leasedOut));
 
         assertEquals(UdpBulkRouter.RouteDecision.DROPPED, router.route(ps, "exclusive", 100, 3, TYPE, PAY));
+    }
+
+    @Test
+    @DisplayName("并发 refresh + routeAndPick（模拟 pushPool 多线程发送同一玩家 chunk）不抛 AIOOBE，决策合法")
+    void concurrentRefreshAndRouteKeepsWrrStateIntact() throws Exception {
+        // 回归：ServerChunkPushManager.pushPool（2-8 线程）对同一玩家的多个 chunk 并发走
+        // tryRouteBulk → refresh + routeAndPick。修复前 refresh 与 wrrPickShared 的 curWeights
+        // check-then-act 竞态会产生 ArrayIndexOutOfBoundsException: Index N out of bounds for length 1。
+        UdpBulkRouter router = new UdpBulkRouter(1_000);
+        FakeTarget d1 = fast();
+        FakeTarget d2 = fast();
+        FakeTarget d3 = fast();
+        UdpBulkRouter.PlayerSessions ps = UdpBulkRouter.PlayerSessions.of(List.of(d1, d2, d3));
+
+        // 快照在 0~3 个会话间抖动，最大化 curWeights 重分配竞争（与生产 bind/lease 抖动同构）。
+        @SuppressWarnings("unchecked")
+        List<FakeTarget>[] snapshots = new List[] {
+                List.of(), List.of(d1), List.of(d1, d2), List.of(d1, d2, d3)
+        };
+
+        int threads = 8;
+        int roundsPerThread = 2_000;
+        AtomicInteger dataSent = new AtomicInteger();
+        AtomicInteger primary = new AtomicInteger();
+        AtomicInteger dropped = new AtomicInteger();
+
+        ExecutorService pool = Executors.newFixedThreadPool(threads);
+        CountDownLatch start = new CountDownLatch(1);
+        List<Future<?>> futures = new ArrayList<>();
+        try {
+            for (int t = 0; t < threads; t++) {
+                final int threadIdx = t;
+                futures.add(pool.submit(() -> {
+                    try {
+                        start.await();
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        throw new RuntimeException(e);
+                    }
+                    for (int i = 0; i < roundsPerThread; i++) {
+                        // 与生产一致：worksetsFor 先 refresh 快照，再 routeAndPick；线程间任意交错。
+                        ps.refresh(snapshots[(threadIdx + i) % snapshots.length]);
+                        UdpBulkRouter.RouteOutcome o =
+                                router.routeAndPick(ps, "share", 1, 3, TYPE, PAY);
+                        if (o.decision() == UdpBulkRouter.RouteDecision.DATA_SENT) {
+                            assertNotNull(o.chosenOrNull(), "DATA_SENT 必须携带选中 target");
+                            dataSent.incrementAndGet();
+                        } else if (o.decision() == UdpBulkRouter.RouteDecision.PRIMARY) {
+                            primary.incrementAndGet();
+                        } else {
+                            dropped.incrementAndGet();
+                        }
+                    }
+                }));
+            }
+            start.countDown();
+            for (Future<?> f : futures) {
+                f.get(60, TimeUnit.SECONDS); // 任何 AIOOBE 都会在此以 ExecutionException 上抛
+            }
+        } finally {
+            pool.shutdownNow();
+        }
+
+        assertEquals(0, dropped.get(), "share 模式无候选应退 PRIMARY，不该出现 DROPPED");
+        assertTrue(dataSent.get() > 0, "抖动含健康候选，应出现 DATA_SENT");
+        assertTrue(primary.get() > 0, "抖动含空快照，应出现 PRIMARY");
+        // enqueue 在 ps monitor 内原子执行，但 FakeTarget 计数 ++ 非原子（测试侧），只允许偏小。
+        assertTrue(d1.enqueueCount + d2.enqueueCount + d3.enqueueCount <= dataSent.get());
     }
 
     /** 轻量 fake。 */
