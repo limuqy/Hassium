@@ -205,6 +205,30 @@ pipeline 协调者 `ClientChunkPipeline`（实例化，生命周期随连接；�
 - 生成吞吐 ≥ 跑图需求（基线：1.20.1 单机 100+ chunks/s 多核）。
 - 冒烟：SeedGen 路径下区块无黑块、光照正常（并行引擎落地）。
 
+### 5.4 影子服务端构造链（已确认 API 事实，2026-08-08 mojmap 反编译验证）
+
+**结论先行**：方案 A 的实质是「客户端进程内构造一个不 spin 的迷你 `MinecraftServer` 子类」。1.20.1 与 1.21.11 的外层契约几乎一致，差异集中在 `WorldLoader.InitConfig` 与 `ChunkProgressListenerFactory`/`LevelLoadListener`。模板直接照抄 `IntegratedServer`（客户端进程本就有服务端全部类）。
+
+**构造链（两版本通用）**：
+1. `WorldStem = WorldLoader.load(InitConfig, WorldDataSupplier, ResultFactory, Executor, Executor)`（1.20.1/1.21.11 签名一致；内部 1.21.11 走 TagLoader→RegistryDataLoader 链，外部不可见）。`WorldStem = record(resourceManager, dataPackResources, registries, worldData)`（两版本同）。
+2. 子类构造：`super(Thread, LevelStorageAccess, PackRepository, WorldStem, Proxy, DataFixer, Services, Listener)` —— 1.20.1 第 8 参 `ChunkProgressListenerFactory`，1.21.11 换 `LevelLoadListener`（`MinecraftServer` 同 8 参）。
+3. **playerList 必须先于 createLevels**：`createLevels` 内调 `getPlayerList().addWorldborderListener(...)`。模板：构造里直接 `setPlayerList(new IntegratedPlayerList(this, this.registries(), this.playerDataStorage))`（两版本 `IntegratedServer` 均如此，无 `createPlayerList` 抽象）。
+4. 不走 `spin`/`runServer`：构造后手工调 `initServer()`（内部 `loadLevel()` → `createLevels()` + `prepareLevels()`），随后即可 `overworld().getChunkSource().getChunk(pos, ChunkStatus.FULL, true)` 驱动生成管线。
+5. `createLevels` 差异：1.20.1 带 `ChunkProgressListener` 参数；1.21.11 无参（`levelLoadListener.updateFocus` 直接取 `selectLevelLoadFocusPos()`）。
+
+**必须规避的副作用**：
+- `setInitialSpawn`（`worldData.overworldData().isInitialized()==false` 时触发）会立即生成 11×11 spawn 区域 + 找 spawn 点 + 可能放 bonus chest —— 影子世界应在构造 `WorldDataServer` 后置 `setInitialized(true)` 跳过，spawn 语义对本课题无意义。
+- `prepareLevels` 等 `getTickingGenerated()==441`（START ticket 半径 11 全生成）—— 生成专用上下文不需要 START ticket；跳过 `prepareLevels` 只调 `createLevels`。
+- 临时 `LevelStorageAccess`（`LevelStorageSource.createDefault(tmpPath).createAccess(...)`）会写磁盘（region/level.dat）；用完 close + 删临时目录。`ReloadableServerResources` 会跑完整 datapack 资源加载（配方/战利品/loot），是构造最重的部分——初始化成本实测后再评估缓存/懒加载。
+
+**`SeedGenLevelCompat` 分段点**（初步，实施时再核对）：
+- `WorldLoader.InitConfig` 构造：1.20.1 `functionCompilationLevel`（int） vs 1.21.11 `functionCompilationPermissions`（`PermissionSet`）。
+- `MinecraftServer` 构造第 8 参类型 + `createLevels` 签名（见上）。
+- `ChunkStatus.FULL` 引用（1.20.5+ 包位移）与 `getChunk` 生成入口（1.21.2+ 管线重构但公共入口不变）——复用既有 `MC_1_20_5`/`MC_1_21_2` 边界。
+- `LevelStorageAccess` 构造路径两版本差异（1.21.x `RegionStorageInfo` 引入）——实施时核对。
+
+**与单机模式的关系**：单机/局域网时客户端进程内已有现成 `IntegratedServer`，影子服务端仅多人连接需要；影子实例随连接创建/销毁，与 `Minecraft.getMinecraft().getSingleplayerServer()` 互斥（`hassium-singleplayer-lan-gating` 语义）。
+
 ## 6. Phase 3 — hash 校验闭环
 
 **动机**：任何确定性破口（战利品 roll、插件 setBlock、datapack 差异、mod side-only 生成）都必须被检测并自动修正。**本 Phase 是 SeedGen 的安全网，未完成前 SeedGen 不允许默认开。**
