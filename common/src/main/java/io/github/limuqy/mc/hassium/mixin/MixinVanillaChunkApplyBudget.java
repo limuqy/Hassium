@@ -74,7 +74,8 @@ public abstract class MixinVanillaChunkApplyBudget {
         if (mc == null || mc.getSingleplayerServer() != null) {
             return false; // 单人 / 局域网保持原版即时 apply（存储逻辑本就保持原版格式）
         }
-        return HassiumConfigService.getInstance().isClientCacheEnabled();
+        return HassiumConfigService.getInstance().isClientFeatureGateOpen()
+                && HassiumConfigService.getInstance().isClientCacheEnabled();
     }
 #endif
 }

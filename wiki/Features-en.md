@@ -110,10 +110,17 @@ Hassium is a single client + server suite that optimizes Minecraft from five dir
 
 ## Lighting optimization
 
+### Hassium engine (default on)
+
+- **What**: On login an in-process shadow server is started that owns all chunk lighting computation — the client no longer computes light itself, and the main thread is not occupied by light recomputes during chunk loading
+- **Master switch**: `clientCache.hassiumEngineEnabled` (default `true`); when disabled the server does not strip light (the client does not declare the engine at handshake) and light arrives with the packets
+- **Automatic degradation on startup failure**: if the shadow server fails to start, client cache / beyond-view render / SeedGen are disabled with an in-game notice; networking and basic chunk loading are unaffected. When the server does not run Hassium (no world seed) the shadow server is never started — light arrives with the packets and cache / OVD / world export stay available
+- **World seed**: the shadow server uses the worldSeed sent during the Hassium handshake (server must run the mod); it never generates its own world
+
 ### Light stripping
 
 - **Goal**: The server saves the bandwidth of light data
-- **How**: The server can build chunk packets with an empty light mask (`network.lightStrip` default `true`, near-zero cost); on first load the empty light data forces a local recompute, which is then written back to the cache
+- **How**: The server can build chunk packets with an empty light mask (`network.lightStrip` default `true`, near-zero cost); **stripping is negotiated at handshake** — only when the client declares the engine (`hassiumEngineEnabled=true`) does the server strip, otherwise light arrives with the packets; stripped light is computed by the shadow server and written back to the cache
 - **Config**: `network.lightStrip`
 
 ---
@@ -121,17 +128,7 @@ Hassium is a single client + server suite that optimizes Minecraft from five dir
 ### Light cache
 
 - **Goal**: Avoid recomputing lighting on every load
-- **How**: After the first recompute the light data is written to the cache (`is_light_on=1`); later cache hits apply the stored light directly, skipping the synchronous recompute; a SectionDelta merge forces `is_light_on=0` to avoid false hits
-- **Config**: `clientCache.lightCacheEnabled` (default `true`)
-
----
-
-### Parallel light engine
-
-- **Goal**: Light recomputation no longer blocks the main thread
-- **How**: Recomputation runs on a background thread pool (default 4 threads; virtual-thread mode unbounded); the main thread only captures the 9-column snapshot and submits; completion callbacks are scheduled within the main-thread budget
-- **Config**: `clientCache.parallelLightEngineEnabled` (default `false`), `clientCache.parallelLightEngineThreads` (default `4`)
-- **Sync light (default)**: `clientCache.lightSyncMode` (default `true`) enables double-frame buffering — no-light chunks collected this frame are fully applied at the next frame tail, dark-chunk window ≤1 frame; false = async budgeted consumption (a few chunks per frame, dark chunks fade as recompute lands)
+- **How**: Light computed by the shadow server is stored with the chunk data (`is_light_on=1`); later cache hits apply the stored light directly; a SectionDelta merge forces `is_light_on=0` so the shadow server recomputes it
 - **Metric**: `/hassiumc stats` shows `lighting optimization: xx% (hits N, recompute M)`
 
 ---

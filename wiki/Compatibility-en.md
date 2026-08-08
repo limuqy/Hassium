@@ -48,7 +48,7 @@ Hassium compatibility with common optimization mods, plus escape hatches. Every 
 | Disable global ZSTD (coexist with protocol replacement) | `network.globalPacketCompression = false` |
 | Disable packet aggregation | `network.enablePacketAggregation = false` |
 | Exclude a third-party channel from compression/aggregation | `network.compressionBlacklist` |
-| Disable lighting optimization (recompute each load) | `clientCache.lightCacheEnabled = false` |
+| Disable the Hassium engine (server then does not strip light) | `clientCache.hassiumEngineEnabled = false` |
 | Disable section delta (stale = full fetch) | `clientCache.sectionDeltaEnabled = false` |
 | Disable beyond-view render, restore vanilla RD clamp | `clientCache.viewDistanceExtensionEnabled = false` |
 | Require the mod on clients | `compat.requireClientMod = true` |
@@ -93,7 +93,7 @@ Environment: ~50 optimization-oriented mods (FO-style: Sodium / Iris / Lithium /
 - [ ] Distant Horizons both sides / Voxy + companion mod: LOD works
 - [ ] Via: vanilla clients connect; same-version Hassium clients have full features
 - [ ] C2ME chunkio rewrite on/off × `storage` on/off matrix
-- [ ] Sodium + `lightCacheEnabled` on/off (light glitches)
+- [ ] Sodium + `hassiumEngineEnabled` on/off (light glitches)
 - [ ] Forge / NeoForge equivalent opt-pack compatibility test
 - [ ] Beyond-view in-circuit: multiplayer with `view-distance=8`, client RD=16, the visited ring is visible; F3 shows no large out-of-range requests
 - [ ] Beyond-view + Sodium: meshing stays correct as the ViewArea expands

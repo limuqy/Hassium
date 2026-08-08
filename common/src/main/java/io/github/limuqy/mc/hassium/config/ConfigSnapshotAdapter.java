@@ -27,13 +27,11 @@ public final class ConfigSnapshotAdapter {
                 .with(ConfigSchema.CACHE_JOIN_BOOST_ENABLED, cache.joinBoostEnabled())
                 .with(ConfigSchema.CACHE_ENTITY_SNAPSHOTS_ENABLED, cache.entitySnapshotsEnabled())
                 .with(ConfigSchema.CACHE_LOAD_THREADS, cache.loadThreads())
-                .with(ConfigSchema.CACHE_LIGHT_CACHE_ENABLED, cache.lightCacheEnabled())
                 .with(ConfigSchema.CACHE_MAX_CHUNKS_PER_FRAME, cache.maxChunksPerFrame())
                 .with(ConfigSchema.CACHE_MAIN_THREAD_BUDGET_MS, cache.mainThreadChunkBudgetMs())
-                .with(ConfigSchema.CACHE_PARALLEL_LIGHT_ENGINE_ENABLED, cache.parallelLightEngineEnabled())
-                .with(ConfigSchema.CACHE_PARALLEL_LIGHT_ENGINE_THREADS, cache.parallelLightEngineThreads())
-                .with(ConfigSchema.CACHE_LIGHT_SYNC_MODE, cache.lightSyncMode())
-                .with(ConfigSchema.CACHE_SEED_GEN_THREADS, cache.seedGenThreads());
+                .with(ConfigSchema.CACHE_SEED_GEN_THREADS, cache.seedGenThreads())
+                .with(ConfigSchema.CACHE_HASSIUM_ENGINE_ENABLED, cache.hassiumEngineEnabled())
+                .with(ConfigSchema.CACHE_OVD_LOCAL_GENERATION, cache.ovdLocalGeneration());
 
         HassiumConfig.ClientNetworkConfig clientNet = config.clientNetwork();
         values = values.with(ConfigSchema.CLIENT_NETWORK_ENABLED, clientNet.enabled())
@@ -119,10 +117,11 @@ public final class ConfigSnapshotAdapter {
                 values.get(ConfigSchema.CACHE_MAX_RENDER_DISTANCE), values.get(ConfigSchema.CACHE_OVD_UNLOAD_DELAY_SECS),
                 values.get(ConfigSchema.CACHE_SECTION_DELTA_ENABLED), values.get(ConfigSchema.CACHE_JOIN_BOOST_ENABLED),
                 values.get(ConfigSchema.CACHE_ENTITY_SNAPSHOTS_ENABLED), values.get(ConfigSchema.CACHE_LOAD_THREADS),
-                values.get(ConfigSchema.CACHE_LIGHT_CACHE_ENABLED), values.get(ConfigSchema.CACHE_MAX_CHUNKS_PER_FRAME),
+                values.get(ConfigSchema.CACHE_MAX_CHUNKS_PER_FRAME),
                 values.get(ConfigSchema.CACHE_MAIN_THREAD_BUDGET_MS),
-                values.get(ConfigSchema.CACHE_PARALLEL_LIGHT_ENGINE_ENABLED), values.get(ConfigSchema.CACHE_PARALLEL_LIGHT_ENGINE_THREADS),
-                values.get(ConfigSchema.CACHE_LIGHT_SYNC_MODE), values.get(ConfigSchema.CACHE_SEED_GEN_THREADS));
+                values.get(ConfigSchema.CACHE_SEED_GEN_THREADS),
+                values.get(ConfigSchema.CACHE_HASSIUM_ENGINE_ENABLED),
+                values.get(ConfigSchema.CACHE_OVD_LOCAL_GENERATION));
 
         List<HassiumConfig.ReachableEndpoint> controlEndpoints = values.get(ConfigSchema.NETWORK_CONTROL_ENDPOINTS).stream()
                 .map(DataPlaneEndpointConfig::decodeReachable).toList();

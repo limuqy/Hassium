@@ -45,6 +45,14 @@ public final class ClientChunkPipeline {
     private volatile byte[] serverLevelStemNbt = null;
     private volatile boolean serverSeedGenEnabled = false;
 
+    // === 影子端状态（非网络向功能总开关） ===
+    /** 服务端已装 Hassium MOD（能力握手响应到达；setServerSeedInfo 调用点 = 三加载器握手解码）。 */
+    private volatile boolean hassiumHandshakeDone = false;
+    /** 影子服务端创建成功（启用态：客户端不计算光照，统一投递影子端）。 */
+    private volatile boolean shadowServerReady = false;
+    /** 影子服务端创建失败（降级态：缓存/OVD/SeedGen 全关 + 游戏内报错）。 */
+    private volatile boolean shadowServerFailed = false;
+
     private record PendingHash(long hash, long timestamp) {}
     private record PendingSectionHashes(long[] hashes, long timestamp) {}
 
@@ -108,6 +116,9 @@ public final class ClientChunkPipeline {
         serverSeed = 0L;
         serverLevelStemNbt = null;
         serverSeedGenEnabled = false;
+        hassiumHandshakeDone = false;
+        shadowServerReady = false;
+        shadowServerFailed = false;
         ClientChunkDirtyTracker.clearAll();
     }
 
@@ -118,9 +129,49 @@ public final class ClientChunkPipeline {
         this.serverSeed = seed;
         this.serverLevelStemNbt = levelStemNbt;
         this.serverSeedGenEnabled = enabled;
+        this.hassiumHandshakeDone = true; // 握手响应到达 = 服务端已装 Hassium MOD
         if (enabled) {
             Constants.LOG.info("Hassium: Server SeedGen enabled (seed={})", seed);
         }
+    }
+
+    // === 影子端状态访问 ===
+
+    /** 服务端是否已装 Hassium MOD（能力握手响应到达）。 */
+    public boolean isHassiumHandshakeDone() {
+        return hassiumHandshakeDone;
+    }
+
+    /** 影子服务端创建成功标记（ShadowLightCompute 启动任务回填）。 */
+    public void setShadowServerReady(boolean ready) {
+        this.shadowServerReady = ready;
+    }
+
+    /** 影子服务端创建失败标记（ShadowLightCompute 启动任务回填）。 */
+    public void setShadowServerFailed(boolean failed) {
+        this.shadowServerFailed = failed;
+    }
+
+    /**
+     * 影子端启用态（客户端不再计算光照，区块光照统一投递影子端）：
+     * 配置开启 && 服务端已装 MOD && 影子服务端创建成功。
+     */
+    public boolean isShadowEngineAvailable() {
+        return hassiumHandshakeDone && shadowServerReady && !shadowServerFailed;
+    }
+
+    /**
+     * 影子端激活（投递/分支判定用）：配置开（调用方另查）&& 握手完成 && 未失败。
+     * 创建进行中（shadowServerReady=false）也激活——投递入队等创建完成，
+     * 避免首波 chunk 落回客户端重算。
+     */
+    public boolean isShadowEngineActive() {
+        return hassiumHandshakeDone && !shadowServerFailed;
+    }
+
+    /** 影子端创建失败（降级态全关判定；配置关时由 HassiumConfigService 短路）。 */
+    public boolean isShadowServerFailed() {
+        return shadowServerFailed;
     }
 
     /** 服务端主世界 seed（握手下发；未下发为 0）。 */

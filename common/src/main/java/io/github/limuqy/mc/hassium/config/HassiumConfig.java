@@ -48,7 +48,7 @@ public record HassiumConfig(
     /**
      * 客户端缓存配置（仅物理客户端；client.toml clientCache.*）
      * <p>
-     * 吸收了原 NetworkConfig 中客户端专属字段：loadThreads、lightCacheEnabled（原 lightStrip）、maxChunksPerFrame、mainThreadChunkBudgetMs。
+     * 吸收了原 NetworkConfig 中客户端专属字段：loadThreads、maxChunksPerFrame、mainThreadChunkBudgetMs。
      * Bloom filter 参数硬编码（enabled=true, insertions=10000, fpp=0.01）。
      * maxAgeDays 已删除（热度评分隐式覆盖）。
      */
@@ -75,16 +75,14 @@ public record HassiumConfig(
             boolean entitySnapshotsEnabled,
             // === 从原 NetworkConfig 吸收的客户端字段 ===
             int loadThreads,
-            boolean lightCacheEnabled,
             int maxChunksPerFrame,
             int mainThreadChunkBudgetMs,
-            // === 光照计算引擎（默认官方引擎；接入 Promethium 后可选并行）===
-            boolean parallelLightEngineEnabled,
-            int parallelLightEngineThreads,
-            // === 光照重算模式（默认同步双帧缓冲；false=异步预算消费）===
-            boolean lightSyncMode,
             // === SeedGen 本地生成线程数（Phase 2；0=禁用本地生成）===
-            int seedGenThreads
+            int seedGenThreads,
+            // === 影子端（非网络向功能总开关；默认 true）===
+            boolean hassiumEngineEnabled,
+            // === OVD 本地生成（默认 false；miss 时影子端按世界种子本地生成 + 存缓存）===
+            boolean ovdLocalGeneration
     ) {
         public static final ClientCacheConfig DEFAULT = new ClientCacheConfig(
                 true,    // enabled
@@ -103,13 +101,11 @@ public record HassiumConfig(
                 true,    // joinBoostEnabled
                 true,    // entitySnapshotsEnabled
                 4,       // loadThreads
-                true,    // lightCacheEnabled
                 6,       // maxChunksPerFrame
                 15,      // mainThreadChunkBudgetMs
-                false,   // parallelLightEngineEnabled（默认官方引擎，光照经统一异步缓冲队列预算消费）
-                4,       // parallelLightEngineThreads
-                true,    // lightSyncMode（默认同步双帧缓冲：本帧收集、下一帧尾阻塞全量落地；false=异步预算消费）
-                2        // seedGenThreads（本地生成线程数；0=禁用）
+                2,       // seedGenThreads（本地生成线程数；0=禁用）
+                true,    // hassiumEngineEnabled（默认 true：进服启动影子端承担光照计算；失败降级关闭缓存/OVD/SeedGen）
+                false    // ovdLocalGeneration（默认 false：OVD miss 时影子端本地生成 + 存缓存）
         );
 
         public long maxCacheSizeBytes() {

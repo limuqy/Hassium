@@ -213,7 +213,7 @@ public class ViewDistanceExtensionService {
         }
 
         HassiumConfigService cfg = HassiumConfigService.getInstance();
-        if (!cfg.isClientCacheEnabled() || !cfg.isViewDistanceExtensionEnabled()) {
+        if (!cfg.isClientFeatureGateOpen() || !cfg.isClientCacheEnabled() || !cfg.isViewDistanceExtensionEnabled()) {
             clearAllRenderOnly();
             return;
         }
@@ -742,6 +742,9 @@ public class ViewDistanceExtensionService {
         long delay = Math.min(MISS_RETRY_MAX_MS, MISS_RETRY_BASE_MS << Math.min(count - 1, 4));
         missRetryAt.put(pos, System.currentTimeMillis() + delay);
         Constants.LOG.debug("Hassium: OVD miss {} retry in {}ms (count={})", pos, delay, count);
+        // OVD 本地生成：miss 时影子端按世界种子本地生成填充（默认关；无种子自动关闭）。
+        // 生成的 renderOnly 区块落地后 onRenderOnlyApplied 清 miss 计数；同柱去重防风暴。
+        io.github.limuqy.mc.hassium.network.seedgen.OvdLocalGenerator.request(pos);
     }
 
     /**
@@ -875,7 +878,7 @@ public class ViewDistanceExtensionService {
             return false;
         }
         HassiumConfigService cfg = HassiumConfigService.getInstance();
-        if (!cfg.isClientCacheEnabled() || !cfg.isViewDistanceExtensionEnabled()) {
+        if (!cfg.isClientFeatureGateOpen() || !cfg.isClientCacheEnabled() || !cfg.isViewDistanceExtensionEnabled()) {
             return false;
         }
         int clientVD = resolveEffectiveClientVD(mc);

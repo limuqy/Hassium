@@ -34,12 +34,12 @@
       "MixinGameRenderer",
       "MixinLightRecompute",
       "MixinVanillaChunkApplyBudget",
-      "MixinLevelLightEngine",
       "MixinOptions",
       "OptionsAccessor",
       "ClientLevelAccessor",
       "LevelLightEngineAccessor",
-      "LightEngineAccessor"
+      "LightEngineAccessor",
+      "ThreadedLevelLightEngineAccessor"
     ],
     "server": [
     ],

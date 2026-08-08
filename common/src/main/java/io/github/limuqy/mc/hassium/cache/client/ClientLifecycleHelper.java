@@ -57,9 +57,9 @@ public final class ClientLifecycleHelper {
 
         // M2: 异步初始化存储（热度索引 / section 哈希在后台线程）
         initializeCacheAsync();
-        // 并行光照引擎装配（幂等，重复登录无害）：Promethium MOD 缺席时静默跳过
-        // （配置 / 指标 / 官方引擎原语钩子经反射 Proxy 注入）
-        PromethiumLightBridge.configure();
+        // 影子端预创建（后台；非网络向功能总开关）：握手到达后启动，失败自动降级。
+        // 服务端未装 MOD（无握手）→ 不创建（缓存/OVD/导出保留，光由 packet 自带）。
+        io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.onLogin();
         initialized = true;
     }
 
@@ -150,7 +150,6 @@ public final class ClientLifecycleHelper {
         // ⑤ 清空主线程回调队列 + 玩家坐标缓存
         MainThreadDispatcher.clearClient(false);
         MainThreadDispatcher.clearPlayerPosition();
-        PromethiumLightBridge.clear();
         ClientMetadataHandler.clearPendingState();
 
         // ⑥ finalizeDisconnect：MixinMinecraft disconnect/clearLevel TAIL，或加载器 DISCONNECT 兜底
@@ -166,11 +165,7 @@ public final class ClientLifecycleHelper {
         // ① 拉高预算，尽可能消费加载队列中的缓存区块
         drainLoadQueueWithRaisedBudget();
 
-        // ② 排空光照缓冲：把「已重算待消费」任务全部落地（每块 = 引擎传播 + markDirty），
-        // 预算 2s 封顶；超时残余丢弃（缓存无光 → R2 重算兜底，与既有策略一致）。
-        ClientLightBufferQueue.getInstance().drainAll(2_000_000_000L);
-
-        // ③ 批量 enqueue 所有已加载区块并等待写盘完成。
+        // ② 批量 enqueue 所有已加载区块并等待写盘完成。
         CacheSaveQueue saveQueue = CacheSaveQueue.getInstance();
         Minecraft mc = Minecraft.getInstance();
         ClientLevel level = mc.level != null ? mc.level : saveQueue.getTrackedLevel();
@@ -180,9 +175,6 @@ public final class ClientLifecycleHelper {
             Constants.LOG.warn("Hassium: No ClientLevel available on disconnect — chunks may not be cached");
         }
         saveQueue.flushAsync(5000);
-
-        // ④ 清光照缓冲残余（未消费的直接丢弃——重连后由数据包路径重新提交）
-        ClientLightBufferQueue.getInstance().clear();
     }
 
     /**
@@ -340,6 +332,12 @@ public final class ClientLifecycleHelper {
      */
     private static void initializeCacheAsync() {
         try {
+            // 降级态（shadowEngineEnabled=false / 影子端创建失败）：不建 storage，
+            // 缓存读回/写盘/导出经 getClientStorage()==null 全 gate；服务端未装 MOD 时保留。
+            if (!HassiumConfigService.getInstance().isClientFeatureGateOpen()) {
+                Constants.LOG.info("Hassium: Client cache disabled (shadow engine gate closed)");
+                return;
+            }
             Minecraft mc = Minecraft.getInstance();
 
             // 单人游戏不需要客户端缓存

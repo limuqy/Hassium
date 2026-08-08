@@ -535,6 +535,8 @@ public class ForgeNetworkManager implements NetworkManager {
         ServerChunkPushManager.getInstance().setInitialPlayerPosition(player, msg.playerX(), msg.playerZ());
         // SeedGen 能力记录
         ServerChunkPushManager.getInstance().setPlayerSeedGenSupported(player.getUUID(), msg.seedGenSupported());
+        // 光照计算能力记录（剥光协商：false = 不剥光，光随包自带）
+        ServerChunkPushManager.getInstance().setPlayerLightComputeSupported(player.getUUID(), msg.lightComputeSupported());
 
         DebugLogger.debug(LogType.NETWORK,
                 "[HANDSHAKE] Received from client {}, protocol={}, globalCompression={}, compactHeader={}",
@@ -958,7 +960,8 @@ public class ForgeNetworkManager implements NetworkManager {
                 new byte[] { 0x03 },
                 playerX,
                 playerZ,
-                HassiumConfigService.getInstance().isClientSeedGenEnabled()
+                HassiumConfigService.getInstance().isClientSeedGenEnabled(),
+                HassiumConfigService.getInstance().isHassiumEngineEnabled()
         );
 #if MC_VER < MC_1_20_2
         CHANNEL.sendToServer(packet);
@@ -1115,7 +1118,8 @@ public class ForgeNetworkManager implements NetworkManager {
             byte[] dataplaneTail,
             double playerX,
             double playerZ,
-            boolean seedGenSupported
+            boolean seedGenSupported,
+            boolean lightComputeSupported
     ) {
         public void encode(FriendlyByteBuf buf) {
             buf.writeVarInt(protocolVersion);
@@ -1134,6 +1138,7 @@ public class ForgeNetworkManager implements NetworkManager {
             buf.writeDouble(playerX);
             buf.writeDouble(playerZ);
             buf.writeBoolean(seedGenSupported);
+            buf.writeBoolean(lightComputeSupported);
         }
 
         public static HandshakePacket decode(FriendlyByteBuf buf) {
@@ -1168,6 +1173,14 @@ public class ForgeNetworkManager implements NetworkManager {
                 } catch (Exception ignored) {
                 }
             }
+            // 光照计算能力（append-only；旧客户端无此字段 → false = 不剥光）
+            boolean lightComputeSupported = false;
+            if (buf.isReadable()) {
+                try {
+                    lightComputeSupported = buf.readBoolean();
+                } catch (Exception ignored) {
+                }
+            }
             return new HandshakePacket(
                     protocolVersion,
                     modVersion,
@@ -1180,7 +1193,8 @@ public class ForgeNetworkManager implements NetworkManager {
                     tail,
                     playerX,
                     playerZ,
-                    seedGenSupported
+                    seedGenSupported,
+                    lightComputeSupported
             );
         }
     }

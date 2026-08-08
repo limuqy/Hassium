@@ -474,20 +474,9 @@ public class ClientCacheLoadQueue {
             }
             Constants.LOG.debug("[CACHE_APPLY] Applying chunk {} to world (renderOnly={}, hasLight={}, remaining={})",
                     chunk.pos(), chunk.renderOnly(), chunk.hasCachedLight(), readyQueue.size());
-            // 缓存无光照（is_light_on=0）：apply 前预提交重算。solve（~3ms，后台池）与 packet
-            // 解码/渲染构建并行，渲染时光照大概率已落地 —— 消除「渲染先于光照落地」的跨帧黑块
-            // （MixinLightRecompute TAIL 的精确提交仍会执行并覆盖粗结果，双算成本可忽略）。
-            // renderOnly 走 VDES 自己的路径，不预提交。
-            if (!chunk.renderOnly() && !chunk.hasCachedLight()) {
-                if (PromethiumLightBridge.isEnabled()) {
-                    PromethiumLightBridge
-                            .submitRecompute(chunk.pos(), chunk.lightWritebackNbt());
-                } else {
-                    // 官方引擎：预入统一缓冲队列（内存 NBT，省 TAIL 读盘）；
-                    // TAIL 的 applyLightEngineNow 重复入队去重，不会双算。
-                    ClientLightBufferQueue.getInstance().enqueue(chunk.pos(), chunk.lightWritebackNbt());
-                }
-            }
+            // 缓存无光照（is_light_on=0）：不预提交重算——客户端无本地光照逻辑；
+            // 空光缓存 apply 后由 TAIL（MixinLightRecompute，影子端启用态）统一投递影子端。
+            // renderOnly 走 VDES 自己的路径，不投递。
             boolean appliedToWorld = ClientChunkHandler.applyChunkData(
                     chunk.pos().x, chunk.pos().z, chunk.data(), chunk.renderOnly(),
                     chunk.lightWritebackNbt(), chunk.hasCachedLight());

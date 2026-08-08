@@ -113,6 +113,12 @@ public class ServerChunkPushManager {
     private final Map<UUID, Boolean> playerSeedGenSupported = new ConcurrentHashMap<>();
 
     /**
+     * 每玩家光照计算能力（握手 C2S 上报 lightComputeSupported = 客户端 hassiumEngineEnabled）。
+     * 服务端据此决定是否剥光：客户端声明可本地/影子端算光才剥（stripLightIfConfigured gate）。
+     */
+    private final Map<UUID, Boolean> playerLightComputeSupported = new ConcurrentHashMap<>();
+
+    /**
      * 握手 C2S 能力上报后调用：记录玩家是否支持 SeedGen。
      */
     public void setPlayerSeedGenSupported(UUID playerId, boolean supported) {
@@ -121,6 +127,22 @@ public class ServerChunkPushManager {
         } else {
             playerSeedGenSupported.remove(playerId);
         }
+    }
+
+    /**
+     * 握手 C2S 能力上报后调用：记录玩家是否支持光照计算（影子端/Hassium 引擎）。
+     */
+    public void setPlayerLightComputeSupported(UUID playerId, boolean supported) {
+        if (supported) {
+            playerLightComputeSupported.put(playerId, Boolean.TRUE);
+        } else {
+            playerLightComputeSupported.remove(playerId);
+        }
+    }
+
+    /** 该玩家是否可剥光（客户端声明引擎可用）。 */
+    public boolean isPlayerLightComputeSupported(UUID playerId) {
+        return Boolean.TRUE.equals(playerLightComputeSupported.get(playerId));
     }
 
     /**
@@ -1704,6 +1726,11 @@ public class ServerChunkPushManager {
     private ClientboundLevelChunkWithLightPacket stripLightIfConfigured(
             ServerPlayer player, ChunkPos pos, ClientboundLevelChunkWithLightPacket packet) {
         if (!HassiumConfigService.getInstance().isServerLightStrip()) {
+            return packet;
+        }
+        // 剥光协商：仅客户端声明可算光（握手 lightComputeSupported = hassiumEngineEnabled）
+        // 才剥——客户端没装 MOD / 关闭引擎时服务端不剥，光随包自带（否则客户端黑块）。
+        if (!isPlayerLightComputeSupported(player.getUUID())) {
             return packet;
         }
         try {

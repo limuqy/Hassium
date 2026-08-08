@@ -876,6 +876,9 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
             }
             // SeedGen 能力上报（append-only；旧服务端忽略尾字节）
             buf.writeBoolean(HassiumConfigService.getInstance().isClientSeedGenEnabled());
+            // 光照计算能力上报（append-only）：Hassium 引擎（影子端）开启 = 可剥光。
+            // 服务端据此外剥光决策——引擎关闭/未装 MOD 时不剥（光随包自带）。
+            buf.writeBoolean(HassiumConfigService.getInstance().isHassiumEngineEnabled());
 #if MC_VER < MC_1_20_5
             ClientPlayNetworking.send(HANDSHAKE_C2S, buf);
 #else
@@ -1436,6 +1439,15 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
                     }
                 }
                 ServerChunkPushManager.getInstance().setPlayerSeedGenSupported(player.getUUID(), seedGenSupported);
+                // 光照计算能力（append-only；旧客户端无此字段 → false = 不剥光）
+                boolean lightComputeSupported = false;
+                if (buf.isReadable()) {
+                    try {
+                        lightComputeSupported = buf.readBoolean();
+                    } catch (Exception ignored) {
+                    }
+                }
+                ServerChunkPushManager.getInstance().setPlayerLightComputeSupported(player.getUUID(), lightComputeSupported);
 
                 DebugLogger.debug(LogType.NETWORK,
                         "[HANDSHAKE] Details from {}: protocol={}, modVersion={}, algorithms={}, clientCache={}, globalCompression={}, compactHeader={}",

@@ -25,7 +25,7 @@ Forge/NeoForge 端注册 3 个 spec（CLIENT / COMMON / SERVER），物理客户
 | `storage.mode` | `"mirror"` | **双端** | `MixinRegionFile:159` 决定 mirror/readonly_vanilla/hassium_only | ✅ 正常 |
 | `storage.zstdLevel` | `3` | **双端** | `MixinRegionFile:238` 通过 `HassiumConfigService.getStorageCompressionLevel()` 读取；压缩调用收口至 `CompressionService.compressWithDictionary` | ✅ 正常 |
 
-### B. ClientCache（17 项）→ `client.toml`
+### B. ClientCache（24 项）→ `client.toml`
 
 | 配置项 | 默认值 | 客户端/服务端/双端 | 实际调用 | 状态 |
 |--------|--------|---------------------|----------|------|
@@ -66,15 +66,15 @@ Forge/NeoForge 端注册 3 个 spec（CLIENT / COMMON / SERVER），物理客户
 | `network.enableCompactHeader` | `true` | **双端** | `ZstdPipelineSwitcher:92` + 各 loader 握手协商 | ✅ 正常 |
 | `network.metricsEnabled` | `true` | **双端** | `CommonClass:46` 开关指标 + 命令门控 | ✅ 正常 |
 
-### D. Network — 客户端专属（4 项）→ `client.toml`
+### D. Network — 客户端专属（5 项）→ `client.toml`
 
 | 配置项 | 默认值 | 客户端/服务端/双端 | 实际调用 | 状态 |
 |--------|--------|---------------------|----------|------|
 | `network.clientChunkLoadThreads` | `10` | **客户端** | `ClientLifecycleHelper` 初始化线程池 | ✅ 正常 |
-| `clientCache.lightCacheEnabled` | `true` | **客户端** | 光照缓存：首次重算后存储光照，缓存命中跳过重算 | ✅ 正常 |
 | `clientCache.maxChunksPerFrame` | `6` | **客户端** | `ClientMainThreadBudget:78` | ✅ 正常 |
 | `clientCache.mainThreadChunkBudgetMs` | `15` | **客户端** | `ClientMainThreadBudget:59` | ✅ 正常 |
-| `clientCache.lightSyncMode` | `true` | **客户端** | `ClientLightBufferQueue:69`（同步模式双帧缓冲全量消费） | ✅ 正常 |
+| `clientCache.hassiumEngineEnabled` | `true` | **客户端** | `ShadowLightCompute.onLogin`（Hassium 引擎：影子端统一算光；启动失败降级） | ✅ 正常 |
+| `clientCache.ovdLocalGeneration` | `false` | **客户端** | `OvdLocalGenerator`（OVD miss 时影子端本地生成 + 存缓存；无种子关闭） | ✅ 正常 |
 
 ### E. Network — 服务端专属（5 项）→ `server.toml`
 
@@ -130,27 +130,25 @@ Forge/NeoForge 端注册 3 个 spec（CLIENT / COMMON / SERVER），物理客户
 
 这不算 bug，但 `CompatConfig` 横跨两个文件，用户可能困惑。
 
-#### 3. `lightCacheEnabled`（原 `lightStripEnabled`）
+#### 3. ~~`lightCacheEnabled`（原 `lightStripEnabled`）~~ → ✅ 已删除（2026-08-08 光照逻辑清理）
 
-光照缓存功能由 `clientCache.lightCacheEnabled` 控制（客户端）。服务端是否从网络包剥离光照数据由 `serverNetwork.lightStrip` 控制。
-
-客户端写入 `client.toml` 没问题，但专用服**没有这个文件**，会使用默认值 `true`。这意味着服务端的光照剥离行为无法通过配置调整——除非用户手动创建 `client.toml`（但专用服不会读它）。
+光照缓存并入区块缓存（无独立开关）；剥光协商改为握手能力位：客户端声明引擎可用（`lightComputeSupported` = `hassiumEngineEnabled`）服务端才剥，否则光随包自带。服务端是否剥光仍由 `serverNetwork.lightStrip` 控制（追加玩家能力 gate）。
 
 ## 四、建议
 
 1. ~~**清理 3 个死代码配置项**~~ → ✅ 已完成（2026-07-24 storage-format-unification 整理）
 2. ~~**考虑拆分 `NetworkConfig` record**~~ → ✅ 已完成（config-restructure 已拆分为 `ClientNetworkConfig` + `ServerNetworkConfig`）
-3. **`serverNetwork.lightStrip` 服务端可达性**：当前专用服 `server.toml` 中包含此字段，已可配置；客户端 `clientCache.lightCacheEnabled` 单独控制客户端光照缓存行为
+3. **`serverNetwork.lightStrip` 服务端可达性**：当前专用服 `server.toml` 中包含此字段，已可配置；剥光最终由握手能力位（客户端 `hassiumEngineEnabled`）门控
 
 ## 五、统计汇总
 
 | 分类 | 总字段数 | 正常 | 死代码 |
 |------|----------|------|--------|
 | Storage | 3 | 3 | 0 |
-| ClientCache | 17 | 17 | 0 |
+| ClientCache | 24 | 24 | 0 |
 | Network（共享） | 14 | 14 | 0 |
-| Network（客户端） | 4 | 4 | 0 |
+| Network（客户端） | 5 | 5 | 0 |
 | Network（服务端） | 5 | 5 | 0 |
 | Compat | 2 | 2 | 0 |
 | Debug | 7 | 7 | 0 |
-| **合计** | **52** | **52** | **0** |
+| **合计** | **60** | **60** | **0** |

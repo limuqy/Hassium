@@ -28,7 +28,7 @@
 | | Section delta | On cache mismatch (MISMATCH), fetch only changed sections (`sectionDelta`) and merge locally instead of the whole chunk |
 | | **Beyond-view render** | When client RD exceeds server view distance (multiplayer), fill the outer ring from local cache (render-only; no out-of-range server requests); incompatible with Bobby |
 | | World export | `/hassiumc export` writes the local cache as a vanilla Anvil singleplayer world |
-| **Lighting optimization** | Light stripping | Server can omit light data; the client recomputes lighting locally to save more bandwidth |
+| **Lighting optimization** | Light stripping | Server can strip light data; the Hassium engine (shadow side) computes lighting centrally and persists the cache |
 | | Light cache | Light data is cached after first recompute; cache hits apply pre-computed lighting directly, skipping expensive recomputation |
 | | Parallel light engine | Light recomputation runs on a background thread pool; the main thread only submits snapshots (on by default) |
 | **Utilities** | Traffic metrics | `/hassium stats` (server) and `/hassiumc stats` (client) to inspect compression and cache results |

@@ -347,13 +347,11 @@ public final class FabricTomlConfigIO {
                 getBool(cfg, "clientCache.joinBoostEnabled", d.joinBoostEnabled()),
                 getBool(cfg, "clientCache.entitySnapshotsEnabled", d.entitySnapshotsEnabled()),
                 getInt(cfg, "clientCache.loadThreads", d.loadThreads()),
-                getBool(cfg, "clientCache.lightCacheEnabled", d.lightCacheEnabled()),
                 getInt(cfg, "clientCache.maxChunksPerFrame", d.maxChunksPerFrame()),
                 getInt(cfg, "clientCache.mainThreadChunkBudgetMs", d.mainThreadChunkBudgetMs()),
-                getBool(cfg, "clientCache.parallelLightEngineEnabled", d.parallelLightEngineEnabled()),
-                getInt(cfg, "clientCache.parallelLightEngineThreads", d.parallelLightEngineThreads()),
-                getBool(cfg, "clientCache.lightSyncMode", d.lightSyncMode()),
-                getInt(cfg, "clientCache.seedGenThreads", d.seedGenThreads())
+                getInt(cfg, "clientCache.seedGenThreads", d.seedGenThreads()),
+                getBool(cfg, "clientCache.hassiumEngineEnabled", d.hassiumEngineEnabled()),
+                getBool(cfg, "clientCache.ovdLocalGeneration", d.ovdLocalGeneration())
         );
     }
 
@@ -378,15 +376,14 @@ public final class FabricTomlConfigIO {
         set(cfg, "clientCache.entitySnapshotsEnabled", c.entitySnapshotsEnabled(),
                 "区块卸载时保存非玩家实体快照（默认 true）");
         set(cfg, "clientCache.loadThreads", c.loadThreads(), "客户端区块加载线程数");
-        set(cfg, "clientCache.lightCacheEnabled", c.lightCacheEnabled(), "是否启用光照缓存");
         set(cfg, "clientCache.maxChunksPerFrame", c.maxChunksPerFrame(), "每帧应用缓存区块硬顶");
         set(cfg, "clientCache.mainThreadChunkBudgetMs", c.mainThreadChunkBudgetMs(), "主线程 apply 预算（ms）");
-        set(cfg, "clientCache.parallelLightEngineEnabled", c.parallelLightEngineEnabled(), "是否启用并行光照引擎（需接入 Promethium 光照引擎；默认 false=官方光照计算，光照重算经统一异步缓冲队列预算消费）");
-        set(cfg, "clientCache.parallelLightEngineThreads", c.parallelLightEngineThreads(), "并行光照引擎线程数（虚拟线程模式忽略）");
-        set(cfg, "clientCache.lightSyncMode", c.lightSyncMode(),
-                "是否启用光照重算同步模式（双帧缓冲：本帧收集无光照区块，下一帧尾阻塞全部重算落地，黑块窗口≤1帧；默认 true=同步双帧缓冲，false=异步预算消费；与 parallelLightEngineEnabled 同开时本项优先）");
         set(cfg, "clientCache.seedGenThreads", c.seedGenThreads(),
                 "SeedGen 本地生成线程数（固定平台线程池；0=禁用本地生成，SeedRef 一律回退全量）");
+        set(cfg, "clientCache.hassiumEngineEnabled", c.hassiumEngineEnabled(),
+                "是否启用Hassium 引擎（默认 true）：进服启动Hassium 引擎服务端统一承担区块光照计算，客户端不再计算。启动失败自动降级：客户端缓存/超视渲染/SeedGen/Hassium 引擎光照关闭并游戏内提示；false=不启动Hassium 引擎（此时服务端不剥光，光照随包自带）");
+        set(cfg, "clientCache.ovdLocalGeneration", c.ovdLocalGeneration(),
+                "OVD 本地生成（默认 false）：超视渲染区域缓存 miss 时用Hassium 引擎按服务端世界种子本地生成区块并存入本地缓存；无种子（服务端未装 MOD）时自动关闭生成");
     }
 
     private static HassiumConfig.ClientNetworkConfig readClientNetwork(CommentedConfig cfg) {

@@ -32,7 +32,8 @@
 | | 分段增量 | 缓存过期（MISMATCH）时仅拉取变更分段（`sectionDelta`）本地合并，避免整块重传 |
 | | **超视渲染** | 多人服客户端 RD 大于服务端视距时，用本地缓存回填视距外地形（仅渲染、不向服索要视距外区块）；与 Bobby 互斥 |
 | | 世界导出 | `/hassiumc export` 将本地缓存导出为可进单机的原版 Anvil 世界 |
-| **光照优化** | 光照剥离 | 服务端可不传光照数据，由客户端本地重算，进一步省流量 |
+| **光照优化** | Hassium 引擎 | 非网络向功能总开关（默认开）：进服启动进程内影子服务端统一承担区块光照计算，客户端不再计算；启动失败自动降级 |
+| | 光照剥离 | 服务端可剥光省流量，由 Hassium 引擎（影子端）统一计算光照并落盘缓存 |
 | | 光照缓存 | 首次加载重算后缓存光照数据，后续缓存命中直接应用，跳过同步重算 |
 | | 并行光照 | 可选：安装 Promethium MOD 后开启，光照重算在后台线程池并行执行；默认官方引擎（统一异步缓冲队列，帧尾预算消费，不阻塞主线程） |
 | **实用工具** | 流量监控 | `/hassium stats`（服务端）、`/hassiumc stats`（客户端）查看压缩与缓存效果 |
@@ -87,7 +88,6 @@
 | `storage.enabled` | `false` | 世界存档 ZSTD（默认关；仅专用服务器，请备份） |
 | `clientCache.enabled` | `true` | 客户端缓存 |
 | `clientCache.sectionDeltaEnabled` | `true` | 缓存过期时分段增量 |
-| `clientCache.lightCacheEnabled` | `true` | 光照缓存（命中跳过重算） |
 | `clientCache.viewDistanceExtensionEnabled` | `true` | 超视渲染（多人；与 Bobby 互斥） |
 | `clientCache.maxRenderDistance` | `16` | 超视渲染 / 有效 RD 上限（2–64） |
 | `clientCache.ovdUnloadDelaySecs` | `5` | 离开超视渲染环带后延迟卸载（秒；0=同步） |
@@ -95,9 +95,8 @@
 | `network.globalPacketCompression` | `true` | 全局 ZSTD |
 | `network.maxChunksPerTick` | `4` | 每玩家每 tick 提交上限（发送速率 = 本值 × tick 节奏，满 tick ≈ 4×20/s；掉刻自然降速） |
 | `clientCache.mainThreadChunkBudgetMs` | `15` | 客户端每帧 apply 预算（ms） |
-| `clientCache.parallelLightEngineEnabled` | `false` | 并行光照（可选，需安装 Promethium MOD；开启后重算在后台线程池，主线程只提交快照；MOD 缺席自动回退官方引擎） |
-| `clientCache.parallelLightEngineThreads` | `4` | 并行光照线程数（虚拟线程模式忽略） |
-| `clientCache.lightSyncMode` | `true` | 光照重算同步模式（双帧缓冲：本帧收集无光照区块，下一帧尾阻塞全部重算落地，黑块窗口≤1帧；代价为加载期单帧开销集中） |
+| `clientCache.hassiumEngineEnabled` | `true` | Hassium 引擎（非网络向功能总开关）：进服启动影子服务端统一承担区块光照计算；启动失败自动降级（缓存/超视渲染/SeedGen 关闭并提示）；关闭时服务端不剥光，光照随包自带 |
+| `clientCache.ovdLocalGeneration` | `false` | OVD 本地生成：超视渲染 miss 时按服务端世界种子本地生成并存入缓存；无种子自动关闭 |
 | `network.metricsEnabled` | `false` | 指标收集（默认关闭；自检时自动开启） |
 | `network.dataPlane.enabled` | `false` | UDP/KCP 数据面与 TCP 主控热切/加权分流；默认关闭，启用前请配置可达端点并依次确认 6 个自检标记 |
 | `network.dataPlane.controlStallMs` | `6000` | TCP 主控卡顿多久后触发 `FailoverRequest` |
@@ -176,7 +175,7 @@ flowchart TD
 
 | 文档 | 内容 |
 | --- | --- |
-| [`docs/architecture.md`](docs/architecture.md) | 架构、存储格式、配置、日志、命令 |
+| [`docs/architecture.md`](docs/architecture.md) | 能力总览与场景、模块架构、客户端数据流、存储格式、配置、日志、命令 |
 | [`docs/chunk-cache.md`](docs/chunk-cache.md) | 区块缓存推送、超视渲染摘要、磁盘 NBT、导出 |
 | [`docs/ovd.md`](docs/ovd.md) | 超视渲染技术实现 |
 | [`docs/disk-nbt-cache.md`](docs/disk-nbt-cache.md) | 磁盘 NBT 缓存、Live-Unload、分段增量细节 |

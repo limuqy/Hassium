@@ -94,10 +94,6 @@ public class CacheSaveQueue {
         if (ClientChunkHandler.getClientStorage() == null) {
             return;
         }
-        // 光照未收敛（队列非空）→ 等下一轮：重算风暴中的光不得落盘（38e297e 教训）。
-        if (!ClientLightBufferQueue.getInstance().isEmpty()) {
-            return;
-        }
         // 权威加载未完成 → 等下一轮：加载风暴仍在灌 readyQueue。
         if (ClientCacheLoadQueue.getInstance().getAuthorityLoad() > 0
                 || ClientCacheLoadQueue.getInstance().getReadySize() > 0) {

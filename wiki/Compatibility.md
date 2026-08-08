@@ -48,7 +48,7 @@ Hassium 与常见优化 mod 的兼容性概览与配置逃生口。每条结论�
 | 关闭全局 ZSTD（与同类协议替换共存） | `network.globalPacketCompression = false` |
 | 关闭包聚合 | `network.enablePacketAggregation = false` |
 | 排除第三方包不进压缩/聚合 | `network.compressionBlacklist` |
-| 关闭光照优化（每次加载都重算） | `clientCache.lightCacheEnabled = false` |
+| 关闭 Hassium 引擎（服务端不剥光，光照随包自带） | `clientCache.hassiumEngineEnabled = false` |
 | 关闭分段增量（过期走全量） | `clientCache.sectionDeltaEnabled = false` |
 | 关闭超视渲染恢复原版 RD 钳制 | `clientCache.viewDistanceExtensionEnabled = false` |
 | 强制客户端装模组 | `compat.requireClientMod = true` |
@@ -93,7 +93,7 @@ Hassium 与常见优化 mod 的兼容性概览与配置逃生口。每条结论�
 - [ ] Distant Horizons 双端 / Voxy + 伴生：LOD 正常
 - [ ] Via：无 Hassium 旧客户端能进服；同版本 Hassium 客户端功能完整
 - [ ] C2ME chunkio rewrite 开/关 × `storage` 开/关 对照
-- [ ] Sodium + `lightCacheEnabled` 开/关（光照异常）
+- [ ] Sodium + `hassiumEngineEnabled` 开/关（光照异常）
 - [ ] Forge / NeoForge 同等优化包兼容测试
 - [ ] 超视渲染实机：多人服 `view-distance=8`、客户端 RD=16，走过的环带地形可见；F3 无大量视距外请求
 - [ ] 超视渲染 + Sodium：ViewArea 扩大后 mesh 正常

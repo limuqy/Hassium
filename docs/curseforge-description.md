@@ -56,11 +56,10 @@ Full instructions: [Installation](https://github.com/limuqy/Hassium/wiki/Install
 | | Section delta | On cache mismatch (MISMATCH), fetch only changed sections (`sectionDelta`) and merge locally instead of the whole chunk                                                   |
 | | **Beyond-view render** | When client RD exceeds server view distance (multiplayer), fill the outer ring from local cache (render-only; no out-of-range server requests); incompatible with Bobby   |
 | | World export | `/hassiumc export` writes the local cache as a vanilla Anvil singleplayer world                                                                                           |
-| **Lighting optimization** | Light stripping | Server can omit light data; the client recomputes lighting locally to save more bandwidth                                                                                 |
-| | Light cache | Light data is cached after first recompute; cache hits apply pre-computed lighting directly, skipping expensive recomputation                                             |
-| | Parallel light engine | Light recomputation runs on a background thread pool; the main thread only submits snapshots (on by default)                                                             |
-| | Light sync mode | Optional double-frame buffering (`clientCache.lightSyncMode`): no-light chunks collected this frame are fully applied at the next frame tail, dark chunks clear within one frame     |
-| **Utilities** | Traffic metrics | `/hassium stats` (server) and `/hassiumc stats` (client) to inspect compression and cache results                                                                         |
+| **Lighting optimization** | Hassium engine | In-process shadow server owns all chunk lighting computation — the client stops computing light itself (master switch: `clientCache.hassiumEngineEnabled`, default on; auto-degrades on startup failure) |
+| | Light stripping | Server can omit light data; negotiated at handshake — only stripped when the client declares the engine; stripped light is computed by the shadow server and written back to the cache |
+| | Light cache | Light computed by the shadow server is stored with the chunk data; cache hits apply it directly |
+| **Utilities** | Traffic metrics | `/hassium stats` (server) and `/hassiumc stats` (client) to inspect compression and cache results |
 
 Clients without the mod can connect by default (`compat.requireClientMod = false`); install on both sides for full compression and cache benefits.
 
@@ -116,10 +115,9 @@ Complete matrix: [Support Matrix](https://github.com/limuqy/Hassium/wiki/Support
 | | 分段增量 | 缓存过期（MISMATCH）时仅拉取变更分段（`sectionDelta`）本地合并，避免整块重传 |
 | | **超视渲染** | 多人服客户端 RD 大于服务端视距时，用本地缓存回填视距外地形（仅渲染、不向服索要视距外区块）；与 Bobby 互斥 |
 | | 世界导出 | `/hassiumc export` 将本地缓存导出为可进单机的原版 Anvil 世界 |
-| **光照优化** | 光照剥离 | 服务端可不传光照数据，由客户端本地重算，进一步省流量 |
-| | 光照缓存 | 首次加载重算后缓存光照数据，后续缓存命中直接应用，跳过同步重算 |
-| | 并行光照 | 可选：安装 Promethium MOD 后开启，光照重算在后台线程池并行执行；默认官方引擎（统一异步缓冲队列，帧尾预算消费，不阻塞主线程） |
-| | 同步光照 | 可选：`clientCache.lightSyncMode` 双帧缓冲——本帧收集无光照区块，下一帧尾阻塞全部重算落地，黑块窗口 ≤1 帧 |
+| **光照优化** | Hassium 引擎 | 进服启动进程内影子服务端统一承担全部区块光照计算，客户端不再自己算光（总开关 `clientCache.hassiumEngineEnabled`，默认开；启动失败自动降级） |
+| | 光照剥离 | 服务端可不传光照数据；剥光在握手协商——仅客户端声明引擎可用时才剥，剥离的光照由影子端计算并写回缓存 |
+| | 光照缓存 | 影子端算好的光照随区块数据一体缓存；命中直接应用 |
 | **实用工具** | 流量监控 | `/hassium stats`（服务端）、`/hassiumc stats`（客户端）查看压缩与缓存效果 |
 
 未安装本模组的客户端默认可连接（`compat.requireClientMod = false`）；双端都装才能吃满压缩与缓存。

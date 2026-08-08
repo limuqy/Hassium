@@ -1,21 +1,42 @@
 # Hassium 架构与功能说明
 
-本文档是项目**需求要点 + 模块架构 + 配置/运维**的权威说明。多版本细节见 [`version-segments.md`](version-segments.md)；区块缓存推送流水线见 [`chunk-cache.md`](chunk-cache.md)。
+本文档是项目**能力总览（普通玩家/服主视角）+ 模块架构与配置运维（技术视角）**的权威说明。多版本适配见 [`version-segments.md`](version-segments.md)；区块缓存推送流水线见 [`chunk-cache.md`](chunk-cache.md)。
 
-## 1. 项目定位
+## 1. 这是什么
 
-Hassium 是 Minecraft 多加载器模组（Fabric / Forge / NeoForge），用 **ZSTD** 替代原版 Zlib，优化：
+Hassium 是 Minecraft 多加载器模组（Fabric / Forge / NeoForge），围绕「**更小的网络传输 + 更快的本地加载**」优化存档与区块传输。对应 [README 特性表](../README.md) 的五大能力类：
 
-1. **世界存档压缩**（Region 外层不变，payload type `126`；默认关，仅专用服务器）
-2. **网络传输压缩**（自定义 `hassium:*` 通道 + 可选全局包压缩）
-3. **客户端区块缓存**（本地 Region + `chunkHash` 命中跳过全量下载）
-4. **分段增量**（缓存过期时仅补变更 section，默认开）
-5. **超视渲染**（多人客户端 RD > 服务端视距时，本地缓存回填环带，仅渲染）
-6. **世界导出**（本地缓存导出为可进单机的原版 Anvil 世界）
+- **高效压缩** —— 存储压缩、网络压缩
+- **网络优化** —— 平滑推送、主控热切、加权分流
+- **区块缓存** —— 客户端缓存、分段增量、超视渲染、世界导出
+- **光照优化** —— Hassium 引擎（影子端统一算光）、光照剥离、光照缓存、并行光照、同步光照
+- **实用工具** —— 流量监控、本地生成（SeedGen）
 
 目标版本：Minecraft **1.20.1–1.21.11**（九段适配，见 version-segments）。Forge 仅 **1.20.1 / 1.20.6**。
 
-## 2. 模块结构
+## 2. 解决什么问题（场景举例）
+
+| 场景 | 原有问题 | 本模组怎么解 |
+|------|----------|--------------|
+| 进服/探图，区块一直转圈 | 服务端推全量区块包，带宽慢、主线程卡 | **网络压缩 + 平滑推送**：ZSTD 替代 Zlib，每 tick 限速推送、encode/压缩/发送全部后台化；进服首波不再卡主线程 |
+| 重连服务器 / 再次进入同一区域 | 同一片区域又要重新下载一遍 | **客户端缓存**：曾加载的区块落本地磁盘，重连时 `contentHash` 命中即本地直接应用，不重新下载 |
+| 缓存过期（服务器里东西变了） | 整块重传 | **分段增量**：按 section 比对，只补变更的分段 |
+| 服务器视距小，远处白茫茫 | 客户端想渲染更远，但服务端不推 | **超视渲染**：用本地缓存回填视距外环带（仅渲染，不向服索要） |
+| 光照数据占传输大头 | 每个区块包都带一整柱光照 | **光照剥离 + Hassium 引擎**：服务端可剥光（握手协商），由客户端侧 Hassium 引擎（影子端）统一计算光照并落盘缓存，后续直接应用 |
+| 大片未探索地形（pristine 区块） | 服务端也要逐块生成并传输 | **本地生成（SeedGen）**：服务端只发几十字节的引用（seed + 坐标），客户端用同 seed 本地生成，零传输生成区块 |
+| 主控服务器网络抖动 | 直接断线回大厅 | **主控热切**：TCP 断/卡时按候选自动切换，恢复期画面定格、缓存暖续 |
+
+## 3. 谁适合启用
+
+- **普通玩家**：装上即用。默认全开：网络压缩、客户端缓存、分段增量、超视渲染、光照剥离/缓存/同步模式、Hassium 引擎（影子端统一算光）。无需配置。
+- **服主**：`storage.enabled`（存储压缩）**默认关**——开启会改写存档格式（type 126），**启用前请备份世界**；`network.seedGen.enabled` 默认关——本地生成需要**双端同版本**且客户端开同项，pristine 区块才走本地生成，否则自动回退全量推送。
+- **公网部署（数据面/主控热切）**：默认端点是 `127.0.0.1`，仅本机可用；必须把 `udpListeners.reachableEndpoints` 与 `controlReachableEndpoints` 改为公网可达地址并放行 UDP 端口，见 §12。
+
+---
+
+# 技术细节（面向有运维能力的服主与开发者；普通玩家可跳过）
+
+## 4. 模块结构
 
 ```
 Hassium/
@@ -33,15 +54,54 @@ Hassium/
 |----|------|
 | `storage/` | `HassiumRegionFile`、`MetadataTable`、`RegionBitmap`、`HassiumChunkWriteBuffer`；type 126 压缩由 `compression/CompressionService` 收口 |
 | `compression/` | `CompressionCodec` / `CompressionService`、字典注册 |
-| `network/` | 握手、ZSTD Pipeline、聚合、chunkHash 推送、`ServerChunkPushManager`；`network/dataplane/` 多通道数据面（1.20.1 fabric PoC：`DataPlaneFrame` / `Hkdf` / `DataPlaneCodec` / `BulkRouter` / `DataPlaneServer` / `DataPlaneClientBundle` 等，见 [`multi-channel_network_research.md`](multi-channel_network_research.md)） |
-| `cache/` | 客户端缓存、Bloom、`ClientHeatIndex` / `SectionHashStore`、淘汰 |
-| `config/` | `HassiumConfigService` 门面；Fabric：`HassiumTomlConfigIO`；Forge/NeoForge：`HassiumConfigSpec` |
-| `metrics/` | `NetworkStats` 零分配指标 |
+| `network/` | 握手、ZSTD Pipeline、聚合、chunkHash 推送、`ServerChunkPushManager`；`network/seedgen/` SeedGen 本地生成（`SeedGenExecutor` / `ShadowSeedServer` / `SeedGenLevelCompat` / `SeedGenChunkCodec` / `SeedGenQueue`）；`network/dataplane/` 多通道数据面（`DataPlaneFrame` / `Hkdf` / `BulkRouter` / `ControlEndpointManager` 等） |
+| `network/ClientChunkHandler` → `ClientChunkPipeline` | 客户端区块摄入管线的门面与状态容器（Phase 0 隔离：storage / pending hash / SeedGen 握手信息全收拢为单例状态） |
+| `cache/` | 客户端缓存、Bloom、`ClientHeatIndex` / `SectionHashStore`、淘汰；`cache/client/` 客户端读回/写盘（`ClientCacheLoadQueue`、`CacheSaveQueue`、`ViewDistanceExtensionService`、`HassiumLightHooks`） |
+| `config/` | `HassiumConfigService` 门面；Fabric：`FabricTomlConfigIO`；Forge/NeoForge：`ModConfigSpec` |
+| `metrics/` | `NetworkStats` 零分配指标（`HassiumMetricsImpl`） |
 | `compat/` | Manifold 跨版本 API 桥接 |
 | `mixin/` | 全部 Mixin（common only） |
-| `migration/` / `api/` | 路线图桩（未实现） |
+| `migration/` / `api/` | 存档迁移工具（`MigrationTool`）与对外 API（`HassiumApi` / `HassiumCapabilities`） |
 
-## 3. 存储格式
+## 5. 客户端区块数据流
+
+统一汇合 + 统一光照：所有区块数据入口（网络压缩通道 / 缓存读回 / 原版直发 / OVD /
+SeedGen 本地生成）最终都经 `handleLevelChunkWithLight` 落到客户端；空光照包不再由
+客户端重算，而是投递进进程内 Hassium 引擎影子服务端（`ShadowSeedServer`，完整
+ServerLevel + 官方光照引擎），注入区块数据 → 引擎传播全局收敛 → 回传客户端主线程
+轻量落地（双缓冲原语）并标脏写回缓存。
+
+```mermaid
+flowchart LR
+    subgraph IN["三路入站"]
+        A1["原版 chunk packet<br/>1.20.1~1.21.10 经预算队列"]
+        A2["Hassium 压缩通道<br/>直推 / 聚合 / 数据通道"]
+        A3["SeedRef（SeedGen）<br/>本地影子服务端生成"]
+    end
+    A1 --> B["MainThreadDispatcher<br/>距离优先级 + 帧预算"]
+    A2 --> C["handleCompressedChunk<br/>Netty → 后台解压"]
+    A3 --> C
+    C --> B
+    B --> D["applyChunkData<br/>主线程预算内落地"]
+    D --> E{光照是否随包?}
+    E -->|"带光"| F["客户端原版落地"]
+    E -->|"空光（剥光/缓存无光）"| G["ShadowLightCompute 投递"]
+    G --> H["影子服务端<br/>注入 + 传播收敛"]
+    H --> I["帧尾回传落地<br/>swapDataLayer + 标脏"]
+    D -.-> J["推送即入库 → CacheSaveQueue →<br/>ClientHassiumStorage（HBT1 NBT）"]
+    J -.->|"R2 读回"| K["ClientCacheLoadQueue<br/>region 桶批量 → Bloom 命中"]
+    K --> B
+```
+
+要点：
+
+- **统一汇合**：网络推送与 SeedGen 本地生成汇入同一 `handleCompressedChunk` 解压→应用链；SeedGen 失败/超时（3s）回退全量请求，正确性优先
+- **预算化 apply**：原版包 + Hassium 包 + 缓存读回 + 超视渲染全走 `MainThreadDispatcher` 距离优先级队列，`ClientMainThreadBudget` 帧预算控制（JoinBoost 进服加速）；`hassiumApplyInProgress` ThreadLocal 防 Mixin 重入死循环
+- **Hassium 引擎**（`clientCache.hassiumEngineEnabled`，默认 true）：进服启动影子服务端统一承担区块光照计算（客户端不再计算）。启动失败自动降级：客户端缓存/超视渲染/SeedGen 关闭并游戏内提示，仅保留网络向优化。服务端未装 MOD（无握手种子）→ 影子端不启动，缓存/OVD/导出保留（纯客户端能力），光照随包自带。剥光在握手协商：客户端未声明引擎可用（未装 MOD / 引擎关闭）时服务端不剥光
+- **缓存一致性**：主路径 Live-Unload Snapshot（断连时落收敛光）；`CacheSaveQueue` 后台写盘线程（毒丸停止，防 interrupt 打断 NIO）；R2 读回按 region 分桶批量（每桶串行，避免虚拟线程洪泛）
+- **光照**：由影子端承担（注入后全局收敛，帧尾渲染前批量落地，黑块窗口 = 0；单柱注入失败/超时不回退客户端重算——客户端无光照逻辑，剥光仅在握手声明引擎可用后发生）
+
+## 6. 存储格式
 
 外层保持 Anvil（`.mca`，32×32）：
 
@@ -57,7 +117,7 @@ Sector 3+:    [length(4)][type=126][ZSTD 压缩数据]
 - 客户端辅存：`heat.idx`（热度）、`section_hashes.bin`（per-section 哈希）
 - 字典缺失时拒绝写入 Hassium payload，回退原版
 
-## 4. 网络压缩
+## 7. 网络压缩
 
 | 能力 | 说明 | 默认 |
 |------|------|------|
@@ -71,7 +131,7 @@ Sector 3+:    [length(4)][type=126][ZSTD 压缩数据]
 
 控制面（握手、index sync、chunkHash 等）在压缩黑名单，不进 PENDING 聚合缓冲，也不走 UDP 数据面；UDP 只承载 Bind 后的 S2C bulk。多通道的早期裸 TCP PoC 已退役；运行时验证见 [`runtime-smoke-test.md`](runtime-smoke-test.md) 的 `UdpFailover` phase。
 
-## 5. 配置默认值（安全与行为）
+## 8. 配置默认值（安全与行为）
 
 配置文件：
 
@@ -81,6 +141,7 @@ Sector 3+:    [length(4)][type=126][ZSTD 压缩数据]
 游戏内编辑：
 - **Fabric**：Night Config 自管 toml + jiJ **Cloth**；安装 **Mod Menu** 即可打开。不依赖 FCAP / Configured。
 - **Forge / NeoForge**：原生 ConfigSpec + jiJ **Cloth**（模组列表「配置」按钮）；亦可手改 toml。Configured 仍可选。Forge **1.20.6** 因与 NeoForge 共用 `ModConfigSpec`，仅该端保留 FCAP Forge 桥接。
+
 各项 GUI 文案见 `assets/hassium/lang/*`；toml 注释仍为中文。
 
 | 项 | 默认 | 说明 |
@@ -93,28 +154,28 @@ Sector 3+:    [length(4)][type=126][ZSTD 压缩数据]
 | `clientCache.viewDistanceExtensionEnabled` | true | 超视渲染（依赖 clientCache.enabled；与 Bobby 互斥） |
 | `clientCache.maxRenderDistance` | 16 | 运行时有效 RD / 超视渲染环带上限（2–64） |
 | `clientCache.ovdUnloadDelaySecs` | 5 | 超视渲染离开环带后延迟卸载秒数（0=同步卸载） |
+| `clientCache.mainThreadChunkBudgetMs` | 15 | 客户端主线程 apply 预算（ms） |
+| `clientCache.seedGenThreads` | 2 | SeedGen 本地生成线程数（固定平台线程池；0=禁用本地生成，SeedRef 一律回退全量） |
+| `clientCache.hassiumEngineEnabled` | **true** | Hassium 引擎（非网络向功能总开关）：进服启动影子服务端统一承担区块光照计算（客户端不再计算）。启动失败自动降级：客户端缓存/超视渲染/SeedGen 关闭并游戏内提示，仅保留网络向优化；false=不启动（此时服务端不剥光——剥光在握手协商，光照随包自带） |
+| `clientCache.ovdLocalGeneration` | false | OVD 本地生成：超视渲染区域缓存 miss 时用 Hassium 引擎按服务端世界种子本地生成区块（与服务器地形一致）并存入本地缓存；无种子（服务端未装 MOD）时自动关闭生成 |
 | `network.enabled` | true | Hassium 通道 |
 | `network.globalPacketCompression` | true | 全局 ZSTD |
 | `network.compressionLevel` | 3 | 网络压缩等级（速度优先） |
 | `network.maxChunksPerTick` | 4 | 每玩家每 tick 提交上限（1.21.2+ 为主线程序列化上限，1.20.x/1.21.1 为后台提交上限；发送速率 = 本值 × tick 节奏，满 tick ≈ 4×20/s） |
+| `network.lightStrip` | true | 光照剥离：服务端发包带空 lightMask；实际剥光由握手协商门控（客户端声明 `lightComputeSupported` 才剥，否则光随包自带） |
+| `network.maxLightRecomputePerFrame` | 10 | 每帧最多重算光照的区块数 |
+| `network.seedGen.enabled` | **false** | SeedGen 本地生成（双端同版本，默认关）。服务端对 pristine 区块发 SeedRef 替代区块数据；客户端本地生成，失败/超时回退全量 |
 | `network.dataPlane.enabled` | true | 启用 UDP/KCP 数据面和控制恢复；关后不启动 UDP listener、不广告端点、不处理 failover |
 | `network.dataPlane.controlStallMs` | 6000 | 控制 TCP 静默多久后可申请 failover（ms） |
 | `network.dataPlane.failoverExpiryMs` | 30000 | 服务端 `FailoverPermit` 有效期（ms） |
 | `network.dataPlane.recoveryWindowMs` | 60000 | 客户端候选重连窗口（ms） |
-| `clientCache.mainThreadChunkBudgetMs` | 15 | 客户端主线程 apply 预算（ms） |
-| `clientCache.parallelLightEngineEnabled` | false | 并行光照（需接入 Promethium）：默认官方引擎——光照重算经统一异步缓冲队列，帧尾按预算消费（每帧部分预算，剩余留帧）；开启后转 Promethium 后台线程池重算 + 主线程帧预算原子落地 |
-| `clientCache.parallelLightEngineThreads` | 4 | 并行光照线程数（虚拟线程模式忽略） |
-| `clientCache.lightSyncMode` | true | 光照重算同步模式（双帧缓冲）：默认同步双帧缓冲（本帧收集无光照区块、下一帧尾阻塞全量落地，黑块窗口 ≤1 帧；落地量受 chunk apply 限流约束；与并行光照同开时本项优先）；false=异步预算消费（黑块随重算逐帧消减） |
-| `clientCache.lightCacheEnabled` | true | 光照缓存：首次加载重算后存储光照，缓存命中直接应用 |
-| `network.lightStrip` | true | 光照剥离：服务端发包带空 lightMask，客户端本地重算 |
-| `network.maxLightRecomputePerFrame` | 10 | 每帧最多重算光照的区块数 |
 | `network.metricsEnabled` | false | 指标收集 |
 | `compat.requireClientMod` | false | 无模组客户端可连 |
-| `debug.*` | 全 false | 调试分类日志，见下 |
+| `debug.*` | 全 false | 调试分类日志，见 §9 |
 
 `network.controlReachableEndpoints` 是客户端主控 TCP 重连候选；每项为 `{ host, port, priority }`，最多 4 项。`network.dataPlane.udpListeners` 是服务端 UDP socket 与其客户端可达地址的列表；每项为 `{ bindHost, bindPort, weight, reachableEndpoints }`，其中 `reachableEndpoints` 同样使用 `{ host, port, priority }`，最多 8 项。`bindHost` 只在服务端绑定，绝不下发给客户端；公网服必须把默认的 `127.0.0.1:25565` 改成客户端实际可达的 UDP 地址，并放行对应 UDP 端口。
 
-## 6. 日志策略
+## 9. 日志策略
 
 正常加载路径默认安静：仅少量生命周期 INFO（初始化、字典加载、握手摘要、管道切换、断开清理）。
 
@@ -124,7 +185,7 @@ Sector 3+:    [length(4)][type=126][ZSTD 压缩数据]
 |--------|------|
 | `debug.metadataLogging` | chunkHash / 元数据比对 |
 | `debug.dispatcherLogging` | 主线程调度 |
-| `debug.asyncLogging` | 异步任务 |
+| `debug.asyncLogging` | 异步任务（含 SeedGen 生成/超时） |
 | `debug.compressionLogging` | 压缩/解压 |
 | `debug.chunkApplyLogging` | 区块 apply |
 | `debug.networkLogging` | 网络收发 |
@@ -132,44 +193,32 @@ Sector 3+:    [length(4)][type=126][ZSTD 压缩数据]
 
 ERROR / WARN 始终输出。
 
-## 7. 命令与监控
+## 10. 命令与监控
 
 | 命令 | 侧 | 说明 |
 |------|-----|------|
 | `/hassium stats` | 服务端 | 压缩/发送统计（需 OP 2） |
 | `/hassium metrics on\|off` | 服务端 | 运行时开关指标 |
 | `/hassium stats reset` | 服务端 | 重置计数器 |
-| `/hassiumc stats` | 客户端 | 接收/缓存命中/超视渲染 统计 |
+| `/hassiumc stats` | 客户端 | 接收/缓存命中/超视渲染/光照/区块加载（新增/过期/**本地生成**）统计 |
 | `/hassiumc export [<服务器IP>] [seed]` | 客户端 | 导出本地缓存为 `saves/` 下原版 Anvil 世界 |
 
 实现：`metrics/NetworkStats`（`AtomicLong`，可关闭）。指标关闭时相关 stats 命令不可用。导出走 `CacheWorldExporter`（异步，见 `disk-nbt-cache.md` / `chunk-cache.md` §12）。
 
-## 8. 构建与运行
+客户端 stats 的「区块加载」行口径：`新增` = 无本地缓存的全量请求；`过期` = 缓存过期/技术性回退；`本地` = SeedGen 影子服务端本地生成（等价一次全量请求，带宽节省按 16KB/chunk 原版 Zlib 等价计入）。
 
-```bash
-./gradlew build
-./gradlew build "-Pmc_ver=1.21.1"   # PowerShell 必须给 -P 加引号
-./gradlew :fabric:runClient
-./gradlew :forge:runServer
-./gradlew common:compileJava        # 改 common 后先编
-./gradlew scanVersionBoundaries
-./gradlew compileAnchors
-```
-
-首次或缺少反编译产物：`./gradlew common:decompile`。
-
-## 9. 卖点特性（已实现摘要）
+## 11. 卖点特性（已实现摘要）
 
 按大类组织：**高效压缩 / 网络优化 / 区块缓存 / 光照优化 / 实用工具**。
 
-### 9.1 高效压缩
+### 11.1 高效压缩
 
 | 特性 | 配置 / 命令 | 要点 | 详文 |
 |------|-------------|------|------|
 | **存储压缩** | `storage.enabled`（默认 false，仅专用服）、`storage.zstdLevel`（9） | chunk payload ZSTD 落盘 type 126；外层 Region 不变；启用改写落盘格式需备份 | [`chunk-cache.md`](chunk-cache.md)、[`disk-nbt-cache.md`](disk-nbt-cache.md) |
 | **网络压缩** | `network.enabled`、`globalPacketCompression`、`compressionLevel`、`enablePacketAggregation` | `hassium:*` 通道 ZSTD + 可选全局管道替换 Zlib + 聚合/紧凑包头/上下文压缩 | [`chunk-cache.md`](chunk-cache.md) |
 
-### 9.2 网络优化
+### 11.2 网络优化
 
 | 特性 | 配置 / 命令 | 要点 | 详文 |
 |------|-------------|------|------|
@@ -178,27 +227,32 @@ ERROR / WARN 始终输出。
 | **加权分流** | `network.dataPlane.udpListeners`、每 listener `weight` | 每个 UDP/KCP listener 建独立 session，S2C bulk 按权重加权轮询；不健康或无可用 session 时回落 TCP，控制面始终保留 TCP | [`runtime-smoke-test.md`](runtime-smoke-test.md) §`udp-failover` |
 | **多通道数据面（历史）** | 早期 `DataPlanePoCConfig` | 1.20.1 Fabric 的双裸 TCP PoC 已退役，不是生产配置或运维入口 | [`multi-channel_network_research.md`](multi-channel_network_research.md) |
 
-### 9.3 区块缓存
+### 11.3 区块缓存
 
 | 特性 | 配置 / 命令 | 要点 | 详文 |
 |------|-------------|------|------|
 | **客户端区块缓存** | `clientCache.enabled`（默认 true） | chunkHash 比对命中即本地 apply；磁盘 NBT（`HBT1`）按热度淘汰 | [`chunk-cache.md`](chunk-cache.md)、[`disk-nbt-cache.md`](disk-nbt-cache.md) |
 | **分段增量** | `clientCache.sectionDeltaEnabled`（默认 true） | MISMATCH 时按 section 比对，仅补变更分段 + BE 覆盖；失败/超时回退全量 | [`chunk-cache.md`](chunk-cache.md) §11.5、[`disk-nbt-cache.md`](disk-nbt-cache.md) |
 | **超视渲染** | `viewDistanceExtensionEnabled`、`maxRenderDistance`、`ovdUnloadDelaySecs` | 多人、clientVD>serverVD 时本地缓存回填环带；Forget 原地 renderOnly；不向服索要视距外区块/BE | [`ovd.md`](ovd.md)、[`chunk-cache.md`](chunk-cache.md) §10 |
+| **OVD 本地生成** | `clientCache.ovdLocalGeneration`（默认 false） | 超视渲染区域缓存 miss 时用 Hassium 引擎按服务端世界种子本地生成区块（与服务器地形一致），renderOnly 落地并存入本地缓存；无种子（服务端未装 MOD）时自动关闭生成 | [`ovd.md`](ovd.md) |
 | **世界导出** | `/hassiumc export [<服务器IP>] [seed]` | 客户端缓存 → 原版 Anvil（type2 zlib）；无实体/仅去过的区块快照 | [`chunk-cache.md`](chunk-cache.md) §12、[`disk-nbt-cache.md`](disk-nbt-cache.md) |
 
-### 9.4 光照优化
+### 11.4 光照优化
 
 | 特性 | 配置 / 命令 | 要点 | 详文 |
 |------|-------------|------|------|
-| **光照剥离** | `network.lightStrip`（默认 true） | 服务端发包带空 lightMask（构造近零成本）；客户端本地重算并回写缓存 | [`chunk-cache.md`](chunk-cache.md)、[`runtime-smoke-test.md`](runtime-smoke-test.md) |
-| **光照缓存** | `clientCache.lightCacheEnabled`（默认 true） | 首次重算后缓存光照，命中直接 apply 跳过同步重算；SectionDelta 合并强制失效 | [`chunk-cache.md`](chunk-cache.md)、[`disk-nbt-cache.md`](disk-nbt-cache.md) |
-| **并行光照** | `clientCache.parallelLightEngineEnabled`（默认 false）、`parallelLightEngineThreads`（4） | 可选：需安装 Promethium MOD（客户端运行时经 `PromethiumLightBridge` 反射发现，零编译依赖；MOD 缺席自动降级官方引擎）。开启后重算在后台线程池并行，主线程只做快照捕获与帧预算内原子落地；默认官方引擎——光照重算经统一异步缓冲队列（帧尾预算消费，每帧部分预算） | [`chunk-cache.md`](chunk-cache.md)、[`runtime-smoke-test.md`](runtime-smoke-test.md) |
-| **同步光照** | `clientCache.lightSyncMode`（默认 true） | 官方引擎光照重算同步模式（双帧缓冲）——本帧收集无光照区块，下一帧尾阻塞全部重算落地，黑块窗口 ≤1 帧；false=异步预算消费（每帧部分预算，剩余留帧）；与并行光照同开时本项优先 | [`client-chunk-light-flow.md`](client-chunk-light-flow.md) |
+| **光照剥离** | `network.lightStrip`（默认 true） | 服务端发包带空 lightMask（构造近零成本）；剥光在握手协商——仅客户端声明引擎可用（`lightComputeSupported` = `hassiumEngineEnabled`）时才剥，否则光随包自带 | [`chunk-cache.md`](chunk-cache.md)、[`runtime-smoke-test.md`](runtime-smoke-test.md) |
+| **引擎光照** | `clientCache.hassiumEngineEnabled`（默认 true） | 统一投递影子端：所有区块数据经 `handleLevelChunkWithLight` 汇合，空光照包投递进程内影子服务端（完整 ServerLevel + 官方光照引擎）注入 + 传播全局收敛，回传客户端主线程帧尾轻量落地（`swapDataLayer`）并标脏写回缓存（收敛光落盘）；客户端无本地光照逻辑（不重算、不缓冲、不并行） | [`chunk-cache.md`](chunk-cache.md) |
 
-客户端磁盘缓存 payload 为 NBT（`"HBT1"` + CompoundTag），主一致性路径为 **Live-Unload Snapshot**（renderOnly 跳过落盘）。控制恢复期间缓存写队列与执行器保持可用，重连成功后继续命中既有缓存；旧 packet 字节缓存读到即删并全量请求。
+### 11.5 本地生成（SeedGen）
 
-## 9.5. UDP 数据面 + TCP 控制 Failover 运维
+| 特性 | 配置 / 命令 | 要点 | 详文 |
+|------|-------------|------|------|
+| **本地生成** | `network.seedGen.enabled`（默认 false，双端同开）、`clientCache.seedGenThreads`（2） | 服务端对 pristine（未生成）区块发 `SeedRef`（seed + 坐标 + hash，几十字节）替代区块数据；客户端起影子服务端（`ShadowSeedServer`，专用线程驱动 worldgen）本地生成，经同一解压/应用链落地；失败/超时（3s）回退全量请求 | [`chunk-cache.md`](chunk-cache.md) |
+
+本地生成的区块与直推同链：推送即入库（本地缓存同样受益），stats「区块加载」行计入「本地」计数，带宽节省按缓存命中同口径计入。
+
+### 11.6 数据面 + 主控热切运维
 
 **拓扑与职责**：原版 Minecraft TCP 连接仍是 login、控制与兼容回退路径；UDP/KCP 只承载已 Bind session 的 S2C bulk。服务端从 `network.dataPlane.udpListeners` 向客户端广告可达 UDP 地址，并从 `network.controlReachableEndpoints` 广告备用 TCP 主控地址。两类地址必须分别配置：前者需要 UDP 防火墙/NAT 放行，后者必须能建立完整 Minecraft TCP 会话。
 
@@ -206,9 +260,9 @@ ERROR / WARN 始终输出。
 
 **配置原则**：默认 listener `0.0.0.0:25565` 仅将 `127.0.0.1:25565` 作为客户端可达地址，适合本机开发，不能直接用于公网服。公网部署必须为每个 listener 填写可从客户端访问的 `reachableEndpoints`，避免把 wildcard 或内网 bind 地址下发；使用不同公网端口时，TCP 控制候选与 UDP 可达端点应分别写入。
 
-**冒烟验证**：运行 `UdpFailover` phase 可核验 `UDP_BIND_OK`、`UDP_WRR_OK`、`FAILOVER_PERMIT_OK`、`FAILOVER_RECONNECT_OK`、`CACHE_RESUME_HIT` 与候选耗尽时的 `FAILOVER_TERMINAL_OK`。`network.dataPlane.enabled=false` 时必须不存在 UDP listener、Bind 或 permit marker。Nginx stream harness 仅代理 TCP 主控，UDP 仍直连，详见 [`runtime-smoke-test.md`](runtime-smoke-test.md) §`udp-failover`。
+**自检验证**：运行 `UdpFailover` phase 可核验 `UDP_BIND_OK`、`UDP_WRR_OK`、`FAILOVER_PERMIT_OK`、`FAILOVER_RECONNECT_OK`、`CACHE_RESUME_HIT` 与候选耗尽时的 `FAILOVER_TERMINAL_OK`。`network.dataPlane.enabled=false` 时必须不存在 UDP listener、Bind 或 permit marker。Nginx stream harness 仅代理 TCP 主控，UDP 仍直连，详见 [`runtime-smoke-test.md`](runtime-smoke-test.md) §`udp-failover`。
 
-## 11. 相关文档
+## 12. 相关文档
 
 - [`chunk-cache.md`](chunk-cache.md) — 缓存推送、超视渲染摘要、磁盘 NBT、导出
 - [`ovd.md`](ovd.md) — 超视渲染技术实现
@@ -216,6 +270,8 @@ ERROR / WARN 始终输出。
 - [`version-segments.md`](version-segments.md) — 九段适配真相源
 - [`mod-compat.md`](mod-compat.md) — 多 Mod 兼容边界与配置逃生
 - [`multi-channel_network_research.md`](multi-channel_network_research.md) — 多通道设计与已退役裸 TCP PoC 的历史记录
-- [`runtime-smoke-test.md`](runtime-smoke-test.md) — 多版本 runtime smoke 与 UDP failover harness
+- [`runtime-smoke-test.md`](runtime-smoke-test.md) — 多版本运行时自检与 UDP failover harness
 - 根目录 `README.md` — 用户安装与特性
 - `CLAUDE.md` / `AGENTS.md` — 开发者与 Agent 入口
+
+[← 用户文档](../README.md#用户文档) · [Home](../README.md) · [→ chunk-cache](chunk-cache.md)

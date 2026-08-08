@@ -58,7 +58,7 @@ Hassium 主要改动：
 
 Sodium / Iris / Lithium / FerriteCore / EntityCulling / ImmediatelyFast 等通常不抢 Region 压缩类型与区块广播接管。
 
-常见摩擦：默认 `clientCache.lightCacheEnabled = true`（首次加载重算后缓存光照）。出现光照异常时关闭即可。
+常见摩擦：默认 `clientCache.hassiumEngineEnabled = true`（进服启动影子端统一算光，客户端不再本地算光）。出现光照异常时关闭即可（关闭后服务端不剥光，光照随包自带）。
 
 ## 7. C2ME
 
@@ -98,7 +98,7 @@ Sodium / Iris / Lithium / FerriteCore / EntityCulling / ImmediatelyFast 等通�
 | `network.enablePacketAggregation` | 关包聚合 |
 | `network.compressionBlacklist` | 排除指定包 ID（第三方通道） |
 | `network.dataPlane.enabled` | 关 UDP/KCP bulk 与 TCP 主控恢复；用于隔离 UDP 防火墙、NAT 或代理问题，仍保留 TCP 主控与普通网络路径 |
-| `clientCache.lightCacheEnabled` | 关光照缓存（每次加载触发重算） |
+| `clientCache.hassiumEngineEnabled` | 关 Hassium 引擎（服务端不剥光，光照随包自带；影子端相关功能关闭） |
 | `clientCache.sectionDeltaEnabled` | 关分段增量（过期改走全量） |
 | `clientCache.viewDistanceExtensionEnabled` | 关 超视渲染（恢复原版 RD 钳制） |
 | `clientCache.maxRenderDistance` | 超视渲染 / 有效 RD 上限（2–64） |
@@ -140,7 +140,7 @@ Mixin 在开发映射名与运行时混淆名之间需要对照表，构建时�
 - [ ] DH 双端 / Voxy+伴生：LOD 正常；必要时关聚合或加黑名单  
 - [ ] Via：无 Hassium 旧客户端能进服；同版本 Hassium 客户端功能完整；同进程 Via 时关 `globalPacketCompression`  
 - [ ] C2ME **chunkio rewrite** 开/关与 `storage` 开/关对照  
-- [ ] Sodium + `lightCacheEnabled` 开/关（光照异常时）
+- [ ] Sodium + `hassiumEngineEnabled` 开/关（光照异常时）
 - [ ] 文件级备份：热备份 → 改区块 → 导出还原 → 带 Hassium 进服可读  
 - [ ] Forge / NeoForge 同等优化包冒烟
 - [ ] **超视渲染**：多人服 `view-distance=8`、客户端 RD=16，曾走过的地形环带可见；F3 无大量视距外 `ChunkDataRequestC2S` / `BlockEntityRequestC2S`；关闭 `clientCache.viewDistanceExtensionEnabled` 后恢复原版钳制；断连重连无残留 renderOnly 标记

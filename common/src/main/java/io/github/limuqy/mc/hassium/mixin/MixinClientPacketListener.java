@@ -178,7 +178,7 @@ public class MixinClientPacketListener {
             return serverRadius;
         }
         HassiumConfigService cfg = HassiumConfigService.getInstance();
-        if (!cfg.isClientCacheEnabled() || !cfg.isViewDistanceExtensionEnabled()) {
+        if (!cfg.isClientFeatureGateOpen() || !cfg.isClientCacheEnabled() || !cfg.isViewDistanceExtensionEnabled()) {
             return serverRadius;
         }
         int clientVD = ViewDistanceExtensionService.resolveEffectiveClientVD(mc);

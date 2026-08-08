@@ -32,7 +32,8 @@ Smaller world saves and bandwidth than vanilla, local chunk reuse, and smoother 
 | | Section delta | On cache mismatch (MISMATCH), fetch only changed sections (`sectionDelta`) and merge locally instead of the whole chunk |
 | | **Beyond-view render** | When client RD exceeds server view distance (multiplayer), fill the outer ring from local cache (render-only; no out-of-range server requests); incompatible with Bobby |
 | | World export | `/hassiumc export` writes the local cache as a vanilla Anvil singleplayer world |
-| **Lighting optimization** | Light stripping | Server can omit light data; the client recomputes lighting locally to save more bandwidth |
+| **Lighting optimization** | Hassium engine | Master switch for non-network features (default on): an in-process shadow server owns all chunk lighting computation on login; degrades automatically on startup failure |
+| | Light stripping | Server can strip light data; the Hassium engine (shadow side) computes lighting centrally and persists the cache |
 | | Light cache | Light data is cached after first recompute; cache hits apply pre-computed lighting directly, skipping expensive recomputation |
 | | Parallel light engine | Light recomputation runs on a background thread pool; the main thread only submits snapshots (on by default) |
 | **Utilities** | Traffic metrics | `/hassium stats` (server) and `/hassiumc stats` (client) to inspect compression and cache results |
@@ -87,7 +88,6 @@ Files: `config/hassium/hassium-client.toml`, `config/hassium/hassium-server.toml
 | `storage.enabled` | `false` | World ZSTD (**off by default**; dedicated servers only, **back up first**) |
 | `clientCache.enabled` | `true` | Client cache |
 | `clientCache.sectionDeltaEnabled` | `true` | Section delta on cache mismatch |
-| `clientCache.lightCacheEnabled` | `true` | Light cache (hits skip recomputation) |
 | `clientCache.viewDistanceExtensionEnabled` | `true` | Beyond-view render (multiplayer; exclusive with Bobby) |
 | `clientCache.maxRenderDistance` | `16` | Beyond-view / effective RD cap (2–64) |
 | `clientCache.ovdUnloadDelaySecs` | `5` | Delay unload after leaving beyond-view ring (s; 0=sync) |
@@ -95,8 +95,7 @@ Files: `config/hassium/hassium-client.toml`, `config/hassium/hassium-server.toml
 | `network.globalPacketCompression` | `true` | Global ZSTD |
 | `network.maxChunksPerTick` | `4` | Per-player submit cap per tick (send rate = cap × tick rhythm; ≈ 4×20/s at full tick, naturally slows on lag) |
 | `clientCache.mainThreadChunkBudgetMs` | `15` | Client apply budget per frame (ms) |
-| `clientCache.parallelLightEngineEnabled` | `false` | Parallel light (optional, requires the Promethium MOD; recompute runs on a background pool, main thread only submits snapshots; falls back to the vanilla engine without the MOD) |
-| `clientCache.parallelLightEngineThreads` | `4` | Parallel light thread count (ignored in virtual-thread mode) |
+| `clientCache.hassiumEngineEnabled` | `true` | Hassium engine (master switch for non-network features): starts an in-process shadow server on login that owns all chunk lighting computation; degrades automatically on startup failure (cache/beyond-view render/SeedGen disabled with notice); when disabled the server does not strip light (negotiated at handshake) |
 | `network.metricsEnabled` | `false` | Metrics collection (off by default; auto-enabled during self-checks) |
 | `network.dataPlane.enabled` | `false` | UDP/KCP data plane, control failover, and weighted routing; off by default, configure reachable endpoints and verify the six self-check markers in order before enabling |
 | `network.dataPlane.controlStallMs` | `6000` | How long TCP control can stall before triggering `FailoverRequest` |

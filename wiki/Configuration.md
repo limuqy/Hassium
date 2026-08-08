@@ -39,10 +39,8 @@ Hassium 启动时在 `config/hassium/` 自动生成两份 TOML：
 | --- | --- | --- |
 | `clientCache.enabled` | `true` | 客户端区块缓存总开关 |
 | `clientCache.sectionDeltaEnabled` | `true` | 缓存过期时只补变更分段；关闭则过期走全量重传 |
-| `clientCache.lightCacheEnabled` | `true` | 光照优化；命中跳过同步重算；与 Sodium 等有光照异常时关掉即可 |
-| `clientCache.parallelLightEngineEnabled` | `false` | 并行光照：重算在后台线程池执行，主线程只提交快照 |
-| `clientCache.parallelLightEngineThreads` | `4` | 并行光照线程数（虚拟线程模式忽略） |
-| `clientCache.lightSyncMode` | `true` | 光照重算同步模式（双帧缓冲）：本帧收集无光照区块，下一帧尾阻塞全部重算落地，黑块窗口 ≤1 帧；默认 true=同步双帧缓冲，false=异步预算消费 |
+| `clientCache.hassiumEngineEnabled` | `true` | Hassium 引擎（非网络向功能总开关）：进服启动影子服务端统一承担区块光照计算（客户端不再计算）；启动失败自动降级（缓存/超视渲染/SeedGen 关闭并提示）；关闭时服务端不剥光（握手协商），光照随包自带 |
+| `clientCache.ovdLocalGeneration` | `false` | OVD 本地生成：超视渲染区域缓存 miss 时按服务端世界种子本地生成区块并存入本地缓存；无种子（服务端未装 MOD）时自动关闭生成 |
 | `clientCache.viewDistanceExtensionEnabled` | `true` | 超视渲染（多人服 clientVD > serverVD 时回填环带；**与 Bobby 互斥**） |
 | `clientCache.maxRenderDistance` | `16` | 超视渲染环带与有效 RD 上限（范围 2–64） |
 | `clientCache.ovdUnloadDelaySecs` | `5` | 离开超视渲染环带后延迟卸载秒数（0=同步卸载） |
@@ -95,7 +93,7 @@ Hassium 启动时在 `config/hassium/` 自动生成两份 TOML：
 | 临时存档前关闭存档压缩以免格式变更 | 同上，再备份世界 |
 | 关闭超视渲染恢复原版 RD 钳制 | `clientCache.viewDistanceExtensionEnabled = false` |
 | 提高超视渲染上限到 48 | `clientCache.maxRenderDistance = 48`，并手改 `options.txt` 抬高客户端滑块；注意 RD>32 时雾距可能穿帮 |
-| 关闭光照优化（每次加载重算） | `clientCache.lightCacheEnabled = false` |
+| 关闭 Hassium 引擎（不启动影子端；服务端不剥光，光照随包自带） | `clientCache.hassiumEngineEnabled = false` |
 | 与同进程 Via 桥叠用 | 关 `network.globalPacketCompression` |
 | 第三方通道被聚合误伤 | 关 `network.enablePacketAggregation`，或把通道 ID 加进 `network.compressionBlacklist` |
 | 仅享受客户端缓存（服务端不装） | 客户端单独安装即可，服务端默认 `compat.requireClientMod = false` |

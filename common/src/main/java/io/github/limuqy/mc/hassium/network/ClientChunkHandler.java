@@ -386,10 +386,10 @@ public class ClientChunkHandler {
                 NetworkStats.recordLightCacheHit(getLightBytesPerChunk(level));
                 ViewDistanceExtensionService.getInstance().onRenderOnlyApplied(pos);
             } else {
-                // 重算在帧尾统一执行（官方：ClientLightBufferQueue 消费；并行：引擎完成回调
-                // updateCacheWithLightData）——重算刚完成的光照未收敛，不得立即写盘；只标脏，
-                // 磁盘光照由卸载/断连 dump 从引擎收敛态捕获。此处再登记一次保证任何路径都进入
-                // dirty 集合（重算完成点与 apply 分属不同 tick 时依赖此兜底）。
+                // renderOnly 缓存无光（is_light_on=0）：不本地重算——客户端无光照逻辑；
+                // 空光包 apply 后由 TAIL（MixinLightRecompute，影子端启用态）统一投递影子端，
+                // 算完回传落地后再由卸载/断连 dump 从引擎收敛态捕获写盘。此处只标脏保证
+                // 任何路径都进入 dirty 集合。
                 io.github.limuqy.mc.hassium.cache.client.ClientChunkDirtyTracker.markDirty(pos);
                 ViewDistanceExtensionService.getInstance().onRenderOnlyApplied(pos);
             }

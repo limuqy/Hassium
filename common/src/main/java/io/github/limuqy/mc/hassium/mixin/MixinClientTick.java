@@ -208,28 +208,14 @@ public class MixinClientTick {
             // 忽略加载错误
         }
 
-        // 并行光照引擎结果提交（默认关=官方引擎；同预算内逐结果原子提交，超预算留待下帧；
-        // Promethium MOD 缺席时零开销）
+        // 影子光照回传落地：帧尾渲染前，影子端（启用态）算好的光统一落地，
+        // 黑块窗口 = 0（apply 后立即落地）。随后单柱失败兜底（注入失败/超时柱走
+        // 客户端重算；正常流程不触发）。
         try {
-            io.github.limuqy.mc.hassium.cache.client.PromethiumLightBridge.drainCompletions(frameDeadlineNs);
+            io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.drainReady();
+            io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.drainFailedRecompute();
         } catch (Exception e) {
-            // 忽略提交错误
-        }
-
-        // 官方引擎统一缓冲队列：帧内收集的光照重算按预算消费（每帧部分预算，到点即停，
-        // 剩余留帧；并行引擎路径内部空转）
-        try {
-            io.github.limuqy.mc.hassium.cache.client.ClientLightBufferQueue.getInstance().drainFrame();
-        } catch (Exception e) {
-            // 忽略消费错误
-        }
-
-        // 帧尾合并校准传播：加载期每帧几十块落地，逐块 runLightUpdates 会占满主线程
-        // （profiler：calibrate 内 runLightUpdates ~10%）；此处渲染前统一跑一次。
-        try {
-            io.github.limuqy.mc.hassium.cache.client.ClientLightRecomputeService.flushPendingCalibrations();
-        } catch (Exception e) {
-            // 忽略
+            // 影子光照可选；异常不得中断客户端 tick
         }
 
         // 会话中收敛写回：加载风暴停止（光照队列排空 + 权威加载完 + 安静窗口）后，

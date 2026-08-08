@@ -33,9 +33,13 @@ public class MixinMinecraftServer {
     private void onServerTick(BooleanSupplier hasTimeLeft, CallbackInfo ci) {
         // 刷新服务端主线程回调队列（每 tick 调用）
         MainThreadDispatcher.flushServer();
-        // 按真实 tick 限流序列化区块 + 冲刷 ChunkHash 批次
+        // 按真实 tick 限流序列化区块 + 冲刷 ChunkHash 批次。
+        // 仅专用服务器（dedicated）激活：影子端（客户端进程内的 MinecraftServer）
+        // 不接网络、无玩家，推送管理器不得对影子端世界生效。
         MinecraftServer server = (MinecraftServer) (Object) this;
-        ServerChunkPushManager.getInstance().onServerTick(server);
+        if (RuntimeServerContext.isDedicatedServerContext()) {
+            ServerChunkPushManager.getInstance().onServerTick(server);
+        }
         // 服务端冒烟测试：检测玩家退出后切换视距
         ServerSmokeTest.onServerTick(server);
         DataPlaneUdpServer.tick(System.currentTimeMillis());

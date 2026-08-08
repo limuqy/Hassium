@@ -20,17 +20,23 @@ import java.util.Optional;
 
 import com.mojang.authlib.yggdrasil.ServicesKeySet;
 import com.mojang.logging.LogUtils;
+import io.github.limuqy.mc.hassium.mixin.ThreadedLevelLightEngineAccessor;
 import java.net.Proxy;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.locks.LockSupport;
 import java.util.function.BooleanSupplier;
 import net.minecraft.CrashReport;
 import net.minecraft.SystemReport;
+import net.minecraft.core.SectionPos;
+import net.minecraft.network.FriendlyByteBuf;
+import net.minecraft.network.protocol.game.ClientboundLevelChunkPacketData;
+import net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.Services;
 import net.minecraft.server.WorldStem;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerChunkCache;
+import net.minecraft.server.level.ThreadedLevelLightEngine;
 #if MC_VER < MC_1_21_11
 import com.mojang.datafixers.util.Either;
 import net.minecraft.server.level.ChunkHolder;
@@ -50,8 +56,12 @@ import net.minecraft.server.notifications.EmptyNotificationService;
 #endif
 import net.minecraft.util.datafix.DataFixers;
 import net.minecraft.world.level.ChunkPos;
+import net.minecraft.world.level.LightLayer;
 import net.minecraft.world.level.chunk.ChunkAccess;
+import net.minecraft.world.level.chunk.DataLayer;
 import net.minecraft.world.level.chunk.LevelChunk;
+import net.minecraft.world.level.lighting.LevelLightEngine;
+import net.minecraft.world.level.lighting.LightEngine;
 import net.minecraft.world.level.storage.LevelStorageSource;
 #if MC_VER < MC_1_21_11
 import net.minecraft.world.level.chunk.ChunkStatus;
@@ -176,6 +186,88 @@ public class ShadowSeedServer extends MinecraftServer {
         return stem;
     }
 
+    /**
+     * 注入一个服务端区块包（任意线程可调）：空壳 LevelChunk（不 worldgen）+
+     * packet 数据填充 + 清光触发引擎传播重算。
+     * <p>
+     * 影子端是冻结后端：区块数据只来源于服务端 packet（{@code replaceWithPacketData}
+     * 整柱替换），本 server 不生成世界。种子仅用于 ServerLevel 装配，不影响注入数据。
+     * <p>
+     * 清光 = 原版剥光同款机制：queueSectionData(null) 清数据层 → 引擎传播重算 →
+     * propagateLightSources 推发光源。全部经 ThreadedLevelLightEngine 异步任务
+     * （runMainLoop 已驱动 tryScheduleUpdate）。注入失败返回 false（调用方走单柱兜底）。
+     */
+    public boolean injectChunk(ChunkPos pos, ClientboundLevelChunkWithLightPacket packet) {
+        try {
+            ServerLevel level = this.overworld();
+            LevelChunk chunk = new LevelChunk(level, pos); // 空壳，不 worldgen
+            ClientboundLevelChunkPacketData data = packet.getChunkData();
+            chunk.replaceWithPacketData(data.getReadBuffer(), data.getHeightmaps(),
+                    data.getBlockEntitiesTagsConsumer(pos.x, pos.z));
+            ThreadedLevelLightEngine lightEngine = level.getChunkSource().getLightEngine();
+            int minSection = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMinSection(chunk);
+            int maxSection = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMaxSectionExclusive(chunk);
+            for (int y = minSection; y < maxSection; y++) {
+                SectionPos sp = SectionPos.of(pos, y);
+                lightEngine.queueSectionData(LightLayer.SKY, sp, null);
+                lightEngine.queueSectionData(LightLayer.BLOCK, sp, null);
+                lightEngine.updateSectionStatus(sp, false);
+            }
+            lightEngine.propagateLightSources(pos);
+            return true;
+        } catch (Throwable t) {
+            LOGGER.warn("Hassium: Shadow light inject failed for {}", pos, t);
+            return false;
+        }
+    }
+
+    /**
+     * 光照是否全局收敛（任意线程可调）：ThreadedLevelLightEngine 任务队列空
+     * && 两引擎传播队列（blockNodesToCheck / decrease / increase）空。
+     * <p>
+     * 影子端世界只有注入任务，队列空即全部算完。1.21.11 的 ConsecutiveExecutor
+     * 自驱动 + 异步 runUpdate，调用方须轮询（20ms 间隔）等待。
+     */
+    public boolean isLightConverged() {
+        try {
+            ThreadedLevelLightEngine engine =
+                    (ThreadedLevelLightEngine) this.overworld().getChunkSource().getLightEngine();
+            if (engine.hasLightWork()) {
+                return false;
+            }
+            ThreadedLevelLightEngineAccessor acc = (ThreadedLevelLightEngineAccessor) engine;
+            if (!acc.hassium$getLightTasks().isEmpty()) {
+                return false;
+            }
+            return true;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /**
+     * 提取一个区块的光照结果（任意线程可调）：逐 section 取数据层并 copy 独立副本。
+     * null 保留 null（空 section 无数据层）。
+     *
+     * @param bottomSection 最低 section Y（inclusive）
+     * @param topSection    最高 section Y（exclusive）
+     */
+    public ShadowLightPatch extractLight(ChunkPos pos, int bottomSection, int topSection) {
+        ThreadedLevelLightEngine engine =
+                (ThreadedLevelLightEngine) this.overworld().getChunkSource().getLightEngine();
+        int count = topSection - bottomSection;
+        DataLayer[] sky = new DataLayer[count];
+        DataLayer[] block = new DataLayer[count];
+        for (int i = 0; i < count; i++) {
+            SectionPos sp = SectionPos.of(pos, bottomSection + i);
+            DataLayer s = engine.getLayerListener(LightLayer.SKY).getDataLayerData(sp);
+            DataLayer b = engine.getLayerListener(LightLayer.BLOCK).getDataLayerData(sp);
+            sky[i] = s == null ? null : s.copy();
+            block[i] = b == null ? null : b.copy();
+        }
+        return new ShadowLightPatch(pos, sky, block, bottomSection);
+    }
+
     /** shutdown 用：存档访问（MinecraftServer.storageSource 为 protected）。 */
     LevelStorageSource.LevelStorageAccess storageAccess() {
         return this.storageSource;
@@ -197,12 +289,22 @@ public class ShadowSeedServer extends MinecraftServer {
      */
     void runMainLoop() {
         ServerChunkCache cache = (ServerChunkCache) this.overworld().getChunkSource();
+        // 服务端光照任务驱动：1.20.1~1.21.10 的任务邮箱由 ServerLevel.tick 的
+        // tryScheduleUpdate 投递（影子端不跑完整 tick）；1.21.11 ConsecutiveExecutor
+        // 自驱动，此处幂等无害。pre-update 任务（queueSectionData/updateSectionStatus/
+        // propagateLightSources）与传播（runLightUpdates）都经它执行。
+        ThreadedLevelLightEngine lightEngine = cache.getLightEngine();
         while (!Thread.currentThread().isInterrupted()) {
             boolean worked;
             try {
                 worked = cache.pollTask();
             } catch (Throwable ignored) {
                 break; // server 已 halt
+            }
+            try {
+                lightEngine.tryScheduleUpdate();
+            } catch (Throwable ignored) {
+                // 光照任务驱动失败不影响 worldgen 主循环
             }
             if (!worked) {
                 // managedBlock 同款：pollTask 覆写优先 runDistanceManagerUpdates，

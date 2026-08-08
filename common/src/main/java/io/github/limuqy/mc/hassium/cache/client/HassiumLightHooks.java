@@ -1,17 +1,9 @@
 package io.github.limuqy.mc.hassium.cache.client;
 
 import io.github.limuqy.mc.hassium.Constants;
-import io.github.limuqy.mc.hassium.mixin.LevelLightEngineAccessor;
-import io.github.limuqy.mc.hassium.mixin.LightEngineAccessor;
-import io.github.limuqy.mc.hassium.network.ClientChunkHandler;
-import it.unimi.dsi.fastutil.longs.LongArrayFIFOQueue;
-import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
-import net.minecraft.client.multiplayer.ClientLevel;
-import net.minecraft.core.BlockPos;
 import net.minecraft.core.SectionPos;
-import net.minecraft.nbt.CompoundTag;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.LightLayer;
 import net.minecraft.world.level.chunk.DataLayer;
@@ -22,239 +14,16 @@ import net.minecraft.world.level.lighting.LevelLightEngine;
 import net.minecraft.world.level.lighting.LightEngine;
 
 /**
- * Promethium 光照引擎的 Hassium 侧钩子实现。
+ * Hassium 光照原语（影子端落光/提取用）。
  * <p>
  * 官方引擎原语（依赖 hassium.mixin accessor）与磁盘缓存读写全部留在此处；
- * 引擎接口（LightEngineHooks）在 Promethium MOD 内，Hassium 无编译依赖——本类不
- * implements 接口，由 {@link PromethiumLightBridge} 经反射 Proxy 包装注入，不反向依赖。
+ * 由影子端（ShadowSeedServer 提取 / ShadowLightCompute 落光）与卸载写光链调用。
  */
 public final class HassiumLightHooks {
 
     public static final HassiumLightHooks INSTANCE = new HassiumLightHooks();
 
     private HassiumLightHooks() {}
-
-    public int safeRunLightUpdates(LevelLightEngine lightEngine) {
-        try {
-            return lightEngine.runLightUpdates();
-        } catch (Throwable t) {
-            Constants.LOG.error("Hassium: runLightUpdates failed; clearing residual light queues", t);
-            clearLightQueues(lightEngine);
-            return 0;
-        }
-    }
-
-    /** 清空 sky/block engine 的 deferred 队列（失败兜底，避免渲染线程再崩）。 */
-    public static void clearLightQueues(LevelLightEngine lightEngine) {
-        if (lightEngine == null) {
-            return;
-        }
-        LevelLightEngineAccessor accessor = (LevelLightEngineAccessor) lightEngine;
-        clearEngineQueues(accessor.hassium$getBlockEngine());
-        clearEngineQueues(accessor.hassium$getSkyEngine());
-    }
-
-    private static void clearEngineQueues(LightEngine<?, ?> engine) {
-        if (engine == null) {
-            return;
-        }
-        LightEngineAccessor acc = (LightEngineAccessor) engine;
-        LongOpenHashSet nodes = acc.hassium$getBlockNodesToCheck();
-        if (nodes != null) {
-            nodes.clear();
-        }
-        LongArrayFIFOQueue decrease = acc.hassium$getDecreaseQueue();
-        if (decrease != null) {
-            decrease.clear();
-        }
-        LongArrayFIFOQueue increase = acc.hassium$getIncreaseQueue();
-        if (increase != null) {
-            increase.clear();
-        }
-    }
-
-    public void ensureColumnDataLayers(ClientLevel level, LevelLightEngine lightEngine,
-                                       ChunkPos chunkPos, int bottomSection, int topSection) {
-        for (int sectionY = bottomSection; sectionY < topSection; sectionY++) {
-            SectionPos sectionPos = SectionPos.of(chunkPos.x, sectionY, chunkPos.z);
-            lightEngine.updateSectionStatus(sectionPos, false);
-            level.setSectionDirtyWithNeighbors(chunkPos.x, sectionY, chunkPos.z);
-        }
-    }
-
-    public void ensureNeighborDataLayers(ClientLevel level, LevelLightEngine lightEngine,
-                                         ChunkPos chunkPos, int bottomSection, int topSection) {
-        ensureNeighborColumnIfLoaded(level, lightEngine, chunkPos.x + 1, chunkPos.z, bottomSection, topSection);
-        ensureNeighborColumnIfLoaded(level, lightEngine, chunkPos.x - 1, chunkPos.z, bottomSection, topSection);
-        ensureNeighborColumnIfLoaded(level, lightEngine, chunkPos.x, chunkPos.z + 1, bottomSection, topSection);
-        ensureNeighborColumnIfLoaded(level, lightEngine, chunkPos.x, chunkPos.z - 1, bottomSection, topSection);
-    }
-
-    private static void ensureNeighborColumnIfLoaded(ClientLevel level, LevelLightEngine lightEngine,
-                                                     int chunkX, int chunkZ,
-                                                     int bottomSection, int topSection) {
-        if (level.getChunkSource().getChunkNow(chunkX, chunkZ) == null) {
-            return;
-        }
-        for (int sectionY = bottomSection; sectionY < topSection; sectionY++) {
-            SectionPos sectionPos = SectionPos.of(chunkX, sectionY, chunkZ);
-            lightEngine.updateSectionStatus(sectionPos, false);
-        }
-    }
-
-    public void pullLightFromNeighborEdges(ClientLevel level, ChunkPos chunkPos,
-                                           int bottomSection, int topSection) {
-        LevelLightEngine lightEngine = level.getLightEngine();
-        LayerLightEventListener sky = lightEngine.getLayerListener(LightLayer.SKY);
-        LayerLightEventListener block = lightEngine.getLayerListener(LightLayer.BLOCK);
-        BlockPos.MutableBlockPos neighborPos = new BlockPos.MutableBlockPos();
-        BlockPos.MutableBlockPos ourPos = new BlockPos.MutableBlockPos();
-
-        int minX = chunkPos.getMinBlockX();
-        int minZ = chunkPos.getMinBlockZ();
-
-        if (level.getChunkSource().getChunkNow(chunkPos.x + 1, chunkPos.z) != null) {
-            for (int sectionY = bottomSection; sectionY < topSection; sectionY++) {
-                if (neighborSectionDark(sky, block, chunkPos.x + 1, sectionY, chunkPos.z)
-                        && neighborSectionDark(sky, block, chunkPos.x, sectionY, chunkPos.z)) {
-                    continue;
-                }
-                int y0 = sectionY << 4;
-                int y1 = y0 + 16;
-                for (int z = 0; z < 16; z++) {
-                    for (int y = y0; y < y1; y++) {
-                        neighborPos.set(minX + 16, y, minZ + z);
-                        int skyN = sky.getLightValue(neighborPos);
-                        int skyO = sky.getLightValue(ourPos.set(minX + 15, y, minZ + z));
-                        if (skyN > skyO + 1 || skyO > skyN + 1) {
-                            lightEngine.checkBlock(ourPos);
-                            lightEngine.checkBlock(neighborPos);
-                        } else {
-                            int blockN = block.getLightValue(neighborPos);
-                            int blockO = block.getLightValue(ourPos);
-                            if (blockN > blockO + 1 || blockO > blockN + 1) {
-                                lightEngine.checkBlock(ourPos);
-                                lightEngine.checkBlock(neighborPos);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        if (level.getChunkSource().getChunkNow(chunkPos.x - 1, chunkPos.z) != null) {
-            for (int sectionY = bottomSection; sectionY < topSection; sectionY++) {
-                if (neighborSectionDark(sky, block, chunkPos.x - 1, sectionY, chunkPos.z)
-                        && neighborSectionDark(sky, block, chunkPos.x, sectionY, chunkPos.z)) {
-                    continue;
-                }
-                int y0 = sectionY << 4;
-                int y1 = y0 + 16;
-                for (int z = 0; z < 16; z++) {
-                    for (int y = y0; y < y1; y++) {
-                        neighborPos.set(minX - 1, y, minZ + z);
-                        int skyN = sky.getLightValue(neighborPos);
-                        int skyO = sky.getLightValue(ourPos.set(minX, y, minZ + z));
-                        if (skyN > skyO + 1 || skyO > skyN + 1) {
-                            lightEngine.checkBlock(ourPos);
-                            lightEngine.checkBlock(neighborPos);
-                        } else {
-                            int blockN = block.getLightValue(neighborPos);
-                            int blockO = block.getLightValue(ourPos);
-                            if (blockN > blockO + 1 || blockO > blockN + 1) {
-                                lightEngine.checkBlock(ourPos);
-                                lightEngine.checkBlock(neighborPos);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        if (level.getChunkSource().getChunkNow(chunkPos.x, chunkPos.z + 1) != null) {
-            for (int sectionY = bottomSection; sectionY < topSection; sectionY++) {
-                if (neighborSectionDark(sky, block, chunkPos.x, sectionY, chunkPos.z + 1)
-                        && neighborSectionDark(sky, block, chunkPos.x, sectionY, chunkPos.z)) {
-                    continue;
-                }
-                int y0 = sectionY << 4;
-                int y1 = y0 + 16;
-                for (int x = 0; x < 16; x++) {
-                    for (int y = y0; y < y1; y++) {
-                        neighborPos.set(minX + x, y, minZ + 16);
-                        int skyN = sky.getLightValue(neighborPos);
-                        int skyO = sky.getLightValue(ourPos.set(minX + x, y, minZ + 15));
-                        if (skyN > skyO + 1 || skyO > skyN + 1) {
-                            lightEngine.checkBlock(ourPos);
-                            lightEngine.checkBlock(neighborPos);
-                        } else {
-                            int blockN = block.getLightValue(neighborPos);
-                            int blockO = block.getLightValue(ourPos);
-                            if (blockN > blockO + 1 || blockO > blockN + 1) {
-                                lightEngine.checkBlock(ourPos);
-                                lightEngine.checkBlock(neighborPos);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        if (level.getChunkSource().getChunkNow(chunkPos.x, chunkPos.z - 1) != null) {
-            for (int sectionY = bottomSection; sectionY < topSection; sectionY++) {
-                if (neighborSectionDark(sky, block, chunkPos.x, sectionY, chunkPos.z - 1)
-                        && neighborSectionDark(sky, block, chunkPos.x, sectionY, chunkPos.z)) {
-                    continue;
-                }
-                int y0 = sectionY << 4;
-                int y1 = y0 + 16;
-                for (int x = 0; x < 16; x++) {
-                    for (int y = y0; y < y1; y++) {
-                        neighborPos.set(minX + x, y, minZ - 1);
-                        int skyN = sky.getLightValue(neighborPos);
-                        int skyO = sky.getLightValue(ourPos.set(minX + x, y, minZ));
-                        if (skyN > skyO + 1 || skyO > skyN + 1) {
-                            lightEngine.checkBlock(ourPos);
-                            lightEngine.checkBlock(neighborPos);
-                        } else {
-                            int blockN = block.getLightValue(neighborPos);
-                            int blockO = block.getLightValue(ourPos);
-                            if (blockN > blockO + 1 || blockO > blockN + 1) {
-                                lightEngine.checkBlock(ourPos);
-                                lightEngine.checkBlock(neighborPos);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    private static boolean neighborSectionDark(LayerLightEventListener sky, LayerLightEventListener block,
-                                               int sectionX, int sectionY, int sectionZ) {
-        SectionPos sectionPos = SectionPos.of(sectionX, sectionY, sectionZ);
-        return isLightLayerEmpty(sky.getDataLayerData(sectionPos))
-                && isLightLayerEmpty(block.getDataLayerData(sectionPos));
-    }
-
-    private static boolean isLightLayerEmpty(DataLayer layer) {
-        return layer == null || layer.isEmpty();
-    }
-
-    /**
-     * 引擎重算完成回调（并行引擎经 LightEngineHooks 代理调用；官方引擎在帧尾
-     * {@code ClientLightBufferQueue.drainFrame} 直接登记）：只标脏，不写盘。
-     * <p>
-     * 此刻引擎光 = 刚重算/刚落地的结果，加载风暴中传播域不完整时未收敛（海底 section
-     * 会被 sky 15 灌满，R1 写回即铁证）——立即写盘 = 落盘污染光。磁盘光照只在卸载 /
-     * 断连 dump 时从引擎收敛态捕获（{@link ChunkDiskCodec#copyLightEngineToNbt}），
-     * 这里仅保证该块进入 dirty 集合、dump 会写它。
-     */
-    public void updateCacheWithLightData(ClientLevel level, ChunkPos chunkPos, CompoundTag cachedNbt) {
-        ClientChunkDirtyTracker.markDirty(chunkPos);
-        Constants.LOG.debug("Hassium: Light recompute complete for {}, marked dirty (writeback deferred)", chunkPos);
-    }
-
-    public CompoundTag loadChunkNbtFromCache(ChunkPos pos) {
-        return ClientChunkHandler.loadChunkNbtFromCache(pos);
-    }
 
     // —— 阶段二落地原语：双缓冲 swap 交换（反射，惰性发现） ——
     //
@@ -317,10 +86,12 @@ public final class HassiumLightHooks {
             if (visibleField == null || updatingField == null) {
                 throw new NoSuchFieldException("visible/updating data map");
             }
-            // setLayer(long, DataLayer) → void：按签名找（SRG 稳）
+            // setLayer(long, DataLayer) → void / clearCache()：receiver 是 DataLayerStorageMap
+            // （visible/updating 字段值），只从 map 树找。storageClass（LayerLightSectionStorage）
+            // 树上若有同名方法（自定义实现），receiver 不匹配会 IllegalArgumentException。
             Method setLayer = null;
             Method clearCache = null;
-            for (Class<?> c = storageClass; c != null && (setLayer == null || clearCache == null); c = c.getSuperclass()) {
+            for (Class<?> c = visibleField.getType(); c != null && (setLayer == null || clearCache == null); c = c.getSuperclass()) {
                 for (Method m : c.getDeclaredMethods()) {
                     if (setLayer == null && m.getParameterCount() == 2
                             && m.getParameterTypes()[0] == long.class

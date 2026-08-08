@@ -46,7 +46,7 @@
 | --- | --- | --- |
 | 进服卡顿更严重了 | 客户端缓存目录满或硬盘慢 | `/hassiumc stats` 看缓存命中；检查 `hassium_cache` 目录大小与磁盘 IO |
 | 区块在远处闪烁 | 超视渲染与真实区块交接异常 | 关 `clientCache.viewDistanceExtensionEnabled` 验证；升级到近期版本 |
-| 光照异常 | `clientCache.lightCacheEnabled` 与 Sodium 兼容问题 | 关 `clientCache.lightCacheEnabled` |
+| 光照异常 | `clientCache.hassiumEngineEnabled` 与 Sodium 兼容问题 | 关 `clientCache.hassiumEngineEnabled`（服务端不再剥光，光照随包自带） |
 | 客户端启动报 refmap WARN | Loom 开发环境常态 | 忽略；正式 jar 不复现 |
 | 服务端连接被踢 | `compat.requireClientMod = true` 且客户端未装 | 客户端装 Hassium；或服务端 `requireClientMod = false` |
 | 存档读不出来 | 卸载/降级 Hassium 后残留 type 126 | 重新安装与存档兼容的 Hassium 版本 |

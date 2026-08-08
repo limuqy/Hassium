@@ -3,8 +3,6 @@ package io.github.limuqy.mc.hassium.network;
 import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.cache.ChunkContentHashUtil;
 import io.github.limuqy.mc.hassium.cache.client.ClientCacheLoadQueue;
-import io.github.limuqy.mc.hassium.cache.client.ClientLightBufferQueue;
-import io.github.limuqy.mc.hassium.cache.client.PromethiumLightBridge;
 import io.github.limuqy.mc.hassium.client.ClientSmokeTest;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.metrics.NetworkStats;
@@ -494,6 +492,8 @@ public class ClientMetadataHandler {
         ClientBloomSyncTracker.onDisconnect();
         // SeedGen 影子服务端随断连回收（重连后按需重建）
         io.github.limuqy.mc.hassium.network.seedgen.SeedGenExecutor.getInstance().onDisconnect();
+        // 影子光照管线随断连清空（投递/回传/失败标记；影子服务端由上面 registry 统一关停）
+        io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.onDisconnect();
     }
 
     /**
@@ -757,18 +757,8 @@ public class ClientMetadataHandler {
             var registryAccess = mc.level.registryAccess();
             net.minecraft.nbt.ListTag sections =
                     io.github.limuqy.mc.hassium.compat.CompoundTagCompat.getList(nbt, "sections");
-            // G1：delta 变化 section 已知（merge 后新 section 两光字段缺失）——收集相对索引
-            // 闭包转绝对 section y 直传引擎，消除 inferChangeSpan 推断（响应丢失 / TAIL 读盘
-            // 拿到 merge 前旧 NBT 时推断失败退化为整 chunk 重算）。
-            int minIdx = Integer.MAX_VALUE, maxIdxEx = 0;
             for (SectionDeltaS2CPacket.SectionData sd : entry.changedSections()) {
                 int idx = sd.sectionIndex();
-                if (idx < minIdx) {
-                    minIdx = idx;
-                }
-                if (idx + 1 > maxIdxEx) {
-                    maxIdxEx = idx + 1;
-                }
                 ensureSectionsSize(sections, idx + 1, registryAccess);
                 // 新 section 不含 sky/block_light：方块变了则旧光照必过时
                 net.minecraft.nbt.CompoundTag newSection = new net.minecraft.nbt.CompoundTag();
@@ -783,8 +773,6 @@ public class ClientMetadataHandler {
             // 绝对 section y（background 线程此时 level 非 null 已保证；lambda 内不碰 level）
             // 跨版本：1.21.2+ 无 Level.getMinSection()，统一走 LevelHeightCompat
             final int minSection = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMinSection(mc.level);
-            final int deltaMinSy = minSection + minIdx;
-            final int deltaMaxSyEx = minSection + maxIdxEx;
 
             // 3. BE 全量覆盖（写盘）；世界内 BE 在 apply 后走 applyBlockEntities
             if (!entry.blockEntities().isEmpty()) {
@@ -840,17 +828,9 @@ public class ClientMetadataHandler {
                 if (!isSameSession(submittedLevel)) {
                     return; // 旧会话回调：丢弃
                 }
-                // delta 变化 section 已知（merge 后 NBT 无光字段 section）：预提交分段重算，
-                // 避免 TAIL 读盘（可能仍是 merge 前旧 NBT）推断失败退化为整 chunk。
-                // G1：直传变化域（changedSections 相对索引闭包 + minSection），引擎跳过推断。
-                // 预提交与 apply 同主线程回合，capture 在后续帧才开始 → 采样到的是新地形；
-                // TAIL 再提交命中已有任务（retainNbt 不覆盖），restartCoreOnly 重采样核心柱。
-                if (PromethiumLightBridge.isEnabled()) {
-                    PromethiumLightBridge.submitRecompute(pos, finalNbt, deltaMinSy, deltaMaxSyEx);
-                } else {
-                    // 官方引擎：预入统一缓冲队列（TAIL 的 applyLightEngineNow 重复入队去重）
-                    ClientLightBufferQueue.getInstance().enqueue(pos, finalNbt);
-                }
+                // delta 变化 section 已知（merge 后 NBT 无光字段 section）：不预提交重算——
+                // 客户端无本地光照逻辑；apply（applyChunkData → handleLevelChunkWithLight TAIL）
+                // 由影子端启用态统一投递（is_light_on=0 → 空光包路径）。
                 boolean applied = ClientChunkHandler.applyChunkData(entry.chunkX(), entry.chunkZ(), finalPacketBytes, false);
                 if (applied) {
                     if (!bes.isEmpty()) {

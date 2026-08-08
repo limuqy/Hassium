@@ -26,13 +26,13 @@ public final class ConfigSchema {
     public static final ConfigKey<Boolean> CACHE_JOIN_BOOST_ENABLED = bool("clientCache.joinBoostEnabled", ConfigScope.CLIENT, true, "是否启用进服加速");
     public static final ConfigKey<Boolean> CACHE_ENTITY_SNAPSHOTS_ENABLED = bool("clientCache.entitySnapshotsEnabled", ConfigScope.CLIENT, true, "是否保存实体快照");
     public static final ConfigKey<Integer> CACHE_LOAD_THREADS = integer("clientCache.loadThreads", ConfigScope.CLIENT, 4, 1, 64, "客户端区块加载线程数");
-    public static final ConfigKey<Boolean> CACHE_LIGHT_CACHE_ENABLED = bool("clientCache.lightCacheEnabled", ConfigScope.CLIENT, true, "是否启用光照缓存");
     public static final ConfigKey<Integer> CACHE_MAX_CHUNKS_PER_FRAME = integer("clientCache.maxChunksPerFrame", ConfigScope.CLIENT, 6, 1, 512, "每帧应用缓存区块硬顶");
     public static final ConfigKey<Integer> CACHE_MAIN_THREAD_BUDGET_MS = integer("clientCache.mainThreadChunkBudgetMs", ConfigScope.CLIENT, 15, 1, 50, "主线程 apply 预算（ms）");
-    public static final ConfigKey<Boolean> CACHE_PARALLEL_LIGHT_ENGINE_ENABLED = bool("clientCache.parallelLightEngineEnabled", ConfigScope.CLIENT, false, "是否启用并行光照引擎（需接入 Promethium 光照引擎；默认 false=官方光照计算，光照重算经统一异步缓冲队列预算消费）");
-    public static final ConfigKey<Integer> CACHE_PARALLEL_LIGHT_ENGINE_THREADS = integer("clientCache.parallelLightEngineThreads", ConfigScope.CLIENT, 4, 1, 64, "并行光照引擎线程数（虚拟线程模式忽略）；天空光 BFS 占重算成本 ~90%，默认 4 线程平衡吞吐与帧率");
-    public static final ConfigKey<Boolean> CACHE_LIGHT_SYNC_MODE = bool("clientCache.lightSyncMode", ConfigScope.CLIENT, true, "是否启用光照重算同步模式（双帧缓冲：本帧收集无光照区块，下一帧尾阻塞全部重算落地，黑块窗口≤1帧；默认 true=同步双帧缓冲，false=异步预算消费；与 parallelLightEngineEnabled 同开时本项优先）");
     public static final ConfigKey<Integer> CACHE_SEED_GEN_THREADS = integer("clientCache.seedGenThreads", ConfigScope.CLIENT, 2, 0, 64, "SeedGen 本地生成线程数（固定平台线程池；0=禁用本地生成，SeedRef 一律回退全量）");
+    public static final ConfigKey<Boolean> CACHE_OVD_LOCAL_GENERATION = bool("clientCache.ovdLocalGeneration", ConfigScope.CLIENT, false,
+            "OVD 本地生成（默认 false）：开启后，超视渲染区域缓存 miss 时用Hassium 引擎按服务端世界种子本地生成区块（与服务器地形一致），生成的区块按 renderOnly 落地并存入本地缓存；无种子（服务端未装 MOD / 握手未到）时自动关闭生成，维持 miss 退避重试。需 clientCache.hassiumEngineEnabled 且Hassium 引擎可用");
+    public static final ConfigKey<Boolean> CACHE_HASSIUM_ENGINE_ENABLED = bool("clientCache.hassiumEngineEnabled", ConfigScope.CLIENT, true,
+            "是否启用Hassium 引擎（默认 true）：进服启动Hassium 引擎服务端统一承担区块光照计算（客户端不再计算）。启动失败自动降级：客户端缓存/超视渲染/SeedGen/Hassium 引擎光照全部关闭并游戏内提示；false=不启动Hassium 引擎。注意：关闭时剥光不生效（服务端按握手能力不剥光，光照随包自带）。与 network.seedGen.enabled 相互独立——SeedGen 开关只控制 pristine 本地生成");
     public static final ConfigKey<Boolean> CLIENT_NETWORK_ENABLED = bool("network.enabled", ConfigScope.CLIENT, true, "是否启用客户端 Hassium 自定义通道");
     public static final ConfigKey<Boolean> CLIENT_NETWORK_METRICS_ENABLED = bool("network.metricsEnabled", ConfigScope.CLIENT, false, "是否启用客户端网络指标");
     public static final ConfigKey<Boolean> CLIENT_NETWORK_METRICS_AUTO_RESET = bool("network.metricsAutoReset", ConfigScope.CLIENT, true, "登出服务器时自动重置指标计数");

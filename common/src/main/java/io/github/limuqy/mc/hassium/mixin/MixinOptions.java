@@ -35,7 +35,7 @@ public class MixinOptions {
         }
 
         HassiumConfigService cfg = HassiumConfigService.getInstance();
-        if (!cfg.isClientCacheEnabled() || !cfg.isViewDistanceExtensionEnabled()) {
+        if (!cfg.isClientFeatureGateOpen() || !cfg.isClientCacheEnabled() || !cfg.isViewDistanceExtensionEnabled()) {
             return;
         }
 

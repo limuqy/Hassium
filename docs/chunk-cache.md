@@ -279,20 +279,22 @@ RD > 32（需手改 `options.txt`）时雾距会跟随 `getEffectiveRenderDistan
 
 **光照数据存储**：当 `is_light_on=1` 时，每个 section 的 NBT 可能包含 `sky_light` 和 `block_light`（各 2048 bytes）。
 
-**光照缓存流水线**：
-1. 首次加载（服务器 lightStrip=true）：区块到达 → `MixinLightRecompute` / 空光 → `applyLightEngineNow()` 重算 → 立即回写缓存（`is_light_on=1`），并记「需重算」
-2. 缓存命中（含超视 renderOnly）：后台读 `is_light_on` → `nbtToPacketBytes()` 写入真实光照 → apply 后**跳过**同步重算，记「缓存命中」
-3. 方块变更：拦截 `ClientboundLightUpdatePacket` → 发送 `LightDeltaS2CPacket` → 客户端本地重算 → **标脏**（卸载/`levelChunkToNbt` 再写 `is_light_on=1`）；SectionDelta 合并后强制 `is_light_on=0` 并保持 dirty，避免「flag=1 + 残缺 light」跳过重算
+**光照缓存流水线**（Hassium 引擎统一算光，客户端本地无光照计算）：
+1. 首次加载（剥光协商生效，服务端 lightStrip=true 且客户端声明 `lightComputeSupported`）：空光包到达 → 经 `ClientChunkPipeline` TAIL 投递影子端（`ShadowLightCompute`）→ 影子端算光后回填 `swapDataLayer` 落光，缓存 `is_light_on=1`
+2. 缓存命中（含超视 renderOnly）：后台读 `is_light_on` → `nbtToPacketBytes()` 写入真实光照 → apply 后直接应用，记「缓存命中」
+3. 方块变更：拦截 `ClientboundLightUpdatePacket` → 发送 `LightDeltaS2CPacket` → 空光合并（`is_light_on=0`）→ TAIL 投递影子端重算 → **标脏**（卸载/`levelChunkToNbt` 再写 `is_light_on=1`）；SectionDelta 合并后强制 `is_light_on=0` 并保持 dirty，避免「flag=1 + 残缺 light」跳过引擎计算
 4. 区块卸载 / 断连 dump：脏块若 contentHash 与磁盘一致 → **只补光照、保留磁盘 hash/sectionHashes**（禁止 Live-Unload 重算覆盖 MetadataTable，否则次回大批 MISMATCH）；hash 不一致才全量 `levelChunkToNbt`
-5. 空光重算：只对本块 `propagateLightSources` + 从邻居边缘拉取，**不对邻居再 propagate**（避免缓存命中块被相邻重算踩灭）
+5. 影子端失败（未收敛/提取异常）：单柱失败仅记 failed 并跳过该柱应用（客户端无本地重算兜底）；引擎整体失败 = 客户端功能降级（见下）
+
+**引擎失败降级**：影子端启动失败 / 未握手种子 → `ShadowLightCompute` 引擎关闭，但服务端剥光同样经握手 gate 关闭（无 `lightComputeSupported` 声明 → 光随包自带），客户端无黑块。
 
 **指标语义**（`/hassiumc stats`）：
-- 展示：`光照缓存：xx%（命中 N，重算 M）`，与区块缓存同行风格一致
-- **命中**：从缓存 apply 且跳过同步重算（`is_light_on=1`）
-- **重算**：空光照触发 `applyLightEngineNow`（首次推送 / `is_light_on=0`）
-- 命中率 = 命中 / (命中 + 重算)；与 `nbtToPacketBytes` 解耦，避免暖缓存假 100%
+- 展示：`光照缓存：xx%（命中 N，计算 M）`，与区块缓存同行风格一致
+- **命中**：从缓存 apply 且跳过引擎计算（`is_light_on=1`）
+- **计算**：空光照触发影子端计算（首次推送 / `is_light_on=0`）
+- 命中率 = 命中 / (命中 + 计算)；与 `nbtToPacketBytes` 解耦，避免暖缓存假 100%
 
-**renderOnly**：`ClientCacheLoadQueue.ReadyChunk.hasCachedLight` 为 true 时不再调用 `applyLightEngineNow`（空光仍由 Mixin 重算一次，Handler 只补内存 NBT 回写）。
+**renderOnly**：`ClientCacheLoadQueue.ReadyChunk.hasCachedLight` 为 true 时不再投递影子端（空光仍经 TAIL 投递一次，Handler 只补内存 NBT 回写）。
 
 ### 11.3 Live-Unload Snapshot（主一致性方案）
 

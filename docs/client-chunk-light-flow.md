@@ -8,8 +8,7 @@
 | 主题 | 文档 |
 |------|------|
 | 服务端推送 / chunkHash / 缓存命中 | [`chunk-cache.md`](chunk-cache.md) |
-| 并行光照引擎调优（capture 吞吐/完成率） | 见 hassium-parallel-light-capture-tuning skill |
-| 虚拟线程超订（为什么光照用固定平台池） | hassium-virtual-thread-oversubscription skill |
+| Hassium 引擎（影子端）总体说明 | [`architecture.md`](architecture.md) §5、§11.4 |
 
 ## 1. 总览图
 
@@ -37,18 +36,16 @@ flowchart TD
         G2["② processQueueUntil<br/>预算内 apply 缓存读回"]
         H["applyChunkData<br/>→ Services.getClientChunkApplier<br/>.applyToLevelFromByteBuf<br/>区块落地（此刻可见）"]
         I{"包带光?"}
-        J["权威光随包落地<br/>无需重算（帧尾兜底）"]
-        K["applyLightEngineNow<br/>（三入口汇合）"]
-        L{"并行光照引擎<br/>parallelLightEngineEnabled<br/>默认关"}
-        M["submitRecompute 异步入队<br/>立即返回"]
-        N["ClientLightBufferQueue<br/>统一缓冲队列<br/>异步=帧尾预算消费<br/>同步(lightSyncMode)=帧尾预算内消费<br/>剩余放回下帧"]
-        P["handleLightDeltaPacket<br/>建层 + propagateLightSources 本地重算<br/>+ 标缓存脏"]
+        J["权威光随包落地<br/>无需投递（握手声明引擎才剥光）"]
+        K["TAIL 投递影子端<br/>MixinLightRecompute"]
+        K2["ShadowLightCompute.submit<br/>（pending 队列，后台消费线程）"]
+        P["handleLightDeltaPacket<br/>delta 合并 is_light_on=0<br/>→ TAIL 投递影子端"]
     end
 
-    subgraph LIGHT["并行光照引擎 (Promethium ParallelLightEngineImpl)"]
-        Q["capturePending<br/>帧预算 CAPTURE_BUDGET_NS=5ms<br/>MAX_CAPTURE_COLUMNS_PER_FRAME=24 柱<br/>从已 apply 区块读 blockState 采 3×3=9 柱<br/>等邻居 NEIGHBOR_WAIT_FRAMES=10 + 距离重排"]
-        R["hassium-light 后台固定池<br/>（parallelLightEngineThreads 线程）<br/>纯数据 BFS solve (FIFO)"]
-        S["drainCompletions<br/>帧预算内原子落地<br/>建层 + 核心柱/邻柱差异 swap 交换"]
+    subgraph SHADOW["影子服务端（Hassium 引擎，后台）"]
+        Q["consumeLoop 批量注入<br/>ShadowSeedServer.injectChunk<br/>（ServerLevel + 官方光照引擎）"]
+        R["全局收敛轮询<br/>hasLightWork 空 + lightTasks 空<br/>20ms 间隔 / 5s 超时"]
+        S["extractLight 批量提取<br/>→ ShadowLightPatch 回传"]
     end
 
     A --> D --> E
@@ -61,13 +58,10 @@ flowchart TD
     G2 --> H
     H --> I
     I -- "带光" --> J
-    I -- "无光 (服务端剥离 / 缓存 is_light_on=0)" --> K
-    K --> L
-    K -. "仅 R2 缓存有光时" .-> O
-    L -- "开" --> M
-    L -- "关" --> N
+    I -- "无光（服务端剥离，仅握手声明引擎后发生）" --> K
+    K --> K2 --> Q --> R --> S
     C --> P
-    M --> Q --> R --> S
+    S --> T["帧尾 drainReady<br/>swapDataLayer 双缓冲落地<br/>+ markDirty（收敛光写盘）"]
 ```
 
 ## 2. 线程与队列全景
@@ -80,11 +74,9 @@ flowchart TD
 | 主线程调度 | `PriorityBlockingQueue`（按玩家距离） | — | `MainThreadDispatcher.execute` |
 | 区块 apply | `ClientMainThreadBudget`（JoinBoost 30ms 窗口 / normal `mainThreadChunkBudgetMs`）+ `maxChunksPerFrame` 硬顶 | Render thread | `MixinClientTick` + `MixinVanillaChunkApplyBudget` |
 | R2 读盘 | region 级任务（每 region 至多一个在跑）→ `readyQueue` | 后台虚拟线程 + 主线程 | `ClientCacheLoadQueue` |
-| 光照重算（官方引擎，默认） | `ClientLightBufferQueue` 统一缓冲：帧内收集、帧尾消费——异步 `FRAME_BUDGET_NS`=5ms 预算（~2-3 块/帧）剩余留帧；同步（`lightSyncMode=true`）双帧缓冲、帧尾 `SYNC_FRAME_BUDGET_NS`=12ms 预算内消费（~4-5 块/帧，剩余放回下一帧不丢，黑块窗口 ≤2-3 帧） | Render thread（入队任意线程） | `ClientLightBufferQueue` + `ClientLightRecomputeService.applyLightEngine` |
-| 光照 capture | `CAPTURE_BUDGET_NS`=5ms、24 柱/帧 | Render thread（独占） | `ParallelLightEngineImpl.capturePending` |
-| 光照 solve | `hassium-light` 固定平台池，FIFO | 后台 | `ParallelLightEngineImpl.ensurePool` |
-| 光照落地 | `drainCompletions(frameDeadlineNs)` | Render thread | `ParallelLightEngineImpl.drainCompletions` |
-| 局部光照更新（方块变化 checkBlock） | 引擎统一队列：同柱在飞任务挂载 / 独立队列；`drainCompletions` 预算内应用 | 入队：任意线程（主线程方块更新）；消费：Render thread | `MixinLevelLightEngine` + `PromethiumLightBridge.submitLocalUpdate` |
+| 光照投递 | `ShadowLightCompute` pending/ready/failed 三 map | 投递：主线程（TAIL）；消费：后台 | `MixinLightRecompute` + `ShadowLightCompute` |
+| 影子端注入 + 收敛 | 批量注入 → 全局收敛轮询（20ms / 5s 超时）→ 批量提取 | 影子端主循环线程 | `ShadowSeedServer.runMainLoop` |
+| 光照落地 | 帧尾 `drainReady`（渲染前，预算内） | Render thread | `MixinClientTick` + `HassiumLightHooks.swapDataLayer` |
 
 ## 3. 三条数据入口
 
@@ -92,7 +84,8 @@ flowchart TD
 2. **原版通道**（未压缩 / 原版包）：`ClientPacketListener.handleLevelChunkWithLight`（主线程），`MixinVanillaChunkApplyBudget` 将其预算化（原版是"收到即 apply"、无每帧预算）。
 3. **R2 磁盘读回**：`ClientCacheLoadQueue` 后台读盘 → `readyQueue` → 主线程 `processQueueUntil` 预算内 apply。
 
-三条路最终都汇入 `applyChunkData` → `applyToLevelFromByteBuf`（平台抽象 `IClientChunkApplier`）。
+三条路最终都汇入 `applyChunkData` → `applyToLevelFromByteBuf`（平台抽象 `IClientChunkApplier`，
+内部调 `handleLevelChunkWithLight`，因此缓存读回 / delta 合并也与网络包共用 TAIL 投递点）。
 
 ## 4. 主线程每帧预算循环（MixinClientTick）
 
@@ -101,67 +94,44 @@ flowchart TD
 ```
 flushClientUntil(帧预算)   →  MainThreadDispatcher 出队 apply
 processQueueUntil(帧预算)  →  R2 缓存读回 apply
-drainCompletions(帧预算)   →  并行引擎：capture 采样 + 已完成 solve 落地
-bufferQueue.drainFrame()   →  官方引擎：统一缓冲队列（异步=预算消费；同步=双帧交换后全量）
-flushPendingCalibrations   →  渲染前兜底官方传播队列（原版方块变化）
+ShadowLightCompute.drainReady()         →  影子端算好的光批量落地（swapDataLayer）
+ShadowLightCompute.drainFailedRecompute →  失败柱丢弃（无本地兜底）
+会话中收敛写回                        →  加载风暴停止后脏块写盘（SettleWriteback）
 ```
 
-光照永远排在区块 apply 之后、渲染之前——这是"区块先出现、光后到"的时序根源。
+光照落地永远排在区块 apply 之后、渲染之前——区块先出现、光同帧后到（黑块窗口 = 0）。
 
-## 5. 光照入口与分支
+## 5. 光照投递与影子端管线
 
 `MixinLightRecompute`（`handleLevelChunkWithLight` TAIL）判定包是否带光：
 
-- **带光**（`network.lightStrip=false` 或原版）：权威光照随包落地（apply 时 queueSectionData 生效），无需重算；先落地内圈块重算时缺失本块的边界差值——官方路径由帧尾 `flushPendingCalibrations` 兜底（官方队列跨块传播天然合并），并行路径由引擎后台传播域（核心柱 ±16 格）承担。
-- **无光**（`network.lightStrip=true` 默认 / 缓存 `is_light_on=0`）：`applyLightEngineNow`：
-  1. 并行引擎开且 `lightSyncMode=false` → `submitRecompute` 异步入队，立即返回。
-  *  2. 官方引擎路径（默认 / 同步模式强制）→ 入 `ClientLightBufferQueue`：异步帧尾按预算消费（每帧 5ms，~2-3 块；剩余留帧，不阻塞 apply 链路）；同步（`lightSyncMode=true`）双帧缓冲——本帧 apply 入队，帧尾预算内落地（`SYNC_FRAME_BUDGET_NS`=12ms ≈ 4-5 块，剩余放回下一帧不丢，黑块窗口 ≤2-3 帧；预算化防止加载风暴期帧尾全量消费击穿帧率）。
+- **带光**：权威光照随包落地（apply 时 queueSectionData 生效），无需投递。
+- **无光**：仅当握手协商剥光后发生（客户端声明引擎可用 → 服务端 `network.lightStrip`
+  才剥）。投递 `ShadowLightCompute.submit(pos, packet)`（pending 队列）。
 
-  注：曾有的 `restoreCachedLightToEngine`（R2 磁盘旧光预灌防黑块）已移除——磁盘缓存光可能是未收敛 / 空光字段（SectionDelta 残缺 light、empty-mask 全 0），灌入引擎显示错误亮度；重算完成原子落地新光即最终画面。
+影子端管线（消费线程，非主线程）：
 
-`LightDelta` 是旁路：`handleLightDeltaPacket` 建层 + `propagateLightSources` 本地重算（跳过跨块传播），标缓存脏；residual 由后续渲染帧 drain。
+1. **注入**：批量取 pending → `ShadowSeedServer.injectChunk`：`new LevelChunk(level, pos)` 空壳
+   + `replaceWithPacketData`（全柱 `queueSectionData` + `updateSectionStatus` + `propagateLightSources`）。
+2. **收敛**：`isLightConverged` = `hasLightWork()==false` 且 lightTasks 空；20ms 轮询、5s 超时。
+3. **提取**：逐 section `getDataLayerData().copy()` → `ShadowLightPatch`（sky/block 两层）。
+4. **落地**：帧尾 `drainReady` → 主线程逐 section `swapDataLayer`（双缓冲 map 交换）+
+   `markDirty`（收敛光由断连/卸载 dump 写盘）。
 
-### 原版局部光照更新（方块放置/破坏 → `LevelLightEngine.checkBlock`）
+失败（注入异常 / 收敛超时）→ failed 队列 → 帧尾丢弃。**客户端无本地光照逻辑**（不重算、
+不缓冲、不并行）；影子端启动失败时整体降级（缓存/OVD/SeedGen 关闭并提示），剥光在握手侧
+已协商（未声明引擎 → 服务端不剥），黑块不会因单柱失败扩大。
 
-`LevelChunk.setBlockState`（含服务端方块包、流体、红石等全部客户端方块变化）在光属性变化
-时调用 `LevelLightEngine.checkBlock`——此前在主线程任意时刻内联写官方引擎。
-
-- **并行引擎开启**：`MixinLevelLightEngine` HEAD 拦截重定向到引擎统一队列
-  （`submitLocalUpdate`）——同柱有在飞重算任务时挂载到任务上、结果落地后立即应用
-  （消除「局部更新先传播、旧快照重算后落地覆盖修正」的陈旧光竞态），无在飞任务时入
-  独立队列、下一次 drain 应用；官方引擎写入因此收敛到单一消费者（异步写引擎的前提）。
-  引擎消费窗口内（drain 中）与单机集成服务端引擎身份直通原版。
-
-落地方式（阶段二，主线程税降一个数量级）：后台 solve 产物字节数组零复制包成
-`DataLayer`（引用包装），主线程只做**双缓冲 map 交换**——`LightEngine.storage` 的
-`visibleSectionData`（渲染读）与 `updatingSectionData`（传播写）同时 `setLayer` + 清缓存
-（官方传播 swap 时 visible = updating 浅拷贝共享 DataLayer 对象，单 map 交换会被传播覆盖；
-字段反射经 `HassiumLightHooks.swapDataLayer`，SRG/字段缺失自动降级 memcpy 功能保真）。
-`copyMasked`（邻柱差异只增亮合并）保持逐字节合并语义。
-- **并行引擎关闭 / MOD 缺席**：直通原版，帧尾 `flushPendingCalibrations` 兜底传播，
-  行为与改造前一致。
+`LightDelta` 是旁路：`handleLightDeltaPacket` 合并变更 section（`is_light_on=0`）→ apply
+（走 `handleLevelChunkWithLight`）→ TAIL 投递影子端。
 
 ## 6. 暗块窗口
 
-"暗块窗口" = 区块落地（可见）→ 引擎有光（变亮）之间的墙钟延迟，**出现在剥离光照的所有加载**（R1 无缓存 / R2 无预灌）：重算完成前引擎无光。R2 与 R1 行为一致，不再预灌旧光（旧光可能是未收敛/空光字段，显示错误亮度）。
+影子端模式（默认）：注入 → 收敛 → 提取 → 帧尾落地，全部在后台完成；apply 当帧渲染前落地，
+**黑块窗口 = 0**。
 
-窗口由三个独立预算队列串行构成，主瓶颈是 capture：
-
-```
-capture 排队（~240 帧，R1 625 块 × 9 柱 ÷ 24 柱/帧）
-  + solve FIFO（单任务实测最高 266ms）
-  + NEIGHBOR_WAIT_FRAMES=10（0.5s，等螺旋序邻居 1-5 帧到达）
-  + drain 落地（帧预算内）
-```
-
-官方引擎路径（默认）：缓冲队列 5ms/帧预算 → 加载风暴（32 块/帧）下积压多帧消化，暗块窗口随队列积压增长（每帧 ~2-3 块，625 块 ≈ 4-5s）；预算为部分主线程占用，帧时间不被单帧峰值击穿。`lightSyncMode=true` 时改走双帧缓冲：本帧收集、帧尾预算内落地（`SYNC_FRAME_BUDGET_NS`=12ms ≈ 4-5 块，剩余放回下一帧不丢，黑块窗口 ≤2-3 帧），落地量受帧预算 + chunk apply 限流（maxChunksPerFrame + 时间预算）共同约束；预算化前帧尾全量消费会在加载风暴期把主线程打满（实测 R1 单核 100%、~16fps），预算化后削峰摊平（实测 R1 ~20fps 起、峰值帧剩余放回、黑块观感不明显）。
-
-优化杠杆（已落地，R1 完成率 30%→98%）：`MAX_CAPTURE_COLUMNS_PER_FRAME=24`、`CAPTURE_BUDGET_NS=5ms`、`SNAPSHOT_CACHE_MAX=256`（命中 62%）、`NEIGHBOR_WAIT_FRAMES=10`。
-
-消除窗口的路线（决策见 hassium 讨论记录）：
-
-- **首选**：`network.lightStrip=false`（服务端带光发送）→ 客户端零重算零暗块，代价是带宽（光数据 ZSTD 压缩率高，需实测）。
-- **R1 无缓存**：任何客户端重算方案都无法做到"apply 即有光"，除非服务端随包附光骨架（未实现）。
+引擎未启用（`hassiumEngineEnabled=false` / 服务端未装 MOD）：不剥光，光随包自带，无暗块。
+启动失败降级：剥光不会发生（握手未声明引擎），同样无暗块。
 
 ## 7. 关键组件索引
 
@@ -172,10 +142,10 @@ capture 排队（~240 帧，R1 625 块 × 9 柱 ÷ 24 柱/帧）
 | `ClientMainThreadBudget` | apply 帧预算（JoinBoost / normal / hardCap） |
 | `MixinVanillaChunkApplyBudget` | 原版 chunk 包 apply 预算化 |
 | `ClientCacheLoadQueue` | R2 磁盘读回（region 级并发） |
-| `ClientLightRecomputeService` | 光照编排：并行/官方分派、同步重算实现（缓冲队列消费用） |
-| `ClientLightBufferQueue` | 官方引擎统一缓冲队列：帧内收集、帧尾消费（异步=预算；同步 `lightSyncMode`=双帧交换 + 帧预算内消费，剩余放回） |
-| `PromethiumLightBridge` | 并行光照引擎运行时桥接（反射发现 Promethium MOD；MOD 缺席自动降级官方引擎） |
-| `MixinLevelLightEngine` | 原版局部光照更新重定向：并行引擎开启时 checkBlock 入引擎统一队列（客户端引擎身份门控 + 消费窗口豁免） |
-| `ParallelLightEngine`（Promethium MOD 内） | 并行光照引擎：capture / solve / drain（`parallelLightEngineEnabled=true` 且 MOD 安装时） |
-| `ClientMetadataHandler.handleLightDeltaPacket` | LightDelta 旁路本地重算 |
-| `CacheSaveQueue` | 后台写盘（含光照回写） |
+| `MixinLightRecompute` | `handleLevelChunkWithLight` TAIL：空光 → 影子端投递 |
+| `ShadowLightCompute` | 投递队列（pending/ready/failed）+ 帧尾落地编排 |
+| `ShadowServerRegistry` | 影子端共享单例：握手后创建、失败降级、断连关闭 |
+| `ShadowSeedServer` | 进程内 ServerLevel + 官方光照引擎：注入 / 收敛 / 提取 |
+| `HassiumLightHooks` | 官方引擎原语（`swapDataLayer` 双缓冲落地、`getDataLayerData` 提取） |
+| `ClientMetadataHandler.handleLightDeltaPacket` | LightDelta 旁路：合并 + 投递 |
+| `CacheSaveQueue` | 后台写盘（含收敛光照回写） |

@@ -53,8 +53,6 @@ public final class HassiumClothConfigScreen {
         cache.addEntry(bool(entries, "hassium.configuration.clientCache.sectionDeltaEnabled",
                 draft.cacheSectionDeltaEnabled, dCache.sectionDeltaEnabled(),
                 v -> draft.cacheSectionDeltaEnabled = v));
-        cache.addEntry(bool(entries, "hassium.configuration.clientCache.lightCacheEnabled",
-                draft.lightCacheEnabled, dCache.lightCacheEnabled(), v -> draft.lightCacheEnabled = v));
         cache.addEntry(bool(entries, "hassium.configuration.network.enabled",
                 draft.networkEnabled, dClientNet.enabled(), v -> draft.networkEnabled = v));
         cache.addEntry(doubleRange(entries, "hassium.configuration.clientCache.hotScoreThreshold",
@@ -100,18 +98,15 @@ public final class HassiumClothConfigScreen {
         render.addEntry(intRange(entries, "hassium.configuration.clientCache.mainThreadChunkBudgetMs",
                 draft.mainThreadChunkBudgetMs, dCache.mainThreadChunkBudgetMs(), 1, 50,
                 v -> draft.mainThreadChunkBudgetMs = v));
-        render.addEntry(bool(entries, "hassium.configuration.clientCache.parallelLightEngineEnabled",
-                draft.cacheParallelLightEngineEnabled, dCache.parallelLightEngineEnabled(),
-                v -> draft.cacheParallelLightEngineEnabled = v));
-        render.addEntry(intRange(entries, "hassium.configuration.clientCache.parallelLightEngineThreads",
-                draft.cacheParallelLightEngineThreads, dCache.parallelLightEngineThreads(), 1, 64,
-                v -> draft.cacheParallelLightEngineThreads = v));
-        render.addEntry(bool(entries, "hassium.configuration.clientCache.lightSyncMode",
-                draft.lightSyncMode, dCache.lightSyncMode(),
-                v -> draft.lightSyncMode = v));
         render.addEntry(intRange(entries, "hassium.configuration.clientCache.seedGenThreads",
                 draft.seedGenThreads, dCache.seedGenThreads(), 0, 64,
                 v -> draft.seedGenThreads = v));
+        render.addEntry(bool(entries, "hassium.configuration.clientCache.hassiumEngineEnabled",
+                draft.hassiumEngineEnabled, dCache.hassiumEngineEnabled(),
+                v -> draft.hassiumEngineEnabled = v));
+        render.addEntry(bool(entries, "hassium.configuration.clientCache.ovdLocalGeneration",
+                draft.ovdLocalGeneration, dCache.ovdLocalGeneration(),
+                v -> draft.ovdLocalGeneration = v));
         render.addEntry(bool(entries, "hassium.configuration.network.metricsEnabled",
                 draft.metricsEnabled, dClientNet.metricsEnabled(), v -> draft.metricsEnabled = v));
         render.addEntry(bool(entries, "hassium.configuration.network.metricsAutoReset",
@@ -215,16 +210,14 @@ public final class HassiumClothConfigScreen {
         boolean cacheEntitySnapshotsEnabled;
         // 线程与应用
         int loadThreads;
-        boolean lightCacheEnabled;
         int maxChunksPerFrame;
         int mainThreadChunkBudgetMs;
-        // 并行光照引擎
-        boolean cacheParallelLightEngineEnabled;
-        int cacheParallelLightEngineThreads;
-        // 同步光照（双帧缓冲）
-        boolean lightSyncMode;
         // SeedGen 本地生成
         int seedGenThreads;
+        // Hassium 引擎（非网络向功能总开关）
+        boolean hassiumEngineEnabled;
+        // OVD 本地生成（miss 时Hassium 引擎本地生成 + 存缓存）
+        boolean ovdLocalGeneration;
         // 网络开关
         boolean networkEnabled;
         boolean metricsEnabled;
@@ -264,13 +257,11 @@ public final class HassiumClothConfigScreen {
             d.cacheJoinBoostEnabled = cache.joinBoostEnabled();
             d.cacheEntitySnapshotsEnabled = cache.entitySnapshotsEnabled();
             d.loadThreads = cache.loadThreads();
-            d.lightCacheEnabled = cache.lightCacheEnabled();
             d.maxChunksPerFrame = cache.maxChunksPerFrame();
             d.mainThreadChunkBudgetMs = cache.mainThreadChunkBudgetMs();
-            d.cacheParallelLightEngineEnabled = cache.parallelLightEngineEnabled();
-            d.cacheParallelLightEngineThreads = cache.parallelLightEngineThreads();
-            d.lightSyncMode = cache.lightSyncMode();
             d.seedGenThreads = cache.seedGenThreads();
+            d.hassiumEngineEnabled = cache.hassiumEngineEnabled();
+            d.ovdLocalGeneration = cache.ovdLocalGeneration();
 
             d.networkEnabled = clientNet.enabled();
             d.metricsEnabled = clientNet.metricsEnabled();
@@ -299,9 +290,8 @@ public final class HassiumClothConfigScreen {
                             cacheCleanupIntervalTicks, cacheTargetCacheSizeMb, cacheMinCleanupBatchSize,
                             cacheViewDistanceExtensionEnabled, cacheMaxRenderDistance, cacheOvdUnloadDelaySecs,
                             cacheSectionDeltaEnabled, cacheJoinBoostEnabled, cacheEntitySnapshotsEnabled,
-                            loadThreads, lightCacheEnabled, maxChunksPerFrame, mainThreadChunkBudgetMs,
-                            cacheParallelLightEngineEnabled, cacheParallelLightEngineThreads, lightSyncMode,
-                            seedGenThreads
+                            loadThreads, maxChunksPerFrame, mainThreadChunkBudgetMs,
+                            seedGenThreads, hassiumEngineEnabled, ovdLocalGeneration
                     ),
                     new HassiumConfig.ClientNetworkConfig(networkEnabled, metricsEnabled, metricsAutoReset, recoveryFreeze, seedGenEnabled),
                     HassiumConfig.ServerNetworkConfig.DEFAULT,

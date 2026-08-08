@@ -46,7 +46,7 @@ Toggle the relevant category only; the hot path is quiet by default and enabling
 | --- | --- | --- |
 | Joins are slower, not faster | Client cache is full or disk is slow | `/hassiumc stats` for hit ratio; check `hassium_cache` size and disk IO |
 | Far chunks flicker | Beyond-view render handoff with real chunks | Disable `clientCache.viewDistanceExtensionEnabled` to validate; upgrade to a recent version |
-| Light glitches | `clientCache.lightCacheEnabled` clash with Sodium | Disable `clientCache.lightCacheEnabled` |
+| Light glitches | `clientCache.hassiumEngineEnabled` clash with Sodium | Disable `clientCache.hassiumEngineEnabled` (the server then stops stripping light) |
 | Client logs show refmap WARN | Normal in Loom dev environments | Ignore; released jars do not replay this |
 | Server rejects clients | `compat.requireClientMod = true` and clients do not have the mod | Install Hassium on the client; or set `requireClientMod = false` |
 | Saves fail to load | Type 126 left behind after uninstall/downgrade | Reinstall the matching MC version of Hassium |

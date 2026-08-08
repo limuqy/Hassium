@@ -98,6 +98,14 @@ public final class DataPlaneUdpServer {
         LOCK.lock();
         try {
             if (INSTANCE != null) return;
+            // 影子端（客户端进程内的 MinecraftServer）不得绑定数据面端口：
+            // UDP 数据面只服务专用服务器（dedicated server）场景。
+            // 测试模式（forTest 注入 testListeners）不受此 gate 限制。
+            if (testListeners == null
+                    && !io.github.limuqy.mc.hassium.server.RuntimeServerContext.isDedicatedServerContext()) {
+                LOGGER.debug("DataPlaneUdpServer: skip bind (not dedicated server context)");
+                return;
+            }
             List<HassiumConfig.UdpListenerConfig> listeners = testListeners != null
                     ? testListeners
                     : HassiumConfigService.getInstance().getDataPlaneConfig().udpListeners();

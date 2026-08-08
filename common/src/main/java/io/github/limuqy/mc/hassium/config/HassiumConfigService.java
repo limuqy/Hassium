@@ -237,8 +237,41 @@ public class HassiumConfigService {
         return config.clientCache().enabled();
     }
 
+    /** 影子端配置开关（默认 true）。false 时客户端缓存/超视渲染/SeedGen/影子光照全 gate 关闭。 */
+    public boolean isHassiumEngineEnabled() {
+        return config.clientCache().hassiumEngineEnabled();
+    }
+
+    /** OVD 本地生成开关（默认 false）：OVD miss 时影子端按世界种子本地生成 + 存缓存。 */
+    public boolean isOvdLocalGenerationEnabled() {
+        return config.clientCache().ovdLocalGeneration();
+    }
+
+    /**
+     * 影子端运行时可用（= 配置开启 && 服务端已装 MOD && 影子服务端创建成功，启用态）。
+     * 启用态下客户端不再计算光照，区块光照统一投递影子端计算。
+     */
+    public boolean isShadowEngineAvailable() {
+        return isHassiumEngineEnabled()
+                && io.github.limuqy.mc.hassium.network.ClientChunkPipeline.getInstance().isShadowEngineAvailable();
+    }
+
+    /**
+     * 客户端非网络向功能总 gate：配置关（hassiumEngineEnabled=false）或影子端创建失败
+     * （降级态）时关闭客户端缓存 / 超视渲染 / SeedGen / 世界导出。
+     * <p>
+     * 服务端未装 Hassium MOD（握手未到达）时仍开放：OVD、客户端缓存、世界导出是纯客户端
+     * 能力，不依赖服务端；仅影子端不启动、光照回退客户端重算。
+     */
+    public boolean isClientFeatureGateOpen() {
+        if (!isHassiumEngineEnabled()) {
+            return false;
+        }
+        return !io.github.limuqy.mc.hassium.network.ClientChunkPipeline.getInstance().isShadowServerFailed();
+    }
+
     public boolean isEntitySnapshotsEnabled() {
-        return isClientCacheEnabled() && config.clientCache().entitySnapshotsEnabled();
+        return isClientFeatureGateOpen() && isClientCacheEnabled() && config.clientCache().entitySnapshotsEnabled();
     }
 
     /**
@@ -405,10 +438,6 @@ public class HassiumConfigService {
         return config.clientCache().loadThreads();
     }
 
-    public boolean isLightCacheEnabled() {
-        return config.clientCache().lightCacheEnabled();
-    }
-
     public boolean isServerLightStrip() {
         return config.serverNetwork().lightStrip();
     }
@@ -424,21 +453,6 @@ public class HassiumConfigService {
 
     public int getMaxChunksPerFrame() {
         return Math.max(1, config.clientCache().maxChunksPerFrame());
-    }
-
-    /** 是否启用多线程光照引擎（后台并行重算；默认关）。 */
-    public boolean isParallelLightEngineEnabled() {
-        return config.clientCache().parallelLightEngineEnabled();
-    }
-
-    /** 光照重算同步模式（双帧缓冲：本帧收集、下一帧尾阻塞全部落地；默认关）。 */
-    public boolean isLightSyncMode() {
-        return config.clientCache().lightSyncMode();
-    }
-
-    /** 多线程光照引擎线程数（虚拟线程模式忽略）。 */
-    public int getParallelLightEngineThreads() {
-        return Math.max(1, config.clientCache().parallelLightEngineThreads());
     }
 
     /** SeedGen 本地生成线程数（0=禁用本地生成，SeedRef 一律回退全量）。 */
@@ -531,7 +545,7 @@ public class HassiumConfigService {
      * 默认 true：开启时仅请求变更分段并合并本地缓存；关闭时与全量请求路径一致。
      */
     public boolean isSectionDeltaEnabled() {
-        return isClientCacheEnabled() && config.clientCache().sectionDeltaEnabled();
+        return isClientFeatureGateOpen() && isClientCacheEnabled() && config.clientCache().sectionDeltaEnabled();
     }
 
     // --- internal helpers ---

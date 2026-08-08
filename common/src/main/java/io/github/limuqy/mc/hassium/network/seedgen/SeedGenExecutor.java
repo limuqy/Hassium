@@ -36,9 +36,6 @@ public final class SeedGenExecutor {
     private final SeedGenQueue queue = new SeedGenQueue();
     private final AtomicBoolean drainRunning = new AtomicBoolean(false);
     private volatile ExecutorService pool;
-    private volatile ShadowSeedServer shadowServer;
-    /** 影子服务端创建失败后置 true：本会话不再尝试，全部回退。 */
-    private volatile boolean disabled;
 
     private SeedGenExecutor() {}
 
@@ -62,9 +59,9 @@ public final class SeedGenExecutor {
         return true;
     }
 
-    /** 门控：客户端配置开启 && 服务端 SeedGen 启用。 */
+    /** 门控：客户端配置开启 && 服务端 SeedGen 启用 && 影子端未失败。 */
     private boolean isEnabled() {
-        if (disabled) {
+        if (ShadowServerRegistry.getInstance().isFailed()) {
             return false;
         }
         HassiumConfigService cfg = HassiumConfigService.getInstance();
@@ -74,7 +71,7 @@ public final class SeedGenExecutor {
         return ClientChunkPipeline.getInstance().isServerSeedGenEnabled();
     }
 
-    /** 断连清理：停池、关影子服务端、清队列。 */
+    /** 断连清理：停池、关影子服务端（registry 共享）、清队列。 */
     public void onDisconnect() {
         queue.clear();
         ExecutorService p = pool;
@@ -82,14 +79,7 @@ public final class SeedGenExecutor {
         if (p != null) {
             p.shutdownNow();
         }
-        ShadowSeedServer server = shadowServer;
-        shadowServer = null;
-        disabled = false; // 重连后允许重建
-        if (server != null) {
-            DebugLogger.info(DebugLogger.LogType.ASYNC, "[SEEDGEN] Shutting down shadow seed server");
-            server.stopMainLoop();
-            SeedGenLevelCompat.shutdown(server);
-        }
+        ShadowServerRegistry.getInstance().shutdown();
     }
 
     /** 触发一次 drain（CAS 防并发；池未建则先建）。 */
@@ -137,7 +127,7 @@ public final class SeedGenExecutor {
         } finally {
             drainRunning.set(false);
             // 竞态窗口：drain 退出瞬间有新条目 → 重新触发
-            if (!queue.isEmpty() && !disabled) {
+            if (!queue.isEmpty() && !ShadowServerRegistry.getInstance().isFailed()) {
                 pump();
             }
         }
@@ -180,32 +170,14 @@ public final class SeedGenExecutor {
         }
     }
 
-    /** 影子服务端懒创建（首个生成任务所在线程；创建失败 → disabled + 回退本次）。 */
+    /** 影子服务端懒创建（共享 registry；创建失败 → failed + 回退本次）。 */
     private ShadowSeedServer shadowServer() {
-        ShadowSeedServer server = shadowServer;
-        if (server != null) {
-            return server;
+        ShadowSeedServer server = ShadowServerRegistry.getInstance().getOrCreate();
+        if (server == null) {
+            DebugLogger.info(DebugLogger.LogType.ASYNC,
+                    "[SEEDGEN] Shadow server unavailable (no seed / creation failed) -> fallback");
         }
-        synchronized (this) {
-            server = shadowServer;
-            if (server != null) {
-                return server;
-            }
-            if (disabled) {
-                return null;
-            }
-            long seed = ClientChunkPipeline.getInstance().getServerSeed();
-            DebugLogger.info(DebugLogger.LogType.ASYNC, "[SEEDGEN] Creating shadow seed server (seed={})", seed);
-            try {
-                server = SeedGenLevelCompat.createShadowServer(seed);
-                shadowServer = server;
-                return server;
-            } catch (Exception e) {
-                Constants.LOG.error("Hassium: Shadow seed server creation failed, SeedGen disabled for this session", e);
-                disabled = true;
-                return null;
-            }
-        }
+        return server;
     }
 
     /** 回退全量请求（安全：任何线程可调）。 */
