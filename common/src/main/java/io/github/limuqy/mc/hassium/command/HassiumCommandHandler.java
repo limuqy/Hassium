@@ -108,10 +108,13 @@ public class HassiumCommandHandler {
         long staleRequests = m.getStaleFullChunkRequestCount();
         long newRequestBytes = m.getNewFullChunkRequestBytes();
         long staleRequestBytes = m.getStaleFullChunkRequestBytes();
-        return String.format("§e区块加载：§r%d（新增 %d/%s，过期 %d/%s）",
+        long localCount = m.getLocallyGeneratedChunkCount();
+        long localBytes = m.getLocallyGeneratedChunkBytes();
+        return String.format("§e区块加载：§r%d（新增 %d/%s，过期 %d/%s，本地 %d/%s）",
                 fullRequests,
                 newRequests, MetricsTextFormatter.formatBytes(newRequestBytes),
-                staleRequests, MetricsTextFormatter.formatBytes(staleRequestBytes));
+                staleRequests, MetricsTextFormatter.formatBytes(staleRequestBytes),
+                localCount, MetricsTextFormatter.formatBytes(localBytes));
     }
 
     private static String formatOvdLine() {
@@ -156,6 +159,7 @@ public class HassiumCommandHandler {
         //                     + savedByCacheDelta       (同上，分段增量对应 vanilla 全量 wire)
         //                     + savedByLightHit          (光照命中时 vanilla 等价随 chunk packet 携带光照字节)
         //                     + savedByOvd                (OVD 拿到的 chunks 在 vanilla 要 serverVD=clientVD 才能推)
+        //                     + savedByLocalGen           (SeedGen 本地生成 = 缓存命中同款：vanilla 等价为推全量 chunk)
         //   current  = actualBytesReceived  (Hassium ZSTD wire)
         //   saved    = total_vanilla_wire - current
         //              (= 各优化 wire 节省 + 压缩节省自带；ZSTD 比 Zlib 更省的部分)
@@ -170,8 +174,9 @@ public class HassiumCommandHandler {
         long savedByLightHit = lightWireEstimate * m.getLightCacheHitCount();
         long savedByOvd = chunkWireEstimate
                 * ViewDistanceExtensionService.getInstance().getLoadedCount();
+        long savedByLocalGen = chunkWireEstimate * m.getLocallyGeneratedChunkCount();
         long totalVanillaWire = m.getVanillaBytesReceived()
-                + savedByCacheFullHit + savedByCacheDelta + savedByLightHit + savedByOvd;
+                + savedByCacheFullHit + savedByCacheDelta + savedByLightHit + savedByOvd + savedByLocalGen;
         long current = m.getActualBytesReceived();
         long saved = Math.max(0L, totalVanillaWire - current);
         double saving = totalVanillaWire > 0 ? (double) saved / totalVanillaWire * 100.0 : 0.0;

@@ -163,6 +163,16 @@ public class NetworkStats {
     }
 
     /**
+     * 记录 SeedGen 本地生成成功的完整区块（影子服务端生成，未向服务端请求）。
+     *
+     * @param bytes 等价值字节（口径与 {@link #ESTIMATED_CHUNK_BYTES} 一致）
+     */
+    public static void recordLocallyGeneratedChunk(long bytes) {
+        if (!enabled) return;
+        metrics.recordLocallyGeneratedChunk(bytes);
+    }
+
+    /**
      * 线缆出站帧字节（管线 encode 后 out 增量）。
      * 仅应被 {@code ZstdContextEncoder} / {@code SkipAwareZstdEncoder} 调用。
      */

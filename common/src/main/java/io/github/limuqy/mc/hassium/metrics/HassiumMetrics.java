@@ -134,6 +134,16 @@ public interface HassiumMetrics {
      */
     long getStaleFullChunkRequestBytes();
 
+    /**
+     * 获取 SeedGen 本地生成（影子服务端）区块数（无需向服务端请求）。
+     */
+    long getLocallyGeneratedChunkCount();
+
+    /**
+     * 获取 SeedGen 本地生成区块等价值字节数（与 {@link #getLocallyGeneratedChunkCount()} 同步累加）。
+     */
+    long getLocallyGeneratedChunkBytes();
+
     // ===== 网络指标 =====
 
     /**

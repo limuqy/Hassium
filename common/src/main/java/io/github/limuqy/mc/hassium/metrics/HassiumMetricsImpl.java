@@ -37,6 +37,9 @@ public class HassiumMetricsImpl implements HassiumMetrics {
     private final AtomicLong newFullChunkRequestBytes = new AtomicLong(0);
     private final AtomicLong staleFullChunkRequestCount = new AtomicLong(0);
     private final AtomicLong staleFullChunkRequestBytes = new AtomicLong(0);
+    /** SeedGen 本地生成（影子服务端）区块数/等价值字节；避免一次全量请求。 */
+    private final AtomicLong locallyGeneratedChunkCount = new AtomicLong(0);
+    private final AtomicLong locallyGeneratedChunkBytes = new AtomicLong(0);
 
     // 网络指标
     private final AtomicLong networkBytesSaved = new AtomicLong(0);
@@ -212,6 +215,16 @@ public class HassiumMetricsImpl implements HassiumMetrics {
     @Override
     public long getStaleFullChunkRequestBytes() {
         return staleFullChunkRequestBytes.get();
+    }
+
+    @Override
+    public long getLocallyGeneratedChunkCount() {
+        return locallyGeneratedChunkCount.get();
+    }
+
+    @Override
+    public long getLocallyGeneratedChunkBytes() {
+        return locallyGeneratedChunkBytes.get();
     }
 
     @Override
@@ -409,6 +422,8 @@ public class HassiumMetricsImpl implements HassiumMetrics {
         newFullChunkRequestBytes.set(0);
         staleFullChunkRequestCount.set(0);
         staleFullChunkRequestBytes.set(0);
+        locallyGeneratedChunkCount.set(0);
+        locallyGeneratedChunkBytes.set(0);
         networkBytesSaved.set(0);
         networkCompressTimeNs.set(0);
         networkDecompressTimeNs.set(0);
@@ -572,6 +587,17 @@ public class HassiumMetricsImpl implements HassiumMetrics {
         } else {
             newFullChunkRequestCount.addAndGet(chunkCount);
             newFullChunkRequestBytes.addAndGet(bytes);
+        }
+    }
+
+    /**
+     * 记录 SeedGen 本地生成成功的完整区块。每调用 1 次计 1 chunk；bytes 为其等价值
+     * （本地生成替代一次全量请求，口径与 {@link NetworkStats#ESTIMATED_CHUNK_BYTES} 一致）。
+     */
+    public void recordLocallyGeneratedChunk(long bytes) {
+        locallyGeneratedChunkCount.incrementAndGet();
+        if (bytes > 0) {
+            locallyGeneratedChunkBytes.addAndGet(bytes);
         }
     }
 

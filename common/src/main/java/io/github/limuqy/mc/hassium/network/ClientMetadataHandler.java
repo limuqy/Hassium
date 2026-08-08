@@ -98,11 +98,10 @@ public class ClientMetadataHandler {
     // ===== 阶段一：chunkHash 比对 =====
 
     /**
-     * 处理 SeedRef（SeedGen 区块引用，Phase 1）。
+     * 处理 SeedRef（SeedGen 区块引用）。
      * <p>
-     * Phase 1 语义：客户端本地生成尚未实现——收到 SeedRef 一律回退全量请求
-     * （正确性优先，SeedRef 只为减少流量；回退保证画面完整）。
-     * Phase 3 将替换为：本地 shadow 复算 → hash 校验 → 不匹配回退。
+     * Phase 2 语义：SeedGenExecutor 接管（本地影子服务端生成 + hash 校验留 Phase 3）；
+     * 门控未过/生成失败/超时一律回退全量请求（正确性优先）。
      */
     public static void handleSeedRefPacket(SeedRefS2CPacket packet) {
         Minecraft mc = Minecraft.getInstance();
@@ -123,9 +122,10 @@ public class ClientMetadataHandler {
             return;
         }
 
-        // Phase 1：本地生成未实现，先记录并回退全量请求
-        Constants.LOG.info("[SEED_REF] Received ({}, {}) hash={} -> fallback full request (Phase 1)",
-                packet.chunkX(), packet.chunkZ(), Long.toHexString(packet.contentHash()));
+        // Phase 2：本地影子服务端生成（入队后异步；未接管则回退）
+        if (io.github.limuqy.mc.hassium.network.seedgen.SeedGenExecutor.getInstance().handleSeedRef(packet)) {
+            return;
+        }
         fallbackToFullRequest(mc, packet);
     }
 
@@ -133,6 +133,18 @@ public class ClientMetadataHandler {
      * SeedRef 回退：按当前维度全量请求该区块。
      */
     private static void fallbackToFullRequest(Minecraft mc, SeedRefS2CPacket packet) {
+        fallbackToFullRequestByPos(new ChunkPos(packet.chunkX(), packet.chunkZ()));
+    }
+
+    /**
+     * 公共回退入口（SeedGen 生成线程/超时用）：按当前维度全量请求该区块。
+     * 任意线程可调；断连/未进服时内部兜底跳过。
+     */
+    public static void fallbackToFullRequestByPos(ChunkPos pos) {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.player == null || mc.level == null) {
+            return;
+        }
         String dimension = mc.level.dimension()
 #if MC_VER < MC_1_21_11
                 .location()
@@ -140,7 +152,7 @@ public class ClientMetadataHandler {
                 .identifier()
 #endif
                 .toString();
-        requestFullChunks(dimension, List.of(new ChunkPos(packet.chunkX(), packet.chunkZ())), true);
+        requestFullChunks(dimension, List.of(pos), true);
     }
 
     /**
@@ -480,6 +492,8 @@ public class ClientMetadataHandler {
         pendingHashWaitStartedAtMs = 0L;
         // 重连后需要重发全量 Bloom（新连接的服务端没有本玩家 Bloom 层）
         ClientBloomSyncTracker.onDisconnect();
+        // SeedGen 影子服务端随断连回收（重连后按需重建）
+        io.github.limuqy.mc.hassium.network.seedgen.SeedGenExecutor.getInstance().onDisconnect();
     }
 
     /**

@@ -1427,6 +1427,15 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
                     } catch (Exception ignored) {
                     }
                 }
+                // SeedGen 能力（append-only；旧客户端无此字段）
+                boolean seedGenSupported = false;
+                if (buf.isReadable()) {
+                    try {
+                        seedGenSupported = buf.readBoolean();
+                    } catch (Exception ignored) {
+                    }
+                }
+                ServerChunkPushManager.getInstance().setPlayerSeedGenSupported(player.getUUID(), seedGenSupported);
 
                 DebugLogger.debug(LogType.NETWORK,
                         "[HANDSHAKE] Details from {}: protocol={}, modVersion={}, algorithms={}, clientCache={}, globalCompression={}, compactHeader={}",

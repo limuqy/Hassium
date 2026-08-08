@@ -9,6 +9,13 @@ dependencies {
 }
 
 loom {
+    // fabric-resource-loader-v1 通过 loom 编译期注入给 MinecraftServer 加 DataResourceStore 接口
+    // （common 源码合并进 fabric 模块编译，ShadowSeedServer 被迫实现其抽象方法）。
+    // Hassium 不使用 fabric resource API；运行时接口注入由 fabric 的 MinecraftServerMixin 完成，
+    // 与 loom 编译期注入无关，禁用依赖注入不影响功能。
+    interfaceInjection {
+        enableDependencyInterfaceInjection = false
+    }
     runConfigs.configureEach {
         ideConfigGenerated = true
         if (name == 'client') {
