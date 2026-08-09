@@ -114,7 +114,7 @@ MC_1_21_11
 
 | 分界 | 动作 |
 |------|------|
-| 1.20.1 | 基准：现有网络实现；**UDP 数据面 + TCP 控制 Failover（主控热切 + 加权分流）落地点**（Task 1-9 commit `22c9c3f`）；后续九锚适配由 `931b393`（Fabric launcher 跨版本守卫）与 `e9a9e69`（NeoForge 主控热切 + 加权分流接线 + kcp io.netty split-package 剥离）完成，Fabric + NeoForge × 九锚点 compile 矩阵全 BUILD SUCCESSFUL。L2 恢复表现（`recoveryFreeze` 定格/无感切换）原限 1.20.1 段，后铺开全版本（commit `f89a691`）：冻结注入（tick/teardown/overlay）与终端拆除按段适配（1.20.1 `clearLevel`；1.20.2~1.20.4 `disconnect(Screen)`；≥1.20.5 `disconnect(Screen,Z)`；1.21.6+ launcher 走 `disconnectWithProgressScreen[(Z)]`）；`notifyFallback` 恢复去重同步到 NeoForge/Forge；1.20.1/1.21.1/1.21.11 三段 nginx 真实断链冒烟 PASS |
+| 1.20.1 | 基准：现有网络实现。**历史（1.1.2）**：UDP 数据面 + TCP 控制 Failover（主控热切 + 加权分流）落地点（Task 1-9 commit `22c9c3f`），九锚适配由 `931b393`（Fabric launcher 跨版本守卫）与 `e9a9e69`（NeoForge 主控热切 + 加权分流接线 + kcp io.netty split-package 剥离）完成，Fabric + NeoForge × 九锚点 compile 矩阵全 BUILD SUCCESSFUL；L2 恢复表现（`recoveryFreeze` 定格/无感切换）后铺开全版本（commit `f89a691`，冻结注入与终端拆除按段适配）。**2.0.0 客户端 failover 已退役**（`729d92e` 删 ClientFailoverIdentity/ClientRecoveryState/ControlReconnect\*/ControlEndpoint\*/定格 MixinGui/notifyFallback 等，见 handoff docs/handoff/handoff-2026-08-09-docs-2.0.md）：客户端恢复语义由**网络核心 L1 迁移引擎**承担（`network/core/migration/`，`network.dataPlane.recoveryWindowMs` 语义迁移为其故障静默超时，MigrationPolicy.java:22-23 明注沿用）；UDP 数据面保留为网关↔主控通道 bulk 载体（默认关）。1.20.1/1.21.1/1.21.11 三段 nginx 真实断链冒烟 PASS 为 failover 时代记录（历史语境） |
 | 1.20.2 | CustomPayload 路径；段内无 Forge；1.20.6+ Forge 用 ChannelBuilder play() |
 | 1.20.4 | **仅 NeoForge**：SimpleChannel 被移除，改用 `RegisterPayloadHandlerEvent` + `CustomPacketPayload.write/id`（1.20.5+ 才有 StreamCodec） |
 | 1.20.5 | STREAM_CODEC / `type()`；聚合写包、原版包枚举等 common 能力 |
@@ -133,22 +133,31 @@ MC_1_21_11
 - 各加载器 `registerChannels` / 握手入口仍尊重配置项 `HassiumConfigService.isNetworkCompressionEnabled()`
 - 实现细节见 `PacketCodecCompat`（StreamCodec / GameProtocols / IdDispatchCodec）
 
-### 预握手（login / 配置阶段声明 Hassium 能力）
+### 预握手（历史：login / 配置阶段声明 Hassium 能力）→ 2.0.0 网关自有通道握手
 
-1.20.1 进服初始区块 88%（1614/1842）在 Play 握手完成前经 `trackChunk` 原版直发（真实 light、不受 `maxChunksPerTick` 限流、无 chunkHash 元数据）。治本方案：客户端在 **login（1.20.1）/ 配置阶段（1.20.2+）** 提前发送预握手（`hassium:prehandshake_c2s`），服务端仅 `PlayerCompressionTracker.markPreHandshake(UUID)`；`ServerPlayer` 创建时（`MixinServerPlayer` `<init>` TAIL）自动提升压缩 → 进服第一圈 `trackChunk`/`sendChunk` 100% 走 Hassium 链（剥光 + 限流 + hash 元数据）。ZSTD/聚合/数据面/位置协商仍在 Play 完整握手（幂等）。
+**历史（1.1.2）**：1.20.1 进服初始区块 88%（1614/1842）在 Play 握手完成前经 `trackChunk` 原版直发（真实 light、不受 `maxChunksPerTick` 限流、无 chunkHash 元数据）。治本方案：客户端在 **login（1.20.1）/ 配置阶段（1.20.2+）** 提前发送预握手（`hassium:prehandshake_c2s`），服务端仅 `PlayerCompressionTracker.markPreHandshake(UUID)`；`ServerPlayer` 创建时（`MixinServerPlayer` `<init>` TAIL → `tryEnableOnPlayerJoin`）自动提升压缩 → 进服第一圈 `trackChunk`/`sendChunk` 100% 走 Hassium 链（剥光 + 限流 + hash 元数据）。ZSTD/聚合/数据面/位置协商仍在 Play 完整握手（幂等）。历史载体（**客户端发送端已删**）：
 
-| 段 | 客户端发送 | 服务端接收 |
+| 段 | 客户端发送（已删） | 服务端接收（保留） |
 |----|-----------|-----------|
 | fabric 1.20.1 | `ClientLoginNetworking` 回复 login query（`CompletableFuture` 回能力位） | `ServerLoginConnectionEvents.QUERY_START` 发 query + `ServerLoginNetworking` 收；UUID 按类型反射取 `gameProfile`（1.20.1 无访问器；离线服 login 阶段已派生 OfflinePlayer UUID） |
 | fabric 1.20.2–1.20.4 | `C2SConfigurationChannelEvents.REGISTER` → `ClientConfigurationNetworking.send`（legacy Identifier 通道） | `ServerConfigurationNetworking.registerGlobalReceiver` |
 | fabric 1.20.5+ | 同上（`PreHandshakePayload`，CustomPacketPayload） | `ServerConfigurationNetworking.registerGlobalReceiver(PayloadType)` |
-| neoforge 1.20.5+ | **不发送**（预握手 mixin 仅 Forge 生效：`hassium$doSendPreHandshake` 先判 `!"Forge".equals(platform)` 即 return；neoforge 客户端无独立发送端） | `registrar.configurationToServer(PreHandshakePayload.TYPE, ...)`（收 fabric 客户端发来的预握手；`handlePreHandshake` 按 listener owner UUID 标记） |
-| forge 1.20.6 | 同 mixin（`ClientHandshakePacketListenerImpl.handleGameProfile` TAIL；1.21.2+ 改名 `handleLoginFinished`，非配置 listener 构造） | `SimpleChannel.messageBuilder(..., NetworkDirection.CONFIGURATION_TO_SERVER)` |
-| neoforge 1.20.2–1.20.4 / forge 1.20.1 | **无 login/配置阶段通道 API，不预握手**（保留 Play 握手；1.20.2+ 原版 batch ack 节流使窗口本就 ≤ 前几批 ~9 块/tick） | — |
+| neoforge 1.20.5+ | 历史：不发送（预握手 mixin 仅 Forge 生效，neoforge 客户端无独立发送端） | `registrar.configurationToServer(PreHandshakePayload.TYPE, ...)`（收 fabric 客户端发来的预握手；`handlePreHandshake` 按 listener owner UUID 标记） |
+| forge 1.20.6 | 历史 mixin（`ClientHandshakePacketListenerImpl.handleGameProfile` TAIL；1.21.2+ 改名 `handleLoginFinished`） | `SimpleChannel.messageBuilder(..., NetworkDirection.CONFIGURATION_TO_SERVER)` |
+| neoforge 1.20.2–1.20.4 / forge 1.20.1 | 历史：无 login/配置阶段通道 API，不预握手（保留 Play 握手；1.20.2+ 原版 batch ack 节流使窗口本就 ≤ 前几批 ~9 块/tick） | — |
 
-共用载体：`PreHandshakeProtocol`（legacy buf 编解码）/ `PreHandshakePayload`（1.20.5+ payload，StreamCodec 为 FriendlyByteBuf 级，无 registry 依赖）。能力字段：协议版本、mod 版本、clientCache、globalCompression、compactHeader。客户端侧 hash 处理已有 storage 未就绪缓冲（`PENDING_HASH_PACKETS`），提前推 hash 安全。
+**2.0.0 现状**：客户端预握手**发送端已删**（`MixinClientConfigurationPacketListenerImpl` 与 `hassium$doSendPreHandshake` 零残留，删除清单见 `docs/handoff/handoff-2026-08-09-docs-2.0.md`）——能力声明改由**网关自有通道握手**承担：网络核心（`NetworkCore`）↔ 主控核心（`GatewayChannel`）的网关帧连接内完成握手，`NetworkCore.applyHandshake` 于握手响应 `globalCompressionAccepted` 时安装 ZSTD / 启停 UDP 数据面（NetworkCore.java:395-402）；服务端预握手接收端（`registerPreHandshakeServer` / `PreHandshakeProtocol.handlePreHandshake` / `PlayerCompressionTracker.markPreHandshake` + `MixinServerPlayer.tryEnableOnPlayerJoin`）代码保留、仍注册，但无客户端发送端 → 实际不触发（兼容接收；压缩启用现由 Play 完整握手 `PlayerCompressionTracker.enableCompression` 驱动）。
 
-运行时验证优先级：**1.20.1 → 1.21.1 → 1.21.11**（均要求真实 nginx 断主控 UdpFailover 冒烟通过）；其余锚点以编译 + 短冒烟为主。
+共用载体（历史）：`PreHandshakeProtocol`（legacy buf 编解码）/ `PreHandshakePayload`（1.20.5+ payload，StreamCodec 为 FriendlyByteBuf 级，无 registry 依赖）。能力字段：协议版本、mod 版本、clientCache、globalCompression、compactHeader。客户端侧 hash 处理已有 storage 未就绪缓冲（`PENDING_HASH_PACKETS`），提前推 hash 安全（历史设计依据）。
+
+运行时验证优先级：**1.20.1 → 1.21.1 → 1.21.11**；UDP 数据面断链冒烟经 `UdpFailover` harness 承载（nginx stream 代理 TCP 主控，`scripts/runtime-smoke-test.ps1`）——2.0.0 客户端 failover marker（`FAILOVER_RECONNECT_OK` / `FAILOVER_TERMINAL_OK` / `CACHE_RESUME_HIT`）已随客户端 failover 退役（729d92e），现有效数据面 marker 为服务端 `UDP_BIND_OK` / `UDP_WRR_OK`（`FAILOVER_PERMIT_OK` 仍在服务端 permit 签发链上，正常链路不再由客户端请求触发）；其余锚点以编译 + 短冒烟为主。详见 [`runtime-smoke-test.md`](runtime-smoke-test.md)。
+
+### KCP 依赖现状（数据面传输层）
+
+- **common**：`implementation 'moe.sdl.kcp:kcp-netty:1.6.2'`（common/build.gradle:12，KCP-over-UDP message mode）；生产仅经 `ReliableDatagramSession` 封装 `io.jpower.kcp.netty.Kcp`，路由 / Minecraft 层不得直用（"must not leak its API"）
+- **三端剥离**：kcp-netty 自带 `io.netty.bootstrap.UkcpServerBootstrap`，与 MC Netty 同包 → fabric / forge / neoforge 均有 `kcpIncoming` 配置 + `stripKcpNettyBootstrapPackage` 任务：fabric 剥 `io/netty/*` 后 shade 进主 jar；forge / neoforge 剥 `io.netty.bootstrap` 后进 compile / game-layer / JiJ（Forge SecureJarHandler 包独占冲突规避；详见附录 Forge 1.20.6 记录）
+- **服务端点**：`DataPlaneUdpServer`（KCP-over-UDP 单点，NioDatagramChannel，DataPlaneUdpServer.java:610-611），生命周期接 MixinMinecraftServer；`network.dataPlane.enabled=false` 时跳过
+- **口径**（事实基线③）：UDP 数据面完整保留（默认关），为网关↔主控通道 bulk 载体；KCP 仅承载数据面 bulk，控制/握手走网关帧连接
 
 ---
 

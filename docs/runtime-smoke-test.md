@@ -45,7 +45,7 @@ Hassium 跨版本（1.20.1–1.21.11）× 多加载器（fabric / neoforge）的
 |------|------|------|------|
 | `-Ver` | 是 | — | MC 版本，如 `1.20.1` |
 | `-Loader` | 是 | — | `fabric` 或 `neoforge` |
-| `-Phase` | 是 | — | `I`（初始轮）或 `R`（回归轮）或 `UdpFailover`（Nginx 反代+UDP failover smoke） |
+| `-Phase` | 是 | — | `I`（初始轮）或 `R`（回归轮）；`UdpFailover` 为 1.1.2 遗留值（客户端 failover 已退役，跑必 FAIL，见「Nginx Failover Harness（历史，已退役）」） |
 | `-SessionId` | 是 | — | 会话 ID，用于日志文件命名，如 `1.20.1_fabric_I` |
 | `-CleanWorld` | 否 | false | 删除服务端存档；batch 按 loader 策略决定（见下） |
 | `-SmokeHost` | 否 | 空 | 客户端连服完整地址（如 `127.0.0.1:25566`）；指定后优先于 `-ServerPort` |
@@ -53,13 +53,13 @@ Hassium 跨版本（1.20.1–1.21.11）× 多加载器（fabric / neoforge）的
 | `-DelayMs` | 否 | `10000` | 进世界后等待毫秒，再 dump 统计（ROUND1 窗口=DelayMs×2=20s，ROUND2=DelayMs=10s） |
 | `-ReconnectDelayMs` | 否 | `3000` | 第一轮断开后到重连的毫秒 |
 | `-ServerReadyTimeoutSec` | 否 | `160` | 服务端 `Done!` 出现超时 |
-| `-ClientTimeoutSec` | 否 | `240` | 客户端退出超时（UdpFailover phase 自动至少 300） |
-| `-SmokePhases` | 否 | `classic` | Java 侧阶段：`classic`（经典两轮）或 `udp-failover`（复用两轮连服，聚合六个生产 marker）。旧 `dataplane` / `all` 值仅为脚本与 JVM 参数兼容而解析，数据面 PoC 状态机已退役，不应作为验证入口 |
-| `-NginxExePath` | 否 | `D:\app\nginx-1.31.3\nginx.exe` | UdpFailover phase：nginx stream 反代可执行文件路径 |
-| `-ProxyPort` | 否 | `0`（→ `$ServerPort + 5`） | UdpFailover phase：nginx stream listen port；`-SmokeHost` 显式指定时优先 |
-| `-DryRun` | 否 | false | UdpFailover phase：仅起 nginx + 验 listen + stop + exit；不起 server/client |
-| `-InjectTcpClose` | 否 | false | UdpFailover phase：Round1 后由 nginx `-s stop` 真实关闭主控 TCP；默认走客户端模拟断连 |
-| `-SeamlessMode` | 否 | false | UdpFailover phase：§6.5 在客户端 `hassium-client.toml` 追加 `[network.dataPlane] recoveryFreeze=false`（无感切换），§7.5 客户端退出后回滚；PASS 要求客户端日志出现 `HassiumSmokeTest:CLIENT_MODE recoveryFreeze=false`，否则 patch 未生效按 FAIL 计 |
+| `-ClientTimeoutSec` | 否 | `240` | 客户端退出超时（遗留 `UdpFailover` phase 会强制抬到 300） |
+| `-SmokePhases` | 否 | `classic` | Java 侧阶段：`classic`（经典两轮）。`udp-failover` 已删除（客户端 failover 退役，`ClientSmokeTest` 不再识别该阶段，传入等同 classic）；旧 `dataplane` / `all` 值仅为脚本与 JVM 参数兼容而解析，已退役，不应作为验证入口 |
+| `-NginxExePath` | 否 | `D:\app\nginx-1.31.3\nginx.exe` | 仅遗留 `UdpFailover` phase 使用（nginx stream 反代路径，已退役） |
+| `-ProxyPort` | 否 | `0`（→ `$ServerPort + 5`） | 仅遗留 `UdpFailover` phase 使用（nginx stream listen port，已退役） |
+| `-DryRun` | 否 | false | 仅遗留 `UdpFailover` phase 使用（仅起 nginx + 验 listen + stop + exit；不起 server/client，已退役） |
+| `-InjectTcpClose` | 否 | false | 仅遗留 `UdpFailover` phase 使用（Round1 后由 nginx `-s stop` 真实关闭主控 TCP，已退役） |
+| `-SeamlessMode` | 否 | false | 仅遗留 `UdpFailover` phase 使用（patch 客户端 `hassium-client.toml` 的 `network.dataPlane.recoveryFreeze=false` 跑无感链路，已退役） |
 
 ### 批量参数
 
@@ -98,7 +98,7 @@ Hassium 跨版本（1.20.1–1.21.11）× 多加载器（fabric / neoforge）的
 │     │      ↓                                                         │  │
 │     │  DISCONNECTING  →  conn.disconnect + NetworkStats.reset       │  │
 │     │      ↓ (ReconnectDelayMs)                                      │  │
-│     │  等服务端检测玩家数 0→切 VD=10                                  │  │
+│     │  等服务端检测玩家数 0→切 VD=10 + 注入石墙              │  │
 │     │      ↓                                                         │  │
 │     │  WAIT_JOIN_2  →  反射 ConnectScreen.startConnecting            │  │
 │     │      ↓ (DelayMs)                                              │  │
@@ -113,6 +113,8 @@ Hassium 跨版本（1.20.1–1.21.11）× 多加载器（fabric / neoforge）的
 ```
 
 **为什么等到 `player.getY() > 0` 才开始计时？** 部分版本进服很慢（需要区块替换、服务端处理）；如果 player 对象一创建就开始 10s 计时，统计时区块还没加载完，`hits + misses == 0`。改为等玩家位置被服务端确认（收到 `ClientboundPlayerPositionPacket`）后才开始计时。
+
+**R2 方块变化注入（2.0.0 起）**：玩家离线窗口内，`ServerSmokeTest` 在世界出生点上方放置一堵 4 格高石墙（x∈[-160,160)、y∈[64,68)、z∈[2,4)，横跨 VD10 全宽）。R2 客户端从区块核心缓存读回该区域时 chunkHash 不一致 → 请求 section hash → 服务端回 `SectionDeltaS2CPacket` → 客户端 merge 后变化 section 缺光字段 → 触发增量分段光照重算路径（`[LIGHT-SEG]`）。无变化时该路径不会走，因此注入是 ROUND2 冒烟触发 section-delta / 分段光照的前置条件（`ServerSmokeTest.injectR2BlockChange`）。
 
 ## 退出码
 
@@ -259,91 +261,57 @@ build/smoke-test/
 
 **单 loader 模式**：若 `-Loaders fabric` 只指定一个加载器，`-Parallel` 仍生效但无并行意义，逻辑保持统一。
 
-## `udp-failover` Phase Markers
+## 网关双主控迁移冒烟（T7）
 
-`-Phase UdpFailover` 未显式传 `-SmokePhases` 时会自动启用 `udp-failover`。该阶段驱动 UDP 控制 Failover 端到端冒烟，跨进程日志必须包含下列 marker 才算 PASS；`FAILOVER_TERMINAL_OK` 仅在候选耗尽子用例出现：
+1.1.2 的 UDP 控制面 failover 冒烟（`udp-failover` phase）已随客户端 failover 套件退役（见下节），2.0.0 的迁移冒烟焦点为**网关双主控迁移**：网络核心（客户端进程内网关，`network/core/`）在单主控故障/切换时，经迁移引擎（L1，`network/core/migration/`）带续流票据切到目标主控，世界侧无感、区块续流。当前**代码级冒烟已就位**（`GatewaySmokeTest`，真实 TCP 双端、本机环回）；真实双端/双主控演练为阻塞缺口（E1，见下）。
 
-| Marker | 含义 |
-|--------|------|
-| `UDP_BIND_OK` | 客户端 BindRequest 被服务端某 endpoint 接受，KCP `ReliableDatagramSession` 进入 ESTABLISHED |
-| `UDP_WRR_OK` | `UdpBulkRouter` 成功送一帧 bulk → Primary/UDP 分流计数累加 |
-| `FAILOVER_PERMIT_OK` | 服务端 `ControlFailoverHandler.requestFailover` 返回 `PERMITTED`，并通过 KCP `TYPE_FAILOVER_PERMIT` 回执客户端；客户端 epoch 匹配 + 未过期 |
-| `FAILOVER_RECONNECT_OK` | 客户端 `ControlReconnectOrchestrator.onPrimaryDisconnected` 后 launch 候选 B，新一轮 S2C 握手成功 + `ClientRecoveryState.markRecovered()` 退出恢复态；恢复期画面定格（无过渡画面/断连 UI 呈现） |
-| `CACHE_RESUME_HIT` | 重连后 ChunkHashS2C 触发至少一次缓存命中（`cacheHitFullChunkBytes > 0`）；恢复期未开 final disconnect UI |
-| `FAILOVER_TERMINAL_OK` | 所有候选耗尽 → `ControlReconnectOrchestrator.performTerminalFinalization` → `ClientLifecycleHelper.finalizeDisconnectIfTerminal` 一次性 terminal 关闭 |
+### 冒烟依据：`GatewaySmokeTest`（真实 TCP 双端）
 
-`network.dataPlane.enabled=false` 子用例：必须 **零** UDP listener / Bind / permit 标记，与 TCP revert 路径对齐；`DataPlaneEnabledGuard` 在单测中已覆盖。
+`common/src/test/java/io/github/limuqy/mc/hassium/network/gateway/GatewaySmokeTest.java`（JUnit，随 `common:test` 运行）用真实 TCP socket 起**单主控**（`GatewayServer.start(port)`，`setInfoProvider(null)` 默认关压缩/UDP/SeedGen）与客户端**网络核心**（`NetworkCore.connect`），覆盖：
 
-### 自动 Failover Gate（候选配置要求）
+| 用例 | 验证点 | 断言/日志依据 |
+|------|--------|----------------|
+| `endToEndStandardFlow` | 握手 accepted → 网络核心 ACTIVE → 会话注册 → S2C 推送 → C2S 路由 | `core.state() == NetworkCoreState.ACTIVE`；`server.registry().get(playerId) != null`；客户端 `s2cDispatchedCount` 递增；`c2sRoutedCount` + 主控 `c2sFramesReceived` 递增 |
+| `resumeFlowThroughRealTcp` | 续流票据握手 → `resumeAccepted=true` → 会话 resume → 区块续流 | 票据 = `ResumeTicket(playerId, 递增 epoch, 共享密钥签名)`；`session.resume()` / `resumeEpoch`；`ServerChunkPushManager.isPlayerResumeActive(playerId)`（`[RESUME]` 推送链标记） |
 
-客户端自动切换主控有三道门槛（`ControlReconnectOrchestrator.canStartRecovery`）：
+> 注：迁移冒烟基于 TCP 网关连接（握手即控制连接，`udpSupported=false`）；数据面 UDP 默认关（`network.dataPlane.enabled=false`），不在本冒烟范围。
 
-1. 本次握手必须通告过非空候选 —— 服务端 toml 须配置 `controlReachableEndpoints`（仅靠上次会话持久化候选不算）。
-2. 非用户主动退出（主线程 `Connection.disconnect(Component)` 由 MixinConnection 标记；被踢/超时在 netty 线程不标记）。
-3. 候选与主地址按坐标去重后，客户端控制端点总数 **> 2**（至少主地址 + 2 个候选）。
+### 新流程（与代码冒烟能力一一对应）
 
-因此 UdpFailover smoke 的服务端 `hassium-server.toml` 里 `controlReachableEndpoints` 必须给出 **≥ 2 个**候选端点，否则 `FAILOVER_RECONNECT_OK` 不会出现。
+1. **启动单主控**：`GatewayServer.start(port)`。网关监听地址 = `network.controlReachableEndpoints[0]`，兜底 25566（`GatewayPlatformWiring.resolveBindPort`）。
+2. **验证网络核心 ACTIVE**：握手 accepted → `NetworkCoreState.ACTIVE`（`NetworkCore.onHandshakeAccepted:361`；状态定义见 `NetworkCoreState.java:24`）；会话注册于主控 registry。
+3. **模拟主控故障/切换**（两路皆可）：
+   - 故障触发（生产语义）：迁移引擎心跳监测 outbound 入站静默 ≥ `faultTimeoutMs`（默认 60000，沿用 `network.dataPlane.recoveryWindowMs` 语义，`MigrationPolicy.java:22-23`）→ `Sink.onFault` → `NetworkCore.onFault` → `migrateToImmediate`（`MigrationEngine.tick:257-265` / `NetworkCore.java:858-873`）。
+   - 直接切换（测试缝）：`NetworkCore.migrateToImmediate(endpoint)` —— ACTIVE→MIGRATING→`connectWithResume`（`NetworkCore.java:237-251`）。
+4. **验证无感迁移（客户端 Connection 不断、区块续流）**：
+   - 状态迁移 MIGRATING→ACTIVE 且 `resumeAccepted=true`（日志 `NetworkCore -> ACTIVE (migrated to ..., resumeAccepted=true — 续流就绪)`，`NetworkCore.java:373`）；
+   - 区块续流：主控推送链续流标记激活（`ServerChunkPushManager.isPlayerResumeActive`，GatewaySmokeTest 同款断言）；
+   - 客户端 Connection 不断：迁移发生在网关 outbound 层，vanilla 壳连接不动（`NetworkCoreState.MIGRATING` 定义「主控切换中（旧 outbound 已断开 / 新 outbound 连接中），世界侧无感」，`NetworkCoreState.java:25-26`；壳连接仅 keep-alive 响应走 vanilla TCP）。
 
-另外 smoke 内部模拟断连（`ClientSmokeTest.triggerDisconnect`）已改为反射拿 `Connection.channel` 后直接 `channel.close()` 模拟被动 `channelInactive` —— 不能改用 `disconnect(Component)`，否则会被判为用户主动退出而拦截恢复链路。
+代码级执行：`./gradlew common:test --tests 'io.github.limuqy.mc.hassium.network.gateway.GatewaySmokeTest'`（Test 侧 JUnit；本任务为纯文档任务不代跑）。
 
-### 无缝定格 / 无感切换恢复（全版本）
+### 沿用可用部分（握手 / 缓存 / export 冒烟）
 
-恢复期间（`isRecovering()`）vanilla 断连画面（`clearLevel`/DisconnectedScreen）被抑制，过渡画面（ConnectScreen/ProgressScreen/ReceivingLevelScreen）保持 vanilla 驱动但渲染层隐藏。两种客户端表现由 `network.dataPlane.recoveryFreeze`（CLIENT，默认 true）选择：
+| 能力 | 冒烟载体 | 出处 |
+|------|----------|------|
+| 握手冒烟 | `GatewaySmokeTest` 双用例（标准握手 accepted + 续流票据握手） | GatewaySmokeTest.java |
+| 缓存冒烟 | classic 两轮：ROUND2 区块核心缓存命中（参考 >99%）、OVD、光照缓存 | `ClientSmokeTest` 状态机 / `/hassiumc stats` |
+| export 冒烟 | `/hassiumc export` 存续（影子端世界目录拷贝 → `hassium_exports/<cacheId>`，保留 type 126 + chunkHash）；当前 smoke 脚本未驱动 export，作为网关冒烟的手动/扩展项 | `HassiumCommandHandler.startCacheExport:255` |
 
-- **定格**（默认）：世界与实体 tick 暂停，画面保持冻结世界 + 「正在切换主控…」浮层（`MixinGui`），直到候选握手成功 `setLevel` 换新世界或候选耗尽 terminal 回退。
-- **无感切换**（false）：世界不冻结、照常 tick，玩家本地操作/预测照常生效；恢复窗口内旧连接（`mc.getConnection()`）的全部 C2S 包被 `MixinConnection` 吞掉（服务器已无该玩家，包到不了也不该发）；恢复成功后 `setLevel` 以服务器状态重置——位置回退到断线点、刚挖的方块还原，体感如同突然延迟变高卡了一下，全程无任何切换 UI。
+### E1/E2 呼应（`docs/network-core-followups.md`）
 
-实现约束（改动时注意）：过渡 screen 必须显示在 `mc.screen`（不能拦截 setScreen）——fabric-networking-api-v1 的 `ClientNetworkingImpl.getLoginConnection()` 依赖 `screen instanceof ConnectScreen` 取回候选连接的 Login listener，拦截会导致候选连接在 Login 阶段被 `Cannot register receiver while client is not logging in!` 断开（1.20.1 实测）。画面级效果无头 smoke 不可见，需手动验证：定格模式断主控后应无任何加载画面闪现，仅世界定格 + 浮层，成功后画面恢复可动；无感模式断主控后世界继续可动、输入无响应（被吞），成功后位置/方块回退。
+- **E1（真实双端联调，阻塞项）**：上述冒烟均为单测/桩测，`GatewaySmokeTest` 真实 TCP 仅本机环回；E1 建议「真客户端 + 真主控跑 `docs/runtime-smoke-test.md`；双主控迁移演练」。本文档 classic 流程（真客户端 + 真主控 + ROUND1/2）即 E1 的「真客户端 + 真主控」载体；**双主控迁移演练仍未达**（端点通告未接 CONFIG 帧 B1、无 `/hassium migrate` 命令入口 B4），随 E1 一起补。
+- **E2（ViaFabric 运行时冒烟，随 E1 一起）**：装 ViaFabric → 客户端日志出现 `Hassium: ViaFabric detected via classpath (<类>)` 或 `via mod list (<modId>)`（`ViaFabricCompat.java:146,160`）+ `Hassium: ViaFabric decode bridge installed (live <x> -> fresh <y>)`（`ViaDecodeBridge.java:102`）；不装 → 无桥日志（登录时重探测，`NetworkCore.onLogin:132`）。
 
-## Nginx Failover Harness（UdpFailover phase）
+## Nginx Failover Harness（历史，已退役）
 
-`-Phase UdpFailover` 在 server ready 之前先启动一个本会话专属 nginx 反代，把 TCP 主控端点经 `stream` 块代理到真实 server `$ServerPort`，UDP 数据面仍直连。harness 通过 nginx 干预主控 TCP 的关闭时机，验证 production `ControlReconnectOrchestrator` + `ControlEndpointManager` 在真实 TCP 断链下的恢复链路。
+> 1.1.2 产物，已退役，仅保留事实记录防踩坑。**不要**再用 `-Phase UdpFailover` 作验证入口。
 
-### 拓扑
+**退役理由**：2.0.0 客户端 failover 套件删除（729d92e：`ClientFailoverAttemptMarker` / `EndpointStore` / `Identity` / `ClientRecoveryState` / `ControlEndpoint` / `ControlReconnectLauncher` / `ControlReconnectOrchestrator` 全部移除），`ClientSmokeTest.java:92` 明注「T6：客户端 failover 已退役，udp-failover 阶段删除（旧链路失语义）」——旧六类自检 markers 全部不再产出。脚本层残留（`scripts/runtime-smoke-test.ps1` 的 `-Phase UdpFailover`、`scripts/smoke/UdpFailoverSmoke.psm1`）与 Java 侧脱节：跑该 phase 时 Java 实际执行 classic 两轮，marker 提取恒缺失 → 必 FAIL。`network.dataPlane.recoveryFreeze` 键保留（仅 `ClientSmokeTest` 打标 `HassiumSmokeTest:CLIENT_MODE recoveryFreeze=`，无 UI 定格消费）；服务端 `controlStallMs` / `failoverExpiryMs` 仍由 `ControlFailoverHandler` 消费，客户端侧消费链已删。
 
-```
-client ──TCP 25570── nginx stream proxy ──TCP 25565── server (primary)
-client ──UDP uplink 25571 ────────────────────────────→ server (DataPlaneUdpServer)
-```
+**历史形态**（存档参考）：`-Phase UdpFailover` 在 server ready 前起本会话专属 nginx stream 反代（`client → nginx :ProxyPort → server :ServerPort`，UDP 数据面直连），经 `-InjectTcpClose`（`nginx -s stop` 真断 TCP）或内部模拟断连触发客户端恢复链路，聚合六个生产 markers（Bind / WRR / Permit / Reconnect / CacheResume / Terminal 六类，见归档）判 PASS；`-DryRun` 仅验 harness 启停序列，`-SeamlessMode` patch `recoveryFreeze=false` 跑无感链路；退出码 4/5 为 nginx 缺失/未就绪。拓扑、场景细节与 Pester 覆盖见归档。
 
-### 关键参数
-
-| 参数 | 默认 | 说明 |
-|------|------|------|
-| `-NginxExePath` | `D:\app\nginx-1.31.3\nginx.exe` | Nginx stream 反代可执行文件路径，覆盖仓库默认 |
-| `-ProxyPort` | `0` (→ `$ServerPort + 5`，如 `25570`) | Nginx stream listen port；client 经此端口连主控 |
-| `-DryRun` | false | 仅起 nginx + 验 listen + stop + exit；不起 server/client；用于 Pester 验证 harness 启停序列 |
-| `-InjectTcpClose` | false | Round1 后由 nginx `-s stop` 真实关闭 client 已建立的 stream 连接，触发 channelInactive→orchestrator |
-| `-SeamlessMode` | false | 客户端以无感切换模式跑（`recoveryFreeze=false`）：§6.5 patch `fabric/run/client/config/hassium/hassium-client.toml` 追加 `[network.dataPlane]` 段（尾行 `#SeamlessMode-smoke-injected` 标记），§7.5 客户端退出后按标记回滚；PASS 门禁含 `HassiumSmokeTest:CLIENT_MODE recoveryFreeze=false` |
-
-### 三种运行场景
-
-1. **内部模拟断连（默认，`-InjectTcpClose` 缺省）**：client 经 nginx 连主控；`ClientSmokeTest` 状态机在 ROUND1 后主动 `conn.disconnect()` 触发 vanilla channelInactive → `ControlReconnectOrchestrator.onPrimaryDisconnected` → `FabricControlReconnectLauncher.startConnecting` 同一 nginx 端口 reconnect → ROUND2。Marker 全由 production path 触发；harness 不主动断链。这是 `mono-JVM 跑 server+client 同进程` 时唯一可行设计（harness 无法在不杀整个 JVM 的前提下真断 socket）。
-
-2. **真实 TCP close 注入（`-InjectTcpClose`，manual 一次性验证）**：Round1 客户端进世界后 harness 等 `DelayMs × 1.2 + 5s` 稳定窗口，再 `nginx -s stop` 强制关闭 stream listen 与已建立的 client→server proxy 连接 → client Netty channelInactive 真触发 → orchestrator 开始恢复 → harness 立即重启 nginx + 等 listen 重开 → client `startConnecting` 重连 25570 通过 nginx 代理回到 server。`HassiumSmokeTest:UDP_FAILOVER_HARNESS primaryCloseInjected` / `nginxQuit` / `primaryRestored` 三个 harness timeline 事件按时间顺序写入 `build/smoke-test/nginx/<SessionId>/harness_timeline.log`，便于 reviewer 关联 production markers 与断链时机。
-
-3. **DryRun（`-DryRun`）**：仅起 nginx + 验 listen + 写 `nginxStarted` timeline + stop + exit 0；不起 server/client/JVM。用于 Pester 验证 harness 启停序列与 `Get-UdpFailoverHarnessTimeline` 解析正确，不依赖真实 server 与 nginx 在线验证。
-
-4. **无感切换（`-SeamlessMode`，可与 `-InjectTcpClose` 叠加）**：与场景 1/2 相同链路，唯一差异是客户端以 `recoveryFreeze=false` 运行 —— 断连期间世界不定格、无切换浮层，恢复后回退。harness 在 §6.5 追加 `[network.dataPlane] recoveryFreeze=false` 到客户端 toml（无 BOM UTF-8，PS5.1 `-Encoding UTF8` 会写 BOM 导致 tomlj 解析失败回退默认值），客户端退出后 §7.5 按 `#SeamlessMode-smoke-injected` 标记回滚。验证证据：客户端启动日志 `HassiumSmokeTest:CLIENT_MODE recoveryFreeze=false`（`ClientSmokeTest` 从生产配置读取），此 marker 同时是 PASS 门禁 —— 若 patch 未生效（值仍为 `true`/`unknown`），即使其余 markers 全绿也按 FAIL 计，防止“名义无感、实际定格”的假阳性。结果 JSON 含 `SeamlessMode` 与 `ClientRecoveryFreeze` 字段。
-
-### Helper 模块与 Pester
-
-- `scripts/smoke/UdpFailoverSmoke.psm1` 暴露四个纯函数：`New-UdpFailoverNginxConfig` / `Get-UdpFailoverMarkers` / `Get-UdpFailoverHarnessTimeline` / `Get-UdpFailoverClientMode`；harness 与 Pester 同源 shared。
-- `scripts/smoke/runtime-smoke-test.Tests.ps1` Pester v3.4 兼容（用 `Should Be`/`Should Match`，禁用 `Should -BeTrue`）：覆盖 conf 生成 / 6-marker 聚合 / harness timeline 解析 / `CLIENT_MODE` 提取（true/false/unknown）/ DryRun / InjectTcpClose 时序不变量。**运行方式**：`powershell -NoProfile -ExecutionPolicy Bypass -Command "Invoke-Pester -Path scripts/smoke/runtime-smoke-test.Tests.ps1 -PassThru"`（Pester 3.4.0 不支持 `-Output Detailed`，用 `-PassThru` 取计数）。
-
-### 清理与 zombie 防御
-
-`Stop-FailoverNginxProxy` 先 `nginx -s stop` 优雅停 master，500ms 后再按「命令行含本会话 prefix」定位残留 worker 清理（防 master 已死、worker 残留）。**不按名全杀 nginx**——其他会话/项目启的 nginx（如系统 service）不会被误杀。
-
-### 退出码
-
-| 退出码 | 含义 |
-|--------|------|
-| `0` | PASS（含 DryRun）/ client ROUND2 已断开→重连成功 + markers 全 fire |
-| `2` | FAIL：markers 缺失或 client 非 0 退出 |
-| `3` | server_not_ready |
-| `4` | `NginxExePath` 不存在（UdpFailover phase 必备） |
-| `5` | nginx listen 未就绪 |
+相关历史归档：`docs/archive/multi-channel_network_research.md`（多通道数据面研究，TCP PoC 退役记录）、`docs/archive/superpowers/`（旧工作流产物）；客户端 failover 设计决策见 `docs/handoff/handoff-2026-08-09-network-core.md`。
 
 ## 已知限制
 
@@ -377,18 +345,21 @@ client ──UDP uplink 25571 ────────────────�
 | `hassium.serverSmokeTest` | `false` | 服务端启用 `ServerSmokeTest` |
 | `hassium.serverSmokeTest.vd1` | `20` | 第一轮视距 |
 | `hassium.serverSmokeTest.vd2` | `8` | 第二轮视距 |
-| `hassium.smokePhases` | `classic` | Java 侧阶段选择（`classic` / `udp-failover`，可逗号组合）；旧 `dataplane` / `all` 只为兼容旧调用，服务端忽略已退役的 PoC 状态机 |
+| `hassium.smokePhases` | `classic` | Java 侧阶段选择：`classic`（默认）/ `pregen`（脚本 `-PregenOnly` 用）。`udp-failover` 已删除（`ClientSmokeTest` 不再识别）；旧 `dataplane` / `all` 只为兼容旧调用，服务端忽略已退役的 PoC 状态机 |
 
 ## 相关代码
 
 | 路径 | 作用 |
 |------|------|
-| `common/src/main/java/io/github/limuqy/mc/hassium/client/ClientSmokeTest.java` | 客户端两轮状态机、跨版本反射重连、统计校验；`udp-failover` 复用该断开→重连周期 |
-| `common/src/main/java/io/github/limuqy/mc/hassium/server/ServerSmokeTest.java` | 服务端视距切换；识别 `udp-failover` marker 聚合场景；旧裸 TCP PoC dataplane phase 已退役 |
-| `common/.../network/dataplane/DataPlaneUdpServer.java` / `ReliableDatagramSession.java` / `DataPlaneClientBundle.java` / `ControlReconnectOrchestrator.java` | UDP/KCP listener、按权重 bulk 路由、客户端 Bind/dispatch 与 TCP 主控恢复 |
-| `common/.../network/dataplane/ControlFailoverHandler.java` / `ClientRecoveryState.java` | permit 签发、恢复窗口和候选耗尽时的一次性终态清理 |
-| `common/.../config/HassiumConfigService.java` | 提供统一的 UDP listener、控制候选和 failover 时限配置快照 |
-| `scripts/smoke/UdpFailoverSmoke.psm1` | Nginx stream 配置、六 marker 聚合和 harness timeline 解析 |
-| `scripts/smoke/runtime-smoke-test.Tests.ps1` | 上述 PowerShell helper 的 Pester 覆盖 |
-| `scripts/runtime-smoke-test.ps1` | 单次会话脚本 |
+| `common/src/main/java/io/github/limuqy/mc/hassium/client/ClientSmokeTest.java` | 客户端两轮状态机（R1 断开 → R2 重连）、跨版本反射重连、统计校验；`udp-failover` 阶段已删（`ClientSmokeTest.java:92`），`CLIENT_MODE recoveryFreeze=` 打标保留 |
+| `common/src/main/java/io/github/limuqy/mc/hassium/server/ServerSmokeTest.java` | 服务端视距切换 + R2 方块变化注入（section delta / `[LIGHT-SEG]` 分段光照触发）；`dataplane`/`all` 兼容解析告警 |
+| `common/src/test/java/io/github/limuqy/mc/hassium/network/gateway/GatewaySmokeTest.java` | **网关双主控迁移冒烟依据**：真实 TCP 双端（`GatewayServer.start` + `NetworkCore.connect`），握手/ACTIVE/会话注册/S2C 注入/C2S 路由/续流票据 resume + 推送链标记 |
+| `common/.../network/core/NetworkCore.java` / `migration/MigrationEngine.java` / `MigrationPolicy.java` | 网络核心状态机（IDLE→CONNECTING→HANDSHAKING→ACTIVE→MIGRATING）与 L1 迁移引擎（心跳/故障触发 `faultTimeoutMs`=recoveryWindowMs 语义/续流票据） |
+| `common/.../network/gateway/GatewayServer.java` / `GatewayChannel.java` / `ServerChunkPushManager.java` | 主控核心接入（网关监听端口 = `controlReachableEndpoints[0]` 兜底 25566）；推送链续流标记（`isPlayerResumeActive`） |
+| `common/.../network/dataplane/DataPlaneUdpServer.java` / `ReliableDatagramSession.java` / `DataPlaneClientBundle.java` | 数据面 UDP/KCP 载体（网关↔主控通道 bulk 载体，默认关 `network.dataPlane.enabled=false`） |
+| `common/.../network/dataplane/ControlFailoverHandler.java` | 服务端 permit 链保留（消费 `controlStallMs` / `failoverExpiryMs`）；客户端侧消费链已删（729d92e） |
+| `common/.../config/HassiumConfigService.java` | 统一配置快照（含迁移引擎 `recoveryWindowMs` 接线，`NetworkCore.java:104-106`） |
+| `common/.../network/core/viafabric/ViaFabricCompat.java` / `ViaDecodeBridge.java` | ViaFabric 探测与 S2C 解码桥（E2 运行时冒烟日志源） |
+| `scripts/runtime-smoke-test.ps1` | 单次会话脚本（含遗留 `-Phase UdpFailover`，已退役） |
+| `scripts/smoke/UdpFailoverSmoke.psm1` / `runtime-smoke-test.Tests.ps1` | Nginx harness 遗留（历史，见「Nginx Failover Harness（历史，已退役）」） |
 | `scripts/runtime-smoke-test-batch.ps1` | 批量经典 smoke 脚本 |

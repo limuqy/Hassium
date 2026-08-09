@@ -2,13 +2,15 @@
 
 本文档是 **chunkHash 元数据推送 + 客户端缓存命中** 流水线的唯一真相源。存储文件格式见 [`architecture.md`](architecture.md)。
 
+功能域归属：客户端侧缓存 / 影子端链路属**区块核心**（客户端进程内区块域，影子端 = 其后端引擎），网络传输经**网络核心**（客户端进程内网关）outbound 承载；服务端推送侧属**主控核心**。配置键 `clientCache.*` 为区块核心配置族，键名保留。
+
 **相关专文（细节不在此重复）：**
 
 | 主题 | 文档 | 本文摘要 |
 |------|------|----------|
-| 超视渲染 | [`ovd.md`](ovd.md) | §10 |
-| 磁盘 NBT / Live-Unload / 分段增量 | [`disk-nbt-cache.md`](disk-nbt-cache.md) | §11 |
-| 世界导出 | 同上 + 本文 §12 | §12 |
+| 超视渲染 | 本文 §10 | §10 |
+| 磁盘 NBT / Live-Unload / 分段增量 | 本文 §11 | §11 |
+| 世界导出 | 本文 §12 | §12 |
 | 客户端收包 → apply → 光照落地全链路 | [`client-chunk-light-flow.md`](client-chunk-light-flow.md) | §3 客户端侧延伸 |
 
 **卖点特性（已实现）：** 分段增量（§3 阶段二 / §11）、超视渲染（§10）、`/hassiumc export`（§12）。
@@ -78,7 +80,7 @@ readChunkHash（MetadataTable，必要时 SectionHashStore combine）
 （影子端数据）  ChunkPayload    → SectionDelta → 影子端 apply
    └────────┬────────┘              │（失败/skipped/超时 → 全量）
             └───────────┬───────────┘
-drainReady 帧尾 apply（官方通道 handleLevelChunkWithLight）
+drainReady 帧尾 apply；原版包经网关注入（handler 直调 handleLevelChunkWithLight）
 ```
 ## 4. 主线程限流
 
@@ -143,11 +145,19 @@ SectionDeltaS2CPacket        // 服务端 → 客户端（变更 sections + heig
 - 方向性区块预加载（提高推送优先级，不改变协议）
 - warm-stash 优化（收包后暂存 NBT，卸载时 dirty=false 则 flush warm 跳过 live 重算）
 
-## 9.1 数据面与恢复态
+## 9.1 数据面与恢复（网络核心内无感迁移）
 
-`ChunkHashS2C`、握手、index sync 与 `SectionHashRequest` 都是 TCP 控制面：它们在压缩黑名单中，不进入聚合 PENDING 缓冲，也不走 UDP。`ChunkPayloadS2C` 与 `SectionDeltaS2CPacket` 在已 Bind 的 UDP/KCP session 可用时经 `DataPlaneClientBundle.safeDispatch` 送入既有 `SectionDeltaDispatcher` / chunk apply 路径；无 session 或路由失败时仍由 TCP 发送，缓存一致性协议不变。
+`ChunkHashS2C`、握手、index sync 与 `SectionHashRequest` 都是 TCP 控制面：经网络核心网关 outbound 帧协议（`ControlFrameCodec`）承载，在压缩黑名单中，不进入聚合 PENDING 缓冲，也不走 UDP。`ChunkPayloadS2C` 与 `SectionDeltaS2CPacket` 在已 Bind 的 UDP/KCP session 可用时经 `DataPlaneClientBundle.safeDispatch` 送入既有 `SectionDeltaDispatcher` / chunk apply 路径；无 session 或路由失败时仍由 TCP 发送，缓存一致性协议不变。
 
-TCP 主控发生恢复时，`ClientRecoveryState` 会保留 `ClientHassiumStorage`、`CacheSaveQueue` 与 `HassiumTaskExecutor`，避免候选重连期间清空缓存或取消写入；恢复后的 `ChunkHashS2C` 继续按正常 HIT/MISS/MISMATCH 分支处理。候选全部耗尽才执行一次终态资源清理。恢复期间客户端世界定格（tick 暂停 + 过渡画面仅隐藏渲染），画面保持冻结世界与缓存可见性，重连成功后既有缓存直接命中；UDP/KCP 的拓扑、地址配置和验证方法见 [`architecture.md`](architecture.md) §9.5 与 [`runtime-smoke-test.md`](runtime-smoke-test.md) §`udp-failover`。
+主控故障或负载触发时的恢复由**网络核心内部 L1 迁移引擎**完成（旧候选重连 / 世界定格语义已退役），对客户端原版 `Connection` 与区块核心（缓存 / 影子端）全程无感：
+
+1. **触发**：故障 = outbound 入站静默超时（`MigrationPolicy.faultTimeoutMs`，沿用 `network.dataPlane.recoveryWindowMs` 键语义）；策略 = 主控负载上报（TPS / 负载均值 / 维护窗口阈值）
+2. **换 outbound**：`NetworkCore` ACTIVE → MIGRATING → 关闭旧 outbound → 连接新主控，握手携带 `ResumeTicket` 续流票据（玩家 UUID + 递增 epoch + 共享密钥 HMAC 签名）
+3. **续流**：主控验签通过且 epoch 递增（`ResumeTicketValidator`，防重放）→ S2C 尾 `resumeAccepted=true` → 复用既有推送链（UUID-keyed 会话表，`resyncTrackedChunks`），迁移后的 `ChunkHashS2C` 继续按正常 HIT/MISS/MISMATCH 分支处理；`resumeAccepted=false`（票据无效 / 重放）→ 会话未附着，数据推送不流入，走登录桥 / 重连兜底
+4. **客户端 `Connection` 不断**：无定格、无候选重连窗口，迁移期间既有缓存照常命中，断连清理不触发
+5. **终态清理只在迁移失败回退时**：迁移端点候选耗尽 / 重试超限 → 回退为真正断连（outbound 关 → IDLE → 断连清理链），影子端 `saveAll` 落盘与资源终态清理此时才执行一次
+
+UDP/KCP 的拓扑、地址配置见 [`architecture.md`](architecture.md) §9 尾段（`controlReachableEndpoints` / `udpListeners`）与 §12.6；运行时冒烟见 [`runtime-smoke-test.md`](runtime-smoke-test.md#网关双主控迁移冒烟t7)。
 
 ## 10. 超视渲染（renderOnly）
 
@@ -191,7 +201,9 @@ MixinClientTick.tick
 
 ### 10.6 断连清理
 
-`ClientLifecycleHelper.cleanupOnDisconnect` 在 `ClientCacheLoadQueue.clear()` 后调 `ViewDistanceExtensionService.clearAllRenderOnly()`，清空 `loadedRenderOnly` + level 标记，避免重连后残留。
+`ClientLifecycleHelper.cleanupOnDisconnect`（vanilla 断连 / 登出链 HEAD）调 `ViewDistanceExtensionService.clearAllRenderOnly()`，清空 `loadedRenderOnly` + level 标记，避免重连后残留。断连落盘由影子端 `saveAll` 统一承担（`SeedGenLevelCompat.shutdown`，含 heat.idx 热度索引落盘），客户端无 dump 队列。
+
+清理只在**真正断连**时触发——网络核心内主控迁移（§9.1）不经过断连链：迁移期间 outbound 换向、客户端 `Connection` 不断，区块核心（缓存 / 影子端 / OVD 标记）全程保留；终态资源清理仅在迁移失败回退为断连后执行。
 
 ### 10.7 关键组件
 
@@ -330,7 +342,7 @@ RD > 32（需手改 `options.txt`）时雾距会跟随 `getEffectiveRenderDistan
 
 ## 12. 缓存导出（`/hassiumc export`）
 
-把客户端缓存导出为可进单机世界的原版 Anvil 存档。
+把影子端世界目录整体拷贝为导出存档（`hassium_exports/<cacheId>`；保留 type 126 + chunkHash 格式，原版翻译后续提供）。
 
 ### 12.1 命令
 
@@ -338,12 +350,14 @@ RD > 32（需手改 `options.txt`）时雾距会跟随 `getEffectiveRenderDistan
 /hassiumc export [serverIp] [seed]
 ```
 
-- `<serverIp>` 可选；指定时导出该服务器的缓存；不指定时导出当前连接的服务器
-- `seed` 可选；不指定时使用随机 seed + 空岛模式
+- `<serverIp>` 可选；指定时导出该服务器的影子端世界；不指定时导出当前连接的服务器
+- `seed` 可选；保留参数（目录拷贝不涉及种子）
 - 仅客户端命令，无权限要求
-- 输出目录：`<gameDir>/saves/<worldName>/`
+- 输出目录：`<gameDir>/hassium_exports/<cacheId>/`（`cacheId` = `server_<IP>_<端口>`，或当前连接服务器的 serverId）
 
 ### 12.2 输出结构
+
+数据源 = 影子端世界目录 `hassium_cache/<serverId>/world` 整体拷贝，目录结构与源一致：
 
 | 维度 | 目标目录 |
 |------|----------|
@@ -352,27 +366,24 @@ RD > 32（需手改 `options.txt`）时雾距会跟随 `getEffectiveRenderDistan
 | `minecraft:the_end` | `DIM1/region/` |
 | 其它 | `dimensions/<ns>/<path>/region/` |
 
-- `level.dat` + `level.dat_old`：最小可进世界脚手架（`DataVersion`=当前客户端、`GameType=SURVIVAL`、`SpawnX/Y/Z`、`generatorName=default`）
-- 每个 Region 文件：原版 2-sector header（offset + timestamp）+ `[length(4)][type=2][zlib data]`
-- 转码：Hassium type126 ZSTD → NBT → zlib type2
+- `level.dat` / `level.dat_old`、Region 文件等整体拷贝，无转码
+- **格式保留**：type 126 + chunkHash 落盘格式不变（与影子端存储写路径一致）
+- **原版翻译**（type 126 → 原版格式）后续提供；届时导出的世界方可直接进单机
 
 ### 12.3 异步与进度
 
-- 提交到 `HassiumTaskExecutor` 后台线程池
-- 进度按维度粒度回调，通过聊天回报
-- 单 region 失败不中断整体导出（累加失败计数）
+- 提交到后台线程池异步拷贝；完成后聊天回报「导出完成 / 导出失败」
+- 未连接时回报「未连接服务器，无法确定导出目标」；源目录缺失时回报「未找到影子端世界目录」
 - 全局 `AtomicReference<Future>` 防重入；正在导出时拒绝新请求
 
 ### 12.4 限制说明
 
-导出完成后聊天回报包含以下限制：
-
-- **无实体、无玩家背包/成就**：缓存仅含方块状态与 BE NBT
+- **无实体、无玩家背包/成就**：影子端世界仅含区块/光照与方块实体数据
+- **格式保留 type 126**：需 Hassium 读取；翻译为原版格式后续提供
 - **仅为「去过的区块」快照**：空洞区块由世界生成器填充
 - **模组方块需相同模组与相近 MC 版本**：否则方块可能显示为未知
-- **DataVersion 与当前客户端一致**：跨版本存档升级交给原版
-- **BE 取决于缓存是否含 NBT**：Live-Unload 快照包含 BE；收包 warm-stash 可能缺失
-- **光照从缓存保留**：`is_light_on=1` 的区块导出时携带 `SkyLight`/`BlockLight`，单机打开无需重算
+- **BE 取决于影子端缓存是否含 NBT**：Live-Unload 快照包含 BE；收包 warm-stash 可能缺失
+- **光照随区块保留**：`is_light_on=1` 的区块携带 `SkyLight` / `BlockLight`
 
 ### 12.5 示例
 
@@ -382,7 +393,7 @@ RD > 32（需手改 `options.txt`）时雾距会跟随 `getEffectiveRenderDistan
 
 输出：
 ```
-saves/MyCacheWorld/
+hassium_exports/server_192.168.1.100_25565/
 ├── level.dat
 ├── level.dat_old
 ├── region/
@@ -392,13 +403,13 @@ saves/MyCacheWorld/
 └── DIM1/region/
 ```
 
-完成后在单机主菜单可见 `MyCacheWorld`，进入后可浏览去过的区块。
+目录结构与 `hassium_cache/server_192.168.1.100_25565/world/` 一致；完成后聊天回报 `导出完成: <目标路径>`。
 
 ## 13. 客户端 Bloom 同步与服务端直推（永久虚空修复）
 
 ### 13.1 背景：永久虚空根因
 
-服务端数据队列（`ServerChunkPushManager.enqueueDataRequest`）在 drain 时对已出视距的任务**静默丢弃**：飞行中队列积压（`maxChunksPerTick` 默认 4）时，轮到处理时玩家已前移，任务被丢弃；客户端请求无超时重试，且静止后不再触发新的 `trackChunk`（块已在视距内），→ 前方 30° 扇形虚空永久存在。方向加权（`FORWARD_BIAS`）只改变优先级，堵不住丢弃漏洞。
+服务端数据队列（`ServerChunkPushManager.enqueueDataRequest`）在 drain 时对已出视距的任务**静默丢弃**：飞行中队列积压（`maxChunksPerTick` 默认 5）时，轮到处理时玩家已前移，任务被丢弃；客户端请求无超时重试，且静止后不再触发新的 `trackChunk`（块已在视距内），→ 前方 30° 扇形虚空永久存在。方向加权（`FORWARD_BIAS`）只改变优先级，堵不住丢弃漏洞。
 
 ### 13.2 机制
 
@@ -430,7 +441,7 @@ saves/MyCacheWorld/
 
 `ClientBloomSyncPacket`（C2S，`client_bloom_sync_c2s`）：`boolean full + byte[] bloomBytes`（`[4B size][4B hashCount][bitSet]`）。
 
-握手包（C2S）尾部追加客户端坐标（`double x, double z`，append-only 兼容旧服务端）：服务端校正 resync 视距中心（failover/重连时服务端玩家对象位置滞后在出生点）；客户端发送握手时同步刷新 `MainThreadDispatcher` 位置缓存（不等首帧 tick）。
+握手包（C2S）尾部追加客户端坐标（`double x, double z`，append-only 兼容旧服务端）：服务端校正 resync 视距中心（迁移/重连时服务端玩家对象位置滞后在出生点）；客户端发送握手时同步刷新 `MainThreadDispatcher` 位置缓存（不等首帧 tick）。
 
 ### 13.5 兜底
 

@@ -1,7 +1,9 @@
 # 客户端区块接收与光照应用流程
 
 客户端从收到区块数据包到区块/光照落地主线程的完整链路：线程归属、队列、预算与时序。
-服务端推送链见 [`chunk-cache.md`](chunk-cache.md) §3；磁盘缓存格式见 [`disk-nbt-cache.md`](disk-nbt-cache.md)。
+服务端推送链见 [`chunk-cache.md`](chunk-cache.md) §3；磁盘缓存格式见 [`chunk-cache.md`](chunk-cache.md) §11。
+
+链路归属：客户端收包 → apply → 光照落地全链路属**区块核心**（客户端进程内区块域，影子端 = 其后端引擎）；传输经**网络核心**（客户端进程内网关）outbound 承载；服务端推送属**主控核心**。配置键 `clientCache.*` 为区块核心配置族，键名保留。
 
 **相关专文：**
 
@@ -14,9 +16,9 @@
 
 ```mermaid
 flowchart TD
-    subgraph NET["网络线程 (Netty)"]
-        A["Hassium 压缩通道<br/>ClientChunkHandler.handleCompressedChunk<br/>（BulkCompressedChunk / Data 通道 payload）"]
-        B["原版通道<br/>ClientboundLevelChunkWithLightPacket"]
+    subgraph GW["网络核心（网关 outbound / UDP 数据面）"]
+        A["Bulk 区块 payload<br/>（网关 outbound ZSTD 解码 / UDP 数据面）<br/>ClientChunkHandler.handleCompressedChunk"]
+        B["原版包（网关注入，handler 直调）<br/>ClientboundLevelChunkWithLightPacket"]
         C["LightDelta 增量包<br/>（服务端块变化，只发坐标+section 掩码）"]
     end
 
@@ -68,7 +70,7 @@ flowchart TD
 
 | 环节 | 队列 / 预算 | 线程 | 代码 |
 |------|-------------|------|------|
-| 收包 | —（payload 回调） | Netty | `ClientChunkHandler.handleCompressedChunk` |
+| 收包 | —（payload 回调） | 网关 outbound / UDP 事件循环 | `ClientChunkHandler.handleCompressedChunk`（网关注入直调） |
 | 解压 / 转 NBT | `HassiumTaskExecutor` 提交 | 后台虚拟线程 | `ExecutorFactory.create` |
 | 写盘 | `CacheSaveQueue` | 后台 | `scheduleAsyncCacheIngest` |
 | 主线程调度 | `PriorityBlockingQueue`（按玩家距离） | — | `MainThreadDispatcher.execute` |
@@ -80,8 +82,8 @@ flowchart TD
 
 ## 3. 三条数据入口
 
-1. **Hassium 压缩通道**（默认，走 ZSTD + 聚合）：Netty 收 payload → 后台解压 → `MainThreadDispatcher` 距离优先级排队 → 主线程 apply。
-2. **原版通道**（未压缩 / 原版包）：`ClientPacketListener.handleLevelChunkWithLight`（主线程），`MixinVanillaChunkApplyBudget` 将其预算化（原版是"收到即 apply"、无每帧预算）。
+1. **Bulk 区块 payload**（默认）：经网络核心网关 outbound 帧协议送达（ZSTD 帧外解码；客户端不聚合），或 UDP 数据面（`DataPlaneClientBundle`）到达 → 均直调 `ClientChunkHandler.handleCompressedChunk` → 后台解压 → `MainThreadDispatcher` 距离优先级排队 → 主线程 apply。
+2. **原版包（网关注入）**：`NetworkCore.dispatchS2C` 把解码出的原版包直调进注入器 → `ClientPacketListener.handleLevelChunkWithLight`（主线程），`MixinVanillaChunkApplyBudget` 将其预算化（原版是"收到即 apply"、无每帧预算）。
 3. **R2 磁盘读回**：`ClientCacheLoadQueue` 后台读盘 → `readyQueue` → 主线程 `processQueueUntil` 预算内 apply。
 
 三条路最终都汇入 `applyChunkData` → `applyToLevelFromByteBuf`（平台抽象 `IClientChunkApplier`，
@@ -137,7 +139,7 @@ ShadowLightCompute.drainFailedRecompute →  失败柱丢弃（无本地兜底�
 
 | 组件 | 职责 |
 |------|------|
-| `ClientChunkHandler` | 压缩通道收包、解压调度、`applyChunkData` 统一入口 |
+| `ClientChunkHandler` | bulk 收包（网关 outbound / UDP 注入直调）、解压调度、`applyChunkData` 统一入口 |
 | `MainThreadDispatcher` | 后台→主线程回调队列（距离优先级） |
 | `ClientMainThreadBudget` | apply 帧预算（JoinBoost / normal / hardCap） |
 | `MixinVanillaChunkApplyBudget` | 原版 chunk 包 apply 预算化 |
