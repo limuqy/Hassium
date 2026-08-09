@@ -4,9 +4,12 @@ import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.concurrent.MainThreadDispatcher;
 import io.github.limuqy.mc.hassium.network.PlayerCompressionTracker;
 import io.github.limuqy.mc.hassium.network.ServerChunkPushManager;
+import io.github.limuqy.mc.hassium.network.ServerLoadReporter;
 import io.github.limuqy.mc.hassium.network.dataplane.DataPlaneUdpServer;
 import io.github.limuqy.mc.hassium.server.RuntimeServerContext;
 import io.github.limuqy.mc.hassium.server.ServerSmokeTest;
+import io.github.limuqy.mc.hassium.server.GatewayPlatformWiring;
+import io.github.limuqy.mc.hassium.server.GatewayPlayerBridge;
 import io.github.limuqy.mc.hassium.utils.TickMonitor;
 import net.minecraft.server.MinecraftServer;
 import org.spongepowered.asm.mixin.Mixin;
@@ -39,10 +42,15 @@ public class MixinMinecraftServer {
         MinecraftServer server = (MinecraftServer) (Object) this;
         if (RuntimeServerContext.isDedicatedServerContext()) {
             ServerChunkPushManager.getInstance().onServerTick(server);
+            // T7 负载上报（REQ §B12）：周期采样 CPU/TPS/内存/玩家数，日志输出；
+            // 网关侧接收口 TODO(T8)。
+            ServerLoadReporter.onServerTick(server);
         }
         // 服务端冒烟测试：检测玩家退出后切换视距
         ServerSmokeTest.onServerTick(server);
         DataPlaneUdpServer.tick(System.currentTimeMillis());
+        // T12 网关登录桥泵（登录监听器 tick + 物化检测 + 断连清理；空转零成本）
+        GatewayPlayerBridge.tick(server);
         // mspt 采样（debug.dispatcherLogging 开启时每秒输出一行 [MSPT]）
         TickMonitor.sampleServerTick(server, tickCount);
     }
@@ -69,15 +77,23 @@ public class MixinMinecraftServer {
         } catch (Throwable t) {
             Constants.LOG.warn("Hassium: Failed to bind UDP dataplane, server will run without it", t);
         }
+        // T12 网关接入（主控专用）：真实握手字段 + 登录桥 + 续流物化 + S2C 推送路由。
+        // 失败仅日志（GatewayPlatformWiring 内部兜底）——vanilla TCP 不受影响。
+        if (RuntimeServerContext.isDedicatedServerContext()) {
+            GatewayPlatformWiring.install(server);
+        }
     }
 
     @Inject(method = "stopServer", at = @At("HEAD"))
     private void onServerStop(CallbackInfo ci) {
+        MinecraftServer server = (MinecraftServer) (Object) this;
         // 服务器关闭时清理推送管理器
         ServerChunkPushManager.getInstance().shutdown();
         Constants.LOG.info("Hassium: ServerChunkPushManager shutdown");
         // 关闭 UDP 数据端口
         DataPlaneUdpServer.shutdown();
+        // T12 网关停机（桥清理 + 会话完整清理；幂等）
+        GatewayPlatformWiring.shutdown(server);
         // 清理玩家压缩状态追踪
         PlayerCompressionTracker.clear();
         Constants.LOG.info("Hassium: PlayerCompressionTracker cleared");

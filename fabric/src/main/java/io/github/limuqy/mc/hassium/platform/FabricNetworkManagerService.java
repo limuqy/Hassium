@@ -40,6 +40,11 @@ public class FabricNetworkManagerService implements INetworkManagerService {
 
     @Override
     public void sendChunkHashPacket(ServerPlayer player, FriendlyByteBuf buf) {
+        // T12 网关收口：网关玩家走 kind=1 HASSIUM 帧（客户端 receiver 已退役，回落 CustomPayload 是死路径）
+        if (io.github.limuqy.mc.hassium.server.GatewayPlayerBridge.tryRouteS2C(
+                player, io.github.limuqy.mc.hassium.network.core.GatewayPacketCodec.HassiumSub.CHUNK_HASH.id(), buf)) {
+            return;
+        }
 #if MC_VER < MC_1_20_5
         ServerPlayNetworking.send(player, ChunkHashS2CPacket.CHANNEL, buf);
 #else
@@ -49,6 +54,10 @@ public class FabricNetworkManagerService implements INetworkManagerService {
 
     @Override
     public void sendSeedRef(ServerPlayer player, FriendlyByteBuf buf) {
+        if (io.github.limuqy.mc.hassium.server.GatewayPlayerBridge.tryRouteS2C(
+                player, io.github.limuqy.mc.hassium.network.core.GatewayPacketCodec.HassiumSub.SEED_REF.id(), buf)) {
+            return;
+        }
 #if MC_VER < MC_1_20_5
         ServerPlayNetworking.send(player, SeedRefS2CPacket.CHANNEL, buf);
 #else
@@ -67,6 +76,10 @@ public class FabricNetworkManagerService implements INetworkManagerService {
 
     @Override
     public void sendSectionDeltaPacket(ServerPlayer player, FriendlyByteBuf buf) {
+        if (io.github.limuqy.mc.hassium.server.GatewayPlayerBridge.tryRouteS2C(
+                player, io.github.limuqy.mc.hassium.network.core.GatewayPacketCodec.HassiumSub.SECTION_DELTA.id(), buf)) {
+            return;
+        }
 #if MC_VER < MC_1_20_5
         ServerPlayNetworking.send(player, SectionDeltaS2CPacket.CHANNEL, buf);
 #else
@@ -85,6 +98,10 @@ public class FabricNetworkManagerService implements INetworkManagerService {
 
     @Override
     public void sendBlockEntityData(ServerPlayer player, FriendlyByteBuf buf) {
+        if (io.github.limuqy.mc.hassium.server.GatewayPlayerBridge.tryRouteS2C(
+                player, io.github.limuqy.mc.hassium.network.core.GatewayPacketCodec.HassiumSub.BLOCK_ENTITY_DATA.id(), buf)) {
+            return;
+        }
 #if MC_VER < MC_1_20_5
         ServerPlayNetworking.send(player, BlockEntityDataS2CPacket.CHANNEL, buf);
 #else
@@ -94,6 +111,10 @@ public class FabricNetworkManagerService implements INetworkManagerService {
 
     @Override
     public void sendLightDeltaPacket(ServerPlayer player, FriendlyByteBuf buf) {
+        if (io.github.limuqy.mc.hassium.server.GatewayPlayerBridge.tryRouteS2C(
+                player, io.github.limuqy.mc.hassium.network.core.GatewayPacketCodec.HassiumSub.LIGHT_DELTA.id(), buf)) {
+            return;
+        }
 #if MC_VER < MC_1_20_5
         ServerPlayNetworking.send(player, LightDeltaS2CPacket.CHANNEL, buf);
 #else

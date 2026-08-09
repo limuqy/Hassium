@@ -28,11 +28,20 @@ public class NeoForgeNetworkManagerService implements INetworkManagerService {
 
     @Override
     public void sendChunkHashPacket(ServerPlayer player, FriendlyByteBuf buf) {
+        // T12 网关收口：网关玩家走 kind=1 HASSIUM 帧（客户端 receiver 已退役，回落 CustomPayload 是死路径）
+        if (io.github.limuqy.mc.hassium.server.GatewayPlayerBridge.tryRouteS2C(
+                player, io.github.limuqy.mc.hassium.network.core.GatewayPacketCodec.HassiumSub.CHUNK_HASH.id(), buf)) {
+            return;
+        }
         networkManager.sendChunkHashPacket(player, buf);
     }
 
     @Override
     public void sendSeedRef(ServerPlayer player, FriendlyByteBuf buf) {
+        if (io.github.limuqy.mc.hassium.server.GatewayPlayerBridge.tryRouteS2C(
+                player, io.github.limuqy.mc.hassium.network.core.GatewayPacketCodec.HassiumSub.SEED_REF.id(), buf)) {
+            return;
+        }
         networkManager.sendSeedRef(player, buf);
     }
 
@@ -43,6 +52,10 @@ public class NeoForgeNetworkManagerService implements INetworkManagerService {
 
     @Override
     public void sendSectionDeltaPacket(ServerPlayer player, FriendlyByteBuf buf) {
+        if (io.github.limuqy.mc.hassium.server.GatewayPlayerBridge.tryRouteS2C(
+                player, io.github.limuqy.mc.hassium.network.core.GatewayPacketCodec.HassiumSub.SECTION_DELTA.id(), buf)) {
+            return;
+        }
         networkManager.sendSectionDeltaPacket(player, buf);
     }
 
@@ -53,11 +66,19 @@ public class NeoForgeNetworkManagerService implements INetworkManagerService {
 
     @Override
     public void sendBlockEntityData(ServerPlayer player, FriendlyByteBuf buf) {
+        if (io.github.limuqy.mc.hassium.server.GatewayPlayerBridge.tryRouteS2C(
+                player, io.github.limuqy.mc.hassium.network.core.GatewayPacketCodec.HassiumSub.BLOCK_ENTITY_DATA.id(), buf)) {
+            return;
+        }
         networkManager.sendBlockEntityData(player, buf);
     }
 
     @Override
     public void sendLightDeltaPacket(ServerPlayer player, FriendlyByteBuf buf) {
+        if (io.github.limuqy.mc.hassium.server.GatewayPlayerBridge.tryRouteS2C(
+                player, io.github.limuqy.mc.hassium.network.core.GatewayPacketCodec.HassiumSub.LIGHT_DELTA.id(), buf)) {
+            return;
+        }
         networkManager.sendLightDeltaPacket(player, buf);
     }
 

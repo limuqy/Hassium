@@ -1,0 +1,254 @@
+package io.github.limuqy.mc.hassium.network.gateway;
+
+import io.github.limuqy.mc.hassium.network.core.outbound.HandshakeCodec;
+import io.netty.bootstrap.ServerBootstrap;
+import io.netty.channel.Channel;
+import io.netty.channel.ChannelFuture;
+import io.netty.channel.ChannelInitializer;
+import io.netty.channel.ChannelOption;
+import io.netty.channel.EventLoopGroup;
+import io.netty.channel.nio.NioEventLoopGroup;
+import io.netty.channel.socket.nio.NioServerSocketChannel;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.net.InetSocketAddress;
+import java.util.List;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
+
+/**
+ * 主控侧网关接入服务（T11）：接受客户端 {@code NetworkCore} outbound 帧连接
+ * （复用 T4 ControlFrameCodec/HandshakeCodec，common 包直接引用），把帧连接桥接为
+ * UUID-keyed 玩家会话（登录桥/续流双路径，见 {@link GatewayChannel}）。
+ *
+ * <p><b>生命周期</b>：服务端平台在 MinecraftServer 启动/停止时
+ * {@link #start}/{@link #stop}（接线点 = 平台 MixinMinecraftServer，与
+ * DataPlaneUdpServer 同模式；监听端口建议取
+ * {@code ServerNetworkConfig.controlReachableEndpoints()[0].port()}，客户端
+ * outbound 地址源为 T7/T8 迁移引擎）。停止时逐会话走
+ * {@link GatewayPlayerRegistry} 完整清理（T3：removePlayer 一键清空）。
+ *
+ * <p><b>缝</b>：
+ * <ul>
+ *   <li>{@link #setInfoProvider}：S2C 握手响应服务端字段（压缩/种子/SeedGen/UDP 端点表）。</li>
+ *   <li>{@link #setLoginSink}：LOGIN_C2S 帧（T5 帧类型 9）→ 登录桥（登录完成后
+ *       {@link GatewayChannel#attachPlayer} 附着会话）。</li>
+ *   <li>{@link #registry()}：玩家会话表；平台在其上挂 per-player 清理钩子
+ *       （{@code PlayerCompressionTracker.removePlayer}）。</li>
+ * </ul>
+ *
+ * <p><b>线程模型</b>：accept/帧处理在 Netty event loop；S2C 发送任意线程；
+ * start/stop 任意线程（幂等）。
+ */
+public final class GatewayServer {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger("Hassium/GatewayServer");
+
+    private static final GatewayServer INSTANCE = new GatewayServer();
+
+    public static GatewayServer getInstance() {
+        return INSTANCE;
+    }
+
+    private final ConcurrentHashMap<Channel, GatewayChannel> connections = new ConcurrentHashMap<>();
+    private final GatewayPlayerRegistry registry = new GatewayPlayerRegistry();
+    private final AtomicLong s2cFramesTotal = new AtomicLong();
+    private final AtomicLong c2sFramesTotal = new AtomicLong();
+    private final AtomicLong loginFramesTotal = new AtomicLong();
+    private final AtomicLong configFramesTotal = new AtomicLong();
+    private final AtomicBoolean running = new AtomicBoolean(false);
+    private final AtomicReference<GatewayServerInfoProvider> infoProvider =
+            new AtomicReference<>((channel, request) -> GatewayServerInfoProvider.acceptDefaults());
+
+    private volatile EventLoopGroup bossGroup;
+    private volatile EventLoopGroup workerGroup;
+    private volatile Channel serverChannel;
+    private volatile LoginPayloadSink loginSink;
+    private volatile int zstdThreshold = 256;
+    private volatile int zstdLevel = 3;
+
+    private GatewayServer() {
+    }
+
+    // ==================== 生命周期 ====================
+
+    /** 绑定监听（0.0.0.0）。异步 bind；失败经日志报告并复位 running。 */
+    public void start(int port) {
+        start("0.0.0.0", port);
+    }
+
+    /** 绑定监听（指定 bind host）。异步 bind；失败经日志报告并复位 running。 */
+    public void start(String bindHost, int port) {
+        if (!running.compareAndSet(false, true)) {
+            LOGGER.warn("[GATEWAY] already running ({}:{})", bindHost, port);
+            return;
+        }
+        NioEventLoopGroup boss = new NioEventLoopGroup(1, r -> {
+            Thread t = new Thread(r, "Hassium-GatewayServer-Boss");
+            t.setDaemon(true);
+            return t;
+        });
+        NioEventLoopGroup worker = new NioEventLoopGroup(0, r -> {
+            Thread t = new Thread(r, "Hassium-GatewayServer-Worker");
+            t.setDaemon(true);
+            return t;
+        });
+        bossGroup = boss;
+        workerGroup = worker;
+        ServerBootstrap bootstrap = new ServerBootstrap();
+        bootstrap.group(boss, worker)
+                .channel(NioServerSocketChannel.class)
+                .option(ChannelOption.SO_REUSEADDR, true)
+                .childOption(ChannelOption.TCP_NODELAY, true)
+                .childHandler(new ChannelInitializer<Channel>() {
+                    @Override
+                    protected void initChannel(Channel ch) {
+                        GatewayChannel gc = new GatewayChannel(GatewayServer.this, ch);
+                        connections.put(ch, gc);
+                        ch.pipeline().addLast("frameDecoder", new GatewayChannel.FrameDecoder());
+                        ch.pipeline().addLast("gatewayInbound", new GatewayChannel.GatewayChannelHandler(gc));
+                    }
+                });
+        bootstrap.bind(new InetSocketAddress(bindHost, port)).addListener(future -> {
+            if (future.isSuccess()) {
+                serverChannel = ((ChannelFuture) future).channel();
+                LOGGER.info("[GATEWAY] listening on {}:{}", bindHost, port);
+            } else {
+                LOGGER.error("[GATEWAY] bind failed on {}:{}", bindHost, port, future.cause());
+                running.set(false);
+                shutdownGroups(boss, worker);
+            }
+        });
+    }
+
+    /** 停机：关监听 + 逐连接关闭（完整玩家会话清理）+ 释放 event loop。幂等。 */
+    public void stop() {
+        if (!running.compareAndSet(true, false)) {
+            return;
+        }
+        Channel sc = serverChannel;
+        if (sc != null) {
+            sc.close();
+        }
+        serverChannel = null;
+        for (GatewayChannel gc : List.copyOf(connections.values())) {
+            gc.close("server stop");
+        }
+        connections.clear();
+        registry.clear();
+        EventLoopGroup boss = bossGroup;
+        EventLoopGroup worker = workerGroup;
+        bossGroup = null;
+        workerGroup = null;
+        shutdownGroups(boss, worker);
+        LOGGER.info("[GATEWAY] stopped");
+    }
+
+    public boolean isRunning() {
+        return running.get();
+    }
+
+    /** 监听 channel（异步 bind 完成前为 null；测试取实际绑定端口用）。 */
+    public Channel serverChannel() {
+        return serverChannel;
+    }
+
+    private static void shutdownGroups(EventLoopGroup... groups) {
+        for (EventLoopGroup g : groups) {
+            if (g != null) {
+                g.shutdownGracefully(0, 5, TimeUnit.SECONDS);
+            }
+        }
+    }
+
+    // ==================== 缝 ====================
+
+    /** S2C 握手响应信息提供缝（平台注入真实服务端字段）。 */
+    public void setInfoProvider(GatewayServerInfoProvider provider) {
+        infoProvider.set(provider != null ? provider : (c, r) -> GatewayServerInfoProvider.acceptDefaults());
+    }
+
+    public GatewayServerInfoProvider infoProvider() {
+        return infoProvider.get();
+    }
+
+    /** LOGIN_C2S 帧登录桥缝（T5 登录中继配对；登录完成后经通道附着会话）。 */
+    public void setLoginSink(LoginPayloadSink sink) {
+        loginSink = sink;
+    }
+
+    public LoginPayloadSink loginSink() {
+        return loginSink;
+    }
+
+    /**
+     * ZSTD 阈值/等级（globalCompressionAccepted 时安装）。平台必须与客户端侧
+     * 配置同源（客户端 = HassiumConfigService.getGlobalCompressionThreshold/Level）。
+     */
+    public void setZstd(int threshold, int level) {
+        zstdThreshold = threshold;
+        zstdLevel = level;
+    }
+
+    public int zstdThreshold() {
+        return zstdThreshold;
+    }
+
+    public int zstdLevel() {
+        return zstdLevel;
+    }
+
+    /** 玩家会话注册表（UUID-keyed；平台挂 per-player 清理钩子）。 */
+    public GatewayPlayerRegistry registry() {
+        return registry;
+    }
+
+    // ==================== 计数（可验证） ====================
+
+    public long s2cFramesTotal() {
+        return s2cFramesTotal.get();
+    }
+
+    public long c2sFramesTotal() {
+        return c2sFramesTotal.get();
+    }
+
+    public long loginFramesTotal() {
+        return loginFramesTotal.get();
+    }
+
+    public long configFramesTotal() {
+        return configFramesTotal.get();
+    }
+
+    public int connectionCount() {
+        return connections.size();
+    }
+
+    void onS2CFrame() {
+        s2cFramesTotal.incrementAndGet();
+    }
+
+    void onC2SFrame() {
+        c2sFramesTotal.incrementAndGet();
+    }
+
+    void onLoginFrame() {
+        loginFramesTotal.incrementAndGet();
+    }
+
+    void onConfigFrame() {
+        configFramesTotal.incrementAndGet();
+    }
+
+    void onConnectionClosed(GatewayChannel gc) {
+        Channel ch = gc.channel();
+        if (ch != null) {
+            connections.remove(ch);
+        }
+    }
+}

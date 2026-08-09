@@ -185,15 +185,73 @@ public class ServerChunkPushManager {
      * 握手时客户端上报的玩家位置（方块坐标），校正 resync 视距中心。
      * 服务端玩家位置同步前（首个移动包到达前），客户端坐标是最新鲜的来源。
      */
+    /**
+     * 续流已接受玩家：UUID → 接受的续流票据 epoch（T7 验票通过后标记；removePlayer 清理）。
+     * 续流模式下客户端跳过 login/维度初始化，服务端按上报位置续发视距内 hash（见
+     * {@link #resyncTrackedChunks} 的 [RESUME] 日志与现有 hash 连续性机制）。
+     */
+    private final Map<UUID, Long> resumePlayers = new ConcurrentHashMap<>();
+
+    /**
+     * 握手时客户端上报的完整玩家状态（x/y/z/yaw/pitch/维度），供续流/会话同步使用。
+     */
+    private final Map<UUID, PlayerStateReport> playerStateReports = new ConcurrentHashMap<>();
+
+    /** 仅位置兜底（旧客户端上报 x/z） */
     public void setInitialPlayerPosition(ServerPlayer player, double x, double z) {
-        if (player == null) {
+        setInitialPlayerPosition(player, PlayerStateReport.fromXZ(x, z));
+    }
+
+    /**
+     * 网关帧侧握手路径（T11）：无 ServerPlayer 时按 UUID 记录初始位置（续流玩家实体
+     * 尚未物化；resyncTrackedChunks 与后续会话同步消费同一张表）。removePlayer 清理。
+     */
+    public void setInitialPlayerPosition(UUID playerId, PlayerStateReport state) {
+        if (playerId == null || state == null) {
             return;
         }
-        ChunkPos pos = new ChunkPos((int) Math.floor(x / 16.0), (int) Math.floor(z / 16.0));
-        initialPlayerChunkPos.put(player.getUUID(), pos);
+        ChunkPos pos = new ChunkPos((int) Math.floor(state.x() / 16.0), (int) Math.floor(state.z() / 16.0));
+        initialPlayerChunkPos.put(playerId, pos);
+        if (state.present()) {
+            playerStateReports.put(playerId, state);
+        }
         DebugLogger.info(LogType.NETWORK,
-                "[HANDSHAKE] Player {} reported initial position ({}, {}) → chunk ({}, {})",
-                player.getName().getString(), x, z, pos.x, pos.z);
+                "[GATEWAY] Player {} reported initial position {} → chunk ({}, {})",
+                playerId, state.describe(), pos.x, pos.z);
+    }
+
+    /** 完整玩家状态（T7 位置上报扩展；present=false 时仅取 x/z） */
+    public void setInitialPlayerPosition(ServerPlayer player, PlayerStateReport state) {
+        if (player == null || state == null) {
+            return;
+        }
+        ChunkPos pos = new ChunkPos((int) Math.floor(state.x() / 16.0), (int) Math.floor(state.z() / 16.0));
+        initialPlayerChunkPos.put(player.getUUID(), pos);
+        if (state.present()) {
+            playerStateReports.put(player.getUUID(), state);
+        }
+        DebugLogger.info(LogType.NETWORK,
+                "[HANDSHAKE] Player {} reported initial position {} → chunk ({}, {})",
+                player.getName().getString(), state.describe(), pos.x, pos.z);
+    }
+
+    /** 续流验票通过后标记（epoch = 票据 epoch）；removePlayer 清理 */
+    public void markPlayerResumeActive(UUID playerId, long epoch) {
+        resumePlayers.put(playerId, epoch);
+        DebugLogger.info(LogType.NETWORK, "[RESUME] Player {} resume ready (epoch={})", playerId, epoch);
+    }
+
+    public boolean isPlayerResumeActive(UUID playerId) {
+        return resumePlayers.containsKey(playerId);
+    }
+
+    public long playerResumeEpoch(UUID playerId) {
+        return resumePlayers.getOrDefault(playerId, Long.MIN_VALUE);
+    }
+
+    /** 最近一次上报的完整玩家状态（无上报 → null） */
+    public PlayerStateReport getPlayerStateReport(UUID playerId) {
+        return playerStateReports.get(playerId);
     }
 
     /**
@@ -781,6 +839,13 @@ public class ServerChunkPushManager {
         ChunkPos reportedPos = initialPlayerChunkPos.remove(player.getUUID());
         int centerX = reportedPos != null ? reportedPos.x : player.chunkPosition().x;
         int centerZ = reportedPos != null ? reportedPos.z : player.chunkPosition().z;
+        // T7 续流：验票通过后走同一 resync 机制 —— 按上报位置重发视距 hash，
+        // 客户端与本地 ShadowStorageHashes 比对后只请求增量（hash 连续性）。
+        if (isPlayerResumeActive(player.getUUID())) {
+            DebugLogger.info(LogType.NETWORK,
+                    "[RESUME] Player {} — 续流模式：按上报位置 ({}, {}) 续发视距 chunkHash",
+                    player.getName().getString(), centerX, centerZ);
+        }
         String dimension = level.dimension()
 #if MC_VER < MC_1_21_11
                 .location()
@@ -1892,6 +1957,8 @@ public class ServerChunkPushManager {
         deferredChunks.remove(playerId);
         initialPlayerChunkPos.remove(playerId);
         bloomLayers.remove(playerId);
+        resumePlayers.remove(playerId);
+        playerStateReports.remove(playerId);
     }
 
     /**
@@ -1905,6 +1972,8 @@ public class ServerChunkPushManager {
         pendingResync.clear();
         deferredChunks.clear();
         initialPlayerChunkPos.clear();
+        resumePlayers.clear();
+        playerStateReports.clear();
         if (pushPool != null) {
             pushPool.shutdownNow();
         }

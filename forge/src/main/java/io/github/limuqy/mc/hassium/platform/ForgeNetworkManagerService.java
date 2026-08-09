@@ -19,11 +19,20 @@ public class ForgeNetworkManagerService implements INetworkManagerService {
 
     @Override
     public void sendChunkHashPacket(ServerPlayer player, FriendlyByteBuf buf) {
+        // T12 网关收口：网关玩家走 kind=1 HASSIUM 帧（客户端 receiver 已退役，回落 CustomPayload 是死路径）
+        if (io.github.limuqy.mc.hassium.server.GatewayPlayerBridge.tryRouteS2C(
+                player, io.github.limuqy.mc.hassium.network.core.GatewayPacketCodec.HassiumSub.CHUNK_HASH.id(), buf)) {
+            return;
+        }
         NETWORK_MANAGER.sendChunkHashPacket(player, buf);
     }
 
     @Override
     public void sendSeedRef(ServerPlayer player, FriendlyByteBuf buf) {
+        if (io.github.limuqy.mc.hassium.server.GatewayPlayerBridge.tryRouteS2C(
+                player, io.github.limuqy.mc.hassium.network.core.GatewayPacketCodec.HassiumSub.SEED_REF.id(), buf)) {
+            return;
+        }
         NETWORK_MANAGER.sendSeedRef(player, buf);
     }
 
@@ -34,6 +43,10 @@ public class ForgeNetworkManagerService implements INetworkManagerService {
 
     @Override
     public void sendSectionDeltaPacket(ServerPlayer player, FriendlyByteBuf buf) {
+        if (io.github.limuqy.mc.hassium.server.GatewayPlayerBridge.tryRouteS2C(
+                player, io.github.limuqy.mc.hassium.network.core.GatewayPacketCodec.HassiumSub.SECTION_DELTA.id(), buf)) {
+            return;
+        }
         NETWORK_MANAGER.sendSectionDeltaPacket(player, buf);
     }
 
@@ -44,20 +57,18 @@ public class ForgeNetworkManagerService implements INetworkManagerService {
 
     @Override
     public void sendBlockEntityData(ServerPlayer player, FriendlyByteBuf buf) {
+        if (io.github.limuqy.mc.hassium.server.GatewayPlayerBridge.tryRouteS2C(
+                player, io.github.limuqy.mc.hassium.network.core.GatewayPacketCodec.HassiumSub.BLOCK_ENTITY_DATA.id(), buf)) {
+            return;
+        }
         NETWORK_MANAGER.sendBlockEntityData(player, buf);
     }
     @Override
     public void sendLightDeltaPacket(ServerPlayer player, FriendlyByteBuf buf) {
+        if (io.github.limuqy.mc.hassium.server.GatewayPlayerBridge.tryRouteS2C(
+                player, io.github.limuqy.mc.hassium.network.core.GatewayPacketCodec.HassiumSub.LIGHT_DELTA.id(), buf)) {
+            return;
+        }
         NETWORK_MANAGER.sendLightDeltaPacket(player, buf);
     }
-
-    // ForgeNetworkManager.sendPreHandshake 定义在 #if MC_VER >= MC_1_20_2 块内
-    // （1.20.1 无配置阶段通道，方法整体不编译）；覆写调用点必须同分段，
-    // 否则 1.20.1 编译报找不到符号。1.20.1 走接口 default 空实现（fabric 同）。
-#if MC_VER >= MC_1_20_2
-    @Override
-    public void sendPreHandshake(net.minecraft.network.Connection connection) {
-        NETWORK_MANAGER.sendPreHandshake(connection);
-    }
-#endif
 }
