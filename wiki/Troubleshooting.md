@@ -56,18 +56,16 @@
 
 ---
 
-## 数据面排查
+## 迁移与网关排查
 
-启用 `network.dataPlane.enabled` 后，依次确认 6 个自检标记：
+| 症状 | 可能原因 | 处理 |
+| --- | --- | --- |
+| 主控故障后客户端直接掉线、无迁移 | 网关监听未就绪 / 迁移判定窗口过短 | 确认主控网关端口可达（`network.controlReachableEndpoints[0]`，未配置时兜底 `25566`）；按需调大 `network.dataPlane.recoveryWindowMs`（默认 `60000`，故障静默超时） |
+| 迁移后地形大量重下（续流被拒） | 影子端存档与主控不一致 / 缓存目录异常 | 检查 `hassium_cache` 对应目录与磁盘空间；迁移后首次加载出现部分 MISS 属正常，持续重下则删除该服务器缓存目录重进（见下） |
+| 配置了 UDP 数据面但未见 UDP 流量 | `network.dataPlane.enabled` 默认关 | 需显式开启；关闭时全部流量走网关帧连接（TCP 控制通道） |
+| 网关端口被占用 | 与其它服务冲突 | 通过 `network.controlReachableEndpoints` 指定其它端口（兜底 `25566`） |
 
-1. `UDP_BIND_OK` 失败：检查 UDP 端口是否被占用 / 防火墙是否放行
-2. `UDP_WRR_OK` 失败：检查 `weight` 配置是否合法
-3. `FAILOVER_PERMIT_OK` 失败：检查服务端 `controlStallMs` 是否设得过短
-4. `FAILOVER_RECONNECT_OK` 失败：检查候选 endpoint 公网可达性
-5. `CACHE_RESUME_HIT` 失败：检查 `ClientRecoveryState` 是否真能阻止 finalize（dirty 保留检查）
-6. `FAILOVER_TERMINAL_OK` 失败：候选耗尽后 `consumeTerminalCleanup` 未 exactly-once
-
-详见 [Data-Plane-and-Failover](Data-Plane-and-Failover)。
+详见 [网络核心与主控迁移](Network-Core-and-Master-Migration)。
 
 ---
 

@@ -4,7 +4,7 @@
 
 > **English**: [World-Export-en](World-Export-en) · 中文
 
-`/hassiumc export` 把客户端本地缓存导出为可进单机的原版 Anvil 存档。仅客户端命令，无权限要求。
+`/hassiumc export` 把当前（或指定）服务器的影子端世界目录整体拷贝为导出存档。仅客户端命令，无权限要求。
 
 ---
 
@@ -17,37 +17,19 @@
 | 参数 | 必填 | 说明 |
 | --- | --- | --- |
 | `<serverIp>` | 否 | 指定时导出该服务器缓存；不指定时导出**当前连接**的服务器。格式：`IP_端口` 或纯 `IP` |
-| `seed` | 否 | 不指定时使用随机种子 + 空岛模式 |
+| `seed` | 否 | 保留参数（目录拷贝不涉及种子） |
 
-- 输出目录：`<gameDir>/saves/<worldName>/`
-- 异步执行（后台线程），按维度粒度进度回报到聊天
-- 单 Region 失败不中断整体导出（累加失败计数）
-- 全局防重入：正在导出时拒绝新请求
+- 输出目录：`<gameDir>/hassium_exports/<cacheId>/`（`cacheId` = `server_<IP>_<端口>`，或当前连接服务器的 serverId）
+- 数据源：影子端世界目录 `hassium_cache/<serverId>/world` 整体拷贝
+- 异步执行（后台线程），完成后聊天回报「导出完成 / 导出失败」；未连接时回报「未连接服务器，无法确定导出目标」，目录缺失时回报「未找到影子端世界目录」
 
 ---
 
-## 输出结构
+## 导出内容
 
-| 维度 | 目标目录 |
-| --- | --- |
-| `minecraft:overworld` | `region/` |
-| `minecraft:the_nether` | `DIM-1/region/` |
-| `minecraft:the_end` | `DIM1/region/` |
-| 其它 | `dimensions/<ns>/<path>/region/` |
-
-每个 Region 文件遵循原版布局：
-
-- 双扇区 header（offset table + timestamp）
-- `[length(4)][type=2][zlib data]`
-
-转码路径：Hassium type 126（ZSTD 压缩）→ NBT → zlib type 2
-
-`level.dat` 与 `level.dat_old`：
-
-- 最小可进世界脚手架
-- `DataVersion` = 当前客户端
-- `GameType = SURVIVAL`
-- `SpawnX/Y/Z` 与 `generatorName = default`
+- **数据源**：当前连接（或指定）服务器的影子端世界目录 `hassium_cache/<serverId>/world`，整体拷贝到 `hassium_exports/<cacheId>/`
+- **格式保留**：type 126 + chunkHash 落盘格式不变（与影子端存储写路径一致）
+- **原版翻译**（type 126 → 原版格式）后续提供；届时导出的世界方可直接进单机
 
 ---
 
@@ -57,34 +39,17 @@
 /hassiumc export 192.168.1.100_25565
 ```
 
-输出：
+输出目录：`hassium_exports/server_192.168.1.100_25565/`（与 `hassium_cache/server_192.168.1.100_25565/world/` 目录结构一致）。
 
-```
-saves/MyCacheWorld/
-├── level.dat
-├── level.dat_old
-├── region/
-│   ├── r.0.0.mca
-│   └── r.0.-1.mca
-├── DIM-1/region/
-└── DIM1/region/
-```
-
-完成后在单机主菜单可见 `MyCacheWorld`，进入后可浏览去过的区块。
+完成后聊天回报 `导出完成: <目标路径>`。
 
 ---
 
 ## 限制
 
-导出后聊天回报包含以下限制：
-
-- **无实体、无玩家背包/成就**：缓存仅含方块状态与 BE NBT
+- **无实体、无玩家背包/成就**：影子端世界仅含区块/光照与方块实体数据
+- **格式保留 type 126**：需 Hassium 读取；翻译为原版格式后续提供
 - **仅为「去过的区块」快照**：空洞区块由世界生成器填充
 - **模组方块需相同模组与相近 MC 版本**：否则方块可能显示为未知
-- **DataVersion 与当前客户端一致**：跨版本存档升级交给原版
-- **BE 取决于缓存是否含 NBT**：Live-Unload 快照包含 BE；收包 warm-stash 可能缺失
-- **光照从缓存保留**：`is_light_on=1` 的区块导出时携带 `SkyLight` / `BlockLight`，单机打开无需重算
-
----
-
-[← Beyond-View-Render](Beyond-View-Render) · [Home](Home) · [→ Compatibility](Compatibility)
+- **BE 取决于影子端缓存是否含 NBT**：Live-Unload 快照包含 BE；收包 warm-stash 可能缺失
+- **光照随区块保留**：`is_light_on=1` 的区块携带 `SkyLight` / `BlockLight`

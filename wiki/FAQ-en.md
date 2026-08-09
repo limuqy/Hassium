@@ -60,27 +60,27 @@ A: Ring size depends on the gap between client RD and server view distance. Lowe
 
 ---
 
-## Data plane
+## Network Core and migration
 
-### Q: Is the UDP data plane on by default?
+### Q: Must the client run Hassium to connect through the gateway? Is the UDP data plane on by default?
 
-A: Off by default (`network.dataPlane.enabled = false`). Both features (control failover, weighted routing) are disabled by default; opt in by enabling and configuring reachable endpoints, then verify the six self-check markers in order. See [Data-Plane-and-Failover](Data-Plane-and-Failover-en).
+A: Connecting through the in-process gateway (Network Core) to the master core is the default path in 2.0.0; the UDP data plane (bulk carrier for the gateway↔master channel) is off by default (`network.dataPlane.enabled = false`) and only needs to be enabled when you want data lines. See [Network Core and Master Migration](Network-Core-and-Master-Migration-en).
 
-### Q: Will the client disconnect when the TCP master stalls?
+### Q: Will the client disconnect when the master disconnects or stalls?
 
-A: When the stall exceeds `controlStallMs` (default 6s) and the UDP data plane is healthy, the server issues a `FailoverPermit`. The client does not proactively drop the current master; it switches to the next candidate under the permit. Finalize happens only when candidates are exhausted.
+A: Not immediately. The L1 migration engine decides based on `network.dataPlane.recoveryWindowMs` (default `60000`, the fault-silence timeout) and migrates seamlessly: disk cache and save queue are preserved, the new session resumes directly, no "Connection lost" popup; a real disconnect happens only when the master cannot recover. Migration is smoother when the UDP data plane is enabled and healthy.
 
 ---
 
 ## Export
 
-### Q: Can I open the exported world as a singleplayer world?
+### Q: Can I open the exported world directly as a singleplayer world?
 
-A: Yes. `/hassiumc export` produces a vanilla Anvil save (type 2 Zlib) that appears in the singleplayer menu and can be entered directly.
+A: Not yet. In 2.0.0 `export` copies the shadow-side world directory wholesale, keeping the type 126 + chunkHash on-disk format (vanilla translation is planned later); the export lands in `<gameDir>/hassium_exports/<cacheId>/`.
 
 ### Q: Does the exported world contain entities?
 
-A: **No.** The cache holds only block states and block-entity NBT; no inventory, advancements, or world entities. See [World-Export](World-Export-en) for full caveats.
+A: **No.** The shadow-side world holds only chunk/light and block-entity data; no inventory, advancements, or world entities. See [World-Export](World-Export-en) for full caveats.
 
 ---
 
@@ -96,4 +96,4 @@ A: The hot path is quiet by default. Toggle `debug.*` as needed: `debug.metadata
 
 ---
 
-[← Data-Plane-and-Failover](Data-Plane-and-Failover-en) · [Home](Home-en) · [→ Troubleshooting](Troubleshooting-en)
+[← Network-Core-and-Master-Migration](Network-Core-and-Master-Migration-en) · [Home](Home-en) · [→ Troubleshooting](Troubleshooting-en)

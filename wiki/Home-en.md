@@ -4,7 +4,7 @@
   <img src="https://raw.githubusercontent.com/limuqy/Hassium/master/common/src/main/resources/assets/hassium/logo.png" alt="Hassium Logo" width="200">
 </p>
 
-**Hassium** is a high-performance Minecraft optimization mod providing **efficient storage, network optimization, chunk caching, beyond-view rendering, and lighting optimization**. Covers Minecraft **1.20.1–1.21.11** on **Fabric / Forge / NeoForge**.
+**Hassium** is a high-performance Minecraft optimization mod providing **efficient storage, network optimization, chunk core, beyond-view rendering, and lighting optimization**. Covers Minecraft **1.20.1–1.21.11** on **Fabric / Forge / NeoForge**.
 
 > Repo: [github.com/limuqy/Hassium](https://github.com/limuqy/Hassium) · [简体中文](Home)
 
@@ -21,13 +21,13 @@
 | --- | --- | --- |
 | **Efficient compression** | Storage compression | World chunk ZSTD on disk (type 126) for smaller saves; keeps vanilla Region (`.mca`) layout |
 | | Network compression | More efficient compression for chunks and packets (custom channels + optional global pipeline + aggregation) — less bandwidth and wait time |
-| **Network optimization** | Smooth push | Constant-rate server throttling (150 chunks/s token bucket) + per-tick serialization cap with background encoding; join and view expansion never saturate the main thread |
-| | Control failover | On TCP master disconnect or stall, auto-reconnect through candidate endpoints; during recovery the world freezes on screen by default (optional seamless mode keeps the world running and rolls back after recovery) with the cache kept warm and the disconnect screen hidden (off by default) |
-| | Weighted routing | Multiple UDP/KCP lines share chunk downloads by weight; control stays on vanilla TCP (off by default) |
-| **Chunk caching** | Client chunk cache | Loaded chunks are kept locally; revisiting an area hits via contentHash comparison instead of full downloads |
+| **Network optimization** | Smooth push | Per-tick submit cap (`network.maxChunksPerTick` default `5` ≈ 100 chunks/s at full tick) with background serialization; join and view expansion never saturate the main thread |
+| | Gateway migration | The client connects through an in-process gateway (Network Core) to the master core; on master disconnect/stall the L1 migration engine resumes seamlessly — the cache is not re-downloaded and the disconnect screen stays hidden |
+| | L1 load balancing | Multiple UDP lines share chunk downstream by weight; the UDP data plane is the gateway↔master bulk carrier (off by default) |
+| **Chunk Core** | Chunk Core cache | Loaded chunks are kept locally; revisiting an area hits via contentHash comparison instead of full downloads |
 | | Section delta | On cache mismatch (MISMATCH), fetch only changed sections (`sectionDelta`) and merge locally instead of the whole chunk |
 | | **Beyond-view render** | When client RD exceeds server view distance (multiplayer), fill the outer ring from local cache (render-only; no out-of-range server requests); incompatible with Bobby |
-| | World export | `/hassiumc export` writes the local cache as a vanilla Anvil singleplayer world |
+| | World export | `/hassiumc export` copies the shadow-side world directory wholesale as an export (keeps the type 126 format) |
 | **Lighting optimization** | Light stripping | Server can strip light data; the Hassium engine (shadow side) computes lighting centrally and persists the cache |
 | | Light cache | Light data is cached after first recompute; cache hits apply pre-computed lighting directly, skipping expensive recomputation |
 | | Parallel light engine | Light recomputation runs on a background thread pool; the main thread only submits snapshots (on by default) |
@@ -60,7 +60,7 @@ Details: [Installation](Installation-en).
 | [World-Export](World-Export-en) | Cache world export |
 | [Compatibility](Compatibility-en) | Multi-mod compatibility table |
 | [Support-Matrix](Support-Matrix-en) | Version × loader matrix |
-| [Data-Plane-and-Failover](Data-Plane-and-Failover-en) | Control failover and weighted routing (server ops) |
+| [Network-Core-and-Master-Migration](Network-Core-and-Master-Migration-en) | In-process gateway, seamless migration and the master core (server ops) |
 | [FAQ](FAQ-en) | Frequently asked questions |
 | [Troubleshooting](Troubleshooting-en) | Debug paths and logs |
 

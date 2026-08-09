@@ -4,7 +4,7 @@
   <img src="https://raw.githubusercontent.com/limuqy/Hassium/master/common/src/main/resources/assets/hassium/logo.png" alt="Hassium Logo" width="200">
 </p>
 
-**Hassium** 是 Minecraft 的高性能优化模组，提供**高效存储、网络优化、区块缓存、超视渲染与光照优化**。覆盖 Minecraft **1.20.1–1.21.11**，支持 **Fabric / Forge / NeoForge**。
+**Hassium** 是 Minecraft 的高性能优化模组，提供**高效存储、网络优化、区块核心、超视渲染与光照优化**。覆盖 Minecraft **1.20.1–1.21.11**，支持 **Fabric / Forge / NeoForge**。
 
 > 仓库：[github.com/limuqy/Hassium](https://github.com/limuqy/Hassium) · [English](Home-en)
 
@@ -22,12 +22,12 @@
 | **高效压缩** | 存储压缩 | 区块 ZSTD 落盘（type 126），存档体积显著减小；仍兼容原版 Region（`.mca`）布局 |
 | | 网络压缩 | 区块与数据包 ZSTD 传输（自定义通道 + 可选全局管道 + 聚合），降低带宽与下载等待 |
 | **网络优化** | 平滑推送 | 服务端每 tick 提交上限限速（`maxChunksPerTick`，掉刻自然降速）+ 主线程序列化上限与后台化；进服/扩展视野不卡主线程 |
-| | 主控热切 | TCP 主控断或卡时按候选自动重连；恢复期画面定格（可切无感切换：世界继续运行、恢复后回退）、缓存暖续、隐藏断连界面（默认关） |
-| | 加权分流 | 多 UDP/KCP 线路按 weight 分担区块下载，控制面留原版 TCP（默认关） |
-| **区块缓存** | 客户端缓存 | 曾加载过的区块写入本地；再次进入同一区域时用 contentHash 比对命中，少传全量包 |
+| | 网关迁移 | 客户端经进程内网关（网络核心）接入主控核心；主控断/卡时 L1 迁移引擎无感续流，缓存不重下、断连界面隐藏 |
+| | L1 负载均衡 | 多 UDP 线路按 weight 分担区块下行；UDP 数据面为网关↔主控 bulk 载体（默认关） |
+| **区块核心** | 区块核心缓存 | 曾加载过的区块写入本地；再次进入同一区域时用 contentHash 比对命中，少传全量包 |
 | | 分段增量 | 缓存过期（MISMATCH）时仅拉取变更分段（`sectionDelta`）本地合并，避免整块重传 |
 | | **超视渲染** | 多人服客户端 RD 大于服务端视距时，用本地缓存回填视距外地形（仅渲染、不向服索要视距外区块）；与 Bobby 互斥 |
-| | 世界导出 | `/hassiumc export` 将本地缓存导出为可进单机的原版 Anvil 世界 |
+| | 世界导出 | `/hassiumc export` 把影子端世界目录整体拷贝为导出存档（保留 type 126 格式） |
 | **光照优化** | 光照剥离 | 服务端可剥光省流量，由 Hassium 引擎（影子端）统一计算光照并落盘缓存 |
 | | 光照缓存 | 首次加载重算后缓存光照数据，后续缓存命中直接应用，跳过同步重算 |
 | | 并行光照 | 光照重算在后台线程池并行执行，主线程只提交快照（默认开启） |
@@ -60,7 +60,7 @@
 | [World-Export](World-Export) | 缓存世界导出 |
 | [Compatibility](Compatibility) | 多 Mod 兼容对照表 |
 | [Support-Matrix](Support-Matrix) | 版本 × 加载器支持矩阵 |
-| [Data-Plane-and-Failover](Data-Plane-and-Failover) | 主控热切与加权分流（服主向） |
+| [Network-Core-and-Master-Migration](Network-Core-and-Master-Migration) | 进程内网关、无感迁移与主控核心（服主向） |
 | [FAQ](FAQ) | 常见问题 |
 | [Troubleshooting](Troubleshooting) | 排查路径与日志 |
 

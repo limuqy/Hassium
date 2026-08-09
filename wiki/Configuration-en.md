@@ -8,7 +8,7 @@ Hassium generates two TOML files under `config/hassium/` on startup:
 
 | File | Side | Contents |
 | --- | --- | --- |
-| `hassium-client.toml` | Physical client only | Client cache, beyond-view render, client-side network |
+| `hassium-client.toml` | Physical client only | Chunk Core (`clientCache.*`), beyond-view render, client-side network |
 | `hassium-server.toml` | Dedicated server only | Storage compression, shared network, compat, debug |
 
 In-game config screen entry points:
@@ -31,9 +31,9 @@ In-game config screen entry points:
 | --- | --- | --- |
 | `storage.enabled` | `false` | World save uses ZSTD type 126 (off by default; dedicated servers only — **back up worlds before first enable**) |
 | `storage.mode` | `mirror` | Storage mode (only `mirror` is wired) |
-| `storage.zstdLevel` | `9` | Storage compression level; higher = smaller saves, more CPU |
+| `storage.zstdLevel` | `3` | Storage compression level; higher = smaller saves, more CPU |
 
-### Client cache
+### Chunk Core (`clientCache.*`)
 
 | Key | Default | Notes |
 | --- | --- | --- |
@@ -53,20 +53,10 @@ In-game config screen entry points:
 | `network.enabled` | `true` | Custom `hassium:*` channels (off = revert to vanilla full packets) |
 | `network.globalPacketCompression` | `true` | Replace the vanilla Netty Zlib with ZSTD globally (off = coexist with protocol-replacement mods) |
 | `network.compressionLevel` | `3` | Network compression level (speed-biased) |
-| `network.maxChunksPerTick` | `4` | Per-player submit cap per tick (send rate = cap × tick rhythm; ≈ 4×20/s at full tick, naturally slows on lag) |
-| `network.metricsEnabled` | `true` | Metrics collection (turn off disables `/hassium stats` etc.) |
-| `network.enablePacketAggregation` | on by default | Packet aggregation; turn off if a third-party channel misbehaves |
-| `network.compressionBlacklist` | empty | Packet ID list; matched packets bypass compression/aggregation |
-
-### Data plane (advanced, off by default)
-
-| Key | Default | Notes |
-| --- | --- | --- |
-| `network.dataPlane.enabled` | `false` | UDP/KCP data plane, control failover, and weighted routing (off by default; configure reachable endpoints and verify the six self-check markers in order before enabling) |
-| `network.dataPlane.controlStallMs` | `6000` | Stalled-master duration before the client sends `FailoverRequest` |
-| `network.dataPlane.failoverPermitTtlMs` | `30000` | Validity window for the server-issued `FailoverPermit` |
-
-See [Data-Plane-and-Failover](Data-Plane-and-Failover-en).
+| `network.maxChunksPerTick` | `5` | Per-player submit cap per tick (send rate = cap × tick rhythm; ≈ 5×20 = 100/s at full tick, naturally slows on lag) |
+| `network.metricsEnabled` | `false` | Metrics collection (turn off disables `/hassium stats` etc.) |
+| `network.enablePacketAggregation` | `true` | Packet aggregation; turn off if a third-party channel misbehaves |
+| `network.compressionBlacklist` | 10-item default | Packet ID list; matched packets bypass compression/aggregation (default includes CHUNK_PAYLOAD / SECTION_DELTA / HANDSHAKE / DICTIONARY_SYNC / INDEX_SYNC / CHUNK_HASH / LIGHT_DELTA / BLOCK_ENTITY_DATA / MAIN_CHANNEL / AGGREGATION) |
 
 ### Compat & debug
 

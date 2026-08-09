@@ -17,6 +17,7 @@ Hassium 提供两组命令：
 | --- | --- | --- |
 | `/hassium stats` | 查看服务端压缩与发送统计 | 需要 OP 2 |
 | `/hassium stats reset` | 重置服务器端统计计数器 | 需要 OP 2 |
+| `/hassium stats toggle` | 切换指标收集开关 | 同上 |
 | `/hassium metrics on` | 运行时打开指标收集 | 同上 |
 | `/hassium metrics off` | 运行时关闭指标收集 | 同上 |
 
@@ -28,14 +29,14 @@ Hassium 提供两组命令：
 
 | 命令 | 说明 |
 | --- | --- |
-| `/hassiumc stats` | 查看客户端统计：接收字节数、压缩节省、缓存命中、超视渲染、光照优化 |
-| `/hassiumc export [<serverIp>] [seed]` | 把本地缓存导出为可进单机的原版 Anvil 世界 |
+| `/hassiumc stats` | 查看客户端统计：带宽压缩、区块缓存（全命中+增量）、区块加载（新增+过期+本地）、光照缓存、光照重算、超视渲染 ON\|OFF、带宽节省 |
+| `/hassiumc export [<serverIp>] [seed]` | 把影子端世界目录整体拷贝为导出存档 |
 
 > `export` 参数：
 >
 > - `<serverIp>` 可选；不指定时导出当前连接的服务器缓存（格式：`IP_端口`，或纯 IP）
-> - `seed` 可选；不指定时使用随机 seed + 空岛模式
-> - 输出目录：`<gameDir>/saves/<worldName>/`
+> - `seed` 保留参数（目录拷贝不涉及种子）
+> - 输出目录：`<gameDir>/hassium_exports/<cacheId>/`（保留 type 126 + chunkHash 格式；翻译为原版格式后续提供）
 >
 > 详见 [World-Export](World-Export)。
 

@@ -4,7 +4,7 @@
 
 > **English**: [Features-en](Features-en) · 中文
 
-Hassium 用一套客户端 + 服务端配合，从**高效压缩、网络优化、区块缓存、光照优化、实用工具**五个方向优化 Minecraft。本页按大类给出每条功能的速览与适用条件。
+Hassium 用一套客户端 + 服务端配合，从**高效压缩、网络优化、区块核心、光照优化、实用工具**五个方向优化 Minecraft。本页按大类给出每条功能的速览与适用条件。
 
 ---
 
@@ -14,7 +14,7 @@ Hassium 用一套客户端 + 服务端配合，从**高效压缩、网络优化�
 
 - **目标**：缩小世界存档体积，仍兼容原版 `.mca` 布局
 - **怎么做的**：服务端把每个 chunk payload 用 ZSTD 压缩并标记为 type 126；外层 Region（32×32）数据结构不变
-- **配置**：`storage.enabled`（默认 `false`，仅专用服务器）、`storage.zstdLevel`（默认 `9`）
+- **配置**：`storage.enabled`（默认 `false`，仅专用服务器）、`storage.zstdLevel`（默认 `3`）
 - **注意**：首次启用会改写区块落盘格式，**备份世界**。详见 [FAQ](FAQ)。
 
 ---
@@ -36,7 +36,7 @@ Hassium 用一套客户端 + 服务端配合，从**高效压缩、网络优化�
 
 - **目标**：进服与视野扩展时服务端不把主线程压满、客户端不出现卡顿尖峰
 - **服务端怎么做**（推送侧）：
-  - **tick 粒度限速**：`network.maxChunksPerTick`（默认 `4`）限制每玩家每 tick 提交上限（4×20 = 80/s 满 tick）；掉刻时每 tick 提交量不变、每秒总量自然下降，即保护主线程，主线程峰值 ≤ ~8ms/tick
+  - **tick 粒度限速**：`network.maxChunksPerTick`（默认 `5`）限制每玩家每 tick 提交上限（5×20 = 100/s 满 tick）；掉刻时每 tick 提交量不变、每秒总量自然下降，即保护主线程，主线程峰值 ≤ ~8ms/tick
   - **序列化后台化**：encode / ZSTD 压缩 / hash 计算 / 发送全部在推送线程池（`serverChunkPushThreads` 默认 2，可动态伸缩）；主线程只做 packet 构建——与原版对齐（原版也是主线程构建 + netty 线程编码），1.20.x/1.21.1 甚至整条序列化链都在后台
 - **客户端怎么做**（加载侧）：
   - 每帧主线程 apply 预算 `clientCache.mainThreadChunkBudgetMs`（默认 `15`）
@@ -45,34 +45,34 @@ Hassium 用一套客户端 + 服务端配合，从**高效压缩、网络优化�
 
 ---
 
-### 主控热切
+### 进程内网关与无感迁移
 
-- **目标**：TCP 主控断或卡时按候选自动重连，缓存暖续、隐藏断连界面；恢复期默认画面定格（tick 暂停、过渡画面仅隐藏渲染），也可切无感模式（世界继续运行、恢复后回退），玩家全程看不到切换 UI
-- **怎么做的**：服务端预先把控制面候选端点列表随握手下发客户端；主控硬断或卡顿超过阈值且 UDP 数据面健康时，客户端按候选自动连下一个可达端点，不弹"连接丢失"。切会话期间磁盘缓存、保存队列、任务执行器全保留，新会话直接续上——命中率不掉、地形不需重下；恢复期间过渡画面（连接/加载/接收世界）保持 vanilla 驱动但隐藏绘制；定格模式（`network.dataPlane.recoveryFreeze=true`，默认）世界 tick 暂停，屏幕保持冻结世界 + 「正在切换主控…」浮层，恢复成功画面直接续动；无感模式（false）世界照常运行、输入被恢复窗口吞掉，恢复成功后位置回退到断线点、刚挖的方块还原，体感如同突然延迟变高卡了一下
-- **默认**：关闭（`network.dataPlane.enabled = false`，模组默认走原版 TCP 单连接）。需运维能力，启用前请确认 Nginx / 公网防火墙 / NAT 规则
-- **配置**：`network.dataPlane.controlStallMs`（默认 `6000`，主控卡顿多久触发 failover）、`failoverPermitTtlMs`（默认 `30000`，服务端下发 FailoverPermit 有效期）、`network.dataPlane.recoveryFreeze`（客户端默认 `true`；false=无感切换）
-- **专文**：[主控热切与加权分流](Data-Plane-and-Failover)
+- **目标**：客户端经进程内网关（网络核心）接入主控核心；主控断线或卡顿时无感迁移，缓存续流、断连界面隐藏，玩家全程看不到切换
+- **怎么做的**：客户端进程内网络核心（`network/core/`：NetworkCore 状态机 / outbound 帧协议 / migration 迁移引擎 / viafabric 桥）经网关帧协议连接主控核心（`network/gateway/`，GatewayServer）；主控故障由 L1 迁移引擎按 `network.dataPlane.recoveryWindowMs`（默认 `60000`，故障静默超时）判定后直接迁移——磁盘缓存、保存队列、任务执行器全保留，新会话直接续上，命中率不掉、地形不需重下，不弹「连接丢失」
+- **UDP 数据面**：网关↔主控通道的 bulk 载体（UDP/KCP，AES-GCM 双向认证），默认关（`network.dataPlane.enabled = false`）；关闭时全部流量走网关帧连接
+- **配置**：`network.dataPlane.enabled`（默认 `false`）、`network.dataPlane.recoveryWindowMs`（默认 `60000`）、`network.controlReachableEndpoints`（主控网关监听端点；未配置时兜底 `25566`）
+- **专文**：[网络核心与主控迁移](Network-Core-and-Master-Migration)
 
 ---
 
-### 加权分流
+### L1 负载均衡
 
 - **目标**：高人数服区块下行的带宽瓶颈，用多线路分担
-- **怎么做的**：区块下载走 UDP/KCP 数据面，可配多个 endpoint（多条线路），按 `weight` 加权轮询承载。一条线路打满或降级时流量自动压到其余线路；登录、命令、实体同步等"控制类"流量仍走原版 TCP，不受数据线路波动影响
-- **默认**：关闭（与主控热切同开关 `network.dataPlane.enabled = false`）。需按线路配公网 UDP 端点
-- **配置**：每个 endpoint 在 `network.dataPlane.udpEndpoints` 配置 `weight`（默认 `100`），可设 `priority` 控制候选顺序
-- **专文**：[主控热切与加权分流](Data-Plane-and-Failover)
+- **怎么做的**：主控核心监听控制可达端点；UDP 数据面可配置多个 UDP listener（`network.dataPlane.udpListeners`），按 `weight` 加权轮询承载区块下行。一条线路打满或降级时流量自动压到其余线路；登录、命令、实体同步等“控制类”流量仍走网关帧连接，不受数据线路波动影响
+- **默认**：关闭（与数据面同开关 `network.dataPlane.enabled = false`）。需按线路配公网 UDP 端点
+- **配置**：`network.dataPlane.udpListeners`（weight 默认 `100`）
+- **专文**：[网络核心与主控迁移](Network-Core-and-Master-Migration)
 
 ---
 
-## 区块缓存
+## 区块核心
 
-### 客户端区块缓存
+### 区块核心缓存
 
 - **目标**：再次进入同一区域少传全量区块
 - **怎么做的**：服务端在推送前算 chunkHash；客户端用本地缓存里的 contentHash 比对，命中直接走本地解压 apply，跳过原版全量下载
 - **配置**：`clientCache.enabled`（默认 `true`）
-- **细节**：客户端缓存以磁盘 NBT（`HBT1` magic + CompoundTag）存于 `hassium_cache`；按热度淘汰（不整文件删除 `.mca`）。分段增量、超视渲染、世界导出都复用同一份缓存数据（见下）
+- **细节**：缓存由区块核心影子端承担——进服区块统一落盘原版存档 `hassium_cache/<serverId>/world`（type 126 + chunkHash；旧 HBT1 客户端缓存格式已裁剪）；按热度淘汰（`heat.idx` 跨会话累计）。分段增量、超视渲染、世界导出都复用同一份缓存数据（见下）
 
 ---
 
@@ -102,7 +102,7 @@ Hassium 用一套客户端 + 服务端配合，从**高效压缩、网络优化�
 
 ### 世界导出
 
-- **目标**：把本地缓存导出为可进单机的原版 Anvil 世界
+- **目标**：把影子端世界目录导出为独立存档（保留 type 126 + chunkHash 格式，原版翻译后续提供）
 - **命令**：`/hassiumc export [<serverIp>] [seed]`
 - **专文**：[World-Export](World-Export)
 
@@ -112,7 +112,7 @@ Hassium 用一套客户端 + 服务端配合，从**高效压缩、网络优化�
 
 ### Hassium 引擎（默认开启）
 
-- **是什么**：进服后在客户端进程内启动影子服务端，统一承担全部区块光照计算——客户端不再自己算光，加载阶段主线程不再被光照重算占用
+- **是什么**：进服后在客户端进程内启动影子端（区块核心后端引擎），统一承担全部区块光照计算——客户端不再自己算光，加载阶段主线程不再被光照重算占用
 - **总开关**：`clientCache.hassiumEngineEnabled`（默认 `true`）；关闭后服务端在握手时不剥光（未声明引擎可用），光照随包自带
 - **启动失败自动降级**：影子端启动失败时自动关闭客户端缓存 / 超视渲染 / SeedGen 并在游戏内提示，网络与基础加载不受影响；服务端未装 Hassium MOD 时影子端不启动（无世界种子），光随数据包自带，缓存 / OVD / 世界导出仍可用
 - **世界种子**：影子端使用服务端握手下发的 worldSeed（服务端已装 MOD），不自行生成世界
@@ -129,7 +129,7 @@ Hassium 用一套客户端 + 服务端配合，从**高效压缩、网络优化�
 
 - **目标**：客户端避免重复算光
 - **怎么做的**：影子端算好的光照写回缓存（`is_light_on=1`，随区块数据一体存储）；后续缓存命中直接 apply 已存光照；SectionDelta 合并后强制 `is_light_on=0` 交由影子端重新计算
-- **指标**：`/hassiumc stats` 显示 `光照优化：xx%（命中 N，重算 M）`
+- **指标**：`/hassiumc stats` 显示 `光照缓存：xx%（命中 N，重算 M）` 与 `光照重算：主线程 x ms，后台 y ms`
 
 ---
 
@@ -139,8 +139,8 @@ Hassium 用一套客户端 + 服务端配合，从**高效压缩、网络优化�
 
 | 命令 | 侧 | 输出 |
 | --- | --- | --- |
-| `/hassium stats` | 服务端 | 原始字节 / 发送字节 / 压缩节省 / 推送统计 |
-| `/hassiumc stats` | 客户端 | 接收字节 / 缓存命中 / 超视渲染 / 光照优化 |
+| `/hassium stats` | 服务端 | 发送（原版 Zlib 等价）/ 节省% / 压缩比 / 元数据发送 / 数据请求接收 / 区块压缩 |
+| `/hassiumc stats` | 客户端 | 带宽压缩 / 区块缓存（全命中+增量）/ 区块加载（新增+过期+本地）/ 光照缓存 / 光照重算 / 超视渲染 ON\|OFF / 带宽节省 |
 
 完整命令参考见 [Commands](Commands)。
 

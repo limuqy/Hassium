@@ -32,7 +32,7 @@ Hassium 与常见优化 mod 的兼容性概览与配置逃生口。每条结论�
 | 拓扑 | 结论 |
 | --- | --- |
 | 同版本双端均装 Hassium | Via 不参与；正常 |
-| 服务端 Hassium + Via，客户端**无** Hassium | 支持：握手失败回退原版，Via 翻译原版协议 |
+| 服务端 Hassium + Via，客户端**无** Hassium | 支持：未装模组的客户端走原版协议，Via 翻译原版协议 |
 | 双端都装 Hassium 但 MC 版本不同（靠 Via 桥） | ❌ 不支持（线格式随 `MC_VER` 绑定） |
 
 > 同进程 Via 与 `globalPacketCompression` 叠用可能干扰压缩帧假设。建议同进程 Via 时关闭全局压缩。

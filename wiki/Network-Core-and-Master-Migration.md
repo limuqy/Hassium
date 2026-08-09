@@ -1,138 +1,108 @@
-# 主控热切与加权分流
+# 网络核心与主控迁移
 
 ---
 
-> **English**: [Data-Plane-and-Failover-en](Data-Plane-and-Failover-en) · 中文
+> **English**: [Network-Core-and-Master-Migration-en](Network-Core-and-Master-Migration-en) · 中文
 
 ## 这是什么
 
-**主控热切**和**加权分流**是 Hassium 的两项网络能力，专门解决多人服在主连接抖动时玩家"卡死/掉线/重进"的体验问题，以及高人数服带宽吃紧时的负载分担问题。二者配合使用：主控热切保证"主连接出问题时玩家几乎无感知"，加权分流负责"把区块下载流量分散到多条线路"。
-
-对应 Home 能力列表中的两条：
+**网络核心**与**主控迁移**是 Hassium 2.0.0 的客户端网络架构：客户端进程内由**网络核心**（NetworkCore，`network/core/`）完全接管与主控的收发，世界侧只见纯原版协议；服务端进程内的**主控核心**（`network/gateway/` 网关 + 服务端区块推送）提供对应接入。两者配合达成三件事：
 
 | 能力 | 说明 |
 | --- | --- |
-| **主控热切** | TCP 主控断或卡时按候选自动重连，恢复期画面定格、缓存暖续、隐藏断连界面（数据面 failover） |
-| **加权分流** | 多 UDP/KCP endpoint 按 weight 加权轮询承载数据面，控制面留原版 TCP |
+| **进程内网关** | 客户端↔世界侧纯原版协议（零压缩/零聚合/零自定义包）；网络核心 handler 直调注入 S2C、`routeC2S` 收口 |
+| **无感主控迁移** | 换 outbound + 续流票据（epoch 防重放）+ `resumeAccepted`；客户端 Connection 不断、世界零重载 |
+| **L1 负载均衡** | 故障 / 负载阈值 / 维护窗口 / 演练四类触发迁移；预热 + 空闲窗口 |
+
+2.0.0 之前的断连重连方案已退役：客户端不再维护候选端点表、不弹恢复界面。架构决策与删除清单见 [网络核心交接文档](../docs/handoff/handoff-2026-08-09-network-core.md)，旧研究归档见 [docs/archive/](../docs/archive/)。
 
 ---
 
-## 解决什么问题（举例）
+## 进程内网关架构
 
-**问题一：主连接抖一下，全员掉线回主菜单。**
+### 客户端：世界侧纯原版协议
 
-原版 Minecraft 的登录、聊天、命令、实体同步走一条 TCP 主连接（master Play connection）。区块下载也挤在同一条线上。当主连接卡顿几秒（网络抖动、服主重启、机器迁移）或断开，客户端会弹"连接丢失"界面、踢玩家回主菜单、缓存丢失，重进又要重新下载所有区块——几个玩家正在地心探索，服主例行维护重启，全员进度看起来"白走了"。
+客户端进程内网络收发由网络核心接管，世界侧（`Minecraft` 游戏线程可见的）连接只是"壳"：
 
-**主控热切**做的：主连接断或卡时，客户端按服务端预先下发的候选列表自动连下一个可达端点，**不弹断连界面**。已下载的区块缓存和任务执行器都保留下来，切到新会话直接续上——探索过的地形仍在缓存里，命中率不掉。**有两种恢复表现**（`network.dataPlane.recoveryFreeze`，客户端默认 true）：定格模式——世界 tick 暂停、过渡画面（连接/加载/接收世界）仅隐藏渲染，屏幕保持冻结世界 + 「正在切换主控…」浮层，恢复成功画面直接续动，全程看不到加载画面；无感模式（false）——世界照常运行，玩家操作本地照常生效但发不到服务器，恢复成功后位置回退到断线点、刚挖的方块还原，体感如同突然延迟变高卡了一下，全程无任何切换 UI。
+- **C2S 收口**：PLAY 期客户端出站包经 `MixinConnection` 截获后全部转网关自有通道，由 `NetworkCore.routeC2S` 统一路由；壳连接仅 keep-alive 响应仍走原版 TCP。
+- **S2C 注入**：网关自有通道收包解码后，网络核心经 handler 层**直调注入**原版监听器（`NetworkCore.dispatchS2C`），世界侧只见原版 `Packet` 对象。
+- **零压缩 / 零聚合 / 零自定义包**：客户端↔世界侧不再承载任何 Hassium 压缩、聚合或自定义协议字节——管道层 Mod、handler 层 Mod 全部兼容。
 
-**问题二：几百人同时进服，主连接带宽被打满。**
+### 主控：网关通道
 
-高人数服的瓶颈常是区块下行：每人都拉一片地形，单条线扛不住。扩容还要担心线路不稳那一边出问题。
-
-**加权分流**做的：区块下载走 UDP/KCP 数据面，可以配多个 endpoint（多条线路），按 `weight` 加权轮询分担。一条线路满或降级，流量自动压到其余线路。登录命令等"控制类"流量仍走原版 TCP，不受数据线路波动影响。
-
----
-
-## 谁适合启用
-
-这两项能力**默认关闭**——`network.dataPlane.enabled = false`，模组默认走原版 TCP 单连接，普通联机行为不受影响。需要主控热切或公网分流时，按以下步骤启用：
-
-1. 服主具备 Nginx / 公网防火墙 / NAT 规则的运维能力；
-2. 在 `hassium-server.toml` 中设 `network.dataPlane.enabled = true`，并配置可达的公网端点；
-3. 依次确认 6 个自检标记（见文末）。
-
-> ⚠️ 生产环境配置仍在迁移过程中，目前由 `DataPlanePoCConfig` 临时驱动。不具备上述运维能力的服主保持默认关闭即可，不影响其它能力。
-
-对**单个朋友联机**或**小型私服**的普通玩家：保持默认关闭即可，无需关心本页后续内容。本页技术细节面向有运维需求的服主。
-
----
-
-## 技术细节
-
-以下内容面向有运维能力的服主。普通玩家可跳至 [FAQ](FAQ) 查看常见问题。
+- 网关帧连接（`GatewayChannel`）即控制连接，承载全量玩家流量；ZSTD 装在帧协议**之外**（`ControlFrameCodec` 外挂载，客户端 `OutboundConnection.installZstd` / 主控 `GatewayChannel.installZstd`，阈值与等级复用 `network.globalCompression*` 配置）。
+- **聚合仅主控侧 vanilla 路径**：包聚合挂 vanilla `Connection.send`（`MixinConnection` 仅对服务端玩家监听器生效），网关通道不聚合。
+- **UDP 数据面**（`network/dataplane/`）完整保留，作为网关↔主控通道的 bulk 载体，默认关（`network.dataPlane.enabled = false`）。
 
 ### 拓扑总览
 
-| 平面 | 用途 | 协议 |
+| 连接 | 承载 | 协议 |
 | --- | --- | --- |
-| **控制面（Master TCP）** | 原版 Minecraft login + Play Connection | TCP |
-| **数据面（UDP/KCP）** | 区块 bulk 与数据面分发 | UDP/KCP（独立 session 与 KCP ReliableDatagramSession） |
+| 客户端世界侧壳连接 | keep-alive 响应 + handler 注入的原版包 | 纯原版 TCP（零压缩/零聚合/零自定义包） |
+| 网关↔主控自有通道 | 全量玩家流量（帧 + ZSTD） | 帧协议（ControlFrameCodec），ZSTD 帧外 |
+| UDP 数据面（可选） | bulk 区块载体 | UDP（`network/dataplane/`，默认关） |
 
-- 控制面端点列表由 S2C handshake tail 下发（host:port + priority）
-- 客户端混合 bootstrap + advertised，按 priority 降序，最多 4 个候选（`ControlEndpointManager.MAX_CANDIDATES`）
-- 每个 `(host, port)` UDP 端点绑一个独立 KCP `ReliableDatagramSession`
-- 客户端对每个 advertised endpoint 单独 BindRequest + HKDF 派生 AES-GCM key
+---
 
-### 触发条件
+## 无感主控迁移
 
-**硬断连**：Master TCP `channelInactive` → `ControlReconnectOrchestrator.onPrimaryDisconnected` 立刻 launch 下一个候选；客户端进入 60 秒恢复窗口。恢复期世界 tick/实体 tick 暂停（定格模式）、断连画面与过渡画面均不呈现，仅显示切换浮层。
+迁移 = 客户端**换 outbound**（网关帧连接从主控 A 换到主控 B），`NetworkCore` 状态机 `ACTIVE → MIGRATING → ACTIVE`。原版连接不断开、不弹任何断连/加载界面，世界不重载。
 
-**Master stalled + UDP healthy**：服务端检测 control stall（默认 6 秒）。stalled 期间 `DataPlaneUdpServer.recordControlActivity` 推进；若 UDP session 健康（epoch 一致）服务端下发 `FailoverPermit`（`expiryMs` 默认 30 秒），客户端 `attemptConnectOnlyIfPermitValid` 才连接。
+### 续流票据 ResumeTicket
 
-### 恢复期保留资源
+迁移握手携带**续流票据**（`ResumeTicket`，`network/` 包）：
 
-`ClientRecoveryState.shouldSuppressFinalization()` 为真时，`ClientLifecycleHelper.finalizeDisconnectIfTerminal` 短路 `finalizeDisconnect`：
+- **构造**：`playerId`（16B）+ `epoch`（8B BE）经 HMAC-SHA256 签名，密钥为主控 A/B 共享密钥（`ResumeTicket.setSharedKey`）。
+- **防重放**：`epoch` 在客户端进程生命周期内单调递增（1 起，登录不重置）；主控 `ResumeTicketValidator` 记录各玩家最后接受的 epoch（跨会话不清理），验签通过且 epoch 递增才接受——旧票据重放一律拒绝。
+- **握手结果**：`HandshakeStateTail` S2C 尾携带 `resumeAccepted`：
+  - `resumeAccepted = true`（续流就绪）：主控按票据中的玩家身份复用 UUID-keyed 推送链（`ServerChunkPushManager.markPlayerResumeActive`），数据推送直接流入，客户端磁盘缓存与任务执行器原样承接；
+  - `resumeAccepted = false`（会话未附着）：无票据 / 验票失败 / 重放，会话待登录桥（`GatewayPlayerBridge.attachPlayer`）附着，数据推送不流入，走登录桥/重连兜底。
 
-- 磁盘缓存保留
-- `CacheSaveQueue` 保留
-- `HassiumTaskExecutor` 保留
-- dirty 标志保留
+### 客户端零重载
 
-进入下一候选会话时缓存可直接承接，**命中率不降**。
+迁移全程原版 `Connection` 状态保持、世界照常运行，成功接管后画面无感知。续流失败也不回滚到整段重载——只退化为登录桥兜底路径。
 
-`ClientPlayConnectionEvents.DISCONNECT` 路径调 `DataPlaneClientLifecycle.stopUdp(/*keepLease*/ true)`，UDP bundle 不立即释放。
+---
 
-### 候选耗尽
+## L1 负载均衡
 
-`ControlReconnectOrchestrator.performTerminalFinalization` 调 `ClientLifecycleHelper.finalizeDisconnectIfTerminal`，单例 `ClientRecoveryState.consumeTerminalCleanup` 保证只触发一次磁盘资源关闭。
+`MigrationEngine`（`network/core/migration/`）是 L1 迁移引擎：触发判定 + 迁移编排 + 预热 + 空闲窗口。四类触发：
 
-### 加权分流
+| 触发 | 条件 | 行为 |
+| --- | --- | --- |
+| **故障** | outbound 入站静默超过 `faultTimeoutMs`（默认 60000，沿用 `network.dataPlane.recoveryWindowMs` 语义）；心跳线程按 `heartbeatIntervalMs`（默认 5000）发 HEARTBEAT 监测 | 不预热，直接 `migrateToImmediate` |
+| **负载阈值** | 主控负载报告（`ServerLoadReporter`）：TPS < `minTps`（默认 15.0）或系统负载均值 > `maxLoadAverage`（默认 4.0） | 策略迁移（预热） |
+| **维护窗口** | `maintenanceWindow`（"HH:MM-HH:MM"，本地时区、支持跨午夜；空串禁用）：窗口内恒触发 | 策略迁移（预热） |
+| **演练** | 手动调用迁移入口（`NetworkCore.migrateTo`；命令/API 接线为后续波） | 策略迁移（预热） |
 
-数据面支持多个 UDP endpoint 按 `weight` 加权轮询承载：
+### 预热 + 空闲窗口
 
-- 每个端点一个 `ReliableDatagramSession`
-- 按 `weight` 跑 WRR
-- 支持 `share` / `exclusive` 路由模式
-- UDP 健康度可调权（degraded 降级）
+- **预热**（`PrewarmSession`，`prewarmEnabled` 默认 true）：迁移前先连目标主控，以续流票据建立玩家会话——B 侧物化玩家 + `resyncTrackedChunks` 预同步；迁移时直接接管该连接，增量趋近零。
+- **空闲窗口**（`IdleWindowDetector`）：玩家静止（移动低于阈值）且区块 hash 稳定（增量已收敛）→ 判定为适合迁移的时机。负载/维护/演练路径优先在空闲窗口内执行；故障路径不受限。
 
 ---
 
 ## 配置项
 
+> 2.0.0 **无新增 gateway 配置键**。网关监听端口复用 `network.controlReachableEndpoints[0]`；`dataPlane` 键族保留、语义部分迁移（见下）。
+
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
-| `network.dataPlane.enabled` | `false` | 数据面总开关（默认关；启用前请配置可达端点并依次确认 6 个自检标记） |
-| `network.dataPlane.controlStallMs` | `6000` | Master TCP 卡顿多久触发 `FailoverRequest` |
-| `network.dataPlane.failoverPermitTtlMs` | `30000` | 服务端 `FailoverPermit` 有效期 |
-| `network.dataPlane.udpEndpoints` | （待 toml 化） | 候选列表，每项 `host`、`port`、`weight`、可选 `priority` |
+| `network.enabled`（双端） | `true` | Hassium 自定义通道总开关（客户端/服务端） |
+| `network.controlReachableEndpoints` | `[]` | 主控网关监听地址源；端口取 `endpoints[0].port()`（0 < port < 65536 时），**否则兜底 `25566`**（`GatewayPlayerBridge.DEFAULT_GATEWAY_PORT`，与 vanilla 端口错开）；host 为空兜底 `0.0.0.0` |
+| `network.compressionLevel` | `3` | 自定义通道 ZSTD 压缩等级 |
+| `network.globalPacketCompression` / `globalCompressionLevel` / `globalCompressionThreshold` | `true` / `3` / `256` | 全局压缩配置；同时作为网关通道 ZSTD 安装的阈值/等级源 |
+| `network.dataPlane.enabled` | `false` | UDP 数据面总开关（**默认关**） |
+| `network.dataPlane.recoveryWindowMs` | `60000` | 2.0.0 语义 = **L1 迁移引擎故障静默超时**（`faultTimeoutMs`）；键名沿用，归属数据面族，消费在网络核心 |
 
-> `udpEndpoints` 目前通过 S2C tail 下发；正式落地到 `hassium.toml` 后才能在文件里手改。
+要点：
 
----
-
-## 运维须知
-
-1. 每个公网 `udpEndpoints` 端点需要公网 UDP 防火墙/NAT 规则放行
-2. 10 秒 UDP `lease` 仅用于 drain in-flight data；login 完成前不产生新玩家数据
-3. `controlStallMs` 要求服务端 issue `FailoverPermit`；客户端不会因 latency 单独创建第二条 master Play 连接
-4. TCP 控制 endpoints 与 UDP endpoints 分开列表，公网端口可能不同
-5. Nginx `stream` 反代可承载 TCP 主控 + UDP 直连 failover（见下方自检流程）
+- 客户端 outbound 地址源 = L1 迁移引擎（非配置直读）；端点列表后续由主控握手/CONFIG 帧通告（T10 接线）。
+- 服务端 `dataPlane` 键族其余键（控制静默判定等）为服务端旧判定链保留，客户端侧不再消费。
+- `recoveryFreeze`（CLIENT）键保留但无 UI 消费（仅冒烟打标），历史语义不再描述恢复画面行为。
 
 ---
 
-## 自检标记（公网部署前必跑）
-
-| 标记 | 含义 |
-| --- | --- |
-| `UDP_BIND_OK` | 服务端 UDP 端点成功 bind |
-| `UDP_WRR_OK` | 加权轮询分发正确 |
-| `FAILOVER_PERMIT_OK` | 服务端能在 stall + UDP healthy 时下发 permit |
-| `FAILOVER_RECONNECT_OK` | 客户端能按 permit 切到下一候选 |
-| `CACHE_RESUME_HIT` | 切换后磁盘缓存续上、命中率不降 |
-| `FAILOVER_TERMINAL_OK` | 候选耗尽时 finalize exactly once |
-
-关闭 `network.dataPlane.enabled` 时不应该有任何 UDP listener/bind/failover 行为（regression guard）。
-
----
+## 相关页面
 
 [← Support-Matrix](Support-Matrix) · [Home](Home) · [→ FAQ](FAQ)

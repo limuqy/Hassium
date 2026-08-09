@@ -4,7 +4,7 @@
 
 > **简体中文**: [World-Export](World-Export) · English
 
-`/hassiumc export` writes the client-side cache to a vanilla Anvil singleplayer world. Client-only command, no permission required.
+`/hassiumc export` copies the shadow-side world directory of the current (or a given) server as an export. Client-only command, no permission required.
 
 ---
 
@@ -17,37 +17,19 @@
 | Argument | Required | Notes |
 | --- | --- | --- |
 | `<serverIp>` | no | When given, exports that server's cache; defaults to the **currently connected** server. Format: `IP_port` or bare `IP` |
-| `seed` | no | When omitted, a random seed is used in barrier-island mode |
+| `seed` | no | Retained argument (a directory copy does not involve the seed) |
 
-- Output directory: `<gameDir>/saves/<worldName>/`
-- Runs asynchronously (background thread); progress is reported in chat per dimension
-- A single failing Region does not abort the whole export (failures are counted)
-- Re-entrancy guard rejects new requests while an export is running
+- Output directory: `<gameDir>/hassium_exports/<cacheId>/` (`cacheId` = `server_<IP>_<port>`, or the current server's serverId)
+- Source: wholesale copy of the shadow-side world directory `hassium_cache/<serverId>/world`
+- Runs asynchronously; chat reports "export finished / export failed" on completion; "not connected to a server" when offline, "shadow-side world directory not found" when the source is missing
 
 ---
 
-## Output structure
+## What the export contains
 
-| Dimension | Target directory |
-| --- | --- |
-| `minecraft:overworld` | `region/` |
-| `minecraft:the_nether` | `DIM-1/region/` |
-| `minecraft:the_end` | `DIM1/region/` |
-| Other | `dimensions/<ns>/<path>/region/` |
-
-Each Region file follows the vanilla layout:
-
-- Dual-sector header (offset table + timestamp)
-- `[length(4)][type=2][zlib data]`
-
-Transcode path: Hassium type 126 (ZSTD) → NBT → zlib type 2
-
-`level.dat` and `level.dat_old`:
-
-- Minimal singleplayer-world scaffold
-- `DataVersion` = current client
-- `GameType = SURVIVAL`
-- `SpawnX/Y/Z` and `generatorName = default`
+- **Source**: the shadow-side world directory `hassium_cache/<serverId>/world` of the current (or given) server, copied wholesale to `hassium_exports/<cacheId>/`
+- **Format kept**: type 126 + chunkHash on-disk format, unchanged (same as the shadow-side storage write path)
+- **Vanilla translation** (type 126 → vanilla format) is planned later; until then the export cannot be opened directly as a singleplayer world
 
 ---
 
@@ -57,34 +39,17 @@ Transcode path: Hassium type 126 (ZSTD) → NBT → zlib type 2
 /hassiumc export 192.168.1.100_25565
 ```
 
-Output:
+Output directory: `hassium_exports/server_192.168.1.100_25565/` (mirroring the layout of `hassium_cache/server_192.168.1.100_25565/world/`).
 
-```
-saves/MyCacheWorld/
-├── level.dat
-├── level.dat_old
-├── region/
-│   ├── r.0.0.mca
-│   └── r.0.-1.mca
-├── DIM-1/region/
-└── DIM1/region/
-```
-
-After completion the singleplayer menu shows `MyCacheWorld`; entering it lets you browse the chunks you have visited.
+Chat reports `export finished: <target path>` on completion.
 
 ---
 
 ## Caveats
 
-The chat report after export includes these caveats:
-
-- **No entities, no inventory, no advancements** — the cache holds only block states and BE NBT
+- **No entities, no inventory, no advancements** — the shadow-side world holds only chunk/light and block-entity data
+- **Format stays type 126** — requires Hassium to read; vanilla translation is planned later
 - **A snapshot of the chunks you have visited** — empty chunks are filled by the world generator
 - **Modded blocks need the same mods and a close MC version** — otherwise they may render as unknown
-- **DataVersion matches the current client** — cross-version save upgrade is left to vanilla
-- **BE availability depends on cache contents** — Live-Unload snapshots include BE; warm-stash from inbound packets may be missing
-- **Light is retained from the cache** — chunks with `is_light_on=1` carry `SkyLight` / `BlockLight`, so the singleplayer world opens with no recompute
-
----
-
-[← Beyond-View-Render](Beyond-View-Render-en) · [Home](Home-en) · [→ Compatibility](Compatibility-en)
+- **BE availability depends on the shadow-side cache contents** — Live-Unload snapshots include BE; warm-stash from inbound packets may be missing
+- **Light is retained with the chunks** — chunks with `is_light_on=1` carry `SkyLight` / `BlockLight`

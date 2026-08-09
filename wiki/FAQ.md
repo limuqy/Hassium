@@ -60,27 +60,27 @@ A: 环带规模由客户端 RD 与服务端视距之差决定；可通过降低 
 
 ---
 
-## 数据面
+## 网络核心与迁移
 
-### Q: 数据面 UDP 默认开吗？
+### Q: 客户端必须装 Hassium 才能经网关接入吗？UDP 数据面默认开吗？
 
-A: 默认关。`network.dataPlane.enabled = false`。这两项能力（主控热切、加权分流）默认禁用；想用需手动开启并配置可达端点、依次确认 6 个自检标记，详见 [Data-Plane-and-Failover](Data-Plane-and-Failover)。
+A: 客户端经进程内网关（网络核心）接入主控核心是 2.0.0 的默认接入路径；UDP 数据面（网关↔主控通道的 bulk 载体）默认关（`network.dataPlane.enabled = false`），仅在需要数据线路时开启。详见 [网络核心与主控迁移](Network-Core-and-Master-Migration)。
 
-### Q: TCP 主控卡顿后客户端会断连吗？
+### Q: 主控断线/卡顿时会掉线吗？
 
-A: 卡顿超过 `controlStallMs`（默认 6 秒）且 UDP 数据面健康时，服务端下发 `FailoverPermit`，客户端不主动断当前 master 连接，而是按 permit 切换到下一候选。候选耗尽才真正 finalize。
+A: 不会立即掉线。L1 迁移引擎按 `network.dataPlane.recoveryWindowMs`（默认 `60000`，故障静默超时）判定后无感迁移：磁盘缓存、保存队列全保留，新会话直接续上，不弹「连接丢失」；主控无法恢复时才真正断连。UDP 数据面开启且健康时迁移更平滑。
 
 ---
 
 ## 导出
 
-### Q: 导出的世界能进单机吗？
+### Q: 导出的世界能直接进单机吗？
 
-A: 能。`/hassiumc export` 生成原版 Anvil 存档（type 2 Zlib），单机主菜单可见并可直接进入。
+A: 目前不能直接进。2.0.0 的 `export` 是影子端世界目录整体拷贝，保留 type 126 + chunkHash 落盘格式（翻译为原版格式后续提供）；导出目录为 `<gameDir>/hassium_exports/<cacheId>/`。
 
 ### Q: 导出的世界含实体吗？
 
-A: **不含**。缓存仅含方块状态与方块实体 NBT，无玩家背包/成就/普通实体。导出限制详见 [World-Export](World-Export)。
+A: **不含**。影子端世界仅含区块/光照与方块实体数据，无玩家背包/成就/普通实体。导出限制详见 [World-Export](World-Export)。
 
 ---
 
@@ -96,4 +96,4 @@ A: 热路径默认安静。排查时按需打开 `debug.*`：`debug.metadataLogg
 
 ---
 
-[← Data-Plane-and-Failover](Data-Plane-and-Failover) · [Home](Home) · [→ Troubleshooting](Troubleshooting)
+[← Network-Core-and-Master-Migration](Network-Core-and-Master-Migration) · [Home](Home) · [→ Troubleshooting](Troubleshooting)

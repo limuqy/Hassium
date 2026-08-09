@@ -8,7 +8,7 @@ Hassium 启动时在 `config/hassium/` 自动生成两份 TOML：
 
 | 文件 | 适用端 | 主要内容 |
 | --- | --- | --- |
-| `hassium-client.toml` | 仅物理客户端 | 客户端缓存、超视渲染、客户端网络应用 |
+| `hassium-client.toml` | 仅物理客户端 | 区块核心（`clientCache.*`）、超视渲染、客户端网络应用 |
 | `hassium-server.toml` | 仅专用服 | 存储压缩、共享网络、兼容、调试 |
 
 游戏内编辑入口：
@@ -31,15 +31,15 @@ Hassium 启动时在 `config/hassium/` 自动生成两份 TOML：
 | --- | --- | --- |
 | `storage.enabled` | `false` | 世界存档改用 ZSTD type 126（默认关；仅专用服务器可开启，**首次启用前请备份世界**） |
 | `storage.mode` | `mirror` | 存储模式（仅 `mirror` 生效） |
-| `storage.zstdLevel` | `9` | 存储压缩等级；越高省磁盘越多、CPU 越重 |
+| `storage.zstdLevel` | `3` | 存储压缩等级；越高省磁盘越多、CPU 越重 |
 
-### 客户端缓存
+### 区块核心（`clientCache.*`）
 
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
 | `clientCache.enabled` | `true` | 客户端区块缓存总开关 |
 | `clientCache.sectionDeltaEnabled` | `true` | 缓存过期时只补变更分段；关闭则过期走全量重传 |
-| `clientCache.hassiumEngineEnabled` | `true` | Hassium 引擎（非网络向功能总开关）：进服启动影子服务端统一承担区块光照计算（客户端不再计算）；启动失败自动降级（缓存/超视渲染/SeedGen 关闭并提示）；关闭时服务端不剥光（握手协商），光照随包自带 |
+| `clientCache.hassiumEngineEnabled` | `true` | Hassium 引擎（非网络向功能总开关）：进服启动影子端（区块核心后端引擎）统一承担区块光照计算（客户端不再计算）；启动失败自动降级（缓存/超视渲染/SeedGen 关闭并提示）；关闭时服务端不剥光（握手协商），光照随包自带 |
 | `clientCache.ovdLocalGeneration` | `false` | OVD 本地生成：超视渲染区域缓存 miss 时按服务端世界种子本地生成区块并存入本地缓存；无种子（服务端未装 MOD）时自动关闭生成 |
 | `clientCache.viewDistanceExtensionEnabled` | `true` | 超视渲染（多人服 clientVD > serverVD 时回填环带；**与 Bobby 互斥**） |
 | `clientCache.maxRenderDistance` | `16` | 超视渲染环带与有效 RD 上限（范围 2–64） |
@@ -53,20 +53,10 @@ Hassium 启动时在 `config/hassium/` 自动生成两份 TOML：
 | `network.enabled` | `true` | 自定义 `hassium:*` 通道（关后回退原版全量包） |
 | `network.globalPacketCompression` | `true` | 全局管道用 ZSTD 替换原版 Zlib（关闭可与同类协议替换类 mod 共存） |
 | `network.compressionLevel` | `3` | 网络压缩等级（速度优先） |
-| `network.maxChunksPerTick` | `4` | 每玩家每 tick 提交上限（发送速率 = 本值 × tick 节奏，满 tick ≈ 4×20/s；掉刻自然降速保护主线程） |
-| `network.metricsEnabled` | `true` | 指标收集（关闭后 `/hassium stats` 等命令不可用） |
-| `network.enablePacketAggregation` | 默认开 | 包聚合；第三方通道被拦截异常时关掉 |
-| `network.compressionBlacklist` | 空 | 包 ID 列表，命中的包不进压缩/聚合 |
-
-### 数据面（高级，默认关）
-
-| 键 | 默认 | 说明 |
-| --- | --- | --- |
-| `network.dataPlane.enabled` | `false` | UDP/KCP 数据面与 TCP 主控热切/加权分流（默认关闭；启用前请配置可达端点并依次确认 6 个自检标记） |
-| `network.dataPlane.controlStallMs` | `6000` | TCP 主控卡顿多久后客户端触发 `FailoverRequest` |
-| `network.dataPlane.failoverPermitTtlMs` | `30000` | 服务端下发 `FailoverPermit` 有效期 |
-
-详见 [Data-Plane-and-Failover](Data-Plane-and-Failover)。
+| `network.maxChunksPerTick` | `5` | 每玩家每 tick 提交上限（发送速率 = 本值 × tick 节奏，满 tick ≈ 5×20 = 100/s；掉刻自然降速保护主线程） |
+| `network.metricsEnabled` | `false` | 指标收集（关闭后 `/hassium stats` 等命令不可用） |
+| `network.enablePacketAggregation` | `true` | 包聚合；第三方通道被拦截异常时关掉 |
+| `network.compressionBlacklist` | 10 项默认黑名单 | 包 ID 列表，命中的包不进压缩/聚合（默认含 CHUNK_PAYLOAD / SECTION_DELTA / HANDSHAKE / DICTIONARY_SYNC / INDEX_SYNC / CHUNK_HASH / LIGHT_DELTA / BLOCK_ENTITY_DATA / MAIN_CHANNEL / AGGREGATION） |
 
 ### 兼容与调试
 

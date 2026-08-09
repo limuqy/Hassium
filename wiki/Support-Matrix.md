@@ -77,4 +77,4 @@ Hassium 覆盖 Minecraft **1.20.1–1.21.11**，按 **9 个版本段 × 加载�
 
 ---
 
-[← Compatibility](Compatibility) · [Home](Home) · [→ Data-Plane-and-Failover](Data-Plane-and-Failover)
+[← Compatibility](Compatibility) · [Home](Home) · [→ Network-Core-and-Master-Migration](Network-Core-and-Master-Migration)

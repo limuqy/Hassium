@@ -56,18 +56,16 @@ Toggle the relevant category only; the hot path is quiet by default and enabling
 
 ---
 
-## Data-plane debugging
+## Migration and gateway debugging
 
-After enabling `network.dataPlane.enabled`, verify the six self-check markers in order:
+| Symptom | Likely cause | Action |
+| --- | --- | --- |
+| Client drops straight away on master failure, no migration | Gateway listener not ready / migration window too short | Confirm the master gateway port is reachable (`network.controlReachableEndpoints[0]`, falls back to `25566`); raise `network.dataPlane.recoveryWindowMs` (default `60000`, fault-silence timeout) as needed |
+| Terrain re-downloads heavily after migration (resume refused) | Shadow-side save inconsistent with the master / cache directory broken | Check the `hassium_cache` entry and disk space; some MISS right after migration is normal, but if re-downloads persist, delete that server's cache directory and rejoin (below) |
+| UDP data plane configured but no UDP traffic | `network.dataPlane.enabled` is off by default | Enable it explicitly; while off, all traffic goes through the gateway frame connection (TCP control channel) |
+| Gateway port already in use | Conflict with another service | Point `network.controlReachableEndpoints` at another port (fallback is `25566`) |
 
-1. `UDP_BIND_OK` fails: check UDP port in use / firewall rules
-2. `UDP_WRR_OK` fails: validate `weight` values
-3. `FAILOVER_PERMIT_OK` fails: confirm `controlStallMs` is not too short
-4. `FAILOVER_RECONNECT_OK` fails: confirm candidate endpoint reachability on the public network
-5. `CACHE_RESUME_HIT` fails: verify `ClientRecoveryState` truly blocks finalize (dirty-flags retained)
-6. `FAILOVER_TERMINAL_OK` fails: candidate exhaustion did not call `consumeTerminalCleanup` exactly once
-
-See [Data-Plane-and-Failover](Data-Plane-and-Failover-en).
+See [Network Core and Master Migration](Network-Core-and-Master-Migration-en).
 
 ---
 

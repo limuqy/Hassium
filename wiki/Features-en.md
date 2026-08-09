@@ -4,7 +4,7 @@
 
 > **简体中文**: [Features](Features) · English
 
-Hassium is a single client + server suite that optimizes Minecraft from five directions: **efficient compression, network optimization, chunk caching, lighting optimization, and utilities**. This page groups every feature into categories with a quick overview and when it applies.
+Hassium is a single client + server suite that optimizes Minecraft from five directions: **efficient compression, network optimization, chunk core, lighting optimization, and utilities**. This page groups every feature into categories with a quick overview and when it applies.
 
 ---
 
@@ -14,7 +14,7 @@ Hassium is a single client + server suite that optimizes Minecraft from five dir
 
 - **Goal**: Shrink world saves while keeping the vanilla `.mca` layout
 - **How**: The server compresses each chunk payload with ZSTD as type 126; the outer Region (32×32) structure is unchanged
-- **Config**: `storage.enabled` (default `false`, dedicated servers only), `storage.zstdLevel` (default `9`)
+- **Config**: `storage.enabled` (default `false`, dedicated servers only), `storage.zstdLevel` (default `3`)
 - **Note**: First-time enable rewrites the on-disk chunk format — **back up the world**. See [FAQ](FAQ-en).
 
 ---
@@ -36,7 +36,7 @@ Hassium is a single client + server suite that optimizes Minecraft from five dir
 
 - **Goal**: The server keeps the main thread under control during join and view expansion; the client avoids hitch spikes
 - **Server side** (push):
-  - **Tick-granularity throttling**: `network.maxChunksPerTick` (default `4`) caps per-player submits per tick (4×20 = 80/s at full tick); the per-tick submit count stays fixed during lag so the per-second rate naturally drops — protecting the server main thread; main-thread peak ≤ ~8 ms/tick
+  - **Tick-granularity throttling**: `network.maxChunksPerTick` (default `5`) caps per-player submits per tick (5×20 = 100/s at full tick); the per-tick submit count stays fixed during lag so the per-second rate naturally drops — protecting the server main thread; main-thread peak ≤ ~8 ms/tick
   - **Background serialization**: encode / ZSTD compression / hash computation / send all run on the push pool (`serverChunkPushThreads` default 2, dynamically resizable); the main thread only builds the packet — aligned with vanilla (which also builds on the main thread and encodes on netty). On 1.20.x/1.21.1 the whole serialization chain runs off-thread
 - **Client side** (loading):
   - Per-frame main-thread apply budget `clientCache.mainThreadChunkBudgetMs` (default `15`)
@@ -45,34 +45,34 @@ Hassium is a single client + server suite that optimizes Minecraft from five dir
 
 ---
 
-### Control failover
+### In-process gateway and seamless migration
 
-- **Goal**: On TCP master disconnect or stall, auto-reconnect to a backup endpoint with the cache retained, disconnect UI hidden, and the world frozen on screen during recovery (tick paused, transition screens hidden at the render layer), so players barely notice
-- **How**: The server pre-delivers a control-plane candidate list to the client during handshake; on a hard disconnect or a stall past the threshold with the UDP data plane healthy, the client auto-connects the next reachable candidate without showing "Connection lost". Disk cache, save queue, and task executor are all preserved across the switch, and the new session resumes directly — hit ratio holds, terrain does not re-download. The world tick pauses during recovery, transition screens (connect/loading/receiving-world) keep vanilla driving but are hidden from rendering, the screen keeps the frozen world plus a "Switching master…" overlay, and motion resumes once recovery succeeds
-- **Default**: Off (`network.dataPlane.enabled = false`; the mod uses vanilla single-TCP by default). Requires ops capability — confirm Nginx / public-firewall / NAT rules before enabling
-- **Config**: `network.dataPlane.controlStallMs` (default `6000`, how long a master stall triggers failover), `failoverPermitTtlMs` (default `30000`, validity of the server-issued FailoverPermit)
-- **Deep dive**: [Control failover and weighted routing](Data-Plane-and-Failover-en)
+- **Goal**: The client connects to the master core through an in-process gateway (Network Core); on master disconnect or stall it migrates seamlessly — the cache resumes, the disconnect screen is hidden, players barely notice
+- **How**: The in-process Network Core on the client (`network/core/`: NetworkCore state machine / outbound frame protocol / migration engine / viafabric bridge) connects to the master core (`network/gateway/`, GatewayServer) over the gateway frame protocol; when the master fails, the L1 migration engine decides based on `network.dataPlane.recoveryWindowMs` (default `60000`, the fault-silence timeout) and migrates directly — disk cache, save queue, and task executor are all preserved, the new session resumes directly, hit ratio holds and terrain is not re-downloaded, with no "Connection lost" popup
+- **UDP data plane**: bulk carrier for the gateway↔master channel (UDP/KCP, AES-GCM mutual authentication); off by default (`network.dataPlane.enabled = false`) — all traffic then goes through the gateway frame connection
+- **Config**: `network.dataPlane.enabled` (default `false`), `network.dataPlane.recoveryWindowMs` (default `60000`), `network.controlReachableEndpoints` (master gateway listen endpoints; falls back to `25566` when unset)
+- **Deep dive**: [Network Core and Master Migration](Network-Core-and-Master-Migration-en)
 
 ---
 
-### Weighted routing
+### L1 load balancing
 
 - **Goal**: Share the bandwidth bottleneck of chunk downstream on high-population servers across multiple lines
-- **How**: Chunk downloads run on a UDP/KCP data plane that can be configured with multiple endpoints (multiple lines), carrying traffic by `weight` weighted round-robin. When one line saturates or degrades, traffic shifts onto the rest; login, commands, and entity sync — "control-class" traffic — stay on vanilla TCP and are untouched by data-line issues
-- **Default**: Off (same switch as control failover: `network.dataPlane.enabled = false`). Requires per-line public UDP endpoints
-- **Config**: Each endpoint under `network.dataPlane.udpEndpoints` carries a `weight` (default `100`); `priority` controls candidate ordering
-- **Deep dive**: [Control failover and weighted routing](Data-Plane-and-Failover-en)
+- **How**: The master core listens on the control-reachable endpoints; the UDP data plane supports multiple UDP listeners (`network.dataPlane.udpListeners`) carrying chunk downstream by `weight` weighted round-robin. When one line saturates or degrades, traffic shifts onto the rest; login, commands, and entity sync — "control-class" traffic — stay on the gateway frame connection and are untouched by data-line issues
+- **Default**: Off (same switch as the data plane: `network.dataPlane.enabled = false`). Requires per-line public UDP endpoints
+- **Config**: `network.dataPlane.udpListeners` (`weight` default `100`)
+- **Deep dive**: [Network Core and Master Migration](Network-Core-and-Master-Migration-en)
 
 ---
 
-## Chunk caching
+## Chunk Core
 
-### Client chunk cache
+### Chunk Core cache
 
 - **Goal**: Revisiting an area should skip full chunk downloads
 - **How**: The server computes chunkHash before pushing; the client compares against the local cache contentHash; on hit it decompresses and applies locally, skipping the vanilla full download
 - **Config**: `clientCache.enabled` (default `true`)
-- **Details**: The cache is stored on disk as NBT (`HBT1` magic + CompoundTag) under `hassium_cache`; eviction is per-chunk by heat (no whole `.mca` deletion). Section delta, beyond-view rendering and world export all reuse the same cache data (below)
+- **Details**: The cache lives in the Chunk Core shadow engine — visited chunks are saved into a vanilla-format world at `hassium_cache/<serverId>/world` (type 126 + chunkHash; the old HBT1 client-cache format has been removed); eviction is per-chunk by heat (`heat.idx`, accumulated across sessions). Section delta, beyond-view rendering and world export all reuse the same cache data (below)
 
 ---
 
@@ -102,7 +102,7 @@ Hassium is a single client + server suite that optimizes Minecraft from five dir
 
 ### World export
 
-- **Goal**: Export the local cache to a vanilla Anvil singleplayer world
+- **Goal**: Export the shadow-side world directory as a standalone archive (keeps the type 126 + chunkHash format; vanilla translation is planned later)
 - **Command**: `/hassiumc export [<serverIp>] [seed]`
 - **Deep dive**: [World-Export](World-Export-en)
 
@@ -129,7 +129,7 @@ Hassium is a single client + server suite that optimizes Minecraft from five dir
 
 - **Goal**: Avoid recomputing lighting on every load
 - **How**: Light computed by the shadow server is stored with the chunk data (`is_light_on=1`); later cache hits apply the stored light directly; a SectionDelta merge forces `is_light_on=0` so the shadow server recomputes it
-- **Metric**: `/hassiumc stats` shows `lighting optimization: xx% (hits N, recompute M)`
+- **Metric**: `/hassiumc stats` shows `light cache: xx% (hits N, recompute M)` and `light recompute: main-thread x ms, background y ms`
 
 ---
 
@@ -139,8 +139,8 @@ Hassium is a single client + server suite that optimizes Minecraft from five dir
 
 | Command | Side | Output |
 | --- | --- | --- |
-| `/hassium stats` | Server | Raw bytes / sent bytes / savings / push stats |
-| `/hassiumc stats` | Client | Received bytes / cache hits / beyond-view / lighting optimization |
+| `/hassium stats` | Server | Sent (vanilla-Zlib-equivalent) / savings % / compression ratio / metadata sent / data requests received / chunks compressed |
+| `/hassiumc stats` | Client | Bandwidth compression / chunk cache (full hits + delta) / chunk loading (new + stale + local) / light cache / light recompute / beyond-view ON\|OFF / bandwidth savings |
 
 See [Commands](Commands-en) for the full reference.
 

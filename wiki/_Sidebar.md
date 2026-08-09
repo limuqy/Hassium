@@ -9,7 +9,7 @@
 - [世界导出](World-Export)
 - [兼容性](Compatibility)
 - [支持矩阵](Support-Matrix)
-- [主控热切与加权分流](Data-Plane-and-Failover)
+- [网络核心与主控迁移](Network-Core-and-Master-Migration)
 - [FAQ](FAQ)
 - [排查](Troubleshooting)
 

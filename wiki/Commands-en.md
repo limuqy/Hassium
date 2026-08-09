@@ -17,6 +17,7 @@ Hassium exposes two command groups:
 | --- | --- | --- |
 | `/hassium stats` | Show server-side compression and send statistics | Requires OP 2 |
 | `/hassium stats reset` | Reset server-side counters | Requires OP 2 |
+| `/hassium stats toggle` | Toggle metrics collection | OP 2 |
 | `/hassium metrics on` | Runtime-enable metrics collection | OP 2 |
 | `/hassium metrics off` | Runtime-disable metrics collection | OP 2 |
 
@@ -28,14 +29,14 @@ Hassium exposes two command groups:
 
 | Command | Purpose |
 | --- | --- |
-| `/hassiumc stats` | Show client stats: received bytes, compression savings, cache hits, beyond-view render, lighting optimization |
-| `/hassiumc export [<serverIp>] [seed]` | Export the local cache to a vanilla Anvil singleplayer world |
+| `/hassiumc stats` | Show client stats: bandwidth compression, chunk cache (full hits + delta), chunk loading (new + stale + local), light cache, light recompute, beyond-view ON\|OFF, bandwidth savings |
+| `/hassiumc export [<serverIp>] [seed]` | Copy the shadow-side world directory wholesale as an export |
 
 > `export` arguments:
 >
 > - `<serverIp>` is optional; defaults to the currently connected server (use `IP_port`, or a bare IP)
-> - `seed` is optional; defaults to a random seed in barrier-island mode
-> - Output directory: `<gameDir>/saves/<worldName>/`
+> - `seed` is a retained argument (a directory copy does not involve the seed)
+> - Output directory: `<gameDir>/hassium_exports/<cacheId>/` (keeps the type 126 + chunkHash format; vanilla translation is planned later)
 >
 > See [World-Export](World-Export-en).
 

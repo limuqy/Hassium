@@ -32,7 +32,7 @@ Hassium compatibility with common optimization mods, plus escape hatches. Every 
 | Topology | Verdict |
 | --- | --- |
 | Same version, both sides install Hassium | Via not involved; works |
-| Server Hassium + Via, client has no Hassium | Works: handshake fails → vanilla packets → Via translates |
+| Server Hassium + Via, client has no Hassium | Works: clients without the mod use the vanilla protocol, Via translates it |
 | Both sides install Hassium but MC versions differ (bridged by Via) | ❌ Unsupported (wire format is tied to `MC_VER`) |
 
 > Stacking `globalPacketCompression` with in-process Via can confuse compression frame assumptions. Recommend disabling global compression for in-process Via.

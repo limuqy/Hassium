@@ -9,7 +9,7 @@
 - [World-Export](World-Export-en)
 - [Compatibility](Compatibility-en)
 - [Support-Matrix](Support-Matrix-en)
-- [Control failover and weighted routing](Data-Plane-and-Failover-en)
+- [Network Core and Master Migration](Network-Core-and-Master-Migration-en)
 - [FAQ](FAQ-en)
 - [Troubleshooting](Troubleshooting-en)
 

@@ -77,4 +77,4 @@ See [Compatibility](Compatibility-en).
 
 ---
 
-[← Compatibility](Compatibility-en) · [Home](Home-en) · [→ Data-Plane-and-Failover](Data-Plane-and-Failover-en)
+[← Compatibility](Compatibility-en) · [Home](Home-en) · [→ Network-Core-and-Master-Migration](Network-Core-and-Master-Migration-en)
