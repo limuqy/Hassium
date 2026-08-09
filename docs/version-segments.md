@@ -2,7 +2,7 @@
 
 本文档是 Hassium 多版本适配的**唯一真相源**。工作单位不是「17 个 MC 版本 × 3 加载器」，而是 **9 个有效代码段 × `builds_for` 中的加载器**。
 
-相关：Manifold `#if MC_VER`（见 `.claude/skills/hassium-dev/SKILL.md`）、`versionProperties/*.properties`。
+相关：Manifold `#if MC_VER`（多版本源码预处理，见 AGENTS.md 模块与包地图）、`versionProperties/*.properties`。
 
 ---
 

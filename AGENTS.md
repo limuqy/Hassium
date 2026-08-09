@@ -59,8 +59,6 @@ fabric/ | forge/ | neoforge/
 - 登记：`common/src/main/resources/hassium.mixins.json`
 - 优先 `@Inject` cancellable，避免 `@Overwrite`
 
-清单与规范：skill `hassium-mixin`。
-
 ## 配置红线
 
 | 项 | 默认 | 注意 |
@@ -103,12 +101,7 @@ fabric/ | forge/ | neoforge/
 
 ## Skills
 
-| Skill | 用途 |
-|-------|------|
-| `hassium-dev` | 构建、模块、ServiceLoader、配置、包地图 |
-| `hassium-storage` | 存储 / codec / Region / 字典 |
-| `hassium-network` | 网络核心（网关状态机 / outbound 帧协议 / S2C 注入 / C2S 收口 / 续流票据 / L1 迁移 / ViaFabric 桥）、主控核心接入层（GatewayServer）、chunkHash 推送、限流、指标 |
-| `hassium-mixin` | Mixin 清单与注入 |
+项目指导以本文件为准（`.claude/skills/` 已删除，不再维护第二份知识源）。
 
 ## CurseForge 本地推送
 
