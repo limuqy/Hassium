@@ -96,6 +96,24 @@ public class MixinClientPacketListener {
         ClientMetadataHandler.forwardEntityPacket(packet);
     }
 
+    // ===== 方块更新转发（T2）：HEAD 注入 3 类方块包 handler，不 cancel、不解析、纯转发 =====
+    // handler 方法名/参数 mojmap 全段一致（1.20.1 / 1.21.11 已双版本验证），无需 #if 分界。
+
+    @Inject(method = "handleBlockUpdate", at = @At("HEAD"))
+    private void hassium$onBlockUpdate(net.minecraft.network.protocol.game.ClientboundBlockUpdatePacket packet, CallbackInfo ci) {
+        ClientMetadataHandler.forwardBlockUpdate(packet);
+    }
+
+    @Inject(method = "handleChunkBlocksUpdate", at = @At("HEAD"))
+    private void hassium$onChunkBlocksUpdate(net.minecraft.network.protocol.game.ClientboundSectionBlocksUpdatePacket packet, CallbackInfo ci) {
+        ClientMetadataHandler.forwardBlockUpdate(packet);
+    }
+
+    @Inject(method = "handleBlockEntityData", at = @At("HEAD"))
+    private void hassium$onBlockEntityData(net.minecraft.network.protocol.game.ClientboundBlockEntityDataPacket packet, CallbackInfo ci) {
+        ClientMetadataHandler.forwardBlockUpdate(packet);
+    }
+
     /**
      * 服务端 Forget：若区块仍在超视渲染环带，取消 drop，原地保留为 renderOnly。
      * <p>
