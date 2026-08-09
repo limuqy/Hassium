@@ -58,11 +58,10 @@ public final class ClientChunkPipeline {
     /**
      * Hassium 内部 apply 进行中标志（缓存读回 / OVD / 压缩通道）。
      * <p>
-     * {@code MixinVanillaChunkApplyBudget}（1.20.1~1.21.10 段）把 {@code handleLevelChunkWithLight}
-     * 统一路由到 MainThreadDispatcher 预算队列；但 Hassium 的 applyToLevelFromByteBuf 内部
-     * 也会调用该方法，且调用方（processQueueUntil / HANDLE_COMPRESSED 回调）本身已在主线程
-     * 预算内——再次拦截会造成「入队后立即 hasChunk 校验失败 → 假失败 → 缓存路径重请求风暴、
-     * OVD 全量失败」的恶性循环。此标志让 Mixin 放行 Hassium 预算内的 apply。
+     * Hassium 的 applyToLevelFromByteBuf 内部会调用官方区块应用路径，而调用方
+     * （processQueueUntil / HANDLE_COMPRESSED 回调）本身已在主线程预算内——置位此标志
+     * 供区块应用路径识别「Hassium 预算内 apply」，避免重入冲突（入队后立即 hasChunk
+     * 校验失败 → 假失败 → 缓存路径重请求风暴、OVD 全量失败）。
      */
     private final ThreadLocal<Boolean> hassiumApplyInProgress =
             ThreadLocal.withInitial(() -> Boolean.FALSE);
@@ -228,7 +227,7 @@ public final class ClientChunkPipeline {
         return entry != null ? entry.hashes() : null;
     }
 
-    /** 是否正在 Hassium 预算内的 apply（MixinVanillaChunkApplyBudget 豁免判定）。 */
+    /** 是否正在 Hassium 预算内的 apply（重入标志，供区块应用路径识别）。 */
     public boolean isApplyInProgress() {
         return hassiumApplyInProgress.get();
     }

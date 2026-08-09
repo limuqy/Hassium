@@ -62,6 +62,8 @@ public final class ClientLifecycleHelper {
         // 影子端预创建（后台；非网络向功能总开关）：握手到达后启动，失败自动降级。
         // 服务端未装 MOD（无握手）→ 不创建（缓存/OVD/导出保留，光由 packet 自带）。
         io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.onLogin();
+        // 网络核心（网关）：进入 CONNECTING 并尽力自动建立 outbound（T4 骨架）
+        io.github.limuqy.mc.hassium.network.core.NetworkCore.getInstance().onLogin();
         initialized = true;
     }
 
@@ -73,10 +75,8 @@ public final class ClientLifecycleHelper {
                 return;
             }
             final String serverIp = mc.getConnection().getServerData().ip;
-            final String cacheAddress = io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity
-                    .cacheIdentity(serverIp);
             final Path gameDir = mc.gameDirectory.toPath();
-            final String serverId = "server_" + cacheAddress.replaceAll("[^a-zA-Z0-9._-]", "_");
+            final String serverId = "server_" + serverIp.replaceAll("[^a-zA-Z0-9._-]", "_");
             io.github.limuqy.mc.hassium.network.ClientChunkPipeline.getInstance()
                     .setCacheLocation(gameDir, serverId);
         } catch (Exception ignored) {
@@ -120,6 +120,8 @@ public final class ClientLifecycleHelper {
         initialized = false;
         finalized.set(false);
         ClientMainThreadBudget.clearJoinBoost();
+        // 网络核心（网关）：关 outbound → IDLE（T4 骨架）
+        io.github.limuqy.mc.hassium.network.core.NetworkCore.getInstance().onDisconnect();
 
         Minecraft mc = Minecraft.getInstance();
         if (mc != null && !mc.isSameThread()) {
@@ -176,31 +178,13 @@ public final class ClientLifecycleHelper {
     }
 
     /**
-     * 恢复感知的 finalizer：仅在 {@link ClientRecoveryState#isRecovering()} 返回 false
-     * 时执行真正的最终清理；否则保留磁盘缓存 / executor / save 线程不动 —— 这些资源
-     * 仍需要承接重连后的回首会话（plan §793）。
+     * 最终清理入口（恢复感知已退役：客户端 failover 删除后无条件直接关闭）。
      * <p>
-     * 一旦恢复状态进入 TERMINAL，{@link ClientRecoveryState#consumeTerminalCleanup()}
-     * 返回恰好一次 true 来允许 {@link #finalizeDisconnect()} 跑一次性关闭；正常 logout (
-     * recovery 状态保持 NONE) 时直接执行 finalize。
+     * 保持方法名/调用点不变：{@link MixinMinecraft} 与各加载器 DISCONNECT 事件
+     * 均调用此方法；幂等由 {@link #finalizeDisconnect()} 的 AtomicBoolean 保证。
      */
     public static void finalizeDisconnectIfTerminal() {
-        // 新架构无客户端 cleanupMain dump 队列：断连落盘由影子端 saveAll 承担，
-        // 无需让位逻辑；恢复态判断保留（failover 会话语义）。
-        io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState state =
-                io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState.getInstance();
-        if (state.isRecovering()) {
-            Constants.LOG.debug("Hassium: finalize suppressed — client in recovery phase {}", state.phase());
-            return;
-        }
-        if (state.phase() == io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState.Phase.TERMINAL) {
-            if (!state.consumeTerminalCleanup()) {
-                // 已被并行 caller 一次性消费
-                return;
-            }
-        }
         finalizeDisconnect();
-        // 进入 TERMINAL 后 finalize 已落地：恢复终态由后续 begin 重新进入 NONE 的语义清理
     }
 
     /**
@@ -230,10 +214,8 @@ public final class ClientLifecycleHelper {
             }
 
             final String serverIp = mc.getConnection().getServerData().ip;
-            final String cacheAddress = io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity
-                    .cacheIdentity(serverIp);
             final Path gameDir = mc.gameDirectory.toPath();
-            final String serverId = "server_" + cacheAddress.replaceAll("[^a-zA-Z0-9._-]", "_");
+            final String serverId = "server_" + serverIp.replaceAll("[^a-zA-Z0-9._-]", "_");
 
             // 新架构：客户端无 HBT1 存储；影子端存档目录由 SeedGenLevelCompat 按
             // gameDir/serverId 推导（hassium_cache/<serverId>/world），此处仅保留

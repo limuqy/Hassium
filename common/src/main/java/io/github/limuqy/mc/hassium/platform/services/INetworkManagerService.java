@@ -50,16 +50,6 @@ public interface INetworkManagerService {
     void sendSeedRef(ServerPlayer player, FriendlyByteBuf buf);
 
     /**
-     * 客户端配置阶段发送预握手（1.20.5+）。default 空实现：仅 forge 覆盖
-     * （fabric 走 C2SConfigurationChannelEvents.REGISTER，neoforge 服务端
-     * 只收不发）。
-     *
-     * @param connection 当前连接（forge 需要；fabric/neoforge 忽略）
-     */
-    default void sendPreHandshake(net.minecraft.network.Connection connection) {
-    }
-
-    /**
      * 客户端上报影子端存档布隆位图（C2S，full=true 覆盖旧层）。default 空实现：
      * 仅 fabric 1.20.1 闭环覆盖；neoforge/forge 版本推广时补实现。
      */

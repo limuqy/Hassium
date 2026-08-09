@@ -191,40 +191,8 @@ public class NeoForgeNetworkManager implements NetworkManager {
         LOGGER.info("Hassium: Client dataplane handshake tail: udp={}, controlFailover={}, groups={}, playerReady={}",
                 tail.hasUdpDataplane(), tail.hasControlFailover(), tail.udpListenerGroups().size(),
                 net.minecraft.client.Minecraft.getInstance().player != null);
-        // Task 9 — 同步把 advertised control 候选灌给 client mod 单例 orchestrator（无论是否含 UDP，
-        // 便于 control-only / legacy 服务器场景下 orchestrator 仍可基于 advertised 候选恢复）。
-        try {
-            java.util.List<io.github.limuqy.mc.hassium.network.dataplane.ControlEndpoint> cands =
-                    new java.util.ArrayList<>();
-            for (var ctl : tail.controlEndpoints()) {
-                cands.add(new io.github.limuqy.mc.hassium.network.dataplane.ControlEndpoint(
-                        ctl.host(), ctl.port(), ctl.priority()));
-            }
-            io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity
-                    .mergeAdvertisedCandidates(cands);
-        } catch (Throwable ignored) {}
-        // 客户端主线程已通过此入口；ClientRecoveryState.markRecovered + onHandshakeAccepted 必须在主线程执行
-        // —— caller 已 enqueueWork，此处同步调用安全。
-        if (!tail.hasUdpDataplane()) {
-            // 无 UDP 数据面（control only 或 legacy 服务器）—— 仍在恢复态时确认真实恢复。
-            try {
-                boolean recovered;
-                if (io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState.getInstance().isRecovering()) {
-                    io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState.getInstance().markRecovered();
-                    recovered = io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.onHandshakeAccepted();
-                }
-                else {
-                    recovered = io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.onHandshakeAccepted();
-                }
-                // 仅在真实恢复（orchestrator 曾进入恢复态且握手成功）时消费备用端点提示，
-                // 与 fabric 对齐（commit 4067a3e）：普通重连/首次登录不弹「已通过备用端点连接」；
-                // 否则 consumeSuccessfulFallback 会把上次会话遗留的 fallback 标记误报。
-                if (recovered) {
-                    notifyFallback();
-                }
-            } catch (Throwable ignored) {}
-            return;
-        }
+        // T6：客户端 failover 已退役——不再灌 advertised control 候选 / 不再确认真实恢复，
+        // 仅保留 UDP 数据面启动（网关 outbound 传输层）。
         var player = net.minecraft.client.Minecraft.getInstance().player;
         if (player == null) {
             io.github.limuqy.mc.hassium.network.dataplane.DataPlaneClientLifecycle.getInstance().deferUdpStart(tail);
@@ -234,34 +202,12 @@ public class NeoForgeNetworkManager implements NetworkManager {
         try {
             io.github.limuqy.mc.hassium.network.dataplane.DataPlaneClientLifecycle.getInstance()
                     .startUdp(player.getUUID(), tail.connectionEpoch(), tail);
-            // 只有 DISCONNECT 已建立恢复态的握手才能确认恢复；首次登录只启动 UDP。
-            boolean recovered;
-            if (io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState.getInstance().isRecovering()) {
-                io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState.getInstance().markRecovered();
-                recovered = io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.onHandshakeAccepted();
-            }
-            else {
-                recovered = io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.onHandshakeAccepted();
-            }
-            // 仅在真实恢复时消费备用端点提示（与 fabric 对齐，见上方 no-UDP 分支注释）。
-            if (recovered) {
-                notifyFallback();
-            }
         } catch (RuntimeException ex) {
             LOGGER.warn("Hassium: UDP dataplane start failed", ex);
         }
         catch (LinkageError ex) {
             LOGGER.warn("Hassium: UDP dataplane linkage failed; keeping primary transport", ex);
         }
-    }
-
-    private static void notifyFallback() {
-        io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.consumeSuccessfulFallback()
-                .ifPresent(endpoint -> net.minecraft.client.Minecraft.getInstance().gui.getChat().addMessage(
-                        net.minecraft.network.chat.Component.literal("[Hassium] 主地址 "
-                                + io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.primaryAddress()
-                                + " 不可用，已通过备用端点 " + endpoint.host() + ":" + endpoint.port()
-                                + " 连接；服务器列表地址和缓存身份仍为主地址。")));
     }
 
 #if MC_VER < MC_1_20_4
@@ -470,7 +416,8 @@ public class NeoForgeNetworkManager implements NetworkManager {
             double playerX,
             double playerZ,
             boolean seedGenSupported,
-            boolean lightComputeSupported
+            boolean lightComputeSupported,
+            HandshakeStateTail.C2S stateTail
     ) {
         public HandshakeWrapper(int protocolVersion, String modVersion, String[] supportedAlgorithms,
                                 boolean clientCacheSupported, boolean chunkRevisionSupported,
@@ -479,7 +426,7 @@ public class NeoForgeNetworkManager implements NetworkManager {
             this(protocolVersion, modVersion, supportedAlgorithms, clientCacheSupported, chunkRevisionSupported,
                     scheme127Supported, globalPacketCompressionSupported, compactHeaderSupported,
                     new io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail.C2STail(false, false),
-                    0.0, 0.0, false, false);
+                    0.0, 0.0, false, false, null);
         }
 
         public void encode(FriendlyByteBuf buf) {
@@ -499,6 +446,10 @@ public class NeoForgeNetworkManager implements NetworkManager {
             buf.writeDouble(playerZ);
             buf.writeBoolean(seedGenSupported);
             buf.writeBoolean(lightComputeSupported);
+            // T7 状态尾部（append-only；旧服务端忽略尾字节）
+            if (stateTail != null) {
+                HandshakeStateTail.writeC2S(buf, stateTail);
+            }
         }
 
         public static HandshakeWrapper decode(FriendlyByteBuf buf) {
@@ -542,9 +493,14 @@ public class NeoForgeNetworkManager implements NetworkManager {
                 } catch (Exception ignored) {
                 }
             }
+            // T7 状态尾部（append-only；旧客户端无此字段 → null）
+            HandshakeStateTail.C2S stateTail = null;
+            if (buf.isReadable()) {
+                stateTail = HandshakeStateTail.readC2S(buf);
+            }
             return new HandshakeWrapper(protocolVersion, modVersion, algorithms, clientCache, chunkRevision,
                     scheme127, globalPacketCompression, compactHeader, tail, playerX, playerZ, seedGenSupported,
-                    lightComputeSupported);
+                    lightComputeSupported, stateTail);
         }
     }
 
@@ -557,7 +513,8 @@ public class NeoForgeNetworkManager implements NetworkManager {
             long worldSeed,
             byte[] seedGenTail,
             boolean seedGenEnabled,
-            boolean newFormat
+            boolean newFormat,
+            boolean resumeAccepted
     ) {
         public HandshakeResponseWrapper {
             dataplaneTail = dataplaneTail == null ? new byte[0] : dataplaneTail.clone();
@@ -567,7 +524,7 @@ public class NeoForgeNetworkManager implements NetworkManager {
         public HandshakeResponseWrapper(int protocolVersion, boolean accepted,
                                         boolean globalCompressionAccepted, boolean compactHeaderAccepted) {
             this(protocolVersion, accepted, globalCompressionAccepted, compactHeaderAccepted, new byte[0],
-                    0L, new byte[0], false, false);
+                    0L, new byte[0], false, false, false);
         }
 
         public void encode(FriendlyByteBuf buf) {
@@ -577,13 +534,15 @@ public class NeoForgeNetworkManager implements NetworkManager {
             buf.writeBoolean(compactHeaderAccepted);
             if (newFormat) {
                 // 新格式（仅当客户端 C2S 上报 seedGenSupported=true 时使用）：
-                // varint tailLen + tail + worldSeed + varint seedLen + seed + enabled
+                // varint tailLen + tail + worldSeed + varint seedLen + seed + enabled + resumeAccepted
                 buf.writeVarInt(dataplaneTail.length);
                 buf.writeBytes(dataplaneTail);
                 buf.writeLong(worldSeed);
                 buf.writeVarInt(seedGenTail.length);
                 buf.writeBytes(seedGenTail);
                 buf.writeBoolean(seedGenEnabled);
+                // T7 续流就绪标记（append-only；旧客户端忽略尾字节）
+                buf.writeBoolean(resumeAccepted);
             } else {
                 // 旧格式：tail 无长度前缀（旧客户端读剩余全部）
                 buf.writeBytes(dataplaneTail);
@@ -627,8 +586,17 @@ public class NeoForgeNetworkManager implements NetworkManager {
                 dataplaneTail = new byte[buf.readableBytes()];
                 buf.readBytes(dataplaneTail);
             }
+            // T7 续流就绪标记（append-only；旧服务端无此字段 → false）
+            boolean resumeAccepted = false;
+            if (buf.isReadable()) {
+                try {
+                    resumeAccepted = buf.readBoolean();
+                } catch (Exception ignored) {
+                }
+            }
             return new HandshakeResponseWrapper(protocolVersion, accepted, globalCompressionAccepted,
-                    compactHeaderAccepted, dataplaneTail, worldSeed, seedGenTail, seedGenEnabled, true);
+                    compactHeaderAccepted, dataplaneTail, worldSeed, seedGenTail, seedGenEnabled, true,
+                    resumeAccepted);
         }
     }
 
@@ -1094,7 +1062,8 @@ public class NeoForgeNetworkManager implements NetworkManager {
             double playerX,
             double playerZ,
             boolean seedGenSupported,
-            boolean lightComputeSupported
+            boolean lightComputeSupported,
+            HandshakeStateTail.C2S stateTail
     ) implements CustomPacketPayload {
 
         public static final Type<HandshakePayload> TYPE = new Type<>(
@@ -1121,6 +1090,10 @@ public class NeoForgeNetworkManager implements NetworkManager {
                     buf.writeDouble(p.playerZ());
                     buf.writeBoolean(p.seedGenSupported());
                     buf.writeBoolean(p.lightComputeSupported());
+                    // T7 状态尾部（append-only；旧服务端忽略尾字节）
+                    if (p.stateTail() != null) {
+                        HandshakeStateTail.writeC2S(buf, p.stateTail());
+                    }
                 },
                 buf -> {
                     int protocolVersion = buf.readVarInt();
@@ -1163,9 +1136,14 @@ public class NeoForgeNetworkManager implements NetworkManager {
                         } catch (Exception ignored) {
                         }
                     }
+                    // T7 状态尾部（append-only；旧客户端无此字段 → null）
+                    HandshakeStateTail.C2S stateTail = null;
+                    if (buf.isReadable()) {
+                        stateTail = HandshakeStateTail.readC2S(buf);
+                    }
                     return new HandshakePayload(protocolVersion, modVersion, algorithms, clientCache, chunkRevision,
                             scheme127, globalCompression, compactHeader, tail, playerX, playerZ, seedGenSupported,
-                            lightComputeSupported);
+                            lightComputeSupported, stateTail);
                 }
         );
 
@@ -1176,7 +1154,7 @@ public class NeoForgeNetworkManager implements NetworkManager {
             this(protocolVersion, modVersion, supportedAlgorithms, clientCacheSupported, chunkRevisionSupported,
                     scheme127Supported, globalPacketCompressionSupported, compactHeaderSupported,
                     new io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail.C2STail(false, false),
-                    0.0, 0.0, false, false);
+                    0.0, 0.0, false, false, null);
         }
 
         @Override
@@ -1197,7 +1175,8 @@ public class NeoForgeNetworkManager implements NetworkManager {
             long worldSeed,
             byte[] seedGenTail,
             boolean seedGenEnabled,
-            boolean newFormat
+            boolean newFormat,
+            boolean resumeAccepted
     ) implements CustomPacketPayload {
 
         public static final Type<HandshakeResponsePayload> TYPE = new Type<>(
@@ -1217,6 +1196,8 @@ public class NeoForgeNetworkManager implements NetworkManager {
                         buf.writeVarInt(p.seedGenTail().length);
                         buf.writeBytes(p.seedGenTail());
                         buf.writeBoolean(p.seedGenEnabled());
+                        // T7 续流就绪标记（append-only；旧客户端忽略尾字节）
+                        buf.writeBoolean(p.resumeAccepted());
                     } else {
                         buf.writeBytes(p.dataplaneTail());
                     }
@@ -1257,8 +1238,17 @@ public class NeoForgeNetworkManager implements NetworkManager {
                         dataplaneTail = new byte[buf.readableBytes()];
                         buf.readBytes(dataplaneTail);
                     }
+                    // T7 续流就绪标记（append-only；旧服务端无此字段 → false）
+                    boolean resumeAccepted = false;
+                    if (buf.readableBytes() >= 1) {
+                        try {
+                            resumeAccepted = buf.readBoolean();
+                        } catch (Exception ignored) {
+                        }
+                    }
                     return new HandshakeResponsePayload(protocolVersion, accepted, globalCompressionAccepted,
-                            compactHeaderAccepted, dataplaneTail, worldSeed, seedGenTail, seedGenEnabled, true);
+                            compactHeaderAccepted, dataplaneTail, worldSeed, seedGenTail, seedGenEnabled, true,
+                            resumeAccepted);
                 }
         );
 
@@ -1270,7 +1260,7 @@ public class NeoForgeNetworkManager implements NetworkManager {
         public HandshakeResponsePayload(int protocolVersion, boolean accepted,
                                         boolean globalCompressionAccepted, boolean compactHeaderAccepted) {
             this(protocolVersion, accepted, globalCompressionAccepted, compactHeaderAccepted, new byte[0],
-                    0L, new byte[0], false, false);
+                    0L, new byte[0], false, false, false);
         }
 
         @Override
@@ -2028,7 +2018,27 @@ public class NeoForgeNetworkManager implements NetworkManager {
 
     private void handleHandshakeSimple(ServerPlayer player, HandshakeWrapper msg) {
         // 客户端上报位置：校正 resync 视距中心（failover/重连时服务端玩家对象位置滞后）
-        ServerChunkPushManager.getInstance().setInitialPlayerPosition(player, msg.playerX(), msg.playerZ());
+        // T7 位置上报扩展：完整玩家状态（y/yaw/pitch/维度）
+        HandshakeStateTail.C2S stateTail = msg.stateTail();
+        PlayerStateReport reportedState = stateTail != null && stateTail.state() != null && stateTail.state().present()
+                ? stateTail.state()
+                : PlayerStateReport.fromXZ(msg.playerX(), msg.playerZ());
+        ServerChunkPushManager.getInstance().setInitialPlayerPosition(player, reportedState);
+        // T7 续流验票（验签 + epoch 防重放）→ 续流就绪 → 复用现有推送链
+        boolean resumeAccepted = false;
+        if (stateTail != null && stateTail.resumeRequested()) {
+            ResumeTicketValidator.Verification resume =
+                    ResumeTicketValidator.verifyRequest(player.getUUID(), stateTail.resumeTicket());
+            if (resume.accepted()) {
+                resumeAccepted = true;
+                ServerChunkPushManager.getInstance().markPlayerResumeActive(player.getUUID(), resume.epoch());
+                LOGGER.info("Hassium: [RESUME] {} ticket verified (epoch={}) — 续流就绪，跳过 login/维度初始化",
+                        player.getName().getString(), resume.epoch());
+            } else {
+                LOGGER.warn("Hassium: [RESUME] {} ticket REJECTED (签名无效/epoch 重放) — 回退完整握手",
+                        player.getName().getString());
+            }
+        }
         // SeedGen 能力记录
         ServerChunkPushManager.getInstance().setPlayerSeedGenSupported(player.getUUID(), msg.seedGenSupported());
         ServerChunkPushManager.getInstance().setPlayerLightComputeSupported(player.getUUID(), msg.lightComputeSupported());
@@ -2074,7 +2084,8 @@ public class NeoForgeNetworkManager implements NetworkManager {
                 worldSeed,
                 seedGenTail,
                 seedGenEnabled,
-                msg.seedGenSupported()
+                msg.seedGenSupported(),
+                resumeAccepted
         );
         if (useGlobalCompression) {
             DictionaryManager.init();
@@ -2101,8 +2112,11 @@ public class NeoForgeNetworkManager implements NetworkManager {
 
     private void handleHandshakeResponseSimple(HandshakeResponseWrapper msg) {
 
-        LOGGER.info("Hassium: Client handshake response: accepted={}, globalCompression={}, compactHeader={}",
-                msg.accepted(), msg.globalCompressionAccepted(), msg.compactHeaderAccepted());
+        LOGGER.info("Hassium: Client handshake response: accepted={}, globalCompression={}, compactHeader={}, resumeAccepted={}",
+                msg.accepted(), msg.globalCompressionAccepted(), msg.compactHeaderAccepted(), msg.resumeAccepted());
+        if (msg.resumeAccepted()) {
+            LOGGER.info("Hassium: [RESUME] Server accepted resume — 续流就绪，网关可跳过 login/维度初始化");
+        }
         // SeedGen 信息（新格式下服务端保证带尾部；旧服务端默认不启用）
         if (msg.seedGenTail().length > 0) {
             try {
@@ -2157,14 +2171,6 @@ public class NeoForgeNetworkManager implements NetworkManager {
         registrar.play(HandshakePayload.ID, HandshakePayload::decode, builder -> builder
                 .server(NeoForgeNetworkManager::handleHandshake));
 
-        // 注册握手响应 (S2C：客户端处理)
-        registrar.play(HandshakeResponsePayload.ID, HandshakeResponsePayload::decode, builder -> builder
-                .client(NeoForgeNetworkManager::handleHandshakeResponse));
-
-        // 注册压缩区块数据 (S2C：客户端处理)
-        registrar.play(CompressedChunkPayload.ID, CompressedChunkPayload::decode, builder -> builder
-                .client(NeoForgeNetworkManager::handleCompressedChunk));
-
         // 注册区块数据请求 (C2S：服务器处理)
         registrar.play(ChunkDataRequestPayload.ID, ChunkDataRequestPayload::decode, builder -> builder
                 .server(NeoForgeNetworkManager::handleChunkDataRequest));
@@ -2173,35 +2179,13 @@ public class NeoForgeNetworkManager implements NetworkManager {
         registrar.play(ClientBloomSyncPayload.ID, ClientBloomSyncPayload::decode, builder -> builder
                 .server(NeoForgeNetworkManager::handleClientBloomSync));
 
-        // 注册区块哈希 (S2C：客户端处理)
-        registrar.play(ChunkHashPayload.ID, ChunkHashPayload::decode, builder -> builder
-                .client(NeoForgeNetworkManager::handleChunkHash));
-
-        // 注册 SeedRef (S2C：客户端处理)
-        registrar.play(SeedRefPayload.ID, SeedRefPayload::decode, builder -> builder
-                .client(NeoForgeNetworkManager::handleSeedRef));
-
         // 注册 Section 哈希请求 (C2S：服务器处理)
         registrar.play(SectionHashRequestPayload.ID, SectionHashRequestPayload::decode, builder -> builder
                 .server(NeoForgeNetworkManager::handleSectionHashRequest));
 
-        // 注册 Section Delta (S2C：客户端处理)
-        registrar.play(SectionDeltaPayload.ID, SectionDeltaPayload::decode, builder -> builder
-                .client(NeoForgeNetworkManager::handleSectionDelta));
-
         // 注册 BlockEntity 请求 (C2S：服务器处理)
         registrar.play(BlockEntityRequestPayload.ID, BlockEntityRequestPayload::decode, builder -> builder
                 .server(NeoForgeNetworkManager::handleBlockEntityRequest));
-
-        // 注册 BlockEntity 数据 (S2C：客户端处理)
-        registrar.play(BlockEntityDataPayload.ID, BlockEntityDataPayload::decode, builder -> builder
-                .client(NeoForgeNetworkManager::handleBlockEntityData));
-
-        registrar.play(DictionarySyncNeoPayload.ID, DictionarySyncNeoPayload::decode, builder -> builder
-                .client((payload, ctx) -> ctx.workHandler().execute(() -> handleDictionarySyncClient(payload.data()))));
-
-        registrar.play(IndexSyncNeoPayload.ID, IndexSyncNeoPayload::decode, builder -> builder
-                .client((payload, ctx) -> ctx.workHandler().execute(() -> handleIndexSyncClient(payload.data()))));
 
         registrar.play(CompressionReadyNeoPayload.ID, CompressionReadyNeoPayload::decode, builder -> builder
                 .server((payload, ctx) -> ctx.workHandler().execute(() -> {
@@ -2278,49 +2262,6 @@ public class NeoForgeNetworkManager implements NetworkManager {
         });
     }
 
-    private static void handleHandshakeResponse(HandshakeResponsePayload payload, PlayPayloadContext context) {
-        // 服务端已暂停压缩；此处装 ZSTD 后发 ACK，即使在主线程也安全
-        if (payload.accepted() && payload.globalCompressionAccepted()) {
-            tryInstallClientZstdPipeline();
-        }
-        context.workHandler().execute(() -> {
-            LOGGER.info("Hassium: Client handshake response: accepted={}, globalCompression={}, compactHeader={}",
-                    payload.accepted(), payload.globalCompressionAccepted(), payload.compactHeaderAccepted());
-            // SeedGen 信息（新格式下服务端保证带尾部；旧服务端默认不启用）
-            if (payload.seedGenTail().length > 0) {
-                try {
-                    io.netty.buffer.ByteBuf sb = io.netty.buffer.Unpooled.wrappedBuffer(payload.seedGenTail());
-                    FriendlyByteBuf seedBuf = new FriendlyByteBuf(sb);
-                    seedBuf.readLong(); // 布局内 worldSeed（与 payload.worldSeed() 相同，跳过）
-                    long stemLen = seedBuf.readVarInt();
-                    byte[] stemNbt = null;
-                    if (stemLen > 0 && stemLen <= seedBuf.readableBytes()) {
-                        stemNbt = new byte[(int) stemLen];
-                        seedBuf.readBytes(stemNbt);
-                    }
-                    boolean seedGenEnabled = seedBuf.readableBytes() >= 1 && seedBuf.readBoolean();
-                    ClientChunkPipeline.getInstance().setServerSeedInfo(payload.worldSeed(), stemNbt, seedGenEnabled);
-                    sb.release();
-                } catch (Throwable e) {
-                    LOGGER.debug("Hassium: failed to decode SeedGen tail (legacy server?)", e);
-                }
-            }
-            if (payload.accepted()) {
-                startUdpFromHandshakeTail(payload.dataplaneTail());
-            }
-        });
-    }
-
-    private static void handleCompressedChunk(CompressedChunkPayload payload, PlayPayloadContext context) {
-        context.workHandler().execute(() -> {
-            try {
-                ClientChunkHandler.handleCompressedChunk(payload.data());
-            } catch (Exception e) {
-                LOGGER.error("[CLIENT] Failed to handle compressed chunk", e);
-            }
-        });
-    }
-
     private static void handleChunkDataRequest(ChunkDataRequestPayload payload, PlayPayloadContext context) {
         context.workHandler().execute(() -> {
             try {
@@ -2349,30 +2290,6 @@ public class NeoForgeNetworkManager implements NetworkManager {
         });
     }
 
-    private static void handleChunkHash(ChunkHashPayload payload, PlayPayloadContext context) {
-        context.workHandler().execute(() -> {
-            try {
-                FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(payload.data()));
-                ChunkHashS2CPacket packet = ChunkHashS2CPacket.decode(buf);
-                ClientMetadataHandler.handleChunkHashPacket(packet);
-            } catch (Exception e) {
-                LOGGER.error("[CLIENT] Failed to handle chunk hash", e);
-            }
-        });
-    }
-
-    private static void handleSeedRef(SeedRefPayload payload, PlayPayloadContext context) {
-        context.workHandler().execute(() -> {
-            try {
-                FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(payload.data()));
-                SeedRefS2CPacket packet = SeedRefS2CPacket.decode(buf);
-                ClientMetadataHandler.handleSeedRefPacket(packet);
-            } catch (Exception e) {
-                LOGGER.error("[CLIENT] Failed to handle seed ref", e);
-            }
-        });
-    }
-
     private static void handleSectionHashRequest(SectionHashRequestPayload payload, PlayPayloadContext context) {
         context.workHandler().execute(() -> {
             try {
@@ -2387,20 +2304,6 @@ public class NeoForgeNetworkManager implements NetworkManager {
         });
     }
 
-    private static void handleSectionDelta(SectionDeltaPayload payload, PlayPayloadContext context) {
-        try {
-            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(payload.data()));
-            try {
-                SectionDeltaS2CPacket packet = SectionDeltaS2CPacket.decode(buf);
-                io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.submitDelta(packet);
-            } finally {
-                buf.release();
-            }
-        } catch (Exception e) {
-            LOGGER.error("[CLIENT] Failed to handle section delta packet", e);
-        }
-    }
-
     private static void handleBlockEntityRequest(BlockEntityRequestPayload payload, PlayPayloadContext context) {
         context.workHandler().execute(() -> {
             try {
@@ -2411,18 +2314,6 @@ public class NeoForgeNetworkManager implements NetworkManager {
                 }
             } catch (Exception e) {
                 LOGGER.error("[SERVER] Failed to handle block entity request", e);
-            }
-        });
-    }
-
-    private static void handleBlockEntityData(BlockEntityDataPayload payload, PlayPayloadContext context) {
-        context.workHandler().execute(() -> {
-            try {
-                FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(payload.data()));
-                BlockEntityDataS2CPacket packet = BlockEntityDataS2CPacket.decode(buf);
-                ClientMetadataHandler.handleBlockEntityDataPacket(packet);
-            } catch (Exception e) {
-                LOGGER.error("[CLIENT] Failed to handle block entity data", e);
             }
         });
     }
@@ -2474,20 +2365,6 @@ public class NeoForgeNetworkManager implements NetworkManager {
                 NeoForgeNetworkManager::handleHandshake
         );
 
-        // 注册握手响应 (S2C)
-        registrar.playToClient(
-                HandshakeResponsePayload.TYPE,
-                HandshakeResponsePayload.STREAM_CODEC,
-                NeoForgeNetworkManager::handleHandshakeResponse
-        );
-
-        // 注册压缩区块数据 (S2C)
-        registrar.playToClient(
-                CompressedChunkPayload.TYPE,
-                CompressedChunkPayload.STREAM_CODEC,
-                NeoForgeNetworkManager::handleCompressedChunk
-        );
-
         // 注册区块数据请求 (C2S)
         registrar.playToServer(
                 ChunkDataRequestPayload.TYPE,
@@ -2502,20 +2379,6 @@ public class NeoForgeNetworkManager implements NetworkManager {
                 NeoForgeNetworkManager::handleClientBloomSync
         );
 
-        // 注册区块哈希 (S2C)
-        registrar.playToClient(
-                ChunkHashPayload.TYPE,
-                ChunkHashPayload.STREAM_CODEC,
-                NeoForgeNetworkManager::handleChunkHash
-        );
-
-        // 注册 SeedRef (S2C)
-        registrar.playToClient(
-                SeedRefPayload.TYPE,
-                SeedRefPayload.STREAM_CODEC,
-                NeoForgeNetworkManager::handleSeedRef
-        );
-
         // 注册 Section 哈希请求 (C2S)
         registrar.playToServer(
                 SectionHashRequestPayload.TYPE,
@@ -2523,44 +2386,11 @@ public class NeoForgeNetworkManager implements NetworkManager {
                 NeoForgeNetworkManager::handleSectionHashRequest
         );
 
-        // 注册 Section Delta (S2C)
-        registrar.playToClient(
-                SectionDeltaPayload.TYPE,
-                SectionDeltaPayload.STREAM_CODEC,
-                NeoForgeNetworkManager::handleSectionDelta
-        );
-
         // 注册 BlockEntity 请求 (C2S)
         registrar.playToServer(
                 BlockEntityRequestPayload.TYPE,
                 BlockEntityRequestPayload.STREAM_CODEC,
                 NeoForgeNetworkManager::handleBlockEntityRequest
-        );
-
-        // 注册 BlockEntity 数据 (S2C)
-        registrar.playToClient(
-                BlockEntityDataPayload.TYPE,
-                BlockEntityDataPayload.STREAM_CODEC,
-                NeoForgeNetworkManager::handleBlockEntityData
-        );
-
-        // 注册光照增量 (S2C)
-        registrar.playToClient(
-                LightDeltaPayload.TYPE,
-                LightDeltaPayload.STREAM_CODEC,
-                NeoForgeNetworkManager::handleLightDelta
-        );
-
-        registrar.playToClient(
-                DictionarySyncNeoPayload.TYPE,
-                DictionarySyncNeoPayload.STREAM_CODEC,
-                (payload, ctx) -> ctx.enqueueWork(() -> handleDictionarySyncClient(payload.data()))
-        );
-
-        registrar.playToClient(
-                IndexSyncNeoPayload.TYPE,
-                IndexSyncNeoPayload.STREAM_CODEC,
-                (payload, ctx) -> ctx.enqueueWork(() -> handleIndexSyncClient(payload.data()))
         );
 
         registrar.playToServer(
@@ -2580,7 +2410,27 @@ public class NeoForgeNetworkManager implements NetworkManager {
         context.enqueueWork(() -> {
             if (context.player() instanceof ServerPlayer player) {
                 // 客户端上报位置：校正 resync 视距中心（failover/重连时服务端玩家对象位置滞后）
-                ServerChunkPushManager.getInstance().setInitialPlayerPosition(player, payload.playerX(), payload.playerZ());
+                // T7 位置上报扩展：完整玩家状态（y/yaw/pitch/维度）
+                HandshakeStateTail.C2S stateTail = payload.stateTail();
+                PlayerStateReport reportedState = stateTail != null && stateTail.state() != null && stateTail.state().present()
+                        ? stateTail.state()
+                        : PlayerStateReport.fromXZ(payload.playerX(), payload.playerZ());
+                ServerChunkPushManager.getInstance().setInitialPlayerPosition(player, reportedState);
+                // T7 续流验票（验签 + epoch 防重放）→ 续流就绪 → 复用现有推送链
+                boolean resumeAccepted = false;
+                if (stateTail != null && stateTail.resumeRequested()) {
+                    ResumeTicketValidator.Verification resume =
+                            ResumeTicketValidator.verifyRequest(player.getUUID(), stateTail.resumeTicket());
+                    if (resume.accepted()) {
+                        resumeAccepted = true;
+                        ServerChunkPushManager.getInstance().markPlayerResumeActive(player.getUUID(), resume.epoch());
+                        LOGGER.info("Hassium: [RESUME] {} ticket verified (epoch={}) — 续流就绪，跳过 login/维度初始化",
+                                player.getName().getString(), resume.epoch());
+                    } else {
+                        LOGGER.warn("Hassium: [RESUME] {} ticket REJECTED (签名无效/epoch 重放) — 回退完整握手",
+                                player.getName().getString());
+                    }
+                }
                 // SeedGen 能力记录
                 ServerChunkPushManager.getInstance().setPlayerSeedGenSupported(player.getUUID(), payload.seedGenSupported());
                 ServerChunkPushManager.getInstance().setPlayerLightComputeSupported(player.getUUID(), payload.lightComputeSupported());
@@ -2617,7 +2467,8 @@ public class NeoForgeNetworkManager implements NetworkManager {
                 tailBuffer.readBytes(dataplaneTail);
                 HandshakeResponsePayload response = new HandshakeResponsePayload(
                         Constants.CURRENT_PROTOCOL_VERSION, accepted, useGlobalCompression, useCompactHeader,
-                        dataplaneTail, worldSeed, seedGenTail, seedGenEnabled, payload.seedGenSupported());
+                        dataplaneTail, worldSeed, seedGenTail, seedGenEnabled, payload.seedGenSupported(),
+                        resumeAccepted);
                 // 先暂停出站压缩，再发 HandshakeResponse，避免响应后的包仍走 Zlib
                 if (useGlobalCompression) {
                     DictionaryManager.init();
@@ -2635,49 +2486,6 @@ public class NeoForgeNetworkManager implements NetworkManager {
                 if (accepted && !useGlobalCompression) {
                     ServerChunkPushManager.getInstance().resyncTrackedChunks(player);
                 }
-            }
-        });
-    }
-
-    private static void handleHandshakeResponse(HandshakeResponsePayload payload, IPayloadContext context) {
-        // 服务端已暂停压缩；装 ZSTD 后发 ACK，主线程处理也安全
-        if (payload.accepted() && payload.globalCompressionAccepted()) {
-            tryInstallClientZstdPipeline();
-        }
-        context.enqueueWork(() -> {
-            LOGGER.info("Hassium: Client handshake response: accepted={}, globalCompression={}, compactHeader={}",
-                    payload.accepted(), payload.globalCompressionAccepted(), payload.compactHeaderAccepted());
-            // SeedGen 信息（新格式下服务端保证带尾部；旧服务端默认不启用）
-            if (payload.seedGenTail().length > 0) {
-                try {
-                    io.netty.buffer.ByteBuf sb = io.netty.buffer.Unpooled.wrappedBuffer(payload.seedGenTail());
-                    FriendlyByteBuf seedBuf = new FriendlyByteBuf(sb);
-                    seedBuf.readLong(); // 布局内 worldSeed（与 payload.worldSeed() 相同，跳过）
-                    long stemLen = seedBuf.readVarInt();
-                    byte[] stemNbt = null;
-                    if (stemLen > 0 && stemLen <= seedBuf.readableBytes()) {
-                        stemNbt = new byte[(int) stemLen];
-                        seedBuf.readBytes(stemNbt);
-                    }
-                    boolean seedGenEnabled = seedBuf.readableBytes() >= 1 && seedBuf.readBoolean();
-                    ClientChunkPipeline.getInstance().setServerSeedInfo(payload.worldSeed(), stemNbt, seedGenEnabled);
-                    sb.release();
-                } catch (Throwable e) {
-                    LOGGER.debug("Hassium: failed to decode SeedGen tail (legacy server?)", e);
-                }
-            }
-            if (payload.accepted()) {
-                startUdpFromHandshakeTail(payload.dataplaneTail());
-            }
-        });
-    }
-
-    private static void handleCompressedChunk(CompressedChunkPayload payload, IPayloadContext context) {
-        context.enqueueWork(() -> {
-            try {
-                ClientChunkHandler.handleCompressedChunk(payload.data());
-            } catch (Exception e) {
-                LOGGER.error("[CLIENT] Failed to handle compressed chunk", e);
             }
         });
     }
@@ -2710,30 +2518,6 @@ public class NeoForgeNetworkManager implements NetworkManager {
         });
     }
 
-    private static void handleChunkHash(ChunkHashPayload payload, IPayloadContext context) {
-        context.enqueueWork(() -> {
-            try {
-                FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(payload.data()));
-                ChunkHashS2CPacket packet = ChunkHashS2CPacket.decode(buf);
-                ClientMetadataHandler.handleChunkHashPacket(packet);
-            } catch (Exception e) {
-                LOGGER.error("[CLIENT] Failed to handle chunk hash", e);
-            }
-        });
-    }
-
-    private static void handleSeedRef(SeedRefPayload payload, IPayloadContext context) {
-        context.enqueueWork(() -> {
-            try {
-                FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(payload.data()));
-                SeedRefS2CPacket packet = SeedRefS2CPacket.decode(buf);
-                ClientMetadataHandler.handleSeedRefPacket(packet);
-            } catch (Exception e) {
-                LOGGER.error("[CLIENT] Failed to handle seed ref", e);
-            }
-        });
-    }
-
     private static void handleSectionHashRequest(SectionHashRequestPayload payload, IPayloadContext context) {
         context.enqueueWork(() -> {
             try {
@@ -2746,20 +2530,6 @@ public class NeoForgeNetworkManager implements NetworkManager {
                 LOGGER.error("[SERVER] Failed to handle section hash request", e);
             }
         });
-    }
-
-    private static void handleSectionDelta(SectionDeltaPayload payload, IPayloadContext context) {
-        try {
-            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(payload.data()));
-            try {
-                SectionDeltaS2CPacket packet = SectionDeltaS2CPacket.decode(buf);
-                io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.submitDelta(packet);
-            } finally {
-                buf.release();
-            }
-        } catch (Exception e) {
-            LOGGER.error("[CLIENT] Failed to handle section delta packet", e);
-        }
     }
 
     private static void handleBlockEntityRequest(BlockEntityRequestPayload payload, IPayloadContext context) {
@@ -2775,117 +2545,9 @@ public class NeoForgeNetworkManager implements NetworkManager {
             }
         });
     }
-
-    private static void handleBlockEntityData(BlockEntityDataPayload payload, IPayloadContext context) {
-        context.enqueueWork(() -> {
-            try {
-                FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(payload.data()));
-                BlockEntityDataS2CPacket packet = BlockEntityDataS2CPacket.decode(buf);
-                ClientMetadataHandler.handleBlockEntityDataPacket(packet);
-            } catch (Exception e) {
-                LOGGER.error("[CLIENT] Failed to handle block entity data", e);
-            }
-        });
-    }
-
-    private static void handleLightDelta(LightDeltaPayload payload, IPayloadContext context) {
-        // 方案 A：客户端不消费 LightDelta，no-op
-    }
 #endif
 
     // ========== 发送方法实现 ==========
-
-    @Override
-    public void sendHandshakeRequest() {
-        if (!HassiumConfigService.getInstance().isNetworkCompressionEnabled()) {
-            LOGGER.debug("Hassium: Skip handshake — network.enabled=false");
-            return;
-        }
-#if MC_VER < MC_1_20_4
-        if (net.minecraft.client.Minecraft.getInstance().getConnection() != null) {
-            String compressionAlgorithm = HassiumConfigService.getInstance().getCompressionAlgorithm();
-            String dictAlgorithm = compressionAlgorithm + "_dict";
-            // 玩家坐标（服务端校正 resync 视距中心）；同时立即刷新位置缓存（不等首帧 tick）
-            net.minecraft.client.Minecraft mc = net.minecraft.client.Minecraft.getInstance();
-            double playerX = 0.0;
-            double playerZ = 0.0;
-            if (mc.player != null) {
-                playerX = mc.player.getX();
-                playerZ = mc.player.getZ();
-                io.github.limuqy.mc.hassium.concurrent.MainThreadDispatcher.updatePlayerPosition(playerX, playerZ);
-            }
-            // 管线未就绪时由 switchToZstdWhenReady 延后安装，不在此关闭能力
-            CHANNEL.sendToServer(new HandshakeWrapper(
-                    Constants.CURRENT_PROTOCOL_VERSION,
-                    Constants.MOD_VERSION,
-                    new String[]{compressionAlgorithm, dictAlgorithm},
-                    true, true, false, true, true,
-                    new io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail.C2STail(true, true),
-                    playerX,
-                    playerZ,
-                    HassiumConfigService.getInstance().isClientSeedGenEnabled(),
-                    HassiumConfigService.getInstance().isHassiumEngineEnabled()
-            ));
-            LOGGER.debug("Hassium: Sent handshake request to server");
-        } else {
-            LOGGER.warn("Hassium: Cannot send handshake request, connection is null");
-        }
-#elif MC_VER < MC_1_20_5
-        if (net.minecraft.client.Minecraft.getInstance().getConnection() != null) {
-            String compressionAlgorithm = HassiumConfigService.getInstance().getCompressionAlgorithm();
-            String dictAlgorithm = compressionAlgorithm + "_dict";
-            // 玩家坐标（服务端校正 resync 视距中心）；同时立即刷新位置缓存（不等首帧 tick）
-            net.minecraft.client.Minecraft mc = net.minecraft.client.Minecraft.getInstance();
-            double playerX = 0.0;
-            double playerZ = 0.0;
-            if (mc.player != null) {
-                playerX = mc.player.getX();
-                playerZ = mc.player.getZ();
-                io.github.limuqy.mc.hassium.concurrent.MainThreadDispatcher.updatePlayerPosition(playerX, playerZ);
-            }
-            HandshakePayload payload = new HandshakePayload(
-                    Constants.CURRENT_PROTOCOL_VERSION,
-                    Constants.MOD_VERSION,
-                    new String[]{compressionAlgorithm, dictAlgorithm},
-                    true, true, false, true, true,
-                    new io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail.C2STail(true, true),
-                    playerX,
-                    playerZ,
-                    HassiumConfigService.getInstance().isClientSeedGenEnabled(),
-                    HassiumConfigService.getInstance().isHassiumEngineEnabled()
-            );
-            net.minecraft.client.Minecraft.getInstance().getConnection().send(new ServerboundCustomPayloadPacket(payload));
-            LOGGER.debug("Hassium: Sent handshake request (Payload 1.20.4)");
-        }
-#else
-        if (net.minecraft.client.Minecraft.getInstance().getConnection() != null) {
-            String compressionAlgorithm = HassiumConfigService.getInstance().getCompressionAlgorithm();
-            String dictAlgorithm = compressionAlgorithm + "_dict";
-            // 玩家坐标（服务端校正 resync 视距中心）；同时立即刷新位置缓存（不等首帧 tick）
-            net.minecraft.client.Minecraft mc = net.minecraft.client.Minecraft.getInstance();
-            double playerX = 0.0;
-            double playerZ = 0.0;
-            if (mc.player != null) {
-                playerX = mc.player.getX();
-                playerZ = mc.player.getZ();
-                io.github.limuqy.mc.hassium.concurrent.MainThreadDispatcher.updatePlayerPosition(playerX, playerZ);
-            }
-            HandshakePayload payload = new HandshakePayload(
-                    Constants.CURRENT_PROTOCOL_VERSION,
-                    Constants.MOD_VERSION,
-                    new String[]{compressionAlgorithm, dictAlgorithm},
-                    true, true, false, true, true,
-                    new io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail.C2STail(true, true),
-                    playerX,
-                    playerZ,
-                    HassiumConfigService.getInstance().isClientSeedGenEnabled(),
-                    HassiumConfigService.getInstance().isHassiumEngineEnabled()
-            );
-            net.minecraft.client.Minecraft.getInstance().getConnection().send(payload);
-            LOGGER.debug("Hassium: Sent handshake request (Payload)");
-        }
-#endif
-    }
 
     @Override
     public void sendChunkDataRequest(FriendlyByteBuf buf) {

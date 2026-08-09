@@ -15,11 +15,6 @@ public interface NetworkManager {
     void registerChannels();
 
     /**
-     * 发送握手请求到服务端
-     */
-    void sendHandshakeRequest();
-
-    /**
      * 发送区块数据请求到服务端（客户端调用）
      */
     void sendChunkDataRequest(FriendlyByteBuf buf);

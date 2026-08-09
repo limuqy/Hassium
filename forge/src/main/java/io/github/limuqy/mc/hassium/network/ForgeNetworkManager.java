@@ -311,9 +311,6 @@ public class ForgeNetworkManager implements NetworkManager {
         // ServerPlayer 创建时自动提升压缩 → 进服第一圈 sendChunk 全走 Hassium 链。
         // 必须在 build() 之前注册：Forge 52.1.15 SimpleChannel.build() 会置 built=true，
         // 之后 messageBuilder 抛 IllegalStateException("SimpleChannel builder is fully built")。
-        // 发送必须走 CHANNEL.send（forge 消息路径 → ForgePayload 包装）：客户端直接发
-        // vanilla ServerboundCustomPayloadPacket 会因 forge 配置阶段 custom_payload 统一
-        // 由 ForgePayload 接管而抛 ClassCastException（1.21.1 实测），见 sendPreHandshake()。
         channel.messageBuilder(PreHandshakePayload.class, NetworkDirection.CONFIGURATION_TO_SERVER)
                 .codec(PreHandshakePayload.STREAM_CODEC)
                 .consumer(ForgeNetworkManager::onPreHandshake)
@@ -377,32 +374,6 @@ public class ForgeNetworkManager implements NetworkManager {
                 (buf, msg) -> encode.accept(msg, buf),
                 buf -> decode.apply(buf)
         );
-    }
-
-    /**
-     * 客户端配置阶段发送预握手（1.20.5+，{@code MixinClientConfigurationPacketListenerImpl}
-     * 在 handleGameProfile TAIL 调用，此时出站协议已切 CONFIGURATION）。
-     * <p>
-     * 必须走 {@code CHANNEL.send}（forge 消息路径 → ForgePayload 包装）：forge 配置阶段
-     * 的 custom_payload 统一由 ForgePayload 接管，直接发 vanilla
-     * {@code ServerboundCustomPayloadPacket} 会抛
-     * {@code PreHandshakePayload cannot be cast to ForgePayload}（1.21.1 实测）。
-     */
-    public void sendPreHandshake(net.minecraft.network.Connection connection) {
-#if MC_VER >= MC_1_20_5
-        if (CHANNEL == null) {
-            LOGGER.warn("Hassium: Forge channel not registered, skip pre-handshake");
-            return;
-        }
-        try {
-            CHANNEL.send(PreHandshakePayload.create(), connection);
-            DebugLogger.info(LogType.NETWORK, "[PRE_HANDSHAKE] Sent pre-handshake (configuration phase)");
-        } catch (Exception e) {
-            DebugLogger.warn(LogType.NETWORK, "[PRE_HANDSHAKE] Failed to send pre-handshake: {}", e.toString());
-        }
-#else
-        // 1.20.1：无配置阶段（forge 1.20.1 无通道 API，登录 query 由 fabric 实现）
-#endif
     }
 
     private static void onPreHandshake(PreHandshakePayload msg, CustomPayloadEvent.Context ctx) {
@@ -532,7 +503,27 @@ public class ForgeNetworkManager implements NetworkManager {
         }
 
         // 客户端上报位置：校正 resync 视距中心（failover/重连时服务端玩家对象位置滞后）
-        ServerChunkPushManager.getInstance().setInitialPlayerPosition(player, msg.playerX(), msg.playerZ());
+        // T7 位置上报扩展：完整玩家状态（y/yaw/pitch/维度）
+        HandshakeStateTail.C2S stateTail = msg.stateTail();
+        PlayerStateReport reportedState = stateTail != null && stateTail.state() != null && stateTail.state().present()
+                ? stateTail.state()
+                : PlayerStateReport.fromXZ(msg.playerX(), msg.playerZ());
+        ServerChunkPushManager.getInstance().setInitialPlayerPosition(player, reportedState);
+        // T7 续流验票（验签 + epoch 防重放）→ 续流就绪 → 复用现有推送链
+        boolean resumeAccepted = false;
+        if (stateTail != null && stateTail.resumeRequested()) {
+            ResumeTicketValidator.Verification resume =
+                    ResumeTicketValidator.verifyRequest(player.getUUID(), stateTail.resumeTicket());
+            if (resume.accepted()) {
+                resumeAccepted = true;
+                ServerChunkPushManager.getInstance().markPlayerResumeActive(player.getUUID(), resume.epoch());
+                LOGGER.info("Hassium: [RESUME] {} ticket verified (epoch={}) — 续流就绪，跳过 login/维度初始化",
+                        player.getName().getString(), resume.epoch());
+            } else {
+                LOGGER.warn("Hassium: [RESUME] {} ticket REJECTED (签名无效/epoch 重放) — 回退完整握手",
+                        player.getName().getString());
+            }
+        }
         // SeedGen 能力记录
         ServerChunkPushManager.getInstance().setPlayerSeedGenSupported(player.getUUID(), msg.seedGenSupported());
         // 光照计算能力记录（剥光协商：false = 不剥光，光随包自带）
@@ -575,7 +566,8 @@ public class ForgeNetworkManager implements NetworkManager {
                 createServerTail(player, msg),
                 worldSeed,
                 seedGenTail,
-                seedGenEnabled
+                seedGenEnabled,
+                resumeAccepted
         );
         // 暂停出站压缩，等客户端 CompressionReady ACK 后再切 ZSTD（与 Fabric/NeoForge 对齐）
         if (useGlobalCompression) {
@@ -607,11 +599,18 @@ public class ForgeNetworkManager implements NetworkManager {
         }
         try {
             boolean udpBound = DataPlaneUdpServer.isBound();
+            // epoch 口径统一（顺手修）：与 Fabric/NeoForge 一致，取 DataPlaneUdpServer
+            // per-player 递增会话 epoch（原 System.nanoTime() 与两端口径不一致）。
+            Connection master = getPlayerConnection(player);
+            long epoch = master != null
+                    ? DataPlaneUdpServer.beginControlConnection(player.getUUID(),
+                            () -> master.disconnect(net.minecraft.network.chat.Component.empty()))
+                    : System.currentTimeMillis();
             UdpDataPlaneHandshakeTail.S2CTail tail = DataPlaneHandshakeAdvertisement.create(
                     DataPlaneUdpServer.advertisedControlEndpoints(),
                     DataPlaneUdpServer.boundEndpoints(),
                     udpBound ? DataPlaneUdpServer.getSessionToken() : null,
-                    System.nanoTime(),
+                    epoch,
                     c2s.udpDataplaneSupported() && udpBound,
                     c2s.controlFailoverSupported());
             io.netty.buffer.ByteBuf buffer = io.netty.buffer.Unpooled.buffer();
@@ -627,8 +626,11 @@ public class ForgeNetworkManager implements NetworkManager {
     }
 
     private static void handleHandshakeS2C(HandshakeResponsePacket msg) {
-        LOGGER.info("Hassium: Client handshake response: accepted={}, globalCompression={}, compactHeader={}",
-                msg.accepted(), msg.globalCompressionAccepted(), msg.compactHeaderAccepted());
+        LOGGER.info("Hassium: Client handshake response: accepted={}, globalCompression={}, compactHeader={}, resumeAccepted={}",
+                msg.accepted(), msg.globalCompressionAccepted(), msg.compactHeaderAccepted(), msg.resumeAccepted());
+        if (msg.resumeAccepted()) {
+            LOGGER.info("Hassium: [RESUME] Server accepted resume — 续流就绪，网关可跳过 login/维度初始化");
+        }
         // SeedGen 信息（append-only；旧服务端 worldSeed==0 / seedGenTail 空 → 不启用）
         try {
             if (msg.worldSeed() != 0L && msg.seedGenTail().length > 0) {
@@ -653,32 +655,6 @@ public class ForgeNetworkManager implements NetworkManager {
             try {
                 UdpDataPlaneHandshakeTail.S2CTail tail = UdpDataPlaneHandshakeTail.readS2C(
                         io.netty.buffer.Unpooled.wrappedBuffer(msg.dataplaneTail()));
-                java.util.List<io.github.limuqy.mc.hassium.network.dataplane.ControlEndpoint> candidates =
-                        new java.util.ArrayList<>();
-                for (var endpoint : tail.controlEndpoints()) {
-                    candidates.add(new io.github.limuqy.mc.hassium.network.dataplane.ControlEndpoint(
-                            endpoint.host(), endpoint.port(), endpoint.priority()));
-                }
-                io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity
-                        .mergeAdvertisedCandidates(candidates);
-                boolean recovered;
-                if (io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState.getInstance().isRecovering()) {
-                    io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState.getInstance().markRecovered();
-                    recovered = io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.onPrimaryHandshakeAccepted(null);
-                } else {
-                    recovered = io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.onHandshakeAccepted();
-                }
-                // 仅在真实恢复（orchestrator 曾进入恢复态且握手成功）时消费备用端点提示，
-                // 与 fabric 对齐（commit 4067a3e）：普通重连/首次登录不弹「已通过备用端点连接」；
-                // 否则 consumeSuccessfulFallback 会把上次会话遗留的 fallback 标记误报。
-                if (recovered) {
-                    io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.consumeSuccessfulFallback()
-                            .ifPresent(endpoint -> net.minecraft.client.Minecraft.getInstance().gui.getChat().addMessage(
-                                    net.minecraft.network.chat.Component.literal("[Hassium] 主地址 "
-                                            + io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.primaryAddress()
-                                            + " 不可用，已通过备用端点 " + endpoint.host() + ":" + endpoint.port()
-                                            + " 连接；服务器列表地址和缓存身份仍为主地址。")));
-                }
                 // UDP 数据面启动：与 fabric 对齐（FabricNetworkManager 同位置 startUdp）。
                 // 漏掉则 forge 客户端永不发 BindRequest → 服务端不打 UDP_BIND_OK / UDP_WRR_OK。
                 if (tail.hasUdpDataplane()) {
@@ -936,46 +912,6 @@ public class ForgeNetworkManager implements NetworkManager {
     }
 
     @Override
-    public void sendHandshakeRequest() {
-        if (!HassiumConfigService.getInstance().isNetworkCompressionEnabled()) {
-            LOGGER.debug("Hassium: Skip handshake — network.enabled=false");
-            return;
-        }
-        String compressionAlgorithm = HassiumConfigService.getInstance().getCompressionAlgorithm();
-        String dictAlgorithm = compressionAlgorithm + "_dict";
-        // 玩家坐标（服务端校正 resync 视距中心）；同时立即刷新位置缓存（不等首帧 tick）
-        net.minecraft.client.Minecraft mc = net.minecraft.client.Minecraft.getInstance();
-        double playerX = 0.0;
-        double playerZ = 0.0;
-        if (mc.player != null) {
-            playerX = mc.player.getX();
-            playerZ = mc.player.getZ();
-            io.github.limuqy.mc.hassium.concurrent.MainThreadDispatcher.updatePlayerPosition(playerX, playerZ);
-        }
-        HandshakePacket packet = new HandshakePacket(
-                Constants.CURRENT_PROTOCOL_VERSION,
-                Constants.MOD_VERSION,
-                new String[]{compressionAlgorithm, dictAlgorithm},
-                true,
-                true,
-                false,
-                true,
-                true,
-                new byte[] { 0x03 },
-                playerX,
-                playerZ,
-                HassiumConfigService.getInstance().isClientSeedGenEnabled(),
-                HassiumConfigService.getInstance().isHassiumEngineEnabled()
-        );
-#if MC_VER < MC_1_20_2
-        CHANNEL.sendToServer(packet);
-#else
-        sendToServer(packet);
-#endif
-        LOGGER.debug("Hassium: Sent handshake request to server");
-    }
-
-    @Override
     public void sendChunkDataRequest(FriendlyByteBuf buf) {
         byte[] data = new byte[buf.readableBytes()];
         buf.readBytes(data);
@@ -1110,7 +1046,8 @@ public class ForgeNetworkManager implements NetworkManager {
             double playerX,
             double playerZ,
             boolean seedGenSupported,
-            boolean lightComputeSupported
+            boolean lightComputeSupported,
+            HandshakeStateTail.C2S stateTail
     ) {
         public void encode(FriendlyByteBuf buf) {
             buf.writeVarInt(protocolVersion);
@@ -1130,6 +1067,10 @@ public class ForgeNetworkManager implements NetworkManager {
             buf.writeDouble(playerZ);
             buf.writeBoolean(seedGenSupported);
             buf.writeBoolean(lightComputeSupported);
+            // T7 状态尾部（append-only；旧服务端忽略尾字节）
+            if (stateTail != null) {
+                HandshakeStateTail.writeC2S(buf, stateTail);
+            }
         }
 
         public static HandshakePacket decode(FriendlyByteBuf buf) {
@@ -1172,6 +1113,11 @@ public class ForgeNetworkManager implements NetworkManager {
                 } catch (Exception ignored) {
                 }
             }
+            // T7 状态尾部（append-only；旧客户端无此字段 → null）
+            HandshakeStateTail.C2S stateTail = null;
+            if (buf.isReadable()) {
+                stateTail = HandshakeStateTail.readC2S(buf);
+            }
             return new HandshakePacket(
                     protocolVersion,
                     modVersion,
@@ -1185,7 +1131,8 @@ public class ForgeNetworkManager implements NetworkManager {
                     playerX,
                     playerZ,
                     seedGenSupported,
-                    lightComputeSupported
+                    lightComputeSupported,
+                    stateTail
             );
         }
     }
@@ -1198,7 +1145,8 @@ public class ForgeNetworkManager implements NetworkManager {
             byte[] dataplaneTail,
             long worldSeed,
             byte[] seedGenTail,
-            boolean seedGenEnabled
+            boolean seedGenEnabled,
+            boolean resumeAccepted
     ) {
         public void encode(FriendlyByteBuf buf) {
             buf.writeVarInt(protocolVersion);
@@ -1212,6 +1160,8 @@ public class ForgeNetworkManager implements NetworkManager {
             buf.writeVarInt(seedGenTail.length);
             buf.writeBytes(seedGenTail);
             buf.writeBoolean(seedGenEnabled);
+            // T7 续流就绪标记（append-only；旧客户端忽略尾字节）
+            buf.writeBoolean(resumeAccepted);
         }
 
         public static HandshakeResponsePacket decode(FriendlyByteBuf buf) {
@@ -1238,6 +1188,14 @@ public class ForgeNetworkManager implements NetworkManager {
                 } catch (Exception ignored) {
                 }
             }
+            // T7 续流就绪标记（append-only；旧服务端无此字段 → false）
+            boolean resumeAccepted = false;
+            if (buf.isReadable()) {
+                try {
+                    resumeAccepted = buf.readBoolean();
+                } catch (Exception ignored) {
+                }
+            }
             return new HandshakeResponsePacket(
                     protocolVersion,
                     accepted,
@@ -1246,7 +1204,8 @@ public class ForgeNetworkManager implements NetworkManager {
                     dataplaneTail,
                     worldSeed,
                     seedGenTail,
-                    seedGenEnabled
+                    seedGenEnabled,
+                    resumeAccepted
             );
         }
     }

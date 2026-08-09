@@ -393,4 +393,38 @@ public class ClientMetadataHandler {
             }
         }
     }
+
+    // ===== 实体数据转发（T3：客户端只转发不消费）=====
+
+    /**
+     * 实体包转发到影子端（MixinClientPacketListener 7 个实体 handler HEAD 注入调用）。
+     * <p>
+     * 纯转发：不解析包内容、不 cancel vanilla、不做任何实体数据消费——影子端
+     * {@code ShadowSeedServer.applyEntityPacket} 内部按 instanceof 分发重建/更新实体。
+     * <p>
+     * gate：未进服 / 配置关或影子端降级（{@code isClientFeatureGateOpen}）/ 影子端未创建
+     * （{@code ShadowServerRegistry#get()} 不触发创建——实体包不应触发影子端创建，
+     * 登录流程已创建）→ 静默丢弃。转发调用包 try-catch：恶意/异常包不得打断
+     * vanilla 处理。
+     */
+    public static void forwardEntityPacket(net.minecraft.network.protocol.Packet<?> packet) {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.player == null || mc.level == null) {
+            return;
+        }
+        // 网络/功能 gate：hassiumEngineEnabled 关或影子端创建失败（降级态）→ 静默丢弃
+        if (!io.github.limuqy.mc.hassium.config.HassiumConfigService.getInstance().isClientFeatureGateOpen()) {
+            return;
+        }
+        io.github.limuqy.mc.hassium.network.seedgen.ShadowSeedServer server =
+                io.github.limuqy.mc.hassium.network.seedgen.ShadowServerRegistry.getInstance().get();
+        if (server == null) {
+            return; // 影子端未就绪/握手未完成（登录流程创建；此处不 getOrCreate）
+        }
+        try {
+            server.applyEntityPacket(packet);
+        } catch (Throwable ignored) {
+            // 纯转发：转发异常不得影响 vanilla 包处理（防恶意包）
+        }
+    }
 }

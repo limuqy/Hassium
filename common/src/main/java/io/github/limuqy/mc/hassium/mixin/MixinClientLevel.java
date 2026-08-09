@@ -27,31 +27,6 @@ public class MixinClientLevel implements IClientLevelExtension {
     private final Set<Long> hassium$renderOnlyChunks = new HashSet<>();
 
     /**
-     * L2 世界定格：恢复窗口内暂停世界 tick（区块加载/时间推进等），画面保持定格。
-     * 仅在 {@code network.dataPlane.recoveryFreeze=true}（默认）时生效；false=无感切换：
-     * 世界继续运行，玩家本地操作照常（C2S 被恢复窗口吞掉），恢复成功后 setLevel 回退。
-     * 全版本生效（{@code ClientLevel.tick(BooleanSupplier)} 签名跨 1.20.1~1.21.11 稳定）。
-     */
-    @Inject(method = "tick(Ljava/util/function/BooleanSupplier;)V", at = @At("HEAD"), cancellable = true)
-    private void hassium$freezeTick(java.util.function.BooleanSupplier hasTimeLeft, CallbackInfo ci) {
-        if (io.github.limuqy.mc.hassium.config.HassiumConfigService.getInstance().isRecoveryFreeze()
-                && io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.isRecovering()) {
-            ci.cancel();
-        }
-    }
-
-    /**
-     * L2 世界定格：恢复窗口内暂停实体 tick。
-     */
-    @Inject(method = "tickEntities", at = @At("HEAD"), cancellable = true)
-    private void hassium$freezeTickEntities(CallbackInfo ci) {
-        if (io.github.limuqy.mc.hassium.config.HassiumConfigService.getInstance().isRecoveryFreeze()
-                && io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.isRecovering()) {
-            ci.cancel();
-        }
-    }
-
-    /**
      * 检查区块是否为仅渲染区块
      */
     @Override

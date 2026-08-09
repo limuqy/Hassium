@@ -58,6 +58,83 @@ public class MixinConnection {
 #endif
 
     /**
+     * T5/T10 C2S 通路截获（按 packetListener 阶段分发，send HEAD，可 cancel）：
+     * <ul>
+     *   <li>服务端方向（send 的是 S2C）：零开销放行——先判定服务端监听器，后续客户端类
+     *       instanceof 不执行（dedicated server 客户端类不存在，禁止解析）。</li>
+     *   <li>客户端登录阶段（ClientHandshakePacketListenerImpl）：纯旁路中继 LOGIN_C2S
+     *       （T5；不 cancel——vanilla 登录照常，主控会话由网关独立复刻）。</li>
+     *   <li>客户端配置阶段（ClientConfigurationPacketListenerImpl，1.20.2+）：纯旁路中继
+     *       CONFIG_C2S（T10；不 cancel——客户端配置由 vanilla TCP 完成，镜像供主控阶段推进）。</li>
+     *   <li>客户端 PLAY 阶段（ClientPacketListener）：routeC2S 编码进 outbound（PACKET_C2S），
+     *       返回 true 时 cancel 原版发送——原版连接为壳，C2S 全走网关；keep-alive 响应例外
+     *       （壳连接保活镜像，下波任务）。未路由（outbound 未开/编码失败）原版放行降级。</li>
+     * </ul>
+     * 与 {@link #hassium$tryAggregate}（服务端聚合，cancel 语义独立）互斥：两端监听器类型
+     * 不相交，顺序无关。
+     */
+#if MC_VER < MC_1_21_6
+    @Inject(method = "send(Lnet/minecraft/network/protocol/Packet;Lnet/minecraft/network/PacketSendListener;)V", at = @At("HEAD"), cancellable = true)
+    private void hassium$routeC2SToGateway(Packet<?> packet, PacketSendListener sendListener, CallbackInfo ci) {
+        hassium$routeC2S(packet, ci);
+    }
+#else
+    @Inject(method = "send(Lnet/minecraft/network/protocol/Packet;Lio/netty/channel/ChannelFutureListener;)V", at = @At("HEAD"), cancellable = true)
+    private void hassium$routeC2SToGateway(Packet<?> packet, ChannelFutureListener sendListener, CallbackInfo ci) {
+        hassium$routeC2S(packet, ci);
+    }
+#endif
+
+    @Unique
+    private void hassium$routeC2S(Packet<?> packet, CallbackInfo ci) {
+        // 服务端方向零开销：S2C 发送不路由（客户端类引用不得解析——dedicated server 无客户端类）
+        if (packetListener instanceof ServerGamePacketListenerImpl
+                || packetListener instanceof net.minecraft.server.network.ServerLoginPacketListenerImpl
+                || packetListener instanceof net.minecraft.server.network.ServerHandshakePacketListenerImpl
+                || packetListener instanceof net.minecraft.server.network.ServerStatusPacketListenerImpl) {
+            return;
+        }
+#if MC_VER >= MC_1_20_2
+        if (packetListener instanceof net.minecraft.server.network.ServerConfigurationPacketListenerImpl) {
+            return;
+        }
+#endif
+        io.github.limuqy.mc.hassium.network.core.NetworkCore core =
+                io.github.limuqy.mc.hassium.network.core.NetworkCore.getInstance();
+        // 客户端 vanilla Connection 暂存（CONFIG_S2C 分发回退用；登录期同步登记）
+        core.setVanillaConnection((Connection) (Object) this);
+        if (packetListener instanceof net.minecraft.client.multiplayer.ClientHandshakePacketListenerImpl) {
+            core.relayLoginPacket(packet);
+            return;
+        }
+#if MC_VER >= MC_1_20_2
+        if (packetListener instanceof net.minecraft.client.multiplayer.ClientConfigurationPacketListenerImpl) {
+            core.relayConfigPacket(packet);
+            return;
+        }
+#endif
+        if (packetListener instanceof net.minecraft.client.multiplayer.ClientPacketListener) {
+            // 壳保活：keep-alive 响应走 vanilla TCP（网关会话为主，壳连接不被服务端踢）
+            if (hassium$isKeepAlive(packet)) {
+                return;
+            }
+            if (core.routeC2S(packet)) {
+                ci.cancel();
+            }
+        }
+    }
+
+    /** keep-alive 响应判定（1.20.1 在 game 包；1.20.2+ 在 common 包——按监听器阶段已收敛，包类仅防误伤）。 */
+    @Unique
+    private static boolean hassium$isKeepAlive(Packet<?> packet) {
+#if MC_VER < MC_1_20_2
+        return packet instanceof net.minecraft.network.protocol.game.ServerboundKeepAlivePacket;
+#else
+        return packet instanceof net.minecraft.network.protocol.common.ServerboundKeepAlivePacket;
+#endif
+    }
+
+    /**
      * 聚合拦截公共逻辑（需回调的包不聚合）。
      */
     @Unique
@@ -121,81 +198,9 @@ public class MixinConnection {
         Connection self = (Connection) (Object) this;
         HassiumConnectionRegistry.markDisabled(self);
         HassiumAggregationManager.discardConnection(self);
+        io.github.limuqy.mc.hassium.network.core.NetworkCore.getInstance().setVanillaConnection(null);
         if (this.channel != null) {
             ZstdNegotiationTracker.removeChannel(this.channel);
         }
-    }
-
-    /**
-     * 控制面断连统一入口（L2 恢复启动点迁移）：
-     * <ul>
-     *   <li>主线程 + channel 仍 open → 用户主动退出（PauseScreen 断开），标记后 failover gate 拦截。</li>
-     *   <li>其余（netty 线程 / 通道已关闭）→ 被动断连：驱动控制面恢复。主控断开与候选失败走同一入口，
-     *       orchestrator 剔除 active + 取下一候选，天然形成轮转闭环；服务端侧 instance==null no-op。</li>
-     * </ul>
-     *
-     * <p>带签名注入：1.21.5+ 的 {@code disconnect(DisconnectionDetails)} 重载不标记
-     * （exceptionCaught 非 timeout 走它）。
-     */
-    @Inject(method = "disconnect(Lnet/minecraft/network/chat/Component;)V", at = @At("HEAD"))
-    private void hassium$onControlDisconnect(CallbackInfo ci) {
-        Connection self = (Connection) (Object) this;
-        if (io.github.limuqy.mc.hassium.config.HassiumConfigService.getInstance().isDataplaneLogging()) {
-            io.github.limuqy.mc.hassium.Constants.LOG.info(
-                    "[diag] Connection.disconnect(Component) thread={} connected={} channelNull={} inEventLoop={}",
-                    Thread.currentThread().getName(), self.isConnected(), this.channel == null,
-                    this.channel != null && this.channel.eventLoop().inEventLoop());
-        }
-        if (self.isConnected() && this.channel != null && !this.channel.eventLoop().inEventLoop()) {
-            io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.markUserInitiatedDisconnect();
-            return;
-        }
-        // 被动断连（netty 线程 / 通道已关闭）：驱动控制面恢复
-        io.github.limuqy.mc.hassium.network.dataplane.ControlEndpoint active =
-                io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity
-                        .activeEndpointFromChannel(this.channel);
-        io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity
-                .onPrimaryDisconnected(active, "channel_inactive");
-    }
-
-    /**
-     * L2 无感切换（{@code network.dataPlane.recoveryFreeze=false}）：恢复窗口内吞掉旧连接的全部 C2S 包。
-     * <p>
-     * 无感模式世界不冻结、照常 tick，玩家输入/区块请求会经已断开的旧 connection 发送：
-     * 每次 writeAndFlush 都立即失败（failed future + disconnect 噪音）；更重要的是这些包
-     * 到不了已登出的服务器玩家——直接拦截，让本地预测照常（移动/挖掘客户端侧即时生效），
-     * 服务器无感知，恢复成功后 setLevel 以服务器状态重置：位置回退到断线点、刚挖的方块还原，
-     * 体感如同突然延迟变高卡了一下。
-     * <p>
-     * 只拦 {@code mc.getConnection()}（=旧 player.connection）：候选连接（ConnectScreen 持有）
-     * 不受影响；handleLogin 拆 player 后 getConnection() 先变 null、再指向新连接，均放行。
-     * 全版本生效（≥1.21.6 的 send 第二参数为 {@code ChannelFutureListener}，签名分流）。
-     */
-#if MC_VER < MC_1_21_6
-    @Inject(method = "send(Lnet/minecraft/network/protocol/Packet;Lnet/minecraft/network/PacketSendListener;)V",
-            at = @At("HEAD"), cancellable = true)
-    private void hassium$suppressC2SWhileSeamlessRecovery(
-            Packet<?> packet, net.minecraft.network.PacketSendListener listener,
-            CallbackInfo ci) {
-#else
-    @Inject(method = "send(Lnet/minecraft/network/protocol/Packet;Lio/netty/channel/ChannelFutureListener;)V",
-            at = @At("HEAD"), cancellable = true)
-    private void hassium$suppressC2SWhileSeamlessRecovery(
-            Packet<?> packet, io.netty.channel.ChannelFutureListener listener,
-            CallbackInfo ci) {
-#endif
-        if (io.github.limuqy.mc.hassium.config.HassiumConfigService.getInstance().isRecoveryFreeze()) {
-            return;
-        }
-        if (!io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.isRecovering()) {
-            return;
-        }
-        // 判断逻辑抽到普通类（ClientFailoverIdentity）：mixin handler 方法体直接引用
-        // 客户端类会在服务端变换时崩溃（ClassMetadataNotFoundException: net.minecraft.client.Minecraft）
-        if (!io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity
-                .isCurrentClientConnection((Object) this)) {
-            return;
-        }
-        ci.cancel();
     }
 }

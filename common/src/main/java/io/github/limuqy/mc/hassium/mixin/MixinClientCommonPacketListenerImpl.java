@@ -41,49 +41,5 @@ public class MixinClientCommonPacketListenerImpl {
         ClientLifecycleHelper.cleanupOnDisconnect();
     }
 
-    /**
-     * L2 恢复窗口 begin / UDP keepLease（在冻结 cancel 之前声明执行）。
-     * <p>
-     * 与 1.20.1 的 MixinClientPacketListener.hassium$beginRecoveryState 同逻辑：
-     * 无论先跑还是后跑（fabric DISCONNECT 事件同点竞争），恢复态 begin 与
-     * stopUdp(keepLease=true) 都必须已就位（stopUdp keepLease 幂等，双调安全），
-     * 否则恢复窗口内 finalize 不被抑制、UDP 束被硬关。
-     */
-    @Inject(method = "onDisconnect", at = @At("HEAD"))
-    private void hassium$beginRecoveryState(
-#if MC_VER < MC_1_21_1
-            net.minecraft.network.chat.Component reason,
-#else
-            net.minecraft.network.DisconnectionDetails details,
-#endif
-            CallbackInfo ci) {
-        if (!io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.isRecovering()) {
-            return;
-        }
-        io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState.getInstance().begin(
-                java.lang.System.currentTimeMillis() + 60_000L);
-        io.github.limuqy.mc.hassium.network.dataplane.DataPlaneClientLifecycle.getInstance()
-                .stopUdp(true);
-    }
-
-    /**
-     * L2 世界定格：恢复窗口中取消 vanilla onDisconnect 方法体（mc.disconnect →
-     * clearLevel + setScreen 均不执行），世界画面保持冻结；恢复成功 setLevel 或
-     * terminal 回退后再放行。
-     */
-    @Inject(method = "onDisconnect", at = @At("HEAD"), cancellable = true)
-    private void hassium$freezeOnDisconnect(
-#if MC_VER < MC_1_21_1
-            net.minecraft.network.chat.Component reason,
-#else
-            net.minecraft.network.DisconnectionDetails details,
-#endif
-            CallbackInfo ci) {
-        if (io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.isRecovering()) {
-            io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.markFreezeActive(true);
-            ci.cancel();
-        }
-    }
-
 #endif
 }

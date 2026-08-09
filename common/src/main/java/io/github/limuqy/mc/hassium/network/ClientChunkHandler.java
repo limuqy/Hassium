@@ -276,8 +276,9 @@ public class ClientChunkHandler {
             net.minecraft.network.FriendlyByteBuf friendlyBuf = new net.minecraft.network.FriendlyByteBuf(nettyBuf);
 
             // 通过平台抽象注入区块（需要传入 FriendlyByteBuf）
-            // hassiumApplyInProgress：本调用在 Hassium 主线程预算内，MixinVanillaChunkApplyBudget
-            // 不得再次拦截（否则入队 dispatcher 后 hasChunk 校验立即失败 → 假失败/重请求风暴）。
+            // hassiumApplyInProgress：本调用在 Hassium 主线程预算内，置重入标志防止与
+            // vanilla 区块加载路径互相拦截（入队 dispatcher 后 hasChunk 校验立即失败 →
+            // 假失败/重请求风暴）。
             ClientChunkPipeline pipeline = ClientChunkPipeline.getInstance();
             pipeline.setApplyInProgress(true);
             try {
@@ -298,7 +299,8 @@ public class ClientChunkHandler {
 
             // 区块就绪：发送延后的 BE 请求 + 冲刷暂存 BE
             // renderOnly（超视渲染）不向服务器请求 BE，避免视距外流量
-            // 空光照重算由 MixinLightRecompute 在 handleLevelChunkWithLight TAIL 完成，此处勿重复调用
+            // 影子端光照由 SectionDelta 段级投递（ShadowLightCompute.submitDelta）落地，
+            // 此处不重复触发客户端光照重算
             if (!renderOnly) {
                 if (hasCachedLight) {
                     NetworkStats.recordLightCacheHit(getLightBytesPerChunk(level));

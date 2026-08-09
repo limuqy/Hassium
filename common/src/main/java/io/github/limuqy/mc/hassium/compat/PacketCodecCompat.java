@@ -121,8 +121,20 @@ public final class PacketCodecCompat {
     /**
      * 按协议数字 ID + body 反序列化 CLIENTBOUND 包。
      */
-    @SuppressWarnings({"unchecked", "rawtypes"})
     public static Packet<?> deserializeClientbound(
+            int vanillaId,
+            byte[] body,
+            RegistryAccess registryAccess
+    ) {
+        return deserializePacketById(PacketFlow.CLIENTBOUND, vanillaId, body, registryAccess);
+    }
+
+    /**
+     * 按协议数字 ID + body 反序列化包（flow 泛化版；T5 网关 outbound C2S/S2C 解码、T9 ViaFabric 链复用）。
+     */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    public static Packet<?> deserializePacketById(
+            PacketFlow flow,
             int vanillaId,
             byte[] body,
             RegistryAccess registryAccess
@@ -130,21 +142,92 @@ public final class PacketCodecCompat {
 #if MC_VER < MC_1_20_5
         FriendlyByteBuf pBuf = new FriendlyByteBuf(Unpooled.wrappedBuffer(body));
 #if MC_VER < MC_1_20_2
-        return net.minecraft.network.ConnectionProtocol.PLAY.createPacket(
-                PacketFlow.CLIENTBOUND, vanillaId, pBuf);
+        return net.minecraft.network.ConnectionProtocol.PLAY.createPacket(flow, vanillaId, pBuf);
 #else
-        return net.minecraft.network.ConnectionProtocol.PLAY.codec(PacketFlow.CLIENTBOUND)
+        return net.minecraft.network.ConnectionProtocol.PLAY.codec(flow)
                 .createPacket(vanillaId, pBuf);
 #endif
 #else
         if (registryAccess == null) {
             registryAccess = RegistryAccess.EMPTY;
         }
-        var info = playBound(PacketFlow.CLIENTBOUND, registryAccess);
+        var info = playBound(flow, registryAccess);
         FriendlyByteBuf buf = new FriendlyByteBuf(Unpooled.buffer(body.length + 5));
         try {
             buf.writeVarInt(vanillaId);
             buf.writeBytes(body);
+            return (Packet<?>) ((net.minecraft.network.codec.StreamCodec) info.codec()).decode(buf);
+        } finally {
+            buf.release();
+        }
+#endif
+    }
+
+    /**
+     * 序列化完整原版包（含协议包 ID VarInt）——ViaFabric 转换链的输入线格式。
+     * <p>
+     * {@code flow} 参数：{@code <1.20.5} 段 {@link net.minecraft.network.ConnectionProtocol#getPacketId}
+     * 按 flow 查 ID 必需；{@code >=1.20.5} 段用于绑定协议编解码器。调用方负责传对 flow。
+     */
+    @SuppressWarnings({"rawtypes"})
+    public static byte[] serializePacketFull(
+            Packet<?> packet,
+            PacketFlow flow,
+            RegistryAccess registryAccess
+    ) {
+#if MC_VER < MC_1_20_5
+        FriendlyByteBuf buf = new FriendlyByteBuf(Unpooled.buffer());
+        try {
+            buf.writeVarInt(net.minecraft.network.ConnectionProtocol.PLAY.getPacketId(flow, packet));
+            packet.write(buf);
+            byte[] data = new byte[buf.readableBytes()];
+            buf.readBytes(data);
+            return data;
+        } finally {
+            buf.release();
+        }
+#else
+        if (registryAccess == null) {
+            registryAccess = RegistryAccess.EMPTY;
+        }
+        var info = playBound(flow, registryAccess);
+        ByteBuf buf = Unpooled.buffer();
+        try {
+            ((net.minecraft.network.codec.StreamCodec) info.codec()).encode(buf, packet);
+            byte[] data = new byte[buf.readableBytes()];
+            buf.readBytes(data);
+            return data;
+        } finally {
+            buf.release();
+        }
+#endif
+    }
+
+    /**
+     * 反序列化完整原版包（缓冲内含协议包 ID VarInt，解码后 ID 自行消费）——
+     * ViaFabric 转换链的输出线格式。未知 ID 返回 null（{@code <1.20.5} 段语义）。
+     */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    public static Packet<?> deserializePacketFull(
+            PacketFlow flow,
+            byte[] fullPacketBytes,
+            RegistryAccess registryAccess
+    ) {
+#if MC_VER < MC_1_20_5
+        FriendlyByteBuf pBuf = new FriendlyByteBuf(Unpooled.wrappedBuffer(fullPacketBytes));
+#if MC_VER < MC_1_20_2
+        return net.minecraft.network.ConnectionProtocol.PLAY.createPacket(flow, pBuf.readVarInt(), pBuf);
+#else
+        return net.minecraft.network.ConnectionProtocol.PLAY.codec(flow)
+                .createPacket(pBuf.readVarInt(), pBuf);
+#endif
+#else
+        if (registryAccess == null) {
+            registryAccess = RegistryAccess.EMPTY;
+        }
+        var info = playBound(flow, registryAccess);
+        FriendlyByteBuf buf = new FriendlyByteBuf(Unpooled.wrappedBuffer(fullPacketBytes));
+        try {
             return (Packet<?>) ((net.minecraft.network.codec.StreamCodec) info.codec()).decode(buf);
         } finally {
             buf.release();
@@ -181,7 +264,7 @@ public final class PacketCodecCompat {
 
 #if MC_VER >= MC_1_20_5
     /**
-     * 绑定 PLAY 协议编解码器。
+     * 绑定 PLAY 协议编解码器（单源：网关编解码 GatewayPacketCodec 亦复用）。
      * <ul>
      *   <li>1.20.5–1.21.4：{@code ProtocolInfo.Unbound.bind(decorator)}</li>
      *   <li>1.21.5+：CLIENTBOUND 为 {@code SimpleUnboundProtocol}；
@@ -189,7 +272,7 @@ public final class PacketCodecCompat {
      * </ul>
      */
     @SuppressWarnings({"rawtypes", "unchecked"})
-    private static net.minecraft.network.ProtocolInfo<?> playBound(
+    public static net.minecraft.network.ProtocolInfo<?> playBound(
             PacketFlow flow,
             RegistryAccess registryAccess
     ) {
@@ -223,6 +306,31 @@ public final class PacketCodecCompat {
                 ? net.minecraft.network.protocol.game.GameProtocols.CLIENTBOUND_TEMPLATE
                 : net.minecraft.network.protocol.game.GameProtocols.SERVERBOUND_TEMPLATE;
 #endif
+    }
+#endif
+
+    /**
+     * 登录协议已绑定信息（FriendlyByteBuf；登录包无注册表内容）。
+     * 单源：网关编解码 GatewayPacketCodec 亦复用（网关 LOGIN 协议仅 1.20.5+ 使用）。
+     */
+#if MC_VER >= MC_1_20_5
+    public static net.minecraft.network.ProtocolInfo<?> loginInfo(PacketFlow flow) {
+        return flow == PacketFlow.CLIENTBOUND
+                ? net.minecraft.network.protocol.login.LoginProtocols.CLIENTBOUND
+                : net.minecraft.network.protocol.login.LoginProtocols.SERVERBOUND;
+    }
+#endif
+
+    /**
+     * 配置协议已绑定信息（FriendlyByteBuf；配置含注册表数据包，但编解码不依赖本地注册表——
+     * 1.20.2–1.20.4 走 {@code ConnectionProtocol.CONFIGURATION.codec(flow)}，见 GatewayPacketCodec）。
+     * 单源：网关编解码 GatewayPacketCodec 复用（T10 CONFIG_C2S/CONFIG_S2C 帧）。
+     */
+#if MC_VER >= MC_1_20_5
+    public static net.minecraft.network.ProtocolInfo<?> configInfo(PacketFlow flow) {
+        return flow == PacketFlow.CLIENTBOUND
+                ? net.minecraft.network.protocol.configuration.ConfigurationProtocols.CLIENTBOUND
+                : net.minecraft.network.protocol.configuration.ConfigurationProtocols.SERVERBOUND;
     }
 #endif
 

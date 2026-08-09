@@ -31,61 +31,6 @@ public class MixinClientTick {
     }
 
     /**
-     * L2 定格终态回退：候选全部失败（phase==TERMINAL）时解除定格并回到断开画面。
-     * <p>
-     * 必须用 {@code phase()==TERMINAL} 精确限定：成功路径 onHandshakeAccepted 先置
-     * recovering=false 再 setLevel，若仅看 !isRecovering() 会把成功的短暂窗口误判为终态。
-     * <p>
-     * 拆除入口各段不同：1.20.1 = {@code clearLevel()+setScreen}（该签名在 1.20.1 断连路径不可靠）；
-     * 1.20.2~1.20.4 = {@code Minecraft.disconnect(Screen)}；≥1.20.5 = {@code disconnect(Screen,false)}。
-     * 此刻 {@code isRecovering()==false}（TERMINAL），MixinMinecraft 的冻结 cancel 不会拦截。
-     */
-    @Inject(method = "tick", at = @At("TAIL"))
-    private void hassium$onTickTerminalUnfreeze(CallbackInfo ci) {
-        if (!io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.isFreezeActive()
-                || io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.isRecovering()
-                || io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState.getInstance().phase()
-                        != io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState.Phase.TERMINAL) {
-            return;
-        }
-        io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.markFreezeActive(false);
-        Minecraft mc = Minecraft.getInstance();
-        net.minecraft.client.gui.screens.DisconnectedScreen screen = new net.minecraft.client.gui.screens.DisconnectedScreen(
-                mc.screen,
-                net.minecraft.network.chat.Component.translatable("disconnect.lost"),
-                net.minecraft.network.chat.Component.literal("主控切换失败，已断开连接"));
-#if MC_VER < MC_1_20_2
-        // 1.20.1 用 clearLevel + setScreen 而非 disconnect(Screen)（该签名在 1.20.1 断连路径不可靠）
-        mc.clearLevel();
-        mc.setScreen(screen);
-#elif MC_VER < MC_1_20_5
-        mc.disconnect(screen);
-#else
-        mc.disconnect(screen, false);
-#endif
-    }
-
-    /**
-     * L2 恢复会话渲染遮挡终结：新世界接管完成（候选连接 handleLogin 的 ReceivingLevelScreen
-     * 已被 vanilla 移除 → screen==null）且恢复已成功（!isRecovering）后清除 session 标记，
-     * 后续画面渲染恢复正常。
-     * <p>
-     * vanilla Minecraft.tick 仅在 {@code level==null} 时驱动 pendingConnection；恢复期间
-     * ConnectScreen 已显示（setScreen 放行），由 vanilla tick 驱动，无需手动驱动。
-     */
-    @Inject(method = "tick", at = @At("TAIL"))
-    private void hassium$clearRecoverySession(CallbackInfo ci) {
-        if (!io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.isRecoverySessionActive()) {
-            return;
-        }
-        Minecraft mc = Minecraft.getInstance();
-        if (!io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.isRecovering()
-                && mc.screen == null && mc.level != null && mc.player != null) {
-            io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.markRecoverySession(false);
-        }
-    }
-
-    /**
      * 在客户端 tick 中更新视距扩展和处理缓存加载队列
      */
     @Inject(method = "tick", at = @At("TAIL"))
@@ -111,29 +56,6 @@ public class MixinClientTick {
                 var pending = lifecycle.takePendingUdpStart();
                 if (pending != null) {
                     lifecycle.startUdp(mc.player.getUUID(), pending.connectionEpoch(), pending);
-                    if (io.github.limuqy.mc.hassium.config.HassiumConfigService.getInstance().isDataplaneLogging()) {
-                        io.github.limuqy.mc.hassium.Constants.LOG.info(
-                                "[diag] MixinClientTick pendingUdpStart epoch={} recovering={} phase={}",
-                                pending.connectionEpoch(),
-                                io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState.getInstance().isRecovering(),
-                                io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState.getInstance().phase());
-                    }
-                    // 延迟续接点必须补齐 onHandshakeAccepted + notifyFallback —— 否则
-                    // player==null 握手延迟的场景会跳过 failover 身份确认与缓存身份映射。
-                    try {
-                        if (io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState.getInstance().isRecovering()) {
-                            io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState.getInstance().markRecovered();
-                            io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.onPrimaryHandshakeAccepted(null);
-                        } else {
-                            io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.onHandshakeAccepted();
-                }
-                        io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.consumeSuccessfulFallback()
-                                .ifPresent(endpoint -> mc.gui.getChat().addMessage(
-                                        net.minecraft.network.chat.Component.literal("[Hassium] 主地址 "
-                                                + io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.primaryAddress()
-                                                + " 不可用，已通过备用端点 " + endpoint.host() + ":" + endpoint.port()
-                                                + " 连接；服务器列表地址和缓存身份仍为主地址。")));
-                    } catch (Throwable ignored) {}
                 }
             }
         } catch (Exception e) {

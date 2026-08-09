@@ -11,10 +11,7 @@ import io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail;
 import io.github.limuqy.mc.hassium.utils.DebugLogger;
 import io.github.limuqy.mc.hassium.utils.DebugLogger.LogType;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
-import net.fabricmc.fabric.api.client.networking.v1.ClientLoginNetworking;
 #if MC_VER >= MC_1_20_2
-import net.fabricmc.fabric.api.client.networking.v1.ClientConfigurationNetworking;
-import net.fabricmc.fabric.api.client.networking.v1.C2SConfigurationChannelEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerConfigurationNetworking;
 #endif
 import net.fabricmc.fabric.api.networking.v1.ServerLoginConnectionEvents;
@@ -238,634 +235,6 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
         });
     }
 
-    /**
-     * 客户端预握手注册：1.20.1 login query 回复；1.20.2+ 配置阶段 C2S。
-     * <p>
-     * 预握手使服务端在 {@code ServerPlayer} 创建前即标记 Hassium 客户端，
-     * 进服第一圈 trackChunk/sendChunk 全部走 Hassium 链（剥光 + 限流 + hash 元数据）。
-     */
-    private void registerPreHandshakeClient() {
-#if MC_VER < MC_1_20_2
-        // 1.20.1：服务端 login query 驱动的 reply（fabric login 通道机制）
-        ClientLoginNetworking.registerGlobalReceiver(PRE_HANDSHAKE_C2S,
-                (client, handler, buf, listenerConsumer) -> {
-                    FriendlyByteBuf reply = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
-                    PreHandshakeProtocol.encodeFields(reply);
-                    return java.util.concurrent.CompletableFuture.completedFuture(reply);
-                });
-        LOGGER.debug("Hassium: Registered login pre-handshake reply (client)");
-#elif MC_VER < MC_1_20_5
-        // 1.20.2-1.20.4：配置阶段 REGISTER 声明后发送（legacy Identifier 通道）
-        C2SConfigurationChannelEvents.REGISTER.register((handler, sender, client, channels) -> {
-            if (channels.contains(PRE_HANDSHAKE_C2S)) {
-                FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
-                PreHandshakeProtocol.encodeFields(buf);
-                ClientConfigurationNetworking.send(PRE_HANDSHAKE_C2S, buf);
-                LOGGER.debug("Hassium: Sent pre-handshake (configuration, legacy)");
-            }
-        });
-#else
-        // 1.20.5+：配置阶段 payload（CustomPacketPayload）。
-        // payload type 注册统一在 FabricPayloadRegistry.registerAll（registerChannels 时调用，幂等）
-        C2SConfigurationChannelEvents.REGISTER.register((handler, sender, client, channels) -> {
-            if (channels.contains(PRE_HANDSHAKE_C2S)) {
-                ClientConfigurationNetworking.send(PreHandshakePayload.create());
-                LOGGER.debug("Hassium: Sent pre-handshake (configuration, payload)");
-            }
-        });
-#endif
-    }
-
-    /**
-     * 注册客户端网络通道
-     */
-    public void registerClientChannels() {
-        if (!HassiumConfigService.getInstance().isNetworkCompressionEnabled()) {
-            LOGGER.warn("Hassium: network.enabled=false, skipping Fabric client channel registration");
-            return;
-        }
-        // ===== 预握手（login/配置阶段）：提前声明 Hassium 能力，消灭进服直发窗口 =====
-        registerPreHandshakeClient();
-        // 注册客户端接收压缩区块数据
-#if MC_VER < MC_1_20_5
-        ClientPlayNetworking.registerGlobalReceiver(CHUNK_PAYLOAD_S2C, (client, handler, buf, responseSender) -> {
-            int length = buf.readVarInt();
-            byte[] data = new byte[length];
-            buf.readBytes(data);
-
-            DebugLogger.info(LogType.NETWORK, "[CLIENT] Received compressed chunk payload ({} bytes)", data.length);
-
-            client.execute(() -> {
-                try {
-                    DebugLogger.debug(LogType.COMPRESSION, "[CLIENT] Processing compressed chunk on main thread");
-                    ClientChunkHandler.handleCompressedChunk(data);
-                } catch (Exception e) {
-                    LOGGER.error("[CLIENT] Failed to handle compressed chunk data", e);
-                }
-            });
-        });
-#else
-        ClientPlayNetworking.registerGlobalReceiver(FabricPayloadRegistry.CHUNK_PAYLOAD_S2C_TYPE, (payload, context) -> {
-            FriendlyByteBuf buf = FabricPayloadRegistry.fromPayload(payload);
-            try {
-                int length = buf.readVarInt();
-                byte[] data = new byte[length];
-                buf.readBytes(data);
-                // 直接在回调线程（netty 事件循环）处理：handleCompressedChunk 本身无主线程依赖
-                // （decode + 后台解压 + MainThreadDispatcher 回主线程 apply），dataplane 已在 UDP
-                // 线程直接调用。绕开 client().execute 主线程队列——1.21.x 新 payload API 回调经
-                // execute 后主线程吞吐受帧时间挤压，chunk 风暴下收到速率掉到 ~35/s。
-                try {
-                    ClientChunkHandler.handleCompressedChunk(data);
-                } catch (Exception e) {
-                    LOGGER.error("[CLIENT] Failed to handle compressed chunk data", e);
-                }
-            } finally {
-                buf.release();
-            }
-        });
-#endif
-
-        // 注册分段增量响应（服务端按 section 比对回包；影子端 apply，回调线程直接调用
-        // ——submitDelta 任意线程安全：map put + consumeLoop pump）
-#if MC_VER < MC_1_20_5
-        ClientPlayNetworking.registerGlobalReceiver(SECTION_DELTA_S2C, (client, handler, buf, responseSender) -> {
-            try {
-                FriendlyByteBuf packetBuf = new FriendlyByteBuf(buf.copy());
-                SectionDeltaS2CPacket packet = SectionDeltaS2CPacket.decode(packetBuf);
-                io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.submitDelta(packet);
-            } catch (Exception e) {
-                LOGGER.error("Hassium: Failed to decode section delta packet", e);
-            }
-        });
-#else
-        ClientPlayNetworking.registerGlobalReceiver(FabricPayloadRegistry.SECTION_DELTA_S2C_TYPE, (payload, context) -> {
-            FriendlyByteBuf buf = FabricPayloadRegistry.fromPayload(payload);
-            try {
-                SectionDeltaS2CPacket packet = SectionDeltaS2CPacket.decode(buf);
-                io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.submitDelta(packet);
-            } catch (Exception e) {
-                LOGGER.error("Hassium: Failed to decode section delta packet", e);
-            } finally {
-                buf.release();
-            }
-        });
-#endif
-
-        // 注册字典同步响应
-#if MC_VER < MC_1_20_5
-        ClientPlayNetworking.registerGlobalReceiver(DICTIONARY_SYNC_S2C, (client, handler, buf, responseSender) -> {
-            try {
-                FriendlyByteBuf packetBuf = new FriendlyByteBuf(buf.copy());
-                DictionarySyncPayload payload = DictionarySyncPayload.decode(packetBuf);
-                byte[] dict = payload.dictionary();
-
-                client.execute(() -> {
-                    DictionaryManager.setAggregationDict(dict);
-                    DebugLogger.debug(LogType.NETWORK, "Hassium: Received aggregation dictionary from server ({} bytes)", dict.length);
-                });
-            } catch (Exception e) {
-                LOGGER.error("Hassium: Failed to decode dictionary sync packet", e);
-            }
-        });
-#else
-        ClientPlayNetworking.registerGlobalReceiver(FabricPayloadRegistry.DICTIONARY_SYNC_S2C_TYPE, (payload, context) -> {
-            FriendlyByteBuf buf = FabricPayloadRegistry.fromPayload(payload);
-            try {
-                DictionarySyncPayload dictPayload = DictionarySyncPayload.decode(buf);
-                byte[] dict = dictPayload.dictionary();
-                context.client().execute(() -> {
-                    DictionaryManager.setAggregationDict(dict);
-                    DebugLogger.debug(LogType.NETWORK, "Hassium: Received aggregation dictionary from server ({} bytes)", dict.length);
-                });
-            } catch (Exception e) {
-                LOGGER.error("Hassium: Failed to decode dictionary sync packet", e);
-            } finally {
-                buf.release();
-            }
-        });
-#endif
-
-        // 注册握手响应
-#if MC_VER < MC_1_20_5
-        ClientPlayNetworking.registerGlobalReceiver(HANDSHAKE_S2C, (client, handler, buf, responseSender) -> {
-            buf.readVarInt(); // protocolVersion
-            boolean accepted = buf.readBoolean();
-            boolean globalCompressionAccepted = buf.readBoolean();
-            boolean compactHeaderAccepted = buf.readBoolean();
-            LOGGER.info("Hassium: Client handshake response: accepted={}, globalCompression={}, compactHeader={}",
-                    accepted, globalCompressionAccepted, compactHeaderAccepted);
-            if (accepted && globalCompressionAccepted) {
-                // L2：必须用包所属连接（handler.getConnection()）而非 client.getConnection()——
-                // 恢复期间 client.getConnection() 仍指向旧 player 的 ROUND1 断连连接，
-                // 会把 ZSTD 装到死连接、压缩 ready 发到死连接，候选连接实际未装 ZSTD。
-                var conn = handler.getConnection();
-                if (conn != null) {
-                    Channel channel = getConnectionChannel(conn);
-                    if (channel != null) {
-                        int level = HassiumConfigService.getInstance().getGlobalCompressionLevel();
-                        int threshold = HassiumConfigService.getInstance().getGlobalCompressionThreshold();
-                        ZstdPipelineSwitcher.switchToZstdWhenReady(channel, threshold, level, () -> {
-                            ZstdNegotiationTracker.markNegotiated(channel);
-                            // 对齐 forge：装 ZSTD 后暂停出站压缩（只发明文帧），服务端装好
-                            // ZSTD 并发 IndexSync 后恢复——防客户端压缩大包（bloom manifest 等）
-                            // 在服务端就绪前到达被 zlib 解炸（1.21.11 fabric R2 已复现）
-                            ZstdPipelineSwitcher.pauseOutboundCompression(channel);
-                            sendCompressionReadyToServer(conn);
-                            LOGGER.info("Hassium: Client ZSTD pipeline installed, sent ready ACK (outbound paused)");
-                        });
-                    }
-                }
-            }
-            // Task 5 — 解码 S2C 尾部并启动 UDP 数据面（必须在所有原有字段读完后；append-only）
-            // Task 9 — 同步把 advertised control 候选灌给 client mod 单例 orchestrator；@onHandshakeAccepted
-            try {
-                if (buf.isReadable()) {
-                    UdpDataPlaneHandshakeTail.S2CTail tail = UdpDataPlaneHandshakeTail.readS2C(buf);
-                    // SeedGen 尾部（append-only；旧服务端无此字段时忽略）
-                    try {
-                        if (buf.isReadable()) {
-                            long worldSeed = buf.readLong();
-                            int stemLen = buf.readVarInt();
-                            byte[] stemNbt = null;
-                            if (stemLen > 0 && stemLen <= buf.readableBytes()) {
-                                stemNbt = new byte[stemLen];
-                                buf.readBytes(stemNbt);
-                            }
-                            boolean seedGenEnabled = buf.readableBytes() >= 1 && buf.readBoolean();
-                            ClientChunkPipeline.getInstance().setServerSeedInfo(worldSeed, stemNbt, seedGenEnabled);
-                        }
-                    } catch (Exception seedEx) {
-                        LOGGER.debug("Hassium: failed to decode SeedGen tail (legacy server?)", seedEx);
-                    }
-                    try {
-                        java.util.List<io.github.limuqy.mc.hassium.network.dataplane.ControlEndpoint> cands =
-                                new java.util.ArrayList<>();
-                        for (var ctl : tail.controlEndpoints()) {
-                            cands.add(new io.github.limuqy.mc.hassium.network.dataplane.ControlEndpoint(
-                                    ctl.host(), ctl.port(), ctl.priority()));
-                        }
-                        io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity
-                                .mergeAdvertisedCandidates(cands);
-                    } catch (Throwable ignored) {}
-                    if (tail.hasUdpDataplane() && Minecraft.getInstance().player != null) {
-                        UUID pid = Minecraft.getInstance().player.getUUID();
-                        long epoch = tail.connectionEpoch();
-                        client.execute(() -> {
-                            try { DataPlaneClientLifecycle.getInstance().startUdp(pid, epoch, tail); }
-                            catch (Throwable t) { LOGGER.warn("Hassium: UDP dataplane start failed", t); }
-                            // 只有 DISCONNECT 已建立恢复态的握手才能确认恢复；首次登录只启动 UDP。
-                            // recovered 判定：onHandshakeAccepted 仅当 orchestrator 处于恢复中才返回 true
-                            // （第二次回调/首次登录返回 false），避免 acceptHandshake 坐标相等分支
-                            // 重复设置 successfulFallback → 聊天栏切换消息出现两次。
-                            boolean recovering = io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState
-                                    .getInstance().isRecovering();
-                            boolean recovered;
-                            if (recovering) {
-                                io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState.getInstance()
-                                        .markRecovered();
-                                recovered = io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity
-                                        .onPrimaryHandshakeAccepted(null);
-                            } else {
-                                recovered = io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity
-                                        .onHandshakeAccepted();
-                            }
-                            if (recovered) {
-                                notifyFallback();
-                            }
-                        });
-                    } else if (io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState.getInstance()
-                            .isRecovering()) {
-                        // 无 UDP 数据面（控制 only 或 legacy 服务器）同样只确认真实恢复。
-                        io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState.getInstance().markRecovered();
-                        boolean r = io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity
-                                .onPrimaryHandshakeAccepted(null);
-                        if (r) {
-                            client.execute(FabricNetworkManager::notifyFallback);
-                        }
-                    } else {
-                        boolean r = io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity
-                                .onHandshakeAccepted();
-                        if (r) {
-                            client.execute(FabricNetworkManager::notifyFallback);
-                        }
-                    }
-                    }
-            } catch (Exception tailEx) {
-                LOGGER.debug("Hassium: failed to decode UDP dataplane tail (legacy server?)", tailEx);
-                }
-        });
-#else
-        ClientPlayNetworking.registerGlobalReceiver(FabricPayloadRegistry.HANDSHAKE_S2C_TYPE, (payload, context) -> {
-            FriendlyByteBuf buf = FabricPayloadRegistry.fromPayload(payload);
-            try {
-                buf.readVarInt(); // protocolVersion
-                boolean accepted = buf.readBoolean();
-                boolean globalCompressionAccepted = buf.readBoolean();
-                boolean compactHeaderAccepted = buf.readBoolean();
-                LOGGER.info("Hassium: Client handshake response: accepted={}, globalCompression={}, compactHeader={}",
-                        accepted, globalCompressionAccepted, compactHeaderAccepted);
-                if (accepted && globalCompressionAccepted) {
-                    var conn = context.client().getConnection();
-                    if (conn != null) {
-                        Channel channel = getConnectionChannel(conn.getConnection());
-                        if (channel != null) {
-                            int level = HassiumConfigService.getInstance().getGlobalCompressionLevel();
-                            int threshold = HassiumConfigService.getInstance().getGlobalCompressionThreshold();
-                            ZstdPipelineSwitcher.switchToZstdWhenReady(channel, threshold, level, () -> {
-                                ZstdNegotiationTracker.markNegotiated(channel);
-                                // 对齐 forge：装 ZSTD 后暂停出站压缩（只发明文帧），服务端装好
-                                // ZSTD 并发 IndexSync 后恢复——防客户端压缩大包（bloom manifest 等）
-                                // 在服务端就绪前到达被 zlib 解炸（1.21.11 fabric R2 已复现）
-                                ZstdPipelineSwitcher.pauseOutboundCompression(channel);
-                                sendCompressionReadyToServer();
-                                LOGGER.info("Hassium: Client ZSTD pipeline installed, sent ready ACK (outbound paused)");
-                            });
-                        }
-                    }
-                }
-                // Task 5 — 解码 S2C 尾部并启动 UDP 数据面（必须读完所有原有字段；append-only）
-                // Task 9 — 同步灌 advertised control 候选到 client mod 单例 orchestrator；@onHandshakeAccepted
-                try {
-                    if (buf.isReadable()) {
-                        UdpDataPlaneHandshakeTail.S2CTail tail = UdpDataPlaneHandshakeTail.readS2C(buf);
-                        // SeedGen 尾部（append-only；旧服务端无此字段时忽略）
-                        try {
-                            if (buf.isReadable()) {
-                                long worldSeed = buf.readLong();
-                                int stemLen = buf.readVarInt();
-                                byte[] stemNbt = null;
-                                if (stemLen > 0 && stemLen <= buf.readableBytes()) {
-                                    stemNbt = new byte[stemLen];
-                                    buf.readBytes(stemNbt);
-                                }
-                                boolean seedGenEnabled = buf.readableBytes() >= 1 && buf.readBoolean();
-                                ClientChunkPipeline.getInstance().setServerSeedInfo(worldSeed, stemNbt, seedGenEnabled);
-                            }
-                        } catch (Exception seedEx) {
-                            LOGGER.debug("Hassium: failed to decode SeedGen tail (legacy server?)", seedEx);
-                        }
-                        try {
-                            java.util.List<io.github.limuqy.mc.hassium.network.dataplane.ControlEndpoint> cands =
-                                    new java.util.ArrayList<>();
-                            for (var ctl : tail.controlEndpoints()) {
-                                cands.add(new io.github.limuqy.mc.hassium.network.dataplane.ControlEndpoint(
-                                        ctl.host(), ctl.port(), ctl.priority()));
-                            }
-                            io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity
-                                    .mergeAdvertisedCandidates(cands);
-                        } catch (Throwable ignored) {}
-                        if (tail.hasUdpDataplane() && Minecraft.getInstance().player != null) {
-                            UUID pid = Minecraft.getInstance().player.getUUID();
-                            long epoch = tail.connectionEpoch();
-                            context.client().execute(() -> {
-                                try { DataPlaneClientLifecycle.getInstance().startUdp(pid, epoch, tail); }
-                                catch (Throwable t) { LOGGER.warn("Hassium: UDP dataplane start failed", t); }
-                                // 只有 DISCONNECT 已建立恢复态的握手才能确认恢复；首次登录只启动 UDP。
-                                // recovered 判定：onHandshakeAccepted 仅当 orchestrator 处于恢复中才返回 true
-                                // （第二次回调/首次登录返回 false），避免 acceptHandshake 坐标相等分支
-                                // 重复设置 successfulFallback → 聊天栏切换消息出现两次。
-                                boolean recovering = io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState
-                                        .getInstance().isRecovering();
-                                boolean recovered;
-                                if (recovering) {
-                                    io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState.getInstance()
-                                            .markRecovered();
-                                    recovered = io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity
-                                            .onPrimaryHandshakeAccepted(null);
-                                } else {
-                                    recovered = io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity
-                                            .onHandshakeAccepted();
-                                }
-                                if (recovered) {
-                                    notifyFallback();
-                                }
-                            });
-                        } else if (io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState.getInstance()
-                                .isRecovering()) {
-                            // 无 UDP 数据面（控制 only 或 legacy 服务器）同样只确认真实恢复。
-                            io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState.getInstance().markRecovered();
-                            boolean r = io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity
-                                    .onPrimaryHandshakeAccepted(null);
-                            if (r) {
-                                context.client().execute(FabricNetworkManager::notifyFallback);
-                            }
-                        } else {
-                            boolean r = io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity
-                                    .onHandshakeAccepted();
-                            if (r) {
-                                context.client().execute(FabricNetworkManager::notifyFallback);
-                            }
-                        }
-                    }
-                } catch (Exception tailEx) {
-                    LOGGER.debug("Hassium: failed to decode UDP dataplane tail (legacy server?)", tailEx);
-                }
-            } finally {
-                buf.release();
-            }
-        });
-#endif
-
-        // 注册索引同步响应
-#if MC_VER < MC_1_20_5
-        ClientPlayNetworking.registerGlobalReceiver(INDEX_SYNC_S2C, (client, handler, buf, responseSender) -> {
-            try {
-                int dataLength = buf.readVarInt();
-                byte[] data = new byte[dataLength];
-                buf.readBytes(data);
-
-                IndexSyncPacket syncPacket = IndexSyncPacket.decode(data);
-
-                client.execute(() -> {
-                    try {
-                        String connectionId = "client";
-                        IndexSyncManager indexSyncManager = IndexSyncManager.getInstance();
-                        NamespaceIndexManager clientIndexManager = indexSyncManager.handleSyncPacket(connectionId, syncPacket);
-
-                        Connection connection = Minecraft.getInstance().getConnection().getConnection();
-                        HassiumConnectionRegistry.markEnabled(connection);
-                        HassiumAggregationManager.init();
-                        // 服务端已装 ZSTD（能发来 IndexSync）：恢复客户端出站压缩阈值
-                        //（装 ZSTD 时暂停，见 handshake 处理；对齐 forge）
-                        io.netty.channel.Channel channel = getConnectionChannel(connection);
-                        if (channel != null) {
-                            int threshold = HassiumConfigService.getInstance().getGlobalCompressionThreshold();
-                            ZstdPipelineSwitcher.setOutboundCompressionThreshold(channel, threshold);
-                        }
-
-                        FriendlyByteBuf readyBuf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
-                        new CompressionReadyPayload(true).encode(readyBuf);
-                        ClientPlayNetworking.send(CompressionReadyPayload.CHANNEL, readyBuf);
-                        DebugLogger.debug(LogType.NETWORK,
-                                "Hassium: Received index sync ({} types), sent compression ready",
-                                clientIndexManager.size());
-                    } catch (Exception e) {
-                        LOGGER.error("Hassium: Failed to process index sync packet", e);
-                    }
-                });
-            } catch (Exception e) {
-                LOGGER.error("Hassium: Failed to decode index sync packet", e);
-            }
-        });
-#else
-        ClientPlayNetworking.registerGlobalReceiver(FabricPayloadRegistry.INDEX_SYNC_S2C_TYPE, (payload, context) -> {
-            FriendlyByteBuf buf = FabricPayloadRegistry.fromPayload(payload);
-            try {
-                int dataLength = buf.readVarInt();
-                byte[] data = new byte[dataLength];
-                buf.readBytes(data);
-
-                IndexSyncPacket syncPacket = IndexSyncPacket.decode(data);
-
-                context.client().execute(() -> {
-                    try {
-                        String connectionId = "client";
-                        IndexSyncManager indexSyncManager = IndexSyncManager.getInstance();
-                        NamespaceIndexManager clientIndexManager = indexSyncManager.handleSyncPacket(connectionId, syncPacket);
-
-                        Connection connection = Minecraft.getInstance().getConnection().getConnection();
-                        HassiumConnectionRegistry.markEnabled(connection);
-                        HassiumAggregationManager.init();
-                        // 服务端已装 ZSTD（能发来 IndexSync）：恢复客户端出站压缩阈值
-                        //（装 ZSTD 时暂停，见 handshake 处理；对齐 forge）
-                        io.netty.channel.Channel channel = getConnectionChannel(connection);
-                        if (channel != null) {
-                            int threshold = HassiumConfigService.getInstance().getGlobalCompressionThreshold();
-                            ZstdPipelineSwitcher.setOutboundCompressionThreshold(channel, threshold);
-                        }
-
-                        FriendlyByteBuf readyBuf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
-                        new CompressionReadyPayload(true).encode(readyBuf);
-                        byte[] readyData = new byte[readyBuf.readableBytes()];
-                        readyBuf.readBytes(readyData);
-                        readyBuf.release();
-                        ClientPlayNetworking.send(FabricPayloadRegistry.createPayload(FabricPayloadRegistry.COMPRESSION_READY_C2S_TYPE, readyData));
-                        DebugLogger.debug(LogType.NETWORK,
-                                "Hassium: Received index sync ({} types), sent compression ready",
-                                clientIndexManager.size());
-                    } catch (Exception e) {
-                        LOGGER.error("Hassium: Failed to process index sync packet", e);
-                    }
-                });
-            } catch (Exception e) {
-                LOGGER.error("Hassium: Failed to decode index sync packet", e);
-            } finally {
-                buf.release();
-            }
-        });
-#endif
-
-        // 注册聚合包接收
-#if MC_VER < MC_1_20_5
-        ClientPlayNetworking.registerGlobalReceiver(AGGREGATION_S2C, (client, handler, buf, responseSender) -> {
-            try {
-                FriendlyByteBuf packetBuf = new FriendlyByteBuf(buf.copy());
-                IndexSyncManager indexSyncManager = IndexSyncManager.getInstance();
-                NamespaceIndexManager indexManager = indexSyncManager.getClientIndexManager();
-
-                if (indexManager == null) {
-                    LOGGER.error("Received aggregation packet but client index manager not initialized");
-                    return;
-                }
-
-                HassiumAggregationPacket aggregationPacket = HassiumAggregationPacket.decode(packetBuf, indexManager);
-
-                client.execute(() -> {
-                    aggregationPacket.handle(handler.getConnection());
-                });
-            } catch (Exception e) {
-                LOGGER.error("Failed to handle aggregation packet", e);
-            }
-        });
-#else
-        ClientPlayNetworking.registerGlobalReceiver(FabricPayloadRegistry.AGGREGATION_S2C_TYPE, (payload, context) -> {
-            FriendlyByteBuf buf = FabricPayloadRegistry.fromPayload(payload);
-            try {
-                IndexSyncManager indexSyncManager = IndexSyncManager.getInstance();
-                NamespaceIndexManager indexManager = indexSyncManager.getClientIndexManager();
-
-                if (indexManager == null) {
-                    LOGGER.error("Received aggregation packet but client index manager not initialized");
-                    return;
-                }
-
-                HassiumAggregationPacket aggregationPacket = HassiumAggregationPacket.decode(buf, indexManager);
-
-                context.client().execute(() -> {
-                    aggregationPacket.handle(context.player().connection.getConnection());
-                });
-            } catch (Exception e) {
-                LOGGER.error("Failed to handle aggregation packet", e);
-            } finally {
-                buf.release();
-            }
-        });
-#endif
-
-        // 注册区块哈希广播接收（阶段一）
-#if MC_VER < MC_1_20_5
-        ClientPlayNetworking.registerGlobalReceiver(CHUNK_HASH_S2C, (client, handler, buf, responseSender) -> {
-            try {
-                ChunkHashS2CPacket packet = ChunkHashS2CPacket.decode(buf);
-                client.execute(() -> ClientMetadataHandler.handleChunkHashPacket(packet));
-            } catch (Exception e) {
-                LOGGER.error("[CLIENT] Failed to handle chunk hash packet", e);
-            }
-        });
-#else
-        ClientPlayNetworking.registerGlobalReceiver(FabricPayloadRegistry.CHUNK_HASH_S2C_TYPE, (payload, context) -> {
-            FriendlyByteBuf buf = FabricPayloadRegistry.fromPayload(payload);
-            try {
-                ChunkHashS2CPacket packet = ChunkHashS2CPacket.decode(buf);
-                context.client().execute(() -> ClientMetadataHandler.handleChunkHashPacket(packet));
-            } catch (Exception e) {
-                LOGGER.error("[CLIENT] Failed to handle chunk hash packet", e);
-            } finally {
-                buf.release();
-            }
-        });
-#endif
-
-        // 注册 SeedRef 接收（SeedGen 区块引用）
-#if MC_VER < MC_1_20_5
-        ClientPlayNetworking.registerGlobalReceiver(SEED_REF_S2C, (client, handler, buf, responseSender) -> {
-            try {
-                SeedRefS2CPacket packet = SeedRefS2CPacket.decode(buf);
-                client.execute(() -> ClientMetadataHandler.handleSeedRefPacket(packet));
-            } catch (Exception e) {
-                LOGGER.error("[CLIENT] Failed to handle seed ref packet", e);
-            }
-        });
-#else
-        ClientPlayNetworking.registerGlobalReceiver(FabricPayloadRegistry.SEED_REF_S2C_TYPE, (payload, context) -> {
-            FriendlyByteBuf buf = FabricPayloadRegistry.fromPayload(payload);
-            try {
-                SeedRefS2CPacket packet = SeedRefS2CPacket.decode(buf);
-                context.client().execute(() -> ClientMetadataHandler.handleSeedRefPacket(packet));
-            } catch (Exception e) {
-                LOGGER.error("[CLIENT] Failed to handle seed ref packet", e);
-            } finally {
-                buf.release();
-            }
-        });
-#endif
-
-        // 注册 blockEntity 数据响应接收
-#if MC_VER < MC_1_20_5
-        ClientPlayNetworking.registerGlobalReceiver(BLOCK_ENTITY_DATA_S2C, (client, handler, buf, responseSender) -> {
-            try {
-                BlockEntityDataS2CPacket packet = BlockEntityDataS2CPacket.decode(buf);
-                client.execute(() -> ClientMetadataHandler.handleBlockEntityDataPacket(packet));
-            } catch (Exception e) {
-                LOGGER.error("[CLIENT] Failed to handle block entity data packet", e);
-            }
-        });
-#else
-        ClientPlayNetworking.registerGlobalReceiver(FabricPayloadRegistry.BLOCK_ENTITY_DATA_S2C_TYPE, (payload, context) -> {
-            FriendlyByteBuf buf = FabricPayloadRegistry.fromPayload(payload);
-            try {
-                BlockEntityDataS2CPacket packet = BlockEntityDataS2CPacket.decode(buf);
-                context.client().execute(() -> ClientMetadataHandler.handleBlockEntityDataPacket(packet));
-            } catch (Exception e) {
-                LOGGER.error("[CLIENT] Failed to handle block entity data packet", e);
-            } finally {
-                buf.release();
-            }
-        });
-#endif
-    }
-
-    @Override
-    public void sendHandshakeRequest() {
-        if (!HassiumConfigService.getInstance().isNetworkCompressionEnabled()) {
-            LOGGER.debug("Hassium: Skip handshake — network.enabled=false");
-            return;
-        }
-        if (Minecraft.getInstance().getConnection() != null) {
-            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
-            buf.writeVarInt(Constants.CURRENT_PROTOCOL_VERSION);
-            buf.writeUtf(Constants.MOD_VERSION);
-            String compressionAlgorithm = HassiumConfigService.getInstance().getCompressionAlgorithm();
-            String dictAlgorithm = compressionAlgorithm + "_dict";
-            buf.writeVarInt(2); // 支持的算法数量
-            buf.writeUtf(compressionAlgorithm);
-            buf.writeUtf(dictAlgorithm);
-            buf.writeBoolean(true);  // clientCacheSupported
-            buf.writeBoolean(true);  // chunkRevisionSupported
-            buf.writeBoolean(false); // scheme127Supported
-            buf.writeBoolean(true);  // globalPacketCompressionSupported（管线未就绪时延后安装）
-            buf.writeBoolean(true);  // compactHeaderSupported
-            // Task 5 — C2S 握手尾部：声明 UDP 数据面 + 控制 failover 能力（append-only；旧服务端忽略）
-            UdpDataPlaneHandshakeTail.C2STail c2sTail =
-                    new UdpDataPlaneHandshakeTail.C2STail(true, true);
-            UdpDataPlaneHandshakeTail.writeC2S(buf, c2sTail);
-            // 握手尾部：玩家坐标（服务端校正 resync 视距中心；append-only 兼容旧服务端）。
-            // 同时立即刷新位置缓存（不等首帧 tick），进服早期 apply 优先级即可用真实位置。
-            Minecraft mc = Minecraft.getInstance();
-            if (mc.player != null) {
-                buf.writeDouble(mc.player.getX());
-                buf.writeDouble(mc.player.getZ());
-                io.github.limuqy.mc.hassium.concurrent.MainThreadDispatcher.updatePlayerPosition(
-                        mc.player.getX(), mc.player.getZ());
-            } else {
-                buf.writeDouble(0.0);
-                buf.writeDouble(0.0);
-            }
-            // SeedGen 能力上报（append-only；旧服务端忽略尾字节）
-            buf.writeBoolean(HassiumConfigService.getInstance().isClientSeedGenEnabled());
-            // 光照计算能力上报（append-only）：Hassium 引擎（影子端）开启 = 可剥光。
-            // 服务端据此外剥光决策——引擎关闭/未装 MOD 时不剥（光随包自带）。
-            buf.writeBoolean(HassiumConfigService.getInstance().isHassiumEngineEnabled());
-#if MC_VER < MC_1_20_5
-            ClientPlayNetworking.send(HANDSHAKE_C2S, buf);
-#else
-            ClientPlayNetworking.send(FabricPayloadRegistry.toPayload(FabricPayloadRegistry.HANDSHAKE_C2S_TYPE, buf));
-#endif
-            LOGGER.debug("Hassium: Sent handshake request to server");
-        }
-    }
-
     @Override
     public void sendChunkDataRequest(FriendlyByteBuf buf) {
         if (Minecraft.getInstance().getConnection() != null) {
@@ -1083,16 +452,37 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
     }
 
     /**
-     * 完成服务端握手：发 HandshakeResponse，暂停出站压缩，等客户端 ready ACK 后再切 ZSTD。
+     * T7 续流验票（B 侧）：解码票据 → 共享密钥验签 + epoch 递增防重放（ResumeTicketValidator）。
+     * 通过 → 标记续流就绪并返回 true；失败/未请求 → false（回退完整握手）。
      */
-    private void completeServerHandshake(
+    private static boolean verifyResumeRequest(ServerPlayer player, HandshakeStateTail.C2S stateTail) {
+        if (stateTail == null || !stateTail.resumeRequested()) {
+            return false;
+        }
+        ResumeTicketValidator.Verification resume =
+                ResumeTicketValidator.verifyRequest(player.getUUID(), stateTail.resumeTicket());
+        if (resume.accepted()) {
+            ServerChunkPushManager.getInstance().markPlayerResumeActive(player.getUUID(), resume.epoch());
+            LOGGER.info("Hassium: [RESUME] {} ticket verified (epoch={}) — 续流就绪，跳过 login/维度初始化",
+                    player.getName().getString(), resume.epoch());
+            return true;
+        }
+        LOGGER.warn("Hassium: [RESUME] {} ticket REJECTED (签名无效/epoch 重放) — 回退完整握手",
+                player.getName().getString());
+        return false;
+    }
+
+    /**
+     * 完成服务端握手：发 HandshakeResponse，暂停出站压缩，等客户端 ready ACK 后再切 ZSTD。
+     */    private void completeServerHandshake(
             net.minecraft.server.MinecraftServer server,
             ServerPlayer player,
             boolean accepted,
             boolean useGlobalCompression,
             boolean useCompactHeader,
             boolean clientUdpDataplaneSupported,
-            boolean clientControlFailoverSupported) {
+            boolean clientControlFailoverSupported,
+            boolean resumeAccepted) {
         if (useGlobalCompression) {
             DictionaryManager.init();
             IndexSyncManager.getInstance().initializeServerIndex();
@@ -1132,6 +522,8 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
                 ServerLevel seedLevel = server.overworld();
                 SeedGenTail.writeS2C(response, seedLevel,
                         HassiumConfigService.getInstance().isSeedGenEnabled());
+                // T7 续流就绪标记（append-only；旧客户端忽略尾字节；未请求续流时为 false）
+                HandshakeStateTail.writeS2C(response, new HandshakeStateTail.S2C(resumeAccepted));
             } catch (Exception ex) {
                 LOGGER.warn("Hassium: Failed to append dataplane tail to handshake response for {}",
                         player.getName().getString(), ex);
@@ -1341,7 +733,18 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
                 } catch (Exception ignored) {
                 }
             }
+            // 光照计算能力（append-only；旧客户端无此字段 → false = 不剥光）
+            boolean lightComputeSupported = false;
+            if (buf.isReadable()) {
+                try {
+                    lightComputeSupported = buf.readBoolean();
+                } catch (Exception ignored) {
+                }
+            }
             ServerChunkPushManager.getInstance().setPlayerSeedGenSupported(player.getUUID(), seedGenSupported);
+            ServerChunkPushManager.getInstance().setPlayerLightComputeSupported(player.getUUID(), lightComputeSupported);
+            // T7 状态尾部（append-only；旧客户端无此字段 → null）
+            HandshakeStateTail.C2S stateTail = HandshakeStateTail.readC2S(buf);
 
             DebugLogger.debug(LogType.NETWORK,
                     "[HANDSHAKE] Details from {}: protocol={}, modVersion={}, algorithms={}, clientCache={}, globalCompression={}, compactHeader={}",
@@ -1362,6 +765,7 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
             boolean accepted = true;
             final double finalReportedX = reportedX;
             final double finalReportedZ = reportedZ;
+            final HandshakeStateTail.C2S finalStateTail = stateTail;
 
             // 发送握手响应
             // 时序（对齐原版 SetCompression）：
@@ -1369,9 +773,15 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
             // 2) 再在 EventLoop 上切换 ZSTD（排在已排队的 encode 之后）
             // 3) 随后再发 Dict/Index（走 ZSTD）；客户端在收到 HandshakeResponse 后切换
             server.execute(() -> {
-                ServerChunkPushManager.getInstance().setInitialPlayerPosition(player, finalReportedX, finalReportedZ);
+                // T7 续流验票（验签 + epoch 防重放）→ 续流就绪 → 复用现有推送链
+                boolean resumeAccepted = verifyResumeRequest(player, finalStateTail);
+                PlayerStateReport reportedState = finalStateTail != null && finalStateTail.state().present()
+                        ? finalStateTail.state()
+                        : PlayerStateReport.fromXZ(finalReportedX, finalReportedZ);
+                ServerChunkPushManager.getInstance().setInitialPlayerPosition(player, reportedState);
                 completeServerHandshake(server, player, accepted, useGlobalCompression, useCompactHeader,
-                        dataplaneCapabilities.udpDataplaneSupported(), dataplaneCapabilities.controlFailoverSupported());
+                        dataplaneCapabilities.udpDataplaneSupported(), dataplaneCapabilities.controlFailoverSupported(),
+                        resumeAccepted);
             });
         });
 #else
@@ -1423,6 +833,8 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
                     }
                 }
                 ServerChunkPushManager.getInstance().setPlayerLightComputeSupported(player.getUUID(), lightComputeSupported);
+                // T7 状态尾部（append-only；旧客户端无此字段 → null）
+                HandshakeStateTail.C2S stateTail = HandshakeStateTail.readC2S(buf);
 
                 DebugLogger.debug(LogType.NETWORK,
                         "[HANDSHAKE] Details from {}: protocol={}, modVersion={}, algorithms={}, clientCache={}, globalCompression={}, compactHeader={}",
@@ -1443,11 +855,18 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
                 boolean accepted = true;
                 final double finalReportedX = reportedX;
                 final double finalReportedZ = reportedZ;
+                final HandshakeStateTail.C2S finalStateTail = stateTail;
 
                 server.execute(() -> {
-                    ServerChunkPushManager.getInstance().setInitialPlayerPosition(player, finalReportedX, finalReportedZ);
+                    // T7 续流验票（验签 + epoch 防重放）→ 续流就绪 → 复用现有推送链
+                    boolean resumeAccepted = verifyResumeRequest(player, finalStateTail);
+                    PlayerStateReport reportedState = finalStateTail != null && finalStateTail.state().present()
+                            ? finalStateTail.state()
+                            : PlayerStateReport.fromXZ(finalReportedX, finalReportedZ);
+                    ServerChunkPushManager.getInstance().setInitialPlayerPosition(player, reportedState);
                     completeServerHandshake(server, player, accepted, useGlobalCompression, useCompactHeader,
-                            dataplaneCapabilities.udpDataplaneSupported(), dataplaneCapabilities.controlFailoverSupported());
+                            dataplaneCapabilities.udpDataplaneSupported(), dataplaneCapabilities.controlFailoverSupported(),
+                            resumeAccepted);
                 });
             } catch (Exception e) {
                 LOGGER.error("[HANDSHAKE] Failed to handle handshake packet", e);
@@ -1680,52 +1099,5 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
                     "Hassium: Marked connection as ENABLED for player {}, flushing buffered packets",
                     player.getName().getString());
         }
-    }
-
-    private void sendCompressionReadyToServer() {
-        try {
-            FriendlyByteBuf readyBuf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
-            new CompressionReadyPayload(true).encode(readyBuf);
-#if MC_VER < MC_1_20_5
-            ClientPlayNetworking.send(CompressionReadyPayload.CHANNEL, readyBuf);
-#else
-            byte[] readyData = new byte[readyBuf.readableBytes()];
-            readyBuf.readBytes(readyData);
-            readyBuf.release();
-            ClientPlayNetworking.send(FabricPayloadRegistry.createPayload(
-                    FabricPayloadRegistry.COMPRESSION_READY_C2S_TYPE, readyData));
-#endif
-        } catch (Exception e) {
-            LOGGER.error("Hassium: Failed to send compression ready", e);
-        }
-    }
-
-#if MC_VER < MC_1_20_5
-    /**
-     * 通过指定连接发送压缩确认（1.20.1–1.20.4 分支）。
-     * <p>
-     * L2 恢复场景必须发到候选连接本身：{@code ClientPlayNetworking.send} 走
-     * {@code mc.connection}，恢复期间仍指向旧 player 的 ROUND1 断连连接，
-     * 候选连接的 ready 会发丢，服务端永远不装 ZSTD。
-     */
-    private static void sendCompressionReadyToServer(Connection connection) {
-        try {
-            FriendlyByteBuf readyBuf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
-            new CompressionReadyPayload(true).encode(readyBuf);
-            connection.send(ClientPlayNetworking.createC2SPacket(CompressionReadyPayload.CHANNEL, readyBuf));
-        } catch (Exception e) {
-            LOGGER.error("Hassium: Failed to send compression ready", e);
-        }
-    }
-#endif
-
-    /** Task 9 — 统一消费备用端点成功切换提示;无备用成功时空操作。必须在客户端主线程调用。 */
-    private static void notifyFallback() {
-        io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.consumeSuccessfulFallback()
-                .ifPresent(endpoint -> Minecraft.getInstance().gui.getChat().addMessage(
-                        net.minecraft.network.chat.Component.literal("[Hassium] 主地址 "
-                                + io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.primaryAddress()
-                                + " 不可用，已通过备用端点 " + endpoint.host() + ":" + endpoint.port()
-                                + " 连接；服务器列表地址和缓存身份仍为主地址。")));
     }
 }
