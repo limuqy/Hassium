@@ -1,5 +1,8 @@
 # 并行光照引擎冒烟 toml 注入/回滚辅助
-# 用法:
+# 【已退役 · 2026-08-09 config-restructure】注入键 parallelLightEngineEnabled / parallelLightEngineThreads
+# 已不在 ConfigSchema（2.0.0 schema 零命中，对应功能已移除）；锚点 clientCache.mainThreadChunkBudgetMs
+# 已重排为 chunk.mainThreadChunkBudgetMs。本脚本整体失效，不再维护；如需冒烟注入请按新键名改写。
+# 用法（历史）:
 #   powershell -NoProfile -ExecutionPolicy Bypass -File scripts/light-smoke-toml.ps1 -Loader fabric -Action Inject
 #   powershell -NoProfile -ExecutionPolicy Bypass -File scripts/light-smoke-toml.ps1 -Loader fabric -Action Rollback
 #
