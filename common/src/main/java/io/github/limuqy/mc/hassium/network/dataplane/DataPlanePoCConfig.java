@@ -4,8 +4,8 @@ package io.github.limuqy.mc.hassium.network.dataplane;
  * UDP 数据面协议与路由常量。
  *
  * <p>服务端启用状态和 UDP listener 端点由
- * {@link io.github.limuqy.mc.hassium.config.HassiumConfig.ServerNetworkConfig#dataPlane()}
- * 的 {@code hassium-server.toml network.dataPlane.*} 快照提供；本类不再持有可变端点或启用开关。
+ * {@link io.github.limuqy.mc.hassium.config.HassiumConfig.MasterCoreConfig#dataPlane()}
+ * 的 {@code hassium-server.toml dataplane.*} 快照提供；本类不再持有可变端点或启用开关。
  */
 public final class DataPlanePoCConfig {
 

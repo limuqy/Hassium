@@ -10,9 +10,9 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 /**
  * 解除 {@link Options#getEffectiveRenderDistance()} 的服务端钳制，
- * 返回 min(客户端 RD 滑块, {@code clientCache.maxRenderDistance})，从而扩大 ViewArea。
+ * 返回 min(客户端 RD 滑块, {@code chunk.maxRenderDistance})，从而扩大 ViewArea。
  * <p>
- * 门控：仅多人游戏 + clientCache.enabled + viewDistanceExtensionEnabled 时启用；
+ * 门控：仅多人游戏 + chunk.enabled + viewDistanceExtensionEnabled 时启用；
  * 单人游戏不启用（无缓存数据源，且单人 RD 不受 server 钳制）。
  * 视距外环带由 {@link io.github.limuqy.mc.hassium.cache.client.ViewDistanceExtensionService}
  * 从本地缓存回填，{@code renderOnly} 标记保证不参与模拟。

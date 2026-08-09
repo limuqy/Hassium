@@ -20,7 +20,7 @@ class ConfigSnapshotAdapterTest {
         HassiumConfig original = HassiumConfig.DEFAULT;
         HassiumConfig restored = ConfigSnapshotAdapter.fromValues(ConfigSnapshotAdapter.toValues(original));
 
-        assertEquals(original.serverNetwork().controlReachableEndpoints(), restored.serverNetwork().controlReachableEndpoints());
-        assertEquals(original.serverNetwork().dataPlane(), restored.serverNetwork().dataPlane());
+        assertEquals(original.master().controlReachableEndpoints(), restored.master().controlReachableEndpoints());
+        assertEquals(original.master().dataPlane(), restored.master().dataPlane());
     }
 }

@@ -154,7 +154,7 @@ public final class GatewayPlatformWiring {
                 return port;
             }
         }
-        LOGGER.warn("[GATEWAY] controlReachableEndpoints 未配置有效端口 — 网关监听默认 {}（客户端地址源 = T7/T8 迁移引擎）",
+        LOGGER.warn("[GATEWAY] master.controlReachableEndpoints 未配置有效端口 — 网关监听默认 {}（客户端地址源 = T7/T8 迁移引擎）",
                 GatewayPlayerBridge.DEFAULT_GATEWAY_PORT);
         return GatewayPlayerBridge.DEFAULT_GATEWAY_PORT;
     }

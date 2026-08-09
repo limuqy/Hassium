@@ -28,7 +28,7 @@ public final class ClientMainThreadBudget {
      * 本帧已消耗的缓存区块 apply 名额。
      * <p>
      * 覆盖全部缓存读取路径：readyQueue 消费（权威 + OVD renderOnly）与 OVD unload
-     * substitute 即时替换，共用 {@code clientCache.maxChunksPerFrame} 硬顶——保证
+     * substitute 即时替换，共用 {@code chunk.maxChunksPerFrame} 硬顶——保证
      * 超视距/替换路径不会绕过帧限速挤占主线程。
      */
     private static int frameCacheApplies = 0;
@@ -62,7 +62,7 @@ public final class ClientMainThreadBudget {
     /**
      * 进服时启动 JoinBoost 窗口。
      * <p>
-     * 若配置 {@code clientCache.joinBoostEnabled=false} 则不启动（预算始终为 normalBudgetMs，
+     * 若配置 {@code chunk.joinBoostEnabled=false} 则不启动（预算始终为 normalBudgetMs，
      * OVD_LOAD_THRESHOLD 限流始终生效）。
      */
     public static void startJoinBoost() {

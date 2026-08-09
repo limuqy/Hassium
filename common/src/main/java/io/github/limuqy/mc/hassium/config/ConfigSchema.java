@@ -10,85 +10,98 @@ import java.util.function.Supplier;
 public final class ConfigSchema {
     private static final List<ConfigEntry<?>> ENTRIES = new ArrayList<>();
 
-    public static final ConfigKey<Boolean> CACHE_ENABLED = bool("clientCache.enabled", ConfigScope.CLIENT, true, "是否启用客户端缓存");
-    public static final ConfigKey<Integer> CACHE_MAX_SIZE_MB = integer("clientCache.maxSizeMb", ConfigScope.CLIENT, 4096, 64, 1024 * 1024, "缓存最大容量（MB；影子端存档容量上限，超限触发热度淘汰）");
-    public static final ConfigKey<Integer> CACHE_COMPRESSION_LEVEL = integer("clientCache.cacheCompressionLevel", ConfigScope.CLIENT, 3, 1, 22, "缓存压缩等级");
-    public static final ConfigKey<Double> CACHE_HOT_SCORE_THRESHOLD = decimal("clientCache.hotScoreThreshold", ConfigScope.CLIENT, 0.3, 0.0, 1.0, "热点分数阈值（低于此值视为冷区块，清理时优先淘汰）");
-    public static final ConfigKey<Double> CACHE_RECENCY_WEIGHT = decimal("clientCache.recencyWeight", ConfigScope.CLIENT, 0.7, 0.0, 1.0, "最近访问权重");
-    public static final ConfigKey<Double> CACHE_FREQUENCY_WEIGHT = decimal("clientCache.frequencyWeight", ConfigScope.CLIENT, 0.3, 0.0, 1.0, "访问频率权重");
-    public static final ConfigKey<Integer> CACHE_CLEANUP_INTERVAL_TICKS = integer("clientCache.cleanupIntervalTicks", ConfigScope.CLIENT, 6000, 20, 72000, "清理检查间隔（刻）");
-    public static final ConfigKey<Integer> CACHE_TARGET_SIZE_MB = integer("clientCache.targetCacheSizeMb", ConfigScope.CLIENT, 0, 0, 1024 * 1024, "目标缓存大小（MB；0=自动）");
-    public static final ConfigKey<Integer> CACHE_MIN_CLEANUP_BATCH_SIZE = integer("clientCache.minCleanupBatchSize", ConfigScope.CLIENT, 100, 1, 100000, "每次最少清理区块数");
-    public static final ConfigKey<Boolean> CACHE_VIEW_DISTANCE_EXTENSION_ENABLED = bool("clientCache.viewDistanceExtensionEnabled", ConfigScope.CLIENT, true, "是否启用超视渲染");
-    public static final ConfigKey<Integer> CACHE_MAX_RENDER_DISTANCE = integer("clientCache.maxRenderDistance", ConfigScope.CLIENT, 16, 2, 64, "超视渲染有效距离上限");
-    public static final ConfigKey<Integer> CACHE_OVD_UNLOAD_DELAY_SECS = integer("clientCache.ovdUnloadDelaySecs", ConfigScope.CLIENT, 5, 0, 60, "超视渲染卸载延迟秒数");
-    public static final ConfigKey<Boolean> CACHE_SECTION_DELTA_ENABLED = bool("clientCache.sectionDeltaEnabled", ConfigScope.CLIENT, true, "是否启用分段增量（影子端 delta 消费实现前的控制位；当前客户端 no-op）");
-    public static final ConfigKey<Boolean> CACHE_JOIN_BOOST_ENABLED = bool("clientCache.joinBoostEnabled", ConfigScope.CLIENT, true, "是否启用进服加速");
-    public static final ConfigKey<Integer> CACHE_LOAD_THREADS = integer("clientCache.loadThreads", ConfigScope.CLIENT, 4, 1, 64, "客户端区块加载线程数");
-    public static final ConfigKey<Integer> CACHE_MAX_CHUNKS_PER_FRAME = integer("clientCache.maxChunksPerFrame", ConfigScope.CLIENT, 6, 1, 512, "每帧应用缓存区块硬顶");
-    public static final ConfigKey<Integer> CACHE_MAIN_THREAD_BUDGET_MS = integer("clientCache.mainThreadChunkBudgetMs", ConfigScope.CLIENT, 15, 1, 50, "主线程 apply 预算（ms）");
-    public static final ConfigKey<Integer> CACHE_SEED_GEN_THREADS = integer("clientCache.seedGenThreads", ConfigScope.CLIENT, 2, 0, 64, "SeedGen 本地生成线程数（固定平台线程池；0=禁用本地生成，SeedRef 一律回退全量）");
-    public static final ConfigKey<Boolean> CACHE_OVD_LOCAL_GENERATION = bool("clientCache.ovdLocalGeneration", ConfigScope.CLIENT, false,
-            "OVD 本地生成（默认 false）：开启后，超视渲染区域缓存 miss 时用Hassium 引擎按服务端世界种子本地生成区块（与服务器地形一致），生成的区块按 renderOnly 落地并存入本地缓存；无种子（服务端未装 MOD / 握手未到）时自动关闭生成，维持 miss 退避重试。需 clientCache.hassiumEngineEnabled 且Hassium 引擎可用");
-    public static final ConfigKey<Boolean> CACHE_HASSIUM_ENGINE_ENABLED = bool("clientCache.hassiumEngineEnabled", ConfigScope.CLIENT, true,
-            "是否启用Hassium 引擎（默认 true）：进服启动Hassium 引擎服务端统一承担区块光照计算（客户端不再计算）。启动失败自动降级：客户端缓存/超视渲染/SeedGen/Hassium 引擎光照全部关闭并游戏内提示；false=不启动Hassium 引擎。注意：关闭时剥光不生效（服务端按握手能力不剥光，光照随包自带）。与 network.seedGen.enabled 相互独立——SeedGen 开关只控制 pristine 本地生成");
-    public static final ConfigKey<Boolean> CLIENT_NETWORK_ENABLED = bool("network.enabled", ConfigScope.CLIENT, true, "是否启用客户端 Hassium 自定义通道");
-    public static final ConfigKey<Boolean> CLIENT_NETWORK_METRICS_ENABLED = bool("network.metricsEnabled", ConfigScope.CLIENT, false, "是否启用客户端网络指标");
-    public static final ConfigKey<Boolean> CLIENT_NETWORK_METRICS_AUTO_RESET = bool("network.metricsAutoReset", ConfigScope.CLIENT, true, "登出服务器时自动重置指标计数");
-    public static final ConfigKey<Boolean> CLIENT_SEED_GEN_ENABLED = bool("network.seedGen.enabled", ConfigScope.CLIENT, false, "是否启用 SeedGen（本地生成 pristine 区块；需双端同版本，默认关）");
+    // === 区块核心（chunk.*；CLIENT 21 键，含原 clientCache.* 全族与 network.seedGen.enabled）===
+    public static final ConfigKey<Boolean> CHUNK_ENABLED = bool("chunk.enabled", ConfigScope.CLIENT, Domain.CHUNK_CORE, true, "是否启用区块核心缓存");
+    public static final ConfigKey<Integer> CHUNK_MAX_SIZE_MB = integer("chunk.maxSizeMb", ConfigScope.CLIENT, Domain.CHUNK_CORE, 4096, 64, 1024 * 1024, "缓存最大容量（MB；影子端存档容量上限，超限触发热度淘汰）");
+    public static final ConfigKey<Integer> CHUNK_COMPRESSION_LEVEL = integer("chunk.compressionLevel", ConfigScope.CLIENT, Domain.CHUNK_CORE, 3, 1, 22, "缓存压缩等级");
+    public static final ConfigKey<Double> CHUNK_HOT_SCORE_THRESHOLD = decimal("chunk.hotScoreThreshold", ConfigScope.CLIENT, Domain.CHUNK_CORE, 0.3, 0.0, 1.0, "热点分数阈值（低于此值视为冷区块，清理时优先淘汰）");
+    public static final ConfigKey<Double> CHUNK_RECENCY_WEIGHT = decimal("chunk.recencyWeight", ConfigScope.CLIENT, Domain.CHUNK_CORE, 0.7, 0.0, 1.0, "最近访问权重");
+    public static final ConfigKey<Double> CHUNK_FREQUENCY_WEIGHT = decimal("chunk.frequencyWeight", ConfigScope.CLIENT, Domain.CHUNK_CORE, 0.3, 0.0, 1.0, "访问频率权重");
+    public static final ConfigKey<Integer> CHUNK_CLEANUP_INTERVAL_TICKS = integer("chunk.cleanupIntervalTicks", ConfigScope.CLIENT, Domain.CHUNK_CORE, 6000, 20, 72000, "清理检查间隔（刻）");
+    public static final ConfigKey<Integer> CHUNK_TARGET_SIZE_MB = integer("chunk.targetSizeMb", ConfigScope.CLIENT, Domain.CHUNK_CORE, 0, 0, 1024 * 1024, "目标缓存大小（MB；0=自动）");
+    public static final ConfigKey<Integer> CHUNK_MIN_CLEANUP_BATCH_SIZE = integer("chunk.minCleanupBatchSize", ConfigScope.CLIENT, Domain.CHUNK_CORE, 100, 1, 100000, "每次最少清理区块数");
+    public static final ConfigKey<Boolean> CHUNK_VIEW_DISTANCE_EXTENSION_ENABLED = bool("chunk.viewDistanceExtensionEnabled", ConfigScope.CLIENT, Domain.CHUNK_CORE, true, "是否启用超视渲染");
+    public static final ConfigKey<Integer> CHUNK_MAX_RENDER_DISTANCE = integer("chunk.maxRenderDistance", ConfigScope.CLIENT, Domain.CHUNK_CORE, 16, 2, 64, "超视渲染有效距离上限");
+    public static final ConfigKey<Integer> CHUNK_OVD_UNLOAD_DELAY_SECS = integer("chunk.ovdUnloadDelaySecs", ConfigScope.CLIENT, Domain.CHUNK_CORE, 5, 0, 60, "超视渲染卸载延迟秒数");
+    public static final ConfigKey<Boolean> CHUNK_SECTION_DELTA_ENABLED = bool("chunk.sectionDeltaEnabled", ConfigScope.CLIENT, Domain.CHUNK_CORE, true, "是否启用分段增量（GatewayPacketCodec/NetworkCore/DataPlaneClientBundle 活跃消费）");
+    public static final ConfigKey<Boolean> CHUNK_JOIN_BOOST_ENABLED = bool("chunk.joinBoostEnabled", ConfigScope.CLIENT, Domain.CHUNK_CORE, true, "是否启用进服加速");
+    public static final ConfigKey<Integer> CHUNK_LOAD_THREADS = integer("chunk.loadThreads", ConfigScope.CLIENT, Domain.CHUNK_CORE, 4, 1, 64, "客户端区块加载线程数");
+    public static final ConfigKey<Integer> CHUNK_MAX_CHUNKS_PER_FRAME = integer("chunk.maxChunksPerFrame", ConfigScope.CLIENT, Domain.CHUNK_CORE, 6, 1, 512, "每帧应用缓存区块硬顶");
+    public static final ConfigKey<Integer> CHUNK_MAIN_THREAD_CHUNK_BUDGET_MS = integer("chunk.mainThreadChunkBudgetMs", ConfigScope.CLIENT, Domain.CHUNK_CORE, 15, 1, 50, "主线程 apply 预算（ms）");
+    public static final ConfigKey<Integer> CHUNK_SEED_GEN_THREADS = integer("chunk.seedGenThreads", ConfigScope.CLIENT, Domain.CHUNK_CORE, 2, 0, 64, "SeedGen 本地生成线程数（固定平台线程池；0=禁用本地生成，SeedRef 一律回退全量）");
+    public static final ConfigKey<Boolean> CHUNK_OVD_LOCAL_GENERATION = bool("chunk.ovdLocalGeneration", ConfigScope.CLIENT, Domain.CHUNK_CORE, false,
+            "OVD 本地生成（默认 false）：开启后，超视渲染区域缓存 miss 时用Hassium 引擎按服务端世界种子本地生成区块（与服务器地形一致），生成的区块按 renderOnly 落地并存入本地缓存；无种子（服务端未装 MOD / 握手未到）时自动关闭生成，维持 miss 退避重试。需 chunk.hassiumEngineEnabled 且Hassium 引擎可用");
+    public static final ConfigKey<Boolean> CHUNK_HASSIUM_ENGINE_ENABLED = bool("chunk.hassiumEngineEnabled", ConfigScope.CLIENT, Domain.CHUNK_CORE, true,
+            "是否启用Hassium 引擎（默认 true）：进服启动Hassium 引擎服务端统一承担区块光照计算（客户端不再计算）。启动失败自动降级：客户端缓存/超视渲染/SeedGen/Hassium 引擎光照全部关闭并游戏内提示；false=不启动Hassium 引擎。注意：关闭时剥光不生效（服务端按握手能力不剥光，光照随包自带）。与 chunk.seedGenEnabled 相互独立——SeedGen 开关只控制 pristine 本地生成");
 
-    public static final ConfigKey<Boolean> STORAGE_ENABLED = bool("storage.enabled", ConfigScope.SERVER, false, "是否启用存档压缩（默认关；客户端缓存独立不受影响）");
-    public static final ConfigKey<String> STORAGE_MODE = string("storage.mode", ConfigScope.SERVER, "mirror", "存储模式");
-    public static final ConfigKey<Integer> STORAGE_ZSTD_LEVEL = integer("storage.zstdLevel", ConfigScope.SERVER, 3, 1, 22, "存储 ZSTD 压缩等级");
-    public static final ConfigKey<Boolean> SERVER_NETWORK_ENABLED = bool("network.enabled", ConfigScope.SERVER, true, "是否启用 Hassium 自定义通道");
-    public static final ConfigKey<Boolean> SERVER_SEED_GEN_ENABLED = bool("network.seedGen.enabled", ConfigScope.SERVER, false, "是否启用 SeedGen（服务端对 pristine 区块发 SeedRef 替代区块数据；客户端本地生成，hash 校验兜底；需双端同版本，默认关）");
-    public static final ConfigKey<Integer> NETWORK_COMPRESSION_LEVEL = integer("network.compressionLevel", ConfigScope.SERVER, 3, 1, 22, "自定义通道 ZSTD 压缩等级");
-    public static final ConfigKey<Boolean> NETWORK_MAGICLESS_ZSTD = bool("network.magiclessZstd", ConfigScope.SERVER, true, "是否使用无 magic 的 ZSTD");
-    public static final ConfigKey<Boolean> NETWORK_GLOBAL_PACKET_COMPRESSION = bool("network.globalPacketCompression", ConfigScope.SERVER, true, "是否启用全局包压缩");
-    public static final ConfigKey<Integer> NETWORK_GLOBAL_COMPRESSION_LEVEL = integer("network.globalCompressionLevel", ConfigScope.SERVER, 3, 1, 22, "全局压缩等级");
-    public static final ConfigKey<Integer> NETWORK_GLOBAL_COMPRESSION_THRESHOLD = integer("network.globalCompressionThreshold", ConfigScope.SERVER, 256, 0, 65536, "全局压缩阈值");
-    public static final ConfigKey<Boolean> NETWORK_USE_CONTEXT_COMPRESSION = bool("network.useContextCompression", ConfigScope.SERVER, true, "是否使用上下文压缩");
-    public static final ConfigKey<Boolean> NETWORK_PACKET_AGGREGATION = bool("network.enablePacketAggregation", ConfigScope.SERVER, true, "是否启用包聚合");
-    public static final ConfigKey<Integer> NETWORK_AGGREGATION_MIN_BATCH = integer("network.aggregationMinBatchSize", ConfigScope.SERVER, 4, 1, 256, "聚合最小批量");
-    public static final ConfigKey<Long> NETWORK_AGGREGATION_MAX_WAIT = longValue("network.aggregationMaxWaitTimeMs", ConfigScope.SERVER, 20L, 1L, 5000L, "聚合最大等待时间（ms）");
-    public static final ConfigKey<Integer> NETWORK_AGGREGATION_MAX_SIZE = integer("network.aggregationMaxSize", ConfigScope.SERVER, 256 * 1024, 1024, 8 * 1024 * 1024, "聚合最大大小");
-    public static final ConfigKey<Boolean> NETWORK_COMPACT_HEADER = bool("network.enableCompactHeader", ConfigScope.SERVER, true, "是否启用紧凑包头");
-    public static final ConfigKey<List<String>> NETWORK_COMPRESSION_BLACKLIST = stringList("network.compressionBlacklist", ConfigScope.SERVER, () -> new ArrayList<>(HassiumConfig.ServerNetworkConfig.DEFAULT_COMPRESSION_BLACKLIST), "压缩/聚合黑名单");
-    public static final ConfigKey<Boolean> SERVER_NETWORK_METRICS_ENABLED = bool("network.metricsEnabled", ConfigScope.SERVER, false, "是否启用服务端网络指标");
-    public static final ConfigKey<Integer> NETWORK_MAX_CHUNKS_PER_TICK = integer("network.maxChunksPerTick", ConfigScope.SERVER, 5, 1, 256, "每玩家每 tick 提交到后台序列化的区块上限（序列化/压缩/发送全在推送线程池；发送速率由本值 × tick 节奏决定，满 tick ≈ 本值×20/s）");
-    public static final ConfigKey<Integer> NETWORK_SERVER_PUSH_THREADS = integer("network.serverChunkPushThreads", ConfigScope.SERVER, 2, 1, 64, "服务端推送线程数");
-    public static final ConfigKey<Boolean> NETWORK_DYNAMIC_THREADS = bool("network.dynamicThreadPoolEnabled", ConfigScope.SERVER, true, "是否动态调整推送线程");
-    public static final ConfigKey<Integer> NETWORK_MIN_PUSH_THREADS = integer("network.minPushThreads", ConfigScope.SERVER, 2, 1, 64, "动态池最小线程数");
-    public static final ConfigKey<Integer> NETWORK_MAX_PUSH_THREADS = integer("network.maxPushThreads", ConfigScope.SERVER, 8, 1, 64, "动态池最大线程数");
-    public static final ConfigKey<Boolean> NETWORK_LIGHT_STRIP = bool("network.lightStrip", ConfigScope.SERVER, true, "是否启用光照剥离");
-    public static final ConfigKey<List<String>> NETWORK_CONTROL_ENDPOINTS = stringList("network.controlReachableEndpoints", ConfigScope.SERVER, List::of, "TCP 重连可达端点");
-    public static final ConfigKey<Boolean> DATAPLANE_ENABLED = bool("network.dataPlane.enabled", ConfigScope.SERVER, false, "是否启用 UDP/KCP Data Plane");
-    public static final ConfigKey<List<String>> DATAPLANE_UDP_LISTENERS = stringList("network.dataPlane.udpListeners", ConfigScope.SERVER, () -> HassiumConfig.ServerNetworkConfig.DEFAULT.dataPlane().udpListeners().stream().map(DataPlaneEndpointConfig::encodeListener).toList(), "UDP listener 编码列表");
-    public static final ConfigKey<Long> DATAPLANE_CONTROL_STALL_MS = longValue("network.dataPlane.controlStallMs", ConfigScope.SERVER, 6000L, 1L, Long.MAX_VALUE, "控制 TCP 静默时间（ms）");
-    public static final ConfigKey<Long> DATAPLANE_FAILOVER_EXPIRY_MS = longValue("network.dataPlane.failoverExpiryMs", ConfigScope.SERVER, 30000L, 1L, Long.MAX_VALUE, "failover permit 有效期（ms）");
-    public static final ConfigKey<Long> DATAPLANE_RECOVERY_WINDOW_MS = longValue("network.dataPlane.recoveryWindowMs", ConfigScope.SERVER, 60000L, 1L, Long.MAX_VALUE, "候选重连窗口（ms）");
-    public static final ConfigKey<Boolean> DATAPLANE_RECOVERY_FREEZE = bool("network.dataPlane.recoveryFreeze", ConfigScope.CLIENT, true, "主控热切恢复期画面定格（false=无感切换：不显示切换 UI，世界继续运行，恢复后回退）");
-    public static final ConfigKey<Boolean> COMPAT_REQUIRE_CLIENT_MOD = bool("compat.requireClientMod", ConfigScope.SERVER, false, "是否强制要求客户端安装 Hassium");
-    public static final ConfigKey<Boolean> COMPAT_AUTO_DOWNGRADE = bool("compat.autoDowngradeOnError", ConfigScope.SERVER, true, "出错时是否自动降级");
+    // === 网络核心（net.*；CLIENT 3 键）===
+    public static final ConfigKey<Boolean> NET_ENABLED = bool("net.enabled", ConfigScope.CLIENT, Domain.NETWORK_CORE, true, "是否启用客户端网络核心（2.0.0 进程内网关与帧连接总开关）");
+    public static final ConfigKey<Boolean> NET_METRICS_ENABLED = bool("net.metricsEnabled", ConfigScope.CLIENT, Domain.NETWORK_CORE, false, "是否启用客户端网络指标");
+    public static final ConfigKey<Boolean> NET_METRICS_AUTO_RESET = bool("net.metricsAutoReset", ConfigScope.CLIENT, Domain.NETWORK_CORE, true, "登出服务器时自动重置指标计数");
 
-    public static final ConfigKey<Boolean> CLIENT_DEBUG_METADATA = bool("debug.metadataLogging", ConfigScope.CLIENT, false, "元数据调试日志");
-    public static final ConfigKey<Boolean> CLIENT_DEBUG_DISPATCHER = bool("debug.dispatcherLogging", ConfigScope.CLIENT, false, "主线程调度调试日志");
-    public static final ConfigKey<Boolean> CLIENT_DEBUG_ASYNC = bool("debug.asyncLogging", ConfigScope.CLIENT, false, "异步调试日志");
-    public static final ConfigKey<Boolean> CLIENT_DEBUG_COMPRESSION = bool("debug.compressionLogging", ConfigScope.CLIENT, false, "压缩调试日志");
-    public static final ConfigKey<Boolean> CLIENT_DEBUG_CHUNK_APPLY = bool("debug.chunkApplyLogging", ConfigScope.CLIENT, false, "区块 apply 调试日志");
-    public static final ConfigKey<Boolean> CLIENT_DEBUG_NETWORK = bool("debug.networkLogging", ConfigScope.CLIENT, false, "网络调试日志");
-    public static final ConfigKey<Boolean> CLIENT_DEBUG_CACHE = bool("debug.cacheLogging", ConfigScope.CLIENT, false, "缓存调试日志");
-    public static final ConfigKey<Boolean> CLIENT_DEBUG_DATAPLANE = bool("debug.dataplaneLogging", ConfigScope.CLIENT, false, "数据面调试日志");
-    public static final ConfigKey<Boolean> CLIENT_DEBUG_LIGHT_VERIFY = bool("debug.lightVerify", ConfigScope.CLIENT, false, "光照验算（官方引擎对照 BFS 结果）");
-    public static final ConfigKey<Boolean> SERVER_DEBUG_METADATA = bool("debug.metadataLogging", ConfigScope.SERVER, false, "元数据调试日志");
-    public static final ConfigKey<Boolean> SERVER_DEBUG_DISPATCHER = bool("debug.dispatcherLogging", ConfigScope.SERVER, false, "主线程调度调试日志");
-    public static final ConfigKey<Boolean> SERVER_DEBUG_ASYNC = bool("debug.asyncLogging", ConfigScope.SERVER, false, "异步调试日志");
-    public static final ConfigKey<Boolean> SERVER_DEBUG_COMPRESSION = bool("debug.compressionLogging", ConfigScope.SERVER, false, "压缩调试日志");
-    public static final ConfigKey<Boolean> SERVER_DEBUG_CHUNK_APPLY = bool("debug.chunkApplyLogging", ConfigScope.SERVER, false, "区块 apply 调试日志");
-    public static final ConfigKey<Boolean> SERVER_DEBUG_NETWORK = bool("debug.networkLogging", ConfigScope.SERVER, false, "网络调试日志");
-    public static final ConfigKey<Boolean> SERVER_DEBUG_CACHE = bool("debug.cacheLogging", ConfigScope.SERVER, false, "缓存调试日志");
-    public static final ConfigKey<Boolean> SERVER_DEBUG_DATAPLANE = bool("debug.dataplaneLogging", ConfigScope.SERVER, false, "数据面调试日志");
-    public static final ConfigKey<Boolean> SERVER_DEBUG_LIGHT_VERIFY = bool("debug.lightVerify", ConfigScope.SERVER, false, "光照验算（官方引擎对照 BFS 结果）");
+    // === 区块核心（chunk.*；双端同名键）===
+    public static final ConfigKey<Boolean> CLIENT_CHUNK_SEED_GEN_ENABLED = bool("chunk.seedGenEnabled", ConfigScope.CLIENT, Domain.CHUNK_CORE, false, "是否启用 SeedGen（本地生成 pristine 区块；需双端同版本，默认关）");
+
+    // === 存储域（storage.*；SERVER 2 键）===
+    public static final ConfigKey<Boolean> STORAGE_ENABLED = bool("storage.enabled", ConfigScope.SERVER, Domain.STORAGE, false, "是否启用存档压缩（默认关；区块核心缓存独立不受影响）");
+    public static final ConfigKey<Integer> STORAGE_ZSTD_LEVEL = integer("storage.zstdLevel", ConfigScope.SERVER, Domain.STORAGE, 3, 1, 22, "存储 ZSTD 压缩等级");
+
+    // === 主控核心（master.*；SERVER 21 键，原 network.* SERVER 族 + recoveryWindowMs 语义化迁移）===
+    public static final ConfigKey<Boolean> MASTER_ENABLED = bool("master.enabled", ConfigScope.SERVER, Domain.MASTER_CORE, true, "是否启用主控核心网络通道");
+    public static final ConfigKey<Integer> MASTER_COMPRESSION_LEVEL = integer("master.compressionLevel", ConfigScope.SERVER, Domain.MASTER_CORE, 3, 1, 22, "自有通道 ZSTD 压缩等级");
+    public static final ConfigKey<Boolean> MASTER_MAGICLESS_ZSTD = bool("master.magiclessZstd", ConfigScope.SERVER, Domain.MASTER_CORE, true, "是否使用无 magic 的 ZSTD");
+    public static final ConfigKey<Boolean> MASTER_GLOBAL_PACKET_COMPRESSION = bool("master.globalPacketCompression", ConfigScope.SERVER, Domain.MASTER_CORE, true, "是否启用全局包压缩");
+    public static final ConfigKey<Integer> MASTER_GLOBAL_COMPRESSION_LEVEL = integer("master.globalCompressionLevel", ConfigScope.SERVER, Domain.MASTER_CORE, 3, 1, 22, "全局压缩等级");
+    public static final ConfigKey<Integer> MASTER_GLOBAL_COMPRESSION_THRESHOLD = integer("master.globalCompressionThreshold", ConfigScope.SERVER, Domain.MASTER_CORE, 256, 0, 65536, "全局压缩阈值");
+    public static final ConfigKey<Boolean> MASTER_USE_CONTEXT_COMPRESSION = bool("master.useContextCompression", ConfigScope.SERVER, Domain.MASTER_CORE, true, "是否使用上下文压缩");
+    public static final ConfigKey<Boolean> MASTER_PACKET_AGGREGATION = bool("master.enablePacketAggregation", ConfigScope.SERVER, Domain.MASTER_CORE, true, "是否启用包聚合");
+    public static final ConfigKey<Integer> MASTER_AGGREGATION_MIN_BATCH = integer("master.aggregationMinBatchSize", ConfigScope.SERVER, Domain.MASTER_CORE, 4, 1, 256, "聚合最小批量");
+    public static final ConfigKey<Long> MASTER_AGGREGATION_MAX_WAIT = longValue("master.aggregationMaxWaitTimeMs", ConfigScope.SERVER, Domain.MASTER_CORE, 20L, 1L, 5000L, "聚合最大等待时间（ms）");
+    public static final ConfigKey<Integer> MASTER_AGGREGATION_MAX_SIZE = integer("master.aggregationMaxSize", ConfigScope.SERVER, Domain.MASTER_CORE, 256 * 1024, 1024, 8 * 1024 * 1024, "聚合最大大小");
+    public static final ConfigKey<Boolean> MASTER_COMPACT_HEADER = bool("master.enableCompactHeader", ConfigScope.SERVER, Domain.MASTER_CORE, true, "是否启用紧凑包头");
+    public static final ConfigKey<List<String>> MASTER_COMPRESSION_BLACKLIST = stringList("master.compressionBlacklist", ConfigScope.SERVER, Domain.MASTER_CORE, () -> new ArrayList<>(HassiumConfig.MasterCoreConfig.DEFAULT_COMPRESSION_BLACKLIST), "压缩/聚合黑名单");
+    public static final ConfigKey<Boolean> MASTER_METRICS_ENABLED = bool("master.metricsEnabled", ConfigScope.SERVER, Domain.MASTER_CORE, false, "是否启用主控网络指标");
+    public static final ConfigKey<Integer> MASTER_MAX_CHUNKS_PER_TICK = integer("master.maxChunksPerTick", ConfigScope.SERVER, Domain.MASTER_CORE, 5, 1, 256, "每玩家每 tick 提交到后台序列化的区块上限（序列化/压缩/发送全在推送线程池；发送速率由本值 × tick 节奏决定，满 tick ≈ 本值×20/s）");
+    public static final ConfigKey<Integer> MASTER_SERVER_PUSH_THREADS = integer("master.serverChunkPushThreads", ConfigScope.SERVER, Domain.MASTER_CORE, 2, 1, 64, "服务端推送线程数");
+    public static final ConfigKey<Boolean> MASTER_DYNAMIC_THREADS = bool("master.dynamicThreadPoolEnabled", ConfigScope.SERVER, Domain.MASTER_CORE, true, "是否动态调整推送线程");
+    public static final ConfigKey<Integer> MASTER_MIN_PUSH_THREADS = integer("master.minPushThreads", ConfigScope.SERVER, Domain.MASTER_CORE, 2, 1, 64, "动态池最小线程数");
+    public static final ConfigKey<Integer> MASTER_MAX_PUSH_THREADS = integer("master.maxPushThreads", ConfigScope.SERVER, Domain.MASTER_CORE, 8, 1, 64, "动态池最大线程数");
+    public static final ConfigKey<List<String>> MASTER_CONTROL_ENDPOINTS = stringList("master.controlReachableEndpoints", ConfigScope.SERVER, Domain.MASTER_CORE, List::of, "网关监听/outbound 端点（网关监听地址源；客户端 outbound 地址源 = 迁移引擎）");
+    public static final ConfigKey<Long> MASTER_MIGRATION_FAULT_TIMEOUT_MS = longValue("master.migrationFaultTimeoutMs", ConfigScope.SERVER, Domain.MASTER_CORE, 60000L, 1L, Long.MAX_VALUE, "L1 迁移故障超时（ms；faultTimeout 仍为默认值时覆盖 MigrationEngine/MigrationPolicy）");
+
+    // === 区块核心（chunk.*；SERVER 2 键）===
+    public static final ConfigKey<Boolean> SERVER_CHUNK_SEED_GEN_ENABLED = bool("chunk.seedGenEnabled", ConfigScope.SERVER, Domain.CHUNK_CORE, false, "是否启用 SeedGen（服务端对 pristine 区块发 SeedRef 替代区块数据；客户端本地生成，hash 校验兜底；需双端同版本，默认关）");
+    public static final ConfigKey<Boolean> CHUNK_LIGHT_STRIP = bool("chunk.lightStrip", ConfigScope.SERVER, Domain.CHUNK_CORE, true, "是否启用光照剥离");
+
+    // === 数据面（dataplane.*；SERVER 2 键）===
+    public static final ConfigKey<Boolean> DATAPLANE_ENABLED = bool("dataplane.enabled", ConfigScope.SERVER, Domain.DATAPLANE, false, "是否启用 UDP/KCP Data Plane");
+    public static final ConfigKey<List<String>> DATAPLANE_UDP_LISTENERS = stringList("dataplane.udpListeners", ConfigScope.SERVER, Domain.DATAPLANE, () -> HassiumConfig.MasterCoreConfig.DEFAULT.dataPlane().udpListeners().stream().map(DataPlaneEndpointConfig::encodeListener).toList(), "UDP listener 编码列表");
+
+    // === 兼容性（compat.*；SERVER 2 键）===
+    public static final ConfigKey<Boolean> COMPAT_REQUIRE_CLIENT_MOD = bool("compat.requireClientMod", ConfigScope.SERVER, Domain.COMPAT, false, "是否强制要求客户端安装 Hassium");
+    public static final ConfigKey<Boolean> COMPAT_AUTO_DOWNGRADE = bool("compat.autoDowngradeOnError", ConfigScope.SERVER, Domain.COMPAT, true, "出错时是否自动降级");
+
+    // === 调试（debug.*；CLIENT 9 键）===
+    public static final ConfigKey<Boolean> CLIENT_DEBUG_METADATA = bool("debug.metadataLogging", ConfigScope.CLIENT, Domain.DEBUG, false, "元数据调试日志");
+    public static final ConfigKey<Boolean> CLIENT_DEBUG_DISPATCHER = bool("debug.dispatcherLogging", ConfigScope.CLIENT, Domain.DEBUG, false, "主线程调度调试日志");
+    public static final ConfigKey<Boolean> CLIENT_DEBUG_ASYNC = bool("debug.asyncLogging", ConfigScope.CLIENT, Domain.DEBUG, false, "异步调试日志");
+    public static final ConfigKey<Boolean> CLIENT_DEBUG_COMPRESSION = bool("debug.compressionLogging", ConfigScope.CLIENT, Domain.DEBUG, false, "压缩调试日志");
+    public static final ConfigKey<Boolean> CLIENT_DEBUG_CHUNK_APPLY = bool("debug.chunkApplyLogging", ConfigScope.CLIENT, Domain.DEBUG, false, "区块 apply 调试日志");
+    public static final ConfigKey<Boolean> CLIENT_DEBUG_NETWORK = bool("debug.networkLogging", ConfigScope.CLIENT, Domain.DEBUG, false, "网络调试日志");
+    public static final ConfigKey<Boolean> CLIENT_DEBUG_CACHE = bool("debug.cacheLogging", ConfigScope.CLIENT, Domain.DEBUG, false, "缓存调试日志");
+    public static final ConfigKey<Boolean> CLIENT_DEBUG_DATAPLANE = bool("debug.dataplaneLogging", ConfigScope.CLIENT, Domain.DEBUG, false, "数据面调试日志");
+    public static final ConfigKey<Boolean> CLIENT_DEBUG_LIGHT_VERIFY = bool("debug.lightVerify", ConfigScope.CLIENT, Domain.DEBUG, false, "光照验算（官方引擎对照 BFS 结果）");
+
+    // === 调试（debug.*；SERVER 9 键）===
+    public static final ConfigKey<Boolean> SERVER_DEBUG_METADATA = bool("debug.metadataLogging", ConfigScope.SERVER, Domain.DEBUG, false, "元数据调试日志");
+    public static final ConfigKey<Boolean> SERVER_DEBUG_DISPATCHER = bool("debug.dispatcherLogging", ConfigScope.SERVER, Domain.DEBUG, false, "主线程调度调试日志");
+    public static final ConfigKey<Boolean> SERVER_DEBUG_ASYNC = bool("debug.asyncLogging", ConfigScope.SERVER, Domain.DEBUG, false, "异步调试日志");
+    public static final ConfigKey<Boolean> SERVER_DEBUG_COMPRESSION = bool("debug.compressionLogging", ConfigScope.SERVER, Domain.DEBUG, false, "压缩调试日志");
+    public static final ConfigKey<Boolean> SERVER_DEBUG_CHUNK_APPLY = bool("debug.chunkApplyLogging", ConfigScope.SERVER, Domain.DEBUG, false, "区块 apply 调试日志");
+    public static final ConfigKey<Boolean> SERVER_DEBUG_NETWORK = bool("debug.networkLogging", ConfigScope.SERVER, Domain.DEBUG, false, "网络调试日志");
+    public static final ConfigKey<Boolean> SERVER_DEBUG_CACHE = bool("debug.cacheLogging", ConfigScope.SERVER, Domain.DEBUG, false, "缓存调试日志");
+    public static final ConfigKey<Boolean> SERVER_DEBUG_DATAPLANE = bool("debug.dataplaneLogging", ConfigScope.SERVER, Domain.DEBUG, false, "数据面调试日志");
+    public static final ConfigKey<Boolean> SERVER_DEBUG_LIGHT_VERIFY = bool("debug.lightVerify", ConfigScope.SERVER, Domain.DEBUG, false, "光照验算（官方引擎对照 BFS 结果）");
 
     static {
         validateUniquePaths();
@@ -124,34 +137,30 @@ public final class ConfigSchema {
         }
     }
 
-    private static ConfigKey<Boolean> bool(String path, ConfigScope scope, boolean defaultValue, String comment) {
-        return add(path, scope, ConfigType.BOOLEAN, defaultValue, null, null, comment, Boolean.class);
+    private static ConfigKey<Boolean> bool(String path, ConfigScope scope, Domain domain, boolean defaultValue, String comment) {
+        return add(path, scope, domain, ConfigType.BOOLEAN, defaultValue, null, null, comment, Boolean.class);
     }
 
-    private static ConfigKey<Integer> integer(String path, ConfigScope scope, int defaultValue, int min, int max, String comment) {
-        return add(path, scope, ConfigType.INT, defaultValue, min, max, comment, Integer.class);
+    private static ConfigKey<Integer> integer(String path, ConfigScope scope, Domain domain, int defaultValue, int min, int max, String comment) {
+        return add(path, scope, domain, ConfigType.INT, defaultValue, min, max, comment, Integer.class);
     }
 
-    private static ConfigKey<Long> longValue(String path, ConfigScope scope, long defaultValue, long min, long max, String comment) {
-        return add(path, scope, ConfigType.LONG, defaultValue, min, max, comment, Long.class);
+    private static ConfigKey<Long> longValue(String path, ConfigScope scope, Domain domain, long defaultValue, long min, long max, String comment) {
+        return add(path, scope, domain, ConfigType.LONG, defaultValue, min, max, comment, Long.class);
     }
 
-    private static ConfigKey<Double> decimal(String path, ConfigScope scope, double defaultValue, double min, double max, String comment) {
-        return add(path, scope, ConfigType.DOUBLE, defaultValue, min, max, comment, Double.class);
+    private static ConfigKey<Double> decimal(String path, ConfigScope scope, Domain domain, double defaultValue, double min, double max, String comment) {
+        return add(path, scope, domain, ConfigType.DOUBLE, defaultValue, min, max, comment, Double.class);
     }
 
-    private static ConfigKey<String> string(String path, ConfigScope scope, String defaultValue, String comment) {
-        return add(path, scope, ConfigType.STRING, defaultValue, null, null, comment, String.class);
+    private static ConfigKey<List<String>> stringList(String path, ConfigScope scope, Domain domain, Supplier<List<String>> defaultSupplier, String comment) {
+        return add(path, scope, domain, ConfigType.STRING_LIST, List.copyOf(defaultSupplier.get()), null, null, comment, List.class);
     }
 
-    private static ConfigKey<List<String>> stringList(String path, ConfigScope scope, Supplier<List<String>> defaultSupplier, String comment) {
-        return add(path, scope, ConfigType.STRING_LIST, List.copyOf(defaultSupplier.get()), null, null, comment, List.class);
-    }
-
-    private static <T> ConfigKey<T> add(String path, ConfigScope scope, ConfigType type, T defaultValue,
+    private static <T> ConfigKey<T> add(String path, ConfigScope scope, Domain domain, ConfigType type, T defaultValue,
                                         Number min, Number max, String comment, Class<?> valueType) {
         ConfigKey<T> key = new ConfigKey<>(path, scope, valueType);
-        ENTRIES.add(new ConfigEntry<>(key, path, scope, type, defaultValue, min, max, comment,
+        ENTRIES.add(new ConfigEntry<>(key, path, scope, domain, type, defaultValue, min, max, comment,
                 "hassium.configuration." + path));
         return key;
     }

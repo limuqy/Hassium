@@ -156,9 +156,8 @@ public abstract class MixinRegionFile {
     private void hassium$onGetChunkDataOutputStream(ChunkPos pos, CallbackInfoReturnable<DataOutputStream> cir) {
         HassiumConfigService configService = HassiumConfigService.getInstance();
         boolean shadow = io.github.limuqy.mc.hassium.server.RuntimeServerContext.isShadowServerContext();
-        hassium$LOGGER.debug("Hassium: RegionFile write gate pos={} storageEnabled={} dedicated={} shadow={} mode={}",
-                pos, configService.isStorageEnabled(), hassium$isDedicatedServerContext(), shadow,
-                configService.getConfig().storage().mode());
+        hassium$LOGGER.debug("Hassium: RegionFile write gate pos={} storageEnabled={} dedicated={} shadow={}",
+                pos, configService.isStorageEnabled(), hassium$isDedicatedServerContext(), shadow);
         if (!configService.isStorageEnabled() && !shadow) {
             return;
         }
@@ -169,11 +168,8 @@ public abstract class MixinRegionFile {
             return;
         }
 
-        String mode = configService.getConfig().storage().mode();
-        if ("readonly_vanilla".equals(mode)
-                && !io.github.limuqy.mc.hassium.server.RuntimeServerContext.isShadowServerContext()) {
-            return;
-        }
+        // storage.mode 键已删（REQ 决策 2/B）：存储模式内部固定 mirror，
+        // readonly_vanilla 只读放行分支不再可达。
 
         HassiumChunkWriteBuffer buffer = new HassiumChunkWriteBuffer(
                 data -> hassium$writeHassiumPayload(pos, data)

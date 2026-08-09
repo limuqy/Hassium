@@ -1517,7 +1517,7 @@ public class NeoForgeNetworkManager implements NetworkManager {
     @Override
     public void registerChannels() {
         if (!HassiumConfigService.getInstance().isNetworkCompressionEnabled()) {
-            LOGGER.warn("Hassium: network.enabled=false, skipping NeoForge channel registration");
+            LOGGER.warn("Hassium: master.enabled=false, skipping NeoForge channel registration");
             return;
         }
         LOGGER.debug("Hassium: NeoForge network channels will be registered via event");
@@ -2160,7 +2160,7 @@ public class NeoForgeNetworkManager implements NetworkManager {
     @SubscribeEvent
     public static void registerPayloads(RegisterPayloadHandlerEvent event) {
         if (!HassiumConfigService.getInstance().isNetworkCompressionEnabled()) {
-            LOGGER.warn("Hassium: network.enabled=false, skipping NeoForge Payload registration");
+            LOGGER.warn("Hassium: master.enabled=false, skipping NeoForge Payload registration");
             return;
         }
         LOGGER.debug("Hassium: Registering NeoForge Payload handlers (1.20.4)");
@@ -2343,7 +2343,7 @@ public class NeoForgeNetworkManager implements NetworkManager {
     @SubscribeEvent
     public static void registerPayloads(RegisterPayloadHandlersEvent event) {
         if (!HassiumConfigService.getInstance().isNetworkCompressionEnabled()) {
-            LOGGER.warn("Hassium: network.enabled=false, skipping NeoForge Payload registration");
+            LOGGER.warn("Hassium: master.enabled=false, skipping NeoForge Payload registration");
             return;
         }
         LOGGER.debug("Hassium: Registering NeoForge Payload handlers");

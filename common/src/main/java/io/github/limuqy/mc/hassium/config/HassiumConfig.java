@@ -7,71 +7,72 @@ import java.util.Set;
 /**
  * Hassium 配置（运行时快照）。
  * <p>
- * 物理客户端从 client.toml 加载：ClientCacheConfig + ClientNetworkConfig + DebugConfig。
- * 专用服从 server.toml 加载：StorageConfig + ServerNetworkConfig + CompatConfig + DebugConfig。
+ * 物理客户端从 client.toml 加载：ChunkCoreConfig + NetCoreConfig + DebugConfig。
+ * 专用服从 server.toml 加载：StorageConfig + MasterCoreConfig + CompatConfig + DebugConfig。
  */
 public record HassiumConfig(
         StorageConfig storage,
-        ClientCacheConfig clientCache,
-        ClientNetworkConfig clientNetwork,
-        ServerNetworkConfig serverNetwork,
+        ChunkCoreConfig chunk,
+        NetCoreConfig net,
+        MasterCoreConfig master,
         CompatConfig compat,
         DebugConfig debug
 ) {
     public static final HassiumConfig DEFAULT = new HassiumConfig(
             StorageConfig.DEFAULT,
-            ClientCacheConfig.DEFAULT,
-            ClientNetworkConfig.DEFAULT,
-            ServerNetworkConfig.DEFAULT,
+            ChunkCoreConfig.DEFAULT,
+            NetCoreConfig.DEFAULT,
+            MasterCoreConfig.DEFAULT,
             CompatConfig.DEFAULT,
             DebugConfig.DEFAULT
     );
-    public HassiumConfig withClientNetwork(ClientNetworkConfig clientNetwork) {
-        return new HassiumConfig(storage, clientCache, clientNetwork, serverNetwork, compat, debug);
+    public HassiumConfig withNet(NetCoreConfig net) {
+        return new HassiumConfig(storage, chunk, net, master, compat, debug);
     }
 
     public HassiumConfig withDebug(DebugConfig debug) {
-        return new HassiumConfig(storage, clientCache, clientNetwork, serverNetwork, compat, debug);
+        return new HassiumConfig(storage, chunk, net, master, compat, debug);
     }
 
     /**
-     * 存储配置（仅专用服；server.toml storage.*）
+     * 存储配置（仅专用服；server.toml storage.*）。
+     * <p>
+     * 存储模式固定为内部 mirror（原 storage.mode 键已删，REQ 决策 2/B）。
      */
     public record StorageConfig(
             boolean enabled,
-            String mode,
             int zstdLevel
     ) {
-        public static final StorageConfig DEFAULT = new StorageConfig(false, "mirror", 3);
+        public static final StorageConfig DEFAULT = new StorageConfig(false, 3);
     }
 
     /**
-     * 客户端缓存配置（仅物理客户端；client.toml clientCache.*）
+     * 区块核心配置（双端；client.toml chunk.* CLIENT 21 键 + 服务端 chunk.lightStrip/chunk.seedGenEnabled）。
      * <p>
-     * 吸收了原 NetworkConfig 中客户端专属字段：loadThreads、maxChunksPerFrame、mainThreadChunkBudgetMs。
+     * 吸收原 ClientCacheConfig 全族与 network.seedGen.enabled（双端同名键，按物理端加载）。
      * Bloom filter 参数硬编码（enabled=true, insertions=10000, fpp=0.01）。
      * maxAgeDays 已删除（热度评分隐式覆盖）。
      */
-    public record ClientCacheConfig(
+    public record ChunkCoreConfig(
             boolean enabled,
             int maxSizeMb,
-            int cacheCompressionLevel,
+            int compressionLevel,
             // === 热度清理（影子端容量/热度淘汰：heat.idx 热度索引 + 逐柱删除，saveAll 不再只写不删）===
             double hotScoreThreshold,
             double recencyWeight,
             double frequencyWeight,
             int cleanupIntervalTicks,
-            int targetCacheSizeMb,
+            int targetSizeMb,
             int minCleanupBatchSize,
+            // === 分段增量（GatewayPacketCodec/NetworkCore/DataPlaneClientBundle 活跃消费）===
+            boolean sectionDeltaEnabled,
+            // === JoinBoost ===
+            boolean joinBoostEnabled,
             // === 超视渲染 ===
             boolean viewDistanceExtensionEnabled,
             int maxRenderDistance,
             int ovdUnloadDelaySecs,
-            // === 分段增量（影子端 delta 消费实现前的控制位；当前客户端 no-op）===
-            boolean sectionDeltaEnabled,
-            // === JoinBoost ===
-            boolean joinBoostEnabled,
-            // === 从原 NetworkConfig 吸收的客户端字段 ===
+            // === 线程与应用（从原 NetworkConfig 吸收的客户端字段）===
             int loadThreads,
             int maxChunksPerFrame,
             int mainThreadChunkBudgetMs,
@@ -80,29 +81,35 @@ public record HassiumConfig(
             // === 影子端（非网络向功能总开关；默认 true）===
             boolean hassiumEngineEnabled,
             // === OVD 本地生成（默认 false；miss 时影子端按世界种子本地生成 + 存缓存）===
-            boolean ovdLocalGeneration
+            boolean ovdLocalGeneration,
+            // === SeedGen 总开关（双端同名键；物理端各自加载）===
+            boolean seedGenEnabled,
+            // === 光照剥离（仅专用服；服务端控制是否发包时剥离 LightData）===
+            boolean lightStrip
     ) {
-        public static final ClientCacheConfig DEFAULT = new ClientCacheConfig(
+        public static final ChunkCoreConfig DEFAULT = new ChunkCoreConfig(
                 true,    // enabled
                 4096,    // maxSizeMb
-                3,       // cacheCompressionLevel
+                3,       // compressionLevel
                 0.3,     // hotScoreThreshold
                 0.7,     // recencyWeight
                 0.3,     // frequencyWeight
                 6000,    // cleanupIntervalTicks
-                0,       // targetCacheSizeMb (auto)
+                0,       // targetSizeMb (auto)
                 100,     // minCleanupBatchSize
+                true,    // sectionDeltaEnabled
+                true,    // joinBoostEnabled
                 true,    // viewDistanceExtensionEnabled
                 16,      // maxRenderDistance
                 5,       // ovdUnloadDelaySecs
-                true,    // sectionDeltaEnabled
-                true,    // joinBoostEnabled
                 4,       // loadThreads
                 6,       // maxChunksPerFrame
                 15,      // mainThreadChunkBudgetMs
                 2,       // seedGenThreads（本地生成线程数；0=禁用）
                 true,    // hassiumEngineEnabled（默认 true：进服启动影子端承担光照计算；失败降级关闭缓存/OVD/SeedGen）
-                false    // ovdLocalGeneration（默认 false：OVD miss 时影子端本地生成 + 存缓存）
+                false,   // ovdLocalGeneration（默认 false：OVD miss 时影子端本地生成 + 存缓存）
+                false,   // seedGenEnabled（默认关；需双端同版本）
+                true     // lightStrip（仅服务端消费；物理客户端默认值不参与加载）
         );
 
         public long maxCacheSizeBytes() {
@@ -110,7 +117,7 @@ public record HassiumConfig(
         }
 
         public int resolvedTargetCacheSizeMb() {
-            return targetCacheSizeMb > 0 ? targetCacheSizeMb : (int) (maxSizeMb * 0.8);
+            return targetSizeMb > 0 ? targetSizeMb : (int) (maxSizeMb * 0.8);
         }
 
         public long targetCacheSizeBytes() {
@@ -119,16 +126,14 @@ public record HassiumConfig(
     }
 
     /**
-     * 客户端网络配置（仅物理客户端；client.toml network.*）
+     * 网络核心配置（仅物理客户端；client.toml net.*）。
      */
-    public record ClientNetworkConfig(
+    public record NetCoreConfig(
             boolean enabled,
             boolean metricsEnabled,
-            boolean metricsAutoReset,
-            boolean recoveryFreeze,
-            boolean seedGenEnabled
+            boolean metricsAutoReset
     ) {
-        public static final ClientNetworkConfig DEFAULT = new ClientNetworkConfig(true, false, true, true, false);
+        public static final NetCoreConfig DEFAULT = new NetCoreConfig(true, false, true);
     }
 
     /**
@@ -157,24 +162,21 @@ public record HassiumConfig(
     }
 
     /**
-     * UDP data plane 与控制面恢复共用的服务端配置快照。
+     * UDP 数据面配置（仅专用服；server.toml dataplane.*）。
      */
-    public record DataPlaneConfig(boolean enabled, List<UdpListenerConfig> udpListeners,
-                                  long controlStallMs, long failoverExpiryMs, long recoveryWindowMs) {
+    public record DataPlaneConfig(boolean enabled, List<UdpListenerConfig> udpListeners) {
         public DataPlaneConfig {
             udpListeners = DataPlaneEndpointConfig.normalizeUdpListeners(enabled, udpListeners);
-            DataPlaneEndpointConfig.validatePositive(controlStallMs, "controlStallMs");
-            DataPlaneEndpointConfig.validatePositive(failoverExpiryMs, "failoverExpiryMs");
-            DataPlaneEndpointConfig.validatePositive(recoveryWindowMs, "recoveryWindowMs");
         }
     }
 
     /**
-     * 服务端网络配置（仅专用服；server.toml network.*）
+     * 主控核心配置（仅专用服；server.toml master.* + dataplane.*）。
      * <p>
-     * 包含共享网络行为（压缩/聚合）和服务端专属推送设置。
+     * 服务端网络行为（压缩/聚合/推送/端点）与 L1 迁移故障超时；
+     * 数据面键（dataplane.enabled/udpListeners）经 {@link DataPlaneConfig} 挂载。
      */
-    public record ServerNetworkConfig(
+    public record MasterCoreConfig(
             boolean enabled,
             int compressionLevel,
             boolean magiclessZstd,
@@ -201,37 +203,16 @@ public record HassiumConfig(
             boolean dynamicThreadPoolEnabled,
             int minPushThreads,
             int maxPushThreads,
-            // === 光照剥离（服务端控制是否发包时剥离 LightData）===
-            boolean lightStrip,
-            // === SeedGen（服务端对 pristine 区块发 SeedRef 替代区块数据）===
-            boolean seedGenEnabled,
-            // === 控制面重连与 UDP data plane ===
+            // === 控制面端点与 L1 迁移 ===
             List<ReachableEndpoint> controlReachableEndpoints,
+            long migrationFaultTimeoutMs,
             DataPlaneConfig dataPlane
     ) {
-        public ServerNetworkConfig {
+        public MasterCoreConfig {
             compressionBlacklist = Set.copyOf(compressionBlacklist);
             controlReachableEndpoints = DataPlaneEndpointConfig.normalizeReachableEndpoints(
                     controlReachableEndpoints, 4, "control reachable endpoints");
-        }
-        /**
-         * 保持现有配置后端的构造签名；端点持久化将在相应 adapter 中显式接入。
-         */
-        public ServerNetworkConfig(boolean enabled, int compressionLevel, boolean magiclessZstd,
-                                   boolean globalPacketCompression, int globalCompressionLevel,
-                                   int globalCompressionThreshold, boolean useContextCompression,
-                                   boolean enablePacketAggregation, int aggregationMinBatchSize,
-                                   long aggregationMaxWaitTimeMs, int aggregationMaxSize,
-                                   boolean enableCompactHeader, Set<String> compressionBlacklist,
-                                   boolean metricsEnabled, int maxChunksPerTick,
-                                   int serverChunkPushThreads, boolean dynamicThreadPoolEnabled,
-                                   int minPushThreads, int maxPushThreads, boolean lightStrip) {
-            this(enabled, compressionLevel, magiclessZstd, globalPacketCompression,
-                    globalCompressionLevel, globalCompressionThreshold, useContextCompression,
-                    enablePacketAggregation, aggregationMinBatchSize, aggregationMaxWaitTimeMs,
-                    aggregationMaxSize, enableCompactHeader, compressionBlacklist, metricsEnabled,
-                    maxChunksPerTick, serverChunkPushThreads, dynamicThreadPoolEnabled,
-                    minPushThreads, maxPushThreads, lightStrip, false, List.of(), DEFAULT_DATA_PLANE);
+            DataPlaneEndpointConfig.validatePositive(migrationFaultTimeoutMs, "migrationFaultTimeoutMs");
         }
 
         // 127.0.0.1 仅供本地开发；公网部署必须配置客户端实际可达的地址。
@@ -239,10 +220,7 @@ public record HassiumConfig(
                 false,
                 List.of(new UdpListenerConfig(
                         "0.0.0.0", 25565, 100,
-                        List.of(new ReachableEndpoint("127.0.0.1", 25565, 100)))),
-                6_000L,
-                30_000L,
-                60_000L
+                        List.of(new ReachableEndpoint("127.0.0.1", 25565, 100))))
         );
         public static final Set<String> DEFAULT_COMPRESSION_BLACKLIST = Set.of(
                 HassiumPacketIds.CHUNK_PAYLOAD_S2C,
@@ -257,7 +235,7 @@ public record HassiumConfig(
                 HassiumPacketIds.AGGREGATION_S2C
         );
 
-        public static final ServerNetworkConfig DEFAULT = new ServerNetworkConfig(
+        public static final MasterCoreConfig DEFAULT = new MasterCoreConfig(
                 true,              // enabled
                 3,                 // compressionLevel
                 true,              // magiclessZstd
@@ -272,14 +250,13 @@ public record HassiumConfig(
                 true,              // enableCompactHeader
                 DEFAULT_COMPRESSION_BLACKLIST,
                 false,              // metricsEnabled
-                4,                 // maxChunksPerTick（满 tick ≈ 80/s；发送速率 = 本值 × tick 节奏，掉刻自然降速保护主线程）
+                5,                 // maxChunksPerTick（schema 为准；满 tick ≈ 100/s；发送速率 = 本值 × tick 节奏，掉刻自然降速保护主线程）
                 2,                 // serverChunkPushThreads
                 true,              // dynamicThreadPoolEnabled
                 2,                 // minPushThreads
                 8,                 // maxPushThreads
-                true,              // lightStrip
-                false,             // seedGenEnabled（默认关；Phase 3 hash 闭环完成后才允许开）
                 List.of(),         // controlReachableEndpoints
+                60_000L,           // migrationFaultTimeoutMs（L1 迁移故障静默超时；faultTimeout 仍为默认值时覆盖）
                 DEFAULT_DATA_PLANE
         );
     }

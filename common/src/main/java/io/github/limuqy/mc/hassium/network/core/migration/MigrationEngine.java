@@ -26,7 +26,7 @@ import java.util.function.Supplier;
  * <p><b>触发</b>：
  * <ul>
  *   <li>故障：outbound 入站静默超时（{@link MigrationPolicy#faultTimeoutMs}，沿用既有
- *       {@code network.dataPlane.recoveryWindowMs} 语义）→ {@link Sink#onFault()}。</li>
+ *       {@code master.migrationFaultTimeoutMs} 语义）→ {@link Sink#onFault()}。</li>
  *   <li>策略：{@link ServerLoadReporter.ServerLoadReport} → {@link #evaluatePolicy}
  *       （TPS 阈值 / 负载均值阈值 / 维护窗口）→ {@link Sink#onPolicyTrigger}。
  *       负载上报到客户端的线通道 = T10 CONFIG 帧（本任务不新增帧类型）；收到后调用
@@ -112,12 +112,12 @@ public final class MigrationEngine {
         return policy;
     }
 
-    /** 配置接线辅助：faultTimeout 仍为默认值时用配置 recoveryWindowMs 覆盖（recoveryWindow 语义）。 */
-    public void applyRecoveryWindowFromConfig(long recoveryWindowMs) {
+    /** 配置接线辅助：faultTimeout 仍为默认值时用配置 migrationFaultTimeoutMs 覆盖（L1 迁移 faultTimeout 语义）。 */
+    public void applyMigrationFaultTimeoutFromConfig(long migrationFaultTimeoutMs) {
         MigrationPolicy p = policy;
-        if (p.faultTimeoutMs() == MigrationPolicy.DEFAULT.faultTimeoutMs() && recoveryWindowMs > 0) {
+        if (p.faultTimeoutMs() == MigrationPolicy.DEFAULT.faultTimeoutMs() && migrationFaultTimeoutMs > 0) {
             setPolicy(new MigrationPolicy(p.minTps(), p.maxLoadAverage(), p.maintenanceWindow(),
-                    p.heartbeatIntervalMs(), recoveryWindowMs, p.prewarmEnabled()));
+                    p.heartbeatIntervalMs(), migrationFaultTimeoutMs, p.prewarmEnabled()));
         }
     }
 

@@ -20,9 +20,8 @@ class FabricTomlDataPlaneConfigTest {
                         new HassiumConfig.ReachableEndpoint("edge-a.example", 41001, 100),
                         new HassiumConfig.ReachableEndpoint("edge-b.example", 42001, 80))),
                 new HassiumConfig.UdpListenerConfig("10.0.0.10", 31002, 40, List.of(
-                        new HassiumConfig.ReachableEndpoint("edge-a.example", 43001, 100)))),
-                6_000L, 30_000L, 60_000L);
-        HassiumConfig.ServerNetworkConfig network = withEndpoints(
+                        new HassiumConfig.ReachableEndpoint("edge-a.example", 43001, 100)))));
+        HassiumConfig.MasterCoreConfig master = withEndpoints(
                 List.of(
                         new HassiumConfig.ReachableEndpoint("play.example", 25565, 100),
                         new HassiumConfig.ReachableEndpoint("backup.example", 25565, 80)),
@@ -30,19 +29,19 @@ class FabricTomlDataPlaneConfigTest {
 
         FabricTomlConfigIO.saveServer(root, new HassiumConfig(
                 HassiumConfig.StorageConfig.DEFAULT,
-                HassiumConfig.ClientCacheConfig.DEFAULT,
-                HassiumConfig.ClientNetworkConfig.DEFAULT,
-                network,
+                HassiumConfig.ChunkCoreConfig.DEFAULT,
+                HassiumConfig.NetCoreConfig.DEFAULT,
+                master,
                 HassiumConfig.CompatConfig.DEFAULT,
                 HassiumConfig.DebugConfig.DEFAULT));
-        HassiumConfig.ServerNetworkConfig loaded = FabricTomlConfigIO.loadServer(root).serverNetwork();
+        HassiumConfig.MasterCoreConfig loaded = FabricTomlConfigIO.loadServer(root).master();
 
-        assertEquals(network.controlReachableEndpoints(), loaded.controlReachableEndpoints());
-        assertEquals(network.dataPlane(), loaded.dataPlane());
+        assertEquals(master.controlReachableEndpoints(), loaded.controlReachableEndpoints());
+        assertEquals(master.dataPlane(), loaded.dataPlane());
         String toml = Files.readString(root.resolve("hassium/hassium-server.toml"));
-        assertTrue(toml.contains("[[network.controlReachableEndpoints]]"));
-        assertTrue(toml.contains("[[network.dataPlane.udpListeners]]"));
-        assertTrue(toml.contains("[[network.dataPlane.udpListeners.reachableEndpoints]]"));
+        assertTrue(toml.contains("[[master.controlReachableEndpoints]]"));
+        assertTrue(toml.contains("[[dataplane.udpListeners]]"));
+        assertTrue(toml.contains("[[dataplane.udpListeners.reachableEndpoints]]"));
     }
 
     @Test
@@ -50,23 +49,24 @@ class FabricTomlDataPlaneConfigTest {
         Path config = root.resolve("hassium/hassium-server.toml");
         Files.createDirectories(config.getParent());
         Files.writeString(config, """
-                [network]
+                [master]
                 enabled = true
-                [[network.controlReachableEndpoints]]
+                [[master.controlReachableEndpoints]]
                 host = "0.0.0.0"
                 port = 25565
                 priority = 100
-                [network.dataPlane]
+                [dataplane]
                 enabled = true
+                # 已删键（controlStallMs/failoverExpiryMs）残留不影响加载
                 controlStallMs = -1
                 """);
 
-        HassiumConfig.ServerNetworkConfig loaded = FabricTomlConfigIO.loadServer(root).serverNetwork();
+        HassiumConfig.MasterCoreConfig loaded = FabricTomlConfigIO.loadServer(root).master();
 
         assertTrue(loaded.enabled());
+        // wildcard host 不可作为可达端点下发 → 回退空表
         assertEquals(List.of(), loaded.controlReachableEndpoints());
-        assertEquals(HassiumConfig.ServerNetworkConfig.DEFAULT.dataPlane().controlStallMs(),
-                loaded.dataPlane().controlStallMs());
+        assertEquals(HassiumConfig.MasterCoreConfig.DEFAULT.dataPlane(), loaded.dataPlane());
     }
 
     @Test
@@ -74,30 +74,30 @@ class FabricTomlDataPlaneConfigTest {
         Path config = root.resolve("hassium/hassium-server.toml");
         Files.createDirectories(config.getParent());
         Files.writeString(config, """
-                [network.dataPlane]
+                [dataplane]
                 enabled = false
                 udpListeners = []
                 """);
 
-        HassiumConfig.DataPlaneConfig dataPlane = FabricTomlConfigIO.loadServer(root).serverNetwork().dataPlane();
+        HassiumConfig.DataPlaneConfig dataPlane = FabricTomlConfigIO.loadServer(root).master().dataPlane();
 
         assertTrue(!dataPlane.enabled());
         assertEquals(List.of(), dataPlane.udpListeners());
     }
 
 
-    private static HassiumConfig.ServerNetworkConfig withEndpoints(
+    private static HassiumConfig.MasterCoreConfig withEndpoints(
             List<HassiumConfig.ReachableEndpoint> controlEndpoints,
             HassiumConfig.DataPlaneConfig dataPlane
     ) {
-        HassiumConfig.ServerNetworkConfig d = HassiumConfig.ServerNetworkConfig.DEFAULT;
-        return new HassiumConfig.ServerNetworkConfig(
+        HassiumConfig.MasterCoreConfig d = HassiumConfig.MasterCoreConfig.DEFAULT;
+        return new HassiumConfig.MasterCoreConfig(
                 d.enabled(), d.compressionLevel(), d.magiclessZstd(), d.globalPacketCompression(),
                 d.globalCompressionLevel(), d.globalCompressionThreshold(), d.useContextCompression(),
                 d.enablePacketAggregation(), d.aggregationMinBatchSize(), d.aggregationMaxWaitTimeMs(),
                 d.aggregationMaxSize(), d.enableCompactHeader(), d.compressionBlacklist(), d.metricsEnabled(),
                 d.maxChunksPerTick(), d.serverChunkPushThreads(), d.dynamicThreadPoolEnabled(),
-                d.minPushThreads(), d.maxPushThreads(), d.lightStrip(), d.seedGenEnabled(),
-                controlEndpoints, dataPlane);
+                d.minPushThreads(), d.maxPushThreads(),
+                controlEndpoints, d.migrationFaultTimeoutMs(), dataPlane);
     }
 }

@@ -27,6 +27,6 @@ class ConfigSchemaTest {
         // storage.enabled 默认关（专用服务器才写 type-126；单人/局域网保持原版格式）
         assertFalse(values.get(ConfigSchema.STORAGE_ENABLED));
         assertEquals(3, values.get(ConfigSchema.STORAGE_ZSTD_LEVEL));
-        assertEquals(3, values.get(ConfigSchema.NETWORK_COMPRESSION_LEVEL));
+        assertEquals(3, values.get(ConfigSchema.MASTER_COMPRESSION_LEVEL));
     }
 }

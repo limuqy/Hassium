@@ -65,7 +65,7 @@ public class ForgeNetworkManager implements NetworkManager {
     @Override
     public void registerChannels() {
         if (!HassiumConfigService.getInstance().isNetworkCompressionEnabled()) {
-            LOGGER.warn("Hassium: network.enabled=false, skipping Forge channel registration");
+            LOGGER.warn("Hassium: master.enabled=false, skipping Forge channel registration");
             return;
         }
         LOGGER.debug("Hassium: Registering Forge network channels");

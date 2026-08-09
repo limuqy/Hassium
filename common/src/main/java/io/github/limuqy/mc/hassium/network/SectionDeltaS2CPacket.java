@@ -26,7 +26,7 @@ import java.util.List;
  * {@code skipped}：本请求中因超视距等原因未处理的区块；客户端应立即回退全量。
  * 服务端对每次 SectionHashRequest 都会回包（entries/skipped 可空），避免客户端悬等。
  * <p>
- * 由客户端 {@code clientCache.sectionDeltaEnabled} 门控：开启时 MISMATCH 走分段增量，关闭时全量。
+ * 由客户端 {@code chunk.sectionDeltaEnabled} 门控：开启时 MISMATCH 走分段增量，关闭时全量。
  * <p>
  * 独立 ZSTD 压缩：entries+skipped payload 经 ZSTD 压缩后发送（黑名单排除全局 Pipeline 压缩，
  * 避免双重压缩）。压缩比 < 1 时自动回退未压缩。

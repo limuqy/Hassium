@@ -28,7 +28,7 @@ import java.util.concurrent.atomic.AtomicReference;
  * <p><b>生命周期</b>：服务端平台在 MinecraftServer 启动/停止时
  * {@link #start}/{@link #stop}（接线点 = 平台 MixinMinecraftServer，与
  * DataPlaneUdpServer 同模式；监听端口建议取
- * {@code ServerNetworkConfig.controlReachableEndpoints()[0].port()}，客户端
+ * {@code MasterCoreConfig.controlReachableEndpoints()[0].port()}，客户端
  * outbound 地址源为 T7/T8 迁移引擎）。停止时逐会话走
  * {@link GatewayPlayerRegistry} 完整清理（T3：removePlayer 一键清空）。
  *

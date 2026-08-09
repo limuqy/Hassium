@@ -12,7 +12,7 @@ public interface BulkRouteTarget {
     /** 本会话所属 endpoint 的服务端下标（§{@code DataPlaneUdpServer.BoundEndpoint.endpointId}）。 */
     int endpointId();
 
-    /** 配置的基础权重（{@code network.dataPlane.udpListeners[].weight}）；health penalty 在此之上扣减。 */
+    /** 配置的基础权重（{@code dataplane.udpListeners[].weight}）；health penalty 在此之上扣减。 */
     int weight();
 
     /** 未关闭 + 可写 + SRTT 在硬上限内；router 仅选 healthy 候选。 */

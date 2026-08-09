@@ -11,7 +11,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 
 /**
- * {@code network.dataPlane.enabled=false} 必须不绑定 UDP，并让调用方保留 Primary 回退。
+ * {@code dataplane.enabled=false} 必须不绑定 UDP，并让调用方保留 Primary 回退。
  */
 class DataPlaneEnabledGuardTest {
 
@@ -44,23 +44,21 @@ class DataPlaneEnabledGuardTest {
     }
 
     private static HassiumConfig withDataPlaneEnabled(HassiumConfig config, boolean enabled) {
-        HassiumConfig.ServerNetworkConfig network = config.serverNetwork();
-        HassiumConfig.DataPlaneConfig dataPlane = network.dataPlane();
+        HassiumConfig.MasterCoreConfig master = config.master();
+        HassiumConfig.DataPlaneConfig dataPlane = master.dataPlane();
         HassiumConfig.DataPlaneConfig replacement = new HassiumConfig.DataPlaneConfig(enabled,
-                enabled ? dataPlane.udpListeners() : List.of(), dataPlane.controlStallMs(),
-                dataPlane.failoverExpiryMs(), dataPlane.recoveryWindowMs());
-        HassiumConfig.ServerNetworkConfig updatedNetwork = new HassiumConfig.ServerNetworkConfig(
-                network.enabled(), network.compressionLevel(), network.magiclessZstd(),
-                network.globalPacketCompression(), network.globalCompressionLevel(),
-                network.globalCompressionThreshold(), network.useContextCompression(),
-                network.enablePacketAggregation(), network.aggregationMinBatchSize(),
-                network.aggregationMaxWaitTimeMs(), network.aggregationMaxSize(),
-                network.enableCompactHeader(), network.compressionBlacklist(), network.metricsEnabled(),
-                network.maxChunksPerTick(), network.serverChunkPushThreads(), network.dynamicThreadPoolEnabled(),
-                network.minPushThreads(), network.maxPushThreads(), network.lightStrip(),
-                network.seedGenEnabled(),
-                network.controlReachableEndpoints(), replacement);
-        return new HassiumConfig(config.storage(), config.clientCache(), config.clientNetwork(), updatedNetwork,
+                enabled ? dataPlane.udpListeners() : List.of());
+        HassiumConfig.MasterCoreConfig updatedMaster = new HassiumConfig.MasterCoreConfig(
+                master.enabled(), master.compressionLevel(), master.magiclessZstd(),
+                master.globalPacketCompression(), master.globalCompressionLevel(),
+                master.globalCompressionThreshold(), master.useContextCompression(),
+                master.enablePacketAggregation(), master.aggregationMinBatchSize(),
+                master.aggregationMaxWaitTimeMs(), master.aggregationMaxSize(),
+                master.enableCompactHeader(), master.compressionBlacklist(), master.metricsEnabled(),
+                master.maxChunksPerTick(), master.serverChunkPushThreads(), master.dynamicThreadPoolEnabled(),
+                master.minPushThreads(), master.maxPushThreads(),
+                master.controlReachableEndpoints(), master.migrationFaultTimeoutMs(), replacement);
+        return new HassiumConfig(config.storage(), config.chunk(), config.net(), updatedMaster,
                 config.compat(), config.debug());
     }
 
@@ -93,19 +91,18 @@ class DataPlaneEnabledGuardTest {
 
     private static HassiumConfig withControlReachableEndpoints(HassiumConfig config,
                                                                 List<HassiumConfig.ReachableEndpoint> endpoints) {
-        HassiumConfig.ServerNetworkConfig network = config.serverNetwork();
-        HassiumConfig.ServerNetworkConfig updatedNetwork = new HassiumConfig.ServerNetworkConfig(
-                network.enabled(), network.compressionLevel(), network.magiclessZstd(),
-                network.globalPacketCompression(), network.globalCompressionLevel(),
-                network.globalCompressionThreshold(), network.useContextCompression(),
-                network.enablePacketAggregation(), network.aggregationMinBatchSize(),
-                network.aggregationMaxWaitTimeMs(), network.aggregationMaxSize(),
-                network.enableCompactHeader(), network.compressionBlacklist(), network.metricsEnabled(),
-                network.maxChunksPerTick(), network.serverChunkPushThreads(), network.dynamicThreadPoolEnabled(),
-                network.minPushThreads(), network.maxPushThreads(), network.lightStrip(),
-                network.seedGenEnabled(),
-                endpoints, network.dataPlane());
-        return new HassiumConfig(config.storage(), config.clientCache(), config.clientNetwork(), updatedNetwork,
+        HassiumConfig.MasterCoreConfig master = config.master();
+        HassiumConfig.MasterCoreConfig updatedMaster = new HassiumConfig.MasterCoreConfig(
+                master.enabled(), master.compressionLevel(), master.magiclessZstd(),
+                master.globalPacketCompression(), master.globalCompressionLevel(),
+                master.globalCompressionThreshold(), master.useContextCompression(),
+                master.enablePacketAggregation(), master.aggregationMinBatchSize(),
+                master.aggregationMaxWaitTimeMs(), master.aggregationMaxSize(),
+                master.enableCompactHeader(), master.compressionBlacklist(), master.metricsEnabled(),
+                master.maxChunksPerTick(), master.serverChunkPushThreads(), master.dynamicThreadPoolEnabled(),
+                master.minPushThreads(), master.maxPushThreads(),
+                endpoints, master.migrationFaultTimeoutMs(), master.dataPlane());
+        return new HassiumConfig(config.storage(), config.chunk(), config.net(), updatedMaster,
                 config.compat(), config.debug());
     }
 

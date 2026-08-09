@@ -22,6 +22,6 @@ public final class NetworkCapability {
      */
     public static String unsupportedReason() {
         return "Hassium custom network channel is not fully supported on this MC version. "
-                + "Forcing network.enabled=false. See docs/version-segments.md segment C.";
+                + "Forcing master.enabled=false. See docs/version-segments.md segment C.";
     }
 }

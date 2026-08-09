@@ -1,7 +1,6 @@
 package io.github.limuqy.mc.hassium.network.dataplane;
 
 import org.junit.jupiter.api.BeforeEach;
-import io.github.limuqy.mc.hassium.config.HassiumConfig;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -15,7 +14,7 @@ import static org.junit.jupiter.api.Assertions.*;
  *
  * <p>验证 plan §651-675 的核心不变量：
  * <ul>
- *   <li>主控制连接仍在活跃推进时（{@code lastControlActivity} 距 {@code now} ≤ {@code controlStallMs}）
+ *   <li>主控制连接仍在活跃推进时（{@code lastControlActivity} 距 {@code now} ≤ 固定 stall 阈值 6000ms）
  *       → {@code REJECTED_ACTIVE}。</li>
  *   <li>主连接停顿超时 + UDP 会话存在 + epoch 匹配 → {@code PERMITTED}，旧 master 关闭，
  *       failoverPermit 列表新增一项。</li>
@@ -39,19 +38,18 @@ class ControlFailoverHandlerTest {
     }
 
     @Test
-    @DisplayName("配置的 stall 和 permit expiry 控制授权时序")
-    void permitUsesConfiguredStallAndExpiry() {
-        var config = dataPlaneConfig(50L, 700L, 900L);
-        var configuredHandler = ControlFailoverHandler.forTest(config);
-        configuredHandler.registerControlConnection(PLAYER, 9L, () -> { });
-        configuredHandler.onUdpSessionEstablished(PLAYER, 9L);
-        configuredHandler.recordControlActivity(PLAYER, 9L, 1_000L);
+    @DisplayName("固定 stall 与 permit TTL 控制授权时序（原配置键已删）")
+    void permitUsesFixedStallAndExpiry() {
+        var fixedHandler = ControlFailoverHandler.forTest();
+        fixedHandler.registerControlConnection(PLAYER, 9L, () -> { });
+        fixedHandler.onUdpSessionEstablished(PLAYER, 9L);
+        fixedHandler.recordControlActivity(PLAYER, 9L, 1_000L);
 
         assertEquals(ControlFailoverHandler.FailoverResult.REJECTED_ACTIVE,
-                configuredHandler.requestFailover(PLAYER, 9L, 0, 1_049L));
+                fixedHandler.requestFailover(PLAYER, 9L, 0, 6_999L));
         assertEquals(ControlFailoverHandler.FailoverResult.PERMITTED,
-                configuredHandler.requestFailover(PLAYER, 9L, 0, 1_050L));
-        assertEquals(700L, configuredHandler.failoverPermitTtlMs());
+                fixedHandler.requestFailover(PLAYER, 9L, 0, 7_000L));
+        assertEquals(30_000L, fixedHandler.failoverPermitTtlMs());
     }
 
     @Test
@@ -155,17 +153,6 @@ class ControlFailoverHandlerTest {
         assertEquals(ControlFailoverHandler.FailoverResult.NO_CONNECTION,
                 handler.requestFailover(PLAYER, 7L, 1, 10_000L));
         assertTrue(handler.permits().isEmpty());
-    }
-
-    private static HassiumConfig.DataPlaneConfig dataPlaneConfig(long controlStallMs,
-                                                                  long failoverExpiryMs,
-                                                                  long recoveryWindowMs) {
-        return new HassiumConfig.DataPlaneConfig(
-                true,
-                HassiumConfig.ServerNetworkConfig.DEFAULT.dataPlane().udpListeners(),
-                controlStallMs,
-                failoverExpiryMs,
-                recoveryWindowMs);
     }
 
     /** Fake connection：仅记录是否被关闭。 */

@@ -1054,7 +1054,7 @@ public class ServerChunkPushManager {
             // 到期：本 tick 最多发 maxChunksPerTick 条（与数据直推同节奏），剩余留批次下 tick 续发。
             // 客户端比对（读盘-计算 hash）速率由此受限，避免 resync 一次性倾泻数百 hash。
             int perTick = HassiumConfigService.getInstance().getConfig()
-                    .serverNetwork().maxChunksPerTick();
+                    .master().maxChunksPerTick();
             int take = Math.min(Math.max(1, perTick), batch.entries.size());
             toSend = new ArrayList<>(batch.entries.subList(0, take));
             batch.entries.subList(0, take).clear();
@@ -1589,7 +1589,7 @@ public class ServerChunkPushManager {
                 return;
             }
 
-            int maxPerTick = HassiumConfigService.getInstance().getConfig().serverNetwork().maxChunksPerTick();
+            int maxPerTick = HassiumConfigService.getInstance().getConfig().master().maxChunksPerTick();
             if (maxPerTick <= 0) {
                 maxPerTick = 4;
             }

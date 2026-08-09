@@ -21,7 +21,7 @@ import net.minecraft.world.level.chunk.LevelChunk;
  * 生成的包不带光，落地后影子端按 SectionDelta/空光分支投递
  * {@link ShadowLightCompute}）。
  * <p>
- * Gate：客户端功能 gate 开放 && {@code clientCache.ovdLocalGeneration} 开启 &&
+ * Gate：客户端功能 gate 开放 && {@code chunk.ovdLocalGeneration} 开启 &&
  * 服务端种子可用（握手已到；无种子关闭生成——服务端未装 MOD / 握手未到不生成，
  * 维持 OVD miss 退避重试）。生成在后台线程（worldgen CPU 密集），落地经
  * MainThreadDispatcher 主线程预算内执行。

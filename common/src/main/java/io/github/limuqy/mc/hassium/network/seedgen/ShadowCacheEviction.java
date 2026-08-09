@@ -207,7 +207,7 @@ public final class ShadowCacheEviction {
             return; // 影子端未创建/已关停
         }
         HassiumConfigService cfg = HassiumConfigService.getInstance();
-        HassiumConfig.ClientCacheConfig cc = cfg.getConfig().clientCache();
+        HassiumConfig.ChunkCoreConfig cc = cfg.getConfig().chunk();
         long maxBytes = cc.maxCacheSizeBytes();
         if (maxBytes <= 0) {
             return;

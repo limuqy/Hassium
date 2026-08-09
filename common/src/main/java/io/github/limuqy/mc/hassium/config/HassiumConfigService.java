@@ -37,7 +37,7 @@ public class HassiumConfigService {
 
     public HassiumConfigService(HassiumConfig config) {
         this.config = config;
-        this.networkCompressionEnabled.set(config.clientNetwork().enabled() || config.serverNetwork().enabled());
+        this.networkCompressionEnabled.set(config.net().enabled() || config.master().enabled());
         this.storageEnabled.set(config.storage().enabled());
     }
 
@@ -128,7 +128,7 @@ public class HassiumConfigService {
 
     private void applyLoaded(HassiumConfig loaded) {
         this.config = loaded;
-        this.networkCompressionEnabled.set(loaded.clientNetwork().enabled() || loaded.serverNetwork().enabled());
+        this.networkCompressionEnabled.set(loaded.net().enabled() || loaded.master().enabled());
         this.storageEnabled.set(loaded.storage().enabled());
         this.configLoaded.set(true);
         NetworkStats.setEnabled(resolveMetricsEnabled(loaded));
@@ -209,7 +209,7 @@ public class HassiumConfigService {
         lock.writeLock().lock();
         try {
             this.config = newConfig;
-            this.networkCompressionEnabled.set(newConfig.clientNetwork().enabled() || newConfig.serverNetwork().enabled());
+            this.networkCompressionEnabled.set(newConfig.net().enabled() || newConfig.master().enabled());
             this.storageEnabled.set(newConfig.storage().enabled());
             NetworkStats.setEnabled(resolveMetricsEnabled(newConfig));
         } finally {
@@ -234,22 +234,22 @@ public class HassiumConfigService {
     }
 
     public boolean isClientCacheEnabled() {
-        return config.clientCache().enabled();
+        return config.chunk().enabled();
     }
 
     /** 影子端配置开关（默认 true）。false 时客户端缓存/超视渲染/SeedGen/影子光照全 gate 关闭。 */
     public boolean isHassiumEngineEnabled() {
-        return config.clientCache().hassiumEngineEnabled();
+        return config.chunk().hassiumEngineEnabled();
     }
 
     /** 分段增量：缓存过期（MISMATCH）时按 section 比对只补变更分段（影子端消费）。 */
     public boolean isSectionDeltaEnabled() {
-        return config.clientCache().sectionDeltaEnabled();
+        return config.chunk().sectionDeltaEnabled();
     }
 
     /** OVD 本地生成开关（默认 false）：OVD miss 时影子端按世界种子本地生成 + 存缓存。 */
     public boolean isOvdLocalGenerationEnabled() {
-        return config.clientCache().ovdLocalGeneration();
+        return config.chunk().ovdLocalGeneration();
     }
 
     /**
@@ -287,7 +287,7 @@ public class HassiumConfigService {
     }
 
     public int getCompressionLevel() {
-        return config.serverNetwork().compressionLevel();
+        return config.master().compressionLevel();
     }
 
     public static int getNetworkCompressionLevel() {
@@ -295,7 +295,7 @@ public class HassiumConfigService {
     }
 
     public int getGlobalCompressionLevel() {
-        return config.serverNetwork().globalCompressionLevel();
+        return config.master().globalCompressionLevel();
     }
 
     public static int getNetworkGlobalCompressionLevel() {
@@ -303,7 +303,7 @@ public class HassiumConfigService {
     }
 
     public int getGlobalCompressionThreshold() {
-        return config.serverNetwork().globalCompressionThreshold();
+        return config.master().globalCompressionThreshold();
     }
 
     public static int getNetworkGlobalCompressionThreshold() {
@@ -320,47 +320,52 @@ public class HassiumConfigService {
     }
 
     public int getMaxCacheSizeMb() {
-        return config.clientCache().maxSizeMb();
+        return config.chunk().maxSizeMb();
     }
 
     public int getCacheCompressionLevel() {
-        return config.clientCache().cacheCompressionLevel();
+        return config.chunk().compressionLevel();
     }
 
     public double getHotScoreThreshold() {
-        return config.clientCache().hotScoreThreshold();
+        return config.chunk().hotScoreThreshold();
     }
 
     public double getRecencyWeight() {
-        return config.clientCache().recencyWeight();
+        return config.chunk().recencyWeight();
     }
 
     public double getFrequencyWeight() {
-        return config.clientCache().frequencyWeight();
+        return config.chunk().frequencyWeight();
     }
 
     public int getCleanupIntervalTicks() {
-        return config.clientCache().cleanupIntervalTicks();
+        return config.chunk().cleanupIntervalTicks();
     }
 
     public int getTargetCacheSizeMb() {
-        return config.clientCache().resolvedTargetCacheSizeMb();
+        return config.chunk().resolvedTargetCacheSizeMb();
     }
 
     public long getTargetCacheSizeBytes() {
-        return config.clientCache().targetCacheSizeBytes();
+        return config.chunk().targetCacheSizeBytes();
     }
 
     public HassiumConfig.DataPlaneConfig getDataPlaneConfig() {
-        return config.serverNetwork().dataPlane();
+        return config.master().dataPlane();
+    }
+
+    /** L1 迁移故障静默超时（ms；faultTimeout 仍为默认值时覆盖 MigrationEngine/MigrationPolicy）。 */
+    public long getMigrationFaultTimeoutMs() {
+        return config.master().migrationFaultTimeoutMs();
     }
 
     public java.util.List<HassiumConfig.ReachableEndpoint> getControlReachableEndpoints() {
-        return config.serverNetwork().controlReachableEndpoints();
+        return config.master().controlReachableEndpoints();
     }
 
     public int getMinCleanupBatchSize() {
-        return config.clientCache().minCleanupBatchSize();
+        return config.chunk().minCleanupBatchSize();
     }
 
     public boolean isRequireClientMod() {
@@ -392,55 +397,55 @@ public class HassiumConfigService {
     }
 
     public boolean isGlobalPacketCompressionEnabled() {
-        return config.serverNetwork().globalPacketCompression();
+        return config.master().globalPacketCompression();
     }
 
     public Set<String> getCompressionBlacklist() {
-        return config.serverNetwork().compressionBlacklist();
+        return config.master().compressionBlacklist();
     }
 
     public boolean isPacketCompressible(String packetType) {
-        return !config.serverNetwork().compressionBlacklist().contains(packetType);
+        return !config.master().compressionBlacklist().contains(packetType);
     }
 
     public boolean isUseContextCompression() {
-        return config.serverNetwork().useContextCompression();
+        return config.master().useContextCompression();
     }
 
     public boolean isMagiclessZstd() {
-        return config.serverNetwork().magiclessZstd();
+        return config.master().magiclessZstd();
     }
 
     public boolean isPacketAggregationEnabled() {
-        return config.serverNetwork().enablePacketAggregation();
+        return config.master().enablePacketAggregation();
     }
 
     public int getAggregationMinBatchSize() {
-        return config.serverNetwork().aggregationMinBatchSize();
+        return config.master().aggregationMinBatchSize();
     }
 
     public long getAggregationMaxWaitTimeMs() {
-        return config.serverNetwork().aggregationMaxWaitTimeMs();
+        return config.master().aggregationMaxWaitTimeMs();
     }
 
     public int getAggregationMaxSize() {
-        return config.serverNetwork().aggregationMaxSize();
+        return config.master().aggregationMaxSize();
     }
 
     public boolean isCompactHeaderEnabled() {
-        return config.serverNetwork().enableCompactHeader();
+        return config.master().enableCompactHeader();
     }
 
     public int getServerChunkPushThreads() {
-        return config.serverNetwork().serverChunkPushThreads();
+        return config.master().serverChunkPushThreads();
     }
 
     public int getLoadThreads() {
-        return config.clientCache().loadThreads();
+        return config.chunk().loadThreads();
     }
 
     public boolean isServerLightStrip() {
-        return config.serverNetwork().lightStrip();
+        return config.chunk().lightStrip();
     }
 
     /**
@@ -448,17 +453,17 @@ public class HassiumConfigService {
      * 默认 true（剥离光照数据，客户端本地重算）。
      */
     public boolean isLightDeltaStrip() {
-        // 随 serverNetwork.lightStrip 一起控制
-        return config.serverNetwork().lightStrip();
+        // 随 chunk.lightStrip 一起控制
+        return config.chunk().lightStrip();
     }
 
     public int getMaxChunksPerFrame() {
-        return Math.max(1, config.clientCache().maxChunksPerFrame());
+        return Math.max(1, config.chunk().maxChunksPerFrame());
     }
 
     /** SeedGen 本地生成线程数（0=禁用本地生成，SeedRef 一律回退全量）。 */
     public int getSeedGenThreads() {
-        return Math.max(0, config.clientCache().seedGenThreads());
+        return Math.max(0, config.chunk().seedGenThreads());
     }
 
     /** 光照验算（官方引擎对照 BFS 结果；默认关）。 */
@@ -467,7 +472,7 @@ public class HassiumConfigService {
     }
 
     public int getMainThreadChunkBudgetMs() {
-        int value = config.clientCache().mainThreadChunkBudgetMs();
+        int value = config.chunk().mainThreadChunkBudgetMs();
         if (value <= 0) {
             return 15;
         }
@@ -475,7 +480,7 @@ public class HassiumConfigService {
     }
 
     /**
-     * 是否启用指标收集：客户端从 clientNetwork 读取，服务端从 serverNetwork 读取。
+     * 是否启用指标收集：客户端从 net（网络核心）读取，服务端从 master（主控核心）读取。
      */
     public boolean isMetricsEnabled() {
         return resolveMetricsEnabled(config);
@@ -485,59 +490,52 @@ public class HassiumConfigService {
      * 登出服务器时是否自动重置指标计数（仅客户端字段）。
      */
     public boolean isMetricsAutoResetEnabled() {
-        return config.clientNetwork().metricsAutoReset();
-    }
-
-    /**
-     * 主控热切恢复期画面定格（仅客户端字段）：true=世界 tick 冻结 + 「正在切换主控…」浮层；
-     * false=无感切换（仅 1.20.1 段）：世界继续运行、输入被吞、无任何切换 UI，恢复后回退。
-     */
-    public boolean isRecoveryFreeze() {
-        return config.clientNetwork().recoveryFreeze();
+        return config.net().metricsAutoReset();
     }
 
     public boolean isDynamicThreadPoolEnabled() {
-        return config.serverNetwork().dynamicThreadPoolEnabled();
+        return config.master().dynamicThreadPoolEnabled();
     }
 
     public int getMinPushThreads() {
-        return Math.max(1, config.serverNetwork().minPushThreads());
+        return Math.max(1, config.master().minPushThreads());
     }
 
     public int getMaxPushThreads() {
-        int value = config.serverNetwork().maxPushThreads();
+        int value = config.master().maxPushThreads();
         return Math.max(getMinPushThreads(), value);
     }
 
     /** 是否启用 SeedGen（服务端：对 pristine 区块发 SeedRef 替代区块数据；默认关）。 */
+    /** 是否启用 SeedGen（服务端：对 pristine 区块发 SeedRef 替代区块数据；默认关）。 */
     public boolean isSeedGenEnabled() {
-        return config.serverNetwork().seedGenEnabled();
+        return config.chunk().seedGenEnabled();
     }
 
     /** 客户端是否启用 SeedGen（上报握手能力 + 本地生成开关；默认关）。 */
     public boolean isClientSeedGenEnabled() {
-        return config.clientNetwork().seedGenEnabled();
+        return config.chunk().seedGenEnabled();
     }
 
     /**
-     * 是否启用超视渲染；仍依赖 clientCache.enabled */
+     * 是否启用超视渲染；仍依赖 chunk.enabled */
     public boolean isViewDistanceExtensionEnabled() {
-        return config.clientCache().viewDistanceExtensionEnabled();
+        return config.chunk().viewDistanceExtensionEnabled();
     }
 
     /** 渲染距离上限（Fog/内存约束） */
     public int getMaxRenderDistance() {
-        return Math.max(2, config.clientCache().maxRenderDistance());
+        return Math.max(2, config.chunk().maxRenderDistance());
     }
 
     /** 离开超视渲染环带后延迟卸载秒数（0=同步卸载） */
     public int getOvdUnloadDelaySecs() {
-        return Math.max(0, config.clientCache().ovdUnloadDelaySecs());
+        return Math.max(0, config.chunk().ovdUnloadDelaySecs());
     }
 
     /** 是否启用 JoinBoost（进服后短时提高主线程预算加速加载） */
     public boolean isJoinBoostEnabled() {
-        return config.clientCache().joinBoostEnabled();
+        return config.chunk().joinBoostEnabled();
     }
 
     // --- internal helpers ---
@@ -545,7 +543,7 @@ public class HassiumConfigService {
     /**
      * 根据物理端解析 metricsEnabled：
      * 冒烟测试 {@code hassium.smokeTest=true} 或 {@code hassium.serverSmokeTest=true} 时强开；
-     * 否则客户端读 clientNetwork，服务端读 serverNetwork。
+     * 否则客户端读 net（网络核心），服务端读 master（主控核心）。
      */
     private static boolean resolveMetricsEnabled(HassiumConfig cfg) {
         if (Boolean.parseBoolean(System.getProperty("hassium.smokeTest", "false"))
@@ -553,8 +551,8 @@ public class HassiumConfigService {
             return true;
         }
         if (Services.PLATFORM.isPhysicalClient()) {
-            return cfg.clientNetwork().metricsEnabled();
+            return cfg.net().metricsEnabled();
         }
-        return cfg.serverNetwork().metricsEnabled();
+        return cfg.master().metricsEnabled();
     }
 }

@@ -112,7 +112,7 @@ public final class DataPlaneUdpServer {
             boolean enabled = testListeners != null
                     || HassiumConfigService.getInstance().getDataPlaneConfig().enabled();
             if (!enabled) {
-                LOGGER.info("DataPlaneUdpServer: disabled by network.dataPlane.enabled");
+                LOGGER.info("DataPlaneUdpServer: disabled by dataplane.enabled");
                 return;
             }
             Instance inst = new Instance(listeners);

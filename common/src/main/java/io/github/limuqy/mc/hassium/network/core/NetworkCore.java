@@ -96,16 +96,16 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
                 packet, PacketFlow.SERVERBOUND, GatewayPacketCodec.GatewayProtocol.PLAY,
                 resolveClientRegistryAccess()));
         // T8：迁移引擎接线——故障/策略 sink = 本核心；玩家身份/位置源 = 客户端会话；
-        // 故障静默超时沿用 recoveryWindow 语义（配置值覆盖默认）
+        // 故障静默超时沿用 recoveryWindow 语义（原 recoveryWindowMs 键，现为 master.migrationFaultTimeoutMs；配置值覆盖默认）
         migration.setSink(this);
         migration.setPlayerStateSource(NetworkCore::clientPlayerState);
         migration.setPlayerIdSource(NetworkCore::clientPlayerId);
         try {
-            long recoveryWindowMs = HassiumConfigService.getInstance()
-                    .getDataPlaneConfig().recoveryWindowMs();
-            migration.applyRecoveryWindowFromConfig(recoveryWindowMs);
+            long migrationFaultTimeoutMs = HassiumConfigService.getInstance()
+                    .getMigrationFaultTimeoutMs();
+            migration.applyMigrationFaultTimeoutFromConfig(migrationFaultTimeoutMs);
         } catch (Throwable t) {
-            LOGGER.debug("Hassium: migration recovery-window config read skipped", t);
+            LOGGER.debug("Hassium: migration fault-timeout config read skipped", t);
         }
     }
 
@@ -978,7 +978,7 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
         try {
             HassiumConfigService config = HassiumConfigService.getInstance();
             if (!config.isNetworkCompressionEnabled()) {
-                LOGGER.debug("Hassium: NetworkCore auto-connect skipped (network.enabled=false)");
+                LOGGER.debug("Hassium: NetworkCore auto-connect skipped (net.enabled=false)");
                 return;
             }
             Minecraft mc = Minecraft.getInstance();

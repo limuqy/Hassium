@@ -11,7 +11,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * <p>
  * These assertions fail against the pre-fix tree because:
  * <ul>
- *   <li>{@code ConfigSnapshotAdapter.toValues} omitted CLIENT_NETWORK_* and CLIENT_DEBUG_*;</li>
+ *   <li>{@code ConfigSnapshotAdapter.toValues} omitted NET_* and CLIENT_DEBUG_*;</li>
  *   <li>{@code fromValues} read only SERVER_DEBUG_* so client debug state silently defaulted.</li>
  * </ul>
  */
@@ -19,19 +19,32 @@ class ConfigSnapshotAdapterClientScopeTest {
 
     @Test
     void clientNetworkSettingsRoundTripThroughValues() {
-        HassiumConfig.ClientNetworkConfig clientNet = new HassiumConfig.ClientNetworkConfig(false, true, true, false, false);
-        HassiumConfig original = HassiumConfig.DEFAULT.withClientNetwork(clientNet);
+        HassiumConfig.NetCoreConfig net = new HassiumConfig.NetCoreConfig(false, true, true);
+        HassiumConfig original = HassiumConfig.DEFAULT.withNet(net);
 
         ConfigValues values = ConfigSnapshotAdapter.toValues(original);
 
-        assertEquals(false, values.get(ConfigSchema.CLIENT_NETWORK_ENABLED));
-        assertEquals(true, values.get(ConfigSchema.CLIENT_NETWORK_METRICS_ENABLED));
-        assertEquals(true, values.get(ConfigSchema.CLIENT_NETWORK_METRICS_AUTO_RESET));
-        assertEquals(false, values.get(ConfigSchema.DATAPLANE_RECOVERY_FREEZE));
+        assertEquals(false, values.get(ConfigSchema.NET_ENABLED));
+        assertEquals(true, values.get(ConfigSchema.NET_METRICS_ENABLED));
+        assertEquals(true, values.get(ConfigSchema.NET_METRICS_AUTO_RESET));
 
-        // fromValues 还原（CLIENT scope）必须带回 recoveryFreeze
+        // fromValues 还原（CLIENT scope）必须带回 net.*
         HassiumConfig restored = ConfigSnapshotAdapter.fromValues(values, true);
-        assertEquals(false, restored.clientNetwork().recoveryFreeze());
+        assertEquals(false, restored.net().enabled());
+        assertEquals(true, restored.net().metricsEnabled());
+        assertEquals(true, restored.net().metricsAutoReset());
+    }
+
+    @Test
+    void clientSeedGenRoundTripsThroughValues() {
+        HassiumConfig original = HassiumConfig.DEFAULT.withNet(HassiumConfig.NetCoreConfig.DEFAULT);
+        ConfigValues values = ConfigSnapshotAdapter.toValues(original);
+
+        // 双端同名 chunk.seedGenEnabled：CLIENT 值来自 chunk 记录，SERVER 值同步写入（与 debug 模式一致）
+        assertEquals(false, values.get(ConfigSchema.CLIENT_CHUNK_SEED_GEN_ENABLED));
+        assertEquals(false, values.get(ConfigSchema.SERVER_CHUNK_SEED_GEN_ENABLED));
+        HassiumConfig restored = ConfigSnapshotAdapter.fromValues(values, true);
+        assertEquals(false, restored.chunk().seedGenEnabled());
     }
 
     @Test

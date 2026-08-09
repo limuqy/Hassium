@@ -7,6 +7,7 @@ public record ConfigEntry<T>(
         ConfigKey<T> key,
         String path,
         ConfigScope scope,
+        Domain domain,
         ConfigType type,
         T defaultValue,
         Number min,
@@ -20,6 +21,7 @@ public record ConfigEntry<T>(
             throw new IllegalArgumentException("Configuration path must not be blank");
         }
         Objects.requireNonNull(scope, "scope");
+        Objects.requireNonNull(domain, "domain");
         Objects.requireNonNull(type, "type");
         Objects.requireNonNull(defaultValue, "defaultValue");
         if (min != null && max != null && Double.compare(min.doubleValue(), max.doubleValue()) > 0) {

@@ -196,7 +196,7 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
     @Override
     public void registerChannels() {
         if (!HassiumConfigService.getInstance().isNetworkCompressionEnabled()) {
-            LOGGER.warn("Hassium: network.enabled=false, skipping Fabric channel registration");
+            LOGGER.warn("Hassium: master.enabled=false, skipping Fabric channel registration");
             return;
         }
         LOGGER.debug("Hassium: Registering Fabric network channels");

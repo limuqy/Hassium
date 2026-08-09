@@ -20,7 +20,7 @@ import java.time.format.DateTimeParseException;
  *       空串 = 禁用（默认）。窗口内策略判定恒触发（维护期主动迁移）</li>
  *   <li>{@code heartbeatIntervalMs}：客户端 HEARTBEAT 发送周期（默认 5000）</li>
  *   <li>{@code faultTimeoutMs}：outbound 入站静默超时（默认 60000，沿用既有
- *       {@code network.dataPlane.recoveryWindowMs} 语义；引擎启动时从配置读取覆盖）</li>
+ *       {@code master.migrationFaultTimeoutMs} 语义；引擎启动时从配置读取覆盖）</li>
  *   <li>{@code prewarmEnabled}：迁移前是否先建立目标主控会话（预热，默认 true）</li>
  * </ul>
  */
