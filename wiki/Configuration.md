@@ -8,7 +8,7 @@ Hassium 启动时在 `config/hassium/` 自动生成两份 TOML：
 
 | 文件 | 适用端 | 主要内容 |
 | --- | --- | --- |
-| `hassium-client.toml` | 仅物理客户端 | 区块核心（`clientCache.*`）、超视渲染、客户端网络应用 |
+| `hassium-client.toml` | 仅物理客户端 | 区块缓存（`clientCache.*`）、超视渲染、客户端网络应用 |
 | `hassium-server.toml` | 仅专用服 | 存储压缩、共享网络、兼容、调试 |
 
 游戏内编辑入口：
@@ -33,13 +33,13 @@ Hassium 启动时在 `config/hassium/` 自动生成两份 TOML：
 | `storage.mode` | `mirror` | 存储模式（仅 `mirror` 生效） |
 | `storage.zstdLevel` | `3` | 存储压缩等级；越高省磁盘越多、CPU 越重 |
 
-### 区块核心（`clientCache.*`）
+### 区块缓存（`clientCache.*`）
 
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
 | `clientCache.enabled` | `true` | 客户端区块缓存总开关 |
 | `clientCache.sectionDeltaEnabled` | `true` | 缓存过期时只补变更分段；关闭则过期走全量重传 |
-| `clientCache.hassiumEngineEnabled` | `true` | Hassium 引擎（非网络向功能总开关）：进服启动影子端（区块核心后端引擎）统一承担区块光照计算（客户端不再计算）；启动失败自动降级（缓存/超视渲染/SeedGen 关闭并提示）；关闭时服务端不剥光（握手协商），光照随包自带 |
+| `clientCache.hassiumEngineEnabled` | `true` | Hassium 引擎（非网络向功能总开关）：进服启动影子端统一承担区块光照计算（客户端不再计算）；启动失败自动降级（缓存/超视渲染/SeedGen 关闭并提示）；关闭时服务端不剥光（握手协商），光照随包自带 |
 | `clientCache.ovdLocalGeneration` | `false` | OVD 本地生成：超视渲染区域缓存 miss 时按服务端世界种子本地生成区块并存入本地缓存；无种子（服务端未装 MOD）时自动关闭生成 |
 | `clientCache.viewDistanceExtensionEnabled` | `true` | 超视渲染（多人服 clientVD > serverVD 时回填环带；**与 Bobby 互斥**） |
 | `clientCache.maxRenderDistance` | `16` | 超视渲染环带与有效 RD 上限（范围 2–64） |

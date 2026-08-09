@@ -10,7 +10,7 @@
 
 **EN:** **Hassium** is a high-performance Minecraft optimization mod providing **efficient compression, network optimization, chunk core, beyond-view rendering, and lighting optimization**. Covers Minecraft **1.20.1–1.21.11** on **Fabric / Forge / NeoForge**.
 
-**中文：** **Hassium** 是 Minecraft 的高性能优化模组，提供**高效压缩、网络优化、区块核心、超视渲染与光照优化**。覆盖 Minecraft **1.20.1–1.21.11**，支持 **Fabric / Forge / NeoForge**。
+**中文：** **Hassium** 是 Minecraft 的高性能优化模组，提供**高效压缩、网络优化、区块缓存、超视渲染与光照优化**。覆盖 Minecraft **1.20.1–1.21.11**，支持 **Fabric / Forge / NeoForge**。
 
 ---
 
@@ -26,7 +26,7 @@
 
 **Hassium** is a high-performance Minecraft optimization mod providing **efficient compression, network optimization, chunk core, beyond-view rendering, and lighting optimization**. Covers Minecraft **1.20.1–1.21.11** on **Fabric / Forge / NeoForge**.
 
-**Hassium** 是 Minecraft 的高性能优化模组，提供**高效压缩、网络优化、区块核心、超视渲染与光照优化**。覆盖 Minecraft **1.20.1–1.21.11**，支持 **Fabric / Forge / NeoForge**。
+**Hassium** 是 Minecraft 的高性能优化模组，提供**高效压缩、网络优化、区块缓存、超视渲染与光照优化**。覆盖 Minecraft **1.20.1–1.21.11**，支持 **Fabric / Forge / NeoForge**。
 
 [GitHub Repository](https://github.com/limuqy/Hassium) · [Wiki 中文](https://github.com/limuqy/Hassium/wiki) · [Wiki English](https://github.com/limuqy/Hassium/wiki/Home-en)
 
@@ -53,7 +53,7 @@ Full instructions: [Installation](https://github.com/limuqy/Hassium/wiki/Install
 | | In-process gateway | Client-side in-process gateway (Network Core): vanilla client ↔ Network Core ↔ Master Core private channel; PLAY-phase traffic is routed through the gateway, the shell connection stays keep-alive only |
 | | Seamless migration / L1 load balancing | On master-core silent-failure timeout (`network.dataPlane.recoveryWindowMs`), the L1 migration engine switches the gateway with a warm cache — seamless migration; multiple gateways balanced via L1 load balancing |
 | | UDP data plane | UDP/KCP bulk carrier for the gateway ↔ master-core channel (`network.dataPlane.enabled`, off by default; control plane stays on vanilla TCP) |
-| **Chunk core** | Shadow world save | Every chunk you visit is saved by the Chunk Core shadow engine (full MinecraftServer) into a vanilla-format save (`hassium_cache/<serverId>/world`, type 126 + chunkHash); saved on disconnect, reused on reconnect |
+| **Chunk cache** | Shadow world save | Every chunk you visit is saved by the shadow engine (full MinecraftServer) into a vanilla-format save (`hassium_cache/<serverId>/world`, type 126 + chunkHash); saved on disconnect, reused on reconnect |
 | | Section delta | On cache mismatch (MISMATCH), fetch only changed sections (`sectionDelta`) and merge locally instead of the whole chunk |
 | | **Beyond-view render** | When client RD exceeds server view distance (multiplayer), fill the outer ring from local cache (render-only; no out-of-range server requests); incompatible with Bobby |
 | | World export | `/hassiumc export` copies the shadow-side world directory wholesale to `hassium_exports/<cacheId>` (keeps the type 126 + chunkHash format; vanilla translation is planned later) |
@@ -114,7 +114,7 @@ Complete matrix: [Support Matrix](https://github.com/limuqy/Hassium/wiki/Support
 | | 进程内网关 | 客户端进程内网关（网络核心）：原版客户端 ↔ 网络核心 ↔ 主控核心自有通道；PLAY 期数据经网关路由，壳连接仅保活 |
 | | 无感迁移 / L1 负载均衡 | 主控故障静默超时（`network.dataPlane.recoveryWindowMs`）后由 L1 迁移引擎切换网关、缓存暖续，无感迁移；多网关按 L1 负载均衡 |
 | | UDP 数据面 | 网关↔主控通道的 UDP/KCP bulk 载体（`network.dataPlane.enabled`，默认关；控制面留原版 TCP） |
-| **区块核心** | 影子端世界保存 | 进服区块统一由区块核心影子端（完整 MinecraftServer）落盘原版存档（`hassium_cache/<serverId>/world`），断连保存、重连复用 |
+| **区块缓存** | 影子端世界保存 | 进服区块统一由影子端（完整 MinecraftServer）落盘原版存档（`hassium_cache/<serverId>/world`），断连保存、重连复用 |
 | | 分段增量 | 缓存过期（MISMATCH）时仅拉取变更分段（`sectionDelta`）本地合并，避免整块重传 |
 | | **超视渲染** | 多人服客户端 RD 大于服务端视距时，用本地缓存回填视距外地形（仅渲染、不向服索要视距外区块）；与 Bobby 互斥 |
 | | 世界导出 | `/hassiumc export` 将影子端世界目录整体拷贝为导出存档（`hassium_exports/<cacheId>`；保留 type 126 + chunkHash，原版翻译后续提供） |

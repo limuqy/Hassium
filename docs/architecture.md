@@ -8,7 +8,7 @@ Hassium 是 Minecraft 多加载器模组（Fabric / Forge / NeoForge），围绕
 
 - **高效压缩** —— 存储压缩、网络压缩
 - **网络优化** —— 平滑推送、网关帧协议、L1 无感迁移（切换 outbound + 续流票据）
-- **区块核心** —— 影子端世界保存（进服区块统一由进程内影子服务端落盘原版存档）、超视渲染、世界导出
+- **区块缓存** —— 影子端世界保存（进服区块统一由进程内影子服务端落盘原版存档）、超视渲染、世界导出
 - **光照优化** —— Hassium 引擎（影子端统一算光 + 官方通道回传）、光照剥离、并行光照、同步光照
 - **实用工具** —— 流量监控、本地生成（SeedGen）
 
@@ -250,7 +250,7 @@ ERROR / WARN 始终输出。
 
 ## 12. 卖点特性（已实现摘要）
 
-按大类组织：**高效压缩 / 网络优化 / 区块核心 / 光照优化 / 实用工具**。
+按大类组织：**高效压缩 / 网络优化 / 区块缓存 / 光照优化 / 实用工具**。
 
 ### 12.1 高效压缩
 
@@ -268,7 +268,7 @@ ERROR / WARN 始终输出。
 | **L1 迁移（无感续流）** | `network.dataPlane.recoveryWindowMs`（沿用键名，2.0.0 语义 = 故障静默超时） | 主控故障/断流时切换 outbound 至新主控：`PrewarmSession` 预连 + `ResumeTicket` 续流票据（HMAC-SHA256 + epoch 防重放）→ 主控 `ResumeTicketValidator` 验签 → `markPlayerResumeActive` 推送续流；无需重进世界，区块缓存直接续用；策略触发（TPS/负载/维护窗口）见 §12.6 | [`runtime-smoke-test.md`](runtime-smoke-test.md#网关双主控迁移冒烟t7)「网关双主控迁移冒烟（T7）」 |
 | **多通道数据面（历史）** | 早期 `DataPlanePoCConfig` | 1.20.1 Fabric 的双裸 TCP PoC 已退役，不是生产配置或运维入口 | [`archive/multi-channel_network_research.md`](archive/multi-channel_network_research.md) |
 
-### 12.3 区块核心
+### 12.3 区块缓存
 
 | 特性 | 配置 / 命令 | 要点 | 详文 |
 |------|-------------|------|------|

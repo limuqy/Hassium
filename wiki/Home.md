@@ -4,7 +4,7 @@
   <img src="https://raw.githubusercontent.com/limuqy/Hassium/master/common/src/main/resources/assets/hassium/logo.png" alt="Hassium Logo" width="200">
 </p>
 
-**Hassium** 是 Minecraft 的高性能优化模组，提供**高效存储、网络优化、区块核心、超视渲染与光照优化**。覆盖 Minecraft **1.20.1–1.21.11**，支持 **Fabric / Forge / NeoForge**。
+**Hassium** 是 Minecraft 的高性能优化模组，提供**高效存储、网络优化、区块缓存、超视渲染与光照优化**。覆盖 Minecraft **1.20.1–1.21.11**，支持 **Fabric / Forge / NeoForge**。
 
 > 仓库：[github.com/limuqy/Hassium](https://github.com/limuqy/Hassium) · [English](Home-en)
 
@@ -24,7 +24,7 @@
 | **网络优化** | 平滑推送 | 服务端每 tick 提交上限限速（`maxChunksPerTick`，掉刻自然降速）+ 主线程序列化上限与后台化；进服/扩展视野不卡主线程 |
 | | 网关迁移 | 客户端经进程内网关（网络核心）接入主控核心；主控断/卡时 L1 迁移引擎无感续流，缓存不重下、断连界面隐藏 |
 | | L1 负载均衡 | 多 UDP 线路按 weight 分担区块下行；UDP 数据面为网关↔主控 bulk 载体（默认关） |
-| **区块核心** | 区块核心缓存 | 曾加载过的区块写入本地；再次进入同一区域时用 contentHash 比对命中，少传全量包 |
+| **区块缓存** | 区块缓存 | 曾加载过的区块写入本地；再次进入同一区域时用 contentHash 比对命中，少传全量包 |
 | | 分段增量 | 缓存过期（MISMATCH）时仅拉取变更分段（`sectionDelta`）本地合并，避免整块重传 |
 | | **超视渲染** | 多人服客户端 RD 大于服务端视距时，用本地缓存回填视距外地形（仅渲染、不向服索要视距外区块）；与 Bobby 互斥 |
 | | 世界导出 | `/hassiumc export` 把影子端世界目录整体拷贝为导出存档（保留 type 126 格式） |

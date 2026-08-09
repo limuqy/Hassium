@@ -4,7 +4,7 @@
   <img src="common/src/main/resources/assets/hassium/logo.png" alt="Hassium Logo" width="200">
 </p>
 
-**Hassium** · 高性能区块压缩与客户端区块存储模组，提供**高效压缩、网络优化、区块核心、超视渲染与光照优化**。
+**Hassium** · 高性能区块压缩与客户端区块存储模组，提供**高效压缩、网络优化、区块缓存、超视渲染与光照优化**。
 相对原版缩小存档与带宽、减轻进服卡顿。支持 Fabric / Forge / NeoForge，覆盖 Minecraft 1.20.1–1.21.11。
 
 [English](README-en.md) · **简体中文**
@@ -29,7 +29,7 @@
 | | 进程内网关 | 客户端进程内网关（网络核心）：原版客户端 ↔ 网络核心 ↔ 主控核心自有通道；PLAY 期数据经网关路由，壳连接仅保活 |
 | | 无感迁移 / L1 负载均衡 | 主控故障静默超时（`network.dataPlane.recoveryWindowMs`）后由 L1 迁移引擎切换网关、缓存暖续，无感迁移；多网关按 L1 负载均衡 |
 | | UDP 数据面 | 网关↔主控通道的 UDP/KCP bulk 载体（`network.dataPlane.enabled`，默认关；控制面留原版 TCP） |
-| **区块核心** | 影子端世界保存 | 进服区块统一由区块核心影子端（完整 MinecraftServer）落盘原版存档（`hassium_cache/<serverId>/world`），断连保存、重连复用 |
+| **区块缓存** | 影子端世界保存 | 进服区块统一由影子端（完整 MinecraftServer）落盘原版存档（`hassium_cache/<serverId>/world`），断连保存、重连复用 |
 | | 分段增量 | 缓存过期（MISMATCH）时仅拉取变更分段（`sectionDelta`）本地合并，避免整块重传 |
 | | **超视渲染** | 多人服客户端 RD 大于服务端视距时，用本地缓存回填视距外地形（仅渲染、不向服索要视距外区块）；与 Bobby 互斥 |
 | | 世界导出 | `/hassiumc export` 将影子端世界目录整体拷贝为导出存档（`hassium_exports/<cacheId>`；保留 type 126 + chunkHash，原版翻译后续提供） |
@@ -129,7 +129,7 @@ flowchart LR
     mc["主控核心自有通道<br/>（GatewayServer / GatewayChannel）"]
     wire["Hassium 压缩通道<br/>区块包"]
     decode["handleCompressedChunk<br/>→ decodeChunkPacket 还原官方包"]
-    shadow["区块核心影子端（ShadowSeedServer）<br/>注入 + 官方引擎算光 + 等收敛"]
+    shadow["影子端（ShadowSeedServer）<br/>注入 + 官方引擎算光 + 等收敛"]
     pack["打包带权威光官方包"]
     apply["官方通道 handleLevelChunkWithLight<br/>主线程帧尾落地"]
     save["断连 saveAll → hassium_cache/<serverId>/world<br/>type 126 + chunkHash"]

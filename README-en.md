@@ -4,7 +4,7 @@
   <img src="common/src/main/resources/assets/hassium/logo.png" alt="Hassium Logo" width="200">
 </p>
 
-**Hassium** — high-performance chunk compression and client-side chunk storage for Minecraft, providing **efficient compression, network optimization, chunk core, beyond-view rendering, and lighting optimization**.  
+**Hassium** — high-performance chunk compression and client-side chunk storage for Minecraft, providing **efficient compression, network optimization, chunk cache, beyond-view rendering, and lighting optimization**.  
 Smaller world saves and bandwidth than vanilla, local chunk reuse, and smoother joins. Supports Fabric / Forge / NeoForge across Minecraft 1.20.1–1.21.11.
 
 [简体中文](README.md) · **English**
@@ -29,7 +29,7 @@ Smaller world saves and bandwidth than vanilla, local chunk reuse, and smoother 
 | | In-process gateway | Client-side in-process gateway (Network Core): vanilla client ↔ Network Core ↔ Master Core private channel; PLAY-phase traffic is routed through the gateway, the shell connection stays keep-alive only |
 | | Seamless migration / L1 load balancing | On master-core silent-failure timeout (`network.dataPlane.recoveryWindowMs`), the L1 migration engine switches the gateway with a warm cache — seamless migration; multiple gateways balanced via L1 load balancing |
 | | UDP data plane | UDP/KCP bulk carrier for the gateway ↔ master-core channel (`network.dataPlane.enabled`, off by default; control plane stays on vanilla TCP) |
-| **Chunk core** | Shadow world save | Every chunk you visit is saved by the Chunk Core shadow engine (full MinecraftServer) into a vanilla-format save (`hassium_cache/<serverId>/world`, type 126 + chunkHash); saved on disconnect, reused on reconnect |
+| **Chunk cache** | Shadow world save | Every chunk you visit is saved by the shadow engine (full MinecraftServer) into a vanilla-format save (`hassium_cache/<serverId>/world`, type 126 + chunkHash); saved on disconnect, reused on reconnect |
 | | Section delta | On cache mismatch (MISMATCH), fetch only changed sections (`sectionDelta`) and merge locally instead of the whole chunk |
 | | **Beyond-view render** | When client RD exceeds server view distance (multiplayer), fill the outer ring from local cache (render-only; no out-of-range server requests); incompatible with Bobby |
 | | World export | `/hassiumc export` copies the shadow-side world directory wholesale to `hassium_exports/<cacheId>` (keeps the type 126 + chunkHash format; vanilla translation is planned later) |
@@ -128,7 +128,7 @@ flowchart LR
     mc["Master Core private channel<br/>(GatewayServer / GatewayChannel)"]
     wire["Hassium compressed channel<br/>chunk packets"]
     decode["handleCompressedChunk<br/>→ decodeChunkPacket (vanilla packet)"]
-    shadow["Chunk Core shadow engine (ShadowSeedServer)<br/>inject + vanilla light engine + converge"]
+    shadow["Shadow engine (ShadowSeedServer)<br/>inject + vanilla light engine + converge"]
     pack["Pack official packet with authoritative light"]
     apply["Vanilla channel handleLevelChunkWithLight<br/>applied on main thread frame tail"]
     save["Disconnect saveAll → hassium_cache/<serverId>/world<br/>type 126 + chunkHash"]

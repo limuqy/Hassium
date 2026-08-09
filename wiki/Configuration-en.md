@@ -8,7 +8,7 @@ Hassium generates two TOML files under `config/hassium/` on startup:
 
 | File | Side | Contents |
 | --- | --- | --- |
-| `hassium-client.toml` | Physical client only | Chunk Core (`clientCache.*`), beyond-view render, client-side network |
+| `hassium-client.toml` | Physical client only | Chunk cache (`clientCache.*`), beyond-view render, client-side network |
 | `hassium-server.toml` | Dedicated server only | Storage compression, shared network, compat, debug |
 
 In-game config screen entry points:
@@ -33,7 +33,7 @@ In-game config screen entry points:
 | `storage.mode` | `mirror` | Storage mode (only `mirror` is wired) |
 | `storage.zstdLevel` | `3` | Storage compression level; higher = smaller saves, more CPU |
 
-### Chunk Core (`clientCache.*`)
+### Chunk Cache (`clientCache.*`)
 
 | Key | Default | Notes |
 | --- | --- | --- |
