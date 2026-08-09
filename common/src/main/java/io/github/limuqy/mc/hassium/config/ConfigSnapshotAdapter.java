@@ -25,7 +25,6 @@ public final class ConfigSnapshotAdapter {
                 .with(ConfigSchema.CACHE_OVD_UNLOAD_DELAY_SECS, cache.ovdUnloadDelaySecs())
                 .with(ConfigSchema.CACHE_SECTION_DELTA_ENABLED, cache.sectionDeltaEnabled())
                 .with(ConfigSchema.CACHE_JOIN_BOOST_ENABLED, cache.joinBoostEnabled())
-                .with(ConfigSchema.CACHE_ENTITY_SNAPSHOTS_ENABLED, cache.entitySnapshotsEnabled())
                 .with(ConfigSchema.CACHE_LOAD_THREADS, cache.loadThreads())
                 .with(ConfigSchema.CACHE_MAX_CHUNKS_PER_FRAME, cache.maxChunksPerFrame())
                 .with(ConfigSchema.CACHE_MAIN_THREAD_BUDGET_MS, cache.mainThreadChunkBudgetMs())
@@ -116,7 +115,7 @@ public final class ConfigSnapshotAdapter {
                 values.get(ConfigSchema.CACHE_MIN_CLEANUP_BATCH_SIZE), values.get(ConfigSchema.CACHE_VIEW_DISTANCE_EXTENSION_ENABLED),
                 values.get(ConfigSchema.CACHE_MAX_RENDER_DISTANCE), values.get(ConfigSchema.CACHE_OVD_UNLOAD_DELAY_SECS),
                 values.get(ConfigSchema.CACHE_SECTION_DELTA_ENABLED), values.get(ConfigSchema.CACHE_JOIN_BOOST_ENABLED),
-                values.get(ConfigSchema.CACHE_ENTITY_SNAPSHOTS_ENABLED), values.get(ConfigSchema.CACHE_LOAD_THREADS),
+                values.get(ConfigSchema.CACHE_LOAD_THREADS),
                 values.get(ConfigSchema.CACHE_MAX_CHUNKS_PER_FRAME),
                 values.get(ConfigSchema.CACHE_MAIN_THREAD_BUDGET_MS),
                 values.get(ConfigSchema.CACHE_SEED_GEN_THREADS),

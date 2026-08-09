@@ -24,7 +24,6 @@ public final class ConfigSchema {
     public static final ConfigKey<Integer> CACHE_OVD_UNLOAD_DELAY_SECS = integer("clientCache.ovdUnloadDelaySecs", ConfigScope.CLIENT, 5, 0, 60, "超视渲染卸载延迟秒数");
     public static final ConfigKey<Boolean> CACHE_SECTION_DELTA_ENABLED = bool("clientCache.sectionDeltaEnabled", ConfigScope.CLIENT, true, "是否启用分段增量（影子端 delta 消费实现前的控制位；当前客户端 no-op）");
     public static final ConfigKey<Boolean> CACHE_JOIN_BOOST_ENABLED = bool("clientCache.joinBoostEnabled", ConfigScope.CLIENT, true, "是否启用进服加速");
-    public static final ConfigKey<Boolean> CACHE_ENTITY_SNAPSHOTS_ENABLED = bool("clientCache.entitySnapshotsEnabled", ConfigScope.CLIENT, true, "是否保存实体快照（影子端未接入实体数据前的控制位）");
     public static final ConfigKey<Integer> CACHE_LOAD_THREADS = integer("clientCache.loadThreads", ConfigScope.CLIENT, 4, 1, 64, "客户端区块加载线程数");
     public static final ConfigKey<Integer> CACHE_MAX_CHUNKS_PER_FRAME = integer("clientCache.maxChunksPerFrame", ConfigScope.CLIENT, 6, 1, 512, "每帧应用缓存区块硬顶");
     public static final ConfigKey<Integer> CACHE_MAIN_THREAD_BUDGET_MS = integer("clientCache.mainThreadChunkBudgetMs", ConfigScope.CLIENT, 15, 1, 50, "主线程 apply 预算（ms）");

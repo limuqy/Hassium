@@ -45,8 +45,6 @@
     "hassium.configuration.clientNetwork.button":  "客户端网络…",
     "hassium.configuration.clientCache.joinBoostEnabled":  "JoinBoost 加速",
     "hassium.configuration.clientCache.joinBoostEnabled.tooltip":  "进服后短时提高主线程预算加速加载。默认 true。",
-    "hassium.configuration.clientCache.entitySnapshotsEnabled":  "捕获实体快照",
-    "hassium.configuration.clientCache.entitySnapshotsEnabled.tooltip":  "区块卸载时捕获非玩家实体，供后续世界导出使用；数据与区块缓存 Region 完全分离。默认开启。",
     "hassium.configuration.clientCache.loadThreads":  "客户端区块加载线程数",
     "hassium.configuration.clientCache.loadThreads.tooltip":  "默认 4。",
     "hassium.configuration.clientCache.maxChunksPerFrame":  "每帧最大区块数",

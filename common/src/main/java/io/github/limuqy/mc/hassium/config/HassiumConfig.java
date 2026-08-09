@@ -71,8 +71,6 @@ public record HassiumConfig(
             boolean sectionDeltaEnabled,
             // === JoinBoost ===
             boolean joinBoostEnabled,
-            // === 实体快照（影子端未接入实体数据的控制位；拿到实体后启用）===
-            boolean entitySnapshotsEnabled,
             // === 从原 NetworkConfig 吸收的客户端字段 ===
             int loadThreads,
             int maxChunksPerFrame,
@@ -99,7 +97,6 @@ public record HassiumConfig(
                 5,       // ovdUnloadDelaySecs
                 true,    // sectionDeltaEnabled
                 true,    // joinBoostEnabled
-                true,    // entitySnapshotsEnabled
                 4,       // loadThreads
                 6,       // maxChunksPerFrame
                 15,      // mainThreadChunkBudgetMs

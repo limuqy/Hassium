@@ -45,8 +45,6 @@
     "hassium.configuration.clientNetwork.button":  "Client Network…",
     "hassium.configuration.clientCache.joinBoostEnabled":  "JoinBoost acceleration",
     "hassium.configuration.clientCache.joinBoostEnabled.tooltip":  "Briefly raises main-thread budget after join to speed up loading. Default: true.",
-    "hassium.configuration.clientCache.entitySnapshotsEnabled":  "Capture entity snapshots",
-    "hassium.configuration.clientCache.entitySnapshotsEnabled.tooltip":  "Capture non-player entities when a chunk unloads for later world export. Stored separately from chunk cache regions. Default: on.",
     "hassium.configuration.clientCache.loadThreads":  "Client chunk load threads",
     "hassium.configuration.clientCache.loadThreads.tooltip":  "Default: 4.",
     "hassium.configuration.clientCache.maxChunksPerFrame":  "Max chunks per frame",

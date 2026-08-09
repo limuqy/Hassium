@@ -71,9 +71,6 @@ public final class HassiumClothConfigScreen {
         cache.addEntry(intRange(entries, "hassium.configuration.clientCache.minCleanupBatchSize",
                 draft.cacheMinCleanupBatchSize, dCache.minCleanupBatchSize(), 1, 100000,
                 v -> draft.cacheMinCleanupBatchSize = v));
-        cache.addEntry(bool(entries, "hassium.configuration.clientCache.entitySnapshotsEnabled",
-                draft.cacheEntitySnapshotsEnabled, dCache.entitySnapshotsEnabled(),
-                v -> draft.cacheEntitySnapshotsEnabled = v));
 
         // === Category 2: 渲染（8 项）===
         ConfigCategory render = builder.getOrCreateCategory(
@@ -207,7 +204,6 @@ public final class HassiumClothConfigScreen {
         int cacheOvdUnloadDelaySecs;
         boolean cacheSectionDeltaEnabled;
         boolean cacheJoinBoostEnabled;
-        boolean cacheEntitySnapshotsEnabled;
         // 线程与应用
         int loadThreads;
         int maxChunksPerFrame;
@@ -255,7 +251,6 @@ public final class HassiumClothConfigScreen {
             d.cacheOvdUnloadDelaySecs = cache.ovdUnloadDelaySecs();
             d.cacheSectionDeltaEnabled = cache.sectionDeltaEnabled();
             d.cacheJoinBoostEnabled = cache.joinBoostEnabled();
-            d.cacheEntitySnapshotsEnabled = cache.entitySnapshotsEnabled();
             d.loadThreads = cache.loadThreads();
             d.maxChunksPerFrame = cache.maxChunksPerFrame();
             d.mainThreadChunkBudgetMs = cache.mainThreadChunkBudgetMs();
@@ -289,7 +284,7 @@ public final class HassiumClothConfigScreen {
                             cacheHotScoreThreshold, cacheRecencyWeight, cacheFrequencyWeight,
                             cacheCleanupIntervalTicks, cacheTargetCacheSizeMb, cacheMinCleanupBatchSize,
                             cacheViewDistanceExtensionEnabled, cacheMaxRenderDistance, cacheOvdUnloadDelaySecs,
-                            cacheSectionDeltaEnabled, cacheJoinBoostEnabled, cacheEntitySnapshotsEnabled,
+                            cacheSectionDeltaEnabled, cacheJoinBoostEnabled,
                             loadThreads, maxChunksPerFrame, mainThreadChunkBudgetMs,
                             seedGenThreads, hassiumEngineEnabled, ovdLocalGeneration
                     ),

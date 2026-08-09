@@ -345,7 +345,6 @@ public final class FabricTomlConfigIO {
                 getInt(cfg, "clientCache.ovdUnloadDelaySecs", d.ovdUnloadDelaySecs()),
                 getBool(cfg, "clientCache.sectionDeltaEnabled", d.sectionDeltaEnabled()),
                 getBool(cfg, "clientCache.joinBoostEnabled", d.joinBoostEnabled()),
-                getBool(cfg, "clientCache.entitySnapshotsEnabled", d.entitySnapshotsEnabled()),
                 getInt(cfg, "clientCache.loadThreads", d.loadThreads()),
                 getInt(cfg, "clientCache.maxChunksPerFrame", d.maxChunksPerFrame()),
                 getInt(cfg, "clientCache.mainThreadChunkBudgetMs", d.mainThreadChunkBudgetMs()),
@@ -373,8 +372,6 @@ public final class FabricTomlConfigIO {
                 "分段增量（影子端 delta 消费实现前的控制位；当前客户端 no-op，服务端发送的 delta 包被忽略）");
         set(cfg, "clientCache.joinBoostEnabled", c.joinBoostEnabled(),
                 "进服后短时提高主线程预算加速加载（默认 true）");
-        set(cfg, "clientCache.entitySnapshotsEnabled", c.entitySnapshotsEnabled(),
-                "实体快照（影子端未接入实体数据前的控制位；当前存档不含实体）");
         set(cfg, "clientCache.loadThreads", c.loadThreads(), "客户端区块加载线程数");
         set(cfg, "clientCache.maxChunksPerFrame", c.maxChunksPerFrame(), "每帧应用缓存区块硬顶");
         set(cfg, "clientCache.mainThreadChunkBudgetMs", c.mainThreadChunkBudgetMs(), "主线程 apply 预算（ms）");

@@ -25,7 +25,7 @@ Forge/NeoForge 端注册 3 个 spec（CLIENT / COMMON / SERVER），物理客户
 | `storage.mode` | `"mirror"` | **双端** | `MixinRegionFile:159` 决定 mirror/readonly_vanilla/hassium_only | ✅ 正常 |
 | `storage.zstdLevel` | `3` | **双端** | `MixinRegionFile:238` 通过 `HassiumConfigService.getStorageCompressionLevel()` 读取；压缩调用收口至 `CompressionService.compressWithDictionary` | ✅ 正常 |
 
-### B. ClientCache（24 项）→ `client.toml`
+### B. ClientCache（23 项）→ `client.toml`
 
 | 配置项 | 默认值 | 客户端/服务端/双端 | 实际调用 | 状态 |
 |--------|--------|---------------------|----------|------|
@@ -45,7 +45,6 @@ Forge/NeoForge 端注册 3 个 spec（CLIENT / COMMON / SERVER），物理客户
 | `clientCache.ovdUnloadDelaySecs` | `5` | **客户端** | `ViewDistanceExtensionService:255` | ✅ 正常 |
 | `clientCache.sectionDeltaEnabled` | `true` | **客户端** | `ClientMetadataHandler:248` | ✅ 正常 |
 | `clientCache.joinBoostEnabled` | `true` | **客户端** | `ClientMainThreadBudget:31` | ✅ 正常 |
-| `clientCache.entitySnapshotsEnabled` | `true` | **客户端** | `MixinClientLevel:110`, `ClientLifecycleHelper:172` | ✅ 正常 |
 
 ### C. Network — 共享部分（14 项）→ `common.toml`
 
