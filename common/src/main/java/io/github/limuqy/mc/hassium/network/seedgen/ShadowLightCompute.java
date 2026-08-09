@@ -661,8 +661,7 @@ public final class ShadowLightCompute {
     /**
      * 帧尾（MixinClientTick，渲染前）：落地全部就绪回传——官方通道
      * （{@code ClientPacketListener.handleLevelChunkWithLight}）直接主线程调用。
-     * 客户端原版 apply 路径，无 Hassium 定制 apply/预算（预算化由
-     * MixinVanillaChunkApplyBudget 原样生效）。
+     * 客户端原版 apply 路径，无 Hassium 定制 apply/预算（T6 后预算注入已退役）。
      */
     public static void drainReady() {
         if (ready.isEmpty()) {

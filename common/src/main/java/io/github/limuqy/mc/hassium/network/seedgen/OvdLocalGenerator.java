@@ -18,7 +18,7 @@ import net.minecraft.world.level.chunk.LevelChunk;
  * OVD 本地生成：超视渲染（renderOnly）区域缓存 miss 时，用影子端按服务端世界种子
  * 本地生成区块（与服务器地形一致），以 renderOnly 落地并存入本地缓存（写盘链与缓存
  * 读回 renderOnly 一致：卸载/登出 dump 落盘；光照由影子端算光管线统一承担——
- * 生成的包不带光，apply 后 MixinLightRecompute TAIL 空光分支自动投递
+ * 生成的包不带光，落地后影子端按 SectionDelta/空光分支投递
  * {@link ShadowLightCompute}）。
  * <p>
  * Gate：客户端功能 gate 开放 && {@code clientCache.ovdLocalGeneration} 开启 &&

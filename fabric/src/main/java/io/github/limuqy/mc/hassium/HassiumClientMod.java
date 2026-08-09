@@ -2,14 +2,8 @@ package io.github.limuqy.mc.hassium;
 
 import io.github.limuqy.mc.hassium.cache.client.ClientLifecycleHelper;
 import io.github.limuqy.mc.hassium.client.ClientSmokeTest;
-import io.github.limuqy.mc.hassium.client.FabricControlReconnectLauncher;
 import io.github.limuqy.mc.hassium.command.FabricHassiumCommand;
-import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.network.DictionaryManager;
-import io.github.limuqy.mc.hassium.network.FabricNetworkManager;
-import io.github.limuqy.mc.hassium.network.dataplane.ControlReconnectOrchestrator;
-import io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity;
-import io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState;
 import io.github.limuqy.mc.hassium.network.dataplane.DataPlaneClientLifecycle;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
@@ -19,83 +13,25 @@ import org.slf4j.LoggerFactory;
 public class HassiumClientMod implements ClientModInitializer {
 
     private static final Logger LOGGER = LoggerFactory.getLogger("Hassium/ClientMod");
-    private static final FabricNetworkManager networkManager = new FabricNetworkManager();
-
-    // Task 9 — control-reconnect orchestrator singleton; launcher wires vanilla ConnectScreen。
-    // advertised candidates are populated from the S2C handshake tail; bootstrap active comes
-    // from the prior live Connection's remote address on disconnect.
-    private static volatile ControlReconnectOrchestrator reconnectOrchestrator;
-
-    /** 客户端 access — FabricNetworkManager S2C handler 用以灌候选与 onHandshakeAccepted 回调。 */
-    public static ControlReconnectOrchestrator reconnectOrchestrator() {
-        return reconnectOrchestrator;
-    }
 
     @Override
     public void onInitializeClient() {
-        // Task 9 — control-reconnect orchestrator (singleton; launcher wired here, candidates
-        // populated from S2C handshake tails as advertised backup endpoints arrive).
-        if (reconnectOrchestrator == null) {
-            ClientFailoverIdentity.initialize(
-                    io.github.limuqy.mc.hassium.platform.Services.PLATFORM.getConfigDirectory()
-                            .resolve("hassium").resolve("failover-endpoints.properties"),
-                    new FabricControlReconnectLauncher());
-            reconnectOrchestrator = ClientFailoverIdentity.orchestrator();
-        }
-
         ClientSmokeTest.initIfEnabled();
 
         // 加载内置区块字典（打包在 mod 中，不需要从服务端传输）
         DictionaryManager.loadChunkDictionary();
 
-        // 注册客户端网络通道
-        networkManager.registerClientChannels();
-
-        // 客户端加入服务器事件：发送握手请求。
-        // Task 5 — UDP 数据面 bundle 由 S2C 握手尾部（FabricNetworkManager）驱动，
-        // 通过 DataPlaneClientLifecycle.startUdp 在 accepted 响应中自动启动；
-        // 此处不再硬编码直连 PoC Data 副端口（旧 PoC connectAndBind() 已移除）。
-        ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> {
-            // 单人/局域网房主：integrated server 是本地进程，压缩握手无收益，跳过
-            if (client.getSingleplayerServer() != null) {
-                LOGGER.debug("Hassium: Single-player/LAN host, skip handshake");
-                return;
-            }
-            if (!HassiumConfigService.getInstance().isNetworkCompressionEnabled()) {
-                LOGGER.debug("Hassium: Client joined server, network disabled — skip handshake");
-                return;
-            }
-            networkManager.sendHandshakeRequest();
-        });
-
-        // 客户端断开事件：恢复启动已前移到 MixinConnection.disconnect(Component) HEAD
-        // （被动断连判定，先于 fabric DISCONNECT 必然执行），此处仅保留恢复态 begin 与清理。
-        // 恢复中 finalizeDisconnectIfTerminal 会短路 one-time terminal；磁盘缓存/executor
-        // 留待下一候选握手成功 markRecovered；候选耗尽时 orchestrator 自身触发一次 terminal.
+        // 客户端断开事件：清理 + 关闭 UDP 数据面 bundle + 最终清理（幂等）。
+        // 客户端 failover 已退役（T6）：无恢复态逻辑，UDP 束直接硬关；
+        // 新架构客户端不主动发握手（receiver 已删），数据面由网关 outbound 接管。
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
-            try {
-                ControlReconnectOrchestrator orch = reconnectOrchestrator;
-                if (orch != null && orch.hasAdvertisedCandidates()) {
-                    // begin 的 isRecovering() 此时已由 MixinConnection 置位（disconnect(Component)
-                    // 先于 onDisconnect / fabric DISCONNECT 触发）；候选耗尽走 terminal，不再 begin
-                    // （避免 stopUdp(keepLease) 空 bundle）。
-                    if (orch.isRecovering()) {
-                        ClientRecoveryState.getInstance().begin(
-                                java.lang.System.currentTimeMillis() + 60_000L);
-                    }
-                }
-            } catch (Throwable t) {
-                LOGGER.warn("Hassium: reconnect orchestrator begin failed", t);
-            }
-
             ClientLifecycleHelper.cleanupOnDisconnect();
-            // 关闭 UDP 数据面 bundle；恢复态下用温和关闭（保留磁盘缓存/executor）
             try {
-                DataPlaneClientLifecycle.getInstance().stopUdp(
-                        ClientRecoveryState.getInstance().isRecovering());
-            } catch (Throwable ignored) {}
+                DataPlaneClientLifecycle.getInstance().stopUdp(false);
+            } catch (Throwable ignored) {
+                // UDP 数据面可选；关闭失败不得阻断断连清理
+            }
             // 延后到下一 tick：等 Minecraft.disconnect / clearLevel 拆除完成；与 Mixin TAIL 幂等
-            // 但仅在非恢复态下真跑 finalize；恢复态交给 MixinMinecraft TAIL 在 markTerminal 后触发一次
             client.execute(ClientLifecycleHelper::finalizeDisconnectIfTerminal);
         });
 

@@ -63,9 +63,6 @@ public final class ClientSmokeTest {
     /** 阶段选择：classic = 两轮连服 VD 切换；dataplane = 多通道数据面（单次连服 + Data 帧计数报）。 */
     private static volatile boolean runClassic = true;
     private static volatile boolean runDataplane = false;
-    /** §2.3 UDP failover phase：复用 classic 两轮连服状态机；不切 VD（server 不切）；
-     *  仅在客户端进入联服时打 phase accepted marker，由 ps1 聚合 UDP_FAILOVER* markers 判 PASS。 */
-    private static volatile boolean runUdpFailover = false;
 
     private ClientSmokeTest() {
     }
@@ -83,12 +80,6 @@ public final class ClientSmokeTest {
         joinTimeoutMs = parseLong(System.getProperty("hassium.smokeTest.joinTimeoutMs"), 120_000L);
         moveSeconds = (int) parseLong(System.getProperty("hassium.smokeTest.moveSeconds"), 0L);
         host = System.getProperty("hassium.smokeTest.host", "127.0.0.1:25565");
-        // 首次连接由 loom 以 --quickPlayMultiplayer 发起，绕过 ConnectScreen.startConnecting，
-        // MixinConnectScreen 捕获不到 primary 身份 → ClientFailoverIdentity.primaryAddress 保持 null，
-        // S2C 握手通告的 advertised 候选被 merge gate（primaryAddress==null）丢弃，
-        // 断链后 hasAdvertisedCandidates()==false 使 failover 恢复链路完全不启动。
-        // smoke 里显式建立与真实用户（ConnectScreen 进入）等价的 primary 身份。
-        io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.prepareInitialConnection(host);
         // 阶段选择解析（与服务端 ServerSmokeTest.initIfEnabled 同规则）
         String phases = System.getProperty("hassium.smokePhases", "classic");
         java.util.Set<String> phaseSet = new java.util.HashSet<>();
@@ -98,15 +89,7 @@ public final class ClientSmokeTest {
         }
         runClassic = phaseSet.contains("classic") || phaseSet.contains("all");
         runDataplane = phaseSet.contains("dataplane") || phaseSet.contains("all");
-        runUdpFailover = phaseSet.contains("udp-failover");
-        // udp-failover 不自动叠加 classic；若用户未显式带 classic，仍需 classic 两轮连服
-        // 的状态机驱动断开→重连 cycle，因此 fallback 视作 classic。
-        if (runUdpFailover && !runClassic) {
-            runClassic = true;
-        }
-        if (runUdpFailover) {
-            LOGGER.info("HassiumSmokeTest:UDP_FAILOVER phase accepted: 复用 classic 两轮状态机");
-        }
+        // T6：客户端 failover 已退役，udp-failover 阶段删除（旧链路失语义）
         state = State.WAIT_JOIN_1;
         startAtMs = System.currentTimeMillis();
         joinAtMs = -1L;
@@ -196,14 +179,6 @@ public final class ClientSmokeTest {
         }
         // 单人内嵌服不计入多人连服冒烟
         if (mc.getSingleplayerServer() != null) {
-            return;
-        }
-
-        // L2 定格恢复：ROUND1 断连后 player/level 不再卸载（世界定格），恢复窗口内必须等待
-        // 恢复握手完成（isRecovering=false）再计时 ROUND2 —— 否则 joinAtMs 在重连前启动，
-        // 统计可能在候选连接 / 新世界 setLevel 尚未完成时触发。
-        if (state == State.WAIT_JOIN_2 && runUdpFailover
-                && io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.isRecovering()) {
             return;
         }
 
@@ -361,7 +336,77 @@ public final class ClientSmokeTest {
             } else {
                 LOGGER.error("{} round1={} round2={}", MARKER_FAIL, round1Pass, round2Pass);
             }
+            // T6 实体冒烟增强（dev 测试代码）：R2 断线 → 影子端异步保存（daemon 线程）。
+            // 不主动断连直接退出时，JVM 终止会打断 daemon saveAll，R2 期间新转发的实体
+            // （如 rcon summon）来不及落盘。这里先走与 ROUND1 相同的被动断连路径，
+            // 再等保存完成（heat.idx mtime 变化 = saveAll 最后一步落盘）后才退出。
+            dumpShadowEntities();
+            triggerDisconnect(mc);
+            awaitShadowSaveComplete();
             scheduleExit(allPass ? 0 : 2);
+        }
+    }
+
+    /**
+     * T6 实体冒烟增强（dev 测试代码）：打印影子端内存中的实体清单
+     * （验证 R2 期间转发的实体是否已被影子端应用，含 UUID/坐标/名字）。
+     */
+    private static void dumpShadowEntities() {
+        try {
+            io.github.limuqy.mc.hassium.network.seedgen.ShadowSeedServer server =
+                    io.github.limuqy.mc.hassium.network.seedgen.ShadowServerRegistry.getInstance().get();
+            if (server == null) {
+                LOGGER.info("HassiumSmokeTest: shadow dump: no shadow server");
+                return;
+            }
+            net.minecraft.server.level.ServerLevel level = server.overworld();
+            // 超大固定 AABB 覆盖影子世界全范围（1.20.1 无 WorldBorder.getBounds）
+            net.minecraft.world.phys.AABB bounds = new net.minecraft.world.phys.AABB(
+                    -3.0E7, -64.0, -3.0E7, 3.0E7, 512.0, 3.0E7);
+            java.util.List<net.minecraft.world.entity.Entity> all =
+                    level.getEntitiesOfClass(net.minecraft.world.entity.Entity.class, bounds, e -> true);
+            LOGGER.info("HassiumSmokeTest: shadow dump: {} entities", all.size());
+            for (net.minecraft.world.entity.Entity e : all) {
+                LOGGER.info("HassiumSmokeTest: shadow dump: type={} uuid={} netid={} pos={} name={}",
+                        net.minecraft.world.entity.EntityType.getKey(e.getType()),
+                        e.getUUID(), e.getId(), e.blockPosition().toShortString(),
+                        e.getName().getString());
+            }
+        } catch (Throwable t) {
+            LOGGER.warn("HassiumSmokeTest: shadow dump failed", t);
+        }
+    }
+
+    /**
+     * T6 实体冒烟增强（dev 测试代码）：等待影子端断连保存完成。
+     * 完成信号 = {@code hassium_cache/<serverId>/heat.idx} mtime 变化
+     * （{@code ShadowCacheEviction.save} 是 saveAll 的最后一步）；15s 超时兜底不阻塞退出。
+     */
+    private static void awaitShadowSaveComplete() {
+        try {
+            io.github.limuqy.mc.hassium.network.ClientChunkPipeline pipeline =
+                    io.github.limuqy.mc.hassium.network.ClientChunkPipeline.getInstance();
+            java.nio.file.Path gameDir = pipeline.getGameDir();
+            String serverId = pipeline.getServerId();
+            if (gameDir == null || serverId == null) {
+                LOGGER.warn("HassiumSmokeTest: shadow save wait skipped (cache location unknown)");
+                return;
+            }
+            java.nio.file.Path heatIdx = gameDir.resolve("hassium_cache").resolve(serverId)
+                    .resolve("heat.idx");
+            long before = heatIdx.toFile().lastModified();
+            long deadline = System.currentTimeMillis() + 15_000L;
+            while (System.currentTimeMillis() < deadline) {
+                Thread.sleep(500L);
+                long now = heatIdx.toFile().lastModified();
+                if (now != before && now > 0L) {
+                    LOGGER.info("HassiumSmokeTest: shadow save completed (heat.idx {} -> {})", before, now);
+                    return;
+                }
+            }
+            LOGGER.warn("HassiumSmokeTest: shadow save wait timed out (heat.idx mtime unchanged {})", before);
+        } catch (Throwable t) {
+            LOGGER.warn("HassiumSmokeTest: shadow save wait failed, continuing", t);
         }
     }
 
@@ -371,11 +416,9 @@ public final class ClientSmokeTest {
             return;
         }
 
-        // 玩家仍在游戏：两种可能 —— (a) ROUND1 断开未生效；(b) failover 恢复链路已把玩家
-        // 重新接回（orchestrator 经候选端点进服）。(b) 下强制断开会打断恢复后的连接，并把缓存
-        // 身份从主地址分裂到候选地址（failover marker 已清后 cacheIdentity 不再映射回主地址），
-        // 导致 ROUND2 缓存命中归零。统一转 WAIT_JOIN_2：恢复进服后由该状态正常等待并统计；
-        // 若断开确实未生效（player 持续在场且无恢复），stats 数据仍为当前连接，不影响判定。
+        // 玩家仍在游戏：ROUND1 断开未生效（被动断连失败）。统一转 WAIT_JOIN_2：
+        // 由该状态正常等待并统计；若断开确实未生效（player 持续在场），
+        // stats 数据仍为当前连接，不影响判定。
         if (mc.player != null) {
             state = State.WAIT_JOIN_2;
             joinAtMs = -1L;
@@ -421,10 +464,8 @@ public final class ClientSmokeTest {
             ClientPacketListener conn = mc.getConnection();
             if (conn != null) {
                 LOGGER.info("HassiumSmokeTest: disconnecting from server");
-                // 直接关 netty channel 模拟被动断连（channelInactive），而不是调
-                // Connection.disconnect(Component) —— 后者在主线程 + channel open 会被
-                // MixinConnection 标记为用户主动退出，从而被 failover gate 拦截，
-                // udp-failover phase 的恢复链路将不再启动。
+                // 直接关 netty channel 模拟被动断连（channelInactive），而非调
+                // Connection.disconnect(Component)（主线程手动登出路径，语义不同）。
                 net.minecraft.network.Connection netConn = conn.getConnection();
                 io.netty.channel.Channel ch = null;
                 try {
