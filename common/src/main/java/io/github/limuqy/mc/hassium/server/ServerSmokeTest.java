@@ -54,11 +54,6 @@ public final class ServerSmokeTest {
 
     /** 阶段选择：classic = 现有两轮连服（VD 切换）。Task 10b §2.1 退役 dataplane 后仅剩 classic。 */
     private static volatile boolean runClassic = true;
-    /** 阶段选择：udp-failover = 单路连服 + UDP 数据面 + 控制面 failover 观测（§2.3）。不切 VD。
-     *  服务端不主动断主控 TCP（mono-JVM 不可行）：production 的 onPrimaryDisconnected 由
-     *  客户端主动 disconnect 间接触发，smoke 仅聚合 production 注入的 UDP_FAILOVER* markers
-     *  作为 PASS 判据。 */
-    private static volatile boolean runUdpFailover = false;
     /** 阶段选择：pregen = 预生成大片区块后停服（冒烟前一次性执行，消除 worldgen 供给波动）。 */
     private static volatile boolean runPregen = false;
     /** 预生成半径（块）：49×49 覆盖 VD20（41×41）首轮需求 */
@@ -93,12 +88,10 @@ public final class ServerSmokeTest {
         }
         boolean dataplaneRequested = phaseSet.contains("dataplane") || phaseSet.contains("all");
         runClassic = phaseSet.contains("classic") || phaseSet.contains("all");
-        runUdpFailover = phaseSet.contains("udp-failover");
         runPregen = phaseSet.contains("pregen");
         if (runPregen) {
             // 预生成阶段：不起玩家相关逻辑，只加载区块
             runClassic = false;
-            runUdpFailover = false;
             int total = (2 * PREGEN_RADIUS + 1) * (2 * PREGEN_RADIUS + 1);
             pregenFutures = new CompletableFuture[total];
             pregenCursor = 0;
@@ -106,17 +99,13 @@ public final class ServerSmokeTest {
             pregenDone = false;
             LOGGER.info("{} PREGEN phase accepted: radius={} total={} chunks", MARKER, PREGEN_RADIUS, total);
         }
-        if (dataplaneRequested && !phaseSet.contains("classic") && !runUdpFailover) {
+        if (dataplaneRequested && !phaseSet.contains("classic")) {
             // 用户显式传 dataplane 但未带 classic —— 仍默认跑 classic 以保证后续能切换 VD。
             runClassic = true;
         }
         if (dataplaneRequested) {
             LOGGER.warn("{} phases={} 中 dataplane/all 已退役（Task 10b §2.1）；仅运行 classic",
                     MARKER, phases);
-        }
-        if (runUdpFailover) {
-            LOGGER.info("{} UDP_FAILOVER phase accepted: 不切换视距，仅注入 markers 由 client 聚合判断",
-                    MARKER);
         }
         enabled = true;
         armed = true;
@@ -140,7 +129,7 @@ public final class ServerSmokeTest {
 
         try {
             // 延迟设置初始视距（PlayerList 在 initServer 后才可用）
-            if ((runClassic || runUdpFailover) && !initialVdSet && server.getPlayerList() != null) {
+            if (runClassic && !initialVdSet && server.getPlayerList() != null) {
                 try {
                     server.getPlayerList().setViewDistance(vd1);
                     initialVdSet = true;

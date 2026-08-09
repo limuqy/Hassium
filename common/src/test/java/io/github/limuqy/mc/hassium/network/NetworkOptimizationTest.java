@@ -1,5 +1,6 @@
 package io.github.limuqy.mc.hassium.network;
 
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.DisplayName;
@@ -12,6 +13,17 @@ import static org.junit.jupiter.api.Assertions.*;
  * 测试紧凑包头、索引管理等功能
  */
 public class NetworkOptimizationTest {
+
+    /**
+     * 注册表 bootstrap 前置：IndexSyncManager 初始化会经 PacketCodecCompat 触发
+     * GameProtocols/ItemStack/BuiltInRegistries 静态初始化；未 bootstrap 时该失败
+     * 会让这些类在测试 JVM 内永久不可用，连锁污染后续所有依赖注册表的测试。
+     */
+    @BeforeAll
+    static void bootstrapRegistries() {
+        net.minecraft.SharedConstants.setVersion(net.minecraft.DetectedVersion.BUILT_IN);
+        net.minecraft.server.Bootstrap.bootStrap();
+    }
 
     private NamespaceIndexManager indexManager;
 
