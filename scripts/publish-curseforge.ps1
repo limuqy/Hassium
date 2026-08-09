@@ -96,7 +96,7 @@ foreach ($ver in $versionList) {
 
     Write-Host "`n=== Publish $ver ($($loaders -join ',')) ===" -ForegroundColor Cyan
     # PowerShell 会拆开 1.20.1，必须给 -P 参数加引号。
-    # --no-daemon 与 CLAUDE.md 全程构建惯例统一，避免 daemon 残留占用 jar。
+    # --no-daemon 与 AGENTS.md 全程构建惯例统一，避免 daemon 残留占用 jar。
     # -x test：发布验证由 scripts/runtime-smoke-test-batch.ps1 那条运行时冒烟覆盖（全版本已过），
     #          common 的 plain JUnit 是开发期单元片段且依赖 MC runtime/原版 API，让它挡 build 只会误伤产线产物。
     & $Gradlew --no-daemon build publishCurseForge "-Pmc_ver=$ver" -x test @extra
