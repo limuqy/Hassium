@@ -25,10 +25,10 @@ Smaller world saves and bandwidth than vanilla, local chunk reuse, and smoother 
 | --- | --- | --- |
 | **Efficient compression** | Storage compression | World chunk ZSTD on disk (type 126) for smaller saves; keeps vanilla Region (`.mca`) layout |
 | | Network compression | More efficient compression for chunks and packets (custom channels + global pipeline + packet aggregation) — less bandwidth and wait time |
-| **Network optimization** | Smooth push | Per-player per-tick submit cap (`maxChunksPerTick`, ≈ cap×20/s at full tick) + main-thread serialization cap with background encoding; join and view expansion never saturate the main thread |
+| **Network optimization** | Smooth push | Per-player per-tick submit cap (`master.maxChunksPerTick`, ≈ cap×20/s at full tick) + main-thread serialization cap with background encoding; join and view expansion never saturate the main thread |
 | | In-process gateway | Client-side in-process gateway (Network Core): vanilla client ↔ Network Core ↔ Master Core private channel; PLAY-phase traffic is routed through the gateway, the shell connection stays keep-alive only |
-| | Seamless migration / L1 load balancing | On master-core silent-failure timeout (`network.dataPlane.recoveryWindowMs`), the L1 migration engine switches the gateway with a warm cache — seamless migration; multiple gateways balanced via L1 load balancing |
-| | UDP data plane | UDP/KCP bulk carrier for the gateway ↔ master-core channel (`network.dataPlane.enabled`, off by default; control plane stays on vanilla TCP) |
+| | Seamless migration / L1 load balancing | On master-core silent-failure timeout (`master.migrationFaultTimeoutMs`), the L1 migration engine switches the gateway with a warm cache — seamless migration; multiple gateways balanced via L1 load balancing |
+| | UDP data plane | UDP/KCP bulk carrier for the gateway ↔ master-core channel (`dataplane.enabled`, off by default; control plane stays on vanilla TCP) |
 | **Chunk cache** | Shadow world save | Every chunk you visit is saved by the shadow engine (full MinecraftServer) into a vanilla-format save (`hassium_cache/<serverId>/world`, type 126 + chunkHash); saved on disconnect, reused on reconnect |
 | | Section delta | On cache mismatch (MISMATCH), fetch only changed sections (`sectionDelta`) and merge locally instead of the whole chunk |
 | | **Beyond-view render** | When client RD exceeds server view distance (multiplayer), fill the outer ring from local cache (render-only; no out-of-range server requests); incompatible with Bobby |
@@ -88,19 +88,21 @@ Files: `config/hassium/hassium-client.toml`, `config/hassium/hassium-server.toml
 | Key | Default | Notes |
 | --- | --- | --- |
 | `storage.enabled` | `false` | World ZSTD (**off by default**; dedicated servers only, **back up first**) |
-| `clientCache.enabled` | `true` | Shadow world save (visited chunks saved to `hassium_cache/<serverId>/world`) |
-| `clientCache.sectionDeltaEnabled` | `true` | Section delta on cache mismatch |
-| `clientCache.viewDistanceExtensionEnabled` | `true` | Beyond-view render (multiplayer; exclusive with Bobby) |
-| `clientCache.maxRenderDistance` | `16` | Beyond-view / effective RD cap (2–64) |
-| `clientCache.ovdUnloadDelaySecs` | `5` | Delay unload after leaving beyond-view ring (s; 0=sync) |
-| `network.enabled` | `true` | Custom channels |
-| `network.globalPacketCompression` | `true` | Global ZSTD |
-| `network.maxChunksPerTick` | `5` | Per-player submit cap per tick (send rate = cap × tick rhythm; ≈ 5×20/s ≈ 100/s at full tick, naturally slows on lag) |
-| `clientCache.mainThreadChunkBudgetMs` | `15` | Client apply budget per frame (ms) |
-| `clientCache.hassiumEngineEnabled` | `true` | Hassium engine (master switch for non-network features): starts an in-process shadow server on login that owns world saving (cache) + chunk lighting + official packet packing; degrades automatically on startup failure (cache/beyond-view render/SeedGen disabled with notice); when disabled the server does not strip light (negotiated at handshake) |
-| `network.metricsEnabled` | `false` | Metrics collection (off by default; auto-enabled during self-checks) |
-| `network.dataPlane.enabled` | `false` | UDP/KCP data plane: bulk carrier for the gateway ↔ master-core channel (**off by default**); configure reachable endpoints (`network.controlReachableEndpoints`) before enabling |
-| `network.dataPlane.controlStallMs` | `6000` | TCP control silence timeout (used by the server-side failover permit check) |
+| `chunk.enabled` | `true` | Shadow world save (visited chunks saved to `hassium_cache/<serverId>/world`) |
+| `chunk.sectionDeltaEnabled` | `true` | Section delta on cache mismatch |
+| `chunk.viewDistanceExtensionEnabled` | `true` | Beyond-view render (multiplayer; exclusive with Bobby) |
+| `chunk.maxRenderDistance` | `16` | Beyond-view / effective RD cap (2–64) |
+| `chunk.ovdUnloadDelaySecs` | `5` | Delay unload after leaving beyond-view ring (s; 0=sync) |
+| `chunk.mainThreadChunkBudgetMs` | `15` | Client apply budget per frame (ms) |
+| `chunk.hassiumEngineEnabled` | `true` | Hassium engine (master switch for non-network features): starts an in-process shadow server on login that owns world saving (cache) + chunk lighting + official packet packing; degrades automatically on startup failure (cache/beyond-view render/SeedGen disabled with notice); when disabled the server does not strip light (negotiated at handshake) |
+| `chunk.ovdLocalGeneration` | `false` | Beyond-view local generation: generate on cache miss from the server's world seed and store; auto-disabled when no seed |
+| `net.enabled` | `true` | Master switch for the client network core (custom channels; off = revert to vanilla chunk packets) |
+| `net.metricsEnabled` | `false` | Client network metrics (off by default; auto-enabled during self-checks) |
+| `master.globalPacketCompression` | `true` | Global ZSTD |
+| `master.maxChunksPerTick` | `5` | Per-player submit cap per tick (send rate = cap × tick rhythm; ≈ 5×20/s ≈ 100/s at full tick, naturally slows on lag) |
+| `master.metricsEnabled` | `false` | Server network metrics (off by default; auto-enabled during self-checks) |
+| `master.controlReachableEndpoints` | `[]` | Gateway listen endpoints (`endpoints[0]` is the gateway port, falls back to 25566) |
+| `dataplane.enabled` | `false` | UDP/KCP data plane: bulk carrier for the gateway ↔ master-core channel (**off by default**); configure reachable endpoints (`dataplane.udpListeners[*].reachableEndpoints`) before enabling |
 | `debug.*` | `false` | Category debug logs (quiet by default) |
 
 Full reference: [`docs/architecture.md`](docs/architecture.md).

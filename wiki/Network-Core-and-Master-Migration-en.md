@@ -30,9 +30,9 @@ The Network Core takes over all client-side networking; the connection visible t
 
 ### Master: gateway channel
 
-- The gateway frame connection (`GatewayChannel`) **is** the control connection and carries all player traffic; ZSTD is mounted **outside** the frame protocol (alongside `ControlFrameCodec` — client `OutboundConnection.installZstd` / master `GatewayChannel.installZstd`, reusing the `network.globalCompression*` thresholds and levels).
+- The gateway frame connection (`GatewayChannel`) **is** the control connection and carries all player traffic; ZSTD is mounted **outside** the frame protocol (alongside `ControlFrameCodec` — client `OutboundConnection.installZstd` / master `GatewayChannel.installZstd`, reusing the `master.globalCompression*` thresholds and levels).
 - **Aggregation is a master-side vanilla path only**: packet aggregation hooks vanilla `Connection.send` (`MixinConnection` applies it only to server-side player listeners); the gateway channel never aggregates.
-- The **UDP data plane** (`network/dataplane/`) is fully retained as the bulk carrier for the gateway↔master channel, off by default (`network.dataPlane.enabled = false`).
+- The **UDP data plane** (`network/dataplane/`) is fully retained as the bulk carrier for the gateway↔master channel, off by default (`dataplane.enabled = false`).
 
 ### Topology overview
 
@@ -70,7 +70,7 @@ Throughout migration the vanilla `Connection` state is preserved and the world k
 
 | Trigger | Condition | Behavior |
 | --- | --- | --- |
-| **Fault** | Outbound inbound silence exceeds `faultTimeoutMs` (default 60000, reusing the `network.dataPlane.recoveryWindowMs` semantics); a heartbeat thread sends HEARTBEATs every `heartbeatIntervalMs` (default 5000) | No prewarm; direct `migrateToImmediate` |
+| **Fault** | Outbound inbound silence exceeds `faultTimeoutMs` (default 60000, reusing the `master.migrationFaultTimeoutMs` semantics); a heartbeat thread sends HEARTBEATs every `heartbeatIntervalMs` (default 5000) | No prewarm; direct `migrateToImmediate` |
 | **Load thresholds** | Master load report (`ServerLoadReporter`): TPS < `minTps` (default 15.0) or system load average > `maxLoadAverage` (default 4.0) | Policy migration (prewarm) |
 | **Maintenance window** | `maintenanceWindow` ("HH:MM-HH:MM", local timezone, midnight-crossing supported; empty = disabled): always triggers while inside the window | Policy migration (prewarm) |
 | **Drill** | Manual invocation of the migration entry point (`NetworkCore.migrateTo`; command/API wiring is a later wave) | Policy migration (prewarm) |
@@ -84,22 +84,23 @@ Throughout migration the vanilla `Connection` state is preserved and the world k
 
 ## Config keys
 
-> 2.0.0 adds **no new gateway config keys**. The gateway listen port reuses `network.controlReachableEndpoints[0]`; the `dataPlane` key family is retained with partial semantics migration (below).
+> 2.0.0 adds **no new gateway config keys**. The gateway listen port reuses `master.controlReachableEndpoints[0]`; key families were re-keyed on 2026-08-09 (config-restructure): network core `net.*` (client) / master core `master.*` (server) / data plane `dataplane.*`.
 
 | Key | Default | Notes |
 | --- | --- | --- |
-| `network.enabled` (both sides) | `true` | Hassium custom-channel master switch (client/server) |
-| `network.controlReachableEndpoints` | `[]` | Master gateway listen-address source; port = `endpoints[0].port()` (when 0 < port < 65536), **otherwise falls back to `25566`** (`GatewayPlayerBridge.DEFAULT_GATEWAY_PORT`, offset from the vanilla port); empty host falls back to `0.0.0.0` |
-| `network.compressionLevel` | `3` | Custom-channel ZSTD compression level |
-| `network.globalPacketCompression` / `globalCompressionLevel` / `globalCompressionThreshold` | `true` / `3` / `256` | Global compression config; also the threshold/level source for the gateway channel's ZSTD install |
-| `network.dataPlane.enabled` | `false` | UDP data-plane master switch (**off by default**) |
-| `network.dataPlane.recoveryWindowMs` | `60000` | 2.0.0 semantics = **L1 migration engine fault-silence timeout** (`faultTimeoutMs`); key name kept, family stays the data plane, consumed in the Network Core |
+| `net.enabled` | `true` | Master switch for the client network core (in-process gateway and optimized channels) |
+| `master.enabled` | `true` | Master switch for the server-side network channels |
+| `master.controlReachableEndpoints` | `[]` | Master gateway listen-address source; port = `endpoints[0].port()` (when 0 < port < 65536), **otherwise falls back to `25566`** (`GatewayPlayerBridge.DEFAULT_GATEWAY_PORT`, offset from the vanilla port); empty host falls back to `0.0.0.0` |
+| `master.compressionLevel` | `3` | Custom-channel ZSTD compression level |
+| `master.globalPacketCompression` / `master.globalCompressionLevel` / `master.globalCompressionThreshold` | `true` / `3` / `256` | Global compression config; also the threshold/level source for the gateway channel's ZSTD install |
+| `dataplane.enabled` | `false` | UDP data-plane master switch (**off by default**) |
+| `master.migrationFaultTimeoutMs` | `60000` | 2.0.0 semantics = **L1 migration engine fault-silence timeout** (`faultTimeoutMs`); semantic rename of the former `network.dataPlane.recoveryWindowMs`, consumed in the Network Core |
 
 Notes:
 
 - The client's outbound address source is the L1 migration engine (not a direct config read); the endpoint list will later be advertised by the master via handshake/CONFIG frames (T10 wiring).
-- The remaining server-side `dataPlane` keys (control-silence detection, etc.) are kept for the server's legacy detection chain; the client side no longer consumes them.
-- `recoveryFreeze` (CLIENT) is kept but has no UI consumer (smoke-test marker only); its historical recovery-screen semantics are not described anymore.
+- The former server-side `dataPlane` key family has been re-keyed to `dataplane.*` (`enabled` / `udpListeners`); the old `controlStallMs` / `failoverExpiryMs` keys were deleted (2026-08-09) — the server permit chain now uses fixed constants (6000/30000).
+- `recoveryFreeze` (CLIENT) was deleted (2026-08-09; it had no UI consumer, smoke-test marker only); its historical recovery-screen semantics are not described anymore.
 
 ---
 

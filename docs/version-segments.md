@@ -156,7 +156,7 @@ MC_1_21_11
 
 - **common**：`implementation 'moe.sdl.kcp:kcp-netty:1.6.2'`（common/build.gradle:12，KCP-over-UDP message mode）；生产仅经 `ReliableDatagramSession` 封装 `io.jpower.kcp.netty.Kcp`，路由 / Minecraft 层不得直用（"must not leak its API"）
 - **三端剥离**：kcp-netty 自带 `io.netty.bootstrap.UkcpServerBootstrap`，与 MC Netty 同包 → fabric / forge / neoforge 均有 `kcpIncoming` 配置 + `stripKcpNettyBootstrapPackage` 任务：fabric 剥 `io/netty/*` 后 shade 进主 jar；forge / neoforge 剥 `io.netty.bootstrap` 后进 compile / game-layer / JiJ（Forge SecureJarHandler 包独占冲突规避；详见附录 Forge 1.20.6 记录）
-- **服务端点**：`DataPlaneUdpServer`（KCP-over-UDP 单点，NioDatagramChannel，DataPlaneUdpServer.java:610-611），生命周期接 MixinMinecraftServer；`network.dataPlane.enabled=false` 时跳过
+| **服务端点**：`DataPlaneUdpServer`（KCP-over-UDP 单点，NioDatagramChannel，DataPlaneUdpServer.java:610-611），生命周期接 MixinMinecraftServer；`dataplane.enabled=false` 时跳过
 - **口径**（事实基线③）：UDP 数据面完整保留（默认关），为网关↔主控通道 bulk 载体；KCP 仅承载数据面 bulk，控制/握手走网关帧连接
 
 ---

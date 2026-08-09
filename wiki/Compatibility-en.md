@@ -14,9 +14,9 @@ Hassium compatibility with common optimization mods, plus escape hatches. Every 
 | --- | --- | --- |
 | **Bobby and similar client-side out-of-range caches** | ❌ **Incompatible** | Hassium ships its own beyond-view renderer; co-installation will conflict |
 | **Immersive Portals** | ❌ **Incompatible** | |
-| **Other compression / protocol-replacement mods (e.g. rewriting the Netty Zlib)** | ❌ **Incompatible** | Conflicts with `network.globalPacketCompression` |
+| **Other compression / protocol-replacement mods (e.g. rewriting the Netty Zlib)** | ❌ **Incompatible** | Conflicts with `master.globalPacketCompression` |
 | **Starlight** | — **Not considered** | Already merged into vanilla lighting |
-| **Third-party packets hurt by aggregation** | ⚠️ Disable aggregation or blacklist | `network.enablePacketAggregation = false`, or add the channel ID to `network.compressionBlacklist` |
+| **Third-party packets hurt by aggregation** | ⚠️ Disable aggregation or blacklist | `master.enablePacketAggregation = false`, or add the channel ID to `master.compressionBlacklist` |
 | **Anti-x-ray (rewrites the outbound chunk packet)** | ✅ Likely compatible | miss path reuses the already-built packet bytes; if the rewriter only patches `Connection.send` after Hassium cancels, it may bypass |
 | **Distant Horizons / Voxy** | ✅ Likely compatible | Independent LOD channels; aggregation mishaps handled as above |
 | **ViaVersion** | ⚠️ Conditional | See below |
@@ -35,7 +35,7 @@ Hassium compatibility with common optimization mods, plus escape hatches. Every 
 | Server Hassium + Via, client has no Hassium | Works: clients without the mod use the vanilla protocol, Via translates it |
 | Both sides install Hassium but MC versions differ (bridged by Via) | ❌ Unsupported (wire format is tied to `MC_VER`) |
 
-> Stacking `globalPacketCompression` with in-process Via can confuse compression frame assumptions. Recommend disabling global compression for in-process Via.
+> Stacking `master.globalPacketCompression` with in-process Via can confuse compression frame assumptions. Recommend disabling global compression for in-process Via.
 
 ---
 
@@ -44,13 +44,13 @@ Hassium compatibility with common optimization mods, plus escape hatches. Every 
 | Goal | Tweak |
 | --- | --- |
 | Disable storage compression, keep network benefits | `storage.enabled = false` |
-| Disable custom channels and push | `network.enabled = false` |
-| Disable global ZSTD (coexist with protocol replacement) | `network.globalPacketCompression = false` |
-| Disable packet aggregation | `network.enablePacketAggregation = false` |
-| Exclude a third-party channel from compression/aggregation | `network.compressionBlacklist` |
-| Disable the Hassium engine (server then does not strip light) | `clientCache.hassiumEngineEnabled = false` |
-| Disable section delta (stale = full fetch) | `clientCache.sectionDeltaEnabled = false` |
-| Disable beyond-view render, restore vanilla RD clamp | `clientCache.viewDistanceExtensionEnabled = false` |
+| Disable custom channels and push | `master.enabled = false` |
+| Disable global ZSTD (coexist with protocol replacement) | `master.globalPacketCompression = false` |
+| Disable packet aggregation | `master.enablePacketAggregation = false` |
+| Exclude a third-party channel from compression/aggregation | `master.compressionBlacklist` |
+| Disable the Hassium engine (server then does not strip light) | `chunk.hassiumEngineEnabled = false` |
+| Disable section delta (stale = full fetch) | `chunk.sectionDeltaEnabled = false` |
+| Disable beyond-view render, restore vanilla RD clamp | `chunk.viewDistanceExtensionEnabled = false` |
 | Require the mod on clients | `compat.requireClientMod = true` |
 
 ---

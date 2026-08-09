@@ -30,9 +30,9 @@
 
 ### 主控：网关通道
 
-- 网关帧连接（`GatewayChannel`）即控制连接，承载全量玩家流量；ZSTD 装在帧协议**之外**（`ControlFrameCodec` 外挂载，客户端 `OutboundConnection.installZstd` / 主控 `GatewayChannel.installZstd`，阈值与等级复用 `network.globalCompression*` 配置）。
+- 网关帧连接（`GatewayChannel`）即控制连接，承载全量玩家流量；ZSTD 装在帧协议**之外**（`ControlFrameCodec` 外挂载，客户端 `OutboundConnection.installZstd` / 主控 `GatewayChannel.installZstd`，阈值与等级复用 `master.globalCompression*` 配置）。
 - **聚合仅主控侧 vanilla 路径**：包聚合挂 vanilla `Connection.send`（`MixinConnection` 仅对服务端玩家监听器生效），网关通道不聚合。
-- **UDP 数据面**（`network/dataplane/`）完整保留，作为网关↔主控通道的 bulk 载体，默认关（`network.dataPlane.enabled = false`）。
+- **UDP 数据面**（`network/dataplane/`）完整保留，作为网关↔主控通道的 bulk 载体，默认关（`dataplane.enabled = false`）。
 
 ### 拓扑总览
 
@@ -70,7 +70,7 @@
 
 | 触发 | 条件 | 行为 |
 | --- | --- | --- |
-| **故障** | outbound 入站静默超过 `faultTimeoutMs`（默认 60000，沿用 `network.dataPlane.recoveryWindowMs` 语义）；心跳线程按 `heartbeatIntervalMs`（默认 5000）发 HEARTBEAT 监测 | 不预热，直接 `migrateToImmediate` |
+| **故障** | outbound 入站静默超过 `faultTimeoutMs`（默认 60000，沿用 `master.migrationFaultTimeoutMs` 语义）；心跳线程按 `heartbeatIntervalMs`（默认 5000）发 HEARTBEAT 监测 | 不预热，直接 `migrateToImmediate` |
 | **负载阈值** | 主控负载报告（`ServerLoadReporter`）：TPS < `minTps`（默认 15.0）或系统负载均值 > `maxLoadAverage`（默认 4.0） | 策略迁移（预热） |
 | **维护窗口** | `maintenanceWindow`（"HH:MM-HH:MM"，本地时区、支持跨午夜；空串禁用）：窗口内恒触发 | 策略迁移（预热） |
 | **演练** | 手动调用迁移入口（`NetworkCore.migrateTo`；命令/API 接线为后续波） | 策略迁移（预热） |
@@ -84,22 +84,23 @@
 
 ## 配置项
 
-> 2.0.0 **无新增 gateway 配置键**。网关监听端口复用 `network.controlReachableEndpoints[0]`；`dataPlane` 键族保留、语义部分迁移（见下）。
+> 2.0.0 **无新增 gateway 配置键**。网关监听端口复用 `master.controlReachableEndpoints[0]`；键族按 2026-08-09 重排（config-restructure）：网络核心 `net.*`（客户端）/ 主控核心 `master.*`（服务端）/ 数据面 `dataplane.*`。
 
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
-| `network.enabled`（双端） | `true` | Hassium 自定义通道总开关（客户端/服务端） |
-| `network.controlReachableEndpoints` | `[]` | 主控网关监听地址源；端口取 `endpoints[0].port()`（0 < port < 65536 时），**否则兜底 `25566`**（`GatewayPlayerBridge.DEFAULT_GATEWAY_PORT`，与 vanilla 端口错开）；host 为空兜底 `0.0.0.0` |
-| `network.compressionLevel` | `3` | 自定义通道 ZSTD 压缩等级 |
-| `network.globalPacketCompression` / `globalCompressionLevel` / `globalCompressionThreshold` | `true` / `3` / `256` | 全局压缩配置；同时作为网关通道 ZSTD 安装的阈值/等级源 |
-| `network.dataPlane.enabled` | `false` | UDP 数据面总开关（**默认关**） |
-| `network.dataPlane.recoveryWindowMs` | `60000` | 2.0.0 语义 = **L1 迁移引擎故障静默超时**（`faultTimeoutMs`）；键名沿用，归属数据面族，消费在网络核心 |
+| `net.enabled` | `true` | 客户端网络核心总开关（进程内网关与优化通道） |
+| `master.enabled` | `true` | 服务端网络通道总开关 |
+| `master.controlReachableEndpoints` | `[]` | 主控网关监听地址源；端口取 `endpoints[0].port()`（0 < port < 65536 时），**否则兜底 `25566`**（`GatewayPlayerBridge.DEFAULT_GATEWAY_PORT`，与 vanilla 端口错开）；host 为空兜底 `0.0.0.0` |
+| `master.compressionLevel` | `3` | 自定义通道 ZSTD 压缩等级 |
+| `master.globalPacketCompression` / `master.globalCompressionLevel` / `master.globalCompressionThreshold` | `true` / `3` / `256` | 全局压缩配置；同时作为网关通道 ZSTD 安装的阈值/等级源 |
+| `dataplane.enabled` | `false` | UDP 数据面总开关（**默认关**） |
+| `master.migrationFaultTimeoutMs` | `60000` | 2.0.0 语义 = **L1 迁移引擎故障静默超时**（`faultTimeoutMs`）；原 `network.dataPlane.recoveryWindowMs` 语义化迁移至此键，消费在网络核心 |
 
 要点：
 
 - 客户端 outbound 地址源 = L1 迁移引擎（非配置直读）；端点列表后续由主控握手/CONFIG 帧通告（T10 接线）。
-- 服务端 `dataPlane` 键族其余键（控制静默判定等）为服务端旧判定链保留，客户端侧不再消费。
-- `recoveryFreeze`（CLIENT）键保留但无 UI 消费（仅冒烟打标），历史语义不再描述恢复画面行为。
+- 服务端 `dataPlane` 键族已重排为 `dataplane.*`（`enabled` / `udpListeners`）；旧 `controlStallMs` / `failoverExpiryMs` 键已删（2026-08-09），服务端 permit 链引用固定常量（6000/30000）。
+- `recoveryFreeze`（CLIENT）键已删（2026-08-09，原无 UI 消费、仅冒烟打标），历史语义不再描述恢复画面行为。
 
 ---
 

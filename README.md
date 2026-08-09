@@ -25,10 +25,10 @@
 | --- | --- | --- |
 | **高效压缩** | 存储压缩 | 世界区块 ZSTD 落盘（type 126），存档体积显著减小；仍兼容原版 Region（`.mca`）布局 |
 | | 网络压缩 | 区块与数据包 ZSTD 传输（自定义通道 + 全局管道 + 包聚合），降低带宽与下载等待 |
-| **网络优化** | 平滑推送 | 服务端每 tick 提交上限限速（`maxChunksPerTick`，满 tick ≈ 值×20/s）+ 主线程序列化上限与后台化；进服/扩展视野不卡主线程 |
+| **网络优化** | 平滑推送 | 服务端每 tick 提交上限限速（`master.maxChunksPerTick`，满 tick ≈ 值×20/s）+ 主线程序列化上限与后台化；进服/扩展视野不卡主线程 |
 | | 进程内网关 | 客户端进程内网关（网络核心）：原版客户端 ↔ 网络核心 ↔ 主控核心自有通道；PLAY 期数据经网关路由，壳连接仅保活 |
-| | 无感迁移 / L1 负载均衡 | 主控故障静默超时（`network.dataPlane.recoveryWindowMs`）后由 L1 迁移引擎切换网关、缓存暖续，无感迁移；多网关按 L1 负载均衡 |
-| | UDP 数据面 | 网关↔主控通道的 UDP/KCP bulk 载体（`network.dataPlane.enabled`，默认关；控制面留原版 TCP） |
+| | 无感迁移 / L1 负载均衡 | 主控故障静默超时（`master.migrationFaultTimeoutMs`）后由 L1 迁移引擎切换网关、缓存暖续，无感迁移；多网关按 L1 负载均衡 |
+| | UDP 数据面 | 网关↔主控通道的 UDP/KCP bulk 载体（`dataplane.enabled`，默认关；控制面留原版 TCP） |
 | **区块缓存** | 影子端世界保存 | 进服区块统一由影子端（完整 MinecraftServer）落盘原版存档（`hassium_cache/<serverId>/world`），断连保存、重连复用 |
 | | 分段增量 | 缓存过期（MISMATCH）时仅拉取变更分段（`sectionDelta`）本地合并，避免整块重传 |
 | | **超视渲染** | 多人服客户端 RD 大于服务端视距时，用本地缓存回填视距外地形（仅渲染、不向服索要视距外区块）；与 Bobby 互斥 |
@@ -88,20 +88,21 @@
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
 | `storage.enabled` | `false` | 世界存档 ZSTD（默认关；仅专用服务器，请备份） |
-| `clientCache.enabled` | `true` | 影子端世界保存（进服区块统一落盘 `hassium_cache/<serverId>/world`） |
-| `clientCache.sectionDeltaEnabled` | `true` | 缓存过期时分段增量 |
-| `clientCache.viewDistanceExtensionEnabled` | `true` | 超视渲染（多人；与 Bobby 互斥） |
-| `clientCache.maxRenderDistance` | `16` | 超视渲染 / 有效 RD 上限（2–64） |
-| `clientCache.ovdUnloadDelaySecs` | `5` | 离开超视渲染环带后延迟卸载（秒；0=同步） |
-| `network.enabled` | `true` | 自定义通道 |
-| `network.globalPacketCompression` | `true` | 全局 ZSTD |
-| `network.maxChunksPerTick` | `5` | 每玩家每 tick 提交上限（发送速率 = 本值 × tick 节奏，满 tick ≈ 5×20/s ≈ 100/s；掉刻自然降速） |
-| `clientCache.mainThreadChunkBudgetMs` | `15` | 客户端每帧 apply 预算（ms） |
-| `clientCache.hassiumEngineEnabled` | `true` | Hassium 引擎（非网络向功能总开关）：进服启动进程内影子服务端统一承担世界保存（缓存）+ 光照计算 + 打包官方区块包；启动失败自动降级（缓存/超视渲染/SeedGen 关闭并提示）；关闭时服务端不剥光，光照随包自带 |
-| `clientCache.ovdLocalGeneration` | `false` | OVD 本地生成：超视渲染 miss 时按服务端世界种子本地生成并存入缓存；无种子自动关闭 |
-| `network.metricsEnabled` | `false` | 指标收集（默认关闭；自检时自动开启） |
-| `network.dataPlane.enabled` | `false` | UDP/KCP 数据面：网关↔主控通道的 bulk 载体（默认关）；启用前请配置可达端点（`network.controlReachableEndpoints`） |
-| `network.dataPlane.controlStallMs` | `6000` | 控制 TCP 静默时间（服务端 failover permit 判定用） |
+| `chunk.enabled` | `true` | 影子端世界保存（进服区块统一落盘 `hassium_cache/<serverId>/world`） |
+| `chunk.sectionDeltaEnabled` | `true` | 缓存过期时分段增量 |
+| `chunk.viewDistanceExtensionEnabled` | `true` | 超视渲染（多人；与 Bobby 互斥） |
+| `chunk.maxRenderDistance` | `16` | 超视渲染 / 有效 RD 上限（2–64） |
+| `chunk.ovdUnloadDelaySecs` | `5` | 离开超视渲染环带后延迟卸载（秒；0=同步） |
+| `chunk.mainThreadChunkBudgetMs` | `15` | 客户端每帧 apply 预算（ms） |
+| `chunk.hassiumEngineEnabled` | `true` | Hassium 引擎（非网络向功能总开关）：进服启动进程内影子服务端统一承担世界保存（缓存）+ 光照计算 + 打包官方区块包；启动失败自动降级（缓存/超视渲染/SeedGen 关闭并提示）；关闭时服务端不剥光，光照随包自带 |
+| `chunk.ovdLocalGeneration` | `false` | 超视渲染本地生成：超视渲染 miss 时按服务端世界种子本地生成并存入缓存；无种子自动关闭 |
+| `net.enabled` | `true` | 客户端网络核心总开关（自定义通道；关后回退原版区块包） |
+| `net.metricsEnabled` | `false` | 客户端网络指标（默认关闭；自检时自动开启） |
+| `master.globalPacketCompression` | `true` | 全局 ZSTD |
+| `master.maxChunksPerTick` | `5` | 每玩家每 tick 提交上限（发送速率 = 本值 × tick 节奏，满 tick ≈ 5×20/s ≈ 100/s；掉刻自然降速） |
+| `master.metricsEnabled` | `false` | 服务端网络指标（默认关闭；自检时自动开启） |
+| `master.controlReachableEndpoints` | `[]` | 网关监听端点（`endpoints[0]` 即网关端口，兜底 25566） |
+| `dataplane.enabled` | `false` | UDP/KCP 数据面：网关↔主控通道的 bulk 载体（默认关）；启用前请配置可达端点（`dataplane.udpListeners[*].reachableEndpoints`） |
 | `debug.*` | `false` | 分类调试日志（默认安静） |
 
 完整说明见 [`docs/architecture.md`](docs/architecture.md)。

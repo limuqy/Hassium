@@ -64,13 +64,14 @@ fabric/ | forge/ | neoforge/
 | 项 | 默认 | 注意 |
 |----|------|------|
 | `storage.enabled` | **false** | 默认关；开启后改存档格式（type 126）→ 提醒备份；仅专用服务器写，单人/局域网保持原版格式（读兼容）；客户端影子端（hassium_cache）固定写 126，不受本开关约束 |
-| `network.enabled` | true | |
-| `globalPacketCompression` | true | |
-| `clientCache.enabled` | true | |
-| `clientCache.sectionDeltaEnabled` | true | 过期分段增量 |
-| `clientCache.viewDistanceExtensionEnabled` | true | 超视渲染（多人；≠ Bobby） |
-| `clientCache.maxRenderDistance` | 16 | OVD 环带上限（2–64） |
-| `clientCache.ovdUnloadDelaySecs` | 5 | OVD 卸载延迟 |
+| `net.enabled` | true | 客户端网络核心总开关 |
+| `master.enabled` | true | 服务端网络通道总开关 |
+| `master.globalPacketCompression` | true | |
+| `chunk.enabled` | true | |
+| `chunk.sectionDeltaEnabled` | true | 过期分段增量 |
+| `chunk.viewDistanceExtensionEnabled` | true | 超视渲染（多人；≠ Bobby） |
+| `chunk.maxRenderDistance` | 16 | 超视渲染环带上限（2–64） |
+| `chunk.ovdUnloadDelaySecs` | 5 | 超视渲染卸载延迟 |
 | `debug.*` | false | 热路径用 `DebugLogger` |
 
 存档格式 type **126**（非 127）；元数据推送字段为 **chunkHash**（非 inhabitedTime）。客户端影子端世界 = `hassium_cache/<serverId>/world`（原版存档结构 + type 126 + chunkHash 落盘，`MixinRegionFile` shadow 上下文 gate）；旧 HBT1 客户端磁盘缓存已裁剪（热度清理逻辑迁移为影子端 `ShadowCacheEviction`：heat.idx 容量/热度淘汰，`hassium_cache/<serverId>/heat.idx` per-server）。
@@ -79,9 +80,9 @@ fabric/ | forge/ | neoforge/
 
 **网络核心**（客户端进程内网关，`network/core/`）——NetworkCore 五态状态机（IDLE/CONNECTING/HANDSHAKING/ACTIVE/MIGRATING）+ `outbound/` 帧协议（TCP 控制面 + UDP 数据面启停）+ `migration/` L1 迁移引擎 + `viafabric/` 兼容桥；S2C handler 直调注入（dispatchS2C → GatewayS2CRouter），C2S routeC2S 收口；主控切换 = 换 outbound + 续流票据（ResumeTicket，epoch 防重放），客户端零重载。
 
-**区块核心**（客户端进程内区块域）——`network/seedgen/` 影子端（= 本域后端引擎：生成/算光/落盘/淘汰）+ `network/` 顶层摄入管线（ClientChunkPipeline / ClientMetadataHandler / ChunkHash 客户端侧）+ `cache/`（OVD / MainThreadBudget / Bloom / 生命周期）；`clientCache.*` 键族 = 本域配置族。
+**区块核心**（客户端进程内区块域）——`network/seedgen/` 影子端（= 本域后端引擎：生成/算光/落盘/淘汰）+ `network/` 顶层摄入管线（ClientChunkPipeline / ClientMetadataHandler / ChunkHash 客户端侧）+ `cache/`（OVD / MainThreadBudget / Bloom / 生命周期）；`chunk.*` 键族 = 本域配置族（2026-08-09 config-restructure：原 `clientCache.*` 重排为 `chunk.*`）。
 
-**主控核心**（服务端进程内网络与推送）——`network/gateway/` 接入层（GatewayServer / GatewayChannel / GatewayPlayerSession / GatewayPlayerRegistry，端口 = controlReachableEndpoints[0] 或 25566 兜底）+ 服务端区块推送（ServerChunkPushManager / ChunkHashS2C / ChunkSender / SectionDelta 服务端 / ServerLoadReporter）+ 服务端聚合与 ZstdPipeline 兼容链（HassiumAggregationManager / ZstdPipelineSwitcher）。
+**主控核心**（服务端进程内网络与推送）——`network/gateway/` 接入层（GatewayServer / GatewayChannel / GatewayPlayerSession / GatewayPlayerRegistry，端口 = `master.controlReachableEndpoints[0]` 或 25566 兜底）+ 服务端区块推送（ServerChunkPushManager / ChunkHashS2C / ChunkSender / SectionDelta 服务端 / ServerLoadReporter）+ 服务端聚合与 ZstdPipeline 兼容链（HassiumAggregationManager / ZstdPipelineSwitcher）。
 
 ```
 客户端 world 侧（纯原版协议）── 网络核心（网关）── 帧连接 ── 主控核心（GatewayServer）

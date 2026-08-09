@@ -2,7 +2,7 @@
 
 本文档是 **chunkHash 元数据推送 + 客户端缓存命中** 流水线的唯一真相源。存储文件格式见 [`architecture.md`](architecture.md)。
 
-功能域归属：客户端侧缓存 / 影子端链路属**区块核心**（客户端进程内区块域，影子端 = 其后端引擎），网络传输经**网络核心**（客户端进程内网关）outbound 承载；服务端推送侧属**主控核心**。配置键 `clientCache.*` 为区块核心配置族，键名保留。
+功能域归属：客户端侧缓存 / 影子端链路属**区块核心**（客户端进程内区块域，影子端 = 其后端引擎），网络传输经**网络核心**（客户端进程内网关）outbound 承载；服务端推送侧属**主控核心**。配置键 `chunk.*` 为区块核心配置族（2026-08-09 config-restructure：原 `clientCache.*` 重排为 `chunk.*`）。
 
 **相关专文（细节不在此重复）：**
 
@@ -59,7 +59,7 @@ pushPool: computeSectionHashes → combine → chunkHash
 enqueueDataRequest（距离优先）
         ▼
 onServerTick（真实 server tick 限流）:
-  主线程: 优先 take 缓存包字节，否则 getChunk + serialize ≤ maxChunksPerTick
+  主线程: 优先 take 缓存包字节，否则 getChunk + serialize ≤ master.maxChunksPerTick
   pushPool: ZSTD + ChunkPayloadS2C
 ```
 
@@ -108,7 +108,7 @@ SectionHashRequestC2SPacket  // 客户端 → 服务端（本地 section hashes�
 SectionDeltaS2CPacket        // 服务端 → 客户端（变更 sections + heightmaps + BE）
 ```
 
-门控：`clientCache.sectionDeltaEnabled`（默认 `true`；需同时 `clientCache.enabled`）。
+门控：`chunk.sectionDeltaEnabled`（默认 `true`；需同时 `chunk.enabled`）。
 
 | 比对结果 | 开关关 | 开关开（默认） |
 |----------|--------|----------------|
@@ -151,13 +151,13 @@ SectionDeltaS2CPacket        // 服务端 → 客户端（变更 sections + heig
 
 主控故障或负载触发时的恢复由**网络核心内部 L1 迁移引擎**完成（旧候选重连 / 世界定格语义已退役），对客户端原版 `Connection` 与区块核心（缓存 / 影子端）全程无感：
 
-1. **触发**：故障 = outbound 入站静默超时（`MigrationPolicy.faultTimeoutMs`，沿用 `network.dataPlane.recoveryWindowMs` 键语义）；策略 = 主控负载上报（TPS / 负载均值 / 维护窗口阈值）
+1. **触发**：故障 = outbound 入站静默超时（`MigrationPolicy.faultTimeoutMs`，沿用 `master.migrationFaultTimeoutMs` 键语义）；策略 = 主控负载上报（TPS / 负载均值 / 维护窗口阈值）
 2. **换 outbound**：`NetworkCore` ACTIVE → MIGRATING → 关闭旧 outbound → 连接新主控，握手携带 `ResumeTicket` 续流票据（玩家 UUID + 递增 epoch + 共享密钥 HMAC 签名）
 3. **续流**：主控验签通过且 epoch 递增（`ResumeTicketValidator`，防重放）→ S2C 尾 `resumeAccepted=true` → 复用既有推送链（UUID-keyed 会话表，`resyncTrackedChunks`），迁移后的 `ChunkHashS2C` 继续按正常 HIT/MISS/MISMATCH 分支处理；`resumeAccepted=false`（票据无效 / 重放）→ 会话未附着，数据推送不流入，走登录桥 / 重连兜底
 4. **客户端 `Connection` 不断**：无定格、无候选重连窗口，迁移期间既有缓存照常命中，断连清理不触发
 5. **终态清理只在迁移失败回退时**：迁移端点候选耗尽 / 重试超限 → 回退为真正断连（outbound 关 → IDLE → 断连清理链），影子端 `saveAll` 落盘与资源终态清理此时才执行一次
 
-UDP/KCP 的拓扑、地址配置见 [`architecture.md`](architecture.md) §9 尾段（`controlReachableEndpoints` / `udpListeners`）与 §12.6；运行时冒烟见 [`runtime-smoke-test.md`](runtime-smoke-test.md#网关双主控迁移冒烟t7)。
+UDP/KCP 的拓扑、地址配置见 [`architecture.md`](architecture.md) §9 尾段（`master.controlReachableEndpoints` / `udpListeners`）与 §12.6；运行时冒烟见 [`runtime-smoke-test.md`](runtime-smoke-test.md#网关双主控迁移冒烟t7)。
 
 ## 10. 超视渲染（renderOnly）
 
@@ -167,7 +167,7 @@ UDP/KCP 的拓扑、地址配置见 [`architecture.md`](architecture.md) §9 尾
 
 ### 10.2 解锁渲染距离
 
-`MixinOptions` 注入 `Options#getEffectiveRenderDistance`（HEAD cancellable）：当 `clientCache.enabled && viewDistanceExtensionEnabled && 多人游戏` 时返回客户端滑块值，绕过原版 `serverRenderDistance` 钳制。ViewArea 随之扩大（原版自动）。单人游戏不启用。
+`MixinOptions` 注入 `Options#getEffectiveRenderDistance`（HEAD cancellable）：当 `chunk.enabled && viewDistanceExtensionEnabled && 多人游戏` 时返回客户端滑块值，绕过原版 `serverRenderDistance` 钳制。ViewArea 随之扩大（原版自动）。单人游戏不启用。
 
 `serverRenderDistance` 经 `OptionsAccessor`（Mixin `@Accessor`）从 Options private 字段读取；未登录时 fallback `simulationDistance`。
 
@@ -409,7 +409,7 @@ hassium_exports/server_192.168.1.100_25565/
 
 ### 13.1 背景：永久虚空根因
 
-服务端数据队列（`ServerChunkPushManager.enqueueDataRequest`）在 drain 时对已出视距的任务**静默丢弃**：飞行中队列积压（`maxChunksPerTick` 默认 5）时，轮到处理时玩家已前移，任务被丢弃；客户端请求无超时重试，且静止后不再触发新的 `trackChunk`（块已在视距内），→ 前方 30° 扇形虚空永久存在。方向加权（`FORWARD_BIAS`）只改变优先级，堵不住丢弃漏洞。
+服务端数据队列（`ServerChunkPushManager.enqueueDataRequest`）在 drain 时对已出视距的任务**静默丢弃**：飞行中队列积压（`master.maxChunksPerTick` 默认 5）时，轮到处理时玩家已前移，任务被丢弃；客户端请求无超时重试，且静止后不再触发新的 `trackChunk`（块已在视距内），→ 前方 30° 扇形虚空永久存在。方向加权（`FORWARD_BIAS`）只改变优先级，堵不住丢弃漏洞。
 
 ### 13.2 机制
 

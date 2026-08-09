@@ -45,14 +45,14 @@ Toggle the relevant category only; the hot path is quiet by default and enabling
 | Symptom | Likely cause | Action |
 | --- | --- | --- |
 | Joins are slower, not faster | Client cache is full or disk is slow | `/hassiumc stats` for hit ratio; check `hassium_cache` size and disk IO |
-| Far chunks flicker | Beyond-view render handoff with real chunks | Disable `clientCache.viewDistanceExtensionEnabled` to validate; upgrade to a recent version |
-| Light glitches | `clientCache.hassiumEngineEnabled` clash with Sodium | Disable `clientCache.hassiumEngineEnabled` (the server then stops stripping light) |
+| Far chunks flicker | Beyond-view render handoff with real chunks | Disable `chunk.viewDistanceExtensionEnabled` to validate; upgrade to a recent version |
+| Light glitches | `chunk.hassiumEngineEnabled` clash with Sodium | Disable `chunk.hassiumEngineEnabled` (the server then stops stripping light) |
 | Client logs show refmap WARN | Normal in Loom dev environments | Ignore; released jars do not replay this |
 | Server rejects clients | `compat.requireClientMod = true` and clients do not have the mod | Install Hassium on the client; or set `requireClientMod = false` |
 | Saves fail to load | Type 126 left behind after uninstall/downgrade | Reinstall the matching MC version of Hassium |
-| Third-party packets break under aggregation | Aggregation interferes | Disable `network.enablePacketAggregation`, or use `network.compressionBlacklist` |
+| Third-party packets break under aggregation | Aggregation interferes | Disable `master.enablePacketAggregation`, or use `master.compressionBlacklist` |
 | Fog extends too far, far chunks pop in | RD > 32 with Fog Mixin not implemented | Keep RD ≤ 32 |
-| In-process Via bridge misbehaves | `globalPacketCompression` vs compression frame assumptions | Disable `network.globalPacketCompression` |
+| In-process Via bridge misbehaves | `master.globalPacketCompression` vs compression frame assumptions | Disable `master.globalPacketCompression` |
 
 ---
 
@@ -60,10 +60,10 @@ Toggle the relevant category only; the hot path is quiet by default and enabling
 
 | Symptom | Likely cause | Action |
 | --- | --- | --- |
-| Client drops straight away on master failure, no migration | Gateway listener not ready / migration window too short | Confirm the master gateway port is reachable (`network.controlReachableEndpoints[0]`, falls back to `25566`); raise `network.dataPlane.recoveryWindowMs` (default `60000`, fault-silence timeout) as needed |
+| Client drops straight away on master failure, no migration | Gateway listener not ready / migration window too short | Confirm the master gateway port is reachable (`master.controlReachableEndpoints[0]`, falls back to `25566`); raise `master.migrationFaultTimeoutMs` (default `60000`, fault-silence timeout) as needed |
 | Terrain re-downloads heavily after migration (resume refused) | Shadow-side save inconsistent with the master / cache directory broken | Check the `hassium_cache` entry and disk space; some MISS right after migration is normal, but if re-downloads persist, delete that server's cache directory and rejoin (below) |
-| UDP data plane configured but no UDP traffic | `network.dataPlane.enabled` is off by default | Enable it explicitly; while off, all traffic goes through the gateway frame connection (TCP control channel) |
-| Gateway port already in use | Conflict with another service | Point `network.controlReachableEndpoints` at another port (fallback is `25566`) |
+| UDP data plane configured but no UDP traffic | `dataplane.enabled` is off by default | Enable it explicitly; while off, all traffic goes through the gateway frame connection (TCP control channel) |
+| Gateway port already in use | Conflict with another service | Point `master.controlReachableEndpoints` at another port (fallback is `25566`) |
 
 See [Network Core and Master Migration](Network-Core-and-Master-Migration-en).
 

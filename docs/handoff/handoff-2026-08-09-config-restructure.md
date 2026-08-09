@@ -15,6 +15,14 @@
 2. **删键**：`network.dataPlane.recoveryFreeze`、`network.dataPlane.controlStallMs`、`network.dataPlane.failoverExpiryMs`、`storage.mode`（固定内部 mirror 字段）
 3. **注释 7 处 + 客户端配置 UI 描述（cloth-config，lang `hassium.configuration.*` zh/en）本次修**
 
+### 二轮调研补充决策（2026-08-09，本会话拍板，勿再问）
+
+4. **键前缀定稿**：`chunk.*`（区块核心）/ `net.*`（网络核心）/ `master.*`（主控核心）/ `dataplane.*`（数据面）；`storage.*`/`compat.*`/`debug.*` 保留
+5. **UI 重分 4 类（能力词）**：区块缓存（Chunk Cache，11 项）/ 渲染与生成（Rendering & Generation，10 项）/ 网络与连接（Network & Connection，3 项）/ 调试（Debug，9 项）；旧 `category.cache/render` 废弃；网络键归位
+6. **UI 描述用户化**：显示名+tooltip 双用户化，内部术语（chunkHash/SeedRef/pristine/renderOnly/ZSTD/heat）仅括号注明；tooltip 含效果+默认值；修默认值错误 3 处（storage.enabled→false、network.metricsEnabled→false、network.maxChunksPerTick→5）
+7. **lang 清理**：删无消费残留 key（category.clientNetwork/storageAndGeneral/compression/compatAndDebug、section.hassium.hassium.*×4、*.button×6、纯分组 key×6）
+8. **domain-naming.md 同步**：「配置键族保留」表述改为键族已重排（T3 附做）
+
 ## 预研关键事实（代码出处已在 REQ「预研依据」，执行前可复验）
 
 - ConfigSchema 75 键（CLIENT 34 / SERVER 41）；HassiumConfig 嵌套 record 即消费层分类
@@ -51,3 +59,5 @@
 3. 全仓旧键名 grep 零残留（历史语境注明可留）；中英双语同步（wiki/README/lang）
 4. 编译必须通过（common + fabric + forge + neoforge）；配置加载 round-trip 有证据
 5. 术语按 `.omp/workflows/docs-2.0/work/domain-naming.md`（三核心 + 支撑域；卖点语境用能力词「区块缓存」）
+6. UI 必须 4 类分组且键归位（网络键不得挂区块缓存/渲染类）；lang 无无消费 key、默认值描述与 schema 一致
+7. `.omp/workflows/docs-2.0/work/domain-naming.md` 配置键族表述须同步（不再称"键名不变"）

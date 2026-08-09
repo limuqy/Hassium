@@ -14,9 +14,9 @@ Hassium 与常见优化 mod 的兼容性概览与配置逃生口。每条结论�
 | --- | --- | --- |
 | **Bobby / 同类客户端视距外缓存** | ❌ **不兼容** | Hassium 内置超视渲染；同装会冲突 |
 | **Immersive Portals** | ❌ **不兼容** | |
-| **同类压缩 / 协议替换（改 Netty Zlib 等）** | ❌ **不兼容** | 与 `network.globalPacketCompression` 冲突 |
+| **同类压缩 / 协议替换（改 Netty Zlib 等）** | ❌ **不兼容** | 与 `master.globalPacketCompression` 冲突 |
 | **Starlight** | — **不考虑** | 已并入原版光照 |
-| **包聚合导致第三方包异常** | ⚠️ 关聚合或加黑名单 | `network.enablePacketAggregation = false` 或 `network.compressionBlacklist` |
+| **包聚合导致第三方包异常** | ⚠️ 关聚合或加黑名单 | `master.enablePacketAggregation = false` 或 `master.compressionBlacklist` |
 | **反透视（改即将发送的区块包）** | ✅ 希望兼容 | miss 路径复用已构建包字节；若只在 `Connection.send` 上改写且发生在 Hassium 取消之后可能旁路 |
 | **Distant Horizons / Voxy** | ✅ 希望兼容 | 独立 LOD 通道；聚合误伤同上处理 |
 | **ViaVersion** | ⚠️ 有条件 | 见下表 |
@@ -35,7 +35,7 @@ Hassium 与常见优化 mod 的兼容性概览与配置逃生口。每条结论�
 | 服务端 Hassium + Via，客户端**无** Hassium | 支持：未装模组的客户端走原版协议，Via 翻译原版协议 |
 | 双端都装 Hassium 但 MC 版本不同（靠 Via 桥） | ❌ 不支持（线格式随 `MC_VER` 绑定） |
 
-> 同进程 Via 与 `globalPacketCompression` 叠用可能干扰压缩帧假设。建议同进程 Via 时关闭全局压缩。
+> 同进程 Via 与 `master.globalPacketCompression` 叠用可能干扰压缩帧假设。建议同进程 Via 时关闭全局压缩。
 
 ---
 
@@ -44,13 +44,13 @@ Hassium 与常见优化 mod 的兼容性概览与配置逃生口。每条结论�
 | 想要的效果 | 改动 |
 | --- | --- |
 | 关闭存储压缩、保留网络优化 | `storage.enabled = false` |
-| 关闭自定义通道与推送 | `network.enabled = false` |
-| 关闭全局 ZSTD（与同类协议替换共存） | `network.globalPacketCompression = false` |
-| 关闭包聚合 | `network.enablePacketAggregation = false` |
-| 排除第三方包不进压缩/聚合 | `network.compressionBlacklist` |
-| 关闭 Hassium 引擎（服务端不剥光，光照随包自带） | `clientCache.hassiumEngineEnabled = false` |
-| 关闭分段增量（过期走全量） | `clientCache.sectionDeltaEnabled = false` |
-| 关闭超视渲染恢复原版 RD 钳制 | `clientCache.viewDistanceExtensionEnabled = false` |
+| 关闭自定义通道与推送 | `master.enabled = false` |
+| 关闭全局 ZSTD（与同类协议替换共存） | `master.globalPacketCompression = false` |
+| 关闭包聚合 | `master.enablePacketAggregation = false` |
+| 排除第三方包不进压缩/聚合 | `master.compressionBlacklist` |
+| 关闭 Hassium 引擎（服务端不剥光，光照随包自带） | `chunk.hassiumEngineEnabled = false` |
+| 关闭分段增量（过期走全量） | `chunk.sectionDeltaEnabled = false` |
+| 关闭超视渲染恢复原版 RD 钳制 | `chunk.viewDistanceExtensionEnabled = false` |
 | 强制客户端装模组 | `compat.requireClientMod = true` |
 
 ---

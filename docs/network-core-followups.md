@@ -22,7 +22,7 @@
 | # | 项 | 现状 | 建议 |
 |---|---|---|---|
 | B1 | 端点通告 | targets 目前编程注入 | 走 CONFIG 帧通告端点池 |
-| B2 | 参数全链接线 | MigrationPolicy 默认值 + setter 齐备，未接配置 | 接 ConfigSchema（策略/心跳/空闲参数，故障超时复用 recoveryWindowMs） |
+| B2 | 参数全链接线 | MigrationPolicy 默认值 + setter 齐备，未接配置 | 接 ConfigSchema（策略/心跳/空闲参数，故障超时复用 master.migrationFaultTimeoutMs） |
 | B3 | 预热会话 TTL | B 侧预热会话无清理 | 加 TTL 清理 |
 | B4 | 迁移命令注册 | 无平台命令入口 | 注册 `/hassium migrate` 类命令（演练触发） |
 | B5 | UDP 数据面迁移 | udpTail 固定 `udpSupported=false`（帧连接即控制连接，beginControlConnection 未走） | UDP 会话迁移归后续波，先文档化决策 |

@@ -12,7 +12,7 @@ Beyond-view render lets a multiplayer client with render distance (RD) greater t
 
 - **Multiplayer only** — `MixinOptions` and `ViewDistanceExtensionService` both check `mc.getSingleplayerServer() != null`; singleplayer is skipped
 - Client RD greater than the server `view-distance`
-- Both `clientCache.enabled` and `clientCache.viewDistanceExtensionEnabled` enabled (both default true)
+- Both `chunk.enabled` and `chunk.viewDistanceExtensionEnabled` enabled (both default true)
 - **Incompatible with Bobby** — Hassium ships its own beyond-view renderer; do not run Bobby alongside
 
 ---
@@ -34,7 +34,7 @@ flowchart TD
     real -.-> apply
 ```
 
-- Ring size depends on the gap between client RD and server view distance; lower `clientCache.maxRenderDistance` to limit resource use
+- Ring size depends on the gap between client RD and server view distance; lower `chunk.maxRenderDistance` to limit resource use
 - Engages only when `clientVD > serverVD`; on `clientVD ≤ serverVD` it auto-clears and reverts to vanilla
 - Toggling `viewDistanceExtensionEnabled = false` clears and reverts to the vanilla RD clamp
 
@@ -44,9 +44,9 @@ flowchart TD
 
 | Key | Default | Notes |
 | --- | --- | --- |
-| `clientCache.viewDistanceExtensionEnabled` | `true` | Master switch |
-| `clientCache.maxRenderDistance` | `16` | Beyond-view ring and effective RD cap (range 2–64) |
-| `clientCache.ovdUnloadDelaySecs` | `5` | Seconds of delayed unload after leaving the ring (0 = sync) |
+| `chunk.viewDistanceExtensionEnabled` | `true` | Master switch |
+| `chunk.maxRenderDistance` | `16` | Beyond-view ring and effective RD cap (range 2–64) |
+| `chunk.ovdUnloadDelaySecs` | `5` | Seconds of delayed unload after leaving the ring (0 = sync) |
 
 ---
 
@@ -84,7 +84,7 @@ Ring size grows with the gap between client RD and server view distance. Hassium
 ## Debugging
 
 - In F3: beyond-view chunks should be visible; no large out-of-range `ChunkDataRequestC2S` / `BlockEntityRequestC2S` traffic
-- Disable `clientCache.viewDistanceExtensionEnabled` to verify the vanilla clamp returns
+- Disable `chunk.viewDistanceExtensionEnabled` to verify the vanilla clamp returns
 - Client logs: enable `debug.cacheLogging` and `debug.chunkApplyLogging`
 - See [Troubleshooting](Troubleshooting-en)
 

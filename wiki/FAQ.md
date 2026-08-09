@@ -32,11 +32,11 @@ A: 默认可以。`compat.requireClientMod = false`（默认）时未装模组�
 
 ### Q: 我装了同类压缩 mod，能和 Hassium 共存吗？
 
-A: 不行。与 `network.globalPacketCompression` 冲突。逃生口：`network.globalPacketCompression = false` 或 `network.enabled = false`（仅享受客户端缓存）。
+A: 不行。与 `master.globalPacketCompression` 冲突。逃生口：`master.globalPacketCompression = false` 或 `master.enabled = false`（仅享受客户端缓存）。
 
 ### Q: 第三方 mod 的包被 Hassium 聚合后报错？
 
-A: 逃生：(1) `network.enablePacketAggregation = false`，或 (2) 把该包 ID 加进 `network.compressionBlacklist`。
+A: 逃生：(1) `master.enablePacketAggregation = false`，或 (2) 把该包 ID 加进 `master.compressionBlacklist`。
 
 ---
 
@@ -56,7 +56,7 @@ A: 这是已知限制。Fog Mixin 跨 9 段版本签名差异大未实现；RD >
 
 ### Q: 超视渲染环带内存占用大吗？
 
-A: 环带规模由客户端 RD 与服务端视距之差决定；可通过降低 `clientCache.maxRenderDistance` 或关闭 `clientCache.viewDistanceExtensionEnabled` 限制资源占用。超视渲染复用现有缓存淘汰机制，不新增专用内存池。
+A: 环带规模由客户端 RD 与服务端视距之差决定；可通过降低 `chunk.maxRenderDistance` 或关闭 `chunk.viewDistanceExtensionEnabled` 限制资源占用。超视渲染复用现有缓存淘汰机制，不新增专用内存池。
 
 ---
 
@@ -64,11 +64,11 @@ A: 环带规模由客户端 RD 与服务端视距之差决定；可通过降低 
 
 ### Q: 客户端必须装 Hassium 才能经网关接入吗？UDP 数据面默认开吗？
 
-A: 客户端经进程内网关（网络核心）接入主控核心是 2.0.0 的默认接入路径；UDP 数据面（网关↔主控通道的 bulk 载体）默认关（`network.dataPlane.enabled = false`），仅在需要数据线路时开启。详见 [网络核心与主控迁移](Network-Core-and-Master-Migration)。
+A: 客户端经进程内网关（网络核心）接入主控核心是 2.0.0 的默认接入路径；UDP 数据面（网关↔主控通道的 bulk 载体）默认关（`dataplane.enabled = false`），仅在需要数据线路时开启。详见 [网络核心与主控迁移](Network-Core-and-Master-Migration)。
 
 ### Q: 主控断线/卡顿时会掉线吗？
 
-A: 不会立即掉线。L1 迁移引擎按 `network.dataPlane.recoveryWindowMs`（默认 `60000`，故障静默超时）判定后无感迁移：磁盘缓存、保存队列全保留，新会话直接续上，不弹「连接丢失」；主控无法恢复时才真正断连。UDP 数据面开启且健康时迁移更平滑。
+A: 不会立即掉线。L1 迁移引擎按 `master.migrationFaultTimeoutMs`（默认 `60000`，故障静默超时）判定后无感迁移：磁盘缓存、保存队列全保留，新会话直接续上，不弹「连接丢失」；主控无法恢复时才真正断连。UDP 数据面开启且健康时迁移更平滑。
 
 ---
 

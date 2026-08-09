@@ -49,10 +49,10 @@ Full instructions: [Installation](https://github.com/limuqy/Hassium/wiki/Install
 | --- | --- | --- |
 | **Efficient compression** | Storage compression | World chunk ZSTD on disk (type 126) for smaller saves; keeps vanilla Region (`.mca`) layout |
 | | Network compression | More efficient compression for chunks and packets (custom channels + global pipeline + packet aggregation) — less bandwidth and wait time |
-| **Network optimization** | Smooth push | Per-player per-tick submit cap (`maxChunksPerTick`, ≈ cap×20/s at full tick) + main-thread serialization cap with background encoding; join and view expansion never saturate the main thread |
+| **Network optimization** | Smooth push | Per-player per-tick submit cap (`master.maxChunksPerTick`, ≈ cap×20/s at full tick) + main-thread serialization cap with background encoding; join and view expansion never saturate the main thread |
 | | In-process gateway | Client-side in-process gateway (Network Core): vanilla client ↔ Network Core ↔ Master Core private channel; PLAY-phase traffic is routed through the gateway, the shell connection stays keep-alive only |
-| | Seamless migration / L1 load balancing | On master-core silent-failure timeout (`network.dataPlane.recoveryWindowMs`), the L1 migration engine switches the gateway with a warm cache — seamless migration; multiple gateways balanced via L1 load balancing |
-| | UDP data plane | UDP/KCP bulk carrier for the gateway ↔ master-core channel (`network.dataPlane.enabled`, off by default; control plane stays on vanilla TCP) |
+| | Seamless migration / L1 load balancing | On master-core silent-failure timeout (`master.migrationFaultTimeoutMs`), the L1 migration engine switches the gateway with a warm cache — seamless migration; multiple gateways balanced via L1 load balancing |
+| | UDP data plane | UDP/KCP bulk carrier for the gateway ↔ master-core channel (`dataplane.enabled`, off by default; control plane stays on vanilla TCP) |
 | **Chunk cache** | Shadow world save | Every chunk you visit is saved by the shadow engine (full MinecraftServer) into a vanilla-format save (`hassium_cache/<serverId>/world`, type 126 + chunkHash); saved on disconnect, reused on reconnect |
 | | Section delta | On cache mismatch (MISMATCH), fetch only changed sections (`sectionDelta`) and merge locally instead of the whole chunk |
 | | **Beyond-view render** | When client RD exceeds server view distance (multiplayer), fill the outer ring from local cache (render-only; no out-of-range server requests); incompatible with Bobby |
@@ -110,10 +110,10 @@ Complete matrix: [Support Matrix](https://github.com/limuqy/Hassium/wiki/Support
 | --- | --- | --- |
 | **高效压缩** | 存储压缩 | 世界区块 ZSTD 落盘（type 126），存档体积显著减小；仍兼容原版 Region（`.mca`）布局 |
 | | 网络压缩 | 区块与数据包 ZSTD 传输（自定义通道 + 全局管道 + 包聚合），降低带宽与下载等待 |
-| **网络优化** | 平滑推送 | 服务端每 tick 提交上限限速（`maxChunksPerTick`，满 tick ≈ 值×20/s）+ 主线程序列化上限与后台化；进服/扩展视野不卡主线程 |
+| **网络优化** | 平滑推送 | 服务端每 tick 提交上限限速（`master.maxChunksPerTick`，满 tick ≈ 值×20/s）+ 主线程序列化上限与后台化；进服/扩展视野不卡主线程 |
 | | 进程内网关 | 客户端进程内网关（网络核心）：原版客户端 ↔ 网络核心 ↔ 主控核心自有通道；PLAY 期数据经网关路由，壳连接仅保活 |
-| | 无感迁移 / L1 负载均衡 | 主控故障静默超时（`network.dataPlane.recoveryWindowMs`）后由 L1 迁移引擎切换网关、缓存暖续，无感迁移；多网关按 L1 负载均衡 |
-| | UDP 数据面 | 网关↔主控通道的 UDP/KCP bulk 载体（`network.dataPlane.enabled`，默认关；控制面留原版 TCP） |
+| | 无感迁移 / L1 负载均衡 | 主控故障静默超时（`master.migrationFaultTimeoutMs`）后由 L1 迁移引擎切换网关、缓存暖续，无感迁移；多网关按 L1 负载均衡 |
+| | UDP 数据面 | 网关↔主控通道的 UDP/KCP bulk 载体（`dataplane.enabled`，默认关；控制面留原版 TCP） |
 | **区块缓存** | 影子端世界保存 | 进服区块统一由影子端（完整 MinecraftServer）落盘原版存档（`hassium_cache/<serverId>/world`），断连保存、重连复用 |
 | | 分段增量 | 缓存过期（MISMATCH）时仅拉取变更分段（`sectionDelta`）本地合并，避免整块重传 |
 | | **超视渲染** | 多人服客户端 RD 大于服务端视距时，用本地缓存回填视距外地形（仅渲染、不向服索要视距外区块）；与 Bobby 互斥 |

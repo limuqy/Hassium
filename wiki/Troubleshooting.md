@@ -45,14 +45,14 @@
 | 症状 | 可能原因 | 处理 |
 | --- | --- | --- |
 | 进服卡顿更严重了 | 客户端缓存目录满或硬盘慢 | `/hassiumc stats` 看缓存命中；检查 `hassium_cache` 目录大小与磁盘 IO |
-| 区块在远处闪烁 | 超视渲染与真实区块交接异常 | 关 `clientCache.viewDistanceExtensionEnabled` 验证；升级到近期版本 |
-| 光照异常 | `clientCache.hassiumEngineEnabled` 与 Sodium 兼容问题 | 关 `clientCache.hassiumEngineEnabled`（服务端不再剥光，光照随包自带） |
+| 区块在远处闪烁 | 超视渲染与真实区块交接异常 | 关 `chunk.viewDistanceExtensionEnabled` 验证；升级到近期版本 |
+| 光照异常 | `chunk.hassiumEngineEnabled` 与 Sodium 兼容问题 | 关 `chunk.hassiumEngineEnabled`（服务端不再剥光，光照随包自带） |
 | 客户端启动报 refmap WARN | Loom 开发环境常态 | 忽略；正式 jar 不复现 |
 | 服务端连接被踢 | `compat.requireClientMod = true` 且客户端未装 | 客户端装 Hassium；或服务端 `requireClientMod = false` |
 | 存档读不出来 | 卸载/降级 Hassium 后残留 type 126 | 重新安装与存档兼容的 Hassium 版本 |
-| 聚合把第三方包搞坏 | 包聚合误伤 | 关 `network.enablePacketAggregation` 或加 `network.compressionBlacklist` |
+| 聚合把第三方包搞坏 | 包聚合误伤 | 关 `master.enablePacketAggregation` 或加 `master.compressionBlacklist` |
 | 雾距过大、远端区块穿帮 | RD > 32 且 Fog Mixin 未实现 | 保持 RD ≤ 32 |
-| 同进程 Via 桥出错 | `globalPacketCompression` 与压缩帧假设冲突 | 关 `network.globalPacketCompression` |
+| 同进程 Via 桥出错 | `master.globalPacketCompression` 与压缩帧假设冲突 | 关 `master.globalPacketCompression` |
 
 ---
 
@@ -60,10 +60,10 @@
 
 | 症状 | 可能原因 | 处理 |
 | --- | --- | --- |
-| 主控故障后客户端直接掉线、无迁移 | 网关监听未就绪 / 迁移判定窗口过短 | 确认主控网关端口可达（`network.controlReachableEndpoints[0]`，未配置时兜底 `25566`）；按需调大 `network.dataPlane.recoveryWindowMs`（默认 `60000`，故障静默超时） |
+| 主控故障后客户端直接掉线、无迁移 | 网关监听未就绪 / 迁移判定窗口过短 | 确认主控网关端口可达（`master.controlReachableEndpoints[0]`，未配置时兜底 `25566`）；按需调大 `master.migrationFaultTimeoutMs`（默认 `60000`，故障静默超时） |
 | 迁移后地形大量重下（续流被拒） | 影子端存档与主控不一致 / 缓存目录异常 | 检查 `hassium_cache` 对应目录与磁盘空间；迁移后首次加载出现部分 MISS 属正常，持续重下则删除该服务器缓存目录重进（见下） |
-| 配置了 UDP 数据面但未见 UDP 流量 | `network.dataPlane.enabled` 默认关 | 需显式开启；关闭时全部流量走网关帧连接（TCP 控制通道） |
-| 网关端口被占用 | 与其它服务冲突 | 通过 `network.controlReachableEndpoints` 指定其它端口（兜底 `25566`） |
+| 配置了 UDP 数据面但未见 UDP 流量 | `dataplane.enabled` 默认关 | 需显式开启；关闭时全部流量走网关帧连接（TCP 控制通道） |
+| 网关端口被占用 | 与其它服务冲突 | 通过 `master.controlReachableEndpoints` 指定其它端口（兜底 `25566`） |
 
 详见 [网络核心与主控迁移](Network-Core-and-Master-Migration)。
 

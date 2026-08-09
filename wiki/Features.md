@@ -24,9 +24,9 @@ Hassium 用一套客户端 + 服务端配合，从**高效压缩、网络优化�
 - **目标**：进服与跑图时下载等待更短、带宽占用更低
 - **怎么做的**：
   - 自定义 `hassium:*` 通道用 ZSTD 传区块等数据
-  - 可选全局管道 ZSTD 替换原版 Zlib（`globalPacketCompression`）
+  - 可选全局管道 ZSTD 替换原版 Zlib（`master.globalPacketCompression`）
   - 聚合 + 紧凑包头 + 上下文压缩提升压缩比
-- **配置**：`network.enabled`、`network.globalPacketCompression`、`network.compressionLevel`、`network.enablePacketAggregation`
+- **配置**：`master.enabled`、`master.globalPacketCompression`、`master.compressionLevel`、`master.enablePacketAggregation`
 
 ---
 
@@ -36,10 +36,10 @@ Hassium 用一套客户端 + 服务端配合，从**高效压缩、网络优化�
 
 - **目标**：进服与视野扩展时服务端不把主线程压满、客户端不出现卡顿尖峰
 - **服务端怎么做**（推送侧）：
-  - **tick 粒度限速**：`network.maxChunksPerTick`（默认 `5`）限制每玩家每 tick 提交上限（5×20 = 100/s 满 tick）；掉刻时每 tick 提交量不变、每秒总量自然下降，即保护主线程，主线程峰值 ≤ ~8ms/tick
-  - **序列化后台化**：encode / ZSTD 压缩 / hash 计算 / 发送全部在推送线程池（`serverChunkPushThreads` 默认 2，可动态伸缩）；主线程只做 packet 构建——与原版对齐（原版也是主线程构建 + netty 线程编码），1.20.x/1.21.1 甚至整条序列化链都在后台
+  - **tick 粒度限速**：`master.maxChunksPerTick`（默认 `5`）限制每玩家每 tick 提交上限（5×20 = 100/s 满 tick）；掉刻时每 tick 提交量不变、每秒总量自然下降，即保护主线程，主线程峰值 ≤ ~8ms/tick
+  - **序列化后台化**：encode / ZSTD 压缩 / hash 计算 / 发送全部在推送线程池（`master.serverChunkPushThreads` 默认 2，可动态伸缩）；主线程只做 packet 构建——与原版对齐（原版也是主线程构建 + netty 线程编码），1.20.x/1.21.1 甚至整条序列化链都在后台
 - **客户端怎么做**（加载侧）：
-  - 每帧主线程 apply 预算 `clientCache.mainThreadChunkBudgetMs`（默认 `15`）
+  - 每帧主线程 apply 预算 `chunk.mainThreadChunkBudgetMs`（默认 `15`）
   - 进服约 10 秒走 JoinBoost 临时抬高预算，再线性退坡到默认
 - **指标**：`/hassium stats` 与 `/hassiumc stats` 看吞吐与缓存
 
@@ -48,9 +48,9 @@ Hassium 用一套客户端 + 服务端配合，从**高效压缩、网络优化�
 ### 进程内网关与无感迁移
 
 - **目标**：客户端经进程内网关（网络核心）接入主控核心；主控断线或卡顿时无感迁移，缓存续流、断连界面隐藏，玩家全程看不到切换
-- **怎么做的**：客户端进程内网络核心（`network/core/`：NetworkCore 状态机 / outbound 帧协议 / migration 迁移引擎 / viafabric 桥）经网关帧协议连接主控核心（`network/gateway/`，GatewayServer）；主控故障由 L1 迁移引擎按 `network.dataPlane.recoveryWindowMs`（默认 `60000`，故障静默超时）判定后直接迁移——磁盘缓存、保存队列、任务执行器全保留，新会话直接续上，命中率不掉、地形不需重下，不弹「连接丢失」
-- **UDP 数据面**：网关↔主控通道的 bulk 载体（UDP/KCP，AES-GCM 双向认证），默认关（`network.dataPlane.enabled = false`）；关闭时全部流量走网关帧连接
-- **配置**：`network.dataPlane.enabled`（默认 `false`）、`network.dataPlane.recoveryWindowMs`（默认 `60000`）、`network.controlReachableEndpoints`（主控网关监听端点；未配置时兜底 `25566`）
+- **怎么做的**：客户端进程内网络核心（`network/core/`：NetworkCore 状态机 / outbound 帧协议 / migration 迁移引擎 / viafabric 桥）经网关帧协议连接主控核心（`network/gateway/`，GatewayServer）；主控故障由 L1 迁移引擎按 `master.migrationFaultTimeoutMs`（默认 `60000`，故障静默超时）判定后直接迁移——磁盘缓存、保存队列、任务执行器全保留，新会话直接续上，命中率不掉、地形不需重下，不弹「连接丢失」
+- **UDP 数据面**：网关↔主控通道的 bulk 载体（UDP/KCP，AES-GCM 双向认证），默认关（`dataplane.enabled = false`）；关闭时全部流量走网关帧连接
+- **配置**：`dataplane.enabled`（默认 `false`）、`master.migrationFaultTimeoutMs`（默认 `60000`）、`master.controlReachableEndpoints`（主控网关监听端点；未配置时兜底 `25566`）
 - **专文**：[网络核心与主控迁移](Network-Core-and-Master-Migration)
 
 ---
@@ -58,9 +58,9 @@ Hassium 用一套客户端 + 服务端配合，从**高效压缩、网络优化�
 ### L1 负载均衡
 
 - **目标**：高人数服区块下行的带宽瓶颈，用多线路分担
-- **怎么做的**：主控核心监听控制可达端点；UDP 数据面可配置多个 UDP listener（`network.dataPlane.udpListeners`），按 `weight` 加权轮询承载区块下行。一条线路打满或降级时流量自动压到其余线路；登录、命令、实体同步等“控制类”流量仍走网关帧连接，不受数据线路波动影响
-- **默认**：关闭（与数据面同开关 `network.dataPlane.enabled = false`）。需按线路配公网 UDP 端点
-- **配置**：`network.dataPlane.udpListeners`（weight 默认 `100`）
+- **怎么做的**：主控核心监听控制可达端点；UDP 数据面可配置多个 UDP listener（`dataplane.udpListeners`），按 `weight` 加权轮询承载区块下行。一条线路打满或降级时流量自动压到其余线路；登录、命令、实体同步等“控制类”流量仍走网关帧连接，不受数据线路波动影响
+- **默认**：关闭（与数据面同开关 `dataplane.enabled = false`）。需按线路配公网 UDP 端点
+- **配置**：`dataplane.udpListeners`（weight 默认 `100`）
 - **专文**：[网络核心与主控迁移](Network-Core-and-Master-Migration)
 
 ---
@@ -71,7 +71,7 @@ Hassium 用一套客户端 + 服务端配合，从**高效压缩、网络优化�
 
 - **目标**：再次进入同一区域少传全量区块
 - **怎么做的**：服务端在推送前算 chunkHash；客户端用本地缓存里的 contentHash 比对，命中直接走本地解压 apply，跳过原版全量下载
-- **配置**：`clientCache.enabled`（默认 `true`）
+- **配置**：`chunk.enabled`（默认 `true`）
 - **细节**：缓存由影子端承担——进服区块统一落盘原版存档 `hassium_cache/<serverId>/world`（type 126 + chunkHash；旧 HBT1 客户端缓存格式已裁剪）；按热度淘汰（`heat.idx` 跨会话累计）。分段增量、超视渲染、世界导出都复用同一份缓存数据（见下）
 
 ---
@@ -80,7 +80,7 @@ Hassium 用一套客户端 + 服务端配合，从**高效压缩、网络优化�
 
 - **目标**：缓存过期（MISMATCH）时避免整块重传
 - **怎么做的**：客户端拿 sectionHashes 与服务端比对，只请求变更分段（`SectionHashRequest` / `SectionDeltaS2C`），在本地与缓存 NBT 合并后写入磁盘；失败/超时自动回退全量
-- **配置**：`clientCache.sectionDeltaEnabled`（默认 `true`；需同时 `clientCache.enabled`）
+- **配置**：`chunk.sectionDeltaEnabled`（默认 `true`；需同时 `chunk.enabled`）
 
 | 比对结果 | 关闭分段增量 | 开启（默认） |
 | --- | --- | --- |
@@ -94,7 +94,7 @@ Hassium 用一套客户端 + 服务端配合，从**高效压缩、网络优化�
 
 - **目标**：多人服客户端 RD > 服务端视距时，本地缓存回填视距外环带，**仅渲染不参与模拟**
 - **怎么做的**：解锁客户端滑块的 serverVD 钳制；本地缓存命中区块以 renderOnly 标记装配，不向服请求视距外区块/BE；真实区块到达时覆盖回正常
-- **配置**：`clientCache.viewDistanceExtensionEnabled`（默认 `true`）、`clientCache.maxRenderDistance`（默认 `16`，范围 2–64）、`clientCache.ovdUnloadDelaySecs`（默认 `5`）
+- **配置**：`chunk.viewDistanceExtensionEnabled`（默认 `true`）、`chunk.maxRenderDistance`（默认 `16`，范围 2–64）、`chunk.ovdUnloadDelaySecs`（默认 `5`）
 - **限制**：与 Bobby 互斥；单人服不启用；RD>32 时雾距跟随扩大可能穿帮（Fog Mixin 未实现）
 - **专文**：[Beyond-View-Render](Beyond-View-Render)
 
@@ -113,15 +113,15 @@ Hassium 用一套客户端 + 服务端配合，从**高效压缩、网络优化�
 ### Hassium 引擎（默认开启）
 
 - **是什么**：进服后在客户端进程内启动影子端，统一承担全部区块光照计算——客户端不再自己算光，加载阶段主线程不再被光照重算占用
-- **总开关**：`clientCache.hassiumEngineEnabled`（默认 `true`）；关闭后服务端在握手时不剥光（未声明引擎可用），光照随包自带
+- **总开关**：`chunk.hassiumEngineEnabled`（默认 `true`）；关闭后服务端在握手时不剥光（未声明引擎可用），光照随包自带
 - **启动失败自动降级**：影子端启动失败时自动关闭客户端缓存 / 超视渲染 / SeedGen 并在游戏内提示，网络与基础加载不受影响；服务端未装 Hassium MOD 时影子端不启动（无世界种子），光随数据包自带，缓存 / OVD / 世界导出仍可用
 - **世界种子**：影子端使用服务端握手下发的 worldSeed（服务端已装 MOD），不自行生成世界
 
 ### 光照剥离
 
 - **目标**：服务端省下光照数据传输
-- **怎么做的**：服务端发包可剥离光照（`network.lightStrip` 默认 `true`，空 lightMask 构造，几乎零成本）；**剥光在握手协商**——仅客户端声明引擎可用（`hassiumEngineEnabled=true`）时服务端才剥，否则光随包自带；剥离的光照由客户端影子端计算并写回缓存
-- **配置**：`network.lightStrip`
+- **怎么做的**：服务端发包可剥离光照（`chunk.lightStrip` 默认 `true`，空 lightMask 构造，几乎零成本）；**剥光在握手协商**——仅客户端声明引擎可用（`hassiumEngineEnabled=true`）时服务端才剥，否则光随包自带；剥离的光照由客户端影子端计算并写回缓存
+- **配置**：`chunk.lightStrip`
 
 ---
 

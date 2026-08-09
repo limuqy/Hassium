@@ -12,7 +12,7 @@
 
 - **多人服**：单人服不启用（`MixinOptions` 与 `ViewDistanceExtensionService` 都检查 `mc.getSingleptrServer() != null`）
 - 客户端 RD 大于服务端 `view-distance`
-- 启用 `clientCache.enabled` 与 `clientCache.viewDistanceExtensionEnabled`（均默认 true）
+- 启用 `chunk.enabled` 与 `chunk.viewDistanceExtensionEnabled`（均默认 true）
 - **与 Bobby 互斥**：Hassium 自研超视渲染，勿与 Bobby 同装
 
 ---
@@ -34,7 +34,7 @@ flowchart TD
     real -.-> apply
 ```
 
-- 环带规模取决于客户端 RD 与服务端视距之差；可降低 `clientCache.maxRenderDistance` 来限制资源占用
+- 环带规模取决于客户端 RD 与服务端视距之差；可降低 `chunk.maxRenderDistance` 来限制资源占用
 - 单客户端仅当 `clientVD > serverVD` 才进入超视渲染；进入 `clientVD ≤ serverVD` 自动 clear，恢复原版
 - 配置关闭（`viewDistanceExtensionEnabled=false`）→ clear，恢复原版 RD 钳制
 
@@ -44,9 +44,9 @@ flowchart TD
 
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
-| `clientCache.viewDistanceExtensionEnabled` | `true` | 总开关 |
-| `clientCache.maxRenderDistance` | `16` | 超视渲染环带与有效 RD 上限（范围 2–64） |
-| `clientCache.ovdUnloadDelaySecs` | `5` | 离开环带后延迟卸载秒数（0=同步卸载） |
+| `chunk.viewDistanceExtensionEnabled` | `true` | 总开关 |
+| `chunk.maxRenderDistance` | `16` | 超视渲染环带与有效 RD 上限（范围 2–64） |
+| `chunk.ovdUnloadDelaySecs` | `5` | 离开环带后延迟卸载秒数（0=同步卸载） |
 
 ---
 
@@ -84,7 +84,7 @@ flowchart TD
 ## 排查
 
 - F3 观察：超视渲染激活时环带区块应可见；无大量视距外 `ChunkDataRequestC2S` / `BlockEntityRequestC2S`
-- 关闭 `clientCache.viewDistanceExtensionEnabled` 验证恢复原版钳制
+- 关闭 `chunk.viewDistanceExtensionEnabled` 验证恢复原版钳制
 - 客户端日志可开 `debug.cacheLogging` 与 `debug.chunkApplyLogging`
 - 见 [Troubleshooting](Troubleshooting)
 

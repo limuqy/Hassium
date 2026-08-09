@@ -3,7 +3,7 @@
 客户端从收到区块数据包到区块/光照落地主线程的完整链路：线程归属、队列、预算与时序。
 服务端推送链见 [`chunk-cache.md`](chunk-cache.md) §3；磁盘缓存格式见 [`chunk-cache.md`](chunk-cache.md) §11。
 
-链路归属：客户端收包 → apply → 光照落地全链路属**区块核心**（客户端进程内区块域，影子端 = 其后端引擎）；传输经**网络核心**（客户端进程内网关）outbound 承载；服务端推送属**主控核心**。配置键 `clientCache.*` 为区块核心配置族，键名保留。
+链路归属：客户端收包 → apply → 光照落地全链路属**区块核心**（客户端进程内区块域，影子端 = 其后端引擎）；传输经**网络核心**（客户端进程内网关）outbound 承载；服务端推送属**主控核心**。配置键 `chunk.*` 为区块核心配置族（2026-08-09 config-restructure：原 `clientCache.*` 重排为 `chunk.*`）。
 
 **相关专文：**
 
@@ -108,7 +108,7 @@ ShadowLightCompute.drainFailedRecompute →  失败柱丢弃（无本地兜底�
 `MixinLightRecompute`（`handleLevelChunkWithLight` TAIL）判定包是否带光：
 
 - **带光**：权威光照随包落地（apply 时 queueSectionData 生效），无需投递。
-- **无光**：仅当握手协商剥光后发生（客户端声明引擎可用 → 服务端 `network.lightStrip`
+- **无光**：仅当握手协商剥光后发生（客户端声明引擎可用 → 服务端 `chunk.lightStrip`
   才剥）。投递 `ShadowLightCompute.submit(pos, packet)`（pending 队列）。
 
 影子端管线（消费线程，非主线程）：

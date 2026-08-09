@@ -32,11 +32,11 @@ A: Yes by default. With `compat.requireClientMod = false` (default), vanilla cli
 
 ### Q: I run another compression mod; can I coexist with Hassium?
 
-A: No — it conflicts with `network.globalPacketCompression`. Escape hatches: `network.globalPacketCompression = false` or `network.enabled = false` (client cache only).
+A: No — it conflicts with `master.globalPacketCompression`. Escape hatches: `master.globalPacketCompression = false` or `master.enabled = false` (client cache only).
 
 ### Q: A third-party mod's packets break under Hassium aggregation. What now?
 
-A: Escape via (1) `network.enablePacketAggregation = false`, or (2) add the packet ID to `network.compressionBlacklist`.
+A: Escape via (1) `master.enablePacketAggregation = false`, or (2) add the packet ID to `master.compressionBlacklist`.
 
 ---
 
@@ -56,7 +56,7 @@ A: Known limitation. The Fog Mixin is not implemented across the nine version se
 
 ### Q: How much memory does the beyond-view ring use?
 
-A: Ring size depends on the gap between client RD and server view distance. Lower `clientCache.maxRenderDistance`, or disable `clientCache.viewDistanceExtensionEnabled`, to limit resource use. Beyond-view rendering reuses the existing cache eviction mechanism and adds no dedicated memory pool.
+A: Ring size depends on the gap between client RD and server view distance. Lower `chunk.maxRenderDistance`, or disable `chunk.viewDistanceExtensionEnabled`, to limit resource use. Beyond-view rendering reuses the existing cache eviction mechanism and adds no dedicated memory pool.
 
 ---
 
@@ -64,11 +64,11 @@ A: Ring size depends on the gap between client RD and server view distance. Lowe
 
 ### Q: Must the client run Hassium to connect through the gateway? Is the UDP data plane on by default?
 
-A: Connecting through the in-process gateway (Network Core) to the master core is the default path in 2.0.0; the UDP data plane (bulk carrier for the gateway↔master channel) is off by default (`network.dataPlane.enabled = false`) and only needs to be enabled when you want data lines. See [Network Core and Master Migration](Network-Core-and-Master-Migration-en).
+A: Connecting through the in-process gateway (Network Core) to the master core is the default path in 2.0.0; the UDP data plane (bulk carrier for the gateway↔master channel) is off by default (`dataplane.enabled = false`) and only needs to be enabled when you want data lines. See [Network Core and Master Migration](Network-Core-and-Master-Migration-en).
 
 ### Q: Will the client disconnect when the master disconnects or stalls?
 
-A: Not immediately. The L1 migration engine decides based on `network.dataPlane.recoveryWindowMs` (default `60000`, the fault-silence timeout) and migrates seamlessly: disk cache and save queue are preserved, the new session resumes directly, no "Connection lost" popup; a real disconnect happens only when the master cannot recover. Migration is smoother when the UDP data plane is enabled and healthy.
+A: Not immediately. The L1 migration engine decides based on `master.migrationFaultTimeoutMs` (default `60000`, the fault-silence timeout) and migrates seamlessly: disk cache and save queue are preserved, the new session resumes directly, no "Connection lost" popup; a real disconnect happens only when the master cannot recover. Migration is smoother when the UDP data plane is enabled and healthy.
 
 ---
 
