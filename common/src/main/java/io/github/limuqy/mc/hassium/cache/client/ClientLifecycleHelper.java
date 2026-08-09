@@ -39,9 +39,8 @@ public final class ClientLifecycleHelper {
         if (initialized) {
             return;
         }
-        // 初始化统一后台执行器（平台线程数由配置文件控制，虚拟线程模式下忽略）
-        int threads = HassiumConfigService.getInstance().getLoadThreads();
-        HassiumTaskExecutor.initClient(threads);
+        // 初始化统一后台执行器（chunk.loadThreads 配置已删除，固定默认线程数；虚拟线程模式下忽略）
+        HassiumTaskExecutor.initClient(HassiumTaskExecutor.DEFAULT_CLIENT_THREADS);
 
         // 尽早写入玩家坐标，避免首波 hash/payload 在首 tick 前用 (0,0) 算优先级
         try {

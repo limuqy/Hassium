@@ -22,6 +22,9 @@ import java.util.function.Consumer;
  */
 public class HassiumTaskExecutor implements AutoCloseable, Executor {
 
+    /** 客户端统一后台执行器的平台线程数（原 chunk.loadThreads 配置已删除；虚拟线程模式下忽略，仅 Java 17 平台回退）。 */
+    public static final int DEFAULT_CLIENT_THREADS = 4;
+
     private static volatile HassiumTaskExecutor clientInstance;
     private static volatile HassiumTaskExecutor serverInstance;
 

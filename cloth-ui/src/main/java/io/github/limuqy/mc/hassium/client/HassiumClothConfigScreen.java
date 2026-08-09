@@ -87,9 +87,9 @@ public final class HassiumClothConfigScreen {
         rendering.addEntry(intRange(entries, "hassium.configuration.chunk.ovdUnloadDelaySecs",
                 draft.cacheOvdUnloadDelaySecs, dCache.ovdUnloadDelaySecs(), 0, 60,
                 v -> draft.cacheOvdUnloadDelaySecs = v));
-        rendering.addEntry(intRange(entries, "hassium.configuration.chunk.loadThreads",
-                draft.loadThreads, dCache.loadThreads(), 1, 64,
-                v -> draft.loadThreads = v));
+        rendering.addEntry(intRange(entries, "hassium.configuration.chunk.unloadDelaySecs",
+                draft.cacheUnloadDelaySecs, dCache.unloadDelaySecs(), 0, 600,
+                v -> draft.cacheUnloadDelaySecs = v));
         rendering.addEntry(intRange(entries, "hassium.configuration.chunk.maxChunksPerFrame",
                 draft.maxChunksPerFrame, dCache.maxChunksPerFrame(), 1, 512, v -> draft.maxChunksPerFrame = v));
         rendering.addEntry(intRange(entries, "hassium.configuration.chunk.mainThreadChunkBudgetMs",
@@ -208,8 +208,9 @@ public final class HassiumClothConfigScreen {
         int cacheOvdUnloadDelaySecs;
         boolean cacheSectionDeltaEnabled;
         boolean cacheJoinBoostEnabled;
+        // 影子端内存区块回收延迟
+        int cacheUnloadDelaySecs;
         // 线程与应用
-        int loadThreads;
         int maxChunksPerFrame;
         int mainThreadChunkBudgetMs;
         // SeedGen 本地生成
@@ -254,7 +255,7 @@ public final class HassiumClothConfigScreen {
             d.cacheOvdUnloadDelaySecs = cache.ovdUnloadDelaySecs();
             d.cacheSectionDeltaEnabled = cache.sectionDeltaEnabled();
             d.cacheJoinBoostEnabled = cache.joinBoostEnabled();
-            d.loadThreads = cache.loadThreads();
+            d.cacheUnloadDelaySecs = cache.unloadDelaySecs();
             d.maxChunksPerFrame = cache.maxChunksPerFrame();
             d.mainThreadChunkBudgetMs = cache.mainThreadChunkBudgetMs();
             d.seedGenThreads = cache.seedGenThreads();
@@ -287,7 +288,7 @@ public final class HassiumClothConfigScreen {
                             cacheCleanupIntervalTicks, cacheTargetCacheSizeMb, cacheMinCleanupBatchSize,
                             cacheSectionDeltaEnabled, cacheJoinBoostEnabled,
                             cacheViewDistanceExtensionEnabled, cacheMaxRenderDistance, cacheOvdUnloadDelaySecs,
-                            loadThreads, maxChunksPerFrame, mainThreadChunkBudgetMs,
+                            cacheUnloadDelaySecs, maxChunksPerFrame, mainThreadChunkBudgetMs,
                             seedGenThreads, hassiumEngineEnabled, ovdLocalGeneration,
                             seedGenEnabled,
                             HassiumConfig.ChunkCoreConfig.DEFAULT.lightStrip()

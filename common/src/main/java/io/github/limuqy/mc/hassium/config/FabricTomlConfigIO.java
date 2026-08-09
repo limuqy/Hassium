@@ -371,7 +371,7 @@ public final class FabricTomlConfigIO {
                 getBool(cfg, "chunk.viewDistanceExtensionEnabled", d.viewDistanceExtensionEnabled()),
                 getInt(cfg, "chunk.maxRenderDistance", d.maxRenderDistance()),
                 getInt(cfg, "chunk.ovdUnloadDelaySecs", d.ovdUnloadDelaySecs()),
-                getInt(cfg, "chunk.loadThreads", d.loadThreads()),
+                getInt(cfg, "chunk.unloadDelaySecs", d.unloadDelaySecs()),
                 getInt(cfg, "chunk.maxChunksPerFrame", d.maxChunksPerFrame()),
                 getInt(cfg, "chunk.mainThreadChunkBudgetMs", d.mainThreadChunkBudgetMs()),
                 getInt(cfg, "chunk.seedGenThreads", d.seedGenThreads()),
@@ -400,8 +400,8 @@ public final class FabricTomlConfigIO {
                 "是否启用超视渲染（客户端 RD > 服务端视距时本地缓存回填环带）");
         set(cfg, "chunk.maxRenderDistance", c.maxRenderDistance(), "超视渲染 / 有效 RD 上限（Fog/内存约束）");
         set(cfg, "chunk.ovdUnloadDelaySecs", c.ovdUnloadDelaySecs(), "离开超视渲染环带后延迟卸载秒数");
-        set(cfg, "chunk.loadThreads", c.loadThreads(), "客户端区块加载线程数");
-        set(cfg, "chunk.maxChunksPerFrame", c.maxChunksPerFrame(), "每帧应用缓存区块硬顶");
+        set(cfg, "chunk.unloadDelaySecs", c.unloadDelaySecs(), "影子端内存区块回收延迟秒数（离开卸载边界后计时，超时落盘并清内存；0=禁用回收）");
+        set(cfg, "chunk.maxChunksPerFrame", c.maxChunksPerFrame(), "每帧区块主线程操作硬顶（apply 回调 + OVD 入队 + 影子回传消费共用）");
         set(cfg, "chunk.mainThreadChunkBudgetMs", c.mainThreadChunkBudgetMs(), "主线程 apply 预算（ms）");
         set(cfg, "chunk.hassiumEngineEnabled", c.hassiumEngineEnabled(),
                 "是否启用Hassium 引擎（默认 true）：进服启动Hassium 引擎服务端统一承担区块光照计算，客户端不再计算。启动失败自动降级：客户端缓存/超视渲染/SeedGen/Hassium 引擎光照关闭并游戏内提示；false=不启动Hassium 引擎（此时服务端不剥光，光照随包自带）");

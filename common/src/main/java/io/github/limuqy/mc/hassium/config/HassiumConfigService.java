@@ -440,10 +440,6 @@ public class HassiumConfigService {
         return config.master().serverChunkPushThreads();
     }
 
-    public int getLoadThreads() {
-        return config.chunk().loadThreads();
-    }
-
     public boolean isServerLightStrip() {
         return config.chunk().lightStrip();
     }
@@ -459,6 +455,11 @@ public class HassiumConfigService {
 
     public int getMaxChunksPerFrame() {
         return Math.max(1, config.chunk().maxChunksPerFrame());
+    }
+
+    /** 影子端内存区块回收延迟（秒；0=禁用回收）。 */
+    public int getChunkUnloadDelaySecs() {
+        return config.chunk().unloadDelaySecs();
     }
 
     /** SeedGen 本地生成线程数（0=禁用本地生成，SeedRef 一律回退全量）。 */

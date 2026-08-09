@@ -41,8 +41,8 @@ Hassium 启动时在 `config/hassium/` 自动生成两份 TOML：
 | `chunk.viewDistanceExtensionEnabled` | `true` | 超视渲染（多人服 clientVD > serverVD 时回填环带；**与 Bobby 互斥**） |
 | `chunk.maxRenderDistance` | `16` | 超视渲染环带与有效 RD 上限（范围 2–64） |
 | `chunk.ovdUnloadDelaySecs` | `5` | 离开超视渲染环带后延迟卸载秒数（0=同步卸载） |
-| `chunk.loadThreads` | `4` | 客户端区块加载线程数 |
-| `chunk.maxChunksPerFrame` | `6` | 每帧 apply 缓存区块硬顶 |
+| `chunk.unloadDelaySecs` | `30` | 影子端内存区块回收延迟秒数（离开卸载边界后计时，超时落盘并清内存；0=禁用回收） |
+| `chunk.maxChunksPerFrame` | `6` | 每帧区块主线程操作硬顶（apply 回调 + OVD 入队 + 影子回传消费共用） |
 | `chunk.mainThreadChunkBudgetMs` | `15` | 客户端每帧 apply 区块的预算（ms）；进服前约 10 秒走 JoinBoost 临时抬高 |
 | `chunk.hassiumEngineEnabled` | `true` | Hassium 引擎（非网络向功能总开关）：进服启动影子端统一承担区块光照计算（客户端不再计算）；启动失败自动降级（缓存/超视渲染/SeedGen 关闭并提示）；关闭时服务端不剥光（握手协商），光照随包自带 |
 | `chunk.ovdLocalGeneration` | `false` | 超视渲染本地生成：超视渲染区域缓存 miss 时按服务端世界种子本地生成区块并存入本地缓存；无种子（服务端未装 MOD）时自动关闭生成 |

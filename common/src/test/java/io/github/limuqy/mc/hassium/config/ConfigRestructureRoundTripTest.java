@@ -23,7 +23,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * 1. defaults 生成 71 键，前缀分布 23/3/21/18/2/2/2
  * 2. client/server toml 写读 round-trip（含全部新键组）
  * 3. 新键可加载抽查（chunk.seedGenEnabled 双端 / master.migrationFaultTimeoutMs / dataplane.udpListeners 复杂值）
- * 4. 删键（recoveryFreeze / controlStallMs / failoverExpiryMs / storage.mode）不再出现在写出的 toml
+ * 4. 删键（recoveryFreeze / controlStallMs / failoverExpiryMs / storage.mode / chunk.loadThreads）不再出现在写出的 toml
  * 5. 默认值语义抽查 ≥5 键对照 key-mapping.md
  * <p>
  * 复跑：sh gradlew --no-daemon common:test --tests ConfigRestructureRoundTripTest
@@ -31,7 +31,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class ConfigRestructureRoundTripTest {
 
     private static final List<String> DELETED_KEYS =
-            List.of("recoveryFreeze", "controlStallMs", "failoverExpiryMs", "storage.mode");
+            List.of("recoveryFreeze", "controlStallMs", "failoverExpiryMs", "storage.mode", "loadThreads");
 
     // === 1. defaults 生成：71 键齐全 ===
 
@@ -71,7 +71,7 @@ class ConfigRestructureRoundTripTest {
     void clientTomlRoundTripsNewKeys(@TempDir Path root) throws IOException {
         HassiumConfig.ChunkCoreConfig chunk = new HassiumConfig.ChunkCoreConfig(
                 true, 8192, 7, 0.5, 0.8, 0.2, 1200, 1024, 200,
-                true, false, true, 32, 10, 8, 12, 30, 4, true, true, true, true);
+                true, false, true, 32, 10, 45, 12, 30, 4, true, true, true, true);
         HassiumConfig.NetCoreConfig net = new HassiumConfig.NetCoreConfig(true, true, false);
         HassiumConfig.DebugConfig debug = new HassiumConfig.DebugConfig(
                 true, false, true, false, true, false, true, false, true);
@@ -88,6 +88,7 @@ class ConfigRestructureRoundTripTest {
         String toml = Files.readString(root.resolve("hassium/hassium-client.toml"));
         // nightconfig 嵌套表格式：[chunk] 表内 seedGenEnabled = true
         assertTrue(toml.contains("seedGenEnabled = true"), "client toml 缺 seedGenEnabled=true:\n" + toml);
+        assertTrue(toml.contains("unloadDelaySecs = 45"), "client toml 缺 chunk.unloadDelaySecs=45:\n" + toml);
         assertTrue(toml.contains("[net]"), "client toml 缺 [net] 表");
         assertTrue(toml.contains("lightVerify = true"), "client toml 缺 debug.lightVerify=true");
     }
@@ -112,7 +113,7 @@ class ConfigRestructureRoundTripTest {
         // server toml 只写 chunk.lightStrip/chunk.seedGenEnabled 两键，其余键读回默认 → 仅改这两键
         HassiumConfig.ChunkCoreConfig chunk = new HassiumConfig.ChunkCoreConfig(
                 true, 4096, 3, 0.3, 0.7, 0.3, 6000, 0, 100,
-                true, true, true, 16, 5, 4, 6, 15, 2, true, false, true, false);
+                true, true, true, 16, 5, 30, 6, 15, 2, true, false, true, false);
         HassiumConfig.CompatConfig compat = new HassiumConfig.CompatConfig(true, false);
         HassiumConfig.DebugConfig debug = new HassiumConfig.DebugConfig(
                 false, true, false, true, false, true, false, true, false);

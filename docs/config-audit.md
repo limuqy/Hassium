@@ -42,8 +42,8 @@
 | `chunk.viewDistanceExtensionEnabled` | `true` | 超视渲染（OVD）开关 |
 | `chunk.maxRenderDistance` | `16` | 超视渲染 / 有效 RD 上限 |
 | `chunk.ovdUnloadDelaySecs` | `5` | 超视卸载延迟秒 |
-| `chunk.loadThreads` | `4` | 客户端区块加载线程数 |
-| `chunk.maxChunksPerFrame` | `6` | 每帧 apply 缓存区块硬顶 |
+| `chunk.unloadDelaySecs` | `30` | 影子端内存区块回收延迟秒数（离开卸载边界后计时，超时落盘并清内存；0=禁用回收） |
+| `chunk.maxChunksPerFrame` | `6` | 每帧区块主线程操作硬顶（apply 回调 + OVD 入队 + 影子回传消费共用） |
 | `chunk.mainThreadChunkBudgetMs` | `15` | 主线程 apply 预算（ms） |
 | `chunk.hassiumEngineEnabled` | `true` | Hassium 引擎总开关（进服启动承担光照计算；失败降级关闭缓存/OVD/SeedGen 并游戏内提示） |
 | `chunk.ovdLocalGeneration` | `false` | OVD 本地生成（miss 时影子端按世界种子本地生成，renderOnly 落地；需引擎可用） |

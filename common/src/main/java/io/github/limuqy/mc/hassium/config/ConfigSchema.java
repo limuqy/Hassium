@@ -24,8 +24,8 @@ public final class ConfigSchema {
     public static final ConfigKey<Boolean> CHUNK_VIEW_DISTANCE_EXTENSION_ENABLED = bool("chunk.viewDistanceExtensionEnabled", ConfigScope.CLIENT, Domain.CHUNK_CORE, true, "是否启用超视渲染");
     public static final ConfigKey<Integer> CHUNK_MAX_RENDER_DISTANCE = integer("chunk.maxRenderDistance", ConfigScope.CLIENT, Domain.CHUNK_CORE, 16, 2, 64, "超视渲染有效距离上限");
     public static final ConfigKey<Integer> CHUNK_OVD_UNLOAD_DELAY_SECS = integer("chunk.ovdUnloadDelaySecs", ConfigScope.CLIENT, Domain.CHUNK_CORE, 5, 0, 60, "超视渲染卸载延迟秒数");
-    public static final ConfigKey<Integer> CHUNK_LOAD_THREADS = integer("chunk.loadThreads", ConfigScope.CLIENT, Domain.CHUNK_CORE, 4, 1, 64, "客户端区块加载线程数");
-    public static final ConfigKey<Integer> CHUNK_MAX_CHUNKS_PER_FRAME = integer("chunk.maxChunksPerFrame", ConfigScope.CLIENT, Domain.CHUNK_CORE, 6, 1, 512, "每帧应用缓存区块硬顶");
+    public static final ConfigKey<Integer> CHUNK_UNLOAD_DELAY_SECS = integer("chunk.unloadDelaySecs", ConfigScope.CLIENT, Domain.CHUNK_CORE, 30, 0, 600, "影子端内存区块回收延迟秒数（离开卸载边界后计时，超时落盘并清内存；0=禁用回收）");
+    public static final ConfigKey<Integer> CHUNK_MAX_CHUNKS_PER_FRAME = integer("chunk.maxChunksPerFrame", ConfigScope.CLIENT, Domain.CHUNK_CORE, 6, 1, 512, "每帧区块主线程操作硬顶（apply 回调 + OVD 入队 + 影子回传消费共用）");
     public static final ConfigKey<Integer> CHUNK_MAIN_THREAD_CHUNK_BUDGET_MS = integer("chunk.mainThreadChunkBudgetMs", ConfigScope.CLIENT, Domain.CHUNK_CORE, 15, 1, 50, "主线程 apply 预算（ms）");
     public static final ConfigKey<Boolean> CHUNK_HASSIUM_ENGINE_ENABLED = bool("chunk.hassiumEngineEnabled", ConfigScope.CLIENT, Domain.CHUNK_CORE, true,
             "是否启用Hassium 引擎（默认 true）：进服启动Hassium 引擎服务端统一承担区块光照计算（客户端不再计算）。启动失败自动降级：客户端缓存/超视渲染/SeedGen/Hassium 引擎光照全部关闭并游戏内提示；false=不启动Hassium 引擎。注意：关闭时剥光不生效（服务端按握手能力不剥光，光照随包自带）。与 chunk.seedGenEnabled 相互独立——SeedGen 开关只控制 pristine 本地生成");

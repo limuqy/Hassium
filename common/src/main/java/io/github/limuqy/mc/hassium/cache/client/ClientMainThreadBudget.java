@@ -24,39 +24,7 @@ public final class ClientMainThreadBudget {
     /** 最近一次权威区块 apply 的时间戳（settle 写回判定：加载风暴停止的安静窗口）。 */
     private static volatile long lastApplyNano = 0L;
 
-    /**
-     * 本帧已消耗的缓存区块 apply 名额。
-     * <p>
-     * 覆盖全部缓存读取路径：readyQueue 消费（权威 + OVD renderOnly）与 OVD unload
-     * substitute 即时替换，共用 {@code chunk.maxChunksPerFrame} 硬顶——保证
-     * 超视距/替换路径不会绕过帧限速挤占主线程。
-     */
-    private static int frameCacheApplies = 0;
-
-    private static int frameCacheHardCap = 12;
-
     private ClientMainThreadBudget() {
-    }
-
-    /**
-     * 每帧开始重置缓存 apply 配额（Minecraft.tick HEAD，渲染帧粒度）。
-     */
-    public static void beginFrameCacheBudget() {
-        frameCacheApplies = 0;
-        frameCacheHardCap = HassiumConfigService.getInstance().getMaxChunksPerFrame();
-    }
-
-    /**
-     * 尝试获取一个本帧缓存 apply 名额（任何缓存读取路径统一入口）。
-     *
-     * @return true=获得名额（本帧还可继续 apply）；false=本帧配额已满
-     */
-    public static boolean tryAcquireCacheApply() {
-        if (frameCacheApplies >= frameCacheHardCap) {
-            return false;
-        }
-        frameCacheApplies++;
-        return true;
     }
 
     /**

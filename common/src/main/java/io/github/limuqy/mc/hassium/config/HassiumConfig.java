@@ -72,8 +72,9 @@ public record HassiumConfig(
             boolean viewDistanceExtensionEnabled,
             int maxRenderDistance,
             int ovdUnloadDelaySecs,
+            // === 影子端内存区块回收（离开卸载边界后计时，超时落盘并清内存；0=禁用回收）===
+            int unloadDelaySecs,
             // === 线程与应用（从原 NetworkConfig 吸收的客户端字段）===
-            int loadThreads,
             int maxChunksPerFrame,
             int mainThreadChunkBudgetMs,
             // === SeedGen 本地生成线程数（Phase 2；0=禁用本地生成）===
@@ -102,7 +103,7 @@ public record HassiumConfig(
                 true,    // viewDistanceExtensionEnabled
                 16,      // maxRenderDistance
                 5,       // ovdUnloadDelaySecs
-                4,       // loadThreads
+                30,      // unloadDelaySecs（影子端内存区块回收延迟；0=禁用回收）
                 6,       // maxChunksPerFrame
                 15,      // mainThreadChunkBudgetMs
                 2,       // seedGenThreads（本地生成线程数；0=禁用）
