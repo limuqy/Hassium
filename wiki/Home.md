@@ -4,7 +4,7 @@
   <img src="https://raw.githubusercontent.com/limuqy/Hassium/master/common/src/main/resources/assets/hassium/logo.png" alt="Hassium Logo" width="200">
 </p>
 
-**Hassium** 是 Minecraft 的高性能优化模组，提供**高效存储、网络优化、区块缓存、超视渲染与光照优化**。覆盖 Minecraft **1.20.1–1.21.11**，支持 **Fabric / Forge / NeoForge**。
+**Hassium** 是 Minecraft 的高性能优化模组，提供**高效存储、网络优化、区块缓存、本地生成、超视渲染与光照优化**。覆盖 Minecraft **1.20.1–1.21.11**，支持 **Fabric / Forge / NeoForge**。
 
 > 仓库：[github.com/limuqy/Hassium](https://github.com/limuqy/Hassium) · [English](Home-en)
 
@@ -26,6 +26,7 @@
 | | L1 负载均衡 | 多 UDP 线路按 weight 分担区块下行；UDP 数据面为网关↔主控 bulk 载体（默认关） |
 | **区块缓存** | 区块缓存 | 曾加载过的区块写入本地；再次进入同一区域时用 contentHash 比对命中，少传全量包 |
 | | 分段增量 | 缓存过期（MISMATCH）时仅拉取变更分段（`sectionDelta`）本地合并，避免整块重传 |
+| | 本地生成（SeedGen） | 服务端对 pristine 区块只发 seed + 坐标引用，客户端用同种子本地生成，零传输生成区块；失败/超时自动回退全量 |
 | | **超视渲染** | 多人服客户端 RD 大于服务端视距时，用本地缓存回填视距外地形（仅渲染、不向服索要视距外区块）；与 Bobby 互斥 |
 | | 世界导出 | `/hassiumc export` 把影子端世界目录整体拷贝为导出存档（保留 type 126 格式） |
 | **光照优化** | 光照剥离 | 服务端可剥光省流量，由 Hassium 引擎（影子端）统一计算光照并落盘缓存 |

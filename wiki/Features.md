@@ -4,7 +4,7 @@
 
 > **English**: [Features-en](Features-en) · 中文
 
-Hassium 用一套客户端 + 服务端配合，从**高效压缩、网络优化、区块缓存、光照优化、实用工具**五个方向优化 Minecraft。本页按大类给出每条功能的速览与适用条件。
+Hassium 用一套客户端 + 服务端配合，从**高效压缩、网络优化、区块缓存、本地生成、光照优化、实用工具**六个方向优化 Minecraft。本页按大类给出每条功能的速览与适用条件。
 
 ---
 
@@ -105,6 +105,14 @@ Hassium 用一套客户端 + 服务端配合，从**高效压缩、网络优化�
 - **目标**：把影子端世界目录导出为独立存档（保留 type 126 + chunkHash 格式，原版翻译后续提供）
 - **命令**：`/hassiumc export [<serverIp>] [seed]`
 - **专文**：[World-Export](World-Export)
+
+---
+
+### 本地生成（SeedGen）
+
+- **目标**：大片未探索地形（pristine 区块）不再逐块传输，零带宽生成
+- **怎么做的**：服务端对 pristine 区块只发引用（seed + 坐标 + hash，几十字节）替代区块数据；客户端影子服务端用同种子本地生成，与远程区块同链（算光 → 打包官方包 → 官方通道落地），断连一并 `saveAll` 落盘；失败/超时自动回退全量请求
+- **配置**：`chunk.seedGenEnabled`（默认 `false`，需双端同版本同开）、`chunk.seedGenThreads`（2）
 
 ---
 

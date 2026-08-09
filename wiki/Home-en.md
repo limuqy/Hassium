@@ -4,7 +4,7 @@
   <img src="https://raw.githubusercontent.com/limuqy/Hassium/master/common/src/main/resources/assets/hassium/logo.png" alt="Hassium Logo" width="200">
 </p>
 
-**Hassium** is a high-performance Minecraft optimization mod providing **efficient storage, network optimization, chunk cache, beyond-view rendering, and lighting optimization**. Covers Minecraft **1.20.1–1.21.11** on **Fabric / Forge / NeoForge**.
+**Hassium** is a high-performance Minecraft optimization mod providing **efficient storage, network optimization, chunk cache, local generation, beyond-view rendering, and lighting optimization**. Covers Minecraft **1.20.1–1.21.11** on **Fabric / Forge / NeoForge**.
 
 > Repo: [github.com/limuqy/Hassium](https://github.com/limuqy/Hassium) · [简体中文](Home)
 
@@ -26,6 +26,7 @@
 | | L1 load balancing | Multiple UDP lines share chunk downstream by weight; the UDP data plane is the gateway↔master bulk carrier (off by default) |
 | **Chunk cache** | Chunk cache | Loaded chunks are kept locally; revisiting an area hits via contentHash comparison instead of full downloads |
 | | Section delta | On cache mismatch (MISMATCH), fetch only changed sections (`sectionDelta`) and merge locally instead of the whole chunk |
+| | Local generation (SeedGen) | For pristine (never-generated) chunks the server sends a tiny seed + position reference instead of chunk data; the client generates locally with the same seed — zero transfer. Falls back to full transfer on failure/timeout |
 | | **Beyond-view render** | When client RD exceeds server view distance (multiplayer), fill the outer ring from local cache (render-only; no out-of-range server requests); incompatible with Bobby |
 | | World export | `/hassiumc export` copies the shadow-side world directory wholesale as an export (keeps the type 126 format) |
 | **Lighting optimization** | Light stripping | Server can strip light data; the Hassium engine (shadow side) computes lighting centrally and persists the cache |

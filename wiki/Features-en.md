@@ -4,7 +4,7 @@
 
 > **简体中文**: [Features](Features) · English
 
-Hassium is a single client + server suite that optimizes Minecraft from five directions: **efficient compression, network optimization, chunk cache, lighting optimization, and utilities**. This page groups every feature into categories with a quick overview and when it applies.
+Hassium is a single client + server suite that optimizes Minecraft from six directions: **efficient compression, network optimization, chunk cache, local generation, lighting optimization, and utilities**. This page groups every feature into categories with a quick overview and when it applies.
 
 ---
 
@@ -105,6 +105,14 @@ Hassium is a single client + server suite that optimizes Minecraft from five dir
 - **Goal**: Export the shadow-side world directory as a standalone archive (keeps the type 126 + chunkHash format; vanilla translation is planned later)
 - **Command**: `/hassiumc export [<serverIp>] [seed]`
 - **Deep dive**: [World-Export](World-Export-en)
+
+---
+
+### Local generation (SeedGen)
+
+- **Goal**: No more per-chunk transfer for large unexplored areas (pristine chunks) — zero-bandwidth generation
+- **How**: For pristine chunks the server sends only a reference (seed + position + hash, a few dozen bytes) instead of chunk data; the client's shadow server generates locally with the same seed, through the same pipeline as remote chunks (light → official packet packing → vanilla channel apply), saved by `saveAll` on disconnect; falls back to a full request on failure/timeout
+- **Config**: `chunk.seedGenEnabled` (default `false`; requires matching versions and the option enabled on both sides), `chunk.seedGenThreads` (2)
 
 ---
 
