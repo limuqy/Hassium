@@ -1,7 +1,5 @@
 package io.github.limuqy.mc.hassium.mixin;
 
-import io.github.limuqy.mc.hassium.cache.client.CacheSaveQueue;
-import io.github.limuqy.mc.hassium.cache.client.ClientCacheLoadQueue;
 import io.github.limuqy.mc.hassium.cache.client.ClientMainThreadBudget;
 import io.github.limuqy.mc.hassium.cache.client.ViewDistanceExtensionService;
 import io.github.limuqy.mc.hassium.client.ClientSmokeTest;
@@ -143,14 +141,10 @@ public class MixinClientTick {
         }
 
         // 更新玩家坐标，用于 MainThreadDispatcher 距离优先级计算
-        // 同时跟踪 ClientLevel，供断连时 bulk-enqueue（此时 mc.level 可能已 null）
         try {
             Minecraft mc = Minecraft.getInstance();
             if (mc.player != null) {
                 MainThreadDispatcher.updatePlayerPosition(mc.player.getX(), mc.player.getZ());
-            }
-            if (mc.level != null) {
-                CacheSaveQueue.getInstance().trackLevel(mc.level);
             }
         } catch (Exception e) {
             // 忽略
@@ -162,50 +156,41 @@ public class MixinClientTick {
             // 忽略更新错误
         }
 
-        // 恢复期预填充（无感切换恢复成功后从磁盘缓存回填权威区，权威数据到达后覆盖）
-        try {
-            io.github.limuqy.mc.hassium.cache.client.RecoveryChunkPrefill.getInstance().tick();
-        } catch (Exception e) {
-            // 预填充失败不阻断客户端 tick
-        }
-
-        // storage 就绪门控：冲刷暂存 hash / 检查超时
-        try {
-            ClientMetadataHandler.tickPendingHashGate();
-        } catch (Exception e) {
-            // 忽略
-        }
-
-        // 主线程时间预算：网络回调 vs 缓存 apply 动态分配。
-        // 两边都有活时保持 1/3:2/3，防止服务器推送饿死 readyQueue（虚空根因之一）；
-        // 任一侧空闲时把整帧预算给另一侧，避免全局压缩后的纯推送路径被卡在 forceOne≈1/帧。
+        // 主线程时间预算：网络回调 vs 影子光落地动态分配。
         long budgetNs = ClientMainThreadBudget.getBudgetNs();
         int hardCap = ClientMainThreadBudget.getHardCap();
         long frameStartNs = System.nanoTime();
         long frameDeadlineNs = frameStartNs + budgetNs;
 
         boolean hasFlush = MainThreadDispatcher.getClientQueueSize() > 0;
-        boolean hasCache = ClientCacheLoadQueue.getInstance().getReadySize() > 0;
 
         try {
             if (hasFlush) {
-                // 两侧都忙：flush 先吃 1/3；仅 flush 有活：给满整帧
-                long flushDeadlineNs = hasCache
-                        ? (frameStartNs + budgetNs / 3)
-                        : frameDeadlineNs;
-                MainThreadDispatcher.flushClientUntil(flushDeadlineNs, hardCap);
+                MainThreadDispatcher.flushClientUntil(frameDeadlineNs, hardCap);
             }
         } catch (Exception e) {
             MainThreadDispatcher.flushClient();
         }
 
+        // 全量请求超时重发（fallback 链兜底；SeedGen 影子端接管时无请求）
         try {
-            // 缓存侧拿剩余墙钟预算（含 flush 提前结束时的回收）
-            if (hasCache || ClientCacheLoadQueue.getInstance().getReadySize() > 0) {
-                ClientCacheLoadQueue.getInstance().processQueueUntil(frameDeadlineNs);
-            }
+            io.github.limuqy.mc.hassium.network.ClientMetadataHandler.tickPendingFullRequestTimeouts();
         } catch (Exception e) {
-            // 忽略加载错误
+            // 忽略
+        }
+
+        // 分段增量请求超时回退全量（服务端始终回包，仅丢包/断连竞态兜底）
+        try {
+            io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.tickPendingDeltaTimeouts();
+        } catch (Exception e) {
+            // 忽略
+        }
+
+        // 影子端缓存清理节流检查（容量/热度淘汰；超限时后台执行，不卡帧）
+        try {
+            io.github.limuqy.mc.hassium.network.seedgen.ShadowCacheEviction.tick();
+        } catch (Exception e) {
+            // 忽略
         }
 
         // 影子光照回传落地：帧尾渲染前，影子端（启用态）算好的光统一落地，
@@ -213,19 +198,8 @@ public class MixinClientTick {
         // 客户端重算；正常流程不触发）。
         try {
             io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.drainReady();
-            io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.drainFailedRecompute();
         } catch (Exception e) {
             // 影子光照可选；异常不得中断客户端 tick
-        }
-
-        // 会话中收敛写回：加载风暴停止（光照队列排空 + 权威加载完 + 安静窗口）后，
-        // 周期性把脏块 light-patch 落盘——1.20.1 靠环带卸载写光（R2 命中 54.6%），
-        // 1.21.x 无卸载只靠 dump（命中 24% → 黑块风暴）。放在光照消费/校准之后，
-        // 保证门控看到的是本帧的收敛终态。
-        try {
-            io.github.limuqy.mc.hassium.cache.client.CacheSaveQueue.tickSettleWriteback();
-        } catch (Exception e) {
-            // 忽略
         }
     }
 

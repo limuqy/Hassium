@@ -242,6 +242,11 @@ public class HassiumConfigService {
         return config.clientCache().hassiumEngineEnabled();
     }
 
+    /** 分段增量：缓存过期（MISMATCH）时按 section 比对只补变更分段（影子端消费）。 */
+    public boolean isSectionDeltaEnabled() {
+        return config.clientCache().sectionDeltaEnabled();
+    }
+
     /** OVD 本地生成开关（默认 false）：OVD miss 时影子端按世界种子本地生成 + 存缓存。 */
     public boolean isOvdLocalGenerationEnabled() {
         return config.clientCache().ovdLocalGeneration();
@@ -268,10 +273,6 @@ public class HassiumConfigService {
             return false;
         }
         return !io.github.limuqy.mc.hassium.network.ClientChunkPipeline.getInstance().isShadowServerFailed();
-    }
-
-    public boolean isEntitySnapshotsEnabled() {
-        return isClientFeatureGateOpen() && isClientCacheEnabled() && config.clientCache().entitySnapshotsEnabled();
     }
 
     /**
@@ -537,15 +538,6 @@ public class HassiumConfigService {
     /** 是否启用 JoinBoost（进服后短时提高主线程预算加速加载） */
     public boolean isJoinBoostEnabled() {
         return config.clientCache().joinBoostEnabled();
-    }
-
-    /**
-     * MISMATCH 是否走分段增量（仍依赖 {@link #isClientCacheEnabled()}）。
-     * <p>
-     * 默认 true：开启时仅请求变更分段并合并本地缓存；关闭时与全量请求路径一致。
-     */
-    public boolean isSectionDeltaEnabled() {
-        return isClientFeatureGateOpen() && isClientCacheEnabled() && config.clientCache().sectionDeltaEnabled();
     }
 
     // --- internal helpers ---

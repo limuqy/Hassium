@@ -19,12 +19,14 @@ import net.minecraft.server.WorldLoader;
 import net.minecraft.server.WorldStem;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.packs.repository.PackRepository;
-#if MC_VER < MC_1_21_11
+#if MC_VER < MC_1_20_2
 import net.minecraft.server.packs.repository.ServerPacksSource;
 #else
 import net.minecraft.server.packs.repository.ServerPacksSource;
-import net.minecraft.server.permissions.LevelBasedPermissionSet;
 import net.minecraft.world.level.validation.DirectoryValidator;
+#endif
+#if MC_VER >= MC_1_21_11
+import net.minecraft.server.permissions.LevelBasedPermissionSet;
 #endif
 import net.minecraft.world.Difficulty;
 import net.minecraft.world.flag.FeatureFlags;
@@ -103,16 +105,18 @@ public final class SeedGenLevelCompat {
         return server;
     }
 
-    /** 纯装配（专用线程内）：临时目录 + 空存档 + 数据包 + 世界 stem + initServer。 */
+    /** 纯装配（专用线程内）：持久世界目录 + 存档 + 数据包 + 世界 stem + initServer。 */
     private static ShadowSeedServer assembleShadowServer(long seed) throws IOException {
-        Path tmpDir = Files.createTempDirectory("hassium-seedgen");
-        LevelStorageSource storage = LevelStorageSource.createDefault(tmpDir);
+        // 影子端世界根 = 客户端缓存目录下原版存档结构（hassium_cache/<serverId>/world）。
+        // 断连保存、重连复用，不删除（不再兼容旧 HBT1 客户端缓存格式，数据不迁移）。
+        Path worldRoot = resolveShadowWorldRoot();
+        LevelStorageSource storage = LevelStorageSource.createDefault(worldRoot);
         LevelStorageSource.LevelStorageAccess access = null;
         PackRepository repo = null;
         WorldStem stem = null;
         try {
-            access = storage.validateAndCreateAccess("seedgen");
-#if MC_VER < MC_1_21_11
+            access = storage.validateAndCreateAccess("world");
+#if MC_VER < MC_1_20_2
             repo = new PackRepository(new ServerPacksSource());
 #else
             repo = new PackRepository(new ServerPacksSource(
@@ -125,7 +129,7 @@ public final class SeedGenLevelCompat {
                     new DataPackConfig(packIds, List.of()), FeatureFlags.REGISTRY.allFlags());
             LevelSettings settings = new LevelSettings("HassiumSeedGen", GameType.CREATIVE, false,
                     Difficulty.NORMAL, true,
-#if MC_VER < MC_1_21_11
+#if MC_VER < MC_1_21_2
                     new GameRules(),
 #else
                     new GameRules(FeatureFlags.REGISTRY.allFlags()),
@@ -148,7 +152,7 @@ public final class SeedGenLevelCompat {
                                         Registry<LevelStem> stemRegistry =
                                                 new MappedRegistry<>(Registries.LEVEL_STEM, Lifecycle.stable()).freeze();
                                         WorldDimensions.Complete complete = dataLoadContext.datapackWorldgen()
-#if MC_VER < MC_1_21_11
+#if MC_VER < MC_1_21_2
                                                 .registryOrThrow(Registries.WORLD_PRESET)
                                                 .getHolderOrThrow(WorldPresets.NORMAL)
 #else
@@ -171,14 +175,13 @@ public final class SeedGenLevelCompat {
                     .get(120, TimeUnit.SECONDS);
 
             ShadowSeedServer server = ShadowSeedServer.create(
-                    Thread.currentThread(), access, repo, stem, seed, tmpDir);
+                    Thread.currentThread(), access, repo, stem, seed, worldRoot);
             server.initServer();
             return server;
         } catch (Exception e) {
-            // 装配失败：回收已创建的资源后重抛
+            // 装配失败：回收已创建的资源后重抛（持久目录保留，不删除）
             Constants.LOG.error("Hassium: Failed to create shadow seed server", e);
             closeQuietly(stem, access);
-            deleteRecursively(tmpDir);
             if (e instanceof IOException ioe) {
                 throw ioe;
             }
@@ -186,20 +189,54 @@ public final class SeedGenLevelCompat {
         }
     }
 
-    /** 关闭影子服务端并回收临时目录。 */
+    /**
+     * 影子端世界根：{@code <gameDir>/hassium_cache/<serverId>}（serverId 未就绪
+     * 时退回临时目录——进服早期竞态兜底，正常路径 storage 初始化已记录目录）。
+     * 存档名固定为 "world"，最终目录 = {@code hassium_cache/<serverId>/world}。
+     */
+    static Path resolveShadowWorldRoot() {
+        io.github.limuqy.mc.hassium.network.ClientChunkPipeline pipeline =
+                io.github.limuqy.mc.hassium.network.ClientChunkPipeline.getInstance();
+        java.nio.file.Path gameDir = pipeline.getGameDir();
+        String serverId = pipeline.getServerId();
+        if (gameDir == null || serverId == null) {
+            try {
+                return Files.createTempDirectory("hassium-shadow");
+            } catch (IOException e) {
+                throw new RuntimeException("Cannot resolve shadow world root", e);
+            }
+        }
+        return gameDir.resolve("hassium_cache").resolve(serverId);
+    }
+
+    /** 关闭影子服务端：先全量保存（type 126 + hash 落盘），再停线程；持久目录保留。 */
     public static void shutdown(ShadowSeedServer server) {
         if (server == null) {
             return;
+        }
+        try {
+            server.saveAll();
+        } catch (Exception e) {
+            Constants.LOG.warn("Hassium: Shadow seed server save failed", e);
         }
         try {
             server.halt(false);
         } catch (Exception e) {
             Constants.LOG.warn("Hassium: Shadow seed server halt failed", e);
         }
-        // 停各维度的 chunk 源（worldgen/光照线程）
+        // 停各维度的 chunk 源：只关 region 文件层（ChunkStorage.close），不关
+        // ServerChunkCache——其 mainThreadProcessor.close() → BlockableEventLoop.close()
+        // 会 shutdown 进程级共享的 Util.backgroundExecutor()（1.20.1 BlockableEventLoop
+        // 构造即用该 ForkJoinPool），R2 影子端重建后 light mailbox 全部
+        // RejectedExecutionException（官方 integrated server 切世界也只 halt 不关
+        // chunkSource，共享 pool 生命周期 = 进程生命周期）。
         for (ServerLevel level : server.getAllLevels()) {
             try {
+#if MC_VER < MC_1_21_2
+                ((net.minecraft.server.level.ServerChunkCache) level.getChunkSource()).chunkMap.close();
+#else
                 level.close();
+#endif
             } catch (Exception e) {
                 Constants.LOG.warn("Hassium: Shadow level close failed for {}", level.dimension(), e);
             }
@@ -214,8 +251,11 @@ public final class SeedGenLevelCompat {
                 Constants.LOG.warn("Hassium: Shadow storage close failed", e);
             }
         }
-        // 回收临时目录（LevelStorageAccess.close 可能已删，容错）
-        deleteRecursively(server.tmpRoot());
+        // 持久世界目录保留（重连复用）；复位影子上下文与 hash 桥。
+        io.github.limuqy.mc.hassium.server.RuntimeServerContext.setShadowServer(false);
+        io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.clear();
+        // 热度索引内存态清空（磁盘 heat.idx 已随 saveAll 落盘，重连装配时重新加载）
+        ShadowCacheEviction.reset();
     }
 
     private static void closeQuietly(WorldStem stem, LevelStorageSource.LevelStorageAccess access) {
@@ -232,28 +272,6 @@ public final class SeedGenLevelCompat {
             } catch (Exception e) {
                 Constants.LOG.warn("Hassium: Shadow storage close failed", e);
             }
-        }
-    }
-
-    private static void deleteRecursively(Path root) {
-        if (root == null) {
-            return;
-        }
-        try {
-            if (Files.exists(root)) {
-                try (java.util.stream.Stream<Path> paths = Files.walk(root)) {
-                    paths.sorted(java.util.Comparator.reverseOrder())
-                            .forEach(p -> {
-                                try {
-                                    Files.deleteIfExists(p);
-                                } catch (IOException e) {
-                                    // 忽略单个文件删除失败，尽力回收
-                                }
-                            });
-                }
-            }
-        } catch (IOException e) {
-            Constants.LOG.warn("Hassium: Failed to delete shadow temp dir {}", root, e);
         }
     }
 }

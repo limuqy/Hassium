@@ -210,6 +210,28 @@ if (-not $precheck.Skipped) {
     }
 }
 
+# 写服务端 server.properties（§2 配置 + §4.1 自动避让改端口后同步重写共用）。
+function Write-SmokeServerProperties {
+    param(
+        [Parameter(Mandatory=$true)][string]$Dir,
+        [Parameter(Mandatory=$true)][int]$Port
+    )
+    $props = @"
+server-port=$Port
+view-distance=16
+online-mode=false
+gamemode=creative
+level-type=minecraft\:normal
+level-seed=42
+motd=Hassium Smoke Test
+max-players=20
+white-list=false
+enforce-whitelist=false
+spawn-protection=0
+"@
+    Set-Content -Path (Join-Path $Dir "server.properties") -Value $props
+}
+
 # 仅清理本会话相关的 java 进程，避免在并行模式下误杀另一会话 / 另一项目。
 # 服务端通过端口定位（只杀 Listen 连接，且验证命令行属本工程）；客户端/兜底服务端
 # 通过命令行中「本工程根 + $Loader\run\{client,server}」路径的出现来定位。
@@ -363,20 +385,7 @@ Remove-Item -Recurse -Force (Join-Path $clientRunDir "crash-reports") -ErrorActi
 Write-Host "[$SessionId] [2/9] 配置服务端 ($Loader/run/server/)..."
 New-Item -ItemType Directory -Force -Path $serverRunDir -ErrorAction SilentlyContinue | Out-Null
 Set-Content -Path (Join-Path $serverRunDir "eula.txt") -Value "eula=true" -NoNewline
-$props = @"
-server-port=$ServerPort
-view-distance=16
-online-mode=false
-gamemode=creative
-level-type=minecraft\:normal
-level-seed=42
-motd=Hassium Smoke Test
-max-players=20
-white-list=false
-enforce-whitelist=false
-spawn-protection=0
-"@
-Set-Content -Path (Join-Path $serverRunDir "server.properties") -Value $props
+Write-SmokeServerProperties -Dir $serverRunDir -Port $ServerPort
 
 # 创建 world\serverconfig 目录（部分 neoforge / forge 50 版本不会自动创建）
 New-Item -ItemType Directory -Force -Path (Join-Path $serverRunDir "world\serverconfig") -ErrorAction SilentlyContinue | Out-Null
@@ -454,6 +463,41 @@ foreach ($p in $portsToFree) {
     }
 }
 
+# §4.1 端口自动避让（用户指示）：默认端口被占用（非本工程残留——§4 已释放本工程进程）
+# 时自动改空闲端口，避免并行会话/其他项目占 25565 导致启动失败。
+# 显式直传 -ServerPort 时不自动改（尊重指定端口，被占则后续服务端启动失败如实报错）。
+# 改后全链跟随：server.properties、客户端连接、Stop-SessionJava、ProxyPort(+5) 均引用 $ServerPort。
+if (-not $PSBoundParameters.ContainsKey('ServerPort')) {
+    $probe = Get-NetTCPConnection -LocalPort $ServerPort -State Listen -ErrorAction SilentlyContinue
+    if ($probe) {
+        $newPort = $ServerPort
+        for ($try = 0; $try -lt 100; $try++) {
+            $newPort++
+            $busy = Get-NetTCPConnection -LocalPort $newPort -State Listen -ErrorAction SilentlyContinue
+            if (-not $busy) { break }
+        }
+        if ($newPort -ne $ServerPort) {
+            Write-Host "[$SessionId] 端口 $ServerPort 被占用（PID $($probe[0].OwningProcess)），自动改用 $newPort"
+            $ServerPort = $newPort
+            # §2 已写 properties（旧端口），同步重写
+            Write-SmokeServerProperties -Dir $serverRunDir -Port $ServerPort
+            # effectiveHost 在脚本开头按旧端口快照，同步重建（SmokeHost 显式优先语义保持）
+            if (-not ($SmokeHost -and $SmokeHost -ne "")) {
+                $effectiveHost = "127.0.0.1:$ServerPort"
+            }
+            # UdpFailover：ProxyPort 未显式指定时跟随新端口（+5），effectiveHost 走 proxy
+            if ($Phase -eq "UdpFailover" -and -not $PSBoundParameters.ContainsKey('ProxyPort')) {
+                $ProxyPort = $ServerPort + 5
+                if (-not ($SmokeHost -and $SmokeHost -ne "")) {
+                    $effectiveHost = "127.0.0.1:$ProxyPort"
+                }
+            }
+        } else {
+            Write-Host "[$SessionId] 端口 $ServerPort 被占用，且未找到空闲避让端口；按原端口继续（启动将失败）"
+        }
+    }
+}
+
 # §3.2 UdpFailover phase：在 §5 server 启动前先起 nginx stream proxy。
 # UDP 数据面仍直连 server。client 连的就是 effectiveHost=127.0.0.1:$ProxyPort。
 $nginxDirHandle = $null
@@ -512,7 +556,7 @@ if ($PregenOnly) {
     $pregenGradlew = Join-Path $projectRoot "gradlew.bat"
     # 不调 gradlew --stop：全局停 daemon 会误杀并行会话/其他项目的构建；--no-daemon 不依赖 daemon。
     Write-Host "[$SessionId] [PregenOnly] 启动服务端 ($Loader / $Ver)..."
-    $pregenArgs = @("--no-daemon", ":${Loader}:runServer", "-PhassiumSmokeTest=true", "-PhassiumSmokePhases=pregen", "-Pmc_ver=${Ver}")
+    $pregenArgs = @("--no-daemon", "-Dorg.gradle.jvmargs=-Xmx2G -DsmokeSession=${SessionId}", ":${Loader}:runServer", "-PhassiumSmokeTest=true", "-PhassiumSmokePhases=pregen", "-Pmc_ver=${Ver}")
     $server = Start-Process -FilePath $pregenGradlew `
         -ArgumentList $pregenArgs `
         -RedirectStandardOutput $serverLog `
@@ -564,7 +608,7 @@ $gradlew = Join-Path $projectRoot "gradlew.bat"
 #    runServer/runClient 均显式 --no-daemon（见 5.1），不依赖 daemon；残留 daemon 由下次构建自然复用。
 # 5.1 再起服务端 —— 显式 --no-daemon 确保不复用任何 daemon
 Write-Host "[$SessionId] [4/9] 启动服务端 ($Loader / $Ver)..."
-$serverArgs = @("--no-daemon", ":${Loader}:runServer", "-PhassiumSmokeTest=true", "-PhassiumSmokePhases=${SmokePhases}", "-Pmc_ver=${Ver}")
+$serverArgs = @("--no-daemon", "-Dorg.gradle.jvmargs=-Xmx2G -DsmokeSession=${SessionId}", ":${Loader}:runServer", "-PhassiumSmokeTest=true", "-PhassiumSmokePhases=${SmokePhases}", "-Pmc_ver=${Ver}")
 $server = Start-Process -FilePath $gradlew `
     -ArgumentList $serverArgs `
     -RedirectStandardOutput $serverLog `
@@ -637,9 +681,14 @@ if ($SeamlessMode) {
 }
 
 # 7. 启动客户端（前台阻塞，自动两轮连服）
+# 冒烟 gradle 调用统一加 daemon 组隔离（org.gradle.jvmargs 唯一化）：gradle 8.x 的
+# --no-daemon 仍是单次 daemon，且 daemon 按 JVM 参数分组复用——并行构建（其他会话/
+# 其他 agent）会复用并互相 stop（"Daemon is stopping immediately"）把 runClient 杀掉。
+# 隔离后冒烟 daemon 自成一组，与本仓库其他构建互不干扰；单次构建用完即停不泄漏。
 Write-Host "[$SessionId] [6/9] 启动客户端连服（两轮自动）..."
 $clientArgs = @(
     "--no-daemon",
+    "-Dorg.gradle.jvmargs=-Xmx2G -DsmokeSession=$SessionId",
     ":${Loader}:runClient",
     "-PhassiumSmokeTest=true",
     "-PhassiumSmokeHost=$effectiveHost",

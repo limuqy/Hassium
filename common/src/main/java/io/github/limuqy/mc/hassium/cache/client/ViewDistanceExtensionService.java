@@ -128,7 +128,7 @@ public class ViewDistanceExtensionService {
 
     /**
      * 判断指定区块是否为 renderOnly（仅渲染、不参与模拟）。
-     * 供 {@link CacheSaveQueue} 在卸载时短路：renderOnly 区块不写回缓存，保留历史快照。
+     * 影子模式下数据源为影子端，卸载直接 drop（断连落盘由影子端 saveAll 承担）。
      */
     public boolean isRenderOnly(ChunkPos pos) {
         return pos != null && (loadedRenderOnly.contains(pos) || pendingRenderOnly.contains(pos));
@@ -217,6 +217,12 @@ public class ViewDistanceExtensionService {
             clearAllRenderOnly();
             return;
         }
+        // 方案 A（客户端零侵入架构）：OVD 数据源 = 影子端（读盘/生成 → 官方包推送）。
+        // 非影子模式 = 纯网络优化，无本地缓存/OVD。
+        if (!io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.isEnabled()) {
+            clearAllRenderOnly();
+            return;
+        }
 
         int clientVD = resolveEffectiveClientVD(mc);
         int serverVD = resolveServerVD(mc);
@@ -284,24 +290,8 @@ public class ViewDistanceExtensionService {
         }
 
         // 加载新的 renderOnly（跳过已 apply / 已排队 / 未到期 miss）
-        // 权威加载未完成（pending + ready 含权威块）：OVD 完全暂停，权威块独占每帧配额。
-        // 用户场景：正常 VD 加载完成后再加载超视距，避免 OVD 读盘/apply 挤占权威。
-        if (ClientCacheLoadQueue.getInstance().getAuthorityLoad() > 0) {
-            Constants.LOG.debug("Hassium: OVD paused (authorityLoad={}), waiting for authority chunks",
-                    ClientCacheLoadQueue.getInstance().getAuthorityLoad());
-            return;
-        }
-        // JoinBoost 窗口内跳过队列深度门槛（权威已完成，OVD 可以积极灌队）；
-        // 窗口过期后按阈值限流，防止 OVD 数千区块压垮 executor。
-        if (!ClientMainThreadBudget.isJoinBoostActive()) {
-            int pendingLoad = ClientCacheLoadQueue.getInstance().getPendingSize()
-                    + ClientCacheLoadQueue.getInstance().getReadySize();
-            if (pendingLoad > OVD_LOAD_THRESHOLD) {
-                Constants.LOG.debug("Hassium: OVD paused (pendingLoad={}, threshold={}), waiting for authority chunks",
-                        pendingLoad, OVD_LOAD_THRESHOLD);
-                return;
-            }
-        }
+        // 影子模式：OVD 请求直接投递影子端（读盘/生成），无客户端加载队列限流；
+        // 生成预算由 SeedGenExecutor 的线程池/队列自限。
 
         List<ChunkPos> toLoad = new ArrayList<>(needed.size());
         for (ChunkPos pos : needed) {
@@ -491,7 +481,7 @@ public class ViewDistanceExtensionService {
     }
 
     /**
-     * @return true 若已成功登记 pending 并 enqueue 到 {@link ClientCacheLoadQueue}
+     * @return true 若已成功登记 pending 并投递影子端 OVD 生成/读盘
      */
     private boolean loadRenderOnlyChunk(ChunkPos pos) {
         Minecraft mc = Minecraft.getInstance();
@@ -500,33 +490,21 @@ public class ViewDistanceExtensionService {
             return false;
         }
 
-        // storage 未就绪：不要进队列烧 miss 次数（异步 onLogin 窗口）
-        if (ClientChunkHandler.getClientStorage() == null) {
-            Constants.LOG.debug("Hassium: OVD skip enqueue {} (client storage not ready)", pos);
-            return false;
+        // 影子模式（客户端零侵入架构）：OVD 数据源 = 影子端——R1 落盘读回优先
+        // （generateChunk 官方链 getChunkFuture 自动读盘），盘缺失时本地生成兜底，
+        // 统一经官方包通道 apply renderOnly。不依赖 HBT1 storage，先于其检查。
+        if (io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.isEnabled()
+                && io.github.limuqy.mc.hassium.network.seedgen.OvdLocalGenerator.isEnabled()) {
+            io.github.limuqy.mc.hassium.network.seedgen.OvdLocalGenerator.request(pos);
+            pendingRenderOnly.add(pos);
+            loadedRenderOnly.remove(pos);
+            delayedUnloadAt.remove(pos);
+            missRetryAt.remove(pos);
+            return true;
         }
 
-        IClientLevelExtension accessor = (IClientLevelExtension) level;
-        if (accessor.hassium$isRenderOnly(pos.toLong())) {
-            return false;
-        }
-        ClientChunkCache cache = ((ClientLevelAccessor) level).hassium$getChunkSource();
-        if (cache.hasChunk(pos.x, pos.z)) {
-            return false;
-        }
-
-        // 刷新坐标缓存后冻结 RENDER_ONLY 键；坐标未知时仍为环带层 base+0（权威 > 未知任务 > 环带）
-        MainThreadDispatcher.updatePlayerPosition(mc.player.getX(), mc.player.getZ());
-        double priority = MainThreadDispatcher.renderOnlyPriority(pos);
-        // 仅 pending；apply 成功后再进 loaded，避免 miss 后 loaded 语义错误 / 负向感知
-        pendingRenderOnly.add(pos);
-        loadedRenderOnly.remove(pos);
-        ClientCacheLoadQueue.getInstance().enqueue(pos, priority, true);
-        delayedUnloadAt.remove(pos);
-        // 重试路径：清掉旧 miss 时间戳，保留 count 供下次 miss 退避
-        missRetryAt.remove(pos);
-        Constants.LOG.debug("Hassium: Queued render-only chunk {} for async loading", pos);
-        return true;
+        // 非影子模式（纯网络优化）：OVD 禁用，不加载 renderOnly
+        return false;
     }
 
     /**
@@ -565,8 +543,8 @@ public class ViewDistanceExtensionService {
 
         try {
             ensureChunkCacheRadius(level, resolveEffectiveClientVD(mc));
-            // 落盘必须在标 renderOnly 之前（CacheSaveQueue 对 renderOnly 短路）
-            CacheSaveQueue.getInstance().enqueue(chunk);
+            // 新架构：断连落盘由影子端 saveAll 统一承担（区块 R1 已进影子端 ChunkMap），
+            // Forget 保留路径无需客户端写盘。
 
             pendingRenderOnly.remove(pos);
             loadedRenderOnly.add(pos);
@@ -586,73 +564,13 @@ public class ViewDistanceExtensionService {
     /**
      * 真实区块即将被卸载时的兜底（{@link MixinClientLevel} unload HEAD）。
      * <p>
-     * 主路径已在 Forget 时 {@link #tryRetainOnServerForget} 取消 drop；此处覆盖
-     * 其它仍会走到 {@code level.unload} 的情况。
-     * vanilla {@code Storage.replace(old, null)}：先 CAS 清空 slot，再 unload，
-     * 故 HEAD 时可同栈 apply 填回。
+     * 新架构：OVD 区块数据常驻影子端存档，卸载直接 drop；重新进环带由
+     * OVD 读盘快速补（影子端读盘 ~10ms），不再做 HBT1 同栈替换。
      *
-     * @return true 若已提交即时替换（调用方勿再清 renderOnly 标记）
+     * @return 恒 false（不再替换）
      */
     public boolean trySubstituteOnUnload(LevelChunk chunk) {
-        if (chunk == null) {
-            return false;
-        }
-        ChunkPos pos = chunk.getPos();
-        // 已是 renderOnly：不重复替换
-        if (isRenderOnly(pos)) {
-            return false;
-        }
-        if (!shouldKeepAsRenderOnly(pos)) {
-            return false;
-        }
-        if (!(chunk.getLevel() instanceof ClientLevel clientLevel)) {
-            return false;
-        }
-
-        try {
-            // 帧配额：OVD unload substitute 与 readyQueue 消费共用 maxChunksPerFrame 硬顶。
-            // 权威块在队时本帧不替换（权威优先，轮空才轮到 OVD）；配额满同样 defer——
-            // 延迟几帧由 OVD rescan 正常路径补上，不绕过帧限速。
-            if (ClientCacheLoadQueue.getInstance().hasAuthorityReady()
-                    || !io.github.limuqy.mc.hassium.cache.client.ClientMainThreadBudget.tryAcquireCacheApply()) {
-                Constants.LOG.debug("Hassium: OVD unload substitute deferred (authority in queue or frame budget full)");
-                return false;
-            }
-            // 扩大半径，避免随后 apply 被 inRange 丢弃
-            Minecraft mc = Minecraft.getInstance();
-            if (mc != null) {
-                ensureChunkCacheRadius(clientLevel, resolveEffectiveClientVD(mc));
-            }
-
-            net.minecraft.nbt.CompoundTag nbt = ChunkDiskCodec.levelChunkToNbt(chunk, clientLevel);
-            if (nbt == null) {
-                Constants.LOG.debug("Hassium: OVD unload substitute serialize failed for {}", pos);
-                return false;
-            }
-            byte[] nbtBytes = ChunkDiskCodec.nbtToBytes(nbt);
-            if (nbtBytes == null) {
-                return false;
-            }
-
-            pendingRenderOnly.remove(pos);
-            loadedRenderOnly.add(pos);
-            delayedUnloadAt.remove(pos);
-            missRetryAt.remove(pos);
-            missRetryCount.remove(pos);
-            unloadSubstituteTotal.incrementAndGet();
-
-            // 同栈 apply：Storage slot 已在 unload 前被 CAS 清空，此时写入不会被随后覆盖
-            // levelChunkToNbt 已含光照 → isLightOn 为 true，跳过同步重算
-            if (ClientChunkHandler.applyChunkData(pos.x, pos.z, nbtBytes, true, nbt)) {
-                Constants.LOG.debug("Hassium: OVD unload substitute applied immediately for {}", pos);
-            } else {
-                Constants.LOG.debug("Hassium: OVD unload substitute immediate apply failed {}, queued by miss retry", pos);
-            }
-            return true;
-        } catch (Exception e) {
-            Constants.LOG.debug("Hassium: OVD unload substitute failed for {}", pos, e);
-            return false;
-        }
+        return false;
     }
 
     private void unloadRenderOnlyChunk(ChunkPos pos) {
@@ -729,13 +647,7 @@ public class ViewDistanceExtensionService {
         if (pos == null) {
             return;
         }
-        // 异步 init 未完成：短延迟再试，不烧 count
-        if (ClientChunkHandler.getClientStorage() == null) {
-            missRetryAt.put(pos, System.currentTimeMillis() + MISS_RETRY_BASE_MS);
-            Constants.LOG.debug("Hassium: OVD miss {} (storage not ready), soft retry in {}ms",
-                    pos, MISS_RETRY_BASE_MS);
-            return;
-        }
+        // 影子模式无客户端 storage：直接登记 miss 退避，由 OVD 读盘/生成补洞
         missTotal.incrementAndGet();
         int count = missRetryCount.getOrDefault(pos, 0) + 1;
         missRetryCount.put(pos, count);

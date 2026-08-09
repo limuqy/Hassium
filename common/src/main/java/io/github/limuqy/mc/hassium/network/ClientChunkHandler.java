@@ -1,8 +1,6 @@
 package io.github.limuqy.mc.hassium.network;
 
 import io.github.limuqy.mc.hassium.Constants;
-import io.github.limuqy.mc.hassium.cache.client.ChunkDiskCodec;
-import io.github.limuqy.mc.hassium.cache.client.ClientHassiumStorage;
 import io.github.limuqy.mc.hassium.cache.client.ChunkOutOfViewException;
 import io.github.limuqy.mc.hassium.cache.client.ViewDistanceExtensionService;
 import io.github.limuqy.mc.hassium.metrics.NetworkStats;
@@ -16,13 +14,8 @@ import io.github.limuqy.mc.hassium.utils.DebugLogger.LogType;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.world.level.ChunkPos;
-import net.minecraft.nbt.CompoundTag;
 
-import java.nio.file.Path;
-import java.util.Collections;
-import java.util.Iterator;
 import java.util.List;
-import java.util.Map;
 
 /**
  * 客户端区块处理器门面（Phase 0 隔离重构后）。
@@ -33,24 +26,6 @@ import java.util.Map;
  * Phase 4 完成后删除本门面，调用方直指 pipeline 实例。
  */
 public class ClientChunkHandler {
-
-    /**
-     * 初始化客户端缓存存储（转发 pipeline）
-     *
-     * @param gameDir     游戏目录
-     * @param serverId    服务器标识（如 server_127.0.0.1_25565）
-     * @param dimension   维度标识（如 minecraft:overworld）
-     */
-    public static void initStorage(Path gameDir, String serverId, String dimension) {
-        ClientChunkPipeline.getInstance().initStorage(gameDir, serverId, dimension);
-    }
-
-    /**
-     * 获取客户端缓存存储实例（转发 pipeline）
-     */
-    public static ClientHassiumStorage getClientStorage() {
-        return ClientChunkPipeline.getInstance().getClientStorage();
-    }
 
     /**
      * 重置客户端缓存存储（断开连接时调用，转发 pipeline）
@@ -67,79 +42,6 @@ public class ClientChunkHandler {
     }
 
     /**
-     * 全量推送异步入库：packet → NBT → CacheSaveQueue（不堵主线程）。
-     * <p>
-     * 初始多为 is_light_on=0；光照回写后标净。level 未就绪时保持 dirty，留给卸载/断连安全网。
-     */
-    private static void scheduleAsyncCacheIngest(int chunkX, int chunkZ, byte[] packetBytes) {
-        ChunkPos pos = new ChunkPos(chunkX, chunkZ);
-        io.github.limuqy.mc.hassium.cache.client.ClientChunkDirtyTracker.markDirty(pos);
-
-        HassiumTaskExecutor executor = HassiumTaskExecutor.getClient();
-        Runnable ingest = () -> {
-            try {
-                if (ClientChunkPipeline.getInstance().getClientStorage() == null) {
-                    return;
-                }
-                Minecraft mc = Minecraft.getInstance();
-                ClientLevel level = mc.level;
-                if (level == null) {
-                    DebugLogger.debug(LogType.COMPRESSION,
-                            "[CACHE_INGEST] Level not ready for [{}, {}], keep dirty for unload", chunkX, chunkZ);
-                    return;
-                }
-                CompoundTag nbt = ChunkDiskCodec.packetBytesToNbt(
-                        packetBytes, level.registryAccess(), level.getSectionsCount());
-                if (nbt == null) {
-                    DebugLogger.debug(LogType.COMPRESSION,
-                            "[CACHE_INGEST] packetBytesToNbt failed for [{}, {}]", chunkX, chunkZ);
-                    return;
-                }
-                byte[] nbtBytes = ChunkDiskCodec.nbtToBytes(nbt);
-                if (nbtBytes == null) {
-                    return;
-                }
-                ClientChunkPipeline pipeline = ClientChunkPipeline.getInstance();
-                long contentHash = pipeline.peekPendingContentHash(chunkX, chunkZ);
-                long[] sectionHashes = pipeline.peekPendingSectionHashes(chunkX, chunkZ);
-                if (contentHash == 0L && sectionHashes != null && sectionHashes.length > 0) {
-                    contentHash = io.github.limuqy.mc.hassium.cache.ChunkContentHashUtil
-                            .combineSectionHashesFromArray(sectionHashes);
-                }
-                if (contentHash == 0L) {
-                    // 兜底：chunkHash 包未先于 chunk 到达（或已过期）时，从服务端数据重算，
-                    // 避免 contentHash=0 被 MetadataTable 翻转成 1 → 次回 compare 全 MISMATCH。
-                    // 与 SectionDelta 的 applyDeltaEntry 重算路径一致（方块数据同源，hash 相同）。
-                    int sectionCount = level.getSectionsCount();
-                    long[] nbtSectionHashes = io.github.limuqy.mc.hassium.cache.client.ChunkDiskCodec
-                            .computeSectionHashesFromNbt(nbt, sectionCount, level.registryAccess());
-                    sectionHashes = nbtSectionHashes;
-                    contentHash = io.github.limuqy.mc.hassium.cache.ChunkContentHashUtil
-                            .combineSectionHashesFromArray(nbtSectionHashes);
-                }
-                io.github.limuqy.mc.hassium.cache.client.CacheSaveQueue.getInstance()
-                        .enqueueSerialized(pos, nbtBytes, contentHash, sectionHashes);
-                pipeline.consumePendingContentHash(chunkX, chunkZ);
-                pipeline.consumePendingSectionHashes(chunkX, chunkZ);
-            } catch (Exception e) {
-                DebugLogger.debug(LogType.COMPRESSION,
-                        "[CACHE_INGEST] Failed for [{}, {}]: {}", chunkX, chunkZ, e.getMessage());
-            }
-        };
-
-        if (Minecraft.getInstance().isSameThread()) {
-            if (executor != null && executor.isRunning()) {
-                executor.submit(ingest, TaskCategory.SAFE_TO_CANCEL);
-            } else {
-                ingest.run();
-            }
-        } else {
-            // 已在解压后台线程，直接入库避免再排队
-            ingest.run();
-        }
-    }
-
-    /**
      * 处理接收到的压缩区块数据
      * <p>
      * 解码在调用者线程（主线程），ZSTD 解压提交到后台线程池，
@@ -150,7 +52,6 @@ public class ClientChunkHandler {
     public static void handleCompressedChunk(byte[] compressedData) {
         DebugLogger.info(LogType.COMPRESSION, "[HANDLE_COMPRESSED] Received compressed chunk data ({} bytes)",
                 compressedData == null ? -1 : compressedData.length);
-
         if (compressedData == null || compressedData.length == 0) {
             Constants.LOG.error("[HANDLE_COMPRESSED] Empty compressed payload, ignoring");
             return;
@@ -199,12 +100,30 @@ public class ClientChunkHandler {
                     DebugLogger.error("[HANDLE_COMPRESSED] Failed to decompress chunk data for [{}, {}]", chunkX, chunkZ);
                     return;
                 }
+                if (decompressed.length != compressed.originalSize) {
+                    DebugLogger.error("[HANDLE_COMPRESSED] Decompressed size mismatch for [{}, {}] got={} orig={}",
+                            chunkX, chunkZ, decompressed.length, compressed.originalSize);
+                }
 
                 DebugLogger.info(LogType.COMPRESSION, "[HANDLE_COMPRESSED] Decompressed chunk [{}, {}] ({} -> {} bytes)",
                     chunkX, chunkZ, compData.length, decompressed.length);
 
-                // 推送即入库：后台转 NBT 并投入 CacheSaveQueue（与主线程 apply 并行摊销写盘）
-                scheduleAsyncCacheIngest(chunkX, chunkZ, decompressed);
+                // 影子链路（服务端已装 MOD + 引擎开启）：还原官方包 → 投递影子端
+                // （注入 → 原版算光 → 打包官方包 → 官方通道落地）；缓存读写由影子端
+                // 世界存档承担，客户端不再 apply/入库。
+                if (io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.isEnabled()) {
+                    net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket packet =
+                            decodeChunkPacket(decompressed);
+                    if (packet != null) {
+                        io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.submit(
+                                new ChunkPos(chunkX, chunkZ), packet);
+                        return;
+                    }
+                    // decode 失败：回退直接 apply（数据仍需落地；方案 A 无客户端入库）
+                    DebugLogger.warn(LogType.COMPRESSION,
+                            "[HANDLE_COMPRESSED] Packet decode failed for [{}, {}], fallback direct apply",
+                            chunkX, chunkZ);
+                }
 
                 // 回主线程应用区块（距离优先级依赖 updatePlayerPosition）
                 MainThreadDispatcher.execute(() -> {
@@ -237,7 +156,16 @@ public class ClientChunkHandler {
             Constants.LOG.debug("Hassium: Decompressed chunk [{}, {}] on main thread (fallback), size: {} -> {} bytes",
                 compressed.chunkX, compressed.chunkZ, compressed.compressedData.length, decompressed.length);
 
-            scheduleAsyncCacheIngest(compressed.chunkX, compressed.chunkZ, decompressed);
+            // 影子链路分流（同异步路径）
+            if (io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.isEnabled()) {
+                net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket packet =
+                        decodeChunkPacket(decompressed);
+                if (packet != null) {
+                    io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.submit(
+                            new ChunkPos(compressed.chunkX, compressed.chunkZ), packet);
+                    return;
+                }
+            }
 
             // 应用区块
             boolean applied = applyChunkData(compressed.chunkX, compressed.chunkZ, decompressed, false);
@@ -255,61 +183,59 @@ public class ClientChunkHandler {
     }
 
     /**
+     * 还原官方区块包（线格式字节 → {@code ClientboundLevelChunkWithLightPacket}；
+     * 影子链路投递用）。decode 失败返回 null（调用方回退旧链）。
+     */
+    private static net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket
+            decodeChunkPacket(byte[] packetBytes) {
+        try {
+#if MC_VER < MC_1_20_5
+            io.netty.buffer.ByteBuf nettyBuf = io.netty.buffer.Unpooled.wrappedBuffer(packetBytes);
+            try {
+                net.minecraft.network.FriendlyByteBuf friendlyBuf =
+                        new net.minecraft.network.FriendlyByteBuf(nettyBuf);
+                return new net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket(friendlyBuf);
+            } finally {
+                nettyBuf.release();
+            }
+#else
+            net.minecraft.client.Minecraft mc = net.minecraft.client.Minecraft.getInstance();
+            if (mc.level == null) {
+                return null;
+            }
+            net.minecraft.network.RegistryFriendlyByteBuf buf = new net.minecraft.network.RegistryFriendlyByteBuf(
+                    io.netty.buffer.Unpooled.wrappedBuffer(packetBytes), mc.level.registryAccess());
+            try {
+                return net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket
+                        .STREAM_CODEC.decode(buf);
+            } finally {
+                buf.release();
+            }
+#endif
+        } catch (Exception e) {
+            DebugLogger.error("[DECODE_CHUNK] Failed to decode chunk packet", e);
+            return null;
+        }
+    }
+
+    /**
      * 将解压后的区块数据应用到客户端世界
      * <p>
-     * {@code chunkData} 支持两种格式：
-     * <ul>
-     *   <li>NBT 字节（含 {@code "HBT1"} magic 前缀）：{@link ChunkDiskCodec#bytesToNbt} →
-     *       {@link ChunkDiskCodec#nbtToPacketBytes} 重组 packet → {@code applyToLevelFromByteBuf}</li>
-     *   <li>旧 packet 字节（无 magic 前缀，向后兼容）：直接 {@code applyToLevelFromByteBuf}</li>
-     * </ul>
+     * 方案 A：{@code chunkData} 为官方 packet 线格式字节（服务端/影子端推送），
+     * 直接经平台 applier 落地。
      *
      * @param chunkX     区块X坐标
      * @param chunkZ     区块Z坐标
-     * @param chunkData  NBT 字节或 packet 字节
+     * @param chunkData  packet 字节
      * @param renderOnly true=仅渲染不参与逻辑tick
      */
     public static boolean applyChunkData(int chunkX, int chunkZ, byte[] chunkData, boolean renderOnly) {
-        // 仍是 HBT1 NBT 时自动识别 is_light_on；已是 packet 字节则视为无标志（由调用方显式传入）
-        CompoundTag nbt = ChunkDiskCodec.bytesToNbt(chunkData);
-        if (nbt != null) {
-            return applyChunkDataInternal(chunkX, chunkZ, chunkData, renderOnly, nbt,
-                    ChunkDiskCodec.isLightOn(nbt));
-        }
-        return applyChunkDataInternal(chunkX, chunkZ, chunkData, renderOnly, null, false);
+        // 方案 A：数据均为官方 packet 字节（服务端/影子端推送），无 HBT1 NBT 分支。
+        return applyChunkDataInternal(chunkX, chunkZ, chunkData, renderOnly, false);
     }
-
-    /**
-     * 将解压后的区块数据应用到客户端世界（接受预构建的 NBT 以避免光照回写时重复读盘）。
-     *
-     * @param chunkX     区块X坐标
-     * @param chunkZ     区块Z坐标
-     * @param chunkData  NBT 字节或 packet 字节
-     * @param renderOnly true=仅渲染不参与逻辑tick
-     * @param cachedNbt  内存中的缓存 NBT（可为 null，null 时回退磁盘读取）
-     */
-    public static boolean applyChunkData(int chunkX, int chunkZ, byte[] chunkData,
-                                         boolean renderOnly, CompoundTag cachedNbt) {
-        return applyChunkDataInternal(chunkX, chunkZ, chunkData, renderOnly, cachedNbt,
-                ChunkDiskCodec.isLightOn(cachedNbt));
-    }
-
-    /**
-     * 缓存队列 apply：显式传入是否已含光照，避免 packet 字节路径无法再读 {@code is_light_on}。
-     */
-    public static boolean applyChunkData(int chunkX, int chunkZ, byte[] chunkData,
-                                         boolean renderOnly, CompoundTag cachedNbt,
-                                         boolean hasCachedLight) {
-        return applyChunkDataInternal(chunkX, chunkZ, chunkData, renderOnly, cachedNbt, hasCachedLight);
-    }
-
-    /**
-     * Hassium 内部 apply 进行中标志已迁 {@link ClientChunkPipeline#isApplyInProgress()}。
-     */
 
     private static boolean applyChunkDataInternal(int chunkX, int chunkZ, byte[] chunkData,
-                                                  boolean renderOnly, CompoundTag cachedNbt,
-                                                  boolean hasCachedLight) {
+                                                  boolean renderOnly, boolean hasCachedLight) {
         DebugLogger.info(LogType.CHUNK_APPLY,
                 "[APPLY_CHUNK] Applying chunk [{}, {}] (dataSize={}, renderOnly={}, hasCachedLight={})",
                 chunkX, chunkZ, chunkData.length, renderOnly, hasCachedLight);
@@ -335,7 +261,7 @@ public class ClientChunkHandler {
             // 丢弃（数据已推送即入库，等于直接入客户端缓存）。判定与 apply 之间仍有
             // 竞态窗口，由下方 ChunkOutOfViewException 兜底。
             if (!renderOnly && ViewDistanceExtensionService.getInstance().shouldKeepAsRenderOnly(pos)) {
-                return applyChunkDataInternal(chunkX, chunkZ, chunkData, true, cachedNbt, hasCachedLight);
+                return applyChunkDataInternal(chunkX, chunkZ, chunkData, true, hasCachedLight);
             }
 
             // 超视渲染 / 缓存 apply 前先保证 Storage 半径 ≥ clientVD（防 server 缩半径窗口）
@@ -343,12 +269,9 @@ public class ClientChunkHandler {
                 ViewDistanceExtensionService.getInstance().ensureExpandedRadius();
             }
 
-            byte[] packetBytes = ChunkDiskCodec.maybeNbtToPacketBytes(
-                    chunkData, level.registryAccess(), level.getSectionsCount());
-
-            // chunkData 是 FriendlyByteBuf 格式，需要通过 Minecraft 的数据包处理器来应用
-            // 创建 FriendlyByteBuf 来读取数据，确保从位置 0 开始读取
-            io.netty.buffer.ByteBuf nettyBuf = io.netty.buffer.Unpooled.wrappedBuffer(packetBytes);
+            // chunkData 是官方 packet 线格式字节（FriendlyByteBuf 格式），
+            // 通过 Minecraft 的数据包处理器来应用
+            io.netty.buffer.ByteBuf nettyBuf = io.netty.buffer.Unpooled.wrappedBuffer(chunkData);
             nettyBuf.readerIndex(0);  // 确保从头开始读取
             net.minecraft.network.FriendlyByteBuf friendlyBuf = new net.minecraft.network.FriendlyByteBuf(nettyBuf);
 
@@ -386,11 +309,7 @@ public class ClientChunkHandler {
                 NetworkStats.recordLightCacheHit(getLightBytesPerChunk(level));
                 ViewDistanceExtensionService.getInstance().onRenderOnlyApplied(pos);
             } else {
-                // renderOnly 缓存无光（is_light_on=0）：不本地重算——客户端无光照逻辑；
-                // 空光包 apply 后由 TAIL（MixinLightRecompute，影子端启用态）统一投递影子端，
-                // 算完回传落地后再由卸载/断连 dump 从引擎收敛态捕获写盘。此处只标脏保证
-                // 任何路径都进入 dirty 集合。
-                io.github.limuqy.mc.hassium.cache.client.ClientChunkDirtyTracker.markDirty(pos);
+                // OVD 包（影子端官方算光带光）；仅登记 renderOnly 落地
                 ViewDistanceExtensionService.getInstance().onRenderOnlyApplied(pos);
             }
             return true;
@@ -421,104 +340,4 @@ public class ClientChunkHandler {
         // level 参数保留以便未来按 sectionsCount 动态估算；当前与区块口径一致用常量
         return NetworkStats.ESTIMATED_LIGHT_BYTES;
     }
-
-    /**
-     * 批量加载缓存区块（region 级批量读，语义与单块路径一致）。
-     * <p>
-     * 同 region 的块一次锁持有顺序读，锁外解压；无效 NBT 校验与删盘行为同
-     * {@link #loadChunkDataFromCache(ChunkPos)}。
-     *
-     * @param positions 区块坐标列表（可跨 region，内部按 region 分组）
-     * @return 校验通过的区块坐标 → HBT1 字节
-     */
-    public static Map<ChunkPos, byte[]> loadChunkDataBatchFromCache(List<ChunkPos> positions) {
-        ClientHassiumStorage storage = ClientChunkPipeline.getInstance().getClientStorage();
-        if (storage == null) {
-            return Collections.emptyMap();
-        }
-        Map<ChunkPos, byte[]> loaded = storage.loadRegionBatch(positions);
-        if (loaded.isEmpty()) {
-            return loaded;
-        }
-        Iterator<Map.Entry<ChunkPos, byte[]>> it = loaded.entrySet().iterator();
-        while (it.hasNext()) {
-            Map.Entry<ChunkPos, byte[]> e = it.next();
-            byte[] chunkData = e.getValue();
-            if (ChunkDiskCodec.isValidChunkNbt(chunkData)) {
-                continue;
-            }
-            if (ChunkDiskCodec.stripMagicPrefix(chunkData) == null) {
-                Constants.LOG.debug("Hassium: Cache invalid (non-NBT) for chunk {}, removing", e.getKey());
-                try {
-                    storage.remove(e.getKey());
-                } catch (Throwable t) {
-                    Constants.LOG.debug("Hassium: Failed to remove invalid cache for {}", e.getKey(), t);
-                }
-            } else {
-                Constants.LOG.warn("Hassium: Cache has HBT1 magic but invalid chunk NBT for {}, keeping on disk",
-                        e.getKey());
-            }
-            NetworkStats.recordCacheMiss();
-            it.remove();
-        }
-        return loaded;
-    }
-
-    /**
-     * 从缓存加载区块数据（仅加载和解压，不应用到世界）
-     * <p>
-     * 可以在后台线程调用，避免阻塞主线程。
-     * <p>
-     * 旧 packet 缓存识别：解压后若不是合法 NBT（无 magic 前缀），删块并返回 null，
-     * 让 {@code ClientCacheLoadQueue} 走全量请求。
-     *
-     * @param pos 区块坐标
-     * @return NBT 字节（含 magic 前缀）；不存在或非法返回 null
-     */
-    public static byte[] loadChunkDataFromCache(ChunkPos pos) {
-        ClientHassiumStorage storage = ClientChunkPipeline.getInstance().getClientStorage();
-        if (storage == null) {
-            return null;
-        }
-
-        try {
-            byte[] chunkData = storage.loadAndDecompress(pos);
-            if (chunkData == null) {
-                return null;
-            }
-            // 校验 NBT 格式：仅旧 packet（无 HBT1 magic）才删盘；HBT1 结构异常保留以免误删
-            if (!ChunkDiskCodec.isValidChunkNbt(chunkData)) {
-                if (ChunkDiskCodec.stripMagicPrefix(chunkData) == null) {
-                    Constants.LOG.debug("Hassium: Cache invalid (non-NBT) for chunk {}, removing", pos);
-                    try {
-                        storage.remove(pos);
-                    } catch (Throwable t) {
-                        Constants.LOG.debug("Hassium: Failed to remove invalid cache for {}", pos, t);
-                    }
-                } else {
-                    Constants.LOG.warn("Hassium: Cache has HBT1 magic but invalid chunk NBT for {}, keeping on disk",
-                            pos);
-                }
-                NetworkStats.recordCacheMiss();
-                return null;
-            }
-            Constants.LOG.debug("Hassium: Loaded chunk {} from cache ({} NBT bytes)", pos, chunkData.length);
-            return chunkData;
-        } catch (Exception e) {
-            Constants.LOG.debug("Hassium: Failed to load chunk {} from cache", pos, e);
-            return null;
-        }
-    }
-
-    /**
-     * 从缓存加载区块 NBT（后台线程安全）。
-     *
-     * @param pos 区块坐标
-     * @return chunk NBT；不存在或非法返回 null
-     */
-    public static net.minecraft.nbt.CompoundTag loadChunkNbtFromCache(ChunkPos pos) {
-        byte[] bytes = loadChunkDataFromCache(pos);
-        return bytes != null ? ChunkDiskCodec.bytesToNbt(bytes) : null;
-    }
-
 }

@@ -18,8 +18,6 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
  * 负责初始化缓存系统和断开连接时清理。
  * 元数据处理逻辑在 {@link io.github.limuqy.mc.hassium.network.ClientMetadataHandler} 中。
  * <p>
- * M2: 缓存存储初始化异步化 —— handleLogin 时在后台线程完成 ClientHassiumStorage 创建。
- * <p>
  * 1.20.2+：{@code onDisconnect} 已上移到 {@code ClientCommonPacketListenerImpl}，
  * 由 {@link MixinClientCommonPacketListenerImpl} 注入。
  * <p>
@@ -57,8 +55,6 @@ public class MixinClientPacketListener {
                                         + " 不可用，已通过备用端点 " + endpoint.host() + ":" + endpoint.port()
                                         + " 连接；服务器列表地址和缓存身份仍为主地址。")));
                 // 无感切换：新 level 区块缓存全空，服务端会重发全部权威区块（秒级下载）。
-                // 区块预填充已在 setLevel HEAD（handleLogin 内部，更早）由 RecoveryChunkPrefill
-                // captureAndStart 完成——内存快照旧 level 区块 + 磁盘兜底，权威数据到达后覆盖。
             }
         } catch (Throwable ignored) {
             // 收敛失败不阻断登录

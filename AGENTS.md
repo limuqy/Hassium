@@ -53,7 +53,7 @@ fabric/ | forge/ | neoforge/
 
 | 项 | 默认 | 注意 |
 |----|------|------|
-| `storage.enabled` | **false** | 默认关；开启后改存档格式（type 126）→ 提醒备份；仅专用服务器写，单人/局域网保持原版格式（读兼容；客户端缓存独立不受影响） |
+| `storage.enabled` | **false** | 默认关；开启后改存档格式（type 126）→ 提醒备份；仅专用服务器写，单人/局域网保持原版格式（读兼容）；客户端影子端（hassium_cache）固定写 126，不受本开关约束 |
 | `network.enabled` | true | |
 | `globalPacketCompression` | true | |
 | `clientCache.enabled` | true | |
@@ -61,9 +61,9 @@ fabric/ | forge/ | neoforge/
 | `clientCache.viewDistanceExtensionEnabled` | true | 超视渲染（多人；≠ Bobby） |
 | `debug.*` | false | 热路径用 `DebugLogger` |
 
-存档格式 type **126**（非 127）；元数据推送字段为 **chunkHash**（非 inhabitedTime）。客户端磁盘 payload 为 **NBT（HBT1）**，非旧 packet 字节。
+存档格式 type **126**（非 127）；元数据推送字段为 **chunkHash**（非 inhabitedTime）。客户端影子端世界 = `hassium_cache/<serverId>/world`（原版存档结构 + type 126 + chunkHash 落盘，`MixinRegionFile` shadow 上下文 gate）；旧 HBT1 客户端磁盘缓存已裁剪（含 CacheEvictionManager 热度清理——逻辑迁移为影子端 `ShadowCacheEviction`：heat.idx 热度索引 + 容量/热度淘汰，`hassium_cache/<serverId>/heat.idx` per-server）。
 
-卖点（已实现，按类）：**高效压缩**——存储压缩（ZSTD 落盘 type 126）、网络压缩（全局包/包聚合）；**网络优化**——平滑推送（每 tick 提交上限限速 + 全路径后台化）、主控热切、加权分流；**区块缓存**——客户端缓存、分段增量、超视渲染、`/hassiumc export` 世界导出；**光照优化**——Hassium 引擎（影子端统一算光，客户端不计算；`clientCache.hassiumEngineEnabled` 默认 true，剥光握手协商）、光照剥离（服务端可选剥光）、光照缓存（随区块数据一体，无独立开关）。
+卖点（已实现，按类）：**高效压缩**——存储压缩（ZSTD 落盘 type 126）、网络压缩（全局包/包聚合）；**网络优化**——平滑推送（每 tick 提交上限限速 + 全路径后台化）、主控热切、加权分流；**区块缓存**——影子端世界保存（进服区块由进程内影子服务端落盘原版存档 `hassium_cache/<serverId>/world`，断连保存重连复用）、容量/热度淘汰（`clientCache.maxSizeMb` 等 7 键：heat.idx 热度索引 + 逐柱删除）、分段增量、超视渲染、`/hassiumc export` 世界导出；**光照优化**——Hassium 引擎（影子端统一算光 + 官方通道回传，客户端不计算；`clientCache.hassiumEngineEnabled` 默认 true，剥光握手协商）、光照剥离（服务端可选剥光）。
 
 ## Skills
 

@@ -132,14 +132,9 @@ public class MixinMinecraft {
     }
 
     /**
-     * setLevel 不再主动 flush 缓存保存队列（历史 flush 最坏主线程阻塞 ~5.2s）：
-     * <ul>
-     *   <li>重连/登录：断连路径已由 {@link ClientLifecycleHelper#cleanupOnDisconnect()} 的
-     *       {@code enqueueAllFromLevel + flushAsync(5000)} 与 {@code finalizeDisconnect} 的
-     *       {@code drainRemaining(5000)} 排空，setLevel 时队列为空；</li>
-     *   <li>维度切换：storage 不重建（仅登录时 init），旧任务写旧维度 region 文件
-     *       （HassiumRegionFile 方法 synchronized），与新会话无冲突，后台自然完成。</li>
-     * </ul>
+     * setLevel 不做任何缓存 flush：新架构下断连落盘由影子端 saveAll 统一承担
+     * （SeedGenLevelCompat.shutdown），客户端无磁盘缓存队列；维度切换时影子端
+     * 不重建，无需处理。
      * <p>
      * 1.20.5–1.21.8：{@code setLevel(ClientLevel, ReceivingLevelScreen.Reason)}；
      * 1.21.9+：Reason 参数移除，恢复为单参数。
@@ -149,9 +144,7 @@ public class MixinMinecraft {
 #if MC_VER < MC_1_20_5
     @Inject(method = "setLevel", at = @At("HEAD"))
     private void hassium$onSetLevel(ClientLevel newLevel, CallbackInfo ci) {
-        // 无感切换恢复成功：新 level 即将接管，先把旧 level 内存区块快照入队（零磁盘 IO），
-        // 消除恢复后区块重新加载的空窗；非恢复场景内部判定后直接返回。
-        io.github.limuqy.mc.hassium.cache.client.RecoveryChunkPrefill.getInstance().captureAndStart(newLevel);
+        // 方案 A：无客户端磁盘缓存，无需快照预填充；恢复期区块由重连正常链重建。
         io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.markFreezeActive(false);
     }
 #elif MC_VER < MC_1_21_9
@@ -159,17 +152,13 @@ public class MixinMinecraft {
     private void hassium$onSetLevel(ClientLevel newLevel,
                                      net.minecraft.client.gui.screens.ReceivingLevelScreen.Reason reason,
                                      CallbackInfo ci) {
-        // 无感切换恢复成功：新 level 即将接管，先把旧 level 内存区块快照入队（零磁盘 IO），
-        // 消除恢复后区块重新加载的空窗；非恢复场景内部判定后直接返回。
-        io.github.limuqy.mc.hassium.cache.client.RecoveryChunkPrefill.getInstance().captureAndStart(newLevel);
+        // 方案 A：无客户端磁盘缓存，无需快照预填充；恢复期区块由重连正常链重建。
         io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.markFreezeActive(false);
     }
 #else
     @Inject(method = "setLevel", at = @At("HEAD"))
     private void hassium$onSetLevel(ClientLevel newLevel, CallbackInfo ci) {
-        // 无感切换恢复成功：新 level 即将接管，先把旧 level 内存区块快照入队（零磁盘 IO），
-        // 消除恢复后区块重新加载的空窗；非恢复场景内部判定后直接返回。
-        io.github.limuqy.mc.hassium.cache.client.RecoveryChunkPrefill.getInstance().captureAndStart(newLevel);
+        // 方案 A：无客户端磁盘缓存，无需快照预填充；恢复期区块由重连正常链重建。
         io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity.markFreezeActive(false);
     }
 #endif

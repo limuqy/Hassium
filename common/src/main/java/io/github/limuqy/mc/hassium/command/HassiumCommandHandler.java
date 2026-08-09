@@ -1,6 +1,6 @@
 package io.github.limuqy.mc.hassium.command;
 
-import io.github.limuqy.mc.hassium.cache.client.CacheWorldExporter;
+
 import io.github.limuqy.mc.hassium.cache.client.ViewDistanceExtensionService;
 import io.github.limuqy.mc.hassium.metrics.HassiumMetricsImpl;
 import io.github.limuqy.mc.hassium.metrics.MetricsTextFormatter;
@@ -240,63 +240,87 @@ public class HassiumCommandHandler {
     }
 
     /**
-     * 启动缓存导出为原版世界（客户端命令）。
+     * 导出影子端世界为完整存档目录（客户端命令）。
      * <p>
-     * 异步执行；进度通过聊天回报。限制说明见 {@link CacheWorldExporter}。
+     * 方案 A：export = 直接拷贝影子端世界目录 {@code hassium_cache/<serverId>/world}
+     * 到 {@code hassium_exports/<serverId>}，保留 type 126 + hash 落盘格式；
+     * 服务端翻译 126→原版后续单独实现。
+     * <p>
+     * 异步执行；进度通过聊天回报。
      *
      * @param serverIp 服务器 IP:Port（null/空时导出当前连接的服务器缓存）
-     * @param seed     世界种子（null 时使用随机 seed + 空岛模式）
+     * @param seed     保留参数（目录拷贝不涉及种子）
      * @return 启动结果消息
      */
     public static String startCacheExport(String serverIp, Long seed) {
-        if (CacheWorldExporter.isRunning()) {
-            return "§c已有导出任务正在运行，请等待完成§r";
+        Minecraft mc = Minecraft.getInstance();
+        if (mc == null) {
+            return "§cMinecraft 实例不可用§r";
+        }
+        Path gameDir = mc.gameDirectory.toPath();
+
+        String cacheId;
+        if (serverIp != null && !serverIp.isEmpty()) {
+            cacheId = sanitizeServerIp(serverIp);
+        } else {
+            // 当前服务器：从影子端管线取 serverId（未连接/未初始化则失败）
+            String serverId = io.github.limuqy.mc.hassium.network.ClientChunkPipeline.getInstance().getServerId();
+            if (serverId == null) {
+                return "§c未连接服务器，无法确定导出目标§r";
+            }
+            cacheId = serverId;
         }
 
-        // 确定是否为空岛模式（seed 为 null 时使用空岛）
-        boolean voidWorld = (seed == null);
-        long actualSeed = (seed != null) ? seed : new java.util.Random().nextLong();
+        Path src = gameDir.resolve("hassium_cache").resolve(cacheId).resolve("world");
+        if (!Files.isDirectory(src)) {
+            return "§c未找到影子端世界目录：" + src + "§r";
+        }
 
-        CacheWorldExporter.ProgressCallback progress = (done, total, message) -> {
-            Minecraft mc = Minecraft.getInstance();
-            if (mc != null && mc.gui != null) {
-                mc.gui.getChat().addMessage(net.minecraft.network.chat.Component.literal("§6[Hassium]§r " + message));
-            }
-        };
+        Path dst = gameDir.resolve("hassium_exports").resolve(cacheId);
+        try {
+            Files.createDirectories(dst.getParent());
+            copyTreeAsync(src, dst, cacheId);
+            return "§a开始导出 " + cacheId + " 的影子端世界...§r"
+                    + "\n§7目标: " + dst + "§r"
+                    + "\n§7(保留 type 126 + chunkHash 格式；翻译为原版格式后续提供)§r";
+        } catch (Exception e) {
+            return "§c导出启动失败: " + e.getMessage() + "§r";
+        }
+    }
 
-        if (serverIp != null && !serverIp.isEmpty()) {
-            // 指定服务器导出
-            Minecraft mc = Minecraft.getInstance();
-            if (mc == null) {
-                return "§cMinecraft 实例不可用§r";
+    private static void copyTreeAsync(Path src, Path dst, String cacheId) {
+        Thread t = new Thread(() -> {
+            try {
+                copyTree(src, dst);
+                Minecraft mc = Minecraft.getInstance();
+                if (mc != null && mc.gui != null) {
+                    mc.gui.getChat().addMessage(net.minecraft.network.chat.Component.literal(
+                            "§6[Hassium]§r 导出完成: " + dst));
+                }
+            } catch (Exception e) {
+                Minecraft mc = Minecraft.getInstance();
+                if (mc != null && mc.gui != null) {
+                    mc.gui.getChat().addMessage(net.minecraft.network.chat.Component.literal(
+                            "§c[Hassium]§r 导出失败: " + e.getMessage()));
+                }
             }
-            Path gameDir = mc.gameDirectory.toPath();
-            String sanitized = sanitizeServerIp(serverIp);
-            Path serverDir = gameDir.resolve("hassium_cache").resolve(sanitized);
-            if (!Files.isDirectory(serverDir)) {
-                return "§c未找到服务器 " + serverIp + " 的缓存目录§r";
-            }
-            CacheWorldExporter.exportOffline(serverDir, actualSeed, voidWorld, progress);
-            return "§a开始导出 " + serverIp + " 的缓存...§r"
-                    + (voidWorld ? "\n§7(空岛模式，seed: " + actualSeed + ")§r" : "");
-        } else {
-            // 当前服务器导出
-            Minecraft mc = Minecraft.getInstance();
-            if (mc == null || mc.level == null) {
-                return "§c未连接到服务器，无法导出当前世界§r";
-            }
+        }, "hassium-export-" + cacheId);
+        t.setDaemon(true);
+        t.start();
+    }
 
-            // 检查是否为单人世界
-            if (mc.hasSingleplayerServer()) {
-                return "§c单人世界无法导出缓存，请指定要导出的服务器 IP§r\n"
-                        + "§7用法: /hassiumc export <serverIp> [seed]§r";
+    private static void copyTree(Path src, Path dst) throws java.io.IOException {
+        try (java.util.stream.Stream<Path> stream = Files.walk(src)) {
+            java.util.List<Path> paths = stream.toList();
+            for (Path p : paths) {
+                Path target = dst.resolve(src.relativize(p).toString());
+                if (Files.isDirectory(p)) {
+                    Files.createDirectories(target);
+                } else {
+                    Files.createDirectories(target.getParent());
+                    Files.copy(p, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                }
             }
-
-            boolean started = CacheWorldExporter.exportAsync(actualSeed, voidWorld, progress);
-            return started
-                    ? "§a开始导出缓存...§r"
-                    + (voidWorld ? "\n§7(空岛模式，seed: " + actualSeed + ")§r" : "")
-                    : "§c导出启动失败（未连接服务器或已有任务在跑）§r";
         }
     }
 
@@ -312,15 +336,21 @@ public class HassiumCommandHandler {
         Minecraft mc = Minecraft.getInstance();
         if (mc == null) return List.of();
         Path gameDir = mc.gameDirectory.toPath();
-        return CacheWorldExporter.listCachedServers(gameDir).stream()
-                .map(CacheWorldExporter.ServerCacheInfo::displayName)
-                .toList();
+        Path cacheRoot = gameDir.resolve("hassium_cache");
+        if (!Files.isDirectory(cacheRoot)) {
+            return List.of();
+        }
+        List<String> ids = new java.util.ArrayList<>();
+        try (java.util.stream.Stream<Path> stream = Files.list(cacheRoot)) {
+            stream.filter(Files::isDirectory).forEach(p -> ids.add(p.getFileName().toString()));
+        } catch (java.io.IOException e) {
+            return List.of();
+        }
+        return ids;
     }
 
     /** 查询当前导出状态。 */
     public static String getCacheExportStatus() {
-        return CacheWorldExporter.isRunning()
-                ? "§6导出进行中...§r"
-                : "§a无导出任务§r";
+        return "§a无导出任务（目录拷贝同步完成，见聊天回报）§r";
     }
 }

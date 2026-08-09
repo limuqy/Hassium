@@ -56,7 +56,7 @@ public record HassiumConfig(
             boolean enabled,
             int maxSizeMb,
             int cacheCompressionLevel,
-            // === 热度清理 ===
+            // === 热度清理（影子端容量/热度淘汰：heat.idx 热度索引 + 逐柱删除，saveAll 不再只写不删）===
             double hotScoreThreshold,
             double recencyWeight,
             double frequencyWeight,
@@ -67,11 +67,11 @@ public record HassiumConfig(
             boolean viewDistanceExtensionEnabled,
             int maxRenderDistance,
             int ovdUnloadDelaySecs,
-            // === 分段增量 ===
+            // === 分段增量（影子端 delta 消费实现前的控制位；当前客户端 no-op）===
             boolean sectionDeltaEnabled,
             // === JoinBoost ===
             boolean joinBoostEnabled,
-            // === 实体快照 ===
+            // === 实体快照（影子端未接入实体数据的控制位；拿到实体后启用）===
             boolean entitySnapshotsEnabled,
             // === 从原 NetworkConfig 吸收的客户端字段 ===
             int loadThreads,

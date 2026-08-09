@@ -4,7 +4,7 @@
   <img src="common/src/main/resources/assets/hassium/logo.png" alt="Hassium Logo" width="200">
 </p>
 
-**Hassium** — high-performance chunk compression and client-side caching for Minecraft, providing **efficient compression, network optimization, chunk caching, beyond-view rendering, and lighting optimization**.  
+**Hassium** — high-performance chunk compression and client-side chunk storage for Minecraft, providing **efficient compression, network optimization, chunk caching, beyond-view rendering, and lighting optimization**.  
 Smaller world saves and bandwidth than vanilla, local chunk reuse, and smoother joins. Supports Fabric / Forge / NeoForge across Minecraft 1.20.1–1.21.11.
 
 [简体中文](README.md) · **English**
@@ -28,13 +28,13 @@ Smaller world saves and bandwidth than vanilla, local chunk reuse, and smoother 
 | **Network optimization** | Smooth push | Constant-rate server throttling (64 chunks/s token bucket) + per-tick serialization cap with background encoding; join and view expansion never saturate the main thread |
 | | Control failover | On TCP-control stall or drop, auto-reconnect via candidate endpoints with warm cache and hidden disconnect screen (data-plane failover) |
 | | Weighted routing | Multiple UDP/KCP endpoints carry the data plane by weighted round-robin; control plane stays on vanilla TCP |
-| **Chunk caching** | Client chunk cache | Loaded chunks are kept locally; revisiting an area hits via contentHash comparison instead of full downloads |
+| **Chunk caching** | Shadow world save | Every chunk you visit is saved by an in-process shadow server (full MinecraftServer) into a vanilla-format save (`hassium_cache/<serverId>/world`, type 126 + chunkHash); saved on disconnect, reused on reconnect |
 | | Section delta | On cache mismatch (MISMATCH), fetch only changed sections (`sectionDelta`) and merge locally instead of the whole chunk |
 | | **Beyond-view render** | When client RD exceeds server view distance (multiplayer), fill the outer ring from local cache (render-only; no out-of-range server requests); incompatible with Bobby |
 | | World export | `/hassiumc export` writes the local cache as a vanilla Anvil singleplayer world |
-| **Lighting optimization** | Hassium engine | Master switch for non-network features (default on): an in-process shadow server owns all chunk lighting computation on login; degrades automatically on startup failure |
-| | Light stripping | Server can strip light data; the Hassium engine (shadow side) computes lighting centrally and persists the cache |
-| | Light cache | Light data is cached after first recompute; cache hits apply pre-computed lighting directly, skipping expensive recomputation |
+| **Lighting optimization** | Hassium engine | Master switch for non-network features (default on): an in-process shadow server (full MinecraftServer) owns world saving (cache) + chunk lighting + official chunk packet packing, delivered back over the vanilla channel; degrades automatically on startup failure |
+| | Light stripping | Server can strip light data; the Hassium engine (shadow side) computes lighting centrally and packs it back |
+| | Light cache | Shadow-side lighting is saved with the chunk (type 126 + chunkHash); reconnects reuse it, skipping recomputation |
 | | Parallel light engine | Light recomputation runs on a background thread pool; the main thread only submits snapshots (on by default) |
 | **Utilities** | Traffic metrics | `/hassium stats` (server) and `/hassiumc stats` (client) to inspect compression and cache results |
 
@@ -73,7 +73,8 @@ See [`docs/version-segments.md`](docs/version-segments.md) for the nine adaptati
 Enabled by default:
 
 - Hassium channel compression and global packet compression
-- Client chunk cache
+- Shadow world save (visited chunks persisted to `hassium_cache/<serverId>/world`, saved on disconnect, reused on reconnect)
+- In-process shadow server lighting (Hassium engine)
 
 > World storage compression (`storage.enabled`) is **off by default** — dedicated servers only. Enabling it rewrites on-disk chunk payloads; **back up worlds** first. Vanilla clients can connect by default (`compat.requireClientMod = false`).
 
@@ -86,7 +87,7 @@ Files: `config/hassium/hassium-client.toml`, `config/hassium/hassium-server.toml
 | Key | Default | Notes |
 | --- | --- | --- |
 | `storage.enabled` | `false` | World ZSTD (**off by default**; dedicated servers only, **back up first**) |
-| `clientCache.enabled` | `true` | Client cache |
+| `clientCache.enabled` | `true` | Shadow world save (visited chunks saved to `hassium_cache/<serverId>/world`) |
 | `clientCache.sectionDeltaEnabled` | `true` | Section delta on cache mismatch |
 | `clientCache.viewDistanceExtensionEnabled` | `true` | Beyond-view render (multiplayer; exclusive with Bobby) |
 | `clientCache.maxRenderDistance` | `16` | Beyond-view / effective RD cap (2–64) |
@@ -95,7 +96,7 @@ Files: `config/hassium/hassium-client.toml`, `config/hassium/hassium-server.toml
 | `network.globalPacketCompression` | `true` | Global ZSTD |
 | `network.maxChunksPerTick` | `4` | Per-player submit cap per tick (send rate = cap × tick rhythm; ≈ 4×20/s at full tick, naturally slows on lag) |
 | `clientCache.mainThreadChunkBudgetMs` | `15` | Client apply budget per frame (ms) |
-| `clientCache.hassiumEngineEnabled` | `true` | Hassium engine (master switch for non-network features): starts an in-process shadow server on login that owns all chunk lighting computation; degrades automatically on startup failure (cache/beyond-view render/SeedGen disabled with notice); when disabled the server does not strip light (negotiated at handshake) |
+| `clientCache.hassiumEngineEnabled` | `true` | Hassium engine (master switch for non-network features): starts an in-process shadow server on login that owns world saving (cache) + chunk lighting + official packet packing; degrades automatically on startup failure (cache/beyond-view render/SeedGen disabled with notice); when disabled the server does not strip light (negotiated at handshake) |
 | `network.metricsEnabled` | `false` | Metrics collection (off by default; auto-enabled during self-checks) |
 | `network.dataPlane.enabled` | `false` | UDP/KCP data plane, control failover, and weighted routing; off by default, configure reachable endpoints and verify the six self-check markers in order before enabling |
 | `network.dataPlane.controlStallMs` | `6000` | How long TCP control can stall before triggering `FailoverRequest` |
@@ -120,22 +121,22 @@ Full reference: [`docs/architecture.md`](docs/architecture.md).
 ## How it works
 
 ```mermaid
-flowchart TD
-    trigger["trackChunk / broadcast"]
-    mixin["Mixin cancels vanilla full chunk"]
-    hash["Push ChunkHashS2C"]
-    compare{"Client compares chunkHash"}
-    hit["ClientCacheLoadQueue"]
-    miss["Full ChunkDataRequestC2S"]
-    push["Serialize on main + compress on pool"]
-    apply["Apply under main-thread budget"]
+flowchart LR
+    wire["Hassium compressed channel<br/>chunk packets"]
+    decode["handleCompressedChunk<br/>→ decodeChunkPacket (vanilla packet)"]
+    shadow["In-process shadow server (ShadowSeedServer)<br/>inject + vanilla light engine + converge"]
+    pack["Pack official packet with authoritative light"]
+    apply["Vanilla channel handleLevelChunkWithLight<br/>applied on main thread frame tail"]
+    save["Disconnect saveAll → hassium_cache/<serverId>/world<br/>type 126 + chunkHash"]
+    regen["SeedGen local generation → submitGenerated, same pipeline"]
 
-    trigger --> mixin --> hash --> compare
-    compare -->|hit| hit --> apply
-    compare -->|miss| miss --> push --> apply
+    wire --> decode --> shadow --> pack --> apply
+    regen --> shadow
+    shadow -.-> save
+    save -.->|"reconnect reuse"| shadow
 ```
 
-Details: [`docs/chunk-cache.md`](docs/chunk-cache.md).
+Details: [`docs/architecture.md`](docs/architecture.md).
 
 ---
 

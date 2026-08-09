@@ -55,7 +55,7 @@ public final class PristineRegistry {
             return;
         }
         if (isPristineCandidate(chunk
-#if MC_VER < MC_1_21_2
+#if MC_VER < MC_1_21_1
                 .getStatus()
 #else
                 .getPersistedStatus()

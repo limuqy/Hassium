@@ -30,13 +30,13 @@ Forge/NeoForge 端注册 3 个 spec（CLIENT / COMMON / SERVER），物理客户
 | 配置项 | 默认值 | 客户端/服务端/双端 | 实际调用 | 状态 |
 |--------|--------|---------------------|----------|------|
 | `clientCache.enabled` | `true` | **客户端** | 多处门控 | ✅ 正常 |
-| `clientCache.maxSizeMb` | `2048` | **客户端** | 缓存容量上限 | ✅ 正常 |
-| `clientCache.hotScoreThreshold` | `0.3` | **客户端** | `CacheEvictionManager:94` 保护热区块 | ✅ 正常 |
-| `clientCache.recencyWeight` | `0.7` | **客户端** | `CacheEvictionManager:49-53` 热度计算 | ✅ 正常 |
-| `clientCache.frequencyWeight` | `0.3` | **客户端** | `CacheEvictionManager:49-53` 热度计算 | ✅ 正常 |
-| `clientCache.cleanupIntervalTicks` | `6000` | **客户端** | `ClientHassiumStorage:441` 清理频率 | ✅ 正常 |
-| `clientCache.targetCacheSizeMb` | `0`(自动) | **客户端** | `CacheEvictionManager:214` via `targetCacheSizeBytes()` | ✅ 正常 |
-| `clientCache.minCleanupBatchSize` | `100` | **客户端** | `CacheEvictionManager:83` 最小清理批次 | ✅ 正常 |
+| `clientCache.maxSizeMb` | `2048` | **客户端** | 影子端存档容量上限（`ShadowCacheEviction.runCleanup`） | ✅ 正常 |
+| `clientCache.hotScoreThreshold` | `0.3` | **客户端** | `ShadowCacheEviction` 保护热区块 | ✅ 正常 |
+| `clientCache.recencyWeight` | `0.7` | **客户端** | `ShadowCacheEviction.hotScore` 热度计算 | ✅ 正常 |
+| `clientCache.frequencyWeight` | `0.3` | **客户端** | `ShadowCacheEviction.hotScore` 热度计算 | ✅ 正常 |
+| `clientCache.cleanupIntervalTicks` | `6000` | **客户端** | `ShadowCacheEviction.tick` 清理频率 | ✅ 正常 |
+| `clientCache.targetCacheSizeMb` | `0`(自动) | **客户端** | `ShadowCacheEviction` via `targetCacheSizeBytes()` | ✅ 正常 |
+| `clientCache.minCleanupBatchSize` | `100` | **客户端** | `ShadowCacheEviction` 最小清理批次 | ✅ 正常 |
 | `clientCache.bloomFilterEnabled` | `true` | **客户端** | `ClientHassiumStorage:57` 门控 Bloom | ✅ 正常 |
 | `clientCache.bloomFilterExpectedInsertions` | `10000` | **客户端** | `ChunkBloomFilter:71` 配置 Bloom | ✅ 正常 |
 | `clientCache.bloomFilterFpp` | `0.01` | **客户端** | `ChunkBloomFilter:72` 配置 Bloom | ✅ 正常 |

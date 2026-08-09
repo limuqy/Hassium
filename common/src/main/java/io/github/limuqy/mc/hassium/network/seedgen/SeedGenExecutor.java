@@ -150,19 +150,13 @@ public final class SeedGenExecutor {
                 return;
             }
             ServerLevel level = server.overworld();
-            ClientboundLevelChunkWithLightPacket packet = SeedGenChunkCodec.buildPacket(chunk, level);
-            byte[] encoded = packet == null ? null : SeedGenChunkCodec.encode(packet, server.registryAccess());
-            byte[] wire = encoded == null ? null : SeedGenChunkCodec.compress(encoded, pos.x, pos.z);
             long ms = (System.nanoTime() - t0) / 1_000_000L;
-            if (wire == null) {
-                DebugLogger.warn(DebugLogger.LogType.ASYNC, "[SEEDGEN] Encode/compress failed ({}, {}) -> fallback", pos.x, pos.z);
-                fallback(pos);
-                return;
-            }
-            DebugLogger.info(DebugLogger.LogType.ASYNC, "[SEEDGEN] Generated ({}, {}) in {}ms, wire={} bytes",
-                    pos.x, pos.z, ms, wire.length);
+            DebugLogger.info(DebugLogger.LogType.ASYNC, "[SEEDGEN] Generated ({}, {}) in {}ms",
+                    pos.x, pos.z, ms);
             NetworkStats.recordLocallyGeneratedChunk(NetworkStats.ESTIMATED_CHUNK_BYTES);
-            ClientChunkHandler.handleCompressedChunk(wire);
+            // 统一影子通道：等光收敛（原版生成后算光同款逻辑）→ 打包官方包 →
+            // 官方通道落地（客户端不参与缓存/光照）。
+            ShadowLightCompute.submitGenerated(pos, chunk, level);
             queue.remove(pos);
         } catch (Exception e) {
             Constants.LOG.error("Hassium: SeedGen generation failed for {}", pos, e);

@@ -556,7 +556,8 @@ public class ForgeNetworkManager implements NetworkManager {
         byte[] seedGenTail = new byte[0];
         boolean seedGenEnabled = HassiumConfigService.getInstance().isSeedGenEnabled();
         try {
-            net.minecraft.server.level.ServerLevel seedLevel = player.serverLevel();
+            net.minecraft.server.level.ServerLevel seedLevel =
+                    io.github.limuqy.mc.hassium.compat.PlayerCompat.getServerLevel(player);
             worldSeed = seedLevel.getSeed();
             io.netty.buffer.ByteBuf sb = io.netty.buffer.Unpooled.buffer();
             SeedGenTail.writeS2C(new FriendlyByteBuf(sb), seedLevel, seedGenEnabled);
@@ -891,8 +892,12 @@ public class ForgeNetworkManager implements NetworkManager {
     private static void handleSectionDelta(SectionDeltaWrapper msg) {
         try {
             FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data()));
-            SectionDeltaS2CPacket packet = SectionDeltaS2CPacket.decode(buf);
-            ClientMetadataHandler.handleSectionDeltaPacket(packet);
+            try {
+                SectionDeltaS2CPacket packet = SectionDeltaS2CPacket.decode(buf);
+                io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.submitDelta(packet);
+            } finally {
+                buf.release();
+            }
         } catch (Exception e) {
             LOGGER.error("Hassium: Failed to handle section delta packet", e);
         }
@@ -924,8 +929,7 @@ public class ForgeNetworkManager implements NetworkManager {
     private static void handleLightDelta(LightDeltaWrapper msg) {
         try {
             FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data()));
-            LightDeltaS2CPacket packet = LightDeltaS2CPacket.decode(buf);
-            ClientMetadataHandler.handleLightDeltaPacket(packet);
+            // 方案 A：客户端不消费 LightDelta，no-op
         } catch (Exception e) {
             LOGGER.error("Hassium: Failed to handle light delta packet", e);
         }
@@ -982,19 +986,6 @@ public class ForgeNetworkManager implements NetworkManager {
         sendToServer(new DataRequestWrapper(data));
 #endif
         LOGGER.debug("Hassium: Sent chunk data request");
-    }
-
-    @Override
-    public void sendClientBloomSync(FriendlyByteBuf buf) {
-        byte[] data = new byte[buf.readableBytes()];
-        buf.readBytes(data);
-        buf.release();
-#if MC_VER < MC_1_20_2
-        CHANNEL.sendToServer(new ClientBloomSyncWrapper(data));
-#else
-        sendToServer(new ClientBloomSyncWrapper(data));
-#endif
-        LOGGER.debug("Hassium: Sent client bloom sync");
     }
 
     @Override

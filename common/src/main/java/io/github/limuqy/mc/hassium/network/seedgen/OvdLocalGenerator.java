@@ -33,15 +33,22 @@ public final class OvdLocalGenerator {
 
     private OvdLocalGenerator() {}
 
-    /** 门控：功能 gate && 配置开 && 有种子（握手已到）&& 影子端未失败。 */
+    /** 门控：功能 gate &&（影子模式自动启用，否则配置开 && 有种子）&& 影子端未失败。 */
     public static boolean isEnabled() {
         HassiumConfigService cfg = HassiumConfigService.getInstance();
-        if (!cfg.isClientFeatureGateOpen() || !cfg.isOvdLocalGenerationEnabled()) {
+        if (!cfg.isClientFeatureGateOpen()) {
             return false;
         }
-        // 无种子关闭生成：服务端未装 MOD / 握手未到时没有世界种子，本地生成地形与服务器不一致
-        if (!ClientChunkPipeline.getInstance().isHassiumHandshakeDone()) {
-            return false;
+        // 影子模式（客户端零侵入架构）：OVD 数据源 = 影子端（R1 落盘读回 /
+        // 本地生成兜底），不再受 ovdLocalGeneration 配置约束。
+        if (!ShadowLightCompute.isEnabled()) {
+            if (!cfg.isOvdLocalGenerationEnabled()) {
+                return false;
+            }
+            // 无种子关闭生成：服务端未装 MOD / 握手未到时没有世界种子，本地生成地形与服务器不一致
+            if (!ClientChunkPipeline.getInstance().isHassiumHandshakeDone()) {
+                return false;
+            }
         }
         return !ShadowServerRegistry.getInstance().isFailed();
     }
@@ -119,7 +126,8 @@ public final class OvdLocalGenerator {
                 if (Minecraft.getInstance().level == null) {
                     return; // 断连：丢弃（缓存由下次进服重建）
                 }
-                // renderOnly 落地：不请求 BE、不参与模拟；空光包经 TAIL 投递影子端算光。
+                // renderOnly 落地：不请求 BE、不参与模拟；包经 buildPacket 官方算光
+                // （level.getLightEngine()）带光推送，客户端无需补算。
                 // apply 失败（出视距竞态）→ onRenderOnlyMiss 会再次触发请求。
                 if (ClientChunkHandler.applyChunkData(pos.x, pos.z, data, true)) {
                     DebugLogger.info(DebugLogger.LogType.ASYNC,
@@ -134,7 +142,7 @@ public final class OvdLocalGenerator {
     }
 
     private static long chunkPosKey(ChunkPos pos) {
-        return ((long) pos.x << 32) | (pos.z & 0xFFFFFFFFL);
+        return net.minecraft.world.level.ChunkPos.asLong(pos.x, pos.z);
     }
 
     /** 诊断：队列大小。 */

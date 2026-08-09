@@ -65,6 +65,17 @@ CHANNEL = ResourceLocationCompat.create(Constants.MOD_ID, "section_delta_s2c");
                 buf.writeBytes(section.blockData);
             }
 
+            // heightmaps（整个 chunk 的 rawData；delta 不含 heightmap → 必须随包下发，
+            // 否则 merge 后高度图过期）
+            buf.writeVarInt(entry.heightmaps.size());
+            for (HeightmapData hm : entry.heightmaps) {
+                buf.writeVarInt(hm.typeId);
+                buf.writeVarInt(hm.data.length);
+                for (long v : hm.data) {
+                    buf.writeLong(v);
+                }
+            }
+
             // blockEntity 数据
             buf.writeVarInt(entry.blockEntities.size());
             for (BlockEntityData be : entry.blockEntities) {
@@ -102,6 +113,19 @@ CHANNEL = ResourceLocationCompat.create(Constants.MOD_ID, "section_delta_s2c");
                 sections.add(new SectionData(sectionIndex, blockData));
             }
 
+            // heightmaps（typeId = Heightmap.Types.ordinal()）
+            int hmCount = buf.readVarInt();
+            List<HeightmapData> heightmaps = new ArrayList<>(hmCount);
+            for (int j = 0; j < hmCount; j++) {
+                int typeId = buf.readVarInt();
+                int dataLen = buf.readVarInt();
+                long[] data = new long[dataLen];
+                for (int k = 0; k < dataLen; k++) {
+                    data[k] = buf.readLong();
+                }
+                heightmaps.add(new HeightmapData(typeId, data));
+            }
+
             // blockEntity 数据
             int beCount = buf.readVarInt();
             List<BlockEntityData> blockEntities = new ArrayList<>(beCount);
@@ -117,7 +141,7 @@ CHANNEL = ResourceLocationCompat.create(Constants.MOD_ID, "section_delta_s2c");
                 blockEntities.add(new BlockEntityData(pos, type, nbt));
             }
 
-            entries.add(new DeltaEntry(chunkX, chunkZ, sections, blockEntities));
+            entries.add(new DeltaEntry(chunkX, chunkZ, sections, heightmaps, blockEntities));
         }
 
         List<SkippedChunk> skipped = new ArrayList<>();
@@ -210,8 +234,20 @@ CHANNEL = ResourceLocationCompat.create(Constants.MOD_ID, "section_delta_s2c");
             int chunkX,
             int chunkZ,
             List<SectionData> changedSections,
+            List<HeightmapData> heightmaps,
             List<BlockEntityData> blockEntities
-    ) {}
+    ) {
+        public DeltaEntry(int chunkX, int chunkZ, List<SectionData> changedSections,
+                          List<BlockEntityData> blockEntities) {
+            this(chunkX, chunkZ, changedSections, List.of(), blockEntities);
+        }
+    }
+
+    /**
+     * chunk 级高度图 rawData（typeId = {@code Heightmap.Types.ordinal()}）。
+     * 服务端打包 chunk.getHeightmaps() 全量；客户端 apply 时逐 type setHeightmap。
+     */
+    public record HeightmapData(int typeId, long[] data) {}
 
     /**
      * 请求中被服务端跳过的区块（客户端应回退全量）

@@ -127,13 +127,13 @@ public final class DataPlaneClientBundle {
     private volatile SectionDeltaDispatcher sectionDeltaDispatcher = DEFAULT_SECTION_DELTA_CONSUMER;
     private volatile boolean bound = false;
 
-    /** Task 8 — section delta decoder/handler seam；缺省直调 Common {@link ClientMetadataHandler}。 */
+    /** Task 8 — section delta decoder/handler seam；默认接影子端（submitDelta 任意线程安全）。 */
     public interface SectionDeltaDispatcher {
         void dispatch(io.github.limuqy.mc.hassium.network.SectionDeltaS2CPacket packet);
     }
 
     private static final SectionDeltaDispatcher DEFAULT_SECTION_DELTA_CONSUMER =
-            ClientMetadataHandler::handleSectionDeltaPacket;
+            io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute::submitDelta;
 
     /** 测试用 seam：替换 chunk 派发器（默认 PoC 主线程调度策略保留）。 */
     public void setChunkDispatcherForTest(ChunkDispatcher d) {

@@ -326,6 +326,32 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
         });
 #endif
 
+        // 注册分段增量响应（服务端按 section 比对回包；影子端 apply，回调线程直接调用
+        // ——submitDelta 任意线程安全：map put + consumeLoop pump）
+#if MC_VER < MC_1_20_5
+        ClientPlayNetworking.registerGlobalReceiver(SECTION_DELTA_S2C, (client, handler, buf, responseSender) -> {
+            try {
+                FriendlyByteBuf packetBuf = new FriendlyByteBuf(buf.copy());
+                SectionDeltaS2CPacket packet = SectionDeltaS2CPacket.decode(packetBuf);
+                io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.submitDelta(packet);
+            } catch (Exception e) {
+                LOGGER.error("Hassium: Failed to decode section delta packet", e);
+            }
+        });
+#else
+        ClientPlayNetworking.registerGlobalReceiver(FabricPayloadRegistry.SECTION_DELTA_S2C_TYPE, (payload, context) -> {
+            FriendlyByteBuf buf = FabricPayloadRegistry.fromPayload(payload);
+            try {
+                SectionDeltaS2CPacket packet = SectionDeltaS2CPacket.decode(buf);
+                io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.submitDelta(packet);
+            } catch (Exception e) {
+                LOGGER.error("Hassium: Failed to decode section delta packet", e);
+            } finally {
+                buf.release();
+            }
+        });
+#endif
+
         // 注册字典同步响应
 #if MC_VER < MC_1_20_5
         ClientPlayNetworking.registerGlobalReceiver(DICTIONARY_SYNC_S2C, (client, handler, buf, responseSender) -> {
@@ -765,30 +791,6 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
         });
 #endif
 
-        // 注册分段增量响应接收（阶段二）
-#if MC_VER < MC_1_20_5
-        ClientPlayNetworking.registerGlobalReceiver(SECTION_DELTA_S2C, (client, handler, buf, responseSender) -> {
-            try {
-                SectionDeltaS2CPacket packet = SectionDeltaS2CPacket.decode(buf);
-                client.execute(() -> ClientMetadataHandler.handleSectionDeltaPacket(packet));
-            } catch (Exception e) {
-                LOGGER.error("[CLIENT] Failed to handle section delta packet", e);
-            }
-        });
-#else
-        ClientPlayNetworking.registerGlobalReceiver(FabricPayloadRegistry.SECTION_DELTA_S2C_TYPE, (payload, context) -> {
-            FriendlyByteBuf buf = FabricPayloadRegistry.fromPayload(payload);
-            try {
-                SectionDeltaS2CPacket packet = SectionDeltaS2CPacket.decode(buf);
-                context.client().execute(() -> ClientMetadataHandler.handleSectionDeltaPacket(packet));
-            } catch (Exception e) {
-                LOGGER.error("[CLIENT] Failed to handle section delta packet", e);
-            } finally {
-                buf.release();
-            }
-        });
-#endif
-
         // 注册 blockEntity 数据响应接收
 #if MC_VER < MC_1_20_5
         ClientPlayNetworking.registerGlobalReceiver(BLOCK_ENTITY_DATA_S2C, (client, handler, buf, responseSender) -> {
@@ -807,30 +809,6 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
                 context.client().execute(() -> ClientMetadataHandler.handleBlockEntityDataPacket(packet));
             } catch (Exception e) {
                 LOGGER.error("[CLIENT] Failed to handle block entity data packet", e);
-            } finally {
-                buf.release();
-            }
-        });
-#endif
-
-        // 注册光照增量通知接收
-#if MC_VER < MC_1_20_5
-        ClientPlayNetworking.registerGlobalReceiver(LIGHT_DELTA_S2C, (client, handler, buf, responseSender) -> {
-            try {
-                LightDeltaS2CPacket packet = LightDeltaS2CPacket.decode(buf);
-                client.execute(() -> ClientMetadataHandler.handleLightDeltaPacket(packet));
-            } catch (Exception e) {
-                LOGGER.error("[CLIENT] Failed to handle light delta packet", e);
-            }
-        });
-#else
-        ClientPlayNetworking.registerGlobalReceiver(FabricPayloadRegistry.LIGHT_DELTA_S2C_TYPE, (payload, context) -> {
-            FriendlyByteBuf buf = FabricPayloadRegistry.fromPayload(payload);
-            try {
-                LightDeltaS2CPacket packet = LightDeltaS2CPacket.decode(buf);
-                context.client().execute(() -> ClientMetadataHandler.handleLightDeltaPacket(packet));
-            } catch (Exception e) {
-                LOGGER.error("[CLIENT] Failed to handle light delta packet", e);
             } finally {
                 buf.release();
             }
@@ -917,6 +895,7 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
             buf.release();
         }
     }
+
 
     @Override
     public void sendCompressedPayload(CompressedPayloadPacket packet) {
@@ -1026,12 +1005,8 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
             DebugLogger.debug(LogType.NETWORK, "[SEND_CHUNK] Encoded chunk data ({} bytes), sending via network", data.length);
 #if MC_VER < MC_1_20_5
             ServerPlayNetworking.send(player, CHUNK_PAYLOAD_S2C, buf);
-            DebugLogger.debug(LogType.NETWORK, "[SEND_CHUNK] Successfully sent compressed chunk [{}, {}] to player {}",
-                    compressed.chunkX, compressed.chunkZ, player.getName().getString());
 #else
             ServerPlayNetworking.send(player, FabricPayloadRegistry.toPayload(FabricPayloadRegistry.CHUNK_PAYLOAD_S2C_TYPE, buf));
-            DebugLogger.debug(LogType.NETWORK, "[SEND_CHUNK] Successfully sent compressed chunk [{}, {}] to player {}",
-                    compressed.chunkX, compressed.chunkZ, player.getName().getString());
 #endif
         } catch (Exception e) {
             LOGGER.error("[SEND_CHUNK] Failed to send compressed chunk to player {}", player.getName().getString(), e);

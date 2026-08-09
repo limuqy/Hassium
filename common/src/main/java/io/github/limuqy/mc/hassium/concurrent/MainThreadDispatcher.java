@@ -16,8 +16,8 @@ import java.util.function.Predicate;
  * 后台线程通过 {@link #execute(Runnable)} 提交回调，
  * 主线程在 {@link #flushClient()} 中按优先级批量执行。
  * <p>
- * 优先级由 {@link ChunkDistancePriority} 在入队瞬间冻结（数值越小越优先），
- * 与 {@code ClientCacheLoadQueue} 一致；玩家移动不改写已入队 key。
+ * 优先级由 {@link ChunkDistancePriority} 在入队瞬间冻结（数值越小越优先）；
+ * 玩家移动不改写已入队 key。
  * 层序恒为：权威 &gt; 未知任务（无锚点） &gt; 环带（renderOnly）。
  * <p>
  * 队列为 {@link KeyedPriorityQueue}：同 chunk 位置同语义（op）的新任务入队时

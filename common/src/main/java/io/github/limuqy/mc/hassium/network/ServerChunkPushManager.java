@@ -2,7 +2,7 @@ package io.github.limuqy.mc.hassium.network;
 
 import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.cache.ChunkContentHashUtil;
-import io.github.limuqy.mc.hassium.cache.client.ChunkBloomFilter;
+
 import io.github.limuqy.mc.hassium.concurrent.ChunkDistancePriority;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.metrics.NetworkStats;
@@ -101,13 +101,6 @@ public class ServerChunkPushManager {
     private record ResyncEntry(ChunkPos pos, String dimension) {}
 
     /**
-     * 每玩家缓存 Bloom 层（进服全量 + 会话增量位图；查询 = 任一层命中 OR）。
-     * 服务端据此分流：miss（确定无缓存）→ 直推数据；hit（可能有）→ 发 hash 客户端对比。
-     * 只增不减（客户端淘汰/过期由 hash 对比 MISS/MISMATCH 兜底），进服全量覆盖旧层。
-     */
-    private final Map<UUID, PlayerBloomLayers> bloomLayers = new ConcurrentHashMap<>();
-
-    /**
      * 每玩家 SeedGen 能力（握手 C2S 上报 seedGenSupported；默认 false）。
      */
     private final Map<UUID, Boolean> playerSeedGenSupported = new ConcurrentHashMap<>();
@@ -117,6 +110,11 @@ public class ServerChunkPushManager {
      * 服务端据此决定是否剥光：客户端声明可本地/影子端算光才剥（stripLightIfConfigured gate）。
      */
     private final Map<UUID, Boolean> playerLightComputeSupported = new ConcurrentHashMap<>();
+
+    /**
+     * 每玩家影子端存档布隆位图层（客户端握手上报；bloom hit → 只发 hash 让影子端比对）。
+     */
+    private final Map<UUID, PlayerBloomLayers> bloomLayers = new ConcurrentHashMap<>();
 
     /**
      * 握手 C2S 能力上报后调用：记录玩家是否支持 SeedGen。
@@ -160,9 +158,6 @@ public class ServerChunkPushManager {
         return PristineRegistry.isPristine(pos);
     }
 
-    /** Bloom 层数上限：超出丢弃最旧层（保守 miss → 直推，正确性不受影响，仅多花一次直推流量） */
-    private static final int BLOOM_MAX_LAYERS = 64;
-
     /**
      * 每玩家出界待命任务：drain 时已出视距的任务不静默丢弃（原 bug 根因），
      * 转入待命，玩家折返/静止后重新在视距内时恢复入队；超时（10s）才真丢弃。
@@ -176,15 +171,8 @@ public class ServerChunkPushManager {
     private static final long DEFER_CHECK_INTERVAL_MS = 1000L;
     /** 待命任务最大等待（毫秒），超时真丢弃（玩家不再回来） */
     private static final long DEFER_MAX_WAIT_MS = 10_000L;
-
-    /**
-     * resync 队列入队时间（playerId → epoch ms）：resync 等待客户端首个 Bloom 到达，
-     * 超时（无 Bloom 的旧客户端/未启用缓存）则无 Bloom 兜底启动（fallback 发 hash）。
-     */
-    private final Map<UUID, Long> resyncQueuedAt = new ConcurrentHashMap<>();
-
-    /** resync 等待 Bloom 的最长时间（毫秒） */
-    private static final long RESYNC_BLOOM_WAIT_MS = 5_000L;
+    /** 每玩家 bloom 层上限（超出丢最旧层） */
+    private static final int BLOOM_MAX_LAYERS = 64;
 
     /**
      * 握手上报的玩家初始 chunk 位置（playerId → ChunkPos）。
@@ -557,12 +545,17 @@ public class ServerChunkPushManager {
     }
 
     /**
-     * 统一 hash 发送入口：per-player 按 Bloom 分流。
+     * 统一 hash 发送入口：per-player 分流。
      * <p>
      * SeedGen 玩家（能力 + 配置 + pristine）→ 只发 SeedRef（本地生成，零区块数据流量）；
-     * 其余玩家按 Bloom 分流：miss（确定无缓存）→ hash 立即直发 + 主动入队直推（hash 先行，
-     * 客户端可暂存 contentHash；直发与数据同受 drain 的 maxChunksPerTick 节奏约束，hash 不晚于数据）；
-     * hit/未就绪 → 入批次，由每 tick 限流发送（防客户端缓存比对风暴）。
+     * 其余玩家 → Bloom 分流（客户端握手上报影子端存档布隆位图）：
+     * <ul>
+     *   <li>bloom 就绪且 miss（确定无缓存）→ hash 直发 + 数据直推（enqueueDirectPush）；</li>
+     *   <li>bloom hit（可能有缓存）或 bloom 未就绪 → 只发 hash——由客户端影子端
+     *       读盘比对（内存/存档 hash 表）决定：命中本地回传、未命中请求数据
+     *       （ChunkDataRequestC2S → enqueueDataRequest 推送）。</li>
+     * </ul>
+     * hash 直发（不走限流批次）：影子端比对在后台线程（无旧客户端比对风暴）。
      */
     private void sendChunkHashAndMaybePush(List<ServerPlayer> players, ChunkPos pos,
                                            long chunkHash, long[] sectionHashes, int sectionBitmap, String dimension) {
@@ -574,11 +567,10 @@ public class ServerChunkPushManager {
                 sendSeedRef(player, pos, chunkHash, sectionHashes);
                 continue;
             }
+            sendChunkHashDirect(player, pos, chunkHash, sectionBitmap, dimension);
             if (shouldPushFull(player, pos, dimension)) {
-                sendChunkHashDirect(player, pos, chunkHash, sectionBitmap, dimension);
+                // bloom miss（确定无缓存）→ 数据直推；影子端无需再请求。
                 enqueueDirectPush(player, dimension, List.of(pos));
-            } else {
-                sendChunkHash(List.of(player), pos, chunkHash, sectionBitmap, dimension);
             }
         }
     }
@@ -669,47 +661,8 @@ public class ServerChunkPushManager {
     }
 
     /**
-     * 每玩家 Bloom 层容器：full 覆盖、append 追加、查询 OR。
-     */
-    private static final class PlayerBloomLayers {
-        private final List<ChunkBloomFilter> layers = new ArrayList<>();
-
-        void reset(ChunkBloomFilter filter) {
-            synchronized (layers) {
-                layers.clear();
-                layers.add(filter);
-            }
-        }
-
-        void append(ChunkBloomFilter filter) {
-            synchronized (layers) {
-                if (layers.size() >= BLOOM_MAX_LAYERS) {
-                    layers.remove(0);
-                }
-                layers.add(filter);
-            }
-        }
-
-        boolean isEmpty() {
-            synchronized (layers) {
-                return layers.isEmpty();
-            }
-        }
-
-        boolean mightContain(int chunkX, int chunkZ, String dimension) {
-            synchronized (layers) {
-                for (ChunkBloomFilter layer : layers) {
-                    if (layer.mightContain(chunkX, chunkZ, dimension)) {
-                        return true;
-                    }
-                }
-                return false;
-            }
-        }
-    }
-
     /**
-     * 处理客户端的缓存 Bloom 位图同步包。
+     * 处理客户端的影子端存档 Bloom 位图同步包。
      * <p>
      * {@code full=true} 覆盖旧层（进服全量）；{@code full=false} 追加一层（会话增量）。
      * 首个 Bloom 到达后，{@link #drainPendingResync} 自动恢复 resync 提交（无需额外动作）。
@@ -720,7 +673,8 @@ public class ServerChunkPushManager {
             return;
         }
         try {
-            ChunkBloomFilter filter = ChunkBloomFilter.fromByteArray(packet.bloomBytes());
+            io.github.limuqy.mc.hassium.cache.client.ChunkBloomFilter filter =
+                    io.github.limuqy.mc.hassium.cache.client.ChunkBloomFilter.fromByteArray(packet.bloomBytes());
             if (filter == null) {
                 Constants.LOG.warn("[BLOOM_SYNC] Invalid bloom bytes from player {} ({} bytes)",
                         player.getName().getString(), packet.bloomBytes() == null ? -1 : packet.bloomBytes().length);
@@ -754,6 +708,44 @@ public class ServerChunkPushManager {
             return false;
         }
         return !layers.mightContain(pos.x, pos.z, dimension);
+    }
+
+    /** 每玩家 bloom 层（full 重置 / 增量追加；查询任一命中即可能缓存）。 */
+    private static final class PlayerBloomLayers {
+        private final List<io.github.limuqy.mc.hassium.cache.client.ChunkBloomFilter> layers = new ArrayList<>();
+
+        void reset(io.github.limuqy.mc.hassium.cache.client.ChunkBloomFilter filter) {
+            synchronized (layers) {
+                layers.clear();
+                layers.add(filter);
+            }
+        }
+
+        void append(io.github.limuqy.mc.hassium.cache.client.ChunkBloomFilter filter) {
+            synchronized (layers) {
+                if (layers.size() >= BLOOM_MAX_LAYERS) {
+                    layers.remove(0);
+                }
+                layers.add(filter);
+            }
+        }
+
+        boolean isEmpty() {
+            synchronized (layers) {
+                return layers.isEmpty();
+            }
+        }
+
+        boolean mightContain(int chunkX, int chunkZ, String dimension) {
+            synchronized (layers) {
+                for (io.github.limuqy.mc.hassium.cache.client.ChunkBloomFilter layer : layers) {
+                    if (layer.mightContain(chunkX, chunkZ, dimension)) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+        }
     }
 
     /**
@@ -824,7 +816,6 @@ public class ServerChunkPushManager {
         queue.addAll(entries);
         if (!queue.isEmpty()) {
             pendingResync.put(player.getUUID(), queue);
-            resyncQueuedAt.put(player.getUUID(), System.currentTimeMillis());
             DebugLogger.info(LogType.CHUNK_APPLY,
                     "Hassium: Queued {} chunkHashes for resync (player={}, vd={}, perTick={})",
                     queue.size(), player.getName().getString(), viewDistance, RESYNC_PER_TICK);
@@ -849,20 +840,7 @@ public class ServerChunkPushManager {
                 if (level == null) {
                     continue;
                 }
-                // resync 等待客户端首个 Bloom：Bloom 未到则先不提交（避免首圈全部 miss 直推、
-                // Bloom 收益归零）。无 Bloom 的旧客户端/未启用缓存 → 超时后无 Bloom 兜底启动。
-                PlayerBloomLayers layers = bloomLayers.get(player.getUUID());
-                boolean bloomReady = layers != null && !layers.isEmpty();
-                if (!bloomReady) {
-                    Long queuedAt = resyncQueuedAt.get(player.getUUID());
-                    if (queuedAt == null
-                            || System.currentTimeMillis() - queuedAt < RESYNC_BLOOM_WAIT_MS) {
-                        continue;
-                    }
-                    DebugLogger.info(LogType.CHUNK_APPLY,
-                            "Hassium: Resync bloom wait timeout ({}ms), proceeding without bloom (player={})",
-                            RESYNC_BLOOM_WAIT_MS, player.getName().getString());
-                }
+                // 方案 A：客户端无缓存/Bloom，resync 无需等待，直接提交
                 int processed = 0;
                 int skipped = 0;
                 while (!queue.isEmpty() && processed < RESYNC_PER_TICK) {
@@ -1160,7 +1138,8 @@ public class ServerChunkPushManager {
                         : collectBlockEntities(chunk);
 
                 deltas.add(new SectionDeltaS2CPacket.DeltaEntry(
-                        entry.chunkX(), entry.chunkZ(), changedSections, blockEntities));
+                        entry.chunkX(), entry.chunkZ(), changedSections,
+                        collectHeightmaps(chunk), blockEntities));
             } catch (Exception e) {
                 Constants.LOG.error("[SECTION_DELTA] Failed to process chunk [{}, {}]",
                         entry.chunkX(), entry.chunkZ(), e);
@@ -1222,7 +1201,7 @@ public class ServerChunkPushManager {
                         : collectBlockEntities(w.chunk());
 
                 deltas.add(new SectionDeltaS2CPacket.DeltaEntry(
-                        w.x(), w.z(), changedSections, blockEntities));
+                        w.x(), w.z(), changedSections, collectHeightmaps(w.chunk()), blockEntities));
             } catch (Exception e) {
                 Constants.LOG.error("[SECTION_DELTA] Failed to process chunk [{}, {}]",
                         w.x(), w.z(), e);
@@ -1376,6 +1355,19 @@ public class ServerChunkPushManager {
         } finally {
             buf.release();
         }
+    }
+
+    /**
+     * 收集 chunk 全部 heightmap rawData（FULL status 的 types；与服务端 chunk 当前状态一致）。
+     * delta 包不含 heightmap 线格式，必须随包下发，客户端 merge 后逐 type setHeightmap。
+     */
+    private List<SectionDeltaS2CPacket.HeightmapData> collectHeightmaps(LevelChunk chunk) {
+        List<SectionDeltaS2CPacket.HeightmapData> result = new ArrayList<>();
+        for (var entry : chunk.getHeightmaps()) {
+            long[] raw = entry.getValue().getRawData();
+            result.add(new SectionDeltaS2CPacket.HeightmapData(entry.getKey().ordinal(), raw));
+        }
+        return result;
     }
 
     /**
@@ -1739,7 +1731,10 @@ public class ServerChunkPushManager {
             if (chunk == null) {
                 return packet;
             }
-            ClientboundLevelChunkWithLightPacket stripped = buildChunkPacket(chunk, level);
+            if (chunk.getPos().x != pos.x || chunk.getPos().z != pos.z) {
+                Constants.LOG.warn("[LIGHT-STRIP] CHUNK POS MISMATCH pos=[{}, {}] chunk=[{}, {}]",
+                        pos.x, pos.z, chunk.getPos().x, chunk.getPos().z);
+            }            ClientboundLevelChunkWithLightPacket stripped = buildChunkPacket(chunk, level);
             return stripped != null ? stripped : packet;
         } catch (Exception e) {
             Constants.LOG.warn("[LIGHT-STRIP] Failed to rebuild stripped chunk packet at {}", pos, e);
@@ -1880,7 +1875,10 @@ public class ServerChunkPushManager {
     }
 
     /**
-     * 移除玩家的所有队列
+     * 移除玩家的所有队列（含 bloom 层——玩家断开后旧 bloom 必须失效：
+     * 否则 R2 重连 trackChunk 会用 R1 残留的空 bloom 误判 miss → 全量直推，
+     * bloom 分流退化为无缓存形态。清空后 R2 上报前走"未就绪只发 hash"，
+     * 由影子端读盘比对决定本地回传/请求，语义正确）。
      */
     public void removePlayer(UUID playerId) {
         io.github.limuqy.mc.hassium.concurrent.KeyedPriorityQueue<DataRequestTask> queue = dataQueues.remove(playerId);
@@ -1891,10 +1889,9 @@ public class ServerChunkPushManager {
         hashBatches.remove(playerId);
         preparedChunkPackets.remove(playerId);
         pendingResync.remove(playerId);
-        bloomLayers.remove(playerId);
         deferredChunks.remove(playerId);
-        resyncQueuedAt.remove(playerId);
         initialPlayerChunkPos.remove(playerId);
+        bloomLayers.remove(playerId);
     }
 
     /**
@@ -1906,9 +1903,7 @@ public class ServerChunkPushManager {
         hashBatches.clear();
         preparedChunkPackets.clear();
         pendingResync.clear();
-        bloomLayers.clear();
         deferredChunks.clear();
-        resyncQueuedAt.clear();
         initialPlayerChunkPos.clear();
         if (pushPool != null) {
             pushPool.shutdownNow();

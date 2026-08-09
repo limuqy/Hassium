@@ -1,13 +1,10 @@
 package io.github.limuqy.mc.hassium.network;
 
 import io.github.limuqy.mc.hassium.Constants;
-import io.github.limuqy.mc.hassium.cache.ChunkContentHashUtil;
-import io.github.limuqy.mc.hassium.cache.client.ClientCacheLoadQueue;
 import io.github.limuqy.mc.hassium.client.ClientSmokeTest;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.metrics.NetworkStats;
 import io.github.limuqy.mc.hassium.metrics.VanillaZlibEstimator;
-import io.github.limuqy.mc.hassium.cache.client.ClientHassiumStorage;
 import io.github.limuqy.mc.hassium.concurrent.ChunkDistancePriority;
 import io.github.limuqy.mc.hassium.concurrent.HassiumTaskExecutor;
 import io.github.limuqy.mc.hassium.concurrent.MainThreadDispatcher;
@@ -58,30 +55,6 @@ public class ClientMetadataHandler {
     private record PendingBlockEntityNbt(BlockPos pos, CompoundTag nbt) {}
 
     /**
-     * storage 未就绪时暂存的 chunkHash 包；就绪后批量比对，超时再回退全量请求。
-     */
-    private static final ConcurrentLinkedQueue<ChunkHashS2CPacket> PENDING_HASH_PACKETS =
-            new ConcurrentLinkedQueue<>();
-
-    /** 首次因 storage 未就绪而暂存 hash 的时间戳；0 表示当前无等待 */
-    private static volatile long pendingHashWaitStartedAtMs = 0L;
-
-    /** storage 就绪等待超时（毫秒），超时后对暂存包回退全量请求 */
-    private static final long STORAGE_READY_TIMEOUT_MS = 2_000L;
-
-    /**
-     * 已发出、尚未被 SectionDelta 覆盖的 MISMATCH 区块（chunkKey → 维度 + 截止时间）。
-     * 服务端 skipped / 超时均回退全量，避免反复 MISMATCH。
-     */
-    private static final ConcurrentHashMap<Long, PendingDeltaRequest> PENDING_DELTA_REQUESTS =
-            new ConcurrentHashMap<>();
-
-    private record PendingDeltaRequest(String dimension, long deadlineMs) {}
-
-    /** 分段增量无响应超时（毫秒） */
-    private static final long DELTA_RESPONSE_TIMEOUT_MS = 3_000L;
-
-    /**
      * 已发出、尚未收到数据的全量请求（chunkKey → 维度 + 截止时间）。
      * 服务端出界丢弃/队列积压导致请求石沉大海时兜底重发，杜绝「永久虚空」。
      */
@@ -109,10 +82,8 @@ public class ClientMetadataHandler {
         int estimatedSize = 4 + 4 + 8 + 4 + packet.sectionHashes().length * 8;
         NetworkStats.recordMetadataReceived(estimatedSize);
 
-        // 门控：无缓存存储 / 服务端未启用 SeedGen / 客户端配置未开启 → 直接回退
-        ClientHassiumStorage storage = ClientChunkHandler.getClientStorage();
-        if (storage == null
-                || !io.github.limuqy.mc.hassium.config.HassiumConfigService.getInstance().isClientSeedGenEnabled()
+        // 门控：服务端未启用 SeedGen / 客户端配置未开启 → 直接回退
+        if (!io.github.limuqy.mc.hassium.config.HassiumConfigService.getInstance().isClientSeedGenEnabled()
                 || !io.github.limuqy.mc.hassium.network.ClientChunkPipeline.getInstance().isServerSeedGenEnabled()) {
             Constants.LOG.info("[SEED_REF] Received ({}, {}) but SeedGen inactive -> fallback full request",
                     packet.chunkX(), packet.chunkZ());
@@ -156,10 +127,8 @@ public class ClientMetadataHandler {
     /**
      * 处理阶段一 chunkHash 广播包。
      * <p>
-     * 比对本地缓存的 chunkHash：
-     * - 匹配 → 缓存命中，从缓存加载 + 请求 blockEntity
-     * - 无缓存 → 全量请求
-     * - MISMATCH → {@code clientCache.sectionDeltaEnabled} 开启时走分段增量，否则全量
+     * 方案 A：客户端不再比对 hash；hash 仅暂存供影子端读盘比对
+     * （R2 磁盘命中判定），区块数据由服务端全量推送。
      */
     public static void handleChunkHashPacket(ChunkHashS2CPacket packet) {
         Minecraft mc = Minecraft.getInstance();
@@ -172,91 +141,21 @@ public class ClientMetadataHandler {
         int estimatedSize = packet.dimension().length() + packet.entries().size() * 16 + 8;
         NetworkStats.recordMetadataReceived(estimatedSize);
 
-        ClientHassiumStorage storage = ClientChunkHandler.getClientStorage();
-        if (storage == null) {
-            // 暂存等待 storage 就绪，避免进服早期假全量请求
-            if (pendingHashWaitStartedAtMs == 0L) {
-                pendingHashWaitStartedAtMs = System.currentTimeMillis();
-            }
-            PENDING_HASH_PACKETS.offer(packet);
-            DebugLogger.warn(LogType.METADATA,
-                    "[CHUNK_HASH] Storage not ready, buffering hash packet (pending={})",
-                    PENDING_HASH_PACKETS.size());
-            return;
+        ClientChunkPipeline pipeline = ClientChunkPipeline.getInstance();
+        for (ChunkHashS2CPacket.Entry entry : packet.entries()) {
+            pipeline.storePendingContentHash(entry.chunkX(), entry.chunkZ(), entry.chunkHash());
         }
 
-        dispatchChunkHashCompare(storage, packet);
-    }
-
-    /**
-     * storage 异步初始化完成后调用：冲刷暂存的 hash 包。
-     */
-    public static void onStorageReady() {
-        pendingHashWaitStartedAtMs = 0L;
-        flushPendingHashPackets(false);
-    }
-
-    /**
-     * 每帧检查：storage 已就绪则冲刷；超时则回退全量请求；并冲刷超时的分段增量。
-     * <p>
-     * 断连后 player/level 为 null，此时不应再 flush，避免向已关闭的连接发包抛
-     * {@code Cannot send packets when not in game!}。完整清理由
-     * {@link #clearPendingState()} 在 Mixin onDisconnect 中完成。
-     */
-    public static void tickPendingHashGate() {
-        Minecraft mc = Minecraft.getInstance();
-        if (mc.player == null || mc.level == null) {
-            return;
-        }
-        if (!PENDING_HASH_PACKETS.isEmpty()) {
-            ClientHassiumStorage storage = ClientChunkHandler.getClientStorage();
-            if (storage != null) {
-                onStorageReady();
-            } else {
-                long started = pendingHashWaitStartedAtMs;
-                if (started > 0L && System.currentTimeMillis() - started >= STORAGE_READY_TIMEOUT_MS) {
-                    DebugLogger.warn(LogType.METADATA,
-                            "[CHUNK_HASH] Storage ready timeout ({}ms), falling back to full requests for {} packets",
-                            STORAGE_READY_TIMEOUT_MS, PENDING_HASH_PACKETS.size());
-                    flushPendingHashPackets(true);
-                    pendingHashWaitStartedAtMs = 0L;
-                }
-            }
-        }
-        tickPendingDeltaTimeouts();
-        tickPendingFullRequestTimeouts();
-        // 缓存 Bloom 位图同步：全量一次 + 增量批次（阈值/冷却）
-        ClientBloomSyncTracker.tick();
-    }
-
-    /**
-     * 超时未收到 SectionDelta 覆盖的区块 → 回退全量。
-     */
-    private static void tickPendingDeltaTimeouts() {
-        if (PENDING_DELTA_REQUESTS.isEmpty()) {
-            return;
-        }
-        long now = System.currentTimeMillis();
-        Map<String, List<ChunkPos>> timedOut = new HashMap<>();
-        for (var it = PENDING_DELTA_REQUESTS.entrySet().iterator(); it.hasNext(); ) {
-            var e = it.next();
-            if (now >= e.getValue().deadlineMs()) {
-                ChunkPos pos = new ChunkPos(e.getKey());
-                timedOut.computeIfAbsent(e.getValue().dimension(), k -> new ArrayList<>()).add(pos);
-                it.remove();
-            }
-        }
-        for (var e : timedOut.entrySet()) {
-            DebugLogger.warn(LogType.METADATA,
-                    "[SECTION_DELTA] Timeout waiting for {} chunks, fallback to full", e.getValue().size());
-            requestFullChunks(e.getKey(), e.getValue(), true);
-        }
+        // 影子端 hash 比对（服务端 bloom hit 只发 hash；影子端决定是否需要数据）：
+        // 命中 → 本地回传；不中 → 请求数据。后台池执行（查盘不阻塞 Netty）。
+        io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute
+                .handleRemoteHashes(packet.dimension(), packet.entries());
     }
 
     /**
      * 超时未收到区块数据的全量请求 → 重发（服务端出界丢弃/积压兜底）。
      */
-    private static void tickPendingFullRequestTimeouts() {
+    public static void tickPendingFullRequestTimeouts() {
         if (PENDING_FULL_REQUESTS.isEmpty()) {
             return;
         }
@@ -285,183 +184,6 @@ public class ClientMetadataHandler {
     }
 
     /**
-     * 冲刷暂存 hash：正常比对或超时全量请求。
-     */
-    private static void flushPendingHashPackets(boolean forceFullRequest) {
-        ClientHassiumStorage storage = ClientChunkHandler.getClientStorage();
-        ChunkHashS2CPacket packet;
-        while ((packet = PENDING_HASH_PACKETS.poll()) != null) {
-            if (forceFullRequest || storage == null) {
-                requestFullChunks(packet.dimension(), packet.entries().stream()
-                        .map(e -> new ChunkPos(e.chunkX(), e.chunkZ()))
-                        .toList(), true);
-            } else {
-                dispatchChunkHashCompare(storage, packet);
-            }
-        }
-    }
-
-    /**
-     * 将 chunkHash 比对提交到后台或同步执行。
-     */
-    private static void dispatchChunkHashCompare(ClientHassiumStorage storage, ChunkHashS2CPacket packet) {
-        // 同步执行比对：compareChunkHashes 是纯内存操作（readChunkHash 查 Bloom Filter +
-        // SectionHashStore，均在内存），不阻塞主线程。
-        // 不能提交到 HassiumTaskExecutor：进服时超视渲染会提交数千个 processNextTask
-        // （缓存加载）任务到同一 executor，chunkHash 比对任务被淹没导致延迟十数秒，
-        // serverVD 内区块无法及时加载（用户看到"脚下10区块加载后等10秒才继续"）。
-        ChunkHashResult result = compareChunkHashes(storage, packet);
-        applyChunkHashResult(result, packet.dimension());
-    }
-
-    /**
-     * chunkHash 比对结果
-     * <p>
-     * 三桶分流：HIT（缓存命中）/ MISS（无缓存，全量）/ MISMATCH（缓存过期，走分段增量）。
-     */
-    private record ChunkHashResult(
-            List<ChunkPos> hitChunks,
-            List<ChunkPos> newFullRequestChunks,
-            List<ChunkPos> staleFullRequestChunks,
-            List<ChunkPos> deltaRequestChunks,
-            String dimension
-    ) {}
-
-    /**
-     * 在后台线程比对 chunkHash
-     */
-    private static ChunkHashResult compareChunkHashes(
-            ClientHassiumStorage storage, ChunkHashS2CPacket packet) {
-        List<ChunkPos> hitChunks = new ArrayList<>();
-        List<ChunkPos> newFullRequestChunks = new ArrayList<>();
-        List<ChunkPos> staleFullRequestChunks = new ArrayList<>();
-        List<ChunkPos> deltaRequestChunks = new ArrayList<>();
-
-        for (ChunkHashS2CPacket.Entry entry : packet.entries()) {
-            ChunkPos pos = new ChunkPos(entry.chunkX(), entry.chunkZ());
-            long cachedChunkHash = storage.readChunkHash(pos);
-            NetworkStats.recordCacheLoadEligible(ESTIMATED_CHUNK_BYTES);
-
-            if (cachedChunkHash != 0L && cachedChunkHash == entry.chunkHash()) {
-                hitChunks.add(pos);
-                NetworkStats.recordCacheHit(ESTIMATED_CHUNK_BYTES);
-                NetworkStats.recordCacheFullHit(ESTIMATED_CHUNK_BYTES);
-                DebugLogger.info(LogType.METADATA, "[CHUNK_HASH] HIT chunk {} (hash={})",
-                        pos, Long.toHexString(entry.chunkHash()));
-            } else if (cachedChunkHash == 0L) {
-                // MISS：无缓存，走全量。暂存服务端 hash，供 chunk 数据到达时写入缓存，
-                // 否则 ingest 保存的 contentHash=0 会被 MetadataTable 翻转成 1，次回 compare 全 MISMATCH。
-                ClientChunkHandler.storePendingContentHash(pos.x, pos.z, entry.chunkHash());
-                // 无 section hash：服务端未下发，chunk 到达后由 ingest 兜底重算
-                NetworkStats.recordCacheMiss(ESTIMATED_CHUNK_BYTES);
-                DebugLogger.info(LogType.METADATA, "[CHUNK_HASH] MISS chunk {}", pos);
-                newFullRequestChunks.add(pos);
-            } else {
-                // MISMATCH：开关开启走分段增量，否则全量（见 clientCache.sectionDeltaEnabled）
-                NetworkStats.recordCacheStale(ESTIMATED_CHUNK_BYTES);
-                ClientChunkHandler.storePendingContentHash(pos.x, pos.z, entry.chunkHash());
-                if (HassiumConfigService.getInstance().isSectionDeltaEnabled()) {
-                    DebugLogger.info(LogType.METADATA,
-                            "[CHUNK_HASH] MISMATCH chunk {} (cached={}, server={}) -> delta",
-                            pos, Long.toHexString(cachedChunkHash), Long.toHexString(entry.chunkHash()));
-                    deltaRequestChunks.add(pos);
-                } else {
-                    DebugLogger.info(LogType.METADATA,
-                            "[CHUNK_HASH] MISMATCH chunk {} (cached={}, server={}) -> full",
-                            pos, Long.toHexString(cachedChunkHash), Long.toHexString(entry.chunkHash()));
-                    staleFullRequestChunks.add(pos);
-                }
-            }
-        }
-
-        DebugLogger.info(LogType.METADATA,
-                "[CHUNK_HASH] Result: {} hits, {} new full-request, {} stale full-request, {} delta-request (total {})",
-                hitChunks.size(), newFullRequestChunks.size(), staleFullRequestChunks.size(),
-                deltaRequestChunks.size(), packet.entries().size());
-        if (!hitChunks.isEmpty() && ClientSmokeTest.isEnabled()) {
-            Constants.LOG.info("HassiumSmokeTest:UDP_FAILOVER CACHE_RESUME_HIT hits={} dimension={}",
-                    hitChunks.size(), packet.dimension());
-        }
-
-        return new ChunkHashResult(hitChunks, newFullRequestChunks, staleFullRequestChunks,
-                deltaRequestChunks, packet.dimension());
-    }
-
-    /**
-     * 主线程应用 chunkHash 比对结果
-     */
-    private static void applyChunkHashResult(ChunkHashResult result, String dimension) {
-        Minecraft mc = Minecraft.getInstance();
-        if (mc.player == null || mc.getConnection() == null) return;
-
-        // 缓存命中：从缓存加载；BE 请求延后到区块真正 apply 之后
-        if (!result.hitChunks().isEmpty()) {
-            DebugLogger.info(LogType.METADATA, "[CHUNK_HASH] {} cache hits, loading from cache",
-                    result.hitChunks().size());
-            ClientCacheLoadQueue loadQueue = ClientCacheLoadQueue.getInstance();
-            // 同步刷新坐标缓存后冻结权威层 priority（未知时与 renderOnly 同为 LOWEST）
-            MainThreadDispatcher.updatePlayerPosition(mc.player.getX(), mc.player.getZ());
-            for (ChunkPos pos : result.hitChunks()) {
-                double priority = MainThreadDispatcher.authoritativePriority(pos);
-                PENDING_BE_REQUESTS.put(ChunkPos.asLong(pos.x, pos.z), dimension);
-                loadQueue.enqueue(pos, priority);
-            }
-        }
-
-        if (!result.newFullRequestChunks().isEmpty()) {
-            DebugLogger.info(LogType.METADATA,
-                    "[CHUNK_HASH] {} misses, requesting full chunks",
-                    result.newFullRequestChunks().size());
-            requestFullChunks(dimension, result.newFullRequestChunks(), false);
-        }
-
-        if (!result.staleFullRequestChunks().isEmpty()) {
-            DebugLogger.info(LogType.METADATA,
-                    "[CHUNK_HASH] {} stale chunks, requesting full chunks",
-                    result.staleFullRequestChunks().size());
-            requestFullChunks(dimension, result.staleFullRequestChunks(), true);
-        }
-
-        // MISMATCH：发送 sectionHash 请求，服务端比对后回 SectionDeltaS2CPacket（分段增量）
-        if (!result.deltaRequestChunks().isEmpty()) {
-            DebugLogger.info(LogType.METADATA,
-                    "[CHUNK_HASH] {} mismatches, requesting section-delta",
-                    result.deltaRequestChunks().size());
-            sendSectionHashRequestForChunks(dimension, result.deltaRequestChunks());
-        }
-    }
-
-    /**
-     * 构造并发送 sectionHash 请求（从缓存读 sectionHashes，无则该块回退全量）。
-     */
-    private static void sendSectionHashRequestForChunks(String dimension, List<ChunkPos> chunks) {
-        ClientHassiumStorage storage = ClientChunkHandler.getClientStorage();
-        if (storage == null) {
-            // storage 不可用，回退全量
-            requestFullChunks(dimension, chunks, true);
-            return;
-        }
-        List<SectionHashRequestC2SPacket.Entry> entries = new ArrayList<>();
-        List<ChunkPos> fallback = new ArrayList<>();
-        for (ChunkPos pos : chunks) {
-            long[] sectionHashes = storage.readSectionHashes(pos);
-            if (sectionHashes == null || sectionHashes.length == 0) {
-                fallback.add(pos);
-            } else {
-                entries.add(new SectionHashRequestC2SPacket.Entry(pos.x, pos.z, sectionHashes));
-            }
-        }
-        if (!entries.isEmpty()) {
-            sendSectionHashRequest(dimension, entries);
-        }
-        if (!fallback.isEmpty()) {
-            DebugLogger.info(LogType.METADATA,
-                    "[CHUNK_HASH] {} chunks have no sectionHashes, fallback to full", fallback.size());
-            requestFullChunks(dimension, fallback, true);
-        }
-    }
-
-    /**
      * 区块已成功应用到客户端世界后调用。
      * <p>
      * 1. 发送此前登记的 BE 请求（缓存命中路径）
@@ -484,16 +206,19 @@ public class ClientMetadataHandler {
     public static void clearPendingState() {
         PENDING_BE_REQUESTS.clear();
         PENDING_BLOCK_ENTITIES.clear();
-        PENDING_HASH_PACKETS.clear();
-        PENDING_DELTA_REQUESTS.clear();
         PENDING_FULL_REQUESTS.clear();
-        pendingHashWaitStartedAtMs = 0L;
-        // 重连后需要重发全量 Bloom（新连接的服务端没有本玩家 Bloom 层）
-        ClientBloomSyncTracker.onDisconnect();
         // SeedGen 影子服务端随断连回收（重连后按需重建）
         io.github.limuqy.mc.hassium.network.seedgen.SeedGenExecutor.getInstance().onDisconnect();
         // 影子光照管线随断连清空（投递/回传/失败标记；影子服务端由上面 registry 统一关停）
         io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.onDisconnect();
+    }
+
+    /**
+     * 影子端 hash 比对 miss 后的数据请求入口（ShadowLightCompute 后台线程调用；
+     * requestFullChunks 内部有 not-in-game 兜底与距离排序）。
+     */
+    public static void requestFullChunksPublic(String dimension, List<ChunkPos> chunks, boolean staleOrFallback) {
+        requestFullChunks(dimension, chunks, staleOrFallback);
     }
 
     /**
@@ -567,341 +292,6 @@ public class ClientMetadataHandler {
     }
 
     // ===== 阶段二：sectionHash 请求和 delta 响应（MISMATCH 路径，NBT merge）=====
-
-    /**
-     * 发送阶段二 sectionHash 请求到服务端。
-     * <p>
-     * 由 {@link #applyChunkHashResult} 的 MISMATCH 分支调用。服务端比对后回
-     * {@link SectionDeltaS2CPacket}，客户端走 {@link #applyDeltaEntry} NBT merge。
-     */
-    private static void sendSectionHashRequest(String dimension,
-                                                List<SectionHashRequestC2SPacket.Entry> entries) {
-        SectionHashRequestC2SPacket request = new SectionHashRequestC2SPacket(dimension, entries);
-        FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
-        boolean sent = false;
-        try {
-            request.encode(buf);
-            Services.NETWORK_MANAGER.sendSectionHashRequest(buf);
-            sent = true;
-            NetworkStats.recordSectionDeltaRequestsSent(entries.size());
-            long deadline = System.currentTimeMillis() + DELTA_RESPONSE_TIMEOUT_MS;
-            for (SectionHashRequestC2SPacket.Entry entry : entries) {
-                PENDING_DELTA_REQUESTS.put(
-                        ChunkPos.asLong(entry.chunkX(), entry.chunkZ()),
-                        new PendingDeltaRequest(dimension, deadline));
-            }
-            DebugLogger.info(LogType.METADATA, "[SECTION_HASH] Sent section hash request for {} chunks",
-                    entries.size());
-        } catch (Exception e) {
-            DebugLogger.error("[SECTION_HASH] Failed to send section hash request", e);
-        } finally {
-            if (!sent && buf != null) buf.release();
-        }
-        if (!sent) {
-            List<ChunkPos> fallback = new ArrayList<>(entries.size());
-            for (SectionHashRequestC2SPacket.Entry entry : entries) {
-                fallback.add(new ChunkPos(entry.chunkX(), entry.chunkZ()));
-            }
-            requestFullChunks(dimension, fallback, true);
-        }
-    }
-
-    /**
-     * 处理阶段二分段增量响应。
-     * <p>
-     * {@code entries} 走 NBT merge；{@code skipped}（超视距等）立即回退全量。
-     */
-    public static void handleSectionDeltaPacket(SectionDeltaS2CPacket packet) {
-        Minecraft mc = Minecraft.getInstance();
-        if (mc.player == null) return;
-
-        DebugLogger.info(LogType.METADATA,
-                "[SECTION_DELTA] Received delta packet: {} entries, {} skipped, dimension={}",
-                packet.entries().size(), packet.skipped().size(), packet.dimension());
-
-        int receivedChunkCount = packet.entries().size() + packet.skipped().size();
-        if (receivedChunkCount > 0) {
-            long vanillaBytes = (long) receivedChunkCount * VanillaZlibEstimator.estimate((int) ESTIMATED_CHUNK_BYTES);
-            NetworkStats.recordSectionDeltaReceived(receivedChunkCount, vanillaBytes);
-        }
-
-        for (int i = 0; i < packet.entries().size(); i++) {
-            SectionDeltaS2CPacket.DeltaEntry entry = packet.entries().get(i);
-            PENDING_DELTA_REQUESTS.remove(ChunkPos.asLong(entry.chunkX(), entry.chunkZ()));
-            try {
-                long deltaSavedBytes = Math.max(0L,
-                        ESTIMATED_CHUNK_BYTES - estimateSectionDeltaEntryPayloadBytes(packet, entry, i));
-                HassiumTaskExecutor executor = HassiumTaskExecutor.getClient();
-                if (executor != null && executor.isRunning()) {
-                    // 后台 merge 链（读盘/解压/NBT merge/hash/压缩）→ 主线程 apply；
-                    // 写盘与 full ingest 共用单消费者 FIFO（见 applyDeltaEntryBackground javadoc）。
-                    executor.submit(() -> applyDeltaEntryBackground(entry, packet.dimension(), deltaSavedBytes),
-                            TaskCategory.SAFE_TO_CANCEL);
-                } else {
-                    applyDeltaEntryBackground(entry, packet.dimension(), deltaSavedBytes); // 回退：当前线程
-                }
-            } catch (Exception e) {
-                DebugLogger.error("[SECTION_DELTA] Failed to submit delta for chunk [{}, {}]",
-                        entry.chunkX(), entry.chunkZ(), e);
-            }
-        }
-
-        if (!packet.skipped().isEmpty()) {
-            List<ChunkPos> fallback = new ArrayList<>(packet.skipped().size());
-            for (SectionDeltaS2CPacket.SkippedChunk s : packet.skipped()) {
-                PENDING_DELTA_REQUESTS.remove(ChunkPos.asLong(s.chunkX(), s.chunkZ()));
-                fallback.add(new ChunkPos(s.chunkX(), s.chunkZ()));
-            }
-            DebugLogger.info(LogType.METADATA,
-                    "[SECTION_DELTA] {} chunks skipped by server, fallback to full", fallback.size());
-            requestFullChunks(packet.dimension(), fallback, true);
-        }
-    }
-
-    /**
-     * 估算分段增量包载荷大小（用于客户端「网络接收」统计）。
-     */
-    private static long estimateSectionDeltaPayloadBytes(SectionDeltaS2CPacket packet) {
-        long bytes = 8L + packet.dimension().length();
-        for (SectionDeltaS2CPacket.DeltaEntry entry : packet.entries()) {
-            bytes += estimateSectionDeltaEntryPayloadBytes(entry);
-        }
-        bytes += packet.skipped().size() * 8L;
-        return bytes;
-    }
-
-    private static long estimateSectionDeltaEntryPayloadBytes(SectionDeltaS2CPacket packet,
-                                                               SectionDeltaS2CPacket.DeltaEntry entry,
-                                                               int entryIndex) {
-        int entryCount = packet.entries().size();
-        if (entryCount <= 0) {
-            return 0L;
-        }
-        long sharedBytes = 8L + packet.dimension().length();
-        long apportionedSharedBytes = sharedBytes / entryCount
-                + (entryIndex < sharedBytes % entryCount ? 1L : 0L);
-        return estimateSectionDeltaEntryPayloadBytes(entry) + apportionedSharedBytes;
-    }
-
-    private static long estimateSectionDeltaEntryPayloadBytes(SectionDeltaS2CPacket.DeltaEntry entry) {
-        long bytes = 8L;
-        for (SectionDeltaS2CPacket.SectionData sd : entry.changedSections()) {
-            bytes += 8L + (sd.blockData() != null ? sd.blockData().length : 0);
-        }
-        for (SectionDeltaS2CPacket.BlockEntityData be : entry.blockEntities()) {
-            // BE：坐标 + 类型字符串 + NBT 粗估
-            bytes += 48;
-            if (be.type() != null) {
-                bytes += be.type().toString().length();
-            }
-            if (be.nbt() != null) {
-                bytes += 64;
-            }
-        }
-        return bytes;
-    }
-
-    /**
-     * 后台应用单个 chunk 的 delta 数据（NBT merge），完成后主线程 apply。
-     * <p>
-     * 由 {@link HassiumTaskExecutor} 后台池执行：磁盘读 / ZSTD 解压 / NBT 解析 / section merge /
-     * hash 重算 / 压缩写盘全部移出包处理线程与主线程；仅最后一步 {@code applyChunkData} 必须主线程
-     * （经 {@link MainThreadDispatcher} 回主线程）。
-     * <p>
-     * 写盘经 {@code CacheSaveQueue#enqueueSerialized} 与 full ingest 共用单消费者 FIFO：平台线程池
-     * FIFO 下 full 先入队→delta 后入队→写盘序正确（终态 = full+增量）；虚拟线程并发模式下与现状
-     * 同级（delta 增量可能被 full 覆盖，服务器 hash 校验不匹配 → 重请求全量自愈）。
-     * <p>
-     * 步骤：
-     * <ol>
-     *   <li>读缓存 NBT（{@link ClientChunkHandler#loadChunkNbtFromCache}）</li>
-     *   <li>对每个 changedSection：替换 {@code sections[idx].data}，更新 {@code has_only_air}</li>
-     *   <li>BE 全量覆盖：delta 的 BE 列表替换 {@code block_entities}</li>
-     *   <li>重算 {@code sectionHashes} + {@code chunkHash} → 入队 persist</li>
-     *   <li>{@code nbtToPacketBytes} → 主线程 apply</li>
-     * </ol>
-     * 任一步失败 → 回主线程 {@code requestFullChunks}（保底，不比现在差）。
-     */
-    private static void applyDeltaEntryBackground(SectionDeltaS2CPacket.DeltaEntry entry, String dimension, long deltaSavedBytes) {
-        ChunkPos pos = new ChunkPos(entry.chunkX(), entry.chunkZ());
-        // 任务开始时的会话 level（可能 null=断连中）：回调执行时若已切换（断连/重连/维度切换），
-        // 旧会话的 apply/请求必须丢弃，否则旧 chunk 泄入新 world、旧 dimension 请求发到新会话
-        net.minecraft.client.multiplayer.ClientLevel submittedLevel = Minecraft.getInstance().level;
-        try {
-            Minecraft mc = Minecraft.getInstance();
-            if (mc.level == null) {
-                MainThreadDispatcher.execute(() -> {
-                    if (!isSameSession(submittedLevel)) {
-                        return; // 旧会话回调：丢弃
-                    }
-                    requestFullChunks(dimension, List.of(pos), true);
-                }, pos);
-                return;
-            }
-
-            // 1. 读缓存 NBT
-            net.minecraft.nbt.CompoundTag nbt = ClientChunkHandler.loadChunkNbtFromCache(pos);
-            if (nbt == null) {
-                DebugLogger.info(LogType.METADATA,
-                        "[SECTION_DELTA] No cached NBT for {}, fallback to full", pos);
-                MainThreadDispatcher.execute(() -> {
-                    if (!isSameSession(submittedLevel)) {
-                        return; // 旧会话回调：丢弃
-                    }
-                    requestFullChunks(dimension, List.of(pos), true);
-                }, pos);
-                return;
-            }
-
-            // 2. 替换变更的 sections
-            var registryAccess = mc.level.registryAccess();
-            net.minecraft.nbt.ListTag sections =
-                    io.github.limuqy.mc.hassium.compat.CompoundTagCompat.getList(nbt, "sections");
-            for (SectionDeltaS2CPacket.SectionData sd : entry.changedSections()) {
-                int idx = sd.sectionIndex();
-                ensureSectionsSize(sections, idx + 1, registryAccess);
-                // 新 section 不含 sky/block_light：方块变了则旧光照必过时
-                net.minecraft.nbt.CompoundTag newSection = new net.minecraft.nbt.CompoundTag();
-                boolean hasOnlyAir = checkSectionHasOnlyAir(sd.blockData(), registryAccess);
-                newSection.putBoolean("has_only_air", hasOnlyAir);
-                newSection.putByteArray("data", sd.blockData());
-                sections.set(idx, newSection);
-            }
-            nbt.put("sections", sections);
-            // 方块变更后磁盘光照不可信；否则 is_light_on=1 + 残缺 light 会跳过重算并长期黑块
-            nbt.putByte("is_light_on", (byte) 0);
-            // 绝对 section y（background 线程此时 level 非 null 已保证；lambda 内不碰 level）
-            // 跨版本：1.21.2+ 无 Level.getMinSection()，统一走 LevelHeightCompat
-            final int minSection = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMinSection(mc.level);
-
-            // 3. BE 全量覆盖（写盘）；世界内 BE 在 apply 后走 applyBlockEntities
-            if (!entry.blockEntities().isEmpty()) {
-                net.minecraft.nbt.ListTag beList = new net.minecraft.nbt.ListTag();
-                for (SectionDeltaS2CPacket.BlockEntityData be : entry.blockEntities()) {
-                    if (be.nbt() != null) {
-                        beList.add(be.nbt());
-                    }
-                }
-                nbt.put("block_entities", beList);
-            }
-
-            // 4. 重算 hash + 入队 persist（is_light_on=0 → 保持 dirty，等光照回写/卸载）
-            int sectionCount = mc.level.getSectionsCount();
-            nbt.putInt("section_count", sectionCount);
-            long[] newSectionHashes = io.github.limuqy.mc.hassium.cache.client.ChunkDiskCodec
-                    .computeSectionHashesFromNbt(nbt, sectionCount, registryAccess);
-            long newChunkHash = ChunkContentHashUtil.combineSectionHashesFromArray(newSectionHashes);
-            byte[] nbtBytes = io.github.limuqy.mc.hassium.cache.client.ChunkDiskCodec.nbtToBytes(nbt);
-            if (nbtBytes == null) {
-                MainThreadDispatcher.execute(() -> {
-                    if (!isSameSession(submittedLevel)) {
-                        return; // 旧会话回调：丢弃
-                    }
-                    requestFullChunks(dimension, List.of(pos), true);
-                }, pos);
-                return;
-            }
-            // 与 full ingest 共用单消费者 FIFO，region 写不再有两路并发
-            io.github.limuqy.mc.hassium.cache.client.CacheSaveQueue.getInstance()
-                    .enqueueSerialized(pos, nbtBytes, newChunkHash, newSectionHashes);
-
-            DebugLogger.info(LogType.METADATA,
-                    "[SECTION_DELTA] Merged {} sections for {} (newHash={})",
-                    entry.changedSections().size(), pos, Long.toHexString(newChunkHash));
-
-            // 5. 主线程 apply + BE（nbtToPacketBytes 不写 BE 线格式）
-            byte[] packetBytes = io.github.limuqy.mc.hassium.cache.client.ChunkDiskCodec
-                    .nbtToPacketBytes(nbt, registryAccess, sectionCount);
-            if (packetBytes == null) {
-                MainThreadDispatcher.execute(() -> {
-                    if (!isSameSession(submittedLevel)) {
-                        return; // 旧会话回调：丢弃
-                    }
-                    requestFullChunks(dimension, List.of(pos), true);
-                }, pos);
-                return;
-            }
-            final byte[] finalPacketBytes = packetBytes;
-            final net.minecraft.nbt.CompoundTag finalNbt = nbt;
-            final List<SectionDeltaS2CPacket.BlockEntityData> bes = entry.blockEntities();
-            io.github.limuqy.mc.hassium.concurrent.MainThreadDispatcher.execute(() -> {
-                if (!isSameSession(submittedLevel)) {
-                    return; // 旧会话回调：丢弃
-                }
-                // delta 变化 section 已知（merge 后 NBT 无光字段 section）：不预提交重算——
-                // 客户端无本地光照逻辑；apply（applyChunkData → handleLevelChunkWithLight TAIL）
-                // 由影子端启用态统一投递（is_light_on=0 → 空光包路径）。
-                boolean applied = ClientChunkHandler.applyChunkData(entry.chunkX(), entry.chunkZ(), finalPacketBytes, false);
-                if (applied) {
-                    if (!bes.isEmpty()) {
-                        applyBlockEntities(entry.chunkX(), entry.chunkZ(), bes);
-                    }
-                    NetworkStats.recordCacheDeltaSaved(deltaSavedBytes);
-                } else {
-                    requestFullChunks(dimension, List.of(pos), true);
-                }
-            }, pos);
-
-        } catch (Throwable t) {
-            DebugLogger.warn(LogType.METADATA,
-                    "[SECTION_DELTA] Merge failed for {}, fallback to full", pos, t);
-            MainThreadDispatcher.execute(() -> {
-                if (!isSameSession(submittedLevel)) {
-                    return; // 旧会话回调：丢弃
-                }
-                requestFullChunks(dimension, List.of(pos), true);
-            }, pos);
-        }
-    }
-
-    /** 回调执行时校验会话未切换（断连/重连/维度切换后 level 对象必变）。 */
-    private static boolean isSameSession(net.minecraft.client.multiplayer.ClientLevel submittedLevel) {
-        return Minecraft.getInstance().level == submittedLevel;
-    }
-
-    /**
-     * 扩容 sections ListTag 到 minSize。
-     * <p>
-     * 占位必须是合法 {@code LevelChunkSection.write} 字节；禁止 {@code data=[]}，
-     * 否则 {@code nbtToPacketBytes} 拼流缺字节导致虚空。
-     */
-    private static void ensureSectionsSize(net.minecraft.nbt.ListTag sections, int minSize,
-                                           net.minecraft.core.RegistryAccess registryAccess) {
-        while (sections.size() < minSize) {
-            var emptySec = io.github.limuqy.mc.hassium.compat.LevelChunkSectionCompat.create(registryAccess);
-            sections.add(io.github.limuqy.mc.hassium.compat.ChunkPacketDataCompat
-                    .writeSection(emptySec, registryAccess));
-        }
-    }
-
-    /** 解析 section 线格式字节，检查是否全空气（用 LevelChunkSectionCompat + ChunkPacketDataCompat）。 */
-    private static boolean checkSectionHasOnlyAir(byte[] blockData, net.minecraft.core.RegistryAccess registryAccess) {
-        if (blockData == null || blockData.length == 0) return true;
-        try {
-            net.minecraft.world.level.chunk.LevelChunkSection sec =
-                    io.github.limuqy.mc.hassium.compat.LevelChunkSectionCompat.create(registryAccess);
-            net.minecraft.nbt.CompoundTag tmp = new net.minecraft.nbt.CompoundTag();
-            tmp.putByteArray("data", blockData);
-            io.github.limuqy.mc.hassium.compat.ChunkPacketDataCompat.readSectionInto(tmp, sec, registryAccess);
-            return sec.hasOnlyAir();
-        } catch (Exception e) {
-            return false;
-        }
-    }
-
-    /**
-     * 应用 blockEntity 数据到世界
-     */
-    private static void applyBlockEntities(int chunkX, int chunkZ,
-                                            List<SectionDeltaS2CPacket.BlockEntityData> blockEntities) {
-        Minecraft mc = Minecraft.getInstance();
-        if (mc.level == null) return;
-
-        long chunkKey = ChunkPos.asLong(chunkX, chunkZ);
-        for (SectionDeltaS2CPacket.BlockEntityData beData : blockEntities) {
-            tryApplyOrStashBlockEntity(chunkKey, beData.pos(), beData.nbt());
-        }
-    }
 
     /**
      * 处理服务端返回的 blockEntity 数据包。
@@ -1002,55 +392,5 @@ public class ClientMetadataHandler {
                         beData.pos(), e);
             }
         }
-    }
-
-    /**
-     * 处理服务端发送的光照增量通知。
-     * <p>
-     * 拦截 {@code ClientboundLightUpdatePacket} 后，服务端仅发送区块坐标和 section 位掩码。
-     * 客户端标记对应 section dirty，本地重算光照（跳过跨区块传播），并标记缓存光照过时。
-     */
-    public static void handleLightDeltaPacket(LightDeltaS2CPacket packet) {
-        Minecraft mc = Minecraft.getInstance();
-        if (mc.level == null) return;
-
-        net.minecraft.world.level.lighting.LevelLightEngine lightEngine = mc.level.getLightEngine();
-        int bottomSection = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMinSection(mc.level);
-        int topSection = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMaxSectionExclusive(mc.level);
-
-        for (LightDeltaS2CPacket.Entry entry : packet.entries()) {
-            ChunkPos chunkPos = new ChunkPos(entry.chunkX(), entry.chunkZ());
-
-            // 全 column 建层（不仅 mask bit）。propagateLightSources / 边缘传播会读相邻 section；
-            // 仅 mask 建层在 1.21.10 上仍会撞 null DataLayer。
-            for (int sectionY = bottomSection; sectionY < topSection; sectionY++) {
-                net.minecraft.core.SectionPos sectionPos =
-                        net.minecraft.core.SectionPos.of(entry.chunkX(), sectionY, entry.chunkZ());
-                lightEngine.updateSectionStatus(sectionPos, false);
-                mc.level.setSectionDirtyWithNeighbors(entry.chunkX(), sectionY, entry.chunkZ());
-            }
-
-            // 本地重算光照（仅目标区块，跳过 pullLightFromNeighborEdges）
-            lightEngine.propagateLightSources(chunkPos);
-            // 不在此路径全局 drain：邻居可能尚未建层。
-            // residual 由后续 applyLightEngine 的 safeRunLightUpdates / 渲染帧 drain。
-
-            // 记录指标 + vanilla 等价入站 wire（vanilla 不会发 delta，会随 chunk packet 携带光照字节走 Zlib 压缩入站）
-            NetworkStats.recordLightDeltaReceived(1);
-            NetworkStats.recordVanillaBytesReceived(
-                    VanillaZlibEstimator.estimate((int) ESTIMATED_LIGHT_BYTES));
-
-            // 标记缓存光照过时（is_light_on=0）
-            markCacheLightStale(chunkPos);
-        }
-    }
-
-    /**
-     * 标记缓存光照过时：仅标脏，卸载时由 levelChunkToNbt 写入最新光照。
-     */
-    private static void markCacheLightStale(ChunkPos chunkPos) {
-        io.github.limuqy.mc.hassium.cache.client.ClientChunkDirtyTracker.markDirty(chunkPos);
-        DebugLogger.debug(LogType.METADATA,
-                "[LIGHT_DELTA] Marked dirty (light stale) for chunk [{}, {}]", chunkPos.x, chunkPos.z);
     }
 }

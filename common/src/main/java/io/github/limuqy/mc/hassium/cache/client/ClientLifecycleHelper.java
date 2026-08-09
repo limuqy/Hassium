@@ -32,10 +32,8 @@ public final class ClientLifecycleHelper {
     }
 
     /**
-     * 玩家登录时初始化缓存系统。
-     * <p>
-     * M2: 将 ClientHassiumStorage 创建（含热度索引 / section 哈希初始化）异步化，
-     * handleLogin 主线程不再阻塞在磁盘索引初始化上。
+     * 玩家登录时初始化缓存系统（新架构：无 HBT1 客户端存储，影子端承担保存；
+     * 此处仅初始化后台执行器 + OVD 环带重扫）。
      */
     public static void onLogin() {
         if (initialized) {
@@ -55,6 +53,10 @@ public final class ClientLifecycleHelper {
         // 进服吞吐加速：临时提高主线程时间预算
         ClientMainThreadBudget.startJoinBoost();
 
+        // 影子端世界根定位：gameDir/serverId 同步记录（异步任务与影子端预创建竞态，
+        // 影子端装配需要此信息——先于 initializeCacheAsync/onLogin 完成）。
+        recordCacheLocationSync();
+
         // M2: 异步初始化存储（热度索引 / section 哈希在后台线程）
         initializeCacheAsync();
         // 影子端预创建（后台；非网络向功能总开关）：握手到达后启动，失败自动降级。
@@ -63,22 +65,29 @@ public final class ClientLifecycleHelper {
         initialized = true;
     }
 
+    /** 同步记录 gameDir/serverId（影子端世界目录定位；与 initializeCacheAsync 同口径）。 */
+    private static void recordCacheLocationSync() {
+        try {
+            Minecraft mc = Minecraft.getInstance();
+            if (mc == null || mc.getConnection() == null || mc.getConnection().getServerData() == null) {
+                return;
+            }
+            final String serverIp = mc.getConnection().getServerData().ip;
+            final String cacheAddress = io.github.limuqy.mc.hassium.network.dataplane.ClientFailoverIdentity
+                    .cacheIdentity(serverIp);
+            final Path gameDir = mc.gameDirectory.toPath();
+            final String serverId = "server_" + cacheAddress.replaceAll("[^a-zA-Z0-9._-]", "_");
+            io.github.limuqy.mc.hassium.network.ClientChunkPipeline.getInstance()
+                    .setCacheLocation(gameDir, serverId);
+        } catch (Exception ignored) {
+            // 记录失败不阻断登录
+        }
+    }
+
     /** 手动登出双触发防重入冷却（MixinMinecraft.disconnect HEAD 主线程 + listener onDisconnect Netty 线程各自注入）。 */
     private static final long CLEANUP_COOLDOWN_NS = 1_000_000_000L;
     private static final java.util.concurrent.atomic.AtomicLong LAST_CLEANUP_NANO =
             new java.util.concurrent.atomic.AtomicLong(0);
-
-    /**
-     * Netty 线程断连（被动断开/服务器踢）时，cleanupMain 经 {@code mc.execute} 排队、
-     * 由主线程 pollTask 执行——与主线程 tick 链（onDisconnect → clearLevel TAIL 的
-     * {@link #finalizeDisconnectIfTerminal()}）存在帧序竞态：若主线程先完成 finalize
-     * （storage close + dirty clearAll）再 pollTask cleanupMain，dump 全被 dirty gate
-     * 挡掉（实测 fabric R1 断连 R2 光照 0%）。此标志在 cleanupMain 排队期间置位，
-     * 让 clearLevel TAIL 的同步 finalize 让位，等 pollTask 的 cleanupMain 完成、
-     * 由断连方随后排队的 finalizeIfTerminal 收尾（15s 兜底防主线程永不执行）。
-     */
-    private static final java.util.concurrent.atomic.AtomicLong CLEANUP_MAIN_PENDING_NANO =
-            new java.util.concurrent.atomic.AtomicLong(0L);
 
     /**
      * 断开连接时清理（{@code onDisconnect} HEAD，世界拆除之前）。
@@ -114,31 +123,13 @@ public final class ClientLifecycleHelper {
 
         Minecraft mc = Minecraft.getInstance();
         if (mc != null && !mc.isSameThread()) {
-            // 被动断开（服务器踢/断网）：onDisconnect 在 Netty 线程触发。dump 必须同步等
-            // 主线程完成（enqueue 强制主线程序列化），否则异步转移晚于 clearLevel/clearAll 全丢。
-            java.util.concurrent.CountDownLatch latch = new java.util.concurrent.CountDownLatch(1);
-            CLEANUP_MAIN_PENDING_NANO.set(System.nanoTime());
-            mc.execute(() -> {
-                try {
-                    cleanupOnDisconnectMainThread();
-                } finally {
-                    CLEANUP_MAIN_PENDING_NANO.set(0L);
-                    latch.countDown();
-                }
-            });
-            try {
-                latch.await(15, java.util.concurrent.TimeUnit.SECONDS);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-            }
-        } else {
-            // 手动登出：MixinMinecraft.disconnect(Screen[,Z])/clearLevel HEAD，主线程同步执行
-            cleanupOnDisconnectMainThread();
+            // 被动断开（服务器踢/断网）：onDisconnect 在 Netty 线程触发。
+            // 新架构断连落盘由影子端 saveAll 承担（SeedGenLevelCompat.shutdown），
+            // 客户端无 dump 队列，无需等主线程。
         }
 
         // 主线程无关的清理（线程安全容器）
-        // ③ 清空加载队列（不再有新区块需要加载）
-        ClientCacheLoadQueue.getInstance().clear();
+        // ③ 影子端存档由 SeedGenLevelCompat.shutdown(saveAll) 承担，无客户端加载队列
         ViewDistanceExtensionService.getInstance().clearAllRenderOnly();
 
         // ④ 取消后台任务（但不关闭 executor，save 还需要它）
@@ -154,27 +145,7 @@ public final class ClientLifecycleHelper {
 
         // ⑥ finalizeDisconnect：MixinMinecraft disconnect/clearLevel TAIL，或加载器 DISCONNECT 兜底
 
-        Constants.LOG.info("Hassium: Disconnect cleanup done (chunks enqueued + flushed before teardown)");
-    }
-
-    /**
-     * 主线程上的断连落盘：① 消费加载队列 → ② 排空光照缓冲（消费 = 引擎重算 + markDirty，
-     * 否则缓冲在清理时被直接丢弃，已重算块不会入队写盘）→ ③ 批量入队 + 等待写盘完成。
-     */
-    private static void cleanupOnDisconnectMainThread() {
-        // ① 拉高预算，尽可能消费加载队列中的缓存区块
-        drainLoadQueueWithRaisedBudget();
-
-        // ② 批量 enqueue 所有已加载区块并等待写盘完成。
-        CacheSaveQueue saveQueue = CacheSaveQueue.getInstance();
-        Minecraft mc = Minecraft.getInstance();
-        ClientLevel level = mc.level != null ? mc.level : saveQueue.getTrackedLevel();
-        if (level != null) {
-            saveQueue.enqueueAllFromLevel(level);
-        } else {
-            Constants.LOG.warn("Hassium: No ClientLevel available on disconnect — chunks may not be cached");
-        }
-        saveQueue.flushAsync(5000);
+        Constants.LOG.info("Hassium: Disconnect cleanup done (shadow saveAll via SeedGenLevelCompat.shutdown)");
     }
 
     /**
@@ -187,8 +158,8 @@ public final class ClientLifecycleHelper {
      */
     public static void finalizeDisconnect() {
         if (!finalized.compareAndSet(false, true)) return;
-        // 会话真正终止：停止恢复期预填充（残留 pending 由下次 start 清空）
-        RecoveryChunkPrefill.getInstance().stop();
+        // 会话真正终止：影子端由断连链 SeedGenLevelCompat.shutdown 关闭（含 saveAll）；
+        // 无客户端恢复期预填充。
         // ⑩ 登出自动重置指标：恢复中此方法被短路，故仅在真正终止时清零；
         // failover 恢复成功后计数跨断线保留，符合「同一会话」语义。
         // 与冒烟测试 ROUND2 入口的重置保持一致：NetworkStats + DataPlane PoC 计数器一并清。
@@ -196,28 +167,12 @@ public final class ClientLifecycleHelper {
             io.github.limuqy.mc.hassium.metrics.NetworkStats.reset();
             io.github.limuqy.mc.hassium.network.dataplane.DataPlaneClientBundle.resetDataBulkCounters();
         }
-        // ⑥ finalDrain：排空拆除阶段产生的 save 任务
-        CacheSaveQueue.getInstance().drainRemaining(5000);
 
-        // ⑦ 关闭 executor
+        // ⑥ 关闭 executor（影子端已在断连链关闭；无客户端 save 线程/storage）
         HassiumTaskExecutor.shutdownClient(5000);
 
-        // ⑧ 停止 save 线程
-        CacheSaveQueue.getInstance().shutdown();
-
-        // ⑨ 关闭 storage
-        ClientHassiumStorage storage = ClientChunkHandler.getClientStorage();
-        if (storage != null) {
-            try {
-                storage.close();
-            } catch (Exception e) {
-                Constants.LOG.warn("Hassium: Failed to close client storage on disconnect", e);
-            }
-        }
-        ClientEntitySnapshotStore.closeCurrent();
-        ClientHassiumStorage.closeSharedDatabase();
+        // ⑦ 清理会话状态
         ClientChunkHandler.resetStorage();
-        ClientChunkDirtyTracker.clearAll();
     }
 
     /**
@@ -230,17 +185,8 @@ public final class ClientLifecycleHelper {
      * recovery 状态保持 NONE) 时直接执行 finalize。
      */
     public static void finalizeDisconnectIfTerminal() {
-        // Netty 断连路径的 cleanupMain 排队期间让位：主线程 tick 链（onDisconnect →
-        // clearLevel TAIL）的同步 finalize 若抢先执行会关 storage + clearAll dirty，
-        // 使随后 pollTask 的 cleanupMain dump 全部落空（fabric R1 断连 R2 光照 0%）。
-        // 让位后由断连方在 cleanupMain 完成后排队的 finalizeIfTerminal 收尾；
-        // 15s 兜底：主线程 pollTask 异常/卡死时不永久丢失 finalize。
-        long pendingSince = CLEANUP_MAIN_PENDING_NANO.get();
-        if (pendingSince != 0L && System.nanoTime() - pendingSince < 15_000_000_000L) {
-            Constants.LOG.debug("Hassium: finalize deferred — cleanup main pending ({}ms ago)",
-                    (System.nanoTime() - pendingSince) / 1_000_000);
-            return;
-        }
+        // 新架构无客户端 cleanupMain dump 队列：断连落盘由影子端 saveAll 承担，
+        // 无需让位逻辑；恢复态判断保留（failover 会话语义）。
         io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState state =
                 io.github.limuqy.mc.hassium.network.dataplane.ClientRecoveryState.getInstance();
         if (state.isRecovering()) {
@@ -258,77 +204,8 @@ public final class ClientLifecycleHelper {
     }
 
     /**
-     * 断连时拉高预算，尽可能消费加载队列中的缓存区块。
-     * <p>
-     * 未 apply 的区块在断连后丢失（可接受），但 apply 过的区块在卸载时会被 save。
-     */
-    private static void drainLoadQueueWithRaisedBudget() {
-        ClientCacheLoadQueue loadQueue = ClientCacheLoadQueue.getInstance();
-        int pending = loadQueue.getPendingSize() + loadQueue.getReadySize();
-        if (pending <= 0) {
-            return;
-        }
-
-        // 1.21.11 Fabric：onDisconnect 可能在 Netty IO 线程触发。
-        // applyChunkData → handleLevelChunkWithLight 要求主线程，否则
-        // RunningOnDifferentThreadException（冒烟 R2 已复现）。非主线程只放弃 apply。
-        Minecraft mc = Minecraft.getInstance();
-        if (!mc.isSameThread()) {
-            Constants.LOG.info(
-                    "Hassium: Disconnect drain skipped off main thread (pending={}, thread={})",
-                    pending, Thread.currentThread().getName());
-            return;
-        }
-
-        // 断连时序防护（neoforge 1.20.2+ NPE 根因）：Minecraft 的断开流程先执行
-        // connection.close()（ClientPacketListener.level=null），而 mc.level 尚未清空。
-        // 此时队列中的缓存区块已无法进入世界（apply 必失败），且 updateLevelChunk 会因
-        // this.level 为 null 抛 NPE —— 直接放弃 drain（队列随后由 cleanupOnDisconnect 清空）。
-        ClientPacketListener connection = mc.getConnection();
-        if (connection == null || connection.getLevel() == null) {
-            Constants.LOG.info(
-                    "Hassium: Disconnect drain skipped - ClientPacketListener level already torn down (pending={})",
-                    pending);
-            return;
-        }
-
-        Constants.LOG.info("Hassium: Disconnect drain - {} chunks pending, raising budget", pending);
-
-        long deadlineNs = System.nanoTime() + 5_000_000_000L; // 5秒总超时
-        while (System.nanoTime() < deadlineNs) {
-            int ready = loadQueue.getReadySize();
-            int pendingTasks = loadQueue.getPendingSize();
-            if (ready == 0 && pendingTasks == 0) {
-                break;
-            }
-
-            // 消费 ready 队列（主线程 apply + 光照重算）
-            if (ready > 0) {
-                long frameBudgetNs = 50_000_000L; // 每帧 50ms（正常 ~10ms）
-                loadQueue.processQueueUntil(System.nanoTime() + frameBudgetNs);
-            }
-
-            // 等待 pending → ready（后台解压 + NBT 重组）
-            if (loadQueue.getReadySize() == 0 && loadQueue.getPendingSize() > 0) {
-                try {
-                    Thread.sleep(10);
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    break;
-                }
-            }
-        }
-
-        Constants.LOG.info("Hassium: Disconnect drain complete");
-    }
-
-    /**
-     * 异步初始化客户端缓存系统（M2）
-     * <p>
-     * ClientHassiumStorage 构造函数中包含热度索引 / section 哈希初始化，
-     * 将这部分移到后台线程，避免阻塞主线程。
-     * <p>
-     * 初始化完成前，元数据包处理会通过同步回退路径。
+     * 异步初始化客户端缓存系统（新架构：无 HBT1 存储初始化，影子端存档目录由
+     * SeedGenLevelCompat 推导；此处仅触发 OVD 环带重扫）。
      */
     private static void initializeCacheAsync() {
         try {
@@ -358,54 +235,12 @@ public final class ClientLifecycleHelper {
             final Path gameDir = mc.gameDirectory.toPath();
             final String serverId = "server_" + cacheAddress.replaceAll("[^a-zA-Z0-9._-]", "_");
 
-            String dimension = "minecraft:overworld";
-            if (mc.player.level() != null) {
-                dimension = mc.player.level().dimension()
-#if MC_VER < MC_1_21_11
-                        .location()
-#else
-                        .identifier()
-#endif
-                        .toString();
-            }
-            final String finalDimension = dimension;
-
-            // M2: 异步初始化存储（热度索引 / section 哈希在后台线程）
-            HassiumTaskExecutor executor = HassiumTaskExecutor.getClient();
-            if (executor != null && executor.isRunning()) {
-                executor.submit(() -> {
-                    ClientChunkHandler.initStorage(gameDir, serverId, finalDimension);
-                    initializeEntitySnapshots(gameDir, serverId, finalDimension);
-                    ClientMetadataHandler.onStorageReady();
-                    io.github.limuqy.mc.hassium.network.ClientBloomSyncTracker.onStorageReady();
-                    // 超视渲染：清 miss 耗尽状态并强制下一 tick 全环带重扫
-                    ViewDistanceExtensionService.getInstance().onClientStorageReady();
-                    Constants.LOG.info("Hassium: Async initialized client cache for server {} (connected {}) dim {}",
-                            cacheAddress, serverIp, finalDimension);
-                }, TaskCategory.BEST_EFFORT);
-            } else {
-                // 回退：同步初始化
-                ClientChunkHandler.initStorage(gameDir, serverId, finalDimension);
-                initializeEntitySnapshots(gameDir, serverId, finalDimension);
-                ClientMetadataHandler.onStorageReady();
-                io.github.limuqy.mc.hassium.network.ClientBloomSyncTracker.onStorageReady();
-                ViewDistanceExtensionService.getInstance().onClientStorageReady();
-                Constants.LOG.info("Hassium: Initialized client cache for server {} (connected {}) dim {}",
-                        cacheAddress, serverIp, finalDimension);
-            }
+            // 新架构：客户端无 HBT1 存储；影子端存档目录由 SeedGenLevelCompat 按
+            // gameDir/serverId 推导（hassium_cache/<serverId>/world），此处仅保留
+            // OVD 环带重扫（影子模式就绪后强制补扫）。
+            ViewDistanceExtensionService.getInstance().onClientStorageReady();
         } catch (Exception e) {
             Constants.LOG.error("Hassium: Failed to initialize client cache", e);
-        }
-    }
-
-    private static void initializeEntitySnapshots(Path gameDir, String serverId, String dimension) {
-        if (!HassiumConfigService.getInstance().isEntitySnapshotsEnabled()) {
-            return;
-        }
-        try {
-            ClientEntitySnapshotStore.initialize(gameDir, serverId, dimension);
-        } catch (Exception e) {
-            Constants.LOG.warn("Hassium: Failed to initialize entity snapshot store for {}", dimension, e);
         }
     }
 }

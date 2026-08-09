@@ -1772,7 +1772,7 @@ public class NeoForgeNetworkManager implements NetworkManager {
                         try {
                             FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data()));
                             SectionDeltaS2CPacket packet = SectionDeltaS2CPacket.decode(buf);
-                            ClientMetadataHandler.handleSectionDeltaPacket(packet);
+                            io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.submitDelta(packet);
                         } catch (Exception e) {
                             LOGGER.error("[CLIENT] Failed to handle section delta", e);
                         }
@@ -1782,15 +1782,9 @@ public class NeoForgeNetworkManager implements NetworkManager {
                 java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT));
 #else
                 (msg, ctx) -> {
-                    ctx.enqueueWork(() -> {
-                        try {
-                            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data()));
-                            SectionDeltaS2CPacket packet = SectionDeltaS2CPacket.decode(buf);
-                            ClientMetadataHandler.handleSectionDeltaPacket(packet);
-                        } catch (Exception e) {
-                            LOGGER.error("[CLIENT] Failed to handle section delta", e);
-                        }
-                    });
+                    io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.submitDelta(
+                            SectionDeltaS2CPacket.decode(new FriendlyByteBuf(
+                                    io.netty.buffer.Unpooled.wrappedBuffer(msg.data()))));
                     ctx.setPacketHandled(true);
                 },
                 java.util.Optional.of(PlayNetworkDirection.PLAY_TO_CLIENT));
@@ -1871,29 +1865,13 @@ public class NeoForgeNetworkManager implements NetworkManager {
                 LightDeltaWrapper::encode, LightDeltaWrapper::decode,
 #if MC_VER < MC_1_20_2
                 (msg, ctx) -> {
-                    ctx.get().enqueueWork(() -> {
-                        try {
-                            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data()));
-                            LightDeltaS2CPacket packet = LightDeltaS2CPacket.decode(buf);
-                            ClientMetadataHandler.handleLightDeltaPacket(packet);
-                        } catch (Exception e) {
-                            LOGGER.error("[CLIENT] Failed to handle light delta", e);
-                        }
-                    });
+                    // 方案 A：客户端不消费 LightDelta，no-op
                     ctx.get().setPacketHandled(true);
                 },
                 java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT));
 #else
                 (msg, ctx) -> {
-                    ctx.enqueueWork(() -> {
-                        try {
-                            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data()));
-                            LightDeltaS2CPacket packet = LightDeltaS2CPacket.decode(buf);
-                            ClientMetadataHandler.handleLightDeltaPacket(packet);
-                        } catch (Exception e) {
-                            LOGGER.error("[CLIENT] Failed to handle light delta", e);
-                        }
-                    });
+                    // 方案 A：客户端不消费 LightDelta，no-op
                     ctx.setPacketHandled(true);
                 },
                 java.util.Optional.of(PlayNetworkDirection.PLAY_TO_CLIENT));
@@ -2410,15 +2388,17 @@ public class NeoForgeNetworkManager implements NetworkManager {
     }
 
     private static void handleSectionDelta(SectionDeltaPayload payload, PlayPayloadContext context) {
-        context.workHandler().execute(() -> {
+        try {
+            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(payload.data()));
             try {
-                FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(payload.data()));
                 SectionDeltaS2CPacket packet = SectionDeltaS2CPacket.decode(buf);
-                ClientMetadataHandler.handleSectionDeltaPacket(packet);
-            } catch (Exception e) {
-                LOGGER.error("[CLIENT] Failed to handle section delta", e);
+                io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.submitDelta(packet);
+            } finally {
+                buf.release();
             }
-        });
+        } catch (Exception e) {
+            LOGGER.error("[CLIENT] Failed to handle section delta packet", e);
+        }
     }
 
     private static void handleBlockEntityRequest(BlockEntityRequestPayload payload, PlayPayloadContext context) {
@@ -2456,9 +2436,16 @@ public class NeoForgeNetworkManager implements NetworkManager {
         // ServerPlayer 创建时（MixinServerPlayer TAIL）自动提升为压缩启用。
         // 完整协商（ZSTD/聚合/数据面/位置）仍在 Play 阶段 handleHandshake 完成。
         UUID playerId = null;
+#if MC_VER < MC_1_20_6
+        if (context.connection().getPacketListener()
+                instanceof net.minecraft.server.network.ServerConfigurationPacketListenerImpl configListener) {
+            playerId = io.github.limuqy.mc.hassium.compat.PlayerCompat.getProfileId(configListener.getOwner());
+        }
+#else
         if (context.listener() instanceof net.minecraft.server.network.ServerConfigurationPacketListenerImpl configListener) {
             playerId = io.github.limuqy.mc.hassium.compat.PlayerCompat.getProfileId(configListener.getOwner());
         }
+#endif
         PreHandshakeProtocol.handlePreHandshake(playerId, payload);
     }
 
@@ -2762,15 +2749,17 @@ public class NeoForgeNetworkManager implements NetworkManager {
     }
 
     private static void handleSectionDelta(SectionDeltaPayload payload, IPayloadContext context) {
-        context.enqueueWork(() -> {
+        try {
+            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(payload.data()));
             try {
-                FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(payload.data()));
                 SectionDeltaS2CPacket packet = SectionDeltaS2CPacket.decode(buf);
-                ClientMetadataHandler.handleSectionDeltaPacket(packet);
-            } catch (Exception e) {
-                LOGGER.error("[CLIENT] Failed to handle section delta", e);
+                io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.submitDelta(packet);
+            } finally {
+                buf.release();
             }
-        });
+        } catch (Exception e) {
+            LOGGER.error("[CLIENT] Failed to handle section delta packet", e);
+        }
     }
 
     private static void handleBlockEntityRequest(BlockEntityRequestPayload payload, IPayloadContext context) {
@@ -2800,15 +2789,7 @@ public class NeoForgeNetworkManager implements NetworkManager {
     }
 
     private static void handleLightDelta(LightDeltaPayload payload, IPayloadContext context) {
-        context.enqueueWork(() -> {
-            try {
-                FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(payload.data()));
-                LightDeltaS2CPacket packet = LightDeltaS2CPacket.decode(buf);
-                ClientMetadataHandler.handleLightDeltaPacket(packet);
-            } catch (Exception e) {
-                LOGGER.error("[CLIENT] Failed to handle light delta", e);
-            }
-        });
+        // 方案 A：客户端不消费 LightDelta，no-op
     }
 #endif
 
@@ -2937,43 +2918,6 @@ public class NeoForgeNetworkManager implements NetworkManager {
             ChunkDataRequestPayload payload = new ChunkDataRequestPayload(data);
             net.minecraft.client.Minecraft.getInstance().getConnection().send(payload);
             LOGGER.debug("Hassium: Sent chunk data request (Payload)");
-        } else {
-            buf.release();
-        }
-#endif
-    }
-
-    @Override
-    public void sendClientBloomSync(FriendlyByteBuf buf) {
-#if MC_VER < MC_1_20_4
-        if (net.minecraft.client.Minecraft.getInstance().getConnection() != null) {
-            byte[] data = new byte[buf.readableBytes()];
-            buf.readBytes(data);
-            buf.release();
-            CHANNEL.sendToServer(new ClientBloomSyncWrapper(data));
-            LOGGER.debug("Hassium: Sent client bloom sync (SimpleChannel)");
-        } else {
-            buf.release();
-        }
-#elif MC_VER < MC_1_20_5
-        if (net.minecraft.client.Minecraft.getInstance().getConnection() != null) {
-            byte[] data = new byte[buf.readableBytes()];
-            buf.readBytes(data);
-            buf.release();
-            ClientBloomSyncPayload payload = new ClientBloomSyncPayload(data);
-            net.minecraft.client.Minecraft.getInstance().getConnection().send(new ServerboundCustomPayloadPacket(payload));
-            LOGGER.debug("Hassium: Sent client bloom sync (Payload 1.20.4)");
-        } else {
-            buf.release();
-        }
-#else
-        if (net.minecraft.client.Minecraft.getInstance().getConnection() != null) {
-            byte[] data = new byte[buf.readableBytes()];
-            buf.readBytes(data);
-            buf.release();
-            ClientBloomSyncPayload payload = new ClientBloomSyncPayload(data);
-            net.minecraft.client.Minecraft.getInstance().getConnection().send(payload);
-            LOGGER.debug("Hassium: Sent client bloom sync (Payload)");
         } else {
             buf.release();
         }

@@ -1,8 +1,6 @@
 package io.github.limuqy.mc.hassium.network;
 
 import io.github.limuqy.mc.hassium.Constants;
-import io.github.limuqy.mc.hassium.cache.client.ClientChunkDirtyTracker;
-import io.github.limuqy.mc.hassium.cache.client.ClientHassiumStorage;
 
 import java.nio.file.Path;
 import java.util.Map;
@@ -22,8 +20,9 @@ public final class ClientChunkPipeline {
 
     private static volatile ClientChunkPipeline INSTANCE;
 
-    /** 客户端缓存存储（断连置 null） */
-    private volatile ClientHassiumStorage clientStorage;
+    /** 影子端世界根定位（initStorage 记录；hassium_cache/<serverId>/world）。 */
+    private volatile java.nio.file.Path gameDir;
+    private volatile String serverId;
 
     /** 元数据 contentHash 暂存：chunkPos -> (hash, timestamp)，用于收到数据后写入缓存 */
     private final Map<Long, PendingHash> pendingContentHashes = new ConcurrentHashMap<>();
@@ -92,25 +91,29 @@ public final class ClientChunkPipeline {
      * @param serverId    服务器标识（如 server_127.0.0.1_25565）
      * @param dimension   维度标识（如 minecraft:overworld）
      */
-    public void initStorage(Path gameDir, String serverId, String dimension) {
-        // 维度目录名：将冒号替换为下划线
-        String dimDir = dimension.replaceAll("[^a-zA-Z0-9._-]", "_");
-        clientStorage = new ClientHassiumStorage(gameDir, serverId, dimDir);
-        Constants.LOG.info("Hassium: Initialized client chunk cache for server {} dimension {}", serverId, dimension);
+    /**
+     * 仅记录目录定位（gameDir/serverId；影子端世界根定位用，不创建任何存储）。
+     * 与 {@link #setCacheLocation} 共用字段。
+     */
+    public void setCacheLocation(Path gameDir, String serverId) {
+        this.gameDir = gameDir;
+        this.serverId = serverId;
     }
 
-    /**
-     * 获取客户端缓存存储实例
-     */
-    public ClientHassiumStorage getClientStorage() {
-        return clientStorage;
+    /** 游戏目录（影子端世界根定位用；未初始化返回 null）。 */
+    public java.nio.file.Path getGameDir() {
+        return gameDir;
+    }
+
+    /** 服务器标识（如 server_127.0.0.1_25565；未初始化返回 null）。 */
+    public String getServerId() {
+        return serverId;
     }
 
     /**
      * 重置客户端缓存存储（断开连接时调用）
      */
     public void resetStorage() {
-        clientStorage = null;
         pendingContentHashes.clear();
         pendingSectionHashes.clear();
         serverSeed = 0L;
@@ -119,7 +122,6 @@ public final class ClientChunkPipeline {
         hassiumHandshakeDone = false;
         shadowServerReady = false;
         shadowServerFailed = false;
-        ClientChunkDirtyTracker.clearAll();
     }
 
     /**
@@ -250,6 +252,7 @@ public final class ClientChunkPipeline {
     }
 
     private static long chunkPosKey(int x, int z) {
-        return ((long) x << 32) | (z & 0xFFFFFFFFL);
+        // 必须与官方 ChunkPos.asLong(x, z) 一致（x 低位、z 高位），见 ShadowLightCompute 注释。
+        return net.minecraft.world.level.ChunkPos.asLong(x, z);
     }
 }

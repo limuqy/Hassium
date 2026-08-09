@@ -29,18 +29,17 @@ chunkHash   = combineSectionHashes(sectionIndex → sectionHash)
 
 实现：`ChunkContentHashUtil`。服务端与客户端算法一致。
 
-客户端落盘时 `MetadataTable.contentHash` **必须**等于 `combine(sectionHashes)`（与 `ChunkHashS2C` 同值）。卸载重写（`CacheSaveQueue`）同样用 combine，勿用含 BE/heightmap 的 `compute()`。
+客户端落盘时 contentHash **必须**等于 `combine(sectionHashes)`（与 `ChunkHashS2C` 同值）。影子端 `ShadowStorageHashes` 表落盘同源（apply/注入时重算写入）。
 
-命中比对（`ClientHassiumStorage.readChunkHash`）：
+命中比对（影子端 `ShadowLightCompute` / 磁盘 `ShadowStorageHashes`）：
 
-1. Bloom 预筛 → 打开 Region
-2. 读 MetadataTable `contentHash`（合法非 0；`1` 视为无效占位）
-3. 若无效则 `combine(SectionHashStore)` 回退
-4. 与服务端 `chunkHash` 相等 → 命中
+1. 内存已注入 → `ShadowStorageHashes` 表优先，无表现算
+2. 未注入 → `ShadowSeedServer.loadFromDisk` 读影子端存档比对（光脏标记拦截欠光块）
+3. 与服务端 `chunkHash` 相等 → 命中直接回传；不等且光干净 → 分段增量候选
 
 ## 3. 现行数据流
 
-> **阶段二 分段增量**（默认开）：缓存过期（MISMATCH）走 `SectionHashRequest` → NBT merge（失败回退全量）。详见 §11。
+> **阶段二 分段增量**（默认开）：缓存过期（MISMATCH）走 `SectionHashRequest` → 影子端 apply（失败回退全量）。详见 §11。
 
 ### 服务端
 
@@ -71,17 +70,15 @@ storage 未就绪 → 暂存；就绪后批量比对（超时约 2s 回退全量
         │
 readChunkHash（MetadataTable，必要时 SectionHashStore combine）
         │
-   ┌────┴────────────┬────────────┐
+   ┌────┴────────┬────────────┐
   HIT              MISS         MISMATCH（过期）
    │                 │              │
-CacheLoadQueue   全量请求     分段增量（默认开）
+直接回传          全量请求     分段增量（默认开）
    │                 │         SectionHashRequest
-后台磁盘+解压    ChunkPayload    → SectionDelta → NBT merge
+（影子端数据）  ChunkPayload    → SectionDelta → 影子端 apply
    └────────┬────────┘              │（失败/skipped/超时 → 全量）
             └───────────┬───────────┘
-主线程时间预算 apply（JoinBoost：进服约 10s 提高预算）
-        │
-HIT apply 后再请求 blockEntity
+drainReady 帧尾 apply（官方通道 handleLevelChunkWithLight）
 ```
 ## 4. 主线程限流
 
@@ -105,19 +102,19 @@ ChunkHashS2CPacket(dimension, List<Entry>)
 ### 阶段二：分段增量（默认开启，可关闭）
 
 ```java
-SectionHashRequestC2SPacket  // 客户端 → 服务端
-SectionDeltaS2CPacket        // 服务端 → 客户端（变更分段 + BE）
+SectionHashRequestC2SPacket  // 客户端 → 服务端（本地 section hashes）
+SectionDeltaS2CPacket        // 服务端 → 客户端（变更 sections + heightmaps + BE）
 ```
 
 门控：`clientCache.sectionDeltaEnabled`（默认 `true`；需同时 `clientCache.enabled`）。
 
 | 比对结果 | 开关关 | 开关开（默认） |
 |----------|--------|----------------|
-| HIT | 缓存队列 | 缓存队列 |
+| HIT | 缓存队列 | 影子端直接回传 |
 | MISS | 全量 | 全量 |
-| MISMATCH（过期） | 全量 | `sendSectionHashRequest` → NBT merge（失败回退全量） |
+| MISMATCH（过期） | 全量 | `sendSectionHashRequest` → 影子端 apply（失败回退全量） |
 
-服务端按 `0..sectionsCount-1` 比对 hash（空气=0），不等则统一 `serializeSection`（无专用空气协议）。详见 §11.5。
+服务端按 `0..sectionsCount-1` 比对 hash（空气=0），不等则统一 `serializeSection`（无专用空气协议）。响应含 heightmaps（服务端 `getHeightmaps()` rawData 直发）。详见 §11.5。
 
 旧 `ChunkMetadataS2C`（contentHash 批量元数据）协议已删除。
 
@@ -125,15 +122,13 @@ SectionDeltaS2CPacket        // 服务端 → 客户端（变更分段 + BE）
 
 | 组件 | 职责 |
 |------|------|
-| `ServerChunkPushManager` | hash 批量、数据队列、tick 序列化、pushPool |
+| `ServerChunkPushManager` | hash 批量、数据队列、tick 序列化、pushPool、delta 比对回包 |
 | `MixinChunkHolder` / `MixinServerPlayer` / `MixinPlayerChunkSender` | 拦截原版全量推送 |
-| `ClientMetadataHandler` | hash 比对、全量请求、（保留）delta handler |
-| `ClientCacheLoadQueue` | 后台读缓存 |
-| `ClientMainThreadBudget` + `MainThreadDispatcher` | 主线程时间预算 drain |
+| `ClientMetadataHandler` | hash 比对、全量请求、blockEntity 请求 |
+| `ShadowLightCompute` | 影子端 hash 比对、delta 候选/请求/超时回退、consumeLoop 应用与回传 |
+| `ShadowSeedServer.applySectionDelta` | 影子端 section/BE/heightmap 覆盖 + 清光重算 + contentHash 落表 |
 | `ChunkBloomFilter` | 减少无效磁盘 IO |
-| `ClientHassiumStorage` / `HassiumRegionFile` | 客户端 Region 缓存 + MetadataTable |
-| `ClientHeatIndex` | 访问热度 / LRU（`config/hassium/heat.idx`），不参与命中 |
-| `SectionHashStore` | per-dimension `section_hashes.bin`；分段增量比对 / 命中回退 |
+| `ShadowStorageHashes` | 影子端 contentHash 表 + 光脏标记（R2 命中判定） |
 
 ## 7. 客户端淘汰
 
@@ -254,6 +249,8 @@ RD > 32（需手改 `options.txt`）时雾距会跟随 `getEffectiveRenderDistan
 
 ## 11. 磁盘 NBT 缓存格式
 
+> **本节为旧 HBT1 客户端缓存格式的历史记录**：新架构下客户端不再读写磁盘缓存——缓存由影子端原版存档承担（`hassium_cache/<serverId>/world`，type 126 + chunkHash，见 architecture.md §6），清理由 `ShadowCacheEviction`（heat.idx 热度淘汰）负责。`HassiumRegionFile` / `ClientCacheDatabase` / `CacheEvictionManager` 等旧类已裁剪。
+
 自 `disk-nbt-cache-and-export` 起，客户端缓存 payload 从 packet 字节改为磁盘 chunk `CompoundTag`。
 
 ### 11.1 外层布局（不变）
@@ -280,31 +277,30 @@ RD > 32（需手改 `options.txt`）时雾距会跟随 `getEffectiveRenderDistan
 **光照数据存储**：当 `is_light_on=1` 时，每个 section 的 NBT 可能包含 `sky_light` 和 `block_light`（各 2048 bytes）。
 
 **光照缓存流水线**（Hassium 引擎统一算光，客户端本地无光照计算）：
-1. 首次加载（剥光协商生效，服务端 lightStrip=true 且客户端声明 `lightComputeSupported`）：空光包到达 → 经 `ClientChunkPipeline` TAIL 投递影子端（`ShadowLightCompute`）→ 影子端算光后回填 `swapDataLayer` 落光，缓存 `is_light_on=1`
-2. 缓存命中（含超视 renderOnly）：后台读 `is_light_on` → `nbtToPacketBytes()` 写入真实光照 → apply 后直接应用，记「缓存命中」
-3. 方块变更：拦截 `ClientboundLightUpdatePacket` → 发送 `LightDeltaS2CPacket` → 空光合并（`is_light_on=0`）→ TAIL 投递影子端重算 → **标脏**（卸载/`levelChunkToNbt` 再写 `is_light_on=1`）；SectionDelta 合并后强制 `is_light_on=0` 并保持 dirty，避免「flag=1 + 残缺 light」跳过引擎计算
-4. 区块卸载 / 断连 dump：脏块若 contentHash 与磁盘一致 → **只补光照、保留磁盘 hash/sectionHashes**（禁止 Live-Unload 重算覆盖 MetadataTable，否则次回大批 MISMATCH）；hash 不一致才全量 `levelChunkToNbt`
-5. 影子端失败（未收敛/提取异常）：单柱失败仅记 failed 并跳过该柱应用（客户端无本地重算兜底）；引擎整体失败 = 客户端功能降级（见下）
+1. 首次加载（剥光协商生效，服务端 lightStrip=true 且客户端声明 `lightComputeSupported`）：空光包到达 → 投递影子端（`ShadowLightCompute`）→ 影子端算光后打包收敛光回传，断连 `saveAll` 落盘收敛光
+2. 缓存命中（含超视 renderOnly）：影子端存档 `loadFromDisk` 直接回传（存档即收敛光；光脏标记拦截欠光块 → 走重算链）
+3. 方块变更：`LightDeltaS2CPacket` → 影子端重算 → 标脏 → 落盘写收敛光；SectionDelta 变更 section 清光重算（`applySectionDelta`）
+4. 区块卸载 / 断连 dump：`saveAll` 全量重写（含收敛光）；欠光块 `markLightDirty`（R2 命中判定拦截）
+5. 收敛超时：欠光打包 + 标脏 + 后台补发（引擎传播完成后重新回传覆盖，黑块不残留）
 
 **引擎失败降级**：影子端启动失败 / 未握手种子 → `ShadowLightCompute` 引擎关闭，但服务端剥光同样经握手 gate 关闭（无 `lightComputeSupported` 声明 → 光随包自带），客户端无黑块。
 
 **指标语义**（`/hassiumc stats`）：
-- 展示：`光照缓存：xx%（命中 N，计算 M）`，与区块缓存同行风格一致
-- **命中**：从缓存 apply 且跳过引擎计算（`is_light_on=1`）
-- **计算**：空光照触发影子端计算（首次推送 / `is_light_on=0`）
-- 命中率 = 命中 / (命中 + 计算)；与 `nbtToPacketBytes` 解耦，避免暖缓存假 100%
+- 展示：`区块缓存：xx%（全命中 N/B，增量 M/B）`，命中率 = 有效命中字节 / eligible 字节
+- **全命中**：影子端存档/内存直接回传（跳过全量下载）
+- **增量**：delta apply 成功（避免全量下载的等价值）
+- eligible：影子端尝试过的缓存路径（disk hit + delta 请求）
 
 **renderOnly**：`ClientCacheLoadQueue.ReadyChunk.hasCachedLight` 为 true 时不再投递影子端（空光仍经 TAIL 投递一次，Handler 只补内存 NBT 回写）。
 
-### 11.3 Live-Unload Snapshot（主一致性方案）
+### 11.3 影子端存档（主一致性方案）
 
-真实区块卸载时用 `LevelChunk` + `ChunkContentHashUtil.computeSectionHashes(chunk)` 覆盖磁盘：
-- `CacheSaveQueue.enqueue` 入口检查 renderOnly → 直接跳过（保留历史快照）
-- `ChunkDiskCodec.levelChunkToNbt(chunk, level)` → NBT
-- `computeSectionHashes(chunk)` → `combineSectionHashesFromArray` → contentHash（与服务端同算法）
-- persist 覆盖磁盘
+影子端 `ShadowSeedServer` 运行期维护注入区块，断连/卸载统一 `saveAll` 落盘：
+- `ChunkSerializer.write(level, chunk)`（1.21.2+ `SerializableChunkData`）→ NBT
+- `ChunkContentHashUtil.computeSectionHashes(chunk)` → `combineSectionHashes` → contentHash 落 `ShadowStorageHashes`
+- chunkMap.write 落盘（type 126，MixinRegionFile shadow 上下文 gate）
 
-这保证「曾加载并收到更新」的块再进应 HIT。
+这保证「曾加载并收到更新」的块 R2 再进应 HIT。
 
 ### 11.4 旧 packet 缓存识别
 
@@ -316,22 +312,21 @@ RD > 32（需手改 `options.txt`）时雾距会跟随 `getEffectiveRenderDistan
 
 仅当 `HassiumConfigService.isSectionDeltaEnabled()` 为真时启用（默认开）；关闭则过期与未命中一样全量。
 
-`compareChunkHashes` MISMATCH → `sendSectionHashRequest` → `ServerChunkPushManager.handleSectionHashRequest`（按索引完整比对；视距+1 余量）→ **始终**回 `SectionDeltaS2CPacket`（`entries` + `skipped`）：
-1. `entries`：读缓存 NBT；`ensureSectionsSize` 占位须为合法 `writeSection` 字节（禁止 `data=[]`）
-2. 变更分段的 `SectionData.blockData` 替换 `sections[idx].data`
-3. BE 写盘覆盖；主线程 apply 后再 `applyBlockEntities`（packet 线格式不带 BE）
-4. 重算 `sectionHashes` + `chunkHash` → persist + `nbtToPacketBytes` apply
-5. `skipped` / merge 失败 / 3s 无覆盖 → `requestFullChunks`（保底）
+影子端 hash 比对 MISMATCH（内存/磁盘有旧数据且光干净）→ `requestSectionDeltas` 上报本地 section hashes → `ServerChunkPushManager.handleSectionHashRequest`（按索引完整比对；视距+1 余量）→ **始终**回 `SectionDeltaS2CPacket`（`entries` + `skipped`）：
+1. `entries`：`LevelChunkSection.read(buf)` 就地覆盖变更 section（官方格式，跨版本稳定）；`heightmaps` 直写（服务端 `chunk.getHeightmaps()` rawData 直发，客户端 `setHeightmap`）
+2. BE 全量快照（服务端发整 chunk BE；客户端 `getBlockEntity(pos, IMMEDIATE)` + `loadFromTag` 镜像官方 `replaceWithPacketData` consumer）
+3. 变更 section 清光（`queueSectionData(null)` + `updateSectionStatus(false)`）+ `propagateLightSources` → 引擎重算传播 → consumeLoop 等全局收敛 → 收敛光打包回传；**收敛超时 → 欠光打包 + 标脏 + 后台补发**（引擎传播完成后重新回传覆盖，黑块窗口 = 剩余传播时间）
+4. 重算 contentHash 写 `ShadowStorageHashes`（R2 比对 / 断连落盘复用）
+5. `skipped` / apply 失败 / 8s 请求超时 / 发送失败 → `requestFullChunksPublic`（保底）
 
 ### 11.6 关键组件
 
 | 组件 | 职责 |
 |------|------|
-| `ChunkDiskCodec` | packet↔NBT、LevelChunk→NBT、NBT 字节序列化 |
-| `ChunkPacketDataCompat` | section/heightmaps NBT 读写（跨版本） |
-| `CompoundTagCompat` | CompoundTag getter（1.21.5+ Optional 兼容） |
-| `CacheSaveQueue` | Live-Unload 主路径（renderOnly 跳过） |
-| `ClientChunkHandler` | apply 走 NBT→packet 重组（复用 `applyToLevelFromByteBuf`） |
+| `ShadowLightCompute` | hash 比对、delta 候选判定、请求/超时/回退、consumeLoop 应用与回传 |
+| `ShadowSeedServer.applySectionDelta` | section/BE/heightmap 覆盖 + 清光 + contentHash 重算 |
+| `SectionDeltaS2CPacket` | 线格式：sections + heightmaps + BE（`LevelChunkSection.read` 兼容 1.20.1~1.21.11） |
+| `DataPlaneClientBundle` | 数据面帧 `TYPE_BULK_SECTION_DELTA` 分发 → `submitDelta`（默认 dispatcher） |
 
 ## 12. 缓存导出（`/hassiumc export`）
 

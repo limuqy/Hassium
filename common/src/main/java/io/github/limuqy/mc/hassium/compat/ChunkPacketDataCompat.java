@@ -28,8 +28,6 @@ import java.util.Map;
  * 1.21.5 起 heightmaps 由 NBT 改为 {@code StreamCodec}（{@code Map<Heightmap.Types, long[]>}）。
  * 解析缓存中的 chunk packet 字节时必须经此兼容层跳过/复制，否则 section 偏移错位，
  * sectionHashes 计算失败 → 缓存命中率恒为 0。
- * <p>
- * 另提供 section / heightmaps 的 NBT 读写辅助，供 {@code ChunkDiskCodec} 使用。
  * 跨版本差异内聚在本文件，业务代码不散落 {@code #if MC_VER}。
  */
 public final class ChunkPacketDataCompat {

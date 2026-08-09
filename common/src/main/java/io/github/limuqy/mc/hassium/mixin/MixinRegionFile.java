@@ -39,12 +39,20 @@ public abstract class MixinRegionFile {
     @Unique
     private static final byte HASSIUM_COMPRESSION_TYPE = (byte) 126;
 
+    /** hash payload magic（ZSTD 首字节恒 0x28，不会撞 0x48——判别安全）。 */
+    @Unique
+    private static final byte HASSIUM_HASH_MAGIC = (byte) 0x48;
+
+    @Unique
+    private static final int HASSIUM_HASH_LENGTH = 8;
+
     @Unique
     private static final int SECTOR_SIZE = 4096;
 
     /**
      * 原版 timestamp 扇区：1024 × int32（不可扩成 8B contentHash，否则会侵占 data sector）。
-     * 服务端存档仍写 unix 秒；客户端缓存的 contentHash 由 HassiumRegionFile 独立管理。
+     * 服务端存档仍写 unix 秒；contentHash 走 payload 头（magic 0x48 + 8B hash），
+     * 由存储桥 {@code ShadowStorageHashes} 提供。
      */
     @Unique
     private ByteBuffer hassium$vanillaTimestamps;
@@ -129,7 +137,8 @@ public abstract class MixinRegionFile {
     @Inject(method = "getChunkDataInputStream", at = @At("HEAD"), cancellable = true)
     private void hassium$onGetChunkDataInputStream(ChunkPos pos, CallbackInfoReturnable<DataInputStream> cir) {
         HassiumConfigService configService = HassiumConfigService.getInstance();
-        if (!configService.isStorageEnabled()) {
+        if (!configService.isStorageEnabled()
+                && !io.github.limuqy.mc.hassium.server.RuntimeServerContext.isShadowServerContext()) {
             return;
         }
 
@@ -146,17 +155,23 @@ public abstract class MixinRegionFile {
     @Inject(method = "getChunkDataOutputStream", at = @At("HEAD"), cancellable = true)
     private void hassium$onGetChunkDataOutputStream(ChunkPos pos, CallbackInfoReturnable<DataOutputStream> cir) {
         HassiumConfigService configService = HassiumConfigService.getInstance();
-        if (!configService.isStorageEnabled()) {
+        boolean shadow = io.github.limuqy.mc.hassium.server.RuntimeServerContext.isShadowServerContext();
+        hassium$LOGGER.debug("Hassium: RegionFile write gate pos={} storageEnabled={} dedicated={} shadow={} mode={}",
+                pos, configService.isStorageEnabled(), hassium$isDedicatedServerContext(), shadow,
+                configService.getConfig().storage().mode());
+        if (!configService.isStorageEnabled() && !shadow) {
             return;
         }
 
-        // 单人/局域网（integrated server）不写 Hassium 格式，放行原版输出流
-        if (!hassium$isDedicatedServerContext()) {
+        // 单人/局域网（integrated server）不写 Hassium 格式，放行原版输出流；
+        // 影子服务端（客户端进程内世界管理后端）固定写 Hassium 格式（type 126）。
+        if (!hassium$isDedicatedServerContext() && !shadow) {
             return;
         }
 
         String mode = configService.getConfig().storage().mode();
-        if ("readonly_vanilla".equals(mode)) {
+        if ("readonly_vanilla".equals(mode)
+                && !io.github.limuqy.mc.hassium.server.RuntimeServerContext.isShadowServerContext()) {
             return;
         }
 
@@ -211,8 +226,21 @@ public abstract class MixinRegionFile {
         }
         dataBuf.flip();
 
-        byte[] compressedData = new byte[dataBuf.remaining()];
-        dataBuf.get(compressedData);
+        byte[] rawData = new byte[dataBuf.remaining()];
+        dataBuf.get(rawData);
+
+        // hash payload：magic 判别（ZSTD 首字节恒 0x28，不会撞 0x48）。
+        // 新格式 [magic(1)][hash(8)][zstd]：解压 zstd 并回填 hash 表（R2 比对用）。
+        byte[] compressedData = rawData;
+        if (rawData.length >= HASSIUM_HASH_LENGTH + 1 && rawData[0] == HASSIUM_HASH_MAGIC) {
+            long storedHash = 0L;
+            for (int i = 0; i < HASSIUM_HASH_LENGTH; i++) {
+                storedHash = (storedHash << 8) | (rawData[i + 1] & 0xFFL);
+            }
+            io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.put(pos.x, pos.z, storedHash);
+            compressedData = new byte[rawData.length - HASSIUM_HASH_LENGTH - 1];
+            System.arraycopy(rawData, HASSIUM_HASH_LENGTH + 1, compressedData, 0, compressedData.length);
+        }
 
         // 使用 ZSTD 字典解压
         byte[] decompressed;
@@ -250,12 +278,25 @@ public abstract class MixinRegionFile {
             throw new IOException("Hassium compression failed", e);
         }
 
-        // 构造 payload: [length(4)][compressionType(1)][compressedData]
+        // 构造 payload: [length(4)][compressionType(1)][magic(1)][hash(8)][compressedData]
+        // （hash 表有值才带 magic+hash；无值保持旧 126 格式，兼容）
+        Long storedHash = io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.get(pos);
         int payloadLength = 1 + compressedData.length;
-        ByteBuffer sectorBuf = ByteBuffer.allocate(4 + payloadLength);
-        sectorBuf.putInt(payloadLength);
-        sectorBuf.put(HASSIUM_COMPRESSION_TYPE);
-        sectorBuf.put(compressedData);
+        ByteBuffer sectorBuf;
+        if (storedHash != null) {
+            payloadLength += 1 + HASSIUM_HASH_LENGTH;
+            sectorBuf = ByteBuffer.allocate(4 + payloadLength);
+            sectorBuf.putInt(payloadLength);
+            sectorBuf.put(HASSIUM_COMPRESSION_TYPE);
+            sectorBuf.put(HASSIUM_HASH_MAGIC);
+            sectorBuf.putLong(storedHash);
+            sectorBuf.put(compressedData);
+        } else {
+            sectorBuf = ByteBuffer.allocate(4 + payloadLength);
+            sectorBuf.putInt(payloadLength);
+            sectorBuf.put(HASSIUM_COMPRESSION_TYPE);
+            sectorBuf.put(compressedData);
+        }
         sectorBuf.flip();
 
         hassium$self().invokeWrite(pos, sectorBuf);

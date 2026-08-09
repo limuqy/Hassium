@@ -45,11 +45,6 @@ public interface INetworkManagerService {
     void sendLightDeltaPacket(ServerPlayer player, FriendlyByteBuf buf);
 
     /**
-     * 发送客户端缓存 Bloom 位图同步包到服务端（客户端调用）
-     */
-    void sendClientBloomSync(FriendlyByteBuf buf);
-
-    /**
      * 发送 SeedRef 到客户端（SeedGen：pristine 区块引用替代区块数据；服务端调用）
      */
     void sendSeedRef(ServerPlayer player, FriendlyByteBuf buf);
@@ -62,5 +57,15 @@ public interface INetworkManagerService {
      * @param connection 当前连接（forge 需要；fabric/neoforge 忽略）
      */
     default void sendPreHandshake(net.minecraft.network.Connection connection) {
+    }
+
+    /**
+     * 客户端上报影子端存档布隆位图（C2S，full=true 覆盖旧层）。default 空实现：
+     * 仅 fabric 1.20.1 闭环覆盖；neoforge/forge 版本推广时补实现。
+     */
+    default void sendClientBloomSync(FriendlyByteBuf buf) {
+        if (buf != null && buf.refCnt() > 0) {
+            buf.release();
+        }
     }
 }

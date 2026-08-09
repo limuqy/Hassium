@@ -357,7 +357,7 @@ public final class FabricTomlConfigIO {
 
     private static void writeClientCache(CommentedConfig cfg, HassiumConfig.ClientCacheConfig c) {
         set(cfg, "clientCache.enabled", c.enabled(), "是否启用客户端缓存");
-        set(cfg, "clientCache.maxSizeMb", c.maxSizeMb(), "缓存最大容量（MB）");
+        set(cfg, "clientCache.maxSizeMb", c.maxSizeMb(), "缓存最大容量（MB；影子端存档容量上限，超限触发热度淘汰）");
         set(cfg, "clientCache.cacheCompressionLevel", c.cacheCompressionLevel(), "缓存压缩等级");
         set(cfg, "clientCache.hotScoreThreshold", c.hotScoreThreshold(), "热点分数阈值");
         set(cfg, "clientCache.recencyWeight", c.recencyWeight(), "最近访问权重");
@@ -370,11 +370,11 @@ public final class FabricTomlConfigIO {
         set(cfg, "clientCache.maxRenderDistance", c.maxRenderDistance(), "超视渲染 / 有效 RD 上限（Fog/内存约束）");
         set(cfg, "clientCache.ovdUnloadDelaySecs", c.ovdUnloadDelaySecs(), "离开超视渲染环带后延迟卸载秒数");
         set(cfg, "clientCache.sectionDeltaEnabled", c.sectionDeltaEnabled(),
-                "缓存过期时是否走分段增量（默认 true；依赖 clientCache.enabled）");
+                "分段增量（影子端 delta 消费实现前的控制位；当前客户端 no-op，服务端发送的 delta 包被忽略）");
         set(cfg, "clientCache.joinBoostEnabled", c.joinBoostEnabled(),
                 "进服后短时提高主线程预算加速加载（默认 true）");
         set(cfg, "clientCache.entitySnapshotsEnabled", c.entitySnapshotsEnabled(),
-                "区块卸载时保存非玩家实体快照（默认 true）");
+                "实体快照（影子端未接入实体数据前的控制位；当前存档不含实体）");
         set(cfg, "clientCache.loadThreads", c.loadThreads(), "客户端区块加载线程数");
         set(cfg, "clientCache.maxChunksPerFrame", c.maxChunksPerFrame(), "每帧应用缓存区块硬顶");
         set(cfg, "clientCache.mainThreadChunkBudgetMs", c.mainThreadChunkBudgetMs(), "主线程 apply 预算（ms）");

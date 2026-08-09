@@ -4,8 +4,8 @@
   <img src="common/src/main/resources/assets/hassium/logo.png" alt="Hassium Logo" width="200">
 </p>
 
-**Hassium** · 高性能区块压缩与客户端缓存模组，提供**高效压缩、网络优化、区块缓存、超视渲染与光照优化**。
-相对原版缩小存档与带宽、复用本地区块、减轻进服卡顿。支持 Fabric / Forge / NeoForge，覆盖 Minecraft 1.20.1–1.21.11。
+**Hassium** · 高性能区块压缩与客户端区块存储模组，提供**高效压缩、网络优化、区块缓存、超视渲染与光照优化**。
+相对原版缩小存档与带宽、减轻进服卡顿。支持 Fabric / Forge / NeoForge，覆盖 Minecraft 1.20.1–1.21.11。
 
 [English](README-en.md) · **简体中文**
 
@@ -28,13 +28,13 @@
 | **网络优化** | 平滑推送 | 服务端每 tick 提交上限限速（`maxChunksPerTick`，满 tick ≈ 值×20/s）+ 主线程序列化上限与后台化；进服/扩展视野不卡主线程 |
 | | 主控热切 | TCP 主控断或卡时按候选自动重连，恢复期画面定格（tick 暂停、过渡画面隐藏；可选无感切换），缓存暖续、隐藏断连界面（数据面 failover） |
 | | 加权分流 | 多 UDP/KCP endpoint 按 weight 加权轮询承载数据面，控制面留原版 TCP |
-| **区块缓存** | 客户端缓存 | 曾加载过的区块写入本地；再次进入同一区域时用 contentHash 比对命中，少传全量包 |
+| **区块缓存** | 影子端世界保存 | 进服区块统一由进程内影子服务端（完整 MinecraftServer）落盘原版存档（`hassium_cache/<serverId>/world`），断连保存、重连复用 |
 | | 分段增量 | 缓存过期（MISMATCH）时仅拉取变更分段（`sectionDelta`）本地合并，避免整块重传 |
 | | **超视渲染** | 多人服客户端 RD 大于服务端视距时，用本地缓存回填视距外地形（仅渲染、不向服索要视距外区块）；与 Bobby 互斥 |
 | | 世界导出 | `/hassiumc export` 将本地缓存导出为可进单机的原版 Anvil 世界 |
-| **光照优化** | Hassium 引擎 | 非网络向功能总开关（默认开）：进服启动进程内影子服务端统一承担区块光照计算，客户端不再计算；启动失败自动降级 |
-| | 光照剥离 | 服务端可剥光省流量，由 Hassium 引擎（影子端）统一计算光照并落盘缓存 |
-| | 光照缓存 | 首次加载重算后缓存光照数据，后续缓存命中直接应用，跳过同步重算 |
+| **光照优化** | Hassium 引擎 | 非网络向功能总开关（默认开）：进服启动进程内影子服务端（完整 MinecraftServer）统一承担**世界保存（缓存）+ 区块光照计算 + 打包官方区块包**（官方通道回传），客户端不再计算；启动失败自动降级 |
+| | 光照剥离 | 服务端可剥光省流量，由 Hassium 引擎（影子端）统一计算光照并打包回传 |
+| | 光照缓存 | 影子端算光随区块一体落盘（type 126 + chunkHash），重连复用，跳过重算 |
 | | 并行光照 | 可选：安装 Promethium MOD 后开启，光照重算在后台线程池并行执行；默认官方引擎（统一异步缓冲队列，帧尾预算消费，不阻塞主线程） |
 | **实用工具** | 流量监控 | `/hassium stats`（服务端）、`/hassiumc stats`（客户端）查看压缩与缓存效果 |
 
@@ -73,7 +73,8 @@
 安装后默认启用：
 
 - Hassium 通道压缩与全局包压缩
-- 客户端区块缓存
+- 影子端世界保存（进服区块落盘 `hassium_cache/<serverId>/world`，断连保存、重连复用）
+- 进程内影子服务端统一算光（Hassium 引擎）
 
 > 存档存储压缩（`storage.enabled`）默认关闭，仅专用服务器可开启；开启会改写区块落盘格式，请先**备份世界**。未装模组的客户端默认可连接（`compat.requireClientMod = false`）。
 
@@ -86,7 +87,7 @@
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
 | `storage.enabled` | `false` | 世界存档 ZSTD（默认关；仅专用服务器，请备份） |
-| `clientCache.enabled` | `true` | 客户端缓存 |
+| `clientCache.enabled` | `true` | 影子端世界保存（进服区块统一落盘 `hassium_cache/<serverId>/world`） |
 | `clientCache.sectionDeltaEnabled` | `true` | 缓存过期时分段增量 |
 | `clientCache.viewDistanceExtensionEnabled` | `true` | 超视渲染（多人；与 Bobby 互斥） |
 | `clientCache.maxRenderDistance` | `16` | 超视渲染 / 有效 RD 上限（2–64） |
@@ -95,7 +96,7 @@
 | `network.globalPacketCompression` | `true` | 全局 ZSTD |
 | `network.maxChunksPerTick` | `4` | 每玩家每 tick 提交上限（发送速率 = 本值 × tick 节奏，满 tick ≈ 4×20/s；掉刻自然降速） |
 | `clientCache.mainThreadChunkBudgetMs` | `15` | 客户端每帧 apply 预算（ms） |
-| `clientCache.hassiumEngineEnabled` | `true` | Hassium 引擎（非网络向功能总开关）：进服启动影子服务端统一承担区块光照计算；启动失败自动降级（缓存/超视渲染/SeedGen 关闭并提示）；关闭时服务端不剥光，光照随包自带 |
+| `clientCache.hassiumEngineEnabled` | `true` | Hassium 引擎（非网络向功能总开关）：进服启动进程内影子服务端统一承担世界保存（缓存）+ 光照计算 + 打包官方区块包；启动失败自动降级（缓存/超视渲染/SeedGen 关闭并提示）；关闭时服务端不剥光，光照随包自带 |
 | `clientCache.ovdLocalGeneration` | `false` | OVD 本地生成：超视渲染 miss 时按服务端世界种子本地生成并存入缓存；无种子自动关闭 |
 | `network.metricsEnabled` | `false` | 指标收集（默认关闭；自检时自动开启） |
 | `network.dataPlane.enabled` | `false` | UDP/KCP 数据面与 TCP 主控热切/加权分流；默认关闭，启用前请配置可达端点并依次确认 6 个自检标记 |
@@ -121,22 +122,22 @@
 ## 工作原理（简图）
 
 ```mermaid
-flowchart TD
-    trigger["trackChunk / broadcast"]
-    mixin["Mixin 拦截原版全量包"]
-    hash["推送 ChunkHashS2C"]
-    compare{"客户端比对 chunkHash"}
-    hit["ClientCacheLoadQueue"]
-    miss["ChunkDataRequestC2S 全量"]
-    push["主线程序列化 + pushPool 压缩"]
-    apply["主线程时间预算 apply"]
+flowchart LR
+    wire["Hassium 压缩通道<br/>区块包"]
+    decode["handleCompressedChunk<br/>→ decodeChunkPacket 还原官方包"]
+    shadow["进程内影子服务端（ShadowSeedServer）<br/>注入 + 官方引擎算光 + 等收敛"]
+    pack["打包带权威光官方包"]
+    apply["官方通道 handleLevelChunkWithLight<br/>主线程帧尾落地"]
+    save["断连 saveAll → hassium_cache/<serverId>/world<br/>type 126 + chunkHash"]
+    regen["SeedGen 本地生成 → submitGenerated 同链"]
 
-    trigger --> mixin --> hash --> compare
-    compare -->|命中| hit --> apply
-    compare -->|未命中| miss --> push --> apply
+    wire --> decode --> shadow --> pack --> apply
+    regen --> shadow
+    shadow -.-> save
+    save -.->|"重连复用"| shadow
 ```
 
-细节见 [`docs/chunk-cache.md`](docs/chunk-cache.md)。
+细节见 [`docs/architecture.md`](docs/architecture.md)。
 
 ---
 
