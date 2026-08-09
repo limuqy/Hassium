@@ -403,12 +403,12 @@ public final class FabricTomlConfigIO {
         set(cfg, "chunk.loadThreads", c.loadThreads(), "客户端区块加载线程数");
         set(cfg, "chunk.maxChunksPerFrame", c.maxChunksPerFrame(), "每帧应用缓存区块硬顶");
         set(cfg, "chunk.mainThreadChunkBudgetMs", c.mainThreadChunkBudgetMs(), "主线程 apply 预算（ms）");
-        set(cfg, "chunk.seedGenThreads", c.seedGenThreads(),
-                "SeedGen 本地生成线程数（固定平台线程池；0=禁用本地生成，SeedRef 一律回退全量）");
         set(cfg, "chunk.hassiumEngineEnabled", c.hassiumEngineEnabled(),
                 "是否启用Hassium 引擎（默认 true）：进服启动Hassium 引擎服务端统一承担区块光照计算，客户端不再计算。启动失败自动降级：客户端缓存/超视渲染/SeedGen/Hassium 引擎光照关闭并游戏内提示；false=不启动Hassium 引擎（此时服务端不剥光，光照随包自带）");
         set(cfg, "chunk.ovdLocalGeneration", c.ovdLocalGeneration(),
                 "OVD 本地生成（默认 false）：超视渲染区域缓存 miss 时用Hassium 引擎按服务端世界种子本地生成区块并存入本地缓存；无种子（服务端未装 MOD）时自动关闭生成");
+        set(cfg, "chunk.seedGenThreads", c.seedGenThreads(),
+                "SeedGen 本地生成线程数（固定平台线程池；0=禁用本地生成，SeedRef 一律回退全量）");
         set(cfg, "chunk.seedGenEnabled", c.seedGenEnabled(),
                 "是否启用 SeedGen（本地生成 pristine 区块；需双端同版本，默认关）");
     }

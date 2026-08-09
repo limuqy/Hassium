@@ -33,9 +33,6 @@ In-game config screen entry points:
 | `chunk.enabled` | `true` | Master switch for the client chunk cache |
 | `chunk.maxSizeMb` | `4096` | Disk cap for the local cache (MB); overflow evicts least-recently-used chunks by heat |
 | `chunk.sectionDeltaEnabled` | `true` | On cache mismatch, fetch only changed sections; off = full re-fetch |
-| `chunk.hassiumEngineEnabled` | `true` | Hassium engine (master switch for non-network features): starts an in-process shadow server on login that owns all chunk lighting computation (the client stops computing light itself); on startup failure it degrades automatically (client cache / beyond-view render / SeedGen disabled with an in-game notice); when disabled the server does not strip light (negotiated at handshake), light arrives with the packets |
-| `chunk.ovdLocalGeneration` | `false` | Beyond-view local generation: beyond-view-render chunks that miss the client cache are generated locally using the server's world seed and stored into the local cache; auto-disabled when no seed is available (server without the mod) |
-| `chunk.mainThreadChunkBudgetMs` | `15` | Per-frame chunk apply budget on the client (ms); JoinBoost temporarily raises it for ~10s after join |
 
 ### Rendering & Generation (`chunk.*`, Chunk Core)
 
@@ -46,6 +43,9 @@ In-game config screen entry points:
 | `chunk.ovdUnloadDelaySecs` | `5` | Seconds of delayed unload after leaving the beyond-view ring (0 = sync) |
 | `chunk.loadThreads` | `4` | Client chunk load threads |
 | `chunk.maxChunksPerFrame` | `6` | Hard cap on cached chunks applied per frame |
+| `chunk.mainThreadChunkBudgetMs` | `15` | Per-frame chunk apply budget on the client (ms); JoinBoost temporarily raises it for ~10s after join |
+| `chunk.hassiumEngineEnabled` | `true` | Hassium engine (master switch for non-network features): starts an in-process shadow server on login that owns all chunk lighting computation (the client stops computing light itself); on startup failure it degrades automatically (client cache / beyond-view render / SeedGen disabled with an in-game notice); when disabled the server does not strip light (negotiated at handshake), light arrives with the packets |
+| `chunk.ovdLocalGeneration` | `false` | Beyond-view local generation: beyond-view-render chunks that miss the client cache are generated locally using the server's world seed and stored into the local cache; auto-disabled when no seed is available (server without the mod) |
 | `chunk.seedGenThreads` | `2` | Local generation threads (0 = disable local generation; chunks are always downloaded in full) |
 | `chunk.seedGenEnabled` | `false` | Local chunk generation (both sides): on SeedRef, regenerate the chunk locally from the world seed (hash-verified) instead of a full download; requires matching versions on both sides |
 

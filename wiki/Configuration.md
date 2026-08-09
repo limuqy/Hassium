@@ -33,9 +33,6 @@ Hassium 启动时在 `config/hassium/` 自动生成两份 TOML：
 | `chunk.enabled` | `true` | 客户端区块缓存总开关 |
 | `chunk.maxSizeMb` | `4096` | 缓存容量上限（MB）；超过后按热度清理最久未用的区块 |
 | `chunk.sectionDeltaEnabled` | `true` | 缓存过期时只补变更分段；关闭则过期走全量重传 |
-| `chunk.hassiumEngineEnabled` | `true` | Hassium 引擎（非网络向功能总开关）：进服启动影子端统一承担区块光照计算（客户端不再计算）；启动失败自动降级（缓存/超视渲染/SeedGen 关闭并提示）；关闭时服务端不剥光（握手协商），光照随包自带 |
-| `chunk.ovdLocalGeneration` | `false` | 超视渲染本地生成：超视渲染区域缓存 miss 时按服务端世界种子本地生成区块并存入本地缓存；无种子（服务端未装 MOD）时自动关闭生成 |
-| `chunk.mainThreadChunkBudgetMs` | `15` | 客户端每帧 apply 区块的预算（ms）；进服前约 10 秒走 JoinBoost 临时抬高 |
 
 ### 渲染与生成（`chunk.*`，区块核心）
 
@@ -46,6 +43,9 @@ Hassium 启动时在 `config/hassium/` 自动生成两份 TOML：
 | `chunk.ovdUnloadDelaySecs` | `5` | 离开超视渲染环带后延迟卸载秒数（0=同步卸载） |
 | `chunk.loadThreads` | `4` | 客户端区块加载线程数 |
 | `chunk.maxChunksPerFrame` | `6` | 每帧 apply 缓存区块硬顶 |
+| `chunk.mainThreadChunkBudgetMs` | `15` | 客户端每帧 apply 区块的预算（ms）；进服前约 10 秒走 JoinBoost 临时抬高 |
+| `chunk.hassiumEngineEnabled` | `true` | Hassium 引擎（非网络向功能总开关）：进服启动影子端统一承担区块光照计算（客户端不再计算）；启动失败自动降级（缓存/超视渲染/SeedGen 关闭并提示）；关闭时服务端不剥光（握手协商），光照随包自带 |
+| `chunk.ovdLocalGeneration` | `false` | 超视渲染本地生成：超视渲染区域缓存 miss 时按服务端世界种子本地生成区块并存入本地缓存；无种子（服务端未装 MOD）时自动关闭生成 |
 | `chunk.seedGenThreads` | `2` | 本地区块生成线程数（0=禁用本地生成，区块一律全量下载） |
 | `chunk.seedGenEnabled` | `false` | 本地区块生成（双端键）：收到 SeedRef 引用时本地按世界种子重新生成区块（哈希校验兜底），避免整块下载；需双端同版本 |
 

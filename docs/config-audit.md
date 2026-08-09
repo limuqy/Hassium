@@ -45,9 +45,9 @@
 | `chunk.loadThreads` | `4` | 客户端区块加载线程数 |
 | `chunk.maxChunksPerFrame` | `6` | 每帧 apply 缓存区块硬顶 |
 | `chunk.mainThreadChunkBudgetMs` | `15` | 主线程 apply 预算（ms） |
-| `chunk.seedGenThreads` | `2` | SeedGen 本地生成线程数（0=禁用本地生成，SeedRef 回退全量） |
 | `chunk.hassiumEngineEnabled` | `true` | Hassium 引擎总开关（进服启动承担光照计算；失败降级关闭缓存/OVD/SeedGen 并游戏内提示） |
 | `chunk.ovdLocalGeneration` | `false` | OVD 本地生成（miss 时影子端按世界种子本地生成，renderOnly 落地；需引擎可用） |
+| `chunk.seedGenThreads` | `2` | SeedGen 本地生成线程数（0=禁用本地生成，SeedRef 回退全量） |
 | `chunk.seedGenEnabled` | `false` | SeedGen 开关（收到 SeedRef 本地复算；需双端同版本） |
 
 **A2. net.\*（3 键，网络核心）**

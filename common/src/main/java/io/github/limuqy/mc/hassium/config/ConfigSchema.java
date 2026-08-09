@@ -1,7 +1,6 @@
 package io.github.limuqy.mc.hassium.config;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 import java.util.Set;
 import java.util.function.Supplier;
@@ -20,27 +19,25 @@ public final class ConfigSchema {
     public static final ConfigKey<Integer> CHUNK_CLEANUP_INTERVAL_TICKS = integer("chunk.cleanupIntervalTicks", ConfigScope.CLIENT, Domain.CHUNK_CORE, 6000, 20, 72000, "清理检查间隔（刻）");
     public static final ConfigKey<Integer> CHUNK_TARGET_SIZE_MB = integer("chunk.targetSizeMb", ConfigScope.CLIENT, Domain.CHUNK_CORE, 0, 0, 1024 * 1024, "目标缓存大小（MB；0=自动）");
     public static final ConfigKey<Integer> CHUNK_MIN_CLEANUP_BATCH_SIZE = integer("chunk.minCleanupBatchSize", ConfigScope.CLIENT, Domain.CHUNK_CORE, 100, 1, 100000, "每次最少清理区块数");
+    public static final ConfigKey<Boolean> CHUNK_SECTION_DELTA_ENABLED = bool("chunk.sectionDeltaEnabled", ConfigScope.CLIENT, Domain.CHUNK_CORE, true, "是否启用分段增量（GatewayPacketCodec/NetworkCore/DataPlaneClientBundle 活跃消费）");
+    public static final ConfigKey<Boolean> CHUNK_JOIN_BOOST_ENABLED = bool("chunk.joinBoostEnabled", ConfigScope.CLIENT, Domain.CHUNK_CORE, true, "是否启用进服加速");
     public static final ConfigKey<Boolean> CHUNK_VIEW_DISTANCE_EXTENSION_ENABLED = bool("chunk.viewDistanceExtensionEnabled", ConfigScope.CLIENT, Domain.CHUNK_CORE, true, "是否启用超视渲染");
     public static final ConfigKey<Integer> CHUNK_MAX_RENDER_DISTANCE = integer("chunk.maxRenderDistance", ConfigScope.CLIENT, Domain.CHUNK_CORE, 16, 2, 64, "超视渲染有效距离上限");
     public static final ConfigKey<Integer> CHUNK_OVD_UNLOAD_DELAY_SECS = integer("chunk.ovdUnloadDelaySecs", ConfigScope.CLIENT, Domain.CHUNK_CORE, 5, 0, 60, "超视渲染卸载延迟秒数");
-    public static final ConfigKey<Boolean> CHUNK_SECTION_DELTA_ENABLED = bool("chunk.sectionDeltaEnabled", ConfigScope.CLIENT, Domain.CHUNK_CORE, true, "是否启用分段增量（GatewayPacketCodec/NetworkCore/DataPlaneClientBundle 活跃消费）");
-    public static final ConfigKey<Boolean> CHUNK_JOIN_BOOST_ENABLED = bool("chunk.joinBoostEnabled", ConfigScope.CLIENT, Domain.CHUNK_CORE, true, "是否启用进服加速");
     public static final ConfigKey<Integer> CHUNK_LOAD_THREADS = integer("chunk.loadThreads", ConfigScope.CLIENT, Domain.CHUNK_CORE, 4, 1, 64, "客户端区块加载线程数");
     public static final ConfigKey<Integer> CHUNK_MAX_CHUNKS_PER_FRAME = integer("chunk.maxChunksPerFrame", ConfigScope.CLIENT, Domain.CHUNK_CORE, 6, 1, 512, "每帧应用缓存区块硬顶");
     public static final ConfigKey<Integer> CHUNK_MAIN_THREAD_CHUNK_BUDGET_MS = integer("chunk.mainThreadChunkBudgetMs", ConfigScope.CLIENT, Domain.CHUNK_CORE, 15, 1, 50, "主线程 apply 预算（ms）");
-    public static final ConfigKey<Integer> CHUNK_SEED_GEN_THREADS = integer("chunk.seedGenThreads", ConfigScope.CLIENT, Domain.CHUNK_CORE, 2, 0, 64, "SeedGen 本地生成线程数（固定平台线程池；0=禁用本地生成，SeedRef 一律回退全量）");
-    public static final ConfigKey<Boolean> CHUNK_OVD_LOCAL_GENERATION = bool("chunk.ovdLocalGeneration", ConfigScope.CLIENT, Domain.CHUNK_CORE, false,
-            "OVD 本地生成（默认 false）：开启后，超视渲染区域缓存 miss 时用Hassium 引擎按服务端世界种子本地生成区块（与服务器地形一致），生成的区块按 renderOnly 落地并存入本地缓存；无种子（服务端未装 MOD / 握手未到）时自动关闭生成，维持 miss 退避重试。需 chunk.hassiumEngineEnabled 且Hassium 引擎可用");
     public static final ConfigKey<Boolean> CHUNK_HASSIUM_ENGINE_ENABLED = bool("chunk.hassiumEngineEnabled", ConfigScope.CLIENT, Domain.CHUNK_CORE, true,
             "是否启用Hassium 引擎（默认 true）：进服启动Hassium 引擎服务端统一承担区块光照计算（客户端不再计算）。启动失败自动降级：客户端缓存/超视渲染/SeedGen/Hassium 引擎光照全部关闭并游戏内提示；false=不启动Hassium 引擎。注意：关闭时剥光不生效（服务端按握手能力不剥光，光照随包自带）。与 chunk.seedGenEnabled 相互独立——SeedGen 开关只控制 pristine 本地生成");
+    public static final ConfigKey<Boolean> CHUNK_OVD_LOCAL_GENERATION = bool("chunk.ovdLocalGeneration", ConfigScope.CLIENT, Domain.CHUNK_CORE, false,
+            "OVD 本地生成（默认 false）：开启后，超视渲染区域缓存 miss 时用Hassium 引擎按服务端世界种子本地生成区块（与服务器地形一致），生成的区块按 renderOnly 落地并存入本地缓存；无种子（服务端未装 MOD / 握手未到）时自动关闭生成，维持 miss 退避重试。需 chunk.hassiumEngineEnabled 且Hassium 引擎可用");
+    public static final ConfigKey<Integer> CHUNK_SEED_GEN_THREADS = integer("chunk.seedGenThreads", ConfigScope.CLIENT, Domain.CHUNK_CORE, 2, 0, 64, "SeedGen 本地生成线程数（固定平台线程池；0=禁用本地生成，SeedRef 一律回退全量）");
+    public static final ConfigKey<Boolean> CLIENT_CHUNK_SEED_GEN_ENABLED = bool("chunk.seedGenEnabled", ConfigScope.CLIENT, Domain.CHUNK_CORE, false, "是否启用 SeedGen（本地生成 pristine 区块；需双端同版本，默认关；双端同名键）");
 
     // === 网络核心（net.*；CLIENT 3 键）===
     public static final ConfigKey<Boolean> NET_ENABLED = bool("net.enabled", ConfigScope.CLIENT, Domain.NETWORK_CORE, true, "是否启用客户端网络核心（2.0.0 进程内网关与帧连接总开关）");
     public static final ConfigKey<Boolean> NET_METRICS_ENABLED = bool("net.metricsEnabled", ConfigScope.CLIENT, Domain.NETWORK_CORE, false, "是否启用客户端网络指标");
     public static final ConfigKey<Boolean> NET_METRICS_AUTO_RESET = bool("net.metricsAutoReset", ConfigScope.CLIENT, Domain.NETWORK_CORE, true, "登出服务器时自动重置指标计数");
-
-    // === 区块核心（chunk.*；双端同名键）===
-    public static final ConfigKey<Boolean> CLIENT_CHUNK_SEED_GEN_ENABLED = bool("chunk.seedGenEnabled", ConfigScope.CLIENT, Domain.CHUNK_CORE, false, "是否启用 SeedGen（本地生成 pristine 区块；需双端同版本，默认关）");
 
     // === 存储域（storage.*；SERVER 2 键）===
     public static final ConfigKey<Boolean> STORAGE_ENABLED = bool("storage.enabled", ConfigScope.SERVER, Domain.STORAGE, false, "是否启用存档压缩（默认关；区块核心缓存独立不受影响）");

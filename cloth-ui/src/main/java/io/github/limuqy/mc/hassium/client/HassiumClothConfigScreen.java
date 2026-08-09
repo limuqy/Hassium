@@ -95,15 +95,15 @@ public final class HassiumClothConfigScreen {
         rendering.addEntry(intRange(entries, "hassium.configuration.chunk.mainThreadChunkBudgetMs",
                 draft.mainThreadChunkBudgetMs, dCache.mainThreadChunkBudgetMs(), 1, 50,
                 v -> draft.mainThreadChunkBudgetMs = v));
-        rendering.addEntry(intRange(entries, "hassium.configuration.chunk.seedGenThreads",
-                draft.seedGenThreads, dCache.seedGenThreads(), 0, 64,
-                v -> draft.seedGenThreads = v));
         rendering.addEntry(bool(entries, "hassium.configuration.chunk.hassiumEngineEnabled",
                 draft.hassiumEngineEnabled, dCache.hassiumEngineEnabled(),
                 v -> draft.hassiumEngineEnabled = v));
         rendering.addEntry(bool(entries, "hassium.configuration.chunk.ovdLocalGeneration",
                 draft.ovdLocalGeneration, dCache.ovdLocalGeneration(),
                 v -> draft.ovdLocalGeneration = v));
+        rendering.addEntry(intRange(entries, "hassium.configuration.chunk.seedGenThreads",
+                draft.seedGenThreads, dCache.seedGenThreads(), 0, 64,
+                v -> draft.seedGenThreads = v));
         rendering.addEntry(bool(entries, "hassium.configuration.chunk.seedGenEnabled",
                 draft.seedGenEnabled, dCache.seedGenEnabled(), v -> draft.seedGenEnabled = v));
 
