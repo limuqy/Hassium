@@ -142,8 +142,8 @@ MC_1_21_11
 | fabric 1.20.1 | `ClientLoginNetworking` 回复 login query（`CompletableFuture` 回能力位） | `ServerLoginConnectionEvents.QUERY_START` 发 query + `ServerLoginNetworking` 收；UUID 按类型反射取 `gameProfile`（1.20.1 无访问器；离线服 login 阶段已派生 OfflinePlayer UUID） |
 | fabric 1.20.2–1.20.4 | `C2SConfigurationChannelEvents.REGISTER` → `ClientConfigurationNetworking.send`（legacy Identifier 通道） | `ServerConfigurationNetworking.registerGlobalReceiver` |
 | fabric 1.20.5+ | 同上（`PreHandshakePayload`，CustomPacketPayload） | `ServerConfigurationNetworking.registerGlobalReceiver(PayloadType)` |
-| neoforge 1.20.5+ | `MixinClientConfigurationPacketListenerImpl`（配置 listener 构造 TAIL，fabric 平台跳过） | `PayloadRegistrar.configurationToServer` |
-| forge 1.20.6 | 同 mixin | `SimpleChannel.messageBuilder(..., NetworkDirection.CONFIGURATION_TO_SERVER)` |
+| neoforge 1.20.5+ | **不发送**（预握手 mixin 仅 Forge 生效：`hassium$doSendPreHandshake` 先判 `!"Forge".equals(platform)` 即 return；neoforge 客户端无独立发送端） | `registrar.configurationToServer(PreHandshakePayload.TYPE, ...)`（收 fabric 客户端发来的预握手；`handlePreHandshake` 按 listener owner UUID 标记） |
+| forge 1.20.6 | 同 mixin（`ClientHandshakePacketListenerImpl.handleGameProfile` TAIL；1.21.2+ 改名 `handleLoginFinished`，非配置 listener 构造） | `SimpleChannel.messageBuilder(..., NetworkDirection.CONFIGURATION_TO_SERVER)` |
 | neoforge 1.20.2–1.20.4 / forge 1.20.1 | **无 login/配置阶段通道 API，不预握手**（保留 Play 握手；1.20.2+ 原版 batch ack 节流使窗口本就 ≤ 前几批 ~9 块/tick） | — |
 
 共用载体：`PreHandshakeProtocol`（legacy buf 编解码）/ `PreHandshakePayload`（1.20.5+ payload，StreamCodec 为 FriendlyByteBuf 级，无 registry 依赖）。能力字段：协议版本、mod 版本、clientCache、globalCompression、compactHeader。客户端侧 hash 处理已有 storage 未就绪缓冲（`PENDING_HASH_PACKETS`），提前推 hash 安全。
