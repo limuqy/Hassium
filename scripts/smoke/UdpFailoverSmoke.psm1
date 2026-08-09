@@ -6,7 +6,7 @@
 #   - Get-UdpFailoverMarkers aggregates server/client log content into a six-key
 #     bool hashtable. The harness owns invocation; it never writes markers.
 #
-# Source: Plan docs/superpowers/plans/2026-07-27-unified-endpoint-model-and-nginx-smoke.md Task 9.
+# Source: Plan docs/archive/superpowers/plans/2026-07-27-unified-endpoint-model-and-nginx-smoke.md Task 9.
 # Red lines: only call vanilla network entrypoints; never reflect login
 # protocol; never assert write `HassiumSmokeTest:*` markers.
 

@@ -40,7 +40,7 @@ import io.github.limuqy.mc.hassium.compat.ResourceLocationCompat;
  * 服务端空心区块（hollow chunk）收益基准 demo。
  * <p>
  * 数据源：原版 .mca region 文件（storage.enabled=false 的服务端存档即此格式）。
- * 处理链与 docs/server-chunk-surface-shell.md §4 对齐：
+ * 处理链与 docs/archive/server-chunk-surface-shell.md §4 对齐：
  * <pre>
  *   .mca → chunk NBT → section palette+data → packet 格式编码（PalettedContainer 规则）
  *        → palette 级 dense 分类 → 六方向 section 图 BFS 壳层（shellDepth 可配）

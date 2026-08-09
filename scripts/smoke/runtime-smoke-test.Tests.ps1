@@ -1,6 +1,6 @@
 # runtime-smoke-test.Tests.ps1 — Pester tests for Task 9 Nginx failover smoke helpers.
 #
-# Source: Plan §1, §4 Step 4 (docs/superpowers/plans/2026-07-27-unived-endpoint-model-and-nginx-smoke.md).
+# Source: Plan §1, §4 Step 4 (docs/archive/superpowers/plans/2026-07-27-unived-endpoint-model-and-nginx-smoke.md).
 # Covers `New-UdpFailoverNginxConfig` and `Get-UdpFailoverMarkers` from the
 # `UdpFailoverSmoke.psm1` module. Pure-function tests, no Nginx binary required.
 

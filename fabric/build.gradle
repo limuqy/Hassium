@@ -78,7 +78,7 @@ dependencies {
     implementation 'org.lz4:lz4-java:1.8.0'
     implementation 'com.google.code.findbugs:jsr305:3.0.1'
     // kcp 走剥离版：zstd-jni 同款 shade 进主 jar；不再裸 implementation
-    // （否则生产 jar 零 kcp，玩家装 UDP 数据面 NoClassDefFoundError，见 docs/findings-kcp-jij-stuck.md）。
+    // （否则生产 jar 零 kcp，玩家装 UDP 数据面 NoClassDefFoundError，见 docs/archive/findings-kcp-jij-stuck.md）。
     implementation files(stripKcpTask)
     // 原始坐标仅用于剥离任务输入；真正进 compile / 运行 的是剥离后的 jar（见末尾 jar {} shade）。
     kcpIncoming('moe.sdl.kcp:kcp-netty:1.6.2') {
@@ -119,7 +119,7 @@ dependencies {
 
 // 生产 jar 内嵌剥离版 kcp（zstd-jni 同款 shade，非 Loom JiJ）：把剥离后的 kcp jar
 // 解包合并进主 jar 任务，随 Hassium mod 类一起被 Fabric Loader 加载。这同时修掉
-// 先前 fabric 生产 jar 零 kcp 的暗错（见 docs/findings-kcp-jij-stuck.md）。
+// 先前 fabric 生产 jar 零 kcp 的暗错（见 docs/archive/findings-kcp-jij-stuck.md）。
 // patchedKcpJar 是 stripKcpNettyBootstrapPackage 任务的 outputs.file，from(zipTree(...))
 // 会让 jar 任务自动 dependsOn 剥离任务；显式声明一次以求稳。
 jar {

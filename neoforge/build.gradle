@@ -143,7 +143,7 @@ tasks.withType(JavaCompile).configureEach {
 
 // 生产 jar 内嵌剥离版 kcp（zstd-jni 同款 shade，非 Loom JiJ）：把剥离后的 kcp jar
 // 解包合并进主 jar 任务，随 Hassium mod 类一起被 mod loader 加载。绕开 Loom
-// processIncludeJars 对裸 File artifact 的 module-component 校验（见 docs/findings-kcp-jij-stuck.md）。
+// processIncludeJars 对裸 File artifact 的 module-component 校验（见 docs/archive/findings-kcp-jij-stuck.md）。
 // patchedKcpJar 是 stripKcpNettyBootstrapPackage 任务的 outputs.file，from(zipTree(...))
 // 会让 jar 任务自动 dependsOn 剥离任务；显式声明一次以求稳。
 jar {
