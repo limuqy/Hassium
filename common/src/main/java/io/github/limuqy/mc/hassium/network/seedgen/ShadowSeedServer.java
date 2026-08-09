@@ -46,8 +46,11 @@ import net.minecraft.core.SectionPos;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.network.protocol.Packet;
 import net.minecraft.network.protocol.game.ClientboundAddEntityPacket;
+import net.minecraft.network.protocol.game.ClientboundBlockEntityDataPacket;
+import net.minecraft.network.protocol.game.ClientboundBlockUpdatePacket;
 import net.minecraft.network.protocol.game.ClientboundLevelChunkPacketData;
 import net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket;
+import net.minecraft.network.protocol.game.ClientboundSectionBlocksUpdatePacket;
 import net.minecraft.network.protocol.game.ClientboundMoveEntityPacket;
 import net.minecraft.network.protocol.game.ClientboundRemoveEntitiesPacket;
 import net.minecraft.network.protocol.game.ClientboundRotateHeadPacket;
@@ -93,6 +96,7 @@ import net.minecraft.world.level.chunk.ChunkAccess;
 import net.minecraft.world.level.chunk.DataLayer;
 import net.minecraft.world.level.chunk.LevelChunk;
 import net.minecraft.world.level.chunk.LevelChunkSection;
+import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.level.lighting.LevelLightEngine;
 import net.minecraft.world.level.lighting.LightEngine;
@@ -258,16 +262,7 @@ public class ShadowSeedServer extends MinecraftServer {
             ClientboundLevelChunkPacketData data = packet.getChunkData();
             chunk.replaceWithPacketData(data.getReadBuffer(), data.getHeightmaps(),
                     data.getBlockEntitiesTagsConsumer(pos.x, pos.z));
-            ThreadedLevelLightEngine lightEngine = level.getChunkSource().getLightEngine();
-            int minSection = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMinSection(chunk);
-            int maxSection = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMaxSectionExclusive(chunk);
-            for (int y = minSection; y < maxSection; y++) {
-                SectionPos sp = SectionPos.of(pos, y);
-                lightEngine.queueSectionData(LightLayer.SKY, sp, null);
-                lightEngine.queueSectionData(LightLayer.BLOCK, sp, null);
-                lightEngine.updateSectionStatus(sp, false);
-            }
-            lightEngine.propagateLightSources(pos);
+            clearChunkLight(pos, chunk);
             // 计算 contentHash（section hash combine，与网络 chunkHash 同算法）写入存储桥，
             // 保存（type 126 payload 带 hash）与 R2 比对（远程权威 hash vs 本地存储 hash）共用。
             try {
@@ -288,6 +283,39 @@ public class ShadowSeedServer extends MinecraftServer {
     }
 
     /**
+     * 清光公共方法（injectChunk / relightChunk 共用）：清空整柱全部 section 光数据层 →
+     * 引擎传播重算 → 推发光源。原版剥光同款机制（{@code queueSectionData(null)} 清数据层），
+     * 全部经 ThreadedLevelLightEngine 异步任务（runMainLoop 已驱动 tryScheduleUpdate）。
+     */
+    private void clearChunkLight(ChunkPos pos, LevelChunk chunk) {
+        ThreadedLevelLightEngine lightEngine =
+                (ThreadedLevelLightEngine) this.overworld().getChunkSource().getLightEngine();
+        int minSection = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMinSection(chunk);
+        int maxSection = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMaxSectionExclusive(chunk);
+        for (int y = minSection; y < maxSection; y++) {
+            SectionPos sp = SectionPos.of(pos, y);
+            lightEngine.queueSectionData(LightLayer.SKY, sp, null);
+            lightEngine.queueSectionData(LightLayer.BLOCK, sp, null);
+            lightEngine.updateSectionStatus(sp, false);
+        }
+        lightEngine.propagateLightSources(pos);
+    }
+
+    /**
+     * 磁盘命中 + hash 一致但光标脏：本地重算光照（不请求网络全量）。
+     * <p>
+     * 区块已加载进影子端（{@link #injectLoadedChunk} 先行），内容与远程权威一致，
+     * 仅光欠（保存时未收敛落盘）——清光重算（{@link #clearChunkLight}）后引擎传播
+     * 期间视为欠光：起始即标脏（防 R2 读盘直接打包欠光数据），收敛后由
+     * pushReady(converged=true) 清除；补发给客户端的欠光由光照更新桥梁承担。
+     * 任意线程可调（调用方在后台池）。
+     */
+    public void relightChunk(ChunkPos pos, LevelChunk chunk) {
+        io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.markLightDirty(pos, true);
+        clearChunkLight(pos, chunk);
+    }
+
+    /**
      * 应用服务端分段增量（SectionDeltaS2CPacket）到已注入区块。
      * <p>
      * 步骤（镜像 {@code replaceWithPacketData} 语义，按 delta 包裁剪）：
@@ -300,7 +328,8 @@ public class ShadowSeedServer extends MinecraftServer {
      *       replaceWithPacketData 的 consumer（IMMEDIATE 创建 + type 校验 + load）</li>
      *   <li><b>光</b>：delta 不含光照 → 变更 section 清光（{@code queueSectionData(null)}，
      *       injectChunk 同款），{@code propagateLightSources} 推发光源，引擎传播重算——
-     *       收敛由调用方（ShadowLightCompute consumeLoop）统一等待</li>
+     *       收敛由调用方（ShadowLightCompute consumeLoop）批级采样；欠光由光照更新
+     *       桥梁（collectLightUpdate → drainLightMasks）事件驱动补发</li>
      * </ol>
      * 完成后重算 contentHash 写存储桥（后续 hash 比对 / R2 落盘复用）。
      * 仅 {@code consumeLoop} 单线程调用；失败返回 false（调用方回退全量请求）。
@@ -377,6 +406,81 @@ public class ShadowSeedServer extends MinecraftServer {
      * 无锁热点。
      */
     private final Object entityApplyLock = new Object();
+
+    /**
+     * 应用一个官方方块同步包到影子端（任意线程可调；内部 {@code execute()} 投递影子端主线程）。
+     * <p>
+     * 与客户端同源的服务端方块更新（T2 mixin 转发，不 cancel 原版处理）：内容变更 →
+     * 缓存 hash 失效（下次比对现算）+ 光照标脏（读盘不直接打包欠光）。三类包：
+     * <ul>
+     *   <li>{@code ClientboundBlockUpdatePacket}：单方块，{@code level.setBlock(pos, state, 3)}</li>
+     *   <li>{@code ClientboundSectionBlocksUpdatePacket}：分段批量，
+     *       {@code packet.runUpdates((pos, state) -> ...)}（两版逐字一致）逐块 setBlock</li>
+     *   <li>{@code ClientboundBlockEntityDataPacket}：BE 更新，
+     *       {@code BlockEntityCompat.loadFromTag}（镜像原版 handler 语义）</li>
+     * </ul>
+     * 执行线程 = 影子端主循环线程（mainThreadProcessor 由 {@link #runMainLoop()} 驱动，
+     * {@link #generateChunk} 同模式），天然串行；主循环已停（断连/关停）时投递被
+     * {@code RejectedExecutionException} 兜底丢弃，无残留。
+     */
+    public void applyBlockUpdate(Packet<?> packet) {
+        if (packet == null) {
+            return;
+        }
+        try {
+            this.execute(() -> {
+                try {
+                    if (packet instanceof ClientboundBlockUpdatePacket block) {
+                        applyBlock(block.getPos(), block.getBlockState());
+                    } else if (packet instanceof ClientboundSectionBlocksUpdatePacket section) {
+                        java.util.Set<Long> affected = new java.util.HashSet<>();
+                        section.runUpdates((pos, state) -> {
+                            this.overworld().setBlock(pos, state, 3);
+                            affected.add(ChunkPos.asLong(pos.getX() >> 4, pos.getZ() >> 4));
+                        });
+                        invalidateChunkContent(affected);
+                    } else if (packet instanceof ClientboundBlockEntityDataPacket blockEntity) {
+                        applyBlockEntity(blockEntity);
+                    }
+                } catch (Throwable t) {
+                    LOGGER.debug("Hassium: Shadow applyBlockUpdate ignored: {}", t.toString());
+                }
+            });
+        } catch (java.util.concurrent.RejectedExecutionException e) {
+            // 主循环已停（断连竞态）：更新丢弃，数据由下次进服 hash 比对/直推兜底
+        }
+    }
+
+    /** 单方块应用：{@code setBlock(pos, state, 3)} + 所在 chunk 内容失效/光标脏。 */
+    private void applyBlock(BlockPos pos, BlockState state) {
+        this.overworld().setBlock(pos, state, 3);
+        invalidateChunkContent(java.util.Collections.singleton(ChunkPos.asLong(pos.getX() >> 4, pos.getZ() >> 4)));
+    }
+
+    /** BE 更新应用：镜像原版 handleBlockEntityData（loadFromTag + setChanged），无 BE 则忽略。 */
+    private void applyBlockEntity(ClientboundBlockEntityDataPacket packet) {
+        ServerLevel level = this.overworld();
+        net.minecraft.world.level.block.entity.BlockEntity be = level.getBlockEntity(packet.getPos());
+        if (be == null || packet.getTag() == null) {
+            return;
+        }
+        BlockEntityCompat.loadFromTag(be, packet.getTag(), level.registryAccess());
+        be.setChanged();
+        invalidateChunkContent(java.util.Collections.singleton(
+                ChunkPos.asLong(packet.getPos().getX() >> 4, packet.getPos().getZ() >> 4)));
+    }
+
+    /**
+     * 内容失效（chunkKey 去重集合）：移除 hash 缓存（下次比对现算）+
+     * 光照标脏（光不确定，读盘不直接打包欠光数据）。REQ 需求 2 语义。
+     */
+    private void invalidateChunkContent(java.util.Set<Long> chunkKeys) {
+        for (long key : chunkKeys) {
+            ChunkPos pos = new ChunkPos(key);
+            io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.remove(pos);
+            io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.markLightDirty(pos, true);
+        }
+    }
 
     /**
      * 应用一个官方实体同步包到影子端（任意线程可调；内部串行化）。
@@ -708,6 +812,64 @@ public class ShadowSeedServer extends MinecraftServer {
     }
 
     /**
+     * 单柱落盘（saveAll / T5 出界卸载共用）：原版序列化 → ChunkMap 存储写
+     * （type 126 + hash 由 MixinRegionFile 挂钩）。IOWorker 异步入队，不逐柱 flush
+     * （断连 saveAll 统一 flush）。任意线程可调。
+     *
+     * @return true=已提交写队列；false=序列化/提交异常（调用方自行兜底）
+     */
+    public boolean saveChunkToDisk(ChunkPos pos, LevelChunk chunk) {
+        try {
+            ServerLevel level = this.overworld();
+#if MC_VER < MC_1_21_2
+            net.minecraft.nbt.CompoundTag nbt =
+                    net.minecraft.world.level.chunk.storage.ChunkSerializer.write(level, chunk);
+#else
+            // 1.21.2+：SerializableChunkData 序列化（结构/POI 数据 Phase 2 补全）
+            net.minecraft.nbt.CompoundTag nbt =
+                    net.minecraft.world.level.chunk.storage.SerializableChunkData
+                            .copyOf(level, chunk).write();
+#endif
+#if MC_VER < MC_1_21_2
+            level.getChunkSource().chunkMap.write(pos, nbt);
+#else
+            // 1.21.2+：write(ChunkPos, Supplier<CompoundTag>)（IOWorker 延迟序列化）
+            level.getChunkSource().chunkMap.write(pos, () -> nbt);
+#endif
+            return true;
+        } catch (Throwable t) {
+            LOGGER.warn("Hassium: Shadow chunk save failed for ({}, {})", pos.x, pos.z, t);
+            return false;
+        }
+    }
+
+    /**
+     * 单柱卸载（T5 内存区块回收：出界到期柱）：落盘（IOWorker 异步）+ 从注入表
+     * 条件移除 + hash 表移除（下次比对经读盘 hook 回填）。落盘前采样全局收敛——
+     * 未收敛（欠光落盘）保守标脏（R2 读盘命中不得直接打包，走 relight 链）；
+     * 收敛则清除标脏（落盘即收敛光）。与 ShadowCacheEviction（容量淘汰删磁盘）
+     * 独立共存：本方法只落盘 + 清内存。
+     *
+     * @return true=已提交落盘并移除；false=落盘失败（保留内存驻留，断连 saveAll 兜底）
+     */
+    public boolean unloadChunk(ChunkPos pos, LevelChunk chunk) {
+        boolean converged = isLightConverged();
+        if (!saveChunkToDisk(pos, chunk)) {
+            return false;
+        }
+        long key = ChunkPos.asLong(pos.x, pos.z);
+        injectedChunks.remove(key, chunk); // 条件移除：仅当仍是该 chunk（防并发替换后误删新数据）
+        io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.remove(pos);
+        io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.markLightDirty(pos, !converged);
+        return true;
+    }
+
+    /** 注入区块表条目视图（T5 卸载扫描遍历用；弱一致迭代，任意线程）。 */
+    public java.util.Set<java.util.Map.Entry<Long, LevelChunk>> injectedChunkEntries() {
+        return injectedChunks.entrySet();
+    }
+
+    /**
      * 断连/关停保存（任意线程可调）：注入区块表全量落盘（原版序列化 →
      * ChunkMap 存储写，type 126 + hash 由 MixinRegionFile 挂钩）。影子端不跑
      * tick，原版自动保存不触发；注入区块不经 ChunkMap 正规流程，故显式按表写。
@@ -728,26 +890,7 @@ public class ShadowSeedServer extends MinecraftServer {
                 // 官方 ChunkPos 编码：x 低位、z 高位（与 asLong 对称）
                 int x = (int) key;
                 int z = (int) (key >> 32);
-                try {
-                    net.minecraft.world.level.chunk.LevelChunk chunk = e.getValue();
-#if MC_VER < MC_1_21_2
-                    net.minecraft.nbt.CompoundTag nbt =
-                            net.minecraft.world.level.chunk.storage.ChunkSerializer.write(level, chunk);
-#else
-                    // 1.21.2+：SerializableChunkData 序列化（结构/POI 数据 Phase 2 补全）
-                    net.minecraft.nbt.CompoundTag nbt =
-                            net.minecraft.world.level.chunk.storage.SerializableChunkData
-                                    .copyOf(level, chunk).write();
-#endif
-#if MC_VER < MC_1_21_2
-                    level.getChunkSource().chunkMap.write(new ChunkPos(x, z), nbt);
-#else
-                    // 1.21.2+：write(ChunkPos, Supplier<CompoundTag>)（IOWorker 延迟序列化）
-                    level.getChunkSource().chunkMap.write(new ChunkPos(x, z), () -> nbt);
-#endif
-                } catch (Throwable t) {
-                    LOGGER.warn("Hassium: Shadow chunk save failed for ({}, {})", x, z, t);
-                }
+                saveChunkToDisk(new ChunkPos(x, z), e.getValue());
             }
             // 写队列同步落盘（IOWorker.store 异步；halt 前必须 flush）
 #if MC_VER < MC_1_21_11
