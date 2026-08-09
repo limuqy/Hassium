@@ -27,6 +27,8 @@ import net.minecraft.util.debugchart.SampleLogger;
 import com.mojang.authlib.yggdrasil.ServicesKeySet;
 import com.mojang.logging.LogUtils;
 import io.github.limuqy.mc.hassium.compat.BlockEntityCompat;
+import io.github.limuqy.mc.hassium.compat.EntityPacketCompat;
+import io.github.limuqy.mc.hassium.mixin.ServerLevelAccessor;
 import io.github.limuqy.mc.hassium.mixin.ThreadedLevelLightEngineAccessor;
 import io.github.limuqy.mc.hassium.network.SectionDeltaS2CPacket;
 import io.github.limuqy.mc.hassium.utils.DebugLogger;
@@ -42,9 +44,24 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.core.SectionPos;
 import net.minecraft.network.FriendlyByteBuf;
+import net.minecraft.network.protocol.Packet;
+import net.minecraft.network.protocol.game.ClientboundAddEntityPacket;
 import net.minecraft.network.protocol.game.ClientboundLevelChunkPacketData;
 import net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket;
+import net.minecraft.network.protocol.game.ClientboundMoveEntityPacket;
+import net.minecraft.network.protocol.game.ClientboundRemoveEntitiesPacket;
+import net.minecraft.network.protocol.game.ClientboundRotateHeadPacket;
+import net.minecraft.network.protocol.game.ClientboundSetEntityDataPacket;
+import net.minecraft.network.protocol.game.ClientboundSetEntityMotionPacket;
+import net.minecraft.network.protocol.game.ClientboundTeleportEntityPacket;
 import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.level.FullChunkStatus;
+#if MC_VER >= MC_1_21_2
+import net.minecraft.world.entity.EntitySpawnReason;
+#endif
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.level.entity.PersistentEntitySectionManager;
 import net.minecraft.server.Services;
 import net.minecraft.server.WorldStem;
 import net.minecraft.server.level.ServerLevel;
@@ -354,6 +371,178 @@ public class ShadowSeedServer extends MinecraftServer {
     }
 
     /**
+     * 实体操作串行锁：PersistentEntitySectionManager 的 EntityLookup/sectionStorage
+     * 非线程安全（原版仅 server 主线程单写）。包转发可能 Netty 线程（1.20.1 首包）
+     * 与主线程交替调用，入口统一串行化。临界区为 µs 级实体状态操作，实体包频率低，
+     * 无锁热点。
+     */
+    private final Object entityApplyLock = new Object();
+
+    /**
+     * 应用一个官方实体同步包到影子端（任意线程可调；内部串行化）。
+     * <p>
+     * 客户端纯转发（T3 mixin 侧只调本方法），进程内对象直传（零编码零压缩）。
+     * 按 instanceof 分发 7 类包，镜像原版 ClientPacketListener handler 的实体语义，
+     * 但影子端不 tick 实体：全部为瞬时状态操作（挂载/assignValues/setPos/速度/移除），
+     * 无插值、无 tick 循环、不阻塞主线程。
+     * <p>
+     * 容错：实体不存在/类型不匹配/异常一律静默（debug 日志），与 handler 容错一致。
+     */
+    public void applyEntityPacket(Packet<?> packet) {
+        try {
+            synchronized (entityApplyLock) {
+                if (packet instanceof ClientboundAddEntityPacket add) {
+                    applyAddEntity(add);
+                } else if (packet instanceof ClientboundSetEntityDataPacket data) {
+                    applySetEntityData(data);
+                } else if (packet instanceof ClientboundMoveEntityPacket move) {
+                    applyMoveEntity(move);
+                } else if (packet instanceof ClientboundTeleportEntityPacket teleport) {
+                    applyTeleportEntity(teleport);
+                } else if (packet instanceof ClientboundSetEntityMotionPacket motion) {
+                    applySetEntityMotion(motion);
+                } else if (packet instanceof ClientboundRotateHeadPacket head) {
+                    applyRotateHead(head);
+                } else if (packet instanceof ClientboundRemoveEntitiesPacket remove) {
+                    applyRemoveEntities(remove);
+                }
+            }
+        } catch (Throwable t) {
+            LOGGER.debug("Hassium: Shadow applyEntityPacket ignored: {}", t.toString());
+        }
+    }
+
+    /**
+     * Add：镜像原版 handleAddEntity 重建链 —— {@code type.create(level[, LOAD])} →
+     * {@code entity.recreateFromPacket(packet)}（内部 setId/UUID/位置/旋转/运动/data）→
+     * {@code ServerLevel.addFreshEntity} 挂载（LevelChunk.addEntity 全段空方法不可用，
+     * 见 T1 事实表 ④）。
+     * <p>
+     * 挂载成功后把实体所在 chunk 可见性置 ENTITY_TICKING：默认 HIDDEN 下实体不进
+     * visibleEntityStorage（getEntity(id) 查不到）且 saveAll 走 processChunkUnload
+     * 摘除实体；ENTITY_TICKING = accessible（可查、可存）但不 ticking（不进 entityTickList，
+     * 影子端零 tick 红线保持）。
+     */
+    private void applyAddEntity(ClientboundAddEntityPacket packet) {
+        ServerLevel level = this.overworld();
+        if (level.getEntity(packet.getId()) != null) {
+            return; // 防重复（原版 UUID 去重等价：addFreshEntity 内部按 UUID 拒绝重复）
+        }
+        EntityType<?> type = packet.getType();
+        if (type == EntityType.PLAYER) {
+            return; // 影子端不重建玩家（1.21.11 原版走 RemotePlayer 专用路径，服务端也不发 AddEntity 玩家）
+        }
+        Entity entity = type.create(level
+#if MC_VER >= MC_1_21_2
+                , EntitySpawnReason.LOAD
+#endif
+        );
+        if (entity == null) {
+            return;
+        }
+        entity.recreateFromPacket(packet);
+        if (!level.addFreshEntity(entity)) {
+            return;
+        }
+        this.entityManager().updateChunkStatus(entity.chunkPosition(), FullChunkStatus.ENTITY_TICKING);
+    }
+
+    /** SetEntityData：官方 handler 同款 {@code assignValues}，无解析无消费。 */
+    private void applySetEntityData(ClientboundSetEntityDataPacket packet) {
+        ServerLevel level = this.overworld();
+        Entity entity = level.getEntity(packet.id());
+        if (entity != null) {
+            entity.getEntityData().assignValues(packet.packedItems());
+        }
+    }
+
+    /**
+     * MoveEntity（Pos/PosRot/Rot 三重载同构）：相对位移 → 绝对（客户端 VecDeltaCodec
+     * 同语义：base + delta/4096；影子端实体位置 = 上次包应用后位置，故当前坐标 + delta）。
+     * 旋转按 hasRotation 决定，getter 三段漂移由 EntityPacketCompat 归一。
+     */
+    private void applyMoveEntity(ClientboundMoveEntityPacket packet) {
+        ServerLevel level = this.overworld();
+        Entity entity = packet.getEntity(level);
+        if (entity == null) {
+            return;
+        }
+        if (packet.hasPosition()) {
+            entity.setPos(
+                    entity.getX() + packet.getXa() / 4096.0,
+                    entity.getY() + packet.getYa() / 4096.0,
+                    entity.getZ() + packet.getZa() / 4096.0);
+        }
+        if (packet.hasRotation()) {
+            entity.setYRot(EntityPacketCompat.moveYRot(packet));
+            entity.setXRot(EntityPacketCompat.moveXRot(packet));
+        }
+        entity.setOnGround(packet.isOnGround());
+    }
+
+    /**
+     * TeleportEntity：段 A–D 包字段直取绝对坐标；段 E+ record 经
+     * {@code PositionMoveRotation.calculateAbsolute(prev, change, relatives)} 计算
+     * （prev = 实体当前位置/旋转/已知运动，EntityPacketCompat 归一）。
+     * yHeadRot 同步 yRot（镜像服务端 teleportSetPosition 语义）。
+     */
+    private void applyTeleportEntity(ClientboundTeleportEntityPacket packet) {
+        ServerLevel level = this.overworld();
+        Entity entity = level.getEntity(EntityPacketCompat.teleportId(packet));
+        if (entity == null) {
+            return;
+        }
+        EntityPacketCompat.TeleportState tp = EntityPacketCompat.teleportState(entity, packet);
+        entity.setPos(tp.position().x, tp.position().y, tp.position().z);
+        entity.setYRot(tp.yRot());
+        entity.setYHeadRot(tp.yRot());
+        entity.setXRot(tp.xRot());
+        if (tp.deltaMovement() != null) {
+            entity.setDeltaMovement(tp.deltaMovement());
+        }
+        entity.setOnGround(tp.onGround());
+    }
+
+    /** Motion：setDeltaMovement（A–C int / D–G double / H+ Vec3 由 EntityPacketCompat 归一）。 */
+    private void applySetEntityMotion(ClientboundSetEntityMotionPacket packet) {
+        ServerLevel level = this.overworld();
+        Entity entity = level.getEntity(packet.getId());
+        if (entity != null) {
+            entity.setDeltaMovement(EntityPacketCompat.motionVec(packet));
+        }
+    }
+
+    /** RotateHead：setYHeadRot（A–D byte / E+ float 由 EntityPacketCompat 归一）。 */
+    private void applyRotateHead(ClientboundRotateHeadPacket packet) {
+        ServerLevel level = this.overworld();
+        Entity entity = packet.getEntity(level);
+        if (entity != null) {
+            entity.setYHeadRot(EntityPacketCompat.headYRot(packet));
+        }
+    }
+
+    /**
+     * Remove：IntList 逐个按 id 移除。移除路径查证（T1 事实表 ④）：服务端无
+     * {@code Level.removeEntity(int, reason)}（仅 ClientLevel 专有）；立即生效且不依赖
+     * tick 的公开路径 = {@code entity.remove(DISCARDED)} → setRemoved → levelCallback.onRemove
+     * 同步摘除（section + visibleEntityStorage + knownUuids），两版本同构。
+     */
+    private void applyRemoveEntities(ClientboundRemoveEntitiesPacket packet) {
+        ServerLevel level = this.overworld();
+        for (int id : packet.getEntityIds()) {
+            Entity entity = level.getEntity(id);
+            if (entity != null) {
+                entity.remove(Entity.RemovalReason.DISCARDED);
+            }
+        }
+    }
+
+    /** 影子端实体管理器（ServerLevel 私有字段，经 ServerLevelAccessor）。 */
+    private PersistentEntitySectionManager<Entity> entityManager() {
+        return ((ServerLevelAccessor) this.overworld()).hassium$getEntityManager();
+    }
+
+    /**
      * 从影子端存档（磁盘 region，type 126）加载区块——官方 {@code scheduleChunkLoad}
      * 完整链（readChunk → 126 解压（MixinRegionFile 读 hook）→ NBT 解析 → 光照恢复）。
      * 返回的 LevelChunk 带存档光（断连 saveAll 落的收敛光），直接打包即可（无需重算）。
@@ -566,6 +755,18 @@ public class ShadowSeedServer extends MinecraftServer {
 #else
             level.getChunkSource().chunkMap.synchronize(true).join();
 #endif
+            // 实体落盘：实体不在 chunk NBT（ChunkSerializer.write 的 "Entities" 仅 PROTOCHUNK
+            // 分支；LevelChunk 无实体存储），真相源是 PersistentEntitySectionManager
+            // （EntityStorage → entities/ 目录）。镜像 ServerLevel.save 顺序：chunk 先、实体后。
+            // Add 挂载时已把实体所在 chunk visibility 置 ENTITY_TICKING，saveAll 走
+            // storeChunkSections（storeEntities 写盘）而非 HIDDEN 的 processChunkUnload（会
+            // 把内存实体摘除标记 removed）。FRESH 状态首轮经 saveAll 内部 requestChunkLoad
+            // （空盘）+ processPendingLoads 收敛为 LOADED 后写盘。
+            try {
+                this.entityManager().saveAll();
+            } catch (Throwable t) {
+                LOGGER.warn("Hassium: Shadow entity save failed", t);
+            }
             // 热度索引随存档落盘（跨会话累计；进程内索引由 load/reset 管理）
             ShadowCacheEviction.save(worldRoot);
         } catch (Throwable t) {
