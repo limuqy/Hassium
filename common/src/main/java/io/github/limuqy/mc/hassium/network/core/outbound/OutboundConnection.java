@@ -1,0 +1,433 @@
+package io.github.limuqy.mc.hassium.network.core.outbound;
+
+import io.github.limuqy.mc.hassium.network.HandshakeStateTail;
+import io.github.limuqy.mc.hassium.network.ZstdContextDecoder;
+import io.github.limuqy.mc.hassium.network.SkipAwareZstdEncoder;
+import io.netty.bootstrap.Bootstrap;
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.Unpooled;
+import io.netty.channel.Channel;
+import io.netty.channel.ChannelHandlerContext;
+import io.netty.channel.ChannelInitializer;
+import io.netty.channel.ChannelOption;
+import io.netty.channel.EventLoopGroup;
+import io.netty.channel.SimpleChannelInboundHandler;
+import io.netty.channel.embedded.EmbeddedChannel;
+import io.netty.channel.nio.NioEventLoopGroup;
+import io.netty.channel.socket.nio.NioSocketChannel;
+import io.netty.handler.codec.ByteToMessageDecoder;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.io.IOException;
+import java.net.InetSocketAddress;
+import java.util.List;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+
+/**
+ * 网关 outbound 连接：到主控的 TCP 控制面 + UDP 数据面（bulk 区块）。
+ *
+ * <p><b>控制面帧协议</b>：{@link ControlFrameCodec}（varint 帧长 + type + payload），
+ * 纯 Netty 零 MC 依赖。管道（注册序）：
+ * <pre>
+ *   [zstdDecoder(握手后)] [zstdEncoder(握手后)] [frameDecoder] [inboundHandler]
+ * </pre>
+ * 入站：zstdDecoder → frameDecoder → handler；出站（handler → 反向）：frameDecoder(仅入站跳过)
+ * → zstdEncoder → socket。ZSTD 复用 {@link ZstdContextDecoder}/{@link SkipAwareZstdEncoder}
+ * （{@link #installZstd}），不改其原挂载（原挂载 = 原版 Connection 管道，T6 前保留）。
+ *
+ * <p><b>握手流</b>：channelActive → 发 HANDSHAKE_C2S（明文）→ listener.onOpen；
+ * HANDSHAKE_S2C → 解码 → accepted ? onHandshakeAccepted（随后装 ZSTD）: onHandshakeRejected。
+ *
+ * <p><b>UDP 数据面</b>：握手尾部带数据面时经 {@link UdpDataPlane} 登记启动；bulk 区块接收走
+ * 现有 DataPlaneClientBundle（ChunkDispatcher 缝，T5 指向 dispatchS2C）。
+ *
+ * <p><b>线程模型</b>：connect 由主线程调用；onOpen/onHandshakeAccepted/onError 在 Netty
+ * event loop 回调（NetworkCore 状态机为原子操作，线程安全）。
+ *
+ * <p>测试缝：{@link #openEmbedded} 用 EmbeddedChannel 跑完整帧/握手流（同包测试）。
+ */
+public final class OutboundConnection {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger("Hassium/OutboundGateway");
+
+    /** 握手结果回调（NetworkCore 实现）。 */
+    public interface Listener {
+        /** 控制面已建立、握手请求已发出（event loop 线程）。 */
+        void onOpen(OutboundConnection connection);
+
+        /** 握手接受（event loop 线程）；此时可装 ZSTD、启动 UDP 数据面。 */
+        void onHandshakeAccepted(HandshakeCodec.ServerResponse response);
+
+        /**
+         * 握手接受 + T7 S2C 尾续流结果（resumeAccepted；T8 迁移引擎续流发起）。
+         * 默认实现转发单参版本——既有监听器不受影响。
+         */
+        default void onHandshakeAccepted(HandshakeCodec.ServerResponse response, boolean resumeAccepted) {
+            onHandshakeAccepted(response);
+        }
+
+        /** 握手被主控拒绝（线格式无原因字段）。 */
+        void onHandshakeRejected(String reason);
+
+        /** 连接/协议错误（event loop 线程）。 */
+        void onError(Throwable cause);
+    }
+
+    private static final String DECODER_NAME = "frameDecoder";
+    private static final String ZSTD_DECODER_NAME = "zstdDecoder";
+    private static final String ZSTD_ENCODER_NAME = "zstdEncoder";
+    private static final String HANDLER_NAME = "gatewayInbound";
+
+    private final Listener listener;
+    private final HandshakeCodec.ClientRequestOptions handshakeOptions;
+    private final HandshakeStateTail.C2S handshakeTail;
+    private final EventLoopGroup ownedGroup;
+    private final AtomicBoolean closed = new AtomicBoolean(false);
+    private final AtomicBoolean zstdInstalled = new AtomicBoolean(false);
+
+    private volatile Channel channel;
+    private volatile java.util.function.Consumer<ByteBuf> s2cPayloadConsumer;
+    private volatile java.util.function.Consumer<ByteBuf> loginS2cPayloadConsumer;
+    private volatile java.util.function.Consumer<ByteBuf> configS2cPayloadConsumer;
+    private volatile java.lang.Runnable inboundActivityListener;
+    private volatile boolean lastResumeAccepted;
+
+    private OutboundConnection(EventLoopGroup ownedGroup,
+                               HandshakeCodec.ClientRequestOptions handshakeOptions,
+                               HandshakeStateTail.C2S handshakeTail,
+                               Listener listener) {
+        this.ownedGroup = ownedGroup;
+        this.handshakeOptions = handshakeOptions;
+        this.handshakeTail = handshakeTail;
+        this.listener = listener;
+    }
+
+    /**
+     * 异步建立到主控的 TCP 控制面连接（event loop 线程回调 {@link Listener}）。
+     * 失败经 {@link Listener#onError} 报告。
+     */
+    public static OutboundConnection connect(String host, int port,
+                                             HandshakeCodec.ClientRequestOptions options,
+                                             Listener listener) {
+        return connect(host, port, options, listener, null);
+    }
+
+    /**
+     * 异步建立到主控的 TCP 控制面连接，握手请求携带 T7 续流状态尾
+     * （T8 迁移引擎续流发起；tail 为 null 时不携带）。
+     */
+    public static OutboundConnection connect(String host, int port,
+                                             HandshakeCodec.ClientRequestOptions options,
+                                             Listener listener,
+                                             HandshakeStateTail.C2S tail) {
+        NioEventLoopGroup group = new NioEventLoopGroup(1, r -> {
+            Thread t = new Thread(r, "Hassium-GatewayOutbound");
+            t.setDaemon(true);
+            return t;
+        });
+        OutboundConnection conn = new OutboundConnection(group, options, tail, listener);
+        Bootstrap bootstrap = new Bootstrap();
+        bootstrap.group(group)
+                .channel(NioSocketChannel.class)
+                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, 5000)
+                .handler(new ChannelInitializer<Channel>() {
+                    @Override
+                    protected void initChannel(Channel ch) {
+                        ch.pipeline().addLast(DECODER_NAME, new FrameDecoder());
+                        ch.pipeline().addLast(HANDLER_NAME, new InboundHandler(conn));
+                    }
+                });
+        bootstrap.connect(new InetSocketAddress(host, port)).addListener(future -> {
+            if (!future.isSuccess()) {
+                Throwable cause = future.cause() != null ? future.cause()
+                        : new IOException("connect failed: " + host + ":" + port);
+                conn.listener.onError(cause);
+            }
+        });
+        return conn;
+    }
+
+    /**
+     * 测试缝：EmbeddedChannel 跑完整帧/握手流（core 包测试用）。
+     * channelActive 在构造期触发——自动发握手并回调 onOpen，随后可直接 writeInbound 帧。
+     */
+    public static OutboundConnection openEmbedded(HandshakeCodec.ClientRequestOptions options, Listener listener) {
+        return openEmbedded(options, listener, null);
+    }
+
+    /** 测试缝：EmbeddedChannel 变体，握手请求携带续流状态尾（T8 预热/迁移测试）。 */
+    public static OutboundConnection openEmbedded(HandshakeCodec.ClientRequestOptions options,
+                                                  Listener listener,
+                                                  HandshakeStateTail.C2S tail) {
+        OutboundConnection conn = new OutboundConnection(null, options, tail, listener);
+        EmbeddedChannel embedded = new EmbeddedChannel(new FrameDecoder(), new InboundHandler(conn));
+        conn.channel = embedded;
+        return conn;
+    }
+
+    /** 入站 S2C payload 消费者（T5 注册：解码为原版 Packet 后交 NetworkCore#dispatchS2C）。 */
+    public void setS2CPayloadConsumer(java.util.function.Consumer<ByteBuf> consumer) {
+        this.s2cPayloadConsumer = consumer;
+    }
+
+    /** 入站登录 S2C payload 消费者（T5 注册：登录桥接，与 {@link #s2cPayloadConsumer} 独立解码协议）。 */
+    public void setLoginS2CPayloadConsumer(java.util.function.Consumer<ByteBuf> consumer) {
+        this.loginS2cPayloadConsumer = consumer;
+    }
+
+    /** 入站配置阶段 S2C payload 消费者（T10 注册：CONFIG_S2C 帧 → NetworkCore#onConfigS2CPayload）。 */
+    public void setConfigS2CPayloadConsumer(java.util.function.Consumer<ByteBuf> consumer) {
+        this.configS2cPayloadConsumer = consumer;
+    }
+
+    /**
+     * 最近一次握手响应的续流接受标记（T7 S2C 尾；未握手/拒绝 → false）。
+     * 与 {@link Listener#onHandshakeAccepted(HandshakeCodec.ServerResponse, boolean)} 同源，供事后查询。
+     */
+    public boolean lastResumeAccepted() {
+        return lastResumeAccepted;
+    }
+
+    /** 握手接受后装 ZSTD（复用现有编解码器；仅本网关管道新挂载）。阈值/等级与现有全局压缩同源。 */
+    public void installZstd(int threshold, int level) {
+        Channel ch = channel;
+        if (ch == null || !zstdInstalled.compareAndSet(false, true)) {
+            return;
+        }
+        ch.pipeline().addBefore(DECODER_NAME, ZSTD_DECODER_NAME, new ZstdContextDecoder(threshold, true, false));
+        ch.pipeline().addBefore(DECODER_NAME, ZSTD_ENCODER_NAME, new SkipAwareZstdEncoder(threshold, level, false));
+        LOGGER.info("Hassium: Gateway outbound ZSTD installed (threshold={}, level={})", threshold, level);
+    }
+
+    /**
+     * 发送 C2S 握手请求（channelActive 自动发送；显式调用用于重发）。
+     * 构造时若指定续流状态尾（T8），请求一并携带。
+     */
+    public void sendHandshake(HandshakeCodec.ClientRequestOptions options) {
+        sendFrame(ControlFrameType.HANDSHAKE_C2S, HandshakeCodec.encodeClientRequest(options, handshakeTail));
+    }
+
+    /**
+     * 发送应用层心跳（HEARTBEAT 帧，空 payload；T8 迁移引擎故障检测）。
+     * 主控侧 GatewayChannel 回显（与 PING→PONG 对称）。
+     */
+    public void sendHeartbeat() {
+        sendFrame(ControlFrameType.HEARTBEAT, Unpooled.EMPTY_BUFFER);
+    }
+
+    /**
+     * 注册入站活动监听（任意入站帧触发；T8 心跳超时监测的 liveness 信号）。
+     * 幂等（重复注册覆盖）。
+     */
+    public void setInboundActivityListener(java.lang.Runnable listener) {
+        this.inboundActivityListener = listener;
+    }
+
+    /**
+     * 发送 C2S 包 payload（routeC2S 经编码器产出；本方法接管 payload 所有权并释放）。
+     */
+    public void sendC2S(ByteBuf payload) {
+        sendFrame(ControlFrameType.PACKET_C2S, payload);
+    }
+
+    /**
+     * 发送登录阶段 C2S 包 payload（登录桥接，T5；本方法接管 payload 所有权并释放）。
+     */
+    public void sendLoginC2S(ByteBuf payload) {
+        sendFrame(ControlFrameType.LOGIN_C2S, payload);
+    }
+
+    /**
+     * 发送配置阶段 C2S 包 payload（config 中继，T10；本方法接管 payload 所有权并释放）。
+     */
+    public void sendConfigC2S(ByteBuf payload) {
+        sendFrame(ControlFrameType.CONFIG_C2S, payload);
+    }
+
+    /** 幂等关闭：关 channel + 释放自有 event loop。 */
+    public void close() {
+        if (!closed.compareAndSet(false, true)) {
+            return;
+        }
+        Channel ch = channel;
+        if (ch != null) {
+            ch.close();
+        }
+        EventLoopGroup group = ownedGroup;
+        if (group != null) {
+            group.shutdownGracefully(0, 5, TimeUnit.SECONDS);
+        }
+        LOGGER.info("Hassium: Gateway outbound closed");
+    }
+
+    public boolean isOpen() {
+        Channel ch = channel;
+        return !closed.get() && ch != null && ch.isActive();
+    }
+
+    public Channel channel() {
+        return channel;
+    }
+
+    // ---- 内部 ----
+
+    private void sendFrame(ControlFrameType type, ByteBuf payload) {
+        Channel ch = channel;
+        if (ch == null || !ch.isActive()) {
+            payload.release();
+            LOGGER.debug("Hassium: outbound frame {} dropped (channel not open)", type);
+            return;
+        }
+        ch.writeAndFlush(ControlFrameCodec.encodeFrame(type, payload));
+        payload.release();
+    }
+
+    private void onChannelActive(ChannelHandlerContext ctx) {
+        channel = ctx.channel();
+        LOGGER.info("Hassium: Gateway outbound control channel active ({})", ctx.channel().remoteAddress());
+        if (handshakeOptions != null) {
+            sendHandshake(handshakeOptions);
+        }
+        listener.onOpen(this);
+    }
+
+    private void onHandshakeFrame(ByteBuf payload) {
+        HandshakeCodec.ServerResponse response = HandshakeCodec.decodeServerResponse(payload);
+        // T7 S2C 尾（resumeAccepted）：解码后保留尾字节不消费（GatewayServerTest 依赖尾保留）
+        boolean resumeAccepted = HandshakeStateTail.readS2C(payload).resumeAccepted();
+        this.lastResumeAccepted = resumeAccepted;
+        if (response.accepted()) {
+            LOGGER.info("Hassium: Gateway handshake accepted (proto={}, globalCompression={}, compactHeader={}, udp={}, resume={})",
+                    response.protocolVersion(), response.globalCompressionAccepted(),
+                    response.compactHeaderAccepted(),
+                    response.udpTail() != null && response.udpTail().hasUdpDataplane(),
+                    resumeAccepted);
+            listener.onHandshakeAccepted(response, resumeAccepted);
+        } else {
+            LOGGER.warn("Hassium: Gateway handshake rejected (proto={})", response.protocolVersion());
+            listener.onHandshakeRejected("master rejected handshake");
+        }
+    }
+
+    private void onS2CPayload(ByteBuf payload) {
+        java.util.function.Consumer<ByteBuf> consumer = s2cPayloadConsumer;
+        if (consumer == null) {
+            LOGGER.debug("Hassium: S2C payload received, no consumer registered yet (T5) — {} bytes",
+                    payload.readableBytes());
+            return;
+        }
+        consumer.accept(payload.retainedDuplicate());
+    }
+
+    private void onLoginS2CPayload(ByteBuf payload) {
+        java.util.function.Consumer<ByteBuf> consumer = loginS2cPayloadConsumer;
+        if (consumer == null) {
+            LOGGER.debug("Hassium: LOGIN_S2C payload received, no login consumer registered yet (T5) — {} bytes",
+                    payload.readableBytes());
+            return;
+        }
+        consumer.accept(payload.retainedDuplicate());
+    }
+
+    private void onConfigS2CPayload(ByteBuf payload) {
+        java.util.function.Consumer<ByteBuf> consumer = configS2cPayloadConsumer;
+        if (consumer == null) {
+            LOGGER.debug("Hassium: CONFIG_S2C payload received, no config consumer registered yet (T10) — {} bytes",
+                    payload.readableBytes());
+            return;
+        }
+        consumer.accept(payload.retainedDuplicate());
+    }
+
+    private void onPing(ChannelHandlerContext ctx, ByteBuf payload) {
+        ctx.writeAndFlush(ControlFrameCodec.encodeFrame(ControlFrameType.PONG, payload));
+    }
+
+    private void onChannelInactive() {
+        if (!closed.get()) {
+            LOGGER.warn("Hassium: Gateway outbound control channel closed by peer");
+            listener.onError(new IOException("outbound control channel closed by peer"));
+        }
+    }
+
+    private void onException(Throwable cause) {
+        if (closed.get()) {
+            return;
+        }
+        LOGGER.error("Hassium: Gateway outbound error", cause);
+        listener.onError(cause);
+    }
+
+    /** 帧拆分器：累积缓冲 → 完整帧（数据不足不消费；非法帧抛给 exceptionCaught）。 */
+    private static final class FrameDecoder extends ByteToMessageDecoder {
+        @Override
+        protected void decode(ChannelHandlerContext ctx, ByteBuf in, List<Object> out) {
+            while (in.isReadable()) {
+                try {
+                    ControlFrameCodec.Frame frame = ControlFrameCodec.tryDecodeFrame(in);
+                    if (frame == null) {
+                        break;
+                    }
+                    out.add(frame);
+                } catch (IllegalArgumentException e) {
+                    ctx.fireExceptionCaught(e);
+                    break;
+                }
+            }
+        }
+    }
+
+    private static final class InboundHandler extends SimpleChannelInboundHandler<ControlFrameCodec.Frame> {
+
+        private final OutboundConnection connection;
+
+        InboundHandler(OutboundConnection connection) {
+            this.connection = connection;
+        }
+
+        @Override
+        public void channelActive(ChannelHandlerContext ctx) {
+            connection.onChannelActive(ctx);
+        }
+
+        @Override
+        public void channelInactive(ChannelHandlerContext ctx) {
+            connection.onChannelInactive();
+        }
+
+        @Override
+        protected void channelRead0(ChannelHandlerContext ctx, ControlFrameCodec.Frame frame) {
+            java.lang.Runnable activity = connection.inboundActivityListener;
+            if (activity != null) {
+                try {
+                    activity.run();
+                } catch (Throwable t) {
+                    LOGGER.warn("Hassium: inbound activity listener failed", t);
+                }
+            }
+            try {
+                switch (frame.type()) {
+                    case HANDSHAKE_S2C -> connection.onHandshakeFrame(frame.payload());
+                    case PACKET_S2C -> connection.onS2CPayload(frame.payload());
+                    case LOGIN_S2C -> connection.onLoginS2CPayload(frame.payload());
+                    case CONFIG_S2C -> connection.onConfigS2CPayload(frame.payload());
+                    case PING -> connection.onPing(ctx, frame.payload());
+                    case HEARTBEAT -> {
+                        // T7：迁移引擎存活判定输入（心跳定时器）
+                    }
+                    case PACKET_C2S, AGGREGATED, HANDSHAKE_C2S, LOGIN_C2S, CONFIG_C2S, PONG ->
+                            LOGGER.warn("Hassium: unexpected inbound control frame {}", frame.type());
+                }
+            } finally {
+                frame.payload().release();
+            }
+        }
+
+        @Override
+        public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
+            connection.onException(cause);
+        }
+    }
+}
