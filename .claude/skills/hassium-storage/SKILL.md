@@ -36,7 +36,7 @@ description: Hassium 存储与压缩技能。涉及 Region/type 126、HassiumReg
 | `SimpleDictionaryRegistry` / `ResourceDictionaryLoader` | 字典加载 |
 | `CompressionAlgorithmId` | `hassium:zstd` 等命名空间 |
 
-默认等级：**存储 zstdLevel=9**；**网络 compressionLevel=3**（见 NetworkConfig）。
+默认等级：**存储 zstdLevel=3**（`storage.zstdLevel`，ConfigSchema）；**网络 compressionLevel=3**（`network.compressionLevel`）。默认值一律以 ConfigSchema 为准（HassiumConfig 个别死默认无调用方）。
 
 ## 编解码约定
 
@@ -57,8 +57,8 @@ description: Hassium 存储与压缩技能。涉及 Region/type 126、HassiumReg
 
 ## 配置
 
-- `storage.enabled` 默认 **true**（改格式 → 备份世界）
-- `storage.mode`：`readonly_vanilla` / `mirror` / `hassium_only`
+- `storage.enabled` 默认 **false**（schema；开启后改存档格式 → 备份世界；仅专用服务器写，客户端影子端 hassium_cache 固定写 126 不受本开关约束）
+- `storage.mode`：默认 `mirror`；取值 `readonly_vanilla` / `mirror` / `hassium_only`
 - `migration/` 包为未实现桩，勿假定已有迁移工具
 
 ## 测试

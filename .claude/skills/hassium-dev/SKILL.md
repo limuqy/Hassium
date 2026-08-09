@@ -5,7 +5,7 @@ description: Hassium 项目开发通用技能。涉及跨平台(common/fabric/fo
 
 # Hassium 开发通用技能
 
-多加载器（Fabric / Forge / NeoForge）+ Manifold 九段多版本。存储/压缩细节见 [[hassium-storage]]；网络与缓存推送见 [[hassium-network]]；Mixin 见 [[hassium-mixin]]。版本分界真相源：`docs/version-segments.md`。
+多加载器（Fabric / Forge / NeoForge）+ Manifold 九段多版本。存储/压缩细节见 [[hassium-storage]]；网络核心与区块推送见 [[hassium-network]]；Mixin 见 [[hassium-mixin]]。版本分界真相源：`docs/version-segments.md`；入口速查与配置红线：`AGENTS.md`（原 `CLAUDE.md` 已合并于此）。
 
 ## 模块与 builds_for
 
@@ -22,16 +22,18 @@ versionProperties/← 每版本 builds_for、依赖
 
 改动归属：业务/算法 → `common`；加载器 API → 对应模块；跨版本 API → `common/.../compat/`（禁止业务散落新 `#if`）。
 
-## 功能域地图
+## 功能域地图（三核心 + 支撑域，术语按 `.omp/workflows/docs-2.0/work/domain-naming.md`）
 
-| 域 | 包 | Skill |
-|----|-----|-------|
-| 存储 / Region | `storage/` `compression/` | hassium-storage |
-| 网络 / 推送 / 缓存流水线 | `network/` `cache/` | hassium-network |
-| Mixin | `mixin/` | hassium-mixin |
-| 配置 / 指标 / 平台 | `config/` `metrics/` `platform/` | 本 skill |
+| 功能域 | 包锚点 | Skill |
+|--------|--------|-------|
+| 网络核心（客户端进程内网关） | `network/core/`（NetworkCore 状态机 / `outbound/` 帧协议 / `migration/` L1 迁移引擎 / `viafabric/` 桥） | hassium-network |
+| 主控核心（服务端网络与推送） | `network/gateway/`（GatewayServer / GatewayChannel / GatewayPlayerSession / GatewayPlayerRegistry）+ 服务端区块推送（ServerChunkPushManager / ChunkHashS2C / ChunkSender / SectionDelta 服务端 / ServerLoadReporter）+ `HassiumAggregationManager` / `ZstdPipelineSwitcher` | hassium-network |
+| 区块核心（客户端区块域） | `network/seedgen/` 影子端（= 区块核心后端引擎：ShadowSeedServer / ShadowLightCompute / SeedGenExecutor / ShadowCacheEviction / OvdLocalGenerator / ShadowServerRegistry）+ `network/` 顶层摄入管线（ClientChunkPipeline / ClientMetadataHandler）+ `cache/`（OVD / MainThreadBudget / Bloom / LifecycleHelper）；`clientCache.*` 键族 = 本域配置族 | hassium-network / hassium-mixin |
+| 存储域（不立核心名） | `storage/` `compression/` + MixinRegionFile（type 126 写缓冲 / chunkHash 桥） | hassium-storage |
+| UDP 数据面（不立核心名） | `network/dataplane/`（网关↔主控通道 bulk 载体，默认关） | hassium-network |
+| 支撑设施 | `config/` `metrics/` `compat/` `api/` `migration/` `platform/` `server/`（装配：GatewayPlatformWiring / GatewayPlayerBridge / MixinConnectionGatewayServer） | 本 skill |
 
-元数据推送字段为 **chunkHash**（`ChunkHashS2CPacket`），不是 inhabitedTime。磁盘压缩 type **126**。
+「核心」仅此三个；其余一律称域/子系统/服务。类名、包名、配置键不改，仅文档表述按上表。
 
 ## ServiceLoader
 
@@ -60,12 +62,12 @@ compat 类索引（完整表见 version-segments）：`PacketPayloadCompat`、`R
 
 | Gate | 方法 | 默认 |
 |------|------|------|
-| 存储 | `isStorageEnabled()` | **true**（改存档 → 提醒备份） |
+| 存储 | `isStorageEnabled()` | **false**（schema；仅专用服务器写；客户端影子端 hassium_cache 固定写 126 不受本开关约束） |
 | 网络通道 | `isNetworkCompressionEnabled()` | true |
 | 客户端缓存 | `isClientCacheEnabled()` | true |
 | 调试日志 | `DebugLogger` + `debug.*` | 全 false |
 
-`zstd-jni` 已在 `common/build.gradle`；注意 native 在两加载器 jar-in-jar 打包。
+默认值口径：**ConfigSchema.java 为唯一 schema**（三端 backend 均从 schema 生成），`HassiumConfig.DEFAULT` 个别字段为死默认（如 maxChunksPerTick=4 ≠ schema 的 5），文档与实现一律以 schema 为准。`zstd-jni` 已在 `common/build.gradle`；注意 native 在两加载器 jar-in-jar 打包。
 
 ## 修复红线
 
@@ -134,5 +136,9 @@ compat 类索引（完整表见 version-segments）：`PacketPayloadCompat`、`R
 
 - `docs/architecture.md` — 架构与配置
 - `docs/chunk-cache.md` — 缓存流水线
+- `docs/client-chunk-light-flow.md` — 客户端光照流
 - `docs/version-segments.md` — 九段
-- `CLAUDE.md` / `AGENTS.md` — 入口
+- `docs/mod-compat.md` — 多 Mod 兼容
+- `docs/runtime-smoke-test.md` — 运行时冒烟
+- `docs/network-core-followups.md` — 网络核心未达项
+- `AGENTS.md` — 入口速查（含三核心速记与配置红线）

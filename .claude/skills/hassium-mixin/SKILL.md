@@ -5,15 +5,15 @@ description: Hassium Mixin 注入技能。在 common 模块为 RegionFile、Conn
 
 # Hassium Mixin 技能
 
-全部 Mixin 位于 `common/.../mixin/`，随加载器源码集合并编译（Fabric / Forge / NeoForge）。通用规则见 [[hassium-dev]]；存储读写见 [[hassium-storage]]；推送逻辑见 [[hassium-network]]。
+全部 Mixin 位于 `common/.../mixin/`，随加载器源码集合并编译（Fabric / Forge / NeoForge）。通用规则见 [[hassium-dev]]；存储读写见 [[hassium-storage]]；网络核心/推送逻辑见 [[hassium-network]]。
 
 ## 约定
 
 - 注入字段/方法：`@Unique` + `hassium$` 前缀
 - Logger：`LoggerFactory.getLogger("Hassium/TargetClass")`
-- 私有成员：`@Accessor` / `@Invoker`（如 `RegionFileAccessor`、`ClientLevelAccessor`）
+- 私有成员：`@Accessor` / `@Invoker`（如 `RegionFileAccessor`、`ClientLevelAccessor`、`OptionsAccessor`）
 - 优先 `@Inject` + `cancellable = true`，避免 `@Overwrite`
-- 登记：类简名写入 `common/src/main/resources/hassium.mixins.json`（`mixins` 或 `client`）
+- 登记：类简名写入 `common/src/main/resources/hassium.mixins.json`（`mixins` 或 `client` 段）
 
 ## Feature gate
 
@@ -23,9 +23,9 @@ description: Hassium Mixin 注入技能。在 common 模块为 RegionFile、Conn
 | 网络推送 / 全局压缩 | `isNetworkCompressionEnabled()` + 握手/连接状态 |
 | 客户端缓存写 | `isClientCacheEnabled()`（及 storage 就绪） |
 
-## 已注册注入点
+## 已注册注入点（以 `hassium.mixins.json` 为准，2026-08-09 核：mixins 17 + client 12 = **29** 类）
 
-### 存储
+### 存储域
 
 | Mixin | 目标 | 职责 |
 |-------|------|------|
@@ -34,32 +34,47 @@ description: Hassium Mixin 注入技能。在 common 模块为 RegionFile、Conn
 | `MixinIOWorker` | `IOWorker` | 统计/日志 |
 | `MixinChunkSerializer` | `ChunkSerializer` / `SerializableChunkData` | 统计（含 `#if`） |
 
-### 网络 / 推送
+### 区块核心（服务端侧推送 + 影子端）
 
 | Mixin | 目标 | 职责 |
 |-------|------|------|
-| `MixinChunkHolder` | `ChunkHolder` | 拦截 broadcast → chunkHash |
-| `MixinServerPlayer` | `ServerPlayer` | 拦截 trackChunk |
-| `MixinPlayerChunkSender` | `PlayerChunkSender` | 1.20.2+；1.20.1 可为占位 |
-| `MixinMinecraftServer` | `MinecraftServer` | tick：`onServerTick` + hash flush |
-| `MixinConnection` | `Connection` | 聚合发送等 |
-| `MixinConnectionSetupCompression` | `Connection` | 全局 ZSTD 替换 Zlib |
-| `MixinServerGamePacketListenerImpl` | `ServerGamePacketListenerImpl` | 断开清理等 |
+| `MixinChunkHolder` | `ChunkHolder` | 拦截 broadcast → chunkHash；增量 light 包拦截转 `LightDeltaS2C` |
+| `MixinServerPlayer` | `ServerPlayer` | 拦截 trackChunk（1.20.1；1.20.2+ 由 PlayerChunkSender 承担） |
+| `MixinPlayerChunkSender` | `PlayerChunkSender` | 1.20.2+ 拦截 `sendChunk`，替代 trackChunk 注入；1.20.1 挂空壳到 `MinecraftServer` 以满足 json 注册 |
+| `MixinMinecraftServer` | `MinecraftServer` | tick TAIL：`MainThreadDispatcher.flushServer` + 按真实 tick 限流序列化区块 + 冲刷 ChunkHash 批次（仅 dedicated）+ `DataPlaneUdpServer` / `GatewayServer` 生命周期（bind/tick/stop） |
+| `MixinChunkAccess` | `LevelChunk` | pristine 跟踪修改标记（SeedGen Phase 1）：`setBlockState` 移除 pristine 登记，服务端不再发 SeedRef |
+| `MixinLightDataWrite` | `ClientboundLightUpdatePacketData` | 实测出站 chunk 包光照线格式字节数，校准 `NetworkStats.ESTIMATED_LIGHT_BYTES` 与 `lightStrip` 带宽决策 |
+| `LightUpdatePacketAccessor` | `ClientboundLightUpdatePacket` | 反射辅助（字段名跨版本不同）；字段提取逻辑在 `MixinChunkHolder` |
+| `ChunkMapAccessor` | `ChunkMap` | 磁盘加载访问器：影子端读盘（缓存命中 / OVD 环带回填）复用官方 `scheduleChunkLoad` 完整链（`< MC_1_21_2` 返回 `Either`；1.21.2+ 返回 `CompletableFuture`） |
+| `ServerLevelAccessor` | `ServerLevel` | `entityManager` 访问器：影子端实体通道（`updateChunkStatus` 置 ENTITY_TICKING + `saveAll` 落盘 `entities/`） |
 
-### 客户端
+### 主控核心（服务端网络与网关接入）
 
 | Mixin | 目标 | 职责 |
 |-------|------|------|
+| `MixinConnection` | `Connection` | `hassium$tryAggregate`（仅 `ServerGamePacketListenerImpl` 生效）+ C2S 通路截获 `hassium$routeC2S`（send HEAD，可 cancel）+ 断开清理 |
+| `MixinConnectionGatewayServer` | `Connection` | 网关 Connection 桥：`sendPacket` HEAD 拦截 → 网关帧路由；channel/address accessor（`GatewayPlayerBridge` 创建假 Connection 时注入 EmbeddedChannel）；sendPacket 描述符按锚点分段（1.20.1 两参 / 1.20.2–1.21.5 三参 / 1.21.6+ ChannelFutureListener） |
+| `MixinConnectionSetupCompression` | `Connection` | 协商后 `setupCompression` → 切换管线 ZSTD（ZstdPipelineSwitcher） |
+| `MixinServerGamePacketListenerImpl` | `ServerGamePacketListenerImpl` | per-player 控制活动 / 断连记录（数据面 permit 判定链）、断开清理 |
+
+### 客户端（区块核心侧：缓存 / 超视 / 光照 / 生命周期）
+
+| Mixin | 目标 | 职责 |
+|-------|------|------|
+| `MixinMinecraft` | `Minecraft` | 断连清理（`cleanupOnDisconnect` HEAD）+ 最终清理（`finalizeDisconnectIfTerminal` TAIL）；维度切换刷新缓存保存队列 |
+| `MixinClientPacketListener` | `ClientPacketListener` | 初始化缓存系统、断开清理（1.20.1）；元数据逻辑在 `ClientMetadataHandler` |
+| `MixinClientCommonPacketListenerImpl` | `ClientCommonPacketListenerImpl` | 1.20.2+ 断开清理（onDisconnect 上移后在此注入）；1.20.1 挂空壳到 `Minecraft` 以满足 json 注册 |
 | `MixinClientLevel` | `ClientLevel` | 卸载写缓存 |
 | `ClientLevelAccessor` | `ClientLevel` | Accessor |
-| `MixinMinecraft` | `Minecraft` | 配置/生命周期 |
-| `MixinClientTick` | `Minecraft` | 客户端 drain |
-| `MixinClientPacketListener` | `ClientPacketListener` | 包处理 |
-| `MixinClientCommonPacketListenerImpl` | `ClientCommonPacketListenerImpl` | 通用监听 |
-| `MixinLightRecompute` | `ClientPacketListener` | lightStrip 后本地重算（propagate + 邻区边界拉取）与每帧限流 |
-| `MixinLevelRenderer` | `LevelRenderer` | 渲染相关 |
+| `MixinLevel` | `Level` | 跳过 renderOnly（超视渲染）区块的 blockEntity tick（`tickBlockEntity` HEAD cancel；`require = 0` 跨版本静默不注入） |
+| `MixinClientTick` | `Minecraft` | 每帧更新视距扩展服务、按时间预算应用区块、刷新回调；takePendingUdpStart 周期驱动 UDP 数据面 |
+| `MixinOptions` | `Options` | 解除 `getEffectiveRenderDistance()` 服务端钳制 → `min(客户端 RD 滑块, clientCache.maxRenderDistance)`，扩大 ViewArea（仅多人 + clientCache.enabled + viewDistanceExtensionEnabled） |
+| `OptionsAccessor` | `Options` | `serverRenderDistance` 字段访问器（`ViewDistanceExtensionService` 环带计算用） |
+| `LevelLightEngineAccessor` | `LevelLightEngine` | 访问内部 sky/block engine，失败后清空 residual light queue |
+| `LightEngineAccessor` | `LightEngine` | 访问 deferred 队列；`runLightUpdates` NPE 后清残留防崩溃 |
+| `ThreadedLevelLightEngineAccessor` | `ThreadedLevelLightEngine` | 服务端光照任务队列访问器（影子端收敛判定：同时检查 `lightTasks` 空） |
 
-当前共 **19** 个已注册类（以 `hassium.mixins.json` 为准）。
+> 已退役（不再登记，改代码前若在别处看到引用按已删处理）：光照本地重算、渲染相关、旧 UI 冻结套件（`recoveryFreeze` 键保留但无 UI 消费）。
 
 ## 添加流程
 
@@ -81,10 +96,11 @@ description: Hassium Mixin 注入技能。在 common 模块为 RegionFile、Conn
 
 ## 常见坑
 
-- Connection `send` 在 1.21.6+ 监听器类型变更 → 见 `MixinConnection` / version-segments
+- Connection `send` 在 1.21.6+ 监听器类型变更 → 见 `MixinConnection` / `docs/version-segments.md`
 - static 字段泄漏玩家状态 → 用弱引用或连接级 registry
-- 同一逻辑勿在 ChunkHolder + ServerPlayer 重复发送（核对拦截点）
-- 1.20.1 无 `PlayerChunkSender` 时保留空 mixin 以满足 json 注册需要
+- 同一逻辑勿在 ChunkHolder + ServerPlayer 重复发送（核对拦截点：1.20.1 trackChunk / 1.20.2+ PlayerChunkSender 二选一）
+- 1.20.1 无 `PlayerChunkSender` / `ClientCommonPacketListenerImpl` 时保留空壳到 `MinecraftServer` / `Minecraft`，以满足 json 注册需要
+- 注入抽象方法会失败（asm insnNode null）→ 注入具体实现类（如 `MixinChunkAccess` 注入 `LevelChunk` 而非 `ChunkAccess`）
 - `hassium.refmap.json`：Loom 生成的 Mixin 名映射表；发行 jar 必需。`runClient` 下 WARN「could not be read」通常可忽略（详见 [`docs/mod-compat.md`](../../../docs/mod-compat.md) §10）
 
 ## 调试
