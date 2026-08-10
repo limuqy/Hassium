@@ -40,6 +40,11 @@ public final class PrewarmSession {
     private final Callback callback;
     private final AtomicBoolean done = new AtomicBoolean(false);
 
+    /** A-M3: 预热连接超时（10s 从 create 起算；到期未 ready/失败 → onFailed + close）。
+     *  预热整体 TTL 沿用既有 B3 语义（master.migrationPrewarmTtlMs，服务端物化会话清扫），
+     *  客户端只加连接超时。 */
+    private static final long PREWARM_CONNECT_TIMEOUT_MS = 10_000L;
+
     private volatile OutboundConnection connection;
     private volatile boolean ready;
     private volatile boolean resumeAccepted;
@@ -86,6 +91,8 @@ public final class PrewarmSession {
         PrewarmSession session = new PrewarmSession(endpoint, callback);
         session.connection = connectionFactory.create(endpoint.host(), endpoint.port(),
                 HandshakeCodec.ClientRequestOptions.defaults(), tail, new Listener(session));
+        // A-M3: 连接超时守卫（TCP connect 挂死/握手无响应 → 到期 onFailed + close）
+        session.startConnectTimeout();
         return session;
     }
 
@@ -121,6 +128,33 @@ public final class PrewarmSession {
             conn.close();
         }
         done.set(true);
+    }
+
+    /**
+     * A-M3: 连接超时守卫（10s 从 create 起算，守护线程）：到期仍未终态 → 视为连接失败
+     * （onFailed + close，回调驱动迁移直连兜底）。终态（ready/失败/关闭）后退出；
+     * onFailed CAS 失败 = 已 ready/已失败，不再 close（防 ready 后误关待接管连接）。
+     */
+    private void startConnectTimeout() {
+        Thread t = new Thread(() -> {
+            long deadline = System.currentTimeMillis() + PREWARM_CONNECT_TIMEOUT_MS;
+            long remaining;
+            while (!done.get() && (remaining = deadline - System.currentTimeMillis()) > 0) {
+                try {
+                    Thread.sleep(Math.min(remaining, 100));
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+            }
+            if (!done.get()
+                    && onFailed(new IOException("prewarm connect timed out after "
+                            + PREWARM_CONNECT_TIMEOUT_MS + "ms: " + endpoint))) {
+                close();
+            }
+        }, "Hassium-PrewarmTimeout");
+        t.setDaemon(true);
+        t.start();
     }
 
     // ---- 内部 ----
@@ -163,12 +197,14 @@ public final class PrewarmSession {
         return prewarmBytesReceived.get();
     }
 
-    private void onFailed(Throwable cause) {
+    /** 失败收口（终态 CAS）；返回是否由本调用完成终态（超时守卫据此决定是否 close）。 */
+    private boolean onFailed(Throwable cause) {
         if (!done.compareAndSet(false, true)) {
-            return;
+            return false;
         }
         LOGGER.warn("[PREWARM] session failed at {}: {}", endpoint, cause.toString());
         callback.onFailed(endpoint, cause);
+        return true;
     }
 
     /** OutboundConnection.Listener 适配（预热连接独立于主状态机）。 */

@@ -39,6 +39,6 @@ public abstract class MixinChunkAccess {
         }
         LevelChunk self = (LevelChunk) (Object) this;
         ChunkPos chunkPos = self.getPos();
-        PristineRegistry.onBlockModified(new ChunkPos(chunkPos.x, chunkPos.z));
+        PristineRegistry.onBlockModified(self.getLevel().dimension(), new ChunkPos(chunkPos.x, chunkPos.z));
     }
 }

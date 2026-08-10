@@ -1,6 +1,10 @@
 package io.github.limuqy.mc.hassium.network;
 
+import io.github.limuqy.mc.hassium.compat.ResourceLocationCompat;
+import net.minecraft.core.registries.Registries;
+import net.minecraft.resources.ResourceKey;
 import net.minecraft.world.level.ChunkPos;
+import net.minecraft.world.level.Level;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -14,7 +18,7 @@ import static org.junit.jupiter.api.Assertions.*;
  *   <li>{@link PristineRegistry#isPristineCandidate} 判定真值表（status/inhabitedTime/modified）</li>
  *   <li>{@link PristineRegistry#onBlockModified} 修改即移除登记（幂等）</li>
  *   <li>{@link PristineRegistry#clear} 清空（重启语义：全部视为非 pristine）</li>
- *   <li>{@link PristineRegistry#isPristine} / {@code isEmpty} 状态查询</li>
+ *   <li>{@link PristineRegistry#isPristine}（含非主世界不命中）/ {@code isEmpty} 状态查询</li>
  * </ul>
  */
 class PristineRegistryTest {
@@ -50,27 +54,32 @@ class PristineRegistryTest {
         assertTrue(PristineRegistry.isEmpty());
 
         // 模拟 markIfPristine 的登记效果：直接经候选判定置位（与实现同源）
-        PristineRegistry.markPristineForTest(pos);
-        assertTrue(PristineRegistry.isPristine(pos));
+        PristineRegistry.markPristineForTest(PristineRegistry.OVERWORLD_KEY, pos);
+        assertTrue(PristineRegistry.isPristine(PristineRegistry.OVERWORLD_KEY, pos));
         assertFalse(PristineRegistry.isEmpty());
 
+        // 非主世界维度：不命中 pristine（静默走全量）
+        ResourceKey<Level> nether = ResourceKey.create(Registries.DIMENSION,
+                ResourceLocationCompat.create("minecraft:the_nether"));
+        assertFalse(PristineRegistry.isPristine(nether, pos));
+
         // 改动（setBlockState → onBlockModified）→ 移除登记，且幂等
-        PristineRegistry.onBlockModified(pos);
-        assertFalse(PristineRegistry.isPristine(pos));
-        PristineRegistry.onBlockModified(pos);
-        assertFalse(PristineRegistry.isPristine(pos));
+        PristineRegistry.onBlockModified(PristineRegistry.OVERWORLD_KEY, pos);
+        assertFalse(PristineRegistry.isPristine(PristineRegistry.OVERWORLD_KEY, pos));
+        PristineRegistry.onBlockModified(PristineRegistry.OVERWORLD_KEY, pos);
+        assertFalse(PristineRegistry.isPristine(PristineRegistry.OVERWORLD_KEY, pos));
 
         PristineRegistry.clear();
     }
 
     @Test
     void clearShouldResetAll() {
-        PristineRegistry.markPristineForTest(new ChunkPos(-3, 7));
-        PristineRegistry.markPristineForTest(new ChunkPos(0, 0));
+        PristineRegistry.markPristineForTest(PristineRegistry.OVERWORLD_KEY, new ChunkPos(-3, 7));
+        PristineRegistry.markPristineForTest(PristineRegistry.OVERWORLD_KEY, new ChunkPos(0, 0));
         assertFalse(PristineRegistry.isEmpty());
 
         PristineRegistry.clear();
         assertTrue(PristineRegistry.isEmpty());
-        assertFalse(PristineRegistry.isPristine(new ChunkPos(-3, 7)));
+        assertFalse(PristineRegistry.isPristine(PristineRegistry.OVERWORLD_KEY, new ChunkPos(-3, 7)));
     }
 }

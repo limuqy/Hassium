@@ -1,5 +1,8 @@
 package io.github.limuqy.mc.hassium.network;
 
+import io.github.limuqy.mc.hassium.compat.ResourceLocationCompat;
+import net.minecraft.core.registries.Registries;
+import net.minecraft.resources.ResourceKey;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.chunk.ChunkAccess;
@@ -19,6 +22,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * <p>
  * 语义约定（写死）：
  * <ul>
+ *   <li>仅主世界维度登记（SeedGen 只支持主世界；非主世界恒不命中，静默走全量）。</li>
  *   <li>登记发生在区块生成完成 → 首次推送之间（{@link #markIfPristine} 由推送管线调用）；
  *       worldgen 管线内的放置发生在登记之前，不算「修改」。</li>
  *   <li>登记后的一切 {@code ChunkAccess.setBlockState}（MixinChunkAccess 注入）均视为修改，
@@ -30,8 +34,18 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public final class PristineRegistry {
 
-    /** chunkKey(ChunkPos.asLong) -> pristine 标志 */
-    private static final ConcurrentHashMap<Long, Boolean> PRISTINE = new ConcurrentHashMap<>();
+    /**
+     * 主世界维度 key（纯 Registry 引用，避免 {@code Level.<clinit>} 在无 bootstrap
+     * 单测环境失败——PlayerDataStorage A6 实测约定）。
+     */
+    static final ResourceKey<Level> OVERWORLD_KEY = ResourceKey.create(
+            Registries.DIMENSION, ResourceLocationCompat.create("minecraft:overworld"));
+
+    /** 复合键：(维度, chunkPos)。维度隔离防跨维同坐标误命中；非主世界不登记。 */
+    private record Key(ResourceKey<Level> dimension, long chunkPos) {}
+
+    /** key(dimension, chunkPos) -> pristine 标志 */
+    private static final ConcurrentHashMap<Key, Boolean> PRISTINE = new ConcurrentHashMap<>();
 
     private PristineRegistry() {
     }
@@ -50,10 +64,15 @@ public final class PristineRegistry {
      * 不触发加载——用 4 参 getChunk(nonnull=false) 取现有 chunk，缺失/未 FULL 不登记。
      */
     public static void markIfPristine(Level level, ChunkPos pos) {
+        ResourceKey<Level> dimension = level.dimension();
+        if (!dimension.equals(OVERWORLD_KEY)) {
+            return; // 非主世界：SeedGen 仅主世界，不登记（静默走全量）
+        }
         ChunkAccess access = level.getChunk(pos.x, pos.z, ChunkStatus.FULL, false);
         if (!(access instanceof LevelChunk chunk)) {
             return;
         }
+        long chunkKey = ChunkPos.asLong(pos.x, pos.z);
         if (isPristineCandidate(chunk
 #if MC_VER < MC_1_21_1
                 .getStatus()
@@ -61,16 +80,19 @@ public final class PristineRegistry {
                 .getPersistedStatus()
 #endif
                 .isOrAfter(ChunkStatus.FULL),
-                chunk.getInhabitedTime(), PRISTINE.containsKey(ChunkPos.asLong(pos.x, pos.z)))) {
-            PRISTINE.put(ChunkPos.asLong(pos.x, pos.z), Boolean.TRUE);
+                chunk.getInhabitedTime(), PRISTINE.containsKey(new Key(dimension, chunkKey)))) {
+            PRISTINE.put(new Key(dimension, chunkKey), Boolean.TRUE);
         }
     }
 
     /**
-     * 该区块当前是否 pristine。
+     * 该区块当前是否 pristine（非主世界恒 false：静默走全量）。
      */
-    public static boolean isPristine(ChunkPos pos) {
-        return PRISTINE.containsKey(ChunkPos.asLong(pos.x, pos.z));
+    public static boolean isPristine(ResourceKey<Level> dimension, ChunkPos pos) {
+        if (!dimension.equals(OVERWORLD_KEY)) {
+            return false;
+        }
+        return PRISTINE.containsKey(new Key(dimension, ChunkPos.asLong(pos.x, pos.z)));
     }
 
     /**
@@ -83,15 +105,15 @@ public final class PristineRegistry {
     /**
      * 区块被修改：移除登记。幂等。
      */
-    public static void onBlockModified(ChunkPos pos) {
-        PRISTINE.remove(ChunkPos.asLong(pos.x, pos.z));
+    public static void onBlockModified(ResourceKey<Level> dimension, ChunkPos pos) {
+        PRISTINE.remove(new Key(dimension, ChunkPos.asLong(pos.x, pos.z)));
     }
 
     /**
      * 测试钩子（package-private）：直接置位登记，模拟 markIfPristine 的登记结果。
      */
-    static void markPristineForTest(ChunkPos pos) {
-        PRISTINE.put(ChunkPos.asLong(pos.x, pos.z), Boolean.TRUE);
+    static void markPristineForTest(ResourceKey<Level> dimension, ChunkPos pos) {
+        PRISTINE.put(new Key(dimension, ChunkPos.asLong(pos.x, pos.z)), Boolean.TRUE);
     }
 
     /**

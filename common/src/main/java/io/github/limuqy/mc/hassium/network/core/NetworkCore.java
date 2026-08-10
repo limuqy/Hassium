@@ -27,6 +27,7 @@ import org.slf4j.LoggerFactory;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
@@ -89,6 +90,11 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
     private final AtomicLong migrationAttempts = new AtomicLong();
 
     private static final long MAX_MIGRATION_ATTEMPTS = 3;
+
+    /** A-M2: 握手总超时（从 CONNECTING 起算；到期同握手期故障兜底：断 outbound → IDLE 原版直连）。 */
+    private static final long HANDSHAKE_TIMEOUT_MS = 15_000L;
+    /** A-M2: 最近一次 connect 的握手 deadline（event loop 定时任务到期自检；0=未握手期）。 */
+    private volatile long handshakeDeadlineMs;
 
     private NetworkCore() {
         // T5：S2C 注入器（handler 层直调路由）随单例就位；outbound payload 缝在 attach 时接线
@@ -179,6 +185,8 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
         if (state.get() == NetworkCoreState.IDLE) {
             transition(NetworkCoreState.IDLE, NetworkCoreState.CONNECTING);
         }
+        // A-M2: 握手总超时起算（从 CONNECTING 起算 15s；onOpen 时在 event loop 排到期任务）
+        handshakeDeadlineMs = System.currentTimeMillis() + HANDSHAKE_TIMEOUT_MS;
         lastEndpoint = host + ":" + port;
         migration.noteCurrentEndpoint(new MigrationEndpoint(host, port));
         attach(createOutbound(host, port, tail));
@@ -348,6 +356,37 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
     public void onOpen(OutboundConnection connection) {
         if (!transition(NetworkCoreState.CONNECTING, NetworkCoreState.HANDSHAKING)) {
             LOGGER.debug("Hassium: onOpen while state={} (reconnect/migrate: handshake in flight)", state.get());
+        }
+        // A-M2: 握手总超时（15s 从 connect()/CONNECTING 起算）——event loop 到期自检：
+        // 仍处握手期 → onFault 兜底（断 outbound → IDLE 原版直连）；已 ACTIVE/MIGRATING 无操作。
+        scheduleHandshakeTimeout(connection);
+    }
+
+    /**
+     * A-M2: 握手总超时定时任务（event loop；15s 从 CONNECTING 起算）。到期自检状态与
+     * deadline——握手完成（ACTIVE）/迁移中（MIGRATING）/已断（IDLE）均无操作；重连会
+     * 推进 deadline，旧任务到期因 deadline 已更新而跳过。
+     */
+    private void scheduleHandshakeTimeout(OutboundConnection connection) {
+        long deadline = handshakeDeadlineMs;
+        if (deadline <= 0) {
+            return; // 未经 connect()（测试直接 attach / 预热接管），无握手超时语义
+        }
+        long remaining = deadline - System.currentTimeMillis();
+        try {
+            connection.channel().eventLoop().schedule(() -> {
+                if (System.currentTimeMillis() < handshakeDeadlineMs) {
+                    return; // 重连已推进 deadline，旧任务作废
+                }
+                NetworkCoreState st = state.get();
+                if (st == NetworkCoreState.CONNECTING || st == NetworkCoreState.HANDSHAKING) {
+                    LOGGER.warn("Hassium: handshake timed out after {}ms (state={}) — "
+                            + "fall back to vanilla direct connection (N1)", HANDSHAKE_TIMEOUT_MS, st);
+                    onFault();
+                }
+            }, Math.max(0L, remaining), TimeUnit.MILLISECONDS);
+        } catch (Throwable t) {
+            LOGGER.debug("Hassium: handshake timeout scheduling skipped (event loop unavailable)", t);
         }
     }
 
@@ -525,6 +564,15 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
             }
             LOGGER.error("Hassium: migration failed — back to IDLE", cause);
             transitionTo(NetworkCoreState.IDLE);
+            return;
+        }
+        if (state.get() == NetworkCoreState.ACTIVE) {
+            // A-M1: ACTIVE 期被动断链（TCP 硬断 channelInactive / 连接异常）→ N2 故障路径
+            // （onFault → migrateToImmediate 迁移引擎），不再直降 IDLE 静默卡死。主动断开
+            // 不触发：onDisconnect 先置 outbound=null 再 close，且 OutboundConnection.closed
+            // 抑制 channelInactive/exceptionCaught 的 onError 回调。
+            LOGGER.warn("Hassium: outbound error while ACTIVE — fault trigger (migrate): {}", cause.toString());
+            onFault();
             return;
         }
         LOGGER.error("Hassium: NetworkCore outbound error", cause);
@@ -972,8 +1020,23 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
     /** 故障触发（引擎心跳超时）：立即切换；无目标端点 → 降级 IDLE。 */
     @Override
     public void onFault() {
-        if (state.get() != NetworkCoreState.ACTIVE) {
-            LOGGER.debug("Hassium: fault trigger ignored (state={})", state.get());
+        NetworkCoreState st = state.get();
+        // A-M2: 握手期故障（CONNECTING/HANDSHAKING）→ N1 兜底：断 outbound + 回 IDLE
+        // （原版直连兜底；修复静默/读超时故障在握手期被 ACTIVE-only 守卫吞掉 → 永久卡
+        // HANDSHAKING）。MIGRATING/IDLE 保持现有迁移语义（忽略）。
+        if (st == NetworkCoreState.CONNECTING || st == NetworkCoreState.HANDSHAKING) {
+            LOGGER.warn("Hassium: fault trigger during handshake (state={}) — "
+                    + "fall back to vanilla direct connection (N1)", st);
+            OutboundConnection oc = outbound;
+            outbound = null;
+            if (oc != null) {
+                oc.close();
+            }
+            transitionTo(NetworkCoreState.IDLE);
+            return;
+        }
+        if (st != NetworkCoreState.ACTIVE) {
+            LOGGER.debug("Hassium: fault trigger ignored (state={})", st);
             return;
         }
         MigrationEndpoint target = migration.nextEndpoint();

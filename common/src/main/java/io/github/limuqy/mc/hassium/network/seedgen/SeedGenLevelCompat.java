@@ -14,6 +14,10 @@ import net.minecraft.commands.Commands;
 import net.minecraft.core.MappedRegistry;
 import net.minecraft.core.Registry;
 import net.minecraft.core.registries.Registries;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.nbt.NbtOps;
+import net.minecraft.network.FriendlyByteBuf;
+import net.minecraft.resources.RegistryOps;
 import net.minecraft.server.Services;
 import net.minecraft.server.WorldLoader;
 import net.minecraft.server.WorldStem;
@@ -57,7 +61,8 @@ import net.minecraft.util.Util;
  * 模板 = 原版 GameTestServer.create，差异：
  * <ul>
  *   <li>seed 用服务端下发的 worldSeed（WorldOptions(seed, generateStructures=true, bonusChest=false)）</li>
- *   <li>preset 用 NORMAL（原版主世界，与多人服务器一致；GameTestServer 用 FLAT 测结构）</li>
+ *   <li>preset 用 NORMAL（原版主世界，与多人服务器一致）；服务端握手 LevelStem
+ *       存在时优先消费（自定义 worldgen 同源装配，见 {@link #buildWorldDimensions}）</li>
  *   <li>PrimaryLevelData 预置 initialized=true，跳过 setInitialSpawn 的 spawn 区块生成</li>
  * </ul>
  */
@@ -151,17 +156,8 @@ public final class SeedGenLevelCompat {
                                     dataLoadContext -> {
                                         Registry<LevelStem> stemRegistry =
                                                 new MappedRegistry<>(Registries.LEVEL_STEM, Lifecycle.stable()).freeze();
-                                        WorldDimensions.Complete complete = dataLoadContext.datapackWorldgen()
-#if MC_VER < MC_1_21_2
-                                                .registryOrThrow(Registries.WORLD_PRESET)
-                                                .getHolderOrThrow(WorldPresets.NORMAL)
-#else
-                                                .lookupOrThrow(Registries.WORLD_PRESET)
-                                                .getOrThrow(WorldPresets.NORMAL)
-#endif
-                                                .value()
-                                                .createWorldDimensions()
-                                                .bake(stemRegistry);
+                                        WorldDimensions.Complete complete = buildWorldDimensions(
+                                                dataLoadContext, stemRegistry);
                                         PrimaryLevelData worldData = new PrimaryLevelData(
                                                 settings, worldOptions, complete.specialWorldProperty(), complete.lifecycle());
                                         worldData.setInitialized(true);
@@ -187,6 +183,68 @@ public final class SeedGenLevelCompat {
             }
             throw new IOException("Shadow seed server creation failed", e);
         }
+    }
+
+    /**
+     * 装配世界维度：优先消费服务端握手下发的 LevelStem NBT（自定义 worldgen 服务器
+     * 本地生成与服务器一致——dimension type / generator settings 同源）；未下发或
+     * 解码失败（自定义 datapack 客户端缺失）回落原版 NORMAL preset（旧行为）。
+     * 残余地形不一致由 SeedGen 生成后 chunkHash 校验兜底（不匹配 → 回退全量）。
+     */
+    private static WorldDimensions.Complete buildWorldDimensions(
+            WorldLoader.DataLoadContext dataLoadContext,
+            Registry<LevelStem> stemRegistry) {
+        byte[] stemNbt = io.github.limuqy.mc.hassium.network.ClientChunkPipeline
+                .getInstance().getServerLevelStemNbt();
+        if (stemNbt != null && stemNbt.length > 0) {
+            try {
+                FriendlyByteBuf buf = new FriendlyByteBuf(
+                        io.netty.buffer.Unpooled.wrappedBuffer(stemNbt));
+                CompoundTag tag;
+                try {
+                    tag = buf.readNbt();
+                } finally {
+                    buf.release();
+                }
+                if (tag != null) {
+                    RegistryOps<net.minecraft.nbt.Tag> ops =
+                            RegistryOps.create(NbtOps.INSTANCE, dataLoadContext.datapackWorldgen());
+                    java.util.Optional<LevelStem> decoded = LevelStem.CODEC.parse(ops, tag).result();
+                    if (decoded.isPresent()) {
+                        Constants.LOG.info("Hassium: Shadow server consuming server LevelStem (custom worldgen)");
+                        return overworldOnlyDimensions(decoded.get()).bake(stemRegistry);
+                    }
+                }
+            } catch (Throwable t) {
+                Constants.LOG.warn("Hassium: LevelStem decode failed, fallback to NORMAL preset", t);
+            }
+        }
+        return dataLoadContext.datapackWorldgen()
+#if MC_VER < MC_1_21_2
+                .registryOrThrow(Registries.WORLD_PRESET)
+                .getHolderOrThrow(WorldPresets.NORMAL)
+#else
+                .lookupOrThrow(Registries.WORLD_PRESET)
+                .getOrThrow(WorldPresets.NORMAL)
+#endif
+                .value()
+                .createWorldDimensions()
+                .bake(stemRegistry);
+    }
+
+    /**
+     * 单主世界 stem 包装为 WorldDimensions（1.20.1-1.20.4 Registry 形态 /
+     * 1.20.5+ Map 形态）。影子端只装配主世界——createLevels 按维度 registry 建 level，
+     * 仅 overworld 无碍（generateChunk/injectChunk 全部走 {@code overworld()}）。
+     */
+    private static WorldDimensions overworldOnlyDimensions(LevelStem stem) {
+#if MC_VER < MC_1_20_5
+        MappedRegistry<LevelStem> dims = new MappedRegistry<>(Registries.LEVEL_STEM, Lifecycle.stable());
+        dims.register(LevelStem.OVERWORLD, stem, Lifecycle.stable());
+        return new WorldDimensions(dims.freeze());
+#else
+        return new WorldDimensions(java.util.Map.of(LevelStem.OVERWORLD, stem));
+#endif
     }
 
     /**

@@ -10,6 +10,7 @@ import io.github.limuqy.mc.hassium.metrics.VanillaZlibEstimator;
 import io.github.limuqy.mc.hassium.platform.Services;
 import io.github.limuqy.mc.hassium.compat.PlayerCompat;
 import io.github.limuqy.mc.hassium.compat.RegistryCompat;
+import io.github.limuqy.mc.hassium.compat.ResourceLocationCompat;
 import io.github.limuqy.mc.hassium.utils.DebugLogger;
 import io.github.limuqy.mc.hassium.utils.DebugLogger.LogType;
 import net.minecraft.core.BlockPos;
@@ -26,9 +27,11 @@ import net.minecraft.resources.ResourceLocation;
 #else
 import net.minecraft.resources.Identifier;
 #endif
+import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.level.ChunkPos;
+import net.minecraft.world.level.Level;
 import net.minecraft.world.level.biome.Biome;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.chunk.LevelChunk;
@@ -146,16 +149,19 @@ public class ServerChunkPushManager {
     /**
      * 该玩家 + 该区块是否走 SeedGen（SeedRef 替代区块数据）。
      * <p>
-     * gate：客户端上报能力 && 服务端配置开启 && 区块 pristine（本会话生成且未修改）。
+     * gate：客户端上报能力 && 服务端配置开启 && 主世界维度 && 区块 pristine
+     * （本会话生成且未修改）。非主世界维度不命中 pristine（静默走全量）。
      */
-    public boolean isSeedGenFor(UUID playerId, ChunkPos pos) {
+    public boolean isSeedGenFor(UUID playerId, ChunkPos pos, String dimension) {
         if (!HassiumConfigService.getInstance().isSeedGenEnabled()) {
             return false;
         }
         if (!Boolean.TRUE.equals(playerSeedGenSupported.get(playerId))) {
             return false;
         }
-        return PristineRegistry.isPristine(pos);
+        ResourceKey<Level> dimKey = ResourceKey.create(Registries.DIMENSION,
+                ResourceLocationCompat.create(dimension));
+        return PristineRegistry.isPristine(dimKey, pos);
     }
 
     /**
@@ -399,7 +405,7 @@ public class ServerChunkPushManager {
                 if (encoded != null) {
                     for (ServerPlayer player : players) {
                         // SeedGen 玩家：不发数据任务（本地生成），只发 SeedRef
-                        if (isSeedGenFor(player.getUUID(), pos)) {
+                        if (isSeedGenFor(player.getUUID(), pos, dimension)) {
                             continue;
                         }
                         putPreparedChunkPacket(player.getUUID(), pos, encoded);
@@ -462,7 +468,7 @@ public class ServerChunkPushManager {
             try {
                 if (effectivePacket instanceof ClientboundLevelChunkWithLightPacket lightPacket) {
                     // SeedGen 玩家：不发数据任务（本地生成），只发 SeedRef
-                    if (!isSeedGenFor(player.getUUID(), pos)) {
+                    if (!isSeedGenFor(player.getUUID(), pos, dimension)) {
                         byte[] encoded = encodeChunkPacket(lightPacket, registryAccess);
                         if (encoded != null) {
                             putPreparedChunkPacket(player.getUUID(), pos, encoded);
@@ -538,7 +544,7 @@ public class ServerChunkPushManager {
         PristineRegistry.markIfPristine(level, pos);
         // 同步缓存已构建的 packet：encode 留给 drain 消费方后台执行，主线程不再付线格式编码成本；
         // packet 为纯数据（构造后不碰 chunk），后台 hash/encode 并发读安全。
-        if (!isSeedGenFor(player.getUUID(), pos)) {
+        if (!isSeedGenFor(player.getUUID(), pos, dimension)) {
             putPreparedChunkPacket(player.getUUID(), pos, packet);
         }
 
@@ -621,7 +627,7 @@ public class ServerChunkPushManager {
             if (!player.isAlive() || player.hasDisconnected()) {
                 continue;
             }
-            if (isSeedGenFor(player.getUUID(), pos)) {
+            if (isSeedGenFor(player.getUUID(), pos, dimension)) {
                 sendSeedRef(player, pos, chunkHash, sectionHashes);
                 continue;
             }

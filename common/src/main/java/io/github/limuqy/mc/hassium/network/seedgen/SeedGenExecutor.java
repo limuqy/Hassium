@@ -1,6 +1,7 @@
 package io.github.limuqy.mc.hassium.network.seedgen;
 
 import io.github.limuqy.mc.hassium.Constants;
+import io.github.limuqy.mc.hassium.cache.ChunkContentHashUtil;
 import io.github.limuqy.mc.hassium.concurrent.ExecutorFactory;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.network.ClientChunkHandler;
@@ -146,6 +147,26 @@ public final class SeedGenExecutor {
             if (chunk == null) {
                 DebugLogger.warn(DebugLogger.LogType.ASYNC,
                         "[SEEDGEN] Generation timeout/failed ({}, {}) -> fallback", pos.x, pos.z);
+                fallback(pos);
+                return;
+            }
+            // 生成后 chunkHash 校验：与服务端 SeedRef 下发 hash 比对（同 ChunkContentHashUtil
+            // 算法，服务端 packet 路径与客户端内存路径等价性有保证）；不匹配 = 本地 worldgen
+            // 与服务器不一致（自定义 datapack 缺失等）→ 走现有回退路径全量拉取，不产出错误地形。
+            final long localHash;
+            try {
+                localHash = ChunkContentHashUtil.combineSectionHashes(
+                        ChunkContentHashUtil.computeSectionHashes(chunk));
+            } catch (Throwable hashError) {
+                DebugLogger.warn(DebugLogger.LogType.ASYNC,
+                        "[SEEDGEN] Hash compute failed ({}, {}) -> fallback", pos.x, pos.z);
+                fallback(pos);
+                return;
+            }
+            if (localHash != entry.contentHash()) {
+                DebugLogger.warn(DebugLogger.LogType.ASYNC,
+                        "[SEEDGEN] Hash mismatch ({}, {}): local={} server={} -> fallback full",
+                        pos.x, pos.z, Long.toHexString(localHash), Long.toHexString(entry.contentHash()));
                 fallback(pos);
                 return;
             }
