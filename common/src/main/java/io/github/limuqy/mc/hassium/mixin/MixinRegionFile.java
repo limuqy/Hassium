@@ -10,6 +10,7 @@ import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -59,6 +60,10 @@ public abstract class MixinRegionFile {
 
     @Unique
     private boolean hassium$timestampsLoaded = false;
+
+    /** 时间戳表有未落盘修改（攒批：close/flush 时一次性写回，对齐原版 header 攒批语义）。 */
+    @Unique
+    private boolean hassium$metadataDirty = false;
 
     @Unique
     private boolean hassium$dedicatedServerContext = false;
@@ -113,10 +118,16 @@ public abstract class MixinRegionFile {
         }
         int index = (pos.x & 31) + (pos.z & 31) * 32;
         table.putInt(index * 4, timestamp);
+        // review-fix: T7-64: 脏标记——不再每次 chunk 写立即整扇区落盘
+        hassium$metadataDirty = true;
     }
 
     @Unique
     public void hassium$flushMetadata() {
+        // review-fix: T7-64: 攒批——无脏修改时零 I/O
+        if (!hassium$metadataDirty) {
+            return;
+        }
         ByteBuffer table = hassium$getVanillaTimestamps();
         if (table == null) {
             return;
@@ -128,10 +139,23 @@ public abstract class MixinRegionFile {
                 table.limit(SECTOR_SIZE);
                 channel.write(table, SECTOR_SIZE);
                 table.clear();
+                hassium$metadataDirty = false;
             }
         } catch (IOException e) {
             hassium$LOGGER.error("Hassium: Failed to flush vanilla timestamp sector", e);
         }
+    }
+
+    // review-fix: T7-64: 脏时间戳扇区在 close（停机/逐出）与 flush（周期性存档）时一次性写回，
+    // 取代原每次 chunk 写都整 16KB 扇区同步落盘（批量保存时写放大明显）
+    @Inject(method = "close", at = @At("HEAD"))
+    private void hassium$onClose(CallbackInfo ci) {
+        hassium$flushMetadata();
+    }
+
+    @Inject(method = "flush", at = @At("HEAD"))
+    private void hassium$onFlush(CallbackInfo ci) {
+        hassium$flushMetadata();
     }
 
     @Inject(method = "getChunkDataInputStream", at = @At("HEAD"), cancellable = true)
@@ -298,10 +322,9 @@ public abstract class MixinRegionFile {
         hassium$self().invokeWrite(pos, sectorBuf);
 
         // 更新时间戳
+        // review-fix: T7-64: 不再每块立即 flushMetadata——脏标记攒批，close/flush 时统一写回
         int timestamp = (int) (System.currentTimeMillis() / 1000);
         hassium$setChunkTimestamp(pos, timestamp);
-        hassium$flushMetadata();
-
         hassium$LOGGER.debug("Wrote Hassium chunk {}: {} -> {} bytes",
                 pos, rawNbtData.length, compressedData.length);
     }

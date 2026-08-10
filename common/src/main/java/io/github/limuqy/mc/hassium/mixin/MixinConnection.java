@@ -45,14 +45,15 @@ public class MixinConnection {
     @Shadow
     private Channel channel;
 
+    // review-fix: T7-59: handler 统一加 hassium$ 前缀（Mixin 惯例，避免与目标类未来同名成员 merge 冲突）
 #if MC_VER < MC_1_21_6
     @Inject(method = "send(Lnet/minecraft/network/protocol/Packet;Lnet/minecraft/network/PacketSendListener;)V", at = @At("HEAD"), cancellable = true)
-    private void onSendPacket(Packet<?> packet, PacketSendListener sendListener, CallbackInfo ci) {
+    private void hassium$onSendPacket(Packet<?> packet, PacketSendListener sendListener, CallbackInfo ci) {
         hassium$tryAggregate(packet, sendListener != null, ci);
     }
 #else
     @Inject(method = "send(Lnet/minecraft/network/protocol/Packet;Lio/netty/channel/ChannelFutureListener;)V", at = @At("HEAD"), cancellable = true)
-    private void onSendPacket(Packet<?> packet, ChannelFutureListener sendListener, CallbackInfo ci) {
+    private void hassium$onSendPacket(Packet<?> packet, ChannelFutureListener sendListener, CallbackInfo ci) {
         hassium$tryAggregate(packet, sendListener != null, ci);
     }
 #endif
@@ -193,7 +194,13 @@ public class MixinConnection {
         ci.cancel();
     }
 
-    @Inject(method = "disconnect", at = @At("HEAD"))
+    // review-fix: T7-60: 带描述符注入 disconnect——1.21.1+ 有 Component/DisconnectionDetails 双重载
+    // （Component 委托 Details），无描述符会命中两个重载致清理逻辑重复执行
+#if MC_VER < MC_1_21_1
+    @Inject(method = "disconnect(Lnet/minecraft/network/chat/Component;)V", at = @At("HEAD"))
+#else
+    @Inject(method = "disconnect(Lnet/minecraft/network/DisconnectionDetails;)V", at = @At("HEAD"))
+#endif
     private void hassium$onDisconnect(CallbackInfo ci) {
         Connection self = (Connection) (Object) this;
         HassiumConnectionRegistry.markDisabled(self);

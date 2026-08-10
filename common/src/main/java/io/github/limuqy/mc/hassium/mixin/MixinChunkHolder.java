@@ -18,6 +18,7 @@ import org.slf4j.LoggerFactory;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 import java.util.ArrayList;
@@ -43,26 +44,8 @@ public class MixinChunkHolder {
             return;
         }
 
-        // 分离 Hassium 和非 Hassium 玩家
-        List<ServerPlayer> hassiumPlayers = null;
-        for (ServerPlayer player : players) {
-            if (PlayerCompressionTracker.isCompressionEnabled(player)) {
-                if (hassiumPlayers == null) {
-                    hassiumPlayers = new ArrayList<>();
-                }
-                hassiumPlayers.add(player);
-            } else {
-                // 检查是否强制要求客户端 Mod
-                if (HassiumConfigService.getInstance().isRequireClientMod()
-                        && PlayerCompressionTracker.isHandshakeTimeout(player)) {
-                    player.connection.disconnect(Component.literal(
-                            "This server requires the Hassium mod. Please install it to join."));
-                    continue;
-                }
-                // 非 Hassium 玩家在主线程上发送原版 packet
-                player.connection.send(packet);
-            }
-        }
+        // 分离 Hassium 和非 Hassium 玩家（共用踢出检查）
+        List<ServerPlayer> hassiumPlayers = hassium$separatePlayers(players, packet);
 
         // 没有 Hassium 玩家时直接取消原版 broadcast
         if (hassiumPlayers == null) {
@@ -86,6 +69,36 @@ public class MixinChunkHolder {
     }
 
     /**
+     * 分离 Hassium 与非 Hassium 玩家：Hassium 玩家收集返回；非 Hassium 玩家主线程直发原版包；
+     * 强制 Mod 且握手超时的玩家踢出。chunk / light 两分支共用，行为保持一致。
+     */
+    // review-fix: T7-62: light 分支缺 isRequireClientMod && isHandshakeTimeout 踢出检查，
+    // 提取为共用私有方法消除两分支行为不一致
+    @Unique
+    private List<ServerPlayer> hassium$separatePlayers(List<ServerPlayer> players, Packet<?> vanillaPacket) {
+        List<ServerPlayer> hassiumPlayers = null;
+        for (ServerPlayer player : players) {
+            if (PlayerCompressionTracker.isCompressionEnabled(player)) {
+                if (hassiumPlayers == null) {
+                    hassiumPlayers = new ArrayList<>();
+                }
+                hassiumPlayers.add(player);
+            } else {
+                // 检查是否强制要求客户端 Mod
+                if (HassiumConfigService.getInstance().isRequireClientMod()
+                        && PlayerCompressionTracker.isHandshakeTimeout(player)) {
+                    player.connection.disconnect(Component.literal(
+                            "This server requires the Hassium mod. Please install it to join."));
+                    continue;
+                }
+                // 非 Hassium 玩家在主线程上发送原版 packet
+                player.connection.send(vanillaPacket);
+            }
+        }
+        return hassiumPlayers;
+    }
+
+    /**
      * 拦截 ClientboundLightUpdatePacket，对 Hassium 客户端发送轻量光照增量通知。
      * <p>
      * 剥离光照数据，仅发送区块坐标和 section 位掩码。客户端本地重算光照。
@@ -96,19 +109,8 @@ public class MixinChunkHolder {
             return;
         }
 
-        // 分离 Hassium 和非 Hassium 玩家
-        List<ServerPlayer> hassiumPlayers = null;
-        for (ServerPlayer player : players) {
-            if (PlayerCompressionTracker.isCompressionEnabled(player)) {
-                if (hassiumPlayers == null) {
-                    hassiumPlayers = new ArrayList<>();
-                }
-                hassiumPlayers.add(player);
-            } else {
-                // 非 Hassium 玩家发送原版包
-                player.connection.send(lightPacket);
-            }
-        }
+        // 分离 Hassium 和非 Hassium 玩家（与 chunk 分支共用踢出检查）
+        List<ServerPlayer> hassiumPlayers = hassium$separatePlayers(players, lightPacket);
 
         if (hassiumPlayers == null) {
             ci.cancel();
@@ -118,14 +120,13 @@ public class MixinChunkHolder {
         int chunkX = lightPacket.getX();
         int chunkZ = lightPacket.getZ();
 
-        // 尝试通过反射提取 section 位掩码
+        // 尝试通过反射提取 section 位掩码（masks 位于 ClientboundLightUpdatePacketData 内，
+        // 经 packet.lightData 导航；Field 首次解析后缓存，热路径零反射开销）
         java.util.BitSet skyMask = new java.util.BitSet();
         java.util.BitSet blockMask = new java.util.BitSet();
         try {
-            Class<?> clazz = lightPacket.getClass();
-            // 尝试不同的字段名（yarn / mojmap / intermediary）
-            skyMask = tryGetBitSetField(clazz, lightPacket, "skyYMask", "f_132411_", "skyYMask");
-            blockMask = tryGetBitSetField(clazz, lightPacket, "blockYMask", "f_132412_", "blockYMask");
+            skyMask = hassium$getMask(lightPacket, true);
+            blockMask = hassium$getMask(lightPacket, false);
         } catch (Exception e) {
             // 反射失败时使用空 BitSet，客户端会重算所有 section
             LOGGER.debug("Hassium: Could not extract light masks via reflection, using empty masks");
@@ -153,20 +154,74 @@ public class MixinChunkHolder {
     }
 
     /**
-     * 尝试通过反射获取 BitSet 字段
+     * ClientboundLightUpdatePacket.lightData（masks 位于 ClientboundLightUpdatePacketData，
+     * 1.20.1+ 均非 packet 直接字段）。首次解析成功后缓存 Field，热路径不再 getDeclaredField；
+     * 字段名候选覆盖 mojmap（Forge 运行时）与 intermediary（Fabric 运行时，MCP 核实
+     * lightData=field_34872 / skyYMask=field_34873 / blockYMask=field_34874，1.20.1~1.21.11 稳定）。
      */
-    private static java.util.BitSet tryGetBitSetField(Class<?> clazz, Object obj, String... fieldNames) {
-        for (String name : fieldNames) {
+    // review-fix: T7-61: 热路径反射未缓存 + 字段名重复且层级错误（masks 在 data 对象内）
+    @Unique
+    private static volatile java.lang.reflect.Field hassium$lightDataField;
+
+    @Unique
+    private static volatile java.lang.reflect.Field hassium$skyYMaskField;
+
+    @Unique
+    private static volatile java.lang.reflect.Field hassium$blockYMaskField;
+
+    /**
+     * 解析 packet.lightData 对象（masks 容器）；解析失败返回 null。
+     */
+    @Unique
+    private static Object hassium$getLightData(ClientboundLightUpdatePacket lightPacket) throws IllegalAccessException {
+        java.lang.reflect.Field field = hassium$lightDataField;
+        if (field == null) {
+            field = hassium$findAccessibleField(lightPacket.getClass(), "lightData", "field_34872");
+            hassium$lightDataField = field;
+        }
+        return field != null ? field.get(lightPacket) : null;
+    }
+
+    /**
+     * 解析 skyYMask / blockYMask（位于 lightData 对象上）；失败返回空 BitSet。
+     */
+    @Unique
+    private static java.util.BitSet hassium$getMask(ClientboundLightUpdatePacket lightPacket, boolean sky)
+            throws IllegalAccessException {
+        Object data = hassium$getLightData(lightPacket);
+        if (data == null) {
+            return new java.util.BitSet();
+        }
+        java.lang.reflect.Field field = sky ? hassium$skyYMaskField : hassium$blockYMaskField;
+        if (field == null) {
+            field = hassium$findAccessibleField(data.getClass(), sky ? "skyYMask" : "blockYMask",
+                    sky ? "field_34873" : "field_34874");
+            if (sky) {
+                hassium$skyYMaskField = field;
+            } else {
+                hassium$blockYMaskField = field;
+            }
+        }
+        if (field == null) {
+            return new java.util.BitSet();
+        }
+        Object value = field.get(data);
+        return value instanceof java.util.BitSet bs ? bs : new java.util.BitSet();
+    }
+
+    /**
+     * 按候选字段名查找并放行访问（mojmap / intermediary）；全部未命中返回 null。
+     */
+    @Unique
+    private static java.lang.reflect.Field hassium$findAccessibleField(Class<?> clazz, String... names) {
+        for (String name : names) {
             try {
                 java.lang.reflect.Field field = clazz.getDeclaredField(name);
                 field.setAccessible(true);
-                Object value = field.get(obj);
-                if (value instanceof java.util.BitSet bs) {
-                    return bs;
-                }
-            } catch (NoSuchFieldException | IllegalAccessException ignored) {
+                return field;
+            } catch (NoSuchFieldException ignored) {
             }
         }
-        return new java.util.BitSet();
+        return null;
     }
 }

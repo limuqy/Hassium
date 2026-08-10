@@ -13,10 +13,10 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
-
 /**
  * 扩展客户端世界状态，支持区块缓存保存
  */
@@ -52,11 +52,13 @@ public class MixinClientLevel implements IClientLevelExtension {
     }
 
     /**
-     * 获取所有仅渲染区块
+     * 获取所有仅渲染区块（防御性拷贝，外部不可修改内部簿记）
      */
     @Override
     public Set<Long> hassium$getRenderOnlyChunks() {
-        return hassium$renderOnlyChunks;
+        // review-fix: T7-63: 原返回内部 HashSet 引用，外部可修改破坏 renderOnly 簿记；
+        // 全库无调用方需可变视图（grep 核实仅接口声明 + 本实现），返回不可变副本
+        return Collections.unmodifiableSet(new HashSet<>(hassium$renderOnlyChunks));
     }
 
     /**

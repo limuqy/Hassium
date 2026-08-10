@@ -35,8 +35,9 @@ public class MixinMinecraftServer {
     @Shadow
     private int tickCount;
 
+    // review-fix: T7-59: handler 统一加 hassium$ 前缀（Mixin 惯例，避免与目标类未来同名成员 merge 冲突）
     @Inject(method = "tickServer", at = @At("TAIL"))
-    private void onServerTick(BooleanSupplier hasTimeLeft, CallbackInfo ci) {
+    private void hassium$onServerTick(BooleanSupplier hasTimeLeft, CallbackInfo ci) {
         // 刷新服务端主线程回调队列（每 tick 调用）
         MainThreadDispatcher.flushServer();
         // 按真实 tick 限流序列化区块 + 冲刷 ChunkHash 批次。
@@ -60,8 +61,9 @@ public class MixinMinecraftServer {
         ResumeTicketValidator.persistIfDue();
     }
 
+    // review-fix: T7-59: handler 统一加 hassium$ 前缀
     @Inject(method = "runServer", at = @At(value = "INVOKE", target = "Lnet/minecraft/server/MinecraftServer;initServer()Z"))
-    private void onServerInit(CallbackInfo ci) {
+    private void hassium$onServerInit(CallbackInfo ci) {
         // 服务器初始化时设置服务器实例（用于 Fabric 网络管理器）
         MinecraftServer server = (MinecraftServer) (Object) this;
         // 记录服务器类型：存储格式等仅专用服务器功能需要（单人/局域网 integrated server 不启用）
@@ -100,8 +102,9 @@ public class MixinMinecraftServer {
         }
     }
 
+    // review-fix: T7-59: handler 统一加 hassium$ 前缀
     @Inject(method = "stopServer", at = @At("HEAD"))
-    private void onServerStop(CallbackInfo ci) {
+    private void hassium$onServerStop(CallbackInfo ci) {
         MinecraftServer server = (MinecraftServer) (Object) this;
         // 服务器关闭时清理推送管理器
         ServerChunkPushManager.getInstance().shutdown();

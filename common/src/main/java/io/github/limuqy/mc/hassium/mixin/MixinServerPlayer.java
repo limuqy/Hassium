@@ -31,7 +31,13 @@ public abstract class MixinServerPlayer extends Player {
 #endif
     }
 
-    @Inject(method = "<init>", at = @At("TAIL"))
+    // review-fix: T7-65: 带描述符精确注入主构造器——1.20.2+ 为四参 (…ClientInformation)，
+    // 1.20.1 为三参；避免未来版本新增构造器时 <init> 无描述符命中全部重载重复执行
+#if MC_VER < MC_1_20_2
+    @Inject(method = "<init>(Lnet/minecraft/server/MinecraftServer;Lnet/minecraft/server/level/ServerLevel;Lcom/mojang/authlib/GameProfile;)V", at = @At("TAIL"))
+#else
+    @Inject(method = "<init>(Lnet/minecraft/server/MinecraftServer;Lnet/minecraft/server/level/ServerLevel;Lcom/mojang/authlib/GameProfile;Lnet/minecraft/server/level/ClientInformation;)V", at = @At("TAIL"))
+#endif
     private void hassium$onPlayerInit(CallbackInfo ci) {
         ServerPlayer self = (ServerPlayer) (Object) this;
         PlayerCompressionTracker.setConnected(self);
