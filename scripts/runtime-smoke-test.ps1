@@ -783,8 +783,12 @@ $gatewayGate = $false
 if ($gatewayByRound.ContainsKey("ROUND1") -and $gatewayByRound.ContainsKey("ROUND2")) {
     $g1 = $gatewayByRound["ROUND1"]
     $g2 = $gatewayByRound["ROUND2"]
-    $gatewayGate = ($g1.gatewayState -eq "ACTIVE" -and $g1.gatewayS2c -gt 0) -and
-                   ($g2.gatewayState -eq "ACTIVE" -and $g2.gatewayS2c -gt 0)
+    # T9v3 gate 修正（Main 裁决）：标准 vanilla 登录路径 S2C 主通道 = vanilla TCP 壳连接，
+    # 帧 S2C 通道仅登录桥/续流物化路径启用（REQ A1「S2C 镜像未做」）→ 标准会话 s2c 恒为 0，
+    # 原 gate（两轮 s2c>0）不可达。放宽为两轮 state=ACTIVE 且 c2s>0（网关 C2S 路径真实工作）；
+    # s2c>0 作为续流断言归 T10（迁移演练后帧 S2C 计数增长）。
+    $gatewayGate = ($g1.gatewayState -eq "ACTIVE" -and $g1.gatewayC2s -gt 0) -and
+                   ($g2.gatewayState -eq "ACTIVE" -and $g2.gatewayC2s -gt 0)
 }
 $gatewayRound1 = if ($gatewayByRound.ContainsKey("ROUND1")) {
     $gatewayByRound["ROUND1"]
@@ -836,7 +840,7 @@ $clientRecoveryFreeze = if ($udpFailoverIsPhase) {
 if ($udpFailoverIsPhase) {
     $result = if ($udpFailoverCorePass -and $clientExit -eq 0) { "PASS" } else { "FAIL" }
 } else {
-    # T7 V0：classic 阶段叠加网关断言门禁（两轮 ACTIVE 且 s2c>0），无网络核心路径时 FAIL
+    # T7 V0：classic 阶段叠加网关断言门禁（两轮 ACTIVE 且 c2s>0），无网络核心路径时 FAIL
     $result = if ($hasPass -and $clientExit -eq 0 -and $gatewayGate) { "PASS" } else { "FAIL" }
 }
 
@@ -874,7 +878,7 @@ $resultObj = @{
     # T7 V0 网关断言字段（稳定命名供 T9 消费）：
     #   GatewayRound1.gatewayState/gatewayS2c/gatewayC2s/gatewayResume
     #   GatewayRound2.gatewayState/gatewayS2c/gatewayC2s/gatewayResume
-    #   GatewayGatePass（ROUND1/2 均 ACTIVE 且 s2c>0；classic 阶段并入 Result 判定）
+    #   GatewayGatePass（ROUND1/2 均 ACTIVE 且 c2s>0；classic 阶段并入 Result 判定。T9v3 由 s2c>0 放宽）
     GatewayRound1 = $gatewayRound1
     GatewayRound2 = $gatewayRound2
     GatewayGatePass = $gatewayGate
@@ -889,7 +893,7 @@ Write-Host "[$SessionId] === RESULT: $result ==="
 Write-Host "[$SessionId] Round1: stats=$round1StatsFound pass=$round1Pass"
 Write-Host "[$SessionId] Round2: stats=$round2StatsFound pass=$round2Pass"
 Write-Host "[$SessionId] ServerSwitched: $serverSwitched Exit: $clientExit"
-Write-Host "[$SessionId] Gateway gate: $gatewayGate (R1=$($gatewayRound1.gatewayState)/s2c=$($gatewayRound1.gatewayS2c) R2=$($gatewayRound2.gatewayState)/s2c=$($gatewayRound2.gatewayS2c))"
+Write-Host "[$SessionId] Gateway gate: $gatewayGate (R1=$($gatewayRound1.gatewayState)/c2s=$($gatewayRound1.gatewayC2s) R2=$($gatewayRound2.gatewayState)/c2s=$($gatewayRound2.gatewayC2s))"
 if ($udpFailoverIsPhase) {
     Write-Host "[$SessionId] UdpFailover markers: UDP_BIND_OK=$($udpFailoverFound['UDP_BIND_OK']) UDP_WRR_OK=$($udpFailoverFound['UDP_WRR_OK']) FAILOVER_PERMIT_OK=$($udpFailoverFound['FAILOVER_PERMIT_OK']) FAILOVER_RECONNECT_OK=$($udpFailoverFound['FAILOVER_RECONNECT_OK']) FAILOVER_TERMINAL_OK=$($udpFailoverFound['FAILOVER_TERMINAL_OK']) CACHE_RESUME_HIT=$($udpFailoverFound['CACHE_RESUME_HIT'])"
 }

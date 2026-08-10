@@ -42,6 +42,8 @@ public final class ClientSmokeTest {
         DISCONNECTING, // 主动断开
         WAIT_JOIN_2,   // 等待第二轮进服
         ROUND_2_STATS, // 第二轮统计输出
+        MIGRATE_TRIGGER, // T10：触发 /hassium migrate 命令（迁移演练单轮模式）
+        WAIT_MIGRATED,   // T10：等待迁移完成（state=ACTIVE && resumeAccepted）
         DONE
     }
 
@@ -66,6 +68,22 @@ public final class ClientSmokeTest {
     private static volatile boolean runClassic = true;
     private static volatile boolean runDataplane = false;
 
+    /** T10 迁移演练：目标主控 host:port（非空 = migrate 单轮模式，ROUND1 统计后触发迁移命令）。 */
+    private static volatile String migrateTo = null;
+    /** T10 N1：true = 走 NetworkCore.migrateToImmediate（API 直调；命令面无 immediate 子命令，
+     *  故障路径语义——有真实断线窗口，N1 位置回退仅此路径可观察）。false = 真实命令
+     *  /hassium migrate（预热感知，连接无缝，无断线窗口）。 */
+    private static volatile boolean migrateImmediate = false;
+    /** T10 N1：迁移触发后继续移动秒数（0=不动）。immediate 路径断线窗口内客户端预测移动
+     *  → 迁移完成后回退到快照/权威位置（MIGRATE_POS_BEFORE vs AFTER 对比）。 */
+    private static volatile int migrateMoveSeconds = 0;
+    /** 迁移触发时刻（迁移窗口起始，供超时判定）。 */
+    private static volatile long migrateTriggeredAtMs = -1L;
+    /** 迁移等待超时（默认 joinTimeoutMs）。 */
+    private static volatile long migrateWaitTimeoutMs = 120_000L;
+    /** 迁移完成时刻（resumeAccepted=true 检测到；再等 delayMs 让帧 S2C 流入后统计）。 */
+    private static volatile long migratedAtMs = -1L;
+
     private ClientSmokeTest() {
     }
 
@@ -82,6 +100,13 @@ public final class ClientSmokeTest {
         joinTimeoutMs = parseLong(System.getProperty("hassium.smokeTest.joinTimeoutMs"), 120_000L);
         moveSeconds = (int) parseLong(System.getProperty("hassium.smokeTest.moveSeconds"), 0L);
         host = System.getProperty("hassium.smokeTest.host", "127.0.0.1:25565");
+        migrateTo = System.getProperty("hassium.smokeTest.migrateTo");
+        if (migrateTo != null && migrateTo.isBlank()) {
+            migrateTo = null;
+        }
+        migrateWaitTimeoutMs = parseLong(System.getProperty("hassium.smokeTest.migrateWaitTimeoutMs"), joinTimeoutMs);
+        migrateImmediate = Boolean.parseBoolean(System.getProperty("hassium.smokeTest.migrateImmediate", "false"));
+        migrateMoveSeconds = (int) parseLong(System.getProperty("hassium.smokeTest.migrateMoveSeconds"), 0L);
         // 阶段选择解析（与服务端 ServerSmokeTest.initIfEnabled 同规则）
         String phases = System.getProperty("hassium.smokePhases", "classic");
         java.util.Set<String> phaseSet = new java.util.HashSet<>();
@@ -160,6 +185,12 @@ public final class ClientSmokeTest {
                 break;
             case DISCONNECTING:
                 handleDisconnect(mc, now);
+                break;
+            case MIGRATE_TRIGGER:
+                handleMigrateTrigger(mc, now);
+                break;
+            case WAIT_MIGRATED:
+                handleWaitMigrated(mc, now);
                 break;
             case DONE:
                 break;
@@ -255,7 +286,9 @@ public final class ClientSmokeTest {
             LOGGER.info("{} {} end", MARKER_STATS, roundLabel);
 
             // T7 V0 网关断言 dump：ROUND1/ROUND2 各一条稳定 marker。
-            // 仅供 harness 解析判定（PASS 需两轮 state=ACTIVE 且 s2c>0），不改任何生产代码。
+            // 仅供 harness 解析判定（PASS 需两轮 state=ACTIVE 且 c2s>0——T9v3 gate 修正：
+            // 标准登录 S2C 主通道=vanilla TCP 壳，帧 S2C 仅登录桥/续流路径启用，s2c 恒 0），
+            // 不改任何生产代码。
             dumpGatewayAssertion(roundLabel);
 
             // dataplane 阶段：报 Data 帧计数 delta（Data 帧经 DataPlaneClientBundle.handleBulkChunk 累加；
@@ -330,6 +363,12 @@ public final class ClientSmokeTest {
                 return;
             }
             // 主动断开连接
+            if (migrateTo != null) {
+                // T10 迁移演练：ROUND1 统计完不断开，进入迁移触发阶段
+                LOGGER.info("HassiumSmokeTest: migrate mode enabled, target={} — proceeding to MIGRATE_TRIGGER", migrateTo);
+                state = State.MIGRATE_TRIGGER;
+                return;
+            }
             state = State.DISCONNECTING;
             disconnectAtMs = now;
             triggerDisconnect(mc);
@@ -356,7 +395,8 @@ public final class ClientSmokeTest {
      * T7 V0 网关断言：dump NetworkCore 状态与计数（只读现有公开 API：state()/s2cDispatchedCount()/
      * c2sRoutedCount()/lastResumeAccepted()，不改生产代码）。
      * marker 格式：{@code HassiumSmokeTest:GATEWAY_CLIENT ROUND<n> state=<NetworkCoreState> s2c=<n> c2s=<n> resume=<bool>}
-     * harness（runtime-smoke-test.ps1）PASS 判定 = ROUND1/2 均 state=ACTIVE 且 s2c>0；
+     * harness（runtime-smoke-test.ps1）PASS 判定 = ROUND1/2 均 state=ACTIVE 且 c2s>0
+     * （T9v3 由 s2c>0 放宽：标准登录帧 S2C 通道不启用，见脚本注释）；
      * 读取异常时输出 state=ERROR s2c=0 c2s=0 resume=false，使门禁确定性 FAIL。
      */
     private static void dumpGatewayAssertion(String roundLabel) {
@@ -432,6 +472,105 @@ public final class ClientSmokeTest {
             LOGGER.warn("HassiumSmokeTest: shadow save wait timed out (heat.idx mtime unchanged {})", before);
         } catch (Throwable t) {
             LOGGER.warn("HassiumSmokeTest: shadow save wait failed, continuing", t);
+        }
+    }
+
+    /**
+     * T10 迁移演练：触发 /hassium migrate 命令（真实命令路径——ClientPacketListener.sendCommand
+     * 经平台客户端命令 mixin/补丁拦截 → 客户端命令树本地执行，不发服务器）。
+     */
+    private static void handleMigrateTrigger(Minecraft mc, long now) {
+        ClientPacketListener conn = mc.getConnection();
+        if (conn == null || mc.player == null) {
+            return;
+        }
+        // N1 观察点：迁移触发前客户端位置（断线窗口起点）
+        LOGGER.info("HassiumSmokeTest:MIGRATE_POS_BEFORE pos=({}, {}, {}) dim={}",
+                mc.player.getX(), mc.player.getY(), mc.player.getZ(),
+                mc.player.level().dimension()
+#if MC_VER < MC_1_21_11
+                        .location()
+#else
+                        .identifier()
+#endif
+                        .toString());
+        try {
+            if (migrateImmediate) {
+                // N1 路径：immediate 迁移（API 直调——命令面无 immediate 子命令，故障路径内部 API）。
+                // 有真实断线窗口（closeOldOutbound → 续流连接重建），窗口内客户端预测移动可观察回退。
+                LOGGER.info("HassiumSmokeTest: triggering immediate migrate to {} (API migrateToImmediate)", migrateTo);
+                String[] hp = migrateTo.split(":");
+                io.github.limuqy.mc.hassium.network.core.NetworkCore.getInstance().migrateToImmediate(
+                        new io.github.limuqy.mc.hassium.network.core.migration.MigrationEndpoint(hp[0],
+                                Integer.parseInt(hp[1])));
+            } else {
+                LOGGER.info("HassiumSmokeTest: triggering client command '/hassium migrate {}'", migrateTo);
+                conn.sendCommand("hassium migrate " + migrateTo);
+            }
+        } catch (Throwable t) {
+            LOGGER.error("HassiumSmokeTest:MIGRATE_FAIL sendCommand failed", t);
+            finishWithFail("sendCommand(hassium migrate) failed: " + t, 2);
+            return;
+        }
+        // N1：断线窗口内注入预测移动（immediate 路径才有窗口；爬升 2s 后平飞 migrateMoveSeconds）
+        if (migrateMoveSeconds > 0 && mc.player != null) {
+            mc.player.getAbilities().flying = true;
+            mc.options.keyJump.setDown(true);
+            movePhase = 1;
+            moveUntilMs = now + 2000L;
+            LOGGER.info("HassiumSmokeTest:MIGRATE_MOVE_START climb 2s + cruise {}s pos=({}, {})",
+                    migrateMoveSeconds, mc.player.blockPosition().getX(), mc.player.blockPosition().getZ());
+        }
+        migrateTriggeredAtMs = now;
+        state = State.WAIT_MIGRATED;
+    }
+
+    /** T10 迁移演练：等待 NetworkCore 回到 ACTIVE 且 resumeAccepted=true（迁移完成）。 */
+    private static void handleWaitMigrated(Minecraft mc, long now) {
+        if (migrateTriggeredAtMs < 0L) {
+            migrateTriggeredAtMs = now;
+        }
+        boolean done = false;
+        boolean resume = false;
+        try {
+            io.github.limuqy.mc.hassium.network.core.NetworkCore core =
+                    io.github.limuqy.mc.hassium.network.core.NetworkCore.getInstance();
+            done = core.state() == io.github.limuqy.mc.hassium.network.core.NetworkCoreState.ACTIVE
+                    && core.lastResumeAccepted();
+            resume = core.lastResumeAccepted();
+        } catch (Throwable t) {
+            LOGGER.warn("HassiumSmokeTest: NetworkCore probe failed", t);
+        }
+        if (done) {
+            if (migratedAtMs < 0L) {
+                migratedAtMs = now;
+                LOGGER.info("HassiumSmokeTest: migration completed (resumeAccepted=true) — waiting {} ms for frame S2C inflow",
+                        Math.max(3000L, delayMs));
+            }
+            if (now - migratedAtMs >= Math.max(3000L, delayMs)) {
+                // N1 观察点：迁移完成后位置（回退后应回到快照/权威位置）
+                if (mc.player != null) {
+                    LOGGER.info("HassiumSmokeTest:MIGRATE_POS_AFTER pos=({}, {}, {}) dim={}",
+                            mc.player.getX(), mc.player.getY(), mc.player.getZ(),
+                            mc.player.level().dimension()
+#if MC_VER < MC_1_21_11
+                                    .location()
+#else
+                                    .identifier()
+#endif
+                                    .toString());
+                }
+                state = State.ROUND_2_STATS;
+                // 复用 ROUND2 统计路径（roundLabel=ROUND2；migrate 模式无断开重连）
+                joinAtMs = -1L;
+            }
+            return;
+        }
+        if (now - migrateTriggeredAtMs > migrateWaitTimeoutMs) {
+            LOGGER.error("HassiumSmokeTest:MIGRATE_FAIL timeout ({} ms) state={} resumeAccepted={}",
+                    migrateWaitTimeoutMs,
+                    io.github.limuqy.mc.hassium.network.core.NetworkCore.getInstance().state(), resume);
+            finishWithFail("migrate wait timeout: resumeAccepted=" + resume, 2);
         }
     }
 

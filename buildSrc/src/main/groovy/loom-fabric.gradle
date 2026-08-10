@@ -29,6 +29,8 @@ loom {
                 def moveSeconds = project.findProperty('hassiumSmokeMoveSeconds') ?: '0'
                 def phases = project.findProperty('hassiumSmokePhases') ?: 'classic'
                 def manualLogout = project.findProperty('hassiumSmokeManualLogout')
+                def migrateTo = project.findProperty('hassiumSmokeMigrateTo')
+                def username = project.findProperty('hassiumSmokeUsername')
                 // loom 1.17+: RunConfiguration 用 ListProperty<String>，旧版裸 ArrayList getter 已 @Deprecated 且
                 // 内部 getJvmArguments().get() 在配置阶段未 finalize 时抛 UnsupportedOperationException。
                 // 改用 ListProperty 原生 addAll/add，避开 deprecated 路径。
@@ -41,6 +43,22 @@ loom {
                         "-Dhassium.smokeTest.host=${host}",
                         "-Dhassium.smokePhases=${phases}"
                 ])
+                if (migrateTo != null && !migrateTo.toString().isBlank()) {
+                    jvmArguments.add("-Dhassium.smokeTest.migrateTo=${migrateTo}")
+                }
+                def migrateImmediate = project.findProperty('hassiumSmokeMigrateImmediate')
+                if (migrateImmediate != null) {
+                    jvmArguments.add("-Dhassium.smokeTest.migrateImmediate=${migrateImmediate}")
+                }
+                def migrateMoveSeconds = project.findProperty('hassiumSmokeMigrateMoveSeconds')
+                if (migrateMoveSeconds != null) {
+                    jvmArguments.add("-Dhassium.smokeTest.migrateMoveSeconds=${migrateMoveSeconds}")
+                }
+                // T10 迁移演练：固定客户端用户名 → 预热/演练同 UUID（A6 playerdata 命中）。
+                // loom dev 环境默认随机用户名（Player+随机），跨会话 UUID 不一致。
+                if (username != null && !username.toString().isBlank()) {
+                    programArguments.addAll(['--username', username.toString()])
+                }
                 if (manualLogout != null && manualLogout.toString() == 'true') {
                     jvmArguments.add("-Dhassium.smokeTest.manualLogout=true")
                 }
@@ -49,7 +67,9 @@ loom {
                 ])
             }
         } else if (name == 'server') {
-            runDir = 'run/server'
+            // T10 双主控演练：-PhassiumServerRunDir=run/serverB 让 B 服务端用独立 run 目录
+            // （默认 'run/server' 不变，向后兼容既有 smoke 脚本）。
+            runDir = project.findProperty('hassiumServerRunDir') ?: 'run/server'
             if (project.hasProperty('hassiumSmokeTest') && project.property('hassiumSmokeTest').toString() == 'true') {
                 // 无 GUI，避免头少环境挂起
                 programArguments.add('nogui')
