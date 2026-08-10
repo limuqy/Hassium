@@ -16,7 +16,7 @@ import static org.junit.jupiter.api.Assertions.*;
  * 留联机验收。这里覆盖不依赖 MC ROI 的纯逻辑：
  * <ul>
  *   <li>{@link PristineRegistry#isPristineCandidate} 判定真值表（status/inhabitedTime/modified）</li>
- *   <li>{@link PristineRegistry#onBlockModified} 修改即移除登记（幂等）</li>
+ *   <li>{@link PristineRegistry#onBlockModified} 修改即置墓碑（永不重登记，幂等）</li>
  *   <li>{@link PristineRegistry#clear} 清空（重启语义：全部视为非 pristine）</li>
  *   <li>{@link PristineRegistry#isPristine}（含非主世界不命中）/ {@code isEmpty} 状态查询</li>
  * </ul>
@@ -72,6 +72,25 @@ class PristineRegistryTest {
         PristineRegistry.clear();
     }
 
+
+    @Test
+    void tombstoneShouldPreventReregistration() {
+        // review-fix: T3-49：墓碑语义——修改后同会话内再次推送（resync/客户端重请求
+        // 触发重推）不得重新登记；否则再发 SeedRef → 客户端重生成原始地形覆盖玩家修改
+        ChunkPos pos = new ChunkPos(5, 6);
+        PristineRegistry.clear();
+        PristineRegistry.markPristineForTest(PristineRegistry.OVERWORLD_KEY, pos);
+        assertTrue(PristineRegistry.isPristine(PristineRegistry.OVERWORLD_KEY, pos));
+
+        PristineRegistry.onBlockModified(PristineRegistry.OVERWORLD_KEY, pos);
+        assertFalse(PristineRegistry.isPristine(PristineRegistry.OVERWORLD_KEY, pos));
+
+        // 墓碑存在：重推触发再次登记（markPristineForTest 与实现同源，putIfAbsent）→ 不得复活
+        PristineRegistry.markPristineForTest(PristineRegistry.OVERWORLD_KEY, pos);
+        assertFalse(PristineRegistry.isPristine(PristineRegistry.OVERWORLD_KEY, pos));
+
+        PristineRegistry.clear();
+    }
     @Test
     void clearShouldResetAll() {
         PristineRegistry.markPristineForTest(PristineRegistry.OVERWORLD_KEY, new ChunkPos(-3, 7));

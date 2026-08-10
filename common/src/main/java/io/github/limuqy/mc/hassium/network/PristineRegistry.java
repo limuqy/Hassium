@@ -25,8 +25,8 @@ import java.util.concurrent.ConcurrentHashMap;
  *   <li>仅主世界维度登记（SeedGen 只支持主世界；非主世界恒不命中，静默走全量）。</li>
  *   <li>登记发生在区块生成完成 → 首次推送之间（{@link #markIfPristine} 由推送管线调用）；
  *       worldgen 管线内的放置发生在登记之前，不算「修改」。</li>
- *   <li>登记后的一切 {@code ChunkAccess.setBlockState}（MixinChunkAccess 注入）均视为修改，
- *       从登记移除。玩家破坏/放置、插件 setBlock、随机 tick 方块变化全部经此路径。</li>
+ *   <li>区块被修改：置为已修改墓碑（永不重登记）。玩家破坏/放置、插件 setBlock、
+ *       随机 tick 方块变化全部经此路径。</li>
  *   <li>不持久化：存档重启后全部区块视为非 pristine（走缓存/全量）。</li>
  * </ul>
  * <p>
@@ -44,7 +44,7 @@ public final class PristineRegistry {
     /** 复合键：(维度, chunkPos)。维度隔离防跨维同坐标误命中；非主世界不登记。 */
     private record Key(ResourceKey<Level> dimension, long chunkPos) {}
 
-    /** key(dimension, chunkPos) -> pristine 标志 */
+    /** key(dimension, chunkPos) -> 状态：TRUE=pristine；FALSE=已修改墓碑（永不重登记）。 */
     private static final ConcurrentHashMap<Key, Boolean> PRISTINE = new ConcurrentHashMap<>();
 
     private PristineRegistry() {
@@ -73,6 +73,9 @@ public final class PristineRegistry {
             return;
         }
         long chunkKey = ChunkPos.asLong(pos.x, pos.z);
+        Key key = new Key(dimension, chunkKey);
+        // review-fix: T3-49：墓碑存在（曾修改）→ 候选判定拒绝，永不重登记；
+        // putIfAbsent 保证并发下不翻转墓碑（onBlockModified 的无条件 put(FALSE) 优先）
         if (isPristineCandidate(chunk
 #if MC_VER < MC_1_21_1
                 .getStatus()
@@ -80,8 +83,8 @@ public final class PristineRegistry {
                 .getPersistedStatus()
 #endif
                 .isOrAfter(ChunkStatus.FULL),
-                chunk.getInhabitedTime(), PRISTINE.containsKey(new Key(dimension, chunkKey)))) {
-            PRISTINE.put(new Key(dimension, chunkKey), Boolean.TRUE);
+                chunk.getInhabitedTime(), Boolean.FALSE.equals(PRISTINE.get(key)))) {
+            PRISTINE.putIfAbsent(key, Boolean.TRUE);
         }
     }
 
@@ -92,7 +95,8 @@ public final class PristineRegistry {
         if (!dimension.equals(OVERWORLD_KEY)) {
             return false;
         }
-        return PRISTINE.containsKey(new Key(dimension, ChunkPos.asLong(pos.x, pos.z)));
+        // review-fix: T3-49：仅 TRUE=pristine；墓碑（FALSE）与缺失均不命中
+        return Boolean.TRUE.equals(PRISTINE.get(new Key(dimension, ChunkPos.asLong(pos.x, pos.z))));
     }
 
     /**
@@ -103,17 +107,20 @@ public final class PristineRegistry {
     }
 
     /**
-     * 区块被修改：移除登记。幂等。
+     * 区块被修改：置墓碑（FALSE）而非移除——同会话内该区块再次推送（resync/客户端
+     * 重请求触发重推）时 markIfPristine 不得重新登记。幂等；无条件覆盖保证与
+     * markIfPristine 的 putIfAbsent(TRUE) 竞态下最终态恒为已修改。
      */
     public static void onBlockModified(ResourceKey<Level> dimension, ChunkPos pos) {
-        PRISTINE.remove(new Key(dimension, ChunkPos.asLong(pos.x, pos.z)));
+        PRISTINE.put(new Key(dimension, ChunkPos.asLong(pos.x, pos.z)), Boolean.FALSE);
     }
 
     /**
-     * 测试钩子（package-private）：直接置位登记，模拟 markIfPristine 的登记结果。
+     * 测试钩子（package-private）：直接置位登记，模拟 markIfPristine 的登记结果
+     * （putIfAbsent：墓碑存在时不复活，与实现同源）。
      */
     static void markPristineForTest(ResourceKey<Level> dimension, ChunkPos pos) {
-        PRISTINE.put(new Key(dimension, ChunkPos.asLong(pos.x, pos.z)), Boolean.TRUE);
+        PRISTINE.putIfAbsent(new Key(dimension, ChunkPos.asLong(pos.x, pos.z)), Boolean.TRUE);
     }
 
     /**

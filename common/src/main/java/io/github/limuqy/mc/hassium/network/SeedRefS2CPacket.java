@@ -2,6 +2,7 @@ package io.github.limuqy.mc.hassium.network;
 
 import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.compat.ResourceLocationCompat;
+import io.netty.handler.codec.DecoderException;
 import net.minecraft.network.FriendlyByteBuf;
 #if MC_VER < MC_1_21_11
 import net.minecraft.resources.ResourceLocation;
@@ -27,6 +28,8 @@ public record SeedRefS2CPacket(
         long contentHash,
         long[] sectionHashes
 ) {
+    /** review-fix: T3-53：恶意/损坏包 count 驱动 new long[count] 可 OOM 客户端；每 chunk section 数上限（1.18+ ≤ 24） */
+    private static final int MAX_SECTION_HASHES = 512;
     public static final
 #if MC_VER < MC_1_21_11
     ResourceLocation
@@ -50,6 +53,9 @@ public record SeedRefS2CPacket(
         int chunkZ = buf.readVarInt();
         long contentHash = buf.readLong();
         int count = buf.readVarInt();
+        if (count < 0 || count > MAX_SECTION_HASHES) {
+            throw new DecoderException("SeedRefS2CPacket section hash count too large: " + count);
+        }
         long[] sectionHashes = new long[count];
         for (int i = 0; i < count; i++) {
             sectionHashes[i] = buf.readLong();

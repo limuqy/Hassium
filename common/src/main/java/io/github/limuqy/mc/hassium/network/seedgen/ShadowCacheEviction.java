@@ -239,6 +239,12 @@ public final class ShadowCacheEviction {
             if (score > threshold) {
                 continue; // 热度过高：不清理（更冷的在后面，继续看）
             }
+            // review-fix: T3-50：扫描与删除间的 TOCTOU——复核注入表；扫描后被
+            // consumeLoop 注入的区块跳过（deleteChunk 会无条件摘注入 + 清磁盘，
+            // 导致该柱回传跳过、磁盘缓存丢失）
+            if (server.injectedChunk(c.pos().x, c.pos().z) != null) {
+                continue;
+            }
             server.deleteChunk(c.pos());
             removed++;
             freed += c.sizeBytes();

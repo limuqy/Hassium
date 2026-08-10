@@ -6,6 +6,7 @@ import io.github.limuqy.mc.hassium.compression.CompressionService;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import net.minecraft.core.BlockPos;
 import net.minecraft.nbt.CompoundTag;
+import io.netty.handler.codec.DecoderException;
 import net.minecraft.network.FriendlyByteBuf;
 #if MC_VER < MC_1_21_11
 import net.minecraft.resources.ResourceLocation;
@@ -39,6 +40,23 @@ public record SectionDeltaS2CPacket(
     public SectionDeltaS2CPacket(String dimension, List<DeltaEntry> entries) {
         this(dimension, entries, List.of());
     }
+    /** review-fix: T3-53：单 section 数据上限，对齐原版 ClientboundLevelChunkPacketData.TWO_MEGABYTES */
+    private static final int TWO_MEGABYTES = 2 * 1024 * 1024;
+    /** review-fix: T3-53：单包 entries/skipped 上限（视距级请求批，留余量） */
+    private static final int MAX_ENTRIES = 4096;
+    /** review-fix: T3-53：单 chunk section 数上限（1.18+ ≤ 24） */
+    private static final int MAX_SECTIONS = 64;
+    /** review-fix: T3-53：单 chunk 方块实体数上限（16×16×24 方块位） */
+    private static final int MAX_BLOCK_ENTITIES = 4096;
+
+    /** review-fix: T3-53：解码守卫——恶意/损坏包超限值驱动 new 数组/集合预分配 → OOM 客户端 */
+    private static void checkDecodeLimit(int value, int max, String what) {
+        if (value < 0 || value > max) {
+            throw new DecoderException("SectionDeltaS2CPacket " + what + " too large: " + value
+                    + " (max " + max + ")");
+        }
+    }
+
 
     public static final
     #if MC_VER < MC_1_21_11
@@ -97,6 +115,7 @@ CHANNEL = ResourceLocationCompat.create(Constants.MOD_ID, "section_delta_s2c");
      */
     private static SectionDeltaS2CPacket decodePayload(String dimension, FriendlyByteBuf buf) {
         int size = buf.readVarInt();
+        checkDecodeLimit(size, MAX_ENTRIES, "entries");
         List<DeltaEntry> entries = new ArrayList<>(size);
         for (int i = 0; i < size; i++) {
             int chunkX = buf.readVarInt();
@@ -104,10 +123,12 @@ CHANNEL = ResourceLocationCompat.create(Constants.MOD_ID, "section_delta_s2c");
 
             // 变更的 sections
             int sectionCount = buf.readVarInt();
+            checkDecodeLimit(sectionCount, MAX_SECTIONS, "sectionCount");
             List<SectionData> sections = new ArrayList<>(sectionCount);
             for (int j = 0; j < sectionCount; j++) {
                 int sectionIndex = buf.readVarInt();
                 int dataLen = buf.readVarInt();
+                checkDecodeLimit(dataLen, TWO_MEGABYTES, "section dataLen");
                 byte[] blockData = new byte[dataLen];
                 buf.readBytes(blockData);
                 sections.add(new SectionData(sectionIndex, blockData));
@@ -119,6 +140,7 @@ CHANNEL = ResourceLocationCompat.create(Constants.MOD_ID, "section_delta_s2c");
             for (int j = 0; j < hmCount; j++) {
                 int typeId = buf.readVarInt();
                 int dataLen = buf.readVarInt();
+                checkDecodeLimit(dataLen, TWO_MEGABYTES / Long.BYTES, "heightmap dataLen");
                 long[] data = new long[dataLen];
                 for (int k = 0; k < dataLen; k++) {
                     data[k] = buf.readLong();
@@ -128,6 +150,7 @@ CHANNEL = ResourceLocationCompat.create(Constants.MOD_ID, "section_delta_s2c");
 
             // blockEntity 数据
             int beCount = buf.readVarInt();
+            checkDecodeLimit(beCount, MAX_BLOCK_ENTITIES, "blockEntity count");
             List<BlockEntityData> blockEntities = new ArrayList<>(beCount);
             for (int j = 0; j < beCount; j++) {
                 BlockPos pos = buf.readBlockPos();
@@ -147,6 +170,7 @@ CHANNEL = ResourceLocationCompat.create(Constants.MOD_ID, "section_delta_s2c");
         List<SkippedChunk> skipped = new ArrayList<>();
         if (buf.isReadable()) {
             int skippedCount = buf.readVarInt();
+            checkDecodeLimit(skippedCount, MAX_ENTRIES, "skipped count");
             skipped = new ArrayList<>(skippedCount);
             for (int i = 0; i < skippedCount; i++) {
                 skipped.add(new SkippedChunk(buf.readVarInt(), buf.readVarInt()));
@@ -203,6 +227,7 @@ CHANNEL = ResourceLocationCompat.create(Constants.MOD_ID, "section_delta_s2c");
             String algorithm = buf.readUtf();
             int originalSize = buf.readVarInt();
             int compressedLen = buf.readVarInt();
+            checkDecodeLimit(compressedLen, TWO_MEGABYTES, "compressedLen");
             byte[] compressed = new byte[compressedLen];
             buf.readBytes(compressed);
             byte[] raw;
@@ -215,6 +240,7 @@ CHANNEL = ResourceLocationCompat.create(Constants.MOD_ID, "section_delta_s2c");
         } else {
             // 未压缩：读 rawLen + rawBytes
             int rawLen = buf.readVarInt();
+            checkDecodeLimit(rawLen, TWO_MEGABYTES, "rawLen");
             byte[] raw = new byte[rawLen];
             buf.readBytes(raw);
             payloadBuf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(raw));

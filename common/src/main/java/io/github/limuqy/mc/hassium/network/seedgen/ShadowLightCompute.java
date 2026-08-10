@@ -19,6 +19,7 @@ import net.minecraft.client.multiplayer.ClientPacketListener;
 import net.minecraft.core.SectionPos;
 import net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket;
 import net.minecraft.network.protocol.game.ClientboundLightUpdatePacket;
+import net.minecraft.util.Mth;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.LightLayer;
 import net.minecraft.world.level.chunk.LevelChunk;
@@ -433,15 +434,18 @@ public final class ShadowLightCompute {
      * 投递一个本地生成区块（SeedGen worldgen 完成；任意线程）。区块已在影子端，
      * 无需注入——引擎传播算光（原版生成后算光同款）后打包官方包回传；欠光由
      * 光照更新桥梁补发。
+     *
+     * @return true=已入队待回传；false=引擎不可用（并发降级），调用方须回退全量
      */
-    public static void submitGenerated(ChunkPos pos,
-                                       net.minecraft.world.level.chunk.LevelChunk chunk,
-                                       net.minecraft.server.level.ServerLevel level) {
+    public static boolean submitGenerated(ChunkPos pos,
+                                          net.minecraft.world.level.chunk.LevelChunk chunk,
+                                          net.minecraft.server.level.ServerLevel level) {
         if (pos == null || chunk == null || !isEnabled()) {
-            return;
+            return false;
         }
         generated.put(chunkPosKey(pos), new GenEntry(chunk, level));
         pump();
+        return true;
     }
 
     /** 触发消费循环（CAS 防并发；已失败/未握手时静默）。 */
@@ -560,10 +564,11 @@ public final class ShadowLightCompute {
                                 converged, batch.size(), genBatch.size(), deltaBatch.size());
                 for (Map.Entry<Long, ClientboundLevelChunkWithLightPacket> e : batch) {
                     long key = e.getKey();
-                    if (!pending.containsKey(key)) {
-                        continue; // REPLACE 后旧条目已被新 batch 接管 / 断连清理
+                    // review-fix: T3-47：条件移除——仅当仍是本 batch 快照的旧条目才删；
+                    // 已被同 key 新投递 REPLACE 时保留新包（下一轮消费），避免删新回旧
+                    if (!pending.remove(key, e.getValue())) {
+                        continue;
                     }
-                    pending.remove(key);
                     ChunkPos pos = new ChunkPos(key);
                     // 注入即回传：数据完整，光欠由光照更新桥梁（collectLightUpdate →
                     // drainLightMasks）事件驱动补发——客户端不参与光照计算。
@@ -586,10 +591,10 @@ public final class ShadowLightCompute {
                 }
                 for (Map.Entry<Long, GenEntry> e : genBatch) {
                     long key = e.getKey();
-                    if (!generated.containsKey(key)) {
-                        continue; // 断连清理
+                    // review-fix: T3-47：条件移除（同 pending）——REPLACE 后保留新条目
+                    if (!generated.remove(key, e.getValue())) {
+                        continue;
                     }
-                    generated.remove(key);
                     try {
                         pushReady(key, e.getValue().chunk, e.getValue().level, converged);
                     } catch (Throwable t) {
@@ -744,8 +749,9 @@ public final class ShadowLightCompute {
         }
         long now = System.currentTimeMillis();
         long delayMs = delaySecs * 1000L;
-        int pcx = (int) mc.player.getX() >> 4;
-        int pcz = (int) mc.player.getZ() >> 4;
+        // review-fix: T3-48：负数坐标 (int) 向零截断 → Mth.floor 向下取整
+        int pcx = Mth.floor(mc.player.getX()) >> 4;
+        int pcz = Mth.floor(mc.player.getZ()) >> 4;
         // 1) 出界登记 / 回界取消（遍历注入表；弱一致迭代安全）
         for (Map.Entry<Long, LevelChunk> e : server.injectedChunkEntries()) {
             long key = e.getKey();

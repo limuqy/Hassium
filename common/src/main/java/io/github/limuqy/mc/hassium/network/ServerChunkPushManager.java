@@ -1965,6 +1965,9 @@ public class ServerChunkPushManager {
         bloomLayers.remove(playerId);
         resumePlayers.remove(playerId);
         playerStateReports.remove(playerId);
+        // review-fix: T3-52：能力表随玩家清理（防 per-player 表无界增长）
+        playerSeedGenSupported.remove(playerId);
+        playerLightComputeSupported.remove(playerId);
     }
 
     /**
@@ -1980,6 +1983,9 @@ public class ServerChunkPushManager {
         initialPlayerChunkPos.clear();
         resumePlayers.clear();
         playerStateReports.clear();
+        // review-fix: T3-52：能力表一并清理
+        playerSeedGenSupported.clear();
+        playerLightComputeSupported.clear();
         if (pushPool != null) {
             pushPool.shutdownNow();
         }

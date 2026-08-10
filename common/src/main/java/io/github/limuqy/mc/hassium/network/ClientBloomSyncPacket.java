@@ -3,6 +3,7 @@ package io.github.limuqy.mc.hassium.network;
 import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.compat.ResourceLocationCompat;
 import net.minecraft.network.FriendlyByteBuf;
+import io.netty.handler.codec.DecoderException;
 #if MC_VER < MC_1_21_11
 import net.minecraft.resources.ResourceLocation;
 #else
@@ -30,6 +31,11 @@ ResourceLocation
 Identifier
 #endif
 CHANNEL = ResourceLocationCompat.create(Constants.MOD_ID, "client_bloom_sync_c2s");
+    /** review-fix: T3-53：恶意/损坏包 length 驱动 new byte[length] 可 OOM 客户端；
+     *  位图正常规模（createDefault 10k/0.01 ≈ 12KB，数万区块 < 1MB）；对齐原版
+     *  ClientboundLevelChunkPacketData.TWO_MEGABYTES */
+    private static final int TWO_MEGABYTES = 2 * 1024 * 1024;
+
 
     /**
      * 编码到网络缓冲区
@@ -46,6 +52,9 @@ CHANNEL = ResourceLocationCompat.create(Constants.MOD_ID, "client_bloom_sync_c2s
     public static ClientBloomSyncPacket decode(FriendlyByteBuf buf) {
         boolean full = buf.readBoolean();
         int length = buf.readVarInt();
+        if (length < 0 || length > TWO_MEGABYTES) {
+            throw new DecoderException("ClientBloomSyncPacket bloom length too large: " + length);
+        }
         byte[] bloomBytes = new byte[length];
         buf.readBytes(bloomBytes);
         return new ClientBloomSyncPacket(full, bloomBytes);

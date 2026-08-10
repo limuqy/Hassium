@@ -177,7 +177,12 @@ public final class SeedGenExecutor {
             NetworkStats.recordLocallyGeneratedChunk(NetworkStats.ESTIMATED_CHUNK_BYTES);
             // 统一影子通道：等光收敛（原版生成后算光同款逻辑）→ 打包官方包 →
             // 官方通道落地（客户端不参与缓存/光照）。
-            ShadowLightCompute.submitGenerated(pos, chunk, level);
+            // review-fix: T3-51：投递失败（并发降级 isEnabled=false）→ 回退全量，
+            // 防止生成结果静默丢弃后该柱客户端虚空
+            if (!ShadowLightCompute.submitGenerated(pos, chunk, level)) {
+                fallback(pos);
+                return;
+            }
             queue.remove(pos);
         } catch (Exception e) {
             Constants.LOG.error("Hassium: SeedGen generation failed for {}", pos, e);
