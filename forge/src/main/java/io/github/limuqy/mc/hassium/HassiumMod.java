@@ -3,8 +3,11 @@ package io.github.limuqy.mc.hassium;
 import io.github.limuqy.mc.hassium.config.ForgeConfigBackend;
 import io.github.limuqy.mc.hassium.config.ForgeConfigRegistration;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
+import io.github.limuqy.mc.hassium.metrics.NetworkStats;
 import io.github.limuqy.mc.hassium.network.ChunkSender;
 import io.github.limuqy.mc.hassium.network.ForgeNetworkManager;
+import io.github.limuqy.mc.hassium.network.dataplane.DataPlaneFrame;
+import io.github.limuqy.mc.hassium.network.dataplane.DataPlaneServer;
 #if MC_VER < MC_1_21_6
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 #else
@@ -26,7 +29,20 @@ public class HassiumMod {
         ForgeConfigRegistration.register(CONFIG, Constants.CONFIG_CLIENT_FILE, Constants.CONFIG_SERVER_FILE);
         CommonClass.init();
 
-        ChunkSender.setInstance(ForgeNetworkManager::sendCompressedChunk);
+        // review-fix: T10-M1：数据面 BULK 路由对齐 Fabric——先查 UDP 数据面可用（未启用/未绑定/无会话时
+        // DataPlaneServer.tryRouteBulk 自检返回 false），命中则走 BULK 通道；否则回退帧通道 Primary
+        ChunkSender.setInstance((player, compressed) -> {
+            byte[] payload = compressed.encode();
+            if (DataPlaneServer.tryRouteBulk(
+                    player.getUUID(),
+                    DataPlaneFrame.TYPE_BULK_COMPRESSED_CHUNK,
+                    payload)) {
+                return; // 已走 Data 通道
+            }
+            // 未走 Data 通道 → 走 Primary（帧通道），记分流统计（口径 = encode() 总长度，与 Data 侧对齐）
+            NetworkStats.recordBulkSentPrimary(payload.length);
+            ForgeNetworkManager.sendCompressedChunk(player, compressed);
+        });
         LOGGER.info("Hassium: ChunkSender registered for Forge");
     }
 

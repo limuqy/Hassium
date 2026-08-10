@@ -7,6 +7,7 @@ import io.github.limuqy.mc.hassium.config.HassiumConfigService;
  * <p>
  * 用本帧已消耗的 {@code nanoTime} 约束 apply / 回调吞吐，替代滞后的 FPS 自适应。
  * 进服后短时 JoinBoost 提高预算，摊平「停顿后突进」。
+ * JoinBoost 自 {@link #startJoinBoost()} 起 30s 宽松封顶：apply 活跃可续期，但总窗口不超 30s。
  */
 public final class ClientMainThreadBudget {
 
@@ -16,10 +17,16 @@ public final class ClientMainThreadBudget {
     /** 窗口内区块 apply 活跃时的续期时长（毫秒）：全量加载 >10s 时预算不中途退坡 */
     private static final long RENEW_WINDOW_MS = 5_000;
 
+    /** JoinBoost 总时长宽松封顶（毫秒）：自 startJoinBoost 起算，续期不越此上限 */
+    private static final long JOIN_BOOST_CAP_MS = 30_000;
+
     /** JoinBoost 期间的预算（毫秒） */
     private static final int JOIN_BOOST_BUDGET_MS = 30;
 
     private static volatile long joinBoostUntilMs = 0L;
+
+    /** JoinBoost 封顶截止（毫秒）：startJoinBoost 记 now+30s；续期与读取均不越过此值。 */
+    private static volatile long joinBoostDeadlineMs = 0L;
 
     /** 最近一次权威区块 apply 的时间戳（settle 写回判定：加载风暴停止的安静窗口）。 */
     private static volatile long lastApplyNano = 0L;
@@ -37,7 +44,9 @@ public final class ClientMainThreadBudget {
         if (!HassiumConfigService.getInstance().isJoinBoostEnabled()) {
             return;
         }
-        joinBoostUntilMs = System.currentTimeMillis() + JOIN_BOOST_DURATION_MS;
+        long now = System.currentTimeMillis();
+        joinBoostDeadlineMs = now + JOIN_BOOST_CAP_MS;
+        joinBoostUntilMs = now + JOIN_BOOST_DURATION_MS;
     }
 
     /**
@@ -45,6 +54,7 @@ public final class ClientMainThreadBudget {
      */
     public static void clearJoinBoost() {
         joinBoostUntilMs = 0L;
+        joinBoostDeadlineMs = 0L;
     }
 
     /**
@@ -59,7 +69,7 @@ public final class ClientMainThreadBudget {
         lastApplyNano = System.nanoTime();
         long until = joinBoostUntilMs;
         if (until > 0L && System.currentTimeMillis() < until) {
-            joinBoostUntilMs = System.currentTimeMillis() + RENEW_WINDOW_MS;
+            joinBoostUntilMs = Math.min(System.currentTimeMillis() + RENEW_WINDOW_MS, joinBoostDeadlineMs);
         }
     }
 
@@ -74,7 +84,7 @@ public final class ClientMainThreadBudget {
      * 当前是否处于 JoinBoost 窗口。
      */
     public static boolean isJoinBoostActive() {
-        long until = joinBoostUntilMs;
+        long until = Math.min(joinBoostUntilMs, joinBoostDeadlineMs);
         return until > 0L && System.currentTimeMillis() < until;
     }
 
@@ -90,7 +100,7 @@ public final class ClientMainThreadBudget {
     public static long getBudgetNs() {
         int normalBudgetMs = HassiumConfigService.getInstance().getMainThreadChunkBudgetMs();
         long now = System.currentTimeMillis();
-        long until = joinBoostUntilMs;
+        long until = Math.min(joinBoostUntilMs, joinBoostDeadlineMs);
         if (until > 0 && now < until) {
             // boostBudgetMs 至少不低于 normalBudgetMs（用户调高 normalBudgetMs 时 JoinBoost 不反向降预算）
             int boostBudgetMs = Math.max(JOIN_BOOST_BUDGET_MS, normalBudgetMs);
