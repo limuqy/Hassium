@@ -20,9 +20,14 @@ public interface NetworkManager {
     void sendChunkDataRequest(FriendlyByteBuf buf);
 
     /**
-     * 发送压缩区块数据到客户端（服务端调用）
+     * 发送压缩区块数据到客户端（服务端调用）。
+     * <p>
+     * 已退役（review-fix: T11-14）：全库无调用方，三端实现均为抛 UnsupportedOperationException 的
+     * 死代码；实际发送走 ChunkSender → 平台专用 sendCompressedChunk 路径。保留 default no-op 仅
+     * 兼容残留实现，待 fabric/forge 清理后整方法删除。
      */
-    void sendCompressedPayload(CompressedPayloadPacket packet);
+    default void sendCompressedPayload(CompressedPayloadPacket packet) {
+    }
 
     /**
      * 发送区块哈希广播到客户端（阶段一，服务端调用）

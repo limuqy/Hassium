@@ -29,6 +29,7 @@ import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -79,13 +80,15 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
     private volatile boolean lastResumeAccepted;
     private volatile net.minecraft.network.Connection vanillaConnection;
 
-    /** L1 迁移引擎（REQ C 节）：触发判定 + 迁移编排 + 预热 + 空闲窗口。 */
+    /** L1 迁移引擎（REQ C 节）：触发判定 + 迁移编排 + 预热。 */
     private final MigrationEngine migration = new MigrationEngine();
 
     /** 迁移中目标端点（故障/回调决策用）。 */
     private volatile MigrationEndpoint pendingMigrationTarget;
-    /** 切换动作已落地（预热回调防重入；迁移成功/回退时复位）。 */
-    private volatile boolean migrationResolved;
+    /** 切换动作已落地（预热回调防重入；迁移成功/回退时复位）。
+     *  review-fix: T1-68 promotePrewarm 并发重入门闩——AtomicBoolean.compareAndSet
+     *  保证 migrateTo 主线程与 event loop onReady 双路径仅一个 promote 落地。 */
+    private final AtomicBoolean migrationResolved = new AtomicBoolean(false);
     /** 迁移连接尝试计数（成功/新会话复位）。 */
     private final AtomicLong migrationAttempts = new AtomicLong();
 
@@ -220,10 +223,11 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
         migration.noteMigrationStarted();
         migration.noteCurrentEndpoint(endpoint);
         pendingMigrationTarget = endpoint;
-        migrationResolved = false;
+        migrationResolved.set(false);
         lastEndpoint = endpoint.host() + ":" + endpoint.port();
-        LOGGER.info("Hassium: NetworkCore migrating to {} (prewarm={}, idleWindow={})",
-                endpoint, migration.policy().prewarmEnabled(), migration.isIdleWindow());
+        // review-fix: T1-66 空闲窗口判定未接线迁移决策（YAGNI 移除），仅保留 prewarm 参数
+        LOGGER.info("Hassium: NetworkCore migrating to {} (prewarm={})",
+                endpoint, migration.policy().prewarmEnabled());
         if (!migration.policy().prewarmEnabled()) {
             closeOldOutbound();
             connectWithResume(endpoint);
@@ -254,7 +258,7 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
         migration.noteMigrationStarted();
         migration.noteCurrentEndpoint(endpoint);
         pendingMigrationTarget = endpoint;
-        migrationResolved = false;
+        migrationResolved.set(false);
         lastEndpoint = endpoint.host() + ":" + endpoint.port();
         LOGGER.info("Hassium: NetworkCore migrating immediately to {} (fault/direct)", endpoint);
         closeOldOutbound();
@@ -278,7 +282,13 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
 
     /** 预热会话接管：旧 outbound 关闭 → 预热连接入站缝接线 → 应用握手 → ACTIVE。 */
     private void promotePrewarm(PrewarmSession warm) {
-        migrationResolved = true;
+        // review-fix: T1-68 CAS 门闩——双路径（migrateTo 主线程 / event loop onReady）
+        // 竞争 promote，仅胜者执行 applyHandshake/UDP start（重复执行靠幂等吸收的问题消除）
+        if (!migrationResolved.compareAndSet(false, true)) {
+            LOGGER.info("Hassium: promotePrewarm skipped — migration already resolved ({})",
+                    warm.endpoint());
+            return;
+        }
         OutboundConnection conn = warm.connection();
         HandshakeCodec.ServerResponse response = warm.handshakeResponse();
         lastResumeAccepted = warm.resumeAccepted();
@@ -306,7 +316,7 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
         @Override
         public void onReady(PrewarmSession session) {
             migration.clearPrewarm(session);
-            if (!migrationResolved && state.get() == NetworkCoreState.MIGRATING) {
+            if (!migrationResolved.get() && state.get() == NetworkCoreState.MIGRATING) {
                 promotePrewarm(session);
             } else {
                 LOGGER.info("Hassium: prewarm ready for {} but switch already resolved — closing",
@@ -317,8 +327,8 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
 
         @Override
         public void onFailed(MigrationEndpoint endpoint, Throwable cause) {
-            if (!migrationResolved && state.get() == NetworkCoreState.MIGRATING) {
-                migrationResolved = true;
+            if (!migrationResolved.get() && state.get() == NetworkCoreState.MIGRATING) {
+                migrationResolved.set(true);
                 LOGGER.warn("[PREWARM] failed for {} — direct migrate with resume: {}", endpoint,
                         cause.toString());
                 closeOldOutbound();
@@ -553,8 +563,8 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
                         target);
                 return;
             }
-            if (!migrationResolved) {
-                migrationResolved = true;
+            if (!migrationResolved.get()) {
+                migrationResolved.set(true);
                 MigrationEndpoint next = migration.nextEndpoint();
                 if (next != null && migrationAttempts.incrementAndGet() <= MAX_MIGRATION_ATTEMPTS) {
                     LOGGER.warn("Hassium: migration connection failed ({}), retrying {}", cause.toString(), next);
@@ -698,8 +708,8 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
         s2cDispatched.incrementAndGet();
         switch (hp.sub()) {
             case CHUNK_HASH -> {
-                // T8：区块 hash 活动 = 增量未收敛信号（空闲窗口判定输入）
-                migration.noteChunkHashActivity();
+                // review-fix: T1-66 空闲窗口判定移除——区块 hash 活动仅消费方为已删检测器，
+                // 收口只做元数据分发（增量未收敛信号不再接线）
                 ClientMetadataHandler.handleChunkHashPacket(
                         (io.github.limuqy.mc.hassium.network.ChunkHashS2CPacket) hp.packet());
             }

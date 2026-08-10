@@ -49,9 +49,15 @@ public final class HandshakeStateTail {
         buf.writeFloat(s.pitch());
         writeUtf(buf, s.dimension() != null ? s.dimension() : "");
         buf.writeBoolean(tail.resumeRequested());
-        if (tail.resumeRequested() && tail.resumeTicket() != null) {
-            buf.writeInt(tail.resumeTicket().length);
-            buf.writeBytes(tail.resumeTicket());
+        // review-fix: T2-77: resumeRequested=true 时恒写票据长度字段（ticket==null → 0），
+        // 消除写侧跳过、读侧假定存在的结构不对称；readC2S 结构假定不变（resumeRequested=false
+        // 仍不写，避免读端字段错位）
+        if (tail.resumeRequested()) {
+            int ticketLen = tail.resumeTicket() != null ? tail.resumeTicket().length : 0;
+            buf.writeInt(ticketLen);
+            if (ticketLen > 0) {
+                buf.writeBytes(tail.resumeTicket());
+            }
         }
         // T10 追加字段（append-only）：玩家 UUID（标准流程握手附着；旧端/新端读旧帧兼容）
         if (tail.playerId() != null) {

@@ -29,7 +29,7 @@ import java.util.function.LongSupplier;
 import java.util.function.Supplier;
 
 /**
- * L1 迁移引擎（REQ C 节，骨架）：触发判定 + 迁移编排 + 预热 + 空闲窗口。
+ * L1 迁移引擎（REQ C 节，骨架）：触发判定 + 迁移编排 + 预热。
  *
  * <p><b>触发</b>：
  * <ul>
@@ -55,10 +55,10 @@ import java.util.function.Supplier;
  * 迁移归后续波。T7 交接的「beginControlConnection epoch 并入 validator」在网关形态下
  * 不适用（不触发）。
  *
- * <p>纯逻辑（无 MC 依赖）：位置/玩家身份经 {@link #setPlayerStateSource} /
- * {@link #setPlayerIdSource} 注入；时钟经 {@link #setClock}（测试）注入；
- * 连接经 {@link #setConnectionFactory}（测试）注入。心跳由 {@link #start} 的守护线程
- * 周期 tick（测试直接 {@link #tick} 手动驱动，不 start）。
+ * <p>纯逻辑（无 MC 依赖）：玩家身份经 {@link #setPlayerIdSource} 注入、位置状态经
+ * {@link #setPlayerStateSource} 注入（{@link #buildHandshakeTail} 读取）；时钟经
+ * {@link #setClock}（测试）注入；连接经 {@link #setConnectionFactory}（测试）注入。
+ * 心跳由 {@link #start} 的守护线程周期 tick（测试直接 {@link #tick} 手动驱动，不 start）。
  */
 public final class MigrationEngine {
 
@@ -86,7 +86,6 @@ public final class MigrationEngine {
     private volatile Supplier<UUID> playerIdSource;
     private volatile LongSupplier clockMs = System::currentTimeMillis;
     private volatile PrewarmSession prewarm;
-    private volatile IdleWindowDetector idleDetector;
 
     /** 续流票据 epoch：进程生命周期单调递增（1 起；onLogin 不重置——各主控 validator 表跨会话持久）。 */
     private final AtomicLong epochCounter = new AtomicLong();
@@ -264,10 +263,9 @@ public final class MigrationEngine {
 
     /**
      * 心跳 tick（start 的守护线程周期调用；测试手动驱动）。
-     * 1) 空闲窗口采样；2) 到点发 HEARTBEAT；3) 入站静默 ≥ 生效静默超时 → 故障触发。
+     * 1) 到点发 HEARTBEAT；2) 入站静默 ≥ 生效静默超时 → 故障触发。
      */
     public void tick(long nowMs) {
-        sampleIdleWindow(nowMs);
         MigrationPolicy p = policy;
         OutboundConnection oc = heartbeatTarget;
         if (oc == null || !oc.isOpen()) {
@@ -606,41 +604,6 @@ public final class MigrationEngine {
     public void clearPrewarm(PrewarmSession session) {
         if (prewarm == session) {
             prewarm = null;
-        }
-    }
-
-    // ==================== 空闲窗口 ====================
-
-    /** 空闲窗口判定（玩家静止 + 区块 hash 稳定；检测器未就绪 = 不判定 → true）。 */
-    public boolean isIdleWindow() {
-        IdleWindowDetector d = idleDetector;
-        return d == null || d.isIdle();
-    }
-
-    /** 区块 hash 活动信号（入站 ChunkHashS2CPacket 等；NetworkCore dispatch 接线）。 */
-    public void noteChunkHashActivity() {
-        IdleWindowDetector d = idleDetector;
-        if (d != null) {
-            d.noteChunkHashActivity();
-        }
-    }
-
-    private void sampleIdleWindow(long nowMs) {
-        Supplier<PlayerStateReport> src = playerStateSource;
-        if (src == null) {
-            return;
-        }
-        MigrationPolicy p = policy;
-        IdleWindowDetector d = idleDetector;
-        // 空闲窗口参数随 policy 变化（B2：idleWindowMs/idleMoveThresholdBps 移入 policy）→ 重建检测器
-        if (d == null || d.windowMs() != p.idleWindowMs()
-                || d.moveThresholdBlocksPerSec() != p.idleMoveThresholdBps()) {
-            d = new IdleWindowDetector(p.idleMoveThresholdBps(), p.idleWindowMs(), clockMs);
-            idleDetector = d;
-        }
-        PlayerStateReport state = src.get();
-        if (state != null && state.present()) {
-            d.sample(state.x(), state.z());
         }
     }
 

@@ -64,6 +64,11 @@ public final class PreHandshakeProtocol {
             boolean clientCache = buf.readBoolean();
             boolean globalCompression = buf.readBoolean();
             boolean compactHeader = buf.readBoolean();
+            // review-fix: T2-72: 网络可控声明在标记前校验（范围 + mod 格式）；失败仅记日志不标记，
+            // 防止任意客户端自声明 Hassium 而服务端进服即启用压缩/聚合语义
+            if (!validateAndLog(playerId, protocolVersion, modVersion)) {
+                return;
+            }
             PlayerCompressionTracker.markPreHandshake(playerId);
             DebugLogger.info(LogType.NETWORK,
                     "[PRE_HANDSHAKE] Marked {} (protocol={}, mod={}, clientCache={}, globalCompression={}, compactHeader={})",
@@ -74,6 +79,66 @@ public final class PreHandshakeProtocol {
         }
     }
 
+    /**
+     * 校验客户端自声明的协议版本与 mod 版本；失败仅记日志（不标记）。
+     * <p>
+     * review-fix: T2-72: 协议版本须落在 {@code [1, CURRENT_PROTOCOL_VERSION]}（允许更旧客户端），
+     * mod 版本须为常规版本串格式（非空、长度 ≤64、仅 {@code [0-9A-Za-z._+-]}）。
+     */
+    private static boolean validateAndLog(UUID playerId, int protocolVersion, String modVersion) {
+        if (protocolVersion < 1 || protocolVersion > Constants.CURRENT_PROTOCOL_VERSION) {
+            DebugLogger.warn(LogType.NETWORK,
+                    "[PRE_HANDSHAKE] Rejected protocol version {} (expected 1..{}) from player {}, not marking",
+                    protocolVersion, Constants.CURRENT_PROTOCOL_VERSION, playerId);
+            return false;
+        }
+        if (!isValidModVersion(modVersion)) {
+            DebugLogger.warn(LogType.NETWORK,
+                    "[PRE_HANDSHAKE] Rejected malformed mod version '{}' from player {}, not marking",
+                    sanitizeLog(modVersion), playerId);
+            return false;
+        }
+        return true;
+    }
+
+    private static boolean isValidModVersion(String version) {
+        if (version == null || version.isEmpty() || version.length() > 64) {
+            return false;
+        }
+        for (int i = 0; i < version.length(); i++) {
+            char c = version.charAt(i);
+            boolean ok = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+                    || c == '.' || c == '_' || c == '-' || c == '+';
+            if (!ok) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * 过滤日志输出中的控制字符（防日志注入；失败的 mod 版本可能携带任意字符）。
+     */
+    private static String sanitizeLog(String value) {
+        if (value == null) {
+            return "null";
+        }
+        StringBuilder sb = null;
+        for (int i = 0; i < value.length(); i++) {
+            char c = value.charAt(i);
+            if (c < 0x20 || c == 0x7F) {
+                if (sb == null) {
+                    sb = new StringBuilder(value.length());
+                    sb.append(value, 0, i);
+                }
+                sb.append('?');
+            } else if (sb != null) {
+                sb.append(c);
+            }
+        }
+        return sb != null ? sb.toString() : value;
+    }
+
 #if MC_VER >= MC_1_20_5
     /**
      * 配置阶段 payload 版入口（fabric 1.20.5+ / neoforge / forge）。
@@ -81,6 +146,10 @@ public final class PreHandshakeProtocol {
     public static void handlePreHandshake(UUID playerId, PreHandshakePayload payload) {
         if (playerId == null || payload == null) {
             DebugLogger.info(LogType.NETWORK, "[PRE_HANDSHAKE] Ignored null pre-handshake (player={})", playerId);
+            return;
+        }
+        // review-fix: T2-72: 配置阶段入口同样先校验（网络可控声明）再标记
+        if (!validateAndLog(playerId, payload.protocolVersion(), payload.modVersion())) {
             return;
         }
         PlayerCompressionTracker.markPreHandshake(playerId);

@@ -262,12 +262,18 @@ public final class OutboundConnection {
 
     private void installReadTimeoutIfPossible() {
         long idleMs = readTimeoutMs;
-        if (idleMs <= 0 || readTimeoutHandler == null || readTimeoutInstalled.get()) {
+        if (idleMs <= 0 || readTimeoutHandler == null) {
             return;
         }
         Channel ch = channel;
         if (ch == null || !ch.isActive()) {
             return; // onChannelActive 时再装
+        }
+        // review-fix: T1-69 热更新——已安装时移除重建（否则新阈值被忽略，
+        // B2 配置热更新场景失效）；pipeline 增删线程安全（Netty 内部调度到 event loop）
+        if (readTimeoutInstalled.get()) {
+            ch.pipeline().remove(READ_TIMEOUT_NAME);
+            readTimeoutInstalled.set(false);
         }
         if (readTimeoutInstalled.compareAndSet(false, true)) {
             ch.pipeline().addFirst(READ_TIMEOUT_NAME, new IdleStateHandler(0, 0, idleMs, TimeUnit.MILLISECONDS));

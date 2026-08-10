@@ -32,7 +32,9 @@ import org.slf4j.LoggerFactory;
  *   <li>用同一 {@code UserConnection} 新建一个 {@code ViaDecodeHandler} 实例，装进
  *       {@link EmbeddedChannel} 作为转换通道——不移动 live handler，不碰原版 pipeline；</li>
  *   <li>{@link #translatePacket}：Packet → 完整线字节（含协议 ID，{@link PacketCodecCompat#serializePacketFull}）
- *       → 写进转换通道 → 读出转换后字节 → {@link PacketCodecCompat#deserializePacketFull} 还原 Packet。</li>
+ *       → 写进转换通道 → 读出转换后字节 → {@link PacketCodecCompat#deserializePacketFull} 还原 Packet。
+ *       review-fix: T1-70 热路径零拷贝——线字节经 {@link ByteBuf} 全链路传递，无中间
+ *       {@code copiedBuffer}/byte[] 物化（仅 compat 边界 serialize/deserialize 各一次）。</li>
  * </ol>
  *
  * <p><b>失败安全</b>：ViaFabric 内部 API 跨版本不确定（ViaVersion 4.x/5.x），任何一步
@@ -109,13 +111,14 @@ final class ViaDecodeBridge {
     }
 
     /**
-     * 完整包字节（含协议 ID）→ ViaFabric 转换后字节。失败/被吞 → null；不消费输入缓冲；
+     * 完整包字节（含协议 ID）→ ViaFabric 转换后字节。失败/被吞 → null。
+     * <p>review-fix: T1-70 热路径零拷贝——输入缓冲所有权<b>转移</b>给转换通道
+     * （不再 {@code copiedBuffer} 全量拷贝）；调用方必须保证不再使用/释放该缓冲。
      * 返回缓冲所有权归调用方（用完 release）。
      */
     ByteBuf translateBytes(ByteBuf fullPacket) {
-        ByteBuf copy = Unpooled.copiedBuffer(fullPacket);
         try {
-            if (!transformChannel.writeInbound(copy)) {
+            if (!transformChannel.writeInbound(fullPacket)) {
                 return null;
             }
             transformChannel.checkException();
@@ -126,6 +129,10 @@ final class ViaDecodeBridge {
             drainInbound();
             return null;
         } catch (Throwable t) {
+            // 异常路径输入缓冲可能未被 handler 消费：防泄漏（正常路径已由管道释放）
+            if (fullPacket.refCnt() > 0) {
+                fullPacket.release();
+            }
             drainInbound();
             degradeOnce(t);
             return null;
@@ -146,22 +153,21 @@ final class ViaDecodeBridge {
             if (full == null || full.length == 0) {
                 return null;
             }
+            // review-fix: T1-70 零拷贝链路——wrappedBuffer 零拷贝包 serialize 输出，
+            // 所有权直接移交转换通道（translateBytes 消费并释放），不再 copiedBuffer 拷贝；
+            // 输出侧 ByteBuf 直取，仅 deserialize 边界物化一次 byte[]
             ByteBuf wire = Unpooled.wrappedBuffer(full);
+            ByteBuf translated = translateBytes(wire);
+            if (translated == null) {
+                return null;
+            }
             try {
-                ByteBuf translated = translateBytes(wire);
-                if (translated == null) {
-                    return null;
-                }
-                try {
-                    byte[] bytes = new byte[translated.readableBytes()];
-                    translated.readBytes(bytes);
-                    return PacketCodecCompat.deserializePacketFull(
-                            PacketFlow.CLIENTBOUND, bytes, registryAccess());
-                } finally {
-                    translated.release();
-                }
+                byte[] bytes = new byte[translated.readableBytes()];
+                translated.readBytes(bytes);
+                return PacketCodecCompat.deserializePacketFull(
+                        PacketFlow.CLIENTBOUND, bytes, registryAccess());
             } finally {
-                wire.release();
+                translated.release();
             }
         } catch (Throwable t) {
             degradeOnce(t);

@@ -10,9 +10,9 @@ import io.netty.buffer.Unpooled;
 /**
  * 网关 outbound 握手编解码（从三端 NetworkManager 内联线格式提取，纯 ByteBuf 零 MC 依赖）。
  *
- * <p><b>为何不激活 {@code HassiumHandshake}：</b>其线格式（ByteBuffer + HassiumCapabilities）
- * 与三端内联格式（varint/utf + 固定字段 + append-only 尾）不一致；激活需迁移三端发送方，
- * 回归风险大且 T6 未派不可删代码。本类 = 内联格式提取，纯新增、零回归，三端发送方原样保留。
+ * <p><b>历史</b>：HassiumHandshake 已删除（T2-71）；其线格式（ByteBuffer +
+ * HassiumCapabilities）与三端内联格式（varint/utf + 固定字段 + append-only 尾）不一致。
+ * 本类 = 内联格式提取（三端发送方原样保留），并作为网关 outbound 握手唯一编解码方。
  *
  * <p><b>C2S 请求线格式</b>（T6 前为三端 NetworkManager 内联发送格式；现由本类作为
  * 网关 outbound 唯一生成方）：
@@ -219,7 +219,15 @@ public final class HandshakeCodec {
             if (in.isReadable()) {
                 worldSeed = in.readLong();
                 int stemLen = ControlFrameCodec.readVarInt(in);
-                if (stemLen > 0 && stemLen <= in.readableBytes()) {
+                // review-fix: T1-67 非法长度不再静默降级——畸形响应显式失败
+                // （与 readUtf 超限抛 IllegalArgumentException 一致），避免 seedgen
+                // 数据静默丢失
+                if (stemLen < 0 || stemLen > in.readableBytes()) {
+                    throw new IllegalArgumentException(
+                            "Invalid levelStemNbt length " + stemLen
+                                    + " (readableBytes=" + in.readableBytes() + ")");
+                }
+                if (stemLen > 0) {
                     levelStemNbt = new byte[stemLen];
                     in.readBytes(levelStemNbt);
                 }

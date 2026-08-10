@@ -306,31 +306,6 @@ class MigrationEngineTest {
         conn.close();
     }
 
-    @Test
-    void idleWindowParametersFromPolicy() {
-        MigrationEngine engine = engine();
-        engine.setPolicy(new MigrationPolicy(15.0, 4.0, "", 5000L, 10000L, 60000L, 2000L, 0.5, true));
-
-        long t0 = clock.get();
-        engine.tick(clock.get()); // 首次采样（仅记录）
-        assertFalse(engine.isIdleWindow(), "窗口未到不判定空闲");
-        clock.set(t0 + 1999);
-        engine.tick(clock.get());
-        assertFalse(engine.isIdleWindow(), "2000ms 未到仍不空闲");
-        clock.set(t0 + 2000);
-        engine.tick(clock.get());
-        assertTrue(engine.isIdleWindow(), "policy idleWindowMs=2000 生效：玩家静止满窗口判定空闲");
-
-        // policy 变化 → 检测器按新参数重建（B2：参数移入 policy 后可调）
-        engine.setPolicy(new MigrationPolicy(15.0, 4.0, "", 5000L, 10000L, 60000L, 5000L, 0.5, true));
-        clock.set(t0 + 2100);
-        engine.tick(clock.get());
-        assertFalse(engine.isIdleWindow(), "重建后按新窗口 5000ms 重新计时");
-        clock.set(t0 + 2100 + 5000 + 1);
-        engine.tick(clock.get());
-        assertTrue(engine.isIdleWindow(), "重建后按新窗口 5000ms 生效");
-    }
-
     // ==================== 预热生命周期 ====================
 
     @Test
