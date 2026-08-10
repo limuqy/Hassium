@@ -1,5 +1,6 @@
 package io.github.limuqy.mc.hassium.mixin;
 
+import io.github.limuqy.mc.hassium.server.GatewayConnectionAccessor;
 import io.github.limuqy.mc.hassium.server.GatewayPlayerBridge;
 import io.netty.channel.Channel;
 import net.minecraft.network.Connection;
@@ -27,6 +28,10 @@ import java.net.SocketAddress;
  * <p>客户端侧零影响：{@link GatewayPlayerBridge#routeS2C} 查桥状态表，非网关
  * 连接原样放行（拦截点即 return false，vanilla 发送不受扰）。
  *
+ * <p>实现 {@link GatewayConnectionAccessor}：mixin 把接口挂到目标类 Connection，
+ * 业务代码（GatewayPlayerBridge）cast 接口而非本 mixin 类——fabric Knot 运行时
+ * 禁止直接引用 mixin 类（T10 真实运行修复，见接口 javadoc）。
+ *
  * <p>sendPacket 描述符按锚点分段：
  * <ul>
  *   <li>1.20.1：{@code sendPacket(Packet, PacketSendListener)}（2 参）</li>
@@ -35,7 +40,7 @@ import java.net.SocketAddress;
  * </ul>
  */
 @Mixin(value = Connection.class, priority = 5)
-public abstract class MixinConnectionGatewayServer {
+public abstract class MixinConnectionGatewayServer implements GatewayConnectionAccessor {
 
     @Accessor("channel")
     public abstract void hassium$setGatewayChannel(Channel channel);

@@ -118,8 +118,15 @@ dependencies {
     // 必须用 forge 变体（neoforge 变体最低 1.20.6）；1.20.2+ 用 neoforge 变体。
     // 坐标用 project ID WMDesFsZ（slug "imblocker" 在 Modrinth Maven 上指向旧项目 1.0.x）。
     if (gradle.ext.has('imblocker_version')) {
+        // 1.20.1（forge 平台）：IMBlocker 5.5.4-forge 的动态 mixin 插件在 dev 环境引用
+        // net.minecraft.client.MainWindow 抛 ClassMetadataNotFoundException（MixinTransformerError
+        // 崩 runClient，实测 2026-08-10）；该 mod 仅开发输入法体验，冒烟自动化无人工输入不需要 →
+        // 1.20.1 跳过。1.20.2+ neoforge 变体正常。
+        def imSkip = gradle.ext.minecraft_version == '1.20.1'
         def imFilter = gradle.ext.minecraft_version == '1.20.1' ? 'forge' : 'neoforge'
-        modLocalRuntime("maven.modrinth:WMDesFsZ:${gradle.ext.imblocker_version}-${imFilter}")
+        if (!imSkip) {
+            modLocalRuntime("maven.modrinth:WMDesFsZ:${gradle.ext.imblocker_version}-${imFilter}")
+        }
     }
 }
 

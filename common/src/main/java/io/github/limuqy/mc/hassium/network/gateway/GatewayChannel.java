@@ -353,7 +353,7 @@ public final class GatewayChannel {
         if (ch == null || !zstdInstalled.compareAndSet(false, true)) {
             return;
         }
-        ch.pipeline().addBefore(DECODER_NAME, ZSTD_DECODER_NAME, new ZstdContextDecoder(threshold, true, false));
+        ch.pipeline().addBefore(DECODER_NAME, ZSTD_DECODER_NAME, new ZstdContextDecoder(threshold, true, false, true));
         ch.pipeline().addBefore(DECODER_NAME, ZSTD_ENCODER_NAME, new SkipAwareZstdEncoder(threshold, level, false));
         LOGGER.info("[GATEWAY] ZSTD installed for {} (threshold={}, level={})", remote(), threshold, level);
     }
