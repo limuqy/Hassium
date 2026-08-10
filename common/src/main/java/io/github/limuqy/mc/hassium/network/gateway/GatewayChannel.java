@@ -197,6 +197,7 @@ public final class GatewayChannel {
                     request.udpDataplaneSupported(), request.controlFailoverSupported(), resumeAccepted);
         } else {
             LOGGER.warn("[GATEWAY] Handshake rejected from {} (proto={})", remote(), request.protocolVersion());
+            close("handshake rejected"); // review-fix: 拒绝后立即关闭，不留半开连接
         }
     }
 
@@ -507,6 +508,15 @@ public final class GatewayChannel {
         @Override
         protected void channelRead0(ChannelHandlerContext ctx, ControlFrameCodec.Frame frame) {
             try {
+                // review-fix: state 门控——非 ACTIVE 只接受 HANDSHAKE_C2S/PING/HEARTBEAT，其余丢弃
+                State st = channel.state();
+                if (st != State.ACTIVE
+                        && frame.type() != ControlFrameType.HANDSHAKE_C2S
+                        && frame.type() != ControlFrameType.PING
+                        && frame.type() != ControlFrameType.HEARTBEAT) {
+                    LOGGER.warn("[GATEWAY] dropping inbound {} from {} (state={})", frame.type(), channel.remote(), st);
+                    return;
+                }
                 switch (frame.type()) {
                     case HANDSHAKE_C2S -> channel.handleHandshake(frame.payload());
                     case PACKET_C2S -> channel.handleC2SPayload(frame.payload());

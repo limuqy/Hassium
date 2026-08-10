@@ -16,6 +16,9 @@ import io.github.limuqy.mc.hassium.compat.ResourceLocationCompat;
  * 存储包类型标识符和原始数据
  */
 public class AggregatedSubPacket {
+    /** 单个子包数据上限 1MB（review-fix: T13-C1） */
+    private static final int MAXIMUM_SUBPACKET_LENGTH = 1024 * 1024;
+
     private final
 #if MC_VER < MC_1_21_11
     ResourceLocation
@@ -72,6 +75,12 @@ public class AggregatedSubPacket {
 
         // 读取数据长度和数据
         int length = buf.readVarInt();
+        if (length < 0 || length > MAXIMUM_SUBPACKET_LENGTH || length > buf.readableBytes()) {
+            throw new IllegalArgumentException(
+                    "AggregatedSubPacket: invalid data length " + length
+                            + " (remaining " + buf.readableBytes()
+                            + ", max " + MAXIMUM_SUBPACKET_LENGTH + ")");
+        }
         byte[] data = new byte[length];
         buf.readBytes(data);
 

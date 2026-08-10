@@ -2,13 +2,14 @@ package io.github.limuqy.mc.hassium.network;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
-import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.util.UUID;
 
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * 续流票据（REQ §B9）：玩家 UUID + epoch + HMAC-SHA256 签名。
@@ -20,13 +21,16 @@ import javax.crypto.spec.SecretKeySpec;
  */
 public final class ResumeTicket {
 
+    private static final Logger LOGGER = LoggerFactory.getLogger("Hassium/ResumeTicket");
+
     /** HMAC-SHA256 签名长度 */
     public static final int SIGNATURE_LENGTH = 32;
 
     /** 编码后总长：uuid(16) + epoch(8) + sig(32) */
     public static final int ENCODED_LENGTH = 16 + 8 + SIGNATURE_LENGTH;
 
-    private static volatile byte[] sharedKey = defaultSharedKey();
+    /** null = 未显式配置共享密钥 → 续流禁用（review-fix: T13-C2） */
+    private static volatile byte[] sharedKey;
 
     private final UUID playerId;
     private final long epoch;
@@ -51,15 +55,16 @@ public final class ResumeTicket {
     }
 
     /**
-     * 当前共享密钥（默认由常量派生；部署时主控 A/B 通过
-     * {@link #setSharedKey} 统一覆盖——密钥分发属部署事项，T8 落地）。
+     * 当前共享密钥；未显式配置（{@link #setSharedKey} 未调用或传 null/空）时为 null，
+     * 此时续流禁用：sign 返回 null、verify 返回 false（部署时主控 A/B 必须显式
+     * 统一配置——密钥分发属部署事项，T8 落地）。
      */
     public static byte[] sharedKey() {
         return sharedKey;
     }
 
     public static void setSharedKey(byte[] key) {
-        sharedKey = key == null || key.length == 0 ? defaultSharedKey() : key.clone();
+        sharedKey = key == null || key.length == 0 ? null : key.clone();
     }
 
     /** 签名输入：uuid(16B) + epoch(8B BE) */
@@ -73,6 +78,10 @@ public final class ResumeTicket {
     }
 
     public static byte[] sign(UUID playerId, long epoch, byte[] key) {
+        if (key == null) {
+            LOGGER.warn("ResumeTicket: shared key not configured, resume signing disabled");
+            return null;
+        }
         try {
             Mac mac = Mac.getInstance("HmacSHA256");
             mac.init(new SecretKeySpec(key, "HmacSHA256"));
@@ -82,8 +91,12 @@ public final class ResumeTicket {
         }
     }
 
-    /** 验签（常数时间比较） */
+    /** 验签（常数时间比较）；密钥未配置时返回 false */
     public boolean verify(byte[] key) {
+        if (key == null) {
+            LOGGER.warn("ResumeTicket: shared key not configured, resume verification disabled");
+            return false;
+        }
         if (signature.length != SIGNATURE_LENGTH) {
             return false;
         }
@@ -119,19 +132,6 @@ public final class ResumeTicket {
         byte[] sig = new byte[SIGNATURE_LENGTH];
         buffer.get(sig);
         return new ResumeTicket(id, epoch, sig);
-    }
-
-    private static byte[] defaultSharedKey() {
-        try {
-            return MessageDigest.getInstance("SHA-256")
-                    .digest("hassium-resume-shared-key-v1".getBytes(StandardCharsets.UTF_8));
-        } catch (NoSuchAlgorithmException e) {
-            byte[] key = new byte[SIGNATURE_LENGTH];
-            for (int i = 0; i < key.length; i++) {
-                key[i] = (byte) (0xA5 + i);
-            }
-            return key;
-        }
     }
 
     @Override

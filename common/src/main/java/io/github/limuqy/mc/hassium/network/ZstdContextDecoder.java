@@ -167,6 +167,11 @@ public class ZstdContextDecoder extends ByteToMessageDecoder {
         ctx.fireExceptionCaught(cause);
     }
 
+    @Override
+    protected void handlerRemoved0(ChannelHandlerContext ctx) throws Exception {
+        close(); // 释放 native 解压上下文，防泄漏（review-fix: T13-M3）
+    }
+
     public synchronized void close() {
         if (!closed) {
             closed = true;

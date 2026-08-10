@@ -181,7 +181,13 @@ public class ZstdPipelineSwitcher {
     private static void removeHandlerSafely(ChannelPipeline pipeline, String name) {
         try {
             if (pipeline.get(name) != null) {
-                pipeline.remove(name);
+                ChannelHandler removed = pipeline.remove(name);
+                // 显式释放 Zstd native 上下文（handlerRemoved 兜底，close 幂等）（review-fix: T13-M3）
+                if (removed instanceof ZstdContextDecoder decoder) {
+                    decoder.close();
+                } else if (removed instanceof ZstdContextEncoder encoder) {
+                    encoder.close();
+                }
                 LOGGER.debug("Removed handler: {}", name);
             }
         } catch (Exception e) {

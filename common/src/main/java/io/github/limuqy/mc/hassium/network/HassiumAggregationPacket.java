@@ -42,6 +42,10 @@ public class HassiumAggregationPacket {
     private static final byte COMPRESSED_WITH_DICT_FLAG = 2;
     private static final byte NOT_COMPRESSED_FLAG = 0;
     private static final int COMPRESSION_THRESHOLD = 32;
+    /** 解压后原始数据上限，与 {@code ZstdContextDecoder} 对齐 8MB，防恶意帧解压 OOM（review-fix: T13-C1） */
+    private static final int MAXIMUM_UNCOMPRESSED_LENGTH = 8 * 1024 * 1024;
+    /** 子包数量上限：每子包至少 2 字节（标识 + 长度 VarInt），且硬上限 4096（review-fix: T13-C1） */
+    private static final int MAXIMUM_PACKET_COUNT = 4096;
 
     private final List<AggregatedSubPacket> subPackets;
     private final NamespaceIndexManager indexManager;
@@ -132,6 +136,11 @@ public class HassiumAggregationPacket {
         if (flag == COMPRESSED_FLAG || flag == COMPRESSED_WITH_DICT_FLAG) {
             // 解压
             int uncompressedLength = buf.readVarInt();
+            if (uncompressedLength < 0 || uncompressedLength > MAXIMUM_UNCOMPRESSED_LENGTH) {
+                throw new IllegalArgumentException(
+                        "HassiumAggregationPacket: uncompressed length " + uncompressedLength
+                                + " exceeds maximum " + MAXIMUM_UNCOMPRESSED_LENGTH);
+            }
             int compressedLength = buf.readableBytes();
             byte[] compressed = new byte[compressedLength];
             buf.readBytes(compressed);
@@ -165,6 +174,12 @@ public class HassiumAggregationPacket {
         FriendlyByteBuf rawBuf = new FriendlyByteBuf(Unpooled.wrappedBuffer(rawData));
         try {
             int packetCount = rawBuf.readVarInt();
+            if (packetCount < 0 || packetCount > MAXIMUM_PACKET_COUNT
+                    || packetCount > rawData.length / 2) {
+                throw new IllegalArgumentException(
+                        "HassiumAggregationPacket: invalid packet count " + packetCount
+                                + " for " + rawData.length + " raw bytes");
+            }
             List<AggregatedSubPacket> subPackets = new ArrayList<>(packetCount);
 
             for (int i = 0; i < packetCount; i++) {

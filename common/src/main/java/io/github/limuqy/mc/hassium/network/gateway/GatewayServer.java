@@ -4,11 +4,16 @@ import io.github.limuqy.mc.hassium.network.core.outbound.HandshakeCodec;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
+import io.netty.channel.ChannelHandlerContext;
+import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.ChannelOption;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
+import io.netty.handler.timeout.IdleState;
+import io.netty.handler.timeout.IdleStateEvent;
+import io.netty.handler.timeout.IdleStateHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -47,6 +52,9 @@ import java.util.concurrent.atomic.AtomicReference;
 public final class GatewayServer {
 
     private static final Logger LOGGER = LoggerFactory.getLogger("Hassium/GatewayServer");
+
+    private static final int MAX_CONNECTIONS = 256; // review-fix: 接入连接数上限
+    private static final long READ_IDLE_SECONDS = 10; // review-fix: readIdle 超时（秒）
 
     private static final GatewayServer INSTANCE = new GatewayServer();
 
@@ -107,9 +115,28 @@ public final class GatewayServer {
                 .childHandler(new ChannelInitializer<Channel>() {
                     @Override
                     protected void initChannel(Channel ch) {
+                        // review-fix: 连接数上限——超限直接关闭，不进入连接表
+                        if (connections.size() >= MAX_CONNECTIONS) {
+                            LOGGER.warn("[GATEWAY] connection limit {} reached — rejecting {}", MAX_CONNECTIONS, ch.remoteAddress());
+                            ch.close();
+                            return;
+                        }
                         GatewayChannel gc = new GatewayChannel(GatewayServer.this, ch);
                         connections.put(ch, gc);
                         ch.pipeline().addLast("frameDecoder", new GatewayChannel.FrameDecoder());
+                        // review-fix: readIdle 10s 关闭（IdleStateHandler 置于 frameDecoder 之后）
+                        ch.pipeline().addLast("idleState", new IdleStateHandler(0, READ_IDLE_SECONDS, 0, TimeUnit.SECONDS));
+                        ch.pipeline().addLast("idleGuard", new ChannelInboundHandlerAdapter() {
+                            @Override
+                            public void userEventTriggered(ChannelHandlerContext ctx, Object evt) {
+                                if (evt instanceof IdleStateEvent && ((IdleStateEvent) evt).state() == IdleState.READER_IDLE) {
+                                    LOGGER.warn("[GATEWAY] read idle {}s from {} — closing", READ_IDLE_SECONDS, ctx.channel().remoteAddress());
+                                    gc.close("read idle");
+                                } else {
+                                    ctx.fireUserEventTriggered(evt);
+                                }
+                            }
+                        });
                         ch.pipeline().addLast("gatewayInbound", new GatewayChannel.GatewayChannelHandler(gc));
                     }
                 });

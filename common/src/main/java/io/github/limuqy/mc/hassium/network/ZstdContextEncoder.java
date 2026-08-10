@@ -117,6 +117,11 @@ public class ZstdContextEncoder extends MessageToByteEncoder<ByteBuf> {
         ctx.fireExceptionCaught(cause);
     }
 
+    @Override
+    public void handlerRemoved(ChannelHandlerContext ctx) throws Exception {
+        close(); // 释放 native 压缩上下文，防泄漏（review-fix: T13-M3）
+    }
+
     public synchronized void close() {
         if (!closed) {
             closed = true;

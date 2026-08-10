@@ -143,7 +143,8 @@ public final class PlayerDataStorage {
 #if MC_VER < MC_1_20_3
             return NbtIo.readCompressed(file.toFile());
 #else
-            return NbtIo.readCompressed(file, NbtAccounter.unlimitedHeap());
+            // review-fix: 有界配额 2MiB（防解压炸弹；旧分支保持现状）
+            return NbtIo.readCompressed(file, NbtAccounter.create(2_097_152L));
 #endif
         } catch (Exception e) {
             LOGGER.warn("[GATEWAY] corrupt playerdata file {} — skipped", file);

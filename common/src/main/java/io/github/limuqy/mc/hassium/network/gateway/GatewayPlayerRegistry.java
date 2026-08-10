@@ -29,7 +29,7 @@ public final class GatewayPlayerRegistry {
     private final CopyOnWriteArrayList<Consumer<UUID>> removalHooks = new CopyOnWriteArrayList<>();
     private final CopyOnWriteArrayList<Consumer<GatewayPlayerSession>> attachHooks = new CopyOnWriteArrayList<>();
 
-    /** 登记玩家会话（重复注册同 UUID：旧会话由调用方先移除；此处直接覆盖并告警）。 */
+    /** 登记玩家会话（重复注册同 UUID：直接覆盖并关闭旧通道；旧会话清理链由通道断连路径完成）。 */
     public GatewayPlayerSession register(GatewayPlayerSession session) {
         if (session == null) {
             return null;
@@ -37,6 +37,7 @@ public final class GatewayPlayerRegistry {
         GatewayPlayerSession prev = sessions.put(session.playerId(), session);
         if (prev != null && prev != session) {
             LOGGER.warn("[GATEWAY] Session overwrite for {} (old channel {})", session.playerId(), prev.channel().remote());
+            prev.channel().close("session overwritten"); // review-fix: 旧通道走完整清理链（channelInactive → GatewayChannel.close）
         }
         LOGGER.info("[GATEWAY] Player session registered: {} (resume={}{}, channel={}, players={})",
                 session.playerId(), session.resume(),
