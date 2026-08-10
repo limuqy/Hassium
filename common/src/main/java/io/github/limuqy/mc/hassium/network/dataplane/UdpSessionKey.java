@@ -26,8 +26,19 @@ final class UdpSessionKey {
         if (endpointId < 0 || channelId < 0) {
             throw new IllegalArgumentException("endpointId/channelId must be non-negative");
         }
+        // review-fix: T4-M1 — endpointId/channelId 以 4 字节大端写入 info，杜绝单字节截断导致的
+        // 密钥域碰撞（如 endpointId=256 与 endpointId=0 曾导出同一把 key）；client/server 共用本方法，天然对称。
         return Hkdf.extractAndExpand(token, concat(uuidBytes(playerId), longBytes(epoch)),
-                concat(INFO_PREFIX, new byte[] {(byte) endpointId, (byte) channelId}), 16);
+                concat(INFO_PREFIX, concat(intBytes(endpointId), intBytes(channelId))), 16);
+    }
+
+    private static byte[] intBytes(int value) {
+        return new byte[] {
+                (byte) (value >>> 24),
+                (byte) (value >>> 16),
+                (byte) (value >>> 8),
+                (byte) value
+        };
     }
 
     private static byte[] uuidBytes(UUID playerId) {

@@ -150,6 +150,22 @@ public final class DataPlaneSessionRegistry {
     }
 
     /**
+     * review-fix: T4-M2 — 关闭并移除该 {@code (playerId, epoch)} 下的全部会话（idle 超时清理路径），
+     * 同步撤销该键的 lease 项。未知键为无害 no-op；幂等。调用方（{@code DataPlaneUdpServer} 扫描器）
+     * 随后负责触发 {@link ControlFailoverHandler#onUdpSessionClosed} 回调。
+     */
+    public synchronized void removeSessions(UUID playerId, long epoch) {
+        Key k = new Key(playerId, epoch);
+        List<ReliableDatagramSession> bucket = sessions.remove(k);
+        if (bucket != null) {
+            for (ReliableDatagramSession s : bucket) {
+                s.close();
+            }
+        }
+        pendingLeases.removeIf(pl -> Objects.equals(pl.playerId, playerId) && pl.epoch == epoch);
+    }
+
+    /**
      * 推进 lease 表：关闭所有已逾期的 (playerId, epoch) 会话，把它们从 {@code sessions} 移除。
      * 单调调用（tick 线程上串行）；幂等。
      */

@@ -30,6 +30,9 @@ public final class ControlFrameCodec {
     private ControlFrameCodec() {
     }
 
+    /** 控制帧最大长度（16 MiB，含 type 与 payload）；超限视为协议错误。 */
+    public static final int MAX_FRAME_LENGTH = 16 * 1024 * 1024;
+
     /** 解析出的一帧（payload 为 retained slice，处理方负责 release）。 */
     public record Frame(ControlFrameType type, ByteBuf payload) {
     }
@@ -58,7 +61,7 @@ public final class ControlFrameCodec {
         }
         in.markReaderIndex();
         int frameLen = readVarInt(in);
-        if (frameLen < 1) {
+        if (frameLen < 1 || frameLen > MAX_FRAME_LENGTH) {
             in.resetReaderIndex();
             throw new IllegalArgumentException("invalid control frame length: " + frameLen);
         }

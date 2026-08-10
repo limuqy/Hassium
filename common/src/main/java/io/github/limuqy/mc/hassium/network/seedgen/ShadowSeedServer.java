@@ -401,9 +401,8 @@ public class ShadowSeedServer extends MinecraftServer {
 
     /**
      * 实体操作串行锁：PersistentEntitySectionManager 的 EntityLookup/sectionStorage
-     * 非线程安全（原版仅 server 主线程单写）。包转发可能 Netty 线程（1.20.1 首包）
-     * 与主线程交替调用，入口统一串行化。临界区为 µs 级实体状态操作，实体包频率低，
-     * 无锁热点。
+     * 非线程安全（原版仅 server 主线程单写）。入口已统一 execute() 到影子主循环线程
+     * （与方块操作同线程，天然串行），锁保留作防御（不再承担跨线程互斥）。
      */
     private final Object entityApplyLock = new Object();
 
@@ -451,23 +450,38 @@ public class ShadowSeedServer extends MinecraftServer {
         }
     }
 
-    /** 单方块应用：{@code setBlock(pos, state, 3)} + 所在 chunk 内容失效/光标脏。 */
+    /** 单方块应用：注入区块直接 setBlockState（flags 与 {@code level.setBlock(pos, state, 3)} 同源）；未注入跳过并标脏。 */
     private void applyBlock(BlockPos pos, BlockState state) {
-        this.overworld().setBlock(pos, state, 3);
-        invalidateChunkContent(java.util.Collections.singleton(ChunkPos.asLong(pos.getX() >> 4, pos.getZ() >> 4)));
+        long key = ChunkPos.asLong(pos.getX() >> 4, pos.getZ() >> 4);
+        LevelChunk chunk = injectedChunks.get(key);
+        if (chunk != null) {
+            // review-fix: T13-FixT3Chunk-2：注入区块不经 ChunkMap，level.setBlock 会触发幻影 worldgen——直接对注入 chunk 应用
+#if MC_VER < MC_1_21_5
+            chunk.setBlockState(pos, state, false);
+#else
+            chunk.setBlockState(pos, state, 3);
+#endif
+        }
+        invalidateChunkContent(java.util.Collections.singleton(key));
     }
 
     /** BE 更新应用：镜像原版 handleBlockEntityData（loadFromTag + setChanged），无 BE 则忽略。 */
     private void applyBlockEntity(ClientboundBlockEntityDataPacket packet) {
         ServerLevel level = this.overworld();
-        net.minecraft.world.level.block.entity.BlockEntity be = level.getBlockEntity(packet.getPos());
+        long key = ChunkPos.asLong(packet.getPos().getX() >> 4, packet.getPos().getZ() >> 4);
+        LevelChunk chunk = injectedChunks.get(key);
+        if (chunk == null) {
+            // review-fix: T13-FixT3Chunk-2：未注入——跳过应用并标脏（hash 比对触发全量回拉）
+            invalidateChunkContent(java.util.Collections.singleton(key));
+            return;
+        }
+        net.minecraft.world.level.block.entity.BlockEntity be = chunk.getBlockEntity(packet.getPos());
         if (be == null || packet.getTag() == null) {
             return;
         }
         BlockEntityCompat.loadFromTag(be, packet.getTag(), level.registryAccess());
         be.setChanged();
-        invalidateChunkContent(java.util.Collections.singleton(
-                ChunkPos.asLong(packet.getPos().getX() >> 4, packet.getPos().getZ() >> 4)));
+        invalidateChunkContent(java.util.Collections.singleton(key));
     }
 
     /**
@@ -483,36 +497,44 @@ public class ShadowSeedServer extends MinecraftServer {
     }
 
     /**
-     * 应用一个官方实体同步包到影子端（任意线程可调；内部串行化）。
+     * 应用一个官方实体同步包到影子端（任意线程可调；内部 {@code execute()} 投递影子端
+     * 主循环线程，与 {@link #applyBlockUpdate} 同模式——方块/实体操作同线程串行）。
      * <p>
      * 客户端纯转发（T3 mixin 侧只调本方法），进程内对象直传（零编码零压缩）。
      * 按 instanceof 分发 7 类包，镜像原版 ClientPacketListener handler 的实体语义，
      * 但影子端不 tick 实体：全部为瞬时状态操作（挂载/assignValues/setPos/速度/移除），
      * 无插值、无 tick 循环、不阻塞主线程。
      * <p>
-     * 容错：实体不存在/类型不匹配/异常一律静默（debug 日志），与 handler 容错一致。
+     * 容错：实体不存在/类型不匹配/异常一律静默（debug 日志），与 handler 容错一致；
+     * 主循环已停（断连/关停）时投递被 {@code RejectedExecutionException} 兜底丢弃，无残留。
      */
     public void applyEntityPacket(Packet<?> packet) {
         try {
-            synchronized (entityApplyLock) {
-                if (packet instanceof ClientboundAddEntityPacket add) {
-                    applyAddEntity(add);
-                } else if (packet instanceof ClientboundSetEntityDataPacket data) {
-                    applySetEntityData(data);
-                } else if (packet instanceof ClientboundMoveEntityPacket move) {
-                    applyMoveEntity(move);
-                } else if (packet instanceof ClientboundTeleportEntityPacket teleport) {
-                    applyTeleportEntity(teleport);
-                } else if (packet instanceof ClientboundSetEntityMotionPacket motion) {
-                    applySetEntityMotion(motion);
-                } else if (packet instanceof ClientboundRotateHeadPacket head) {
-                    applyRotateHead(head);
-                } else if (packet instanceof ClientboundRemoveEntitiesPacket remove) {
-                    applyRemoveEntities(remove);
+            this.execute(() -> {
+                synchronized (entityApplyLock) {
+                    try {
+                        if (packet instanceof ClientboundAddEntityPacket add) {
+                            applyAddEntity(add);
+                        } else if (packet instanceof ClientboundSetEntityDataPacket data) {
+                            applySetEntityData(data);
+                        } else if (packet instanceof ClientboundMoveEntityPacket move) {
+                            applyMoveEntity(move);
+                        } else if (packet instanceof ClientboundTeleportEntityPacket teleport) {
+                            applyTeleportEntity(teleport);
+                        } else if (packet instanceof ClientboundSetEntityMotionPacket motion) {
+                            applySetEntityMotion(motion);
+                        } else if (packet instanceof ClientboundRotateHeadPacket head) {
+                            applyRotateHead(head);
+                        } else if (packet instanceof ClientboundRemoveEntitiesPacket remove) {
+                            applyRemoveEntities(remove);
+                        }
+                    } catch (Throwable t) {
+                        LOGGER.debug("Hassium: Shadow applyEntityPacket ignored: {}", t.toString());
+                    }
                 }
-            }
-        } catch (Throwable t) {
-            LOGGER.debug("Hassium: Shadow applyEntityPacket ignored: {}", t.toString());
+            });
+        } catch (java.util.concurrent.RejectedExecutionException e) {
+            // review-fix: T13-FixT3Chunk-3：主循环已停（断连竞态）：更新丢弃，数据由下次进服 hash 比对/直推兜底
         }
     }
 

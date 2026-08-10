@@ -225,6 +225,37 @@ public final class DataPlaneUdpServer {
             }
         }
         inst.registry.expireLeases(nowMs);
+        sweepIdleSessions(inst, nowMs);
+    }
+
+    /**
+     * review-fix: T4-M2 — 周期（30s）扫描清理 idle 超时会话（心跳帧不实现，仅超时清理）：
+     * <ul>
+     *   <li>有 active master（{@link ControlFailoverHandler#currentEpoch} 与该会话 epoch 一致）→
+     *       {@link #SESSION_IDLE_TTL_MS}（90s）无 receive 即清理；</li>
+     *   <li>无 active master（handler 无该 player 状态或 epoch 不匹配）→ {@link #NO_MASTER_TTL_MS}（30s）短 TTL。</li>
+     * </ul>
+     * 清理走 {@link DataPlaneSessionRegistry#removeSessions} 统一移除路径并触发
+     * {@link ControlFailoverHandler#onUdpSessionClosed} 回调。持续 receive 的 active 会话不会被误清；
+     * lease 排干会话由 {@code expireLeases} 先行关闭（lease ≤ 30s < 90s），不受本扫描影响。
+     */
+    private static void sweepIdleSessions(Instance inst, long nowMs) {
+        if (nowMs - inst.lastSweepMs < IDLE_SWEEP_INTERVAL_MS) {
+            return;
+        }
+        inst.lastSweepMs = nowMs;
+        ControlFailoverHandler handler = ControlFailoverHandler.getInstance();
+        for (ReliableDatagramSession session : inst.registry.allSessions()) {
+            long masterEpoch = handler.currentEpoch(session.playerId());
+            boolean hasMaster = masterEpoch != 0L && masterEpoch == session.epoch();
+            long ttlMs = hasMaster ? SESSION_IDLE_TTL_MS : NO_MASTER_TTL_MS;
+            if (nowMs - session.lastActivityMs() >= ttlMs) {
+                inst.registry.removeSessions(session.playerId(), session.epoch());
+                handler.onUdpSessionClosed(session.playerId(), session.epoch());
+                LOGGER.info("UdpServer: idle session swept player={} epoch={} idleMs={} hasMaster={}",
+                        session.playerId(), session.epoch(), nowMs - session.lastActivityMs(), hasMaster);
+            }
+        }
     }
 
     /** 单例 {@link UdpBulkRouter}；hardRttMs 暂维持协议默认 1000ms。 */
@@ -391,6 +422,10 @@ public final class DataPlaneUdpServer {
 
     /** 默认 lease 时长（ms）；Task 6 会经配置项覆盖。 */
     private static final long DEFAULT_LEASE_MS = 30_000L;
+    // review-fix: T4-M2 — idle 会话清理：扫描周期 / 有 active master 的 idle TTL / 无 active master 的短 TTL。
+    private static final long IDLE_SWEEP_INTERVAL_MS = 30_000L;
+    private static final long SESSION_IDLE_TTL_MS = 90_000L;
+    private static final long NO_MASTER_TTL_MS = 30_000L;
     private static final int EVENT_LOOP_THREADS = 1;
     private static final byte[] HKDF_INFO_PREFIX = "hassium-udp-v1".getBytes(java.nio.charset.StandardCharsets.US_ASCII);
 
@@ -408,6 +443,8 @@ public final class DataPlaneUdpServer {
                 new java.util.concurrent.ConcurrentHashMap<>();
         final AtomicInteger dispatchedCount = new AtomicInteger();
         volatile boolean bound = false;
+        /** review-fix: T4-M2 — 上次 idle 扫描时刻（tick 线程写，tick 线程读）。 */
+        long lastSweepMs = 0L;
 
         Instance(List<HassiumConfig.UdpListenerConfig> listeners) {
             this.configured = List.copyOf(listeners);

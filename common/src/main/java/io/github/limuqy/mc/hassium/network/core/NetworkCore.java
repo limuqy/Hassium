@@ -1,5 +1,6 @@
 package io.github.limuqy.mc.hassium.network.core;
 
+import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.config.HassiumConfig;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.network.ClientChunkPipeline;
@@ -361,6 +362,13 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
      */
     @Override
     public void onHandshakeAccepted(HandshakeCodec.ServerResponse response, boolean resumeAccepted) {
+        // review-fix: T1-M3 协议版本不匹配 → 走拒绝路径（关 outbound → IDLE）
+        if (response.protocolVersion() != Constants.CURRENT_PROTOCOL_VERSION) {
+            LOGGER.warn("Hassium: NetworkCore handshake protocol mismatch (got={}, expected={})",
+                    response.protocolVersion(), Constants.CURRENT_PROTOCOL_VERSION);
+            onHandshakeRejected("protocol version mismatch");
+            return;
+        }
         lastHandshake = response;
         lastResumeAccepted = resumeAccepted;
         applyHandshake(response);

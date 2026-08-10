@@ -25,11 +25,11 @@ public final class IdleWindowDetector {
     private final long windowMs;
     private final LongSupplier clockMs;
 
-    private long lastSampleMs = Long.MIN_VALUE;
-    private double lastX;
-    private double lastZ;
-    private long lastMoveMs = Long.MIN_VALUE;
-    private long lastHashActivityMs = Long.MIN_VALUE;
+    private volatile long lastSampleMs = Long.MIN_VALUE;
+    private volatile double lastX;
+    private volatile double lastZ;
+    private volatile long lastMoveMs = Long.MIN_VALUE;
+    private volatile long lastHashActivityMs = Long.MIN_VALUE;
 
     public IdleWindowDetector(double moveThresholdBlocksPerSec, long windowMs, LongSupplier clockMs) {
         if (!(moveThresholdBlocksPerSec > 0)) {

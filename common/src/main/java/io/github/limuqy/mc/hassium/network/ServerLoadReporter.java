@@ -19,7 +19,8 @@ public final class ServerLoadReporter {
     /** 上报周期（tick）：100 = 5 秒 */
     public static final int REPORT_INTERVAL_TICKS = 100;
 
-    private static final AtomicLong LAST_REPORT_TICK = new AtomicLong(Long.MIN_VALUE);
+    // review-fix: T13-FixT3Chunk-1：初值 0（Long.MIN_VALUE 使 tick - last 减法溢出恒为负，首报永不触发）
+    private static final AtomicLong LAST_REPORT_TICK = new AtomicLong(0);
     private static volatile ServerLoadReport lastReport;
 
     private ServerLoadReporter() {}

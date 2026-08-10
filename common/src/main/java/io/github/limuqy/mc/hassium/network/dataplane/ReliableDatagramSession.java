@@ -89,6 +89,8 @@ public final class ReliableDatagramSession implements BulkRouteTarget {
     private boolean closed = false;
     // Task 3 UDP lease：主 TCP 断开后保留会话以排干已 accepted 的帧；非 lease 期恒 false。
     private volatile long leaseExpireAt = Long.MAX_VALUE;
+    // review-fix: T4-M2 — 最近一次 receive 的活动时间戳（构造时初始化，避免新建会话被首轮扫描误清）。
+    private volatile long lastActivityMs;
 
     public ReliableDatagramSession(UUID playerId, long epoch, UdpEndpoint endpoint,
                                    InetSocketAddress remote, byte[] key, DatagramSink sink) {
@@ -118,6 +120,7 @@ public final class ReliableDatagramSession implements BulkRouteTarget {
         this.hardRttMs = endpoint.hardRttMs();
         this.endpointId = endpointId;
         this.weight = weight < 1 ? 1 : weight;
+        this.lastActivityMs = System.currentTimeMillis();
 
         this.kcpOutput = this::onKcpOutput;
         this.kcp = new Kcp(conv, kcpOutput);
@@ -148,6 +151,7 @@ public final class ReliableDatagramSession implements BulkRouteTarget {
         if (closed || datagram == null || !datagram.isReadable()) {
             return;
         }
+        lastActivityMs = nowMs; // review-fix: T4-M2 — 任何有效入帧都视为活动，供 idle 扫描判定
         try {
             kcp.input(datagram);
         } catch (Throwable ignored) {
@@ -451,5 +455,10 @@ public final class ReliableDatagramSession implements BulkRouteTarget {
     /** 当前时刻是否处于 lease 期（主 TCP 已断但已 accepted 的帧仍可排干的窗口内）。 */
     public boolean isLeaseActive(long nowMs) {
         return nowMs < leaseExpireAt;
+    }
+
+    /** review-fix: T4-M2 — 最近一次 {@link #receive} 的活动时间戳（构造时即初始化）；供 idle 超时扫描读取。 */
+    public long lastActivityMs() {
+        return lastActivityMs;
     }
 }
