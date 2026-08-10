@@ -17,6 +17,7 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.nio.charset.StandardCharsets;
 import java.net.ServerSocket;
 import java.util.ArrayList;
 import java.util.List;
@@ -47,6 +48,11 @@ class GatewaySmokeTest {
         net.minecraft.server.Bootstrap.bootStrap();
     }
 #endif
+
+    @BeforeAll
+    static void setupResumeKey() {
+        ResumeTicket.setSharedKey("hassium-test-key".getBytes(StandardCharsets.UTF_8));
+    }
 
     @BeforeEach
     void setUp() {

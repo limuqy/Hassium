@@ -12,8 +12,10 @@ import io.github.limuqy.mc.hassium.network.core.outbound.OutboundConnection;
 import io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.embedded.EmbeddedChannel;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -32,6 +34,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * 负载报告触发路由 / 预热生命周期。
  */
 class MigrationEngineTest {
+
+    @BeforeAll
+    static void setupResumeKey() {
+        ResumeTicket.setSharedKey("hassium-test-key".getBytes(StandardCharsets.UTF_8));
+    }
 
     private static final UUID PLAYER = UUID.fromString("00000000-0000-0000-0000-000000000001");
 

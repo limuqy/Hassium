@@ -18,8 +18,10 @@ import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.network.protocol.Packet;
 import net.minecraft.network.protocol.game.ClientboundPlayerPositionPacket;
 import net.minecraft.network.protocol.game.ServerGamePacketListener;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -38,6 +40,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * T6（N1）：掉线期（MIGRATING/IDLE/静默期）routeC2S 已消费丢弃、resumeAccepted 位置回退。
  */
 class NetworkCoreMigrationTest {
+
+    @BeforeAll
+    static void setupResumeKey() {
+        ResumeTicket.setSharedKey("hassium-test-key".getBytes(StandardCharsets.UTF_8));
+    }
 
     private static final byte[] TOKEN = new byte[16];
     private static final UUID PLAYER = UUID.fromString("00000000-0000-0000-0000-000000000002");
