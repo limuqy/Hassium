@@ -291,7 +291,8 @@ public interface HassiumMetrics {
 
     /** §14 第 4 步：send-side per-portIdx 累计字节数；不存在则 0。 */
     long getBulkSentBytesByPort(int portIdx);
-    /** Data 通道分流比例（占总帧数的百分比）。 */
+    /** Data 通道分流比例（share/exclusive 模式下 Data 帧占总帧数的百分比；PoC 关注 Primary vs Data 走向）。 */
+    // review-fix: T9-35 原 impl 覆盖与接口 default 逐行重复，已删除 impl 覆盖；此为唯一实现
     default double getBulkDataSharePercent() {
         long total = getBulkFramesPrimary() + getBulkFramesData();
         if (total == 0) return 0.0;

@@ -40,8 +40,12 @@ public final class VanillaZlibEstimator {
             def.setInput(rawPayload);
             def.finish();
             byte[] buf = new byte[len + 64];
-            int clen = def.deflate(buf);
-            return varIntBytes(len) + clen;
+            // review-fix: T9-36 循环 deflate 至 finished() 并按 getTotalOut() 计——
+            // 极端不可压缩输入（stored-block 开销）下 len+64 缓冲可能不足，单次 deflate 截断会低估 Zlib 帧
+            while (!def.finished()) {
+                def.deflate(buf);
+            }
+            return varIntBytes(len) + (int) def.getTotalOut();
         } finally {
             def.end();
         }
@@ -52,9 +56,8 @@ public final class VanillaZlibEstimator {
      * 公式基于真实 MC 区块 NBT 数据剖面（典型 Zlib 压缩率 25-40%），略保守以不夸大 ZSTD 优势：
      * <ul>
      *   <li>&lt;256 → VarInt(0) + raw（不压缩）</li>
-     *   <li>256-4095 → ~35% of raw</li>
-     *   <li>4096-65535 → ~30% of raw（区块包体范围）</li>
-     *   <li>&gt;65536 → ~25% of raw（大型聚合）</li>
+     *   <li>256-4095 → ~80% of raw（小负载保守估计：不可压缩输入 zlib stored-block 帧 ≈ raw+11B，
+     *       压缩收益有限；0.35 对真实小输入过于乐观）</li>
      * </ul>
      *
      * @param rawSize 未压缩负载字节数
@@ -66,8 +69,10 @@ public final class VanillaZlibEstimator {
             return varIntBytes(0) + rawSize;
         }
         double ratio;
+        // review-fix: T9-37 小段（256-4095）改用保守比率 0.8——原 0.35 对不可压缩小输入过度乐观，
+        // 且 256B 处帧大小骤降 2/3（255→256B 的阈值突变源于 MC 协议本身：低于阈值不压缩）
         if (rawSize <= 4095) {
-            ratio = 0.35;
+            ratio = 0.8;
         } else if (rawSize <= 65535) {
             ratio = 0.30;
         } else {

@@ -444,7 +444,8 @@ public class NetworkStats {
      * 获取格式化的统计信息
      */
     public static String getFormattedStats() {
-        return metrics.toFormattedString();
+        // review-fix: T9-38 metrics 关闭时短路，避免大 String.format 空跑（与本文件其他 getter enabled ? x : 0 模式一致）
+        return enabled ? metrics.toFormattedString() : "";
     }
 
     /**

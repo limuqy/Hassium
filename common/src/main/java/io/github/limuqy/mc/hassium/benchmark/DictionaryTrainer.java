@@ -128,10 +128,11 @@ public class DictionaryTrainer {
      *
      * @param regionDir  存档 region 目录（例如 world/region 或 world/DIM-1/region）
      * @param maxSamples 最大样本数量，达到后停止扫描
-     * @param seed       随机种子，若非 null 则对提取到的样本进行随机采样（用于多样性）
      * @return 提取到的区块 NBT 样本列表
      */
-    public static List<byte[]> extractRealChunkSamples(Path regionDir, int maxSamples, Long seed) throws IOException {
+    // review-fix: T9-40 seed 参数已移除——原 seed 采样分支为死代码：扫描循环在 samples.size() >= maxSamples 即 break，
+    // samples.size() > maxSamples 恒 false，且全部调用点传 null
+    public static List<byte[]> extractRealChunkSamples(Path regionDir, int maxSamples) throws IOException {
         List<byte[]> samples = new ArrayList<>();
 
         if (!Files.isDirectory(regionDir)) {
@@ -159,19 +160,6 @@ public class DictionaryTrainer {
             } catch (IOException e) {
                 System.err.println("跳过无法读取的 region 文件: " + regionFile + " (" + e.getMessage() + ")");
             }
-        }
-
-        // 可选：随机采样以增加多样性
-        if (seed != null && samples.size() > maxSamples) {
-            Random random = new Random(seed);
-            List<byte[]> shuffled = new ArrayList<>(samples);
-            for (int i = shuffled.size() - 1; i > 0; i--) {
-                int j = random.nextInt(i + 1);
-                byte[] temp = shuffled.get(i);
-                shuffled.set(i, shuffled.get(j));
-                shuffled.set(j, temp);
-            }
-            return shuffled.subList(0, maxSamples);
         }
 
         return samples;
@@ -325,7 +313,7 @@ public class DictionaryTrainer {
                 }
                 System.out.printf("  从 %s 提取样本 (目标: %d, 权重: %.0f%%)...%n",
                         dimNames[i], sampleCounts[i], weightValues[i] * 100);
-                List<byte[]> dimSamples = extractRealChunkSamples(dimDir, sampleCounts[i], null);
+                List<byte[]> dimSamples = extractRealChunkSamples(dimDir, sampleCounts[i]);
                 System.out.printf("    实际提取: %d 个样本%n", dimSamples.size());
                 sampleList.addAll(dimSamples);
             }
@@ -335,7 +323,7 @@ public class DictionaryTrainer {
             if (!Files.isDirectory(regionDir)) {
                 regionDir = worldSaveDir; // 如果传入的就是 region 目录
             }
-            sampleList = extractRealChunkSamples(regionDir, maxSamples, null);
+            sampleList = extractRealChunkSamples(regionDir, maxSamples);
         }
 
         if (sampleList.isEmpty()) {
@@ -535,7 +523,7 @@ public class DictionaryTrainer {
         System.out.println("选项:");
         System.out.println("  --world <存档根目录>     使用真实存档区块数据训练（推荐）");
         System.out.println("                           需传入存档根目录（包含 region、DIM-1/region、DIM1/region）");
-        System.out.println("  --max-world-samples <N>  最多提取的区块样本数（默认: 5000）");
+        System.out.println("  --max-world-samples <N>  最多提取的区块样本数（默认: 10000）"); // review-fix: T9-41 与 main L454 实际默认一致
         System.out.println("  --weights <preset>       维度采样权重预设（默认: balanced）");
         System.out.println("                           - balanced: 均衡采样，三维度各 33% (通用性最好)");
         System.out.println("                           - frequency: 频率加权，主世界 60%, 下界 25%, 末地 15%");

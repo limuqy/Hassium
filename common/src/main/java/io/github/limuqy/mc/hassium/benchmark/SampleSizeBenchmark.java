@@ -153,10 +153,9 @@ public class SampleSizeBenchmark {
         System.out.printf("步骤 1/2: 从存档提取样本池 (最多 %d 个样本)...%n", config.maxSamples());
         List<byte[]> fullSamplePool;
         if (config.worldSaveDir() != null) {
-            fullSamplePool = DictionaryTrainer.extractRealChunkSamples(
+            fullSamplePool = DictionaryTrainer.extractRealChunkSamples( // review-fix: T9-40 seed 参数已移除（原分支死代码，调用点恒传 null）
                     config.worldSaveDir().resolve("region"),
-                    config.maxSamples(),
-                    null
+                    config.maxSamples()
             );
         } else {
             fullSamplePool = DictionaryTrainer.generateTrainingSamples(

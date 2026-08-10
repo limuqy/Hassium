@@ -26,6 +26,10 @@ public final class CompressionBenchmark {
         System.out.println();
 
         Random random = new Random(42);
+        // review-fix: T9-39 按实测累计各 level 的压缩比/压缩速度，末尾推荐基于实测数据计算而非硬编码
+        double[] sumRatio = new double[LEVELS.length];
+        double[] sumCompressSpeed = new double[LEVELS.length];
+        int levelCount = 0;
 
         for (int size : SIZES) {
             byte[] data = generateTestData(random, size);
@@ -35,7 +39,8 @@ public final class CompressionBenchmark {
                     "Level", "压缩比", "压缩速度", "解压速度", "压缩耗时");
             System.out.println("-".repeat(60));
 
-            for (int level : LEVELS) {
+            for (int li = 0; li < LEVELS.length; li++) {
+                int level = LEVELS[li];
                 // 预热
                 for (int i = 0; i < WARMUP; i++) {
                     Zstd.compress(data, level);
@@ -61,21 +66,41 @@ public final class CompressionBenchmark {
                 double compressSpeed = throughputMBs(data.length, compressTime, ITERATIONS);
                 double decompressSpeed = throughputMBs(data.length, decompressTime, ITERATIONS);
                 double compressMs = (compressTime / 1_000_000.0) / ITERATIONS;
+                sumRatio[li] += ratio;
+                sumCompressSpeed[li] += compressSpeed;
 
                 System.out.printf("%-8d %-12.2f %-12.2f %-12.2f %-12.3f%n",
                         level, ratio, compressSpeed, decompressSpeed, compressMs);
             }
+            levelCount++;
             System.out.println();
         }
 
-        // 打印推荐
-        System.out.println("=== 推荐分析 ===");
-        System.out.println("Level 3: 速度快，压缩比适中，适合网络传输");
-        System.out.println("Level 6: 平衡点，速度和压缩比都不错");
-        System.out.println("Level 9: 压缩比高，但速度较慢");
-        System.out.println();
-        System.out.println("当前默认 Level 9，建议改为 Level 3 以提升压缩速度。");
-        System.out.println("压缩比从 ~7:1 降至 ~6:1，但速度提升 2-3 倍。");
+        // 推荐：按实测均值计算，避免硬编码结论与本次数据相矛盾
+        System.out.println("=== 推荐分析（按本次实测均值） ===");
+        int bestRatio = 0, bestSpeed = 0;
+        for (int i = 1; i < LEVELS.length; i++) {
+            if (sumRatio[i] / levelCount > sumRatio[bestRatio] / levelCount) {
+                bestRatio = i;
+            }
+            if (sumCompressSpeed[i] / levelCount > sumCompressSpeed[bestSpeed] / levelCount) {
+                bestSpeed = i;
+            }
+        }
+        // 平衡点：压缩比不低于最优 95% 的 level 中压缩速度最快者
+        int balanced = bestSpeed;
+        double bestRatioVal = sumRatio[bestRatio] / levelCount;
+        for (int i = 0; i < LEVELS.length; i++) {
+            if (sumRatio[i] / levelCount >= bestRatioVal * 0.95
+                    && sumCompressSpeed[i] / levelCount > sumCompressSpeed[balanced] / levelCount) {
+                balanced = i;
+            }
+        }
+        System.out.printf("  压缩比最高: Level %d（平均 %.2f:1）%n",
+                LEVELS[bestRatio], sumRatio[bestRatio] / levelCount);
+        System.out.printf("  压缩速度最高: Level %d（平均 %.1f MB/s）%n",
+                LEVELS[bestSpeed], sumCompressSpeed[bestSpeed] / levelCount);
+        System.out.printf("  平衡推荐: Level %d（压缩比 ≥ 最优 95%% 中速度最快）%n", LEVELS[balanced]);
     }
 
     /**

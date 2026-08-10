@@ -133,8 +133,13 @@ public class NetworkPacketDictionaryTrainer {
             ));
 
             sb.append("  样本分布:\n");
-            for (Map.Entry<PacketType, Integer> entry : sampleCounts.entrySet()) {
-                sb.append(String.format("    %-20s: %d 个\n", entry.getKey().name(), entry.getValue()));
+            if (sampleCounts.isEmpty()) {
+                // review-fix: T9-43 无类型信息的样本源（pcap/log）不打印凭空捏造的分布
+                sb.append("    (样本源不携带包类型信息，无分布数据)\n");
+            } else {
+                for (Map.Entry<PacketType, Integer> entry : sampleCounts.entrySet()) {
+                    sb.append(String.format("    %-20s: %d 个\n", entry.getKey().name(), entry.getValue()));
+                }
             }
 
             return sb.toString();
@@ -148,11 +153,20 @@ public class NetworkPacketDictionaryTrainer {
         Random random = new Random(seed);
         byte[] data = new byte[size];
 
-        // 包头：VarInt 包 ID + VarInt 长度
-        int headerSize = 4; // 简化的包头
-        if (size <= headerSize) {
+        // 包头：VarInt 包 ID + VarInt 长度（review-fix: T9-42 实际写入模拟 ID/长度——
+        // 原实现 headerSize 仅作跳过偏移、头 4 字节恒为 0，模拟样本与真实包字节结构不符）
+        // ordinal < 128 → ID 1 字节；size ≤ 2^21-1 → 长度 ≤ 3 字节；合计 ≤ 4 字节
+        if (size <= 4) {
             return data;
         }
+        int headerSize = 0;
+        data[headerSize++] = (byte) type.ordinal();
+        int len = size;
+        while ((len & ~0x7F) != 0) {
+            data[headerSize++] = (byte) ((len & 0x7F) | 0x80);
+            len >>>= 7;
+        }
+        data[headerSize++] = (byte) len;
 
         // 根据包类型生成不同的内容
         switch (type) {
@@ -490,22 +504,27 @@ public class NetworkPacketDictionaryTrainer {
     }
 
     /**
-     * 生成训练样本集
+     * 按 typeWeights 计算各包类型样本数：truncation 后余数并入 C2S_MOVE（与 generateTrainingSamples 生成口径一致）。
+     * review-fix: T9-43 生成与统计共用同一计数函数，训练结果打印真实分配而非按权重重算
      */
-    public static List<byte[]> generateTrainingSamples(NetworkTrainingParams params) {
-        List<byte[]> samples = new ArrayList<>(params.sampleCount());
+    private static Map<PacketType, Integer> computeSampleCounts(NetworkTrainingParams params) {
         Map<PacketType, Integer> sampleCounts = new EnumMap<>(PacketType.class);
-
-        // 计算每个类型的样本数量
         int remaining = params.sampleCount();
         for (Map.Entry<PacketType, Double> entry : params.typeWeights().entrySet()) {
             int count = (int) (params.sampleCount() * entry.getValue());
             sampleCounts.put(entry.getKey(), count);
             remaining -= count;
         }
-
-        // 将剩余样本分配给移动包（最频繁）
         sampleCounts.merge(PacketType.C2S_MOVE, remaining, Integer::sum);
+        return sampleCounts;
+    }
+
+    /**
+     * 生成训练样本集
+     */
+    public static List<byte[]> generateTrainingSamples(NetworkTrainingParams params) {
+        List<byte[]> samples = new ArrayList<>(params.sampleCount());
+        Map<PacketType, Integer> sampleCounts = computeSampleCounts(params);
 
         // 生成样本
         long seed = 12345L;
@@ -676,16 +695,18 @@ public class NetworkPacketDictionaryTrainer {
      */
     public static NetworkTrainingResult trainDictionary(NetworkTrainingParams params) throws IOException {
         List<byte[]> samples = generateTrainingSamples(params);
-        return trainDictionaryFromSamples(samples, params.dictionarySize(), params.typeWeights());
+        return trainDictionaryFromSamples(samples, params.dictionarySize(), computeSampleCounts(params));
     }
 
     /**
-     * 使用给定样本集训练字典
+     * 使用给定样本集训练字典。
+     *
+     * @param sampleCounts 各包类型真实样本数（透传自生成端）；pcap/log 等无类型信息的样本源传 null
      */
     public static NetworkTrainingResult trainDictionaryFromSamples(
             List<byte[]> samples,
             int dictionarySize,
-            Map<PacketType, Double> typeWeights
+            Map<PacketType, Integer> sampleCounts // review-fix: T9-43 真实计数透传，不再按权重重算；null = 样本源无包类型信息
     ) throws IOException {
         System.out.println("开始训练网络包 ZSTD 字典...");
         System.out.printf("  字典大小: %d bytes (%.1f KB)%n", dictionarySize, dictionarySize / 1024.0);
@@ -714,10 +735,9 @@ public class NetworkPacketDictionaryTrainer {
         double ratioWithoutDict = testCompressionWithoutDict(samples);
         double ratioWithDict = testCompressionWithDict(samples, dictionary);
 
-        // 统计样本分布
-        Map<PacketType, Integer> sampleCounts = new EnumMap<>(PacketType.class);
-        for (PacketType type : typeWeights.keySet()) {
-            sampleCounts.put(type, (int) (samples.size() * typeWeights.get(type)));
+        // 统计样本分布（透传真实计数；无类型信息源为空表）
+        if (sampleCounts == null) {
+            sampleCounts = Collections.emptyMap();
         }
 
         return new NetworkTrainingResult(
@@ -840,11 +860,11 @@ public class NetworkPacketDictionaryTrainer {
             if (pcapFile != null) {
                 System.out.println("从抓包文件提取样本: " + pcapFile);
                 List<byte[]> samples = extractSamplesFromPcap(pcapFile, maxSamples);
-                result = trainDictionaryFromSamples(samples, params.dictionarySize(), params.typeWeights());
+                result = trainDictionaryFromSamples(samples, params.dictionarySize(), null); // review-fix: T9-43 pcap 样本无包类型信息
             } else if (logFile != null) {
                 System.out.println("从服务器日志提取样本: " + logFile);
                 List<byte[]> samples = extractSamplesFromLog(logFile, maxSamples);
-                result = trainDictionaryFromSamples(samples, params.dictionarySize(), params.typeWeights());
+                result = trainDictionaryFromSamples(samples, params.dictionarySize(), null); // review-fix: T9-43 log 样本无包类型信息
             } else {
                 result = trainDictionary(params);
             }

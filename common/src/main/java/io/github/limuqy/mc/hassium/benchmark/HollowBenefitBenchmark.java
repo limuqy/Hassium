@@ -72,9 +72,9 @@ public final class HollowBenefitBenchmark {
     private static final int ZSTD_LEVEL = 3;
 
     /** 一个 section 的磁盘表示（已剥离 properties）。 */
-    private record SectionData(int y, List<String> palette, long[] data) {}
+    private record SectionEncoded(int y, List<String> palette, long[] data) {} // review-fix: T9-45 原名 SectionData 命中 data 后缀反模式
 
-    private record ChunkData(ChunkPos pos, List<SectionData> sections) {}
+    private record ChunkEncoded(ChunkPos pos, List<SectionEncoded> sections) {} // review-fix: T9-45 原名 ChunkData 命中 data 后缀反模式
 
     /** palette 解析缓存（按方块名，跨 section/chunk 复用）。 */
     private static final Map<String, BlockState> STATE_CACHE = new HashMap<>();
@@ -108,7 +108,7 @@ public final class HollowBenefitBenchmark {
         System.out.println("MC registry: " + registrySize + " block states");
         System.out.println();
 
-        Map<ChunkPos, ChunkData> chunks = scanWorld(Path.of(worldDir));
+        Map<ChunkPos, ChunkEncoded> chunks = scanWorld(Path.of(worldDir));
         System.out.println("loaded chunks: " + chunks.size());
         System.out.println("口径: section blockCount+blockStates 域; biomes/BE/heightmaps/light 两侧相同不计入");
         System.out.println();
@@ -117,7 +117,7 @@ public final class HollowBenefitBenchmark {
         Map<ChunkPos, boolean[]> denseMap = new HashMap<>();
         long totalSections = 0;
         long denseSections = 0;
-        for (Map.Entry<ChunkPos, ChunkData> e : chunks.entrySet()) {
+        for (Map.Entry<ChunkPos, ChunkEncoded> e : chunks.entrySet()) {
             boolean[] dense = classify(e.getValue());
             denseMap.put(e.getKey(), dense);
             for (boolean sectionDense : dense) {
@@ -131,38 +131,41 @@ public final class HollowBenefitBenchmark {
                 totalSections, denseSections, denseSections * 100.0 / Math.max(1, totalSections), decodeFailures);
 
         // 2) shellDepth sweep：BFS + 重组 + ZSTD
+        // review-fix: T9-46 full 编码与 shellDepth 无关（hollow 仅替换被剔除 section），
+        // 先全量累加一次作为真实 totals；原实现循环内覆盖，totals 仅反映最后一档
         long totalFullRaw = 0, totalFullZstd = 0;
+        for (Map.Entry<ChunkPos, ChunkEncoded> e : chunks.entrySet()) {
+            byte[] full = encodeChunk(e.getValue(), null, null, 0);
+            totalFullRaw += full.length;
+            totalFullZstd += Zstd.compress(full, ZSTD_LEVEL).length;
+        }
         List<Map<Integer, int[]>> yCullPerDepth = new ArrayList<>();
         System.out.printf("%-10s | %12s | %12s | %8s | %12s | %12s | %8s | %9s%n",
                 "shellDepth", "fullRaw", "hollowRaw", "rawSave%", "fullZstd", "hollowZstd", "zstdSave%", "culledSec");
         System.out.println("-".repeat(110));
         for (int depth = 0; depth <= maxShellDepth; depth++) {
             Map<ChunkPos, int[]> dist = bfsShell(denseMap, depth);
-            long fullRaw = 0, hollowRaw = 0, fullZstd = 0, hollowZstd = 0;
+            long fullRaw = totalFullRaw, fullZstd = totalFullZstd; // full 与 depth 无关，各档行复用 totals
+            long hollowRaw = 0, hollowZstd = 0;
             long culled = 0;
             Map<Integer, int[]> yCull = new TreeMap<>();
-            for (Map.Entry<ChunkPos, ChunkData> e : chunks.entrySet()) {
-                ChunkData cd = e.getValue();
+            for (Map.Entry<ChunkPos, ChunkEncoded> e : chunks.entrySet()) {
+                ChunkEncoded cd = e.getValue();
                 boolean[] dense = denseMap.get(cd.pos());
                 int[] d = dist.get(cd.pos());
-                byte[] full = encodeChunk(cd, null, null, depth);
                 byte[] hollow = encodeChunk(cd, dense, d, depth);
-                fullRaw += full.length;
                 hollowRaw += hollow.length;
-                fullZstd += Zstd.compress(full, ZSTD_LEVEL).length;
                 hollowZstd += Zstd.compress(hollow, ZSTD_LEVEL).length;
                 for (int i = 0; i < cd.sections().size(); i++) {
                     int y = cd.sections().get(i).y();
                     int[] v = yCull.computeIfAbsent(y, k -> new int[2]);
                     v[1]++;
-                    if (dense[i] && d[i] > depth) {
+                    if (dense[i] && (d[i] < 0 || d[i] > depth)) { // review-fix: T9-44 与 encodeChunk 剔除判定一致（dist==-1 不可达同样剔除）
                         culled++;
                         v[0]++;
                     }
                 }
             }
-            totalFullRaw = fullRaw;
-            totalFullZstd = fullZstd;
             yCullPerDepth.add(yCull);
             System.out.printf("%-10d | %12d | %12d | %7.2f%% | %12d | %12d | %7.2f%% | %9d%n",
                     depth, fullRaw, hollowRaw, pct(fullRaw, hollowRaw),
@@ -186,9 +189,9 @@ public final class HollowBenefitBenchmark {
     // region 扫描
     // ------------------------------------------------------------------
 
-    private static Map<ChunkPos, ChunkData> scanWorld(Path worldDir) throws IOException {
+    private static Map<ChunkPos, ChunkEncoded> scanWorld(Path worldDir) throws IOException {
         Path regionDir = worldDir.resolve("region");
-        Map<ChunkPos, ChunkData> out = new HashMap<>();
+        Map<ChunkPos, ChunkEncoded> out = new HashMap<>();
         if (!Files.isDirectory(regionDir)) {
             throw new IOException("region 目录不存在: " + regionDir);
         }
@@ -209,7 +212,7 @@ public final class HollowBenefitBenchmark {
         return out;
     }
 
-    private static void scanRegionFile(Path regionFile, Map<ChunkPos, ChunkData> out) throws IOException {
+    private static void scanRegionFile(Path regionFile, Map<ChunkPos, ChunkEncoded> out) throws IOException {
         String name = regionFile.getFileName().toString(); // r.X.Z.mca
         String[] parts = name.substring(2, name.length() - 4).split("\\.");
         int rx = Integer.parseInt(parts[0]);
@@ -256,10 +259,10 @@ public final class HollowBenefitBenchmark {
                     }
                     int cx = rx * 32 + (i & 31);
                     int cz = rz * 32 + (i >> 5);
-                    List<SectionData> sections = parseSections(tag);
+                    List<SectionEncoded> sections = parseSections(tag);
                     if (!sections.isEmpty()) {
                         ChunkPos p = new ChunkPos(cx, cz);
-                        out.put(p, new ChunkData(p, sections));
+                        out.put(p, new ChunkEncoded(p, sections));
                     }
                 }
             }
@@ -291,7 +294,7 @@ public final class HollowBenefitBenchmark {
         }
     }
 
-    private static List<SectionData> parseSections(CompoundTag chunkTag) {
+    private static List<SectionEncoded> parseSections(CompoundTag chunkTag) {
         ListTag sections = getListTag(chunkTag, "sections");
         CompoundTag level = getCompoundOrNull(chunkTag, "Level");
         if (sections.isEmpty() && level != null) {
@@ -300,7 +303,7 @@ public final class HollowBenefitBenchmark {
         if (sections.isEmpty()) {
             return List.of();
         }
-        TreeMap<Integer, SectionData> byY = new TreeMap<>();
+        TreeMap<Integer, SectionEncoded> byY = new TreeMap<>();
         for (int i = 0; i < sections.size(); i++) {
             CompoundTag sec = listCompoundOrNull(sections, i);
             if (sec == null) {
@@ -320,7 +323,7 @@ public final class HollowBenefitBenchmark {
                 names.add(bracket >= 0 ? n.substring(0, bracket) : n);
             }
             long[] data = getLongArray(bs, "data");
-            byY.put(y, new SectionData(y, names, data));
+            byY.put(y, new SectionEncoded(y, names, data));
         }
         return new ArrayList<>(byY.values());
     }
@@ -379,7 +382,7 @@ public final class HollowBenefitBenchmark {
     // dense 分类（palette 级，与生产 maybeHas/count 同构）
     // ------------------------------------------------------------------
 
-    private static boolean[] classify(ChunkData cd) {
+    private static boolean[] classify(ChunkEncoded cd) {
         boolean[] dense = new boolean[cd.sections().size()];
         for (int i = 0; i < cd.sections().size(); i++) {
             dense[i] = classifySection(cd.sections().get(i));
@@ -387,7 +390,7 @@ public final class HollowBenefitBenchmark {
         return dense;
     }
 
-    private static boolean classifySection(SectionData s) {
+    private static boolean classifySection(SectionEncoded s) {
         int n = s.palette().size();
         if (n == 1) {
             return isSolidOpaque(state(s.palette().get(0)));
@@ -529,10 +532,11 @@ public final class HollowBenefitBenchmark {
     // ------------------------------------------------------------------
 
     /** 编码整 chunk：按 section 顺序拼接；hollow 时剔除 section 替换 canonical air。 */
-    private static byte[] encodeChunk(ChunkData cd, boolean[] dense, int[] dist, int shellDepth) {
+    private static byte[] encodeChunk(ChunkEncoded cd, boolean[] dense, int[] dist, int shellDepth) {
         ByteArrayOutputStream out = new ByteArrayOutputStream(16 * 1024);
         for (int i = 0; i < cd.sections().size(); i++) {
-            boolean culled = dense != null && dist != null && dense[i] && dist[i] > shellDepth;
+            // review-fix: T9-44 dist[i] == -1 = 六方向全 dense、BFS 不可达（如全实心底层），同样在壳层外 → 一并剔除
+            boolean culled = dense != null && dist != null && dense[i] && (dist[i] < 0 || dist[i] > shellDepth);
             if (culled) {
                 writeCanonicalAirSection(out);
             } else {
@@ -542,7 +546,7 @@ public final class HollowBenefitBenchmark {
         return out.toByteArray();
     }
 
-    private static void encodeSection(ByteArrayOutputStream out, SectionData s) {
+    private static void encodeSection(ByteArrayOutputStream out, SectionEncoded s) {
         int blockCount = blockCount(s);
         out.write(blockCount >> 8);
         out.write(blockCount & 0xFF);
@@ -550,7 +554,7 @@ public final class HollowBenefitBenchmark {
     }
 
     /** states PalettedContainer 编码（不含 blockCount 前缀）。 */
-    private static void encodeStates(ByteArrayOutputStream out, SectionData s) {
+    private static void encodeStates(ByteArrayOutputStream out, SectionEncoded s) {
         int n = s.palette().size();
         if (n == 1) {
             out.write(0); // bits = 0
@@ -571,7 +575,7 @@ public final class HollowBenefitBenchmark {
     }
 
     /** 非空气方块数：palette 全非 air → 4096；否则解码统计。 */
-    private static int blockCount(SectionData s) {
+    private static int blockCount(SectionEncoded s) {
         int n = s.palette().size();
         if (n == 1) {
             return state(s.palette().get(0)).isAir() ? 0 : 4096;

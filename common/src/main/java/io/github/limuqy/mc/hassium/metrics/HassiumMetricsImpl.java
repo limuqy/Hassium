@@ -510,7 +510,10 @@ public class HassiumMetricsImpl implements HassiumMetrics {
      */
     public void recordCacheHit(long bytes) {
         cacheHitCount.incrementAndGet();
-        cacheHitBytes.addAndGet(bytes);
+        // review-fix: T9-32 与 recordCacheLoadEligible 等守卫口径一致，负值/0 不污染 hitBytes
+        if (bytes > 0) {
+            cacheHitBytes.addAndGet(bytes);
+        }
     }
 
     /**
@@ -525,7 +528,10 @@ public class HassiumMetricsImpl implements HassiumMetrics {
      */
     public void recordCacheMiss(long bytes) {
         cacheMissCount.incrementAndGet();
-        cacheMissBytes.addAndGet(bytes);
+        // review-fix: T9-32 与 recordCacheLoadEligible 等守卫口径一致，负值/0 不污染 missBytes
+        if (bytes > 0) {
+            cacheMissBytes.addAndGet(bytes);
+        }
     }
 
     /**
@@ -540,7 +546,10 @@ public class HassiumMetricsImpl implements HassiumMetrics {
      */
     public void recordCacheStale(long bytes) {
         cacheStaleCount.incrementAndGet();
-        cacheStaleBytes.addAndGet(bytes);
+        // review-fix: T9-32 与 recordCacheLoadEligible 等守卫口径一致，负值/0 不污染 staleBytes
+        if (bytes > 0) {
+            cacheStaleBytes.addAndGet(bytes);
+        }
     }
 
     /**
@@ -890,7 +899,14 @@ public class HassiumMetricsImpl implements HassiumMetrics {
     }
 
     /**
-     * 获取压缩统计信息
+     * 获取压缩统计信息。
+     *
+     * <p>映射口径（review-fix: T9-33）：CompressionStats 各字段来自<em>存储路径</em>——
+     * totalCompressed/totalUncompressed = 压缩写盘/原版写盘字节（压缩率口径 = 落盘字节比）；
+     * compressTimeNs/compressCount = storageWriteTimeNs/storageWriteCount（压缩后写盘，
+     * 含磁盘 I/O 与序列化，非纯 codec CPU 耗时）；decompressTimeNs/decompressCount =
+     * storageReadTimeNs/storageReadCount（读盘后解压，同样含磁盘 I/O）。
+     * 若需纯压缩/解压 CPU 耗时需另拆字段。
      */
     public CompressionStats getCompressionStats() {
         return new CompressionStats(
@@ -906,15 +922,20 @@ public class HassiumMetricsImpl implements HassiumMetrics {
 
     /**
      * 获取格式化的统计信息
+     *
+     * <p>review-fix: T9-34 原版/压缩读取共用同一 storageReadCount（写入同理），
+     * 计数单列"存储读取/写入次数"，避免同一次数出现两次误读为重复计数。
      */
     public String toFormattedString() {
         String base = String.format(
                 "=== Hassium 性能统计 ===\n" +
                         "存储:\n" +
-                        "  原版读取: %d bytes (%d 次)\n" +
-                        "  原版写入: %d bytes (%d 次)\n" +
-                        "  压缩读取: %d bytes (%d 次)\n" +
-                        "  压缩写入: %d bytes (%d 次)\n" +
+                        "  原版读取: %d bytes\n" +
+                        "  压缩读取: %d bytes\n" +
+                        "  原版写入: %d bytes\n" +
+                        "  压缩写入: %d bytes\n" +
+                        "  存储读取: %d 次\n" +
+                        "  存储写入: %d 次\n" +
                         "  压缩率: %s\n" +
                         "缓存:\n" +
                         "  命中: %d 次 (%s)\n" +
@@ -943,10 +964,12 @@ public class HassiumMetricsImpl implements HassiumMetrics {
                         "  存储: %d\n" +
                         "  网络: %d\n" +
                         "  压缩: %d",
-                storageBytesVanillaRead.get(), storageReadCount.get(),
-                storageBytesVanillaWritten.get(), storageWriteCount.get(),
-                storageBytesCompressedRead.get(), storageReadCount.get(),
-                storageBytesCompressedWritten.get(), storageWriteCount.get(),
+                storageBytesVanillaRead.get(),
+                storageBytesCompressedRead.get(),
+                storageBytesVanillaWritten.get(),
+                storageBytesCompressedWritten.get(),
+                storageReadCount.get(),
+                storageWriteCount.get(),
                 MetricsTextFormatter.formatPercent(getCompressionRatio() * 100.0),
                 cacheHitCount.get(), MetricsTextFormatter.formatBytes(cacheHitBytes.get()),
                 cacheMissCount.get(), MetricsTextFormatter.formatBytes(cacheMissBytes.get()),
@@ -987,10 +1010,4 @@ public class HassiumMetricsImpl implements HassiumMetrics {
         return sb.toString();
     }
 
-    /** Data 通道分流比例（share/exclusive 模式下 Data 帧占总帧数的百分比；PoC 关注 Primary vs Data 走向）。 */
-    public double getBulkDataSharePercent() {
-        long total = bulkFramesPrimary.get() + bulkFramesData.get();
-        if (total == 0) return 0.0;
-        return (double) bulkFramesData.get() / total * 100.0;
-    }
 }
