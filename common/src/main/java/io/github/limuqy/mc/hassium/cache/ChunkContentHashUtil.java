@@ -2,25 +2,11 @@ package io.github.limuqy.mc.hassium.cache;
 
 import com.google.common.hash.Hashing;
 import io.github.limuqy.mc.hassium.Constants;
-import io.github.limuqy.mc.hassium.compat.CompoundTagCompat;
 import io.github.limuqy.mc.hassium.compat.LevelChunkSectionCompat;
 import net.jpountz.xxhash.StreamingXXHash64;
 import net.jpountz.xxhash.XXHash64;
 import net.jpountz.xxhash.XXHashFactory;
 import net.minecraft.core.RegistryAccess;
-import net.minecraft.nbt.ByteArrayTag;
-import net.minecraft.nbt.ByteTag;
-import net.minecraft.nbt.CompoundTag;
-import net.minecraft.nbt.DoubleTag;
-import net.minecraft.nbt.FloatTag;
-import net.minecraft.nbt.IntArrayTag;
-import net.minecraft.nbt.IntTag;
-import net.minecraft.nbt.ListTag;
-import net.minecraft.nbt.LongArrayTag;
-import net.minecraft.nbt.LongTag;
-import net.minecraft.nbt.ShortTag;
-import net.minecraft.nbt.StringTag;
-import net.minecraft.nbt.Tag;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.network.protocol.game.ClientboundLevelChunkPacketData;
 import net.minecraft.world.level.chunk.LevelChunk;
@@ -30,7 +16,6 @@ import io.netty.buffer.Unpooled;
 
 import java.io.IOException;
 import java.io.OutputStream;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -332,64 +317,7 @@ public final class ChunkContentHashUtil {
         return XX_HASH_64.hash(data, 0, data.length, 0L);
     }
 
-    private static void writeNbt(OutputStream out, Tag element) throws IOException {
-        if (element == null) {
-            out.write(0);
-            return;
-        }
-        out.write(element.getId());
-        if (element instanceof CompoundTag c) {
-            List<String> keys = new ArrayList<>(CompoundTagCompat.getKeys(c));
-            Collections.sort(keys);
-            writeInt(out, keys.size());
-            for (String key : keys) {
-                writeString(out, key);
-                writeNbt(out, c.get(key));
-            }
-        } else if (element instanceof ListTag l) {
-            writeInt(out, l.size());
-            for (Tag e : l) {
-                writeNbt(out, e);
-            }
-        } else if (element instanceof ByteTag b) {
-            out.write(CompoundTagCompat.getByte(b));
-        } else if (element instanceof ShortTag s) {
-            writeShort(out, CompoundTagCompat.getShort(s));
-        } else if (element instanceof IntTag ni) {
-            writeInt(out, CompoundTagCompat.getInt(ni));
-        } else if (element instanceof LongTag nl) {
-            writeLong(out, CompoundTagCompat.getLong(nl));
-        } else if (element instanceof FloatTag f) {
-            writeInt(out, Float.floatToIntBits(CompoundTagCompat.getFloat(f)));
-        } else if (element instanceof DoubleTag d) {
-            writeLong(out, Double.doubleToLongBits(CompoundTagCompat.getDouble(d)));
-        } else if (element instanceof StringTag s) {
-            writeString(out, CompoundTagCompat.getString(s));
-        } else if (element instanceof ByteArrayTag a) {
-            byte[] arr = a.getAsByteArray();
-            writeInt(out, arr.length);
-            out.write(arr);
-        } else if (element instanceof IntArrayTag a) {
-            int[] arr = a.getAsIntArray();
-            writeInt(out, arr.length);
-            for (int ia : arr) {
-                writeInt(out, ia);
-            }
-        } else if (element instanceof LongArrayTag a) {
-            long[] arr = a.getAsLongArray();
-            writeInt(out, arr.length);
-            for (long la : arr) {
-                writeLong(out, la);
-            }
-        } else {
-            Constants.LOG.warn("Hassium: Unknown NBT type {} in chunk hash", element.getId());
-        }
-    }
-
-    private static void writeShort(OutputStream out, short v) throws IOException {
-        out.write((v >>> 8) & 0xFF);
-        out.write(v & 0xFF);
-    }
+    // review-fix: T6-58 writeNbt/writeShort/writeString 已删（全库仅自递归，无调用方）+ 死 NBT import 清理
 
     private static void writeInt(OutputStream out, int v) throws IOException {
         out.write((v >>> 24) & 0xFF);
@@ -402,12 +330,6 @@ public final class ChunkContentHashUtil {
         for (int i = 7; i >= 0; i--) {
             out.write((int) ((v >>> (i * 8)) & 0xFF));
         }
-    }
-
-    private static void writeString(OutputStream out, String s) throws IOException {
-        byte[] bytes = s.getBytes(StandardCharsets.UTF_8);
-        writeInt(out, bytes.length);
-        out.write(bytes);
     }
 
     /**

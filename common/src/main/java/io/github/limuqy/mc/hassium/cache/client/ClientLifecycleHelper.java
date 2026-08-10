@@ -75,7 +75,8 @@ public final class ClientLifecycleHelper {
             }
             final String serverIp = mc.getConnection().getServerData().ip;
             final Path gameDir = mc.gameDirectory.toPath();
-            final String serverId = "server_" + serverIp.replaceAll("[^a-zA-Z0-9._-]", "_");
+            // review-fix: T8-27: serverId sanitize 收敛到 utils/ServerIdUtil（三处复制统一）
+            final String serverId = io.github.limuqy.mc.hassium.utils.ServerIdUtil.sanitize(serverIp);
             io.github.limuqy.mc.hassium.network.ClientChunkPipeline.getInstance()
                     .setCacheLocation(gameDir, serverId);
         } catch (Exception ignored) {
@@ -214,7 +215,8 @@ public final class ClientLifecycleHelper {
 
             final String serverIp = mc.getConnection().getServerData().ip;
             final Path gameDir = mc.gameDirectory.toPath();
-            final String serverId = "server_" + serverIp.replaceAll("[^a-zA-Z0-9._-]", "_");
+            // review-fix: T8-27: serverId sanitize 收敛到 utils/ServerIdUtil
+            final String serverId = io.github.limuqy.mc.hassium.utils.ServerIdUtil.sanitize(serverIp);
 
             // 新架构：客户端无 HBT1 存储；影子端存档目录由 SeedGenLevelCompat 按
             // gameDir/serverId 推导（hassium_cache/<serverId>/world），此处仅保留

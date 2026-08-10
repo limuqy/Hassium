@@ -1,5 +1,6 @@
 package io.github.limuqy.mc.hassium.cache.client;
 
+import io.github.limuqy.mc.hassium.Constants;
 import java.util.BitSet;
 
 /**
@@ -10,6 +11,12 @@ import java.util.BitSet;
  * 当 Bloom Filter 表示区块存在时，区块可能在缓存中（有假阳性）。
  * <p>
  * 线程安全：所有操作都是原子的。
+ * <p>
+ * 饱和：位数组固定，{@link #put(int, int, String)} 无插入上限。插入数超过构造时
+ * {@code expectedInsertions}（设计容量）后假阳性率（FPP）开始劣化（约 10 万插入时
+ * m/n≈0.96、FPP≈65%）。达到设计容量时记一次 WARN 告警；重建扩容成本未评估，暂不自动扩容。
+ * 消费侧 {@code ServerChunkPushManager.shouldPushFull} 有 miss→重推兜底，无数据错误，
+ * 仅缓存分流收益随世界增长递减。
  */
 public class ChunkBloomFilter {
 
@@ -32,6 +39,10 @@ public class ChunkBloomFilter {
      * 已插入元素数量
      */
     private int insertCount;
+    /**
+     * 设计容量：达到该插入数后 FPP 开始劣化（构造参数 expectedInsertions；反序列化时由 size/hashCount 反推）
+     */
+    private final int designCapacity;
 
     /**
      * 创建 Bloom Filter
@@ -53,6 +64,7 @@ public class ChunkBloomFilter {
         this.hashCount = optimalHashCount(size, expectedInsertions);
         this.bitSet = new BitSet(size);
         this.insertCount = 0;
+        this.designCapacity = expectedInsertions;
     }
 
     /**
@@ -76,6 +88,8 @@ public class ChunkBloomFilter {
         this.hashCount = hashCount;
         this.bitSet = bitSet;
         this.insertCount = 0;
+        // review-fix: T6-54 反序列化产物仅查询不插入；按最优参数关系 n = m·ln2/k 反推设计容量（供饱和告警用）
+        this.designCapacity = Math.max(1, (int) Math.round(size * Math.log(2.0) / hashCount));
     }
 
     /**
@@ -118,6 +132,9 @@ public class ChunkBloomFilter {
 
     /**
      * 向 Bloom Filter 添加元素
+     * <p>
+     * 无插入上限；插入数达到设计容量（构造参数 {@code expectedInsertions}）时记一次饱和告警，
+     * 此后 FPP 随继续插入劣化，建议扩容或重建过滤器。
      *
      * @param chunkX 区块 X 坐标
      * @param chunkZ 区块 Z 坐标
@@ -130,6 +147,11 @@ public class ChunkBloomFilter {
             bitSet.set(index);
         }
         insertCount++;
+        // review-fix: T6-54 插入达设计容量时饱和告警（重建扩容成本未评估，暂不自动扩容）
+        if (insertCount == designCapacity) {
+            Constants.LOG.warn("Hassium: Bloom Filter 插入数 {} 达到设计容量（位数组 {} 位 / {} 哈希），"
+                    + "继续插入将劣化假阳性率，建议扩容或重建", insertCount, size, hashCount);
+        }
     }
 
     /**

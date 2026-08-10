@@ -33,6 +33,9 @@ public class HassiumConfigService {
 
     public HassiumConfigService() {
         this.config = HassiumConfig.DEFAULT;
+        // review-fix: T6-55 默认构造同步 DEFAULT 门闩——storageEnabled 不再初值 true，
+        // 消除 loadFromToml 之前窗口内 MixinRegionFile 写盘门闩按 true 的语义矛盾
+        this.storageEnabled.set(HassiumConfig.DEFAULT.storage().enabled());
     }
 
     public HassiumConfigService(HassiumConfig config) {

@@ -126,7 +126,7 @@ public final class FabricTomlConfigIO {
     private static Object readSchemaValue(CommentedConfig cfg, ConfigEntry<?> entry) {
         if (entry.key() == ConfigSchema.MASTER_CONTROL_ENDPOINTS
                 || entry.key() == ConfigSchema.CLIENT_MASTER_CONTROL_ENDPOINTS) {
-            return readReachableEndpoints(cfg, entry.path(), entry.path()).stream()
+            return readReachableEndpoints(cfg, entry.path(), entry.path(), MAX_CONTROL_ENDPOINTS).stream()
                     .map(DataPlaneEndpointConfig::encodeReachable).toList();
         }
         if (entry.key() == ConfigSchema.DATAPLANE_UDP_LISTENERS) {
@@ -311,6 +311,11 @@ public final class FabricTomlConfigIO {
 
     private static CommentedFileConfig open(Path path) {
         return CommentedFileConfig.builder(path)
+                // review-fix: T6-56 核验结论：NightConfig 3.6.7 的 .sync() = save() 阻塞式落盘
+                // （非「每次 set 整文件写盘」——那是 .autosave()；已核对 3.6.7 sources javadoc 与
+                // WriteSyncFileConfig/ConfigWrapper 字节码）。set() 仅改内存，write*/saveValues 末尾
+                // cfg.save() 单次同步整文件落盘，审查所述「一次保存 20+ 次重写」不成立。
+                // 维持 .sync()：移除会使 save() 异步化，写失败脱离调用方 try/catch（静默丢失），属回归。
                 .sync()
                 .preserveInsertionOrder()
                 .writingMode(WritingMode.REPLACE)
@@ -502,7 +507,8 @@ public final class FabricTomlConfigIO {
                 getInt(cfg, "master.maxPushThreads", d.maxPushThreads()),
                 getString(cfg, "master.bindHost", d.bindHost()),
                 getString(cfg, "master.authToken", d.authToken()),
-                readReachableEndpoints(cfg, "master.controlReachableEndpoints", "master.controlReachableEndpoints"),
+                readReachableEndpoints(cfg, "master.controlReachableEndpoints", "master.controlReachableEndpoints",
+                        MAX_CONTROL_ENDPOINTS),
                 getPositiveLong(cfg, "master.migrationFaultTimeoutMs", d.migrationFaultTimeoutMs()),
                 // CLIENT scope 迁移策略键不在 server.toml（物理客户端经 client.toml 加载）→ 默认值
                 d.migrationMinTps(),
@@ -652,8 +658,20 @@ public final class FabricTomlConfigIO {
         }
         return def;
     }
+    /**
+     * control 端点上限（与 {@link HassiumConfig.MasterCoreConfig} 构造钳位 4 一致）。
+     * 读侧按同一上限归一化：手工编辑 toml 含 5-8 个 control 端点时仅丢端点，
+     * 不再读侧放行→构造侧抛异常→整份配置静默回退默认。
+     */
+    private static final int MAX_CONTROL_ENDPOINTS = 4;
+    /** UDP listener reachable 端点上限（与 {@link HassiumConfig.UdpListenerConfig} 钳位 8 一致）。 */
+    private static final int MAX_LISTENER_ENDPOINTS = 8;
+
+    /**
+     * 读取并归一化 reachable 端点表；超过 {@code maxEntries} 时记 warn 并返回空表（仅丢该端点组）。
+     */
     private static List<HassiumConfig.ReachableEndpoint> readReachableEndpoints(
-            CommentedConfig cfg, String path, String fieldName
+            CommentedConfig cfg, String path, String fieldName, int maxEntries
     ) {
         Object value = cfg.get(path);
         if (!(value instanceof List<?> entries)) {
@@ -674,7 +692,8 @@ public final class FabricTomlConfigIO {
             }
         }
         try {
-            return DataPlaneEndpointConfig.normalizeReachableEndpoints(endpoints, 8, fieldName);
+            // review-fix: T6-57 按调用方传入上限归一化（control=4、listener=8），与构造侧钳位一致
+            return DataPlaneEndpointConfig.normalizeReachableEndpoints(endpoints, maxEntries, fieldName);
         } catch (IllegalArgumentException e) {
             LOGGER.warn("Hassium: 忽略 {}: {}", fieldName, e.getMessage());
             return List.of();
@@ -714,7 +733,7 @@ public final class FabricTomlConfigIO {
                         getString(listener, "bindHost", ""), getInt(listener, "bindPort", -1),
                         getInt(listener, "weight", -1),
                         readReachableEndpoints(listener, "reachableEndpoints",
-                                "dataplane.udpListeners.reachableEndpoints")));
+                                "dataplane.udpListeners.reachableEndpoints", MAX_LISTENER_ENDPOINTS)));
             } catch (IllegalArgumentException e) {
                 LOGGER.warn("Hassium: 忽略无效 UDP listener: {}", e.getMessage());
             }
