@@ -17,7 +17,7 @@ import java.util.*;
  * 3. 重复模式较多（相同类型的包结构相似）
  * <p>
  * 训练策略：
- * 1. 从网络抓包文件提取样本（.pcap/.pcapng）
+ * 1. 从网络抓包文件提取样本（.pcap，仅以太网/IPv4/UDP）
  * 2. 从服务器日志提取聊天/命令样本
  * 3. 生成模拟网络包样本
  */
@@ -532,7 +532,10 @@ public class NetworkPacketDictionaryTrainer {
     /**
      * 从网络抓包文件提取样本
      * <p>
-     * 支持 .pcap 和 .pcapng 格式
+     * 支持经典 .pcap 格式（以太网 + IPv4 + UDP 包），不支持 .pcapng
+     * <p>
+     * review-fix: T9-M2 真实解析 pcap：全局头 24B + 每包记录头 16B，
+     * 剥离链路层(14B 以太网)/网络层(IPv4 IHL)/传输层(UDP 8B)后取 payload 作为样本；畸形/不支持包跳过
      */
     public static List<byte[]> extractSamplesFromPcap(Path pcapFile, int maxSamples) throws IOException {
         List<byte[]> samples = new ArrayList<>();
@@ -541,21 +544,105 @@ public class NetworkPacketDictionaryTrainer {
             throw new IOException("抓包文件不存在: " + pcapFile);
         }
 
-        // 简化实现：读取文件内容作为样本
-        // 实际实现需要解析 pcap 格式
-        byte[] fileContent = Files.readAllBytes(pcapFile);
+        try (InputStream in = Files.newInputStream(pcapFile)) {
+            byte[] globalHeader = new byte[24];
+            if (readFully(in, globalHeader) < 24) {
+                throw new IOException("无效的 pcap 文件: 全局头不足 24 字节");
+            }
+            // 魔数 0xa1b2c3d4（大端）或 0xd4c3b2a1（小端）
+            boolean bigEndian;
+            int magic = readInt(globalHeader, 0, true);
+            if (magic == 0xa1b2c3d4) {
+                bigEndian = true;
+            } else if (magic == 0xd4c3b2a1) {
+                bigEndian = false;
+            } else {
+                throw new IOException("不支持的 pcap 魔数: 0x" + Integer.toHexString(magic) + "（仅支持经典 pcap，不支持 pcapng）");
+            }
+            // 链路类型: 1 = 以太网
+            if (readInt(globalHeader, 20, bigEndian) != 1) {
+                throw new IOException("仅支持以太网链路层 (linktype=1) 的 pcap 文件");
+            }
 
-        // 将文件内容分割为多个样本
-        int sampleSize = 256;
-        for (int i = 0; i < fileContent.length && samples.size() < maxSamples; i += sampleSize) {
-            int end = Math.min(i + sampleSize, fileContent.length);
-            byte[] sample = Arrays.copyOfRange(fileContent, i, end);
-            if (sample.length > 0) {
-                samples.add(sample);
+            byte[] recordHeader = new byte[16];
+            while (samples.size() < maxSamples) {
+                if (readFully(in, recordHeader) < 16) {
+                    break; // 文件尾，正常结束
+                }
+                int inclLen = readInt(recordHeader, 8, bigEndian);
+                if (inclLen <= 0 || inclLen > 65535) {
+                    if (inclLen < 0) {
+                        break; // 长度字段溢出，视为损坏
+                    }
+                    continue; // 0 长度包或超长记录（非以太网帧），跳过
+                }
+                byte[] frame = new byte[inclLen];
+                if (readFully(in, frame) < inclLen) {
+                    break; // 截断的记录，结束解析
+                }
+                byte[] payload = extractUdpPayload(frame);
+                if (payload != null && payload.length > 0) {
+                    samples.add(payload);
+                }
             }
         }
 
         return samples;
+    }
+
+    /**
+     * 从以太网帧中提取 UDP payload；畸形或不支持的包返回 null
+     */
+    private static byte[] extractUdpPayload(byte[] frame) {
+        // 不够以太网头(14B) + IPv4 头(20B) + UDP 头(8B)
+        if (frame.length < 14 + 20 + 8) {
+            return null;
+        }
+        // 链路层: 仅接受 IPv4 (ethertype 0x0800)
+        if ((frame[12] & 0xFF) != 0x08 || (frame[13] & 0xFF) != 0x00) {
+            return null;
+        }
+        // 网络层: 仅接受 IPv4，IHL 决定头长
+        int ipOffset = 14;
+        int versionIhl = frame[ipOffset] & 0xFF;
+        if ((versionIhl >> 4) != 4) {
+            return null;
+        }
+        int ipHeaderLen = (versionIhl & 0x0F) * 4;
+        if (ipHeaderLen < 20 || frame[ipOffset + 9] != 17) {
+            return null; // 畸形 IHL 或非 UDP 协议
+        }
+        // 传输层: 8B UDP 头，其后为 payload
+        int udpOffset = ipOffset + ipHeaderLen;
+        if (frame.length < udpOffset + 8) {
+            return null;
+        }
+        return Arrays.copyOfRange(frame, udpOffset + 8, frame.length);
+    }
+
+    private static int readFully(InputStream in, byte[] buffer) throws IOException {
+        int total = 0;
+        while (total < buffer.length) {
+            int read = in.read(buffer, total, buffer.length - total);
+            if (read < 0) {
+                break;
+            }
+            total += read;
+        }
+        return total;
+    }
+
+    private static int readInt(byte[] buffer, int offset, boolean bigEndian) {
+        if (bigEndian) {
+            return ((buffer[offset] & 0xFF) << 24)
+                    | ((buffer[offset + 1] & 0xFF) << 16)
+                    | ((buffer[offset + 2] & 0xFF) << 8)
+                    | (buffer[offset + 3] & 0xFF);
+        }
+        return ((buffer[offset + 3] & 0xFF) << 24)
+                | ((buffer[offset + 2] & 0xFF) << 16)
+                | ((buffer[offset + 1] & 0xFF) << 8)
+                | (buffer[offset] & 0xFF);
     }
 
     /**
@@ -779,7 +866,7 @@ public class NetworkPacketDictionaryTrainer {
         System.out.println("用法: NetworkPacketDictionaryTrainer [选项]");
         System.out.println();
         System.out.println("选项:");
-        System.out.println("  --pcap <file>           从抓包文件提取样本（.pcap/.pcapng）");
+        System.out.println("  --pcap <file>           从抓包文件提取样本（.pcap，仅以太网/IPv4/UDP）");
         System.out.println("  --log <file>            从服务器日志提取聊天/命令样本");
         System.out.println("  --samples <count>       最大样本数量（默认: 5000）");
         System.out.println("  --dict-size <size>      字典大小（默认: 32768）");

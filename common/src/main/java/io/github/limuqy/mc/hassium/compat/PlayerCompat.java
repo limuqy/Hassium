@@ -43,7 +43,10 @@ public final class PlayerCompat {
 #if MC_VER < MC_1_21_9
         return player.getServer();
 #else
-        return player.level().getServer();
+        // review-fix: T8-M2: level() 可为 null（玩家脱离世界/断连窗口），判空返回 null，
+        // 与旧分支 getServer() 可空语义一致
+        ServerLevel level = player.level();
+        return level != null ? level.getServer() : null;
 #endif
     }
 
@@ -54,7 +57,10 @@ public final class PlayerCompat {
 #if MC_VER < MC_1_21_6
         return player.server.getPlayerList().getViewDistance();
 #else
-        return player.level().getServer().getPlayerList().getViewDistance();
+        // review-fix: T8-M2: level()/getServer() 判空，null 返回 0（调用方按“未知视距”保守处理）
+        ServerLevel level = player.level();
+        MinecraftServer server = level != null ? level.getServer() : null;
+        return server != null ? server.getPlayerList().getViewDistance() : 0;
 #endif
     }
 

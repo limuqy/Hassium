@@ -71,16 +71,20 @@ public class HassiumTaskExecutor implements AutoCloseable, Executor {
     public void submit(Runnable task, TaskCategory category) {
         TrackedTask tracked = new TrackedTask(category);
         String taskId = tracked.id;
-        taskRegistry.put(taskId, tracked);
-        Future<?> future = executor.submit(() -> {
+        // review-fix: T8-M1: 先赋后提——FutureTask 先发布到 tracked.future（volatile）再 submit，
+        // 消除 submit 后赋值的窗口：cancelAll 读到注册表条目时 future 必已可见，不再漏取消
+        FutureTask<Void> future = new FutureTask<Void>(() -> {
             try {
                 task.run();
             } finally {
                 taskRegistry.remove(taskId);
             }
+            return null;
         });
-        // 记录 Future：cancelAll(category) 可取消排队中的任务（cancel(true) 直接移除）
         tracked.future = future;
+        taskRegistry.put(taskId, tracked);
+        // 记录 Future：cancelAll(category) 可取消排队中的任务（cancel(true) 直接移除）
+        executor.submit(future);
     }
 
     /**

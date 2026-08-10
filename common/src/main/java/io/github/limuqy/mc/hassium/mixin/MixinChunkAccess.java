@@ -25,7 +25,8 @@ public abstract class MixinChunkAccess {
 
     @Inject(method = "setBlockState"
             + "(Lnet/minecraft/core/BlockPos;Lnet/minecraft/world/level/block/state/BlockState;"
-#if MC_VER < MC_1_21_2
+            // review-fix: T13-FixT7Mixin-1：1.21.2-1.21.4 第三参为 boolean，1.21.5+ 为 int；旧分界 <MC_1_21_2 会向 1.21.2-1.21.4 注入 I 描述符，启动即崩
+#if MC_VER < MC_1_21_5
             + "Z"
 #else
             + "I"

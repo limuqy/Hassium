@@ -24,8 +24,11 @@ public class MixinIOWorker {
 
     /**
      * 拦截存储任务提交
+     * review-fix: T13-FixT7Mixin-3：补全描述符精确匹配 delegate 版 store(ChunkPos,CompoundTag)，
+     * 1.21.2+ 另有一个 store(ChunkPos,Supplier) overload（delegate 内部调用），无描述符会双计数
      */
-    @Inject(method = "store", at = @At("HEAD"))
+    @Inject(method = "store(Lnet/minecraft/world/level/ChunkPos;Lnet/minecraft/nbt/CompoundTag;)Ljava/util/concurrent/CompletableFuture;",
+            at = @At("HEAD"))
     private void hassium$onStore(CallbackInfoReturnable<?> cir) {
         hassium$totalStoreOperations.incrementAndGet();
         Constants.LOG.debug("IOWorker.store() called (total: {})", hassium$totalStoreOperations.get());

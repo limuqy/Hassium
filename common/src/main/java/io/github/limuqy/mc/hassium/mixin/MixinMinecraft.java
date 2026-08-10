@@ -44,7 +44,7 @@ public class MixinMinecraft {
     private void hassium$dumpCacheOnDisconnect(net.minecraft.client.gui.screens.Screen screen, CallbackInfo ci) {
         ClientLifecycleHelper.cleanupOnDisconnect();
     }
-#else
+#elif MC_VER < MC_1_21_11
     @Inject(method = "disconnect()V", at = @At("HEAD"), require = 0)
     private void hassium$dumpCacheOnDisconnectNoScreen(CallbackInfo ci) {
         ClientLifecycleHelper.cleanupOnDisconnect();
@@ -55,6 +55,14 @@ public class MixinMinecraft {
                                                boolean keepResourcePacks, CallbackInfo ci) {
         ClientLifecycleHelper.cleanupOnDisconnect();
     }
+#else
+    // review-fix: T13-FixT7Mixin-2：1.21.11+ disconnect 核心实现为 3 参 disconnect(Screen,boolean,boolean)，
+    // disconnectWithProgressScreen 直调 3 参版绕过 2 参注入；HEAD 在世界拆除前触发缓存落盘
+    @Inject(method = "disconnect(Lnet/minecraft/client/gui/screens/Screen;ZZ)V", at = @At("HEAD"))
+    private void hassium$dumpCacheOnDisconnect(net.minecraft.client.gui.screens.Screen screen,
+                                               boolean keepResourcePacks, boolean bl, CallbackInfo ci) {
+        ClientLifecycleHelper.cleanupOnDisconnect();
+    }
 #endif
 
     /**
@@ -63,7 +71,8 @@ public class MixinMinecraft {
      * <ul>
      *   <li>1.20.1：{@code clearLevel}</li>
      *   <li>1.20.2–1.20.4：{@code disconnect(Screen)}</li>
-     *   <li>1.20.5+：{@code disconnect(Screen, boolean)}；部分 NeoForge 仍保留 {@code clearLevel}（require=0）</li>
+     *   <li>1.20.5–1.21.10：{@code disconnect(Screen, boolean)}；部分 NeoForge 仍保留 {@code clearLevel}（require=0）</li>
+     *   <li>1.21.11+：{@code disconnect(Screen, boolean, boolean)}（disconnectWithProgressScreen 直调 3 参版）</li>
      * </ul>
      * 与各加载器 DISCONNECT / LoggingOut 延后到下一 tick 的 finalize 互为兜底（{@code AtomicBoolean} 幂等）。
      */
@@ -77,10 +86,22 @@ public class MixinMinecraft {
     private void hassium$onDisconnect(net.minecraft.client.gui.screens.Screen screen, CallbackInfo ci) {
         ClientLifecycleHelper.finalizeDisconnectIfTerminal();
     }
-#else
+#elif MC_VER < MC_1_21_11
     @Inject(method = "disconnect(Lnet/minecraft/client/gui/screens/Screen;Z)V", at = @At("TAIL"))
     private void hassium$onDisconnect(net.minecraft.client.gui.screens.Screen screen, boolean keepResourcePacks,
                                       CallbackInfo ci) {
+        ClientLifecycleHelper.finalizeDisconnectIfTerminal();
+    }
+
+    @Inject(method = "clearLevel", at = @At("TAIL"), require = 0)
+    private void hassium$onClearLevelCompat(CallbackInfo ci) {
+        ClientLifecycleHelper.finalizeDisconnectIfTerminal();
+    }
+#else
+    // review-fix: T13-FixT7Mixin-2：1.21.11+ 3 参 disconnect TAIL——世界拆除后最终清理
+    @Inject(method = "disconnect(Lnet/minecraft/client/gui/screens/Screen;ZZ)V", at = @At("TAIL"))
+    private void hassium$onDisconnect(net.minecraft.client.gui.screens.Screen screen, boolean keepResourcePacks,
+                                      boolean bl, CallbackInfo ci) {
         ClientLifecycleHelper.finalizeDisconnectIfTerminal();
     }
 

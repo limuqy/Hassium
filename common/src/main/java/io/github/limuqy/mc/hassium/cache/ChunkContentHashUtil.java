@@ -415,6 +415,7 @@ public final class ChunkContentHashUtil {
      */
     private static class HashingOutputStream extends OutputStream {
         private final StreamingXXHash64 hasher;
+        private final byte[] scratch = new byte[1]; // review-fix: T13-FixT6Cache-1
 
         HashingOutputStream(StreamingXXHash64 hasher) {
             this.hasher = hasher;
@@ -422,7 +423,8 @@ public final class ChunkContentHashUtil {
 
         @Override
         public void write(int b) {
-            hasher.update(new byte[]{(byte) b}, 0, 1);
+            scratch[0] = (byte) b;
+            hasher.update(scratch, 0, 1);
         }
 
         @Override

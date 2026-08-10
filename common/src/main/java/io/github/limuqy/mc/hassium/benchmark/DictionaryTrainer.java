@@ -448,9 +448,9 @@ public class DictionaryTrainer {
      */
     public static void main(String[] args) {
         try {
-            TrainingParams params = TrainingParams.COMPACT;
+            TrainingParams params = TrainingParams.DEFAULT; // review-fix: T9-M1 与 help 默认(112640/1000)一致
             Path outputPath = Path.of("hassium-dictionary.bin");
-            Path worldRegionDir = Path.of("D:\\MC\\HMCL\\.minecraft\\versions\\Fabulously Optimized 1.21.1\\saves\\大世界");
+            Path worldRegionDir = null; // review-fix: T9-M1 移除硬编码个人路径，默认走模拟训练；--world 显式指定
             int maxWorldSamples = 10000;
             DimensionWeights weights = DimensionWeights.FREQUENCY_WEIGHTED;
 
