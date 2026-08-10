@@ -415,6 +415,16 @@ public class HassiumConfigService {
         return config.master().controlReachableEndpoints();
     }
 
+    /** 网关监听 bind host（D-M2：默认 127.0.0.1 回环；空串 = 0.0.0.0 全网卡）。 */
+    public String getMasterBindHost() {
+        return config.master().bindHost();
+    }
+
+    /** 网关握手鉴权 token（D-M2：默认空 = 不鉴权；双端同键，客户端握手帧携带）。 */
+    public String getMasterAuthToken() {
+        return config.master().authToken();
+    }
+
     public int getMinCleanupBatchSize() {
         return config.chunk().minCleanupBatchSize();
     }

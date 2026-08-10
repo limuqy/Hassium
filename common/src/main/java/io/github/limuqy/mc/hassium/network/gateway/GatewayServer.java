@@ -78,15 +78,17 @@ public final class GatewayServer {
     private volatile LoginPayloadSink loginSink;
     private volatile int zstdThreshold = 256;
     private volatile int zstdLevel = 3;
+    /** D-M2: 可选握手鉴权 token（master.authToken；默认空 = 不鉴权）。 */
+    private volatile String authToken = "";
 
     private GatewayServer() {
     }
 
     // ==================== 生命周期 ====================
 
-    /** 绑定监听（0.0.0.0）。异步 bind；失败经日志报告并复位 running。 */
+    /** 绑定监听（默认 127.0.0.1 回环；T5-M3 安全默认）。异步 bind；失败经日志报告并复位 running。 */
     public void start(int port) {
-        start("0.0.0.0", port);
+        start("127.0.0.1", port);
     }
 
     /** 绑定监听（指定 bind host）。异步 bind；失败经日志报告并复位 running。 */
@@ -227,6 +229,19 @@ public final class GatewayServer {
 
     public int zstdLevel() {
         return zstdLevel;
+    }
+
+    /** D-M2: 配置握手鉴权 token（平台接线传入 master.authToken；空 = 不鉴权）。 */
+    public void setAuthToken(String authToken) {
+        this.authToken = authToken != null ? authToken : "";
+    }
+
+    public String authToken() {
+        return authToken;
+    }
+
+    public boolean isAuthEnabled() {
+        return !authToken.isEmpty();
     }
 
     /** 玩家会话注册表（UUID-keyed；平台挂 per-player 清理钩子）。 */

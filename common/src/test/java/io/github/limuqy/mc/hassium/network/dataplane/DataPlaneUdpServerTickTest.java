@@ -25,8 +25,9 @@ final class DataPlaneUdpServerTickTest {
             server.bind();
             int port = server.getBoundEndpoints().get(0).boundPort();
             UUID player = UUID.randomUUID();
-            long epoch = 7L;
-            byte[] token = server.getSessionToken();
+            // D-M1: per-player per-epoch token——先经 beginControlConnection 签发
+            long epoch = DataPlaneUdpServer.beginControlConnection(player, () -> { });
+            byte[] token = DataPlaneUdpServer.getBindToken(player, epoch);
             byte[] bind = UdpBindRequestCodec.encodeRequest(token, player, epoch, 0, 0);
             peer.send(new DatagramPacket(bind, bind.length, InetAddress.getLoopbackAddress(), port));
             server.awaitDispatchedFrames(1, 1_500);

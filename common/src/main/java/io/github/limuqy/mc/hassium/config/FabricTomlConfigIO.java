@@ -343,7 +343,9 @@ public final class FabricTomlConfigIO {
                 getString(cfg, "master.migrationMaintenanceWindow", d.migrationMaintenanceWindow()),
                 getPositiveLong(cfg, "master.migrationHeartbeatIntervalMs", d.migrationHeartbeatIntervalMs()),
                 getPositiveLong(cfg, "master.migrationIdleWindowMs", d.migrationIdleWindowMs()),
-                getPositiveLong(cfg, "master.migrationSilentTimeoutMs", d.migrationSilentTimeoutMs()));
+                getPositiveLong(cfg, "master.migrationSilentTimeoutMs", d.migrationSilentTimeoutMs()))
+                // D-M2 双端同键：客户端经 client.toml 读 master.authToken（bindHost 仅服务端消费）
+                .withGatewayAuth(d.bindHost(), getString(cfg, "master.authToken", d.authToken()));
     }
 
     /** 客户端 toml 的 master 迁移策略键（CLIENT scope；仅迁移族，master.* 服务端键不写）。 */
@@ -355,6 +357,9 @@ public final class FabricTomlConfigIO {
         set(cfg, "master.migrationIdleWindowMs", master.migrationIdleWindowMs(), "L1 迁移：空闲窗口判定时长（ms；玩家静止 + 区块 hash 稳定，适合迁移的时机）");
         set(cfg, "master.migrationSilentTimeoutMs", master.migrationSilentTimeoutMs(),
                 "L1 迁移：outbound 入站静默超时（ms；默认 10s 使失效识别 ≤15s；未配置时回退 master.migrationFaultTimeoutMs 语义）");
+        // D-M2 双端同键：客户端握手帧携带（与服务端 master.authToken 同值）
+        set(cfg, "master.authToken", master.authToken(),
+                "网关握手鉴权 token（与服务端 master.authToken 同键；默认空=不鉴权）");
     }
 
     private static void writeServer(
@@ -495,6 +500,8 @@ public final class FabricTomlConfigIO {
                 getBool(cfg, "master.dynamicThreadPoolEnabled", d.dynamicThreadPoolEnabled()),
                 getInt(cfg, "master.minPushThreads", d.minPushThreads()),
                 getInt(cfg, "master.maxPushThreads", d.maxPushThreads()),
+                getString(cfg, "master.bindHost", d.bindHost()),
+                getString(cfg, "master.authToken", d.authToken()),
                 readReachableEndpoints(cfg, "master.controlReachableEndpoints", "master.controlReachableEndpoints"),
                 getPositiveLong(cfg, "master.migrationFaultTimeoutMs", d.migrationFaultTimeoutMs()),
                 // CLIENT scope 迁移策略键不在 server.toml（物理客户端经 client.toml 加载）→ 默认值
@@ -505,6 +512,7 @@ public final class FabricTomlConfigIO {
                 d.migrationIdleWindowMs(),
                 d.migrationSilentTimeoutMs(),
                 getPositiveLong(cfg, "master.migrationPrewarmTtlMs", d.migrationPrewarmTtlMs()),
+                getPositiveLong(cfg, "master.resumeTicketTtlMs", d.resumeTicketTtlMs()),
                 readDataPlane(cfg, d.dataPlane())
         );
     }
@@ -529,12 +537,18 @@ public final class FabricTomlConfigIO {
         set(cfg, "master.dynamicThreadPoolEnabled", n.dynamicThreadPoolEnabled(), "是否动态调整推送线程（仅服务端）");
         set(cfg, "master.minPushThreads", n.minPushThreads(), "动态池最小线程数（仅服务端）");
         set(cfg, "master.maxPushThreads", n.maxPushThreads(), "动态池最大线程数（仅服务端）");
+        set(cfg, "master.bindHost", n.bindHost(),
+                "网关监听 bind host（默认 127.0.0.1 回环；空串=0.0.0.0 全网卡，生产多网卡显式声明）");
+        set(cfg, "master.authToken", n.authToken(),
+                "网关握手鉴权 token（默认空=不鉴权；非空时客户端握手帧需携带同值，校验失败断开）");
         writeReachableEndpoints(cfg, "master.controlReachableEndpoints", n.controlReachableEndpoints(),
                 "网关监听/outbound 端点（网关监听地址源；客户端 outbound 地址源 = 迁移引擎）");
         set(cfg, "master.migrationFaultTimeoutMs", n.migrationFaultTimeoutMs(),
                 "L1 迁移故障超时（ms；silentTimeout 未配置时的回退值）");
         set(cfg, "master.migrationPrewarmTtlMs", n.migrationPrewarmTtlMs(),
                 "预热会话 TTL（ms；无续流完成的预热物化会话到期清理）");
+        set(cfg, "master.resumeTicketTtlMs", n.resumeTicketTtlMs(),
+                "续流票据有效期（ms；T2 票据防重放时间窗口，默认 5min；旧格式票据不受限）");
         writeDataPlane(cfg, n.dataPlane());
     }
 

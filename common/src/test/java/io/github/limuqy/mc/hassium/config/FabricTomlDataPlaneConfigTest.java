@@ -98,10 +98,11 @@ class FabricTomlDataPlaneConfigTest {
                 d.aggregationMaxSize(), d.enableCompactHeader(), d.compressionBlacklist(), d.metricsEnabled(),
                 d.maxChunksPerTick(), d.serverChunkPushThreads(), d.dynamicThreadPoolEnabled(),
                 d.minPushThreads(), d.maxPushThreads(),
+                d.bindHost(), d.authToken(),
                 controlEndpoints, d.migrationFaultTimeoutMs(),
                 d.migrationMinTps(), d.migrationMaxLoadAverage(),
                 d.migrationMaintenanceWindow(), d.migrationHeartbeatIntervalMs(),
                 d.migrationIdleWindowMs(), d.migrationSilentTimeoutMs(),
-                d.migrationPrewarmTtlMs(), dataPlane);
+                d.migrationPrewarmTtlMs(), d.resumeTicketTtlMs(), dataPlane);
     }
 }

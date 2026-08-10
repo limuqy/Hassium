@@ -60,10 +60,21 @@ public final class ControlFailoverHandler {
     private static final class PlayerState {
         final UUID playerId;
         long epoch;
+        /** D-M1: per-(playerId, epoch) 16B bind token；epoch 变更即轮换，旧 token 直接失效。 */
+        byte[] bindToken;
         long lastControlActivityMs;
         Runnable masterClose;
         boolean udpSessionPresent;
         PlayerState(UUID playerId) { this.playerId = playerId; }
+    }
+
+    /** D-M1: bind token 生成源（SecureRandom 16B/次）。 */
+    private static final java.security.SecureRandom TOKEN_RNG = new java.security.SecureRandom();
+
+    private static byte[] nextToken() {
+        byte[] token = new byte[16];
+        TOKEN_RNG.nextBytes(token);
+        return token;
     }
 
     /** 单实例（生产环境）。 */
@@ -92,6 +103,7 @@ public final class ControlFailoverHandler {
     /**
      * 接受一个新的 TCP master 并为其分配递增 epoch。旧 UDP 授权被撤销；调用方必须用返回值
      * 写入握手 S2C tail，客户端才能建立对应的 KCP 会话。
+     * <p>D-M1：epoch 递增即轮换 bind token（{@link #bindToken}）——旧 epoch 的 token 立即失效。
      */
     public long beginControlConnection(UUID playerId, Runnable masterClose) {
         PlayerState st = states.computeIfAbsent(playerId, PlayerState::new);
@@ -100,7 +112,26 @@ public final class ControlFailoverHandler {
             st.lastControlActivityMs = System.currentTimeMillis();
             st.masterClose = masterClose;
             st.udpSessionPresent = false;
+            st.bindToken = nextToken();
             return st.epoch;
+        }
+    }
+
+    /**
+     * 返回该 (playerId, epoch) 当前下发的 16B bind token；epoch 已轮换或未签发 → null
+     * （旧 token 直接失效，不做 last-token 宽限——重连即换新 token，旧握手尾即刻作废）。
+     * 调用方（握手尾部构造 / BindRequest 校验）据此下发与比对。
+     */
+    public byte[] bindToken(UUID playerId, long epoch) {
+        PlayerState st = states.get(playerId);
+        if (st == null) {
+            return null;
+        }
+        synchronized (st) {
+            if (st.bindToken == null || st.epoch != epoch) {
+                return null;
+            }
+            return st.bindToken.clone();
         }
     }
 
@@ -122,6 +153,10 @@ public final class ControlFailoverHandler {
         synchronized (st) {
             st.epoch = epoch;
             st.masterClose = masterClose;
+            // 首次注册（无 token）时签发；已有 token 不轮换（轮换只在 beginControlConnection 的 epoch 递增路径）
+            if (st.bindToken == null) {
+                st.bindToken = nextToken();
+            }
         }
     }
 

@@ -2,10 +2,13 @@ package io.github.limuqy.mc.hassium.mixin;
 
 import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.concurrent.MainThreadDispatcher;
+import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.network.PlayerCompressionTracker;
+import io.github.limuqy.mc.hassium.network.ResumeTicketValidator;
 import io.github.limuqy.mc.hassium.network.ServerChunkPushManager;
 import io.github.limuqy.mc.hassium.network.ServerLoadReporter;
 import io.github.limuqy.mc.hassium.network.dataplane.DataPlaneUdpServer;
+import io.github.limuqy.mc.hassium.platform.Services;
 import io.github.limuqy.mc.hassium.server.RuntimeServerContext;
 import io.github.limuqy.mc.hassium.server.ServerSmokeTest;
 import io.github.limuqy.mc.hassium.server.GatewayPlatformWiring;
@@ -53,6 +56,8 @@ public class MixinMinecraftServer {
         GatewayPlayerBridge.tick(server);
         // mspt 采样（debug.dispatcherLogging 开启时每秒输出一行 [MSPT]）
         TickMonitor.sampleServerTick(server, tickCount);
+        // T2 票据防重放：epoch 表定期落盘（内部 60s 限频；停机窗口重放由 5min 时间窗口兜底）
+        ResumeTicketValidator.persistIfDue();
     }
 
     @Inject(method = "runServer", at = @At(value = "INVOKE", target = "Lnet/minecraft/server/MinecraftServer;initServer()Z"))
@@ -82,6 +87,17 @@ public class MixinMinecraftServer {
         if (RuntimeServerContext.isDedicatedServerContext()) {
             GatewayPlatformWiring.install(server);
         }
+        // T2 票据防重放：epoch 表启动加载 + 有效期配置（config 目录 hassium-state.json）。
+        // 配置读取失败仅告警并回退默认 TTL——防重放持久化不阻断服务器启动。
+        try {
+            ResumeTicketValidator.configureStateFile(
+                    Services.PLATFORM.getConfigDirectory().resolve("hassium-state.json"));
+            ResumeTicketValidator.configureTtlMs(
+                    HassiumConfigService.getInstance().getConfig().master().resumeTicketTtlMs());
+            ResumeTicketValidator.load();
+        } catch (Throwable t) {
+            Constants.LOG.warn("Hassium: ResumeTicketValidator init failed (fallback defaults): {}", t.toString());
+        }
     }
 
     @Inject(method = "stopServer", at = @At("HEAD"))
@@ -97,5 +113,7 @@ public class MixinMinecraftServer {
         // 清理玩家压缩状态追踪
         PlayerCompressionTracker.clear();
         Constants.LOG.info("Hassium: PlayerCompressionTracker cleared");
+        // T2 票据防重放：epoch 表停机落盘（原子写；重启后 load 继续防重放）
+        ResumeTicketValidator.save();
     }
 }

@@ -57,11 +57,12 @@ class DataPlaneEnabledGuardTest {
                 master.enableCompactHeader(), master.compressionBlacklist(), master.metricsEnabled(),
                 master.maxChunksPerTick(), master.serverChunkPushThreads(), master.dynamicThreadPoolEnabled(),
                 master.minPushThreads(), master.maxPushThreads(),
+                master.bindHost(), master.authToken(),
                 master.controlReachableEndpoints(), master.migrationFaultTimeoutMs(),
                 master.migrationMinTps(), master.migrationMaxLoadAverage(),
                 master.migrationMaintenanceWindow(), master.migrationHeartbeatIntervalMs(),
                 master.migrationIdleWindowMs(), master.migrationSilentTimeoutMs(),
-                master.migrationPrewarmTtlMs(), replacement);
+                master.migrationPrewarmTtlMs(), master.resumeTicketTtlMs(), replacement);
         return new HassiumConfig(config.storage(), config.chunk(), config.net(), updatedMaster,
                 config.compat(), config.debug());
     }
@@ -105,11 +106,12 @@ class DataPlaneEnabledGuardTest {
                 master.enableCompactHeader(), master.compressionBlacklist(), master.metricsEnabled(),
                 master.maxChunksPerTick(), master.serverChunkPushThreads(), master.dynamicThreadPoolEnabled(),
                 master.minPushThreads(), master.maxPushThreads(),
+                master.bindHost(), master.authToken(),
                 endpoints, master.migrationFaultTimeoutMs(),
                 master.migrationMinTps(), master.migrationMaxLoadAverage(),
                 master.migrationMaintenanceWindow(), master.migrationHeartbeatIntervalMs(),
                 master.migrationIdleWindowMs(), master.migrationSilentTimeoutMs(),
-                master.migrationPrewarmTtlMs(), master.dataPlane());
+                master.migrationPrewarmTtlMs(), master.resumeTicketTtlMs(), master.dataPlane());
         return new HassiumConfig(config.storage(), config.chunk(), config.net(), updatedMaster,
                 config.compat(), config.debug());
     }

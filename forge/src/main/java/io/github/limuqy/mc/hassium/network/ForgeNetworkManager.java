@@ -623,7 +623,8 @@ public class ForgeNetworkManager implements NetworkManager {
             UdpDataPlaneHandshakeTail.S2CTail tail = DataPlaneHandshakeAdvertisement.create(
                     DataPlaneUdpServer.advertisedControlEndpoints(),
                     DataPlaneUdpServer.boundEndpoints(),
-                    udpBound ? DataPlaneUdpServer.getSessionToken() : null,
+                    // D-M1: per-player per-epoch bind token（epoch 变更即轮换；master==null 未签发 → null → 无 UDP 尾）
+                    udpBound ? DataPlaneUdpServer.getBindToken(player.getUUID(), epoch) : null,
                     epoch,
                     c2s.udpDataplaneSupported() && udpBound,
                     c2s.controlFailoverSupported());

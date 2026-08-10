@@ -208,6 +208,9 @@ public record HassiumConfig(
             boolean dynamicThreadPoolEnabled,
             int minPushThreads,
             int maxPushThreads,
+            // === 网关监听与鉴权（D-M2：默认回环绑定 + 可选握手鉴权）===
+            String bindHost,
+            String authToken,
             // === 控制面端点与 L1 迁移 ===
             List<ReachableEndpoint> controlReachableEndpoints,
             long migrationFaultTimeoutMs,
@@ -220,6 +223,8 @@ public record HassiumConfig(
             long migrationSilentTimeoutMs,
             // === 预热会话 TTL（SERVER scope；T4 交付键，只实现+getter）===
             long migrationPrewarmTtlMs,
+            // === 续流票据有效期（SERVER scope；T2 防重放时间窗口，服务端校验消费）===
+            long resumeTicketTtlMs,
             DataPlaneConfig dataPlane
     ) {
         public MasterCoreConfig {
@@ -237,6 +242,7 @@ public record HassiumConfig(
             DataPlaneEndpointConfig.validatePositive(migrationIdleWindowMs, "migrationIdleWindowMs");
             DataPlaneEndpointConfig.validatePositive(migrationSilentTimeoutMs, "migrationSilentTimeoutMs");
             DataPlaneEndpointConfig.validatePositive(migrationPrewarmTtlMs, "migrationPrewarmTtlMs");
+            DataPlaneEndpointConfig.validatePositive(resumeTicketTtlMs, "resumeTicketTtlMs");
         }
 
         /**
@@ -250,9 +256,24 @@ public record HassiumConfig(
                     useContextCompression, enablePacketAggregation, aggregationMinBatchSize,
                     aggregationMaxWaitTimeMs, aggregationMaxSize, enableCompactHeader, compressionBlacklist,
                     metricsEnabled, maxChunksPerTick, serverChunkPushThreads, dynamicThreadPoolEnabled,
-                    minPushThreads, maxPushThreads, controlReachableEndpoints, migrationFaultTimeoutMs,
+                    minPushThreads, maxPushThreads, bindHost, authToken, controlReachableEndpoints, migrationFaultTimeoutMs,
                     minTps, maxLoadAverage, maintenanceWindow, heartbeatIntervalMs, idleWindowMs,
-                    silentTimeoutMs, migrationPrewarmTtlMs, dataPlane);
+                    silentTimeoutMs, migrationPrewarmTtlMs, resumeTicketTtlMs, dataPlane);
+        }
+
+        /**
+         * 便捷构造：仅替换网关监听/鉴权字段（D-M2 客户端加载 client.toml 的 master.authToken 用；
+         * 其余字段保持本实例值）。
+         */
+        public MasterCoreConfig withGatewayAuth(String bindHost, String authToken) {
+            return new MasterCoreConfig(enabled, compressionLevel, magiclessZstd,
+                    globalPacketCompression, globalCompressionLevel, globalCompressionThreshold,
+                    useContextCompression, enablePacketAggregation, aggregationMinBatchSize,
+                    aggregationMaxWaitTimeMs, aggregationMaxSize, enableCompactHeader, compressionBlacklist,
+                    metricsEnabled, maxChunksPerTick, serverChunkPushThreads, dynamicThreadPoolEnabled,
+                    minPushThreads, maxPushThreads, bindHost, authToken, controlReachableEndpoints, migrationFaultTimeoutMs,
+                    migrationMinTps, migrationMaxLoadAverage, migrationMaintenanceWindow, migrationHeartbeatIntervalMs,
+                    migrationIdleWindowMs, migrationSilentTimeoutMs, migrationPrewarmTtlMs, resumeTicketTtlMs, dataPlane);
         }
 
         // 127.0.0.1 仅供本地开发；公网部署必须配置客户端实际可达的地址。
@@ -295,6 +316,8 @@ public record HassiumConfig(
                 true,              // dynamicThreadPoolEnabled
                 2,                 // minPushThreads
                 8,                 // maxPushThreads
+                "127.0.0.1",       // bindHost（D-M2 默认回环绑定；空串=0.0.0.0 全网卡，生产多网卡显式声明）
+                "",                // authToken（D-M2 默认空=不鉴权）
                 List.of(),         // controlReachableEndpoints
                 60_000L,           // migrationFaultTimeoutMs（L1 迁移故障静默超时；silentTimeout 未配置时的回退值）
                 15.0,              // migrationMinTps
@@ -304,6 +327,7 @@ public record HassiumConfig(
                 10000L,            // migrationIdleWindowMs
                 10000L,            // migrationSilentTimeoutMs（默认 10s：失效识别 ≤15s；显式配置时优先于 faultTimeout）
                 60_000L,           // migrationPrewarmTtlMs（预热会话 TTL；T4 消费）
+                300_000L,          // resumeTicketTtlMs（续流票据有效期；T2 防重放时间窗口，默认 5min）
                 DEFAULT_DATA_PLANE
         );
     }

@@ -41,13 +41,13 @@ class ConfigRestructureRoundTripTest {
         Map<String, ConfigEntry<?>> byPath = ConfigSchema.entries().stream()
                 .collect(Collectors.toMap(e -> e.scope() + "/" + e.path(), Function.identity()));
 
-        assertEquals(79, ConfigSchema.entries().size(), "schema 留存键数（71 既有 + 7 迁移键族：6 CLIENT + 1 SERVER + 1 CLIENT 端点副本）");
-        assertEquals(79, values.asMap().size(), "defaults 键数");
+        assertEquals(84, ConfigSchema.entries().size(), "schema 留存键数（71 既有 + 7 迁移键族 + 1 CLIENT 端点副本 + 3 D-M2 网关鉴权键 + 2 B 续流票据 TTL 双端键）");
+        assertEquals(84, values.asMap().size(), "defaults 键数");
 
         Map<String, Long> prefixCounts = ConfigSchema.entries().stream()
                 .collect(Collectors.groupingBy(e -> e.path().substring(0, e.path().indexOf('.') + 1),
                         Collectors.counting()));
-        assertEquals(Map.of("chunk.", 23L, "net.", 3L, "master.", 29L, "debug.", 18L,
+        assertEquals(Map.of("chunk.", 23L, "net.", 3L, "master.", 34L, "debug.", 18L,
                 "dataplane.", 2L, "storage.", 2L, "compat.", 2L), prefixCounts);
 
         // 双端同名键 chunk.seedGenEnabled 各一
@@ -112,6 +112,8 @@ class ConfigRestructureRoundTripTest {
         HassiumConfig.MasterCoreConfig master = new HassiumConfig.MasterCoreConfig(
                 true, 9, false, false, 5, 512, false, false, 8, 50L, 131072, false,
                 Set.of("CHUNK_PAYLOAD_S2C", "MAIN_CHANNEL"), true, 7, 4, false, 3, 12,
+                // D-M2 网关监听/鉴权（server.toml 往返）
+                "10.0.0.5", "secret-token",
                 List.of(new HassiumConfig.ReachableEndpoint("play.example", 25565, 100),
                         new HassiumConfig.ReachableEndpoint("backup.example", 25565, 80)),
                 90_000L,
@@ -124,6 +126,8 @@ class ConfigRestructureRoundTripTest {
                 HassiumConfig.MasterCoreConfig.DEFAULT.migrationSilentTimeoutMs(),
                 // SERVER scope：预热会话 TTL（T4 交付键，toml 往返）
                 120_000L,
+                // SERVER scope：续流票据有效期（T2 防重放时间窗口，toml 往返）
+                450_000L,
                 new HassiumConfig.DataPlaneConfig(true, List.of(
                         new HassiumConfig.UdpListenerConfig("0.0.0.0", 31001, 60, List.of(
                                 new HassiumConfig.ReachableEndpoint("edge-a.example", 41001, 100),

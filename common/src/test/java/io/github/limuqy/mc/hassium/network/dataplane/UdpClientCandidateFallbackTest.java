@@ -28,7 +28,9 @@ final class UdpClientCandidateFallbackTest {
         DataPlaneClientBundle bundle = new DataPlaneClientBundle();
         try {
             server.bind();
-            bundle.connectAndBind(PLAYER, 7L, server.getSessionToken(), List.of(
+            // D-M1: per-player per-epoch token——先经 beginControlConnection 签发
+            long epoch = DataPlaneUdpServer.beginControlConnection(PLAYER, () -> { });
+            bundle.connectAndBind(PLAYER, epoch, DataPlaneUdpServer.getBindToken(PLAYER, epoch), List.of(
                     new UdpDataPlaneHandshakeTail.UdpListenerGroup(0, 100, List.of(
                             new UdpDataPlaneHandshakeTail.UdpReachableEndpoint("127.0.0.1", blackholePort, 100),
                             new UdpDataPlaneHandshakeTail.UdpReachableEndpoint("127.0.0.1", serverPort, 10)))));

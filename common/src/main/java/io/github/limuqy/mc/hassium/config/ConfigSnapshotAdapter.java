@@ -71,6 +71,9 @@ public final class ConfigSnapshotAdapter {
                 .with(ConfigSchema.MASTER_DYNAMIC_THREADS, master.dynamicThreadPoolEnabled())
                 .with(ConfigSchema.MASTER_MIN_PUSH_THREADS, master.minPushThreads())
                 .with(ConfigSchema.MASTER_MAX_PUSH_THREADS, master.maxPushThreads())
+                .with(ConfigSchema.MASTER_BIND_HOST, master.bindHost())
+                .with(ConfigSchema.MASTER_AUTH_TOKEN, master.authToken())
+                .with(ConfigSchema.CLIENT_MASTER_AUTH_TOKEN, master.authToken())
                 .with(ConfigSchema.MASTER_CONTROL_ENDPOINTS, master.controlReachableEndpoints().stream().map(DataPlaneEndpointConfig::encodeReachable).toList())
                 .with(ConfigSchema.CLIENT_MASTER_CONTROL_ENDPOINTS, master.controlReachableEndpoints().stream().map(DataPlaneEndpointConfig::encodeReachable).toList())
                 .with(ConfigSchema.MASTER_MIGRATION_FAULT_TIMEOUT_MS, master.migrationFaultTimeoutMs())
@@ -81,6 +84,8 @@ public final class ConfigSnapshotAdapter {
                 .with(ConfigSchema.MASTER_MIGRATION_IDLE_WINDOW_MS, master.migrationIdleWindowMs())
                 .with(ConfigSchema.MASTER_MIGRATION_SILENT_TIMEOUT_MS, master.migrationSilentTimeoutMs())
                 .with(ConfigSchema.MASTER_MIGRATION_PREWARM_TTL_MS, master.migrationPrewarmTtlMs())
+                .with(ConfigSchema.MASTER_RESUME_TICKET_TTL_MS, master.resumeTicketTtlMs())
+                .with(ConfigSchema.CLIENT_MASTER_RESUME_TICKET_TTL_MS, master.resumeTicketTtlMs())
                 .with(ConfigSchema.SERVER_CHUNK_SEED_GEN_ENABLED, chunk.seedGenEnabled())
                 .with(ConfigSchema.DATAPLANE_ENABLED, master.dataPlane().enabled())
                 .with(ConfigSchema.DATAPLANE_UDP_LISTENERS, master.dataPlane().udpListeners().stream().map(DataPlaneEndpointConfig::encodeListener).toList());
@@ -147,6 +152,8 @@ public final class ConfigSnapshotAdapter {
                 values.get(ConfigSchema.MASTER_MAX_CHUNKS_PER_TICK), values.get(ConfigSchema.MASTER_SERVER_PUSH_THREADS),
                 values.get(ConfigSchema.MASTER_DYNAMIC_THREADS), values.get(ConfigSchema.MASTER_MIN_PUSH_THREADS),
                 values.get(ConfigSchema.MASTER_MAX_PUSH_THREADS),
+                values.get(ConfigSchema.MASTER_BIND_HOST),
+                stringValue(values, physicalClient, ConfigSchema.CLIENT_MASTER_AUTH_TOKEN, ConfigSchema.MASTER_AUTH_TOKEN),
                 controlEndpoints, values.get(ConfigSchema.MASTER_MIGRATION_FAULT_TIMEOUT_MS),
                 values.get(ConfigSchema.MASTER_MIGRATION_MIN_TPS),
                 values.get(ConfigSchema.MASTER_MIGRATION_MAX_LOAD_AVERAGE),
@@ -155,6 +162,7 @@ public final class ConfigSnapshotAdapter {
                 values.get(ConfigSchema.MASTER_MIGRATION_IDLE_WINDOW_MS),
                 values.get(ConfigSchema.MASTER_MIGRATION_SILENT_TIMEOUT_MS),
                 values.get(ConfigSchema.MASTER_MIGRATION_PREWARM_TTL_MS),
+                resumeTicketTtlValue(values, physicalClient),
                 dataPlane);
         HassiumConfig.CompatConfig compat = new HassiumConfig.CompatConfig(
                 values.get(ConfigSchema.COMPAT_REQUIRE_CLIENT_MOD), values.get(ConfigSchema.COMPAT_AUTO_DOWNGRADE));
@@ -189,6 +197,20 @@ public final class ConfigSnapshotAdapter {
     private static List<String> endpointValue(ConfigValues values, boolean physicalClient,
                                               ConfigKey<List<String>> clientKey, ConfigKey<List<String>> serverKey) {
         return values.get(physicalClient ? clientKey : serverKey);
+    }
+
+    /** 双端同名键 master.authToken（D-M2 握手鉴权）：物理客户端读 CLIENT 副本，专用服读 SERVER 原键。 */
+    private static String stringValue(ConfigValues values, boolean physicalClient,
+                                      ConfigKey<String> clientKey, ConfigKey<String> serverKey) {
+        return values.get(physicalClient ? clientKey : serverKey);
+    }
+
+
+    /** 双端同名键 master.resumeTicketTtlMs：物理客户端读 CLIENT 副本，专用服读 SERVER 原键。 */
+    private static long resumeTicketTtlValue(ConfigValues values, boolean physicalClient) {
+        return values.get(physicalClient
+                ? ConfigSchema.CLIENT_MASTER_RESUME_TICKET_TTL_MS
+                : ConfigSchema.MASTER_RESUME_TICKET_TTL_MS);
     }
 
 

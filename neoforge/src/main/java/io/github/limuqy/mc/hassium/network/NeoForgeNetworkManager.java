@@ -176,8 +176,10 @@ public class NeoForgeNetworkManager implements NetworkManager {
             return io.github.limuqy.mc.hassium.network.dataplane.DataPlaneHandshakeAdvertisement.create(
                     io.github.limuqy.mc.hassium.network.dataplane.DataPlaneUdpServer.advertisedControlEndpoints(),
                     io.github.limuqy.mc.hassium.network.dataplane.DataPlaneUdpServer.boundEndpoints(),
+                    // D-M1: per-player per-epoch bind token（epoch 变更即轮换；旧 token 直接失效）
                     udpBound
-                            ? io.github.limuqy.mc.hassium.network.dataplane.DataPlaneUdpServer.getSessionToken()
+                            ? io.github.limuqy.mc.hassium.network.dataplane.DataPlaneUdpServer.getBindToken(
+                                    player.getUUID(), epoch)
                             : null,
                     epoch,
                     capabilities.udpDataplaneSupported() && udpBound,

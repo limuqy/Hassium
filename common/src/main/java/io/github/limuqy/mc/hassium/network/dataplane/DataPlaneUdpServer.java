@@ -33,15 +33,16 @@ import java.util.concurrent.locks.ReentrantLock;
  * <p>核心职责（plan §335、§412-429）：
  * <ul>
  *   <li>{@link #bind()}：对每个 {@link DataPlanePoCConfig.Endpoint} 起一条 {@link NioDatagramChannel}，
- *       共享一个 {@link NioEventLoopGroup}；同时生成单实例 16-byte {@link SecureRandom} token（bind 一次），
- *       作为 HKDF per-session 派生根。</li>
+ *       共享一个 {@link NioEventLoopGroup}。bind token 为 per-player per-epoch 16B
+ *       （{@link SecureRandom}，{@code ControlFailoverHandler.beginControlConnection} 签发，
+ *       epoch 变更即轮换），作为 HKDF per-session 派生根。</li>
  *   <li>每个 datagram 入帧先经「未知 peer / Bind frame 解析」分支：拒绝未知 token / 错配 endpointId；
  *       正确的 (token, playerId, epoch, endpointId, channelId) 派生 per-session key 并构造
  *       {@link ReliableDatagramSession}，注册入 {@link DataPlaneSessionRegistry}。KCP tick 与 lease
  *       过期由 event loop 定期调度。</li>
  *   <li>{@link #tryRouteBulk(UUID, int, byte[])} 委托给 Task 4 router；Task 3 占位实现先返回 false
  *       退化为 Primary-only 行为，Task 4 再覆盖。</li>
- *   <li>{@link #shutdown()}：close 所有 channel + 释放 event loop + 清空 registry + 抹零 token。</li>
+ *   <li>{@link #shutdown()}：close 所有 channel + 释放 event loop + 清空 registry。</li>
  * </ul>
  *
  * <p>不变量：
@@ -151,13 +152,12 @@ public final class DataPlaneUdpServer {
         return isBound();
     }
 
-    /** 服务端共享 token：bind 时 {@link SecureRandom} 生成；未 bind 抛 {@link IllegalStateException}。 */
-    public static byte[] getSessionToken() {
-        Instance inst = INSTANCE;
-        if (inst == null) {
-            throw new IllegalStateException("DataPlaneUdpServer not bound");
-        }
-        return inst.sessionToken;
+    /**
+     * D-M1: 返回 (playerId, epoch) 当前下发的 16B bind token（per-player per-epoch，epoch 变更即轮换；
+     * 握手响应经 {@link DataPlaneHandshakeAdvertisement} 下发客户端）。未签发或 epoch 已轮换 → null。
+     */
+    public static byte[] getBindToken(UUID playerId, long epoch) {
+        return ControlFailoverHandler.getInstance().bindToken(playerId, epoch);
     }
 
     /**
@@ -432,7 +432,6 @@ public final class DataPlaneUdpServer {
     private static final class Instance {
         final List<HassiumConfig.UdpListenerConfig> configured;
         final DataPlaneSessionRegistry registry = new DataPlaneSessionRegistry();
-        final byte[] sessionToken;
         final NioEventLoopGroup group = new NioEventLoopGroup(EVENT_LOOP_THREADS);
         final List<Channel> channels = new ArrayList<>();
         final List<BoundEndpoint> boundEndpoints = new ArrayList<>();
@@ -448,8 +447,6 @@ public final class DataPlaneUdpServer {
 
         Instance(List<HassiumConfig.UdpListenerConfig> listeners) {
             this.configured = List.copyOf(listeners);
-            this.sessionToken = new byte[16];
-            new SecureRandom().nextBytes(this.sessionToken);
         }
 
         /** 取/构造 per-player WRR 状态；每次刷新 sessions 快照以反映新 bind/lease/关闭。 */
@@ -500,7 +497,6 @@ public final class DataPlaneUdpServer {
             }
             byRemote.clear();
             bound = false;
-            java.util.Arrays.fill(sessionToken, (byte) 0);
         }
 
         /** Per-channel datagram dispatcher；共享 instance 的 byRemote 与 registry。 */
@@ -523,7 +519,9 @@ public final class DataPlaneUdpServer {
                 // 否则转给既有会话处理（KCP 内部去重/重组都会拒绝非 KCP 字节，安全）。
                 ReliableDatagramSession existing = byRemote.get(packet.sender());
                 if (existing != null && !existing.isClosed()
-                        && !(readable >= UdpBindRequestCodec.MIN_BYTES && looksLikeBind(buf, sessionToken))) {
+                        && !(readable >= UdpBindRequestCodec.MIN_BYTES && looksLikeBind(buf,
+                                ControlFailoverHandler.getInstance()
+                                        .bindToken(existing.playerId(), existing.epoch())))) {
                     existing.receive(buf.retainedDuplicate(), System.currentTimeMillis());
                     return;
                 }
@@ -546,8 +544,11 @@ public final class DataPlaneUdpServer {
                     }
                     return;
                 }
-                // token 校验
-                if (!java.util.Arrays.equals(req.token(), sessionToken)) {
+                // token 校验（D-M1）：必须等于该 (playerId, epoch) 握手下发的 per-player bind token。
+                // epoch 已轮换时 handler 无该 epoch 的 token（null）→ 拒绝——叠加 currentEpoch 校验。
+                byte[] expectedToken = ControlFailoverHandler.getInstance()
+                        .bindToken(req.playerId(), req.connectionEpoch());
+                if (expectedToken == null || !java.util.Arrays.equals(req.token(), expectedToken)) {
                     if (DataPlanePoCConfig.isDataplaneLogEnabled()) {
                         DebugLogger.info(DebugLogger.LogType.DATAPLANE,
                                 "UdpServer: token mismatch from {}", packet.sender());
@@ -564,7 +565,7 @@ public final class DataPlaneUdpServer {
                     return;
                 }
 
-                byte[] key = UdpSessionKey.derive(sessionToken, req.playerId(), req.connectionEpoch(),
+                byte[] key = UdpSessionKey.derive(expectedToken, req.playerId(), req.connectionEpoch(),
                         endpointId, req.channelId());
 
                 UdpEndpoint ep = UdpEndpoint.builder()
@@ -613,14 +614,16 @@ public final class DataPlaneUdpServer {
 
     /**
      * 快速判别 {@code buf} 是否「看起来像 BindRequest」——只检查 {@code token[16]} 的前 4 字节是否
-     * 与服务端 token 前 4 字节匹配。用于既有 remote 路径上快速区分「合法 KCP 线字节」与
-     * 「客户端在已建立会话后还重复发 BindRequest」这两种远方异常。错判只会主动走解析路径多读一次，
-     * 不会丢消息——保守即可。
+     * 与该既有会话 (playerId, epoch) 的 per-player token 前 4 字节匹配。用于既有 remote 路径上快速区分
+     * 「合法 KCP 线字节」与「客户端在已建立会话后还重复发 BindRequest」这两种远方异常。错判只会主动走
+     * 解析路径多读一次，不会丢消息——保守即可；token 缺失（epoch 已轮换）按「非 BindRequest」保守处理。
      */
-    private static boolean looksLikeBind(ByteBuf buf, byte[] sessionToken) {
-        if (buf.readableBytes() < 4) return false;
+    private static boolean looksLikeBind(ByteBuf buf, byte[] expectedToken) {
+        if (buf.readableBytes() < 4 || expectedToken == null || expectedToken.length < 4) {
+            return false;
+        }
         for (int i = 0; i < 4; i++) {
-            if (buf.getByte(buf.readerIndex() + i) != sessionToken[i]) {
+            if (buf.getByte(buf.readerIndex() + i) != expectedToken[i]) {
                 return false;
             }
         }

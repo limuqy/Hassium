@@ -120,6 +120,13 @@ public final class GatewayChannel {
         handshakeOptions = request;
         stateTail = tail;
 
+        // ---- D-M2: 可选握手鉴权（master.authToken 非空时校验；失败立即关闭，不进入任何会话处理）----
+        if (server.isAuthEnabled() && !server.authToken().equals(HandshakeCodec.readAuthToken(payload))) {
+            LOGGER.warn("[GATEWAY] handshake auth failed from {} — closing", remote());
+            close("auth failed");
+            return;
+        }
+
         // ---- 续流验票：玩家身份 = 票据身份（帧连接无原版 ServerPlayer） ----
         UUID resumePlayer = null;
         long epoch = Long.MIN_VALUE;

@@ -2,6 +2,7 @@ package io.github.limuqy.mc.hassium.network.core.migration;
 
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.config.MigrationPolicyConfig;
+import io.github.limuqy.mc.hassium.network.ClientChunkPipeline;
 import io.github.limuqy.mc.hassium.network.HandshakeStateTail;
 import io.github.limuqy.mc.hassium.network.PlayerStateReport;
 import io.github.limuqy.mc.hassium.network.ResumeTicket;
@@ -11,6 +12,11 @@ import io.github.limuqy.mc.hassium.network.core.outbound.OutboundConnection;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -84,6 +90,13 @@ public final class MigrationEngine {
 
     /** 续流票据 epoch：进程生命周期单调递增（1 起；onLogin 不重置——各主控 validator 表跨会话持久）。 */
     private final AtomicLong epochCounter = new AtomicLong();
+
+    // 续流票据 epoch 持久化（T2 B-M2）：重启后从 hassium_cache/<serverId>/resume-epoch.json
+    // 加载继续递增，避免 epoch 归零 → 服务端防重放拒收 → 续流永久降级。
+    private volatile Path epochStateFile;
+    private boolean epochStateLoaded;
+    private long lastPersistedEpoch;
+    private final Object epochPersistLock = new Object();
 
     // 心跳监测（tick 线程）
     private volatile OutboundConnection heartbeatTarget;
@@ -395,15 +408,128 @@ public final class MigrationEngine {
 
     // ==================== 续流票据 / 预热 ====================
 
-    /** 构造续流票据：playerId（注入源）+ 递增 epoch + 共享密钥签名（T7 ResumeTicket）。 */
+    /** 构造续流票据：playerId（注入源）+ 递增 epoch + 签发时间戳 + 共享密钥签名（T7 ResumeTicket）。 */
     public ResumeTicket createResumeTicket() {
         Supplier<UUID> src = playerIdSource;
         UUID playerId = src != null ? src.get() : null;
         if (playerId == null) {
             throw new IllegalStateException("playerId unavailable (playerIdSource not set or returned null)");
         }
+        long epoch = nextResumeEpoch();
+        long issuedAtMs = System.currentTimeMillis();
+        return new ResumeTicket(playerId, epoch, issuedAtMs,
+                ResumeTicket.sign(playerId, epoch, issuedAtMs, ResumeTicket.sharedKey()));
+    }
+
+    /**
+     * 签发 epoch：首次签发前定位并加载持久化值（重启续流不降级），签发后同步落盘。
+     * 内存计数器（AtomicLong）与落盘值（只写严格更大值，锁内）双重保证严格单调。
+     */
+    private long nextResumeEpoch() {
+        if (!epochStateLoaded) {
+            loadPersistedEpoch();
+        }
         long epoch = epochCounter.incrementAndGet();
-        return new ResumeTicket(playerId, epoch, ResumeTicket.sign(playerId, epoch, ResumeTicket.sharedKey()));
+        persistEpoch(epoch);
+        return epoch;
+    }
+
+    /** 启动加载：epochCounter 起点 = max(当前, 持久化值)；下次 incrementAndGet 自然 +1 继续用。幂等。 */
+    public void loadPersistedEpoch() {
+        synchronized (epochPersistLock) {
+            if (epochStateLoaded) {
+                return;
+            }
+            epochStateLoaded = true;
+            if (epochStateFile == null) {
+                resolveEpochStateFile();
+            }
+            final Path file = epochStateFile;
+            if (file == null || !Files.isRegularFile(file)) {
+                return;
+            }
+            try {
+                String content = new String(Files.readAllBytes(file), StandardCharsets.UTF_8);
+                long persisted = parseEpochJson(content);
+                if (persisted > 0) {
+                    epochCounter.accumulateAndGet(persisted, Math::max);
+                    lastPersistedEpoch = persisted;
+                    LOGGER.info("Hassium: resume ticket epoch restored to {} from {}", persisted, file);
+                }
+            } catch (Exception e) {
+                LOGGER.warn("Hassium: resume ticket epoch load failed from {}: {}", file, e.toString());
+            }
+        }
+    }
+
+    /** 签发后落盘：只写严格更大的值（并发/乱序安全）；文件不可写仅告警，不阻断签发。 */
+    private void persistEpoch(long epoch) {
+        synchronized (epochPersistLock) {
+            if (epoch <= lastPersistedEpoch) {
+                return;
+            }
+            lastPersistedEpoch = epoch;
+            final Path file = epochStateFile;
+            if (file == null) {
+                return;
+            }
+            try {
+                atomicWrite(file, "{\"version\":1,\"epoch\":" + epoch + "}");
+            } catch (Exception e) {
+                LOGGER.warn("Hassium: resume ticket epoch persist failed to {}: {}", file, e.toString());
+            }
+        }
+    }
+
+    /** 定位持久化文件：与影子端缓存同目录 {@code hassium_cache/<serverId>/resume-epoch.json}。 */
+    private void resolveEpochStateFile() {
+        try {
+            ClientChunkPipeline pipeline = ClientChunkPipeline.getInstance();
+            Path gameDir = pipeline.getGameDir();
+            String serverId = pipeline.getServerId();
+            if (gameDir != null && serverId != null) {
+                epochStateFile = gameDir.resolve("hassium_cache").resolve(serverId).resolve("resume-epoch.json");
+                LOGGER.info("Hassium: resume ticket epoch state file: {}", epochStateFile);
+            }
+        } catch (Throwable t) {
+            // 定位失败保持禁用（进程内单调），不影响续流功能本身
+        }
+    }
+
+    /** 解析本类写出的 epoch 文件：{"version":1,"epoch":<n>}；损坏返回 0（从头计数）。 */
+    private static long parseEpochJson(String content) {
+        if (content == null) {
+            return 0L;
+        }
+        int key = content.indexOf("\"epoch\":");
+        if (key < 0) {
+            return 0L;
+        }
+        int start = key + "\"epoch\":".length();
+        int end = content.indexOf('}', start);
+        if (end < 0) {
+            end = content.length();
+        }
+        try {
+            return Long.parseLong(content.substring(start, end).trim());
+        } catch (NumberFormatException e) {
+            return 0L;
+        }
+    }
+
+    /** 原子写：临时文件 + rename（ATOMIC_MOVE，不支持时回退 REPLACE_EXISTING）。 */
+    private static void atomicWrite(Path file, String content) throws IOException {
+        Path dir = file.toAbsolutePath().getParent();
+        if (dir != null) {
+            Files.createDirectories(dir);
+        }
+        Path tmp = file.resolveSibling(file.getFileName() + ".tmp");
+        Files.write(tmp, content.getBytes(StandardCharsets.UTF_8));
+        try {
+            Files.move(tmp, file, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+        } catch (java.nio.file.AtomicMoveNotSupportedException e) {
+            Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING);
+        }
     }
 
     /**

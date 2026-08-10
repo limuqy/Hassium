@@ -23,6 +23,7 @@ import io.netty.buffer.Unpooled;
  *   | bool globalCompression | bool compactHeader
  *   | [append-only 尾] udpTail flags 1B | double x | double z
  *   | bool seedGenSupported | bool engineEnabled
+ *   | [append-only 尾] T7 状态尾（可选）| D-M2 authToken（utf，可选）
  * </pre>
  *
  * <p><b>S2C 响应线格式</b>（对齐三端 {@code completeServerHandshake} 与客户端解码）：
@@ -100,6 +101,16 @@ public final class HandshakeCodec {
      * （旧路径线格式不变）。尾追加在固定字段之后，旧服务端忽略尾字节。
      */
     public static ByteBuf encodeClientRequest(ClientRequestOptions opts, HandshakeStateTail.C2S tail) {
+        return encodeClientRequest(opts, tail, "");
+    }
+
+    /**
+     * 编码 C2S 握手请求 + T7 续流状态尾 + D-M2 握手鉴权 token（{@code master.authToken}
+     * 双端同键；非空时服务端校验失败 close("auth failed")）。
+     * authToken 以 utf 追加在状态尾之后（append-only：旧服务端忽略尾字节；旧客户端无此字段）。
+     * authToken 为空时不追加任何字节——未启用鉴权时线格式与旧版完全一致。
+     */
+    public static ByteBuf encodeClientRequest(ClientRequestOptions opts, HandshakeStateTail.C2S tail, String authToken) {
         ByteBuf buf = Unpooled.buffer();
         ControlFrameCodec.writeVarInt(buf, opts.protocolVersion());
         ControlFrameCodec.writeUtf(buf, opts.modVersion());
@@ -121,7 +132,25 @@ public final class HandshakeCodec {
         if (tail != null) {
             HandshakeStateTail.writeC2S(buf, tail);
         }
+        if (authToken != null && !authToken.isEmpty()) {
+            ControlFrameCodec.writeUtf(buf, authToken);
+        }
         return buf;
+    }
+
+    /**
+     * 读取 C2S 握手尾部的鉴权 token（D-M2；追加在 T7 状态尾之后，调用方须先 readC2S）。
+     * 旧客户端无此字段 → 空串；损坏 → 空串（鉴权开启时自然校验失败）。
+     */
+    public static String readAuthToken(ByteBuf in) {
+        if (in == null || !in.isReadable()) {
+            return "";
+        }
+        try {
+            return ControlFrameCodec.readUtf(in);
+        } catch (IllegalArgumentException e) {
+            return "";
+        }
     }
 
     /**

@@ -62,6 +62,8 @@ public final class GatewayPlatformWiring {
             gateway.setLoginSink((ch, payload) -> GatewayPlayerBridge.dispatchLoginFrame(ch, payload, server));
             HassiumConfigService config = HassiumConfigService.getInstance();
             gateway.setZstd(config.getGlobalCompressionThreshold(), config.getGlobalCompressionLevel());
+            // D-M2: 可选握手鉴权（master.authToken；空 = 不鉴权，保持既有行为）
+            gateway.setAuthToken(config.getMasterAuthToken());
             // per-player 清理：PlayerCompressionTracker + vanilla PlayerList 完整移除
             // （帧连接已关 → S2C 经桥自然丢弃；DataPlaneUdpServer 无 UDP 会话，无级联）
             gateway.registry().addPlayerRemovalHook(
@@ -110,11 +112,13 @@ public final class GatewayPlatformWiring {
             LOGGER.warn("[GATEWAY] world seed/stem resolve failed — 回落保守默认", t);
         }
         try {
-            // 帧连接即控制连接：不 beginControlConnection（UDP 会话 T8 并入票据 epoch 口径）
+            // 帧连接即控制连接：不 beginControlConnection（UDP 会话 T8 并入票据 epoch 口径）。
+            // D-M1: udpSupported=false 时 token 不参与下发（create() 对 !hasUdp 写零 token），
+            // 直接传 null——per-player bind token 仅由三端数据面握手尾经 getBindToken 下发。
             udpTail = DataPlaneHandshakeAdvertisement.create(
                     DataPlaneUdpServer.advertisedControlEndpoints(),
                     DataPlaneUdpServer.boundEndpoints(),
-                    DataPlaneUdpServer.isBound() ? DataPlaneUdpServer.getSessionToken() : null,
+                    null,
                     0L, false, false);
         } catch (Throwable t) {
             LOGGER.warn("[GATEWAY] udp tail resolve failed — disabled", t);
@@ -133,16 +137,18 @@ public final class GatewayPlatformWiring {
 
     // ==================== 监听端口 ====================
 
+    /**
+     * T5-M3 修复：网关默认绑定 127.0.0.1 回环，避免无鉴权监听暴露到公网。
+     * bind host 唯一来源 = {@code master.bindHost}（默认 127.0.0.1；空串 = 0.0.0.0 全网卡，
+     * 生产多网卡显式声明）。不再回退 {@code controlReachableEndpoints[0].host()}——
+     * 那是客户端可达地址（可含公网 IP），不等于本机 bind 地址。
+     */
     private static String resolveBindHost(HassiumConfigService config) {
-        List<io.github.limuqy.mc.hassium.config.HassiumConfig.ReachableEndpoint> endpoints =
-                config.getControlReachableEndpoints();
-        if (!endpoints.isEmpty()) {
-            String host = endpoints.get(0).host();
-            if (host != null && !host.isBlank()) {
-                return host;
-            }
+        String bindHost = config.getMasterBindHost();
+        if (bindHost == null || bindHost.isBlank()) {
+            return "0.0.0.0";
         }
-        return "0.0.0.0";
+        return bindHost;
     }
 
     private static int resolveBindPort(HassiumConfigService config) {

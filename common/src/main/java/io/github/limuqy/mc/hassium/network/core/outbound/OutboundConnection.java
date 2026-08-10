@@ -218,9 +218,11 @@ public final class OutboundConnection {
     /**
      * 发送 C2S 握手请求（channelActive 自动发送；显式调用用于重发）。
      * 构造时若指定续流状态尾（T8），请求一并携带。
+     * D-M2: 握手帧携带 master.authToken（客户端配置，双端同键；空 = 不鉴权）。
      */
     public void sendHandshake(HandshakeCodec.ClientRequestOptions options) {
-        sendFrame(ControlFrameType.HANDSHAKE_C2S, HandshakeCodec.encodeClientRequest(options, handshakeTail));
+        sendFrame(ControlFrameType.HANDSHAKE_C2S, HandshakeCodec.encodeClientRequest(
+                options, handshakeTail, io.github.limuqy.mc.hassium.config.HassiumConfigService.getInstance().getMasterAuthToken()));
     }
 
     /**

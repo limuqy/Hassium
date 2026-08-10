@@ -2,6 +2,7 @@ package io.github.limuqy.mc.hassium.network.dataplane;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.net.DatagramPacket;
@@ -69,10 +70,12 @@ final class DataPlaneUdpServerBindTest {
             assertTrue(first.boundPort() > 0, "OS-assigned port must be positive");
             assertTrue(second.boundPort() > 0);
 
-            // 对每个 endpoint 发一封「正确 endpointId」的 BindRequest，server 应建立会话
-            byte[] token = server.getSessionToken();
+            // 对每个 endpoint 发一封「正确 endpointId」的 BindRequest，server 应建立会话。
+            // D-M1: per-player per-epoch token——先经 beginControlConnection 签发 (alice, epoch) token
             UUID alice = new UUID(0xA11CE_A11CEL, 7L);
-            long epoch = 1L;
+            long epoch = DataPlaneUdpServer.beginControlConnection(alice, () -> { });
+            byte[] token = DataPlaneUdpServer.getBindToken(alice, epoch);
+            assertNotNull(token, "beginControlConnection 后必须已签发 per-player bind token");
 
             sendDatagram("127.0.0.1", first.boundPort(),
                     validBindRequest(token, alice, epoch, first.endpointId(), 1));

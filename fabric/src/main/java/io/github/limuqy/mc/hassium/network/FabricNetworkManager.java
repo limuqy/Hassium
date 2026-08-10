@@ -526,7 +526,8 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
                 UdpDataPlaneHandshakeTail.S2CTail s2cTail = DataPlaneHandshakeAdvertisement.create(
                         DataPlaneUdpServer.advertisedControlEndpoints(),
                         DataPlaneUdpServer.boundEndpoints(),
-                        udpBound ? DataPlaneUdpServer.getSessionToken() : null,
+                        // D-M1: per-player per-epoch bind token（epoch 变更即轮换；旧 token 直接失效）
+                        udpBound ? DataPlaneUdpServer.getBindToken(player.getUUID(), epoch) : null,
                         epoch,
                         clientUdpDataplaneSupported && udpBound,
                         clientControlFailoverSupported);
