@@ -47,9 +47,7 @@ public final class DataPlanePoCConfig {
                 io.github.limuqy.mc.hassium.utils.DebugLogger.LogType.DATAPLANE);
     }
 
-    public static final byte[] BIND_TOKEN = new byte[16]; // 全零 PoC
-
-    /** HKDF info 区分标签（PoC 固定；用于每渠道写密钥派生） */
-    public static final int FRAME_KEY_INFO_TAG = 0x44_50_4C_31; // "DPL1"
-
+    // review-fix: T4-80 — 删除死常量 BIND_TOKEN（全零 public byte[]，可被任何代码改写，误用即静默
+    // 取消全部鉴权；grep 确认 src/main + src/test + 三端均无引用）与 FRAME_KEY_INFO_TAG（PoC 遗留，
+    // 密钥派生已收敛到 UdpSessionKey.derive / DataPlaneUdpServer，无需区分标签）。
 }

@@ -210,6 +210,17 @@ public final class ControlFailoverHandler {
         return List.copyOf(permits);
     }
 
+    /**
+     * review-fix: T4-82 — permits 表按 TTL 清理：以本次颁布时刻为参考时钟，剔除已超过
+     * {@link #DEFAULT_FAILOVER_PERMIT_TTL_MS} 的旧条目，防止 failover 记账列表无界增长
+     * （每次颁布新 permit 都顺带压缩一次；生产路径 nowMs 为真实时钟）。
+     */
+    private void pruneExpiredPermits(long nowMs) {
+        synchronized (permits) {
+            permits.removeIf(p -> nowMs - p.permitMs() >= DEFAULT_FAILOVER_PERMIT_TTL_MS);
+        }
+    }
+
     public long failoverPermitTtlMs() {
         return DEFAULT_FAILOVER_PERMIT_TTL_MS;
     }
@@ -247,6 +258,7 @@ public final class ControlFailoverHandler {
             } catch (Throwable t) {
                 LOGGER.warn("Control failover: closing old master failed for player={}", playerId, t);
             }
+            pruneExpiredPermits(nowMs); // review-fix: T4-82 — 加条目前先清理过期 permit
             permits.add(new Permit(playerId, epoch, requestedEndpointId, nowMs));
             st.masterClose = null; // 单次生效，避免重复关闭
             return FailoverResult.PERMITTED;

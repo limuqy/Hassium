@@ -53,4 +53,26 @@ class DataPlaneFrameTest {
         byte[] bad = new byte[]{2, 1}; // type=1, 但 payload 缺失
         assertThrows(Exception.class, () -> DataPlaneFrame.decodePayload(bad));
     }
+
+    @Test @DisplayName("decodeType 拒绝非法类型（review-fix: T4-84 类型范围校验）")
+    void decodeTypeRejectsOutOfRangeType() {
+        byte[] frame = new byte[] {2, 0, 1}; // frameLen=2（type+payload），type=0 非法
+        assertThrows(IllegalArgumentException.class, () -> DataPlaneFrame.decodeType(frame));
+        byte[] high = new byte[] {2, 10, 1}; // type=10 > MAX_TYPE
+        assertThrows(IllegalArgumentException.class, () -> DataPlaneFrame.decodeType(high));
+    }
+
+    @Test @DisplayName("decodeType 超大 VarInt frameLen 抛 IllegalArgumentException 而非 BufferUnderflowException（review-fix: T4-84 溢出防护）")
+    void decodeTypeRejectsOverflowingFrameLen() {
+        // 5 字节 VarInt = 0xFFFFFFFF（frameLen ≈ 2^32）：原实现 int 溢出使截断检查失效 → BufferUnderflowException；
+        // 修复后走 long 比较 → IllegalArgumentException。
+        byte[] overflow = new byte[] {(byte) 0xFF, (byte) 0xFF, (byte) 0xFF, (byte) 0xFF, 0x0F, 3};
+        assertThrows(IllegalArgumentException.class, () -> DataPlaneFrame.decodeType(overflow));
+    }
+
+    @Test @DisplayName("decodePayload 拒绝 frameLen=0（防 dataLen=-1 负数组分配，review-fix: T4-84）")
+    void decodePayloadRejectsZeroFrameLen() {
+        byte[] frame = new byte[] {0, 1};
+        assertThrows(IllegalArgumentException.class, () -> DataPlaneFrame.decodePayload(frame));
+    }
 }

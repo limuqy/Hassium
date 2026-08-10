@@ -193,6 +193,7 @@ public final class DataPlaneUdpServer {
         Instance inst = INSTANCE;
         if (inst != null) {
             inst.registry.replaceEpoch(playerId, epoch);
+            inst.worksets.remove(playerId); // review-fix: T4-82 — 旧 epoch 会话已全部关闭，workset 快照一并失效
         }
         return epoch;
     }
@@ -224,7 +225,12 @@ public final class DataPlaneUdpServer {
                         session.playerId(), session.epoch(), t);
             }
         }
-        inst.registry.expireLeases(nowMs);
+        // review-fix: T4-82/T4-85 — lease 到期关闭的会话同步触发 onUdpSessionClosed 回调
+        // （udpSessionPresent 可回 false）并清理该玩家 workset（随会话关闭移除）。
+        for (DataPlaneSessionRegistry.ExpiredLease expired : inst.registry.expireLeases(nowMs)) {
+            ControlFailoverHandler.getInstance().onUdpSessionClosed(expired.playerId(), expired.epoch());
+            inst.dropWorksetIfNoSessions(expired.playerId());
+        }
         sweepIdleSessions(inst, nowMs);
     }
 
@@ -252,6 +258,7 @@ public final class DataPlaneUdpServer {
             if (nowMs - session.lastActivityMs() >= ttlMs) {
                 inst.registry.removeSessions(session.playerId(), session.epoch());
                 handler.onUdpSessionClosed(session.playerId(), session.epoch());
+                inst.dropWorksetIfNoSessions(session.playerId()); // review-fix: T4-82 — workset 随会话关闭移除
                 LOGGER.info("UdpServer: idle session swept player={} epoch={} idleMs={} hasMaster={}",
                         session.playerId(), session.epoch(), nowMs - session.lastActivityMs(), hasMaster);
             }
@@ -427,7 +434,8 @@ public final class DataPlaneUdpServer {
     private static final long SESSION_IDLE_TTL_MS = 90_000L;
     private static final long NO_MASTER_TTL_MS = 30_000L;
     private static final int EVENT_LOOP_THREADS = 1;
-    private static final byte[] HKDF_INFO_PREFIX = "hassium-udp-v1".getBytes(java.nio.charset.StandardCharsets.US_ASCII);
+    // review-fix: T4-80 — 删除与 UdpSessionKey.INFO_PREFIX 重复的 HKDF_INFO_PREFIX（grep 无引用），
+    // INFO 常量收敛单一来源 UdpSessionKey.INFO_PREFIX，杜绝分叉导致密钥失配。
 
     private static final class Instance {
         final List<HassiumConfig.UdpListenerConfig> configured;
@@ -455,6 +463,14 @@ public final class DataPlaneUdpServer {
                     u -> UdpBulkRouter.PlayerSessions.of(List.of()));
             ps.refresh(snapshot);
             return ps;
+        }
+
+        /** review-fix: T4-82 — 该玩家已无任何存活会话时移除其 bulk WRR workset，
+         *  杜绝 per-player 无界增长与已关闭会话引用滞留（List.copyOf 快照阻止 GC）。 */
+        void dropWorksetIfNoSessions(UUID playerId) {
+            if (registry.sessionsByPlayer(playerId).isEmpty()) {
+                worksets.remove(playerId);
+            }
         }
 
         void bind() {
@@ -497,6 +513,7 @@ public final class DataPlaneUdpServer {
             }
             byRemote.clear();
             bound = false;
+            worksets.clear(); // review-fix: T4-82 — 实例销毁时一并清空 workset
         }
 
         /** Per-channel datagram dispatcher；共享 instance 的 byRemote 与 registry。 */
@@ -613,16 +630,19 @@ public final class DataPlaneUdpServer {
     /* ----------------- helpers ----------------- */
 
     /**
-     * 快速判别 {@code buf} 是否「看起来像 BindRequest」——只检查 {@code token[16]} 的前 4 字节是否
-     * 与该既有会话 (playerId, epoch) 的 per-player token 前 4 字节匹配。用于既有 remote 路径上快速区分
-     * 「合法 KCP 线字节」与「客户端在已建立会话后还重复发 BindRequest」这两种远方异常。错判只会主动走
-     * 解析路径多读一次，不会丢消息——保守即可；token 缺失（epoch 已轮换）按「非 BindRequest」保守处理。
+     * review-fix: T4-83 — 快速判别 {@code buf} 是否「看起来像 BindRequest」：比较完整 16 字节 token
+     * （BindRequest 线格式 token 位于帧首）。KCP datagram 首 4 字节为 conv，与随机 16B token 完整匹配
+     * 概率 2^-128，误判可忽略；持 token 攻击者构造「前 4 字节匹配」伪 KCP 包引既有会话入帧进 bind 解析
+     * 路径丢弃的漏洞由此关闭。token 缺失（epoch 已轮换）按「非 BindRequest」保守处理。
      */
     private static boolean looksLikeBind(ByteBuf buf, byte[] expectedToken) {
-        if (buf.readableBytes() < 4 || expectedToken == null || expectedToken.length < 4) {
+        if (expectedToken == null || expectedToken.length != 16) {
             return false;
         }
-        for (int i = 0; i < 4; i++) {
+        if (buf.readableBytes() < 16) {
+            return false;
+        }
+        for (int i = 0; i < 16; i++) {
             if (buf.getByte(buf.readerIndex() + i) != expectedToken[i]) {
                 return false;
             }

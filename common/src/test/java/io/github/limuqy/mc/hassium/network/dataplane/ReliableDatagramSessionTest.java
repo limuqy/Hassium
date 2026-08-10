@@ -17,6 +17,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -261,6 +262,59 @@ class ReliableDatagramSessionTest {
         s.close();
         assertFalse(s.isWritable(), "closed session must not be writable");
         assertFalse(s.isHealthy(), "closed session must not be healthy");
+    }
+
+    /**
+     * review-fix: T4-87 — datagram 级 4B 截断 HMAC 标签：无标签 / 篡改标签的 KCP 线字节在进入 KCP 前
+     * 被静默丢弃；仅带正确标签的 datagram 被投递（防伪造分片灌满重组窗口）。
+     */
+    @Test
+    void datagramTagIsRequiredAndVerified() {
+        AtomicInteger deliverCount = new AtomicInteger();
+        Wire s2c = new Wire();
+        Wire c2s = new Wire();
+        ReliableDatagramSession server = serverSession(defaultEndpoint(UdpEndpoint.Role.SERVER), s2c);
+        ReliableDatagramSession client = clientSession(defaultEndpoint(UdpEndpoint.Role.CLIENT), c2s);
+        server.receiveHandler(r -> deliverCount.incrementAndGet());
+
+        byte[] payload = new byte[] {1, 2, 3};
+        client.enqueueAuthenticated(DataPlaneFrame.TYPE_KEEPALIVE, payload);
+
+        long nowMs = 0L;
+        ByteBuf wire = null;
+        for (int i = 0; i < 200 && wire == null; i++, nowMs += STEP_MS) {
+            server.tick(nowMs);
+            client.tick(nowMs);
+            wire = c2s.poll();
+        }
+        assertNotNull(wire, "client must emit tagged datagrams");
+        try {
+            int len = wire.readableBytes();
+            assertTrue(len > 4, "tagged datagram must carry KCP bytes plus 4B tag");
+
+            // (1) 去掉尾部标签 → 丢弃（不进 KCP）
+            ByteBuf untagged = PooledByteBufAllocator.DEFAULT.buffer(len - 4);
+            untagged.writeBytes(wire, wire.readerIndex(), len - 4);
+            server.receive(untagged, nowMs);
+
+            // (2) 篡改标签末字节 → 丢弃（独立拷贝，不污染 wire 共享内存）
+            ByteBuf corrupt = PooledByteBufAllocator.DEFAULT.buffer(len);
+            corrupt.writeBytes(wire, wire.readerIndex(), len);
+            corrupt.setByte(corrupt.writerIndex() - 1, corrupt.getByte(corrupt.writerIndex() - 1) ^ 0x01);
+            server.receive(corrupt, nowMs);
+
+            // (3) 原样标签 → 投递
+            server.receive(wire.retainedDuplicate(), nowMs);
+        } finally {
+            wire.release();
+        }
+
+        for (int step = 0; step < 2000 && deliverCount.get() == 0; step++) {
+            step(server, s2c, client, c2s, (step + 1) * STEP_MS);
+        }
+        assertEquals(1, deliverCount.get(), "only the validly tagged datagram may be delivered");
+        drainWire(s2c);
+        drainWire(c2s);
     }
 
     private static byte[] payload() {

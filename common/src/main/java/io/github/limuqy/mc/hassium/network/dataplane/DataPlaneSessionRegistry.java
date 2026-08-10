@@ -166,13 +166,21 @@ public final class DataPlaneSessionRegistry {
     }
 
     /**
+     * review-fix: T4-82/T4-85 — expireLeases 返回本次到期关闭的 (playerId, epoch)，调用方
+     * （{@code DataPlaneUdpServer.tick}）据以触发 {@link ControlFailoverHandler#onUdpSessionClosed}
+     * 回调（udpSessionPresent 可回 false）并清理 per-player workset。无到期项返回空列表。
+     */
+    public record ExpiredLease(UUID playerId, long epoch) {}
+
+    /**
      * 推进 lease 表：关闭所有已逾期的 (playerId, epoch) 会话，把它们从 {@code sessions} 移除。
      * 单调调用（tick 线程上串行）；幂等。
      */
-    public synchronized void expireLeases(long nowMs) {
+    public synchronized List<ExpiredLease> expireLeases(long nowMs) {
         if (pendingLeases.isEmpty()) {
-            return;
+            return List.of();
         }
+        List<ExpiredLease> expired = new ArrayList<>();
         for (PendingLease pl : pendingLeases) {
             if (nowMs >= pl.expireAt) {
                 List<ReliableDatagramSession> bucket = sessions.get(new Key(pl.playerId, pl.epoch));
@@ -182,9 +190,11 @@ public final class DataPlaneSessionRegistry {
                     }
                     bucket.clear();
                     sessions.remove(new Key(pl.playerId, pl.epoch));
+                    expired.add(new ExpiredLease(pl.playerId, pl.epoch));
                 }
             }
         }
         pendingLeases.removeIf(pl -> nowMs >= pl.expireAt);
+        return List.copyOf(expired);
     }
 }

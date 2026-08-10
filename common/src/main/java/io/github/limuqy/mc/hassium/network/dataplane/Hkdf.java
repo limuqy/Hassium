@@ -11,6 +11,14 @@ import java.security.GeneralSecurityException;
 public class Hkdf {
 
     private static final String HMAC_SHA256 = "HmacSHA256";
+    // review-fix: T4-78 — ThreadLocal 缓存 Mac 实例，避免每次派生都走 JCA provider 查找 + 实例化。
+    private static final ThreadLocal<Mac> MAC = ThreadLocal.withInitial(() -> {
+        try {
+            return Mac.getInstance(HMAC_SHA256);
+        } catch (GeneralSecurityException e) {
+            throw new ExceptionInInitializerError(e);
+        }
+    });
 
     /**
      * HKDF extract + expand 一步完成。
@@ -33,15 +41,21 @@ public class Hkdf {
     /** HKDF-Extract: PRK = HMAC-SHA256(salt, IKM) */
     static byte[] extract(byte[] ikm, byte[] salt) throws GeneralSecurityException {
         if (salt == null || salt.length == 0) salt = new byte[32];
-        Mac mac = Mac.getInstance(HMAC_SHA256);
+        Mac mac = MAC.get();
         mac.init(new SecretKeySpec(salt, HMAC_SHA256));
         return mac.doFinal(ikm);
     }
 
     /** HKDF-Expand: OKM = T(1) || T(2) || ... */
     static byte[] expand(byte[] prk, byte[] info, int length) throws GeneralSecurityException {
-        Mac mac = Mac.getInstance(HMAC_SHA256);
-        mac.init(new SecretKeySpec(prk, HMAC_SHA256));
+        // review-fix: T4-79 — RFC 5869 长度上限：单字节计数器最多 255 轮 × 32B/轮；越界抛
+        // IllegalArgumentException（原实现 length > 255*32 时 byte 计数器溢出死循环 + 超大分配）。
+        if (length < 1 || length > 255 * 32) {
+            throw new IllegalArgumentException(
+                    "HKDF expand length out of range (1.." + (255 * 32) + "): " + length);
+        }
+        Mac mac = MAC.get();
+        mac.init(new SecretKeySpec(prk, HMAC_SHA256)); // review-fix: T4-78 误删——复用实例必须重 init（extract 残留 salt 状态）
 
         byte[] result = new byte[length];
         byte[] t = new byte[0];

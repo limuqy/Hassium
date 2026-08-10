@@ -56,15 +56,17 @@ public final class DataPlaneClientBundle {
     private static final int PROTOCOL_VERSION = UdpBindRequestCodec.PROTOCOL_VERSION;
 
     // ===== PoC-compatible static counters (transport-agnostic) =====
-    public static volatile long bulkFramesData = 0;
-    public static volatile long bulkBytesData = 0;
+    // review-fix: T4-86 — volatile long 非原子 ++/+= 在 workerGroup 双线程 event loop 并发累计会丢计数；
+    // 改 AtomicLong 保证用户可见指标准确（getter/reset 形态不变）。
+    public static final AtomicLong bulkFramesData = new AtomicLong(0);
+    public static final AtomicLong bulkBytesData = new AtomicLong(0);
     private static final ConcurrentHashMap<Integer, AtomicLong>
             perPortFrames = new ConcurrentHashMap<>();
     private static final ConcurrentHashMap<Integer, AtomicLong>
             perPortBytes = new ConcurrentHashMap<>();
 
-    public static long getBulkFramesData() { return bulkFramesData; }
-    public static long getBulkBytesData() { return bulkBytesData; }
+    public static long getBulkFramesData() { return bulkFramesData.get(); }
+    public static long getBulkBytesData() { return bulkBytesData.get(); }
 
     public static long getBulkFramesByPort(int portIdx) {
         AtomicLong v = perPortFrames.get(portIdx);
@@ -86,15 +88,15 @@ public final class DataPlaneClientBundle {
     }
 
     public static void resetDataBulkCounters() {
-        bulkFramesData = 0;
-        bulkBytesData = 0;
+        bulkFramesData.set(0);
+        bulkBytesData.set(0);
         perPortFrames.clear();
         perPortBytes.clear();
     }
 
     private static void onBulkArrived(int portIdx, long payloadLen) {
-        bulkFramesData++;
-        bulkBytesData += payloadLen;
+        bulkFramesData.incrementAndGet();
+        bulkBytesData.addAndGet(payloadLen);
         perPortFrames.computeIfAbsent(portIdx, k -> new AtomicLong()).incrementAndGet();
         perPortBytes.computeIfAbsent(portIdx, k -> new AtomicLong()).addAndGet(payloadLen);
     }

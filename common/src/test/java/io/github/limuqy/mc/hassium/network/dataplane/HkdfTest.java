@@ -16,20 +16,29 @@ class HkdfTest {
         assertArrayEquals(expected, result);
     }
 
-    @Test @DisplayName("deriveDataKey 与设计稿 §4 Key derivation 公式一致")
+    @Test @DisplayName("UdpSessionKey.derive 确定性 + 参数隔离（T4-80 INFO 收敛后唯一实现）")
     void deriveDataKey() {
         byte[] token = new byte[16]; // 全零 token（PoC 固定值）
-        byte[] playerUuid = {0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15}; // 16 bytes
-        byte[] info = "hassium-dataplane-v1".getBytes(java.nio.charset.StandardCharsets.UTF_8);
-        byte[] channelId = new byte[]{0,0,0,1}; // VarInt 1 的字节
-        byte[] combinedInfo = new byte[info.length + channelId.length];
-        System.arraycopy(info, 0, combinedInfo, 0, info.length);
-        System.arraycopy(channelId, 0, combinedInfo, 0, channelId.length);
-        byte[] key = Hkdf.extractAndExpand(token, playerUuid, combinedInfo, 16);
+        java.util.UUID playerId = new java.util.UUID(0x0001020304050607L, 0x08090a0b0c0d0e0fL);
+        byte[] key = UdpSessionKey.derive(token, playerId, 0L, 1, 1);
         assertEquals(16, key.length);
         // 派生结果应该是确定性的
-        byte[] key2 = Hkdf.extractAndExpand(token, playerUuid, combinedInfo, 16);
+        byte[] key2 = UdpSessionKey.derive(token, playerId, 0L, 1, 1);
         assertArrayEquals(key, key2);
+        // 参数隔离：endpointId/channelId 任一变化必须换 key（T4-M1 防密钥域碰撞）
+        assertFalse(java.util.Arrays.equals(key, UdpSessionKey.derive(token, playerId, 0L, 2, 1)));
+        assertFalse(java.util.Arrays.equals(key, UdpSessionKey.derive(token, playerId, 0L, 1, 2)));
+        assertFalse(java.util.Arrays.equals(key, UdpSessionKey.derive(token, playerId, 1L, 1, 1)));
+    }
+
+    @Test @DisplayName("expand 长度越界抛 IllegalArgumentException（RFC 5869 上限）")
+    void expandLengthBounds() {
+        byte[] ikm = new byte[16];
+        // review-fix: T4-79 — 0 与 > 255*32 越界拒绝；上限值合法且长度精确。
+        assertThrows(IllegalArgumentException.class, () -> Hkdf.extractAndExpand(ikm, null, null, 0));
+        assertThrows(IllegalArgumentException.class,
+                () -> Hkdf.extractAndExpand(ikm, null, null, 255 * 32 + 1));
+        assertEquals(255 * 32, Hkdf.extractAndExpand(ikm, null, null, 255 * 32).length);
     }
 
     private static byte[] hex(String s) {

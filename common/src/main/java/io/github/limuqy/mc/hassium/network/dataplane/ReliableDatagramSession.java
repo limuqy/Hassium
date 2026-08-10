@@ -6,6 +6,10 @@ import io.jpower.kcp.netty.KcpOutput;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufAllocator;
 import io.netty.buffer.PooledByteBufAllocator;
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
+import java.security.GeneralSecurityException;
+import java.security.MessageDigest;
 
 import java.net.InetSocketAddress;
 import java.util.ArrayList;
@@ -54,6 +58,19 @@ public final class ReliableDatagramSession implements BulkRouteTarget {
     public record Metrics(long srttMs, long packetsLost, int queuedBytes, boolean writable) {}
 
     private static final int TICK_INTERVAL = 10; // ms — 与 nodelay(interval=10) 一致
+    // review-fix: T4-87 — datagram 级轻量鉴权：每个 KCP 线 datagram 追加 4 字节截断 HMAC-SHA256
+    // （密钥复用 AEAD 派生 key；conv 计算不变，BindRequest 路径不涉及），接收端校验通过才喂入 KCP——
+    // 无密钥攻击者无法伪造源地址 + 可推算 conv 的假分片灌满 rcvWindow 重组窗口（AEAD 在 KCP 之上
+    // 无法提前拒绝）。
+    private static final int DATAGRAM_TAG_BYTES = 4;
+    private static final String DATAGRAM_HMAC_ALGO = "HmacSHA256";
+    private static final ThreadLocal<Mac> DATAGRAM_MAC = ThreadLocal.withInitial(() -> {
+        try {
+            return Mac.getInstance(DATAGRAM_HMAC_ALGO);
+        } catch (GeneralSecurityException e) {
+            throw new ExceptionInInitializerError(e);
+        }
+    });
 
     private final UUID playerId;
     private final long epoch;
@@ -146,19 +163,34 @@ public final class ReliableDatagramSession implements BulkRouteTarget {
         return this;
     }
 
-    /** 接收一个对端发出的 KCP 线字节 datagram，喂入 KCP 并立即尝试解出完整应用帧。 */
+    /**
+     * 接收一个对端发出的 KCP 线字节 datagram：先校验尾部 4B 截断 HMAC（T4-87），通过后喂入 KCP
+     * 并立即尝试解出完整应用帧。无标签/错标签的伪造 datagram 在进入 KCP 前被静默丢弃。
+     */
     public synchronized void receive(ByteBuf datagram, long nowMs) {
         if (closed || datagram == null || !datagram.isReadable()) {
             return;
         }
         lastActivityMs = nowMs; // review-fix: T4-M2 — 任何有效入帧都视为活动，供 idle 扫描判定
         try {
-            kcp.input(datagram);
+            // review-fix: T4-87 — 校验 4B 截断 HMAC：失败即丢弃，绝不喂入 KCP（防伪造分片灌满重组窗口）。
+            int readable = datagram.readableBytes();
+            if (readable <= DATAGRAM_TAG_BYTES) {
+                return;
+            }
+            byte[] expected = new byte[DATAGRAM_TAG_BYTES];
+            datagram.getBytes(datagram.readerIndex() + readable - DATAGRAM_TAG_BYTES, expected);
+            byte[] computed = datagramTag(datagram, datagram.readerIndex(), readable - DATAGRAM_TAG_BYTES);
+            if (!MessageDigest.isEqual(expected, computed)) {
+                return;
+            }
+            kcp.input(datagram.slice(datagram.readerIndex(), readable - DATAGRAM_TAG_BYTES));
         } catch (Throwable ignored) {
             // 损坏/不可解析 datagram 静默丢弃——KCP 自身对恶意输入有保护；这里不传播至事件循环。
             return;
         } finally {
-            // KCP input 通过 readRetainedSlice 取走自己的 retain，调用方仍持所有权——释放调用方传入的 buf。
+            // KCP input 通过 readRetainedSlice 取走自己的 retain（slice 与调用方共享 refCnt），
+            // 调用方仍持所有权——释放调用方传入的 buf。
             datagram.release();
         }
         drainReceived();
@@ -252,6 +284,9 @@ public final class ReliableDatagramSession implements BulkRouteTarget {
         closed = true;
         try { kcp.release(); } catch (Throwable ignored) {}
         outstandingAppBytes = 0;
+        // review-fix: T4-82 — 抹零 AEAD 密钥，缩短敏感材料内存滞留窗口
+        // （closed 门闩保证此后无任何 seal/open/datagramTag 路径再触达 key）。
+        java.util.Arrays.fill(key, (byte) 0);
     }
 
     // ---------- internals ----------
@@ -260,10 +295,10 @@ public final class ReliableDatagramSession implements BulkRouteTarget {
      * KCP flush 回调：把「待发往 wire」的 datagram 交给 {@link DatagramSink}。
      * <p><b>所有权（已由 javap 确认）</b>：KCP {@code output(ByteBuf,Kcp)} 在回调返回后
      * <b>不会</b> release 原 {@code buf}——它只是把内存交给回调。故本类对 {@code buf} 负责显式释放。
-     * 规则：先 {@code retainedDuplicate()} 给 sink 一份独立 retain（sink 自行处置该 dup），
-     * {@code sink.send} 返回后无论成败一律 {@code buf.release()} 释放本类持有的原 buf，
+     * 规则：把 KCP 线字节拷贝进新分配的 {@code wire}（T4-87 起追加 4B HMAC 标签，见 {@link #onKcpOutput}
+     * 内注释），{@code sink.send} 返回后无论成败一律 {@code buf.release()} 释放本类持有的原 buf，
      * 避免 KCP 不释放导致每个发出的 datagram 泄漏一个 pool direct buffer（直内存耗尽）。
-     * dup 的所有权在 {@link DatagramSink}：sink 若不再持有须自行 release。
+     * {@code wire} 的所有权在 {@link DatagramSink}：sink 若不再持有须自行 release。
      */
     private void onKcpOutput(ByteBuf buf, Kcp k) {
         if (closed) {
@@ -271,15 +306,32 @@ public final class ReliableDatagramSession implements BulkRouteTarget {
             buf.release();
             return;
         }
-        ByteBuf dup = buf.retainedDuplicate();
+        // review-fix: T4-87 — 追加 4B 截断 HMAC 后交 sink；wire 为新分配 buffer（不复用 KCP 池化
+        // buf，避免改写共享内存污染 segment 池），所有权移交 sink（sink 不持有须自行 release）。
+        ByteBuf wire = alloc.buffer(buf.readableBytes() + DATAGRAM_TAG_BYTES);
         try {
-            sink.send(dup);
+            wire.writeBytes(buf, buf.readerIndex(), buf.readableBytes());
+            wire.writeBytes(datagramTag(buf, buf.readerIndex(), buf.readableBytes()));
+            sink.send(wire);
         } catch (Throwable ignored) {
-            // sink 异常：dup 未被 sink 接管，本类负责释放 dup 自身的 retain。
-            dup.release();
+            // sink 异常：wire 未被 sink 接管，本类负责释放。
+            wire.release();
         } finally {
             // KCP 不 release 原 buf（javap 确认），本类统一释放，杜绝单 datagram 直内存泄漏。
             buf.release();
+        }
+    }
+
+    /** 计算 KCP 线字节（不含标签部分）的 4 字节截断 HMAC-SHA256；密钥 = 会话 AEAD key。 */
+    private byte[] datagramTag(ByteBuf data, int offset, int len) {
+        Mac mac = DATAGRAM_MAC.get();
+        try {
+            mac.init(new SecretKeySpec(key, DATAGRAM_HMAC_ALGO));
+            mac.update(data.nioBuffer(offset, len));
+            byte[] full = mac.doFinal();
+            return new byte[] { full[0], full[1], full[2], full[3] };
+        } catch (GeneralSecurityException e) {
+            throw new SecurityException("datagram tag computation failed", e);
         }
     }
 

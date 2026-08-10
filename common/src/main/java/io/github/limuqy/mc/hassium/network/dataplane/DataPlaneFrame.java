@@ -34,8 +34,18 @@ public class DataPlaneFrame {
     public static int decodeType(byte[] frame) {
         java.nio.ByteBuffer buf = java.nio.ByteBuffer.wrap(frame);
         int frameLen = readVarInt(buf);
-        if (frame.length < frameLen + varIntSize(frameLen)) throw new IllegalArgumentException("Truncated frame");
-        return buf.get() & 0xFF;
+        // review-fix: T4-84 — long 累加防 5 字节 VarInt（上限 2^35-1）整数溢出绕过截断检查；
+        // frameLen < 1 直接拒绝（合法帧 frameLen = 1 + payload 恒 >= 1）。
+        if (frameLen < 1 || frame.length < (long) frameLen + varIntSize(frameLen)) {
+            throw new IllegalArgumentException("Truncated frame");
+        }
+        int type = buf.get() & 0xFF;
+        // review-fix: T4-84 — 类型范围校验：解码侧与 encode 侧一致，拒绝 0 与 10..255 的非法类型，
+        // 取代原先「返回任意 0..255」的宽容行为。
+        if (type < MIN_TYPE || type > MAX_TYPE) {
+            throw new IllegalArgumentException("Invalid frame type: " + type);
+        }
+        return type;
     }
 
     /** 从完整帧中提取 payload */
@@ -43,8 +53,10 @@ public class DataPlaneFrame {
         java.nio.ByteBuffer buf = java.nio.ByteBuffer.wrap(frame);
         int frameLen = readVarInt(buf);
         int headerSize = varIntSize(frameLen);
-        // 整帧必须至少含 headerSize + frameLen 字节；frameLen = type(1) + payload
-        if (frame.length < headerSize + frameLen) throw new IllegalArgumentException("Truncated frame");
+        // review-fix: T4-84 — 同 decodeType：long 累加防溢出；frameLen < 1 拒绝（防 dataLen=-1 负数组分配）。
+        if (frameLen < 1 || frame.length < (long) headerSize + frameLen) {
+            throw new IllegalArgumentException("Truncated frame");
+        }
         buf.get(); // 跳过 type 字节
         int dataLen = frameLen - 1; // payload 长度
         byte[] payload = new byte[dataLen];

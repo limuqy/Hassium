@@ -12,10 +12,6 @@ class DataPlanePoCConfigTest {
     void degradeThreshold() {
         assertEquals(3, DataPlanePoCConfig.DEGRADE_AFTER_DROPS);
     }
+    // review-fix: T4-80 — FRAME_KEY_INFO_TAG/BIND_TOKEN 死常量已删（密钥派生收敛 UdpSessionKey），原 frameKeyInfoTag 断言一并移除。
 
-    @Test
-    @DisplayName("UDP session HKDF 标签维持协议值")
-    void frameKeyInfoTag() {
-        assertEquals(0x44_50_4C_31, DataPlanePoCConfig.FRAME_KEY_INFO_TAG);
-    }
 }

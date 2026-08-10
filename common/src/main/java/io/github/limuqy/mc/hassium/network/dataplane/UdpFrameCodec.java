@@ -3,6 +3,7 @@ package io.github.limuqy.mc.hassium.network.dataplane;
 import javax.crypto.Cipher;
 import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
+import java.util.Arrays;
 import java.security.GeneralSecurityException;
 
 /**
@@ -38,6 +39,21 @@ public final class UdpFrameCodec {
     private static final int SEQUENCE_BYTES = Long.BYTES;
     private static final int TYPE_BYTES = 1;
     private static final int AEAD_PLAINTEXT_PREFIX_BYTES = SEQUENCE_BYTES + TYPE_BYTES;
+    // review-fix: T4-78 — ThreadLocal 缓存 Cipher 实例：seal/open 每帧复用，避免 bulk 热路径
+    // （每 chunk 两次加解密）反复走 JCA provider 查找 + 实例化；每次调用仍重新 init（重置状态）。
+    // 注意：JDK 9+ 禁止同一 Cipher 实例用相同 IV 加密两次（防 GCM 密钥流重用）——同 nonce 重传
+    // （seal 相同 (key, dir, seq, payload) 输出同密文是本 codec 契约）必须换新实例，见 {@link #seal}。
+    private static final ThreadLocal<Cipher> CIPHER = ThreadLocal.withInitial(UdpFrameCodec::newCipher);
+    /** 本线程最后一次加密 nonce；seal 检测同 nonce 复用（重传）时替换新实例。 */
+    private static final ThreadLocal<byte[]> LAST_NONCE = new ThreadLocal<>();
+
+    private static Cipher newCipher() {
+        try {
+            return Cipher.getInstance(TRANSFORMATION);
+        } catch (GeneralSecurityException e) {
+            throw new SecurityException("failed to create AES/GCM cipher", e);
+        }
+    }
 
     private UdpFrameCodec() {}
 
@@ -84,10 +100,18 @@ public final class UdpFrameCodec {
             System.arraycopy(payload, 0, aadPlaintext, AEAD_PLAINTEXT_PREFIX_BYTES, payloadLen);
         }
         try {
-            Cipher cipher = Cipher.getInstance(TRANSFORMATION);
+            byte[] nonce = nonce(direction, sequence);
+            Cipher cipher = CIPHER.get();
+            byte[] prevNonce = LAST_NONCE.get();
+            if (prevNonce != null && Arrays.equals(prevNonce, nonce)) {
+                // 同 nonce 重传（seal 相同参数输出同密文契约）：JDK 禁同实例 IV 复用 → 换新实例
+                cipher = newCipher();
+                CIPHER.set(cipher);
+            }
+            LAST_NONCE.set(nonce);
             cipher.init(Cipher.ENCRYPT_MODE,
                     new SecretKeySpec(key, KEY_ALGO),
-                    new GCMParameterSpec(TAG_BITS, nonce(direction, sequence)));
+                    new GCMParameterSpec(TAG_BITS, nonce));
             byte[] ciphertext = cipher.doFinal(aadPlaintext);
             byte[] out = new byte[SEQUENCE_BYTES + ciphertext.length];
             writeLong(out, 0, sequence);
@@ -119,7 +143,7 @@ public final class UdpFrameCodec {
         long headerSequence = readLong(sealed, 0);
         int cipherLen = sealed.length - SEQUENCE_BYTES;
         try {
-            Cipher cipher = Cipher.getInstance(TRANSFORMATION);
+            Cipher cipher = CIPHER.get(); // review-fix: T4-78 — 复用 ThreadLocal 缓存实例
             cipher.init(Cipher.DECRYPT_MODE,
                     new SecretKeySpec(key, KEY_ALGO),
                     new GCMParameterSpec(TAG_BITS, nonce(direction, headerSequence)));
