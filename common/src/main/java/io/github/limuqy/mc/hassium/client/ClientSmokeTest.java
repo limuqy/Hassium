@@ -633,9 +633,10 @@ public final class ClientSmokeTest {
                 net.minecraft.network.Connection netConn = conn.getConnection();
                 io.netty.channel.Channel ch = null;
                 try {
-                    java.lang.reflect.Field f = net.minecraft.network.Connection.class.getDeclaredField("channel");
-                    f.setAccessible(true);
-                    ch = (io.netty.channel.Channel) f.get(netConn);
+                    // review-fix: T8-32: 复用 ReflectionCompat.findFieldByType（类型匹配、映射无关）——
+                    // 字段名 "channel" 反射在 intermediary/SRG 生产环境必 NoSuchFieldException
+                    ch = (io.netty.channel.Channel) io.github.limuqy.mc.hassium.compat.ReflectionCompat
+                            .getFieldByType(netConn, io.netty.channel.Channel.class, true);
                 } catch (ReflectiveOperationException ignored) {
                     // 字段缺失（版本差异）时退回 disconnect 路径
                 }

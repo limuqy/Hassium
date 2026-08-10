@@ -130,6 +130,14 @@ public final class MainThreadDispatcher {
     }
 
     /**
+     * 整数 chunk 坐标版 {@link #authoritativePriority}——不分配 {@link ChunkPos}。
+     * review-fix: T8-29: execute/refreshPriority 由 Key.posLong 解 x/z 后走此路径。
+     */
+    public static double authoritativePriority(int chunkX, int chunkZ) {
+        return priorityOf(ChunkDistancePriority.Tier.AUTHORITATIVE, chunkX, chunkZ);
+    }
+
+    /**
      * renderOnly 层优先级。坐标未知时仍为 {@link ChunkDistancePriority.Tier#RENDER_ONLY} 层
      *（{@code base+0}），保证<strong>环带始终晚于权威与未知任务</strong>。
      */
@@ -142,6 +150,14 @@ public final class MainThreadDispatcher {
             // 无锚点：UNKNOWN 层（夹在权威与环带之间），勿用绝对 MAX
             return ChunkDistancePriority.unknown();
         }
+        return priorityOf(tier, chunkPos.x, chunkPos.z);
+    }
+
+    /** review-fix: T8-29: 整数坐标核心实现（不分配 ChunkPos）；world 坐标按 /16 换算为 chunk 分式坐标。 */
+    private static double priorityOf(ChunkDistancePriority.Tier tier, int chunkX, int chunkZ) {
+        if (tier == null) {
+            return ChunkDistancePriority.unknown();
+        }
         if (!hassium$playerPosKnown) {
             updatePlayerPosition();
         }
@@ -149,7 +165,7 @@ public final class MainThreadDispatcher {
             // 保留所属层，仅无距离分量 → 权威 > 未知任务 > 环带 的层序不破
             return ChunkDistancePriority.ofUnknownDistance(tier);
         }
-        return ChunkDistancePriority.ofWorld(tier, chunkPos, hassium$playerX, hassium$playerZ);
+        return ChunkDistancePriority.of(tier, chunkX, chunkZ, hassium$playerX / 16.0, hassium$playerZ / 16.0);
     }
 
     // ============== 提交 API ==============
@@ -197,8 +213,8 @@ public final class MainThreadDispatcher {
     public static void execute(Runnable task, KeyedPriorityQueue.Key key, TaskCategory category) {
         double priority = PRIORITY_UNKNOWN;
         if (key != null) {
-            ChunkPos pos = new ChunkPos(ChunkPos.getX(key.posLong()), ChunkPos.getZ(key.posLong()));
-            priority = authoritativePriority(pos);
+            // review-fix: T8-29: 由 Key.posLong 直接解 x/z，避免每次 new ChunkPos（apply 每 chunk 一次）
+            priority = authoritativePriority(ChunkPos.getX(key.posLong()), ChunkPos.getZ(key.posLong()));
         }
         execute(task, priority, category, key);
     }
@@ -311,8 +327,8 @@ public final class MainThreadDispatcher {
         if (task.key() == null) {
             return task.priority();
         }
-        ChunkPos pos = new ChunkPos(ChunkPos.getX(task.key().posLong()), ChunkPos.getZ(task.key().posLong()));
-        return authoritativePriority(pos);
+        // review-fix: T8-29: 由 Key.posLong 直接解 x/z，不分配 ChunkPos
+        return authoritativePriority(ChunkPos.getX(task.key().posLong()), ChunkPos.getZ(task.key().posLong()));
     }
 
     /**

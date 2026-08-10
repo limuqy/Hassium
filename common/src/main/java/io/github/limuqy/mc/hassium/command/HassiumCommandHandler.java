@@ -329,11 +329,9 @@ public class HassiumCommandHandler {
         }
     }
 
-    /** 将服务器 IP:Port 转换为缓存目录名。 */
+    /** 将服务器 IP:Port 转换为缓存目录名（review-fix: T8-27: 收敛到 utils/ServerIdUtil 单一实现）。 */
     private static String sanitizeServerIp(String serverIp) {
-        // 127.0.0.1:25565 → server_127.0.0.1_25565
-        String sanitized = serverIp.replaceAll("[^a-zA-Z0-9._-]", "_");
-        return "server_" + sanitized;
+        return io.github.limuqy.mc.hassium.utils.ServerIdUtil.sanitize(serverIp);
     }
 
     /** 获取可自动补全的缓存服务器列表（显示名）。 */

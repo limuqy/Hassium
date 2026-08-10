@@ -2,6 +2,7 @@ package io.github.limuqy.mc.hassium.concurrent;
 
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.PriorityBlockingQueue;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Predicate;
 
@@ -15,8 +16,9 @@ import java.util.function.Predicate;
  * <p>
  * <b>三层能力</b>（各调用点按需参数化）：
  * <ol>
- *   <li><b>入队取代</b>：{@link OfferPolicy#REPLACE} 用新任务替换同 key 旧任务并摘出堆
- *       （新任务带入队时刻的最新优先级）；{@link OfferPolicy#SKIP_IF_PRESENT} 丢弃新任务。</li>
+ *   <li><b>入队取代</b>：{@link OfferPolicy#REPLACE} 用新任务替换同 key 旧任务
+ *       （旧任务留堆为过期残留、由消费侧 {@link #isCurrent} 丢弃并定期压缩；
+ *       新任务带入队时刻的最新优先级）；{@link OfferPolicy#SKIP_IF_PRESENT} 丢弃新任务。</li>
  *   <li><b>消费侧版本校验</b>：{@link Entry#generation()} 单调递增；
  *       {@link #isCurrent(Entry)} 在 poll 与真正执行之间仍可失效——poll 后、执行前
  *       同 key 有新任务入队时旧任务立即过期，调用方据此跳过，杜绝老数据覆盖。</li>
@@ -90,6 +92,16 @@ public final class KeyedPriorityQueue<E> {
     private final PriorityBlockingQueue<Entry<E>> heap;
     /** key → 最新存活 entry（同时也是 generation 登记表）。null-key 任务不进本表。 */
     private final ConcurrentHashMap<Key, Entry<E>> current = new ConcurrentHashMap<>();
+    /**
+     * REPLACE 取代后留在堆中的过期残留条目数（poll/peek/removeIf/压缩移除时递减）。
+     * review-fix: T8-22: REPLACE 不再 heap.remove(old)（O(n) 线性扫 → 整体 O(n²)）——
+     * 旧条目留堆由消费侧 {@link #isCurrent} 丢弃，本计数用于 {@link #size()} 精确化
+     * 与定期压缩（{@link #compactIfNeeded()}）的阈值。
+     */
+    private final AtomicInteger staleCount = new AtomicInteger();
+
+    /** review-fix: T8-22: 过期残留触发整堆压缩的阈值（达到即 O(n) removeIf 扫一次，摊还 O(1)）。 */
+    private static final int COMPACT_THRESHOLD = 256;
 
     public KeyedPriorityQueue() {
         this(16);
@@ -118,14 +130,36 @@ public final class KeyedPriorityQueue<E> {
         if (policy == OfferPolicy.SKIP_IF_PRESENT) {
             return OfferResult.DUP_SKIPPED;
         }
-        // REPLACE：条件替换登记表（并发 REPLACE 已抢先时本任务作废）；旧任务若仍在
-        // 堆中则摘除（已被 poll 则 no-op，由消费侧 isCurrent 校验丢弃）。
+        // REPLACE：条件替换登记表（并发 REPLACE 已抢先时本任务作废）；旧任务留在堆中
+        // 作为过期残留，由 poll/peek 侧 isCurrent 丢弃——不再 heap.remove(old) 线性扫
+        // （玩家来回移动高频 REPLACE 时整体 O(n²) → 摊还 O(1)，review-fix: T8-22）。
         if (!current.replace(key, old, entry)) {
             return OfferResult.DUP_SKIPPED; // 被并发 REPLACE 抢先：丢弃，防双 entry
         }
-        heap.remove(old);
         heap.offer(entry);
+        staleCount.incrementAndGet(); // review-fix: T8-22: 旧任务留堆为过期残留，计数供 size()/压缩阈值
+        compactIfNeeded();
         return OfferResult.REPLACED;
+    }
+
+    /**
+     * review-fix: T8-22: 过期残留达到阈值时整堆压缩一次（O(n)，摊还到每次 REPLACE 为 O(1)）。
+     * 仅移除 isCurrent=false 的条目——null-key 恒 current，活条目必是登记表最新值，不会误删。
+     * {@link PriorityBlockingQueue#removeIf} 内部加锁，与并发 offer/poll 安全。
+     */
+    private void compactIfNeeded() {
+        if (staleCount.get() < COMPACT_THRESHOLD) {
+            return;
+        }
+        AtomicInteger dropped = new AtomicInteger();
+        heap.removeIf(e -> {
+            boolean stale = !isCurrent(e);
+            if (stale) {
+                dropped.incrementAndGet();
+            }
+            return stale;
+        });
+        staleCount.addAndGet(-dropped.get());
     }
 
     /**
@@ -138,8 +172,10 @@ public final class KeyedPriorityQueue<E> {
             if (entry == null || isCurrent(entry)) {
                 return entry;
             }
+            staleCount.decrementAndGet(); // review-fix: T8-22: 丢弃过期残留（堆中垃圾出堆）
         }
     }
+
 
     /**
      * 出队最优任务，并在出队瞬间用 {@code refresher} 按当前锚点重算优先级。
@@ -156,6 +192,7 @@ public final class KeyedPriorityQueue<E> {
                 if (entry == null) {
                     return null;
                 }
+                staleCount.decrementAndGet(); // review-fix: T8-22: 丢弃过期残留
                 continue; // 过期任务丢弃
             }
             double fresh = refresher.refresh(entry.key(), entry.priority());
@@ -181,6 +218,7 @@ public final class KeyedPriorityQueue<E> {
                 return entry;
             }
             heap.poll();
+            staleCount.decrementAndGet(); // review-fix: T8-22: 顺带清理过期队首
         }
     }
 
@@ -232,11 +270,16 @@ public final class KeyedPriorityQueue<E> {
             @SuppressWarnings("unchecked")
             Entry<E> entry = (Entry<E>) o;
             if (predicate.test(entry.item())) {
-                if (heap.remove(entry)) {
+                boolean removedFromHeap = heap.remove(entry);
+                if (removedFromHeap) {
                     removed = true;
                 }
                 if (entry.key() != null) {
-                    current.remove(entry.key(), entry);
+                    // review-fix: T8-22: 登记表移除成功 = 活条目（正常释放）；失败 = 过期残留 → 同步计数
+                    boolean released = current.remove(entry.key(), entry);
+                    if (removedFromHeap && !released) {
+                        staleCount.decrementAndGet();
+                    }
                 }
             }
         }
@@ -246,11 +289,14 @@ public final class KeyedPriorityQueue<E> {
     public void clear() {
         heap.clear();
         current.clear();
+        staleCount.set(0); // review-fix: T8-22: 清堆同步清零残留计数
     }
 
+    /** 存活任务数（堆中条目数 - 过期残留数）。并发下为近似值。review-fix: T8-22: 残留不计入 size。 */
     public int size() {
-        return heap.size();
+        return Math.max(0, heap.size() - staleCount.get());
     }
+
 
     public boolean isEmpty() {
         return heap.isEmpty();

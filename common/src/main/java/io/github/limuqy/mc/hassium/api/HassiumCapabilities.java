@@ -17,9 +17,15 @@ public record HassiumCapabilities(
         boolean seedGenSupported
 ) {
     /**
-     * 当前协议版本
+     * 当前协议版本（本类专用）。
+     * <p>
+     * review-fix: T8-25: 原常量名 {@code CURRENT_PROTOCOL_VERSION} 与
+     * {@code Constants.CURRENT_PROTOCOL_VERSION}（=1）同名不同值（3），改名为
+     * {@code CAPABILITY_PROTOCOL_VERSION} 消除口径冲突。grep 确认本类全库无生产调用方
+     * （HassiumHandshake 已删除、HandshakeCodec 为唯一握手编解码方，见 HandshakeCodec:13-16
+     * 未激活说明）——保留为未来激活的占位常量，不再冒充全局协议版本。
      */
-    public static final int CURRENT_PROTOCOL_VERSION = 3;
+    public static final int CAPABILITY_PROTOCOL_VERSION = 3;
 
     /**
      * 创建默认的客户端能力
@@ -30,7 +36,7 @@ public record HassiumCapabilities(
     public static HassiumCapabilities clientDefaults(String modVersion, Set<String> supportedAlgorithms) {
         return new HassiumCapabilities(
                 modVersion,
-                CURRENT_PROTOCOL_VERSION,
+                CAPABILITY_PROTOCOL_VERSION,
                 supportedAlgorithms,
                 true,
                 true,
@@ -50,7 +56,7 @@ public record HassiumCapabilities(
     public static HassiumCapabilities serverDefaults(String modVersion, Set<String> supportedAlgorithms) {
         return new HassiumCapabilities(
                 modVersion,
-                CURRENT_PROTOCOL_VERSION,
+                CAPABILITY_PROTOCOL_VERSION,
                 supportedAlgorithms,
                 true,
                 true,

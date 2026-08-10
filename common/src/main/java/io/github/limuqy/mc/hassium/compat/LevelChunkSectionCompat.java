@@ -25,6 +25,16 @@ import net.minecraft.world.level.chunk.Strategy;
 public final class LevelChunkSectionCompat {
     private LevelChunkSectionCompat() {}
 
+#if MC_VER >= MC_1_21_9
+    /**
+     * review-fix: T8-28: Strategy 只依赖全局内置注册表 {@link Block#BLOCK_STATE_REGISTRY}，
+     * 与调用方 registryAccess 无关——原实现每次 writeSectionForHash 重建（哈希计算高频），
+     * 缓存为 static final。
+     */
+    private static final Strategy<BlockState> BLOCK_STATES_STRATEGY =
+            Strategy.createForBlockStates(Block.BLOCK_STATE_REGISTRY);
+#endif
+
     /**
      * 创建用于读写 section 字节流的临时 LevelChunkSection。
      */
@@ -53,20 +63,19 @@ public final class LevelChunkSectionCompat {
     public static void writeSectionForHash(LevelChunkSection section, OutputStream out) throws IOException {
 #if MC_VER >= MC_1_21_9
         // 1.21.9+: pack(Strategy) 规范化
-        Strategy<BlockState> strategy = Strategy.createForBlockStates(Block.BLOCK_STATE_REGISTRY);
-        PalettedContainerRO.PackedData<BlockState> packed = section.getStates().pack(strategy);
+        PalettedContainerRO.PackedData<BlockState> packed = section.getStates().pack(BLOCK_STATES_STRATEGY);
         DataOutputStream dout = new DataOutputStream(out);
         for (BlockState state : packed.paletteEntries()) {
             dout.writeInt(Block.BLOCK_STATE_REGISTRY.getId(state));
         }
-        final DataOutputStream fdout = dout;
-        packed.storage().ifPresent(s -> s.forEachOrdered(v -> {
-            try {
-                fdout.writeLong(v);
-            } catch (IOException e) {
-                throw new RuntimeException(e);
+        // review-fix: T8-28: 不再用 RuntimeException 包装 IOException（会穿透只 catch IOException
+        // 的调用方，见 ChunkContentHashUtil:190/258）——改普通迭代直抛 IOException。
+        if (packed.storage().isPresent()) {
+            java.util.PrimitiveIterator.OfLong it = packed.storage().get().iterator();
+            while (it.hasNext()) {
+                dout.writeLong(it.nextLong());
             }
-        }));
+        }
 #else
         // 1.20.1-1.21.8: 逐位置写 BlockState ID（规范化；与 palette 排列无关）。
         // 注：旧实现 section.write() 字节对 palette 排列敏感——服务端两次构建 packet

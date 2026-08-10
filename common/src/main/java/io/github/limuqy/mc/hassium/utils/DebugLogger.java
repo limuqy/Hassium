@@ -27,6 +27,16 @@ public class DebugLogger {
     }
 
     /**
+     * review-fix: T8-26: 热路径开销——isEnabled 原实现每调用走 getInstance()+isConfigLoaded()+
+     * getConfig()（读锁）+switch 取 8 个 debug 布尔位；MainThreadDispatcher 每任务每帧 3+ 条
+     * info 日志，日志关闭时判断成本仍在。缓存「配置实例身份（=配置变更版本号）+ 8 位布尔位」，
+     * 配置加载（applyLoaded 替换 config 实例）后首次调用自动重算；两字段 volatile 发布，
+     * 竞态仅致一次性陈旧位，下次调用自愈。
+     */
+    private static volatile HassiumConfig cachedConfig;
+    private static volatile int cachedEnabledBits;
+
+    /**
      * 检查指定类型的日志是否启用
      */
     public static boolean isEnabled(LogType type) {
@@ -35,20 +45,33 @@ public class DebugLogger {
             if (!configService.isConfigLoaded()) {
                 return false;
             }
-            HassiumConfig.DebugConfig debug = configService.getConfig().debug();
-            return switch (type) {
-                case METADATA -> debug.metadataLogging();
-                case DISPATCHER -> debug.dispatcherLogging();
-                case ASYNC -> debug.asyncLogging();
-                case COMPRESSION -> debug.compressionLogging();
-                case CHUNK_APPLY -> debug.chunkApplyLogging();
-                case NETWORK -> debug.networkLogging();
-                case CACHE -> debug.cacheLogging();
-                case DATAPLANE -> debug.dataplaneLogging();
-            };
+            HassiumConfig config = configService.getConfig();
+            int bits = cachedEnabledBits;
+            if (config != cachedConfig) {
+                // 配置实例被替换（reload）→ 重算缓存位（配置变更版本号 = 实例身份）
+                bits = computeEnabledBits(config);
+                cachedConfig = config;
+                cachedEnabledBits = bits;
+            }
+            return (bits & (1 << type.ordinal())) != 0;
         } catch (Exception e) {
             return false;
         }
+    }
+
+    /** review-fix: T8-26: 一次性把 8 个 debug 位打包成 int（按 LogType.ordinal() 置位）。 */
+    private static int computeEnabledBits(HassiumConfig config) {
+        HassiumConfig.DebugConfig debug = config.debug();
+        int bits = 0;
+        if (debug.metadataLogging()) bits |= 1 << LogType.METADATA.ordinal();
+        if (debug.dispatcherLogging()) bits |= 1 << LogType.DISPATCHER.ordinal();
+        if (debug.asyncLogging()) bits |= 1 << LogType.ASYNC.ordinal();
+        if (debug.compressionLogging()) bits |= 1 << LogType.COMPRESSION.ordinal();
+        if (debug.chunkApplyLogging()) bits |= 1 << LogType.CHUNK_APPLY.ordinal();
+        if (debug.networkLogging()) bits |= 1 << LogType.NETWORK.ordinal();
+        if (debug.cacheLogging()) bits |= 1 << LogType.CACHE.ordinal();
+        if (debug.dataplaneLogging()) bits |= 1 << LogType.DATAPLANE.ordinal();
+        return bits;
     }
 
     /**

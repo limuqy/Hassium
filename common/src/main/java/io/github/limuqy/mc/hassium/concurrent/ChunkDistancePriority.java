@@ -121,21 +121,34 @@ public final class ChunkDistancePriority {
     }
 
     /**
+     * 整数 chunk 坐标版 {@link #of}——不分配 {@link ChunkPos}。
+     * review-fix: T8-29: MainThreadDispatcher 由 Key.posLong 解出 x/z 后走此重载，
+     * 消除 execute/refreshPriority 热路径（apply 每 chunk 一次）的 new ChunkPos 分配。
+     */
+    public static double of(Tier tier, int chunkX, int chunkZ, double playerChunkX, double playerChunkZ) {
+        if (tier == null) {
+            return LOWEST;
+        }
+        double dx = chunkX - playerChunkX;
+        double dz = chunkZ - playerChunkZ;
+        return tier.base() + dx * dx + dz * dz;
+    }
+
+    /**
      * 世界坐标版 {@link #of}。
      */
     public static double ofWorld(Tier tier, ChunkPos pos, double worldX, double worldZ) {
         return of(tier, pos, worldX / 16.0, worldZ / 16.0);
     }
 
-    /**
-     * 整数中心版（服务端 resync 等）。
-     */
+    /** 整数中心版（服务端 resync 等）。 */
     public static double ofCenter(Tier tier, ChunkPos pos, int centerChunkX, int centerChunkZ) {
         if (pos == null || tier == null) {
             return LOWEST;
         }
         return tier.base() + distSq(pos, centerChunkX, centerChunkZ);
     }
+
 
     /**
      * 层内仅 base、无距离（坐标未知时的权威/环带，或未知层本身）。

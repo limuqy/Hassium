@@ -21,6 +21,8 @@ import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
+import java.util.WeakHashMap;
 
 /**
  * 1.20.5+ 包编解码兼容层（StreamCodec / GameProtocols / PacketType）。
@@ -33,6 +35,18 @@ public final class PacketCodecCompat {
 #if MC_VER >= MC_1_20_5
     private static volatile List<PlayPacketEntry> cachedClientbound;
     private static volatile List<PlayPacketEntry> cachedServerbound;
+    /**
+     * review-fix: T8-23: playBound 产物按 (flow, registryAccess) 缓存。registryAccess 每连接
+     * 恒定，bind 产物可复用；serializePacketBody/Full/deserializePacketById 每包调用一次
+     * （ServerChunkPushManager 推送热路径），原实现每包 decorator+bind 造成重复分配。
+     * 用 WeakHashMap 键（弱引用）避免随连接生命周期泄漏；值强引用 bind 产物，键存活则命中。
+     * equals 语义：RegistryAccess 结构相等（同注册表内容）即视为同键，bind 结果等价。
+     * <p>槽位按 flow 分列：CLIENTBOUND/SERVERBOUND 各存一份——同 registryAccess 下
+     * 两个 flow 的 ProtocolInfo 是不同协议表（IdDispatchCodec 包集合不同），共用一个
+     * 产物会让 SERVERBOUND 编码误用 CLIENTBOUND 表（keep_alive 等 common 包 unknown）。
+     */
+    private static final Map<RegistryAccess, net.minecraft.network.ProtocolInfo<?>[]> PLAY_BOUND_CACHE =
+            Collections.synchronizedMap(new WeakHashMap<>());
 #endif
 
     private PacketCodecCompat() {}
@@ -281,6 +295,28 @@ public final class PacketCodecCompat {
             PacketFlow flow,
             RegistryAccess registryAccess
     ) {
+        if (registryAccess == null) {
+            registryAccess = RegistryAccess.EMPTY;
+        }
+        // review-fix: T8-23: 弱引用小缓存——命中即复用 bound ProtocolInfo，避免每包 decorator+bind。
+        // 槽位按 flow 分列（见 PLAY_BOUND_CACHE javadoc）：CLIENTBOUND/SERVERBOUND 协议表不同。
+        int slotIndex = flow == PacketFlow.CLIENTBOUND ? 0 : 1;
+        net.minecraft.network.ProtocolInfo<?>[] slot =
+                PLAY_BOUND_CACHE.computeIfAbsent(registryAccess, ra -> new net.minecraft.network.ProtocolInfo<?>[2]);
+        net.minecraft.network.ProtocolInfo<?> cached = slot[slotIndex];
+        if (cached == null) {
+            cached = bindPlayBound(flow, registryAccess);
+            slot[slotIndex] = cached; // 并发双 bind 无害（幂等覆盖同语义产物）
+        }
+        return cached;
+    }
+
+    /** review-fix: T8-23: 实际 bind 构造（缓存未命中时执行一次）。 */
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private static net.minecraft.network.ProtocolInfo<?> bindPlayBound(
+            PacketFlow flow,
+            RegistryAccess registryAccess
+    ) {
         @SuppressWarnings("deprecation") // NeoForge 1.21.11+: decorator(1-param) deprecated; 2-param 需 ConnectionType.OTHER(仅 NeoForge classpath)
         var decorator = net.minecraft.network.RegistryFriendlyByteBuf.decorator(registryAccess);
 #if MC_VER < MC_1_21_5
@@ -380,6 +416,13 @@ public final class PacketCodecCompat {
             List<PlayPacketEntry> result = new ArrayList<>(byId.size());
             for (int i = 0; i < byId.size(); i++) {
                 Object entry = byId.get(i);
+                if (entry == null) {
+                    // review-fix: T8-24: 列表含 null 洞（反射回退脆弱性）——跳过并记录洞位，
+                    // 不再 NPE 冒泡到外层 catch 导致整表返回空列表（调用方得空表更糟）
+                    LOGGER.warn("PLAY {} byId 表第 {} 位为 null（洞位），跳过（numericId 后续错位风险已记录）",
+                            flow, i);
+                    continue;
+                }
                 Method typeMethod = entry.getClass().getMethod("type");
                 Object typeObj = typeMethod.invoke(entry);
                 if (!(typeObj instanceof net.minecraft.network.protocol.PacketType<?> packetType)) {

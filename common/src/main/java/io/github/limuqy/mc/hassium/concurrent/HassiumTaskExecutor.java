@@ -126,7 +126,12 @@ public class HassiumTaskExecutor implements AutoCloseable, Executor {
      */
     public <T> void submitAndCallback(Callable<T> task, Consumer<T> callback, TaskCategory category) {
         DebugLogger.info(LogType.ASYNC, "[ASYNC] Submitting task to executor '{}'", name);
-        executor.submit(() -> {
+        // review-fix: T8-30: 登记 taskRegistry——原实现未登记，cancelAll(category) 覆盖不到；
+        // 登记模式对齐 submit(Runnable, TaskCategory)（T8-M1 先赋后提：FutureTask 先发布
+        // 到 tracked.future 再 submit，cancelAll 读到条目时 future 必已可见）
+        TrackedTask tracked = new TrackedTask(category);
+        String taskId = tracked.id;
+        FutureTask<Void> future = new FutureTask<Void>(() -> {
             try {
                 DebugLogger.info(LogType.ASYNC, "[ASYNC] Task started on executor '{}'", name);
                 T result = task.call();
@@ -138,8 +143,20 @@ public class HassiumTaskExecutor implements AutoCloseable, Executor {
                 });
             } catch (Exception e) {
                 DebugLogger.error("[ASYNC] Task failed on executor '{}'", e, name);
+            } finally {
+                taskRegistry.remove(taskId);
             }
+            return null;
         });
+        tracked.future = future;
+        taskRegistry.put(taskId, tracked);
+        try {
+            executor.submit(future);
+        } catch (java.util.concurrent.RejectedExecutionException e) {
+            // review-fix: T8-30: 关闭竞态窗口内 submit 被拒——清理登记并转日志，不再冒泡
+            taskRegistry.remove(taskId);
+            DebugLogger.error("[ASYNC] Rejected submission on executor '{}' (shutting down)", e, name);
+        }
     }
 
     /**

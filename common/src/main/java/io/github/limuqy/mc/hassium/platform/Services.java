@@ -20,7 +20,9 @@ public class Services {
 
     // Client-side chunk applier for injecting cached chunks into the client world.
     // This is lazily loaded only in client environment to avoid server-side class loading errors.
-    private static IClientChunkApplier clientChunkApplier;
+    // review-fix: T8-31: volatile + 双重检查锁——原非 volatile 非同步懒加载在多线程首次并发
+    // 访问时会重复 load（无害但非确定性），且存在重排序暴露半初始化引用的理论风险。
+    private static volatile IClientChunkApplier clientChunkApplier;
 
     // 网络管理器：发送 chunkHash / 区块数据请求等
     public static final IConfigBackend CONFIG = load(IConfigBackend.class);
@@ -30,14 +32,21 @@ public class Services {
      * 获取客户端区块应用器（仅物理客户端可用）
      */
     public static IClientChunkApplier getClientChunkApplier() {
-        if (clientChunkApplier == null) {
-            if (PLATFORM.isPhysicalClient()) {
-                clientChunkApplier = load(IClientChunkApplier.class);
-            } else {
-                throw new UnsupportedOperationException("getClientChunkApplier() 仅在客户端可用");
+        IClientChunkApplier applier = clientChunkApplier;
+        if (applier == null) {
+            synchronized (Services.class) {
+                applier = clientChunkApplier;
+                if (applier == null) {
+                    if (PLATFORM.isPhysicalClient()) {
+                        applier = load(IClientChunkApplier.class);
+                        clientChunkApplier = applier;
+                    } else {
+                        throw new UnsupportedOperationException("getClientChunkApplier() 仅在客户端可用");
+                    }
+                }
             }
         }
-        return clientChunkApplier;
+        return applier;
     }
 
     // This code is used to load a service for the current environment. Your implementation of the service must be defined
