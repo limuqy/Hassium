@@ -49,6 +49,19 @@ public class ForgeNetworkManager implements NetworkManager {
     private static final String PROTOCOL_VERSION = "1";
     private static final int PROTOCOL_VERSION_INT = 1;
 
+    // review-fix: T10-M2：共享调度器，防每次握手新建单线程调度执行器泄漏线程；JVM 关闭钩子回收
+    private static final java.util.concurrent.ScheduledExecutorService PENDING_TIMEOUT_SCHEDULER =
+            java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread t = new Thread(r, "Hassium-PendingTimeout");
+                t.setDaemon(true);
+                return t;
+            });
+
+    static {
+        Runtime.getRuntime().addShutdownHook(
+                new Thread(PENDING_TIMEOUT_SCHEDULER::shutdownNow, "Hassium-PendingTimeoutShutdown"));
+    }
+
 #if MC_VER < MC_1_20_2
     public static final SimpleChannel CHANNEL = NetworkRegistry.newSimpleChannel(
             ResourceLocationCompat.create(Constants.MOD_ID, "main"),
@@ -389,67 +402,68 @@ public class ForgeNetworkManager implements NetworkManager {
     }
 
     private static void onHandshakeC2S(HandshakePacket msg, CustomPayloadEvent.Context ctx) {
-        handleHandshakeC2S(msg, ctx.getSender(), resp -> CHANNEL.reply(resp, ctx));
+        // review-fix: T10-M1：consumer 在 netty 线程触发，封送主线程（同 legacy enqueueWork / Fabric server.execute）
+        ctx.enqueueWork(() -> handleHandshakeC2S(msg, ctx.getSender(), resp -> CHANNEL.reply(resp, ctx)));
     }
 
     private static void onHandshakeS2C(HandshakeResponsePacket msg, CustomPayloadEvent.Context ctx) {
-        handleHandshakeS2C(msg);
+        ctx.enqueueWork(() -> handleHandshakeS2C(msg));
     }
 
     private static void onCompressedPayload(CompressedPayloadWrapper msg, CustomPayloadEvent.Context ctx) {
-        handleCompressedPayload(msg);
+        ctx.enqueueWork(() -> handleCompressedPayload(msg));
     }
 
     private static void onAggregationClient(AggregationWrapper msg, CustomPayloadEvent.Context ctx) {
-        handleAggregationClient(msg);
+        ctx.enqueueWork(() -> handleAggregationClient(msg));
     }
 
     private static void onDataRequest(DataRequestWrapper msg, CustomPayloadEvent.Context ctx) {
-        handleDataRequest(msg, ctx.getSender());
+        ctx.enqueueWork(() -> handleDataRequest(msg, ctx.getSender()));
     }
 
     private static void onClientBloomSync(ClientBloomSyncWrapper msg, CustomPayloadEvent.Context ctx) {
-        handleClientBloomSync(msg, ctx.getSender());
+        ctx.enqueueWork(() -> handleClientBloomSync(msg, ctx.getSender()));
     }
 
     private static void onChunkHash(ChunkHashWrapper msg, CustomPayloadEvent.Context ctx) {
-        handleChunkHash(msg);
+        ctx.enqueueWork(() -> handleChunkHash(msg));
     }
 
     private static void onSeedRef(SeedRefWrapper msg, CustomPayloadEvent.Context ctx) {
-        handleSeedRef(msg);
+        ctx.enqueueWork(() -> handleSeedRef(msg));
     }
 
     private static void onSectionHashRequest(SectionHashRequestWrapper msg, CustomPayloadEvent.Context ctx) {
-        handleSectionHashRequest(msg, ctx.getSender());
+        ctx.enqueueWork(() -> handleSectionHashRequest(msg, ctx.getSender()));
     }
 
     private static void onSectionDelta(SectionDeltaWrapper msg, CustomPayloadEvent.Context ctx) {
-        handleSectionDelta(msg);
+        ctx.enqueueWork(() -> handleSectionDelta(msg));
     }
 
     private static void onBlockEntityRequest(BlockEntityRequestWrapper msg, CustomPayloadEvent.Context ctx) {
-        handleBlockEntityRequest(msg, ctx.getSender());
+        ctx.enqueueWork(() -> handleBlockEntityRequest(msg, ctx.getSender()));
     }
 
     private static void onBlockEntityData(BlockEntityDataWrapper msg, CustomPayloadEvent.Context ctx) {
-        handleBlockEntityData(msg);
+        ctx.enqueueWork(() -> handleBlockEntityData(msg));
     }
 
     private static void onLightDelta(LightDeltaWrapper msg, CustomPayloadEvent.Context ctx) {
-        handleLightDelta(msg);
+        ctx.enqueueWork(() -> handleLightDelta(msg));
     }
 
     private static void onDictionarySync(DictionarySyncWrapper msg, CustomPayloadEvent.Context ctx) {
-        handleDictionarySyncClient(msg.data());
+        ctx.enqueueWork(() -> handleDictionarySyncClient(msg.data()));
     }
 
     private static void onIndexSync(IndexSyncWrapper msg, CustomPayloadEvent.Context ctx) {
-        handleIndexSyncClient(msg.data());
+        ctx.enqueueWork(() -> handleIndexSyncClient(msg.data()));
     }
 
     private static void onCompressionReady(CompressionReadyWrapper msg, CustomPayloadEvent.Context ctx) {
-        handleCompressionReadyServer(ctx.getSender(), msg.ready());
+        ctx.enqueueWork(() -> handleCompressionReadyServer(ctx.getSender(), msg.ready()));
     }
 
     private static void sendToPlayer(ServerPlayer player, Object msg) {
@@ -764,11 +778,7 @@ public class ForgeNetworkManager implements NetworkManager {
     }
 
     private static void schedulePendingTimeout(Connection connection, String playerName) {
-        java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
-            Thread t = new Thread(r, "Hassium-PendingTimeout");
-            t.setDaemon(true);
-            return t;
-        }).schedule(() -> {
+        PENDING_TIMEOUT_SCHEDULER.schedule(() -> {
             if (HassiumConnectionRegistry.tryDemoteFromPending(connection)) {
                 HassiumAggregationManager.discardConnection(connection);
                 LOGGER.warn("Hassium: Ack timeout for {}, disabling aggregation", playerName);
@@ -798,7 +808,7 @@ public class ForgeNetworkManager implements NetworkManager {
                 return;
             }
             HassiumAggregationPacket.decode(packetBuf, indexManager).handle(clientConn.getConnection());
-        } catch (Exception e) {
+        } catch (Throwable e) { // review-fix: T13-C1（decode 校验抛 IllegalArgumentException/Error 均须收敛，防 OOM 后链路悬挂）
             LOGGER.error("Hassium: Failed to handle aggregation packet", e);
         } finally {
             packetBuf.release();

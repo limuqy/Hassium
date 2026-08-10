@@ -48,6 +48,19 @@ public class FabricNetworkManager implements NetworkManager {
 
     private static final Logger LOGGER = LoggerFactory.getLogger("Hassium/Network");
 
+    // review-fix: T10-M2：共享调度器，防每次握手新建单线程调度执行器泄漏线程；JVM 关闭钩子回收
+    private static final java.util.concurrent.ScheduledExecutorService PENDING_TIMEOUT_SCHEDULER =
+            java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread t = new Thread(r, "Hassium-PendingTimeout");
+                t.setDaemon(true);
+                return t;
+            });
+
+    static {
+        Runtime.getRuntime().addShutdownHook(
+                new Thread(PENDING_TIMEOUT_SCHEDULER::shutdownNow, "Hassium-PendingTimeoutShutdown"));
+    }
+
     // 缓存服务器实例
     private static volatile net.minecraft.server.MinecraftServer cachedServer;
 
@@ -584,11 +597,7 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
                 "Hassium: Marked connection as PENDING for player {}", player.getName().getString());
 
         String playerName = player.getName().getString();
-        java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
-            Thread t = new Thread(r, "Hassium-PendingTimeout");
-            t.setDaemon(true);
-            return t;
-        }).schedule(() -> {
+        PENDING_TIMEOUT_SCHEDULER.schedule(() -> {
             if (HassiumConnectionRegistry.tryDemoteFromPending(connection)) {
                 HassiumAggregationManager.discardConnection(connection);
                 LOGGER.warn("Hassium: Ack timeout for {}, disabling aggregation", playerName);

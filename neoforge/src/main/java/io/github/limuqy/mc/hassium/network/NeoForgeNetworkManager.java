@@ -62,6 +62,19 @@ public class NeoForgeNetworkManager implements NetworkManager {
     private static final Logger LOGGER = LoggerFactory.getLogger("Hassium/NeoForgeNetwork");
     private static final String PROTOCOL_VERSION = "1";
 
+    // review-fix: T10-M2（同 REPORT T11-M2）：共享调度器，防每次握手新建单线程调度执行器泄漏线程；JVM 关闭钩子回收
+    private static final java.util.concurrent.ScheduledExecutorService PENDING_TIMEOUT_SCHEDULER =
+            java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread t = new Thread(r, "Hassium-PendingTimeout");
+                t.setDaemon(true);
+                return t;
+            });
+
+    static {
+        Runtime.getRuntime().addShutdownHook(
+                new Thread(PENDING_TIMEOUT_SCHEDULER::shutdownNow, "Hassium-PendingTimeoutShutdown"));
+    }
+
     // 缓存服务器实例
     private static volatile net.minecraft.server.MinecraftServer cachedServer;
 
@@ -2194,6 +2207,46 @@ public class NeoForgeNetworkManager implements NetworkManager {
                     }
                 })));
 
+        // ===== S2C（客户端处理；与服务端发送方向一一对应）=====
+        // review-fix: T11-M1：此前只注册 C2S，9 个 S2C payload 客户端零注册 → 直连回退路径功能性死亡
+
+        // 握手响应 S2C
+        registrar.play(HandshakeResponsePayload.ID, HandshakeResponsePayload::decode, builder -> builder
+                .client(NeoForgeNetworkManager::handleHandshakeResponseS2C));
+
+        // 压缩区块 S2C
+        registrar.play(CompressedChunkPayload.ID, CompressedChunkPayload::decode, builder -> builder
+                .client(NeoForgeNetworkManager::handleCompressedChunkS2C));
+
+        // 区块哈希 S2C
+        registrar.play(ChunkHashPayload.ID, ChunkHashPayload::decode, builder -> builder
+                .client(NeoForgeNetworkManager::handleChunkHashS2C));
+
+        // SeedRef S2C
+        registrar.play(SeedRefPayload.ID, SeedRefPayload::decode, builder -> builder
+                .client(NeoForgeNetworkManager::handleSeedRefS2C));
+
+        // SectionDelta S2C
+        registrar.play(SectionDeltaPayload.ID, SectionDeltaPayload::decode, builder -> builder
+                .client(NeoForgeNetworkManager::handleSectionDeltaS2C));
+
+        // BlockEntityData S2C
+        registrar.play(BlockEntityDataPayload.ID, BlockEntityDataPayload::decode, builder -> builder
+                .client(NeoForgeNetworkManager::handleBlockEntityDataS2C));
+
+        // LightDelta S2C（方案 A：客户端不消费，no-op 标记已处理）
+        registrar.play(LightDeltaPayload.ID, LightDeltaPayload::decode, builder -> builder
+                .client((payload, ctx) -> {
+                }));
+
+        // 字典同步 S2C
+        registrar.play(DictionarySyncNeoPayload.ID, DictionarySyncNeoPayload::decode, builder -> builder
+                .client(NeoForgeNetworkManager::handleDictionarySyncS2C));
+
+        // 索引同步 S2C
+        registrar.play(IndexSyncNeoPayload.ID, IndexSyncNeoPayload::decode, builder -> builder
+                .client(NeoForgeNetworkManager::handleIndexSyncS2C));
+
         LOGGER.info("Hassium: Registered all NeoForge payload handlers (1.20.4)");
     }
 
@@ -2318,6 +2371,100 @@ public class NeoForgeNetworkManager implements NetworkManager {
         });
     }
 
+    // ===== S2C 客户端处理（1.20.4；处理逻辑对齐 SimpleChannel 注册块）=====
+
+    private static void handleHandshakeResponseS2C(HandshakeResponsePayload payload, PlayPayloadContext context) {
+        context.workHandler().execute(() -> {
+            LOGGER.info("Hassium: Client handshake response: accepted={}, globalCompression={}, compactHeader={}",
+                    payload.accepted(), payload.globalCompressionAccepted(), payload.compactHeaderAccepted());
+            // SeedGen 信息（新格式下服务端保证带尾部；旧服务端默认不启用）
+            if (payload.seedGenTail().length > 0) {
+                try {
+                    io.netty.buffer.ByteBuf sb = io.netty.buffer.Unpooled.wrappedBuffer(payload.seedGenTail());
+                    FriendlyByteBuf seedBuf = new FriendlyByteBuf(sb);
+                    seedBuf.readLong(); // 布局内 worldSeed（与 payload.worldSeed() 相同，跳过）
+                    long stemLen = seedBuf.readVarInt();
+                    byte[] stemNbt = null;
+                    if (stemLen > 0 && stemLen <= seedBuf.readableBytes()) {
+                        stemNbt = new byte[(int) stemLen];
+                        seedBuf.readBytes(stemNbt);
+                    }
+                    boolean seedGenEnabled = seedBuf.readableBytes() >= 1 && seedBuf.readBoolean();
+                    ClientChunkPipeline.getInstance().setServerSeedInfo(payload.worldSeed(), stemNbt, seedGenEnabled);
+                    sb.release();
+                } catch (Throwable e) {
+                    LOGGER.debug("Hassium: failed to decode SeedGen tail (legacy server?)", e);
+                }
+            }
+            if (payload.accepted() && payload.globalCompressionAccepted()) {
+                tryInstallClientZstdPipeline();
+            }
+            if (payload.accepted()) {
+                startUdpFromHandshakeTail(payload.dataplaneTail());
+            }
+        });
+    }
+
+    private static void handleCompressedChunkS2C(CompressedChunkPayload payload, PlayPayloadContext context) {
+        context.workHandler().execute(() -> {
+            try {
+                ClientChunkHandler.handleCompressedChunk(payload.data());
+            } catch (Exception e) {
+                LOGGER.error("[CLIENT] Failed to handle compressed chunk", e);
+            }
+        });
+    }
+
+    private static void handleChunkHashS2C(ChunkHashPayload payload, PlayPayloadContext context) {
+        context.workHandler().execute(() -> {
+            try {
+                FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(payload.data()));
+                ChunkHashS2CPacket packet = ChunkHashS2CPacket.decode(buf);
+                ClientMetadataHandler.handleChunkHashPacket(packet);
+            } catch (Exception e) {
+                LOGGER.error("[CLIENT] Failed to handle chunk hash", e);
+            }
+        });
+    }
+
+    private static void handleSeedRefS2C(SeedRefPayload payload, PlayPayloadContext context) {
+        context.workHandler().execute(() -> {
+            try {
+                FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(payload.data()));
+                SeedRefS2CPacket packet = SeedRefS2CPacket.decode(buf);
+                ClientMetadataHandler.handleSeedRefPacket(packet);
+            } catch (Exception e) {
+                LOGGER.error("[CLIENT] Failed to handle seed ref", e);
+            }
+        });
+    }
+
+    private static void handleSectionDeltaS2C(SectionDeltaPayload payload, PlayPayloadContext context) {
+        // 与 SimpleChannel 1.20.2+ 分支一致：submitDelta 自带线程封送，不再包 workHandler
+        io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.submitDelta(
+                SectionDeltaS2CPacket.decode(new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(payload.data()))));
+    }
+
+    private static void handleBlockEntityDataS2C(BlockEntityDataPayload payload, PlayPayloadContext context) {
+        context.workHandler().execute(() -> {
+            try {
+                FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(payload.data()));
+                BlockEntityDataS2CPacket packet = BlockEntityDataS2CPacket.decode(buf);
+                ClientMetadataHandler.handleBlockEntityDataPacket(packet);
+            } catch (Exception e) {
+                LOGGER.error("[CLIENT] Failed to handle block entity data", e);
+            }
+        });
+    }
+
+    private static void handleDictionarySyncS2C(DictionarySyncNeoPayload payload, PlayPayloadContext context) {
+        context.workHandler().execute(() -> handleDictionarySyncClient(payload.data()));
+    }
+
+    private static void handleIndexSyncS2C(IndexSyncNeoPayload payload, PlayPayloadContext context) {
+        context.workHandler().execute(() -> handleIndexSyncClient(payload.data()));
+    }
+
 #else
     /**
      * 注册所有 Payload (1.20.5+)
@@ -2402,6 +2549,46 @@ public class NeoForgeNetworkManager implements NetworkManager {
                     }
                 })
         );
+
+        // ===== S2C（客户端处理；与服务端发送方向一一对应）=====
+        // review-fix: T11-M1：此前只注册 C2S，9 个 S2C payload 客户端零注册 → 直连回退路径功能性死亡
+
+        // 握手响应 S2C
+        registrar.playToClient(HandshakeResponsePayload.TYPE, HandshakeResponsePayload.STREAM_CODEC,
+                NeoForgeNetworkManager::handleHandshakeResponseS2C);
+
+        // 压缩区块 S2C
+        registrar.playToClient(CompressedChunkPayload.TYPE, CompressedChunkPayload.STREAM_CODEC,
+                NeoForgeNetworkManager::handleCompressedChunkS2C);
+
+        // 区块哈希 S2C
+        registrar.playToClient(ChunkHashPayload.TYPE, ChunkHashPayload.STREAM_CODEC,
+                NeoForgeNetworkManager::handleChunkHashS2C);
+
+        // SeedRef S2C
+        registrar.playToClient(SeedRefPayload.TYPE, SeedRefPayload.STREAM_CODEC,
+                NeoForgeNetworkManager::handleSeedRefS2C);
+
+        // SectionDelta S2C
+        registrar.playToClient(SectionDeltaPayload.TYPE, SectionDeltaPayload.STREAM_CODEC,
+                NeoForgeNetworkManager::handleSectionDeltaS2C);
+
+        // BlockEntityData S2C
+        registrar.playToClient(BlockEntityDataPayload.TYPE, BlockEntityDataPayload.STREAM_CODEC,
+                NeoForgeNetworkManager::handleBlockEntityDataS2C);
+
+        // LightDelta S2C（方案 A：客户端不消费，no-op 标记已处理）
+        registrar.playToClient(LightDeltaPayload.TYPE, LightDeltaPayload.STREAM_CODEC,
+                (payload, ctx) -> {
+                });
+
+        // 字典同步 S2C
+        registrar.playToClient(DictionarySyncNeoPayload.TYPE, DictionarySyncNeoPayload.STREAM_CODEC,
+                NeoForgeNetworkManager::handleDictionarySyncS2C);
+
+        // 索引同步 S2C
+        registrar.playToClient(IndexSyncNeoPayload.TYPE, IndexSyncNeoPayload.STREAM_CODEC,
+                NeoForgeNetworkManager::handleIndexSyncS2C);
 
         LOGGER.info("Hassium: Registered all NeoForge payload handlers");
     }
@@ -2544,6 +2731,103 @@ public class NeoForgeNetworkManager implements NetworkManager {
                 LOGGER.error("[SERVER] Failed to handle block entity request", e);
             }
         });
+    }
+
+    // ===== S2C 客户端处理（1.20.5+；处理逻辑对齐 SimpleChannel 注册块）=====
+
+    private static void handleHandshakeResponseS2C(HandshakeResponsePayload payload, IPayloadContext context) {
+        context.enqueueWork(() -> {
+            LOGGER.info("Hassium: Client handshake response: accepted={}, globalCompression={}, compactHeader={}, resumeAccepted={}",
+                    payload.accepted(), payload.globalCompressionAccepted(), payload.compactHeaderAccepted(), payload.resumeAccepted());
+            if (payload.resumeAccepted()) {
+                LOGGER.info("Hassium: [RESUME] Server accepted resume — 续流就绪，网关可跳过 login/维度初始化");
+            }
+            // SeedGen 信息（新格式下服务端保证带尾部；旧服务端默认不启用）
+            if (payload.seedGenTail().length > 0) {
+                try {
+                    io.netty.buffer.ByteBuf sb = io.netty.buffer.Unpooled.wrappedBuffer(payload.seedGenTail());
+                    FriendlyByteBuf seedBuf = new FriendlyByteBuf(sb);
+                    seedBuf.readLong(); // 布局内 worldSeed（与 payload.worldSeed() 相同，跳过）
+                    long stemLen = seedBuf.readVarInt();
+                    byte[] stemNbt = null;
+                    if (stemLen > 0 && stemLen <= seedBuf.readableBytes()) {
+                        stemNbt = new byte[(int) stemLen];
+                        seedBuf.readBytes(stemNbt);
+                    }
+                    boolean seedGenEnabled = seedBuf.readableBytes() >= 1 && seedBuf.readBoolean();
+                    ClientChunkPipeline.getInstance().setServerSeedInfo(payload.worldSeed(), stemNbt, seedGenEnabled);
+                    sb.release();
+                } catch (Throwable e) {
+                    LOGGER.debug("Hassium: failed to decode SeedGen tail (legacy server?)", e);
+                }
+            }
+            if (payload.accepted() && payload.globalCompressionAccepted()) {
+                tryInstallClientZstdPipeline();
+            }
+            if (payload.accepted()) {
+                startUdpFromHandshakeTail(payload.dataplaneTail());
+            }
+        });
+    }
+
+    private static void handleCompressedChunkS2C(CompressedChunkPayload payload, IPayloadContext context) {
+        context.enqueueWork(() -> {
+            try {
+                ClientChunkHandler.handleCompressedChunk(payload.data());
+            } catch (Exception e) {
+                LOGGER.error("[CLIENT] Failed to handle compressed chunk", e);
+            }
+        });
+    }
+
+    private static void handleChunkHashS2C(ChunkHashPayload payload, IPayloadContext context) {
+        context.enqueueWork(() -> {
+            try {
+                FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(payload.data()));
+                ChunkHashS2CPacket packet = ChunkHashS2CPacket.decode(buf);
+                ClientMetadataHandler.handleChunkHashPacket(packet);
+            } catch (Exception e) {
+                LOGGER.error("[CLIENT] Failed to handle chunk hash", e);
+            }
+        });
+    }
+
+    private static void handleSeedRefS2C(SeedRefPayload payload, IPayloadContext context) {
+        context.enqueueWork(() -> {
+            try {
+                FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(payload.data()));
+                SeedRefS2CPacket packet = SeedRefS2CPacket.decode(buf);
+                ClientMetadataHandler.handleSeedRefPacket(packet);
+            } catch (Exception e) {
+                LOGGER.error("[CLIENT] Failed to handle seed ref", e);
+            }
+        });
+    }
+
+    private static void handleSectionDeltaS2C(SectionDeltaPayload payload, IPayloadContext context) {
+        // 与 SimpleChannel 1.20.2+ 分支一致：submitDelta 自带线程封送，不再包 enqueueWork
+        io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.submitDelta(
+                SectionDeltaS2CPacket.decode(new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(payload.data()))));
+    }
+
+    private static void handleBlockEntityDataS2C(BlockEntityDataPayload payload, IPayloadContext context) {
+        context.enqueueWork(() -> {
+            try {
+                FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(payload.data()));
+                BlockEntityDataS2CPacket packet = BlockEntityDataS2CPacket.decode(buf);
+                ClientMetadataHandler.handleBlockEntityDataPacket(packet);
+            } catch (Exception e) {
+                LOGGER.error("[CLIENT] Failed to handle block entity data", e);
+            }
+        });
+    }
+
+    private static void handleDictionarySyncS2C(DictionarySyncNeoPayload payload, IPayloadContext context) {
+        context.enqueueWork(() -> handleDictionarySyncClient(payload.data()));
+    }
+
+    private static void handleIndexSyncS2C(IndexSyncNeoPayload payload, IPayloadContext context) {
+        context.enqueueWork(() -> handleIndexSyncClient(payload.data()));
     }
 #endif
 
@@ -2912,7 +3196,7 @@ public class NeoForgeNetworkManager implements NetworkManager {
                 return;
             }
             HassiumAggregationPacket.decode(packetBuf, indexManager).handle(clientConn.getConnection());
-        } catch (Exception e) {
+        } catch (Throwable e) { // review-fix: T13-C1（decode 校验抛 IllegalArgumentException/Error 均须收敛，防 OOM 后链路悬挂）
             LOGGER.error("Failed to handle aggregation packet", e);
         } finally {
             packetBuf.release();
@@ -2959,11 +3243,7 @@ public class NeoForgeNetworkManager implements NetworkManager {
     }
 
     private static void schedulePendingTimeout(Connection connection, String playerName) {
-        java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
-            Thread t = new Thread(r, "Hassium-PendingTimeout");
-            t.setDaemon(true);
-            return t;
-        }).schedule(() -> {
+        PENDING_TIMEOUT_SCHEDULER.schedule(() -> {
             if (HassiumConnectionRegistry.tryDemoteFromPending(connection)) {
                 HassiumAggregationManager.discardConnection(connection);
                 LOGGER.warn("Hassium: Ack timeout for {}, disabling aggregation", playerName);
