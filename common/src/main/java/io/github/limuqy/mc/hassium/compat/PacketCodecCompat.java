@@ -178,7 +178,12 @@ public final class PacketCodecCompat {
 #if MC_VER < MC_1_20_5
         FriendlyByteBuf buf = new FriendlyByteBuf(Unpooled.buffer());
         try {
+#if MC_VER < MC_1_20_2
             buf.writeVarInt(net.minecraft.network.ConnectionProtocol.PLAY.getPacketId(flow, packet));
+#else
+            // 1.20.2 网络重构：getPacketId(flow, packet) 移除，改 codec(flow).packetId(packet)
+            buf.writeVarInt(net.minecraft.network.ConnectionProtocol.PLAY.codec(flow).packetId(packet));
+#endif
             packet.write(buf);
             byte[] data = new byte[buf.readableBytes()];
             buf.readBytes(data);

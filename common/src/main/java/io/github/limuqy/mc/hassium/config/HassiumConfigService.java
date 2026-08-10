@@ -360,6 +360,57 @@ public class HassiumConfigService {
         return config.master().migrationFaultTimeoutMs();
     }
 
+    /** L1 迁移策略：主控 TPS 低于此值触发迁移（默认 15.0）。 */
+    public double getMigrationMinTps() {
+        return config.master().migrationMinTps();
+    }
+
+    /** L1 迁移策略：主控系统负载均值高于此值触发迁移（默认 4.0；-1 无信号）。 */
+    public double getMigrationMaxLoadAverage() {
+        return config.master().migrationMaxLoadAverage();
+    }
+
+    /** L1 迁移策略：维护窗口 "HH:MM-HH:MM"（本地时区，含跨午夜；空串=禁用）。 */
+    public String getMigrationMaintenanceWindow() {
+        return config.master().migrationMaintenanceWindow();
+    }
+
+    /** L1 迁移：应用层 HEARTBEAT 发送周期（ms；默认 5000）。 */
+    public long getMigrationHeartbeatIntervalMs() {
+        return config.master().migrationHeartbeatIntervalMs();
+    }
+
+    /** L1 迁移：空闲窗口判定时长（ms；默认 10000）。 */
+    public long getMigrationIdleWindowMs() {
+        return config.master().migrationIdleWindowMs();
+    }
+
+    /**
+     * L1 迁移：outbound 入站静默超时（ms；默认 10000 使失效识别 ≤15s）。
+     * 未配置（仍为默认值）时经 {@link MigrationPolicyConfig} 回退 faultTimeout 语义。
+     */
+    public long getMigrationSilentTimeoutMs() {
+        return config.master().migrationSilentTimeoutMs();
+    }
+
+    /** 预热会话 TTL（ms；B 侧预热物化会话清理；T4 交付键）。 */
+    public long getMigrationPrewarmTtlMs() {
+        return config.master().migrationPrewarmTtlMs();
+    }
+
+    /** L1 迁移策略配置快照（MigrationEngine.applyMigrationPolicyFromConfig 消费）。 */
+    public MigrationPolicyConfig getMigrationPolicyConfig() {
+        HassiumConfig.MasterCoreConfig m = config.master();
+        return new MigrationPolicyConfig(
+                m.migrationMinTps(),
+                m.migrationMaxLoadAverage(),
+                m.migrationMaintenanceWindow(),
+                m.migrationHeartbeatIntervalMs(),
+                m.migrationIdleWindowMs(),
+                m.migrationSilentTimeoutMs(),
+                m.migrationFaultTimeoutMs());
+    }
+
     public java.util.List<HassiumConfig.ReachableEndpoint> getControlReachableEndpoints() {
         return config.master().controlReachableEndpoints();
     }

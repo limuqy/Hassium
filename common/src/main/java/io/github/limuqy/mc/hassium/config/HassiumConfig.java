@@ -172,10 +172,14 @@ public record HassiumConfig(
     }
 
     /**
-     * 主控核心配置（仅专用服；server.toml master.* + dataplane.*）。
+     * 主控核心配置（专用服；server.toml master.* + dataplane.*）。
      * <p>
      * 服务端网络行为（压缩/聚合/推送/端点）与 L1 迁移故障超时；
      * 数据面键（dataplane.enabled/udpListeners）经 {@link DataPlaneConfig} 挂载。
+     * <p>
+     * L1 迁移策略参数（migrationMinTps 等）为 CLIENT scope 键：客户端 MigrationEngine
+     * 消费，物理客户端经 client.toml 加载（服务端加载时取默认值不参与）；唯一例外是
+     * migrationPrewarmTtlMs（SERVER scope，B 侧预热会话清理，T4 消费）。
      */
     public record MasterCoreConfig(
             boolean enabled,
@@ -207,6 +211,15 @@ public record HassiumConfig(
             // === 控制面端点与 L1 迁移 ===
             List<ReachableEndpoint> controlReachableEndpoints,
             long migrationFaultTimeoutMs,
+            // === L1 迁移策略（CLIENT scope 键；客户端经 client.toml 加载）===
+            double migrationMinTps,
+            double migrationMaxLoadAverage,
+            String migrationMaintenanceWindow,
+            long migrationHeartbeatIntervalMs,
+            long migrationIdleWindowMs,
+            long migrationSilentTimeoutMs,
+            // === 预热会话 TTL（SERVER scope；T4 交付键，只实现+getter）===
+            long migrationPrewarmTtlMs,
             DataPlaneConfig dataPlane
     ) {
         public MasterCoreConfig {
@@ -214,6 +227,32 @@ public record HassiumConfig(
             controlReachableEndpoints = DataPlaneEndpointConfig.normalizeReachableEndpoints(
                     controlReachableEndpoints, 4, "control reachable endpoints");
             DataPlaneEndpointConfig.validatePositive(migrationFaultTimeoutMs, "migrationFaultTimeoutMs");
+            if (!(migrationMinTps > 0)) {
+                throw new IllegalArgumentException("migrationMinTps must be positive");
+            }
+            if (!(migrationMaxLoadAverage > 0)) {
+                throw new IllegalArgumentException("migrationMaxLoadAverage must be positive");
+            }
+            DataPlaneEndpointConfig.validatePositive(migrationHeartbeatIntervalMs, "migrationHeartbeatIntervalMs");
+            DataPlaneEndpointConfig.validatePositive(migrationIdleWindowMs, "migrationIdleWindowMs");
+            DataPlaneEndpointConfig.validatePositive(migrationSilentTimeoutMs, "migrationSilentTimeoutMs");
+            DataPlaneEndpointConfig.validatePositive(migrationPrewarmTtlMs, "migrationPrewarmTtlMs");
+        }
+
+        /**
+         * 便捷构造：保留既有主控字段，仅替换 L1 迁移策略参数（cloth-ui 保存路径用；
+         * 其余迁移字段保持本实例值）。
+         */
+        public MasterCoreConfig withMigrationPolicy(double minTps, double maxLoadAverage, String maintenanceWindow,
+                                                    long heartbeatIntervalMs, long idleWindowMs, long silentTimeoutMs) {
+            return new MasterCoreConfig(enabled, compressionLevel, magiclessZstd,
+                    globalPacketCompression, globalCompressionLevel, globalCompressionThreshold,
+                    useContextCompression, enablePacketAggregation, aggregationMinBatchSize,
+                    aggregationMaxWaitTimeMs, aggregationMaxSize, enableCompactHeader, compressionBlacklist,
+                    metricsEnabled, maxChunksPerTick, serverChunkPushThreads, dynamicThreadPoolEnabled,
+                    minPushThreads, maxPushThreads, controlReachableEndpoints, migrationFaultTimeoutMs,
+                    minTps, maxLoadAverage, maintenanceWindow, heartbeatIntervalMs, idleWindowMs,
+                    silentTimeoutMs, migrationPrewarmTtlMs, dataPlane);
         }
 
         // 127.0.0.1 仅供本地开发；公网部署必须配置客户端实际可达的地址。
@@ -257,7 +296,14 @@ public record HassiumConfig(
                 2,                 // minPushThreads
                 8,                 // maxPushThreads
                 List.of(),         // controlReachableEndpoints
-                60_000L,           // migrationFaultTimeoutMs（L1 迁移故障静默超时；faultTimeout 仍为默认值时覆盖）
+                60_000L,           // migrationFaultTimeoutMs（L1 迁移故障静默超时；silentTimeout 未配置时的回退值）
+                15.0,              // migrationMinTps
+                4.0,               // migrationMaxLoadAverage
+                "",                // migrationMaintenanceWindow（空串=禁用）
+                5000L,             // migrationHeartbeatIntervalMs
+                10000L,            // migrationIdleWindowMs
+                10000L,            // migrationSilentTimeoutMs（默认 10s：失效识别 ≤15s；显式配置时优先于 faultTimeout）
+                60_000L,           // migrationPrewarmTtlMs（预热会话 TTL；T4 消费）
                 DEFAULT_DATA_PLANE
         );
     }

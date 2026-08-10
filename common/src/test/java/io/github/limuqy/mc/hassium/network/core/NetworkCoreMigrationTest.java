@@ -12,7 +12,12 @@ import io.github.limuqy.mc.hassium.network.core.outbound.HandshakeCodec;
 import io.github.limuqy.mc.hassium.network.core.outbound.OutboundConnection;
 import io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail;
 import io.netty.buffer.ByteBuf;
+import io.netty.buffer.Unpooled;
 import io.netty.channel.embedded.EmbeddedChannel;
+import net.minecraft.network.FriendlyByteBuf;
+import net.minecraft.network.protocol.Packet;
+import net.minecraft.network.protocol.game.ClientboundPlayerPositionPacket;
+import net.minecraft.network.protocol.game.ServerGamePacketListener;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
@@ -23,12 +28,14 @@ import java.util.concurrent.atomic.AtomicLong;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * NetworkCore 迁移流程（T8）：migrateTo 状态流转（ACTIVE→MIGRATING→ACTIVE）、
  * 续流票据随握手上线、预热接管、故障触发立即迁移。
+ * T6（N1）：掉线期（MIGRATING/IDLE/静默期）routeC2S 已消费丢弃、resumeAccepted 位置回退。
  */
 class NetworkCoreMigrationTest {
 
@@ -59,6 +66,8 @@ class NetworkCoreMigrationTest {
     private static void resetCore(NetworkCore core) {
         core.onDisconnect();
         core.migration().setTargetEndpoints(List.of());
+        // currentEndpoint 也要清：nextEndpoint 排除当前端点，残留会让单目标端点故障测试退化为 IDLE
+        core.migration().noteCurrentEndpoint(null);
         core.migration().setClock(System::currentTimeMillis);
         core.migration().setConnectionFactory(null);
         core.migration().setPlayerIdSource(null);
@@ -82,6 +91,50 @@ class NetworkCoreMigrationTest {
                 new PlayerStateReport(10, 20, 30, 90, 0, "minecraft:overworld"));
     }
 
+    /** T3 配置化后的测试策略（silentTimeout=默认 10000 / faultTimeout=60000 → 生效静默超时 10000ms；无预热变体显式传 false）。 */
+    private static MigrationPolicy testPolicy() {
+        return new MigrationPolicy(15.0, 4.0, "", 5000L, 10000L, 60000L, 10000L, 0.5, true);
+    }
+
+    /** 通用假包（routeC2S 丢弃分类只关心包对象，不编码）。 */
+    private static Packet<ServerGamePacketListener> fakePacket() {
+        return new Packet<>() {
+#if MC_VER < MC_1_20_5
+            @Override
+            public void write(FriendlyByteBuf buffer) {
+            }
+#else
+            @Override
+            public net.minecraft.network.protocol.PacketType<? extends Packet<ServerGamePacketListener>> type() {
+                return null;
+            }
+#endif
+            @Override
+            public void handle(ServerGamePacketListener handler) {
+            }
+        };
+    }
+
+    /** 位置回退包坐标断言（1.21.2+ record 形态差异收敛）。 */
+    private static void assertRollbackPosition(ClientboundPlayerPositionPacket packet,
+                                               double x, double y, double z, float yaw, float pitch) {
+#if MC_VER < MC_1_21_2
+        assertEquals(x, packet.getX(), 1.0e-6);
+        assertEquals(y, packet.getY(), 1.0e-6);
+        assertEquals(z, packet.getZ(), 1.0e-6);
+        assertEquals(yaw, packet.getYRot(), 1.0e-6);
+        assertEquals(pitch, packet.getXRot(), 1.0e-6);
+        assertTrue(packet.getRelativeArguments().isEmpty(), "绝对坐标回退（无相对标志）");
+#else
+        assertEquals(x, packet.change().position().x, 1.0e-6);
+        assertEquals(y, packet.change().position().y, 1.0e-6);
+        assertEquals(z, packet.change().position().z, 1.0e-6);
+        assertEquals(yaw, packet.change().yRot(), 1.0e-6);
+        assertEquals(pitch, packet.change().xRot(), 1.0e-6);
+        assertTrue(packet.relatives().isEmpty(), "绝对坐标回退（无相对标志）");
+#endif
+    }
+
     /** 经 embedded 缝建立 ACTIVE 会话。 */
     private static OutboundConnection establishActive(NetworkCore core) {
         core.transition(NetworkCoreState.IDLE, NetworkCoreState.CONNECTING);
@@ -99,7 +152,7 @@ class NetworkCoreMigrationTest {
         List<OutboundConnection> created = new ArrayList<>();
         installEmbeddedFactory(core, created);
         installPlayerSources(core);
-        core.migration().setPolicy(new MigrationPolicy(15.0, 4.0, "", 5000L, 60000L, false));
+        core.migration().setPolicy(new MigrationPolicy(15.0, 4.0, "", 5000L, 10000L, 60000L, 10000L, 0.5, false));
 
         OutboundConnection connA = establishActive(core);
         long epochBefore = core.migration().currentEpoch();
@@ -150,7 +203,7 @@ class NetworkCoreMigrationTest {
         List<OutboundConnection> created = new ArrayList<>();
         installEmbeddedFactory(core, created);
         installPlayerSources(core);
-        core.migration().setPolicy(new MigrationPolicy(15.0, 4.0, "", 5000L, 60000L, true));
+        core.migration().setPolicy(testPolicy());
 
         OutboundConnection connA = establishActive(core);
 
@@ -195,7 +248,7 @@ class NetworkCoreMigrationTest {
         List<OutboundConnection> created = new ArrayList<>();
         installEmbeddedFactory(core, created);
         installPlayerSources(core);
-        core.migration().setPolicy(new MigrationPolicy(15.0, 4.0, "", 5000L, 60000L, true));
+        core.migration().setPolicy(testPolicy());
         core.migration().setTargetEndpoints(List.of(MASTER_B));
         core.migration().setClock(clock::get);
 
@@ -219,6 +272,150 @@ class NetworkCoreMigrationTest {
         // 新连接续流接受 → ACTIVE
         acceptHandshake(connB, true);
         assertEquals(NetworkCoreState.ACTIVE, core.state());
+
+        core.onDisconnect();
+    }
+
+    @Test
+    void routeC2SDropsDuringDisconnectPeriods() {
+        NetworkCore core = NetworkCore.getInstance();
+        resetCore(core);
+        installPlayerSources(core);
+        core.migration().setPolicy(testPolicy());
+        core.migration().setClock(clock::get);
+
+        OutboundConnection connA = establishActive(core);
+        NetworkCore.C2SEncoder prevEncoder = core.c2sEncoder();
+        core.setC2SEncoder(p -> Unpooled.wrappedBuffer(new byte[] {1, 2, 3}));
+        Packet<?> packet = fakePacket();
+        long before = core.c2sRoutedCount();
+
+        // ACTIVE + outbound 开：正常路由
+        assertTrue(core.routeC2S(packet), "ACTIVE：应编码进 outbound 路由");
+
+        // MIGRATING（切换窗口）：已消费丢弃——MixinConnection cancel 原版发送，不排队不重放
+        assertTrue(core.transition(NetworkCoreState.ACTIVE, NetworkCoreState.MIGRATING));
+        assertTrue(core.routeC2S(packet), "MIGRATING：掉线期已消费丢弃");
+
+        // CONNECTING/HANDSHAKING（正常连接建立期）：原版直连兜底（登录期不可丢）
+        assertTrue(core.transition(NetworkCoreState.MIGRATING, NetworkCoreState.CONNECTING));
+        assertFalse(core.routeC2S(packet), "CONNECTING：原版直连兜底");
+        assertTrue(core.transition(NetworkCoreState.CONNECTING, NetworkCoreState.HANDSHAKING));
+        assertFalse(core.routeC2S(packet), "HANDSHAKING：原版直连兜底");
+
+        // IDLE（onError 掉线）：已消费丢弃
+        assertTrue(core.transition(NetworkCoreState.HANDSHAKING, NetworkCoreState.IDLE));
+        assertTrue(core.routeC2S(packet), "IDLE：掉线期已消费丢弃");
+
+        assertEquals(before + 5, core.c2sRoutedCount(), "每次调用计数 +1（可验证）");
+        core.setC2SEncoder(prevEncoder);
+        core.onDisconnect();
+    }
+
+    @Test
+    void routeC2SDropsWhileInboundSilentDuringActive() {
+        NetworkCore core = NetworkCore.getInstance();
+        resetCore(core);
+        installPlayerSources(core);
+        // 显式 silentTimeoutMs（≠默认）→ resolvedSilentTimeoutMs 优先 silentTimeout = 30000ms
+        core.migration().setPolicy(new MigrationPolicy(15.0, 4.0, "", 5000L, 30000L, 60000L, 10000L, 0.5, true));
+        core.migration().setClock(clock::get);
+
+        OutboundConnection connA = establishActive(core); // attach → bindHeartbeatTarget：lastInbound=200_000
+        NetworkCore.C2SEncoder prevEncoder = core.c2sEncoder();
+        core.setC2SEncoder(p -> Unpooled.wrappedBuffer(new byte[] {1, 2, 3}));
+        Packet<?> packet = fakePacket();
+        EmbeddedChannel embedded = (EmbeddedChannel) connA.channel();
+        embedded.readOutbound(); // 排空握手帧
+
+        // 静默不足超时：正常路由
+        clock.set(clock.get() + 29_999);
+        assertTrue(core.routeC2S(packet), "静默 < 生效静默超时：正常路由");
+        assertNotNull(embedded.readOutbound(), "路由应编码出 outbound 帧");
+
+        // 静默 ≥ 生效静默超时（未 tick，状态仍 ACTIVE）：fault 前丢弃窗口 → 已消费丢弃（不排队）
+        clock.set(clock.get() + 2);
+        assertTrue(core.routeC2S(packet), "静默 ≥ 生效静默超时：fault 前丢弃窗口已消费丢弃");
+        assertEquals(NetworkCoreState.ACTIVE, core.state(), "静默丢弃不触发状态变更（fault 由 tick 驱动）");
+        assertNull(embedded.readOutbound(), "丢弃不应产生 outbound 帧");
+
+        // 入站活动恢复 → 静默解除 → 恢复路由
+        core.migration().noteInboundActivity();
+        assertTrue(core.routeC2S(packet), "入站恢复：恢复路由");
+
+        core.setC2SEncoder(prevEncoder);
+        core.onDisconnect();
+    }
+
+    @Test
+    void resumeAcceptedRollsBackPositionToSnapshot() {
+        NetworkCore core = NetworkCore.getInstance();
+        resetCore(core);
+        List<OutboundConnection> created = new ArrayList<>();
+        installEmbeddedFactory(core, created);
+        installPlayerSources(core);
+        // 无预热（直接切换）：迁移握手经 NetworkCore.onHandshakeAccepted 回调（预热路径走 promotePrewarm，不在 T6 方法区）
+        core.migration().setPolicy(new MigrationPolicy(15.0, 4.0, "", 5000L, 10000L, 60000L, 10000L, 0.5, false));
+
+        List<Packet<?>> dispatched = new ArrayList<>();
+        core.registerS2CInjector(dispatched::add);
+        long before = core.s2cDispatchedCount();
+
+        OutboundConnection connA = establishActive(core); // 初始连接 resumeAccepted=false → 不回退
+        assertEquals(0, dispatched.size(), "初始连接（resumeAccepted=false）不应回退");
+
+        core.migrateTo(MASTER_B);
+        assertEquals(NetworkCoreState.MIGRATING, core.state());
+        OutboundConnection connB = created.get(0);
+        acceptHandshake(connB, true);
+
+        assertEquals(NetworkCoreState.ACTIVE, core.state());
+        assertTrue(core.lastResumeAccepted(), "续流就绪");
+        assertEquals(before + 1, core.s2cDispatchedCount(), "回退位置包应经 dispatchS2C 分发");
+        assertEquals(1, dispatched.size(), "注入器应收到回退位置包");
+        Packet<?> rollback = dispatched.get(0);
+        assertTrue(rollback instanceof ClientboundPlayerPositionPacket, "回退包应为 ClientboundPlayerPositionPacket");
+        // 位置 = 续流握手上报快照（installPlayerSources 注入值 (10,20,30) yaw=90 pitch=0）
+        assertRollbackPosition((ClientboundPlayerPositionPacket) rollback, 10.0, 20.0, 30.0, 90.0f, 0.0f);
+
+        core.unregisterS2CInjector(dispatched::add);
+        core.onDisconnect();
+    }
+
+    /** B1：握手响应通告 controlEndpoints → applyHandshake 填充迁移候选；空列表不覆盖编程注入。 */
+    @Test
+    void handshakeAdvertisementFillsTargetEndpoints() {
+        NetworkCore core = NetworkCore.getInstance();
+        resetCore(core);
+        List<OutboundConnection> created = new ArrayList<>();
+        installEmbeddedFactory(core, created);
+        installPlayerSources(core);
+        // 编程注入兜底：先注入，握手通告为空时不得覆盖
+        core.migration().setTargetEndpoints(List.of(MASTER_B));
+
+        // 初始连接（S2C 尾 disabled → controlEndpoints 空）→ targets 保留编程注入
+        OutboundConnection connA = establishActive(core);
+        assertEquals(List.of(MASTER_B), core.migration().targetEndpoints(), "空通告不覆盖编程注入");
+
+        // 迁移握手：S2C 尾带 controlEndpoints（udp=false 仍写 controls）→ targets 被通告填充
+        core.migrateToImmediate(MASTER_B);
+        assertEquals(NetworkCoreState.MIGRATING, core.state());
+        assertEquals(1, created.size());
+        OutboundConnection connB = core.outbound();
+        EmbeddedChannel embeddedB = (EmbeddedChannel) connB.channel();
+        ByteBuf response = HandshakeCodec.encodeServerResponse(1, true, true, true,
+                new UdpDataPlaneHandshakeTail.S2CTail(
+                        false, true, 7L, UdpDataPlaneHandshakeTail.PROTOCOL_VERSION, TOKEN,
+                        List.of(new UdpDataPlaneHandshakeTail.ControlEndpoint("c.example", 25567, 100)),
+                        List.of()),
+                0L, null, false);
+        HandshakeStateTail.writeS2C(response, new HandshakeStateTail.S2C(true));
+        embeddedB.writeInbound(ControlFrameCodec.encodeFrame(ControlFrameType.HANDSHAKE_S2C, response));
+        response.release();
+
+        assertEquals(NetworkCoreState.ACTIVE, core.state());
+        assertEquals(List.of(new MigrationEndpoint("c.example", 25567)),
+                core.migration().targetEndpoints(), "握手通告端点池应填充迁移候选");
 
         core.onDisconnect();
     }

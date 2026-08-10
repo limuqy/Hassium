@@ -5,11 +5,13 @@ import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 
 /**
- * 迁移策略（L1 骨架，REQ C 节）：负载阈值 + 维护窗口 + 心跳/故障参数。
+ * 迁移策略（L1 骨架，REQ C 节）：负载阈值 + 维护窗口 + 心跳/故障参数 + 空闲窗口。
  *
  * <p>纯数据不可变记录。默认值即骨架可用配置；运行时替换经
- * {@link MigrationEngine#setPolicy}。HassiumConfig 全链配置接线（TOML/cloth-ui）
- * 为后续波交接项——本记录 = 程序化配置入口。
+ * {@link MigrationEngine#setPolicy}。B2 全链接线：策略字段经
+ * {@code master.migration*} 配置键族接线（TOML/cloth-ui），引擎启动时由
+ * {@link MigrationEngine#applyMigrationPolicyFromConfig} 按「字段仍为默认值才覆盖」
+ * 规则应用配置快照（程序化 setPolicy 优先）。
  *
  * <p>字段语义：
  * <ul>
@@ -19,8 +21,15 @@ import java.time.format.DateTimeParseException;
  *   <li>{@code maintenanceWindow}：维护窗口 "HH:MM-HH:MM"（本地时区，含端点），
  *       空串 = 禁用（默认）。窗口内策略判定恒触发（维护期主动迁移）</li>
  *   <li>{@code heartbeatIntervalMs}：客户端 HEARTBEAT 发送周期（默认 5000）</li>
- *   <li>{@code faultTimeoutMs}：outbound 入站静默超时（默认 60000，沿用既有
- *       {@code master.migrationFaultTimeoutMs} 语义；引擎启动时从配置读取覆盖）</li>
+ *   <li>{@code silentTimeoutMs}：outbound 入站静默超时（默认 10000，N2 快速失效：
+ *       默认失效识别 ≤15s）。显式配置（≠默认）时优先；未配置时回退
+ *       {@code faultTimeoutMs}（既有 {@code master.migrationFaultTimeoutMs} 语义，
+ *       见 {@link #resolvedSilentTimeoutMs()}）</li>
+ *   <li>{@code faultTimeoutMs}：legacy 静默超时（默认 60000，沿用既有
+ *       {@code master.migrationFaultTimeoutMs} 语义；silentTimeout 未配置时的回退值）</li>
+ *   <li>{@code idleWindowMs}：空闲窗口判定时长（默认 10000；原 MigrationEngine 常量移入）</li>
+ *   <li>{@code idleMoveThresholdBps}：空闲判定位移阈值，方块/秒（默认 0.5；原
+ *       MigrationEngine 常量移入，无独立配置键）</li>
  *   <li>{@code prewarmEnabled}：迁移前是否先建立目标主控会话（预热，默认 true）</li>
  * </ul>
  */
@@ -29,11 +38,15 @@ public record MigrationPolicy(
         double maxLoadAverage,
         String maintenanceWindow,
         long heartbeatIntervalMs,
+        long silentTimeoutMs,
         long faultTimeoutMs,
+        long idleWindowMs,
+        double idleMoveThresholdBps,
         boolean prewarmEnabled
 ) {
 
-    public static final MigrationPolicy DEFAULT = new MigrationPolicy(15.0, 4.0, "", 5000L, 60000L, true);
+    public static final MigrationPolicy DEFAULT =
+            new MigrationPolicy(15.0, 4.0, "", 5000L, 10000L, 60000L, 10000L, 0.5, true);
 
     public MigrationPolicy {
         if (!(minTps > 0)) {
@@ -45,9 +58,37 @@ public record MigrationPolicy(
         if (heartbeatIntervalMs <= 0) {
             throw new IllegalArgumentException("heartbeatIntervalMs must be positive");
         }
+        if (silentTimeoutMs <= 0) {
+            throw new IllegalArgumentException("silentTimeoutMs must be positive");
+        }
         if (faultTimeoutMs <= 0) {
             throw new IllegalArgumentException("faultTimeoutMs must be positive");
         }
+        if (idleWindowMs <= 0) {
+            throw new IllegalArgumentException("idleWindowMs must be positive");
+        }
+        if (!(idleMoveThresholdBps > 0)) {
+            throw new IllegalArgumentException("idleMoveThresholdBps must be positive");
+        }
+    }
+
+    /**
+     * 生效静默超时（N2 失效判定用）：
+     * <ul>
+     *   <li>silentTimeoutMs 显式配置（≠默认 10000）→ 用之（新键优先）；</li>
+     *   <li>否则 faultTimeoutMs 显式配置（≠默认 60000）→ 用之（既有
+     *       {@code master.migrationFaultTimeoutMs} 兼容语义）；</li>
+     *   <li>两者均未配置 → 默认 10000ms（默认失效识别 ≤15s）。</li>
+     * </ul>
+     */
+    public long resolvedSilentTimeoutMs() {
+        if (silentTimeoutMs != DEFAULT.silentTimeoutMs()) {
+            return silentTimeoutMs;
+        }
+        if (faultTimeoutMs != DEFAULT.faultTimeoutMs()) {
+            return faultTimeoutMs;
+        }
+        return DEFAULT.silentTimeoutMs();
     }
 
     /** 当前时刻是否处于维护窗口（窗口格式 "HH:MM-HH:MM"；空串/非法格式恒 false）。 */

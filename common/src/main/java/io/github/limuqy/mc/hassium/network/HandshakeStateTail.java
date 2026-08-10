@@ -18,15 +18,16 @@ import java.util.UUID;
  */
 public final class HandshakeStateTail {
 
-    /** C2S：完整玩家状态 + 是否请求续流 + 票据字节 + 玩家 UUID（T10 标准流程握手附着用） */
-    public record C2S(PlayerStateReport state, boolean resumeRequested, byte[] resumeTicket, UUID playerId) {
+    /** C2S：完整玩家状态 + 是否请求续流 + 票据字节 + 玩家 UUID（T10 标准流程握手附着用）+ lightComputeSupported（A7 客户端影子光照能力） */
+    public record C2S(PlayerStateReport state, boolean resumeRequested, byte[] resumeTicket, UUID playerId,
+                      boolean lightComputeSupported) {
         public static C2S noResume(PlayerStateReport state) {
-            return new C2S(state, false, null, null);
+            return new C2S(state, false, null, null, false);
         }
 
         /** 标准流程（非续流）：携带玩家 UUID，主控据此把网关会话附着到 vanilla 物化玩家。 */
         public static C2S ident(PlayerStateReport state, UUID playerId) {
-            return new C2S(state, false, null, playerId);
+            return new C2S(state, false, null, playerId, false);
         }
     }
 
@@ -60,6 +61,8 @@ public final class HandshakeStateTail {
         } else {
             buf.writeBoolean(false);
         }
+        // A7 追加字段（append-only）：lightComputeSupported（客户端影子光照能力；恒写，旧端忽略尾字节）
+        buf.writeBoolean(tail.lightComputeSupported());
     }
 
     /** 读取 C2S 尾部；无可读字节或解析失败 → null */
@@ -93,7 +96,13 @@ public final class HandshakeStateTail {
                     playerId = new UUID(buf.readLong(), buf.readLong());
                 }
             }
-            return new C2S(new PlayerStateReport(x, y, z, yaw, pitch, dimension), resumeRequested, ticket, playerId);
+            // A7 追加字段（append-only）：缺尾/旧端默认 false（旧帧无此字节）
+            boolean lightComputeSupported = false;
+            if (buf.isReadable()) {
+                lightComputeSupported = buf.readBoolean();
+            }
+            return new C2S(new PlayerStateReport(x, y, z, yaw, pitch, dimension), resumeRequested, ticket, playerId,
+                    lightComputeSupported);
         } catch (Exception e) {
             return null;
         }

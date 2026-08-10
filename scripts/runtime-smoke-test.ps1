@@ -763,6 +763,40 @@ $round2Pass = $clientContent -match "ROUND2 stats OK"
 $hasPass = $clientContent -match "HassiumSmokeTest:PASS"
 $hasFail = $clientContent -match "HassiumSmokeTest:FAIL"
 
+# T7 V0 网关断言（网络核心路径）：解析 ClientSmokeTest 每轮 dump 的 GATEWAY_CLIENT marker。
+# marker 格式：HassiumSmokeTest:GATEWAY_CLIENT ROUND<1|2> state=<NetworkCoreState> s2c=<n> c2s=<n> resume=<bool>
+# 门禁：ROUND1/2 均须 state=ACTIVE 且 s2c>0（网络核心路径真实工作）；任一缺失/非 ACTIVE/s2c=0 → FAIL。
+# 当前已知状态：客户端 outbound 初始地址源未接（T12 交接项 5，Wave 1b T1/B1 修复），
+# 修复前 smoke 中 state 停留在 HANDSHAKING → 门禁 FAIL，即「无网络核心路径时 FAIL」语义。
+$gatewayRe = "HassiumSmokeTest:GATEWAY_CLIENT\s+ROUND(\d) state=(\w+) s2c=(\d+) c2s=(\d+) resume=(true|false)"
+$gatewayByRound = @{}
+foreach ($gm in [regex]::Matches($clientContent, $gatewayRe)) {
+    $round = "ROUND" + $gm.Groups[1].Value
+    $gatewayByRound[$round] = @{
+        gatewayState  = $gm.Groups[2].Value
+        gatewayS2c    = [long]$gm.Groups[3].Value
+        gatewayC2s    = [long]$gm.Groups[4].Value
+        gatewayResume = ($gm.Groups[5].Value -eq "true")
+    }
+}
+$gatewayGate = $false
+if ($gatewayByRound.ContainsKey("ROUND1") -and $gatewayByRound.ContainsKey("ROUND2")) {
+    $g1 = $gatewayByRound["ROUND1"]
+    $g2 = $gatewayByRound["ROUND2"]
+    $gatewayGate = ($g1.gatewayState -eq "ACTIVE" -and $g1.gatewayS2c -gt 0) -and
+                   ($g2.gatewayState -eq "ACTIVE" -and $g2.gatewayS2c -gt 0)
+}
+$gatewayRound1 = if ($gatewayByRound.ContainsKey("ROUND1")) {
+    $gatewayByRound["ROUND1"]
+} else {
+    @{ gatewayState = "MISSING"; gatewayS2c = 0; gatewayC2s = 0; gatewayResume = $false }
+}
+$gatewayRound2 = if ($gatewayByRound.ContainsKey("ROUND2")) {
+    $gatewayByRound["ROUND2"]
+} else {
+    @{ gatewayState = "MISSING"; gatewayS2c = 0; gatewayC2s = 0; gatewayResume = $false }
+}
+
 # 服务端视距切换检查
 $serverSwitched = if (Test-Path $serverLog) {
     (Get-Content $serverLog -Raw) -match "view-distance switched to 10"
@@ -797,12 +831,13 @@ $clientRecoveryFreeze = if ($udpFailoverIsPhase) {
     Get-UdpFailoverClientMode -ClientLog $clientContent
 } else { "unknown" }
 # Pass 决策：udp-failover 阶段不要求 client 两轮 PASS（仅要求关键 markers + client 退出 0）。
-# classic / R / I 阶段沿袭原 hasPass+exit==0 逻辑。
+# classic / R / I 阶段 = 原 hasPass+exit==0 逻辑 + T7 V0 网关断言门禁（GatewayGatePass）。
 
 if ($udpFailoverIsPhase) {
     $result = if ($udpFailoverCorePass -and $clientExit -eq 0) { "PASS" } else { "FAIL" }
 } else {
-    $result = if ($hasPass -and $clientExit -eq 0) { "PASS" } else { "FAIL" }
+    # T7 V0：classic 阶段叠加网关断言门禁（两轮 ACTIVE 且 s2c>0），无网络核心路径时 FAIL
+    $result = if ($hasPass -and $clientExit -eq 0 -and $gatewayGate) { "PASS" } else { "FAIL" }
 }
 
 # 清理 nginx stream proxy（仅 UdpFailover phase 启动过）
@@ -836,6 +871,13 @@ $resultObj = @{
     UdpFailoverMarkers = $udpFailoverFound
     UdpFailoverCorePass = $udpFailoverCorePass
     ClientRecoveryFreeze = $clientRecoveryFreeze
+    # T7 V0 网关断言字段（稳定命名供 T9 消费）：
+    #   GatewayRound1.gatewayState/gatewayS2c/gatewayC2s/gatewayResume
+    #   GatewayRound2.gatewayState/gatewayS2c/gatewayC2s/gatewayResume
+    #   GatewayGatePass（ROUND1/2 均 ACTIVE 且 s2c>0；classic 阶段并入 Result 判定）
+    GatewayRound1 = $gatewayRound1
+    GatewayRound2 = $gatewayRound2
+    GatewayGatePass = $gatewayGate
     StatsFiles = @(
         if ($round1StatsFound) { "build/smoke-test/stats/${SessionId}_round1_VD20.txt" }
         if ($round2StatsFound) { "build/smoke-test/stats/${SessionId}_round2_VD10.txt" }
@@ -847,6 +889,7 @@ Write-Host "[$SessionId] === RESULT: $result ==="
 Write-Host "[$SessionId] Round1: stats=$round1StatsFound pass=$round1Pass"
 Write-Host "[$SessionId] Round2: stats=$round2StatsFound pass=$round2Pass"
 Write-Host "[$SessionId] ServerSwitched: $serverSwitched Exit: $clientExit"
+Write-Host "[$SessionId] Gateway gate: $gatewayGate (R1=$($gatewayRound1.gatewayState)/s2c=$($gatewayRound1.gatewayS2c) R2=$($gatewayRound2.gatewayState)/s2c=$($gatewayRound2.gatewayS2c))"
 if ($udpFailoverIsPhase) {
     Write-Host "[$SessionId] UdpFailover markers: UDP_BIND_OK=$($udpFailoverFound['UDP_BIND_OK']) UDP_WRR_OK=$($udpFailoverFound['UDP_WRR_OK']) FAILOVER_PERMIT_OK=$($udpFailoverFound['FAILOVER_PERMIT_OK']) FAILOVER_RECONNECT_OK=$($udpFailoverFound['FAILOVER_RECONNECT_OK']) FAILOVER_TERMINAL_OK=$($udpFailoverFound['FAILOVER_TERMINAL_OK']) CACHE_RESUME_HIT=$($udpFailoverFound['CACHE_RESUME_HIT'])"
 }

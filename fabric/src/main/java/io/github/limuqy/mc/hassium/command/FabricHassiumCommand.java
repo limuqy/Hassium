@@ -2,6 +2,7 @@ package io.github.limuqy.mc.hassium.command;
 
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.arguments.StringArgumentType;
+import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.suggestion.Suggestions;
 import com.mojang.brigadier.suggestion.SuggestionsBuilder;
@@ -75,7 +76,53 @@ public class FabricHassiumCommand {
                                         .executes(FabricHassiumCommand::exportWithArgs)
                                 )
                         )
+                        .then(migrateSubtree())
         );
+        // /hassium migrate 别名（统一三端命令名；与 /hassiumc migrate 共用子树）
+        dispatcher.register(
+                ClientCommandManager.literal("hassium")
+                        .then(migrateSubtree())
+        );
+    }
+
+    /**
+     * migrate 子树（/hassiumc migrate 与 /hassium migrate 共用）。
+     * <p>
+     * 字面量子命令（list/status）必须注册在 endpoint 参数之前：brigadier 对同名输入
+     * 多候选等长匹配时取先注册者（"/hassium migrate list" 命中 list 而非 endpoint 参数）。
+     */
+    private static LiteralArgumentBuilder<FabricClientCommandSource> migrateSubtree() {
+        return ClientCommandManager.literal("migrate")
+                .executes(FabricHassiumCommand::migrateUsage)
+                .then(ClientCommandManager.literal("list")
+                        .executes(FabricHassiumCommand::migrateList))
+                .then(ClientCommandManager.literal("status")
+                        .executes(FabricHassiumCommand::migrateStatus))
+                .then(ClientCommandManager.argument("endpoint", StringArgumentType.greedyString())
+                        .executes(FabricHassiumCommand::migrateToEndpoint));
+    }
+
+    /** migrate 无参数：用法帮助 */
+    private static int migrateUsage(CommandContext<FabricClientCommandSource> context) {
+        context.getSource().sendFeedback(Component.literal(HassiumCommandHandler.migrateUsage()));
+        return 1;
+    }
+
+    private static int migrateList(CommandContext<FabricClientCommandSource> context) {
+        context.getSource().sendFeedback(Component.literal(HassiumCommandHandler.migrateList()));
+        return 1;
+    }
+
+    /** 解析端点参数：migrate <host:port> */
+    private static int migrateToEndpoint(CommandContext<FabricClientCommandSource> context) {
+        String endpoint = StringArgumentType.getString(context, "endpoint");
+        context.getSource().sendFeedback(Component.literal(HassiumCommandHandler.migrateTo(endpoint)));
+        return 1;
+    }
+
+    private static int migrateStatus(CommandContext<FabricClientCommandSource> context) {
+        context.getSource().sendFeedback(Component.literal(HassiumCommandHandler.migrateStatus()));
+        return 1;
     }
 
     private static CompletableFuture<Suggestions> suggestCachedServers(

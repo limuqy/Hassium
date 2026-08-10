@@ -184,7 +184,7 @@ class HandshakeCodecTest {
         ByteBuf buf = HandshakeCodec.encodeClientRequest(opts);
         HandshakeStateTail.C2S tail = new HandshakeStateTail.C2S(
                 new PlayerStateReport(10.5, 64.0, 20.25, 90.0f, 0.0f, "minecraft:overworld"),
-                true, new byte[] {1, 2, 3}, null);
+                true, new byte[] {1, 2, 3}, null, true);
         HandshakeStateTail.writeC2S(buf, tail);
         try {
             HandshakeCodec.ClientRequestOptions decoded = HandshakeCodec.decodeClientRequest(buf);
@@ -195,6 +195,7 @@ class HandshakeCodecTest {
             assertEquals(10.5, got.state().x(), 0.0);
             assertEquals("minecraft:overworld", got.state().dimension());
             assertArrayEquals(new byte[] {1, 2, 3}, got.resumeTicket());
+            assertTrue(got.lightComputeSupported(), "A7 lightComputeSupported 尾字段往返一致");
         } finally {
             buf.release();
         }

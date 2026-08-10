@@ -28,7 +28,7 @@ class PrewarmSessionTest {
     private static HandshakeStateTail.C2S resumeTail() {
         PlayerStateReport state = new PlayerStateReport(12.5, 64.0, -34.0, 180.0f, 12.0f, "minecraft:overworld");
         return new HandshakeStateTail.C2S(state, true, new byte[56],
-                java.util.UUID.fromString("00000000-0000-0000-0000-0000000000aa"));
+                java.util.UUID.fromString("00000000-0000-0000-0000-0000000000aa"), true);
     }
 
     @Test

@@ -2,7 +2,8 @@ package io.github.limuqy.mc.hassium.server;
 
 import io.github.limuqy.mc.hassium.compat.PacketCodecCompat;
 import io.github.limuqy.mc.hassium.compat.ResourceLocationCompat;
-import io.github.limuqy.mc.hassium.mixin.MixinConnectionGatewayServer;
+import io.github.limuqy.mc.hassium.server.GatewayConnectionAccessor;
+import io.github.limuqy.mc.hassium.network.HandshakeStateTail;
 import io.github.limuqy.mc.hassium.network.PlayerCompressionTracker;
 import io.github.limuqy.mc.hassium.network.PlayerStateReport;
 import io.github.limuqy.mc.hassium.network.ServerChunkPushManager;
@@ -66,7 +67,9 @@ import java.util.concurrent.ConcurrentHashMap;
  * 后会话经 attach 钩子直挂 vanilla 玩家 C2S sink（见 materializeResumeOnMain）。
  *
  * <p><b>续流路径</b>（全锚点）：会话登记（attach hook）→ {@link #materializeResumePlayer}
- * 主线程执行：按上报位置/维度创建 ServerPlayer（占位名；数据加载后续波）→
+ * 主线程执行：玩家名经 usercache/nameToIdCache 解析（兜底占位名 Hassium#&lt;uuid8&gt;），
+ * 磁盘 playerdata 数据加载（A6，先于 placeNewPlayer、muted 窗口内）→
+ * 按上报位置/维度创建 ServerPlayer →
  * muted placeNewPlayer（join S2C 风暴吞掉——续流客户端已持有世界，收到 Login 包会
  * 重载；server 侧注册/tracking/scoreboard 簿记全走 vanilla）→ unmute →
  * {@code ServerChunkPushManager.resyncTrackedChunks}（[RESUME] 日志可验证）→
@@ -193,8 +196,8 @@ public final class GatewayPlayerBridge {
         });
         embedded.pipeline().addLast("encoder", new ChannelOutboundHandlerAdapter() {
         });
-        ((MixinConnectionGatewayServer) (Object) connection).hassium$setGatewayChannel(embedded);
-        ((MixinConnectionGatewayServer) (Object) connection).hassium$setGatewayAddress(
+        ((GatewayConnectionAccessor) (Object) connection).hassium$setGatewayChannel(embedded);
+        ((GatewayConnectionAccessor) (Object) connection).hassium$setGatewayAddress(
                 new InetSocketAddress("127.0.0.1", 0));
         return connection;
     }
@@ -367,7 +370,7 @@ public final class GatewayPlayerBridge {
             ServerLoginPacketListenerImpl listener = new ServerLoginPacketListenerImpl(server, connection, false);
 #endif
             // setListener 在 1.21.11 非 public → 统一走 mixin accessor（各锚点字段同名 packetListener）
-            ((MixinConnectionGatewayServer) (Object) connection).hassium$setGatewayPacketListener(listener);
+            ((GatewayConnectionAccessor) (Object) connection).hassium$setGatewayPacketListener(listener);
             LoginBridgeState st = new LoginBridgeState(channel, connection);
             st.listener = listener;
             LOGGER.info("[GATEWAY] Login bridge started for {} — 等待 LOGIN_C2S 登录链", channel.remote());
@@ -427,6 +430,15 @@ public final class GatewayPlayerBridge {
             }
         }
         pumpPendingAttach(server);
+        // T4 B3：预热会话 TTL 清扫（registry 层；无续流完成的 resume 会话到期走 finishRemoval
+        // 完整清理链；TTL 读 HassiumConfigService.getMigrationPrewarmTtlMs()）
+        try {
+            GatewayServer.getInstance().registry().sweepExpired(System.currentTimeMillis(),
+                    io.github.limuqy.mc.hassium.config.HassiumConfigService.getInstance()
+                            .getMigrationPrewarmTtlMs());
+        } catch (Throwable t) {
+            LOGGER.error("[GATEWAY] prewarm TTL sweep failed", t);
+        }
     }
 
     /** 登录完成（1.20.1：ServerPlayer 已物化）：附着会话 + C2S sink。 */
@@ -514,24 +526,55 @@ public final class GatewayPlayerBridge {
             return;
         }
         PlayerStateReport state = session.stateReport();
+        boolean present = state != null && state.present();
+        // 名称来源定案（A6）：playerdata NBT 无 name 字段 → 玩家名缓存解析
+        // （<1.21.9 usercache.json GameProfileCache；1.21.9+ services().nameToIdCache()）；
+        // 无记录时兜底占位名 Hassium#<uuid8>（日志明确标记 fallback）
+        String name = PlayerDataStorage.resolveName(server, playerId);
+        boolean fallbackName = name == null;
+        if (fallbackName) {
+            name = "Hassium#" + playerId.toString().substring(0, 8);
+        }
         ServerLevel level = resolveLevel(server, state);
-        // 占位名：续流票据仅携带 UUID（T7 格式 56B 定长）；名字解析/数据加载 = 后续波
-        com.mojang.authlib.GameProfile profile = new com.mojang.authlib.GameProfile(
-                playerId, "Hassium#" + playerId.toString().substring(0, 8));
+        com.mojang.authlib.GameProfile profile = new com.mojang.authlib.GameProfile(playerId, name);
         ServerPlayer player = createServerPlayer(server, level, profile);
-        double y = state != null && state.present()
+        // 磁盘 playerdata 加载（先于 placeNewPlayer，muted 窗口内）：背包/末影箱/经验/
+        // 位置/维度（EntitySnapshotCompat.loadFromTag 封装 1.21.6+ ValueInput 差异）
+        PlayerDataStorage.LoadResult data = PlayerDataStorage.loadInto(server, player, name);
+        if (data.loaded()) {
+            LOGGER.info("[GATEWAY] Player {} resume data loaded (name={}) — 背包/末影箱/位置从 playerdata 恢复",
+                    playerId, name);
+        } else {
+            LOGGER.info("[GATEWAY] Player {} no playerdata on disk (name={}{}) — resume with empty data",
+                    playerId, name, fallbackName ? ", fallback name" : "");
+        }
+        // 维度：续流上报优先；上报缺失时回退磁盘存档维度（resolveLevel 已兜底主世界）
+        if (!present) {
+            ResourceKey<Level> diskDim = PlayerDataStorage.parseDimension(data.tag());
+            if (diskDim != null) {
+                ServerLevel diskLevel = server.getLevel(diskDim);
+                if (diskLevel != null) {
+                    level = diskLevel;
+                    player.setServerLevel(diskLevel);
+                }
+            }
+        }
+        // 位置：断线上报快照优先（更新鲜）；缺失时用磁盘 NBT 的 Pos（loadFromTag 已应用）
+        double y = present
                 ? state.y()
+                : (data.loaded()
+                ? player.getY()
                 : level
-#if MC_VER < MC_1_21_11
+#if MC_VER < MC_1_21_9
                 .getSharedSpawnPos()
 #else
                 .getRespawnData().pos()
 #endif
-                .getY();
-        player.setPos(state != null ? state.x() : 0.0, y,
-                state != null ? state.z() : 0.0);
-        player.setYRot(state != null ? state.yaw() : 0.0f);
-        player.setXRot(state != null ? state.pitch() : 0.0f);
+                .getY());
+        player.setPos(present ? state.x() : player.getX(), y,
+                present ? state.z() : player.getZ());
+        player.setYRot(present ? state.yaw() : player.getYRot());
+        player.setXRot(present ? state.pitch() : player.getXRot());
 
         // 能力标记先于物化：MixinPlayerChunkSender/MixinChunkHolder 拦截 gate =
         // PlayerCompressionTracker.isCompressionEnabled；推送链按 flag 走 hash 主链路
@@ -539,8 +582,9 @@ public final class GatewayPlayerBridge {
         push.setPlayerSeedGenSupported(playerId,
                 session.channel().handshakeOptions() != null
                         && session.channel().handshakeOptions().seedGenSupported());
-        // 帧握手未携带 lightComputeSupported（T11 尾部无此字段）→ 保守不剥光（全量光数据）
-        push.setPlayerLightComputeSupported(playerId, false);
+        // A7：帧握手尾携带 lightComputeSupported（旧端/缺尾默认 false）→ 剥光 gate 按客户端能力
+        HandshakeStateTail.C2S stateTail = session.channel().stateTail();
+        push.setPlayerLightComputeSupported(playerId, stateTail != null && stateTail.lightComputeSupported());
         PlayerCompressionTracker.enableCompression(player);
 
         // muted placeNewPlayer：join S2C 风暴吞掉（续流客户端已持有世界）；server 侧簿记全走 vanilla
@@ -548,7 +592,7 @@ public final class GatewayPlayerBridge {
         BridgeState bridge = bridgeConnection(connection, session.channel(), server, true);
         // listener 占位（placeNewPlayer 会覆盖为正式 listener；1.21.11 setListener 非 public → accessor）
         if (player.connection != null) {
-            ((MixinConnectionGatewayServer) (Object) connection).hassium$setGatewayPacketListener(player.connection);
+            ((GatewayConnectionAccessor) (Object) connection).hassium$setGatewayPacketListener(player.connection);
         }
         placeNewPlayer(server, connection, player);
         bridge.muted = false;
@@ -580,8 +624,10 @@ public final class GatewayPlayerBridge {
 #if MC_VER < MC_1_20_2
         server.getPlayerList().placeNewPlayer(connection, player);
 #elif MC_VER < MC_1_20_5
+        // 1.20.2+ placeNewPlayer 收 CommonListenerCookie（ClientInformation 参数移除）；
+        // 1.20.2–1.20.4 createInitial 仅单参，1.20.5+ 增 (GameProfile, boolean) 重载
         server.getPlayerList().placeNewPlayer(connection, player,
-                net.minecraft.server.level.ClientInformation.createDefault());
+                net.minecraft.server.network.CommonListenerCookie.createInitial(player.getGameProfile()));
 #else
         server.getPlayerList().placeNewPlayer(connection, player,
                 net.minecraft.server.network.CommonListenerCookie.createInitial(player.getGameProfile(), false));

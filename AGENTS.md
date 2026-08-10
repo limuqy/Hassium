@@ -23,6 +23,13 @@ Minecraft 1.20.1–1.21.11 多加载器模组（Fabric / Forge / NeoForge），Z
 
 PowerShell：始终写 `"-Pmc_ver=1.20.1"`，否则 `1.20.1` 会被截成 `1`。
 
+## Minecraft 源码查询
+
+查 MC 源码/映射/反编译时用 **minecraft-dev**（MCP，工具名 `minecraft_dev_*`）：
+- `get_minecraft_source` / `decompile_minecraft_version` / `search_minecraft_code` / `search_indexed`（先 `index_minecraft_version`）— 按版本查反编译源码
+- `find_mapping` — official / intermediary / yarn / mojmap 互查
+- `analyze_mixin` / `validate_access_transformer` / `validate_access_widener` / `analyze_mod_jar` — 验证 Mixin / AT / AW / 第三方 mod
+
 ## 模块与包地图
 
 ```

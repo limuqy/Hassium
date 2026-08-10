@@ -16,6 +16,9 @@ import io.netty.channel.embedded.EmbeddedChannel;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.nio.NioSocketChannel;
 import io.netty.handler.codec.ByteToMessageDecoder;
+import io.netty.handler.timeout.IdleState;
+import io.netty.handler.timeout.IdleStateEvent;
+import io.netty.handler.timeout.IdleStateHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -79,6 +82,7 @@ public final class OutboundConnection {
     private static final String ZSTD_DECODER_NAME = "zstdDecoder";
     private static final String ZSTD_ENCODER_NAME = "zstdEncoder";
     private static final String HANDLER_NAME = "gatewayInbound";
+    private static final String READ_TIMEOUT_NAME = "readTimeout";
 
     private final Listener listener;
     private final HandshakeCodec.ClientRequestOptions handshakeOptions;
@@ -86,6 +90,7 @@ public final class OutboundConnection {
     private final EventLoopGroup ownedGroup;
     private final AtomicBoolean closed = new AtomicBoolean(false);
     private final AtomicBoolean zstdInstalled = new AtomicBoolean(false);
+    private final AtomicBoolean readTimeoutInstalled = new AtomicBoolean(false);
 
     private volatile Channel channel;
     private volatile java.util.function.Consumer<ByteBuf> s2cPayloadConsumer;
@@ -93,6 +98,10 @@ public final class OutboundConnection {
     private volatile java.util.function.Consumer<ByteBuf> configS2cPayloadConsumer;
     private volatile java.lang.Runnable inboundActivityListener;
     private volatile boolean lastResumeAccepted;
+    /** Netty 读超时（N2；0=未启用）。 */
+    private volatile long readTimeoutMs;
+    /** 读超时处理器（调用方映射到迁移 fault 路径；禁止直降 onError→IDLE，契约风险 5）。 */
+    private volatile java.lang.Runnable readTimeoutHandler;
 
     private OutboundConnection(EventLoopGroup ownedGroup,
                                HandshakeCodec.ClientRequestOptions handshakeOptions,
@@ -190,13 +199,18 @@ public final class OutboundConnection {
         return lastResumeAccepted;
     }
 
+    /** 构造时携带的握手状态尾（T6 位置回退快照源：续流握手上报位置；未指定 → null）。 */
+    public HandshakeStateTail.C2S handshakeTail() {
+        return handshakeTail;
+    }
+
     /** 握手接受后装 ZSTD（复用现有编解码器；仅本网关管道新挂载）。阈值/等级与现有全局压缩同源。 */
     public void installZstd(int threshold, int level) {
         Channel ch = channel;
         if (ch == null || !zstdInstalled.compareAndSet(false, true)) {
             return;
         }
-        ch.pipeline().addBefore(DECODER_NAME, ZSTD_DECODER_NAME, new ZstdContextDecoder(threshold, true, false));
+        ch.pipeline().addBefore(DECODER_NAME, ZSTD_DECODER_NAME, new ZstdContextDecoder(threshold, true, false, true));
         ch.pipeline().addBefore(DECODER_NAME, ZSTD_ENCODER_NAME, new SkipAwareZstdEncoder(threshold, level, false));
         LOGGER.info("Hassium: Gateway outbound ZSTD installed (threshold={}, level={})", threshold, level);
     }
@@ -223,6 +237,40 @@ public final class OutboundConnection {
      */
     public void setInboundActivityListener(java.lang.Runnable listener) {
         this.inboundActivityListener = listener;
+    }
+
+    /**
+     * 启用 Netty 读超时（N2 快速失效；幂等，重复调用覆盖参数）。
+     * <p>
+     * 入站静默超过 {@code idleMs}（任意帧均重置计时）→ 在 event loop 触发
+     * {@code onReadTimeout}。调用方必须把读超时映射到<b>迁移 fault 路径</b>
+     * （Sink.onFault → 迁移/快速失败），<b>禁止</b>直降 onError → IDLE——
+     * 否则快速失效识别会把玩家踢下线而非迁移（契约风险 5）。
+     * <p>
+     * 连接尚未 active 时仅记录参数，channelActive 后自动安装。
+     */
+    public void enableReadTimeout(long idleMs, java.lang.Runnable onReadTimeout) {
+        if (idleMs <= 0 || onReadTimeout == null) {
+            return;
+        }
+        this.readTimeoutMs = idleMs;
+        this.readTimeoutHandler = onReadTimeout;
+        installReadTimeoutIfPossible();
+    }
+
+    private void installReadTimeoutIfPossible() {
+        long idleMs = readTimeoutMs;
+        if (idleMs <= 0 || readTimeoutHandler == null || readTimeoutInstalled.get()) {
+            return;
+        }
+        Channel ch = channel;
+        if (ch == null || !ch.isActive()) {
+            return; // onChannelActive 时再装
+        }
+        if (readTimeoutInstalled.compareAndSet(false, true)) {
+            ch.pipeline().addFirst(READ_TIMEOUT_NAME, new IdleStateHandler(0, 0, idleMs, TimeUnit.MILLISECONDS));
+            LOGGER.debug("Hassium: Gateway outbound read timeout installed ({}ms)", idleMs);
+        }
     }
 
     /**
@@ -287,10 +335,25 @@ public final class OutboundConnection {
     private void onChannelActive(ChannelHandlerContext ctx) {
         channel = ctx.channel();
         LOGGER.info("Hassium: Gateway outbound control channel active ({})", ctx.channel().remoteAddress());
+        installReadTimeoutIfPossible();
         if (handshakeOptions != null) {
             sendHandshake(handshakeOptions);
         }
         listener.onOpen(this);
+    }
+
+    /** Netty 读超时（READER_IDLE）：转发注册的 fault 处理器（不在本层触发 onError）。 */
+    private void onReadTimeout() {
+        java.lang.Runnable handler = readTimeoutHandler;
+        if (handler == null) {
+            LOGGER.warn("Hassium: Gateway outbound read timeout, no handler registered");
+            return;
+        }
+        try {
+            handler.run();
+        } catch (Throwable t) {
+            LOGGER.error("Hassium: Gateway read-timeout handler failed", t);
+        }
     }
 
     private void onHandshakeFrame(ByteBuf payload) {
@@ -395,6 +458,15 @@ public final class OutboundConnection {
         @Override
         public void channelInactive(ChannelHandlerContext ctx) {
             connection.onChannelInactive();
+        }
+
+        @Override
+        public void userEventTriggered(ChannelHandlerContext ctx, Object evt) {
+            if (evt instanceof IdleStateEvent idle && idle.state() == IdleState.READER_IDLE) {
+                connection.onReadTimeout();
+            } else {
+                ctx.fireUserEventTriggered(evt);
+            }
         }
 
         @Override

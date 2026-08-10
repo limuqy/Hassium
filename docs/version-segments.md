@@ -35,8 +35,10 @@
 
 ```
 MC_1_20_2
+MC_1_20_3
 MC_1_20_4
 MC_1_20_5
+MC_1_20_6
 MC_1_21_1
 MC_1_21_2
 MC_1_21_5
@@ -49,7 +51,8 @@ MC_1_21_11
 
 历史遗留：代码中偶见 `MC_1_21_4`（与 `MC_1_21_5` 等价边界）。新代码禁止新增；清扫时统一为 `MC_1_21_5`。
 
-> **关于 `MC_1_20_4`**：这是 NeoForge 网络子系统在段 B 内的**子分界**（仅影响 neoforge 模块）。NeoForge 20.4 移除 SimpleChannel，1.20.4 必须改用 `RegisterPayloadHandlerEvent` + `CustomPacketPayload.write/id`；段 B 的其它版本（1.20.2/1.20.3）仍走 SimpleChannel。引入此子分界是技术必要，非"碎片边界"。
+> **关于 `MC_1_20_3`**：`MinecraftServer.getAverageTickTime()` 在 1.20.3 改名 `getAverageTickTimeNanos()`（返回值 float→long，纳秒），ServerLoadReporter 需此子分界（历史 commit edca91c 亦曾以此边界处理 tickTimes）。
+> **关于 `MC_1_20_4` / `MC_1_20_6`**：均为 NeoForge 网络子系统在段 B/C 内的**子分界**（仅影响 neoforge 模块）。NeoForge 20.4 移除 SimpleChannel，1.20.4 必须改用 `RegisterPayloadHandlerEvent` + `CustomPacketPayload.write/id`；NeoForge 20.6 的 `IPayloadContext` 移除 `connection()` 改 `listener()`（NeoForgeNetworkManager:2331 使用）。引入这些子分界是技术必要，非"碎片边界"。
 
 ---
 

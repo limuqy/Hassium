@@ -13,6 +13,7 @@ import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.embedded.EmbeddedChannel;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -38,6 +39,17 @@ class GatewayServerTest {
 
     private final List<UUID> usedUuids = new ArrayList<>();
 
+    /** 1.20.5+（1.21.2+ 的 bootstrap 检查机制）注册表访问需先 Bootstrap；缺失时首个
+     *  触发 ChunkStatus 初始化的握手（真实 TCP/embedded 路径）抛 "Not bootstrapped"
+     *  并污染 BuiltInRegistries 初始化缓存（连带 GatewaySmokeTest @BeforeAll 失败）。 */
+#if MC_VER >= MC_1_20_5
+    @BeforeAll
+    static void bootstrap() {
+        net.minecraft.SharedConstants.setVersion(net.minecraft.DetectedVersion.BUILT_IN);
+        net.minecraft.server.Bootstrap.bootStrap();
+    }
+#endif
+
     private static HandshakeCodec.ClientRequestOptions testOptions() {
         return new HandshakeCodec.ClientRequestOptions(
                 Constants.CURRENT_PROTOCOL_VERSION, Constants.MOD_VERSION,
@@ -60,7 +72,7 @@ class GatewayServerTest {
         if (resumeRequested) {
             HandshakeStateTail.writeC2S(buf, new HandshakeStateTail.C2S(
                     new PlayerStateReport(10.5, 64.0, 20.25, 90.0f, 0.0f, "minecraft:overworld"),
-                    true, signedTicket(playerId, epoch), playerId));
+                    true, signedTicket(playerId, epoch), playerId, true));
         }
         return buf;
     }
@@ -119,6 +131,8 @@ class GatewayServerTest {
         assertEquals(epoch, session.resumeEpoch());
         assertTrue(channel.resumeAccepted());
         assertTrue(channel.state() == GatewayChannel.State.ACTIVE);
+        assertTrue(channel.stateTail().lightComputeSupported(),
+                "A7：帧握手尾 lightComputeSupported 应传递到会话（客户端能力 → 剥光 gate）");
 
         // T7 分支被帧侧触发：推送链续流标记 + 位置上报入库
         assertTrue(ServerChunkPushManager.getInstance().isPlayerResumeActive(playerId));

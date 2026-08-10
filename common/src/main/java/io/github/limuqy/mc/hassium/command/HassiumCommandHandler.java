@@ -6,6 +6,11 @@ import io.github.limuqy.mc.hassium.metrics.HassiumMetricsImpl;
 import io.github.limuqy.mc.hassium.metrics.MetricsTextFormatter;
 import io.github.limuqy.mc.hassium.metrics.NetworkStats;
 import io.github.limuqy.mc.hassium.metrics.VanillaZlibEstimator;
+import io.github.limuqy.mc.hassium.network.core.NetworkCore;
+import io.github.limuqy.mc.hassium.network.core.NetworkCoreState;
+import io.github.limuqy.mc.hassium.network.core.migration.MigrationEndpoint;
+import io.github.limuqy.mc.hassium.network.core.migration.MigrationEngine;
+import io.github.limuqy.mc.hassium.network.core.migration.MigrationPolicy;
 import net.minecraft.client.Minecraft;
 
 import java.nio.file.Files;
@@ -352,5 +357,114 @@ public class HassiumCommandHandler {
     /** 查询当前导出状态。 */
     public static String getCacheExportStatus() {
         return "§a无导出任务（目录拷贝同步完成，见聊天回报）§r";
+    }
+
+    // ==================== /hassium migrate（B4 迁移命令） ====================
+
+    /** 客户端命令上下文检查：migrate 依赖客户端进程内的 NetworkCore 网关单例。 */
+    private static boolean isClientContext() {
+        return Minecraft.getInstance() != null;
+    }
+
+    private static String clientOnlyMessage() {
+        return "§c/hassium migrate 是客户端命令，需在客户端执行§r";
+    }
+
+    /** migrate 无参数：用法帮助。 */
+    public static String migrateUsage() {
+        return "§6=== /hassium migrate 用法 ===§r\n" +
+                "§e/hassium migrate list§r — 列出目标端点池（主控握手通告）\n" +
+                "§e/hassium migrate <host:port>§r — 迁移到指定端点（预热感知全流程，演练用）\n" +
+                "§e/hassium migrate status§r — 显示网关状态 / 当前端点 / 最近续流 / 策略参数";
+    }
+
+    /** migrate list：列出 MigrationEngine.targetEndpoints() 端点池。 */
+    public static String migrateList() {
+        if (!isClientContext()) {
+            return clientOnlyMessage();
+        }
+        NetworkCore core = NetworkCore.getInstance();
+        List<MigrationEndpoint> targets = core.migration().targetEndpoints();
+        if (targets.isEmpty()) {
+            return "§6=== Hassium 迁移目标端点 ===§r\n" +
+                    "§e端点池:§r §7空§r\n" +
+                    "§7（连接主控后经握手通告填充；也可直接 /hassium migrate <host:port> 指定）§r";
+        }
+        StringBuilder sb = new StringBuilder("§6=== Hassium 迁移目标端点 ===§r\n");
+        for (MigrationEndpoint ep : targets) {
+            sb.append("§7 - §r§e").append(ep).append("§r\n");
+        }
+        return sb.toString();
+    }
+
+    /**
+     * migrate <host:port>：触发预热感知迁移（NetworkCore.migrateTo）。
+     * <p>
+     * 语义选择：命令走 {@link NetworkCore#migrateTo}（预热感知全流程——先建目标主控
+     * 预热会话，就绪后重叠切换；预热禁用/失败自动回退直接续流连接），而非
+     * {@link NetworkCore#migrateToImmediate}（故障路径直接切换，不预热）。
+     * 演练用立即切换可后续追加子命令。
+     */
+    public static String migrateTo(String hostPort) {
+        if (!isClientContext()) {
+            return clientOnlyMessage();
+        }
+        if (hostPort == null || hostPort.indexOf(':') < 0) {
+            return "§c端点格式非法: " + hostPort + "（必须为 host:port，如 127.0.0.1:25566；缺失端口拒绝执行，避免误迁移到默认端口）§r";
+        }
+        NetworkCore core = NetworkCore.getInstance();
+        NetworkCoreState st = core.state();
+        if (st != NetworkCoreState.ACTIVE) {
+            return "§c迁移未触发：网关状态 " + st + "（迁移需从 ACTIVE 发起，未连接/切换中不可用）§r";
+        }
+        final MigrationEndpoint endpoint;
+        try {
+            endpoint = MigrationEndpoint.parse(hostPort.trim());
+        } catch (IllegalArgumentException e) {
+            return "§c端点格式非法: " + hostPort + "（应为 host:port，如 127.0.0.1:25566）§r";
+        }
+        core.migrateTo(endpoint);
+        return "§a迁移已触发（预热感知）→ §e" + endpoint + "§r\n" +
+                "§7状态 MIGRATING → 新主控握手接受后恢复 ACTIVE（/hassium migrate status 查看）§r";
+    }
+
+    /** migrate status：网关状态 + 当前端点 + 最近续流 + 端点池 + 策略参数。 */
+    public static String migrateStatus() {
+        if (!isClientContext()) {
+            return clientOnlyMessage();
+        }
+        NetworkCore core = NetworkCore.getInstance();
+        MigrationEngine engine = core.migration();
+        MigrationPolicy p = engine.policy();
+        StringBuilder sb = new StringBuilder();
+        sb.append("§6=== Hassium 迁移状态 ===§r\n");
+        sb.append("§e网关状态:§r ").append(core.state()).append('\n');
+        String endpoint = core.lastEndpoint();
+        sb.append("§e当前端点:§r ").append(endpoint != null ? endpoint : "§7未连接§r").append('\n');
+        sb.append(core.lastResumeAccepted()
+                ? "§e最近续流:§r §a已接受§r\n"
+                : "§e最近续流:§r §7未接受§r\n");
+        List<MigrationEndpoint> targets = engine.targetEndpoints();
+        if (targets.isEmpty()) {
+            sb.append("§e目标端点池:§r §7空（等待主控握手通告）§r\n");
+        } else {
+            sb.append("§e目标端点池:§r ");
+            for (int i = 0; i < targets.size(); i++) {
+                if (i > 0) {
+                    sb.append(", ");
+                }
+                sb.append(targets.get(i));
+            }
+            sb.append('\n');
+        }
+        String window = p.maintenanceWindow();
+        sb.append("§e策略:§r TPS<").append(p.minTps())
+                .append(" | 负载>").append(p.maxLoadAverage())
+                .append(" | 维护窗口 ").append(window == null || window.isBlank() ? "禁用" : window)
+                .append(" | 心跳 ").append(p.heartbeatIntervalMs()).append("ms")
+                .append(" | 静默超时 ").append(p.resolvedSilentTimeoutMs()).append("ms")
+                .append(" | 空闲窗口 ").append(p.idleWindowMs()).append("ms")
+                .append(" | 预热 ").append(p.prewarmEnabled() ? "开" : "关").append('\n');
+        return sb.toString();
     }
 }

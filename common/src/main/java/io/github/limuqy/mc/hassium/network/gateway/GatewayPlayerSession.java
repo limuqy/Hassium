@@ -61,6 +61,14 @@ public final class GatewayPlayerSession {
         return stateReport;
     }
 
+    /**
+     * 会话登记时刻（构造即登记，见 {@link GatewayChannel#attachPlayer}）。
+     *
+     * <p>TTL 起算点（B3）：resume 会话按此值起算预热 TTL（{@code master.migrationPrewarmTtlMs}，
+     * {@link GatewayPlayerRegistry#sweepExpired} 清扫）——登记后无续流完成（C2S sink 未挂载）
+     * 超过 TTL 即移除。续流完成 = {@link #setC2SSink} 挂载（物化成功），完成者归通道断连清理，
+     * 不参与 TTL。
+     */
     public long registeredAtMillis() {
         return registeredAtMillis;
     }

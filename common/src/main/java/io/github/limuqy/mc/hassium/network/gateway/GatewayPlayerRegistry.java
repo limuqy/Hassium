@@ -101,6 +101,47 @@ public final class GatewayPlayerRegistry {
         return session;
     }
 
+    /**
+     * 预热会话 TTL 清扫（B3，服务端 tick 泵调用）：移除「无续流完成」且超时的 resume 会话。
+     *
+     * <p>判定（风险 8 裁决，TTL 起算点 = {@link GatewayPlayerSession#registeredAtMillis()}）：
+     * 仅 resume 会话（prewarm/续流握手登记）参与 TTL；「续流完成」= C2S sink 已挂载
+     * （物化成功、玩家进入世界）——完成者的生命周期归通道断连清理路径（{@link GatewayChannel#close}），
+     * TTL 不清。新会话覆盖旧会话后，旧会话不在本表内（{@link #register} put 覆盖），清扫
+     * 天然只针对当前登记会话——续流成功后旧会话停止计时，不误伤正常续流。
+     *
+     * <p>移除走 {@link #remove(GatewayPlayerSession)}（身份守卫 + finishRemoval 完整清理链：
+     * ServerChunkPushManager.removePlayer + removal hook + detachPlayer，不另起清理逻辑）。
+     *
+     * @param nowMs 当前时刻（tick 泵传 System.currentTimeMillis()；测试可注入模拟到期）
+     * @param ttlMs 预热会话 TTL（HassiumConfigService.getMigrationPrewarmTtlMs()，默认 60000）
+     * @return 本轮移除的会话数（测试/诊断）
+     */
+    public int sweepExpired(long nowMs, long ttlMs) {
+        if (ttlMs <= 0) {
+            return 0; // 配置禁用防御（键 min=1000，正常不可达）
+        }
+        int swept = 0;
+        for (GatewayPlayerSession session : sessions.values()) {
+            try {
+                if (session == null || !session.resume() || session.c2sSink() != null) {
+                    continue; // 非 resume / 续流已完成 → 归断连清理路径
+                }
+                if (nowMs - session.registeredAtMillis() <= ttlMs) {
+                    continue; // 未到期
+                }
+                if (remove(session) != null) {
+                    swept++;
+                    LOGGER.info("[GATEWAY] Player session TTL expired: {} (age={}ms, ttl={}ms) — 无续流完成，清理",
+                            session.playerId(), nowMs - session.registeredAtMillis(), ttlMs);
+                }
+            } catch (Throwable t) {
+                LOGGER.error("[GATEWAY] TTL sweep failed for {}", session.playerId(), t);
+            }
+        }
+        return swept;
+    }
+
     /** 平台侧 per-player 清理钩子（如 PlayerCompressionTracker.removePlayer）；幂等注册。 */
     public void addPlayerRemovalHook(Consumer<UUID> hook) {
         if (hook != null) {

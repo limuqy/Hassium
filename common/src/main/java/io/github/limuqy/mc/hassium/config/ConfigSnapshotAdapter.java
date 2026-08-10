@@ -72,7 +72,15 @@ public final class ConfigSnapshotAdapter {
                 .with(ConfigSchema.MASTER_MIN_PUSH_THREADS, master.minPushThreads())
                 .with(ConfigSchema.MASTER_MAX_PUSH_THREADS, master.maxPushThreads())
                 .with(ConfigSchema.MASTER_CONTROL_ENDPOINTS, master.controlReachableEndpoints().stream().map(DataPlaneEndpointConfig::encodeReachable).toList())
+                .with(ConfigSchema.CLIENT_MASTER_CONTROL_ENDPOINTS, master.controlReachableEndpoints().stream().map(DataPlaneEndpointConfig::encodeReachable).toList())
                 .with(ConfigSchema.MASTER_MIGRATION_FAULT_TIMEOUT_MS, master.migrationFaultTimeoutMs())
+                .with(ConfigSchema.MASTER_MIGRATION_MIN_TPS, master.migrationMinTps())
+                .with(ConfigSchema.MASTER_MIGRATION_MAX_LOAD_AVERAGE, master.migrationMaxLoadAverage())
+                .with(ConfigSchema.MASTER_MIGRATION_MAINTENANCE_WINDOW, master.migrationMaintenanceWindow())
+                .with(ConfigSchema.MASTER_MIGRATION_HEARTBEAT_INTERVAL_MS, master.migrationHeartbeatIntervalMs())
+                .with(ConfigSchema.MASTER_MIGRATION_IDLE_WINDOW_MS, master.migrationIdleWindowMs())
+                .with(ConfigSchema.MASTER_MIGRATION_SILENT_TIMEOUT_MS, master.migrationSilentTimeoutMs())
+                .with(ConfigSchema.MASTER_MIGRATION_PREWARM_TTL_MS, master.migrationPrewarmTtlMs())
                 .with(ConfigSchema.SERVER_CHUNK_SEED_GEN_ENABLED, chunk.seedGenEnabled())
                 .with(ConfigSchema.DATAPLANE_ENABLED, master.dataPlane().enabled())
                 .with(ConfigSchema.DATAPLANE_UDP_LISTENERS, master.dataPlane().udpListeners().stream().map(DataPlaneEndpointConfig::encodeListener).toList());
@@ -121,7 +129,8 @@ public final class ConfigSnapshotAdapter {
                 seedGenValue(values, physicalClient, ConfigSchema.CLIENT_CHUNK_SEED_GEN_ENABLED, ConfigSchema.SERVER_CHUNK_SEED_GEN_ENABLED),
                 values.get(ConfigSchema.CHUNK_LIGHT_STRIP));
 
-        List<HassiumConfig.ReachableEndpoint> controlEndpoints = values.get(ConfigSchema.MASTER_CONTROL_ENDPOINTS).stream()
+        List<HassiumConfig.ReachableEndpoint> controlEndpoints = endpointValue(values, physicalClient,
+                ConfigSchema.CLIENT_MASTER_CONTROL_ENDPOINTS, ConfigSchema.MASTER_CONTROL_ENDPOINTS).stream()
                 .map(DataPlaneEndpointConfig::decodeReachable).toList();
         List<HassiumConfig.UdpListenerConfig> listeners = values.get(ConfigSchema.DATAPLANE_UDP_LISTENERS).stream()
                 .map(DataPlaneEndpointConfig::decodeListener).toList();
@@ -138,7 +147,15 @@ public final class ConfigSnapshotAdapter {
                 values.get(ConfigSchema.MASTER_MAX_CHUNKS_PER_TICK), values.get(ConfigSchema.MASTER_SERVER_PUSH_THREADS),
                 values.get(ConfigSchema.MASTER_DYNAMIC_THREADS), values.get(ConfigSchema.MASTER_MIN_PUSH_THREADS),
                 values.get(ConfigSchema.MASTER_MAX_PUSH_THREADS),
-                controlEndpoints, values.get(ConfigSchema.MASTER_MIGRATION_FAULT_TIMEOUT_MS), dataPlane);
+                controlEndpoints, values.get(ConfigSchema.MASTER_MIGRATION_FAULT_TIMEOUT_MS),
+                values.get(ConfigSchema.MASTER_MIGRATION_MIN_TPS),
+                values.get(ConfigSchema.MASTER_MIGRATION_MAX_LOAD_AVERAGE),
+                values.get(ConfigSchema.MASTER_MIGRATION_MAINTENANCE_WINDOW),
+                values.get(ConfigSchema.MASTER_MIGRATION_HEARTBEAT_INTERVAL_MS),
+                values.get(ConfigSchema.MASTER_MIGRATION_IDLE_WINDOW_MS),
+                values.get(ConfigSchema.MASTER_MIGRATION_SILENT_TIMEOUT_MS),
+                values.get(ConfigSchema.MASTER_MIGRATION_PREWARM_TTL_MS),
+                dataPlane);
         HassiumConfig.CompatConfig compat = new HassiumConfig.CompatConfig(
                 values.get(ConfigSchema.COMPAT_REQUIRE_CLIENT_MOD), values.get(ConfigSchema.COMPAT_AUTO_DOWNGRADE));
         HassiumConfig.DebugConfig debug = new HassiumConfig.DebugConfig(
@@ -165,6 +182,12 @@ public final class ConfigSnapshotAdapter {
 
     private static boolean seedGenValue(ConfigValues values, boolean physicalClient,
                                         ConfigKey<Boolean> clientKey, ConfigKey<Boolean> serverKey) {
+        return values.get(physicalClient ? clientKey : serverKey);
+    }
+
+    /** 双端同名键 master.controlReachableEndpoints：物理客户端读 CLIENT 副本，专用服读 SERVER 原键。 */
+    private static List<String> endpointValue(ConfigValues values, boolean physicalClient,
+                                              ConfigKey<List<String>> clientKey, ConfigKey<List<String>> serverKey) {
         return values.get(physicalClient ? clientKey : serverKey);
     }
 

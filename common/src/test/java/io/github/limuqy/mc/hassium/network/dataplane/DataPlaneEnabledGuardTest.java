@@ -57,7 +57,11 @@ class DataPlaneEnabledGuardTest {
                 master.enableCompactHeader(), master.compressionBlacklist(), master.metricsEnabled(),
                 master.maxChunksPerTick(), master.serverChunkPushThreads(), master.dynamicThreadPoolEnabled(),
                 master.minPushThreads(), master.maxPushThreads(),
-                master.controlReachableEndpoints(), master.migrationFaultTimeoutMs(), replacement);
+                master.controlReachableEndpoints(), master.migrationFaultTimeoutMs(),
+                master.migrationMinTps(), master.migrationMaxLoadAverage(),
+                master.migrationMaintenanceWindow(), master.migrationHeartbeatIntervalMs(),
+                master.migrationIdleWindowMs(), master.migrationSilentTimeoutMs(),
+                master.migrationPrewarmTtlMs(), replacement);
         return new HassiumConfig(config.storage(), config.chunk(), config.net(), updatedMaster,
                 config.compat(), config.debug());
     }
@@ -101,7 +105,11 @@ class DataPlaneEnabledGuardTest {
                 master.enableCompactHeader(), master.compressionBlacklist(), master.metricsEnabled(),
                 master.maxChunksPerTick(), master.serverChunkPushThreads(), master.dynamicThreadPoolEnabled(),
                 master.minPushThreads(), master.maxPushThreads(),
-                endpoints, master.migrationFaultTimeoutMs(), master.dataPlane());
+                endpoints, master.migrationFaultTimeoutMs(),
+                master.migrationMinTps(), master.migrationMaxLoadAverage(),
+                master.migrationMaintenanceWindow(), master.migrationHeartbeatIntervalMs(),
+                master.migrationIdleWindowMs(), master.migrationSilentTimeoutMs(),
+                master.migrationPrewarmTtlMs(), master.dataPlane());
         return new HassiumConfig(config.storage(), config.chunk(), config.net(), updatedMaster,
                 config.compat(), config.debug());
     }

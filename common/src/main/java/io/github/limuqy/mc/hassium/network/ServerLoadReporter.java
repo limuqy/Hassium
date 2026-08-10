@@ -65,7 +65,7 @@ public final class ServerLoadReporter {
             return null;
         }
         double systemLoad = ManagementFactory.getOperatingSystemMXBean().getSystemLoadAverage();
-#if MC_VER < MC_1_21_1
+#if MC_VER < MC_1_20_3
         float avgTickMs = server.getAverageTickTime();
 #else
         float avgTickMs = server.getAverageTickTimeNanos() / 1_000_000.0f;

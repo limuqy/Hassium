@@ -103,7 +103,7 @@ class MigrationEngineTest {
     @Test
     void policyThresholds() {
         MigrationEngine engine = engine();
-        engine.setPolicy(new MigrationPolicy(15.0, 4.0, "", 5000L, 60000L, true));
+        engine.setPolicy(new MigrationPolicy(15.0, 4.0, "", 5000L, 10000L, 60000L, 10000L, 0.5, true));
 
         assertFalse(engine.evaluatePolicy(report(2.0, 19.5)).migrate(), "健康负载不触发");
         assertTrue(engine.evaluatePolicy(report(2.0, 12.0)).migrate(), "TPS 低于阈值触发");
@@ -119,12 +119,12 @@ class MigrationEngineTest {
         long now = java.time.LocalDateTime.of(2026, 8, 9, 1, 30)
                 .atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli();
         clock.set(now);
-        engine.setPolicy(new MigrationPolicy(15.0, 4.0, "01:00-02:00", 5000L, 60000L, true));
+        engine.setPolicy(new MigrationPolicy(15.0, 4.0, "01:00-02:00", 5000L, 10000L, 60000L, 10000L, 0.5, true));
         assertTrue(engine.evaluatePolicy(report(2.0, 19.5)).migrate(), "窗口内健康负载也触发（维护）");
-        engine.setPolicy(new MigrationPolicy(15.0, 4.0, "03:00-04:00", 5000L, 60000L, true));
+        engine.setPolicy(new MigrationPolicy(15.0, 4.0, "03:00-04:00", 5000L, 10000L, 60000L, 10000L, 0.5, true));
         assertFalse(engine.evaluatePolicy(report(2.0, 19.5)).migrate(), "窗口外不触发");
         // 跨午夜窗口
-        engine.setPolicy(new MigrationPolicy(15.0, 4.0, "23:00-02:00", 5000L, 60000L, true));
+        engine.setPolicy(new MigrationPolicy(15.0, 4.0, "23:00-02:00", 5000L, 10000L, 60000L, 10000L, 0.5, true));
         assertTrue(engine.evaluatePolicy(report(2.0, 19.5)).migrate(), "跨午夜窗口覆盖 01:30");
     }
 
@@ -133,7 +133,7 @@ class MigrationEngineTest {
         MigrationEngine engine = engine();
         AtomicReference<String> trigger = new AtomicReference<>();
         engine.setSink(recordingSink(null, trigger));
-        engine.setPolicy(new MigrationPolicy(15.0, 4.0, "", 5000L, 60000L, true));
+        engine.setPolicy(new MigrationPolicy(15.0, 4.0, "", 5000L, 10000L, 60000L, 10000L, 0.5, true));
 
         engine.onLoadReport(report(2.0, 19.5));
         assertNull(trigger.get(), "健康负载不触发 sink");
@@ -150,7 +150,8 @@ class MigrationEngineTest {
         MigrationEngine engine = engine();
         AtomicLong faults = new AtomicLong();
         engine.setSink(recordingSink(faults, null));
-        engine.setPolicy(new MigrationPolicy(15.0, 4.0, "", 5000L, 60000L, true));
+        // N2：silentTimeoutMs 默认 10000（失效识别 ≤15s；显式配置优先于 faultTimeoutMs）
+        engine.setPolicy(new MigrationPolicy(15.0, 4.0, "", 5000L, 10000L, 60000L, 10000L, 0.5, true));
 
         long t0 = clock.get();
         OutboundConnection conn = OutboundConnection.openEmbedded(
@@ -194,14 +195,133 @@ class MigrationEngineTest {
         clock.set(t0 + 6000);
         engine.noteInboundActivity();
 
-        // 静默超过 faultTimeout（60000）→ 故障触发一次
-        clock.set(t0 + 6000 + 60000 + 1);
+        // 静默超过生效静默超时（10000，默认 → 失效识别 ≤15s）→ 故障触发一次
+        clock.set(t0 + 6000 + 10000 + 1);
         engine.tick(clock.get());
         assertEquals(1, faults.get(), "心跳超时触发故障");
         engine.tick(clock.get());
         assertEquals(1, faults.get(), "故障只触发一次（去重）");
         assertEquals(1, engine.faultsDetected());
         conn.close();
+    }
+
+    // ==================== B2/N2：新参数生效 ====================
+
+    @Test
+    void heartbeatIntervalFromPolicy() {
+        MigrationEngine engine = engine();
+        AtomicLong faults = new AtomicLong();
+        engine.setSink(recordingSink(faults, null));
+        engine.setPolicy(new MigrationPolicy(15.0, 4.0, "", 2000L, 60000L, 60000L, 10000L, 0.5, true));
+
+        long t0 = clock.get();
+        OutboundConnection conn = OutboundConnection.openEmbedded(
+                HandshakeCodec.ClientRequestOptions.defaults(),
+                new OutboundConnection.Listener() {
+                    @Override
+                    public void onOpen(OutboundConnection c) {
+                    }
+
+                    @Override
+                    public void onHandshakeAccepted(HandshakeCodec.ServerResponse r) {
+                    }
+
+                    @Override
+                    public void onHandshakeRejected(String reason) {
+                    }
+
+                    @Override
+                    public void onError(Throwable cause) {
+                    }
+                });
+        engine.bindHeartbeatTarget(conn);
+        EmbeddedChannel embedded = (EmbeddedChannel) conn.channel();
+        embedded.readOutbound(); // 丢弃握手帧
+
+        // 周期 2000ms：t0+2000 未到 → 不发；t0+2000 到点 → 发
+        clock.set(t0 + 1999);
+        engine.tick(clock.get());
+        assertNull(embedded.readOutbound(), "2000ms 周期未到不应发 HEARTBEAT");
+        clock.set(t0 + 2000);
+        engine.tick(clock.get());
+        ByteBuf frameBuf = embedded.readOutbound();
+        assertNotNull(frameBuf, "2000ms 周期到点应发 HEARTBEAT");
+        try {
+            ControlFrameCodec.Frame frame = ControlFrameCodec.tryDecodeFrame(frameBuf);
+            assertEquals(ControlFrameType.HEARTBEAT, frame.type());
+            frame.payload().release();
+        } finally {
+            frameBuf.release();
+        }
+        conn.close();
+    }
+
+    @Test
+    void silentTimeoutFallbackToFaultTimeoutWhenUnset() {
+        MigrationEngine engine = engine();
+        AtomicLong faults = new AtomicLong();
+        engine.setSink(recordingSink(faults, null));
+        // silentTimeoutMs 仍为默认（未配置）→ 回退显式配置的 faultTimeoutMs=30000（既有 master.migrationFaultTimeoutMs 语义）
+        engine.setPolicy(new MigrationPolicy(15.0, 4.0, "", 5000L, 10000L, 30000L, 10000L, 0.5, true));
+        assertEquals(30000L, engine.policy().resolvedSilentTimeoutMs(), "未配置 silentTimeout 时回退 faultTimeout");
+
+        long t0 = clock.get();
+        OutboundConnection conn = OutboundConnection.openEmbedded(
+                HandshakeCodec.ClientRequestOptions.defaults(),
+                new OutboundConnection.Listener() {
+                    @Override
+                    public void onOpen(OutboundConnection c) {
+                    }
+
+                    @Override
+                    public void onHandshakeAccepted(HandshakeCodec.ServerResponse r) {
+                    }
+
+                    @Override
+                    public void onHandshakeRejected(String reason) {
+                    }
+
+                    @Override
+                    public void onError(Throwable cause) {
+                    }
+                });
+        engine.bindHeartbeatTarget(conn);
+        EmbeddedChannel embedded = (EmbeddedChannel) conn.channel();
+        embedded.readOutbound();
+
+        // 10000 未触发（回退语义），30000+1 触发
+        clock.set(t0 + 10000 + 1);
+        engine.tick(clock.get());
+        assertEquals(0, faults.get(), "回退 faultTimeout=30000 时 10s 不触发");
+        clock.set(t0 + 30000 + 1);
+        engine.tick(clock.get());
+        assertEquals(1, faults.get(), "回退 faultTimeout=30000 后 30s 触发");
+        conn.close();
+    }
+
+    @Test
+    void idleWindowParametersFromPolicy() {
+        MigrationEngine engine = engine();
+        engine.setPolicy(new MigrationPolicy(15.0, 4.0, "", 5000L, 10000L, 60000L, 2000L, 0.5, true));
+
+        long t0 = clock.get();
+        engine.tick(clock.get()); // 首次采样（仅记录）
+        assertFalse(engine.isIdleWindow(), "窗口未到不判定空闲");
+        clock.set(t0 + 1999);
+        engine.tick(clock.get());
+        assertFalse(engine.isIdleWindow(), "2000ms 未到仍不空闲");
+        clock.set(t0 + 2000);
+        engine.tick(clock.get());
+        assertTrue(engine.isIdleWindow(), "policy idleWindowMs=2000 生效：玩家静止满窗口判定空闲");
+
+        // policy 变化 → 检测器按新参数重建（B2：参数移入 policy 后可调）
+        engine.setPolicy(new MigrationPolicy(15.0, 4.0, "", 5000L, 10000L, 60000L, 5000L, 0.5, true));
+        clock.set(t0 + 2100);
+        engine.tick(clock.get());
+        assertFalse(engine.isIdleWindow(), "重建后按新窗口 5000ms 重新计时");
+        clock.set(t0 + 2100 + 5000 + 1);
+        engine.tick(clock.get());
+        assertTrue(engine.isIdleWindow(), "重建后按新窗口 5000ms 生效");
     }
 
     // ==================== 预热生命周期 ====================

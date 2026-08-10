@@ -72,6 +72,20 @@ public class ForgeHassiumCommand {
                                 )
                         )
         );
+        // /hassium migrate 客户端命令（统一三端命令名；服务端 /hassium 不注册 migrate 子树，
+        // 服务端执行提示由 HassiumCommandHandler 客户端上下文检查兜底）
+        dispatcher.register(
+                Commands.literal("hassium")
+                        .then(Commands.literal("migrate")
+                                .executes(ForgeHassiumCommand::migrateUsage)
+                                .then(Commands.literal("list")
+                                        .executes(ForgeHassiumCommand::migrateList))
+                                .then(Commands.literal("status")
+                                        .executes(ForgeHassiumCommand::migrateStatus))
+                                .then(Commands.argument("endpoint", StringArgumentType.greedyString())
+                                        .executes(ForgeHassiumCommand::migrateToEndpoint))
+                        )
+        );
     }
 
     private static CompletableFuture<Suggestions> suggestCachedServers(
@@ -120,6 +134,29 @@ public class ForgeHassiumCommand {
     private static int showClientStats(CommandContext<CommandSourceStack> context) {
         String message = HassiumCommandHandler.getClientStatsMessage();
         context.getSource().sendSuccess(() -> Component.literal(message), false);
+        return 1;
+    }
+
+    /** migrate 无参数：用法帮助 */
+    private static int migrateUsage(CommandContext<CommandSourceStack> context) {
+        context.getSource().sendSuccess(() -> Component.literal(HassiumCommandHandler.migrateUsage()), false);
+        return 1;
+    }
+
+    private static int migrateList(CommandContext<CommandSourceStack> context) {
+        context.getSource().sendSuccess(() -> Component.literal(HassiumCommandHandler.migrateList()), false);
+        return 1;
+    }
+
+    /** 解析端点参数：migrate <host:port> */
+    private static int migrateToEndpoint(CommandContext<CommandSourceStack> context) {
+        String endpoint = StringArgumentType.getString(context, "endpoint");
+        context.getSource().sendSuccess(() -> Component.literal(HassiumCommandHandler.migrateTo(endpoint)), false);
+        return 1;
+    }
+
+    private static int migrateStatus(CommandContext<CommandSourceStack> context) {
+        context.getSource().sendSuccess(() -> Component.literal(HassiumCommandHandler.migrateStatus()), false);
         return 1;
     }
 

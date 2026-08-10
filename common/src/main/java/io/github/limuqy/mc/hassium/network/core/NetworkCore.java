@@ -1,5 +1,6 @@
 package io.github.limuqy.mc.hassium.network.core;
 
+import io.github.limuqy.mc.hassium.config.HassiumConfig;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.network.ClientChunkPipeline;
 import io.github.limuqy.mc.hassium.network.ClientMetadataHandler;
@@ -11,6 +12,7 @@ import io.github.limuqy.mc.hassium.network.core.migration.PrewarmSession;
 import io.github.limuqy.mc.hassium.network.core.outbound.HandshakeCodec;
 import io.github.limuqy.mc.hassium.network.core.outbound.OutboundConnection;
 import io.github.limuqy.mc.hassium.network.core.outbound.UdpDataPlane;
+import io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail;
 import io.github.limuqy.mc.hassium.network.core.viafabric.ViaFabricCompat;
 import io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute;
 import io.netty.buffer.ByteBuf;
@@ -96,16 +98,16 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
                 packet, PacketFlow.SERVERBOUND, GatewayPacketCodec.GatewayProtocol.PLAY,
                 resolveClientRegistryAccess()));
         // T8：迁移引擎接线——故障/策略 sink = 本核心；玩家身份/位置源 = 客户端会话；
-        // 故障静默超时沿用 recoveryWindow 语义（原 recoveryWindowMs 键，现为 master.migrationFaultTimeoutMs；配置值覆盖默认）
+        // B2 全链接线：master.migration* 键族（minTps/负载/维护窗口/心跳/静默超时/空闲窗口）
+        // 经 getMigrationPolicyConfig 应用；silentTimeout 未配置时回退 migrationFaultTimeoutMs 语义
         migration.setSink(this);
         migration.setPlayerStateSource(NetworkCore::clientPlayerState);
         migration.setPlayerIdSource(NetworkCore::clientPlayerId);
         try {
-            long migrationFaultTimeoutMs = HassiumConfigService.getInstance()
-                    .getMigrationFaultTimeoutMs();
-            migration.applyMigrationFaultTimeoutFromConfig(migrationFaultTimeoutMs);
+            migration.applyMigrationPolicyFromConfig(
+                    HassiumConfigService.getInstance().getMigrationPolicyConfig());
         } catch (Throwable t) {
-            LOGGER.debug("Hassium: migration fault-timeout config read skipped", t);
+            LOGGER.debug("Hassium: migration policy config read skipped", t);
         }
     }
 
@@ -380,9 +382,68 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
             LOGGER.info("Hassium: NetworkCore -> ACTIVE (epoch={})",
                     response.udpTail() != null ? response.udpTail().connectionEpoch() : -1L);
         }
+        // N1：续流就绪（resumeAccepted）→ 位置回退到断线时上报快照（服务端续流物化权威位置）
+        if (resumeAccepted) {
+            rollbackPlayerPosition();
+        }
     }
 
-    /** 握手响应应用：SeedGen 透传 + UDP 数据面 + ZSTD（幂等；初始连接/迁移/预热接管复用）。 */
+    /**
+     * N1 位置回退（resumeAccepted 后，event loop 线程）：客户端本地预测在掉线/切换窗口
+     * 继续前进，服务端续流物化在「握手尾上报位置」——恢复后把客户端位置回退到该快照，
+     * 消除预测漂移。快照源 = 当前 outbound 握手尾 {@link HandshakeStateTail.C2S#state()}
+     * （续流握手时经 {@link #connect(String, int, HandshakeStateTail.C2S)} 携带；预热路径
+     * promotePrewarm 不走本方法）。经 {@link #dispatchS2C} 注入
+     * {@code ClientboundPlayerPositionPacket}（GatewayS2CRouter 通用分发 → 官方
+     * handleMovePlayer，绝对坐标；非主线程自动 MainThreadDispatcher 排队）。
+     * 维度守卫：客户端玩家存在且当前维度 ≠ 快照维度时跳过（坐标语义不同）。
+     */
+    private void rollbackPlayerPosition() {
+        OutboundConnection oc = outbound;
+        HandshakeStateTail.C2S tail = oc != null ? oc.handshakeTail() : null;
+        PlayerStateReport snap = tail != null ? tail.state() : null;
+        if (snap == null || !snap.present()) {
+            LOGGER.debug("Hassium: resume rollback skipped (no snapshot in handshake tail)");
+            return;
+        }
+        Minecraft mc = Minecraft.getInstance();
+        if (mc != null && mc.player != null) {
+            String currentDim = mc.player.level().dimension()
+#if MC_VER < MC_1_21_11
+                    .location()
+#else
+                    .identifier()
+#endif
+                    .toString();
+            if (!currentDim.equals(snap.dimension())) {
+                LOGGER.info("Hassium: resume rollback skipped (dimension {} != snapshot {})",
+                        currentDim, snap.dimension());
+                return;
+            }
+        }
+        LOGGER.info("Hassium: resume rollback -> {}", snap.describe());
+        dispatchS2C(buildRollbackPositionPacket(snap));
+    }
+
+    /** 快照 PlayerStateReport → ClientboundPlayerPositionPacket（绝对坐标；id=0 无确认语义）。 */
+    private static Packet<?> buildRollbackPositionPacket(PlayerStateReport snap) {
+#if MC_VER < MC_1_21_2
+        // 1.20.1~1.21.1：类形式 (x, y, z, yRot, xRot, relatives, id)
+        return new net.minecraft.network.protocol.game.ClientboundPlayerPositionPacket(
+                snap.x(), snap.y(), snap.z(), snap.yaw(), snap.pitch(), java.util.Set.of(), 0);
+#else
+        // 1.21.2+：record (id, PositionMoveRotation, relatives)；deltaMovement=ZERO（回退即停）
+        return new net.minecraft.network.protocol.game.ClientboundPlayerPositionPacket(
+                0,
+                new net.minecraft.world.entity.PositionMoveRotation(
+                        new net.minecraft.world.phys.Vec3(snap.x(), snap.y(), snap.z()),
+                        net.minecraft.world.phys.Vec3.ZERO,
+                        snap.yaw(), snap.pitch()),
+                java.util.Set.of());
+#endif
+    }
+
+    /** 握手响应应用：SeedGen 透传 + UDP 数据面 + ZSTD + 通告端点消费（幂等；初始连接/迁移/预热接管复用）。 */
     private void applyHandshake(HandshakeCodec.ServerResponse response) {
         try {
             // SeedGen 尾部透传 ClientChunkPipeline 现有状态（与三端内联解码同语义）
@@ -393,6 +454,17 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
         }
         if (response.udpTail() != null && response.udpTail().hasUdpDataplane()) {
             UdpDataPlane.getInstance().start(response.udpTail());
+        }
+        // B1：主控握手通告的控制端点池（udp=false 时仍写 controls）→ 迁移候选目标。
+        // 空列表不覆盖 = 编程注入兜底（测试/迁移命令先 setTargetEndpoints 后握手）。
+        UdpDataPlaneHandshakeTail.S2CTail udpTail = response.udpTail();
+        if (udpTail != null && !udpTail.controlEndpoints().isEmpty()) {
+            List<MigrationEndpoint> advertised = udpTail.controlEndpoints().stream()
+                    .map(ce -> new MigrationEndpoint(ce.host(), ce.port()))
+                    .toList();
+            migration.setTargetEndpoints(advertised);
+            LOGGER.info("Hassium: NetworkCore handshake advertised {} control endpoint(s): {}",
+                    advertised.size(), advertised);
         }
         OutboundConnection oc = outbound;
         if (oc != null) {
@@ -631,19 +703,53 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
 
     /**
      * world 侧出站收口（T5 接入 MixinConnection 截获，T10 完整接线）：原版 C2S 包编码进
-     * outbound PACKET_C2S 帧。返回 {@code true} = 已完整编码并交给 outbound（调用方应取消
-     * 原版发送——原版连接为壳，C2S 全走网关）；{@code false} = 未路由（原版放行，降级）。
+     * outbound PACKET_C2S 帧。返回 {@code true} = 已消费（MixinConnection 应取消原版发送——
+     * 原版连接为壳，C2S 全走网关；掉线期丢弃同样返回 true，语义 = 已消费不发送不排队）；
+     * {@code false} = 未路由（原版放行，降级）。
      * <p>
-     * 未路由情形：状态非 ACTIVE（CONNECTING/HANDSHAKING 窗口原版直连兜底，避免丢包）、
-     * outbound 未开、无编码器、编码失败（未知/自定义包）。
+     * 分类（N1 掉线期丢弃，契约风险 4）：
+     * <ul>
+     *   <li>ACTIVE：正常路由（编码进 outbound）。入站静默 ≥ 生效静默超时
+     *       （{@link MigrationEngine#isInboundSilent()}，与 T3 故障判定同源同参）时链路已失效，
+     *       继续编码 = 帧在 TCP 缓冲排队 → 恢复后重放风暴 → 直接丢弃（故障前丢弃窗口）。</li>
+     *   <li>CONNECTING/HANDSHAKING：正常连接建立期 → 原版直连兜底（登录期不可丢），返回 false。</li>
+     *   <li>IDLE/MIGRATING：掉线期（onError 后 / 切换窗口）→ 已消费丢弃，返回 true——
+     *       破坏/放置/交互/移动等 PLAY C2S 不排队不重放；keep-alive 壳保活与登录/配置中继
+     *       （isConfigPacket/isLoginPacket 例外列表）在 MixinConnection 层先行旁路，不受影响。</li>
+     * </ul>
+     * 其余未路由情形：outbound 未开、无编码器、编码失败（未知/自定义包）。
      * 计数 {@link #c2sRoutedCount()} 每次调用 +1（可验证）。
      */
     public boolean routeC2S(Packet<?> packet) {
-        c2sRouted.incrementAndGet();
-        if (state.get() != NetworkCoreState.ACTIVE) {
-            LOGGER.debug("Hassium: routeC2S {} passthrough (state={}, count={})",
-                    packet.getClass().getSimpleName(), state.get(), c2sRouted.get());
+#if MC_VER >= MC_1_20_2
+        // 配置阶段终包兜底：handleConfigurationFinished 先换 PLAY 监听器再 send(FinishConfiguration)，
+        // mixin 的监听器判定已失真，这里按包类型兜底——必须原版发送（vanilla 依赖该包编码时
+        // ProtocolSwapHandler 重置 outbound 管线；cancel 会导致 outbound 停在 encoder，
+        // setupOutboundProtocol(PLAY) 任务写入未配置管线崩溃 UnsupportedOperationException）。
+        // 其余配置阶段包由 mixin 配置分支正确分发到 relayConfigPacket，无需在此兜底。
+        if (packet instanceof net.minecraft.network.protocol.configuration.ServerboundFinishConfigurationPacket) {
             return false;
+        }
+#endif
+        c2sRouted.incrementAndGet();
+        NetworkCoreState st = state.get();
+        if (st != NetworkCoreState.ACTIVE) {
+            // 正常连接建立期：原版直连兜底（不取消原版发送）
+            if (st == NetworkCoreState.CONNECTING || st == NetworkCoreState.HANDSHAKING) {
+                LOGGER.debug("Hassium: routeC2S {} passthrough (state={}, count={})",
+                        packet.getClass().getSimpleName(), st, c2sRouted.get());
+                return false;
+            }
+            // 掉线期（IDLE/MIGRATING）：已消费丢弃——MixinConnection cancel 原版发送，不排队不重放
+            LOGGER.debug("Hassium: routeC2S {} dropped (state={}, 掉线期已消费, count={})",
+                    packet.getClass().getSimpleName(), st, c2sRouted.get());
+            return true;
+        }
+        // ACTIVE 但入站静默（心跳无回显 ≥ 静默超时，fault 判定窗口内）：链路失效即丢弃期
+        if (migration.isInboundSilent()) {
+            LOGGER.debug("Hassium: routeC2S {} dropped (inbound silent, count={})",
+                    packet.getClass().getSimpleName(), c2sRouted.get());
+            return true;
         }
         OutboundConnection oc = outbound;
         C2SEncoder encoder = c2sEncoder.get();
@@ -929,11 +1035,15 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
     /**
      * T10 标准流程握手尾：玩家状态 + UUID（无续流票据）。主控据此在非续流路径把网关
      * 会话附着到 vanilla 物化玩家（握手晚于登录完成时直接挂 C2S sink，无需登录桥）。
+     * lightComputeSupported 值源 = config.isHassiumEngineEnabled()（与
+     * {@link HandshakeCodec.ClientRequestOptions#defaults()} 的 engineEnabled 同源；
+     * 主控据此开剥光 gate）。
      * 环境不可用（无玩家/无 profile）时返回可安全发送的最小尾（playerId=null，主控
      * 回退登录桥路径）。
      */
     private static HandshakeStateTail.C2S buildAutoTail() {
-        return new HandshakeStateTail.C2S(clientPlayerState(), false, null, clientPlayerId());
+        return new HandshakeStateTail.C2S(clientPlayerState(), false, null, clientPlayerId(),
+                HassiumConfigService.getInstance().isHassiumEngineEnabled());
     }
 
     // ==================== 状态机 ====================
@@ -971,7 +1081,10 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
     // ==================== 内部 ====================
 
     /**
-     * 尽力自动连接当前登录服务器（vanilla Connection 的 ServerData.ip，"host[:port]"）。
+     * 尽力自动连接当前登录服务器。初始地址源优先级（T9 修复）：
+     * master.controlReachableEndpoints[0]（客户端读 SERVER scope 键——服务端同键绑定
+     * 监听端口，双端读同一值 OK；网关帧端口直连，避免 vanilla 端口 25565 无人连 →
+     * HANDSHAKING 卡死）→ 兜底 vanilla Connection 的 ServerData.ip（"host[:port]"）。
      * 网络压缩关闭时跳过；失败仅告警（正式地址源 = T7 迁移引擎）。
      */
     private void autoConnect() {
@@ -981,23 +1094,34 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
                 LOGGER.debug("Hassium: NetworkCore auto-connect skipped (net.enabled=false)");
                 return;
             }
-            Minecraft mc = Minecraft.getInstance();
-            if (mc == null || mc.getConnection() == null || mc.getConnection().getServerData() == null) {
-                return;
-            }
-            String ip = mc.getConnection().getServerData().ip;
-            if (ip == null || ip.isEmpty()) {
-                return;
-            }
-            String host = ip;
+            String host = null;
             int port = 25565;
-            int colon = ip.lastIndexOf(':');
-            if (colon > 0) {
-                try {
-                    port = Integer.parseInt(ip.substring(colon + 1));
-                    host = ip.substring(0, colon);
-                } catch (NumberFormatException ignored) {
-                    // 无端口后缀（或 IPv6 字面量），整体按 host 处理
+            List<HassiumConfig.ReachableEndpoint> endpoints = config.getControlReachableEndpoints();
+            if (!endpoints.isEmpty()) {
+                HassiumConfig.ReachableEndpoint first = endpoints.get(0);
+                if (first.host() != null && !first.host().isBlank()) {
+                    host = first.host();
+                    port = first.port();
+                }
+            }
+            if (host == null) {
+                Minecraft mc = Minecraft.getInstance();
+                if (mc == null || mc.getConnection() == null || mc.getConnection().getServerData() == null) {
+                    return;
+                }
+                String ip = mc.getConnection().getServerData().ip;
+                if (ip == null || ip.isEmpty()) {
+                    return;
+                }
+                host = ip;
+                int colon = ip.lastIndexOf(':');
+                if (colon > 0) {
+                    try {
+                        port = Integer.parseInt(ip.substring(colon + 1));
+                        host = ip.substring(0, colon);
+                    } catch (NumberFormatException ignored) {
+                        // 无端口后缀（或 IPv6 字面量），整体按 host 处理
+                    }
                 }
             }
             connect(host, port);

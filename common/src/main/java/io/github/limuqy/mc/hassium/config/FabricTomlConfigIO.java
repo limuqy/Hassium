@@ -124,7 +124,8 @@ public final class FabricTomlConfigIO {
     }
 
     private static Object readSchemaValue(CommentedConfig cfg, ConfigEntry<?> entry) {
-        if (entry.key() == ConfigSchema.MASTER_CONTROL_ENDPOINTS) {
+        if (entry.key() == ConfigSchema.MASTER_CONTROL_ENDPOINTS
+                || entry.key() == ConfigSchema.CLIENT_MASTER_CONTROL_ENDPOINTS) {
             return readReachableEndpoints(cfg, entry.path(), entry.path()).stream()
                     .map(DataPlaneEndpointConfig::encodeReachable).toList();
         }
@@ -171,7 +172,8 @@ public final class FabricTomlConfigIO {
 
     @SuppressWarnings("unchecked")
     private static void writeSchemaValue(CommentedConfig cfg, ConfigEntry<?> entry, Object value) {
-        if (entry.key() == ConfigSchema.MASTER_CONTROL_ENDPOINTS) {
+        if (entry.key() == ConfigSchema.MASTER_CONTROL_ENDPOINTS
+                || entry.key() == ConfigSchema.CLIENT_MASTER_CONTROL_ENDPOINTS) {
             writeReachableEndpoints(cfg, entry.path(), ((List<String>) value).stream()
                     .map(DataPlaneEndpointConfig::decodeReachable).toList(), entry.comment());
         } else if (entry.key() == ConfigSchema.DATAPLANE_UDP_LISTENERS) {
@@ -207,12 +209,13 @@ public final class FabricTomlConfigIO {
         } catch (java.io.IOException e) {
             throw new IllegalStateException("无法创建临时客户端配置目录", e);
         }
-        writeClient(configRoot.resolve(Constants.CONFIG_CLIENT_FILE), config.chunk(), config.net(), config.debug());
+        writeClient(configRoot.resolve(Constants.CONFIG_CLIENT_FILE), config.chunk(), config.net(), config.master(), config.debug());
     }
 
     private static HassiumConfig loadClientFile(Path client) throws java.io.IOException {
         HassiumConfig.ChunkCoreConfig chunk = HassiumConfig.ChunkCoreConfig.DEFAULT;
         HassiumConfig.NetCoreConfig net = HassiumConfig.NetCoreConfig.DEFAULT;
+        HassiumConfig.MasterCoreConfig master = HassiumConfig.MasterCoreConfig.DEFAULT;
         HassiumConfig.DebugConfig debug = HassiumConfig.DebugConfig.DEFAULT;
 
         Files.createDirectories(client.getParent());
@@ -222,19 +225,20 @@ public final class FabricTomlConfigIO {
                 cfg.load();
                 chunk = readChunkCore(cfg);
                 net = readNetCore(cfg);
+                master = readClientMigrationPolicy(cfg, master);
                 debug = readDebug(cfg);
             } catch (Exception e) {
                 LOGGER.warn("Hassium: 读取 {} 失败，使用默认客户端配置", client, e);
             }
         } else {
-            writeClient(client, chunk, net, debug);
+            writeClient(client, chunk, net, master, debug);
         }
 
         return new HassiumConfig(
                 HassiumConfig.StorageConfig.DEFAULT,
                 chunk,
                 net,
-                HassiumConfig.MasterCoreConfig.DEFAULT,
+                master,
                 HassiumConfig.CompatConfig.DEFAULT,
                 debug
         );
@@ -293,7 +297,7 @@ public final class FabricTomlConfigIO {
                     physicalClient ? clientPath().getParent() : serverPath().getParent()
             );
             if (physicalClient) {
-                writeClient(clientPath(), config.chunk(), config.net(), config.debug());
+                writeClient(clientPath(), config.chunk(), config.net(), config.master(), config.debug());
             } else {
                 writeServer(serverPath(), config.storage(), config.chunk(), config.master(), config.compat(), config.debug());
             }
@@ -317,14 +321,40 @@ public final class FabricTomlConfigIO {
             Path path,
             HassiumConfig.ChunkCoreConfig chunk,
             HassiumConfig.NetCoreConfig net,
+            HassiumConfig.MasterCoreConfig master,
             HassiumConfig.DebugConfig debug
     ) {
         try (CommentedFileConfig cfg = open(path)) {
             writeChunkCore(cfg, chunk);
             writeNetCore(cfg, net);
+            writeClientMigrationPolicy(cfg, master);
             writeDebug(cfg, debug);
             cfg.save();
         }
+    }
+
+    /** 客户端 toml 的 master 迁移策略键（CLIENT scope；缺省回退传入默认）。 */
+    private static HassiumConfig.MasterCoreConfig readClientMigrationPolicy(
+            CommentedConfig cfg, HassiumConfig.MasterCoreConfig d
+    ) {
+        return d.withMigrationPolicy(
+                getDouble(cfg, "master.migrationMinTps", d.migrationMinTps()),
+                getDouble(cfg, "master.migrationMaxLoadAverage", d.migrationMaxLoadAverage()),
+                getString(cfg, "master.migrationMaintenanceWindow", d.migrationMaintenanceWindow()),
+                getPositiveLong(cfg, "master.migrationHeartbeatIntervalMs", d.migrationHeartbeatIntervalMs()),
+                getPositiveLong(cfg, "master.migrationIdleWindowMs", d.migrationIdleWindowMs()),
+                getPositiveLong(cfg, "master.migrationSilentTimeoutMs", d.migrationSilentTimeoutMs()));
+    }
+
+    /** 客户端 toml 的 master 迁移策略键（CLIENT scope；仅迁移族，master.* 服务端键不写）。 */
+    private static void writeClientMigrationPolicy(CommentedConfig cfg, HassiumConfig.MasterCoreConfig master) {
+        set(cfg, "master.migrationMinTps", master.migrationMinTps(), "L1 迁移策略：主控 TPS 低于此值触发迁移");
+        set(cfg, "master.migrationMaxLoadAverage", master.migrationMaxLoadAverage(), "L1 迁移策略：主控系统负载均值高于此值触发迁移（getSystemLoadAverage 为 -1 视为无信号）");
+        set(cfg, "master.migrationMaintenanceWindow", master.migrationMaintenanceWindow(), "L1 迁移策略：维护窗口 \"HH:MM-HH:MM\"（本地时区，含跨午夜）；空串=禁用");
+        set(cfg, "master.migrationHeartbeatIntervalMs", master.migrationHeartbeatIntervalMs(), "L1 迁移：应用层 HEARTBEAT 发送周期（ms）");
+        set(cfg, "master.migrationIdleWindowMs", master.migrationIdleWindowMs(), "L1 迁移：空闲窗口判定时长（ms；玩家静止 + 区块 hash 稳定，适合迁移的时机）");
+        set(cfg, "master.migrationSilentTimeoutMs", master.migrationSilentTimeoutMs(),
+                "L1 迁移：outbound 入站静默超时（ms；默认 10s 使失效识别 ≤15s；未配置时回退 master.migrationFaultTimeoutMs 语义）");
     }
 
     private static void writeServer(
@@ -467,6 +497,14 @@ public final class FabricTomlConfigIO {
                 getInt(cfg, "master.maxPushThreads", d.maxPushThreads()),
                 readReachableEndpoints(cfg, "master.controlReachableEndpoints", "master.controlReachableEndpoints"),
                 getPositiveLong(cfg, "master.migrationFaultTimeoutMs", d.migrationFaultTimeoutMs()),
+                // CLIENT scope 迁移策略键不在 server.toml（物理客户端经 client.toml 加载）→ 默认值
+                d.migrationMinTps(),
+                d.migrationMaxLoadAverage(),
+                d.migrationMaintenanceWindow(),
+                d.migrationHeartbeatIntervalMs(),
+                d.migrationIdleWindowMs(),
+                d.migrationSilentTimeoutMs(),
+                getPositiveLong(cfg, "master.migrationPrewarmTtlMs", d.migrationPrewarmTtlMs()),
                 readDataPlane(cfg, d.dataPlane())
         );
     }
@@ -493,7 +531,10 @@ public final class FabricTomlConfigIO {
         set(cfg, "master.maxPushThreads", n.maxPushThreads(), "动态池最大线程数（仅服务端）");
         writeReachableEndpoints(cfg, "master.controlReachableEndpoints", n.controlReachableEndpoints(),
                 "网关监听/outbound 端点（网关监听地址源；客户端 outbound 地址源 = 迁移引擎）");
-        set(cfg, "master.migrationFaultTimeoutMs", n.migrationFaultTimeoutMs(), "L1 迁移故障超时（ms）");
+        set(cfg, "master.migrationFaultTimeoutMs", n.migrationFaultTimeoutMs(),
+                "L1 迁移故障超时（ms；silentTimeout 未配置时的回退值）");
+        set(cfg, "master.migrationPrewarmTtlMs", n.migrationPrewarmTtlMs(),
+                "预热会话 TTL（ms；无续流完成的预热物化会话到期清理）");
         writeDataPlane(cfg, n.dataPlane());
     }
 

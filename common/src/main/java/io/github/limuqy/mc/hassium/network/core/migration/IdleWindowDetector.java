@@ -90,4 +90,14 @@ public final class IdleWindowDetector {
     public long lastHashActivityMs() {
         return lastHashActivityMs;
     }
+
+    /** 判定静止的移动阈值（方块/秒；policy 参数观测/重建比较用）。 */
+    public double moveThresholdBlocksPerSec() {
+        return moveThresholdBlocksPerSec;
+    }
+
+    /** 连续无移动且无 hash 活动的最小时长（ms；policy 参数观测/重建比较用）。 */
+    public long windowMs() {
+        return windowMs;
+    }
 }

@@ -131,7 +131,7 @@ class GatewaySmokeTest {
         NetworkCore core = NetworkCore.getInstance();
         HandshakeStateTail.C2S tail = new HandshakeStateTail.C2S(
                 new PlayerStateReport(10.5, 64.0, 20.25, 90.0f, 0.0f, "minecraft:overworld"),
-                false, null, playerId);
+                false, null, playerId, true);
         core.connect("127.0.0.1", port, tail);
 
         // 握手 accepted → ACTIVE（客户端）
@@ -176,7 +176,7 @@ class GatewaySmokeTest {
         NetworkCore core = NetworkCore.getInstance();
         HandshakeStateTail.C2S tail = new HandshakeStateTail.C2S(
                 new PlayerStateReport(10.5, 64.0, 20.25, 90.0f, 0.0f, "minecraft:overworld"),
-                true, signedTicket(playerId, epoch), playerId);
+                true, signedTicket(playerId, epoch), playerId, true);
         core.connect("127.0.0.1", port, tail);
 
         awaitTrue(() -> core.state() == NetworkCoreState.ACTIVE, 10_000, "client ACTIVE");

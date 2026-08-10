@@ -37,7 +37,7 @@ class ViaFabricCompatTest {
 
     private static Packet<ServerGamePacketListener> fakePacket() {
         return new Packet<>() {
-#if MC_VER < MC_1_21_1
+#if MC_VER < MC_1_20_5
             @Override
             public void write(FriendlyByteBuf buffer) {
             }

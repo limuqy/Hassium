@@ -33,6 +33,8 @@ public final class ClientSmokeTest {
     private static final String MARKER_STATS = "HassiumSmokeTest:CLIENT_STATS";
     private static final String MARKER_PASS = "HassiumSmokeTest:PASS";
     private static final String MARKER_FAIL = "HassiumSmokeTest:FAIL";
+    /** T7 V0 网关断言 marker：每轮统计时 dump NetworkCore 状态/计数，供 runtime-smoke-test.ps1 解析。 */
+    private static final String MARKER_GATEWAY = "HassiumSmokeTest:GATEWAY_CLIENT";
 
     private enum State {
         WAIT_JOIN_1,   // 等待第一轮进服
@@ -252,6 +254,10 @@ public final class ClientSmokeTest {
             }
             LOGGER.info("{} {} end", MARKER_STATS, roundLabel);
 
+            // T7 V0 网关断言 dump：ROUND1/ROUND2 各一条稳定 marker。
+            // 仅供 harness 解析判定（PASS 需两轮 state=ACTIVE 且 s2c>0），不改任何生产代码。
+            dumpGatewayAssertion(roundLabel);
+
             // dataplane 阶段：报 Data 帧计数 delta（Data 帧经 DataPlaneClientBundle.handleBulkChunk 累加；
             // total 来自 NetworkStats.chunksDecompressed，Primary 与 Data 都计入；primaryDelta = total - dataDelta）
             if (runDataplane) {
@@ -343,6 +349,26 @@ public final class ClientSmokeTest {
             triggerDisconnect(mc);
             awaitShadowSaveComplete();
             scheduleExit(allPass ? 0 : 2);
+        }
+    }
+
+    /**
+     * T7 V0 网关断言：dump NetworkCore 状态与计数（只读现有公开 API：state()/s2cDispatchedCount()/
+     * c2sRoutedCount()/lastResumeAccepted()，不改生产代码）。
+     * marker 格式：{@code HassiumSmokeTest:GATEWAY_CLIENT ROUND<n> state=<NetworkCoreState> s2c=<n> c2s=<n> resume=<bool>}
+     * harness（runtime-smoke-test.ps1）PASS 判定 = ROUND1/2 均 state=ACTIVE 且 s2c>0；
+     * 读取异常时输出 state=ERROR s2c=0 c2s=0 resume=false，使门禁确定性 FAIL。
+     */
+    private static void dumpGatewayAssertion(String roundLabel) {
+        try {
+            io.github.limuqy.mc.hassium.network.core.NetworkCore core =
+                    io.github.limuqy.mc.hassium.network.core.NetworkCore.getInstance();
+            LOGGER.info("{} {} state={} s2c={} c2s={} resume={}",
+                    MARKER_GATEWAY, roundLabel, core.state(), core.s2cDispatchedCount(),
+                    core.c2sRoutedCount(), core.lastResumeAccepted());
+        } catch (Throwable t) {
+            LOGGER.error("{} {} state=ERROR s2c=0 c2s=0 resume=false (dump failed: {})",
+                    MARKER_GATEWAY, roundLabel, t.toString());
         }
     }
 

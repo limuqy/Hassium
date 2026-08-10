@@ -19,7 +19,7 @@ class HandshakeStateTailTest {
         byte[] ticket = ResumeTicket.sign(java.util.UUID.randomUUID(), 99L, new byte[]{9, 9, 9});
 
         ByteBuf buf = Unpooled.buffer();
-        HandshakeStateTail.writeC2S(buf, new HandshakeStateTail.C2S(state, true, ticket, null));
+        HandshakeStateTail.writeC2S(buf, new HandshakeStateTail.C2S(state, true, ticket, null, true));
 
         HandshakeStateTail.C2S decoded = HandshakeStateTail.readC2S(buf);
         assertNotNull(decoded);
@@ -27,6 +27,7 @@ class HandshakeStateTailTest {
         assertTrue(decoded.resumeRequested());
         assertArrayEquals(ticket, decoded.resumeTicket());
         assertNull(decoded.playerId());
+        assertTrue(decoded.lightComputeSupported(), "A7 lightComputeSupported 字段往返一致");
     }
 
     @Test
@@ -36,7 +37,7 @@ class HandshakeStateTailTest {
         java.util.UUID playerId = java.util.UUID.randomUUID();
 
         ByteBuf buf = Unpooled.buffer();
-        HandshakeStateTail.writeC2S(buf, new HandshakeStateTail.C2S(state, false, null, playerId));
+        HandshakeStateTail.writeC2S(buf, new HandshakeStateTail.C2S(state, false, null, playerId, true));
 
         HandshakeStateTail.C2S decoded = HandshakeStateTail.readC2S(buf);
         assertNotNull(decoded);
@@ -44,16 +45,18 @@ class HandshakeStateTailTest {
         assertFalse(decoded.resumeRequested());
         assertNull(decoded.resumeTicket());
         assertEquals(playerId, decoded.playerId(), "T10 playerId 字段往返一致");
+        assertTrue(decoded.lightComputeSupported(), "A7 lightComputeSupported 字段往返一致");
 
-        // 兼容性：旧客户端格式（无 playerId 字节）→ 新端读 playerId=null
+        // 兼容性：旧客户端格式（无 playerId/light 字节）→ 新端读 playerId=null、light=false
         ByteBuf legacy = Unpooled.buffer();
-        HandshakeStateTail.writeC2S(legacy, new HandshakeStateTail.C2S(state, true, new byte[]{1}, null));
+        HandshakeStateTail.writeC2S(legacy, new HandshakeStateTail.C2S(state, true, new byte[]{1}, null, true));
         ByteBuf truncated = Unpooled.buffer();
-        truncated.writeBytes(legacy, 0, legacy.readableBytes() - 1); // 截掉 playerId 布尔字节
+        truncated.writeBytes(legacy, 0, legacy.readableBytes() - 1); // 截掉 light 布尔字节（模拟旧客户端尾）
         HandshakeStateTail.C2S legacyDecoded = HandshakeStateTail.readC2S(truncated);
         assertNotNull(legacyDecoded);
         assertNull(legacyDecoded.playerId(), "旧格式无 playerId → null");
         assertTrue(legacyDecoded.resumeRequested());
+        assertFalse(legacyDecoded.lightComputeSupported(), "缺尾默认 false");
         legacy.release();
         truncated.release();
     }
@@ -91,7 +94,8 @@ class HandshakeStateTailTest {
     @Test
     @DisplayName("新客户端尾部对旧服务端语义：写入固定长度后可忽略（读端模拟旧服务端读前序字段）")
     void newTailIsAppendOnly() {
-        // 旧服务端按旧格式读：固定字段（x/z/seedGen/light）后剩余字节忽略
+        // 新客户端尾部对旧服务端语义：写入固定长度后可忽略（读端模拟旧服务端读前序字段）
+        // 尾部恒写 lightComputeSupported（最后 1 字节）；旧服务端读完前序字段后忽略剩余字节
         PlayerStateReport state = new PlayerStateReport(1.0, 2.0, 3.0, 4.0f, 5.0f, "minecraft:overworld");
         ByteBuf buf = Unpooled.buffer();
         // 模拟完整 C2S：前序字段由调用方写，这里只验证尾部追加不影响前序读取

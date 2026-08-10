@@ -1,5 +1,7 @@
 package io.github.limuqy.mc.hassium.network.core.migration;
 
+import io.github.limuqy.mc.hassium.config.HassiumConfigService;
+import io.github.limuqy.mc.hassium.config.MigrationPolicyConfig;
 import io.github.limuqy.mc.hassium.network.HandshakeStateTail;
 import io.github.limuqy.mc.hassium.network.PlayerStateReport;
 import io.github.limuqy.mc.hassium.network.ResumeTicket;
@@ -25,8 +27,10 @@ import java.util.function.Supplier;
  *
  * <p><b>触发</b>：
  * <ul>
- *   <li>故障：outbound 入站静默超时（{@link MigrationPolicy#faultTimeoutMs}，沿用既有
- *       {@code master.migrationFaultTimeoutMs} 语义）→ {@link Sink#onFault()}。</li>
+ *   <li>故障：outbound 入站静默超时（{@link MigrationPolicy#resolvedSilentTimeoutMs()}，
+ *       默认 10s（N2 快速失效 ≤15s）；silentTimeout 未配置时回退既有
+ *       {@code master.migrationFaultTimeoutMs} 语义）→ {@link Sink#onFault()}。
+ *       读超时（Netty IdleStateHandler）同走 fault 路径。</li>
  *   <li>策略：{@link ServerLoadReporter.ServerLoadReport} → {@link #evaluatePolicy}
  *       （TPS 阈值 / 负载均值阈值 / 维护窗口）→ {@link Sink#onPolicyTrigger}。
  *       负载上报到客户端的线通道 = T10 CONFIG 帧（本任务不新增帧类型）；收到后调用
@@ -53,11 +57,6 @@ import java.util.function.Supplier;
 public final class MigrationEngine {
 
     private static final Logger LOGGER = LoggerFactory.getLogger("Hassium/MigrationEngine");
-
-    /** 空闲判定：位移阈值（方块/秒）。 */
-    private static final double IDLE_MOVE_THRESHOLD_BPS = 0.5;
-    /** 空闲判定：无移动且无 hash 活动的最小时长（ms）。 */
-    private static final long IDLE_WINDOW_MS = 10_000L;
 
     /** 迁移动作去向（NetworkCore 实现）。 */
     public interface Sink {
@@ -112,13 +111,30 @@ public final class MigrationEngine {
         return policy;
     }
 
-    /** 配置接线辅助：faultTimeout 仍为默认值时用配置 migrationFaultTimeoutMs 覆盖（L1 迁移 faultTimeout 语义）。 */
-    public void applyMigrationFaultTimeoutFromConfig(long migrationFaultTimeoutMs) {
+    /**
+     * 配置接线辅助（B2 全链接线）：policy 中仍为默认值的字段用配置快照覆盖（程序化
+     * {@link #setPolicy} 优先）；silentTimeout/faultTimeout 的兼容回退见
+     * {@link MigrationPolicy#resolvedSilentTimeoutMs}。
+     */
+    public void applyMigrationPolicyFromConfig(MigrationPolicyConfig config) {
         MigrationPolicy p = policy;
-        if (p.faultTimeoutMs() == MigrationPolicy.DEFAULT.faultTimeoutMs() && migrationFaultTimeoutMs > 0) {
-            setPolicy(new MigrationPolicy(p.minTps(), p.maxLoadAverage(), p.maintenanceWindow(),
-                    p.heartbeatIntervalMs(), migrationFaultTimeoutMs, p.prewarmEnabled()));
-        }
+        MigrationPolicy d = MigrationPolicy.DEFAULT;
+        double minTps = p.minTps() != d.minTps() ? p.minTps() : config.minTps();
+        double maxLoadAverage = p.maxLoadAverage() != d.maxLoadAverage()
+                ? p.maxLoadAverage() : config.maxLoadAverage();
+        String maintenanceWindow = !d.maintenanceWindow().equals(p.maintenanceWindow())
+                ? p.maintenanceWindow() : config.maintenanceWindow();
+        long heartbeatIntervalMs = p.heartbeatIntervalMs() != d.heartbeatIntervalMs()
+                ? p.heartbeatIntervalMs() : config.heartbeatIntervalMs();
+        long silentTimeoutMs = p.silentTimeoutMs() != d.silentTimeoutMs()
+                ? p.silentTimeoutMs() : config.silentTimeoutMs();
+        long faultTimeoutMs = p.faultTimeoutMs() != d.faultTimeoutMs()
+                ? p.faultTimeoutMs() : config.faultTimeoutMs();
+        long idleWindowMs = p.idleWindowMs() != d.idleWindowMs()
+                ? p.idleWindowMs() : config.idleWindowMs();
+        // idleMoveThresholdBps 无独立配置键：保持 policy 现值（默认 0.5）
+        setPolicy(new MigrationPolicy(minTps, maxLoadAverage, maintenanceWindow, heartbeatIntervalMs,
+                silentTimeoutMs, faultTimeoutMs, idleWindowMs, p.idleMoveThresholdBps(), p.prewarmEnabled()));
     }
 
     /** 候选目标端点（迁移环形推进）。 */
@@ -208,8 +224,8 @@ public final class MigrationEngine {
                 LOGGER.error("Hassium: migration engine tick failed", t);
             }
         }, 1_000L, 1_000L, TimeUnit.MILLISECONDS);
-        LOGGER.info("Hassium: migration engine started (heartbeat={}ms, faultTimeout={}ms)",
-                policy.heartbeatIntervalMs(), policy.faultTimeoutMs());
+        LOGGER.info("Hassium: migration engine started (heartbeat={}ms, silentTimeout={}ms, idleWindow={}ms)",
+                policy.heartbeatIntervalMs(), policy.resolvedSilentTimeoutMs(), policy.idleWindowMs());
     }
 
     /** 停止心跳监测（幂等）。 */
@@ -235,7 +251,7 @@ public final class MigrationEngine {
 
     /**
      * 心跳 tick（start 的守护线程周期调用；测试手动驱动）。
-     * 1) 空闲窗口采样；2) 到点发 HEARTBEAT；3) 入站静默 ≥ faultTimeout → 故障触发。
+     * 1) 空闲窗口采样；2) 到点发 HEARTBEAT；3) 入站静默 ≥ 生效静默超时 → 故障触发。
      */
     public void tick(long nowMs) {
         sampleIdleWindow(nowMs);
@@ -254,12 +270,13 @@ public final class MigrationEngine {
                 }
             }
         }
+        long silentTimeout = p.resolvedSilentTimeoutMs();
         long lastIn = lastInboundMs.get();
-        if (lastIn != Long.MIN_VALUE && nowMs - lastIn >= p.faultTimeoutMs()
+        if (lastIn != Long.MIN_VALUE && nowMs - lastIn >= silentTimeout
                 && faultReported.compareAndSet(false, true)) {
             faultsDetected.incrementAndGet();
-            LOGGER.warn("[FAILOVER] outbound silent for {}ms (faultTimeout={}ms) — fault trigger",
-                    nowMs - lastIn, p.faultTimeoutMs());
+            LOGGER.warn("[FAILOVER] outbound silent for {}ms (silentTimeout={}ms) — fault trigger",
+                    nowMs - lastIn, silentTimeout);
             Sink s = sink;
             if (s != null) {
                 try {
@@ -278,13 +295,48 @@ public final class MigrationEngine {
         faultReported.set(false);
     }
 
-    /** outbound 建立（握手接受/预热接管后调用）：重置心跳计时。 */
+    /**
+     * 入站静默判定（T6 掉线期丢弃窗口，与 {@link #tick} 故障判定同源同参——
+     * 均用 {@link MigrationPolicy#resolvedSilentTimeoutMs()}）：最近入站活动距今 ≥
+     * 生效静默超时视为链路已失效——此时继续编码 C2S 只会让帧在 TCP 缓冲排队
+     * （主控恢复后重放风暴），故 NetworkCore.routeC2S 在静默期直接丢弃。
+     * 无入站记录（连接建立期/引擎未绑定）恒 false；不触发任何状态变更（fault 仍由 tick 驱动）。
+     */
+    public boolean isInboundSilent() {
+        long lastIn = lastInboundMs.get();
+        if (lastIn == Long.MIN_VALUE) {
+            return false;
+        }
+        return clockMs.getAsLong() - lastIn >= policy.resolvedSilentTimeoutMs();
+    }
+
+    /** outbound 建立（握手接受/预热接管后调用）：重置心跳计时 + 启用 Netty 读超时（fault 路径）。 */
     public void bindHeartbeatTarget(OutboundConnection connection) {
         heartbeatTarget = connection;
         long now = clockMs.getAsLong();
         lastInboundMs.set(now);
         lastHeartbeatSentMs.set(now);
         faultReported.set(false);
+        // N2 快速失效：TCP 层读超时（event loop 级，与应用层静默判定同阈值）→ fault 路径
+        // （Sink.onFault → 迁移）。契约风险 5：读超时禁止直降 onError→IDLE。
+        connection.enableReadTimeout(policy.resolvedSilentTimeoutMs(), this::onTransportReadTimeout);
+    }
+
+    /** Netty 读超时 → 故障路径（与 tick 静默判定同去重标志；onFault → 迁移而非踢下线）。 */
+    private void onTransportReadTimeout() {
+        if (!faultReported.compareAndSet(false, true)) {
+            return;
+        }
+        faultsDetected.incrementAndGet();
+        LOGGER.warn("[FAILOVER] outbound read timeout (Netty idle) — fault trigger");
+        Sink s = sink;
+        if (s != null) {
+            try {
+                s.onFault();
+            } catch (Throwable t) {
+                LOGGER.error("Hassium: fault sink failed", t);
+            }
+        }
     }
 
     // ==================== 策略触发 ====================
@@ -380,7 +432,10 @@ public final class MigrationEngine {
             playerId = idSrc != null ? idSrc.get() : null;
         }
         // T10：C2S 尾追加玩家 UUID 字段（标准流程握手附着；续流路径 = 票据身份）
-        return new HandshakeStateTail.C2S(state, resumeRequested, ticket, playerId);
+        // A7：lightComputeSupported 值源 = config.isHassiumEngineEnabled()（与
+        // ClientRequestOptions.engineEnabled() 同源；主控据此开剥光 gate）
+        return new HandshakeStateTail.C2S(state, resumeRequested, ticket, playerId,
+                HassiumConfigService.getInstance().isHassiumEngineEnabled());
     }
 
     /**
@@ -449,9 +504,12 @@ public final class MigrationEngine {
         if (src == null) {
             return;
         }
+        MigrationPolicy p = policy;
         IdleWindowDetector d = idleDetector;
-        if (d == null) {
-            d = new IdleWindowDetector(IDLE_MOVE_THRESHOLD_BPS, IDLE_WINDOW_MS, clockMs);
+        // 空闲窗口参数随 policy 变化（B2：idleWindowMs/idleMoveThresholdBps 移入 policy）→ 重建检测器
+        if (d == null || d.windowMs() != p.idleWindowMs()
+                || d.moveThresholdBlocksPerSec() != p.idleMoveThresholdBps()) {
+            d = new IdleWindowDetector(p.idleMoveThresholdBps(), p.idleWindowMs(), clockMs);
             idleDetector = d;
         }
         PlayerStateReport state = src.get();

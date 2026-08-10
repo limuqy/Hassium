@@ -64,7 +64,17 @@ public final class ConfigSchema {
     public static final ConfigKey<Integer> MASTER_MIN_PUSH_THREADS = integer("master.minPushThreads", ConfigScope.SERVER, Domain.MASTER_CORE, 2, 1, 64, "动态池最小线程数");
     public static final ConfigKey<Integer> MASTER_MAX_PUSH_THREADS = integer("master.maxPushThreads", ConfigScope.SERVER, Domain.MASTER_CORE, 8, 1, 64, "动态池最大线程数");
     public static final ConfigKey<List<String>> MASTER_CONTROL_ENDPOINTS = stringList("master.controlReachableEndpoints", ConfigScope.SERVER, Domain.MASTER_CORE, List::of, "网关监听/outbound 端点（网关监听地址源；客户端 outbound 地址源 = 迁移引擎）");
-    public static final ConfigKey<Long> MASTER_MIGRATION_FAULT_TIMEOUT_MS = longValue("master.migrationFaultTimeoutMs", ConfigScope.SERVER, Domain.MASTER_CORE, 60000L, 1L, Long.MAX_VALUE, "L1 迁移故障超时（ms；faultTimeout 仍为默认值时覆盖 MigrationEngine/MigrationPolicy）");
+    /** CLIENT scope 同名键（T9 E1 接线）：客户端 outbound 初始地址源。物理客户端读 client.toml 的 SERVER scope 键（快照路径按 scope 过滤读不到），故按 chunk.seedGenEnabled 同款双端同名键模式注册 CLIENT 副本，双端读同一值 OK。 */
+    public static final ConfigKey<List<String>> CLIENT_MASTER_CONTROL_ENDPOINTS = stringList("master.controlReachableEndpoints", ConfigScope.CLIENT, Domain.MASTER_CORE, List::of, "网关监听/outbound 端点（客户端 outbound 初始地址源；服务端同键绑定监听端口，双端读同一值 OK）");
+    public static final ConfigKey<Long> MASTER_MIGRATION_FAULT_TIMEOUT_MS = longValue("master.migrationFaultTimeoutMs", ConfigScope.SERVER, Domain.MASTER_CORE, 60000L, 1L, Long.MAX_VALUE, "L1 迁移故障超时（ms；兼容键：migrationSilentTimeoutMs 未配置时回退本值，见 MigrationPolicy#resolvedSilentTimeoutMs）");
+
+    // === L1 迁移策略（master.migration*；CLIENT 6 键，客户端 MigrationEngine 消费，cloth 屏可见）===
+    public static final ConfigKey<Double> MASTER_MIGRATION_MIN_TPS = decimal("master.migrationMinTps", ConfigScope.CLIENT, Domain.MASTER_CORE, 15.0, 0.1, 100.0, "L1 迁移策略：主控 TPS 低于此值触发迁移");
+    public static final ConfigKey<Double> MASTER_MIGRATION_MAX_LOAD_AVERAGE = decimal("master.migrationMaxLoadAverage", ConfigScope.CLIENT, Domain.MASTER_CORE, 4.0, 0.1, 100.0, "L1 迁移策略：主控系统负载均值高于此值触发迁移（getSystemLoadAverage 为 -1 视为无信号）");
+    public static final ConfigKey<String> MASTER_MIGRATION_MAINTENANCE_WINDOW = string("master.migrationMaintenanceWindow", ConfigScope.CLIENT, Domain.MASTER_CORE, "", "L1 迁移策略：维护窗口 \"HH:MM-HH:MM\"（本地时区，含跨午夜）；空串=禁用");
+    public static final ConfigKey<Long> MASTER_MIGRATION_HEARTBEAT_INTERVAL_MS = longValue("master.migrationHeartbeatIntervalMs", ConfigScope.CLIENT, Domain.MASTER_CORE, 5000L, 100L, 60000L, "L1 迁移：应用层 HEARTBEAT 发送周期（ms）");
+    public static final ConfigKey<Long> MASTER_MIGRATION_IDLE_WINDOW_MS = longValue("master.migrationIdleWindowMs", ConfigScope.CLIENT, Domain.MASTER_CORE, 10000L, 1000L, 600000L, "L1 迁移：空闲窗口判定时长（ms；玩家静止 + 区块 hash 稳定，适合迁移的时机）");
+    public static final ConfigKey<Long> MASTER_MIGRATION_SILENT_TIMEOUT_MS = longValue("master.migrationSilentTimeoutMs", ConfigScope.CLIENT, Domain.MASTER_CORE, 10000L, 1000L, 600000L, "L1 迁移：outbound 入站静默超时（ms；默认 10s 使失效识别 ≤15s；未配置时回退 master.migrationFaultTimeoutMs 语义）");
 
     // === 区块核心（chunk.*；SERVER 2 键）===
     public static final ConfigKey<Boolean> SERVER_CHUNK_SEED_GEN_ENABLED = bool("chunk.seedGenEnabled", ConfigScope.SERVER, Domain.CHUNK_CORE, false, "是否启用 SeedGen（服务端对 pristine 区块发 SeedRef 替代区块数据；客户端本地生成，hash 校验兜底；需双端同版本，默认关）");
@@ -75,6 +85,7 @@ public final class ConfigSchema {
     public static final ConfigKey<List<String>> DATAPLANE_UDP_LISTENERS = stringList("dataplane.udpListeners", ConfigScope.SERVER, Domain.DATAPLANE, () -> HassiumConfig.MasterCoreConfig.DEFAULT.dataPlane().udpListeners().stream().map(DataPlaneEndpointConfig::encodeListener).toList(), "UDP listener 编码列表");
 
     // === 兼容性（compat.*；SERVER 2 键）===
+    public static final ConfigKey<Long> MASTER_MIGRATION_PREWARM_TTL_MS = longValue("master.migrationPrewarmTtlMs", ConfigScope.SERVER, Domain.MASTER_CORE, 60000L, 1000L, Long.MAX_VALUE, "预热会话 TTL（ms；无续流完成的预热物化会话到期清理；T4 交付键，本键仅实现+getter）");
     public static final ConfigKey<Boolean> COMPAT_REQUIRE_CLIENT_MOD = bool("compat.requireClientMod", ConfigScope.SERVER, Domain.COMPAT, false, "是否强制要求客户端安装 Hassium");
     public static final ConfigKey<Boolean> COMPAT_AUTO_DOWNGRADE = bool("compat.autoDowngradeOnError", ConfigScope.SERVER, Domain.COMPAT, true, "出错时是否自动降级");
 
@@ -148,6 +159,10 @@ public final class ConfigSchema {
 
     private static ConfigKey<Double> decimal(String path, ConfigScope scope, Domain domain, double defaultValue, double min, double max, String comment) {
         return add(path, scope, domain, ConfigType.DOUBLE, defaultValue, min, max, comment, Double.class);
+    }
+
+    private static ConfigKey<String> string(String path, ConfigScope scope, Domain domain, String defaultValue, String comment) {
+        return add(path, scope, domain, ConfigType.STRING, defaultValue, null, null, comment, String.class);
     }
 
     private static ConfigKey<List<String>> stringList(String path, ConfigScope scope, Domain domain, Supplier<List<String>> defaultSupplier, String comment) {
