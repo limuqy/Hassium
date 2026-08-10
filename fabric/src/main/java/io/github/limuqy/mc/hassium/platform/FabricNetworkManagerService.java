@@ -12,6 +12,7 @@ import io.github.limuqy.mc.hassium.network.SectionHashRequestC2SPacket;
 import io.github.limuqy.mc.hassium.platform.services.INetworkManagerService;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
+import net.minecraft.client.Minecraft;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.server.level.ServerPlayer;
 import org.slf4j.Logger;
@@ -31,11 +32,16 @@ public class FabricNetworkManagerService implements INetworkManagerService {
 
     @Override
     public void sendChunkDataRequest(FriendlyByteBuf buf) {
+        // review-fix: T10-6: 无 connection 检查直接 send → 断线竞态下 Fabric send 抛异常且 buf 未释放；对齐 FabricNetworkManager:250-263
+        if (Minecraft.getInstance().getConnection() != null) {
 #if MC_VER < MC_1_20_5
-        ClientPlayNetworking.send(ChunkDataRequestC2SPacket.CHANNEL, buf);
+            ClientPlayNetworking.send(ChunkDataRequestC2SPacket.CHANNEL, buf);
 #else
-        ClientPlayNetworking.send(FabricPayloadRegistry.toPayload(FabricPayloadRegistry.CHUNK_DATA_REQUEST_C2S_TYPE, buf));
+            ClientPlayNetworking.send(FabricPayloadRegistry.toPayload(FabricPayloadRegistry.CHUNK_DATA_REQUEST_C2S_TYPE, buf));
 #endif
+        } else {
+            buf.release();
+        }
     }
 
     @Override

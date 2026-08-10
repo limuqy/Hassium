@@ -72,7 +72,8 @@ public class ForgeNetworkManager implements NetworkManager {
     private static int packetId = 0;
 #else
     /** Forge 50+：在 {@link #registerChannels()} 中构建并赋值 */
-    public static SimpleChannel CHANNEL;
+    // review-fix: T10-10: commonSetup 主线程赋值、netty 线程读取 → volatile 保证可见性
+    public static volatile SimpleChannel CHANNEL;
 #endif
 
     @Override
@@ -257,17 +258,6 @@ public class ForgeNetworkManager implements NetworkManager {
                 java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT)
         );
 
-        CHANNEL.<LightDeltaWrapper>registerMessage(
-                packetId++,
-                LightDeltaWrapper.class,
-                LightDeltaWrapper::encode,
-                LightDeltaWrapper::decode,
-                (msg, ctx) -> {
-                    ctx.get().enqueueWork(() -> handleLightDelta(msg));
-                    ctx.get().setPacketHandled(true);
-                },
-                java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT)
-        );
 
         CHANNEL.<DictionarySyncWrapper>registerMessage(
                 packetId++,
@@ -365,8 +355,6 @@ public class ForgeNetworkManager implements NetworkManager {
                         .addMain(BlockEntityDataWrapper.class,
                                 playCodec(BlockEntityDataWrapper::encode, BlockEntityDataWrapper::decode),
                                 ForgeNetworkManager::onBlockEntityData)
-                        .addMain(LightDeltaWrapper.class, playCodec(LightDeltaWrapper::encode, LightDeltaWrapper::decode),
-                                ForgeNetworkManager::onLightDelta)
                         .addMain(SeedRefWrapper.class, playCodec(SeedRefWrapper::encode, SeedRefWrapper::decode),
                                 ForgeNetworkManager::onSeedRef)
                         .addMain(DictionarySyncWrapper.class,
@@ -450,9 +438,6 @@ public class ForgeNetworkManager implements NetworkManager {
         ctx.enqueueWork(() -> handleBlockEntityData(msg));
     }
 
-    private static void onLightDelta(LightDeltaWrapper msg, CustomPayloadEvent.Context ctx) {
-        ctx.enqueueWork(() -> handleLightDelta(msg));
-    }
 
     private static void onDictionarySync(DictionarySyncWrapper msg, CustomPayloadEvent.Context ctx) {
         ctx.enqueueWork(() -> handleDictionarySyncClient(msg.data()));
@@ -913,32 +898,26 @@ public class ForgeNetworkManager implements NetworkManager {
         }
     }
 
-    private static void handleLightDelta(LightDeltaWrapper msg) {
-        try {
-            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data()));
-            // 方案 A：客户端不消费 LightDelta，no-op
-        } catch (Exception e) {
-            LOGGER.error("Hassium: Failed to handle light delta packet", e);
-        }
-    }
 
     @Override
     public void sendChunkDataRequest(FriendlyByteBuf buf) {
-        byte[] data = new byte[buf.readableBytes()];
-        buf.readBytes(data);
-        buf.release();
+        // review-fix: T10-7: 未连接时 sendToServer → PacketDistributor.SERVER 抛 IllegalStateException（buf 已 release 丢失）→ 对齐 NeoForge:2555 先查连接
+        if (net.minecraft.client.Minecraft.getInstance().getConnection() != null) {
+            byte[] data = new byte[buf.readableBytes()];
+            buf.readBytes(data);
+            buf.release();
 #if MC_VER < MC_1_20_2
-        CHANNEL.sendToServer(new DataRequestWrapper(data));
+            CHANNEL.sendToServer(new DataRequestWrapper(data));
 #else
-        sendToServer(new DataRequestWrapper(data));
+            sendToServer(new DataRequestWrapper(data));
 #endif
-        LOGGER.debug("Hassium: Sent chunk data request");
+            LOGGER.debug("Hassium: Sent chunk data request");
+        } else {
+            buf.release();
+        }
     }
 
-    @Override
-    public void sendCompressedPayload(CompressedPayloadPacket packet) {
-        throw new UnsupportedOperationException("Not implemented");
-    }
+    // review-fix: T11-14 sendCompressedPayload 退役（common 接口 default no-op，无调用方）
 
     @Override
     public void sendChunkHashPacket(ServerPlayer player, FriendlyByteBuf buf) {
@@ -1013,15 +992,10 @@ public class ForgeNetworkManager implements NetworkManager {
     }
 
     @Override
+    // review-fix: T10-8: LightDelta 客户端不消费（原 handler 即 no-op），S2C 通道整体退役——注册已删，
+    // SimpleChannel 发送未注册消息会抛异常；此处仅消费 buf 所有权（release）不再发送。
     public void sendLightDeltaPacket(ServerPlayer player, FriendlyByteBuf buf) {
-        byte[] data = new byte[buf.readableBytes()];
-        buf.readBytes(data);
         buf.release();
-#if MC_VER < MC_1_20_2
-        CHANNEL.sendTo(new LightDeltaWrapper(data), player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
-#else
-        sendToPlayer(player, new LightDeltaWrapper(data));
-#endif
     }
 
     /**
@@ -1239,7 +1213,11 @@ public class ForgeNetworkManager implements NetworkManager {
         }
 
         public static CompressedPayloadWrapper decode(FriendlyByteBuf buf) {
+            // review-fix: T10-9: length 无上限 → readTail 式校验（恶意超大 varInt 拒绝分配）
             int length = buf.readVarInt();
+            if (length < 0 || length > buf.readableBytes()) {
+                throw new IllegalArgumentException("invalid CompressedPayloadWrapper length: " + length);
+            }
             byte[] data = new byte[length];
             buf.readBytes(data);
             return new CompressedPayloadWrapper(data);
@@ -1253,7 +1231,11 @@ public class ForgeNetworkManager implements NetworkManager {
         }
 
         public static AggregationWrapper decode(FriendlyByteBuf buf) {
+            // review-fix: T10-9: length 无上限 → readTail 式校验（恶意超大 varInt 拒绝分配）
             int length = buf.readVarInt();
+            if (length < 0 || length > buf.readableBytes()) {
+                throw new IllegalArgumentException("invalid AggregationWrapper length: " + length);
+            }
             byte[] data = new byte[length];
             buf.readBytes(data);
             return new AggregationWrapper(data);
@@ -1267,7 +1249,11 @@ public class ForgeNetworkManager implements NetworkManager {
         }
 
         public static DataRequestWrapper decode(FriendlyByteBuf buf) {
+            // review-fix: T10-9: length 无上限 → readTail 式校验（恶意超大 varInt 拒绝分配）
             int length = buf.readVarInt();
+            if (length < 0 || length > buf.readableBytes()) {
+                throw new IllegalArgumentException("invalid DataRequestWrapper length: " + length);
+            }
             byte[] data = new byte[length];
             buf.readBytes(data);
             return new DataRequestWrapper(data);
@@ -1281,7 +1267,11 @@ public class ForgeNetworkManager implements NetworkManager {
         }
 
         public static ClientBloomSyncWrapper decode(FriendlyByteBuf buf) {
+            // review-fix: T10-9: length 无上限 → readTail 式校验（恶意超大 varInt 拒绝分配）
             int length = buf.readVarInt();
+            if (length < 0 || length > buf.readableBytes()) {
+                throw new IllegalArgumentException("invalid ClientBloomSyncWrapper length: " + length);
+            }
             byte[] data = new byte[length];
             buf.readBytes(data);
             return new ClientBloomSyncWrapper(data);
@@ -1295,7 +1285,11 @@ public class ForgeNetworkManager implements NetworkManager {
         }
 
         public static ChunkHashWrapper decode(FriendlyByteBuf buf) {
+            // review-fix: T10-9: length 无上限 → readTail 式校验（恶意超大 varInt 拒绝分配）
             int length = buf.readVarInt();
+            if (length < 0 || length > buf.readableBytes()) {
+                throw new IllegalArgumentException("invalid ChunkHashWrapper length: " + length);
+            }
             byte[] data = new byte[length];
             buf.readBytes(data);
             return new ChunkHashWrapper(data);
@@ -1309,7 +1303,11 @@ public class ForgeNetworkManager implements NetworkManager {
         }
 
         public static SectionHashRequestWrapper decode(FriendlyByteBuf buf) {
+            // review-fix: T10-9: length 无上限 → readTail 式校验（恶意超大 varInt 拒绝分配）
             int length = buf.readVarInt();
+            if (length < 0 || length > buf.readableBytes()) {
+                throw new IllegalArgumentException("invalid SectionHashRequestWrapper length: " + length);
+            }
             byte[] data = new byte[length];
             buf.readBytes(data);
             return new SectionHashRequestWrapper(data);
@@ -1323,7 +1321,11 @@ public class ForgeNetworkManager implements NetworkManager {
         }
 
         public static SectionDeltaWrapper decode(FriendlyByteBuf buf) {
+            // review-fix: T10-9: length 无上限 → readTail 式校验（恶意超大 varInt 拒绝分配）
             int length = buf.readVarInt();
+            if (length < 0 || length > buf.readableBytes()) {
+                throw new IllegalArgumentException("invalid SectionDeltaWrapper length: " + length);
+            }
             byte[] data = new byte[length];
             buf.readBytes(data);
             return new SectionDeltaWrapper(data);
@@ -1337,7 +1339,11 @@ public class ForgeNetworkManager implements NetworkManager {
         }
 
         public static SeedRefWrapper decode(FriendlyByteBuf buf) {
+            // review-fix: T10-9: length 无上限 → readTail 式校验（恶意超大 varInt 拒绝分配）
             int length = buf.readVarInt();
+            if (length < 0 || length > buf.readableBytes()) {
+                throw new IllegalArgumentException("invalid SeedRefWrapper length: " + length);
+            }
             byte[] data = new byte[length];
             buf.readBytes(data);
             return new SeedRefWrapper(data);
@@ -1351,7 +1357,11 @@ public class ForgeNetworkManager implements NetworkManager {
         }
 
         public static BlockEntityRequestWrapper decode(FriendlyByteBuf buf) {
+            // review-fix: T10-9: length 无上限 → readTail 式校验（恶意超大 varInt 拒绝分配）
             int length = buf.readVarInt();
+            if (length < 0 || length > buf.readableBytes()) {
+                throw new IllegalArgumentException("invalid BlockEntityRequestWrapper length: " + length);
+            }
             byte[] data = new byte[length];
             buf.readBytes(data);
             return new BlockEntityRequestWrapper(data);
@@ -1365,26 +1375,17 @@ public class ForgeNetworkManager implements NetworkManager {
         }
 
         public static BlockEntityDataWrapper decode(FriendlyByteBuf buf) {
+            // review-fix: T10-9: length 无上限 → readTail 式校验（恶意超大 varInt 拒绝分配）
             int length = buf.readVarInt();
+            if (length < 0 || length > buf.readableBytes()) {
+                throw new IllegalArgumentException("invalid BlockEntityDataWrapper length: " + length);
+            }
             byte[] data = new byte[length];
             buf.readBytes(data);
             return new BlockEntityDataWrapper(data);
         }
     }
 
-    public record LightDeltaWrapper(byte[] data) {
-        public void encode(FriendlyByteBuf buf) {
-            buf.writeVarInt(data.length);
-            buf.writeBytes(data);
-        }
-
-        public static LightDeltaWrapper decode(FriendlyByteBuf buf) {
-            int length = buf.readVarInt();
-            byte[] data = new byte[length];
-            buf.readBytes(data);
-            return new LightDeltaWrapper(data);
-        }
-    }
 
     public record DictionarySyncWrapper(byte[] data) {
         public void encode(FriendlyByteBuf buf) {
@@ -1393,7 +1394,11 @@ public class ForgeNetworkManager implements NetworkManager {
         }
 
         public static DictionarySyncWrapper decode(FriendlyByteBuf buf) {
+            // review-fix: T10-9: length 无上限 → readTail 式校验（恶意超大 varInt 拒绝分配）
             int length = buf.readVarInt();
+            if (length < 0 || length > buf.readableBytes()) {
+                throw new IllegalArgumentException("invalid DictionarySyncWrapper length: " + length);
+            }
             byte[] data = new byte[length];
             buf.readBytes(data);
             return new DictionarySyncWrapper(data);
@@ -1407,7 +1412,11 @@ public class ForgeNetworkManager implements NetworkManager {
         }
 
         public static IndexSyncWrapper decode(FriendlyByteBuf buf) {
+            // review-fix: T10-9: length 无上限 → readTail 式校验（恶意超大 varInt 拒绝分配）
             int length = buf.readVarInt();
+            if (length < 0 || length > buf.readableBytes()) {
+                throw new IllegalArgumentException("invalid IndexSyncWrapper length: " + length);
+            }
             byte[] data = new byte[length];
             buf.readBytes(data);
             return new IndexSyncWrapper(data);

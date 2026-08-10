@@ -81,7 +81,8 @@ public class HassiumNeoForge {
             }
             // 未走 Data 通道 → 走 Primary，记分流统计（口径 = encode() 总长度，与 Data 侧对齐）
             io.github.limuqy.mc.hassium.metrics.NetworkStats.recordBulkSentPrimary(payload.length);
-            NeoForgeNetworkManager.sendCompressedChunk(player, compressed);
+            // review-fix: T11-19 传已编码 payload，避免 sendCompressedChunk 内部二次 encode()（重复分配+拷贝）
+            NeoForgeNetworkManager.sendCompressedChunk(player, payload);
         });
         LOGGER.info("Hassium: ChunkSender registered for NeoForge");
 

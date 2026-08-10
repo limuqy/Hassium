@@ -279,10 +279,7 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
     }
 
 
-    @Override
-    public void sendCompressedPayload(CompressedPayloadPacket packet) {
-        throw new UnsupportedOperationException("Use sendCompressedChunk() instead");
-    }
+    // review-fix: T11-14 sendCompressedPayload 退役（common 接口 default no-op，无调用方）
 
     @Override
     public void sendChunkHashPacket(ServerPlayer player, FriendlyByteBuf buf) {
@@ -386,7 +383,13 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
 
             DebugLogger.debug(LogType.NETWORK, "[SEND_CHUNK] Encoded chunk data ({} bytes), sending via network", data.length);
 #if MC_VER < MC_1_20_5
-            ServerPlayNetworking.send(player, CHUNK_PAYLOAD_S2C, buf);
+            // review-fix: T10-2: send 抛异常时 Fabric 不会释放 buf → 失败路径手动 release 后重抛（成功路径由 Fabric 负责释放）
+            try {
+                ServerPlayNetworking.send(player, CHUNK_PAYLOAD_S2C, buf);
+            } catch (Exception e) {
+                buf.release();
+                throw e;
+            }
 #else
             ServerPlayNetworking.send(player, FabricPayloadRegistry.toPayload(FabricPayloadRegistry.CHUNK_PAYLOAD_S2C_TYPE, buf));
 #endif
@@ -922,8 +925,8 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
             try {
                 DebugLogger.debug(LogType.NETWORK, "[SERVER] Received chunk data request from player {}",
                         player.getName().getString());
-                ChunkDataRequestC2SPacket request = ChunkDataRequestC2SPacket.decode(
-                        new net.minecraft.network.FriendlyByteBuf(buf.copy()));
+                // review-fix: T10-1: 直接 decode 原 buf（Fabric 回调结束后负责释放），避免副本泄漏
+                ChunkDataRequestC2SPacket request = ChunkDataRequestC2SPacket.decode(buf);
                 DebugLogger.debug(LogType.NETWORK, "[SERVER] Decoded chunk data request: {} chunks, dimension={}",
                         request.chunks().size(), request.dimension());
 
@@ -971,8 +974,8 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
 #if MC_VER < MC_1_20_5
         ServerPlayNetworking.registerGlobalReceiver(SECTION_HASH_REQUEST_C2S, (server, player, handler, buf, sender) -> {
             try {
-                SectionHashRequestC2SPacket request = SectionHashRequestC2SPacket.decode(
-                        new net.minecraft.network.FriendlyByteBuf(buf.copy()));
+                // review-fix: T10-1: 直接 decode 原 buf（Fabric 回调结束后负责释放），避免副本泄漏
+                SectionHashRequestC2SPacket request = SectionHashRequestC2SPacket.decode(buf);
 
                 server.execute(() -> {
                     try {
@@ -1014,8 +1017,8 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
 #if MC_VER < MC_1_20_5
         ServerPlayNetworking.registerGlobalReceiver(BLOCK_ENTITY_REQUEST_C2S, (server, player, handler, buf, sender) -> {
             try {
-                BlockEntityRequestC2SPacket request = BlockEntityRequestC2SPacket.decode(
-                        new net.minecraft.network.FriendlyByteBuf(buf.copy()));
+                // review-fix: T10-1: 直接 decode 原 buf（Fabric 回调结束后负责释放），避免副本泄漏
+                BlockEntityRequestC2SPacket request = BlockEntityRequestC2SPacket.decode(buf);
 
                 server.execute(() -> {
                     try {
@@ -1057,8 +1060,8 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
 #if MC_VER < MC_1_20_5
         ServerPlayNetworking.registerGlobalReceiver(CLIENT_BLOOM_SYNC_C2S, (server, player, handler, buf, sender) -> {
             try {
-                ClientBloomSyncPacket packet = ClientBloomSyncPacket.decode(
-                        new net.minecraft.network.FriendlyByteBuf(buf.copy()));
+                // review-fix: T10-1: 直接 decode 原 buf（Fabric 回调结束后负责释放），避免副本泄漏
+                ClientBloomSyncPacket packet = ClientBloomSyncPacket.decode(buf);
 
                 server.execute(() -> {
                     try {

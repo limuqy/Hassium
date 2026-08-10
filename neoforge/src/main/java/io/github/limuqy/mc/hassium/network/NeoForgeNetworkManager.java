@@ -61,6 +61,8 @@ public class NeoForgeNetworkManager implements NetworkManager {
 
     private static final Logger LOGGER = LoggerFactory.getLogger("Hassium/NeoForgeNetwork");
     private static final String PROTOCOL_VERSION = "1";
+    // review-fix: T11-15 握手算法列表上限（防恶意 varint 超大分配 / NegativeArraySizeException）
+    private static final int MAX_HANDSHAKE_ALGORITHMS = 64;
 
     // review-fix: T10-M2（同 REPORT T11-M2）：共享调度器，防每次握手新建单线程调度执行器泄漏线程；JVM 关闭钩子回收
     private static final java.util.concurrent.ScheduledExecutorService PENDING_TIMEOUT_SCHEDULER =
@@ -470,7 +472,11 @@ public class NeoForgeNetworkManager implements NetworkManager {
         public static HandshakeWrapper decode(FriendlyByteBuf buf) {
             int protocolVersion = buf.readVarInt();
             String modVersion = buf.readUtf();
+            // review-fix: T11-15 上限校验（防恶意 varint OOM/NegativeArraySizeException）
             int algoCount = buf.readVarInt();
+            if (algoCount < 0 || algoCount > MAX_HANDSHAKE_ALGORITHMS) {
+                throw new IllegalArgumentException("Handshake algorithm count out of range: " + algoCount);
+            }
             String[] algorithms = new String[algoCount];
             for (int i = 0; i < algoCount; i++) {
                 algorithms[i] = buf.readUtf();
@@ -617,7 +623,6 @@ public class NeoForgeNetworkManager implements NetworkManager {
 
 #elif MC_VER < MC_1_20_5
     // 1.20.4: CustomPacketPayload.write + id（NeoForge 20.4 移除 SimpleChannel，无 StreamCodec/Type）
-    public static final Object CHANNEL = null;
 
     /**
      * 握手请求 Payload (C2S)
@@ -678,7 +683,11 @@ public class NeoForgeNetworkManager implements NetworkManager {
         public static HandshakePayload decode(FriendlyByteBuf buf) {
             int protocolVersion = buf.readVarInt();
             String modVersion = buf.readUtf();
+            // review-fix: T11-15 上限校验（防恶意 varint OOM/NegativeArraySizeException）
             int algCount = buf.readVarInt();
+            if (algCount < 0 || algCount > MAX_HANDSHAKE_ALGORITHMS) {
+                throw new IllegalArgumentException("Handshake algorithm count out of range: " + algCount);
+            }
             String[] algorithms = new String[algCount];
             for (int i = 0; i < algCount; i++) {
                 algorithms[i] = buf.readUtf();
@@ -1059,7 +1068,6 @@ public class NeoForgeNetworkManager implements NetworkManager {
 
 #else
     // 1.20.5+: 使用 Payload + StreamCodec
-    public static final Object CHANNEL = null;
 
     /**
      * 握手请求 Payload (C2S)
@@ -1113,7 +1121,11 @@ public class NeoForgeNetworkManager implements NetworkManager {
                 buf -> {
                     int protocolVersion = buf.readVarInt();
                     String modVersion = buf.readUtf();
+                    // review-fix: T11-15 上限校验（防恶意 varint OOM/NegativeArraySizeException）
                     int algCount = buf.readVarInt();
+                    if (algCount < 0 || algCount > MAX_HANDSHAKE_ALGORITHMS) {
+                        throw new IllegalArgumentException("Handshake algorithm count out of range: " + algCount);
+                    }
                     String[] algorithms = new String[algCount];
                     for (int i = 0; i < algCount; i++) {
                         algorithms[i] = buf.readUtf();
@@ -2257,11 +2269,10 @@ public class NeoForgeNetworkManager implements NetworkManager {
             if (context.player().orElse(null) instanceof ServerPlayer player) {
                 // 客户端上报位置：校正 resync 视距中心（failover/重连时服务端玩家对象位置滞后）
                 ServerChunkPushManager.getInstance().setInitialPlayerPosition(player, payload.playerX(), payload.playerZ());
+                // review-fix: T11-12 原 2259/2264 双份重复调用（合并残留），已删其一，仅保留此一处
                 // SeedGen 能力记录
                 ServerChunkPushManager.getInstance().setPlayerSeedGenSupported(player.getUUID(), payload.seedGenSupported());
                 ServerChunkPushManager.getInstance().setPlayerLightComputeSupported(player.getUUID(), payload.lightComputeSupported());
-                // 客户端上报位置：校正 resync 视距中心（failover/重连时服务端玩家对象位置滞后）
-                ServerChunkPushManager.getInstance().setInitialPlayerPosition(player, payload.playerX(), payload.playerZ());
                 PlayerCompressionTracker.enableCompression(player);
                 boolean useGlobalCompression = HassiumConfigService.getInstance().isGlobalPacketCompressionEnabled()
                         && payload.globalPacketCompressionSupported();
@@ -2872,10 +2883,6 @@ public class NeoForgeNetworkManager implements NetworkManager {
 #endif
     }
 
-    @Override
-    public void sendCompressedPayload(CompressedPayloadPacket packet) {
-        throw new UnsupportedOperationException("Use sendCompressedChunk() instead");
-    }
 
     @Override
     public void sendChunkHashPacket(ServerPlayer player, FriendlyByteBuf buf) {
@@ -3055,15 +3062,13 @@ public class NeoForgeNetworkManager implements NetworkManager {
     }
 
     /**
-     * 发送压缩区块数据到指定玩家
+     * 发送已编码的压缩区块负载到指定玩家（payload 由调用方 encode 一次；review-fix: T11-19）
      */
-    public static void sendCompressedChunk(ServerPlayer player, ChunkCompressionHandler.CompressedChunkData compressed) {
+    public static void sendCompressedChunk(ServerPlayer player, byte[] data) {
         try {
-            LOGGER.debug("[SEND_CHUNK] Sending compressed chunk [{}, {}] to player {} (size={})",
-                    compressed.chunkX, compressed.chunkZ, player.getName().getString(),
-                    compressed.compressedData.length);
+            LOGGER.debug("[SEND_CHUNK] Sending compressed chunk to player {} (size={})",
+                    player.getName().getString(), data.length);
 
-            byte[] data = compressed.encode();
 
 #if MC_VER < MC_1_20_4
 #if MC_VER < MC_1_20_2
@@ -3077,8 +3082,8 @@ public class NeoForgeNetworkManager implements NetworkManager {
             CompressedChunkPayload payload = new CompressedChunkPayload(data);
             player.connection.send(payload);
 #endif
-            LOGGER.debug("[SEND_CHUNK] Successfully sent chunk [{}, {}] to {}",
-                    compressed.chunkX, compressed.chunkZ, player.getName().getString());
+            LOGGER.debug("[SEND_CHUNK] Successfully sent chunk to {}",
+                    player.getName().getString());
         } catch (Exception e) {
             LOGGER.error("[SEND_CHUNK] Failed to send chunk to {}", player.getName().getString(), e);
         }

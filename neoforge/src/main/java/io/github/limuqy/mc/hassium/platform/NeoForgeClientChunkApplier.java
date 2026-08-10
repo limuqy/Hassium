@@ -10,11 +10,9 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientChunkCache;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.multiplayer.ClientPacketListener;
-import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket;
 import net.minecraft.world.level.ChunkPos;
-import net.minecraft.world.level.chunk.LevelChunk;
 
 /**
  * NeoForge 平台的客户端区块注入实现
@@ -44,8 +42,7 @@ public class NeoForgeClientChunkApplier implements IClientChunkApplier {
 #endif
 
             if (packet.getX() != pos.x || packet.getZ() != pos.z) {
-                Constants.LOG.error("Hassium: Chunk position mismatch! Expected [{}, {}], got [{}, {}]",
-                    pos.x, pos.z, packet.getX(), packet.getZ());
+                // review-fix: T11-21 去内部 error 日志（外层 catch 统一记录，避免同一错误双份日志）
                 // 抛异常让 ClientChunkHandler.applyChunkData 的 catch 块统一处理 onRenderOnlyMiss
                 throw new IllegalStateException("Chunk position mismatch");
             }
@@ -108,46 +105,6 @@ public class NeoForgeClientChunkApplier implements IClientChunkApplier {
             throw new RuntimeException(e);
         }
     }
-
-    @Override
-    public void applyToLevel(ClientLevel level, ChunkPos pos, CompoundTag nbt, boolean renderOnly) {
-        try {
-            LevelChunk chunk = new LevelChunk(level, pos);
-
-            ClientLevelAccessor accessor = (ClientLevelAccessor) level;
-            ClientChunkCache chunkSource = accessor.hassium$getChunkSource();
-
-            injectChunkViaReflection(chunkSource, pos, chunk);
-
-            chunk.setLoaded(true);
-
-            if (renderOnly) {
-                IClientLevelExtension mixinAccessor = (IClientLevelExtension) level;
-                mixinAccessor.hassium$addRenderOnlyChunk(pos.toLong());
-            }
-
-            Constants.LOG.debug("Hassium: NeoForge applied chunk [{}, {}] (renderOnly={}) [PLACEHOLDER]",
-                pos.x, pos.z, renderOnly);
-
-        } catch (Exception e) {
-            Constants.LOG.error("Hassium: Failed to apply chunk [{}, {}] to client level", pos.x, pos.z, e);
-        }
-    }
-
-    private void injectChunkViaReflection(ClientChunkCache chunkSource, ChunkPos pos, LevelChunk chunk) {
-        try {
-            java.lang.reflect.Field storageField = ClientChunkCache.class.getDeclaredField("storage");
-            storageField.setAccessible(true);
-            Object storage = storageField.get(chunkSource);
-
-            if (storage != null) {
-                java.lang.reflect.Method replaceMethod = storage.getClass().getDeclaredMethod(
-                        "replace", int.class, int.class, LevelChunk.class);
-                replaceMethod.setAccessible(true);
-                replaceMethod.invoke(storage, pos.x, pos.z, chunk);
-            }
-        } catch (Exception e) {
-            Constants.LOG.error("Hassium: Failed to inject chunk via reflection", e);
-        }
-    }
+    // review-fix: T11-20 占位 NBT 注入路径 applyToLevel 全库无调用方（common IClientChunkApplier 接口方法
+    // 由主会话/M10 删除），injectChunkViaReflection 按 mojmap 字段名反射 + 双重吞异常 → 整段删除。
 }

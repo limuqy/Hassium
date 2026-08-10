@@ -4,8 +4,6 @@ import io.github.limuqy.mc.hassium.network.NeoForgeNetworkManager;
 import io.github.limuqy.mc.hassium.platform.services.INetworkManagerService;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.server.level.ServerPlayer;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 /**
  * NeoForge 平台的网络管理器服务实现
@@ -13,7 +11,6 @@ import org.slf4j.LoggerFactory;
  */
 public class NeoForgeNetworkManagerService implements INetworkManagerService {
 
-    private static final Logger LOGGER = LoggerFactory.getLogger("Hassium/NeoForgeNetworkService");
 
     private final NeoForgeNetworkManager networkManager;
 
@@ -80,12 +77,5 @@ public class NeoForgeNetworkManagerService implements INetworkManagerService {
             return;
         }
         networkManager.sendLightDeltaPacket(player, buf);
-    }
-
-    /**
-     * 获取底层的 NetworkManager 实例
-     */
-    public NeoForgeNetworkManager getNetworkManager() {
-        return networkManager;
     }
 }

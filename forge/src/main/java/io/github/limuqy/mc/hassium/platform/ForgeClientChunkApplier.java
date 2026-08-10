@@ -10,17 +10,14 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientChunkCache;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.multiplayer.ClientPacketListener;
-import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket;
 import net.minecraft.world.level.ChunkPos;
-import net.minecraft.world.level.chunk.LevelChunk;
 
 /**
  * Forge 平台的客户端区块注入实现
  * <p>
- * 注意：由于客户端环境限制，当前实现创建空区块并注入。
- * 完整的区块数据恢复需要更复杂的实现，将在后续版本中完善。
+ * 完整区块数据恢复路径见 {@link #applyToLevelFromByteBuf}。
  */
 public class ForgeClientChunkApplier implements IClientChunkApplier {
 
@@ -92,59 +89,5 @@ public class ForgeClientChunkApplier implements IClientChunkApplier {
         }
     }
 
-    @Override
-    public void applyToLevel(ClientLevel level, ChunkPos pos, CompoundTag nbt, boolean renderOnly) {
-        try {
-            // TODO: 实现完整的区块数据恢复
-            // 当前创建空区块作为占位，实际的 NBT 数据恢复需要：
-            // 1. 手动从 NBT 恢复 sections
-            // 2. 恢复 block entities
-            // 3. 恢复 heightmaps
-            // 这需要复制 ChunkSerializer 的大部分逻辑
 
-            LevelChunk chunk = new LevelChunk(level, pos);
-
-            // 通过 accessor 获取 ClientChunkCache 并注入区块
-            ClientLevelAccessor accessor = (ClientLevelAccessor) level;
-            ClientChunkCache chunkSource = accessor.hassium$getChunkSource();
-
-            // 使用反射调用内部方法注入区块
-            injectChunkViaReflection(chunkSource, pos, chunk);
-
-            // 标记区块为已加载状态
-            chunk.setLoaded(true);
-
-            // 如果是仅渲染区块，标记它
-            if (renderOnly) {
-                IClientLevelExtension mixinAccessor = (IClientLevelExtension) level;
-                mixinAccessor.hassium$addRenderOnlyChunk(pos.toLong());
-            }
-
-            Constants.LOG.debug("Hassium: Forge applied chunk [{}, {}] (renderOnly={}) [PLACEHOLDER]",
-                pos.x, pos.z, renderOnly);
-
-        } catch (Exception e) {
-            Constants.LOG.error("Hassium: Failed to apply chunk [{}, {}] to client level", pos.x, pos.z, e);
-        }
-    }
-
-    private void injectChunkViaReflection(ClientChunkCache chunkSource, ChunkPos pos, LevelChunk chunk) {
-        try {
-            // ClientChunkCache 的内部 Storage 类有 replace 方法
-            // 我们通过反射访问它
-            java.lang.reflect.Field storageField = ClientChunkCache.class.getDeclaredField("storage");
-            storageField.setAccessible(true);
-            Object storage = storageField.get(chunkSource);
-
-            if (storage != null) {
-                // 调用 storage.replace 方法
-                java.lang.reflect.Method replaceMethod = storage.getClass().getDeclaredMethod(
-                        "replace", int.class, int.class, LevelChunk.class);
-                replaceMethod.setAccessible(true);
-                replaceMethod.invoke(storage, pos.x, pos.z, chunk);
-            }
-        } catch (Exception e) {
-            Constants.LOG.error("Hassium: Failed to inject chunk via reflection", e);
-        }
-    }
 }

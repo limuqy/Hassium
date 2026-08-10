@@ -37,6 +37,9 @@ public class HassiumClientMod implements ClientModInitializer {
 
         // 注册客户端命令
         FabricHassiumCommand.registerClientCommands();
+        // review-fix: T10-11: Fabric 客户端零 S2C receiver（T12 收口，网关为唯一支持客户端形态；客户端 receiver 已退役）。
+        // 非网关直连时所有 Hassium S2C 通道被 Fabric 静默丢弃 → 显式告警，便于第一时间定位（不改消费路径）。
+        LOGGER.warn("Hassium: Fabric client registers no Hassium S2C receivers — Hassium server->client packets are only consumed via the gateway topology (T12). Direct connections to a Hassium server will silently drop them.");
         LOGGER.info("Hassium: Fabric client-side initialization complete");
     }
 }

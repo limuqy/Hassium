@@ -139,7 +139,8 @@ public final class FabricPayloadRegistry {
                 io.github.limuqy.mc.hassium.network.PreHandshakePayload.TYPE,
                 io.github.limuqy.mc.hassium.network.PreHandshakePayload.STREAM_CODEC);
 
-        LOGGER.info("Hassium: Registered 9 S2C and 6 C2S payload types for 1.20.5+");
+        // review-fix: T10-3: 实际注册 10 S2C（:119-128）+ 6 C2S（:131-136）+ 1 configurationC2S（:138-140），原日志 9/6 与实际不符误导排障
+        LOGGER.info("Hassium: Registered 10 S2C and 6 C2S (+1 config) payload types for 1.20.5+");
     }
 
     /**
