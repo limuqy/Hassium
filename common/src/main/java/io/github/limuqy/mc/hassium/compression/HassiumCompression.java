@@ -9,13 +9,15 @@ import io.github.limuqy.mc.hassium.Constants;
  */
 public class HassiumCompression {
 
+    // review-fix: T5-93 volatile——并发 initialize()/isInitialized()/getDictionaryRegistry() 可见性
+    private static volatile boolean initialized = false;
     private static DictionaryRegistry dictionaryRegistry;
-    private static boolean initialized = false;
 
     /**
      * 初始化压缩系统
      */
-    public static void initialize() {
+    // review-fix: T5-93 synchronized——并发 initialize() 双执行竞态（重复建 registry/注册 codec/加载字典）
+    public static synchronized void initialize() {
         if (initialized) {
             Constants.LOG.warn("HassiumCompression already initialized");
             return;
@@ -65,7 +67,8 @@ public class HassiumCompression {
     /**
      * 重置压缩系统（主要用于测试）
      */
-    public static void reset() {
+    // review-fix: T5-93 与 initialize() 同锁（reset 后并发 initialize 需同步）
+    public static synchronized void reset() {
         dictionaryRegistry = null;
         initialized = false;
         Constants.LOG.info("Hassium compression system reset");

@@ -14,6 +14,9 @@ public class VanillaZlibCodec implements CompressionCodec {
 
     private static final CompressionAlgorithmId ALGORITHM_ID = CompressionAlgorithmId.VANILLA_ZLIB;
 
+    /** review-fix: T5-90 解压输出上限（防 zip bomb） */
+    private static final int MAX_DECOMPRESSED_SIZE = 64 * 1024 * 1024;
+
     @Override
     public CompressionAlgorithmId id() {
         return ALGORITHM_ID;
@@ -48,19 +51,36 @@ public class VanillaZlibCodec implements CompressionCodec {
             inflater.setInput(input);
 
             ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
-            byte[] buffer = new byte[1024];
+            byte[] buffer = new byte[8192];
             while (!inflater.finished()) {
                 int count = inflater.inflate(buffer);
                 if (count == 0) {
+                    // review-fix: T5-90 无进展不再静默 break——明确区分截断/缺字典/格式错误
                     if (inflater.needsInput()) {
-                        throw new CompressionException.DecompressionFailedException("Zlib decompression failed: needs more input");
+                        throw new CompressionException.DecompressionFailedException(
+                                "Zlib decompression failed: truncated input");
                     }
-                    break;
+                    if (inflater.needsDictionary()) {
+                        throw new CompressionException.DecompressionFailedException(
+                                "Zlib decompression failed: preset dictionary required");
+                    }
+                    throw new CompressionException.DecompressionFailedException(
+                            "Zlib decompression failed: no progress before stream end");
+                }
+                if (outputStream.size() > MAX_DECOMPRESSED_SIZE - count) {
+                    throw new CompressionException.DecompressionFailedException(
+                            "Zlib decompression failed: output exceeds limit " + MAX_DECOMPRESSED_SIZE);
                 }
                 outputStream.write(buffer, 0, count);
             }
-
+            // review-fix: T5-90 退出校验——循环退出时 inflater 必须 finished，否则视为截断
+            if (!inflater.finished()) {
+                throw new CompressionException.DecompressionFailedException(
+                        "Zlib decompression failed: stream not finished");
+            }
             return outputStream.toByteArray();
+        } catch (CompressionException e) {
+            throw e;
         } catch (Exception e) {
             throw new CompressionException.DecompressionFailedException("Zlib decompression failed", e);
         } finally {

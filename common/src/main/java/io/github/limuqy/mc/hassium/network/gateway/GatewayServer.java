@@ -143,14 +143,31 @@ public final class GatewayServer {
                     }
                 });
         bootstrap.bind(new InetSocketAddress(bindHost, port)).addListener(future -> {
-            if (future.isSuccess()) {
-                serverChannel = ((ChannelFuture) future).channel();
-                LOGGER.info("[GATEWAY] listening on {}:{}", bindHost, port);
-            } else {
+            if (!future.isSuccess()) {
                 LOGGER.error("[GATEWAY] bind failed on {}:{}", bindHost, port, future.cause());
                 running.set(false);
                 shutdownGroups(boss, worker);
+                return;
             }
+            Channel boundChannel = ((ChannelFuture) future).channel();
+            // review-fix: T5-95 stop() 与异步 bind 竞态——成功回调内复查 running：
+            // stop 已执行（group 已关）时立即关闭新 channel，避免 channel/group 泄漏
+            if (!running.get()) {
+                boundChannel.close();
+                shutdownGroups(boss, worker);
+                LOGGER.info("[GATEWAY] bind completed after stop — closed bound channel");
+                return;
+            }
+            serverChannel = boundChannel;
+            // review-fix: T5-95 复查残留窗口——stop 恰在检查与赋值之间执行时再核一次
+            if (!running.get()) {
+                serverChannel = null;
+                boundChannel.close();
+                shutdownGroups(boss, worker);
+                LOGGER.info("[GATEWAY] stop raced bind completion — closed bound channel");
+                return;
+            }
+            LOGGER.info("[GATEWAY] listening on {}:{}", bindHost, port);
         });
     }
 

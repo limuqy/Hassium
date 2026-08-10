@@ -39,6 +39,19 @@ public class ZstdCompressionTest {
                 input.length, compressed.length, (double) compressed.length / input.length * 100);
     }
 
+
+    /** review-fix: T5-88 content size 为 0 的合法空内容帧按空数组解压（此前误判为失败抛异常） */
+    @Test
+    public void testZstdEmptyFrameRoundtrip() throws CompressionException {
+        ZstdCompressionCodec codec = new ZstdCompressionCodec();
+
+        byte[] compressed = codec.compress(new byte[0], CompressionOptions.withLevel(3));
+        byte[] decompressed = codec.decompress(compressed, CompressionOptions.withLevel(3));
+
+        assertNotNull(decompressed);
+        assertArrayEquals(new byte[0], decompressed, "empty frame should decompress to empty array");
+    }
+
     @Test
     public void testZstdCompressionLevels() throws CompressionException {
         ZstdCompressionCodec codec = new ZstdCompressionCodec();

@@ -208,7 +208,7 @@ public class HassiumAggregationPacket {
                 type = subPacket.getType();
                 ByteBuf data = subPacket.getDataBuf();
 
-                Constants.LOG.debug("Handling aggregated sub-packet: {}", type);
+                Constants.LOG.debug("Handling aggregated sub-packet: {}", sanitizeLog(type));
 
                 // 检查是否是原版包
                 Integer vanillaId = indexManager.getVanillaPacketId(type, PacketFlow.CLIENTBOUND);
@@ -224,7 +224,7 @@ public class HassiumAggregationPacket {
                                 body,
                                 PacketCodecCompat.resolveRegistryAccess(connection));
                     } catch (Exception e) {
-                        Constants.LOG.error("Failed to decode vanilla packet {} (id={})", type, vanillaId, e);
+                        Constants.LOG.error("Failed to decode vanilla packet {} (id={})", sanitizeLog(type), vanillaId, e);
                         continue;
                     }
                 } else {
@@ -241,13 +241,34 @@ public class HassiumAggregationPacket {
                         Packet rawPacket = packet;
                         rawPacket.handle(connection.getPacketListener());
                     } catch (Exception e) {
-                        Constants.LOG.error("Failed to handle packet {}", type, e);
+                        Constants.LOG.error("Failed to handle packet {}", sanitizeLog(type), e);
                     }
                 }
             } catch (Exception e) {
-                Constants.LOG.error("Failed to handle aggregated sub-packet: {}", subPacket.getType(), e);
+                Constants.LOG.error("Failed to handle aggregated sub-packet: {}", sanitizeLog(subPacket.getType()), e);
             }
         }
+    }
+
+    /**
+     * 过滤日志输出中的控制字符（review-fix: T2-73：子包类型为网络可控输入，防日志注入）。
+     */
+    private static String sanitizeLog(Object value) {
+        String s = String.valueOf(value);
+        StringBuilder sb = null;
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c < 0x20 || c == 0x7F) {
+                if (sb == null) {
+                    sb = new StringBuilder(s.length());
+                    sb.append(s, 0, i);
+                }
+                sb.append('?');
+            } else if (sb != null) {
+                sb.append(c);
+            }
+        }
+        return sb != null ? sb.toString() : s;
     }
 
     public List<AggregatedSubPacket> getSubPackets() {

@@ -138,20 +138,29 @@ public class ZstdPipelineSwitcher {
     }
 
     /**
-     * 反射获取 Connection.channel（加载器侧共用）。
-     * <p>
-     * 按字段类型匹配而非字段名：Forge（SRG）/ Fabric（intermediary）生产运行时的字段名
-     * 不是 mojmap 名 "channel"，名字反射在 1.20.1 段全线失败。
-     * Connection 在 1.20.1–1.21.11 中 Channel 类型字段唯一，类型匹配安全。
+     * Connection.channel 字段缓存（review-fix: T2-75）：热路径（每 20ms/连接 flush）首次反射
+     * 查找后缓存复用；字段按类型匹配（Forge SRG / Fabric intermediary 字段名不可靠），
+     * 类加载器侧共用，双检锁保证线程安全。
      */
+    private static volatile Field connectionChannelField;
+
     public static Channel getConnectionChannel(Connection connection) {
         if (connection == null) {
             return null;
         }
         try {
-            Field channelField = io.github.limuqy.mc.hassium.compat.ReflectionCompat.findFieldByType(
-                    Connection.class, Channel.class, false);
-            channelField.setAccessible(true);
+            Field channelField = connectionChannelField;
+            if (channelField == null) {
+                synchronized (ZstdPipelineSwitcher.class) {
+                    channelField = connectionChannelField;
+                    if (channelField == null) {
+                        channelField = io.github.limuqy.mc.hassium.compat.ReflectionCompat.findFieldByType(
+                                Connection.class, Channel.class, false);
+                        channelField.setAccessible(true);
+                        connectionChannelField = channelField;
+                    }
+                }
+            }
             return (Channel) channelField.get(connection);
         } catch (Exception e) {
             LOGGER.error("Hassium: Failed to get channel from connection", e);
@@ -166,6 +175,17 @@ public class ZstdPipelineSwitcher {
         Channel channel = getConnectionChannel(connection);
         if (channel != null) {
             channel.attr(HassiumPipelineAttributes.SKIP_PIPELINE_COMPRESSION).set(true);
+        }
+    }
+
+    /**
+     * 清除下一帧跳过管线压缩标记（review-fix: T2-74）：聚合包发送异常后调用，
+     * 防止残留标记使后续普通帧跳过压缩明文写出。
+     */
+    public static void clearSkipNextPipelineCompression(Connection connection) {
+        Channel channel = getConnectionChannel(connection);
+        if (channel != null) {
+            channel.attr(HassiumPipelineAttributes.SKIP_PIPELINE_COMPRESSION).set(false);
         }
     }
 

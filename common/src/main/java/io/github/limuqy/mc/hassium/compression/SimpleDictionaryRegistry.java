@@ -123,11 +123,9 @@ public class SimpleDictionaryRegistry implements DictionaryRegistry {
                 checksum,
                 "file"
         );
-
-        dictionaries.put(dictionaryId, data);
-        descriptors.put(dictionaryId, descriptor);
-
-        Constants.LOG.info("Loaded dictionary from file: {} ({} bytes)", dictionaryId, data.length);
+        // review-fix: T5-94 复用 register()——checksum 校验 + 重复 ID 拒绝与注册路径语义一致
+        // （此前直接 put 覆盖绕过校验；重复 ID 由 register 抛"already registered"，loadFromDirectory 逐文件捕获记录）
+        register(descriptor, data);
     }
 
     /**

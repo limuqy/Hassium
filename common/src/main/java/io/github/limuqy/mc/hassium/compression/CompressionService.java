@@ -2,9 +2,9 @@ package io.github.limuqy.mc.hassium.compression;
 
 import io.github.limuqy.mc.hassium.Constants;
 
-import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 压缩服务
@@ -15,7 +15,8 @@ public class CompressionService {
 
     private static final CompressionService INSTANCE = new CompressionService();
 
-    private final Map<String, CompressionCodec> codecs = new HashMap<>();
+    // review-fix: T5-92 并发安全——registerCodec（初始化线程）与 getCodec（使用线程）可并发
+    private final Map<String, CompressionCodec> codecs = new ConcurrentHashMap<>();
     private DictionaryRegistry dictionaryRegistry;
 
     private CompressionService() {

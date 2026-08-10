@@ -15,6 +15,8 @@ public class ZstdCompressionCodec implements CompressionCodec {
     public CompressionAlgorithmId id() {
         return ALGORITHM_ID;
     }
+    /** review-fix: T5-88 解压输出上限（防巨型 content size 声明 / zip bomb） */
+    private static final int MAX_DECOMPRESSED_SIZE = 64 * 1024 * 1024;
 
     @Override
     public byte[] compress(byte[] input, CompressionOptions options) throws CompressionException {
@@ -28,10 +30,21 @@ public class ZstdCompressionCodec implements CompressionCodec {
     @Override
     public byte[] decompress(byte[] input, CompressionOptions options) throws CompressionException {
         try {
-            // Zstd.getFrameContentSize(byte[]) 获取未压缩大小，等价于已过时的 decompressedSize
-            byte[] result = Zstd.decompress(input, (int) Zstd.getFrameContentSize(input));
-            if (result == null || result.length == 0) {
-                throw new CompressionException.DecompressionFailedException("ZSTD decompression failed: empty output");
+            long contentSize = Zstd.getFrameContentSize(input);
+            // review-fix: T5-88 超限拒绝——巨大声明（及 -1 强转负值）在分配前拦截
+            if (contentSize > MAX_DECOMPRESSED_SIZE) {
+                throw new CompressionException.DecompressionFailedException(
+                        "ZSTD decompression failed: declared content size " + contentSize
+                                + " exceeds limit " + MAX_DECOMPRESSED_SIZE);
+            }
+            if (contentSize == 0) {
+                // review-fix: T5-88 content size 为 0 的合法空内容帧按空数组处理（此前误判为失败）
+                return new byte[0];
+            }
+            // contentSize 已知时按声明精确分配；未知（-1）时以上限兜底（native 侧仍校验实际大小）
+            byte[] result = Zstd.decompress(input, contentSize < 0 ? MAX_DECOMPRESSED_SIZE : (int) contentSize);
+            if (result == null) {
+                throw new CompressionException.DecompressionFailedException("ZSTD decompression failed: null output");
             }
             return result;
         } catch (CompressionException e) {

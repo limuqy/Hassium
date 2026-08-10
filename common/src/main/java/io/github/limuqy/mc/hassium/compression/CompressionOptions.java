@@ -4,11 +4,16 @@ import java.util.Optional;
 
 /**
  * 压缩选项
+ * <p>
+ * {@code verifyChecksum} 为遗留死配置（review-fix: T5-92）：全部内置 codec 由压缩格式自身
+ * 保证完整性（zstd 帧内嵌内容校验、zlib Adler-32），解压失败即抛
+ * {@link CompressionException.DecompressionFailedException}，该标志无消费方、无额外校验可实现；
+ * 移除将破坏公开 record 签名，故保留键并标记 {@code @Deprecated}——禁止新增消费方。
  */
 public record CompressionOptions(
         int level,
         Optional<String> dictionaryId,
-        boolean verifyChecksum
+        @Deprecated boolean verifyChecksum
 ) {
     /**
      * 默认压缩选项

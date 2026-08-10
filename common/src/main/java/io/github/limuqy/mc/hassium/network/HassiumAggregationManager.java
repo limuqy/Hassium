@@ -238,6 +238,12 @@ public class HassiumAggregationManager {
                 return;
             }
 
+            // review-fix: T2-76: sender 未就绪（初始化顺序异常窗口）时保留缓冲，下轮重试不丢数据
+            if (sender == null) {
+                Constants.LOG.warn("AggregationSender not set, deferring flush of {} packets", packets.size());
+                return;
+            }
+
             // 复制并清空缓冲区
             List<AggregatedSubPacket> sendPackets = new ArrayList<>(packets);
             packets.clear();
@@ -285,16 +291,48 @@ public class HassiumAggregationManager {
             if (sender != null) {
                 // 聚合包内部已有字典 ZSTD：标记下一帧跳过管线压缩
                 ZstdPipelineSwitcher.markSkipNextPipelineCompression(connection);
-                sender.send(connection, buf);
+                try {
+                    sender.send(connection, buf);
+                } catch (Exception e) {
+                    // review-fix: T2-74: 发送异常时清理残留 skip 标记，避免下一普通帧跳过压缩明文写出
+                    ZstdPipelineSwitcher.clearSkipNextPipelineCompression(connection);
+                    throw e;
+                }
             } else {
-                Constants.LOG.error("AggregationSender not set, dropping {} packets", batch.size());
+                // review-fix: T2-76: sender 缺失（初始化顺序异常窗口）时回队兜底，不丢数据
+                Constants.LOG.warn("AggregationSender not set, re-queueing {} packets", batch.size());
                 buf.release();
+                List<AggregatedSubPacket> buffer = PACKET_BUFFER.computeIfAbsent(connection, k -> new ArrayList<>());
+                synchronized (buffer) {
+                    buffer.addAll(batch);
+                }
             }
 
             Constants.LOG.debug("Flushed aggregation batch: {} packets for {}",
-                    batch.size(), connection.getRemoteAddress());
+                    batch.size(), sanitizeLog(connection.getRemoteAddress()));
         } catch (Exception e) {
             Constants.LOG.error("Failed to flush aggregation batch", e);
         }
+    }
+
+    /**
+     * 过滤日志输出中的控制字符（review-fix: T2-73：远端地址等网络可控输入防日志注入）。
+     */
+    private static String sanitizeLog(Object value) {
+        String s = String.valueOf(value);
+        StringBuilder sb = null;
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c < 0x20 || c == 0x7F) {
+                if (sb == null) {
+                    sb = new StringBuilder(s.length());
+                    sb.append(s, 0, i);
+                }
+                sb.append('?');
+            } else if (sb != null) {
+                sb.append(c);
+            }
+        }
+        return sb != null ? sb.toString() : s;
     }
 }
