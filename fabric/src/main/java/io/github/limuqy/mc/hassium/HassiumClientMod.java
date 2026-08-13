@@ -3,11 +3,20 @@ package io.github.limuqy.mc.hassium;
 import io.github.limuqy.mc.hassium.cache.client.ClientLifecycleHelper;
 import io.github.limuqy.mc.hassium.client.ClientSmokeTest;
 import io.github.limuqy.mc.hassium.command.FabricHassiumCommand;
+import io.github.limuqy.mc.hassium.network.ClientChunkHandler;
 import io.github.limuqy.mc.hassium.network.DictionaryManager;
 import io.github.limuqy.mc.hassium.network.dataplane.DataPlaneClientLifecycle;
+import io.github.limuqy.mc.hassium.network.FabricNetworkManager;
+#if MC_VER >= MC_1_20_5
+import io.github.limuqy.mc.hassium.network.FabricPayloadRegistry;
+#endif
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
+import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import org.slf4j.Logger;
+#if MC_VER >= MC_1_20_5
+import net.minecraft.network.FriendlyByteBuf;
+#endif
 import org.slf4j.LoggerFactory;
 
 public class HassiumClientMod implements ClientModInitializer {
@@ -37,9 +46,34 @@ public class HassiumClientMod implements ClientModInitializer {
 
         // 注册客户端命令
         FabricHassiumCommand.registerClientCommands();
-        // review-fix: T10-11: Fabric 客户端零 S2C receiver（T12 收口，网关为唯一支持客户端形态；客户端 receiver 已退役）。
-        // 非网关直连时所有 Hassium S2C 通道被 Fabric 静默丢弃 → 显式告警，便于第一时间定位（不改消费路径）。
-        LOGGER.warn("Hassium: Fabric client registers no Hassium S2C receivers — Hassium server->client packets are only consumed via the gateway topology (T12). Direct connections to a Hassium server will silently drop them.");
+        // review-fix: T10-11 → T12+区块直收：HASSIUM 业务 S2C 通道（CHUNK_HASH/SECTION_DELTA/SEED_REF/
+        // LIGHT_DELTA/BLOCK_ENTITY_DATA）经网关收口（kind=1 HASSIUM 帧 → NetworkCore.dispatchS2CBusiness），
+        // 客户端无需 receiver；唯一例外是 CHUNK_PAYLOAD_S2C——服务端经 ServerPlayNetworking.send 以 vanilla
+        // CustomPayload 发出，网关 GatewayPlayerBridge.routeS2C 按 kind=0 vanilla 帧转发 → 客户端
+        // GatewayS2CRouter.dispatchToListener → 官方 handleCustomPayload → Fabric ClientPlayNetworking 分发，
+        // 不走 dispatchS2CBusiness，因此必须保留客户端 receiver（缺失时全量压缩区块被静默丢弃，即「过期
+        // 3007」根因；receiver 注册见下）。
+        LOGGER.warn("Hassium: Fabric client registers no HASSIUM business S2C receivers (CHUNK_HASH/SECTION_DELTA/SEED_REF/LIGHT_DELTA/BLOCK_ENTITY_DATA) — those packets are only consumed via the gateway topology (T12). CHUNK_PAYLOAD_S2C is the exception: it is a vanilla CustomPayload delivered via handleCustomPayload → ClientPlayNetworking, with a receiver registered below.");
+
+        // CHUNK_PAYLOAD_S2C 客户端 receiver：全量压缩区块直收（网关 kind=0 vanilla 帧转发，非 HASSIUM 帧）。
+#if MC_VER < MC_1_20_5
+        ClientPlayNetworking.registerGlobalReceiver(FabricNetworkManager.CHUNK_PAYLOAD_S2C,
+                (client, handler, buf, responseSender) -> {
+                    int len = buf.readVarInt();
+                    byte[] data = new byte[len];
+                    buf.readBytes(data);
+                    ClientChunkHandler.handleCompressedChunk(data);
+                });
+#else
+        ClientPlayNetworking.registerGlobalReceiver(FabricPayloadRegistry.CHUNK_PAYLOAD_S2C_TYPE,
+                (payload, context) -> {
+                    FriendlyByteBuf buf = FabricPayloadRegistry.fromPayload(payload);
+                    int len = buf.readVarInt();
+                    byte[] data = new byte[len];
+                    buf.readBytes(data);
+                    ClientChunkHandler.handleCompressedChunk(data);
+                });
+#endif
         LOGGER.info("Hassium: Fabric client-side initialization complete");
     }
 }

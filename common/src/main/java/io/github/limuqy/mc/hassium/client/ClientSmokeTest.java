@@ -705,26 +705,20 @@ public final class ClientSmokeTest {
             Class<?> connectScreenClass = Class.forName("net.minecraft.client.gui.screens.ConnectScreen");
             Class<?> screenClass = Class.forName("net.minecraft.client.gui.screens.Screen");
 
-            // 尝试 6 参数版本（1.20.5+）：startConnecting(Screen, Minecraft, ServerAddress, ServerData, boolean, TransferState)
-            // TransferState 类路径跨版本不同：1.20.5-1.21.5 在 multiplayer 包；1.21.6+ 在 multiplayer.transfer 包
-            String[] transferStatePaths = {
-                    "net.minecraft.client.multiplayer.transfer.TransferState",
-                    "net.minecraft.client.multiplayer.TransferState"
-            };
-            for (String tsPath : transferStatePaths) {
-                try {
-                    Class<?> transferStateClass = Class.forName(tsPath);
-                    java.lang.reflect.Method m6 = connectScreenClass.getMethod(
-                            "startConnecting", screenClass, Minecraft.class, serverAddrClass, serverDataClass, boolean.class, transferStateClass
-                    );
-                    m6.invoke(null, null, mc, addr, serverData, false, null);
-                    LOGGER.info("HassiumSmokeTest: reconnect triggered (6-arg signature, {})", tsPath);
-                    return;
-                } catch (ClassNotFoundException | NoSuchMethodException ignored) {
-                }
+            // 6 参数版本（1.20.5+）：startConnecting(Screen, Minecraft, ServerAddress, ServerData, boolean, TransferState)
+            // TransferState 从未改包：1.20.5+ 全版本在 net.minecraft.client.multiplayer 包（multiplayer.transfer 子包不存在）
+            try {
+                Class<?> transferStateClass = Class.forName("net.minecraft.client.multiplayer.TransferState");
+                java.lang.reflect.Method m6 = connectScreenClass.getMethod(
+                        "startConnecting", screenClass, Minecraft.class, serverAddrClass, serverDataClass, boolean.class, transferStateClass
+                );
+                m6.invoke(null, null, mc, addr, serverData, false, null);
+                LOGGER.info("HassiumSmokeTest: reconnect triggered (6-arg signature, net.minecraft.client.multiplayer.TransferState)");
+                return;
+            } catch (ClassNotFoundException | NoSuchMethodException ignored) {
             }
 
-            // 尝试 5 参数版本（1.20.1-1.21.5）：startConnecting(Screen, Minecraft, ServerAddress, ServerData, boolean)
+            // 5 参数版本（<1.20.5，如 1.20.1）：startConnecting(Screen, Minecraft, ServerAddress, ServerData, boolean)
             try {
                 java.lang.reflect.Method m5 = connectScreenClass.getMethod(
                         "startConnecting", screenClass, Minecraft.class, serverAddrClass, serverDataClass, boolean.class

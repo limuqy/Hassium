@@ -24,6 +24,7 @@
         "ServerLevelAccessor"
     ],
     "client": [
+      "MixinConnectScreen",
       "MixinMinecraft",
       "MixinClientPacketListener",
       "MixinClientCommonPacketListenerImpl",
