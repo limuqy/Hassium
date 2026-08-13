@@ -51,13 +51,21 @@ public final class SeedGenQueue {
 
     private final Map<Long, Entry> pending = new ConcurrentHashMap<>();
 
-    /** 入队。返回 true = 新条目；false = 已存在（hash 覆盖更新）。 */
+    /** 入队。返回 true = 新条目；false = 已存在（hash 覆盖更新）。
+     *  盲预生成条目（contentHash==0，无服务端 hash）不覆盖已有 hash 条目（SeedRef 优先）；
+     *  hash 条目（SeedRef）可覆盖任意旧条目。 */
     public boolean enqueue(ChunkPos pos, long contentHash, long[] sectionHashes) {
         Entry entry = new Entry(pos, contentHash, sectionHashes, nowMs());
-        return pending.put(ChunkPos.asLong(pos.x, pos.z), entry) == null;
+        long key = ChunkPos.asLong(pos.x, pos.z);
+        if (contentHash == 0L) {
+            return pending.putIfAbsent(key, entry) == null;
+        }
+        return pending.put(key, entry) == null;
     }
 
-    /** 取距玩家（区块坐标，曼哈顿距离）最近的未超时条目；队列空或全部超时返回 null。不移除。 */
+    /** 取距玩家（区块坐标，曼哈顿距离）最近的未超时条目；队列空或全部超时返回 null。不移除。
+     *  同距时优先 SeedRef 条目（contentHash≠0）——盲预生成条目（hash=0）不挤占校验条目，
+     *  防 SeedRef 深队超时回退（预生成 441 块 × 25ms 深度因子会拖垮 SeedRef 的 30s 预算）。 */
     public Entry peekNearest(int playerChunkX, int playerChunkZ) {
         Entry best = null;
         int bestDist = Integer.MAX_VALUE;
@@ -66,7 +74,8 @@ public final class SeedGenQueue {
                 continue; // 超时条目由 expire() 统一回收
             }
             int dist = Math.abs(e.pos().x - playerChunkX) + Math.abs(e.pos().z - playerChunkZ);
-            if (dist < bestDist) {
+            if (best == null || dist < bestDist
+                    || (dist == bestDist && e.contentHash() != 0L && best.contentHash() == 0L)) {
                 bestDist = dist;
                 best = e;
             }
@@ -74,19 +83,25 @@ public final class SeedGenQueue {
         return best;
     }
 
-    /** 回收并返回全部超时条目（调用方负责回退全量请求）。 */
+    /** 回收并返回全部超时条目（调用方负责回退全量请求）。盲预生成条目（contentHash==0）永不超时。 */
     public List<Entry> expire() {
         List<Entry> expired = new ArrayList<>();
         long now = nowMs();
         long timeout = fallbackTimeoutMs(pending.size());
         pending.entrySet().removeIf(e -> {
-            if (now - e.getValue().enqueueTimeMs() > timeout) {
-                expired.add(e.getValue());
+            Entry entry = e.getValue();
+            if (entry.contentHash() != 0L && now - entry.enqueueTimeMs() > timeout) {
+                expired.add(entry);
                 return true;
             }
             return false;
         });
         return expired;
+    }
+    /** 原子取出（仅当条目仍 pending）：多 worker 并行生成时防重复接管同一条目。
+     *  返回 true = 本 worker 取得所有权；false = 已被其他 worker 取走/超时回收。 */
+    public boolean tryTake(ChunkPos pos) {
+        return pending.remove(ChunkPos.asLong(pos.x, pos.z)) != null;
     }
 
     /** 生成完成后移除。 */

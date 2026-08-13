@@ -8,8 +8,10 @@
 # 每个版本×加载器 1 个会话（客户端自动两轮：VD=20 + VD=10）
 # CleanWorld 策略（按 loader 独立，fabric/forge/neoforge 各有 run/server）:
 #   - 该 loader 的第一个版本：清理服务端存档
-#   - 后续版本：默认不清理（复用存档加快启动）
-#   - 退版本（高→低）：强制清理（高版本存档无法被低版本读取）
+#   - 版本变化（升或降）：清理（worldgen 跨版本可能变化——1.21.9 地形塑造重构、
+#     1.21.4 pale garden 等；复用旧版本 terrain 会让新版本 seedgen 影子端系统性
+#     mismatch，R2 命中率崩塌。T8 1.21.11 实测 17.8%）
+#   - 同版本：复用存档加快启动
 #   - 同会话失败重试：强制清理（干净重试）
 # 并行模式: 同版本多 loader 同时跑，端口按 -Loaders 顺序 fabric=BasePort, forge=+1, neoforge=+2
 #           版本间仍串行（避免跨版本存档冲突）；全程不调 gradlew --stop（全局停 daemon 会误杀
@@ -65,6 +67,17 @@ function IsVersionDowngrade($current, $previous) {
     }
     return $false
 }
+# 版本相等判断（与 IsVersionDowngrade 同源：数值段比较，避免 "1.9" vs "1.10" 字典序陷阱）
+function IsSameVersion($current, $previous) {
+    $cur = $current -split '\.' | ForEach-Object { [int]$_ }
+    $prev = $previous -split '\.' | ForEach-Object { [int]$_ }
+    for ($i = 0; $i -lt [Math]::Max($cur.Count, $prev.Count); $i++) {
+        $c = if ($i -lt $cur.Count) { $cur[$i] } else { 0 }
+        $p = if ($i -lt $prev.Count) { $prev[$i] } else { 0 }
+        if ($c -ne $p) { return $false }
+    }
+    return $true
+}
 
 # 按 loader 决定是否清理服务端存档（fabric/neoforge 各有独立 run/server）
 # 返回: $true=清理, $false=复用
@@ -78,10 +91,14 @@ function Get-ShouldCleanWorld {
         return $true  # 该 loader 第一个版本：清理
     }
     $prev = $PrevVerByLoader[$Loader]
-    if (IsVersionDowngrade $Ver $prev) {
-        return $true  # 退版本：强制清理
+    if (-not (IsSameVersion $Ver $prev)) {
+        # 版本变化（升或降）一律清理：worldgen 跨版本可能变化（1.21.9 地形塑造重构 /
+        # 1.21.4 pale garden 生物群系表等），复用旧版本 terrain 会让新版本 seedgen
+        # 影子端系统性 hash mismatch（T8 1.21.11 实测 R2 命中 17.8%，服务端 90+
+        # 条 SECTION_DELTA fallback 风暴）。同版本复用保留「加快启动」语义。
+        return $true
     }
-    return $false  # 后续同向/升版本：不清理
+    return $false  # 同版本：复用存档加快启动
 }
 
 # 单会话执行函数（封装重试逻辑，供串行路径共用）

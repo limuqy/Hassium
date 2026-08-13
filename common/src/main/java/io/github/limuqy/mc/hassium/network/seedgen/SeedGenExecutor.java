@@ -16,6 +16,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import net.minecraft.client.Minecraft;
 import net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket;
 import net.minecraft.server.level.ServerLevel;
@@ -30,7 +31,8 @@ import net.minecraft.world.level.chunk.LevelChunk;
  * <ul>
  *   <li>网络线程入队（{@link #enqueue}，非阻塞）</li>
  *   <li>平台线程池（seedGenThreads，CPU 密集：worldgen + 编码 + 压缩，避免虚拟线程超订）</li>
- *   <li>单个 drain 循环互斥运行（AtomicBoolean CAS），串行生成（影子服务端单实例）</li>
+ *   <li>每 worker 一个独立 drain 循环（{@link #activeWorkers} 记账，补足到 seedGenThreads 个），
+ *       并行生成（影子端 getChunkFuture 任意线程可调；队列原子取出防重复接管）</li>
  * </ul>
  * 生成失败/超时统一回退全量请求（{@link ClientMetadataHandler#fallbackToFullRequest}）；hash mismatch
  * 走分片增量（{@link ShadowLightCompute#requestSectionDeltas}，delta 链路失败内部兜底全量），正确性优先。
@@ -55,8 +57,15 @@ public final class SeedGenExecutor {
     /** T7：镜像服务端 {@code ServerChunkPushManager#SECTION_DELTA_FALLBACK_THRESHOLD_PCT}（75%）。
      *  本地 worldgen 与服务器不一致时，变更 section 占比达阈值服务端必然跳过 delta 回退全量——
      *  客户端预判后直接全量请求，跳过必败的 delta 往返。改动需与服务端同值同步。 */
+    /** 盲预生成半径（区块）：进服后主动覆盖 R2 重连视距 VD10（±10 → 441 块），不依赖 SeedRef。
+     *  1.21.9+ worldgen 串行（ChunkMap ConsecutiveExecutor），实测 ~6.7 块/s——R1 35s 窗口
+     *  可生成 ~230 块（≈59% 覆盖率）；441 全量 ~66s 跨入 R2 窗口续生成。 */
+    private static final int PREGEN_RADIUS = 10;
+    /** 盲预生成已调度（首个 SeedRef 到达时触发一次；断连重置）。 */
+    private final AtomicBoolean pregenScheduled = new AtomicBoolean(false);
     private static final int SECTION_DELTA_FALLBACK_THRESHOLD_PCT = 75;
-    private final AtomicBoolean drainRunning = new AtomicBoolean(false);
+    /** 活跃 drain worker 数（并行生成；新 seedref 到达时补足到配置线程数）。 */
+    private final AtomicInteger activeWorkers = new AtomicInteger();
     private volatile ExecutorService pool;
 
     private SeedGenExecutor() {}
@@ -79,6 +88,8 @@ public final class SeedGenExecutor {
         DebugLogger.info(DebugLogger.LogType.ASYNC, "[SEEDGEN] Claimed ({}, {}) hash={} (buffered={}, queue={})",
                 packet.chunkX(), packet.chunkZ(), Long.toHexString(packet.contentHash()), pendingIn.size(), queue.size());
         pump();
+        // 首个 SeedRef：影子端已就绪 → 铺开盲预生成队列（幂等，覆盖 R2 重连视距）
+        schedulePregen();
         return true;
     }
 
@@ -98,6 +109,7 @@ public final class SeedGenExecutor {
     public void onDisconnect() {
         queue.clear();
         pendingIn.clear();
+        pregenScheduled.set(false);
         ExecutorService p = pool;
         pool = null;
         if (p != null) {
@@ -105,8 +117,56 @@ public final class SeedGenExecutor {
         }
         ShadowServerRegistry.getInstance().shutdown();
     }
+    /** 影子端就绪回调（ShadowServerRegistry.getOrCreate 创建成功后调用，任意线程）：
+     *  铺开盲预生成——不依赖 SeedRef（T3 复验实证：R1 期间服务端可能 0 个 SeedRef，
+     *  仅 handleSeedRef 触发时预生成永不铺开 → R1 覆盖率 0）。幂等（pregenScheduled）。 */
+    public void onShadowReady() {
+        schedulePregen();
+    }
+    /**
+     * 盲预生成（不依赖 SeedRef）：进服后主动把玩家 ±{@link #PREGEN_RADIUS} 内全部块
+     * 入队生成（contentHash=0，不校验服务端 hash，直接注入影子端存档）。
+     * <p>
+     * 动机（M5 实证）：R1 10 秒窗口服务端仅推 45 个 SeedRef（spawn 区 pregen 已完成、
+     * 其余块非 pristine 走数据直推）→ 影子端存档仅 45 块 → R2 重连请求 393 块时
+     * 覆盖率 11.5% → 命中率 ≈ 覆盖率（实测 11.9%）。盲预生成把影子端存档铺满
+     * R2 视距（±10 → 441 块），覆盖率 → ~60%+，R2 读盘比对/增量命中随之提升。
+     * <p>
+     * 与服务端一致性：同种子同算法（M4 双端 region 对比已证大多数块逐 section 一致），
+     * feature 随机与邻域无关（M4e 核实）；差异仅为服务端 tick 演化（lava/植被），
+     * 走 R2 增量命中兜底。SeedRef 条目（hash≠0）在队列中优先（peekNearest 同距优先）。
+     */
+    private void schedulePregen() {
+        if (!pregenScheduled.compareAndSet(false, true)) {
+            return;
+        }
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.player == null || mc.level == null) {
+            pregenScheduled.set(false); // 未进服：等下一个 SeedRef 再试
+            return;
+        }
+        ChunkPos center = mc.player.chunkPosition();
+        int n = 0;
+        for (int dx = -PREGEN_RADIUS; dx <= PREGEN_RADIUS; dx++) {
+            for (int dz = -PREGEN_RADIUS; dz <= PREGEN_RADIUS; dz++) {
+                ChunkPos pos = new ChunkPos(center.x + dx, center.z + dz);
+                // 走 pendingIn 节流（FIFO 尾随 SeedRef 释放）：盲预生成 441 块若直接入队
+                // 会撑爆 MAX_WORK_DEPTH=96 → releasePendingWork 停止释放 → SeedRef 饿死
+                // （M5-R 实证：增量 0）。去重：queue 已有（SeedRef 已接管）则跳过。
+                if (queue.isPending(pos)) {
+                    continue;
+                }
+                pendingIn.add(new SeedRefS2CPacket(pos.x, pos.z, 0L, new long[0]));
+                n++;
+            }
+        }
+        DebugLogger.info(DebugLogger.LogType.ASYNC,
+                "[SEEDGEN] Blind pregen scheduled: {} chunks around ({}, {}) (buffered={}, queue={})",
+                n, center.x, center.z, pendingIn.size(), queue.size());
+        pump();
+    }
 
-    /** 触发一次 drain（CAS 防并发；池未建则先建）。 */
+    /** 触发 drain：补足活跃 worker 到配置线程数（默认 2，并行生成；CAS 语义由 activeWorkers 记账承担）。 */
     private void pump() {
         ExecutorService p = pool;
         if (p == null || p.isShutdown()) {
@@ -120,16 +180,18 @@ public final class SeedGenExecutor {
                 }
             }
         }
-        if (drainRunning.compareAndSet(false, true)) {
+        int target = Math.max(1, HassiumConfigService.getInstance().getSeedGenThreads());
+        while (activeWorkers.get() < target) {
+            activeWorkers.incrementAndGet();
             try {
                 p.submit(this::drain);
             } catch (java.util.concurrent.RejectedExecutionException e) {
-                drainRunning.set(false); // 池已停（断连竞态），丢弃本次
+                activeWorkers.decrementAndGet(); // 池已停（断连竞态），丢弃本次
+                break;
             }
         }
     }
-
-    /** 工作循环：释放缓冲 → 取最近未超时条目 → 生成 → 编码 → 压缩 → 交给客户端链；空则退出。 */
+    /** 工作循环（每 worker 一份）：释放缓冲 → 原子取最近未超时条目 → 生成 → 编码 → 压缩 → 交给客户端链；空则退出。 */
     private void drain() {
         // 回退请求聚合缓冲：超时/失败回退攒批发送（不逐块单包），防 1000+ 单包风暴（P1）
         List<ChunkPos> fallbackBuffer = new ArrayList<>();
@@ -149,6 +211,10 @@ public final class SeedGenExecutor {
                 if (entry == null) {
                     break;
                 }
+                // 原子取出：多 worker 并行时防重复接管同一条目（已被其他 worker 取走则跳过）
+                if (!queue.tryTake(entry.pos())) {
+                    continue;
+                }
                 generateOne(entry, fallbackBuffer);
                 if (fallbackBuffer.size() >= FALLBACK_BATCH_MAX) {
                     flushFallback(fallbackBuffer);
@@ -156,8 +222,8 @@ public final class SeedGenExecutor {
             }
         } finally {
             flushFallback(fallbackBuffer);
-            drainRunning.set(false);
-            // 竞态窗口：drain 退出瞬间有新条目 → 重新触发
+            activeWorkers.decrementAndGet();
+            // 竞态窗口：worker 退出瞬间有新条目 → 重新触发（补足 worker 数）
             if ((!queue.isEmpty() || !pendingIn.isEmpty()) && !ShadowServerRegistry.getInstance().isFailed()) {
                 pump();
             }
@@ -230,9 +296,25 @@ public final class SeedGenExecutor {
             long t0 = System.nanoTime();
             LevelChunk chunk = server.generateChunk(pos);
             if (chunk == null) {
+                if (entry.contentHash() == 0L) {
+                    // 盲预生成（无服务端对应推送）：超时/失败静默跳过，不回退全量
+                    DebugLogger.warn(DebugLogger.LogType.ASYNC,
+                            "[SEEDGEN] Blind pregen timeout/failed ({}, {})", pos.x, pos.z);
+                    return;
+                }
                 DebugLogger.warn(DebugLogger.LogType.ASYNC,
                         "[SEEDGEN] Generation timeout/failed ({}, {}) -> fallback", pos.x, pos.z);
                 addFallback(fallbackBuffer, pos);
+                return;
+            }
+            if (entry.contentHash() == 0L) {
+                // 盲预生成（无服务端 hash）：直接注入影子端存档（R2 读盘比对），
+                // 不校验/delta——服务端对应块可能尚未生成，hash 无从比对
+                NetworkStats.recordLocallyGeneratedChunk(NetworkStats.ESTIMATED_CHUNK_BYTES);
+                if (!ShadowLightCompute.submitGenerated(pos, chunk, server.overworld())) {
+                    DebugLogger.warn(DebugLogger.LogType.ASYNC,
+                            "[SEEDGEN] Blind pregen submit failed ({}, {})", pos.x, pos.z);
+                }
                 return;
             }
             // 生成后 chunkHash 校验：与服务端 SeedRef 下发 hash 比对（同 ChunkContentHashUtil

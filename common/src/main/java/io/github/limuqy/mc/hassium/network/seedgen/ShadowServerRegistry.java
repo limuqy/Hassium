@@ -101,6 +101,9 @@ public final class ShadowServerRegistry {
                         .onShadowReady();
                 DebugLogger.info(DebugLogger.LogType.ASYNC,
                         "[SHADOW] Shadow server ready (seed={})", seed);
+                // 影子端就绪 → 盲预生成铺开（不依赖 SeedRef：T3 复验实证 R1 期间服务端可能
+                // 0 个 SeedRef（spawn 区 pregen 时序抖动）→ schedulePregen 永不触发 → R1 覆盖率 0）
+                SeedGenExecutor.getInstance().onShadowReady();
                 // 影子端就绪后上报存档布隆位图（后台扫描 region 头部位图，不卡创建线程）：
                 // 服务端 bloom miss（确定无缓存）→ 数据直推；bloom hit → 只发 hash 由影子端比对。
                 io.github.limuqy.mc.hassium.concurrent.HassiumTaskExecutor executor =
