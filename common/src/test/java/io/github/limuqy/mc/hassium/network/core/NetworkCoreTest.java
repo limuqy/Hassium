@@ -153,15 +153,41 @@ class NetworkCoreTest {
                 ControlFrameCodec.encodeFrame(ControlFrameType.HANDSHAKE_S2C, response));
         response.release();
         assertEquals(NetworkCoreState.ACTIVE, core.state());
+        // L2 场景：pre-login 已 dispatch 的 S2C（1.21.1 R1 冒烟：ACTIVE 与 onLogin 间服务端
+        // 已推 chunk hash）——计数在 onLogin 后必须保留
+        core.dispatchS2C(fakePacket());
+        core.dispatchS2C(fakePacket());
+        assertEquals(2, core.s2cDispatchedCount());
+        // 对照：其他周期计数（c2sRouted）onLogin 后仍复位（语义不变）
+        core.routeC2S(fakePacket());
+        assertEquals(1, core.c2sRoutedCount());
 
         // 修复：bootstrap 已 ACTIVE 时 onLogin 保持连接（不 close、不重连、不降 CONNECTING）
         core.onLogin();
         assertEquals(NetworkCoreState.ACTIVE, core.state());
         assertSame(conn, core.outbound());
         assertTrue(conn.isOpen());
+        assertEquals(2, core.s2cDispatchedCount(), "bootstrap onLogin 不得清掉 pre-login dispatch 计数");
+        assertEquals(0, core.c2sRoutedCount(), "其他计数器语义不变：c2sRouted 仍复位");
+
 
         core.onDisconnect();
         assertNull(core.outbound());
+    }
+    @Test
+    void onLoginNewConnectionResetsS2cCount() {
+        NetworkCore core = NetworkCore.getInstance();
+        core.onDisconnect();
+
+        // 无活连接（新连接分支）：onLogin 全量复位，s2cDispatched 一并清零
+        core.dispatchS2C(fakePacket());
+        assertEquals(1, core.s2cDispatchedCount());
+
+        core.onLogin();
+        assertEquals(NetworkCoreState.CONNECTING, core.state());
+        assertEquals(0, core.s2cDispatchedCount(), "新连接分支应全量复位（含 s2cDispatched）");
+
+        core.onDisconnect();
     }
 
     @Test

@@ -157,13 +157,17 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
      *   <li>无活连接：关闭陈旧 outbound（正常为 null）、清零计数、进入 CONNECTING，并按当前
      *       连接地址尝试自动建立 outbound（失败仅告警，正式地址源为 T7 迁移引擎）。</li>
      * </ul>
-     * 三分支均复位连接周期计数/握手标记/迁移尝试（{@link #resetSessionCounters()}）。
+     * 三分支均复位连接周期计数/握手标记/迁移尝试（{@link #resetSessionCounters}）；唯一例外：
+     * outbound 跨 onLogin 保留的分支（仅网关登录 / gateway-bootstrap）不复位 s2cDispatched——
+     * 同一 outbound 连接周期内 pre-login 已到达并 dispatch 的 S2C（1.21.1 R1 冒烟：ACTIVE 与
+     * onLogin 间服务端已推 114 条 chunk hash）应保留计数，否则 world ready 后 dump 恒为 0。
      */
     public void onLogin() {
         GatewayOnlyLogin session = gatewayOnlyLogin;
         if (session != null) {
             session.onLoginCompleted();
-            resetSessionCounters();
+            // L2 修复：仅网关登录 = 同一 outbound 连接周期，pre-login 登录桥 dispatch 计数保留
+            resetSessionCounters(false);
             // T9：ViaFabric 兼容——新会话重探测 + 重置转换桥（旧 UserConnection 失效）并接线翻译器
             ViaFabricCompat.INSTANCE.onLogin();
             // T8：迁移引擎心跳监测随会话启动（守护线程；测试不经过此路径）
@@ -180,7 +184,9 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
         // 1.20.1 上 custom payload 在 Netty 线程先于主线程 handleLogin 到达，onLogin 时握手已完成。
         NetworkCoreState st = state.get();
         if (outbound != null && st != NetworkCoreState.IDLE) {
-            resetSessionCounters();
+            // L2 修复（1.21.1 R1 冒烟 gatewayS2c=0 根因）：bootstrap outbound 跨 onLogin 保留，
+            // pre-login 已 dispatch 的 S2C（chunk hash）计数不复位
+            resetSessionCounters(false);
             ViaFabricCompat.INSTANCE.onLogin();
             migration.start();
             if (st != NetworkCoreState.ACTIVE) {
@@ -196,7 +202,8 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
             stale.close();
             outbound = null;
         }
-        resetSessionCounters();
+        // 新连接分支：新连接周期从零开始，全量复位（含 s2cDispatched）
+        resetSessionCounters(true);
         ViaFabricCompat.INSTANCE.onLogin();
         migration.start();
         transitionTo(NetworkCoreState.CONNECTING);
@@ -204,9 +211,14 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
         autoConnect();
     }
 
-    /** 会话周期复位（onLogin 三分支共用）：连接周期计数/握手标记/迁移尝试归零。 */
-    private void resetSessionCounters() {
-        s2cDispatched.set(0);
+    /** 会话周期复位（onLogin 三分支共用）：连接周期计数/握手标记/迁移尝试归零。
+     *  {@code resetS2cDispatched}=true 时 s2cDispatched 一并清零（新连接分支）；
+     *  false 时保留（仅网关登录 / bootstrap 分支——outbound 跨 onLogin 为同一连接周期，
+     *  pre-login 已 dispatch 的 S2C 属本周期真实计数，L2 修复）。其余计数器语义三分支不变。 */
+    private void resetSessionCounters(boolean resetS2cDispatched) {
+        if (resetS2cDispatched) {
+            s2cDispatched.set(0);
+        }
         c2sRouted.set(0);
         loginRelayed.set(0);
         configRelayed.set(0);
