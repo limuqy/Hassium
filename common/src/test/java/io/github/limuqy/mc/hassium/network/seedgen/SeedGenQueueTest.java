@@ -62,24 +62,31 @@ class SeedGenQueueTest {
     }
 
     @Test
-    @DisplayName("超时回收：超过 FALLBACK_TIMEOUT_MS 后 expire 返回条目并移除，peek 跳过")
-    void expireReapsTimedOutEntries() throws InterruptedException {
+    @DisplayName("超时回收：超过 fallbackTimeoutMs 后 expire 返回条目并移除，peek 跳过")
+    void expireReapsTimedOutEntries() {
         SeedGenQueue q = new SeedGenQueue();
-        q.enqueue(new ChunkPos(5, 5), 1L, null);
-        q.enqueue(new ChunkPos(6, 6), 2L, null);
-        assertEquals(2, q.size());
+        long t0 = 1_000_000L;
+        SeedGenQueue.clockOverrideMs = t0;
+        try {
+            q.enqueue(new ChunkPos(5, 5), 1L, null);
+            q.enqueue(new ChunkPos(6, 6), 2L, null);
+            assertEquals(2, q.size());
 
-        // 未超时：peek 正常返回
-        assertNotNull(q.peekNearest(5, 5));
+            // 未超时：peek 正常返回
+            assertNotNull(q.peekNearest(5, 5));
 
-        Thread.sleep(SeedGenQueue.FALLBACK_TIMEOUT_MS + 200);
+            // 超过 基数 + 深度自适应 后全部超时（时钟注入，免 30s 真实睡眠）
+            SeedGenQueue.clockOverrideMs = t0 + SeedGenQueue.fallbackTimeoutMs(q.size()) + 200;
 
-        // 超时后 peek 不再返回（全部超时）
-        assertNull(q.peekNearest(5, 5));
+            // 超时后 peek 不再返回（全部超时）
+            assertNull(q.peekNearest(5, 5));
 
-        List<SeedGenQueue.Entry> expired = q.expire();
-        assertEquals(2, expired.size());
-        assertTrue(q.isEmpty());
+            List<SeedGenQueue.Entry> expired = q.expire();
+            assertEquals(2, expired.size());
+            assertTrue(q.isEmpty());
+        } finally {
+            SeedGenQueue.clockOverrideMs = -1L;
+        }
     }
 
     @Test

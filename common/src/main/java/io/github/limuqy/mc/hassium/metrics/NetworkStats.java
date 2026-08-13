@@ -365,6 +365,34 @@ public class NetworkStats {
     }
 
     /**
+     * 记录影子链路光照复用（key：{@code light.reuse.shadow.count} / {@code light.reuse.shadow.bytes}）。
+     * 剥光协商（lightComputeSupported=true）后服务端包不带光 → hasCachedLight 恒 false，
+     * 直连口径 {@link #recordLightCacheHit(long)} 不触发（P2 指标死区根因）；影子端
+     * 内存/磁盘缓存命中 + 收敛光直接回传的复用事件由本方法独立记账，
+     * 与直连口径同构、互不合并，使剥光模式下指标可区分直连/影子。
+     *
+     * @param bytes 等价字节数（口径与 {@link #ESTIMATED_LIGHT_BYTES} 一致，每 chunk 16KB）
+     */
+    public static void recordLightReuseShadow(long bytes) {
+        if (!enabled) return;
+        metrics.recordLightReuseShadow(bytes);
+    }
+
+    /**
+     * 影子链路光照复用次数（key：{@code light.reuse.shadow.count}）。
+     */
+    public static long getLightReuseShadowCount() {
+        return enabled ? metrics.getLightReuseShadowCount() : 0L;
+    }
+
+    /**
+     * 影子链路光照复用等价字节数（key：{@code light.reuse.shadow.bytes}）。
+     */
+    public static long getLightReuseShadowBytes() {
+        return enabled ? metrics.getLightReuseShadowBytes() : 0L;
+    }
+
+    /**
      * 记录光照缓存未命中（仅累加 count）。
      */
     public static void recordLightCacheMiss() {

@@ -10,11 +10,41 @@ import net.minecraft.world.level.ChunkPos;
  * SeedGen 待生成队列：按距玩家距离优先，同区块去重（新 SeedRef 覆盖旧 hash），超时回退。
  * <p>
  * 线程安全（ConcurrentHashMap + 不可变 Entry）。纯逻辑无 Minecraft 依赖之外的单测友好结构。
+ * <p>
+ * 超时语义（P1 修复）：回退超时 = 30s 基数 + 队列深度自适应。原 8s 固定值与服务端推送吞吐
+ * （maxChunksPerTick=5 → 满刻 100/s）不匹配：1784 块全量尾部必然 >8s，到期风暴 + 客户端
+ * 8s 级联重发 → 过期 1593（FINDINGS P1）。工作队列被 {@link SeedGenExecutor} 节流至
+ * {@code MAX_WORK_DEPTH=96} 槽，串行生成实测 p90≈182ms/块 → 最坏在队等待 ≈17.5s，
+ * 30s 基数提供 ≥1.7x 余量；深度因子兜底队列失控场景。
  */
 public final class SeedGenQueue {
 
-    /** 队列入队后超过该时长仍未出队 → 超时，回退全量请求（服务端直推兜底）。 */
-    public static final long FALLBACK_TIMEOUT_MS = 8_000L;
+    /**
+     * 回退超时基数：入队（进入有界工作队列）后超过该时长仍未生成 → 回退全量请求（服务端直推兜底）。
+     */
+    public static final long FALLBACK_TIMEOUT_BASE_MS = 30_000L;
+
+    /** 深度自适应系数：每在队 1 块追加 25ms 等待预算（保守 40/s 服务率，实际满刻 ≈ 100/s）。 */
+    public static final long FALLBACK_TIMEOUT_PER_ENTRY_MS = 25L;
+
+    /** 深度自适应上限（最坏超时 = BASE + MAX_EXTRA ≈ 90s）。 */
+    public static final long FALLBACK_TIMEOUT_MAX_EXTRA_MS = 60_000L;
+
+    /**
+     * 按当前队列深度计算回退超时：深度越大尾部块等待越久，超时随之放大，
+     * 避免深队尾块在正常生成进度下误回退（旧 8s 在 1784 深队下必然误触发风暴）。
+     */
+    public static long fallbackTimeoutMs(int queueDepth) {
+        return FALLBACK_TIMEOUT_BASE_MS + Math.min(FALLBACK_TIMEOUT_MAX_EXTRA_MS,
+                (long) queueDepth * FALLBACK_TIMEOUT_PER_ENTRY_MS);
+    }
+
+    /** 测试时钟覆盖（<0 = 用 System.currentTimeMillis() 正常路径）。包内可见，仅测试注入用。 */
+    static volatile long clockOverrideMs = -1L;
+
+    private static long nowMs() {
+        return clockOverrideMs >= 0 ? clockOverrideMs : System.currentTimeMillis();
+    }
 
     /** 入队条目（不可变快照）。 */
     public record Entry(ChunkPos pos, long contentHash, long[] sectionHashes, long enqueueTimeMs) {}
@@ -23,7 +53,7 @@ public final class SeedGenQueue {
 
     /** 入队。返回 true = 新条目；false = 已存在（hash 覆盖更新）。 */
     public boolean enqueue(ChunkPos pos, long contentHash, long[] sectionHashes) {
-        Entry entry = new Entry(pos, contentHash, sectionHashes, System.currentTimeMillis());
+        Entry entry = new Entry(pos, contentHash, sectionHashes, nowMs());
         return pending.put(ChunkPos.asLong(pos.x, pos.z), entry) == null;
     }
 
@@ -32,7 +62,7 @@ public final class SeedGenQueue {
         Entry best = null;
         int bestDist = Integer.MAX_VALUE;
         for (Entry e : pending.values()) {
-            if (System.currentTimeMillis() - e.enqueueTimeMs() > FALLBACK_TIMEOUT_MS) {
+            if (nowMs() - e.enqueueTimeMs() > fallbackTimeoutMs(pending.size())) {
                 continue; // 超时条目由 expire() 统一回收
             }
             int dist = Math.abs(e.pos().x - playerChunkX) + Math.abs(e.pos().z - playerChunkZ);
@@ -47,9 +77,10 @@ public final class SeedGenQueue {
     /** 回收并返回全部超时条目（调用方负责回退全量请求）。 */
     public List<Entry> expire() {
         List<Entry> expired = new ArrayList<>();
-        long now = System.currentTimeMillis();
+        long now = nowMs();
+        long timeout = fallbackTimeoutMs(pending.size());
         pending.entrySet().removeIf(e -> {
-            if (now - e.getValue().enqueueTimeMs() > FALLBACK_TIMEOUT_MS) {
+            if (now - e.getValue().enqueueTimeMs() > timeout) {
                 expired.add(e.getValue());
                 return true;
             }

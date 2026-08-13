@@ -4,7 +4,9 @@ import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.config.HassiumConfig;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.network.ClientChunkPipeline;
+import io.github.limuqy.mc.hassium.network.ClientEndpointStore;
 import io.github.limuqy.mc.hassium.network.ClientMetadataHandler;
+import io.github.limuqy.mc.hassium.network.GatewayInfoCodec;
 import io.github.limuqy.mc.hassium.network.HandshakeStateTail;
 import io.github.limuqy.mc.hassium.network.PlayerStateReport;
 import io.github.limuqy.mc.hassium.network.core.migration.MigrationEndpoint;
@@ -16,9 +18,12 @@ import io.github.limuqy.mc.hassium.network.core.outbound.UdpDataPlane;
 import io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail;
 import io.github.limuqy.mc.hassium.network.core.viafabric.ViaFabricCompat;
 import io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute;
+import io.github.limuqy.mc.hassium.server.GatewayPlayerBridge;
+import io.github.limuqy.mc.hassium.platform.Services;
 import io.netty.buffer.ByteBuf;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.RegistryAccess;
+import net.minecraft.network.PacketListener;
 import net.minecraft.network.protocol.Packet;
 import net.minecraft.network.protocol.PacketFlow;
 import org.slf4j.Logger;
@@ -33,6 +38,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.Optional;
 
 /**
  * 网络核心（进程内网关）单例：完全接管客户端↔主控的网络收发（REQ A 节）。
@@ -79,6 +85,20 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
     private volatile String lastEndpoint;
     private volatile boolean lastResumeAccepted;
     private volatile net.minecraft.network.Connection vanillaConnection;
+    /** M1 bootstrap：最近一次收到的 gateway_info（onDisconnect 清空；onLogin 不清——1.20.1
+     *  上 custom payload 在 Netty 线程先于主线程 handleLogin 到达，onLogin 清空会让
+     *  autoConnect 走探测而丢弃已到的下发端点；autoConnect ② 与 onGatewayInfo 共用）。 */
+    private volatile GatewayInfoCodec.GatewayInfo lastGatewayInfo;
+    /** M2 端点存储（懒建；config/hassium/failover-endpoints.properties，CONTRACTS §4 format=2）。 */
+    private volatile ClientEndpointStore endpointStore;
+    /** M3 仅网关登录会话（主连接失效恢复，仅网关登录）；非 null = 仅网关模式激活
+     *  （登录期 + PLAY 期——PLAY keep-alive 无壳路径依赖；onDisconnect 清）。 */
+    private volatile GatewayOnlyLogin gatewayOnlyLogin;
+    /** M3 最近一次原版连接意图（MixinConnectScreen startConnecting HEAD 捕获；失败决策用）。 */
+    private volatile net.minecraft.client.multiplayer.ServerData gatewayOnlyServerData;
+    private volatile net.minecraft.client.gui.screens.Screen gatewayOnlyParentScreen;
+    /** M3 当前连接意图已尝试过仅网关登录（防 setScreen 拦截重入循环；新意图复位）。 */
+    private volatile boolean gatewayOnlyAttempted;
 
     /** L1 迁移引擎（REQ C 节）：触发判定 + 迁移编排 + 预热。 */
     private final MigrationEngine migration = new MigrationEngine();
@@ -96,6 +116,8 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
 
     /** A-M2: 握手总超时（从 CONNECTING 起算；到期同握手期故障兜底：断 outbound → IDLE 原版直连）。 */
     private static final long HANDSHAKE_TIMEOUT_MS = 15_000L;
+    /** M2 端点存储文件（相对 config/，与 CONFIG_CLIENT_FILE 同目录族 config/hassium/）。 */
+    private static final String FAILOVER_ENDPOINTS_FILE = "hassium/failover-endpoints.properties";
     /** A-M2: 最近一次 connect 的握手 deadline（event loop 定时任务到期自检；0=未握手期）。 */
     private volatile long handshakeDeadlineMs;
 
@@ -124,15 +146,66 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
     // ==================== 生命周期 ====================
 
     /**
-     * 玩家登录（vanilla login 完成后，主线程）：关闭陈旧 outbound、清零计数、进入 CONNECTING，
-     * 并按当前连接地址尝试自动建立 outbound（失败仅告警，正式地址源为 T7 迁移引擎）。
+     * 玩家登录（vanilla login 完成后，主线程）：按 outbound 现状分三支——
+     * <ul>
+     *   <li>仅网关登录（{@link #gatewayOnlyLogin} 非 null）：保留 ACTIVE outbound
+     *       （主控会话 = 唯一会话；close/autoConnect 会杀服务端会话并重连冲突），仅复位。</li>
+     *   <li>gateway-bootstrap 活连接（outbound 非 null 且非 IDLE）：bootstrap 握手已完成
+     *       （ACTIVE）或在途（CONNECTING/HANDSHAKING）——1.20.1 custom payload 先于主线程
+     *       handleLogin 到达，onLogin 时握手已建立 → 保留现有 outbound，不 close、不重连
+     *       （close 会让服务端 peer closed 移除玩家会话 → 数据面断，T5 冒烟 R1 根因）。</li>
+     *   <li>无活连接：关闭陈旧 outbound（正常为 null）、清零计数、进入 CONNECTING，并按当前
+     *       连接地址尝试自动建立 outbound（失败仅告警，正式地址源为 T7 迁移引擎）。</li>
+     * </ul>
+     * 三分支均复位连接周期计数/握手标记/迁移尝试（{@link #resetSessionCounters()}）。
      */
     public void onLogin() {
+        GatewayOnlyLogin session = gatewayOnlyLogin;
+        if (session != null) {
+            session.onLoginCompleted();
+            resetSessionCounters();
+            // T9：ViaFabric 兼容——新会话重探测 + 重置转换桥（旧 UserConnection 失效）并接线翻译器
+            ViaFabricCompat.INSTANCE.onLogin();
+            // T8：迁移引擎心跳监测随会话启动（守护线程；测试不经过此路径）
+            migration.start();
+            if (state.get() != NetworkCoreState.ACTIVE) {
+                LOGGER.warn("Hassium: gateway-only login completed but state={} (expected ACTIVE)", state.get());
+            }
+            LOGGER.info("Hassium: NetworkCore onLogin (gateway-only) — outbound kept ACTIVE");
+            return;
+        }
+        // M3 gateway-bootstrap：bootstrap 握手已完成（ACTIVE）或在途（CONNECTING/HANDSHAKING）
+        // → 保留现有 outbound，不重连。修复（T5 冒烟 R1 根因）：onLogin 无条件 close 会把
+        // bootstrap 已 ACTIVE 的握手连接杀掉 → 服务端 peer closed 移除玩家会话 → 数据面断。
+        // 1.20.1 上 custom payload 在 Netty 线程先于主线程 handleLogin 到达，onLogin 时握手已完成。
+        NetworkCoreState st = state.get();
+        if (outbound != null && st != NetworkCoreState.IDLE) {
+            resetSessionCounters();
+            ViaFabricCompat.INSTANCE.onLogin();
+            migration.start();
+            if (st != NetworkCoreState.ACTIVE) {
+                LOGGER.warn("Hassium: NetworkCore onLogin with bootstrap outbound in state {} "
+                        + "(expected ACTIVE) — keeping, no reconnect", st);
+            }
+            LOGGER.info("Hassium: NetworkCore onLogin (bootstrap) — outbound kept (state={}), "
+                    + "no reconnect", st);
+            return;
+        }
         OutboundConnection stale = outbound;
         if (stale != null) {
             stale.close();
             outbound = null;
         }
+        resetSessionCounters();
+        ViaFabricCompat.INSTANCE.onLogin();
+        migration.start();
+        transitionTo(NetworkCoreState.CONNECTING);
+        LOGGER.info("Hassium: NetworkCore onLogin -> CONNECTING");
+        autoConnect();
+    }
+
+    /** 会话周期复位（onLogin 三分支共用）：连接周期计数/握手标记/迁移尝试归零。 */
+    private void resetSessionCounters() {
         s2cDispatched.set(0);
         c2sRouted.set(0);
         loginRelayed.set(0);
@@ -140,13 +213,6 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
         lastHandshake = null;
         lastResumeAccepted = false;
         migrationAttempts.set(0);
-        // T9：ViaFabric 兼容——新会话重探测 + 重置转换桥（旧 UserConnection 失效）并接线翻译器
-        ViaFabricCompat.INSTANCE.onLogin();
-        // T8：迁移引擎心跳监测随会话启动（守护线程；测试不经过此路径）
-        migration.start();
-        transitionTo(NetworkCoreState.CONNECTING);
-        LOGGER.info("Hassium: NetworkCore onLogin -> CONNECTING");
-        autoConnect();
     }
 
     /** 玩家断开（ClientLifecycleHelper.cleanupOnDisconnect，世界拆除前）：关 outbound → IDLE。 */
@@ -159,6 +225,9 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
         lastHandshake = null;
         lastResumeAccepted = false;
         vanillaConnection = null;
+        lastGatewayInfo = null;
+        // M3：仅网关模式结束（本地壳连接随 disconnect 拆除；下一连接意图重新捕获决策）
+        gatewayOnlyLogin = null;
         // T8：停心跳监测 + 清预热（幂等）
         migration.stop();
         // 连接周期计数：断连即周期结束（登录/路由计数按 onLogin 累计的语义对称）
@@ -171,12 +240,68 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
     }
 
     /**
+     * M1 bootstrap：服务端经 vanilla 通道下发网关信息（channel=hassium:gateway_info，
+     * 主线程——客户端 Connection.tick 泵 handleCustomPayload → {@link
+     * io.github.limuqy.mc.hassium.network.ClientGatewayBootstrap} → 本方法）。
+     * <p>语义（CONTRACTS §3）：
+     * <ul>
+     *   <li>端点池非空 → 并入迁移候选池（setTargetEndpoints，供迁移环形推进）</li>
+     *   <li>outbound 非 ACTIVE（IDLE/CONNECTING/HANDSHAKING）→ close 旧竞态连接 →
+     *       connect(端点[0], 下发 authToken)——bootstrap 端点优先于配置/探测路径；
+     *       CONNECTING/HANDSHAKING 且 in-flight 目标已 = 端点[0]（gateway_info 迟到/重入）→
+     *       保留 in-flight 连接不重连（重复 supersede 会杀自己刚建立的握手，T5 冒烟 R2 根因）</li>
+     *   <li>已 ACTIVE → 仅并入候选池，不发起重连（配置/探测已握手成功）</li>
+     *   <li>端点池为空（服务端未配置端点、监听默认端口 25566）→ 仅记录，不连接</li>
+     * </ul>
+     */
+    public void onGatewayInfo(GatewayInfoCodec.GatewayInfo info) {
+        if (info == null) {
+            return;
+        }
+        lastGatewayInfo = info;
+        List<GatewayInfoCodec.Endpoint> eps = info.endpoints();
+        if (eps.isEmpty()) {
+            LOGGER.info("Hassium: gateway_info received (proto={}, no endpoints — server on default gateway port)",
+                    info.protocolVersion());
+            return;
+        }
+        List<MigrationEndpoint> pool = eps.stream()
+                .map(e -> new MigrationEndpoint(e.host(), e.port()))
+                .toList();
+        migration.setTargetEndpoints(pool);
+        NetworkCoreState st = state.get();
+        if (st == NetworkCoreState.ACTIVE) {
+            LOGGER.info("Hassium: gateway_info merged {} endpoint(s) into migration pool (already ACTIVE)",
+                    pool.size());
+            return;
+        }
+        GatewayInfoCodec.Endpoint first = eps.get(0);
+        if (st == NetworkCoreState.CONNECTING || st == NetworkCoreState.HANDSHAKING) {
+            // M3 gateway-bootstrap：in-flight 连接已指向下发端点[0] → 保留（gateway_info 可能
+            // 迟到/重入，重复 supersede 会杀掉自己刚建立的握手连接 → 服务端会话被移除；
+            // T5 冒烟 R2 根因：in-flight 25567 == 下发 25567 仍被杀一次）。
+            String target = first.host() + ":" + first.port();
+            if (target.equals(lastEndpoint)) {
+                LOGGER.info("Hassium: gateway_info endpoint matches in-flight connection ({}) — "
+                        + "keeping, no reconnect", target);
+                return;
+            }
+            LOGGER.warn("Hassium: gateway_info supersedes in-flight connection (state={}) — "
+                    + "reconnect to bootstrap endpoint", st);
+            closeOldOutbound();
+        }
+        connect(first.host(), first.port(), buildAutoTail(), info.authToken());
+        LOGGER.info("Hassium: gateway_info bootstrap connect -> {}:{} (auth={})",
+                first.host(), first.port(), info.authToken().isEmpty() ? "none" : "configured");
+    }
+
+    /**
      * 建立到主控的 outbound 连接（异步）。IDLE 时先转 CONNECTING；
      * ACTIVE/MIGRATING 中调用 = 重连/切换（旧 outbound 关闭）。
      * 握手自动携带 T10 标准流程尾（玩家 UUID/位置，主控据此把会话附着到 vanilla 物化玩家）。
      */
     public void connect(String host, int port) {
-        connect(host, port, buildAutoTail());
+        connect(host, port, buildAutoTail(), null);
     }
 
     /**
@@ -185,6 +310,17 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
      * tail 非 null 时握手携带 T7/T10 状态尾（T8 迁移续流发起 / T10 标准流程身份附着）。
      */
     public void connect(String host, int port, HandshakeStateTail.C2S tail) {
+        connect(host, port, tail, null);
+    }
+
+    /**
+     * 建立到主控的 outbound 连接（异步）+ 连接级鉴权 token（M1 bootstrap 下发）。
+     * IDLE 时先转 CONNECTING；ACTIVE/MIGRATING 中调用 = 重连/切换（旧 outbound 关闭）。
+     * authToken 为 null 时握手回退 config master.authToken；空串 = 显式不鉴权
+     * （线格式不追加 token 字节）。
+     * tail 非 null 时握手携带 T7/T10 状态尾（T8 迁移续流发起 / T10 标准流程身份附着）。
+     */
+    public void connect(String host, int port, HandshakeStateTail.C2S tail, String authToken) {
         if (state.get() == NetworkCoreState.IDLE) {
             transition(NetworkCoreState.IDLE, NetworkCoreState.CONNECTING);
         }
@@ -192,14 +328,14 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
         handshakeDeadlineMs = System.currentTimeMillis() + HANDSHAKE_TIMEOUT_MS;
         lastEndpoint = host + ":" + port;
         migration.noteCurrentEndpoint(new MigrationEndpoint(host, port));
-        attach(createOutbound(host, port, tail));
+        attach(createOutbound(host, port, tail, authToken));
         LOGGER.info("Hassium: NetworkCore connecting outbound to {}", lastEndpoint);
     }
 
     /** 经迁移引擎连接工厂创建 outbound（默认真实 NIO；测试注入 EmbeddedChannel 缝）。 */
-    private OutboundConnection createOutbound(String host, int port, HandshakeStateTail.C2S tail) {
+    private OutboundConnection createOutbound(String host, int port, HandshakeStateTail.C2S tail, String authToken) {
         return migration.createConnection(host, port,
-                HandshakeCodec.ClientRequestOptions.defaults(), tail, this);
+                HandshakeCodec.ClientRequestOptions.defaults(), tail, this, authToken);
     }
 
     /**
@@ -367,6 +503,11 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
         if (!transition(NetworkCoreState.CONNECTING, NetworkCoreState.HANDSHAKING)) {
             LOGGER.debug("Hassium: onOpen while state={} (reconnect/migrate: handshake in flight)", state.get());
         }
+        // M3 仅网关登录：outbound 打开 → 会话发送登录 hello（主线程）
+        GatewayOnlyLogin session = gatewayOnlyLogin;
+        if (session != null) {
+            session.onOutboundOpen();
+        }
         // A-M2: 握手总超时（15s 从 connect()/CONNECTING 起算）——event loop 到期自检：
         // 仍处握手期 → onFault 兜底（断 outbound → IDLE 原版直连）；已 ACTIVE/MIGRATING 无操作。
         scheduleHandshakeTimeout(connection);
@@ -520,6 +661,8 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
                     .map(ce -> new MigrationEndpoint(ce.host(), ce.port()))
                     .toList();
             migration.setTargetEndpoints(advertised);
+            // M2：通告端点落盘（format=2 端点存储；主地址不可得/写入失败仅跳过，不阻断握手）
+            persistAdvertisedEndpoints(udpTail.controlEndpoints());
             LOGGER.info("Hassium: NetworkCore handshake advertised {} control endpoint(s): {}",
                     advertised.size(), advertised);
         }
@@ -536,9 +679,89 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
         }
     }
 
-    @Override
+    /**
+     * M2 端点存储写入：握手成功通告的 controlEndpoints 按逻辑主地址（当前会话 vanilla
+     * ServerData.ip，event loop 线程现取）持久化到 failover-endpoints.properties（format=2）。
+     * 主地址不可得或写入失败 → 仅告警跳过，不影响握手/迁移。
+     */
+    private void persistAdvertisedEndpoints(List<UdpDataPlaneHandshakeTail.ControlEndpoint> advertised) {
+        try {
+            String mainAddress = currentMainAddress();
+            if (mainAddress == null) {
+                LOGGER.debug("Hassium: endpoint store write skipped (no main address)");
+                return;
+            }
+            List<HassiumConfig.ReachableEndpoint> endpoints = advertised.stream()
+                    .map(ce -> new HassiumConfig.ReachableEndpoint(ce.host(), ce.port(), ce.priority()))
+                    .toList();
+            endpointStore().record(mainAddress, endpoints);
+            LOGGER.info("Hassium: endpoint store recorded {} endpoint(s) for {}", endpoints.size(), mainAddress);
+        } catch (Throwable t) {
+            LOGGER.warn("Hassium: endpoint store write skipped", t);
+        }
+    }
+
+    /** 当前会话逻辑主地址（ServerData.ip）；不可得 → null（调用方跳过写入）。 */
+    private String currentMainAddress() {
+        try {
+            Minecraft mc = Minecraft.getInstance();
+            if (mc != null && mc.getConnection() != null && mc.getConnection().getServerData() != null) {
+                String ip = mc.getConnection().getServerData().ip;
+                if (ip != null && !ip.isEmpty()) {
+                    return ip;
+                }
+            }
+        } catch (Throwable ignored) {
+            // 不可得 → 跳过写入
+        }
+        return null;
+    }
+
+    /** M2 端点存储（懒建；路径 = config/hassium/failover-endpoints.properties）。 */
+    private ClientEndpointStore endpointStore() {
+        ClientEndpointStore store = endpointStore;
+        if (store == null) {
+            synchronized (this) {
+                store = endpointStore;
+                if (store == null) {
+                    store = new ClientEndpointStore(
+                            Services.PLATFORM.getConfigDirectory().resolve(FAILOVER_ENDPOINTS_FILE));
+                    endpointStore = store;
+                }
+            }
+        }
+        return store;
+    }
+
+
+    /**
+     * M3 仅网关登录期连接/握手失败（CONNECTING/HANDSHAKING）：关 outbound → 会话
+     * 重试下一 store 端点（池耗尽由会话收尾）。非仅网关登录期 / 非握手期 → false
+     * （走既有迁移/ACTIVE 语义）。
+     */
+    private boolean handleGatewayOnlyFailure() {
+        GatewayOnlyLogin session = gatewayOnlyLogin;
+        if (session == null) {
+            return false;
+        }
+        NetworkCoreState st = state.get();
+        if (st != NetworkCoreState.CONNECTING && st != NetworkCoreState.HANDSHAKING) {
+            return false;
+        }
+        OutboundConnection oc = outbound;
+        outbound = null;
+        if (oc != null) {
+            oc.close();
+        }
+        session.onOutboundFailed();
+        return true;
+    }
+
     public void onHandshakeRejected(String reason) {
         LOGGER.warn("Hassium: NetworkCore handshake rejected: {}", reason);
+        if (handleGatewayOnlyFailure()) {
+            return;
+        }
         OutboundConnection oc = outbound;
         if (oc != null) {
             oc.close();
@@ -549,6 +772,11 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
 
     @Override
     public void onError(Throwable cause) {
+        if (handleGatewayOnlyFailure()) {
+            LOGGER.warn("Hassium: outbound failed during gateway-only login — retry next endpoint: {}",
+                    cause.toString());
+            return;
+        }
         if (state.get() == NetworkCoreState.MIGRATING) {
             OutboundConnection oc = outbound;
             outbound = null;
@@ -664,6 +892,14 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
      */
     private void onS2CPayload(ByteBuf payload) {
         try {
+            if (LOGGER.isDebugEnabled()) {
+                StringBuilder sb = new StringBuilder();
+                int n = Math.min(payload.readableBytes(), 16);
+                for (int i = 0; i < n; i++) {
+                    sb.append(String.format("%02X ", payload.getByte(payload.readerIndex() + i) & 0xFF));
+                }
+                LOGGER.debug("Hassium: T6DBG onS2CPayload size={} head={}", payload.readableBytes(), sb);
+            }
             int kind = GatewayPacketCodec.peekKind(payload);
             if (kind == GatewayPacketCodec.KIND_HASSIUM) {
                 dispatchS2CBusiness(GatewayPacketCodec.decodeHassium(payload));
@@ -674,7 +910,7 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
                     resolveClientRegistryAccess());
             dispatchS2C(packet);
         } catch (Throwable t) {
-            LOGGER.error("Hassium: S2C payload decode failed", t);
+            LOGGER.error("Hassium: S2C payload decode failed (payloadSize={})", payload.readableBytes(), t);
         } finally {
             payload.release();
         }
@@ -829,6 +1065,15 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
                     packet.getClass().getSimpleName(), c2sRouted.get());
             return false;
         }
+        // 展开 bundle（对称 routeS2C）：ServerboundBundlePacket 无独立协议 id
+        // （<1.20.5 分隔机制 getPacketId=-1），直接 encode 会产出 vanillaId=-1 坏帧
+        // 发给主控。逐子包递归路由，语义等价（丢渲染期原子性）。
+        if (packet instanceof net.minecraft.network.protocol.BundlePacket<?> bundle) {
+            for (Object sub : bundle.subPackets()) {
+                routeC2S((net.minecraft.network.protocol.Packet<?>) sub);
+            }
+            return true;
+        }
         ByteBuf payload = null;
         try {
             payload = encoder.encode(packet);
@@ -902,6 +1147,10 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
         return packet instanceof net.minecraft.network.protocol.login.ServerboundCustomQueryPacket;
 #else
         if (packet instanceof net.minecraft.network.protocol.login.ServerboundCustomQueryAnswerPacket) {
+            return true;
+        }
+        if (packet instanceof net.minecraft.network.protocol.common.ServerboundKeepAlivePacket) {
+            // 1.20.2+ 登录期 keep-alive 响应（common 包；登录监听器实现 ServerCommonPacketListener）
             return true;
         }
         return packet instanceof net.minecraft.network.protocol.login.ServerboundLoginAcknowledgedPacket;
@@ -1025,12 +1274,133 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
         return vanillaConnection;
     }
 
+    // ==================== M3 仅网关登录（主连接失效恢复） ====================
+
+    /**
+     * M3：捕获最近一次原版连接意图（MixinConnectScreen.startConnecting HEAD，主线程）。
+     * 原版连接失败（DisconnectedScreen 拦截）时决策：store 命中 → 仅网关登录。
+     */
+    public void captureConnectIntent(net.minecraft.client.multiplayer.ServerData serverData,
+                                     net.minecraft.client.gui.screens.Screen parentScreen) {
+        this.gatewayOnlyServerData = serverData;
+        this.gatewayOnlyParentScreen = parentScreen;
+        this.gatewayOnlyAttempted = false;
+    }
+
+    /**
+     * M3 失败决策（MixinMinecraft.setScreen 拦截 DisconnectedScreen → ConnectScreen 时
+     * 调用，主线程）：store 命中且本意图未尝试过 → 启动仅网关登录会话并吞掉原版失败界面。
+     * <p>
+     * 放行原版失败界面的条件：已在仅网关登录中（由调用方先行拦截）之外——net.enabled=false、
+     * 无连接意图、ServerData.ip 为空、store 未命中/不可用、本意图已尝试过。
+     *
+     * @return true = 已接管（调用方应取消原版 setScreen）
+     */
+    public boolean tryStartGatewayOnlyLogin(Minecraft mc) {
+        try {
+            if (gatewayOnlyLogin != null) {
+                return true; // 已在仅网关登录中：吞掉后续失败界面，由会话收尾
+            }
+            if (gatewayOnlyAttempted) {
+                return false; // 本连接意图已尝试过仅网关登录：原版失败界面
+            }
+            if (!HassiumConfigService.getInstance().isNetworkCompressionEnabled()) {
+                return false;
+            }
+            net.minecraft.client.multiplayer.ServerData sd = gatewayOnlyServerData;
+            if (sd == null || sd.ip == null || sd.ip.isBlank()) {
+                return false;
+            }
+            List<HassiumConfig.ReachableEndpoint> endpoints = lookupStoreEndpoints(sd.ip);
+            if (endpoints.isEmpty()) {
+                return false;
+            }
+            gatewayOnlyAttempted = true;
+            GatewayOnlyLogin session = new GatewayOnlyLogin(this, mc, sd, gatewayOnlyParentScreen, endpoints);
+            gatewayOnlyLogin = session;
+            session.start();
+            LOGGER.info("Hassium: gateway-only login started for {} ({} endpoint(s))", sd.ip, endpoints.size());
+            return true;
+        } catch (Throwable t) {
+            LOGGER.error("Hassium: gateway-only login start aborted", t);
+            gatewayOnlyLogin = null;
+            return false;
+        }
+    }
+
+    private List<HassiumConfig.ReachableEndpoint> lookupStoreEndpoints(String mainAddress) {
+        try {
+            Optional<ClientEndpointStore.Entry> entry = endpointStore().lookup(mainAddress);
+            if (entry.isPresent() && !entry.get().endpoints().isEmpty()) {
+                return entry.get().endpoints();
+            }
+        } catch (Throwable t) {
+            LOGGER.warn("Hassium: gateway-only endpoint store lookup failed for {}", mainAddress, t);
+        }
+        return List.of();
+    }
+
+    /** 是否处于仅网关登录模式（登录期 + PLAY 期——PLAY keep-alive 无壳路径依赖）。 */
+    public boolean isGatewayOnlyLogin() {
+        return gatewayOnlyLogin != null;
+    }
+
+    /** 连接屏离开是否 = 用户取消（回父屏）；登录成功 setScreen(ReceivingLevelScreen) 非父屏 → false。 */
+    public boolean isGatewayOnlyCancelTarget(net.minecraft.client.gui.screens.Screen screen) {
+        GatewayOnlyLogin session = gatewayOnlyLogin;
+        return session != null && session.isCancelTarget(screen);
+    }
+
+    /** 仅网关登录当前监听器（本地 Connection 监听器：登录期 = 登录监听器；
+     *  handleGameProfile 后 = ClientPacketListener；会话未激活 → null）。 */
+    public PacketListener gatewayOnlyLoginListener() {
+        GatewayOnlyLogin session = gatewayOnlyLogin;
+        return session == null ? null : session.listener();
+    }
+
+    /** 仅网关登录期出现原版失败界面（本地连接登录期断开）→ 会话收尾（取断开原因）。 */
+    public void notifyGatewayOnlyDisconnect() {
+        GatewayOnlyLogin session = gatewayOnlyLogin;
+        if (session != null) {
+            session.onLoginDisconnect();
+        }
+    }
+
+    /** 连接屏取消（MixinConnectScreen.onClose HEAD）→ 会话静默收尾。 */
+    public void notifyGatewayOnlyCancel() {
+        GatewayOnlyLogin session = gatewayOnlyLogin;
+        if (session != null) {
+            session.onCancel();
+        }
+    }
+
+    /** 仅网关登录会话结束（abort/静默收尾）。成功路径保留字段作模式标记（onDisconnect 清）。 */
+    void notifyGatewayOnlySessionEnded() {
+        gatewayOnlyLogin = null;
+    }
+
+    /** 仅网关登录收尾：关闭当前 outbound → IDLE（失败重试路径的 outbound 已由
+     *  {@link #handleGatewayOnlyFailure()} 关闭，此处幂等）。 */
+    void closeGatewayOnlyOutbound() {
+        OutboundConnection oc = outbound;
+        outbound = null;
+        if (oc != null) {
+            oc.close();
+        }
+        transitionTo(NetworkCoreState.IDLE);
+    }
+
     // ==================== 迁移引擎（T8：Sink + 配置透传） ====================
 
     /** 故障触发（引擎心跳超时）：立即切换；无目标端点 → 降级 IDLE。 */
     @Override
     public void onFault() {
         NetworkCoreState st = state.get();
+        // M3 仅网关登录期握手故障：重试下一 store 端点（不降级原版直连）
+        if (handleGatewayOnlyFailure()) {
+            LOGGER.warn("Hassium: fault trigger during gateway-only login (state={}) — retry next endpoint", st);
+            return;
+        }
         // A-M2: 握手期故障（CONNECTING/HANDSHAKING）→ N1 兜底：断 outbound + 回 IDLE
         // （原版直连兜底；修复静默/读超时故障在握手期被 ACTIVE-only 守卫吞掉 → 永久卡
         // HANDSHAKING）。MIGRATING/IDLE 保持现有迁移语义（忽略）。
@@ -1122,7 +1492,7 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
      * 环境不可用（无玩家/无 profile）时返回可安全发送的最小尾（playerId=null，主控
      * 回退登录桥路径）。
      */
-    private static HandshakeStateTail.C2S buildAutoTail() {
+    static HandshakeStateTail.C2S buildAutoTail() {
         return new HandshakeStateTail.C2S(clientPlayerState(), false, null, clientPlayerId(),
                 HassiumConfigService.getInstance().isHassiumEngineEnabled());
     }
@@ -1162,11 +1532,20 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
     // ==================== 内部 ====================
 
     /**
-     * 尽力自动连接当前登录服务器。初始地址源优先级（T9 修复）：
-     * master.controlReachableEndpoints[0]（客户端读 SERVER scope 键——服务端同键绑定
-     * 监听端口，双端读同一值 OK；网关帧端口直连，避免 vanilla 端口 25565 无人连 →
-     * HANDSHAKING 卡死）→ 兜底 vanilla Connection 的 ServerData.ip（"host[:port]"）。
-     * 网络压缩关闭时跳过；失败仅告警（正式地址源 = T7 迁移引擎）。
+     * 尽力自动连接当前登录服务器（M1 bootstrap 三级；修复 T9 兜底连 vanilla 端口 25565
+     * → 网关握手帧发到原版端口 → 10s 静默 fault 的根因）：
+     * <ol>
+     *   <li><b>配置端点</b>：master.controlReachableEndpoints[0]（客户端显式配置最高
+     *       优先；T9 语义保留——bootstrap 覆盖竞态由 onGatewayInfo close 重连处理）</li>
+     *   <li><b>gateway_info 已到</b>：连下发端点[0] + 下发 authToken（登录同 tick 队列
+     *       已可消费）</li>
+     *   <li><b>探测兜底</b>：ServerData host + {@link GatewayPlayerBridge#DEFAULT_GATEWAY_PORT}
+     *       （25566，与 vanilla 端口错开的网关默认端口）——服务端没装 Hassium 时 TCP 即时
+     *       拒绝（onError → IDLE 降级纯 vanilla），无 10s 静默；TCP connect 超时由 Netty
+     *       5s 兜底。<b>禁止连 ServerData 的 vanilla 端口。</b></li>
+     * </ol>
+     * gateway_info 未到时事件驱动：onGatewayInfo 到达后自然 connect（本方法不等待、
+     * 无超时窗口）。net.enabled=false 时全部跳过（保留现状）。失败仅告警。
      */
     private void autoConnect() {
         try {
@@ -1175,39 +1554,51 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
                 LOGGER.debug("Hassium: NetworkCore auto-connect skipped (net.enabled=false)");
                 return;
             }
-            String host = null;
-            int port = 25565;
+            // ① 配置端点（显式配置最高优先）
             List<HassiumConfig.ReachableEndpoint> endpoints = config.getControlReachableEndpoints();
             if (!endpoints.isEmpty()) {
                 HassiumConfig.ReachableEndpoint first = endpoints.get(0);
                 if (first.host() != null && !first.host().isBlank()) {
-                    host = first.host();
-                    port = first.port();
-                }
-            }
-            if (host == null) {
-                Minecraft mc = Minecraft.getInstance();
-                if (mc == null || mc.getConnection() == null || mc.getConnection().getServerData() == null) {
+                    connect(first.host(), first.port());
                     return;
                 }
-                String ip = mc.getConnection().getServerData().ip;
-                if (ip == null || ip.isEmpty()) {
-                    return;
-                }
-                host = ip;
-                int colon = ip.lastIndexOf(':');
-                if (colon > 0) {
-                    try {
-                        port = Integer.parseInt(ip.substring(colon + 1));
-                        host = ip.substring(0, colon);
-                    } catch (NumberFormatException ignored) {
-                        // 无端口后缀（或 IPv6 字面量），整体按 host 处理
-                    }
-                }
             }
-            connect(host, port);
+            // ② gateway_info 已到 → 下发端点 + 下发 token
+            GatewayInfoCodec.GatewayInfo info = lastGatewayInfo;
+            if (info != null && !info.endpoints().isEmpty()) {
+                GatewayInfoCodec.Endpoint first = info.endpoints().get(0);
+                connect(first.host(), first.port(), buildAutoTail(), info.authToken());
+                return;
+            }
+            // ③ 探测兜底：ServerData host + 网关默认端口（禁连 vanilla 端口）
+            String host = serverDataHost();
+            if (host != null && !host.isBlank()) {
+                connect(host, GatewayPlayerBridge.DEFAULT_GATEWAY_PORT);
+            }
         } catch (Throwable t) {
             LOGGER.debug("Hassium: NetworkCore auto-connect skipped", t);
         }
+    }
+
+    /** ServerData 主机名（剥掉尾部 ":端口"；无 ServerData → null）。探测兜底专用。 */
+    private static String serverDataHost() {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc == null || mc.getConnection() == null || mc.getConnection().getServerData() == null) {
+            return null;
+        }
+        String ip = mc.getConnection().getServerData().ip;
+        if (ip == null || ip.isBlank()) {
+            return null;
+        }
+        int colon = ip.lastIndexOf(':');
+        if (colon > 0) {
+            try {
+                Integer.parseInt(ip.substring(colon + 1));
+                return ip.substring(0, colon);
+            } catch (NumberFormatException ignored) {
+                // IPv6 字面量或非数字后缀：整体按 host 处理
+            }
+        }
+        return ip;
     }
 }

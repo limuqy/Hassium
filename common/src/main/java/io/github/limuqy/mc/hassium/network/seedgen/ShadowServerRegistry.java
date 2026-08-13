@@ -27,8 +27,14 @@ public final class ShadowServerRegistry {
     private final Object lock = new Object();
     private volatile ShadowSeedServer server;
     private volatile boolean failed;
-    /** 上次关停后台任务（重连重建前等待完成：保存必须落完才能重开同一存档目录）。 */
+    /** 本次关停后台任务（关停完成时 complete；保存必须落完才能重开同一存档目录）。 */
     private volatile java.util.concurrent.CompletableFuture<Void> shutdownFuture;
+    /** 上一次关停的 future（由每次 {@link #shutdown()} 更新为本次 future）——
+     * R2 会话期写 gate（{@link #isPreviousShutdownComplete()}）与 saver 前置等待读取：
+     * 同一存档目录禁止并发写（数据安全红线）。 */
+    private volatile java.util.concurrent.CompletableFuture<Void> previousShutdownFuture;
+    /** 关停是否仍在进行（写 gate 主状态；shutdown 开始置 false，saver 结束置 true）。 */
+    private volatile boolean previousShutdownComplete = true;
 
     private ShadowServerRegistry() {}
 
@@ -61,6 +67,12 @@ public final class ShadowServerRegistry {
         if (!ClientChunkPipeline.getInstance().isHassiumHandshakeDone()) {
             return null; // 无服务端 seed：不创建（无种子关闭生成，含 OVD 本地生成）
         }
+        // P3：世界根决议前置条件（与 SeedGenLevelCompat.resolveShadowWorldRoot 一致）——
+        // gameDir 未记录（登录早期）时无法决议稳定目录，创建会抛异常/落丢档目录；
+        // 不创建，调用方（区块包/Ovd/SeedGen）随后自然重试。
+        if (ClientChunkPipeline.getInstance().getGameDir() == null) {
+            return null;
+        }
         synchronized (lock) {
             s = server;
             if (s != null) {
@@ -69,16 +81,24 @@ public final class ShadowServerRegistry {
             if (failed) {
                 return null;
             }
-            // 重连重建：等待上次断连的后台关停（saveAll 落盘）完成——同一存档目录
-            // 不能并发开两个 LevelStorageAccess（文件锁）。
-            awaitShutdownComplete();
+            // 重连重建：不再等待上次关停的 saveAll 落盘完成——R1 关停线程第一步即释放
+            // 世界目录锁（session.lock，见 SeedGenLevelCompat.shutdown），R2 可并发创建
+            // 影子端并读盘（loadFromDisk 只读；torn read 退化为比对 miss → 数据重推）。
+            // 锁仍被占用（关停线程尚未执行到 access.close() 的毫秒级竞态窗口）时由
+            // createShadowServerWithLockRetry 短暂重试，绝不把「锁忙」当成创建失败直接
+            // 降级——旧行为：saveAll 慢时 awaitShutdownComplete 10s 超时 → tryLock
+            // OverlappingFileLockException → failShadowServer → 缓存/OVD/光照整会话全关。
             long seed = ClientChunkPipeline.getInstance().getServerSeed();
             DebugLogger.info(DebugLogger.LogType.ASYNC, "[SHADOW] Creating shadow server (seed={})", seed);
             try {
-                s = SeedGenLevelCompat.createShadowServer(seed);
+                s = createShadowServerWithLockRetry(seed);
                 final ShadowSeedServer created = s;
                 server = created;
                 ClientChunkPipeline.getInstance().setShadowServerReady(true);
+                // 影子端就绪 → OVD 环带重扫对齐（ready 前重扫必读空盘，见
+                // ViewDistanceExtensionService.onShadowReady；P3/P5 关联项）。
+                io.github.limuqy.mc.hassium.cache.client.ViewDistanceExtensionService.getInstance()
+                        .onShadowReady();
                 DebugLogger.info(DebugLogger.LogType.ASYNC,
                         "[SHADOW] Shadow server ready (seed={})", seed);
                 // 影子端就绪后上报存档布隆位图（后台扫描 region 头部位图，不卡创建线程）：
@@ -153,21 +173,32 @@ public final class ShadowServerRegistry {
 
     /**
      * 断连清理（幂等；重连后允许重建）。保存全链（saveAll → halt → chunkMap.close）
-     * 提交后台池执行——登出/断连不卡主线程（用户可感知的登出停顿）。重连重建
-     * （{@link #getOrCreate}）前等待该任务完成（同一存档目录不能并发开两个 LevelStorageAccess）。
+     * 提交后台守护线程执行——登出/断连不卡主线程（用户可感知的登出停顿）。
+     * <p>
+     * T5cShadowReady：重建（{@link #getOrCreate}）不再等待本关停的 saveAll 落盘完成
+     * ——本关停线程第一步即释放世界目录锁（session.lock，见
+     * {@code SeedGenLevelCompat.shutdown}），R2 并发创建影子端只读盘（torn read 退化
+     * 为比对 miss → 数据重推）。同一存档目录禁止并发写：本次保存（saver）前置等待
+     * 上次关停完成（有界 30s），R2 会话期写路径经 {@link #isPreviousShutdownComplete()}
+     * gate 串行化（{@code ShadowSeedServer.saveChunkToDisk / deleteChunk}）。
      * 游戏进程退出路径（JVM 终止）后台任务可能被中断——保存丢失可接受
      * （R2 比对 miss → 数据请求重推，正确降级）。
      */
     public void shutdown() {
         final ShadowSeedServer s;
+        final java.util.concurrent.CompletableFuture<Void> previous;
         synchronized (lock) {
             s = server;
             server = null;
             failed = false;
-            shutdownFuture = null;
-        }
-        if (s == null) {
-            return;
+            // 捕获上次关停的 future（本次保存开始前等待其完成——禁并发写同一 mca）；
+            // shutdownFuture 保持原值直到下面替换，getOrCreate 已不再等待它。
+            previous = previousShutdownFuture;
+            if (s == null) {
+                return; // 幂等：无端可关，写 gate 状态保持
+            }
+            // 关停开始：写 gate 关闭（R2 会话期禁止写盘，直至本关停结束）
+            previousShutdownComplete = false;
         }
         DebugLogger.info(DebugLogger.LogType.ASYNC, "[SHADOW] Shutting down shadow server (async save)");
         // 保存用独立守护线程：HassiumTaskExecutor 随断连链关停（5s 强制），
@@ -176,32 +207,92 @@ public final class ShadowServerRegistry {
         // （R2 比对 miss → 数据重推，正确降级）。
         java.util.concurrent.CompletableFuture<Void> future = new java.util.concurrent.CompletableFuture<>();
         shutdownFuture = future;
+        previousShutdownFuture = future; // 本次 future = 下一会话的「上次关停」（写 gate 依据）
         Thread saver = new Thread(() -> {
+            boolean saveAllowed = true;
             try {
                 // 注意：不能先 stopMainLoop——saveAll 期间主循环仍在驱动光照任务，
                 // isLightConverged 才可能为 true（提前停会误判未收敛 → 全量标脏 →
                 // R2 hash 命中全被拦截）。mainLoop 由 shutdown 内部的 halt 停止。
-                SeedGenLevelCompat.shutdown(s);
+                if (previous != null && !previous.isDone()) {
+                    try {
+                        previous.get(30, java.util.concurrent.TimeUnit.SECONDS);
+                    } catch (java.util.concurrent.TimeoutException te) {
+                        // 数据安全红线：上次关停异常挂起 → 跳过本次保存（仅回收资源），
+                        // 绝不与挂起的 saveAll 并发写同一 mca。
+                        saveAllowed = false;
+                        Constants.LOG.warn("Hassium: Previous shadow shutdown not finished in 30s; "
+                                + "skipping this save to avoid concurrent writes to the same world dir");
+                    } catch (Exception e) {
+                        DebugLogger.warn(DebugLogger.LogType.ASYNC,
+                                "[SHADOW] Wait previous shutdown failed", e);
+                    }
+                }
+                SeedGenLevelCompat.shutdown(s, !saveAllowed);
                 future.complete(null);
             } catch (Throwable t) {
                 Constants.LOG.warn("Hassium: Shadow server async shutdown failed", t);
                 future.completeExceptionally(t);
+            } finally {
+                previousShutdownComplete = true; // 关停结束：写 gate 重新打开
             }
         }, "hassium-shadow-shutdown");
         saver.setDaemon(true);
         saver.start();
     }
 
-    /** 等待上次关停完成（getOrCreate 重建前；最多等 10s，超时放弃等待——保存可能丢，比对 miss 降级）。 */
-    private void awaitShutdownComplete() {
-        java.util.concurrent.CompletableFuture<Void> f = shutdownFuture;
-        if (f == null) {
-            return;
+    /** 上次关停（R1 saveAll）是否已结束：R2 会话期写 gate（false = 禁写盘）。 */
+    public boolean isPreviousShutdownComplete() {
+        return previousShutdownComplete;
+    }
+
+    /**
+     * 创建影子端；世界目录锁被上次关停占用（毫秒级竞态窗口：关停线程尚未执行到
+     * access.close()）时短暂重试——绝不把「锁忙」当成创建失败直接降级（旧行为：
+     * saveAll 慢时 awaitShutdownComplete 10s 超时 → tryLock OverlappingFileLockException
+     * → failShadowServer → 缓存/OVD/光照整会话全关）。锁释放是关停线程第一步，
+     * 实际 1-2 次重试即成功；10s 上限后仍失败才抛给调用方走降级。
+     */
+    private ShadowSeedServer createShadowServerWithLockRetry(long seed) throws Exception {
+        final int maxAttempts = 50; // 200ms × 50 = 10s
+        int attempt = 0;
+        while (true) {
+            try {
+                return SeedGenLevelCompat.createShadowServer(seed);
+            } catch (Exception e) {
+                if (++attempt < maxAttempts && isLockBusy(e)) {
+                    try {
+                        Thread.sleep(200L);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        throw e;
+                    }
+                    continue;
+                }
+                throw e;
+            }
         }
-        try {
-            f.get(10, java.util.concurrent.TimeUnit.SECONDS);
-        } catch (Exception e) {
-            DebugLogger.warn(DebugLogger.LogType.ASYNC, "[SHADOW] Wait shutdown complete failed", e);
+    }
+
+    /** 目录锁占用判定：同 JVM 重复 tryLock（OverlappingFileLockException）或跨进程
+     * 占用（"already locked"/"Failed to acquire lock"/Windows 锁冲突 IOException）。 */
+    private static boolean isLockBusy(Throwable t) {
+        for (Throwable c = t; c != null; c = c.getCause()) {
+            if (c instanceof java.nio.channels.OverlappingFileLockException) {
+                return true;
+            }
+            if (c instanceof java.io.IOException) {
+                String m = c.getMessage();
+                if (m != null) {
+                    String lm = m.toLowerCase(java.util.Locale.ROOT);
+                    if (lm.contains("already locked") || lm.contains("failed to acquire lock")
+                            || lm.contains("failed to open lock") || lm.contains("session.lock")
+                            || lm.contains("locked a portion") || lm.contains("used by another process")) {
+                        return true;
+                    }
+                }
+            }
         }
+        return false;
     }
 }

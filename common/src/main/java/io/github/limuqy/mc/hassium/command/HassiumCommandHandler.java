@@ -128,17 +128,31 @@ public class HassiumCommandHandler {
             return "§e超视渲染：§r§7OFF§r";
         }
         // 拆分"渲染 N/M"与"已加载/缺失"两段，一目了然区分客户端渲染半径 vs 服务端推送半径
-        return String.format("§e超视渲染：§r§aON§r（§a渲染 %d/%d§r，已加载 %d，缺失 %d）",
+        // 影子复用 = 影子端 hash 比对命中（内存/磁盘读回）直接服务的区块数（T5g）：
+        // 这些区块经官方通道以普通区块落地，不进入 loaded 集合，单独展示；
+        // 「已加载」仍为 renderOnly 落地数（既有语义不变）。
+        return String.format("§e超视渲染：§r§aON§r（§a渲染 %d/%d§r，已加载 %d，缺失 %d，影子复用 %d）",
                 ovd.getLastClientVD(), ovd.getLastServerVD(),
-                ovd.getLoadedCount(), ovd.getPendingMissCount());
+                ovd.getLoadedCount(), ovd.getPendingMissCount(), ovd.getShadowServedCount());
     }
 
     private static String formatLightCacheLine(HassiumMetricsImpl m) {
         long lightHit = m.getLightCacheHitCount();
         long lightMiss = m.getLightCacheMissCount();
-        return String.format("§e光照缓存：§r%s（命中 %d/%s，重算 %d/%s）",
-                MetricsTextFormatter.formatPercent(m.getLightCacheHitRate() * 100.0),
+        // 剥光协商（lightComputeSupported=true）下 hasCachedLight 恒 false → 直连命中口径
+        // 恒 0（P2 指标死区）；光照复用实际由影子链路承担（ShadowLightCompute 内存/磁盘命中
+        // 记账，key light.reuse.shadow.*，见 NetworkStats#recordLightReuseShadow）。
+        // 展示口径 = 直连命中 + 影子复用（重算仅直连口径），剥光模式下「光照缓存」行
+        // 如实反映影子复用率；两类底层计数器互不合并、语义不变。
+        long shadowReuse = m.getLightReuseShadowCount();
+        long shadowReuseBytes = m.getLightReuseShadowBytes();
+        long totalHit = lightHit + shadowReuse;
+        long total = totalHit + lightMiss;
+        double rate = total > 0 ? (double) totalHit / total * 100.0 : 0.0;
+        return String.format("§e光照缓存：§r%s（命中 %d/%s，影子复用 %d/%s，重算 %d/%s）",
+                MetricsTextFormatter.formatPercent(rate),
                 lightHit, MetricsTextFormatter.formatBytes(m.getLightCacheHitBytes()),
+                shadowReuse, MetricsTextFormatter.formatBytes(shadowReuseBytes),
                 lightMiss, MetricsTextFormatter.formatBytes(m.getLightCacheMissBytes()));
     }
 

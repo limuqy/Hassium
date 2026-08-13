@@ -108,6 +108,45 @@ public final class PacketPayloadCompat {
             || packet instanceof net.minecraft.network.protocol.common.ServerboundCustomPayloadPacket;
 #endif
     }
+#if MC_VER >= MC_1_20_5
+    /**
+     * 1.20.5+：为 payload id 创建类型化 {@code CustomPacketPayload.Type}。
+     * fabric 端经 {@code PayloadTypeRegistry.playS2C().register(type, codec)} 注册后，
+     * {@link #createClientboundPayload} 产出的 RawCustomPayload 才能被
+     * {@code ClientboundCustomPayloadPacket} 正常编码——未注册类型编码回退 DiscardedPayload codec
+     * （checkcast → ClassCastException，T5f 冒烟根因）。
+     */
+    public static net.minecraft.network.protocol.common.custom.CustomPacketPayload.Type<RawCustomPayload> payloadType(
+#if MC_VER < MC_1_21_11
+ResourceLocation
+#else
+Identifier
+#endif
+ id) {
+        return new net.minecraft.network.protocol.common.custom.CustomPacketPayload.Type<>(id);
+    }
+
+    /**
+     * 1.20.5+：RawCustomPayload 字节流 codec（encode 直写字节；decode 读尽剩余——payload 为
+     * CustomPayload 包末字段）。与 {@link #createClientboundPayload} 产出的实例类一致注册，
+     * 否则注册 codec 的 T 参数与实例类不符仍会 checkcast CCE。
+     */
+    public static net.minecraft.network.codec.StreamCodec<FriendlyByteBuf, RawCustomPayload> rawPayloadCodec(
+#if MC_VER < MC_1_21_11
+ResourceLocation
+#else
+Identifier
+#endif
+ id) {
+        return net.minecraft.network.codec.StreamCodec.of(
+                (buf, payload) -> buf.writeBytes(payload.data()),
+                buf -> {
+                    byte[] data = new byte[buf.readableBytes()];
+                    buf.readBytes(data);
+                    return new RawCustomPayload(id, data);
+                });
+    }
+#endif
 
 #if MC_VER >= MC_1_20_2
     /**
@@ -138,7 +177,7 @@ Identifier
         }
     }
 #else
-    private record RawCustomPayload(
+    public record RawCustomPayload(
 #if MC_VER < MC_1_21_11
 ResourceLocation
 #else

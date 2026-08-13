@@ -67,6 +67,12 @@ public class HassiumMetricsImpl implements HassiumMetrics {
     private final AtomicLong lightCacheHitBytes = new AtomicLong(0);
     private final AtomicLong lightCacheMissCount = new AtomicLong(0);
     private final AtomicLong lightCacheMissBytes = new AtomicLong(0);
+    /** 影子链路光照复用次数（key：light.reuse.shadow.count）。剥光协商（lightComputeSupported=true）
+     *  下服务端包不带光 → hasCachedLight 恒 false，直连口径 lightCacheHitCount 不触发；
+     *  影子端内存/磁盘缓存命中 + 收敛光直接回传的复用事件独立记账，与直连口径同构但互不合并。 */
+    private final AtomicLong lightReuseShadowCount = new AtomicLong(0);
+    /** 影子链路光照复用等价字节数（key：light.reuse.shadow.bytes；口径 = ESTIMATED_LIGHT_BYTES/chunk）。 */
+    private final AtomicLong lightReuseShadowBytes = new AtomicLong(0);
     private final AtomicLong lightRecomputeTimeNs = new AtomicLong(0);
     /** 后台并行光照重算（ParallelLightEngineImpl solve）总耗时；同步路径恒 0。 */
     private final AtomicLong lightRecomputeBackgroundTimeNs = new AtomicLong(0);
@@ -307,6 +313,16 @@ public class HassiumMetricsImpl implements HassiumMetrics {
     }
 
     @Override
+    public long getLightReuseShadowCount() {
+        return lightReuseShadowCount.get();
+    }
+
+    @Override
+    public long getLightReuseShadowBytes() {
+        return lightReuseShadowBytes.get();
+    }
+
+    @Override
     public long getLightCacheMissCount() {
         return lightCacheMissCount.get();
     }
@@ -447,6 +463,8 @@ public class HassiumMetricsImpl implements HassiumMetrics {
         lightCacheHitBytes.set(0);
         lightCacheMissCount.set(0);
         lightCacheMissBytes.set(0);
+        lightReuseShadowCount.set(0);
+        lightReuseShadowBytes.set(0);
         lightRecomputeTimeNs.set(0);
         lightRecomputeBackgroundTimeNs.set(0);
         lightDeltaReceivedCount.set(0);
@@ -647,6 +665,21 @@ public class HassiumMetricsImpl implements HassiumMetrics {
         lightCacheHitCount.incrementAndGet();
         if (bytes > 0) {
             lightCacheHitBytes.addAndGet(bytes);
+        }
+    }
+
+    /**
+     * 记录影子链路光照复用（剥光协商下服务端包不带光，hasCachedLight 恒 false，直连口径
+     * {@link #recordLightCacheHit(long)} 不触发）。影子端内存/磁盘缓存命中 + 收敛光直接回传
+     * 的复用事件由本方法独立记账（key：light.reuse.shadow.count / light.reuse.shadow.bytes），
+     * 与直连口径同构、互不合并（指标可区分直连/影子口径）。
+     *
+     * @param bytes 等价字节数（口径与 {@link NetworkStats#ESTIMATED_LIGHT_BYTES} 一致，每 chunk 16KB）
+     */
+    public void recordLightReuseShadow(long bytes) {
+        lightReuseShadowCount.incrementAndGet();
+        if (bytes > 0) {
+            lightReuseShadowBytes.addAndGet(bytes);
         }
     }
 

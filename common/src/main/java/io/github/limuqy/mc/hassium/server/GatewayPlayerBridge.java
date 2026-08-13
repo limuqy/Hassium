@@ -236,10 +236,30 @@ public final class GatewayPlayerBridge {
         if (st.muted) {
             return true; // 物化窗口：join 风暴吞掉
         }
+        // 展开 bundle（1.19.4+ 原子包容器）：ClientboundBundlePacket 无独立协议 id
+        // （<1.20.5 走 BundleDelimiterPacket 分隔机制，getPacketId 恒 -1），直接
+        // encodeVanilla 会产出 vanillaId=-1 的坏帧（M3 冒烟：客户端 decode
+        // createPacket(-1) → IndexOutOfBounds → NPE 风暴）。逐子包递归编码发送，
+        // 语义等价（丢失的仅渲染期原子性，登录/实体更新无正确性影响）。
+        if (packet instanceof net.minecraft.network.protocol.BundlePacket<?> bundle) {
+            for (Object sub : bundle.subPackets()) {
+                routeS2C(connection, (net.minecraft.network.protocol.Packet<?>) sub);
+            }
+            return true;
+        }
         try {
             GatewayPacketCodec.GatewayProtocol proto = detectProtocol(connection, packet);
             ByteBuf payload = GatewayPacketCodec.encodeVanilla(
                     packet, PacketFlow.CLIENTBOUND, proto, st.registryAccess);
+            if (LOGGER.isDebugEnabled()) {
+                StringBuilder sb = new StringBuilder();
+                int n = Math.min(payload.readableBytes(), 12);
+                for (int i = 0; i < n; i++) {
+                    sb.append(String.format("%02X ", payload.getByte(payload.readerIndex() + i) & 0xFF));
+                }
+                LOGGER.debug("[GATEWAY] T6DBG routeS2C {} proto={} payloadSize={} head={}",
+                        packet.getClass().getSimpleName(), proto, payload.readableBytes(), sb);
+            }
             if (proto == GatewayPacketCodec.GatewayProtocol.LOGIN) {
                 st.channel.sendLoginS2CPayload(payload);
             } else if (proto == GatewayPacketCodec.GatewayProtocol.CONFIG) {
@@ -264,7 +284,7 @@ public final class GatewayPlayerBridge {
         if (packet instanceof net.minecraft.network.protocol.login.ClientboundHelloPacket
                 || packet instanceof net.minecraft.network.protocol.login.ClientboundLoginCompressionPacket
                 || packet instanceof net.minecraft.network.protocol.login.ClientboundLoginDisconnectPacket
-#if MC_VER < MC_1_21_5
+#if MC_VER < MC_1_21_2
                 || packet instanceof net.minecraft.network.protocol.login.ClientboundGameProfilePacket
 #else
                 || packet instanceof net.minecraft.network.protocol.login.ClientboundLoginFinishedPacket
@@ -451,6 +471,8 @@ public final class GatewayPlayerBridge {
         }
         ServerPlayer player = server.getPlayerList().getPlayer(playerId);
         if (player != null) {
+            PlayerCompressionTracker.enableCompression(player);
+            ServerChunkPushManager.getInstance().resyncTrackedChunks(player);
             session.setC2SSink(createC2SSink(server, player));
         }
         LOGGER.info("[GATEWAY] Login bridge completed for {} — 会话附着 + C2S sink 挂载", playerId);
@@ -510,6 +532,11 @@ public final class GatewayPlayerBridge {
             // （双 ServerPlayer 冲突结构性不可达，见 T10-TASK.md 论证；此分支亦兜续流握手
             // 早于 vanilla 物化的时序竞态）
             ServerPlayer existing = server.getPlayerList().getPlayer(playerId);
+            // T5b：与 finishLoginBridge 对齐 —— 压缩启用 + 区块重同步（resyncTrackedChunks
+            // 内守卫 isCompressionEnabled=false 直接 return，缺 enableCompression 则推送链
+            // 零 hash 零推送 → 客户端数据面全 0）；两调用幂等，先于 sink 挂载执行
+            PlayerCompressionTracker.enableCompression(existing);
+            ServerChunkPushManager.getInstance().resyncTrackedChunks(existing);
             if (session.c2sSink() == null) {
                 session.setC2SSink(createC2SSink(server, existing));
                 LOGGER.info("[GATEWAY] Player {} — attached to existing vanilla player (C2S sink 挂载)",
@@ -769,9 +796,11 @@ public final class GatewayPlayerBridge {
         try {
             payload.writeByte(GatewayPacketCodec.KIND_HASSIUM);
             ControlFrameCodec.writeVarInt(payload, hassiumSubId);
-            int len = buf.readableBytes();
-            buf.getBytes(buf.readerIndex(), payload, payload.writerIndex(), len);
-            payload.writerIndex(payload.writerIndex() + len);
+            // review-fix: 原 buf.getBytes(readerIndex, payload, payload.writerIndex(), len) 把 payload
+            // 当固定容量 dst（Unpooled.buffer() 初始 256B，getBytes 不扩容，只查 dstIndex+len<=capacity）
+            // → 大业务包（SECTION_DELTA >254B 等）越界 IndexOutOfBoundsException 被吞掉丢弃。
+            // 改 writeBytes 自动扩容 + 追加到 writerIndex，大包正确写入。
+            payload.writeBytes(buf, buf.readerIndex(), buf.readableBytes());
             session.sendS2CPayload(payload); // 所有权移交
             buf.release();
             return true;

@@ -116,6 +116,8 @@ public final class ShadowLightCompute {
 
     /** delta 请求超时（毫秒）：服务端始终回包（entries/skipped 可空），丢包/断连竞态兜底。 */
     private static final long DELTA_REQUEST_TIMEOUT_MS = 8_000L;
+    /** 每轮消费循环注入 chunk 上限（背压：避免一次性注入大批 chunk 算光占满 CPU/GC 卡主线程）。 */
+    private static final int CONSUME_BATCH_LIMIT = 32;
     /** 已发出、未收到 delta 响应的请求（pos → 维度 + 截止时间）；超时回退全量。 */
     private static final ConcurrentHashMap<Long, PendingDelta> pendingDeltaRequests =
             new ConcurrentHashMap<>();
@@ -211,6 +213,19 @@ public final class ShadowLightCompute {
                         if (chunkHashOf(loaded, pos, remoteHash)) {
                             org.slf4j.LoggerFactory.getLogger("Hassium/ShadowDisk")
                                     .info("Shadow hash cache hit ({}, {}), memory push", pos.x, pos.z);
+                            // P2：影子链路光复用记账（key light.reuse.shadow.*）——内存命中
+                            // （hash 一致 + 光已收敛）即真实复用，与直连口径 lightCacheHit* 独立。
+                            // T5g：区块缓存全命中记账——内存命中 = 影子端直接服务客户端、未走网络拉取，
+                            // 与 consumeLoop 磁盘直推口径同构（count+bytes，key cacheHitFullChunk*）。
+                            io.github.limuqy.mc.hassium.metrics.NetworkStats.recordCacheLoadEligible(
+                                    io.github.limuqy.mc.hassium.metrics.NetworkStats.ESTIMATED_CHUNK_BYTES);
+                            io.github.limuqy.mc.hassium.metrics.NetworkStats.recordCacheFullHit(
+                                    io.github.limuqy.mc.hassium.metrics.NetworkStats.ESTIMATED_CHUNK_BYTES);
+                            // T5g：OVD 统计侧影子命中直接服务计数（超视渲染行「影子复用」展示用）。
+                            io.github.limuqy.mc.hassium.cache.client.ViewDistanceExtensionService
+                                    .getInstance().noteShadowServed();
+                            io.github.limuqy.mc.hassium.metrics.NetworkStats.recordLightReuseShadow(
+                                    io.github.limuqy.mc.hassium.metrics.NetworkStats.ESTIMATED_LIGHT_BYTES);
                             pushReady(chunkPosKey(pos), loaded, server.overworld(), true);
                             continue;
                         }
@@ -245,6 +260,19 @@ public final class ShadowLightCompute {
                             } else {
                                 org.slf4j.LoggerFactory.getLogger("Hassium/ShadowDisk")
                                         .info("Shadow hash cache hit ({}, {}), disk push", pos.x, pos.z);
+                                // T5g：区块缓存全命中记账——磁盘命中（disk push）= 影子端读盘直接服务，
+                                // 未走网络拉取；与 consumeLoop 磁盘直推同口径（count+bytes）。
+                                io.github.limuqy.mc.hassium.metrics.NetworkStats.recordCacheLoadEligible(
+                                        io.github.limuqy.mc.hassium.metrics.NetworkStats.ESTIMATED_CHUNK_BYTES);
+                                io.github.limuqy.mc.hassium.metrics.NetworkStats.recordCacheFullHit(
+                                        io.github.limuqy.mc.hassium.metrics.NetworkStats.ESTIMATED_CHUNK_BYTES);
+                                // T5g：OVD 统计侧影子命中直接服务计数（超视渲染行「影子复用」展示用）。
+                                io.github.limuqy.mc.hassium.cache.client.ViewDistanceExtensionService
+                                        .getInstance().noteShadowServed();
+                                // P2：影子链路光复用记账——磁盘命中（存档收敛光）即复用；
+                                // 上方「磁盘命中 + 光脏 → relight 本地重算」分支不记账（光新算非复用）。
+                                io.github.limuqy.mc.hassium.metrics.NetworkStats.recordLightReuseShadow(
+                                        io.github.limuqy.mc.hassium.metrics.NetworkStats.ESTIMATED_LIGHT_BYTES);
                                 pushReady(chunkPosKey(pos), fromDisk, server.overworld(), true);
                             }
                             continue;
@@ -292,11 +320,11 @@ public final class ShadowLightCompute {
     }
 
     /**
-     * 上报本地 section hashes 请求分段增量（后台池调用）：影子端本地有旧数据
+     * 上报本地 section hashes 请求分段增量（后台池 / SeedGen 生成线程调用）：影子端本地有旧数据
      * （内存/磁盘）但 contentHash 与远程权威不一致 → 服务端按 section 比对只回
      * 变更 section + heightmaps + BE。登记超时（{@link #tickPendingDeltaTimeouts}）。
      */
-    private static void requestSectionDeltas(String dimension, List<ChunkPos> chunks) {
+    public static void requestSectionDeltas(String dimension, List<ChunkPos> chunks) {
         ShadowSeedServer server = ShadowServerRegistry.getInstance().getOrCreate();
         if (server == null || chunks.isEmpty()) {
             return;
@@ -479,7 +507,13 @@ public final class ShadowLightCompute {
                     return;
                 }
                 List<Map.Entry<Long, ClientboundLevelChunkWithLightPacket>> batch =
-                        new ArrayList<>(pending.entrySet());
+                        new ArrayList<>(CONSUME_BATCH_LIMIT);
+                for (Map.Entry<Long, ClientboundLevelChunkWithLightPacket> e : pending.entrySet()) {
+                    if (batch.size() >= CONSUME_BATCH_LIMIT) {
+                        break;
+                    }
+                    batch.add(e);
+                }
                 List<Map.Entry<Long, GenEntry>> genBatch = new ArrayList<>(generated.entrySet());
                 List<Map.Entry<Long, DeltaWork>> deltaBatch = new ArrayList<>(pendingDeltas.entrySet());
                 if (batch.isEmpty() && genBatch.isEmpty() && deltaBatch.isEmpty()) {
@@ -507,6 +541,9 @@ public final class ShadowLightCompute {
                                             io.github.limuqy.mc.hassium.metrics.NetworkStats.ESTIMATED_CHUNK_BYTES);
                                     io.github.limuqy.mc.hassium.metrics.NetworkStats.recordCacheFullHit(
                                             io.github.limuqy.mc.hassium.metrics.NetworkStats.ESTIMATED_CHUNK_BYTES);
+                                    // P2：影子链路光复用记账——磁盘命中直推（存档即收敛光）。
+                                    io.github.limuqy.mc.hassium.metrics.NetworkStats.recordLightReuseShadow(
+                                            io.github.limuqy.mc.hassium.metrics.NetworkStats.ESTIMATED_LIGHT_BYTES);
                                     pushReady(e.getKey(), fromDisk,
                                             server.overworld(), true /* converged: 存档即收敛光 */);
                                     pending.remove(e.getKey());
@@ -559,6 +596,13 @@ public final class ShadowLightCompute {
                 // （collectLightUpdate → drainLightMasks → OP_LIGHT_UPDATE）事件驱动补发；
                 // 标脏语义保留（pushReady 内 markLightDirty(pos, !converged)）。
                 boolean converged = server.isLightConverged();
+                // P2-revive：全局收敛 → 清空全部光照标脏。isLightConverged 为 true = 引擎光照
+                // 队列全部排空，所有标脏柱（含前序批次 push 时未收敛、本批未重推的柱）光均已
+                // 收敛为干净光；不清则脏标残留 → R2 读盘命中检查 isLightDirty 全挂 → 全命中 0
+                // （T5c 定位真凶）。pushReady(true) 只清本批 32 柱覆盖不全，须全表清。
+                if (converged) {
+                    io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.clearLightDirty();
+                }
                 org.slf4j.LoggerFactory.getLogger("Hassium/ShadowDisk")
                         .info("consumeLoop batch done: converged={} (batch={} gen={} delta={})",
                                 converged, batch.size(), genBatch.size(), deltaBatch.size());
@@ -625,6 +669,10 @@ public final class ShadowLightCompute {
                                 "[SHADOW_DELTA] Build failed ({}, {})", pos.x, pos.z);
                     }
                 }
+                // 背压：每轮最多注入 CONSUME_BATCH_LIMIT 个 chunk，消费完一批即退出，
+                // 由 finally 重新 pump 提交下一轮（executor 调度间隙让出 CPU，避免一次性
+                // 注入大批 chunk 算光占满 CPU/GC 卡主线程）。
+                break;
             }
         } finally {
             consumeRunning.set(false);
@@ -635,7 +683,16 @@ public final class ShadowLightCompute {
         }
     }
 
-    /** 打包官方包（带权威光）入回传队列（chunk 包 op=OP_CHUNK_APPLY，REPLACE）。 */
+    /**
+     * 打包官方包（带权威光）入回传队列（chunk 包 op=OP_CHUNK_APPLY，REPLACE）。
+     * <p>
+     * 光照复用记账口径（P2）：{@code converged=true} 本身<em>不是</em>复用信号——注入/生成/增量
+     * 路径的块在引擎收敛后同样以 converged=true 回传（此时光为本会话新算，非复用）。
+     * 真正的光复用事件只发生在三个缓存命中点（{@link #processRemoteHashes} 内存/磁盘命中、
+     * {@link #consumeLoop} 磁盘直推），记账在那些调用点完成
+     * （{@code NetworkStats.recordLightReuseShadow}，key {@code light.reuse.shadow.*}），
+     * 此处不重复计数，避免把「收敛后回传」误计为「光复用」。
+     */
     private static void pushReady(long key, net.minecraft.world.level.chunk.LevelChunk chunk,
                                   net.minecraft.server.level.ServerLevel level, boolean converged) {
         ChunkPos pos = chunk.getPos();
@@ -674,6 +731,7 @@ public final class ShadowLightCompute {
      */
     public static void drainReady() {
         tickChunkUnload();
+        clearDirtyIfConverged();
         drainLightMasks();
         if (ready.isEmpty()) {
             return;
@@ -709,6 +767,32 @@ public final class ShadowLightCompute {
             } finally {
                 ready.release(entry);
             }
+        }
+    }
+
+    /**
+     * 光照收敛完成回调（帧尾，客户端主线程）：覆盖 consumeLoop 退出后引擎才收敛的窗口
+     * （R1 全量注入 → consumeLoop 各批退出 → 引擎异步算光后收敛，此时无任何 pushReady 重推
+     * 清脏）——确认全局收敛（{@code ShadowSeedServer.isLightConverged}）即清空光照标脏表，
+     * 保证收敛光落盘（saveAll）不带脏标 → R2 读盘命中可跳过重算直接复用。
+     * 标脏表未标脏时零开销短路（不查引擎）；未收敛时绝不清（欠光数据必须保持脏）。
+     */
+    private static void clearDirtyIfConverged() {
+        if (!io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.hasLightDirty()) {
+            return;
+        }
+        ShadowSeedServer server = ShadowServerRegistry.getInstance().get();
+        if (server == null) {
+            return;
+        }
+        try {
+            if (server.isLightConverged()) {
+                io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.clearLightDirty();
+                DebugLogger.info(DebugLogger.LogType.ASYNC,
+                        "[SHADOW_LIGHT] Global convergence confirmed, cleared light-dirty marks");
+            }
+        } catch (Throwable t) {
+            DebugLogger.warn(DebugLogger.LogType.ASYNC, "[SHADOW_LIGHT] Convergence check failed", t);
         }
     }
 

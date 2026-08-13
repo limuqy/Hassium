@@ -2,6 +2,7 @@
 package io.github.limuqy.mc.hassium.network;
 
 import io.github.limuqy.mc.hassium.Constants;
+import io.github.limuqy.mc.hassium.compat.PacketPayloadCompat;
 import io.github.limuqy.mc.hassium.compat.ResourceLocationCompat;
 import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
 import net.minecraft.network.FriendlyByteBuf;
@@ -50,6 +51,10 @@ public final class FabricPayloadRegistry {
             type("block_entity_data_s2c");
     public static final CustomPacketPayload.Type<RawPayload> LIGHT_DELTA_S2C_TYPE =
             type("light_delta_s2c");
+
+    /** gateway_info：M1 bootstrap 握手（ServerGatewayInfoSender → PacketPayloadCompat.createClientboundPayload 直发）。 */
+    public static final CustomPacketPayload.Type<PacketPayloadCompat.RawCustomPayload> GATEWAY_INFO_S2C_TYPE =
+            new CustomPacketPayload.Type<>(ResourceLocationCompat.create(HassiumPacketIds.GATEWAY_INFO_S2C));
 
     // ===== C2S payload types (client -> server) =====
 
@@ -125,6 +130,11 @@ public final class FabricPayloadRegistry {
         PayloadTypeRegistry.playS2C().register(SEED_REF_S2C_TYPE, codec(SEED_REF_S2C_TYPE));
         PayloadTypeRegistry.playS2C().register(SECTION_DELTA_S2C_TYPE, codec(SECTION_DELTA_S2C_TYPE));
         PayloadTypeRegistry.playS2C().register(BLOCK_ENTITY_DATA_S2C_TYPE, codec(BLOCK_ENTITY_DATA_S2C_TYPE));
+
+        // gateway_info：服务端经 compat createClientboundPayload 直发；注册后 1.20.5+ 类型化
+        // 编解码走 RawCustomPayload codec（未注册 → DiscardedPayload 回退 CCE / 客户端数据被丢弃）。
+        PayloadTypeRegistry.playS2C().register(GATEWAY_INFO_S2C_TYPE,
+                PacketPayloadCompat.rawPayloadCodec(ResourceLocationCompat.create(HassiumPacketIds.GATEWAY_INFO_S2C)));
         PayloadTypeRegistry.playS2C().register(LIGHT_DELTA_S2C_TYPE, codec(LIGHT_DELTA_S2C_TYPE));
 
         // C2S types
@@ -139,8 +149,8 @@ public final class FabricPayloadRegistry {
                 io.github.limuqy.mc.hassium.network.PreHandshakePayload.TYPE,
                 io.github.limuqy.mc.hassium.network.PreHandshakePayload.STREAM_CODEC);
 
-        // review-fix: T10-3: 实际注册 10 S2C（:119-128）+ 6 C2S（:131-136）+ 1 configurationC2S（:138-140），原日志 9/6 与实际不符误导排障
-        LOGGER.info("Hassium: Registered 10 S2C and 6 C2S (+1 config) payload types for 1.20.5+");
+        // review-fix: T10-3: 实际注册 11 S2C（含 gateway_info，T5f 新增）+ 6 C2S + 1 configurationC2S
+        LOGGER.info("Hassium: Registered 11 S2C and 6 C2S (+1 config) payload types for 1.20.5+");
     }
 
     /**

@@ -248,8 +248,19 @@ public final class SeedGenLevelCompat {
     }
 
     /**
-     * 影子端世界根：{@code <gameDir>/hassium_cache/<serverId>}（serverId 未就绪
-     * 时退回临时目录——进服早期竞态兜底，正常路径 storage 初始化已记录目录）。
+     * 影子端世界根决议（唯一规则，P3 修复；勿在别处另立规则）。优先级：
+     * <ol>
+     *   <li>{@code serverId} 已就绪（gateway-only 握手完成时 {@code ClientLifecycleHelper}
+     *       已同步记录；正常路径 storage 初始化亦记录）→ {@code <gameDir>/hassium_cache/<serverId>}
+     *       （既有目录布局，重连复用）。若真实目录尚不存在且存在同 server 的 pending 目录
+     *       （此前 serverId 未就绪期间的落盘），整体改名迁移复用（{@link #migratePendingWorld}）。</li>
+     *   <li>{@code serverId} 未就绪（首连早期竞态兜底）→
+     *       {@code <gameDir>/hassium_cache/pending-<sanitized(serverIp)>}，<b>不回落 TEMP</b>——
+     *       TEMP 目录进程退出即丢，重连后真实目录为空导致全量 miss（P3 根因）；pending 数据
+     *       在重连（serverId 就绪）时按第 1 条迁移复用。</li>
+     *   <li>无任何服务器标识（理论不可达：影子创建前置条件 = 握手完成 ≥ serverId 已记录；
+     *       防御）→ 抛异常，由 ShadowServerRegistry 走降级，不静默丢档。</li>
+     * </ol>
      * 存档名固定为 "world"，最终目录 = {@code hassium_cache/<serverId>/world}。
      */
     static Path resolveShadowWorldRoot() {
@@ -257,26 +268,97 @@ public final class SeedGenLevelCompat {
                 io.github.limuqy.mc.hassium.network.ClientChunkPipeline.getInstance();
         java.nio.file.Path gameDir = pipeline.getGameDir();
         String serverId = pipeline.getServerId();
-        if (gameDir == null || serverId == null) {
-            try {
-                return Files.createTempDirectory("hassium-shadow");
-            } catch (IOException e) {
-                throw new RuntimeException("Cannot resolve shadow world root", e);
-            }
+        if (gameDir == null) {
+            throw new IllegalStateException(
+                    "Cannot resolve shadow world root: gameDir not recorded (login incomplete)");
         }
-        return gameDir.resolve("hassium_cache").resolve(serverId);
+        java.nio.file.Path cacheRoot = gameDir.resolve("hassium_cache");
+        if (serverId != null) {
+            migratePendingWorld(cacheRoot, serverId);
+            return cacheRoot.resolve(serverId);
+        }
+        String serverIp = io.github.limuqy.mc.hassium.cache.client.ClientLifecycleHelper.currentServerIp();
+        if (serverIp != null && !serverIp.isBlank()) {
+            return cacheRoot.resolve(
+                    "pending-" + io.github.limuqy.mc.hassium.utils.ServerIdUtil.sanitize(serverIp));
+        }
+        throw new IllegalStateException(
+                "Cannot resolve shadow world root: no server identity (serverId/serverIp unavailable)");
     }
 
-    /** 关闭影子服务端：先全量保存（type 126 + hash 落盘），再停线程；持久目录保留。 */
-    public static void shutdown(ShadowSeedServer server) {
-        if (server == null) {
+    /**
+     * 重连迁移：真实目录尚未创建时，若存在同 server 的 pending 目录（此前 serverId 未就绪
+     * 期间的落盘），整体改名迁移复用——首连数据不因 worldRoot 决议漂移而丢失。
+     * 真实目录已存在（正常重连复用路径）或 pending 不存在/非目录 → 不动（不破坏既有布局）。
+     * 迁移失败仅告警，回落全新真实目录（pending 数据保留，不删除）。
+     */
+    private static void migratePendingWorld(java.nio.file.Path cacheRoot, String serverId) {
+        java.nio.file.Path pending = cacheRoot.resolve("pending-" + serverId);
+        java.nio.file.Path real = cacheRoot.resolve(serverId);
+        if (!Files.isDirectory(pending) || Files.exists(real)) {
             return;
         }
         try {
-            server.saveAll();
-        } catch (Exception e) {
-            Constants.LOG.warn("Hassium: Shadow seed server save failed", e);
+            Files.move(pending, real);
+            Constants.LOG.info("Hassium: shadow cache migrated pending-{} -> {}", serverId, serverId);
+        } catch (IOException e) {
+            Constants.LOG.warn("Hassium: shadow cache pending migration failed (using fresh dir)", e);
         }
+    }
+
+    /**
+     * 关闭影子服务端：先释放世界目录锁（session.lock），再全量保存（type 126 + hash
+     * 落盘），最后停线程；持久目录保留。
+     * <p>
+     * 锁先行（T5cShadowReady）：{@code LevelStorageAccess} 的 session.lock 只用于
+     * 防止「同一存档目录并发开两个 access」——保存链（saveAll → halt → chunkMap.close）
+     * 全程只依赖路径/region 文件句柄，不依赖该锁；把 {@code access.close()} 提到
+     * saveAll 之前，R2 重连建端便不再被 R1 的 saveAll 阻塞（毫秒级拿到锁即可创建）。
+     * R2 创建后与 R1 saveAll 并发：R2 只读盘（loadFromDisk），R1 只写——torn read
+     * 退化为比对 miss → 数据重推（正确降级）；R2 的写路径由
+     * {@code ShadowServerRegistry} 的关停完成 gate 串行化（见
+     * {@code isPreviousShutdownComplete} / {@code beginShutdownSave}），杜绝并发写
+     * 同一 mca。
+     */
+    public static void shutdown(ShadowSeedServer server) {
+        shutdown(server, false);
+    }
+
+    /**
+     * @param skipSave true = 上次关停异常未完成（saver 前置等待 30s 超时）→ 放弃本次
+     *                 保存仅回收资源（数据安全红线：禁止与挂起的 saveAll 并发写同一
+     *                 mca；数据由后续会话比对 miss 重推兜底）。
+     */
+    public static void shutdown(ShadowSeedServer server, boolean skipSave) {
+        if (server == null) {
+            return;
+        }
+        // 本端进入关停保存：写 gate 对本端放行（上次关停已在 saver 前置等待完成，
+        // 本端写盘与任何其他端无并发）。
+        server.beginShutdownSave();
+        // 1) 先释放世界目录锁（毫秒级）：R2 重连建端不再等待 R1 saveAll 落盘完成。
+        LevelStorageSource.LevelStorageAccess access = server.storageAccess();
+        if (access != null) {
+            try {
+                access.close();
+            } catch (Exception e) {
+                Constants.LOG.warn("Hassium: Shadow storage close failed", e);
+            }
+        }
+        // 2) 全量保存（此时 R2 可并发创建影子端并读盘；本端写盘与任何其他端无并发）
+        if (skipSave) {
+            Constants.LOG.warn("Hassium: Shadow seed server save skipped "
+                    + "(previous shutdown incomplete; data re-pushed on next session)");
+        } else {
+            try {
+                server.saveAll();
+            } catch (Exception e) {
+                Constants.LOG.warn("Hassium: Shadow seed server save failed", e);
+            }
+        }
+        // 3) 停线程。注意：不能先 stopMainLoop——saveAll 期间主循环仍在驱动光照任务，
+        // isLightConverged 才可能为 true（提前停会误判未收敛 → 全量标脏 →
+        // R2 hash 命中全被拦截）。mainLoop 由 shutdown 内部的 halt 停止。
         try {
             server.halt(false);
         } catch (Exception e) {
@@ -301,14 +383,7 @@ public final class SeedGenLevelCompat {
         }
         WorldStem stem = server.stem();
         closeQuietly(stem, null);
-        LevelStorageSource.LevelStorageAccess access = server.storageAccess();
-        if (access != null) {
-            try {
-                access.close();
-            } catch (Exception e) {
-                Constants.LOG.warn("Hassium: Shadow storage close failed", e);
-            }
-        }
+        // 目录锁已在步骤 1 释放（幂等；此处不再重复 close）。
         // 持久世界目录保留（重连复用）；复位影子上下文与 hash 桥。
         io.github.limuqy.mc.hassium.server.RuntimeServerContext.setShadowServer(false);
         io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.clear();

@@ -102,6 +102,12 @@ public class ViewDistanceExtensionService {
      *（避免 lastPlayerPos 未变 early-return 导致重连后永不 enqueue）。
      */
     private volatile boolean forceRescan = false;
+    /**
+     * 影子端未就绪期间被延迟的环带重扫（ready 后由 {@link #onShadowReady()} 补扫；
+     * 影子失败/无握手则永不触发——OVD 本就关闭）。每次登录经
+     * {@link #onClientStorageReady()} 重新评估，无跨会话残留。
+     */
+    private volatile boolean rescanDeferred = false;
 
     private final AtomicLong missTotal = new AtomicLong();
     private final AtomicLong retryTotal = new AtomicLong();
@@ -109,6 +115,11 @@ public class ViewDistanceExtensionService {
     private final AtomicLong forgetRetainTotal = new AtomicLong();
     /** unload 路径同栈/入队替换次数（Forget 以外的兜底） */
     private final AtomicLong unloadSubstituteTotal = new AtomicLong();
+    /** 影子端缓存命中（hash 比对内存/磁盘读回）直接服务客户端的区块累计数（T5g）。
+     *  与 loadedRenderOnly（已 apply 的 renderOnly）互斥口径：这些区块经官方通道以普通区块
+     *  落地、不进入 loaded 集合，单独记账供「超视渲染」行展示影子复用；不随 clearAllRenderOnly
+     *  重置（会话累计，与 forgetRetainTotal 同级）。 */
+    private final AtomicLong shadowServedTotal = new AtomicLong();
 
     private ViewDistanceExtensionService() {
     }
@@ -188,8 +199,19 @@ public class ViewDistanceExtensionService {
      * 客户端缓存 storage 异步就绪后调用：清 miss 计数并强制下一 tick 全环带重扫。
      * 解决「重连后超视渲染失效」：onLogin 异步 init 期间 load 全 miss 并耗尽 retry，
      * 且 lastPlayerPos 未变导致 early-return。
+     * <p>
+     * P5 对齐：影子端未激活（握手未完成/创建中/已失败）时延迟执行——此刻重扫必读空盘
+     * （影子存档尚未落盘），全部 miss 并耗尽 retry；影子端 ready 后由
+     * {@link io.github.limuqy.mc.hassium.network.seedgen.ShadowServerRegistry} 调
+     * {@link #onShadowReady()} 补扫。
      */
     public void onClientStorageReady() {
+        if (!io.github.limuqy.mc.hassium.network.ClientChunkPipeline.getInstance().isShadowEngineActive()) {
+            rescanDeferred = true;
+            Constants.LOG.debug("Hassium: OVD rescan deferred until shadow engine active");
+            return;
+        }
+        rescanDeferred = false;
         missRetryAt.clear();
         missRetryCount.clear();
         delayedUnloadAt.clear();
@@ -198,6 +220,16 @@ public class ViewDistanceExtensionService {
         lastClientVD = -1;
         lastServerVD = -1;
         Constants.LOG.debug("Hassium: OVD storage ready → force rescan");
+    }
+
+    /**
+     * 影子端 ready（ShadowServerRegistry.getOrCreate 成功后调用）：补上被延迟的环带重扫
+     * （{@link #onClientStorageReady()} 因影子未激活而延迟的补扫）；未延迟则不动作。
+     */
+    public void onShadowReady() {
+        if (rescanDeferred) {
+            onClientStorageReady();
+        }
     }
 
     /**
@@ -685,6 +717,15 @@ public class ViewDistanceExtensionService {
     }
 
     /**
+     * 影子端缓存命中（hash 比对内存/磁盘读回）直接服务客户端：累计计数（任意线程可调，
+     * T5g）。调用点 = ShadowLightCompute.processRemoteHashes 内存/磁盘命中分支
+     * （disk push / memory push 直推，客户端经官方通道以普通区块落地）。
+     */
+    public void noteShadowServed() {
+        shadowServedTotal.incrementAndGet();
+    }
+
+    /**
      * 清理所有 renderOnly 状态。
      */
     public void clearAllRenderOnly() {
@@ -717,6 +758,11 @@ public class ViewDistanceExtensionService {
     /** 已成功 apply 到客户端的 renderOnly 数量（不含仅排队）。 */
     public int getLoadedCount() {
         return loadedRenderOnly.size();
+    }
+
+    /** 影子端缓存命中直接服务的区块累计数（hash 比对内存/磁盘读回；T5g，与 loaded 互斥口径）。 */
+    public long getShadowServedCount() {
+        return shadowServedTotal.get();
     }
 
     /** 已 enqueue、等待磁盘 hit/miss 的 renderOnly 数量。 */

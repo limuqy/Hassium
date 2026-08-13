@@ -61,6 +61,18 @@ public final class ShadowStorageHashes {
         return Boolean.TRUE.equals(LIGHT_DIRTY.get(ChunkPos.asLong(pos.x, pos.z)));
     }
 
+    /** 光照标脏表是否非空（帧尾收敛检查的零开销短路门；无标脏不查引擎）。 */
+    public static boolean hasLightDirty() {
+        return !LIGHT_DIRTY.isEmpty();
+    }
+
+    /** 清空全部光照标脏。仅全局光照确认收敛后调用（{@code ShadowSeedServer.isLightConverged()}
+     * 排空 = 所有标脏柱光均已收敛为干净光，R2 读盘可跳过重算直接复用）；
+     * 未收敛时调用会误把欠光数据当干净光，严禁。 */
+    public static void clearLightDirty() {
+        LIGHT_DIRTY.clear();
+    }
+
     /** 清空 hash 表（影子端装配/关停时调用）。光照标脏表不随 hash 清空：
      * 欠光标脏必须跨影子端关停保留（进程内），R2 读盘命中继承 R1 的欠光状态；
      * 装配新会话时默认干净（表从零起），无残留串扰。 */

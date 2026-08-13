@@ -66,14 +66,24 @@ public final class ClientLifecycleHelper {
         initialized = true;
     }
 
-    /** 同步记录 gameDir/serverId（影子端世界目录定位；与 initializeCacheAsync 同口径）。 */
+    /**
+     * 同步记录 gameDir/serverId（影子端世界目录定位；与 initializeCacheAsync 同口径）。
+     * <p>
+     * P3 修复：gateway-only 首连时 vanilla 监听器晚于影子创建（{@code mc.getConnection()}
+     * 的 serverData 不可用），此前此处静默跳过 → 影子端 worldRoot 回落 TEMP（进程退出
+     * 即丢）→ 重连读空盘全量 miss。现经网关会话监听器兜底（{@link #currentServerIp()}），
+     * 保证握手完成前 serverId 即已记录——影子创建前置条件（握手完成）恒晚于本记录。
+     */
     private static void recordCacheLocationSync() {
         try {
             Minecraft mc = Minecraft.getInstance();
-            if (mc == null || mc.getConnection() == null || mc.getConnection().getServerData() == null) {
+            if (mc == null) {
                 return;
             }
-            final String serverIp = mc.getConnection().getServerData().ip;
+            final String serverIp = currentServerIp();
+            if (serverIp == null) {
+                return;
+            }
             final Path gameDir = mc.gameDirectory.toPath();
             // review-fix: T8-27: serverId sanitize 收敛到 utils/ServerIdUtil（三处复制统一）
             final String serverId = io.github.limuqy.mc.hassium.utils.ServerIdUtil.sanitize(serverIp);
@@ -82,6 +92,41 @@ public final class ClientLifecycleHelper {
         } catch (Exception ignored) {
             // 记录失败不阻断登录
         }
+    }
+
+    /**
+     * 当前会话服务器地址（影子端 worldRoot 定位用；不可得 → null）。
+     * <p>
+     * 来源优先级（与 SeedGenLevelCompat.resolveShadowWorldRoot 的 serverIp 兜底同源）：
+     * <ol>
+     *   <li>{@code mc.getConnection().getServerData().ip}——正常路径（vanilla 监听器已挂载）</li>
+     *   <li>{@code NetworkCore.gatewayOnlyLoginListener()} 的 serverData.ip——仅网关登录
+     *       期 vanilla 监听器未挂载时的兜底：网关会话从连接意图（MixinConnectScreen）起即持有
+     *       用户输入的 ServerData，handleGameProfile 后其监听器为携带该 ServerData 的
+     *       {@link ClientPacketListener}</li>
+     * </ol>
+     */
+    public static String currentServerIp() {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc == null) {
+            return null;
+        }
+        if (mc.getConnection() != null && mc.getConnection().getServerData() != null) {
+            String ip = mc.getConnection().getServerData().ip;
+            if (ip != null && !ip.isBlank()) {
+                return ip;
+            }
+        }
+        // 仅网关登录兜底：网关会话本地壳连接的当前监听器
+        net.minecraft.network.PacketListener gateway =
+                io.github.limuqy.mc.hassium.network.core.NetworkCore.getInstance().gatewayOnlyLoginListener();
+        if (gateway instanceof net.minecraft.client.multiplayer.ClientPacketListener cpl) {
+            net.minecraft.client.multiplayer.ServerData sd = cpl.getServerData();
+            if (sd != null && sd.ip != null && !sd.ip.isBlank()) {
+                return sd.ip;
+            }
+        }
+        return null;
     }
 
     /** 手动登出双触发防重入冷却（MixinMinecraft.disconnect HEAD 主线程 + listener onDisconnect Netty 线程各自注入）。 */

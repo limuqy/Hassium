@@ -138,6 +138,21 @@ public class ShadowSeedServer extends MinecraftServer {
     private final java.util.concurrent.ConcurrentHashMap<Long, net.minecraft.world.level.chunk.LevelChunk>
             injectedChunks = new java.util.concurrent.ConcurrentHashMap<>();
 
+    /**
+     * 本端是否已进入关停保存（SeedGenLevelCompat.shutdown 首步置位）：本端 saveAll 的
+     * 写路径豁免 {@code ShadowServerRegistry.isPreviousShutdownComplete()} 写 gate——
+     * 关停 saver 已前置等待上次关停完成（有界 30s，超时跳过保存），本端写盘与任何
+     * 其他端无并发（数据安全红线：同一 mca 禁并发写）。运行期（R2 会话）恒为 false，
+     * 此时写 gate 生效：R1 saveAll 未完成 → saveChunkToDisk/deleteChunk 拒绝落盘，
+     * 内存驻留/比对 miss 兜底。
+     */
+    private volatile boolean ownShutdownInProgress;
+
+    /** 关停保存开始（SeedGenLevelCompat.shutdown 首步调用）：写 gate 对本端保存放行。 */
+    void beginShutdownSave() {
+        this.ownShutdownInProgress = true;
+    }
+
     private ShadowSeedServer(Thread thread,
                              LevelStorageSource.LevelStorageAccess access,
                              PackRepository repo,
@@ -213,13 +228,43 @@ public class ShadowSeedServer extends MinecraftServer {
      */
     public LevelChunk generateChunk(ChunkPos pos) {
         ServerChunkCache cache = (ServerChunkCache) this.overworld().getChunkSource();
-        long deadline = System.nanoTime() + GENERATION_TIMEOUT_NANOS;
+        // 3×3 邻域预生成：FEATURES 步骤（applyBiomeDecoration）的 biome 集合与
+        // per-step feature 排序索引取决于生成时已就绪的邻域区块（range 8 内）
+        // ——影子端逐块生成、邻域为空时，feature 放置（矿石/花岗岩闪长岩团块/
+        // 树木种类/植被）与服务端（生成时邻域齐备）不一致 → contentHash 不匹配。
+        // 邻块只预生成到 BIOMES（非 FULL）：FEATURES 需要的仅是邻块 biome 集合，
+        // BIOMES 状态即就绪且确定性；若邻块提前升到 FULL，将以空邻域生成错误
+        // feature 并被缓存命中 → 邻块成为目标时级联污染。改 BIOMES 后，邻块成为
+        // 目标时从 BIOMES 继续升 FULL（非复用错数据），级联消除。
+        // 队列按玩家距离升序，多数邻块已在队首生成，仅补缺口；已生成直接命中缓存。
+        // 总超时放宽到 9×单块（8 邻块 + 目标），兜底回退语义不变。
+        long deadline = System.nanoTime() + GENERATION_TIMEOUT_NANOS * 9;
+        for (int dx = -1; dx <= 1; dx++) {
+            for (int dz = -1; dz <= 1; dz++) {
+                if (dx == 0 && dz == 0) {
+                    continue;
+                }
+                if (generateChunkInternal(cache, new ChunkPos(pos.x + dx, pos.z + dz), ChunkStatus.BIOMES, deadline) == null) {
+                    return null;
+                }
+            }
+        }
+        ChunkAccess chunk = generateChunkInternal(cache, pos, ChunkStatus.FULL, deadline);
+        return chunk instanceof LevelChunk levelChunk ? levelChunk : null;
+    }
+
+    /**
+     * 单块按指定 ChunkStatus 生成（generateChunk 内部：目标块 FULL、邻块 BIOMES，
+     * 共用实现与超时）。返回生成后的 ChunkAccess（BIOMES 时为 ProtoChunk，FULL 时
+     * 为 LevelChunk），超时/中断/失败返回 null → 调用方回退全量。
+     */
+    private ChunkAccess generateChunkInternal(ServerChunkCache cache, ChunkPos pos, ChunkStatus status, long deadline) {
 #if MC_VER < MC_1_20_5
         CompletableFuture<Either<ChunkAccess, ChunkHolder.ChunkLoadingFailure>> future =
-                cache.getChunkFuture(pos.x, pos.z, ChunkStatus.FULL, true);
+                cache.getChunkFuture(pos.x, pos.z, status, true);
 #else
         CompletableFuture<ChunkResult<ChunkAccess>> future =
-                cache.getChunkFuture(pos.x, pos.z, ChunkStatus.FULL, true);
+                cache.getChunkFuture(pos.x, pos.z, status, true);
 #endif
         while (!future.isDone()) {
             if (System.nanoTime() > deadline) {
@@ -232,11 +277,10 @@ public class ShadowSeedServer extends MinecraftServer {
             }
         }
 #if MC_VER < MC_1_20_5
-        ChunkAccess chunk = future.join().left().orElse(null);
+        return future.join().left().orElse(null);
 #else
-        ChunkAccess chunk = future.join().orElse(null);
+        return future.join().orElse(null);
 #endif
-        return chunk instanceof LevelChunk levelChunk ? levelChunk : null;
     }
 
     /** shutdown 用：资源引用 */
@@ -841,6 +885,13 @@ public class ShadowSeedServer extends MinecraftServer {
      * @return true=已提交写队列；false=序列化/提交异常（调用方自行兜底）
      */
     public boolean saveChunkToDisk(ChunkPos pos, LevelChunk chunk) {
+        // T5c 写 gate：上次关停（R1 saveAll）未完成时禁止落盘——禁并发写同一 mca
+        // （数据安全红线）。拒绝后调用方（unloadChunk）保留内存驻留，断连 saveAll 兜底；
+        // 本端关停保存（ownShutdownInProgress，saver 已前置等待上次关停完成）豁免。
+        if (!ownShutdownInProgress
+                && !ShadowServerRegistry.getInstance().isPreviousShutdownComplete()) {
+            return false;
+        }
         try {
             ServerLevel level = this.overworld();
 #if MC_VER < MC_1_21_2
@@ -1040,6 +1091,13 @@ public class ShadowSeedServer extends MinecraftServer {
         injectedChunks.remove(key);
         io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.remove(pos);
         ShadowCacheEviction.remove(pos);
+        // T5c 写 gate：上次关停（R1 saveAll）未完成时跳过磁盘删除（禁并发写同一 mca）；
+        // 内存态已同步清理。本端关停保存期间（ownShutdownInProgress）豁免——同进程
+        // IOWorker 队列已串行化本端全部写/删。
+        if (!ownShutdownInProgress
+                && !ShadowServerRegistry.getInstance().isPreviousShutdownComplete()) {
+            return;
+        }
         try {
             ServerLevel level = this.overworld();
 #if MC_VER < MC_1_21_2

@@ -76,6 +76,7 @@ public class ClientChunkHandler {
 
         // 记录收到压缩区块数据
         NetworkStats.recordChunkReceived(VanillaZlibEstimator.estimate(compressed.originalSize));
+        NetworkStats.recordWireBytesReceived(compressed.compressedData.length);
 
         HassiumTaskExecutor executor = HassiumTaskExecutor.getClient();
         if (executor == null) {
@@ -301,6 +302,11 @@ public class ClientChunkHandler {
             // renderOnly（超视渲染）不向服务器请求 BE，避免视距外流量
             // 影子端光照由 SectionDelta 段级投递（ShadowLightCompute.submitDelta）落地，
             // 此处不重复触发客户端光照重算
+            // 光照缓存记账口径（P2 对齐）：直连口径（recordLightCacheHit）仅在 hasCachedLight=true
+            // 时触发；剥光协商（lightComputeSupported=true）后服务端包不带光 → hasCachedLight 恒
+            // false，此处直连口径不触发属设计态。剥光模式下光照复用由影子链路记账：
+            // ShadowLightCompute 内存/磁盘缓存命中 → NetworkStats.recordLightReuseShadow
+            // （key light.reuse.shadow.*），此处不重复计数。
             if (!renderOnly) {
                 if (hasCachedLight) {
                     NetworkStats.recordLightCacheHit(getLightBytesPerChunk(level));

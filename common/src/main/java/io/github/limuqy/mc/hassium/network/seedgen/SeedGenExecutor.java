@@ -10,6 +10,9 @@ import io.github.limuqy.mc.hassium.network.ClientMetadataHandler;
 import io.github.limuqy.mc.hassium.network.SeedRefS2CPacket;
 import io.github.limuqy.mc.hassium.metrics.NetworkStats;
 import io.github.limuqy.mc.hassium.utils.DebugLogger;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.atomic.AtomicBoolean;
 import net.minecraft.client.Minecraft;
@@ -28,13 +31,26 @@ import net.minecraft.world.level.chunk.LevelChunk;
  *   <li>平台线程池（seedGenThreads，CPU 密集：worldgen + 编码 + 压缩，避免虚拟线程超订）</li>
  *   <li>单个 drain 循环互斥运行（AtomicBoolean CAS），串行生成（影子服务端单实例）</li>
  * </ul>
- * 失败/超时统一回退全量请求（{@link ClientMetadataHandler#fallbackToFullRequest}），正确性优先。
+ * 生成失败/超时统一回退全量请求（{@link ClientMetadataHandler#fallbackToFullRequest}）；hash mismatch
+ * 走分片增量（{@link ShadowLightCompute#requestSectionDeltas}，delta 链路失败内部兜底全量），正确性优先。
  */
 public final class SeedGenExecutor {
 
     private static final SeedGenExecutor INSTANCE = new SeedGenExecutor();
 
     private final SeedGenQueue queue = new SeedGenQueue();
+    /**
+     * P1 节流：seedref 先入 pendingIn 缓冲，由 drain 按生成完成速率释放进有界工作队列，
+     * 队列深度恒 ≤ {@link #MAX_WORK_DEPTH}——world-ready 一次性重放 1784 时不再瞬时灌入，
+     * 影子端创建/装配/生成不再被洪峰淹没，且尾块在队等待被深度上界约束（超时窗口可准确覆盖）。
+     */
+    private final ConcurrentLinkedQueue<SeedRefS2CPacket> pendingIn = new ConcurrentLinkedQueue<>();
+
+    /** 有界工作队列最大深度：96 槽 × 实测生成 p90≈182ms/块 ≈ 17.5s 最坏在队等待。 */
+    private static final int MAX_WORK_DEPTH = 96;
+
+    /** 回退请求合包上限：超时/失败回退攒批发送（不逐块单包），服务端 100/s 限速下单包风暴 = P1 诱因。 */
+    private static final int FALLBACK_BATCH_MAX = 64;
     private final AtomicBoolean drainRunning = new AtomicBoolean(false);
     private volatile ExecutorService pool;
 
@@ -52,10 +68,11 @@ public final class SeedGenExecutor {
         if (!isEnabled()) {
             return false;
         }
-        queue.enqueue(new ChunkPos(packet.chunkX(), packet.chunkZ()),
-                packet.contentHash(), packet.sectionHashes());
-        DebugLogger.info(DebugLogger.LogType.ASYNC, "[SEEDGEN] Queued ({}, {}) hash={} (queue={})",
-                packet.chunkX(), packet.chunkZ(), Long.toHexString(packet.contentHash()), queue.size());
+        // 节流接管：先入缓冲不直接进工作队列——由 drain 按生成完成速率释放
+        // （releasePendingWork），world-ready 重放不会一次性灌 1784 进队
+        pendingIn.add(packet);
+        DebugLogger.info(DebugLogger.LogType.ASYNC, "[SEEDGEN] Claimed ({}, {}) hash={} (buffered={}, queue={})",
+                packet.chunkX(), packet.chunkZ(), Long.toHexString(packet.contentHash()), pendingIn.size(), queue.size());
         pump();
         return true;
     }
@@ -75,6 +92,7 @@ public final class SeedGenExecutor {
     /** 断连清理：停池、关影子服务端（registry 共享）、清队列。 */
     public void onDisconnect() {
         queue.clear();
+        pendingIn.clear();
         ExecutorService p = pool;
         pool = null;
         if (p != null) {
@@ -106,13 +124,16 @@ public final class SeedGenExecutor {
         }
     }
 
-    /** 工作循环：取最近未超时条目 → 生成 → 编码 → 压缩 → 交给客户端链；空则退出。 */
+    /** 工作循环：释放缓冲 → 取最近未超时条目 → 生成 → 编码 → 压缩 → 交给客户端链；空则退出。 */
     private void drain() {
+        // 回退请求聚合缓冲：超时/失败回退攒批发送（不逐块单包），防 1000+ 单包风暴（P1）
+        List<ChunkPos> fallbackBuffer = new ArrayList<>();
         try {
             while (!Thread.currentThread().isInterrupted()) {
-                // 超时条目先回退
+                releasePendingWork();
+                // 超时条目批量回退（expire 已移除；聚合攒批，flush 时合包）
                 for (SeedGenQueue.Entry expired : queue.expire()) {
-                    fallback(expired.pos());
+                    addFallback(fallbackBuffer, expired.pos());
                 }
                 Minecraft mc = Minecraft.getInstance();
                 if (mc.player == null || mc.level == null) {
@@ -123,23 +144,82 @@ public final class SeedGenExecutor {
                 if (entry == null) {
                     break;
                 }
-                generateOne(entry);
+                generateOne(entry, fallbackBuffer);
+                if (fallbackBuffer.size() >= FALLBACK_BATCH_MAX) {
+                    flushFallback(fallbackBuffer);
+                }
             }
         } finally {
+            flushFallback(fallbackBuffer);
             drainRunning.set(false);
             // 竞态窗口：drain 退出瞬间有新条目 → 重新触发
-            if (!queue.isEmpty() && !ShadowServerRegistry.getInstance().isFailed()) {
+            if ((!queue.isEmpty() || !pendingIn.isEmpty()) && !ShadowServerRegistry.getInstance().isFailed()) {
                 pump();
             }
         }
     }
 
-    private void generateOne(SeedGenQueue.Entry entry) {
+    /**
+     * 从 pendingIn 释放 seedref 进有界工作队列：队列恒 ≤ {@link #MAX_WORK_DEPTH} 槽，
+     * 实际入队速率 ≈ 生成完成速率（生成完 1 块才释放 1 块）——world-ready 一次性重放
+     * 1784 不再瞬时灌入，影子端装配/生成不被洪峰淹没；尾块在队等待被深度上界约束，
+     * 使 SeedGenQueue 自适应超时窗口可准确覆盖（P1）。
+     */
+    private void releasePendingWork() {
+        while (queue.size() < MAX_WORK_DEPTH) {
+            SeedRefS2CPacket p = pendingIn.poll();
+            if (p == null) {
+                break;
+            }
+            queue.enqueue(new ChunkPos(p.chunkX(), p.chunkZ()), p.contentHash(), p.sectionHashes());
+            DebugLogger.info(DebugLogger.LogType.ASYNC,
+                    "[SEEDGEN] Released ({}, {}) into work queue (queue={})",
+                    p.chunkX(), p.chunkZ(), queue.size());
+        }
+    }
+
+    /** 登记回退：出队 + 攒批（实际发送由 {@link #flushFallback} 按批合包）。 */
+    private void addFallback(List<ChunkPos> buffer, ChunkPos pos) {
+        queue.remove(pos);
+        buffer.add(pos);
+    }
+
+    /**
+     * 攒批发送回退全量请求：按 {@link #FALLBACK_BATCH_MAX} 合包，不再逐块单包
+     * （服务端 100/s 限速下单包风暴 = P1 级联重发诱因）。断连时清缓冲丢弃。
+     */
+    private void flushFallback(List<ChunkPos> buffer) {
+        if (buffer.isEmpty()) {
+            return;
+        }
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.player == null || mc.level == null) {
+            buffer.clear();
+            return;
+        }
+        String dimension = mc.level.dimension()
+#if MC_VER < MC_1_21_11
+                .location()
+#else
+                .identifier()
+#endif
+                .toString();
+        for (int i = 0; i < buffer.size(); i += FALLBACK_BATCH_MAX) {
+            int end = Math.min(i + FALLBACK_BATCH_MAX, buffer.size());
+            List<ChunkPos> batch = new ArrayList<>(buffer.subList(i, end));
+            DebugLogger.warn(DebugLogger.LogType.ASYNC,
+                    "[SEEDGEN] Fallback batch: {} chunks (aggregated, not per-chunk)", batch.size());
+            ClientMetadataHandler.requestFullChunksPublic(dimension, batch, true);
+        }
+        buffer.clear();
+    }
+
+    private void generateOne(SeedGenQueue.Entry entry, List<ChunkPos> fallbackBuffer) {
         ChunkPos pos = entry.pos();
         try {
             ShadowSeedServer server = shadowServer();
             if (server == null) {
-                fallback(pos);
+                addFallback(fallbackBuffer, pos);
                 return;
             }
             long t0 = System.nanoTime();
@@ -147,27 +227,42 @@ public final class SeedGenExecutor {
             if (chunk == null) {
                 DebugLogger.warn(DebugLogger.LogType.ASYNC,
                         "[SEEDGEN] Generation timeout/failed ({}, {}) -> fallback", pos.x, pos.z);
-                fallback(pos);
+                addFallback(fallbackBuffer, pos);
                 return;
             }
             // 生成后 chunkHash 校验：与服务端 SeedRef 下发 hash 比对（同 ChunkContentHashUtil
             // 算法，服务端 packet 路径与客户端内存路径等价性有保证）；不匹配 = 本地 worldgen
-            // 与服务器不一致（自定义 datapack 缺失等）→ 走现有回退路径全量拉取，不产出错误地形。
+            // 与服务器不一致（自定义 datapack 缺失等）→ 本地块作基线走分片增量（服务端按 section 回补），不产出错误地形。
             final long localHash;
             try {
                 localHash = ChunkContentHashUtil.combineSectionHashes(
                         ChunkContentHashUtil.computeSectionHashes(chunk));
             } catch (Throwable hashError) {
-                DebugLogger.warn(DebugLogger.LogType.ASYNC,
-                        "[SEEDGEN] Hash compute failed ({}, {}) -> fallback", pos.x, pos.z);
-                fallback(pos);
+                addFallback(fallbackBuffer, pos);
                 return;
             }
             if (localHash != entry.contentHash()) {
                 DebugLogger.warn(DebugLogger.LogType.ASYNC,
-                        "[SEEDGEN] Hash mismatch ({}, {}): local={} server={} -> fallback full",
+                        "[SEEDGEN] Hash mismatch ({}, {}): local={} server={} -> section-delta fallback",
                         pos.x, pos.z, Long.toHexString(localHash), Long.toHexString(entry.contentHash()));
-                fallback(pos);
+                // review-fix: 本地 worldgen 与服务器不一致 → 不再全量请求：本地生成块作 section delta
+                // 基线注入影子端，上报本地 section hashes，服务端按 section 比对只回变更 section
+                // （heightmaps/BE 一并），不产出错误地形。delta 请求发送失败（requestSectionDeltas 内部）/
+                // 超时（tickPendingDeltaTimeouts）/ 服务端 skipped（submitDelta 内部）均已
+                // requestFullChunksPublic 兜底，此处不重复回退。
+                queue.remove(pos);
+                server.injectLoadedChunk(pos, chunk);
+                Minecraft mc = Minecraft.getInstance();
+                if (mc.player != null && mc.level != null) {
+                    String dimension = mc.level.dimension()
+#if MC_VER < MC_1_21_11
+                            .location()
+#else
+                            .identifier()
+#endif
+                            .toString();
+                    ShadowLightCompute.requestSectionDeltas(dimension, List.of(pos));
+                }
                 return;
             }
             ServerLevel level = server.overworld();
@@ -180,13 +275,13 @@ public final class SeedGenExecutor {
             // review-fix: T3-51：投递失败（并发降级 isEnabled=false）→ 回退全量，
             // 防止生成结果静默丢弃后该柱客户端虚空
             if (!ShadowLightCompute.submitGenerated(pos, chunk, level)) {
-                fallback(pos);
+                addFallback(fallbackBuffer, pos);
                 return;
             }
             queue.remove(pos);
         } catch (Exception e) {
             Constants.LOG.error("Hassium: SeedGen generation failed for {}", pos, e);
-            fallback(pos);
+            addFallback(fallbackBuffer, pos);
         }
     }
 
@@ -200,14 +295,8 @@ public final class SeedGenExecutor {
         return server;
     }
 
-    /** 回退全量请求（安全：任何线程可调）。 */
-    private void fallback(ChunkPos pos) {
-        queue.remove(pos);
-        ClientMetadataHandler.fallbackToFullRequestByPos(pos);
-    }
-
-    /** 队列内待生成条目数（诊断/测试）。 */
+    /** 队列内待生成条目数 = 有界工作队列 + 未释放缓冲（诊断/测试）。 */
     public int pendingCount() {
-        return queue.size();
+        return queue.size() + pendingIn.size();
     }
 }

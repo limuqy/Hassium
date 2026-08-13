@@ -22,6 +22,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -132,6 +133,35 @@ class NetworkCoreTest {
         assertEquals(NetworkCoreState.IDLE, core.state());
         assertNull(core.outbound());
         assertFalse(conn.isOpen());
+    }
+
+    @Test
+    void onLoginKeepsActiveBootstrapOutbound() {
+        NetworkCore core = NetworkCore.getInstance();
+        core.onDisconnect();
+        core.onLogin();
+        assertEquals(NetworkCoreState.CONNECTING, core.state());
+
+        // 模拟 bootstrap：握手在 handleLogin 前完成（1.20.1 custom payload 先于主线程到达）
+        OutboundConnection conn = OutboundConnection.openEmbedded(testOptions(), core);
+        core.attach(conn);
+        UdpDataPlaneHandshakeTail.S2CTail tail = new UdpDataPlaneHandshakeTail.S2CTail(
+                true, true, 1L, 1, TOKEN, List.of(), List.of(), List.of());
+        ByteBuf response = HandshakeCodec.encodeServerResponse(
+                1, true, true, true, tail, 12345L, new byte[] {1}, true);
+        ((EmbeddedChannel) conn.channel()).writeInbound(
+                ControlFrameCodec.encodeFrame(ControlFrameType.HANDSHAKE_S2C, response));
+        response.release();
+        assertEquals(NetworkCoreState.ACTIVE, core.state());
+
+        // 修复：bootstrap 已 ACTIVE 时 onLogin 保持连接（不 close、不重连、不降 CONNECTING）
+        core.onLogin();
+        assertEquals(NetworkCoreState.ACTIVE, core.state());
+        assertSame(conn, core.outbound());
+        assertTrue(conn.isOpen());
+
+        core.onDisconnect();
+        assertNull(core.outbound());
     }
 
     @Test

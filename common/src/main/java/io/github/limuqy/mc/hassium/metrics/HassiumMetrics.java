@@ -243,6 +243,19 @@ public interface HassiumMetrics {
     long getLightCacheHitBytes();
 
     /**
+     * 获取影子链路光照复用次数（key：light.reuse.shadow.count）。
+     * 剥光协商下直连口径 lightCacheHitCount 恒 0，影子命中路径的复用事件独立记账；
+     * 与直连口径同构、互不合并。
+     */
+    long getLightReuseShadowCount();
+
+    /**
+     * 获取影子链路光照复用等价字节数（key：light.reuse.shadow.bytes；
+     * 口径与 {@code NetworkStats.ESTIMATED_LIGHT_BYTES} 一致，每 chunk 16KB）
+     */
+    long getLightReuseShadowBytes();
+
+    /**
      * 获取缓存不含光照数据需重算的区块数（is_light_on=0）
      */
     long getLightCacheMissCount();

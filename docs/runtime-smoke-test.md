@@ -207,7 +207,7 @@ build/smoke-test/
 
 - 看 `client_<SessionId>.log` 是否有 `no compatible startConnecting method found`
 - 检查 `ClientSmokeTest.triggerReconnect` 反射逻辑是否覆盖当前版本签名
-- 参考 1.20.5+ 的 6 参数 `startConnecting(Screen, Minecraft, ServerAddress, ServerData, boolean, TransferState)`，TransferState 类路径在 1.21.6+ 从 `multiplayer.TransferState` 改到 `multiplayer.transfer.TransferState`
+- 参考 1.20.5+ 的 6 参数 `startConnecting(Screen, Minecraft, ServerAddress, ServerData, boolean, TransferState)`；TransferState 类路径从未改包：1.20.5+ 全版本在 `net.minecraft.client.multiplayer.TransferState`（`multiplayer.transfer` 子包不存在，早期记载有误）
 
 ### 4. 统计无区块加载（`hits + misses == 0`）
 

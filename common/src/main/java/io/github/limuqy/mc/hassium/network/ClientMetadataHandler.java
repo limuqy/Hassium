@@ -61,10 +61,62 @@ public class ClientMetadataHandler {
     private static final ConcurrentHashMap<Long, PendingFullRequest> PENDING_FULL_REQUESTS =
             new ConcurrentHashMap<>();
 
-    private record PendingFullRequest(String dimension, long deadlineMs) {}
+    private record PendingFullRequest(String dimension, long deadlineMs, int retries) {}
 
-    /** 全量请求无响应超时（毫秒） */
-    private static final long FULL_REQUEST_TIMEOUT_MS = 8_000L;
+    /**
+     * 全量请求超时基数：30s（原 8s 固定值与服务端推送吞吐 maxChunksPerTick=5 → 满刻 100/s 不匹配：
+     * 1000+ 块全量尾部服务时间必然 &gt;8s → 级联重发风暴，FINDINGS P1 根因之一）。
+     * 动态部分：批次大小 × 25ms/块（保守 40/s 服务率，实际满刻 ≈100/s）
+     * + 在途请求数 × 10ms/块（多批合包共享服务端队列，尾部等待按在途总量估算）。
+     */
+    private static final long FULL_REQUEST_TIMEOUT_BASE_MS = 30_000L;
+
+    /** 每批次内每块追加的等待预算（毫秒）。 */
+    private static final long FULL_REQUEST_TIMEOUT_PER_CHUNK_MS = 25L;
+
+    /** 每在途请求追加的等待预算（毫秒）。 */
+    private static final long FULL_REQUEST_TIMEOUT_PER_INFLIGHT_MS = 10L;
+
+    /** 动态超时上限（毫秒），防极端深队下重发窗口无限拉长。 */
+    private static final long FULL_REQUEST_TIMEOUT_MAX_MS = 120_000L;
+
+    /** 全量请求重发上限：超限丢弃登记——服务端直推/vanilla 跟踪仍会送达区块，登记仅用于超时重试兜底。 */
+    private static final int FULL_REQUEST_MAX_RETRIES = 3;
+
+    /**
+     * 自适应全量请求超时：批次越大 / 在途越多，服务端服务时间越长，窗口随之放大，
+     * 保证正常积压永不触发重发（旧 8s 必然误触发 → 重发风暴）。
+     */
+    private static long fullRequestTimeoutMs(int batchSize, int inFlightBefore) {
+        long t = FULL_REQUEST_TIMEOUT_BASE_MS
+                + (long) batchSize * FULL_REQUEST_TIMEOUT_PER_CHUNK_MS
+                + (long) inFlightBefore * FULL_REQUEST_TIMEOUT_PER_INFLIGHT_MS;
+        return Math.min(t, FULL_REQUEST_TIMEOUT_MAX_MS);
+    }
+
+    /**
+     * 首登过渡窗口缓冲：SEED_REF 帧。
+     * <p>
+     * 服务端 login bridge 完成后（finishLoginBridge → resyncTrackedChunks）立即发
+     * SeedRef/chunkHash，但客户端 {@code mc.level}/{@code mc.player} 要等到
+     * player entered world 才非空——早退 return 会把这些帧静默丢弃，seedgen/hash
+     * 驱动的区块加载永不启动。此处 Netty 线程入队，客户端主线程每 tick 由
+     * {@link #drainPendingOnWorldReady()} 在 world 就绪后重放。
+     * <p>
+     * 线程安全：{@code SeedRefS2CPacket} 为 record，decode 后不再被任何方修改
+     * （{@code long[] sectionHashes} 构造后只读），可安全跨线程持有。
+     */
+    private static final ConcurrentLinkedQueue<SeedRefS2CPacket> PENDING_SEED_REFS =
+            new ConcurrentLinkedQueue<>();
+
+    /**
+     * 首登过渡窗口缓冲：chunkHash 广播帧（语义同上）。
+     * <p>
+     * 线程安全：{@code ChunkHashS2CPacket} 为 record（String + 不可变 Entry），
+     * 可安全跨线程持有。
+     */
+    private static final ConcurrentLinkedQueue<ChunkHashS2CPacket> PENDING_CHUNK_HASHES =
+            new ConcurrentLinkedQueue<>();
 
     // ===== 阶段一：chunkHash 比对 =====
 
@@ -77,6 +129,10 @@ public class ClientMetadataHandler {
     public static void handleSeedRefPacket(SeedRefS2CPacket packet) {
         Minecraft mc = Minecraft.getInstance();
         if (mc.player == null || mc.level == null) {
+            // 首登过渡窗口：login bridge 完成后服务端立即发 SeedRef，但客户端 world
+            // 要等 player entered world 才就绪——入队缓冲待 drainPendingOnWorldReady
+            // 重放（不静默丢弃，否则 seedgen/hash 驱动的区块加载永不启动）。
+            PENDING_SEED_REFS.add(packet);
             return;
         }
         int estimatedSize = 4 + 4 + 8 + 4 + packet.sectionHashes().length * 8;
@@ -121,7 +177,7 @@ public class ClientMetadataHandler {
                 .identifier()
 #endif
                 .toString();
-        requestFullChunks(dimension, List.of(pos), true);
+        requestFullChunks(dimension, List.of(pos), true, 0);
     }
 
     /**
@@ -132,7 +188,11 @@ public class ClientMetadataHandler {
      */
     public static void handleChunkHashPacket(ChunkHashS2CPacket packet) {
         Minecraft mc = Minecraft.getInstance();
-        if (mc.player == null) return;
+        if (mc.player == null) {
+            // 首登过渡窗口：同上，入队缓冲待 world 就绪重放
+            PENDING_CHUNK_HASHES.add(packet);
+            return;
+        }
 
         DebugLogger.info(LogType.METADATA, "[RECV_HASH] Received chunk hash packet: {} entries, dimension={}",
                 packet.entries().size(), packet.dimension());
@@ -153,7 +213,59 @@ public class ClientMetadataHandler {
     }
 
     /**
+     * 首登缓冲重放（客户端主线程每 tick 由 MixinClientTick 调用）：
+     * world（{@code mc.player}/{@code mc.level}）就绪后一次性取出过渡窗口内
+     * 缓冲的 SEED_REF/chunkHash 并按原 handler 处理体重放。
+     * <p>
+     * 先清空队列再遍历重放（poll 到本地快照），避免重入/重复 drain；
+     * 重放时 world 已就绪，handler 的早退分支不会再触发。重放期间新到的帧
+     * 留在队列，下个 tick 继续 drain，不丢帧。
+     */
+    public static void drainPendingOnWorldReady() {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.player == null || mc.level == null) {
+            return;
+        }
+        List<SeedRefS2CPacket> seedRefs = new ArrayList<>();
+        for (SeedRefS2CPacket p; (p = PENDING_SEED_REFS.poll()) != null; ) {
+            seedRefs.add(p);
+        }
+        List<ChunkHashS2CPacket> hashes = new ArrayList<>();
+        for (ChunkHashS2CPacket p; (p = PENDING_CHUNK_HASHES.poll()) != null; ) {
+            hashes.add(p);
+        }
+        if (!seedRefs.isEmpty()) {
+            DebugLogger.info(LogType.METADATA,
+                    "[SEED_REF] World ready — replaying {} buffered seed refs", seedRefs.size());
+            for (SeedRefS2CPacket p : seedRefs) {
+                handleSeedRefPacket(p);
+            }
+        }
+        if (!hashes.isEmpty()) {
+            DebugLogger.info(LogType.METADATA,
+                    "[CHUNK_HASH] World ready — replaying {} buffered chunk hash packets", hashes.size());
+            for (ChunkHashS2CPacket p : hashes) {
+                handleChunkHashPacket(p);
+            }
+        }
+    }
+
+    /**
+     * 断开连接时清空首登缓冲：旧会话过渡窗口内的帧不得残留到下一会话
+     * （重连后 resync 会重新推送，残留帧反而可能污染新会话）。
+     */
+    public static void clearPendingOnDisconnect() {
+        PENDING_SEED_REFS.clear();
+        PENDING_CHUNK_HASHES.clear();
+    }
+
+    /**
      * 超时未收到区块数据的全量请求 → 重发（服务端出界丢弃/积压兜底）。
+     * <p>
+     * P1 修复：旧逻辑每 8s 无限重发全部超时块 → 级联重发风暴（9 次 347 块 → 过期 1593）。
+     * 现按重试次数分组合包（每块重发计数独立递增），超限
+     * （{@link #FULL_REQUEST_MAX_RETRIES}）丢弃登记——区块仍由服务端直推/vanilla 跟踪送达，
+     * 登记仅用于超时重试兜底，不会因丢弃而虚空。
      */
     public static void tickPendingFullRequestTimeouts() {
         if (PENDING_FULL_REQUESTS.isEmpty()) {
@@ -161,18 +273,40 @@ public class ClientMetadataHandler {
         }
         long now = System.currentTimeMillis();
         Map<String, List<ChunkPos>> timedOut = new HashMap<>();
+        Map<Long, Integer> retryCounts = new HashMap<>();
         for (var it = PENDING_FULL_REQUESTS.entrySet().iterator(); it.hasNext(); ) {
             var e = it.next();
             if (now >= e.getValue().deadlineMs()) {
                 ChunkPos pos = new ChunkPos(e.getKey());
                 timedOut.computeIfAbsent(e.getValue().dimension(), k -> new ArrayList<>()).add(pos);
+                retryCounts.put(e.getKey(), e.getValue().retries());
                 it.remove();
             }
         }
         for (var e : timedOut.entrySet()) {
-            DebugLogger.warn(LogType.METADATA,
-                    "[CHUNK_HASH] {} full requests timed out, retrying", e.getValue().size());
-            requestFullChunks(e.getKey(), e.getValue(), true);
+            String dim = e.getKey();
+            // 按重试次数分组：每块的重发计数独立递增（requestFullChunks 按组登记 retries+1）
+            java.util.Map<Integer, List<ChunkPos>> byRetry = new java.util.TreeMap<>();
+            int dropped = 0;
+            for (ChunkPos pos : e.getValue()) {
+                int r = retryCounts.getOrDefault(ChunkPos.asLong(pos.x, pos.z), 0);
+                if (r >= FULL_REQUEST_MAX_RETRIES) {
+                    dropped++;
+                } else {
+                    byRetry.computeIfAbsent(r, k -> new ArrayList<>()).add(pos);
+                }
+            }
+            if (dropped > 0) {
+                DebugLogger.warn(LogType.METADATA,
+                        "[CHUNK_HASH] {} full requests timed out, {} gave up after {} retries (push path still delivers)",
+                        e.getValue().size(), dropped, FULL_REQUEST_MAX_RETRIES);
+            }
+            for (var grp : byRetry.entrySet()) {
+                DebugLogger.warn(LogType.METADATA,
+                        "[CHUNK_HASH] {} full requests timed out, retrying (attempt {})",
+                        grp.getValue().size(), grp.getKey() + 1);
+                requestFullChunks(dim, grp.getValue(), true, grp.getKey() + 1);
+            }
         }
     }
 
@@ -204,6 +338,7 @@ public class ClientMetadataHandler {
      * 断开连接时清理待处理状态
      */
     public static void clearPendingState() {
+        clearPendingOnDisconnect();
         PENDING_BE_REQUESTS.clear();
         PENDING_BLOCK_ENTITIES.clear();
         PENDING_FULL_REQUESTS.clear();
@@ -218,13 +353,17 @@ public class ClientMetadataHandler {
      * requestFullChunks 内部有 not-in-game 兜底与距离排序）。
      */
     public static void requestFullChunksPublic(String dimension, List<ChunkPos> chunks, boolean staleOrFallback) {
-        requestFullChunks(dimension, chunks, staleOrFallback);
+        requestFullChunks(dimension, chunks, staleOrFallback, 0);
     }
 
     /**
-     * 请求完整区块数据（无缓存时的回退）
+     * 请求完整区块数据（无缓存时的回退；批量合包）。
+     * <p>
+     * P1 修复：超时窗口按批次/在途量自适应（服务端 maxChunksPerTick=5 → 100/s 吞吐下
+     * 1000+ 块尾部服务 ≈18s，旧 8s 固定窗口必然误触发级联重发）；同区块同维度已在途
+     * （未过期）→ 去重跳过发包（服务端 KeyedPriorityQueue REPLACE 语义下重复请求零增益）。
      */
-    private static void requestFullChunks(String dimension, List<ChunkPos> chunks, boolean staleOrFallback) {
+    private static void requestFullChunks(String dimension, List<ChunkPos> chunks, boolean staleOrFallback, int retries) {
         // 兜底：断连后不再发包，避免 Cannot send packets when not in game!
         // 异步回调（applyChunkHashResult 等）与 tickPendingHashGate 之间存在竞态，
         // 即使上层已检查，这里仍兜一道。
@@ -246,7 +385,24 @@ public class ClientMetadataHandler {
             ordered.sort(Comparator.comparingDouble(
                     p -> ChunkDistancePriority.distSq(p, playerChunkX, playerChunkZ)));
         }
-        ChunkDataRequestC2SPacket request = new ChunkDataRequestC2SPacket(dimension, ordered);
+        // 去重：同区块同维度已在途（未过期）→ 跳过发包；过期残留（未及 tick sweep）→ 换新登记
+        long now = System.currentTimeMillis();
+        int inFlightBefore = PENDING_FULL_REQUESTS.size();
+        long deadline = now + fullRequestTimeoutMs(ordered.size(), inFlightBefore);
+        List<ChunkPos> toRequest = new ArrayList<>(ordered.size());
+        for (ChunkPos pos : ordered) {
+            long key = ChunkPos.asLong(pos.x, pos.z);
+            PendingFullRequest existing = PENDING_FULL_REQUESTS.get(key);
+            if (existing != null && existing.deadlineMs() > now && existing.dimension().equals(dimension)) {
+                continue;
+            }
+            PENDING_FULL_REQUESTS.put(key, new PendingFullRequest(dimension, deadline, retries));
+            toRequest.add(pos);
+        }
+        if (toRequest.isEmpty()) {
+            return;
+        }
+        ChunkDataRequestC2SPacket request = new ChunkDataRequestC2SPacket(dimension, toRequest);
         FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
         boolean sent = false;
         try {
@@ -254,15 +410,8 @@ public class ClientMetadataHandler {
             Services.NETWORK_MANAGER.sendChunkDataRequest(buf);
             sent = true;
             // 按区块数计，避免一批多块只记 1 次导致「全量请求」与日志对不上
-            NetworkStats.recordDataRequestsSent(ordered.size());
-            NetworkStats.recordFullChunkRequests(ordered.size(), ordered.size() * ESTIMATED_CHUNK_BYTES, staleOrFallback);
-            // 登记超时重试（服务端出界丢弃/积压时兜底）；收到数据由 onChunkDataReceived 清除
-            long deadline = System.currentTimeMillis() + FULL_REQUEST_TIMEOUT_MS;
-            for (ChunkPos pos : ordered) {
-                PENDING_FULL_REQUESTS.put(
-                        ChunkPos.asLong(pos.x, pos.z),
-                        new PendingFullRequest(dimension, deadline));
-            }
+            NetworkStats.recordDataRequestsSent(toRequest.size());
+            NetworkStats.recordFullChunkRequests(toRequest.size(), toRequest.size() * ESTIMATED_CHUNK_BYTES, staleOrFallback);
         } catch (Exception e) {
             DebugLogger.error("[CHUNK_HASH] Failed to request full chunks", e);
         } finally {
