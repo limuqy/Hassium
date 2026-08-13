@@ -131,9 +131,15 @@ public class HassiumCommandHandler {
         // 影子复用 = 影子端 hash 比对命中（内存/磁盘读回）直接服务的区块数（T5g）：
         // 这些区块经官方通道以普通区块落地，不进入 loaded 集合，单独展示；
         // 「已加载」仍为 renderOnly 落地数（既有语义不变）。
-        return String.format("§e超视渲染：§r§aON§r（§a渲染 %d/%d§r，已加载 %d，缺失 %d，影子复用 %d）",
+        // T7 口径对齐：「环带服务」= 已加载 + 影子复用（会话内环带由本地存储服务的累计数），
+        // 与 slm_final 长会话基线 OVD loaded（>1100，长会话累计）同族可比——基线只统计
+        // renderOnly 落地，本值并入影子端直推后口径更全；窗口语义（10s/20s 快照 vs 长会话）
+        // 由对比文档标注，不作为单值跨窗口硬比。
+        long ringServed = ovd.getLoadedCount() + ovd.getShadowServedCount();
+        return String.format(
+                "§e超视渲染：§r§aON§r（§a渲染 %d/%d§r，已加载 %d，缺失 %d，影子复用 %d，环带服务 %d）",
                 ovd.getLastClientVD(), ovd.getLastServerVD(),
-                ovd.getLoadedCount(), ovd.getPendingMissCount(), ovd.getShadowServedCount());
+                ovd.getLoadedCount(), ovd.getPendingMissCount(), ovd.getShadowServedCount(), ringServed);
     }
 
     private static String formatLightCacheLine(HassiumMetricsImpl m) {

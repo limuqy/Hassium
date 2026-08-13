@@ -12,6 +12,7 @@ import io.github.limuqy.mc.hassium.metrics.NetworkStats;
 import io.github.limuqy.mc.hassium.utils.DebugLogger;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -51,6 +52,10 @@ public final class SeedGenExecutor {
 
     /** 回退请求合包上限：超时/失败回退攒批发送（不逐块单包），服务端 100/s 限速下单包风暴 = P1 诱因。 */
     private static final int FALLBACK_BATCH_MAX = 64;
+    /** T7：镜像服务端 {@code ServerChunkPushManager#SECTION_DELTA_FALLBACK_THRESHOLD_PCT}（75%）。
+     *  本地 worldgen 与服务器不一致时，变更 section 占比达阈值服务端必然跳过 delta 回退全量——
+     *  客户端预判后直接全量请求，跳过必败的 delta 往返。改动需与服务端同值同步。 */
+    private static final int SECTION_DELTA_FALLBACK_THRESHOLD_PCT = 75;
     private final AtomicBoolean drainRunning = new AtomicBoolean(false);
     private volatile ExecutorService pool;
 
@@ -234,9 +239,10 @@ public final class SeedGenExecutor {
             // 算法，服务端 packet 路径与客户端内存路径等价性有保证）；不匹配 = 本地 worldgen
             // 与服务器不一致（自定义 datapack 缺失等）→ 本地块作基线走分片增量（服务端按 section 回补），不产出错误地形。
             final long localHash;
+            final Map<Integer, Long> localSectionHashes;
             try {
-                localHash = ChunkContentHashUtil.combineSectionHashes(
-                        ChunkContentHashUtil.computeSectionHashes(chunk));
+                localSectionHashes = ChunkContentHashUtil.computeSectionHashes(chunk);
+                localHash = ChunkContentHashUtil.combineSectionHashes(localSectionHashes);
             } catch (Throwable hashError) {
                 addFallback(fallbackBuffer, pos);
                 return;
@@ -261,7 +267,17 @@ public final class SeedGenExecutor {
                             .identifier()
 #endif
                             .toString();
-                    ShadowLightCompute.requestSectionDeltas(dimension, List.of(pos));
+                    // T7 预判：变更占比达服务端回退阈值时，delta 往返必败（R2 观测 25 次 mismatch
+                    // → 19 次服务端 skipped，全部来自此路径）——直接全量请求，节省一次往返与
+                    // 服务端逐 section 比对/序列化开销；统计记账与 skipped 兜底路径完全一致（stale=true）。
+                    if (wouldServerSkipDelta(entry, localSectionHashes)) {
+                        DebugLogger.warn(DebugLogger.LogType.ASYNC,
+                                "[SEEDGEN] Delta preempted ({}, {}): >= {}% non-empty sections differ -> direct full request",
+                                pos.x, pos.z, SECTION_DELTA_FALLBACK_THRESHOLD_PCT);
+                        ClientMetadataHandler.requestFullChunksPublic(dimension, List.of(pos), true);
+                    } else {
+                        ShadowLightCompute.requestSectionDeltas(dimension, List.of(pos));
+                    }
                 }
                 return;
             }
@@ -283,6 +299,37 @@ public final class SeedGenExecutor {
             Constants.LOG.error("Hassium: SeedGen generation failed for {}", pos, e);
             addFallback(fallbackBuffer, pos);
         }
+    }
+
+    /**
+     * 镜像服务端 section-delta 回退判定（{@code ServerChunkPushManager} 的
+     * {@code processSectionDelta}/{@code handleSectionHashRequest} 同算法）：按完整索引比对双方
+     * section 哈希（0 = 空 section），「变更 section × 100 / 服务端非空 section 数 ≥ 75%」时
+     * 服务端跳过 delta 回退全量。客户端持有 SeedRef 下发的服务端 sectionHashes 与本地生成哈希，
+     * 可精确预判；无服务端哈希（空数组）时维持原 delta 路径由服务端自行判定。
+     */
+    private static boolean wouldServerSkipDelta(SeedGenQueue.Entry entry,
+                                                Map<Integer, Long> localSectionHashes) {
+        long[] serverHashes = entry.sectionHashes();
+        if (serverHashes == null || serverHashes.length == 0) {
+            return false;
+        }
+        long[] localHashes = ChunkContentHashUtil.sectionHashesToArray(localSectionHashes);
+        int len = Math.max(serverHashes.length, localHashes.length);
+        int changed = 0;
+        int nonEmpty = 0;
+        for (int idx = 0; idx < len; idx++) {
+            long serverHash = idx < serverHashes.length ? serverHashes[idx] : 0L;
+            long localHash = idx < localHashes.length ? localHashes[idx] : 0L;
+            if (serverHash != 0L) {
+                nonEmpty++;
+            }
+            if (serverHash != localHash) {
+                changed++;
+            }
+        }
+        return nonEmpty > 0 && changed > 0
+                && changed * 100 / nonEmpty >= SECTION_DELTA_FALLBACK_THRESHOLD_PCT;
     }
 
     /** 影子服务端懒创建（共享 registry；创建失败 → failed + 回退本次）。 */
