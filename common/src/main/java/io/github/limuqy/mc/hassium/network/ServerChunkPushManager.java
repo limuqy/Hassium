@@ -914,12 +914,16 @@ public class ServerChunkPushManager {
                 // 方案 A：客户端无缓存/Bloom，resync 无需等待，直接提交
                 int processed = 0;
                 int skipped = 0;
-                while (!queue.isEmpty() && processed < RESYNC_PER_TICK) {
+                // skipped 计入 tick 配额：null 条目放回队尾后若仅约束 processed，
+                // 同 tick 内全 null 时会 poll→addLast 无限循环；processed+skipped 封顶保证有界。
+                while (!queue.isEmpty() && processed + skipped < RESYNC_PER_TICK) {
                     ResyncEntry entry = queue.poll();
-                    // chunk 可能已被卸载；getChunkNow 返回 null 时跳过
+                    // chunk 可能尚未生成（1.21.11 首次登录大部分区块未生成）或已被卸载；
+                    // getChunkNow 返回 null 时放回队尾，留待后续 tick 重试，避免永久丢弃补发
                     LevelChunk chunk = level.getChunkSource().getChunkNow(entry.pos().x, entry.pos().z);
                     if (chunk == null) {
                         skipped++;
+                        queue.addLast(entry);
                         continue;
                     }
                     submitMetadataTaskFromChunk(player, entry.pos(), chunk, entry.dimension());

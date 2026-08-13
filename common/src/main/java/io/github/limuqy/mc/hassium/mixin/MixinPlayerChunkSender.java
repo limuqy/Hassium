@@ -1,7 +1,7 @@
 package io.github.limuqy.mc.hassium.mixin;
 
-import io.github.limuqy.mc.hassium.network.PlayerCompressionTracker;
 import io.github.limuqy.mc.hassium.network.ServerChunkPushManager;
+import io.github.limuqy.mc.hassium.network.gateway.GatewayServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.network.ServerGamePacketListenerImpl;
@@ -41,8 +41,12 @@ public abstract class MixinPlayerChunkSender {
     private static void hassium$onSendChunk(ServerGamePacketListenerImpl listener, ServerLevel level,
                                              LevelChunk chunk, CallbackInfo ci) {
         ServerPlayer player = listener.getPlayer();
-        if (!PlayerCompressionTracker.isCompressionEnabled(player)) {
-            return; // 非 Hassium 玩家，放行原版发送
+        // 拦截 gate = 网关会话存在：有会话即 Hassium 客户端（网关握手已确认身份）→ 转元数据
+        // （chunkHash/seedgen 帧走网关自有通道，不依赖 ZSTD/压缩启用）；无网关会话（原版
+        // 客户端）放行原版发送。不等压缩启用：enableCompression 在物化后 finishLoginBridge
+        // 才置位，ChunkSender 抢跑窗口内必须已拦截，否则原版直发 → 客户端影子端无数据。
+        if (GatewayServer.getInstance().registry().get(player.getUUID()) == null) {
+            return;
         }
 
         ChunkPos pos = chunk.getPos();

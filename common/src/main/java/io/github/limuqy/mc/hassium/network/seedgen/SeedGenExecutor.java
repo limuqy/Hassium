@@ -64,6 +64,9 @@ public final class SeedGenExecutor {
     /** 盲预生成已调度（首个 SeedRef 到达时触发一次；断连重置）。 */
     private final AtomicBoolean pregenScheduled = new AtomicBoolean(false);
     private static final int SECTION_DELTA_FALLBACK_THRESHOLD_PCT = 75;
+    /** P2 诊断埋点（T7）：mismatch dump 总量上限（前 N 块），防 debug 全开时刷屏。 */
+    private static final int MISMATCH_DUMP_MAX = 20;
+    private static final AtomicInteger mismatchDumpsLogged = new AtomicInteger();
     /** 活跃 drain worker 数（并行生成；新 seedref 到达时补足到配置线程数）。 */
     private final AtomicInteger activeWorkers = new AtomicInteger();
     private volatile ExecutorService pool;
@@ -258,6 +261,7 @@ public final class SeedGenExecutor {
     /**
      * 攒批发送回退全量请求：按 {@link #FALLBACK_BATCH_MAX} 合包，不再逐块单包
      * （服务端 100/s 限速下单包风暴 = P1 级联重发诱因）。断连时清缓冲丢弃。
+     * P2（T7）：回退统一改走 new 请求路径 + requestedMisses 去重。
      */
     private void flushFallback(List<ChunkPos> buffer) {
         if (buffer.isEmpty()) {
@@ -275,14 +279,26 @@ public final class SeedGenExecutor {
                 .identifier()
 #endif
                 .toString();
-        for (int i = 0; i < buffer.size(); i += FALLBACK_BATCH_MAX) {
-            int end = Math.min(i + FALLBACK_BATCH_MAX, buffer.size());
-            List<ChunkPos> batch = new ArrayList<>(buffer.subList(i, end));
-            DebugLogger.warn(DebugLogger.LogType.ASYNC,
-                    "[SEEDGEN] Fallback batch: {} chunks (aggregated, not per-chunk)", batch.size());
-            ClientMetadataHandler.requestFullChunksPublic(dimension, batch, true);
+        // P2（T7）：回退统一改走 new 请求路径（hash-miss 正轨，注入数据路径 hash 忠实已被
+        // R2 磁盘命中实证）+ requestedMisses 去重——stale/full 回退（生成超时/失败/hash
+        // 错误等）不再计入「过期」，杜绝同 chunk 重复回退放大。
+        List<ChunkPos> toRequest = new ArrayList<>(buffer.size());
+        for (ChunkPos pos : buffer) {
+            if (ShadowLightCompute.tryRequestMiss(pos)) {
+                toRequest.add(pos);
+            }
         }
         buffer.clear();
+        if (toRequest.isEmpty()) {
+            return;
+        }
+        for (int i = 0; i < toRequest.size(); i += FALLBACK_BATCH_MAX) {
+            int end = Math.min(i + FALLBACK_BATCH_MAX, toRequest.size());
+            List<ChunkPos> batch = new ArrayList<>(toRequest.subList(i, end));
+            DebugLogger.warn(DebugLogger.LogType.ASYNC,
+                    "[SEEDGEN] Fallback batch: {} chunks (new-path, deduped)", batch.size());
+            ClientMetadataHandler.requestFullChunksPublic(dimension, batch, false);
+        }
     }
 
     private void generateOne(SeedGenQueue.Entry entry, List<ChunkPos> fallbackBuffer) {
@@ -331,15 +347,17 @@ public final class SeedGenExecutor {
             }
             if (localHash != entry.contentHash()) {
                 DebugLogger.warn(DebugLogger.LogType.ASYNC,
-                        "[SEEDGEN] Hash mismatch ({}, {}): local={} server={} -> section-delta fallback",
+                        "[SEEDGEN] Hash mismatch ({}, {}): local={} server={} -> full-request fallback",
                         pos.x, pos.z, Long.toHexString(localHash), Long.toHexString(entry.contentHash()));
-                // review-fix: 本地 worldgen 与服务器不一致 → 不再全量请求：本地生成块作 section delta
-                // 基线注入影子端，上报本地 section hashes，服务端按 section 比对只回变更 section
-                // （heightmaps/BE 一并），不产出错误地形。delta 请求发送失败（requestSectionDeltas 内部）/
-                // 超时（tickPendingDeltaTimeouts）/ 服务端 skipped（submitDelta 内部）均已
-                // requestFullChunksPublic 兜底，此处不重复回退。
+                // P2 诊断埋点（T7）：mismatch 数据 dump——逐 section hash 对比 + 首个差异
+                // section 块状态摘要 + 影子端 seed/LevelStem 身份摘要，供下轮定案 P2 机制。
+                dumpMismatchDiagnostics(pos, entry, chunk, localSectionHashes, localHash, server);
+                // P2 缓解（T7）：不匹配回退改走 new 请求路径（hash-miss 正轨，注入数据路径
+                // hash 忠实已被 R2 磁盘命中实证）——预判全量分支不再注入本地块作 delta 基线，
+                // 也不再 stale=true 请求。保留 delta 预判（>=75% 变更服务端必跳过 delta →
+                // 直接 full）；<75% 仍可先试 delta（本地块作基线），delta 链失败兜底
+                // （发送失败/超时/skipped/apply 失败）已统一改走 new 路径。
                 queue.remove(pos);
-                server.injectLoadedChunk(pos, chunk);
                 Minecraft mc = Minecraft.getInstance();
                 if (mc.player != null && mc.level != null) {
                     String dimension = mc.level.dimension()
@@ -349,15 +367,15 @@ public final class SeedGenExecutor {
                             .identifier()
 #endif
                             .toString();
-                    // T7 预判：变更占比达服务端回退阈值时，delta 往返必败（R2 观测 25 次 mismatch
-                    // → 19 次服务端 skipped，全部来自此路径）——直接全量请求，节省一次往返与
-                    // 服务端逐 section 比对/序列化开销；统计记账与 skipped 兜底路径完全一致（stale=true）。
                     if (wouldServerSkipDelta(entry, localSectionHashes)) {
                         DebugLogger.warn(DebugLogger.LogType.ASYNC,
                                 "[SEEDGEN] Delta preempted ({}, {}): >= {}% non-empty sections differ -> direct full request",
                                 pos.x, pos.z, SECTION_DELTA_FALLBACK_THRESHOLD_PCT);
-                        ClientMetadataHandler.requestFullChunksPublic(dimension, List.of(pos), true);
+                        if (ShadowLightCompute.tryRequestMiss(pos)) {
+                            ClientMetadataHandler.requestFullChunksPublic(dimension, List.of(pos), false);
+                        }
                     } else {
+                        server.injectLoadedChunk(pos, chunk);
                         ShadowLightCompute.requestSectionDeltas(dimension, List.of(pos));
                     }
                 }
@@ -412,6 +430,116 @@ public final class SeedGenExecutor {
         }
         return nonEmpty > 0 && changed > 0
                 && changed * 100 / nonEmpty >= SECTION_DELTA_FALLBACK_THRESHOLD_PCT;
+    }
+
+    /**
+     * P2 诊断埋点（T7）：mismatch 分支一次性 dump 生成上下文数据，供下轮定案 P2 机制
+     * （整柱平移 = seed/装配问题 vs 稀疏差异 = feature 放置问题 vs 仅部分 section =
+     * biome/高度图边界）。DebugLogger（LogType.ASYNC，debug.asyncLogging 配置门控）；
+     * 首次 mismatch 每 chunk 一条，总量限制前 {@link #MISMATCH_DUMP_MAX} 块防刷屏。内容：
+     * <ul>
+     *   <li>影子端 worldgen 身份：level.getSeed() vs 服务端下发 seed + generator 类名 +
+     *       NoiseGeneratorSettings holder key/关键字段（LevelStem 装配差异直接现形）</li>
+     *   <li>逐 section hash 对比：服务端 SeedRef 下发 sectionHashes[] vs 本地生成
+     *       （前 8 个差异 + 差异总数）</li>
+     *   <li>首个差异 section 块状态摘要：sectionY + hasOnlyAir + nonAir 块数 + distinct block 数</li>
+     * </ul>
+     */
+    private static void dumpMismatchDiagnostics(ChunkPos pos, SeedGenQueue.Entry entry,
+                                                LevelChunk chunk, Map<Integer, Long> localSectionHashes,
+                                                long localHash, ShadowSeedServer server) {
+        if (!DebugLogger.isEnabled(DebugLogger.LogType.ASYNC)) {
+            return;
+        }
+        if (mismatchDumpsLogged.getAndIncrement() >= MISMATCH_DUMP_MAX) {
+            return;
+        }
+        try {
+            StringBuilder sb = new StringBuilder(256);
+            sb.append("[SEEDGEN][DIAG] mismatch (").append(pos.x).append(", ").append(pos.z).append(") ");
+            // 影子端 worldgen 身份摘要：level seed vs 服务端下发 seed（seed 装配差异直接现形）
+            ServerLevel level = server.overworld();
+            sb.append("shadowSeed=").append(level.getSeed())
+                    .append("(serverSeed=")
+                    .append(ClientChunkPipeline.getInstance().getServerSeed())
+                    .append(')');
+            // LevelStem generator 身份摘要（generator 消费自服务端握手 LevelStem NBT）
+            net.minecraft.world.level.chunk.ChunkGenerator generator = level.getChunkSource().getGenerator();
+            sb.append(" generator=").append(generator.getClass().getSimpleName());
+            if (generator instanceof net.minecraft.world.level.levelgen.NoiseBasedChunkGenerator nbcg) {
+                net.minecraft.core.Holder<net.minecraft.world.level.levelgen.NoiseGeneratorSettings> holder =
+                        nbcg.generatorSettings();
+                String settingsKey = holder.unwrapKey()
+#if MC_VER < MC_1_21_11
+                        .map(k -> k.location().toString())
+#else
+                        .map(k -> k.identifier().toString())
+#endif
+                        .orElse("(unregistered)");
+                net.minecraft.world.level.levelgen.NoiseGeneratorSettings ns = holder.value();
+                sb.append(" noiseSettings=").append(settingsKey)
+                        .append("{seaLevel=").append(ns.seaLevel())
+                        .append(", defaultFluid=").append(ns.defaultFluid())
+                        .append(", aquifers=").append(ns.isAquifersEnabled())
+                        .append(", oreVeins=").append(ns.oreVeinsEnabled())
+                        .append(", legacyRandom=").append(ns.useLegacyRandomSource())
+                        .append('}');
+            }
+            // 逐 section hash 对比（服务端 SeedRef 下发 vs 本地生成）
+            long[] serverHashes = entry.sectionHashes();
+            long[] localHashes = ChunkContentHashUtil.sectionHashesToArray(localSectionHashes);
+            sb.append(" localHash=0x").append(Long.toHexString(localHash))
+                    .append(" serverHash=0x").append(Long.toHexString(entry.contentHash()));
+            if (serverHashes == null || serverHashes.length == 0) {
+                sb.append(" (server section hashes unavailable, per-section compare skipped)");
+            } else {
+                int len = Math.max(serverHashes.length, localHashes.length);
+                int diffs = 0;
+                int firstDiffIdx = -1;
+                sb.append(" sections[");
+                for (int i = 0; i < len; i++) {
+                    long sh = i < serverHashes.length ? serverHashes[i] : 0L;
+                    long lh = i < localHashes.length ? localHashes[i] : 0L;
+                    if (sh != lh) {
+                        if (diffs < 8) {
+                            sb.append(i).append(":0x").append(Long.toHexString(lh))
+                                    .append("!=0x").append(Long.toHexString(sh)).append(' ');
+                        }
+                        if (firstDiffIdx < 0) {
+                            firstDiffIdx = i;
+                        }
+                        diffs++;
+                    }
+                }
+                sb.append("] diffs=").append(diffs);
+                // 首个差异 section 块状态摘要
+                if (firstDiffIdx >= 0 && firstDiffIdx < chunk.getSections().length) {
+                    net.minecraft.world.level.chunk.LevelChunkSection section = chunk.getSection(firstDiffIdx);
+                    int nonAir = 0;
+                    java.util.Set<net.minecraft.world.level.block.Block> distinctBlocks = new java.util.HashSet<>();
+                    for (int y = 0; y < 16; y++) {
+                        for (int z = 0; z < 16; z++) {
+                            for (int x = 0; x < 16; x++) {
+                                net.minecraft.world.level.block.state.BlockState bs = section.getBlockState(x, y, z);
+                                if (!bs.isAir()) {
+                                    nonAir++;
+                                    distinctBlocks.add(bs.getBlock());
+                                }
+                            }
+                        }
+                    }
+                    sb.append(" firstDiffSection=idx").append(firstDiffIdx)
+                            .append("(y=").append(chunk.getSectionYFromSectionIndex(firstDiffIdx)).append(')')
+                            .append(" hasOnlyAir=").append(section.hasOnlyAir())
+                            .append(" nonAir=").append(nonAir)
+                            .append(" distinctBlocks=").append(distinctBlocks.size());
+                }
+            }
+            DebugLogger.info(DebugLogger.LogType.ASYNC, "{}", sb);
+        } catch (Throwable t) {
+            DebugLogger.warn(DebugLogger.LogType.ASYNC,
+                    "[SEEDGEN][DIAG] Mismatch dump failed ({}, {})", pos.x, pos.z);
+        }
     }
 
     /** 影子服务端懒创建（共享 registry；创建失败 → failed + 回退本次）。 */
