@@ -1,8 +1,10 @@
 package io.github.limuqy.mc.hassium.mixin;
 
 import io.github.limuqy.mc.hassium.cache.client.ClientLifecycleHelper;
+import io.github.limuqy.mc.hassium.client.MinecraftAccessor;
 import net.minecraft.client.Minecraft;
 import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.gen.Accessor;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
@@ -15,9 +17,51 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
  * T6：移除 L2 冻结/恢复窗口（客户端 failover 已退役）——setScreen 拦截、按键冻结防护、
  * setLevel 冻结复位、disconnect/clearLevel 冻结兜底全部删除；保留断连清理
  * （cleanupOnDisconnect HEAD）与最终清理（finalizeDisconnectIfTerminal TAIL）。
+ * <p>
+ * M3：重新引入 setScreen HEAD 拦截（仅网关登录失败接管——与原 T6 冻结拦截语义无关）：
+ * 原版连接失败弹 DisconnectedScreen 时交 {@code NetworkCore.tryStartGatewayOnlyLogin}
+ * 决策（store 命中 → 取消失败界面转仅网关登录）；同时实现 {@link MinecraftAccessor}
+ * （pendingConnection 挂载，runTick 泵 tick）。
  */
 @Mixin(Minecraft.class)
-public class MixinMinecraft {
+public abstract class MixinMinecraft implements MinecraftAccessor {
+
+    /** M3：仅网关登录挂载本地 Connection（runTick level==null 分支泵 tick）。 */
+    @Accessor("pendingConnection")
+    public abstract void hassium$setPendingConnection(net.minecraft.network.Connection connection);
+
+    /**
+     * M3 主连接失效恢复（仅网关登录）：原版连接失败（DisconnectedScreen）且当前屏为
+     * ConnectScreen 时——已在仅网关登录中 → 通知会话收尾（登录期断开）并吞掉失败界面；
+     * 否则 store 命中决策（tryStartGatewayOnlyLogin），命中则取消原版失败界面转仅网关登录。
+     * <p>
+     * 取消通知：ConnectScreen 在所有版本均无 onClose 覆写（init() 的 Cancel 按钮 →
+     * setScreen(parent)，shouldCloseOnEsc=false），故在此拦截「离开 ConnectScreen 到
+     * 父屏」——仅网关登录会话激活且目标 = 父屏时通知静默收尾（用户取消）。登录成功
+     * handleLogin → setScreen(ReceivingLevelScreen) 非父屏，不取消。
+     */
+    @Inject(method = "setScreen(Lnet/minecraft/client/gui/screens/Screen;)V", at = @At("HEAD"), cancellable = true)
+    private void hassium$onSetScreen(net.minecraft.client.gui.screens.Screen screen, CallbackInfo ci) {
+        net.minecraft.client.gui.screens.Screen current = ((Minecraft) (Object) this).screen;
+        io.github.limuqy.mc.hassium.network.core.NetworkCore core =
+                io.github.limuqy.mc.hassium.network.core.NetworkCore.getInstance();
+        if (screen instanceof net.minecraft.client.gui.screens.DisconnectedScreen) {
+            if (current instanceof net.minecraft.client.gui.screens.ConnectScreen) {
+                if (core.isGatewayOnlyLogin()) {
+                    core.notifyGatewayOnlyDisconnect();
+                    ci.cancel();
+                    return;
+                }
+                if (core.tryStartGatewayOnlyLogin((Minecraft) (Object) this)) {
+                    ci.cancel();
+                }
+            }
+            return;
+        }
+        if (current instanceof net.minecraft.client.gui.screens.ConnectScreen && core.isGatewayOnlyCancelTarget(screen)) {
+            core.notifyGatewayOnlyCancel();
+        }
+    }
 
     /**
      * 断连缓存落盘（dump），在世界拆除之前触发——手动登出（PauseScreen 保存并退出 →

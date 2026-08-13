@@ -71,7 +71,16 @@ public final class KeyedPriorityQueue<E> {
     public record Entry<E>(E item, Key key, double priority, long generation) implements Comparable<Entry<E>> {
         @Override
         public int compareTo(Entry<E> other) {
-            return Double.compare(this.priority, other.priority);
+            int c = Double.compare(this.priority, other.priority);
+            if (c != 0) {
+                return c;
+            }
+            // review-fix: 同优先级（无锚点任务均为 PRIORITY_UNKNOWN、null key）严格按入队顺序——
+            // generation 全局单调递增作 tie-breaker。此前 PriorityBlockingQueue 对 compareTo==0
+            // 的元素不保证出队顺序，导致 gateway-only 登录时 ClientboundLoginPacket 与后续
+            // 初始化包（PlayerAbilities/SetCarriedItem/…）乱序 dispatch，handleLogin 未执行即
+            // 触达后续 handler（player/level null NPE 风暴）。
+            return Long.compare(this.generation, other.generation);
         }
 
         /** 同逻辑元素以新键重插（generation 不变，仍可通过 {@link #isCurrent} 校验）。 */

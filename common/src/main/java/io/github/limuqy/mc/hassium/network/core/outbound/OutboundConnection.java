@@ -103,24 +103,24 @@ public final class OutboundConnection {
     /** 读超时处理器（调用方映射到迁移 fault 路径；禁止直降 onError→IDLE，契约风险 5）。 */
     private volatile java.lang.Runnable readTimeoutHandler;
 
+    /** 连接级握手鉴权 token（M1 bootstrap 下发；null = 未指定，sendHandshake 回退 config）。 */
+    private final String authToken;
+
     private OutboundConnection(EventLoopGroup ownedGroup,
                                HandshakeCodec.ClientRequestOptions handshakeOptions,
                                HandshakeStateTail.C2S handshakeTail,
+                               String authToken,
                                Listener listener) {
         this.ownedGroup = ownedGroup;
         this.handshakeOptions = handshakeOptions;
         this.handshakeTail = handshakeTail;
+        this.authToken = authToken;
         this.listener = listener;
     }
-
-    /**
-     * 异步建立到主控的 TCP 控制面连接（event loop 线程回调 {@link Listener}）。
-     * 失败经 {@link Listener#onError} 报告。
-     */
     public static OutboundConnection connect(String host, int port,
                                              HandshakeCodec.ClientRequestOptions options,
                                              Listener listener) {
-        return connect(host, port, options, listener, null);
+        return connect(host, port, options, listener, null, null);
     }
 
     /**
@@ -131,12 +131,25 @@ public final class OutboundConnection {
                                              HandshakeCodec.ClientRequestOptions options,
                                              Listener listener,
                                              HandshakeStateTail.C2S tail) {
+        return connect(host, port, options, listener, tail, null);
+    }
+
+    /**
+     * 异步建立到主控的 TCP 控制面连接，握手请求携带 T7 续流状态尾 + 连接级鉴权 token
+     * （M1 bootstrap 下发 token；authToken 为 null 时 sendHandshake 回退 config
+     * master.authToken，空串 = 显式不鉴权，线格式不追加 token 字节）。
+     */
+    public static OutboundConnection connect(String host, int port,
+                                             HandshakeCodec.ClientRequestOptions options,
+                                             Listener listener,
+                                             HandshakeStateTail.C2S tail,
+                                             String authToken) {
         NioEventLoopGroup group = new NioEventLoopGroup(1, r -> {
             Thread t = new Thread(r, "Hassium-GatewayOutbound");
             t.setDaemon(true);
             return t;
         });
-        OutboundConnection conn = new OutboundConnection(group, options, tail, listener);
+        OutboundConnection conn = new OutboundConnection(group, options, tail, authToken, listener);
         Bootstrap bootstrap = new Bootstrap();
         bootstrap.group(group)
                 .channel(NioSocketChannel.class)
@@ -170,7 +183,7 @@ public final class OutboundConnection {
     public static OutboundConnection openEmbedded(HandshakeCodec.ClientRequestOptions options,
                                                   Listener listener,
                                                   HandshakeStateTail.C2S tail) {
-        OutboundConnection conn = new OutboundConnection(null, options, tail, listener);
+        OutboundConnection conn = new OutboundConnection(null, options, tail, null, listener);
         EmbeddedChannel embedded = new EmbeddedChannel(new FrameDecoder(), new InboundHandler(conn));
         conn.channel = embedded;
         return conn;
@@ -218,11 +231,13 @@ public final class OutboundConnection {
     /**
      * 发送 C2S 握手请求（channelActive 自动发送；显式调用用于重发）。
      * 构造时若指定续流状态尾（T8），请求一并携带。
-     * D-M2: 握手帧携带 master.authToken（客户端配置，双端同键；空 = 不鉴权）。
+     * D-M2: 握手帧携带鉴权 token——连接级（M1 bootstrap 下发）优先，
+     * 缺省回退客户端配置 master.authToken（双端同键；空 = 不鉴权）。
      */
     public void sendHandshake(HandshakeCodec.ClientRequestOptions options) {
-        sendFrame(ControlFrameType.HANDSHAKE_C2S, HandshakeCodec.encodeClientRequest(
-                options, handshakeTail, io.github.limuqy.mc.hassium.config.HassiumConfigService.getInstance().getMasterAuthToken()));
+        String token = authToken != null ? authToken
+                : io.github.limuqy.mc.hassium.config.HassiumConfigService.getInstance().getMasterAuthToken();
+        sendFrame(ControlFrameType.HANDSHAKE_C2S, HandshakeCodec.encodeClientRequest(options, handshakeTail, token));
     }
 
     /**

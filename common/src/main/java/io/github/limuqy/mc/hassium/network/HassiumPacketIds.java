@@ -124,6 +124,14 @@ public final class HassiumPacketIds {
      */
     public static final String LIGHT_DELTA_S2C = "hassium:light_delta_s2c";
 
+    // ===== 网关 bootstrap 相关包 =====
+
+    /**
+     * 服务端 -> 客户端：网关 bootstrap 信息（玩家 join 首帧经 vanilla 通道下发；
+     * 载荷 = {@link GatewayInfoCodec.GatewayInfo}，见 CONTRACTS §1）。
+     */
+    public static final String GATEWAY_INFO_S2C = "hassium:gateway_info";
+
     /**
      * 检查是否为 Hassium 数据包
      */

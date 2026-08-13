@@ -428,6 +428,11 @@ public class HassiumConfigService {
         return config.master().authToken();
     }
 
+    /** 网关主控核心是否启用（仅 master.enabled 时服务端下发 gateway_info bootstrap）。 */
+    public boolean isMasterEnabled() {
+        return config.master().enabled();
+    }
+
     public int getMinCleanupBatchSize() {
         return config.chunk().minCleanupBatchSize();
     }

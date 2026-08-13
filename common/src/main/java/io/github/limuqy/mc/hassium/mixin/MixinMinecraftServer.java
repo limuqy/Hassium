@@ -7,6 +7,7 @@ import io.github.limuqy.mc.hassium.network.PlayerCompressionTracker;
 import io.github.limuqy.mc.hassium.network.ResumeTicketValidator;
 import io.github.limuqy.mc.hassium.network.ServerChunkPushManager;
 import io.github.limuqy.mc.hassium.network.ServerLoadReporter;
+import io.github.limuqy.mc.hassium.network.ServerGatewayInfoSender;
 import io.github.limuqy.mc.hassium.network.dataplane.DataPlaneUdpServer;
 import io.github.limuqy.mc.hassium.platform.Services;
 import io.github.limuqy.mc.hassium.server.RuntimeServerContext;
@@ -49,6 +50,8 @@ public class MixinMinecraftServer {
             // T7 负载上报（REQ §B12）：周期采样 CPU/TPS/内存/玩家数，日志输出；
             // 网关侧接收口 TODO(T8)。
             ServerLoadReporter.onServerTick(server);
+            // M1 bootstrap：补发 <init> 时 connection 未挂载玩家的 gateway_info（CONTRACTS §2）
+            ServerGatewayInfoSender.drainPending(server);
         }
         // 服务端冒烟测试：检测玩家退出后切换视距
         ServerSmokeTest.onServerTick(server);

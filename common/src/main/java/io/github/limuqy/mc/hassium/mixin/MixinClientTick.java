@@ -99,6 +99,14 @@ public class MixinClientTick {
             // 忽略
         }
 
+        // 首登 SEED_REF/chunkHash 缓冲重放：login bridge 完成后服务端早于客户端 world
+        // 就绪发包，world 就绪后每 tick 重放（登录过渡窗口内帧不丢，seedgen 不哑火）
+        try {
+            io.github.limuqy.mc.hassium.network.ClientMetadataHandler.drainPendingOnWorldReady();
+        } catch (Exception e) {
+            // 忽略
+        }
+
         // 分段增量请求超时回退全量（服务端始终回包，仅丢包/断连竞态兜底）
         try {
             io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.tickPendingDeltaTimeouts();

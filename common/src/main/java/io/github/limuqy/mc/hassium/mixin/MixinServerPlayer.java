@@ -3,6 +3,7 @@ package io.github.limuqy.mc.hassium.mixin;
 import com.mojang.authlib.GameProfile;
 import io.github.limuqy.mc.hassium.network.PlayerCompressionTracker;
 import io.github.limuqy.mc.hassium.network.ServerChunkPushManager;
+import io.github.limuqy.mc.hassium.network.ServerGatewayInfoSender;
 import io.github.limuqy.mc.hassium.utils.DebugLogger;
 import io.github.limuqy.mc.hassium.utils.DebugLogger.LogType;
 import net.minecraft.core.BlockPos;
@@ -45,6 +46,9 @@ public abstract class MixinServerPlayer extends Player {
         // 立即启用压缩，进服第一圈 trackChunk/sendChunk 全部走 Hassium 链
         // （剥光 + maxChunksPerTick 限流 + chunkHash 元数据），消灭握手前原版直发窗口。
         PlayerCompressionTracker.tryEnableOnPlayerJoin(self);
+        // M1 bootstrap：玩家物化后经 vanilla 通道下发 gateway_info（connection 未挂时登记待发，
+        // 由 MixinMinecraftServer tick 泵补发；仅专用服 + master.enabled，见 CONTRACTS §2）。
+        ServerGatewayInfoSender.onPlayerInit(self);
     }
 
 #if MC_VER < MC_1_20_2

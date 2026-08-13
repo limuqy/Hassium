@@ -1,7 +1,6 @@
 package io.github.limuqy.mc.hassium.network;
 
 import com.github.luben.zstd.ZstdDecompressCtx;
-import io.github.limuqy.mc.hassium.metrics.NetworkStats;
 import io.github.limuqy.mc.hassium.network.core.outbound.ControlFrameCodec;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
@@ -29,12 +28,23 @@ import java.util.List;
  * 把剩余字节全部透传会把下一个单元的 VarInt(0) 头带进下游 FrameDecoder 导致
  * {@code invalid control frame length: 0}。frameAware=true 时按 ControlFrameCodec
  * 帧边界只消费恰好一个明文帧，剩余保留待下次 decode（半包时整体回退等待）。
+ * <p>
+ * M3 冒烟补强（T5Verification）：压缩单元同样会与后续单元同段粘包（1.20.1
+ * ClientboundLoginPacket 帧后紧跟 difficulty/abilities 等小帧），原实现把
+ * {@code readableBytes()} 全部当作压缩体——容量检查随粘包内容漂移且尾随帧被吞。
+ * frameAware=true 时压缩分支按 RFC 8878 帧头/块头解析首帧边界，只消费本帧
+ * （{@link #parseFrameCompressedLength}），剩余留待下次 decode，与明文分支同语义。
  */
 public class ZstdContextDecoder extends ByteToMessageDecoder {
 
     private static final Logger LOGGER = LoggerFactory.getLogger("Hassium/ZstdContextDecoder");
 
-    private static final int MAXIMUM_COMPRESSED_LENGTH = 2 * 1024 * 1024;
+    // 压缩帧长度上限 = 解压上限 + ZSTD 冗余（M3 冒烟实测：1.20.1 ClientboundLoginPacket
+    // 内嵌 RegistryAccess$Frozen 全量注册表，解压体积贴近 8MiB 上限且数据近乎不可压，
+    // ZSTD level3 后 8389820B ≈ 解压体积 + 1.2KB 帧头——旧 2MiB 上限与 8MiB 对齐上限
+    // 都拦不住，必须留出 ZSTD 帧头/字面量段开销余量。防炸弹的硬约束是解压上限，
+    // 压缩上限仅为内存保护，冗余 1MiB 无安全损失）。
+    private static final int MAXIMUM_COMPRESSED_LENGTH = 8 * 1024 * 1024 + 1024 * 1024;
     private static final int MAXIMUM_UNCOMPRESSED_LENGTH = 8 * 1024 * 1024;
 
     private int threshold;
@@ -75,9 +85,7 @@ public class ZstdContextDecoder extends ByteToMessageDecoder {
     @Override
     protected void decode(ChannelHandlerContext ctx, ByteBuf in, List<Object> out) throws Exception {
         if (closed) {
-            int inStart = in.readerIndex();
             out.add(in.readBytes(in.readableBytes()));
-            NetworkStats.recordWireBytesReceived(in.readerIndex() - inStart);
             return;
         }
 
@@ -122,14 +130,38 @@ public class ZstdContextDecoder extends ByteToMessageDecoder {
                 }
             }
 
-            int compressedLength = friendlyBuf.readableBytes();
-            if (compressedLength > MAXIMUM_COMPRESSED_LENGTH) {
-                throw new DecoderException("Badly compressed packet - compressed size " +
-                        compressedLength + " exceeds maximum " + MAXIMUM_COMPRESSED_LENGTH);
+            byte[] compressed;
+            if (frameAware) {
+                // 压缩单元与后续单元可能同段粘包（M3 冒烟实测：1.20.1 ClientboundLoginPacket
+                // 帧后紧跟 difficulty/abilities 等小帧——readableBytes() 把尾随帧计入压缩体，
+                // 容量检查随粘包内容漂移 8.39MB→9.44MB 且尾随帧被吞）。与明文分支同语义：
+                // 按 zstd 帧边界（RFC 8878 帧头/块头解析）只消费本帧，剩余留待下次 decode。
+                int headerLen = in.readerIndex() - inStart;
+                long frameLen = parseFrameCompressedLength(in, in.readerIndex(), in.readableBytes());
+                if (frameLen < 0) {
+                    // 半包：帧头/数据块未齐，整体回退等待更多数据
+                    in.readerIndex(inStart);
+                    return;
+                }
+                if (frameLen > MAXIMUM_COMPRESSED_LENGTH) {
+                    throw new DecoderException("Badly compressed packet - compressed size " +
+                            frameLen + " exceeds maximum " + MAXIMUM_COMPRESSED_LENGTH);
+                }
+                if (in.readableBytes() < frameLen) {
+                    in.readerIndex(inStart);
+                    return;
+                }
+                compressed = new byte[(int) frameLen];
+                friendlyBuf.readBytes(compressed);
+            } else {
+                int compressedLength = friendlyBuf.readableBytes();
+                if (compressedLength > MAXIMUM_COMPRESSED_LENGTH) {
+                    throw new DecoderException("Badly compressed packet - compressed size " +
+                            compressedLength + " exceeds maximum " + MAXIMUM_COMPRESSED_LENGTH);
+                }
+                compressed = new byte[compressedLength];
+                friendlyBuf.readBytes(compressed);
             }
-
-            byte[] compressed = new byte[compressedLength];
-            friendlyBuf.readBytes(compressed);
 
             byte[] result;
             try {
@@ -144,11 +176,99 @@ public class ZstdContextDecoder extends ByteToMessageDecoder {
             }
 
             if (LOGGER.isDebugEnabled()) {
-                LOGGER.debug("Decompressed packet: {} -> {} bytes", compressedLength, result.length);
+                LOGGER.debug("Decompressed packet: {} -> {} bytes", compressed.length, result.length);
             }
             out.add(Unpooled.wrappedBuffer(result));
         }
-        NetworkStats.recordWireBytesReceived(in.readerIndex() - inStart);
+
+    }
+    /**
+     * 解析 zstd 帧（RFC 8878）首帧的压缩体长度（含 magic/帧头/全部数据块/内容校验和）。
+     * 压缩单元可能与后续单元同段粘包（M3 冒烟实测），压缩体长度必须按帧边界确定，
+     * 不能用 {@code readableBytes()}——后者会把尾随帧计入且导致容量检查随粘包漂移。
+     *
+     * @param start     帧起点（zstd magic 所在偏移）
+     * @param available 从 {@code start} 起可读字节数
+     * @return 首帧压缩体字节数；数据不完整（半包）返回 -1
+     */
+    private static long parseFrameCompressedLength(ByteBuf in, int start, int available) {
+        // 全部按相对 start 的偏移推进（available 亦是相对长度，不得与绝对 pos 混用）
+        if (available < 4) {
+            return -1;
+        }
+        // RFC 8878 §3.1.1：Magic_Number 4 字节小端 0xFD2FB528（线上 28 B5 2F FD）
+        if (Integer.reverseBytes(in.getInt(start)) != 0xFD2FB528) {
+            throw new DecoderException("Badly compressed packet - invalid zstd magic");
+        }
+        if (available < 5) {
+            return -1;
+        }
+        int fhd = in.getUnsignedByte(start + 4);
+        boolean singleSegment = (fhd & 0x20) != 0;
+        if ((fhd & 0x8) != 0) {
+            // §3.1.1.1.1.4 Reserved_bit 必须为 0
+            throw new DecoderException("Badly compressed packet - reserved zstd header bit set");
+        }
+        int pos = 5;
+        if (!singleSegment) {
+            if (available < pos + 1) {
+                return -1;
+            }
+            pos += 1; // Window_Descriptor
+        }
+        // §3.1.1.1 字段序：Window_Descriptor → Dictionary_ID → Frame_Content_Size
+        int didSize = switch (fhd & 0x3) {
+            case 0 -> 0;
+            case 1 -> 1;
+            case 2 -> 2;
+            default -> 4;
+        };
+        if (available < pos + didSize) {
+            return -1;
+        }
+        pos += didSize;
+        // §3.1.1.1.1.1 FCS_Field_Size：flag 0=单段 1B/多段无，1=2B，2=4B，3=8B
+        int fcsSize = switch ((fhd >> 6) & 0x3) {
+            case 0 -> singleSegment ? 1 : 0;
+            case 1 -> 2;
+            case 2 -> 4;
+            default -> 8;
+        };
+        if (available < pos + fcsSize) {
+            return -1;
+        }
+        pos += fcsSize;
+        // §3.1.1.2 块：Block_Header 3 字节小端——Last_Block=bit0，Block_Type=bits1-2，
+        // Block_Size=bits3-23（数据块长度；RLE 块数据只有 1 字节）
+        while (true) {
+            if (available < pos + 3) {
+                return -1;
+            }
+            int blockHeader = in.getUnsignedByte(start + pos)
+                    | (in.getUnsignedByte(start + pos + 1) << 8)
+                    | (in.getUnsignedByte(start + pos + 2) << 16);
+            boolean lastBlock = (blockHeader & 0x1) != 0;
+            int blockType = (blockHeader >> 1) & 0x3;
+            int blockSize = (blockHeader >> 3) & 0x1FFFFF;
+            if (blockType == 3) {
+                throw new DecoderException("Badly compressed packet - reserved zstd block type");
+            }
+            int dataLen = blockType == 1 ? 1 : blockSize;
+            if (available < pos + 3 + dataLen) {
+                return -1;
+            }
+            pos += 3 + dataLen;
+            if (lastBlock) {
+                break;
+            }
+        }
+        if ((fhd & 0x4) != 0) { // Content_Checksum
+            if (available < pos + 4) {
+                return -1;
+            }
+            pos += 4;
+        }
+        return pos;
     }
 
     public void setThreshold(int threshold, boolean validateDecompressed) {

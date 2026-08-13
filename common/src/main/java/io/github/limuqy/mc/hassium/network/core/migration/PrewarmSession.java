@@ -63,10 +63,38 @@ public final class PrewarmSession {
                                   HandshakeCodec.ClientRequestOptions options,
                                   HandshakeStateTail.C2S tail,
                                   OutboundConnection.Listener listener);
+
+        /**
+         * 连接工厂 + 连接级鉴权 token（M1 bootstrap 下发）。默认实现忽略 token
+         * （既有测试缝不受影响）；{@link #REAL_FACTORY} 转发给真实 connect。
+         */
+        default OutboundConnection create(String host, int port,
+                                          HandshakeCodec.ClientRequestOptions options,
+                                          HandshakeStateTail.C2S tail,
+                                          OutboundConnection.Listener listener,
+                                          String authToken) {
+            return create(host, port, options, tail, listener);
+        }
     }
 
-    private static final OutboundConnectionFactory REAL_FACTORY =
-            (host, port, options, tail, listener) -> OutboundConnection.connect(host, port, options, listener, tail);
+    private static final OutboundConnectionFactory REAL_FACTORY = new OutboundConnectionFactory() {
+        @Override
+        public OutboundConnection create(String host, int port,
+                                         HandshakeCodec.ClientRequestOptions options,
+                                         HandshakeStateTail.C2S tail,
+                                         OutboundConnection.Listener listener) {
+            return OutboundConnection.connect(host, port, options, listener, tail);
+        }
+
+        @Override
+        public OutboundConnection create(String host, int port,
+                                         HandshakeCodec.ClientRequestOptions options,
+                                         HandshakeStateTail.C2S tail,
+                                         OutboundConnection.Listener listener,
+                                         String authToken) {
+            return OutboundConnection.connect(host, port, options, listener, tail, authToken);
+        }
+    };
 
     /** 建立到目标主控的真实预热连接（异步；回调在 event loop 线程触发）。 */
     public static PrewarmSession start(MigrationEndpoint endpoint,

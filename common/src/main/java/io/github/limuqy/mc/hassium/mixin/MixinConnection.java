@@ -115,8 +115,11 @@ public class MixinConnection {
         }
 #endif
         if (packetListener instanceof net.minecraft.client.multiplayer.ClientPacketListener) {
-            // 壳保活：keep-alive 响应走 vanilla TCP（网关会话为主，壳连接不被服务端踢）
-            if (hassium$isKeepAlive(packet)) {
+            // 壳保活：正常会话（有壳）keep-alive 响应走 vanilla TCP（网关会话为主，
+            // 壳连接不被服务端踢）；仅网关登录无壳连接——keep-alive 走网关 PACKET_C2S
+            // （原版发送会进 EmbeddedChannel 队列永不送达 → 服务端踢人）。
+            if (hassium$isKeepAlive(packet)
+                    && !io.github.limuqy.mc.hassium.network.core.NetworkCore.getInstance().isGatewayOnlyLogin()) {
                 return;
             }
             if (core.routeC2S(packet)) {

@@ -203,6 +203,21 @@ public final class MigrationEngine {
         return connectionFactory.create(host, port, options, tail, listener);
     }
 
+    /**
+     * 经连接工厂创建 outbound + 连接级鉴权 token（M1 bootstrap 下发；
+     * authToken 为 null 时走无 token 路径，sendHandshake 回退 config）。
+     */
+    public OutboundConnection createConnection(String host, int port,
+                                               HandshakeCodec.ClientRequestOptions options,
+                                               HandshakeStateTail.C2S tail,
+                                               OutboundConnection.Listener listener,
+                                               String authToken) {
+        if (authToken == null) {
+            return createConnection(host, port, options, tail, listener);
+        }
+        return connectionFactory.create(host, port, options, tail, listener, authToken);
+    }
+
     public void setPlayerStateSource(Supplier<PlayerStateReport> source) {
         this.playerStateSource = source;
     }
