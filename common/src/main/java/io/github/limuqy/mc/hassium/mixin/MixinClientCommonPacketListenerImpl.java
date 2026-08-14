@@ -47,9 +47,9 @@ public class MixinClientCommonPacketListenerImpl {
      * ClientCommonPacketListenerImpl）。非 gateway_info 通道直接放行（不 cancel）。
      * 1.20.1 的注入在 {@link MixinClientPacketListener}（game 包），双端各只注入一处。
      */
-    @Inject(method = "handleCustomPayload", at = @At("HEAD"))
+    @Inject(method = "handleCustomPayload", at = @At("HEAD"), cancellable = true)
     private void hassium$onCustomPayload(net.minecraft.network.protocol.common.ClientboundCustomPayloadPacket packet, CallbackInfo ci) {
-        io.github.limuqy.mc.hassium.network.ClientGatewayBootstrap.handleCustomPayload(packet);
+        io.github.limuqy.mc.hassium.network.ClientGatewayBootstrap.handleCustomPayload(packet, ci);
     }
 #endif
 

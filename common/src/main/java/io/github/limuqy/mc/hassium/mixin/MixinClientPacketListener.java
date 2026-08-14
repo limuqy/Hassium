@@ -54,9 +54,9 @@ public class MixinClientPacketListener {
 #endif
 #if MC_VER < MC_1_20_2
     // ===== M1 bootstrap：gateway_info 接收（仅 1.20.1：handleCustomPayload 仍在 game 包 ClientPacketListener） =====
-    @Inject(method = "handleCustomPayload", at = @At("HEAD"))
+    @Inject(method = "handleCustomPayload", at = @At("HEAD"), cancellable = true)
     private void hassium$onCustomPayload(net.minecraft.network.protocol.game.ClientboundCustomPayloadPacket packet, CallbackInfo ci) {
-        io.github.limuqy.mc.hassium.network.ClientGatewayBootstrap.handleCustomPayload(packet);
+        io.github.limuqy.mc.hassium.network.ClientGatewayBootstrap.handleCustomPayload(packet, ci);
     }
 #endif
 

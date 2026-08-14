@@ -140,6 +140,13 @@ public final class SeedGenExecutor {
      * 走 R2 增量命中兜底。SeedRef 条目（hash≠0）在队列中优先（peekNearest 同距优先）。
      */
     private void schedulePregen() {
+        // 门控（与 handleSeedRef 的 isEnabled 同源）：客户端配置关 / 线程 0 /
+        // 服务端未启用 SeedGen 时绝不铺开盲预生成——否则影子端就绪即对 ±PREGEN_RADIUS
+        // 全量本地 worldgen（441 块），生成结果还会回传客户端覆盖服务端权威数据
+        // （放置方块消失 / 区块突变现场）。
+        if (!isEnabled()) {
+            return;
+        }
         if (!pregenScheduled.compareAndSet(false, true)) {
             return;
         }
@@ -324,12 +331,27 @@ public final class SeedGenExecutor {
                 return;
             }
             if (entry.contentHash() == 0L) {
-                // 盲预生成（无服务端 hash）：直接注入影子端存档（R2 读盘比对），
-                // 不校验/delta——服务端对应块可能尚未生成，hash 无从比对
+                // 盲预生成（无服务端 hash）：仅注入影子端缓存——内存表（injectedChunks）
+                // → 断连 saveAll 落盘 → R2 读盘比对/增量基线。**绝不回传客户端世界**：
+                // 生成结果未经服务端校验（服务端对应块可能已放置方块/被修改），回传会
+                // 用 pristine 地形覆盖服务端权威数据（放置方块消失 = 区块突变/方块缺失
+                // 现场）。此前误走 submitGenerated → generated → pushReady → 官方通道，
+                // 且产物不入注入表（既不落盘也服务不了 R2，双重失效）。
                 NetworkStats.recordLocallyGeneratedChunk(NetworkStats.ESTIMATED_CHUNK_BYTES);
-                if (!ShadowLightCompute.submitGenerated(pos, chunk, server.overworld())) {
-                    DebugLogger.warn(DebugLogger.LogType.ASYNC,
-                            "[SEEDGEN] Blind pregen submit failed ({}, {})", pos.x, pos.z);
+                server.injectLoadedChunk(pos, chunk);
+                io.github.limuqy.mc.hassium.network.seedgen.ShadowCacheEviction.recordAccess(pos);
+                // 光收敛性无保证（生成时邻域仅 BIOMES 空壳，边界光欠）→ 标脏：R2 读盘
+                // 命中走本地 relight 链；内存命中经 awaitBatchLight 屏障重算，杜绝欠光直推。
+                io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.markLightDirty(pos, true);
+                // 计算并登记 contentHash（与 injectChunk 同款）：后续 hash 比对/R2 落盘复用；
+                // 失败则比对路径现算兜底（chunkHashOf/diskHashMatches）。
+                try {
+                    long pregenHash = ChunkContentHashUtil.combineSectionHashes(
+                            ChunkContentHashUtil.computeSectionHashes(chunk));
+                    io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.put(pos, pregenHash);
+                } catch (Throwable hashError) {
+                    DebugLogger.debug(DebugLogger.LogType.ASYNC,
+                            "[SEEDGEN] Blind pregen hash compute failed ({}, {})", pos.x, pos.z);
                 }
                 return;
             }

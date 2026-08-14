@@ -9,6 +9,11 @@
         "MixinIOWorker",
         "RegionFileAccessor",
         "ChunkMapAccessor",
+        "SimpleRegionStorageAccessor",
+        "IOWorkerAccessor",
+        "SectionStorageAccessor",
+        "EntityStorageAccessor",
+        "PersistentEntitySectionManagerAccessor",
         "MixinServerGamePacketListenerImpl",
         "MixinMinecraftServer",
         "MixinConnection",
@@ -36,7 +41,8 @@
       "ClientLevelAccessor",
       "LevelLightEngineAccessor",
       "LightEngineAccessor",
-      "ThreadedLevelLightEngineAccessor"
+      "ThreadedLevelLightEngineAccessor",
+      "MixinLayerLightSectionStorage"
     ],
     "server": [
     ],
