@@ -74,18 +74,36 @@ public class ForgeHassiumCommand {
         );
         // /hassium migrate 客户端命令（统一三端命令名；服务端 /hassium 不注册 migrate 子树，
         // 服务端执行提示由 HassiumCommandHandler 客户端上下文检查兜底）
+        // 单一 greedyString 参数分发 list/status/endpoint：字面量子命令与字符串参数为兄弟
+        // 节点时 brigadier 必报参数歧义告警，合并后零歧义（tab 补全见 suggestMigrate）。
         dispatcher.register(
                 Commands.literal("hassium")
                         .then(Commands.literal("migrate")
                                 .executes(ForgeHassiumCommand::migrateUsage)
-                                .then(Commands.literal("list")
-                                        .executes(ForgeHassiumCommand::migrateList))
-                                .then(Commands.literal("status")
-                                        .executes(ForgeHassiumCommand::migrateStatus))
-                                .then(Commands.argument("endpoint", StringArgumentType.greedyString())
-                                        .executes(ForgeHassiumCommand::migrateToEndpoint))
+                                .then(Commands.argument("args", StringArgumentType.greedyString())
+                                        .suggests(ForgeHassiumCommand::suggestMigrate)
+                                        .executes(ForgeHassiumCommand::migrateDispatch))
                         )
         );
+    }
+
+    private static CompletableFuture<Suggestions> suggestMigrate(
+            CommandContext<CommandSourceStack> context, SuggestionsBuilder builder) {
+        builder.suggest("list");
+        builder.suggest("status");
+        HassiumCommandHandler.getCachedServerIds().forEach(builder::suggest);
+        return builder.buildFuture();
+    }
+
+    /** migrate <list|status|host:port> 统一分发。 */
+    private static int migrateDispatch(CommandContext<CommandSourceStack> context) {
+        String args = StringArgumentType.getString(context, "args");
+        switch (args) {
+            case "list" -> migrateList(context);
+            case "status" -> migrateStatus(context);
+            default -> migrateToEndpoint(context);
+        }
+        return 1;
     }
 
     private static CompletableFuture<Suggestions> suggestCachedServers(
@@ -150,7 +168,7 @@ public class ForgeHassiumCommand {
 
     /** 解析端点参数：migrate <host:port> */
     private static int migrateToEndpoint(CommandContext<CommandSourceStack> context) {
-        String endpoint = StringArgumentType.getString(context, "endpoint");
+        String endpoint = StringArgumentType.getString(context, "args");
         context.getSource().sendSuccess(() -> Component.literal(HassiumCommandHandler.migrateTo(endpoint)), false);
         return 1;
     }

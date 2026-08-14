@@ -88,18 +88,36 @@ public class FabricHassiumCommand {
     /**
      * migrate 子树（/hassiumc migrate 与 /hassium migrate 共用）。
      * <p>
-     * 字面量子命令（list/status）必须注册在 endpoint 参数之前：brigadier 对同名输入
-     * 多候选等长匹配时取先注册者（"/hassium migrate list" 命中 list 而非 endpoint 参数）。
+     * 单一 greedyString 参数分发 list/status/endpoint：字面量子命令（list/status）与
+     * 字符串参数（endpoint）注册为兄弟节点时 brigadier 必然报参数歧义告警
+     * （"Ambiguity between arguments ..."），合并后零歧义；tab 补全经
+     * {@link #suggestMigrate} 给出 list/status/缓存服务器列表。
      */
     private static LiteralArgumentBuilder<FabricClientCommandSource> migrateSubtree() {
         return ClientCommandManager.literal("migrate")
                 .executes(FabricHassiumCommand::migrateUsage)
-                .then(ClientCommandManager.literal("list")
-                        .executes(FabricHassiumCommand::migrateList))
-                .then(ClientCommandManager.literal("status")
-                        .executes(FabricHassiumCommand::migrateStatus))
-                .then(ClientCommandManager.argument("endpoint", StringArgumentType.greedyString())
-                        .executes(FabricHassiumCommand::migrateToEndpoint));
+                .then(ClientCommandManager.argument("args", StringArgumentType.greedyString())
+                        .suggests(FabricHassiumCommand::suggestMigrate)
+                        .executes(FabricHassiumCommand::migrateDispatch));
+    }
+
+    private static CompletableFuture<Suggestions> suggestMigrate(
+            CommandContext<FabricClientCommandSource> context, SuggestionsBuilder builder) {
+        builder.suggest("list");
+        builder.suggest("status");
+        HassiumCommandHandler.getCachedServerIds().forEach(builder::suggest);
+        return builder.buildFuture();
+    }
+
+    /** migrate <list|status|host:port> 统一分发。 */
+    private static int migrateDispatch(CommandContext<FabricClientCommandSource> context) {
+        String args = StringArgumentType.getString(context, "args");
+        switch (args) {
+            case "list" -> migrateList(context);
+            case "status" -> migrateStatus(context);
+            default -> migrateToEndpoint(context);
+        }
+        return 1;
     }
 
     /** migrate 无参数：用法帮助 */
