@@ -55,6 +55,13 @@ public final class ShadowServerRegistry {
     /**
      * 懒创建（任意线程可调；失败返回 null 并置 failed + 游戏内报错）。
      * 未握手（服务端未装 MOD / 握手未到）→ null（不创建、不置 failed）。
+     * <p>
+     * 创建前等待上次关停（saveAll）落盘完成（有界 30s，与 saver 同界）：
+     * 跨会话并发打开同一 .mca 会读到半写头 → 陈旧 offset 表 → 重叠期读取
+     * 错位区块（"Chunk found in invalid location" 风暴 + 重建 churn，2026-08-14
+     * 定位）。等待把重叠期退化为「比对 miss → 数据重推」（原设计意图的正确降级），
+     * 而非磁盘损坏级别的读取错误。超时继续创建（罕见病态：saver 同界超时也会
+     * 跳过保存，无并发写）。锁外等待：不阻塞 {@link #shutdown()} 的锁获取。
      */
     public ShadowSeedServer getOrCreate() {
         ShadowSeedServer s = server;
@@ -73,6 +80,7 @@ public final class ShadowServerRegistry {
         if (ClientChunkPipeline.getInstance().getGameDir() == null) {
             return null;
         }
+        awaitPreviousShutdownComplete();
         synchronized (lock) {
             s = server;
             if (s != null) {
@@ -89,6 +97,7 @@ public final class ShadowServerRegistry {
             // 降级——旧行为：saveAll 慢时 awaitShutdownComplete 10s 超时 → tryLock
             // OverlappingFileLockException → failShadowServer → 缓存/OVD/光照整会话全关。
             long seed = ClientChunkPipeline.getInstance().getServerSeed();
+            long createStartNs = System.nanoTime(); // T0b 诊断：Creating→ready 总耗时基准
             DebugLogger.info(DebugLogger.LogType.ASYNC, "[SHADOW] Creating shadow server (seed={})", seed);
             try {
                 s = createShadowServerWithLockRetry(seed);
@@ -100,7 +109,8 @@ public final class ShadowServerRegistry {
                 io.github.limuqy.mc.hassium.cache.client.ViewDistanceExtensionService.getInstance()
                         .onShadowReady();
                 DebugLogger.info(DebugLogger.LogType.ASYNC,
-                        "[SHADOW] Shadow server ready (seed={})", seed);
+                        "[SHADOW] Shadow server ready (seed={}) (+{}ms)",
+                        seed, (System.nanoTime() - createStartNs) / 1_000_000L);
                 // 影子端就绪 → 盲预生成铺开（不依赖 SeedRef：T3 复验实证 R1 期间服务端可能
                 // 0 个 SeedRef（spawn 区 pregen 时序抖动）→ schedulePregen 永不触发 → R1 覆盖率 0）
                 SeedGenExecutor.getInstance().onShadowReady();
@@ -232,6 +242,20 @@ public final class ShadowServerRegistry {
                     }
                 }
                 SeedGenLevelCompat.shutdown(s, !saveAllowed);
+                // 上次关停 saveAll 已落盘完成：若新会话的影子端已在本次关停期间并发
+                // 创建（T5cShadowReady 设计允许），其 region/poi/entities 文件可能是在
+                // saveAll 进行中打开的（构造时读到半写头 → 陈旧 usedSectors/offset 表）。
+                // 关闭并清缓存：下次访问重新打开（完整头），杜绝跨会话扇区重叠写。
+                // 必须先于 future.complete：下一会话的 saver 等待本 future 才开始写盘。
+                ShadowSeedServer current = server;
+                if (current != null) {
+                    try {
+                        current.refreshRegionFiles();
+                    } catch (Throwable t) {
+                        DebugLogger.warn(DebugLogger.LogType.ASYNC,
+                                "[SHADOW] Region file refresh failed", t);
+                    }
+                }
                 future.complete(null);
             } catch (Throwable t) {
                 Constants.LOG.warn("Hassium: Shadow server async shutdown failed", t);
@@ -247,6 +271,24 @@ public final class ShadowServerRegistry {
     /** 上次关停（R1 saveAll）是否已结束：R2 会话期写 gate（false = 禁写盘）。 */
     public boolean isPreviousShutdownComplete() {
         return previousShutdownComplete;
+    }
+
+    /** 有界等待上次关停 saveAll 完成（30s 与 saver 同界；超时继续创建）。 */
+    private static void awaitPreviousShutdownComplete() {
+        final long deadline = System.currentTimeMillis() + 30_000L;
+        while (!ShadowServerRegistry.getInstance().isPreviousShutdownComplete()) {
+            if (System.currentTimeMillis() > deadline) {
+                DebugLogger.warn(DebugLogger.LogType.ASYNC,
+                        "[SHADOW] Previous shutdown saveAll not complete in 30s; creating shadow server anyway");
+                return;
+            }
+            try {
+                Thread.sleep(50L);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+        }
     }
 
     /**

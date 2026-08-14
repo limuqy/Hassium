@@ -36,6 +36,7 @@ public final class ClientLifecycleHelper {
      * 此处仅初始化后台执行器 + OVD 环带重扫）。
      */
     public static void onLogin() {
+        io.github.limuqy.mc.hassium.utils.LoginTiming.markLogin(); // T0b 诊断：handleLogin 时刻（总耗时起点）
         if (initialized) {
             return;
         }

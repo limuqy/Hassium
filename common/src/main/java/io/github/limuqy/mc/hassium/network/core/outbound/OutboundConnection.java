@@ -102,6 +102,8 @@ public final class OutboundConnection {
     private volatile long readTimeoutMs;
     /** 读超时处理器（调用方映射到迁移 fault 路径；禁止直降 onError→IDLE，契约风险 5）。 */
     private volatile java.lang.Runnable readTimeoutHandler;
+    /** T0b 诊断：控制通道 active 时刻（wall ms；握手 accepted 延迟基准）。 */
+    private volatile long channelActiveAtMs;
 
     /** 连接级握手鉴权 token（M1 bootstrap 下发；null = 未指定，sendHandshake 回退 config）。 */
     private final String authToken;
@@ -357,6 +359,7 @@ public final class OutboundConnection {
 
     private void onChannelActive(ChannelHandlerContext ctx) {
         channel = ctx.channel();
+        channelActiveAtMs = System.currentTimeMillis();
         LOGGER.info("Hassium: Gateway outbound control channel active ({})", ctx.channel().remoteAddress());
         installReadTimeoutIfPossible();
         if (handshakeOptions != null) {
@@ -385,11 +388,13 @@ public final class OutboundConnection {
         boolean resumeAccepted = HandshakeStateTail.readS2C(payload).resumeAccepted();
         this.lastResumeAccepted = resumeAccepted;
         if (response.accepted()) {
-            LOGGER.info("Hassium: Gateway handshake accepted (proto={}, globalCompression={}, compactHeader={}, udp={}, resume={})",
+            long hsDeltaMs = channelActiveAtMs > 0 ? System.currentTimeMillis() - channelActiveAtMs : -1L;
+            LOGGER.info("Hassium: Gateway handshake accepted (proto={}, globalCompression={}, compactHeader={}, udp={}, resume={}){}",
                     response.protocolVersion(), response.globalCompressionAccepted(),
                     response.compactHeaderAccepted(),
                     response.udpTail() != null && response.udpTail().hasUdpDataplane(),
-                    resumeAccepted);
+                    resumeAccepted,
+                    hsDeltaMs >= 0 ? " (+" + hsDeltaMs + "ms since channel active)" : "");
             listener.onHandshakeAccepted(response, resumeAccepted);
         } else {
             LOGGER.warn("Hassium: Gateway handshake rejected (proto={})", response.protocolVersion());

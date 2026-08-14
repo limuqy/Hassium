@@ -196,9 +196,15 @@ public class ShadowSeedServer extends MinecraftServer {
                 new EmptyNotificationService()
 #endif
         ) {});
+        long t0Ns = System.nanoTime(); // T0b 诊断：initServer 各阶段耗时
         this.loadLevel();
+        long t1Ns = System.nanoTime();
         // 缓存清理热度索引加载（跨会话累计；损坏/缺失 → 空索引）
         ShadowCacheEviction.load(worldRoot);
+        long t2Ns = System.nanoTime();
+        DebugLogger.info(DebugLogger.LogType.ASYNC,
+                "[SHADOW-DIAG] initServer: loadLevel={}ms evictionLoad={}ms (seed={})",
+                (t1Ns - t0Ns) / 1_000_000L, (t2Ns - t1Ns) / 1_000_000L, worldSeed);
         LOGGER.info("Hassium: Shadow seed server started (seed={})", worldSeed);
         return true;
     }
@@ -330,19 +336,26 @@ public class ShadowSeedServer extends MinecraftServer {
      * 清光公共方法（injectChunk / relightChunk 共用）：清空整柱全部 section 光数据层 →
      * 引擎传播重算 → 推发光源。原版剥光同款机制（{@code queueSectionData(null)} 清数据层），
      * 全部经 ThreadedLevelLightEngine 异步任务（runMainLoop 已驱动 tryScheduleUpdate）。
+     * <p>
+     * 全程持有 {@link ShadowLightCompute#LIGHT_ENGINE_MUTEX}：清光投递（removeSection
+     * 延迟删除）与光屏障（{@code ShadowLightCompute.awaitBatchLight} 的 lightChunk）互斥，
+     * 否则相邻柱的传播与清光在引擎 Worker 线程交错 → getStoredLevel 读 null DataLayer
+     * NPE（2026-08-14 1.20.1 定位，见锁 javadoc）。锁内仅投递任务（addTask，微秒级）。
      */
     private void clearChunkLight(ChunkPos pos, LevelChunk chunk) {
-        ThreadedLevelLightEngine lightEngine =
-                (ThreadedLevelLightEngine) this.overworld().getChunkSource().getLightEngine();
-        int minSection = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMinSection(chunk);
-        int maxSection = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMaxSectionExclusive(chunk);
-        for (int y = minSection; y < maxSection; y++) {
-            SectionPos sp = SectionPos.of(pos, y);
-            lightEngine.queueSectionData(LightLayer.SKY, sp, null);
-            lightEngine.queueSectionData(LightLayer.BLOCK, sp, null);
-            lightEngine.updateSectionStatus(sp, false);
+        synchronized (ShadowLightCompute.LIGHT_ENGINE_MUTEX) {
+            ThreadedLevelLightEngine lightEngine =
+                    (ThreadedLevelLightEngine) this.overworld().getChunkSource().getLightEngine();
+            int minSection = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMinSection(chunk);
+            int maxSection = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMaxSectionExclusive(chunk);
+            for (int y = minSection; y < maxSection; y++) {
+                SectionPos sp = SectionPos.of(pos, y);
+                lightEngine.queueSectionData(LightLayer.SKY, sp, null);
+                lightEngine.queueSectionData(LightLayer.BLOCK, sp, null);
+                lightEngine.updateSectionStatus(sp, false);
+            }
+            lightEngine.propagateLightSources(pos);
         }
-        lightEngine.propagateLightSources(pos);
     }
 
     /**
@@ -382,7 +395,9 @@ public class ShadowSeedServer extends MinecraftServer {
                                      List<SectionDeltaS2CPacket.SectionData> changedSections,
                                      List<SectionDeltaS2CPacket.HeightmapData> heightmaps,
                                      List<SectionDeltaS2CPacket.BlockEntityData> blockEntities) {
-        try {
+        // 变更 section 清光投递与光屏障互斥（同 clearChunkLight；2026-08-14 NPE 同源）。
+        synchronized (ShadowLightCompute.LIGHT_ENGINE_MUTEX) {
+            try {
             LevelChunk chunk = injectedChunks.get(ChunkPos.asLong(pos.x, pos.z));
             if (chunk == null) {
                 LOGGER.debug("Hassium: Shadow applySectionDelta chunk not injected ({}, {})", pos.x, pos.z);
@@ -440,6 +455,7 @@ public class ShadowSeedServer extends MinecraftServer {
         } catch (Throwable t) {
             LOGGER.warn("Hassium: Shadow applySectionDelta failed for {}", pos, t);
             return false;
+        }
         }
     }
 
@@ -1112,6 +1128,81 @@ public class ShadowSeedServer extends MinecraftServer {
 
     long worldSeed() {
         return worldSeed;
+    }
+
+    /**
+     * 刷新本端全部 region 存储（chunk / poi / entities）：关闭已缓存的 RegionFile 并
+     * 清空缓存，下次访问重新打开（读到完整头部）。
+     * <p>
+     * 上次关停（R1 saveAll）落盘完成时由 saver 调用：本端（R2）可能在 R1 saveAll
+     * 期间已打开同一 .mca（构造时读到半写头 → 陈旧 usedSectors/offset 位图），若不
+     * 刷新，本端后续写入（T5c gate 放行后）会与 R1 数据扇区重叠——错位区块、垃圾
+     * 长度、外部流残留等持续损坏（2026-08-14 定位）。
+     * <p>
+     * 与 T5c 写 gate 组合：本方法执行时 previousShutdownComplete 仍为 false，本端写
+     * 路径（saveChunkToDisk/deleteChunk）保持拒绝，仅在途读会短暂失败（空区块重建
+     * → 数据重推，正确降级）。
+     */
+    public void refreshRegionFiles() {
+        try {
+            for (net.minecraft.server.level.ServerLevel level : getAllLevels()) {
+                net.minecraft.server.level.ServerChunkCache cache =
+                        (net.minecraft.server.level.ServerChunkCache) level.getChunkSource();
+                // chunk 存储：ChunkMap extends SimpleRegionStorage(≥1.21.2)/ChunkStorage(<1.21.2)
+                refreshRegionStorageFromHop((io.github.limuqy.mc.hassium.mixin.SimpleRegionStorageAccessor)
+                        (Object) cache.chunkMap);
+                // POI 存储：PoiManager extends SectionStorage
+                io.github.limuqy.mc.hassium.mixin.ChunkMapAccessor cm =
+                        (io.github.limuqy.mc.hassium.mixin.ChunkMapAccessor) (Object) cache.chunkMap;
+                refreshRegionStorageFromHop((io.github.limuqy.mc.hassium.mixin.SectionStorageAccessor)
+                        (Object) cm.hassium$getPoiManager());
+                // 实体存储：ServerLevel.entityManager（1.21.11 为字段）→ permanentStorage = EntityStorage
+                io.github.limuqy.mc.hassium.mixin.PersistentEntitySectionManagerAccessor em =
+                        (io.github.limuqy.mc.hassium.mixin.PersistentEntitySectionManagerAccessor)
+                                (Object) ((io.github.limuqy.mc.hassium.mixin.ServerLevelAccessor)
+                                        (Object) level).hassium$getEntityManager();
+                refreshRegionStorageFromHop((io.github.limuqy.mc.hassium.mixin.EntityStorageAccessor)
+                        (Object) em.hassium$getPermanentStorage());
+            }
+        } catch (Throwable t) {
+            LOGGER.warn("Hassium: Shadow region file refresh failed", t);
+        }
+    }
+
+    /** 经带 #if 的 accessor 取到下一跳存储对象（SimpleRegionStorage / IOWorker）后统一刷新。 */
+    private static void refreshRegionStorageFromHop(Object hop) {
+        if (hop instanceof io.github.limuqy.mc.hassium.mixin.SimpleRegionStorageAccessor acc) {
+            refreshRegionStorage((io.github.limuqy.mc.hassium.mixin.IOWorkerAccessor)
+                    (Object) acc.hassium$getWorker());
+        } else if (hop instanceof io.github.limuqy.mc.hassium.mixin.IOWorkerAccessor worker) {
+            refreshRegionStorage(worker);
+        }
+    }
+
+    private static void refreshRegionStorage(io.github.limuqy.mc.hassium.mixin.IOWorkerAccessor worker) {
+        Object storage = worker.hassium$getStorage();
+        try {
+            // RegionFileStorage 是 final 类：接口型 accessor 无法注入（"target type mismatch
+            // ... is not an interface"），类 mixin 又无法从外部 cast——此处反射读取私有
+            // regionCache（字段名 1.20.1~1.21.11 一致），关闭全部 RegionFile 并清空缓存，
+            // 下次访问（getRegionFile）重新打开读取完整头。
+            java.lang.reflect.Field cacheField = storage.getClass().getDeclaredField("regionCache");
+            cacheField.setAccessible(true);
+            it.unimi.dsi.fastutil.longs.Long2ObjectLinkedOpenHashMap<?> cache =
+                    (it.unimi.dsi.fastutil.longs.Long2ObjectLinkedOpenHashMap<?>) cacheField.get(storage);
+            for (Object file : cache.values()) {
+                if (file instanceof java.io.Closeable closeable) {
+                    try {
+                        closeable.close();
+                    } catch (java.io.IOException ignored) {
+                        // 关闭失败不影响：下次访问重新打开
+                    }
+                }
+            }
+            cache.clear();
+        } catch (Throwable t) {
+            LOGGER.warn("Hassium: Shadow region file refresh failed", t);
+        }
     }
 
     // ---- GameTestServer 镜像覆写（不跑 tick 循环，覆写仅满足 abstract 集与防御） ----

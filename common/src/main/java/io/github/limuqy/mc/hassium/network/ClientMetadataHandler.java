@@ -314,6 +314,7 @@ public class ClientMetadataHandler {
      * 区块数据到达后清除对应全量请求登记（handleCompressedChunk 解码后调用）。
      */
     public static void onChunkDataReceived(int chunkX, int chunkZ) {
+        io.github.limuqy.mc.hassium.utils.ChunkFlowTiming.recordReceive(chunkX, chunkZ); // T0b 诊断：端到端起点
         PENDING_FULL_REQUESTS.remove(ChunkPos.asLong(chunkX, chunkZ));
     }
 

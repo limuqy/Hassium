@@ -43,6 +43,16 @@ public abstract class MixinMinecraft implements MinecraftAccessor {
     @Inject(method = "setScreen(Lnet/minecraft/client/gui/screens/Screen;)V", at = @At("HEAD"), cancellable = true)
     private void hassium$onSetScreen(net.minecraft.client.gui.screens.Screen screen, CallbackInfo ci) {
         net.minecraft.client.gui.screens.Screen current = ((Minecraft) (Object) this).screen;
+        // T0b 诊断：加载屏消退时刻（ReceivingLevelScreen 被替换为非加载屏，含 setScreen(null)）
+#if MC_VER < MC_1_21_9
+        if (current instanceof net.minecraft.client.gui.screens.ReceivingLevelScreen
+                && !(screen instanceof net.minecraft.client.gui.screens.ReceivingLevelScreen)) {
+#else
+        if (current instanceof net.minecraft.client.gui.screens.LevelLoadingScreen
+                && !(screen instanceof net.minecraft.client.gui.screens.LevelLoadingScreen)) {
+#endif
+            io.github.limuqy.mc.hassium.utils.LoginTiming.onLoadingScreenDismissed();
+        }
         io.github.limuqy.mc.hassium.network.core.NetworkCore core =
                 io.github.limuqy.mc.hassium.network.core.NetworkCore.getInstance();
         if (screen instanceof net.minecraft.client.gui.screens.DisconnectedScreen) {

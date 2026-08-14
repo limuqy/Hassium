@@ -2,6 +2,7 @@ package io.github.limuqy.mc.hassium.network.seedgen;
 
 import com.mojang.serialization.Lifecycle;
 import io.github.limuqy.mc.hassium.Constants;
+import io.github.limuqy.mc.hassium.utils.DebugLogger;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -112,15 +113,18 @@ public final class SeedGenLevelCompat {
 
     /** 纯装配（专用线程内）：持久世界目录 + 存档 + 数据包 + 世界 stem + initServer。 */
     private static ShadowSeedServer assembleShadowServer(long seed) throws IOException {
+        long t0Ns = System.nanoTime(); // T0b 诊断：装配各阶段耗时
         // 影子端世界根 = 客户端缓存目录下原版存档结构（hassium_cache/<serverId>/world）。
         // 断连保存、重连复用，不删除（不再兼容旧 HBT1 客户端缓存格式，数据不迁移）。
         Path worldRoot = resolveShadowWorldRoot();
+        long tResolveNs = System.nanoTime();
         LevelStorageSource storage = LevelStorageSource.createDefault(worldRoot);
         LevelStorageSource.LevelStorageAccess access = null;
         PackRepository repo = null;
         WorldStem stem = null;
         try {
             access = storage.validateAndCreateAccess("world");
+            long tAccessNs = System.nanoTime();
 #if MC_VER < MC_1_20_2
             repo = new PackRepository(new ServerPacksSource());
 #else
@@ -128,6 +132,7 @@ public final class SeedGenLevelCompat {
                     new DirectoryValidator(ignored -> false)));
 #endif
             repo.reload();
+            long tRepoNs = System.nanoTime();
 
             List<String> packIds = new ArrayList<>(repo.getAvailableIds());
             WorldDataConfiguration dataConfig = new WorldDataConfiguration(
@@ -169,11 +174,21 @@ public final class SeedGenLevelCompat {
                                     executor)
                     )
                     .get(120, TimeUnit.SECONDS);
+        long tStemNs = System.nanoTime();
+        ShadowSeedServer server = ShadowSeedServer.create(
+                Thread.currentThread(), access, repo, stem, seed, worldRoot);
+        server.initServer();
+        DebugLogger.info(DebugLogger.LogType.ASYNC,
+                "[SHADOW-DIAG] assembleShadowServer: worldRoot={}ms storage+access={}ms packRepo={}ms worldStem={}ms initServer={}ms total={}ms (seed={})",
+                (tResolveNs - t0Ns) / 1_000_000L,
+                (tAccessNs - tResolveNs) / 1_000_000L,
+                (tRepoNs - tAccessNs) / 1_000_000L,
+                (tStemNs - tRepoNs) / 1_000_000L,
+                (System.nanoTime() - tStemNs) / 1_000_000L,
+                (System.nanoTime() - t0Ns) / 1_000_000L,
+                seed);
+        return server;
 
-            ShadowSeedServer server = ShadowSeedServer.create(
-                    Thread.currentThread(), access, repo, stem, seed, worldRoot);
-            server.initServer();
-            return server;
         } catch (Exception e) {
             // 装配失败：回收已创建的资源后重抛（持久目录保留，不删除）
             Constants.LOG.error("Hassium: Failed to create shadow seed server", e);
@@ -333,6 +348,11 @@ public final class SeedGenLevelCompat {
         if (server == null) {
             return;
         }
+        // 捕获当前影子端代际：关停期间若新会话的影子端已并发创建（initServer 置位
+        // true 并递增代际），末尾不得复位全局标志/清空桥表——否则误清新会话的存储
+        // 格式门控（原版 zlib 混入 126 文件）与 hash/热度内存态。
+        int shadowGeneration =
+                io.github.limuqy.mc.hassium.server.RuntimeServerContext.getShadowGeneration();
         // 本端进入关停保存：写 gate 对本端放行（上次关停已在 saver 前置等待完成，
         // 本端写盘与任何其他端无并发）。
         server.beginShutdownSave();
@@ -384,11 +404,17 @@ public final class SeedGenLevelCompat {
         WorldStem stem = server.stem();
         closeQuietly(stem, null);
         // 目录锁已在步骤 1 释放（幂等；此处不再重复 close）。
-        // 持久世界目录保留（重连复用）；复位影子上下文与 hash 桥。
-        io.github.limuqy.mc.hassium.server.RuntimeServerContext.setShadowServer(false);
-        io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.clear();
-        // 热度索引内存态清空（磁盘 heat.idx 已随 saveAll 落盘，重连装配时重新加载）
-        ShadowCacheEviction.reset();
+        // 持久世界目录保留（重连复用）；复位影子上下文与 hash 桥——仅当代际未变
+        // （关停期间无新影子端接管）时执行，防止异步关停清掉新会话的存储 gate /
+        // hash 表 / 热度索引（T5cShadowReady 并发创建设计下的数据损坏根因）。
+        if (io.github.limuqy.mc.hassium.server.RuntimeServerContext
+                .getShadowGeneration() == shadowGeneration) {
+            io.github.limuqy.mc.hassium.server.RuntimeServerContext
+                    .clearShadowServerIfCurrentGeneration(shadowGeneration);
+            io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.clear();
+            // 热度索引内存态清空（磁盘 heat.idx 已随 saveAll 落盘，重连装配时重新加载）
+            ShadowCacheEviction.reset();
+        }
     }
 
     private static void closeQuietly(WorldStem stem, LevelStorageSource.LevelStorageAccess access) {

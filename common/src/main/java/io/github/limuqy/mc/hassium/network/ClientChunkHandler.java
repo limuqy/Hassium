@@ -14,8 +14,14 @@ import io.github.limuqy.mc.hassium.utils.DebugLogger.LogType;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.world.level.ChunkPos;
+import net.minecraft.core.BlockPos;
+import net.minecraft.world.level.levelgen.Heightmap;
+import net.minecraft.world.level.LightLayer;
+
 
 import java.util.List;
+
+
 
 /**
  * 客户端区块处理器门面（Phase 0 隔离重构后）。
@@ -320,6 +326,9 @@ public class ClientChunkHandler {
                 // OVD 包（影子端官方算光带光）；仅登记 renderOnly 落地
                 ViewDistanceExtensionService.getInstance().onRenderOnlyApplied(pos);
             }
+            // 诊断探针（debug.chunkApplyLogging 开启时输出）：apply#/光照/方块采样
+            probeChunkState(pos, level, renderOnly ? "ovd" : "apply");
+
             return true;
 
         } catch (ChunkOutOfViewException e) {
@@ -344,6 +353,42 @@ public class ClientChunkHandler {
      * 光照缓存等价值字节估算（与 {@code ClientMetadataHandler.ESTIMATED_CHUNK_BYTES} 同口径，16KB/chunk）。
      * 见 {@link NetworkStats#ESTIMATED_LIGHT_BYTES} 注释。
      */
+    /** 探针：per-pos 客户端 apply 计数（重复 apply 检测；仅诊断用）。 */
+    private static final java.util.Map<Long, Integer> APPLY_COUNT =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+    /**
+     * 客户端区块应用探针（debug.chunkApplyLogging 开启时输出；关闭时零开销短路）：
+     * per-pos apply 计数 + 区块光照采样（地表 sky / 高空 sky / 地下 block）+
+     * 地表方块采样。同 pos 多次 apply（apply# > 1）或 skyTop=0 即「突变 / 黑块」嫌疑，
+     * 用于诊断区块错位、已加载区块突然变、黑块问题。诊断专用，不参与任何逻辑。
+     */
+    public static void probeChunkState(ChunkPos pos, ClientLevel level, String source) {
+        if (!DebugLogger.isEnabled(LogType.CHUNK_APPLY)) {
+            return;
+        }
+        if (level == null || pos == null) {
+            return;
+        }
+        int count = APPLY_COUNT.merge(pos.toLong(), 1, Integer::sum);
+        int bx = (pos.x << 4) + 8;
+        int bz = (pos.z << 4) + 8;
+        int minY = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMinBlockY(level);
+        int maxY = minY + level.getHeight();
+        int topY = level.getHeight(Heightmap.Types.WORLD_SURFACE, bx, bz);
+        int sampleY = Math.max(topY, minY);
+        int skyTop = level.getBrightness(LightLayer.SKY,
+                new BlockPos(bx, Math.max(topY + 1, minY), bz));
+        int skyAir = level.getBrightness(LightLayer.SKY,
+                new BlockPos(bx, maxY - 2, bz));
+        int blockLow = level.getBrightness(LightLayer.BLOCK,
+                new BlockPos(bx, minY + 1, bz));
+        String topBlock = level.getBlockState(new BlockPos(bx, sampleY, bz))
+                .getBlock().getDescriptionId();
+        DebugLogger.info(LogType.CHUNK_APPLY,
+                "[CHUNK_PROBE] source={} pos=({},{}) apply#={} skyTop={} skyAir={} blockLow={} topBlock={}",
+                source, pos.x, pos.z, count, skyTop, skyAir, blockLow, topBlock);
+    }
     private static long getLightBytesPerChunk(ClientLevel level) {
         // level 参数保留以便未来按 sectionsCount 动态估算；当前与区块口径一致用常量
         return NetworkStats.ESTIMATED_LIGHT_BYTES;

@@ -121,6 +121,11 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
     /** A-M2: 最近一次 connect 的握手 deadline（event loop 定时任务到期自检；0=未握手期）。 */
     private volatile long handshakeDeadlineMs;
 
+    /** T0b 诊断：握手各阶段耗时——各状态进入时刻（wall ms；0=本会话未进入）。 */
+    private volatile long connectingAtMs;
+    private volatile long handshakingAtMs;
+    private volatile long stateEnteredAtMs;
+
     private NetworkCore() {
         // T5：S2C 注入器（handler 层直调路由）随单例就位；outbound payload 缝在 attach 时接线
         registerS2CInjector(GatewayS2CRouter.INSTANCE);
@@ -591,6 +596,12 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
         } else {
             LOGGER.info("Hassium: NetworkCore -> ACTIVE (epoch={})",
                     response.udpTail() != null ? response.udpTail().connectionEpoch() : -1L);
+            // T0b 诊断：握手各阶段耗时（wall ms；初始连接路径）
+            long now = System.currentTimeMillis();
+            if (connectingAtMs > 0L && handshakingAtMs > 0L) {
+                LOGGER.info("[HANDSHAKE-DIAG] CONNECTING->HANDSHAKING={}ms HANDSHAKING->ACTIVE={}ms total={}ms",
+                        handshakingAtMs - connectingAtMs, now - handshakingAtMs, now - connectingAtMs);
+            }
         }
         // N1：续流就绪（resumeAccepted）→ 位置回退到断线时上报快照（服务端续流物化权威位置）
         if (resumeAccepted) {
@@ -1515,10 +1526,15 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
         return state.get();
     }
 
-    /** CAS 转移；成功返回 true 并日志。 */
+    /** CAS 转移；成功返回 true 并日志（含距上次转移的耗时 delta，T0b 诊断）。 */
     public boolean transition(NetworkCoreState from, NetworkCoreState to) {
         if (state.compareAndSet(from, to)) {
-            LOGGER.info("Hassium: NetworkCore state {} -> {}", from, to);
+            long now = System.currentTimeMillis();
+            long deltaMs = stateEnteredAtMs > 0 ? now - stateEnteredAtMs : -1L;
+            stateEnteredAtMs = now;
+            recordStageEnter(to, now);
+            LOGGER.info("Hassium: NetworkCore state {} -> {}{}", from, to,
+                    deltaMs >= 0 ? " (+" + deltaMs + "ms)" : "");
             return true;
         }
         return false;
@@ -1527,7 +1543,21 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
     private void transitionTo(NetworkCoreState to) {
         NetworkCoreState prev = state.getAndSet(to);
         if (prev != to) {
-            LOGGER.info("Hassium: NetworkCore state {} -> {}", prev, to);
+            long now = System.currentTimeMillis();
+            long deltaMs = stateEnteredAtMs > 0 ? now - stateEnteredAtMs : -1L;
+            stateEnteredAtMs = now;
+            recordStageEnter(to, now);
+            LOGGER.info("Hassium: NetworkCore state {} -> {}{}", prev, to,
+                    deltaMs >= 0 ? " (+" + deltaMs + "ms)" : "");
+        }
+    }
+
+    /** T0b 诊断：记录握手各阶段进入时刻（仅 CONNECTING/HANDSHAKING；ACTIVE 累计在 onHandshakeAccepted）。 */
+    private void recordStageEnter(NetworkCoreState to, long now) {
+        if (to == NetworkCoreState.CONNECTING) {
+            connectingAtMs = now;
+        } else if (to == NetworkCoreState.HANDSHAKING) {
+            handshakingAtMs = now;
         }
     }
 
