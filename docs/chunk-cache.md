@@ -289,11 +289,11 @@ RD > 32（需手改 `options.txt`）时雾距会跟随 `getEffectiveRenderDistan
 **光照数据存储**：当 `is_light_on=1` 时，每个 section 的 NBT 可能包含 `sky_light` 和 `block_light`（各 2048 bytes）。
 
 **光照缓存流水线**（Hassium 引擎统一算光，客户端本地无光照计算）：
-1. 首次加载（剥光协商生效，服务端 lightStrip=true 且客户端声明 `lightComputeSupported`）：空光包到达 → 投递影子端（`ShadowLightCompute`）→ 影子端算光后打包收敛光回传，断连 `saveAll` 落盘收敛光
-2. 缓存命中（含超视 renderOnly）：影子端存档 `loadFromDisk` 直接回传（存档即收敛光；光脏标记拦截欠光块 → 走重算链）
-3. 方块变更：`LightDeltaS2CPacket` → 影子端重算 → 标脏 → 落盘写收敛光；SectionDelta 变更 section 清光重算（`applySectionDelta`）
+1. 首次加载（剥光协商生效，服务端 lightStrip=true 且客户端声明 `lightComputeSupported`）：空光包 → `GatewayS2CRouter` 先投影子端而不直接 apply → `ShadowLightCompute` 注入清光 → 屏障前 sky 预播种（`ensureChunkLightLayers`：Threaded 引擎任务逐列把「源及其上方」queued 成 15，恒先于 initializeLight 执行）→ per-chunk 两阶段屏障（`initializeLight` → `lightChunk`）→ `isChunkLightComplete` 通过后才打包收敛光回传，断连 `saveAll` 落盘收敛光
+2. 缓存命中（含超视 renderOnly）：影子端存档 `loadFromDisk` 同样走预播种 + 两阶段光屏障后回传（存档即收敛光；光脏标记拦截欠光块 → 走重算链）
+3. 方块变更：`LightDeltaS2CPacket`（含 empty 掩码）→ `ShadowLightCompute.submitLightDelta` → `invalidateLightSections` 清对应 section → 重算收敛 → 光包回传且掩码仅含服务端声明的变更 section（未变化 section 客户端保留旧光，不回传区块数据）；SectionDelta 变更 section 清光重算（`applySectionDelta`，heightmap 覆盖后重算 sky 光源表）
 4. 区块卸载 / 断连 dump：`saveAll` 全量重写（含收敛光）；欠光块 `markLightDirty`（R2 命中判定拦截）
-5. 收敛超时：欠光打包 + 标脏 + 后台补发（引擎传播完成后重新回传覆盖，黑块不残留）
+5. 屏障完成但光层不全自动重试（≤6 轮），5s 超时后短暂续投（≤2 轮），仍不全：欠光打包 + 标脏 + 后台补发（引擎传播完成后重新回传覆盖，黑块不残留）；屏障完成瞬间丢弃该柱未消费的光桥掩码（杜绝「移除在途→最终光 offer 前」的中间态光包）；「邻柱补光」已移除（2026-08-15：光包风暴放大器，边界补光由跨柱传播 + collectLightUpdate → drainLightMasks 桥梁事件驱动覆盖，光桥只对影子区块包已落地且客户端未卸载的柱发送）；<b>打包瞬间严禁直写 raw skyEngine.queuedSections</b>（2026-08-16：与 `markNewInconsistencies` 的 fastutil 迭代器并发 → `LongArrayList.wrapped is null` NPE → runLightUpdates 中断 → POST 永不执行 → 批量超时/空层，改由 Threaded 引擎任务预播种 + 只读核验）
 
 **引擎失败降级**：影子端启动失败 / 未握手种子 → `ShadowLightCompute` 引擎关闭，但服务端剥光同样经握手 gate 关闭（无 `lightComputeSupported` 声明 → 光随包自带），客户端无黑块。
 
@@ -327,7 +327,7 @@ RD > 32（需手改 `options.txt`）时雾距会跟随 `getEffectiveRenderDistan
 影子端 hash 比对 MISMATCH（内存/磁盘有旧数据且光干净）→ `requestSectionDeltas` 上报本地 section hashes → `ServerChunkPushManager.handleSectionHashRequest`（按索引完整比对；视距+1 余量）→ **始终**回 `SectionDeltaS2CPacket`（`entries` + `skipped`）：
 1. `entries`：`LevelChunkSection.read(buf)` 就地覆盖变更 section（官方格式，跨版本稳定）；`heightmaps` 直写（服务端 `chunk.getHeightmaps()` rawData 直发，客户端 `setHeightmap`）
 2. BE 全量快照（服务端发整 chunk BE；客户端 `getBlockEntity(pos, IMMEDIATE)` + `loadFromTag` 镜像官方 `replaceWithPacketData` consumer）
-3. 变更 section 清光（`queueSectionData(null)` + `updateSectionStatus(false)`）+ `propagateLightSources` → 引擎重算传播 → consumeLoop 等全局收敛 → 收敛光打包回传；**收敛超时 → 欠光打包 + 标脏 + 后台补发**（引擎传播完成后重新回传覆盖，黑块窗口 = 剩余传播时间）
+3. 变更 section 清光（强制覆盖共享空光层 `queueSectionData(EMPTY)`；原版 notReady 移除对带邻域 section 永不生效，且重建 `new DataLayer(15)` 会毁掉水面梯度）+ `propagateLightSources` → 引擎重算传播 → per-chunk `lightChunk` 屏障 + `isChunkLightComplete`（lightCorrect + 两光层齐全 + 源上方 sky 层非全空）校验通过后收敛光打包回传；**光层不全自动重试（≤6 轮），超限 → 欠光打包 + 标脏 + 后台补发**（引擎传播完成后重新回传覆盖，黑块窗口 = 剩余传播时间）
 4. 重算 contentHash 写 `ShadowStorageHashes`（R2 比对 / 断连落盘复用）
 5. `skipped` / apply 失败 / 8s 请求超时 / 发送失败 → `requestFullChunksPublic`（保底）
 

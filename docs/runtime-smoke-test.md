@@ -130,20 +130,22 @@ Hassium 跨版本（1.20.1–1.21.11）× 多加载器（fabric / neoforge）的
 
 | 字段 | 含义 |
 |------|------|
-| **带宽压缩(Zlib→ZSTD)** | 百分比 = 当前/原版Zlib × 100%（越小越省）；括号内为 Hassium ZSTD 线缆实测字节与原版 Zlib 管线估算字节 |
+| **带宽压缩(Zlib→ZSTD)** | 压缩节省百分比 = (原版Zlib - Hassium 实际) / 原版Zlib × 100%；括号内为 Hassium ZSTD 线缆实测字节与原版 Zlib 管线估算字节 |
 | **压缩比** | Zlib 估算 ÷ ZSTD 实测，如 `1.76:1` 表示 ZSTD 比 Zlib 少 43% |
-| **区块缓存** | 命中率 + 命中字节（从本地缓存加载）+ 增量字节（section-delta 避免的完整加载） |
-| **区块加载** | 总数（新增数/新增字节 + 过期数/过期字节） |
-| **超视渲染（OVD）** | `已加载 / 缺失`；ROUND2 应非 0 |
-| **光照缓存** | 命中率 + 命中数 + 重算数 |
+| **区块缓存** | `缓存命中 = (客户端缓存 + 本地重算 - 分片) / 客户端应用区块`。客户端缓存 = 影子端全命中；本地重算 = SeedGen 本地生成；分片 = section-delta（计入应用区块，并从命中分子中扣除）；应用区块 = 全量请求 + 客户端缓存 + 本地重算 + 分片 的来源汇总（OVD 不计入） |
+| **区块加载** | 总数（新增数/新增字节 + 过期数/过期字节 + 本地生成数/字节） |
+| **超视渲染（OVD）** | `已加载 / 缺失 / 影子复用 / 环带服务`；ROUND2 应非 0。OVD 环带不参与缓存命中率评估 |
+| **光照缓存** | 命中率 = (直连命中 + 影子复用) / (命中 + 本地重算)。影子端本会话重算光（远程全量注入 / 分片增量 / LightDelta / SeedGen 本地生成 / 光脏缓存命中）都计为本地重算；ROUND1 重算为主（命中 0% 正常），ROUND2 有缓存复用且存在分片增量/全量请求时会低于 100% |
+| **流量节省** | `服务端实际推送 / 无MOD应收 × 100%`（越小越省；已节省 = 100% − 该值）。无MOD应收 = 数据包（含分片全量等价）+ 本地重算 + 客户端缓存 + 光照；**不含 OVD**（无 MOD 时服务端本来也不推 serverVD 之外区块） |
 
 > **注意：**"原版Zlib" 是 `VanillaZlibEstimator.estimate()` 对同负载模拟 `Deflater(level=6)` + 阈值 256 帧格式的输出估算值，并非真实原版管线实测。`estimate(int)`（无实际字节时使用）基于 MC 区块 NBT 典型压缩率 25–35% 校准。详见 `VanillaZlibEstimator` 和 `VanillaZlibVsZstdBenchmarkTest`。
 
 **典型健康指标**（1.20.1 fabric ROUND1 VD=20 参考）：
 
-- 带宽压缩(Zlib→ZSTD)：56.9%（当前 7.0 MB，原版Zlib 12.3 MB），压缩比 1.76:1
-- 区块加载：~1600 新增 / ~25 MB
-- ROUND2（VD=10，已有缓存）：缓存命中率 >99%，OVD loaded >1100，光照缓存命中率 >95%
+- 带宽压缩(Zlib→ZSTD)：~16%（当前 7.9 MB，原版Zlib 9.5 MB），压缩比 1.19:1
+- 区块加载：~1570 新增 / ~25 MB，缓存命中 0%（首次连服无缓存，预期）
+- ROUND1：光照缓存命中率 0%（影子端全量重算，`重算` 计数应接近已提交的注入区块数，正常）
+- ROUND2（VD=10，已有缓存）：区块缓存应按新口径明显命中（应用区块 = 全命中 + 全量请求 + 分片 + 本地重算）；光照缓存命中率通常 70–95%（影子复用为主 + 分片增量/全量请求带来重算）；流量节省 = 实际/无MOD 通常在 15–30%（即已节省 70–85%）
 
 ## 日志位置
 
@@ -295,7 +297,7 @@ build/smoke-test/
 | 能力 | 冒烟载体 | 出处 |
 |------|----------|------|
 | 握手冒烟 | `GatewaySmokeTest` 双用例（标准握手 accepted + 续流票据握手） | GatewaySmokeTest.java |
-| 缓存冒烟 | classic 两轮：ROUND2 区块核心缓存命中（参考 >99%）、OVD、光照缓存 | `ClientSmokeTest` 状态机 / `/hassiumc stats` |
+| 缓存冒烟 | classic 两轮：ROUND2 区块核心缓存按新口径命中（应用区块 = 全命中+分片+全量请求+本地重算）、OVD、光照缓存；`validateStats` 逐项核公式 | `ClientSmokeTest` 状态机 / `/hassiumc stats` |
 | export 冒烟 | `/hassiumc export` 存续（影子端世界目录拷贝 → `hassium_exports/<cacheId>`，保留 type 126 + chunkHash）；当前 smoke 脚本未驱动 export，作为网关冒烟的手动/扩展项 | `HassiumCommandHandler.startCacheExport:255` |
 
 ### E1/E2 呼应（`docs/network-core-followups.md`）

@@ -78,6 +78,15 @@ public final class GatewayS2CRouter implements Consumer<Packet<?>> {
 
     private void routeChunk(ClientboundLevelChunkWithLightPacket packet) {
         ChunkPos pos = new ChunkPos(packet.getX(), packet.getZ());
+        // 剥光包（四个掩码全空）先交给影子端重算：直接官方 apply 会让客户端在
+        // 影子光回传前渲染无光区块（纯黑），随后光包到达再跳亮——水面/水底
+        // 「先亮后黑再亮」跳变源之一。影子端收敛后会以带光区块包回传，等价官方
+        // 时序（先有权威光再落地），原版「未收敛不发黑块」语义。
+        if (isLightStripped(packet)
+                && io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.isEnabled()) {
+            io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.submit(pos, packet);
+            return;
+        }
         Minecraft mc = Minecraft.getInstance();
         if (mc == null || mc.isSameThread()) {
             // 无客户端（单测）/ 主线程：直调（预算/重入由现有 mixin 机制处理）
@@ -86,6 +95,19 @@ public final class GatewayS2CRouter implements Consumer<Packet<?>> {
         }
         // 非主线程（outbound event loop）：距离优先级预算队列，同位置 REPLACE
         MainThreadDispatcher.execute(() -> invokeChunkHandler(packet), pos);
+    }
+
+    /** 服务端剥光包 = sky/block/empty 四掩码全空（服务端只保留了方块数据）。 */
+    private boolean isLightStripped(ClientboundLevelChunkWithLightPacket packet) {
+        try {
+            var light = packet.getLightData();
+            return light.getSkyYMask().isEmpty()
+                    && light.getBlockYMask().isEmpty()
+                    && light.getEmptySkyYMask().isEmpty()
+                    && light.getEmptyBlockYMask().isEmpty();
+        } catch (Throwable t) {
+            return false; // 反射/版本异常：走官方路径，不阻断区块
+        }
     }
 
     private void invokeChunkHandler(ClientboundLevelChunkWithLightPacket packet) {

@@ -173,6 +173,15 @@ public class NetworkStats {
     }
 
     /**
+     * 记录一个权威区块已成功应用到客户端世界（按区块坐标去重；renderOnly 不计入）。
+     * 供缓存命中率分母「客户端应用区块」使用。
+     */
+    public static void recordChunkApplied(int chunkX, int chunkZ) {
+        if (!enabled) return;
+        metrics.recordClientChunkApplied(net.minecraft.world.level.ChunkPos.asLong(chunkX, chunkZ));
+    }
+
+    /**
      * 线缆出站帧字节（管线 encode 后 out 增量）。
      * 仅应被 {@code ZstdContextEncoder} / {@code SkipAwareZstdEncoder} 调用。
      */
@@ -292,6 +301,16 @@ public class NetworkStats {
     }
 
     /**
+     * 记录「网络已推送完整区块，客户端仍改用本地缓存」的命中（与
+     * {@link #recordCacheFullHit(long)} 同触发点补充记账）。流量节省计算时扣除，
+     * 防止与已计入 {@code vanillaBytesReceived} 的完整区块 wire 双重计数。
+     */
+    public static void recordCacheFullHitNetworkReplaced(long bytes) {
+        if (!enabled) return;
+        metrics.recordCacheFullHitNetworkReplaced(bytes);
+    }
+
+    /**
      * 记录成功应用分段增量后避免加载完整区块的字节数。
      */
     public static void recordCacheDeltaSaved(long bytes) {
@@ -336,9 +355,10 @@ public class NetworkStats {
     }
 
     /**
-     * 记录收到的分段增量（仅记 vanilla 等价 + 计数；actual 由管线层 recordWireBytesReceived 统一记）。
+     * 记录成功应用的分段增量（仅记 vanilla 等价 + 计数；actual 由管线层 recordWireBytesReceived 统一记）。
+     * 收到即记会在「apply 失败 → 回退全量」场景重复计入同一区块，因此调用点 = 成功应用后。
      *
-     * @param chunks       区块数
+     * @param chunks       成功应用的区块数
      * @param vanillaBytes 若走全量时的原版等价字节（估算 = vanilla Zlib 全量推等价 wire）
      */
     public static void recordSectionDeltaReceived(int chunks, long vanillaBytes) {

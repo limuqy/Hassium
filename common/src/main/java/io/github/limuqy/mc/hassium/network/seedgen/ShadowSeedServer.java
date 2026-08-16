@@ -126,6 +126,15 @@ public class ShadowSeedServer extends MinecraftServer {
     /** Services 最小化（1.20.1 四参 / 1.21.11 五参，后者补 mock resolver 防 NPE） */
     private static final Services NO_SERVICES = buildNoServices();
 
+    /**
+     * 共享只读空光层（全 0）：清光路径 {@code queueSectionData(layer, sp, EMPTY)} 用——
+     * 由引擎在 markNewInconsistencies 时安装为 section 的 updating 层，之后的写入都走
+     * copy-on-write（changedSections 副本），本实例绝不被就地修改（同
+     * MixinLayerLightSectionStorage.hassium$EMPTY_DATA_LAYER 的只读约定）。
+     */
+    private static final net.minecraft.world.level.chunk.DataLayer EMPTY_LIGHT_LAYER =
+            new net.minecraft.world.level.chunk.DataLayer(2048);
+
     private final WorldStem stem;
     private final long worldSeed;
     /** 持久世界根（客户端缓存目录下原版存档结构；断连保存、重连复用，不删除）。 */
@@ -289,6 +298,23 @@ public class ShadowSeedServer extends MinecraftServer {
 #endif
     }
 
+    /**
+     * 大批量光任务投递后的引擎任务水位排水（委托
+     * {@link ShadowLightCompute#awaitEngineTaskDrain}）：仅 injectChunk（重注入清光）与
+     * relightChunk 使用——两柱清光单柱可投 48+ 个 PRE 任务，连续多柱叠加会越过
+     * vanilla sorter 并发 runUpdate 阈值（1000）→ 任务错序 → 空光层打包黑块。
+     * 每柱末尾调用：水位已达标时零开销（一次 size 读），积压时忙等 mailbox 消化。
+     */
+    private void awaitLightTaskDrain() {
+        try {
+            ThreadedLevelLightEngine lightEngine =
+                    (ThreadedLevelLightEngine) this.overworld().getChunkSource().getLightEngine();
+            ShadowLightCompute.awaitEngineTaskDrain(lightEngine);
+        } catch (Throwable ignored) {
+            // 引擎不可用：排水跳过（不阻塞注入链）
+        }
+    }
+
     /** shutdown 用：资源引用 */
     WorldStem stem() {
         return stem;
@@ -296,14 +322,16 @@ public class ShadowSeedServer extends MinecraftServer {
 
     /**
      * 注入一个服务端区块包（任意线程可调）：空壳 LevelChunk（不 worldgen）+
-     * packet 数据填充 + 清光触发引擎传播重算。
+     * packet 数据填充（含 {@code initializeLightSources} 重填 sky 光源表）+ 清光触发引擎
+     * 传播重算。
      * <p>
      * 影子端是冻结后端：区块数据只来源于服务端 packet（{@code replaceWithPacketData}
      * 整柱替换），本 server 不生成世界。种子仅用于 ServerLevel 装配，不影响注入数据。
      * <p>
-     * 清光 = 原版剥光同款机制：queueSectionData(null) 清数据层 → 引擎传播重算 →
-     * propagateLightSources 推发光源。全部经 ThreadedLevelLightEngine 异步任务
-     * （runMainLoop 已驱动 tryScheduleUpdate）。注入失败返回 false（调用方走单柱兜底）。
+     * 清光只在重注入（REPLACE 覆盖）时执行（强制覆盖共享空光层，见
+     * {@link #clearChunkLight}）；全新柱无引擎状态直接跳过。全部经
+     * ThreadedLevelLightEngine 异步任务（runMainLoop 已驱动 tryScheduleUpdate）。
+     * 注入失败返回 false（调用方走单柱兜底）。
      */
     public boolean injectChunk(ChunkPos pos, ClientboundLevelChunkWithLightPacket packet) {
         try {
@@ -312,7 +340,17 @@ public class ShadowSeedServer extends MinecraftServer {
             ClientboundLevelChunkPacketData data = packet.getChunkData();
             chunk.replaceWithPacketData(data.getReadBuffer(), data.getHeightmaps(),
                     data.getBlockEntitiesTagsConsumer(pos.x, pos.z));
-            clearChunkLight(pos, chunk);
+            long key = ChunkPos.asLong(pos.x, pos.z);
+            boolean fresh = !this.injectedChunks.containsKey(key);
+            if (!fresh) {
+                // 重注入（REPLACE 覆盖）：旧光必须物理清除再重算。全新柱无任何引擎状态
+                // （section 状态 0、无数据层），跳过清光——省 2×~30 个引擎任务，避免首波
+                // 并发任务量越过 ThreadedLevelLightEngine 1000 阈值触发 sorter 线程并发
+                // runUpdate → 任务错序（propagateLightSources 先于 updateSectionStatus）→
+                // 空光层被打包推送（客户端黑面/黑块）。全新柱由 ensureChunkLightLayers +
+                // lightChunk 直接初始化。
+                clearChunkLight(pos, chunk);
+            }
             // 计算 contentHash（section hash combine，与网络 chunkHash 同算法）写入存储桥，
             // 保存（type 126 payload 带 hash）与 R2 比对（远程权威 hash vs 本地存储 hash）共用。
             try {
@@ -323,8 +361,13 @@ public class ShadowSeedServer extends MinecraftServer {
             } catch (Throwable hashError) {
                 LOGGER.debug("Hassium: Shadow contentHash compute failed for {}, skip hash write", pos);
             }
-            injectedChunks.put(ChunkPos.asLong(pos.x, pos.z), chunk);
+            injectedChunks.put(key, chunk);
             ShadowCacheEviction.recordAccess(pos);
+            if (!fresh) {
+                // 重注入清光投递 48+ 个 PRE 任务：按柱排水，防连续重注入叠加越 1000 阈值
+                // （fresh 柱零投递，size 检查立即通过零开销）。
+                awaitLightTaskDrain();
+            }
             return true;
         } catch (Throwable t) {
             LOGGER.warn("Hassium: Shadow light inject failed for {}", pos, t);
@@ -333,29 +376,309 @@ public class ShadowSeedServer extends MinecraftServer {
     }
 
     /**
-     * 清光公共方法（injectChunk / relightChunk 共用）：清空整柱全部 section 光数据层 →
-     * 引擎传播重算 → 推发光源。原版剥光同款机制（{@code queueSectionData(null)} 清数据层），
-     * 全部经 ThreadedLevelLightEngine 异步任务（runMainLoop 已驱动 tryScheduleUpdate）。
+     * 清光公共方法（重注入 / relightChunk 共用）：把整柱全部 section 光数据层强制覆盖为
+     * 共享空层（{@code queueSectionData(layer, sp, EMPTY)}，markNewInconsistencies 时安装），
+     * 并撤销 sky 光源注册——随后由 {@link #ensureChunkLightLayers}（setLightEnabled(true)）
+     * + {@code lightChunk}（propagateLightSources 播种 fill + 向下衰减传播）重建。
+     * 全新柱勿调（无引擎状态，见 injectChunk）。
      * <p>
-     * 全程持有 {@link ShadowLightCompute#LIGHT_ENGINE_MUTEX}：清光投递（removeSection
-     * 延迟删除）与光屏障（{@code ShadowLightCompute.awaitBatchLight} 的 lightChunk）互斥，
-     * 否则相邻柱的传播与清光在引擎 Worker 线程交错 → getStoredLevel 读 null DataLayer
-     * NPE（2026-08-14 1.20.1 定位，见锁 javadoc）。锁内仅投递任务（addTask，微秒级）。
+     * 为什么不用 {@code queueSectionData(null)} + {@code updateSectionStatus(notReady=true)}：
+     * 原版 removeSection 只在 section 邻域计数归零时物理删层（边缘 section 的 26 邻域含
+     * 相邻柱 → 永不归零 → 旧层残留 = 清光形同虚设，旧光/变黑场景不收敛）；且重建时
+     * lightOnInSection=true 会走 {@code new DataLayer(15)} 初始化——位于天空源以下的
+     * section 被 15 填满后 propagation 只增不减（`$$10 > $$7` 严格大于），水面垂直梯度
+     * 永久丢失。强制覆盖空层则无状态机依赖：空层由播种 fill + 传播按块重新写入。
+     * <p>
+     * 全程持有 {@link ShadowLightCompute#LIGHT_ENGINE_MUTEX}：清光投递与光屏障
+     * （{@code ShadowLightCompute.submitLightBatch} 的 lightChunk）互斥，否则相邻柱的
+     * 传播与清光在引擎 Worker 线程交错（2026-08-14 1.20.1 定位，见锁 javadoc）。
+     * 锁内仅投递任务（addTask，微秒级）。
      */
     private void clearChunkLight(ChunkPos pos, LevelChunk chunk) {
         synchronized (ShadowLightCompute.LIGHT_ENGINE_MUTEX) {
             ThreadedLevelLightEngine lightEngine =
                     (ThreadedLevelLightEngine) this.overworld().getChunkSource().getLightEngine();
+            lightEngine.setLightEnabled(pos, false);
+            // 与 vanilla ThreadedLevelLightEngine.updateChunkStatus 同范围（minLight..maxLight）：
+            // 含上下各一层 padding。只清 chunk 实际 section 会残留 padding 光，边界传播时
+            // 读到陈旧数据（视距边缘/水面上下边缘黑块来源之一）。
+            for (int y = lightEngine.getMinLightSection(); y < lightEngine.getMaxLightSection(); y++) {
+                SectionPos sp = SectionPos.of(pos, y);
+                lightEngine.queueSectionData(LightLayer.SKY, sp, EMPTY_LIGHT_LAYER);
+                lightEngine.queueSectionData(LightLayer.BLOCK, sp, EMPTY_LIGHT_LAYER);
+            }
+        }
+    }
+
+    /**
+     * 光屏障前置准备：刷新 sky 光源表，并把「源及其上方」列的天空光预播种成 15。
+     * <p>
+     * <b>预播种经 {@code ThreadedLevelLightEngine.queueSectionData} 投递</b>（PRE 任务、
+     * priority 0，恒先于同柱 initializeLight 任务执行），绝不直接调 raw SkyLightEngine：
+     * raw {@code queueSectionData} 会并发写 queuedSections 的 fastutil 迭代器，实测在
+     * {@code markNewInconsistencies} 抛 {@code LongArrayList.wrapped is null} NPE，
+     * 直接打断 runLightUpdates → POST 永不执行 → 批量 5s 超时 + 光层空转。
+     * <p>
+     * 预播种层 = 现有层 copy（有则保留源之下已算好的垂直梯度）+ 逐列把源以上写 15。
+     * 纯空气 section 无 section 状态时 queued 层不会立刻安装，但对
+     * {@code getDataLayerData} 立即可见 → 打包直接读到；之后邻域状态到位时被消费安装。
+     * 只投递需要改动的 section（磁盘命中收敛光跳过 = 零任务）。
+     * <p>
+     * 必须在 {@link ShadowLightCompute#LIGHT_ENGINE_MUTEX} 锁内调用（调用方
+     * {@code submitLightBatch} 已持有）；本方法只投递任务，不直接写光照存储。
+     */
+    public void ensureChunkLightLayers(ChunkPos pos, LevelChunk chunk) {
+        if (chunk == null) {
+            return;
+        }
+        chunk.initializeLightSources(); // sky 光源表随 heightmaps/方块数据刷新
+        if (!this.overworld().dimensionType().hasSkyLight()) {
+            return;
+        }
+        ThreadedLevelLightEngine lightEngine =
+                (ThreadedLevelLightEngine) this.overworld().getChunkSource().getLightEngine();
+        net.minecraft.world.level.lighting.ChunkSkyLightSources sources = chunk.getSkyLightSources();
+        int minBlockY = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMinBlockY(this.overworld());
+        int minSection = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMinSection(chunk);
+        int maxSection = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMaxSectionExclusive(chunk);
+        for (int y = minSection; y < maxSection; y++) {
+            if (!sectionAtOrAboveAnySkySource(sources, y, minBlockY)) {
+                continue; // 源之下：保持现有/空层（官方包省略 → 客户端置 0，语义正确）
+            }
+            SectionPos sp = SectionPos.of(pos, y);
+            DataLayer current =
+                    lightEngine.getLayerListener(LightLayer.SKY).getDataLayerData(sp);
+            DataLayer seeded = seedSkyAboveSources(sources, current, y, minBlockY);
+            if (seeded == null) {
+                continue; // 已全 15：零任务（磁盘命中/重试路径大部分 section 跳过）
+            }
+            lightEngine.queueSectionData(LightLayer.SKY, sp, seeded);
+        }
+    }
+
+    /**
+     * 逐列重放官方播种语义：只把「源及其上方」写成 15，源以下保留 current 现有值
+     * （整层填 15 会毁掉水面/山坡的垂直梯度）。current 为 null 时新建零层再填。
+     * 已全部满足时返回 null（调用方跳过投递）。
+     */
+    private static DataLayer seedSkyAboveSources(
+            net.minecraft.world.level.lighting.ChunkSkyLightSources sources,
+            DataLayer current, int sectionY, int minBlockY) {
+        int sectionBottom = SectionPos.sectionToBlockCoord(sectionY);
+        int sectionTop = sectionBottom + 15;
+        boolean needsSeed = false;
+        for (int x = 0; x < 16 && !needsSeed; x++) {
+            for (int z = 0; z < 16 && !needsSeed; z++) {
+                int src = sources.getLowestSourceY(x, z);
+                if (src < minBlockY || src > sectionTop) {
+                    continue;
+                }
+                int fromY = Math.max(src, sectionBottom);
+                for (int by = fromY; by <= sectionTop; by++) {
+                    if (current == null || current.get(x, SectionPos.sectionRelative(by), z) != 15) {
+                        needsSeed = true;
+                        break;
+                    }
+                }
+            }
+        }
+        if (!needsSeed) {
+            return null;
+        }
+        DataLayer seeded = current != null ? current.copy() : new DataLayer(2048);
+        for (int x = 0; x < 16; x++) {
+            for (int z = 0; z < 16; z++) {
+                int src = sources.getLowestSourceY(x, z);
+                if (src < minBlockY || src > sectionTop) {
+                    continue;
+                }
+                int fromY = Math.max(src, sectionBottom);
+                for (int by = fromY; by <= sectionTop; by++) {
+                    seeded.set(x, SectionPos.sectionRelative(by), z, 15);
+                }
+            }
+        }
+        return seeded;
+    }
+
+    /**
+     * 增量算光清光（LightDelta 消费）：只清服务端声明发生变化的 section——
+     * 含「变为全空」的 empty 掩码（旧 LightDelta 协议缺失该信息，现已 append 补发）。
+     * <p>
+     * 清光方式 = 强制覆盖共享空层（{@link #EMPTY_LIGHT_LAYER}，见 clearChunkLight 注释：
+     * notReady 移除路径对带邻域的 section 永不生效）。随后由两阶段光屏障的
+     * initializeLight 先安装空层、lightChunk 再执行 propagateLightSources——位于源的
+     * section 被播种 fill 重填、源以下经向下衰减传播重写（水面垂直梯度重建）。
+     * 这里不提前 propagate（提前写旧层会在 markNewInconsistencies 安装空层时被覆盖白算）。
+     * <p>
+     * 返回 false 表示目标柱未注入（可能已卸载/尚未到达）；调用方只需标脏，
+     * 后续 R2 读盘命中会走 relight 链，不会把旧光当权威光复用。
+     */
+    public boolean invalidateLightSections(ChunkPos pos,
+                                           java.util.BitSet skyMask,
+                                           java.util.BitSet blockMask,
+                                           java.util.BitSet emptySkyMask,
+                                           java.util.BitSet emptyBlockMask) {
+        LevelChunk chunk = this.injectedChunks.get(ChunkPos.asLong(pos.x, pos.z));
+        if (chunk == null) {
+            return false;
+        }
+        synchronized (ShadowLightCompute.LIGHT_ENGINE_MUTEX) {
+            ThreadedLevelLightEngine lightEngine =
+                    (ThreadedLevelLightEngine) this.overworld().getChunkSource().getLightEngine();
+            int minLight = lightEngine.getMinLightSection();
+            int lightCount = lightEngine.getLightSectionCount();
+            java.util.TreeSet<Integer> touched = new java.util.TreeSet<>();
+            hassium$collectLightBits(skyMask, minLight, lightCount, touched);
+            hassium$collectLightBits(blockMask, minLight, lightCount, touched);
+            hassium$collectLightBits(emptySkyMask, minLight, lightCount, touched);
+            hassium$collectLightBits(emptyBlockMask, minLight, lightCount, touched);
+            if (touched.isEmpty()) {
+                return true; // 服务端异常空包：无可清 section，不投递空传播
+            }
+            for (int y : touched) {
+                SectionPos sp = SectionPos.of(pos, y);
+                int bit = y - minLight;
+                if (skyMask.get(bit) || emptySkyMask.get(bit)) {
+                    lightEngine.queueSectionData(LightLayer.SKY, sp, EMPTY_LIGHT_LAYER);
+                }
+                if (blockMask.get(bit) || emptyBlockMask.get(bit)) {
+                    lightEngine.queueSectionData(LightLayer.BLOCK, sp, EMPTY_LIGHT_LAYER);
+                }
+            }
+            // 不在这里 propagateLightSources：两阶段屏障的 initializeLight 先把排队的
+            // 共享空层安装（markNewInconsistencies），随后的 lightChunk 播种/传播才写
+            // 在空层上。这里提前 propagate 会先写旧层、随后被空层安装覆盖 = 一轮白算，
+            // 且多投 49+ 个 PRE 任务推高 lightTasks 水位。
+        }
+        return true;
+    }
+
+    /** BitSet 位索引（相对 minLightSection）→ 绝对 sectionY，越界位丢弃。 */
+    private static void hassium$collectLightBits(java.util.BitSet mask, int minLight, int lightCount,
+                                                 java.util.TreeSet<Integer> out) {
+        for (int bit = mask.nextSetBit(0); bit >= 0 && bit < lightCount; bit = mask.nextSetBit(bit + 1)) {
+            out.add(minLight + bit);
+        }
+    }
+
+    /**
+     * 整柱实际 section 的权威光是否全部就绪：sky/block 两层 DataLayer 非 null，且
+     * <b>位于任一行天空源的 section 的 sky 层必须非全空</b>。
+     * <p>
+     * 官方 {@code ClientboundLightUpdatePacketData} 对 null DataLayer 是「静默省略」（新柱
+     * apply 后该 section 无光数据 → 黑块）；对全空层则打包成 empty 掩码——客户端收到后
+     * 把该 section 置为全 0 光（亮区变黑，等后续包修正 = 「亮→黑→亮」跳变源之一）。全空
+     * sky 层只在「该行全部天空源都低于本 section 顶」时合法（深海/地下）；位于源的 section
+     * 全空 = 播种/fill 未跑到（引擎任务错序/并发 runUpdate）→ 判未收敛，触发续投重试
+     * （ensureChunkLightLayers + lightChunk 重跑 propagateLightSources 后自愈）。
+     */
+    public boolean isChunkLightComplete(ChunkPos pos, LevelChunk chunk) {
+        try {
+            // 原版 FULL 语义：lightChunk 的 POST_UPDATE 置 lightCorrect=true 才算该柱
+            // 光状态可推送；future 完成但 lightCorrect=false 只出现在异常路径，按未收敛处理。
+            if (!chunk.isLightCorrect()) {
+                return false;
+            }
+            LevelLightEngine lightEngine = this.overworld().getChunkSource().getLightEngine();
+            boolean hasSky = this.overworld().dimensionType().hasSkyLight();
+            net.minecraft.world.level.lighting.ChunkSkyLightSources skySources =
+                    hasSky ? chunk.getSkyLightSources() : null;
             int minSection = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMinSection(chunk);
             int maxSection = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMaxSectionExclusive(chunk);
             for (int y = minSection; y < maxSection; y++) {
                 SectionPos sp = SectionPos.of(pos, y);
-                lightEngine.queueSectionData(LightLayer.SKY, sp, null);
-                lightEngine.queueSectionData(LightLayer.BLOCK, sp, null);
-                lightEngine.updateSectionStatus(sp, false);
+                int sectionIndex = chunk.getSectionIndexFromSectionY(y);
+                net.minecraft.world.level.chunk.LevelChunkSection section = chunk.getSection(sectionIndex);
+                if (section == null || section.hasOnlyAir()) {
+                    // 纯空气 section 不需要光数据层：源之上由屏障前预播种（ensureChunkLightLayers
+                    // 投递的 queued 15 层）直接进包；源之下全 0 正确（官方包省略 null 层 = 新柱零光）。
+                    continue;
+                }
+                // 非空 section：initializeLight 必须已为它建层。block 层缺失 = 屏障异常；
+                // sky 层缺失时只要预播种任务已投递，queuedSections 立即可见，不算失败。
+                if (lightEngine.getLayerListener(LightLayer.BLOCK).getDataLayerData(sp) == null) {
+                    return false;
+                }
+                if (hasSky && lightEngine.getLayerListener(LightLayer.SKY).getDataLayerData(sp) == null
+                        && sectionAtOrAboveAnySkySource(skySources, y, io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMinBlockY(this.overworld()))) {
+                    return false; // 源所在/更高 section 的 sky 层缺建层：heal 无法基于可见层打包
+                }
             }
-            lightEngine.propagateLightSources(pos);
+            return true;
+        } catch (Throwable t) {
+            return false;
         }
+    }
+
+    /**
+     * 打包前天空光校验（只读，不再写光照存储）——预播种（{@code ensureChunkLightLayers}
+     * 经 Threaded 引擎任务投递的 queued 15 层）应已保证「源及其上方」全 15；
+     * 本方法只做最终核验与告警。发现缺失说明屏障前预播种被绕过，日志
+     * {@code Sky seed missing} 即报警，不回退为直接写 queuedSections——直接写会与
+     * 引擎线程的 {@code markNewInconsistencies} 迭代器并发，实测抛 fastutil
+     * {@code LongArrayList.wrapped is null} NPE 并打断整轮 runLightUpdates。
+     */
+    public void fillSkySectionsForPacket(ChunkPos pos, LevelChunk chunk) {
+        try {
+            net.minecraft.world.level.lighting.ChunkSkyLightSources sources =
+                    chunk.getSkyLightSources();
+            LevelLightEngine levelLightEngine = this.overworld().getChunkSource().getLightEngine();
+            LightEngine<?, ?> skyEngine =
+                    ((io.github.limuqy.mc.hassium.mixin.LevelLightEngineAccessor) levelLightEngine)
+                            .hassium$getSkyEngine();
+            int minBlockY = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMinBlockY(this.overworld());
+            int minSection = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMinSection(chunk);
+            int maxSection = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMaxSectionExclusive(chunk);
+            int bad = 0;
+            for (int y = minSection; y < maxSection; y++) {
+                if (!sectionAtOrAboveAnySkySource(sources, y, minBlockY)) {
+                    continue;
+                }
+                SectionPos sp = SectionPos.of(pos, y);
+                DataLayer sky = skyEngine.getDataLayerData(sp);
+                int sectionTop = SectionPos.sectionToBlockCoord(y) + 15;
+                for (int x = 0; x < 16 && bad == 0; x++) {
+                    for (int z = 0; z < 16 && bad == 0; z++) {
+                        int src = sources.getLowestSourceY(x, z);
+                        if (src < minBlockY || src > sectionTop) {
+                            continue;
+                        }
+                        int fromY = Math.max(src, SectionPos.sectionToBlockCoord(y));
+                        for (int by = fromY; by <= sectionTop; by++) {
+                            if (sky == null || sky.get(x, SectionPos.sectionRelative(by), z) != 15) {
+                                bad++;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            if (bad > 0) {
+                DebugLogger.warn(DebugLogger.LogType.ASYNC,
+                        "[SHADOW_LIGHT] Sky seed missing ({}, {}) — verify-only, pre-seed barrier was bypassed",
+                        pos.x, pos.z);
+            }
+        } catch (Throwable t) {
+            DebugLogger.warn(DebugLogger.LogType.ASYNC,
+                    "[SHADOW_LIGHT] Sky seed verify failed ({}, {}): {}", pos.x, pos.z, t.toString());
+        }
+    }
+
+    /** 是否存在真实天空源（非 {@code NEGATIVE_INFINITY} 哨兵）位于 sectionTop 或以下。 */
+    private static boolean sectionAtOrAboveAnySkySource(
+            net.minecraft.world.level.lighting.ChunkSkyLightSources sources,
+            int sectionY, int minBlockY) {
+        int sectionTop = SectionPos.sectionToBlockCoord(sectionY) + 15;
+        for (int x = 0; x < 16; x++) {
+            for (int z = 0; z < 16; z++) {
+                int src = sources.getLowestSourceY(x, z);
+                if (src >= minBlockY && src <= sectionTop) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     /**
@@ -370,6 +693,7 @@ public class ShadowSeedServer extends MinecraftServer {
     public void relightChunk(ChunkPos pos, LevelChunk chunk) {
         io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.markLightDirty(pos, true);
         clearChunkLight(pos, chunk);
+        awaitLightTaskDrain(); // 清光投递 48+ PRE 任务：按柱排水（processRemoteHashes 批量 relight 叠加防护）
     }
 
     /**
@@ -383,9 +707,9 @@ public class ShadowSeedServer extends MinecraftServer {
      *       直接改 section 不会自动更新高度图）</li>
      *   <li>blockEntity：服务端发整 chunk BE 快照 → 先清旧表，再镜像官方
      *       replaceWithPacketData 的 consumer（IMMEDIATE 创建 + type 校验 + load）</li>
-     *   <li><b>光</b>：delta 不含光照 → 变更 section 清光（{@code queueSectionData(null)}，
-     *       injectChunk 同款），{@code propagateLightSources} 推发光源，引擎传播重算——
-     *       收敛由调用方（ShadowLightCompute consumeLoop）批级采样；欠光由光照更新
+     *   <li><b>光</b>：delta 不含光照 → 变更 section 清光（{@code queueSectionData(EMPTY)}，
+     *       injectChunk 同款）→ 由调用方两阶段屏障（initializeLight → lightChunk）重算，
+     *       不在此处 propagate（提前传播会被空层安装覆盖）；欠光由光照更新
      *       桥梁（collectLightUpdate → drainLightMasks）事件驱动补发</li>
      * </ol>
      * 完成后重算 contentHash 写存储桥（后续 hash 比对 / R2 落盘复用）。
@@ -414,11 +738,12 @@ public class ShadowSeedServer extends MinecraftServer {
                 } finally {
                     buf.release();
                 }
-                // 2) 变更 section 清光：delta 无光，旧光已过期 → 引擎重算
+                // 2) 变更 section 清光：delta 无光，旧光已过期 → 由随后的两阶段光屏障重算。
+                //    强制覆盖共享空层（notReady 移除对带邻域 section 永不生效，
+                //    见 clearChunkLight 注释）；不在这里 propagate（会被空层安装覆盖白算）。
                 SectionPos sp = SectionPos.of(pos, chunk.getSectionYFromSectionIndex(sd.sectionIndex()));
-                lightEngine.queueSectionData(LightLayer.SKY, sp, null);
-                lightEngine.queueSectionData(LightLayer.BLOCK, sp, null);
-                lightEngine.updateSectionStatus(sp, false);
+                lightEngine.queueSectionData(LightLayer.SKY, sp, EMPTY_LIGHT_LAYER);
+                lightEngine.queueSectionData(LightLayer.BLOCK, sp, EMPTY_LIGHT_LAYER);
             }
             // 3) heightmaps 逐 type 覆盖
             Heightmap.Types[] types = Heightmap.Types.values();
@@ -427,6 +752,9 @@ public class ShadowSeedServer extends MinecraftServer {
                     chunk.setHeightmap(types[hm.typeId()], hm.data());
                 }
             }
+            // heightmap 变化 → sky 光源表必须重算，否则 lightChunk 的播种仍按旧地形高度
+            // （水面升降/填海造陆后 sky 光错位 = 暗区来源之一）。
+            chunk.initializeLightSources();
             // 4) BE 全量覆盖（服务端发整 chunk BE 快照）：先清旧，再镜像官方
             // replaceWithPacketData 的 consumer（IMMEDIATE 创建 + load）。不做 type 校验：
             // IMMEDIATE 创建的 BE 类型必然匹配新 block state（delta 数据自洽），
@@ -441,7 +769,6 @@ public class ShadowSeedServer extends MinecraftServer {
                     BlockEntityCompat.loadFromTag(be, bed.nbt(), this.overworld().registryAccess());
                 }
             }
-            lightEngine.propagateLightSources(pos);
             // 5) 重算 contentHash 写存储桥（R2 比对 / 断连落盘复用）
             try {
                 long contentHash = io.github.limuqy.mc.hassium.cache.ChunkContentHashUtil

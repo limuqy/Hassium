@@ -121,19 +121,26 @@ public class MixinChunkHolder {
         int chunkZ = lightPacket.getZ();
 
         // 尝试通过反射提取 section 位掩码（masks 位于 ClientboundLightUpdatePacketData 内，
-        // 经 packet.lightData 导航；Field 首次解析后缓存，热路径零反射开销）
+        // 经 packet.lightData 导航；Field 首次解析后缓存，热路径零反射开销）。
+        // 必须同时提取 empty 掩码：变为全空的 section 只出现在 emptySky/BlockYMask 中，
+        // 影子端若不知道这些 section 就无法清掉旧光（光变黑不收敛的场景之一）。
         java.util.BitSet skyMask = new java.util.BitSet();
         java.util.BitSet blockMask = new java.util.BitSet();
+        java.util.BitSet emptySkyMask = new java.util.BitSet();
+        java.util.BitSet emptyBlockMask = new java.util.BitSet();
         try {
-            skyMask = hassium$getMask(lightPacket, true);
-            blockMask = hassium$getMask(lightPacket, false);
+            skyMask = hassium$getMask(lightPacket, true, false);
+            blockMask = hassium$getMask(lightPacket, false, false);
+            emptySkyMask = hassium$getMask(lightPacket, true, true);
+            emptyBlockMask = hassium$getMask(lightPacket, false, true);
         } catch (Exception e) {
             // 反射失败时使用空 BitSet，客户端会重算所有 section
             LOGGER.debug("Hassium: Could not extract light masks via reflection, using empty masks");
         }
 
         // 构建光照增量包（仅坐标和位掩码，无光照数据）
-        LightDeltaS2CPacket.Entry entry = new LightDeltaS2CPacket.Entry(chunkX, chunkZ, skyMask, blockMask);
+        LightDeltaS2CPacket.Entry entry = new LightDeltaS2CPacket.Entry(
+                chunkX, chunkZ, skyMask, blockMask, emptySkyMask, emptyBlockMask);
         LightDeltaS2CPacket deltaPacket = new LightDeltaS2CPacket(List.of(entry));
 
         // 发送给所有 Hassium 玩家
@@ -169,6 +176,12 @@ public class MixinChunkHolder {
     @Unique
     private static volatile java.lang.reflect.Field hassium$blockYMaskField;
 
+    @Unique
+    private static volatile java.lang.reflect.Field hassium$emptySkyYMaskField;
+
+    @Unique
+    private static volatile java.lang.reflect.Field hassium$emptyBlockYMaskField;
+
     /**
      * 解析 packet.lightData 对象（masks 容器）；解析失败返回 null。
      */
@@ -183,30 +196,51 @@ public class MixinChunkHolder {
     }
 
     /**
-     * 解析 skyYMask / blockYMask（位于 lightData 对象上）；失败返回空 BitSet。
+     * 解析 skyYMask / blockYMask / emptySkyYMask / emptyBlockYMask（位于 lightData 对象上）；
+     * 失败返回空 BitSet。
      */
     @Unique
-    private static java.util.BitSet hassium$getMask(ClientboundLightUpdatePacket lightPacket, boolean sky)
+    private static java.util.BitSet hassium$getMask(ClientboundLightUpdatePacket lightPacket, boolean sky, boolean empty)
             throws IllegalAccessException {
         Object data = hassium$getLightData(lightPacket);
         if (data == null) {
             return new java.util.BitSet();
         }
-        java.lang.reflect.Field field = sky ? hassium$skyYMaskField : hassium$blockYMaskField;
+        java.lang.reflect.Field field = hassium$maskField(sky, empty);
         if (field == null) {
-            field = hassium$findAccessibleField(data.getClass(), sky ? "skyYMask" : "blockYMask",
-                    sky ? "field_34873" : "field_34874");
-            if (sky) {
-                hassium$skyYMaskField = field;
-            } else {
-                hassium$blockYMaskField = field;
-            }
+            field = hassium$findAccessibleField(data.getClass(),
+                    sky ? (empty ? "emptySkyYMask" : "skyYMask") : (empty ? "emptyBlockYMask" : "blockYMask"),
+                    sky ? (empty ? "field_34875" : "field_34873") : (empty ? "field_34876" : "field_34874"));
+            hassium$setMaskField(sky, empty, field);
         }
         if (field == null) {
             return new java.util.BitSet();
         }
         Object value = field.get(data);
         return value instanceof java.util.BitSet bs ? bs : new java.util.BitSet();
+    }
+
+    @Unique
+    private static java.lang.reflect.Field hassium$maskField(boolean sky, boolean empty) {
+        if (sky) {
+            return empty ? hassium$emptySkyYMaskField : hassium$skyYMaskField;
+        }
+        return empty ? hassium$emptyBlockYMaskField : hassium$blockYMaskField;
+    }
+
+    @Unique
+    private static void hassium$setMaskField(boolean sky, boolean empty, java.lang.reflect.Field field) {
+        if (sky) {
+            if (empty) {
+                hassium$emptySkyYMaskField = field;
+            } else {
+                hassium$skyYMaskField = field;
+            }
+        } else if (empty) {
+            hassium$emptyBlockYMaskField = field;
+        } else {
+            hassium$blockYMaskField = field;
+        }
     }
 
     /**

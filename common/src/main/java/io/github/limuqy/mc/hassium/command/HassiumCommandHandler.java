@@ -5,7 +5,6 @@ import io.github.limuqy.mc.hassium.cache.client.ViewDistanceExtensionService;
 import io.github.limuqy.mc.hassium.metrics.HassiumMetricsImpl;
 import io.github.limuqy.mc.hassium.metrics.MetricsTextFormatter;
 import io.github.limuqy.mc.hassium.metrics.NetworkStats;
-import io.github.limuqy.mc.hassium.metrics.VanillaZlibEstimator;
 import io.github.limuqy.mc.hassium.network.core.NetworkCore;
 import io.github.limuqy.mc.hassium.network.core.NetworkCoreState;
 import io.github.limuqy.mc.hassium.network.core.migration.MigrationEndpoint;
@@ -96,15 +95,24 @@ public class HassiumCommandHandler {
     }
 
     private static String formatChunkCacheLine(HassiumMetricsImpl m) {
-        // 命中：完整区块本地缓存直接提供（count + bytes）；增量：分段增量补齐节省（count + bytes）
+        // 公式（用户定稿）：缓存命中 = (客户端缓存 + 本地重算 - 分片) / 客户端应用区块。
+        // 客户端缓存 = 影子端全命中；本地重算 = SeedGen 本地生成；分片 = section-delta。
+        // 旧口径分母只含「已完成 hash 决策」的区块（miss 走全量的不进去）→ R2 虚高 100%。
+        // 新口径：分片从命中分子中扣除，分母 = 全量请求 + 缓存全命中 + 本地重算 + 分片
+        // （来源汇总，避免命中已记账、区块尚未落地时命中数 > 应用数的时序错配）。
         long fullHitCount = m.getCacheHitFullChunkCount();
         long fullHitBytes = m.getCacheHitFullChunkBytes();
+        long localCount = m.getLocallyGeneratedChunkCount();
+        long localBytes = m.getLocallyGeneratedChunkBytes();
         long deltaCount = m.getCacheDeltaCount();
         long deltaBytes = m.getCacheDeltaSavedBytes();
-        return String.format("§e区块缓存：§r%s（全命中 %d/%s，增量 %d/%s）",
+        return String.format(
+                "§e区块缓存：§r%s（客户端缓存 %d/%s，本地重算 %d/%s，分片 %d/%s，应用区块 %d）",
                 MetricsTextFormatter.formatPercent(m.getEffectiveCacheHitRate() * 100.0),
                 fullHitCount, MetricsTextFormatter.formatBytes(fullHitBytes),
-                deltaCount, MetricsTextFormatter.formatBytes(deltaBytes));
+                localCount, MetricsTextFormatter.formatBytes(localBytes),
+                deltaCount, MetricsTextFormatter.formatBytes(deltaBytes),
+                m.getClientAppliedChunkCount());
     }
 
     private static String formatChunkLoadLine(HassiumMetricsImpl m) {
@@ -146,23 +154,24 @@ public class HassiumCommandHandler {
         long lightHit = m.getLightCacheHitCount();
         long lightMiss = m.getLightCacheMissCount();
         // 剥光协商（lightComputeSupported=true）下 hasCachedLight 恒 false → 直连命中口径
-        // 恒 0（P2 指标死区）；光照复用实际由影子链路承担（ShadowLightCompute 内存/磁盘命中
-        // 记账，key light.reuse.shadow.*，见 NetworkStats#recordLightReuseShadow）。
-        // 展示口径 = 直连命中 + 影子复用（重算仅直连口径），剥光模式下「光照缓存」行
-        // 如实反映影子复用率；两类底层计数器互不合并、语义不变。
+        // 恒 0；光照复用由影子链路承担（key light.reuse.shadow.*）。
+        // 影子端本会话重算的光（远程全量注入 / 分段增量 / LightDelta / 本地生成 / 光脏缓存命中）
+        // 统一在光屏障完成时记 lightCacheMiss，因此分片增量会让重算数上升、命中率下降，
+        // 不再出现「有分片但光照缓存仍 100%」的假象。
         long shadowReuse = m.getLightReuseShadowCount();
         long shadowReuseBytes = m.getLightReuseShadowBytes();
-        long totalHit = lightHit + shadowReuse;
-        long total = totalHit + lightMiss;
-        double rate = total > 0 ? (double) totalHit / total * 100.0 : 0.0;
         return String.format("§e光照缓存：§r%s（命中 %d/%s，影子复用 %d/%s，重算 %d/%s）",
-                MetricsTextFormatter.formatPercent(rate),
+                MetricsTextFormatter.formatPercent(m.getLightCacheHitRate() * 100.0),
                 lightHit, MetricsTextFormatter.formatBytes(m.getLightCacheHitBytes()),
                 shadowReuse, MetricsTextFormatter.formatBytes(shadowReuseBytes),
                 lightMiss, MetricsTextFormatter.formatBytes(m.getLightCacheMissBytes()));
     }
 
-    /** 光照重算耗时行：主线程 = 玩家感知的世界应用阻塞；后台 = 并行引擎 BFS（同步路径恒 0）。 */
+    /**
+     * 光照重算耗时行：主线程 = 玩家感知的世界应用阻塞；后台 = 并行引擎 BFS（同步路径恒 0）。
+     * miss 计数在光屏障提交成功时记（保证冒烟窗口内可见），耗时在屏障完成回传时补记，
+     * 因此统计快照瞬间仍在途的任务会计数但暂未计耗时，平均值为当时已收敛部分的下界。
+     */
     private static String formatLightRecomputeLine(HassiumMetricsImpl m) {
         long miss = m.getLightCacheMissCount();
         double mainThreadMs = m.getLightRecomputeTimeMs();
@@ -174,41 +183,21 @@ public class HassiumCommandHandler {
     }
 
     private static String formatSavingsLine(HassiumMetricsImpl m) {
-        // 「带宽节省」line 合并所有 Hassium 优化（含压缩）相对纯 vanilla Zlib 等价总 wire 的节省。
-        // 口径：所有按 wire 字节同源——vanilla Zlib 压缩后等价 wire，
-        //      current = actualBytesReceived 是 Hassium ZSTD 实际 wire。
-        //
-        // 公式：
-        //   total_vanilla_wire = vanillaBytesReceived (实际发出 chunk 包的 vanilla Zlib 等价 wire，已由 recordChunkReceived 累计)
-        //                     + savedByCacheFullHit    (vanilla 等价为走全量推这些 chunk，VanillaZlibEstimator.estimate(16KB) × count)
-        //                     + savedByCacheDelta       (同上，分段增量对应 vanilla 全量 wire)
-        //                     + savedByLightHit          (光照命中时 vanilla 等价随 chunk packet 携带光照字节)
-        //                     + savedByOvd                (OVD 拿到的 chunks 在 vanilla 要 serverVD=clientVD 才能推)
-        //                     + savedByLocalGen           (SeedGen 本地生成 = 缓存命中同款：vanilla 等价为推全量 chunk)
-        //   current  = actualBytesReceived  (Hassium ZSTD wire)
-        //   saved    = total_vanilla_wire - current
-        //              (= 各优化 wire 节省 + 压缩节省自带；ZSTD 比 Zlib 更省的部分)
-        //   saving%  = saved / total_vanilla_wire × 100
-        //
-        // ROUND1 命中：saved 仅含压缩节省，saving% ≈ 带宽压缩 saving%（≈40%）。
-        // ROUND2 OVD+cache 全开：saved 同时含压缩/缓存/光照/OVD 全套优化，saving% 高 → 99% 区间。
-        long chunkWireEstimate = VanillaZlibEstimator.estimate((int) NetworkStats.ESTIMATED_CHUNK_BYTES);
-        long lightWireEstimate = VanillaZlibEstimator.estimate((int) NetworkStats.ESTIMATED_LIGHT_BYTES);
-        long savedByCacheFullHit = chunkWireEstimate * m.getCacheHitFullChunkCount();
-        long savedByCacheDelta = chunkWireEstimate * m.getCacheDeltaCount();
-        long savedByLightHit = lightWireEstimate * m.getLightCacheHitCount();
-        long savedByOvd = chunkWireEstimate
-                * ViewDistanceExtensionService.getInstance().getLoadedCount();
-        long savedByLocalGen = chunkWireEstimate * m.getLocallyGeneratedChunkCount();
-        long totalVanillaWire = m.getVanillaBytesReceived()
-                + savedByCacheFullHit + savedByCacheDelta + savedByLightHit + savedByOvd + savedByLocalGen;
+        // 「流量节省」line（用户定稿）：流量节省 = 服务端实际推送 / 无 MOD 时要接收。
+        // 无 MOD 应收 = 数据包 + 本地重算（SeedGen）+ 客户端缓存 + 光照（直连命中/影子复用/本地重算），
+        // 统一为原版 Zlib 等价 wire。分段增量已按「若走全量的原版 Zlib 等价」计入数据包
+        // （recordSectionDeltaReceived），不再单列；OVD 环带不计入（无 MOD 时服务端本来也不推）。
+        // 第一段百分比 = 实际 / 无MOD（越小越省），括号内同时给「已节省」便于阅读。
+        long noModReceive = m.getNoModReceiveBytes();
         long current = m.getActualBytesReceived();
-        long saved = Math.max(0L, totalVanillaWire - current);
-        double saving = totalVanillaWire > 0 ? (double) saved / totalVanillaWire * 100.0 : 0.0;
-        return String.format("§e带宽节省：§r%s（当前 %s，原版 %s）",
+        double ratio = m.getTrafficSavingsPercent();
+        long saved = Math.max(0L, noModReceive - current);
+        double saving = noModReceive > 0 ? (double) saved / noModReceive * 100.0 : 0.0;
+        return String.format("§e流量节省：§r%s（实际/无MOD，已节省 %s；当前 %s，无MOD %s）",
+                MetricsTextFormatter.formatPercent(ratio),
                 MetricsTextFormatter.formatPercent(saving),
                 MetricsTextFormatter.formatBytes(current),
-                MetricsTextFormatter.formatBytes(totalVanillaWire));
+                MetricsTextFormatter.formatBytes(noModReceive));
     }
 
     /**

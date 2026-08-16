@@ -1,11 +1,16 @@
 package io.github.limuqy.mc.hassium.client;
 
 import io.github.limuqy.mc.hassium.command.HassiumCommandHandler;
+import io.github.limuqy.mc.hassium.metrics.HassiumMetricsImpl;
+import io.github.limuqy.mc.hassium.metrics.NetworkStats;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientPacketListener;
 import net.minecraft.network.chat.Component;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 
 /**
@@ -318,7 +323,7 @@ public final class ClientSmokeTest {
                         roundLabel, perPortLog.length() == 0 ? "(no Data frames)" : perPortLog.toString());
             }
 
-            boolean ok = validateStats(plain);
+            boolean ok = validateStats(plain, roundLabel);
             // dataplane 模式：classic stats 结构校验放宽（仅 dataplane 阶段数据面行不一定满足 classic 关键词）
             if (runDataplane && !runClassic) {
                 ok = true; // 仅 dataplane 模式不依赖 classic stats 关键词
@@ -779,20 +784,137 @@ public final class ClientSmokeTest {
     }
 
     /**
-     * 校验客户端统计摘要的稳定结构。
+     * 校验客户端统计摘要的结构与数值一致性。
+     * <p>
+     * 数值口径（与 {@link HassiumCommandHandler} 显示完全同源）：
+     * <ol>
+     *   <li>缓存命中 = (客户端缓存 + 本地重算 - 分片) / 客户端应用区块；
+     *       分片增量不再计入命中，分母是实际应用的权威区块数（去重，OVD 不计入）。</li>
+     *   <li>流量节省 = 服务端实际推送 / 无MOD应收（数据包 + 本地重算 + 客户端缓存 + 光照）。</li>
+     *   <li>光照缓存命中率 = (直连命中 + 影子复用) / (命中 + 本地重算)。</li>
+     * </ol>
      */
-    static boolean validateStats(String plain) {
+    static boolean validateStats(String plain, String roundLabel) {
         if (plain == null || plain.isBlank()) {
             return false;
         }
-        return plain.contains("Hassium")
+        if (!(plain.contains("Hassium")
                 && plain.contains("客户端统计")
                 && plain.contains("带宽压缩")
                 && plain.contains("区块缓存")
                 && plain.contains("区块加载")
                 && plain.contains("超视渲染")
-                && plain.contains("光照缓存");
+                && plain.contains("光照缓存")
+                && plain.contains("流量节省"))) {
+            LOGGER.error("{} {} stats validation FAILED: missing structural lines", MARKER_FAIL, roundLabel);
+            return false;
+        }
+
+        HassiumMetricsImpl m = NetworkStats.getMetrics();
+        long applied = m.getClientAppliedChunkCount();
+        if (applied <= 0) {
+            LOGGER.error("{} {} stats validation FAILED: client applied chunks == 0", MARKER_FAIL, roundLabel);
+            return false;
+        }
+        if (m.getClientLandedChunkCount() <= 0) {
+            LOGGER.error("{} {} stats validation FAILED: no chunk actually landed on client", MARKER_FAIL, roundLabel);
+            return false;
+        }
+
+        boolean ok = true;
+
+        // 1) 区块缓存行：显示的百分比与计数必须和指标计算一致。
+        Matcher cacheMatcher = CACHE_STATS_PATTERN.matcher(plain);
+        if (!cacheMatcher.find()) {
+            LOGGER.error("{} {} stats validation FAILED: cache line not parseable", MARKER_FAIL, roundLabel);
+            ok = false;
+        } else {
+            double displayedRate = Double.parseDouble(cacheMatcher.group(1));
+            double expectedRate = m.getEffectiveCacheHitRate() * 100.0;
+            long cacheCount = Long.parseLong(cacheMatcher.group(2));
+            long localCount = Long.parseLong(cacheMatcher.group(3));
+            long deltaCount = Long.parseLong(cacheMatcher.group(4));
+            long appliedCount = Long.parseLong(cacheMatcher.group(5));
+            if (Math.abs(displayedRate - expectedRate) > 0.06
+                    || cacheCount != m.getCacheHitFullChunkCount()
+                    || localCount != m.getLocallyGeneratedChunkCount()
+                    || deltaCount != m.getCacheDeltaCount()
+                    || appliedCount != m.getClientAppliedChunkCount()) {
+                LOGGER.error("{} {} stats validation FAILED: cache formula mismatch " +
+                                "displayed={}/{} local={} delta={} applied={}, expected={}/{} local={} delta={} applied={}",
+                        MARKER_FAIL, roundLabel,
+                        displayedRate, cacheCount, localCount, deltaCount, appliedCount,
+                        String.format(java.util.Locale.ROOT, "%.1f", expectedRate),
+                        m.getCacheHitFullChunkCount(), m.getLocallyGeneratedChunkCount(),
+                        m.getCacheDeltaCount(), m.getClientAppliedChunkCount());
+                ok = false;
+            }
+        }
+
+        // 2) 流量节省行：显示百分比必须等于 实际推送 / 无MOD应收。
+        Matcher savingsMatcher = SAVINGS_STATS_PATTERN.matcher(plain);
+        if (!savingsMatcher.find()) {
+            LOGGER.error("{} {} stats validation FAILED: traffic savings line not parseable", MARKER_FAIL, roundLabel);
+            ok = false;
+        } else {
+            double displayedRatio = Double.parseDouble(savingsMatcher.group(1));
+            double expectedRatio = Math.max(0.0, Math.min(100.0, m.getTrafficSavingsPercent()));
+            if (Math.abs(displayedRatio - expectedRatio) > 0.06) {
+                LOGGER.error("{} {} stats validation FAILED: traffic savings mismatch displayed={} expected={}",
+                        MARKER_FAIL, roundLabel, displayedRatio, expectedRatio);
+                ok = false;
+            }
+        }
+
+        // 3) 光照缓存行：百分比与 (直连命中 + 影子复用) / (命中 + 重算) 一致。
+        Matcher lightMatcher = LIGHT_STATS_PATTERN.matcher(plain);
+        if (!lightMatcher.find()) {
+            LOGGER.error("{} {} stats validation FAILED: light cache line not parseable", MARKER_FAIL, roundLabel);
+            ok = false;
+        } else {
+            double displayedRate = Double.parseDouble(lightMatcher.group(1));
+            double expectedRate = m.getLightCacheHitRate() * 100.0;
+            long directHit = Long.parseLong(lightMatcher.group(2));
+            long shadowReuse = Long.parseLong(lightMatcher.group(3));
+            long recompute = Long.parseLong(lightMatcher.group(4));
+            if (Math.abs(displayedRate - expectedRate) > 0.06
+                    || directHit != m.getLightCacheHitCount()
+                    || shadowReuse != m.getLightReuseShadowCount()
+                    || recompute != m.getLightCacheMissCount()) {
+                LOGGER.error("{} {} stats validation FAILED: light formula mismatch " +
+                                "displayed={}/{} shadow={} recompute={}, expected={}/{} shadow={} recompute={}",
+                        MARKER_FAIL, roundLabel,
+                        displayedRate, directHit, shadowReuse, recompute,
+                        String.format(java.util.Locale.ROOT, "%.1f", expectedRate),
+                        m.getLightCacheHitCount(), m.getLightReuseShadowCount(), m.getLightCacheMissCount());
+                ok = false;
+            }
+        }
+
+        // ROUND2 回归门禁：缓存主链路必须真实命中（0 说明影子端缓存未生效）。
+        if ("ROUND2".equals(roundLabel) && m.getCacheHitFullChunkCount() <= 0) {
+            LOGGER.error("{} {} stats validation FAILED: ROUND2 has zero cache full hits", MARKER_FAIL, roundLabel);
+            ok = false;
+        }
+
+        if (ok) {
+            LOGGER.info("HassiumSmokeTest: stats OK applied={} cacheRate={}% trafficRatio={}%",
+                    applied,
+                    String.format(java.util.Locale.ROOT, "%.1f", m.getEffectiveCacheHitRate() * 100.0),
+                    String.format(java.util.Locale.ROOT, "%.1f", m.getTrafficSavingsPercent()));
+        }
+        return ok;
     }
+
+    /** 区块缓存行：百分比（客户端缓存 N/B，本地重算 N/B，分片 N/B，应用区块 N）。 */
+    private static final Pattern CACHE_STATS_PATTERN = Pattern.compile(
+            "区块缓存：([0-9.]+)%（客户端缓存 (\\d+)/[^，]*，本地重算 (\\d+)/[^，]*，分片 (\\d+)/[^，]*，应用区块 (\\d+)）");
+    /** 流量节省行：第一段 = 实际 / 无MOD。 */
+    private static final Pattern SAVINGS_STATS_PATTERN = Pattern.compile(
+            "流量节省：([0-9.]+)%（实际/无MOD，已节省 [0-9.]+%；当前 [^，]*，无MOD [^）]*）");
+    /** 光照缓存行：百分比（命中 N/B，影子复用 N/B，重算 N/B）。 */
+    private static final Pattern LIGHT_STATS_PATTERN = Pattern.compile(
+            "光照缓存：([0-9.]+)%（命中 (\\d+)/[^，]*，影子复用 (\\d+)/[^，]*，重算 (\\d+)/[^）]*）");
 
     private static String stripSection(String s) {
         if (s == null) {

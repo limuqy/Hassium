@@ -242,12 +242,12 @@ ERROR / WARN 始终输出。
 | `/hassium stats` | 服务端 | 压缩/发送统计（需 OP 2） |
 | `/hassium metrics on\|off` | 服务端 | 运行时开关指标 |
 | `/hassium stats reset` | 服务端 | 重置计数器 |
-| `/hassiumc stats` | 客户端 | 接收/缓存命中/超视渲染/光照/区块加载（新增/过期/**本地生成**）统计 |
+| `/hassiumc stats` | 客户端 | 接收/缓存命中（客户端缓存+本地重算−分片 / 应用区块）/超视渲染/光照/区块加载（新增/过期/**本地生成**）/流量节省（实际/无MOD应收）统计 |
 | `/hassiumc export [<服务器IP>] [seed]` | 客户端 | 导出本地缓存为 `saves/` 下原版 Anvil 世界 |
 
 实现：`metrics/NetworkStats`（`AtomicLong`，可关闭）。指标关闭时相关 stats 命令不可用。导出走 `CacheWorldExporter`（异步，见 `chunk-cache.md` §12）。
 
-客户端 stats 的「区块加载」行口径：`新增` = 无本地缓存的全量请求；`过期` = 缓存过期/技术性回退；`本地` = SeedGen 影子服务端本地生成（等价一次全量请求，带宽节省按 16KB/chunk 原版 Zlib 等价计入）。
+客户端 stats 的「区块加载」行口径：`新增` = 无本地缓存的全量请求；`过期` = 缓存过期/技术性回退；`本地` = SeedGen 影子服务端本地生成（等价一次全量请求）。区块缓存命中率分母为「客户端应用区块」（实际落地权威区块去重，OVD 不计入）；流量节省 = 实际推送 / 无MOD应收（数据包+本地重算+客户端缓存+光照，不含 OVD），统一按原版 Zlib 等价 wire 计。
 
 ## 12. 卖点特性（已实现摘要）
 
@@ -293,7 +293,7 @@ ERROR / WARN 始终输出。
 |------|-------------|------|------|
 | **本地生成** | `chunk.seedGenEnabled`（默认 false，双端同开）、`chunk.seedGenThreads`（2） | 服务端对 pristine（未生成）区块发 `SeedRef`（seed + 坐标 + hash，几十字节）替代区块数据；客户端影子服务端（`ShadowSeedServer`）本地生成，经 `submitGenerated` 与远程区块同链（算光 → 打包官方包 → 官方通道落地），断连一并 `saveAll` 落盘；失败/超时回退全量请求 | [`chunk-cache.md`](chunk-cache.md) |
 
-本地生成的区块与直推同链：推送即入库（本地缓存同样受益），stats「区块加载」行计入「本地」计数，带宽节省按缓存命中同口径计入。
+本地生成的区块与直推同链：推送即入库（本地缓存同样受益），stats「区块加载」行计入「本地」计数，同时以「本地重算」计入区块缓存命中分子与流量节省的无MOD应收（原版 Zlib 等价）。
 
 ### 12.6 网络核心 L1 迁移运维
 

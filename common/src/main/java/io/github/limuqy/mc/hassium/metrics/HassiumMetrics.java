@@ -144,6 +144,42 @@ public interface HassiumMetrics {
      */
     long getLocallyGeneratedChunkBytes();
 
+    /**
+     * 获取「客户端应用区块」计数（缓存命中率分母，按区块来源汇总的完整区块等价值）：
+     * <p>
+     * {@code 全量请求 + 客户端缓存全命中 + 本地重算（SeedGen）+ 分片增量}。
+     * 用来源计数汇总而不是某一时刻的落地快照，避免「命中已记账、区块还在回传队列中」
+     * 导致的命中数 &gt; 应用数、命中率被 clamp 成 100% 的时序错配。
+     */
+    default long getClientAppliedChunkCount() {
+        return getFullChunkRequestCount()
+                + getCacheHitFullChunkCount()
+                + getLocallyGeneratedChunkCount()
+                + getCacheDeltaCount();
+    }
+
+    /**
+     * 获取客户端实际落地的权威区块数（按区块位置去重；renderOnly/OVD 不计入）。
+     * <p>
+     * 冒烟测试用它做「确有区块落地」的运行时门禁；命中率分母用
+     * {@link #getClientAppliedChunkCount()} 的来源汇总口径。
+     */
+    long getClientLandedChunkCount();
+
+    /**
+     * 获取「网络已推送完整区块，客户端仍改用本地缓存」的区块数。
+     * <p>
+     * 这类区块对缓存命中率而言是命中（数据源 = 本地缓存），但对流量节省而言没有减少
+     * 服务端推送（数据包已真实到线），不能与 {@link #getCacheHitFullChunkCount()} 一起
+     * 再计入无 MOD 应收流量，否则会双重计数。
+     */
+    long getCacheHitNetworkReplacedCount();
+
+    /**
+     * 获取「网络已推送完整区块，客户端仍改用本地缓存」的完整区块等价值字节数。
+     */
+    long getCacheHitNetworkReplacedBytes();
+
     // ===== 网络指标 =====
 
     /**
@@ -339,19 +375,78 @@ public interface HassiumMetrics {
     }
 
     /**
-     * 计算有效缓存命中字节数。
+     * 计算有效缓存命中区块数。
+     * <p>
+     * 公式（冒烟客户端统计口径）：
+     * {@code 缓存命中 = (客户端缓存 + 本地重算 - 分片) / 客户端应用区块}。
+     * 客户端缓存 = {@link #getCacheHitFullChunkCount()}；本地重算 = SeedGen
+     * {@link #getLocallyGeneratedChunkCount()}；分片 = section-delta
+     * {@link #getCacheDeltaCount()}（仍计入分母应用区块，但从命中分子中扣除）。
      */
-    default long getEffectiveCacheHitBytes() {
-        return getCacheHitFullChunkBytes() + getCacheDeltaSavedBytes();
+    default long getEffectiveCacheHitCount() {
+        return Math.max(0L,
+                getCacheHitFullChunkCount() + getLocallyGeneratedChunkCount() - getCacheDeltaCount());
     }
 
     /**
-     * 计算有效缓存命中率（按避免加载完整区块的等价值字节数）。
+     * 计算有效缓存命中字节数（完整区块等价值，与命中区块数同公式）：
+     * 客户端缓存 + 本地重算（SeedGen 本地生成）− 分片增量。
+     */
+    default long getEffectiveCacheHitBytes() {
+        return Math.max(0L,
+                getCacheHitFullChunkBytes() + getLocallyGeneratedChunkBytes() - getCacheDeltaSavedBytes());
+    }
+
+    /**
+     * 计算有效缓存命中率。
+     * <p>
+     * 分母 = 客户端应用区块（来源汇总：全量请求 + 缓存全命中 + 本地重算 + 分片增量），
+     * 而非旧的「已完成 hash 决策字节数」：旧分母不包含 hash miss 后走全量请求的区块，
+     * 会把 R2 命中率虚高到 100%。
      */
     default double getEffectiveCacheHitRate() {
-        long eligibleBytes = getCacheLoadEligibleBytes();
-        if (eligibleBytes <= 0) return 0.0;
-        return (double) getEffectiveCacheHitBytes() / eligibleBytes;
+        long appliedChunks = getClientAppliedChunkCount();
+        if (appliedChunks <= 0) return 0.0;
+        long hitChunks = Math.min(getEffectiveCacheHitCount(), appliedChunks);
+        return (double) hitChunks / appliedChunks;
+    }
+
+    /**
+     * 无 MOD 时要接收的数据量（原版 Zlib 等价 wire）：
+     * <p>
+     * {@code 数据包 + 本地重算 + 客户端缓存 + 光照}：
+     * <ul>
+     *   <li>数据包：{@link #getVanillaBytesReceived()}（实际推送的全量区块 + 分段增量
+     *       的全量等价 wire，已由各接收埋点累计）</li>
+     *   <li>本地重算：SeedGen 本地生成替代的全量区块 wire</li>
+     *   <li>客户端缓存：真正少推的缓存全命中 wire（扣除「网络已推送但仍改用本地缓存」
+     *       的重叠部分，避免双重计数）</li>
+     *   <li>光照：直连光照命中 + 影子复用 + 本地重算光照的等价 wire</li>
+     * </ul>
+     * 超视渲染（OVD）不计入：无 MOD 时服务端本来也不会推送 serverVD 之外的区块。
+     */
+    default long getNoModReceiveBytes() {
+        long chunkWireEstimate = VanillaZlibEstimator.estimate((int) NetworkStats.ESTIMATED_CHUNK_BYTES);
+        long lightWireEstimate = VanillaZlibEstimator.estimate((int) NetworkStats.ESTIMATED_LIGHT_BYTES);
+        long avoidedCacheHits = Math.max(0L,
+                getCacheHitFullChunkCount() - getCacheHitNetworkReplacedCount());
+        long lightTotal = getLightCacheHitCount() + getLightReuseShadowCount() + getLightCacheMissCount();
+        return getVanillaBytesReceived()
+                + chunkWireEstimate * getLocallyGeneratedChunkCount()
+                + chunkWireEstimate * avoidedCacheHits
+                + lightWireEstimate * lightTotal;
+    }
+
+    /**
+     * 流量节省 = 服务端实际推送的数据量 / 无 MOD 时要接收的数据量（百分比，越小越省）。
+     * <p>
+     * 注意：这是「实际流量占无 MOD 原版流量的比例」，不是节省掉的百分比；
+     * 已节省百分比 = {@code 100% - 本值}。
+     */
+    default double getTrafficSavingsPercent() {
+        long noModReceive = getNoModReceiveBytes();
+        if (noModReceive <= 0) return 0.0;
+        return (double) getActualBytesReceived() / noModReceive * 100.0;
     }
 
     /**
@@ -391,12 +486,15 @@ public interface HassiumMetrics {
     }
 
     /**
-     * 计算光照缓存命中率
+     * 计算光照缓存命中率。
+     * <p>
+     * 剥光协商下直连命中（{@link #getLightCacheHitCount()}）恒 0，实际复用由影子链路
+     * （{@link #getLightReuseShadowCount()}）承担；本地重算（光标脏缓存命中）计入
+     * {@link #getLightCacheMissCount()}。命中 = 直连 + 影子复用，分母再加重算。
      */
     default double getLightCacheHitRate() {
-        long hit = getLightCacheHitCount();
-        long miss = getLightCacheMissCount();
-        long total = hit + miss;
+        long hit = getLightCacheHitCount() + getLightReuseShadowCount();
+        long total = hit + getLightCacheMissCount();
         if (total == 0) return 0.0;
         return (double) hit / total;
     }

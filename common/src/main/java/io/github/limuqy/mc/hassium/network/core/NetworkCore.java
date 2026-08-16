@@ -978,8 +978,12 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
                 io.github.limuqy.mc.hassium.network.LightDeltaS2CPacket light =
                         (io.github.limuqy.mc.hassium.network.LightDeltaS2CPacket) hp.packet();
                 io.github.limuqy.mc.hassium.metrics.NetworkStats.recordLightDeltaReceived(light.entries().size());
-                LOGGER.debug("Hassium: LightDelta {} entries (consumer T6: shadow light invalidation)",
+                LOGGER.debug("Hassium: LightDelta {} entries (shadow light invalidation)",
                         light.entries().size());
+                // T6 接线：增量算光入口。shadow 清掉对应 section 的光（含变空 section）→
+                // 重算收敛 → 以官方 ClientboundLightUpdatePacket 回传客户端，杜绝
+                // 增量光照被丢弃后客户端保持旧光/黑光。
+                io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.submitLightDelta(light);
             }
             case SEED_REF -> ClientMetadataHandler.handleSeedRefPacket(
                     (io.github.limuqy.mc.hassium.network.SeedRefS2CPacket) hp.packet());

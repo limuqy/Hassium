@@ -302,6 +302,9 @@ public class ClientChunkHandler {
             // （高预算被 OVD 吃满、VDES 的 JoinBoost 门控失效）。
             if (!renderOnly) {
                 io.github.limuqy.mc.hassium.cache.client.ClientMainThreadBudget.noteChunkApplyActivity();
+                // 缓存命中率分母「客户端应用区块」：权威区块成功落地（按坐标去重）；
+                // renderOnly/OVD 不计入（用户口径：OVD 环带不参与命中率评估）。
+                NetworkStats.recordChunkApplied(chunkX, chunkZ);
             }
 
             // 区块就绪：发送延后的 BE 请求 + 冲刷暂存 BE

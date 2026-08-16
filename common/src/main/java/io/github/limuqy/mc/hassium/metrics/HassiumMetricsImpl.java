@@ -40,6 +40,19 @@ public class HassiumMetricsImpl implements HassiumMetrics {
     /** SeedGen 本地生成（影子服务端）区块数/等价值字节；避免一次全量请求。 */
     private final AtomicLong locallyGeneratedChunkCount = new AtomicLong(0);
     private final AtomicLong locallyGeneratedChunkBytes = new AtomicLong(0);
+    /**
+     * 客户端实际应用的权威区块计数（按 chunkPos 去重；renderOnly/OVD 不计入）。
+     * 缓存命中率分母「客户端应用区块」。
+     */
+    private final AtomicLong clientAppliedChunkCount = new AtomicLong(0);
+    private final java.util.Set<Long> clientAppliedChunkKeys = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    /**
+     * 网络已推送完整区块、客户端仍改用本地缓存命中的区块（count/bytes）。
+     * 对缓存命中率是命中；对流量节省不是「少推」，必须从缓存节省项中扣除，防止
+     * 与 {@code vanillaBytesReceived}（已含该完整区块 wire）双重计数。
+     */
+    private final AtomicLong cacheHitNetworkReplacedCount = new AtomicLong(0);
+    private final AtomicLong cacheHitNetworkReplacedBytes = new AtomicLong(0);
 
     // 网络指标
     private final AtomicLong networkBytesSaved = new AtomicLong(0);
@@ -231,6 +244,29 @@ public class HassiumMetricsImpl implements HassiumMetrics {
     @Override
     public long getLocallyGeneratedChunkBytes() {
         return locallyGeneratedChunkBytes.get();
+    }
+
+    @Override
+    public long getClientAppliedChunkCount() {
+        return getFullChunkRequestCount()
+                + getCacheHitFullChunkCount()
+                + getLocallyGeneratedChunkCount()
+                + getCacheDeltaCount();
+    }
+
+    @Override
+    public long getClientLandedChunkCount() {
+        return clientAppliedChunkCount.get();
+    }
+
+    @Override
+    public long getCacheHitNetworkReplacedCount() {
+        return cacheHitNetworkReplacedCount.get();
+    }
+
+    @Override
+    public long getCacheHitNetworkReplacedBytes() {
+        return cacheHitNetworkReplacedBytes.get();
     }
 
     @Override
@@ -440,6 +476,10 @@ public class HassiumMetricsImpl implements HassiumMetrics {
         staleFullChunkRequestBytes.set(0);
         locallyGeneratedChunkCount.set(0);
         locallyGeneratedChunkBytes.set(0);
+        clientAppliedChunkCount.set(0);
+        clientAppliedChunkKeys.clear();
+        cacheHitNetworkReplacedCount.set(0);
+        cacheHitNetworkReplacedBytes.set(0);
         networkBytesSaved.set(0);
         networkCompressTimeNs.set(0);
         networkDecompressTimeNs.set(0);
@@ -625,6 +665,28 @@ public class HassiumMetricsImpl implements HassiumMetrics {
         locallyGeneratedChunkCount.incrementAndGet();
         if (bytes > 0) {
             locallyGeneratedChunkBytes.addAndGet(bytes);
+        }
+    }
+
+    /**
+     * 记录一个权威区块已成功应用到客户端世界（按 {@code chunkPosKey} 去重）。
+     * renderOnly（OVD）区块不得调用本方法。
+     */
+    public void recordClientChunkApplied(long chunkPosKey) {
+        if (clientAppliedChunkKeys.add(chunkPosKey)) {
+            clientAppliedChunkCount.incrementAndGet();
+        }
+    }
+
+    /**
+     * 记录「网络已推送完整区块，客户端仍改用本地缓存」的命中。
+     * 与 {@link #recordCacheFullHit(long)} 同时调用；流量节省计算会用
+     * {@code cacheHitFullChunkCount - cacheHitNetworkReplacedCount} 扣除重叠。
+     */
+    public void recordCacheFullHitNetworkReplaced(long bytes) {
+        cacheHitNetworkReplacedCount.incrementAndGet();
+        if (bytes > 0) {
+            cacheHitNetworkReplacedBytes.addAndGet(bytes);
         }
     }
 
@@ -834,13 +896,15 @@ public class HassiumMetricsImpl implements HassiumMetrics {
     }
 
     /**
-     * 记录分段增量接收：计入 vanilla 等价字节（vanilla 不发 delta，会发整 chunk Zlib wire）+ sectionDelta 区块计数；
-     * 与 actual（管线层 recordWireBytesReceived 累得 SectionDelta 入站 wire ZSTD 字节）口径一致。
+     * 记录分段增量成功应用：计入 vanilla 等价字节（vanilla 不发 delta，会发整 chunk Zlib wire）
+     * + sectionDelta 区块计数；与 actual（管线层 recordWireBytesReceived 累得 SectionDelta
+     * 入站 wire ZSTD 字节）口径一致。收到即记会在「apply 失败 → 回退全量」场景把同一区块计两次，
+     * 因此仅在 consumeLoop 成功应用后调用。
      * <p>
-     * SectionDelta 在 vanilla 等价 = vanilla 不发 delta，只会在 chunk 变化时发完整 chunk packet（含 light）
+     * SectionDelta 在 vanilla 等价 = vanilla 不发 delta，只会在 chunk 变化时发完整 chunk packet（含光）
      * 走 Zlib 压缩入站，每 chunk 等价 wire = {@link VanillaZlibEstimator#estimate}(16KB)。
      *
-     * @param chunks       收到 delta 的区块数
+     * @param chunks       成功应用 delta 的区块数
      * @param vanillaBytes 若走全量时的原版等价字节（估算）
      */
     public void recordSectionDeltaReceived(long chunks, long vanillaBytes) {
