@@ -90,6 +90,42 @@ class SeedGenQueueTest {
     }
 
     @Test
+    @DisplayName("盲预生成条目（hash=0）永不超时：peek 仍可选、expire 不回收")
+    void pregenEntriesNeverExpire() {
+        SeedGenQueue q = new SeedGenQueue();
+        long t0 = 1_000_000L;
+        SeedGenQueue.clockOverrideMs = t0;
+        try {
+            q.enqueue(new ChunkPos(5, 5), 0L, new long[0]);
+            assertEquals(1, q.size());
+
+            // 远超超时窗口后：hash=0 条目仍可被选中，且 expire 不回收
+            SeedGenQueue.clockOverrideMs = t0 + SeedGenQueue.fallbackTimeoutMs(q.size()) + 60_000L;
+            SeedGenQueue.Entry e = q.peekNearest(5, 5);
+            assertNotNull(e);
+            assertEquals(0L, e.contentHash());
+            assertTrue(q.expire().isEmpty());
+            assertEquals(1, q.size());
+        } finally {
+            SeedGenQueue.clockOverrideMs = -1L;
+        }
+    }
+
+    @Test
+    @DisplayName("同距时 SeedRef 条目优先于盲预生成条目")
+    void seedRefBeatsPregenOnTie() {
+        SeedGenQueue q = new SeedGenQueue();
+        ChunkPos player = new ChunkPos(0, 0);
+        q.enqueue(new ChunkPos(1, 0), 0L, new long[0]);
+        q.enqueue(new ChunkPos(0, 1), 42L, new long[]{7});
+
+        SeedGenQueue.Entry e = q.peekNearest(player.x, player.z);
+        assertNotNull(e);
+        assertEquals(42L, e.contentHash());
+        assertEquals(new ChunkPos(0, 1), e.pos());
+    }
+
+    @Test
     @DisplayName("生成完成移除与断连清空")
     void removeAndClear() {
         SeedGenQueue q = new SeedGenQueue();

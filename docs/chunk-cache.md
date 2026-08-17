@@ -311,6 +311,8 @@ RD > 32（需手改 `options.txt`）时雾距会跟随 `getEffectiveRenderDistan
 - `ChunkSerializer.write(level, chunk)`（1.21.2+ `SerializableChunkData`）→ NBT
 - `ChunkContentHashUtil.computeSectionHashes(chunk)` → `combineSectionHashes` → contentHash 落 `ShadowStorageHashes`
 - chunkMap.write 落盘（type 126，MixinRegionFile shadow 上下文 gate）
+- **脏柱增量**：磁盘命中且未修改的柱不重写；网络注入/增量/方块更新/光增量/relight/本地生成才置脏，`saveAll` 只重写脏柱
+- **并行序列化**：脏柱 NBT 序列化在临时池并行（上限 4 线程），ChunkMap 写提交仍串行回到 saver 线程，IOWorker 统一 flush（避免并发写同一 mca 与 `ChunkMap.write` 非线程安全面）
 
 这保证「曾加载并收到更新」的块 R2 再进应 HIT。
 
@@ -447,4 +449,23 @@ hassium_exports/server_192.168.1.100_25565/
 
 - 客户端全量请求超时重试（8s）：`PENDING_FULL_REQUESTS`，收到数据（`onChunkDataReceived`）清除
 - 服务端 resync 等 Bloom 超时 5s → 无 Bloom 原路径（发 hash）
-- 出界任务待命 10s 超时 → 真丢弃（玩家已远离）
+- 出界任务待命 10min 超时 → 真丢弃（玩家已远离；10s 对移动探索太短，
+  frontline 任务被过早丢弃后客户端静止/折返时无新请求可触发，会造成“永久”扇形/十字虚空）
+
+### 13.6 SeedGen 两级缓冲（FIFO 头部阻塞修复）
+
+`SeedGenExecutor` 的缓冲分两级：`pendingLive`（服务端 SeedRef）与 `pendingPregen`
+（盲预生成，contentHash=0），由 drain 按当前玩家位置**最近优先**释放进有界工作队列
+（≤96 槽），活体 SeedRef 永远先于盲预生成。原实现为单条 FIFO（`ConcurrentLinkedQueue`），
+移动探索时新到达的当前视野 SeedRef 排在更早路径/初始 resync/441 个盲预生成条目之后：
+工作队列 96 槽被旧块占满，近处块几十秒后才生成，落地时玩家已走远被 vanilla
+丢弃（`Ignoring chunk since it's not in the view range`）→ 身边持续空洞。
+盲预生成条目永不超时（`SeedGenQueue.expire` 与 `peekNearest` 均只对 hash≠0 生效）。
+
+### 13.7 SeedGen 自愈熔断与出界待命延长（mismatch 风暴修复）
+
+同一会话内若客户端对 pristine 区块大量回退全量（说明本地世界gen与服务端不一致，
+例如跨版本/数据包/客户端侧世界gen差异），`ServerChunkPushManager` 会在连续
+`SEED_GEN_DISABLE_THRESHOLD`（16）次 pristine 全量请求后对该玩家**自动停发 SeedRef**，
+改走全量推送；同时把出界待命任务超时从 10s 提高到 10min，避免移动时前排任务
+被过早丢弃后无法自动补回。熔断状态随玩家断开/服务端停止清理。

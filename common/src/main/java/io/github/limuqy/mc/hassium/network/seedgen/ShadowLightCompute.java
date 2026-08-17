@@ -1,5 +1,6 @@
 package io.github.limuqy.mc.hassium.network.seedgen;
 
+import io.github.limuqy.mc.hassium.concurrent.ChunkDistancePriority;
 import io.github.limuqy.mc.hassium.concurrent.HassiumTaskExecutor;
 import io.github.limuqy.mc.hassium.concurrent.KeyedPriorityQueue;
 import io.github.limuqy.mc.hassium.concurrent.TaskCategory;
@@ -1367,7 +1368,8 @@ public final class ShadowLightCompute {
         ready.offer(new ReadyItem(null, packet),
                 io.github.limuqy.mc.hassium.concurrent.MainThreadDispatcher.chunkKey(
                         pos, io.github.limuqy.mc.hassium.concurrent.MainThreadDispatcher.OP_LIGHT_UPDATE),
-                io.github.limuqy.mc.hassium.concurrent.MainThreadDispatcher.authoritativePriority(pos),
+                io.github.limuqy.mc.hassium.concurrent.MainThreadDispatcher.authoritativePriority(pos)
+                        + ChunkDistancePriority.TIER_BIAS,
                 KeyedPriorityQueue.OfferPolicy.REPLACE);
         io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.markLightDirty(pos, !converged);
         DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
@@ -1413,17 +1415,24 @@ public final class ShadowLightCompute {
             ReadyItem item = entry.item();
             try {
                 if (item.chunkPacket != null) {
+                    int chunkX = item.chunkPacket.getX();
+                    int chunkZ = item.chunkPacket.getZ();
                     connection.handleLevelChunkWithLight(item.chunkPacket);
-                    shadowAppliedChunks.add(ChunkPos.asLong(item.chunkPacket.getX(), item.chunkPacket.getZ()));
-                    io.github.limuqy.mc.hassium.metrics.NetworkStats.recordChunkApplied(
-                            item.chunkPacket.getX(), item.chunkPacket.getZ());
-                    io.github.limuqy.mc.hassium.utils.ChunkFlowTiming.recordApply(entry.key().posLong());
-                    // 诊断探针（debug.chunkApplyLogging 开启时输出）：影子回传区块落地后
-                    // 光照/方块采样（apply#/skyTop=0 即黑块嫌疑）
-                    if (mc != null && mc.level != null) {
+                    // vanilla 可能因区块不在视距内而忽略（ClientChunkManager.loadChunkFromPacket
+                    // 返回 null 并打印 Ignoring chunk...）。只有真正落地才登记/计数/探针；
+                    // 否则不加入 shadowAppliedChunks，避免光桥误以为该柱已落地而继续发 light 包。
+                    if (mc != null && mc.level != null && mc.level.hasChunk(chunkX, chunkZ)) {
+                        shadowAppliedChunks.add(ChunkPos.asLong(chunkX, chunkZ));
+                        io.github.limuqy.mc.hassium.metrics.NetworkStats.recordChunkApplied(chunkX, chunkZ);
+                        io.github.limuqy.mc.hassium.utils.ChunkFlowTiming.recordApply(entry.key().posLong());
+                        // 诊断探针（debug.chunkApplyLogging 开启时输出）：影子回传区块落地后
+                        // 光照/方块采样（apply#/skyTop=0 即黑块嫌疑）
                         io.github.limuqy.mc.hassium.network.ClientChunkHandler.probeChunkState(
-                                new ChunkPos(item.chunkPacket.getX(), item.chunkPacket.getZ()),
-                                mc.level, "shadow");
+                                new ChunkPos(chunkX, chunkZ), mc.level, "shadow");
+                    } else {
+                        DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
+                                "[SHADOW_CHUNK] Vanilla ignored chunk ({}, {}) — not marked as applied",
+                                chunkX, chunkZ);
                     }
                 } else if (item.lightPacket != null) {
                     connection.handleLightUpdatePacket(item.lightPacket);
@@ -1681,7 +1690,8 @@ public final class ShadowLightCompute {
                 ready.offer(new ReadyItem(null, packet),
                         io.github.limuqy.mc.hassium.concurrent.MainThreadDispatcher.chunkKey(
                                 pos, io.github.limuqy.mc.hassium.concurrent.MainThreadDispatcher.OP_LIGHT_UPDATE),
-                        io.github.limuqy.mc.hassium.concurrent.MainThreadDispatcher.authoritativePriority(pos),
+                        io.github.limuqy.mc.hassium.concurrent.MainThreadDispatcher.authoritativePriority(pos)
+                                + ChunkDistancePriority.TIER_BIAS,
                         KeyedPriorityQueue.OfferPolicy.REPLACE);
             } catch (Throwable t) {
                 DebugLogger.warn(DebugLogger.LogType.ASYNC,

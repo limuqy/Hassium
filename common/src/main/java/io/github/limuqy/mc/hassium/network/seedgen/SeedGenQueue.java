@@ -70,7 +70,10 @@ public final class SeedGenQueue {
         Entry best = null;
         int bestDist = Integer.MAX_VALUE;
         for (Entry e : pending.values()) {
-            if (nowMs() - e.enqueueTimeMs() > fallbackTimeoutMs(pending.size())) {
+            // 盲预生成条目（contentHash=0）永不超时（expire() 同样只回收 hash 条目）；
+            // 否则它们到期后既不被 peekNearest 选中也不被 expire 移除，会永久卡死队列。
+            if (e.contentHash() != 0L
+                    && nowMs() - e.enqueueTimeMs() > fallbackTimeoutMs(pending.size())) {
                 continue; // 超时条目由 expire() 统一回收
             }
             int dist = Math.abs(e.pos().x - playerChunkX) + Math.abs(e.pos().z - playerChunkZ);

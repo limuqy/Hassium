@@ -13,7 +13,6 @@ import io.github.limuqy.mc.hassium.utils.DebugLogger;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -43,11 +42,23 @@ public final class SeedGenExecutor {
 
     private final SeedGenQueue queue = new SeedGenQueue();
     /**
-     * P1 节流：seedref 先入 pendingIn 缓冲，由 drain 按生成完成速率释放进有界工作队列，
+     * P1 节流 + 距离优先：seedref 先入 pendingLive 缓冲，由 drain 按生成完成速率、
+     * <b>按当前玩家位置最近优先</b>释放进有界工作队列（{@link SeedGenQueue#peekNearest}），
      * 队列深度恒 ≤ {@link #MAX_WORK_DEPTH}——world-ready 一次性重放 1784 时不再瞬时灌入，
      * 影子端创建/装配/生成不再被洪峰淹没，且尾块在队等待被深度上界约束（超时窗口可准确覆盖）。
+     * <p>
+     * 不用 FIFO：FIFO 会让「当前视野内刚到达的 SeedRef」排在更早路径/初始 resync 的
+     * SeedRef 之后，工作队列 96 槽被远方旧块占满 → 近处块几十秒后才被释放/生成，
+     * 落地时玩家已走远被 vanilla 丢弃（Ignoring chunk since it's not in the view range）
+     * → 身边持续空洞。
      */
-    private final ConcurrentLinkedQueue<SeedRefS2CPacket> pendingIn = new ConcurrentLinkedQueue<>();
+    private final SeedGenQueue pendingLive = new SeedGenQueue();
+
+    /**
+     * 盲预生成低优先级缓冲：仅当 pendingLive 无可用条目时才释放（R2 缓存预热不得
+     * 挤占活体 SeedGen；盲预生成条目 contentHash=0 永不超时）。
+     */
+    private final SeedGenQueue pendingPregen = new SeedGenQueue();
 
     /** 有界工作队列最大深度：96 槽 × 实测生成 p90≈182ms/块 ≈ 17.5s 最坏在队等待。 */
     private static final int MAX_WORK_DEPTH = 96;
@@ -85,11 +96,15 @@ public final class SeedGenExecutor {
         if (!isEnabled()) {
             return false;
         }
-        // 节流接管：先入缓冲不直接进工作队列——由 drain 按生成完成速率释放
-        // （releasePendingWork），world-ready 重放不会一次性灌 1784 进队
-        pendingIn.add(packet);
-        DebugLogger.info(DebugLogger.LogType.ASYNC, "[SEEDGEN] Claimed ({}, {}) hash={} (buffered={}, queue={})",
-                packet.chunkX(), packet.chunkZ(), Long.toHexString(packet.contentHash()), pendingIn.size(), queue.size());
+        // 节流接管：先入 pendingLive 缓冲不直接进工作队列——由 drain 按生成完成速率、
+        // 距玩家最近优先释放（releasePendingWork），world-ready 重放不会一次性灌 1784 进队。
+        ChunkPos pos = new ChunkPos(packet.chunkX(), packet.chunkZ());
+        // 同 pos 盲预生成条目若还在低优先级缓冲，交给活体 SeedRef 取代（防重复 worldgen）。
+        pendingPregen.remove(pos);
+        pendingLive.enqueue(pos, packet.contentHash(), packet.sectionHashes());
+        DebugLogger.info(DebugLogger.LogType.ASYNC, "[SEEDGEN] Claimed ({}, {}) hash={} (bufferedLive={}, bufferedPregen={}, queue={})",
+                packet.chunkX(), packet.chunkZ(), Long.toHexString(packet.contentHash()),
+                pendingLive.size(), pendingPregen.size(), queue.size());
         pump();
         // 首个 SeedRef：影子端已就绪 → 铺开盲预生成队列（幂等，覆盖 R2 重连视距）
         schedulePregen();
@@ -111,7 +126,8 @@ public final class SeedGenExecutor {
     /** 断连清理：停池、关影子服务端（registry 共享）、清队列。 */
     public void onDisconnect() {
         queue.clear();
-        pendingIn.clear();
+        pendingLive.clear();
+        pendingPregen.clear();
         pregenScheduled.set(false);
         ExecutorService p = pool;
         pool = null;
@@ -160,19 +176,19 @@ public final class SeedGenExecutor {
         for (int dx = -PREGEN_RADIUS; dx <= PREGEN_RADIUS; dx++) {
             for (int dz = -PREGEN_RADIUS; dz <= PREGEN_RADIUS; dz++) {
                 ChunkPos pos = new ChunkPos(center.x + dx, center.z + dz);
-                // 走 pendingIn 节流（FIFO 尾随 SeedRef 释放）：盲预生成 441 块若直接入队
-                // 会撑爆 MAX_WORK_DEPTH=96 → releasePendingWork 停止释放 → SeedRef 饿死
-                // （M5-R 实证：增量 0）。去重：queue 已有（SeedRef 已接管）则跳过。
-                if (queue.isPending(pos)) {
+                // 走 pendingPregen 低优先级缓冲：仅当无活体 SeedRef 时由 releasePendingWork
+                // 释放（盲预生成不挤占 SeedGen）；441 块若直接入队会撑爆 MAX_WORK_DEPTH=96。
+                // 去重：工作队列 / 活体缓冲 / 低优先级缓冲已有该柱则跳过。
+                if (queue.isPending(pos) || pendingLive.isPending(pos) || pendingPregen.isPending(pos)) {
                     continue;
                 }
-                pendingIn.add(new SeedRefS2CPacket(pos.x, pos.z, 0L, new long[0]));
+                pendingPregen.enqueue(pos, 0L, new long[0]);
                 n++;
             }
         }
         DebugLogger.info(DebugLogger.LogType.ASYNC,
-                "[SEEDGEN] Blind pregen scheduled: {} chunks around ({}, {}) (buffered={}, queue={})",
-                n, center.x, center.z, pendingIn.size(), queue.size());
+                "[SEEDGEN] Blind pregen scheduled: {} chunks around ({}, {}) (bufferedPregen={}, queue={})",
+                n, center.x, center.z, pendingPregen.size(), queue.size());
         pump();
     }
 
@@ -207,17 +223,26 @@ public final class SeedGenExecutor {
         List<ChunkPos> fallbackBuffer = new ArrayList<>();
         try {
             while (!Thread.currentThread().isInterrupted()) {
-                releasePendingWork();
-                // 超时条目批量回退（expire 已移除；聚合攒批，flush 时合包）
-                for (SeedGenQueue.Entry expired : queue.expire()) {
-                    addFallback(fallbackBuffer, expired.pos());
-                }
                 Minecraft mc = Minecraft.getInstance();
                 if (mc.player == null || mc.level == null) {
                     break; // 断连/未进服：剩余条目由 onDisconnect 清空
                 }
-                SeedGenQueue.Entry entry = queue.peekNearest(
-                        mc.player.chunkPosition().x, mc.player.chunkPosition().z);
+                int playerChunkX = mc.player.chunkPosition().x;
+                int playerChunkZ = mc.player.chunkPosition().z;
+                // 工作队列超时条目批量回退（expire 已移除；聚合攒批，flush 时合包）
+                for (SeedGenQueue.Entry expired : queue.expire()) {
+                    addFallback(fallbackBuffer, expired.pos());
+                }
+                // 活体缓冲超时同样回退：超时从 SeedRef 到达即起算（FIFO 旧实现要等释放进
+                // 工作队列才起算，尾部条目最长可被额外拖 30s+ 才有兜底）。
+                for (SeedGenQueue.Entry expired : pendingLive.expire()) {
+                    addFallback(fallbackBuffer, expired.pos());
+                }
+                if (fallbackBuffer.size() >= FALLBACK_BATCH_MAX) {
+                    flushFallback(fallbackBuffer);
+                }
+                releasePendingWork(playerChunkX, playerChunkZ);
+                SeedGenQueue.Entry entry = queue.peekNearest(playerChunkX, playerChunkZ);
                 if (entry == null) {
                     break;
                 }
@@ -234,28 +259,51 @@ public final class SeedGenExecutor {
             flushFallback(fallbackBuffer);
             activeWorkers.decrementAndGet();
             // 竞态窗口：worker 退出瞬间有新条目 → 重新触发（补足 worker 数）
-            if ((!queue.isEmpty() || !pendingIn.isEmpty()) && !ShadowServerRegistry.getInstance().isFailed()) {
+            if ((!queue.isEmpty() || !pendingLive.isEmpty() || !pendingPregen.isEmpty())
+                    && !ShadowServerRegistry.getInstance().isFailed()) {
                 pump();
             }
         }
     }
 
     /**
-     * 从 pendingIn 释放 seedref 进有界工作队列：队列恒 ≤ {@link #MAX_WORK_DEPTH} 槽，
+     * 从两级缓冲释放 seedref 进有界工作队列：队列恒 ≤ {@link #MAX_WORK_DEPTH} 槽，
      * 实际入队速率 ≈ 生成完成速率（生成完 1 块才释放 1 块）——world-ready 一次性重放
      * 1784 不再瞬时灌入，影子端装配/生成不被洪峰淹没；尾块在队等待被深度上界约束，
      * 使 SeedGenQueue 自适应超时窗口可准确覆盖（P1）。
+     * <p>
+     * 释放顺序：活体 SeedRef 永远先于盲预生成；两者内部都按「距当前玩家最近优先」
+     * 而不是到达顺序（FIFO）。这消除头部阻塞：玩家快速移动时，刚到达的当前视野
+     * SeedRef 不再排在几百个旧路径 SeedRef / 441 个盲预生成条目之后。
      */
-    private void releasePendingWork() {
-        while (queue.size() < MAX_WORK_DEPTH) {
-            SeedRefS2CPacket p = pendingIn.poll();
-            if (p == null) {
+    private void releasePendingWork(int playerChunkX, int playerChunkZ) {
+        releasePendingWork(queue, pendingLive, pendingPregen, playerChunkX, playerChunkZ, MAX_WORK_DEPTH);
+    }
+
+    /** 纯逻辑静态版本（单测可用）：活体优先、按当前玩家位置最近优先地从两级缓冲释放进工作队列。 */
+    static void releasePendingWork(SeedGenQueue workQueue, SeedGenQueue liveQueue, SeedGenQueue pregenQueue,
+                                   int playerChunkX, int playerChunkZ, int maxWorkDepth) {
+        int released = 0;
+        while (workQueue.size() < maxWorkDepth && released < maxWorkDepth) {
+            SeedGenQueue.Entry entry = liveQueue.peekNearest(playerChunkX, playerChunkZ);
+            SeedGenQueue source = liveQueue;
+            if (entry == null) {
+                entry = pregenQueue.peekNearest(playerChunkX, playerChunkZ);
+                source = pregenQueue;
+            }
+            if (entry == null) {
                 break;
             }
-            queue.enqueue(new ChunkPos(p.chunkX(), p.chunkZ()), p.contentHash(), p.sectionHashes());
+            // 原子认领：多 worker 并行释放时防重复接管同一条目；失败重试下一轮。
+            if (!source.tryTake(entry.pos())) {
+                continue;
+            }
+            workQueue.enqueue(entry.pos(), entry.contentHash(), entry.sectionHashes());
+            released++;
             DebugLogger.info(DebugLogger.LogType.ASYNC,
-                    "[SEEDGEN] Released ({}, {}) into work queue (queue={})",
-                    p.chunkX(), p.chunkZ(), queue.size());
+                    "[SEEDGEN] Released ({}, {}) into work queue (queue={}, live={}, pregen={})",
+                    entry.pos().x, entry.pos().z, workQueue.size(),
+                    liveQueue.size(), pregenQueue.size());
         }
     }
 
@@ -338,7 +386,7 @@ public final class SeedGenExecutor {
                 // 现场）。此前误走 submitGenerated → generated → pushReady → 官方通道，
                 // 且产物不入注入表（既不落盘也服务不了 R2，双重失效）。
                 NetworkStats.recordLocallyGeneratedChunk(NetworkStats.ESTIMATED_CHUNK_BYTES);
-                server.injectLoadedChunk(pos, chunk);
+                server.injectLoadedChunk(pos, chunk, true);
                 io.github.limuqy.mc.hassium.network.seedgen.ShadowCacheEviction.recordAccess(pos);
                 // 光收敛性无保证（生成时邻域仅 BIOMES 空壳，边界光欠）→ 标脏：R2 读盘
                 // 命中走本地 relight 链；内存命中经 awaitBatchLight 屏障重算，杜绝欠光直推。
@@ -397,7 +445,7 @@ public final class SeedGenExecutor {
                             ClientMetadataHandler.requestFullChunksPublic(dimension, List.of(pos), false);
                         }
                     } else {
-                        server.injectLoadedChunk(pos, chunk);
+                        server.injectLoadedChunk(pos, chunk, true);
                         ShadowLightCompute.requestSectionDeltas(dimension, List.of(pos));
                     }
                 }
@@ -576,6 +624,6 @@ public final class SeedGenExecutor {
 
     /** 队列内待生成条目数 = 有界工作队列 + 未释放缓冲（诊断/测试）。 */
     public int pendingCount() {
-        return queue.size() + pendingIn.size();
+        return queue.size() + pendingLive.size() + pendingPregen.size();
     }
 }

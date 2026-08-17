@@ -43,6 +43,7 @@ import java.util.Comparator;
 import java.util.Deque;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
@@ -109,6 +110,19 @@ public class ServerChunkPushManager {
     private final Map<UUID, Boolean> playerSeedGenSupported = new ConcurrentHashMap<>();
 
     /**
+     * SeedGen 自愈熔断：客户端对 pristine 区块请求全量数据达到阈值后，
+     * 判定本会话 SeedGen 本地生成与服务器世界gen不一致（如跨版本/数据包差异），
+     * 对该玩家停发 SeedRef，改走全量推送，避免 mismatch 风暴打爆数据队列。
+     */
+    private final Set<UUID> seedGenDisabledPlayers = ConcurrentHashMap.newKeySet();
+
+    /** 每玩家 pristine 全量回退计数（仅客户端请求路径计数，直推不计）。 */
+    private final Map<UUID, Integer> seedGenFallbackCounts = new ConcurrentHashMap<>();
+
+    /** 触发 SeedGen 熔断的 pristine 全量请求数。 */
+    private static final int SEED_GEN_DISABLE_THRESHOLD = 16;
+
+    /**
      * 每玩家光照计算能力（握手 C2S 上报 lightComputeSupported = 客户端 hassiumEngineEnabled）。
      * 服务端据此决定是否剥光：客户端声明可本地/影子端算光才剥（stripLightIfConfigured gate）。
      */
@@ -153,6 +167,17 @@ public class ServerChunkPushManager {
      * （本会话生成且未修改）。非主世界维度不命中 pristine（静默走全量）。
      */
     public boolean isSeedGenFor(UUID playerId, ChunkPos pos, String dimension) {
+        if (seedGenDisabledPlayers.contains(playerId)) {
+            return false;
+        }
+        return isSeedGenCandidate(playerId, pos, dimension);
+    }
+
+    /**
+     * SeedGen 候选判定（不含熔断）：配置开启 + 玩家支持 + 主世界 pristine。
+     * 熔断前与 {@link #isSeedGenFor} 等价，供请求路径统计回退次数。
+     */
+    private boolean isSeedGenCandidate(UUID playerId, ChunkPos pos, String dimension) {
         if (!HassiumConfigService.getInstance().isSeedGenEnabled()) {
             return false;
         }
@@ -162,6 +187,23 @@ public class ServerChunkPushManager {
         ResourceKey<Level> dimKey = ResourceKey.create(Registries.DIMENSION,
                 ResourceLocationCompat.create(dimension));
         return PristineRegistry.isPristine(dimKey, pos);
+    }
+
+    /**
+     * 记录一次 pristine 全量回退；达到阈值后对该玩家熔断 SeedGen。
+     */
+    private void recordSeedGenFallback(UUID playerId, ChunkPos pos, String dimension) {
+        if (seedGenDisabledPlayers.contains(playerId) || !isSeedGenCandidate(playerId, pos, dimension)) {
+            return;
+        }
+        int count = seedGenFallbackCounts.merge(playerId, 1, Integer::sum);
+        if (count >= SEED_GEN_DISABLE_THRESHOLD) {
+            seedGenDisabledPlayers.add(playerId);
+            DebugLogger.warn(LogType.NETWORK,
+                    "[SEEDGEN] Auto-disabling SeedGen for player {} after {} pristine full-data fallbacks "
+                            + "(local worldgen appears inconsistent with server) — falling back to full pushes",
+                    playerId, count);
+        }
     }
 
     /**
@@ -175,8 +217,12 @@ public class ServerChunkPushManager {
 
     /** 待命检查周期（毫秒） */
     private static final long DEFER_CHECK_INTERVAL_MS = 1000L;
-    /** 待命任务最大等待（毫秒），超时真丢弃（玩家不再回来） */
-    private static final long DEFER_MAX_WAIT_MS = 10_000L;
+    /** 待命任务最大等待（毫秒），超时真丢弃（玩家不再回来）。
+     *  10s 对移动探索太短：frontline 任务被过早丢弃后客户端静止/折返时无新请求可触发，
+     *  导致扇形/十字虚空“永久”不补。 */
+    private static final long DEFER_MAX_WAIT_MS = 600_000L;
+    /** 每玩家待命任务上限：防超长超时下无界增长；超出时不再接纳新的出界任务 */
+    private static final int MAX_DEFERRED_PER_PLAYER = 8192;
     /** 每玩家 bloom 层上限（超出丢最旧层） */
     private static final int BLOOM_MAX_LAYERS = 64;
 
@@ -841,13 +887,41 @@ public class ServerChunkPushManager {
         int viewDistance = PlayerCompat.getViewDistance(player);
         // 与 ChunkMap 扫描余量一致，略扩一圈避免边界遗漏
         int radius = Math.max(2, viewDistance + 1);
-        // 握手上报位置优先（failover/重连时服务端玩家对象位置滞后于客户端真实位置）；消费后移除
+        // 位置选择：普通登录/重连时 vanilla 已按 playerdata 物化，player.chunkPosition()
+        // 是权威位置；握手上报位置可能是旧出生点/未更新快照，不能覆盖真实位置。
+        // 续流（resume）路径按上报位置物化玩家，此时上报位置才是权威。
+        // 额外保留旧 failover 兜底：若玩家对象仍滞留在出生点且上报位置非出生点，
+        // 说明真实位置尚未同步，仍以上报位置为准。
         ChunkPos reportedPos = initialPlayerChunkPos.remove(player.getUUID());
-        int centerX = reportedPos != null ? reportedPos.x : player.chunkPosition().x;
-        int centerZ = reportedPos != null ? reportedPos.z : player.chunkPosition().z;
+        ChunkPos actualPos = player.chunkPosition();
+        ChunkPos spawnPos;
+#if MC_VER < MC_1_21_9
+        spawnPos = new ChunkPos(level.getSharedSpawnPos());
+#else
+        spawnPos = new ChunkPos(level.getRespawnData().pos());
+#endif
+        boolean resume = isPlayerResumeActive(player.getUUID());
+        boolean actualStillAtSpawn = actualPos.x == spawnPos.x && actualPos.z == spawnPos.z
+                && reportedPos != null
+                && (reportedPos.x != spawnPos.x || reportedPos.z != spawnPos.z);
+        boolean preferReported = (resume || actualStillAtSpawn) && reportedPos != null;
+        int centerX;
+        int centerZ;
+        if (preferReported) {
+            centerX = reportedPos.x;
+            centerZ = reportedPos.z;
+        } else {
+            centerX = actualPos.x;
+            centerZ = actualPos.z;
+            if (reportedPos != null && (reportedPos.x != actualPos.x || reportedPos.z != actualPos.z)) {
+                DebugLogger.info(LogType.NETWORK,
+                        "[RESYNC] Ignoring stale reported position ({}, {}) for player {} — using actual player chunk ({}, {})",
+                        reportedPos.x, reportedPos.z, player.getName().getString(), centerX, centerZ);
+            }
+        }
         // T7 续流：验票通过后走同一 resync 机制 —— 按上报位置重发视距 hash，
         // 客户端与本地 ShadowStorageHashes 比对后只请求增量（hash 连续性）。
-        if (isPlayerResumeActive(player.getUUID())) {
+        if (resume) {
             DebugLogger.info(LogType.NETWORK,
                     "[RESUME] Player {} — 续流模式：按上报位置 ({}, {}) 续发视距 chunkHash",
                     player.getName().getString(), centerX, centerZ);
@@ -1486,7 +1560,7 @@ public class ServerChunkPushManager {
         DebugLogger.info(LogType.NETWORK, "[ENQUEUE_DATA] Player {} requested {} chunks (dimension={})",
                 player.getName().getString(), chunks.size(), dimension);
 
-        enqueueInternal(player, dimension, chunks);
+        enqueueInternal(player, dimension, chunks, true);
     }
 
     /**
@@ -1497,10 +1571,11 @@ public class ServerChunkPushManager {
         DebugLogger.info(LogType.NETWORK, "[ENQUEUE_DATA] Direct push {} chunks to player {} (dimension={})",
                 chunks.size(), player.getName().getString(), dimension);
 
-        enqueueInternal(player, dimension, chunks);
+        enqueueInternal(player, dimension, chunks, false);
     }
 
-    private void enqueueInternal(ServerPlayer player, String dimension, List<ChunkPos> chunks) {
+    private void enqueueInternal(ServerPlayer player, String dimension, List<ChunkPos> chunks,
+                                 boolean countSeedGenFallback) {
         ensureInitialized();
 
         // 检查玩家是否仍然在线
@@ -1545,6 +1620,9 @@ public class ServerChunkPushManager {
                 }
             }
             tasks.add(new DataRequestTask(pos, dimension, priority));
+            if (countSeedGenFallback) {
+                recordSeedGenFallback(playerId, pos, dimension);
+            }
         }
 
         // 去重/取代：同区块已在队时用新任务（最新优先级）替换旧任务——
@@ -1662,6 +1740,12 @@ public class ServerChunkPushManager {
                 if (!isServerChunkInRange(task.pos().x, task.pos().z, playerChunk.x, playerChunk.z, serverVD)) {
                     Map<Long, DeferredTask> deferred = deferredChunks.computeIfAbsent(
                             playerId, k -> new ConcurrentHashMap<>());
+                    if (deferred.size() >= MAX_DEFERRED_PER_PLAYER) {
+                        DebugLogger.warn(LogType.NETWORK,
+                                "[PROCESS_QUEUE] Dropping deferred chunk {} (deferred map full, size={})",
+                                task.pos(), deferred.size());
+                        continue;
+                    }
                     deferred.putIfAbsent(ChunkPos.asLong(task.pos().x, task.pos().z),
                             new DeferredTask(task.pos(), task.dimension(), System.currentTimeMillis()));
                     DebugLogger.info(LogType.NETWORK,
@@ -1972,6 +2056,8 @@ public class ServerChunkPushManager {
         // review-fix: T3-52：能力表随玩家清理（防 per-player 表无界增长）
         playerSeedGenSupported.remove(playerId);
         playerLightComputeSupported.remove(playerId);
+        seedGenDisabledPlayers.remove(playerId);
+        seedGenFallbackCounts.remove(playerId);
     }
 
     /**
@@ -1990,6 +2076,8 @@ public class ServerChunkPushManager {
         // review-fix: T3-52：能力表一并清理
         playerSeedGenSupported.clear();
         playerLightComputeSupported.clear();
+        seedGenDisabledPlayers.clear();
+        seedGenFallbackCounts.clear();
         if (pushPool != null) {
             pushPool.shutdownNow();
         }
