@@ -34,7 +34,7 @@ flowchart TD
     end
 
     subgraph MAIN["主线程 (Render thread) — 每帧预算循环 (MixinClientTick)"]
-        G["① flushClientUntil<br/>预算内出队<br/>（JoinBoost 30ms 窗口 / normal 15ms + hardCap 32）"]
+        G["① flushClientUntil<br/>时间预算内出队<br/>（JoinBoost 30ms / normal 15ms，无数量硬顶）"]
         G2["② processQueueUntil<br/>预算内 apply 缓存读回"]
         H["applyChunkData<br/>→ Services.getClientChunkApplier<br/>.applyToLevelFromByteBuf<br/>区块落地（此刻可见）"]
         I{"包带光?"}
@@ -74,7 +74,7 @@ flowchart TD
 | 解压 / 转 NBT | `HassiumTaskExecutor` 提交 | 后台虚拟线程 | `ExecutorFactory.create` |
 | 写盘 | `CacheSaveQueue` | 后台 | `scheduleAsyncCacheIngest` |
 | 主线程调度 | `PriorityBlockingQueue`（按玩家距离） | — | `MainThreadDispatcher.execute` |
-| 区块 apply | `ClientMainThreadBudget`（JoinBoost 30ms 窗口 / normal `mainThreadChunkBudgetMs`）+ `maxChunksPerFrame` 硬顶 | Render thread | `MixinClientTick` + `MixinVanillaChunkApplyBudget` |
+| 区块 apply | `ClientMainThreadBudget`（JoinBoost 30ms 窗口 / normal `mainThreadChunkBudgetMs`）；无数量硬顶 | Render thread | `MixinClientTick` |
 | R2 读盘 | region 级任务（每 region 至多一个在跑）→ `readyQueue` | 后台虚拟线程 + 主线程 | `ClientCacheLoadQueue` |
 | 光照投递 | `ShadowLightCompute` pending/generated/delta/pendingLightUpdates/inflight + 帧尾光桥 | 投递：网关 Netty / 解压后台；消费：后台池 | `submit` / `submitLightDelta` + `ShadowLightCompute` |
 | 影子端注入 + 收敛 | sky 预播种（Threaded 任务）→ per-chunk 两阶段屏障（`initializeLight` → `lightChunk`）→ `isChunkLightComplete` 校验，缺层自动续投（≤6 / 超时 ≤2） | 引擎 mailbox / 后台池 | `ShadowSeedServer.runMainLoop` + `ShadowLightCompute` |
@@ -99,8 +99,10 @@ ShadowLightCompute.drainReady()   →  影子端算好的光/区块批量落地�
 ShadowLightCompute.drainLightMasks() →  in-flight 柱暂缓，其余光更新攒批入队
 ```
 
-`drainReady` 内部顺序：卸载检查 → 标脏收敛清理 → 光屏障超时扫表 → `drainLightMasks` →
-按优先级消费回传队列（每帧 ≤ `max(1, hardCap)`）。光更新收集只发生在渲染前的同一主线程帧尾。
+`drainReady` 内部顺序：卸载检查 → 标脏收敛清理 → 光屏障超时扫表 → `drainLightMasks`
+（光包入同一 FIFO）→ 按到达顺序 apply（区块包入队时丢掉该柱旧光）。
+`maxChunksPerFrame` 只限缓存读取生产（OVD 入队 + 影子读盘）。距离优先级只在服务端推送
+与 `MainThreadDispatcher` 缓存读取，影子→客户端回传按到达顺序。
 
 ## 5. 光照投递与影子端管线
 
@@ -134,9 +136,10 @@ ShadowLightCompute.drainLightMasks() →  in-flight 柱暂缓，其余光更新�
 3. **打包**：区块路径 `SeedGenChunkCodec.buildPacket`（官方带光区块包）；纯光路径
    （LightDelta）`ClientboundLightUpdatePacket(pos, engine, null, null)`
    （全柱光包，不回传方块数据）。
-4. **落地**：帧尾 `drainReady` 官方通道消费；每帧硬顶。屏障期间同柱的
-   `lightUpdates` 掩码暂缓（`inflightLight` 守卫），最终全量光回传后丢弃中间态，
-   避免水面/边界「先亮→再黑→终亮」跳变。
+4. **落地**：帧尾 `drainReady` 官方通道消费；共享帧时间预算。区块包与光包同一 FIFO：
+   到达顺序落地，区块包入队时丢掉该柱尚未落地的旧光，避免旧空光排在新区块包之后盖暗。
+   屏障期间同柱的 `lightUpdates` 掩码暂缓（`inflightLight` 守卫），
+   最终全量光回传后丢弃中间态，避免水面/边界「先亮→再黑→终亮」跳变。
 
 `LightDelta`（增量算光）主链路：
 
@@ -150,12 +153,10 @@ ShadowLightCompute.drainLightMasks() →  in-flight 柱暂缓，其余光更新�
    只增不减 → 水面梯度永久丢失）→ `propagateLightSources` 重播（播种 fill + 向下衰减
    传播按块重写空层 → 梯度重建）→ 全柱光包回传。不清的柱只标脏，后续 R2 读盘命中
    走 relight 链，不会把旧光当权威光复用。
-4. ~~新柱收敛后对 4 邻柱登记全柱补光~~（2026-08-15 移除）：该机制是光包风暴与跳变的
-   主放大器（每柱收敛 × 4 邻柱整柱清光重算 + 全柱光包回传，跑图时成百上千光包占据
-   在途屏障与回传队列，区块注入被挤占 → 虚空区块迟迟未补全）。邻柱边界补光本就由
-   跨柱传播 + `collectLightUpdate → drainLightMasks` 桥梁事件驱动覆盖（邻柱到货时其
-   传播写进已存在柱的边界 section，触发光照更新包补发）；sky 是 per-column 播种与
-   邻柱无关——反向补光纯属冗余。
+4. 新柱首包之后对已注入、不在屏障中的 4 邻柱再投一次 `propagateLightSources`（不清光、
+   不整柱回传）。2026-08-15 曾整柱清光重算，光包风暴后误判「sky 与邻柱无关」整段删掉——
+   屋檐下水平天空光只能由邻柱 increase 推入，邻柱先收敛（尤其 REUSE 跳过 propagate）
+   时后到柱会永久欠光。真正变亮的 section 仍走 `collectLightUpdate → drainLightMasks`。
 
 失败（注入异常 / 重试超限）→ 欠光回传 + 标脏 + 光照更新桥梁兜底。**客户端无本地
 光照逻辑**；影子端启动失败时整体降级（缓存/OVD/SeedGen 关闭并提示），剥光在握手侧
@@ -178,7 +179,7 @@ ShadowLightCompute.drainLightMasks() →  in-flight 柱暂缓，其余光更新�
 | `ClientChunkHandler` | bulk 收包（网关 outbound / UDP 注入直调）、解压调度、`applyChunkData` 统一入口 |
 | `GatewayS2CRouter` | 原版包注入路由；剥光区块包先投影子端再回传，杜绝直接 apply 黑块 |
 | `MainThreadDispatcher` | 后台→主线程回调队列（距离优先级） |
-| `ClientMainThreadBudget` | 主线程 apply 帧预算（JoinBoost / normal / hardCap） |
+| `ClientMainThreadBudget` | 主线程 apply 时间预算（JoinBoost / normal）；`maxChunksPerFrame` 只限缓存读取生产 |
 | `ShadowLightCompute` | 投递队列（pending/generated/delta/pendingLightUpdates/inflight）+ 屏障重试 + 帧尾落地编排 |
 | `ShadowServerRegistry` | 影子端共享单例：握手后创建、失败降级、断连关闭 |
 | `ShadowSeedServer` | 进程内 ServerLevel + 官方光照引擎：注入 / 清光（vanilla updateChunkStatus 同款）/ 增量清光 / 完整度校验 |

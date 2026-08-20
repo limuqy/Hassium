@@ -45,8 +45,8 @@ public final class ConfigSchema {
             "影子端内存区块回收延迟秒数（离开卸载边界后计时，超时落盘并清内存；0=禁用回收）",
             "Shadow in-memory chunk recycle delay in seconds (0 = disable)");
     public static final ConfigKey<Integer> CHUNK_MAX_CHUNKS_PER_FRAME = integer("chunk.maxChunksPerFrame", ConfigScope.CLIENT, Domain.CHUNK_CORE, 6, 1, 512,
-            "每帧区块主线程操作硬顶（apply 回调 + OVD 入队 + 影子回传消费共用）",
-            "Hard cap on main-thread chunk ops per frame");
+            "每 tick 缓存读取生产上限（OVD 入队 + 影子读盘；主线程消费只受时间预算）",
+            "Per-tick cache-read production cap (OVD enqueue + shadow disk); consume is time-budget only");
     public static final ConfigKey<Integer> CHUNK_MAIN_THREAD_CHUNK_BUDGET_MS = integer("chunk.mainThreadChunkBudgetMs", ConfigScope.CLIENT, Domain.CHUNK_CORE, 15, 1, 50,
             "主线程 apply 预算（ms）", "Main-thread apply budget in ms");
     public static final ConfigKey<Boolean> CHUNK_HASSIUM_ENGINE_ENABLED = bool("chunk.hassiumEngineEnabled", ConfigScope.CLIENT, Domain.CHUNK_CORE, true,

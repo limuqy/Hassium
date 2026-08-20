@@ -26,6 +26,7 @@ public class MixinClientTick {
     @Inject(method = "tick", at = @At("HEAD"))
     private void hassium$tickStart(CallbackInfo ci) {
         TickMonitor.beginClientTick();
+        ClientMainThreadBudget.resetCacheReadBudget();
     }
 
     /**
@@ -75,10 +76,14 @@ public class MixinClientTick {
         } catch (Exception e) {
             // 忽略更新错误
         }
+        try {
+            io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.flushDeferredRemoteHashes();
+        } catch (Exception e) {
+            // 缓存读盘配额用尽后的续抽；失败不得中断 tick
+        }
 
-        // 主线程时间预算：网络回调 vs 影子光落地动态分配。
+        // 主线程时间预算：网络回调 vs 影子光落地动态分配。消费侧只受时间约束。
         long budgetNs = ClientMainThreadBudget.getBudgetNs();
-        int hardCap = ClientMainThreadBudget.getHardCap();
         long frameStartNs = System.nanoTime();
         long frameDeadlineNs = frameStartNs + budgetNs;
 
@@ -86,10 +91,10 @@ public class MixinClientTick {
 
         try {
             if (hasFlush) {
-                MainThreadDispatcher.flushClientUntil(frameDeadlineNs, hardCap);
+                MainThreadDispatcher.flushClientUntil(frameDeadlineNs);
             }
         } catch (Exception e) {
-            MainThreadDispatcher.flushClient();
+            MainThreadDispatcher.flushClientUntil(frameDeadlineNs);
         }
 
         // 全量请求超时重发（fallback 链兜底；SeedGen 影子端接管时无请求）
@@ -125,7 +130,7 @@ public class MixinClientTick {
         // 黑块窗口 = 0（apply 后立即落地）。随后单柱失败兜底（注入失败/超时柱走
         // 客户端重算；正常流程不触发）。
         try {
-            io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.drainReady();
+            io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.drainReady(frameDeadlineNs);
         } catch (Exception e) {
             // 影子光照可选；异常不得中断客户端 tick
         }

@@ -56,14 +56,39 @@ class ShadowLightComputeTimingRegressionTest {
     }
 
     @Test
-    @DisplayName("邻柱补光：已落地柱才占预算，inflight/deferred 不占坑")
+    @DisplayName("光桥打包：须已有影子区块包，且跳过屏障/欠光暂缓/邻柱重播")
     void lightMaskBudgetSkipsInflightAndDeferred() {
-        assertTrue(ShadowLightCompute.canDrainLightMaskThisFrame(true, true, false, false));
-        assertFalse(ShadowLightCompute.canDrainLightMaskThisFrame(true, true, true, false),
+        assertTrue(ShadowLightCompute.canDrainLightMaskThisFrame(false, false, true, false));
+        assertFalse(ShadowLightCompute.canDrainLightMaskThisFrame(false, false, false, false),
+                "加载屏 blocks-only 柱不得套光包");
+        assertFalse(ShadowLightCompute.canDrainLightMaskThisFrame(true, false, true, false),
                 "屏障中的柱不得占光桥预算");
-        assertFalse(ShadowLightCompute.canDrainLightMaskThisFrame(true, true, false, true),
+        assertFalse(ShadowLightCompute.canDrainLightMaskThisFrame(false, true, true, false),
                 "欠光暂缓覆盖的柱不得占光桥预算");
-        assertFalse(ShadowLightCompute.canDrainLightMaskThisFrame(true, false, false, false),
-                "尚无影子全量落地则不发光包");
+        assertFalse(ShadowLightCompute.canDrainLightMaskThisFrame(false, false, true, true),
+                "邻柱重播尚未排完不得快照中间态空层");
+    }
+
+    @Test
+    @DisplayName("影子回传 FIFO：后入队的优先级数值更大")
+    void shadowApplyIsFifoNotDistance() {
+        double first = ShadowLightCompute.fifoApplyPriority();
+        double second = ShadowLightCompute.fifoApplyPriority();
+        assertTrue(first < second, "入队序号必须单调递增，drainReady 按到达顺序 apply");
+    }
+
+    @Test
+    @DisplayName("跨柱屋檐：只重播已注入且不在屏障中的邻柱光源，不清光")
+    void respreadsNeighborSourcesWithoutFullRelight() {
+        assertTrue(ShadowLightCompute.shouldRespreadNeighborSources(true, false),
+                "已注入邻柱必须再 propagate，才能把天空光推进后到的屋檐柱");
+        assertFalse(ShadowLightCompute.shouldRespreadNeighborSources(false, false),
+                "邻柱尚未注入：其随后的 lightChunk 会 propagate");
+        assertFalse(ShadowLightCompute.shouldRespreadNeighborSources(true, true),
+                "邻柱正在屏障中：lightChunk(false) 结束时会 propagate，避免重复");
+        assertTrue(ShadowLightCompute.shouldRespreadSelfSources(true),
+                "REUSE 跳过了本柱 propagate，邻柱后到时本柱光源也要再推一次");
+        assertFalse(ShadowLightCompute.shouldRespreadSelfSources(false),
+                "RECOMPUTE 刚跑过本柱 propagate，不必立刻再投");
     }
 }

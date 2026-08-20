@@ -379,20 +379,24 @@ public class ViewDistanceExtensionService {
                     return dx * dx + dz * dz;
                 }));
 
-        int budget = HassiumConfigService.getInstance().getMaxChunksPerFrame();
         int enqueued = 0;
         int cursor = 0;
-        for (; cursor < toLoad.size() && enqueued < budget; cursor++) {
+        for (; cursor < toLoad.size(); cursor++) {
+            if (!ClientMainThreadBudget.tryAcquireCacheRead()) {
+                break;
+            }
             if (loadRenderOnlyChunk(toLoad.get(cursor))) {
                 enqueued++;
+            } else {
+                ClientMainThreadBudget.refundCacheRead();
             }
         }
 
         // 本 tick 未扫完 toLoad（预算打满）→ 不写 last*，下 tick geometryChanged 继续近距灌队
         // storage 未就绪时 load 全失败会扫完列表并更新 last*；就绪后由 onClientStorageReady 强制 rescan
         if (cursor < toLoad.size()) {
-            Constants.LOG.debug("Hassium: OVD enqueue {}/{} this tick (cap={}), defer rest",
-                    enqueued, toLoad.size(), budget);
+            Constants.LOG.debug("Hassium: OVD enqueue {}/{} this tick (cache-read cap exhausted), defer rest",
+                    enqueued, toLoad.size());
             return;
         }
 

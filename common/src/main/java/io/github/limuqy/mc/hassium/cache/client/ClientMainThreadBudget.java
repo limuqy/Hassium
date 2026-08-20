@@ -1,12 +1,15 @@
 package io.github.limuqy.mc.hassium.cache.client;
 
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * 客户端主线程区块应用时间预算。
+ * 客户端主线程区块应用时间预算，以及影子端缓存读取生产配额。
  * <p>
- * 用本帧已消耗的 {@code nanoTime} 约束 apply / 回调吞吐，替代滞后的 FPS 自适应。
- * 进服后短时 JoinBoost 提高预算，摊平「停顿后突进」。
+ * 消费（apply / 回调 / 影子回传落地）只用本帧 {@code nanoTime} 预算；
+ * {@code chunk.maxChunksPerFrame} 只约束缓存读取生产（OVD 入队、影子读盘），
+ * 服务端推送有自己的限流，客户端不重复掐。
+ * 进服后短时 JoinBoost 提高时间预算与读盘配额，摊平「停顿后突进」。
  * JoinBoost 自 {@link #startJoinBoost()} 起 30s 宽松封顶：apply 活跃可续期，但总窗口不超 30s。
  */
 public final class ClientMainThreadBudget {
@@ -24,7 +27,7 @@ public final class ClientMainThreadBudget {
     private static final int JOIN_BOOST_BUDGET_MS = 30;
 
     /**
-     * JoinBoost 期间每 tick 影子回传/apply 硬顶下限。默认 {@code chunk.maxChunksPerFrame}=6
+     * JoinBoost 期间每 tick 缓存读取生产配额下限。默认 {@code chunk.maxChunksPerFrame}=6
      * 在 20 tick/s 下理论 120/s，但实测进服帧时常掉到 ~8–10Hz，6×10=60 仍低于 15s 铺满所需 ~67/s。
      */
     private static final int JOIN_BOOST_HARD_CAP = 12;
@@ -36,6 +39,9 @@ public final class ClientMainThreadBudget {
 
     /** 最近一次权威区块 apply 的时间戳（settle 写回判定：加载风暴停止的安静窗口）。 */
     private static volatile long lastApplyNano = 0L;
+
+    /** 本 tick 剩余缓存读取次数（OVD 入队 + 影子 {@code loadFromDisk}）。 */
+    private static final AtomicInteger cacheReadsRemaining = new AtomicInteger();
 
     private ClientMainThreadBudget() {
     }
@@ -116,7 +122,8 @@ public final class ClientMainThreadBudget {
     }
 
     /**
-     * 本帧安全硬顶（最多 apply / 回调次数）。
+     * 本 tick 缓存读取生产配额（{@code chunk.maxChunksPerFrame}；JoinBoost 期间下限 12）。
+     * 不用于主线程消费。
      */
     public static int getHardCap() {
         int base = Math.max(1, HassiumConfigService.getInstance().getMaxChunksPerFrame());
@@ -124,5 +131,30 @@ public final class ClientMainThreadBudget {
             return Math.max(base, JOIN_BOOST_HARD_CAP);
         }
         return base;
+    }
+
+    /** 客户端 tick 开头重置本 tick 的缓存读取配额。 */
+    public static void resetCacheReadBudget() {
+        cacheReadsRemaining.set(getHardCap());
+    }
+
+    /**
+     * 占用一次缓存读取（OVD 入队或影子读盘）。配额用尽返回 {@code false}，调用方应把剩余工作留到下 tick。
+     */
+    public static boolean tryAcquireCacheRead() {
+        while (true) {
+            int n = cacheReadsRemaining.get();
+            if (n <= 0) {
+                return false;
+            }
+            if (cacheReadsRemaining.compareAndSet(n, n - 1)) {
+                return true;
+            }
+        }
+    }
+
+    /** {@link #tryAcquireCacheRead()} 之后实际未发起读取时退还配额。 */
+    public static void refundCacheRead() {
+        cacheReadsRemaining.incrementAndGet();
     }
 }

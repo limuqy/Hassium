@@ -93,7 +93,7 @@ drainReady 帧尾 apply；原版包经网关注入（handler 直调 handleLevelC
 |------|------|
 | `mainThreadChunkBudgetMs` | 每帧 apply/回调共享预算（默认 15ms） |
 | JoinBoost | 进服约 10s，预算从约 30ms 线性退坡到 `mainThreadChunkBudgetMs` |
-| `maxChunksPerFrame` | 安全硬顶（默认 6） |
+| `maxChunksPerFrame` | 每 tick 缓存读取生产上限（默认 6；OVD 入队 + 影子读盘） |
 
 控制面包（hash / 握手 / index sync 等）在 `PacketCompressionBlacklist`，避免进 PENDING 聚合窗口。
 
@@ -184,7 +184,7 @@ MixinClientTick.tick
     → serverVD = OptionsAccessor.getServerRenderDistance()
     → 环带 = {pos : serverVD < dist(pos,player) ≤ clientVD}（圆形）
     → toLoad：跳过已 loaded/pending/未到期 miss；按切比雪夫(+欧氏次键)近距排序
-    → 每 tick 最多 enqueue maxChunksPerFrame 个（与主线程 apply 硬顶共用配置）
+    → 每 tick 最多 enqueue maxChunksPerFrame 个（缓存读取生产配额，与影子读盘共用）
     → ClientCacheLoadQueue.enqueue(pos, MainThreadDispatcher.renderOnlyPriority(pos), renderOnly=true)
       // RENDER_ONLY 层（tier*BIAS+distSq）；层序恒为 权威 > 未知任务 > 环带；priority 越小越优先
     → 未扫完 toLoad 不更新 lastPlayerPos → 下 tick 继续灌；另有 pendingLoad>128 门槛（JoinBoost 跳过）

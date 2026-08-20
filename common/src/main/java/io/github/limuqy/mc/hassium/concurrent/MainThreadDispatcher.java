@@ -251,29 +251,39 @@ public final class MainThreadDispatcher {
     // ============== 刷新（主线程调用） ==============
 
     /**
-     * 刷新客户端主线程回调队列（每帧调用）
+     * 刷新客户端主线程回调队列（每帧调用）。
      * <p>
-     * 按优先级顺序出队并执行，默认最多执行 DEFAULT_MAX_CALLBACKS_PER_FRAME 个。
+     * 测试 / 兼容入口：给足时间预算，按 {@link #DEFAULT_MAX_CALLBACKS_PER_FRAME} 出队。
      */
     public static void flushClient() {
         flushClient(DEFAULT_MAX_CALLBACKS_PER_FRAME);
     }
 
     /**
-     * 刷新客户端主线程回调队列（每帧调用，按数量硬顶）。
+     * 刷新客户端主线程回调队列（测试用数量上限）。
      *
      * @param maxPerFrame 单帧最多执行的回调数
      */
     public static void flushClient(int maxPerFrame) {
-        long deadlineNs = System.nanoTime() + 50_000_000L; // 兼容旧调用：给足预算，仍受 hardCap 约束
+        long deadlineNs = System.nanoTime() + 50_000_000L; // 兼容旧调用：给足预算，仍受 count 约束
         flushClientUntil(deadlineNs, maxPerFrame);
+    }
+
+    /**
+     * 在共享时间预算内刷新客户端回调队列（无数量硬顶）。
+     *
+     * @param deadlineNs 本帧截止时间（{@link System#nanoTime()}）
+     * @return 实际处理的回调数
+     */
+    public static int flushClientUntil(long deadlineNs) {
+        return flushClientUntil(deadlineNs, Integer.MAX_VALUE);
     }
 
     /**
      * 在共享时间预算内刷新客户端回调队列。
      *
-     * @param deadlineNs  本帧截止时间（{@link System#nanoTime()}）
-     * @param hardCap     安全硬顶（最多回调数）
+     * @param deadlineNs 本帧截止时间（{@link System#nanoTime()}）
+     * @param hardCap    测试用数量上限；生产路径传 {@link Integer#MAX_VALUE}
      * @return 实际处理的回调数
      */
     public static int flushClientUntil(long deadlineNs, int hardCap) {

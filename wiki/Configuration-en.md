@@ -43,7 +43,7 @@ In-game config screen entry points:
 | `chunk.maxRenderDistance` | `16` | Beyond-view ring and effective RD cap (range 2–64) |
 | `chunk.ovdUnloadDelaySecs` | `5` | Seconds of delayed unload after leaving the beyond-view ring (0 = sync) |
 | `chunk.unloadDelaySecs` | `30` | Shadow-server in-memory chunk recycle delay in seconds (starts counting once a chunk leaves the unload boundary; on timeout the chunk is flushed to disk and freed from memory; 0 = disable recycling) |
-| `chunk.maxChunksPerFrame` | `6` | Hard cap on main-thread chunk operations per frame (shared by apply callbacks, beyond-view enqueue and shadow light delivery) |
+| `chunk.maxChunksPerFrame` | `6` | Per-tick cache-read production cap (beyond-view enqueue + shadow disk). Main-thread apply is time-budget only; server push is throttled on the server |
 | `chunk.mainThreadChunkBudgetMs` | `15` | Per-frame chunk apply budget on the client (ms); JoinBoost temporarily raises it for ~10s after join |
 | `chunk.hassiumEngineEnabled` | `true` | Hassium engine (master switch for non-network features): starts an in-process shadow server on login that owns all chunk lighting computation (the client stops computing light itself); on startup failure it degrades automatically (client cache / beyond-view render / SeedGen disabled with an in-game notice); when disabled the server does not strip light (negotiated at handshake), light arrives with the packets |
 | `chunk.ovdLocalGeneration` | `false` | Beyond-view local generation: beyond-view-render chunks that miss the client cache are generated locally using the server's world seed and stored into the local cache; auto-disabled when no seed is available (server without the mod) |
