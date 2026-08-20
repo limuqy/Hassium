@@ -50,4 +50,19 @@ class ServerChunkPushManagerBloomSplitTest {
         layers.reset(filter);
         assertFalse(ServerChunkPushManager.shouldPushFull(layers, 7, 8, DIM));
     }
+
+    @Test
+    void sessionTable_ignoredWhenInBloom() {
+        assertFalse(ServerChunkPushManager.shouldReuseSessionPush(true, 42L, 42L));
+        assertFalse(ServerChunkPushManager.shouldRecordSessionPush(true, 42L));
+    }
+
+    @Test
+    void sessionTable_reusesSameHashWhenNotInBloom() {
+        assertTrue(ServerChunkPushManager.shouldReuseSessionPush(false, 42L, 42L));
+        assertFalse(ServerChunkPushManager.shouldReuseSessionPush(false, 42L, 99L));
+        assertFalse(ServerChunkPushManager.shouldReuseSessionPush(false, null, 42L));
+        assertTrue(ServerChunkPushManager.shouldRecordSessionPush(false, 42L));
+        assertFalse(ServerChunkPushManager.shouldRecordSessionPush(false, 0L));
+    }
 }

@@ -162,6 +162,16 @@ public class ServerChunkPushManager {
     private final Map<UUID, PlayerBloomLayers> bloomLayers = new ConcurrentHashMap<>();
 
     /**
+     * Bloom 未命中柱的本会话已直推 contentHash（按玩家）。Bloom 已有的柱不登记、不查表。
+     * 走近再次 trackChunk 时 Bloom 仍空，hash 相同则只发 hash，避免无 Bloom 时重复整柱直推。
+     */
+    private final Map<UUID, ConcurrentHashMap<SessionPushKey, Long>> sessionPushedHashes =
+            new ConcurrentHashMap<>();
+    private static final int MAX_SESSION_PUSH_HASHES = 8192;
+
+    private record SessionPushKey(String dimension, int x, int z) {}
+
+    /**
      * 握手 C2S 能力上报后调用：记录玩家是否支持 SeedGen。
      */
     public void setPlayerSeedGenSupported(UUID playerId, boolean supported) {
@@ -692,9 +702,9 @@ public class ServerChunkPushManager {
      * SeedGen 玩家（能力 + 配置 + pristine）→ 只发 SeedRef（本地生成，零区块数据流量）；
      * 其余玩家 → Bloom 分流（客户端握手上报影子端存档布隆位图）：
      * <ul>
-     *   <li>bloom miss / 空 / 未就绪（确定无缓存或尚无法判定）→ 只直推，不发 hash；</li>
-     *   <li>bloom hit（可能有缓存）→ 只发 hash，由客户端影子端读盘比对决定
-     *       命中本地回传或 ChunkDataRequestC2S 请求数据。</li>
+     *   <li>bloom hit（可能有缓存）→ 只发 hash，不查/不写本会话直推表；</li>
+     *   <li>bloom miss / 空 / 未就绪 → 查本会话直推表：同柱同 hash 已直推过则只发 hash；
+     *       否则整柱直推并在发送成功后登记（仅登记不在 Bloom 中的柱）。</li>
      * </ul>
      * hash 直发（不走限流批次）：影子端比对在后台线程（无旧客户端比对风暴）。
      */
@@ -708,13 +718,17 @@ public class ServerChunkPushManager {
                 enqueueSeedRef(player, pos, dimension, chunkHash, sectionHashes);
                 continue;
             }
-            if (shouldPushFull(player, pos, dimension)) {
-                // miss / 空 / 未就绪 → 只直推，不发 hash（避免客户端再走比对/请求往返）。
-                enqueueDirectPush(player, dimension, List.of(pos));
-            } else {
-                // hit → 只发 hash，不直推。
+            boolean inBloom = !shouldPushFull(player, pos, dimension);
+            if (inBloom) {
                 sendChunkHashDirect(player, pos, chunkHash, sectionBitmap, dimension);
+                continue;
             }
+            Long lastSent = lastSessionPushedHash(player.getUUID(), dimension, pos);
+            if (shouldReuseSessionPush(inBloom, lastSent, chunkHash)) {
+                sendChunkHashDirect(player, pos, chunkHash, sectionBitmap, dimension);
+                continue;
+            }
+            enqueueDirectPush(player, dimension, List.of(pos), chunkHash);
         }
     }
 
@@ -852,6 +866,46 @@ public class ServerChunkPushManager {
      */
     private boolean shouldPushFull(ServerPlayer player, ChunkPos pos, String dimension) {
         return shouldPushFull(bloomLayers.get(player.getUUID()), pos.x, pos.z, dimension);
+    }
+
+    /**
+     * Bloom 未命中时，本会话已直推过相同 contentHash → 只发 hash，不再整柱。
+     * Bloom 已命中不走本表。
+     */
+    static boolean shouldReuseSessionPush(boolean inBloom, Long lastSentHash, long currentHash) {
+        if (inBloom || lastSentHash == null || currentHash == 0L) {
+            return false;
+        }
+        return lastSentHash == currentHash;
+    }
+
+    /** 只登记不在 Bloom 中的直推柱。 */
+    static boolean shouldRecordSessionPush(boolean inBloom, long currentHash) {
+        return !inBloom && currentHash != 0L;
+    }
+
+    private Long lastSessionPushedHash(UUID playerId, String dimension, ChunkPos pos) {
+        if (playerId == null || dimension == null || pos == null) {
+            return null;
+        }
+        ConcurrentHashMap<SessionPushKey, Long> table = sessionPushedHashes.get(playerId);
+        if (table == null) {
+            return null;
+        }
+        return table.get(new SessionPushKey(dimension, pos.x, pos.z));
+    }
+
+    private void rememberSessionPush(UUID playerId, String dimension, ChunkPos pos, long chunkHash) {
+        if (playerId == null || dimension == null || pos == null || chunkHash == 0L) {
+            return;
+        }
+        ConcurrentHashMap<SessionPushKey, Long> table =
+                sessionPushedHashes.computeIfAbsent(playerId, ignored -> new ConcurrentHashMap<>());
+        SessionPushKey key = new SessionPushKey(dimension, pos.x, pos.z);
+        if (table.size() >= MAX_SESSION_PUSH_HASHES && !table.containsKey(key)) {
+            return;
+        }
+        table.put(key, chunkHash);
     }
 
     /**
@@ -1064,7 +1118,21 @@ public class ServerChunkPushManager {
                 // 未加载：保留在 pendingSends，等 getChunkNow != null 再试
                 continue;
             }
-            boolean pushFull = shouldPushFull(player, pos, dimension);
+            boolean bloomMiss = shouldPushFull(player, pos, dimension);
+            boolean pushFull = bloomMiss;
+            long currentHash = 0L;
+            if (bloomMiss) {
+                try {
+                    currentHash = ChunkContentHashUtil.combineSectionHashes(
+                            ChunkContentHashUtil.computeSectionHashes(chunk));
+                } catch (Throwable ignored) {
+                    currentHash = 0L;
+                }
+                Long lastSent = lastSessionPushedHash(playerId, dimension, pos);
+                if (hashBudget > 0 && shouldReuseSessionPush(false, lastSent, currentHash)) {
+                    pushFull = false;
+                }
+            }
             if (pushFull) {
                 if (fullBudget <= 0) {
                     continue;
@@ -1074,7 +1142,7 @@ public class ServerChunkPushManager {
             }
             long packed = ChunkPos.asLong(pos.x, pos.z);
             boolean accepted = pushFull
-                    ? enqueueDirectPush(player, dimension, List.of(pos))
+                    ? enqueueDirectPush(player, dimension, List.of(pos), currentHash)
                     : submitMetadataTaskFromChunk(player, pos, chunk, dimension);
             if (!commitPacedPendingKey(pending, packed, accepted)) {
                 // admission 拒绝：本 tick 不再硬塞更远的直推柱；hash 失败则跳过该柱重试
@@ -1758,10 +1826,14 @@ public class ServerChunkPushManager {
      * @return true if every chunk was newly queued or already under admission
      */
     public boolean enqueueDirectPush(ServerPlayer player, String dimension, List<ChunkPos> chunks) {
+        return enqueueDirectPush(player, dimension, chunks, 0L);
+    }
+
+    boolean enqueueDirectPush(ServerPlayer player, String dimension, List<ChunkPos> chunks, long contentHash) {
         DebugLogger.info(LogType.NETWORK, "[ENQUEUE_DATA] Direct push {} chunks to player {} (dimension={})",
                 chunks.size(), player.getName().getString(), dimension);
 
-        return enqueueInternal(player, dimension, chunks, false);
+        return enqueueInternal(player, dimension, chunks, false, contentHash);
     }
 
     /**
@@ -1769,6 +1841,11 @@ public class ServerChunkPushManager {
      */
     private boolean enqueueInternal(ServerPlayer player, String dimension, List<ChunkPos> chunks,
                                  boolean countSeedGenFallback) {
+        return enqueueInternal(player, dimension, chunks, countSeedGenFallback, 0L);
+    }
+
+    private boolean enqueueInternal(ServerPlayer player, String dimension, List<ChunkPos> chunks,
+                                 boolean countSeedGenFallback, long contentHash) {
         ensureInitialized();
         if (!player.isAlive() || player.hasDisconnected()) {
             Constants.LOG.warn("[ENQUEUE_DATA] Player {} is not online, ignoring data request",
@@ -1803,7 +1880,8 @@ public class ServerChunkPushManager {
                     priority -= FORWARD_BIAS * dot;
                 }
             }
-            DataRequestTask task = new DataRequestTask(pos, dimension, priority, null);
+            long taskHash = chunks.size() == 1 ? contentHash : 0L;
+            DataRequestTask task = new DataRequestTask(pos, dimension, priority, null, taskHash);
             // 已在 pending/in-flight：视为成功（paced pending 可安全移除，避免永久重试）
             if (controller.contains(admissionKey(task))) {
                 if (countSeedGenFallback) {
@@ -2214,6 +2292,9 @@ public class ServerChunkPushManager {
         }
         sender.sendCompressedChunk(player, compressed);
         NetworkStats.recordChunkSent(VanillaZlibEstimator.estimate(chunkData));
+        if (shouldRecordSessionPush(shouldPushFull(player, task.pos(), task.dimension()), task.contentHash())) {
+            rememberSessionPush(player.getUUID(), task.dimension(), task.pos(), task.contentHash());
+        }
         // [LIGHT-DATA] 观测锚点：每 512 块打印一次出站光照实测（校准 ESTIMATED_LIGHT_BYTES=16KB；
         // MixinLightDataWrite 按包实测线格式字节——含握手前原版直发真实 light 与剥光空包，
         // 均值 ≈ 每块 light 实际线格式字节；与 lightStrip=false 对照可量化剥光收益）
@@ -2482,6 +2563,7 @@ public class ServerChunkPushManager {
         deferredChunks.remove(playerId);
         initialPlayerChunkPos.remove(playerId);
         bloomLayers.remove(playerId);
+        sessionPushedHashes.remove(playerId);
         resumePlayers.remove(playerId);
         playerStateReports.remove(playerId);
         // review-fix: T3-52：能力表随玩家清理（防 per-player 表无界增长）
@@ -2509,6 +2591,7 @@ public class ServerChunkPushManager {
         initialPlayerChunkPos.clear();
         resumePlayers.clear();
         playerStateReports.clear();
+        sessionPushedHashes.clear();
         // review-fix: T3-52：能力表一并清理
         playerSeedGenSupported.clear();
         playerLightComputeSupported.clear();
@@ -2535,7 +2618,12 @@ public class ServerChunkPushManager {
     }
 
     /** 区块数据请求任务。 */
-    private record DataRequestTask(ChunkPos pos, String dimension, double priority, SeedRefWork seedRef) {}
+    private record DataRequestTask(ChunkPos pos, String dimension, double priority, SeedRefWork seedRef,
+                                   long contentHash) {
+        DataRequestTask(ChunkPos pos, String dimension, double priority, SeedRefWork seedRef) {
+            this(pos, dimension, priority, seedRef, 0L);
+        }
+    }
 
     private static final class SeedRefWork {
         private final long chunkHash;
