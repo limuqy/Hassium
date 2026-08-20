@@ -671,6 +671,7 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
             // SeedGen 尾部透传 ClientChunkPipeline 现有状态（与三端内联解码同语义）
             ClientChunkPipeline.getInstance().setServerSeedInfo(
                     response.worldSeed(), response.levelStemNbt(), response.seedGenEnabled());
+            ShadowLightCompute.flushDeferredRemoteHashes();
         } catch (Throwable t) {
             LOGGER.warn("Hassium: setServerSeedInfo failed", t);
         }

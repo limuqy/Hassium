@@ -77,7 +77,8 @@ class ChunkAdmissionControllerTest {
         ChunkAdmissionController.Reservation slowReservation = slow.admit(key(1), 1L);
         assertNotNull(slowReservation);
         assertTrue(slow.acknowledge(slowReservation.deliveryId(), 201_000_001L));
-        assertEquals(1.0, slow.desiredPerTick());
+        assertEquals(9.0, slow.desiredPerTick(),
+                "slow batch must not collapse below PlayerChunkSender-style INITIAL=9");
 
         ChunkAdmissionController fast = new ChunkAdmissionController();
         fast.offer(key(2));

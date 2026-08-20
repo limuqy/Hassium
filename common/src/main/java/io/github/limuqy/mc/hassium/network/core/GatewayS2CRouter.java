@@ -78,12 +78,20 @@ public final class GatewayS2CRouter implements Consumer<Packet<?>> {
 
     private void routeChunk(ClientboundLevelChunkWithLightPacket packet) {
         ChunkPos pos = new ChunkPos(packet.getX(), packet.getZ());
-        // 剥光包（四个掩码全空）先交给影子端重算：直接官方 apply 会让客户端在
-        // 影子光回传前渲染无光区块（纯黑），随后光包到达再跳亮——水面/水底
-        // 「先亮后黑再亮」跳变源之一。影子端收敛后会以带光区块包回传，等价官方
-        // 时序（先有权威光再落地），原版「未收敛不发黑块」语义。
+        // 剥光包（四个掩码全空）先交给影子端重算。加载屏脚下 3×3 只落地方块
+        // （不 enableChunkLight），避免客户端自算光与影子重复、先亮后暗。
         if (isLightStripped(packet)
                 && io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.isEnabled()) {
+            if (io.github.limuqy.mc.hassium.network.ClientChunkHandler.shouldFastApplyForLoadingScreen(pos)) {
+                Minecraft loadingMc = Minecraft.getInstance();
+                if (loadingMc == null || loadingMc.isSameThread()) {
+                    io.github.limuqy.mc.hassium.network.ClientChunkHandler
+                            .applyLoadingScreenBlocksOnly(packet, 0L);
+                } else {
+                    MainThreadDispatcher.execute(() -> io.github.limuqy.mc.hassium.network.ClientChunkHandler
+                            .applyLoadingScreenBlocksOnly(packet, 0L), pos);
+                }
+            }
             io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.submit(pos, packet);
             return;
         }

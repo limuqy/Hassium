@@ -399,11 +399,11 @@ public final class SeedGenExecutor {
                 NetworkStats.recordLocallyGeneratedChunk(NetworkStats.ESTIMATED_CHUNK_BYTES);
                 server.injectLoadedChunk(pos, chunk, true);
                 io.github.limuqy.mc.hassium.network.seedgen.ShadowCacheEviction.recordAccess(pos);
-                // 光收敛性无保证（生成时邻域仅 BIOMES 空壳，边界光欠）→ 标脏：R2 读盘
-                // 命中走本地 relight 链；内存命中经 awaitBatchLight 屏障重算，杜绝欠光直推。
-                io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.markLightDirty(pos, true);
+                // 光收敛性无保证（生成时邻域仅 BIOMES 空壳，边界光欠）→ isLightCorrect=false：
+                // 落盘省略 isLightOn，R2 读盘走 lightChunk(false)；内存命中经屏障重算。
+                chunk.setLightCorrect(false);
                 // 计算并登记 contentHash（与 injectChunk 同款）：后续 hash 比对/R2 落盘复用；
-                // 失败则比对路径现算兜底（chunkHashOf/diskHashMatches）。
+                // 失败则比对路径仅在表缺失时现算兜底（chunkHashOf/diskHashMatches）。
                 try {
                     long pregenHash = ChunkContentHashUtil.combineSectionHashes(
                             ChunkContentHashUtil.computeSectionHashes(chunk));

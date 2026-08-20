@@ -410,8 +410,8 @@ public class ShadowSeedServer extends MinecraftServer {
                 // lightChunk 直接初始化。
                 clearChunkLight(pos, chunk);
             }
-            // 计算 contentHash（section hash combine，与网络 chunkHash 同算法）写入存储桥，
-            // 保存（type 126 payload 带 hash）与 R2 比对（远程权威 hash vs 本地存储 hash）共用。
+            // 网络注入：packet 内容可能与磁盘表 hash 不同，必须现算并覆盖。
+            // 读盘柱走 injectLoadedChunk，hash 已由 MixinRegionFile 回填，禁止在此重复现算。
             try {
                 long contentHash = io.github.limuqy.mc.hassium.cache.ChunkContentHashUtil
                         .combineSectionHashes(io.github.limuqy.mc.hassium.cache.ChunkContentHashUtil
@@ -628,17 +628,18 @@ public class ShadowSeedServer extends MinecraftServer {
      * 整柱实际 section 的权威光是否全部就绪：sky/block 两层 DataLayer 非 null，且
      * <b>位于任一行天空源的 section 的 sky 层必须非全空</b>。
      * <p>
+     * 供 {@code ShadowLightCompute.finishLight} 对齐原版 {@code isLightCorrect}：
+     * 不全 → {@code setLightCorrect(false)} + 仍推首包；补光走 drainLightMasks。
+     * 补光走 drainLightMasks。不再用于挡首包或续投屏障。
+     * <p>
      * 官方 {@code ClientboundLightUpdatePacketData} 对 null DataLayer 是「静默省略」（新柱
      * apply 后该 section 无光数据 → 黑块）；对全空层则打包成 empty 掩码——客户端收到后
-     * 把该 section 置为全 0 光（亮区变黑，等后续包修正 = 「亮→黑→亮」跳变源之一）。全空
-     * sky 层只在「该行全部天空源都低于本 section 顶」时合法（深海/地下）；位于源的 section
-     * 全空 = 播种/fill 未跑到（引擎任务错序/并发 runUpdate）→ 判未收敛，触发续投重试
-     * （ensureChunkLightLayers + lightChunk 重跑 propagateLightSources 后自愈）。
+     * 把该 section 置为全 0 光。全空 sky 层只在「该行全部天空源都低于本 section 顶」时合法；
+     * 位于源的 section 全空 = 播种/fill 未跑到（引擎任务错序），按未完备处理。
      */
     public boolean isChunkLightComplete(ChunkPos pos, LevelChunk chunk) {
         try {
-            // 原版 FULL 语义：lightChunk 的 POST_UPDATE 置 lightCorrect=true 才算该柱
-            // 光状态可推送；future 完成但 lightCorrect=false 只出现在异常路径，按未收敛处理。
+            // lightCorrect=false 只出现在异常路径 / 尚未跑完 LIGHT，按未完备处理。
             if (!chunk.isLightCorrect()) {
                 return false;
             }
@@ -744,16 +745,12 @@ public class ShadowSeedServer extends MinecraftServer {
     }
 
     /**
-     * 磁盘命中 + hash 一致但光标脏：本地重算光照（不请求网络全量）。
-     * <p>
-     * 区块已加载进影子端（{@link #injectLoadedChunk} 先行），内容与远程权威一致，
-     * 仅光欠（保存时未收敛落盘）——清光重算（{@link #clearChunkLight}）后引擎传播
-     * 期间视为欠光：起始即标脏（防 R2 读盘直接打包欠光数据），收敛后由
-     * pushReady(converged=true) 清除；补发给客户端的欠光由光照更新桥梁承担。
-     * 任意线程可调（调用方在后台池）。
+     * 磁盘命中 + hash 一致但 {@code !isLightCorrect}：本地重算光照（不请求网络全量）。
+     * 清光后引擎传播期间保持 {@code isLightCorrect=false}，收敛由 finishLight /
+     * confirmLightsCorrectIfConverged 写回。
      */
     public void relightChunk(ChunkPos pos, LevelChunk chunk) {
-        io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.markLightDirty(pos, true);
+        chunk.setLightCorrect(false);
         dirtyChunks.add(ChunkPos.asLong(pos.x, pos.z));
         clearChunkLight(pos, chunk);
         awaitLightTaskDrain(); // 清光投递 48+ PRE 任务：按柱排水（processRemoteHashes 批量 relight 叠加防护）
@@ -937,14 +934,13 @@ public class ShadowSeedServer extends MinecraftServer {
     }
 
     /**
-     * 内容失效（chunkKey 去重集合）：移除 hash 缓存（下次比对现算）+
-     * 光照标脏（光不确定，读盘不直接打包欠光数据）。REQ 需求 2 语义。
+     * 内容失效（chunkKey 去重集合）：移除 hash 缓存（下次比对不得误命中）。
+     * 光照交给柱上 {@code isLightCorrect} / 随后全量注入清光。
      */
     private void invalidateChunkContent(java.util.Set<Long> chunkKeys) {
         for (long key : chunkKeys) {
             ChunkPos pos = new ChunkPos(key);
             io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.remove(pos);
-            io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.markLightDirty(pos, true);
             dirtyChunks.add(key);
         }
     }
@@ -1220,7 +1216,9 @@ public class ShadowSeedServer extends MinecraftServer {
 
     /**
      * 读盘命中（hash 比对一致）区块加载进影子端表：后续 hash 到达直接内存比对
-     * （无需再读盘）；saveAll 落盘复用同一表。区块带存档收敛光，无需重算。
+     * （无需再读盘）；saveAll 落盘复用同一表。contentHash 已由 MixinRegionFile
+     * 读盘回填，此处不再 computeSectionHashes。光照是否续算由调用方按
+     * {@code chunk.isLightCorrect()}（NBT isLightOn）决定，本方法不清光。
      * 默认视为 clean（磁盘已有该柱），saveAll 不重写；本地生成/盲预生成等新数据
      * 请使用 {@link #injectLoadedChunk(ChunkPos, LevelChunk, boolean)} 并传 true。
      */
@@ -1241,6 +1239,50 @@ public class ShadowSeedServer extends MinecraftServer {
             dirtyChunks.add(key);
         } else {
             dirtyChunks.remove(key);
+        }
+    }
+
+    /**
+     * 与原版 {@code ChunkSerializer} 对齐：{@code isLightCorrect} 决定落盘是否写
+     * {@code isLightOn}。变更后加入 dirtyChunks，saveAll 才会重写该柱。
+     */
+    public void syncLightCorrect(LevelChunk chunk, boolean correct) {
+        if (chunk == null) {
+            return;
+        }
+        if (chunk.isLightCorrect() == correct) {
+            return;
+        }
+        chunk.setLightCorrect(correct);
+        ChunkPos pos = chunk.getPos();
+        dirtyChunks.add(ChunkPos.asLong(pos.x, pos.z));
+    }
+
+    /**
+     * 引擎任务排空后，仅把「层已齐全」的内存柱改回 {@code isLightCorrect=true}，
+     * 随后 saveAll 写入 isLightOn。层不齐的柱保持 false，避免误 reuse 空光。
+     */
+    public void confirmLightsCorrectIfConverged() {
+        if (!isLightConverged()) {
+            return;
+        }
+        boolean any = false;
+        for (Map.Entry<Long, LevelChunk> e : injectedChunks.entrySet()) {
+            LevelChunk chunk = e.getValue();
+            if (chunk == null || chunk.isLightCorrect()) {
+                continue;
+            }
+            ChunkPos pos = chunk.getPos();
+            if (!isChunkLightComplete(pos, chunk)) {
+                continue;
+            }
+            chunk.setLightCorrect(true);
+            dirtyChunks.add(ChunkPos.asLong(pos.x, pos.z));
+            any = true;
+        }
+        if (any) {
+            DebugLogger.info(DebugLogger.LogType.ASYNC,
+                    "[SHADOW_LIGHT] Global convergence confirmed, isLightCorrect restored");
         }
     }
 
@@ -1353,15 +1395,16 @@ public class ShadowSeedServer extends MinecraftServer {
 
     /**
      * 单柱卸载（T5 内存区块回收：出界到期柱）：落盘（IOWorker 异步）+ 从注入表
-     * 条件移除 + hash 表移除（下次比对经读盘 hook 回填）。落盘前采样全局收敛——
-     * 未收敛（欠光落盘）保守标脏（R2 读盘命中不得直接打包，走 relight 链）；
-     * 收敛则清除标脏（落盘即收敛光）。与 ShadowCacheEviction（容量淘汰删磁盘）
-     * 独立共存：本方法只落盘 + 清内存。
+     * 条件移除 + hash 表移除（下次比对经读盘 hook 回填）。落盘前若引擎未排空，
+     * 把 {@code isLightCorrect} 打回 false，NBT 省略 isLightOn，重载再跑 LIGHT。
+     * 与 ShadowCacheEviction（容量淘汰删磁盘）独立：本方法只落盘 + 清内存。
      *
      * @return true=已提交落盘并移除；false=落盘失败（保留内存驻留，断连 saveAll 兜底）
      */
     public boolean unloadChunk(ChunkPos pos, LevelChunk chunk) {
-        boolean converged = isLightConverged();
+        if (!isLightConverged()) {
+            chunk.setLightCorrect(false);
+        }
         if (!saveChunkToDisk(pos, chunk)) {
             return false;
         }
@@ -1369,7 +1412,6 @@ public class ShadowSeedServer extends MinecraftServer {
         injectedChunks.remove(key, chunk); // 条件移除：仅当仍是该 chunk（防并发替换后误删新数据）
         dirtyChunks.remove(key);
         io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.remove(pos);
-        io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.markLightDirty(pos, !converged);
         return true;
     }
 

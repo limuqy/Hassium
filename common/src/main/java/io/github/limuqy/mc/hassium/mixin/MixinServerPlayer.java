@@ -53,11 +53,8 @@ public abstract class MixinServerPlayer extends Player {
 
 #if MC_VER < MC_1_20_2
     /**
-     * 拦截 trackChunk：对 Hassium 客户端异步发送 contentHash 元数据。
-     * hash 计算和元数据发送在 pushPool 工作线程上执行，不阻塞主线程。
-     * <p>
-     * 仅 1.20.1：1.20.2+ 移除了 {@code ServerPlayer.trackChunk}，初始区块发送
-     * 改走 {@code PlayerChunkSender.sendChunk}（private static），需另行适配。
+     * 拦截 trackChunk：1.20.1 无 {@code PlayerChunkSender}，原版会对已加载视距一窝蜂调用。
+     * 只登记 pending，由服务端 tick 按近距定额 drain（同 1.21.11 PlayerChunkSender）。
      * 区块更新广播仍由 {@link MixinChunkHolder#hassium$onBroadcast} 拦截。
      */
     @Inject(method = "trackChunk", at = @At("HEAD"), cancellable = true)
@@ -70,7 +67,6 @@ public abstract class MixinServerPlayer extends Player {
         DebugLogger.info(LogType.NETWORK, "[TRACK_CHUNK] Player {} tracking chunk {} (compressionEnabled=true)",
                 self.getName().getString(), pos);
 
-        // 异步计算 hash 并发送元数据到 pushPool 工作线程
         String dimension = self.level().dimension()
 #if MC_VER < MC_1_21_11
                 .location()
@@ -78,7 +74,7 @@ public abstract class MixinServerPlayer extends Player {
                 .identifier()
 #endif
                 .toString();
-        ServerChunkPushManager.getInstance().submitMetadataTask(self, pos, chunkPacket, dimension);
+        ServerChunkPushManager.getInstance().markChunkPendingToSend(self, pos, dimension);
 
         ci.cancel();
     }

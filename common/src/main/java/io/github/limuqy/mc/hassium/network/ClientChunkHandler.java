@@ -51,6 +51,94 @@ public class ClientChunkHandler {
         return DebugLogger.isEnabled(LogType.CHUNK_APPLY) ? origin : null;
     }
 
+    /**
+     * 加载地形屏未关时，玩家脚下切比雪夫 ≤1 的柱先落地方块，避免影子光屏障挡住
+     * {@code LevelRenderer.isChunkCompiled}。必须走 {@link #applyLoadingScreenBlocksOnly}，
+     * 不得官方 {@code handleLevelChunkWithLight}：剥光包会 {@code enableChunkLight} 触发
+     * 客户端自算光，与影子端重复并造成先亮后暗。
+     */
+    public static boolean shouldFastApplyForLoadingScreen(ChunkPos pos) {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc == null || mc.player == null || pos == null) {
+            return false;
+        }
+#if MC_VER < MC_1_21_9
+        if (!(mc.screen instanceof net.minecraft.client.gui.screens.ReceivingLevelScreen)) {
+            return false;
+        }
+#else
+        if (!(mc.screen instanceof net.minecraft.client.gui.screens.LevelLoadingScreen)) {
+            return false;
+        }
+#endif
+        return isWithinChebyshev(pos, mc.player.chunkPosition(), 1);
+    }
+
+    static boolean isWithinChebyshev(ChunkPos pos, ChunkPos center, int radius) {
+        if (pos == null || center == null || radius < 0) {
+            return false;
+        }
+        return Math.max(Math.abs(pos.x - center.x), Math.abs(pos.z - center.z)) <= radius;
+    }
+
+    /**
+     * 加载屏快路径：只写入方块/高度图/BE，并标脏 mesh；不 {@code applyLightData}/
+     * {@code enableChunkLight}。对齐单人「服务端算光、客户端只装」——此处权威光由影子端后补。
+     * <p>
+     * 必须在客户端主线程调用。
+     *
+     * @return true=柱已进入客户端缓存（可关加载屏）；false=视距外丢弃等失败
+     */
+    public static boolean applyLoadingScreenBlocksOnly(
+            net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket packet,
+            long deliveryId) {
+        if (packet == null) {
+            return false;
+        }
+        Minecraft mc = Minecraft.getInstance();
+        ClientLevel level = mc != null ? mc.level : null;
+        if (level == null) {
+            return false;
+        }
+        int chunkX = packet.getX();
+        int chunkZ = packet.getZ();
+        ChunkPos pos = new ChunkPos(chunkX, chunkZ);
+        logChunkApplyEvent("loading_blocks_only", pos, false, mc);
+        ClientChunkPipeline pipeline = ClientChunkPipeline.getInstance();
+        pipeline.setApplyInProgress(true);
+        try {
+            net.minecraft.network.protocol.game.ClientboundLevelChunkPacketData data = packet.getChunkData();
+            net.minecraft.world.level.chunk.LevelChunk chunk = level.getChunkSource().replaceWithPacketData(
+                    chunkX, chunkZ, data.getReadBuffer(), data.getHeightmaps(),
+                    data.getBlockEntitiesTagsConsumer(chunkX, chunkZ));
+            if (chunk == null || !level.getChunkSource().hasChunk(chunkX, chunkZ)) {
+                logChunkApplyEvent("loading_blocks_miss", pos, false, mc);
+                return false;
+            }
+            // 只催 mesh，不打开光照 section（避免 LevelRenderer.runLightUpdates 自算）。
+            int minSection = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMinSection(level);
+            int maxSection = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMaxSectionExclusive(level);
+            for (int sectionY = minSection; sectionY < maxSection; sectionY++) {
+                level.setSectionDirtyWithNeighbors(chunkX, sectionY, chunkZ);
+            }
+            level.getLightEngine().setLightEnabled(pos, false);
+            io.github.limuqy.mc.hassium.cache.client.ClientMainThreadBudget.noteChunkApplyActivity();
+            NetworkStats.recordChunkApplied(chunkX, chunkZ);
+            ClientMetadataHandler.onChunkApplied(pos);
+            recordAuthoritativeApply(deliveryId, false, true);
+            DebugLogger.info(LogType.CHUNK_APPLY,
+                    "[APPLY_CHUNK] Loading-screen blocks-only ({}, {}) — light deferred to shadow",
+                    chunkX, chunkZ);
+            return true;
+        } catch (Throwable t) {
+            DebugLogger.warn(LogType.CHUNK_APPLY,
+                    "[APPLY_CHUNK] Loading-screen blocks-only failed ({}, {})", chunkX, chunkZ);
+            return false;
+        } finally {
+            pipeline.setApplyInProgress(false);
+        }
+    }
+
     /** 影子端官方通道落地的诊断事件；来源为 null 表示开启日志前已入队。 */
     public static void logShadowChunkApplyEvent(String phase, ChunkPos pos, boolean renderOnly, TraceOrigin origin) {
         logChunkApplyEvent(phase, pos, renderOnly, Minecraft.getInstance(), origin);
@@ -171,8 +259,17 @@ public class ClientChunkHandler {
                     net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket packet =
                             decodeChunkPacket(decompressed);
                     if (packet != null) {
+                        ChunkPos pos = new ChunkPos(chunkX, chunkZ);
+                        // 加载屏要等脚下柱 compiled：只落地方块（不 enableChunkLight），
+                        // 立刻 ACK；光完全由影子端回传，避免客户端自算与影子重复。
+                        if (shouldFastApplyForLoadingScreen(pos)) {
+                            MainThreadDispatcher.execute(() -> applyLoadingScreenBlocksOnly(
+                                    packet, compressed.deliveryId), pos);
+                            io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.submit(pos, packet, 0L);
+                            return;
+                        }
                         io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.submit(
-                                new ChunkPos(chunkX, chunkZ), packet, compressed.deliveryId);
+                                pos, packet, compressed.deliveryId);
                         return;
                     }
                     // decode 失败：回退直接 apply（数据仍需落地；方案 A 无客户端入库）

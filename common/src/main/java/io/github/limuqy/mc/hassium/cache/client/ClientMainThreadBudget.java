@@ -23,6 +23,12 @@ public final class ClientMainThreadBudget {
     /** JoinBoost 期间的预算（毫秒） */
     private static final int JOIN_BOOST_BUDGET_MS = 30;
 
+    /**
+     * JoinBoost 期间每 tick 影子回传/apply 硬顶下限。默认 {@code chunk.maxChunksPerFrame}=6
+     * 在 20 tick/s 下理论 120/s，但实测进服帧时常掉到 ~8–10Hz，6×10=60 仍低于 15s 铺满所需 ~67/s。
+     */
+    private static final int JOIN_BOOST_HARD_CAP = 12;
+
     private static volatile long joinBoostUntilMs = 0L;
 
     /** JoinBoost 封顶截止（毫秒）：startJoinBoost 记 now+30s；续期与读取均不越过此值。 */
@@ -113,6 +119,10 @@ public final class ClientMainThreadBudget {
      * 本帧安全硬顶（最多 apply / 回调次数）。
      */
     public static int getHardCap() {
-        return HassiumConfigService.getInstance().getMaxChunksPerFrame();
+        int base = Math.max(1, HassiumConfigService.getInstance().getMaxChunksPerFrame());
+        if (isJoinBoostActive()) {
+            return Math.max(base, JOIN_BOOST_HARD_CAP);
+        }
+        return base;
     }
 }

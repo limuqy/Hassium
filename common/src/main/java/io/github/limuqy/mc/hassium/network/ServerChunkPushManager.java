@@ -85,6 +85,12 @@ public class ServerChunkPushManager {
     private static final int RESYNC_PER_TICK = 32;
 
     /**
+     * Bloom hit 只发 hash：不受 admission 窗口约束（hash 不占 pending/inFlight）。
+     * 与 resync 同量级，避免 R2 有缓存时仍按 maxChunksPerTick=5 滴灌导致空窗。
+     */
+    static final int HASH_SENDS_PER_TICK = 32;
+
+    /**
      * 每玩家区块数据请求队列（{@link io.github.limuqy.mc.hassium.concurrent.KeyedPriorityQueue}：
      * 同区块重复请求 REPLACE 取代 + 消费时按当前玩家位置重算优先级）
      */
@@ -118,6 +124,13 @@ public class ServerChunkPushManager {
 
     /** resync 待补发条目 */
     private record ResyncEntry(ChunkPos pos, String dimension) {}
+
+    /**
+     * 1.20.1：仿 {@code PlayerChunkSender} pending。trackChunk 只登记，tick 近距定额出队。
+     * 1.20.2+ 由原版 PlayerChunkSender 定额 sendChunk，不用本表。
+     */
+    private final Map<UUID, Set<Long>> pendingSends = new ConcurrentHashMap<>();
+    private final Map<UUID, String> pendingSendDimension = new ConcurrentHashMap<>();
 
     /**
      * 每玩家 SeedGen 能力（握手 C2S 上报 seedGenSupported；默认 false）。
@@ -585,7 +598,10 @@ public class ServerChunkPushManager {
      * @param chunk     区块对象（须在主线程或原版 ChunkSender 线程调用）
      * @param dimension 维度标识
      */
-    public void submitMetadataTaskFromChunk(ServerPlayer player, ChunkPos pos,
+    /**
+     * @return true if the metadata/hash path was actually submitted (packet built + async work queued)
+     */
+    public boolean submitMetadataTaskFromChunk(ServerPlayer player, ChunkPos pos,
                                              LevelChunk chunk, String dimension) {
         ensureInitialized();
         ServerLevel level = PlayerCompat.getServerLevel(player);
@@ -598,7 +614,7 @@ public class ServerChunkPushManager {
         diag(D_BUILD, System.nanoTime() - tBuild);
         if (packet == null) {
             Constants.LOG.warn("[ASYNC_METADATA] Failed to build chunk packet for {}", pos);
-            return;
+            return false;
         }
         // 主线程登记 pristine（resync 时区块可能早已生成且未被修改——登记语义：会话内生成完成
         // 且未修改；已是 FULL 的旧块 inhabitedTime==0 同样满足候选，登记无副作用）
@@ -630,6 +646,7 @@ public class ServerChunkPushManager {
                         pos, player.getName().getString(), e);
             }
         });
+        return true;
     }
 
     /**
@@ -670,15 +687,14 @@ public class ServerChunkPushManager {
     }
 
     /**
-     * 统一 hash 发送入口：per-player 分流。
+     * 统一 hash/直推入口：per-player 分流。
      * <p>
      * SeedGen 玩家（能力 + 配置 + pristine）→ 只发 SeedRef（本地生成，零区块数据流量）；
      * 其余玩家 → Bloom 分流（客户端握手上报影子端存档布隆位图）：
      * <ul>
-     *   <li>bloom 就绪且 miss（确定无缓存）→ hash 直发 + 数据直推（enqueueDirectPush）；</li>
-     *   <li>bloom hit（可能有缓存）或 bloom 未就绪 → 只发 hash——由客户端影子端
-     *       读盘比对（内存/存档 hash 表）决定：命中本地回传、未命中请求数据
-     *       （ChunkDataRequestC2S → enqueueDataRequest 推送）。</li>
+     *   <li>bloom miss / 空 / 未就绪（确定无缓存或尚无法判定）→ 只直推，不发 hash；</li>
+     *   <li>bloom hit（可能有缓存）→ 只发 hash，由客户端影子端读盘比对决定
+     *       命中本地回传或 ChunkDataRequestC2S 请求数据。</li>
      * </ul>
      * hash 直发（不走限流批次）：影子端比对在后台线程（无旧客户端比对风暴）。
      */
@@ -692,10 +708,12 @@ public class ServerChunkPushManager {
                 enqueueSeedRef(player, pos, dimension, chunkHash, sectionHashes);
                 continue;
             }
-            sendChunkHashDirect(player, pos, chunkHash, sectionBitmap, dimension);
             if (shouldPushFull(player, pos, dimension)) {
-                // bloom miss（确定无缓存）→ 数据直推；影子端无需再请求。
+                // miss / 空 / 未就绪 → 只直推，不发 hash（避免客户端再走比对/请求往返）。
                 enqueueDirectPush(player, dimension, List.of(pos));
+            } else {
+                // hit → 只发 hash，不直推。
+                sendChunkHashDirect(player, pos, chunkHash, sectionBitmap, dimension);
             }
         }
     }
@@ -830,18 +848,25 @@ public class ServerChunkPushManager {
     }
 
     /**
-     * Bloom 分流判定：有 Bloom 且 miss（确定无缓存）→ 直推；否则发 hash（hit 或 Bloom 未就绪）。
+     * Bloom 分流判定：miss / 空 / 未就绪 → 直推；hit → 只发 hash。
      */
     private boolean shouldPushFull(ServerPlayer player, ChunkPos pos, String dimension) {
-        PlayerBloomLayers layers = bloomLayers.get(player.getUUID());
-        if (layers == null || layers.isEmpty()) {
-            return false;
-        }
-        return !layers.mightContain(pos.x, pos.z, dimension);
+        return shouldPushFull(bloomLayers.get(player.getUUID()), pos.x, pos.z, dimension);
     }
 
-    /** 每玩家 bloom 层（full 重置 / 增量追加；查询任一命中即可能缓存）。 */
-    private static final class PlayerBloomLayers {
+    /**
+     * 包可见：供单测覆盖 empty / unready / miss / hit。
+     * {@code layers == null} 视为未就绪；空层或空过滤器视为 empty。
+     */
+    static boolean shouldPushFull(PlayerBloomLayers layers, int chunkX, int chunkZ, String dimension) {
+        if (layers == null || layers.isEmpty()) {
+            return true;
+        }
+        return !layers.mightContain(chunkX, chunkZ, dimension);
+    }
+
+    /** 每玩家 bloom 层（full 重置 / 增量追加；查询任一命中即可能缓存）。包可见供单测构造。 */
+    static final class PlayerBloomLayers {
         private final List<io.github.limuqy.mc.hassium.cache.client.ChunkBloomFilter> layers = new ArrayList<>();
 
         void reset(io.github.limuqy.mc.hassium.cache.client.ChunkBloomFilter filter) {
@@ -879,12 +904,8 @@ public class ServerChunkPushManager {
     }
 
     /**
-     * 握手成功后补发玩家当前视距内已加载区块的 chunkHash。
-     * <p>
-     * 初始 {@code trackChunk}/{@code sendChunk} 往往发生在握手完成之前，
-     * 彼时 {@link PlayerCompressionTracker#isCompressionEnabled} 为 false，
-     * 拦截器放行原版包且不推 hash，导致客户端统计全 0、缓存主链路永不启动。
-     * 必须在主线程调用（读世界区块）。
+     * 握手成功后：1.20.1 把已加载视距柱登记进 paced pending；1.20.2+ 不 dump 整盘 hash
+     * （由 PlayerChunkSender 定额 sendChunk）。必须在主线程调用。
      */
     public void resyncTrackedChunks(ServerPlayer player) {
         if (player == null || !player.isAlive() || player.hasDisconnected()) {
@@ -954,37 +975,148 @@ public class ServerChunkPushManager {
 #endif
                 .toString();
 
-        // 按距玩家欧氏距离升序入队，使每 tick RESYNC_PER_TICK 优先补发近处 hash
-        // （原 dx/dz 扫掠会让远离出生点的边缘块先进入客户端请求流）
-        List<ResyncEntry> entries = new ArrayList<>((radius * 2 + 1) * (radius * 2 + 1));
+        // 不再把整盘 hash 灌进 pendingResync（曾 2s dump 上千条，绕开原版定额）。
+        // 1.20.2+：PlayerChunkSender 已近距定额 sendChunk。
+        // 1.20.1：只把已加载柱登记进 pendingSends，由 tick drain 出队。
+#if MC_VER < MC_1_20_2
+        int marked = 0;
         for (int dx = -radius; dx <= radius; dx++) {
             for (int dz = -radius; dz <= radius; dz++) {
-                if (!isServerChunkInRange(centerX + dx, centerZ + dz, centerX, centerZ, viewDistance)) {
+                int cx = centerX + dx;
+                int cz = centerZ + dz;
+                if (!isServerChunkInRange(cx, cz, centerX, centerZ, viewDistance)) {
                     continue;
                 }
-                entries.add(new ResyncEntry(new ChunkPos(centerX + dx, centerZ + dz), dimension));
+                if (level.getChunkSource().getChunkNow(cx, cz) == null) {
+                    continue;
+                }
+                markChunkPendingToSend(player, new ChunkPos(cx, cz), dimension);
+                marked++;
             }
         }
-        // 距离升序；同距（同环）时按角度扫，且每环起点旋转 45°（ring*π/4），
-        // 避免 stable sort 保留 dx/dz 扫掠序 → 负方向（西/南）恒早于正方向（东/北）2-3s。
-        entries.sort(Comparator.comparingDouble((ResyncEntry e) ->
-                        ChunkDistancePriority.distSq(e.pos(), centerX, centerZ))
-                .thenComparingDouble(e -> {
-                    ChunkPos p = e.pos();
-                    double dx = p.x - (double) centerX;
-                    double dz = p.z - (double) centerZ;
-                    double ring = Math.round(Math.sqrt(dx * dx + dz * dz));
-                    double angle = Math.atan2(dz, dx) + ring * (Math.PI / 4.0);
-                    return angle - 2 * Math.PI * Math.floor(angle / (2 * Math.PI));
-                }));
-        Deque<ResyncEntry> queue = new ArrayDeque<>(entries.size());
-        queue.addAll(entries);
-        if (!queue.isEmpty()) {
-            pendingResync.put(player.getUUID(), queue);
-            DebugLogger.info(LogType.CHUNK_APPLY,
-                    "Hassium: Queued {} chunkHashes for resync (player={}, vd={}, perTick={})",
-                    queue.size(), player.getName().getString(), viewDistance, RESYNC_PER_TICK);
+        DebugLogger.info(LogType.CHUNK_APPLY,
+                "Hassium: Pending {} loaded chunks for paced send (player={}, vd={})",
+                marked, player.getName().getString(), viewDistance);
+#endif
+    }
+
+    /**
+     * 1.20.1：登记待发送柱。出队见 {@link #drainPendingSends}。
+     */
+    public void markChunkPendingToSend(ServerPlayer player, ChunkPos pos, String dimension) {
+        if (player == null || pos == null || dimension == null) {
+            return;
         }
+        UUID playerId = player.getUUID();
+        pendingSendDimension.put(playerId, dimension);
+        pendingSends.computeIfAbsent(playerId, ignored -> ConcurrentHashMap.newKeySet())
+                .add(ChunkPos.asLong(pos.x, pos.z));
+    }
+
+    /**
+     * 每 tick 从 pending 取距玩家最近、且已加载的柱出队。
+     * <p>
+     * 仅在 admission/直推入队（或 hash 路径实际提交）成功后才从 {@code pendingSends} 移除；
+     * admission 满或未加载柱保留，下一 tick 重试。直推预算 = min(maxChunksPerTick,
+     * MAX_PENDING − pending − inFlight)；hash 预算独立为 {@link #HASH_SENDS_PER_TICK}。
+     */
+    private void drainPendingSends(ServerPlayer player) {
+        UUID playerId = player.getUUID();
+        Set<Long> pending = pendingSends.get(playerId);
+        if (pending == null || pending.isEmpty()) {
+            return;
+        }
+        String dimension = pendingSendDimension.get(playerId);
+        if (dimension == null) {
+            pending.clear();
+            return;
+        }
+        ServerLevel level = PlayerCompat.getServerLevel(player);
+        if (level == null) {
+            return;
+        }
+        int maxPerTick = HassiumConfigService.getInstance().getConfig().master().maxChunksPerTick();
+        if (maxPerTick <= 0) {
+            maxPerTick = 4;
+        }
+        ChunkAdmissionController controller = admissionControllers.computeIfAbsent(
+                playerId, ignored -> new ChunkAdmissionController());
+        int fullBudget = pacedSendBudget(controller.pendingCount(), controller.inFlightCount(), maxPerTick);
+        int hashBudget = HASH_SENDS_PER_TICK;
+        if (fullBudget <= 0 && hashBudget <= 0) {
+            return;
+        }
+        ChunkPos center = player.chunkPosition();
+        List<ChunkPos> loaded = new ArrayList<>();
+        for (Long packed : pending) {
+            ChunkPos pos = new ChunkPos(packed);
+            if (level.getChunkSource().getChunkNow(pos.x, pos.z) != null) {
+                loaded.add(pos);
+            }
+        }
+        loaded.sort(Comparator.comparingDouble(pos -> ChunkDistancePriority.distSq(pos, center.x, center.z)));
+        for (ChunkPos pos : loaded) {
+            if (fullBudget <= 0 && hashBudget <= 0) {
+                break;
+            }
+            LevelChunk chunk = level.getChunkSource().getChunkNow(pos.x, pos.z);
+            if (chunk == null) {
+                // 未加载：保留在 pendingSends，等 getChunkNow != null 再试
+                continue;
+            }
+            boolean pushFull = shouldPushFull(player, pos, dimension);
+            if (pushFull) {
+                if (fullBudget <= 0) {
+                    continue;
+                }
+            } else if (hashBudget <= 0) {
+                continue;
+            }
+            long packed = ChunkPos.asLong(pos.x, pos.z);
+            boolean accepted = pushFull
+                    ? enqueueDirectPush(player, dimension, List.of(pos))
+                    : submitMetadataTaskFromChunk(player, pos, chunk, dimension);
+            if (!commitPacedPendingKey(pending, packed, accepted)) {
+                // admission 拒绝：本 tick 不再硬塞更远的直推柱；hash 失败则跳过该柱重试
+                if (pushFull) {
+                    break;
+                }
+                continue;
+            }
+            if (pushFull) {
+                fullBudget--;
+            } else {
+                hashBudget--;
+            }
+        }
+        if (pending.isEmpty()) {
+            pendingSends.remove(playerId);
+            pendingSendDimension.remove(playerId);
+        }
+    }
+
+    /**
+     * 包可见：paced drain 单 tick 预算。admission room = MAX_PENDING − (pending + inFlight)。
+     */
+    static int pacedSendBudget(int pendingCount, int inFlightCount, int maxChunksPerTick) {
+        int room = ChunkAdmissionController.MAX_PENDING_PER_PLAYER - pendingCount - inFlightCount;
+        if (room <= 0 || maxChunksPerTick <= 0) {
+            return 0;
+        }
+        return Math.min(maxChunksPerTick, room);
+    }
+
+    /**
+     * 包可见：仅在入队/提交成功时从 paced pending 移除 key；失败则保留以便重试。
+     *
+     * @return true if the key was consumed (accepted)
+     */
+    static boolean commitPacedPendingKey(Set<Long> pending, long packedKey, boolean accepted) {
+        if (!accepted) {
+            return false;
+        }
+        pending.remove(packedKey);
+        return true;
     }
 
     /**
@@ -1089,7 +1221,8 @@ public class ServerChunkPushManager {
             return;
         }
         // 注意：pendingResync 也需要 onServerTick 来 drain，必须加入条件判断
-        if (!initialized.get() && dataQueues.isEmpty() && hashBatches.isEmpty() && pendingResync.isEmpty()) {
+        if (!initialized.get() && dataQueues.isEmpty() && hashBatches.isEmpty()
+                && pendingResync.isEmpty() && pendingSends.isEmpty()) {
             return;
         }
         ensureInitialized();
@@ -1098,6 +1231,7 @@ public class ServerChunkPushManager {
         long nowNanos = System.nanoTime();
         for (ServerPlayer player : server.getPlayerList().getPlayers()) {
             flushPlayerHashBatchIfDue(player, now);
+            drainPendingSends(player);
             drainPlayerQueueTick(player);
             expirePlayerDeliveries(player, nowNanos);
         }
@@ -1620,21 +1754,26 @@ public class ServerChunkPushManager {
     /**
      * Bloom miss 主动直推入队（服务端驱动，不计入客户端请求统计）。
      * 与客户端请求共用同一队列/去重/出界待命语义。
+     *
+     * @return true if every chunk was newly queued or already under admission
      */
-    public void enqueueDirectPush(ServerPlayer player, String dimension, List<ChunkPos> chunks) {
+    public boolean enqueueDirectPush(ServerPlayer player, String dimension, List<ChunkPos> chunks) {
         DebugLogger.info(LogType.NETWORK, "[ENQUEUE_DATA] Direct push {} chunks to player {} (dimension={})",
                 chunks.size(), player.getName().getString(), dimension);
 
-        enqueueInternal(player, dimension, chunks, false);
+        return enqueueInternal(player, dimension, chunks, false);
     }
 
-    private void enqueueInternal(ServerPlayer player, String dimension, List<ChunkPos> chunks,
+    /**
+     * @return true if every chunk was newly queued or already under admission
+     */
+    private boolean enqueueInternal(ServerPlayer player, String dimension, List<ChunkPos> chunks,
                                  boolean countSeedGenFallback) {
         ensureInitialized();
         if (!player.isAlive() || player.hasDisconnected()) {
             Constants.LOG.warn("[ENQUEUE_DATA] Player {} is not online, ignoring data request",
                     player.getName().getString());
-            return;
+            return false;
         }
 
         UUID playerId = player.getUUID();
@@ -1650,7 +1789,10 @@ public class ServerChunkPushManager {
             dirZ = vel.z / len;
         }
 
+        ChunkAdmissionController controller = admissionControllers.computeIfAbsent(
+                playerId, ignored -> new ChunkAdmissionController());
         int queued = 0;
+        boolean allAccepted = true;
         for (ChunkPos pos : chunks) {
             double priority = ChunkDistancePriority.distSq(pos, playerChunkX, playerChunkZ);
             if (dirX != 0.0) {
@@ -1661,16 +1803,27 @@ public class ServerChunkPushManager {
                     priority -= FORWARD_BIAS * dot;
                 }
             }
-            if (offerPendingTask(player, new DataRequestTask(pos, dimension, priority, null))) {
+            DataRequestTask task = new DataRequestTask(pos, dimension, priority, null);
+            // 已在 pending/in-flight：视为成功（paced pending 可安全移除，避免永久重试）
+            if (controller.contains(admissionKey(task))) {
+                if (countSeedGenFallback) {
+                    recordSeedGenFallback(playerId, pos, dimension);
+                }
+                continue;
+            }
+            if (offerPendingTask(player, task)) {
                 queued++;
+            } else {
+                allAccepted = false;
             }
             if (countSeedGenFallback) {
                 recordSeedGenFallback(playerId, pos, dimension);
             }
         }
         DebugLogger.info(LogType.NETWORK,
-                "[ENQUEUE_DATA] Player {} queued {} chunks (dimension={}, playerPos=({}, {}))",
-                player.getName().getString(), queued, dimension, playerChunkX, playerChunkZ);
+                "[ENQUEUE_DATA] Player {} queued {} chunks (dimension={}, playerPos=({}, {}), accepted={})",
+                player.getName().getString(), queued, dimension, playerChunkX, playerChunkZ, allAccepted);
+        return allAccepted;
     }
 
     /** Enqueues a SeedRef through the same keyed admission as compressed full payloads. */
@@ -2231,6 +2384,10 @@ public class ServerChunkPushManager {
             return;
         }
         long posLong = ChunkPos.asLong(pos.x, pos.z);
+        Set<Long> pending = pendingSends.get(playerId);
+        if (pending != null) {
+            pending.remove(posLong);
+        }
         Map<Long, DeferredTask> deferred = deferredChunks.get(playerId);
         if (deferred != null) {
             deferred.remove(posLong);
@@ -2320,6 +2477,8 @@ public class ServerChunkPushManager {
         hashBatches.remove(playerId);
         preparedChunkPackets.remove(playerId);
         pendingResync.remove(playerId);
+        pendingSends.remove(playerId);
+        pendingSendDimension.remove(playerId);
         deferredChunks.remove(playerId);
         initialPlayerChunkPos.remove(playerId);
         bloomLayers.remove(playerId);
@@ -2344,6 +2503,8 @@ public class ServerChunkPushManager {
         hashBatches.clear();
         preparedChunkPackets.clear();
         pendingResync.clear();
+        pendingSends.clear();
+        pendingSendDimension.clear();
         deferredChunks.clear();
         initialPlayerChunkPos.clear();
         resumePlayers.clear();

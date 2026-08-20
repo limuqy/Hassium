@@ -28,4 +28,42 @@ class ShadowLightComputeTimingRegressionTest {
         assertFalse(ShadowLightCompute.shouldRetainPendingWhenServerUnavailable(true),
                 "只有明确不可恢复失败才允许消费者放弃 pending");
     }
+
+    @Test
+    @DisplayName("lightChunk 第二参：仅引擎内已有光才跳过 propagate")
+    void lightChunkHasExistingLightOnlyWhenReusingEngineLight() {
+        assertTrue(ShadowLightCompute.lightChunkHasExistingLight(true));
+        assertFalse(ShadowLightCompute.lightChunkHasExistingLight(false));
+    }
+
+    @Test
+    @DisplayName("客户端已有柱时欠光首包必须暂缓，防先亮后暗")
+    void defersIncompleteOverwriteWhenClientAlreadyHasChunk() {
+        assertTrue(ShadowLightCompute.shouldDeferIncompleteClientOverwrite(true, false));
+        assertFalse(ShadowLightCompute.shouldDeferIncompleteClientOverwrite(false, false),
+                "客户端尚无柱：欠光首包仍可推（先暗后亮）");
+        assertFalse(ShadowLightCompute.shouldDeferIncompleteClientOverwrite(true, true));
+        assertFalse(ShadowLightCompute.shouldDeferIncompleteClientOverwrite(false, true));
+    }
+
+    @Test
+    @DisplayName("磁盘命中续算：只看 isLightCorrect（NBT isLightOn），不另管脏表")
+    void diskNeedRelightFollowsIsLightCorrectOnly() {
+        assertFalse(ShadowLightCompute.diskNeedRelight(true),
+                "isLightCorrect → lightReuse，lightChunk(true) 跳过 propagate");
+        assertTrue(ShadowLightCompute.diskNeedRelight(false),
+                "isLightOn=false → lightChunk(false) 播种+传播续算");
+    }
+
+    @Test
+    @DisplayName("邻柱补光：已落地柱才占预算，inflight/deferred 不占坑")
+    void lightMaskBudgetSkipsInflightAndDeferred() {
+        assertTrue(ShadowLightCompute.canDrainLightMaskThisFrame(true, true, false, false));
+        assertFalse(ShadowLightCompute.canDrainLightMaskThisFrame(true, true, true, false),
+                "屏障中的柱不得占光桥预算");
+        assertFalse(ShadowLightCompute.canDrainLightMaskThisFrame(true, true, false, true),
+                "欠光暂缓覆盖的柱不得占光桥预算");
+        assertFalse(ShadowLightCompute.canDrainLightMaskThisFrame(true, false, false, false),
+                "尚无影子全量落地则不发光包");
+    }
 }

@@ -310,7 +310,7 @@ public record HassiumConfig(
                 true,              // enableCompactHeader
                 DEFAULT_COMPRESSION_BLACKLIST,
                 false,              // metricsEnabled
-                5,                 // maxChunksPerTick（schema 为准；满 tick ≈ 100/s；发送速率 = 本值 × tick 节奏，掉刻自然降速保护主线程）
+                9,                 // maxChunksPerTick（schema 为准；对齐原版 PlayerChunkSender 初值；满 tick ≈ 180/s）
                 2,                 // serverChunkPushThreads
                 true,              // dynamicThreadPoolEnabled
                 2,                 // minPushThreads

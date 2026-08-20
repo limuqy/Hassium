@@ -221,8 +221,8 @@ class ConfigRestructureRoundTripTest {
         assertEquals(4.0, values.get(ConfigSchema.MASTER_MIGRATION_MAX_LOAD_AVERAGE));
         assertEquals("", values.get(ConfigSchema.MASTER_MIGRATION_MAINTENANCE_WINDOW));
         assertEquals(60_000L, values.get(ConfigSchema.MASTER_MIGRATION_PREWARM_TTL_MS));
-        // master.maxChunksPerTick 以 schema 为准 = 5（REQ 决策 6）
-        assertEquals(5, values.get(ConfigSchema.MASTER_MAX_CHUNKS_PER_TICK));
+        // master.maxChunksPerTick 以 schema 为准 = 9（对齐原版 PlayerChunkSender 初值）
+        assertEquals(9, values.get(ConfigSchema.MASTER_MAX_CHUNKS_PER_TICK));
         // dataplane.udpListeners 默认编码 [0.0.0.0:25565 (w=100) → 127.0.0.1:25565 (w=100)]
         assertEquals(List.of("0.0.0.0,25565,100;127.0.0.1,25565,100"),
                 values.get(ConfigSchema.DATAPLANE_UDP_LISTENERS));

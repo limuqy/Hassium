@@ -256,6 +256,7 @@ public class ClientMetadataHandler {
                 handleChunkHashPacket(p);
             }
         }
+        io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.flushDeferredRemoteHashes();
     }
 
     /**

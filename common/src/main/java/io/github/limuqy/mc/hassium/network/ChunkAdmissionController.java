@@ -267,7 +267,11 @@ final class ChunkAdmissionController {
                 ? observedPerTick
                 : ewmaApplyPerTick * 0.75 + observedPerTick * 0.25;
         if (ewmaApplyPerTick < desiredPerTick) {
-            desiredPerTick = Math.max(1.0, Math.min(desiredPerTick, ewmaApplyPerTick));
+            // Floor at INITIAL (capped by this tick's hard max). A slow first batch
+            // (shadow light RTT) must not collapse quota to 1/tick like vanilla
+            // PlayerChunkSender starting at 9.
+            double floor = Math.min(INITIAL_DESIRED_PER_TICK, maxChunksPerTick);
+            desiredPerTick = Math.max(floor, Math.min(desiredPerTick, ewmaApplyPerTick));
         } else {
             desiredPerTick = Math.min(maxChunksPerTick, desiredPerTick + 1.0);
         }
