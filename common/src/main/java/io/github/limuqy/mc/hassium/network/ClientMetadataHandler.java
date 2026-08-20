@@ -367,6 +367,15 @@ public class ClientMetadataHandler {
     }
 
     /**
+     * SeedRef 生成失败/超时回退：正 {@code fallbackDeliveryId} 必须随单柱请求发出，
+     * 服务端才能释放对应 admission reservation 并接纳全量入队。
+     */
+    public static void requestFullChunksPublic(String dimension, List<ChunkPos> chunks, boolean staleOrFallback,
+                                               long fallbackDeliveryId) {
+        requestFullChunks(dimension, chunks, staleOrFallback, 0, fallbackDeliveryId);
+    }
+
+    /**
      * 请求完整区块数据（无缓存时的回退；批量合包）。
      * <p>
      * P1 修复：超时窗口按批次/在途量自适应（服务端 maxChunksPerTick=5 → 100/s 吞吐下

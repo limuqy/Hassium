@@ -65,8 +65,9 @@ public class ClientChunkHandler {
     }
 
     /**
-     * 最终落地回调：只有成功的非 render-only authoritative apply 才进入 ACK 聚合器。
-     * 接收、解码、提交、失败与 out-of-view 分支均不得调用为成功。
+     * 最终落地回调：成功消费带正 {@code deliveryId} 的权威投递即进入 ACK 聚合器。
+     * OVD / {@code redirect_render_only} 仍会落地该包（{@code renderOnly=true}），必须 ACK 以释放服务端 in-flight。
+     * 接收、解码、提交失败不得记为成功。
      */
     public static void recordAuthoritativeApply(long deliveryId, boolean renderOnly, boolean applied) {
         if (shouldRecordAuthoritativeApply(deliveryId, renderOnly, applied)) {
@@ -75,7 +76,7 @@ public class ClientChunkHandler {
     }
 
     static boolean shouldRecordAuthoritativeApply(long deliveryId, boolean renderOnly, boolean applied) {
-        return applied && !renderOnly && deliveryId > 0L;
+        return applied && deliveryId > 0L;
     }
 
     /** 断线时清除本会话尚未发送的 delivery ACK。 */

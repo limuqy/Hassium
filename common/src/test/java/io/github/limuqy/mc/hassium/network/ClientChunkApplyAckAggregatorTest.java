@@ -136,10 +136,11 @@ class ClientChunkApplyAckAggregatorTest {
     }
 
     @Test
-    void finalApplyCallbackRejectsZeroFailedAndOutOfViewOutcomes() {
+    void finalApplyCallbackRejectsZeroAndFailedButAcksRenderOnlySuccess() {
         assertFalse(ClientChunkHandler.shouldRecordAuthoritativeApply(0L, false, true));
         assertFalse(ClientChunkHandler.shouldRecordAuthoritativeApply(9L, false, false));
-        assertFalse(ClientChunkHandler.shouldRecordAuthoritativeApply(9L, true, true));
+        assertFalse(ClientChunkHandler.shouldRecordAuthoritativeApply(9L, true, false));
+        assertTrue(ClientChunkHandler.shouldRecordAuthoritativeApply(9L, true, true));
         assertTrue(ClientChunkHandler.shouldRecordAuthoritativeApply(9L, false, true));
     }
 }

@@ -220,7 +220,7 @@ public final class SeedGenExecutor {
     /** 工作循环（每 worker 一份）：释放缓冲 → 原子取最近未超时条目 → 生成 → 编码 → 压缩 → 交给客户端链；空则退出。 */
     private void drain() {
         // 回退请求聚合缓冲：超时/失败回退攒批发送（不逐块单包），防 1000+ 单包风暴（P1）
-        List<ChunkPos> fallbackBuffer = new ArrayList<>();
+        List<FallbackRequest> fallbackBuffer = new ArrayList<>();
         try {
             while (!Thread.currentThread().isInterrupted()) {
                 Minecraft mc = Minecraft.getInstance();
@@ -231,12 +231,12 @@ public final class SeedGenExecutor {
                 int playerChunkZ = mc.player.chunkPosition().z;
                 // 工作队列超时条目批量回退（expire 已移除；聚合攒批，flush 时合包）
                 for (SeedGenQueue.Entry expired : queue.expire()) {
-                    addFallback(fallbackBuffer, expired.pos());
+                    addFallback(fallbackBuffer, expired);
                 }
                 // 活体缓冲超时同样回退：超时从 SeedRef 到达即起算（FIFO 旧实现要等释放进
                 // 工作队列才起算，尾部条目最长可被额外拖 30s+ 才有兜底）。
                 for (SeedGenQueue.Entry expired : pendingLive.expire()) {
-                    addFallback(fallbackBuffer, expired.pos());
+                    addFallback(fallbackBuffer, expired);
                 }
                 if (fallbackBuffer.size() >= FALLBACK_BATCH_MAX) {
                     flushFallback(fallbackBuffer);
@@ -307,18 +307,25 @@ public final class SeedGenExecutor {
         }
     }
 
+    /** SeedRef 回退必须携带原 deliveryId；盲预生成等无 admission 的条目为 0。 */
+    private record FallbackRequest(ChunkPos pos, long deliveryId) {}
+
     /** 登记回退：出队 + 攒批（实际发送由 {@link #flushFallback} 按批合包）。 */
-    private void addFallback(List<ChunkPos> buffer, ChunkPos pos) {
+    private void addFallback(List<FallbackRequest> buffer, SeedGenQueue.Entry entry) {
+        addFallback(buffer, entry.pos(), entry.deliveryId());
+    }
+
+    private void addFallback(List<FallbackRequest> buffer, ChunkPos pos, long deliveryId) {
         queue.remove(pos);
-        buffer.add(pos);
+        buffer.add(new FallbackRequest(pos, deliveryId));
     }
 
     /**
-     * 攒批发送回退全量请求：按 {@link #FALLBACK_BATCH_MAX} 合包，不再逐块单包
-     * （服务端 100/s 限速下单包风暴 = P1 级联重发诱因）。断连时清缓冲丢弃。
-     * P2（T7）：回退统一改走 new 请求路径 + requestedMisses 去重。
+     * 攒批发送回退全量请求：无 deliveryId 的条目按 {@link #FALLBACK_BATCH_MAX} 合包；
+     * 正 deliveryId 必须单柱直发，否则服务端无法释放 SeedRef reservation。
+     * 断连时清缓冲丢弃。
      */
-    private void flushFallback(List<ChunkPos> buffer) {
+    private void flushFallback(List<FallbackRequest> buffer) {
         if (buffer.isEmpty()) {
             return;
         }
@@ -334,13 +341,17 @@ public final class SeedGenExecutor {
                 .identifier()
 #endif
                 .toString();
-        // P2（T7）：回退统一改走 new 请求路径（hash-miss 正轨，注入数据路径 hash 忠实已被
-        // R2 磁盘命中实证）+ requestedMisses 去重——stale/full 回退（生成超时/失败/hash
-        // 错误等）不再计入「过期」，杜绝同 chunk 重复回退放大。
         List<ChunkPos> toRequest = new ArrayList<>(buffer.size());
-        for (ChunkPos pos : buffer) {
-            if (ShadowLightCompute.tryRequestMiss(pos)) {
-                toRequest.add(pos);
+        for (FallbackRequest item : buffer) {
+            if (item.deliveryId() > 0L) {
+                ShadowLightCompute.tryRequestMiss(item.pos());
+                DebugLogger.warn(DebugLogger.LogType.ASYNC,
+                        "[SEEDGEN] Fallback ({}, {}) deliveryId={}",
+                        item.pos().x, item.pos().z, item.deliveryId());
+                ClientMetadataHandler.requestFullChunksPublic(
+                        dimension, List.of(item.pos()), false, item.deliveryId());
+            } else if (ShadowLightCompute.tryRequestMiss(item.pos())) {
+                toRequest.add(item.pos());
             }
         }
         buffer.clear();
@@ -356,12 +367,12 @@ public final class SeedGenExecutor {
         }
     }
 
-    private void generateOne(SeedGenQueue.Entry entry, List<ChunkPos> fallbackBuffer) {
+    private void generateOne(SeedGenQueue.Entry entry, List<FallbackRequest> fallbackBuffer) {
         ChunkPos pos = entry.pos();
         try {
             ShadowSeedServer server = shadowServer();
             if (server == null) {
-                addFallback(fallbackBuffer, pos);
+                addFallback(fallbackBuffer, entry);
                 return;
             }
             long t0 = System.nanoTime();
@@ -375,7 +386,7 @@ public final class SeedGenExecutor {
                 }
                 DebugLogger.warn(DebugLogger.LogType.ASYNC,
                         "[SEEDGEN] Generation timeout/failed ({}, {}) -> fallback", pos.x, pos.z);
-                addFallback(fallbackBuffer, pos);
+                addFallback(fallbackBuffer, entry);
                 return;
             }
             if (entry.contentHash() == 0L) {
@@ -412,7 +423,7 @@ public final class SeedGenExecutor {
                 localSectionHashes = ChunkContentHashUtil.computeSectionHashes(chunk);
                 localHash = ChunkContentHashUtil.combineSectionHashes(localSectionHashes);
             } catch (Throwable hashError) {
-                addFallback(fallbackBuffer, pos);
+                addFallback(fallbackBuffer, entry);
                 return;
             }
             if (localHash != entry.contentHash()) {
@@ -441,9 +452,9 @@ public final class SeedGenExecutor {
                         DebugLogger.warn(DebugLogger.LogType.ASYNC,
                                 "[SEEDGEN] Delta preempted ({}, {}): >= {}% non-empty sections differ -> direct full request",
                                 pos.x, pos.z, SECTION_DELTA_FALLBACK_THRESHOLD_PCT);
-                        if (ShadowLightCompute.tryRequestMiss(pos)) {
-                            ClientMetadataHandler.requestFullChunksPublic(dimension, List.of(pos), false);
-                        }
+                        ShadowLightCompute.tryRequestMiss(pos);
+                        ClientMetadataHandler.requestFullChunksPublic(
+                                dimension, List.of(pos), false, entry.deliveryId());
                     } else {
                         server.injectLoadedChunk(pos, chunk, true);
                         ShadowLightCompute.requestSectionDeltas(dimension, List.of(pos));
@@ -461,13 +472,13 @@ public final class SeedGenExecutor {
             // review-fix: T3-51：投递失败（并发降级 isEnabled=false）→ 回退全量，
             // 防止生成结果静默丢弃后该柱客户端虚空
             if (!ShadowLightCompute.submitGenerated(pos, chunk, level, entry.deliveryId())) {
-                addFallback(fallbackBuffer, pos);
+                addFallback(fallbackBuffer, entry);
                 return;
             }
             queue.remove(pos);
         } catch (Exception e) {
             Constants.LOG.error("Hassium: SeedGen generation failed for {}", pos, e);
-            addFallback(fallbackBuffer, pos);
+            addFallback(fallbackBuffer, entry);
         }
     }
 

@@ -2056,6 +2056,7 @@ public class ServerChunkPushManager {
             return;
         }
         if (!markDeliverySent(player.getUUID(), deliveryId)) {
+            rollbackDelivery(player, task, deliveryId);
             return;
         }
         sender.sendCompressedChunk(player, compressed);
