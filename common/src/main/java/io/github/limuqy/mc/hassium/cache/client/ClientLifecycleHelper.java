@@ -56,6 +56,7 @@ public final class ClientLifecycleHelper {
         // 影子端世界根定位：gameDir/serverId 同步记录（异步任务与影子端预创建竞态，
         // 影子端装配需要此信息——先于 initializeCacheAsync/onLogin 完成）。
         recordCacheLocationSync();
+        io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.onCacheLocationReady();
 
         // M2: 异步初始化存储（热度索引 / section 哈希在后台线程）
         initializeCacheAsync();

@@ -933,7 +933,7 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
                 server.execute(() -> {
                     try {
                         ServerChunkPushManager.getInstance().enqueueDataRequest(
-                                player, request.dimension(), request.chunks());
+                                player, request.dimension(), request.chunks(), request.fallbackDeliveryId());
                     } catch (Exception e) {
                         LOGGER.error("[SERVER] Failed to handle chunk data request", e);
                     }
@@ -957,7 +957,7 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
                 server.execute(() -> {
                     try {
                         ServerChunkPushManager.getInstance().enqueueDataRequest(
-                                player, request.dimension(), request.chunks());
+                                player, request.dimension(), request.chunks(), request.fallbackDeliveryId());
                     } catch (Exception e) {
                         LOGGER.error("[SERVER] Failed to handle chunk data request", e);
                     }

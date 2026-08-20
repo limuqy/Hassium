@@ -158,7 +158,15 @@ public class ClientMetadataHandler {
      * SeedRef 回退：按当前维度全量请求该区块。
      */
     private static void fallbackToFullRequest(Minecraft mc, SeedRefS2CPacket packet) {
-        fallbackToFullRequestByPos(new ChunkPos(packet.chunkX(), packet.chunkZ()));
+        String dimension = mc.level.dimension()
+#if MC_VER < MC_1_21_11
+                .location()
+#else
+                .identifier()
+#endif
+                .toString();
+        requestFullChunks(dimension, List.of(new ChunkPos(packet.chunkX(), packet.chunkZ())), true, 0,
+                packet.deliveryId());
     }
 
     /**
@@ -177,7 +185,7 @@ public class ClientMetadataHandler {
                 .identifier()
 #endif
                 .toString();
-        requestFullChunks(dimension, List.of(pos), true, 0);
+        requestFullChunks(dimension, List.of(pos), true, 0, 0L);
     }
 
     /**
@@ -305,7 +313,7 @@ public class ClientMetadataHandler {
                 DebugLogger.warn(LogType.METADATA,
                         "[CHUNK_HASH] {} full requests timed out, retrying (attempt {})",
                         grp.getValue().size(), grp.getKey() + 1);
-                requestFullChunks(dim, grp.getValue(), true, grp.getKey() + 1);
+                requestFullChunks(dim, grp.getValue(), true, grp.getKey() + 1, 0L);
             }
         }
     }
@@ -343,6 +351,7 @@ public class ClientMetadataHandler {
         PENDING_BE_REQUESTS.clear();
         PENDING_BLOCK_ENTITIES.clear();
         PENDING_FULL_REQUESTS.clear();
+        ClientChunkHandler.clearChunkApplyAcks();
         // SeedGen 影子服务端随断连回收（重连后按需重建）
         io.github.limuqy.mc.hassium.network.seedgen.SeedGenExecutor.getInstance().onDisconnect();
         // 影子光照管线随断连清空（投递/回传/失败标记；影子服务端由上面 registry 统一关停）
@@ -354,7 +363,7 @@ public class ClientMetadataHandler {
      * requestFullChunks 内部有 not-in-game 兜底与距离排序）。
      */
     public static void requestFullChunksPublic(String dimension, List<ChunkPos> chunks, boolean staleOrFallback) {
-        requestFullChunks(dimension, chunks, staleOrFallback, 0);
+        requestFullChunks(dimension, chunks, staleOrFallback, 0, 0L);
     }
 
     /**
@@ -364,7 +373,8 @@ public class ClientMetadataHandler {
      * 1000+ 块尾部服务 ≈18s，旧 8s 固定窗口必然误触发级联重发）；同区块同维度已在途
      * （未过期）→ 去重跳过发包（服务端 KeyedPriorityQueue REPLACE 语义下重复请求零增益）。
      */
-    private static void requestFullChunks(String dimension, List<ChunkPos> chunks, boolean staleOrFallback, int retries) {
+    private static void requestFullChunks(String dimension, List<ChunkPos> chunks, boolean staleOrFallback,
+                                          int retries, long fallbackDeliveryId) {
         // 兜底：断连后不再发包，避免 Cannot send packets when not in game!
         // 异步回调（applyChunkHashResult 等）与 tickPendingHashGate 之间存在竞态，
         // 即使上层已检查，这里仍兜一道。
@@ -386,7 +396,7 @@ public class ClientMetadataHandler {
             ordered.sort(Comparator.comparingDouble(
                     p -> ChunkDistancePriority.distSq(p, playerChunkX, playerChunkZ)));
         }
-        // 去重：同区块同维度已在途（未过期）→ 跳过发包；过期残留（未及 tick sweep）→ 换新登记
+        // 普通请求按同区块同维度未过期登记去重；SeedRef 回退必须直发原 deliveryId，以释放服务端 reservation。
         long now = System.currentTimeMillis();
         int inFlightBefore = PENDING_FULL_REQUESTS.size();
         long deadline = now + fullRequestTimeoutMs(ordered.size(), inFlightBefore);
@@ -394,7 +404,8 @@ public class ClientMetadataHandler {
         for (ChunkPos pos : ordered) {
             long key = ChunkPos.asLong(pos.x, pos.z);
             PendingFullRequest existing = PENDING_FULL_REQUESTS.get(key);
-            if (existing != null && existing.deadlineMs() > now && existing.dimension().equals(dimension)) {
+            if (fallbackDeliveryId == 0L && existing != null && existing.deadlineMs() > now
+                    && existing.dimension().equals(dimension)) {
                 continue;
             }
             PENDING_FULL_REQUESTS.put(key, new PendingFullRequest(dimension, deadline, retries));
@@ -403,7 +414,7 @@ public class ClientMetadataHandler {
         if (toRequest.isEmpty()) {
             return;
         }
-        ChunkDataRequestC2SPacket request = new ChunkDataRequestC2SPacket(dimension, toRequest);
+        ChunkDataRequestC2SPacket request = new ChunkDataRequestC2SPacket(dimension, toRequest, fallbackDeliveryId);
         FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
         boolean sent = false;
         try {

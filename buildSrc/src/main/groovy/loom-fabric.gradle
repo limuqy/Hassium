@@ -73,10 +73,14 @@ loom {
             if (project.hasProperty('hassiumSmokeTest') && project.property('hassiumSmokeTest').toString() == 'true') {
                 // 无 GUI，避免头少环境挂起
                 programArguments.add('nogui')
-                // 服务端冒烟：启动 VD=20，玩家退出后切 VD=8
+                // 服务端冒烟：启动 VD=vd1，玩家退出后切 vd2
                 def phases = project.findProperty('hassiumSmokePhases') ?: 'classic'
+                def vd1 = project.findProperty('hassiumSmokeVd1') ?: '20'
+                def vd2 = project.findProperty('hassiumSmokeVd2') ?: '10'
                 jvmArguments.addAll([
                         "-Dhassium.serverSmokeTest=true",
+                        "-Dhassium.serverSmokeTest.vd1=${vd1}",
+                        "-Dhassium.serverSmokeTest.vd2=${vd2}",
                         "-Dhassium.smokePhases=${phases}"
                 ])
             }

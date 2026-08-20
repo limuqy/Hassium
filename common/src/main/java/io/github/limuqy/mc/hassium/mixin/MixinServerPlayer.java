@@ -82,6 +82,27 @@ public abstract class MixinServerPlayer extends Player {
 
         ci.cancel();
     }
+
+    /**
+     * 1.20.1 无 {@code PlayerChunkSender.dropChunk}：vanilla {@code untrackChunk} 是 tracking-view
+     * 移除的对称回调。必须释放 admission pending/in-flight，否则 384 上限被已出界旧块占满，
+     * 玩家前方新块的数据请求会被静默丢弃，表现为前方迟迟不加载。
+     */
+    @Inject(method = "untrackChunk", at = @At("HEAD"))
+    private void hassium$onUntrackChunk(ChunkPos pos, CallbackInfo ci) {
+        ServerPlayer self = (ServerPlayer) (Object) this;
+        if (!PlayerCompressionTracker.isCompressionEnabled(self)) {
+            return;
+        }
+        String dimension = self.level().dimension()
+#if MC_VER < MC_1_21_11
+                .location()
+#else
+                .identifier()
+#endif
+                .toString();
+        ServerChunkPushManager.getInstance().releasePlayerChunkDelivery(self.getUUID(), dimension, pos);
+    }
 #endif
 }
 

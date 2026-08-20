@@ -69,7 +69,6 @@ public class HassiumCommandHandler {
         sb.append(formatChunkCacheLine(metrics)).append('\n');
         sb.append(formatChunkLoadLine(metrics)).append('\n');
         sb.append(formatLightCacheLine(metrics)).append('\n');
-        sb.append(formatLightRecomputeLine(metrics)).append('\n');
         sb.append(formatOvdLine()).append('\n');
         sb.append(formatSavingsLine(metrics)).append('\n');
         // 每行末尾统一带 \n；冒烟 strip 后用 split("\\R", -1) 已能容忍空末行。
@@ -95,8 +94,8 @@ public class HassiumCommandHandler {
     }
 
     private static String formatChunkCacheLine(HassiumMetricsImpl m) {
-        // 公式（用户定稿）：缓存命中 = (客户端缓存 + 本地重算 - 分片) / 客户端应用区块。
-        // 客户端缓存 = 影子端全命中；本地重算 = SeedGen 本地生成；分片 = section-delta。
+        // 公式（用户定稿）：缓存命中 = (命中 + 本地重算 - 分片) / 客户端应用区块。
+        // 命中 = 影子端全命中；本地重算 = SeedGen 本地生成；分片 = section-delta。
         // 旧口径分母只含「已完成 hash 决策」的区块（miss 走全量的不进去）→ R2 虚高 100%。
         // 新口径：分片从命中分子中扣除，分母 = 全量请求 + 缓存全命中 + 本地重算 + 分片
         // （来源汇总，避免命中已记账、区块尚未落地时命中数 > 应用数的时序错配）。
@@ -107,7 +106,7 @@ public class HassiumCommandHandler {
         long deltaCount = m.getCacheDeltaCount();
         long deltaBytes = m.getCacheDeltaSavedBytes();
         return String.format(
-                "§e区块缓存：§r%s（客户端缓存 %d/%s，本地重算 %d/%s，分片 %d/%s，应用区块 %d）",
+                "§e区块缓存：§r%s（命中 %d/%s，本地重算 %d/%s，分片 %d/%s，应用区块 %d）",
                 MetricsTextFormatter.formatPercent(m.getEffectiveCacheHitRate() * 100.0),
                 fullHitCount, MetricsTextFormatter.formatBytes(fullHitBytes),
                 localCount, MetricsTextFormatter.formatBytes(localBytes),
@@ -151,35 +150,19 @@ public class HassiumCommandHandler {
     }
 
     private static String formatLightCacheLine(HassiumMetricsImpl m) {
-        long lightHit = m.getLightCacheHitCount();
-        long lightMiss = m.getLightCacheMissCount();
         // 剥光协商（lightComputeSupported=true）下 hasCachedLight 恒 false → 直连命中口径
-        // 恒 0；光照复用由影子链路承担（key light.reuse.shadow.*）。
+        // 恒 0；光照复用由影子链路承担（key light.reuse.shadow.*），与直连命中合并展示为
+        // 「命中」（口径与 getLightCacheHitRate 一致：命中 = 直连 + 影子复用），不再单列。
         // 影子端本会话重算的光（远程全量注入 / 分段增量 / LightDelta / 本地生成 / 光脏缓存命中）
         // 统一在光屏障完成时记 lightCacheMiss，因此分片增量会让重算数上升、命中率下降，
         // 不再出现「有分片但光照缓存仍 100%」的假象。
-        long shadowReuse = m.getLightReuseShadowCount();
-        long shadowReuseBytes = m.getLightReuseShadowBytes();
-        return String.format("§e光照缓存：§r%s（命中 %d/%s，影子复用 %d/%s，重算 %d/%s）",
+        long lightHit = m.getLightCacheHitCount() + m.getLightReuseShadowCount();
+        long lightHitBytes = m.getLightCacheHitBytes() + m.getLightReuseShadowBytes();
+        long lightMiss = m.getLightCacheMissCount();
+        return String.format("§e光照缓存：§r%s（命中 %d/%s，重算 %d/%s）",
                 MetricsTextFormatter.formatPercent(m.getLightCacheHitRate() * 100.0),
-                lightHit, MetricsTextFormatter.formatBytes(m.getLightCacheHitBytes()),
-                shadowReuse, MetricsTextFormatter.formatBytes(shadowReuseBytes),
+                lightHit, MetricsTextFormatter.formatBytes(lightHitBytes),
                 lightMiss, MetricsTextFormatter.formatBytes(m.getLightCacheMissBytes()));
-    }
-
-    /**
-     * 光照重算耗时行：主线程 = 玩家感知的世界应用阻塞；后台 = 并行引擎 BFS（同步路径恒 0）。
-     * miss 计数在光屏障提交成功时记（保证冒烟窗口内可见），耗时在屏障完成回传时补记，
-     * 因此统计快照瞬间仍在途的任务会计数但暂未计耗时，平均值为当时已收敛部分的下界。
-     */
-    private static String formatLightRecomputeLine(HassiumMetricsImpl m) {
-        long miss = m.getLightCacheMissCount();
-        double mainThreadMs = m.getLightRecomputeTimeMs();
-        double backgroundMs = m.getLightRecomputeBackgroundTimeMs();
-        return String.format("§e光照重算：§r主线程 %.1f ms，后台 %.1f ms（%d 次，平均 %.2f/%.2f ms）",
-                mainThreadMs, backgroundMs, miss,
-                miss == 0 ? 0.0 : mainThreadMs / miss,
-                miss == 0 ? 0.0 : backgroundMs / miss);
     }
 
     private static String formatSavingsLine(HassiumMetricsImpl m) {
@@ -187,14 +170,12 @@ public class HassiumCommandHandler {
         // 无 MOD 应收 = 数据包 + 本地重算（SeedGen）+ 客户端缓存 + 光照（直连命中/影子复用/本地重算），
         // 统一为原版 Zlib 等价 wire。分段增量已按「若走全量的原版 Zlib 等价」计入数据包
         // （recordSectionDeltaReceived），不再单列；OVD 环带不计入（无 MOD 时服务端本来也不推）。
-        // 第一段百分比 = 实际 / 无MOD（越小越省），括号内同时给「已节省」便于阅读。
+        // 第一段百分比 = 已节省（= 100% - 实际/无MOD），括号内给当前/无MOD 绝对值便于阅读。
         long noModReceive = m.getNoModReceiveBytes();
         long current = m.getActualBytesReceived();
-        double ratio = m.getTrafficSavingsPercent();
         long saved = Math.max(0L, noModReceive - current);
         double saving = noModReceive > 0 ? (double) saved / noModReceive * 100.0 : 0.0;
-        return String.format("§e流量节省：§r%s（实际/无MOD，已节省 %s；当前 %s，无MOD %s）",
-                MetricsTextFormatter.formatPercent(ratio),
+        return String.format("§e流量节省：§r%s（当前 %s，无MOD %s）",
                 MetricsTextFormatter.formatPercent(saving),
                 MetricsTextFormatter.formatBytes(current),
                 MetricsTextFormatter.formatBytes(noModReceive));

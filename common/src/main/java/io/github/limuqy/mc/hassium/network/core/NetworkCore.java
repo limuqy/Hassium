@@ -13,6 +13,7 @@ import io.github.limuqy.mc.hassium.network.core.migration.MigrationEndpoint;
 import io.github.limuqy.mc.hassium.network.core.migration.MigrationEngine;
 import io.github.limuqy.mc.hassium.network.core.migration.PrewarmSession;
 import io.github.limuqy.mc.hassium.network.core.outbound.HandshakeCodec;
+import io.github.limuqy.mc.hassium.network.core.outbound.ChunkApplyAck;
 import io.github.limuqy.mc.hassium.network.core.outbound.OutboundConnection;
 import io.github.limuqy.mc.hassium.network.core.outbound.UdpDataPlane;
 import io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail;
@@ -1112,6 +1113,19 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
             return true;
         }
         return false;
+    }
+
+    /**
+     * 发送客户端最终 authoritative apply 的 delivery ACK；未连通时返回 {@code false}，调用方保留待确认项。
+     */
+    public boolean sendChunkApplyAck(ChunkApplyAck ack) {
+        java.util.Objects.requireNonNull(ack, "ack");
+        OutboundConnection oc = outbound;
+        if (state.get() != NetworkCoreState.ACTIVE || oc == null || !oc.isOpen()) {
+            return false;
+        }
+        oc.sendChunkApplyAck(ack);
+        return true;
     }
 
     public long c2sRoutedCount() {

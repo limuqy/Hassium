@@ -47,15 +47,21 @@ public final class SeedGenQueue {
     }
 
     /** 入队条目（不可变快照）。 */
-    public record Entry(ChunkPos pos, long contentHash, long[] sectionHashes, long enqueueTimeMs) {}
+    public record Entry(ChunkPos pos, long contentHash, long[] sectionHashes, long deliveryId, long enqueueTimeMs) {}
 
     private final Map<Long, Entry> pending = new ConcurrentHashMap<>();
 
-    /** 入队。返回 true = 新条目；false = 已存在（hash 覆盖更新）。
-     *  盲预生成条目（contentHash==0，无服务端 hash）不覆盖已有 hash 条目（SeedRef 优先）；
-     *  hash 条目（SeedRef）可覆盖任意旧条目。 */
+    /** 兼容盲预生成与不需 ACK 的旧调用。 */
     public boolean enqueue(ChunkPos pos, long contentHash, long[] sectionHashes) {
-        Entry entry = new Entry(pos, contentHash, sectionHashes, nowMs());
+        return enqueue(pos, contentHash, sectionHashes, 0L);
+    }
+
+    /** 入队。正 deliveryId 必须随同本次 SeedRef 生成直到 authoritative apply。 */
+    public boolean enqueue(ChunkPos pos, long contentHash, long[] sectionHashes, long deliveryId) {
+        if (deliveryId < 0L) {
+            throw new IllegalArgumentException("deliveryId must be non-negative");
+        }
+        Entry entry = new Entry(pos, contentHash, sectionHashes, deliveryId, nowMs());
         long key = ChunkPos.asLong(pos.x, pos.z);
         if (contentHash == 0L) {
             return pending.putIfAbsent(key, entry) == null;
@@ -101,6 +107,12 @@ public final class SeedGenQueue {
         });
         return expired;
     }
+
+    /** 原子取出指定不可变快照；同坐标新 SeedRef 已替换时旧 worker 必须让位。 */
+    public boolean tryTake(Entry entry) {
+        return entry != null && pending.remove(ChunkPos.asLong(entry.pos().x, entry.pos().z), entry);
+    }
+
     /** 原子取出（仅当条目仍 pending）：多 worker 并行生成时防重复接管同一条目。
      *  返回 true = 本 worker 取得所有权；false = 已被其他 worker 取走/超时回收。 */
     public boolean tryTake(ChunkPos pos) {

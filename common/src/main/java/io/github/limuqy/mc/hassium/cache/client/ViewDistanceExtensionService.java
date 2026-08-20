@@ -44,6 +44,9 @@ import java.util.concurrent.atomic.AtomicLong;
 public class ViewDistanceExtensionService {
 
     private static final ViewDistanceExtensionService INSTANCE = new ViewDistanceExtensionService();
+    /** 原版 ClientChunkCache.Storage 在请求半径外额外保留的区块安全带。 */
+    private static final int CLIENT_CACHE_PADDING = 3;
+
 
     /** miss 首次重试延迟（ms） */
     private static final long MISS_RETRY_BASE_MS = 1000L;
@@ -144,6 +147,35 @@ public class ViewDistanceExtensionService {
     public boolean isRenderOnly(ChunkPos pos) {
         return pos != null && (loadedRenderOnly.contains(pos) || pendingRenderOnly.contains(pos));
     }
+    /**
+     * 当前客户端渲染方形窗口。后台影子任务不得访问 Minecraft 客户端状态；
+     * 仅由渲染线程在回传包消费前调用。
+     */
+    public boolean isWithinCurrentClientView(ChunkPos pos) {
+        return isWithinCurrentClientRange(pos, 0);
+    }
+
+    /**
+     * 当前原版 {@link ClientChunkCache} 可接收的方形窗口。
+     * Storage 使用 {@code max(2, requestedRadius) + 3}；保留这三格预取安全带，
+     * 避免服务端已跟踪的边界包被客户端提前丢弃后永久不再重发。
+     */
+    public boolean isWithinCurrentClientCacheWindow(ChunkPos pos) {
+        return isWithinCurrentClientRange(pos, CLIENT_CACHE_PADDING);
+    }
+
+    private boolean isWithinCurrentClientRange(ChunkPos pos, int padding) {
+        Minecraft mc = Minecraft.getInstance();
+        if (pos == null || mc == null || mc.player == null) {
+            return false;
+        }
+        int playerChunkX = (int) Math.floor(mc.player.getX()) >> 4;
+        int playerChunkZ = (int) Math.floor(mc.player.getZ()) >> 4;
+        int radius = isEnabled() ? resolveEffectiveClientVD(mc) : resolveServerVD(mc);
+        return isChunkInClientRange(pos.x - playerChunkX, pos.z - playerChunkZ,
+                Math.max(2, radius) + padding);
+    }
+
 
     /**
      * 与原版 {@code ChunkMap.isChunkInRange} / 服务端 {@code ServerChunkPushManager.isServerChunkInRange}
@@ -521,12 +553,21 @@ public class ViewDistanceExtensionService {
         if (level == null || mc.player == null) {
             return false;
         }
+        // 防御：环带内已有真实区块（非 renderOnly）时不得用 OVD 历史/磁盘数据覆盖。
+        // 正常路径服务器 Forget 会 tryRetainOnServerForget 转 renderOnly，但影子回传
+        // (drainReady) 曾直接走 vanilla 通道，可能留下未标记的真实区块；此处跳过可避免
+        // “真实区块刚生成 → OVD 又用旧缓存覆盖成虚空”的环带覆盖。
+        if (((ClientLevelAccessor) level).hassium$getChunkSource().hasChunk(pos.x, pos.z)
+                && !isRenderOnly(pos)
+                && !((IClientLevelExtension) level).hassium$isRenderOnly(pos.toLong())) {
+            return false;
+        }
 
         // 影子模式（客户端零侵入架构）：OVD 数据源 = 影子端——R1 落盘读回优先
         // （generateChunk 官方链 getChunkFuture 自动读盘），盘缺失时本地生成兜底，
         // 统一经官方包通道 apply renderOnly。不依赖 HBT1 storage，先于其检查。
         if (io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.isEnabled()
-                && io.github.limuqy.mc.hassium.network.seedgen.OvdLocalGenerator.isEnabled()) {
+                && io.github.limuqy.mc.hassium.network.seedgen.OvdLocalGenerator.isLoadEnabled()) {
             io.github.limuqy.mc.hassium.network.seedgen.OvdLocalGenerator.request(pos);
             pendingRenderOnly.add(pos);
             loadedRenderOnly.remove(pos);
@@ -688,7 +729,12 @@ public class ViewDistanceExtensionService {
         Constants.LOG.debug("Hassium: OVD miss {} retry in {}ms (count={})", pos, delay, count);
         // OVD 本地生成：miss 时影子端按世界种子本地生成填充（默认关；无种子自动关闭）。
         // 生成的 renderOnly 区块落地后 onRenderOnlyApplied 清 miss 计数；同柱去重防风暴。
-        io.github.limuqy.mc.hassium.network.seedgen.OvdLocalGenerator.request(pos);
+        // 关键：必须只在 pos 仍属于当前 OVD 环带时才重新请求。异步生成/apply 期间玩家
+        // 可能已经飞远，旧 pos 已不在 clientVD 内；无条件重请求会让陈旧区块无限
+        // “生成→apply→Ignoring chunk→miss→再生成”循环，灌爆主线程/执行器。
+        if (shouldKeepAsRenderOnly(pos)) {
+            io.github.limuqy.mc.hassium.network.seedgen.OvdLocalGenerator.request(pos);
+        }
     }
 
     /**

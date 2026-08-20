@@ -145,6 +145,7 @@ public final class ClientSmokeTest {
 
         long now = System.currentTimeMillis();
 
+
         // 飞行注入：爬升阶段到期 → 转平飞；平飞到期或玩家消失（断开/重连）→ 复位按键
         if (moveUntilMs > 0L) {
             if (mc.player == null) {
@@ -269,6 +270,7 @@ public final class ClientSmokeTest {
             }
         }
     }
+
 
     private static void handleStats(Minecraft mc, long now) {
         // 立即切换状态，防止重复调用（onClientTick 可能在状态可见性延迟时再次进入）
@@ -788,10 +790,12 @@ public final class ClientSmokeTest {
      * <p>
      * 数值口径（与 {@link HassiumCommandHandler} 显示完全同源）：
      * <ol>
-     *   <li>缓存命中 = (客户端缓存 + 本地重算 - 分片) / 客户端应用区块；
+     *   <li>缓存命中 = (命中 + 本地重算 - 分片) / 客户端应用区块；
      *       分片增量不再计入命中，分母是实际应用的权威区块数（去重，OVD 不计入）。</li>
-     *   <li>流量节省 = 服务端实际推送 / 无MOD应收（数据包 + 本地重算 + 客户端缓存 + 光照）。</li>
-     *   <li>光照缓存命中率 = (直连命中 + 影子复用) / (命中 + 本地重算)。</li>
+     *   <li>流量节省 = 服务端实际推送 / 无MOD应收（数据包 + 本地重算 + 客户端缓存 + 光照）；
+     *       行内第一段百分比为已节省（= 100% - 实际/无MOD）。</li>
+     *   <li>光照缓存命中率 = (直连命中 + 影子复用) / (命中 + 本地重算)；影子复用并入
+     *       「命中」展示，不再单列。</li>
      * </ol>
      */
     static boolean validateStats(String plain, String roundLabel) {
@@ -851,22 +855,26 @@ public final class ClientSmokeTest {
             }
         }
 
-        // 2) 流量节省行：显示百分比必须等于 实际推送 / 无MOD应收。
+        // 2) 流量节省行：第一段百分比必须等于 已节省（= 100% - 实际推送 / 无MOD应收）。
         Matcher savingsMatcher = SAVINGS_STATS_PATTERN.matcher(plain);
         if (!savingsMatcher.find()) {
             LOGGER.error("{} {} stats validation FAILED: traffic savings line not parseable", MARKER_FAIL, roundLabel);
             ok = false;
         } else {
-            double displayedRatio = Double.parseDouble(savingsMatcher.group(1));
-            double expectedRatio = Math.max(0.0, Math.min(100.0, m.getTrafficSavingsPercent()));
-            if (Math.abs(displayedRatio - expectedRatio) > 0.06) {
+            double displayedSaving = Double.parseDouble(savingsMatcher.group(1));
+            long noMod = m.getNoModReceiveBytes();
+            double expectedSaving = noMod > 0
+                    ? Math.max(0.0, Math.min(100.0,
+                    (double) Math.max(0L, noMod - m.getActualBytesReceived()) / noMod * 100.0))
+                    : 0.0;
+            if (Math.abs(displayedSaving - expectedSaving) > 0.06) {
                 LOGGER.error("{} {} stats validation FAILED: traffic savings mismatch displayed={} expected={}",
-                        MARKER_FAIL, roundLabel, displayedRatio, expectedRatio);
+                        MARKER_FAIL, roundLabel, displayedSaving, expectedSaving);
                 ok = false;
             }
         }
 
-        // 3) 光照缓存行：百分比与 (直连命中 + 影子复用) / (命中 + 重算) 一致。
+        // 3) 光照缓存行：百分比与 (直连命中 + 影子复用) / (命中 + 重算) 一致；「命中」= 直连 + 影子复用。
         Matcher lightMatcher = LIGHT_STATS_PATTERN.matcher(plain);
         if (!lightMatcher.find()) {
             LOGGER.error("{} {} stats validation FAILED: light cache line not parseable", MARKER_FAIL, roundLabel);
@@ -874,19 +882,18 @@ public final class ClientSmokeTest {
         } else {
             double displayedRate = Double.parseDouble(lightMatcher.group(1));
             double expectedRate = m.getLightCacheHitRate() * 100.0;
-            long directHit = Long.parseLong(lightMatcher.group(2));
-            long shadowReuse = Long.parseLong(lightMatcher.group(3));
-            long recompute = Long.parseLong(lightMatcher.group(4));
+            long displayedHit = Long.parseLong(lightMatcher.group(2));
+            long recompute = Long.parseLong(lightMatcher.group(3));
+            long expectedHit = m.getLightCacheHitCount() + m.getLightReuseShadowCount();
             if (Math.abs(displayedRate - expectedRate) > 0.06
-                    || directHit != m.getLightCacheHitCount()
-                    || shadowReuse != m.getLightReuseShadowCount()
+                    || displayedHit != expectedHit
                     || recompute != m.getLightCacheMissCount()) {
                 LOGGER.error("{} {} stats validation FAILED: light formula mismatch " +
-                                "displayed={}/{} shadow={} recompute={}, expected={}/{} shadow={} recompute={}",
+                                "displayed={}/{} recompute={}, expected={}/{} recompute={}",
                         MARKER_FAIL, roundLabel,
-                        displayedRate, directHit, shadowReuse, recompute,
+                        displayedRate, displayedHit, recompute,
                         String.format(java.util.Locale.ROOT, "%.1f", expectedRate),
-                        m.getLightCacheHitCount(), m.getLightReuseShadowCount(), m.getLightCacheMissCount());
+                        expectedHit, m.getLightCacheMissCount());
                 ok = false;
             }
         }
@@ -906,15 +913,15 @@ public final class ClientSmokeTest {
         return ok;
     }
 
-    /** 区块缓存行：百分比（客户端缓存 N/B，本地重算 N/B，分片 N/B，应用区块 N）。 */
+    /** 区块缓存行：百分比（命中 N/B，本地重算 N/B，分片 N/B，应用区块 N）。 */
     private static final Pattern CACHE_STATS_PATTERN = Pattern.compile(
-            "区块缓存：([0-9.]+)%（客户端缓存 (\\d+)/[^，]*，本地重算 (\\d+)/[^，]*，分片 (\\d+)/[^，]*，应用区块 (\\d+)）");
-    /** 流量节省行：第一段 = 实际 / 无MOD。 */
+            "区块缓存：([0-9.]+)%（命中 (\\d+)/[^，]*，本地重算 (\\d+)/[^，]*，分片 (\\d+)/[^，]*，应用区块 (\\d+)）");
+    /** 流量节省行：第一段 = 已节省（= 100% - 实际/无MOD）。 */
     private static final Pattern SAVINGS_STATS_PATTERN = Pattern.compile(
-            "流量节省：([0-9.]+)%（实际/无MOD，已节省 [0-9.]+%；当前 [^，]*，无MOD [^）]*）");
-    /** 光照缓存行：百分比（命中 N/B，影子复用 N/B，重算 N/B）。 */
+            "流量节省：([0-9.]+)%（当前 [^，]*，无MOD [^）]*）");
+    /** 光照缓存行：百分比（命中 N/B，重算 N/B）；命中 = 直连 + 影子复用。 */
     private static final Pattern LIGHT_STATS_PATTERN = Pattern.compile(
-            "光照缓存：([0-9.]+)%（命中 (\\d+)/[^，]*，影子复用 (\\d+)/[^，]*，重算 (\\d+)/[^）]*）");
+            "光照缓存：([0-9.]+)%（命中 (\\d+)/[^，]*，重算 (\\d+)/[^）]*）");
 
     private static String stripSection(String s) {
         if (s == null) {

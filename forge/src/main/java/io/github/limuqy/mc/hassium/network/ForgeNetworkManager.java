@@ -809,7 +809,7 @@ public class ForgeNetworkManager implements NetworkManager {
             FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data()));
             ChunkDataRequestC2SPacket request = ChunkDataRequestC2SPacket.decode(buf);
             ServerChunkPushManager.getInstance().enqueueDataRequest(
-                    player, request.dimension(), request.chunks());
+                    player, request.dimension(), request.chunks(), request.fallbackDeliveryId());
         } catch (Exception e) {
             LOGGER.error("Hassium: Failed to handle chunk data request", e);
         }

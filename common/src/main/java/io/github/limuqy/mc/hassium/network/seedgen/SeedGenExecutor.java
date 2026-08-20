@@ -101,7 +101,7 @@ public final class SeedGenExecutor {
         ChunkPos pos = new ChunkPos(packet.chunkX(), packet.chunkZ());
         // 同 pos 盲预生成条目若还在低优先级缓冲，交给活体 SeedRef 取代（防重复 worldgen）。
         pendingPregen.remove(pos);
-        pendingLive.enqueue(pos, packet.contentHash(), packet.sectionHashes());
+        pendingLive.enqueue(pos, packet.contentHash(), packet.sectionHashes(), packet.deliveryId());
         DebugLogger.info(DebugLogger.LogType.ASYNC, "[SEEDGEN] Claimed ({}, {}) hash={} (bufferedLive={}, bufferedPregen={}, queue={})",
                 packet.chunkX(), packet.chunkZ(), Long.toHexString(packet.contentHash()),
                 pendingLive.size(), pendingPregen.size(), queue.size());
@@ -247,7 +247,7 @@ public final class SeedGenExecutor {
                     break;
                 }
                 // 原子取出：多 worker 并行时防重复接管同一条目（已被其他 worker 取走则跳过）
-                if (!queue.tryTake(entry.pos())) {
+                if (!queue.tryTake(entry)) {
                     continue;
                 }
                 generateOne(entry, fallbackBuffer);
@@ -295,10 +295,10 @@ public final class SeedGenExecutor {
                 break;
             }
             // 原子认领：多 worker 并行释放时防重复接管同一条目；失败重试下一轮。
-            if (!source.tryTake(entry.pos())) {
+            if (!source.tryTake(entry)) {
                 continue;
             }
-            workQueue.enqueue(entry.pos(), entry.contentHash(), entry.sectionHashes());
+            workQueue.enqueue(entry.pos(), entry.contentHash(), entry.sectionHashes(), entry.deliveryId());
             released++;
             DebugLogger.info(DebugLogger.LogType.ASYNC,
                     "[SEEDGEN] Released ({}, {}) into work queue (queue={}, live={}, pregen={})",
@@ -460,7 +460,7 @@ public final class SeedGenExecutor {
             // 官方通道落地（客户端不参与缓存/光照）。
             // review-fix: T3-51：投递失败（并发降级 isEnabled=false）→ 回退全量，
             // 防止生成结果静默丢弃后该柱客户端虚空
-            if (!ShadowLightCompute.submitGenerated(pos, chunk, level)) {
+            if (!ShadowLightCompute.submitGenerated(pos, chunk, level, entry.deliveryId())) {
                 addFallback(fallbackBuffer, pos);
                 return;
             }

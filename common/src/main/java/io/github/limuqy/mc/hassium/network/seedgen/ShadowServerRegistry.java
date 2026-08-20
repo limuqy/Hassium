@@ -104,6 +104,7 @@ public final class ShadowServerRegistry {
                 final ShadowSeedServer created = s;
                 server = created;
                 ClientChunkPipeline.getInstance().setShadowServerReady(true);
+                ShadowLightCompute.onShadowServerReady();
                 // 影子端就绪 → OVD 环带重扫对齐（ready 前重扫必读空盘，见
                 // ViewDistanceExtensionService.onShadowReady；P3/P5 关联项）。
                 io.github.limuqy.mc.hassium.cache.client.ViewDistanceExtensionService.getInstance()

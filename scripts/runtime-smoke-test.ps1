@@ -26,6 +26,9 @@ param(
     # 客户端进服后飞行移动秒数（先爬升 2s 再平飞；0=不动）。仅验证用途：驱动
     # 「进服即移动」区块补给顺序场景，非标准冒烟默认行为。
     [int]$MoveSeconds = 0,
+    # Server view-distance: ROUND1=Vd1, switch to Vd2 after first disconnect.
+    [int]$Vd1 = 20,
+    [int]$Vd2 = 10,
     [int]$ServerReadyTimeoutSec = 160,
     [int]$ClientTimeoutSec = 240,
     [string]$SmokePhases = "classic",
@@ -210,11 +213,12 @@ if (-not $precheck.Skipped) {
 function Write-SmokeServerProperties {
     param(
         [Parameter(Mandatory=$true)][string]$Dir,
-        [Parameter(Mandatory=$true)][int]$Port
+        [Parameter(Mandatory=$true)][int]$Port,
+        [int]$ViewDistance = 16
     )
     $props = @"
 server-port=$Port
-view-distance=16
+view-distance=$ViewDistance
 online-mode=false
 gamemode=creative
 level-type=minecraft\:normal
@@ -381,7 +385,7 @@ Remove-Item -Recurse -Force (Join-Path $clientRunDir "crash-reports") -ErrorActi
 Write-Host "[$SessionId] [2/9] 配置服务端 ($Loader/run/server/)..."
 New-Item -ItemType Directory -Force -Path $serverRunDir -ErrorAction SilentlyContinue | Out-Null
 Set-Content -Path (Join-Path $serverRunDir "eula.txt") -Value "eula=true" -NoNewline
-Write-SmokeServerProperties -Dir $serverRunDir -Port $ServerPort
+Write-SmokeServerProperties -Dir $serverRunDir -Port $ServerPort -ViewDistance $Vd1
 
 # 创建 world\serverconfig 目录（部分 neoforge / forge 50 版本不会自动创建）
 New-Item -ItemType Directory -Force -Path (Join-Path $serverRunDir "world\serverconfig") -ErrorAction SilentlyContinue | Out-Null
@@ -476,7 +480,7 @@ if (-not $PSBoundParameters.ContainsKey('ServerPort')) {
             Write-Host "[$SessionId] 端口 $ServerPort 被占用（PID $($probe[0].OwningProcess)），自动改用 $newPort"
             $ServerPort = $newPort
             # §2 已写 properties（旧端口），同步重写
-            Write-SmokeServerProperties -Dir $serverRunDir -Port $ServerPort
+            Write-SmokeServerProperties -Dir $serverRunDir -Port $ServerPort -ViewDistance $Vd1
             # effectiveHost 在脚本开头按旧端口快照，同步重建（SmokeHost 显式优先语义保持）
             if (-not ($SmokeHost -and $SmokeHost -ne "")) {
                 $effectiveHost = "127.0.0.1:$ServerPort"
@@ -604,7 +608,7 @@ $gradlew = Join-Path $projectRoot "gradlew.bat"
 #    runServer/runClient 均显式 --no-daemon（见 5.1），不依赖 daemon；残留 daemon 由下次构建自然复用。
 # 5.1 再起服务端 —— 显式 --no-daemon 确保不复用任何 daemon
 Write-Host "[$SessionId] [4/9] 启动服务端 ($Loader / $Ver)..."
-$serverArgs = @("--no-daemon", "-Dorg.gradle.jvmargs=-Xmx2G -DsmokeSession=${SessionId}", ":${Loader}:runServer", "-PhassiumSmokeTest=true", "-PhassiumSmokePhases=${SmokePhases}", "-Pmc_ver=${Ver}")
+$serverArgs = @("--no-daemon", "-Dorg.gradle.jvmargs=-Xmx2G -DsmokeSession=${SessionId}", ":${Loader}:runServer", "-PhassiumSmokeTest=true", "-PhassiumSmokePhases=${SmokePhases}", "-PhassiumSmokeVd1=$Vd1", "-PhassiumSmokeVd2=$Vd2", "-Pmc_ver=${Ver}")
 $server = Start-Process -FilePath $gradlew `
     -ArgumentList $serverArgs `
     -RedirectStandardOutput $serverLog `
@@ -734,16 +738,16 @@ $clientContent = if (Test-Path $clientLog) { Get-Content $clientLog -Raw } else 
 $round1Match = [regex]::Match($clientContent, "HassiumSmokeTest:CLIENT_STATS ROUND1 begin(.+?)HassiumSmokeTest:CLIENT_STATS ROUND1 end", [System.Text.RegularExpressions.RegexOptions]::Singleline)
 if ($round1Match.Success) {
     $round1Stats = $round1Match.Groups[1].Value.Trim()
-    $round1Stats | Out-File (Join-Path $statsDir "${SessionId}_round1_VD20.txt") -Encoding UTF8
-    Write-Host "[$SessionId] ROUND1 统计已保存到 stats/${SessionId}_round1_VD20.txt"
+    $round1Stats | Out-File (Join-Path $statsDir "${SessionId}_round1_VD${Vd1}.txt") -Encoding UTF8
+    Write-Host "[$SessionId] ROUND1 统计已保存到 stats/${SessionId}_round1_VD${Vd1}.txt"
 }
 
 # 提取 ROUND2 统计
 $round2Match = [regex]::Match($clientContent, "HassiumSmokeTest:CLIENT_STATS ROUND2 begin(.+?)HassiumSmokeTest:CLIENT_STATS ROUND2 end", [System.Text.RegularExpressions.RegexOptions]::Singleline)
 if ($round2Match.Success) {
     $round2Stats = $round2Match.Groups[1].Value.Trim()
-    $round2Stats | Out-File (Join-Path $statsDir "${SessionId}_round2_VD10.txt") -Encoding UTF8
-    Write-Host "[$SessionId] ROUND2 统计已保存到 stats/${SessionId}_round2_VD10.txt"
+    $round2Stats | Out-File (Join-Path $statsDir "${SessionId}_round2_VD${Vd2}.txt") -Encoding UTF8
+    Write-Host "[$SessionId] ROUND2 统计已保存到 stats/${SessionId}_round2_VD${Vd2}.txt"
 }
 
 # 提取服务端视距切换日志
@@ -883,8 +887,8 @@ $resultObj = @{
     GatewayRound2 = $gatewayRound2
     GatewayGatePass = $gatewayGate
     StatsFiles = @(
-        if ($round1StatsFound) { "build/smoke-test/stats/${SessionId}_round1_VD20.txt" }
-        if ($round2StatsFound) { "build/smoke-test/stats/${SessionId}_round2_VD10.txt" }
+        if ($round1StatsFound) { "build/smoke-test/stats/${SessionId}_round1_VD${Vd1}.txt" }
+        if ($round2StatsFound) { "build/smoke-test/stats/${SessionId}_round2_VD${Vd2}.txt" }
     )
 }
 $resultObj | ConvertTo-Json -Depth 3 | Out-File (Join-Path $resultsDir "result_${SessionId}.json")

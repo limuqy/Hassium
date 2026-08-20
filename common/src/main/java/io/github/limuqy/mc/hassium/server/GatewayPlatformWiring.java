@@ -3,6 +3,7 @@ package io.github.limuqy.mc.hassium.server;
 import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.network.SeedGenTail;
+import io.github.limuqy.mc.hassium.network.ServerChunkPushManager;
 import io.github.limuqy.mc.hassium.network.dataplane.DataPlaneHandshakeAdvertisement;
 import io.github.limuqy.mc.hassium.network.dataplane.DataPlaneUdpServer;
 import io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail;
@@ -60,6 +61,8 @@ public final class GatewayPlatformWiring {
             GatewayServer gateway = GatewayServer.getInstance();
             gateway.setInfoProvider((channel, request) -> resolveServerInfo(server));
             gateway.setLoginSink((ch, payload) -> GatewayPlayerBridge.dispatchLoginFrame(ch, payload, server));
+            gateway.setChunkApplyAckSessionSink((session, ack) ->
+                    server.execute(() -> ServerChunkPushManager.getInstance().handleChunkApplyAck(session, ack)));
             HassiumConfigService config = HassiumConfigService.getInstance();
             gateway.setZstd(config.getGlobalCompressionThreshold(), config.getGlobalCompressionLevel());
             // D-M2: 可选握手鉴权（master.authToken；空 = 不鉴权，保持既有行为）

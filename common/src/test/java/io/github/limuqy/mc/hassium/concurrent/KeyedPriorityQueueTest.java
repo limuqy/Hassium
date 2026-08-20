@@ -241,4 +241,50 @@ class KeyedPriorityQueueTest {
         assertEquals(3, order.size());
         assertEquals(java.util.Set.of("first", "second", "third"), new java.util.HashSet<>(order));
     }
+
+    @Test
+    @DisplayName("reprioritize：冻结近环在玩家移走后让位给真正近处的新任务")
+    void reprioritizePromotesNewlyNearOverFrozenFar() {
+        KeyedPriorityQueue<String> q = new KeyedPriorityQueue<>();
+        for (int i = 0; i < 32; i++) {
+            q.offer("old" + i, key(1000L + i, OP_APPLY), i * 0.1,
+                    KeyedPriorityQueue.OfferPolicy.REPLACE);
+        }
+        q.offer("near", key(POS_B, OP_APPLY), 50.0, KeyedPriorityQueue.OfferPolicy.REPLACE);
+
+        KeyedPriorityQueue.PriorityRefresher refresher =
+                (k, old) -> k.posLong() == POS_B ? 0.0 : 100.0;
+        assertEquals(33, q.reprioritize(refresher));
+        assertEquals("near", q.poll().item());
+    }
+
+    @Test
+    @DisplayName("满队列驱逐：更近任务挤掉最差存活任务，更远任务被拒绝")
+    void evictWorstIfWorseThanPrefersNearer() {
+        KeyedPriorityQueue<String> q = new KeyedPriorityQueue<>();
+        q.offer("near", key(POS_A, OP_APPLY), 1.0, KeyedPriorityQueue.OfferPolicy.REPLACE);
+        q.offer("far", key(POS_B, OP_APPLY), 100.0, KeyedPriorityQueue.OfferPolicy.REPLACE);
+
+        KeyedPriorityQueue.Entry<String> evicted = q.evictWorstIfWorseThan(10.0);
+        assertEquals("far", evicted.item());
+        assertEquals(1, q.size());
+        assertNull(q.evictWorstIfWorseThan(1.0));
+        assertEquals("near", q.poll().item());
+    }
+
+    @Test
+    @DisplayName("pollBest 重插后 current 指向新键，release 能清掉登记")
+    void pollBestReinsertUpdatesCurrentForRelease() {
+        KeyedPriorityQueue<String> q = new KeyedPriorityQueue<>();
+        q.offer("A", key(POS_A, OP_APPLY), 10.0, KeyedPriorityQueue.OfferPolicy.REPLACE);
+        q.offer("B", key(POS_B, OP_APPLY), 100.0, KeyedPriorityQueue.OfferPolicy.REPLACE);
+
+        KeyedPriorityQueue.PriorityRefresher refresher =
+                (k, old) -> k.posLong() == POS_B ? 1.0 : 200.0;
+        KeyedPriorityQueue.Entry<String> first = q.pollBest(refresher, 8);
+        assertEquals("B", first.item());
+        q.release(first);
+        assertEquals(KeyedPriorityQueue.OfferResult.INSERTED,
+                q.offer("B2", key(POS_B, OP_APPLY), 5.0, KeyedPriorityQueue.OfferPolicy.REPLACE));
+    }
 }

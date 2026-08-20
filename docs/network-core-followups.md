@@ -82,3 +82,12 @@
 关联文档：`.omp/workflows/network-core/REQ.md`、`TASKS.md`、
 `work/RealE2EVerification-TASK.md`（T9v4 交接）、`work/T10-MigrationDrill-TASK.md`、
 `docs/runtime-smoke-test.md`、`docs/handoff/handoff-2026-08-09-network-core.md`。
+## 本波追加：反馈式渐进区块推送（2026-08-19）
+
+- ✅ 已实现：服务端 full/SeedRef 统一进入 per-player keyed admission；首次 authoritative ACK 前单未确认批次，ACK 后最多 10 批；`master.maxChunksPerTick` 保留为硬上限；deliveryId 贯穿压缩 full/SeedGen 到客户端最终落地。
+- ✅ 已实现：客户端仅在 `shadow_applied`/最终 authoritative apply 成功后批量发送 `ChunkApplyAck`；服务端 ACK 幂等释放 in-flight；resync/hash/full 共用 admission；Gateway channel writability 作为传输背压。
+- ✅ 已加固：SeedRef fallback 携带 deliveryId 转换 reservation；失败路径 rollback；pending/request count 有界；完整 dimension key；session-aware ACK；1.20.2+ `dropChunk` 精确释放；客户端 ACK 多批失败保留。
+- ✅ 已验证：`common:test`、重点测试、`common:compileJava`、Fabric/Forge/NeoForge 1.20.1 与 Fabric/NeoForge 1.21.11 编译通过；证据见 `.omp/workflows/progressive-chunk-push/work/FinalCompileCheck-TASK.md`。
+- 🔲 待实测：Fabric 1.20.1 真实进服/移动曲线。当前客户端固定使用 `fabric/run/client`，已有会话占用且没有 client runDir 隔离参数；本波未复用既有日志，需独立运行窗口后验收生产/apply 曲线、重复率、近环优先和 VD20 完整性。
+
+实现与契约：`.omp/workflows/progressive-chunk-push/REQ.md`、`TASKS.md`、`work/CONTRACTS.md`；审查与阻塞记录：`work/REVIEW-FINDINGS.md`、`work/FabricRuntimeCurve-TASK.md`。

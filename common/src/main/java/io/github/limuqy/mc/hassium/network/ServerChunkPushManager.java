@@ -12,6 +12,9 @@ import io.github.limuqy.mc.hassium.compat.PlayerCompat;
 import io.github.limuqy.mc.hassium.compat.RegistryCompat;
 import io.github.limuqy.mc.hassium.compat.ResourceLocationCompat;
 import io.github.limuqy.mc.hassium.utils.DebugLogger;
+import io.github.limuqy.mc.hassium.network.core.outbound.ChunkApplyAck;
+import io.github.limuqy.mc.hassium.network.gateway.GatewayPlayerSession;
+import io.github.limuqy.mc.hassium.network.gateway.GatewayServer;
 import io.github.limuqy.mc.hassium.utils.DebugLogger.LogType;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Registry;
@@ -70,6 +73,9 @@ public class ServerChunkPushManager {
 
     /** 每玩家已准备包字节缓存上限，防止永不 miss 时泄漏 */
     private static final int MAX_PREPARED_PER_PLAYER = 384;
+    /** 每玩家 authoritative data queue 与 admission pending 的共同硬上限。 */
+    private static final int MAX_DATA_QUEUE_PER_PLAYER = ChunkAdmissionController.MAX_PENDING_PER_PLAYER;
+
 
     /**
      * 握手后 resync 分批补发：每 tick 最多处理的区块数。
@@ -88,6 +94,15 @@ public class ServerChunkPushManager {
      * 每玩家是否正在本 tick 序列化（防重复 drain）
      */
     private final Map<UUID, AtomicBoolean> processingFlags = new ConcurrentHashMap<>();
+
+    /** 每玩家 authoritative full/SeedGen 投递的准入状态；ACK 经主线程泵入。 */
+    private final Map<UUID, ChunkAdmissionController> admissionControllers = new ConcurrentHashMap<>();
+
+    /** 单调时钟超时；到期后仅当前仍在 tracking view 的 key 才重新 admission。 */
+
+    /** delivery id → 原始任务，仅供超时后在仍 tracking 时重新入队。 */
+    private final Map<UUID, Map<Long, DataRequestTask>> inFlightTasks = new ConcurrentHashMap<>();
+    private static final long DELIVERY_TIMEOUT_NANOS = TimeUnit.SECONDS.toNanos(30L);
 
     /**
      * 每玩家待发送的 chunkHash 批次
@@ -674,7 +689,7 @@ public class ServerChunkPushManager {
                 continue;
             }
             if (isSeedGenFor(player.getUUID(), pos, dimension)) {
-                sendSeedRef(player, pos, chunkHash, sectionHashes);
+                enqueueSeedRef(player, pos, dimension, chunkHash, sectionHashes);
                 continue;
             }
             sendChunkHashDirect(player, pos, chunkHash, sectionBitmap, dimension);
@@ -685,26 +700,31 @@ public class ServerChunkPushManager {
         }
     }
 
-    /**
-     * SeedRef 直发（SeedGen 玩家）：替代 chunkHash+区块数据，几十字节引用。
-     */
-    private void sendSeedRef(ServerPlayer player, ChunkPos pos, long chunkHash, long[] sectionHashes) {
-        SeedRefS2CPacket packet = new SeedRefS2CPacket(pos.x, pos.z, chunkHash,
-                sectionHashes != null ? sectionHashes : new long[0]);
+    /** 发送已由 admission 分配 deliveryId 的 SeedRef。 */
+    private void sendSeedRef(ServerPlayer player, DataRequestTask task, long deliveryId) {
+        SeedRefWork seedRef = task.seedRef();
+        SeedRefS2CPacket packet = new SeedRefS2CPacket(task.pos().x, task.pos().z, seedRef.chunkHash(),
+                seedRef.sectionHashes(), deliveryId);
         FriendlyByteBuf buf = null;
         boolean sent = false;
         try {
             buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
             packet.encode(buf);
             int bytes = buf.readableBytes();
+            if (!markDeliverySent(player.getUUID(), deliveryId)) {
+                rollbackDelivery(player, task, deliveryId);
+                return;
+            }
             Services.NETWORK_MANAGER.sendSeedRef(player, buf);
             sent = true;
             NetworkStats.recordMetadataSent(bytes);
-            Constants.LOG.info("[SEED_REF] Sent ({}, {}) hash={} bytes={} to {}", pos.x, pos.z,
-                    Long.toHexString(chunkHash), bytes, player.getName().getString());
+            Constants.LOG.info("[SEED_REF] Sent ({}, {}) hash={} deliveryId={} bytes={} to {}",
+                    task.pos().x, task.pos().z, Long.toHexString(seedRef.chunkHash()), deliveryId, bytes,
+                    player.getName().getString());
         } catch (Exception e) {
             Constants.LOG.error("[SEED_REF] Failed to send SeedRef to player {}",
                     player.getName().getString(), e);
+            rollbackDelivery(player, task, deliveryId);
         } finally {
             if (!sent && buf != null) {
                 buf.release();
@@ -1000,6 +1020,11 @@ public class ServerChunkPushManager {
                         queue.addLast(entry);
                         continue;
                     }
+                    if (isAdmissionPendingOrInFlight(player, entry)) {
+                        // resync 只补 full admission 尚未覆盖的 key；不重发 hash/直推以绕过窗口。
+                        processed++;
+                        continue;
+                    }
                     submitMetadataTaskFromChunk(player, entry.pos(), chunk, entry.dimension());
                     processed++;
                 }
@@ -1070,9 +1095,11 @@ public class ServerChunkPushManager {
         ensureInitialized();
 
         long now = System.currentTimeMillis();
+        long nowNanos = System.nanoTime();
         for (ServerPlayer player : server.getPlayerList().getPlayers()) {
             flushPlayerHashBatchIfDue(player, now);
             drainPlayerQueueTick(player);
+            expirePlayerDeliveries(player, nowNanos);
         }
 
         // 出界待命任务周期重评估（玩家折返/静止后恢复入队，防永久虚空）
@@ -1088,6 +1115,8 @@ public class ServerChunkPushManager {
 
         // 清理已离线玩家的批次
         hashBatches.keySet().removeIf(id -> server.getPlayerList().getPlayer(id) == null);
+        admissionControllers.keySet().removeIf(id -> server.getPlayerList().getPlayer(id) == null);
+        inFlightTasks.keySet().removeIf(id -> server.getPlayerList().getPlayer(id) == null);
         adjustThreadPool();
     }
 
@@ -1554,12 +1583,37 @@ public class ServerChunkPushManager {
      * @param chunks    请求的区块列表
      */
     public void enqueueDataRequest(ServerPlayer player, String dimension, List<ChunkPos> chunks) {
-        // 记录收到数据请求
+        enqueueDataRequest(player, dimension, chunks, 0L);
+    }
+
+    /**
+     * Enqueues a full-data request. A positive fallback id is valid only for its original single SeedRef
+     * delivery; this monitor releases that exact reservation and commits the replacement admission
+     * without allowing another producer to reuse the key between those transitions.
+     */
+    public synchronized void enqueueDataRequest(ServerPlayer player, String dimension, List<ChunkPos> chunks,
+                                                long fallbackDeliveryId) {
+        if (fallbackDeliveryId <= 0L) {
+            NetworkStats.recordDataRequestReceived();
+            enqueueInternal(player, dimension, chunks, true);
+            return;
+        }
+        if (player == null || chunks == null || chunks.size() != 1) {
+            return;
+        }
+        UUID playerId = player.getUUID();
+        DataRequestTask task = inFlightTasks.getOrDefault(playerId, Map.of()).get(fallbackDeliveryId);
+        ChunkPos pos = chunks.get(0);
+        if (task == null || task.seedRef() == null || !task.dimension().equals(dimension)
+                || task.pos().x != pos.x || task.pos().z != pos.z) {
+            return;
+        }
+        ChunkAdmissionController controller = admissionControllers.get(playerId);
+        if (controller == null || !controller.release(admissionKey(task), fallbackDeliveryId)) {
+            return;
+        }
+        inFlightTasks.getOrDefault(playerId, Map.of()).remove(fallbackDeliveryId, task);
         NetworkStats.recordDataRequestReceived();
-
-        DebugLogger.info(LogType.NETWORK, "[ENQUEUE_DATA] Player {} requested {} chunks (dimension={})",
-                player.getName().getString(), chunks.size(), dimension);
-
         enqueueInternal(player, dimension, chunks, true);
     }
 
@@ -1577,8 +1631,6 @@ public class ServerChunkPushManager {
     private void enqueueInternal(ServerPlayer player, String dimension, List<ChunkPos> chunks,
                                  boolean countSeedGenFallback) {
         ensureInitialized();
-
-        // 检查玩家是否仍然在线
         if (!player.isAlive() || player.hasDisconnected()) {
             Constants.LOG.warn("[ENQUEUE_DATA] Player {} is not online, ignoring data request",
                     player.getName().getString());
@@ -1586,17 +1638,8 @@ public class ServerChunkPushManager {
         }
 
         UUID playerId = player.getUUID();
-        io.github.limuqy.mc.hassium.concurrent.KeyedPriorityQueue<DataRequestTask> queue = dataQueues.computeIfAbsent(
-                playerId, k -> new io.github.limuqy.mc.hassium.concurrent.KeyedPriorityQueue<>(100));
-
         double playerChunkX = player.getX() / 16.0;
         double playerChunkZ = player.getZ() / 16.0;
-
-        // 移动方向加权：纯 distSq 升序（近先推）会把飞行方向前方的块（距离最远）
-        // 永远排到队尾——飞行时前方出现锥形虚空（~30° 扇区），转弯后新前方继续滞后
-        // （实测：前方块迟推数秒、已加载块在视距圆移动时正常卸载 → 视觉跳变）。
-        // 按玩家速度方向把前方块提前：priority = distSq - BIAS * dot(pos-player, dir)。
-        // 仅对前方（dot>0）加权，后方不加权不惩罚；速度阈值防原地抖动/转视角误判。
         net.minecraft.world.phys.Vec3 vel = player.getDeltaMovement();
         double dirX = 0.0;
         double dirZ = 0.0;
@@ -1607,9 +1650,8 @@ public class ServerChunkPushManager {
             dirZ = vel.z / len;
         }
 
-        List<DataRequestTask> tasks = new ArrayList<>(chunks.size());
+        int queued = 0;
         for (ChunkPos pos : chunks) {
-            // 入队瞬间冻结 distSq（层内排序键；无 renderOnly 层）
             double priority = ChunkDistancePriority.distSq(pos, playerChunkX, playerChunkZ);
             if (dirX != 0.0) {
                 double dx = pos.x - playerChunkX;
@@ -1619,31 +1661,150 @@ public class ServerChunkPushManager {
                     priority -= FORWARD_BIAS * dot;
                 }
             }
-            tasks.add(new DataRequestTask(pos, dimension, priority));
+            if (offerPendingTask(player, new DataRequestTask(pos, dimension, priority, null))) {
+                queued++;
+            }
             if (countSeedGenFallback) {
                 recordSeedGenFallback(playerId, pos, dimension);
             }
         }
+        DebugLogger.info(LogType.NETWORK,
+                "[ENQUEUE_DATA] Player {} queued {} chunks (dimension={}, playerPos=({}, {}))",
+                player.getName().getString(), queued, dimension, playerChunkX, playerChunkZ);
+    }
 
-        // 去重/取代：同区块已在队时用新任务（最新优先级）替换旧任务——
-        // 直推 + 客户端请求同块、多路径并发时仍只推送一次，且玩家折返时的
-        // 重复请求能刷新冻结的优先级键（原 queuedChunkKeys 仅丢弃新请求）。
-        int replaced = 0;
-        for (DataRequestTask task : tasks) {
-            io.github.limuqy.mc.hassium.concurrent.KeyedPriorityQueue.OfferResult result = queue.offer(
-                    task,
-                    new io.github.limuqy.mc.hassium.concurrent.KeyedPriorityQueue.Key(
-                            ChunkPos.asLong(task.pos().x, task.pos().z), 0),
-                    task.priority(),
+    /** Enqueues a SeedRef through the same keyed admission as compressed full payloads. */
+    private void enqueueSeedRef(ServerPlayer player, ChunkPos pos, String dimension,
+                                long chunkHash, long[] sectionHashes) {
+        if (!player.isAlive() || player.hasDisconnected()) {
+            return;
+        }
+        double priority = ChunkDistancePriority.distSq(pos, player.getX() / 16.0, player.getZ() / 16.0);
+        offerPendingTask(player, new DataRequestTask(pos, dimension, priority,
+                new SeedRefWork(chunkHash, sectionHashes)));
+    }
+
+    /** Existing bounded priority queue owns ordering; admission owns cross-source keyed state. */
+    /**
+     * Commits the controller and priority-queue entries under one manager monitor.  A queue insertion
+     * failure or a full queue withdraws the just-added pending key, so it cannot consume admission
+     * capacity without a drainable task.
+     */
+    private synchronized boolean offerPendingTask(ServerPlayer player, DataRequestTask task) {
+        UUID playerId = player.getUUID();
+        ChunkAdmissionController controller = admissionControllers.computeIfAbsent(
+                playerId, ignored -> new ChunkAdmissionController());
+        ChunkAdmissionController.ChunkDeliveryKey key = admissionKey(task);
+        if (controller.contains(key)) {
+            return false;
+        }
+        io.github.limuqy.mc.hassium.concurrent.KeyedPriorityQueue<DataRequestTask> queue = dataQueues.computeIfAbsent(
+                playerId, ignored -> new io.github.limuqy.mc.hassium.concurrent.KeyedPriorityQueue<>(100));
+        if (controller.pendingCount() >= ChunkAdmissionController.MAX_PENDING_PER_PLAYER
+                || queue.size() >= MAX_DATA_QUEUE_PER_PLAYER) {
+            io.github.limuqy.mc.hassium.concurrent.KeyedPriorityQueue.Entry<DataRequestTask> evicted =
+                    queue.evictWorstIfWorseThan(task.priority());
+            if (evicted == null) {
+                return false;
+            }
+            controller.withdrawPending(admissionKey(evicted.item()));
+            DebugLogger.info(LogType.NETWORK,
+                    "[ENQUEUE_DATA] Evicted farther pending {} for nearer {}",
+                    evicted.item().pos(), task.pos());
+        }
+        if (!controller.offer(key)) {
+            return false;
+        }
+        try {
+            queue.offer(task, dataQueueKey(task), task.priority(),
                     io.github.limuqy.mc.hassium.concurrent.KeyedPriorityQueue.OfferPolicy.REPLACE);
-            if (result == io.github.limuqy.mc.hassium.concurrent.KeyedPriorityQueue.OfferResult.REPLACED) {
-                replaced++;
+            return true;
+        } catch (RuntimeException e) {
+            controller.withdrawPending(key);
+            throw e;
+        }
+    }
+
+    private static ChunkAdmissionController.ChunkDeliveryKey admissionKey(DataRequestTask task) {
+        return new ChunkAdmissionController.ChunkDeliveryKey(task.dimension(), task.pos().x, task.pos().z);
+    }
+
+    private static io.github.limuqy.mc.hassium.concurrent.KeyedPriorityQueue.Key dataQueueKey(DataRequestTask task) {
+        return new io.github.limuqy.mc.hassium.concurrent.KeyedPriorityQueue.Key(
+                ChunkPos.asLong(task.pos().x, task.pos().z), 0, task.dimension());
+    }
+
+    /** Gateway 会话存在时，full admission 只在 active + writable 的 channel 上推进。 */
+    private static boolean isFullDeliveryChannelWritable(ServerPlayer player) {
+        io.github.limuqy.mc.hassium.network.gateway.GatewayPlayerSession session =
+                io.github.limuqy.mc.hassium.network.gateway.GatewayServer.getInstance()
+                        .registry().get(player.getUUID());
+        return session == null || session.channel().isWritable();
+    }
+
+    /** resync 不得覆盖同一 key 已排队或等待 ACK 的 authoritative full delivery。 */
+    private boolean isAdmissionPendingOrInFlight(ServerPlayer player, ResyncEntry entry) {
+        ChunkAdmissionController controller = admissionControllers.get(player.getUUID());
+        return controller != null && controller.contains(new ChunkAdmissionController.ChunkDeliveryKey(
+                entry.dimension(), entry.pos().x, entry.pos().z));
+    }
+
+    /**
+     * 网关 ACK 经 {@code MinecraftServer.execute} 切入服务器线程后调用。
+     * 会话对象是网关附着时创建的不可变身份；重连覆盖后，旧 event-loop 回调无法释放
+     * 新会话从 1 重新分配的 delivery id。
+     */
+    public void handleChunkApplyAck(GatewayPlayerSession session, ChunkApplyAck ack) {
+        if (session == null || ack == null
+                || GatewayServer.getInstance().registry().get(session.playerId()) != session) {
+            return;
+        }
+        UUID playerId = session.playerId();
+        ChunkAdmissionController controller = admissionControllers.get(playerId);
+        if (controller == null) {
+            return;
+        }
+        Map<Long, DataRequestTask> tasks = inFlightTasks.get(playerId);
+        long nowNanos = System.nanoTime();
+        for (long deliveryId : ack.deliveryIds()) {
+            if (controller.acknowledge(deliveryId, nowNanos) && tasks != null) {
+                tasks.remove(deliveryId);
             }
         }
+    }
 
-        DebugLogger.info(LogType.NETWORK, "[ENQUEUE_DATA] Player {} queued {} chunks (queueSize={}, replaced={}, playerPos=({}, {}))",
-                player.getName().getString(), tasks.size(), queue.size(), replaced, playerChunkX, playerChunkZ);
-        // 实际 drain 由 onServerTick 按真实每 tick 上限处理，避免连环 submit 卡主线程
+    /** Requeues only timed-out deliveries that remain in this player's currently tracked view. */
+    private void expirePlayerDeliveries(ServerPlayer player, long nowNanos) {
+        ChunkAdmissionController controller = admissionControllers.get(player.getUUID());
+        if (controller == null) {
+            return;
+        }
+        Map<Long, DataRequestTask> tasks = inFlightTasks.get(player.getUUID());
+        for (ChunkAdmissionController.ExpiredDelivery expired :
+                controller.expire(nowNanos, DELIVERY_TIMEOUT_NANOS)) {
+            DataRequestTask task = tasks != null ? tasks.remove(expired.deliveryId()) : null;
+            if (task != null && isStillTracking(player, task)) {
+                offerPendingTask(player, task);
+            } else {
+                controller.release(expired.key());
+            }
+        }
+    }
+
+    private static boolean isStillTracking(ServerPlayer player, DataRequestTask task) {
+        ServerLevel level = PlayerCompat.getServerLevel(player);
+        if (!
+#if MC_VER < MC_1_21_11
+                level.dimension().location()
+#else
+                level.dimension().identifier()
+#endif
+                .toString().equals(task.dimension())) {
+            return false;
+        }
+        ChunkPos center = player.chunkPosition();
+        return isServerChunkInRange(task.pos().x, task.pos().z, center.x, center.z,
+                PlayerCompat.getViewDistance(player));
     }
 
     /**
@@ -1664,6 +1825,7 @@ public class ServerChunkPushManager {
             return;
         }
 
+
         AtomicBoolean flag = processingFlags.computeIfAbsent(playerId, k -> new AtomicBoolean(false));
         if (!flag.compareAndSet(false, true)) {
             return;
@@ -1681,13 +1843,17 @@ public class ServerChunkPushManager {
             if (maxPerTick <= 0) {
                 maxPerTick = 4;
             }
+            ChunkAdmissionController controller = admissionControllers.computeIfAbsent(
+                    playerId, ignored -> new ChunkAdmissionController());
+            if (!controller.beginTick(maxPerTick, isFullDeliveryChannelWritable(player))) {
+                return;
+            }
 
             ServerLevel level = PlayerCompat.getServerLevel(player);
             // 本 tick 玩家锚点与视距（服务端 tick 内位置不变）：drain 前快照，供出界丢弃判定
             ChunkPos playerChunk = player.chunkPosition();
             int serverVD = PlayerCompat.getViewDistance(player);
             List<SerializedChunkWork> works = new ArrayList<>(maxPerTick);
-            int processed = 0;
 
             // 消费时重算优先级：冻结键按本 tick 玩家位置 + 移动方向刷新（同 enqueueInternal
             // 的前向加权公式）。玩家排队期间移动 → 近处块不再被「入队时远、现在近」的旧键
@@ -1711,6 +1877,9 @@ public class ServerChunkPushManager {
             io.github.limuqy.mc.hassium.concurrent.KeyedPriorityQueue.PriorityRefresher refresher =
                     (key, old) -> key == null ? old
                             : refreshPriority(key.posLong(), anchorX, anchorZ, fwdX, fwdZ, FORWARD_BIAS);
+            // 先整队按当前锚点重算，再 pollBest。仅靠有界重插（默认 8 次）无法翻过
+            // 进服时冻结的近环数百条目，玩家移动后会持续吐出已落后方的旧块。
+            queue.reprioritize(refresher);
 
             // 所有版本主线程构建 packet 快照：1.20.1 的 ThreadingDetector 是信号量互斥，
             // 主线程 tick 写 chunk 与后台 build 并发即引爆（本次 01:09:04 [10,3] 崩溃实测），
@@ -1720,7 +1889,7 @@ public class ServerChunkPushManager {
             // 主线程构建完整 packet 快照，encode/压缩/限速/发送在 pushPool。
             // <1.21.2 无检测：主线程只取 chunk 引用，build/encode 全后台（恢复 1.20.1 已验证的全后台路径）。
             // packet 的内部 chunk/light 数据已脱离世界对象，线格式 encode、压缩、限速与发送仍在 pushPool。
-            while (processed < maxPerTick && !queue.isEmpty()) {
+            while (controller.canAdmit() && !queue.isEmpty()) {
                 if (!player.isAlive() || player.hasDisconnected()) {
                     removePlayer(playerId);
                     return;
@@ -1734,10 +1903,12 @@ public class ServerChunkPushManager {
                 DataRequestTask task = entry.item();
                 // 出队即释放 key 登记（允许客户端重试/直推重新入队；原 queuedChunkKeys.remove 语义）
                 queue.release(entry);
+                ChunkAdmissionController.ChunkDeliveryKey deliveryKey = admissionKey(task);
 
                 // 任务排队期间玩家可能已移出权威视距：不静默丢弃（客户端无重试 → 永久虚空 bug 根因），
                 // 转入待命集合，玩家折返/静止后重新在视距内时恢复入队；超时（10s）才真丢弃。
                 if (!isServerChunkInRange(task.pos().x, task.pos().z, playerChunk.x, playerChunk.z, serverVD)) {
+                    controller.release(deliveryKey);
                     Map<Long, DeferredTask> deferred = deferredChunks.computeIfAbsent(
                             playerId, k -> new ConcurrentHashMap<>());
                     if (deferred.size() >= MAX_DEFERRED_PER_PLAYER) {
@@ -1754,6 +1925,25 @@ public class ServerChunkPushManager {
                     continue;
                 }
 
+                ChunkAdmissionController.Reservation reservation = controller.admit(deliveryKey);
+                if (reservation == null) {
+                    // poll+release 已把任务移出数据队列。admit 因 !canAdmit 失败时
+                    // pending 仍占着该 key，offerPendingTask.contains 会永久拒绝重入队。
+                    // 仍 pending → 放回队列并结束本 tick；pending 已撤（untrack/出界）→ 丢弃。
+                    if (controller.isPending(deliveryKey)) {
+                        queue.offer(task, dataQueueKey(task), task.priority(),
+                                io.github.limuqy.mc.hassium.concurrent.KeyedPriorityQueue.OfferPolicy.REPLACE);
+                        break;
+                    }
+                    continue;
+                }
+                inFlightTasks.computeIfAbsent(playerId, ignored -> new ConcurrentHashMap<>())
+                        .put(reservation.deliveryId(), task);
+                if (task.seedRef() != null) {
+                    sendSeedRef(player, task, reservation.deliveryId());
+                    continue;
+                }
+
                 try {
                     // 优先使用拦截时缓存的包字节或 packet（与 chunkHash / 反透视视图一致）
                     PreparedChunk prepared = takePreparedChunkPacket(playerId, task.pos());
@@ -1767,6 +1957,7 @@ public class ServerChunkPushManager {
                             LevelChunk chunk = level.getChunk(task.pos().x, task.pos().z);
                             if (chunk == null) {
                                 Constants.LOG.warn("[PROCESS_QUEUE] Chunk {} not loaded, skipping", task.pos());
+                                rollbackDelivery(player, task, reservation.deliveryId());
                                 continue;
                             }
                             long tBuild = System.nanoTime();
@@ -1774,19 +1965,20 @@ public class ServerChunkPushManager {
                             diag(D_BUILD, System.nanoTime() - tBuild);
                             if (packet == null) {
                                 Constants.LOG.warn("[PROCESS_QUEUE] Failed to build chunk packet {}", task.pos());
+                                rollbackDelivery(player, task, reservation.deliveryId());
                                 continue;
                             }
                         }
                     }
 
-                    works.add(new SerializedChunkWork(player, task.pos(), chunkData,
+                    works.add(new SerializedChunkWork(player, task, reservation.deliveryId(), chunkData,
                             packet, level.registryAccess()));
-                    processed++;
                     DebugLogger.info(LogType.NETWORK, "[PROCESS_QUEUE] Built chunk packet {} (remaining={})",
                             task.pos(), queue.size());
                 } catch (Exception e) {
                     Constants.LOG.error("[PROCESS_QUEUE] Failed to prepare chunk {} for player {}",
                             task.pos(), player.getName().getString(), e);
+                    rollbackDelivery(player, task, reservation.deliveryId());
                 }
             }
 
@@ -1794,21 +1986,33 @@ public class ServerChunkPushManager {
                 DebugLogger.info(LogType.NETWORK, "[PROCESS_QUEUE] Tick drain for {}: prepared={}, remaining={}",
                         player.getName().getString(), works.size(), queue.size());
                 for (SerializedChunkWork work : works) {
-                    pushPool.submit(() -> {
-                        byte[] chunkData = work.chunkData();
-                        if (chunkData == null) {
-                            long tEnc = System.nanoTime();
-                            chunkData = encodeChunkPacket(work.packet(), work.registryAccess());
-                            diag(D_ENCODE, System.nanoTime() - tEnc);
-                        }
-                        if (chunkData == null) {
-                            Constants.LOG.warn("[PROCESS_QUEUE] Failed to encode chunk {}", work.pos());
-                            return;
-                        }
-                        long tSend = System.nanoTime();
-                        compressAndSend(work.player(), work.pos(), chunkData, sender);
-                        diag(D_SEND, System.nanoTime() - tSend);
-                    });
+                    try {
+                        pushPool.submit(() -> {
+                            try {
+                                byte[] chunkData = work.chunkData();
+                                if (chunkData == null) {
+                                    long tEnc = System.nanoTime();
+                                    chunkData = encodeChunkPacket(work.packet(), work.registryAccess());
+                                    diag(D_ENCODE, System.nanoTime() - tEnc);
+                                }
+                                if (chunkData == null) {
+                                    Constants.LOG.warn("[PROCESS_QUEUE] Failed to encode chunk {}", work.task().pos());
+                                    rollbackDelivery(work.player(), work.task(), work.deliveryId());
+                                    return;
+                                }
+                                long tSend = System.nanoTime();
+                                compressAndSend(work.player(), work.task(), chunkData, work.deliveryId(), sender);
+                                diag(D_SEND, System.nanoTime() - tSend);
+                            } catch (Throwable t) {
+                                Constants.LOG.error("[PROCESS_QUEUE] Failed to encode/send chunk {}",
+                                        work.task().pos(), t);
+                                rollbackDelivery(work.player(), work.task(), work.deliveryId());
+                            }
+                        });
+                    } catch (RuntimeException e) {
+                        Constants.LOG.error("[PROCESS_QUEUE] Chunk push submission rejected for {}", work.task().pos(), e);
+                        rollbackDelivery(work.player(), work.task(), work.deliveryId());
+                    }
                 }
             }
         } finally {
@@ -1816,24 +2020,26 @@ public class ServerChunkPushManager {
         }
     }
 
-    /**
-     * 后台压缩并发送（不访问世界对象）。
-     */
-    private void compressAndSend(ServerPlayer player, ChunkPos pos, byte[] chunkData, ChunkSender sender) {
+    /** 后台压缩并发送（不访问世界对象）；计时从实际 transport handoff 开始。 */
+    private void compressAndSend(ServerPlayer player, DataRequestTask task, byte[] chunkData, long deliveryId,
+                                 ChunkSender sender) {
         if (!player.isAlive() || player.hasDisconnected()) {
+            rollbackDelivery(player, task, deliveryId);
             return;
         }
         try {
             ChunkCompressionHandler.CompressedChunkData compressed =
-                    ChunkCompressionHandler.compressChunkData(chunkData, pos.x, pos.z);
+                    ChunkCompressionHandler.compressChunkData(chunkData, task.pos().x, task.pos().z, deliveryId);
             if (compressed == null) {
-                Constants.LOG.warn("[PROCESS_QUEUE] Failed to compress chunk {}", pos);
+                Constants.LOG.warn("[PROCESS_QUEUE] Failed to compress chunk {}", task.pos());
+                rollbackDelivery(player, task, deliveryId);
                 return;
             }
-            sendCompressed(player, pos, chunkData, compressed, sender);
+            sendCompressed(player, task, chunkData, compressed, deliveryId, sender);
         } catch (Exception e) {
             Constants.LOG.error("[PROCESS_QUEUE] Failed to compress/send chunk {} for player {}",
-                    pos, player.getName().getString(), e);
+                    task.pos(), player.getName().getString(), e);
+            rollbackDelivery(player, task, deliveryId);
         }
     }
 
@@ -1842,10 +2048,14 @@ public class ServerChunkPushManager {
      * 掉刻时每 tick 提交量不变、每秒总量自然下降，即保护主线程。无令牌桶后
      * 无需延迟重提交，压缩完成后直接发送（全在 pushPool，不占主线程）。
      */
-    private void sendCompressed(ServerPlayer player, ChunkPos pos, byte[] chunkData,
-                                ChunkCompressionHandler.CompressedChunkData compressed, ChunkSender sender) {
-        // 压缩完成与发送之间玩家可能断开：发送前校验
+    private void sendCompressed(ServerPlayer player, DataRequestTask task, byte[] chunkData,
+                                ChunkCompressionHandler.CompressedChunkData compressed, long deliveryId,
+                                ChunkSender sender) {
         if (!player.isAlive() || player.hasDisconnected()) {
+            rollbackDelivery(player, task, deliveryId);
+            return;
+        }
+        if (!markDeliverySent(player.getUUID(), deliveryId)) {
             return;
         }
         sender.sendCompressedChunk(player, compressed);
@@ -1864,9 +2074,30 @@ public class ServerChunkPushManager {
                     NetworkStats.ESTIMATED_LIGHT_BYTES);
         }
         DebugLogger.info(LogType.NETWORK, "[PROCESS_QUEUE] Sent chunk {} to player {} ({} -> {} bytes, ratio={})",
-                pos, player.getName().getString(),
+                task.pos(), player.getName().getString(),
                 chunkData.length, compressed.compressedData.length,
                 String.format("%.2f", (double) chunkData.length / compressed.compressedData.length));
+    }
+
+    private boolean markDeliverySent(UUID playerId, long deliveryId) {
+        ChunkAdmissionController controller = admissionControllers.get(playerId);
+        return controller != null && controller.markSent(deliveryId, System.nanoTime());
+    }
+
+    /** Removes the exact reservation and schedules a fresh admission only while the player still tracks it. */
+    private synchronized void rollbackDelivery(ServerPlayer player, DataRequestTask task, long deliveryId) {
+        UUID playerId = player.getUUID();
+        ChunkAdmissionController controller = admissionControllers.get(playerId);
+        if (controller == null || !controller.release(admissionKey(task), deliveryId)) {
+            return;
+        }
+        Map<Long, DataRequestTask> tasks = inFlightTasks.get(playerId);
+        if (tasks != null) {
+            tasks.remove(deliveryId, task);
+        }
+        if (player.isAlive() && !player.hasDisconnected() && isStillTracking(player, task)) {
+            offerPendingTask(player, task);
+        }
     }
 
     /**
@@ -1991,6 +2222,41 @@ public class ServerChunkPushManager {
     }
 
     /**
+     * Releases one exact tracked chunk delivery without scanning the player's queue or in-flight map.
+     * Version-specific tracking hooks can call this when their mapped untrack callback is available.
+     */
+    public void releasePlayerChunkDelivery(UUID playerId, String dimension, ChunkPos pos) {
+        if (playerId == null || dimension == null || pos == null) {
+            return;
+        }
+        long posLong = ChunkPos.asLong(pos.x, pos.z);
+        Map<Long, DeferredTask> deferred = deferredChunks.get(playerId);
+        if (deferred != null) {
+            deferred.remove(posLong);
+        }
+        io.github.limuqy.mc.hassium.concurrent.KeyedPriorityQueue<DataRequestTask> queue = dataQueues.get(playerId);
+        if (queue != null) {
+            queue.removeIf(task -> dimension.equals(task.dimension())
+                    && task.pos().x == pos.x && task.pos().z == pos.z);
+        }
+        ChunkAdmissionController controller = admissionControllers.get(playerId);
+        if (controller == null) {
+            return;
+        }
+        ChunkAdmissionController.ChunkDeliveryKey key =
+                new ChunkAdmissionController.ChunkDeliveryKey(dimension, pos.x, pos.z);
+        long deliveryId = controller.releaseDeliveryId(key);
+        if (deliveryId != 0L) {
+            Map<Long, DataRequestTask> tasks = inFlightTasks.get(playerId);
+            if (tasks != null) {
+                tasks.remove(deliveryId);
+            }
+            return;
+        }
+        controller.release(key);
+    }
+
+    /**
      * 动态调整线程池大小
      */
     private void adjustThreadPool() {
@@ -2045,6 +2311,11 @@ public class ServerChunkPushManager {
             queue.clear();
         }
         processingFlags.remove(playerId);
+        ChunkAdmissionController controller = admissionControllers.remove(playerId);
+        if (controller != null) {
+            controller.clear();
+        }
+        inFlightTasks.remove(playerId);
         hashBatches.remove(playerId);
         preparedChunkPackets.remove(playerId);
         pendingResync.remove(playerId);
@@ -2066,6 +2337,9 @@ public class ServerChunkPushManager {
     public void shutdown() {
         dataQueues.clear();
         processingFlags.clear();
+        admissionControllers.values().forEach(ChunkAdmissionController::clear);
+        admissionControllers.clear();
+        inFlightTasks.clear();
         hashBatches.clear();
         preparedChunkPackets.clear();
         pendingResync.clear();
@@ -2098,19 +2372,33 @@ public class ServerChunkPushManager {
                 totalQueues, totalPending, activeThreads, poolSize);
     }
 
-    /**
-     * 区块数据请求任务
-     */
-    private record DataRequestTask(ChunkPos pos, String dimension, double priority) {}
+    /** 区块数据请求任务。 */
+    private record DataRequestTask(ChunkPos pos, String dimension, double priority, SeedRefWork seedRef) {}
 
+    private static final class SeedRefWork {
+        private final long chunkHash;
+        private final long[] sectionHashes;
+
+        SeedRefWork(long chunkHash, long[] sectionHashes) {
+            this.chunkHash = chunkHash;
+            this.sectionHashes = sectionHashes != null ? sectionHashes.clone() : new long[0];
+        }
+
+        long chunkHash() {
+            return chunkHash;
+        }
+
+        long[] sectionHashes() {
+            return sectionHashes.clone();
+        }
+    }
     /**
      * 工作项携带已构建 packet 或已编码字节；二者均不再读取世界对象，后台 encode 安全。
      * registryAccess 在服务端启动后只读。
      */
-    private record SerializedChunkWork(ServerPlayer player, ChunkPos pos,
+    private record SerializedChunkWork(ServerPlayer player, DataRequestTask task, long deliveryId,
                                        byte[] chunkData, ClientboundLevelChunkWithLightPacket packet,
                                        RegistryAccess registryAccess) {}
-
     /**
      * 短窗口 ChunkHash 批次
      */

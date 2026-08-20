@@ -3,6 +3,9 @@ package io.github.limuqy.mc.hassium.mixin;
 import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.cache.client.IClientLevelExtension;
 import io.github.limuqy.mc.hassium.cache.client.ViewDistanceExtensionService;
+import io.github.limuqy.mc.hassium.utils.DebugLogger;
+import io.github.limuqy.mc.hassium.utils.DebugLogger.LogType;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.chunk.LevelChunk;
@@ -71,7 +74,30 @@ public class MixinClientLevel implements IClientLevelExtension {
     @Inject(method = "unload", at = @At("HEAD"))
     private void hassium$onUnload(LevelChunk chunk, CallbackInfo ci) {
         ChunkPos pos = chunk.getPos();
-        hassium$renderOnlyChunks.remove(pos.toLong());
+        boolean wasRenderOnly = hassium$renderOnlyChunks.remove(pos.toLong());
+        io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.onClientChunkUnloaded(pos);
+        hassium$logChunkUnload(pos, wasRenderOnly);
+    }
+
+    @Unique
+    private void hassium$logChunkUnload(ChunkPos pos, boolean wasRenderOnly) {
+        if (!DebugLogger.isEnabled(LogType.CHUNK_APPLY)) {
+            return;
+        }
+        long eventMs = System.currentTimeMillis();
+        Minecraft minecraft = Minecraft.getInstance();
+        if (minecraft.player == null) {
+            DebugLogger.info(LogType.CHUNK_APPLY,
+                    "[CHUNK_UNLOAD] eventMs={} target=({},{}) renderOnly={} player=unavailable",
+                    eventMs, pos.x, pos.z, wasRenderOnly);
+            return;
+        }
+        int playerX = (int) Math.floor(minecraft.player.getX());
+        int playerY = (int) Math.floor(minecraft.player.getY());
+        int playerZ = (int) Math.floor(minecraft.player.getZ());
+        DebugLogger.info(LogType.CHUNK_APPLY,
+                "[CHUNK_UNLOAD] eventMs={} target=({},{}) renderOnly={} playerBlock=({},{},{}) playerChunk=({},{})",
+                eventMs, pos.x, pos.z, wasRenderOnly, playerX, playerY, playerZ, playerX >> 4, playerZ >> 4);
     }
 
 }

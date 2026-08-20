@@ -63,5 +63,22 @@ public abstract class MixinPlayerChunkSender {
 
         ci.cancel(); // 取消原版区块包发送
     }
+#if MC_VER >= MC_1_20_2
+    /** PlayerChunkSender.dropChunk 是 1.20.2+ 的精确 tracking-view 移除回调。 */
+    @Inject(method = "dropChunk", at = @At("HEAD"))
+    private void hassium$onDropChunk(ServerPlayer player, ChunkPos pos, CallbackInfo ci) {
+        if (GatewayServer.getInstance().registry().get(player.getUUID()) == null) {
+            return;
+        }
+        String dimension = player.level().dimension()
+#if MC_VER < MC_1_21_11
+                .location()
+#else
+                .identifier()
+#endif
+                .toString();
+        ServerChunkPushManager.getInstance().releasePlayerChunkDelivery(player.getUUID(), dimension, pos);
+    }
+#endif
 #endif
 }

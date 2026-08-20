@@ -66,6 +66,11 @@ public final class ClientChunkPipeline {
     private final ThreadLocal<Boolean> hassiumApplyInProgress =
             ThreadLocal.withInitial(() -> Boolean.FALSE);
 
+    /** 当前连接的 authoritative apply ACK；断连时与其它会话状态一并清空。 */
+    private final ClientChunkApplyAckAggregator chunkApplyAcks =
+            new ClientChunkApplyAckAggregator(ack -> io.github.limuqy.mc.hassium.network.core.NetworkCore
+                    .getInstance().sendChunkApplyAck(ack));
+
     private ClientChunkPipeline() {
     }
 
@@ -121,6 +126,7 @@ public final class ClientChunkPipeline {
         hassiumHandshakeDone = false;
         shadowServerReady = false;
         shadowServerFailed = false;
+        chunkApplyAcks.clear();
     }
 
     /**
@@ -235,6 +241,21 @@ public final class ClientChunkPipeline {
     /** 设置 Hassium 预算内 apply 重入标志（apply 前后配对调用）。 */
     public void setApplyInProgress(boolean inProgress) {
         hassiumApplyInProgress.set(inProgress);
+    }
+
+    /** 只接收最终成功的权威落地；0 表示非 flow-controlled 投递。 */
+    void recordAuthoritativeApply(long deliveryId) {
+        chunkApplyAcks.recordApplied(deliveryId);
+    }
+
+    /** 客户端 tick 尾冲刷已落地的 authoritative delivery。 */
+    void flushChunkApplyAcks() {
+        chunkApplyAcks.flush();
+    }
+
+    /** 断线时丢弃旧会话 ACK，禁止跨连接重放。 */
+    void clearChunkApplyAcks() {
+        chunkApplyAcks.clear();
     }
 
     /**

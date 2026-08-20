@@ -1,5 +1,6 @@
 package io.github.limuqy.mc.hassium.concurrent;
 
+import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.PriorityBlockingQueue;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -42,9 +43,14 @@ public final class KeyedPriorityQueue<E> {
 
     /**
      * 队列键：{@code posLong} = {@code ChunkPos.asLong(x, z)}；{@code op} 区分同位置
-     * 不同语义的任务（取值由调用方定义，见 {@link MainThreadDispatcher}）。
+     * 不同语义的任务（取值由调用方定义，见 {@link MainThreadDispatcher}）。{@code dimension}
+     * 为 null 保持既有无维度调用的相等性；跨维度队列必须传入完整稳定维度标识，不能使用 hash。
      */
-    public record Key(long posLong, int op) {}
+    public record Key(long posLong, int op, String dimension) {
+        public Key(long posLong, int op) {
+            this(posLong, op, null);
+        }
+    }
 
     /** 入队策略 */
     public enum OfferPolicy {
@@ -205,16 +211,73 @@ public final class KeyedPriorityQueue<E> {
                 continue; // 过期任务丢弃
             }
             double fresh = refresher.refresh(entry.key(), entry.priority());
-            if (fresh > entry.priority() && reinserts < maxReinserts) {
-                Entry<E> head = heap.peek();
-                if (head != null && fresh > head.priority()) {
-                    heap.offer(entry.withPriority(fresh));
-                    reinserts++;
+            if (Double.compare(fresh, entry.priority()) != 0) {
+                Entry<E> updated = entry.withPriority(fresh);
+                if (entry.key() != null && !current.replace(entry.key(), entry, updated)) {
+                    staleCount.decrementAndGet();
                     continue;
                 }
+                entry = updated;
+            }
+            // 刷新后比当前存活队首更差：重插，让真正更近的任务先出队。
+            Entry<E> head = peek();
+            if (head != null && fresh > head.priority() && reinserts < maxReinserts) {
+                heap.offer(entry);
+                reinserts++;
+                continue;
             }
             return entry;
         }
+    }
+
+    /**
+     * 按当前锚点重算所有存活任务的优先级。旧堆条目留作过期残留，由 poll/压缩回收。
+     * 玩家移动后应在 drain 前调用一次，避免 {@link #pollBest} 的有界重插把「入队时近、现在远」
+     * 的冻结键当成最优而饿死新近处任务。
+     */
+    public int reprioritize(PriorityRefresher refresher) {
+        if (refresher == null || current.isEmpty()) {
+            return 0;
+        }
+        int updated = 0;
+        for (Entry<E> old : List.copyOf(current.values())) {
+            double fresh = refresher.refresh(old.key(), old.priority());
+            if (Double.compare(fresh, old.priority()) == 0) {
+                continue;
+            }
+            Entry<E> neu = new Entry<>(old.item(), old.key(), fresh, sequence.incrementAndGet());
+            if (current.replace(old.key(), old, neu)) {
+                heap.offer(neu);
+                staleCount.incrementAndGet();
+                updated++;
+            }
+        }
+        compactIfNeeded();
+        return updated;
+    }
+
+    /**
+     * 队列已满时给更优（数值更小）的新任务腾位：若最差存活条目严格更差则驱逐并返回它。
+     */
+    public Entry<E> evictWorstIfWorseThan(double betterPriority) {
+        Entry<E> worst = null;
+        for (Entry<E> candidate : current.values()) {
+            if (worst == null
+                    || candidate.priority() > worst.priority()
+                    || (candidate.priority() == worst.priority()
+                    && candidate.generation() < worst.generation())) {
+                worst = candidate;
+            }
+        }
+        if (worst == null || worst.priority() <= betterPriority) {
+            return null;
+        }
+        if (!current.remove(worst.key(), worst)) {
+            return null;
+        }
+        staleCount.incrementAndGet();
+        compactIfNeeded();
+        return worst;
     }
 
     /**

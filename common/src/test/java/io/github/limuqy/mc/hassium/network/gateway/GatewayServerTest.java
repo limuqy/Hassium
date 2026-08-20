@@ -101,6 +101,15 @@ class GatewayServerTest {
         usedUuids.clear();
     }
 
+    @Test
+    void writabilityRequiresActiveChannel() {
+        GatewayChannel channel = GatewayChannel.openEmbedded(GatewayServer.getInstance());
+        assertTrue(channel.isWritable());
+
+        channel.close("test");
+        assertFalse(channel.isWritable());
+    }
+
     /** 续流握手：验票通过 → resumeAccepted=true → UUID-keyed 会话注册 + T7 推送分支触发。 */
     @Test
     void resumeHandshakeRegistersSessionAndAccepts() {

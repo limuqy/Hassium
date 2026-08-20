@@ -1,11 +1,11 @@
 package io.github.limuqy.mc.hassium.network.seedgen;
 
-import io.github.limuqy.mc.hassium.concurrent.MainThreadDispatcher;
-import io.github.limuqy.mc.hassium.concurrent.TaskCategory;
+import io.github.limuqy.mc.hassium.cache.client.ViewDistanceExtensionService;
 import io.github.limuqy.mc.hassium.concurrent.HassiumTaskExecutor;
+import io.github.limuqy.mc.hassium.concurrent.TaskCategory;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
-import io.github.limuqy.mc.hassium.network.ClientChunkHandler;
 import io.github.limuqy.mc.hassium.network.ClientChunkPipeline;
+import io.github.limuqy.mc.hassium.network.ClientChunkHandler.TraceOrigin;
 import io.github.limuqy.mc.hassium.utils.DebugLogger;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -29,28 +29,44 @@ import net.minecraft.world.level.chunk.LevelChunk;
 public final class OvdLocalGenerator {
 
     private static final ConcurrentHashMap<Long, ChunkPos> queue = new ConcurrentHashMap<>();
+    /**
+     * 将 OVD 数据源（注入/磁盘/生成）提交到影子光照管线，待算光后经 drainReady 以
+     * renderOnly 落地。相比直连 buildPacket，能获得 LevelLightEngine 收敛光，避免
+     * OVD 磁盘区块“有方块但无光”的虚空/黑块。
+     */
+    public static boolean submitGeneratedRenderOnly(ChunkPos pos,
+                                                    net.minecraft.world.level.chunk.LevelChunk chunk,
+                                                    net.minecraft.server.level.ServerLevel level,
+                                                    TraceOrigin traceOrigin) {
+        if (pos == null || chunk == null || !isLoadEnabled()
+                || !ViewDistanceExtensionService.getInstance().shouldKeepAsRenderOnly(pos)) {
+            return false;
+        }
+        return ShadowLightCompute.submitGenerated(pos, chunk, level, true, traceOrigin);
+    }
     private static final AtomicBoolean drainRunning = new AtomicBoolean(false);
 
     private OvdLocalGenerator() {}
 
-    /** 门控：功能 gate &&（影子模式自动启用，否则配置开 && 有种子）&& 影子端未失败。 */
-    public static boolean isEnabled() {
+    /** 影子端可用：只有影子模式可用时才允许 OVD 队列投递（用于读已注入/磁盘缓存）。 */
+    public static boolean isLoadEnabled() {
         HassiumConfigService cfg = HassiumConfigService.getInstance();
         if (!cfg.isClientFeatureGateOpen()) {
             return false;
         }
-        // 影子模式（客户端零侵入架构）：OVD 数据源 = 影子端（R1 落盘读回 /
-        // 本地生成兜底），不再受 ovdLocalGeneration 配置约束。
         if (!ShadowLightCompute.isEnabled()) {
-            if (!cfg.isOvdLocalGenerationEnabled()) {
-                return false;
-            }
-            // 无种子关闭生成：服务端未装 MOD / 握手未到时没有世界种子，本地生成地形与服务器不一致
-            if (!ClientChunkPipeline.getInstance().isHassiumHandshakeDone()) {
-                return false;
-            }
+            return false;
+        }
+        if (!ClientChunkPipeline.getInstance().isHassiumHandshakeDone()) {
+            return false;
         }
         return !ShadowServerRegistry.getInstance().isFailed();
+    }
+
+    /** 是否允许 worldgen 兜底：严格尊重 chunk.ovdLocalGeneration。 */
+    public static boolean isEnabled() {
+        return isLoadEnabled()
+                && HassiumConfigService.getInstance().isOvdLocalGenerationEnabled();
     }
 
     /**
@@ -58,7 +74,15 @@ public final class OvdLocalGenerator {
      * 同柱已在队列/生成中则跳过（去重，防 miss 退避重试风暴）。
      */
     public static void request(ChunkPos pos) {
-        if (pos == null || !isEnabled()) {
+        if (pos == null || !isLoadEnabled()) {
+            return;
+        }
+        // 防御：只接受当前仍属于 OVD 环带的请求。调用方（loadRenderOnlyChunk /
+        // onRenderOnlyMiss）已各自校验，这里再加一道，防止未来新增调用路径把陈旧
+        // pos 重新灌入队列造成“generate→apply→Ignoring→miss→request”风暴。
+        if (!ViewDistanceExtensionService.getInstance().shouldKeepAsRenderOnly(pos)) {
+            DebugLogger.debug(DebugLogger.LogType.ASYNC,
+                    "[OVD_GEN] Ignoring stale request ({}, {})", pos.x, pos.z);
             return;
         }
         long key = chunkPosKey(pos);
@@ -98,7 +122,7 @@ public final class OvdLocalGenerator {
             }
         } finally {
             drainRunning.set(false);
-            if (!queue.isEmpty() && isEnabled()) {
+            if (!queue.isEmpty() && isLoadEnabled()) {
                 pump();
             }
         }
@@ -106,35 +130,106 @@ public final class OvdLocalGenerator {
 
     private static void generateAndApply(ChunkPos pos) {
         try {
+            // 出队后先检查：玩家可能已经移动，pos 不再属于当前 OVD 环带。
+            // 在后台生成前就丢弃，避免为陈旧区块浪费 worldgen/算光/落盘。
+            if (Minecraft.getInstance().level == null
+                    || !ViewDistanceExtensionService.getInstance().shouldKeepAsRenderOnly(pos)) {
+                DebugLogger.debug(DebugLogger.LogType.ASYNC,
+                        "[OVD_GEN] Dropping stale queued chunk ({}, {}) before generation", pos.x, pos.z);
+                return;
+            }
             ShadowSeedServer server = ShadowServerRegistry.getInstance().getOrCreate();
             if (server == null) {
                 queue.clear(); // 影子端不可用（无种子/失败）：本批放弃，miss 重试兜底
                 return;
             }
             ServerLevel level = server.overworld();
-            long t0 = System.nanoTime();
-            LevelChunk chunk = server.generateChunk(pos);
+            // 优先使用本会话已注入的权威数据（服务端 packet 填充，内容与服务器一致）。
+            // 只有从未进入过服务器视距、内存表为空且允许本地生成时才走 worldgen 兜底；
+            // 本地生成关闭时只读磁盘缓存，避免用生成结果覆盖真实缓存。
+            LevelChunk chunk = server.injectedChunk(pos.x, pos.z);
+            String dataSource = chunk != null ? "injected" : null;
+            if (chunk == null && isEnabled()) {
+                chunk = server.generateChunk(pos);
+                dataSource = "generate";
+            }
+            if (chunk == null) {
+                // 本地生成关闭或生成超时：尝试磁盘缓存（旧会话或此前 OVD/GEN 落盘）。
+                chunk = server.loadFromDisk(pos);
+                if (chunk != null) {
+                    dataSource = "disk";
+                }
+            }
             if (chunk == null) {
                 DebugLogger.warn(DebugLogger.LogType.ASYNC,
-                        "[OVD_GEN] Generation timed out ({}, {})", pos.x, pos.z);
-                return; // 超时丢弃：OVD miss 退避重试会再次触发
+                        "[OVD_GEN] No source for chunk ({}, {}) (localGenerationEnabled={}, injected=null, disk=null)",
+                        pos.x, pos.z, isEnabled());
+                return; // 无数据可 apply；miss 退避重试会保留到盘上出现数据
             }
-            byte[] data = SeedGenChunkCodec.encode(SeedGenChunkCodec.buildPacket(chunk, level),
-                    level.registryAccess());
-            long genMs = (System.nanoTime() - t0) / 1_000_000L;
-            MainThreadDispatcher.execute(() -> {
-                if (Minecraft.getInstance().level == null) {
-                    return; // 断连：丢弃（缓存由下次进服重建）
+            int nonAirSections = 0;
+            for (net.minecraft.world.level.chunk.LevelChunkSection section : chunk.getSections()) {
+                if (!section.hasOnlyAir()) {
+                    nonAirSections++;
                 }
-                // renderOnly 落地：不请求 BE、不参与模拟；包经 buildPacket 官方算光
-                // （level.getLightEngine()）带光推送，客户端无需补算。
-                // apply 失败（出视距竞态）→ onRenderOnlyMiss 会再次触发请求。
-                if (ClientChunkHandler.applyChunkData(pos.x, pos.z, data, true)) {
-                    DebugLogger.info(DebugLogger.LogType.ASYNC,
-                            "[OVD_GEN] Applied locally generated chunk ({}, {}) in {}ms",
-                            pos.x, pos.z, genMs);
+            }
+            int diagTopY = chunk.getHeight(
+                    net.minecraft.world.level.levelgen.Heightmap.Types.WORLD_SURFACE, 8, 8);
+            DebugLogger.info(DebugLogger.LogType.ASYNC,
+                    "[OVD_GEN_DIAG] pos=({},{}) dataSource={} sections={} nonAirSections={} topY={} heightmapKeys={}",
+                    pos.x, pos.z, dataSource, chunk.getSections().length, nonAirSections, diagTopY,
+                    chunk.getHeightmaps().size());
+            if ("generate".equals(dataSource) && nonAirSections == 0) {
+                // 生成的区块是全空气：先试磁盘缓存（可能是旧会话真实数据），
+                // 仍无真实数据才拒绝 apply，避免用坏生成结果覆盖/显示成虚空。
+                LevelChunk diskChunk = server.loadFromDisk(pos);
+                if (diskChunk != null) {
+                    int diskNonAir = 0;
+                    for (net.minecraft.world.level.chunk.LevelChunkSection section : diskChunk.getSections()) {
+                        if (!section.hasOnlyAir()) {
+                            diskNonAir++;
+                        }
+                    }
+                    if (diskNonAir > 0) {
+                        chunk = diskChunk;
+                        dataSource = "disk";
+                        nonAirSections = diskNonAir;
+                        DebugLogger.warn(DebugLogger.LogType.ASYNC,
+                                "[OVD_GEN] Generated chunk ({}, {}) was all-air, falling back to disk cache "
+                                        + "(nonAirSections={})", pos.x, pos.z, diskNonAir);
+                    } else {
+                        DebugLogger.warn(DebugLogger.LogType.ASYNC,
+                                "[OVD_GEN] Refusing to apply all-air generated chunk ({}, {}) "
+                                        + "(nonAirSections=0) — likely worldgen/heightmap drift, keep previous cache instead",
+                                pos.x, pos.z);
+                        return;
+                    }
+                } else {
+                    DebugLogger.warn(DebugLogger.LogType.ASYNC,
+                            "[OVD_GEN] Refusing to apply all-air generated chunk ({}, {}) "
+                                    + "(nonAirSections=0, no disk fallback) — likely worldgen/heightmap drift",
+                            pos.x, pos.z);
+                    return;
                 }
-            }, pos, TaskCategory.BEST_EFFORT);
+            }
+            // 统一交给影子光照管线：算光完成后经 drainReady 以 renderOnly 落地。
+            // 不再直连 buildPacket——磁盘/注入区块的光在存档/内存但不在 LevelLightEngine，
+            // 直连会打出“有方块但无光”的虚空/黑块包（CHUNK_PROBE skyTop=0 证据）。
+            TraceOrigin traceOrigin = null;
+            if (DebugLogger.isEnabled(DebugLogger.LogType.CHUNK_APPLY)) {
+                traceOrigin = switch (dataSource) {
+                    case "injected" -> TraceOrigin.SHADOW_MEMORY_CACHE;
+                    case "disk" -> TraceOrigin.SHADOW_DISK_CACHE;
+                    case "generate" -> TraceOrigin.LOCAL_GENERATION;
+                    default -> null;
+                };
+            }
+            if (!submitGeneratedRenderOnly(pos, chunk, level, traceOrigin)) {
+                DebugLogger.warn(DebugLogger.LogType.ASYNC,
+                        "[OVD_GEN] Failed to submit chunk ({}, {}) to light pipeline (dataSource={})",
+                        pos.x, pos.z, dataSource);
+                // 清 pending/miss 登记，避免该柱永久卡在 pendingRenderOnly 不再重试。
+                ViewDistanceExtensionService.getInstance().onRenderOnlyMiss(pos);
+            }
         } catch (Throwable t) {
             DebugLogger.warn(DebugLogger.LogType.ASYNC,
                     "[OVD_GEN] Generation failed ({}, {}): {}", pos.x, pos.z, t.toString());

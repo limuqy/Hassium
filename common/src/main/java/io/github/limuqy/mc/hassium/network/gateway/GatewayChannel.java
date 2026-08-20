@@ -7,6 +7,7 @@ import io.github.limuqy.mc.hassium.network.ResumeTicketValidator;
 import io.github.limuqy.mc.hassium.network.ServerChunkPushManager;
 import io.github.limuqy.mc.hassium.network.SkipAwareZstdEncoder;
 import io.github.limuqy.mc.hassium.network.ZstdContextDecoder;
+import io.github.limuqy.mc.hassium.network.core.outbound.ChunkApplyAck;
 import io.github.limuqy.mc.hassium.network.core.outbound.ControlFrameCodec;
 import io.github.limuqy.mc.hassium.network.core.outbound.ControlFrameType;
 import io.github.limuqy.mc.hassium.network.core.outbound.HandshakeCodec;
@@ -291,6 +292,23 @@ public final class GatewayChannel {
         }
     }
 
+    /** CHUNK_APPLY_ACK 仅在 active 玩家会话内交给 admission 接收缝。 */
+    void handleChunkApplyAck(ByteBuf payload) {
+        final ChunkApplyAck ack;
+        try {
+            ack = ChunkApplyAck.decode(payload);
+        } catch (RuntimeException e) {
+            LOGGER.warn("[GATEWAY] malformed CHUNK_APPLY_ACK from {}: {}", remote(), e.getMessage());
+            return;
+        }
+        GatewayPlayerSession session = playerSession;
+        if (session == null) {
+            LOGGER.debug("[GATEWAY] CHUNK_APPLY_ACK from {} without player session", remote());
+            return;
+        }
+        server.onChunkApplyAck(session, ack);
+    }
+
     /** LOGIN_C2S 帧（T5 帧类型 9；登录阶段，会话未建立）→ 服务端登录桥缝。 */
     void handleLoginPayload(ByteBuf payload) {
         loginFramesReceived.incrementAndGet();
@@ -387,6 +405,12 @@ public final class GatewayChannel {
     public boolean isOpen() {
         Channel ch = channel;
         return !closed.get() && ch != null && ch.isActive();
+    }
+
+    /** 可用于 full delivery admission 的传输状态：channel 必须仍活跃且 Netty 可写。 */
+    public boolean isWritable() {
+        Channel ch = channel;
+        return !closed.get() && ch != null && ch.isActive() && ch.isWritable();
     }
 
     // ==================== 状态查询 ====================
@@ -529,6 +553,7 @@ public final class GatewayChannel {
                     case PACKET_C2S -> channel.handleC2SPayload(frame.payload());
                     case LOGIN_C2S -> channel.handleLoginPayload(frame.payload());
                     case CONFIG_C2S -> channel.handleConfigPayload(frame.payload());
+                    case CHUNK_APPLY_ACK -> channel.handleChunkApplyAck(frame.payload());
                     case PING -> {
                         // 心跳探测应答（主控 → 客户端 PING 的对称端）
                         ctx.writeAndFlush(ControlFrameCodec.encodeFrame(ControlFrameType.PONG, frame.payload()));

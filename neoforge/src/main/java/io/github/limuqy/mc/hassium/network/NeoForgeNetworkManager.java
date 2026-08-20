@@ -1651,7 +1651,8 @@ public class NeoForgeNetworkManager implements NetworkManager {
                         try {
                             FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data()));
                             ChunkDataRequestC2SPacket request = ChunkDataRequestC2SPacket.decode(buf);
-                            ServerChunkPushManager.getInstance().enqueueDataRequest(player, request.dimension(), request.chunks());
+                            ServerChunkPushManager.getInstance().enqueueDataRequest(
+                                    player, request.dimension(), request.chunks(), request.fallbackDeliveryId());
                         } catch (Exception e) {
                             LOGGER.error("[SERVER] Failed to handle chunk data request", e);
                         }
@@ -1667,7 +1668,8 @@ public class NeoForgeNetworkManager implements NetworkManager {
                         try {
                             FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data()));
                             ChunkDataRequestC2SPacket request = ChunkDataRequestC2SPacket.decode(buf);
-                            ServerChunkPushManager.getInstance().enqueueDataRequest(player, request.dimension(), request.chunks());
+                            ServerChunkPushManager.getInstance().enqueueDataRequest(
+                                    player, request.dimension(), request.chunks(), request.fallbackDeliveryId());
                         } catch (Exception e) {
                             LOGGER.error("[SERVER] Failed to handle chunk data request", e);
                         }
@@ -2334,7 +2336,8 @@ public class NeoForgeNetworkManager implements NetworkManager {
                 if (context.player().orElse(null) instanceof ServerPlayer player) {
                     FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(payload.data()));
                     ChunkDataRequestC2SPacket request = ChunkDataRequestC2SPacket.decode(buf);
-                    ServerChunkPushManager.getInstance().enqueueDataRequest(player, request.dimension(), request.chunks());
+                    ServerChunkPushManager.getInstance().enqueueDataRequest(
+                            player, request.dimension(), request.chunks(), request.fallbackDeliveryId());
                 }
             } catch (Exception e) {
                 LOGGER.error("[SERVER] Failed to handle chunk data request", e);
@@ -2696,7 +2699,8 @@ public class NeoForgeNetworkManager implements NetworkManager {
                 if (context.player() instanceof ServerPlayer player) {
                     FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(payload.data()));
                     ChunkDataRequestC2SPacket request = ChunkDataRequestC2SPacket.decode(buf);
-                    ServerChunkPushManager.getInstance().enqueueDataRequest(player, request.dimension(), request.chunks());
+                    ServerChunkPushManager.getInstance().enqueueDataRequest(
+                            player, request.dimension(), request.chunks(), request.fallbackDeliveryId());
                 }
             } catch (Exception e) {
                 LOGGER.error("[SERVER] Failed to handle chunk data request", e);
