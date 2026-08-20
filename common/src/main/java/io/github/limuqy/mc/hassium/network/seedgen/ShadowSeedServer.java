@@ -201,10 +201,8 @@ public class ShadowSeedServer extends MinecraftServer {
 
     @Override
     public boolean initServer() {
-        // 影子服务端上下文：存储层（MixinRegionFile）据此固定写 Hassium type 126 + hash。
-        // 位于 loadLevel 之前（RegionFile 在 createLevels 装配存档时即创建）。
-        // MixinMinecraftServer.onServerInit（INVOKE initServer 前）写入 dedicated=false，
-        // 此处覆盖为 shadow=true——时序安全（先 false 后 true）。
+        // 影子服务端上下文：通常已在 SeedGenLevelCompat.assembleShadowServer
+        // （WorldLoader 前）置位；此处幂等确保 createLevels 期间 RegionFile gate 有效。
         io.github.limuqy.mc.hassium.server.RuntimeServerContext.setShadowServer(true);
         io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.clear();
         this.setPlayerList(new PlayerList(this, this.registries(), this.playerDataStorage,
@@ -230,6 +228,7 @@ public class ShadowSeedServer extends MinecraftServer {
     @Override
     protected void loadLevel() {
         this.worldData.setModdedInfo(this.getServerModName(), this.getModdedStatus().shouldReportAsModified());
+        long tCreateNs = System.nanoTime();
 #if MC_VER < MC_1_20_5
         this.createLevels(new LoggerChunkProgressListener(11));
 #elif MC_VER < MC_1_21_9
@@ -237,9 +236,15 @@ public class ShadowSeedServer extends MinecraftServer {
 #else
         this.createLevels();
 #endif
+        long tAfterLevelsNs = System.nanoTime();
         this.forceDifficulty();
         // 不调用 prepareLevels()：不等待 441 ticking 区块，按需生成
         saveWorldData();
+        DebugLogger.info(DebugLogger.LogType.ASYNC,
+                "[SHADOW-DIAG] loadLevel: createLevels={}ms forceDifficulty+saveWorldData={}ms (seed={})",
+                (tAfterLevelsNs - tCreateNs) / 1_000_000L,
+                (System.nanoTime() - tAfterLevelsNs) / 1_000_000L,
+                worldSeed);
     }
 
     /**
@@ -1693,6 +1698,16 @@ public class ShadowSeedServer extends MinecraftServer {
 
     long worldSeed() {
         return worldSeed;
+    }
+
+    /**
+     * 登出保活：saveAll 之后清空 injected/dirty 热表，保留 MinecraftServer /
+     * session.lock / 主循环。同 serverId 重进复用实例，跳过 WorldLoader。
+     */
+    void clearHotStateAfterPark() {
+        injectedChunks.clear();
+        dirtyChunks.clear();
+        LOGGER.info("Hassium: Shadow hot state cleared after park (seed={})", worldSeed);
     }
 
     /**

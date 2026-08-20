@@ -114,6 +114,9 @@ public final class SeedGenLevelCompat {
     /** 纯装配（专用线程内）：持久世界目录 + 存档 + 数据包 + 世界 stem + initServer。 */
     private static ShadowSeedServer assembleShadowServer(long seed) throws IOException {
         long t0Ns = System.nanoTime(); // T0b 诊断：装配各阶段耗时
+        // 影子上下文须在 WorldLoader.load 之前置位：ReloadableServerResources.listeners()
+        // Mixin 据此跳过 recipe/advancement/function/loot（保留 TagManager）。
+        io.github.limuqy.mc.hassium.server.RuntimeServerContext.setShadowServer(true);
         // 影子端世界根 = 客户端缓存目录下原版存档结构（hassium_cache/<serverId>/world）。
         // 断连保存、重连复用，不删除（不再兼容旧 HBT1 客户端缓存格式，数据不迁移）。
         Path worldRoot = resolveShadowWorldRoot();
@@ -179,7 +182,7 @@ public final class SeedGenLevelCompat {
                 Thread.currentThread(), access, repo, stem, seed, worldRoot);
         server.initServer();
         DebugLogger.info(DebugLogger.LogType.ASYNC,
-                "[SHADOW-DIAG] assembleShadowServer: worldRoot={}ms storage+access={}ms packRepo={}ms worldStem={}ms initServer={}ms total={}ms (seed={})",
+                "[SHADOW-DIAG] assembleShadowServer: worldRoot={}ms storage+access={}ms packRepo={}ms worldStem(WorldLoader)={}ms initServer={}ms total={}ms (seed={})",
                 (tResolveNs - t0Ns) / 1_000_000L,
                 (tAccessNs - tResolveNs) / 1_000_000L,
                 (tRepoNs - tAccessNs) / 1_000_000L,
@@ -190,7 +193,12 @@ public final class SeedGenLevelCompat {
         return server;
 
         } catch (Exception e) {
-            // 装配失败：回收已创建的资源后重抛（持久目录保留，不删除）
+            // 装配失败：复位影子标志（代际由本轮 setShadowServer(true) 递增）后回收资源
+            try {
+                int gen = io.github.limuqy.mc.hassium.server.RuntimeServerContext.getShadowGeneration();
+                io.github.limuqy.mc.hassium.server.RuntimeServerContext.clearShadowServerIfCurrentGeneration(gen);
+            } catch (Throwable ignored) {
+            }
             Constants.LOG.error("Hassium: Failed to create shadow seed server", e);
             closeQuietly(stem, access);
             if (e instanceof IOException ioe) {
@@ -234,7 +242,7 @@ public final class SeedGenLevelCompat {
                 Constants.LOG.warn("Hassium: LevelStem decode failed, fallback to NORMAL preset", t);
             }
         }
-        return dataLoadContext.datapackWorldgen()
+        WorldDimensions presetDims = dataLoadContext.datapackWorldgen()
 #if MC_VER < MC_1_21_2
                 .registryOrThrow(Registries.WORLD_PRESET)
                 .getHolderOrThrow(WorldPresets.NORMAL)
@@ -243,8 +251,11 @@ public final class SeedGenLevelCompat {
                 .getOrThrow(WorldPresets.NORMAL)
 #endif
                 .value()
-                .createWorldDimensions()
-                .bake(stemRegistry);
+                .createWorldDimensions();
+        // 影子端只建 Overworld：跳过 Nether/End 的 ServerLevel + 光引擎线程池
+        LevelStem overworld = presetDims.get(LevelStem.OVERWORLD)
+                .orElseThrow(() -> new IllegalStateException("NORMAL preset missing overworld stem"));
+        return overworldOnlyDimensions(overworld).bake(stemRegistry);
     }
 
     /**

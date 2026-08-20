@@ -137,6 +137,12 @@ public final class ClientChunkPipeline {
         this.serverLevelStemNbt = levelStemNbt;
         this.serverSeedGenEnabled = enabled;
         this.hassiumHandshakeDone = true; // 握手响应到达 = 服务端已装 Hassium MOD
+        // 取消投机看门狗（已确认 Hassium 服，勿关停刚拉起的影子）
+        try {
+            io.github.limuqy.mc.hassium.network.seedgen.ShadowServerRegistry.getInstance()
+                    .cancelSpeculativeWatchdogPublic();
+        } catch (Throwable ignored) {
+        }
         if (enabled) {
             Constants.LOG.info("Hassium: Server SeedGen enabled; world seed will be saved in shadow level.dat");
         }

@@ -45,6 +45,11 @@ public class DebugLogger {
             if (!configService.isConfigLoaded()) {
                 return false;
             }
+            // 冒烟默认打开 CHUNK_APPLY，便于对照 [CHUNK_APPLY] 与 [CHUNK_MESH]
+            if (type == LogType.CHUNK_APPLY
+                    && Boolean.parseBoolean(System.getProperty("hassium.smokeTest", "false"))) {
+                return true;
+            }
             HassiumConfig config = configService.getConfig();
             int bits = cachedEnabledBits;
             if (config != cachedConfig) {

@@ -353,9 +353,9 @@ public class ClientMetadataHandler {
         PENDING_BLOCK_ENTITIES.clear();
         PENDING_FULL_REQUESTS.clear();
         ClientChunkHandler.clearChunkApplyAcks();
-        // SeedGen 影子服务端随断连回收（重连后按需重建）
+        // SeedGen 影子服务端登出保活（同 serverId 重进复用；idle/换服再 shutdown）
         io.github.limuqy.mc.hassium.network.seedgen.SeedGenExecutor.getInstance().onDisconnect();
-        // 影子光照管线随断连清空（投递/回传/失败标记；影子服务端由上面 registry 统一关停）
+        // 影子光照管线随断连清空（投递/回传；影子服务端由上面 registry park）
         io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.onDisconnect();
     }
 

@@ -341,6 +341,11 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
     public void connect(String host, int port, HandshakeStateTail.C2S tail, String authToken) {
         if (state.get() == NetworkCoreState.IDLE) {
             transition(NetworkCoreState.IDLE, NetworkCoreState.CONNECTING);
+            try {
+                io.github.limuqy.mc.hassium.cache.client.ClientLifecycleHelper.startShadowIfConfigured();
+            } catch (Throwable t) {
+                LOGGER.debug("Hassium: early shadow start on CONNECTING skipped", t);
+            }
         }
         // A-M2: 握手总超时起算（从 CONNECTING 起算 15s；onOpen 时在 event loop 排到期任务）
         handshakeDeadlineMs = System.currentTimeMillis() + HANDSHAKE_TIMEOUT_MS;
@@ -1327,6 +1332,12 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
         this.gatewayOnlyServerData = serverData;
         this.gatewayOnlyParentScreen = parentScreen;
         this.gatewayOnlyAttempted = false;
+        // 连服意图即投机启动影子（与 vanilla 连接/握手并行；WorldLoader 重叠 login）
+        try {
+            io.github.limuqy.mc.hassium.cache.client.ClientLifecycleHelper.startShadowIfConfigured(serverData);
+        } catch (Throwable t) {
+            LOGGER.debug("Hassium: early shadow start on connect intent skipped", t);
+        }
     }
 
     /**

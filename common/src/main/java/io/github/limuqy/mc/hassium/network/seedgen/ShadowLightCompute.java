@@ -400,10 +400,22 @@ public final class ShadowLightCompute {
     }
 
     /**
-     * 登录初始化：影子端预创建（后台，不卡主线程）。握手未到时等待；
-     * 超时放弃（首个投递触发消费循环时再创建）。
+     * 登录初始化入口（兼容旧调用点）：等价 {@link #startShadowSpeculative()}。
+     * 握手不再阻塞创建；无握手约 3s 后关停投机影子。
      */
     public static void onLogin() {
+        startShadowSpeculative();
+    }
+
+    /** 投机创建超时：无握手则关停刚拉起的影子（原版服不常驻）。 */
+    static final long SPECULATIVE_HANDSHAKE_TIMEOUT_MS = 3_000L;
+
+    /**
+     * 配置就绪即后台 getOrCreate（不等握手）。已存在实例则幂等返回；
+     * 创建时若尚未握手，武装 3s 看门狗——超时仍无握手则 {@link ShadowServerRegistry#shutdown()}。
+     * {@link #isEnabled()} 仍要求握手，避免原版服走剥光路径。
+     */
+    public static void startShadowSpeculative() {
         if (!HassiumConfigService.getInstance().isHassiumEngineEnabled()) {
             return;
         }
@@ -412,21 +424,27 @@ public final class ShadowLightCompute {
             return;
         }
         executor.submit(() -> {
-            long waitStartMs = System.currentTimeMillis(); // T0b 诊断：等待握手实际耗时
-            long deadline = System.currentTimeMillis() + 3_000L;
-            while (!ClientChunkPipeline.getInstance().isHassiumHandshakeDone()
-                    && System.currentTimeMillis() < deadline) {
-                try {
-                    Thread.sleep(20L);
-                } catch (InterruptedException e) {
-                    return;
-                }
-            }
+            boolean hadHandshake = ClientChunkPipeline.getInstance().isHassiumHandshakeDone();
             DebugLogger.info(DebugLogger.LogType.NETWORK,
-                    "[LOGIN-DIAG] onLogin waited {}ms for handshake (deadline 3000ms)",
-                    System.currentTimeMillis() - waitStartMs);
-            ShadowServerRegistry.getInstance().getOrCreate();
+                    "[LOGIN-DIAG] startShadowSpeculative handshakeDone={} (no wait)",
+                    hadHandshake);
+            ShadowSeedServer created = ShadowServerRegistry.getInstance().getOrCreate();
+            if (created != null && !hadHandshake
+                    && shouldArmSpeculativeWatchdog(hadHandshake)) {
+                ShadowServerRegistry.getInstance().armSpeculativeHandshakeWatchdog(
+                        SPECULATIVE_HANDSHAKE_TIMEOUT_MS);
+            }
         }, TaskCategory.BEST_EFFORT);
+    }
+
+    /** 测试缝：仅当创建时尚未握手才武装看门狗。 */
+    static boolean shouldArmSpeculativeWatchdog(boolean handshakeDoneAtCreate) {
+        return !handshakeDoneAtCreate;
+    }
+
+    /** 测试缝：超时且仍无握手 → 应关停投机影子。 */
+    static boolean shouldShutdownSpeculativeShadow(boolean handshakeDone, long elapsedMs, long timeoutMs) {
+        return !handshakeDone && elapsedMs >= timeoutMs;
     }
 
     /**

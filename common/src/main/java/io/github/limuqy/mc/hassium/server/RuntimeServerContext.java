@@ -46,9 +46,13 @@ public final class RuntimeServerContext {
      */
     public static void setShadowServer(boolean shadow) {
         synchronized (RuntimeServerContext.class) {
-            shadowServer = shadow;
             if (shadow) {
-                shadowGeneration++;
+                if (!shadowServer) {
+                    shadowServer = true;
+                    shadowGeneration++;
+                }
+            } else {
+                shadowServer = false;
             }
         }
     }

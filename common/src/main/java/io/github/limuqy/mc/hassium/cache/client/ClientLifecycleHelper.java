@@ -60,12 +60,66 @@ public final class ClientLifecycleHelper {
 
         // M2: 异步初始化存储（热度索引 / section 哈希在后台线程）
         initializeCacheAsync();
-        // 影子端预创建（后台；非网络向功能总开关）：握手到达后启动，失败自动降级。
-        // 服务端未装 MOD（无握手）→ 不创建（缓存/OVD/导出保留，光由 packet 自带）。
-        io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.onLogin();
+        // 影子端预创建（可能已在 ConnectScreen/CONNECTING 投机启动；此处幂等补齐）。
+        // 握手只开 isEnabled() 消费闸；无握手约 3s 后关停投机影子。
+        startShadowIfConfigured();
         // 网络核心（网关）：进入 CONNECTING 并尽力自动建立 outbound（T4 骨架）
         io.github.limuqy.mc.hassium.network.core.NetworkCore.getInstance().onLogin();
         initialized = true;
+    }
+
+    /**
+     * 配置开启即装配影子端（与握手/login 并行）。
+     * <p>
+     * 触发点：{@link io.github.limuqy.mc.hassium.mixin.MixinConnectScreen} /
+     * NetworkCore 进入 CONNECTING / {@link #onLogin()}。幂等；无 gameDir/serverIp
+     * 时跳过（调用方稍后重试）。
+     */
+    public static void startShadowIfConfigured() {
+        startShadowIfConfigured(null);
+    }
+
+    /**
+     * @param serverData 连服意图上的 ServerData（ConnectScreen）；null 则回退
+     *                   {@link #currentServerIp()}
+     */
+    public static void startShadowIfConfigured(net.minecraft.client.multiplayer.ServerData serverData) {
+        if (!HassiumConfigService.getInstance().isHassiumEngineEnabled()) {
+            return;
+        }
+        HassiumTaskExecutor executor = HassiumTaskExecutor.getClient();
+        if (executor == null || !executor.isRunning()) {
+            HassiumTaskExecutor.initClient(HassiumTaskExecutor.DEFAULT_CLIENT_THREADS);
+        }
+        recordCacheLocationForConnect(serverData);
+        io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.onCacheLocationReady();
+        io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.startShadowSpeculative();
+    }
+
+    /** ConnectScreen / 早期连接：用 ServerData.ip 或 currentServerIp 写入 cache 定位。 */
+    private static void recordCacheLocationForConnect(net.minecraft.client.multiplayer.ServerData serverData) {
+        try {
+            Minecraft mc = Minecraft.getInstance();
+            if (mc == null) {
+                return;
+            }
+            String serverIp = null;
+            if (serverData != null && serverData.ip != null && !serverData.ip.isBlank()) {
+                serverIp = serverData.ip;
+            }
+            if (serverIp == null) {
+                serverIp = currentServerIp();
+            }
+            if (serverIp == null) {
+                return;
+            }
+            final Path gameDir = mc.gameDirectory.toPath();
+            final String serverId = io.github.limuqy.mc.hassium.utils.ServerIdUtil.sanitize(serverIp);
+            io.github.limuqy.mc.hassium.network.ClientChunkPipeline.getInstance()
+                    .setCacheLocation(gameDir, serverId);
+        } catch (Exception ignored) {
+            // 记录失败不阻断连接
+        }
     }
 
     /**
@@ -180,6 +234,7 @@ public final class ClientLifecycleHelper {
         // 主线程无关的清理（线程安全容器）
         // ③ 影子端存档由 SeedGenLevelCompat.shutdown(saveAll) 承担，无客户端加载队列
         ViewDistanceExtensionService.getInstance().clearAllRenderOnly();
+        ChunkMeshCompileLog.reset();
 
         // ④ 取消后台任务（但不关闭 executor，save 还需要它）
         HassiumTaskExecutor clientExecutor = HassiumTaskExecutor.getClient();
@@ -194,7 +249,7 @@ public final class ClientLifecycleHelper {
 
         // ⑥ finalizeDisconnect：MixinMinecraft disconnect/clearLevel TAIL，或加载器 DISCONNECT 兜底
 
-        Constants.LOG.info("Hassium: Disconnect cleanup done (shadow saveAll via SeedGenLevelCompat.shutdown)");
+        Constants.LOG.info("Hassium: Disconnect cleanup done (shadow park-for-reuse via SeedGenExecutor)");
     }
 
     /**
@@ -217,7 +272,7 @@ public final class ClientLifecycleHelper {
             io.github.limuqy.mc.hassium.network.dataplane.DataPlaneClientBundle.resetDataBulkCounters();
         }
 
-        // ⑥ 关闭 executor（影子端已在断连链关闭；无客户端 save 线程/storage）
+        // ⑥ 关闭 executor（影子端已在断连链 park 保活或 idle 超时后 shutdown；无客户端 save 线程）
         HassiumTaskExecutor.shutdownClient(5000);
 
         // ⑦ 清理会话状态

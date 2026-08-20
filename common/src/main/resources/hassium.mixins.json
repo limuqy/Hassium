@@ -26,7 +26,8 @@
         "MixinPlayerChunkSender",
         "MixinLightDataWrite",
         "LightUpdatePacketAccessor",
-        "ServerLevelAccessor"
+        "ServerLevelAccessor",
+        "MixinReloadableServerResources"
     ],
     "client": [
       "MixinConnectScreen",
@@ -36,6 +37,7 @@
       "MixinClientLevel",
       "MixinLevel",
       "MixinClientTick",
+      "MixinLevelRenderer",
       "MixinOptions",
       "OptionsAccessor",
       "ClientLevelAccessor",
