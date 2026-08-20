@@ -39,4 +39,15 @@ class ConfigCommentsTest {
         assertTrue(text.contains("Enable client network core"), text);
         assertTrue(text.indexOf("是否启用客户端网络核心") < text.indexOf("Enable client network core"), text);
     }
+
+    @Test
+    void serverSeedGenCommentWarnsAboutWorldSeedLeak() {
+        String comment = ConfigSchema.serverEntries().stream()
+                .filter(e -> e.path().equals("chunk.seedGenEnabled"))
+                .findFirst()
+                .orElseThrow()
+                .comment();
+        assertTrue(comment.contains("泄露服务端种子"), comment);
+        assertTrue(comment.toLowerCase(java.util.Locale.ROOT).contains("leaks the server world seed"), comment);
+    }
 }

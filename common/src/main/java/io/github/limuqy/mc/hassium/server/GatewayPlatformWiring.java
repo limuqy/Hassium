@@ -107,10 +107,13 @@ public final class GatewayPlatformWiring {
         UdpDataPlaneHandshakeTail.S2CTail udpTail;
         long seed = 0L;
         byte[] stemNbt = null;
+        boolean seedGenEnabled = config.isSeedGenEnabled();
         try {
             ServerLevel overworld = server.overworld();
-            seed = overworld.getSeed();
-            stemNbt = SeedGenTail.encodeLevelStemNbt(overworld);
+            seed = SeedGenTail.handshakeWorldSeed(overworld, seedGenEnabled);
+            if (seedGenEnabled) {
+                stemNbt = SeedGenTail.encodeLevelStemNbt(overworld);
+            }
         } catch (Throwable t) {
             LOGGER.warn("[GATEWAY] world seed/stem resolve failed — 回落保守默认", t);
         }
@@ -135,7 +138,7 @@ public final class GatewayPlatformWiring {
                 udpTail,
                 seed,
                 stemNbt,
-                config.isSeedGenEnabled());
+                seedGenEnabled);
     }
 
     // ==================== 监听端口 ====================

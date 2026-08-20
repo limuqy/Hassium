@@ -138,7 +138,7 @@ public final class ClientChunkPipeline {
         this.serverSeedGenEnabled = enabled;
         this.hassiumHandshakeDone = true; // 握手响应到达 = 服务端已装 Hassium MOD
         if (enabled) {
-            Constants.LOG.info("Hassium: Server SeedGen enabled (seed={})", seed);
+            Constants.LOG.info("Hassium: Server SeedGen enabled; world seed will be saved in shadow level.dat");
         }
     }
 

@@ -322,13 +322,15 @@ public final class SeedGenLevelCompat {
     }
 
     /**
-     * 关闭影子服务端：先释放世界目录锁（session.lock），再全量保存（type 126 + hash
-     * 落盘），最后停线程；持久目录保留。
+     * 关闭影子服务端：先用原版能力写出 {@code level.dat}，再释放世界目录锁
+     * （session.lock），然后全量保存区块（type 126 + hash），最后停线程；持久目录保留。
      * <p>
-     * 锁先行（T5cShadowReady）：{@code LevelStorageAccess} 的 session.lock 只用于
-     * 防止「同一存档目录并发开两个 access」——保存链（saveAll → halt → chunkMap.close）
-     * 全程只依赖路径/region 文件句柄，不依赖该锁；把 {@code access.close()} 提到
-     * saveAll 之前，R2 重连建端便不再被 R1 的 saveAll 阻塞（毫秒级拿到锁即可创建）。
+     * 锁在 level.dat 之后、区块 saveAll 之前释放（T5cShadowReady）：
+     * {@code LevelStorageAccess} 的 session.lock 只用于防止「同一存档目录并发开两个
+     * access」——区块保存链（saveAll → halt → chunkMap.close）全程只依赖路径/region
+     * 文件句柄，不依赖该锁；{@code saveDataTag} 必须在 close 之前。把
+     * {@code access.close()} 提到区块 saveAll 之前，R2 重连建端便不再被 R1 的 saveAll
+     * 阻塞（毫秒级拿到锁即可创建）。
      * R2 创建后与 R1 saveAll 并发：R2 只读盘（loadFromDisk），R1 只写——torn read
      * 退化为比对 miss → 数据重推（正确降级）；R2 的写路径由
      * {@code ShadowServerRegistry} 的关停完成 gate 串行化（见
@@ -356,7 +358,13 @@ public final class SeedGenLevelCompat {
         // 本端进入关停保存：写 gate 对本端放行（上次关停已在 saver 前置等待完成，
         // 本端写盘与任何其他端无并发）。
         server.beginShutdownSave();
-        // 1) 先释放世界目录锁（毫秒级）：R2 重连建端不再等待 R1 saveAll 落盘完成。
+        // 1) 原版写出 level.dat（须在关闭 storageSource 之前；种子/维度设置来自 WorldOptions）
+        try {
+            server.saveWorldData();
+        } catch (Exception e) {
+            Constants.LOG.warn("Hassium: Shadow level.dat save failed", e);
+        }
+        // 2) 再释放世界目录锁（毫秒级）：R2 重连建端不再等待 R1 saveAll 落盘完成。
         LevelStorageSource.LevelStorageAccess access = server.storageAccess();
         if (access != null) {
             try {
@@ -365,7 +373,7 @@ public final class SeedGenLevelCompat {
                 Constants.LOG.warn("Hassium: Shadow storage close failed", e);
             }
         }
-        // 2) 全量保存（此时 R2 可并发创建影子端并读盘；本端写盘与任何其他端无并发）
+        // 3) 全量保存区块（此时 R2 可并发创建影子端并读盘；本端写盘与任何其他端无并发）
         if (skipSave) {
             Constants.LOG.warn("Hassium: Shadow seed server save skipped "
                     + "(previous shutdown incomplete; data re-pushed on next session)");
@@ -376,7 +384,7 @@ public final class SeedGenLevelCompat {
                 Constants.LOG.warn("Hassium: Shadow seed server save failed", e);
             }
         }
-        // 3) 停线程。注意：不能先 stopMainLoop——saveAll 期间主循环仍在驱动光照任务，
+        // 4) 停线程。注意：不能先 stopMainLoop——saveAll 期间主循环仍在驱动光照任务，
         // isLightConverged 才可能为 true（提前停会误判未收敛 → 全量标脏 →
         // R2 hash 命中全被拦截）。mainLoop 由 shutdown 内部的 halt 停止。
         try {

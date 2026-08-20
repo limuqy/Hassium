@@ -9,7 +9,7 @@ Hassium 是 Minecraft 多加载器模组（Fabric / Forge / NeoForge），围绕
 - **高效压缩** —— 存储压缩、网络压缩
 - **网络优化** —— 平滑推送（含反馈式渐进 admission）、网关帧协议、L1 无感迁移（切换 outbound + 续流票据）
 - **区块缓存** —— 影子端世界保存（进服区块统一由进程内影子服务端落盘原版存档）、超视渲染、世界导出
-- **本地生成** —— SeedGen：大片未探索地形（pristine 区块）服务端只发 seed + 坐标引用，客户端同种子本地生成，零传输生成区块（需双端同版本，默认关）
+- **本地生成** —— SeedGen：大片未探索地形（pristine 区块）服务端只发坐标引用，客户端同种子本地生成（需双端同版本，默认关）。**开启服务端开关会向客户端下发世界种子，等同泄露服务端种子**
 - **光照优化** —— Hassium 引擎（影子端统一算光 + 官方通道回传）、光照剥离、光照缓存；并行光照为可选（安装 Promethium 后开启）
 - **实用工具** —— 流量监控
 
@@ -24,13 +24,13 @@ Hassium 是 Minecraft 多加载器模组（Fabric / Forge / NeoForge），围绕
 | 缓存过期（服务器里东西变了） | 整块重传 | **分段增量**：按 section 比对，只补变更的分段 |
 | 服务器视距小，远处白茫茫 | 客户端想渲染更远，但服务端不推 | **超视渲染**：用本地缓存回填视距外环带（仅渲染，不向服索要） |
 | 光照数据占传输大头 | 每个区块包都带一整柱光照 | **光照剥离 + Hassium 引擎**：服务端剥光（握手协商），由客户端进程内影子服务端统一计算光照并打包官方区块包，经官方通道回传落地 |
-| 大片未探索地形（pristine 区块） | 服务端也要逐块生成并传输 | **本地生成（SeedGen）**：服务端只发几十字节的引用（seed + 坐标），客户端用同 seed 本地生成，零传输生成区块 |
+| 大片未探索地形（pristine 区块） | 服务端也要逐块生成并传输 | **本地生成（SeedGen）**：服务端发坐标引用，客户端用同 seed 本地生成。**开启会泄露服务端种子** |
 | 主控服务器网络抖动 | 直接断线回大厅 | **网络核心无感迁移**：主控故障/断流时由 L1 迁移引擎切换 outbound 连接，持续流票据在新主控续流，区块缓存/进度无感延续 |
 
 ## 3. 谁适合启用
 
 - **普通玩家**：装上即用。默认全开：网络压缩、影子端世界保存、分段增量、超视渲染、光照剥离/缓存/同步模式、Hassium 引擎（进程内影子服务端统一算光与保存）。无需配置。
-- **服主**：`storage.enabled`（存储压缩）**默认关**——开启会改写存档格式（type 126），**启用前请备份世界**；`chunk.seedGenEnabled` 默认关——本地生成需要**双端同版本**且客户端开同项，pristine 区块才走本地生成，否则自动回退全量推送。
+- **服主**：`storage.enabled`（存储压缩）**默认关**——开启会改写存档格式（type 126），**启用前请备份世界**；`chunk.seedGenEnabled` 默认关——本地生成需要**双端同版本**且客户端开同项，pristine 区块才走本地生成，否则自动回退全量推送。**开启服务端本地生成会向客户端下发世界种子，等同泄露服务端种子**（探图/种子地图/导出存档均可利用）。
 - **公网部署（UDP 数据面/网关）**：默认端点是 `127.0.0.1`，仅本机可用；必须把 `dataplane.udpListeners[*].reachableEndpoints` 改为公网可达地址并放行 UDP 端口（网关监听端口取 `master.controlReachableEndpoints[0]`，兜底 25566），见 §13。
 
 ---
@@ -200,7 +200,7 @@ Sector 2+:    [length(4)][type=126][magic 0x48][hash(8)][ZSTD 压缩数据]
 | `chunk.seedGenThreads` | 2 | 本地区块生成线程数（固定平台线程池；0=禁用本地生成，SeedRef 一律回退全量） |
 | `chunk.hassiumEngineEnabled` | **true** | Hassium 引擎（非网络向功能总开关）：进服启动进程内影子服务端（完整 MinecraftServer）统一承担**世界保存（缓存）+ 区块光照计算 + 打包官方区块包**（官方通道回传）。启动失败自动降级：客户端缓存/超视渲染/SeedGen 关闭并游戏内提示，仅保留网络向优化；false=不启动（此时服务端不剥光——剥光在握手协商，光照随包自带） |
 | `chunk.ovdLocalGeneration` | false | 超视渲染本地生成：超视渲染区域缓存 miss 时用 Hassium 引擎按服务端世界种子本地生成区块（与服务器地形一致）并存入本地缓存；无种子（服务端未装 MOD）时自动关闭生成 |
-| `chunk.seedGenEnabled` | **false** | 本地区块生成（双端同版本，默认关）。服务端对 pristine 区块发 SeedRef 替代区块数据；客户端本地生成，失败/超时回退全量 |
+| `chunk.seedGenEnabled` | **false** | 本地区块生成（双端同版本，默认关）。**服务端开启会向客户端下发世界种子（泄露服务端种子）**；对 pristine 区块发 SeedRef 替代区块数据；客户端本地生成，失败/超时回退全量 |
 | `chunk.lightStrip` | true | 光照剥离：服务端发包带空 lightMask；实际剥光由握手协商门控（客户端声明 `lightComputeSupported` 才剥，否则光随包自带） |
 | `net.enabled` | true | 客户端网络核心总开关（进程内网关与优化通道） |
 | `net.metricsEnabled` | false | 客户端网络指标 |
@@ -250,7 +250,7 @@ ERROR / WARN 始终输出。
 | `/hassium stats reset` / `toggle` | 服务端 | 重置计数器 / 切换指标收集 |
 | `/hassium metrics on\|off` | 服务端 | 运行时开关指标 |
 | `/hassiumc stats` | 客户端 | 接收/缓存命中（客户端缓存+本地重算−分片 / 应用区块）/超视渲染/光照/区块加载（新增/过期/**本地生成**）/流量节省（实际/无MOD应收）统计 |
-| `/hassiumc export [<服务器IP>] [seed]` | 客户端 | 导出影子端世界目录为 `hassium_exports/<cacheId>/`（保留 type 126） |
+| `/hassiumc export [<服务器IP>] [seed]` | 客户端 | 拷贝影子端 `world` 目录。`level.dat` 已由影子端原版写出；亦可手工把 `hassium_cache/<id>/world` 复制到 `saves/` |
 | `/hassium migrate` / `list` / `status` / `<host:port>` | 客户端（仅开发环境） | L1 迁移演练入口（`NetworkCore.migrateTo`；正式包不注册） |
 
 实现：`metrics/NetworkStats`（`AtomicLong`，可关闭）。指标关闭时相关 stats 命令不可用。导出走 `CacheWorldExporter`（异步，见 `chunk-cache.md` §12）。
@@ -299,7 +299,7 @@ ERROR / WARN 始终输出。
 
 | 特性 | 配置 / 命令 | 要点 | 详文 |
 |------|-------------|------|------|
-| **本地生成** | `chunk.seedGenEnabled`（默认 false，双端同开）、`chunk.seedGenThreads`（2） | 服务端对 pristine（未生成）区块发 `SeedRef`（seed + 坐标 + hash，几十字节）替代区块数据；客户端影子服务端（`ShadowSeedServer`）本地生成，经 `submitGenerated` 与远程区块同链（算光 → 打包官方包 → 官方通道落地），断连一并 `saveAll` 落盘；失败/超时回退全量请求 | [`chunk-cache.md`](chunk-cache.md) |
+| **本地生成** | `chunk.seedGenEnabled`（默认 false，双端同开）、`chunk.seedGenThreads`（2） | **开启会泄露服务端世界种子**（握手下发，影子端用原版 `saveDataTag` 写入 `level.dat`）。服务端对 pristine 区块发 `SeedRef`（坐标 + hash）替代区块数据；客户端影子服务端本地生成；失败/超时回退全量。导出/手工拷贝 `hassium_cache/<id>/world` 即带该种子 | [`chunk-cache.md`](chunk-cache.md) |
 
 本地生成的区块与直推同链：推送即入库（本地缓存同样受益），stats「区块加载」行计入「本地」计数，同时以「本地重算」计入区块缓存命中分子与流量节省的无MOD应收（原版 Zlib 等价）。
 

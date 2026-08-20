@@ -59,8 +59,8 @@ public final class ConfigSchema {
             "SeedGen 本地生成线程数（0=禁用本地生成，SeedRef 一律回退全量）",
             "SeedGen local-generation thread count (0 = disable; SeedRef falls back to full chunk)");
     public static final ConfigKey<Boolean> CLIENT_CHUNK_SEED_GEN_ENABLED = bool("chunk.seedGenEnabled", ConfigScope.CLIENT, Domain.CHUNK_CORE, false,
-            "是否启用 SeedGen（本地生成 pristine 区块；需双端同版本，默认关；双端同名键）",
-            "Enable SeedGen (local pristine chunks; both sides same version; default off)");
+            "是否启用 SeedGen（本地生成 pristine 区块；需双端同版本，默认关）。服务端开启时会下发世界种子",
+            "Enable SeedGen (local pristine chunks; both sides same version; default off). Server enablement sends the world seed");
 
     // === 网络核心（net.*；CLIENT 3 键）===
     public static final ConfigKey<Boolean> NET_ENABLED = bool("net.enabled", ConfigScope.CLIENT, Domain.NETWORK_CORE, true,
@@ -157,8 +157,8 @@ public final class ConfigSchema {
 
     // === 区块核心（chunk.*；SERVER 2 键）===
     public static final ConfigKey<Boolean> SERVER_CHUNK_SEED_GEN_ENABLED = bool("chunk.seedGenEnabled", ConfigScope.SERVER, Domain.CHUNK_CORE, false,
-            "是否启用 SeedGen（服务端对 pristine 区块发 SeedRef；需双端同版本，默认关）",
-            "Enable SeedGen (server sends SeedRef for pristine chunks; default off)");
+            "是否启用 SeedGen（对 pristine 区块发 SeedRef；需双端同版本，默认关）。警告：开启会向客户端下发世界种子，等同泄露服务端种子",
+            "Enable SeedGen (SeedRef for pristine chunks; default off). WARNING: this leaks the server world seed to clients");
     public static final ConfigKey<Boolean> CHUNK_LIGHT_STRIP = bool("chunk.lightStrip", ConfigScope.SERVER, Domain.CHUNK_CORE, true,
             "是否启用光照剥离", "Enable light stripping");
 

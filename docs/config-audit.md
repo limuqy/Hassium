@@ -48,7 +48,7 @@
 | `chunk.hassiumEngineEnabled` | `true` | Hassium 引擎总开关（进服启动承担光照计算；失败降级关闭缓存/OVD/SeedGen 并游戏内提示） |
 | `chunk.ovdLocalGeneration` | `false` | OVD 本地生成（miss 时影子端按世界种子本地生成，renderOnly 落地；需引擎可用） |
 | `chunk.seedGenThreads` | `2` | SeedGen 本地生成线程数（0=禁用本地生成，SeedRef 回退全量） |
-| `chunk.seedGenEnabled` | `false` | SeedGen 开关（收到 SeedRef 本地复算；需双端同版本） |
+| `chunk.seedGenEnabled` | `false` | SeedGen 开关（收到 SeedRef 本地复算；需双端同版本）。服务端开启会下发世界种子 |
 
 **A2. net.\*（3 键，网络核心）**
 
@@ -101,7 +101,7 @@
 
 | 配置项 | 默认值 | 说明 |
 |--------|--------|------|
-| `chunk.seedGenEnabled` | `false` | 服务端对 pristine 区块发 SeedRef 替代区块数据（hash 校验兜底） |
+| `chunk.seedGenEnabled` | `false` | 服务端对 pristine 区块发 SeedRef；**开启会向客户端下发世界种子（泄露服务端种子）** |
 | `chunk.lightStrip` | `true` | 光照剥离（剥光实际由握手协商门控） |
 
 **B4. dataplane.\*（2 键，数据面域，不立核心名）**
@@ -169,7 +169,7 @@
 |------|------|--------|
 | `/hassium stats`（+`reset`/`toggle`）、`/hassium metrics on/off` | 服务端统计/重置/开关（requires metrics 开启；level 2） | `master.metricsEnabled`（SERVER） |
 | `/hassiumc stats` | 客户端统计 7 行（requires metrics 开启） | `net.metricsEnabled`（CLIENT） |
-| `/hassiumc export [<serverIp> [seed]]` | 影子端世界目录整体拷贝 → `hassium_exports/<cacheId>` | — |
+| `/hassiumc export [<serverIp> [seed]]` | 拷贝影子端 `world`（含原版写出的 `level.dat`）→ `hassium_exports/<cacheId>`；也可手工拷到 `saves/` | — |
 
 ## 八、问题总结
 

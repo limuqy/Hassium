@@ -237,14 +237,16 @@ public class HassiumCommandHandler {
     /**
      * 导出影子端世界为完整存档目录（客户端命令）。
      * <p>
-     * 方案 A：export = 直接拷贝影子端世界目录 {@code hassium_cache/<serverId>/world}
-     * 到 {@code hassium_exports/<serverId>}，保留 type 126 + hash 落盘格式；
-     * 服务端翻译 126→原版后续单独实现。
+     * 直接拷贝影子端世界目录 {@code hassium_cache/<serverId>/world}
+     * 到 {@code hassium_exports/<serverId>}。{@code level.dat} 由影子端用原版
+     * {@code saveDataTag} 写出（含 WorldOptions 种子），导出不再改写 NBT。
+     * 亦可不进游戏，把该 {@code world} 目录复制到 {@code saves/} 当单机存档
+     * （须已离开服务器，避免 session.lock；格式仍为 type 126）。
      * <p>
      * 异步执行；进度通过聊天回报。
      *
      * @param serverIp 服务器 IP:Port（null/空时导出当前连接的服务器缓存）
-     * @param seed     保留参数（目录拷贝不涉及种子）
+     * @param seed     保留参数（种子已在影子端 level.dat 中，拷贝即可）
      * @return 启动结果消息
      */
     public static String startCacheExport(String serverIp, Long seed) {
@@ -258,7 +260,6 @@ public class HassiumCommandHandler {
         if (serverIp != null && !serverIp.isEmpty()) {
             cacheId = sanitizeServerIp(serverIp);
         } else {
-            // 当前服务器：从影子端管线取 serverId（未连接/未初始化则失败）
             String serverId = io.github.limuqy.mc.hassium.network.ClientChunkPipeline.getInstance().getServerId();
             if (serverId == null) {
                 return "§c未连接服务器，无法确定导出目标§r";
@@ -277,7 +278,8 @@ public class HassiumCommandHandler {
             copyTreeAsync(src, dst, cacheId);
             return "§a开始导出 " + cacheId + " 的影子端世界...§r"
                     + "\n§7目标: " + dst + "§r"
-                    + "\n§7(保留 type 126 + chunkHash 格式；翻译为原版格式后续提供)§r";
+                    + "\n§7亦可把 hassium_cache/" + cacheId + "/world 直接复制到 saves/§r"
+                    + "\n§7(保留 type 126 + chunkHash；level.dat 为影子端原版写出)§r";
         } catch (Exception e) {
             return "§c导出启动失败: " + e.getMessage() + "§r";
         }
@@ -311,6 +313,8 @@ public class HassiumCommandHandler {
                 Path target = dst.resolve(src.relativize(p).toString());
                 if (Files.isDirectory(p)) {
                     Files.createDirectories(target);
+                } else if ("session.lock".equals(p.getFileName().toString())) {
+                    continue;
                 } else {
                     Files.createDirectories(target.getParent());
                     Files.copy(p, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING);

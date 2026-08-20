@@ -17,11 +17,12 @@ import net.minecraft.world.level.dimension.LevelStem;
  * <p>
  * 布局（在 UDP dataplane tail 之后追加）：
  * <pre>
- *   long worldSeed        // 服务端主世界 seed
+ *   long worldSeed        // 仅 seedGenEnabled=true 时为真实主世界 seed；否则 0（避免关功能仍泄露种子）
  *   varint stemLen + bytes // LevelStem NBT（0 = 未提供）
  *   boolean seedGenEnabled // 服务端 SeedGen 开关
  * </pre>
  * 旧客户端读到 UDP tail 结束即停，忽略尾部字节。
+ * 开启 SeedGen 会向客户端下发世界种子，等同泄露服务端种子。
  */
 public final class SeedGenTail {
 
@@ -85,12 +86,18 @@ public final class SeedGenTail {
         }
     }
 
+    /** 握手用世界种子：仅在 SeedGen 开启时下发真实 seed，否则 0。 */
+    public static long handshakeWorldSeed(ServerLevel level, boolean enabled) {
+        return enabled && level != null ? level.getSeed() : 0L;
+    }
+
     /**
      * 追加 SeedGen 尾部（服务端调用；enabled = 服务端配置开关）。
+     * enabled=false 时写 seed=0 且不附 LevelStem，避免关本地生成仍把种子发给客户端。
      */
     public static void writeS2C(FriendlyByteBuf response, ServerLevel level, boolean enabled) {
-        response.writeLong(level.getSeed());
-        byte[] stemNbt = encodeLevelStemNbt(level);
+        response.writeLong(handshakeWorldSeed(level, enabled));
+        byte[] stemNbt = enabled ? encodeLevelStemNbt(level) : null;
         response.writeVarInt(stemNbt != null ? stemNbt.length : 0);
         if (stemNbt != null) {
             response.writeBytes(stemNbt);

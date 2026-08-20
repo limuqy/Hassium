@@ -2086,7 +2086,7 @@ public class NeoForgeNetworkManager implements NetworkManager {
             try {
                 net.minecraft.server.level.ServerLevel seedLevel = player.serverLevel();
                 seedGenEnabled = HassiumConfigService.getInstance().isSeedGenEnabled();
-                worldSeed = seedLevel.getSeed();
+                worldSeed = SeedGenTail.handshakeWorldSeed(seedLevel, seedGenEnabled);
                 io.netty.buffer.ByteBuf sb = io.netty.buffer.Unpooled.buffer();
                 SeedGenTail.writeS2C(new FriendlyByteBuf(sb), seedLevel, seedGenEnabled);
                 seedGenTail = new byte[sb.readableBytes()];
@@ -2291,7 +2291,7 @@ public class NeoForgeNetworkManager implements NetworkManager {
                         net.minecraft.server.level.ServerLevel seedLevel =
                                 io.github.limuqy.mc.hassium.compat.PlayerCompat.getServerLevel(player);
                         seedGenEnabled = HassiumConfigService.getInstance().isSeedGenEnabled();
-                        worldSeed = seedLevel.getSeed();
+                        worldSeed = SeedGenTail.handshakeWorldSeed(seedLevel, seedGenEnabled);
                         io.netty.buffer.ByteBuf sb = io.netty.buffer.Unpooled.buffer();
                         SeedGenTail.writeS2C(new FriendlyByteBuf(sb), seedLevel, seedGenEnabled);
                         seedGenTail = new byte[sb.readableBytes()];
@@ -2653,7 +2653,7 @@ public class NeoForgeNetworkManager implements NetworkManager {
                         net.minecraft.server.level.ServerLevel seedLevel =
                                 io.github.limuqy.mc.hassium.compat.PlayerCompat.getServerLevel(player);
                         seedGenEnabled = HassiumConfigService.getInstance().isSeedGenEnabled();
-                        worldSeed = seedLevel.getSeed();
+                        worldSeed = SeedGenTail.handshakeWorldSeed(seedLevel, seedGenEnabled);
                         io.netty.buffer.ByteBuf sb = io.netty.buffer.Unpooled.buffer();
                         SeedGenTail.writeS2C(new FriendlyByteBuf(sb), seedLevel, seedGenEnabled);
                         seedGenTail = new byte[sb.readableBytes()];

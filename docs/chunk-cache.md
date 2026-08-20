@@ -13,7 +13,7 @@
 | 世界导出 | 本文 §12 | §12 |
 | 客户端收包 → apply → 光照落地全链路 | [`client-chunk-light-flow.md`](client-chunk-light-flow.md) | §3 客户端侧延伸 |
 
-**卖点特性（已实现）：** 分段增量（§3 阶段二 / §11）、超视渲染（§10）、`/hassiumc export`（§12）。
+**卖点特性（已实现）：** 分段增量（§3 阶段二 / §11）、超视渲染（§10）、`/hassiumc export`（§12）。本地生成（SeedGen）开启时握手下发世界种子，由影子端原版写入 `level.dat`（**泄露种子**）；导出或手工把 `hassium_cache/<id>/world` 拷到 `saves/` 即可当存档。
 
 ## 1. 目标与约束
 
@@ -358,7 +358,8 @@ RD > 32（需手改 `options.txt`）时雾距会跟随 `getEffectiveRenderDistan
 ```
 
 - `<serverIp>` 可选；指定时导出该服务器的影子端世界；不指定时导出当前连接的服务器
-- `seed` 可选；保留参数（目录拷贝不涉及种子）
+- `seed` 可选；**已忽略**。种子由影子端用原版 `saveDataTag` 写入 `level.dat`（`WorldOptions`），拷贝即可
+- 亦可不进游戏、不用本命令：把 `<gameDir>/hassium_cache/<cacheId>/world` 复制到 `<gameDir>/saves/<任意名>/`（须已离开该服务器，避免占用 `session.lock`）
 - 仅客户端命令，无权限要求
 - 输出目录：`<gameDir>/hassium_exports/<cacheId>/`（`cacheId` = `server_<IP>_<端口>`，或当前连接服务器的 serverId）
 
@@ -373,7 +374,7 @@ RD > 32（需手改 `options.txt`）时雾距会跟随 `getEffectiveRenderDistan
 | `minecraft:the_end` | `DIM1/region/` |
 | 其它 | `dimensions/<ns>/<path>/region/` |
 
-- `level.dat` / `level.dat_old`、Region 文件等整体拷贝，无转码
+- `level.dat` / `level.dat_old`、Region 文件等整体拷贝（跳过 `session.lock`）；`level.dat` 为影子端原版写出，含 WorldOptions 种子
 - **格式保留**：type 126 + chunkHash 落盘格式不变（与影子端存储写路径一致）
 - **原版翻译**（type 126 → 原版格式）后续提供；届时导出的世界方可直接进单机
 
@@ -387,7 +388,7 @@ RD > 32（需手改 `options.txt`）时雾距会跟随 `getEffectiveRenderDistan
 
 - **无实体、无玩家背包/成就**：影子端世界仅含区块/光照与方块实体数据
 - **格式保留 type 126**：需 Hassium 读取；翻译为原版格式后续提供
-- **仅为「去过的区块」快照**：空洞区块由世界生成器填充
+- **仅为「去过的区块」快照**：空洞区块由世界生成器按 `level.dat` 种子填充（本地生成开启时即为服务端种子）
 - **模组方块需相同模组与相近 MC 版本**：否则方块可能显示为未知
 - **BE 取决于影子端缓存是否含 NBT**：Live-Unload 快照包含 BE；收包 warm-stash 可能缺失
 - **光照随区块保留**：`is_light_on=1` 的区块携带 `SkyLight` / `BlockLight`

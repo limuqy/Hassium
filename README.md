@@ -31,7 +31,7 @@
 | | UDP 数据面 | 网关↔主控通道的 UDP/KCP bulk 载体（`dataplane.enabled`，默认关；控制面留原版 TCP） |
 | **区块缓存** | 影子端世界保存 | 进服区块统一由影子端（完整 MinecraftServer）落盘原版存档（`hassium_cache/<serverId>/world`），断连保存、重连复用 |
 | | 分段增量 | 缓存过期（MISMATCH）时仅拉取变更分段（`sectionDelta`）本地合并，避免整块重传 |
-| | 本地生成（SeedGen） | 服务端对 pristine 区块只发 seed + 坐标引用，客户端用同种子本地生成，零传输生成区块；失败/超时自动回退全量 |
+| | 本地生成（SeedGen） | 服务端对 pristine 区块发坐标引用，客户端用同种子本地生成；**开启会泄露服务端世界种子**；失败/超时自动回退全量 |
 | | **超视渲染** | 多人服客户端 RD 大于服务端视距时，用本地缓存回填视距外地形（仅渲染、不向服索要视距外区块）；与 Bobby 互斥 |
 | | 世界导出 | `/hassiumc export` 将影子端世界目录整体拷贝为导出存档（`hassium_exports/<cacheId>`；保留 type 126 + chunkHash，原版翻译后续提供） |
 | **光照优化** | Hassium 引擎 | 非网络向功能总开关（默认开）：进服启动进程内影子服务端（完整 MinecraftServer）统一承担**世界保存（缓存）+ 区块光照计算 + 打包官方区块包**（官方通道回传），客户端不再计算；启动失败自动降级 |
@@ -118,7 +118,7 @@
 | `/hassium metrics on\|off` | 开关指标 |
 | `/hassium stats reset` | 重置计数器 |
 | `/hassiumc stats` | 客户端统计（含超视渲染 / 缓存命中） |
-| `/hassiumc export [<服务器IP>] [seed]` | 将影子端世界目录整体拷贝到 `hassium_exports/<cacheId>`（保留 type 126 + chunkHash；原版翻译后续提供） |
+| `/hassiumc export [<服务器IP>] [seed]` | 拷贝影子端 `world` 到 `hassium_exports/<cacheId>`（`level.dat` 由影子端原版写出）；也可把该目录复制到 `saves/` |
 
 ---
 

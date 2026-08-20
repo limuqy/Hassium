@@ -239,6 +239,21 @@ public class ShadowSeedServer extends MinecraftServer {
 #endif
         this.forceDifficulty();
         // 不调用 prepareLevels()：不等待 441 ticking 区块，按需生成
+        saveWorldData();
+    }
+
+    /**
+     * 用原版 {@code LevelStorageAccess.saveDataTag} 写出 {@code level.dat}
+     * （含 WorldOptions 种子）。须在 storageSource 仍打开时调用。
+     * 这样 {@code hassium_cache/<id>/world} 可直接拷到 {@code saves/} 当单机存档。
+     */
+    void saveWorldData() {
+        try {
+            this.storageSource.saveDataTag(this.registryAccess(), this.worldData);
+            LOGGER.info("Hassium: Shadow level.dat saved (seed={})", worldSeed);
+        } catch (Throwable t) {
+            LOGGER.warn("Hassium: Shadow level.dat save failed", t);
+        }
     }
 
     /** 单区块生成超时：原版 worldgen 卡死时兜底回退（3s ≫ 正常生成耗时）。 */
