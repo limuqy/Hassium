@@ -21,6 +21,7 @@ In-game config screen entry points:
 
 > You can also edit the TOML directly and restart; GUI and TOML stay in sync.
 > The in-game UI has 4 categories: Chunk Cache / Rendering & Generation / Network & Connection / Debug (client keys only); server keys are edited directly in `hassium-server.toml`.
+> This page lists common keys only; migration candidate endpoints are synced by the server handshake / `GatewayInfo` — **clients do not fill** `master.controlReachableEndpoints`.
 
 ---
 
@@ -48,6 +49,8 @@ In-game config screen entry points:
 | `chunk.ovdLocalGeneration` | `false` | Beyond-view local generation: beyond-view-render chunks that miss the client cache are generated locally using the server's world seed and stored into the local cache; auto-disabled when no seed is available (server without the mod) |
 | `chunk.seedGenThreads` | `2` | Local generation threads (0 = disable local generation; chunks are always downloaded in full) |
 | `chunk.seedGenEnabled` | `false` | Local chunk generation (both sides): on SeedRef, regenerate the chunk locally from the world seed (hash-verified) instead of a full download; requires matching versions on both sides |
+| `chunk.lightStrip` | `true` | Light stripping (SERVER): packets may use an empty lightMask; actual stripping is handshake-gated (only when the client declares the engine available) |
+| `chunk.joinBoostEnabled` | `true` | Temporarily raise the main-thread apply budget after joining |
 
 ### Network Core (`net.*`)
 
@@ -68,8 +71,18 @@ In-game config screen entry points:
 | `master.enablePacketAggregation` | `true` | Packet aggregation; turn off if a third-party channel misbehaves |
 | `master.compressionBlacklist` | 10-item default | Packet ID list; matched packets bypass compression/aggregation (default includes CHUNK_PAYLOAD / SECTION_DELTA / HANDSHAKE / DICTIONARY_SYNC / INDEX_SYNC / CHUNK_HASH / LIGHT_DELTA / BLOCK_ENTITY_DATA / MAIN_CHANNEL / AGGREGATION) |
 | `master.metricsEnabled` | `false` | Server network metrics (off disables `/hassium stats` etc.) |
-| `master.controlReachableEndpoints` | `[]` | Gateway listen endpoints (`endpoints[0]` is the gateway port; falls back to `25566` when unset) |
-| `master.migrationFaultTimeoutMs` | `60000` | Master fault-silence timeout (ms): after this, the L1 migration engine switches masters seamlessly |
+| `master.controlReachableEndpoints` | `[]` | **Server** gateway listen endpoints (`endpoints[0]` is the gateway port; falls back to `25566`); synced to the client via handshake / `GatewayInfo` as migration candidates — **players do not fill this on the client** |
+| `master.bindHost` | `127.0.0.1` | Gateway bind host (loopback by default; empty = `0.0.0.0`) |
+| `master.authToken` | `""` | Gateway handshake auth token (empty = off); after the server sets it, `GatewayInfo` can deliver it (client may also set the same value manually) |
+| `master.migrationFaultTimeoutMs` | `60000` | L1 migration legacy fault-timeout fallback (ms) |
+| `master.migrationSilentTimeoutMs` | `10000` | Outbound inbound silence timeout (ms; effective default) |
+| `master.migrationMinTps` | `15.0` | Migrate when master TPS falls below this (CLIENT) |
+| `master.migrationMaxLoadAverage` | `4.0` | Migrate when system load average exceeds this (CLIENT) |
+| `master.migrationMaintenanceWindow` | `""` | Maintenance window `HH:MM-HH:MM` (empty = off; CLIENT) |
+| `master.migrationHeartbeatIntervalMs` | `5000` | Application HEARTBEAT interval (CLIENT) |
+| `master.migrationIdleWindowMs` | `10000` | Idle-window detection duration (CLIENT) |
+| `master.migrationPrewarmTtlMs` | `60000` | Prewarm session TTL (SERVER) |
+| `master.resumeTicketTtlMs` | `300000` | Resume ticket TTL (dual-scope) |
 
 ### Data Plane (`dataplane.*`)
 

@@ -70,10 +70,10 @@ Throughout migration the vanilla `Connection` state is preserved and the world k
 
 | Trigger | Condition | Behavior |
 | --- | --- | --- |
-| **Fault** | Outbound inbound silence exceeds `faultTimeoutMs` (default 60000, reusing the `master.migrationFaultTimeoutMs` semantics); a heartbeat thread sends HEARTBEATs every `heartbeatIntervalMs` (default 5000) | No prewarm; direct `migrateToImmediate` |
-| **Load thresholds** | Master load report (`ServerLoadReporter`): TPS < `minTps` (default 15.0) or system load average > `maxLoadAverage` (default 4.0) | Policy migration (prewarm) |
-| **Maintenance window** | `maintenanceWindow` ("HH:MM-HH:MM", local timezone, midnight-crossing supported; empty = disabled): always triggers while inside the window | Policy migration (prewarm) |
-| **Drill** | Manual invocation of the migration entry point (`NetworkCore.migrateTo`; command/API wiring is a later wave) | Policy migration (prewarm) |
+| **Fault** | Outbound inbound silence exceeds the effective timeout (default `master.migrationSilentTimeoutMs`=10000; explicitly changing `migrationFaultTimeoutMs` can fall back to that legacy key); a heartbeat thread sends HEARTBEATs every `migrationHeartbeatIntervalMs` (default 5000) | No prewarm; direct `migrateToImmediate` |
+| **Load thresholds** | Master load report (`ServerLoadReporter`): TPS < `migrationMinTps` (default 15.0) or system load average > `migrationMaxLoadAverage` (default 4.0) | Policy migration (prewarm) |
+| **Maintenance window** | `migrationMaintenanceWindow` ("HH:MM-HH:MM", local timezone, midnight-crossing supported; empty = disabled): always triggers while inside the window | Policy migration (prewarm) |
+| **Drill** | Client `/hassium migrate list\|status\|<host:port>` (`NetworkCore.migrateTo`) | Policy migration (prewarm) |
 
 ### Prewarm + idle window
 
@@ -84,23 +84,30 @@ Throughout migration the vanilla `Connection` state is preserved and the world k
 
 ## Config keys
 
-> 2.0.0 adds **no new gateway config keys**. The gateway listen port reuses `master.controlReachableEndpoints[0]`; key families were re-keyed on 2026-08-09 (config-restructure): network core `net.*` (client) / master core `master.*` (server) / data plane `dataplane.*`.
+> Gateway listen port reuses `master.controlReachableEndpoints[0]`; key families follow the 2026-08-09 restructure: network core `net.*` (client) / master core `master.*` / data plane `dataplane.*`. Most L1 policy keys live in **client.toml** (CLIENT scope).
 
 | Key | Default | Notes |
 | --- | --- | --- |
 | `net.enabled` | `true` | Master switch for the client network core (in-process gateway and optimized channels) |
 | `master.enabled` | `true` | Master switch for the server-side network channels |
-| `master.controlReachableEndpoints` | `[]` | Master gateway listen-address source; port = `endpoints[0].port()` (when 0 < port < 65536), **otherwise falls back to `25566`** (`GatewayPlayerBridge.DEFAULT_GATEWAY_PORT`, offset from the vanilla port); empty host falls back to `0.0.0.0` |
+| `master.controlReachableEndpoints` | `[]` | **Server** master gateway listen/advertise addresses; port from `endpoints[0]`, **else `25566`**; synced to the client via handshake tail and `GatewayInfo` (**clients do not fill this**) |
+| `master.bindHost` | `127.0.0.1` | Gateway bind host (loopback by default; empty = `0.0.0.0`) |
+| `master.authToken` | `""` | Gateway handshake auth (empty = off); may be delivered by `GatewayInfo` |
 | `master.compressionLevel` | `3` | Custom-channel ZSTD compression level |
-| `master.globalPacketCompression` / `master.globalCompressionLevel` / `master.globalCompressionThreshold` | `true` / `3` / `256` | Global compression config; also the threshold/level source for the gateway channel's ZSTD install |
+| `master.globalPacketCompression` / `globalCompressionLevel` / `globalCompressionThreshold` | `true` / `3` / `256` | Global compression; also the gateway ZSTD install source |
 | `dataplane.enabled` | `false` | UDP data-plane master switch (**off by default**) |
-| `master.migrationFaultTimeoutMs` | `60000` | 2.0.0 semantics = **L1 migration engine fault-silence timeout** (`faultTimeoutMs`); semantic rename of the former `network.dataPlane.recoveryWindowMs`, consumed in the Network Core |
+| `master.migrationSilentTimeoutMs` | `10000` | Outbound inbound silence timeout (effective default; fail detection ≤15s) |
+| `master.migrationFaultTimeoutMs` | `60000` | Legacy fault-timeout fallback (used when this key is changed and silent stays at default) |
+| `master.migrationMinTps` / `migrationMaxLoadAverage` / `migrationMaintenanceWindow` | `15` / `4` / `""` | Policy triggers (CLIENT) |
+| `master.migrationHeartbeatIntervalMs` / `migrationIdleWindowMs` | `5000` / `10000` | Heartbeat / idle window (CLIENT) |
+| `master.migrationPrewarmTtlMs` | `60000` | Prewarm session TTL (SERVER) |
+| `master.resumeTicketTtlMs` | `300000` | Resume ticket TTL (dual-scope) |
 
 Notes:
 
-- The client's outbound address source is the L1 migration engine (not a direct config read); the endpoint list will later be advertised by the master via handshake/CONFIG frames (T10 wiring).
-- The former server-side `dataPlane` key family has been re-keyed to `dataplane.*` (`enabled` / `udpListeners`); the old `controlStallMs` / `failoverExpiryMs` keys were deleted (2026-08-09) — the server permit chain now uses fixed constants (6000/30000).
-- `recoveryFreeze` (CLIENT) was deleted (2026-08-09; it had no UI consumer, smoke-test marker only); its historical recovery-screen semantics are not described anymore.
+- Client migration candidate endpoints = master handshake-tail `controlEndpoints` + login-phase `GatewayInfo` (persisted to `failover-endpoints.properties`); **not** filled by hand in client.toml. Drill entry = `/hassium migrate`.
+- Former `dataPlane` / `controlStallMs` / `failoverExpiryMs` / `recoveryFreeze` keys were removed.
+- Configuration lists operator/player common keys only; full `ConfigSchema` detail keys (aggregation / dynamic pools / hot-score eviction, etc.) stay code-authoritative and are not fully expanded in the wiki.
 
 ---
 

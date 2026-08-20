@@ -42,4 +42,19 @@ Hassium 提供两组命令：
 
 ---
 
+## 客户端迁移命令（`/hassium migrate`）
+
+演练 / 手动切换主控用（注册在客户端；服务端执行会提示需在客户端上下文）：
+
+| 命令 | 说明 |
+| --- | --- |
+| `/hassium migrate` | 用法帮助 |
+| `/hassium migrate list` | 列出可用迁移端点 |
+| `/hassium migrate status` | 当前网络核心 / 迁移状态 |
+| `/hassium migrate <host:port>` | 迁移到指定主控网关端点（预热 + 续流票据） |
+
+详见 [网络核心与主控迁移](Network-Core-and-Master-Migration)。
+
+---
+
 [← Configuration](Configuration) · [Home](Home) · [→ Features](Features)

@@ -21,8 +21,8 @@
 | --- | --- | --- |
 | **Efficient compression** | Storage compression | World chunk ZSTD on disk (type 126) for smaller saves; keeps vanilla Region (`.mca`) layout |
 | | Network compression | More efficient compression for chunks and packets (custom channels + optional global pipeline + aggregation) — less bandwidth and wait time |
-| **Network optimization** | Smooth push | Per-tick submit cap (`master.maxChunksPerTick` default `5` ≈ 100 chunks/s at full tick) with background serialization; join and view expansion never saturate the main thread |
-| | Gateway migration | The client connects through an in-process gateway (Network Core) to the master core; on master disconnect/stall the L1 migration engine resumes seamlessly — the cache is not re-downloaded and the disconnect screen stays hidden |
+| **Network optimization** | Smooth push | Per-tick submit cap (`master.maxChunksPerTick` default `5` ≈ 100 chunks/s at full tick) with background serialization and client apply-ACK progressive admission; join and view expansion never saturate the main thread |
+| | Gateway migration | The client connects through an in-process gateway (Network Core) to the master core; on master disconnect/stall the L1 migration engine resumes seamlessly — the cache is not re-downloaded and the disconnect screen stays hidden; drill with `/hassium migrate` |
 | | L1 load balancing | Multiple UDP lines share chunk downstream by weight; the UDP data plane is the gateway↔master bulk carrier (off by default) |
 | **Chunk cache** | Chunk cache | Loaded chunks are kept locally; revisiting an area hits via contentHash comparison instead of full downloads |
 | | Section delta | On cache mismatch (MISMATCH), fetch only changed sections (`sectionDelta`) and merge locally instead of the whole chunk |
@@ -31,7 +31,7 @@
 | | World export | `/hassiumc export` copies the shadow-side world directory wholesale as an export (keeps the type 126 format) |
 | **Lighting optimization** | Light stripping | Server can strip light data; the Hassium engine (shadow side) computes lighting centrally and persists the cache |
 | | Light cache | Light data is cached after first recompute; cache hits apply pre-computed lighting directly, skipping expensive recomputation |
-| | Parallel light engine | Light recomputation runs on a background thread pool; the main thread only submits snapshots (on by default) |
+| | Parallel light engine | Optional: enable with Promethium installed; default path uses the shadow-side vanilla light engine asynchronously (frame-budget drain) |
 | **Utilities** | Traffic metrics | `/hassium stats` (server) and `/hassiumc stats` (client) to inspect compression and cache results |
 
 Feature details: [Features](Features-en).

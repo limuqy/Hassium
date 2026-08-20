@@ -38,6 +38,8 @@ Hassium 用一套客户端 + 服务端配合，从**高效压缩、网络优化�
 - **服务端怎么做**（推送侧）：
   - **tick 粒度限速**：`master.maxChunksPerTick`（默认 `5`）限制每玩家每 tick 提交上限（5×20 = 100/s 满 tick）；掉刻时每 tick 提交量不变、每秒总量自然下降，即保护主线程，主线程峰值 ≤ ~8ms/tick
   - **序列化后台化**：encode / ZSTD 压缩 / hash 计算 / 发送全部在推送线程池（`master.serverChunkPushThreads` 默认 2，可动态伸缩）；主线程只做 packet 构建——与原版对齐（原版也是主线程构建 + netty 线程编码），1.20.x/1.21.1 甚至整条序列化链都在后台
+  - **反馈式渐进 admission**：full / SeedGen 投递按 `(dimension, chunk)` 去重入队；客户端 authoritative 落地后发 `ChunkApplyAck`（`CHUNK_APPLY_ACK` 帧）；首次 ACK 前仅一个未确认批次，之后最多 10 批；`GatewayChannel.isWritable` 为传输背压，不能替代 apply ACK
+  - **验收状态**：实现与编译/单测已交付；Fabric 1.20.1 真实进服/移动生产–apply 曲线仍待独立运行窗口验收（见 [`network-core-followups.md`](../docs/network-core-followups.md)）
 - **客户端怎么做**（加载侧）：
   - 每帧主线程 apply 预算 `chunk.mainThreadChunkBudgetMs`（默认 `15`）
   - 进服约 10 秒走 JoinBoost 临时抬高预算，再线性退坡到默认
@@ -48,9 +50,9 @@ Hassium 用一套客户端 + 服务端配合，从**高效压缩、网络优化�
 ### 进程内网关与无感迁移
 
 - **目标**：客户端经进程内网关（网络核心）接入主控核心；主控断线或卡顿时无感迁移，缓存续流、断连界面隐藏，玩家全程看不到切换
-- **怎么做的**：客户端进程内网络核心（`network/core/`：NetworkCore 状态机 / outbound 帧协议 / migration 迁移引擎 / viafabric 桥）经网关帧协议连接主控核心（`network/gateway/`，GatewayServer）；主控故障由 L1 迁移引擎按 `master.migrationFaultTimeoutMs`（默认 `60000`，故障静默超时）判定后直接迁移——磁盘缓存、保存队列、任务执行器全保留，新会话直接续上，命中率不掉、地形不需重下，不弹「连接丢失」
+- **怎么做的**：客户端进程内网络核心（`network/core/`：NetworkCore 状态机 / outbound 帧协议 / migration 迁移引擎 / viafabric 桥）经网关帧协议连接主控核心（`network/gateway/`，GatewayServer）；主控故障由 L1 迁移引擎按生效静默超时（默认 `master.migrationSilentTimeoutMs`=`10000`）判定后直接迁移——磁盘缓存、保存队列、任务执行器全保留，新会话直接续上，命中率不掉、地形不需重下，不弹「连接丢失」；可用 `/hassium migrate` 演练
 - **UDP 数据面**：网关↔主控通道的 bulk 载体（UDP/KCP，AES-GCM 双向认证），默认关（`dataplane.enabled = false`）；关闭时全部流量走网关帧连接
-- **配置**：`dataplane.enabled`（默认 `false`）、`master.migrationFaultTimeoutMs`（默认 `60000`）、`master.controlReachableEndpoints`（主控网关监听端点；未配置时兜底 `25566`）
+- **配置**：`dataplane.enabled`（默认 `false`）、`master.migrationSilentTimeoutMs`（默认 `10000`）、`master.migrationFaultTimeoutMs`（legacy `60000` 回退）、服务端 `master.controlReachableEndpoints`（握手同步到客户端，未配置时兜底 `25566`）
 - **专文**：[网络核心与主控迁移](Network-Core-and-Master-Migration)
 
 ---

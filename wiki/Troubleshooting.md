@@ -60,7 +60,7 @@
 
 | 症状 | 可能原因 | 处理 |
 | --- | --- | --- |
-| 主控故障后客户端直接掉线、无迁移 | 网关监听未就绪 / 迁移判定窗口过短 | 确认主控网关端口可达（`master.controlReachableEndpoints[0]`，未配置时兜底 `25566`）；按需调大 `master.migrationFaultTimeoutMs`（默认 `60000`，故障静默超时） |
+| 主控故障后客户端直接掉线、无迁移 | 网关监听未就绪 / 迁移判定窗口过短 | 确认主控网关端口可达（`master.controlReachableEndpoints[0]`，未配置时兜底 `25566`）；按需调大 `master.migrationSilentTimeoutMs`（默认 `10000`）；legacy 回退键为 `migrationFaultTimeoutMs` |
 | 迁移后地形大量重下（续流被拒） | 影子端存档与主控不一致 / 缓存目录异常 | 检查 `hassium_cache` 对应目录与磁盘空间；迁移后首次加载出现部分 MISS 属正常，持续重下则删除该服务器缓存目录重进（见下） |
 | 配置了 UDP 数据面但未见 UDP 流量 | `dataplane.enabled` 默认关 | 需显式开启；关闭时全部流量走网关帧连接（TCP 控制通道） |
 | 网关端口被占用 | 与其它服务冲突 | 通过 `master.controlReachableEndpoints` 指定其它端口（兜底 `25566`） |

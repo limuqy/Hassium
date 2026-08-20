@@ -42,4 +42,19 @@ Hassium exposes two command groups:
 
 ---
 
+## Client migration commands (`/hassium migrate`)
+
+Drill / manual master switch (registered on the client; running on a dedicated server prints a client-context hint):
+
+| Command | Purpose |
+| --- | --- |
+| `/hassium migrate` | Usage help |
+| `/hassium migrate list` | List available migration endpoints |
+| `/hassium migrate status` | Current Network Core / migration status |
+| `/hassium migrate <host:port>` | Migrate to the given master gateway endpoint (prewarm + resume ticket) |
+
+See [Network Core and Master Migration](Network-Core-and-Master-Migration-en).
+
+---
+
 [← Configuration](Configuration-en) · [Home](Home-en) · [→ Features](Features-en)

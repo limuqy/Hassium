@@ -60,7 +60,7 @@ Toggle the relevant category only; the hot path is quiet by default and enabling
 
 | Symptom | Likely cause | Action |
 | --- | --- | --- |
-| Client drops straight away on master failure, no migration | Gateway listener not ready / migration window too short | Confirm the master gateway port is reachable (`master.controlReachableEndpoints[0]`, falls back to `25566`); raise `master.migrationFaultTimeoutMs` (default `60000`, fault-silence timeout) as needed |
+| Client drops straight away on master failure, no migration | Gateway listener not ready / migration window too short | Confirm the master gateway port is reachable (`master.controlReachableEndpoints[0]`, falls back to `25566`); raise `master.migrationSilentTimeoutMs` (default `10000`) as needed; legacy fallback key is `migrationFaultTimeoutMs` |
 | Terrain re-downloads heavily after migration (resume refused) | Shadow-side save inconsistent with the master / cache directory broken | Check the `hassium_cache` entry and disk space; some MISS right after migration is normal, but if re-downloads persist, delete that server's cache directory and rejoin (below) |
 | UDP data plane configured but no UDP traffic | `dataplane.enabled` is off by default | Enable it explicitly; while off, all traffic goes through the gateway frame connection (TCP control channel) |
 | Gateway port already in use | Conflict with another service | Point `master.controlReachableEndpoints` at another port (fallback is `25566`) |

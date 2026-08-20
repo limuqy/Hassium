@@ -4,7 +4,7 @@ AI Agent 速查（原 `CLAUDE.md` 已合并于此，2026-08-09）。多版本真
 
 ## 项目身份
 
-Minecraft 1.20.1–1.21.11 多加载器模组（Fabric / Forge / NeoForge），ZSTD 优化存档与网络；九段适配单位见 version-segments。Forge 仅 **1.20.1 / 1.20.6**（1.21+ 用 NeoForge）。**2.0.0** 起客户端网络由进程内网关（网络核心）接管：客户端↔世界侧纯原版协议，网关↔主控自有通道（ZSTD/UDP 数据面/hash/delta 保留；聚合为主控侧 vanilla 路径），主控切换为无感续流迁移（旧 failover 已退役）。
+Minecraft 1.20.1–1.21.11 多加载器模组（Fabric / Forge / NeoForge），ZSTD 优化存档与网络；九段适配单位见 version-segments。Forge 支持 **1.20.1 / 1.20.6 / 1.21.1 / 1.21.3–1.21.10**（1.21.2 上游无 Forge userdev；**1.21.11 起 sunset**，该段用 NeoForge）。**2.0.0** 起客户端网络由进程内网关（网络核心）接管：客户端↔世界侧纯原版协议，网关↔主控自有通道（ZSTD/UDP 数据面/hash/delta 保留；聚合为主控侧 vanilla 路径），主控切换为无感续流迁移（旧 failover 已退役）。
 
 ## 关键构建命令
 

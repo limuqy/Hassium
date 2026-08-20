@@ -21,6 +21,7 @@ Hassium 启动时在 `config/hassium/` 自动生成两份 TOML：
 
 > 也可以直接编辑 TOML 文件后重启；GUI 与 TOML 互相同步。
 > 游戏内 UI 分 4 类：区块缓存 / 渲染与生成 / 网络与连接 / 调试（仅客户端键）；服务端键需直接编辑 `hassium-server.toml`。
+> 本页只列常用键；迁移候选端点由服务端握手 / `GatewayInfo` 同步，**客户端无需手填** `master.controlReachableEndpoints`。
 
 ---
 
@@ -48,6 +49,8 @@ Hassium 启动时在 `config/hassium/` 自动生成两份 TOML：
 | `chunk.ovdLocalGeneration` | `false` | 超视渲染本地生成：超视渲染区域缓存 miss 时按服务端世界种子本地生成区块并存入本地缓存；无种子（服务端未装 MOD）时自动关闭生成 |
 | `chunk.seedGenThreads` | `2` | 本地区块生成线程数（0=禁用本地生成，区块一律全量下载） |
 | `chunk.seedGenEnabled` | `false` | 本地区块生成（双端键）：收到 SeedRef 引用时本地按世界种子重新生成区块（哈希校验兜底），避免整块下载；需双端同版本 |
+| `chunk.lightStrip` | `true` | 光照剥离（SERVER）：发包可带空 lightMask；实际剥光由握手协商（客户端声明引擎可用才剥） |
+| `chunk.joinBoostEnabled` | `true` | 进服后短时抬高主线程 apply 预算 |
 
 ### 网络核心（`net.*`）
 
@@ -68,8 +71,18 @@ Hassium 启动时在 `config/hassium/` 自动生成两份 TOML：
 | `master.enablePacketAggregation` | `true` | 包聚合；第三方通道被拦截异常时关掉 |
 | `master.compressionBlacklist` | 10 项默认黑名单 | 包 ID 列表，命中的包不进压缩/聚合（默认含 CHUNK_PAYLOAD / SECTION_DELTA / HANDSHAKE / DICTIONARY_SYNC / INDEX_SYNC / CHUNK_HASH / LIGHT_DELTA / BLOCK_ENTITY_DATA / MAIN_CHANNEL / AGGREGATION） |
 | `master.metricsEnabled` | `false` | 服务端网络指标（关闭后 `/hassium stats` 等命令不可用） |
-| `master.controlReachableEndpoints` | `[]` | 网关监听端点（`endpoints[0]` 即网关端口，未配置时兜底 `25566`） |
-| `master.migrationFaultTimeoutMs` | `60000` | 主控故障静默超时（ms）：超过后 L1 迁移引擎无感切换主控 |
+| `master.controlReachableEndpoints` | `[]` | **服务端**网关监听端点（`endpoints[0]` 即网关端口，未配置时兜底 `25566`）；握手 / `GatewayInfo` 同步给客户端作迁移候选——**玩家客户端无需填写** |
+| `master.bindHost` | `127.0.0.1` | 网关监听 bind host（默认回环；空串=`0.0.0.0`） |
+| `master.authToken` | `""` | 网关握手鉴权 token（空=不鉴权）；服务端配置后可由 `GatewayInfo` 下发，客户端亦可手填同值 |
+| `master.migrationFaultTimeoutMs` | `60000` | L1 迁移 legacy 故障超时回退（ms） |
+| `master.migrationSilentTimeoutMs` | `10000` | outbound 入站静默超时（ms；默认生效值） |
+| `master.migrationMinTps` | `15.0` | 主控 TPS 低于此值触发策略迁移（CLIENT） |
+| `master.migrationMaxLoadAverage` | `4.0` | 系统负载均值高于此值触发策略迁移（CLIENT） |
+| `master.migrationMaintenanceWindow` | `""` | 维护窗口 `HH:MM-HH:MM`（空=禁用；CLIENT） |
+| `master.migrationHeartbeatIntervalMs` | `5000` | 应用层 HEARTBEAT 周期（CLIENT） |
+| `master.migrationIdleWindowMs` | `10000` | 空闲窗口判定时长（CLIENT） |
+| `master.migrationPrewarmTtlMs` | `60000` | 预热会话 TTL（SERVER） |
+| `master.resumeTicketTtlMs` | `300000` | 续流票据有效期（双端同名键） |
 
 ### 数据面（`dataplane.*`）
 

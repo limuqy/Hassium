@@ -70,10 +70,10 @@
 
 | 触发 | 条件 | 行为 |
 | --- | --- | --- |
-| **故障** | outbound 入站静默超过 `faultTimeoutMs`（默认 60000，沿用 `master.migrationFaultTimeoutMs` 语义）；心跳线程按 `heartbeatIntervalMs`（默认 5000）发 HEARTBEAT 监测 | 不预热，直接 `migrateToImmediate` |
-| **负载阈值** | 主控负载报告（`ServerLoadReporter`）：TPS < `minTps`（默认 15.0）或系统负载均值 > `maxLoadAverage`（默认 4.0） | 策略迁移（预热） |
-| **维护窗口** | `maintenanceWindow`（"HH:MM-HH:MM"，本地时区、支持跨午夜；空串禁用）：窗口内恒触发 | 策略迁移（预热） |
-| **演练** | 手动调用迁移入口（`NetworkCore.migrateTo`；命令/API 接线为后续波） | 策略迁移（预热） |
+| **故障** | outbound 入站静默超过生效超时（默认 `master.migrationSilentTimeoutMs`=10000；显式改 `migrationFaultTimeoutMs` 时可回退该 legacy 键）；心跳线程按 `migrationHeartbeatIntervalMs`（默认 5000）发 HEARTBEAT 监测 | 不预热，直接 `migrateToImmediate` |
+| **负载阈值** | 主控负载报告（`ServerLoadReporter`）：TPS < `migrationMinTps`（默认 15.0）或系统负载均值 > `migrationMaxLoadAverage`（默认 4.0） | 策略迁移（预热） |
+| **维护窗口** | `migrationMaintenanceWindow`（"HH:MM-HH:MM"，本地时区、支持跨午夜；空串禁用）：窗口内恒触发 | 策略迁移（预热） |
+| **演练** | 客户端 `/hassium migrate list\|status\|<host:port>`（`NetworkCore.migrateTo`） | 策略迁移（预热） |
 
 ### 预热 + 空闲窗口
 
@@ -84,23 +84,30 @@
 
 ## 配置项
 
-> 2.0.0 **无新增 gateway 配置键**。网关监听端口复用 `master.controlReachableEndpoints[0]`；键族按 2026-08-09 重排（config-restructure）：网络核心 `net.*`（客户端）/ 主控核心 `master.*`（服务端）/ 数据面 `dataplane.*`。
+> 网关监听端口复用 `master.controlReachableEndpoints[0]`；键族按 2026-08-09 重排：网络核心 `net.*`（客户端）/ 主控核心 `master.*` / 数据面 `dataplane.*`。L1 策略键多在 **client.toml**（CLIENT scope）。
 
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
 | `net.enabled` | `true` | 客户端网络核心总开关（进程内网关与优化通道） |
 | `master.enabled` | `true` | 服务端网络通道总开关 |
-| `master.controlReachableEndpoints` | `[]` | 主控网关监听地址源；端口取 `endpoints[0].port()`（0 < port < 65536 时），**否则兜底 `25566`**（`GatewayPlayerBridge.DEFAULT_GATEWAY_PORT`，与 vanilla 端口错开）；host 为空兜底 `0.0.0.0` |
+| `master.controlReachableEndpoints` | `[]` | **服务端**主控网关监听/通告地址；端口取 `endpoints[0]`，**否则兜底 `25566`**；经握手尾与 `GatewayInfo` 同步到客户端（**客户端无需手填**） |
+| `master.bindHost` | `127.0.0.1` | 网关监听 bind host（默认回环；空串=`0.0.0.0`） |
+| `master.authToken` | `""` | 网关握手鉴权（空=不鉴权）；可由 `GatewayInfo` 下发 |
 | `master.compressionLevel` | `3` | 自定义通道 ZSTD 压缩等级 |
-| `master.globalPacketCompression` / `master.globalCompressionLevel` / `master.globalCompressionThreshold` | `true` / `3` / `256` | 全局压缩配置；同时作为网关通道 ZSTD 安装的阈值/等级源 |
+| `master.globalPacketCompression` / `globalCompressionLevel` / `globalCompressionThreshold` | `true` / `3` / `256` | 全局压缩；亦为网关通道 ZSTD 安装源 |
 | `dataplane.enabled` | `false` | UDP 数据面总开关（**默认关**） |
-| `master.migrationFaultTimeoutMs` | `60000` | 2.0.0 语义 = **L1 迁移引擎故障静默超时**（`faultTimeoutMs`）；原 `network.dataPlane.recoveryWindowMs` 语义化迁移至此键，消费在网络核心 |
+| `master.migrationSilentTimeoutMs` | `10000` | outbound 入站静默超时（默认生效值；失效识别 ≤15s） |
+| `master.migrationFaultTimeoutMs` | `60000` | legacy 故障超时回退（显式改此键且 silent 仍为默认时生效） |
+| `master.migrationMinTps` / `migrationMaxLoadAverage` / `migrationMaintenanceWindow` | `15` / `4` / `""` | 策略触发（CLIENT） |
+| `master.migrationHeartbeatIntervalMs` / `migrationIdleWindowMs` | `5000` / `10000` | 心跳 / 空闲窗口（CLIENT） |
+| `master.migrationPrewarmTtlMs` | `60000` | 预热会话 TTL（SERVER） |
+| `master.resumeTicketTtlMs` | `300000` | 续流票据有效期（双端同名键） |
 
 要点：
 
-- 客户端 outbound 地址源 = L1 迁移引擎（非配置直读）；端点列表后续由主控握手/CONFIG 帧通告（T10 接线）。
-- 服务端 `dataPlane` 键族已重排为 `dataplane.*`（`enabled` / `udpListeners`）；旧 `controlStallMs` / `failoverExpiryMs` 键已删（2026-08-09），服务端 permit 链引用固定常量（6000/30000）。
-- `recoveryFreeze`（CLIENT）键已删（2026-08-09，原无 UI 消费、仅冒烟打标），历史语义不再描述恢复画面行为。
+- 客户端迁移候选端点 = 主控握手尾 `controlEndpoints` + 登录期 `GatewayInfo` 同步（落盘 `failover-endpoints.properties`）；**不是**靠 client.toml 手填。演练入口 `/hassium migrate`。
+- 服务端 `dataPlane` 键族已重排为 `dataplane.*`；旧 `controlStallMs` / `failoverExpiryMs` / `recoveryFreeze` 已删。
+- Configuration 只列服主/玩家常用键；`ConfigSchema` 全量细键（聚合/动态线程池/热度淘汰等）以代码为准，不在 wiki 全量展开。
 
 ---
 

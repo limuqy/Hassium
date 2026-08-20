@@ -56,12 +56,17 @@ pushPool: computeSectionHashes → combine → chunkHash
         ▼  ChunkHashS2C（控制面黑名单）
 客户端 miss → ChunkDataRequestC2S
         ▼
-enqueueDataRequest（距离优先）
+enqueueDataRequest（距离优先）→ per-player `ChunkAdmissionController`（keyed pending/in-flight）
         ▼
-onServerTick（真实 server tick 限流）:
-  主线程: 优先 take 缓存包字节，否则 getChunk + serialize ≤ master.maxChunksPerTick
-  pushPool: ZSTD + ChunkPayloadS2C
-```
+onServerTick（真实 server tick 限流 + ACK 背压）:
+  主线程: 优先 take 缓存包字节，否则 getChunk + serialize
+         ≤ master.maxChunksPerTick，且受未确认批次窗口约束
+         （首次 ACK 前 1 批，之后最多 10 批；deliveryId 单调）
+  pushPool: ZSTD + ChunkPayloadS2C / SeedRef
+        ▼
+客户端 authoritative apply 成功 → `CHUNK_APPLY_ACK`（批量 deliveryId）
+        ▼
+服务端幂等释放 in-flight / 放行下一批
 
 ### 客户端
 

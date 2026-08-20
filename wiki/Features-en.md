@@ -38,6 +38,8 @@ Hassium is a single client + server suite that optimizes Minecraft from six dire
 - **Server side** (push):
   - **Tick-granularity throttling**: `master.maxChunksPerTick` (default `5`) caps per-player submits per tick (5×20 = 100/s at full tick); the per-tick submit count stays fixed during lag so the per-second rate naturally drops — protecting the server main thread; main-thread peak ≤ ~8 ms/tick
   - **Background serialization**: encode / ZSTD compression / hash computation / send all run on the push pool (`master.serverChunkPushThreads` default 2, dynamically resizable); the main thread only builds the packet — aligned with vanilla (which also builds on the main thread and encodes on netty). On 1.20.x/1.21.1 the whole serialization chain runs off-thread
+  - **Progressive admission**: full / SeedGen deliveries are keyed by `(dimension, chunk)`; the client sends `ChunkApplyAck` after authoritative apply; one unacked batch before the first ACK, then up to 10; `GatewayChannel.isWritable` is transport backpressure only
+  - **Verification status**: Implementation plus compile/unit tests are delivered; the Fabric 1.20.1 live join/move production–apply curve still needs a dedicated runtime window (see [`network-core-followups.md`](../docs/network-core-followups.md))
 - **Client side** (loading):
   - Per-frame main-thread apply budget `chunk.mainThreadChunkBudgetMs` (default `15`)
   - JoinBoost temporarily raises the budget for ~10s after join, then linearly ramps down
@@ -48,9 +50,9 @@ Hassium is a single client + server suite that optimizes Minecraft from six dire
 ### In-process gateway and seamless migration
 
 - **Goal**: The client connects to the master core through an in-process gateway (Network Core); on master disconnect or stall it migrates seamlessly — the cache resumes, the disconnect screen is hidden, players barely notice
-- **How**: The in-process Network Core on the client (`network/core/`: NetworkCore state machine / outbound frame protocol / migration engine / viafabric bridge) connects to the master core (`network/gateway/`, GatewayServer) over the gateway frame protocol; when the master fails, the L1 migration engine decides based on `master.migrationFaultTimeoutMs` (default `60000`, the fault-silence timeout) and migrates directly — disk cache, save queue, and task executor are all preserved, the new session resumes directly, hit ratio holds and terrain is not re-downloaded, with no "Connection lost" popup
+- **How**: The in-process Network Core on the client (`network/core/`: NetworkCore state machine / outbound frame protocol / migration engine / viafabric bridge) connects to the master core (`network/gateway/`, GatewayServer) over the gateway frame protocol; when the master fails, the L1 migration engine decides based on the effective silence timeout (default `master.migrationSilentTimeoutMs`=`10000`) and migrates directly — disk cache, save queue, and task executor are all preserved, the new session resumes directly, hit ratio holds and terrain is not re-downloaded, with no "Connection lost" popup; drill with `/hassium migrate`
 - **UDP data plane**: bulk carrier for the gateway↔master channel (UDP/KCP, AES-GCM mutual authentication); off by default (`dataplane.enabled = false`) — all traffic then goes through the gateway frame connection
-- **Config**: `dataplane.enabled` (default `false`), `master.migrationFaultTimeoutMs` (default `60000`), `master.controlReachableEndpoints` (master gateway listen endpoints; falls back to `25566` when unset)
+- **Config**: `dataplane.enabled` (default `false`), `master.migrationSilentTimeoutMs` (default `10000`), `master.migrationFaultTimeoutMs` (legacy `60000` fallback), server `master.controlReachableEndpoints` (handshake-synced to the client; falls back to `25566` when unset)
 - **Deep dive**: [Network Core and Master Migration](Network-Core-and-Master-Migration-en)
 
 ---
