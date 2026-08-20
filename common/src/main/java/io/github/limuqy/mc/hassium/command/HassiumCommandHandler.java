@@ -347,7 +347,7 @@ public class HassiumCommandHandler {
         return "§a无导出任务（目录拷贝同步完成，见聊天回报）§r";
     }
 
-    // ==================== /hassium migrate（B4 迁移命令） ====================
+    // ==================== /hassium migrate（B4 迁移演练；仅开发环境注册） ====================
 
     /** 客户端命令上下文检查：migrate 依赖客户端进程内的 NetworkCore 网关单例。 */
     private static boolean isClientContext() {
@@ -358,9 +358,9 @@ public class HassiumCommandHandler {
         return "§c/hassium migrate 是客户端命令，需在客户端执行§r";
     }
 
-    /** migrate 无参数：用法帮助。 */
+    /** migrate 无参数：用法帮助（命令仅在开发环境注册）。 */
     public static String migrateUsage() {
-        return "§6=== /hassium migrate 用法 ===§r\n" +
+        return "§6=== /hassium migrate 用法（开发环境）===§r\n" +
                 "§e/hassium migrate list§r — 列出目标端点池（主控握手通告）\n" +
                 "§e/hassium migrate <host:port>§r — 迁移到指定端点（预热感知全流程，演练用）\n" +
                 "§e/hassium migrate status§r — 显示网关状态 / 当前端点 / 最近续流 / 策略参数";

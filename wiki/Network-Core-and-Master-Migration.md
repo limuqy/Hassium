@@ -73,7 +73,7 @@
 | **故障** | outbound 入站静默超过生效超时（默认 `master.migrationSilentTimeoutMs`=10000；显式改 `migrationFaultTimeoutMs` 时可回退该 legacy 键）；心跳线程按 `migrationHeartbeatIntervalMs`（默认 5000）发 HEARTBEAT 监测 | 不预热，直接 `migrateToImmediate` |
 | **负载阈值** | 主控负载报告（`ServerLoadReporter`）：TPS < `migrationMinTps`（默认 15.0）或系统负载均值 > `migrationMaxLoadAverage`（默认 4.0） | 策略迁移（预热） |
 | **维护窗口** | `migrationMaintenanceWindow`（"HH:MM-HH:MM"，本地时区、支持跨午夜；空串禁用）：窗口内恒触发 | 策略迁移（预热） |
-| **演练** | 客户端 `/hassium migrate list\|status\|<host:port>`（`NetworkCore.migrateTo`） | 策略迁移（预热） |
+| **演练** | 客户端 `/hassium migrate list\|status\|<host:port>`（`NetworkCore.migrateTo`；**仅开发环境注册**） | 策略迁移（预热） |
 
 ### 预热 + 空闲窗口
 
@@ -105,7 +105,7 @@
 
 要点：
 
-- 客户端迁移候选端点 = 主控握手尾 `controlEndpoints` + 登录期 `GatewayInfo` 同步（落盘 `failover-endpoints.properties`）；**不是**靠 client.toml 手填。演练入口 `/hassium migrate`。
+- 客户端迁移候选端点 = 主控握手尾 `controlEndpoints` + 登录期 `GatewayInfo` 同步（落盘 `failover-endpoints.properties`）；**不是**靠 client.toml 手填。演练入口 `/hassium migrate`（仅开发环境）。
 - 服务端 `dataPlane` 键族已重排为 `dataplane.*`；旧 `controlStallMs` / `failoverExpiryMs` / `recoveryFreeze` 已删。
 - Configuration 只列服主/玩家常用键；`ConfigSchema` 全量细键（聚合/动态线程池/热度淘汰等）以代码为准，不在 wiki 全量展开。
 

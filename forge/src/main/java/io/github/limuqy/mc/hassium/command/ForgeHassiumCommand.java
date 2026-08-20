@@ -7,6 +7,7 @@ import com.mojang.brigadier.suggestion.Suggestions;
 import com.mojang.brigadier.suggestion.SuggestionsBuilder;
 import io.github.limuqy.mc.hassium.compat.PermissionCompat;
 import io.github.limuqy.mc.hassium.metrics.NetworkStats;
+import io.github.limuqy.mc.hassium.platform.Services;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.network.chat.Component;
@@ -72,19 +73,19 @@ public class ForgeHassiumCommand {
                                 )
                         )
         );
-        // /hassium migrate 客户端命令（统一三端命令名；服务端 /hassium 不注册 migrate 子树，
-        // 服务端执行提示由 HassiumCommandHandler 客户端上下文检查兜底）
-        // 单一 greedyString 参数分发 list/status/endpoint：字面量子命令与字符串参数为兄弟
-        // 节点时 brigadier 必报参数歧义告警，合并后零歧义（tab 补全见 suggestMigrate）。
-        dispatcher.register(
-                Commands.literal("hassium")
-                        .then(Commands.literal("migrate")
-                                .executes(ForgeHassiumCommand::migrateUsage)
-                                .then(Commands.argument("args", StringArgumentType.greedyString())
-                                        .suggests(ForgeHassiumCommand::suggestMigrate)
-                                        .executes(ForgeHassiumCommand::migrateDispatch))
-                        )
-        );
+        // /hassium migrate：仅开发环境注册（正式包不暴露；runClient / 冒烟仍可用）
+        // 单一 greedyString 参数分发 list/status/endpoint，避免字面量与字符串兄弟节点歧义。
+        if (Services.PLATFORM.isDevelopmentEnvironment()) {
+            dispatcher.register(
+                    Commands.literal("hassium")
+                            .then(Commands.literal("migrate")
+                                    .executes(ForgeHassiumCommand::migrateUsage)
+                                    .then(Commands.argument("args", StringArgumentType.greedyString())
+                                            .suggests(ForgeHassiumCommand::suggestMigrate)
+                                            .executes(ForgeHassiumCommand::migrateDispatch))
+                            )
+            );
+        }
     }
 
     private static CompletableFuture<Suggestions> suggestMigrate(

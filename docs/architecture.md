@@ -72,7 +72,7 @@ flowchart LR
 
 **续流**：迁移时 `MigrationEngine` 签发 `ResumeTicket`（HMAC-SHA256 签名 + epoch 防重放）随握手请求续流；主控 `ResumeTicketValidator` 验签通过 → `ServerChunkPushManager.markPlayerResumeActive` → 推送断点续流，区块缓存直接续用（`resumeAccepted=true`）；验票失败则会话待登录桥附着。
 
-**迁移**：`NetworkCoreState` 状态机（IDLE/CONNECTING/HANDSHAKING/ACTIVE/MIGRATING）。触发 = 故障（outbound 入站静默超时，生效默认 `master.migrationSilentTimeoutMs`）或策略（TPS/负载/维护窗口，`MigrationPolicy`）或演练（`/hassium migrate`）；执行 = `PrewarmSession` 预连就绪后无缝切换或直连切换，详见 §12.6。
+**迁移**：`NetworkCoreState` 状态机（IDLE/CONNECTING/HANDSHAKING/ACTIVE/MIGRATING）。触发 = 故障（outbound 入站静默超时，生效默认 `master.migrationSilentTimeoutMs`）或策略（TPS/负载/维护窗口，`MigrationPolicy`）或演练（`/hassium migrate`，仅开发环境）；执行 = `PrewarmSession` 预连就绪后无缝切换或直连切换，详见 §12.6。
 
 网络核心未达项交接见 [`network-core-followups.md`](network-core-followups.md)（后续波）。
 
@@ -251,7 +251,7 @@ ERROR / WARN 始终输出。
 | `/hassium metrics on\|off` | 服务端 | 运行时开关指标 |
 | `/hassiumc stats` | 客户端 | 接收/缓存命中（客户端缓存+本地重算−分片 / 应用区块）/超视渲染/光照/区块加载（新增/过期/**本地生成**）/流量节省（实际/无MOD应收）统计 |
 | `/hassiumc export [<服务器IP>] [seed]` | 客户端 | 导出影子端世界目录为 `hassium_exports/<cacheId>/`（保留 type 126） |
-| `/hassium migrate` / `list` / `status` / `<host:port>` | 客户端 | L1 迁移演练入口（`NetworkCore.migrateTo`；三端客户端命令注册） |
+| `/hassium migrate` / `list` / `status` / `<host:port>` | 客户端（仅开发环境） | L1 迁移演练入口（`NetworkCore.migrateTo`；正式包不注册） |
 
 实现：`metrics/NetworkStats`（`AtomicLong`，可关闭）。指标关闭时相关 stats 命令不可用。导出走 `CacheWorldExporter`（异步，见 `chunk-cache.md` §12）。
 
@@ -274,7 +274,7 @@ ERROR / WARN 始终输出。
 |------|-------------|------|------|
 | **平滑推送** | `master.maxChunksPerTick`（5）、`master.serverChunkPushThreads` | 每 tick 提交上限限速（满 tick ≈ 100/s，掉刻自然降速；主线程峰值 ≤8ms/tick）；encode/压缩/hash/发送全在推送池——1.21.2+ 主线程仅 build，<1.21.2 全后台；**反馈式渐进 admission**（`ChunkAdmissionController` + `ChunkApplyAck`：客户端 authoritative 落地后 ACK，背压服务端 full/SeedGen 生产）；实现与单测已交付，Fabric 1.20.1 进服/移动曲线待独立验收 | [`chunk-cache.md`](chunk-cache.md)、[`network-core-followups.md`](network-core-followups.md)、[`runtime-smoke-test.md`](runtime-smoke-test.md) |
 | **网关帧协议** | 无专属配置键（网关端口 = `master.controlReachableEndpoints[0]`，兜底 25566） | 客户端 outbound（网络核心）↔ 主控 `GatewayServer`（主控核心）的 TCP 控制面：varint 帧长 + type + payload；ZSTD 装于帧协议之外（握手协商后安装）；S2C 推送经 `PACKET_S2C` 帧回传，C2S 经 `PACKET_C2S` 帧收口 | §4、§8 |
-| **L1 迁移（无感续流）** | `master.migrationSilentTimeoutMs`（默认 10000）+ `migrationFaultTimeoutMs`（60000 legacy 回退）；`/hassium migrate` | 主控故障/断流时切换 outbound 至新主控：`PrewarmSession` 预连 + `ResumeTicket` 续流票据（HMAC-SHA256 + epoch 防重放）→ 主控 `ResumeTicketValidator` 验签 → `markPlayerResumeActive` 推送续流；无需重进世界，区块缓存直接续用；策略/演练触发见 §12.6 | [`runtime-smoke-test.md`](runtime-smoke-test.md#网关双主控迁移冒烟t7) |
+| **L1 迁移（无感续流）** | `master.migrationSilentTimeoutMs`（默认 10000）+ `migrationFaultTimeoutMs`（60000 legacy 回退）；`/hassium migrate`（仅开发环境） | 主控故障/断流时切换 outbound 至新主控：`PrewarmSession` 预连 + `ResumeTicket` 续流票据（HMAC-SHA256 + epoch 防重放）→ 主控 `ResumeTicketValidator` 验签 → `markPlayerResumeActive` 推送续流；无需重进世界，区块缓存直接续用；策略/演练触发见 §12.6 | [`runtime-smoke-test.md`](runtime-smoke-test.md#网关双主控迁移冒烟t7) |
 | **多通道数据面（历史）** | 早期 `DataPlanePoCConfig` | 1.20.1 Fabric 的双裸 TCP PoC 已退役，不是生产配置或运维入口 | [`archive/multi-channel_network_research.md`](archive/multi-channel_network_research.md) |
 
 ### 12.3 区块缓存
@@ -311,7 +311,7 @@ ERROR / WARN 始终输出。
 
 - **故障触发**：outbound 入站静默超过生效值 `MigrationPolicy.resolvedSilentTimeoutMs()`（默认 **`master.migrationSilentTimeoutMs=10000`**；显式改 `migrationFaultTimeoutMs` 时可回退该 legacy 键）→ 立即切换 outbound；心跳按 `migrationHeartbeatIntervalMs`（默认 5000）发送；
 - **策略触发**（`MigrationPolicy`）：主控 TPS 低于 `migrationMinTps`（默认 15）、系统负载高于 `migrationMaxLoadAverage`（默认 4）、或处于 `migrationMaintenanceWindow`（`HH:mm-HH:mm`，默认空 = 不启用）→ 主动迁移；
-- **演练触发**：客户端 `/hassium migrate <host:port>`（或 `list` / `status`）→ `NetworkCore.migrateTo`；
+- **演练触发**：客户端 `/hassium migrate <host:port>`（或 `list` / `status`）→ `NetworkCore.migrateTo`（仅开发环境注册；正式包不可用）；
 - **执行**：`PrewarmSession` 向新主控预连（握手 + 续流票据）就绪后无缝切换（`ACTIVE → MIGRATING → ACTIVE`）；预连未就绪时直连迁移（带续流）；切换只换 outbound，客户端注入/路由不动。
 
 **续流票据**：迁移时客户端持 `ResumeTicket`（HMAC-SHA256 签名 + epoch 防重放）在新主控握手请求续流；主控 `ResumeTicketValidator` 验签通过 → `ServerChunkPushManager.markPlayerResumeActive` → S2C 推送从断点续流（区块缓存/进度无感延续）；验票失败 → `resumeAccepted=false`，会话待登录桥附着，数据推送不流入。

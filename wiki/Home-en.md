@@ -22,7 +22,7 @@
 | **Efficient compression** | Storage compression | World chunk ZSTD on disk (type 126) for smaller saves; keeps vanilla Region (`.mca`) layout |
 | | Network compression | More efficient compression for chunks and packets (custom channels + optional global pipeline + aggregation) — less bandwidth and wait time |
 | **Network optimization** | Smooth push | Per-tick submit cap (`master.maxChunksPerTick` default `5` ≈ 100 chunks/s at full tick) with background serialization and client apply-ACK progressive admission; join and view expansion never saturate the main thread |
-| | Gateway migration | The client connects through an in-process gateway (Network Core) to the master core; on master disconnect/stall the L1 migration engine resumes seamlessly — the cache is not re-downloaded and the disconnect screen stays hidden; drill with `/hassium migrate` |
+| | Gateway migration | The client connects through an in-process gateway (Network Core) to the master core; on master disconnect/stall the L1 migration engine resumes seamlessly — the cache is not re-downloaded and the disconnect screen stays hidden |
 | | L1 load balancing | Multiple UDP lines share chunk downstream by weight; the UDP data plane is the gateway↔master bulk carrier (off by default) |
 | **Chunk cache** | Chunk cache | Loaded chunks are kept locally; revisiting an area hits via contentHash comparison instead of full downloads |
 | | Section delta | On cache mismatch (MISMATCH), fetch only changed sections (`sectionDelta`) and merge locally instead of the whole chunk |

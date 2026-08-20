@@ -8,6 +8,7 @@ import com.mojang.brigadier.suggestion.Suggestions;
 import com.mojang.brigadier.suggestion.SuggestionsBuilder;
 import io.github.limuqy.mc.hassium.compat.PermissionCompat;
 import io.github.limuqy.mc.hassium.metrics.NetworkStats;
+import io.github.limuqy.mc.hassium.platform.Services;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.network.chat.Component;
@@ -63,30 +64,31 @@ public class FabricHassiumCommand {
     }
 
     private static void registerClientCommandsInternal(CommandDispatcher<FabricClientCommandSource> dispatcher) {
-        dispatcher.register(
-                ClientCommandManager.literal("hassiumc")
-                        .then(ClientCommandManager.literal("stats")
-                                .requires(source -> HassiumCommandHandler.isMetricsEnabled())
-                                .executes(FabricHassiumCommand::showClientStats)
+        LiteralArgumentBuilder<FabricClientCommandSource> hassiumc = ClientCommandManager.literal("hassiumc")
+                .then(ClientCommandManager.literal("stats")
+                        .requires(source -> HassiumCommandHandler.isMetricsEnabled())
+                        .executes(FabricHassiumCommand::showClientStats)
+                )
+                .then(ClientCommandManager.literal("export")
+                        .executes(FabricHassiumCommand::exportCurrentWorld)
+                        .then(ClientCommandManager.argument("args", StringArgumentType.greedyString())
+                                .suggests(FabricHassiumCommand::suggestCachedServers)
+                                .executes(FabricHassiumCommand::exportWithArgs)
                         )
-                        .then(ClientCommandManager.literal("export")
-                                .executes(FabricHassiumCommand::exportCurrentWorld)
-                                .then(ClientCommandManager.argument("args", StringArgumentType.greedyString())
-                                        .suggests(FabricHassiumCommand::suggestCachedServers)
-                                        .executes(FabricHassiumCommand::exportWithArgs)
-                                )
-                        )
-                        .then(migrateSubtree())
-        );
-        // /hassium migrate 别名（统一三端命令名；与 /hassiumc migrate 共用子树）
-        dispatcher.register(
-                ClientCommandManager.literal("hassium")
-                        .then(migrateSubtree())
-        );
+                );
+        // migrate 仅开发环境：正式包不暴露演练入口；runClient / 冒烟仍可用
+        if (Services.PLATFORM.isDevelopmentEnvironment()) {
+            hassiumc.then(migrateSubtree());
+            dispatcher.register(
+                    ClientCommandManager.literal("hassium")
+                            .then(migrateSubtree())
+            );
+        }
+        dispatcher.register(hassiumc);
     }
 
     /**
-     * migrate 子树（/hassiumc migrate 与 /hassium migrate 共用）。
+     * migrate 子树（/hassiumc migrate 与 /hassium migrate 共用；仅开发环境注册）。
      * <p>
      * 单一 greedyString 参数分发 list/status/endpoint：字面量子命令（list/status）与
      * 字符串参数（endpoint）注册为兄弟节点时 brigadier 必然报参数歧义告警
@@ -133,7 +135,7 @@ public class FabricHassiumCommand {
 
     /** 解析端点参数：migrate <host:port> */
     private static int migrateToEndpoint(CommandContext<FabricClientCommandSource> context) {
-        String endpoint = StringArgumentType.getString(context, "endpoint");
+        String endpoint = StringArgumentType.getString(context, "args");
         context.getSource().sendFeedback(Component.literal(HassiumCommandHandler.migrateTo(endpoint)));
         return 1;
     }

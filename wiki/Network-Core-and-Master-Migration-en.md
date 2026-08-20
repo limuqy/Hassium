@@ -73,7 +73,7 @@ Throughout migration the vanilla `Connection` state is preserved and the world k
 | **Fault** | Outbound inbound silence exceeds the effective timeout (default `master.migrationSilentTimeoutMs`=10000; explicitly changing `migrationFaultTimeoutMs` can fall back to that legacy key); a heartbeat thread sends HEARTBEATs every `migrationHeartbeatIntervalMs` (default 5000) | No prewarm; direct `migrateToImmediate` |
 | **Load thresholds** | Master load report (`ServerLoadReporter`): TPS < `migrationMinTps` (default 15.0) or system load average > `migrationMaxLoadAverage` (default 4.0) | Policy migration (prewarm) |
 | **Maintenance window** | `migrationMaintenanceWindow` ("HH:MM-HH:MM", local timezone, midnight-crossing supported; empty = disabled): always triggers while inside the window | Policy migration (prewarm) |
-| **Drill** | Client `/hassium migrate list\|status\|<host:port>` (`NetworkCore.migrateTo`) | Policy migration (prewarm) |
+| **Drill** | Client `/hassium migrate list\|status\|<host:port>` (`NetworkCore.migrateTo`; **development environment only**) | Policy migration (prewarm) |
 
 ### Prewarm + idle window
 
@@ -105,7 +105,7 @@ Throughout migration the vanilla `Connection` state is preserved and the world k
 
 Notes:
 
-- Client migration candidate endpoints = master handshake-tail `controlEndpoints` + login-phase `GatewayInfo` (persisted to `failover-endpoints.properties`); **not** filled by hand in client.toml. Drill entry = `/hassium migrate`.
+- Client migration candidate endpoints = master handshake-tail `controlEndpoints` + login-phase `GatewayInfo` (persisted to `failover-endpoints.properties`); **not** filled by hand in client.toml. Drill entry = `/hassium migrate` (development environment only).
 - Former `dataPlane` / `controlStallMs` / `failoverExpiryMs` / `recoveryFreeze` keys were removed.
 - Configuration lists operator/player common keys only; full `ConfigSchema` detail keys (aggregation / dynamic pools / hot-score eviction, etc.) stay code-authoritative and are not fully expanded in the wiki.
 

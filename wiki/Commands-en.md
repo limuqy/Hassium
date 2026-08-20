@@ -42,9 +42,9 @@ Hassium exposes two command groups:
 
 ---
 
-## Client migration commands (`/hassium migrate`)
+## Client migration commands (`/hassium migrate`, development only)
 
-Drill / manual master switch (registered on the client; running on a dedicated server prints a client-context hint):
+Master-switch drill entry; **registered only in a development environment** (`runClient` / IDE), not in release builds. Production migration is triggered automatically by fault/policy — no player action required.
 
 | Command | Purpose |
 | --- | --- |

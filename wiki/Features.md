@@ -50,7 +50,7 @@ Hassium 用一套客户端 + 服务端配合，从**高效压缩、网络优化�
 ### 进程内网关与无感迁移
 
 - **目标**：客户端经进程内网关（网络核心）接入主控核心；主控断线或卡顿时无感迁移，缓存续流、断连界面隐藏，玩家全程看不到切换
-- **怎么做的**：客户端进程内网络核心（`network/core/`：NetworkCore 状态机 / outbound 帧协议 / migration 迁移引擎 / viafabric 桥）经网关帧协议连接主控核心（`network/gateway/`，GatewayServer）；主控故障由 L1 迁移引擎按生效静默超时（默认 `master.migrationSilentTimeoutMs`=`10000`）判定后直接迁移——磁盘缓存、保存队列、任务执行器全保留，新会话直接续上，命中率不掉、地形不需重下，不弹「连接丢失」；可用 `/hassium migrate` 演练
+- **怎么做的**：客户端进程内网络核心（`network/core/`：NetworkCore 状态机 / outbound 帧协议 / migration 迁移引擎 / viafabric 桥）经网关帧协议连接主控核心（`network/gateway/`，GatewayServer）；主控故障由 L1 迁移引擎按生效静默超时（默认 `master.migrationSilentTimeoutMs`=`10000`）判定后直接迁移——磁盘缓存、保存队列、任务执行器全保留，新会话直接续上，命中率不掉、地形不需重下，不弹「连接丢失」
 - **UDP 数据面**：网关↔主控通道的 bulk 载体（UDP/KCP，AES-GCM 双向认证），默认关（`dataplane.enabled = false`）；关闭时全部流量走网关帧连接
 - **配置**：`dataplane.enabled`（默认 `false`）、`master.migrationSilentTimeoutMs`（默认 `10000`）、`master.migrationFaultTimeoutMs`（legacy `60000` 回退）、服务端 `master.controlReachableEndpoints`（握手同步到客户端，未配置时兜底 `25566`）
 - **专文**：[网络核心与主控迁移](Network-Core-and-Master-Migration)

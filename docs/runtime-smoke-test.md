@@ -302,7 +302,7 @@ build/smoke-test/
 
 ### E1/E2 呼应（`docs/network-core-followups.md`）
 
-- **E1（真实双端联调）**：上述冒烟多为单测/桩测，`GatewaySmokeTest` 真实 TCP 仅本机环回；E1 =「真客户端 + 真主控跑本文档 classic 流程（ROUND1/2）」+「双主控迁移演练」。迁移命令入口 `/hassium migrate`（B4）与双主控演练已交付（见 [`network-core-followups.md`](network-core-followups.md) B4/E1）；端点通告 CONFIG 帧（B1）状态见该清单。
+- **E1（真实双端联调）**：上述冒烟多为单测/桩测，`GatewaySmokeTest` 真实 TCP 仅本机环回；E1 =「真客户端 + 真主控跑本文档 classic 流程（ROUND1/2）」+「双主控迁移演练」。迁移命令入口 `/hassium migrate`（B4，仅开发环境）与双主控演练已交付（见 [`network-core-followups.md`](network-core-followups.md) B4/E1）；端点通告 CONFIG 帧（B1）状态见该清单。
 - **E2（ViaFabric 运行时冒烟，随 E1 一起）**：装 ViaFabric → 客户端日志出现 `Hassium: ViaFabric detected via classpath (<类>)` 或 `via mod list (<modId>)`（`ViaFabricCompat.java:146,160`）+ `Hassium: ViaFabric decode bridge installed (live <x> -> fresh <y>)`（`ViaDecodeBridge.java:102`）；不装 → 无桥日志（登录时重探测，`NetworkCore.onLogin:132`）。
 
 ## Nginx Failover Harness（历史，已退役）

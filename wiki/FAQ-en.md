@@ -68,7 +68,7 @@ A: Connecting through the in-process gateway (Network Core) to the master core i
 
 ### Q: Will the client disconnect when the master disconnects or stalls?
 
-A: Not immediately. The L1 migration engine decides based on the effective silence timeout (default `master.migrationSilentTimeoutMs`=`10000`; explicitly changing `migrationFaultTimeoutMs` can fall back) and migrates seamlessly: disk cache and save queue are preserved, the new session resumes directly, no "Connection lost" popup; a real disconnect happens only when the master cannot recover. Drill with `/hassium migrate`. Migration is smoother when the UDP data plane is enabled and healthy.
+A: Not immediately. The L1 migration engine decides based on the effective silence timeout (default `master.migrationSilentTimeoutMs`=`10000`; explicitly changing `migrationFaultTimeoutMs` can fall back) and migrates seamlessly: disk cache and save queue are preserved, the new session resumes directly, no "Connection lost" popup; a real disconnect happens only when the master cannot recover. Migration is smoother when the UDP data plane is enabled and healthy.
 
 ---
 
