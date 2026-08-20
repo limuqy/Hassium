@@ -334,8 +334,8 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
     /**
      * 建立到主控的 outbound 连接（异步）+ 连接级鉴权 token（M1 bootstrap 下发）。
      * IDLE 时先转 CONNECTING；ACTIVE/MIGRATING 中调用 = 重连/切换（旧 outbound 关闭）。
-     * authToken 为 null 时握手回退 config master.authToken；空串 = 显式不鉴权
-     * （线格式不追加 token 字节）。
+     * authToken 为 null 时握手回退 {@link #bootstrapAuthToken()}（gateway_info 下发）；
+     * 空串 = 显式不鉴权（线格式不追加 token 字节）。
      * tail 非 null 时握手携带 T7/T10 状态尾（T8 迁移续流发起 / T10 标准流程身份附着）。
      */
     public void connect(String host, int port, HandshakeStateTail.C2S tail, String authToken) {
@@ -1589,23 +1589,28 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
         return lastEndpoint;
     }
 
+    /** 最近一次 gateway_info（bootstrap 下发；仅网关登录取鉴权 token 用）。 */
+    public GatewayInfoCodec.GatewayInfo lastGatewayInfo() {
+        return lastGatewayInfo;
+    }
+
+    /** gateway_info 下发的鉴权 token；未收到 → 空串（不鉴权）。 */
+    public String bootstrapAuthToken() {
+        GatewayInfoCodec.GatewayInfo info = lastGatewayInfo;
+        return info != null && info.authToken() != null ? info.authToken() : "";
+    }
+
     // ==================== 内部 ====================
 
     /**
-     * 尽力自动连接当前登录服务器（M1 bootstrap 三级；修复 T9 兜底连 vanilla 端口 25565
-     * → 网关握手帧发到原版端口 → 10s 静默 fault 的根因）：
+     * 尽力自动连接当前登录服务器（主控端点/鉴权仅信 gateway_info 下发）：
      * <ol>
-     *   <li><b>配置端点</b>：master.controlReachableEndpoints[0]（客户端显式配置最高
-     *       优先；T9 语义保留——bootstrap 覆盖竞态由 onGatewayInfo close 重连处理）</li>
-     *   <li><b>gateway_info 已到</b>：连下发端点[0] + 下发 authToken（登录同 tick 队列
-     *       已可消费）</li>
+     *   <li><b>gateway_info 已到</b>：连下发端点[0] + 下发 authToken</li>
      *   <li><b>探测兜底</b>：ServerData host + {@link GatewayPlayerBridge#DEFAULT_GATEWAY_PORT}
-     *       （25566，与 vanilla 端口错开的网关默认端口）——服务端没装 Hassium 时 TCP 即时
-     *       拒绝（onError → IDLE 降级纯 vanilla），无 10s 静默；TCP connect 超时由 Netty
-     *       5s 兜底。<b>禁止连 ServerData 的 vanilla 端口。</b></li>
+     *       （25566；禁连 vanilla 端口）。无鉴权 token（等 gateway_info 或服务端未开鉴权）</li>
      * </ol>
-     * gateway_info 未到时事件驱动：onGatewayInfo 到达后自然 connect（本方法不等待、
-     * 无超时窗口）。net.enabled=false 时全部跳过（保留现状）。失败仅告警。
+     * gateway_info 未到时事件驱动：onGatewayInfo 到达后自然 connect。
+     * net.enabled=false 时全部跳过。失败仅告警。
      */
     private void autoConnect() {
         try {
@@ -1614,26 +1619,17 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
                 LOGGER.debug("Hassium: NetworkCore auto-connect skipped (net.enabled=false)");
                 return;
             }
-            // ① 配置端点（显式配置最高优先）
-            List<HassiumConfig.ReachableEndpoint> endpoints = config.getControlReachableEndpoints();
-            if (!endpoints.isEmpty()) {
-                HassiumConfig.ReachableEndpoint first = endpoints.get(0);
-                if (first.host() != null && !first.host().isBlank()) {
-                    connect(first.host(), first.port());
-                    return;
-                }
-            }
-            // ② gateway_info 已到 → 下发端点 + 下发 token
+            // ① gateway_info 已到 → 下发端点 + 下发 token
             GatewayInfoCodec.GatewayInfo info = lastGatewayInfo;
             if (info != null && !info.endpoints().isEmpty()) {
                 GatewayInfoCodec.Endpoint first = info.endpoints().get(0);
                 connect(first.host(), first.port(), buildAutoTail(), info.authToken());
                 return;
             }
-            // ③ 探测兜底：ServerData host + 网关默认端口（禁连 vanilla 端口）
+            // ② 探测兜底：ServerData host + 网关默认端口（禁连 vanilla 端口）
             String host = serverDataHost();
             if (host != null && !host.isBlank()) {
-                connect(host, GatewayPlayerBridge.DEFAULT_GATEWAY_PORT);
+                connect(host, GatewayPlayerBridge.DEFAULT_GATEWAY_PORT, buildAutoTail(), "");
             }
         } catch (Throwable t) {
             LOGGER.debug("Hassium: NetworkCore auto-connect skipped", t);

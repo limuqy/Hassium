@@ -3,7 +3,6 @@ package io.github.limuqy.mc.hassium.network.core;
 import io.github.limuqy.mc.hassium.client.ConnectScreenAccessor;
 import io.github.limuqy.mc.hassium.client.MinecraftAccessor;
 import io.github.limuqy.mc.hassium.config.HassiumConfig;
-import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.server.GatewayConnectionAccessor;
 import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.channel.ChannelOutboundHandlerAdapter;
@@ -221,7 +220,7 @@ public final class GatewayOnlyLogin {
         LOGGER.info("Hassium: gateway-only login -> endpoint {}:{} ({} of {})",
                 ep.host(), ep.port(), index + 1, endpoints.size());
         core.connect(ep.host(), ep.port(), NetworkCore.buildAutoTail(),
-                HassiumConfigService.getInstance().getMasterAuthToken());
+                core.bootstrapAuthToken());
     }
 
     private void sendHello() {

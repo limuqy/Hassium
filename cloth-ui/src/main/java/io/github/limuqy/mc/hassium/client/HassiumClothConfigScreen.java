@@ -117,7 +117,7 @@ public final class HassiumClothConfigScreen {
         networkCat.addEntry(bool(entries, "hassium.configuration.net.metricsAutoReset",
                 draft.metricsAutoReset, dNet.metricsAutoReset(), v -> draft.metricsAutoReset = v));
 
-        // L1 迁移策略（master.migration* CLIENT scope 键；迁移引擎/快速失效参数）
+        // L1 迁移策略（客户端仅保留的 master.*；端点/鉴权由 gateway_info 下发）
         var dMaster = HassiumConfig.MasterCoreConfig.DEFAULT;
         networkCat.addEntry(doubleRange(entries, "hassium.configuration.master.migrationMinTps",
                 draft.migrationMinTps, dMaster.migrationMinTps(), 0.1, 100.0,

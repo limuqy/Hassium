@@ -69,7 +69,7 @@
 - `ZstdContextDecoder` frameAware 模式（网关管道专用）：明文单元按 ControlFrameCodec 帧边界消费，修粘包下 `invalid control frame length: 0`；半包整体回退。`network/ZstdContextDecoder.java`（L26-31、L93-97）。
 - `GatewayConnectionAccessor` 接口（新）：fabric Knot 运行时禁止直接引用 mixin 类（T10 首次真实续流物化崩溃根因），mixin 将接口挂到 Connection，业务代码 cast 接口。`server/GatewayConnectionAccessor.java`、`mixin/MixinConnectionGatewayServer.java`、`server/GatewayPlayerBridge.java`（L199-201 等）。
 - T8b 10 处 1.20.2–1.20.4 边界编译错误修复（10 版本编译全绿）。
-- scope bug 修复：`CLIENT_MASTER_CONTROL_ENDPOINTS` 注册 CLIENT scope 副本（物理客户端读 client.toml 的 SERVER scope 键经快照路径按 scope 过滤读不到）——`config/ConfigSchema.java`（L68 注释）、`config/ConfigSnapshotAdapter.java`（L74-75 双键同写、L132-134 scope 回退读）。
+- scope 收口：客户端不再注册 `master.authToken` / `master.controlReachableEndpoints` / `master.resumeTicketTtlMs` 的 CLIENT 副本——端点与鉴权仅经 `gateway_info` 下发；客户端 schema 仅保留 L1 `master.migration*` 6 键。
 - 1.20.1 neoforge dev 环境 IMBlocker 动态 mixin CNFE：`neoforge/build.gradle` 特判跳过（modLocalRuntime 不进生产）。
 - 演练支撑（非生产语义改动）：`buildSrc/loom-fabric.gradle`（`-PhassiumSmokeUsername`/`-PhassiumSmokeMigrateImmediate`/`-PhassiumSmokeMigrateMoveSeconds` 透传）、`client/ClientSmokeTest.java`（migrate 单轮模式 + immediate API 直调，命令面无 immediate 子命令，故障路径内部 API）。
 

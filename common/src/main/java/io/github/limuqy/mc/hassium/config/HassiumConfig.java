@@ -262,8 +262,7 @@ public record HassiumConfig(
         }
 
         /**
-         * 便捷构造：仅替换网关监听/鉴权字段（D-M2 客户端加载 client.toml 的 master.authToken 用；
-         * 其余字段保持本实例值）。
+         * 便捷构造：仅替换网关监听/鉴权字段（服务端平台接线用；其余字段保持本实例值）。
          */
         public MasterCoreConfig withGatewayAuth(String bindHost, String authToken) {
             return new MasterCoreConfig(enabled, compressionLevel, magiclessZstd,

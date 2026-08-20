@@ -138,8 +138,9 @@ public final class OutboundConnection {
 
     /**
      * 异步建立到主控的 TCP 控制面连接，握手请求携带 T7 续流状态尾 + 连接级鉴权 token
-     * （M1 bootstrap 下发 token；authToken 为 null 时 sendHandshake 回退 config
-     * master.authToken，空串 = 显式不鉴权，线格式不追加 token 字节）。
+     * （M1 bootstrap 下发 token；authToken 为 null 时 sendHandshake 回退
+     * {@link io.github.limuqy.mc.hassium.network.core.NetworkCore#bootstrapAuthToken()}，
+     * 空串 = 显式不鉴权，线格式不追加 token 字节）。
      */
     public static OutboundConnection connect(String host, int port,
                                              HandshakeCodec.ClientRequestOptions options,
@@ -234,11 +235,12 @@ public final class OutboundConnection {
      * 发送 C2S 握手请求（channelActive 自动发送；显式调用用于重发）。
      * 构造时若指定续流状态尾（T8），请求一并携带。
      * D-M2: 握手帧携带鉴权 token——连接级（M1 bootstrap 下发）优先，
-     * 缺省回退客户端配置 master.authToken（双端同键；空 = 不鉴权）。
+     * 缺省回退 {@link io.github.limuqy.mc.hassium.network.core.NetworkCore#bootstrapAuthToken()}
+     * （gateway_info；空 = 不鉴权）。
      */
     public void sendHandshake(HandshakeCodec.ClientRequestOptions options) {
         String token = authToken != null ? authToken
-                : io.github.limuqy.mc.hassium.config.HassiumConfigService.getInstance().getMasterAuthToken();
+                : io.github.limuqy.mc.hassium.network.core.NetworkCore.getInstance().bootstrapAuthToken();
         sendFrame(ControlFrameType.HANDSHAKE_C2S, HandshakeCodec.encodeClientRequest(options, handshakeTail, token));
     }
 

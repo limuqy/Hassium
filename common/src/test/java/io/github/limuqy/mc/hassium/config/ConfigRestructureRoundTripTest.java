@@ -41,13 +41,13 @@ class ConfigRestructureRoundTripTest {
         Map<String, ConfigEntry<?>> byPath = ConfigSchema.entries().stream()
                 .collect(Collectors.toMap(e -> e.scope() + "/" + e.path(), Function.identity()));
 
-        assertEquals(84, ConfigSchema.entries().size(), "schema 留存键数（71 既有 + 7 迁移键族 + 1 CLIENT 端点副本 + 3 D-M2 网关鉴权键 + 2 B 续流票据 TTL 双端键）");
-        assertEquals(84, values.asMap().size(), "defaults 键数");
+        assertEquals(81, ConfigSchema.entries().size(), "schema 留存键数（84 原 − 3 客户端多余 master 副本：authToken/endpoints/resumeTicketTtl）");
+        assertEquals(81, values.asMap().size(), "defaults 键数");
 
         Map<String, Long> prefixCounts = ConfigSchema.entries().stream()
                 .collect(Collectors.groupingBy(e -> e.path().substring(0, e.path().indexOf('.') + 1),
                         Collectors.counting()));
-        assertEquals(Map.of("chunk.", 23L, "net.", 3L, "master.", 34L, "debug.", 18L,
+        assertEquals(Map.of("chunk.", 23L, "net.", 3L, "master.", 31L, "debug.", 18L,
                 "dataplane.", 2L, "storage.", 2L, "compat.", 2L), prefixCounts);
 
         // 双端同名键 chunk.seedGenEnabled 各一
@@ -103,6 +103,9 @@ class ConfigRestructureRoundTripTest {
         assertTrue(toml.contains("migrationHeartbeatIntervalMs = 3000"), "client toml 缺 migrationHeartbeatIntervalMs:\n" + toml);
         assertTrue(toml.contains("migrationIdleWindowMs = 8000"), "client toml 缺 migrationIdleWindowMs:\n" + toml);
         assertTrue(toml.contains("migrationSilentTimeoutMs = 9000"), "client toml 缺 migrationSilentTimeoutMs:\n" + toml);
+        assertFalse(toml.contains("authToken"), "client.toml 不应再写 master.authToken（改由 gateway_info 下发）:\n" + toml);
+        assertFalse(toml.contains("controlReachableEndpoints"),
+                "client.toml 不应再写 master.controlReachableEndpoints:\n" + toml);
     }
 
     // === 2+3. server toml round-trip（master./dataplane./storage./compat./chunk.lightStrip）===

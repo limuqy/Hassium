@@ -178,7 +178,7 @@ Sector 2+:    [length(4)][type=126][magic 0x48][hash(8)][ZSTD 压缩数据]
 
 配置文件（双文件按物理端加载）：
 
-- `config/hassium/hassium-client.toml` — 仅物理客户端（`chunk.*` / `net.*` / 客户端侧迁移策略 `master.migration*` 与可选 `master.authToken` / `debug.*`；**控制端点不靠本文件手填**，见握手同步）
+- `config/hassium/hassium-client.toml` — 仅物理客户端（`chunk.*` / `net.*` / 客户端侧迁移策略 `master.migration*` 6 键 / `debug.*`；端点与鉴权由握手 `gateway_info` 同步，**不靠本文件手填**）
 - `config/hassium/hassium-server.toml` — 仅专用服（`storage.*` / `master.*` 含 `controlReachableEndpoints` / `dataplane.*` / `compat.*` / `debug.*`）
 
 游戏内编辑：

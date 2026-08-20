@@ -73,16 +73,16 @@ Hassium 启动时在 `config/hassium/` 自动生成两份 TOML：
 | `master.metricsEnabled` | `false` | 服务端网络指标（关闭后 `/hassium stats` 等命令不可用） |
 | `master.controlReachableEndpoints` | `[]` | **服务端**网关监听端点（`endpoints[0]` 即网关端口，未配置时兜底 `25566`）；握手 / `GatewayInfo` 同步给客户端作迁移候选——**玩家客户端无需填写** |
 | `master.bindHost` | `127.0.0.1` | 网关监听 bind host（默认回环；空串=`0.0.0.0`） |
-| `master.authToken` | `""` | 网关握手鉴权 token（空=不鉴权）；服务端配置后可由 `GatewayInfo` 下发，客户端亦可手填同值 |
+| `master.authToken` | `""` | 网关握手鉴权 token（空=不鉴权）；**仅服务端**配置，经 `GatewayInfo` 下发客户端——**玩家客户端无需填写** |
 | `master.migrationFaultTimeoutMs` | `60000` | L1 迁移 legacy 故障超时回退（ms） |
-| `master.migrationSilentTimeoutMs` | `10000` | outbound 入站静默超时（ms；默认生效值） |
-| `master.migrationMinTps` | `15.0` | 主控 TPS 低于此值触发策略迁移（CLIENT） |
-| `master.migrationMaxLoadAverage` | `4.0` | 系统负载均值高于此值触发策略迁移（CLIENT） |
-| `master.migrationMaintenanceWindow` | `""` | 维护窗口 `HH:MM-HH:MM`（空=禁用；CLIENT） |
-| `master.migrationHeartbeatIntervalMs` | `5000` | 应用层 HEARTBEAT 周期（CLIENT） |
-| `master.migrationIdleWindowMs` | `10000` | 空闲窗口判定时长（CLIENT） |
+| `master.migrationSilentTimeoutMs` | `10000` | outbound 入站静默超时（ms；默认生效值；**客户端**可调） |
+| `master.migrationMinTps` | `15.0` | 主控 TPS 低于此值触发策略迁移（**客户端**） |
+| `master.migrationMaxLoadAverage` | `4.0` | 系统负载均值高于此值触发策略迁移（**客户端**） |
+| `master.migrationMaintenanceWindow` | `""` | 维护窗口 `HH:MM-HH:MM`（空=禁用；**客户端**） |
+| `master.migrationHeartbeatIntervalMs` | `5000` | 应用层 HEARTBEAT 周期（**客户端**） |
+| `master.migrationIdleWindowMs` | `10000` | 空闲窗口判定时长（**客户端**） |
 | `master.migrationPrewarmTtlMs` | `60000` | 预热会话 TTL（SERVER） |
-| `master.resumeTicketTtlMs` | `300000` | 续流票据有效期（双端同名键） |
+| `master.resumeTicketTtlMs` | `300000` | 续流票据有效期（**仅服务端**校验消费） |
 
 ### 数据面（`dataplane.*`）
 

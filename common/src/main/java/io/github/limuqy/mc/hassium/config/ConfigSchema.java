@@ -63,19 +63,15 @@ public final class ConfigSchema {
     public static final ConfigKey<Boolean> MASTER_DYNAMIC_THREADS = bool("master.dynamicThreadPoolEnabled", ConfigScope.SERVER, Domain.MASTER_CORE, true, "是否动态调整推送线程");
     public static final ConfigKey<Integer> MASTER_MIN_PUSH_THREADS = integer("master.minPushThreads", ConfigScope.SERVER, Domain.MASTER_CORE, 2, 1, 64, "动态池最小线程数");
     public static final ConfigKey<Integer> MASTER_MAX_PUSH_THREADS = integer("master.maxPushThreads", ConfigScope.SERVER, Domain.MASTER_CORE, 8, 1, 64, "动态池最大线程数");
-    public static final ConfigKey<List<String>> MASTER_CONTROL_ENDPOINTS = stringList("master.controlReachableEndpoints", ConfigScope.SERVER, Domain.MASTER_CORE, List::of, "网关监听/outbound 端点（网关监听地址源；客户端 outbound 地址源 = 迁移引擎）");
-    /** CLIENT scope 同名键（T9 E1 接线）：客户端 outbound 初始地址源。物理客户端读 client.toml 的 SERVER scope 键（快照路径按 scope 过滤读不到），故按 chunk.seedGenEnabled 同款双端同名键模式注册 CLIENT 副本，双端读同一值 OK。 */
-    public static final ConfigKey<List<String>> CLIENT_MASTER_CONTROL_ENDPOINTS = stringList("master.controlReachableEndpoints", ConfigScope.CLIENT, Domain.MASTER_CORE, List::of, "网关监听/outbound 端点（客户端 outbound 初始地址源；服务端同键绑定监听端口，双端读同一值 OK）");
+    public static final ConfigKey<List<String>> MASTER_CONTROL_ENDPOINTS = stringList("master.controlReachableEndpoints", ConfigScope.SERVER, Domain.MASTER_CORE, List::of, "网关监听端点（服务端绑定/下发；客户端经 gateway_info 同步，无需本地配置）");
 
-    // === 网关监听与鉴权（D-M2：默认回环绑定 + 可选握手鉴权）===
+    // === 网关监听与鉴权（D-M2：默认回环绑定 + 可选握手鉴权；仅 SERVER）===
     public static final ConfigKey<String> MASTER_BIND_HOST = string("master.bindHost", ConfigScope.SERVER, Domain.MASTER_CORE, "127.0.0.1", "网关监听 bind host（默认 127.0.0.1 回环；空串=0.0.0.0 全网卡，生产多网卡显式声明）");
-    public static final ConfigKey<String> MASTER_AUTH_TOKEN = string("master.authToken", ConfigScope.SERVER, Domain.MASTER_CORE, "", "网关握手鉴权 token（默认空=不鉴权；非空时客户端握手帧需携带同值，校验失败 close(\"auth failed\")）");
-    /** CLIENT scope 同名键（D-M2 双端同键）：客户端经 client.toml 加载并随握手帧携带。 */
-    public static final ConfigKey<String> CLIENT_MASTER_AUTH_TOKEN = string("master.authToken", ConfigScope.CLIENT, Domain.MASTER_CORE, "", "网关握手鉴权 token（与服务端 master.authToken 同键；默认空=不鉴权）");
+    public static final ConfigKey<String> MASTER_AUTH_TOKEN = string("master.authToken", ConfigScope.SERVER, Domain.MASTER_CORE, "", "网关握手鉴权 token（默认空=不鉴权；经 gateway_info 下发客户端，校验失败 close(\"auth failed\")）");
 
     public static final ConfigKey<Long> MASTER_MIGRATION_FAULT_TIMEOUT_MS = longValue("master.migrationFaultTimeoutMs", ConfigScope.SERVER, Domain.MASTER_CORE, 60000L, 1L, Long.MAX_VALUE, "L1 迁移故障超时（ms；兼容键：migrationSilentTimeoutMs 未配置时回退本值，见 MigrationPolicy#resolvedSilentTimeoutMs）");
 
-    // === L1 迁移策略（master.migration*；CLIENT 6 键，客户端 MigrationEngine 消费，cloth 屏可见）===
+    // === L1 迁移策略（master.migration*；CLIENT 仅此 6 键——主控端点/鉴权由服务端握手下发）===
     public static final ConfigKey<Double> MASTER_MIGRATION_MIN_TPS = decimal("master.migrationMinTps", ConfigScope.CLIENT, Domain.MASTER_CORE, 15.0, 0.1, 100.0, "L1 迁移策略：主控 TPS 低于此值触发迁移");
     public static final ConfigKey<Double> MASTER_MIGRATION_MAX_LOAD_AVERAGE = decimal("master.migrationMaxLoadAverage", ConfigScope.CLIENT, Domain.MASTER_CORE, 4.0, 0.1, 100.0, "L1 迁移策略：主控系统负载均值高于此值触发迁移（getSystemLoadAverage 为 -1 视为无信号）");
     public static final ConfigKey<String> MASTER_MIGRATION_MAINTENANCE_WINDOW = string("master.migrationMaintenanceWindow", ConfigScope.CLIENT, Domain.MASTER_CORE, "", "L1 迁移策略：维护窗口 \"HH:MM-HH:MM\"（本地时区，含跨午夜）；空串=禁用");
@@ -95,8 +91,6 @@ public final class ConfigSchema {
     public static final ConfigKey<Long> MASTER_MIGRATION_PREWARM_TTL_MS = longValue("master.migrationPrewarmTtlMs", ConfigScope.SERVER, Domain.MASTER_CORE, 60000L, 1000L, Long.MAX_VALUE, "预热会话 TTL（ms；无续流完成的预热物化会话到期清理；T4 交付键，本键仅实现+getter）");
     /** SERVER scope：服务端 ResumeTicketValidator 时间窗口校验消费（T2 票据防重放）。 */
     public static final ConfigKey<Long> MASTER_RESUME_TICKET_TTL_MS = longValue("master.resumeTicketTtlMs", ConfigScope.SERVER, Domain.MASTER_CORE, 300000L, 1000L, Long.MAX_VALUE, "续流票据有效期（ms；T2 票据防重放时间窗口，默认 5min；旧格式票据 issuedAt=0 不受限）");
-    /** CLIENT scope 同名键（双端注册）：客户端预留，服务端校验消费；物理客户端读 client.toml 的 CLIENT 键。 */
-    public static final ConfigKey<Long> CLIENT_MASTER_RESUME_TICKET_TTL_MS = longValue("master.resumeTicketTtlMs", ConfigScope.CLIENT, Domain.MASTER_CORE, 300000L, 1000L, Long.MAX_VALUE, "续流票据有效期（ms；双端同名键，客户端预留；服务端校验消费）");
     public static final ConfigKey<Boolean> COMPAT_REQUIRE_CLIENT_MOD = bool("compat.requireClientMod", ConfigScope.SERVER, Domain.COMPAT, false, "是否强制要求客户端安装 Hassium");
     public static final ConfigKey<Boolean> COMPAT_AUTO_DOWNGRADE = bool("compat.autoDowngradeOnError", ConfigScope.SERVER, Domain.COMPAT, true, "出错时是否自动降级");
 

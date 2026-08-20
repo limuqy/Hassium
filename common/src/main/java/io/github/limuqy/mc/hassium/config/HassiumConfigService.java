@@ -423,7 +423,7 @@ public class HassiumConfigService {
         return config.master().bindHost();
     }
 
-    /** 网关握手鉴权 token（D-M2：默认空 = 不鉴权；双端同键，客户端握手帧携带）。 */
+    /** 网关握手鉴权 token（服务端配置；客户端经 gateway_info 下发，本地配置不再保留）。 */
     public String getMasterAuthToken() {
         return config.master().authToken();
     }

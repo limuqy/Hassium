@@ -124,8 +124,7 @@ public final class FabricTomlConfigIO {
     }
 
     private static Object readSchemaValue(CommentedConfig cfg, ConfigEntry<?> entry) {
-        if (entry.key() == ConfigSchema.MASTER_CONTROL_ENDPOINTS
-                || entry.key() == ConfigSchema.CLIENT_MASTER_CONTROL_ENDPOINTS) {
+        if (entry.key() == ConfigSchema.MASTER_CONTROL_ENDPOINTS) {
             return readReachableEndpoints(cfg, entry.path(), entry.path(), MAX_CONTROL_ENDPOINTS).stream()
                     .map(DataPlaneEndpointConfig::encodeReachable).toList();
         }
@@ -172,8 +171,7 @@ public final class FabricTomlConfigIO {
 
     @SuppressWarnings("unchecked")
     private static void writeSchemaValue(CommentedConfig cfg, ConfigEntry<?> entry, Object value) {
-        if (entry.key() == ConfigSchema.MASTER_CONTROL_ENDPOINTS
-                || entry.key() == ConfigSchema.CLIENT_MASTER_CONTROL_ENDPOINTS) {
+        if (entry.key() == ConfigSchema.MASTER_CONTROL_ENDPOINTS) {
             writeReachableEndpoints(cfg, entry.path(), ((List<String>) value).stream()
                     .map(DataPlaneEndpointConfig::decodeReachable).toList(), entry.comment());
         } else if (entry.key() == ConfigSchema.DATAPLANE_UDP_LISTENERS) {
@@ -338,7 +336,7 @@ public final class FabricTomlConfigIO {
         }
     }
 
-    /** 客户端 toml 的 master 迁移策略键（CLIENT scope；缺省回退传入默认）。 */
+    /** 客户端 toml 的 master 迁移策略键（CLIENT scope；缺省回退传入默认）。端点/鉴权由 gateway_info 下发，不读写。 */
     private static HassiumConfig.MasterCoreConfig readClientMigrationPolicy(
             CommentedConfig cfg, HassiumConfig.MasterCoreConfig d
     ) {
@@ -348,12 +346,10 @@ public final class FabricTomlConfigIO {
                 getString(cfg, "master.migrationMaintenanceWindow", d.migrationMaintenanceWindow()),
                 getPositiveLong(cfg, "master.migrationHeartbeatIntervalMs", d.migrationHeartbeatIntervalMs()),
                 getPositiveLong(cfg, "master.migrationIdleWindowMs", d.migrationIdleWindowMs()),
-                getPositiveLong(cfg, "master.migrationSilentTimeoutMs", d.migrationSilentTimeoutMs()))
-                // D-M2 双端同键：客户端经 client.toml 读 master.authToken（bindHost 仅服务端消费）
-                .withGatewayAuth(d.bindHost(), getString(cfg, "master.authToken", d.authToken()));
+                getPositiveLong(cfg, "master.migrationSilentTimeoutMs", d.migrationSilentTimeoutMs()));
     }
 
-    /** 客户端 toml 的 master 迁移策略键（CLIENT scope；仅迁移族，master.* 服务端键不写）。 */
+    /** 客户端 toml 的 master 迁移策略键（CLIENT scope；仅 migration* 6 键）。 */
     private static void writeClientMigrationPolicy(CommentedConfig cfg, HassiumConfig.MasterCoreConfig master) {
         set(cfg, "master.migrationMinTps", master.migrationMinTps(), "L1 迁移策略：主控 TPS 低于此值触发迁移");
         set(cfg, "master.migrationMaxLoadAverage", master.migrationMaxLoadAverage(), "L1 迁移策略：主控系统负载均值高于此值触发迁移（getSystemLoadAverage 为 -1 视为无信号）");
@@ -362,9 +358,6 @@ public final class FabricTomlConfigIO {
         set(cfg, "master.migrationIdleWindowMs", master.migrationIdleWindowMs(), "L1 迁移：空闲窗口判定时长（ms；玩家静止 + 区块 hash 稳定，适合迁移的时机）");
         set(cfg, "master.migrationSilentTimeoutMs", master.migrationSilentTimeoutMs(),
                 "L1 迁移：outbound 入站静默超时（ms；默认 10s 使失效识别 ≤15s；未配置时回退 master.migrationFaultTimeoutMs 语义）");
-        // D-M2 双端同键：客户端握手帧携带（与服务端 master.authToken 同值）
-        set(cfg, "master.authToken", master.authToken(),
-                "网关握手鉴权 token（与服务端 master.authToken 同键；默认空=不鉴权）");
     }
 
     private static void writeServer(
