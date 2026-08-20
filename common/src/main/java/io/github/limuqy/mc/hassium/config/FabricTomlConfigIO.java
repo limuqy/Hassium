@@ -593,9 +593,22 @@ public final class FabricTomlConfigIO {
 
     // --- value helpers ---
 
-    private static void set(CommentedConfig cfg, String path, Object value, String comment) {
-        cfg.setComment(path, comment);
+    /**
+     * 写键值与备注。若 path 在 {@link ConfigSchema} 中有登记，优先用 schema 双语备注
+     * （中文一行 / 英文一行）；否则用 {@code fallbackComment}。
+     */
+    private static void set(CommentedConfig cfg, String path, Object value, String fallbackComment) {
+        cfg.setComment(path, schemaCommentOr(path, fallbackComment));
         cfg.set(path, value);
+    }
+
+    private static String schemaCommentOr(String path, String fallbackComment) {
+        for (ConfigEntry<?> entry : ConfigSchema.entries()) {
+            if (entry.path().equals(path) && entry.comment() != null && !entry.comment().isBlank()) {
+                return entry.comment();
+            }
+        }
+        return fallbackComment;
     }
 
     private static boolean getBool(CommentedConfig cfg, String path, boolean def) {

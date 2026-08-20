@@ -1,5 +1,6 @@
 package io.github.limuqy.mc.hassium.platform;
 
+import io.github.limuqy.mc.hassium.config.ConfigComments;
 import io.github.limuqy.mc.hassium.config.ConfigEntry;
 import io.github.limuqy.mc.hassium.config.ConfigScope;
 import io.github.limuqy.mc.hassium.config.ConfigSchema;
@@ -68,7 +69,7 @@ public final class NeoForgeConfigBackend implements IConfigBackend {
         Map<String, ModConfigSpec.ConfigValue<?>> values = new HashMap<>();
 #endif
         for (ConfigEntry<?> entry : entries(scope)) {
-            builder.comment(entry.comment()).translation(entry.translationKey());
+            builder.comment(ConfigComments.lines(entry.comment())).translation(entry.translationKey());
 #if MC_VER < MC_1_20_2
             ForgeConfigSpec.ConfigValue<?> configValue;
 #else

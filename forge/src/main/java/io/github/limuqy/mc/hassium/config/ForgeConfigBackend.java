@@ -47,7 +47,7 @@ public final class ForgeConfigBackend implements IConfigBackend {
         ForgeConfigSpec.Builder builder = new ForgeConfigSpec.Builder();
         Map<String, ForgeConfigSpec.ConfigValue<?>> values = new HashMap<>();
         for (ConfigEntry<?> entry : entries(scope)) {
-            builder.comment(entry.comment()).translation(entry.translationKey());
+            builder.comment(ConfigComments.lines(entry.comment())).translation(entry.translationKey());
             ForgeConfigSpec.ConfigValue<?> configValue;
             switch (entry.type()) {
                 case BOOLEAN, STRING -> configValue = builder.define(entry.path(), entry.defaultValue());

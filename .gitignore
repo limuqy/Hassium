@@ -24,7 +24,7 @@ eclipse
 run
 logs
 /.codegraph/
-/.comate/
+/.cursor/
 /.omc/
 /.vscode/
 /.idea/

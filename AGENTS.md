@@ -25,10 +25,12 @@ PowerShell：始终写 `"-Pmc_ver=1.20.1"`，否则 `1.20.1` 会被截成 `1`。
 
 ## Minecraft 源码查询
 
-查 MC 源码/映射/反编译时用 **minecraft-dev**（MCP，工具名 `minecraft_dev_*`）：
+查 MC 源码/映射/反编译时用 **minecraft-dev**（工具名 `minecraft_dev_*`）：
 - `get_minecraft_source` / `decompile_minecraft_version` / `search_minecraft_code` / `search_indexed`（先 `index_minecraft_version`）— 按版本查反编译源码
 - `find_mapping` — official / intermediary / yarn / mojmap 互查
 - `analyze_mixin` / `validate_access_transformer` / `validate_access_widener` / `analyze_mod_jar` — 验证 Mixin / AT / AW / 第三方 mod
+
+游戏内看屏/点 UI/跑功能测试用 **minecraft-mod-mcp**（stdio 桥 `npx -y minecraft-mod-mcp`，配置见项目根 `.cursor/mcp.json` 与 `.mcp.json`）。**不要**把 Cursor MCP 配成指向 `localhost:9876` 的 SSE。操作手册：[`docs/ai-functional-test.md`](docs/ai-functional-test.md)。与 minecraft-dev 职责不同，禁止混用。
 
 ## 模块与包地图
 

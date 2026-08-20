@@ -13,6 +13,7 @@
 | [version-segments.md](version-segments.md) | 多版本九段适配真相源 | 当前 |
 | [mod-compat.md](mod-compat.md) | 多 Mod 兼容边界与配置逃生 | 当前 |
 | [runtime-smoke-test.md](runtime-smoke-test.md) | 多版本运行时自检与网关双主控迁移冒烟 | 当前 |
+| [ai-functional-test.md](ai-functional-test.md) | 面向 AI 的游戏内功能测试操作（minecraft-mod-mcp） | 当前 |
 | [config-audit.md](config-audit.md) | 配置项审计与清理记录 | 当前 |
 | [network-core-followups.md](network-core-followups.md) | 网络核心未达项交接清单（后续波） | 当前 |
 | [curseforge-description.md](curseforge-description.md) | CurseForge 发布描述草稿 | 当前 |
