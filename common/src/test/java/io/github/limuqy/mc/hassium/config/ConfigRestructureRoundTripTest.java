@@ -41,13 +41,13 @@ class ConfigRestructureRoundTripTest {
         Map<String, ConfigEntry<?>> byPath = ConfigSchema.entries().stream()
                 .collect(Collectors.toMap(e -> e.scope() + "/" + e.path(), Function.identity()));
 
-        assertEquals(81, ConfigSchema.entries().size(), "schema 留存键数（84 原 − 3 客户端多余 master 副本：authToken/endpoints/resumeTicketTtl）");
-        assertEquals(81, values.asMap().size(), "defaults 键数");
+        assertEquals(77, ConfigSchema.entries().size(), "schema 留存键数（81 原 − 4：debug 按端裁剪 dataplane/metadata/cache/lightVerify 对端副本）");
+        assertEquals(77, values.asMap().size(), "defaults 键数");
 
         Map<String, Long> prefixCounts = ConfigSchema.entries().stream()
                 .collect(Collectors.groupingBy(e -> e.path().substring(0, e.path().indexOf('.') + 1),
                         Collectors.counting()));
-        assertEquals(Map.of("chunk.", 23L, "net.", 3L, "master.", 31L, "debug.", 18L,
+        assertEquals(Map.of("chunk.", 23L, "net.", 3L, "master.", 31L, "debug.", 14L,
                 "dataplane.", 2L, "storage.", 2L, "compat.", 2L), prefixCounts);
 
         // 双端同名键 chunk.seedGenEnabled 各一
@@ -95,6 +95,7 @@ class ConfigRestructureRoundTripTest {
         assertTrue(toml.contains("unloadDelaySecs = 45"), "client toml 缺 chunk.unloadDelaySecs=45:\n" + toml);
         assertTrue(toml.contains("[net]"), "client toml 缺 [net] 表");
         assertTrue(toml.contains("lightVerify = true"), "client toml 缺 debug.lightVerify=true");
+        assertFalse(toml.contains("dataplaneLogging"), "client toml 不应含服务端专属 debug.dataplaneLogging:\n" + toml);
         // B2：迁移策略键进 client.toml（CLIENT scope）
         assertTrue(toml.contains("migrationMinTps = 12.0"), "client toml 缺 migrationMinTps=12.0:\n" + toml);
         assertTrue(toml.contains("migrationMaxLoadAverage = 5.5"), "client toml 缺 migrationMaxLoadAverage=5.5:\n" + toml);
@@ -171,6 +172,10 @@ class ConfigRestructureRoundTripTest {
         assertTrue(toml.contains("lightStrip = false"), "server toml 缺 chunk.lightStrip=false");
         assertTrue(toml.contains("zstdLevel = 9"), "server toml 缺 storage.zstdLevel=9");
         assertTrue(toml.contains("autoDowngradeOnError = false"), "server toml 缺 compat.autoDowngradeOnError=false");
+        assertTrue(toml.contains("dataplaneLogging = true"), "server toml 缺 debug.dataplaneLogging=true:\n" + toml);
+        assertFalse(toml.contains("metadataLogging"), "server toml 不应含客户端专属 debug.metadataLogging:\n" + toml);
+        assertFalse(toml.contains("cacheLogging"), "server toml 不应含客户端专属 debug.cacheLogging:\n" + toml);
+        assertFalse(toml.contains("lightVerify"), "server toml 不应含客户端专属 debug.lightVerify:\n" + toml);
     }
 
     // === 4. 删键不再出现 ===

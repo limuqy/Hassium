@@ -230,15 +230,17 @@ Sector 2+:    [length(4)][type=126][magic 0x48][hash(8)][ZSTD 压缩数据]
 
 热路径（收发包、命中/未命中、压缩大小等）走 `DebugLogger`，由 `debug.*` 控制：
 
-| 配置键 | 含义 |
-|--------|------|
-| `debug.metadataLogging` | chunkHash / 元数据比对 |
-| `debug.dispatcherLogging` | 主线程调度 |
-| `debug.asyncLogging` | 异步任务（含 SeedGen 生成/超时） |
-| `debug.compressionLogging` | 压缩/解压 |
-| `debug.chunkApplyLogging` | 区块 apply |
-| `debug.networkLogging` | 网络收发 |
-| `debug.cacheLogging` | 缓存读写 |
+| 配置键 | 端 | 含义 |
+|--------|----|------|
+| `debug.metadataLogging` | 客户端 | chunkHash / 元数据比对 |
+| `debug.dispatcherLogging` | 双端 | 主线程调度 / MSPT |
+| `debug.asyncLogging` | 双端 | 异步任务（客户端含 SeedGen 生成/超时） |
+| `debug.compressionLogging` | 双端 | 压缩/解压 |
+| `debug.chunkApplyLogging` | 双端 | 区块 apply / 服务端 resync |
+| `debug.networkLogging` | 双端 | 网络收发 |
+| `debug.cacheLogging` | 客户端 | 缓存读写 |
+| `debug.lightVerify` | 客户端 | 光照验算 |
+| `debug.dataplaneLogging` | 服务端 | UDP 数据面热路径 |
 
 ERROR / WARN 始终输出。
 

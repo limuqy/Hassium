@@ -47,7 +47,6 @@ public final class ConfigSnapshotAdapter {
                 .with(ConfigSchema.CLIENT_DEBUG_CHUNK_APPLY, debug.chunkApplyLogging())
                 .with(ConfigSchema.CLIENT_DEBUG_NETWORK, debug.networkLogging())
                 .with(ConfigSchema.CLIENT_DEBUG_CACHE, debug.cacheLogging())
-                .with(ConfigSchema.CLIENT_DEBUG_DATAPLANE, debug.dataplaneLogging())
                 .with(ConfigSchema.CLIENT_DEBUG_LIGHT_VERIFY, debug.lightVerify());
         HassiumConfig.MasterCoreConfig master = config.master();
         values = values.with(ConfigSchema.STORAGE_ENABLED, config.storage().enabled())
@@ -90,15 +89,12 @@ public final class ConfigSnapshotAdapter {
         HassiumConfig.CompatConfig compat = config.compat();
         values = values.with(ConfigSchema.COMPAT_REQUIRE_CLIENT_MOD, compat.requireClientMod())
                 .with(ConfigSchema.COMPAT_AUTO_DOWNGRADE, compat.autoDowngradeOnError());
-        return values.with(ConfigSchema.SERVER_DEBUG_METADATA, debug.metadataLogging())
-                .with(ConfigSchema.SERVER_DEBUG_DISPATCHER, debug.dispatcherLogging())
+        return values.with(ConfigSchema.SERVER_DEBUG_DISPATCHER, debug.dispatcherLogging())
                 .with(ConfigSchema.SERVER_DEBUG_ASYNC, debug.asyncLogging())
                 .with(ConfigSchema.SERVER_DEBUG_COMPRESSION, debug.compressionLogging())
                 .with(ConfigSchema.SERVER_DEBUG_CHUNK_APPLY, debug.chunkApplyLogging())
                 .with(ConfigSchema.SERVER_DEBUG_NETWORK, debug.networkLogging())
-                .with(ConfigSchema.SERVER_DEBUG_CACHE, debug.cacheLogging())
-                .with(ConfigSchema.SERVER_DEBUG_DATAPLANE, debug.dataplaneLogging())
-                .with(ConfigSchema.SERVER_DEBUG_LIGHT_VERIFY, debug.lightVerify());
+                .with(ConfigSchema.SERVER_DEBUG_DATAPLANE, debug.dataplaneLogging());
     }
 
     public static HassiumConfig fromValues(ConfigValues values) {
@@ -107,10 +103,10 @@ public final class ConfigSnapshotAdapter {
 
     /**
      * Restores a runtime snapshot from schema values, choosing CLIENT or SERVER {@code debug.*}
-     * keys according to the running physical side. The schema registers a parallel
-     * {@code debug.*} set per scope, while {@link HassiumConfig} carries a single
-     * {@link HassiumConfig.DebugConfig}; on the physical client the active DebugConfig
-     * mirrors {@code CLIENT_DEBUG_*}, on a dedicated server it mirrors {@code SERVER_DEBUG_*}.
+     * keys according to the running physical side. Dual-scoped flags (dispatcher / async /
+     * compression / chunkApply / network) read the matching side; client-only flags
+     * (metadata / cache / lightVerify) and the server-only flag (dataplane) always come
+     * from their own schema key (the other side keeps the default {@code false}).
      * The same side-routing applies to the double-scoped {@code chunk.seedGenEnabled}.
      */
     public static HassiumConfig fromValues(ConfigValues values, boolean physicalClient) {
@@ -167,15 +163,15 @@ public final class ConfigSnapshotAdapter {
         HassiumConfig.CompatConfig compat = new HassiumConfig.CompatConfig(
                 values.get(ConfigSchema.COMPAT_REQUIRE_CLIENT_MOD), values.get(ConfigSchema.COMPAT_AUTO_DOWNGRADE));
         HassiumConfig.DebugConfig debug = new HassiumConfig.DebugConfig(
-                debugValue(values, physicalClient, ConfigSchema.CLIENT_DEBUG_METADATA, ConfigSchema.SERVER_DEBUG_METADATA),
+                values.get(ConfigSchema.CLIENT_DEBUG_METADATA),
                 debugValue(values, physicalClient, ConfigSchema.CLIENT_DEBUG_DISPATCHER, ConfigSchema.SERVER_DEBUG_DISPATCHER),
                 debugValue(values, physicalClient, ConfigSchema.CLIENT_DEBUG_ASYNC, ConfigSchema.SERVER_DEBUG_ASYNC),
                 debugValue(values, physicalClient, ConfigSchema.CLIENT_DEBUG_COMPRESSION, ConfigSchema.SERVER_DEBUG_COMPRESSION),
                 debugValue(values, physicalClient, ConfigSchema.CLIENT_DEBUG_CHUNK_APPLY, ConfigSchema.SERVER_DEBUG_CHUNK_APPLY),
                 debugValue(values, physicalClient, ConfigSchema.CLIENT_DEBUG_NETWORK, ConfigSchema.SERVER_DEBUG_NETWORK),
-                debugValue(values, physicalClient, ConfigSchema.CLIENT_DEBUG_CACHE, ConfigSchema.SERVER_DEBUG_CACHE),
-                debugValue(values, physicalClient, ConfigSchema.CLIENT_DEBUG_DATAPLANE, ConfigSchema.SERVER_DEBUG_DATAPLANE),
-                debugValue(values, physicalClient, ConfigSchema.CLIENT_DEBUG_LIGHT_VERIFY, ConfigSchema.SERVER_DEBUG_LIGHT_VERIFY));
+                values.get(ConfigSchema.CLIENT_DEBUG_CACHE),
+                values.get(ConfigSchema.SERVER_DEBUG_DATAPLANE),
+                values.get(ConfigSchema.CLIENT_DEBUG_LIGHT_VERIFY));
         return new HassiumConfig(new HassiumConfig.StorageConfig(
                 values.get(ConfigSchema.STORAGE_ENABLED), values.get(ConfigSchema.STORAGE_ZSTD_LEVEL)),
                 chunk, new HassiumConfig.NetCoreConfig(

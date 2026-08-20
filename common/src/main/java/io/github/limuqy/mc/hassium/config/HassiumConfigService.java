@@ -97,7 +97,7 @@ public class HassiumConfigService {
         return tomlBackend.get();
     }
 
-    /** 客户端 debug.dataplaneLogging：数据面/主控热切诊断日志（默认 false，需要时打开）。 */
+    /** 服务端 debug.dataplaneLogging：数据面热路径诊断日志（默认 false，需要时打开）。 */
     public boolean isDataplaneLogging() {
         return config.debug().dataplaneLogging();
     }

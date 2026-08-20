@@ -143,7 +143,7 @@ SectionDeltaS2CPacket        // 服务端 → 客户端（变更 sections + heig
 
 ## 8. 调试
 
-默认无热路径 INFO。排查时打开 `config/hassium/hassium-server.toml` 的 `debug.metadataLogging` / `debug.networkLogging` / `debug.cacheLogging` 等（见 architecture）。运行时统计：`/hassiumc stats`。
+默认无热路径 INFO。排查时打开 `config/hassium/hassium-client.toml` 的 `debug.metadataLogging` / `debug.networkLogging` / `debug.cacheLogging` 等（见 architecture）。运行时统计：`/hassiumc stats`。
 
 ## 9. 待实现
 

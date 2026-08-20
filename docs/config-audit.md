@@ -58,9 +58,9 @@
 | `net.metricsEnabled` | `false` | 客户端网络指标 |
 | `net.metricsAutoReset` | `true` | 登出自动重置指标 |
 
-**A3. debug.\*（9 键，支撑设施）**
+**A3. debug.\*（8 键，支撑设施；不含数据面）**
 
-`debug.metadataLogging` / `dispatcherLogging` / `asyncLogging` / `compressionLogging` / `chunkApplyLogging` / `networkLogging` / `cacheLogging` / `dataplaneLogging` / `lightVerify` —— 全 `false`（客户端调试日志族）
+`debug.metadataLogging` / `dispatcherLogging` / `asyncLogging` / `compressionLogging` / `chunkApplyLogging` / `networkLogging` / `cacheLogging` / `lightVerify` —— 全 `false`（客户端调试日志族）
 
 ### B. SERVER 键（server.toml / server spec，38 键）
 
@@ -118,9 +118,9 @@
 | `compat.requireClientMod` | `false` | 强制客户端装 Hassium |
 | `compat.autoDowngradeOnError` | `true` | 出错自动降级 |
 
-**B6. debug.\*（9 键，支撑设施）**
+**B6. debug.\*（6 键，支撑设施；不含元数据/缓存/光照验算）**
 
-`debug.metadataLogging` / `dispatcherLogging` / `asyncLogging` / `compressionLogging` / `chunkApplyLogging` / `networkLogging` / `cacheLogging` / `dataplaneLogging` / `lightVerify` —— 全 `false`（服务端调试日志族）
+`debug.dispatcherLogging` / `asyncLogging` / `compressionLogging` / `chunkApplyLogging` / `networkLogging` / `dataplaneLogging` —— 全 `false`（服务端调试日志族）
 
 ### C. 删键（4 键，REQ 决策 2/B）
 
@@ -195,11 +195,11 @@
 |------|--------|------|----------------|
 | `chunk.*` CLIENT | 区块核心 | 21 | `ovdLocalGeneration`=false、`seedGenEnabled`=false、`seedGenThreads`=0 表示禁用 |
 | `net.*` | 网络核心 | 3 | `metricsEnabled`=false |
-| `debug.*` CLIENT | 调试 | 9 | 全 false |
+| `debug.*` CLIENT | 调试 | 8 | 全 false |
 | `storage.*` | 存储 | 2 | `enabled`=false |
 | `master.*` | 主控核心 | 21 | `metricsEnabled`=false、`controlReachableEndpoints`=[] |
 | `chunk.*` SERVER | 区块核心 | 2 | `seedGenEnabled`=false |
 | `dataplane.*` | 数据面 | 2 | `enabled`=false（UDP 默认关） |
 | `compat.*` | 兼容 | 2 | `requireClientMod`=false |
-| `debug.*` SERVER | 调试 | 9 | 全 false |
+| `debug.*` SERVER | 调试 | 6 | 全 false |
 | **留存合计** | | **71** | **删键 4**（recoveryFreeze/controlStallMs/failoverExpiryMs/storage.mode） |

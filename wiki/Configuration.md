@@ -105,19 +105,31 @@ Hassium 启动时在 `config/hassium/` 自动生成两份 TOML：
 | `compat.requireClientMod` | `false` | 关 = 无模组客户端可连（仅享受服务端压缩）；开则强制客户端装模组 |
 | `compat.autoDowngradeOnError` | `true` | 出错时自动回退原版行为 |
 
-### 调试（`debug.*`，双端）
+### 调试（`debug.*`，按端分离）
+
+客户端 `hassium-client.toml`：
 
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
 | `debug.metadataLogging` | `false` | chunkHash / 元数据比对日志 |
 | `debug.dispatcherLogging` | `false` | 主线程调度日志 |
-| `debug.asyncLogging` | `false` | 异步任务日志 |
-| `debug.compressionLogging` | `false` | 压缩/解压日志 |
+| `debug.asyncLogging` | `false` | 异步任务日志（含 SeedGen / 影子端） |
+| `debug.compressionLogging` | `false` | 解压日志 |
 | `debug.chunkApplyLogging` | `false` | 区块 apply 日志 |
 | `debug.networkLogging` | `false` | 网络收发日志 |
 | `debug.cacheLogging` | `false` | 缓存读写日志 |
-| `debug.dataplaneLogging` | `false` | 数据面热路径日志 |
 | `debug.lightVerify` | `false` | 光照验算日志 |
+
+服务端 `hassium-server.toml`：
+
+| 键 | 默认 | 说明 |
+| --- | --- | --- |
+| `debug.dispatcherLogging` | `false` | 主线程调度 / MSPT 日志 |
+| `debug.asyncLogging` | `false` | 异步任务日志 |
+| `debug.compressionLogging` | `false` | 压缩发包日志 |
+| `debug.chunkApplyLogging` | `false` | 区块补发 / resync 日志 |
+| `debug.networkLogging` | `false` | 网络收发日志 |
+| `debug.dataplaneLogging` | `false` | UDP 数据面热路径日志 |
 
 热路径默认安静（仅少量生命周期 INFO）；排查时按需开启对应 `debug.*`。ERROR / WARN 始终输出。详见 [Troubleshooting](Troubleshooting)。
 

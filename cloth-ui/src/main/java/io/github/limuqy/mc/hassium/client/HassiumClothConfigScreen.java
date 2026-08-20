@@ -17,7 +17,7 @@ import java.util.function.Consumer;
  * <p>
  * 仅显示客户端字段；服务端字段不出现 GUI 中，toConfig() 用 DEFAULT 填充。
  * <p>
- * UI 4 类分组（REQ 决策 5）：区块缓存（11 项）/ 渲染与生成（10 项）/ 网络与连接（3 项）/ 调试（9 项）。
+ * UI 4 类分组（REQ 决策 5）：区块缓存（11 项）/ 渲染与生成（10 项）/ 网络与连接（3 项）/ 调试（8 项）。
  */
 public final class HassiumClothConfigScreen {
 
@@ -138,7 +138,7 @@ public final class HassiumClothConfigScreen {
                 (int) draft.migrationSilentTimeoutMs, (int) dMaster.migrationSilentTimeoutMs(),
                 1000, 600000, v -> draft.migrationSilentTimeoutMs = v));
 
-        // === Category 4: 调试（9 项）===
+        // === Category 4: 调试（客户端 8 项；dataplaneLogging 仅服务端 toml）===
         ConfigCategory debugCat = builder.getOrCreateCategory(
                 Component.translatable("hassium.configuration.category.debug"));
         debugCat.addEntry(bool(entries, "hassium.configuration.debug.metadataLogging",
@@ -155,8 +155,6 @@ public final class HassiumClothConfigScreen {
                 draft.networkLogging, dDebug.networkLogging(), v -> draft.networkLogging = v));
         debugCat.addEntry(bool(entries, "hassium.configuration.debug.cacheLogging",
                 draft.cacheLogging, dDebug.cacheLogging(), v -> draft.cacheLogging = v));
-        debugCat.addEntry(bool(entries, "hassium.configuration.debug.dataplaneLogging",
-                draft.dataplaneLogging, dDebug.dataplaneLogging(), v -> draft.dataplaneLogging = v));
         debugCat.addEntry(bool(entries, "hassium.configuration.debug.lightVerify",
                 draft.lightVerify, dDebug.lightVerify(), v -> draft.lightVerify = v));
         return builder.build();

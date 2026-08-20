@@ -181,7 +181,7 @@ public final class ConfigSchema {
     public static final ConfigKey<Boolean> COMPAT_AUTO_DOWNGRADE = bool("compat.autoDowngradeOnError", ConfigScope.SERVER, Domain.COMPAT, true,
             "出错时是否自动降级", "Auto-downgrade on error");
 
-    // === 调试（debug.*；CLIENT 9 键）===
+    // === 调试（debug.*；CLIENT 8 键：元数据/缓存/光照验算为客户端专属；数据面不在此端）===
     public static final ConfigKey<Boolean> CLIENT_DEBUG_METADATA = bool("debug.metadataLogging", ConfigScope.CLIENT, Domain.DEBUG, false,
             "元数据调试日志", "Metadata debug logging");
     public static final ConfigKey<Boolean> CLIENT_DEBUG_DISPATCHER = bool("debug.dispatcherLogging", ConfigScope.CLIENT, Domain.DEBUG, false,
@@ -196,14 +196,10 @@ public final class ConfigSchema {
             "网络调试日志", "Network debug logging");
     public static final ConfigKey<Boolean> CLIENT_DEBUG_CACHE = bool("debug.cacheLogging", ConfigScope.CLIENT, Domain.DEBUG, false,
             "缓存调试日志", "Cache debug logging");
-    public static final ConfigKey<Boolean> CLIENT_DEBUG_DATAPLANE = bool("debug.dataplaneLogging", ConfigScope.CLIENT, Domain.DEBUG, false,
-            "数据面调试日志", "Data-plane debug logging");
     public static final ConfigKey<Boolean> CLIENT_DEBUG_LIGHT_VERIFY = bool("debug.lightVerify", ConfigScope.CLIENT, Domain.DEBUG, false,
             "光照验算（官方引擎对照 BFS 结果）", "Light verification (compare against official engine BFS)");
 
-    // === 调试（debug.*；SERVER 9 键）===
-    public static final ConfigKey<Boolean> SERVER_DEBUG_METADATA = bool("debug.metadataLogging", ConfigScope.SERVER, Domain.DEBUG, false,
-            "元数据调试日志", "Metadata debug logging");
+    // === 调试（debug.*；SERVER 6 键：数据面为服务端专属；不含元数据/缓存/光照验算）===
     public static final ConfigKey<Boolean> SERVER_DEBUG_DISPATCHER = bool("debug.dispatcherLogging", ConfigScope.SERVER, Domain.DEBUG, false,
             "主线程调度调试日志", "Main-thread dispatcher debug logging");
     public static final ConfigKey<Boolean> SERVER_DEBUG_ASYNC = bool("debug.asyncLogging", ConfigScope.SERVER, Domain.DEBUG, false,
@@ -214,12 +210,8 @@ public final class ConfigSchema {
             "区块 apply 调试日志", "Chunk-apply debug logging");
     public static final ConfigKey<Boolean> SERVER_DEBUG_NETWORK = bool("debug.networkLogging", ConfigScope.SERVER, Domain.DEBUG, false,
             "网络调试日志", "Network debug logging");
-    public static final ConfigKey<Boolean> SERVER_DEBUG_CACHE = bool("debug.cacheLogging", ConfigScope.SERVER, Domain.DEBUG, false,
-            "缓存调试日志", "Cache debug logging");
     public static final ConfigKey<Boolean> SERVER_DEBUG_DATAPLANE = bool("debug.dataplaneLogging", ConfigScope.SERVER, Domain.DEBUG, false,
             "数据面调试日志", "Data-plane debug logging");
-    public static final ConfigKey<Boolean> SERVER_DEBUG_LIGHT_VERIFY = bool("debug.lightVerify", ConfigScope.SERVER, Domain.DEBUG, false,
-            "光照验算（官方引擎对照 BFS 结果）", "Light verification (compare against official engine BFS)");
 
     static {
         validateUniquePaths();

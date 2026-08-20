@@ -105,19 +105,31 @@ In-game config screen entry points:
 | `compat.requireClientMod` | `false` | Off = vanilla clients can join (server-only compression benefit); on = require the mod on clients |
 | `compat.autoDowngradeOnError` | `true` | Fall back to vanilla behavior on errors |
 
-### Debug (`debug.*`, both sides)
+### Debug (`debug.*`, split by side)
+
+Client `hassium-client.toml`:
 
 | Key | Default | Notes |
 | --- | --- | --- |
 | `debug.metadataLogging` | `false` | chunkHash / metadata comparison logs |
 | `debug.dispatcherLogging` | `false` | Main-thread dispatch logs |
-| `debug.asyncLogging` | `false` | Async task logs |
-| `debug.compressionLogging` | `false` | Compression / decompression logs |
+| `debug.asyncLogging` | `false` | Async task logs (incl. SeedGen / shadow) |
+| `debug.compressionLogging` | `false` | Decompression logs |
 | `debug.chunkApplyLogging` | `false` | Chunk apply logs |
 | `debug.networkLogging` | `false` | Network send / receive logs |
 | `debug.cacheLogging` | `false` | Cache read / write logs |
-| `debug.dataplaneLogging` | `false` | Data-plane hot-path logs |
 | `debug.lightVerify` | `false` | Light verification logs |
+
+Server `hassium-server.toml`:
+
+| Key | Default | Notes |
+| --- | --- | --- |
+| `debug.dispatcherLogging` | `false` | Main-thread dispatch / MSPT logs |
+| `debug.asyncLogging` | `false` | Async task logs |
+| `debug.compressionLogging` | `false` | Compression send logs |
+| `debug.chunkApplyLogging` | `false` | Resync / catch-up logs |
+| `debug.networkLogging` | `false` | Network send / receive logs |
+| `debug.dataplaneLogging` | `false` | UDP data-plane hot-path logs |
 
 The hot path is quiet by default (only a few lifecycle INFO logs). Toggle `debug.*` categories as needed while debugging. ERROR / WARN are always emitted. See [Troubleshooting](Troubleshooting-en).
 

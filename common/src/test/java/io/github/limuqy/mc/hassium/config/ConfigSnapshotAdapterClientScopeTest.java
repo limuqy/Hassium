@@ -62,7 +62,8 @@ class ConfigSnapshotAdapterClientScopeTest {
         assertEquals(true, values.get(ConfigSchema.CLIENT_DEBUG_CHUNK_APPLY));
         assertEquals(false, values.get(ConfigSchema.CLIENT_DEBUG_NETWORK));
         assertEquals(true, values.get(ConfigSchema.CLIENT_DEBUG_CACHE));
-        assertEquals(false, values.get(ConfigSchema.CLIENT_DEBUG_DATAPLANE));
+        assertEquals(true, values.get(ConfigSchema.CLIENT_DEBUG_LIGHT_VERIFY));
+        assertEquals(false, values.get(ConfigSchema.SERVER_DEBUG_DATAPLANE));
     }
 
     @Test
@@ -95,9 +96,22 @@ class ConfigSnapshotAdapterClientScopeTest {
         assertTrue(ConfigSchema.serverEntries().stream()
                 .noneMatch(e -> e.key() == ConfigSchema.CLIENT_DEBUG_METADATA));
         assertTrue(ConfigSchema.clientEntries().stream()
-                .noneMatch(e -> e.key() == ConfigSchema.SERVER_DEBUG_METADATA));
+                .noneMatch(e -> e.key() == ConfigSchema.SERVER_DEBUG_DATAPLANE));
         assertFalse(ConfigSchema.clientEntries().isEmpty());
         assertFalse(ConfigSchema.serverEntries().isEmpty());
+    }
+
+    @Test
+    void debugKeysAreSplitBySide() {
+        assertTrue(ConfigSchema.clientEntries().stream().anyMatch(e -> e.path().equals("debug.metadataLogging")));
+        assertTrue(ConfigSchema.clientEntries().stream().anyMatch(e -> e.path().equals("debug.lightVerify")));
+        assertTrue(ConfigSchema.clientEntries().stream().anyMatch(e -> e.path().equals("debug.cacheLogging")));
+        assertTrue(ConfigSchema.clientEntries().stream().noneMatch(e -> e.path().equals("debug.dataplaneLogging")));
+
+        assertTrue(ConfigSchema.serverEntries().stream().anyMatch(e -> e.path().equals("debug.dataplaneLogging")));
+        assertTrue(ConfigSchema.serverEntries().stream().noneMatch(e -> e.path().equals("debug.metadataLogging")));
+        assertTrue(ConfigSchema.serverEntries().stream().noneMatch(e -> e.path().equals("debug.cacheLogging")));
+        assertTrue(ConfigSchema.serverEntries().stream().noneMatch(e -> e.path().equals("debug.lightVerify")));
     }
 
     @Test

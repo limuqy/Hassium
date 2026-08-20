@@ -24,17 +24,19 @@
 
 ## 调试日志开关
 
-`config/hassium/hassium-client.toml` 或 `config/hassium/hassium-server.toml` 末尾的 `debug.*`：
+`config/hassium/hassium-client.toml` 或 `config/hassium/hassium-server.toml` 末尾的 `debug.*`（按端分离，不是两端同一套键）：
 
-| 配置键 | 含义 |
-| --- | --- |
-| `debug.metadataLogging` | chunkHash / 元数据比对 |
-| `debug.dispatcherLogging` | 主线程调度 |
-| `debug.asyncLogging` | 异步任务 |
-| `debug.compressionLogging` | 压缩/解压 |
-| `debug.chunkApplyLogging` | 区块 apply |
-| `debug.networkLogging` | 网络收发 |
-| `debug.cacheLogging` | 缓存读写 |
+| 配置键 | 端 | 含义 |
+| --- | --- | --- |
+| `debug.metadataLogging` | 客户端 | chunkHash / 元数据比对 |
+| `debug.dispatcherLogging` | 双端 | 主线程调度 |
+| `debug.asyncLogging` | 双端 | 异步任务 |
+| `debug.compressionLogging` | 双端 | 压缩/解压 |
+| `debug.chunkApplyLogging` | 双端 | 区块 apply |
+| `debug.networkLogging` | 双端 | 网络收发 |
+| `debug.cacheLogging` | 客户端 | 缓存读写 |
+| `debug.lightVerify` | 客户端 | 光照验算 |
+| `debug.dataplaneLogging` | 服务端 | UDP 数据面热路径 |
 
 按需打开某一类；热路径默认安静，全员开启会显著影响 FPS。`ERROR` / `WARN` 始终输出。
 

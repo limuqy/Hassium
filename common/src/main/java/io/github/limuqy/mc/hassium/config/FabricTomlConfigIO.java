@@ -18,8 +18,8 @@ import java.util.Set;
 /**
  * Fabric 自管 toml 读写（二文件模型）。
  * <p>
- * 物理客户端：{@code hassium/hassium-client.toml}（chunk + net + debug）<br>
- * 专用服：{@code hassium/hassium-server.toml}（storage + master + compat + debug）
+ * 物理客户端：{@code hassium/hassium-client.toml}（chunk + net + 客户端 debug）<br>
+ * 专用服：{@code hassium/hassium-server.toml}（storage + master + compat + 服务端 debug）
  */
 public final class FabricTomlConfigIO {
 
@@ -331,7 +331,7 @@ public final class FabricTomlConfigIO {
             writeChunkCore(cfg, chunk);
             writeNetCore(cfg, net);
             writeClientMigrationPolicy(cfg, master);
-            writeDebug(cfg, debug);
+            writeClientDebug(cfg, debug);
             cfg.save();
         }
     }
@@ -373,7 +373,7 @@ public final class FabricTomlConfigIO {
             writeServerChunk(cfg, chunk);
             writeMasterCore(cfg, master);
             writeCompat(cfg, compat);
-            writeDebug(cfg, debug);
+            writeServerDebug(cfg, debug);
             cfg.save();
         }
     }
@@ -579,7 +579,7 @@ public final class FabricTomlConfigIO {
         );
     }
 
-    private static void writeDebug(CommentedConfig cfg, HassiumConfig.DebugConfig d) {
+    private static void writeClientDebug(CommentedConfig cfg, HassiumConfig.DebugConfig d) {
         set(cfg, "debug.metadataLogging", d.metadataLogging(), "元数据调试日志");
         set(cfg, "debug.dispatcherLogging", d.dispatcherLogging(), "主线程调度调试日志");
         set(cfg, "debug.asyncLogging", d.asyncLogging(), "异步任务调试日志");
@@ -587,8 +587,16 @@ public final class FabricTomlConfigIO {
         set(cfg, "debug.chunkApplyLogging", d.chunkApplyLogging(), "区块 apply 调试日志");
         set(cfg, "debug.networkLogging", d.networkLogging(), "网络调试日志");
         set(cfg, "debug.cacheLogging", d.cacheLogging(), "缓存调试日志");
-        set(cfg, "debug.dataplaneLogging", d.dataplaneLogging(), "数据面（多通道 Data Plane）热路径日志 — 默认 false 以避免高频刷屏");
         set(cfg, "debug.lightVerify", d.lightVerify(), "光照验算（官方引擎对照 BFS 结果）");
+    }
+
+    private static void writeServerDebug(CommentedConfig cfg, HassiumConfig.DebugConfig d) {
+        set(cfg, "debug.dispatcherLogging", d.dispatcherLogging(), "主线程调度调试日志");
+        set(cfg, "debug.asyncLogging", d.asyncLogging(), "异步任务调试日志");
+        set(cfg, "debug.compressionLogging", d.compressionLogging(), "压缩调试日志");
+        set(cfg, "debug.chunkApplyLogging", d.chunkApplyLogging(), "区块 apply 调试日志");
+        set(cfg, "debug.networkLogging", d.networkLogging(), "网络调试日志");
+        set(cfg, "debug.dataplaneLogging", d.dataplaneLogging(), "数据面（多通道 Data Plane）热路径日志 — 默认 false 以避免高频刷屏");
     }
 
     // --- value helpers ---

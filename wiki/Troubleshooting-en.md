@@ -24,17 +24,19 @@ After starting the client or server, search `latest.log` for `Hassium`, `ERROR`,
 
 ## Debug toggles
 
-The `debug.*` block near the bottom of `config/hassium/hassium-client.toml` or `config/hassium/hassium-server.toml`:
+The `debug.*` block near the bottom of `config/hassium/hassium-client.toml` or `config/hassium/hassium-server.toml` (keys differ by side):
 
-| Key | Meaning |
-| --- | --- |
-| `debug.metadataLogging` | chunkHash / metadata comparison |
-| `debug.dispatcherLogging` | Main-thread dispatch |
-| `debug.asyncLogging` | Async tasks |
-| `debug.compressionLogging` | Compression / decompression |
-| `debug.chunkApplyLogging` | Chunk apply |
-| `debug.networkLogging` | Network send / receive |
-| `debug.cacheLogging` | Cache read / write |
+| Key | Side | Meaning |
+| --- | --- | --- |
+| `debug.metadataLogging` | client | chunkHash / metadata comparison |
+| `debug.dispatcherLogging` | both | Main-thread dispatch |
+| `debug.asyncLogging` | both | Async tasks |
+| `debug.compressionLogging` | both | Compression / decompression |
+| `debug.chunkApplyLogging` | both | Chunk apply |
+| `debug.networkLogging` | both | Network send / receive |
+| `debug.cacheLogging` | client | Cache read / write |
+| `debug.lightVerify` | client | Light verification |
+| `debug.dataplaneLogging` | server | UDP data-plane hot path |
 
 Toggle the relevant category only; the hot path is quiet by default and enabling all of them will hurt FPS noticeably. `ERROR` / `WARN` are always emitted.
 
