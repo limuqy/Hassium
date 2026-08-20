@@ -1,78 +1,35 @@
 package io.github.limuqy.mc.hassium.network.seedgen;
 
 import io.github.limuqy.mc.hassium.Constants;
-import io.github.limuqy.mc.hassium.compat.LevelHeightCompat;
 import io.github.limuqy.mc.hassium.network.ChunkCompressionHandler;
-import java.util.BitSet;
 import net.minecraft.core.RegistryAccess;
-import net.minecraft.core.SectionPos;
 import net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket;
 import net.minecraft.server.level.ServerLevel;
-import net.minecraft.world.level.LightLayer;
-import net.minecraft.world.level.chunk.DataLayer;
 import net.minecraft.world.level.chunk.LevelChunk;
 import net.minecraft.world.level.lighting.LevelLightEngine;
 
 /**
- * 本地生成区块 → 线上数据编码（与 ServerChunkPushManager 编码链等价的独立副本，
+ * 本地生成 / 影子回传区块 → 线上数据编码（与 ServerChunkPushManager 编码链等价的独立副本，
  * 避免把该管理器的 private 方法改造成公共 API）。
  * <p>
- * 与直推路径的差异：不剥光（本地生成自带完整光照，直接下发）→ 客户端零重算。
+ * 收敛首包与原版单人相同构造：{@code new ClientboundLevelChunkWithLightPacket(chunk, engine, null, null)}。
  */
 public final class SeedGenChunkCodec {
 
     private SeedGenChunkCodec() {}
 
     /**
-     * 构建区块包。天空光：非空层照常带上；源之上的空层仍打 empty 掩码；
-     * 源之下的空层省略（避免 emptySkyYMask 把尚未被邻柱 increase 写入的屋檐钉成 0）。
+     * 构建区块包。{@code lightChunk} future 成功后与单人一致：两个 BitSet 为 null，
+     * 由引擎自己决定打包哪些光层。禁止在默认路径上自研 sky/block 掩码。
      */
     public static ClientboundLevelChunkWithLightPacket buildPacket(LevelChunk chunk, ServerLevel level) {
         try {
             LevelLightEngine engine = level.getLightEngine();
-            BitSet sky = skySectionsToPack(chunk, level, engine);
-            BitSet block = blockSectionsToPack(chunk, engine);
-            return new ClientboundLevelChunkWithLightPacket(chunk, engine, sky, block);
+            return new ClientboundLevelChunkWithLightPacket(chunk, engine, null, null);
         } catch (Exception e) {
             Constants.LOG.error("Hassium: SeedGen failed to build chunk packet {}", chunk.getPos(), e);
             return null;
         }
-    }
-
-    private static BitSet skySectionsToPack(LevelChunk chunk, ServerLevel level, LevelLightEngine engine) {
-        BitSet bits = new BitSet();
-        net.minecraft.world.level.ChunkPos pos = chunk.getPos();
-        int min = engine.getMinLightSection();
-        int count = engine.getLightSectionCount();
-        boolean hasSky = level.dimensionType().hasSkyLight();
-        net.minecraft.world.level.lighting.ChunkSkyLightSources sources =
-                hasSky ? chunk.getSkyLightSources() : null;
-        int minBlockY = LevelHeightCompat.getMinBlockY(level);
-        for (int i = 0; i < count; i++) {
-            DataLayer sky = engine.getLayerListener(LightLayer.SKY)
-                    .getDataLayerData(SectionPos.of(pos, min + i));
-            boolean atOrAbove = sources != null
-                    && ShadowSeedServer.sectionAtOrAboveAnySkySource(sources, min + i, minBlockY);
-            if (ShadowLightCompute.shouldIncludeSkySectionInPacket(
-                    sky != null, sky != null && sky.isEmpty(), atOrAbove)) {
-                bits.set(i);
-            }
-        }
-        return bits;
-    }
-
-    private static BitSet blockSectionsToPack(LevelChunk chunk, LevelLightEngine engine) {
-        BitSet bits = new BitSet();
-        net.minecraft.world.level.ChunkPos pos = chunk.getPos();
-        int min = engine.getMinLightSection();
-        int count = engine.getLightSectionCount();
-        for (int i = 0; i < count; i++) {
-            if (engine.getLayerListener(LightLayer.BLOCK)
-                    .getDataLayerData(SectionPos.of(pos, min + i)) != null) {
-                bits.set(i);
-            }
-        }
-        return bits;
     }
 
     /**

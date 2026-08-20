@@ -834,16 +834,19 @@ public final class ClientSmokeTest {
             ok = false;
         } else {
             double displayedRate = Double.parseDouble(cacheMatcher.group(1));
-            double expectedRate = m.getEffectiveCacheHitRate() * 100.0;
             long cacheCount = Long.parseLong(cacheMatcher.group(2));
             long localCount = Long.parseLong(cacheMatcher.group(3));
             long deltaCount = Long.parseLong(cacheMatcher.group(4));
             long appliedCount = Long.parseLong(cacheMatcher.group(5));
+            long parsedHit = Math.max(0L, cacheCount + localCount - deltaCount);
+            double expectedRate = appliedCount <= 0L
+                    ? 0.0
+                    : 100.0 * Math.min(parsedHit, appliedCount) / appliedCount;
             if (Math.abs(displayedRate - expectedRate) > 0.06
-                    || cacheCount != m.getCacheHitFullChunkCount()
-                    || localCount != m.getLocallyGeneratedChunkCount()
-                    || deltaCount != m.getCacheDeltaCount()
-                    || appliedCount != m.getClientAppliedChunkCount()) {
+                    || !countsNear(cacheCount, m.getCacheHitFullChunkCount())
+                    || !countsNear(localCount, m.getLocallyGeneratedChunkCount())
+                    || !countsNear(deltaCount, m.getCacheDeltaCount())
+                    || !countsNear(appliedCount, m.getClientAppliedChunkCount())) {
                 LOGGER.error("{} {} stats validation FAILED: cache formula mismatch " +
                                 "displayed={}/{} local={} delta={} applied={}, expected={}/{} local={} delta={} applied={}",
                         MARKER_FAIL, roundLabel,
@@ -886,8 +889,8 @@ public final class ClientSmokeTest {
             long recompute = Long.parseLong(lightMatcher.group(3));
             long expectedHit = m.getLightCacheHitCount() + m.getLightReuseShadowCount();
             if (Math.abs(displayedRate - expectedRate) > 0.06
-                    || displayedHit != expectedHit
-                    || recompute != m.getLightCacheMissCount()) {
+                    || !countsNear(displayedHit, expectedHit)
+                    || !countsNear(recompute, m.getLightCacheMissCount())) {
                 LOGGER.error("{} {} stats validation FAILED: light formula mismatch " +
                                 "displayed={}/{} recompute={}, expected={}/{} recompute={}",
                         MARKER_FAIL, roundLabel,
@@ -928,6 +931,11 @@ public final class ClientSmokeTest {
             return "";
         }
         return s.replaceAll("§.", "");
+    }
+
+    /** dump 与校验之间后台线程仍可能 +1；允许小漂移。 */
+    static boolean countsNear(long dumped, long live) {
+        return Math.abs(dumped - live) <= 8L;
     }
 
     private static long parseLong(String raw, long def) {

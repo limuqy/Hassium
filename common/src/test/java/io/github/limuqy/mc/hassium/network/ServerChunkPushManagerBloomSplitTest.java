@@ -65,4 +65,10 @@ class ServerChunkPushManagerBloomSplitTest {
         assertTrue(ServerChunkPushManager.shouldRecordSessionPush(false, 42L));
         assertFalse(ServerChunkPushManager.shouldRecordSessionPush(false, 0L));
     }
+
+    @Test
+    void directPushStillPairsHashSoClientCanAccountAndDiskHit() {
+        assertTrue(ServerChunkPushManager.shouldPairHashWithDirectPush(),
+                "Bloom miss 直推必须附带 hash，否则 ROUND2 缓存命中为 0");
+    }
 }

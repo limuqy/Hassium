@@ -729,6 +729,11 @@ public class ServerChunkPushManager {
                 continue;
             }
             enqueueDirectPush(player, dimension, List.of(pos), chunkHash);
+            // 直推仍带 hash：客户端才能记「应用区块」分母，R2 才能走读盘命中。
+            // resync 不等 Bloom（方案 A），不带 hash 时 ROUND2 缓存命中恒为 0。
+            if (shouldPairHashWithDirectPush()) {
+                sendChunkHashDirect(player, pos, chunkHash, sectionBitmap, dimension);
+            }
         }
     }
 
@@ -877,6 +882,14 @@ public class ServerChunkPushManager {
             return false;
         }
         return lastSentHash == currentHash;
+    }
+
+    /**
+     * Bloom miss 直推时仍附带 hash。客户端用它记账 / R2 读盘比对；
+     * 不附带则直推路径永远进不了 {@code getClientAppliedChunkCount}。
+     */
+    static boolean shouldPairHashWithDirectPush() {
+        return true;
     }
 
     /** 只登记不在 Bloom 中的直推柱。 */

@@ -23,6 +23,10 @@ public interface ChunkMapAccessor {
     @org.spongepowered.asm.mixin.gen.Accessor("poiManager")
     net.minecraft.world.entity.ai.village.poi.PoiManager hassium$getPoiManager();
 
+    /** 可见 ChunkHolder（与 {@code getChunkForLighting} 同一张表；不经 getChunk mixin）。 */
+    @Invoker("getVisibleChunkIfPresent")
+    net.minecraft.server.level.ChunkHolder hassium$getVisibleChunkIfPresent(long pos);
+
     @Invoker("readChunk")
     CompletableFuture<Optional<CompoundTag>> hassium$readChunk(ChunkPos pos);
 

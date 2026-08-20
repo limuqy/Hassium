@@ -165,6 +165,7 @@ public final class ShadowServerRegistry {
             SeedGenExecutor.getInstance().onShadowReady();
             DebugLogger.info(DebugLogger.LogType.ASYNC,
                     "[SHADOW] Reusing parked shadow server (serverId={})", boundServerId);
+            scheduleBloomSync(s);
         }
         return s;
     }

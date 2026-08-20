@@ -9,6 +9,7 @@
         "MixinIOWorker",
         "RegionFileAccessor",
         "ChunkMapAccessor",
+        "MixinChunkMap",
         "SimpleRegionStorageAccessor",
         "IOWorkerAccessor",
         "SectionStorageAccessor",

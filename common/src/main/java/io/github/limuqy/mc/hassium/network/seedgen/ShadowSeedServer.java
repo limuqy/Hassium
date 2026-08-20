@@ -28,6 +28,7 @@ import com.mojang.authlib.yggdrasil.ServicesKeySet;
 import com.mojang.logging.LogUtils;
 import io.github.limuqy.mc.hassium.compat.BlockEntityCompat;
 import io.github.limuqy.mc.hassium.compat.EntityPacketCompat;
+import io.github.limuqy.mc.hassium.compat.ShadowChunkMapCompat;
 import io.github.limuqy.mc.hassium.mixin.ServerLevelAccessor;
 import io.github.limuqy.mc.hassium.mixin.ThreadedLevelLightEngineAccessor;
 import io.github.limuqy.mc.hassium.network.SectionDeltaS2CPacket;
@@ -141,12 +142,17 @@ public class ShadowSeedServer extends MinecraftServer {
     /** 持久世界根（客户端缓存目录下原版存档结构；断连保存、重连复用，不删除）。 */
     private final java.nio.file.Path worldRoot;
     /**
-     * 注入区块表（pos → LevelChunk）：注入的区块不经 ChunkMap 正规加载流程
-     * （不 worldgen、无 ChunkHolder），由本表持有——打包（buildPacket）与
-     * 保存（saveAll）直接取用；REPLACE 覆盖。
+     * 注入区块表（pos → LevelChunk）：网络/读盘 decode 后的 FULL 柱。随后加
+     * {@code TicketType.UNKNOWN} FULL 级票进入 ChunkMap（{@code scheduleChunkLoad}
+     * 短路为 {@code ImposterProtoChunk}）。探活结论：不能赌金字塔对 FULL+
+     * {@code !isLightCorrect} 柱只重跑 LIGHT（邻柱无盘会 worldgen），算光仍走
+     * {@code ShadowLightCompute} 官方 {@code initializeLight}+{@code lightChunk}。
+     * 打包与 saveAll 仍取本表；REPLACE 覆盖。
      */
     private final java.util.concurrent.ConcurrentHashMap<Long, net.minecraft.world.level.chunk.LevelChunk>
             injectedChunks = new java.util.concurrent.ConcurrentHashMap<>();
+    /** 本端为注入柱加上的 UNKNOWN FULL 票（与注入表同阶，卸载还票）。 */
+    private final java.util.Set<Long> injectTickets = java.util.concurrent.ConcurrentHashMap.newKeySet();
 
     /**
      * 断连 saveAll 是否需要重写该柱：仅在区块内容/光照相对磁盘发生变化时置脏。
@@ -303,6 +309,15 @@ public class ShadowSeedServer extends MinecraftServer {
      * 为 LevelChunk），超时/中断/失败返回 null → 调用方回退全量。
      */
     private ChunkAccess generateChunkInternal(ServerChunkCache cache, ChunkPos pos, ChunkStatus status, long deadline) {
+        ShadowChunkMapCompat.enterWorldgen();
+        try {
+            return generateChunkInternalAllowed(cache, pos, status, deadline);
+        } finally {
+            ShadowChunkMapCompat.leaveWorldgen();
+        }
+    }
+
+    private ChunkAccess generateChunkInternalAllowed(ServerChunkCache cache, ChunkPos pos, ChunkStatus status, long deadline) {
 #if MC_VER < MC_1_20_5
         CompletableFuture<Either<ChunkAccess, ChunkHolder.ChunkLoadingFailure>> future =
                 cache.getChunkFuture(pos.x, pos.z, status, true);
@@ -357,15 +372,30 @@ public class ShadowSeedServer extends MinecraftServer {
      * 影子端是冻结后端：区块数据只来源于服务端 packet（{@code replaceWithPacketData}
      * 整柱替换），本 server 不生成世界。种子仅用于 ServerLevel 装配，不影响注入数据。
      * <p>
+     * 把剥光 S2C 包 decode 成 {@code LevelChunk} 写入注入表，并加 UNKNOWN FULL 票
+     * 进入 ChunkMap（{@code scheduleChunkLoad} 短路为 ImposterProtoChunk）。
+     * <p>
+     * 探活（vanilla ChunkMap / ChunkStatusTasks）：FULL 柱 persisted 恒 FULL；
+     * {@code isLighted==false} 时 LIGHT task <em>可能</em>仍被调用，但 LIGHT range=1
+     * 会拉邻柱，无盘邻柱走 GENERATION_PYRAMID。注入路径禁止 worldgen，因此不算光
+     * 不依赖金字塔重跑 LIGHT；清光仍用 {@link #clearChunkLight}（禁止换成
+     * {@code updateChunkStatus}）。
+     * <p>
      * 清光只在重注入（REPLACE 覆盖）时执行（强制覆盖共享空光层，见
      * {@link #clearChunkLight}）；全新柱无引擎状态直接跳过。全部经
      * ThreadedLevelLightEngine 异步任务（runMainLoop 已驱动 tryScheduleUpdate）。
      * 注入失败返回 false（调用方走单柱兜底）。
      */
     public boolean injectChunk(ChunkPos pos, ClientboundLevelChunkWithLightPacket packet) {
+        long key = ChunkPos.asLong(pos.x, pos.z);
+        LevelChunk previous = this.injectedChunks.get(key);
         try {
             ServerLevel level = this.overworld();
             LevelChunk chunk = new LevelChunk(level, pos); // 空壳，不 worldgen
+            // FULL 票扩散后本柱可能已有 ProtoChunk holder。replaceWithPacketData 会走
+            // initializeLightSources / BE → ServerLevel.getChunk，把 Proto 强转 LevelChunk。
+            // 必须先让 getChunk mixin 命中本柱，decode 失败再还原。
+            this.injectedChunks.put(key, chunk);
             ClientboundLevelChunkPacketData data = packet.getChunkData();
             // 显式把 section 读游标复位到 0：getReadBuffer() 返回的是包内 byte[] 的
             // 新包装，正常应本来就是 0，但这里不依赖该假设——防止某些 Netty/FriendlyByteBuf
@@ -389,6 +419,7 @@ public class ShadowSeedServer extends MinecraftServer {
                                 + "(sections={}, sectionBytes={}, heightmapKeys={})",
                         pos.x, pos.z, chunk.getSections().length, sectionBytes, data.getHeightmaps().size());
                 chunk = new LevelChunk(level, pos);
+                this.injectedChunks.put(key, chunk);
                 FriendlyByteBuf retryBuf = data.getReadBuffer();
                 retryBuf.readerIndex(0);
                 chunk.replaceWithPacketData(retryBuf, data.getHeightmaps(),
@@ -404,8 +435,7 @@ public class ShadowSeedServer extends MinecraftServer {
                     "[SHADOW_INJECT] pos=({},{}) sections={} nonAirSections={} sectionBytes={} heightmapKeys={}",
                     pos.x, pos.z, chunk.getSections().length, nonAirSections, sectionBytes,
                     data.getHeightmaps().size());
-            long key = ChunkPos.asLong(pos.x, pos.z);
-            boolean fresh = !this.injectedChunks.containsKey(key);
+            boolean fresh = previous == null;
             if (!fresh) {
                 // 重注入（REPLACE 覆盖）：旧光必须物理清除再重算。全新柱无任何引擎状态
                 // （section 状态 0、无数据层），跳过清光——省 2×~30 个引擎任务，避免首波
@@ -425,9 +455,9 @@ public class ShadowSeedServer extends MinecraftServer {
             } catch (Throwable hashError) {
                 LOGGER.debug("Hassium: Shadow contentHash compute failed for {}, skip hash write", pos);
             }
-            injectedChunks.put(key, chunk);
             dirtyChunks.add(key);
             ShadowCacheEviction.recordAccess(pos);
+            registerInjectTicket(pos);
             if (!fresh) {
                 // 重注入清光投递 48+ 个 PRE 任务：按柱排水，防连续重注入叠加越 1000 阈值
                 // （fresh 柱零投递，size 检查立即通过零开销）。
@@ -435,6 +465,11 @@ public class ShadowSeedServer extends MinecraftServer {
             }
             return true;
         } catch (Throwable t) {
+            if (previous != null) {
+                this.injectedChunks.put(key, previous);
+            } else {
+                this.injectedChunks.remove(key);
+            }
             LOGGER.warn("Hassium: Shadow light inject failed for {}", pos, t);
             return false;
         }
@@ -1136,6 +1171,89 @@ public class ShadowSeedServer extends MinecraftServer {
     }
 
     /**
+     * holder 上已有 {@code INITIALIZE_LIGHT} 的 parent chunk（与原版
+     * {@code getChunkForLighting} 同一条件）。无 holder 视为视距边缘。
+     */
+    public boolean hasInitializeLightParent(int x, int z) {
+        try {
+            return ShadowChunkMapCompat.hasInitializeLightParent(
+                    (ServerChunkCache) this.overworld().getChunkSource(), x, z);
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    public boolean hasVisibleChunkHolder(int x, int z) {
+        try {
+            return ShadowChunkMapCompat.hasVisibleHolder(
+                    (ServerChunkCache) this.overworld().getChunkSource(), x, z);
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    /** 当前注入票数量（与注入表同阶；测试/泄漏诊断）。 */
+    int injectTicketCount() {
+        return injectTickets.size();
+    }
+
+    boolean hasInjectTicket(ChunkPos pos) {
+        return pos != null && injectTickets.contains(ChunkPos.asLong(pos.x, pos.z));
+    }
+
+    /**
+     * 注入成功后加 {@code TicketType.UNKNOWN}、{@code ChunkLevel.byStatus(FULL)}
+     * （非 32/31 ticking）。主循环 {@code pollTask} 会 {@code runDistanceManagerUpdates}。
+     */
+    void registerInjectTicket(ChunkPos pos) {
+        if (pos == null) {
+            return;
+        }
+        long key = ChunkPos.asLong(pos.x, pos.z);
+        if (!ShadowChunkMapCompat.rememberTicketKey(injectTickets, key)) {
+            return;
+        }
+        ChunkPos ticketPos = new ChunkPos(pos.x, pos.z);
+        runOnShadowMain(() -> {
+            try {
+                ServerChunkCache cache = (ServerChunkCache) this.overworld().getChunkSource();
+                ShadowChunkMapCompat.addFullUnknownTicket(cache, ticketPos);
+            } catch (Throwable t) {
+                injectTickets.remove(key);
+                LOGGER.debug("Hassium: shadow inject ticket add failed for {}", ticketPos);
+            }
+        });
+    }
+
+    /** 卸载成功后还同一 UNKNOWN 票，避免 holder 泄漏。 */
+    void unregisterInjectTicket(ChunkPos pos) {
+        if (pos == null) {
+            return;
+        }
+        long key = ChunkPos.asLong(pos.x, pos.z);
+        if (!ShadowChunkMapCompat.forgetTicketKey(injectTickets, key)) {
+            return;
+        }
+        ChunkPos ticketPos = new ChunkPos(pos.x, pos.z);
+        runOnShadowMain(() -> {
+            try {
+                ServerChunkCache cache = (ServerChunkCache) this.overworld().getChunkSource();
+                ShadowChunkMapCompat.removeFullUnknownTicket(cache, ticketPos);
+            } catch (Throwable t) {
+                LOGGER.debug("Hassium: shadow inject ticket remove failed for {}", ticketPos);
+            }
+        });
+    }
+
+    private void runOnShadowMain(Runnable job) {
+        if (this.isSameThread()) {
+            job.run();
+        } else {
+            this.execute(job);
+        }
+    }
+
+    /**
      * 读盘命中（hash 比对一致）区块加载进影子端表：后续 hash 到达直接内存比对
      * （无需再读盘）；saveAll 落盘复用同一表。contentHash 已由 MixinRegionFile
      * 读盘回填，此处不再 computeSectionHashes。光照是否续算由调用方按
@@ -1161,6 +1279,7 @@ public class ShadowSeedServer extends MinecraftServer {
         } else {
             dirtyChunks.remove(key);
         }
+        registerInjectTicket(pos);
     }
 
     /**
@@ -1333,6 +1452,7 @@ public class ShadowSeedServer extends MinecraftServer {
         injectedChunks.remove(key, chunk); // 条件移除：仅当仍是该 chunk（防并发替换后误删新数据）
         dirtyChunks.remove(key);
         io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.remove(pos);
+        unregisterInjectTicket(pos);
         return true;
     }
 

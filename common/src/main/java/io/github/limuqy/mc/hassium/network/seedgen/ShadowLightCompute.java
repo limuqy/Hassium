@@ -392,13 +392,35 @@ public final class ShadowLightCompute {
     }
 
     /**
-     * 对齐原版 {@code ChunkStatus.LIGHT}（range=1）：邻柱完成 {@code INITIALIZE_LIGHT}
-     * 后才 {@code lightChunk}。{@code expected==0} 表示视距外/地图边缘，与原版
-     * ChunkMap 里邻柱不存在相同，立即进入 LIGHT。
+     * 服务端直推注入：hash miss 已经 {@code recordFullChunkRequests} 过的柱不再记一次。
+     * 直推若不带 hash，这条是「应用区块」分母的唯一来源。
+     */
+    static boolean shouldAccountServerPushAsApplied(boolean alreadyRequested) {
+        return !alreadyRequested;
+    }
+
+    /**
+     * 对齐原版 {@code ChunkStatus.LIGHT}（range=1）：邻柱 holder 已有
+     * {@code INITIALIZE_LIGHT} parent（与 {@code getChunkForLighting} 同一条件）
+     * 或本端已 {@code initializeLight} 后才 {@code lightChunk}。{@code expected==0}
+     * 表示视距外/地图边缘，立即进入 LIGHT。探活：金字塔不会可靠地只重跑 LIGHT，
+     * 两阶段屏障保留；不再把自研 {@code initializedLight} 表当作唯一真相。
      */
     static boolean canStartVanillaLightStage(int readyNeighbors, int expectedNeighbors,
                                              boolean timedOut) {
         return timedOut || readyNeighbors >= expectedNeighbors;
+    }
+
+    /** 邻柱就绪：holder 已有 INITIALIZE_LIGHT parent，或本端 initializeLight 已完成。 */
+    static boolean isVanillaLightNeighborReady(boolean holderHasInitLightParent,
+                                               boolean selfInitializedLight) {
+        return holderHasInitLightParent || selfInitializedLight;
+    }
+
+    /** 邻柱是否算「应该存在」：有 holder / 注入表 / 管道中；超时当边缘。 */
+    static boolean isVanillaLightNeighborExpected(boolean holderPresent, boolean inInjectOrPipeline,
+                                                  boolean withinViewFallback) {
+        return holderPresent || inInjectOrPipeline || withinViewFallback;
     }
 
     /** 全量重算才等邻柱建层；光桥 / 分段增量 / 磁盘复用走原版 checkBlock 或 isLighted。 */
@@ -1163,6 +1185,11 @@ public final class ShadowLightCompute {
                         ShadowServerRegistry.getInstance().failShadowServer();
                         return;
                     }
+                    if (shouldAccountServerPushAsApplied(requestedMisses.contains(e.getKey()))) {
+                        requestedMisses.add(e.getKey());
+                        io.github.limuqy.mc.hassium.metrics.NetworkStats.recordFullChunkRequests(
+                                1, io.github.limuqy.mc.hassium.metrics.NetworkStats.ESTIMATED_CHUNK_BYTES, false);
+                    }
                     lightTasks.add(new LightTask(e.getKey(), LightSource.PENDING, pendingEntry,
                             server.injectedChunk(pos.x, pos.z), server.overworld(), LightMetric.RECOMPUTE,
                             false, pendingEntry.traceOrigin(), pendingEntry.deliveryId()));
@@ -1511,7 +1538,7 @@ public final class ShadowLightCompute {
                 continue;
             }
             expected++;
-            if (initializedLight.containsKey(ChunkPos.asLong(nx, nz))) {
+            if (isVanillaLightNeighborReadyNow(server, nx, nz)) {
                 ready++;
             }
         }
@@ -1519,21 +1546,26 @@ public final class ShadowLightCompute {
     }
 
     private static boolean isVanillaLightNeighborExpected(ShadowSeedServer server, int nx, int nz) {
+        boolean holderPresent = server != null && server.hasVisibleChunkHolder(nx, nz);
         long nKey = ChunkPos.asLong(nx, nz);
-        if (initializedLight.containsKey(nKey)
+        boolean inInjectOrPipeline = initializedLight.containsKey(nKey)
                 || waitingForLight.containsKey(nKey)
                 || inflightLight.containsKey(nKey)
                 || pending.containsKey(nKey)
                 || generated.containsKey(nKey)
-                || (server != null && server.injectedChunk(nx, nz) != null)) {
-            return true;
-        }
-        return withinLightTicket(nx, nz);
+                || (server != null && server.injectedChunk(nx, nz) != null);
+        return isVanillaLightNeighborExpected(holderPresent, inInjectOrPipeline, withinLightTicket(nx, nz));
+    }
+
+    private static boolean isVanillaLightNeighborReadyNow(ShadowSeedServer server, int nx, int nz) {
+        boolean holderParent = server != null && server.hasInitializeLightParent(nx, nz);
+        boolean selfInit = initializedLight.containsKey(ChunkPos.asLong(nx, nz));
+        return isVanillaLightNeighborReady(holderParent, selfInit);
     }
 
     /**
-     * 原版 ChunkMap 用 ticket 决定邻柱是否存在。影子端没有 ChunkHolder，用玩家视距
-     * 方形窗口近似「会被注入的邻柱」，避免同波包还在解码时 expected==0 立刻 lightChunk。
+     * 原版 ChunkMap 用 ticket/holder 决定邻柱是否存在。票尚未被 pollTask 消化时
+     * 用玩家视距方形窗口近似，避免同波包还在解码时 expected==0 立刻 lightChunk。
      */
     private static boolean withinLightTicket(int nx, int nz) {
         try {
@@ -1788,11 +1820,6 @@ public final class ShadowLightCompute {
         // ThreadingDetector 崩溃（T7 线程转储：consumeLoop pushReady 打包 vs hash 线程）。
         ClientboundLevelChunkWithLightPacket packet;
         synchronized (chunkLock(pos)) {
-            // 打包前天空光只读校验（官方 lightChunk 应已播种）。
-            ShadowSeedServer healServer = ShadowServerRegistry.getInstance().get();
-            if (healServer != null) {
-                healServer.fillSkySectionsForPacket(pos, chunk);
-            }
             packet = SeedGenChunkCodec.buildPacket(chunk, level);
         }
         if (packet == null) {
@@ -1827,15 +1854,6 @@ public final class ShadowLightCompute {
     private static void pushLightReady(ChunkPos pos, net.minecraft.server.level.ServerLevel level,
                                        net.minecraft.world.level.chunk.LevelChunk chunk,
                                        boolean converged, LightWork work) {
-        // 打包前天空光只读校验；缺失仅告警，不直写 queuedSections。
-        if (chunk != null) {
-            synchronized (chunkLock(pos)) {
-                ShadowSeedServer healServer = ShadowServerRegistry.getInstance().get();
-                if (healServer != null) {
-                    healServer.fillSkySectionsForPacket(pos, chunk);
-                }
-            }
-        }
         BitSet skyMask = null;
         BitSet blockMask = null;
         if (work != null) {
@@ -1843,6 +1861,11 @@ public final class ShadowLightCompute {
             skyMask.or(work.emptySkyMask());
             blockMask = (BitSet) work.blockMask().clone();
             blockMask.or(work.emptyBlockMask());
+        }
+        if (!converged && skyMask != null) {
+            ShadowSeedServer server = ShadowServerRegistry.getInstance().get();
+            omitUnlitEavesFromSkyMask(skyMask, pos, level.getLightEngine(),
+                    level.getLightEngine().getMinLightSection(), server);
         }
         ClientboundLightUpdatePacket packet =
                 new ClientboundLightUpdatePacket(pos, level.getLightEngine(), skyMask, blockMask);
@@ -2332,10 +2355,6 @@ public final class ShadowLightCompute {
             if (skyMask.isEmpty() && blockMask.isEmpty()) {
                 continue; // 收集全部越界（异常高度数据）：无可发送内容
             }
-            omitUnlitEavesFromSkyMask(skyMask, pos, engine, minLightSection, server);
-            if (skyMask.isEmpty() && blockMask.isEmpty()) {
-                continue;
-            }
             try {
                 offerLightReady(pos, new ClientboundLightUpdatePacket(pos, engine, skyMask, blockMask));
             } catch (Throwable t) {
@@ -2359,8 +2378,8 @@ public final class ShadowLightCompute {
     }
 
     /**
-     * 光桥不要把「源之下仍全空」的 sky section 打成 emptySkyYMask。
-     * 源所在 section（如 (-13,3) 的 sectionY=5）层非空，本过滤不会碰到它。
+     * 仅超时/未收敛光包使用：不要把「源之下仍全空」的 sky section 打成 emptySkyYMask。
+     * 收敛后的 {@code ClientboundLightUpdatePacket} 用引擎掩码，不再按天空源裁空层。
      */
     private static void omitUnlitEavesFromSkyMask(BitSet skyMask, ChunkPos pos, LevelLightEngine engine,
                                                   int minLightSection, ShadowSeedServer server) {

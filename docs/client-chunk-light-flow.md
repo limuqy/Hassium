@@ -45,9 +45,9 @@ flowchart TD
     end
 
     subgraph SHADOW["影子服务端（Hassium 引擎，后台）"]
-        Q["consumeLoop 批量注入<br/>ShadowSeedServer.injectChunk<br/>（ServerLevel + 官方光照引擎）"]
-        R["sky 预播种（Threaded 引擎任务，<br/>源及其上方逐列 queued=15）<br/>→ per-chunk 两阶段屏障<br/>initializeLight → lightChunk<br/>+ isChunkLightComplete 校验"]
-        S["buildPacket 打包回传<br/>（全量区块包 / 光包：仅 LightDelta 变更 section 掩码<br/>+ 打包前只读 sky 核验，绝不直写 queuedSections）"]
+        Q["consumeLoop 批量注入<br/>injectChunk + UNKNOWN FULL 票<br/>scheduleChunkLoad → ImposterProtoChunk"]
+        R["两阶段屏障<br/>initializeLight → 邻柱 holder parent<br/>→ lightChunk"]
+        S["buildPacket(chunk, engine, null, null)<br/>drainReady → handleLevelChunkWithLight"]
     end
 
     A --> D --> E
@@ -77,7 +77,7 @@ flowchart TD
 | 区块 apply | `ClientMainThreadBudget`（JoinBoost 30ms 窗口 / normal `mainThreadChunkBudgetMs`）；无数量硬顶 | Render thread | `MixinClientTick` |
 | R2 读盘 | region 级任务（每 region 至多一个在跑）→ `readyQueue` | 后台虚拟线程 + 主线程 | `ClientCacheLoadQueue` |
 | 光照投递 | `ShadowLightCompute` pending/generated/delta/pendingLightUpdates/inflight + 帧尾光桥 | 投递：网关 Netty / 解压后台；消费：后台池 | `submit` / `submitLightDelta` + `ShadowLightCompute` |
-| 影子端注入 + 收敛 | sky 预播种（Threaded 任务）→ per-chunk 两阶段屏障（`initializeLight` → `lightChunk`）→ `isChunkLightComplete` 校验，缺层自动续投（≤6 / 超时 ≤2） | 引擎 mailbox / 后台池 | `ShadowSeedServer.runMainLoop` + `ShadowLightCompute` |
+| 影子端注入 + 收敛 | 注入表 + UNKNOWN FULL 票 → per-chunk 两阶段屏障（`initializeLight` → 邻柱 holder `INITIALIZE_LIGHT` parent → `lightChunk`）；`isChunkLightComplete` 不挡首包 | 引擎 mailbox / 后台池 | `ShadowSeedServer.runMainLoop` + `ShadowLightCompute` |
 | 光照落地 | 帧尾 `drainReady`（渲染前，预算内；光桥只对影子区块包已落地且客户端未卸载的柱发送） | Render thread | `MixinClientTick` + `ShadowLightCompute.drainReady` |
 
 ## 3. 三条数据入口
@@ -112,30 +112,46 @@ ShadowLightCompute.drainLightMasks() →  in-flight 柱暂缓，其余光更新�
 - **剥光包**（服务端 `chunk.lightStrip`，握手声明引擎后才发生）：不直接 apply——
   先投递 `ShadowLightCompute.submit(pos, packet)`；影子端算完打包带光区块包回传，
   客户端从源头就不会看到无光区块。
+  加载屏脚下 3×3 走 `applyLoadingScreenBlocksOnly`（只写方块，`setLightEnabled(false)`），
+  **禁止客户端自算光**；影子带光包到达后再 `handleLevelChunkWithLight`。
+
+### 探活结论（ChunkMap / ChunkStatusTasks，1.20.1 与 1.21.1）
+
+`LevelChunk.getPersistedStatus()` 恒为 `FULL`。`ChunkStep.apply` 在 persisted 已达目标时
+仍会调用 task；`isLighted = persisted >= LIGHT && isLightCorrect()`，故 FULL +
+`isLightCorrect=false` 时 `isLighted==false`，LIGHT 步**有可能**对
+`ImposterProtoChunk` 跑 `initializeLight`+`lightChunk`。
+
+但 FULL 级票会向外扩散（约 `RADIUS_AROUND_FULL_CHUNK`=8），邻柱无盘则
+`createEmptyChunk` 后走 **GENERATION_PYRAMID**（噪声地形）。注入路径禁止 worldgen，
+因此**不能**把金字塔当作 FULL 注入柱的唯一算光路径。官方
+`initializeLight`/`lightChunk` 仍由 `ShadowLightCompute` 两阶段屏障提交；回传仍是
+`drainReady` → `handleLevelChunkWithLight`。禁止把 `clearChunkLight` 换成
+`updateChunkStatus`；禁止假玩家 / MemoryChannel。
 
 影子端管线（消费线程，非主线程）：
 
 1. **注入**：`ShadowSeedServer.injectChunk`：`new LevelChunk(level, pos)` 空壳 +
    `replaceWithPacketData`（重填 `skyLightSources`——水面/地形高度表随区块数据刷新）。
+   写入注入表后加 `TicketType.UNKNOWN`、`ChunkLevel.byStatus(FULL)`（非 32/31 ticking）；
+   `MixinChunkMap.scheduleChunkLoad` 命中注入表则完成 future 为
+   `ImposterProtoChunk(wrapped LevelChunk)`。SeedGen `generateChunk` 期间允许金字塔
+   worldgen；注入票路径地形步透传，不得生成新地形。卸载成功后 `removeTicket` 同一票。
    重注入（REPLACE 覆盖）时 `clearChunkLight` 撤销 sky 源注册（`setLightEnabled(false)`）
    并把整柱 section（含上下 padding）强制覆盖为共享空光层（`queueSectionData(EMPTY)`）；
    **全新柱跳过清光**（无引擎状态，省 2×~30 个引擎任务，避免首波任务量越过
    ThreadedLevelLightEngine 1000 阈值触发 sorter 线程并发 `runUpdate` → 任务错序 →
    空光层被打包推送）。
-2. **屏障**：对每柱先 `ensureChunkLightLayers`（缺失 section 投 `updateSectionStatus(false)`
-   初始化 + `setLightEnabled(true)` 注册 sky 源/地表源之上的空层填 15，镜像 vanilla
-   `initializeLight`）再提交官方 `lightChunk(chunk, false)`；future 完成后再校验
-   `isChunkLightComplete()` = `chunk.isLightCorrect()==true` 且 sky/block 全部 section
-   DataLayer 非 null，**且位于任一行天空源的 section 的 sky 层非全空**（全空 sky 层只
-   在深海/地下合法；位于源的 section 全空 = 播种/fill 未跑到 → 判未收敛）。null 层会被
-   官方光包静默省略 → 客户端黑块；全空层会打包成 empty 掩码 → 客户端把已亮 section
-   置 0（「亮→黑→亮」跳变源之一）。不全时自动重试（正常完成≤6 轮；5s 超时后续投≤2
-   轮），仍不全才按欠光回传 + 标脏 + 光更新桥梁补发。这就是原版的「未收敛状态」处理：
-   原版只在 FULL（lightCorrect）后推送，Hassium 等同一信号而不是等一个不保证 section
-   层齐备的 future。
-3. **打包**：区块路径 `SeedGenChunkCodec.buildPacket`（官方带光区块包）；纯光路径
-   （LightDelta）`ClientboundLightUpdatePacket(pos, engine, null, null)`
-   （全柱光包，不回传方块数据）。
+2. **屏障**：对每柱提交官方 `initializeLight` → 等邻柱 holder 已有
+   `INITIALIZE_LIGHT` parent（与原版 `getChunkForLighting` 同一条件；票未消化时
+   仍看本端 `initializedLight` / 视距回退；超时当边缘）→ `lightChunk`。future 完成后
+   立即打包；`isChunkLightComplete` 只作诊断/磁盘续算，**不挡首包**。发送门控：
+   `lightChunk` 失败/超时且客户端**已有柱**则 `deferredLightPush`，不要欠光
+   `emptySkyYMask` 盖暗；客户端尚无柱才允许首包。
+3. **打包**：区块路径 `SeedGenChunkCodec.buildPacket` =
+   `new ClientboundLevelChunkWithLightPacket(chunk, engine, null, null)`（与单人一致）。
+   纯光路径（LightDelta / 收敛增量）`ClientboundLightUpdatePacket(pos, engine, masks)`
+   用引擎掩码；`omitUnlitEavesFromSkyMask` **仅**超时/未收敛光包。
 4. **落地**：帧尾 `drainReady` 官方通道消费；共享帧时间预算。区块包与光包同一 FIFO：
    到达顺序落地，区块包入队时丢掉该柱尚未落地的旧光，避免旧空光排在新区块包之后盖暗。
    屏障期间同柱的 `lightUpdates` 掩码暂缓（`inflightLight` 守卫），

@@ -1,4 +1,5 @@
 package io.github.limuqy.mc.hassium.mixin;
+import io.github.limuqy.mc.hassium.compat.ShadowChunkMapCompat;
 import io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute;
 import io.github.limuqy.mc.hassium.network.seedgen.ShadowSeedServer;
 import io.github.limuqy.mc.hassium.network.seedgen.ShadowServerRegistry;
@@ -49,11 +50,10 @@ public class MixinServerChunkCache {
     /**
      * 影子服务端：光照传播取数桥（T2）。
      * <p>
-     * 原版 {@code getChunkForLighting} 只查 ChunkMap 的 ChunkHolder——注入区块
-     * （{@link ShadowSeedServer#injectedChunk} 表）不经 ChunkMap 正规加载、无
-     * ChunkHolder，传播（{@code LightEngine.getState} / {@code propagateLightSources}）
-     * 取数恒 null → 方块按 BEDROCK、发光源不推，光照算不出（全黑/错光）。
-     * HEAD 拦截：影子端上下文优先返回注入表区块，其余路径不动。
+     * 原版 {@code getChunkForLighting} 只查 ChunkMap 的 ChunkHolder。注入柱虽已加
+     * UNKNOWN FULL 票，票由影子主循环 {@code pollTask} 消化，而光照 Worker 可能在
+     * 票落地前取邻柱——HEAD 拦截仍作兜底，避免传播读到 null（方块按 BEDROCK）。
+     * 探活：holder 的 FEATURES future 在票消化前不稳定，故不删除本桥。
      * <p>
      * 1.20.1 / 1.21.11 方法签名一致（{@code LightChunk getChunkForLighting(int, int)}），
      * 零 #if。
@@ -76,13 +76,12 @@ public class MixinServerChunkCache {
     /**
      * 影子服务端：区块取数桥（防后台线程 getChunk join 死锁）。
      * <p>
-     * 原版 {@code ServerChunkCache.getChunk(int, int, ChunkStatus, boolean)} 查 ChunkMap
-     * 的 ChunkHolder——注入区块（{@link ShadowSeedServer#injectedChunk} 表）不经 ChunkMap
-     * 正规加载、无 ChunkHolder，非主线程调用会触发异步加载 future 并 {@code join()}
-     * 永久阻塞（影子端不跑 ChunkMap tick，future 永不完成）——consumeLoop 应用
-     * SectionDelta 时 BE load（如 SpawnerBlockEntity.load → Level.getBlockState）即死锁，
-     * 注入路径整体瘫痪（2026-08-14 定位）。HEAD 拦截：影子端上下文优先返回注入表
-     * 区块（恒 FULL，满足一切 ≤FULL 请求），其余路径不动。
+     * 原版 {@code ServerChunkCache.getChunk} 查 ChunkHolder。注入票尚未被 pollTask
+     * 消化时非主线程 {@code join()} 会永久阻塞（影子端不跑完整 tick）。HEAD 拦截
+     * 仍作兜底（恒 FULL）。holder 稳定前不删除本桥。
+     * <p>
+     * FULL 票扩散后邻柱可能只有 ProtoChunk：注入表未命中且非 SeedGen worldgen 时
+     * 对 FULL 取数返回 null，避免 {@code ServerLevel.getChunk} 把 Proto 强转 LevelChunk。
      * <p>
      * 1.20.1 / 1.21.11 方法签名一致（{@code ChunkAccess getChunk(int, int, ChunkStatus, boolean)}），
      * 零 #if。
@@ -100,6 +99,14 @@ public class MixinServerChunkCache {
         LevelChunk chunk = server.injectedChunk(x, z);
         if (chunk != null) {
             cir.setReturnValue(chunk);
+            return;
+        }
+        if (ShadowChunkMapCompat.shouldSuppressUninjectedFullGetChunk(
+                true,
+                ShadowChunkMapCompat.isWorldgenAllowed(),
+                false,
+                ShadowChunkMapCompat.isFullOrAfter(status))) {
+            cir.setReturnValue(null);
         }
     }
 }

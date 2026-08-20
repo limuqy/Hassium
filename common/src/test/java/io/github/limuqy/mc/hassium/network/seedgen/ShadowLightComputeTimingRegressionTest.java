@@ -1,8 +1,10 @@
 package io.github.limuqy.mc.hassium.network.seedgen;
 
+import io.github.limuqy.mc.hassium.compat.ShadowChunkMapCompat;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -94,6 +96,84 @@ class ShadowLightComputeTimingRegressionTest {
     }
 
     @Test
+    @DisplayName("邻柱就绪谓词：holder INITIALIZE_LIGHT parent / 无 holder / 超时当边缘")
+    void neighborReadyUsesHolderInitializeLightParent() {
+        assertTrue(ShadowLightCompute.isVanillaLightNeighborReady(true, false),
+                "holder 已有 INITIALIZE_LIGHT parent → 可 lightChunk");
+        assertTrue(ShadowLightCompute.isVanillaLightNeighborReady(false, true),
+                "本端 initializeLight 已完成（票尚未消化）→ 可 lightChunk");
+        assertFalse(ShadowLightCompute.isVanillaLightNeighborReady(false, false),
+                "无 holder 且未 initializeLight");
+        assertTrue(ShadowLightCompute.isVanillaLightNeighborExpected(true, false, false));
+        assertTrue(ShadowLightCompute.isVanillaLightNeighborExpected(false, true, false));
+        assertTrue(ShadowLightCompute.isVanillaLightNeighborExpected(false, false, true),
+                "视距内回退：票尚未落地");
+        assertFalse(ShadowLightCompute.isVanillaLightNeighborExpected(false, false, false));
+        assertTrue(ShadowLightCompute.canStartVanillaLightStage(0, 1, true),
+                "超时当边缘：不等缺失 holder");
+    }
+
+    @Test
+    @DisplayName("scheduleChunkLoad 短路：仅影子+注入表命中；SeedGen 允许 worldgen")
+    void scheduleChunkLoadShortCircuitDoesNotWorldgenOnInject() {
+        assertTrue(ShadowChunkMapCompat.shouldShortCircuitScheduleLoad(true, true));
+        assertFalse(ShadowChunkMapCompat.shouldShortCircuitScheduleLoad(true, false),
+                "未命中注入表：不得短路成注入柱，但也不得在注入路径 worldgen");
+        assertFalse(ShadowChunkMapCompat.shouldShortCircuitScheduleLoad(false, true));
+        assertTrue(ShadowChunkMapCompat.shouldPassthroughGenerationStep(true, false, false),
+                "注入票路径：地形步透传");
+        assertFalse(ShadowChunkMapCompat.shouldPassthroughGenerationStep(true, true, false),
+                "SeedGen generateChunk 期间允许 worldgen");
+        assertFalse(ShadowChunkMapCompat.shouldPassthroughGenerationStep(true, false, true),
+                "EMPTY 不透传，走 scheduleChunkLoad");
+    }
+
+    @Test
+    @DisplayName("FULL 取数：注入表未命中不得把票扩散 ProtoChunk 交给 ServerLevel.getChunk")
+    void suppressesUninjectedFullGetChunkToAvoidProtoCast() {
+        assertTrue(ShadowChunkMapCompat.shouldSuppressUninjectedFullGetChunk(true, false, false, true),
+                "注入票路径 FULL：邻柱 Proto 必须对 getChunk 隐藏");
+        assertFalse(ShadowChunkMapCompat.shouldSuppressUninjectedFullGetChunk(true, false, true, true),
+                "注入表已命中：返回 LevelChunk");
+        assertFalse(ShadowChunkMapCompat.shouldSuppressUninjectedFullGetChunk(true, true, false, true),
+                "SeedGen worldgen 期间放行原版取数");
+        assertFalse(ShadowChunkMapCompat.shouldSuppressUninjectedFullGetChunk(true, false, false, false),
+                "EMPTY/LIGHT 等非 FULL 仍可走 ProtoChunk holder");
+        assertFalse(ShadowChunkMapCompat.shouldSuppressUninjectedFullGetChunk(false, false, false, true));
+    }
+
+    @Test
+    @DisplayName("UNKNOWN FULL 票集合加/卸对称")
+    void injectTicketAddRemoveAreSymmetric() {
+        java.util.Set<Long> keys = new java.util.HashSet<>();
+        long a = net.minecraft.world.level.ChunkPos.asLong(3, -7);
+        long b = net.minecraft.world.level.ChunkPos.asLong(4, -7);
+        assertTrue(ShadowChunkMapCompat.rememberTicketKey(keys, a));
+        assertFalse(ShadowChunkMapCompat.rememberTicketKey(keys, a), "同柱不重复加票");
+        assertTrue(ShadowChunkMapCompat.rememberTicketKey(keys, b));
+        assertEquals(2, keys.size());
+        assertTrue(ShadowChunkMapCompat.forgetTicketKey(keys, a));
+        assertFalse(ShadowChunkMapCompat.forgetTicketKey(keys, a), "还票后不再 remove");
+        assertEquals(1, keys.size());
+        assertTrue(ShadowChunkMapCompat.forgetTicketKey(keys, b));
+        assertTrue(keys.isEmpty());
+    }
+
+    @Test
+    @DisplayName("空 sky 层：源之上仍打包，源之下省略——仅未收敛光包路径仍用该谓词")
+    void omitsEmptySkyBelowSourcesFromPacket() {
+        assertTrue(ShadowLightCompute.shouldIncludeSkySectionInPacket(true, false, true),
+                "非空层必须进包（(-13,3) sectionY=5 柱心已是 15）");
+        assertTrue(ShadowLightCompute.shouldIncludeSkySectionInPacket(true, false, false));
+        assertTrue(ShadowLightCompute.shouldIncludeSkySectionInPacket(true, true, true),
+                "源之上空层仍要 empty 掩码，否则客户端按缺层向上继承成 15");
+        assertFalse(ShadowLightCompute.shouldIncludeSkySectionInPacket(true, true, false),
+                "源之下空层不得 emptySkyYMask（仅未收敛光包）");
+        assertFalse(ShadowLightCompute.shouldIncludeSkySectionInPacket(false, false, true));
+        assertFalse(ShadowLightCompute.shouldIncludeSkySectionInPacket(false, true, false));
+    }
+
+    @Test
     @DisplayName("客户端已落地影子全量包时 hash 命中不得整柱重推")
     void skipsRedundantFullPushWhenClientAlreadyHasShadowPacket() {
         assertTrue(ShadowLightCompute.shouldSkipRedundantFullPush(true),
@@ -109,16 +189,10 @@ class ShadowLightComputeTimingRegressionTest {
     }
 
     @Test
-    @DisplayName("空 sky 层：源之上仍打包，源之下省略以免 emptySkyYMask 钉死屋檐")
-    void omitsEmptySkyBelowSourcesFromPacket() {
-        assertTrue(ShadowLightCompute.shouldIncludeSkySectionInPacket(true, false, true),
-                "非空层必须进包（(-13,3) sectionY=5 柱心已是 15）");
-        assertTrue(ShadowLightCompute.shouldIncludeSkySectionInPacket(true, false, false));
-        assertTrue(ShadowLightCompute.shouldIncludeSkySectionInPacket(true, true, true),
-                "源之上空层仍要 empty 掩码，否则客户端按缺层向上继承成 15");
-        assertFalse(ShadowLightCompute.shouldIncludeSkySectionInPacket(true, true, false),
-                "源之下空层不得 emptySkyYMask");
-        assertFalse(ShadowLightCompute.shouldIncludeSkySectionInPacket(false, false, true));
-        assertFalse(ShadowLightCompute.shouldIncludeSkySectionInPacket(false, true, false));
+    @DisplayName("直推注入：未请求过的柱计入应用区块，hash miss 已记账的不再重复")
+    void accountsServerPushInjectOnce() {
+        assertTrue(ShadowLightCompute.shouldAccountServerPushAsApplied(false));
+        assertFalse(ShadowLightCompute.shouldAccountServerPushAsApplied(true),
+                "hash miss 已 recordFullChunkRequests，注入不得再加分母");
     }
 }
