@@ -411,7 +411,7 @@ public class ShadowSeedServer extends MinecraftServer {
                 // （section 状态 0、无数据层），跳过清光——省 2×~30 个引擎任务，避免首波
                 // 并发任务量越过 ThreadedLevelLightEngine 1000 阈值触发 sorter 线程并发
                 // runUpdate → 任务错序（propagateLightSources 先于 updateSectionStatus）→
-                // 空光层被打包推送（客户端黑面/黑块）。全新柱由 ensureChunkLightLayers +
+                // 空光层被打包推送（客户端黑面/黑块）。全新柱由官方 initializeLight +
                 // lightChunk 直接初始化。
                 clearChunkLight(pos, chunk);
             }
@@ -443,8 +443,8 @@ public class ShadowSeedServer extends MinecraftServer {
     /**
      * 清光公共方法（重注入 / relightChunk 共用）：把整柱全部 section 光数据层强制覆盖为
      * 共享空层（{@code queueSectionData(layer, sp, EMPTY)}，markNewInconsistencies 时安装），
-     * 并撤销 sky 光源注册——随后由 {@link #ensureChunkLightLayers}（setLightEnabled(true)）
-     * + {@code lightChunk}（propagateLightSources 播种 fill + 向下衰减传播）重建。
+     * 并撤销 sky 光源注册——随后由官方 {@code initializeLight} + {@code lightChunk}
+     * （{@code propagateLightSources} 播种 fill + 向下衰减传播）重建。
      * 全新柱勿调（无引擎状态，见 injectChunk）。
      * <p>
      * 为什么不用 {@code queueSectionData(null)} + {@code updateSectionStatus(notReady=true)}：
@@ -473,97 +473,6 @@ public class ShadowSeedServer extends MinecraftServer {
                 lightEngine.queueSectionData(LightLayer.BLOCK, sp, EMPTY_LIGHT_LAYER);
             }
         }
-    }
-
-    /**
-     * 光屏障前置准备：刷新 sky 光源表，并把「源及其上方」列的天空光预播种成 15。
-     * <p>
-     * <b>预播种经 {@code ThreadedLevelLightEngine.queueSectionData} 投递</b>（PRE 任务、
-     * priority 0，恒先于同柱 initializeLight 任务执行），绝不直接调 raw SkyLightEngine：
-     * raw {@code queueSectionData} 会并发写 queuedSections 的 fastutil 迭代器，实测在
-     * {@code markNewInconsistencies} 抛 {@code LongArrayList.wrapped is null} NPE，
-     * 直接打断 runLightUpdates → POST 永不执行 → 批量 5s 超时 + 光层空转。
-     * <p>
-     * 预播种层 = 现有层 copy（有则保留源之下已算好的垂直梯度）+ 逐列把源以上写 15。
-     * 纯空气 section 无 section 状态时 queued 层不会立刻安装，但对
-     * {@code getDataLayerData} 立即可见 → 打包直接读到；之后邻域状态到位时被消费安装。
-     * 只投递需要改动的 section（磁盘命中收敛光跳过 = 零任务）。
-     * <p>
-     * 必须在 {@link ShadowLightCompute#LIGHT_ENGINE_MUTEX} 锁内调用（调用方
-     * {@code submitLightBatch} 已持有）；本方法只投递任务，不直接写光照存储。
-     */
-    public void ensureChunkLightLayers(ChunkPos pos, LevelChunk chunk) {
-        if (chunk == null) {
-            return;
-        }
-        chunk.initializeLightSources(); // sky 光源表随 heightmaps/方块数据刷新
-        if (!this.overworld().dimensionType().hasSkyLight()) {
-            return;
-        }
-        ThreadedLevelLightEngine lightEngine =
-                (ThreadedLevelLightEngine) this.overworld().getChunkSource().getLightEngine();
-        net.minecraft.world.level.lighting.ChunkSkyLightSources sources = chunk.getSkyLightSources();
-        int minBlockY = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMinBlockY(this.overworld());
-        int minSection = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMinSection(chunk);
-        int maxSection = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMaxSectionExclusive(chunk);
-        for (int y = minSection; y < maxSection; y++) {
-            if (!sectionAtOrAboveAnySkySource(sources, y, minBlockY)) {
-                continue; // 源之下：保持现有/空层（官方包省略 → 客户端置 0，语义正确）
-            }
-            SectionPos sp = SectionPos.of(pos, y);
-            DataLayer current =
-                    lightEngine.getLayerListener(LightLayer.SKY).getDataLayerData(sp);
-            DataLayer seeded = seedSkyAboveSources(sources, current, y, minBlockY);
-            if (seeded == null) {
-                continue; // 已全 15：零任务（磁盘命中/重试路径大部分 section 跳过）
-            }
-            lightEngine.queueSectionData(LightLayer.SKY, sp, seeded);
-        }
-    }
-
-    /**
-     * 逐列重放官方播种语义：只把「源及其上方」写成 15，源以下保留 current 现有值
-     * （整层填 15 会毁掉水面/山坡的垂直梯度）。current 为 null 时新建零层再填。
-     * 已全部满足时返回 null（调用方跳过投递）。
-     */
-    private static DataLayer seedSkyAboveSources(
-            net.minecraft.world.level.lighting.ChunkSkyLightSources sources,
-            DataLayer current, int sectionY, int minBlockY) {
-        int sectionBottom = SectionPos.sectionToBlockCoord(sectionY);
-        int sectionTop = sectionBottom + 15;
-        boolean needsSeed = false;
-        for (int x = 0; x < 16 && !needsSeed; x++) {
-            for (int z = 0; z < 16 && !needsSeed; z++) {
-                int src = sources.getLowestSourceY(x, z);
-                if (src < minBlockY || src > sectionTop) {
-                    continue;
-                }
-                int fromY = Math.max(src, sectionBottom);
-                for (int by = fromY; by <= sectionTop; by++) {
-                    if (current == null || current.get(x, SectionPos.sectionRelative(by), z) != 15) {
-                        needsSeed = true;
-                        break;
-                    }
-                }
-            }
-        }
-        if (!needsSeed) {
-            return null;
-        }
-        DataLayer seeded = current != null ? current.copy() : new DataLayer(2048);
-        for (int x = 0; x < 16; x++) {
-            for (int z = 0; z < 16; z++) {
-                int src = sources.getLowestSourceY(x, z);
-                if (src < minBlockY || src > sectionTop) {
-                    continue;
-                }
-                int fromY = Math.max(src, sectionBottom);
-                for (int by = fromY; by <= sectionTop; by++) {
-                    seeded.set(x, SectionPos.sectionRelative(by), z, 15);
-                }
-            }
-        }
-        return seeded;
     }
 
     /**
@@ -659,12 +568,11 @@ public class ShadowSeedServer extends MinecraftServer {
                 int sectionIndex = chunk.getSectionIndexFromSectionY(y);
                 net.minecraft.world.level.chunk.LevelChunkSection section = chunk.getSection(sectionIndex);
                 if (section == null || section.hasOnlyAir()) {
-                    // 纯空气 section 不需要光数据层：源之上由屏障前预播种（ensureChunkLightLayers
-                    // 投递的 queued 15 层）直接进包；源之下全 0 正确（官方包省略 null 层 = 新柱零光）。
+                    // 纯空气 section 不需要光数据层：源之上由官方 lightChunk 播种；
+                    // 源之下全 0 正确（官方包省略 null 层 = 新柱零光）。
                     continue;
                 }
-                // 非空 section：initializeLight 必须已为它建层。block 层缺失 = 屏障异常；
-                // sky 层缺失时只要预播种任务已投递，queuedSections 立即可见，不算失败。
+                // 非空 section：initializeLight 必须已为它建层。block 层缺失 = 屏障异常。
                 if (lightEngine.getLayerListener(LightLayer.BLOCK).getDataLayerData(sp) == null) {
                     return false;
                 }
@@ -680,25 +588,37 @@ public class ShadowSeedServer extends MinecraftServer {
     }
 
     /**
-     * 打包前天空光校验（只读，不再写光照存储）——预播种（{@code ensureChunkLightLayers}
-     * 经 Threaded 引擎任务投递的 queued 15 层）应已保证「源及其上方」全 15；
-     * 本方法只做最终核验与告警。发现缺失说明屏障前预播种被绕过，日志
-     * {@code Sky seed missing} 即报警，不回退为直接写 queuedSections——直接写会与
-     * 引擎线程的 {@code markNewInconsistencies} 迭代器并发，实测抛 fastutil
-     * {@code LongArrayList.wrapped is null} NPE 并打断整轮 runLightUpdates。
+     * 打包前天空光校验（只读）——官方 {@code lightChunk} / {@code propagateLightSources}
+     * 应已把源及其上方写成 15。缺失只告警，不回写 queuedSections。
      */
     public void fillSkySectionsForPacket(ChunkPos pos, LevelChunk chunk) {
+        if (!isSkySeeded(pos, chunk)) {
+            DebugLogger.warn(DebugLogger.LogType.ASYNC,
+                    "[SHADOW_LIGHT] Sky seed missing ({}, {}) — verify-only after vanilla lightChunk",
+                    pos.x, pos.z);
+        }
+    }
+
+    /**
+     * 打包可见的天空光是否已把「源及其上方」写成 15。
+     */
+    public boolean isSkySeeded(ChunkPos pos, LevelChunk chunk) {
         try {
+            if (chunk == null || !this.overworld().dimensionType().hasSkyLight()) {
+                return true;
+            }
             net.minecraft.world.level.lighting.ChunkSkyLightSources sources =
                     chunk.getSkyLightSources();
             LevelLightEngine levelLightEngine = this.overworld().getChunkSource().getLightEngine();
             LightEngine<?, ?> skyEngine =
                     ((io.github.limuqy.mc.hassium.mixin.LevelLightEngineAccessor) levelLightEngine)
                             .hassium$getSkyEngine();
+            if (skyEngine == null) {
+                return true;
+            }
             int minBlockY = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMinBlockY(this.overworld());
             int minSection = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMinSection(chunk);
             int maxSection = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMaxSectionExclusive(chunk);
-            int bad = 0;
             for (int y = minSection; y < maxSection; y++) {
                 if (!sectionAtOrAboveAnySkySource(sources, y, minBlockY)) {
                     continue;
@@ -706,8 +626,8 @@ public class ShadowSeedServer extends MinecraftServer {
                 SectionPos sp = SectionPos.of(pos, y);
                 DataLayer sky = skyEngine.getDataLayerData(sp);
                 int sectionTop = SectionPos.sectionToBlockCoord(y) + 15;
-                for (int x = 0; x < 16 && bad == 0; x++) {
-                    for (int z = 0; z < 16 && bad == 0; z++) {
+                for (int x = 0; x < 16; x++) {
+                    for (int z = 0; z < 16; z++) {
                         int src = sources.getLowestSourceY(x, z);
                         if (src < minBlockY || src > sectionTop) {
                             continue;
@@ -715,26 +635,22 @@ public class ShadowSeedServer extends MinecraftServer {
                         int fromY = Math.max(src, SectionPos.sectionToBlockCoord(y));
                         for (int by = fromY; by <= sectionTop; by++) {
                             if (sky == null || sky.get(x, SectionPos.sectionRelative(by), z) != 15) {
-                                bad++;
-                                break;
+                                return false;
                             }
                         }
                     }
                 }
             }
-            if (bad > 0) {
-                DebugLogger.warn(DebugLogger.LogType.ASYNC,
-                        "[SHADOW_LIGHT] Sky seed missing ({}, {}) — verify-only, pre-seed barrier was bypassed",
-                        pos.x, pos.z);
-            }
+            return true;
         } catch (Throwable t) {
             DebugLogger.warn(DebugLogger.LogType.ASYNC,
-                    "[SHADOW_LIGHT] Sky seed verify failed ({}, {}): {}", pos.x, pos.z, t.toString());
+                    "[SHADOW_LIGHT] Sky seed check failed ({}, {}): {}", pos.x, pos.z, t.toString());
+            return false;
         }
     }
 
     /** 是否存在真实天空源（非 {@code NEGATIVE_INFINITY} 哨兵）位于 sectionTop 或以下。 */
-    private static boolean sectionAtOrAboveAnySkySource(
+    static boolean sectionAtOrAboveAnySkySource(
             net.minecraft.world.level.lighting.ChunkSkyLightSources sources,
             int sectionY, int minBlockY) {
         int sectionTop = SectionPos.sectionToBlockCoord(sectionY) + 15;

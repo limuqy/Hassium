@@ -15,6 +15,7 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.SectionPos;
 import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.level.LightLayer;
 
@@ -610,16 +611,27 @@ public class ClientChunkHandler {
         int fixedY = Math.max(minY, Math.min(maxY - 1, 62));
         String fixedBlock = level.getBlockState(new BlockPos(bx, fixedY, bz))
                 .getBlock().getDescriptionId();
+        int originX = pos.x << 4;
+        int originZ = pos.z << 4;
+        int surfaceSection = SectionPos.blockToSectionCoord(Math.max(topY, minY));
+        int midY = Math.max(minY, Math.min(maxY - 1, SectionPos.sectionToBlockCoord(surfaceSection) + 8));
+        int skyMid = level.getBrightness(LightLayer.SKY, new BlockPos(bx, midY, bz));
+        int skyW = level.getBrightness(LightLayer.SKY, new BlockPos(originX, midY, bz));
+        int skyE = level.getBrightness(LightLayer.SKY, new BlockPos(originX + 15, midY, bz));
+        int skyN = level.getBrightness(LightLayer.SKY, new BlockPos(bx, midY, originZ));
+        int skyS = level.getBrightness(LightLayer.SKY, new BlockPos(bx, midY, originZ + 15));
         if (!countAsApply) {
             DebugLogger.info(LogType.CHUNK_APPLY,
-                    "[CHUNK_PROBE] source=light pos=({},{}) apply#={} fullOrigin={} fullView={} fullApplySeq={} fullApplyAgeMs={} lightQueueDelayMs={} fullAppliedAfterLightQueued={} chunkPresent=true topY={} skyTop={} skyAir={} blockLow={} topBlock={} fixedY={} fixedBlock={}",
+                    "[CHUNK_PROBE] source=light pos=({},{}) apply#={} fullOrigin={} fullView={} fullApplySeq={} fullApplyAgeMs={} lightQueueDelayMs={} fullAppliedAfterLightQueued={} chunkPresent=true topY={} skyTop={} skyAir={} blockLow={} topBlock={} fixedY={} fixedBlock={} secY={} skyMid={} skyW={} skyE={} skyN={} skyS={}",
                     pos.x, pos.z, count, origin, fullView, fullApplySequence, fullApplyAgeMs, lightQueueDelayMs,
-                    fullAppliedAfterLightQueued, topY, skyTop, skyAir, blockLow, topBlock, fixedY, fixedBlock);
+                    fullAppliedAfterLightQueued, topY, skyTop, skyAir, blockLow, topBlock, fixedY, fixedBlock,
+                    surfaceSection, skyMid, skyW, skyE, skyN, skyS);
             return;
         }
         DebugLogger.info(LogType.CHUNK_APPLY,
-                "[CHUNK_PROBE] source={} pos=({},{}) apply#={} topY={} skyTop={} skyAir={} blockLow={} topBlock={} fixedY={} fixedBlock={}",
-                source, pos.x, pos.z, count, topY, skyTop, skyAir, blockLow, topBlock, fixedY, fixedBlock);
+                "[CHUNK_PROBE] source={} pos=({},{}) apply#={} topY={} skyTop={} skyAir={} blockLow={} topBlock={} fixedY={} fixedBlock={} secY={} skyMid={} skyW={} skyE={} skyN={} skyS={}",
+                source, pos.x, pos.z, count, topY, skyTop, skyAir, blockLow, topBlock, fixedY, fixedBlock,
+                surfaceSection, skyMid, skyW, skyE, skyN, skyS);
     }
     private static long getLightBytesPerChunk(ClientLevel level) {
         // level 参数保留以便未来按 sectionsCount 动态估算；当前与区块口径一致用常量

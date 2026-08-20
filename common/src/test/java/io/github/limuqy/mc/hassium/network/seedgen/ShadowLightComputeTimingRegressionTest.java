@@ -56,7 +56,7 @@ class ShadowLightComputeTimingRegressionTest {
     }
 
     @Test
-    @DisplayName("光桥打包：须已有影子区块包，且跳过屏障/欠光暂缓/邻柱重播")
+    @DisplayName("光桥打包：须已有影子区块包，且跳过屏障/欠光暂缓/等待 LIGHT")
     void lightMaskBudgetSkipsInflightAndDeferred() {
         assertTrue(ShadowLightCompute.canDrainLightMaskThisFrame(false, false, true, false));
         assertFalse(ShadowLightCompute.canDrainLightMaskThisFrame(false, false, false, false),
@@ -66,7 +66,7 @@ class ShadowLightComputeTimingRegressionTest {
         assertFalse(ShadowLightCompute.canDrainLightMaskThisFrame(false, true, true, false),
                 "欠光暂缓覆盖的柱不得占光桥预算");
         assertFalse(ShadowLightCompute.canDrainLightMaskThisFrame(false, false, true, true),
-                "邻柱重播尚未排完不得快照中间态空层");
+                "尚未 lightChunk（等邻柱 INITIALIZE_LIGHT）不得快照");
     }
 
     @Test
@@ -78,17 +78,47 @@ class ShadowLightComputeTimingRegressionTest {
     }
 
     @Test
-    @DisplayName("跨柱屋檐：只重播已注入且不在屏障中的邻柱光源，不清光")
-    void respreadsNeighborSourcesWithoutFullRelight() {
-        assertTrue(ShadowLightCompute.shouldRespreadNeighborSources(true, false),
-                "已注入邻柱必须再 propagate，才能把天空光推进后到的屋檐柱");
-        assertFalse(ShadowLightCompute.shouldRespreadNeighborSources(false, false),
-                "邻柱尚未注入：其随后的 lightChunk 会 propagate");
-        assertFalse(ShadowLightCompute.shouldRespreadNeighborSources(true, true),
-                "邻柱正在屏障中：lightChunk(false) 结束时会 propagate，避免重复");
-        assertTrue(ShadowLightCompute.shouldRespreadSelfSources(true),
-                "REUSE 跳过了本柱 propagate，邻柱后到时本柱光源也要再推一次");
-        assertFalse(ShadowLightCompute.shouldRespreadSelfSources(false),
-                "RECOMPUTE 刚跑过本柱 propagate，不必立刻再投");
+    @DisplayName("LIGHT range=1：8 邻完成 INITIALIZE_LIGHT 后才 lightChunk")
+    void waitsForVanillaLightNeighborsBeforeLightChunk() {
+        assertTrue(ShadowLightCompute.needsVanillaLightNeighborWait(true));
+        assertFalse(ShadowLightCompute.needsVanillaLightNeighborWait(false),
+                "光桥/增量/磁盘复用不等邻柱");
+        assertFalse(ShadowLightCompute.canStartVanillaLightStage(4, 8, false),
+                "视距内邻柱未建层：不得 lightChunk");
+        assertTrue(ShadowLightCompute.canStartVanillaLightStage(8, 8, false),
+                "8 邻都已 initializeLight：进入 LIGHT");
+        assertTrue(ShadowLightCompute.canStartVanillaLightStage(0, 0, false),
+                "地图边缘没有邻柱：与 ChunkMap 邻柱不存在相同，立即 LIGHT");
+        assertTrue(ShadowLightCompute.canStartVanillaLightStage(4, 8, true),
+                "超时按视距边缘处理");
+    }
+
+    @Test
+    @DisplayName("客户端已落地影子全量包时 hash 命中不得整柱重推")
+    void skipsRedundantFullPushWhenClientAlreadyHasShadowPacket() {
+        assertTrue(ShadowLightCompute.shouldSkipRedundantFullPush(true),
+                "走近触发的 hash 命中再推全量会把 emptySkyYMask 盖掉光桥屋檐光");
+        assertFalse(ShadowLightCompute.shouldSkipRedundantFullPush(false),
+                "加载屏 blocks-only / 尚未影子落地：仍要首次带光回传");
+        assertTrue(ShadowLightCompute.shouldSkipUnchangedRepush(true, false, false),
+                "Bloom 直推没有 remoteHash，已落地不得再整柱 REPLACE");
+        assertTrue(ShadowLightCompute.shouldSkipUnchangedRepush(true, true, true));
+        assertFalse(ShadowLightCompute.shouldSkipUnchangedRepush(true, true, false),
+                "hash 不一致：方块变了，必须注入");
+        assertFalse(ShadowLightCompute.shouldSkipUnchangedRepush(false, false, false));
+    }
+
+    @Test
+    @DisplayName("空 sky 层：源之上仍打包，源之下省略以免 emptySkyYMask 钉死屋檐")
+    void omitsEmptySkyBelowSourcesFromPacket() {
+        assertTrue(ShadowLightCompute.shouldIncludeSkySectionInPacket(true, false, true),
+                "非空层必须进包（(-13,3) sectionY=5 柱心已是 15）");
+        assertTrue(ShadowLightCompute.shouldIncludeSkySectionInPacket(true, false, false));
+        assertTrue(ShadowLightCompute.shouldIncludeSkySectionInPacket(true, true, true),
+                "源之上空层仍要 empty 掩码，否则客户端按缺层向上继承成 15");
+        assertFalse(ShadowLightCompute.shouldIncludeSkySectionInPacket(true, true, false),
+                "源之下空层不得 emptySkyYMask");
+        assertFalse(ShadowLightCompute.shouldIncludeSkySectionInPacket(false, false, true));
+        assertFalse(ShadowLightCompute.shouldIncludeSkySectionInPacket(false, true, false));
     }
 }
