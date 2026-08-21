@@ -168,7 +168,7 @@ Sector 2+:    [length(4)][type=126][magic 0x48][hash(8)][ZSTD 压缩数据]
 | 上下文 / magicless | 提升压缩比 | 均默认启用 |
 | 包聚合 | 仅主控侧 vanilla 路径（`MixinConnection` 仅对 `ServerGamePacketListenerImpl` 生效）；网关通道不聚合 | `master.enablePacketAggregation=true` |
 | 紧凑包头 | 聚合包内 `CompactHeaderCodec`（主控侧） | 默认启用 |
-| 平滑推送 | 每 tick 提交上限限速（`master.maxChunksPerTick=5`，满 tick ≈ 100/s，掉刻自然降速）；encode/压缩/hash/发送全后台（1.21.2+ 主线程仅 build，<1.21.2 全后台）；**反馈式渐进 admission**（客户端 authoritative apply ACK / `CHUNK_APPLY_ACK`：首次 ACK 前单未确认批次，之后最多 10 批；`deliveryId` 贯穿 full/SeedGen；实现已交付，Fabric 进服曲线待独立验收） | 默认启用 |
+| 平滑推送 | 每 tick 提交上限限速（`master.maxChunksPerTick=4`，满 tick ≈ 80/s，掉刻自然降速）；主线程构建 packet 快照，encode/压缩/hash/发送在固定推送池（`master.serverChunkPushThreads=4`）；**反馈式渐进 admission**（客户端 authoritative apply ACK / `CHUNK_APPLY_ACK`：首次 ACK 前单未确认批次，之后最多 10 批；`deliveryId` 贯穿 full/SeedGen；实现已交付，Fabric 进服曲线待独立验收） | 默认启用 |
 | UDP/KCP 数据面 | 网关↔主控通道的 bulk 载体：每个 `udpListeners` 项建立独立 KCP session；按 `weight` 加权轮询发送 S2C bulk，异常时自动回落帧连接；握手尾 `udpTail.hasUdpDataplane()` 触发客户端 `UdpDataPlane.start` | `dataplane.enabled=false`（默认关；默认端点仅本机可用） |
 | 网关控制恢复（L1 迁移） | outbound 入站静默超时（生效默认 `master.migrationSilentTimeoutMs`=10000；`migrationFaultTimeoutMs`=60000 为 legacy 回退）或策略/演练触发切换；`ResumeTicket` 续流票据（HMAC-SHA256 + epoch 防重放）验签后续流；服务端 failover permit 链保留（`controlStallMs`/`failoverExpiryMs` 键已删，`ControlFailoverHandler` 引用固定常量 6000/30000） | 迁移引擎默认开启 |
 
@@ -207,7 +207,8 @@ Sector 2+:    [length(4)][type=126][magic 0x48][hash(8)][ZSTD 压缩数据]
 | `master.enabled` | true | 服务端网络通道总开关 |
 | `master.globalPacketCompression` | true | 全局 ZSTD（主控侧 vanilla 路径） |
 | `master.compressionLevel` | 3 | 网络压缩等级（速度优先） |
-| `master.maxChunksPerTick` | **5** | 每玩家每 tick 提交上限（1.21.2+ 为主线程序列化上限，1.20.x/1.21.1 为后台提交上限；发送速率 = 本值 × tick 节奏，满 tick ≈ 100/s） |
+| `master.maxChunksPerTick` | **4** | 每玩家每 tick 提交上限（主线程序列化快照上限；发送速率 = 本值 × tick 节奏，满 tick ≈ 80/s） |
+| `master.serverChunkPushThreads` | **4** | 服务端区块推送固定线程数（encode / hash / ZSTD） |
 | `master.metricsEnabled` | false | 服务端网络指标 |
 | `master.controlReachableEndpoints` | `[]` | **服务端**网关监听/通告端点（`endpoints[0]` 即网关端口，兜底 25566）；经握手尾 / `GatewayInfo` 同步给客户端作迁移候选——**客户端无需主动配置** |
 | `master.bindHost` | `127.0.0.1` | 网关监听 bind host（默认回环；空串=`0.0.0.0`） |
@@ -274,7 +275,7 @@ ERROR / WARN 始终输出。
 
 | 特性 | 配置 / 命令 | 要点 | 详文 |
 |------|-------------|------|------|
-| **平滑推送** | `master.maxChunksPerTick`（5）、`master.serverChunkPushThreads` | 每 tick 提交上限限速（满 tick ≈ 100/s，掉刻自然降速；主线程峰值 ≤8ms/tick）；encode/压缩/hash/发送全在推送池——1.21.2+ 主线程仅 build，<1.21.2 全后台；**反馈式渐进 admission**（`ChunkAdmissionController` + `ChunkApplyAck`：客户端 authoritative 落地后 ACK，背压服务端 full/SeedGen 生产）；实现与单测已交付，Fabric 1.20.1 进服/移动曲线待独立验收 | [`chunk-cache.md`](chunk-cache.md)、[`network-core-followups.md`](network-core-followups.md)、[`runtime-smoke-test.md`](runtime-smoke-test.md) |
+| **平滑推送** | `master.maxChunksPerTick`（4）、`master.serverChunkPushThreads`（4） | 每 tick 提交上限限速（满 tick ≈ 80/s，掉刻自然降速）；主线程构建 packet 快照，encode/压缩/hash/发送在固定推送池；**反馈式渐进 admission**（`ChunkAdmissionController` + `ChunkApplyAck`：客户端 authoritative 落地后 ACK，背压服务端 full/SeedGen 生产）；实现与单测已交付，Fabric 1.20.1 进服/移动曲线待独立验收 | [`chunk-cache.md`](chunk-cache.md)、[`network-core-followups.md`](network-core-followups.md)、[`runtime-smoke-test.md`](runtime-smoke-test.md) |
 | **网关帧协议** | 无专属配置键（网关端口 = `master.controlReachableEndpoints[0]`，兜底 25566） | 客户端 outbound（网络核心）↔ 主控 `GatewayServer`（主控核心）的 TCP 控制面：varint 帧长 + type + payload；ZSTD 装于帧协议之外（握手协商后安装）；S2C 推送经 `PACKET_S2C` 帧回传，C2S 经 `PACKET_C2S` 帧收口 | §4、§8 |
 | **L1 迁移（无感续流）** | `master.migrationSilentTimeoutMs`（默认 10000）+ `migrationFaultTimeoutMs`（60000 legacy 回退）；`/hassium migrate`（仅开发环境） | 主控故障/断流时切换 outbound 至新主控：`PrewarmSession` 预连 + `ResumeTicket` 续流票据（HMAC-SHA256 + epoch 防重放）→ 主控 `ResumeTicketValidator` 验签 → `markPlayerResumeActive` 推送续流；无需重进世界，区块缓存直接续用；策略/演练触发见 §12.6 | [`runtime-smoke-test.md`](runtime-smoke-test.md#网关双主控迁移冒烟t7) |
 | **多通道数据面（历史）** | 早期 `DataPlanePoCConfig` | 1.20.1 Fabric 的双裸 TCP PoC 已退役，不是生产配置或运维入口 | [`archive/multi-channel_network_research.md`](archive/multi-channel_network_research.md) |

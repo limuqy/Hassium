@@ -36,8 +36,8 @@ Hassium is a single client + server suite that optimizes Minecraft from six dire
 
 - **Goal**: The server keeps the main thread under control during join and view expansion; the client avoids hitch spikes
 - **Server side** (push):
-  - **Tick-granularity throttling**: `master.maxChunksPerTick` (default `5`) caps per-player submits per tick (5×20 = 100/s at full tick); the per-tick submit count stays fixed during lag so the per-second rate naturally drops — protecting the server main thread; main-thread peak ≤ ~8 ms/tick
-  - **Background serialization**: encode / ZSTD compression / hash computation / send all run on the push pool (`master.serverChunkPushThreads` default 2, dynamically resizable); the main thread only builds the packet — aligned with vanilla (which also builds on the main thread and encodes on netty). On 1.20.x/1.21.1 the whole serialization chain runs off-thread
+  - **Tick-granularity throttling**: `master.maxChunksPerTick` (default `4`) caps per-player submits per tick (4×20 = 80/s at full tick); the per-tick submit count stays fixed during lag so the per-second rate naturally drops — protecting the server main thread
+  - **Background serialization**: encode / ZSTD compression / hash computation / send all run on the fixed push pool (`master.serverChunkPushThreads` default 4); the main thread only builds the packet snapshot — aligned with vanilla (which also builds on the main thread and encodes on netty)
   - **Progressive admission**: full / SeedGen deliveries are keyed by `(dimension, chunk)`; the client sends `ChunkApplyAck` after authoritative apply; one unacked batch before the first ACK, then up to 10; `GatewayChannel.isWritable` is transport backpressure only
   - **Verification status**: Implementation plus compile/unit tests are delivered; the Fabric 1.20.1 live join/move production–apply curve still needs a dedicated runtime window (see [`network-core-followups.md`](../docs/network-core-followups.md))
 - **Client side** (loading):

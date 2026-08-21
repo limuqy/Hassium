@@ -205,9 +205,6 @@ public record HassiumConfig(
             // === 服务端推送 ===
             int maxChunksPerTick,
             int serverChunkPushThreads,
-            boolean dynamicThreadPoolEnabled,
-            int minPushThreads,
-            int maxPushThreads,
             // === 网关监听与鉴权（D-M2：默认回环绑定 + 可选握手鉴权）===
             String bindHost,
             String authToken,
@@ -255,8 +252,7 @@ public record HassiumConfig(
                     globalPacketCompression, globalCompressionLevel, globalCompressionThreshold,
                     useContextCompression, enablePacketAggregation, aggregationMinBatchSize,
                     aggregationMaxWaitTimeMs, aggregationMaxSize, enableCompactHeader, compressionBlacklist,
-                    metricsEnabled, maxChunksPerTick, serverChunkPushThreads, dynamicThreadPoolEnabled,
-                    minPushThreads, maxPushThreads, bindHost, authToken, controlReachableEndpoints, migrationFaultTimeoutMs,
+                    metricsEnabled, maxChunksPerTick, serverChunkPushThreads, bindHost, authToken, controlReachableEndpoints, migrationFaultTimeoutMs,
                     minTps, maxLoadAverage, maintenanceWindow, heartbeatIntervalMs, idleWindowMs,
                     silentTimeoutMs, migrationPrewarmTtlMs, resumeTicketTtlMs, dataPlane);
         }
@@ -269,8 +265,7 @@ public record HassiumConfig(
                     globalPacketCompression, globalCompressionLevel, globalCompressionThreshold,
                     useContextCompression, enablePacketAggregation, aggregationMinBatchSize,
                     aggregationMaxWaitTimeMs, aggregationMaxSize, enableCompactHeader, compressionBlacklist,
-                    metricsEnabled, maxChunksPerTick, serverChunkPushThreads, dynamicThreadPoolEnabled,
-                    minPushThreads, maxPushThreads, bindHost, authToken, controlReachableEndpoints, migrationFaultTimeoutMs,
+                    metricsEnabled, maxChunksPerTick, serverChunkPushThreads, bindHost, authToken, controlReachableEndpoints, migrationFaultTimeoutMs,
                     migrationMinTps, migrationMaxLoadAverage, migrationMaintenanceWindow, migrationHeartbeatIntervalMs,
                     migrationIdleWindowMs, migrationSilentTimeoutMs, migrationPrewarmTtlMs, resumeTicketTtlMs, dataPlane);
         }
@@ -310,11 +305,8 @@ public record HassiumConfig(
                 true,              // enableCompactHeader
                 DEFAULT_COMPRESSION_BLACKLIST,
                 false,              // metricsEnabled
-                9,                 // maxChunksPerTick（schema 为准；对齐原版 PlayerChunkSender 初值；满 tick ≈ 180/s）
-                2,                 // serverChunkPushThreads
-                true,              // dynamicThreadPoolEnabled
-                2,                 // minPushThreads
-                8,                 // maxPushThreads
+                4,                 // maxChunksPerTick（满 tick ≈ 80/s）
+                4,                 // serverChunkPushThreads
                 "127.0.0.1",       // bindHost（D-M2 默认回环绑定；空串=0.0.0.0 全网卡，生产多网卡显式声明）
                 "",                // authToken（D-M2 默认空=不鉴权）
                 List.of(),         // controlReachableEndpoints

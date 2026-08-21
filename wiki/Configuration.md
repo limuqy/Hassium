@@ -67,7 +67,8 @@ Hassium 启动时在 `config/hassium/` 自动生成两份 TOML：
 | `master.enabled` | `true` | 服务端网络通道总开关 |
 | `master.globalPacketCompression` | `true` | 全局管道用 ZSTD 替换原版 Zlib（关闭可与同类协议替换类 mod 共存） |
 | `master.compressionLevel` | `3` | 自有通道压缩等级（速度优先） |
-| `master.maxChunksPerTick` | `5` | 每玩家每 tick 提交上限（发送速率 = 本值 × tick 节奏，满 tick ≈ 5×20 = 100/s；掉刻自然降速保护主线程） |
+| `master.maxChunksPerTick` | `4` | 每玩家每 tick 提交上限（发送速率 = 本值 × tick 节奏，满 tick ≈ 4×20 = 80/s；掉刻自然降速保护主线程） |
+| `master.serverChunkPushThreads` | `4` | 服务端区块推送固定线程数（encode / hash / ZSTD 后台池） |
 | `master.enablePacketAggregation` | `true` | 包聚合；第三方通道被拦截异常时关掉 |
 | `master.compressionBlacklist` | 10 项默认黑名单 | 包 ID 列表，命中的包不进压缩/聚合（默认含 CHUNK_PAYLOAD / SECTION_DELTA / HANDSHAKE / DICTIONARY_SYNC / INDEX_SYNC / CHUNK_HASH / LIGHT_DELTA / BLOCK_ENTITY_DATA / MAIN_CHANNEL / AGGREGATION） |
 | `master.metricsEnabled` | `false` | 服务端网络指标（关闭后 `/hassium stats` 等命令不可用） |

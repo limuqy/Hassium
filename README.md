@@ -100,7 +100,7 @@
 | `net.enabled` | `true` | 客户端网络核心总开关（自定义通道；关后回退原版区块包） |
 | `net.metricsEnabled` | `false` | 客户端网络指标（默认关闭；自检时自动开启） |
 | `master.globalPacketCompression` | `true` | 全局 ZSTD |
-| `master.maxChunksPerTick` | `5` | 每玩家每 tick 提交上限（发送速率 = 本值 × tick 节奏，满 tick ≈ 5×20/s ≈ 100/s；掉刻自然降速） |
+| `master.maxChunksPerTick` | `4` | 每玩家每 tick 提交上限（发送速率 = 本值 × tick 节奏，满 tick ≈ 4×20/s ≈ 80/s；掉刻自然降速） |
 | `master.metricsEnabled` | `false` | 服务端网络指标（默认关闭；自检时自动开启） |
 | `master.controlReachableEndpoints` | `[]` | 网关监听端点（`endpoints[0]` 即网关端口，兜底 25566） |
 | `dataplane.enabled` | `false` | UDP/KCP 数据面：网关↔主控通道的 bulk 载体（默认关）；启用前请配置可达端点（`dataplane.udpListeners[*].reachableEndpoints`） |

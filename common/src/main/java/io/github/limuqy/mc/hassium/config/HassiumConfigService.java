@@ -506,7 +506,7 @@ public class HassiumConfigService {
     }
 
     public int getServerChunkPushThreads() {
-        return config.master().serverChunkPushThreads();
+        return Math.max(1, Math.min(64, config.master().serverChunkPushThreads()));
     }
 
     public boolean isServerLightStrip() {
@@ -563,20 +563,6 @@ public class HassiumConfigService {
         return config.net().metricsAutoReset();
     }
 
-    public boolean isDynamicThreadPoolEnabled() {
-        return config.master().dynamicThreadPoolEnabled();
-    }
-
-    public int getMinPushThreads() {
-        return Math.max(1, config.master().minPushThreads());
-    }
-
-    public int getMaxPushThreads() {
-        int value = config.master().maxPushThreads();
-        return Math.max(getMinPushThreads(), value);
-    }
-
-    /** 是否启用 SeedGen（服务端：对 pristine 区块发 SeedRef 替代区块数据；默认关）。 */
     /** 是否启用 SeedGen（服务端：对 pristine 区块发 SeedRef 替代区块数据；默认关）。 */
     public boolean isSeedGenEnabled() {
         return config.chunk().seedGenEnabled();

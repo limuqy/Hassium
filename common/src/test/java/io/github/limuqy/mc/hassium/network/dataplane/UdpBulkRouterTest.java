@@ -123,7 +123,7 @@ class UdpBulkRouterTest {
     @Test
     @DisplayName("并发 refresh + routeAndPick（模拟 pushPool 多线程发送同一玩家 chunk）不抛 AIOOBE，决策合法")
     void concurrentRefreshAndRouteKeepsWrrStateIntact() throws Exception {
-        // 回归：ServerChunkPushManager.pushPool（2-8 线程）对同一玩家的多个 chunk 并发走
+        // 回归：ServerChunkPushManager.pushPool（固定多线程）对同一玩家的多个 chunk 并发走
         // tryRouteBulk → refresh + routeAndPick。修复前 refresh 与 wrrPickShared 的 curWeights
         // check-then-act 竞态会产生 ArrayIndexOutOfBoundsException: Index N out of bounds for length 1。
         UdpBulkRouter router = new UdpBulkRouter(1_000);

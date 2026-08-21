@@ -89,11 +89,8 @@
 | `master.enableCompactHeader` | `true` | 紧凑包头 |
 | `master.compressionBlacklist` | 10 项默认黑名单（CHUNK_PAYLOAD/SECTION_DELTA/HANDSHAKE/DICTIONARY_SYNC/INDEX_SYNC/CHUNK_HASH/LIGHT_DELTA/BLOCK_ENTITY_DATA/MAIN_CHANNEL/AGGREGATION） | 压缩/聚合黑名单；默认源 HassiumConfig.java:225-235 |
 | `master.metricsEnabled` | `false` | 主控网络指标 |
-| `master.maxChunksPerTick` | `5` | 每玩家每 tick 提交序列化区块上限（满 tick ≈ 100/s） |
-| `master.serverChunkPushThreads` | `2` | 服务端推送线程数 |
-| `master.dynamicThreadPoolEnabled` | `true` | 动态调整推送线程 |
-| `master.minPushThreads` | `2` | 动态池最小线程 |
-| `master.maxPushThreads` | `8` | 动态池最大线程 |
+| `master.maxChunksPerTick` | `4` | 每玩家每 tick 提交序列化区块上限（满 tick ≈ 80/s） |
+| `master.serverChunkPushThreads` | `4` | 服务端区块推送固定线程数（encode / hash / ZSTD） |
 | `master.controlReachableEndpoints` | `[]` | 网关监听/outbound 端点（网关监听地址源） |
 | `master.migrationFaultTimeoutMs` | `60000` | L1 迁移故障超时（ms；faultTimeout 未覆盖时生效） |
 
@@ -146,7 +143,7 @@
    - `network.dataPlane.enabled` / `udpListeners` → `dataplane.*`；`network.dataPlane.recoveryWindowMs` → `master.migrationFaultTimeoutMs`（语义 = L1 迁移 faultTimeout）
    - 保留：`storage.enabled/zstdLevel`、`compat.*`、`debug.*`（路径不变）
 2. **删除 4 键**（见 §二.C）；ControlFailoverHandler 引用字段改为固定常量（6000/30000）。
-3. **默认值口径**：生效默认 = ConfigSchema（三端 backend 均从 schema 生成）。`maxChunksPerTick` 默认 **5**（HassiumConfig.DEFAULT 已同步，无死默认）。
+3. **默认值口径**：生效默认 = ConfigSchema（三端 backend 均从 schema 生成）。`maxChunksPerTick` / `serverChunkPushThreads` 默认 **4**。
 4. **注释修正**（与 T1 同步）：`recoveryWindowMs`→migrationFaultTimeoutMs 语义、`controlReachableEndpoints` = 网关监听/outbound 端点、`sectionDeltaEnabled` 活跃消费、`net.enabled` = 网络核心总开关。
 
 ## 五、gateway 端口事实（无新增配置键的依据）
@@ -184,7 +181,7 @@
 
 ### 🟡 分类问题
 
-1. ~~`HassiumConfig.DEFAULT.maxChunksPerTick=4` 与 schema 的 5 不一致~~ —— **已修复**（2026-08-09 重排，DEFAULT 同步为 5）。
+1. ~~`HassiumConfig.DEFAULT.maxChunksPerTick` 与 schema 不一致~~ —— **已对齐为 4**。
 2. ~~ConfigSchema 内注释滞后于 2.0.0 消费语义~~ —— **已修复**（T1 修正 7 处过时注释）。
 3. **聚合键挂载点收敛**：聚合/压缩/紧凑包头键全为主控侧 vanilla 路径键（`master.*`）；网关通道仅复用 `master.globalCompression*`（ZSTD 等级/阈值），无聚合、无独立键。
 4. **键族归属**：2026-08-09 重排后，所有键按三核心 + 支撑域前缀归位（`chunk.*` 区块核心 / `net.*` 网络核心 / `master.*` 主控核心 / `dataplane.*` 数据面 / `storage.*` 存储 / `compat.*` 兼容 / `debug.*` 调试），无历史错放键。

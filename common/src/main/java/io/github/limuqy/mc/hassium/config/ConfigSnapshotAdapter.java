@@ -67,9 +67,6 @@ public final class ConfigSnapshotAdapter {
                 .with(ConfigSchema.MASTER_METRICS_ENABLED, master.metricsEnabled())
                 .with(ConfigSchema.MASTER_MAX_CHUNKS_PER_TICK, master.maxChunksPerTick())
                 .with(ConfigSchema.MASTER_SERVER_PUSH_THREADS, master.serverChunkPushThreads())
-                .with(ConfigSchema.MASTER_DYNAMIC_THREADS, master.dynamicThreadPoolEnabled())
-                .with(ConfigSchema.MASTER_MIN_PUSH_THREADS, master.minPushThreads())
-                .with(ConfigSchema.MASTER_MAX_PUSH_THREADS, master.maxPushThreads())
                 .with(ConfigSchema.MASTER_BIND_HOST, master.bindHost())
                 .with(ConfigSchema.MASTER_AUTH_TOKEN, master.authToken())
                 .with(ConfigSchema.MASTER_CONTROL_ENDPOINTS, master.controlReachableEndpoints().stream().map(DataPlaneEndpointConfig::encodeReachable).toList())
@@ -146,8 +143,6 @@ public final class ConfigSnapshotAdapter {
                 values.get(ConfigSchema.MASTER_AGGREGATION_MAX_SIZE), values.get(ConfigSchema.MASTER_COMPACT_HEADER),
                 SetCopy.copy(values.get(ConfigSchema.MASTER_COMPRESSION_BLACKLIST)), values.get(ConfigSchema.MASTER_METRICS_ENABLED),
                 values.get(ConfigSchema.MASTER_MAX_CHUNKS_PER_TICK), values.get(ConfigSchema.MASTER_SERVER_PUSH_THREADS),
-                values.get(ConfigSchema.MASTER_DYNAMIC_THREADS), values.get(ConfigSchema.MASTER_MIN_PUSH_THREADS),
-                values.get(ConfigSchema.MASTER_MAX_PUSH_THREADS),
                 values.get(ConfigSchema.MASTER_BIND_HOST),
                 authToken,
                 controlEndpoints, values.get(ConfigSchema.MASTER_MIGRATION_FAULT_TIMEOUT_MS),

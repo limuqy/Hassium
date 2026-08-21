@@ -108,17 +108,12 @@ public final class ConfigSchema {
             "压缩/聚合黑名单", "Compression / aggregation blacklist");
     public static final ConfigKey<Boolean> MASTER_METRICS_ENABLED = bool("master.metricsEnabled", ConfigScope.SERVER, Domain.MASTER_CORE, false,
             "是否启用主控网络指标", "Enable master network metrics");
-    public static final ConfigKey<Integer> MASTER_MAX_CHUNKS_PER_TICK = integer("master.maxChunksPerTick", ConfigScope.SERVER, Domain.MASTER_CORE, 9, 1, 256,
-            "每玩家每 tick 提交到后台序列化的区块上限（满 tick ≈ 本值×20/s；对齐原版 PlayerChunkSender 初值 9）",
-            "Per-player per-tick chunk submit cap (≈ value×20/s at full tick; vanilla PlayerChunkSender starts at 9)");
-    public static final ConfigKey<Integer> MASTER_SERVER_PUSH_THREADS = integer("master.serverChunkPushThreads", ConfigScope.SERVER, Domain.MASTER_CORE, 2, 1, 64,
-            "服务端推送线程数", "Server chunk-push thread count");
-    public static final ConfigKey<Boolean> MASTER_DYNAMIC_THREADS = bool("master.dynamicThreadPoolEnabled", ConfigScope.SERVER, Domain.MASTER_CORE, true,
-            "是否动态调整推送线程", "Dynamically resize the push thread pool");
-    public static final ConfigKey<Integer> MASTER_MIN_PUSH_THREADS = integer("master.minPushThreads", ConfigScope.SERVER, Domain.MASTER_CORE, 2, 1, 64,
-            "动态池最小线程数", "Dynamic pool minimum threads");
-    public static final ConfigKey<Integer> MASTER_MAX_PUSH_THREADS = integer("master.maxPushThreads", ConfigScope.SERVER, Domain.MASTER_CORE, 8, 1, 64,
-            "动态池最大线程数", "Dynamic pool maximum threads");
+    public static final ConfigKey<Integer> MASTER_MAX_CHUNKS_PER_TICK = integer("master.maxChunksPerTick", ConfigScope.SERVER, Domain.MASTER_CORE, 4, 1, 256,
+            "每玩家每 tick 提交到后台序列化的区块上限（满 tick ≈ 本值×20/s）",
+            "Per-player per-tick chunk submit cap (≈ value×20/s at full tick)");
+    public static final ConfigKey<Integer> MASTER_SERVER_PUSH_THREADS = integer("master.serverChunkPushThreads", ConfigScope.SERVER, Domain.MASTER_CORE, 4, 1, 64,
+            "服务端区块推送线程数（encode/hash/ZSTD 固定后台池）",
+            "Server chunk-push thread count (fixed encode/hash/ZSTD pool)");
     public static final ConfigKey<List<String>> MASTER_CONTROL_ENDPOINTS = stringList("master.controlReachableEndpoints", ConfigScope.SERVER, Domain.MASTER_CORE, List::of,
             "网关监听端点（服务端绑定/下发；客户端经 gateway_info 同步，无需本地配置）",
             "Gateway listen endpoints (server bind/publish; clients get them via gateway_info)");

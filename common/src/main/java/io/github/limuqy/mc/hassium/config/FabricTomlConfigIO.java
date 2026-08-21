@@ -495,9 +495,6 @@ public final class FabricTomlConfigIO {
                 getBool(cfg, "master.metricsEnabled", d.metricsEnabled()),
                 getInt(cfg, "master.maxChunksPerTick", d.maxChunksPerTick()),
                 getInt(cfg, "master.serverChunkPushThreads", d.serverChunkPushThreads()),
-                getBool(cfg, "master.dynamicThreadPoolEnabled", d.dynamicThreadPoolEnabled()),
-                getInt(cfg, "master.minPushThreads", d.minPushThreads()),
-                getInt(cfg, "master.maxPushThreads", d.maxPushThreads()),
                 getString(cfg, "master.bindHost", d.bindHost()),
                 getString(cfg, "master.authToken", d.authToken()),
                 readReachableEndpoints(cfg, "master.controlReachableEndpoints", "master.controlReachableEndpoints",
@@ -532,10 +529,10 @@ public final class FabricTomlConfigIO {
         set(cfg, "master.compressionBlacklist", new ArrayList<>(n.compressionBlacklist()), "压缩/聚合黑名单");
         set(cfg, "master.metricsEnabled", n.metricsEnabled(), "是否启用指标收集");
         set(cfg, "master.maxChunksPerTick", n.maxChunksPerTick(), "每玩家每 tick 提交到后台序列化的区块上限（发送速率 = 本值 × tick 节奏，满 tick ≈ 本值×20/s，仅服务端）");
-        set(cfg, "master.serverChunkPushThreads", n.serverChunkPushThreads(), "服务端推送线程数（仅服务端）");
-        set(cfg, "master.dynamicThreadPoolEnabled", n.dynamicThreadPoolEnabled(), "是否动态调整推送线程（仅服务端）");
-        set(cfg, "master.minPushThreads", n.minPushThreads(), "动态池最小线程数（仅服务端）");
-        set(cfg, "master.maxPushThreads", n.maxPushThreads(), "动态池最大线程数（仅服务端）");
+        set(cfg, "master.serverChunkPushThreads", n.serverChunkPushThreads(), "服务端区块推送线程数（encode/hash/ZSTD 固定后台池，仅服务端）");
+        cfg.remove("master.dynamicThreadPoolEnabled");
+        cfg.remove("master.minPushThreads");
+        cfg.remove("master.maxPushThreads");
         set(cfg, "master.bindHost", n.bindHost(),
                 "网关监听 bind host（默认 127.0.0.1 回环；空串=0.0.0.0 全网卡，生产多网卡显式声明）");
         set(cfg, "master.authToken", n.authToken(),

@@ -100,7 +100,7 @@ Files: `config/hassium/hassium-client.toml`, `config/hassium/hassium-server.toml
 | `net.enabled` | `true` | Master switch for the client network core (custom channels; off = revert to vanilla chunk packets) |
 | `net.metricsEnabled` | `false` | Client network metrics (off by default; auto-enabled during self-checks) |
 | `master.globalPacketCompression` | `true` | Global ZSTD |
-| `master.maxChunksPerTick` | `5` | Per-player submit cap per tick (send rate = cap × tick rhythm; ≈ 5×20/s ≈ 100/s at full tick, naturally slows on lag) |
+| `master.maxChunksPerTick` | `4` | Per-player submit cap per tick (send rate = cap × tick rhythm; ≈ 4×20/s ≈ 80/s at full tick, naturally slows on lag) |
 | `master.metricsEnabled` | `false` | Server network metrics (off by default; auto-enabled during self-checks) |
 | `master.controlReachableEndpoints` | `[]` | Gateway listen endpoints (`endpoints[0]` is the gateway port, falls back to 25566) |
 | `dataplane.enabled` | `false` | UDP/KCP data plane: bulk carrier for the gateway ↔ master-core channel (**off by default**); configure reachable endpoints (`dataplane.udpListeners[*].reachableEndpoints`) before enabling |

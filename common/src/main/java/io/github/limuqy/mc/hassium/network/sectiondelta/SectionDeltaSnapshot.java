@@ -21,7 +21,11 @@ public final class SectionDeltaSnapshot {
     }
 
     public static SectionDeltaSnapshot capture(LevelChunk chunk) {
-        LevelChunkSection[] sections = chunk.getSections();
+        return capture(chunk.getSections());
+    }
+
+    /** 从已脱离 live world 的 section 数组捕获（任意线程可读）。 */
+    public static SectionDeltaSnapshot capture(LevelChunkSection[] sections) {
         int count = sections.length;
         long[] hashes = new long[count];
         int[][] planes = new int[count][];

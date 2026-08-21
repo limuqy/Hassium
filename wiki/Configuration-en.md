@@ -67,7 +67,8 @@ In-game config screen entry points:
 | `master.enabled` | `true` | Master switch for the server-side network channels |
 | `master.globalPacketCompression` | `true` | Replace the vanilla Netty Zlib with ZSTD globally (off = coexist with protocol-replacement mods) |
 | `master.compressionLevel` | `3` | Own-channel compression level (speed-biased) |
-| `master.maxChunksPerTick` | `5` | Per-player submit cap per tick (send rate = cap × tick rhythm; ≈ 5×20 = 100/s at full tick, naturally slows on lag) |
+| `master.maxChunksPerTick` | `4` | Per-player submit cap per tick (send rate = cap × tick rhythm; ≈ 4×20 = 80/s at full tick, naturally slows on lag) |
+| `master.serverChunkPushThreads` | `4` | Fixed server chunk-push thread count (encode / hash / ZSTD pool) |
 | `master.enablePacketAggregation` | `true` | Packet aggregation; turn off if a third-party channel misbehaves |
 | `master.compressionBlacklist` | 10-item default | Packet ID list; matched packets bypass compression/aggregation (default includes CHUNK_PAYLOAD / SECTION_DELTA / HANDSHAKE / DICTIONARY_SYNC / INDEX_SYNC / CHUNK_HASH / LIGHT_DELTA / BLOCK_ENTITY_DATA / MAIN_CHANNEL / AGGREGATION) |
 | `master.metricsEnabled` | `false` | Server network metrics (off disables `/hassium stats` etc.) |

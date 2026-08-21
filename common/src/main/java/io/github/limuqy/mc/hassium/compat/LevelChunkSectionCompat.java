@@ -3,6 +3,9 @@ package io.github.limuqy.mc.hassium.compat;
 import java.io.DataOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
+#if MC_VER < MC_1_21_11
+import net.minecraft.core.Holder;
+#endif
 import net.minecraft.core.Registry;
 import net.minecraft.core.RegistryAccess;
 import net.minecraft.network.FriendlyByteBuf;
@@ -10,9 +13,12 @@ import net.minecraft.world.level.biome.Biome;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.chunk.LevelChunkSection;
+#if MC_VER < MC_1_21_11
+import net.minecraft.world.level.chunk.PalettedContainer;
+#endif
+import net.minecraft.world.level.chunk.PalettedContainerRO;
 #if MC_VER >= MC_1_21_9
 import net.minecraft.world.level.chunk.PalettedContainerFactory;
-import net.minecraft.world.level.chunk.PalettedContainerRO;
 import net.minecraft.world.level.chunk.Strategy;
 #endif
 
@@ -44,6 +50,27 @@ public final class LevelChunkSectionCompat {
         return new LevelChunkSection(biomeRegistry);
 #else
         return new LevelChunkSection(PalettedContainerFactory.create(registryAccess));
+#endif
+    }
+
+    /**
+     * 主线程脱离 live world：拷贝 PalettedContainer（独立 ThreadingDetector），
+     * 后台可自由 hash / write / 扫格。用内存换主线程时间。
+     */
+    @SuppressWarnings("unchecked")
+    public static LevelChunkSection copyDetached(LevelChunkSection live) {
+#if MC_VER >= MC_1_21_11
+        return live.copy();
+#else
+        PalettedContainer<BlockState> states = live.getStates().copy();
+        PalettedContainerRO<Holder<Biome>> biomes;
+        PalettedContainerRO<Holder<Biome>> src = live.getBiomes();
+        if (src instanceof PalettedContainer<?> paletted) {
+            biomes = (PalettedContainerRO<Holder<Biome>>) (Object) paletted.copy();
+        } else {
+            biomes = src.recreate();
+        }
+        return new LevelChunkSection(states, biomes);
 #endif
     }
 

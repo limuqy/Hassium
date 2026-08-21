@@ -31,7 +31,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class ConfigRestructureRoundTripTest {
 
     private static final List<String> DELETED_KEYS =
-            List.of("recoveryFreeze", "controlStallMs", "failoverExpiryMs", "storage.mode", "loadThreads");
+            List.of("recoveryFreeze", "controlStallMs", "failoverExpiryMs", "storage.mode", "loadThreads",
+                    "dynamicThreadPoolEnabled", "minPushThreads", "maxPushThreads");
 
     // === 1. defaults 生成：71 键齐全 ===
 
@@ -41,13 +42,13 @@ class ConfigRestructureRoundTripTest {
         Map<String, ConfigEntry<?>> byPath = ConfigSchema.entries().stream()
                 .collect(Collectors.toMap(e -> e.scope() + "/" + e.path(), Function.identity()));
 
-        assertEquals(77, ConfigSchema.entries().size(), "schema 留存键数（81 原 − 4：debug 按端裁剪 dataplane/metadata/cache/lightVerify 对端副本）");
-        assertEquals(77, values.asMap().size(), "defaults 键数");
+        assertEquals(74, ConfigSchema.entries().size(), "schema 留存键数（77 − 3：动态推送线程池三项）");
+        assertEquals(74, values.asMap().size(), "defaults 键数");
 
         Map<String, Long> prefixCounts = ConfigSchema.entries().stream()
                 .collect(Collectors.groupingBy(e -> e.path().substring(0, e.path().indexOf('.') + 1),
                         Collectors.counting()));
-        assertEquals(Map.of("chunk.", 23L, "net.", 3L, "master.", 31L, "debug.", 14L,
+        assertEquals(Map.of("chunk.", 23L, "net.", 3L, "master.", 28L, "debug.", 14L,
                 "dataplane.", 2L, "storage.", 2L, "compat.", 2L), prefixCounts);
 
         // 双端同名键 chunk.seedGenEnabled 各一
@@ -115,7 +116,7 @@ class ConfigRestructureRoundTripTest {
     void serverTomlRoundTripsNewKeys(@TempDir Path root) throws IOException {
         HassiumConfig.MasterCoreConfig master = new HassiumConfig.MasterCoreConfig(
                 true, 9, false, false, 5, 512, false, false, 8, 50L, 131072, false,
-                Set.of("CHUNK_PAYLOAD_S2C", "MAIN_CHANNEL"), true, 7, 4, false, 3, 12,
+                Set.of("CHUNK_PAYLOAD_S2C", "MAIN_CHANNEL"), true, 7, 4,
                 // D-M2 网关监听/鉴权（server.toml 往返）
                 "10.0.0.5", "secret-token",
                 List.of(new HassiumConfig.ReachableEndpoint("play.example", 25565, 100),
@@ -221,8 +222,9 @@ class ConfigRestructureRoundTripTest {
         assertEquals(4.0, values.get(ConfigSchema.MASTER_MIGRATION_MAX_LOAD_AVERAGE));
         assertEquals("", values.get(ConfigSchema.MASTER_MIGRATION_MAINTENANCE_WINDOW));
         assertEquals(60_000L, values.get(ConfigSchema.MASTER_MIGRATION_PREWARM_TTL_MS));
-        // master.maxChunksPerTick 以 schema 为准 = 9（对齐原版 PlayerChunkSender 初值）
-        assertEquals(9, values.get(ConfigSchema.MASTER_MAX_CHUNKS_PER_TICK));
+        // master.maxChunksPerTick / serverChunkPushThreads 默认 4
+        assertEquals(4, values.get(ConfigSchema.MASTER_MAX_CHUNKS_PER_TICK));
+        assertEquals(4, values.get(ConfigSchema.MASTER_SERVER_PUSH_THREADS));
         // dataplane.udpListeners 默认编码 [0.0.0.0:25565 (w=100) → 127.0.0.1:25565 (w=100)]
         assertEquals(List.of("0.0.0.0,25565,100;127.0.0.1,25565,100"),
                 values.get(ConfigSchema.DATAPLANE_UDP_LISTENERS));

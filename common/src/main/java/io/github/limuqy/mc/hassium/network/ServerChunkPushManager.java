@@ -401,22 +401,6 @@ public class ServerChunkPushManager {
         return INSTANCE;
     }
 
-    /**
-     * 上次调整线程池的时间戳
-     */
-    private volatile long lastAdjustmentTime = 0;
-
-    /**
-     * 线程池调整间隔（毫秒）
-     */
-    private static final long ADJUSTMENT_INTERVAL_MS = 5000;
-
-    /**
-     * 队列长度阈值（用于动态调整）
-     */
-    private static final int QUEUE_HIGH_THRESHOLD = 50;
-    private static final int QUEUE_LOW_THRESHOLD = 10;
-
     /** ChunkHash 单包最多 entries */
     private static final int HASH_BATCH_MAX_ENTRIES = 16;
 
@@ -454,19 +438,10 @@ public class ServerChunkPushManager {
      */
     private void ensureInitialized() {
         if (initialized.compareAndSet(false, true)) {
-            HassiumConfigService configService = HassiumConfigService.getInstance();
-            int initialThreads = configService.getServerChunkPushThreads();
-            int minThreads = configService.getMinPushThreads();
-            int maxThreads = configService.getMaxPushThreads();
-
-            if (initialThreads <= 0) {
-                initialThreads = 2;
-            }
-            initialThreads = Math.max(minThreads, Math.min(maxThreads, initialThreads));
-
+            int threads = HassiumConfigService.getInstance().getServerChunkPushThreads();
             pushPool = new ThreadPoolExecutor(
-                    initialThreads,
-                    maxThreads,
+                    threads,
+                    threads,
                     60L, TimeUnit.SECONDS,
                     new LinkedBlockingQueue<>(),
                     r -> {
@@ -477,8 +452,7 @@ public class ServerChunkPushManager {
             );
             pushPool.allowCoreThreadTimeOut(true);
 
-            Constants.LOG.info("Hassium: ServerChunkPushManager initialized with {} threads (min={}, max={})",
-                    initialThreads, minThreads, maxThreads);
+            Constants.LOG.info("Hassium: ServerChunkPushManager initialized with {} threads", threads);
             io.github.limuqy.mc.hassium.utils.StallDiag.event(
                     "pushManager timeoutMs={} maxInFlightWindow={}",
                     TimeUnit.NANOSECONDS.toMillis(DELIVERY_TIMEOUT_NANOS),
@@ -1508,7 +1482,6 @@ public class ServerChunkPushManager {
         hashBatches.keySet().removeIf(id -> server.getPlayerList().getPlayer(id) == null);
         admissionControllers.keySet().removeIf(id -> server.getPlayerList().getPlayer(id) == null);
         inFlightTasks.keySet().removeIf(id -> server.getPlayerList().getPlayer(id) == null);
-        adjustThreadPool();
     }
 
     /** 上次出界待命检查时间（毫秒） */
@@ -1591,22 +1564,23 @@ public class ServerChunkPushManager {
     /**
      * 处理客户端的 section 哈希请求（阶段二）。
      * <p>
-     * 全版本主线程处理：1.21.2+（PalettedContainer ThreadingDetector）比对/序列化必须在主线程；
-     * 1.20.x / 1.21.1 的 ThreadingDetector 为信号量版（tryAcquire 失败阻塞、持有方 checkAndUnlock
-     * 抛 ReportedException），后台读 chunk 与主线程 tick 写并发即崩服（drain 路径 5bf3c6b 已实测
-     * 回退，阶段二同理由）——<1.21.2 同样全主线程执行，正确性优先。
+     * 主线程只做已加载柱的脱离拷贝（{@code getChunkNow} + PalettedContainer.copy），
+     * 禁止 {@code getChunk} 同步读盘。hash / 平面 / 规划 / write / 回包全部下推
+     * {@code pushPool}：live {@link LevelChunk} 不能给后台读（ThreadingDetector）。
      * 每次请求都回包：可服务的进 {@code entries}，超距/失败的进 {@code skipped}（客户端回退全量）。
      */
     public void handleSectionHashRequest(ServerPlayer player, SectionHashRequestC2SPacket request) {
         if (!player.isAlive() || player.hasDisconnected()) { return; }
-#if MC_VER < MC_1_21_2
         ensureInitialized();
 
         ServerLevel level = PlayerCompat.getServerLevel(player);
+        if (level == null) {
+            return;
+        }
         int maxDist = PlayerCompat.getViewDistance(player) + SECTION_DELTA_VIEW_MARGIN;
         ChunkPos playerChunkPos = player.chunkPosition();
         List<SectionDeltaS2CPacket.SkippedChunk> skipped = new ArrayList<>();
-        List<DeltaWork> works = new ArrayList<>();
+        List<SectionDeltaWork> works = new ArrayList<>();
 
         for (var entry : request.entries()) {
             int dx = Math.abs(entry.chunkX() - playerChunkPos.x);
@@ -1620,92 +1594,47 @@ public class ServerChunkPushManager {
                 continue;
             }
 
-            LevelChunk chunk = level.getChunk(entry.chunkX(), entry.chunkZ());
+            LevelChunk chunk = level.getChunkSource().getChunkNow(entry.chunkX(), entry.chunkZ());
             if (chunk == null) {
                 skipped.add(new SectionDeltaS2CPacket.SkippedChunk(entry.chunkX(), entry.chunkZ()));
                 continue;
             }
 
-            works.add(new DeltaWork(chunk, entry));
-        }
-
-        // 主线程直接执行：ThreadingDetector 信号量版（<1.21.2）后台读 chunk 与主线程 tick 写并发即崩服
-        processSectionDelta(player, request.dimension(), works, skipped);
-#else
-        ServerLevel level = PlayerCompat.getServerLevel(player);
-        int maxDist = PlayerCompat.getViewDistance(player) + SECTION_DELTA_VIEW_MARGIN;
-        ChunkPos playerChunkPos = player.chunkPosition();
-        List<SectionDeltaS2CPacket.DeltaEntry> deltas = new ArrayList<>();
-        List<SectionDeltaS2CPacket.SkippedChunk> skipped = new ArrayList<>();
-
-        for (var entry : request.entries()) {
             try {
-                int dx = Math.abs(entry.chunkX() - playerChunkPos.x);
-                int dz = Math.abs(entry.chunkZ() - playerChunkPos.z);
-                if (dx > maxDist || dz > maxDist) {
-                    DebugLogger.info(LogType.NETWORK,
-                            "[SECTION_DELTA] Skip [{}, {}] out of range (dx={}, dz={}, maxDist={}, player=[{}, {}])",
-                            entry.chunkX(), entry.chunkZ(), dx, dz, maxDist,
-                            playerChunkPos.x, playerChunkPos.z);
-                    skipped.add(new SectionDeltaS2CPacket.SkippedChunk(entry.chunkX(), entry.chunkZ()));
-                    continue;
-                }
-
-                LevelChunk chunk = level.getChunk(entry.chunkX(), entry.chunkZ());
-                if (chunk == null) {
-                    skipped.add(new SectionDeltaS2CPacket.SkippedChunk(entry.chunkX(), entry.chunkZ()));
-                    continue;
-                }
-
-                SectionDeltaS2CPacket.DeltaEntry planned = planAndSerialize(chunk, entry);
-                if (planned == null) {
-                    skipped.add(new SectionDeltaS2CPacket.SkippedChunk(entry.chunkX(), entry.chunkZ()));
-                    continue;
-                }
-                deltas.add(planned);
+                works.add(new SectionDeltaWork(snapshotSectionDeltaColumn(chunk), entry));
             } catch (Exception e) {
-                Constants.LOG.error("[SECTION_DELTA] Failed to process chunk [{}, {}]",
+                Constants.LOG.error("[SECTION_DELTA] Failed to snapshot chunk [{}, {}]",
                         entry.chunkX(), entry.chunkZ(), e);
                 skipped.add(new SectionDeltaS2CPacket.SkippedChunk(entry.chunkX(), entry.chunkZ()));
             }
         }
 
-        sendSectionDeltaResponse(player, request.dimension(), deltas, skipped);
-#endif
-    }
-
-#if MC_VER < MC_1_21_2
-    /**
-     * 主线程执行 section 比对 + 序列化 + 回包（单请求单回包语义，顺序按请求顺序保持）。
-     */
-    private void processSectionDelta(ServerPlayer player, String dimension,
-                                     List<DeltaWork> works,
-                                     List<SectionDeltaS2CPacket.SkippedChunk> skipped) {
-        if (player.hasDisconnected()) {
-            return; // 断线无需回包
-        }
-        List<SectionDeltaS2CPacket.DeltaEntry> deltas = new ArrayList<>();
-        for (DeltaWork w : works) {
-            try {
-                SectionDeltaS2CPacket.DeltaEntry planned = planAndSerialize(w.chunk(), w.entry());
-                if (planned == null) {
-                    skipped.add(new SectionDeltaS2CPacket.SkippedChunk(w.entry().chunkX(), w.entry().chunkZ()));
-                    continue;
-                }
-                deltas.add(planned);
-            } catch (Exception e) {
-                Constants.LOG.error("[SECTION_DELTA] Failed to process chunk [{}, {}]",
-                        w.entry().chunkX(), w.entry().chunkZ(), e);
-                skipped.add(new SectionDeltaS2CPacket.SkippedChunk(w.entry().chunkX(), w.entry().chunkZ()));
+        String dimension = request.dimension();
+        pushPool.submit(() -> {
+            if (player.hasDisconnected()) {
+                return;
             }
-        }
-
-        sendSectionDeltaResponse(player, dimension, deltas, skipped);
+            List<SectionDeltaS2CPacket.DeltaEntry> deltas = new ArrayList<>();
+            List<SectionDeltaS2CPacket.SkippedChunk> skippedOut = new ArrayList<>(skipped);
+            for (SectionDeltaWork work : works) {
+                try {
+                    SectionDeltaS2CPacket.DeltaEntry planned = planAndSerialize(work.snap(), work.entry());
+                    if (planned == null) {
+                        skippedOut.add(new SectionDeltaS2CPacket.SkippedChunk(
+                                work.entry().chunkX(), work.entry().chunkZ()));
+                        continue;
+                    }
+                    deltas.add(planned);
+                } catch (Exception e) {
+                    Constants.LOG.error("[SECTION_DELTA] Failed to process chunk [{}, {}]",
+                            work.entry().chunkX(), work.entry().chunkZ(), e);
+                    skippedOut.add(new SectionDeltaS2CPacket.SkippedChunk(
+                            work.entry().chunkX(), work.entry().chunkZ()));
+                }
+            }
+            sendSectionDeltaResponse(player, dimension, deltas, skippedOut);
+        });
     }
-
-    /** 阶段二工作项：chunk 引用 + 客户端请求条目（hashes + 平面） */
-    private record DeltaWork(LevelChunk chunk, SectionHashRequestC2SPacket.Entry entry) {}
-#endif
 
     /**
      * 组包并发送阶段二响应（Data 通道优先，回退 Primary）。
@@ -1764,60 +1693,49 @@ public class ServerChunkPushManager {
     /**
      * 处理客户端的 blockEntity 数据请求。
      * <p>
-     * 低频路径，且 BE 收集需遍历 chunk BE map（1.21.2+ 跨线程读 chunk 结构被 ThreadingDetector 拦截），
-     * 保持主线程处理。
+     * 主线程只对已加载柱做 NBT 快照（{@code getChunkNow}）；组包发送下推 {@code pushPool}。
      */
     @SuppressWarnings("deprecation") // Forge: BuiltInRegistries 字段在 Forge patched jar 中被标记 @Deprecated
     public void handleBlockEntityRequest(ServerPlayer player, BlockEntityRequestC2SPacket request) {
         if (!player.isAlive() || player.hasDisconnected()) { return; }
+        ensureInitialized();
 
         ServerLevel level = PlayerCompat.getServerLevel(player);
+        if (level == null) {
+            return;
+        }
         int viewDistance = PlayerCompat.getViewDistance(player);
         ChunkPos playerChunkPos = player.chunkPosition();
         List<BlockEntityDataS2CPacket.ChunkBlockEntities> entries = new ArrayList<>();
 
         for (ChunkPos pos : request.chunks()) {
             try {
-                // 校验区块是否在玩家视距范围内
                 int dx = Math.abs(pos.x - playerChunkPos.x);
                 int dz = Math.abs(pos.z - playerChunkPos.z);
                 if (dx > viewDistance || dz > viewDistance) { continue; }
 
-                LevelChunk chunk = level.getChunk(pos.x, pos.z);
+                LevelChunk chunk = level.getChunkSource().getChunkNow(pos.x, pos.z);
                 if (chunk == null) { continue; }
 
-                List<BlockEntityDataS2CPacket.BlockEntityData> blockEntities = new ArrayList<>();
-                for (Map.Entry<BlockPos, BlockEntity> entry : chunk.getBlockEntities().entrySet()) {
-                    BlockPos bePos = entry.getKey();
-                    BlockEntity be = entry.getValue();
-#if MC_VER < MC_1_20_5
-                    CompoundTag nbt = be.saveWithoutMetadata();
-#else
-                    CompoundTag nbt = be.saveWithoutMetadata(be.getLevel().registryAccess());
-#endif
-#if MC_VER < MC_1_21_11
-                    ResourceLocation
-#else
-                    Identifier
-#endif
-                    type = BuiltInRegistries.BLOCK_ENTITY_TYPE.getKey(be.getType());
-                    if (type != null) {
-                        blockEntities.add(new BlockEntityDataS2CPacket.BlockEntityData(bePos, type, nbt));
-                    }
-                }
-
-                entries.add(new BlockEntityDataS2CPacket.ChunkBlockEntities(pos.x, pos.z, blockEntities));
+                entries.add(new BlockEntityDataS2CPacket.ChunkBlockEntities(
+                        pos.x, pos.z, collectRequestedBlockEntities(chunk)));
             } catch (Exception e) {
                 Constants.LOG.error("[BLOCK_ENTITY] Failed to collect block entities for chunk {}", pos, e);
             }
         }
 
-        if (!entries.isEmpty()) {
+        if (entries.isEmpty()) {
+            return;
+        }
+        String dimension = request.dimension();
+        pushPool.submit(() -> {
+            if (player.hasDisconnected()) {
+                return;
+            }
             FriendlyByteBuf buf = null;
             boolean sent = false;
             try {
-                BlockEntityDataS2CPacket packet = new BlockEntityDataS2CPacket(
-                        request.dimension(), entries);
+                BlockEntityDataS2CPacket packet = new BlockEntityDataS2CPacket(dimension, entries);
                 buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
                 packet.encode(buf);
                 Services.NETWORK_MANAGER.sendBlockEntityData(player, buf);
@@ -1829,16 +1747,16 @@ public class ServerChunkPushManager {
                     buf.release();
                 }
             }
-        }
+        });
     }
 
     /**
-     * 捕获服务端快照 → Planner → 序列化 FULL 或打包 BLOCKS。
+     * 对已脱离 live world 的 section 拷贝做 Planner → FULL / BLOCKS。
      * 返回 null 表示整块 skipped（75% 回退）。
      */
-    private SectionDeltaS2CPacket.DeltaEntry planAndSerialize(LevelChunk chunk,
+    private SectionDeltaS2CPacket.DeltaEntry planAndSerialize(SectionDeltaColumnSnap snap,
                                                              SectionHashRequestC2SPacket.Entry clientEntry) {
-        SectionDeltaSnapshot serverSnap = SectionDeltaSnapshot.capture(chunk);
+        SectionDeltaSnapshot serverSnap = SectionDeltaSnapshot.capture(snap.sections());
         SectionDeltaSnapshot clientSnap = new SectionDeltaSnapshot(
                 clientEntry.sectionHashes(), clientEntry.planes());
         SectionDeltaPlanner.ChunkDecision decision = SectionDeltaPlanner.plan(clientSnap, serverSnap);
@@ -1854,14 +1772,18 @@ public class ServerChunkPushManager {
             if (sd.kind() == SectionDeltaPlanner.Kind.SKIP) {
                 continue;
             }
+            LevelChunkSection section = sectionAt(snap.sections(), sd.sectionIndex());
+            if (section == null) {
+                continue;
+            }
             if (sd.kind() == SectionDeltaPlanner.Kind.FULL) {
                 changedSections.add(new SectionDeltaS2CPacket.SectionData(
                         sd.sectionIndex(), SectionDeltaS2CPacket.KIND_FULL,
-                        serializeSection(chunk, sd.sectionIndex())));
+                        writeSectionBytes(section)));
                 continue;
             }
-            byte[] full = serializeSection(chunk, sd.sectionIndex());
-            int[] stateIds = stateIdsOf(chunk, sd.sectionIndex(), sd.candidates());
+            byte[] full = writeSectionBytes(section);
+            int[] stateIds = stateIdsOf(section, sd.candidates());
             byte[] blocks = SectionPlaneSyndrome.encodeBlockList(sd.candidates(), stateIds);
             if (blocks.length <= full.length) {
                 changedSections.add(new SectionDeltaS2CPacket.SectionData(
@@ -1874,11 +1796,27 @@ public class ServerChunkPushManager {
         long expectedChunkHash = ChunkContentHashUtil.combineSectionHashesFromArray(serverSnap.sectionHashes());
         return new SectionDeltaS2CPacket.DeltaEntry(
                 clientEntry.chunkX(), clientEntry.chunkZ(), changedSections,
-                collectHeightmaps(chunk), collectBlockEntities(chunk), expectedChunkHash);
+                snap.heightmaps(), snap.blockEntities(), expectedChunkHash);
     }
 
-    private int[] stateIdsOf(LevelChunk chunk, int sectionIndex, int[] candidates) {
-        LevelChunkSection section = chunk.getSection(sectionIndex);
+    private static LevelChunkSection sectionAt(LevelChunkSection[] sections, int index) {
+        return index >= 0 && index < sections.length ? sections[index] : null;
+    }
+
+    /** 主线程：PalettedContainer 拷贝 + heightmap/BE 快照，不再 hash / 扫格 / write。 */
+    private SectionDeltaColumnSnap snapshotSectionDeltaColumn(LevelChunk chunk) {
+        LevelChunkSection[] src = chunk.getSections();
+        LevelChunkSection[] copies = new LevelChunkSection[src.length];
+        for (int i = 0; i < src.length; i++) {
+            if (src[i] == null) {
+                continue;
+            }
+            copies[i] = LevelChunkSectionCompat.copyDetached(src[i]);
+        }
+        return new SectionDeltaColumnSnap(copies, collectHeightmaps(chunk), collectBlockEntities(chunk));
+    }
+
+    private int[] stateIdsOf(LevelChunkSection section, int[] candidates) {
         int[] ids = new int[candidates.length];
         for (int i = 0; i < candidates.length; i++) {
             int packed = candidates[i];
@@ -1890,11 +1828,7 @@ public class ServerChunkPushManager {
         return ids;
     }
 
-    /**
-     * 序列化单个 section 的方块数据
-     */
-    private byte[] serializeSection(LevelChunk chunk, int sectionIndex) {
-        LevelChunkSection section = chunk.getSection(sectionIndex);
+    private byte[] writeSectionBytes(LevelChunkSection section) {
         FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
         try {
             section.write(buf);
@@ -1914,7 +1848,8 @@ public class ServerChunkPushManager {
         List<SectionDeltaS2CPacket.HeightmapData> result = new ArrayList<>();
         for (var entry : chunk.getHeightmaps()) {
             long[] raw = entry.getValue().getRawData();
-            result.add(new SectionDeltaS2CPacket.HeightmapData(entry.getKey().ordinal(), raw));
+            result.add(new SectionDeltaS2CPacket.HeightmapData(
+                    entry.getKey().ordinal(), raw != null ? raw.clone() : new long[0]));
         }
         return result;
     }
@@ -1944,6 +1879,15 @@ public class ServerChunkPushManager {
             }
         }
         return result;
+    }
+
+    private List<BlockEntityDataS2CPacket.BlockEntityData> collectRequestedBlockEntities(LevelChunk chunk) {
+        List<SectionDeltaS2CPacket.BlockEntityData> src = collectBlockEntities(chunk);
+        List<BlockEntityDataS2CPacket.BlockEntityData> out = new ArrayList<>(src.size());
+        for (SectionDeltaS2CPacket.BlockEntityData be : src) {
+            out.add(new BlockEntityDataS2CPacket.BlockEntityData(be.pos(), be.type(), be.nbt()));
+        }
+        return out;
     }
 
     /**
@@ -2209,7 +2153,7 @@ public class ServerChunkPushManager {
     }
 
     /**
-     * 每 tick 构建最多 maxChunksPerTick 个区块包快照，并将编码、压缩、限速与发送下推 pushPool。
+     * 每 tick 构建最多 maxChunksPerTick 个区块包快照，并将编码、压缩与发送下推 pushPool。
      * <p>
      * 任何版本都不能让 pushPool 读取 {@link LevelChunk}：1.20.1 已证实其
      * {@code PalettedContainer} 会与服务端主线程并发访问并抛出 ThreadingDetector 异常。
@@ -2256,14 +2200,8 @@ public class ServerChunkPushManager {
             int serverVD = PlayerCompat.getViewDistance(player);
             List<SerializedChunkWork> works = new ArrayList<>(maxPerTick);
 
-            // 所有版本主线程构建 packet 快照：1.20.1 的 ThreadingDetector 是信号量互斥，
-            // 主线程 tick 写 chunk 与后台 build 并发即引爆（本次 01:09:04 [10,3] 崩溃实测），
-            // 无合法后台读路径；packet 内部数据已脱离世界对象，encode/压缩/限速/发送在 pushPool。
-
-            // 1.21.2+ 的 PalettedContainer ThreadingDetector 禁止跨线程读 chunk：
-            // 主线程构建完整 packet 快照，encode/压缩/限速/发送在 pushPool。
-            // <1.21.2 无检测：主线程只取 chunk 引用，build/encode 全后台（恢复 1.20.1 已验证的全后台路径）。
-            // packet 的内部 chunk/light 数据已脱离世界对象，线格式 encode、压缩、限速与发送仍在 pushPool。
+            // 所有版本主线程构建 packet 快照：ThreadingDetector 禁止/会崩于跨线程读 LevelChunk。
+            // packet 内部数据已脱离世界对象，encode/压缩/发送在 pushPool。
             while (controller.canAdmit() && !queue.isEmpty()) {
                 if (!player.isAlive() || player.hasDisconnected()) {
                     removePlayer(playerId);
@@ -2325,7 +2263,7 @@ public class ServerChunkPushManager {
                             // 拦截路径已同步 build：直接后台 encode，主线程零序列化
                             packet = prepared.packet();
                         } else {
-                            LevelChunk chunk = level.getChunk(task.pos().x, task.pos().z);
+                            LevelChunk chunk = level.getChunkSource().getChunkNow(task.pos().x, task.pos().z);
                             if (chunk == null) {
                                 Constants.LOG.warn("[PROCESS_QUEUE] Chunk {} not loaded, skipping", task.pos());
                                 rollbackDelivery(player, task, reservation.deliveryId());
@@ -2492,7 +2430,7 @@ public class ServerChunkPushManager {
         }
         try {
             ServerLevel level = PlayerCompat.getServerLevel(player);
-            LevelChunk chunk = level.getChunk(pos.x, pos.z);
+            LevelChunk chunk = level.getChunkSource().getChunkNow(pos.x, pos.z);
             if (chunk == null) {
                 return packet;
             }
@@ -2633,49 +2571,6 @@ public class ServerChunkPushManager {
             return;
         }
         controller.release(key);
-    }
-
-    /**
-     * 动态调整线程池大小
-     */
-    private void adjustThreadPool() {
-        if (!HassiumConfigService.getInstance().isDynamicThreadPoolEnabled()) {
-            return;
-        }
-
-        long now = System.currentTimeMillis();
-        if (now - lastAdjustmentTime < ADJUSTMENT_INTERVAL_MS) {
-            return;
-        }
-        lastAdjustmentTime = now;
-
-        int totalPending = dataQueues.values().stream()
-                .mapToInt(FifoChunkQueue::size)
-                .sum();
-
-        int coreThreads = pushPool.getCorePoolSize();
-        int maxThreads = pushPool.getMaximumPoolSize();
-        int configuredMax = HassiumConfigService.getInstance().getMaxPushThreads();
-        int minThreads = HassiumConfigService.getInstance().getMinPushThreads();
-        int activeThreads = pushPool.getActiveCount();
-
-        // 队列堆积：抬高 maximum（须先保证 max >= core）
-        if (totalPending > QUEUE_HIGH_THRESHOLD && maxThreads < configuredMax) {
-            int newMax = Math.min(maxThreads + 2, configuredMax);
-            pushPool.setMaximumPoolSize(newMax);
-            Constants.LOG.debug("Hassium: Thread pool max expanded to {} (queueSize={}, active={})",
-                    newMax, totalPending, activeThreads);
-        }
-        // 队列空闲：先降 core 再降 max，避免 max < core 抛 IllegalArgumentException
-        else if (totalPending < QUEUE_LOW_THRESHOLD && coreThreads > minThreads && activeThreads < coreThreads) {
-            int newCore = Math.max(coreThreads - 1, minThreads);
-            pushPool.setCorePoolSize(newCore);
-            if (pushPool.getMaximumPoolSize() < newCore) {
-                pushPool.setMaximumPoolSize(newCore);
-            }
-            Constants.LOG.debug("Hassium: Thread pool core shrunk to {} (queueSize={}, active={})",
-                    newCore, totalPending, activeThreads);
-        }
     }
 
     /**
@@ -2826,6 +2721,15 @@ public class ServerChunkPushManager {
             return sectionHashes.clone();
         }
     }
+
+    /** 主线程拷贝 + 客户端请求条目，交给 pushPool 规划/序列化。 */
+    private record SectionDeltaWork(SectionDeltaColumnSnap snap, SectionHashRequestC2SPacket.Entry entry) {}
+
+    /** 已脱离 live world 的柱数据；后台可自由读。 */
+    private record SectionDeltaColumnSnap(
+            LevelChunkSection[] sections,
+            List<SectionDeltaS2CPacket.HeightmapData> heightmaps,
+            List<SectionDeltaS2CPacket.BlockEntityData> blockEntities) {}
     /**
      * 工作项携带已构建 packet 或已编码字节；二者均不再读取世界对象，后台 encode 安全。
      * registryAccess 在服务端启动后只读。
