@@ -12,6 +12,7 @@ import io.github.limuqy.mc.hassium.compat.PlayerCompat;
 import io.github.limuqy.mc.hassium.compat.RegistryCompat;
 import io.github.limuqy.mc.hassium.compat.ResourceLocationCompat;
 import io.github.limuqy.mc.hassium.utils.DebugLogger;
+import io.github.limuqy.mc.hassium.utils.TickMonitor;
 import io.github.limuqy.mc.hassium.network.core.outbound.ChunkApplyAck;
 import io.github.limuqy.mc.hassium.network.gateway.GatewayPlayerSession;
 import io.github.limuqy.mc.hassium.network.gateway.GatewayServer;
@@ -89,6 +90,13 @@ public class ServerChunkPushManager {
      * 与 resync 同量级，避免 R2 有缓存时仍按 maxChunksPerTick=5 滴灌导致空窗。
      */
     static final int HASH_SENDS_PER_TICK = 32;
+
+    /**
+     * A4：入队可领先 drain 若干 tick，让 {@code dataQueues.remaining} 允许 &gt;0。
+     * drain 仍按 {@code maxChunksPerTick}；入队 = min(admissionRoom, max(maxChunksPerTick * N, 32))。
+     */
+    static final int ENQUEUE_AHEAD_MULTIPLIER = 8;
+    static final int MIN_ENQUEUE_PER_TICK = 32;
 
     /**
      * 每玩家区块数据请求队列（{@link io.github.limuqy.mc.hassium.concurrent.KeyedPriorityQueue}：
@@ -898,14 +906,21 @@ public class ServerChunkPushManager {
     }
 
     private Long lastSessionPushedHash(UUID playerId, String dimension, ChunkPos pos) {
-        if (playerId == null || dimension == null || pos == null) {
+        if (pos == null) {
+            return null;
+        }
+        return lastSessionPushedHash(playerId, dimension, pos.x, pos.z);
+    }
+
+    private Long lastSessionPushedHash(UUID playerId, String dimension, int chunkX, int chunkZ) {
+        if (playerId == null || dimension == null) {
             return null;
         }
         ConcurrentHashMap<SessionPushKey, Long> table = sessionPushedHashes.get(playerId);
         if (table == null) {
             return null;
         }
-        return table.get(new SessionPushKey(dimension, pos.x, pos.z));
+        return table.get(new SessionPushKey(dimension, chunkX, chunkZ));
     }
 
     private void rememberSessionPush(UUID playerId, String dimension, ChunkPos pos, long chunkHash) {
@@ -1083,9 +1098,12 @@ public class ServerChunkPushManager {
     /**
      * 每 tick 从 pending 取距玩家最近、且已加载的柱出队。
      * <p>
-     * 仅在 admission/直推入队（或 hash 路径实际提交）成功后才从 {@code pendingSends} 移除；
-     * admission 满或未加载柱保留，下一 tick 重试。直推预算 = min(maxChunksPerTick,
-     * MAX_PENDING − pending − inFlight)；hash 预算独立为 {@link #HASH_SENDS_PER_TICK}。
+     * 先按 packed key 距离排序（不碰世界），再 {@code getChunkNow} 直到填满本 tick
+     * 入队预算即停，禁止每 tick 扫满 VD 方阵。主线程不算 section hash：ROUND1
+     * {@code lastSessionPushedHash==null} 直接 {@code enqueueDirectPush(..., 0L)}；
+     * 会话复用比对走 {@link #submitMetadataTaskFromChunk} 的 pushPool。
+     * 仅在 admission/直推入队（或 hash 路径实际提交）成功后才从 {@code pendingSends} 移除。
+     * 入队预算见 {@link #pacedEnqueueBudget}；hash 预算独立为 {@link #HASH_SENDS_PER_TICK}。
      */
     private void drainPendingSends(ServerPlayer player) {
         UUID playerId = player.getUUID();
@@ -1108,63 +1126,44 @@ public class ServerChunkPushManager {
         }
         ChunkAdmissionController controller = admissionControllers.computeIfAbsent(
                 playerId, ignored -> new ChunkAdmissionController());
-        int fullBudget = pacedSendBudget(controller.pendingCount(), controller.inFlightCount(), maxPerTick);
+        int fullBudget = pacedEnqueueBudget(controller.pendingCount(), controller.inFlightCount(), maxPerTick);
         int hashBudget = HASH_SENDS_PER_TICK;
         if (fullBudget <= 0 && hashBudget <= 0) {
             return;
         }
         ChunkPos center = player.chunkPosition();
-        List<ChunkPos> loaded = new ArrayList<>();
-        for (Long packed : pending) {
-            ChunkPos pos = new ChunkPos(packed);
-            if (level.getChunkSource().getChunkNow(pos.x, pos.z) != null) {
-                loaded.add(pos);
-            }
-        }
-        loaded.sort(Comparator.comparingDouble(pos -> ChunkDistancePriority.distSq(pos, center.x, center.z)));
-        for (ChunkPos pos : loaded) {
+        List<Long> ordered = new ArrayList<>(pending);
+        sortPackedKeysByDistance(ordered, center.x, center.z);
+        for (Long packed : ordered) {
             if (fullBudget <= 0 && hashBudget <= 0) {
                 break;
             }
-            LevelChunk chunk = level.getChunkSource().getChunkNow(pos.x, pos.z);
+            int x = ChunkPos.getX(packed);
+            int z = ChunkPos.getZ(packed);
+            PlayerBloomLayers layers = bloomLayers.get(playerId);
+            boolean bloomMiss = shouldPushFull(layers, x, z, dimension);
+            Long lastSent = lastSessionPushedHash(playerId, dimension, x, z);
+            boolean directNoHash = shouldDirectPushWithoutHash(bloomMiss, lastSent, layers != null);
+            if (!shouldProbeWorldForPacedPending(directNoHash, fullBudget, hashBudget)) {
+                continue;
+            }
+            LevelChunk chunk = level.getChunkSource().getChunkNow(x, z);
             if (chunk == null) {
                 // 未加载：保留在 pendingSends，等 getChunkNow != null 再试
                 continue;
             }
-            boolean bloomMiss = shouldPushFull(player, pos, dimension);
-            boolean pushFull = bloomMiss;
-            long currentHash = 0L;
-            if (bloomMiss) {
-                try {
-                    currentHash = ChunkContentHashUtil.combineSectionHashes(
-                            ChunkContentHashUtil.computeSectionHashes(chunk));
-                } catch (Throwable ignored) {
-                    currentHash = 0L;
-                }
-                Long lastSent = lastSessionPushedHash(playerId, dimension, pos);
-                if (hashBudget > 0 && shouldReuseSessionPush(false, lastSent, currentHash)) {
-                    pushFull = false;
-                }
-            }
-            if (pushFull) {
-                if (fullBudget <= 0) {
-                    continue;
-                }
-            } else if (hashBudget <= 0) {
-                continue;
-            }
-            long packed = ChunkPos.asLong(pos.x, pos.z);
-            boolean accepted = pushFull
-                    ? enqueueDirectPush(player, dimension, List.of(pos), currentHash)
+            ChunkPos pos = new ChunkPos(x, z);
+            boolean accepted = directNoHash
+                    ? enqueueDirectPush(player, dimension, List.of(pos), 0L)
                     : submitMetadataTaskFromChunk(player, pos, chunk, dimension);
             if (!commitPacedPendingKey(pending, packed, accepted)) {
                 // admission 拒绝：本 tick 不再硬塞更远的直推柱；hash 失败则跳过该柱重试
-                if (pushFull) {
+                if (directNoHash) {
                     break;
                 }
                 continue;
             }
-            if (pushFull) {
+            if (directNoHash) {
                 fullBudget--;
             } else {
                 hashBudget--;
@@ -1177,7 +1176,46 @@ public class ServerChunkPushManager {
     }
 
     /**
-     * 包可见：paced drain 单 tick 预算。admission room = MAX_PENDING − (pending + inFlight)。
+     * packed key 按距中心平方距离排序，不访问世界。
+     */
+    static void sortPackedKeysByDistance(List<Long> packedKeys, int centerChunkX, int centerChunkZ) {
+        packedKeys.sort(Comparator.comparingLong(packed -> {
+            long dx = (long) ChunkPos.getX(packed) - centerChunkX;
+            long dz = (long) ChunkPos.getZ(packed) - centerChunkZ;
+            return dx * dx + dz * dz;
+        }));
+    }
+
+    /**
+     * ROUND1 / Bloom 已上报且 miss、本会话尚未直推过：跳过主线程 hash，直接入队。
+     * Bloom 未就绪必须走 pushPool hash（R2 重连上报前）；hit 或会话复用同样走
+     * {@link #submitMetadataTaskFromChunk}。
+     */
+    static boolean shouldDirectPushWithoutHash(boolean bloomMiss, Long lastSessionPushedHash) {
+        return shouldDirectPushWithoutHash(bloomMiss, lastSessionPushedHash, true);
+    }
+
+    /**
+     * {@code bloomReady=false}（尚未收到 Bloom）禁止 skip-hash：否则 R2 在上报前会把
+     * 整视距当 ROUND1 直推且 contentHash=0，缓存全命中恒为 0。
+     */
+    static boolean shouldDirectPushWithoutHash(boolean bloomMiss, Long lastSessionPushedHash,
+                                               boolean bloomReady) {
+        return bloomReady && bloomMiss && lastSessionPushedHash == null;
+    }
+
+    /**
+     * 预算已尽的路径禁止 {@code getChunkNow}：ROUND1 直推看入队预算，hash/会话复用看 hash 预算。
+     */
+    static boolean shouldProbeWorldForPacedPending(boolean directNoHash, int fullBudget, int hashBudget) {
+        if (fullBudget <= 0 && hashBudget <= 0) {
+            return false;
+        }
+        return directNoHash ? fullBudget > 0 : hashBudget > 0;
+    }
+
+    /**
+     * 包可见：paced drain 单 tick 发送定额。admission room = MAX_PENDING − (pending + inFlight)。
      */
     static int pacedSendBudget(int pendingCount, int inFlightCount, int maxChunksPerTick) {
         int room = ChunkAdmissionController.MAX_PENDING_PER_PLAYER - pendingCount - inFlightCount;
@@ -1185,6 +1223,18 @@ public class ServerChunkPushManager {
             return 0;
         }
         return Math.min(maxChunksPerTick, room);
+    }
+
+    /**
+     * 包可见：paced 入队预算，可领先 drain 定额，仍受 admission room 与 {@link ChunkAdmissionController#MAX_PENDING_PER_PLAYER} 约束。
+     */
+    static int pacedEnqueueBudget(int pendingCount, int inFlightCount, int maxChunksPerTick) {
+        int room = ChunkAdmissionController.MAX_PENDING_PER_PLAYER - pendingCount - inFlightCount;
+        if (room <= 0 || maxChunksPerTick <= 0) {
+            return 0;
+        }
+        int desired = Math.max(maxChunksPerTick * ENQUEUE_AHEAD_MULTIPLIER, MIN_ENQUEUE_PER_TICK);
+        return Math.min(desired, room);
     }
 
     /**
@@ -1310,12 +1360,19 @@ public class ServerChunkPushManager {
 
         long now = System.currentTimeMillis();
         long nowNanos = System.nanoTime();
+        long drainPendingNs = 0L;
+        long drainQueueNs = 0L;
         for (ServerPlayer player : server.getPlayerList().getPlayers()) {
             flushPlayerHashBatchIfDue(player, now);
+            long t0 = System.nanoTime();
             drainPendingSends(player);
+            drainPendingNs += System.nanoTime() - t0;
+            t0 = System.nanoTime();
             drainPlayerQueueTick(player);
+            drainQueueNs += System.nanoTime() - t0;
             expirePlayerDeliveries(player, nowNanos);
         }
+        TickMonitor.addHassiumDrainNs(drainPendingNs, drainQueueNs);
 
         // 出界待命任务周期重评估（玩家折返/静止后恢复入队，防永久虚空）
         if (now - lastDeferredCheckMs >= DEFER_CHECK_INTERVAL_MS) {

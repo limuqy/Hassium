@@ -16,8 +16,11 @@ import net.minecraft.server.MinecraftServer;
  * 默认关；开启后从冒烟/玩家日志直接拉 mspt 曲线：
  * <pre>
  * [MSPT] server avg=12.3ms max=18.5ms last=10.2ms ticks=20
+ * [MSPT] hassium drainPending=1.2ms drainQueue=0.4ms flush=0.1ms
  * [MSPT] client avg=8.1ms max=21.0ms last=7.9ms ticks=20
  * </pre>
+ * vanilla {@code [MSPT] server} 读的是 {@code tickTimes}，不含 {@code hassium$onServerTick}
+ * 自身；Hassium TAIL 分段（flush / drainPending / drainQueue）单独一行。
  */
 public final class TickMonitor {
 
@@ -31,6 +34,12 @@ public final class TickMonitor {
     private static long serverMaxNs;
     private static long serverLastNs;
     private static int serverTicks;
+
+    // ---- Hassium TAIL 分段（Server thread；与 vanilla tickTimes 窗口独立） ----
+    private static long hassiumDrainPendingNs;
+    private static long hassiumDrainQueueNs;
+    private static long hassiumFlushNs;
+    private static int hassiumTicks;
 
     // ---- 客户端（Render thread，单线程访问） ----
     private static long clientStartNs;
@@ -67,6 +76,34 @@ public final class TickMonitor {
         }
     }
 
+    /** {@code MainThreadDispatcher.flushServer} 本 tick 耗时（ns）。 */
+    public static void addHassiumFlushNs(long ns) {
+        if (ns > 0L) {
+            hassiumFlushNs += ns;
+        }
+    }
+
+    /** {@code drainPendingSends} / {@code drainPlayerQueueTick} 本 tick 耗时（ns）。 */
+    public static void addHassiumDrainNs(long drainPendingNs, long drainQueueNs) {
+        if (drainPendingNs > 0L) {
+            hassiumDrainPendingNs += drainPendingNs;
+        }
+        if (drainQueueNs > 0L) {
+            hassiumDrainQueueNs += drainQueueNs;
+        }
+    }
+
+    /** 结算本 tick 的 Hassium TAIL 分段；每 {@link #WINDOW_TICKS} tick 打一行。 */
+    public static void finishHassiumTick() {
+        try {
+            if (++hassiumTicks >= WINDOW_TICKS) {
+                flushHassium();
+            }
+        } catch (Throwable t) {
+            // 采样失败不得影响 tick
+        }
+    }
+
     /** 客户端 {@code Minecraft.tick()} HEAD：记录本 tick 起始时刻。 */
     public static void beginClientTick() {
         clientStartNs = System.nanoTime();
@@ -96,6 +133,23 @@ public final class TickMonitor {
         serverSumNs = 0;
         serverMaxNs = 0;
         serverTicks = 0;
+    }
+
+    private static void flushHassium() {
+        DebugLogger.info(LogType.DISPATCHER, "{}",
+                formatHassiumMspt(hassiumDrainPendingNs, hassiumDrainQueueNs, hassiumFlushNs, hassiumTicks));
+        hassiumDrainPendingNs = 0;
+        hassiumDrainQueueNs = 0;
+        hassiumFlushNs = 0;
+        hassiumTicks = 0;
+    }
+
+    /** 包可见：Hassium TAIL 分段日志正文（挂 debug.dispatcherLogging）。 */
+    static String formatHassiumMspt(long drainPendingNs, long drainQueueNs, long flushNs, int ticks) {
+        int n = ticks <= 0 ? 1 : ticks;
+        return "[MSPT] hassium drainPending=" + fmt(drainPendingNs / 1_000_000.0 / n)
+                + "ms drainQueue=" + fmt(drainQueueNs / 1_000_000.0 / n)
+                + "ms flush=" + fmt(flushNs / 1_000_000.0 / n) + "ms";
     }
 
     private static void flushClient() {

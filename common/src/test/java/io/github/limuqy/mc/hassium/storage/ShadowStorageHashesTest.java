@@ -52,4 +52,25 @@ class ShadowStorageHashesTest {
         assertTrue(ShadowStorageHashes.matchesRemote(new ChunkPos(4, 5), 42L));
         assertFalse(ShadowStorageHashes.matchesRemote(new ChunkPos(4, 5), 41L));
     }
+
+    @Test
+    @DisplayName("lightDirty 不改变 content hash 命中")
+    void lightDirtyStillMatchesRemote() {
+        ChunkPos pos = new ChunkPos(9, 9);
+        ShadowStorageHashes.put(pos, 77L);
+        ShadowStorageHashes.markLightReady(pos);
+        assertTrue(ShadowStorageHashes.isLightDirty(pos));
+        assertEquals(Boolean.TRUE, ShadowStorageHashes.matchesRemote(pos, 77L));
+    }
+
+    @Test
+    @DisplayName("markContentDirty 只改脏位")
+    void markContentDirtyIsFlagOnly() {
+        ChunkPos pos = new ChunkPos(0, 1);
+        ShadowStorageHashes.markContentDirty(pos);
+        assertTrue(ShadowStorageHashes.isContentDirty(pos));
+        assertNull(ShadowStorageHashes.get(pos));
+        assertTrue(ShadowStorageHashes.claimDirty(ChunkPos.asLong(pos.x, pos.z)));
+        assertFalse(ShadowStorageHashes.isDirty(pos));
+    }
 }

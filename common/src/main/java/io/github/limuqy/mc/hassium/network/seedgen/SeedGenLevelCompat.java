@@ -403,6 +403,11 @@ public final class SeedGenLevelCompat {
         } catch (Exception e) {
             Constants.LOG.warn("Hassium: Shadow seed server halt failed", e);
         }
+        try {
+            server.closeStorage();
+        } catch (Exception e) {
+            Constants.LOG.warn("Hassium: Shadow storage manager close failed", e);
+        }
         // 停各维度的 chunk 源：只关 region 文件层（ChunkStorage.close），不关
         // ServerChunkCache——其 mainThreadProcessor.close() → BlockableEventLoop.close()
         // 会 shutdown 进程级共享的 Util.backgroundExecutor()（1.20.1 BlockableEventLoop

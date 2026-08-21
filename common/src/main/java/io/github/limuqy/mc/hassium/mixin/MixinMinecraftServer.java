@@ -40,7 +40,9 @@ public class MixinMinecraftServer {
     @Inject(method = "tickServer", at = @At("TAIL"))
     private void hassium$onServerTick(BooleanSupplier hasTimeLeft, CallbackInfo ci) {
         // 刷新服务端主线程回调队列（每 tick 调用）
+        long tFlush = System.nanoTime();
         MainThreadDispatcher.flushServer();
+        TickMonitor.addHassiumFlushNs(System.nanoTime() - tFlush);
         // 按真实 tick 限流序列化区块 + 冲刷 ChunkHash 批次。
         // 仅专用服务器（dedicated）激活：影子端（客户端进程内的 MinecraftServer）
         // 不接网络、无玩家，推送管理器不得对影子端世界生效。
@@ -59,6 +61,7 @@ public class MixinMinecraftServer {
         // T12 网关登录桥泵（登录监听器 tick + 物化检测 + 断连清理；空转零成本）
         GatewayPlayerBridge.tick(server);
         // mspt 采样（debug.dispatcherLogging 开启时每秒输出一行 [MSPT]）
+        TickMonitor.finishHassiumTick();
         TickMonitor.sampleServerTick(server, tickCount);
         // T2 票据防重放：epoch 表定期落盘（内部 60s 限频；停机窗口重放由 5min 时间窗口兜底）
         ResumeTicketValidator.persistIfDue();

@@ -108,6 +108,9 @@ public final class ClientMainThreadBudget {
      * 窗口内退坡反而会把续期后的预算砍到中间值（remaining/10s 比例）→
      * 实测 1021 块全量加载后段速率从 70/s 掉到 33/s。
      * 窗口到期瞬间的降档只发生在加载已结束/空闲时，无感知。
+     * <p>
+     * JoinBoost 期间 {@link #dispatcherShareNs(long)} 只把一半分给 dispatcher，
+     * 另一半预留给影子 {@code drainReady}，避免帧 deadline 在落地前已过期。
      */
     public static long getBudgetNs() {
         int normalBudgetMs = HassiumConfigService.getInstance().getMainThreadChunkBudgetMs();
@@ -119,6 +122,22 @@ public final class ClientMainThreadBudget {
             return boostBudgetMs * 1_000_000L;
         }
         return normalBudgetMs * 1_000_000L;
+    }
+
+    /**
+     * 本帧 dispatcher 可用的预算份额（纳秒）。JoinBoost 预留一半给 {@code drainReady}；
+     * 非 JoinBoost 为满额（drainReady 吃 dispatcher 剩余）。
+     */
+    public static long dispatcherShareNs(long budgetNs) {
+        return dispatcherShareNs(budgetNs, isJoinBoostActive());
+    }
+
+    /** 测试缝：JoinBoost 时 dispatcher 与 drainReady 对半分账。 */
+    static long dispatcherShareNs(long budgetNs, boolean joinBoost) {
+        if (budgetNs <= 0L) {
+            return 0L;
+        }
+        return joinBoost ? budgetNs / 2L : budgetNs;
     }
 
     /**

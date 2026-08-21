@@ -82,19 +82,21 @@ public class MixinClientTick {
             // 缓存读盘配额用尽后的续抽；失败不得中断 tick
         }
 
-        // 主线程时间预算：网络回调 vs 影子光落地动态分配。消费侧只受时间约束。
+        // 主线程时间预算：网络回调 vs 影子落地。JoinBoost 预留一半给 drainReady，
+        // 避免 dispatcher 先把 deadline 用尽导致整帧 0 chunk。消费侧只受时间约束。
         long budgetNs = ClientMainThreadBudget.getBudgetNs();
         long frameStartNs = System.nanoTime();
+        long dispatcherDeadlineNs = frameStartNs + ClientMainThreadBudget.dispatcherShareNs(budgetNs);
         long frameDeadlineNs = frameStartNs + budgetNs;
 
         boolean hasFlush = MainThreadDispatcher.getClientQueueSize() > 0;
 
         try {
             if (hasFlush) {
-                MainThreadDispatcher.flushClientUntil(frameDeadlineNs);
+                MainThreadDispatcher.flushClientUntil(dispatcherDeadlineNs);
             }
         } catch (Exception e) {
-            MainThreadDispatcher.flushClientUntil(frameDeadlineNs);
+            MainThreadDispatcher.flushClientUntil(dispatcherDeadlineNs);
         }
 
         // 全量请求超时重发（fallback 链兜底；SeedGen 影子端接管时无请求）

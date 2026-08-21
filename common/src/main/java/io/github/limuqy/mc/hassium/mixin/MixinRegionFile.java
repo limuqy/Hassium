@@ -1,9 +1,8 @@
 package io.github.limuqy.mc.hassium.mixin;
 
-import io.github.limuqy.mc.hassium.compression.CompressionService;
-import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.storage.HassiumChunkWriteBuffer;
+import io.github.limuqy.mc.hassium.storage.HassiumType126Codec;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.chunk.storage.RegionFile;
 import org.spongepowered.asm.mixin.Mixin;
@@ -38,14 +37,7 @@ public abstract class MixinRegionFile {
     private static final Logger hassium$LOGGER = LoggerFactory.getLogger("Hassium/RegionFile");
 
     @Unique
-    private static final byte HASSIUM_COMPRESSION_TYPE = (byte) 126;
-
-    /** hash payload magic（ZSTD 首字节恒 0x28，不会撞 0x48——判别安全）。 */
-    @Unique
-    private static final byte HASSIUM_HASH_MAGIC = (byte) 0x48;
-
-    @Unique
-    private static final int HASSIUM_HASH_LENGTH = 8;
+    private static final byte HASSIUM_COMPRESSION_TYPE = HassiumType126Codec.COMPRESSION_TYPE;
 
     @Unique
     private static final int SECTOR_SIZE = 4096;
@@ -249,23 +241,13 @@ public abstract class MixinRegionFile {
         byte[] rawData = new byte[dataBuf.remaining()];
         dataBuf.get(rawData);
 
-        // hash payload：magic 判别（ZSTD 首字节恒 0x28，不会撞 0x48）。
-        // 新格式 [magic(1)][hash(8)][zstd]：解压 zstd 并回填 hash 表（R2 比对用）。
-        byte[] compressedData = rawData;
-        if (rawData.length >= HASSIUM_HASH_LENGTH + 1 && rawData[0] == HASSIUM_HASH_MAGIC) {
-            long storedHash = 0L;
-            for (int i = 0; i < HASSIUM_HASH_LENGTH; i++) {
-                storedHash = (storedHash << 8) | (rawData[i + 1] & 0xFFL);
-            }
-            io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.put(pos.x, pos.z, storedHash);
-            compressedData = new byte[rawData.length - HASSIUM_HASH_LENGTH - 1];
-            System.arraycopy(rawData, HASSIUM_HASH_LENGTH + 1, compressedData, 0, compressedData.length);
-        }
-
-        // 使用 ZSTD 字典解压
         byte[] decompressed;
         try {
-            decompressed = CompressionService.getInstance().decompressWithDictionary(compressedData);
+            HassiumType126Codec.Decoded decoded = HassiumType126Codec.decode(rawData);
+            if (decoded.contentHash() != null) {
+                io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.put(pos.x, pos.z, decoded.contentHash());
+            }
+            decompressed = decoded.nbt();
         } catch (Exception e) {
             hassium$LOGGER.error("ZSTD dictionary decompression failed for chunk {}", pos, e);
             if (HassiumConfigService.getInstance().isAutoDowngradeEnabled()) {
@@ -274,8 +256,8 @@ public abstract class MixinRegionFile {
             throw new IOException("Hassium decompression failed at " + pos, e);
         }
 
-        hassium$LOGGER.debug("Read Hassium chunk {}: {} -> {} bytes",
-                pos, compressedData.length, decompressed.length);
+        hassium$LOGGER.debug("Read Hassium chunk {}: payload {} -> {} bytes",
+                pos, rawData.length, decompressed.length);
 
         return new DataInputStream(new BufferedInputStream(new ByteArrayInputStream(decompressed)));
     }
@@ -285,10 +267,13 @@ public abstract class MixinRegionFile {
         HassiumConfigService configService = HassiumConfigService.getInstance();
         int level = configService.getStorageCompressionLevel();
 
-        // 使用 ZSTD 字典压缩
-        byte[] compressedData;
+        Long storedHash = io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.get(pos);
+        ByteBuffer sectorBuf;
+        int compressedLength;
         try {
-            compressedData = CompressionService.getInstance().compressWithDictionary(rawNbtData, level);
+            byte[] sector = HassiumType126Codec.encodeSector(rawNbtData, storedHash, level);
+            compressedLength = sector.length;
+            sectorBuf = ByteBuffer.wrap(sector);
         } catch (Exception e) {
             hassium$LOGGER.error("ZSTD dictionary compression failed for chunk {}, falling back to vanilla", pos, e);
             if (configService.isAutoDowngradeEnabled()) {
@@ -298,27 +283,6 @@ public abstract class MixinRegionFile {
             throw new IOException("Hassium compression failed", e);
         }
 
-        // 构造 payload: [length(4)][compressionType(1)][magic(1)][hash(8)][compressedData]
-        // （hash 表有值才带 magic+hash；无值保持旧 126 格式，兼容）
-        Long storedHash = io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.get(pos);
-        int payloadLength = 1 + compressedData.length;
-        ByteBuffer sectorBuf;
-        if (storedHash != null) {
-            payloadLength += 1 + HASSIUM_HASH_LENGTH;
-            sectorBuf = ByteBuffer.allocate(4 + payloadLength);
-            sectorBuf.putInt(payloadLength);
-            sectorBuf.put(HASSIUM_COMPRESSION_TYPE);
-            sectorBuf.put(HASSIUM_HASH_MAGIC);
-            sectorBuf.putLong(storedHash);
-            sectorBuf.put(compressedData);
-        } else {
-            sectorBuf = ByteBuffer.allocate(4 + payloadLength);
-            sectorBuf.putInt(payloadLength);
-            sectorBuf.put(HASSIUM_COMPRESSION_TYPE);
-            sectorBuf.put(compressedData);
-        }
-        sectorBuf.flip();
-
         hassium$self().invokeWrite(pos, sectorBuf);
 
         // 更新时间戳
@@ -326,7 +290,7 @@ public abstract class MixinRegionFile {
         int timestamp = (int) (System.currentTimeMillis() / 1000);
         hassium$setChunkTimestamp(pos, timestamp);
         hassium$LOGGER.debug("Wrote Hassium chunk {}: {} -> {} bytes",
-                pos, rawNbtData.length, compressedData.length);
+                pos, rawNbtData.length, compressedLength);
     }
 
     @Unique

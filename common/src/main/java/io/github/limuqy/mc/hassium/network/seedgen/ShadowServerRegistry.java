@@ -189,8 +189,7 @@ public final class ShadowServerRegistry {
                     packet.encode(fbb);
                     io.github.limuqy.mc.hassium.platform.Services.NETWORK_MANAGER.sendClientBloomSync(fbb);
                     sent = true;
-                    DebugLogger.info(DebugLogger.LogType.ASYNC,
-                            "[BLOOM_SYNC] Shadow bloom sent ({} bytes, {} chunks)",
+                    Constants.LOG.info("Hassium: Shadow bloom sent ({} bytes, {} chunks)",
                             bytes.length, bloom.getInsertCount());
                 } finally {
                     if (!sent && buf.refCnt() > 0) {
