@@ -31,6 +31,7 @@ public class HassiumMetricsImpl implements HassiumMetrics {
     private final AtomicLong cacheHitFullChunkCount = new AtomicLong(0);
     private final AtomicLong cacheDeltaSavedBytes = new AtomicLong(0);
     private final AtomicLong cacheDeltaCount = new AtomicLong(0);
+    private final AtomicLong cacheShardBytes = new AtomicLong(0);
     private final AtomicLong fullChunkRequestCount = new AtomicLong(0);
     private final AtomicLong fullChunkRequestBytes = new AtomicLong(0);
     private final AtomicLong newFullChunkRequestCount = new AtomicLong(0);
@@ -41,8 +42,8 @@ public class HassiumMetricsImpl implements HassiumMetrics {
     private final AtomicLong locallyGeneratedChunkCount = new AtomicLong(0);
     private final AtomicLong locallyGeneratedChunkBytes = new AtomicLong(0);
     /**
-     * 客户端实际应用的权威区块计数（按 chunkPos 去重；renderOnly/OVD 不计入）。
-     * 缓存命中率分母「客户端应用区块」。
+     * 客户端实际落地的权威区块计数（按 chunkPos 去重；renderOnly/OVD 不计入）。
+     * 冒烟「确有落地」门禁用；缓存命中率分母是 {@link #getClientAppliedChunkBytes()}。
      */
     private final AtomicLong clientAppliedChunkCount = new AtomicLong(0);
     private final java.util.Set<Long> clientAppliedChunkKeys = java.util.concurrent.ConcurrentHashMap.newKeySet();
@@ -204,6 +205,11 @@ public class HassiumMetricsImpl implements HassiumMetrics {
     @Override
     public long getCacheDeltaCount() {
         return cacheDeltaCount.get();
+    }
+
+    @Override
+    public long getCacheShardBytes() {
+        return cacheShardBytes.get();
     }
 
     @Override
@@ -468,6 +474,7 @@ public class HassiumMetricsImpl implements HassiumMetrics {
         cacheHitFullChunkCount.set(0);
         cacheDeltaSavedBytes.set(0);
         cacheDeltaCount.set(0);
+        cacheShardBytes.set(0);
         fullChunkRequestCount.set(0);
         fullChunkRequestBytes.set(0);
         newFullChunkRequestCount.set(0);
@@ -636,6 +643,15 @@ public class HassiumMetricsImpl implements HassiumMetrics {
         cacheDeltaCount.incrementAndGet();
         if (bytes > 0) {
             cacheDeltaSavedBytes.addAndGet(bytes);
+        }
+    }
+
+    /**
+     * 记录分段增量里变更 section 的内容等价值（分片，从命中分子扣除）。
+     */
+    public void recordCacheShard(long bytes) {
+        if (bytes > 0) {
+            cacheShardBytes.addAndGet(bytes);
         }
     }
 

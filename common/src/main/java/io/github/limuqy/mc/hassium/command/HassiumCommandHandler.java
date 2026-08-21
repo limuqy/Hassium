@@ -66,14 +66,18 @@ public class HassiumCommandHandler {
         // 后台注入/hash 会并发加计数：缓存行与加载行必须用同一组快照，否则
         // 「应用区块」与「区块加载」会差 1，冒烟公式校验失败。
         long fullHitCount = metrics.getCacheHitFullChunkCount();
+        long fullHitBytes = metrics.getCacheHitFullChunkBytes();
         long localCount = metrics.getLocallyGeneratedChunkCount();
         long deltaCount = metrics.getCacheDeltaCount();
+        long deltaBytes = metrics.getCacheDeltaSavedBytes();
+        long shardBytes = metrics.getCacheShardBytes();
         long fullRequests = metrics.getFullChunkRequestCount();
-        long applied = fullRequests + fullHitCount + localCount + deltaCount;
+        long appliedBytes = metrics.getFullChunkRequestBytes() + fullHitBytes + deltaBytes;
         StringBuilder sb = new StringBuilder();
         sb.append("§6=== Hassium 客户端统计 ===§r\n");
         sb.append(formatBandwidthLine(metrics)).append('\n');
-        sb.append(formatChunkCacheLine(metrics, fullHitCount, localCount, deltaCount, applied)).append('\n');
+        sb.append(formatChunkCacheLine(fullHitCount, fullHitBytes, deltaCount, deltaBytes,
+                shardBytes, appliedBytes)).append('\n');
         sb.append(formatChunkLoadLine(metrics, fullRequests, localCount)).append('\n');
         sb.append(formatLightCacheLine(metrics)).append('\n');
         sb.append(formatOvdLine()).append('\n');
@@ -100,22 +104,23 @@ public class HassiumCommandHandler {
                 MetricsTextFormatter.formatCompressionRatio(vanillaRecv, actualRecv));
     }
 
-    private static String formatChunkCacheLine(HassiumMetricsImpl m, long fullHitCount,
-                                              long localCount, long deltaCount, long applied) {
-        // 公式（用户定稿）：缓存命中 = (命中 + 本地重算 - 分片) / 客户端应用区块。
-        // 命中 = 影子端全命中；本地重算 = SeedGen 本地生成；分片 = section-delta。
-        // 旧口径分母只含「已完成 hash 决策」的区块（miss 走全量的不进去）→ R2 虚高 100%。
-        // 新口径：分片从命中分子中扣除，分母 = 全量请求 + 缓存全命中 + 本地重算 + 分片
-        // （来源汇总，避免命中已记账、区块尚未落地时命中数 > 应用数的时序错配）。
-        long hitChunks = Math.max(0L, fullHitCount + localCount - deltaCount);
-        double rate = applied <= 0L ? 0.0 : (double) Math.min(hitChunks, applied) / applied * 100.0;
+    private static String formatChunkCacheLine(long fullHitCount, long fullHitBytes,
+                                              long partialCount, long partialBytes,
+                                              long shardBytes, long appliedBytes) {
+        // 缓存命中 = (全命中 + 部分命中 - 分片) / 应用，按内容等价值字节。
+        // 全命中 = 磁盘/内存 contentHash 整柱复用；部分命中 = 缓存柱作基线的分段增量；
+        // 分片 = 变更 section 等价值。SeedGen 本地生成不算缓存，只在「区块加载 / 本地」。
+        long hitBytes = Math.max(0L, fullHitBytes + partialBytes - shardBytes);
+        double rate = appliedBytes <= 0L
+                ? 0.0
+                : (double) Math.min(hitBytes, appliedBytes) / appliedBytes * 100.0;
         return String.format(
-                "§e区块缓存：§r%s（命中 %d/%s，本地重算 %d/%s，分片 %d/%s，应用区块 %d）",
+                "§e区块缓存：§r%s（全命中 %d/%s，部分命中 %d/%s，分片 %s，应用 %s）",
                 MetricsTextFormatter.formatPercent(rate),
-                fullHitCount, MetricsTextFormatter.formatBytes(m.getCacheHitFullChunkBytes()),
-                localCount, MetricsTextFormatter.formatBytes(m.getLocallyGeneratedChunkBytes()),
-                deltaCount, MetricsTextFormatter.formatBytes(m.getCacheDeltaSavedBytes()),
-                applied);
+                fullHitCount, MetricsTextFormatter.formatBytes(fullHitBytes),
+                partialCount, MetricsTextFormatter.formatBytes(partialBytes),
+                MetricsTextFormatter.formatBytes(shardBytes),
+                MetricsTextFormatter.formatBytes(appliedBytes));
     }
 
     private static String formatChunkLoadLine(HassiumMetricsImpl m, long fullRequests, long localCount) {

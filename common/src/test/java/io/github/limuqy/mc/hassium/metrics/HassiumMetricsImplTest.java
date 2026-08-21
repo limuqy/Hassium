@@ -7,34 +7,46 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 class HassiumMetricsImplTest {
 
     @Test
-    void effectiveCacheHitRateUsesAppliedChunkDenominator() {
+    void effectiveCacheHitRateIgnoresSeedGenAndUsesBytes() {
         HassiumMetricsImpl metrics = new HassiumMetricsImpl();
 
-        // 2 客户端缓存 + 1 本地重算（SeedGen 本地生成）+ 1 分片增量 = 4 个应用区块来源
+        // 2 全命中 + 1 SeedGen（不算缓存）+ 1 部分命中（未记分片）
         metrics.recordCacheFullHit(16_384);
         metrics.recordCacheFullHit(16_384);
         metrics.recordLocallyGeneratedChunk(16_384);
         metrics.recordCacheDeltaSaved(16_384);
 
-        // (客户端缓存 2 + 本地重算 1 - 分片 1) / 应用区块 4
+        // 分子 = 全命中 32768 + 部分 16384；分母不含 SeedGen = 49152 → 100%
         assertEquals(2, metrics.getEffectiveCacheHitCount());
-        assertEquals(32_768, metrics.getEffectiveCacheHitBytes());
-        assertEquals(0.5, metrics.getEffectiveCacheHitRate(), 1e-9);
+        assertEquals(49_152, metrics.getEffectiveCacheHitBytes());
+        assertEquals(1.0, metrics.getEffectiveCacheHitRate(), 1e-9);
         assertEquals(4, metrics.getClientAppliedChunkCount());
+        assertEquals(49_152, metrics.getClientAppliedChunkBytes());
     }
 
     @Test
-    void effectiveCacheHitRateSubtractsSectionDeltaFromHitNumerator() {
+    void effectiveCacheHitRateSubtractsChangedSectionShardOnly() {
         HassiumMetricsImpl metrics = new HassiumMetricsImpl();
 
-        // 1 客户端缓存 + 1 分片增量：分片计入应用区块，并按公式从命中分子中扣除
         metrics.recordCacheFullHit(16_384);
         metrics.recordCacheDeltaSaved(16_384);
+        // 24 section 里改 2 个 → 分片 1365，未变内容仍算部分命中
+        metrics.recordCacheShard(16_384 * 2 / 24);
 
-        assertEquals(0, metrics.getEffectiveCacheHitCount());
-        assertEquals(0, metrics.getEffectiveCacheHitBytes());
-        assertEquals(0.0, metrics.getEffectiveCacheHitRate(), 1e-9);
+        long expectedHit = 16_384 + 16_384 - (16_384 * 2 / 24);
+        assertEquals(1, metrics.getEffectiveCacheHitCount());
+        assertEquals(expectedHit, metrics.getEffectiveCacheHitBytes());
+        assertEquals((double) expectedHit / 32_768, metrics.getEffectiveCacheHitRate(), 1e-9);
         assertEquals(2, metrics.getClientAppliedChunkCount());
+    }
+
+    @Test
+    void shardEquivBytesScalesByChangedSections() {
+        assertEquals(0L, NetworkStats.shardEquivBytes(0, 24));
+        assertEquals(0L, NetworkStats.shardEquivBytes(2, 0));
+        assertEquals(16_384L * 2 / 24, NetworkStats.shardEquivBytes(2, 24));
+        assertEquals(16_384L, NetworkStats.shardEquivBytes(24, 24));
+        assertEquals(16_384L, NetworkStats.shardEquivBytes(30, 24));
     }
 
     @Test
@@ -105,12 +117,15 @@ class HassiumMetricsImplTest {
         metrics.recordCacheFullHit(-1);
         metrics.recordCacheFullHitNetworkReplaced(-1);
         metrics.recordCacheDeltaSaved(0);
+        metrics.recordCacheShard(0);
+        metrics.recordCacheShard(-1);
         metrics.recordFullChunkRequests(0, 16_384, false);
         metrics.recordFullChunkRequests(1, 0, true);
 
         assertEquals(0, metrics.getCacheLoadEligibleBytes());
         assertEquals(0, metrics.getCacheHitFullChunkBytes());
         assertEquals(0, metrics.getCacheDeltaSavedBytes());
+        assertEquals(0, metrics.getCacheShardBytes());
         assertEquals(0, metrics.getFullChunkRequestCount());
         assertEquals(1, metrics.getCacheHitNetworkReplacedCount()); // count 不受 bytes<=0 影响
         assertEquals(0, metrics.getCacheHitNetworkReplacedBytes());
@@ -124,6 +139,7 @@ class HassiumMetricsImplTest {
         metrics.recordCacheFullHit(16_384);
         metrics.recordCacheFullHitNetworkReplaced(16_384);
         metrics.recordCacheDeltaSaved(8_192);
+        metrics.recordCacheShard(1_365);
         metrics.recordFullChunkRequests(1, 16_384, false);
         metrics.recordFullChunkRequests(1, 16_384, true);
         metrics.addSectionDeltaRequestsSent(1);
@@ -136,6 +152,7 @@ class HassiumMetricsImplTest {
         assertEquals(0, metrics.getCacheLoadEligibleBytes());
         assertEquals(0, metrics.getCacheHitFullChunkBytes());
         assertEquals(0, metrics.getCacheDeltaSavedBytes());
+        assertEquals(0, metrics.getCacheShardBytes());
         assertEquals(0, metrics.getFullChunkRequestCount());
         assertEquals(0, metrics.getNewFullChunkRequestCount());
         assertEquals(0, metrics.getStaleFullChunkRequestCount());

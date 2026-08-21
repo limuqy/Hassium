@@ -319,6 +319,25 @@ public class NetworkStats {
     }
 
     /**
+     * 记录分段增量里变更 section 的内容等价值（分片，从缓存命中分子扣除）。
+     */
+    public static void recordCacheShard(long bytes) {
+        if (!enabled) return;
+        metrics.recordCacheShard(bytes);
+    }
+
+    /**
+     * 变更 section 折成完整区块等价值：{@code 16KB × changed / sections}。
+     */
+    public static long shardEquivBytes(int changedSections, int sectionCount) {
+        if (changedSections <= 0 || sectionCount <= 0) {
+            return 0L;
+        }
+        int n = Math.min(changedSections, sectionCount);
+        return ESTIMATED_CHUNK_BYTES * n / sectionCount;
+    }
+
+    /**
      * 记录已成功发出的完整区块请求及其来源。
      *
      * @param chunkCount       请求的区块数

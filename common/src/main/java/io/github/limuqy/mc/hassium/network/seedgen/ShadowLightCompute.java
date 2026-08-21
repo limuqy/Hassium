@@ -1224,16 +1224,20 @@ public final class ShadowLightCompute {
                                     .requestFullChunksPublic(work.dimension(), fallback, false);
                         }
                     } else {
-                        // 成功应用：记增量统计（估算原版全量等价值）。
-                        // 分片「无 MOD 应收」= 原版 Zlib 全量 chunk wire（旧实现漏做 Zlib 估算，
-                        // 直接以 16KB 原始字节入账，且收到即记、失败回退后会与全量包重复计数）。
+                        // 成功应用：部分命中 = 本地缓存整柱基线；分片 = 变更 section 等价值。
                         io.github.limuqy.mc.hassium.metrics.NetworkStats.recordCacheDeltaSaved(
                                 io.github.limuqy.mc.hassium.metrics.NetworkStats.ESTIMATED_CHUNK_BYTES);
+                        net.minecraft.world.level.chunk.LevelChunk baseline =
+                                server.injectedChunk(pos.x, pos.z);
+                        int sectionCount = baseline != null ? baseline.getSectionsCount() : 0;
+                        io.github.limuqy.mc.hassium.metrics.NetworkStats.recordCacheShard(
+                                io.github.limuqy.mc.hassium.metrics.NetworkStats.shardEquivBytes(
+                                        work.entry().changedSections().size(), sectionCount));
                         io.github.limuqy.mc.hassium.metrics.NetworkStats.recordSectionDeltaReceived(1,
                                 io.github.limuqy.mc.hassium.metrics.VanillaZlibEstimator.estimate(
                                         (int) io.github.limuqy.mc.hassium.metrics.NetworkStats.ESTIMATED_CHUNK_BYTES));
                         lightTasks.add(new LightTask(key, LightSource.DELTA, null,
-                                server.injectedChunk(pos.x, pos.z), server.overworld(), LightMetric.RECOMPUTE,
+                                baseline, server.overworld(), LightMetric.RECOMPUTE,
                                 false, traceOrigin(TraceOrigin.SERVER_PUSH)));
                     }
                 }
@@ -2477,17 +2481,13 @@ public final class ShadowLightCompute {
     }
 
     /**
-     * 磁盘/内存 contentHash 与远程权威比对：表命中直接比；仅表缺失才
-     * {@code computeSectionHashes}，并把结果写回表避免同柱反复现算。
+     * 磁盘/内存 contentHash 与远程权威比对：表命中 TRUE 直接信；表缺失或 FALSE
+     * 再从活柱现算（避免脏表把整柱判成增量）。
      */
     private static boolean diskHashMatches(LevelChunk chunk, ChunkPos pos, long remoteHash) {
         Boolean tableMatch = io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.matchesRemote(pos, remoteHash);
-        if (tableMatch != null) {
-            if (!tableMatch) {
-                org.slf4j.LoggerFactory.getLogger("Hassium/ShadowDisk")
-                        .debug("Shadow disk hash MISMATCH table vs remote={}", remoteHash);
-            }
-            return tableMatch;
+        if (tableMatch == Boolean.TRUE) {
+            return true;
         }
         try {
             long diskHash = io.github.limuqy.mc.hassium.cache.ChunkContentHashUtil

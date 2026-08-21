@@ -95,7 +95,7 @@ public interface HassiumMetrics {
     long getCacheHitFullChunkCount();
 
     /**
-     * 获取成功应用分段增量后避免加载完整区块的字节数。
+     * 获取成功应用分段增量后计入部分命中的完整区块等价值字节数。
      */
     long getCacheDeltaSavedBytes();
 
@@ -103,6 +103,11 @@ public interface HassiumMetrics {
      * 获取分段增量命中区块数（与 {@link #getCacheDeltaSavedBytes()} 同步累加）。
      */
     long getCacheDeltaCount();
+
+    /**
+     * 分片（变更 section）等价值字节：从部分命中分子中扣除，只把「未变内容」算进命中。
+     */
+    long getCacheShardBytes();
 
     /**
      * 获取客户端成功发出的完整区块请求数。
@@ -145,17 +150,36 @@ public interface HassiumMetrics {
     long getLocallyGeneratedChunkBytes();
 
     /**
-     * 获取「客户端应用区块」计数（缓存命中率分母，按区块来源汇总的完整区块等价值）：
-     * <p>
-     * {@code 全量请求 + 客户端缓存全命中 + 本地重算（SeedGen）+ 分片增量}。
-     * 用来源计数汇总而不是某一时刻的落地快照，避免「命中已记账、区块还在回传队列中」
-     * 导致的命中数 &gt; 应用数、命中率被 clamp 成 100% 的时序错配。
+     * 客户端应用来源柱数（冒烟结构门禁 / 区块加载对照）：
+     * {@code 全量请求 + 缓存全命中 + SeedGen 本地生成 + 分段增量}。
+     * 缓存命中率分母用 {@link #getClientAppliedChunkBytes()}，不含本地生成。
      */
     default long getClientAppliedChunkCount() {
         return getFullChunkRequestCount()
                 + getCacheHitFullChunkCount()
                 + getLocallyGeneratedChunkCount()
                 + getCacheDeltaCount();
+    }
+
+    /**
+     * 客户端应用内容等价值字节（缓存命中率分母）：
+     * 全量请求 + 缓存全命中 + 分段增量基线柱。不含 SeedGen 本地生成。
+     */
+    default long getClientAppliedChunkBytes() {
+        return getFullChunkRequestBytes()
+                + getCacheHitFullChunkBytes()
+                + getCacheDeltaSavedBytes();
+    }
+
+    /**
+     * 部分命中：本地区块缓存作基线的分段增量柱（完整区块等价值）。不含本地生成。
+     */
+    default long getCachePartialHitBytes() {
+        return getCacheDeltaSavedBytes();
+    }
+
+    default long getCachePartialHitCount() {
+        return getCacheDeltaCount();
     }
 
     /**
@@ -375,40 +399,35 @@ public interface HassiumMetrics {
     }
 
     /**
-     * 计算有效缓存命中区块数。
-     * <p>
-     * 公式（冒烟客户端统计口径）：
-     * {@code 缓存命中 = (客户端缓存 + 本地重算 - 分片) / 客户端应用区块}。
-     * 客户端缓存 = {@link #getCacheHitFullChunkCount()}；本地重算 = SeedGen
-     * {@link #getLocallyGeneratedChunkCount()}；分片 = section-delta
-     * {@link #getCacheDeltaCount()}（仍计入分母应用区块，但从命中分子中扣除）。
-     */
-    default long getEffectiveCacheHitCount() {
-        return Math.max(0L,
-                getCacheHitFullChunkCount() + getLocallyGeneratedChunkCount() - getCacheDeltaCount());
-    }
-
-    /**
-     * 计算有效缓存命中字节数（完整区块等价值，与命中区块数同公式）：
-     * 客户端缓存 + 本地重算（SeedGen 本地生成）− 分片增量。
+     * 有效命中内容字节：{@code 全命中 + 部分命中 - 分片}。
+     * 全命中 = {@link #getCacheHitFullChunkBytes()}（磁盘/内存 contentHash 整柱复用）；
+     * 部分命中 = {@link #getCachePartialHitBytes()}（缓存柱作基线的分段增量）；
+     * 分片 = {@link #getCacheShardBytes()}（变更 section 等价值）。
+     * SeedGen 本地生成不算缓存命中，只在「区块加载 / 本地」展示。
      */
     default long getEffectiveCacheHitBytes() {
         return Math.max(0L,
-                getCacheHitFullChunkBytes() + getLocallyGeneratedChunkBytes() - getCacheDeltaSavedBytes());
+                getCacheHitFullChunkBytes() + getCachePartialHitBytes() - getCacheShardBytes());
     }
 
     /**
-     * 计算有效缓存命中率。
-     * <p>
-     * 分母 = 客户端应用区块（来源汇总：全量请求 + 缓存全命中 + 本地重算 + 分片增量），
-     * 而非旧的「已完成 hash 决策字节数」：旧分母不包含 hash miss 后走全量请求的区块，
-     * 会把 R2 命中率虚高到 100%。
+     * 有效命中柱数（展示用）：全命中柱。部分命中与分片按字节扣减，不在柱数上互抵。
+     */
+    default long getEffectiveCacheHitCount() {
+        return getCacheHitFullChunkCount();
+    }
+
+    /**
+     * 缓存命中率，统一按内容等价值字节：
+     * {@code (全命中 + 部分命中 - 分片) / 应用}。
      */
     default double getEffectiveCacheHitRate() {
-        long appliedChunks = getClientAppliedChunkCount();
-        if (appliedChunks <= 0) return 0.0;
-        long hitChunks = Math.min(getEffectiveCacheHitCount(), appliedChunks);
-        return (double) hitChunks / appliedChunks;
+        long appliedBytes = getClientAppliedChunkBytes();
+        if (appliedBytes <= 0L) {
+            return 0.0;
+        }
+        long hitBytes = Math.min(getEffectiveCacheHitBytes(), appliedBytes);
+        return (double) hitBytes / appliedBytes;
     }
 
     /**

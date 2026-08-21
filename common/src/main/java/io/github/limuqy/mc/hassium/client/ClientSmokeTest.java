@@ -790,8 +790,9 @@ public final class ClientSmokeTest {
      * <p>
      * 数值口径（与 {@link HassiumCommandHandler} 显示完全同源）：
      * <ol>
-     *   <li>缓存命中 = (命中 + 本地重算 - 分片) / 客户端应用区块；
-     *       分片增量不再计入命中，分母是实际应用的权威区块数（去重，OVD 不计入）。</li>
+     *   <li>缓存命中 = (全命中 + 部分命中 - 分片) / 应用，按内容等价值字节；
+     *       全命中 = 本地缓存整柱复用；部分命中 = 缓存柱作基线的分段增量；
+     *       分片 = 变更 section 等价值。SeedGen 本地生成不算缓存命中。</li>
      *   <li>流量节省 = 服务端实际推送 / 无MOD应收（数据包 + 本地重算 + 客户端缓存 + 光照）；
      *       行内第一段百分比为已节省（= 100% - 实际/无MOD）。</li>
      *   <li>光照缓存命中率 = (直连命中 + 影子复用) / (命中 + 本地重算)；影子复用并入
@@ -835,25 +836,17 @@ public final class ClientSmokeTest {
         } else {
             double displayedRate = Double.parseDouble(cacheMatcher.group(1));
             long cacheCount = Long.parseLong(cacheMatcher.group(2));
-            long localCount = Long.parseLong(cacheMatcher.group(3));
-            long deltaCount = Long.parseLong(cacheMatcher.group(4));
-            long appliedCount = Long.parseLong(cacheMatcher.group(5));
-            long parsedHit = Math.max(0L, cacheCount + localCount - deltaCount);
-            double expectedRate = appliedCount <= 0L
-                    ? 0.0
-                    : 100.0 * Math.min(parsedHit, appliedCount) / appliedCount;
+            long partialCount = Long.parseLong(cacheMatcher.group(3));
+            double expectedRate = m.getEffectiveCacheHitRate() * 100.0;
             if (Math.abs(displayedRate - expectedRate) > 0.06
                     || !countsNear(cacheCount, m.getCacheHitFullChunkCount())
-                    || !countsNear(localCount, m.getLocallyGeneratedChunkCount())
-                    || !countsNear(deltaCount, m.getCacheDeltaCount())
-                    || !countsNear(appliedCount, m.getClientAppliedChunkCount())) {
+                    || !countsNear(partialCount, m.getCacheDeltaCount())) {
                 LOGGER.error("{} {} stats validation FAILED: cache formula mismatch " +
-                                "displayed={}/{} local={} delta={} applied={}, expected={}/{} local={} delta={} applied={}",
+                                "displayed={}/{} partial={}, expected={}/{} partial={}",
                         MARKER_FAIL, roundLabel,
-                        displayedRate, cacheCount, localCount, deltaCount, appliedCount,
+                        displayedRate, cacheCount, partialCount,
                         String.format(java.util.Locale.ROOT, "%.1f", expectedRate),
-                        m.getCacheHitFullChunkCount(), m.getLocallyGeneratedChunkCount(),
-                        m.getCacheDeltaCount(), m.getClientAppliedChunkCount());
+                        m.getCacheHitFullChunkCount(), m.getCacheDeltaCount());
                 ok = false;
             }
         }
@@ -916,9 +909,9 @@ public final class ClientSmokeTest {
         return ok;
     }
 
-    /** 区块缓存行：百分比（命中 N/B，本地重算 N/B，分片 N/B，应用区块 N）。 */
+    /** 区块缓存行：百分比（全命中 N/B，部分命中 N/B，分片 B，应用 B）。 */
     private static final Pattern CACHE_STATS_PATTERN = Pattern.compile(
-            "区块缓存：([0-9.]+)%（命中 (\\d+)/[^，]*，本地重算 (\\d+)/[^，]*，分片 (\\d+)/[^，]*，应用区块 (\\d+)）");
+            "区块缓存：([0-9.]+)%（全命中 (\\d+)/[^，]*，部分命中 (\\d+)/[^，]*，分片 [^，]*，应用 [^）]*）");
     /** 流量节省行：第一段 = 已节省（= 100% - 实际/无MOD）。 */
     private static final Pattern SAVINGS_STATS_PATTERN = Pattern.compile(
             "流量节省：([0-9.]+)%（当前 [^，]*，无MOD [^）]*）");

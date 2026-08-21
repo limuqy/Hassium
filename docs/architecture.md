@@ -251,13 +251,13 @@ ERROR / WARN 始终输出。
 | `/hassium stats` | 服务端 | 压缩/发送统计（需 OP 2） |
 | `/hassium stats reset` / `toggle` | 服务端 | 重置计数器 / 切换指标收集 |
 | `/hassium metrics on\|off` | 服务端 | 运行时开关指标 |
-| `/hassiumc stats` | 客户端 | 接收/缓存命中（客户端缓存+本地重算−分片 / 应用区块）/超视渲染/光照/区块加载（新增/过期/**本地生成**）/流量节省（实际/无MOD应收）统计 |
+| `/hassiumc stats` | 客户端 | 接收/缓存命中（全命中+部分命中−分片 / 应用，按字节；本地生成不算缓存）/超视渲染/光照/区块加载（新增/过期/**本地生成**）/流量节省（实际/无MOD应收）统计 |
 | `/hassiumc export [<服务器IP>] [seed]` | 客户端 | 拷贝影子端 `world` 目录。`level.dat` 已由影子端原版写出；亦可手工把 `hassium_cache/<id>/world` 复制到 `saves/` |
 | `/hassium migrate` / `list` / `status` / `<host:port>` | 客户端（仅开发环境） | L1 迁移演练入口（`NetworkCore.migrateTo`；正式包不注册） |
 
 实现：`metrics/NetworkStats`（`AtomicLong`，可关闭）。指标关闭时相关 stats 命令不可用。导出走 `CacheWorldExporter`（异步，见 `chunk-cache.md` §12）。
 
-客户端 stats 的「区块加载」行口径：`新增` = 无本地缓存的全量请求；`过期` = 缓存过期/技术性回退；`本地` = SeedGen 影子服务端本地生成（等价一次全量请求）。区块缓存命中率分母为「客户端应用区块」（实际落地权威区块去重，OVD 不计入）；流量节省 = 实际推送 / 无MOD应收（数据包+本地重算+客户端缓存+光照，不含 OVD），统一按原版 Zlib 等价 wire 计。
+客户端 stats 的「区块加载」行口径：`新增` = 无本地缓存的全量请求；`过期` = 缓存过期/技术性回退；`本地` = SeedGen 影子服务端本地生成（等价一次全量请求）。区块缓存命中率 = `(全命中 + 部分命中 − 分片) / 应用`（内容等价值字节；部分命中 = 缓存柱作基线的分段增量；分片 = 变更 section；不含 SeedGen；OVD 不计入）；流量节省 = 实际推送 / 无MOD应收（数据包+本地重算+客户端缓存+光照，不含 OVD），统一按原版 Zlib 等价 wire 计。
 
 ## 12. 卖点特性（已实现摘要）
 
@@ -303,7 +303,7 @@ ERROR / WARN 始终输出。
 |------|-------------|------|------|
 | **本地生成** | `chunk.seedGenEnabled`（默认 false，双端同开）、`chunk.seedGenThreads`（2） | **开启会泄露服务端世界种子**（握手下发，影子端用原版 `saveDataTag` 写入 `level.dat`）。服务端对 pristine 区块发 `SeedRef`（坐标 + hash）替代区块数据；客户端影子服务端本地生成；失败/超时回退全量。导出/手工拷贝 `hassium_cache/<id>/world` 即带该种子 | [`chunk-cache.md`](chunk-cache.md) |
 
-本地生成的区块与直推同链：推送即入库（本地缓存同样受益），stats「区块加载」行计入「本地」计数，同时以「本地重算」计入区块缓存命中分子与流量节省的无MOD应收（原版 Zlib 等价）。
+本地生成的区块与直推同链：推送即入库（本地缓存同样受益），stats「区块加载」行计入「本地」计数，并计入流量节省的无MOD应收（原版 Zlib 等价）。**不计入**区块缓存命中分子（命中只统计本地区块缓存复用）。
 
 ### 12.6 网络核心 L1 迁移运维
 
