@@ -13,7 +13,7 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 #if MC_VER < MC_1_20_2
-import io.github.limuqy.mc.hassium.network.PlayerCompressionTracker;
+import io.github.limuqy.mc.hassium.network.ServerChunkPushManager;
 import net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.level.ThreadedLevelLightEngine;
@@ -58,8 +58,8 @@ public class MixinChunkMap {
     private ClientboundLevelChunkWithLightPacket hassium$dummyChunkPacket;
 
     /**
-     * 1.20.1：Hassium 玩家用独立、已填充的 holder，跳过 {@code new ClientboundLevelChunkWithLightPacket}
-     *（组包成本）。trackChunk mixin 仍会登记 pending 并 cancel 发送；实体追踪后半段照常。
+     * 1.20.1：专用服用独立、已填充的 holder，跳过 {@code new ClientboundLevelChunkWithLightPacket}
+     *（组包成本）。与压缩无关；{@link MixinServerPlayer} 登记 pending 并 cancel 发送。
      */
     @ModifyVariable(method = "playerLoadedChunk", at = @At("HEAD"), argsOnly = true, ordinal = 0)
     private MutableObject<ClientboundLevelChunkWithLightPacket> hassium$skipVanillaPacketBuild(
@@ -69,7 +69,7 @@ public class MixinChunkMap {
             LevelChunk chunk) {
         if (RuntimeServerContext.isShadowServerContext()
                 || player == null
-                || !PlayerCompressionTracker.isCompressionEnabled(player)) {
+                || !ServerChunkPushManager.shouldPaceChunkSends()) {
             return holder;
         }
         MutableObject<ClientboundLevelChunkWithLightPacket> isolated = new MutableObject<>();

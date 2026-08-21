@@ -11,6 +11,7 @@ import io.github.limuqy.mc.hassium.platform.Services;
 import io.github.limuqy.mc.hassium.compat.PlayerCompat;
 import io.github.limuqy.mc.hassium.compat.RegistryCompat;
 import io.github.limuqy.mc.hassium.compat.ResourceLocationCompat;
+import io.github.limuqy.mc.hassium.server.RuntimeServerContext;
 import io.github.limuqy.mc.hassium.utils.DebugLogger;
 import io.github.limuqy.mc.hassium.utils.TickMonitor;
 import io.github.limuqy.mc.hassium.network.core.outbound.ChunkApplyAck;
@@ -133,6 +134,14 @@ public class ServerChunkPushManager {
 
     /** resync 待补发条目 */
     private record ResyncEntry(ChunkPos pos, String dimension) {}
+
+    /**
+     * 源头定额与压缩/握手无关：专用服一律按 {@code master.maxChunksPerTick} 滴灌。
+     * 压缩只决定 drain 时走原版包还是 Hassium 元数据。
+     */
+    public static boolean shouldPaceChunkSends() {
+        return RuntimeServerContext.isDedicatedServerContext();
+    }
 
     /**
      * 1.20.1：仿 {@code PlayerChunkSender} pending。trackChunk 只登记，tick 近距定额出队。
@@ -1197,7 +1206,7 @@ public class ServerChunkPushManager {
      * 已到且 miss、且 {@code lastSessionPushedHash==null} 才 {@code enqueueDirectPush(..., 0L)}；
      * 未就绪 / hit / 会话复用走 {@link #submitMetadataTaskFromChunk} 的 pushPool。
      * 仅在 admission/直推入队（或 hash 路径实际提交）成功后才从 {@code pendingSends} 移除。
-     * 入队预算见 {@link #pacedEnqueueBudget}；hash 预算独立为 {@link #HASH_SENDS_PER_TICK}。
+     * 入队预算见 {@link #pacedEnqueueBudget}；hash 与全量共用 {@code maxChunksPerTick}。
      */
     private void drainPendingSends(ServerPlayer player) {
         UUID playerId = player.getUUID();
@@ -1218,10 +1227,14 @@ public class ServerChunkPushManager {
         if (maxPerTick <= 0) {
             maxPerTick = 4;
         }
+        if (!PlayerCompressionTracker.isCompressionEnabled(player)) {
+            drainVanillaPacedSends(player, pending, level, maxPerTick);
+            return;
+        }
         ChunkAdmissionController controller = admissionControllers.computeIfAbsent(
                 playerId, ignored -> new ChunkAdmissionController());
         int fullBudget = pacedSendBudget(controller.pendingCount(), controller.inFlightCount(), maxPerTick);
-        int hashBudget = HASH_SENDS_PER_TICK;
+        int hashBudget = maxPerTick;
         if (fullBudget <= 0 && hashBudget <= 0) {
             return;
         }
@@ -1279,6 +1292,42 @@ public class ServerChunkPushManager {
             long dz = (long) ChunkPos.getZ(packed) - centerChunkZ;
             return dx * dx + dz * dz;
         }));
+    }
+
+    /**
+     * 压缩尚未启用时按原版包滴灌。走 {@code connection.send}，不经过 {@code trackChunk} mixin。
+     */
+    private void drainVanillaPacedSends(ServerPlayer player, Set<Long> pending, ServerLevel level,
+                                        int maxPerTick) {
+        ChunkPos center = player.chunkPosition();
+        List<Long> ordered = new ArrayList<>(pending);
+        sortPackedKeysByDistance(ordered, center.x, center.z);
+        int sent = 0;
+        for (Long packed : ordered) {
+            if (sent >= maxPerTick) {
+                break;
+            }
+            int x = ChunkPos.getX(packed);
+            int z = ChunkPos.getZ(packed);
+            LevelChunk chunk = level.getChunkSource().getChunkNow(x, z);
+            if (chunk == null) {
+                continue;
+            }
+            ClientboundLevelChunkWithLightPacket packet;
+            try {
+                packet = new ClientboundLevelChunkWithLightPacket(chunk, level.getLightEngine(), null, null);
+            } catch (Exception e) {
+                Constants.LOG.error("Hassium: Failed to build paced vanilla chunk packet [{}, {}]", x, z, e);
+                continue;
+            }
+            player.connection.send(packet);
+            pending.remove(packed);
+            sent++;
+        }
+        if (pending.isEmpty()) {
+            pendingSends.remove(player.getUUID());
+            pendingSendDimension.remove(player.getUUID());
+        }
     }
 
     /**

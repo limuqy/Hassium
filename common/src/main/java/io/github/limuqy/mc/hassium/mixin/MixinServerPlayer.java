@@ -54,18 +54,17 @@ public abstract class MixinServerPlayer extends Player {
 #if MC_VER < MC_1_20_2
     /**
      * 拦截 trackChunk：1.20.1 无 {@code PlayerChunkSender}，原版会对已加载视距一窝蜂调用。
-     * {@link MixinChunkMap} 跳过原版组包；这里只登记 pending，由服务端 tick 按近距定额 drain
-     * （同 1.21.11 {@code PlayerChunkSender.sendNextChunks}）。
+     * 专用服只登记 pending（与压缩无关），由 tick 按 {@code maxChunksPerTick} 定额 drain。
      * 区块更新广播仍由 {@link MixinChunkHolder#hassium$onBroadcast} 拦截。
      */
     @Inject(method = "trackChunk", at = @At("HEAD"), cancellable = true)
     private void hassium$onTrackChunk(ChunkPos pos, Packet<?> chunkPacket, CallbackInfo ci) {
         ServerPlayer self = (ServerPlayer) (Object) this;
-        if (!PlayerCompressionTracker.isCompressionEnabled(self)) {
+        if (!ServerChunkPushManager.shouldPaceChunkSends()) {
             return;
         }
 
-        DebugLogger.info(LogType.NETWORK, "[TRACK_CHUNK] Player {} tracking chunk {} (compressionEnabled=true)",
+        DebugLogger.info(LogType.NETWORK, "[TRACK_CHUNK] Player {} tracking chunk {} (paced)",
                 self.getName().getString(), pos);
 
         String dimension = self.level().dimension()
@@ -88,7 +87,7 @@ public abstract class MixinServerPlayer extends Player {
     @Inject(method = "untrackChunk", at = @At("HEAD"))
     private void hassium$onUntrackChunk(ChunkPos pos, CallbackInfo ci) {
         ServerPlayer self = (ServerPlayer) (Object) this;
-        if (!PlayerCompressionTracker.isCompressionEnabled(self)) {
+        if (!ServerChunkPushManager.shouldPaceChunkSends()) {
             return;
         }
         String dimension = self.level().dimension()

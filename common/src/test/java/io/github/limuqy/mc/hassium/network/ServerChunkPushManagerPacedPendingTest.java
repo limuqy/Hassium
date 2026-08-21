@@ -1,5 +1,6 @@
 package io.github.limuqy.mc.hassium.network;
 
+import io.github.limuqy.mc.hassium.server.RuntimeServerContext;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
@@ -16,6 +17,20 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * drain 定额相同（源头限速，不再领先入队）。
  */
 class ServerChunkPushManagerPacedPendingTest {
+
+    @Test
+    void shouldPaceChunkSends_dependsOnDedicatedNotCompression() {
+        boolean prev = RuntimeServerContext.isDedicatedServerContext();
+        try {
+            RuntimeServerContext.setDedicatedServer(false);
+            assertFalse(ServerChunkPushManager.shouldPaceChunkSends());
+            RuntimeServerContext.setDedicatedServer(true);
+            assertTrue(ServerChunkPushManager.shouldPaceChunkSends(),
+                    "source pacing must not wait on compression/handshake");
+        } finally {
+            RuntimeServerContext.setDedicatedServer(prev);
+        }
+    }
 
     @Test
     void commitPacedPendingKey_offerFailureKeepsKey() {

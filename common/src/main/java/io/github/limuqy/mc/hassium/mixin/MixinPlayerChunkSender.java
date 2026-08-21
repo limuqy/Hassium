@@ -53,12 +53,12 @@ public abstract class MixinPlayerChunkSender {
     private boolean hassium$forceQuota;
 
     /**
-     * 源头定额：把原版 {@code sendNextChunks} 的 batch 钳到 {@code maxChunksPerTick}，
-     * 避免先按 9–64 组包再让 admission 丢掉。握手门控与 {@link #hassium$onSendChunk} 相同。
+     * 源头定额：把原版 {@code sendNextChunks} 的 batch 钳到 {@code maxChunksPerTick}。
+     * 与压缩/网关会话无关；{@link #hassium$onSendChunk} 仍按会话决定是否改走元数据。
      */
     @Inject(method = "sendNextChunks", at = @At("HEAD"))
     private void hassium$capSourceRate(ServerPlayer player, CallbackInfo ci) {
-        hassium$forceQuota = GatewayServer.getInstance().registry().get(player.getUUID()) != null;
+        hassium$forceQuota = io.github.limuqy.mc.hassium.server.RuntimeServerContext.isDedicatedServerContext();
         if (!hassium$forceQuota) {
             return;
         }
