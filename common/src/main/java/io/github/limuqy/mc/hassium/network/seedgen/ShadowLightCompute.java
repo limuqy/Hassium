@@ -211,6 +211,13 @@ public final class ShadowLightCompute {
         return chunkLocks.computeIfAbsent(chunkPosKey(pos), k -> new Object());
     }
 
+    /** 与注入/hash 比对/apply 共用同一把 per-chunk 锁。 */
+    public static void withChunkLock(ChunkPos pos, Runnable action) {
+        synchronized (chunkLock(pos)) {
+            action.run();
+        }
+    }
+
     /**
      * 供 OVD 本地生成/磁盘/注入打包复用同一把 chunk 锁：buildPacket 会读取
      * LevelChunkSection 的 PalettedContainer（write → acquire），若与 hash 比对/
@@ -844,15 +851,18 @@ public final class ShadowLightCompute {
                 continue; // 已被移除/竞态：数据由服务端直推兜底
             }
             long[] sectionHashes;
-            // P1（T7）：computeSectionHashes 读注入 chunk section 容器，与 consumeLoop
+            int[][] planes;
+            // P1（T7）：读注入 chunk section 容器，与 consumeLoop
             // 打包/写路径（buildPacket/applySectionDelta）同 chunk 锁互斥。
             synchronized (chunkLock(pos)) {
-                sectionHashes = io.github.limuqy.mc.hassium.cache.ChunkContentHashUtil
-                        .sectionHashesToArray(io.github.limuqy.mc.hassium.cache.ChunkContentHashUtil
-                                .computeSectionHashes(chunk));
+                io.github.limuqy.mc.hassium.network.sectiondelta.SectionDeltaSnapshot snap =
+                        io.github.limuqy.mc.hassium.network.sectiondelta.SectionDeltaSnapshots
+                                .getOrCapture(pos, chunk);
+                sectionHashes = snap.sectionHashes();
+                planes = snap.planes();
             }
             entries.add(new io.github.limuqy.mc.hassium.network.SectionHashRequestC2SPacket.Entry(
-                    pos.x, pos.z, sectionHashes));
+                    pos.x, pos.z, sectionHashes, planes));
             pendingDeltaRequests.put(chunkPosKey(pos), new PendingDelta(dimension, deadline));
         }
         if (entries.isEmpty()) {
@@ -1245,8 +1255,7 @@ public final class ShadowLightCompute {
                     // （chunkHashOf / computeSectionHashes）同 chunk 锁互斥（T7 崩溃同机制）。
                     boolean applied;
                     synchronized (chunkLock(pos)) {
-                        applied = server.applySectionDelta(pos, work.entry().changedSections(),
-                                work.entry().heightmaps(), work.entry().blockEntities());
+                        applied = server.applySectionDelta(pos, work.entry());
                     }
                     if (!applied) {
                         // 基线缺失 / 应用失败 → 回退全量（正确性优先）；跳过本 chunk 回传
@@ -1260,7 +1269,7 @@ public final class ShadowLightCompute {
                                     .requestFullChunksPublic(work.dimension(), fallback, false);
                         }
                     } else {
-                        // 成功应用：部分命中 = 本地缓存整柱基线；分片 = 变更 section 等价值。
+                        // 成功应用：部分命中 = 本地缓存整柱基线；分片 = FULL 整段 / BLOCKS 按格折算。
                         io.github.limuqy.mc.hassium.metrics.NetworkStats.recordCacheDeltaSaved(
                                 io.github.limuqy.mc.hassium.metrics.NetworkStats.ESTIMATED_CHUNK_BYTES);
                         net.minecraft.world.level.chunk.LevelChunk baseline =
@@ -1268,7 +1277,9 @@ public final class ShadowLightCompute {
                         int sectionCount = baseline != null ? baseline.getSectionsCount() : 0;
                         io.github.limuqy.mc.hassium.metrics.NetworkStats.recordCacheShard(
                                 io.github.limuqy.mc.hassium.metrics.NetworkStats.shardEquivBytes(
-                                        work.entry().changedSections().size(), sectionCount));
+                                        io.github.limuqy.mc.hassium.network.SectionDeltaS2CPacket.changedCells(
+                                                work.entry().changedSections()),
+                                        sectionCount));
                         io.github.limuqy.mc.hassium.metrics.NetworkStats.recordSectionDeltaReceived(1,
                                 io.github.limuqy.mc.hassium.metrics.VanillaZlibEstimator.estimate(
                                         (int) io.github.limuqy.mc.hassium.metrics.NetworkStats.ESTIMATED_CHUNK_BYTES));

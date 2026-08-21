@@ -14,6 +14,7 @@ import net.minecraft.resources.ResourceLocation;
 import net.minecraft.resources.Identifier;
 #endif
 import io.github.limuqy.mc.hassium.compat.ResourceLocationCompat;
+import io.github.limuqy.mc.hassium.network.sectiondelta.SectionPlaneSyndrome;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -21,8 +22,8 @@ import java.util.List;
 /**
  * 服务端 -> 客户端：分段增量响应（阶段二）
  * <p>
- * 服务端比对客户端的 section 哈希后，只发送变更的 section 数据和全部 blockEntity 数据。
- * 客户端组装：缓存的 sections + 新 sections + 实体数据。
+ * 服务端比对客户端的 section 哈希 + 平面综合征后，发送变更 section（整段 FULL 或
+ * 方块列表 BLOCKS）和全部 blockEntity 数据。客户端组装：缓存的 sections + 新数据 + 实体。
  * <p>
  * {@code skipped}：本请求中因超视距等原因未处理的区块；客户端应立即回退全量。
  * 服务端对每次 SectionHashRequest 都会回包（entries/skipped 可空），避免客户端悬等。
@@ -48,6 +49,10 @@ public record SectionDeltaS2CPacket(
     private static final int MAX_SECTIONS = 64;
     /** review-fix: T3-53：单 chunk 方块实体数上限（16×16×24 方块位） */
     private static final int MAX_BLOCK_ENTITIES = 4096;
+    /** BLOCKS 单段最多 4096 格（整段）。 */
+    private static final int MAX_BLOCKS_PER_SECTION = 4096;
+    public static final int KIND_FULL = 0;
+    public static final int KIND_BLOCKS = 1;
 
     /** review-fix: T3-53：解码守卫——恶意/损坏包超限值驱动 new 数组/集合预分配 → OOM 客户端 */
     private static void checkDecodeLimit(int value, int max, String what) {
@@ -74,11 +79,13 @@ CHANNEL = ResourceLocationCompat.create(Constants.MOD_ID, "section_delta_s2c");
         for (DeltaEntry entry : entries) {
             buf.writeVarInt(entry.chunkX);
             buf.writeVarInt(entry.chunkZ);
+            buf.writeLong(entry.expectedChunkHash);
 
             // 变更的 sections
             buf.writeVarInt(entry.changedSections.size());
             for (SectionData section : entry.changedSections) {
                 buf.writeVarInt(section.sectionIndex);
+                buf.writeByte(section.kind);
                 buf.writeVarInt(section.blockData.length);
                 buf.writeBytes(section.blockData);
             }
@@ -120,6 +127,7 @@ CHANNEL = ResourceLocationCompat.create(Constants.MOD_ID, "section_delta_s2c");
         for (int i = 0; i < size; i++) {
             int chunkX = buf.readVarInt();
             int chunkZ = buf.readVarInt();
+            long expectedChunkHash = buf.readLong();
 
             // 变更的 sections
             int sectionCount = buf.readVarInt();
@@ -127,11 +135,18 @@ CHANNEL = ResourceLocationCompat.create(Constants.MOD_ID, "section_delta_s2c");
             List<SectionData> sections = new ArrayList<>(sectionCount);
             for (int j = 0; j < sectionCount; j++) {
                 int sectionIndex = buf.readVarInt();
+                int kind = buf.readByte() & 0xFF;
+                if (kind != KIND_FULL && kind != KIND_BLOCKS) {
+                    throw new DecoderException("SectionDeltaS2CPacket unknown section kind: " + kind);
+                }
                 int dataLen = buf.readVarInt();
                 checkDecodeLimit(dataLen, TWO_MEGABYTES, "section dataLen");
                 byte[] blockData = new byte[dataLen];
                 buf.readBytes(blockData);
-                sections.add(new SectionData(sectionIndex, blockData));
+                if (kind == KIND_BLOCKS) {
+                    checkBlocksPayload(blockData);
+                }
+                sections.add(new SectionData(sectionIndex, kind, blockData));
             }
 
             // heightmaps（typeId = Heightmap.Types.ordinal()）
@@ -164,7 +179,7 @@ CHANNEL = ResourceLocationCompat.create(Constants.MOD_ID, "section_delta_s2c");
                 blockEntities.add(new BlockEntityData(pos, type, nbt));
             }
 
-            entries.add(new DeltaEntry(chunkX, chunkZ, sections, heightmaps, blockEntities));
+            entries.add(new DeltaEntry(chunkX, chunkZ, sections, heightmaps, blockEntities, expectedChunkHash));
         }
 
         List<SkippedChunk> skipped = new ArrayList<>();
@@ -177,6 +192,21 @@ CHANNEL = ResourceLocationCompat.create(Constants.MOD_ID, "section_delta_s2c");
             }
         }
         return new SectionDeltaS2CPacket(dimension, entries, skipped);
+    }
+
+    private static void checkBlocksPayload(byte[] blockData) {
+        FriendlyByteBuf inner = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(blockData));
+        try {
+            int count = inner.readVarInt();
+            checkDecodeLimit(count, MAX_BLOCKS_PER_SECTION, "block count");
+            for (int i = 0; i < count; i++) {
+                inner.readVarLong();
+            }
+        } catch (IndexOutOfBoundsException e) {
+            throw new DecoderException("SectionDeltaS2CPacket truncated BLOCKS payload");
+        } finally {
+            inner.release();
+        }
     }
 
     public void encode(FriendlyByteBuf buf) {
@@ -261,11 +291,17 @@ CHANNEL = ResourceLocationCompat.create(Constants.MOD_ID, "section_delta_s2c");
             int chunkZ,
             List<SectionData> changedSections,
             List<HeightmapData> heightmaps,
-            List<BlockEntityData> blockEntities
+            List<BlockEntityData> blockEntities,
+            long expectedChunkHash
     ) {
         public DeltaEntry(int chunkX, int chunkZ, List<SectionData> changedSections,
                           List<BlockEntityData> blockEntities) {
-            this(chunkX, chunkZ, changedSections, List.of(), blockEntities);
+            this(chunkX, chunkZ, changedSections, List.of(), blockEntities, 0L);
+        }
+
+        public DeltaEntry(int chunkX, int chunkZ, List<SectionData> changedSections,
+                          List<HeightmapData> heightmaps, List<BlockEntityData> blockEntities) {
+            this(chunkX, chunkZ, changedSections, heightmaps, blockEntities, 0L);
         }
     }
 
@@ -281,9 +317,42 @@ CHANNEL = ResourceLocationCompat.create(Constants.MOD_ID, "section_delta_s2c");
     public record SkippedChunk(int chunkX, int chunkZ) {}
 
     /**
-     * 变更的 section 数据
+     * 变更的 section 数据。
+     * {@code kind}：{@link #KIND_FULL} = {@code section.write} 字节；
+     * {@link #KIND_BLOCKS} = VarInt 个数 + {@code varLong(stateId<<12 | localPos)}。
      */
-    public record SectionData(int sectionIndex, byte[] blockData) {}
+    public record SectionData(int sectionIndex, int kind, byte[] blockData) {
+        public SectionData(int sectionIndex, byte[] blockData) {
+            this(sectionIndex, KIND_FULL, blockData);
+        }
+    }
+
+    /**
+     * 分片扣减用的变更格数：{@code FULL} / 未知 kind / 损坏 BLOCKS = 4096；
+     * {@code BLOCKS} = 列表个数（封顶 4096）。
+     */
+    public static long changedCells(List<SectionData> sections) {
+        if (sections == null || sections.isEmpty()) {
+            return 0L;
+        }
+        long cells = 0L;
+        for (SectionData sd : sections) {
+            if (sd == null) {
+                continue;
+            }
+            if (sd.kind() == KIND_BLOCKS) {
+                int n = SectionPlaneSyndrome.peekBlockListCount(sd.blockData());
+                if (n < 0) {
+                    cells += SectionPlaneSyndrome.CELLS;
+                } else {
+                    cells += Math.min(n, SectionPlaneSyndrome.CELLS);
+                }
+            } else {
+                cells += SectionPlaneSyndrome.CELLS;
+            }
+        }
+        return cells;
+    }
 
     /**
      * 方块实体数据

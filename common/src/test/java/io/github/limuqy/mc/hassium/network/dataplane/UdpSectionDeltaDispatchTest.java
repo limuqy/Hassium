@@ -61,8 +61,10 @@ class UdpSectionDeltaDispatchTest {
         assertNotNull(got, "section delta dispatcher 被调用");
         assertEquals(original.dimension(), got.dimension(), "维度一致");
         assertEquals(original.entries().size(), got.entries().size(), "DeltaEntry 数量一致");
-        assertEquals(original.entries().get(0).heightmaps().size(),
-                got.entries().get(0).heightmaps().size(), "heightmaps 数量一致");
+        assertEquals(original.entries().get(0).expectedChunkHash(),
+                got.entries().get(0).expectedChunkHash(), "expectedChunkHash 一致");
+        assertEquals(original.entries().get(0).changedSections().get(0).kind(),
+                got.entries().get(0).changedSections().get(0).kind(), "section kind 一致");
         for (int i = 0; i < original.entries().get(0).heightmaps().size(); i++) {
             assertEquals(original.entries().get(0).heightmaps().get(i).typeId(),
                     got.entries().get(0).heightmaps().get(i).typeId(), "heightmap typeId 一致");
@@ -88,7 +90,8 @@ class UdpSectionDeltaDispatchTest {
     private static SectionDeltaS2CPacket fixtureDeltaPacket() {
         List<SectionDeltaS2CPacket.DeltaEntry> entries = new ArrayList<>();
         List<SectionDeltaS2CPacket.SectionData> sections = new ArrayList<>();
-        sections.add(new SectionDeltaS2CPacket.SectionData(0, new byte[] {0x0A, 0x0B, 0x0C}));
+        sections.add(new SectionDeltaS2CPacket.SectionData(
+                0, SectionDeltaS2CPacket.KIND_FULL, new byte[] {0x0A, 0x0B, 0x0C}));
         List<SectionDeltaS2CPacket.BlockEntityData> blockEntities = new ArrayList<>();
         List<SectionDeltaS2CPacket.HeightmapData> heightmaps = new ArrayList<>();
         heightmaps.add(new SectionDeltaS2CPacket.HeightmapData(0, new long[] {0x1122334455667788L, 0x99AABBCCDDEEFF00L}));
@@ -97,7 +100,8 @@ class UdpSectionDeltaDispatchTest {
                 32, -16,
                 sections,
                 heightmaps,
-                blockEntities
+                blockEntities,
+                0x5A5A5A5A5A5A5A5AL
         ));
         List<SectionDeltaS2CPacket.SkippedChunk> skipped = new ArrayList<>();
         return new SectionDeltaS2CPacket("minecraft:overworld", entries, skipped);

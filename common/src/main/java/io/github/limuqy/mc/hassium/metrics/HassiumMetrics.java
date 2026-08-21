@@ -105,7 +105,8 @@ public interface HassiumMetrics {
     long getCacheDeltaCount();
 
     /**
-     * 分片（变更 section）等价值字节：从部分命中分子中扣除，只把「未变内容」算进命中。
+     * 分片（变更内容）等价值字节：从部分命中分子中扣除，只把「未变内容」算进命中。
+     * {@code FULL} 按整段，{@code BLOCKS} 按列表格数 / 4096 折一段。
      */
     long getCacheShardBytes();
 
@@ -402,7 +403,7 @@ public interface HassiumMetrics {
      * 有效命中内容字节：{@code 全命中 + 部分命中 - 分片}。
      * 全命中 = {@link #getCacheHitFullChunkBytes()}（磁盘/内存 contentHash 整柱复用）；
      * 部分命中 = {@link #getCachePartialHitBytes()}（缓存柱作基线的分段增量）；
-     * 分片 = {@link #getCacheShardBytes()}（变更 section 等价值）。
+     * 分片 = {@link #getCacheShardBytes()}（FULL 整段 / BLOCKS 按格折算）。
      * SeedGen 本地生成不算缓存命中，只在「区块加载 / 本地」展示。
      */
     default long getEffectiveCacheHitBytes() {

@@ -50,6 +50,16 @@ class HassiumMetricsImplTest {
     }
 
     @Test
+    void shardEquivBytesProratesBlockListCells() {
+        // 1×2 巷道 32 格 / 24 段：16KB × 32 / (24×4096) = 5
+        assertEquals(16_384L * 32 / (24 * 4096), NetworkStats.shardEquivBytes(32L, 24));
+        // 一段 FULL = 4096 格，与「1 个变更 section」同值
+        assertEquals(NetworkStats.shardEquivBytes(1, 24), NetworkStats.shardEquivBytes(4096L, 24));
+        assertEquals(0L, NetworkStats.shardEquivBytes(0L, 24));
+        assertEquals(16_384L, NetworkStats.shardEquivBytes(24L * 4096, 24));
+    }
+
+    @Test
     void effectiveCacheHitRateReturnsZeroWithoutAnyChunkSources() {
         HassiumMetricsImpl metrics = new HassiumMetricsImpl();
 

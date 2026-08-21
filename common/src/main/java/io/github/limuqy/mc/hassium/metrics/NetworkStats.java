@@ -1,5 +1,7 @@
 package io.github.limuqy.mc.hassium.metrics;
 
+import io.github.limuqy.mc.hassium.network.sectiondelta.SectionPlaneSyndrome;
+
 /**
  * 网络统计轻量门面
  * <p>
@@ -319,7 +321,8 @@ public class NetworkStats {
     }
 
     /**
-     * 记录分段增量里变更 section 的内容等价值（分片，从缓存命中分子扣除）。
+     * 记录分段增量里变更内容的等价值（分片，从缓存命中分子扣除）。
+     * {@code FULL} 段按整段 4096 格；{@code BLOCKS} 按列表格数。
      */
     public static void recordCacheShard(long bytes) {
         if (!enabled) return;
@@ -327,14 +330,26 @@ public class NetworkStats {
     }
 
     /**
-     * 变更 section 折成完整区块等价值：{@code 16KB × changed / sections}。
+     * 变更格子折成完整区块等价值：{@code 16KB × changedCells / (sectionCount × 4096)}。
+     */
+    public static long shardEquivBytes(long changedCells, int sectionCount) {
+        if (changedCells <= 0L || sectionCount <= 0) {
+            return 0L;
+        }
+        long denom = (long) sectionCount * SectionPlaneSyndrome.CELLS;
+        long cells = Math.min(changedCells, denom);
+        return ESTIMATED_CHUNK_BYTES * cells / denom;
+    }
+
+    /**
+     * 全部按 {@code FULL} 段计（每段 4096 格）：{@code 16KB × changed / sections}。
      */
     public static long shardEquivBytes(int changedSections, int sectionCount) {
         if (changedSections <= 0 || sectionCount <= 0) {
             return 0L;
         }
         int n = Math.min(changedSections, sectionCount);
-        return ESTIMATED_CHUNK_BYTES * n / sectionCount;
+        return shardEquivBytes((long) n * SectionPlaneSyndrome.CELLS, sectionCount);
     }
 
     /**

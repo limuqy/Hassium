@@ -647,7 +647,8 @@ public class HassiumMetricsImpl implements HassiumMetrics {
     }
 
     /**
-     * 记录分段增量里变更 section 的内容等价值（分片，从命中分子扣除）。
+     * 记录分段增量里变更内容的等价值（分片，从命中分子扣除）。
+     * {@code FULL} 整段 / {@code BLOCKS} 按格。
      */
     public void recordCacheShard(long bytes) {
         if (bytes > 0) {

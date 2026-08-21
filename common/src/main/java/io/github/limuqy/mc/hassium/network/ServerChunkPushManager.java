@@ -2,6 +2,7 @@ package io.github.limuqy.mc.hassium.network;
 
 import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.cache.ChunkContentHashUtil;
+import io.github.limuqy.mc.hassium.compat.LevelChunkSectionCompat;
 
 import io.github.limuqy.mc.hassium.concurrent.ChunkDistancePriority;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
@@ -16,6 +17,9 @@ import io.github.limuqy.mc.hassium.utils.TickMonitor;
 import io.github.limuqy.mc.hassium.network.core.outbound.ChunkApplyAck;
 import io.github.limuqy.mc.hassium.network.gateway.GatewayPlayerSession;
 import io.github.limuqy.mc.hassium.network.gateway.GatewayServer;
+import io.github.limuqy.mc.hassium.network.sectiondelta.SectionDeltaPlanner;
+import io.github.limuqy.mc.hassium.network.sectiondelta.SectionDeltaSnapshot;
+import io.github.limuqy.mc.hassium.network.sectiondelta.SectionPlaneSyndrome;
 import io.github.limuqy.mc.hassium.utils.DebugLogger.LogType;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Registry;
@@ -1480,19 +1484,6 @@ public class ServerChunkPushManager {
     private static final int SECTION_DELTA_VIEW_MARGIN = 1;
 
     /**
-     * 分段增量退化阈值：变更 section 占总 section 的百分比达到此值时回退全量请求。
-     * <p>
-     * 当 chunk 大部分 section 变更时，分段增量的 per-section 框架开销
-     * (sectionIndex VarInt + dataLen VarInt) 会使响应比全量包更大。
-     * 此阈值兜底防止「分段增量不如原版」的退化场景。
-     * <p>
-     * 75% 选择依据：分段增量额外开销 ≈ 变更数 × 3 字节(框架) + BE 列表；
-     * 全量开销 ≈ 全部 sections + heightmaps + light。当变更占比 ≥ 75% 时，
-     * 分段增量数据量已接近全量，加上框架开销后大概率超过全量。
-     */
-    private static final int SECTION_DELTA_FALLBACK_THRESHOLD_PCT = 75;
-
-    /**
      * 处理客户端的 section 哈希请求（阶段二）。
      * <p>
      * 全版本主线程处理：1.21.2+（PalettedContainer ThreadingDetector）比对/序列化必须在主线程；
@@ -1530,7 +1521,7 @@ public class ServerChunkPushManager {
                 continue;
             }
 
-            works.add(new DeltaWork(chunk, entry.sectionHashes(), entry.chunkX(), entry.chunkZ()));
+            works.add(new DeltaWork(chunk, entry));
         }
 
         // 主线程直接执行：ThreadingDetector 信号量版（<1.21.2）后台读 chunk 与主线程 tick 写并发即崩服
@@ -1561,42 +1552,12 @@ public class ServerChunkPushManager {
                     continue;
                 }
 
-                // 计算当前 section 哈希（不含 blockEntity；空气 section 不在 map 中，视为 0）
-                Map<Integer, Long> currentHashes = ChunkContentHashUtil.computeSectionHashes(chunk);
-                long[] clientHashes = entry.sectionHashes();
-
-                // 按完整索引比对：避免「服务端变空气」时漏发清除（非空 map 扫不到该 idx）
-                List<SectionDeltaS2CPacket.SectionData> changedSections = new ArrayList<>();
-                int sectionCount = chunk.getSectionsCount();
-                for (int idx = 0; idx < sectionCount; idx++) {
-                    long serverHash = currentHashes.getOrDefault(idx, 0L);
-                    long clientHash = idx < clientHashes.length ? clientHashes[idx] : 0L;
-                    if (serverHash != clientHash) {
-                        byte[] data = serializeSection(chunk, idx);
-                        changedSections.add(new SectionDeltaS2CPacket.SectionData(idx, data));
-                    }
-                }
-
-                // 退化保护：变更 section 占非空 section 的占比达阈值时回退全量，避免分段增量比全量包更大。
-                // 用非空 section 数（currentHashes.size()）而非总 section 数做分母：
-                // 空 section 不进 delta，用总数会稀释占比，导致该回退时不回退。
-                int nonEmptyCount = currentHashes.size();
-                if (nonEmptyCount > 0 && !changedSections.isEmpty()
-                        && changedSections.size() * 100 / nonEmptyCount >= SECTION_DELTA_FALLBACK_THRESHOLD_PCT) {
-                    DebugLogger.info(LogType.NETWORK,
-                            "[SECTION_DELTA] Fallback to full for [{}, {}]: {}/{} non-empty sections changed (>= {}%)",
-                            entry.chunkX(), entry.chunkZ(), changedSections.size(), nonEmptyCount,
-                            SECTION_DELTA_FALLBACK_THRESHOLD_PCT);
+                SectionDeltaS2CPacket.DeltaEntry planned = planAndSerialize(chunk, entry);
+                if (planned == null) {
                     skipped.add(new SectionDeltaS2CPacket.SkippedChunk(entry.chunkX(), entry.chunkZ()));
                     continue;
                 }
-
-                // 收集 blockEntity 数据：BE 不进 chunkHash，每次 delta 都附带当前快照。
-                List<SectionDeltaS2CPacket.BlockEntityData> blockEntities = collectBlockEntities(chunk);
-
-                deltas.add(new SectionDeltaS2CPacket.DeltaEntry(
-                        entry.chunkX(), entry.chunkZ(), changedSections,
-                        collectHeightmaps(chunk), blockEntities));
+                deltas.add(planned);
             } catch (Exception e) {
                 Constants.LOG.error("[SECTION_DELTA] Failed to process chunk [{}, {}]",
                         entry.chunkX(), entry.chunkZ(), e);
@@ -1621,53 +1582,24 @@ public class ServerChunkPushManager {
         List<SectionDeltaS2CPacket.DeltaEntry> deltas = new ArrayList<>();
         for (DeltaWork w : works) {
             try {
-                // 计算当前 section 哈希（不含 blockEntity；空气 section 不在 map 中，视为 0）
-                Map<Integer, Long> currentHashes = ChunkContentHashUtil.computeSectionHashes(w.chunk());
-                long[] clientHashes = w.clientHashes();
-
-                // 按完整索引比对：避免「服务端变空气」时漏发清除（非空 map 扫不到该 idx）
-                List<SectionDeltaS2CPacket.SectionData> changedSections = new ArrayList<>();
-                int sectionCount = w.chunk().getSectionsCount();
-                for (int idx = 0; idx < sectionCount; idx++) {
-                    long serverHash = currentHashes.getOrDefault(idx, 0L);
-                    long clientHash = idx < clientHashes.length ? clientHashes[idx] : 0L;
-                    if (serverHash != clientHash) {
-                        byte[] data = serializeSection(w.chunk(), idx);
-                        changedSections.add(new SectionDeltaS2CPacket.SectionData(idx, data));
-                    }
-                }
-
-                // 退化保护：变更 section 占非空 section 的占比达阈值时回退全量，避免分段增量比全量包更大。
-                // 用非空 section 数（currentHashes.size()）而非总 section 数做分母：
-                // 空 section 不进 delta，用总数会稀释占比，导致该回退时不回退。
-                int nonEmptyCount = currentHashes.size();
-                if (nonEmptyCount > 0 && !changedSections.isEmpty()
-                        && changedSections.size() * 100 / nonEmptyCount >= SECTION_DELTA_FALLBACK_THRESHOLD_PCT) {
-                    DebugLogger.info(LogType.NETWORK,
-                            "[SECTION_DELTA] Fallback to full for [{}, {}]: {}/{} non-empty sections changed (>= {}%)",
-                            w.x(), w.z(), changedSections.size(), nonEmptyCount,
-                            SECTION_DELTA_FALLBACK_THRESHOLD_PCT);
-                    skipped.add(new SectionDeltaS2CPacket.SkippedChunk(w.x(), w.z()));
+                SectionDeltaS2CPacket.DeltaEntry planned = planAndSerialize(w.chunk(), w.entry());
+                if (planned == null) {
+                    skipped.add(new SectionDeltaS2CPacket.SkippedChunk(w.entry().chunkX(), w.entry().chunkZ()));
                     continue;
                 }
-
-                // 收集 blockEntity 数据：BE 不进 chunkHash，每次 delta 都附带当前快照。
-                List<SectionDeltaS2CPacket.BlockEntityData> blockEntities = collectBlockEntities(w.chunk());
-
-                deltas.add(new SectionDeltaS2CPacket.DeltaEntry(
-                        w.x(), w.z(), changedSections, collectHeightmaps(w.chunk()), blockEntities));
+                deltas.add(planned);
             } catch (Exception e) {
                 Constants.LOG.error("[SECTION_DELTA] Failed to process chunk [{}, {}]",
-                        w.x(), w.z(), e);
-                skipped.add(new SectionDeltaS2CPacket.SkippedChunk(w.x(), w.z()));
+                        w.entry().chunkX(), w.entry().chunkZ(), e);
+                skipped.add(new SectionDeltaS2CPacket.SkippedChunk(w.entry().chunkX(), w.entry().chunkZ()));
             }
         }
 
         sendSectionDeltaResponse(player, dimension, deltas, skipped);
     }
 
-    /** 阶段二后台工作项：chunk 引用 + 客户端 section 哈希快照 */
-    private record DeltaWork(LevelChunk chunk, long[] clientHashes, int x, int z) {}
+    /** 阶段二工作项：chunk 引用 + 客户端请求条目（hashes + 平面） */
+    private record DeltaWork(LevelChunk chunk, SectionHashRequestC2SPacket.Entry entry) {}
 #endif
 
     /**
@@ -1793,6 +1725,64 @@ public class ServerChunkPushManager {
                 }
             }
         }
+    }
+
+    /**
+     * 捕获服务端快照 → Planner → 序列化 FULL 或打包 BLOCKS。
+     * 返回 null 表示整块 skipped（75% 回退）。
+     */
+    private SectionDeltaS2CPacket.DeltaEntry planAndSerialize(LevelChunk chunk,
+                                                             SectionHashRequestC2SPacket.Entry clientEntry) {
+        SectionDeltaSnapshot serverSnap = SectionDeltaSnapshot.capture(chunk);
+        SectionDeltaSnapshot clientSnap = new SectionDeltaSnapshot(
+                clientEntry.sectionHashes(), clientEntry.planes());
+        SectionDeltaPlanner.ChunkDecision decision = SectionDeltaPlanner.plan(clientSnap, serverSnap);
+        if (decision.skipWholeChunk()) {
+            DebugLogger.info(LogType.NETWORK,
+                    "[SECTION_DELTA] Fallback to full for [{}, {}]: changed sections >= {}%",
+                    clientEntry.chunkX(), clientEntry.chunkZ(),
+                    SectionDeltaPlanner.FALLBACK_THRESHOLD_PCT);
+            return null;
+        }
+        List<SectionDeltaS2CPacket.SectionData> changedSections = new ArrayList<>();
+        for (SectionDeltaPlanner.SectionDecision sd : decision.sections()) {
+            if (sd.kind() == SectionDeltaPlanner.Kind.SKIP) {
+                continue;
+            }
+            if (sd.kind() == SectionDeltaPlanner.Kind.FULL) {
+                changedSections.add(new SectionDeltaS2CPacket.SectionData(
+                        sd.sectionIndex(), SectionDeltaS2CPacket.KIND_FULL,
+                        serializeSection(chunk, sd.sectionIndex())));
+                continue;
+            }
+            byte[] full = serializeSection(chunk, sd.sectionIndex());
+            int[] stateIds = stateIdsOf(chunk, sd.sectionIndex(), sd.candidates());
+            byte[] blocks = SectionPlaneSyndrome.encodeBlockList(sd.candidates(), stateIds);
+            if (blocks.length <= full.length) {
+                changedSections.add(new SectionDeltaS2CPacket.SectionData(
+                        sd.sectionIndex(), SectionDeltaS2CPacket.KIND_BLOCKS, blocks));
+            } else {
+                changedSections.add(new SectionDeltaS2CPacket.SectionData(
+                        sd.sectionIndex(), SectionDeltaS2CPacket.KIND_FULL, full));
+            }
+        }
+        long expectedChunkHash = ChunkContentHashUtil.combineSectionHashesFromArray(serverSnap.sectionHashes());
+        return new SectionDeltaS2CPacket.DeltaEntry(
+                clientEntry.chunkX(), clientEntry.chunkZ(), changedSections,
+                collectHeightmaps(chunk), collectBlockEntities(chunk), expectedChunkHash);
+    }
+
+    private int[] stateIdsOf(LevelChunk chunk, int sectionIndex, int[] candidates) {
+        LevelChunkSection section = chunk.getSection(sectionIndex);
+        int[] ids = new int[candidates.length];
+        for (int i = 0; i < candidates.length; i++) {
+            int packed = candidates[i];
+            ids[i] = LevelChunkSectionCompat.blockStateId(section.getBlockState(
+                    SectionPlaneSyndrome.localX(packed),
+                    SectionPlaneSyndrome.localY(packed),
+                    SectionPlaneSyndrome.localZ(packed)));
+        }
+        return ids;
     }
 
     /**

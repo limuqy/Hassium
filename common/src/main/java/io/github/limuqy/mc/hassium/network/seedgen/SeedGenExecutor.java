@@ -8,6 +8,7 @@ import io.github.limuqy.mc.hassium.network.ClientChunkHandler;
 import io.github.limuqy.mc.hassium.network.ClientChunkPipeline;
 import io.github.limuqy.mc.hassium.network.ClientMetadataHandler;
 import io.github.limuqy.mc.hassium.network.SeedRefS2CPacket;
+import io.github.limuqy.mc.hassium.network.sectiondelta.SectionDeltaPlanner;
 import io.github.limuqy.mc.hassium.metrics.NetworkStats;
 import io.github.limuqy.mc.hassium.utils.DebugLogger;
 import java.util.ArrayList;
@@ -65,16 +66,12 @@ public final class SeedGenExecutor {
 
     /** 回退请求合包上限：超时/失败回退攒批发送（不逐块单包），服务端 100/s 限速下单包风暴 = P1 诱因。 */
     private static final int FALLBACK_BATCH_MAX = 64;
-    /** T7：镜像服务端 {@code ServerChunkPushManager#SECTION_DELTA_FALLBACK_THRESHOLD_PCT}（75%）。
-     *  本地 worldgen 与服务器不一致时，变更 section 占比达阈值服务端必然跳过 delta 回退全量——
-     *  客户端预判后直接全量请求，跳过必败的 delta 往返。改动需与服务端同值同步。 */
     /** 盲预生成半径（区块）：进服后主动覆盖 R2 重连视距 VD10（±10 → 441 块），不依赖 SeedRef。
      *  1.21.9+ worldgen 串行（ChunkMap ConsecutiveExecutor），实测 ~6.7 块/s——R1 35s 窗口
      *  可生成 ~230 块（≈59% 覆盖率）；441 全量 ~66s 跨入 R2 窗口续生成。 */
     private static final int PREGEN_RADIUS = 10;
     /** 盲预生成已调度（首个 SeedRef 到达时触发一次；断连重置）。 */
     private final AtomicBoolean pregenScheduled = new AtomicBoolean(false);
-    private static final int SECTION_DELTA_FALLBACK_THRESHOLD_PCT = 75;
     /** P2 诊断埋点（T7）：mismatch dump 总量上限（前 N 块），防 debug 全开时刷屏。 */
     private static final int MISMATCH_DUMP_MAX = 20;
     private static final AtomicInteger mismatchDumpsLogged = new AtomicInteger();
@@ -451,7 +448,7 @@ public final class SeedGenExecutor {
                     if (wouldServerSkipDelta(entry, localSectionHashes)) {
                         DebugLogger.warn(DebugLogger.LogType.ASYNC,
                                 "[SEEDGEN] Delta preempted ({}, {}): >= {}% non-empty sections differ -> direct full request",
-                                pos.x, pos.z, SECTION_DELTA_FALLBACK_THRESHOLD_PCT);
+                                pos.x, pos.z, SectionDeltaPlanner.FALLBACK_THRESHOLD_PCT);
                         ShadowLightCompute.tryRequestMiss(pos);
                         ClientMetadataHandler.requestFullChunksPublic(
                                 dimension, List.of(pos), false, entry.deliveryId());
@@ -494,8 +491,7 @@ public final class SeedGenExecutor {
     }
 
     /**
-     * 镜像服务端 section-delta 回退判定（{@code ServerChunkPushManager} 的
-     * {@code processSectionDelta}/{@code handleSectionHashRequest} 同算法）：按完整索引比对双方
+     * 镜像服务端 section-delta 回退判定：按完整索引比对双方
      * section 哈希（0 = 空 section），「变更 section × 100 / 服务端非空 section 数 ≥ 75%」时
      * 服务端跳过 delta 回退全量。客户端持有 SeedRef 下发的服务端 sectionHashes 与本地生成哈希，
      * 可精确预判；无服务端哈希（空数组）时维持原 delta 路径由服务端自行判定。
@@ -507,21 +503,7 @@ public final class SeedGenExecutor {
             return false;
         }
         long[] localHashes = ChunkContentHashUtil.sectionHashesToArray(localSectionHashes);
-        int len = Math.max(serverHashes.length, localHashes.length);
-        int changed = 0;
-        int nonEmpty = 0;
-        for (int idx = 0; idx < len; idx++) {
-            long serverHash = idx < serverHashes.length ? serverHashes[idx] : 0L;
-            long localHash = idx < localHashes.length ? localHashes[idx] : 0L;
-            if (serverHash != 0L) {
-                nonEmpty++;
-            }
-            if (serverHash != localHash) {
-                changed++;
-            }
-        }
-        return nonEmpty > 0 && changed > 0
-                && changed * 100 / nonEmpty >= SECTION_DELTA_FALLBACK_THRESHOLD_PCT;
+        return SectionDeltaPlanner.shouldFallbackFullChunk(localHashes, serverHashes);
     }
 
     /**

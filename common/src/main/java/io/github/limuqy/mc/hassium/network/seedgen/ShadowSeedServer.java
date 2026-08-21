@@ -28,11 +28,15 @@ import com.mojang.authlib.yggdrasil.ServicesKeySet;
 import com.mojang.logging.LogUtils;
 import io.github.limuqy.mc.hassium.compat.BlockEntityCompat;
 import io.github.limuqy.mc.hassium.compat.EntityPacketCompat;
+import io.github.limuqy.mc.hassium.compat.LevelChunkSectionCompat;
 import io.github.limuqy.mc.hassium.compat.ShadowChunkMapCompat;
 import io.github.limuqy.mc.hassium.mixin.ServerLevelAccessor;
 import io.github.limuqy.mc.hassium.mixin.ThreadedLevelLightEngineAccessor;
 import io.github.limuqy.mc.hassium.network.BlockEntityDataS2CPacket;
 import io.github.limuqy.mc.hassium.network.SectionDeltaS2CPacket;
+import io.github.limuqy.mc.hassium.network.sectiondelta.SectionDeltaSnapshot;
+import io.github.limuqy.mc.hassium.network.sectiondelta.SectionDeltaSnapshots;
+import io.github.limuqy.mc.hassium.network.sectiondelta.SectionPlaneSyndrome;
 import io.github.limuqy.mc.hassium.utils.DebugLogger;
 import java.net.Proxy;
 import java.util.ArrayList;
@@ -210,6 +214,7 @@ public class ShadowSeedServer extends MinecraftServer {
         // （WorldLoader 前）置位；此处幂等确保 createLevels 期间 RegionFile gate 有效。
         io.github.limuqy.mc.hassium.server.RuntimeServerContext.setShadowServer(true);
         io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.clear();
+        SectionDeltaSnapshots.clear();
         this.setPlayerList(new PlayerList(this, this.registries(), this.playerDataStorage,
 #if MC_VER < MC_1_21_9
                 1
@@ -460,6 +465,9 @@ public class ShadowSeedServer extends MinecraftServer {
             } catch (Throwable hashError) {
                 LOGGER.debug("Hassium: Shadow contentHash compute failed for {}, skip hash write", pos);
             }
+            LevelChunk captured = chunk;
+            ShadowLightCompute.withChunkLock(pos, () ->
+                    SectionDeltaSnapshots.put(pos, SectionDeltaSnapshot.capture(captured)));
             io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.markContentDirty(key);
             ShadowCacheEviction.recordAccess(pos);
             registerInjectTicket(pos);
@@ -722,24 +730,20 @@ public class ShadowSeedServer extends MinecraftServer {
      * <p>
      * 步骤（镜像 {@code replaceWithPacketData} 语义，按 delta 包裁剪）：
      * <ol>
-     *   <li>变更 sections：{@code LevelChunkSection.read(buf)} 就地覆盖
-     *       （counts+states+biomes 官方网络格式，与服务端 serializeSection 对称）</li>
+     *   <li>变更 sections：{@code KIND_FULL} → {@code LevelChunkSection.read(buf)}；
+     *       {@code KIND_BLOCKS} → {@code section.setBlockState}（禁止 {@code level.setBlock}）</li>
      *   <li>heightmaps：逐 type {@code setHeightmap}（delta 包随附服务端 rawData——
      *       直接改 section 不会自动更新高度图）</li>
      *   <li>blockEntity：服务端发整 chunk BE 快照 → 先清旧表，再镜像官方
      *       replaceWithPacketData 的 consumer（IMMEDIATE 创建 + type 校验 + load）</li>
      *   <li><b>光</b>：delta 不含光照 → 变更 section 清光（{@code queueSectionData(EMPTY)}，
-     *       injectChunk 同款）→ 由调用方两阶段屏障（initializeLight → lightChunk）重算，
-     *       不在此处 propagate（提前传播会被空层安装覆盖）；欠光由光照更新
-     *       桥梁（collectLightUpdate → drainLightMasks）事件驱动补发</li>
+     *       injectChunk 同款）→ 由调用方两阶段屏障（initializeLight → lightChunk）重算</li>
+     *   <li>比对 {@code expectedChunkHash}，失败返回 false（调用方回退全量）</li>
      * </ol>
-     * 完成后重算 contentHash 写存储桥（后续 hash 比对 / R2 落盘复用）。
+     * 完成后重算 contentHash 写存储桥，并 recapture 平面综合征 memo。
      * 仅 {@code consumeLoop} 单线程调用；失败返回 false（调用方回退全量请求）。
      */
-    public boolean applySectionDelta(ChunkPos pos,
-                                     List<SectionDeltaS2CPacket.SectionData> changedSections,
-                                     List<SectionDeltaS2CPacket.HeightmapData> heightmaps,
-                                     List<SectionDeltaS2CPacket.BlockEntityData> blockEntities) {
+    public boolean applySectionDelta(ChunkPos pos, SectionDeltaS2CPacket.DeltaEntry entry) {
         // 变更 section 清光投递与光屏障互斥（同 clearChunkLight；2026-08-14 NPE 同源）。
         synchronized (ShadowLightCompute.LIGHT_ENGINE_MUTEX) {
             try {
@@ -753,11 +757,23 @@ public class ShadowSeedServer extends MinecraftServer {
             ThreadedLevelLightEngine lightEngine =
                     (ThreadedLevelLightEngine) this.overworld().getChunkSource().getLightEngine();
             // 1) sections 就地覆盖（先于 BE——BE 创建依赖新 block state）
-            for (SectionDeltaS2CPacket.SectionData sd : changedSections) {
+            for (SectionDeltaS2CPacket.SectionData sd : entry.changedSections()) {
                 LevelChunkSection section = chunk.getSection(sd.sectionIndex());
                 FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(sd.blockData()));
                 try {
-                    section.read(buf);
+                    if (sd.kind() == SectionDeltaS2CPacket.KIND_FULL) {
+                        section.read(buf);
+                    } else if (sd.kind() == SectionDeltaS2CPacket.KIND_BLOCKS) {
+                        if (!applyBlockList(section, buf)) {
+                            SectionDeltaSnapshots.invalidate(pos);
+                            return false;
+                        }
+                    } else {
+                        LOGGER.debug("Hassium: Shadow applySectionDelta unknown kind {} ({}, {})",
+                                sd.kind(), pos.x, pos.z);
+                        SectionDeltaSnapshots.invalidate(pos);
+                        return false;
+                    }
                 } finally {
                     buf.release();
                 }
@@ -770,7 +786,7 @@ public class ShadowSeedServer extends MinecraftServer {
             }
             // 3) heightmaps 逐 type 覆盖
             Heightmap.Types[] types = Heightmap.Types.values();
-            for (SectionDeltaS2CPacket.HeightmapData hm : heightmaps) {
+            for (SectionDeltaS2CPacket.HeightmapData hm : entry.heightmaps()) {
                 if (hm.typeId() >= 0 && hm.typeId() < types.length) {
                     chunk.setHeightmap(types[hm.typeId()], hm.data());
                 }
@@ -785,28 +801,61 @@ public class ShadowSeedServer extends MinecraftServer {
             for (BlockPos bp : new ArrayList<>(chunk.getBlockEntities().keySet())) {
                 chunk.removeBlockEntity(bp);
             }
-            for (SectionDeltaS2CPacket.BlockEntityData bed : blockEntities) {
+            for (SectionDeltaS2CPacket.BlockEntityData bed : entry.blockEntities()) {
                 net.minecraft.world.level.block.entity.BlockEntity be =
                         chunk.getBlockEntity(bed.pos(), LevelChunk.EntityCreationType.IMMEDIATE);
                 if (be != null && bed.nbt() != null) {
                     BlockEntityCompat.loadFromTag(be, bed.nbt(), this.overworld().registryAccess());
                 }
             }
-            // 5) 重算 contentHash 写存储桥（R2 比对 / 断连落盘复用）
+            // 5) 重算 contentHash 写存储桥（R2 比对 / 断连落盘复用），并校验 expectedChunkHash
             try {
                 long contentHash = io.github.limuqy.mc.hassium.cache.ChunkContentHashUtil
                         .combineSectionHashes(io.github.limuqy.mc.hassium.cache.ChunkContentHashUtil
                                 .computeSectionHashes(chunk));
+                if (contentHash != entry.expectedChunkHash()) {
+                    LOGGER.debug("Hassium: Shadow applySectionDelta hash mismatch ({}, {}): got={} expected={}",
+                            pos.x, pos.z, Long.toHexString(contentHash),
+                            Long.toHexString(entry.expectedChunkHash()));
+                    SectionDeltaSnapshots.invalidate(pos);
+                    return false;
+                }
                 io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.put(pos, contentHash);
+                SectionDeltaSnapshots.put(pos, SectionDeltaSnapshot.capture(chunk));
             } catch (Throwable hashError) {
                 LOGGER.debug("Hassium: Shadow contentHash recompute failed for {}, skip hash write", pos);
+                SectionDeltaSnapshots.invalidate(pos);
+                return false;
             }
             return true;
         } catch (Throwable t) {
             LOGGER.warn("Hassium: Shadow applySectionDelta failed for {}", pos, t);
+            SectionDeltaSnapshots.invalidate(pos);
             return false;
         }
         }
+    }
+
+    private static boolean applyBlockList(LevelChunkSection section, FriendlyByteBuf buf) {
+        int count = buf.readVarInt();
+        if (count < 0 || count > SectionPlaneSyndrome.CELLS) {
+            return false;
+        }
+        for (int i = 0; i < count; i++) {
+            long packed = buf.readVarLong();
+            int localPos = (int) (packed & SectionPlaneSyndrome.LOCAL_POS_MASK);
+            int stateId = (int) (packed >>> 12);
+            BlockState state = LevelChunkSectionCompat.blockStateFromId(stateId);
+            if (state == null) {
+                return false;
+            }
+            section.setBlockState(
+                    SectionPlaneSyndrome.localX(localPos),
+                    SectionPlaneSyndrome.localY(localPos),
+                    SectionPlaneSyndrome.localZ(localPos),
+                    state);
+        }
+        return true;
     }
 
     /**
@@ -941,6 +990,7 @@ public class ShadowSeedServer extends MinecraftServer {
             ChunkPos pos = new ChunkPos(key);
             io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.remove(pos);
             io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.markContentDirty(key);
+            SectionDeltaSnapshots.invalidate(key);
         }
     }
 
@@ -1331,6 +1381,8 @@ public class ShadowSeedServer extends MinecraftServer {
         } else {
             io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.claimDirty(key);
         }
+        ShadowLightCompute.withChunkLock(pos, () ->
+                SectionDeltaSnapshots.put(pos, SectionDeltaSnapshot.capture(chunk)));
         registerInjectTicket(pos);
     }
 

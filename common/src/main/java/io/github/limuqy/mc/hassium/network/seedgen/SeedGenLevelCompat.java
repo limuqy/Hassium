@@ -436,6 +436,7 @@ public final class SeedGenLevelCompat {
             io.github.limuqy.mc.hassium.server.RuntimeServerContext
                     .clearShadowServerIfCurrentGeneration(shadowGeneration);
             io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.clear();
+            io.github.limuqy.mc.hassium.network.sectiondelta.SectionDeltaSnapshots.clear();
             // 热度索引内存态清空（磁盘 heat.idx 已随 saveAll 落盘，重连装配时重新加载）
             ShadowCacheEviction.reset();
         }

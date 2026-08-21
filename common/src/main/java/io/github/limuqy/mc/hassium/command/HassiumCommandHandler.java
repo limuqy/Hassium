@@ -109,7 +109,7 @@ public class HassiumCommandHandler {
                                               long shardBytes, long appliedBytes) {
         // 缓存命中 = (全命中 + 部分命中 - 分片) / 应用，按内容等价值字节。
         // 全命中 = 磁盘/内存 contentHash 整柱复用；部分命中 = 缓存柱作基线的分段增量；
-        // 分片 = 变更 section 等价值。SeedGen 本地生成不算缓存，只在「区块加载 / 本地」。
+        // 分片 = FULL 整段 / BLOCKS 按格折算。SeedGen 本地生成不算缓存，只在「区块加载 / 本地」。
         long hitBytes = Math.max(0L, fullHitBytes + partialBytes - shardBytes);
         double rate = appliedBytes <= 0L
                 ? 0.0

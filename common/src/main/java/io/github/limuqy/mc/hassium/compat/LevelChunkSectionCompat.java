@@ -8,9 +8,9 @@ import net.minecraft.core.RegistryAccess;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.world.level.biome.Biome;
 import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.chunk.LevelChunkSection;
 #if MC_VER >= MC_1_21_9
-import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.chunk.PalettedContainerFactory;
 import net.minecraft.world.level.chunk.PalettedContainerRO;
 import net.minecraft.world.level.chunk.Strategy;
@@ -89,5 +89,22 @@ public final class LevelChunkSectionCompat {
             }
         }
 #endif
+    }
+
+    /**
+     * 平面综合征 / 方块列表用的 BlockState 数值 ID，与 1.20.1–1.21.8
+     * {@link #writeSectionForHash} 的 {@code Block.getId} 口径一致。
+     */
+    public static int blockStateId(BlockState state) {
+#if MC_VER >= MC_1_21_9
+        return Block.BLOCK_STATE_REGISTRY.getId(state);
+#else
+        return Block.getId(state);
+#endif
+    }
+
+    /** 方块列表 apply：由数值 ID 还原 BlockState（非法 ID 返回 null）。 */
+    public static BlockState blockStateFromId(int id) {
+        return Block.BLOCK_STATE_REGISTRY.byId(id);
     }
 }
