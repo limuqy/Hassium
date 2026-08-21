@@ -1,6 +1,5 @@
 package io.github.limuqy.mc.hassium.network;
 
-import io.github.limuqy.mc.hassium.concurrent.KeyedPriorityQueue;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -67,6 +66,42 @@ class ChunkAdmissionControllerTest {
         controller.offer(key(11));
         controller.beginTick(1);
         assertFalse(controller.canAdmit());
+    }
+
+    @Test
+    void admission_partialBatchAcksDoNotFreezeWindow() {
+        ChunkAdmissionController controller = new ChunkAdmissionController();
+        controller.offer(key(0));
+        controller.beginTick(9);
+        ChunkAdmissionController.Reservation first = controller.admit(key(0), 1L);
+        assertNotNull(first);
+        assertTrue(controller.acknowledge(first.deliveryId(), 2L));
+
+        // 10 ticks × 2 chunks：每批只 ACK 1/2，旧逻辑 unacknowledgedBatches=10 冻死窗口。
+        long sentAt = 3L;
+        java.util.List<ChunkAdmissionController.Reservation> stuck = new java.util.ArrayList<>();
+        for (int tick = 0; tick < ChunkAdmissionController.POST_ACK_MAX_UNACKNOWLEDGED_BATCHES; tick++) {
+            int a = 100 + tick * 2;
+            int b = a + 1;
+            controller.offer(key(a));
+            controller.offer(key(b));
+            controller.beginTick(9);
+            ChunkAdmissionController.Reservation ra = controller.admit(key(a), sentAt++);
+            ChunkAdmissionController.Reservation rb = controller.admit(key(b), sentAt++);
+            assertNotNull(ra);
+            assertNotNull(rb);
+            assertTrue(controller.acknowledge(ra.deliveryId(), sentAt++));
+            stuck.add(rb);
+        }
+        assertEquals(ChunkAdmissionController.POST_ACK_MAX_UNACKNOWLEDGED_BATCHES,
+                stuck.size());
+        assertEquals(ChunkAdmissionController.POST_ACK_MAX_UNACKNOWLEDGED_BATCHES,
+                controller.inFlightCount());
+
+        controller.offer(key(999));
+        controller.beginTick(9);
+        assertNotNull(controller.admit(key(999), sentAt),
+                "partial ACKs must free in-flight credit even if tick-batches remain incomplete");
     }
 
     @Test
@@ -171,12 +206,49 @@ class ChunkAdmissionControllerTest {
 
         ChunkAdmissionController.Reservation reservation = controller.admit(deliveryKey);
         assertNotNull(reservation);
-        assertFalse(controller.acknowledge(reservation.deliveryId(), 10L));
         assertTrue(controller.markSent(reservation.deliveryId(), 5L));
         assertTrue(controller.release(deliveryKey, reservation.deliveryId()));
         assertEquals(0, controller.inFlightCount());
         assertEquals(0, controller.unacknowledgedBatches());
         assertFalse(controller.release(deliveryKey, reservation.deliveryId()));
+    }
+
+    @Test
+    void admission_ackBeforeMarkSentReleasesBatchCredit() {
+        ChunkAdmissionController controller = new ChunkAdmissionController();
+        controller.offer(key(1));
+        controller.beginTick(5);
+        ChunkAdmissionController.Reservation first = controller.admit(key(1));
+        assertNotNull(first);
+        assertEquals(1, controller.unacknowledgedBatches());
+
+        assertTrue(controller.acknowledge(first.deliveryId(), 10L),
+                "client apply/ACK can beat pushPool markSent");
+        assertEquals(0, controller.inFlightCount());
+        assertEquals(0, controller.unacknowledgedBatches());
+        assertFalse(controller.markSent(first.deliveryId(), 11L),
+                "already-ACKed delivery must not be marked sent");
+
+        controller.offer(key(2));
+        controller.beginTick(5);
+        assertNotNull(controller.admit(key(2), 12L),
+                "early ACK must free the first-batch gate");
+    }
+
+    @Test
+    void admission_unsentReservationExpiresFromAdmitTime() {
+        ChunkAdmissionController controller = new ChunkAdmissionController();
+        controller.offer(key(1));
+        controller.beginTick(1);
+        ChunkAdmissionController.Reservation reservation = controller.admit(key(1), 0L, 1L);
+        assertNotNull(reservation);
+        assertEquals(1, controller.inFlightCount());
+
+        assertEquals(0, controller.expire(100L, 100L).size(), "unsent must not expire before admit+timeout");
+        assertEquals(1, controller.expire(101L, 100L).size());
+        assertEquals(0, controller.inFlightCount());
+        assertEquals(0, controller.unacknowledgedBatches());
+        assertTrue(controller.offer(key(1)), "timeout caller re-admits only if tracking still requires the key");
     }
 
     @Test
@@ -215,28 +287,17 @@ class ChunkAdmissionControllerTest {
     }
 
     @Test
-    void drainProtocol_admitFailureMustRequeueWhilePending() {
+    void drainProtocol_admitFailureKeepsPendingHead() {
         ChunkAdmissionController controller = new ChunkAdmissionController();
-        KeyedPriorityQueue<String> queue = new KeyedPriorityQueue<>();
-        KeyedPriorityQueue.Key queueKey = new KeyedPriorityQueue.Key(1L, 0, "minecraft:overworld");
-
         controller.offer(key(1));
         controller.offer(key(2));
-        queue.offer("chunk-2", queueKey, 1.0, KeyedPriorityQueue.OfferPolicy.REPLACE);
-
         controller.beginTick(1);
         assertNotNull(controller.admit(key(1), 1L));
-
-        KeyedPriorityQueue.Entry<String> entry = queue.poll();
-        assertNotNull(entry);
-        queue.release(entry);
-        assertNull(controller.admit(key(2)));
+        assertNull(controller.admit(key(2)), "quota 用尽不得摘掉队头 pending");
         assertTrue(controller.isPending(key(2)));
-
-        queue.offer(entry.item(), queueKey, entry.priority(), KeyedPriorityQueue.OfferPolicy.REPLACE);
-        assertEquals(1, queue.size());
-        assertEquals("chunk-2", queue.poll().item());
         assertFalse(controller.offer(key(2)));
+        assertEquals(1, controller.pendingCount());
+        assertEquals(1, controller.inFlightCount());
     }
 
     private static ChunkAdmissionController.ChunkDeliveryKey key(int x) {

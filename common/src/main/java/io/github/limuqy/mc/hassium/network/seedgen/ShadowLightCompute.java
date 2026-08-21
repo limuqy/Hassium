@@ -1694,6 +1694,17 @@ public final class ShadowLightCompute {
         if (executor == null || !executor.isRunning() || !isEnabled()) {
             return true; // 断连竞态：影子已关/队列已清（onDisconnect 清空 pending/generated/ready）→ 丢弃
         }
+        Minecraft mc = Minecraft.getInstance();
+        if (mc != null && mc.isSameThread()) {
+            // drainReady / sweepLightTimeouts 已在主线程：同步打包入 ready，
+            // 同帧就能 apply+ACK。丢给线程池会让本帧 ready 仍空、early-return，
+            // 服务端 10-batch 窗口卡到 delivery timeout。
+            finishLight(inf, converged);
+            if (inflightLight.size() < PIPELINE_LOW_WATER && hasPendingWork() && isEnabled()) {
+                pump();
+            }
+            return true;
+        }
         try {
             executor.submit(() -> finishLight(inf, converged), TaskCategory.BEST_EFFORT);
         } catch (java.util.concurrent.RejectedExecutionException e) {
@@ -1974,10 +1985,19 @@ public final class ShadowLightCompute {
             drainLightMasks(deadlineNs, false, false, 0); // 断连：与原先一样清空 lightUpdates
             ready.clear();
             ClientChunkHandler.flushChunkApplyAcks();
+            logStallDrain(0, deadlineNs);
             return;
+        }
+        // 服务端 ACK 窗口在 100/s 平台期已满：一旦本帧 ready 空、又不再 submit()，
+        // consumeLoop 不会被 pump，pending 会一直趴着直到 30s delivery timeout。
+        if (hasPendingWork()
+                && inflightLight.size() < PIPELINE_MAX_INFLIGHT
+                && isEnabled()) {
+            pump();
         }
         if (ready.isEmpty() && !joinBoost) {
             ClientChunkHandler.flushChunkApplyAcks();
+            logStallDrain(0, deadlineNs);
             return;
         }
         List<KeyedPriorityQueue.Entry<ReadyItem>> deferredLights = new ArrayList<>();
@@ -2053,6 +2073,21 @@ public final class ShadowLightCompute {
             ready.reoffer(retry, retry.priority());
         }
         ClientChunkHandler.flushChunkApplyAcks();
+        logStallDrain(chunksAppliedThisFrame, deadlineNs);
+    }
+
+    private static void logStallDrain(int applied, long deadlineNs) {
+        io.github.limuqy.mc.hassium.utils.StallDiag.clientHz(
+                "drain applied={} leftoverMs={} {} {} joinBoost={} rem={}ms budgetMs={} dispQ={} ackPend={}",
+                applied,
+                Math.max(0L, deadlineNs - System.nanoTime()) / 1_000_000L,
+                stallSnapshot(),
+                io.github.limuqy.mc.hassium.network.ClientMetadataHandler.stallSnapshot(),
+                ClientMainThreadBudget.isJoinBoostActive(),
+                ClientMainThreadBudget.joinBoostRemainingMs(),
+                ClientMainThreadBudget.getBudgetNs() / 1_000_000L,
+                io.github.limuqy.mc.hassium.concurrent.MainThreadDispatcher.getClientQueueSize(),
+                ClientChunkPipeline.getInstance().pendingAckCount());
     }
 
     /** @return true=本条目可 release；false=权威包被原版忽略，帧尾重入队 */
@@ -2099,6 +2134,7 @@ public final class ShadowLightCompute {
             recordFullApplyTrace(chunkKey, renderOnly, item.traceOrigin());
             if (!renderOnly) {
                 io.github.limuqy.mc.hassium.metrics.NetworkStats.recordChunkApplied(chunkX, chunkZ);
+                io.github.limuqy.mc.hassium.cache.client.ClientMainThreadBudget.noteChunkApplyActivity();
             }
             ClientChunkHandler.recordAuthoritativeApply(item.deliveryId(), renderOnly, true);
             if (renderOnly) {
@@ -2609,6 +2645,27 @@ public final class ShadowLightCompute {
     /** 诊断：回传队列大小（区块 + 光照）。 */
     public static int readyCount() {
         return ready.size();
+    }
+
+    /**
+     * 主线程是否应为 {@code drainReady} 预留预算：ready 非空，或影子管线里还有
+     * pending / 在途光屏障。只看 {@link #readyCount()} 会在 JoinBoost 到期后把
+     * 100% 预算给 dispatcher，pending 抽不出来、ACK 停、服务端窗口卡死。
+     */
+    public static boolean hasBacklog() {
+        return readyCount() > 0 || hasPendingWork()
+                || !inflightLight.isEmpty() || !waitingForLight.isEmpty();
+    }
+
+    /** 冒烟卡顿诊断：影子管线队列快照。 */
+    public static String stallSnapshot() {
+        return "ready=" + ready.size()
+                + " pending=" + pending.size()
+                + " gen=" + generated.size()
+                + " delta=" + pendingDeltas.size()
+                + " inflightLight=" + inflightLight.size()
+                + " waiting=" + waitingForLight.size()
+                + " consume=" + consumeRunning.get();
     }
 
     /** 光屏障来源：决定 submitLightBatch 提交时的队列条件移除与 finishLight 回传前 REPLACE 校验方式。 */

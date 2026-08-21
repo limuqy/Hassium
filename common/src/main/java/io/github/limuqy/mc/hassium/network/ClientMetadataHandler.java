@@ -95,6 +95,20 @@ public class ClientMetadataHandler {
         return Math.min(t, FULL_REQUEST_TIMEOUT_MAX_MS);
     }
 
+    /** 冒烟卡顿诊断：在途全量请求数 + 最近到期剩余毫秒。 */
+    public static String stallSnapshot() {
+        int n = PENDING_FULL_REQUESTS.size();
+        if (n == 0) {
+            return "fullReq=0";
+        }
+        long now = System.currentTimeMillis();
+        long nextMs = Long.MAX_VALUE;
+        for (PendingFullRequest req : PENDING_FULL_REQUESTS.values()) {
+            nextMs = Math.min(nextMs, req.deadlineMs() - now);
+        }
+        return "fullReq=" + n + " nextMs=" + Math.max(0L, nextMs);
+    }
+
     /**
      * 首登过渡窗口缓冲：SEED_REF 帧。
      * <p>
@@ -306,6 +320,9 @@ public class ClientMetadataHandler {
                     byRetry.computeIfAbsent(r, k -> new ArrayList<>()).add(pos);
                 }
             }
+            int retrying = e.getValue().size() - dropped;
+            io.github.limuqy.mc.hassium.utils.StallDiag.event(
+                    "fullReq timeout n={} retry={} drop={}", e.getValue().size(), retrying, dropped);
             if (dropped > 0) {
                 DebugLogger.warn(LogType.METADATA,
                         "[CHUNK_HASH] {} full requests timed out, {} gave up after {} retries (push path still delivers)",
@@ -448,6 +465,17 @@ public class ClientMetadataHandler {
         if (toRequest.isEmpty()) {
             return;
         }
+        if (fallbackDeliveryId != 0L) {
+            sendFullChunkRequest(dimension, toRequest, fallbackDeliveryId, staleOrFallback);
+            return;
+        }
+        for (List<ChunkPos> batch : ChunkDataRequestC2SPacket.partition(toRequest)) {
+            sendFullChunkRequest(dimension, batch, 0L, staleOrFallback);
+        }
+    }
+
+    private static void sendFullChunkRequest(String dimension, List<ChunkPos> toRequest,
+                                             long fallbackDeliveryId, boolean staleOrFallback) {
         ChunkDataRequestC2SPacket request = new ChunkDataRequestC2SPacket(dimension, toRequest, fallbackDeliveryId);
         FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
         boolean sent = false;
@@ -455,7 +483,6 @@ public class ClientMetadataHandler {
             request.encode(buf);
             Services.NETWORK_MANAGER.sendChunkDataRequest(buf);
             sent = true;
-            // 按区块数计，避免一批多块只记 1 次导致「全量请求」与日志对不上
             NetworkStats.recordDataRequestsSent(toRequest.size());
             NetworkStats.recordFullChunkRequests(toRequest.size(), toRequest.size() * ESTIMATED_CHUNK_BYTES, staleOrFallback);
         } catch (Exception e) {

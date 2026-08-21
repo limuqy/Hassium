@@ -26,6 +26,19 @@ public record ChunkDataRequestC2SPacket(
     /** 单帧请求上限；与服务端 per-player admission pending 上限一致，防异常包放大内存。 */
     public static final int MAX_CHUNKS_PER_REQUEST = 384;
 
+    /** 超过单帧上限时按序切批，避免构造抛错导致整批 C2S 未发出、客户端却已登记。 */
+    public static List<List<ChunkPos>> partition(List<ChunkPos> chunks) {
+        if (chunks == null || chunks.isEmpty()) {
+            return List.of();
+        }
+        List<List<ChunkPos>> batches = new ArrayList<>();
+        for (int i = 0; i < chunks.size(); i += MAX_CHUNKS_PER_REQUEST) {
+            int end = Math.min(i + MAX_CHUNKS_PER_REQUEST, chunks.size());
+            batches.add(List.copyOf(chunks.subList(i, end)));
+        }
+        return batches;
+    }
+
     public ChunkDataRequestC2SPacket {
         if (dimension == null || chunks == null) {
             throw new IllegalArgumentException("ChunkDataRequest fields must not be null");

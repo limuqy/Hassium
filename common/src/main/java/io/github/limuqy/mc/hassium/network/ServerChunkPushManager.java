@@ -4,7 +4,6 @@ import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.cache.ChunkContentHashUtil;
 import io.github.limuqy.mc.hassium.compat.LevelChunkSectionCompat;
 
-import io.github.limuqy.mc.hassium.concurrent.ChunkDistancePriority;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.metrics.NetworkStats;
 import io.github.limuqy.mc.hassium.metrics.VanillaZlibEstimator;
@@ -49,6 +48,7 @@ import java.util.ArrayList;
 import java.util.ArrayDeque;
 import java.util.Comparator;
 import java.util.Deque;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -96,17 +96,10 @@ public class ServerChunkPushManager {
     static final int HASH_SENDS_PER_TICK = 32;
 
     /**
-     * A4：入队可领先 drain 若干 tick，让 {@code dataQueues.remaining} 允许 &gt;0。
-     * drain 仍按 {@code maxChunksPerTick}；入队 = min(admissionRoom, max(maxChunksPerTick * N, 32))。
+     * 每玩家区块数据请求队列。源头（1.20.1 pending drain / 1.20.2+ {@code sendNextChunks}）
+     * 已按 {@code maxChunksPerTick} 定额，这里只做 FIFO 衔接 admission，不再按距离重排。
      */
-    static final int ENQUEUE_AHEAD_MULTIPLIER = 8;
-    static final int MIN_ENQUEUE_PER_TICK = 32;
-
-    /**
-     * 每玩家区块数据请求队列（{@link io.github.limuqy.mc.hassium.concurrent.KeyedPriorityQueue}：
-     * 同区块重复请求 REPLACE 取代 + 消费时按当前玩家位置重算优先级）
-     */
-    private final Map<UUID, io.github.limuqy.mc.hassium.concurrent.KeyedPriorityQueue<DataRequestTask>> dataQueues = new ConcurrentHashMap<>();
+    private final Map<UUID, FifoChunkQueue> dataQueues = new ConcurrentHashMap<>();
 
     /**
      * 每玩家是否正在本 tick 序列化（防重复 drain）
@@ -120,7 +113,11 @@ public class ServerChunkPushManager {
 
     /** delivery id → 原始任务，仅供超时后在仍 tracking 时重新入队。 */
     private final Map<UUID, Map<Long, DataRequestTask>> inFlightTasks = new ConcurrentHashMap<>();
-    private static final long DELIVERY_TIMEOUT_NANOS = TimeUnit.SECONDS.toNanos(30L);
+    /**
+     * 未 ACK 投递超时。30s 时 ROUND1 在 apply/ACK 停后会空窗 ~25s 才恢复；
+     * 8s 足够覆盖影子算光 RTT，又不会把卡死窗口拖成可见停顿。
+     */
+    private static final long DELIVERY_TIMEOUT_NANOS = TimeUnit.SECONDS.toNanos(8L);
 
     /**
      * 每玩家待发送的 chunkHash 批次
@@ -143,6 +140,14 @@ public class ServerChunkPushManager {
      */
     private final Map<UUID, Set<Long>> pendingSends = new ConcurrentHashMap<>();
     private final Map<UUID, String> pendingSendDimension = new ConcurrentHashMap<>();
+
+    /**
+     * 客户端明确要全量数据（C2S miss / 入队被挤出）的待发集。只走
+     * {@link #enqueueDirectPush}，admission 满则留到下 tick，禁止当成功丢掉。
+     * 与 {@link #pendingSends} 分离：后者在 Bloom 未就绪时只发 hash 就会出队。
+     */
+    private final Map<UUID, Set<Long>> pendingFullSends = new ConcurrentHashMap<>();
+    private final Map<UUID, String> pendingFullDimension = new ConcurrentHashMap<>();
 
     /**
      * 每玩家 SeedGen 能力（握手 C2S 上报 seedGenSupported；默认 false）。
@@ -465,6 +470,10 @@ public class ServerChunkPushManager {
 
             Constants.LOG.info("Hassium: ServerChunkPushManager initialized with {} threads (min={}, max={})",
                     initialThreads, minThreads, maxThreads);
+            io.github.limuqy.mc.hassium.utils.StallDiag.event(
+                    "pushManager timeoutMs={} maxInFlightWindow={}",
+                    TimeUnit.NANOSECONDS.toMillis(DELIVERY_TIMEOUT_NANOS),
+                    ChunkAdmissionController.POST_ACK_MAX_UNACKNOWLEDGED_BATCHES);
         }
     }
 
@@ -1108,6 +1117,79 @@ public class ServerChunkPushManager {
     }
 
     /**
+     * 全量数据义务：C2S miss 或从 admission 队列被挤出的柱。Bloom 未就绪只发 hash
+     * 不会从这里出队。
+     */
+    void markPendingFullSend(ServerPlayer player, ChunkPos pos, String dimension) {
+        if (player == null || pos == null || dimension == null) {
+            return;
+        }
+        UUID playerId = player.getUUID();
+        pendingFullDimension.put(playerId, dimension);
+        pendingFullSends.computeIfAbsent(playerId, ignored -> ConcurrentHashMap.newKeySet())
+                .add(ChunkPos.asLong(pos.x, pos.z));
+    }
+
+    /**
+     * 未进入 admission 的全量请求必须留在 backlog。已经 pending/in-flight 的不算丢失。
+     */
+    static boolean shouldBacklogUnacceptedFullRequest(boolean offered, boolean alreadyAdmitted) {
+        return !offered && !alreadyAdmitted;
+    }
+
+    /**
+     * 每 tick 把 C2S/挤出 backlog 定额 {@link #enqueueDirectPush}。admission 满则停下
+     * 等 ACK 腾出窗口，绝不把 key 当成功丢掉。
+     */
+    private void drainPendingFullSends(ServerPlayer player) {
+        UUID playerId = player.getUUID();
+        Set<Long> pending = pendingFullSends.get(playerId);
+        if (pending == null || pending.isEmpty()) {
+            return;
+        }
+        String dimension = pendingFullDimension.get(playerId);
+        if (dimension == null) {
+            pending.clear();
+            return;
+        }
+        int maxPerTick = HassiumConfigService.getInstance().getConfig().master().maxChunksPerTick();
+        if (maxPerTick <= 0) {
+            maxPerTick = 4;
+        }
+        ChunkAdmissionController controller = admissionControllers.computeIfAbsent(
+                playerId, ignored -> new ChunkAdmissionController());
+        int budget = pacedSendBudget(controller.pendingCount(), controller.inFlightCount(), maxPerTick);
+        if (budget <= 0) {
+            return;
+        }
+        ChunkPos center = player.chunkPosition();
+        List<Long> ordered = new ArrayList<>(pending);
+        sortPackedKeysByDistance(ordered, center.x, center.z);
+        for (Long packed : ordered) {
+            if (budget <= 0) {
+                break;
+            }
+            int x = ChunkPos.getX(packed);
+            int z = ChunkPos.getZ(packed);
+            ChunkAdmissionController.ChunkDeliveryKey key =
+                    new ChunkAdmissionController.ChunkDeliveryKey(dimension, x, z);
+            if (controller.contains(key)) {
+                pending.remove(packed);
+                continue;
+            }
+            boolean accepted = enqueueDirectPush(player, dimension, List.of(new ChunkPos(x, z)), 0L);
+            if (!commitPacedPendingKey(pending, packed, accepted)) {
+                break;
+            }
+            budget--;
+        }
+        if (pending.isEmpty()) {
+            pendingFullSends.remove(playerId);
+            pendingFullDimension.remove(playerId);
+        }
+    }
+
+    /**
      * 每 tick 从 pending 取距玩家最近、且已加载的柱出队。
      * <p>
      * 先按 packed key 距离排序（不碰世界），再 {@code getChunkNow} 直到填满本 tick
@@ -1138,7 +1220,7 @@ public class ServerChunkPushManager {
         }
         ChunkAdmissionController controller = admissionControllers.computeIfAbsent(
                 playerId, ignored -> new ChunkAdmissionController());
-        int fullBudget = pacedEnqueueBudget(controller.pendingCount(), controller.inFlightCount(), maxPerTick);
+        int fullBudget = pacedSendBudget(controller.pendingCount(), controller.inFlightCount(), maxPerTick);
         int hashBudget = HASH_SENDS_PER_TICK;
         if (fullBudget <= 0 && hashBudget <= 0) {
             return;
@@ -1240,15 +1322,10 @@ public class ServerChunkPushManager {
     }
 
     /**
-     * 包可见：paced 入队预算，可领先 drain 定额，仍受 admission room 与 {@link ChunkAdmissionController#MAX_PENDING_PER_PLAYER} 约束。
+     * 包可见：paced 入队预算与 drain 定额相同（源头已限速，不再领先入队）。
      */
     static int pacedEnqueueBudget(int pendingCount, int inFlightCount, int maxChunksPerTick) {
-        int room = ChunkAdmissionController.MAX_PENDING_PER_PLAYER - pendingCount - inFlightCount;
-        if (room <= 0 || maxChunksPerTick <= 0) {
-            return 0;
-        }
-        int desired = Math.max(maxChunksPerTick * ENQUEUE_AHEAD_MULTIPLIER, MIN_ENQUEUE_PER_TICK);
-        return Math.min(desired, room);
+        return pacedSendBudget(pendingCount, inFlightCount, maxChunksPerTick);
     }
 
     /**
@@ -1321,30 +1398,6 @@ public class ServerChunkPushManager {
         }
     }
 
-    /** 前向加权：前方每格优先 ~BIAS² 距离平方（BIAS=6 → 前方 8 格 ≈ 距离 4 格的优先级） */
-    private static final double FORWARD_BIAS = 6.0;
-
-    /** drain 时消费侧重算优先级的最大重插次数（防移动振荡导致任务永不被消费） */
-    private static final int DRAIN_REPRIORITIZE_MAX_REINSERTS = 8;
-
-    /**
-     * 消费时按当前玩家位置 + 移动方向重算优先级（与 {@code enqueueInternal} 入队公式一致）。
-     */
-    private static double refreshPriority(long posLong, double playerChunkX, double playerChunkZ,
-                                          double dirX, double dirZ, double forwardBias) {
-        ChunkPos pos = new ChunkPos(ChunkPos.getX(posLong), ChunkPos.getZ(posLong));
-        double priority = ChunkDistancePriority.distSq(pos, playerChunkX, playerChunkZ);
-        if (dirX != 0.0) {
-            double dx = pos.x - playerChunkX;
-            double dz = pos.z - playerChunkZ;
-            double dot = dx * dirX + dz * dirZ;
-            if (dot > 0.0) {
-                priority -= forwardBias * dot;
-            }
-        }
-        return priority;
-    }
-
     /**
      * 与原版 {@code ChunkMap.isChunkInRange} 一致的视距判定（圆柱近似）。
      */
@@ -1367,7 +1420,8 @@ public class ServerChunkPushManager {
         }
         // 注意：pendingResync 也需要 onServerTick 来 drain，必须加入条件判断
         if (!initialized.get() && dataQueues.isEmpty() && hashBatches.isEmpty()
-                && pendingResync.isEmpty() && pendingSends.isEmpty()) {
+                && pendingResync.isEmpty() && pendingSends.isEmpty()
+                && pendingFullSends.isEmpty()) {
             return;
         }
         ensureInitialized();
@@ -1380,11 +1434,13 @@ public class ServerChunkPushManager {
             flushPlayerHashBatchIfDue(player, now);
             long t0 = System.nanoTime();
             drainPendingSends(player);
+            drainPendingFullSends(player);
             drainPendingNs += System.nanoTime() - t0;
             t0 = System.nanoTime();
             drainPlayerQueueTick(player);
             drainQueueNs += System.nanoTime() - t0;
             expirePlayerDeliveries(player, nowNanos);
+            logStallServer(player);
         }
         TickMonitor.addHassiumDrainNs(drainPendingNs, drainQueueNs);
 
@@ -1918,34 +1974,13 @@ public class ServerChunkPushManager {
         }
 
         UUID playerId = player.getUUID();
-        double playerChunkX = player.getX() / 16.0;
-        double playerChunkZ = player.getZ() / 16.0;
-        net.minecraft.world.phys.Vec3 vel = player.getDeltaMovement();
-        double dirX = 0.0;
-        double dirZ = 0.0;
-        double velLenSq = vel.x * vel.x + vel.z * vel.z;
-        if (velLenSq > 0.01) {
-            double len = Math.sqrt(velLenSq);
-            dirX = vel.x / len;
-            dirZ = vel.z / len;
-        }
-
         ChunkAdmissionController controller = admissionControllers.computeIfAbsent(
                 playerId, ignored -> new ChunkAdmissionController());
         int queued = 0;
         boolean allAccepted = true;
         for (ChunkPos pos : chunks) {
-            double priority = ChunkDistancePriority.distSq(pos, playerChunkX, playerChunkZ);
-            if (dirX != 0.0) {
-                double dx = pos.x - playerChunkX;
-                double dz = pos.z - playerChunkZ;
-                double dot = dx * dirX + dz * dirZ;
-                if (dot > 0.0) {
-                    priority -= FORWARD_BIAS * dot;
-                }
-            }
             long taskHash = chunks.size() == 1 ? contentHash : 0L;
-            DataRequestTask task = new DataRequestTask(pos, dimension, priority, null, taskHash);
+            DataRequestTask task = new DataRequestTask(pos, dimension, null, taskHash);
             // 已在 pending/in-flight：视为成功（paced pending 可安全移除，避免永久重试）
             if (controller.contains(admissionKey(task))) {
                 if (countSeedGenFallback) {
@@ -1957,14 +1992,17 @@ public class ServerChunkPushManager {
                 queued++;
             } else {
                 allAccepted = false;
+                if (shouldBacklogUnacceptedFullRequest(false, controller.contains(admissionKey(task)))) {
+                    markPendingFullSend(player, pos, dimension);
+                }
             }
             if (countSeedGenFallback) {
                 recordSeedGenFallback(playerId, pos, dimension);
             }
         }
         DebugLogger.info(LogType.NETWORK,
-                "[ENQUEUE_DATA] Player {} queued {} chunks (dimension={}, playerPos=({}, {}), accepted={})",
-                player.getName().getString(), queued, dimension, playerChunkX, playerChunkZ, allAccepted);
+                "[ENQUEUE_DATA] Player {} queued {} chunks (dimension={}, accepted={})",
+                player.getName().getString(), queued, dimension, allAccepted);
         return allAccepted;
     }
 
@@ -1974,15 +2012,13 @@ public class ServerChunkPushManager {
         if (!player.isAlive() || player.hasDisconnected()) {
             return;
         }
-        double priority = ChunkDistancePriority.distSq(pos, player.getX() / 16.0, player.getZ() / 16.0);
-        offerPendingTask(player, new DataRequestTask(pos, dimension, priority,
+        offerPendingTask(player, new DataRequestTask(pos, dimension,
                 new SeedRefWork(chunkHash, sectionHashes)));
     }
 
-    /** Existing bounded priority queue owns ordering; admission owns cross-source keyed state. */
     /**
-     * Commits the controller and priority-queue entries under one manager monitor.  A queue insertion
-     * failure or a full queue withdraws the just-added pending key, so it cannot consume admission
+     * Commits the controller and FIFO entries under one manager monitor. A queue insertion
+     * failure withdraws the just-added pending key, so it cannot consume admission
      * capacity without a drainable task.
      */
     private synchronized boolean offerPendingTask(ServerPlayer player, DataRequestTask task) {
@@ -1993,26 +2029,18 @@ public class ServerChunkPushManager {
         if (controller.contains(key)) {
             return false;
         }
-        io.github.limuqy.mc.hassium.concurrent.KeyedPriorityQueue<DataRequestTask> queue = dataQueues.computeIfAbsent(
-                playerId, ignored -> new io.github.limuqy.mc.hassium.concurrent.KeyedPriorityQueue<>(100));
+        FifoChunkQueue queue = dataQueues.computeIfAbsent(playerId, ignored -> new FifoChunkQueue());
         if (controller.pendingCount() >= ChunkAdmissionController.MAX_PENDING_PER_PLAYER
                 || queue.size() >= MAX_DATA_QUEUE_PER_PLAYER) {
-            io.github.limuqy.mc.hassium.concurrent.KeyedPriorityQueue.Entry<DataRequestTask> evicted =
-                    queue.evictWorstIfWorseThan(task.priority());
-            if (evicted == null) {
-                return false;
-            }
-            controller.withdrawPending(admissionKey(evicted.item()));
-            DebugLogger.info(LogType.NETWORK,
-                    "[ENQUEUE_DATA] Evicted farther pending {} for nearer {}",
-                    evicted.item().pos(), task.pos());
+            io.github.limuqy.mc.hassium.utils.StallDiag.noteEnqueueReject();
+            return false;
         }
         if (!controller.offer(key)) {
+            io.github.limuqy.mc.hassium.utils.StallDiag.noteEnqueueReject();
             return false;
         }
         try {
-            queue.offer(task, dataQueueKey(task), task.priority(),
-                    io.github.limuqy.mc.hassium.concurrent.KeyedPriorityQueue.OfferPolicy.REPLACE);
+            queue.offer(key, task);
             return true;
         } catch (RuntimeException e) {
             controller.withdrawPending(key);
@@ -2022,11 +2050,6 @@ public class ServerChunkPushManager {
 
     private static ChunkAdmissionController.ChunkDeliveryKey admissionKey(DataRequestTask task) {
         return new ChunkAdmissionController.ChunkDeliveryKey(task.dimension(), task.pos().x, task.pos().z);
-    }
-
-    private static io.github.limuqy.mc.hassium.concurrent.KeyedPriorityQueue.Key dataQueueKey(DataRequestTask task) {
-        return new io.github.limuqy.mc.hassium.concurrent.KeyedPriorityQueue.Key(
-                ChunkPos.asLong(task.pos().x, task.pos().z), 0, task.dimension());
     }
 
     /** Gateway 会话存在时，full admission 只在 active + writable 的 channel 上推进。 */
@@ -2061,10 +2084,19 @@ public class ServerChunkPushManager {
         }
         Map<Long, DataRequestTask> tasks = inFlightTasks.get(playerId);
         long nowNanos = System.nanoTime();
+        int unknown = 0;
         for (long deliveryId : ack.deliveryIds()) {
-            if (controller.acknowledge(deliveryId, nowNanos) && tasks != null) {
-                tasks.remove(deliveryId);
+            if (controller.acknowledge(deliveryId, nowNanos)) {
+                if (tasks != null) {
+                    tasks.remove(deliveryId);
+                }
+            } else {
+                unknown++;
             }
+        }
+        if (unknown > 0) {
+            io.github.limuqy.mc.hassium.utils.StallDiag.event(
+                    "ack unknown={} of {} {}", unknown, ack.size(), controller.diagLine());
         }
     }
 
@@ -2075,15 +2107,40 @@ public class ServerChunkPushManager {
             return;
         }
         Map<Long, DataRequestTask> tasks = inFlightTasks.get(player.getUUID());
+        int expiredCount = 0;
+        int requeued = 0;
         for (ChunkAdmissionController.ExpiredDelivery expired :
                 controller.expire(nowNanos, DELIVERY_TIMEOUT_NANOS)) {
+            expiredCount++;
             DataRequestTask task = tasks != null ? tasks.remove(expired.deliveryId()) : null;
             if (task != null && isStillTracking(player, task)) {
                 offerPendingTask(player, task);
+                requeued++;
             } else {
                 controller.release(expired.key());
             }
         }
+        if (expiredCount > 0) {
+            io.github.limuqy.mc.hassium.utils.StallDiag.event(
+                    "expire n={} requeued={} timeoutMs={} {}",
+                    expiredCount, requeued, TimeUnit.NANOSECONDS.toMillis(DELIVERY_TIMEOUT_NANOS),
+                    controller.diagLine());
+        }
+    }
+
+    private void logStallServer(ServerPlayer player) {
+        ChunkAdmissionController controller = admissionControllers.get(player.getUUID());
+        FifoChunkQueue queue = dataQueues.get(player.getUUID());
+        java.util.Set<Long> pending = pendingSends.get(player.getUUID());
+        java.util.Set<Long> fullPending = pendingFullSends.get(player.getUUID());
+        io.github.limuqy.mc.hassium.utils.StallDiag.serverHz(
+                "writable={} q={} pacedPending={} fullPending={} enqReject={} {}",
+                isFullDeliveryChannelWritable(player),
+                queue == null ? 0 : queue.size(),
+                pending == null ? 0 : pending.size(),
+                fullPending == null ? 0 : fullPending.size(),
+                io.github.limuqy.mc.hassium.utils.StallDiag.takeEnqueueRejects(),
+                controller == null ? "admission=null" : controller.diagLine());
     }
 
     private static boolean isStillTracking(ServerPlayer player, DataRequestTask task) {
@@ -2110,7 +2167,7 @@ public class ServerChunkPushManager {
      */
     private void drainPlayerQueueTick(ServerPlayer player) {
         UUID playerId = player.getUUID();
-        io.github.limuqy.mc.hassium.concurrent.KeyedPriorityQueue<DataRequestTask> queue = dataQueues.get(playerId);
+        FifoChunkQueue queue = dataQueues.get(playerId);
         if (queue == null || queue.isEmpty()) {
             return;
         }
@@ -2150,32 +2207,6 @@ public class ServerChunkPushManager {
             int serverVD = PlayerCompat.getViewDistance(player);
             List<SerializedChunkWork> works = new ArrayList<>(maxPerTick);
 
-            // 消费时重算优先级：冻结键按本 tick 玩家位置 + 移动方向刷新（同 enqueueInternal
-            // 的前向加权公式）。玩家排队期间移动 → 近处块不再被「入队时远、现在近」的旧键
-            // 压在队尾；重插有界（防移动振荡导致任务永不被消费）。
-            double playerChunkX = player.getX() / 16.0;
-            double playerChunkZ = player.getZ() / 16.0;
-            net.minecraft.world.phys.Vec3 vel = player.getDeltaMovement();
-            double dirX = 0.0;
-            double dirZ = 0.0;
-            double velLenSq = vel.x * vel.x + vel.z * vel.z;
-            if (velLenSq > 0.01) {
-                double len = Math.sqrt(velLenSq);
-                dirX = vel.x / len;
-                dirZ = vel.z / len;
-            }
-            // lambda 需捕获 effectively-final 副本
-            final double anchorX = playerChunkX;
-            final double anchorZ = playerChunkZ;
-            final double fwdX = dirX;
-            final double fwdZ = dirZ;
-            io.github.limuqy.mc.hassium.concurrent.KeyedPriorityQueue.PriorityRefresher refresher =
-                    (key, old) -> key == null ? old
-                            : refreshPriority(key.posLong(), anchorX, anchorZ, fwdX, fwdZ, FORWARD_BIAS);
-            // 先整队按当前锚点重算，再 pollBest。仅靠有界重插（默认 8 次）无法翻过
-            // 进服时冻结的近环数百条目，玩家移动后会持续吐出已落后方的旧块。
-            queue.reprioritize(refresher);
-
             // 所有版本主线程构建 packet 快照：1.20.1 的 ThreadingDetector 是信号量互斥，
             // 主线程 tick 写 chunk 与后台 build 并发即引爆（本次 01:09:04 [10,3] 崩溃实测），
             // 无合法后台读路径；packet 内部数据已脱离世界对象，encode/压缩/限速/发送在 pushPool。
@@ -2190,19 +2221,16 @@ public class ServerChunkPushManager {
                     return;
                 }
 
-                io.github.limuqy.mc.hassium.concurrent.KeyedPriorityQueue.Entry<DataRequestTask> entry =
-                        queue.pollBest(refresher, DRAIN_REPRIORITIZE_MAX_REINSERTS);
-                if (entry == null) {
+                DataRequestTask task = queue.peek();
+                if (task == null) {
                     break;
                 }
-                DataRequestTask task = entry.item();
-                // 出队即释放 key 登记（允许客户端重试/直推重新入队；原 queuedChunkKeys.remove 语义）
-                queue.release(entry);
                 ChunkAdmissionController.ChunkDeliveryKey deliveryKey = admissionKey(task);
 
                 // 任务排队期间玩家可能已移出权威视距：不静默丢弃（客户端无重试 → 永久虚空 bug 根因），
                 // 转入待命集合，玩家折返/静止后重新在视距内时恢复入队；超时（10s）才真丢弃。
                 if (!isServerChunkInRange(task.pos().x, task.pos().z, playerChunk.x, playerChunk.z, serverVD)) {
+                    queue.poll();
                     controller.release(deliveryKey);
                     Map<Long, DeferredTask> deferred = deferredChunks.computeIfAbsent(
                             playerId, k -> new ConcurrentHashMap<>());
@@ -2222,16 +2250,15 @@ public class ServerChunkPushManager {
 
                 ChunkAdmissionController.Reservation reservation = controller.admit(deliveryKey);
                 if (reservation == null) {
-                    // poll+release 已把任务移出数据队列。admit 因 !canAdmit 失败时
-                    // pending 仍占着该 key，offerPendingTask.contains 会永久拒绝重入队。
-                    // 仍 pending → 放回队列并结束本 tick；pending 已撤（untrack/出界）→ 丢弃。
+                    // 仍占队头。admit 因 !canAdmit 失败时 pending 仍在，下一 tick 再试。
+                    // pending 已撤（untrack/出界）→ 丢掉队头。
                     if (controller.isPending(deliveryKey)) {
-                        queue.offer(task, dataQueueKey(task), task.priority(),
-                                io.github.limuqy.mc.hassium.concurrent.KeyedPriorityQueue.OfferPolicy.REPLACE);
                         break;
                     }
+                    queue.poll();
                     continue;
                 }
+                queue.poll();
                 inFlightTasks.computeIfAbsent(playerId, ignored -> new ConcurrentHashMap<>())
                         .put(reservation.deliveryId(), task);
                 if (task.seedRef() != null) {
@@ -2537,7 +2564,7 @@ public class ServerChunkPushManager {
         if (deferred != null) {
             deferred.remove(posLong);
         }
-        io.github.limuqy.mc.hassium.concurrent.KeyedPriorityQueue<DataRequestTask> queue = dataQueues.get(playerId);
+        FifoChunkQueue queue = dataQueues.get(playerId);
         if (queue != null) {
             queue.removeIf(task -> dimension.equals(task.dimension())
                     && task.pos().x == pos.x && task.pos().z == pos.z);
@@ -2574,7 +2601,7 @@ public class ServerChunkPushManager {
         lastAdjustmentTime = now;
 
         int totalPending = dataQueues.values().stream()
-                .mapToInt(io.github.limuqy.mc.hassium.concurrent.KeyedPriorityQueue::size)
+                .mapToInt(FifoChunkQueue::size)
                 .sum();
 
         int coreThreads = pushPool.getCorePoolSize();
@@ -2609,7 +2636,7 @@ public class ServerChunkPushManager {
      * 由影子端读盘比对决定本地回传/请求，语义正确）。
      */
     public void removePlayer(UUID playerId) {
-        io.github.limuqy.mc.hassium.concurrent.KeyedPriorityQueue<DataRequestTask> queue = dataQueues.remove(playerId);
+        FifoChunkQueue queue = dataQueues.remove(playerId);
         if (queue != null) {
             queue.clear();
         }
@@ -2624,6 +2651,8 @@ public class ServerChunkPushManager {
         pendingResync.remove(playerId);
         pendingSends.remove(playerId);
         pendingSendDimension.remove(playerId);
+        pendingFullSends.remove(playerId);
+        pendingFullDimension.remove(playerId);
         deferredChunks.remove(playerId);
         initialPlayerChunkPos.remove(playerId);
         bloomLayers.remove(playerId);
@@ -2673,7 +2702,7 @@ public class ServerChunkPushManager {
     public String getStats() {
         int totalQueues = dataQueues.size();
         int totalPending = dataQueues.values().stream()
-                .mapToInt(io.github.limuqy.mc.hassium.concurrent.KeyedPriorityQueue::size)
+                .mapToInt(FifoChunkQueue::size)
                 .sum();
         int poolSize = pushPool != null ? pushPool.getPoolSize() : 0;
         int activeThreads = pushPool != null ? pushPool.getActiveCount() : 0;
@@ -2682,10 +2711,52 @@ public class ServerChunkPushManager {
     }
 
     /** 区块数据请求任务。 */
-    private record DataRequestTask(ChunkPos pos, String dimension, double priority, SeedRefWork seedRef,
-                                   long contentHash) {
-        DataRequestTask(ChunkPos pos, String dimension, double priority, SeedRefWork seedRef) {
-            this(pos, dimension, priority, seedRef, 0L);
+    private record DataRequestTask(ChunkPos pos, String dimension, SeedRefWork seedRef, long contentHash) {
+        DataRequestTask(ChunkPos pos, String dimension, SeedRefWork seedRef) {
+            this(pos, dimension, seedRef, 0L);
+        }
+    }
+
+    /**
+     * 按入队顺序衔接 admission。同 key 再入队只更新任务、不改变位置。
+     */
+    static final class FifoChunkQueue {
+        private final LinkedHashMap<ChunkAdmissionController.ChunkDeliveryKey, DataRequestTask> entries =
+                new LinkedHashMap<>();
+
+        int size() {
+            return entries.size();
+        }
+
+        boolean isEmpty() {
+            return entries.isEmpty();
+        }
+
+        void clear() {
+            entries.clear();
+        }
+
+        DataRequestTask peek() {
+            var it = entries.entrySet().iterator();
+            return it.hasNext() ? it.next().getValue() : null;
+        }
+
+        DataRequestTask poll() {
+            var it = entries.entrySet().iterator();
+            if (!it.hasNext()) {
+                return null;
+            }
+            DataRequestTask task = it.next().getValue();
+            it.remove();
+            return task;
+        }
+
+        void offer(ChunkAdmissionController.ChunkDeliveryKey key, DataRequestTask task) {
+            entries.put(key, task);
+        }
+
+        void removeIf(java.util.function.Predicate<DataRequestTask> predicate) {
+            entries.entrySet().removeIf(e -> predicate.test(e.getValue()));
         }
     }
 

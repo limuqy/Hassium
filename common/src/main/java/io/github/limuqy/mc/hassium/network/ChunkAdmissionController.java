@@ -98,6 +98,11 @@ final class ChunkAdmissionController {
 
     /** Test seam retaining an explicit handoff timestamp. */
     synchronized Reservation admit(ChunkDeliveryKey key, long sentAtNanos) {
+        return admit(key, sentAtNanos, sentAtNanos > 0L ? sentAtNanos : System.nanoTime());
+    }
+
+    /** Test seam: {@code reservedAtNanos} is the timeout clock until {@link #markSent}. */
+    synchronized Reservation admit(ChunkDeliveryKey key, long sentAtNanos, long reservedAtNanos) {
         if (!canAdmit() || !pendingByKey.remove(key)) {
             return null;
         }
@@ -110,7 +115,8 @@ final class ChunkAdmissionController {
         if (deliveryId <= 0L) {
             throw new IllegalStateException("Chunk delivery id overflow");
         }
-        inFlightById.put(deliveryId, new InFlightDelivery(key, sentAtNanos, currentBatchId));
+        long reservedAt = reservedAtNanos > 0L ? reservedAtNanos : System.nanoTime();
+        inFlightById.put(deliveryId, new InFlightDelivery(key, sentAtNanos, currentBatchId, reservedAt));
         inFlightByKey.put(key, deliveryId);
         batchesById.get(currentBatchId).remaining++;
         quota -= 1.0;
@@ -132,10 +138,14 @@ final class ChunkAdmissionController {
         return true;
     }
 
-    /** Acknowledges one handoff delivery; feedback is calculated only when its whole batch completes. */
+    /**
+     * Acknowledges one reserved delivery. Client apply can beat {@link #markSent} on localhost
+     * (skip-redundant hash hit, or pushPool still compressing); rejecting that ACK leaks the
+     * 10-batch window until a 30s timeout.
+     */
     synchronized boolean acknowledge(long deliveryId, long acknowledgedAtNanos) {
         InFlightDelivery delivery = inFlightById.get(deliveryId);
-        if (delivery == null || delivery.sentAtNanos() == 0L) {
+        if (delivery == null) {
             return false;
         }
         inFlightById.remove(deliveryId);
@@ -178,13 +188,14 @@ final class ChunkAdmissionController {
         return deliveryId != null ? releaseDelivery(deliveryId) : removedPending;
     }
 
-    /** Releases timed-out handoff deliveries; caller re-enqueues only keys still tracked. */
+    /** Releases timed-out reservations; unsent deliveries clock from admit, not {@link #markSent}. */
     synchronized List<ExpiredDelivery> expire(long nowNanos, long timeoutNanos) {
         List<ExpiredDelivery> expired = new ArrayList<>();
         for (var iterator = inFlightById.entrySet().iterator(); iterator.hasNext(); ) {
             Map.Entry<Long, InFlightDelivery> entry = iterator.next();
             InFlightDelivery delivery = entry.getValue();
-            if (delivery.sentAtNanos() == 0L || nowNanos - delivery.sentAtNanos() < timeoutNanos) {
+            long clock = delivery.timingAnchorNanos();
+            if (clock <= 0L || nowNanos - clock < timeoutNanos) {
                 continue;
             }
             iterator.remove();
@@ -231,9 +242,33 @@ final class ChunkAdmissionController {
         return desiredPerTick;
     }
 
+    synchronized String diagLine() {
+        return "pending=" + pendingByKey.size()
+                + " inFlight=" + inFlightById.size()
+                + " unackedBatches=" + unacknowledgedBatches
+                + " firstAck=" + hasReceivedFirstAck
+                + " quota=" + String.format("%.1f", quota)
+                + " desired=" + String.format("%.1f", desiredPerTick)
+                + " canAdmit=" + canAdmit();
+    }
+
+    /**
+     * Credit is in-flight <em>chunks</em> after the first ACK, not incomplete
+     * tick-batches. A batch is one server tick ({@code maxChunksPerTick}
+     * members). If one member is slow (shadow light) the batch stays
+     * unacknowledged; 10 such batches used to freeze the window even after
+     * 80/90 ACKs. Before the first ACK, still only one in-flight batch
+     * (unknown RTT). After that, cap = {@code 10 × maxChunksPerTick}.
+     */
     private boolean hasBatchCredit() {
-        int maxBatches = hasReceivedFirstAck ? POST_ACK_MAX_UNACKNOWLEDGED_BATCHES : 1;
-        return currentBatchId != 0L || unacknowledgedBatches < maxBatches;
+        if (currentBatchId != 0L) {
+            return true;
+        }
+        if (!hasReceivedFirstAck) {
+            return unacknowledgedBatches < 1;
+        }
+        int maxInFlight = POST_ACK_MAX_UNACKNOWLEDGED_BATCHES * Math.max(1, maxChunksPerTick);
+        return inFlightById.size() < maxInFlight;
     }
 
     private void recordTransportHandoff(long batchId, long sentAtNanos) {
@@ -277,9 +312,13 @@ final class ChunkAdmissionController {
         }
     }
 
-    private record InFlightDelivery(ChunkDeliveryKey key, long sentAtNanos, long batchId) {
+    private record InFlightDelivery(ChunkDeliveryKey key, long sentAtNanos, long batchId, long reservedAtNanos) {
         private InFlightDelivery withSentAtNanos(long value) {
-            return new InFlightDelivery(key, value, batchId);
+            return new InFlightDelivery(key, value, batchId, reservedAtNanos);
+        }
+
+        private long timingAnchorNanos() {
+            return sentAtNanos > 0L ? sentAtNanos : reservedAtNanos;
         }
     }
 

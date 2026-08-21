@@ -54,11 +54,14 @@ public final class ClientMainThreadBudget {
      */
     public static void startJoinBoost() {
         if (!HassiumConfigService.getInstance().isJoinBoostEnabled()) {
+            io.github.limuqy.mc.hassium.utils.StallDiag.event("joinBoost start skipped (disabled)");
             return;
         }
         long now = System.currentTimeMillis();
         joinBoostDeadlineMs = now + JOIN_BOOST_CAP_MS;
         joinBoostUntilMs = now + JOIN_BOOST_DURATION_MS;
+        io.github.limuqy.mc.hassium.utils.StallDiag.event(
+                "joinBoost start until={}ms cap={}ms", JOIN_BOOST_DURATION_MS, JOIN_BOOST_CAP_MS);
     }
 
     /**
@@ -72,16 +75,29 @@ public final class ClientMainThreadBudget {
     /**
      * 区块 apply 活跃时续期 JoinBoost 窗口。
      * <p>
-     * 进服全量加载（1021 块 × ~11ms）超过固定 10s 窗口时，后段预算会线性退坡到 normal
-     * → 实测 16s 后加载速率从 70/s 掉到 33/s。加载洪峰期间每次 apply 续期 5s，
-     * 让高预算持续到加载完成；窗口过期后不再续期（移动/飞行环带不会永久占用高预算）。
-     * 预算只是上限：零星 apply 用不满，不会凭空占用帧时间。
+     * 进服全量加载超过固定 10s 初始窗口时，只要仍在 30s 封顶内，每次权威 apply
+     * 都把窗口接到 now+5s。旧逻辑要求「当前仍在窗口内」才续期：初始 10s 一过
+     * （或中间空了一帧）就再也续不上，ROUND1 在 ~10s 处掉出高预算，ACK 停、
+     * 服务端 10-batch 窗口卡死直到 30s timeout。
      */
     public static void noteChunkApplyActivity() {
         lastApplyNano = System.nanoTime();
-        long until = joinBoostUntilMs;
-        if (until > 0L && System.currentTimeMillis() < until) {
-            joinBoostUntilMs = Math.min(System.currentTimeMillis() + RENEW_WINDOW_MS, joinBoostDeadlineMs);
+        long deadline = joinBoostDeadlineMs;
+        if (deadline <= 0L) {
+            startJoinBoost();
+            return;
+        }
+        long now = System.currentTimeMillis();
+        if (now >= deadline) {
+            return;
+        }
+        joinBoostUntilMs = Math.min(now + RENEW_WINDOW_MS, deadline);
+    }
+
+    /** Test seam: 初始 10s 已过、30s 封顶仍在，用于验证过期后 apply 仍能续期。 */
+    static void elapseInitialJoinBoostWindowForTest() {
+        if (joinBoostDeadlineMs > 0L) {
+            joinBoostUntilMs = System.currentTimeMillis() - 1L;
         }
     }
 
@@ -100,6 +116,15 @@ public final class ClientMainThreadBudget {
         return until > 0L && System.currentTimeMillis() < until;
     }
 
+    /** 诊断：JoinBoost 剩余毫秒（已过期或未启动为 0）。 */
+    public static long joinBoostRemainingMs() {
+        long until = Math.min(joinBoostUntilMs, joinBoostDeadlineMs);
+        if (until <= 0L) {
+            return 0L;
+        }
+        return Math.max(0L, until - System.currentTimeMillis());
+    }
+
     /**
      * 本帧可用的时间预算（纳秒）。
      * <p>
@@ -109,8 +134,9 @@ public final class ClientMainThreadBudget {
      * 实测 1021 块全量加载后段速率从 70/s 掉到 33/s。
      * 窗口到期瞬间的降档只发生在加载已结束/空闲时，无感知。
      * <p>
-     * JoinBoost 期间 {@link #dispatcherShareNs(long)} 只把一半分给 dispatcher，
-     * 另一半预留给影子 {@code drainReady}，避免帧 deadline 在落地前已过期。
+     * JoinBoost 期间以及影子 {@code drainReady} 仍有待落地块时，
+     * {@link #dispatcherShareNs(long)} 只把一半分给 dispatcher，
+     * 另一半预留给影子落地，避免帧 deadline 在落地前已过期。
      */
     public static long getBudgetNs() {
         int normalBudgetMs = HassiumConfigService.getInstance().getMainThreadChunkBudgetMs();
@@ -125,19 +151,22 @@ public final class ClientMainThreadBudget {
     }
 
     /**
-     * 本帧 dispatcher 可用的预算份额（纳秒）。JoinBoost 预留一半给 {@code drainReady}；
-     * 非 JoinBoost 为满额（drainReady 吃 dispatcher 剩余）。
+     * 本帧 dispatcher 可用的预算份额（纳秒）。JoinBoost 或调用方声明需要预留
+     * drainReady 时对半分账；否则 dispatcher 可用满额。
      */
     public static long dispatcherShareNs(long budgetNs) {
         return dispatcherShareNs(budgetNs, isJoinBoostActive());
     }
 
-    /** 测试缝：JoinBoost 时 dispatcher 与 drainReady 对半分账。 */
-    static long dispatcherShareNs(long budgetNs, boolean joinBoost) {
+    /**
+     * {@code reserveDrainReady=true} 时 dispatcher 只拿一半，给影子 {@code drainReady} 留出落地时间。
+     * JoinBoost 到期后若仍把 100% 分给 dispatcher，ROUND1 会在 ~10s 处整帧 0 apply，ACK 停、准入窗口卡死。
+     */
+    public static long dispatcherShareNs(long budgetNs, boolean reserveDrainReady) {
         if (budgetNs <= 0L) {
             return 0L;
         }
-        return joinBoost ? budgetNs / 2L : budgetNs;
+        return reserveDrainReady ? budgetNs / 2L : budgetNs;
     }
 
     /**

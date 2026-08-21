@@ -13,7 +13,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * 1.20.1 paced pending：admission 拒绝时不得从 pendingSends 丢 key；入队预算与
- * drain 定额解耦，仍受 pending+inFlight 与 MAX_PENDING 约束。
+ * drain 定额相同（源头限速，不再领先入队）。
  */
 class ServerChunkPushManagerPacedPendingTest {
 
@@ -53,13 +53,12 @@ class ServerChunkPushManagerPacedPendingTest {
     }
 
     @Test
-    void pacedEnqueueBudget_exceedsSendQuota() {
+    void pacedEnqueueBudget_matchesSendQuota() {
         int send = ServerChunkPushManager.pacedSendBudget(0, 0, 4);
         int enqueue = ServerChunkPushManager.pacedEnqueueBudget(0, 0, 4);
-        assertEquals(4, send, "drain quota stays maxChunksPerTick");
-        assertTrue(enqueue > send, "enqueue may lead drain so dataQueues.remaining can be >0");
-        assertEquals(32, enqueue);
-        assertEquals(64, ServerChunkPushManager.pacedEnqueueBudget(0, 0, 8));
+        assertEquals(send, enqueue, "source-paced enqueue must not lead drain");
+        assertEquals(4, enqueue);
+        assertEquals(8, ServerChunkPushManager.pacedEnqueueBudget(0, 0, 8));
     }
 
     @Test
@@ -73,8 +72,9 @@ class ServerChunkPushManagerPacedPendingTest {
     @Test
     void pacedEnqueueBudget_cappedByAdmissionRoom() {
         assertEquals(4, ServerChunkPushManager.pacedEnqueueBudget(380, 0, 8));
-        assertEquals(10, ServerChunkPushManager.pacedEnqueueBudget(
-                ChunkAdmissionController.MAX_PENDING_PER_PLAYER - 10, 0, 4));
+        assertEquals(4, ServerChunkPushManager.pacedEnqueueBudget(
+                ChunkAdmissionController.MAX_PENDING_PER_PLAYER - 10, 0, 4),
+                "source-paced budget is min(maxChunksPerTick, admission room)");
     }
 
     @Test
@@ -123,5 +123,14 @@ class ServerChunkPushManagerPacedPendingTest {
         }
         assertFalse(controller.offer(new ChunkAdmissionController.ChunkDeliveryKey("dim", 999, 0)));
         assertEquals(ChunkAdmissionController.MAX_PENDING_PER_PLAYER, controller.pendingCount());
+    }
+
+    @Test
+    void unacceptedFullRequest_mustBacklogUnlessAlreadyAdmitted() {
+        assertTrue(ServerChunkPushManager.shouldBacklogUnacceptedFullRequest(false, false),
+                "offer failed and not in admission → keep on server until later tick");
+        assertFalse(ServerChunkPushManager.shouldBacklogUnacceptedFullRequest(true, false));
+        assertFalse(ServerChunkPushManager.shouldBacklogUnacceptedFullRequest(false, true),
+                "already pending/in-flight is not a drop");
     }
 }

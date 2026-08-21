@@ -2,14 +2,24 @@ package io.github.limuqy.mc.hassium.mixin;
 
 import io.github.limuqy.mc.hassium.network.ServerChunkPushManager;
 import io.github.limuqy.mc.hassium.network.gateway.GatewayServer;
+#if MC_VER >= MC_1_20_2
+import io.github.limuqy.mc.hassium.config.HassiumConfigService;
+#endif
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.network.ServerGamePacketListenerImpl;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.chunk.LevelChunk;
 import org.spongepowered.asm.mixin.Mixin;
+#if MC_VER >= MC_1_20_2
+import org.spongepowered.asm.mixin.Shadow;
+import org.spongepowered.asm.mixin.Unique;
+#endif
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
+#if MC_VER >= MC_1_20_2
+import org.spongepowered.asm.mixin.injection.Redirect;
+#endif
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
@@ -32,6 +42,48 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public abstract class MixinPlayerChunkSender {
 
 #if MC_VER >= MC_1_20_2
+    @Shadow
+    private boolean memoryConnection;
+    @Shadow
+    private float desiredChunksPerTick;
+    @Shadow
+    private float batchQuota;
+
+    @Unique
+    private boolean hassium$forceQuota;
+
+    /**
+     * 源头定额：把原版 {@code sendNextChunks} 的 batch 钳到 {@code maxChunksPerTick}，
+     * 避免先按 9–64 组包再让 admission 丢掉。握手门控与 {@link #hassium$onSendChunk} 相同。
+     */
+    @Inject(method = "sendNextChunks", at = @At("HEAD"))
+    private void hassium$capSourceRate(ServerPlayer player, CallbackInfo ci) {
+        hassium$forceQuota = GatewayServer.getInstance().registry().get(player.getUUID()) != null;
+        if (!hassium$forceQuota) {
+            return;
+        }
+        int max = HassiumConfigService.getInstance().getConfig().master().maxChunksPerTick();
+        if (max <= 0) {
+            max = 4;
+        }
+        if (desiredChunksPerTick > max) {
+            desiredChunksPerTick = max;
+        }
+        if (batchQuota > max) {
+            batchQuota = max;
+        }
+    }
+
+    /**
+     * 本机连接（integrated）会无视 quota 一次吐完全部 pending。Hassium 路径强制走定额 nearest-N。
+     */
+    @Redirect(method = "collectChunksToSend",
+            at = @At(value = "FIELD",
+                    target = "Lnet/minecraft/server/network/PlayerChunkSender;memoryConnection:Z"))
+    private boolean hassium$quotaLimitedCollect(net.minecraft.server.network.PlayerChunkSender self) {
+        return !hassium$forceQuota && memoryConnection;
+    }
+
     /**
      * 拦截 sendChunk：对 Hassium 客户端异步发送 chunkHash 元数据，取消原版区块包。
      * <p>

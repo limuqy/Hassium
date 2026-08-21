@@ -54,7 +54,8 @@ public abstract class MixinServerPlayer extends Player {
 #if MC_VER < MC_1_20_2
     /**
      * 拦截 trackChunk：1.20.1 无 {@code PlayerChunkSender}，原版会对已加载视距一窝蜂调用。
-     * 只登记 pending，由服务端 tick 按近距定额 drain（同 1.21.11 PlayerChunkSender）。
+     * {@link MixinChunkMap} 跳过原版组包；这里只登记 pending，由服务端 tick 按近距定额 drain
+     * （同 1.21.11 {@code PlayerChunkSender.sendNextChunks}）。
      * 区块更新广播仍由 {@link MixinChunkHolder#hassium$onBroadcast} 拦截。
      */
     @Inject(method = "trackChunk", at = @At("HEAD"), cancellable = true)

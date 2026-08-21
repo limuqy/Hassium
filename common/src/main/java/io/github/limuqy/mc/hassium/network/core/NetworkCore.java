@@ -1128,6 +1128,9 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
         java.util.Objects.requireNonNull(ack, "ack");
         OutboundConnection oc = outbound;
         if (state.get() != NetworkCoreState.ACTIVE || oc == null || !oc.isOpen()) {
+            io.github.limuqy.mc.hassium.utils.StallDiag.clientHz(
+                    "ack send dropped state={} open={}",
+                    state.get(), oc != null && oc.isOpen());
             return false;
         }
         oc.sendChunkApplyAck(ack);

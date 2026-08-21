@@ -82,11 +82,16 @@ public class MixinClientTick {
             // 缓存读盘配额用尽后的续抽；失败不得中断 tick
         }
 
-        // 主线程时间预算：网络回调 vs 影子落地。JoinBoost 预留一半给 drainReady，
-        // 避免 dispatcher 先把 deadline 用尽导致整帧 0 chunk。消费侧只受时间约束。
+        // 主线程时间预算：网络回调 vs 影子落地。JoinBoost 或影子管线仍有 backlog
+        // （ready / pending / 在途光）时预留一半给 drainReady，避免 dispatcher 先把
+        // deadline 用尽导致整帧 0 chunk（ROUND1 在 JoinBoost 10s 到期后曾因此卡 22s）。
         long budgetNs = ClientMainThreadBudget.getBudgetNs();
         long frameStartNs = System.nanoTime();
-        long dispatcherDeadlineNs = frameStartNs + ClientMainThreadBudget.dispatcherShareNs(budgetNs);
+        boolean reserveDrainReady = ClientMainThreadBudget.isJoinBoostActive()
+                || io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.hasBacklog();
+        io.github.limuqy.mc.hassium.utils.StallDiag.noteJoinBoost(ClientMainThreadBudget.isJoinBoostActive());
+        long dispatcherDeadlineNs = frameStartNs
+                + ClientMainThreadBudget.dispatcherShareNs(budgetNs, reserveDrainReady);
         long frameDeadlineNs = frameStartNs + budgetNs;
 
         boolean hasFlush = MainThreadDispatcher.getClientQueueSize() > 0;

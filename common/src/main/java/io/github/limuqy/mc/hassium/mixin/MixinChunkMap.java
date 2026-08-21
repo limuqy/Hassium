@@ -12,6 +12,15 @@ import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
+#if MC_VER < MC_1_20_2
+import io.github.limuqy.mc.hassium.network.PlayerCompressionTracker;
+import net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.server.level.ThreadedLevelLightEngine;
+import org.apache.commons.lang3.mutable.MutableObject;
+import org.spongepowered.asm.mixin.Shadow;
+import org.spongepowered.asm.mixin.injection.ModifyVariable;
+#endif
 #if MC_VER < MC_1_20_5
 import com.mojang.datafixers.util.Either;
 import net.minecraft.server.level.ChunkHolder;
@@ -40,6 +49,43 @@ import net.minecraft.world.level.chunk.status.ChunkStep;
  */
 @Mixin(net.minecraft.server.level.ChunkMap.class)
 public class MixinChunkMap {
+
+#if MC_VER < MC_1_20_2
+    @Shadow
+    private ThreadedLevelLightEngine lightEngine;
+
+    @Unique
+    private ClientboundLevelChunkWithLightPacket hassium$dummyChunkPacket;
+
+    /**
+     * 1.20.1：Hassium 玩家用独立、已填充的 holder，跳过 {@code new ClientboundLevelChunkWithLightPacket}
+     *（组包成本）。trackChunk mixin 仍会登记 pending 并 cancel 发送；实体追踪后半段照常。
+     */
+    @ModifyVariable(method = "playerLoadedChunk", at = @At("HEAD"), argsOnly = true, ordinal = 0)
+    private MutableObject<ClientboundLevelChunkWithLightPacket> hassium$skipVanillaPacketBuild(
+            MutableObject<ClientboundLevelChunkWithLightPacket> holder,
+            ServerPlayer player,
+            MutableObject<ClientboundLevelChunkWithLightPacket> ignored,
+            LevelChunk chunk) {
+        if (RuntimeServerContext.isShadowServerContext()
+                || player == null
+                || !PlayerCompressionTracker.isCompressionEnabled(player)) {
+            return holder;
+        }
+        MutableObject<ClientboundLevelChunkWithLightPacket> isolated = new MutableObject<>();
+        isolated.setValue(hassium$dummyPacket(chunk));
+        return isolated;
+    }
+
+    @Unique
+    private ClientboundLevelChunkWithLightPacket hassium$dummyPacket(LevelChunk chunk) {
+        if (hassium$dummyChunkPacket == null && chunk != null && lightEngine != null) {
+            hassium$dummyChunkPacket = new ClientboundLevelChunkWithLightPacket(
+                    chunk, lightEngine, null, null);
+        }
+        return hassium$dummyChunkPacket;
+    }
+#endif
 
 #if MC_VER < MC_1_20_5
     @Inject(method = "scheduleChunkLoad", at = @At("HEAD"), cancellable = true)

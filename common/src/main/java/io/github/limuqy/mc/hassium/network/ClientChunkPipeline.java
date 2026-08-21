@@ -259,6 +259,10 @@ public final class ClientChunkPipeline {
         chunkApplyAcks.flush();
     }
 
+    public int pendingAckCount() {
+        return chunkApplyAcks.size();
+    }
+
     /** 断线时丢弃旧会话 ACK，禁止跨连接重放。 */
     void clearChunkApplyAcks() {
         chunkApplyAcks.clear();
