@@ -653,6 +653,7 @@ public final class ShadowLightCompute {
         ShadowSeedServer server = ShadowServerRegistry.getInstance().getOrCreate();
         List<ChunkPos> misses = new ArrayList<>();
         List<ChunkPos> deltaCandidates = new ArrayList<>();
+        List<ChunkPos> beImmediate = new ArrayList<>();
         List<io.github.limuqy.mc.hassium.network.ChunkHashS2CPacket.Entry> leftover = new ArrayList<>();
         boolean cacheReadBudgetExhausted = false;
         for (io.github.limuqy.mc.hassium.network.ChunkHashS2CPacket.Entry entry : entries) {
@@ -692,11 +693,13 @@ public final class ShadowLightCompute {
                                 DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
                                         "[SHADOW_CHUNK] Skip redundant full push ({}, {}): memory hit, client already applied",
                                         pos.x, pos.z);
+                                scheduleBeRefreshOnHashHit(dimension, pos, true, beImmediate);
                                 continue;
                             }
                             // 回传统一走 generated → consumeLoop 光屏障（submitLightBatch）：
                             // buildPacket 从 LevelLightEngine 收集光，注入表 chunk 的光在引擎
                             // 内（本会话算过）但需确认收敛，直接 push 可能推欠光（黑块）。
+                            scheduleBeRefreshOnHashHit(dimension, pos, false, beImmediate);
                             generated.put(memoryKey, new GenEntry(loaded, server.overworld(), lightReuse,
                                     false, traceOrigin(TraceOrigin.SHADOW_MEMORY_CACHE)));
                             continue;
@@ -762,8 +765,10 @@ public final class ShadowLightCompute {
                             DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
                                     "[SHADOW_CHUNK] Skip redundant full push ({}, {}): disk hit, client already applied",
                                     pos.x, pos.z);
+                            scheduleBeRefreshOnHashHit(dimension, pos, true, beImmediate);
                             continue;
                         }
+                        scheduleBeRefreshOnHashHit(dimension, pos, false, beImmediate);
                         generated.put(diskKey, new GenEntry(fromDisk, server.overworld(), !needRelight,
                                 false, traceOrigin(TraceOrigin.SHADOW_DISK_CACHE)));
                         continue;
@@ -777,6 +782,10 @@ public final class ShadowLightCompute {
             }
             // 3) 不中 / 影子端不可用：请求数据
             misses.add(pos);
+        }
+        if (!beImmediate.isEmpty()) {
+            io.github.limuqy.mc.hassium.network.ClientMetadataHandler
+                    .requestBeRefreshNow(dimension, beImmediate);
         }
         if (!deltaCandidates.isEmpty()) {
             requestSectionDeltas(dimension, deltaCandidates);
@@ -794,6 +803,18 @@ public final class ShadowLightCompute {
             }
         }
         return leftover;
+    }
+
+    /**
+     * 缓存命中不复用 BE：未落地则等 apply 后拉；已落地（跳过重复推）立即拉。
+     */
+    private static void scheduleBeRefreshOnHashHit(String dimension, ChunkPos pos,
+                                                   boolean alreadyApplied, List<ChunkPos> beImmediate) {
+        if (alreadyApplied) {
+            beImmediate.add(pos);
+        } else {
+            io.github.limuqy.mc.hassium.network.ClientMetadataHandler.scheduleBeRefresh(dimension, pos);
+        }
     }
 
     /** 分段增量门控：配置开启 && 影子链路可用。 */

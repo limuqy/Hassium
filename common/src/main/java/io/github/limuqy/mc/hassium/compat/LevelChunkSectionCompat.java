@@ -1,15 +1,15 @@
 package io.github.limuqy.mc.hassium.compat;
 
+import java.io.DataOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
 import net.minecraft.core.Registry;
 import net.minecraft.core.RegistryAccess;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.world.level.biome.Biome;
+import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.chunk.LevelChunkSection;
 #if MC_VER >= MC_1_21_9
-import java.io.DataOutputStream;
-import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.chunk.PalettedContainerFactory;
 import net.minecraft.world.level.chunk.PalettedContainerRO;
@@ -50,9 +50,10 @@ public final class LevelChunkSectionCompat {
     /**
      * 将 section 内容写入 OutputStream 用于哈希计算。
      * <p>
-     * 全版本统一规范化语义：逐位置写 blockState ID，产出不依赖 palette 排列的字节。
-     * 1.21.9+ 用 pack(Strategy)（palette entries + storage longs，同样规范化）；
-     * 1.20.1-1.21.8 用逐位置写 BlockState ID（对齐 pack 的"只依赖 block-at-position"语义）。
+     * 全版本写完整 BlockState ID（含朝向/含水/作物 age 等属性），产出不依赖 palette
+     * 排列的字节。BE NBT 不在此域。
+     * 1.21.9+ 用 pack(Strategy)（palette entries + storage longs）；
+     * 1.20.1–1.21.8 逐位置写 {@link Block#getId(net.minecraft.world.level.block.state.BlockState)}。
      * <p>
      * 背景（1.20.1 实测）：服务端对同一 chunk 会在不同时刻构建 packet（trackChunk 拦截时
      * 算 hash 的包 vs drain 现场构建发送的包），HashMapPalette 的排列随构建时序变化；
@@ -77,15 +78,13 @@ public final class LevelChunkSectionCompat {
             }
         }
 #else
-        // 1.20.1-1.21.8: 逐位置写 BlockState ID（规范化；与 palette 排列无关）。
-        // 注：旧实现 section.write() 字节对 palette 排列敏感——服务端两次构建 packet
-        // 的 palette 排列不同 → 同一内容 hash 不同（伪 MISMATCH），见上方注释。
-        java.io.DataOutputStream dout = new java.io.DataOutputStream(out);
+        // 1.20.1–1.21.8: 逐位置写完整 BlockState ID（规范化；与 palette 排列无关）。
+        // 不可写成 BLOCK.getId(state.getBlock())：会丢掉 facing/waterlogged/age 等属性。
+        DataOutputStream dout = new DataOutputStream(out);
         for (int y = 0; y < 16; y++) {
             for (int z = 0; z < 16; z++) {
                 for (int x = 0; x < 16; x++) {
-                    dout.writeInt(net.minecraft.core.registries.BuiltInRegistries.BLOCK
-                            .getId(section.getBlockState(x, y, z).getBlock()));
+                    dout.writeInt(Block.getId(section.getBlockState(x, y, z)));
                 }
             }
         }

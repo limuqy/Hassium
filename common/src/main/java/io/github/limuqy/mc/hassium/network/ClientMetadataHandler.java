@@ -41,7 +41,8 @@ public class ClientMetadataHandler {
     private static final long ESTIMATED_LIGHT_BYTES = NetworkStats.ESTIMATED_LIGHT_BYTES; // 16KB
 
     /**
-     * 区块已应用到世界后才发送的 BE 请求（chunkKey → dimension）。
+     * 区块已应用到客户端世界后才发送的 BE 请求（chunkKey → dimension）。
+     * BE 不进 chunkHash：缓存命中只复用方块，NBT 每次向主控另拉。
      * 避免 BE 包先于缓存区块到达导致 getBlockEntity() 为 null。
      */
     private static final ConcurrentHashMap<Long, String> PENDING_BE_REQUESTS = new ConcurrentHashMap<>();
@@ -328,6 +329,29 @@ public class ClientMetadataHandler {
     }
 
     /**
+     * 登记缓存命中柱：等 {@link #onChunkApplied} 后再向主控拉 BE（随 apply 节奏）。
+     */
+    public static void scheduleBeRefresh(String dimension, ChunkPos pos) {
+        if (dimension == null || pos == null) {
+            return;
+        }
+        PENDING_BE_REQUESTS.put(ChunkPos.asLong(pos.x, pos.z), dimension);
+    }
+
+    /**
+     * 柱已在客户端世界：立即拉 BE（重进视距 / 跳过重复 apply）。
+     */
+    public static void requestBeRefreshNow(String dimension, List<ChunkPos> chunks) {
+        if (dimension == null || chunks == null || chunks.isEmpty()) {
+            return;
+        }
+        for (ChunkPos pos : chunks) {
+            PENDING_BE_REQUESTS.remove(ChunkPos.asLong(pos.x, pos.z));
+        }
+        requestBlockEntities(dimension, chunks);
+    }
+
+    /**
      * 区块已成功应用到客户端世界后调用。
      * <p>
      * 1. 发送此前登记的 BE 请求（缓存命中路径）
@@ -442,9 +466,15 @@ public class ClientMetadataHandler {
     }
 
     /**
-     * 请求 blockEntity 补发（缓存命中后，blockEntity 不在缓存中）
+     * 请求 blockEntity 补发（缓存命中后每次另拉；不计入全量 miss 流量）
      */
     private static void requestBlockEntities(String dimension, List<ChunkPos> chunks) {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.player == null || mc.getConnection() == null) {
+            DebugLogger.warn(LogType.METADATA,
+                    "[BLOCK_ENTITY] Skip BE request — not in game ({} chunks)", chunks.size());
+            return;
+        }
         // 不计入「全量数据请求」——否则 /hassiumc stats 会把每次 HIT 后的 BE 补发误算成 miss 流量
         BlockEntityRequestC2SPacket request = new BlockEntityRequestC2SPacket(dimension, chunks);
         FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
@@ -499,6 +529,11 @@ public class ClientMetadataHandler {
         long chunkKey = ChunkPos.asLong(chunkX, chunkZ);
         for (BlockEntityDataS2CPacket.BlockEntityData beData : blockEntities) {
             tryApplyOrStashBlockEntity(chunkKey, beData.pos(), beData.nbt());
+        }
+        io.github.limuqy.mc.hassium.network.seedgen.ShadowSeedServer shadow =
+                io.github.limuqy.mc.hassium.network.seedgen.ShadowServerRegistry.getInstance().get();
+        if (shadow != null) {
+            shadow.applyBlockEntitySnapshot(new ChunkPos(chunkX, chunkZ), blockEntities);
         }
     }
 

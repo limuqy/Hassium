@@ -25,7 +25,9 @@ import java.util.Map;
 /**
  * 区块内容哈希（64-bit）。
  * <p>
- * 输入域对齐 NEB：sections + 确定性 heightmap/BE，排除 LightData。
+ * 输入域：各 section 的完整 BlockState（含朝向/含水/作物 age 等属性）。
+ * 不含 biomes、LightData、heightmap、blockEntity NBT。BE 不参与命中判定，
+ * 缓存命中后由 {@code BlockEntityRequest} 单独拉取。
  * 生产算法：xxHash64（基准显著快于 Murmur3_64）。
  * <p>
  * 使用流式哈希计算，避免 ByteArrayOutputStream 临时对象分配。
@@ -160,17 +162,11 @@ public final class ChunkContentHashUtil {
     }
 
     /**
-     * 计算单个 section 的方块哈希（方块状态 + 生物群系，不含 blockEntity）。
-     * <p>
-     * 1.21.9+ 用 pack(Strategy) 规范化，避免 palette 排列变化导致 hash 不匹配。
-     * 1.20.1-1.21.8 用 section.write() 字节（palette 排列稳定）。
-     */
-    /**
-     * 计算单个 section 的方块哈希（仅 blockStates，不含 biomes / blockEntity）。
+     * 计算单个 section 的方块哈希（仅完整 BlockState，不含 biomes / blockEntity）。
      * <p>
      * 所有 hash 计算路径均通过此方法或 {@link #parseAndHashSections} 调用
      * {@link LevelChunkSectionCompat#writeSectionForHash}：逐位置方块、不含光照。
-     * 1.21.9+ pack(Strategy)；1.20.1–1.21.8 逐位置写 Block ID。
+     * 1.21.9+ pack(Strategy)；1.20.1–1.21.8 逐位置写 BlockState ID。
      * <p>
      * 5 条路径等价性保证：
      * <ul>
@@ -250,8 +246,8 @@ public final class ChunkContentHashUtil {
                     continue;
                 }
 
-                // 用 writeSectionForHash 统一哈希：逐位置方块、不含光照
-                // （1.21.9+ pack；1.20.1-1.21.8 逐位置 Block ID）
+                // 用 writeSectionForHash 统一哈希：逐位置完整 BlockState、不含光照
+                // （1.21.9+ pack；1.20.1–1.21.8 逐位置 BlockState ID）
                 StreamingXXHash64 hasher = XX_FACTORY.newStreamingHash64(HASH_SEED);
                 HashingOutputStream out = new HashingOutputStream(hasher);
                 try {

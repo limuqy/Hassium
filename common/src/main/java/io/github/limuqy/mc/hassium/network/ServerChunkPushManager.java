@@ -1591,11 +1591,8 @@ public class ServerChunkPushManager {
                     continue;
                 }
 
-                // 收集 blockEntity 数据：仅在有变更 section 时发送。
-                // 若 changedSections 为空（section hash 全部匹配），客户端缓存 BE 仍有效，无需重发。
-                List<SectionDeltaS2CPacket.BlockEntityData> blockEntities = changedSections.isEmpty()
-                        ? List.of()
-                        : collectBlockEntities(chunk);
+                // 收集 blockEntity 数据：BE 不进 chunkHash，每次 delta 都附带当前快照。
+                List<SectionDeltaS2CPacket.BlockEntityData> blockEntities = collectBlockEntities(chunk);
 
                 deltas.add(new SectionDeltaS2CPacket.DeltaEntry(
                         entry.chunkX(), entry.chunkZ(), changedSections,
@@ -1654,11 +1651,8 @@ public class ServerChunkPushManager {
                     continue;
                 }
 
-                // 收集 blockEntity 数据：仅在有变更 section 时发送。
-                // 若 changedSections 为空（section hash 全部匹配），客户端缓存 BE 仍有效，无需重发。
-                List<SectionDeltaS2CPacket.BlockEntityData> blockEntities = changedSections.isEmpty()
-                        ? List.of()
-                        : collectBlockEntities(w.chunk());
+                // 收集 blockEntity 数据：BE 不进 chunkHash，每次 delta 都附带当前快照。
+                List<SectionDeltaS2CPacket.BlockEntityData> blockEntities = collectBlockEntities(w.chunk());
 
                 deltas.add(new SectionDeltaS2CPacket.DeltaEntry(
                         w.x(), w.z(), changedSections, collectHeightmaps(w.chunk()), blockEntities));

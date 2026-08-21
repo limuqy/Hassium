@@ -476,6 +476,17 @@ public final class SeedGenExecutor {
                 return;
             }
             queue.remove(pos);
+            Minecraft mc = Minecraft.getInstance();
+            if (mc.level != null) {
+                String dimension = mc.level.dimension()
+#if MC_VER < MC_1_21_11
+                        .location()
+#else
+                        .identifier()
+#endif
+                        .toString();
+                ClientMetadataHandler.scheduleBeRefresh(dimension, pos);
+            }
         } catch (Exception e) {
             Constants.LOG.error("Hassium: SeedGen generation failed for {}", pos, e);
             addFallback(fallbackBuffer, entry);
