@@ -710,9 +710,10 @@ public class ServerChunkPushManager {
      * SeedGen 玩家（能力 + 配置 + pristine）→ 只发 SeedRef（本地生成，零区块数据流量）；
      * 其余玩家 → Bloom 分流（客户端握手上报影子端存档布隆位图）：
      * <ul>
+     *   <li>bloom 未就绪（尚未上报）→ 只发 hash，由客户端 HashIndex/磁盘比对；</li>
      *   <li>bloom hit（可能有缓存）→ 只发 hash，不查/不写本会话直推表；</li>
-     *   <li>bloom miss / 空 / 未就绪 → 查本会话直推表：同柱同 hash 已直推过则只发 hash；
-     *       否则整柱直推并在发送成功后登记（仅登记不在 Bloom 中的柱）。</li>
+     *   <li>bloom 已到且 miss → 查本会话直推表：同柱同 hash 已直推过则只发 hash；
+     *       表无记录才整柱直推并在发送成功后登记。</li>
      * </ul>
      * hash 直发（不走限流批次）：影子端比对在后台线程（无旧客户端比对风暴）。
      */
@@ -875,7 +876,8 @@ public class ServerChunkPushManager {
     }
 
     /**
-     * Bloom 分流判定：miss / 空 / 未就绪 → 直推；hit → 只发 hash。
+     * Bloom 分流：未就绪 / 空层 → 只发 hash（防 Bloom 未到时 R2 整视距直推）；
+     * 已收到 Bloom 且 miss → 直推；hit → 只发 hash。
      */
     private boolean shouldPushFull(ServerPlayer player, ChunkPos pos, String dimension) {
         return shouldPushFull(bloomLayers.get(player.getUUID()), pos.x, pos.z, dimension);
@@ -938,13 +940,19 @@ public class ServerChunkPushManager {
 
     /**
      * 包可见：供单测覆盖 empty / unready / miss / hit。
-     * {@code layers == null} 视为未就绪；空层或空过滤器视为 empty。
+     * 未就绪（{@code layers == null}）或空层：不直推，走 hash，避免 Bloom 尚未上报时
+     * R2 被当 ROUND1。已收到 Bloom 后 miss 才直推（再由会话表决定是否复用）。
      */
     static boolean shouldPushFull(PlayerBloomLayers layers, int chunkX, int chunkZ, String dimension) {
-        if (layers == null || layers.isEmpty()) {
-            return true;
+        if (!isBloomReady(layers)) {
+            return false;
         }
         return !layers.mightContain(chunkX, chunkZ, dimension);
+    }
+
+    /** 已收到至少一层 Bloom。空过滤器（ROUND1 无缓存）也算就绪。 */
+    static boolean isBloomReady(PlayerBloomLayers layers) {
+        return layers != null && !layers.isEmpty();
     }
 
     /** 每玩家 bloom 层（full 重置 / 增量追加；查询任一命中即可能缓存）。包可见供单测构造。 */
@@ -1099,9 +1107,9 @@ public class ServerChunkPushManager {
      * 每 tick 从 pending 取距玩家最近、且已加载的柱出队。
      * <p>
      * 先按 packed key 距离排序（不碰世界），再 {@code getChunkNow} 直到填满本 tick
-     * 入队预算即停，禁止每 tick 扫满 VD 方阵。主线程不算 section hash：ROUND1
-     * {@code lastSessionPushedHash==null} 直接 {@code enqueueDirectPush(..., 0L)}；
-     * 会话复用比对走 {@link #submitMetadataTaskFromChunk} 的 pushPool。
+     * 入队预算即停，禁止每 tick 扫满 VD 方阵。主线程不算 section hash：仅当 Bloom
+     * 已到且 miss、且 {@code lastSessionPushedHash==null} 才 {@code enqueueDirectPush(..., 0L)}；
+     * 未就绪 / hit / 会话复用走 {@link #submitMetadataTaskFromChunk} 的 pushPool。
      * 仅在 admission/直推入队（或 hash 路径实际提交）成功后才从 {@code pendingSends} 移除。
      * 入队预算见 {@link #pacedEnqueueBudget}；hash 预算独立为 {@link #HASH_SENDS_PER_TICK}。
      */
@@ -1141,9 +1149,10 @@ public class ServerChunkPushManager {
             int x = ChunkPos.getX(packed);
             int z = ChunkPos.getZ(packed);
             PlayerBloomLayers layers = bloomLayers.get(playerId);
+            boolean bloomReady = isBloomReady(layers);
             boolean bloomMiss = shouldPushFull(layers, x, z, dimension);
             Long lastSent = lastSessionPushedHash(playerId, dimension, x, z);
-            boolean directNoHash = shouldDirectPushWithoutHash(bloomMiss, lastSent, layers != null);
+            boolean directNoHash = shouldDirectPushWithoutHash(bloomMiss, lastSent, bloomReady);
             if (!shouldProbeWorldForPacedPending(directNoHash, fullBudget, hashBudget)) {
                 continue;
             }
@@ -1188,6 +1197,7 @@ public class ServerChunkPushManager {
 
     /**
      * ROUND1 / Bloom 已上报且 miss、本会话尚未直推过：跳过主线程 hash，直接入队。
+     * 直推仅此条件：Bloom 存在但不命中，且会话表无记录。
      * Bloom 未就绪必须走 pushPool hash（R2 重连上报前）；hit 或会话复用同样走
      * {@link #submitMetadataTaskFromChunk}。
      */

@@ -7,22 +7,23 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Bloom 分流：miss / 空 / 未就绪 → {@code shouldPushFull=true}（只直推）；
- * hit → {@code false}（只发 hash）。
+ * Bloom 分流：未就绪 / 空层 → 只发 hash；已收到 Bloom 且 miss → 直推；hit → 只发 hash。
  */
 class ServerChunkPushManagerBloomSplitTest {
 
     private static final String DIM = "minecraft:overworld";
 
     @Test
-    void shouldPushFull_unready_isDirectPush() {
-        assertTrue(ServerChunkPushManager.shouldPushFull(null, 0, 0, DIM));
+    void shouldPushFull_unready_isHashOnly() {
+        assertFalse(ServerChunkPushManager.shouldPushFull(null, 0, 0, DIM));
+        assertFalse(ServerChunkPushManager.isBloomReady(null));
     }
 
     @Test
-    void shouldPushFull_emptyLayers_isDirectPush() {
+    void shouldPushFull_emptyLayers_isHashOnly() {
         ServerChunkPushManager.PlayerBloomLayers layers = new ServerChunkPushManager.PlayerBloomLayers();
-        assertTrue(ServerChunkPushManager.shouldPushFull(layers, 1, 2, DIM));
+        assertFalse(ServerChunkPushManager.isBloomReady(layers));
+        assertFalse(ServerChunkPushManager.shouldPushFull(layers, 1, 2, DIM));
     }
 
     @Test
@@ -30,6 +31,7 @@ class ServerChunkPushManagerBloomSplitTest {
         ChunkBloomFilter empty = ChunkBloomFilter.createDefault();
         ServerChunkPushManager.PlayerBloomLayers layers = new ServerChunkPushManager.PlayerBloomLayers();
         layers.reset(empty);
+        assertTrue(ServerChunkPushManager.isBloomReady(layers));
         assertTrue(ServerChunkPushManager.shouldPushFull(layers, 3, 4, DIM));
     }
 
@@ -49,6 +51,27 @@ class ServerChunkPushManagerBloomSplitTest {
         ServerChunkPushManager.PlayerBloomLayers layers = new ServerChunkPushManager.PlayerBloomLayers();
         layers.reset(filter);
         assertFalse(ServerChunkPushManager.shouldPushFull(layers, 7, 8, DIM));
+    }
+
+    @Test
+    void unreadyWithoutSessionTableStillHashOnly() {
+        boolean miss = ServerChunkPushManager.shouldPushFull(null, 0, 0, DIM);
+        boolean ready = ServerChunkPushManager.isBloomReady(null);
+        assertFalse(ServerChunkPushManager.shouldDirectPushWithoutHash(miss, null, ready));
+    }
+
+    @Test
+    void bloomMissWithoutSessionTableIsDirectPush() {
+        ChunkBloomFilter filter = ChunkBloomFilter.createDefault();
+        filter.put(1, 1, DIM);
+        ServerChunkPushManager.PlayerBloomLayers layers = new ServerChunkPushManager.PlayerBloomLayers();
+        layers.reset(filter);
+        boolean miss = ServerChunkPushManager.shouldPushFull(layers, 9, 9, DIM);
+        assertTrue(miss);
+        assertTrue(ServerChunkPushManager.shouldDirectPushWithoutHash(miss, null,
+                ServerChunkPushManager.isBloomReady(layers)));
+        assertFalse(ServerChunkPushManager.shouldDirectPushWithoutHash(miss, 42L,
+                ServerChunkPushManager.isBloomReady(layers)));
     }
 
     @Test

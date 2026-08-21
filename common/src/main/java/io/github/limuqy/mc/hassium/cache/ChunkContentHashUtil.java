@@ -169,8 +169,8 @@ public final class ChunkContentHashUtil {
      * 计算单个 section 的方块哈希（仅 blockStates，不含 biomes / blockEntity）。
      * <p>
      * 所有 hash 计算路径均通过此方法或 {@link #parseAndHashSections} 调用
-     * {@link LevelChunkSectionCompat#writeSectionForHash}，最终用 pack(Strategy)（1.21.9+）
-     * 或 section.write()（1.20.1-1.21.8）规范化后哈希。
+     * {@link LevelChunkSectionCompat#writeSectionForHash}：逐位置方块、不含光照。
+     * 1.21.9+ pack(Strategy)；1.20.1–1.21.8 逐位置写 Block ID。
      * <p>
      * 5 条路径等价性保证：
      * <ul>
@@ -250,8 +250,8 @@ public final class ChunkContentHashUtil {
                     continue;
                 }
 
-                // 用 writeSectionForHash 统一哈希方式：
-                // 1.21.9+ pack(Strategy) 规范化，1.20.1-1.21.8 section.write() 字节
+                // 用 writeSectionForHash 统一哈希：逐位置方块、不含光照
+                // （1.21.9+ pack；1.20.1-1.21.8 逐位置 Block ID）
                 StreamingXXHash64 hasher = XX_FACTORY.newStreamingHash64(HASH_SEED);
                 HashingOutputStream out = new HashingOutputStream(hasher);
                 try {
