@@ -194,8 +194,8 @@ public class NetworkStats {
 
     /**
      * 线缆入站帧字节（管线 decode 消费的 in 增量）。
-     * <p>主链由 {@code ZstdContextDecoder} 调用；Data 通道 bulk chunk 由
-     * {@code DataPlaneClientBundle.DataPlaneClientHandler} 在解出 TYPE_BULK 后调用相同 wire 口径，
+     * <p>Primary：{@code ZstdContextDecoder}；Data：{@code DataPlaneClientBundle#onBulkArrived}
+     * （UDP 应用帧 payload）。应用层（{@code ClientChunkHandler} 等）禁止再写，避免双重计数。
      * 保证多通道场景下 {@code actualBytesReceived} 覆盖 Primary + Data 两路 actual wire 字节,
      * 让 {@code getReceiveBandwidthSavingPercent} 公式 (vanilla - actual) / vanilla 不再漏算。
      */

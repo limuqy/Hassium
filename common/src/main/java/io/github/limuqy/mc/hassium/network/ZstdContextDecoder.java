@@ -1,6 +1,7 @@
 package io.github.limuqy.mc.hassium.network;
 
 import com.github.luben.zstd.ZstdDecompressCtx;
+import io.github.limuqy.mc.hassium.metrics.NetworkStats;
 import io.github.limuqy.mc.hassium.network.core.outbound.ControlFrameCodec;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
@@ -85,7 +86,9 @@ public class ZstdContextDecoder extends ByteToMessageDecoder {
     @Override
     protected void decode(ChannelHandlerContext ctx, ByteBuf in, List<Object> out) throws Exception {
         if (closed) {
+            int inStart = in.readerIndex();
             out.add(in.readBytes(in.readableBytes()));
+            NetworkStats.recordWireBytesReceived(in.readerIndex() - inStart);
             return;
         }
 
@@ -136,7 +139,6 @@ public class ZstdContextDecoder extends ByteToMessageDecoder {
                 // 帧后紧跟 difficulty/abilities 等小帧——readableBytes() 把尾随帧计入压缩体，
                 // 容量检查随粘包内容漂移 8.39MB→9.44MB 且尾随帧被吞）。与明文分支同语义：
                 // 按 zstd 帧边界（RFC 8878 帧头/块头解析）只消费本帧，剩余留待下次 decode。
-                int headerLen = in.readerIndex() - inStart;
                 long frameLen = parseFrameCompressedLength(in, in.readerIndex(), in.readableBytes());
                 if (frameLen < 0) {
                     // 半包：帧头/数据块未齐，整体回退等待更多数据
@@ -181,6 +183,8 @@ public class ZstdContextDecoder extends ByteToMessageDecoder {
             out.add(Unpooled.wrappedBuffer(result));
         }
 
+        // 仅成功消费路径记账；半包回退（readerIndex 已还原）不记，避免重复累计。
+        NetworkStats.recordWireBytesReceived(in.readerIndex() - inStart);
     }
     /**
      * 解析 zstd 帧（RFC 8878）首帧的压缩体长度（含 magic/帧头/全部数据块/内容校验和）。

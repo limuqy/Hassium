@@ -1,10 +1,13 @@
 package io.github.limuqy.mc.hassium.compression;
 
 import com.github.luben.zstd.ZstdCompressCtx;
+import io.github.limuqy.mc.hassium.metrics.NetworkStats;
 import io.github.limuqy.mc.hassium.network.ZstdContextDecoder;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.embedded.EmbeddedChannel;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.Random;
@@ -21,6 +24,18 @@ import static org.junit.jupiter.api.Assertions.*;
 public class ZstdContextDecoderFrameAwareTest {
 
     private static final int THRESHOLD = 256;
+
+    @BeforeEach
+    void enableMetrics() {
+        NetworkStats.reset();
+        NetworkStats.setEnabled(true);
+    }
+
+    @AfterEach
+    void disableMetrics() {
+        NetworkStats.reset();
+        NetworkStats.setEnabled(false);
+    }
 
     private static byte[] compress(byte[] input) {
         try (ZstdCompressCtx ctx = new ZstdCompressCtx()) {
@@ -61,6 +76,7 @@ public class ZstdContextDecoderFrameAwareTest {
         wire.writeBytes(comp1);
         writeVarInt(wire, payload2.length);
         wire.writeBytes(comp2);
+        int totalWire = wire.readableBytes();
 
         EmbeddedChannel ch = new EmbeddedChannel(new ZstdContextDecoder(THRESHOLD, true, false, true));
         try {
@@ -73,6 +89,9 @@ public class ZstdContextDecoderFrameAwareTest {
             ByteBuf out2 = ch.readInbound();
             assertNotNull(out2, "second coalesced frame must survive (frame-boundary consumption)");
             assertArrayEquals(payload2, readAll(out2));
+
+            assertEquals(totalWire, NetworkStats.getMetrics().getActualBytesReceived(),
+                    "both wire units must contribute to actualBytesReceived");
         } finally {
             ch.finishAndReleaseAll();
         }
@@ -88,12 +107,15 @@ public class ZstdContextDecoderFrameAwareTest {
 
         ByteBuf wire = Unpooled.buffer();
         writeVarInt(wire, payload.length);
+        int headerAndFull = wire.readableBytes() + comp.length;
         wire.writeBytes(comp, 0, comp.length / 2); // 只给半帧
 
         EmbeddedChannel ch = new EmbeddedChannel(new ZstdContextDecoder(THRESHOLD, true, false, true));
         try {
             assertFalse(ch.writeInbound(wire), "partial frame must not produce output");
             assertNull(ch.readInbound());
+            assertEquals(0, NetworkStats.getMetrics().getActualBytesReceived(),
+                    "partial frame must not record wire bytes");
 
             // 补全剩余字节 → 解出完整帧
             ByteBuf rest = Unpooled.buffer();
@@ -102,6 +124,8 @@ public class ZstdContextDecoderFrameAwareTest {
             ByteBuf out = ch.readInbound();
             assertNotNull(out);
             assertArrayEquals(payload, readAll(out));
+            assertEquals(headerAndFull, NetworkStats.getMetrics().getActualBytesReceived(),
+                    "wire bytes recorded only after full unit consumed");
         } finally {
             ch.finishAndReleaseAll();
         }

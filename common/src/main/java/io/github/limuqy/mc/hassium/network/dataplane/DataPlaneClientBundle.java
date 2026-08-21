@@ -1,5 +1,6 @@
 package io.github.limuqy.mc.hassium.network.dataplane;
 
+import io.github.limuqy.mc.hassium.metrics.NetworkStats;
 import io.github.limuqy.mc.hassium.network.ClientChunkHandler;
 import io.github.limuqy.mc.hassium.network.ClientMetadataHandler;
 import io.github.limuqy.mc.hassium.utils.DebugLogger;
@@ -99,6 +100,10 @@ public final class DataPlaneClientBundle {
         bulkBytesData.addAndGet(payloadLen);
         perPortFrames.computeIfAbsent(portIdx, k -> new AtomicLong()).incrementAndGet();
         perPortBytes.computeIfAbsent(portIdx, k -> new AtomicLong()).addAndGet(payloadLen);
+        // Data 通道 actual wire（应用帧 payload；与 Primary 侧 ZstdContextDecoder 互补，禁止 ClientChunkHandler 再记）
+        if (payloadLen > 0 && payloadLen <= Integer.MAX_VALUE) {
+            NetworkStats.recordWireBytesReceived((int) payloadLen);
+        }
     }
 
     // ===== 实例 =====

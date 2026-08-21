@@ -218,9 +218,8 @@ public class ClientChunkHandler {
         // 清除全量请求超时登记（数据已到达，服务端丢弃/积压兜底结束）
         ClientMetadataHandler.onChunkDataReceived(compressed.chunkX, compressed.chunkZ);
 
-        // 记录收到压缩区块数据
+        // 只记原版等价；actual wire 由管线 ZstdContextDecoder / UDP onBulkArrived 统一记，禁止应用层双计。
         NetworkStats.recordChunkReceived(VanillaZlibEstimator.estimate(compressed.originalSize));
-        NetworkStats.recordWireBytesReceived(compressed.compressedData.length);
 
         HassiumTaskExecutor executor = HassiumTaskExecutor.getClient();
         if (executor == null) {
