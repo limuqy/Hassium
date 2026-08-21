@@ -159,10 +159,12 @@ public class HassiumCommandHandler {
     private static String formatLightCacheLine(HassiumMetricsImpl m) {
         // 剥光协商（lightComputeSupported=true）下 hasCachedLight 恒 false → 直连命中口径
         // 恒 0；光照复用由影子链路承担（key light.reuse.shadow.*），与直连命中合并展示为
-        // 「命中」（口径与 getLightCacheHitRate 一致：命中 = 直连 + 影子复用），不再单列。
-        // 影子端本会话重算的光（远程全量注入 / 分段增量 / LightDelta / 本地生成 / 光脏缓存命中）
-        // 统一在光屏障完成时记 lightCacheMiss，因此分片增量会让重算数上升、命中率下降，
-        // 不再出现「有分片但光照缓存仍 100%」的假象。
+        // 「命中」，不再单列。
+        // 命中率按内容等价值字节计（口径与 getLightCacheHitRate 一致，对齐区块缓存行）：
+        // （直连命中字节 + 影子复用字节）/（命中 + 本地重算）。影子端本会话重算的光
+        // （远程全量注入 / 分段增量 / LightDelta / 磁盘光脏续算）在光屏障提交时记
+        // lightCacheMiss——权威区块未收敛光/无光不算命中；OVD/renderOnly 柱由本地影子端
+        // 全量服务，记复用不进重算分母（无 MOD 时服务端本来也不推该环带）。
         long lightHit = m.getLightCacheHitCount() + m.getLightReuseShadowCount();
         long lightHitBytes = m.getLightCacheHitBytes() + m.getLightReuseShadowBytes();
         long lightMiss = m.getLightCacheMissCount();

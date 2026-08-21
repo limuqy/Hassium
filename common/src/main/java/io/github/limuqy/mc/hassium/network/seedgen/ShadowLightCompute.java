@@ -43,9 +43,9 @@ import net.minecraft.world.level.lighting.LevelLightEngine;
  *   <li>投递（{@link #submit} / {@link #submitGenerated}）：任意线程（解压后台 /
  *       主线程 / SeedGen 生成池），pos→数据 REPLACE 覆盖（同柱新数据盖旧）</li>
  *   <li>消费（后台池单循环 CAS，管道化）：取批 → 注入 → 官方 {@code initializeLight}
- *       （对齐 {@code ChunkStatus.INITIALIZE_LIGHT}，range=0）→ 立刻 {@code lightChunk}
- *       （不等 8 邻；屋檐/天空余光走 {@link #drainLightMasks}）→ 打包回传。在途上限
- *       {@link #PIPELINE_MAX_INFLIGHT} 只计正在跑引擎任务的柱。
+ *       （对齐 {@code ChunkStatus.INITIALIZE_LIGHT}，range=0）→ 全量重算等 8 邻建层后
+ *       {@code lightChunk}（对齐原版 LIGHT range=1；光桥/增量/磁盘复用不等邻）→ 打包回传。
+ *       在途上限 {@link #PIPELINE_MAX_INFLIGHT} 只计正在跑引擎任务的柱。
  *       5s 超时兜底欠光标脏，由光照更新桥梁事件驱动补发</li>
  *   <li>光照收集（{@link #collectLightUpdate}）：影子端 light 线程（引擎每完成
  *       一个 section 的光计算）</li>
@@ -84,8 +84,9 @@ public final class ShadowLightCompute {
      *  条件移除；size = 在途计数，上限 {@link #PIPELINE_MAX_INFLIGHT}，断连清空）。 */
     private static final ConcurrentHashMap<Long, InflightLight> inflightLight = new ConcurrentHashMap<>();
     /**
-     * 已完成官方 {@code initializeLight}、尚未 {@code lightChunk}。A2 起不再因
-     * 8 邻未齐而 park；表仅消化历史等待项。不计入 {@link #PIPELINE_MAX_INFLIGHT}。
+     * 已完成官方 {@code initializeLight}、等待 8 邻建层后 {@code lightChunk}
+     * （全量重算的邻居门槛；光桥/增量/磁盘复用不 park）。不计入
+     * {@link #PIPELINE_MAX_INFLIGHT}。
      */
     private static final ConcurrentHashMap<Long, InflightLight> waitingForLight = new ConcurrentHashMap<>();
     /** 已完成 {@code initializeLight} 的柱（含已打包）；邻柱 LIGHT 门槛看这张表。 */
@@ -430,11 +431,15 @@ public final class ShadowLightCompute {
     }
 
     /**
-     * A2：全量重算也不等 8 邻建层；{@code initializeLight} 后立刻 {@code lightChunk}。
-     * 光桥 / 分段增量 / 磁盘复用同样不等邻。余光走 {@link #drainLightMasks}。
+     * 对齐原版 {@code ChunkStatus.LIGHT}：全量重算（PENDING/GENERATED 且非
+     * REUSE_CACHE）须等 8 邻 {@code initializeLight} 建层后才 {@code lightChunk}——
+     * 先算柱播种时读后算柱的 {@code ChunkSkyLightSources} 几何高度图，把跨边界
+     * increase 推进后算柱已建的层；不等邻则先算柱播种止步边界、后算柱屋檐列
+     * （lowestSourceY &gt; sectionTop）播种循环空转，凹槽永久缺光（2026-08-22
+     * (-13,3) 屋檐根因）。光桥 / 分段增量 / 磁盘复用仍不等邻。
      */
     static boolean needsVanillaLightNeighborWait(boolean fullChunkRecompute) {
-        return false;
+        return fullChunkRecompute;
     }
 
     /**
@@ -1411,8 +1416,16 @@ public final class ShadowLightCompute {
                     // 光照统计在提交成功时记（而非回传完成时）：冒烟快照窗口内光屏障可能还在
                     // 在途，等 finishLight 再记会让「分片增量已发生但光照重算仍显示 0」。
                     if (t.metric == LightMetric.RECOMPUTE && t.source != LightSource.PENDING) {
-                        io.github.limuqy.mc.hassium.metrics.NetworkStats.recordLightCacheMiss(
-                                io.github.limuqy.mc.hassium.metrics.NetworkStats.ESTIMATED_LIGHT_BYTES);
+                        if (t.renderOnly) {
+                            // OVD/renderOnly 柱：光照由本地影子端全量服务（无 MOD 时服务端
+                            // 本来也不推该环带），按复用记账、不进重算分母——与
+                            // getNoModReceiveBytes 的 OVD 排除原则一致。
+                            io.github.limuqy.mc.hassium.metrics.NetworkStats.recordLightReuseShadow(
+                                    io.github.limuqy.mc.hassium.metrics.NetworkStats.ESTIMATED_LIGHT_BYTES);
+                        } else {
+                            io.github.limuqy.mc.hassium.metrics.NetworkStats.recordLightCacheMiss(
+                                    io.github.limuqy.mc.hassium.metrics.NetworkStats.ESTIMATED_LIGHT_BYTES);
+                        }
                     }
                 } catch (Throwable ex) {
                     // 提交失败：欠光兜底（旧 result.put(key, FALSE) 同语义）——同步守卫+回传
@@ -1448,7 +1461,7 @@ public final class ShadowLightCompute {
                 onInitializeComplete(server, inf, throwable == null));
     }
 
-    /** 阶段①完成 → 立刻阶段② {@code lightChunk}（A2 不等 8 邻）。 */
+    /** 阶段①完成 → 全量重算等 8 邻建层后进阶段② {@code lightChunk}（光桥/增量不等邻）。 */
     private static void onInitializeComplete(ShadowSeedServer server, InflightLight inf, boolean converged) {
         if (!isEnabled() || (inflightLight.get(inf.key) != inf && waitingForLight.get(inf.key) != inf)) {
             return; // 断连 / 同 key 新屏障 REPLACE：旧链路短路
@@ -1572,7 +1585,7 @@ public final class ShadowLightCompute {
 
     private static boolean canStartVanillaLightStageNow(ShadowSeedServer server, ChunkPos pos,
                                                         InflightLight inf) {
-        // A2: initializeLight 后立刻 lightChunk；全量重算也不等 8 邻。
+        // 对齐原版 ChunkStatus.LIGHT：全量重算等 8 邻 initializeLight；超时按视距边缘。
         if (!needsVanillaLightNeighborWait(inf)) {
             return true;
         }

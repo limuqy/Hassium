@@ -870,7 +870,8 @@ public final class ClientSmokeTest {
             }
         }
 
-        // 3) 光照缓存行：百分比与 (直连命中 + 影子复用) / (命中 + 重算) 一致；「命中」= 直连 + 影子复用。
+        // 3) 光照缓存行：百分比按字节口径（直连命中 + 影子复用字节）/（命中 + 重算字节），
+        // 与 getLightCacheHitRate 一致；「命中」= 直连 + 影子复用（含 OVD/renderOnly 复用）。
         Matcher lightMatcher = LIGHT_STATS_PATTERN.matcher(plain);
         if (!lightMatcher.find()) {
             LOGGER.error("{} {} stats validation FAILED: light cache line not parseable", MARKER_FAIL, roundLabel);

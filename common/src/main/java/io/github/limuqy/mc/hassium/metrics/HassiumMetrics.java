@@ -508,15 +508,25 @@ public interface HassiumMetrics {
     /**
      * 计算光照缓存命中率。
      * <p>
-     * 剥光协商下直连命中（{@link #getLightCacheHitCount()}）恒 0，实际复用由影子链路
-     * （{@link #getLightReuseShadowCount()}）承担；本地重算（光标脏缓存命中）计入
-     * {@link #getLightCacheMissCount()}。命中 = 直连 + 影子复用，分母再加重算。
+     * 口径对齐 {@link #getCacheHitRate()}：按内容等价值字节计
+     * （直连命中 + 影子复用）/（命中 + 本地重算）。剥光协商下直连命中
+     * （{@link #getLightCacheHitCount()}）恒 0，实际复用由影子链路
+     * （{@link #getLightReuseShadowBytes()}）承担；本地重算（光标脏缓存命中）
+     * 计入 {@link #getLightCacheMissBytes()}。OVD/renderOnly 柱不进本口径
+     * （无 MOD 时服务端本来也不推，同 {@link #getNoModReceiveBytes()} 的排除原则，
+     * 其光照由本地影子端全量服务、复用率恒视作 100%）。
      */
     default double getLightCacheHitRate() {
-        long hit = getLightCacheHitCount() + getLightReuseShadowCount();
-        long total = hit + getLightCacheMissCount();
-        if (total == 0) return 0.0;
-        return (double) hit / total;
+        long hitBytes = getLightCacheHitBytes() + getLightReuseShadowBytes();
+        long totalBytes = hitBytes + getLightCacheMissBytes();
+        if (totalBytes == 0) {
+            // 无字节数据时回退到按次数计算
+            long hit = getLightCacheHitCount() + getLightReuseShadowCount();
+            long total = hit + getLightCacheMissCount();
+            if (total == 0) return 0.0;
+            return (double) hit / total;
+        }
+        return (double) hitBytes / totalBytes;
     }
 
     /**

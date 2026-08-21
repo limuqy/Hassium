@@ -117,15 +117,14 @@ class ShadowLightComputeTimingRegressionTest {
     }
 
     @Test
-    @DisplayName("LIGHT：initializeLight 后立刻 lightChunk，未齐 8 邻也进入")
+    @DisplayName("LIGHT：全量重算等 8 邻建层才 lightChunk，光桥/增量不等邻")
     void waitsForVanillaLightNeighborsBeforeLightChunk() {
-        assertFalse(ShadowLightCompute.needsVanillaLightNeighborWait(true),
-                "全量重算也不等 8 邻：未齐邻柱必须能进 lightChunk");
+        assertTrue(ShadowLightCompute.needsVanillaLightNeighborWait(true),
+                "全量重算必须等 8 邻 initializeLight：先算柱播种要推进后算柱已建的层");
         assertFalse(ShadowLightCompute.needsVanillaLightNeighborWait(false),
                 "光桥/增量/磁盘复用不等邻柱");
-        assertTrue(!ShadowLightCompute.needsVanillaLightNeighborWait(true)
-                        || ShadowLightCompute.canStartVanillaLightStage(4, 8, false),
-                "未齐 8 邻也必须能进 lightChunk");
+        assertFalse(ShadowLightCompute.canStartVanillaLightStage(4, 8, false),
+                "未齐 8 邻不得进 lightChunk（屋檐跨边界传播依赖邻柱建层）");
         assertTrue(ShadowLightCompute.canStartVanillaLightStage(8, 8, false),
                 "8 邻都已 initializeLight：进入 LIGHT");
         assertTrue(ShadowLightCompute.canStartVanillaLightStage(0, 0, false),
