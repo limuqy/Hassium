@@ -109,8 +109,8 @@ ChunkHashS2CPacket(dimension, List<Entry>)
 ### 阶段二：分段增量（默认开启，可关闭）
 
 ```java
-SectionHashRequestC2SPacket  // 客户端 → 服务端（本地 section hashes）
-SectionDeltaS2CPacket        // 服务端 → 客户端（变更 sections + heightmaps + BE）
+SectionHashRequestC2SPacket  // 客户端 → 服务端（section hashes + 平面综合征）
+SectionDeltaS2CPacket        // 服务端 → 客户端（BLOCKS 方块列表或 FULL 整段 + heightmaps + BE）
 ```
 
 门控：`chunk.sectionDeltaEnabled`（默认 `true`；需同时 `chunk.enabled`）。
@@ -119,9 +119,9 @@ SectionDeltaS2CPacket        // 服务端 → 客户端（变更 sections + heig
 |----------|--------|----------------|
 | HIT | 缓存队列 | 影子端直接回传 |
 | MISS | 全量 | 全量 |
-| MISMATCH（过期） | 全量 | `sendSectionHashRequest` → 影子端 apply（失败回退全量） |
+| MISMATCH（过期） | 全量 | 分段增量（失败回退全量） |
 
-服务端按 `0..sectionsCount-1` 比对 hash + 平面综合征（空气=0、无平面）；脏段发 `FULL`（`section.write`）或 `BLOCKS` 方块列表。响应含 heightmaps（服务端 `getHeightmaps()` rawData 直发）。详见 §11.5。
+MISMATCH 时客户端上报每段 hash 与 48 条平面综合征；服务端只补变更格（`BLOCKS`），变更过多或 paletted 更小则整段（`FULL`），变更段 ≥75% 则整块。详见 §11.5。
 
 旧 `ChunkMetadataS2C`（contentHash 批量元数据）协议已删除。
 
@@ -133,7 +133,7 @@ SectionDeltaS2CPacket        // 服务端 → 客户端（变更 sections + heig
 | `MixinChunkHolder` / `MixinServerPlayer` / `MixinPlayerChunkSender` | 拦截原版全量推送 |
 | `ClientMetadataHandler` | hash 比对、全量请求、blockEntity 请求 |
 | `ShadowLightCompute` | 影子端 hash 比对、delta 候选/请求/超时回退、consumeLoop 应用与回传 |
-| `ShadowSeedServer.applySectionDelta` | 影子端 section/BE/heightmap 覆盖 + 清光重算 + contentHash 落表 |
+| `ShadowSeedServer.applySectionDelta` | 影子端 FULL/BLOCKS 覆盖 + 清光重算 + contentHash 落表 |
 | `ChunkBloomFilter` | 减少无效磁盘 IO |
 | `ShadowStorageHashes` | 影子端 contentHash 表 + 光脏标记（R2 命中判定） |
 
@@ -303,11 +303,11 @@ RD > 32（需手改 `options.txt`）时雾距会跟随 `getEffectiveRenderDistan
 **引擎失败降级**：影子端启动失败 / 未握手种子 → `ShadowLightCompute` 引擎关闭，但服务端剥光同样经握手 gate 关闭（无 `lightComputeSupported` 声明 → 光随包自带），客户端无黑块。
 
 **指标语义**（`/hassiumc stats`）：
-- 展示：`区块缓存：xx%（全命中 N/B，增量 M/B）`，命中率 = 有效命中字节 / eligible 字节
-- **全命中**：影子端存档/内存直接回传（跳过全量下载）
-- **增量**：delta apply 成功（避免全量下载的整柱等价值）
-- **分片**：从命中分子扣除；`FULL` = 整段 4096 格，`BLOCKS` = 列表格数（封顶 4096）；`16KB × cells / (sectionCount × 4096)`
-- eligible：影子端尝试过的缓存路径（disk hit + delta 请求）
+- 展示：`区块缓存：xx%（全命中 N/B，部分命中 N/B，增量 B，应用 B）`
+- 命中率 = `(全命中 + 部分命中 − 增量) / 应用`
+- **全命中**：影子端存档/内存直接回传
+- **部分命中**：delta 成功（整柱等价值）
+- **增量**：实际变更内容（`FULL` 整段 / `BLOCKS` 按格），从命中分子扣除
 
 **renderOnly**：`ClientCacheLoadQueue.ReadyChunk.hasCachedLight` 为 true 时不再投递影子端（空光仍经 TAIL 投递一次，Handler 只补内存 NBT 回写）。
 
@@ -328,45 +328,24 @@ RD > 32（需手改 `options.txt`）时雾距会跟随 `getEffectiveRenderDistan
 - 合法 NBT（含 magic 前缀）→ 正常返回
 - 非法（旧 packet 字节）→ `clientStorage.remove(pos)` 删块 + 记 miss → 全量请求
 
-### 11.5 分段增量（缓存过期 / MISMATCH 路径）
+### 11.5 分段增量（缓存过期 / MISMATCH）
 
-仅当 `HassiumConfigService.isSectionDeltaEnabled()` 为真时启用（默认开）；关闭则过期与未命中一样全量。
+`chunk.sectionDeltaEnabled`（默认开）。影子端 MISMATCH 且光干净时上报本地 section hash + 每非空段 48×u32 平面综合征；服务端按需比对（不常驻缓存）：
 
-影子端 hash 比对 MISMATCH（内存/磁盘有旧数据且光干净）→ `requestSectionDeltas` 上报本地 section hashes **+ 每非空段 48×u32 平面综合征** → `ServerChunkPushManager.handleSectionHashRequest`（视距+1 余量；服务端按需 `capture`，**不常驻缓存**）→ `SectionDeltaPlanner` → **始终**回 `SectionDeltaS2CPacket`（`entries` + `skipped`）：
+- 稀疏变更（矿道、树、岩浆柱等）→ `BLOCKS` 方块列表
+- 过多（AABB ≥400 格，如炸坑）或整段 paletted 更小（铺平/灌水）→ `FULL` 整段
+- 变更段占非空段 ≥75% → 整块全量
+- apply 后校验 `expectedChunkHash`；失败/超时/`skipped` → 全量
 
-1. 柱级：`changed * 100 / nonEmpty >= 75` → 整块进 `skipped`（全量回退）。常量只在 `SectionDeltaPlanner.FALLBACK_THRESHOLD_PCT`。
-2. 段级：hash 相等跳过；无平面 / 空↔非空 / 脏轴笛卡尔积 `n==0`（碰撞）→ `kind=FULL`（现有 `section.write` 字节）；`n >= 400`（如 9×9×9 炸坑 AABB=729）→ FULL；否则试编码方块列表 vs 整段 paletted，谁小发谁（铺平/灌水低熵走 paletted）。
-3. `kind=BLOCKS`：VarInt 个数 + 原版同构 `varLong(stateId<<12 | localPos)`，单段最多 4096。影子端 `section.setBlockState` 就地写，**禁止** `level.setBlock`。
-4. `DeltaEntry.expectedChunkHash` = 服务端 `combineSectionHashes`；apply 后对不上走 skipped 同款全量回退。
-5. BE 全量快照 + heightmaps 直写 + 变更 section 清光：与改前相同。
-6. 影子端 memo（`SectionDeltaSnapshots`）：`injectChunk` / `injectLoadedChunk` 成功后 `put(capture)`；`requestSectionDeltas` 锁内 `getOrCapture`；活体 `invalidateChunkContent` 失效；`applySectionDelta` 成功后 recapture。BE-only 不碰综合征。断连与 `ShadowStorageHashes.clear` 一并 `Snapshots.clear`。
-7. `skipped` / apply 失败 / 请求超时 / 发送失败 → `requestFullChunksPublic`（保底）。
-
-线格式（2.0.0 起不兼容历史）：
-
-```
-SectionHashRequestC2S  Entry:
-  chunkX, chunkZ, sectionCount,
-  per section: hash:u64  +  (hash≠0 ? 48×u32 planes : 无)
-
-SectionDeltaS2C  DeltaEntry:
-  chunkX, chunkZ, expectedChunkHash:u64,
-  sections: (index, kind:u8, dataLen, data)*
-    kind 0 FULL  = section.write 字节
-    kind 1 BLOCKS = VarInt count + varLong(stateId<<12 | localPos)*
-  heightmaps, blockEntities
-  skipped: (chunkX, chunkZ)*
-```
+影子端注入时把综合征放内存，活体方块更新失效后下次现算。BE / heightmap 仍随包；变更段清光重算。2.0.0 线格式不兼容历史。
 
 ### 11.6 关键组件
 
 | 组件 | 职责 |
 |------|------|
 | `ShadowLightCompute` | hash 比对、delta 候选判定、请求/超时/回退、consumeLoop 应用与回传 |
-| `ShadowSeedServer.applySectionDelta` | FULL=`section.read` / BLOCKS=`section.setBlockState`；expectedChunkHash 校验；清光 + recapture memo |
-| `SectionDeltaPlanner` / `SectionPlaneSyndrome` | 75% 柱回退、脏轴 AABB、BLOCKS vs FULL 试编码 |
-| `SectionDeltaSnapshots` | 影子端平面综合征内存 memo（服务端不缓存） |
-| `SectionDeltaS2CPacket` | 线格式：kind FULL/BLOCKS + expectedChunkHash + heightmaps + BE |
+| `ShadowSeedServer.applySectionDelta` | FULL 整段覆盖 / BLOCKS 逐格写入；hash 校验 + 清光 |
+| `SectionDeltaPlanner` | 柱级 75% 整块回退；段级 BLOCKS vs FULL |
 | `DataPlaneClientBundle` | 数据面帧 `TYPE_BULK_SECTION_DELTA` 分发 → `submitDelta`（默认 dispatcher） |
 
 ## 12. 缓存导出（`/hassiumc export`）

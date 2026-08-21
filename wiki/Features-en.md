@@ -81,14 +81,14 @@ Hassium is a single client + server suite that optimizes Minecraft from six dire
 ### Section delta
 
 - **Goal**: Avoid full re-fetch when the cache is stale (MISMATCH)
-- **How**: The client sends `SectionHashRequest` against its sectionHashes; the server responds with `SectionDeltaS2C` listing only the changed sections; the client merges into its cache NBT, then writes to disk; on failure or timeout it falls back to a full fetch
+- **How**: The client reports section hashes plus plane syndromes. The server sends changed blocks (`BLOCKS`) when sparse, a full section (`FULL`) when too many or paletted is smaller, and a full chunk if ≥75% of sections changed. Failure/timeout falls back to a full fetch
 - **Config**: `chunk.sectionDeltaEnabled` (default `true`; also requires `chunk.enabled`)
 
 | Comparison | Section delta off | On (default) |
 | --- | --- | --- |
 | HIT | Cache queue | Cache queue |
 | MISS | Full fetch | Full fetch |
-| MISMATCH | Full fetch | `SectionHashRequest` → NBT merge (falls back to full on failure) |
+| MISMATCH | Full fetch | Changed blocks / full section (falls back to full chunk on failure) |
 
 ---
 

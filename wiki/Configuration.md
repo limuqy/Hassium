@@ -33,7 +33,7 @@ Hassium 启动时在 `config/hassium/` 自动生成两份 TOML：
 | --- | --- | --- |
 | `chunk.enabled` | `true` | 客户端区块缓存总开关 |
 | `chunk.maxSizeMb` | `4096` | 缓存容量上限（MB）；超过后按热度清理最久未用的区块 |
-| `chunk.sectionDeltaEnabled` | `true` | 缓存过期时只补变更分段；关闭则过期走全量重传 |
+| `chunk.sectionDeltaEnabled` | `true` | 缓存过期时只补变更方块（过多则整段/整块）；关闭则过期走全量 |
 
 ### 渲染与生成（`chunk.*`，区块核心）
 

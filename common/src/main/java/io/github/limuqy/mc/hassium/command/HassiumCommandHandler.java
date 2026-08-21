@@ -107,15 +107,15 @@ public class HassiumCommandHandler {
     private static String formatChunkCacheLine(long fullHitCount, long fullHitBytes,
                                               long partialCount, long partialBytes,
                                               long shardBytes, long appliedBytes) {
-        // 缓存命中 = (全命中 + 部分命中 - 分片) / 应用，按内容等价值字节。
+        // 缓存命中 = (全命中 + 部分命中 - 增量) / 应用，按内容等价值字节。
         // 全命中 = 磁盘/内存 contentHash 整柱复用；部分命中 = 缓存柱作基线的分段增量；
-        // 分片 = FULL 整段 / BLOCKS 按格折算。SeedGen 本地生成不算缓存，只在「区块加载 / 本地」。
+        // 增量 = FULL 整段 / BLOCKS 按格折算。SeedGen 本地生成不算缓存，只在「区块加载 / 本地」。
         long hitBytes = Math.max(0L, fullHitBytes + partialBytes - shardBytes);
         double rate = appliedBytes <= 0L
                 ? 0.0
                 : (double) Math.min(hitBytes, appliedBytes) / appliedBytes * 100.0;
         return String.format(
-                "§e区块缓存：§r%s（全命中 %d/%s，部分命中 %d/%s，分片 %s，应用 %s）",
+                "§e区块缓存：§r%s（全命中 %d/%s，部分命中 %d/%s，增量 %s，应用 %s）",
                 MetricsTextFormatter.formatPercent(rate),
                 fullHitCount, MetricsTextFormatter.formatBytes(fullHitBytes),
                 partialCount, MetricsTextFormatter.formatBytes(partialBytes),

@@ -25,7 +25,7 @@
 | | Gateway migration | The client connects through an in-process gateway (Network Core) to the master core; on master disconnect/stall the L1 migration engine resumes seamlessly — the cache is not re-downloaded and the disconnect screen stays hidden |
 | | L1 load balancing | Multiple UDP lines share chunk downstream by weight; the UDP data plane is the gateway↔master bulk carrier (off by default) |
 | **Chunk cache** | Chunk cache | Loaded chunks are kept locally; revisiting an area hits via contentHash comparison instead of full downloads |
-| | Section delta | On cache mismatch (MISMATCH), fetch only changed sections (`sectionDelta`) and merge locally instead of the whole chunk |
+| | Section delta | On cache mismatch, send changed blocks; too many → full section, then full chunk |
 | | Local generation (SeedGen) | For pristine (never-generated) chunks the server sends a tiny seed + position reference instead of chunk data; the client generates locally with the same seed — zero transfer. Falls back to full transfer on failure/timeout |
 | | **Beyond-view render** | When client RD exceeds server view distance (multiplayer), fill the outer ring from local cache (render-only; no out-of-range server requests); incompatible with Bobby |
 | | World export | `/hassiumc export` copies the shadow-side world directory wholesale as an export (keeps the type 126 format) |

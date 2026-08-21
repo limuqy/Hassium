@@ -21,7 +21,7 @@ Hassium 是 Minecraft 多加载器模组（Fabric / Forge / NeoForge），围绕
 |------|----------|--------------|
 | 进服/探图，区块一直转圈 | 服务端推全量区块包，带宽慢、主线程卡 | **网络压缩 + 平滑推送**：ZSTD 替代 Zlib，每 tick 限速推送、encode/压缩/发送全部后台化；进服首波不再卡主线程 |
 | 重连服务器 / 再次进入同一区域 | 同一片区域又要重新下载一遍 | **影子端世界保存**：进服区块统一由进程内影子服务端（完整 MinecraftServer）算光并落盘原版存档（`hassium_cache/<serverId>/world`），断连保存、重连复用 |
-| 缓存过期（服务器里东西变了） | 整块重传 | **分段增量**：按 section 比对，只补变更的分段 |
+| 缓存过期（服务器里东西变了） | 整块重传 | **分段增量**：稀疏只补变更方块，过多则整段/整块 |
 | 服务器视距小，远处白茫茫 | 客户端想渲染更远，但服务端不推 | **超视渲染**：用本地缓存回填视距外环带（仅渲染，不向服索要） |
 | 光照数据占传输大头 | 每个区块包都带一整柱光照 | **光照剥离 + Hassium 引擎**：服务端剥光（握手协商），由客户端进程内影子服务端统一计算光照并打包官方区块包，经官方通道回传落地 |
 | 大片未探索地形（pristine 区块） | 服务端也要逐块生成并传输 | **本地生成（SeedGen）**：服务端发坐标引用，客户端用同 seed 本地生成。**开启会泄露服务端种子** |
@@ -192,7 +192,7 @@ Sector 2+:    [length(4)][type=126][magic 0x48][hash(8)][ZSTD 压缩数据]
 | `storage.enabled` | **false** | 默认关；开启后存档 ZSTD（type 126）；**启用前请备份世界**。仅专用服务器写（单人/局域网保持原版格式，读兼容） |
 | `storage.zstdLevel` | 3 | 存储压缩等级 |
 | `chunk.enabled` | true | 客户端区块缓存总开关 |
-| `chunk.sectionDeltaEnabled` | true | 缓存过期时分段增量（关则过期走全量） |
+| `chunk.sectionDeltaEnabled` | true | 缓存过期时只补变更方块（过多则整段/整块） |
 | `chunk.viewDistanceExtensionEnabled` | true | 超视渲染（依赖 chunk.enabled；与 Bobby 互斥） |
 | `chunk.maxRenderDistance` | 16 | 运行时有效 RD / 超视渲染环带上限（2–64） |
 | `chunk.ovdUnloadDelaySecs` | 5 | 超视渲染离开环带后延迟卸载秒数（0=同步卸载） |
@@ -251,13 +251,13 @@ ERROR / WARN 始终输出。
 | `/hassium stats` | 服务端 | 压缩/发送统计（需 OP 2） |
 | `/hassium stats reset` / `toggle` | 服务端 | 重置计数器 / 切换指标收集 |
 | `/hassium metrics on\|off` | 服务端 | 运行时开关指标 |
-| `/hassiumc stats` | 客户端 | 接收/缓存命中（全命中+部分命中−分片 / 应用，按字节；本地生成不算缓存）/超视渲染/光照/区块加载（新增/过期/**本地生成**）/流量节省（实际/无MOD应收）统计 |
+| `/hassiumc stats` | 客户端 | 接收/缓存命中（全命中+部分命中−增量 / 应用，按字节；本地生成不算缓存）/超视渲染/光照/区块加载（新增/过期/**本地生成**）/流量节省（实际/无MOD应收）统计 |
 | `/hassiumc export [<服务器IP>] [seed]` | 客户端 | 拷贝影子端 `world` 目录。`level.dat` 已由影子端原版写出；亦可手工把 `hassium_cache/<id>/world` 复制到 `saves/` |
 | `/hassium migrate` / `list` / `status` / `<host:port>` | 客户端（仅开发环境） | L1 迁移演练入口（`NetworkCore.migrateTo`；正式包不注册） |
 
 实现：`metrics/NetworkStats`（`AtomicLong`，可关闭）。指标关闭时相关 stats 命令不可用。导出走 `CacheWorldExporter`（异步，见 `chunk-cache.md` §12）。
 
-客户端 stats 的「区块加载」行口径：`新增` = 无本地缓存的全量请求；`过期` = 缓存过期/技术性回退；`本地` = SeedGen 影子服务端本地生成（等价一次全量请求）。区块缓存命中率 = `(全命中 + 部分命中 − 分片) / 应用`（内容等价值字节；部分命中 = 缓存柱作基线的分段增量；分片 = `FULL` 整段 / `BLOCKS` 按格折算；不含 SeedGen；OVD 不计入）；流量节省 = 实际推送 / 无MOD应收（数据包+本地重算+客户端缓存+光照，不含 OVD），统一按原版 Zlib 等价 wire 计。
+客户端 stats 的「区块加载」行口径：`新增` = 无本地缓存的全量请求；`过期` = 缓存过期/技术性回退；`本地` = SeedGen 影子服务端本地生成（等价一次全量请求）。区块缓存命中率 = `(全命中 + 部分命中 − 增量) / 应用`（内容等价值字节；部分命中 = 缓存柱作基线的分段增量；增量 = `FULL` 整段 / `BLOCKS` 按格折算；不含 SeedGen；OVD 不计入）；流量节省 = 实际推送 / 无MOD应收（数据包+本地重算+客户端缓存+光照，不含 OVD），统一按原版 Zlib 等价 wire 计。
 
 ## 12. 卖点特性（已实现摘要）
 
@@ -285,7 +285,7 @@ ERROR / WARN 始终输出。
 |------|-------------|------|------|
 | **影子端世界保存** | `chunk.enabled`（默认 true） | 进服区块统一由进程内影子服务端（完整 MinecraftServer）落盘原版存档（`hassium_cache/<serverId>/world`，type 126 + chunkHash），断连保存、重连复用；旧 HBT1 客户端磁盘缓存已裁剪 | [`chunk-cache.md`](chunk-cache.md) |
 | **容量/热度淘汰** | `chunk.maxSizeMb`、`chunk.hotScoreThreshold`、`chunk.recencyWeight`、`chunk.frequencyWeight`、`chunk.cleanupIntervalTicks`、`chunk.targetSizeMb`、`chunk.minCleanupBatchSize` | 影子端存档超限后按热度淘汰冷区块（heat.idx 跨会话累计；`chunkMap.write(pos,null)` 逐柱删除；仅删非本会话使用中的磁盘残留） | [`chunk-cache.md`](chunk-cache.md) |
-| **分段增量** | `chunk.sectionDeltaEnabled`（默认 true） | MISMATCH 时按 section 比对，仅补变更分段 + BE 覆盖；失败/超时回退全量 | [`chunk-cache.md`](chunk-cache.md) §11.5 |
+| **分段增量** | `chunk.sectionDeltaEnabled`（默认 true） | MISMATCH 时按平面综合征补变更方块，过多则整段，≥75% 则整块；失败回退全量 | [`chunk-cache.md`](chunk-cache.md) §11.5 |
 | **超视渲染** | `chunk.viewDistanceExtensionEnabled`、`chunk.maxRenderDistance`、`chunk.ovdUnloadDelaySecs` | 多人、clientVD>serverVD 时本地缓存回填环带；Forget 原地 renderOnly；不向服索要视距外区块/BE | [`chunk-cache.md`](chunk-cache.md) §10 |
 | **OVD 本地生成** | `chunk.ovdLocalGeneration`（默认 false） | 超视渲染区域缓存 miss 时用 Hassium 引擎按服务端世界种子本地生成区块（与服务器地形一致），renderOnly 落地并存入本地缓存；无种子（服务端未装 MOD）时自动关闭生成 | [`chunk-cache.md`](chunk-cache.md) §10 |
 | **世界导出** | `/hassiumc export [<服务器IP>] [seed]` | 影子端世界目录整体拷贝 → `hassium_exports/<cacheId>`（保留 type 126 + chunkHash；原版翻译后续提供） | [`chunk-cache.md`](chunk-cache.md) §12 |

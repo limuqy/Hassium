@@ -790,9 +790,9 @@ public final class ClientSmokeTest {
      * <p>
      * 数值口径（与 {@link HassiumCommandHandler} 显示完全同源）：
      * <ol>
-     *   <li>缓存命中 = (全命中 + 部分命中 - 分片) / 应用，按内容等价值字节；
+     *   <li>缓存命中 = (全命中 + 部分命中 - 增量) / 应用，按内容等价值字节；
      *       全命中 = 本地缓存整柱复用；部分命中 = 缓存柱作基线的分段增量；
-     *       分片 = FULL 整段 / BLOCKS 按格折算。SeedGen 本地生成不算缓存命中。</li>
+     *       增量 = FULL 整段 / BLOCKS 按格折算。SeedGen 本地生成不算缓存命中。</li>
      *   <li>流量节省 = 服务端实际推送 / 无MOD应收（数据包 + 本地重算 + 客户端缓存 + 光照）；
      *       行内第一段百分比为已节省（= 100% - 实际/无MOD）。</li>
      *   <li>光照缓存命中率 = (直连命中 + 影子复用) / (命中 + 本地重算)；影子复用并入
@@ -909,9 +909,9 @@ public final class ClientSmokeTest {
         return ok;
     }
 
-    /** 区块缓存行：百分比（全命中 N/B，部分命中 N/B，分片 B，应用 B）。 */
+    /** 区块缓存行：百分比（全命中 N/B，部分命中 N/B，增量 B，应用 B）。 */
     private static final Pattern CACHE_STATS_PATTERN = Pattern.compile(
-            "区块缓存：([0-9.]+)%（全命中 (\\d+)/[^，]*，部分命中 (\\d+)/[^，]*，分片 [^，]*，应用 [^）]*）");
+            "区块缓存：([0-9.]+)%（全命中 (\\d+)/[^，]*，部分命中 (\\d+)/[^，]*，增量 [^，]*，应用 [^）]*）");
     /** 流量节省行：第一段 = 已节省（= 100% - 实际/无MOD）。 */
     private static final Pattern SAVINGS_STATS_PATTERN = Pattern.compile(
             "流量节省：([0-9.]+)%（当前 [^，]*，无MOD [^）]*）");

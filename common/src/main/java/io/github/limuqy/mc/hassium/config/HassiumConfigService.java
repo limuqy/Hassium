@@ -245,7 +245,7 @@ public class HassiumConfigService {
         return config.chunk().hassiumEngineEnabled();
     }
 
-    /** 分段增量：缓存过期（MISMATCH）时按 section 比对只补变更分段（影子端消费）。 */
+    /** 分段增量：MISMATCH 时补变更方块，过多则整段/整块（影子端消费）。 */
     public boolean isSectionDeltaEnabled() {
         return config.chunk().sectionDeltaEnabled();
     }

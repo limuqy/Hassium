@@ -33,7 +33,7 @@ In-game config screen entry points:
 | --- | --- | --- |
 | `chunk.enabled` | `true` | Master switch for the client chunk cache |
 | `chunk.maxSizeMb` | `4096` | Disk cap for the local cache (MB); overflow evicts least-recently-used chunks by heat |
-| `chunk.sectionDeltaEnabled` | `true` | On cache mismatch, fetch only changed sections; off = full re-fetch |
+| `chunk.sectionDeltaEnabled` | `true` | On cache mismatch, send changed blocks (full section/chunk if too many); off = full re-fetch |
 
 ### Rendering & Generation (`chunk.*`, Chunk Core)
 

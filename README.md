@@ -30,7 +30,7 @@
 | | 无感迁移 / L1 负载均衡 | 主控入站静默超时（默认 `master.migrationSilentTimeoutMs`=10000）后由 L1 迁移引擎切换网关、缓存暖续，无感迁移；多线路按 L1 负载均衡 |
 | | UDP 数据面 | 网关↔主控通道的 UDP/KCP bulk 载体（`dataplane.enabled`，默认关；控制面留原版 TCP） |
 | **区块缓存** | 影子端世界保存 | 进服区块统一由影子端（完整 MinecraftServer）落盘原版存档（`hassium_cache/<serverId>/world`），断连保存、重连复用 |
-| | 分段增量 | 缓存过期（MISMATCH）时仅拉取变更分段（`sectionDelta`）本地合并，避免整块重传 |
+| | 分段增量 | 缓存过期时只补变更方块；过多则整段，再多则整块 |
 | | 本地生成（SeedGen） | 服务端对 pristine 区块发坐标引用，客户端用同种子本地生成；**开启会泄露服务端世界种子**；失败/超时自动回退全量 |
 | | **超视渲染** | 多人服客户端 RD 大于服务端视距时，用本地缓存回填视距外地形（仅渲染、不向服索要视距外区块）；与 Bobby 互斥 |
 | | 世界导出 | `/hassiumc export` 将影子端世界目录整体拷贝为导出存档（`hassium_exports/<cacheId>`；保留 type 126 + chunkHash，原版翻译后续提供） |
@@ -90,7 +90,7 @@
 | --- | --- | --- |
 | `storage.enabled` | `false` | 世界存档 ZSTD（默认关；仅专用服务器，请备份） |
 | `chunk.enabled` | `true` | 影子端世界保存（进服区块统一落盘 `hassium_cache/<serverId>/world`） |
-| `chunk.sectionDeltaEnabled` | `true` | 缓存过期时分段增量 |
+| `chunk.sectionDeltaEnabled` | `true` | 缓存过期时只补变更方块（过多则整段/整块） |
 | `chunk.viewDistanceExtensionEnabled` | `true` | 超视渲染（多人；与 Bobby 互斥） |
 | `chunk.maxRenderDistance` | `16` | 超视渲染 / 有效 RD 上限（2–64） |
 | `chunk.ovdUnloadDelaySecs` | `5` | 离开超视渲染环带后延迟卸载（秒；0=同步） |
