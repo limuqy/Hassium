@@ -60,6 +60,8 @@ def loadVersionProperties() {
     gradle.ext.mcVers = mcVers
     gradle.ext.mcIndex = mcIndex
 }
+
+def activeMcVer = hasProperty("mc_ver") ? mc_ver : ""
 loadVersionProperties()
 
 def loaders = ((String) gradle.builds_for).split(",").collect { it.trim() }
@@ -85,6 +87,13 @@ gradle.beforeProject { project ->
     } else if (project.name == 'neoforge') {
         // 1.20.1 的 NeoForge 仍沿用 Forge userdev / SRG 管线，Loom 需按 forge 平台初始化。
         project.ext.set('loom.platform', gradle.ext.minecraft_version == '1.20.1' ? 'forge' : 'neoforge')
+    }
+    // 子工程构建产物按版本分目录（build/<mc_ver 下划线化>）：切 -Pmc_ver 时各版本
+    // classes/jar/任务状态互不覆盖，切回旧版本直接 up-to-date，无需 clean 防宏污染。
+    // 根项目（jdt-cp dump、smoke-test 日志、build.properties）保持默认 build/ 不分版本。
+    if (project.path != ':') {
+        project.layout.buildDirectory =
+                project.file("build/${activeMcVer.replace('.', '_')}")
     }
 }
 

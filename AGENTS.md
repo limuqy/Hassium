@@ -22,6 +22,7 @@ Minecraft 1.20.1 / 1.21.1–1.21.11 多加载器模组（Fabric / Forge / NeoFor
 ```
 
 PowerShell：始终写 `"-Pmc_ver=1.20.1"`，否则 `1.20.1` 会被截成 `1`。
+子工程构建产物按版本分目录（`<module>/build/<mc_ver 下划线化>/`，如 `common/build/1_21_11/`）：切 `-Pmc_ver` 互不覆盖、切回即 up-to-date，无需 clean 防宏污染；根项目 `build/`（jdt-cp、smoke-test 日志）不分版本。
 
 ## Minecraft 源码查询
 
