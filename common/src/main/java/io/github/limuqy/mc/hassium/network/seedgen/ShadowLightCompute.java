@@ -1285,7 +1285,16 @@ public final class ShadowLightCompute {
                                 hashMatches = diskHashMatches(dimension, existing, pos, remoteHash);
                             }
                         }
-                        if (!hashKnown || hashMatches) {
+                    if (!hashKnown && pendingEntry.deliveryId() > 0L) {
+                        // R2 修复：网络权威直推（deliveryId>0）且 hash 未知时，禁止用影子
+                        // 内存陈旧副本顶替（park-for-reuse 内容可能早于服务端离线窗口的
+                        // 方块变化，顶替会让重连玩家永远看不到变化）——落入下方
+                        // injectChunk 接受服务端权威数据并走既有光屏障。
+                        DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
+                                "[SHADOW_CHUNK] Server push w/o hash ({}, {}): accepting fresh data over parked copy",
+                                pos.x, pos.z);
+                    }
+                    if ((!hashKnown && pendingEntry.deliveryId() <= 0L) || hashMatches) {
                             boolean needRelight = !server.isChunkLightComplete(pos, existing);
                             if (!pending.remove(e.getKey(), pendingEntry)) {
                                 continue;

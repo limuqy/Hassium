@@ -142,6 +142,10 @@ public final class ClientChunkPipeline {
         try {
             io.github.limuqy.mc.hassium.network.seedgen.ShadowServerRegistry.getInstance()
                     .cancelSpeculativeWatchdogPublic();
+            // 真实 seed 到达：若影子是投机创建的 seed=0 装配 → 关停重建（复用分支
+            // 永不重进 seed 等待，必须在此主动判定）
+            io.github.limuqy.mc.hassium.network.seedgen.ShadowServerRegistry.getInstance()
+                    .onServerSeedArrived(seed);
         } catch (Throwable ignored) {
         }
         if (enabled) {

@@ -1537,6 +1537,28 @@ public class NeoForgeNetworkManager implements NetworkManager {
                 (payload, context) -> handlePreHandshake(payload, context)
         );
 
+        // gateway_info S2C：vanilla 通道直发（ServerGatewayInfoSender，tick 内 drainPending）。
+        // NeoForge NetworkRegistry.checkPacket 对未注册 payload 直接抛
+        // UnsupportedOperationException 炸 tick 循环（fabric 无此校验，故仅 neo 崩）。
+        // 与 fabric FabricPayloadRegistry 同模式：RawCustomPayload 字节流 codec 注册；
+        // 客户端消费走同一 common 链（GatewayInfoCodec.decode → NetworkCore.onGatewayInfo）。
+        registrar.playToClient(
+                io.github.limuqy.mc.hassium.compat.PacketPayloadCompat.payloadType(
+                        ResourceLocationCompat.create(io.github.limuqy.mc.hassium.network.HassiumPacketIds.GATEWAY_INFO_S2C)),
+                io.github.limuqy.mc.hassium.compat.PacketPayloadCompat.rawPayloadCodec(
+                        ResourceLocationCompat.create(io.github.limuqy.mc.hassium.network.HassiumPacketIds.GATEWAY_INFO_S2C)),
+                (payload, context) -> context.enqueueWork(() -> {
+                    try {
+                        GatewayInfoCodec.GatewayInfo info =
+                                GatewayInfoCodec.decode(payload.data());
+                        io.github.limuqy.mc.hassium.network.core.NetworkCore.getInstance()
+                                .onGatewayInfo(info);
+                    } catch (Exception e) {
+                        LOGGER.error("[CLIENT] Failed to handle gateway_info", e);
+                    }
+                })
+        );
+
         // 注册握手请求 (C2S)
         registrar.playToServer(
                 HandshakePayload.TYPE,

@@ -30,5 +30,7 @@ if ($Mode -eq "off") {
     Write-Host "globalCompressionLevel -> 6"
 }
 
-Set-Content -Path $cfg -Value $lines -Encoding UTF8
+# T8：要求 PowerShell 7 运行——toml 写出统一 -Encoding utf8NoBOM（Windows PowerShell 5.1 的
+# -Encoding UTF8 带 BOM，night-config 对 BOM 敏感 ParsingException → 配置整份回落默认）。
+Set-Content -Path $cfg -Value $lines -Encoding utf8NoBOM
 Get-Content $cfg | Select-String 'globalPacketCompression|globalCompressionLevel' | Out-Host

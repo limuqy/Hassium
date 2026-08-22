@@ -6,6 +6,11 @@
 #   .\scripts\runtime-smoke-test-batch.ps1 -Phase R                              # 回归轮
 #   .\scripts\runtime-smoke-test-batch.ps1 -Phase I -Loaders fabric,forge,neoforge  # 含 Forge（仅 1.20.1/1.21.1+ 部分版本有 builds_for=forge，其它版本自动 SKIP）
 # 每个版本×加载器 1 个会话（客户端自动两轮：VD=20 + VD=10）
+# T8 场景加载: -Scenarios classic,seedgen,dimension（默认仅 classic）。classic 走全矩阵
+# （-Versions × -Loaders）；非 classic 场景只在锚点集跑（硬编码：1.20.1 fabric+neoforge、
+# 1.21.1 neoforge、1.21.11 neoforge，再与 -Versions/-Loaders/versionProperties builds_for
+# 取交集）。非 classic 会话 sessionId 追加 _<scenario> 后缀避免 result JSON 冲突；
+# CSV 增 Scenario 列。
 # CleanWorld 策略（按 loader 独立，fabric/forge/neoforge 各有 run/server）:
 #   - 该 loader 的第一个版本：清理服务端存档
 #   - 版本变化（升或降）：清理（worldgen 跨版本可能变化——1.21.9 地形塑造重构、
@@ -17,9 +22,11 @@
 #           版本间仍串行（避免跨版本存档冲突）；全程不调 gradlew --stop（全局停 daemon 会误杀
 #           并行会话/其他项目的构建；runServer/runClient 均为 --no-daemon，不依赖 daemon）
 param(
-    [Parameter(Mandatory=$true)][ValidateSet("I","R","UdpFailover")][string]$Phase,
+    [Parameter(Mandatory=$true)][ValidateSet("I","R")][string]$Phase,
     [string[]]$Versions,
     [ValidateSet("fabric","forge","neoforge")][string[]]$Loaders = @("fabric","neoforge"),
+    # T8 场景列表（默认仅 classic，保持既有行为）：classic=全矩阵；非 classic 只跑锚点集
+    [string[]]$Scenarios = @("classic"),
     [int]$MaxRetries = 3,
     [switch]$Parallel,
     [int]$BasePort = 25565,
@@ -55,6 +62,46 @@ if ($Versions) {
     $targetVersions = $allVersions
 }
 
+# T8 场景锚点集（硬编码）：非 classic 场景只在锚点 (Ver, Loader) 组合上跑，
+# 再与 -Versions / -Loaders / versionProperties builds_for 取交集。
+$smokeScenarioAnchors = @(
+    @{ Ver = "1.20.1";  Loader = "fabric" },
+    @{ Ver = "1.20.1";  Loader = "neoforge" },
+    @{ Ver = "1.21.1";  Loader = "neoforge" },
+    @{ Ver = "1.21.11"; Loader = "neoforge" }
+)
+
+# 预展开场景计划：classic=全矩阵 targetVersions；非 classic=锚点集过滤后的版本列表
+# （去重升序，与既有版本循环「低到高」语义一致）。主版本循环按此计划迭代。
+$scenarioPlan = @()
+foreach ($sc in $Scenarios) {
+    if ($sc -eq "classic") {
+        foreach ($v in $targetVersions) {
+            $scenarioPlan += [PSCustomObject]@{ Scenario = $sc; Ver = $v }
+        }
+    } else {
+        $anchorVers = @(
+            $smokeScenarioAnchors |
+                Where-Object { $Loaders -contains $_.Loader } |
+                ForEach-Object { $_.Ver } |
+                Select-Object -Unique
+        )
+        $versForSc = if ($Versions) {
+            @($anchorVers | Where-Object { $targetVersions -contains $_ })
+        } else {
+            $anchorVers
+        }
+        if ($versForSc.Count -eq 0) {
+            Write-Host "[scenario:$sc] 锚点集与 -Versions/-Loaders 无交集，跳过该场景" -ForegroundColor Yellow
+            continue
+        }
+        Write-Host "[scenario:$sc] 锚点集版本: $($versForSc -join ', ')"
+        foreach ($v in $versForSc) {
+            $scenarioPlan += [PSCustomObject]@{ Scenario = $sc; Ver = $v }
+        }
+    }
+}
+
 # 版本比较函数：返回 true 表示 currentVer < prevVer（退版本）
 function IsVersionDowngrade($current, $previous) {
     $cur = $current -split '\.' | ForEach-Object { [int]$_ }
@@ -77,6 +124,20 @@ function IsSameVersion($current, $previous) {
         if ($c -ne $p) { return $false }
     }
     return $true
+}
+
+# T2 PROBE JSON v1：把单会话 result JSON 的 Probe.RoundN 摘要成一行短串（joined/gateway/counters），
+# 供 CSV 增列观测；无 probe（旧客户端或解析失败）时返回空串。
+function Format-SmokeProbeRound {
+    param($Round)
+    if (-not $Round) { return "" }
+    $parts = @()
+    if ($null -ne $Round.joined) { $parts += "joined=$($Round.joined)" }
+    if ($Round.gateway) { $parts += "gw=$($Round.gateway.state)/c2s=$($Round.gateway.c2s)" }
+    if ($Round.counters) {
+        foreach ($p in $Round.counters.PSObject.Properties) { $parts += "$($p.Name)=$($p.Value)" }
+    }
+    return ($parts -join ";")
 }
 
 # 按 loader 决定是否清理服务端存档（fabric/neoforge 各有独立 run/server）
@@ -108,6 +169,7 @@ function Invoke-Session {
         [string]$Ver,
         [string]$Loader,
         [string]$Phase,
+        [string]$Scenario = "classic",
         [int]$ServerPort,
         [int]$MaxRetries,
         [switch]$CleanWorld,
@@ -116,7 +178,9 @@ function Invoke-Session {
         [int]$DelayMs = 10000,
         [int]$ReconnectDelayMs = 3000
     )
-    $sessionId = "${Ver}_${Loader}_${Phase}"
+    # 非 classic 场景 sessionId 追加 _<scenario> 后缀，避免与 classic 会话 result JSON 冲突
+    $sfx = if ($Scenario -and $Scenario -ne "classic") { "_${Scenario}" } else { "" }
+    $sessionId = "${Ver}_${Loader}_${Phase}${sfx}"
     $sessionResult = $null
     $attempt = 0
     $lastReason = ""
@@ -136,22 +200,24 @@ function Invoke-Session {
             $pregenSrc = Join-Path $projectRoot "build\smoke-test\pregen-world\${Loader}-${Ver}\world"
             if (-not (Test-Path $pregenSrc)) {
                 Write-Host "[$sessionId] 预生成存档缺失，先执行预生成 (${Loader}/${Ver})..."
-                & $scriptPath -Ver $Ver -Loader $Loader -Phase $Phase `
-                    -SessionId "${sessionId}_pregen" -PregenOnly `
-                    -ServerPort $ServerPort -ServerReadyTimeoutSec $ServerReadyTimeoutSec
+                $pregenArgs = @("-Ver", $Ver, "-Loader", $Loader, "-Phase", $Phase,
+                    "-SessionId", "${sessionId}_pregen", "-PregenOnly",
+                    "-ServerPort", $ServerPort, "-ServerReadyTimeoutSec", $ServerReadyTimeoutSec)
+                if ($Scenario -ne "classic") { $pregenArgs += @("-Scenario", $Scenario) }
+                & $scriptPath @pregenArgs
                 if ($LASTEXITCODE -ne 0) {
                     Write-Host "[$sessionId] 预生成失败，降级为正常 worldgen 冒烟" -ForegroundColor Yellow
                 }
             }
         }
-
-        $result = & $scriptPath `
-            -Ver $Ver -Loader $Loader -Phase $Phase `
-            -SessionId $sessionId -CleanWorld:$doClean `
-            -ServerPort $ServerPort `
-            -ServerReadyTimeoutSec $ServerReadyTimeoutSec `
-            -ClientTimeoutSec $ClientTimeoutSec `
-            -DelayMs $DelayMs -ReconnectDelayMs $ReconnectDelayMs
+        $sessionArgs = @("-Ver", $Ver, "-Loader", $Loader, "-Phase", $Phase,
+            "-SessionId", $sessionId, "-CleanWorld:$doClean",
+            "-ServerPort", $ServerPort,
+            "-ServerReadyTimeoutSec", $ServerReadyTimeoutSec,
+            "-ClientTimeoutSec", $ClientTimeoutSec,
+            "-DelayMs", $DelayMs, "-ReconnectDelayMs", $ReconnectDelayMs)
+        if ($Scenario -ne "classic") { $sessionArgs += @("-Scenario", $Scenario) }
+        $result = & $scriptPath @sessionArgs
 
         if ($result -eq "PASS") {
             $sessionResult = "PASS"
@@ -181,14 +247,29 @@ function Invoke-Session {
         Write-Host $failLine -ForegroundColor Red
     }
 
+    # T2 PROBE JSON v1：读取本会话 result JSON 的 Probe 字段，摘要进 CSV 增列
+    $probeR1 = ""
+    $probeR2 = ""
+    $resultJsonPath = Join-Path $resultsDir "result_${sessionId}.json"
+    if (Test-Path $resultJsonPath) {
+        try {
+            $rj = Get-Content $resultJsonPath -Raw | ConvertFrom-Json
+            $probeR1 = Format-SmokeProbeRound -Round $rj.Probe.Round1
+            $probeR2 = Format-SmokeProbeRound -Round $rj.Probe.Round2
+        } catch { }
+    }
+
     return [PSCustomObject]@{
         Ver=$Ver
         Loader=$Loader
         Phase=$Phase
+        Scenario=$Scenario
         Result=$sessionResult
         SessionId=$sessionId
         Attempts=$attempt
         Reason=$lastReason
+        ProbeR1=$probeR1
+        ProbeR2=$probeR2
     }
 }
 
@@ -197,10 +278,14 @@ $results = @()
 $prevVerByLoader = @{}
 $gradlewPath = Join-Path $projectRoot "gradlew.bat"
 
-foreach ($ver in $targetVersions) {
+foreach ($entry in $scenarioPlan) {
+    $scenario = $entry.Scenario
+    $ver = $entry.Ver
+    # 非 classic 场景 sessionId 后缀（classic 保持原 sessionId 不变）
+    $sfx = if ($scenario -ne "classic") { "_${scenario}" } else { "" }
     Write-Host ""
     Write-Host "============================================"
-    Write-Host "=== Testing: $ver (loaders: $($Loaders -join ','))"
+    Write-Host "=== Testing: $ver (scenario: $scenario, loaders: $($Loaders -join ','))"
     Write-Host "============================================"
 
     # Forge 仅部分版本有 builds_for（1.20.1、1.21.1、1.21.3+ 等）；其它版本强行跑 :forge:runServer
@@ -224,14 +309,11 @@ foreach ($ver in $targetVersions) {
     # 端口分配仍按原 -Loaders 顺序取下标，保证 fabric=BasePort, forge/neoforge 按位偏移
     $loaderPortIndex = @{}
     for ($li = 0; $li -lt $Loaders.Count; $li++) { $loaderPortIndex[$Loaders[$li]] = $li }
-
-    # 跳过该版本不支持的 loader（典型：1.21.11 等段内无 Forge）
-    $skippedLoaders = $Loaders | Where-Object { -not ($activeLoadersForVer -contains $_) }
     foreach ($sk in $skippedLoaders) {
-        $skipSessionId = "${ver}_${sk}_${Phase}"
+        $skipSessionId = "${ver}_${sk}_${Phase}${sfx}"
         Write-Host "[$skipSessionId] 跳过：versionProperties/${ver}.properties builds_for 不含 ${sk}" -ForegroundColor DarkGray
         $results += [PSCustomObject]@{
-            Ver=$ver; Loader=$sk; Phase=$Phase; Result="SKIP"
+            Ver=$ver; Loader=$sk; Phase=$Phase; Scenario=$scenario; Result="SKIP"
             SessionId=$skipSessionId; Attempts=0; Reason="not_in_builds_for"
         }
     }
@@ -243,7 +325,8 @@ foreach ($ver in $targetVersions) {
     if ($Parallel -and $Loaders.Count -gt 1) {
         # ===== 并行模式：同版本多 loader 用 Start-Process 同时跑 =====
         # 注意：不能用 Start-Job（Job 内 Start-Process gradlew.bat 会静默失败）
-        # 改用 Start-Process powershell.exe -File 启动独立进程，各进程内 Start-Process gradlew.bat 正常工作
+        # 改用 Start-Process pwsh.exe -File 启动独立进程（PowerShell 7，utf8NoBOM 写配置必需；
+        # Windows PowerShell 5.1 无该编码值且 -Encoding UTF8 带 BOM），各进程内 Start-Process gradlew.bat 正常工作
 
         # 预编译：在并行启动前先同步编译所有 loader，避免两个并行进程同时触发编译冲突
         # 优先用 :classes 一次编译所有模块（gradle.properties 已启用 parallel，Gradle 内部并行编译）
@@ -272,9 +355,9 @@ foreach ($ver in $targetVersions) {
         if ($activeLoaders.Count -eq 0) {
             Write-Host "[$ver] 所有 loader 预编译失败，跳过该版本" -ForegroundColor Red
             foreach ($loader in $activeLoadersForVer) {
-                $skipSessionId = "${ver}_${loader}_${Phase}"
+                $skipSessionId = "${ver}_${loader}_${Phase}${sfx}"
                 $results += [PSCustomObject]@{
-                    Ver=$ver; Loader=$loader; Phase=$Phase; Result="FAIL"
+                    Ver=$ver; Loader=$loader; Phase=$Phase; Scenario=$scenario; Result="FAIL"
                     SessionId=$skipSessionId; Attempts=0; Reason="precompile_failed"
                 }
                 Add-Content -Path $failuresLog -Value "[$skipSessionId] FAILED: precompile_failed"
@@ -289,7 +372,7 @@ foreach ($ver in $targetVersions) {
             # 端口分配：按 -Loaders 原顺序取下标（确保 fabric=BasePort, forge=+1, neoforge=+2 等）
             $loaderIndex = $loaderPortIndex[$loader]
             $port = $BasePort + $loaderIndex
-            $jobName = "${ver}_${loader}_${Phase}"
+            $jobName = "${ver}_${loader}_${Phase}${sfx}"
             $cleanWorld = Get-ShouldCleanWorld -Ver $ver -Loader $loader -PrevVerByLoader $prevVerByLoader
             $cleanLabel = if ($cleanWorld) { "CleanWorld" } else { "ReuseWorld" }
             if ($cleanWorld -and $prevVerByLoader.ContainsKey($loader)) {
@@ -309,11 +392,13 @@ foreach ($ver in $targetVersions) {
             if ($cleanWorld) {
                 $procArgs += "-CleanWorld"
             }
+            if ($scenario -ne "classic") {
+                $procArgs += @("-Scenario", $scenario)
+            }
 
             $procOutLog = Join-Path $logDir "parallel_${jobName}.log"
             $procErrLog = Join-Path $logDir "parallel_${jobName}_err.log"
-
-            $proc = Start-Process -FilePath "powershell.exe" `
+            $proc = Start-Process -FilePath "pwsh.exe" `
                 -ArgumentList $procArgs `
                 -RedirectStandardOutput $procOutLog `
                 -RedirectStandardError $procErrLog `
@@ -370,18 +455,20 @@ foreach ($ver in $targetVersions) {
                         Add-Content -Path $failuresLog -Value "[$sessionId] FAILED: $lastReason"
                     }
                     $results += [PSCustomObject]@{
-                        Ver=$ver; Loader=$p.Loader; Phase=$Phase; Result=$resultObj.Result
+                        Ver=$ver; Loader=$p.Loader; Phase=$Phase; Scenario=$scenario; Result=$resultObj.Result
                         SessionId=$sessionId; Attempts=1; Reason=$lastReason
+                        ProbeR1=(Format-SmokeProbeRound -Round $resultObj.Probe.Round1)
+                        ProbeR2=(Format-SmokeProbeRound -Round $resultObj.Probe.Round2)
                     }
                 } catch {
                     $results += [PSCustomObject]@{
-                        Ver=$ver; Loader=$p.Loader; Phase=$Phase; Result="FAIL"
+                        Ver=$ver; Loader=$p.Loader; Phase=$Phase; Scenario=$scenario; Result="FAIL"
                         SessionId=$sessionId; Attempts=1; Reason="result JSON parse error"
                     }
                 }
             } else {
                 $results += [PSCustomObject]@{
-                    Ver=$ver; Loader=$p.Loader; Phase=$Phase; Result="FAIL"
+                    Ver=$ver; Loader=$p.Loader; Phase=$Phase; Scenario=$scenario; Result="FAIL"
                     SessionId=$sessionId; Attempts=0; Reason="no_result_json"
                 }
             }
@@ -400,7 +487,7 @@ foreach ($ver in $targetVersions) {
     } else {
         # ===== 串行模式（默认）=====
         foreach ($loader in $activeLoadersForVer) {
-            $sessionId = "${ver}_${loader}_${Phase}"
+            $sessionId = "${ver}_${loader}_${Phase}${sfx}"
             $cleanWorld = Get-ShouldCleanWorld -Ver $ver -Loader $loader -PrevVerByLoader $prevVerByLoader
             $cleanLabel = if ($cleanWorld) { "CleanWorld" } else { "ReuseWorld" }
             if ($cleanWorld -and $prevVerByLoader.ContainsKey($loader)) {
@@ -409,7 +496,7 @@ foreach ($ver in $targetVersions) {
             Write-Host ""
             Write-Host "--- $sessionId ($cleanLabel) ---"
 
-            $r = Invoke-Session -Ver $ver -Loader $loader -Phase $Phase -ServerPort $BasePort -MaxRetries $MaxRetries `
+            $r = Invoke-Session -Ver $ver -Loader $loader -Phase $Phase -Scenario $scenario -ServerPort $BasePort -MaxRetries $MaxRetries `
                 -CleanWorld:$cleanWorld -ServerReadyTimeoutSec $ServerReadyTimeoutSec -ClientTimeoutSec $ClientTimeoutSec
             $results += $r
             $prevVerByLoader[$loader] = $ver
@@ -435,7 +522,7 @@ foreach ($ver in $targetVersions) {
 # 最终汇总
 Write-Host ""
 Write-Host "=== BATCH SUMMARY ($Phase, parallel=$Parallel) ===" -ForegroundColor Cyan
-$results | Format-Table Ver,Loader,Result,Attempts -AutoSize
+$results | Format-Table Scenario,Ver,Loader,Result,Attempts -AutoSize
 $csvPath = Join-Path $logRoot "batch-results-${Phase}.csv"
 $results | Export-Csv $csvPath -NoTypeInformation
 Write-Host "Results saved to: $csvPath"

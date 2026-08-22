@@ -310,9 +310,12 @@ class NetworkCoreMigrationTest {
         assertTrue(core.transition(NetworkCoreState.CONNECTING, NetworkCoreState.HANDSHAKING));
         assertFalse(core.routeC2S(packet), "HANDSHAKING：原版直连兜底");
 
-        // IDLE（onError 掉线）：已消费丢弃
+        // IDLE（onError 掉线）：有 vanilla 壳连接（非 gateway-only，本测试默认）→
+        // passthrough 原版直连。竞态修复：登录初期 IDLE 窗口吞掉 chunk-batch ACK 会让
+        // PlayerChunkSender 以初始 maxUnacknowledgedBatches=1 永久冻结 → 整轮零区块。
+        // gateway-only 登录（无壳）仍丢弃——该路径依赖真实客户端登录流，单测不可达。
         assertTrue(core.transition(NetworkCoreState.HANDSHAKING, NetworkCoreState.IDLE));
-        assertTrue(core.routeC2S(packet), "IDLE：掉线期已消费丢弃");
+        assertFalse(core.routeC2S(packet), "IDLE+壳连接：passthrough 原版直连");
 
         assertEquals(before + 5, core.c2sRoutedCount(), "每次调用计数 +1（可验证）");
         core.setC2SEncoder(prevEncoder);

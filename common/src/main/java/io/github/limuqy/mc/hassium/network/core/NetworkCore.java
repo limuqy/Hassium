@@ -1071,9 +1071,15 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
                         packet.getClass().getSimpleName(), st, c2sRouted.get());
                 return false;
             }
-            // 掉线期（IDLE/MIGRATING）：已消费丢弃——MixinConnection cancel 原版发送，不排队不重放
-            LOGGER.debug("Hassium: routeC2S {} dropped (state={}, 掉线期已消费, count={})",
-                    packet.getClass().getSimpleName(), st, c2sRouted.get());
+            // 掉线期（IDLE/MIGRATING）：已消费丢弃——MixinConnection cancel 原版发送，不排队不重放。
+            // [修复] 例外：IDLE 且存在 vanilla 壳连接（非 gateway-only 登录）→ passthrough。
+            // 竞态实证：登录初期 vanilla PlayerChunkSender 抢在网关会话建立前发块，
+            // 其 chunk-batch ACK 落在本分支被吞；vanilla 初始 maxUnacknowledgedBatches=1
+            // → 发送器等 ACK 永久冻结 → 整轮零区块。壳连接的服务端监听器是真实
+            // ServerGamePacketListenerImpl，passthrough 安全（与 keep-alive 壳保活同构）。
+            if (st == NetworkCoreState.IDLE && !isGatewayOnlyLogin()) {
+                return false;
+            }
             return true;
         }
         // ACTIVE 但入站静默（心跳无回显 ≥ 静默超时，fault 判定窗口内）：链路失效即丢弃期

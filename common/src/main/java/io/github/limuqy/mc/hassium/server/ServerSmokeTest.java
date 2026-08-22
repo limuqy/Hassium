@@ -1,13 +1,13 @@
 package io.github.limuqy.mc.hassium.server;
 
 import io.github.limuqy.mc.hassium.metrics.NetworkStats;
-import io.github.limuqy.mc.hassium.network.dataplane.DataPlanePoCConfig;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.server.level.ServerPlayer;
 #if MC_VER < MC_1_21_1
 import net.minecraft.world.level.chunk.ChunkStatus;
 #else
@@ -28,11 +28,8 @@ import java.util.concurrent.CompletableFuture;
  *   <li>{@code -Dhassium.serverSmokeTest=true} 开启</li>
  *   <li>{@code -Dhassium.serverSmokeTest.vd1=20} 第一轮视距（默认 20）</li>
  *   <li>{@code -Dhassium.serverSmokeTest.vd2=10} 第二轮视距（默认 10）</li>
- *   <li>{@code -Dhassium.smokePhases=classic} 阶段选择（默认 classic）；PoC 时期的
- *       {@code dataplane} phase 已在 Task 10b §2.1 退役，多通道数据面已切换到 UDP/KCP
- *       （见 {@link io.github.limuqy.mc.hassium.network.dataplane.DataPlaneUdpServer}），
- *       用户若仍传入 {@code dataplane} / {@code all} 会被忽略并告警。后续 §2.3 将重新加入
- *       {@code udp-failover} phase。</li>
+ *   <li>{@code -Dhassium.smokePhases=classic,pregen} 阶段选择（逗号分隔；
+ *       缺省 classic：两轮连服 VD 切换。{@code pregen}：预生成大片区块后停服）</li>
  * </ul>
  * 配合 {@link io.github.limuqy.mc.hassium.client.ClientSmokeTest} 使用：
  * 客户端第一轮连服（VD=20）→ 断开 → 服务端切换 VD=8 → 客户端第二轮连服（VD=8）。
@@ -51,8 +48,10 @@ public final class ServerSmokeTest {
     private static volatile int lastPlayerCount = 0;
     /** R2 方块变化注入已执行（离线窗口一次性） */
     private static volatile boolean blockChangeInjected = false;
+    /** T7：{@code hassium.serverSmokeScenario} 非空 → 冒烟场景运行期玩家 join 即 OP。 */
+    private static volatile boolean opOnJoin = false;
 
-    /** 阶段选择：classic = 现有两轮连服（VD 切换）。Task 10b §2.1 退役 dataplane 后仅剩 classic。 */
+    /** 阶段选择：classic = 现有两轮连服（VD 切换）。 */
     private static volatile boolean runClassic = true;
     /** 阶段选择：pregen = 预生成大片区块后停服（冒烟前一次性执行，消除 worldgen 供给波动）。 */
     private static volatile boolean runPregen = false;
@@ -77,17 +76,18 @@ public final class ServerSmokeTest {
         }
         vd1 = parseInt(System.getProperty("hassium.serverSmokeTest.vd1"), 20);
         vd2 = parseInt(System.getProperty("hassium.serverSmokeTest.vd2"), 10);
-        // 阶段选择解析（逗号分隔；classic 缺省）。PoC 期间的 dataplane/all 取值已退役：
-        // Task 10b §2.1 把多通道数据面 phase 下线（数据面生产路径切到 UDP/KCP），
-        // 保留 classic 视距切换 phase。`dataplane` / `all` 中除 classic 外被忽略并告警。
+        // T7 dimension 场景：hassium.serverSmokeScenario 非空（脚本注入）→ 玩家 join 即 OP
+        //（/execute in 切维需权限等级 2，dev 服玩家默认无 OP）。
+        opOnJoin = !System.getProperty("hassium.serverSmokeScenario", "").isBlank();
         String phases = System.getProperty("hassium.smokePhases", "classic");
+        // 阶段选择解析（逗号分隔；classic 缺省）：classic = 现有两轮连服（VD 切换），
+        // pregen = 预生成大片区块后停服（冒烟前一次性执行）。
         Set<String> phaseSet = new HashSet<>();
         for (String p : phases.split(",")) {
             String t = p.trim().toLowerCase();
             if (!t.isEmpty()) phaseSet.add(t);
         }
-        boolean dataplaneRequested = phaseSet.contains("dataplane") || phaseSet.contains("all");
-        runClassic = phaseSet.contains("classic") || phaseSet.contains("all");
+        runClassic = phaseSet.contains("classic");
         runPregen = phaseSet.contains("pregen");
         if (runPregen) {
             // 预生成阶段：不起玩家相关逻辑，只加载区块
@@ -98,14 +98,6 @@ public final class ServerSmokeTest {
             pregenDoneCount = 0;
             pregenDone = false;
             LOGGER.info("{} PREGEN phase accepted: radius={} total={} chunks", MARKER, PREGEN_RADIUS, total);
-        }
-        if (dataplaneRequested && !phaseSet.contains("classic")) {
-            // 用户显式传 dataplane 但未带 classic —— 仍默认跑 classic 以保证后续能切换 VD。
-            runClassic = true;
-        }
-        if (dataplaneRequested) {
-            LOGGER.warn("{} phases={} 中 dataplane/all 已退役（Task 10b §2.1）；仅运行 classic",
-                    MARKER, phases);
         }
         enabled = true;
         armed = true;
@@ -118,12 +110,53 @@ public final class ServerSmokeTest {
     }
 
     /**
+     * T7 dimension 场景服务端配合：冒烟场景运行期把在线玩家全部提升为 OP
+     * （{@code /execute in <dim> run tp} 需权限等级 2，dev 服玩家默认无 OP）。
+     * 幂等轻量（每 tick 扫描在线列表，仅对非 OP 玩家动作）；
+     * 仅 {@code hassium.serverSmokeTest=true} 且 {@code hassium.serverSmokeScenario} 非空时生效。
+     */
+    private static void opSmokePlayers(MinecraftServer server) {
+        if (!opOnJoin) {
+            return;
+        }
+        try {
+            var playerList = server.getPlayerList();
+            if (playerList == null) {
+                return;
+            }
+            for (ServerPlayer p : playerList.getPlayers()) {
+#if MC_VER < MC_1_21_9
+                if (!playerList.isOp(p.getGameProfile())) {
+                    playerList.op(p.getGameProfile());
+                    LOGGER.info("{} op'd smoke player {} (scenario needs level 2 commands)",
+                            MARKER, p.getGameProfile().getName());
+                }
+#else
+                // 1.21.9+ PlayerList op/isOp 改收 NameAndId（GameProfile 退役）
+                if (!playerList.isOp(p.nameAndId())) {
+                    playerList.op(p.nameAndId());
+                    LOGGER.info("{} op'd smoke player {} (scenario needs level 2 commands)",
+                            MARKER, p.nameAndId().name());
+                }
+#endif
+            }
+        } catch (Throwable t) {
+            LOGGER.warn("{} op smoke players failed", MARKER, t);
+        }
+    }
+
+    /**
      * 在服务端 tick 中驱动：
      * 1. 第一次检测到 PlayerList 不为 null 时设置初始 VD=vd1
      * 2. 检测玩家数从 >0 变为 0 时切换视距为 vd2
      */
     public static void onServerTick(MinecraftServer server) {
-        if (!enabled || !armed || server == null) {
+        if (!enabled || server == null) {
+            return;
+        }
+        // T7：OP 提升只依赖 enabled（hassium.serverSmokeTest=true），不随阶段 armed 关闭失效
+        opSmokePlayers(server);
+        if (!armed) {
             return;
         }
 

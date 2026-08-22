@@ -53,15 +53,20 @@ public final class NeoForgeConfigBackend implements IConfigBackend {
 #if MC_VER < MC_1_21_1
     private static SpecData build(ConfigScope scope) {
         ForgeConfigSpec.Builder builder = new ForgeConfigSpec.Builder();
+        Map<String, ForgeConfigSpec.ConfigValue<?>> values = new HashMap<>();
 #else
     private static SpecData build(ConfigScope scope) {
         ModConfigSpec.Builder builder = new ModConfigSpec.Builder();
+        Map<String, ModConfigSpec.ConfigValue<?>> values = new HashMap<>();
 #endif
-        Map<String, Object> values = new HashMap<>();
         for (ConfigEntry<?> entry : entries(scope)) {
             builder.comment(ConfigComments.lines(entry.comment())).translation(entry.translationKey());
-            // T10：define* 返回的 ConfigValue<T> 以 Object 承接，类型名不再暴露到方法体
-            Object configValue = switch (entry.type()) {
+#if MC_VER < MC_1_21_1
+            ForgeConfigSpec.ConfigValue<?> configValue =
+#else
+            ModConfigSpec.ConfigValue<?> configValue =
+#endif
+            switch (entry.type()) {
                 case BOOLEAN, STRING -> builder.define(entry.path(), entry.defaultValue());
                 case INT -> builder.defineInRange(entry.path(), (Integer) entry.defaultValue(),
                         entry.min().intValue(), entry.max().intValue());

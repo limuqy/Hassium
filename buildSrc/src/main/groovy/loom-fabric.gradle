@@ -43,6 +43,18 @@ loom {
                         "-Dhassium.smokeTest.host=${host}",
                         "-Dhassium.smokePhases=${phases}"
                 ])
+                // T2 PROBE JSON v1：harness 传 -PhassiumSmokeProbeDir 时映射为客户端
+                // JVM 属性 hassium.smokeTest.probeDir（ClientSmokeTest 每轮写 roundN.json）
+                def probeDir = project.findProperty('hassiumSmokeProbeDir')
+                if (probeDir != null && !probeDir.toString().isBlank()) {
+                    jvmArguments.add("-Dhassium.smokeTest.probeDir=${probeDir}")
+                }
+                // T8 场景引擎：harness 传 -PhassiumSmokeScenario=<name> 时映射为客户端
+                // JVM 属性 hassium.smokeScenario（ScenarioEngine 加载 scenario/<name>.scenario）
+                def smokeScenario = project.findProperty('hassiumSmokeScenario')
+                if (smokeScenario != null && !smokeScenario.toString().isBlank()) {
+                    jvmArguments.add("-Dhassium.smokeScenario=${smokeScenario}")
+                }
                 if (migrateTo != null && !migrateTo.toString().isBlank()) {
                     jvmArguments.add("-Dhassium.smokeTest.migrateTo=${migrateTo}")
                 }
@@ -83,6 +95,12 @@ loom {
                         "-Dhassium.serverSmokeTest.vd2=${vd2}",
                         "-Dhassium.smokePhases=${phases}"
                 ])
+                // T7/T8 场景引擎服务端侧：harness 传 -PhassiumServerSmokeScenario=<name> 时
+                // 映射为 JVM 属性 hassium.serverSmokeScenario（ScenarioEngine 服务端 op 逻辑）
+                def serverSmokeScenario = project.findProperty('hassiumServerSmokeScenario')
+                if (serverSmokeScenario != null && !serverSmokeScenario.toString().isBlank()) {
+                    jvmArguments.add("-Dhassium.serverSmokeScenario=${serverSmokeScenario}")
+                }
             }
         }
     }

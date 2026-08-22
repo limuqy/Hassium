@@ -106,6 +106,7 @@ public final class FabricTomlConfigIO {
             return values;
         }
         try (CommentedFileConfig cfg = open(path)) {
+            stripUtf8BomIfPresent(path);
             cfg.load();
             for (ConfigEntry<?> entry : entries(scope)) {
                 Object value = readSchemaValue(cfg, entry);
@@ -117,6 +118,29 @@ public final class FabricTomlConfigIO {
             LOGGER.warn("Hassium: 读取 {} 失败，使用默认配置", path, e);
         }
         return values;
+    }
+
+    /**
+     * 剥离 UTF-8 BOM（EF BB BF）：PowerShell 等工具写出的 toml 带 BOM 时，
+     * night-config 解析直接抛 ParsingException（"Invalid bare key: ﻿[…"），
+     * 整份配置回落默认。读前自愈式剥除并留痕。
+     */
+    private static void stripUtf8BomIfPresent(Path path) throws java.io.IOException {
+        byte[] all = Files.readAllBytes(path);
+        byte[] stripped = strippedOfUtf8Bom(all);
+        if (stripped != all) {
+            Files.write(path, stripped);
+            LOGGER.info("Hassium: Stripped UTF-8 BOM from {} (night-config cannot parse it)", path);
+        }
+    }
+
+    /** BOM 剥离纯函数测试缝：带 BOM 返回新数组（去头 3 字节），否则原样返回同一引用。 */
+    static byte[] strippedOfUtf8Bom(byte[] data) {
+        if (data.length >= 3 && (data[0] & 0xFF) == 0xEF
+                && (data[1] & 0xFF) == 0xBB && (data[2] & 0xFF) == 0xBF) {
+            return java.util.Arrays.copyOfRange(data, 3, data.length);
+        }
+        return data;
     }
 
     private static List<ConfigEntry<?>> entries(ConfigScope scope) {

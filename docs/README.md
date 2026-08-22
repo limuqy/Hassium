@@ -9,13 +9,13 @@
 |------|------|------|
 | [architecture.md](architecture.md) | 架构总览：模块架构、存储格式、配置、命令、卖点特性 | 当前 |
 | [chunk-cache.md](chunk-cache.md) | 区块缓存推送、chunkHash、超视渲染（§10）、磁盘 NBT（§11）、导出（§12） | 当前 |
-| [client-chunk-light-flow.md](client-chunk-light-flow.md) | 客户端收包 → apply → 光照落地全链路 | 当前 |
+| [chunk-load-optimization.md](chunk-load-optimization.md) | 进服/重连加载路径、c/d 速率锚点与优化阶段 | 当前 |
 | [version-segments.md](version-segments.md) | 多版本七段适配真相源 | 当前 |
 | [mod-compat.md](mod-compat.md) | 多 Mod 兼容边界与配置逃生 | 当前 |
-| [runtime-smoke-test.md](runtime-smoke-test.md) | 多版本运行时自检与网关双主控迁移冒烟 | 当前 |
-| [ai-functional-test.md](ai-functional-test.md) | 面向 AI 的游戏内功能测试操作（minecraft-mod-mcp） | 当前 |
+| [runtime-smoke-test.md](runtime-smoke-test.md) | 运行时冒烟：L0–L3 分层覆盖、PROBE JSON、场景引擎、门禁与会话判定 | 当前 |
+| [ai-functional-test.md](ai-functional-test.md) | AI 辅助游戏内功能测试（minecraft-mod-mcp，L3 人工专项） | 当前 |
 | [config-audit.md](config-audit.md) | 配置项审计与清理记录 | 当前 |
-| [network-core-followups.md](network-core-followups.md) | 网络核心未达项交接清单（后续波） | 当前 |
+| [network-core-followups.md](network-core-followups.md) | 网络核心收尾核销（主体已落地；后续波见文） | 当前 |
 | [curseforge-description.md](curseforge-description.md) | CurseForge 发布描述草稿 | 当前 |
 
 ## archive（状态：归档）

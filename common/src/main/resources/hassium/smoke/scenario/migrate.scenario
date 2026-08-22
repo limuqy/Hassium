@@ -1,0 +1,14 @@
+# migrate 场景：T10 迁移演练单轮模式（行为不变迁移自旧 MIGRATE_TRIGGER/WAIT_MIGRATED 状态机）
+# 语义保留：migrateTo/migrateImmediate/migrateMoveSeconds 属性经变量注入；
+#   immediate=true 走 NetworkCore.migrateToImmediate API 直调（真实断线窗口），
+#   false 走 /hassium migrate 真实命令（预热感知，无缝）。
+#   migratedSettleMs = max(3000, delayMs)：迁移完成后等帧 S2C 流入再统计。
+join label=WAIT_JOIN_1 since=start timeoutMs=${joinTimeoutMs}
+fly seconds=${moveSeconds} tag=MOVE_
+wait ms=${round1WaitMs}
+dump label=ROUND1 round=1
+command mode=migrate posBefore=true immediate=${migrateImmediate}
+fly seconds=${migrateMoveSeconds} tag=MIGRATE_MOVE_
+wait until=migrated settleMs=${migratedSettleMs} timeoutMs=${migrateWaitTimeoutMs} posAfter=true
+dump label=ROUND2 round=2
+exit

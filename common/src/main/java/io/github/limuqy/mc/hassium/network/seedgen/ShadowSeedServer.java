@@ -305,20 +305,20 @@ public class ShadowSeedServer extends MinecraftServer {
      * vanilla sorter 并发 runUpdate 阈值（1000）→ 任务错序 → 空光层打包黑块。
      * 每柱末尾调用：水位已达标时零开销（一次 size 读），积压时忙等 mailbox 消化。
      */
-    private void awaitLightTaskDrain() {
+    private void awaitLightTaskDrain(ServerLevel level) {
         try {
             ThreadedLevelLightEngine lightEngine =
-                    (ThreadedLevelLightEngine) this.overworld().getChunkSource().getLightEngine();
+                    (ThreadedLevelLightEngine) level.getChunkSource().getLightEngine();
             ShadowLightCompute.awaitEngineTaskDrain(lightEngine);
         } catch (Throwable ignored) {
             // 引擎不可用：排水跳过（不阻塞注入链）
         }
     }
-
     /** shutdown 用：资源引用 */
     WorldStem stem() {
         return stem;
     }
+
 
     /**
      * 注入一个服务端区块包（任意线程可调）：空壳 LevelChunk（不 worldgen）+
@@ -355,7 +355,16 @@ public class ShadowSeedServer extends MinecraftServer {
         long key = DimensionKey.key(dimension, pos.x, pos.z);
         LevelChunk previous = this.injectedChunks.get(key);
         try {
-            ServerLevel level = this.overworld();
+            ServerLevel level = level(dimension);
+            if (level == null) {
+                // 维度未装配（理论不可达：上游 isCacheableDimension 已门控三主维度）。
+                // 返回 false 让调用方走兜底；禁止回退 overworld——错误高度的 LevelChunk
+                // 会在 replaceWithPacketData 按 overworld section 数解析下界包越界
+                // （dim 冒烟实证：IndexOutOfBoundsException → failShadowServer 全链降级）。
+                LOGGER.warn("Hassium: Shadow inject skipped for ({}, {}): dimension {} not assembled",
+                        pos.x, pos.z, dimension);
+                return false;
+            }
             LevelChunk chunk = new LevelChunk(level, pos); // 空壳，不 worldgen
             // FULL 票扩散后本柱可能已有 ProtoChunk holder。replaceWithPacketData 会走
             // initializeLightSources / BE → ServerLevel.getChunk，把 Proto 强转 LevelChunk。
@@ -429,7 +438,7 @@ public class ShadowSeedServer extends MinecraftServer {
             if (!fresh) {
                 // 重注入清光投递 48+ 个 PRE 任务：按柱排水，防连续重注入叠加越 1000 阈值
                 // （fresh 柱零投递，size 检查立即通过零开销）。
-                awaitLightTaskDrain();
+                awaitLightTaskDrain(level);
             }
             return true;
         } catch (Throwable t) {
@@ -701,7 +710,7 @@ public class ShadowSeedServer extends MinecraftServer {
         io.github.limuqy.mc.hassium.storage.ShadowStorageHashes
                 .markLightDirty(dimensionId(chunkLevel(chunk)), pos);
         clearChunkLight(pos, chunk);
-        awaitLightTaskDrain(); // 清光投递 48+ PRE 任务：按柱排水（processRemoteHashes 批量 relight 叠加防护）
+        awaitLightTaskDrain(chunkLevel(chunk)); // 清光投递 48+ PRE 任务：按柱排水（processRemoteHashes 批量 relight 叠加防护）
     }
 
     /**

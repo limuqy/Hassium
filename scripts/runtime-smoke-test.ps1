@@ -9,7 +9,7 @@
 param(
     [Parameter(Mandatory=$true)][string]$Ver,
     [Parameter(Mandatory=$true)][ValidateSet("fabric","forge","neoforge")][string]$Loader,
-    [Parameter(Mandatory=$true)][ValidateSet("I","R","UdpFailover")][string]$Phase,
+    [Parameter(Mandatory=$true)][ValidateSet("I","R")][string]$Phase,
     [Parameter(Mandatory=$true)][string]$SessionId,
     [switch]$CleanWorld,
     # -PregenOnly：只跑服务端预生成（SmokePhases=pregen，49×49 区域），
@@ -32,19 +32,12 @@ param(
     [int]$ServerReadyTimeoutSec = 160,
     [int]$ClientTimeoutSec = 240,
     [string]$SmokePhases = "classic",
-    # -Phase UdpFailover：经 Nginx stream 代理 TCP 主控；UDP 仍直连 server。
-    # 默认 nginx 1.31.3 在 D:\app；行内可传 -NginxExePath 覆盖。$ProxyPort=0 时
-    # 由 phase 触发自动采用 $ServerPort+5，避免与 server 端口冲突。
-    [string]$NginxExePath = "D:\app\nginx-1.31.3\nginx.exe",
-    [int]$ProxyPort = 0,
-    # -DryRun：UdpFailover phase 时只起 nginx + 验 listen，跳过 server/client；
-    # 用于 Pester 验证 harness 启停序列而不起游戏。其他 phase 下 -DryRun 无效。
-    [switch]$DryRun,
-    # -InjectTcpClose：UdpFailover phase 时在 Round1 之后通过 nginx -s quit 注入
-    # 真实 TCP close 触发 client channelInactive→orchestrator，验证 production 在
-    # 真实 RST 下仍工作。默认 false：plan §2.3 走 client 内部模拟 disconnect，
-    # production onPrimaryDisconnected 由 ClientSmokeTest.disconnect 间接触发。
-    [switch]$InjectTcpClose,
+    # T8 场景引擎：-Scenario <name> 加载 common/src/main/resources/hassium/smoke/scenario/<name>.scenario。
+    # 默认 classic 不注入 -Dhassium.smokeScenario（保持既有 ClientSmokeTest 经典路径零行为变化）；
+    # 显式指定时经 loom 属性透传链（-PhassiumSmokeScenario → buildSrc 三端映射）注入。
+    # seedgen/dimension 场景强制 -CleanWorld 语义；存在 scripts/smoke/profiles/<name>.profile.properties
+    # 时按键值对 patch 双端 hassium toml（见 Invoke-SmokeProfilePatch）。
+    [string]$Scenario = "classic",
     # -ManualLogout：ROUND1 断开改走真实手动登出路径（Minecraft.disconnect(Screen[,Z])/
     # clearLevel，MixinMinecraft HEAD 注入 dump 同步执行），验证「手动登出光照/方块落盘」。
     [switch]$ManualLogout
@@ -59,24 +52,6 @@ if ($SmokeHost -and $SmokeHost -ne "") {
     $effectiveHost = "127.0.0.1:$ServerPort"
 }
 
-# §2.3 -Phase UdpFailover：未显式 -SmokePhases 时强制 udp-failover。udp-failover 经典两轮
-# classic 状态机驱动断开→重连 cycle，但比 classic 多出 recovery 窗口（最多 60s），故
-# 默认 ClientTimeoutSec 不够时由 phase 触发扩容。
-if ($Phase -eq "UdpFailover") {
-    if ($SmokePhases -eq "classic") { $SmokePhases = "udp-failover" }
-    if ($ClientTimeoutSec -lt 300) { $ClientTimeoutSec = 300 }
-}
-
-# §3.1 -Phase UdpFailover：经 Nginx stream 代理 TCP 主控；UDP 仍直连 server。
-# 当 ProxyPort 未显式指定时默认 $ServerPort + 5；避免与本会话 Minecraft server 端口冲突。
-# -SmokeHost 若显式给出优先被使用；仅在 -Phase UdpFailover 且 -SmokeHost 空时由 nginx
-# ProxyPort 替代 effectiveHost。classic / R / I phases 不受影响。
-if ($Phase -eq "UdpFailover") {
-    if ($ProxyPort -eq 0) { $ProxyPort = $ServerPort + 5 }
-    if (-not ($SmokeHost -and $SmokeHost -ne "")) {
-        $effectiveHost = "127.0.0.1:$ProxyPort"
-    }
-}
 
 # 路径自推导（脚本位于 <repo>/scripts/，项目根是父目录）
 $projectRoot = Split-Path -Parent $PSScriptRoot
@@ -210,6 +185,10 @@ if (-not $precheck.Skipped) {
 }
 
 # 写服务端 server.properties（§2 配置 + §4.1 自动避让改端口后同步重写共用）。
+# T8：本脚本要求 PowerShell 7 运行——配置文件写出统一 -Encoding utf8NoBOM。背景：
+# Windows PowerShell 5.1 的 -Encoding UTF8 带 BOM，night-config 对 BOM 敏感直接
+# ParsingException → 双端配置整份回落默认（seedgen 三跑根因）。被 mod/服务端消费的
+# 配置文件：hassium toml / server.properties / eula.txt。
 function Write-SmokeServerProperties {
     param(
         [Parameter(Mandatory=$true)][string]$Dir,
@@ -229,7 +208,66 @@ white-list=false
 enforce-whitelist=false
 spawn-protection=0
 "@
-    Set-Content -Path (Join-Path $Dir "server.properties") -Value $props
+    Set-Content -Path (Join-Path $Dir "server.properties") -Value $props -Encoding utf8NoBOM
+}
+
+# T8 场景配置档案落盘：读取 scripts/smoke/profiles/<Name>.profile.properties（行式
+# key=value，# 注释；value 须为合法 TOML 字面量，字符串自带引号），按键值对 patch 双端
+# hassium toml（客户端 run/client/config/hassium/hassium-client.toml、服务端
+# run/server/config/hassium/hassium-server.toml）。键路径写法与 smoke-config-patch.ps1
+# 既有机制一致：按行正则 ^\s*<key>\s*= 匹配并保留原行缩进替换。仅 patch 文件中已存在的
+# 键；toml 文件或键缺失时告警跳过，不阻断冒烟。profile 文件不存在时整体 no-op。
+function Invoke-SmokeProfilePatch {
+    param(
+        [string]$Name,
+        [string]$ClientRunDir,
+        [string]$ServerRunDir,
+        [string]$SessionTag
+    )
+    $profilePath = Join-Path $PSScriptRoot "smoke\profiles\${Name}.profile.properties"
+    if (-not (Test-Path $profilePath)) { return }
+    $kvPairs = @()
+    foreach ($line in (Get-Content $profilePath)) {
+        $t = $line.Trim()
+        if (-not $t -or $t.StartsWith("#")) { continue }
+        $idx = $t.IndexOf("=")
+        if ($idx -lt 1) { continue }
+        $kvPairs += @{ Key = $t.Substring(0, $idx).Trim(); Value = $t.Substring($idx + 1).Trim() }
+    }
+    if ($kvPairs.Count -eq 0) {
+        Write-Host "[$SessionTag] profile '$Name' 无有效键值对，跳过 patch"
+        return
+    }
+    foreach ($toml in @(
+        (Join-Path $ClientRunDir "config\hassium\hassium-client.toml"),
+        (Join-Path $ServerRunDir "config\hassium\hassium-server.toml")
+    )) {
+        if (-not (Test-Path $toml)) {
+            Write-Host "[$SessionTag] profile '$Name' 跳过 ${toml}：文件不存在（全新 run 目录由 mod 首启生成默认值）" -ForegroundColor Yellow
+            continue
+        }
+        $lines = Get-Content $toml
+        foreach ($kv in $kvPairs) {
+            $keyEsc = [regex]::Escape($kv.Key)
+            $patched = $false
+            $newLines = foreach ($l in $lines) {
+                if ($l -match "^(\s*)${keyEsc}\s*=.*$") {
+                    $patched = $true
+                    "$($Matches[1])$($kv.Key) = $($kv.Value)"
+                } else {
+                    $l
+                }
+            }
+            $lines = @($newLines)
+            $leaf = Split-Path -Leaf $toml
+            if ($patched) {
+                Write-Host "[$SessionTag] profile '$Name': $($kv.Key) = $($kv.Value) -> $leaf"
+            } else {
+                Write-Host "[$SessionTag] profile '$Name': 键 $($kv.Key) 在 $leaf 中不存在，跳过" -ForegroundColor Yellow
+            }
+        }
+        Set-Content -Path $toml -Value $lines -Encoding utf8NoBom
+    }
 }
 
 # 仅清理本会话相关的 java 进程，避免在并行模式下误杀另一会话 / 另一项目。
@@ -290,101 +328,16 @@ function Stop-SessionJava {
     }
 }
 
-# Nginx helpers for UdpFailover phase. Module lives under scripts/smoke/.
-# Logged via HassiumSmokeTest:UDP_FAILOVER_HARNESS <event> at=<unix-ms> lines so the
-# reviewer can correlate harness-driven Nginx reloads with production markers.
-$smokeModulePath = Join-Path $PSScriptRoot "smoke\UdpFailoverSmoke.psm1"
-if ($Phase -eq "UdpFailover" -and (Test-Path $smokeModulePath)) {
-    Import-Module -Name $smokeModulePath -Force -ErrorAction Stop
-}
-
-# Per-session Nginx prefix/work dirs (kept under build/smoke-test/nginx/<SessionId>/).
-function Get-FailoverNginxDirs {
-    param([string]$SessId)
-    $base = Join-Path $logRoot "nginx\$SessId"
-    New-Item -ItemType Directory -Force -Path $base | Out-Null
-    $conf    = Join-Path $base "nginx.conf"
-    $prefix  = Join-Path $base "prefix"
-    $logFile = Join-Path $base "harness_timeline.log"
-    New-Item -ItemType Directory -Force -Path $prefix  | Out-Null
-    New-Item -ItemType Directory -Force -Path (Join-Path $prefix "logs") | Out-Null
-    return [pscustomobject]@{ Conf = $conf; Prefix = $prefix; LogFile = $logFile }
-}
-
-# Write a harness timeline line for later Get-UdpFailoverHarnessTimeline parsing.
-function Write-HarnessEvent {
-    param([Parameter(Mandatory=$true)][string]$Event, [Parameter(Mandatory=$true)][string]$LogFile)
-    $now = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-    $line = "HassiumSmokeTest:UDP_FAILOVER_HARNESS $Event at=$now"
-    Add-Content -Path $LogFile -Value $line -ErrorAction SilentlyContinue
-    Write-Host "[$SessionId] $line"
-}
-
-# Write the nginx stream config from the helper module and launch nginx.exe with
-# `-c <conf> -p <prefix>`. Spawn-only; subsequent Wait-NginxListen validates listen.
-function Start-FailoverNginxProxy {
-    param(
-        [Parameter(Mandatory=$true)][string]$NginxExe,
-        [Parameter(Mandatory=$true)][int]$ListenPort,
-        [Parameter(Mandatory=$true)][int]$PrimaryPort,
-        [Parameter(Mandatory=$true)][string]$ConfPath,
-        [Parameter(Mandatory=$true)][string]$PrefixPath
-    )
-    if (-not (Test-Path $NginxExe)) { throw "NginxExe not found: $NginxExe" }
-    $conf = New-UdpFailoverNginxConfig -ListenPort $ListenPort -PrimaryPort $PrimaryPort
-    Set-Content -Path $ConfPath -Value $conf -Encoding ASCII
-    # Start nginx detached (Windows nginx runs foreground by default, so use
-    # Start-Process with -WindowStyle Hidden to return immediately).
-    Start-Process -FilePath $NginxExe `
-        -ArgumentList @("-c", $ConfPath, "-p", $PrefixPath) `
-        -WindowStyle Hidden -PassThru -ErrorAction Stop | Out-Null
-}
-# Wait up to $TimeoutSec for the nginx stream listen port to accept TCP.
-function Wait-NginxListen {
-    param(
-        [Parameter(Mandatory=$true)][int]$ListenPort,
-        [int]$TimeoutSec = 15
-    )
-    $deadline = (Get-Date).AddSeconds($TimeoutSec)
-    while ((Get-Date) -lt $deadline) {
-        $conn = Get-NetTCPConnection -LocalPort $ListenPort -State Listen -ErrorAction SilentlyContinue
-        if ($conn) { return $true }
-        Start-Sleep -Milliseconds 200
-    }
-    return $false
-}
-
-# Stop the nginx master bound to $PrefixPath. `-s quit` lets in-flight stream
-# connections finish; `-s stop` drops them. Use quit by default (graceful).
-function Stop-FailoverNginxProxy {
-    param(
-        [Parameter(Mandatory=$true)][string]$NginxExe,
-        [Parameter(Mandatory=$true)][string]$ConfPath,
-        [Parameter(Mandatory=$true)][string]$PrefixPath,
-        [string]$Signal = "quit"
-    )
-    if (-not (Test-Path $NginxExe)) { return }
-    try { & $NginxExe -s $Signal -c $ConfPath -p $PrefixPath 2>&1 | Out-Null } catch { }
-    Start-Sleep -Milliseconds 500
-    # 兜底：若 nginx master 已死但 worker 进程残留（其 PID 不在 prefix 里），
-    # 按「命令行含本会话 prefix」定位清理——禁止全命名杀，避免误杀其他会话/项目的 nginx。
-    $prefixEsc = [regex]::Escape($PrefixPath)
-    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
-        $_.Name -eq "nginx.exe" -and $_.CommandLine -and $_.CommandLine -match $prefixEsc
-    } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
-    Start-Sleep -Milliseconds 200
-}
 
 # 1. 清理客户端缓存（整个 hassium_cache 目录 + config/hassium 整个目录 + crash-reports）
 Write-Host "[$SessionId] [1/9] 清理客户端缓存 ($Loader/run/client/)..."
 Remove-Item -Recurse -Force (Join-Path $clientRunDir "hassium_cache") -ErrorAction SilentlyContinue
 # Remove-Item -Recurse -Force (Join-Path $clientRunDir "config\hassium") -ErrorAction SilentlyContinue
 Remove-Item -Recurse -Force (Join-Path $clientRunDir "crash-reports") -ErrorAction SilentlyContinue
-
+Set-Content -Path (Join-Path $serverRunDir "eula.txt") -Value "eula=true" -NoNewline -Encoding utf8NoBOM
 # 2. 配置服务端（view-distance 由 ServerSmokeTest 控制，这里设基础值）
 Write-Host "[$SessionId] [2/9] 配置服务端 ($Loader/run/server/)..."
 New-Item -ItemType Directory -Force -Path $serverRunDir -ErrorAction SilentlyContinue | Out-Null
-Set-Content -Path (Join-Path $serverRunDir "eula.txt") -Value "eula=true" -NoNewline
 Write-SmokeServerProperties -Dir $serverRunDir -Port $ServerPort -ViewDistance $Vd1
 
 # 创建 world\serverconfig 目录（部分 neoforge / forge 50 版本不会自动创建）
@@ -401,6 +354,46 @@ if ($needConfigTrackerClean) {
         Write-Host "[$SessionId] 清理 $Loader world/serverconfig/hassium 残留 toml（绕过 FML ConfigTracker 路径拼接 bug）"
     }
 }
+
+if ($Scenario -in @("seedgen", "dimension")) {
+    if (-not $CleanWorld) {
+        Write-Host "[$SessionId] 场景 '$Scenario' 强制 -CleanWorld（干净世界前置）"
+    }
+    $CleanWorld = $true
+}
+
+# T8 harness 卫生（等价清缓存，不改产品默认）：中和历史演练遗留的
+# master.controlReachableEndpoints——残留端点表会让网关绑定非默认端口（如 25567）而客户端
+# 仍找默认 25566，握手永不成立。双端 toml 该键统一写空列表，两端一致回落默认；
+# 随后 Invoke-SmokeProfilePatch 可按 profile 显式覆盖（profile 为准）。
+function Reset-SmokeControlEndpoints {
+    param([string]$ClientRunDir, [string]$ServerRunDir, [string]$SessionTag)
+    foreach ($toml in @(
+        (Join-Path $ClientRunDir "config\hassium\hassium-client.toml"),
+        (Join-Path $ServerRunDir "config\hassium\hassium-server.toml")
+    )) {
+        if (-not (Test-Path $toml)) { continue }
+        $lines = Get-Content $toml
+        $newLines = @(
+            foreach ($l in $lines) {
+                if ($l -match "^(\s*)controlReachableEndpoints\s*=.*$") {
+                    "$($Matches[1])controlReachableEndpoints = []"
+                } else {
+                    $l
+                }
+            }
+        )
+        if (($newLines -join "`n") -ne ($lines -join "`n")) {
+            Set-Content -Path $toml -Value $newLines -Encoding utf8NoBom
+            Write-Host "[$SessionTag] harness 卫生: controlReachableEndpoints 中和为 [] -> $(Split-Path -Leaf $toml)"
+        }
+    }
+}
+Reset-SmokeControlEndpoints -ClientRunDir $clientRunDir -ServerRunDir $serverRunDir -SessionTag $SessionId
+
+# T8 场景配置档案落盘：存在 scripts/smoke/profiles/<Scenario>.profile.properties 时，
+# 按键值对 patch 双端 hassium toml（须在服务端/客户端启动前完成）。文件不存在则 no-op。
+Invoke-SmokeProfilePatch -Name $Scenario -ClientRunDir $clientRunDir -ServerRunDir $serverRunDir -SessionTag $SessionId
 
 # 3. 清理存档（batch：loader 首轮 / 退版本 / 失败重试 会传 -CleanWorld；单会话默认不清理）
 #    CleanWorld 时优先从预生成存档恢复（build/smoke-test/pregen-world/<Loader>-<Ver>/），
@@ -432,13 +425,11 @@ if ($CleanWorld) {
     Write-Host "[$SessionId] [3/9] 跳过存档清理（复用已有 world）"
 }
 
-# 4. 释放 $ServerPort 端口 + UdpFailover phase 时也释放 $ProxyPort (可能被上次会话残留 nginx 占用)
-#    只杀「本工程 loom 服务端或本工程 nginx」占用者；他人进程（其他会话/项目）占用时
-#    仅告警不杀，避免误杀并行会话。
+# 4. 释放 $ServerPort 端口：只杀「本工程 loom 服务端」占用者；他人进程（其他会话/项目）
+#    占用时仅告警不杀，避免误杀并行会话。
 $rootEsc = [regex]::Escape($projectRoot)
 $dliConfig = "-Dfabric\.dli\.config=$rootEsc"
 $portsToFree = @($ServerPort)
-if ($Phase -eq "UdpFailover" -and $ProxyPort -gt 0) { $portsToFree += $ProxyPort }
 foreach ($p in $portsToFree) {
     $conns = Get-NetTCPConnection -LocalPort $p -State Listen -ErrorAction SilentlyContinue
     if ($conns) {
@@ -449,7 +440,6 @@ foreach ($p in $portsToFree) {
             $cmd = $owner.CommandLine
             if ($cmd -and $cmd -match $dliConfig -and $cmd -match "-Dfabric\.dli\.env=server") { $ours += $c.OwningProcess; continue }
             if ($cmd -and $cmd -match "$rootEsc.*run[\\/]+server") { $ours += $c.OwningProcess; continue }
-            if ($cmd -and $cmd -match "(^| )-p .*$([regex]::Escape($logRoot)).*nginx") { $ours += $c.OwningProcess; continue }
             $theirs += $c.OwningProcess
         }
         foreach ($pid_ in ($ours | Select-Object -Unique)) {
@@ -466,7 +456,7 @@ foreach ($p in $portsToFree) {
 # §4.1 端口自动避让（用户指示）：默认端口被占用（非本工程残留——§4 已释放本工程进程）
 # 时自动改空闲端口，避免并行会话/其他项目占 25565 导致启动失败。
 # 显式直传 -ServerPort 时不自动改（尊重指定端口，被占则后续服务端启动失败如实报错）。
-# 改后全链跟随：server.properties、客户端连接、Stop-SessionJava、ProxyPort(+5) 均引用 $ServerPort。
+# 改后全链跟随：server.properties、客户端连接、Stop-SessionJava 均引用 $ServerPort。
 if (-not $PSBoundParameters.ContainsKey('ServerPort')) {
     $probe = Get-NetTCPConnection -LocalPort $ServerPort -State Listen -ErrorAction SilentlyContinue
     if ($probe) {
@@ -485,63 +475,12 @@ if (-not $PSBoundParameters.ContainsKey('ServerPort')) {
             if (-not ($SmokeHost -and $SmokeHost -ne "")) {
                 $effectiveHost = "127.0.0.1:$ServerPort"
             }
-            # UdpFailover：ProxyPort 未显式指定时跟随新端口（+5），effectiveHost 走 proxy
-            if ($Phase -eq "UdpFailover" -and -not $PSBoundParameters.ContainsKey('ProxyPort')) {
-                $ProxyPort = $ServerPort + 5
-                if (-not ($SmokeHost -and $SmokeHost -ne "")) {
-                    $effectiveHost = "127.0.0.1:$ProxyPort"
-                }
-            }
         } else {
             Write-Host "[$SessionId] 端口 $ServerPort 被占用，且未找到空闲避让端口；按原端口继续（启动将失败）"
         }
     }
 }
 
-# §3.2 UdpFailover phase：在 §5 server 启动前先起 nginx stream proxy。
-# UDP 数据面仍直连 server。client 连的就是 effectiveHost=127.0.0.1:$ProxyPort。
-$nginxDirHandle = $null
-$nginxReady = $false
-if ($Phase -eq "UdpFailover") {
-    if (-not (Test-Path $NginxExePath)) {
-        Write-Host "[$SessionId] NginxExePath 不存在: $NginxExePath；UdpFailover phase 缺不可降级，标记 FAIL"
-        $resultObj = @{ SessionId = $SessionId; Ver = $Ver; Loader = $Loader; Phase = $Phase; Result = "FAIL"; Reason = "nginx_exe_missing"; ClientExitCode = -1; UdpFailoverCorePass = $false }
-        $resultObj | ConvertTo-Json -Depth 3 | Out-File (Join-Path $resultsDir "result_${SessionId}.json")
-        exit 4
-    }
-    $nginxDirHandle = Get-FailoverNginxDirs -SessId $SessionId
-    Write-Host "[$SessionId] [4.5/9] 启动 nginx stream proxy listen=127.0.0.1:$ProxyPort upstream=127.0.0.1:$ServerPort..."
-    try {
-        Start-FailoverNginxProxy -NginxExe $NginxExePath -ListenPort $ProxyPort -PrimaryPort $ServerPort `
-                                 -ConfPath $nginxDirHandle.Conf -PrefixPath $nginxDirHandle.Prefix
-        $nginxReady = Wait-NginxListen -ListenPort $ProxyPort -TimeoutSec 15
-        Write-HarnessEvent -Event "nginxStarted" -LogFile $nginxDirHandle.LogFile
-    } catch {
-        Write-Host "[$SessionId] nginx 启动失败: $($_.Exception.Message)"
-    }
-    if (-not $nginxReady) {
-        Write-Host "[$SessionId] nginx listen 未就绪；标记 FAIL"
-        if ($nginxDirHandle) { Stop-FailoverNginxProxy -NginxExe $NginxExePath -ConfPath $nginxDirHandle.Conf -PrefixPath $nginxDirHandle.Prefix -Signal stop }
-        $resultObj = @{ SessionId = $SessionId; Ver = $Ver; Loader = $Loader; Phase = $Phase; Result = "FAIL"; Reason = "nginx_listen_failed"; ClientExitCode = -1; UdpFailoverCorePass = $false }
-        $resultObj | ConvertTo-Json -Depth 3 | Out-File (Join-Path $resultsDir "result_${SessionId}.json")
-        exit 5
-    }
-    Write-Host "[$SessionId] nginx 已 listen on 127.0.0.1:$ProxyPort"
-
-    # -DryRun：仅起 nginx + 验 listen + stop + exit；不起 server/client。
-    if ($DryRun) {
-        Write-Host "[$SessionId] -DryRun：nginx 启停序列已验证；不起 server/client。"
-        Stop-FailoverNginxProxy -NginxExe $NginxExePath -ConfPath $nginxDirHandle.Conf -PrefixPath $nginxDirHandle.Prefix -Signal stop
-        $resultObj = @{
-            SessionId = $SessionId; Ver = $Ver; Loader = $Loader; Phase = $Phase; Result = "PASS"
-            DryRun = $true; NginxProxyPort = $ProxyPort; NginxListenReady = $true
-            HarnessTimeline = (Get-UdpFailoverHarnessTimeline -HarnessLog $nginxDirHandle.LogFile)
-        }
-        $resultObj | ConvertTo-Json -Depth 4 | Out-File (Join-Path $resultsDir "result_${SessionId}.json")
-        Write-Host "[$SessionId] === RESULT: PASS (DryRun) ==="
-        exit 0
-    }
-}
 # 4.5 -PregenOnly：只跑服务端预生成（49×49 区域），不启客户端。
 # 等 PREGEN_DONE marker 后停服并复制 world 到 build/smoke-test/pregen-world/<Loader>-<Ver>/。
 if ($PregenOnly) {
@@ -609,6 +548,11 @@ $gradlew = Join-Path $projectRoot "gradlew.bat"
 # 5.1 再起服务端 —— 显式 --no-daemon 确保不复用任何 daemon
 Write-Host "[$SessionId] [4/9] 启动服务端 ($Loader / $Ver)..."
 $serverArgs = @("--no-daemon", "-Dorg.gradle.jvmargs=-Xmx2G -DsmokeSession=${SessionId}", ":${Loader}:runServer", "-PhassiumSmokeTest=true", "-PhassiumSmokePhases=${SmokePhases}", "-PhassiumSmokeVd1=$Vd1", "-PhassiumSmokeVd2=$Vd2", "-Pmc_ver=${Ver}")
+if ($PSBoundParameters.ContainsKey('Scenario')) {
+    # T7/T8：显式 -Scenario 时向服务端注入场景（buildSrc 三端映射为 -Dhassium.serverSmokeScenario，
+    # 配合 ScenarioEngine 服务端 op 逻辑；仅 serverSide 注入，客户端走 -PhassiumSmokeScenario）
+    $serverArgs += "-PhassiumServerSmokeScenario=$Scenario"
+}
 $server = Start-Process -FilePath $gradlew `
     -ArgumentList $serverArgs `
     -RedirectStandardOutput $serverLog `
@@ -657,6 +601,10 @@ if (-not $serverReady) {
 }
 
 
+# T2 PROBE JSON v1：客户端探针输出目录（JVM 属性 hassium.smokeTest.probeDir 指向）。
+# 启动客户端前创建；ClientSmokeTest 每轮写 roundN.json，harness 解析结果时优先读这里。
+$probeDir = Join-Path $logRoot "probe\$SessionId"
+New-Item -ItemType Directory -Force -Path $probeDir | Out-Null
 # 7. 启动客户端（前台阻塞，自动两轮连服）
 # 冒烟 gradle 调用统一加 daemon 组隔离（org.gradle.jvmargs 唯一化）：gradle 8.x 的
 # --no-daemon 仍是单次 daemon，且 daemon 按 JVM 参数分组复用——并行构建（其他会话/
@@ -673,8 +621,13 @@ $clientArgs = @(
     "-PhassiumSmokeReconnectDelayMs=$ReconnectDelayMs",
     "-PhassiumSmokeMoveSeconds=$MoveSeconds",
     "-PhassiumSmokePhases=$SmokePhases",
-    "-Pmc_ver=${Ver}"
+    "-Pmc_ver=${Ver}",
+    "-PhassiumSmokeProbeDir=$probeDir"
 )
+if ($PSBoundParameters.ContainsKey('Scenario')) {
+    # T8：显式 -Scenario 时经 loom 属性透传链注入 -Dhassium.smokeScenario=<name>
+    $clientArgs += "-PhassiumSmokeScenario=$Scenario"
+}
 if ($ManualLogout) {
     $clientArgs += "-PhassiumSmokeManualLogout=true"
 }
@@ -690,38 +643,7 @@ $clientProc = Start-Process -FilePath $gradlew `
 # 8. 等待客户端退出（最长 ClientTimeoutSec 秒）
 Write-Host "[$SessionId] [7/9] 等待客户端退出 (超时 ${ClientTimeoutSec}s)..."
 $clientDeadline = (Get-Date).AddSeconds($ClientTimeoutSec)
-# -InjectTcpClose：仅 UdpFailover + nginx 已就绪时使用。
-# 在客户进入 Round1 后等待约 DelayMs*1.2 + 5s（保证进世界稳定），再 nginx -s quit
-# 真实关闭 client 已建立的 stream 连接 → 触发 channelInactive → orchestrator →
-# FAILOVER_PERMIT/RECONNECT marker；重启 nginx 等待 listen 重开后再继续等待 client。
-# 默认 false 时 harness 不触发外部断链，由 ClientSmokeTest 内部 disconnect 与 vanilla
-# 重连流程触发（plan §2.3 已说明：mono-JVM 不可真断 socket，内部模拟即真实断开语义）。
-$tcpCloseInjected = $false
 while (-not $clientProc.HasExited -and (Get-Date) -lt $clientDeadline) {
-    if ($Phase -eq "UdpFailover" -and $InjectTcpClose -and $nginxReady -and -not $tcpCloseInjected) {
-        $injectAtMs = ($DelayMs * 1.2 + 5000)
-        $waitDeadline = (Get-Date).AddMilliseconds($injectAtMs)
-        while (-not $clientProc.HasExited -and (Get-Date) -lt $waitDeadline -and (Get-Date) -lt $clientDeadline) {
-            Start-Sleep -Milliseconds 500
-        }
-        if ($clientProc.HasExited) { break }
-        Write-Host "[$SessionId] InjectTcpClose: nginx -s quit 注入主控 TCP 关闭"
-        Write-HarnessEvent -Event "primaryCloseInjected" -LogFile $nginxDirHandle.LogFile
-        Stop-FailoverNginxProxy -NginxExe $NginxExePath -ConfPath $nginxDirHandle.Conf -PrefixPath $nginxDirHandle.Prefix -Signal stop
-        Start-Sleep -Milliseconds 500
-        Write-HarnessEvent -Event "nginxQuit" -LogFile $nginxDirHandle.LogFile
-        # 重启 nginx（同一 conf 仍指向 primary）
-        Start-FailoverNginxProxy -NginxExe $NginxExePath -ListenPort $ProxyPort -PrimaryPort $ServerPort `
-                                 -ConfPath $nginxDirHandle.Conf -PrefixPath $nginxDirHandle.Prefix
-        $restartReady = Wait-NginxListen -ListenPort $ProxyPort -TimeoutSec 15
-        if ($restartReady) {
-            Write-HarnessEvent -Event "primaryRestored" -LogFile $nginxDirHandle.LogFile
-            Write-Host "[$SessionId] nginx 已恢复 listen on 127.0.0.1:$ProxyPort"
-        } else {
-            Write-Host "[$SessionId] 注：nginx 重启后 listen 未及时就绪；client 可能 round2 重连失败"
-        }
-        $tcpCloseInjected = $true
-    }
     Start-Sleep -Seconds 5
 }
 if (-not $clientProc.HasExited) {
@@ -750,6 +672,118 @@ if ($round2Match.Success) {
     Write-Host "[$SessionId] ROUND2 统计已保存到 stats/${SessionId}_round2_VD${Vd2}.txt"
 }
 
+# T2 PROBE JSON v1：优先读客户端写入的 roundN.json（结构化 counters/gateway/disk）；
+# 缺失或解析失败时回退上方中文 stats 正则路径（兼容期）。字段契约：字段可增不可改名。
+function Read-SmokeRoundProbe {
+    param([string]$Dir, [int]$RoundNum)
+    $p = Join-Path $Dir "round${RoundNum}.json"
+    if (-not (Test-Path $p)) { return $null }
+    try {
+        $obj = Get-Content $p -Raw | ConvertFrom-Json
+        if ($null -eq $obj.round) { throw "missing 'round' key" }
+        return $obj
+    } catch {
+        Write-Host "[$SessionId] round${RoundNum}.json 解析失败，回退日志正则: $($_.Exception.Message)"
+        return $null
+    }
+}
+$probeRound1 = Read-SmokeRoundProbe -Dir $probeDir -RoundNum 1
+$probeRound2 = Read-SmokeRoundProbe -Dir $probeDir -RoundNum 2
+if ($probeRound1) {
+    ($probeRound1 | ConvertTo-Json -Depth 5) | Out-File (Join-Path $statsDir "${SessionId}_round1_probe.json") -Encoding UTF8
+}
+if ($probeRound2) {
+    ($probeRound2 | ConvertTo-Json -Depth 5) | Out-File (Join-Path $statsDir "${SessionId}_round2_probe.json") -Encoding UTF8
+}
+Write-Host "[$SessionId] PROBE JSON: round1=$($null -ne $probeRound1) round2=$($null -ne $probeRound2)"
+
+# T3 P0 门禁（基于 PROBE JSON v1，作用于 ROUND2 探针数据）——仅 classic 场景评估：
+#   G1 counters.ovdLoaded > 0
+#   G2 sectionDeltaApplied > 0 或 lightSegRecalc > 0
+#   G3 disk.shadowRegionExists 且 disk.regionFileCount > 0
+#   G4 counters.locallyGenerated == 0（影子端全量命中，不允许本地补生成）
+# 任一不满足 → Round2Pass=false 并把失败门禁名记入 result JSON（ProbeGateFailures）；
+# probe 缺失或对应字段缺失（旧客户端）时跳过该门禁保持兼容。
+# 非 classic 场景（seedgen/dimension 等）跳过这四条门禁：其探针语义不同
+# （如 dimension 切维度轮无 ovd/影子区），套用 classic 门禁会误判 FAIL。
+$probeGateFailures = @()
+if ($Scenario -ne "classic") {
+    # 非 classic 场景：四条 P0 门禁整体跳过，ProbeGateFailures 保持空数组（scenario-gated）
+    Write-Host "[$SessionId] T3 P0 门禁: 非 classic 场景（$Scenario）跳过（scenario-gated）"
+} elseif ($probeRound2) {
+    $c2 = $probeRound2.counters
+    $d2 = $probeRound2.disk
+    if ($c2 -and $null -ne $c2.ovdLoaded -and -not ($c2.ovdLoaded -gt 0)) {
+        $probeGateFailures += "ovdLoaded_not_positive"
+    }
+    if ($c2 -and ($null -ne $c2.sectionDeltaApplied -or $null -ne $c2.lightSegRecalc)) {
+        $sda = if ($null -ne $c2.sectionDeltaApplied) { [long]$c2.sectionDeltaApplied } else { 0 }
+        $lsr = if ($null -ne $c2.lightSegRecalc) { [long]$c2.lightSegRecalc } else { 0 }
+        if (-not ($sda -gt 0 -or $lsr -gt 0)) {
+            $probeGateFailures += "section_delta_or_light_recalc_absent"
+        }
+    }
+    if ($d2 -and $null -ne $d2.shadowRegionExists -and $null -ne $d2.regionFileCount) {
+        if (-not ($d2.shadowRegionExists -and [long]$d2.regionFileCount -gt 0)) {
+            $probeGateFailures += "shadow_region_missing"
+        }
+    }
+    if ($c2 -and $null -ne $c2.locallyGenerated -and [long]$c2.locallyGenerated -ne 0) {
+        $probeGateFailures += "locally_generated_nonzero"
+    }
+    if ($probeGateFailures.Count -gt 0) {
+        Write-Host "[$SessionId] T3 P0 门禁失败: $($probeGateFailures -join ', ')" -ForegroundColor Red
+    } else {
+        Write-Host "[$SessionId] T3 P0 门禁: 全部通过"
+    }
+}
+
+# T7 dimension 磁盘门禁（post-exit）：维度切换不断连，shadow 世界只在断连/退出时落盘，
+# dump 时刻 region 尚未 flush（probe disk.dimensions 全为 -1 属预期语义，Java 侧不改）。
+# 客户端正常退出后，按本会话 probe roundN.json 记录的 disk.cacheDir（.../world/region）
+# 定位影子世界根，校验 world/region（主世界）、world/DIM-1/region（下界）、world/DIM1/region
+# （末地）三处均存在且 ≥1 个 .mca；失败记入 DimensionGateFailures 并判 FAIL。
+# 遗留：主世界同坐标未被覆写的深度比对本轮不做。
+$dimensionGateFailures = @()
+if ($Scenario -eq "dimension") {
+    if ($clientExit -ne 0) {
+        $dimensionGateFailures += "client_exit_nonzero"
+    } else {
+        $cacheRegionDir = $null
+        foreach ($pj in @(Get-ChildItem $probeDir -Filter "round*.json" -ErrorAction SilentlyContinue | Sort-Object Name)) {
+            try {
+                $pd = Get-Content $pj.FullName -Raw | ConvertFrom-Json
+                if ($pd.disk -and $pd.disk.cacheDir) { $cacheRegionDir = $pd.disk.cacheDir }
+            } catch { }
+        }
+        if (-not $cacheRegionDir) {
+            # 回退：hassium_cache 下最近修改的 <serverId>\world\region（probe 缺失时兜底）
+            $cacheRegionDir = Get-ChildItem (Join-Path $clientRunDir "hassium_cache") -Directory -ErrorAction SilentlyContinue |
+                ForEach-Object { Join-Path $_.FullName "world\region" } |
+                Where-Object { Test-Path $_ } |
+                Sort-Object { (Get-Item $_).LastWriteTime } -Descending |
+                Select-Object -First 1
+        }
+        if (-not $cacheRegionDir -or -not (Test-Path $cacheRegionDir)) {
+            $dimensionGateFailures += "shadow_world_not_found"
+        } else {
+            $dimWorldRoot = Split-Path -Parent $cacheRegionDir
+            foreach ($dimEntry in @(@("overworld", "region"), @("nether", "DIM-1\region"), @("end", "DIM1\region"))) {
+                $dimRegionDir = Join-Path $dimWorldRoot $dimEntry[1]
+                $mcaCount = @(Get-ChildItem $dimRegionDir -Filter "*.mca" -File -ErrorAction SilentlyContinue).Count
+                if ($mcaCount -lt 1) {
+                    $dimensionGateFailures += "$($dimEntry[0])_region_missing"
+                }
+            }
+        }
+    }
+    if ($dimensionGateFailures.Count -gt 0) {
+        Write-Host "[$SessionId] dimension 磁盘门禁失败: $($dimensionGateFailures -join ', ')" -ForegroundColor Red
+    } else {
+        Write-Host "[$SessionId] dimension 磁盘门禁: 三维度 region 均有 .mca"
+    }
+}
+
 # 提取服务端视距切换日志
 if (Test-Path $serverLog) {
     $serverSwitchLog = Get-Content $serverLog -Raw
@@ -760,12 +794,19 @@ if (Test-Path $serverLog) {
 }
 
 # 检查两轮统计
-$round1StatsFound = $round1Match.Success
+$round1StatsFound = $round1Match.Success -or ($null -ne $probeRound1)
 $round1Pass = $clientContent -match "ROUND1 stats OK"
-$round2StatsFound = $round2Match.Success
-$round2Pass = $clientContent -match "ROUND2 stats OK"
+$round2StatsFound = $round2Match.Success -or ($null -ne $probeRound2)
+$round2Pass = ($clientContent -match "ROUND2 stats OK") -and ($probeGateFailures.Count -eq 0)
 $hasPass = $clientContent -match "HassiumSmokeTest:PASS"
 $hasFail = $clientContent -match "HassiumSmokeTest:FAIL"
+# 非 classic 场景（seedgen/dimension 等）：不套 classic ROUND stats 正则预期——场景引擎的
+# 轮次语义不同，Round1/Round2 结论直接取客户端 marker（HassiumSmokeTest:PASS 且无 FAIL），
+# 由 HasFail 兜底；会话判定相应改走 HasPass/HasFail 路径（见下方 $result）。
+if ($Scenario -ne "classic") {
+    $round1Pass = $hasPass -and (-not $hasFail)
+    $round2Pass = $hasPass -and (-not $hasFail)
+}
 
 # T7 V0 网关断言（网络核心路径）：解析 ClientSmokeTest 每轮 dump 的 GATEWAY_CLIENT marker。
 # marker 格式：HassiumSmokeTest:GATEWAY_CLIENT ROUND<1|2> state=<NetworkCoreState> s2c=<n> c2s=<n> resume=<bool>
@@ -784,7 +825,14 @@ foreach ($gm in [regex]::Matches($clientContent, $gatewayRe)) {
     }
 }
 $gatewayGate = $false
-if ($gatewayByRound.ContainsKey("ROUND1") -and $gatewayByRound.ContainsKey("ROUND2")) {
+if ($Scenario -ne "classic") {
+    # 非 classic 场景（seedgen/dimension 等）：网关门禁只要求出现过的 GATEWAY_CLIENT marker
+    # 全部 state=ACTIVE（R2 缺失不算失败——场景引擎提前退出时最后一轮可能无 R2 dump）；
+    # 不要求两轮齐备、不查 c2s>0。零 marker 视为网络核心路径缺失 → FAIL。
+    $presentGateways = @($gatewayByRound.Values)
+    $gatewayGate = ($presentGateways.Count -gt 0) -and
+                   (@($presentGateways | Where-Object { $_.gatewayState -ne "ACTIVE" }).Count -eq 0)
+} elseif ($gatewayByRound.ContainsKey("ROUND1") -and $gatewayByRound.ContainsKey("ROUND2")) {
     $g1 = $gatewayByRound["ROUND1"]
     $g2 = $gatewayByRound["ROUND2"]
     # T9v3 gate 修正（Main 裁决）：标准 vanilla 登录路径 S2C 主通道 = vanilla TCP 壳连接，
@@ -805,54 +853,19 @@ $gatewayRound2 = if ($gatewayByRound.ContainsKey("ROUND2")) {
     @{ gatewayState = "MISSING"; gatewayS2c = 0; gatewayC2s = 0; gatewayResume = $false }
 }
 
-# 服务端视距切换检查
+# 服务端视距切换检查（仅信息性输出/JSON 记录，不参与任何场景的 Result 判定；
+# dimension 等非 classic 场景无 VD 切换离线窗口，False 属预期）
 $serverSwitched = if (Test-Path $serverLog) {
     (Get-Content $serverLog -Raw) -match "view-distance switched to 10"
 } else { $false }
-
-# §2.3 UDP_FAILOVER marker 提取（聚合 server/client 双端日志，跨进程替代直接断主控 TCP）
-$udpFailoverIsPhase = ($Phase -eq "UdpFailover")
-$serverContentForUdp = if ($udpFailoverIsPhase -and (Test-Path $serverLog)) {
-    Get-Content $serverLog -Raw
-} else { "" }
-$udpFailoverMarkers = @(
-    "UDP_BIND_OK",
-    "UDP_WRR_OK",
-    "FAILOVER_PERMIT_OK",
-    "FAILOVER_RECONNECT_OK",
-    "FAILOVER_TERMINAL_OK",
-    "CACHE_RESUME_HIT"
-)
-$udpFailoverFound = @{}
-foreach ($m in $udpFailoverMarkers) {
-    $pat = "HassiumSmokeTest:UDP_FAILOVER\s+$m"
-    $hitClient = $clientContent -match $pat
-    $hitServer = $serverContentForUdp -match $pat
-    $udpFailoverFound[$m] = ($hitClient -or $hitServer)
-}
-# 关键 PASS markers：UDP_BIND_OK + CACHE_RESUME_HIT 须同时出现（数据面建立且缓存命中）
-$udpFailoverCorePass = $udpFailoverFound["UDP_BIND_OK"] -and $udpFailoverFound["CACHE_RESUME_HIT"]
-# 恢复表现模式证据：客户端实际 recoveryFreeze 打标值（ClientSmokeTest 保留 marker 输出，
-# 键已删（REQ 决策 2/B）；仅作链路确认，不参与 PASS 判定）。函数来自 UdpFailoverSmoke 模块，
-# 仅 UdpFailover 阶段导入，其它阶段直接置 unknown。
-$clientRecoveryFreeze = if ($udpFailoverIsPhase) {
-    Get-UdpFailoverClientMode -ClientLog $clientContent
-} else { "unknown" }
-# Pass 决策：udp-failover 阶段不要求 client 两轮 PASS（仅要求关键 markers + client 退出 0）。
-# classic / R / I 阶段 = 原 hasPass+exit==0 逻辑 + T7 V0 网关断言门禁（GatewayGatePass）。
-
-if ($udpFailoverIsPhase) {
-    $result = if ($udpFailoverCorePass -and $clientExit -eq 0) { "PASS" } else { "FAIL" }
-} else {
-    # T7 V0：classic 阶段叠加网关断言门禁（两轮 ACTIVE 且 c2s>0），无网络核心路径时 FAIL
-    $result = if ($hasPass -and $clientExit -eq 0 -and $gatewayGate) { "PASS" } else { "FAIL" }
-}
-
-# 清理 nginx stream proxy（仅 UdpFailover phase 启动过）
-if ($Phase -eq "UdpFailover" -and $nginxDirHandle) {
-    Write-Host "[$SessionId] 停止 nginx stream proxy..."
-    Stop-FailoverNginxProxy -NginxExe $NginxExePath -ConfPath $nginxDirHandle.Conf -PrefixPath $nginxDirHandle.Prefix -Signal stop
-}
+# PASS 判定：
+#   classic/R：client 两轮 PASS + 退出码 0 + T7 V0 网关断言门禁（两轮 ACTIVE 且 c2s>0）
+#     + T3 P0 probe 门禁（经 Round2Pass 生效），无网络核心路径时 FAIL。
+#   非 classic 场景：HasPass 且无 HasFail + 退出码 0 + 网关门禁；不套 classic stats/Round2Pass 预期。
+#     dimension 场景另加 post-exit 磁盘门禁（DimensionGateFailures 恒空才 PASS）。
+$result = if ($Scenario -ne "classic") {
+    if ($hasPass -and (-not $hasFail) -and $clientExit -eq 0 -and $gatewayGate -and ($dimensionGateFailures.Count -eq 0)) { "PASS" } else { "FAIL" }
+} elseif ($hasPass -and $clientExit -eq 0 -and $gatewayGate -and $round2Pass) { "PASS" } else { "FAIL" }
 
 # 10. 停止服务端 + 残留 java
 Write-Host "[$SessionId] [9/9] 停止服务端..."
@@ -861,24 +874,25 @@ if (-not $clientProc.HasExited) { Stop-Process -Id $clientProc.Id -Force -ErrorA
 # 仅杀本会话相关的 java 进程（通过端口和 run 目录定位），避免影响并行会话
 Stop-SessionJava -ServerPort $ServerPort -Loader $Loader
 
-# 输出结果 JSON
 $resultObj = @{
     SessionId = $SessionId
     Ver = $Ver
     Loader = $Loader
     Phase = $Phase
+    Scenario = $Scenario
     Result = $result
     ClientExitCode = $clientExit
     Round1Stats = $round1StatsFound
     Round1Pass = $round1Pass
     Round2Stats = $round2StatsFound
     Round2Pass = $round2Pass
+    # T3 P0 probe 门禁失败名单（空数组 = 全过或 probe 缺失跳过）；
+    # 非 classic 场景四条 P0 门禁整体跳过（scenario-gated），ProbeGateFailures 恒为空
+    ProbeGateScenarioGated = ($Scenario -ne "classic")
+    ProbeGateFailures = @($probeGateFailures)
     ServerSwitched = $serverSwitched
     HasPass = $hasPass
     HasFail = $hasFail
-    UdpFailoverMarkers = $udpFailoverFound
-    UdpFailoverCorePass = $udpFailoverCorePass
-    ClientRecoveryFreeze = $clientRecoveryFreeze
     # T7 V0 网关断言字段（稳定命名供 T9 消费）：
     #   GatewayRound1.gatewayState/gatewayS2c/gatewayC2s/gatewayResume
     #   GatewayRound2.gatewayState/gatewayS2c/gatewayC2s/gatewayResume
@@ -886,20 +900,23 @@ $resultObj = @{
     GatewayRound1 = $gatewayRound1
     GatewayRound2 = $gatewayRound2
     GatewayGatePass = $gatewayGate
+    # T7 dimension post-exit 磁盘门禁失败名单（仅 dimension 场景评估；空数组 = 全过或不适用）
+    DimensionGateFailures = @($dimensionGateFailures)
+    # T2 PROBE JSON v1：roundN.json 原值透传（counters/gateway/disk 等），缺失为 $null
+    Probe = @{
+        Round1 = $probeRound1
+        Round2 = $probeRound2
+    }
     StatsFiles = @(
         if ($round1StatsFound) { "build/smoke-test/stats/${SessionId}_round1_VD${Vd1}.txt" }
         if ($round2StatsFound) { "build/smoke-test/stats/${SessionId}_round2_VD${Vd2}.txt" }
     )
 }
-$resultObj | ConvertTo-Json -Depth 3 | Out-File (Join-Path $resultsDir "result_${SessionId}.json")
+$resultObj | ConvertTo-Json -Depth 5 | Out-File (Join-Path $resultsDir "result_${SessionId}.json")
 
 Write-Host "[$SessionId] === RESULT: $result ==="
 Write-Host "[$SessionId] Round1: stats=$round1StatsFound pass=$round1Pass"
 Write-Host "[$SessionId] Round2: stats=$round2StatsFound pass=$round2Pass"
 Write-Host "[$SessionId] ServerSwitched: $serverSwitched Exit: $clientExit"
 Write-Host "[$SessionId] Gateway gate: $gatewayGate (R1=$($gatewayRound1.gatewayState)/c2s=$($gatewayRound1.gatewayC2s) R2=$($gatewayRound2.gatewayState)/c2s=$($gatewayRound2.gatewayC2s))"
-if ($udpFailoverIsPhase) {
-    Write-Host "[$SessionId] UdpFailover markers: UDP_BIND_OK=$($udpFailoverFound['UDP_BIND_OK']) UDP_WRR_OK=$($udpFailoverFound['UDP_WRR_OK']) FAILOVER_PERMIT_OK=$($udpFailoverFound['FAILOVER_PERMIT_OK']) FAILOVER_RECONNECT_OK=$($udpFailoverFound['FAILOVER_RECONNECT_OK']) FAILOVER_TERMINAL_OK=$($udpFailoverFound['FAILOVER_TERMINAL_OK']) CACHE_RESUME_HIT=$($udpFailoverFound['CACHE_RESUME_HIT'])"
-}
-Write-Host "[$SessionId] Client recoveryFreeze=$clientRecoveryFreeze"
 return $result

@@ -292,6 +292,15 @@ final class ChunkAdmissionController {
             return;
         }
         batchesById.remove(batchId);
+        if (batchId == currentBatchId) {
+            // 批次在本 tick 内提前完成（切维时旧维度投递被批量 release/expire、
+            // 新维度 ACK 快速回收，小配额批次可中途清零）：必须复位 currentBatchId，
+            // 否则同 tick 后续 admit 走「已有当前批」分支，batchesById.get 拿到已移除
+            // 的批次 → :121 remaining++ NPE（dim6 e2e 服务端崩溃实证）。
+            // 复位后同 tick 下一次 admit 开新批并重新计入 unacknowledgedBatches，
+            // 与跨 tick 的既有曲线语义一致。
+            currentBatchId = 0L;
+        }
         unacknowledgedBatches--;
         if (batch.acknowledgedCount == 0 || batch.firstSentAtNanos == 0L) {
             return;

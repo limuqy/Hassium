@@ -1,0 +1,25 @@
+# seedgen 场景：T6 SeedGen 本地生成单轮冒烟（join → wait(delayMs*2) → dump ROUND1 → exit）
+#
+# 配置档案需求（T8 harness 落盘；本场景只声明）：
+#   profile=seedgen
+#   服务端 chunk.seedGenEnabled=true
+#   客户端 chunk.seedGenEnabled=true
+#   世界=干净世界（无既有 hassium_cache/<serverId>/ 存档缓存，保证 pristine 判定成立）
+#
+# 门禁（assertProbe，键名与 SmokeProbeWriter PROBE JSON 同源）：
+#   1) counters.locallyGenerated > 0 —— SeedGen 本地生成真实发生
+#      （recordLocallyGeneratedChunk 在本地生成区块成功应用时计数）
+#   2) stats.staleFullChunkRequestCount < stats.clientAppliedChunkCount —— SeedRef 回退全量有界
+#      （回退路径 fallbackToFullRequest/超时回退走 requestFullChunks(staleOrFallback=true)
+#       计入 staleFullChunkRequestCount；有界语义 = 回退数严格小于总应用块数，
+#       即至少部分区块未经全量请求送达，seedgen 主链路未被回退淹没。
+#       [缺口] 服务端精确 per-player 回退计数 ServerChunkPushManager.seedGenFallbackCounts
+#       未暴露到 PROBE，客户端只能用 staleFullChunkRequestCount 作代理上界——详见
+#       work/SeedgenScene-TASK.md，不臆造字段。）
+join label=WAIT_JOIN_1 since=start timeoutMs=${joinTimeoutMs}
+fly seconds=${moveSeconds} tag=MOVE_
+wait ms=${round1WaitMs}
+dump label=ROUND1 round=1
+assertProbe key=counters.locallyGenerated op=gt value=0
+assertProbe key=stats.staleFullChunkRequestCount op=lt vs=stats.clientAppliedChunkCount
+exit rounds=1

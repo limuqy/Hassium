@@ -28,12 +28,25 @@ public final class ShadowServerRegistry {
 
     /** 登出保活空闲超时：无人重进同服则关停释放 RAM。 */
     static final long IDLE_TIMEOUT_MS = 60_000L;
+    /**
+     * SeedGen 预期下（客户端配置开启）投机创建对握手 seed 的有界等待。
+     * 投机创建（{@link ShadowLightCompute#startShadowSpeculative}）早于握手完成，
+     * 曾以 seed=0 装配 → 本地生成与服务端世界不一致被门禁拦截（seedgen e2e 实证：
+     * 影子 started(seed=0) 早于 Handshake accepted 2s，locallyGenerated=0）。
+     */
+    static final long SEED_WAIT_TIMEOUT_MS = 2_000L;
+    static final long SEED_WAIT_POLL_MS = 25L;
+
 
     private final Object lock = new Object();
     private volatile ShadowSeedServer server;
     private volatile String boundServerId;
     private volatile boolean failed;
     private volatile boolean parked;
+    /** 当前实例装配用的 world seed（投机创建时可为 0；seed 到达后触发重建判定）。 */
+    private volatile long assembledSeed;
+    /** createShadowServerWithLockRetry 进行中（onServerSeedArrived 重试等待该标志）。 */
+    private volatile boolean creating;
     /** 本次关停后台任务（关停完成时 complete；保存必须落完才能重开同一存档目录）。 */
     private volatile java.util.concurrent.CompletableFuture<Void> shutdownFuture;
     /** 上一次关停的 future（由每次 {@link #shutdown()} 更新为本次 future）——
@@ -108,6 +121,7 @@ public final class ShadowServerRegistry {
             return null;
         }
         awaitPreviousShutdownComplete();
+        awaitServerSeedIfExpected();
         synchronized (lock) {
             existing = server;
             if (existing != null) {
@@ -128,8 +142,10 @@ public final class ShadowServerRegistry {
                     "[SHADOW] Creating shadow server (seed={}, handshakeDone={})",
                     seed, ClientChunkPipeline.getInstance().isHassiumHandshakeDone());
             try {
+                creating = true;
                 ShadowSeedServer created = createShadowServerWithLockRetry(seed);
                 server = created;
+                assembledSeed = seed;
                 parked = false;
                 boundServerId = ClientChunkPipeline.getInstance().getServerId();
                 cancelIdleTimeout();
@@ -142,8 +158,10 @@ public final class ShadowServerRegistry {
                         seed, (System.nanoTime() - createStartNs) / 1_000_000L);
                 SeedGenExecutor.getInstance().onShadowReady();
                 scheduleBloomSync(created);
+                creating = false;
                 return created;
             } catch (Exception e) {
+                creating = false;
                 failShadowServer();
                 Constants.LOG.error("Hassium: Shadow server creation failed; "
                         + "client cache/lighting/OVD disabled. Disable 'chunk.hassiumEngineEnabled' to suppress.", e);
@@ -151,7 +169,92 @@ public final class ShadowServerRegistry {
             }
         }
     }
+    /**
+     * SeedGen 预期下（客户端配置开启）等待握手 seed 到达，有界超时后按现状以 seed=0
+     * 装配降级（消费侧本地生成仍被既有 gate 拦截，不产出错误地形）。
+     * 退出条件任一：seed 就绪 / 握手完成（seed 为最终值，0 = 服务端 SeedGen 关，
+     * 保持「关闭时不泄露真实 seed」语义）/ 超时 / 中断。
+     * 必须在 {@code synchronized (lock)} 之外等待：避免阻塞其他 getOrCreate 调用方
+     * （consumeLoop / OVD drain 等后台管线）。
+     */
+    private void awaitServerSeedIfExpected() {
+        if (!io.github.limuqy.mc.hassium.config.HassiumConfigService.getInstance()
+                .isClientSeedGenEnabled()) {
+            return;
+        }
+        ClientChunkPipeline pipeline = ClientChunkPipeline.getInstance();
+        long deadline = System.currentTimeMillis() + SEED_WAIT_TIMEOUT_MS;
+        while (pipeline.getServerSeed() == 0L
+                && !pipeline.isHassiumHandshakeDone()
+                && System.currentTimeMillis() < deadline) {
+            try {
+                Thread.sleep(SEED_WAIT_POLL_MS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+        }
+        DebugLogger.info(DebugLogger.LogType.ASYNC,
+                "[SHADOW] Seed wait done: seed={} handshakeDone={}",
+                pipeline.getServerSeed(), pipeline.isHassiumHandshakeDone());
+    }
 
+    /**
+     * 重建判定（纯函数测试缝）：SeedGen 预期下，真实 seed 到达且当前实例装配种子不符
+     * （投机创建的 seed=0 实例）→ 需要重建。
+     */
+    static boolean shouldRebuildForSeed(long assembledSeed, long arrivedSeed,
+                                        boolean clientSeedGenEnabled) {
+        return clientSeedGenEnabled && arrivedSeed != 0L && assembledSeed != arrivedSeed;
+    }
+
+    /** 重建重试上界：创建进行中最多等 ~4s（20 × 200ms），超时放弃本会话重建。 */
+    static final int SEED_REBUILD_MAX_RETRIES = 20;
+    static final long SEED_REBUILD_RETRY_MS = 200L;
+
+    /**
+     * 握手真实 seed 到达（{@code ClientChunkPipeline.setServerSeedInfo} 调用）：
+     * 若现有实例是投机创建的 seed=0 装配 → 关停并按真实 seed 重建。
+     * <p>
+     * 为什么等待路径不够：投机创建可发生在 ConnectScreen（早于 TCP 连接），实例随即
+     * park；登录后 getOrCreate 恒走复用分支，永远不会再进 seed 等待。故 seed 到达时
+     * 必须主动判重建。SeedGen 关闭（arrivedSeed=0）不触发——保持「关闭时不泄露
+     * 真实 seed」语义；park 复用的旧会话实例 assembledSeed 已是真实 seed，判定为
+     * 相等 → 不重建，R1/R2 缓存复用不受影响。
+     */
+    public void onServerSeedArrived(long arrivedSeed) {
+        boolean enabled = io.github.limuqy.mc.hassium.config.HassiumConfigService.getInstance()
+                .isClientSeedGenEnabled();
+        if (!shouldRebuildForSeed(assembledSeed, arrivedSeed, enabled)) {
+            return;
+        }
+        Runnable rebuild = () -> {
+            for (int i = 0; i < SEED_REBUILD_MAX_RETRIES; i++) {
+                if (!creating) {
+                    break;
+                }
+                try {
+                    Thread.sleep(SEED_REBUILD_RETRY_MS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+            }
+            if (creating || !shouldRebuildForSeed(assembledSeed, arrivedSeed, enabled)) {
+                return; // 创建中超时放弃 / 已被其他线程重建
+            }
+            Constants.LOG.info("Hassium: Shadow rebuild for real seed {} (assembled seed={})",
+                    arrivedSeed, assembledSeed);
+            shutdown();
+            getOrCreate();
+        };
+        var executor = io.github.limuqy.mc.hassium.concurrent.HassiumTaskExecutor.getClient();
+        if (executor != null && executor.isRunning()) {
+            executor.submit(rebuild, io.github.limuqy.mc.hassium.concurrent.TaskCategory.BEST_EFFORT);
+        } else {
+            scheduler.submit(rebuild);
+        }
+    }
     /** park → 活跃：取消 idle，标记 ready，唤醒消费者。 */
     private ShadowSeedServer unparkIfNeeded(ShadowSeedServer s) {
         if (parked) {

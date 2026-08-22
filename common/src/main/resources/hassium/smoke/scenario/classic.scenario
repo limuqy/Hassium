@@ -1,0 +1,14 @@
+# classic 场景：两轮连服 VD 切换（行为不变迁移自旧 WAIT_JOIN/ROUND_STATS/DISCONNECTING 状态机）
+# round1WaitMs = delayMs*2（R1 全量下载 ~1681 chunk 进缓存）；round2WaitMs = max(3000, delayMs)
+# （R2 客户端缓存命中为主，floor 3000ms 防止断开尚未重连完）。
+join label=WAIT_JOIN_1 since=start timeoutMs=${joinTimeoutMs}
+fly seconds=${moveSeconds} tag=MOVE_
+wait ms=${round1WaitMs}
+dump label=ROUND1 round=1
+disconnect
+reconnect delayMs=${reconnectDelayMs}
+join label=WAIT_JOIN_2 since=disconnect timeoutMs=${joinTimeoutMs}
+fly seconds=${moveSeconds} tag=MOVE_
+wait ms=${round2WaitMs}
+dump label=ROUND2 round=2
+exit

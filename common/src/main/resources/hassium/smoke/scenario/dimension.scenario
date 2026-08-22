@@ -1,0 +1,34 @@
+# dimension 场景（T7）：单连接三轮切维冒烟——主世界 → 下界 → 末地 → 回主世界。
+# 链路：join → wait(delayMs*2) → dump R1 → dimension nether → wait → dump NETHER
+#       → dimension end → wait → dump END → dimension overworld → wait → dump BACK → exit。
+# 等待：nether/back 段 ${dimWaitMs}（默认 20s）；END 段 ${endWaitMs}（默认 30s——下界修复后
+#       末地注入/算光更慢，20s 不够 joined）。可用 hassium.smokeTest.dimWaitMs/endWaitMs 覆盖。
+# 门禁：每轮 dump 后 assertProbe 校验 joined 且 dimension 正确（活体状态断言，失败即退出码 2）；
+#   中段轮 dump 用 gate=false 跳过 validateStats 的 ROUND2 缓存命中口径（切维后全新区块无缓存命中，
+#   属预期，不作为失败）；整体 PASS 只看 R1 统计校验 + 各轮 assertProbe（exit rounds=1）。
+# 磁盘证据：probe JSON disk.dimensions.{overworld|nether|end}.regionFileCount 记录三维度 region 落盘数
+#   （overworld=world/region、nether=world/DIM-1/region、end=world/DIM1/region）。
+#   「主世界 region 未被切维覆写」的跨轮比对（round1.json vs round4.json）由 harness/离线脚本完成，
+#   引擎内跨轮快照比较待主会话定夺（见 work/DimScene-TASK.md）。
+# profile：本场景无 hassium toml 改动需求，无 <name>.profile.properties。
+join label=WAIT_JOIN_1 since=start timeoutMs=${joinTimeoutMs}
+wait ms=${round1WaitMs}
+dump label=ROUND1 round=1
+assertProbe label=R1_JOINED key=joined op=eq value=true
+assertProbe label=R1_DIM key=dimension op=eq value=minecraft:overworld
+dimension to=nether
+wait ms=${dimWaitMs}
+dump label=NETHER round=2 gate=false
+assertProbe label=NETHER_JOINED key=joined op=eq value=true
+assertProbe label=NETHER_DIM key=dimension op=eq value=minecraft:the_nether
+dimension to=end
+wait ms=${endWaitMs}
+dump label=END round=3 gate=false
+assertProbe label=END_JOINED key=joined op=eq value=true
+assertProbe label=END_DIM key=dimension op=eq value=minecraft:the_end
+dimension to=overworld
+wait ms=${dimWaitMs}
+dump label=BACK round=4 gate=false
+assertProbe label=BACK_JOINED key=joined op=eq value=true
+assertProbe label=BACK_DIM key=dimension op=eq value=minecraft:overworld
+exit rounds=1
