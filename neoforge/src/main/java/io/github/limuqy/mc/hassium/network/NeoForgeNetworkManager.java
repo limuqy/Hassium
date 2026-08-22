@@ -1521,27 +1521,14 @@ public class NeoForgeNetworkManager implements NetworkManager {
 
     @SubscribeEvent
     public static void registerPayloads(RegisterPayloadHandlersEvent event) {
-        if (!HassiumConfigService.getInstance().isNetworkCompressionEnabled()) {
-            LOGGER.warn("Hassium: master.enabled=false, skipping NeoForge Payload registration");
-            return;
-        }
-        LOGGER.debug("Hassium: Registering NeoForge Payload handlers");
-
-        var registrar = event.registrar(PROTOCOL_VERSION);
-
-        // 注册预握手 (C2S, 配置阶段)：提前标记 Hassium 客户端，
-        // ServerPlayer 创建时自动提升压缩 → 进服第一圈 sendChunk 全走 Hassium 链
-        registrar.configurationToServer(
-                PreHandshakePayload.TYPE,
-                PreHandshakePayload.STREAM_CODEC,
-                (payload, context) -> handlePreHandshake(payload, context)
-        );
-
-        // gateway_info S2C：vanilla 通道直发（ServerGatewayInfoSender，tick 内 drainPending）。
-        // NeoForge NetworkRegistry.checkPacket 对未注册 payload 直接抛
-        // UnsupportedOperationException 炸 tick 循环（fabric 无此校验，故仅 neo 崩）。
-        // 与 fabric FabricPayloadRegistry 同模式：RawCustomPayload 字节流 codec 注册；
+        // gateway_info S2C 必须无条件注册（先于下方守卫）：守卫任一路径关闭
+        // （net/master 全关，或 NetworkCapability 能力降级经 setNetworkCompressionEnabled(false)
+        // 强制关注册）时，ServerGatewayInfoSender.canSend（dedicated + master.enabled）
+        // 与注册状态可能脱钩——NeoForge checkPacket 对未注册 S2C payload 直接抛异常炸 tick。
+        // 服务端不发送时注册无副作用。vanilla 通道直发（tick 内 drainPending）；
+        // 与 fabric FabricPayloadRegistry 同模式：RawCustomPayload 字节流 codec，
         // 客户端消费走同一 common 链（GatewayInfoCodec.decode → NetworkCore.onGatewayInfo）。
+        var registrar = event.registrar(PROTOCOL_VERSION);
         registrar.playToClient(
                 io.github.limuqy.mc.hassium.compat.PacketPayloadCompat.payloadType(
                         ResourceLocationCompat.create(io.github.limuqy.mc.hassium.network.HassiumPacketIds.GATEWAY_INFO_S2C)),
@@ -1558,6 +1545,22 @@ public class NeoForgeNetworkManager implements NetworkManager {
                     }
                 })
         );
+
+        if (!HassiumConfigService.getInstance().isNetworkCompressionEnabled()) {
+            LOGGER.warn("Hassium: network core disabled, skipping remaining NeoForge Payload registration");
+            return;
+        }
+        LOGGER.debug("Hassium: Registering NeoForge Payload handlers");
+
+
+        // 注册预握手 (C2S, 配置阶段)：提前标记 Hassium 客户端，
+        // ServerPlayer 创建时自动提升压缩 → 进服第一圈 sendChunk 全走 Hassium 链
+        registrar.configurationToServer(
+                PreHandshakePayload.TYPE,
+                PreHandshakePayload.STREAM_CODEC,
+                (payload, context) -> handlePreHandshake(payload, context)
+        );
+
 
         // 注册握手请求 (C2S)
         registrar.playToServer(
