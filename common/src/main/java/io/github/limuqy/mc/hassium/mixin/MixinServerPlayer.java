@@ -1,6 +1,7 @@
 package io.github.limuqy.mc.hassium.mixin;
 
 import com.mojang.authlib.GameProfile;
+import io.github.limuqy.mc.hassium.compat.LevelCompat;
 import io.github.limuqy.mc.hassium.network.PlayerCompressionTracker;
 import io.github.limuqy.mc.hassium.network.ServerChunkPushManager;
 import io.github.limuqy.mc.hassium.network.ServerGatewayInfoSender;
@@ -34,7 +35,7 @@ public abstract class MixinServerPlayer extends Player {
 
     // review-fix: T7-65: 带描述符精确注入主构造器——1.20.2+ 为四参 (…ClientInformation)，
     // 1.20.1 为三参；避免未来版本新增构造器时 <init> 无描述符命中全部重载重复执行
-#if MC_VER < MC_1_20_2
+#if MC_VER < MC_1_21_1
     @Inject(method = "<init>(Lnet/minecraft/server/MinecraftServer;Lnet/minecraft/server/level/ServerLevel;Lcom/mojang/authlib/GameProfile;)V", at = @At("TAIL"))
 #else
     @Inject(method = "<init>(Lnet/minecraft/server/MinecraftServer;Lnet/minecraft/server/level/ServerLevel;Lcom/mojang/authlib/GameProfile;Lnet/minecraft/server/level/ClientInformation;)V", at = @At("TAIL"))
@@ -51,7 +52,7 @@ public abstract class MixinServerPlayer extends Player {
         ServerGatewayInfoSender.onPlayerInit(self);
     }
 
-#if MC_VER < MC_1_20_2
+#if MC_VER < MC_1_21_1
     /**
      * 拦截 trackChunk：1.20.1 无 {@code PlayerChunkSender}，原版会对已加载视距一窝蜂调用。
      * 专用服只登记 pending（与压缩无关），由 tick 按 {@code maxChunksPerTick} 定额 drain。
@@ -67,13 +68,7 @@ public abstract class MixinServerPlayer extends Player {
         DebugLogger.info(LogType.NETWORK, "[TRACK_CHUNK] Player {} tracking chunk {} (paced)",
                 self.getName().getString(), pos);
 
-        String dimension = self.level().dimension()
-#if MC_VER < MC_1_21_11
-                .location()
-#else
-                .identifier()
-#endif
-                .toString();
+        String dimension = LevelCompat.getDimensionId(self.level());
         ServerChunkPushManager.getInstance().markChunkPendingToSend(self, pos, dimension);
 
         ci.cancel();
@@ -90,13 +85,7 @@ public abstract class MixinServerPlayer extends Player {
         if (!ServerChunkPushManager.shouldPaceChunkSends()) {
             return;
         }
-        String dimension = self.level().dimension()
-#if MC_VER < MC_1_21_11
-                .location()
-#else
-                .identifier()
-#endif
-                .toString();
+        String dimension = LevelCompat.getDimensionId(self.level());
         ServerChunkPushManager.getInstance().releasePlayerChunkDelivery(self.getUUID(), dimension, pos);
     }
 #endif

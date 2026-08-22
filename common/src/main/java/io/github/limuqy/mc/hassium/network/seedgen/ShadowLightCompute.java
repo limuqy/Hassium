@@ -8,6 +8,7 @@ import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.network.ClientChunkHandler;
 import io.github.limuqy.mc.hassium.network.ClientChunkHandler.TraceOrigin;
 import io.github.limuqy.mc.hassium.network.ClientChunkPipeline;
+import io.github.limuqy.mc.hassium.compat.LevelCompat;
 import io.github.limuqy.mc.hassium.utils.DebugLogger;
 import io.github.limuqy.mc.hassium.utils.DimensionKey;
 import java.util.ArrayList;
@@ -1035,13 +1036,7 @@ public final class ShadowLightCompute {
         try {
             Minecraft mc = Minecraft.getInstance();
             if (mc != null && mc.level != null) {
-                return mc.level.dimension()
-#if MC_VER < MC_1_21_11
-                        .location()
-#else
-                        .identifier()
-#endif
-                        .toString();
+                return LevelCompat.getDimensionId(mc.level);
             }
         } catch (Throwable ignored) {
         }

@@ -1,13 +1,6 @@
 package io.github.limuqy.mc.hassium.network;
 
-import io.github.limuqy.mc.hassium.Constants;
-import io.github.limuqy.mc.hassium.compat.ResourceLocationCompat;
 import net.minecraft.network.FriendlyByteBuf;
-#if MC_VER < MC_1_21_11
-import net.minecraft.resources.ResourceLocation;
-#else
-import net.minecraft.resources.Identifier;
-#endif
 
 import java.util.ArrayList;
 import java.util.BitSet;
@@ -28,15 +21,6 @@ import java.util.List;
  * 天然兼容）；新版接收端在尾块缺失（旧服务端）时视为空掩码（降级为旧语义）。
  */
 public record LightDeltaS2CPacket(List<Entry> entries) {
-
-    public static final
-#if MC_VER < MC_1_21_11
-    ResourceLocation
-#else
-    Identifier
-#endif
-    CHANNEL = ResourceLocationCompat.create(Constants.MOD_ID, "light_delta_s2c");
-
     public void encode(FriendlyByteBuf buf) {
         buf.writeVarInt(entries.size());
         for (Entry entry : entries) {

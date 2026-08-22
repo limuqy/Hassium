@@ -7,7 +7,7 @@ import net.darkhax.curseforgegradle.TaskPublishCurseForge
  *
  * 1.20.1 特殊：neoforge 子项目以 loom.platform='forge' 编译（settings.gradle），
  * 产物二进制同时兼容 Forge 与 NeoForge；上传时同一 jar 双标 Forge + NeoForge。
- * 其它版本严格按 builds_for 各自 loader 单标上传（1.20.6 的 forge 子项目独立产 Forge 标签）。
+ * 其它版本严格按 builds_for 各自 loader 单标上传。
  */
 
 def cfLoaderByProject = [

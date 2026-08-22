@@ -55,7 +55,7 @@ public final class TickMonitor {
                 return;
             }
             long ns;
-#if MC_VER < MC_1_20_3
+#if MC_VER < MC_1_21_1
             // 1.20.1~1.20.2：public long[] tickTimes（无公开 getter）
             ns = server.tickTimes[tickCount % 100];
 #else

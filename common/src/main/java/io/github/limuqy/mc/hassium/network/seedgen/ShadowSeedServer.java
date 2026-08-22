@@ -1,35 +1,12 @@
 package io.github.limuqy.mc.hassium.network.seedgen;
 
-#if MC_VER < MC_1_21_9
-import com.mojang.authlib.GameProfile;
-#else
-import com.mojang.authlib.GameProfile;
-import com.mojang.authlib.yggdrasil.ServicesKeySet;
-import net.minecraft.server.players.NameAndId;
-import net.minecraft.server.players.ProfileResolver;
-import net.minecraft.server.players.UserNameToIdResolver;
-import java.util.HashSet;
-import java.util.Set;
-import java.util.UUID;
-import java.util.Optional;
-#endif
-
-#if MC_VER >= MC_1_21_11
-import net.minecraft.server.permissions.LevelBasedPermissionSet;
-import net.minecraft.server.permissions.PermissionSet;
-#endif
-
-#if MC_VER >= MC_1_20_5
-import net.minecraft.util.debugchart.LocalSampleLogger;
-import net.minecraft.util.debugchart.SampleLogger;
-#endif
-
-import com.mojang.authlib.yggdrasil.ServicesKeySet;
 import com.mojang.logging.LogUtils;
 import io.github.limuqy.mc.hassium.compat.BlockEntityCompat;
 import io.github.limuqy.mc.hassium.compat.EntityPacketCompat;
 import io.github.limuqy.mc.hassium.compat.LevelChunkSectionCompat;
+import io.github.limuqy.mc.hassium.compat.LevelCompat;
 import io.github.limuqy.mc.hassium.compat.ShadowChunkMapCompat;
+import io.github.limuqy.mc.hassium.compat.ShadowServerCompat;
 import io.github.limuqy.mc.hassium.mixin.ServerLevelAccessor;
 import io.github.limuqy.mc.hassium.mixin.ThreadedLevelLightEngineAccessor;
 import io.github.limuqy.mc.hassium.network.BlockEntityDataS2CPacket;
@@ -43,7 +20,6 @@ import java.net.Proxy;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.locks.LockSupport;
 import java.util.function.BooleanSupplier;
 import net.minecraft.CrashReport;
@@ -68,9 +44,6 @@ import net.minecraft.network.protocol.game.ClientboundSetEntityMotionPacket;
 import net.minecraft.network.protocol.game.ClientboundTeleportEntityPacket;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.FullChunkStatus;
-#if MC_VER >= MC_1_21_2
-import net.minecraft.world.entity.EntitySpawnReason;
-#endif
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.level.entity.PersistentEntitySectionManager;
@@ -79,25 +52,7 @@ import net.minecraft.server.WorldStem;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerChunkCache;
 import net.minecraft.server.level.ThreadedLevelLightEngine;
-#if MC_VER < MC_1_20_5
-import com.mojang.datafixers.util.Either;
-import net.minecraft.server.level.ChunkHolder;
-#else
-import net.minecraft.server.level.ChunkResult;
-#endif
-#if MC_VER < MC_1_21_9
-import net.minecraft.server.level.progress.LoggerChunkProgressListener;
-#else
-import net.minecraft.server.level.progress.LoggingLevelLoadListener;
-#endif
-#if MC_VER >= MC_1_21_1
-import net.minecraft.ReportType;
-#endif
 import net.minecraft.server.packs.repository.PackRepository;
-import net.minecraft.server.players.PlayerList;
-#if MC_VER >= MC_1_21_9
-import net.minecraft.server.notifications.EmptyNotificationService;
-#endif
 import net.minecraft.util.datafix.DataFixers;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.LightLayer;
@@ -110,11 +65,6 @@ import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.level.lighting.LevelLightEngine;
 import net.minecraft.world.level.lighting.LightEngine;
 import net.minecraft.world.level.storage.LevelStorageSource;
-#if MC_VER < MC_1_20_5
-import net.minecraft.world.level.chunk.ChunkStatus;
-#else
-import net.minecraft.world.level.chunk.status.ChunkStatus;
-#endif
 import org.slf4j.Logger;
 
 /**
@@ -128,12 +78,16 @@ import org.slf4j.Logger;
  *   <li>区块生成靠 {@link ServerChunkCache#getChunk} 的 managedBlock 驱动任务队列，
  *       任意线程阻塞调用即可，无需本 server 跑 tick 循环</li>
  * </ul>
+ * <p><b>WAVE2 收口</b>：方法体内 API / 构造器 / ChunkStatus 换包 / 进度监听 / 权限集以外的
+ * 运行时差异已迁入 {@link io.github.limuqy.mc.hassium.compat.ShadowServerCompat}。
+ * 残留 {@code #if} 仅限 {@code MinecraftServer} 子类必须覆写的抽象方法签名，以及
+ * {@code createLevels} 的 protected 有参/无参调用（compat 包无法代调）。
  */
 public class ShadowSeedServer extends MinecraftServer {
     private static final Logger LOGGER = LogUtils.getLogger();
 
-    /** Services 最小化（1.20.1 四参 / 1.21.11 五参，后者补 mock resolver 防 NPE） */
-    private static final Services NO_SERVICES = buildNoServices();
+    /** Services 最小化（1.20.1 四参 / 1.21.9 五参 mock resolver，见 {@link ShadowServerCompat#noServices}） */
+    private static final Services NO_SERVICES = ShadowServerCompat.noServices();
 
     /**
      * 共享只读空光层（全 0）：清光路径 {@code queueSectionData(layer, sp, EMPTY)} 用——
@@ -194,13 +148,7 @@ public class ShadowSeedServer extends MinecraftServer {
                              long seed,
                              java.nio.file.Path worldRoot) {
         super(thread, access, repo, stem, Proxy.NO_PROXY, DataFixers.getDataFixer(), NO_SERVICES,
-#if MC_VER < MC_1_20_5
-                LoggerChunkProgressListener::new);
-#elif MC_VER < MC_1_21_9
-                LoggerChunkProgressListener::create);
-#else
-                LoggingLevelLoadListener.forDedicatedServer());
-#endif
+                SeedGenLevelCompat.chunkProgressArg());
         this.stem = stem;
         this.worldSeed = seed;
         this.worldRoot = worldRoot;
@@ -222,13 +170,7 @@ public class ShadowSeedServer extends MinecraftServer {
         io.github.limuqy.mc.hassium.server.RuntimeServerContext.setShadowServer(true);
         io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.clear();
         SectionDeltaSnapshots.clear();
-        this.setPlayerList(new PlayerList(this, this.registries(), this.playerDataStorage,
-#if MC_VER < MC_1_21_9
-                1
-#else
-                new EmptyNotificationService()
-#endif
-        ) {});
+        this.setPlayerList(ShadowServerCompat.createPlayerList(this, this.playerDataStorage));
         long t0Ns = System.nanoTime(); // T0b 诊断：initServer 各阶段耗时
         this.loadLevel();
         long t1Ns = System.nanoTime();
@@ -257,10 +199,11 @@ public class ShadowSeedServer extends MinecraftServer {
     protected void loadLevel() {
         this.worldData.setModdedInfo(this.getServerModName(), this.getModdedStatus().shouldReportAsModified());
         long tCreateNs = System.nanoTime();
-#if MC_VER < MC_1_20_5
-        this.createLevels(new LoggerChunkProgressListener(11));
+        // 豁免：createLevels 1.20.1 有参 / 1.21.1 工厂 / 1.21.9 无参，且为 MinecraftServer.protected
+#if MC_VER < MC_1_21_1
+        this.createLevels(new net.minecraft.server.level.progress.LoggerChunkProgressListener(11));
 #elif MC_VER < MC_1_21_9
-        this.createLevels(LoggerChunkProgressListener.create(11));
+        this.createLevels(net.minecraft.server.level.progress.LoggerChunkProgressListener.create(11));
 #else
         this.createLevels();
 #endif
@@ -330,52 +273,29 @@ public class ShadowSeedServer extends MinecraftServer {
                 if (dx == 0 && dz == 0) {
                     continue;
                 }
-                if (generateChunkInternal(cache, new ChunkPos(pos.x + dx, pos.z + dz), ChunkStatus.BIOMES, deadline) == null) {
+                if (generateChunkInternal(cache, new ChunkPos(pos.x + dx, pos.z + dz), true, deadline) == null) {
                     return null;
                 }
             }
         }
-        ChunkAccess chunk = generateChunkInternal(cache, pos, ChunkStatus.FULL, deadline);
+        ChunkAccess chunk = generateChunkInternal(cache, pos, false, deadline);
         return chunk instanceof LevelChunk levelChunk ? levelChunk : null;
     }
 
     /**
-     * 单块按指定 ChunkStatus 生成（generateChunk 内部：目标块 FULL、邻块 BIOMES，
+     * 单块按指定状态生成（generateChunk 内部：目标块 FULL、邻块 BIOMES，
      * 共用实现与超时）。返回生成后的 ChunkAccess（BIOMES 时为 ProtoChunk，FULL 时
      * 为 LevelChunk），超时/中断/失败返回 null → 调用方回退全量。
+     *
+     * @param biomesOnly true = {@code ChunkStatus.BIOMES}；false = {@code FULL}
      */
-    private ChunkAccess generateChunkInternal(ServerChunkCache cache, ChunkPos pos, ChunkStatus status, long deadline) {
+    private ChunkAccess generateChunkInternal(ServerChunkCache cache, ChunkPos pos, boolean biomesOnly, long deadline) {
         ShadowChunkMapCompat.enterWorldgen();
         try {
-            return generateChunkInternalAllowed(cache, pos, status, deadline);
+            return ShadowServerCompat.awaitGeneratedChunk(cache, pos, biomesOnly, deadline);
         } finally {
             ShadowChunkMapCompat.leaveWorldgen();
         }
-    }
-
-    private ChunkAccess generateChunkInternalAllowed(ServerChunkCache cache, ChunkPos pos, ChunkStatus status, long deadline) {
-#if MC_VER < MC_1_20_5
-        CompletableFuture<Either<ChunkAccess, ChunkHolder.ChunkLoadingFailure>> future =
-                cache.getChunkFuture(pos.x, pos.z, status, true);
-#else
-        CompletableFuture<ChunkResult<ChunkAccess>> future =
-                cache.getChunkFuture(pos.x, pos.z, status, true);
-#endif
-        while (!future.isDone()) {
-            if (System.nanoTime() > deadline) {
-                return null;
-            }
-            try {
-                Thread.sleep(10L);
-            } catch (InterruptedException e) {
-                return null;
-            }
-        }
-#if MC_VER < MC_1_20_5
-        return future.join().left().orElse(null);
-#else
-        return future.join().orElse(null);
-#endif
     }
 
     /**
@@ -745,16 +665,13 @@ public class ShadowSeedServer extends MinecraftServer {
     }
 
     /**
-     * 解析 chunk 所属 ServerLevel（{@code LevelChunk.level()} 即装配时的 level 引用）。
+     * 解析 chunk 所属 ServerLevel（{@code LevelChunk.getLevel()} 即装配时的 level 引用，
+     * 全版本统一；1.21.11 亦无 {@code level()} 访问器）。
      * 光照引擎/天光判定按此 level 的 dimensionType——下界无天光，恒用 overworld
      * 会把 nether 柱误判需要 sky 层（REQ 明细5）。
      */
     private static ServerLevel chunkLevel(LevelChunk chunk) {
-#if MC_VER < MC_1_21_11
         return (ServerLevel) chunk.getLevel();
-#else
-        return (ServerLevel) chunk.level();
-#endif
     }
 
 
@@ -981,11 +898,7 @@ public class ShadowSeedServer extends MinecraftServer {
         LevelChunk chunk = injectedChunks.get(key);
         if (chunk != null) {
             // review-fix: T13-FixT3Chunk-2：注入区块不经 ChunkMap，level.setBlock 会触发幻影 worldgen——直接对注入 chunk 应用
-#if MC_VER < MC_1_21_5
-            chunk.setBlockState(pos, state, false);
-#else
-            chunk.setBlockState(pos, state, 3);
-#endif
+            ShadowServerCompat.setBlockState(chunk, pos, state);
         }
         invalidateChunkContent(dimension, java.util.Collections.singleton(key));
     }
@@ -1121,11 +1034,7 @@ public class ShadowSeedServer extends MinecraftServer {
         if (type == EntityType.PLAYER) {
             return; // 影子端不重建玩家（1.21.11 原版走 RemotePlayer 专用路径，服务端也不发 AddEntity 玩家）
         }
-        Entity entity = type.create(level
-#if MC_VER >= MC_1_21_2
-                , EntitySpawnReason.LOAD
-#endif
-        );
+        Entity entity = EntityPacketCompat.create(type, level);
         if (entity == null) {
             return;
         }
@@ -1261,64 +1170,14 @@ public class ShadowSeedServer extends MinecraftServer {
                     ((net.minecraft.server.level.ServerChunkCache) this.overworld().getChunkSource()).chunkMap;
             io.github.limuqy.mc.hassium.mixin.ChunkMapAccessor acc =
                     (io.github.limuqy.mc.hassium.mixin.ChunkMapAccessor) chunkMap;
-#if MC_VER < MC_1_21_2
-            // 1.20.1~1.21.1：readChunk 拿原始 NBT（126 已由 MixinRegionFile 读 hook 解压），
-            // 再走 ChunkSerializer.read 官方解析（含光照恢复）。
-            java.util.concurrent.CompletableFuture<java.util.Optional<net.minecraft.nbt.CompoundTag>> future =
-                    acc.hassium$readChunk(pos);
-            long deadline = System.nanoTime() + GENERATION_TIMEOUT_NANOS;
-            while (!future.isDone()) {
-                if (System.nanoTime() > deadline) {
-                    LOGGER.warn("Hassium: Shadow loadFromDisk timeout ({}, {})", pos.x, pos.z);
-                    return null;
-                }
-                try {
-                    Thread.sleep(10L);
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    return null;
-                }
-            }
-            net.minecraft.nbt.CompoundTag tag = future.join().orElse(null);
-            if (tag == null) {
-                return null; // 存档无此柱
-            }
             net.minecraft.world.level.chunk.ChunkAccess accChunk =
-#if MC_VER < MC_1_21_1
-                    net.minecraft.world.level.chunk.storage.ChunkSerializer.read(
-                            this.overworld(), this.overworld().getPoiManager(), pos, tag);
-#else
-                    // 1.21.1+：read 增加 RegionStorageInfo（官方 ChunkMap 构造同款取值）
-                    net.minecraft.world.level.chunk.storage.ChunkSerializer.read(
-                            this.overworld(), this.overworld().getPoiManager(),
-                            new net.minecraft.world.level.chunk.storage.RegionStorageInfo(
-                                    this.storageSource.getLevelId(), this.overworld().dimension(), "chunk"),
-                            pos, tag);
-#endif
-            return toLevelChunk(dimension, accChunk, pos);
-#else
-            // 1.21.2+：官方 scheduleChunkLoad 完整链（SerializableChunkData 解析）。
-            // TODO(版本推广)：1.21.2+ 分段适配（readChunk → SerializableChunkData.parse+read）
-            CompletableFuture<?> future = acc.hassium$scheduleChunkLoad(pos);
-            long deadline = System.nanoTime() + GENERATION_TIMEOUT_NANOS;
-            while (!future.isDone()) {
-                if (System.nanoTime() > deadline) {
-                    return null;
-                }
-                try {
-                    Thread.sleep(10L);
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    return null;
-                }
-            }
-            net.minecraft.world.level.chunk.ChunkAccess accChunk =
-                    (net.minecraft.world.level.chunk.ChunkAccess) future.join();
+                    ShadowServerCompat.loadFromVanillaChunkMap(
+                            acc, this.overworld(), this.storageSource.getLevelId(), pos,
+                            GENERATION_TIMEOUT_NANOS);
             if (accChunk == null) {
                 return null;
             }
             return toLevelChunk(dimension, accChunk, pos);
-#endif
         } catch (Throwable t) {
             LOGGER.debug("Hassium: Shadow loadFromDisk failed for {}", pos, t);
             return null;
@@ -1368,13 +1227,7 @@ public class ShadowSeedServer extends MinecraftServer {
 
     /** ServerLevel 的维度 id 字符串（{@code namespace:path}；两版本 location/identifier 封装）。 */
     static String dimensionId(ServerLevel lvl) {
-        return lvl.dimension()
-#if MC_VER < MC_1_21_11
-                .location()
-#else
-                .identifier()
-#endif
-                .toString();
+        return LevelCompat.getDimensionId(lvl);
     }
 
     /**
@@ -1654,12 +1507,7 @@ public class ShadowSeedServer extends MinecraftServer {
     }
     /** 原版序列化（版本差异封装；flush 时从 LevelChunk 取 NBT）。 */
     private net.minecraft.nbt.CompoundTag serializeChunkForSave(ServerLevel level, LevelChunk chunk) {
-#if MC_VER < MC_1_21_2
-        return net.minecraft.world.level.chunk.storage.ChunkSerializer.write(level, chunk);
-#else
-        return net.minecraft.world.level.chunk.storage.SerializableChunkData
-                .copyOf(level, chunk).write();
-#endif
+        return ShadowServerCompat.serializeChunk(level, chunk);
     }
     /** 指定维度注入柱序列化（flush 回调；hash 缺失时回填带维度）。 */
     private byte[] serializeInjectedColumn(String dimension, ChunkPos pos) {
@@ -1696,24 +1544,12 @@ public class ShadowSeedServer extends MinecraftServer {
                 return null;
             }
             net.minecraft.world.level.chunk.ChunkAccess accChunk =
-#if MC_VER < MC_1_21_1
-                    net.minecraft.world.level.chunk.storage.ChunkSerializer.read(
-                            this.overworld(), this.overworld().getPoiManager(), pos, tag);
-#elif MC_VER < MC_1_21_2
-                    net.minecraft.world.level.chunk.storage.ChunkSerializer.read(
-                            this.overworld(), this.overworld().getPoiManager(),
-                            new net.minecraft.world.level.chunk.storage.RegionStorageInfo(
-                                    this.storageSource.getLevelId(), this.overworld().dimension(), "chunk"),
-                            pos, tag);
-#else
-                    null;
-#endif
-#if MC_VER >= MC_1_21_2
-            LOGGER.debug("Hassium: parseNbtBytes 1.21.2+ not wired; falling back to vanilla load");
-            return null;
-#else
+                    ShadowServerCompat.parseChunkNbt(
+                            this.overworld(), this.storageSource.getLevelId(), pos, tag);
+            if (accChunk == null) {
+                return null;
+            }
             return toLevelChunk(dimension, accChunk, pos);
-#endif
         } catch (Throwable t) {
             LOGGER.debug("Hassium: parseNbtBytes failed for {}", pos, t);
             return null;
@@ -1805,11 +1641,7 @@ public class ShadowSeedServer extends MinecraftServer {
 
     /** 同步等待 ChunkMap 的 IOWorker 队列落盘（版本差异封装）。 */
     private void flushChunkWorker(ServerLevel level) {
-#if MC_VER < MC_1_21_11
-        level.getChunkSource().chunkMap.flushWorker();
-#else
-        level.getChunkSource().chunkMap.synchronize(true).join();
-#endif
+        ShadowServerCompat.flushChunkWorker(level);
     }
 
     /**
@@ -2058,12 +1890,7 @@ public class ShadowSeedServer extends MinecraftServer {
     public void onServerCrash(CrashReport crashReport) {
         super.onServerCrash(crashReport);
         LOGGER.error("Hassium: Shadow seed server crashed\n{}",
-#if MC_VER < MC_1_21_1
-                crashReport.getFriendlyReport()
-#else
-                crashReport.getFriendlyReport(ReportType.CRASH)
-#endif
-        );
+                ShadowServerCompat.friendlyReport(crashReport));
     }
 
     @Override
@@ -2071,20 +1898,19 @@ public class ShadowSeedServer extends MinecraftServer {
         return false;
     }
 
-#if MC_VER >= MC_1_20_5 && MC_VER < MC_1_21_11
-    /** 1.20.5-1.21.10 段 MinecraftServer 抽象方法（1.21.11 起有默认实现）。 */
+    // 豁免：SampleLogger / tick 日志抽象方法仅 1.21.1+ 存在（1.20.1 无此 API）
+#if MC_VER >= MC_1_21_1
+    private final net.minecraft.util.debugchart.SampleLogger sampleLogger =
+            new net.minecraft.util.debugchart.LocalSampleLogger(4);
+
+    @Override
+    public net.minecraft.util.debugchart.SampleLogger getTickTimeLogger() {
+        return this.sampleLogger;
+    }
+
     @Override
     public boolean isTickTimeLoggingEnabled() {
         return false;
-    }
-#endif
-
-#if MC_VER >= MC_1_20_5 && MC_VER < MC_1_21_11
-    private final SampleLogger sampleLogger = new LocalSampleLogger(4);
-
-    @Override
-    public SampleLogger getTickTimeLogger() {
-        return this.sampleLogger;
     }
 #endif
 
@@ -2113,6 +1939,7 @@ public class ShadowSeedServer extends MinecraftServer {
         return 0;
     }
 
+    // 豁免：MinecraftServer 抽象方法签名随 1.21.9 改名换参、1.21.11 改 PermissionSet，必须落在子类
 #if MC_VER < MC_1_21_9
     @Override
     public int getOperatorUserPermissionLevel() {
@@ -2135,7 +1962,7 @@ public class ShadowSeedServer extends MinecraftServer {
     }
 
     @Override
-    public boolean isSingleplayerOwner(GameProfile profile) {
+    public boolean isSingleplayerOwner(com.mojang.authlib.GameProfile profile) {
         return false;
     }
 #elif MC_VER < MC_1_21_11
@@ -2160,7 +1987,7 @@ public class ShadowSeedServer extends MinecraftServer {
     }
 
     @Override
-    public boolean isSingleplayerOwner(NameAndId nameAndId) {
+    public boolean isSingleplayerOwner(net.minecraft.server.players.NameAndId nameAndId) {
         return false;
     }
 
@@ -2170,13 +1997,13 @@ public class ShadowSeedServer extends MinecraftServer {
     }
 #else
     @Override
-    public LevelBasedPermissionSet operatorUserPermissions() {
-        return LevelBasedPermissionSet.ALL;
+    public net.minecraft.server.permissions.LevelBasedPermissionSet operatorUserPermissions() {
+        return net.minecraft.server.permissions.LevelBasedPermissionSet.ALL;
     }
 
     @Override
-    public PermissionSet getFunctionCompilationPermissions() {
-        return LevelBasedPermissionSet.OWNER;
+    public net.minecraft.server.permissions.PermissionSet getFunctionCompilationPermissions() {
+        return net.minecraft.server.permissions.LevelBasedPermissionSet.OWNER;
     }
 
     @Override
@@ -2185,81 +2012,13 @@ public class ShadowSeedServer extends MinecraftServer {
     }
 
     @Override
-    public boolean isSingleplayerOwner(NameAndId nameAndId) {
+    public boolean isSingleplayerOwner(net.minecraft.server.players.NameAndId nameAndId) {
         return false;
     }
 
     @Override
     public int getMaxPlayers() {
         return 1;
-    }
-
-    @Override
-    public SampleLogger getTickTimeLogger() {
-        return this.sampleLogger;
-    }
-
-    @Override
-    public boolean isTickTimeLoggingEnabled() {
-        return false;
-    }
-#endif
-
-    private static Services buildNoServices() {
-#if MC_VER < MC_1_21_9
-        return new Services(null, ServicesKeySet.EMPTY, null, null);
-#else
-        return new Services(null, ServicesKeySet.EMPTY, null,
-                new MockUserNameToIdResolver(), new MockProfileResolver());
-#endif
-    }
-
-#if MC_VER >= MC_1_21_11
-    private final SampleLogger sampleLogger = new LocalSampleLogger(4);
-#endif
-
-#if MC_VER >= MC_1_21_9
-    /** 1.21.9+ Services 需要非 null resolver（PlayerList 构造期可能查询） */
-    private static final class MockProfileResolver implements ProfileResolver {
-        @Override
-        public Optional<GameProfile> fetchByName(String name) {
-            return Optional.empty();
-        }
-
-        @Override
-        public Optional<GameProfile> fetchById(UUID uuid) {
-            return Optional.empty();
-        }
-    }
-
-    private static final class MockUserNameToIdResolver implements UserNameToIdResolver {
-        private final Set<NameAndId> savedIds = new HashSet<>();
-
-        @Override
-        public void add(NameAndId nameAndId) {
-            this.savedIds.add(nameAndId);
-        }
-
-        @Override
-        public Optional<NameAndId> get(String name) {
-            return this.savedIds.stream()
-                    .filter(id -> id.name().equals(name))
-                    .findFirst()
-                    .or(() -> Optional.of(NameAndId.createOffline(name)));
-        }
-
-        @Override
-        public Optional<NameAndId> get(UUID uuid) {
-            return this.savedIds.stream().filter(id -> id.id().equals(uuid)).findFirst();
-        }
-
-        @Override
-        public void resolveOfflineUsers(boolean offlineMode) {
-        }
-
-        @Override
-        public void save() {
-        }
     }
 #endif
 }

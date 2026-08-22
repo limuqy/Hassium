@@ -1,6 +1,7 @@
 package io.github.limuqy.mc.hassium.network.seedgen;
 
 import io.github.limuqy.mc.hassium.Constants;
+import io.github.limuqy.mc.hassium.compat.ShadowServerCompat;
 import io.github.limuqy.mc.hassium.network.ChunkCompressionHandler;
 import net.minecraft.core.RegistryAccess;
 import net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket;
@@ -36,38 +37,8 @@ public final class SeedGenChunkCodec {
      * 将区块包编码为线格式字节（RegistryAccess 只读，任意线程编码安全）。
      * 与 ServerChunkPushManager.encodeChunkPacket 同构。
      */
-    @SuppressWarnings("deprecation") // NeoForge 1.21.11+: RegistryFriendlyByteBuf(2-param) deprecated; 3-param 需 ConnectionType.OTHER(仅 NeoForge)
     public static byte[] encode(ClientboundLevelChunkWithLightPacket chunkPacket, RegistryAccess registryAccess) {
-#if MC_VER < MC_1_20_5
-        io.netty.buffer.ByteBuf tempBuf = io.netty.buffer.Unpooled.buffer();
-        try {
-            net.minecraft.network.FriendlyByteBuf friendlyBuf = new net.minecraft.network.FriendlyByteBuf(tempBuf);
-            chunkPacket.write(friendlyBuf);
-            byte[] data = new byte[tempBuf.readableBytes()];
-            tempBuf.getBytes(0, data);
-            return data;
-        } catch (Exception e) {
-            Constants.LOG.error("Hassium: SeedGen failed to encode chunk packet", e);
-            return null;
-        } finally {
-            tempBuf.release();
-        }
-#else
-        net.minecraft.network.RegistryFriendlyByteBuf buf =
-                new net.minecraft.network.RegistryFriendlyByteBuf(
-                        io.netty.buffer.Unpooled.buffer(), registryAccess);
-        try {
-            ClientboundLevelChunkWithLightPacket.STREAM_CODEC.encode(buf, chunkPacket);
-            byte[] data = new byte[buf.readableBytes()];
-            buf.readBytes(data);
-            return data;
-        } catch (Exception e) {
-            Constants.LOG.error("Hassium: SeedGen failed to encode chunk packet", e);
-            return null;
-        } finally {
-            buf.release();
-        }
-#endif
+        return ShadowServerCompat.encodeLevelChunkPacket(chunkPacket, registryAccess);
     }
 
     /** 压缩为线上传输格式（ZSTD + LZ4 按既有链）；失败返回 null。 */

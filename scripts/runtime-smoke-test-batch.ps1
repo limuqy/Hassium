@@ -2,9 +2,9 @@
 # 用法:
 #   .\scripts\runtime-smoke-test-batch.ps1 -Phase I                              # 全量初始轮（串行）
 #   .\scripts\runtime-smoke-test-batch.ps1 -Phase I -Parallel                    # 全量初始轮（并行，fabric+neoforge 同时）
-#   .\scripts\runtime-smoke-test-batch.ps1 -Phase I -Versions @("1.20.1","1.20.2")
+#   .\scripts\runtime-smoke-test-batch.ps1 -Phase I -Versions @("1.20.1","1.21.1")
 #   .\scripts\runtime-smoke-test-batch.ps1 -Phase R                              # 回归轮
-#   .\scripts\runtime-smoke-test-batch.ps1 -Phase I -Loaders fabric,forge,neoforge  # 含 Forge（仅 1.20.1/1.20.6 有 builds_for=forge，其它版本自动 SKIP）
+#   .\scripts\runtime-smoke-test-batch.ps1 -Phase I -Loaders fabric,forge,neoforge  # 含 Forge（仅 1.20.1/1.21.1+ 部分版本有 builds_for=forge，其它版本自动 SKIP）
 # 每个版本×加载器 1 个会话（客户端自动两轮：VD=20 + VD=10）
 # CleanWorld 策略（按 loader 独立，fabric/forge/neoforge 各有 run/server）:
 #   - 该 loader 的第一个版本：清理服务端存档
@@ -44,7 +44,7 @@ New-Item -ItemType Directory -Force -Path $resultsDir | Out-Null
 
 # 版本顺序（低到高）
 $allVersions = @(
-    "1.20.1","1.20.2","1.20.3","1.20.4","1.20.5","1.20.6",
+    "1.20.1",
     "1.21.1","1.21.2","1.21.3","1.21.4","1.21.5","1.21.6",
     "1.21.7","1.21.8","1.21.9","1.21.10","1.21.11"
 )
@@ -216,7 +216,7 @@ foreach ($ver in $targetVersions) {
     Write-Host "=== Testing: $ver (loaders: $($Loaders -join ','))"
     Write-Host "============================================"
 
-    # Forge 仅段 A(1.20.1)/段 C 段尾(1.20.6)有 builds_for；其它版本强行跑 :forge:runServer
+    # Forge 仅部分版本有 builds_for（1.20.1、1.21.1、1.21.3+ 等）；其它版本强行跑 :forge:runServer
     # 会因 settings.gradle 未 include forge 子项目而直接失败。读 versionProperties/<ver>.properties
     # 的 builds_for，按它过滤 -Loaders，只跑该版本真正构建的 loader。
     $propsPath = Join-Path $projectRoot "versionProperties\${ver}.properties"
@@ -238,7 +238,7 @@ foreach ($ver in $targetVersions) {
     $loaderPortIndex = @{}
     for ($li = 0; $li -lt $Loaders.Count; $li++) { $loaderPortIndex[$Loaders[$li]] = $li }
 
-    # 跳过该版本不支持的 loader（典型：1.20.2 等段内无 Forge）
+    # 跳过该版本不支持的 loader（典型：1.21.11 等段内无 Forge）
     $skippedLoaders = $Loaders | Where-Object { -not ($activeLoadersForVer -contains $_) }
     foreach ($sk in $skippedLoaders) {
         $skipSessionId = "${ver}_${sk}_${Phase}"

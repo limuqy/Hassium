@@ -43,7 +43,7 @@ class GatewayServerTest {
     /** 1.20.5+（1.21.2+ 的 bootstrap 检查机制）注册表访问需先 Bootstrap；缺失时首个
      *  触发 ChunkStatus 初始化的握手（真实 TCP/embedded 路径）抛 "Not bootstrapped"
      *  并污染 BuiltInRegistries 初始化缓存（连带 GatewaySmokeTest @BeforeAll 失败）。 */
-#if MC_VER >= MC_1_20_5
+#if MC_VER >= MC_1_21_1
     @BeforeAll
     static void bootstrap() {
         net.minecraft.SharedConstants.setVersion(net.minecraft.DetectedVersion.BUILT_IN);

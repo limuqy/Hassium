@@ -1,64 +1,41 @@
 package io.github.limuqy.mc.hassium.network;
 
+import io.github.limuqy.mc.hassium.compat.PacketId;
 import io.github.limuqy.mc.hassium.compat.PacketPayloadCompat;
+import io.github.limuqy.mc.hassium.compat.ResourceLocationCompat;
 import net.minecraft.network.protocol.Packet;
-#if MC_VER < MC_1_21_11
-import net.minecraft.resources.ResourceLocation;
-#else
-import net.minecraft.resources.Identifier;
-#endif
 
 /**
- * 包类型辅助工具
- * <p>
- * 从 Packet 对象中提取 ResourceLocation 标识符
+ * 包类型辅助工具：从 Packet 提取稳定 {@link PacketId}。
  */
 public class PacketTypeHelper {
 
-    private static final String MOD_ID = "hassium";
-
     /**
-     * 获取包的真实类型标识符
+     * 获取包的真实类型标识符。
      * <p>
-     * 自定义 Payload 包返回其通道标识符
-     * 原版包返回 NamespaceIndexManager 分配的标识符
+     * 自定义 Payload 返回其通道；原版包返回 NamespaceIndexManager 分配的标识符
+     * （1.21.1+ 优先 {@code packet.type().id()}）。
      *
-     * @param packet 数据包
-     * @return 包类型标识符，如果无法识别返回 null
+     * @return 包类型，无法识别时 {@code null}
      */
-    public static
-#if MC_VER < MC_1_21_11
-    ResourceLocation
-#else
-    Identifier
-#endif
-    getPacketType(Packet<?> packet) {
+    public static PacketId getPacketType(Packet<?> packet) {
         if (PacketPayloadCompat.isCustomPayloadPacket(packet)) {
             return PacketPayloadCompat.getPayloadId(packet);
-        } else {
-#if MC_VER >= MC_1_20_5
-            // 1.20.5+: PacketType 自带 ResourceLocation id
-            return packet.type().id();
-#else
-            // 原版包：从 IndexSyncManager 获取标识符
-            IndexSyncManager indexSyncManager = IndexSyncManager.getInstance();
-            NamespaceIndexManager indexManager = indexSyncManager.getServerIndexManager();
-            return indexManager.getVanillaIdentifier(packet.getClass());
-#endif
         }
+#if MC_VER >= MC_1_21_1
+        return ResourceLocationCompat.toPacketId(packet.type().id());
+#else
+        IndexSyncManager indexSyncManager = IndexSyncManager.getInstance();
+        NamespaceIndexManager indexManager = indexSyncManager.getServerIndexManager();
+        return indexManager.getVanillaIdentifier(packet.getClass());
+#endif
     }
 
     /**
      * 检查包是否是聚合包（避免递归聚合）
      */
     public static boolean isAggregationPacket(Packet<?> packet) {
-#if MC_VER < MC_1_21_11
-        ResourceLocation
-#else
-        Identifier
-#endif
-        type = getPacketType(packet);
-        return type != null && type.getNamespace().equals(MOD_ID)
-                && type.getPath().equals("aggregation");
+        PacketId type = getPacketType(packet);
+        return type != null && HassiumPacketIds.AGGREGATION_S2C.equals(type.fullId());
     }
 }

@@ -12,7 +12,7 @@ import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
-#if MC_VER < MC_1_20_2
+#if MC_VER < MC_1_21_1
 import io.github.limuqy.mc.hassium.network.ServerChunkPushManager;
 import net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket;
 import net.minecraft.server.level.ServerPlayer;
@@ -21,15 +21,11 @@ import org.apache.commons.lang3.mutable.MutableObject;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.ModifyVariable;
 #endif
-#if MC_VER < MC_1_20_5
+#if MC_VER < MC_1_21_1
 import com.mojang.datafixers.util.Either;
 import net.minecraft.server.level.ChunkHolder;
 import net.minecraft.world.level.chunk.ChunkStatus;
 import net.minecraft.world.level.chunk.ImposterProtoChunk;
-#elif MC_VER < MC_1_21_1
-import net.minecraft.server.level.ChunkHolder;
-import net.minecraft.server.level.ChunkResult;
-import net.minecraft.world.level.chunk.status.ChunkStatus;
 #else
 import net.minecraft.server.level.GenerationChunkHolder;
 import net.minecraft.util.StaticCache2D;
@@ -50,7 +46,7 @@ import net.minecraft.world.level.chunk.status.ChunkStep;
 @Mixin(net.minecraft.server.level.ChunkMap.class)
 public class MixinChunkMap {
 
-#if MC_VER < MC_1_20_2
+#if MC_VER < MC_1_21_1
     @Shadow
     private ThreadedLevelLightEngine lightEngine;
 
@@ -87,7 +83,7 @@ public class MixinChunkMap {
     }
 #endif
 
-#if MC_VER < MC_1_20_5
+#if MC_VER < MC_1_21_1
     @Inject(method = "scheduleChunkLoad", at = @At("HEAD"), cancellable = true)
     private void hassium$shortCircuitInjectLoad(ChunkPos pos,
             CallbackInfoReturnable<CompletableFuture<Either<ChunkAccess, ChunkHolder.ChunkLoadingFailure>>> cir) {
@@ -108,26 +104,7 @@ public class MixinChunkMap {
         }
         cir.setReturnValue(CompletableFuture.completedFuture(Either.left(available)));
     }
-#elif MC_VER < MC_1_21_1
-    @Inject(method = "scheduleChunkLoad", at = @At("HEAD"), cancellable = true)
-    private void hassium$shortCircuitInjectLoad(ChunkPos pos,
-            CallbackInfoReturnable<CompletableFuture<ChunkAccess>> cir) {
-        LevelChunk injected = hassium$injectedIfShortCircuit(pos);
-        if (injected == null) {
-            return;
-        }
-        cir.setReturnValue(ShadowChunkMapCompat.completedImposter(injected));
-    }
-
-    @Inject(method = "scheduleChunkGeneration", at = @At("HEAD"), cancellable = true)
-    private void hassium$passthroughInjectWorldgen(ChunkHolder holder, ChunkStatus status,
-            CallbackInfoReturnable<CompletableFuture<ChunkResult<ChunkAccess>>> cir) {
-        ChunkAccess available = hassium$passthroughChunk(holder, status);
-        if (available == null) {
-            return;
-        }
-        cir.setReturnValue(CompletableFuture.completedFuture(ChunkResult.of(available)));
-    }
+    // 1.20.5–1.20.6 的 ChunkResult/ChunkHolder 中间层注入已随版本支持裁剪删除（API 自 1.21.1 起变化）
 #else
     @Inject(method = "scheduleChunkLoad", at = @At("HEAD"), cancellable = true)
     private void hassium$shortCircuitInjectLoad(ChunkPos pos,

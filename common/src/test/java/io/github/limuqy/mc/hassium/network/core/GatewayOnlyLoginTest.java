@@ -34,7 +34,7 @@ class GatewayOnlyLoginTest {
     }
 
     private static ServerData serverData(String ip) {
-#if MC_VER < MC_1_20_2
+#if MC_VER < MC_1_21_1
         return new ServerData("t", ip, false);
 #else
         return new ServerData("t", ip, ServerData.Type.OTHER);
@@ -67,14 +67,14 @@ class GatewayOnlyLoginTest {
     @Test
     void loginPacketRecognitionCoversHelloAndKey() {
         freshCore();
-#if MC_VER < MC_1_20_5
+#if MC_VER < MC_1_21_1
         assertTrue(NetworkCore.isLoginPacket(new net.minecraft.network.protocol.login.ServerboundHelloPacket(
                 "x", java.util.Optional.empty())));
 #else
         assertTrue(NetworkCore.isLoginPacket(new net.minecraft.network.protocol.login.ServerboundHelloPacket(
                 "x", java.util.UUID.randomUUID())));
 #endif
-#if MC_VER >= MC_1_20_2
+#if MC_VER >= MC_1_21_1
         // 1.20.2+ 登录期 keep-alive 响应属登录 C2S（镜像中继）
         assertTrue(NetworkCore.isLoginPacket(
                 new net.minecraft.network.protocol.common.ServerboundKeepAlivePacket(1L)));

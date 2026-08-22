@@ -38,8 +38,8 @@ public final class ClientGatewayBootstrap {
      */
     public static void handleCustomPayload(Packet<?> packet, CallbackInfo ci) {
         try {
-            Object payloadId = PacketPayloadCompat.getPayloadId(packet);
-            if (payloadId == null || !HassiumPacketIds.GATEWAY_INFO_S2C.equals(payloadId.toString())) {
+            io.github.limuqy.mc.hassium.compat.PacketId payloadId = PacketPayloadCompat.getPayloadId(packet);
+            if (payloadId == null || !HassiumPacketIds.GATEWAY_INFO_S2C.equals(payloadId.fullId())) {
                 return; // 非 gateway_info：vanilla 正常处理，直接放行
             }
             byte[] data = PacketPayloadCompat.extractPayloadData(packet);

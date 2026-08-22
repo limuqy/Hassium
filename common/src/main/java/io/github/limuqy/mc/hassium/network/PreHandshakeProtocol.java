@@ -139,7 +139,7 @@ public final class PreHandshakeProtocol {
         return sb != null ? sb.toString() : value;
     }
 
-#if MC_VER >= MC_1_20_5
+#if MC_VER >= MC_1_21_1
     /**
      * 配置阶段 payload 版入口（fabric 1.20.5+ / neoforge / forge）。
      */

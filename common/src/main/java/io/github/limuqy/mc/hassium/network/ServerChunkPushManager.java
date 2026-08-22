@@ -13,6 +13,7 @@ import io.github.limuqy.mc.hassium.compat.RegistryCompat;
 import io.github.limuqy.mc.hassium.compat.ResourceLocationCompat;
 import io.github.limuqy.mc.hassium.server.RuntimeServerContext;
 import io.github.limuqy.mc.hassium.utils.DebugLogger;
+import io.github.limuqy.mc.hassium.compat.LevelCompat;
 import io.github.limuqy.mc.hassium.utils.TickMonitor;
 import io.github.limuqy.mc.hassium.network.core.outbound.ChunkApplyAck;
 import io.github.limuqy.mc.hassium.network.gateway.GatewayPlayerSession;
@@ -30,11 +31,6 @@ import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.network.protocol.Packet;
 import net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket;
-#if MC_VER < MC_1_21_11
-import net.minecraft.resources.ResourceLocation;
-#else
-import net.minecraft.resources.Identifier;
-#endif
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
@@ -1053,18 +1049,12 @@ public class ServerChunkPushManager {
                     "[RESUME] Player {} — 续流模式：按上报位置 ({}, {}) 续发视距 chunkHash",
                     player.getName().getString(), centerX, centerZ);
         }
-        String dimension = level.dimension()
-#if MC_VER < MC_1_21_11
-                .location()
-#else
-                .identifier()
-#endif
-                .toString();
+        String dimension = LevelCompat.getDimensionId(level);
 
         // 不再把整盘 hash 灌进 pendingResync（曾 2s dump 上千条，绕开原版定额）。
         // 1.20.2+：PlayerChunkSender 已近距定额 sendChunk。
         // 1.20.1：只把已加载柱登记进 pendingSends，由 tick drain 出队。
-#if MC_VER < MC_1_20_2
+#if MC_VER < MC_1_21_1
         int marked = 0;
         for (int dx = -radius; dx <= radius; dx++) {
             for (int dz = -radius; dz <= radius; dz++) {
@@ -1863,20 +1853,14 @@ public class ServerChunkPushManager {
         for (Map.Entry<BlockPos, BlockEntity> entry : chunk.getBlockEntities().entrySet()) {
             BlockPos pos = entry.getKey();
             BlockEntity be = entry.getValue();
-#if MC_VER < MC_1_20_5
+#if MC_VER < MC_1_21_1
             CompoundTag nbt = be.saveWithoutMetadata();
 #else
             CompoundTag nbt = be.saveWithoutMetadata(be.getLevel().registryAccess());
 #endif
-#if MC_VER < MC_1_21_11
-            ResourceLocation
-#else
-            Identifier
-#endif
-            type = net.minecraft.core.registries.BuiltInRegistries.BLOCK_ENTITY_TYPE.getKey(be.getType());
-            if (type != null) {
-                result.add(new SectionDeltaS2CPacket.BlockEntityData(pos, type, nbt));
-            }
+            String type = String.valueOf(
+                    net.minecraft.core.registries.BuiltInRegistries.BLOCK_ENTITY_TYPE.getKey(be.getType()));
+            result.add(new SectionDeltaS2CPacket.BlockEntityData(pos, type, nbt));
         }
         return result;
     }
@@ -2138,13 +2122,7 @@ public class ServerChunkPushManager {
 
     private static boolean isStillTracking(ServerPlayer player, DataRequestTask task) {
         ServerLevel level = PlayerCompat.getServerLevel(player);
-        if (!
-#if MC_VER < MC_1_21_11
-                level.dimension().location()
-#else
-                level.dimension().identifier()
-#endif
-                .toString().equals(task.dimension())) {
+        if (!LevelCompat.getDimensionId(level).equals(task.dimension())) {
             return false;
         }
         ChunkPos center = player.chunkPosition();
@@ -2467,7 +2445,7 @@ public class ServerChunkPushManager {
     @SuppressWarnings("deprecation") // NeoForge 1.21.11+: RegistryFriendlyByteBuf(2-param) deprecated; 3-param 需 ConnectionType.OTHER(仅 NeoForge)
     private byte[] encodeChunkPacket(ClientboundLevelChunkWithLightPacket chunkPacket,
                                      RegistryAccess registryAccess) {
-#if MC_VER < MC_1_20_5
+#if MC_VER < MC_1_21_1
         io.netty.buffer.ByteBuf tempBuf = io.netty.buffer.Unpooled.buffer();
         try {
             FriendlyByteBuf friendlyBuf = new FriendlyByteBuf(tempBuf);

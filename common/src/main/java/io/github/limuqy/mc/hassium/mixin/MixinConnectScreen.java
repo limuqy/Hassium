@@ -14,7 +14,7 @@ import org.spongepowered.asm.mixin.gen.Accessor;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
-#if MC_VER >= MC_1_20_5
+#if MC_VER >= MC_1_21_1
 import net.minecraft.client.multiplayer.TransferState;
 #endif
 
@@ -39,7 +39,7 @@ public abstract class MixinConnectScreen implements ConnectScreenAccessor {
     /** 取消（Cancel 按钮/ESC）由 {@code MixinMinecraft.setScreen} 拦截通知
      *  （ConnectScreen 无 onClose 覆写：所有版本均走 init() 的 Cancel 按钮 → setScreen(parent)）。 */
 
-#if MC_VER < MC_1_20_5
+#if MC_VER < MC_1_21_1
     @Inject(method = "startConnecting(Lnet/minecraft/client/gui/screens/Screen;Lnet/minecraft/client/Minecraft;Lnet/minecraft/client/multiplayer/resolver/ServerAddress;Lnet/minecraft/client/multiplayer/ServerData;Z)V", at = @At("HEAD"))
     private static void hassium$captureConnectIntent(Screen parent, Minecraft minecraft,
                                                      ServerAddress address, ServerData serverData,

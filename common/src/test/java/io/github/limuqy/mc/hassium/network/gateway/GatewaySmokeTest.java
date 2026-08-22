@@ -41,7 +41,7 @@ class GatewaySmokeTest {
     private final List<UUID> usedUuids = new ArrayList<>();
 
     /** 编解码器静态初始化依赖注册表 bootstrap（同 GatewayPacketCodecTest）。 */
-#if MC_VER >= MC_1_20_5
+#if MC_VER >= MC_1_21_1
     @BeforeAll
     static void bootstrap() {
         net.minecraft.SharedConstants.setVersion(net.minecraft.DetectedVersion.BUILT_IN);
@@ -112,7 +112,7 @@ class GatewaySmokeTest {
 
     /** PLAY SERVERBOUND 简单包（全段构造稳定；routeC2S 用）。 */
     private static Packet<?> playC2SPacket() {
-#if MC_VER < MC_1_20_2
+#if MC_VER < MC_1_21_1
         return new net.minecraft.network.protocol.game.ServerboundKeepAlivePacket(123L);
 #else
         return new net.minecraft.network.protocol.common.ServerboundKeepAlivePacket(123L);

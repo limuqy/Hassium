@@ -1,40 +1,23 @@
 package io.github.limuqy.mc.hassium.network;
 
+import io.github.limuqy.mc.hassium.compat.PacketId;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import net.minecraft.network.FriendlyByteBuf;
-#if MC_VER < MC_1_21_11
-import net.minecraft.resources.ResourceLocation;
-#else
-import net.minecraft.resources.Identifier;
-#endif
-import io.github.limuqy.mc.hassium.compat.ResourceLocationCompat;
 
 /**
- * 聚合包中的子包包装
+ * 聚合包中的子包包装。
  * <p>
- * 存储包类型标识符和原始数据
+ * 类型用稳定值 {@link PacketId}，不暴露 {@code ResourceLocation}/{@code Identifier}。
  */
 public class AggregatedSubPacket {
     /** 单个子包数据上限 1MB（review-fix: T13-C1） */
     private static final int MAXIMUM_SUBPACKET_LENGTH = 1024 * 1024;
 
-    private final
-#if MC_VER < MC_1_21_11
-    ResourceLocation
-#else
-    Identifier
-#endif
-    type;
+    private final PacketId type;
     private final byte[] data;
 
-    public AggregatedSubPacket(
-#if MC_VER < MC_1_21_11
-            ResourceLocation
-#else
-            Identifier
-#endif
-            type, byte[] data) {
+    public AggregatedSubPacket(PacketId type, byte[] data) {
         this.type = type;
         this.data = data;
     }
@@ -43,37 +26,20 @@ public class AggregatedSubPacket {
      * 编码子包到缓冲区
      * <p>
      * 格式：[identifier:CompactHeader] [length:VarInt] [data]
-     *
-     * @param buf         输出缓冲区
-     * @param indexManager 索引管理器（用于紧凑包头）
      */
     public void encode(FriendlyByteBuf buf, NamespaceIndexManager indexManager) {
-        // 写入紧凑包头标识符
-        CompactHeaderCodec.writeIdentifier(type.toString(), buf, indexManager);
-
-        // 写入数据长度和数据
+        CompactHeaderCodec.writeIdentifier(type.fullId(), buf, indexManager);
         buf.writeVarInt(data.length);
         buf.writeBytes(data);
     }
 
     /**
      * 从缓冲区解码子包
-     *
-     * @param buf          输入缓冲区
-     * @param indexManager 索引管理器
-     * @return 解码的子包
      */
     public static AggregatedSubPacket decode(FriendlyByteBuf buf, NamespaceIndexManager indexManager) {
-        // 读取紧凑包头标识符
         String identifier = CompactHeaderCodec.readIdentifier(buf, indexManager);
-#if MC_VER < MC_1_21_11
-        ResourceLocation
-#else
-        Identifier
-#endif
-        type = ResourceLocationCompat.create(identifier);
+        PacketId type = PacketId.parse(identifier);
 
-        // 读取数据长度和数据
         int length = buf.readVarInt();
         if (length < 0 || length > MAXIMUM_SUBPACKET_LENGTH || length > buf.readableBytes()) {
             throw new IllegalArgumentException(
@@ -87,13 +53,7 @@ public class AggregatedSubPacket {
         return new AggregatedSubPacket(type, data);
     }
 
-    public
-#if MC_VER < MC_1_21_11
-    ResourceLocation
-#else
-    Identifier
-#endif
-    getType() {
+    public PacketId getType() {
         return type;
     }
 

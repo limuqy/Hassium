@@ -7,14 +7,14 @@ import io.github.limuqy.mc.hassium.network.ClientChunkHandler;
 import io.github.limuqy.mc.hassium.network.DictionaryManager;
 import io.github.limuqy.mc.hassium.network.dataplane.DataPlaneClientLifecycle;
 import io.github.limuqy.mc.hassium.network.FabricNetworkManager;
-#if MC_VER >= MC_1_20_5
+#if MC_VER >= MC_1_21_1
 import io.github.limuqy.mc.hassium.network.FabricPayloadRegistry;
 #endif
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import org.slf4j.Logger;
-#if MC_VER >= MC_1_20_5
+#if MC_VER >= MC_1_21_1
 import net.minecraft.network.FriendlyByteBuf;
 #endif
 import org.slf4j.LoggerFactory;
@@ -56,7 +56,7 @@ public class HassiumClientMod implements ClientModInitializer {
         LOGGER.warn("Hassium: Fabric client registers no HASSIUM business S2C receivers (CHUNK_HASH/SECTION_DELTA/SEED_REF/LIGHT_DELTA/BLOCK_ENTITY_DATA) — those packets are only consumed via the gateway topology (T12). CHUNK_PAYLOAD_S2C is the exception: it is a vanilla CustomPayload delivered via handleCustomPayload → ClientPlayNetworking, with a receiver registered below.");
 
         // CHUNK_PAYLOAD_S2C 客户端 receiver：全量压缩区块直收（网关 kind=0 vanilla 帧转发，非 HASSIUM 帧）。
-#if MC_VER < MC_1_20_5
+#if MC_VER < MC_1_21_1
         ClientPlayNetworking.registerGlobalReceiver(FabricNetworkManager.CHUNK_PAYLOAD_S2C,
                 (client, handler, buf, responseSender) -> {
                     int len = buf.readVarInt();

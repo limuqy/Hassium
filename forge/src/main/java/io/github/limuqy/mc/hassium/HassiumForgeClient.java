@@ -12,7 +12,7 @@ import net.minecraftforge.fml.event.lifecycle.FMLClientSetupEvent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-#if MC_VER < MC_1_20_2
+#if MC_VER < MC_1_21_1
 import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.api.distmarker.OnlyIn;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
@@ -35,7 +35,7 @@ import net.minecraftforge.network.NetworkContext;
  * <p>
  * 客户端统计依赖握手成功后的元数据/压缩区块路径；未握手时 {@code /hassiumc stats} 会全为 0。
  */
-#if MC_VER < MC_1_20_2
+#if MC_VER < MC_1_21_1
 @OnlyIn(Dist.CLIENT)
 @Mod.EventBusSubscriber(modid = Constants.MOD_ID, value = Dist.CLIENT, bus = Mod.EventBusSubscriber.Bus.MOD)
 #else
@@ -67,7 +67,7 @@ public class HassiumForgeClient {
         @SubscribeEvent
         public void onPlayerLoggedIn(ClientPlayerNetworkEvent.LoggingIn event) {
             var connection = event.getConnection();
-#if MC_VER < MC_1_20_2
+#if MC_VER < MC_1_21_1
             if (connection != null && NetworkHooks.isVanillaConnection(connection)) {
                 LOGGER.warn("Hassium: 当前连接被识别为原版/非匹配模组服。"
                         + " hassium:main 通道已禁用，客户端统计会保持全 0；请用同加载器的 forge:runServer + forge:runClient 测试。");

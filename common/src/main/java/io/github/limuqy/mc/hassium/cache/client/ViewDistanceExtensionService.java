@@ -681,8 +681,8 @@ public class ViewDistanceExtensionService {
     private void dropChunkFromClientCache(ClientLevel level, ChunkPos pos) {
         try {
             ClientChunkCache cache = ((ClientLevelAccessor) level).hassium$getChunkSource();
-            // 1.20.1: drop(int, int)；1.20.2+: drop(ChunkPos)
-#if MC_VER < MC_1_20_2
+            // <1.21.1: drop(int, int)；1.21.1+: drop(ChunkPos)
+#if MC_VER < MC_1_21_1
             cache.drop(pos.x, pos.z);
 #else
             cache.drop(pos);

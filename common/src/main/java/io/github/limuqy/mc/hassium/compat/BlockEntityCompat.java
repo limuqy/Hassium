@@ -22,7 +22,7 @@ public final class BlockEntityCompat {
      * 用网络/缓存下发的 CompoundTag 加载已有 BlockEntity 数据。
      */
     public static void loadFromTag(BlockEntity be, CompoundTag tag, HolderLookup.Provider registries) {
-#if MC_VER < MC_1_20_5
+#if MC_VER < MC_1_21_1
         be.load(tag);
 #elif MC_VER < MC_1_21_6
         be.loadWithComponents(tag, registries);

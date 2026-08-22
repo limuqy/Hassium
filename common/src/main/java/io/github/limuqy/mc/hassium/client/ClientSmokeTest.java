@@ -611,10 +611,9 @@ public final class ClientSmokeTest {
         if (Boolean.getBoolean("hassium.smokeTest.manualLogout")) {
             LOGGER.info("HassiumSmokeTest: manual logout (Minecraft.disconnect/clearLevel path)");
             try {
-#if MC_VER < MC_1_20_2
+                // 1.20.2–1.20.4 的 disconnect(Screen) 中间层已随版本支持裁剪删除
+#if MC_VER < MC_1_21_1
                 mc.clearLevel();
-#elif MC_VER < MC_1_20_5
-                mc.disconnect(new net.minecraft.client.gui.screens.TitleScreen());
 #else
                 mc.disconnect(new net.minecraft.client.gui.screens.TitleScreen(), false);
 #endif

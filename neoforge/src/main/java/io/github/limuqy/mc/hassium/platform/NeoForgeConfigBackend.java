@@ -7,7 +7,10 @@ import io.github.limuqy.mc.hassium.config.ConfigSchema;
 import io.github.limuqy.mc.hassium.config.ConfigValues;
 import io.github.limuqy.mc.hassium.platform.services.IConfigBackend;
 
-#if MC_VER < MC_1_20_2
+// T10 收口：ForgeConfigSpec(1.20.1) vs ModConfigSpec(1.21.1+) 双类型名无法用 compat 消除，
+// 类型名暴露仅保留 4 处分段点（import / 访问器返回类型 / Builder 构造 / SpecData 定义），
+// 其余读写逻辑全部收敛到 SpecData.get/set 与 Object 局部变量。
+#if MC_VER < MC_1_21_1
 import net.minecraftforge.common.ForgeConfigSpec;
 #else
 import net.neoforged.neoforge.common.ModConfigSpec;
@@ -18,89 +21,66 @@ import java.util.List;
 import java.util.Map;
 
 public final class NeoForgeConfigBackend implements IConfigBackend {
-#if MC_VER < MC_1_20_2
-    private final ForgeConfigSpec clientSpec;
-    private final ForgeConfigSpec serverSpec;
-    private final Map<String, ForgeConfigSpec.ConfigValue<?>> clientValues;
-    private final Map<String, ForgeConfigSpec.ConfigValue<?>> serverValues;
-#else
-    private final ModConfigSpec clientSpec;
-    private final ModConfigSpec serverSpec;
-    private final Map<String, ModConfigSpec.ConfigValue<?>> clientValues;
-    private final Map<String, ModConfigSpec.ConfigValue<?>> serverValues;
-#endif
+
+    private final SpecData client;
+    private final SpecData server;
 
     public NeoForgeConfigBackend() {
-        SpecData client = build(ConfigScope.CLIENT);
-        SpecData server = build(ConfigScope.SERVER);
-        clientSpec = client.spec();
-        serverSpec = server.spec();
-        clientValues = client.values();
-        serverValues = server.values();
+        client = build(ConfigScope.CLIENT);
+        server = build(ConfigScope.SERVER);
     }
 
-#if MC_VER < MC_1_20_2
-    public ForgeConfigSpec clientSpec() { return clientSpec; }
-    public ForgeConfigSpec serverSpec() { return serverSpec; }
+#if MC_VER < MC_1_21_1
+    public ForgeConfigSpec clientSpec() { return client.spec(); }
+    public ForgeConfigSpec serverSpec() { return server.spec(); }
 #else
-    public ModConfigSpec clientSpec() { return clientSpec; }
-    public ModConfigSpec serverSpec() { return serverSpec; }
+    public ModConfigSpec clientSpec() { return client.spec(); }
+    public ModConfigSpec serverSpec() { return server.spec(); }
 #endif
 
     @Override
     public ConfigValues load(ConfigScope scope) {
         ConfigValues values = ConfigValues.defaults(ConfigSchema.entries());
-        return loadScope(values, scope, nativeValues(scope));
+        return loadScope(values, scope, data(scope));
     }
 
     @Override
     public void save(ConfigScope scope, ConfigValues values) {
-        writeScope(values, scope, nativeValues(scope));
-        nativeSpec(scope).save();
+        writeScope(values, scope, data(scope));
+        data(scope).spec().save();
     }
 
-#if MC_VER < MC_1_20_2
+#if MC_VER < MC_1_21_1
     private static SpecData build(ConfigScope scope) {
         ForgeConfigSpec.Builder builder = new ForgeConfigSpec.Builder();
-        Map<String, ForgeConfigSpec.ConfigValue<?>> values = new HashMap<>();
 #else
     private static SpecData build(ConfigScope scope) {
         ModConfigSpec.Builder builder = new ModConfigSpec.Builder();
-        Map<String, ModConfigSpec.ConfigValue<?>> values = new HashMap<>();
 #endif
+        Map<String, Object> values = new HashMap<>();
         for (ConfigEntry<?> entry : entries(scope)) {
             builder.comment(ConfigComments.lines(entry.comment())).translation(entry.translationKey());
-#if MC_VER < MC_1_20_2
-            ForgeConfigSpec.ConfigValue<?> configValue;
-#else
-            ModConfigSpec.ConfigValue<?> configValue;
-#endif
-            switch (entry.type()) {
-                case BOOLEAN, STRING -> configValue = builder.define(entry.path(), entry.defaultValue());
-                case INT -> configValue = builder.defineInRange(entry.path(), (Integer) entry.defaultValue(),
+            // T10：define* 返回的 ConfigValue<T> 以 Object 承接，类型名不再暴露到方法体
+            Object configValue = switch (entry.type()) {
+                case BOOLEAN, STRING -> builder.define(entry.path(), entry.defaultValue());
+                case INT -> builder.defineInRange(entry.path(), (Integer) entry.defaultValue(),
                         entry.min().intValue(), entry.max().intValue());
-                case LONG -> configValue = builder.defineInRange(entry.path(), (Long) entry.defaultValue(),
+                case LONG -> builder.defineInRange(entry.path(), (Long) entry.defaultValue(),
                         entry.min().longValue(), entry.max().longValue());
-                case DOUBLE -> configValue = builder.defineInRange(entry.path(), (Double) entry.defaultValue(),
+                case DOUBLE -> builder.defineInRange(entry.path(), (Double) entry.defaultValue(),
                         entry.min().doubleValue(), entry.max().doubleValue());
-                case STRING_LIST -> configValue = builder.defineList(entry.path(), (List<?>) entry.defaultValue(),
+                case STRING_LIST -> builder.defineList(entry.path(), (List<?>) entry.defaultValue(),
                         value -> value instanceof String);
                 default -> throw new IllegalStateException("Unsupported configuration type: " + entry.type());
-            }
+            };
             values.put(entry.path(), configValue);
         }
         return new SpecData(builder.build(), values);
     }
 
-#if MC_VER < MC_1_20_2
-    private static ConfigValues loadScope(ConfigValues values, ConfigScope scope,
-                                          Map<String, ForgeConfigSpec.ConfigValue<?>> nativeValues) {
-#else
-    private static ConfigValues loadScope(ConfigValues values, ConfigScope scope,
-                                          Map<String, ModConfigSpec.ConfigValue<?>> nativeValues) {
-#endif
+    private static ConfigValues loadScope(ConfigValues values, ConfigScope scope, SpecData data) {
         for (ConfigEntry<?> entry : entries(scope)) {
-            Object value = nativeValues.get(entry.path()).get();
+            Object value = data.get(entry.path());
             if (value != null) {
                 values = withValue(values, entry, value);
             }
@@ -108,31 +88,11 @@ public final class NeoForgeConfigBackend implements IConfigBackend {
         return values;
     }
 
-#if MC_VER < MC_1_20_2
-    private static void writeScope(ConfigValues values, ConfigScope scope,
-                                   Map<String, ForgeConfigSpec.ConfigValue<?>> nativeValues) {
-#else
-    private static void writeScope(ConfigValues values, ConfigScope scope,
-                                   Map<String, ModConfigSpec.ConfigValue<?>> nativeValues) {
-#endif
+    private static void writeScope(ConfigValues values, ConfigScope scope, SpecData data) {
         for (ConfigEntry<?> entry : entries(scope)) {
-            setValue(nativeValues.get(entry.path()), values, entry);
+            data.set(entry.path(), values.get(entry.key()));
         }
     }
-
-#if MC_VER < MC_1_20_2
-    @SuppressWarnings("unchecked")
-    private static <T> void setValue(ForgeConfigSpec.ConfigValue<?> nativeValue,
-                                      ConfigValues values, ConfigEntry<T> entry) {
-        ((ForgeConfigSpec.ConfigValue<T>) nativeValue).set(values.get(entry.key()));
-    }
-#else
-    @SuppressWarnings("unchecked")
-    private static <T> void setValue(ModConfigSpec.ConfigValue<?> nativeValue,
-                                      ConfigValues values, ConfigEntry<T> entry) {
-        ((ModConfigSpec.ConfigValue<T>) nativeValue).set(values.get(entry.key()));
-    }
-#endif
 
     @SuppressWarnings("unchecked")
     private static <T> ConfigValues withValue(ConfigValues values, ConfigEntry<T> entry, Object value) {
@@ -143,29 +103,33 @@ public final class NeoForgeConfigBackend implements IConfigBackend {
         return scope == ConfigScope.CLIENT ? ConfigSchema.clientEntries() : ConfigSchema.serverEntries();
     }
 
-#if MC_VER < MC_1_20_2
-    private Map<String, ForgeConfigSpec.ConfigValue<?>> nativeValues(ConfigScope scope) {
-        return scope == ConfigScope.CLIENT ? clientValues : serverValues;
+    private SpecData data(ConfigScope scope) {
+        return scope == ConfigScope.CLIENT ? client : server;
     }
 
-    private ForgeConfigSpec nativeSpec(ConfigScope scope) {
-        return scope == ConfigScope.CLIENT ? clientSpec : serverSpec;
-    }
-#else
-    private Map<String, ModConfigSpec.ConfigValue<?>> nativeValues(ConfigScope scope) {
-        return scope == ConfigScope.CLIENT ? clientValues : serverValues;
-    }
-
-    private ModConfigSpec nativeSpec(ConfigScope scope) {
-        return scope == ConfigScope.CLIENT ? clientSpec : serverSpec;
-    }
-#endif
-
-#if MC_VER < MC_1_20_2
+#if MC_VER < MC_1_21_1
+    /** 原生 spec + ConfigValue 表；原生读写收口于 get/set（T10）。 */
     private record SpecData(ForgeConfigSpec spec, Map<String, ForgeConfigSpec.ConfigValue<?>> values) {
+        Object get(String path) {
+            return values.get(path).get();
+        }
+
+        @SuppressWarnings({"unchecked", "rawtypes"})
+        void set(String path, Object value) {
+            ((ForgeConfigSpec.ConfigValue) values.get(path)).set(value);
+        }
     }
 #else
+    /** 原生 spec + ConfigValue 表；原生读写收口于 get/set（T10）。 */
     private record SpecData(ModConfigSpec spec, Map<String, ModConfigSpec.ConfigValue<?>> values) {
+        Object get(String path) {
+            return values.get(path).get();
+        }
+
+        @SuppressWarnings({"unchecked", "rawtypes"})
+        void set(String path, Object value) {
+            ((ModConfigSpec.ConfigValue) values.get(path)).set(value);
+        }
     }
 #endif
 }

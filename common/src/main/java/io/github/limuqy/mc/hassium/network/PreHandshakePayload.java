@@ -4,7 +4,7 @@ import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.compat.ResourceLocationCompat;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import net.minecraft.network.FriendlyByteBuf;
-#if MC_VER >= MC_1_20_5
+#if MC_VER >= MC_1_21_1
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 #endif
@@ -16,10 +16,10 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
  * 服务端收到后仅 {@link PlayerCompressionTracker#markPreHandshake}，
  * 完整协商（ZSTD/聚合/数据面/位置）仍在 Play 阶段握手完成。
  * <p>
- * 仅 {@code MC_VER >= MC_1_20_5} 编译（1.20.2-1.20.4 的 CustomPacketPayload 接口为
- * {@code id()} 形态且 neoforge/forge 无配置阶段通道；fabric 该段走 legacy Identifier 通道）。
+ * 仅 {@code MC_VER >= MC_1_21_1} 编译（1.20.1 无 common 包 CustomPacketPayload；
+ * fabric 旧段走 legacy Identifier 通道）。
  */
-#if MC_VER >= MC_1_20_5
+#if MC_VER >= MC_1_21_1
 public record PreHandshakePayload(
         int protocolVersion,
         String modVersion,

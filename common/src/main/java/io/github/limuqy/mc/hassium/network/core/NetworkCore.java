@@ -3,6 +3,7 @@ package io.github.limuqy.mc.hassium.network.core;
 import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.config.HassiumConfig;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
+import io.github.limuqy.mc.hassium.compat.LevelCompat;
 import io.github.limuqy.mc.hassium.network.ClientChunkPipeline;
 import io.github.limuqy.mc.hassium.network.ClientEndpointStore;
 import io.github.limuqy.mc.hassium.network.ClientMetadataHandler;
@@ -635,13 +636,7 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
         }
         Minecraft mc = Minecraft.getInstance();
         if (mc != null && mc.player != null) {
-            String currentDim = mc.player.level().dimension()
-#if MC_VER < MC_1_21_11
-                    .location()
-#else
-                    .identifier()
-#endif
-                    .toString();
+            String currentDim = LevelCompat.getDimensionId(mc.player.level());
             if (!currentDim.equals(snap.dimension())) {
                 LOGGER.info("Hassium: resume rollback skipped (dimension {} != snapshot {})",
                         currentDim, snap.dimension());
@@ -1004,7 +999,7 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
      * 登录包用 EMPTY 即可）。1.20.1 段无 RegistryFriendlyByteBuf，恒 null/EMPTY。
      */
     private static RegistryAccess resolveClientRegistryAccess() {
-#if MC_VER >= MC_1_20_5
+#if MC_VER >= MC_1_21_1
         Minecraft mc = Minecraft.getInstance();
         if (mc == null) {
             return RegistryAccess.EMPTY;
@@ -1057,7 +1052,7 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
      * 计数 {@link #c2sRoutedCount()} 每次调用 +1（可验证）。
      */
     public boolean routeC2S(Packet<?> packet) {
-#if MC_VER >= MC_1_20_2
+#if MC_VER >= MC_1_21_1
         // 配置阶段终包兜底：handleConfigurationFinished 先换 PLAY 监听器再 send(FinishConfiguration)，
         // mixin 的监听器判定已失真，这里按包类型兜底——必须原版发送（vanilla 依赖该包编码时
         // ProtocolSwapHandler 重置 outbound 管线；cancel 会导致 outbound 停在 encoder，
@@ -1100,7 +1095,7 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
             return false;
         }
         // 展开 bundle（对称 routeS2C）：ServerboundBundlePacket 无独立协议 id
-        // （<1.20.5 分隔机制 getPacketId=-1），直接 encode 会产出 vanillaId=-1 坏帧
+        // （< MC_1_21_1 分隔机制 getPacketId=-1），直接 encode 会产出 vanillaId=-1 坏帧
         // 发给主控。逐子包递归路由，语义等价（丢渲染期原子性）。
         if (packet instanceof net.minecraft.network.protocol.BundlePacket<?> bundle) {
             for (Object sub : bundle.subPackets()) {
@@ -1193,7 +1188,7 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
         if (packet instanceof net.minecraft.network.protocol.login.ServerboundKeyPacket) {
             return true;
         }
-#if MC_VER < MC_1_20_2
+#if MC_VER < MC_1_21_1
         return packet instanceof net.minecraft.network.protocol.login.ServerboundCustomQueryPacket;
 #else
         if (packet instanceof net.minecraft.network.protocol.login.ServerboundCustomQueryAnswerPacket) {
@@ -1258,7 +1253,7 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
      * 1.20.1 无配置协议，恒 false。
      */
     public static boolean isConfigPacket(Packet<?> packet) {
-#if MC_VER < MC_1_20_2
+#if MC_VER < MC_1_21_1
         return false;
 #else
         if (packet instanceof net.minecraft.network.protocol.configuration.ServerboundFinishConfigurationPacket) {
@@ -1279,7 +1274,7 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
         if (packet instanceof net.minecraft.network.protocol.common.ServerboundResourcePackPacket) {
             return true;
         }
-#if MC_VER >= MC_1_20_5
+#if MC_VER >= MC_1_21_1
         if (packet instanceof net.minecraft.network.protocol.configuration.ServerboundSelectKnownPacks) {
             return true;
         }
@@ -1519,13 +1514,7 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
             return PlayerStateReport.absent();
         }
         net.minecraft.world.entity.player.Player player = mc.player;
-        String dimension = player.level().dimension()
-#if MC_VER < MC_1_21_11
-                .location()
-#else
-                .identifier()
-#endif
-                .toString();
+        String dimension = LevelCompat.getDimensionId(player.level());
         return new PlayerStateReport(player.getX(), player.getY(), player.getZ(),
                 player.getYRot(), player.getXRot(), dimension);
     }

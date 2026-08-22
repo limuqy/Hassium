@@ -1,13 +1,6 @@
 package io.github.limuqy.mc.hassium.network;
 
-import io.github.limuqy.mc.hassium.Constants;
 import net.minecraft.network.FriendlyByteBuf;
-#if MC_VER < MC_1_21_11
-import net.minecraft.resources.ResourceLocation;
-#else
-import net.minecraft.resources.Identifier;
-#endif
-import io.github.limuqy.mc.hassium.compat.ResourceLocationCompat;
 import io.github.limuqy.mc.hassium.network.sectiondelta.SectionPlaneSyndrome;
 import io.netty.handler.codec.DecoderException;
 
@@ -27,14 +20,6 @@ public record SectionHashRequestC2SPacket(
 ) {
     /** 与 {@code SectionDeltaS2CPacket} 单 chunk section 数上限对齐（1.18+ ≤ 24，留余量）。 */
     private static final int MAX_SECTIONS = 64;
-
-    public static final
-#if MC_VER < MC_1_21_11
-ResourceLocation
-#else
-Identifier
-#endif
-CHANNEL = ResourceLocationCompat.create(Constants.MOD_ID, "section_hash_request_c2s");
 
     public void encode(FriendlyByteBuf buf) {
         buf.writeUtf(dimension);

@@ -9,11 +9,6 @@ import io.github.limuqy.mc.hassium.network.PacketCompressionBlacklist;
 import io.github.limuqy.mc.hassium.network.PacketTypeHelper;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import net.minecraft.network.Connection;
-#if MC_VER < MC_1_21_11
-import net.minecraft.resources.ResourceLocation;
-#else
-import net.minecraft.resources.Identifier;
-#endif
 import net.minecraft.network.PacketListener;
 #if MC_VER < MC_1_21_6
 import net.minecraft.network.PacketSendListener;
@@ -95,7 +90,7 @@ public class MixinConnection {
                 || packetListener instanceof net.minecraft.server.network.ServerStatusPacketListenerImpl) {
             return;
         }
-#if MC_VER >= MC_1_20_2
+#if MC_VER >= MC_1_21_1
         if (packetListener instanceof net.minecraft.server.network.ServerConfigurationPacketListenerImpl) {
             return;
         }
@@ -108,7 +103,7 @@ public class MixinConnection {
             core.relayLoginPacket(packet);
             return;
         }
-#if MC_VER >= MC_1_20_2
+#if MC_VER >= MC_1_21_1
         if (packetListener instanceof net.minecraft.client.multiplayer.ClientConfigurationPacketListenerImpl) {
             core.relayConfigPacket(packet);
             return;
@@ -131,7 +126,7 @@ public class MixinConnection {
     /** keep-alive 响应判定（1.20.1 在 game 包；1.20.2+ 在 common 包——按监听器阶段已收敛，包类仅防误伤）。 */
     @Unique
     private static boolean hassium$isKeepAlive(Packet<?> packet) {
-#if MC_VER < MC_1_20_2
+#if MC_VER < MC_1_21_1
         return packet instanceof net.minecraft.network.protocol.game.ServerboundKeepAlivePacket;
 #else
         return packet instanceof net.minecraft.network.protocol.common.ServerboundKeepAlivePacket;
@@ -156,12 +151,7 @@ public class MixinConnection {
         }
 
         // 获取包类型
-#if MC_VER < MC_1_21_11
-        ResourceLocation
-#else
-        Identifier
-#endif
-        packetType = PacketTypeHelper.getPacketType(packet);
+        var packetType = PacketTypeHelper.getPacketType(packet);
         if (packetType == null) {
             // 无法识别的包不聚合，直接发送
             return;

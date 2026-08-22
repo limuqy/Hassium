@@ -6,8 +6,11 @@ import net.minecraft.network.protocol.game.ClientboundRotateHeadPacket;
 import net.minecraft.network.protocol.game.ClientboundSetEntityMotionPacket;
 import net.minecraft.network.protocol.game.ClientboundTeleportEntityPacket;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.Vec3;
 #if MC_VER >= MC_1_21_2
+import net.minecraft.world.entity.EntitySpawnReason;
 import net.minecraft.world.entity.PositionMoveRotation;
 #endif
 
@@ -21,7 +24,7 @@ import net.minecraft.world.entity.PositionMoveRotation;
  *   <li>{@code MC_1_21_2}：Teleport 重构 record + Relative（绝对坐标必须
  *       {@code PositionMoveRotation.calculateAbsolute}）；MoveEntity/RotateHead 旋转
  *       getter byte（1/256）→ float（Mth.unpackDegrees）；EntityType.create 加
- *       EntitySpawnReason.LOAD（后者在 ShadowSeedServer 内按同一分界处理）</li>
+ *       EntitySpawnReason.LOAD（见 {@link #create}）</li>
  *   <li>{@code MC_1_21_5}：MoveEntity 旋转 getter 旧名 getyRot/getxRot（float）→
  *       新名 getYRot/getXRot（float）</li>
  *   <li>{@code MC_1_21_9}：Motion 位移三元组 → Vec3（readLpVec3，1/4096）</li>
@@ -30,6 +33,20 @@ import net.minecraft.world.entity.PositionMoveRotation;
 public final class EntityPacketCompat {
 
     private EntityPacketCompat() {
+    }
+
+    /**
+     * 按类型在世界中新建实体（影子端 AddEntity 重建链）。
+     * {@code < 1.21.2}：{@code EntityType.create(level)}；
+     * {@code ≥ 1.21.2}：增加 {@code EntitySpawnReason.LOAD}。
+     */
+    @Nullable
+    public static Entity create(EntityType<?> type, Level level) {
+#if MC_VER >= MC_1_21_2
+        return type.create(level, EntitySpawnReason.LOAD);
+#else
+        return type.create(level);
+#endif
     }
 
     /** MoveEntity：yaw 旋转（角度制 float）。段 A–D byte*360/256 / 段 E 旧名 float / 段 F+ 新名 float。 */

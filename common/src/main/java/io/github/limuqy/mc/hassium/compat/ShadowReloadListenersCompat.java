@@ -1,16 +1,18 @@
 package io.github.limuqy.mc.hassium.compat;
 
+#if MC_VER < MC_1_21_2
 import java.util.ArrayList;
+import net.minecraft.tags.TagManager;
+#endif
 import java.util.List;
 import net.minecraft.server.packs.resources.PreparableReloadListener;
-import net.minecraft.tags.TagManager;
 
 /**
  * 影子端 datapack reload 剪枝：仅保留 {@link TagManager}（方块/流体/物品 tag），
  * 跳过 recipe / advancement / function / loot。
  * <p>
- * 1.21.5+ 段 TagManager 已不在 {@code ReloadableServerResources.listeners()}（改走
- * {@code ReloadableServerRegistries}）——此时返回空表（标签已在别处加载）。
+ * 1.21.2 起 {@code TagManager} 类移除、tag 改走 {@code Registry.PendingTags.apply()}，
+ * {@code listeners()} 返回值本就不含 tag —— 此时原样透传。
  * 跨版本差异收口于此，业务 Mixin 禁止散落 {@code #if}。
  */
 public final class ShadowReloadListenersCompat {
@@ -25,6 +27,7 @@ public final class ShadowReloadListenersCompat {
         if (original == null || original.isEmpty()) {
             return List.of();
         }
+#if MC_VER < MC_1_21_2
         List<PreparableReloadListener> kept = new ArrayList<>(1);
         for (PreparableReloadListener listener : original) {
             if (listener instanceof TagManager) {
@@ -32,5 +35,9 @@ public final class ShadowReloadListenersCompat {
             }
         }
         return List.copyOf(kept);
+#else
+        // ≥1.21.2：listeners() 只含 recipes/functions/advancements，无 tag 可剪
+        return List.copyOf(original);
+#endif
     }
 }

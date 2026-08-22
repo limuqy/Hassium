@@ -50,7 +50,7 @@ processResources {
 
     // javafml 的 loaderVersion ≠ NeoForge 版本号：
     // - 1.20.1（Forge 风格 NeoForge，loader 47.x）：与 forge/neoforge loader 区间一致
-    // - 1.20.2+（FancyModLoader）：language provider Implementation-Version 为 1.0/2.0/...，默认 [1,)
+    // - ≥1.21.1（FancyModLoader）：language provider Implementation-Version 为 1.0/2.0/...，默认 [1,)
     // 高版本若需收紧可在 versionProperties 设 javafml_loader_version_range
     def javafmlRange = gradle.ext.has('javafml_loader_version_range') ? gradle.ext.javafml_loader_version_range : ''
     if (!javafmlRange) {
@@ -59,16 +59,15 @@ processResources {
     }
 
     // mods.toml 里的加载器依赖 modId：
-    // - 1.20.1 NeoForge 仍为 forge；1.20.2+ 为 neoforge
+    // - 1.20.1 NeoForge 仍为 forge；≥1.21.1 为 neoforge
     def mcVer = gradle.ext.minecraft_version as String
     def neoDepModId = (mcVer == '1.20.1') ? 'forge' : 'neoforge'
 
     // mods.toml 依赖声明字段：
     // - 1.20.1（Forge 47.x）：必须用 `mandatory = true`，不支持 `type`
-    // - 1.20.2–1.20.3（NeoForge 20.2.x/20.3.x）：仍要求 `mandatory`，`type` 未实现
-    // - 1.20.4+（NeoForge 20.4+）：必须用 `type = "required"`，`mandatory` 被拒绝
+    // - 1.21.1+（NeoForge 20.4+）：必须用 `type = "required"`，`mandatory` 被拒绝
     def depRequiredField
-    if (mcVer == '1.20.1' || mcVer == '1.20.2' || mcVer == '1.20.3') {
+    if (mcVer == '1.20.1') {
         depRequiredField = 'mandatory = true'
     } else {
         depRequiredField = 'type = "required"'

@@ -1,13 +1,6 @@
 package io.github.limuqy.mc.hassium.network;
 
-import io.github.limuqy.mc.hassium.Constants;
 import net.minecraft.network.FriendlyByteBuf;
-#if MC_VER < MC_1_21_11
-import net.minecraft.resources.ResourceLocation;
-#else
-import net.minecraft.resources.Identifier;
-#endif
-import io.github.limuqy.mc.hassium.compat.ResourceLocationCompat;
 
 /**
  * 字典同步包
@@ -20,13 +13,6 @@ import io.github.limuqy.mc.hassium.compat.ResourceLocationCompat;
  * 空字典（长度 0）表示没有可用字典。
  */
 public record DictionarySyncPayload(byte[] dictionary, boolean isChunkDict) {
-    public static final
-#if MC_VER < MC_1_21_11
-ResourceLocation
-#else
-Identifier
-#endif
-CHANNEL = ResourceLocationCompat.create(Constants.MOD_ID, "dictionary_sync");
 
     /**
      * 最大字典大小（256KB）

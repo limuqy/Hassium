@@ -5,7 +5,7 @@
 #   ./scripts/publish-curseforge.sh
 #   ./scripts/publish-curseforge.sh --dry-run
 #   ./scripts/publish-curseforge.sh --anchors-only
-#   ./scripts/publish-curseforge.sh --versions 1.20.1,1.20.6
+#   ./scripts/publish-curseforge.sh --versions 1.20.1,1.21.1
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -55,7 +55,7 @@ mapfile -t all_versions < <(find versionProperties -name '*.properties' -printf 
 if [[ -n "$VERSIONS" ]]; then
   IFS=',' read -r -a version_list <<< "$VERSIONS"
 elif [[ "$ANCHORS_ONLY" -eq 1 ]]; then
-  version_list=(1.20.1 1.20.2 1.20.5 1.20.6 1.21.1 1.21.2 1.21.5 1.21.6 1.21.9 1.21.11)
+  version_list=(1.20.1 1.21.1 1.21.2 1.21.5 1.21.6 1.21.9 1.21.11)
 else
   version_list=("${all_versions[@]}")
 fi

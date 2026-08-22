@@ -1,6 +1,7 @@
 package io.github.limuqy.mc.hassium.network;
 
 import io.github.limuqy.mc.hassium.Constants;
+import io.github.limuqy.mc.hassium.compat.HassiumChannels;
 import io.github.limuqy.mc.hassium.compat.ResourceLocationCompat;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.network.ServerChunkPushManager;
@@ -11,7 +12,7 @@ import io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail;
 import io.github.limuqy.mc.hassium.utils.DebugLogger;
 import io.github.limuqy.mc.hassium.utils.DebugLogger.LogType;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
-#if MC_VER >= MC_1_20_2
+#if MC_VER >= MC_1_21_1
 import net.fabricmc.fabric.api.networking.v1.ServerConfigurationNetworking;
 #endif
 import net.fabricmc.fabric.api.networking.v1.ServerLoginConnectionEvents;
@@ -39,8 +40,8 @@ import io.netty.channel.Channel;
  * <p>
  * 版本整段切分（见 docs/version-segments.md）：
  * <ul>
- *   <li>{@code MC_VER < MC_1_20_5}：Identifier + FriendlyByteBuf 收发</li>
- *   <li>{@code MC_VER >= MC_1_20_5}：CustomPacketPayload + StreamCodec（{@link FabricPayloadRegistry}）</li>
+ *   <li>{@code MC_VER < MC_1_21_1}：Identifier + FriendlyByteBuf 收发</li>
+ *   <li>{@code MC_VER >= MC_1_21_1}：CustomPacketPayload + StreamCodec（{@link FabricPayloadRegistry}）</li>
  * </ul>
  * 禁止在每个 send/receive 再引入碎片分界；common 侧聚合能力由 {@link io.github.limuqy.mc.hassium.compat.NetworkCapability} 门控。
  */
@@ -127,63 +128,63 @@ ResourceLocation
 #else
 Identifier
 #endif
-DICTIONARY_SYNC_S2C = DictionarySyncPayload.CHANNEL;
+DICTIONARY_SYNC_S2C = ResourceLocationCompat.vanilla(HassiumChannels.DICTIONARY_SYNC);
     public static final
 #if MC_VER < MC_1_21_11
 ResourceLocation
 #else
 Identifier
 #endif
-CHUNK_DATA_REQUEST_C2S = ChunkDataRequestC2SPacket.CHANNEL;
+CHUNK_DATA_REQUEST_C2S = ResourceLocationCompat.vanilla(HassiumChannels.CHUNK_DATA_REQUEST_C2S);
     public static final
 #if MC_VER < MC_1_21_11
 ResourceLocation
 #else
 Identifier
 #endif
-CHUNK_HASH_S2C = ChunkHashS2CPacket.CHANNEL;
+CHUNK_HASH_S2C = ResourceLocationCompat.vanilla(HassiumChannels.CHUNK_HASH_S2C);
     public static final
 #if MC_VER < MC_1_21_11
 ResourceLocation
 #else
 Identifier
 #endif
-SEED_REF_S2C = SeedRefS2CPacket.CHANNEL;
+SEED_REF_S2C = ResourceLocationCompat.vanilla(HassiumChannels.SEED_REF_S2C);
     public static final
 #if MC_VER < MC_1_21_11
 ResourceLocation
 #else
 Identifier
 #endif
-SECTION_HASH_REQUEST_C2S = SectionHashRequestC2SPacket.CHANNEL;
+SECTION_HASH_REQUEST_C2S = ResourceLocationCompat.vanilla(HassiumChannels.SECTION_HASH_REQUEST_C2S);
     public static final
 #if MC_VER < MC_1_21_11
 ResourceLocation
 #else
 Identifier
 #endif
-SECTION_DELTA_S2C = SectionDeltaS2CPacket.CHANNEL;
+SECTION_DELTA_S2C = ResourceLocationCompat.vanilla(HassiumChannels.SECTION_DELTA_S2C);
     public static final
 #if MC_VER < MC_1_21_11
 ResourceLocation
 #else
 Identifier
 #endif
-BLOCK_ENTITY_REQUEST_C2S = BlockEntityRequestC2SPacket.CHANNEL;
+BLOCK_ENTITY_REQUEST_C2S = ResourceLocationCompat.vanilla(HassiumChannels.BLOCK_ENTITY_REQUEST_C2S);
     public static final
 #if MC_VER < MC_1_21_11
 ResourceLocation
 #else
 Identifier
 #endif
-CLIENT_BLOOM_SYNC_C2S = ClientBloomSyncPacket.CHANNEL;
+CLIENT_BLOOM_SYNC_C2S = ResourceLocationCompat.vanilla(HassiumChannels.CLIENT_BLOOM_SYNC_C2S);
     public static final
 #if MC_VER < MC_1_21_11
 ResourceLocation
 #else
 Identifier
 #endif
-BLOCK_ENTITY_DATA_S2C = BlockEntityDataS2CPacket.CHANNEL;
+BLOCK_ENTITY_DATA_S2C = ResourceLocationCompat.vanilla(HassiumChannels.BLOCK_ENTITY_DATA_S2C);
     public static final
 #if MC_VER < MC_1_21_11
 ResourceLocation
@@ -204,7 +205,7 @@ ResourceLocation
 #else
 Identifier
 #endif
-LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
+LIGHT_DELTA_S2C = ResourceLocationCompat.vanilla(HassiumChannels.LIGHT_DELTA_S2C);
 
     @Override
     public void registerChannels() {
@@ -213,7 +214,7 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
             return;
         }
         LOGGER.debug("Hassium: Registering Fabric network channels");
-#if MC_VER >= MC_1_20_5
+#if MC_VER >= MC_1_21_1
         FabricPayloadRegistry.registerAll();
 #endif
         registerServerChannels();
@@ -222,7 +223,7 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
         HassiumAggregationManager.setSender((connection, buf) -> {
             if (connection.getPacketListener() instanceof net.minecraft.server.network.ServerGamePacketListenerImpl handler) {
                 ServerPlayer player = handler.getPlayer();
-#if MC_VER < MC_1_20_5
+#if MC_VER < MC_1_21_1
                 ServerPlayNetworking.send(player, AGGREGATION_S2C, buf);
 #else
                 ServerPlayNetworking.send(player, FabricPayloadRegistry.toPayload(FabricPayloadRegistry.AGGREGATION_S2C_TYPE, buf));
@@ -251,7 +252,7 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
     @Override
     public void sendChunkDataRequest(FriendlyByteBuf buf) {
         if (Minecraft.getInstance().getConnection() != null) {
-#if MC_VER < MC_1_20_5
+#if MC_VER < MC_1_21_1
             ClientPlayNetworking.send(CHUNK_DATA_REQUEST_C2S, buf);
 #else
             ClientPlayNetworking.send(FabricPayloadRegistry.toPayload(FabricPayloadRegistry.CHUNK_DATA_REQUEST_C2S_TYPE, buf));
@@ -266,7 +267,7 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
     @Override
     public void sendClientBloomSync(FriendlyByteBuf buf) {
         if (Minecraft.getInstance().getConnection() != null) {
-#if MC_VER < MC_1_20_5
+#if MC_VER < MC_1_21_1
             ClientPlayNetworking.send(CLIENT_BLOOM_SYNC_C2S, buf);
 #else
             ClientPlayNetworking.send(FabricPayloadRegistry.toPayload(FabricPayloadRegistry.CLIENT_BLOOM_SYNC_C2S_TYPE, buf));
@@ -283,7 +284,7 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
 
     @Override
     public void sendChunkHashPacket(ServerPlayer player, FriendlyByteBuf buf) {
-#if MC_VER < MC_1_20_5
+#if MC_VER < MC_1_21_1
         ServerPlayNetworking.send(player, CHUNK_HASH_S2C, buf);
 #else
         ServerPlayNetworking.send(player, FabricPayloadRegistry.toPayload(FabricPayloadRegistry.CHUNK_HASH_S2C_TYPE, buf));
@@ -292,7 +293,7 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
 
     @Override
     public void sendSeedRef(ServerPlayer player, FriendlyByteBuf buf) {
-#if MC_VER < MC_1_20_5
+#if MC_VER < MC_1_21_1
         ServerPlayNetworking.send(player, SEED_REF_S2C, buf);
 #else
         ServerPlayNetworking.send(player, FabricPayloadRegistry.toPayload(FabricPayloadRegistry.SEED_REF_S2C_TYPE, buf));
@@ -302,7 +303,7 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
     @Override
     public void sendSectionHashRequest(FriendlyByteBuf buf) {
         if (Minecraft.getInstance().getConnection() != null) {
-#if MC_VER < MC_1_20_5
+#if MC_VER < MC_1_21_1
             ClientPlayNetworking.send(SECTION_HASH_REQUEST_C2S, buf);
 #else
             ClientPlayNetworking.send(FabricPayloadRegistry.toPayload(FabricPayloadRegistry.SECTION_HASH_REQUEST_C2S_TYPE, buf));
@@ -328,7 +329,7 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
             buf.release();
             return; // 已走 UDP 数据面
         }
-#if MC_VER < MC_1_20_5
+#if MC_VER < MC_1_21_1
         ServerPlayNetworking.send(player, SECTION_DELTA_S2C, buf);
 #else
         ServerPlayNetworking.send(player, FabricPayloadRegistry.toPayload(FabricPayloadRegistry.SECTION_DELTA_S2C_TYPE, buf));
@@ -338,7 +339,7 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
     @Override
     public void sendBlockEntityRequest(FriendlyByteBuf buf) {
         if (Minecraft.getInstance().getConnection() != null) {
-#if MC_VER < MC_1_20_5
+#if MC_VER < MC_1_21_1
             ClientPlayNetworking.send(BLOCK_ENTITY_REQUEST_C2S, buf);
 #else
             ClientPlayNetworking.send(FabricPayloadRegistry.toPayload(FabricPayloadRegistry.BLOCK_ENTITY_REQUEST_C2S_TYPE, buf));
@@ -350,7 +351,7 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
 
     @Override
     public void sendBlockEntityData(ServerPlayer player, FriendlyByteBuf buf) {
-#if MC_VER < MC_1_20_5
+#if MC_VER < MC_1_21_1
         ServerPlayNetworking.send(player, BLOCK_ENTITY_DATA_S2C, buf);
 #else
         ServerPlayNetworking.send(player, FabricPayloadRegistry.toPayload(FabricPayloadRegistry.BLOCK_ENTITY_DATA_S2C_TYPE, buf));
@@ -359,7 +360,7 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
 
     @Override
     public void sendLightDeltaPacket(ServerPlayer player, FriendlyByteBuf buf) {
-#if MC_VER < MC_1_20_5
+#if MC_VER < MC_1_21_1
         ServerPlayNetworking.send(player, LIGHT_DELTA_S2C, buf);
 #else
         ServerPlayNetworking.send(player, FabricPayloadRegistry.toPayload(FabricPayloadRegistry.LIGHT_DELTA_S2C_TYPE, buf));
@@ -382,7 +383,7 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
             buf.writeBytes(data);
 
             DebugLogger.debug(LogType.NETWORK, "[SEND_CHUNK] Encoded chunk data ({} bytes), sending via network", data.length);
-#if MC_VER < MC_1_20_5
+#if MC_VER < MC_1_21_1
             // review-fix: T10-2: send 抛异常时 Fabric 不会释放 buf → 失败路径手动 release 后重抛（成功路径由 Fabric 负责释放）
             try {
                 ServerPlayNetworking.send(player, CHUNK_PAYLOAD_S2C, buf);
@@ -408,7 +409,7 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
             DictionarySyncPayload payload = new DictionarySyncPayload(aggregationDict, false);
             FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
             payload.encode(buf);
-#if MC_VER < MC_1_20_5
+#if MC_VER < MC_1_21_1
             ServerPlayNetworking.send(player, DICTIONARY_SYNC_S2C, buf);
 #else
             ServerPlayNetworking.send(player, FabricPayloadRegistry.toPayload(FabricPayloadRegistry.DICTIONARY_SYNC_S2C_TYPE, buf));
@@ -429,7 +430,7 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
             DictionarySyncPayload payload = new DictionarySyncPayload(dictionary, false);
             FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
             payload.encode(buf);
-#if MC_VER < MC_1_20_5
+#if MC_VER < MC_1_21_1
             ServerPlayNetworking.send(player, DICTIONARY_SYNC_S2C, buf);
 #else
             ServerPlayNetworking.send(player, FabricPayloadRegistry.toPayload(FabricPayloadRegistry.DICTIONARY_SYNC_S2C_TYPE, buf));
@@ -455,7 +456,7 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
             FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
             buf.writeVarInt(data.length);
             buf.writeBytes(data);
-#if MC_VER < MC_1_20_5
+#if MC_VER < MC_1_21_1
             ServerPlayNetworking.send(player, INDEX_SYNC_S2C, buf);
 #else
             ServerPlayNetworking.send(player, FabricPayloadRegistry.toPayload(FabricPayloadRegistry.INDEX_SYNC_S2C_TYPE, buf));
@@ -546,7 +547,7 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
                         player.getName().getString(), ex);
             }
         }
-#if MC_VER < MC_1_20_5
+#if MC_VER < MC_1_21_1
         ServerPlayNetworking.send(player, HANDSHAKE_S2C, response);
 #else
         ServerPlayNetworking.send(player, FabricPayloadRegistry.toPayload(FabricPayloadRegistry.HANDSHAKE_S2C_TYPE, response));
@@ -656,14 +657,14 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
     }
 
     /**
-     * 服务端预握手注册：1.20.1 login query；1.20.2+ 配置阶段接收。
+     * 服务端预握手注册：{@code MC_VER < MC_1_21_1}（1.20.1）login query；1.21.1+ 配置阶段接收。
      * <p>
      * 收到后仅 {@code PlayerCompressionTracker.markPreHandshake(UUID)}；
      * {@code ServerPlayer} 创建时（{@code MixinServerPlayer} TAIL）自动提升为
      * 压缩启用，完整协商（ZSTD/聚合/数据面/位置）仍在 Play 阶段握手。
      */
     private void registerPreHandshakeServer() {
-#if MC_VER < MC_1_20_2
+#if MC_VER < MC_1_21_1
         // 1.20.1：login query 阶段发 query，收到回复后按 UUID 标记预握手。
         // vanilla / 无 mod 客户端对未知 channel 回空（understood=false），不标记。
         ServerLoginConnectionEvents.QUERY_START.register((loginListener, server, sender, synchronizer) -> {
@@ -687,15 +688,8 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
                     UUID playerId = resolveLoginPlayerId(loginListener);
                     PreHandshakeProtocol.handlePreHandshake(playerId, buf);
                 });
-#elif MC_VER < MC_1_20_5
-        // 1.20.2-1.20.4：配置阶段 legacy Identifier 通道接收
-        ServerConfigurationNetworking.registerGlobalReceiver(PRE_HANDSHAKE_C2S,
-                (server, handler, buf, sender) -> {
-                    UUID playerId = io.github.limuqy.mc.hassium.compat.PlayerCompat.getProfileId(handler.getOwner());
-                    PreHandshakeProtocol.handlePreHandshake(playerId, buf);
-                });
 #else
-        // 1.20.5+：配置阶段 payload 接收。
+        // 1.21.1+：配置阶段 payload 接收。
         // payload type 注册统一在 FabricPayloadRegistry.registerAll（registerChannels 时调用，幂等）
         ServerConfigurationNetworking.registerGlobalReceiver(PreHandshakePayload.TYPE,
                 (payload, context) -> {
@@ -712,7 +706,7 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
         // ===== 预握手（login/配置阶段）：提前标记 Hassium 客户端 =====
         registerPreHandshakeServer();
         // 注册握手请求
-#if MC_VER < MC_1_20_5
+#if MC_VER < MC_1_21_1
         ServerPlayNetworking.registerGlobalReceiver(HANDSHAKE_C2S, (server, player, handler, buf, sender) -> {
             int protocolVersion = buf.readVarInt();
             String modVersion = buf.readUtf();
@@ -890,8 +884,8 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
 #endif
 
         // 注册压缩就绪确认
-#if MC_VER < MC_1_20_5
-        ServerPlayNetworking.registerGlobalReceiver(CompressionReadyPayload.CHANNEL, (server, player, handler, buf, sender) -> {
+#if MC_VER < MC_1_21_1
+        ServerPlayNetworking.registerGlobalReceiver(ResourceLocationCompat.vanilla(HassiumChannels.COMPRESSION_READY_C2S), (server, player, handler, buf, sender) -> {
             CompressionReadyPayload payload = CompressionReadyPayload.decode(buf);
             DebugLogger.debug(LogType.NETWORK, "Hassium: Received compression ready from player {}, ready: {}",
                     player.getName().getString(), payload.isReady());
@@ -920,7 +914,7 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
 #endif
 
         // 注册区块数据请求（新协议）
-#if MC_VER < MC_1_20_5
+#if MC_VER < MC_1_21_1
         ServerPlayNetworking.registerGlobalReceiver(CHUNK_DATA_REQUEST_C2S, (server, player, handler, buf, sender) -> {
             try {
                 DebugLogger.debug(LogType.NETWORK, "[SERVER] Received chunk data request from player {}",
@@ -971,7 +965,7 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
 #endif
 
         // 注册 section 哈希请求（阶段二）
-#if MC_VER < MC_1_20_5
+#if MC_VER < MC_1_21_1
         ServerPlayNetworking.registerGlobalReceiver(SECTION_HASH_REQUEST_C2S, (server, player, handler, buf, sender) -> {
             try {
                 // review-fix: T10-1: 直接 decode 原 buf（Fabric 回调结束后负责释放），避免副本泄漏
@@ -1014,7 +1008,7 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
 #endif
 
         // 注册 blockEntity 数据请求
-#if MC_VER < MC_1_20_5
+#if MC_VER < MC_1_21_1
         ServerPlayNetworking.registerGlobalReceiver(BLOCK_ENTITY_REQUEST_C2S, (server, player, handler, buf, sender) -> {
             try {
                 // review-fix: T10-1: 直接 decode 原 buf（Fabric 回调结束后负责释放），避免副本泄漏
@@ -1057,7 +1051,7 @@ LIGHT_DELTA_S2C = LightDeltaS2CPacket.CHANNEL;
 #endif
 
         // 注册客户端缓存 Bloom 位图同步（C2S）
-#if MC_VER < MC_1_20_5
+#if MC_VER < MC_1_21_1
         ServerPlayNetworking.registerGlobalReceiver(CLIENT_BLOOM_SYNC_C2S, (server, player, handler, buf, sender) -> {
             try {
                 // review-fix: T10-1: 直接 decode 原 buf（Fabric 回调结束后负责释放），避免副本泄漏

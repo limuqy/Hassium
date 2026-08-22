@@ -2,7 +2,7 @@ package io.github.limuqy.mc.hassium.compat;
 
 import net.minecraft.core.RegistryAccess;
 import net.minecraft.core.registries.BuiltInRegistries;
-#if MC_VER >= MC_1_20_5
+#if MC_VER >= MC_1_21_1
 import net.minecraft.core.registries.Registries;
 import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.codec.ByteBufCodecs;
@@ -12,6 +12,7 @@ import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.Tag;
 import net.minecraft.network.FriendlyByteBuf;
+import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.block.entity.BlockEntityType;
 import net.minecraft.world.level.chunk.LevelChunkSection;
 import net.minecraft.world.level.levelgen.Heightmap;
@@ -34,6 +35,20 @@ public final class ChunkPacketDataCompat {
     private static final Logger LOGGER = LoggerFactory.getLogger("Hassium/ChunkPacketDataCompat");
 
     private ChunkPacketDataCompat() {}
+
+    /**
+     * {@link net.minecraft.network.protocol.game.ClientboundForgetLevelChunkPacket} 的区块坐标。
+     * <p>
+     * {@code <1.21.1 getX()/getZ()} / {@code >=1.21.1 pos()}——accessor 差异收口于此（WAVE2 契约 B 节）。
+     */
+    public static ChunkPos forgetChunkPos(
+            net.minecraft.network.protocol.game.ClientboundForgetLevelChunkPacket packet) {
+#if MC_VER < MC_1_21_1
+        return new ChunkPos(packet.getX(), packet.getZ());
+#else
+        return packet.pos();
+#endif
+    }
 
 #if MC_VER >= MC_1_21_5
     private static final net.minecraft.network.codec.StreamCodec<io.netty.buffer.ByteBuf,
@@ -203,7 +218,7 @@ public final class ChunkPacketDataCompat {
             return list;
         }
         try {
-#if MC_VER < MC_1_20_5
+#if MC_VER < MC_1_21_1
             int count = buf.readVarInt();
             for (int i = 0; i < count; i++) {
                 int packedXZ = buf.readUnsignedByte();

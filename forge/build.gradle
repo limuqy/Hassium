@@ -416,7 +416,7 @@ def hassiumExtractForgeOnlyJar = { File src ->
     return stripOut
 }
 
-// Forge 模块仅构建 1.20.1 / 1.20.6（1.21+ 已从 builds_for 移除）。
+// Forge 模块构建 1.20.1 与 1.21.1–1.21.10（1.21.2 上游无 Forge userdev；1.21.11 sunset 走 NeoForge）。
 // Forge 50+ / architectury-loom 开发环境 module path 冲突：
 // 1) loom#191：classpath 仅有 LWJGL natives → 服务端整段移除
 // 2) loom#308：去掉 fabric-log4j-util，避免与 terminalconsoleappender 冲突

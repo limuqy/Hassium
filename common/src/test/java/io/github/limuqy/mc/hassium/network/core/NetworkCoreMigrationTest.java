@@ -106,7 +106,7 @@ class NetworkCoreMigrationTest {
     /** 通用假包（routeC2S 丢弃分类只关心包对象，不编码）。 */
     private static Packet<ServerGamePacketListener> fakePacket() {
         return new Packet<>() {
-#if MC_VER < MC_1_20_5
+#if MC_VER < MC_1_21_1
             @Override
             public void write(FriendlyByteBuf buffer) {
             }

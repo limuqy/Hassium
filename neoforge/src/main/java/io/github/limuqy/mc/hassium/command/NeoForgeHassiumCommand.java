@@ -8,14 +8,10 @@ import io.github.limuqy.mc.hassium.metrics.NetworkStats;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.network.chat.Component;
-#if MC_VER < MC_1_20_2
+#if MC_VER < MC_1_21_1
 import net.minecraftforge.event.RegisterCommandsEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
-#elif MC_VER < MC_1_20_5
-import net.neoforged.neoforge.event.RegisterCommandsEvent;
-import net.neoforged.bus.api.SubscribeEvent;
-import net.neoforged.fml.common.Mod;
 #else
 import net.neoforged.neoforge.event.RegisterCommandsEvent;
 import net.neoforged.bus.api.SubscribeEvent;
@@ -27,7 +23,7 @@ import net.neoforged.fml.common.EventBusSubscriber;
  * <p>
  * 客户端命令见 {@link NeoForgeHassiumClientCommand}，避免专用服务端加载 client event 类。
  */
-#if MC_VER < MC_1_20_5
+#if MC_VER < MC_1_21_1
 @Mod.EventBusSubscriber(modid = Constants.MOD_ID)
 #else
 @EventBusSubscriber(modid = Constants.MOD_ID)

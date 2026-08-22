@@ -3,15 +3,11 @@ package io.github.limuqy.mc.hassium.network;
 import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.compat.PacketCodecCompat;
+import io.github.limuqy.mc.hassium.compat.PacketId;
 import io.github.limuqy.mc.hassium.compat.PacketPayloadCompat;
 import net.minecraft.network.Connection;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.network.protocol.Packet;
-#if MC_VER < MC_1_21_11
-import net.minecraft.resources.ResourceLocation;
-#else
-import net.minecraft.resources.Identifier;
-#endif
 
 import java.util.ArrayList;
 import java.util.List;
@@ -97,12 +93,7 @@ public class HassiumAggregationManager {
      * @param connection 连接
      */
     public static void takeOver(Packet<?> packet, Connection connection) {
-#if MC_VER < MC_1_21_11
-        ResourceLocation
-#else
-        Identifier
-#endif
-        type = PacketTypeHelper.getPacketType(packet);
+        PacketId type = PacketTypeHelper.getPacketType(packet);
         if (type == null) {
             Constants.LOG.warn("Unknown packet type, skipping aggregation: {}", packet.getClass().getSimpleName());
             return;

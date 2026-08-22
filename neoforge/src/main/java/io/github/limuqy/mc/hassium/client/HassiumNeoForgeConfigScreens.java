@@ -6,12 +6,9 @@ import org.slf4j.LoggerFactory;
 
 import java.util.function.Supplier;
 
-#if MC_VER < MC_1_20_2
+#if MC_VER < MC_1_21_1
 import net.minecraftforge.client.ConfigScreenHandler;
 import net.minecraftforge.fml.ModList;
-#elif MC_VER < MC_1_20_5
-import net.neoforged.neoforge.client.ConfigScreenHandler;
-import net.neoforged.fml.ModList;
 #else
 import net.neoforged.fml.ModList;
 import net.neoforged.neoforge.client.gui.IConfigScreenFactory;
@@ -36,7 +33,7 @@ public final class HassiumNeoForgeConfigScreens {
             return;
         }
         ModList.get().getModContainerById(Constants.MOD_ID).ifPresentOrElse(container -> {
-#if MC_VER < MC_1_20_5
+#if MC_VER < MC_1_21_1
             Supplier<ConfigScreenHandler.ConfigScreenFactory> supplier = () ->
                     new ConfigScreenHandler.ConfigScreenFactory(
                             (minecraft, parent) -> HassiumClothConfigScreen.create(parent));

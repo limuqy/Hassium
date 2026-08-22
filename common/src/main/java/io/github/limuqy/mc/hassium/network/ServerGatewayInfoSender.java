@@ -2,7 +2,7 @@ package io.github.limuqy.mc.hassium.network;
 
 import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.compat.PacketPayloadCompat;
-import io.github.limuqy.mc.hassium.compat.ResourceLocationCompat;
+import io.github.limuqy.mc.hassium.compat.PacketId;
 import io.github.limuqy.mc.hassium.config.HassiumConfig;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.server.RuntimeServerContext;
@@ -96,7 +96,7 @@ public final class ServerGatewayInfoSender {
                 config.isHassiumEngineEnabled());
         byte[] data = GatewayInfoCodec.encode(info);
         player.connection.send(PacketPayloadCompat.createClientboundPayload(
-                ResourceLocationCompat.create(HassiumPacketIds.GATEWAY_INFO_S2C), data));
+                PacketId.parse(HassiumPacketIds.GATEWAY_INFO_S2C), data));
         DebugLogger.info(LogType.NETWORK, "Hassium: gateway_info sent to {} (endpoints={}, auth={})",
                 player.getName().getString(), endpoints.size(),
                 config.getMasterAuthToken().isEmpty() ? "none" : "set");

@@ -1,8 +1,9 @@
 package io.github.limuqy.mc.hassium.mixin;
 
+import io.github.limuqy.mc.hassium.compat.LevelCompat;
 import io.github.limuqy.mc.hassium.network.ServerChunkPushManager;
 import io.github.limuqy.mc.hassium.network.gateway.GatewayServer;
-#if MC_VER >= MC_1_20_2
+#if MC_VER >= MC_1_21_1
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 #endif
 import net.minecraft.server.level.ServerLevel;
@@ -11,13 +12,13 @@ import net.minecraft.server.network.ServerGamePacketListenerImpl;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.chunk.LevelChunk;
 import org.spongepowered.asm.mixin.Mixin;
-#if MC_VER >= MC_1_20_2
+#if MC_VER >= MC_1_21_1
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.Unique;
 #endif
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
-#if MC_VER >= MC_1_20_2
+#if MC_VER >= MC_1_21_1
 import org.spongepowered.asm.mixin.injection.Redirect;
 #endif
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
@@ -34,14 +35,14 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
  * 1.20.1 无 {@code PlayerChunkSender}，挂空壳到 {@code MinecraftServer}
  * 以满足 mixins.json 注册（同 {@link MixinClientCommonPacketListenerImpl} 模式）。
  */
-#if MC_VER >= MC_1_20_2
+#if MC_VER >= MC_1_21_1
 @Mixin(net.minecraft.server.network.PlayerChunkSender.class)
 #else
 @Mixin(net.minecraft.server.MinecraftServer.class)
 #endif
 public abstract class MixinPlayerChunkSender {
 
-#if MC_VER >= MC_1_20_2
+#if MC_VER >= MC_1_21_1
     @Shadow
     private boolean memoryConnection;
     @Shadow
@@ -102,33 +103,21 @@ public abstract class MixinPlayerChunkSender {
         }
 
         ChunkPos pos = chunk.getPos();
-        String dimension = level.dimension()
-#if MC_VER < MC_1_21_11
-                .location()
-#else
-                .identifier()
-#endif
-                .toString();
+        String dimension = LevelCompat.getDimensionId(level);
 
         // 异步计算 hash 并发送元数据
         ServerChunkPushManager.getInstance().submitMetadataTaskFromChunk(player, pos, chunk, dimension);
 
         ci.cancel(); // 取消原版区块包发送
     }
-#if MC_VER >= MC_1_20_2
+#if MC_VER >= MC_1_21_1
     /** PlayerChunkSender.dropChunk 是 1.20.2+ 的精确 tracking-view 移除回调。 */
     @Inject(method = "dropChunk", at = @At("HEAD"))
     private void hassium$onDropChunk(ServerPlayer player, ChunkPos pos, CallbackInfo ci) {
         if (GatewayServer.getInstance().registry().get(player.getUUID()) == null) {
             return;
         }
-        String dimension = player.level().dimension()
-#if MC_VER < MC_1_21_11
-                .location()
-#else
-                .identifier()
-#endif
-                .toString();
+        String dimension = LevelCompat.getDimensionId(player.level());
         ServerChunkPushManager.getInstance().releasePlayerChunkDelivery(player.getUUID(), dimension, pos);
     }
 #endif

@@ -1,5 +1,6 @@
 package io.github.limuqy.mc.hassium.platform;
 
+import io.github.limuqy.mc.hassium.compat.HassiumChannels;
 import io.github.limuqy.mc.hassium.network.ChunkDataRequestC2SPacket;
 import io.github.limuqy.mc.hassium.network.ChunkHashS2CPacket;
 import io.github.limuqy.mc.hassium.network.SeedRefS2CPacket;
@@ -17,9 +18,6 @@ import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.server.level.ServerPlayer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-#if MC_VER >= MC_1_20_5
-import io.github.limuqy.mc.hassium.network.FabricPayloadRegistry;
-#endif
 
 /**
  * Fabric 平台的网络管理器服务实现
@@ -34,11 +32,7 @@ public class FabricNetworkManagerService implements INetworkManagerService {
     public void sendChunkDataRequest(FriendlyByteBuf buf) {
         // review-fix: T10-6: 无 connection 检查直接 send → 断线竞态下 Fabric send 抛异常且 buf 未释放；对齐 FabricNetworkManager:250-263
         if (Minecraft.getInstance().getConnection() != null) {
-#if MC_VER < MC_1_20_5
-            ClientPlayNetworking.send(ChunkDataRequestC2SPacket.CHANNEL, buf);
-#else
-            ClientPlayNetworking.send(FabricPayloadRegistry.toPayload(FabricPayloadRegistry.CHUNK_DATA_REQUEST_C2S_TYPE, buf));
-#endif
+            FabricSendCompat.sendToServer(HassiumChannels.CHUNK_DATA_REQUEST_C2S, buf);
         } else {
             buf.release();
         }
@@ -51,11 +45,7 @@ public class FabricNetworkManagerService implements INetworkManagerService {
                 player, io.github.limuqy.mc.hassium.network.core.GatewayPacketCodec.HassiumSub.CHUNK_HASH.id(), buf)) {
             return;
         }
-#if MC_VER < MC_1_20_5
-        ServerPlayNetworking.send(player, ChunkHashS2CPacket.CHANNEL, buf);
-#else
-        ServerPlayNetworking.send(player, FabricPayloadRegistry.toPayload(FabricPayloadRegistry.CHUNK_HASH_S2C_TYPE, buf));
-#endif
+        FabricSendCompat.sendToPlayer(player, HassiumChannels.CHUNK_HASH_S2C, buf);
     }
 
     @Override
@@ -64,20 +54,12 @@ public class FabricNetworkManagerService implements INetworkManagerService {
                 player, io.github.limuqy.mc.hassium.network.core.GatewayPacketCodec.HassiumSub.SEED_REF.id(), buf)) {
             return;
         }
-#if MC_VER < MC_1_20_5
-        ServerPlayNetworking.send(player, SeedRefS2CPacket.CHANNEL, buf);
-#else
-        ServerPlayNetworking.send(player, FabricPayloadRegistry.toPayload(FabricPayloadRegistry.SEED_REF_S2C_TYPE, buf));
-#endif
+        FabricSendCompat.sendToPlayer(player, HassiumChannels.SEED_REF_S2C, buf);
     }
 
     @Override
     public void sendSectionHashRequest(FriendlyByteBuf buf) {
-#if MC_VER < MC_1_20_5
-        ClientPlayNetworking.send(SectionHashRequestC2SPacket.CHANNEL, buf);
-#else
-        ClientPlayNetworking.send(FabricPayloadRegistry.toPayload(FabricPayloadRegistry.SECTION_HASH_REQUEST_C2S_TYPE, buf));
-#endif
+        FabricSendCompat.sendToServer(HassiumChannels.SECTION_HASH_REQUEST_C2S, buf);
     }
 
     @Override
@@ -86,20 +68,12 @@ public class FabricNetworkManagerService implements INetworkManagerService {
                 player, io.github.limuqy.mc.hassium.network.core.GatewayPacketCodec.HassiumSub.SECTION_DELTA.id(), buf)) {
             return;
         }
-#if MC_VER < MC_1_20_5
-        ServerPlayNetworking.send(player, SectionDeltaS2CPacket.CHANNEL, buf);
-#else
-        ServerPlayNetworking.send(player, FabricPayloadRegistry.toPayload(FabricPayloadRegistry.SECTION_DELTA_S2C_TYPE, buf));
-#endif
+        FabricSendCompat.sendToPlayer(player, HassiumChannels.SECTION_DELTA_S2C, buf);
     }
 
     @Override
     public void sendBlockEntityRequest(FriendlyByteBuf buf) {
-#if MC_VER < MC_1_20_5
-        ClientPlayNetworking.send(BlockEntityRequestC2SPacket.CHANNEL, buf);
-#else
-        ClientPlayNetworking.send(FabricPayloadRegistry.toPayload(FabricPayloadRegistry.BLOCK_ENTITY_REQUEST_C2S_TYPE, buf));
-#endif
+        FabricSendCompat.sendToServer(HassiumChannels.BLOCK_ENTITY_REQUEST_C2S, buf);
     }
 
     @Override
@@ -108,11 +82,7 @@ public class FabricNetworkManagerService implements INetworkManagerService {
                 player, io.github.limuqy.mc.hassium.network.core.GatewayPacketCodec.HassiumSub.BLOCK_ENTITY_DATA.id(), buf)) {
             return;
         }
-#if MC_VER < MC_1_20_5
-        ServerPlayNetworking.send(player, BlockEntityDataS2CPacket.CHANNEL, buf);
-#else
-        ServerPlayNetworking.send(player, FabricPayloadRegistry.toPayload(FabricPayloadRegistry.BLOCK_ENTITY_DATA_S2C_TYPE, buf));
-#endif
+        FabricSendCompat.sendToPlayer(player, HassiumChannels.BLOCK_ENTITY_DATA_S2C, buf);
     }
 
     @Override
@@ -121,19 +91,11 @@ public class FabricNetworkManagerService implements INetworkManagerService {
                 player, io.github.limuqy.mc.hassium.network.core.GatewayPacketCodec.HassiumSub.LIGHT_DELTA.id(), buf)) {
             return;
         }
-#if MC_VER < MC_1_20_5
-        ServerPlayNetworking.send(player, LightDeltaS2CPacket.CHANNEL, buf);
-#else
-        ServerPlayNetworking.send(player, FabricPayloadRegistry.toPayload(FabricPayloadRegistry.LIGHT_DELTA_S2C_TYPE, buf));
-#endif
+        FabricSendCompat.sendToPlayer(player, HassiumChannels.LIGHT_DELTA_S2C, buf);
     }
 
     @Override
     public void sendClientBloomSync(FriendlyByteBuf buf) {
-#if MC_VER < MC_1_20_5
-        ClientPlayNetworking.send(io.github.limuqy.mc.hassium.network.ClientBloomSyncPacket.CHANNEL, buf);
-#else
-        ClientPlayNetworking.send(FabricPayloadRegistry.toPayload(FabricPayloadRegistry.CLIENT_BLOOM_SYNC_C2S_TYPE, buf));
-#endif
+        FabricSendCompat.sendToServer(HassiumChannels.CLIENT_BLOOM_SYNC_C2S, buf);
     }
 }

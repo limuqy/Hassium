@@ -4,6 +4,7 @@ import com.github.luben.zstd.ZstdCompressCtx;
 import com.github.luben.zstd.ZstdDecompressCtx;
 import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.compat.PacketCodecCompat;
+import io.github.limuqy.mc.hassium.compat.PacketId;
 import io.github.limuqy.mc.hassium.compat.PacketPayloadCompat;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.metrics.NetworkStats;
@@ -14,11 +15,6 @@ import net.minecraft.network.Connection;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.network.protocol.Packet;
 import net.minecraft.network.protocol.PacketFlow;
-#if MC_VER < MC_1_21_11
-import net.minecraft.resources.ResourceLocation;
-#else
-import net.minecraft.resources.Identifier;
-#endif
 
 import java.util.ArrayList;
 import java.util.List;
@@ -200,12 +196,7 @@ public class HassiumAggregationPacket {
     public void handle(Connection connection) {
         for (AggregatedSubPacket subPacket : subPackets) {
             try {
-#if MC_VER < MC_1_21_11
-                ResourceLocation
-#else
-                Identifier
-#endif
-                type = subPacket.getType();
+                PacketId type = subPacket.getType();
                 ByteBuf data = subPacket.getDataBuf();
 
                 Constants.LOG.debug("Handling aggregated sub-packet: {}", sanitizeLog(type));

@@ -83,19 +83,9 @@ public abstract class MixinMinecraft implements MinecraftAccessor {
      * 被动断开（服务器踢/断网）不经过此入口，仍走 listener onDisconnect 注入
      * （Netty 线程 execute 排队先于 vanilla handleDisconnection，无此竞态）。
      */
-#if MC_VER < MC_1_20_2
+#if MC_VER < MC_1_21_1
     @Inject(method = "clearLevel", at = @At("HEAD"))
     private void hassium$dumpCacheOnDisconnect(CallbackInfo ci) {
-        ClientLifecycleHelper.cleanupOnDisconnect();
-    }
-#elif MC_VER < MC_1_20_5
-    @Inject(method = "disconnect()V", at = @At("HEAD"), require = 0)
-    private void hassium$dumpCacheOnDisconnectNoScreen(CallbackInfo ci) {
-        ClientLifecycleHelper.cleanupOnDisconnect();
-    }
-
-    @Inject(method = "disconnect(Lnet/minecraft/client/gui/screens/Screen;)V", at = @At("HEAD"))
-    private void hassium$dumpCacheOnDisconnect(net.minecraft.client.gui.screens.Screen screen, CallbackInfo ci) {
         ClientLifecycleHelper.cleanupOnDisconnect();
     }
 #elif MC_VER < MC_1_21_11
@@ -124,20 +114,14 @@ public abstract class MixinMinecraft implements MinecraftAccessor {
      * <p>
      * <ul>
      *   <li>1.20.1：{@code clearLevel}</li>
-     *   <li>1.20.2–1.20.4：{@code disconnect(Screen)}</li>
-     *   <li>1.20.5–1.21.10：{@code disconnect(Screen, boolean)}；部分 NeoForge 仍保留 {@code clearLevel}（require=0）</li>
+     *   <li>1.21.1–1.21.10：{@code disconnect(Screen, boolean)}；部分 NeoForge 仍保留 {@code clearLevel}（require=0）</li>
      *   <li>1.21.11+：{@code disconnect(Screen, boolean, boolean)}（disconnectWithProgressScreen 直调 3 参版）</li>
      * </ul>
      * 与各加载器 DISCONNECT / LoggingOut 延后到下一 tick 的 finalize 互为兜底（{@code AtomicBoolean} 幂等）。
      */
-#if MC_VER < MC_1_20_2
+#if MC_VER < MC_1_21_1
     @Inject(method = "clearLevel", at = @At("TAIL"))
     private void hassium$onClearLevel(CallbackInfo ci) {
-        ClientLifecycleHelper.finalizeDisconnectIfTerminal();
-    }
-#elif MC_VER < MC_1_20_5
-    @Inject(method = "disconnect(Lnet/minecraft/client/gui/screens/Screen;)V", at = @At("TAIL"))
-    private void hassium$onDisconnect(net.minecraft.client.gui.screens.Screen screen, CallbackInfo ci) {
         ClientLifecycleHelper.finalizeDisconnectIfTerminal();
     }
 #elif MC_VER < MC_1_21_11

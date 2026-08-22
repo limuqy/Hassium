@@ -236,7 +236,7 @@ public final class GatewayS2CRouter implements Consumer<Packet<?>> {
             handleOnListener(packet, listener);
             return;
         }
-#if MC_VER >= MC_1_20_2
+#if MC_VER >= MC_1_21_1
         if (listener instanceof net.minecraft.client.multiplayer.ClientConfigurationPacketListenerImpl) {
             if (isConfigPhasePacket(packet)) {
                 handleOnListener(packet, listener);
@@ -270,17 +270,12 @@ public final class GatewayS2CRouter implements Consumer<Packet<?>> {
         return listener;
     }
 
-    /** 登录阶段 clientbound 包集合（与 GatewayPlayerBridge.detectProtocol 同宏分界：
-     * <1.21.2 为 GameProfile，>=1.21.2 改名 LoginFinished）。 */
+    /** 登录阶段 clientbound 包集合（GameProfile/LoginFinished 双类名经 PacketCodecCompat 单源）。 */
     private boolean isLoginPhasePacket(Packet<?> packet) {
         return packet instanceof net.minecraft.network.protocol.login.ClientboundHelloPacket
                 || packet instanceof net.minecraft.network.protocol.login.ClientboundLoginCompressionPacket
                 || packet instanceof net.minecraft.network.protocol.login.ClientboundLoginDisconnectPacket
-#if MC_VER < MC_1_21_2
-                || packet instanceof net.minecraft.network.protocol.login.ClientboundGameProfilePacket
-#else
-                || packet instanceof net.minecraft.network.protocol.login.ClientboundLoginFinishedPacket
-#endif
+                || io.github.limuqy.mc.hassium.compat.PacketCodecCompat.isLoginFinishedPacket(packet)
                 || packet instanceof net.minecraft.network.protocol.login.ClientboundCustomQueryPacket;
     }
 
@@ -290,13 +285,13 @@ public final class GatewayS2CRouter implements Consumer<Packet<?>> {
      * （SelectKnownPacks 改名等，与 NetworkCore.isConfigPacket 同款口径）。
      * 1.20.1 无配置协议，恒 false。
      */
-#if MC_VER >= MC_1_20_2
+#if MC_VER >= MC_1_21_1
     private static boolean isConfigPhasePacket(Packet<?> packet) {
         String name = packet.getClass().getName();
         if (name.startsWith("net.minecraft.network.protocol.configuration.")) {
             return true;
         }
-#if MC_VER >= MC_1_20_5
+#if MC_VER >= MC_1_21_1
         if (name.startsWith("net.minecraft.network.protocol.cookie.")) {
             return true;
         }
@@ -318,7 +313,7 @@ public final class GatewayS2CRouter implements Consumer<Packet<?>> {
      * （登录期 vanilla 连接监听器是登录监听器——刻意不注入，登录 S2C 由骨架边界
      * 丢弃，防止主控登录桥与 vanilla 登录双物化）。
      */
-#if MC_VER >= MC_1_20_2
+#if MC_VER >= MC_1_21_1
     private static PacketListener configStageListener() {
         net.minecraft.network.Connection conn =
                 io.github.limuqy.mc.hassium.network.core.NetworkCore.getInstance().vanillaConnection();

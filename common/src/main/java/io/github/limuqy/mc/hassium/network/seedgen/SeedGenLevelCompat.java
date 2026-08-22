@@ -25,11 +25,19 @@ import net.minecraft.server.WorldLoader;
 import net.minecraft.server.WorldStem;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.packs.repository.PackRepository;
-#if MC_VER < MC_1_20_2
+#if MC_VER < MC_1_21_1
 import net.minecraft.server.packs.repository.ServerPacksSource;
+import net.minecraft.server.level.progress.ChunkProgressListenerFactory;
+import net.minecraft.server.level.progress.LoggerChunkProgressListener;
 #else
 import net.minecraft.server.packs.repository.ServerPacksSource;
 import net.minecraft.world.level.validation.DirectoryValidator;
+#endif
+#if MC_VER >= MC_1_21_1 && MC_VER < MC_1_21_9
+import net.minecraft.server.level.progress.ChunkProgressListenerFactory;
+import net.minecraft.server.level.progress.LoggerChunkProgressListener;
+#elif MC_VER >= MC_1_21_9
+import net.minecraft.server.level.progress.LoggingLevelLoadListener;
 #endif
 #if MC_VER >= MC_1_21_11
 import net.minecraft.server.permissions.LevelBasedPermissionSet;
@@ -71,6 +79,27 @@ import net.minecraft.util.Util;
 public final class SeedGenLevelCompat {
 
     private SeedGenLevelCompat() {}
+
+    /**
+     * {@link ShadowSeedServer} 构造末参：区块进度监听。
+     * {@code < 1.21.1}：{@code LoggerChunkProgressListener::new}（工厂）；
+     * {@code 1.21.1–1.21.8}：{@code LoggerChunkProgressListener::create}（工厂）；
+     * {@code ≥ 1.21.9}：{@code LoggingLevelLoadListener.forDedicatedServer()}（监听器实例，
+     * {@code MinecraftServer} 末参类型随之替换）。
+     */
+#if MC_VER < MC_1_21_1
+    static ChunkProgressListenerFactory chunkProgressArg() {
+        return LoggerChunkProgressListener::new;
+    }
+#elif MC_VER < MC_1_21_9
+    static ChunkProgressListenerFactory chunkProgressArg() {
+        return LoggerChunkProgressListener::create;
+    }
+#else
+    static LoggingLevelLoadListener chunkProgressArg() {
+        return LoggingLevelLoadListener.forDedicatedServer();
+    }
+#endif
 
     /**
      * 创建并启动影子服务端（阻塞数秒；任意线程可调）。失败抛异常。
@@ -129,7 +158,7 @@ public final class SeedGenLevelCompat {
         try {
             access = storage.validateAndCreateAccess("world");
             long tAccessNs = System.nanoTime();
-#if MC_VER < MC_1_20_2
+#if MC_VER < MC_1_21_1
             repo = new PackRepository(new ServerPacksSource());
 #else
             repo = new PackRepository(new ServerPacksSource(
@@ -282,7 +311,7 @@ public final class SeedGenLevelCompat {
                 .orElseThrow(() -> new IllegalStateException("NORMAL preset missing nether stem"));
         LevelStem endStem = presetDims.get(LevelStem.END)
                 .orElseThrow(() -> new IllegalStateException("NORMAL preset missing end stem"));
-#if MC_VER < MC_1_20_5
+#if MC_VER < MC_1_21_1
         MappedRegistry<LevelStem> dims = new MappedRegistry<>(Registries.LEVEL_STEM, Lifecycle.stable());
         dims.register(LevelStem.OVERWORLD, overworldStem, Lifecycle.stable());
         dims.register(LevelStem.NETHER, netherStem, Lifecycle.stable());

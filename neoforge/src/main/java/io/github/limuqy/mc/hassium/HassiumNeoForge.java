@@ -8,7 +8,7 @@ import io.github.limuqy.mc.hassium.network.NeoForgeNetworkManager;
 import io.github.limuqy.mc.hassium.network.dataplane.DataPlaneFrame;
 import io.github.limuqy.mc.hassium.network.dataplane.DataPlaneServer;
 
-#if MC_VER < MC_1_20_2
+#if MC_VER < MC_1_21_1
 import net.minecraftforge.fml.ModLoadingContext;
 import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.fml.config.ModConfig;
@@ -16,13 +16,6 @@ import net.minecraftforge.fml.event.config.ModConfigEvent;
 import net.minecraftforge.fml.event.lifecycle.FMLCommonSetupEvent;
 import net.minecraftforge.fml.javafmlmod.FMLJavaModLoadingContext;
 import net.minecraftforge.eventbus.api.IEventBus;
-#elif MC_VER < MC_1_21_1
-import net.neoforged.fml.ModContainer;
-import net.neoforged.fml.common.Mod;
-import net.neoforged.fml.config.ModConfig;
-import net.neoforged.fml.event.config.ModConfigEvent;
-import net.neoforged.fml.event.lifecycle.FMLCommonSetupEvent;
-import net.neoforged.bus.api.IEventBus;
 #else
 import net.neoforged.fml.ModContainer;
 import net.neoforged.fml.common.Mod;
@@ -37,10 +30,9 @@ import org.slf4j.LoggerFactory;
 /**
  * NeoForge 入口类
  * <p>
- * 1.20.1: NeoForge 仍使用 net.minecraftforge 包名 + SimpleChannel
- * 1.20.2–1.20.3: net.neoforged 包名 + SimpleChannel
- * 1.20.4: RegisterPayloadHandlerEvent + CustomPacketPayload.write/id（NeoForge 20.4 移除 SimpleChannel）
- * 1.20.5+: net.neoforged 包名 + Payload/StreamCodec
+ * MC_VER &lt; MC_1_21_1（1.20.1）: NeoForge 仍使用 net.minecraftforge 包名 + SimpleChannel
+ * MC_VER &gt;= MC_1_21_1: net.neoforged 包名 + Payload/StreamCodec
+ * （1.20.2–1.20.6 中间版本段支持已退役，API 自 1.21.1 前版本线起变化）
  */
 @Mod(Constants.MOD_ID)
 public class HassiumNeoForge {
@@ -49,9 +41,9 @@ public class HassiumNeoForge {
     private static final Logger LOGGER = LoggerFactory.getLogger("Hassium/NeoForge");
     private static final NeoForgeConfigBackend CONFIG = (NeoForgeConfigBackend) io.github.limuqy.mc.hassium.platform.Services.CONFIG;
 
-#if MC_VER < MC_1_20_2
+#if MC_VER < MC_1_21_1
     // 1.20.1 的 FML（javafmllanguage 47.x）只反射无参构造器（clazz.getDeclaredConstructor()），
-    // 带 IEventBus/ModContainer 注入是 NeoForge 1.20.2+ FancyModLoader 才支持；
+    // 带 IEventBus/ModContainer 注入是 NeoForge 1.21.1+ FancyModLoader 才支持；
     // 1.20.1 的 mod 事件总线从 FMLJavaModLoadingContext 获取。
     public HassiumNeoForge() {
         IEventBus modEventBus = FMLJavaModLoadingContext.get().getModEventBus();
@@ -86,7 +78,7 @@ public class HassiumNeoForge {
         });
         LOGGER.info("Hassium: ChunkSender registered for NeoForge");
 
-#if MC_VER < MC_1_20_4
+#if MC_VER < MC_1_21_1
         modEventBus.addListener(this::commonSetup);
 #else
         modEventBus.addListener(NeoForgeNetworkManager::registerPayloads);
@@ -106,7 +98,7 @@ public class HassiumNeoForge {
         }
     }
 
-#if MC_VER < MC_1_20_4
+#if MC_VER < MC_1_21_1
     private void commonSetup(FMLCommonSetupEvent event) {
         LOGGER.info("Hassium: Initializing NeoForge SimpleChannel network");
         NeoForgeNetworkManager networkManager = new NeoForgeNetworkManager();

@@ -10,6 +10,7 @@ import io.github.limuqy.mc.hassium.network.ClientMetadataHandler;
 import io.github.limuqy.mc.hassium.network.SeedRefS2CPacket;
 import io.github.limuqy.mc.hassium.network.sectiondelta.SectionDeltaPlanner;
 import io.github.limuqy.mc.hassium.metrics.NetworkStats;
+import io.github.limuqy.mc.hassium.compat.LevelCompat;
 import io.github.limuqy.mc.hassium.utils.DebugLogger;
 import io.github.limuqy.mc.hassium.utils.DimensionKey;
 import java.util.ArrayList;
@@ -77,13 +78,7 @@ public final class SeedGenExecutor {
         if (mc == null || mc.level == null) {
             return null;
         }
-        return mc.level.dimension()
-#if MC_VER < MC_1_21_11
-                .location()
-#else
-                .identifier()
-#endif
-                .toString();
+        return LevelCompat.getDimensionId(mc.level);
     }
 
     /** 有界工作队列最大深度：96 槽 × 实测生成 p90≈182ms/块 ≈ 17.5s 最坏在队等待。 */
@@ -579,11 +574,7 @@ public final class SeedGenExecutor {
                 net.minecraft.core.Holder<net.minecraft.world.level.levelgen.NoiseGeneratorSettings> holder =
                         nbcg.generatorSettings();
                 String settingsKey = holder.unwrapKey()
-#if MC_VER < MC_1_21_11
-                        .map(k -> k.location().toString())
-#else
-                        .map(k -> k.identifier().toString())
-#endif
+                        .map(LevelCompat::keyId)
                         .orElse("(unregistered)");
                 net.minecraft.world.level.levelgen.NoiseGeneratorSettings ns = holder.value();
                 sb.append(" noiseSettings=").append(settingsKey)

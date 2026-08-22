@@ -4,7 +4,7 @@ AI Agent 速查（原 `CLAUDE.md` 已合并于此，2026-08-09）。多版本真
 
 ## 项目身份
 
-Minecraft 1.20.1–1.21.11 多加载器模组（Fabric / Forge / NeoForge），ZSTD 优化存档与网络；九段适配单位见 version-segments。Forge 支持 **1.20.1 / 1.20.6 / 1.21.1 / 1.21.3–1.21.10**（1.21.2 上游无 Forge userdev；**1.21.11 起 sunset**，该段用 NeoForge）。**2.0.0** 起客户端网络由进程内网关（网络核心）接管：客户端↔世界侧纯原版协议，网关↔主控自有通道（ZSTD/UDP 数据面/hash/delta 保留；聚合为主控侧 vanilla 路径），主控切换为无感续流迁移（旧 failover 已退役）。
+Minecraft 1.20.1 / 1.21.1–1.21.11 多加载器模组（Fabric / Forge / NeoForge），ZSTD 优化存档与网络；七段适配单位见 version-segments。Forge 支持 **1.20.1 / 1.21.1 / 1.21.3–1.21.10**（1.21.2 上游无 Forge userdev；**1.21.11 起 sunset**，该段用 NeoForge）。**2.0.0** 起客户端网络由进程内网关（网络核心）接管：客户端↔世界侧纯原版协议，网关↔主控自有通道（ZSTD/UDP 数据面/hash/delta 保留；聚合为主控侧 vanilla 路径），主控切换为无感续流迁移（旧 failover 已退役）。
 
 ## 关键构建命令
 
@@ -113,6 +113,9 @@ fabric/ | forge/ | neoforge/
 
 项目指导以本文件为准（`.claude/skills/` 已删除，不再维护第二份知识源）。
 
+Manifold / 七段 / `#if MC_VER` / `PacketId` / `Identifier` 改代码时自动采用项目 skill：
+[`.cursor/skills/hassium-manifold/SKILL.md`](.cursor/skills/hassium-manifold/SKILL.md)。
+
 ## CurseForge 本地推送
 
 - 配置：`curseforge_project_id`（`gradle.properties`）+ `CURSEFORGE_TOKEN`（环境变量，勿提交）
@@ -124,7 +127,7 @@ fabric/ | forge/ | neoforge/
 - [`docs/architecture.md`](docs/architecture.md) — 架构总览（2.0.0 重构中）
 - [`docs/chunk-cache.md`](docs/chunk-cache.md) — 缓存推送、超视渲染与磁盘细节（§10 超视渲染、§11 磁盘 NBT/分段增量、§12 导出）
 - [`docs/client-chunk-light-flow.md`](docs/client-chunk-light-flow.md) — 客户端光照流
-- [`docs/version-segments.md`](docs/version-segments.md) — 九段适配真相源
+- [`docs/version-segments.md`](docs/version-segments.md) — 七段适配真相源
 - [`docs/mod-compat.md`](docs/mod-compat.md) — 多 Mod 兼容
 - [`docs/runtime-smoke-test.md`](docs/runtime-smoke-test.md) — 运行时冒烟
 - [`docs/network-core-followups.md`](docs/network-core-followups.md) — 网络核心未达项（后续波）

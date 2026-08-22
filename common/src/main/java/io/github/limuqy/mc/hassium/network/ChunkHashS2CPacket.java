@@ -1,13 +1,6 @@
 package io.github.limuqy.mc.hassium.network;
 
-import io.github.limuqy.mc.hassium.Constants;
 import net.minecraft.network.FriendlyByteBuf;
-#if MC_VER < MC_1_21_11
-import net.minecraft.resources.ResourceLocation;
-#else
-import net.minecraft.resources.Identifier;
-#endif
-import io.github.limuqy.mc.hassium.compat.ResourceLocationCompat;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -22,14 +15,6 @@ public record ChunkHashS2CPacket(
         String dimension,
         List<Entry> entries
 ) {
-    public static final
-#if MC_VER < MC_1_21_11
-ResourceLocation
-#else
-Identifier
-#endif
-CHANNEL = ResourceLocationCompat.create(Constants.MOD_ID, "chunk_hash_s2c");
-
     public void encode(FriendlyByteBuf buf) {
         buf.writeUtf(dimension);
         buf.writeVarInt(entries.size());

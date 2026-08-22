@@ -1,14 +1,7 @@
 package io.github.limuqy.mc.hassium.network;
 
-import io.github.limuqy.mc.hassium.Constants;
-import io.github.limuqy.mc.hassium.compat.ResourceLocationCompat;
 import net.minecraft.network.FriendlyByteBuf;
 import io.netty.handler.codec.DecoderException;
-#if MC_VER < MC_1_21_11
-import net.minecraft.resources.ResourceLocation;
-#else
-import net.minecraft.resources.Identifier;
-#endif
 
 /**
  * 客户端 -> 服务端：同步缓存 Bloom 位图
@@ -24,13 +17,6 @@ public record ClientBloomSyncPacket(
         boolean full,
         byte[] bloomBytes
 ) {
-    public static final
-#if MC_VER < MC_1_21_11
-ResourceLocation
-#else
-Identifier
-#endif
-CHANNEL = ResourceLocationCompat.create(Constants.MOD_ID, "client_bloom_sync_c2s");
     /** review-fix: T3-53：恶意/损坏包 length 驱动 new byte[length] 可 OOM 客户端；
      *  位图正常规模（createDefault 10k/0.01 ≈ 12KB，数万区块 < 1MB）；对齐原版
      *  ClientboundLevelChunkPacketData.TWO_MEGABYTES */

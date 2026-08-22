@@ -7,20 +7,13 @@ import io.github.limuqy.mc.hassium.network.dataplane.DataPlaneClientLifecycle;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-#if MC_VER < MC_1_20_2
+#if MC_VER < MC_1_21_1
 import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.client.event.ClientPlayerNetworkEvent;
 import net.minecraftforge.common.MinecraftForge;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.fml.event.lifecycle.FMLClientSetupEvent;
-#elif MC_VER < MC_1_20_5
-import net.neoforged.api.distmarker.Dist;
-import net.neoforged.neoforge.client.event.ClientPlayerNetworkEvent;
-import net.neoforged.neoforge.common.NeoForge;
-import net.neoforged.bus.api.SubscribeEvent;
-import net.neoforged.fml.common.Mod;
-import net.neoforged.fml.event.lifecycle.FMLClientSetupEvent;
 #else
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.neoforge.client.event.ClientPlayerNetworkEvent;
@@ -40,11 +33,11 @@ import net.neoforged.fml.event.lifecycle.FMLClientSetupEvent;
  * T6：客户端 failover 已退役——不再初始化控制面重连单例 / 不再发送握手请求
  * （新架构客户端不发 vanilla 握手，服务端旧握手链休眠）；LoggingOut 直接全量清理。
  */
-#if MC_VER < MC_1_20_5
+#if MC_VER < MC_1_21_1
 @Mod.EventBusSubscriber(modid = Constants.MOD_ID, value = Dist.CLIENT, bus = Mod.EventBusSubscriber.Bus.MOD)
 #elif MC_VER < MC_1_21_6
 @EventBusSubscriber(modid = Constants.MOD_ID, value = Dist.CLIENT, bus = EventBusSubscriber.Bus.MOD)
-#else
+#elif MC_VER >= MC_1_21_6
 // 1.21.6+：bus 参数已移除，FML 按事件类型自动挂到 Mod / Game 总线
 @EventBusSubscriber(modid = Constants.MOD_ID, value = Dist.CLIENT)
 #endif
@@ -66,7 +59,7 @@ public class HassiumNeoForgeClient {
         event.enqueueWork(io.github.limuqy.mc.hassium.client.HassiumNeoForgeConfigScreens::register);
 
         // 注册到 Forge 事件总线监听玩家网络事件（这些事件不在 Mod 总线）
-#if MC_VER < MC_1_20_2
+#if MC_VER < MC_1_21_1
         MinecraftForge.EVENT_BUS.register(new ClientNetworkEventHandler());
 #else
         NeoForge.EVENT_BUS.register(new ClientNetworkEventHandler());

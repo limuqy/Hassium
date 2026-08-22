@@ -8,12 +8,6 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.nbt.CompoundTag;
 import io.netty.handler.codec.DecoderException;
 import net.minecraft.network.FriendlyByteBuf;
-#if MC_VER < MC_1_21_11
-import net.minecraft.resources.ResourceLocation;
-#else
-import net.minecraft.resources.Identifier;
-#endif
-import io.github.limuqy.mc.hassium.compat.ResourceLocationCompat;
 import io.github.limuqy.mc.hassium.network.sectiondelta.SectionPlaneSyndrome;
 
 import java.util.ArrayList;
@@ -61,15 +55,6 @@ public record SectionDeltaS2CPacket(
                     + " (max " + max + ")");
         }
     }
-
-
-    public static final
-    #if MC_VER < MC_1_21_11
-ResourceLocation
-    #else
-Identifier
-    #endif
-CHANNEL = ResourceLocationCompat.create(Constants.MOD_ID, "section_delta_s2c");
 
     /**
      * 序列化 entries+skipped 到 buf（不含 dimension 和压缩头）。
@@ -169,16 +154,10 @@ CHANNEL = ResourceLocationCompat.create(Constants.MOD_ID, "section_delta_s2c");
             List<BlockEntityData> blockEntities = new ArrayList<>(beCount);
             for (int j = 0; j < beCount; j++) {
                 BlockPos pos = buf.readBlockPos();
-#if MC_VER < MC_1_21_11
-                ResourceLocation
-#else
-                Identifier
-#endif
-                type = ResourceLocationCompat.create(buf.readUtf());
+                String type = buf.readUtf();
                 CompoundTag nbt = buf.readNbt();
                 blockEntities.add(new BlockEntityData(pos, type, nbt));
             }
-
             entries.add(new DeltaEntry(chunkX, chunkZ, sections, heightmaps, blockEntities, expectedChunkHash));
         }
 
@@ -357,11 +336,5 @@ CHANNEL = ResourceLocationCompat.create(Constants.MOD_ID, "section_delta_s2c");
     /**
      * 方块实体数据
      */
-    public record BlockEntityData(BlockPos pos,
-#if MC_VER < MC_1_21_11
-ResourceLocation
-#else
-Identifier
-#endif
- type, CompoundTag nbt) {}
+    public record BlockEntityData(BlockPos pos, String type, CompoundTag nbt) {}
 }

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 按 docs/version-segments.md 对 9 个锚点 × builds_for 执行 compileJava。
+# 按 docs/version-segments.md 对 7 个锚点 × builds_for 执行 compileJava。
 # 每个锚点结束后 --stop，避免 loom 全局锁 / Daemon 残留导致下一版本无限等待。
 set -euo pipefail
 
@@ -8,8 +8,6 @@ cd "$ROOT"
 
 ANCHORS=(
   1.20.1
-  1.20.2
-  1.20.5
   1.21.1
   1.21.2
   1.21.5

@@ -1,15 +1,8 @@
 package io.github.limuqy.mc.hassium.network;
 
-import io.github.limuqy.mc.hassium.Constants;
 import net.minecraft.core.BlockPos;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.FriendlyByteBuf;
-#if MC_VER < MC_1_21_11
-import net.minecraft.resources.ResourceLocation;
-#else
-import net.minecraft.resources.Identifier;
-#endif
-import io.github.limuqy.mc.hassium.compat.ResourceLocationCompat;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -24,14 +17,6 @@ public record BlockEntityDataS2CPacket(
         String dimension,
         List<ChunkBlockEntities> entries
 ) {
-    public static final
-#if MC_VER < MC_1_21_11
-ResourceLocation
-#else
-Identifier
-#endif
-CHANNEL = ResourceLocationCompat.create(Constants.MOD_ID, "block_entity_data_s2c");
-
     public void encode(FriendlyByteBuf buf) {
         buf.writeUtf(dimension);
         buf.writeVarInt(entries.size());
@@ -58,12 +43,7 @@ CHANNEL = ResourceLocationCompat.create(Constants.MOD_ID, "block_entity_data_s2c
             List<BlockEntityData> blockEntities = new ArrayList<>(beCount);
             for (int j = 0; j < beCount; j++) {
                 BlockPos pos = buf.readBlockPos();
-#if MC_VER < MC_1_21_11
-                ResourceLocation
-#else
-                Identifier
-#endif
-                type = ResourceLocationCompat.create(buf.readUtf());
+                String type = buf.readUtf();
                 CompoundTag nbt = buf.readNbt();
                 blockEntities.add(new BlockEntityData(pos, type, nbt));
             }
@@ -84,11 +64,5 @@ CHANNEL = ResourceLocationCompat.create(Constants.MOD_ID, "block_entity_data_s2c
     /**
      * 单个 blockEntity 数据
      */
-    public record BlockEntityData(BlockPos pos,
-#if MC_VER < MC_1_21_11
-ResourceLocation
-#else
-Identifier
-#endif
- type, CompoundTag nbt) {}
+    public record BlockEntityData(BlockPos pos, String type, CompoundTag nbt) {}
 }

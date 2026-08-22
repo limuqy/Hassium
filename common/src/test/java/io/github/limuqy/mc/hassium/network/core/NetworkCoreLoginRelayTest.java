@@ -33,7 +33,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class NetworkCoreLoginRelayTest {
 
     /** 编解码器静态初始化依赖注册表 bootstrap（同 GatewayPacketCodecTest）。 */
-#if MC_VER >= MC_1_20_5
+#if MC_VER >= MC_1_21_1
     @BeforeAll
     static void bootstrap() {
         net.minecraft.SharedConstants.setVersion(net.minecraft.DetectedVersion.BUILT_IN);
@@ -43,7 +43,7 @@ class NetworkCoreLoginRelayTest {
 
     private static Packet<ServerGamePacketListener> fakePacket() {
         return new Packet<>() {
-#if MC_VER < MC_1_20_5
+#if MC_VER < MC_1_21_1
             @Override
             public void write(FriendlyByteBuf buffer) {
             }
@@ -77,7 +77,7 @@ class NetworkCoreLoginRelayTest {
 
     /** 真实登录阶段 C2S 包（两段构造稳定：1.20.1 CustomQuery / 1.20.2+ CustomQueryAnswer）。 */
     private static Packet<?> realLoginC2SPacket() {
-#if MC_VER < MC_1_20_2
+#if MC_VER < MC_1_21_1
         // 1.20.1（Forge 合并版）构造为 (int, FriendlyByteBuf)
         return new net.minecraft.network.protocol.login.ServerboundCustomQueryPacket(
                 1, (net.minecraft.network.FriendlyByteBuf) null);
@@ -188,14 +188,10 @@ class NetworkCoreLoginRelayTest {
         core.onDisconnect();
     }
 
-#if MC_VER >= MC_1_20_2
-    /** 真实配置阶段 C2S 包（1.20.2–1.20.4 record 无参构造；1.20.5+ INSTANCE）。 */
+#if MC_VER >= MC_1_21_1
+    /** 真实配置阶段 C2S 包（INSTANCE 单例）。 */
     private static Packet<?> realConfigC2SPacket() {
-#if MC_VER < MC_1_20_5
-        return new net.minecraft.network.protocol.configuration.ServerboundFinishConfigurationPacket();
-#else
         return net.minecraft.network.protocol.configuration.ServerboundFinishConfigurationPacket.INSTANCE;
-#endif
     }
 
     @Test
@@ -250,15 +246,9 @@ class NetworkCoreLoginRelayTest {
 
         long before = core.s2cDispatchedCount();
         // 主控配置响应（CONFIG 协议 CLIENTBOUND 包）经注入器分发（配置监听器缺省时降级日志，计数可验证）
-#if MC_VER < MC_1_20_5
-        ByteBuf payload = GatewayPacketCodec.encodeVanilla(
-                new net.minecraft.network.protocol.configuration.ClientboundFinishConfigurationPacket(),
-                PacketFlow.CLIENTBOUND, GatewayPacketCodec.GatewayProtocol.CONFIG, RegistryAccess.EMPTY);
-#else
         ByteBuf payload = GatewayPacketCodec.encodeVanilla(
                 net.minecraft.network.protocol.configuration.ClientboundFinishConfigurationPacket.INSTANCE,
                 PacketFlow.CLIENTBOUND, GatewayPacketCodec.GatewayProtocol.CONFIG, RegistryAccess.EMPTY);
-#endif
         embedded.writeInbound(ControlFrameCodec.encodeFrame(ControlFrameType.CONFIG_S2C, payload));
         payload.release();
 

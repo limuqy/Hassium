@@ -140,7 +140,7 @@ public final class PlayerDataStorage {
             return null;
         }
         try {
-#if MC_VER < MC_1_20_3
+#if MC_VER < MC_1_21_1
             return NbtIo.readCompressed(file.toFile());
 #else
             // review-fix: 有界配额 2MiB（防解压炸弹；旧分支保持现状）

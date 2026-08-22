@@ -97,7 +97,7 @@ public final class GatewayOnlyLogin {
             acc.hassium$setGatewayAddress(new InetSocketAddress("127.0.0.1", 0));
             Consumer<Component> status = this::onStatus;
             PacketListener listener;
-#if MC_VER < MC_1_20_5
+#if MC_VER < MC_1_21_1
             listener = new ClientHandshakePacketListenerImpl(conn, mc, serverData, parent, false, null, status);
 #elif MC_VER < MC_1_21_9
             listener = new ClientHandshakePacketListenerImpl(conn, mc, serverData, parent, false, null, status, null);
@@ -164,12 +164,7 @@ public final class GatewayOnlyLogin {
         Component reason = null;
         Connection conn = connection;
         if (conn != null) {
-#if MC_VER < MC_1_21_1
-            reason = conn.getDisconnectedReason();
-#else
-            net.minecraft.network.DisconnectionDetails details = conn.getDisconnectionDetails();
-            reason = details == null ? null : details.reason();
-#endif
+            reason = io.github.limuqy.mc.hassium.compat.DisconnectCompat.disconnectedReason(conn);
         }
         if (reason == null) {
             reason = Component.translatable("disconnect.lost");
@@ -228,7 +223,7 @@ public final class GatewayOnlyLogin {
             return;
         }
         try {
-#if MC_VER < MC_1_20_2
+#if MC_VER < MC_1_21_1
             connection.send(new ServerboundHelloPacket(mc.getUser().getName(),
                     Optional.ofNullable(mc.getUser().getProfileId())));
 #else
@@ -293,14 +288,9 @@ public final class GatewayOnlyLogin {
         connection = null;
         if (conn != null) {
             try {
-#if MC_VER < MC_1_21_1
-                conn.disconnect(Component.translatable("disconnect.genericReason",
-                        Component.literal("gateway-only login ended")));
-#else
-                conn.disconnect(new net.minecraft.network.DisconnectionDetails(
+                io.github.limuqy.mc.hassium.compat.DisconnectCompat.disconnect(conn,
                         Component.translatable("disconnect.genericReason",
-                                Component.literal("gateway-only login ended"))));
-#endif
+                                Component.literal("gateway-only login ended")));
             } catch (Throwable t) {
                 LOGGER.debug("Hassium: gateway-only local connection close skipped", t);
             }

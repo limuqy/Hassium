@@ -1,4 +1,4 @@
-#if MC_VER >= MC_1_20_5
+#if MC_VER >= MC_1_21_1
 package io.github.limuqy.mc.hassium.network;
 
 import io.github.limuqy.mc.hassium.Constants;
@@ -17,9 +17,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Fabric 1.20.5+ payload 类型注册表
+ * Fabric 现代段（{@code MC_VER >= MC_1_21_1}）payload 类型注册表
  * <p>
- * 在 1.20.5+ 中，Fabric 网络 API 要求：
+ * 现代 Fabric 网络 API（自 1.20.5 引入）要求：
  * 1. 使用 CustomPacketPayload + StreamCodec 替代旧的 Identifier + FriendlyByteBuf
  * 2. 通过 PayloadTypeRegistry 注册 payload 类型（必须在注册 receiver 之前）
  * 3. 使用 CustomPacketPayload.Type 作为 receiver 注册和发送的标识
@@ -150,7 +150,7 @@ public final class FabricPayloadRegistry {
                 io.github.limuqy.mc.hassium.network.PreHandshakePayload.STREAM_CODEC);
 
         // review-fix: T10-3: 实际注册 11 S2C（含 gateway_info，T5f 新增）+ 6 C2S + 1 configurationC2S
-        LOGGER.info("Hassium: Registered 11 S2C and 6 C2S (+1 config) payload types for 1.20.5+");
+        LOGGER.info("Hassium: Registered 11 S2C and 6 C2S (+1 config) payload types for 1.21.1+");
     }
 
     /**

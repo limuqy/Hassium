@@ -1,5 +1,6 @@
 package io.github.limuqy.mc.hassium.mixin;
 
+import io.github.limuqy.mc.hassium.compat.LevelCompat;
 import io.github.limuqy.mc.hassium.compat.ResourceLocationCompat;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.network.LightDeltaS2CPacket;
@@ -55,13 +56,7 @@ public class MixinChunkHolder {
 
         // 异步计算 hash 并发送元数据到 pushPool 工作线程
         ChunkPos chunkPos = new ChunkPos(chunkPacket.getX(), chunkPacket.getZ());
-        String dimension = hassiumPlayers.get(0).level().dimension()
-#if MC_VER < MC_1_21_11
-                .location()
-#else
-                .identifier()
-#endif
-                .toString();
+        String dimension = LevelCompat.getDimensionId(hassiumPlayers.get(0).level());
         ServerChunkPushManager.getInstance().submitMetadataTask(
                 hassiumPlayers, chunkPos, chunkPacket, dimension);
 

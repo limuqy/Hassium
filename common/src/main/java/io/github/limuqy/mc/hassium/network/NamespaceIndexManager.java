@@ -1,16 +1,11 @@
 package io.github.limuqy.mc.hassium.network;
 
 import io.github.limuqy.mc.hassium.compat.PacketCodecCompat;
-import io.github.limuqy.mc.hassium.compat.ResourceLocationCompat;
+import io.github.limuqy.mc.hassium.compat.PacketId;
 import it.unimi.dsi.fastutil.ints.Int2ObjectMap;
 import net.minecraft.network.ConnectionProtocol;
 import net.minecraft.network.protocol.Packet;
 import net.minecraft.network.protocol.PacketFlow;
-#if MC_VER < MC_1_21_11
-import net.minecraft.resources.ResourceLocation;
-#else
-import net.minecraft.resources.Identifier;
-#endif
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -72,37 +67,19 @@ public class NamespaceIndexManager {
     private final Map<String, Integer> nextPathIndex = new ConcurrentHashMap<>();
 
     /**
-     * 原版包类 -> 标识符映射
+     * 原版包类 -> 稳定标识符
      */
-    private final Map<Class<?>,
-#if MC_VER < MC_1_21_11
-ResourceLocation
-#else
-Identifier
-#endif
-> vanillaClassToIdentifier = new HashMap<>();
+    private final Map<Class<?>, PacketId> vanillaClassToIdentifier = new HashMap<>();
 
     /**
      * 标识符 -> 原版包 ID 映射 (S2C)
      */
-    private final Map<
-#if MC_VER < MC_1_21_11
-ResourceLocation
-#else
-Identifier
-#endif
-, Integer> vanillaIdS2C = new HashMap<>();
+    private final Map<PacketId, Integer> vanillaIdS2C = new HashMap<>();
 
     /**
      * 标识符 -> 原版包 ID 映射 (C2S)
      */
-    private final Map<
-#if MC_VER < MC_1_21_11
-ResourceLocation
-#else
-Identifier
-#endif
-, Integer> vanillaIdC2S = new HashMap<>();
+    private final Map<PacketId, Integer> vanillaIdC2S = new HashMap<>();
 
     /**
      * 注册一个包类型
@@ -173,7 +150,7 @@ Identifier
 
     @SuppressWarnings("unchecked")
     private void initVanillaForSide(PacketFlow side) {
-#if MC_VER < MC_1_20_5
+#if MC_VER < MC_1_21_1
         var map = (Int2ObjectMap<Class<? extends Packet<?>>>) (Int2ObjectMap<?>)
                 ConnectionProtocol.PLAY.getPacketsByIds(side);
 
@@ -187,7 +164,7 @@ Identifier
 
             // 如果已经从另一侧映射过，只记录 ID
             if (vanillaClassToIdentifier.containsKey(clazz)) {
-                ResourceLocation existingId = vanillaClassToIdentifier.get(clazz);
+                PacketId existingId = vanillaClassToIdentifier.get(clazz);
                 if (side == PacketFlow.CLIENTBOUND) {
                     vanillaIdS2C.put(existingId, packetId);
                 } else {
@@ -198,10 +175,10 @@ Identifier
 
             // 类名转 snake_case
             String path = toSnakeCase(clazz.getSimpleName());
-            ResourceLocation id = ResourceLocationCompat.create("minecraft", path);
+            PacketId id = new PacketId("minecraft", path);
 
             // 注册到索引
-            register(id.toString());
+            register(id.fullId());
             vanillaClassToIdentifier.put(clazz, id);
 
             if (side == PacketFlow.CLIENTBOUND) {
@@ -213,14 +190,9 @@ Identifier
 #else
         // 1.20.5+: 通过 GameProtocols / IdDispatchCodec 枚举 PacketType
         for (PacketCodecCompat.PlayPacketEntry entry : PacketCodecCompat.enumeratePlayPackets(side)) {
-#if MC_VER < MC_1_21_11
-            ResourceLocation
-#else
-            Identifier
-#endif
-            id = entry.id();
+            PacketId id = entry.id();
             int packetId = entry.numericId();
-            register(id.toString());
+            register(id.fullId());
             if (side == PacketFlow.CLIENTBOUND) {
                 vanillaIdS2C.put(id, packetId);
             } else {
@@ -262,13 +234,7 @@ Identifier
      * @param packetClass 包类
      * @return 标识符，如果不是原版包返回 null
      */
-    public
-#if MC_VER < MC_1_21_11
-    ResourceLocation
-#else
-    Identifier
-#endif
-    getVanillaIdentifier(Class<?> packetClass) {
+    public PacketId getVanillaIdentifier(Class<?> packetClass) {
         return vanillaClassToIdentifier.get(packetClass);
     }
 
@@ -279,13 +245,7 @@ Identifier
      * @param side 网络方向
      * @return 包 ID，如果不是原版包返回 null
      */
-    public Integer getVanillaPacketId(
-#if MC_VER < MC_1_21_11
-ResourceLocation
-#else
-Identifier
-#endif
- type, PacketFlow side) {
+    public Integer getVanillaPacketId(PacketId type, PacketFlow side) {
         return side == PacketFlow.CLIENTBOUND ? vanillaIdS2C.get(type) : vanillaIdC2S.get(type);
     }
 

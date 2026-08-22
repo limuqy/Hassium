@@ -1,6 +1,7 @@
 package io.github.limuqy.mc.hassium.server;
 
 import io.github.limuqy.mc.hassium.compat.PacketCodecCompat;
+import io.github.limuqy.mc.hassium.compat.LevelCompat;
 import io.github.limuqy.mc.hassium.compat.ResourceLocationCompat;
 import io.github.limuqy.mc.hassium.server.GatewayConnectionAccessor;
 import io.github.limuqy.mc.hassium.network.HandshakeStateTail;
@@ -137,7 +138,7 @@ public final class GatewayPlayerBridge {
     public static final class BridgeState {
         public final GatewayChannel channel;
         public final MinecraftServer server;
-        /** 1.20.5+ PLAY 包编码用（server.registryAccess()）；&lt;1.20.5 恒 null。 */
+        /** 1.21.1+ PLAY 包编码用（server.registryAccess()）；&lt;1.21.1 恒 null。 */
         public final RegistryAccess registryAccess;
         /** muted = 吞 S2C 不发送（续流 placeNewPlayer join 风暴窗口）。 */
         public volatile boolean muted;
@@ -145,11 +146,7 @@ public final class GatewayPlayerBridge {
         BridgeState(GatewayChannel channel, MinecraftServer server) {
             this.channel = channel;
             this.server = server;
-#if MC_VER >= MC_1_20_5
-            this.registryAccess = server != null ? server.registryAccess() : RegistryAccess.EMPTY;
-#else
-            this.registryAccess = null;
-#endif
+            this.registryAccess = PacketCodecCompat.serverRegistryAccess(server);
         }
     }
 
@@ -237,7 +234,7 @@ public final class GatewayPlayerBridge {
             return true; // 物化窗口：join 风暴吞掉
         }
         // 展开 bundle（1.19.4+ 原子包容器）：ClientboundBundlePacket 无独立协议 id
-        // （<1.20.5 走 BundleDelimiterPacket 分隔机制，getPacketId 恒 -1），直接
+        // （< MC_1_21_1 走 BundleDelimiterPacket 分隔机制，getPacketId 恒 -1），直接
         // encodeVanilla 会产出 vanillaId=-1 的坏帧（M3 冒烟：客户端 decode
         // createPacket(-1) → IndexOutOfBounds → NPE 风暴）。逐子包递归编码发送，
         // 语义等价（丢失的仅渲染期原子性，登录/实体更新无正确性影响）。
@@ -284,15 +281,11 @@ public final class GatewayPlayerBridge {
         if (packet instanceof net.minecraft.network.protocol.login.ClientboundHelloPacket
                 || packet instanceof net.minecraft.network.protocol.login.ClientboundLoginCompressionPacket
                 || packet instanceof net.minecraft.network.protocol.login.ClientboundLoginDisconnectPacket
-#if MC_VER < MC_1_21_2
-                || packet instanceof net.minecraft.network.protocol.login.ClientboundGameProfilePacket
-#else
-                || packet instanceof net.minecraft.network.protocol.login.ClientboundLoginFinishedPacket
-#endif
+                || PacketCodecCompat.isLoginFinishedPacket(packet)
                 || packet instanceof net.minecraft.network.protocol.login.ClientboundCustomQueryPacket) {
             return GatewayPacketCodec.GatewayProtocol.LOGIN;
         }
-#if MC_VER >= MC_1_20_2
+#if MC_VER >= MC_1_21_1
         if (connection != null) {
             PacketListener listener = connection.getPacketListener();
             if (listener instanceof net.minecraft.server.network.ServerConfigurationPacketListenerImpl) {
@@ -342,7 +335,7 @@ public final class GatewayPlayerBridge {
                     }
                     return;
                 }
-#if MC_VER >= MC_1_20_2
+#if MC_VER >= MC_1_21_1
                 if (current instanceof net.minecraft.server.network.ServerConfigurationPacketListenerImpl configListener) {
                     // T10 配置阶段：vanilla 在 handleLoginAcknowledgement 自动切换监听器——
                     // 登录监听器退役，配置协议解码 → handle（配置完成后 vanilla 物化玩家）
@@ -384,7 +377,7 @@ public final class GatewayPlayerBridge {
         return LOGIN_BRIDGES.computeIfAbsent(channel, c -> {
             Connection connection = createGatewayConnection();
             bridgeConnection(connection, channel, server, false);
-#if MC_VER < MC_1_20_5
+#if MC_VER < MC_1_21_1
             ServerLoginPacketListenerImpl listener = new ServerLoginPacketListenerImpl(server, connection);
 #else
             ServerLoginPacketListenerImpl listener = new ServerLoginPacketListenerImpl(server, connection, false);
@@ -427,7 +420,7 @@ public final class GatewayPlayerBridge {
                         }
                     }
                 } else {
-#if MC_VER >= MC_1_20_2
+#if MC_VER >= MC_1_21_1
                     // 配置阶段（1.20.2+）：vanilla 在 LoginAcknowledged 后自动切换监听器
                     PacketListener current = st.connection.getPacketListener();
                     if (current instanceof net.minecraft.server.network.ServerConfigurationPacketListenerImpl configListener) {
@@ -591,13 +584,7 @@ public final class GatewayPlayerBridge {
                 ? state.y()
                 : (data.loaded()
                 ? player.getY()
-                : level
-#if MC_VER < MC_1_21_9
-                .getSharedSpawnPos()
-#else
-                .getRespawnData().pos()
-#endif
-                .getY());
+                : LevelCompat.spawnPos(level).getY());
         player.setPos(present ? state.x() : player.getX(), y,
                 present ? state.z() : player.getZ());
         player.setYRot(present ? state.yaw() : player.getYRot());
@@ -629,18 +616,12 @@ public final class GatewayPlayerBridge {
         session.setC2SSink(createC2SSink(server, player));
         LOGGER.info("[GATEWAY] Player {} materialized at ({}, {}, {}) dim={} — resyncTrackedChunks 触发",
                 playerId, player.getX(), player.getY(), player.getZ(),
-                level.dimension()
-#if MC_VER < MC_1_21_11
-                        .location()
-#else
-                        .identifier()
-#endif
-        );
+                LevelCompat.getDimensionId(level));
     }
 
     private static ServerPlayer createServerPlayer(MinecraftServer server, ServerLevel level,
                                                    com.mojang.authlib.GameProfile profile) {
-#if MC_VER < MC_1_20_2
+#if MC_VER < MC_1_21_1
         return new ServerPlayer(server, level, profile);
 #else
         return new ServerPlayer(server, level, profile, net.minecraft.server.level.ClientInformation.createDefault());
@@ -648,13 +629,8 @@ public final class GatewayPlayerBridge {
     }
 
     private static void placeNewPlayer(MinecraftServer server, Connection connection, ServerPlayer player) {
-#if MC_VER < MC_1_20_2
+#if MC_VER < MC_1_21_1
         server.getPlayerList().placeNewPlayer(connection, player);
-#elif MC_VER < MC_1_20_5
-        // 1.20.2+ placeNewPlayer 收 CommonListenerCookie（ClientInformation 参数移除）；
-        // 1.20.2–1.20.4 createInitial 仅单参，1.20.5+ 增 (GameProfile, boolean) 重载
-        server.getPlayerList().placeNewPlayer(connection, player,
-                net.minecraft.server.network.CommonListenerCookie.createInitial(player.getGameProfile()));
 #else
         server.getPlayerList().placeNewPlayer(connection, player,
                 net.minecraft.server.network.CommonListenerCookie.createInitial(player.getGameProfile(), false));
@@ -736,15 +712,10 @@ public final class GatewayPlayerBridge {
             int id = buf.readVarInt();
             byte[] body = new byte[buf.readableBytes()];
             buf.readBytes(body);
-#if MC_VER < MC_1_20_5
+#if MC_VER < MC_1_21_1
             FriendlyByteBuf pBuf = new FriendlyByteBuf(Unpooled.wrappedBuffer(body));
             try {
-#if MC_VER < MC_1_20_2
                 return net.minecraft.network.ConnectionProtocol.LOGIN.createPacket(PacketFlow.SERVERBOUND, id, pBuf);
-#else
-                return net.minecraft.network.ConnectionProtocol.LOGIN.codec(PacketFlow.SERVERBOUND)
-                        .createPacket(id, pBuf);
-#endif
             } finally {
                 pBuf.release();
             }

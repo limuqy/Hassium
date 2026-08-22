@@ -7,6 +7,7 @@ import io.github.limuqy.mc.hassium.concurrent.TaskCategory;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.network.ClientChunkPipeline;
 import io.github.limuqy.mc.hassium.network.ClientChunkHandler.TraceOrigin;
+import io.github.limuqy.mc.hassium.compat.LevelCompat;
 import io.github.limuqy.mc.hassium.utils.DebugLogger;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -39,13 +40,7 @@ public final class OvdLocalGenerator {
         try {
             Minecraft mc = Minecraft.getInstance();
             if (mc != null && mc.level != null) {
-                return mc.level.dimension()
-#if MC_VER < MC_1_21_11
-                        .location()
-#else
-                        .identifier()
-#endif
-                        .toString();
+                return LevelCompat.getDimensionId(mc.level);
             }
         } catch (Throwable ignored) {
         }

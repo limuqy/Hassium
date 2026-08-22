@@ -26,7 +26,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class GatewayPacketCodecTest {
 
     /** GameProtocols/LoginProtocols 静态初始化依赖注册表 bootstrap；1.20.1 段走 ConnectionProtocol 静态表，无需。 */
-#if MC_VER >= MC_1_20_5
+#if MC_VER >= MC_1_21_1
     @BeforeAll
     static void bootstrap() {
         net.minecraft.SharedConstants.setVersion(net.minecraft.DetectedVersion.BUILT_IN);
@@ -83,20 +83,15 @@ class GatewayPacketCodecTest {
         }
     }
 
-#if MC_VER >= MC_1_20_2
+#if MC_VER >= MC_1_21_1
     /**
      * 配置协议包（CONFIG CLIENTBOUND）往返（T10 CONFIG_S2C 帧格式）。
-     * 1.20.5+ 用 ClientboundFinishConfigurationPacket（configuration 包，跨段稳定）；
-     * 1.20.2–1.20.4 用 ClientboundRegistryDataPacket 之外的简单包。
+     * ClientboundFinishConfigurationPacket（configuration 包，跨段稳定）。
      */
     @Test
     void vanillaConfigPacketRoundtrip() {
-        // 1.20.2–1.20.4 record 公开无参构造；1.20.5+ 私有构造 + INSTANCE
-#if MC_VER < MC_1_20_5
-        Packet<?> packet = new net.minecraft.network.protocol.configuration.ClientboundFinishConfigurationPacket();
-#else
+        // 私有构造 + INSTANCE 单例
         Packet<?> packet = net.minecraft.network.protocol.configuration.ClientboundFinishConfigurationPacket.INSTANCE;
-#endif
         ByteBuf payload = GatewayPacketCodec.encodeVanilla(
                 packet, PacketFlow.CLIENTBOUND, GatewayPacketCodec.GatewayProtocol.CONFIG, RegistryAccess.EMPTY);
         try {

@@ -3,7 +3,7 @@
 #   $env:CURSEFORGE_TOKEN = "你的token"
 #   .\scripts\publish-curseforge.ps1
 #   .\scripts\publish-curseforge.ps1 -DryRun
-#   .\scripts\publish-curseforge.ps1 -Versions 1.20.1,1.20.6
+#   .\scripts\publish-curseforge.ps1 -Versions 1.20.1,1.21.1
 #   .\scripts\publish-curseforge.ps1 -AnchorsOnly
 param(
     [switch]$DryRun,
@@ -32,7 +32,7 @@ if (-not $projectIdLine) {
 }
 
 $AnchorList = @(
-    '1.20.1', '1.20.2', '1.20.5', '1.20.6',
+    '1.20.1',
     '1.21.1', '1.21.2', '1.21.5', '1.21.6', '1.21.9', '1.21.11'
 )
 

@@ -96,7 +96,7 @@ public final class GatewayPacketCodec {
      *
      * @param flow          包方向（C2S = SERVERBOUND）
      * @param protocol      PLAY 或 LOGIN（决定协议表）
-     * @param registryAccess 1.20.5+ PLAY 包编码用（可 EMPTY；登录包不需要）
+     * @param registryAccess 1.21.1+ PLAY 包编码用（可 EMPTY；登录包不需要）
      */
     @SuppressWarnings({"rawtypes", "unchecked"})
     public static ByteBuf encodeVanilla(Packet<?> packet, PacketFlow flow,
@@ -104,25 +104,17 @@ public final class GatewayPacketCodec {
         ByteBuf payload = Unpooled.buffer();
         try {
             payload.writeByte(KIND_VANILLA);
-#if MC_VER < MC_1_20_5
+#if MC_VER < MC_1_21_1
             FriendlyByteBuf fbuf = new FriendlyByteBuf(payload);
             net.minecraft.network.ConnectionProtocol proto;
             if (protocol == GatewayProtocol.LOGIN) {
                 proto = net.minecraft.network.ConnectionProtocol.LOGIN;
             } else if (protocol == GatewayProtocol.CONFIG) {
-#if MC_VER < MC_1_20_2
                 throw new IllegalArgumentException("CONFIG protocol unavailable before 1.20.2");
-#else
-                proto = net.minecraft.network.ConnectionProtocol.CONFIGURATION;
-#endif
             } else {
                 proto = net.minecraft.network.ConnectionProtocol.PLAY;
             }
-#if MC_VER < MC_1_20_2
             fbuf.writeVarInt(proto.getPacketId(flow, packet));
-#else
-            fbuf.writeVarInt(proto.codec(flow).packetId(packet));
-#endif
             packet.write(fbuf);
 #else
             net.minecraft.network.ProtocolInfo<?> info;
@@ -160,7 +152,7 @@ public final class GatewayPacketCodec {
      * 解码原版包（kind=0）：{@code [varint 0][varint vanillaId][body]} → {@link Packet}。
      *
      * @param flow          包方向（S2C = CLIENTBOUND）
-     * @param registryAccess 1.20.5+ PLAY 包解码用（区块包必须真实 registry，见
+     * @param registryAccess 1.21.1+ PLAY 包解码用（区块包必须真实 registry，见
      *                       {@link io.github.limuqy.mc.hassium.network.ClientChunkHandler#decodeChunkPacket} 先例）
      */
     @SuppressWarnings({"rawtypes", "unchecked"})
@@ -174,26 +166,18 @@ public final class GatewayPacketCodec {
         int bodyLen = payload.readableBytes();
         byte[] body = new byte[bodyLen];
         payload.readBytes(body);
-#if MC_VER < MC_1_20_5
+#if MC_VER < MC_1_21_1
         FriendlyByteBuf pBuf = new FriendlyByteBuf(Unpooled.wrappedBuffer(body));
         try {
             net.minecraft.network.ConnectionProtocol proto;
             if (protocol == GatewayProtocol.LOGIN) {
                 proto = net.minecraft.network.ConnectionProtocol.LOGIN;
             } else if (protocol == GatewayProtocol.CONFIG) {
-#if MC_VER < MC_1_20_2
                 throw new IllegalArgumentException("CONFIG protocol unavailable before 1.20.2");
-#else
-                proto = net.minecraft.network.ConnectionProtocol.CONFIGURATION;
-#endif
             } else {
                 proto = net.minecraft.network.ConnectionProtocol.PLAY;
             }
-#if MC_VER < MC_1_20_2
             return proto.createPacket(flow, vanillaId, pBuf);
-#else
-            return proto.codec(flow).createPacket(vanillaId, pBuf);
-#endif
         } finally {
             pBuf.release();
         }

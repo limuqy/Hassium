@@ -343,7 +343,7 @@ public class ClientChunkHandler {
     private static net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket
             decodeChunkPacket(byte[] packetBytes) {
         try {
-#if MC_VER < MC_1_20_5
+#if MC_VER < MC_1_21_1
             io.netty.buffer.ByteBuf nettyBuf = io.netty.buffer.Unpooled.wrappedBuffer(packetBytes);
             try {
                 net.minecraft.network.FriendlyByteBuf friendlyBuf =

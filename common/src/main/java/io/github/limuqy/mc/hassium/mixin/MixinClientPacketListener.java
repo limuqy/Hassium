@@ -2,6 +2,7 @@ package io.github.limuqy.mc.hassium.mixin;
 
 import io.github.limuqy.mc.hassium.cache.client.ClientLifecycleHelper;
 import io.github.limuqy.mc.hassium.cache.client.ViewDistanceExtensionService;
+import io.github.limuqy.mc.hassium.compat.ChunkPacketDataCompat;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.network.ClientMetadataHandler;
 import net.minecraft.client.Minecraft;
@@ -43,7 +44,7 @@ public class MixinClientPacketListener {
     }
 
     // ===== 实体数据转发（T3）：HEAD 注入 7 类官方实体包 handler，不 cancel、不解析、纯转发 =====
-#if MC_VER < MC_1_20_2
+#if MC_VER < MC_1_21_1
     /**
      * 断开连接时清理（仅 1.20.1：onDisconnect 仍在 ClientPacketListener）
      */
@@ -52,7 +53,7 @@ public class MixinClientPacketListener {
         ClientLifecycleHelper.cleanupOnDisconnect();
     }
 #endif
-#if MC_VER < MC_1_20_2
+#if MC_VER < MC_1_21_1
     // ===== M1 bootstrap：gateway_info 接收（仅 1.20.1：handleCustomPayload 仍在 game 包 ClientPacketListener） =====
     @Inject(method = "handleCustomPayload", at = @At("HEAD"), cancellable = true)
     private void hassium$onCustomPayload(net.minecraft.network.protocol.game.ClientboundCustomPayloadPacket packet, CallbackInfo ci) {
@@ -128,11 +129,7 @@ public class MixinClientPacketListener {
      */
     @Inject(method = "handleForgetLevelChunk", at = @At("HEAD"), cancellable = true)
     private void hassium$onForgetLevelChunk(ClientboundForgetLevelChunkPacket packet, CallbackInfo ci) {
-#if MC_VER < MC_1_20_2
-        ChunkPos pos = new ChunkPos(packet.getX(), packet.getZ());
-#else
-        ChunkPos pos = packet.pos();
-#endif
+        ChunkPos pos = ChunkPacketDataCompat.forgetChunkPos(packet);
         if (ViewDistanceExtensionService.getInstance().tryRetainOnServerForget(pos)) {
             ci.cancel();
         }

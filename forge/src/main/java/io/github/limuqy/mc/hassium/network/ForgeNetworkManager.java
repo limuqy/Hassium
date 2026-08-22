@@ -16,7 +16,7 @@ import org.slf4j.LoggerFactory;
 
 import java.lang.reflect.Field;
 
-#if MC_VER < MC_1_20_2
+#if MC_VER < MC_1_21_1
 import net.minecraftforge.network.NetworkDirection;
 import net.minecraftforge.network.NetworkRegistry;
 import net.minecraftforge.network.simple.SimpleChannel;
@@ -39,8 +39,8 @@ import java.util.function.Function;
  * <p>
  * 版本整段切分（见 docs/version-segments.md）：
  * <ul>
- *   <li>{@code MC_VER < MC_1_20_2}：旧 SimpleChannel（NetworkRegistry.newSimpleChannel）</li>
- *   <li>{@code MC_VER >= MC_1_20_2}：Forge 50+ ChannelBuilder + play() Payload 风格 SimpleChannel</li>
+ *   <li>{@code MC_VER < MC_1_21_1}：旧 SimpleChannel（NetworkRegistry.newSimpleChannel）</li>
+ *   <li>{@code MC_VER >= MC_1_21_1}：Forge 50+ ChannelBuilder + play() Payload 风格 SimpleChannel</li>
  * </ul>
  */
 public class ForgeNetworkManager implements NetworkManager {
@@ -62,7 +62,7 @@ public class ForgeNetworkManager implements NetworkManager {
                 new Thread(PENDING_TIMEOUT_SCHEDULER::shutdownNow, "Hassium-PendingTimeoutShutdown"));
     }
 
-#if MC_VER < MC_1_20_2
+#if MC_VER < MC_1_21_1
     public static final SimpleChannel CHANNEL = NetworkRegistry.newSimpleChannel(
             ResourceLocationCompat.create(Constants.MOD_ID, "main"),
             () -> PROTOCOL_VERSION,
@@ -83,7 +83,7 @@ public class ForgeNetworkManager implements NetworkManager {
             return;
         }
         LOGGER.debug("Hassium: Registering Forge network channels");
-#if MC_VER < MC_1_20_2
+#if MC_VER < MC_1_21_1
         registerLegacyChannels();
 #else
         registerModernChannels();
@@ -95,7 +95,7 @@ public class ForgeNetworkManager implements NetworkManager {
                 byte[] data = new byte[buf.readableBytes()];
                 buf.readBytes(data);
                 buf.release();
-#if MC_VER < MC_1_20_2
+#if MC_VER < MC_1_21_1
                 CHANNEL.sendTo(new AggregationWrapper(data), player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
 #else
                 sendToPlayer(player, new AggregationWrapper(data));
@@ -107,7 +107,7 @@ public class ForgeNetworkManager implements NetworkManager {
         });
     }
 
-#if MC_VER < MC_1_20_2
+#if MC_VER < MC_1_21_1
     private void registerLegacyChannels() {
         // 必须 setPacketHandled(true)（在 enqueueWork 外），否则 Forge 会把包交给原版
         // S2C / C2S 必须带 NetworkDirection，避免方向校验失败
@@ -753,7 +753,7 @@ public class ForgeNetworkManager implements NetworkManager {
 
     private static void sendCompressionReadyToServer() {
         try {
-#if MC_VER < MC_1_20_2
+#if MC_VER < MC_1_21_1
             CHANNEL.sendToServer(new CompressionReadyWrapper(true));
 #else
             sendToServer(new CompressionReadyWrapper(true));
@@ -906,7 +906,7 @@ public class ForgeNetworkManager implements NetworkManager {
             byte[] data = new byte[buf.readableBytes()];
             buf.readBytes(data);
             buf.release();
-#if MC_VER < MC_1_20_2
+#if MC_VER < MC_1_21_1
             CHANNEL.sendToServer(new DataRequestWrapper(data));
 #else
             sendToServer(new DataRequestWrapper(data));
@@ -924,7 +924,7 @@ public class ForgeNetworkManager implements NetworkManager {
         byte[] data = new byte[buf.readableBytes()];
         buf.readBytes(data);
         buf.release();
-#if MC_VER < MC_1_20_2
+#if MC_VER < MC_1_21_1
         CHANNEL.sendTo(new ChunkHashWrapper(data), player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
 #else
         sendToPlayer(player, new ChunkHashWrapper(data));
@@ -936,7 +936,7 @@ public class ForgeNetworkManager implements NetworkManager {
         byte[] data = new byte[buf.readableBytes()];
         buf.readBytes(data);
         buf.release();
-#if MC_VER < MC_1_20_2
+#if MC_VER < MC_1_21_1
         CHANNEL.sendTo(new SeedRefWrapper(data), player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
 #else
         sendToPlayer(player, new SeedRefWrapper(data));
@@ -948,7 +948,7 @@ public class ForgeNetworkManager implements NetworkManager {
         byte[] data = new byte[buf.readableBytes()];
         buf.readBytes(data);
         buf.release();
-#if MC_VER < MC_1_20_2
+#if MC_VER < MC_1_21_1
         CHANNEL.sendToServer(new SectionHashRequestWrapper(data));
 #else
         sendToServer(new SectionHashRequestWrapper(data));
@@ -960,7 +960,7 @@ public class ForgeNetworkManager implements NetworkManager {
         byte[] data = new byte[buf.readableBytes()];
         buf.readBytes(data);
         buf.release();
-#if MC_VER < MC_1_20_2
+#if MC_VER < MC_1_21_1
         CHANNEL.sendTo(new SectionDeltaWrapper(data), player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
 #else
         sendToPlayer(player, new SectionDeltaWrapper(data));
@@ -972,7 +972,7 @@ public class ForgeNetworkManager implements NetworkManager {
         byte[] data = new byte[buf.readableBytes()];
         buf.readBytes(data);
         buf.release();
-#if MC_VER < MC_1_20_2
+#if MC_VER < MC_1_21_1
         CHANNEL.sendToServer(new BlockEntityRequestWrapper(data));
 #else
         sendToServer(new BlockEntityRequestWrapper(data));
@@ -984,7 +984,7 @@ public class ForgeNetworkManager implements NetworkManager {
         byte[] data = new byte[buf.readableBytes()];
         buf.readBytes(data);
         buf.release();
-#if MC_VER < MC_1_20_2
+#if MC_VER < MC_1_21_1
         CHANNEL.sendTo(new BlockEntityDataWrapper(data), player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
 #else
         sendToPlayer(player, new BlockEntityDataWrapper(data));
@@ -1004,7 +1004,7 @@ public class ForgeNetworkManager implements NetworkManager {
     public static void sendCompressedChunk(ServerPlayer player, ChunkCompressionHandler.CompressedChunkData compressed) {
         try {
             byte[] data = compressed.encode();
-#if MC_VER < MC_1_20_2
+#if MC_VER < MC_1_21_1
             CHANNEL.sendTo(new CompressedPayloadWrapper(data), player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
 #else
             sendToPlayer(player, new CompressedPayloadWrapper(data));
@@ -1445,7 +1445,7 @@ public class ForgeNetworkManager implements NetworkManager {
             byte[] data = new byte[buf.readableBytes()];
             buf.readBytes(data);
             buf.release();
-#if MC_VER < MC_1_20_2
+#if MC_VER < MC_1_21_1
             CHANNEL.sendTo(new DictionarySyncWrapper(data), player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
 #else
             sendToPlayer(player, new DictionarySyncWrapper(data));
@@ -1468,7 +1468,7 @@ public class ForgeNetworkManager implements NetworkManager {
             byte[] data = new byte[buf.readableBytes()];
             buf.readBytes(data);
             buf.release();
-#if MC_VER < MC_1_20_2
+#if MC_VER < MC_1_21_1
             CHANNEL.sendTo(new IndexSyncWrapper(data), player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
 #else
             sendToPlayer(player, new IndexSyncWrapper(data));

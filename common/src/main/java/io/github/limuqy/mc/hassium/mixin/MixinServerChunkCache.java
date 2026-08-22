@@ -4,7 +4,7 @@ import io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute;
 import io.github.limuqy.mc.hassium.network.seedgen.ShadowSeedServer;
 import io.github.limuqy.mc.hassium.network.seedgen.ShadowServerRegistry;
 import io.github.limuqy.mc.hassium.server.RuntimeServerContext;
-#if MC_VER < MC_1_20_5
+#if MC_VER < MC_1_21_1
 import net.minecraft.world.level.chunk.ChunkStatus;
 #else
 import net.minecraft.world.level.chunk.status.ChunkStatus;

@@ -3,6 +3,7 @@ package io.github.limuqy.mc.hassium.network;
 import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.client.ClientSmokeTest;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
+import io.github.limuqy.mc.hassium.compat.LevelCompat;
 import io.github.limuqy.mc.hassium.metrics.NetworkStats;
 import io.github.limuqy.mc.hassium.metrics.VanillaZlibEstimator;
 import io.github.limuqy.mc.hassium.concurrent.ChunkDistancePriority;
@@ -174,13 +175,7 @@ public class ClientMetadataHandler {
      * SeedRef 回退：按当前维度全量请求该区块。
      */
     private static void fallbackToFullRequest(Minecraft mc, SeedRefS2CPacket packet) {
-        String dimension = mc.level.dimension()
-#if MC_VER < MC_1_21_11
-                .location()
-#else
-                .identifier()
-#endif
-                .toString();
+        String dimension = LevelCompat.getDimensionId(mc.level);
         requestFullChunks(dimension, List.of(new ChunkPos(packet.chunkX(), packet.chunkZ())), true, 0,
                 packet.deliveryId());
     }
@@ -194,13 +189,7 @@ public class ClientMetadataHandler {
         if (mc.player == null || mc.level == null) {
             return;
         }
-        String dimension = mc.level.dimension()
-#if MC_VER < MC_1_21_11
-                .location()
-#else
-                .identifier()
-#endif
-                .toString();
+        String dimension = LevelCompat.getDimensionId(mc.level);
         requestFullChunks(dimension, List.of(pos), true, 0, 0L);
     }
 
@@ -710,14 +699,8 @@ public class ClientMetadataHandler {
         }
     }
 
-    /** 客户端当前所在维度 id（{@code namespace:path}；两版本 location/identifier 封装）。 */
+    /** 客户端当前所在维度 id（{@code namespace:path}；LevelCompat 封装）。 */
     private static String currentDimension(Minecraft mc) {
-        return mc.level.dimension()
-#if MC_VER < MC_1_21_11
-                .location()
-#else
-                .identifier()
-#endif
-                .toString();
+        return mc == null || mc.level == null ? null : LevelCompat.getDimensionId(mc.level);
     }
 }

@@ -1,4 +1,4 @@
-# 按 docs/version-segments.md 对 9 个锚点 × builds_for 执行 compileJava。
+# 按 docs/version-segments.md 对 7 个锚点 × builds_for 执行 compileJava。
 # 单次 Gradle 进程只能绑定一个 mc_ver，故本脚本多次调用。
 #
 # 卡住常见原因：fabric-loom 全局锁被 IDEA Gradle Sync 或其他 Gradle 占用，
@@ -11,8 +11,6 @@ Set-Location $Root
 
 $Anchors = @(
     '1.20.1',
-    '1.20.2',
-    '1.20.5',
     '1.21.1',
     '1.21.2',
     '1.21.5',

@@ -35,7 +35,7 @@ import java.net.SocketAddress;
  * <p>sendPacket 描述符按锚点分段：
  * <ul>
  *   <li>1.20.1：{@code sendPacket(Packet, PacketSendListener)}（2 参）</li>
- *   <li>1.20.2–1.21.5：{@code sendPacket(Packet, PacketSendListener, boolean)}（3 参）</li>
+ *   <li>1.21.1–1.21.5：{@code sendPacket(Packet, PacketSendListener, boolean)}（3 参）</li>
  *   <li>1.21.6+：{@code sendPacket(Packet, ChannelFutureListener, boolean)}</li>
  * </ul>
  */
@@ -52,7 +52,7 @@ public abstract class MixinConnectionGatewayServer implements GatewayConnectionA
     @Accessor("packetListener")
     public abstract void hassium$setGatewayPacketListener(PacketListener listener);
 
-#if MC_VER < MC_1_20_2
+#if MC_VER < MC_1_21_1
     @Inject(method = "sendPacket(Lnet/minecraft/network/protocol/Packet;Lnet/minecraft/network/PacketSendListener;)V",
             at = @At("HEAD"), cancellable = true)
     private void hassium$routeS2CToGateway(Packet<?> packet, PacketSendListener sendListener, CallbackInfo ci) {

@@ -1,14 +1,7 @@
 package io.github.limuqy.mc.hassium.network;
 
-import io.github.limuqy.mc.hassium.Constants;
-import io.github.limuqy.mc.hassium.compat.ResourceLocationCompat;
 import io.netty.handler.codec.DecoderException;
 import net.minecraft.network.FriendlyByteBuf;
-#if MC_VER < MC_1_21_11
-import net.minecraft.resources.ResourceLocation;
-#else
-import net.minecraft.resources.Identifier;
-#endif
 
 /**
  * 服务端 -> 客户端：SeedRef（SeedGen 区块引用，Phase 1 引入）。
@@ -32,13 +25,6 @@ public record SeedRefS2CPacket(
 ) {
     /** review-fix: T3-53：恶意/损坏包 count 驱动 new long[count] 可 OOM 客户端；每 chunk section 数上限（1.18+ ≤ 24） */
     private static final int MAX_SECTION_HASHES = 512;
-    public static final
-#if MC_VER < MC_1_21_11
-    ResourceLocation
-#else
-    Identifier
-#endif
-    CHANNEL = ResourceLocationCompat.create(Constants.MOD_ID, "seed_ref_s2c");
 
     public SeedRefS2CPacket {
         if (deliveryId < 0) {

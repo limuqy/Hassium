@@ -13,7 +13,7 @@ import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.chunk.ChunkAccess;
 import net.minecraft.world.level.chunk.ImposterProtoChunk;
 import net.minecraft.world.level.chunk.LevelChunk;
-#if MC_VER < MC_1_20_5
+#if MC_VER < MC_1_21_1
 import net.minecraft.world.level.chunk.ChunkStatus;
 #else
 import net.minecraft.world.level.chunk.status.ChunkStatus;
@@ -114,10 +114,11 @@ public final class ShadowChunkMapCompat {
             return;
         }
         int level = fullTicketLevel();
-#if MC_VER < MC_1_21_9
+#if MC_VER < MC_1_21_5
+        // ≤1.21.4：DistanceManager.addTicket(TicketType, ChunkPos, int, ChunkPos)
         cache.chunkMap.getDistanceManager().addTicket(TicketType.UNKNOWN, pos, level, pos);
 #else
-        // radius 0 → ticket level = ChunkLevel.byStatus(FULL)；UNKNOWN 不含 SIMULATION 位
+        // ≥1.21.5：TicketStorage 重构，ServerChunkCache.addTicketWithRadius（radius 0 → ticket level = ChunkLevel.byStatus(FULL)；UNKNOWN 不含 SIMULATION 位）
         cache.addTicketWithRadius(TicketType.UNKNOWN, pos, 0);
 #endif
     }
@@ -127,7 +128,7 @@ public final class ShadowChunkMapCompat {
             return;
         }
         int level = fullTicketLevel();
-#if MC_VER < MC_1_21_9
+#if MC_VER < MC_1_21_5
         cache.chunkMap.getDistanceManager().removeTicket(TicketType.UNKNOWN, pos, level, pos);
 #else
         cache.removeTicketWithRadius(TicketType.UNKNOWN, pos, 0);
@@ -149,12 +150,10 @@ public final class ShadowChunkMapCompat {
                 return false;
             }
             ChunkStatus parent = ChunkStatus.INITIALIZE_LIGHT.getParent();
-#if MC_VER < MC_1_20_5
+#if MC_VER < MC_1_21_1
             return holder.getFutureIfPresentUnchecked(parent)
                     .getNow(ChunkHolder.UNLOADED_CHUNK).left().isPresent();
-#elif MC_VER < MC_1_21_1
-            return holder.getFutureIfPresentUnchecked(parent)
-                    .getNow(ChunkHolder.UNLOADED_CHUNK).orElse(null) != null;
+            // 1.20.5–1.20.6 的 Optional 中间层分支已随版本支持裁剪删除（API 自 1.21.1 起变化）
 #else
             return holder.getChunkIfPresentUnchecked(parent) != null;
 #endif
