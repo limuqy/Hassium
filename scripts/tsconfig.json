@@ -1,0 +1,13 @@
+{
+    "compilerOptions": {
+        "target": "ESNext",
+        "module": "ESNext",
+        "moduleResolution": "bundler",
+        "strict": true,
+        "noEmit": true,
+        "skipLibCheck": true,
+        "types": ["bun-types"],
+        "typeRoots": ["C:/Users/10885/.bun/install/global/node_modules/@types", "C:/Users/10885/.bun/install/global/node_modules"]
+    },
+    "include": ["*.ts"]
+}

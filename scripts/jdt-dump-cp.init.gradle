@@ -1,0 +1,44 @@
+/**
+ * Gradle init script: adds a dumpJdtCp task per Java project that writes the resolved
+ * compileClasspath + toolchain Java version, for scripts/gen-jdt-projects.py.
+ *
+ * Usage:
+ *   gradlew -Pmc_ver=<ver> --init-script scripts/jdt-dump-cp.init.gradle dumpAllJdtCp
+ *
+ * Output: <root>/build/jdt-cp/<module>.txt            (one absolute jar/dir path per line)
+ *         <root>/build/jdt-cp/<module>.java-version
+ */
+
+allprojects { p ->
+    p.plugins.withId('java') {
+        def tv = null
+        try {
+            if (p.java.toolchain.languageVersion.isPresent()) {
+                tv = p.java.toolchain.languageVersion.get()
+            }
+        } catch (Throwable ignored) {}
+        if (tv == null) tv = System.getProperty('java.version').split('\\.')[0]
+        def outDir = new File(p.rootDir, "build/jdt-cp")
+        p.tasks.register("dumpJdtCp") { t ->
+            t.doLast {
+                outDir.mkdirs()
+                new File(outDir, "${p.name}.java-version").text = String.valueOf(tv)
+                new File(outDir, "${p.name}.txt").text =
+                    p.configurations.compileClasspath.files.collect { it.absolutePath }.join('\n')
+            }
+        }
+    }
+}
+
+allprojects { p ->
+    p.tasks.register('dumpAllJdtCpMarker')
+}
+gradle.projectsEvaluated {
+    def root = gradle.rootProject
+    root.tasks.register('dumpAllJdtCp')
+    allprojects { p ->
+        p.tasks.matching { it.name == 'dumpJdtCp' }.all { t ->
+            root.tasks.named('dumpAllJdtCp').configure { it.dependsOn t }
+        }
+    }
+}
