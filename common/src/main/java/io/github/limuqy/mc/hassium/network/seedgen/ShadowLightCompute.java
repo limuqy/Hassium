@@ -9,6 +9,7 @@ import io.github.limuqy.mc.hassium.network.ClientChunkHandler;
 import io.github.limuqy.mc.hassium.network.ClientChunkHandler.TraceOrigin;
 import io.github.limuqy.mc.hassium.network.ClientChunkPipeline;
 import io.github.limuqy.mc.hassium.utils.DebugLogger;
+import io.github.limuqy.mc.hassium.utils.DimensionKey;
 import java.util.ArrayList;
 import java.util.BitSet;
 import java.util.List;
@@ -64,23 +65,23 @@ import net.minecraft.world.level.lighting.LevelLightEngine;
  */
 public final class ShadowLightCompute {
 
-    /** 投递队列：pos -> 服务端 packet 与仅诊断来源（REPLACE）。 */
+    /** 投递队列：DimensionKey 复合键 -> 服务端 packet 与仅诊断来源（REPLACE）。 */
     private static final ConcurrentHashMap<Long, PendingEntry> pending =
             new ConcurrentHashMap<>();
-    /** 分段增量队列：pos -> (dimension, DeltaEntry)。REPLACE 语义：服务端每份 delta
+    /** 分段增量队列：复合键 -> (dimension, DeltaEntry)。REPLACE 语义：服务端每份 delta
      *  都是「当前服务端状态 vs 客户端基线」的完整差异，后到覆盖先到（内容都正确）。 */
     private static final ConcurrentHashMap<Long, DeltaWork> pendingDeltas =
             new ConcurrentHashMap<>();
-    /** 本地生成队列：pos -> (chunk, level)（SeedGen worldgen 完成 / 磁盘光脏 relight，打包回传）。 */
+    /** 本地生成队列：复合键 -> (chunk, level)（SeedGen worldgen 完成 / 磁盘光脏 relight，打包回传）。 */
     private static final ConcurrentHashMap<Long, GenEntry> generated = new ConcurrentHashMap<>();
     /**
-     * 增量算光队列（LightDelta 消费）：pos -> 变更掩码。REPLACE/合并不冲突——
+     * 增量算光队列（LightDelta 消费）：复合键 -> 变更掩码。REPLACE/合并不冲突——
      * 服务端 LightDelta 是「哪几个 section 刚变完」的增量信号，同柱后到与先到的
      * 掩码取并集即可（影子端按并集清光重算，最终一致性不变）。
      */
     private static final ConcurrentHashMap<Long, LightWork> pendingLightUpdates =
             new ConcurrentHashMap<>();
-    /** 管道在途光屏障：pos -> 提交上下文（submitLightBatch 提交，completeLight/超时扫表
+    /** 管道在途光屏障：复合键 -> 提交上下文（submitLightBatch 提交，completeLight/超时扫表
      *  条件移除；size = 在途计数，上限 {@link #PIPELINE_MAX_INFLIGHT}，断连清空）。 */
     private static final ConcurrentHashMap<Long, InflightLight> inflightLight = new ConcurrentHashMap<>();
     /**
@@ -105,7 +106,7 @@ public final class ShadowLightCompute {
     private record DeferredRemoteHash(String dimension,
                                       List<io.github.limuqy.mc.hassium.network.ChunkHashS2CPacket.Entry> entries) {}
     /**
-     * 客户端已通过影子链路落地的全量区块 epoch。客户端 unload 立即移除；光包携带
+     * 客户端已通过影子链路落地的全量区块 epoch（复合键）。客户端 unload 立即移除；光包携带
      * 入队时 epoch，消费时必须仍相等，避免旧光包打到已卸载或重新装载的同坐标区块。
      */
     private static final ConcurrentHashMap<Long, Long> shadowApplyEpochs = new ConcurrentHashMap<>();
@@ -137,15 +138,16 @@ public final class ShadowLightCompute {
         }
     }
 
-    /** 仅诊断用：最近一次已落地全量区块，供后续光包判定回填时序。 */
+    /** 仅诊断用：最近一次已落地全量区块（复合键），供后续光包判定回填时序。 */
     private static final ConcurrentHashMap<Long, FullApplyTrace> fullApplyTraces = new ConcurrentHashMap<>();
     private static final AtomicLong fullApplySequence = new AtomicLong();
 
     /**
-     * 光照更新收集表：chunkKey → LightMask（影子端 light 线程写，客户端主线程读）。
+     * 光照更新收集表：DimensionKey 复合键 → LightMask（影子端 light 线程写，客户端主线程读）。
      * 引擎每完成一个 section 的光计算写数据层 → {@code onLightUpdate}（MixinServerChunkCache
      * 拦截，T2）→ {@link #collectLightUpdate} 收集绝对 sectionY；主线程帧尾
-     * {@link #drainLightMasks} 攒批打包入回传队列。
+     * {@link #drainLightMasks} 攒批打包入回传队列。维度取客户端当前所在维度
+     * （LightDelta 协议与 mixin 入口均无维度上下文；影子端只装配三主维度）。
      */
     private static final ConcurrentHashMap<Long, LightMask> lightUpdates = new ConcurrentHashMap<>();
 
@@ -181,7 +183,7 @@ public final class ShadowLightCompute {
     static final Object LIGHT_ENGINE_MUTEX = new Object();
 
     /**
-     * 出界卸载延迟表（T5）：chunkKey → 到期毫秒。区块离开卸载边界后登记计时
+     * 出界卸载延迟表（T5）：DimensionKey 复合键 → 到期毫秒。区块离开卸载边界后登记计时
      * （已登记不动，防抖）；玩家回边界内立即取消（区块驻留）；到期 → 单柱落盘 +
      * 从 injectedChunks 移除。客户端主线程帧尾检查（drainReady 开头，节流扫描）。
      * 与 ShadowCacheEviction（容量淘汰删磁盘）独立共存。
@@ -193,7 +195,7 @@ public final class ShadowLightCompute {
     private static final int UNLOAD_PER_SCAN_MAX = 8;
     private static int unloadScanTick = 0;
 
-    /** miss 已请求集合（会话内防抖：直推与请求并存时不重复请求；断连清空）。 */
+    /** miss 已请求集合（复合键；会话内防抖：直推与请求并存时不重复请求；断连清空）。 */
     private static final java.util.Set<Long> requestedMisses = java.util.concurrent.ConcurrentHashMap.newKeySet();
 
     /**
@@ -201,7 +203,9 @@ public final class ShadowLightCompute {
      * （processRemoteHashes→chunkHashOf / requestSectionDeltas→computeSectionHashes）与
      * consumeLoop 打包线程（pushReady→SeedGenChunkCodec.buildPacket / applySectionDelta）
      * 对同一注入 LevelChunk 的容器并发触碰 → 1.21.11 ThreadingDetector 崩溃（全 miss 触发
-     * delta 洪峰时）。按 chunk 粒度互斥：key = ChunkPos.asLong；短临界区（无 IO、无跨 chunk
+     * delta 洪峰时）。按 chunk 粒度互斥：key = 裸 ChunkPos.asLong（刻意维度无关——
+     * ShadowSeedServer.withChunkLock(pos) 与本文件必须命中同一把锁；跨维同坐标共享锁
+     * 只会多等不会漏互斥）。短临界区（无 IO、无跨 chunk
      * 嵌套锁），HassiumTaskExecutor 虚拟线程池内无死锁风险；不同 chunk 不同 monitor 无争用放大。
      * 静态存活（不随断连清理）：键数 = 会话内触碰 chunk 数（每键 ~40B），可忽略；清空反而
      * 引入新旧 monitor 交错窗口。
@@ -252,16 +256,23 @@ public final class ShadowLightCompute {
     }
 
     /** P2（T7）：new 路径回退去重登记（SeedGenExecutor 回退链 / delta 失败兜底共用；
-     *  与 processRemoteHashes 的 miss 请求同一会话内防抖集合）。true = 首次登记（应发送请求）。 */
+     *  与 processRemoteHashes 的 miss 请求同一会话内防抖集合）。true = 首次登记（应发送请求）。
+     *  键 = DimensionKey 复合键（跨维同坐标互不防抖）；无维度上下文的调用方走旧签名
+     *  （委托 OVERWORLD，与 SeedGen 盲预生成等主世界路径一致）。 */
+    public static boolean tryRequestMiss(String dimension, ChunkPos pos) {
+        return requestedMisses.add(DimensionKey.key(dimension, pos.x, pos.z));
+    }
+
+    /** 旧签名（过渡期兼容）：语义 = OVERWORLD。 */
     public static boolean tryRequestMiss(ChunkPos pos) {
-        return requestedMisses.add(chunkPosKey(pos));
+        return tryRequestMiss(DimensionKey.OVERWORLD, pos);
     }
 
     /** P2（T7）：回退请求去重过滤——只保留 requestedMisses 首次登记的 chunk（杜绝同 chunk 重复回退）。 */
-    private static List<ChunkPos> dedupeFallback(List<ChunkPos> chunks) {
+    private static List<ChunkPos> dedupeFallback(String dimension, List<ChunkPos> chunks) {
         List<ChunkPos> toRequest = new ArrayList<>(chunks.size());
         for (ChunkPos pos : chunks) {
-            if (tryRequestMiss(pos)) {
+            if (tryRequestMiss(dimension, pos)) {
                 toRequest.add(pos);
             }
         }
@@ -293,7 +304,7 @@ public final class ShadowLightCompute {
     /** 管道低水位：在途低于此值才由完成回调重新 pump（= 1 批：低水位→满水位恰好补一批，
      *  避免每完成一块就一次 executor 往返）。 */
     private static final int PIPELINE_LOW_WATER = CONSUME_BATCH_LIMIT;
-    /** 已发出、未收到 delta 响应的请求（pos → 维度 + 截止时间）；超时回退全量。 */
+    /** 已发出、未收到 delta 响应的请求（DimensionKey 复合键 → 维度 + 截止时间）；超时回退全量。 */
     private static final ConcurrentHashMap<Long, PendingDelta> pendingDeltaRequests =
             new ConcurrentHashMap<>();
 
@@ -304,7 +315,6 @@ public final class ShadowLightCompute {
     /** LightDelta 变更掩码合并单元（BitSet 由 packet decode 创建，提交后不再被外部修改）。 */
     private record LightWork(BitSet skyMask, BitSet blockMask,
                               BitSet emptySkyMask, BitSet emptyBlockMask) {
-
         boolean hasSections() {
             return !skyMask.isEmpty() || !blockMask.isEmpty()
                     || !emptySkyMask.isEmpty() || !emptyBlockMask.isEmpty();
@@ -613,8 +623,21 @@ public final class ShadowLightCompute {
         if (entries == null || entries.isEmpty()) {
             return;
         }
+        // 自定义维度透传门控（REQ 明细7）：非三主维度整包忽略——不请求不缓存不比对
+        // （数据由服务端直推 + vanilla apply 兜底，见 ClientChunkHandler.handleCompressedChunk）。
+        if (!isCacheableDimension(dimension)) {
+            DebugLogger.info(DebugLogger.LogType.METADATA,
+                    "[SHADOW_HASH] Ignoring non-cacheable dimension packet ({} entries, dimension={})",
+                    entries.size(), dimension);
+            return;
+        }
         deferredRemoteHashes.add(new DeferredRemoteHash(dimension, List.copyOf(entries)));
         tryDrainRemoteHashes();
+    }
+
+    /** 维度白名单判定（透传门控；null 安全）。 */
+    static boolean isCacheableDimension(String dimension) {
+        return DimensionKey.isCacheableDimension(dimension);
     }
 
     /** 握手完成或影子端就绪：单线程抽干 hash 队列（禁止每包一个虚拟线程打满 CPU）。 */
@@ -674,13 +697,13 @@ public final class ShadowLightCompute {
             try {
                 if (server != null) {
                     // 1) 内存已加载：hash 表优先（注入时已算），无表现算（OVD 生成块）
-                    LevelChunk loaded = server.injectedChunk(pos.x, pos.z);
+                    LevelChunk loaded = server.injectedChunk(dimension, pos.x, pos.z);
                     if (loaded != null) {
                         // P1（T7）：hash 比对读注入 chunk section 容器，与 consumeLoop 打包
                         // （pushReady→buildPacket）/ delta 应用（applySectionDelta）同 chunk 锁互斥。
                         boolean hashHit;
                         synchronized (chunkLock(pos)) {
-                            hashHit = chunkHashOf(loaded, pos, remoteHash);
+                            hashHit = chunkHashOf(dimension, loaded, pos, remoteHash);
                         }
                         if (hashHit) {
                             org.slf4j.LoggerFactory.getLogger("Hassium/ShadowDisk")
@@ -700,7 +723,7 @@ public final class ShadowLightCompute {
                                 io.github.limuqy.mc.hassium.metrics.NetworkStats.recordLightReuseShadow(
                                         io.github.limuqy.mc.hassium.metrics.NetworkStats.ESTIMATED_LIGHT_BYTES);
                             }
-                            long memoryKey = chunkPosKey(pos);
+                            long memoryKey = DimensionKey.key(dimension, pos.x, pos.z);
                             if (alreadyShadowApplied(memoryKey)) {
                                 DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
                                         "[SHADOW_CHUNK] Skip redundant full push ({}, {}): memory hit, client already applied",
@@ -712,7 +735,7 @@ public final class ShadowLightCompute {
                             // buildPacket 从 LevelLightEngine 收集光，注入表 chunk 的光在引擎
                             // 内（本会话算过）但需确认收敛，直接 push 可能推欠光（黑块）。
                             scheduleBeRefreshOnHashHit(dimension, pos, false, beImmediate);
-                            generated.put(memoryKey, new GenEntry(loaded, server.overworld(), lightReuse,
+                            generated.put(memoryKey, new GenEntry(loaded, server.level(dimension), lightReuse,
                                     false, traceOrigin(TraceOrigin.SHADOW_MEMORY_CACHE)));
                             continue;
                         }
@@ -726,10 +749,10 @@ public final class ShadowLightCompute {
                         continue;
                     }
                     // 2) 未注入：probeHash（缺文件即 mismatch）；hit 才解压一槽。
-                    io.github.limuqy.mc.hassium.storage.ShadowStorageManager storage = server.storage();
+                    io.github.limuqy.mc.hassium.storage.ShadowStorageManager storage = server.storage(dimension);
                     io.github.limuqy.mc.hassium.storage.ShadowStorageManager.ProbeResult probe =
                             storage != null
-                                    ? storage.probeHash(pos, remoteHash)
+                                    ? storage.probeHash(dimension, pos, remoteHash)
                                     : new io.github.limuqy.mc.hassium.storage.ShadowStorageManager.ProbeResult(
                                             io.github.limuqy.mc.hassium.storage.ShadowStorageManager.ProbeStatus.ABSENT);
                     if (!probe.match()) {
@@ -739,9 +762,9 @@ public final class ShadowLightCompute {
                                 leftover.add(entry);
                                 continue;
                             }
-                            LevelChunk fromDisk = server.loadFromDisk(pos);
+                            LevelChunk fromDisk = server.loadFromDisk(dimension, pos);
                             if (fromDisk != null) {
-                                server.injectLoadedChunk(pos, fromDisk);
+                                server.injectLoadedChunk(dimension, pos, fromDisk);
                                 deltaCandidates.add(pos);
                                 continue;
                             }
@@ -754,10 +777,11 @@ public final class ShadowLightCompute {
                         leftover.add(entry);
                         continue;
                     }
-                    LevelChunk fromDisk = server.loadFromDisk(pos);
+                    LevelChunk fromDisk = server.loadFromDisk(dimension, pos);
                     if (fromDisk != null) {
-                        server.injectLoadedChunk(pos, fromDisk);
-                        boolean needRelight = io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.isLightDirty(pos)
+                        server.injectLoadedChunk(dimension, pos, fromDisk);
+                        boolean needRelight =
+                                io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.isLightDirty(dimension, pos)
                                 || !server.isChunkLightComplete(pos, fromDisk);
                         org.slf4j.LoggerFactory.getLogger("Hassium/ShadowDisk")
                                 .info("Shadow hash cache hit ({}, {}), disk push needRelight={}",
@@ -772,7 +796,7 @@ public final class ShadowLightCompute {
                             io.github.limuqy.mc.hassium.metrics.NetworkStats.recordLightReuseShadow(
                                     io.github.limuqy.mc.hassium.metrics.NetworkStats.ESTIMATED_LIGHT_BYTES);
                         }
-                        long diskKey = chunkPosKey(pos);
+                        long diskKey = DimensionKey.key(dimension, pos.x, pos.z);
                         if (alreadyShadowApplied(diskKey)) {
                             DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
                                     "[SHADOW_CHUNK] Skip redundant full push ({}, {}): disk hit, client already applied",
@@ -781,7 +805,7 @@ public final class ShadowLightCompute {
                             continue;
                         }
                         scheduleBeRefreshOnHashHit(dimension, pos, false, beImmediate);
-                        generated.put(diskKey, new GenEntry(fromDisk, server.overworld(), !needRelight,
+                        generated.put(diskKey, new GenEntry(fromDisk, server.level(dimension), !needRelight,
                                 false, traceOrigin(TraceOrigin.SHADOW_DISK_CACHE)));
                         continue;
                     }
@@ -805,7 +829,7 @@ public final class ShadowLightCompute {
         if (!misses.isEmpty()) {
             List<ChunkPos> toRequest = new ArrayList<>(misses.size());
             for (ChunkPos pos : misses) {
-                if (requestedMisses.add(chunkPosKey(pos))) {
+                if (requestedMisses.add(DimensionKey.key(dimension, pos.x, pos.z))) {
                     toRequest.add(pos);
                 }
             }
@@ -851,7 +875,7 @@ public final class ShadowLightCompute {
         long deadline = System.currentTimeMillis()
                 + deltaRequestTimeoutMs(chunks.size(), pendingDeltaRequests.size());
         for (ChunkPos pos : chunks) {
-            LevelChunk chunk = server.injectedChunk(pos.x, pos.z);
+            LevelChunk chunk = server.injectedChunk(dimension, pos.x, pos.z);
             if (chunk == null) {
                 continue; // 已被移除/竞态：数据由服务端直推兜底
             }
@@ -861,14 +885,15 @@ public final class ShadowLightCompute {
             // 打包/写路径（buildPacket/applySectionDelta）同 chunk 锁互斥。
             synchronized (chunkLock(pos)) {
                 io.github.limuqy.mc.hassium.network.sectiondelta.SectionDeltaSnapshot snap =
-                        io.github.limuqy.mc.hassium.network.sectiondelta.SectionDeltaSnapshots
-                                .getOrCapture(pos, chunk);
+                                io.github.limuqy.mc.hassium.network.sectiondelta.SectionDeltaSnapshots
+                                        .getOrCapture(dimension, pos, chunk);
                 sectionHashes = snap.sectionHashes();
                 planes = snap.planes();
             }
             entries.add(new io.github.limuqy.mc.hassium.network.SectionHashRequestC2SPacket.Entry(
                     pos.x, pos.z, sectionHashes, planes));
-            pendingDeltaRequests.put(chunkPosKey(pos), new PendingDelta(dimension, deadline));
+            pendingDeltaRequests.put(DimensionKey.key(dimension, pos.x, pos.z),
+                    new PendingDelta(dimension, deadline));
         }
         if (entries.isEmpty()) {
             return;
@@ -887,12 +912,12 @@ public final class ShadowLightCompute {
         } catch (Throwable t) {
             // 发送失败 → 立即回退全量（登记的请求清掉，避免超时重复回退）
             for (var e : entries) {
-                pendingDeltaRequests.remove(chunkPosKey(new net.minecraft.world.level.ChunkPos(e.chunkX(), e.chunkZ())));
+                pendingDeltaRequests.remove(DimensionKey.key(dimension, e.chunkX(), e.chunkZ()));
             }
             DebugLogger.warn(DebugLogger.LogType.ASYNC,
                     "[SHADOW_DELTA] Request send failed, fallback full ({} chunks)", entries.size());
             // P2（T7）：失败回退走 new 路径（hash-miss 正轨）+ requestedMisses 去重
-            List<ChunkPos> fallback = dedupeFallback(chunks);
+            List<ChunkPos> fallback = dedupeFallback(dimension, chunks);
             if (!fallback.isEmpty()) {
                 io.github.limuqy.mc.hassium.network.ClientMetadataHandler
                         .requestFullChunksPublic(dimension, fallback, false);
@@ -917,7 +942,7 @@ public final class ShadowLightCompute {
                 "[SHADOW_DELTA] Received {} delta entries (dimension={})", packet.entries().size(), packet.dimension());
         String dimension = packet.dimension();
         for (var entry : packet.entries()) {
-            long key = chunkPosKey(new net.minecraft.world.level.ChunkPos(entry.chunkX(), entry.chunkZ()));
+            long key = DimensionKey.key(dimension, entry.chunkX(), entry.chunkZ());
             pendingDeltas.put(key, new DeltaWork(dimension, entry));
             pendingDeltaRequests.remove(key);
         }
@@ -926,14 +951,14 @@ public final class ShadowLightCompute {
         if (!packet.skipped().isEmpty()) {
             List<net.minecraft.world.level.ChunkPos> skipped = new ArrayList<>(packet.skipped().size());
             for (var s : packet.skipped()) {
-                long key = chunkPosKey(new net.minecraft.world.level.ChunkPos(s.chunkX(), s.chunkZ()));
+                long key = DimensionKey.key(dimension, s.chunkX(), s.chunkZ());
                 pendingDeltaRequests.remove(key);
                 skipped.add(new net.minecraft.world.level.ChunkPos(s.chunkX(), s.chunkZ()));
             }
             DebugLogger.info(DebugLogger.LogType.ASYNC,
                     "[SHADOW_DELTA] {} chunks skipped by server, fallback full", skipped.size());
             // P2（T7）：失败回退走 new 路径 + requestedMisses 去重
-            List<net.minecraft.world.level.ChunkPos> fallback = dedupeFallback(skipped);
+            List<net.minecraft.world.level.ChunkPos> fallback = dedupeFallback(dimension, skipped);
             if (!fallback.isEmpty()) {
                 io.github.limuqy.mc.hassium.network.ClientMetadataHandler
                         .requestFullChunksPublic(dimension, fallback, false);
@@ -960,7 +985,9 @@ public final class ShadowLightCompute {
             if (entry == null || !entry.hasAnySection()) {
                 continue;
             }
-            long key = chunkPosKey(new ChunkPos(entry.chunkX(), entry.chunkZ()));
+            // LightDelta 协议无 dimension 字段（REQ 明细8 核对）：以客户端当前维度作键上下文
+            // （影子端只装配三主维度，玩家所在维度即数据归属维度）。
+            long key = DimensionKey.key(currentDimension(), entry.chunkX(), entry.chunkZ());
             LightWork work = new LightWork((BitSet) entry.skyYMask().clone(),
                     (BitSet) entry.blockYMask().clone(),
                     (BitSet) entry.emptySkyYMask().clone(),
@@ -985,7 +1012,8 @@ public final class ShadowLightCompute {
         for (var it = pendingDeltaRequests.entrySet().iterator(); it.hasNext(); ) {
             var e = it.next();
             if (now >= e.getValue().deadlineMs()) {
-                net.minecraft.world.level.ChunkPos pos = new net.minecraft.world.level.ChunkPos(e.getKey());
+                net.minecraft.world.level.ChunkPos pos = new net.minecraft.world.level.ChunkPos(
+                        DimensionKey.chunkXOf(e.getKey()), DimensionKey.chunkZOf(e.getKey()));
                 timedOut.computeIfAbsent(e.getValue().dimension(), k -> new ArrayList<>()).add(pos);
                 it.remove();
             }
@@ -994,7 +1022,7 @@ public final class ShadowLightCompute {
             DebugLogger.warn(DebugLogger.LogType.ASYNC,
                     "[SHADOW_DELTA] {} delta requests timed out, fallback full", e.getValue().size());
             // P2（T7）：失败回退走 new 路径 + requestedMisses 去重
-            List<net.minecraft.world.level.ChunkPos> fallback = dedupeFallback(e.getValue());
+            List<net.minecraft.world.level.ChunkPos> fallback = dedupeFallback(e.getKey(), e.getValue());
             if (!fallback.isEmpty()) {
                 io.github.limuqy.mc.hassium.network.ClientMetadataHandler
                         .requestFullChunksPublic(e.getKey(), fallback, false);
@@ -1002,9 +1030,27 @@ public final class ShadowLightCompute {
         }
     }
 
+    /** 客户端当前维度 id（{@code namespace:path}；mc.level 不可用回退 OVERWORLD）。 */
+    static String currentDimension() {
+        try {
+            Minecraft mc = Minecraft.getInstance();
+            if (mc != null && mc.level != null) {
+                return mc.level.dimension()
+#if MC_VER < MC_1_21_11
+                        .location()
+#else
+                        .identifier()
+#endif
+                        .toString();
+            }
+        } catch (Throwable ignored) {
+        }
+        return DimensionKey.OVERWORLD;
+    }
+
     /** 内存区块 hash：ShadowStorageHashes 表优先（注入/读盘已登记），无表现算。 */
-    private static boolean chunkHashOf(LevelChunk chunk, ChunkPos pos, long remoteHash) {
-        return diskHashMatches(chunk, pos, remoteHash);
+    private static boolean chunkHashOf(String dimension, LevelChunk chunk, ChunkPos pos, long remoteHash) {
+        return diskHashMatches(dimension, chunk, pos, remoteHash);
     }
 
     /**
@@ -1021,10 +1067,49 @@ public final class ShadowLightCompute {
         if (pos == null || packet == null || deliveryId < 0L || !isEnabled()) {
             return;
         }
+        // 自定义维度透传（REQ 明细7）：非缓存维度不走影子管线，直接原版落地。
+        String dimension = currentDimension();
+        if (!DimensionKey.isCacheableDimension(dimension)) {
+            applyVanillaDirect(pos, packet, deliveryId);
+            return;
+        }
         // 全量数据到达 = 该柱不再等 delta 响应（delta 请求超时登记清除）
-        pendingDeltaRequests.remove(chunkPosKey(pos));
-        pending.put(chunkPosKey(pos), new PendingEntry(packet, traceOrigin(TraceOrigin.SERVER_PUSH), deliveryId));
+        long key = DimensionKey.key(dimension, pos.x, pos.z);
+        pendingDeltaRequests.remove(key);
+        pending.put(key, new PendingEntry(packet, traceOrigin(TraceOrigin.SERVER_PUSH), deliveryId));
         pump();
+    }
+
+    /**
+     * 自定义维度透传：绕过影子管线，主线程直接原版落地（与 ClientChunkHandler
+     * 原版直发路径同语义）。CompressedChunkData 无维度字段，submit 只能以客户端
+     * 当前维度判定；非缓存维度在此恢复原版行为。
+     */
+    private static void applyVanillaDirect(ChunkPos pos,
+                                           ClientboundLevelChunkWithLightPacket packet,
+                                           long deliveryId) {
+        try {
+            Minecraft mc = Minecraft.getInstance();
+            ClientPacketListener connection = mc != null ? mc.getConnection() : null;
+            if (connection == null || packet == null) {
+                return;
+            }
+            final ClientboundLevelChunkWithLightPacket fPacket = packet;
+            final ChunkPos fPos = pos;
+            io.github.limuqy.mc.hassium.concurrent.MainThreadDispatcher.execute(() -> {
+                try {
+                    connection.handleLevelChunkWithLight(fPacket);
+                    io.github.limuqy.mc.hassium.network.ClientChunkHandler
+                            .recordAuthoritativeApply(deliveryId, false, true);
+                    io.github.limuqy.mc.hassium.network.ClientMetadataHandler
+                            .onChunkApplied(fPos);
+                } catch (Throwable t) {
+                    DebugLogger.warn(DebugLogger.LogType.CHUNK_APPLY,
+                            "[SHADOW_CHUNK] vanilla-direct apply failed ({}, {})", fPos.x, fPos.z);
+                }
+            });
+        } catch (Throwable ignored) {
+        }
     }
 
     /**
@@ -1079,7 +1164,13 @@ public final class ShadowLightCompute {
         if (pos == null || chunk == null || deliveryId < 0L || !isEnabled()) {
             return false;
         }
-        generated.put(chunkPosKey(pos), new GenEntry(chunk, level, false, renderOnly, traceOrigin, deliveryId));
+        // 维度从 level 推导（SeedGenExecutor 调用点无需改签名）；非缓存维度不入影子管线。
+        String dimension = level != null ? ShadowSeedServer.dimensionId(level) : null;
+        if (dimension == null || !DimensionKey.isCacheableDimension(dimension)) {
+            return false;
+        }
+        generated.put(DimensionKey.key(dimension, pos.x, pos.z),
+                new GenEntry(chunk, level, false, renderOnly, traceOrigin, deliveryId));
         pump();
         return true;
     }
@@ -1181,22 +1272,26 @@ public final class ShadowLightCompute {
                                 batch.size(), genBatch.size(), deltaBatch.size(), lightBatch.size());
                 List<LightTask> lightTasks = new ArrayList<>();
                 for (Map.Entry<Long, PendingEntry> e : batch) {
-                    ChunkPos pos = new ChunkPos(e.getKey());
+                    // 复合键解维：pending 键携带维度，服务端查询/引擎操作全部路由到该维度。
+                    String dimension = DimensionKey.dimensionOf(e.getKey());
+                    ChunkPos pos = new ChunkPos(DimensionKey.chunkXOf(e.getKey()),
+                            DimensionKey.chunkZOf(e.getKey()));
                     PendingEntry pendingEntry = e.getValue();
                     long remoteHash = io.github.limuqy.mc.hassium.network.ClientChunkPipeline
-                            .getInstance().peekPendingContentHash(pos.x, pos.z);
+                            .getInstance().peekPendingContentHash(dimension, pos.x, pos.z);
                     // 影子内存已有该柱：禁止 injectChunk REPLACE（clearChunkLight 会
                     // 清掉邻柱推进来的屋檐光）。Bloom 直推没有 remoteHash，已落地则直接丢掉。
-                    LevelChunk existing = server.injectedChunk(pos.x, pos.z);
+                    LevelChunk existing = server.injectedChunk(dimension, pos.x, pos.z);
                     if (existing != null) {
                         boolean hashKnown = remoteHash != 0L;
                         boolean hashMatches = false;
                         if (hashKnown) {
                             synchronized (chunkLock(pos)) {
-                                hashMatches = diskHashMatches(existing, pos, remoteHash);
+                                hashMatches = diskHashMatches(dimension, existing, pos, remoteHash);
                             }
                         }
                         if (!hashKnown || hashMatches) {
+                            boolean needRelight = !server.isChunkLightComplete(pos, existing);
                             if (!pending.remove(e.getKey(), pendingEntry)) {
                                 continue;
                             }
@@ -1209,15 +1304,14 @@ public final class ShadowLightCompute {
                                         pendingEntry.deliveryId(), false, true);
                                 continue;
                             }
-                            boolean needRelight = !server.isChunkLightComplete(pos, existing);
-                            generated.put(e.getKey(), new GenEntry(existing, server.overworld(), !needRelight,
+                            generated.put(e.getKey(), new GenEntry(existing, server.level(dimension), !needRelight,
                                     false, traceOrigin(TraceOrigin.SHADOW_MEMORY_CACHE),
                                     pendingEntry.deliveryId()));
                             continue;
                         }
                     }
                     // R1 全量直推：禁 loadFromDisk。内存未命中则注入网络包。
-                    if (!server.injectChunk(pos, pendingEntry.packet())) {
+                    if (!server.injectChunk(dimension, pos, pendingEntry.packet())) {
                         // 注入失败 = 影子链路整体失败：走与握手失败/创建失败同级的
                         // 关闭核心逻辑（shadowServerFailed → 缓存/OVD/SeedGen 关闭 + 提示）。
                         pending.clear();
@@ -1233,16 +1327,16 @@ public final class ShadowLightCompute {
                         io.github.limuqy.mc.hassium.metrics.NetworkStats.recordFullChunkRequests(
                                 1, io.github.limuqy.mc.hassium.metrics.NetworkStats.ESTIMATED_CHUNK_BYTES, false);
                     }
-                    LevelChunk injected = server.injectedChunk(pos.x, pos.z);
+                    LevelChunk injected = server.injectedChunk(dimension, pos.x, pos.z);
                     // B1：注入后立刻 pushReady（可欠光）；drainReady 仍走预算分账。
                     if (injected != null) {
-                        pushReady(e.getKey(), injected, server.overworld(), false, false,
+                        pushReady(e.getKey(), injected, server.level(dimension), false, false,
                                 pendingEntry.traceOrigin(), pendingEntry.deliveryId());
                         io.github.limuqy.mc.hassium.metrics.NetworkStats.recordLightCacheMiss(
                                 io.github.limuqy.mc.hassium.metrics.NetworkStats.ESTIMATED_LIGHT_BYTES);
                     }
                     lightTasks.add(new LightTask(e.getKey(), LightSource.PENDING, pendingEntry,
-                            injected, server.overworld(), LightMetric.RECOMPUTE,
+                            injected, server.level(dimension), LightMetric.RECOMPUTE,
                             false, pendingEntry.traceOrigin(), pendingEntry.deliveryId()));
                 }
                 // 分段增量应用：本地基线 chunk 上就地覆盖变更 section + heightmaps + BE，
@@ -1253,21 +1347,21 @@ public final class ShadowLightCompute {
                         continue; // REPLACE 后旧条目已被新 batch 接管 / 断连清理
                     }
                     pendingDeltas.remove(key);
-                    ChunkPos pos = new ChunkPos(key);
+                    ChunkPos pos = new ChunkPos(DimensionKey.chunkXOf(key), DimensionKey.chunkZOf(key));
                     DeltaWork work = e.getValue();
                     // P1（T7）：applySectionDelta 就地覆盖注入 chunk 的 section 容器
                     // （LevelChunkSection.read → PalettedContainer 写）——与 hash 比对线程
                     // （chunkHashOf / computeSectionHashes）同 chunk 锁互斥（T7 崩溃同机制）。
                     boolean applied;
                     synchronized (chunkLock(pos)) {
-                        applied = server.applySectionDelta(pos, work.entry());
+                        applied = server.applySectionDelta(work.dimension(), pos, work.entry());
                     }
                     if (!applied) {
                         // 基线缺失 / 应用失败 → 回退全量（正确性优先）；跳过本 chunk 回传
                         DebugLogger.warn(DebugLogger.LogType.ASYNC,
                                 "[SHADOW_DELTA] Apply failed ({}, {}), fallback full", pos.x, pos.z);
                         // P2（T7）：失败回退走 new 路径 + requestedMisses 去重
-                        if (tryRequestMiss(pos)) {
+                        if (tryRequestMiss(work.dimension(), pos)) {
                             List<ChunkPos> fallback = new ArrayList<>(1);
                             fallback.add(pos);
                             io.github.limuqy.mc.hassium.network.ClientMetadataHandler
@@ -1278,7 +1372,7 @@ public final class ShadowLightCompute {
                         io.github.limuqy.mc.hassium.metrics.NetworkStats.recordCacheDeltaSaved(
                                 io.github.limuqy.mc.hassium.metrics.NetworkStats.ESTIMATED_CHUNK_BYTES);
                         net.minecraft.world.level.chunk.LevelChunk baseline =
-                                server.injectedChunk(pos.x, pos.z);
+                                server.injectedChunk(work.dimension(), pos.x, pos.z);
                         int sectionCount = baseline != null ? baseline.getSectionsCount() : 0;
                         io.github.limuqy.mc.hassium.metrics.NetworkStats.recordCacheShard(
                                 io.github.limuqy.mc.hassium.metrics.NetworkStats.shardEquivBytes(
@@ -1289,7 +1383,7 @@ public final class ShadowLightCompute {
                                 io.github.limuqy.mc.hassium.metrics.VanillaZlibEstimator.estimate(
                                         (int) io.github.limuqy.mc.hassium.metrics.NetworkStats.ESTIMATED_CHUNK_BYTES));
                         lightTasks.add(new LightTask(key, LightSource.DELTA, null,
-                                baseline, server.overworld(), LightMetric.RECOMPUTE,
+                                baseline, server.level(work.dimension()), LightMetric.RECOMPUTE,
                                 false, traceOrigin(TraceOrigin.SERVER_PUSH)));
                     }
                 }
@@ -1314,8 +1408,10 @@ public final class ShadowLightCompute {
                         pendingLightUpdates.remove(key, work);
                         continue;
                     }
-                    ChunkPos pos = new ChunkPos(key);
-                    boolean invalidated = server.invalidateLightSections(pos,
+                    // LightDelta 无维度字段：键以客户端当前维度登记（submitLightDelta）。
+                    String dimension = DimensionKey.dimensionOf(key);
+                    ChunkPos pos = new ChunkPos(DimensionKey.chunkXOf(key), DimensionKey.chunkZOf(key));
+                    boolean invalidated = server.invalidateLightSections(dimension, pos,
                             work.skyMask(), work.blockMask(), work.emptySkyMask(), work.emptyBlockMask());
                     if (!invalidated) {
                         // 柱未注入：不能重算。不请求全量：方块数据未变，hash 命中时本柱
@@ -1323,13 +1419,13 @@ public final class ShadowLightCompute {
                         pendingLightUpdates.remove(key, work);
                         continue;
                     }
-                    LevelChunk lightChunk = server.injectedChunk(pos.x, pos.z);
+                    LevelChunk lightChunk = server.injectedChunk(dimension, pos.x, pos.z);
                     if (lightChunk != null) {
                         server.syncLightCorrect(lightChunk, false);
                     }
                     lightTasks.add(new LightTask(key, LightSource.LIGHT_ONLY, work,
-                            server.injectedChunk(pos.x, pos.z), server.overworld(), LightMetric.RECOMPUTE,
-                            false, null));
+                            server.injectedChunk(dimension, pos.x, pos.z), server.level(dimension),
+                            LightMetric.RECOMPUTE, false, null));
                 }
                 // 管道化：提交后不等待，立即回循环取下一批（批间零空转）；在途上限由轮顶检查约束。
                 submitLightBatch(server, lightTasks);
@@ -1377,9 +1473,8 @@ public final class ShadowLightCompute {
         if (server == null || tasks == null || tasks.isEmpty()) {
             return;
         }
-        net.minecraft.server.level.ThreadedLevelLightEngine engine =
-                (net.minecraft.server.level.ThreadedLevelLightEngine) server.overworld()
-                        .getChunkSource().getLightEngine();
+        // 光照引擎 per-dimension：各任务可能属不同维度，逐任务在 startLightBarrier 内
+        // 按目标 chunk 所属 level（LightTask.level）解析引擎；此处不再取全局 overworld engine。
         long deadlineMs = System.currentTimeMillis() + CONVERGENCE_WAIT_TIMEOUT_MS;
         synchronized (LIGHT_ENGINE_MUTEX) { // 锁只覆盖「提交循环」，等待/回调/回传全在锁外
             for (LightTask t : tasks) {
@@ -1408,11 +1503,12 @@ public final class ShadowLightCompute {
                     DebugLogger.warn(DebugLogger.LogType.ASYNC,
                             "[SHADOW_CHUNK] Chunk missing after {} ({}, {})",
                             t.source == LightSource.DELTA ? "apply" : "inject",
-                            new ChunkPos(t.key).x, new ChunkPos(t.key).z);
+                            new ChunkPos(DimensionKey.chunkXOf(t.key), DimensionKey.chunkZOf(t.key)).x,
+                            new ChunkPos(DimensionKey.chunkXOf(t.key), DimensionKey.chunkZOf(t.key)).z);
                     continue;
                 }
                 try {
-                    startLightBarrier(server, engine, t, deadlineMs);
+                    startLightBarrier(server, t, deadlineMs);
                     // 光照统计在提交成功时记（而非回传完成时）：冒烟快照窗口内光屏障可能还在
                     // 在途，等 finishLight 再记会让「分片增量已发生但光照重算仍显示 0」。
                     if (t.metric == LightMetric.RECOMPUTE && t.source != LightSource.PENDING) {
@@ -1438,15 +1534,22 @@ public final class ShadowLightCompute {
     /**
      * 两阶段光屏障起始（vanilla {@code ChunkStatus.INITIALIZE_LIGHT} → {@code LIGHT}）：
      * {@code chunk.initializeLightSources()} + {@code engine.initializeLight(chunk, isLighted)}
-     * （range=0），8 邻建层后再 {@code engine.lightChunk(chunk, isLighted)}。
+     * （range=0），8 邻建层后再 {@code lightChunk}。
      * {@code isLighted} 仅磁盘/引擎已有光为 true（跳过 propagate），与原版
      * {@code ChunkStatus.isLighted} 同义。
+     * <p>
+     * 引擎 per-dimension：取目标 chunk 所属 level（{@code t.level}）的光照引擎，
+     * 不再恒用 overworld——nether/end 柱的 initializeLight/lightChunk 必须路由到
+     * 对应 ServerLevel 的引擎（REQ 明细6）。
      * <p>
      * 调用方必须已持有 {@link #LIGHT_ENGINE_MUTEX}（提交循环内）；本方法只投递任务。
      */
     private static void startLightBarrier(ShadowSeedServer server,
-                                          net.minecraft.server.level.ThreadedLevelLightEngine engine,
                                           LightTask t, long deadlineMs) {
+        net.minecraft.server.level.ThreadedLevelLightEngine engine =
+                (net.minecraft.server.level.ThreadedLevelLightEngine)
+                        (t.level != null ? t.level : server.overworld())
+                                .getChunkSource().getLightEngine();
         waitingForLight.remove(t.key);
         initializedLight.remove(t.key);
         t.chunk.initializeLightSources();
@@ -1477,13 +1580,14 @@ public final class ShadowLightCompute {
                     completeLight(inf, false); // 新数据已接管：旧任务让位（finishLight 的 REPLACE 守卫会短路）
                     return;
                 }
-                ChunkPos pos = new ChunkPos(inf.key);
+                ChunkPos pos = new ChunkPos(DimensionKey.chunkXOf(inf.key),
+                        DimensionKey.chunkZOf(inf.key));
                 if (canStartVanillaLightStageNow(server, pos, inf)) {
                     submitLightChunkLocked(server, inf);
                 } else {
                     parkForVanillaLightNeighbors(inf);
                 }
-                flushWaitingAroundLocked(server, pos);
+                flushWaitingAroundLocked(server, DimensionKey.dimensionOf(inf.key), pos);
             }
         } catch (Throwable ex) {
             completeLight(inf, false);
@@ -1511,7 +1615,7 @@ public final class ShadowLightCompute {
             return;
         }
         waitingForLight.put(inf.key, inf);
-        ChunkPos pos = new ChunkPos(inf.key);
+        ChunkPos pos = new ChunkPos(DimensionKey.chunkXOf(inf.key), DimensionKey.chunkZOf(inf.key));
         DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
                 "[SHADOW_LIGHT] Wait neighbors before lightChunk ({}, {})", pos.x, pos.z);
     }
@@ -1524,9 +1628,11 @@ public final class ShadowLightCompute {
             completeLight(inf, false);
             return;
         }
+        // 引擎 per-dimension：lightChunk 路由到目标 chunk 所属 level 的引擎（同 startLightBarrier）。
         net.minecraft.server.level.ThreadedLevelLightEngine engine =
-                (net.minecraft.server.level.ThreadedLevelLightEngine) server.overworld()
-                        .getChunkSource().getLightEngine();
+                (net.minecraft.server.level.ThreadedLevelLightEngine)
+                        (inf.level != null ? inf.level : server.overworld())
+                                .getChunkSource().getLightEngine();
         boolean hasExistingLight = lightChunkHasExistingLight(inf.metric == LightMetric.REUSE_CACHE);
         java.util.concurrent.CompletableFuture<net.minecraft.world.level.chunk.ChunkAccess> lightFuture =
                 engine.lightChunk(inf.chunk, hasExistingLight);
@@ -1548,15 +1654,16 @@ public final class ShadowLightCompute {
         }
     }
 
-    private static void flushWaitingAroundLocked(ShadowSeedServer server, ChunkPos pos) {
-        if (server == null || pos == null) {
+    private static void flushWaitingAroundLocked(ShadowSeedServer server, String dimension, ChunkPos pos) {
+        if (server == null || pos == null || dimension == null) {
             return;
         }
         for (int[] d : LIGHT_STAGE_OFFSETS) {
             if (inflightLight.size() >= PIPELINE_MAX_INFLIGHT) {
                 return;
             }
-            long nKey = ChunkPos.asLong(pos.x + d[0], pos.z + d[1]);
+            // 邻柱键与等待表同维：waitingForLight 键已携带维度，裸 pos 查找恒 miss
+            long nKey = DimensionKey.key(dimension, pos.x + d[0], pos.z + d[1]);
             InflightLight waiter = waitingForLight.get(nKey);
             if (waiter != null) {
                 promoteWaitingToLightChunkLocked(server, waiter);
@@ -1568,7 +1675,7 @@ public final class ShadowLightCompute {
         if (inf == null || server == null) {
             return;
         }
-        ChunkPos pos = new ChunkPos(inf.key);
+        ChunkPos pos = new ChunkPos(DimensionKey.chunkXOf(inf.key), DimensionKey.chunkZOf(inf.key));
         if (!canStartVanillaLightStageNow(server, pos, inf)) {
             return;
         }
@@ -1594,37 +1701,40 @@ public final class ShadowLightCompute {
                 : Math.max(0L, System.currentTimeMillis() - inf.packWaitStartMs);
         boolean timedOut = waitedMs >= NEIGHBOR_PACK_WAIT_MS
                 || System.currentTimeMillis() >= inf.deadlineMs;
+        String dimension = DimensionKey.dimensionOf(inf.key);
         int expected = 0;
         int ready = 0;
         for (int[] d : LIGHT_NEIGHBOR_OFFSETS) {
             int nx = pos.x + d[0];
             int nz = pos.z + d[1];
-            if (!isVanillaLightNeighborExpected(server, nx, nz)) {
+            if (!isVanillaLightNeighborExpected(server, dimension, nx, nz)) {
                 continue;
             }
             expected++;
-            if (isVanillaLightNeighborReadyNow(server, nx, nz)) {
+            if (isVanillaLightNeighborReadyNow(server, dimension, nx, nz)) {
                 ready++;
             }
         }
         return canStartVanillaLightStage(ready, expected, timedOut);
     }
 
-    private static boolean isVanillaLightNeighborExpected(ShadowSeedServer server, int nx, int nz) {
+    private static boolean isVanillaLightNeighborExpected(ShadowSeedServer server, String dimension,
+                                                          int nx, int nz) {
         boolean holderPresent = server != null && server.hasVisibleChunkHolder(nx, nz);
-        long nKey = ChunkPos.asLong(nx, nz);
+        long nKey = DimensionKey.key(dimension, nx, nz);
         boolean inInjectOrPipeline = initializedLight.containsKey(nKey)
                 || waitingForLight.containsKey(nKey)
                 || inflightLight.containsKey(nKey)
                 || pending.containsKey(nKey)
                 || generated.containsKey(nKey)
-                || (server != null && server.injectedChunk(nx, nz) != null);
+                || (server != null && server.injectedChunk(dimension, nx, nz) != null);
         return isVanillaLightNeighborExpected(holderPresent, inInjectOrPipeline, withinLightTicket(nx, nz));
     }
 
-    private static boolean isVanillaLightNeighborReadyNow(ShadowSeedServer server, int nx, int nz) {
+    private static boolean isVanillaLightNeighborReadyNow(ShadowSeedServer server, String dimension,
+                                                          int nx, int nz) {
         boolean holderParent = server != null && server.hasInitializeLightParent(nx, nz);
-        boolean selfInit = initializedLight.containsKey(ChunkPos.asLong(nx, nz));
+        boolean selfInit = initializedLight.containsKey(DimensionKey.key(dimension, nx, nz));
         return isVanillaLightNeighborReady(holderParent, selfInit);
     }
 
@@ -1740,7 +1850,7 @@ public final class ShadowLightCompute {
             deferredLightPush.remove(task.key, task);
             return;
         }
-        ChunkPos pos = new ChunkPos(task.key);
+        ChunkPos pos = new ChunkPos(DimensionKey.chunkXOf(task.key), DimensionKey.chunkZOf(task.key));
         ShadowSeedServer server = ShadowServerRegistry.getInstance().get();
         boolean pushConverged = converged;
         if (task.metric == LightMetric.RECOMPUTE) {
@@ -1826,7 +1936,7 @@ public final class ShadowLightCompute {
                 mask.blockSections.clear();
             }
         }
-        ChunkPos pos = new ChunkPos(key);
+        ChunkPos pos = new ChunkPos(DimensionKey.chunkXOf(key), DimensionKey.chunkZOf(key));
         dropQueuedLights(pos);
     }
 
@@ -1853,7 +1963,8 @@ public final class ShadowLightCompute {
                             completeLight(inf, false);
                             DebugLogger.warn(DebugLogger.LogType.ASYNC,
                                     "[SHADOW_LIGHT] Light timeout ({}ms) ({}, {}), pushing with partial light",
-                                    CONVERGENCE_WAIT_TIMEOUT_MS, new ChunkPos(inf.key).x, new ChunkPos(inf.key).z);
+                                    CONVERGENCE_WAIT_TIMEOUT_MS, DimensionKey.chunkXOf(inf.key),
+                                    DimensionKey.chunkZOf(inf.key));
                         }
                         continue;
                     }
@@ -1871,7 +1982,8 @@ public final class ShadowLightCompute {
             if (now >= inf.deadlineMs && completeLight(inf, false)) {
                 DebugLogger.warn(DebugLogger.LogType.ASYNC,
                         "[SHADOW_LIGHT] Light timeout ({}ms) ({}, {}), pushing with partial light",
-                        CONVERGENCE_WAIT_TIMEOUT_MS, new ChunkPos(inf.key).x, new ChunkPos(inf.key).z);
+                        CONVERGENCE_WAIT_TIMEOUT_MS, DimensionKey.chunkXOf(inf.key),
+                        DimensionKey.chunkZOf(inf.key));
             }
         }
     }
@@ -1906,8 +2018,9 @@ public final class ShadowLightCompute {
         io.github.limuqy.mc.hassium.utils.ChunkFlowTiming.recordReady(key);
         dropQueuedLights(pos);
         ready.offer(new ReadyItem(packet, null, renderOnly, traceOrigin, null, null, deliveryId),
-                io.github.limuqy.mc.hassium.concurrent.MainThreadDispatcher.chunkKey(
-                        pos, io.github.limuqy.mc.hassium.concurrent.MainThreadDispatcher.OP_CHUNK_APPLY),
+                new KeyedPriorityQueue.Key(ChunkPos.asLong(pos.x, pos.z),
+                        io.github.limuqy.mc.hassium.concurrent.MainThreadDispatcher.OP_CHUNK_APPLY,
+                        DimensionKey.dimensionOf(key)),
                 fifoApplyPriority(),
                 KeyedPriorityQueue.OfferPolicy.REPLACE);
         if (!converged) {
@@ -1941,7 +2054,7 @@ public final class ShadowLightCompute {
         if (!converged && skyMask != null) {
             ShadowSeedServer server = ShadowServerRegistry.getInstance().get();
             omitUnlitEavesFromSkyMask(skyMask, pos, level.getLightEngine(),
-                    level.getLightEngine().getMinLightSection(), server);
+                    level.getLightEngine().getMinLightSection(), server, level);
         }
         ClientboundLightUpdatePacket packet =
                 new ClientboundLightUpdatePacket(pos, level.getLightEngine(), skyMask, blockMask);
@@ -1956,8 +2069,9 @@ public final class ShadowLightCompute {
                 ? System.currentTimeMillis()
                 : null;
         ready.offer(new ReadyItem(null, packet, false, null, lightQueuedAtMs, null),
-                io.github.limuqy.mc.hassium.concurrent.MainThreadDispatcher.chunkKey(
-                        pos, io.github.limuqy.mc.hassium.concurrent.MainThreadDispatcher.OP_LIGHT_UPDATE),
+                new KeyedPriorityQueue.Key(ChunkPos.asLong(pos.x, pos.z),
+                        io.github.limuqy.mc.hassium.concurrent.MainThreadDispatcher.OP_LIGHT_UPDATE,
+                        currentDimension()),
                 fifoApplyPriority(),
                 KeyedPriorityQueue.OfferPolicy.REPLACE);
     }
@@ -2056,7 +2170,8 @@ public final class ShadowLightCompute {
                     chunksAppliedThisFrame++;
                     releaseEntry = applyReadyChunk(mc, connection, entry, item);
                 } else if (isLight) {
-                    if (!shadowApplyEpochs.containsKey(entry.key().posLong())) {
+                    if (!shadowApplyEpochs.containsKey(DimensionKey.key(
+                            entry.key().dimension(), entry.key().posLong()))) {
                         // 尚无影子区块包：丢掉这条旧光，等带光首包。
                         continue;
                     }
@@ -2070,7 +2185,8 @@ public final class ShadowLightCompute {
                 }
                 DebugLogger.warn(DebugLogger.LogType.ASYNC,
                         "[SHADOW_CHUNK] Official channel apply failed ({}, {})",
-                        new ChunkPos(entry.key().posLong()).x, new ChunkPos(entry.key().posLong()).z);
+                        entry.key().posLong() & 0xFFFFFFFFL,
+                        (entry.key().posLong() >> 32) & 0xFFFFFFFFL);
             } finally {
                 if (releaseEntry) {
                     ready.release(entry);
@@ -2109,7 +2225,9 @@ public final class ShadowLightCompute {
         int chunkX = item.chunkPacket.getX();
         int chunkZ = item.chunkPacket.getZ();
         ChunkPos chunkPos = new ChunkPos(chunkX, chunkZ);
-        long chunkKey = entry.key().posLong();
+        // ready 队列键 posLong 保持裸 ChunkPos.asLong（MainThreadDispatcher 距离优先级解包），
+        // 维度在 Key.dimension；epoch/trace 表键为复合键 → 此处组复合键
+        long chunkKey = DimensionKey.key(entry.key().dimension(), chunkX, chunkZ);
         boolean ovdRenderOnly = item.renderOnly();
         io.github.limuqy.mc.hassium.cache.client.ViewDistanceExtensionService viewDistance =
                 io.github.limuqy.mc.hassium.cache.client.ViewDistanceExtensionService.getInstance();
@@ -2185,7 +2303,8 @@ public final class ShadowLightCompute {
         if (mc == null || mc.level == null) {
             return;
         }
-        FullApplyTrace fullTrace = fullApplyTraces.get(entry.key().posLong());
+        FullApplyTrace fullTrace = fullApplyTraces.get(DimensionKey.key(
+                entry.key().dimension(), item.lightPacket.getX(), item.lightPacket.getZ()));
         long appliedAtMs = System.currentTimeMillis();
         long fullApplyAgeMs = fullTrace == null ? -1L : appliedAtMs - fullTrace.appliedAtMs();
         long lightQueueDelayMs = item.lightQueuedAtMs() == null
@@ -2230,7 +2349,7 @@ public final class ShadowLightCompute {
                 deferredLightPush.remove(e.getKey(), task);
                 continue;
             }
-            ChunkPos pos = new ChunkPos(task.key);
+            ChunkPos pos = new ChunkPos(DimensionKey.chunkXOf(task.key), DimensionKey.chunkZOf(task.key));
             boolean complete = server.isChunkLightComplete(pos, task.chunk);
             if (!complete && !engineIdle) {
                 continue;
@@ -2260,7 +2379,7 @@ public final class ShadowLightCompute {
     }
 
     private static void pushDeferredNow(ShadowSeedServer server, LightTask task, boolean complete) {
-        ChunkPos pos = new ChunkPos(task.key);
+        ChunkPos pos = new ChunkPos(DimensionKey.chunkXOf(task.key), DimensionKey.chunkZOf(task.key));
         try {
             if (task.source == LightSource.LIGHT_ONLY) {
                 LightWork work = task.token instanceof LightWork w ? w : null;
@@ -2318,7 +2437,7 @@ public final class ShadowLightCompute {
             // 客户端柱被卸载（含原版服务端卸载路径）→ 撤销「影子已落地」标记：
             // 光桥 gate 依赖该标记，残留标记会让重连/重载后的原版直发柱再次收到增量光。
             shadowApplyEpochs.keySet().removeIf(key -> {
-                ChunkPos pos = new ChunkPos(key);
+                ChunkPos pos = new ChunkPos(DimensionKey.chunkXOf(key), DimensionKey.chunkZOf(key));
                 return !hasClientChunk(mc, pos.x, pos.z);
             });
         }
@@ -2344,7 +2463,7 @@ public final class ShadowLightCompute {
         // 1) 出界登记 / 回界取消（遍历注入表；弱一致迭代安全）
         for (Map.Entry<Long, LevelChunk> e : server.injectedChunkEntries()) {
             long key = e.getKey();
-            ChunkPos pos = new ChunkPos(key);
+            ChunkPos pos = new ChunkPos(DimensionKey.chunkXOf(key), DimensionKey.chunkZOf(key));
             if (isWithinBoundary(pos, pcx, pcz, boundary)) {
                 unloadPending.remove(key); // 回界内：取消计时（区块驻留）
             } else {
@@ -2360,19 +2479,19 @@ public final class ShadowLightCompute {
             if (now < e.getValue()) {
                 continue; // 未到期
             }
-            ChunkPos pos = new ChunkPos(key);
+            ChunkPos pos = new ChunkPos(DimensionKey.chunkXOf(key), DimensionKey.chunkZOf(key));
             if (isWithinBoundary(pos, pcx, pcz, boundary)) {
                 it.remove(); // 步骤 1 与 2 之间的移动竞态：回界 → 取消
                 continue;
             }
-            LevelChunk chunk = server.injectedChunk(pos.x, pos.z);
+            LevelChunk chunk = server.injectedChunk(DimensionKey.dimensionOf(key), pos.x, pos.z);
             if (chunk == null) {
                 it.remove(); // 已不在注入表（并发清理/替换）
                 continue;
             }
             // 卸载前释放回传队列中该柱条目（待回传不卸载；KeyedPriorityQueue.removeIf）
             releaseReadyEntries(key);
-            if (!server.unloadChunk(pos, chunk)) {
+            if (!server.unloadChunk(DimensionKey.dimensionOf(key), pos, chunk)) {
                 it.remove(); // 落盘失败：放弃本柱（内存驻留，断连 saveAll 兜底）
                 continue;
             }
@@ -2441,10 +2560,8 @@ public final class ShadowLightCompute {
             lightUpdates.clear(); // 断连竞态：丢弃
             return;
         }
-        net.minecraft.server.level.ServerLevel level = server.overworld();
-        LevelLightEngine engine = level.getLightEngine();
-        int minLightSection = engine.getMinLightSection();
-        int lightSectionCount = engine.getLightSectionCount();
+        // 光照引擎 per-dimension：掩码键携带维度，逐键解析所属 level 的引擎参数
+        // （nether/end 高度剖面不同，minLightSection/lightSectionCount 不能恒取 overworld）。
         List<Long> keys = new ArrayList<>();
         int packedThisFrame = 0;
         for (Long key : lightUpdates.keySet()) {
@@ -2464,11 +2581,20 @@ public final class ShadowLightCompute {
             packedThisFrame++;
         }
         for (Long key : keys) {
-            ChunkPos pos = new ChunkPos(key);
             LightMask mask = lightUpdates.get(key);
             if (mask == null) {
                 continue;
             }
+            ChunkPos pos = new ChunkPos(DimensionKey.chunkXOf(key), DimensionKey.chunkZOf(key));
+            net.minecraft.server.level.ServerLevel level =
+                    server.level(DimensionKey.dimensionOf(key));
+            if (level == null) {
+                lightUpdates.remove(key); // 维度未装配：收集作废
+                continue;
+            }
+            LevelLightEngine engine = level.getLightEngine();
+            int minLightSection = engine.getMinLightSection();
+            int lightSectionCount = engine.getLightSectionCount();
             BitSet skyMask;
             BitSet blockMask;
             synchronized (mask) {
@@ -2521,16 +2647,19 @@ public final class ShadowLightCompute {
      * 收敛后的 {@code ClientboundLightUpdatePacket} 用引擎掩码，不再按天空源裁空层。
      */
     private static void omitUnlitEavesFromSkyMask(BitSet skyMask, ChunkPos pos, LevelLightEngine engine,
-                                                  int minLightSection, ShadowSeedServer server) {
+                                                  int minLightSection, ShadowSeedServer server,
+                                                  net.minecraft.server.level.ServerLevel level) {
         if (skyMask.isEmpty() || server == null || pos == null) {
             return;
         }
+        // per-dimension：天空剖面判断用目标 chunk 所属 level（nether 无天光直接短路）
+        net.minecraft.server.level.ServerLevel dim = level != null ? level : server.overworld();
         LevelChunk chunk = server.injectedChunk(pos.x, pos.z);
-        if (chunk == null || !server.overworld().dimensionType().hasSkyLight()) {
+        if (chunk == null || !dim.dimensionType().hasSkyLight()) {
             return;
         }
         net.minecraft.world.level.lighting.ChunkSkyLightSources sources = chunk.getSkyLightSources();
-        int minBlockY = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMinBlockY(server.overworld());
+        int minBlockY = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMinBlockY(dim);
         for (int bit = skyMask.nextSetBit(0); bit >= 0; bit = skyMask.nextSetBit(bit + 1)) {
             int sectionY = minLightSection + bit;
             DataLayer sky = engine.getLayerListener(LightLayer.SKY)
@@ -2551,12 +2680,14 @@ public final class ShadowLightCompute {
      * <p>
      * 写入前验证登记仍指向本 mask（drain 已条件移除的空 mask 不复用，重试拿新登记），
      * 与 drain 的锁内回收配合：任一收集的 sectionY 必然落入某轮 drain 的处理范围。
+     * <p>
+     * 键维度 = 客户端当前维度（mixin 入口无维度上下文；影子端只装配三主维度）。
      */
     public static void collectLightUpdate(LightLayer layer, SectionPos sectionPos) {
         if (layer == null || sectionPos == null || !isEnabled()) {
             return;
         }
-        long key = ChunkPos.asLong(sectionPos.x(), sectionPos.z());
+        long key = DimensionKey.key(currentDimension(), sectionPos.x(), sectionPos.z());
         while (true) {
             LightMask mask = lightUpdates.computeIfAbsent(key, k -> new LightMask());
             synchronized (mask) {
@@ -2573,10 +2704,9 @@ public final class ShadowLightCompute {
         if (pos == null) {
             return;
         }
-        long chunkKey = pos.toLong();
+        long chunkKey = DimensionKey.key(currentDimension(), pos.x, pos.z);
         Long removedEpoch = shadowApplyEpochs.remove(chunkKey);
         fullApplyTraces.remove(chunkKey);
-        discardLightMask(chunkKey);
         if (removedEpoch != null) {
             DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
                     "[SHADOW_LIGHT] Client unload invalidated ({}, {}) epoch={}",
@@ -2619,8 +2749,9 @@ public final class ShadowLightCompute {
      * 磁盘/内存 contentHash 与远程权威比对：表命中 TRUE 直接信；表缺失或 FALSE
      * 再从活柱现算（避免脏表把整柱判成增量）。
      */
-    private static boolean diskHashMatches(LevelChunk chunk, ChunkPos pos, long remoteHash) {
-        Boolean tableMatch = io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.matchesRemote(pos, remoteHash);
+    private static boolean diskHashMatches(String dimension, LevelChunk chunk, ChunkPos pos, long remoteHash) {
+        Boolean tableMatch =
+                io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.matchesRemote(dimension, pos, remoteHash);
         if (tableMatch == Boolean.TRUE) {
             return true;
         }
@@ -2628,7 +2759,7 @@ public final class ShadowLightCompute {
             long diskHash = io.github.limuqy.mc.hassium.cache.ChunkContentHashUtil
                     .combineSectionHashes(io.github.limuqy.mc.hassium.cache.ChunkContentHashUtil
                             .computeSectionHashes(chunk));
-            io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.put(pos, diskHash);
+            io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.put(dimension, pos, diskHash);
             if (diskHash != remoteHash) {
                 org.slf4j.LoggerFactory.getLogger("Hassium/ShadowDisk")
                         .debug("Shadow disk hash MISMATCH disk={} remote={}", diskHash, remoteHash);

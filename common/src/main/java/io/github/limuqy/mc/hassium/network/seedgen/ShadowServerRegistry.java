@@ -177,28 +177,35 @@ public final class ShadowServerRegistry {
             return;
         }
         executor.submit(() -> {
-            try {
-                io.github.limuqy.mc.hassium.cache.client.ChunkBloomFilter bloom = created.buildBloomFilter();
-                byte[] bytes = bloom.toByteArray();
-                io.github.limuqy.mc.hassium.network.ClientBloomSyncPacket packet =
-                        new io.github.limuqy.mc.hassium.network.ClientBloomSyncPacket(true, bytes);
-                io.netty.buffer.ByteBuf buf = io.netty.buffer.Unpooled.buffer();
-                boolean sent = false;
+            // per-dimension bloom：三维度各构建一帧 full bloom（服务端按维度查询）。
+            for (String dimension : new String[] {
+                    io.github.limuqy.mc.hassium.utils.DimensionKey.OVERWORLD,
+                    io.github.limuqy.mc.hassium.utils.DimensionKey.NETHER,
+                    io.github.limuqy.mc.hassium.utils.DimensionKey.END}) {
                 try {
-                    net.minecraft.network.FriendlyByteBuf fbb = new net.minecraft.network.FriendlyByteBuf(buf);
-                    packet.encode(fbb);
-                    io.github.limuqy.mc.hassium.platform.Services.NETWORK_MANAGER.sendClientBloomSync(fbb);
-                    sent = true;
-                    Constants.LOG.info("Hassium: Shadow bloom sent ({} bytes, {} chunks)",
-                            bytes.length, bloom.getInsertCount());
-                } finally {
-                    if (!sent && buf.refCnt() > 0) {
-                        buf.release();
+                    io.github.limuqy.mc.hassium.cache.client.ChunkBloomFilter bloom =
+                            created.buildBloomFilter(dimension);
+                    byte[] bytes = bloom.toByteArray();
+                    io.github.limuqy.mc.hassium.network.ClientBloomSyncPacket packet =
+                            new io.github.limuqy.mc.hassium.network.ClientBloomSyncPacket(true, bytes);
+                    io.netty.buffer.ByteBuf buf = io.netty.buffer.Unpooled.buffer();
+                    boolean sent = false;
+                    try {
+                        net.minecraft.network.FriendlyByteBuf fbb = new net.minecraft.network.FriendlyByteBuf(buf);
+                        packet.encode(fbb);
+                        io.github.limuqy.mc.hassium.platform.Services.NETWORK_MANAGER.sendClientBloomSync(fbb);
+                        sent = true;
+                        Constants.LOG.info("Hassium: Shadow bloom sent (dimension={}, {} bytes, {} chunks)",
+                                dimension, bytes.length, bloom.getInsertCount());
+                    } finally {
+                        if (!sent && buf.refCnt() > 0) {
+                            buf.release();
+                        }
                     }
+                } catch (Throwable t) {
+                    DebugLogger.warn(DebugLogger.LogType.ASYNC,
+                            "[BLOOM_SYNC] Shadow bloom send failed (dimension={})", t);
                 }
-            } catch (Throwable t) {
-                DebugLogger.warn(DebugLogger.LogType.ASYNC,
-                        "[BLOOM_SYNC] Shadow bloom send failed", t);
             }
         }, io.github.limuqy.mc.hassium.concurrent.TaskCategory.BEST_EFFORT);
     }

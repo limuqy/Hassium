@@ -20,9 +20,9 @@ import java.util.concurrent.ConcurrentHashMap;
  * <p>
  * pristine 定义：**本会话内**生成完成（status FULL）且此后从未被任何来源修改。
  * <p>
- * 语义约定（写死）：
  * <ul>
- *   <li>仅主世界维度登记（SeedGen 只支持主世界；非主世界恒不命中，静默走全量）。</li>
+ *   <li>仅三主维度（overworld/nether/end）登记（SeedGen 支持三主维度；自定义维度
+ *       恒不命中，静默走全量）。</li>
  *   <li>登记发生在区块生成完成 → 首次推送之间（{@link #markIfPristine} 由推送管线调用）；
  *       worldgen 管线内的放置发生在登记之前，不算「修改」。</li>
  *   <li>区块被修改：置为已修改墓碑（永不重登记）。玩家破坏/放置、插件 setBlock、
@@ -35,13 +35,22 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class PristineRegistry {
 
     /**
-     * 主世界维度 key（纯 Registry 引用，避免 {@code Level.<clinit>} 在无 bootstrap
+     * 三主维度 key（纯 Registry 引用，避免 {@code Level.<clinit>} 在无 bootstrap
      * 单测环境失败——PlayerDataStorage A6 实测约定）。
      */
     static final ResourceKey<Level> OVERWORLD_KEY = ResourceKey.create(
             Registries.DIMENSION, ResourceLocationCompat.create("minecraft:overworld"));
+    static final ResourceKey<Level> NETHER_KEY = ResourceKey.create(
+            Registries.DIMENSION, ResourceLocationCompat.create("minecraft:the_nether"));
+    static final ResourceKey<Level> END_KEY = ResourceKey.create(
+            Registries.DIMENSION, ResourceLocationCompat.create("minecraft:the_end"));
 
-    /** 复合键：(维度, chunkPos)。维度隔离防跨维同坐标误命中；非主世界不登记。 */
+    /** SeedGen 可接管维度判定：仅三主维度 true（与 DimensionKey 白名单同源语义）。 */
+    private static boolean isCacheable(ResourceKey<Level> dimension) {
+        return OVERWORLD_KEY.equals(dimension) || NETHER_KEY.equals(dimension) || END_KEY.equals(dimension);
+    }
+
+    /** 复合键：(维度, chunkPos)。维度隔离防跨维同坐标误命中；非三主维度不登记。 */
     private record Key(ResourceKey<Level> dimension, long chunkPos) {}
 
     /** key(dimension, chunkPos) -> 状态：TRUE=pristine；FALSE=已修改墓碑（永不重登记）。 */
@@ -65,8 +74,8 @@ public final class PristineRegistry {
      */
     public static void markIfPristine(Level level, ChunkPos pos) {
         ResourceKey<Level> dimension = level.dimension();
-        if (!dimension.equals(OVERWORLD_KEY)) {
-            return; // 非主世界：SeedGen 仅主世界，不登记（静默走全量）
+        if (!isCacheable(dimension)) {
+            return; // 自定义维度：SeedGen 不接管，不登记（静默走全量）
         }
         ChunkAccess access = level.getChunk(pos.x, pos.z, ChunkStatus.FULL, false);
         if (!(access instanceof LevelChunk chunk)) {
@@ -89,10 +98,10 @@ public final class PristineRegistry {
     }
 
     /**
-     * 该区块当前是否 pristine（非主世界恒 false：静默走全量）。
+     * 该区块当前是否 pristine（非三主维度恒 false：静默走全量）。
      */
     public static boolean isPristine(ResourceKey<Level> dimension, ChunkPos pos) {
-        if (!dimension.equals(OVERWORLD_KEY)) {
+        if (!isCacheable(dimension)) {
             return false;
         }
         // review-fix: T3-49：仅 TRUE=pristine；墓碑（FALSE）与缺失均不命中

@@ -11,9 +11,11 @@ import io.github.limuqy.mc.hassium.network.SeedRefS2CPacket;
 import io.github.limuqy.mc.hassium.network.sectiondelta.SectionDeltaPlanner;
 import io.github.limuqy.mc.hassium.metrics.NetworkStats;
 import io.github.limuqy.mc.hassium.utils.DebugLogger;
+import io.github.limuqy.mc.hassium.utils.DimensionKey;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -60,6 +62,29 @@ public final class SeedGenExecutor {
      * 挤占活体 SeedGen；盲预生成条目 contentHash=0 永不超时）。
      */
     private final SeedGenQueue pendingPregen = new SeedGenQueue();
+    /**
+     * SeedRef 维度上下文：key = ChunkPos.asLong → 接收该 SeedRef 时客户端所在维度。
+     * <p>
+     * SeedRef 协议包不携带维度（REQ 明细8 不新增协议字段）；服务端仅在玩家当前
+     * 维度推送该维 SeedRef，故接收时客户端维度即目标维度。队列条目（SeedGenQueue.Entry）
+     * 不含维度，生成线程经此表取回；断连/条目出队后清理（防泄漏）。
+     */
+    private static final ConcurrentHashMap<Long, String> DIMENSION_CONTEXT = new ConcurrentHashMap<>();
+
+    /** 当前客户端维度 id（mc.level 不可用返回 null）。 */
+    private static String currentDimension() {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc == null || mc.level == null) {
+            return null;
+        }
+        return mc.level.dimension()
+#if MC_VER < MC_1_21_11
+                .location()
+#else
+                .identifier()
+#endif
+                .toString();
+    }
 
     /** 有界工作队列最大深度：96 槽 × 实测生成 p90≈182ms/块 ≈ 17.5s 最坏在队等待。 */
     private static final int MAX_WORK_DEPTH = 96;
@@ -93,14 +118,24 @@ public final class SeedGenExecutor {
         if (!isEnabled()) {
             return false;
         }
+        // 维度门控：非三主维度（自定义维度）不接管——影子端未装配其 level，
+        // 本地 worldgen 无法复算 → 回退全量请求（与 PristineRegistry 白名单同源语义）。
+        String dimension = currentDimension();
+        if (!io.github.limuqy.mc.hassium.utils.DimensionKey.isCacheableDimension(dimension)) {
+            DebugLogger.info(DebugLogger.LogType.ASYNC,
+                    "[SEEDGEN] Dimension {} not cacheable -> fallback ({}, {})",
+                    dimension, packet.chunkX(), packet.chunkZ());
+            return false;
+        }
         // 节流接管：先入 pendingLive 缓冲不直接进工作队列——由 drain 按生成完成速率、
         // 距玩家最近优先释放（releasePendingWork），world-ready 重放不会一次性灌 1784 进队。
         ChunkPos pos = new ChunkPos(packet.chunkX(), packet.chunkZ());
         // 同 pos 盲预生成条目若还在低优先级缓冲，交给活体 SeedRef 取代（防重复 worldgen）。
         pendingPregen.remove(pos);
+        DIMENSION_CONTEXT.put(ChunkPos.asLong(pos.x, pos.z), dimension);
         pendingLive.enqueue(pos, packet.contentHash(), packet.sectionHashes(), packet.deliveryId());
-        DebugLogger.info(DebugLogger.LogType.ASYNC, "[SEEDGEN] Claimed ({}, {}) hash={} (bufferedLive={}, bufferedPregen={}, queue={})",
-                packet.chunkX(), packet.chunkZ(), Long.toHexString(packet.contentHash()),
+        DebugLogger.info(DebugLogger.LogType.ASYNC, "[SEEDGEN] Claimed ({}, {}) dim={} hash={} (bufferedLive={}, bufferedPregen={}, queue={})",
+                packet.chunkX(), packet.chunkZ(), dimension, Long.toHexString(packet.contentHash()),
                 pendingLive.size(), pendingPregen.size(), queue.size());
         pump();
         // 首个 SeedRef：影子端已就绪 → 铺开盲预生成队列（幂等，覆盖 R2 重连视距）
@@ -125,6 +160,7 @@ public final class SeedGenExecutor {
         queue.clear();
         pendingLive.clear();
         pendingPregen.clear();
+        DIMENSION_CONTEXT.clear();
         pregenScheduled.set(false);
         ExecutorService p = pool;
         pool = null;
@@ -160,6 +196,11 @@ public final class SeedGenExecutor {
         if (!isEnabled()) {
             return;
         }
+        // 维度门控（与 handleSeedRef 同源）：自定义维度不铺开盲预生成。
+        String dimension = currentDimension();
+        if (!DimensionKey.isCacheableDimension(dimension)) {
+            return;
+        }
         if (!pregenScheduled.compareAndSet(false, true)) {
             return;
         }
@@ -180,6 +221,7 @@ public final class SeedGenExecutor {
                     continue;
                 }
                 pendingPregen.enqueue(pos, 0L, new long[0]);
+                DIMENSION_CONTEXT.put(ChunkPos.asLong(pos.x, pos.z), dimension);
                 n++;
             }
         }
@@ -304,17 +346,18 @@ public final class SeedGenExecutor {
         }
     }
 
-    /** SeedRef 回退必须携带原 deliveryId；盲预生成等无 admission 的条目为 0。 */
-    private record FallbackRequest(ChunkPos pos, long deliveryId) {}
+    /** SeedRef 回退必须携带原 deliveryId 与维度；盲预生成等无 admission 的条目为 0。 */
+    private record FallbackRequest(ChunkPos pos, long deliveryId, String dimension) {}
 
     /** 登记回退：出队 + 攒批（实际发送由 {@link #flushFallback} 按批合包）。 */
     private void addFallback(List<FallbackRequest> buffer, SeedGenQueue.Entry entry) {
-        addFallback(buffer, entry.pos(), entry.deliveryId());
+        addFallback(buffer, entry.pos(), entry.deliveryId(), dimensionOf(entry.pos()));
     }
 
-    private void addFallback(List<FallbackRequest> buffer, ChunkPos pos, long deliveryId) {
+    private void addFallback(List<FallbackRequest> buffer, ChunkPos pos, long deliveryId, String dimension) {
         queue.remove(pos);
-        buffer.add(new FallbackRequest(pos, deliveryId));
+        DIMENSION_CONTEXT.remove(ChunkPos.asLong(pos.x, pos.z));
+        buffer.add(new FallbackRequest(pos, deliveryId, dimension));
     }
 
     /**
@@ -331,22 +374,21 @@ public final class SeedGenExecutor {
             buffer.clear();
             return;
         }
-        String dimension = mc.level.dimension()
-#if MC_VER < MC_1_21_11
-                .location()
-#else
-                .identifier()
-#endif
-                .toString();
+        // 回退请求按条目自身维度路由（SeedRef 接收时捕获），不再取当前维度——
+        // 玩家跨维瞬间回退批次仍发往原维度，服务端按 task.dimension 落对 level。
         List<ChunkPos> toRequest = new ArrayList<>(buffer.size());
+        String batchDimension = null;
         for (FallbackRequest item : buffer) {
+            if (batchDimension == null) {
+                batchDimension = item.dimension();
+            }
             if (item.deliveryId() > 0L) {
                 ShadowLightCompute.tryRequestMiss(item.pos());
                 DebugLogger.warn(DebugLogger.LogType.ASYNC,
-                        "[SEEDGEN] Fallback ({}, {}) deliveryId={}",
-                        item.pos().x, item.pos().z, item.deliveryId());
+                        "[SEEDGEN] Fallback ({}, {}) dim={} deliveryId={}",
+                        item.pos().x, item.pos().z, item.dimension(), item.deliveryId());
                 ClientMetadataHandler.requestFullChunksPublic(
-                        dimension, List.of(item.pos()), false, item.deliveryId());
+                        item.dimension(), List.of(item.pos()), false, item.deliveryId());
             } else if (ShadowLightCompute.tryRequestMiss(item.pos())) {
                 toRequest.add(item.pos());
             }
@@ -359,26 +401,37 @@ public final class SeedGenExecutor {
             int end = Math.min(i + FALLBACK_BATCH_MAX, toRequest.size());
             List<ChunkPos> batch = new ArrayList<>(toRequest.subList(i, end));
             DebugLogger.warn(DebugLogger.LogType.ASYNC,
-                    "[SEEDGEN] Fallback batch: {} chunks (new-path, deduped)", batch.size());
-            ClientMetadataHandler.requestFullChunksPublic(dimension, batch, false);
+                    "[SEEDGEN] Fallback batch: {} chunks dim={} (new-path, deduped)",
+                    batch.size(), batchDimension);
+            ClientMetadataHandler.requestFullChunksPublic(batchDimension, batch, false);
         }
+    }
+
+    /** 条目维度（SeedRef 接收时捕获；缺失兜底当前维度——盲预生成断连重放等边缘）。 */
+    private static String dimensionOf(ChunkPos pos) {
+        String dim = DIMENSION_CONTEXT.get(ChunkPos.asLong(pos.x, pos.z));
+        return dim != null ? dim : currentDimension();
     }
 
     private void generateOne(SeedGenQueue.Entry entry, List<FallbackRequest> fallbackBuffer) {
         ChunkPos pos = entry.pos();
+        // 条目维度路由：SeedRef 接收时捕获的维度（服务端仅推玩家所在维度的 SeedRef，
+        // 该维度即生成目标）。影子端按此取对应 ServerLevel 做 worldgen 与注入。
+        String dimension = dimensionOf(pos);
         try {
             ShadowSeedServer server = shadowServer();
-            if (server == null) {
+            if (server == null || server.level(dimension) == null) {
                 addFallback(fallbackBuffer, entry);
                 return;
             }
             long t0 = System.nanoTime();
-            LevelChunk chunk = server.generateChunk(pos);
+            LevelChunk chunk = server.generateChunk(dimension, pos);
             if (chunk == null) {
                 if (entry.contentHash() == 0L) {
                     // 盲预生成（无服务端对应推送）：超时/失败静默跳过，不回退全量
                     DebugLogger.warn(DebugLogger.LogType.ASYNC,
                             "[SEEDGEN] Blind pregen timeout/failed ({}, {})", pos.x, pos.z);
+                    DIMENSION_CONTEXT.remove(ChunkPos.asLong(pos.x, pos.z));
                     return;
                 }
                 DebugLogger.warn(DebugLogger.LogType.ASYNC,
@@ -394,8 +447,8 @@ public final class SeedGenExecutor {
                 // 现场）。此前误走 submitGenerated → generated → pushReady → 官方通道，
                 // 且产物不入注入表（既不落盘也服务不了 R2，双重失效）。
                 NetworkStats.recordLocallyGeneratedChunk(NetworkStats.ESTIMATED_CHUNK_BYTES);
-                server.injectLoadedChunk(pos, chunk, true);
-                io.github.limuqy.mc.hassium.network.seedgen.ShadowCacheEviction.recordAccess(pos);
+                server.injectLoadedChunk(dimension, pos, chunk, true);
+                ShadowCacheEviction.recordAccess(dimension, pos);
                 // 光收敛性无保证（生成时邻域仅 BIOMES 空壳，边界光欠）→ isLightCorrect=false：
                 // 落盘省略 isLightOn，R2 读盘走 lightChunk(false)；内存命中经屏障重算。
                 chunk.setLightCorrect(false);
@@ -404,11 +457,12 @@ public final class SeedGenExecutor {
                 try {
                     long pregenHash = ChunkContentHashUtil.combineSectionHashes(
                             ChunkContentHashUtil.computeSectionHashes(chunk));
-                    io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.put(pos, pregenHash);
+                    io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.put(dimension, pos, pregenHash);
                 } catch (Throwable hashError) {
                     DebugLogger.debug(DebugLogger.LogType.ASYNC,
                             "[SEEDGEN] Blind pregen hash compute failed ({}, {})", pos.x, pos.z);
                 }
+                DIMENSION_CONTEXT.remove(ChunkPos.asLong(pos.x, pos.z));
                 return;
             }
             // 生成后 chunkHash 校验：与服务端 SeedRef 下发 hash 比对（同 ChunkContentHashUtil
@@ -429,37 +483,27 @@ public final class SeedGenExecutor {
                         pos.x, pos.z, Long.toHexString(localHash), Long.toHexString(entry.contentHash()));
                 // P2 诊断埋点（T7）：mismatch 数据 dump——逐 section hash 对比 + 首个差异
                 // section 块状态摘要 + 影子端 seed/LevelStem 身份摘要，供下轮定案 P2 机制。
-                dumpMismatchDiagnostics(pos, entry, chunk, localSectionHashes, localHash, server);
+                dumpMismatchDiagnostics(pos, entry, chunk, localSectionHashes, localHash, server, dimension);
                 // P2 缓解（T7）：不匹配回退改走 new 请求路径（hash-miss 正轨，注入数据路径
                 // hash 忠实已被 R2 磁盘命中实证）——预判全量分支不再注入本地块作 delta 基线，
                 // 也不再 stale=true 请求。保留 delta 预判（>=75% 变更服务端必跳过 delta →
                 // 直接 full）；<75% 仍可先试 delta（本地块作基线），delta 链失败兜底
                 // （发送失败/超时/skipped/apply 失败）已统一改走 new 路径。
                 queue.remove(pos);
-                Minecraft mc = Minecraft.getInstance();
-                if (mc.player != null && mc.level != null) {
-                    String dimension = mc.level.dimension()
-#if MC_VER < MC_1_21_11
-                            .location()
-#else
-                            .identifier()
-#endif
-                            .toString();
-                    if (wouldServerSkipDelta(entry, localSectionHashes)) {
-                        DebugLogger.warn(DebugLogger.LogType.ASYNC,
-                                "[SEEDGEN] Delta preempted ({}, {}): >= {}% non-empty sections differ -> direct full request",
-                                pos.x, pos.z, SectionDeltaPlanner.FALLBACK_THRESHOLD_PCT);
-                        ShadowLightCompute.tryRequestMiss(pos);
-                        ClientMetadataHandler.requestFullChunksPublic(
-                                dimension, List.of(pos), false, entry.deliveryId());
-                    } else {
-                        server.injectLoadedChunk(pos, chunk, true);
-                        ShadowLightCompute.requestSectionDeltas(dimension, List.of(pos));
-                    }
+                if (wouldServerSkipDelta(entry, localSectionHashes)) {
+                    DebugLogger.warn(DebugLogger.LogType.ASYNC,
+                            "[SEEDGEN] Delta preempted ({}, {}): >= {}% non-empty sections differ -> direct full request",
+                            pos.x, pos.z, SectionDeltaPlanner.FALLBACK_THRESHOLD_PCT);
+                    ShadowLightCompute.tryRequestMiss(pos);
+                    ClientMetadataHandler.requestFullChunksPublic(
+                            dimension, List.of(pos), false, entry.deliveryId());
+                } else {
+                    server.injectLoadedChunk(dimension, pos, chunk, true);
+                    ShadowLightCompute.requestSectionDeltas(dimension, List.of(pos));
                 }
                 return;
             }
-            ServerLevel level = server.overworld();
+            ServerLevel level = server.level(dimension);
             long ms = (System.nanoTime() - t0) / 1_000_000L;
             DebugLogger.info(DebugLogger.LogType.ASYNC, "[SEEDGEN] Generated ({}, {}) in {}ms",
                     pos.x, pos.z, ms);
@@ -473,17 +517,8 @@ public final class SeedGenExecutor {
                 return;
             }
             queue.remove(pos);
-            Minecraft mc = Minecraft.getInstance();
-            if (mc.level != null) {
-                String dimension = mc.level.dimension()
-#if MC_VER < MC_1_21_11
-                        .location()
-#else
-                        .identifier()
-#endif
-                        .toString();
-                ClientMetadataHandler.scheduleBeRefresh(dimension, pos);
-            }
+            DIMENSION_CONTEXT.remove(ChunkPos.asLong(pos.x, pos.z));
+            ClientMetadataHandler.scheduleBeRefresh(dimension, pos);
         } catch (Exception e) {
             Constants.LOG.error("Hassium: SeedGen generation failed for {}", pos, e);
             addFallback(fallbackBuffer, entry);
@@ -521,7 +556,7 @@ public final class SeedGenExecutor {
      */
     private static void dumpMismatchDiagnostics(ChunkPos pos, SeedGenQueue.Entry entry,
                                                 LevelChunk chunk, Map<Integer, Long> localSectionHashes,
-                                                long localHash, ShadowSeedServer server) {
+                                                long localHash, ShadowSeedServer server, String dimension) {
         if (!DebugLogger.isEnabled(DebugLogger.LogType.ASYNC)) {
             return;
         }
@@ -532,7 +567,7 @@ public final class SeedGenExecutor {
             StringBuilder sb = new StringBuilder(256);
             sb.append("[SEEDGEN][DIAG] mismatch (").append(pos.x).append(", ").append(pos.z).append(") ");
             // 影子端 worldgen 身份摘要：level seed vs 服务端下发 seed（seed 装配差异直接现形）
-            ServerLevel level = server.overworld();
+            ServerLevel level = server.level(dimension);
             sb.append("shadowSeed=").append(level.getSeed())
                     .append("(serverSeed=")
                     .append(ClientChunkPipeline.getInstance().getServerSeed())
@@ -629,5 +664,20 @@ public final class SeedGenExecutor {
     /** 队列内待生成条目数 = 有界工作队列 + 未释放缓冲（诊断/测试）。 */
     public int pendingCount() {
         return queue.size() + pendingLive.size() + pendingPregen.size();
+    }
+
+    /** 维度上下文登记（package-private 测试钩子：模拟 handleSeedRef 捕获的维度）。 */
+    static void putDimensionForTest(ChunkPos pos, String dimension) {
+        DIMENSION_CONTEXT.put(ChunkPos.asLong(pos.x, pos.z), dimension);
+    }
+
+    /** 条目维度解析（package-private 测试钩子：暴露路由判定纯逻辑）。 */
+    static String dimensionOfForTest(ChunkPos pos) {
+        return dimensionOf(pos);
+    }
+
+    /** 清空维度上下文（测试隔离用；与 onDisconnect 同源）。 */
+    static void clearDimensionsForTest() {
+        DIMENSION_CONTEXT.clear();
     }
 }

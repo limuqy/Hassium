@@ -1,5 +1,6 @@
 package io.github.limuqy.mc.hassium.network.seedgen;
 
+import io.github.limuqy.mc.hassium.utils.DimensionKey;
 import io.github.limuqy.mc.hassium.cache.client.ViewDistanceExtensionService;
 import io.github.limuqy.mc.hassium.concurrent.HassiumTaskExecutor;
 import io.github.limuqy.mc.hassium.concurrent.TaskCategory;
@@ -28,7 +29,29 @@ import net.minecraft.world.level.chunk.LevelChunk;
  */
 public final class OvdLocalGenerator {
 
-    private static final ConcurrentHashMap<Long, ChunkPos> queue = new ConcurrentHashMap<>();
+    private static final ConcurrentHashMap<Long, QueuedChunk> queue = new ConcurrentHashMap<>();
+
+    /** 队列条目：入队时捕获的维度 + 目标柱（OVD 生成必须路由到捕获维度的影子 stem）。 */
+    private record QueuedChunk(String dimension, ChunkPos pos) {}
+
+    /** 客户端当前维度 id（mc.level 不可用回退 OVERWORLD）。 */
+    private static String currentDimension() {
+        try {
+            Minecraft mc = Minecraft.getInstance();
+            if (mc != null && mc.level != null) {
+                return mc.level.dimension()
+#if MC_VER < MC_1_21_11
+                        .location()
+#else
+                        .identifier()
+#endif
+                        .toString();
+            }
+        } catch (Throwable ignored) {
+        }
+        return DimensionKey.OVERWORLD;
+    }
+
     /**
      * 将 OVD 数据源（注入/磁盘/生成）提交到影子光照管线，待算光后经 drainReady 以
      * renderOnly 落地。相比直连 buildPacket，能获得 LevelLightEngine 收敛光，避免
@@ -85,8 +108,11 @@ public final class OvdLocalGenerator {
                     "[OVD_GEN] Ignoring stale request ({}, {})", pos.x, pos.z);
             return;
         }
-        long key = chunkPosKey(pos);
-        if (queue.putIfAbsent(key, pos) != null) {
+        // 队列键复合（维度+坐标）：OVD 环带属玩家当前维度，入队时捕获，
+        // 防止跨维切换后旧柱被误当作新维度环带生成。
+        String dimension = currentDimension();
+        long key = DimensionKey.key(dimension, pos.x, pos.z);
+        if (queue.putIfAbsent(key, new QueuedChunk(dimension, pos)) != null) {
             return;
         }
         pump();
@@ -114,11 +140,11 @@ public final class OvdLocalGenerator {
         try {
             while (!Thread.currentThread().isInterrupted() && !queue.isEmpty()) {
                 Long key = queue.keys().nextElement(); // 无序取一（距离无关：OVD 环带已按需请求）
-                ChunkPos pos = queue.remove(key);
-                if (pos == null) {
+                QueuedChunk item = queue.remove(key);
+                if (item == null) {
                     continue;
                 }
-                generateAndApply(pos);
+                generateAndApply(item.dimension(), item.pos());
             }
         } finally {
             drainRunning.set(false);
@@ -128,7 +154,7 @@ public final class OvdLocalGenerator {
         }
     }
 
-    private static void generateAndApply(ChunkPos pos) {
+    private static void generateAndApply(String dimension, ChunkPos pos) {
         try {
             // 出队后先检查：玩家可能已经移动，pos 不再属于当前 OVD 环带。
             // 在后台生成前就丢弃，避免为陈旧区块浪费 worldgen/算光/落盘。
@@ -143,19 +169,25 @@ public final class OvdLocalGenerator {
                 queue.clear(); // 影子端不可用（无种子/失败）：本批放弃，miss 重试兜底
                 return;
             }
-            ServerLevel level = server.overworld();
+            // per-dimension：路由到捕获维度的 stem；未装配（如自定义维度）则放弃
+            ServerLevel level = server.level(dimension);
+            if (level == null) {
+                DebugLogger.debug(DebugLogger.LogType.ASYNC,
+                        "[OVD_GEN] Dimension {} not assembled, dropping ({}, {})", dimension, pos.x, pos.z);
+                return;
+            }
             // 优先使用本会话已注入的权威数据（服务端 packet 填充，内容与服务器一致）。
             // 只有从未进入过服务器视距、内存表为空且允许本地生成时才走 worldgen 兜底；
             // 本地生成关闭时只读磁盘缓存，避免用生成结果覆盖真实缓存。
-            LevelChunk chunk = server.injectedChunk(pos.x, pos.z);
+            LevelChunk chunk = server.injectedChunk(dimension, pos.x, pos.z);
             String dataSource = chunk != null ? "injected" : null;
             if (chunk == null && isEnabled()) {
-                chunk = server.generateChunk(pos);
+                chunk = server.generateChunk(dimension, pos);
                 dataSource = "generate";
             }
             if (chunk == null) {
                 // 本地生成关闭或生成超时：尝试磁盘缓存（旧会话或此前 OVD/GEN 落盘）。
-                chunk = server.loadFromDisk(pos);
+                chunk = server.loadFromDisk(dimension, pos);
                 if (chunk != null) {
                     dataSource = "disk";
                 }
@@ -181,7 +213,7 @@ public final class OvdLocalGenerator {
             if ("generate".equals(dataSource) && nonAirSections == 0) {
                 // 生成的区块是全空气：先试磁盘缓存（可能是旧会话真实数据），
                 // 仍无真实数据才拒绝 apply，避免用坏生成结果覆盖/显示成虚空。
-                LevelChunk diskChunk = server.loadFromDisk(pos);
+                LevelChunk diskChunk = server.loadFromDisk(dimension, pos);
                 if (diskChunk != null) {
                     int diskNonAir = 0;
                     for (net.minecraft.world.level.chunk.LevelChunkSection section : diskChunk.getSections()) {
@@ -211,9 +243,7 @@ public final class OvdLocalGenerator {
                     return;
                 }
             }
-            // 统一交给影子光照管线：算光完成后经 drainReady 以 renderOnly 落地。
-            // 不再直连 buildPacket——磁盘/注入区块的光在存档/内存但不在 LevelLightEngine，
-            // 直连会打出“有方块但无光”的虚空/黑块包（CHUNK_PROBE skyTop=0 证据）。
+            // TODO(T4 后续): OVD 磁盘环带 per-dimension 命名空间（现共享 overworld 环带键）。
             TraceOrigin traceOrigin = null;
             if (DebugLogger.isEnabled(DebugLogger.LogType.CHUNK_APPLY)) {
                 traceOrigin = switch (dataSource) {
@@ -234,10 +264,6 @@ public final class OvdLocalGenerator {
             DebugLogger.warn(DebugLogger.LogType.ASYNC,
                     "[OVD_GEN] Generation failed ({}, {}): {}", pos.x, pos.z, t.toString());
         }
-    }
-
-    private static long chunkPosKey(ChunkPos pos) {
-        return net.minecraft.world.level.ChunkPos.asLong(pos.x, pos.z);
     }
 
     /** 诊断：队列大小。 */

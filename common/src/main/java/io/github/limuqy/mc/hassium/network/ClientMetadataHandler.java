@@ -12,6 +12,7 @@ import io.github.limuqy.mc.hassium.concurrent.TaskCategory;
 import io.github.limuqy.mc.hassium.platform.Services;
 import io.github.limuqy.mc.hassium.utils.DebugLogger;
 import io.github.limuqy.mc.hassium.utils.DebugLogger.LogType;
+import io.github.limuqy.mc.hassium.utils.DimensionKey;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
 import net.minecraft.nbt.CompoundTag;
@@ -41,14 +42,14 @@ public class ClientMetadataHandler {
     private static final long ESTIMATED_LIGHT_BYTES = NetworkStats.ESTIMATED_LIGHT_BYTES; // 16KB
 
     /**
-     * 区块已应用到客户端世界后才发送的 BE 请求（chunkKey → dimension）。
+     * 区块已应用到客户端世界后才发送的 BE 请求（DimensionKey 复合键 → dimension）。
      * BE 不进 chunkHash：缓存命中只复用方块，NBT 每次向主控另拉。
      * 避免 BE 包先于缓存区块到达导致 getBlockEntity() 为 null。
      */
     private static final ConcurrentHashMap<Long, String> PENDING_BE_REQUESTS = new ConcurrentHashMap<>();
 
     /**
-     * BE 数据暂存：区块尚未加载时先缓存，apply 后再写入。
+     * BE 数据暂存（DimensionKey 复合键）：区块尚未加载时先缓存，apply 后再写入。
      */
     private static final ConcurrentHashMap<Long, List<PendingBlockEntityNbt>> PENDING_BLOCK_ENTITIES =
             new ConcurrentHashMap<>();
@@ -56,7 +57,7 @@ public class ClientMetadataHandler {
     private record PendingBlockEntityNbt(BlockPos pos, CompoundTag nbt) {}
 
     /**
-     * 已发出、尚未收到数据的全量请求（chunkKey → 维度 + 截止时间）。
+     * 已发出、尚未收到数据的全量请求（DimensionKey 复合键 → 维度 + 截止时间）。
      * 服务端出界丢弃/队列积压导致请求石沉大海时兜底重发，杜绝「永久虚空」。
      */
     private static final ConcurrentHashMap<Long, PendingFullRequest> PENDING_FULL_REQUESTS =
@@ -226,7 +227,8 @@ public class ClientMetadataHandler {
 
         ClientChunkPipeline pipeline = ClientChunkPipeline.getInstance();
         for (ChunkHashS2CPacket.Entry entry : packet.entries()) {
-            pipeline.storePendingContentHash(entry.chunkX(), entry.chunkZ(), entry.chunkHash());
+            pipeline.storePendingContentHash(packet.dimension(), entry.chunkX(), entry.chunkZ(),
+                    entry.chunkHash());
         }
 
         // 影子端 hash 比对（服务端 bloom hit 只发 hash；影子端决定是否需要数据）：
@@ -301,7 +303,8 @@ public class ClientMetadataHandler {
         for (var it = PENDING_FULL_REQUESTS.entrySet().iterator(); it.hasNext(); ) {
             var e = it.next();
             if (now >= e.getValue().deadlineMs()) {
-                ChunkPos pos = new ChunkPos(e.getKey());
+                ChunkPos pos = new ChunkPos(DimensionKey.chunkXOf(e.getKey()),
+                        DimensionKey.chunkZOf(e.getKey()));
                 timedOut.computeIfAbsent(e.getValue().dimension(), k -> new ArrayList<>()).add(pos);
                 retryCounts.put(e.getKey(), e.getValue().retries());
                 it.remove();
@@ -313,7 +316,7 @@ public class ClientMetadataHandler {
             java.util.Map<Integer, List<ChunkPos>> byRetry = new java.util.TreeMap<>();
             int dropped = 0;
             for (ChunkPos pos : e.getValue()) {
-                int r = retryCounts.getOrDefault(ChunkPos.asLong(pos.x, pos.z), 0);
+                int r = retryCounts.getOrDefault(DimensionKey.key(dim, pos.x, pos.z), 0);
                 if (r >= FULL_REQUEST_MAX_RETRIES) {
                     dropped++;
                 } else {
@@ -342,7 +345,13 @@ public class ClientMetadataHandler {
      */
     public static void onChunkDataReceived(int chunkX, int chunkZ) {
         io.github.limuqy.mc.hassium.utils.ChunkFlowTiming.recordReceive(chunkX, chunkZ); // T0b 诊断：端到端起点
-        PENDING_FULL_REQUESTS.remove(ChunkPos.asLong(chunkX, chunkZ));
+        // 全量请求登记键 = 复合键；数据到达时以当前客户端维度解析归属（与 requestFullChunks 登记一致）。
+        PENDING_FULL_REQUESTS.remove(fullRequestKey(currentDimension(Minecraft.getInstance()), chunkX, chunkZ));
+    }
+
+    /** 全量请求登记键：DimensionKey 复合键。 */
+    private static long fullRequestKey(String dimension, int chunkX, int chunkZ) {
+        return DimensionKey.key(dimension, chunkX, chunkZ);
     }
 
     /**
@@ -352,7 +361,7 @@ public class ClientMetadataHandler {
         if (dimension == null || pos == null) {
             return;
         }
-        PENDING_BE_REQUESTS.put(ChunkPos.asLong(pos.x, pos.z), dimension);
+        PENDING_BE_REQUESTS.put(DimensionKey.key(dimension, pos.x, pos.z), dimension);
     }
 
     /**
@@ -363,7 +372,7 @@ public class ClientMetadataHandler {
             return;
         }
         for (ChunkPos pos : chunks) {
-            PENDING_BE_REQUESTS.remove(ChunkPos.asLong(pos.x, pos.z));
+            PENDING_BE_REQUESTS.remove(DimensionKey.key(dimension, pos.x, pos.z));
         }
         requestBlockEntities(dimension, chunks);
     }
@@ -375,11 +384,14 @@ public class ClientMetadataHandler {
      * 2. 冲刷因竞态暂存的 BE NBT
      */
     public static void onChunkApplied(ChunkPos pos) {
-        long key = ChunkPos.asLong(pos.x, pos.z);
+        // apply 时机无维度上下文（vanilla 通道回调）：按客户端当前维度解析登记键，
+        // 与 scheduleBeRefresh/requestFullChunks 的登记维度一致。
+        String dimension = currentDimension(Minecraft.getInstance());
+        long key = DimensionKey.key(dimension, pos.x, pos.z);
 
-        String dimension = PENDING_BE_REQUESTS.remove(key);
-        if (dimension != null) {
-            requestBlockEntities(dimension, List.of(pos));
+        String registered = PENDING_BE_REQUESTS.remove(key);
+        if (registered != null) {
+            requestBlockEntities(registered, List.of(pos));
         }
 
         flushPendingBlockEntities(key);
@@ -453,7 +465,7 @@ public class ClientMetadataHandler {
         long deadline = now + fullRequestTimeoutMs(ordered.size(), inFlightBefore);
         List<ChunkPos> toRequest = new ArrayList<>(ordered.size());
         for (ChunkPos pos : ordered) {
-            long key = ChunkPos.asLong(pos.x, pos.z);
+            long key = DimensionKey.key(dimension, pos.x, pos.z);
             PendingFullRequest existing = PENDING_FULL_REQUESTS.get(key);
             if (fallbackDeliveryId == 0L && existing != null && existing.deadlineMs() > now
                     && existing.dimension().equals(dimension)) {
@@ -553,14 +565,14 @@ public class ClientMetadataHandler {
         Minecraft mc = Minecraft.getInstance();
         if (mc.level == null) return;
 
-        long chunkKey = ChunkPos.asLong(chunkX, chunkZ);
+        long chunkKey = DimensionKey.key(currentDimension(mc), chunkX, chunkZ);
         for (BlockEntityDataS2CPacket.BlockEntityData beData : blockEntities) {
             tryApplyOrStashBlockEntity(chunkKey, beData.pos(), beData.nbt());
         }
         io.github.limuqy.mc.hassium.network.seedgen.ShadowSeedServer shadow =
                 io.github.limuqy.mc.hassium.network.seedgen.ShadowServerRegistry.getInstance().get();
         if (shadow != null) {
-            shadow.applyBlockEntitySnapshot(new ChunkPos(chunkX, chunkZ), blockEntities);
+            shadow.applyBlockEntitySnapshot(currentDimension(mc), new ChunkPos(chunkX, chunkZ), blockEntities);
         }
     }
 
@@ -692,9 +704,20 @@ public class ClientMetadataHandler {
             return; // 未握手/创建失败（断连或降级）：静默跳过，hash 比对 miss 兜底
         }
         try {
-            server.applyBlockUpdate(packet);
+            server.applyBlockUpdate(currentDimension(mc), packet);
         } catch (Throwable ignored) {
             // 纯转发：转发异常不得影响 vanilla 包处理（防恶意包）
         }
+    }
+
+    /** 客户端当前所在维度 id（{@code namespace:path}；两版本 location/identifier 封装）。 */
+    private static String currentDimension(Minecraft mc) {
+        return mc.level.dimension()
+#if MC_VER < MC_1_21_11
+                .location()
+#else
+                .identifier()
+#endif
+                .toString();
     }
 }

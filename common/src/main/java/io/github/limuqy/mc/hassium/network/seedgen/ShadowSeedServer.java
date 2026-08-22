@@ -36,8 +36,9 @@ import io.github.limuqy.mc.hassium.network.BlockEntityDataS2CPacket;
 import io.github.limuqy.mc.hassium.network.SectionDeltaS2CPacket;
 import io.github.limuqy.mc.hassium.network.sectiondelta.SectionDeltaSnapshot;
 import io.github.limuqy.mc.hassium.network.sectiondelta.SectionDeltaSnapshots;
-import io.github.limuqy.mc.hassium.network.sectiondelta.SectionPlaneSyndrome;
 import io.github.limuqy.mc.hassium.utils.DebugLogger;
+import io.github.limuqy.mc.hassium.network.sectiondelta.SectionPlaneSyndrome;
+import io.github.limuqy.mc.hassium.utils.DimensionKey;
 import java.net.Proxy;
 import java.util.ArrayList;
 import java.util.List;
@@ -48,6 +49,7 @@ import java.util.function.BooleanSupplier;
 import net.minecraft.CrashReport;
 import net.minecraft.SystemReport;
 import net.minecraft.core.BlockPos;
+import net.minecraft.resources.ResourceKey;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.core.SectionPos;
 import net.minecraft.network.FriendlyByteBuf;
@@ -147,12 +149,15 @@ public class ShadowSeedServer extends MinecraftServer {
     /** 持久世界根（客户端缓存目录下原版存档结构；断连保存、重连复用，不删除）。 */
     private final java.nio.file.Path worldRoot;
     /**
-     * 注入区块表（pos → LevelChunk）：网络/读盘 decode 后的 FULL 柱。随后加
-     * {@code TicketType.UNKNOWN} FULL 级票进入 ChunkMap（{@code scheduleChunkLoad}
-     * 短路为 {@code ImposterProtoChunk}）。探活结论：不能赌金字塔对 FULL+
-     * {@code !isLightCorrect} 柱只重跑 LIGHT（邻柱无盘会 worldgen），算光仍走
-     * {@code ShadowLightCompute} 官方 {@code initializeLight}+{@code lightChunk}。
-     * 打包与 saveAll 仍取本表；REPLACE 覆盖。
+     * 注入区块表（{@link DimensionKey} 复合键 → LevelChunk）：网络/读盘 decode 后的
+     * FULL 柱。随后加 {@code TicketType.UNKNOWN} FULL 级票进入 ChunkMap
+     * （{@code scheduleChunkLoad} 短路为 {@code ImposterProtoChunk}）。探活结论：
+     * 不能赌金字塔对 FULL+{@code !isLightCorrect} 柱只重跑 LIGHT（邻柱无盘会
+     * worldgen），算光仍走 {@code ShadowLightCompute} 官方 {@code initializeLight}+
+     * {@code lightChunk}。打包与 saveAll 仍取本表；REPLACE 覆盖。
+     * <p>
+     * 键 = {@code DimensionKey.key(dimension, x, z)} 复合键（高 12 位维度 id + 低 52 位
+     * 对称坐标位域）：跨维同坐标互不覆盖。
      */
     private final java.util.concurrent.ConcurrentHashMap<Long, net.minecraft.world.level.chunk.LevelChunk>
             injectedChunks = new java.util.concurrent.ConcurrentHashMap<>();
@@ -160,10 +165,12 @@ public class ShadowSeedServer extends MinecraftServer {
     private final java.util.Set<Long> injectTickets = java.util.concurrent.ConcurrentHashMap.newKeySet();
 
     /**
+     * 按维度目录落盘的存储管理器（dimension id → manager，各绑定
+     * {@link #regionDir(String)} 对应的 vanilla 布局 region 目录）。
      * 断连 saveAll 是否需要重写该柱：脏位在 {@link io.github.limuqy.mc.hassium.storage.ShadowStorageHashes}
      * （contentDirty / lightDirty）。活数据仍在 {@link #injectedChunks} 的 LevelChunk。
      */
-    private io.github.limuqy.mc.hassium.storage.ShadowStorageManager storage;
+    private volatile java.util.concurrent.ConcurrentHashMap<String, io.github.limuqy.mc.hassium.storage.ShadowStorageManager> storages;
 
     /**
      * 本端是否已进入关停保存（SeedGenLevelCompat.shutdown 首步置位）：本端 saveAll 的
@@ -228,12 +235,17 @@ public class ShadowSeedServer extends MinecraftServer {
         // 缓存清理热度索引加载（跨会话累计；损坏/缺失 → 空索引）
         ShadowCacheEviction.load(worldRoot);
         long t2Ns = System.nanoTime();
-        this.storage = new io.github.limuqy.mc.hassium.storage.ShadowStorageManager(
-                regionDir(),
-                this::serializeInjectedColumn,
-                injectedChunks::containsKey,
-                io.github.limuqy.mc.hassium.config.HassiumConfigService.getInstance()
-                        .getStorageCompressionLevel());
+        this.storages = new java.util.concurrent.ConcurrentHashMap<>();
+        for (ServerLevel lvl : getAllLevels()) {
+            String dim = dimensionId(lvl);
+            this.storages.put(dim, new io.github.limuqy.mc.hassium.storage.ShadowStorageManager(
+                    dim,
+                    regionDir(dim),
+                    pos -> serializeInjectedColumn(dim, pos),
+                    key -> injectedChunks.containsKey(DimensionKey.key(dim, key)),
+                    io.github.limuqy.mc.hassium.config.HassiumConfigService.getInstance()
+                            .getStorageCompressionLevel()));
+        }
         DebugLogger.info(DebugLogger.LogType.ASYNC,
                 "[SHADOW-DIAG] initServer: loadLevel={}ms evictionLoad={}ms (seed={})",
                 (t1Ns - t0Ns) / 1_000_000L, (t2Ns - t1Ns) / 1_000_000L, worldSeed);
@@ -286,8 +298,22 @@ public class ShadowSeedServer extends MinecraftServer {
      * 非主线程路径（本 server 的 mainThread 是装配线程）：getChunkFuture 提交到
      * mainThreadProcessor，由 {@link #runMainLoop()} 驱动完成；本方法只轮询不阻塞。
      */
+    /** 生成一个 FULL 区块（主世界；过渡期兼容签名）。 */
     public LevelChunk generateChunk(ChunkPos pos) {
-        ServerChunkCache cache = (ServerChunkCache) this.overworld().getChunkSource();
+        return generateChunk(DimensionKey.OVERWORLD, pos);
+    }
+
+    /**
+     * 在指定维度生成一个 FULL 区块（任意线程可调；超时/中断返回 null → 调用方回退
+     * 全量请求）。内部取 {@code level(dimension)} 的 chunkSource 做 3×3 邻域 + FULL
+     * 生成，与主世界路径同语义。
+     */
+    public LevelChunk generateChunk(String dimension, ChunkPos pos) {
+        ServerLevel level = level(dimension);
+        if (level == null) {
+            return null;
+        }
+        ServerChunkCache cache = (ServerChunkCache) level.getChunkSource();
         // 3×3 邻域预生成：FEATURES 步骤（applyBiomeDecoration）的 biome 集合与
         // per-step feature 排序索引取决于生成时已就绪的邻域区块（range 8 内）
         // ——影子端逐块生成、邻域为空时，feature 放置（矿石/花岗岩闪长岩团块/
@@ -396,8 +422,17 @@ public class ShadowSeedServer extends MinecraftServer {
      * ThreadedLevelLightEngine 异步任务（runMainLoop 已驱动 tryScheduleUpdate）。
      * 注入失败返回 false（调用方走单柱兜底）。
      */
+    /** 注入一个服务端区块包（主世界；过渡期兼容签名）。 */
     public boolean injectChunk(ChunkPos pos, ClientboundLevelChunkWithLightPacket packet) {
-        long key = ChunkPos.asLong(pos.x, pos.z);
+        return injectChunk(DimensionKey.OVERWORLD, pos, packet);
+    }
+
+    /**
+     * 注入一个服务端区块包到指定维度（任意线程可调）：键走
+     * {@link DimensionKey} 复合键；hash/脏位/热度均带维度。
+     */
+    public boolean injectChunk(String dimension, ChunkPos pos, ClientboundLevelChunkWithLightPacket packet) {
+        long key = DimensionKey.key(dimension, pos.x, pos.z);
         LevelChunk previous = this.injectedChunks.get(key);
         try {
             ServerLevel level = this.overworld();
@@ -461,15 +496,15 @@ public class ShadowSeedServer extends MinecraftServer {
                 long contentHash = io.github.limuqy.mc.hassium.cache.ChunkContentHashUtil
                         .combineSectionHashes(io.github.limuqy.mc.hassium.cache.ChunkContentHashUtil
                                 .computeSectionHashes(chunk));
-                io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.put(pos, contentHash);
+                io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.put(dimension, pos, contentHash);
             } catch (Throwable hashError) {
                 LOGGER.debug("Hassium: Shadow contentHash compute failed for {}, skip hash write", pos);
             }
             LevelChunk captured = chunk;
             ShadowLightCompute.withChunkLock(pos, () ->
-                    SectionDeltaSnapshots.put(pos, SectionDeltaSnapshot.capture(captured)));
+                    SectionDeltaSnapshots.put(dimension, pos, SectionDeltaSnapshot.capture(captured)));
             io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.markContentDirty(key);
-            ShadowCacheEviction.recordAccess(pos);
+            ShadowCacheEviction.recordAccess(dimension, pos);
             registerInjectTicket(pos);
             if (!fresh) {
                 // 重注入清光投递 48+ 个 PRE 任务：按柱排水，防连续重注入叠加越 1000 阈值
@@ -510,9 +545,7 @@ public class ShadowSeedServer extends MinecraftServer {
     private void clearChunkLight(ChunkPos pos, LevelChunk chunk) {
         synchronized (ShadowLightCompute.LIGHT_ENGINE_MUTEX) {
             ThreadedLevelLightEngine lightEngine =
-                    (ThreadedLevelLightEngine) this.overworld().getChunkSource().getLightEngine();
-            lightEngine.setLightEnabled(pos, false);
-            // 与 vanilla ThreadedLevelLightEngine.updateChunkStatus 同范围（minLight..maxLight）：
+                    (ThreadedLevelLightEngine) chunkLevel(chunk).getChunkSource().getLightEngine();
             // 含上下各一层 padding。只清 chunk 实际 section 会残留 padding 光，边界传播时
             // 读到陈旧数据（视距边缘/水面上下边缘黑块来源之一）。
             for (int y = lightEngine.getMinLightSection(); y < lightEngine.getMaxLightSection(); y++) {
@@ -541,12 +574,21 @@ public class ShadowSeedServer extends MinecraftServer {
                                            java.util.BitSet blockMask,
                                            java.util.BitSet emptySkyMask,
                                            java.util.BitSet emptyBlockMask) {
-        LevelChunk chunk = this.injectedChunks.get(ChunkPos.asLong(pos.x, pos.z));
+        return invalidateLightSections(DimensionKey.OVERWORLD, pos, skyMask, blockMask, emptySkyMask, emptyBlockMask);
+    }
+
+    /** 指定维度增量算光清光（LightDelta 消费）。 */
+    public boolean invalidateLightSections(String dimension, ChunkPos pos,
+                                           java.util.BitSet skyMask,
+                                           java.util.BitSet blockMask,
+                                           java.util.BitSet emptySkyMask,
+                                           java.util.BitSet emptyBlockMask) {
+        LevelChunk chunk = this.injectedChunks.get(DimensionKey.key(dimension, pos.x, pos.z));
         if (chunk == null) {
             return false;
         }
         // 光增量会改写引擎光照，saveAll 序列化时从引擎读光，必须把该柱标脏重写。
-        io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.markLightDirty(pos);
+        io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.markLightDirty(dimension, pos);
         synchronized (ShadowLightCompute.LIGHT_ENGINE_MUTEX) {
             ThreadedLevelLightEngine lightEngine =
                     (ThreadedLevelLightEngine) this.overworld().getChunkSource().getLightEngine();
@@ -605,16 +647,18 @@ public class ShadowSeedServer extends MinecraftServer {
             if (!chunk.isLightCorrect()) {
                 return false;
             }
-            LevelLightEngine lightEngine = this.overworld().getChunkSource().getLightEngine();
-            boolean hasSky = this.overworld().dimensionType().hasSkyLight();
+            // 光照引擎/天光判定按 chunk 所属 level 的 dimensionType：下界无天光，
+            // 恒用 overworld 判定会把 nether 柱误判需要 sky 层（REQ 明细5）。
+            ServerLevel owner = chunkLevel(chunk);
+            LevelLightEngine lightEngine = owner.getChunkSource().getLightEngine();
+            boolean hasSky = owner.dimensionType().hasSkyLight();
             net.minecraft.world.level.lighting.ChunkSkyLightSources skySources =
                     hasSky ? chunk.getSkyLightSources() : null;
             int minSection = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMinSection(chunk);
             int maxSection = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMaxSectionExclusive(chunk);
             for (int y = minSection; y < maxSection; y++) {
                 SectionPos sp = SectionPos.of(pos, y);
-                int sectionIndex = chunk.getSectionIndexFromSectionY(y);
-                net.minecraft.world.level.chunk.LevelChunkSection section = chunk.getSection(sectionIndex);
+                net.minecraft.world.level.chunk.LevelChunkSection section = chunk.getSection(chunk.getSectionIndexFromSectionY(y));
                 if (section == null || section.hasOnlyAir()) {
                     // 纯空气 section 不需要光数据层：源之上由官方 lightChunk 播种；
                     // 源之下全 0 正确（官方包省略 null 层 = 新柱零光）。
@@ -625,7 +669,8 @@ public class ShadowSeedServer extends MinecraftServer {
                     return false;
                 }
                 if (hasSky && lightEngine.getLayerListener(LightLayer.SKY).getDataLayerData(sp) == null
-                        && sectionAtOrAboveAnySkySource(skySources, y, io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMinBlockY(this.overworld()))) {
+                        && sectionAtOrAboveAnySkySource(skySources, y,
+                                io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMinBlockY(owner))) {
                     return false; // 源所在/更高 section 的 sky 层缺建层：heal 无法基于可见层打包
                 }
             }
@@ -652,19 +697,21 @@ public class ShadowSeedServer extends MinecraftServer {
      */
     public boolean isSkySeeded(ChunkPos pos, LevelChunk chunk) {
         try {
-            if (chunk == null || !this.overworld().dimensionType().hasSkyLight()) {
+            // 天光判定按 chunk 所属 level：下界无天光直接视为已播种（无 sky 层语义）。
+            ServerLevel owner = chunkLevel(chunk);
+            if (!owner.dimensionType().hasSkyLight()) {
                 return true;
             }
             net.minecraft.world.level.lighting.ChunkSkyLightSources sources =
                     chunk.getSkyLightSources();
-            LevelLightEngine levelLightEngine = this.overworld().getChunkSource().getLightEngine();
+            LevelLightEngine levelLightEngine = owner.getChunkSource().getLightEngine();
             LightEngine<?, ?> skyEngine =
                     ((io.github.limuqy.mc.hassium.mixin.LevelLightEngineAccessor) levelLightEngine)
                             .hassium$getSkyEngine();
             if (skyEngine == null) {
                 return true;
             }
-            int minBlockY = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMinBlockY(this.overworld());
+            int minBlockY = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMinBlockY(owner);
             int minSection = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMinSection(chunk);
             int maxSection = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMaxSectionExclusive(chunk);
             for (int y = minSection; y < maxSection; y++) {
@@ -697,6 +744,20 @@ public class ShadowSeedServer extends MinecraftServer {
         }
     }
 
+    /**
+     * 解析 chunk 所属 ServerLevel（{@code LevelChunk.level()} 即装配时的 level 引用）。
+     * 光照引擎/天光判定按此 level 的 dimensionType——下界无天光，恒用 overworld
+     * 会把 nether 柱误判需要 sky 层（REQ 明细5）。
+     */
+    private static ServerLevel chunkLevel(LevelChunk chunk) {
+#if MC_VER < MC_1_21_11
+        return (ServerLevel) chunk.getLevel();
+#else
+        return (ServerLevel) chunk.level();
+#endif
+    }
+
+
     /** 是否存在真实天空源（非 {@code NEGATIVE_INFINITY} 哨兵）位于 sectionTop 或以下。 */
     static boolean sectionAtOrAboveAnySkySource(
             net.minecraft.world.level.lighting.ChunkSkyLightSources sources,
@@ -720,7 +781,8 @@ public class ShadowSeedServer extends MinecraftServer {
      */
     public void relightChunk(ChunkPos pos, LevelChunk chunk) {
         chunk.setLightCorrect(false);
-        io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.markLightDirty(pos);
+        io.github.limuqy.mc.hassium.storage.ShadowStorageHashes
+                .markLightDirty(dimensionId(chunkLevel(chunk)), pos);
         clearChunkLight(pos, chunk);
         awaitLightTaskDrain(); // 清光投递 48+ PRE 任务：按柱排水（processRemoteHashes 批量 relight 叠加防护）
     }
@@ -742,18 +804,22 @@ public class ShadowSeedServer extends MinecraftServer {
      * </ol>
      * 完成后重算 contentHash 写存储桥，并 recapture 平面综合征 memo。
      * 仅 {@code consumeLoop} 单线程调用；失败返回 false（调用方回退全量请求）。
-     */
     public boolean applySectionDelta(ChunkPos pos, SectionDeltaS2CPacket.DeltaEntry entry) {
+        return applySectionDelta(DimensionKey.OVERWORLD, pos, entry);
+    }
+
+    /** 应用指定维度服务端分段增量（consumeLoop 单线程调用）。 */
+    public boolean applySectionDelta(String dimension, ChunkPos pos, SectionDeltaS2CPacket.DeltaEntry entry) {
         // 变更 section 清光投递与光屏障互斥（同 clearChunkLight；2026-08-14 NPE 同源）。
         synchronized (ShadowLightCompute.LIGHT_ENGINE_MUTEX) {
             try {
-            LevelChunk chunk = injectedChunks.get(ChunkPos.asLong(pos.x, pos.z));
+            LevelChunk chunk = injectedChunks.get(DimensionKey.key(dimension, pos.x, pos.z));
             if (chunk == null) {
                 LOGGER.debug("Hassium: Shadow applySectionDelta chunk not injected ({}, {})", pos.x, pos.z);
                 return false;
             }
             // 增量应用会就地覆盖 section/heightmap/BE/光，标记为需要 saveAll 重写。
-            io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.markContentDirty(pos);
+            io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.markContentDirty(dimension, pos);
             ThreadedLevelLightEngine lightEngine =
                     (ThreadedLevelLightEngine) this.overworld().getChunkSource().getLightEngine();
             // 1) sections 就地覆盖（先于 BE——BE 创建依赖新 block state）
@@ -765,13 +831,13 @@ public class ShadowSeedServer extends MinecraftServer {
                         section.read(buf);
                     } else if (sd.kind() == SectionDeltaS2CPacket.KIND_BLOCKS) {
                         if (!applyBlockList(section, buf)) {
-                            SectionDeltaSnapshots.invalidate(pos);
+                            SectionDeltaSnapshots.invalidate(dimension, pos);
                             return false;
                         }
                     } else {
                         LOGGER.debug("Hassium: Shadow applySectionDelta unknown kind {} ({}, {})",
                                 sd.kind(), pos.x, pos.z);
-                        SectionDeltaSnapshots.invalidate(pos);
+                        SectionDeltaSnapshots.invalidate(dimension, pos);
                         return false;
                     }
                 } finally {
@@ -817,20 +883,20 @@ public class ShadowSeedServer extends MinecraftServer {
                     LOGGER.debug("Hassium: Shadow applySectionDelta hash mismatch ({}, {}): got={} expected={}",
                             pos.x, pos.z, Long.toHexString(contentHash),
                             Long.toHexString(entry.expectedChunkHash()));
-                    SectionDeltaSnapshots.invalidate(pos);
+                    SectionDeltaSnapshots.invalidate(dimension, pos);
                     return false;
                 }
-                io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.put(pos, contentHash);
-                SectionDeltaSnapshots.put(pos, SectionDeltaSnapshot.capture(chunk));
+                io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.put(dimension, pos, contentHash);
+                SectionDeltaSnapshots.put(dimension, pos, SectionDeltaSnapshot.capture(chunk));
             } catch (Throwable hashError) {
                 LOGGER.debug("Hassium: Shadow contentHash recompute failed for {}, skip hash write", pos);
-                SectionDeltaSnapshots.invalidate(pos);
+                SectionDeltaSnapshots.invalidate(dimension, pos);
                 return false;
             }
             return true;
         } catch (Throwable t) {
             LOGGER.warn("Hassium: Shadow applySectionDelta failed for {}", pos, t);
-            SectionDeltaSnapshots.invalidate(pos);
+            SectionDeltaSnapshots.invalidate(dimension, pos);
             return false;
         }
         }
@@ -881,7 +947,7 @@ public class ShadowSeedServer extends MinecraftServer {
      * {@link #generateChunk} 同模式），天然串行；主循环已停（断连/关停）时投递被
      * {@code RejectedExecutionException} 兜底丢弃，无残留。
      */
-    public void applyBlockUpdate(Packet<?> packet) {
+    public void applyBlockUpdate(String dimension, Packet<?> packet) {
         if (packet == null) {
             return;
         }
@@ -889,16 +955,16 @@ public class ShadowSeedServer extends MinecraftServer {
             this.execute(() -> {
                 try {
                     if (packet instanceof ClientboundBlockUpdatePacket block) {
-                        applyBlock(block.getPos(), block.getBlockState());
+                        applyBlock(dimension, block.getPos(), block.getBlockState());
                     } else if (packet instanceof ClientboundSectionBlocksUpdatePacket section) {
                         java.util.Set<Long> affected = new java.util.HashSet<>();
                         section.runUpdates((pos, state) -> {
-                            this.overworld().setBlock(pos, state, 3);
+                            this.level(dimension).setBlock(pos, state, 3);
                             affected.add(ChunkPos.asLong(pos.getX() >> 4, pos.getZ() >> 4));
                         });
-                        invalidateChunkContent(affected);
+                        invalidateChunkContent(dimension, affected);
                     } else if (packet instanceof ClientboundBlockEntityDataPacket blockEntity) {
-                        applyBlockEntity(blockEntity);
+                        applyBlockEntity(dimension, blockEntity);
                     }
                 } catch (Throwable t) {
                     LOGGER.debug("Hassium: Shadow applyBlockUpdate ignored: {}", t.toString());
@@ -909,9 +975,9 @@ public class ShadowSeedServer extends MinecraftServer {
         }
     }
 
-    /** 单方块应用：注入区块直接 setBlockState（flags 与 {@code level.setBlock(pos, state, 3)} 同源）；未注入跳过并标脏。 */
-    private void applyBlock(BlockPos pos, BlockState state) {
-        long key = ChunkPos.asLong(pos.getX() >> 4, pos.getZ() >> 4);
+    /** 单方块应用（指定维度）：注入区块直接 setBlockState；未注入跳过并标脏。 */
+    private void applyBlock(String dimension, BlockPos pos, BlockState state) {
+        long key = DimensionKey.key(dimension, pos.getX() >> 4, pos.getZ() >> 4);
         LevelChunk chunk = injectedChunks.get(key);
         if (chunk != null) {
             // review-fix: T13-FixT3Chunk-2：注入区块不经 ChunkMap，level.setBlock 会触发幻影 worldgen——直接对注入 chunk 应用
@@ -921,17 +987,17 @@ public class ShadowSeedServer extends MinecraftServer {
             chunk.setBlockState(pos, state, 3);
 #endif
         }
-        invalidateChunkContent(java.util.Collections.singleton(key));
+        invalidateChunkContent(dimension, java.util.Collections.singleton(key));
     }
 
-    /** BE 更新应用：镜像原版 handleBlockEntityData（loadFromTag + setChanged），无 BE 则忽略。 */
-    private void applyBlockEntity(ClientboundBlockEntityDataPacket packet) {
-        ServerLevel level = this.overworld();
-        long key = ChunkPos.asLong(packet.getPos().getX() >> 4, packet.getPos().getZ() >> 4);
+    /** BE 更新应用（指定维度）：镜像原版 handleBlockEntityData，无 BE 则忽略。 */
+    private void applyBlockEntity(String dimension, ClientboundBlockEntityDataPacket packet) {
+        ServerLevel level = this.level(dimension);
+        long key = DimensionKey.key(dimension, packet.getPos().getX() >> 4, packet.getPos().getZ() >> 4);
         LevelChunk chunk = injectedChunks.get(key);
         if (chunk == null) {
             // review-fix: T13-FixT3Chunk-2：未注入——跳过应用并标脏（hash 比对触发全量回拉）
-            invalidateChunkContent(java.util.Collections.singleton(key));
+            invalidateChunkContent(dimension, java.util.Collections.singleton(key));
             return;
         }
         net.minecraft.world.level.block.entity.BlockEntity be = chunk.getBlockEntity(packet.getPos());
@@ -941,21 +1007,22 @@ public class ShadowSeedServer extends MinecraftServer {
         BlockEntityCompat.loadFromTag(be, packet.getTag(), level.registryAccess());
         be.setChanged();
         // BE NBT 不进 chunkHash：只标脏落盘，不要丢掉方块 hash 表（否则下次比对无谓重算）。
-        io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.markContentDirty(new ChunkPos(key));
+        io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.markContentDirty(
+                dimension, new ChunkPos(DimensionKey.chunkXOf(key), DimensionKey.chunkZOf(key)));
     }
 
     /**
      * 缓存命中后主控 BE 快照：覆盖影子柱 NBT 并标脏落盘。不改 contentHash（方块未变）。
      * 投递影子主循环；主循环已停则丢弃（下次进服再拉）。
      */
-    public void applyBlockEntitySnapshot(ChunkPos pos,
+    public void applyBlockEntitySnapshot(String dimension, ChunkPos pos,
                                          List<BlockEntityDataS2CPacket.BlockEntityData> blockEntities) {
         if (pos == null || blockEntities == null || blockEntities.isEmpty()) {
             return;
         }
         try {
             this.execute(() -> {
-                LevelChunk chunk = injectedChunks.get(ChunkPos.asLong(pos.x, pos.z));
+                LevelChunk chunk = injectedChunks.get(DimensionKey.key(dimension, pos.x, pos.z));
                 if (chunk == null) {
                     return;
                 }
@@ -974,7 +1041,7 @@ public class ShadowSeedServer extends MinecraftServer {
                     BlockEntityCompat.loadFromTag(be, copy, this.overworld().registryAccess());
                     be.setChanged();
                 }
-                io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.markContentDirty(pos);
+                io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.markContentDirty(dimension, pos);
             });
         } catch (java.util.concurrent.RejectedExecutionException ignored) {
             // 主循环已停：下次进服 hash 命中会再拉 BE
@@ -982,15 +1049,13 @@ public class ShadowSeedServer extends MinecraftServer {
     }
 
     /**
-     * 内容失效（chunkKey 去重集合）：移除 hash 缓存（下次比对不得误命中）。
-     * 光照交给柱上 {@code isLightCorrect} / 随后全量注入清光。
-     */
-    private void invalidateChunkContent(java.util.Set<Long> chunkKeys) {
+    /** 内容失效（指定维度；key 集合为 DimensionKey 复合键）：移除 hash 缓存（下次比对不得误命中）。 */
+    private void invalidateChunkContent(String dimension, java.util.Set<Long> chunkKeys) {
         for (long key : chunkKeys) {
-            ChunkPos pos = new ChunkPos(key);
-            io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.remove(pos);
+            ChunkPos pos = new ChunkPos(DimensionKey.chunkXOf(key), DimensionKey.chunkZOf(key));
+            io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.remove(dimension, pos);
             io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.markContentDirty(key);
-            SectionDeltaSnapshots.invalidate(key);
+            SectionDeltaSnapshots.invalidate(dimension, pos);
         }
     }
 
@@ -1176,10 +1241,16 @@ public class ShadowSeedServer extends MinecraftServer {
      * 本方法可在任意线程调用（同步等待 future 完成，与 generateChunk 同模式）。
      */
     public LevelChunk loadFromDisk(ChunkPos pos) {
-        if (storage != null) {
-            byte[] nbt = storage.readChunk(pos);
+        return loadFromDisk(DimensionKey.OVERWORLD, pos);
+    }
+
+    /** 从指定维度存档（磁盘 region，type 126）加载区块。 */
+    public LevelChunk loadFromDisk(String dimension, ChunkPos pos) {
+        io.github.limuqy.mc.hassium.storage.ShadowStorageManager mgr = storage(dimension);
+        if (mgr != null) {
+            byte[] nbt = mgr.readChunk(pos);
             if (nbt != null) {
-                LevelChunk parsed = parseNbtBytes(pos, nbt);
+                LevelChunk parsed = parseNbtBytes(dimension, pos, nbt);
                 if (parsed != null) {
                     return parsed;
                 }
@@ -1224,7 +1295,7 @@ public class ShadowSeedServer extends MinecraftServer {
                                     this.storageSource.getLevelId(), this.overworld().dimension(), "chunk"),
                             pos, tag);
 #endif
-            return toLevelChunk(accChunk, pos);
+            return toLevelChunk(dimension, accChunk, pos);
 #else
             // 1.21.2+：官方 scheduleChunkLoad 完整链（SerializableChunkData 解析）。
             // TODO(版本推广)：1.21.2+ 分段适配（readChunk → SerializableChunkData.parse+read）
@@ -1246,7 +1317,7 @@ public class ShadowSeedServer extends MinecraftServer {
             if (accChunk == null) {
                 return null;
             }
-            return toLevelChunk(accChunk, pos);
+            return toLevelChunk(dimension, accChunk, pos);
 #endif
         } catch (Throwable t) {
             LOGGER.debug("Hassium: Shadow loadFromDisk failed for {}", pos, t);
@@ -1255,11 +1326,11 @@ public class ShadowSeedServer extends MinecraftServer {
     }
 
     /** 官方加载产物为 ProtoChunk（ChunkSerializer.read 语义）：FULL 转换同款。 */
-    private LevelChunk toLevelChunk(net.minecraft.world.level.chunk.ChunkAccess accChunk, ChunkPos pos) {
+    private LevelChunk toLevelChunk(String dimension, net.minecraft.world.level.chunk.ChunkAccess accChunk, ChunkPos pos) {
         // 读盘命中（R2 缓存复用）记一次访问：容量清理热度评分用。
         // 覆盖 consumeLoop 磁盘优先路径（不经 injectLoadedChunk）与
         // processRemoteHashes 读盘比对路径（两者都经 loadFromDisk）。
-        ShadowCacheEviction.recordAccess(pos);
+        ShadowCacheEviction.recordAccess(dimension, pos);
         if (accChunk instanceof LevelChunk levelChunk) {
             return levelChunk;
         }
@@ -1267,9 +1338,52 @@ public class ShadowSeedServer extends MinecraftServer {
                 chunk -> { });
     }
 
-    /** 注入区块表取用（打包/保存；未注入返回 null）。 */
+    /** 注入区块表取用（主世界；未注入返回 null）。过渡期兼容签名，语义 = OVERWORLD。 */
     public net.minecraft.world.level.chunk.LevelChunk injectedChunk(int x, int z) {
-        return injectedChunks.get(ChunkPos.asLong(x, z));
+        return injectedChunk(DimensionKey.OVERWORLD, x, z);
+    }
+
+    /** 指定维度注入区块表取用（打包/保存；未注入返回 null）。 */
+    public net.minecraft.world.level.chunk.LevelChunk injectedChunk(String dimension, int x, int z) {
+        return injectedChunks.get(DimensionKey.key(dimension, x, z));
+    }
+
+    /**
+     * 维度取 level（CONTRACTS §2）：三维度可取；未知维度返回 null。
+     * {@code minecraft:the_nether} → DIM-1 level（dimensionType 无天光）。
+     */
+    public ServerLevel level(String dimension) {
+        if (dimension == null) {
+            return null;
+        }
+        return this.getLevel(ResourceKey.create(
+                net.minecraft.core.registries.Registries.DIMENSION,
+                io.github.limuqy.mc.hassium.compat.ResourceLocationCompat.create(dimension)));
+    }
+
+    /** 维度取 level（ResourceKey 形态重载；未装配维度返回 null）。 */
+    public ServerLevel level(ResourceKey<net.minecraft.world.level.Level> dim) {
+        return this.getLevel(dim);
+    }
+
+    /** ServerLevel 的维度 id 字符串（{@code namespace:path}；两版本 location/identifier 封装）。 */
+    static String dimensionId(ServerLevel lvl) {
+        return lvl.dimension()
+#if MC_VER < MC_1_21_11
+                .location()
+#else
+                .identifier()
+#endif
+                .toString();
+    }
+
+    /**
+     * 指定维度的存储管理器（落盘/读盘/探活按维度路由）；
+     * 未装配的维度返回 null（调用方降级：内存比对 miss 兜底）。
+     */
+    public io.github.limuqy.mc.hassium.storage.ShadowStorageManager storage(String dimension) {
+        java.util.concurrent.ConcurrentHashMap<String, io.github.limuqy.mc.hassium.storage.ShadowStorageManager> map = storages;
+        return map == null ? null : map.get(dimension);
     }
 
     /**
@@ -1364,7 +1478,11 @@ public class ShadowSeedServer extends MinecraftServer {
      * 请使用 {@link #injectLoadedChunk(ChunkPos, LevelChunk, boolean)} 并传 true。
      */
     public void injectLoadedChunk(ChunkPos pos, net.minecraft.world.level.chunk.LevelChunk chunk) {
-        injectLoadedChunk(pos, chunk, false);
+        injectLoadedChunk(DimensionKey.OVERWORLD, pos, chunk, false);
+    }
+
+    public void injectLoadedChunk(String dimension, ChunkPos pos, net.minecraft.world.level.chunk.LevelChunk chunk) {
+        injectLoadedChunk(dimension, pos, chunk, false);
     }
 
     /**
@@ -1373,8 +1491,9 @@ public class ShadowSeedServer extends MinecraftServer {
      * @param dirty true = 该柱是本地新生成/与磁盘不一致的数据，saveAll 必须重写；
      *              false = 该柱刚从磁盘加载且未被修改，可跳过重写。
      */
-    public void injectLoadedChunk(ChunkPos pos, net.minecraft.world.level.chunk.LevelChunk chunk, boolean dirty) {
-        long key = ChunkPos.asLong(pos.x, pos.z);
+    public void injectLoadedChunk(String dimension, ChunkPos pos,
+                                  net.minecraft.world.level.chunk.LevelChunk chunk, boolean dirty) {
+        long key = DimensionKey.key(dimension, pos.x, pos.z);
         injectedChunks.put(key, chunk);
         if (dirty) {
             io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.markContentDirty(key);
@@ -1382,7 +1501,7 @@ public class ShadowSeedServer extends MinecraftServer {
             io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.claimDirty(key);
         }
         ShadowLightCompute.withChunkLock(pos, () ->
-                SectionDeltaSnapshots.put(pos, SectionDeltaSnapshot.capture(chunk)));
+                SectionDeltaSnapshots.put(dimension, pos, SectionDeltaSnapshot.capture(chunk)));
         registerInjectTicket(pos);
     }
 
@@ -1442,29 +1561,24 @@ public class ShadowSeedServer extends MinecraftServer {
      * <p>
      * 线程：任意线程（region 头读取是轻量 IO，不上锁；调用方在后台池）。
      */
-    public io.github.limuqy.mc.hassium.cache.client.ChunkBloomFilter buildBloomFilter() {
+    public io.github.limuqy.mc.hassium.cache.client.ChunkBloomFilter buildBloomFilter(String dimension) {
         io.github.limuqy.mc.hassium.cache.client.ChunkBloomFilter filter =
                 io.github.limuqy.mc.hassium.cache.client.ChunkBloomFilter.createDefault();
-        String dimension = this.overworld().dimension()
-#if MC_VER < MC_1_21_11
-                .location()
-#else
-                .identifier()
-#endif
-                .toString();
-        // park 异步 save 尚未刷盘时，热表仍有柱：一并放入 bloom。
+        // park 异步 save 尚未刷盘时，热表仍有柱：一并放入 bloom（复合键按维度过滤）。
         for (Map.Entry<Long, LevelChunk> e : injectedChunks.entrySet()) {
             long key = e.getKey();
-            filter.put((int) key, (int) (key >> 32), dimension);
+            if (!dimension.equals(DimensionKey.dimensionOf(key))) {
+                continue;
+            }
+            filter.put(DimensionKey.chunkXOf(key), DimensionKey.chunkZOf(key), dimension);
         }
         // saveAll 已摘注入表后 HashIndex 仍在：必须进 bloom，否则空图被当 ROUND1 直推。
-        for (Long key : io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.hashKeys()) {
-            filter.put((int) (long) key, (int) (key >> 32), dimension);
+        for (Long key : io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.hashKeys(dimension)) {
+            filter.put(DimensionKey.chunkXOf(key), DimensionKey.chunkZOf(key), dimension);
         }
         try {
-            java.io.File regionDir =
-                    new java.io.File(this.storageSource.getDimensionPath(this.overworld().dimension()).toFile(), "region");
-            java.io.File[] files = regionDir.listFiles((dir, name) -> name.endsWith(".mca"));
+            java.io.File dir = regionDir(dimension).toFile();
+            java.io.File[] files = dir.listFiles((d, name) -> name.endsWith(".mca"));
             if (files == null) {
                 return filter;
             }
@@ -1501,36 +1615,43 @@ public class ShadowSeedServer extends MinecraftServer {
         }
         return filter;
     }
-
     /**
      * 单柱落盘：标脏后由 {@link io.github.limuqy.mc.hassium.storage.ShadowStorageManager}
      * 从当前 {@code LevelChunk} 序列化压缩写盘。任意线程可调。
      *
      * @return true=已提交写队列；false=写 gate 拒绝或 flush 失败
      */
-    public boolean saveChunkToDisk(ChunkPos pos, LevelChunk chunk) {
+    public boolean saveChunkToDisk(String dimension, ChunkPos pos, LevelChunk chunk) {
         if (!ownShutdownInProgress
                 && !ShadowServerRegistry.getInstance().isPreviousShutdownComplete()) {
             return false;
         }
-        io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.markContentDirty(pos);
-        if (storage == null) {
+        io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.markContentDirty(dimension, pos);
+        io.github.limuqy.mc.hassium.storage.ShadowStorageManager mgr = storage(dimension);
+        if (mgr == null) {
             return false;
         }
-        return storage.flushColumn(pos,
+        return mgr.flushColumn(pos,
                 io.github.limuqy.mc.hassium.storage.ShadowStorageManager.DEFAULT_FLUSH_TIMEOUT_MS);
     }
 
+    public boolean saveChunkToDisk(ChunkPos pos, LevelChunk chunk) {
+        return saveChunkToDisk(DimensionKey.OVERWORLD, pos, chunk);
+    }
+
+    /** 主世界存储管理器（过渡期兼容；新代码请用 {@link #storage(String)}）。 */
     public io.github.limuqy.mc.hassium.storage.ShadowStorageManager storage() {
-        return storage;
+        return storage(DimensionKey.OVERWORLD);
     }
 
     void closeStorage() {
-        if (storage != null) {
-            storage.close();
+        java.util.concurrent.ConcurrentHashMap<String, io.github.limuqy.mc.hassium.storage.ShadowStorageManager> map = storages;
+        if (map != null) {
+            for (io.github.limuqy.mc.hassium.storage.ShadowStorageManager mgr : map.values()) {
+                mgr.close();
+            }
         }
     }
-
     /** 原版序列化（版本差异封装；flush 时从 LevelChunk 取 NBT）。 */
     private net.minecraft.nbt.CompoundTag serializeChunkForSave(ServerLevel level, LevelChunk chunk) {
 #if MC_VER < MC_1_21_2
@@ -1540,24 +1661,24 @@ public class ShadowSeedServer extends MinecraftServer {
                 .copyOf(level, chunk).write();
 #endif
     }
-
-    private byte[] serializeInjectedColumn(ChunkPos pos) {
-        LevelChunk chunk = injectedChunks.get(ChunkPos.asLong(pos.x, pos.z));
+    /** 指定维度注入柱序列化（flush 回调；hash 缺失时回填带维度）。 */
+    private byte[] serializeInjectedColumn(String dimension, ChunkPos pos) {
+        LevelChunk chunk = injectedChunks.get(DimensionKey.key(dimension, pos.x, pos.z));
         if (chunk == null) {
             return null;
         }
         try {
-            if (io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.get(pos) == null) {
+            if (io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.get(dimension, pos) == null) {
                 try {
                     long contentHash = io.github.limuqy.mc.hassium.cache.ChunkContentHashUtil
                             .combineSectionHashes(io.github.limuqy.mc.hassium.cache.ChunkContentHashUtil
                                     .computeSectionHashes(chunk));
-                    io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.put(pos, contentHash);
+                    io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.put(dimension, pos, contentHash);
                 } catch (Throwable hashError) {
                     LOGGER.debug("Hassium: Shadow flush hash backfill failed for {}", pos);
                 }
             }
-            net.minecraft.nbt.CompoundTag nbt = serializeChunkForSave(this.overworld(), chunk);
+            net.minecraft.nbt.CompoundTag nbt = serializeChunkForSave(level(dimension), chunk);
             java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
             net.minecraft.nbt.NbtIo.write(nbt, new java.io.DataOutputStream(baos));
             return baos.toByteArray();
@@ -1567,7 +1688,7 @@ public class ShadowSeedServer extends MinecraftServer {
         }
     }
 
-    private LevelChunk parseNbtBytes(ChunkPos pos, byte[] nbtBytes) {
+    private LevelChunk parseNbtBytes(String dimension, ChunkPos pos, byte[] nbtBytes) {
         try {
             net.minecraft.nbt.CompoundTag tag = net.minecraft.nbt.NbtIo.read(
                     new java.io.DataInputStream(new java.io.ByteArrayInputStream(nbtBytes)));
@@ -1591,7 +1712,7 @@ public class ShadowSeedServer extends MinecraftServer {
             LOGGER.debug("Hassium: parseNbtBytes 1.21.2+ not wired; falling back to vanilla load");
             return null;
 #else
-            return toLevelChunk(accChunk, pos);
+            return toLevelChunk(dimension, accChunk, pos);
 #endif
         } catch (Throwable t) {
             LOGGER.debug("Hassium: parseNbtBytes failed for {}", pos, t);
@@ -1599,29 +1720,33 @@ public class ShadowSeedServer extends MinecraftServer {
         }
     }
 
-    /**
-     * 单柱卸载（T5）：脏则先 flush 该柱再摘 LevelChunk。不删盘、不卸 hash（R2 探活用）。
-     */
     public boolean unloadChunk(ChunkPos pos, LevelChunk chunk) {
+        return unloadChunk(DimensionKey.OVERWORLD, pos, chunk);
+    }
+
+    /** 单柱卸载（指定维度）：脏则先 flush 该柱再摘 LevelChunk。不删盘、不卸 hash（R2 探活用）。 */
+    public boolean unloadChunk(String dimension, ChunkPos pos, LevelChunk chunk) {
         if (!isLightConverged()) {
             chunk.setLightCorrect(false);
-            io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.markLightDirty(pos);
+            io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.markLightDirty(dimension, pos);
         }
         if (!ownShutdownInProgress
                 && !ShadowServerRegistry.getInstance().isPreviousShutdownComplete()) {
             return false;
         }
-        if (storage != null
-                && io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.isDirty(pos)
-                && !storage.flushColumn(pos,
+        io.github.limuqy.mc.hassium.storage.ShadowStorageManager mgr = storage(dimension);
+        if (mgr != null
+                && io.github.limuqy.mc.hassium.storage.ShadowStorageHashes
+                        .isDirty(DimensionKey.key(dimension, pos.x, pos.z))
+                && !mgr.flushColumn(pos,
                 io.github.limuqy.mc.hassium.storage.ShadowStorageManager.DEFAULT_FLUSH_TIMEOUT_MS)) {
             return false;
         }
-        long key = ChunkPos.asLong(pos.x, pos.z);
+        long key = DimensionKey.key(dimension, pos.x, pos.z);
         injectedChunks.remove(key, chunk);
         unregisterInjectTicket(pos);
-        if (storage != null) {
-            storage.unmountIdleRegions();
+        if (mgr != null) {
+            mgr.unmountIdleRegions();
         }
         return true;
     }
@@ -1644,26 +1769,24 @@ public class ShadowSeedServer extends MinecraftServer {
             int savedCount = 0;
             int abandoned = 0;
             boolean timedOut = false;
-            if (storage != null
+            java.util.concurrent.ConcurrentHashMap<String, io.github.limuqy.mc.hassium.storage.ShadowStorageManager> map = storages;
+            if (map != null && !map.isEmpty()
                     && (ownShutdownInProgress
                     || ShadowServerRegistry.getInstance().isPreviousShutdownComplete())) {
-                for (int pass = 0; pass < 3; pass++) {
-                    io.github.limuqy.mc.hassium.storage.ShadowStorageManager.FlushResult result =
-                            storage.flush(io.github.limuqy.mc.hassium.storage.ShadowStorageManager
-                                    .DEFAULT_FLUSH_TIMEOUT_MS);
-                    savedCount += result.written();
-                    abandoned += result.abandoned();
-                    timedOut |= result.timedOut();
-                    if (result.written() == 0) {
-                        break;
+                for (io.github.limuqy.mc.hassium.storage.ShadowStorageManager mgr : map.values()) {
+                    for (int pass = 0; pass < 3; pass++) {
+                        io.github.limuqy.mc.hassium.storage.ShadowStorageManager.FlushResult result =
+                                mgr.flush(io.github.limuqy.mc.hassium.storage.ShadowStorageManager
+                                        .DEFAULT_FLUSH_TIMEOUT_MS);
+                        savedCount += result.written();
+                        abandoned += result.abandoned();
+                        timedOut |= result.timedOut();
+                        if (result.written() == 0) {
+                            break;
+                        }
                     }
+                    mgr.unmountIdleRegions();
                 }
-                storage.unmountIdleRegions();
-            }
-            try {
-                this.entityManager().saveAll();
-            } catch (Throwable t) {
-                LOGGER.warn("Hassium: Shadow entity save failed", t);
             }
             try {
                 flushChunkWorker(this.overworld());
@@ -1766,38 +1889,48 @@ public class ShadowSeedServer extends MinecraftServer {
             t.interrupt();
         }
     }
+    /** 影子端主世界 region 目录（过渡期兼容；新代码请用 {@link #regionDir(String)}）。 */
+    java.nio.file.Path regionDir() {
+        return regionDir(DimensionKey.OVERWORLD);
+    }
 
+    /**
+     * 指定维度 region 目录（vanilla 存档布局）：overworld→{@code world/region}、
+     * nether→{@code world/DIM-1/region}、end→{@code world/DIM1/region}。
+     * 旧单维度数据（{@code world/region}）即 overworld 数据，布局天然兼容；
+     * nether/end 从空开始。
+     */
+    java.nio.file.Path regionDir(String dimension) {
+        return this.storageSource.getDimensionPath(
+                ResourceKey.create(net.minecraft.core.registries.Registries.DIMENSION,
+                        io.github.limuqy.mc.hassium.compat.ResourceLocationCompat.create(dimension)))
+                .resolve("region");
+    }
     /** shutdown 用：持久世界根（LevelStorageAccess 两版本无统一目录 getter）。 */
     java.nio.file.Path worldRoot() {
         return worldRoot;
     }
 
-    /** 影子端世界 region 目录（容量统计/清理扫描用；与 buildBloomFilter 同源）。 */
-    java.nio.file.Path regionDir() {
-        return this.storageSource.getDimensionPath(this.overworld().dimension()).resolve("region");
+
+    public void deleteChunk(ChunkPos pos) {
+        deleteChunk(DimensionKey.OVERWORLD, pos);
     }
 
-    /**
-     * 删除磁盘区块（缓存清理调用，任意线程）：chunkMap.write(pos, null) →
-     * IOWorker 异步 → RegionFile.clear（offset 置 0 + 释放扇区，下次写入复用）。
-     * 内存注入表 / hash 桥 / 热度索引同步移除，防后续比对误命中。
-     * <p>
-     * 版本差异：1.21.2+ 的 write 接收 Supplier，传 {@code () -> null} 与官方
-     * {@code IOWorker.STORE_EMPTY} 同语义（PendingStore.data=null → clear）。
-     */
-    public void deleteChunk(ChunkPos pos) {
-        long key = ChunkPos.asLong(pos.x, pos.z);
+    /** 删除指定维度磁盘区块（缓存清理调用，任意线程）。 */
+    public void deleteChunk(String dimension, ChunkPos pos) {
+        long key = DimensionKey.key(dimension, pos.x, pos.z);
         injectedChunks.remove(key);
-        ShadowCacheEviction.remove(pos);
+        ShadowCacheEviction.remove(dimension, pos);
         if (!ownShutdownInProgress
                 && !ShadowServerRegistry.getInstance().isPreviousShutdownComplete()) {
-            io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.remove(pos);
+            io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.remove(dimension, pos);
             return;
         }
-        if (storage != null) {
-            storage.deleteColumn(pos);
+        io.github.limuqy.mc.hassium.storage.ShadowStorageManager mgr = storage(dimension);
+        if (mgr != null) {
+            mgr.deleteColumn(pos);
         } else {
-            io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.remove(pos);
+            io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.remove(dimension, pos);
         }
     }
 
@@ -1811,8 +1944,11 @@ public class ShadowSeedServer extends MinecraftServer {
      * Bloom/内存双空，R2 被当 ROUND1 直推。
      */
     void clearHotStateAfterPark() {
-        if (storage != null) {
-            storage.unmountIdleRegions();
+        java.util.concurrent.ConcurrentHashMap<String, io.github.limuqy.mc.hassium.storage.ShadowStorageManager> map = storages;
+        if (map != null) {
+            for (io.github.limuqy.mc.hassium.storage.ShadowStorageManager mgr : map.values()) {
+                mgr.unmountIdleRegions();
+            }
         }
         LOGGER.info("Hassium: Shadow parked (seed={}, injected={}, dirty={})",
                 worldSeed, injectedChunks.size(),

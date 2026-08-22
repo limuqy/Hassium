@@ -19,6 +19,7 @@ import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.NbtOps;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.resources.RegistryOps;
+import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.Services;
 import net.minecraft.server.WorldLoader;
 import net.minecraft.server.WorldStem;
@@ -234,15 +235,24 @@ public final class SeedGenLevelCompat {
                             RegistryOps.create(NbtOps.INSTANCE, dataLoadContext.datapackWorldgen());
                     java.util.Optional<LevelStem> decoded = LevelStem.CODEC.parse(ops, tag).result();
                     if (decoded.isPresent()) {
-                        Constants.LOG.info("Hassium: Shadow server consuming server LevelStem (custom worldgen)");
-                        return overworldOnlyDimensions(decoded.get()).bake(stemRegistry);
+                        Constants.LOG.info("Hassium: Shadow server consuming server LevelStem "
+                                + "(custom worldgen overworld + vanilla nether/end)");
+                        return threeDimensions(dataLoadContext, decoded.get()).bake(stemRegistry);
                     }
                 }
             } catch (Throwable t) {
                 Constants.LOG.warn("Hassium: LevelStem decode failed, fallback to NORMAL preset", t);
             }
         }
-        WorldDimensions presetDims = dataLoadContext.datapackWorldgen()
+        WorldDimensions presetDims = normalPresetDimensions(dataLoadContext);
+        LevelStem overworld = presetDims.get(LevelStem.OVERWORLD)
+                .orElseThrow(() -> new IllegalStateException("NORMAL preset missing overworld stem"));
+        return threeDimensions(dataLoadContext, overworld).bake(stemRegistry);
+    }
+
+    /** NORMAL preset 的 WorldDimensions（两版本 registry/lookup 形态差异封装）。 */
+    private static WorldDimensions normalPresetDimensions(WorldLoader.DataLoadContext dataLoadContext) {
+        return dataLoadContext.datapackWorldgen()
 #if MC_VER < MC_1_21_2
                 .registryOrThrow(Registries.WORLD_PRESET)
                 .getHolderOrThrow(WorldPresets.NORMAL)
@@ -252,24 +262,38 @@ public final class SeedGenLevelCompat {
 #endif
                 .value()
                 .createWorldDimensions();
-        // 影子端只建 Overworld：跳过 Nether/End 的 ServerLevel + 光引擎线程池
-        LevelStem overworld = presetDims.get(LevelStem.OVERWORLD)
-                .orElseThrow(() -> new IllegalStateException("NORMAL preset missing overworld stem"));
-        return overworldOnlyDimensions(overworld).bake(stemRegistry);
     }
 
     /**
-     * 单主世界 stem 包装为 WorldDimensions（1.20.1-1.20.4 Registry 形态 /
-     * 1.20.5+ Map 形态）。影子端只装配主世界——createLevels 按维度 registry 建 level，
-     * 仅 overworld 无碍（generateChunk/injectChunk 全部走 {@code overworld()}）。
+     * 装配三维度（overworld/nether/end）：overworld stem 由调用方给定（服务端握手
+     * 下发的自定义 worldgen stem 或 NORMAL preset 主世界 stem），nether/end 取
+     * NORMAL preset 原版 stem——下界/末地无天光（dimensionType.hasSkyLight=false），
+     * 光照管线按 hasSkyLight 分支，无需额外适配。
+     * <p>
+     * createLevels 按维度 registry 建 level（overworld + registry 其余维度各一个
+     * ServerLevel），generateChunk/injectChunk/bloom/落盘全部按
+     * {@code ShadowSeedServer.level(dimension)} 路由到对应 level。
      */
-    private static WorldDimensions overworldOnlyDimensions(LevelStem stem) {
+    private static WorldDimensions threeDimensions(
+            WorldLoader.DataLoadContext dataLoadContext,
+            LevelStem overworldStem) {
+        WorldDimensions presetDims = normalPresetDimensions(dataLoadContext);
+        LevelStem netherStem = presetDims.get(LevelStem.NETHER)
+                .orElseThrow(() -> new IllegalStateException("NORMAL preset missing nether stem"));
+        LevelStem endStem = presetDims.get(LevelStem.END)
+                .orElseThrow(() -> new IllegalStateException("NORMAL preset missing end stem"));
 #if MC_VER < MC_1_20_5
         MappedRegistry<LevelStem> dims = new MappedRegistry<>(Registries.LEVEL_STEM, Lifecycle.stable());
-        dims.register(LevelStem.OVERWORLD, stem, Lifecycle.stable());
+        dims.register(LevelStem.OVERWORLD, overworldStem, Lifecycle.stable());
+        dims.register(LevelStem.NETHER, netherStem, Lifecycle.stable());
+        dims.register(LevelStem.END, endStem, Lifecycle.stable());
         return new WorldDimensions(dims.freeze());
 #else
-        return new WorldDimensions(java.util.Map.of(LevelStem.OVERWORLD, stem));
+        java.util.Map<ResourceKey<LevelStem>, LevelStem> stems = new java.util.LinkedHashMap<>();
+        stems.put(LevelStem.OVERWORLD, overworldStem);
+        stems.put(LevelStem.NETHER, netherStem);
+        stems.put(LevelStem.END, endStem);
+        return new WorldDimensions(java.util.Map.copyOf(stems));
 #endif
     }
 

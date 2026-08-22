@@ -1,5 +1,6 @@
 package io.github.limuqy.mc.hassium.storage;
 
+import io.github.limuqy.mc.hassium.utils.DimensionKey;
 import net.minecraft.world.level.ChunkPos;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
@@ -70,7 +71,50 @@ class ShadowStorageHashesTest {
         ShadowStorageHashes.markContentDirty(pos);
         assertTrue(ShadowStorageHashes.isContentDirty(pos));
         assertNull(ShadowStorageHashes.get(pos));
-        assertTrue(ShadowStorageHashes.claimDirty(ChunkPos.asLong(pos.x, pos.z)));
+        assertTrue(ShadowStorageHashes.claimDirty(
+                DimensionKey.key(DimensionKey.OVERWORLD, pos.x, pos.z)), "旧裸键布局已废弃：脏键为复合键");
         assertFalse(ShadowStorageHashes.isDirty(pos));
+    }
+
+    @Test
+    @DisplayName("跨维同坐标：overworld/nether 各自 put 不同 hash 互不干扰")
+    void crossDimensionSameCoordsDoNotCollide() {
+        ChunkPos pos = new ChunkPos(-123, 456);
+        ShadowStorageHashes.put(DimensionKey.OVERWORLD, pos, 0xAAL);
+        ShadowStorageHashes.put(DimensionKey.NETHER, pos, 0xBB1L);
+        assertEquals(0xAAL, ShadowStorageHashes.get(DimensionKey.OVERWORLD, pos));
+        assertEquals(0xBB1L, ShadowStorageHashes.get(DimensionKey.NETHER, pos));
+        assertNull(ShadowStorageHashes.get(DimensionKey.END, pos));
+        assertEquals(Boolean.TRUE, ShadowStorageHashes.matchesRemote(DimensionKey.OVERWORLD, pos, 0xAAL));
+        assertEquals(Boolean.FALSE, ShadowStorageHashes.matchesRemote(DimensionKey.NETHER, pos, 0xAAL));
+
+        long owKey = DimensionKey.key(DimensionKey.OVERWORLD, pos.x, pos.z);
+        long neKey = DimensionKey.key(DimensionKey.NETHER, pos.x, pos.z);
+        assertTrue(owKey != neKey);
+        assertEquals(pos.x, DimensionKey.chunkXOf(owKey));
+        assertEquals(pos.z, DimensionKey.chunkZOf(neKey));
+    }
+
+    @Test
+    @DisplayName("脏位跨维隔离：同坐标 overworld 脏不影响 nether")
+    void crossDimensionDirtyFlagsIsolated() {
+        ChunkPos pos = new ChunkPos(7, -8);
+        ShadowStorageHashes.put(DimensionKey.OVERWORLD, pos, 1L);
+        ShadowStorageHashes.markContentDirty(DimensionKey.OVERWORLD, pos);
+        assertFalse(ShadowStorageHashes.isDirty(DimensionKey.NETHER, pos));
+        assertTrue(ShadowStorageHashes.isContentDirty(DimensionKey.OVERWORLD, pos));
+
+        long owKey = DimensionKey.key(DimensionKey.OVERWORLD, pos.x, pos.z);
+        assertTrue(ShadowStorageHashes.claimDirty(owKey));
+        long neKey = DimensionKey.key(DimensionKey.NETHER, pos.x, pos.z);
+        assertFalse(ShadowStorageHashes.claimDirty(neKey));
+
+        // remove 只删本维度，另一维度数据保留
+        ChunkPos shared = new ChunkPos(3, 4);
+        ShadowStorageHashes.put(DimensionKey.OVERWORLD, shared, 10L);
+        ShadowStorageHashes.put(DimensionKey.NETHER, shared, 20L);
+        ShadowStorageHashes.remove(DimensionKey.NETHER, shared);
+        assertEquals(10L, ShadowStorageHashes.get(DimensionKey.OVERWORLD, shared));
+        assertNull(ShadowStorageHashes.get(DimensionKey.NETHER, shared));
     }
 }

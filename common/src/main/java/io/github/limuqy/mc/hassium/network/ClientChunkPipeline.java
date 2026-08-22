@@ -1,6 +1,7 @@
 package io.github.limuqy.mc.hassium.network;
 
 import io.github.limuqy.mc.hassium.Constants;
+import io.github.limuqy.mc.hassium.utils.DimensionKey;
 
 import java.nio.file.Path;
 import java.util.Map;
@@ -24,10 +25,10 @@ public final class ClientChunkPipeline {
     private volatile java.nio.file.Path gameDir;
     private volatile String serverId;
 
-    /** 元数据 contentHash 暂存：chunkPos -> (hash, timestamp)，用于收到数据后写入缓存 */
+    /** 元数据 contentHash 暂存：DimensionKey 复合键 -> (hash, timestamp)，用于收到数据后写入缓存 */
     private final Map<Long, PendingHash> pendingContentHashes = new ConcurrentHashMap<>();
 
-    /** section 哈希暂存：chunkPos -> (sectionHashes, timestamp)，用于 persist 时一起写入 */
+    /** section 哈希暂存：DimensionKey 复合键 -> (sectionHashes, timestamp)，用于 persist 时一起写入 */
     private final Map<Long, PendingSectionHashes> pendingSectionHashes = new ConcurrentHashMap<>();
 
     /** 条目过期时间（30秒） */
@@ -203,40 +204,69 @@ public final class ClientChunkPipeline {
     }
 
     /**
-     * 暂存 contentHash，供后续收到区块数据时使用
+     * 暂存 contentHash，供后续收到区块数据时使用（指定维度）。
      */
-    public void storePendingContentHash(int chunkX, int chunkZ, long contentHash) {
+    public void storePendingContentHash(String dimension, int chunkX, int chunkZ, long contentHash) {
         evictExpiredEntries();
-        pendingContentHashes.put(chunkPosKey(chunkX, chunkZ), new PendingHash(contentHash, System.currentTimeMillis()));
+        pendingContentHashes.put(DimensionKey.key(dimension, chunkX, chunkZ),
+                new PendingHash(contentHash, System.currentTimeMillis()));
+    }
+
+    /** 暂存 contentHash（主世界；过渡期兼容签名，语义 = OVERWORLD）。 */
+    public void storePendingContentHash(int chunkX, int chunkZ, long contentHash) {
+        storePendingContentHash(DimensionKey.OVERWORLD, chunkX, chunkZ, contentHash);
     }
 
     /**
-     * 取出并移除暂存的 contentHash
+     * 取出并移除暂存的 contentHash（指定维度）。
      */
+    public long consumePendingContentHash(String dimension, int chunkX, int chunkZ) {
+        PendingHash entry = pendingContentHashes.remove(DimensionKey.key(dimension, chunkX, chunkZ));
+        return entry != null ? entry.hash() : 0L;
+    }
+
+    /** 取出并移除暂存的 contentHash（主世界；过渡期兼容签名）。 */
     public long consumePendingContentHash(int chunkX, int chunkZ) {
-        PendingHash entry = pendingContentHashes.remove(chunkPosKey(chunkX, chunkZ));
-        return entry != null ? entry.hash() : 0L;
+        return consumePendingContentHash(DimensionKey.OVERWORLD, chunkX, chunkZ);
     }
 
     /**
-     * 窥视暂存 contentHash（不移除），供异步入库与 apply 共用。
+     * 窥视暂存 contentHash（不移除），供异步入库与 apply 共用（指定维度）。
      */
+    public long peekPendingContentHash(String dimension, int chunkX, int chunkZ) {
+        PendingHash entry = pendingContentHashes.get(DimensionKey.key(dimension, chunkX, chunkZ));
+        return entry != null ? entry.hash() : 0L;
+    }
+
+    /** 窥视暂存 contentHash（主世界；过渡期兼容签名）。 */
     public long peekPendingContentHash(int chunkX, int chunkZ) {
-        PendingHash entry = pendingContentHashes.get(chunkPosKey(chunkX, chunkZ));
-        return entry != null ? entry.hash() : 0L;
+        return peekPendingContentHash(DimensionKey.OVERWORLD, chunkX, chunkZ);
     }
 
     /**
-     * 取出并移除暂存的 section 哈希
+     * 取出并移除暂存的 section 哈希（指定维度）。
      */
-    public long[] consumePendingSectionHashes(int chunkX, int chunkZ) {
-        PendingSectionHashes entry = pendingSectionHashes.remove(chunkPosKey(chunkX, chunkZ));
+    public long[] consumePendingSectionHashes(String dimension, int chunkX, int chunkZ) {
+        PendingSectionHashes entry =
+                pendingSectionHashes.remove(DimensionKey.key(dimension, chunkX, chunkZ));
         return entry != null ? entry.hashes() : null;
     }
 
-    public long[] peekPendingSectionHashes(int chunkX, int chunkZ) {
-        PendingSectionHashes entry = pendingSectionHashes.get(chunkPosKey(chunkX, chunkZ));
+    /** 取出并移除暂存的 section 哈希（主世界；过渡期兼容签名）。 */
+    public long[] consumePendingSectionHashes(int chunkX, int chunkZ) {
+        return consumePendingSectionHashes(DimensionKey.OVERWORLD, chunkX, chunkZ);
+    }
+
+    /** 窥视暂存 section 哈希（指定维度；不移除）。 */
+    public long[] peekPendingSectionHashes(String dimension, int chunkX, int chunkZ) {
+        PendingSectionHashes entry =
+                pendingSectionHashes.get(DimensionKey.key(dimension, chunkX, chunkZ));
         return entry != null ? entry.hashes() : null;
+    }
+
+    /** 窥视暂存 section 哈希（主世界；过渡期兼容签名）。 */
+    public long[] peekPendingSectionHashes(int chunkX, int chunkZ) {
+        return peekPendingSectionHashes(DimensionKey.OVERWORLD, chunkX, chunkZ);
     }
 
     /** 是否正在 Hassium 预算内的 apply（重入标志，供区块应用路径识别）。 */
@@ -281,8 +311,4 @@ public final class ClientChunkPipeline {
         pendingSectionHashes.entrySet().removeIf(e -> now - e.getValue().timestamp() > PENDING_HASH_TTL_MS);
     }
 
-    private static long chunkPosKey(int x, int z) {
-        // 必须与官方 ChunkPos.asLong(x, z) 一致（x 低位、z 高位），见 ShadowLightCompute 注释。
-        return net.minecraft.world.level.ChunkPos.asLong(x, z);
-    }
 }

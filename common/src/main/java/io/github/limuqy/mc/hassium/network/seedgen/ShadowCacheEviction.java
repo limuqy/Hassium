@@ -60,6 +60,12 @@ public final class ShadowCacheEviction {
     /** 原版 RegionFile 头 = offset 表 + timestamp 表（2 sectors，非旧 HassiumRegionFile 的 3-sector）。 */
     private static final long HEADER_BYTES = (long) SECTOR_SIZE * 2;
 
+    /** 可缓存维度白名单（与 DimensionKey.isCacheableDimension 同源）。 */
+    private static final String[] DIMENSIONS = {
+            io.github.limuqy.mc.hassium.utils.DimensionKey.OVERWORLD,
+            io.github.limuqy.mc.hassium.utils.DimensionKey.NETHER,
+            io.github.limuqy.mc.hassium.utils.DimensionKey.END
+    };
     private static final ConcurrentHashMap<Long, HotEntry> HEAT = new ConcurrentHashMap<>();
     private static final AtomicBoolean cleanupRunning = new AtomicBoolean(false);
     private static int tickCounter = 0;
@@ -67,22 +73,32 @@ public final class ShadowCacheEviction {
     private record HotEntry(int accessCount, long lastAccessMillis) {}
 
     /** 清理候选：磁盘存在的区块 + 占用量。 */
-    private record Candidate(ChunkPos pos, long sizeBytes, HotEntry hot) {}
+    private record Candidate(String dimension, ChunkPos pos, long sizeBytes, HotEntry hot) {}
 
     private ShadowCacheEviction() {}
 
     // === 热度记录（任意线程） ===
 
-    /** 记录一次区块访问（注入 / 读盘命中时调用）。 */
+    /** 记录一次区块访问（主世界；过渡期兼容签名）。 */
     public static void recordAccess(ChunkPos pos) {
-        long key = ChunkPos.asLong(pos.x, pos.z);
+        recordAccess(io.github.limuqy.mc.hassium.utils.DimensionKey.OVERWORLD, pos);
+    }
+
+    /** 记录一次指定维度区块访问（注入 / 读盘命中时调用）。键 = DimensionKey 复合键。 */
+    public static void recordAccess(String dimension, ChunkPos pos) {
+        long key = io.github.limuqy.mc.hassium.utils.DimensionKey.key(dimension, pos.x, pos.z);
         long now = System.currentTimeMillis();
         HEAT.compute(key, (k, h) -> new HotEntry(h == null ? 1 : h.accessCount + 1, now));
     }
 
-    /** 删除区块时同步移除热度条目（清理执行时调用）。 */
+    /** 删除区块时同步移除热度条目（主世界；过渡期兼容签名）。 */
     public static void remove(ChunkPos pos) {
-        HEAT.remove(ChunkPos.asLong(pos.x, pos.z));
+        remove(io.github.limuqy.mc.hassium.utils.DimensionKey.OVERWORLD, pos);
+    }
+
+    /** 删除指定维度区块时同步移除热度条目。 */
+    public static void remove(String dimension, ChunkPos pos) {
+        HEAT.remove(io.github.limuqy.mc.hassium.utils.DimensionKey.key(dimension, pos.x, pos.z));
     }
 
     // === 热度索引持久化（影子端生命周期挂钩） ===
@@ -152,16 +168,22 @@ public final class ShadowCacheEviction {
         HEAT.clear();
     }
 
+    /** 诊断：区块访问次数（主世界；无记录返回 0）。 */
+    public static int accessCountOf(ChunkPos pos) {
+        return accessCountOf(io.github.limuqy.mc.hassium.utils.DimensionKey.OVERWORLD, pos);
+    }
+
+    /** 诊断：指定维度区块访问次数（无记录返回 0）。 */
+    public static int accessCountOf(String dimension, ChunkPos pos) {
+        HotEntry h = HEAT.get(io.github.limuqy.mc.hassium.utils.DimensionKey.key(dimension, pos.x, pos.z));
+        return h == null ? 0 : h.accessCount();
+    }
+
     /** 诊断：热度索引条目数（测试/排障用）。 */
     public static int entryCount() {
         return HEAT.size();
     }
 
-    /** 诊断：区块访问次数（无记录返回 0；测试/排障用）。 */
-    public static int accessCountOf(ChunkPos pos) {
-        HotEntry h = HEAT.get(ChunkPos.asLong(pos.x, pos.z));
-        return h == null ? 0 : h.accessCount();
-    }
 
     // === 驱动（客户端主线程帧尾） ===
 
@@ -242,10 +264,10 @@ public final class ShadowCacheEviction {
             // review-fix: T3-50：扫描与删除间的 TOCTOU——复核注入表；扫描后被
             // consumeLoop 注入的区块跳过（deleteChunk 会无条件摘注入 + 清磁盘，
             // 导致该柱回传跳过、磁盘缓存丢失）
-            if (server.injectedChunk(c.pos().x, c.pos().z) != null) {
+            if (server.injectedChunk(c.dimension(), c.pos().x, c.pos().z) != null) {
                 continue;
             }
-            server.deleteChunk(c.pos());
+            server.deleteChunk(c.dimension(), c.pos());
             removed++;
             freed += c.sizeBytes();
             Constants.LOG.debug("Hassium: [SHADOW_CLEANUP] Removed chunk [{}, {}] (hotScore={}, size={}KB)",
@@ -261,7 +283,17 @@ public final class ShadowCacheEviction {
      * 与 {@code ShadowSeedServer.buildBloomFilter} 同款轻量只读（4096B 头，无锁）。
      */
     private static long scanRegions(ShadowSeedServer server, List<Candidate> out) {
-        java.io.File regionDir = server.regionDir().toFile();
+        long total = 0;
+        // 分维度目录扫描（vanilla 布局）：overworld→region、nether→DIM-1/region、end→DIM1/region。
+        for (String dimension : DIMENSIONS) {
+            total += scanRegionDir(server, server.regionDir(dimension).toFile(), dimension, out);
+        }
+        return total;
+    }
+
+    /** 扫描单个维度 region 目录：返回有效容量，候选收进 out（含维度复合键热度）。 */
+    private static long scanRegionDir(ShadowSeedServer server, java.io.File regionDir,
+                                      String dimension, List<Candidate> out) {
         java.io.File[] files = regionDir.listFiles((dir, name) -> name.endsWith(".mca"));
         if (files == null) {
             return 0;
@@ -295,20 +327,20 @@ public final class ShadowCacheEviction {
                     if (out != null) {
                         int chunkX = regionX * 32 + (i % 32);
                         int chunkZ = regionZ * 32 + (i / 32);
-                        if (server.injectedChunk(chunkX, chunkZ) == null) {
-                            out.add(new Candidate(new ChunkPos(chunkX, chunkZ), sizeBytes,
-                                    HEAT.get(ChunkPos.asLong(chunkX, chunkZ))));
+                        if (server.injectedChunk(dimension, chunkX, chunkZ) == null) {
+                            out.add(new Candidate(dimension, new ChunkPos(chunkX, chunkZ), sizeBytes,
+                                    HEAT.get(io.github.limuqy.mc.hassium.utils.DimensionKey.key(
+                                            dimension, chunkX, chunkZ))));
                         }
                     }
                 }
-                total += HEADER_BYTES;
             } catch (Throwable t) {
                 Constants.LOG.debug("Hassium: [SHADOW_CLEANUP] region scan failed for {}", f.getName(), t);
             }
+            total += HEADER_BYTES;
         }
         return total;
     }
-
     private static double hotScoreOf(Candidate c, long nowMillis,
                                      double recencyWeight, double frequencyWeight) {
         HotEntry h = c.hot();

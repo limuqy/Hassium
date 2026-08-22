@@ -1,5 +1,6 @@
 package io.github.limuqy.mc.hassium.storage;
 
+import io.github.limuqy.mc.hassium.utils.DimensionKey;
 import io.github.limuqy.mc.hassium.compression.HassiumCompression;
 import java.nio.file.Path;
 import java.util.Set;
@@ -240,5 +241,30 @@ class ShadowStorageManagerTest {
         assertEquals(1, manager.mountedRegionCount());
         assertTrue(manager.isRegionMounted(0, 0));
         assertFalse(manager.isRegionMounted(1, 0));
+    }
+
+    @Test
+    @DisplayName("跨维同坐标：nether manager flush/probe 与 overworld 互不干扰")
+    void crossDimensionManagersDoNotInterfere() {
+        ChunkPos pos = new ChunkPos(6, 6);
+        injected.add(ChunkPos.asLong(pos.x, pos.z));
+
+        ShadowStorageManager nether = new ShadowStorageManager(
+                DimensionKey.NETHER, regionDir, pos2 -> nbtPayload.clone(), injected::contains, 1);
+        try {
+            assertEquals(DimensionKey.NETHER, nether.dimension());
+            ShadowStorageHashes.put(DimensionKey.OVERWORLD, pos, 0x111L);
+            ShadowStorageHashes.put(DimensionKey.NETHER, pos, 0x222L);
+            nether.markContentDirty(pos);
+            assertTrue(ShadowStorageHashes.isContentDirty(DimensionKey.NETHER, pos));
+            assertFalse(ShadowStorageHashes.isContentDirty(DimensionKey.OVERWORLD, pos));
+
+            // nether probe 只看 nether 键：表值 0x222 命中
+            assertTrue(nether.probeHash(pos, 0x222L).match());
+            // overworld 表值不受 nether flush 影响
+            assertEquals(Boolean.TRUE, ShadowStorageHashes.matchesRemote(DimensionKey.OVERWORLD, pos, 0x111L));
+        } finally {
+            nether.close();
+        }
     }
 }

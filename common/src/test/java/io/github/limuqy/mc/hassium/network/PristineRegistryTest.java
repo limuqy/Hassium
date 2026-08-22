@@ -58,10 +58,15 @@ class PristineRegistryTest {
         assertTrue(PristineRegistry.isPristine(PristineRegistry.OVERWORLD_KEY, pos));
         assertFalse(PristineRegistry.isEmpty());
 
-        // 非主世界维度：不命中 pristine（静默走全量）
+        // 三主维度：overworld/nether/end 均可登记命中（门控放宽，REQ 明细5）
         ResourceKey<Level> nether = ResourceKey.create(Registries.DIMENSION,
                 ResourceLocationCompat.create("minecraft:the_nether"));
-        assertFalse(PristineRegistry.isPristine(nether, pos));
+        ResourceKey<Level> end = ResourceKey.create(Registries.DIMENSION,
+                ResourceLocationCompat.create("minecraft:the_end"));
+        PristineRegistry.markPristineForTest(nether, pos);
+        PristineRegistry.markPristineForTest(end, pos);
+        assertTrue(PristineRegistry.isPristine(nether, pos));
+        assertTrue(PristineRegistry.isPristine(end, pos));
 
         // 改动（setBlockState → onBlockModified）→ 移除登记，且幂等
         PristineRegistry.onBlockModified(PristineRegistry.OVERWORLD_KEY, pos);
@@ -91,6 +96,48 @@ class PristineRegistryTest {
 
         PristineRegistry.clear();
     }
+
+    @Test
+    void customDimensionShouldNeverRegisterOrHit() {
+        // 自定义维度：白名单外恒不命中；且不污染三主维度同坐标登记
+        ChunkPos pos = new ChunkPos(9, -2);
+        PristineRegistry.clear();
+        ResourceKey<Level> custom = ResourceKey.create(Registries.DIMENSION,
+                ResourceLocationCompat.create("somemod:custom_dim"));
+        PristineRegistry.markPristineForTest(custom, pos);
+        assertFalse(PristineRegistry.isPristine(custom, pos));
+
+        // 同坐标 overworld 登记不受自定义维度影响（复合键维度隔离）
+        PristineRegistry.markPristineForTest(PristineRegistry.OVERWORLD_KEY, pos);
+        assertTrue(PristineRegistry.isPristine(PristineRegistry.OVERWORLD_KEY, pos));
+        assertFalse(PristineRegistry.isPristine(custom, pos));
+
+        // 自定义维度修改置墓碑也不影响其他维度
+        PristineRegistry.onBlockModified(custom, pos);
+        assertFalse(PristineRegistry.isPristine(custom, pos));
+        assertTrue(PristineRegistry.isPristine(PristineRegistry.OVERWORLD_KEY, pos));
+
+        PristineRegistry.clear();
+    }
+
+    @Test
+    void crossDimensionSamePosShouldBeIsolated() {
+        // 跨维同坐标：nether 修改墓碑不影响 end 的 pristine 登记（复合键隔离）
+        ChunkPos pos = new ChunkPos(4, 4);
+        PristineRegistry.clear();
+        ResourceKey<Level> nether = ResourceKey.create(Registries.DIMENSION,
+                ResourceLocationCompat.create("minecraft:the_nether"));
+        ResourceKey<Level> end = ResourceKey.create(Registries.DIMENSION,
+                ResourceLocationCompat.create("minecraft:the_end"));
+        PristineRegistry.markPristineForTest(nether, pos);
+        PristineRegistry.markPristineForTest(end, pos);
+        PristineRegistry.onBlockModified(nether, pos);
+        assertFalse(PristineRegistry.isPristine(nether, pos));
+        assertTrue(PristineRegistry.isPristine(end, pos));
+
+        PristineRegistry.clear();
+    }
+
     @Test
     void clearShouldResetAll() {
         PristineRegistry.markPristineForTest(PristineRegistry.OVERWORLD_KEY, new ChunkPos(-3, 7));
