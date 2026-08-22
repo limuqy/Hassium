@@ -40,7 +40,9 @@ param(
     [string]$Scenario = "classic",
     # -ManualLogout：ROUND1 断开改走真实手动登出路径（Minecraft.disconnect(Screen[,Z])/
     # clearLevel，MixinMinecraft HEAD 注入 dump 同步执行），验证「手动登出光照/方块落盘」。
-    [switch]$ManualLogout
+    [switch]$ManualLogout,
+    # 日志审计门禁追加豁免正则（默认清单见收尾段审计块）
+    [string[]]$AllowErrorPatterns = @()
 )
 
 $ErrorActionPreference = "Continue"
@@ -334,6 +336,8 @@ Write-Host "[$SessionId] [1/9] 清理客户端缓存 ($Loader/run/client/)..."
 Remove-Item -Recurse -Force (Join-Path $clientRunDir "hassium_cache") -ErrorAction SilentlyContinue
 # Remove-Item -Recurse -Force (Join-Path $clientRunDir "config\hassium") -ErrorAction SilentlyContinue
 Remove-Item -Recurse -Force (Join-Path $clientRunDir "crash-reports") -ErrorAction SilentlyContinue
+# 服务端 crash-reports 同步清理（日志审计门禁以「会话内非空」为失败信号，历史残留会误报）
+Remove-Item -Recurse -Force (Join-Path $serverRunDir "crash-reports") -ErrorAction SilentlyContinue
 Set-Content -Path (Join-Path $serverRunDir "eula.txt") -Value "eula=true" -NoNewline -Encoding utf8NoBOM
 # 2. 配置服务端（view-distance 由 ServerSmokeTest 控制，这里设基础值）
 Write-Host "[$SessionId] [2/9] 配置服务端 ($Loader/run/server/)..."
@@ -874,6 +878,41 @@ if (-not $clientProc.HasExited) { Stop-Process -Id $clientProc.Id -Force -ErrorA
 # 仅杀本会话相关的 java 进程（通过端口和 run 目录定位），避免影响并行会话
 Stop-SessionJava -ServerPort $ServerPort -Loader $Loader
 
+# 11. 日志审计门禁：双端主日志的 ERROR/FATAL 行（豁免清单外）+ crash-reports 非空 → FAIL。
+# 基线：fabric PASS 会话 0 报错；neoforge dev 仅 ClassTransformStatistics/DistCleaner 两类良性提示。
+$logAuditAllow = @(
+    # NeoForge dev 环境良性：unprotect 处理器转换率提示（非 mod 错误）
+    "ClassTransformStatistics.*suspiciously high",
+    # NeoForge dev dist 清理器：客户端类在 dedicated server 侧被拦截的提示
+    "DistCleaner|not present on the dedicated server"
+) + @($AllowErrorPatterns)
+$logAuditFailures = @()
+foreach ($auditLog in @($serverLog, $clientLog)) {
+    if (-not (Test-Path $auditLog)) { continue }
+    $tag = Split-Path -Leaf $auditLog
+    foreach ($line in Get-Content $auditLog) {
+        if ($line -notmatch "/(ERROR|FATAL)\]|FATAL") { continue }
+        $allowHit = $false
+        foreach ($pat in $logAuditAllow) {
+            if ($pat -and $line -match $pat) { $allowHit = $true; break }
+        }
+        if (-not $allowHit) { $logAuditFailures += "${tag}: $line" }
+    }
+}
+foreach ($crashDir in @((Join-Path $clientRunDir "crash-reports"), (Join-Path $serverRunDir "crash-reports"))) {
+    if (Test-Path $crashDir) {
+        $crashes = @(Get-ChildItem $crashDir -File -ErrorAction SilentlyContinue)
+        if ($crashes.Count -gt 0) {
+            $logAuditFailures += "crash-reports 非空 ($(Split-Path -Leaf $crashDir)): $($crashes.Count) 个"
+        }
+    }
+}
+if ($logAuditFailures.Count -gt 0) {
+    Write-Host "[$SessionId] 日志审计门禁失败（$($logAuditFailures.Count) 条未豁免报错）："
+    $logAuditFailures | Select-Object -First 10 | ForEach-Object { Write-Host "[$SessionId]   $_" }
+    $result = "FAIL"
+}
+
 $resultObj = @{
     SessionId = $SessionId
     Ver = $Ver
@@ -911,11 +950,14 @@ $resultObj = @{
         if ($round1StatsFound) { "build/smoke-test/stats/${SessionId}_round1_VD${Vd1}.txt" }
         if ($round2StatsFound) { "build/smoke-test/stats/${SessionId}_round2_VD${Vd2}.txt" }
     )
+    # T11 日志审计门禁失败名单（双端 ERROR/FATAL 未豁免行 + crash-reports 非空；空数组 = 全过）
+    LogAuditFailures = @($logAuditFailures)
 }
 $resultObj | ConvertTo-Json -Depth 5 | Out-File (Join-Path $resultsDir "result_${SessionId}.json")
 
 Write-Host "[$SessionId] === RESULT: $result ==="
 Write-Host "[$SessionId] Round1: stats=$round1StatsFound pass=$round1Pass"
+Write-Host "[$SessionId] LogAudit gate: $($logAuditFailures.Count -eq 0) (未豁免报错 $($logAuditFailures.Count) 条)"
 Write-Host "[$SessionId] Round2: stats=$round2StatsFound pass=$round2Pass"
 Write-Host "[$SessionId] ServerSwitched: $serverSwitched Exit: $clientExit"
 Write-Host "[$SessionId] Gateway gate: $gatewayGate (R1=$($gatewayRound1.gatewayState)/c2s=$($gatewayRound1.gatewayC2s) R2=$($gatewayRound2.gatewayState)/c2s=$($gatewayRound2.gatewayC2s))"

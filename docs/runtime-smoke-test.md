@@ -254,6 +254,19 @@ PASS ⇔ HasPass && !HasFail && exit==0
 PASS ⇔ HasPass && exit==0 && 网关门禁 && Round2Pass（含四门禁）
 ```
 
+### 日志审计门禁（classic 与场景会话通用，作用于收尾段）
+
+双端主日志（`logs/server_<session>.log` / `client_<session>.log`）中任何 `ERROR`/`FATAL` 行，以及任一 run 目录 `crash-reports/` 非空 → 会话 FAIL；失败明细记入 result JSON `LogAuditFailures`（控制台同步输出前 10 条摘录）。追加豁免用 `-AllowErrorPattern <regex>`。
+
+默认豁免清单（dev 环境良性提示，基线实测：fabric PASS 会话 0 报错）：
+
+| 模式 | 来源 |
+|------|------|
+| `ClassTransformStatistics.*suspiciously high` | NeoForge dev unprotect 处理器转换率提示 |
+| `DistCleaner\|not present on the dedicated server` | NeoForge dev dist 清理器拦截客户端类 |
+
+服务端 `crash-reports/` 在会话开始时与客户端一同清理，门禁只看本会话新增。
+
 ## 退出码
 
 | 退出码 | 含义 |
