@@ -52,7 +52,7 @@ A: 不能。超视渲染仅在多人服启用，单人服单端 `view-distance` 
 
 ### Q: 渲染距离拉到 48 后雾后面突然冒出区块？
 
-A: 这是已知限制。Fog Mixin 跨 9 段版本签名差异大未实现；RD > 32 时雾距跟随 `getEffectiveRenderDistance` 扩大，远端区块可能突然显现（穿帮）。建议保持 RD ≤ 32。
+A: 这是已知限制。Fog Mixin 跨七段版本签名差异大未实现；RD > 32 时雾距跟随 `getEffectiveRenderDistance` 扩大，远端区块可能突然显现（穿帮）。建议保持 RD ≤ 32。
 
 ### Q: 超视渲染环带内存占用大吗？
 

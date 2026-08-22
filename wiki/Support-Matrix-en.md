@@ -4,7 +4,7 @@
 
 > **简体中文**: [Support-Matrix](Support-Matrix) · English
 
-Hassium covers Minecraft **1.20.1–1.21.11**, adapted as **9 version segments × loaders**. One segment per version; intra-segment versions are represented by an anchor compile.
+Hassium covers Minecraft **1.20.1 / 1.21.1–1.21.11**, adapted as **7 version segments × loaders**. Intra-segment versions are represented by an anchor compile.
 
 ---
 
@@ -13,11 +13,6 @@ Hassium covers Minecraft **1.20.1–1.21.11**, adapted as **9 version segments �
 | Minecraft | Fabric | Forge | NeoForge |
 | --- | --- | --- | --- |
 | 1.20.1 | ✅ | ✅ | ✅ |
-| 1.20.2 | ✅ | — | ✅ |
-| 1.20.3 | ✅ | — | ✅ |
-| 1.20.4 | ✅ | — | ✅ |
-| 1.20.5 | ✅ | — | ✅ |
-| 1.20.6 | ✅ | ✅ | ✅ |
 | 1.21.1 | ✅ | ✅ | ✅ |
 | 1.21.2 | ✅ | — | ✅ |
 | 1.21.3 | ✅ | ✅ | ✅ |
@@ -30,22 +25,19 @@ Hassium covers Minecraft **1.20.1–1.21.11**, adapted as **9 version segments �
 | 1.21.10 | ✅ | ✅ | ✅ |
 | 1.21.11 | ✅ | — | ✅ |
 
-- **Forge is available on 1.20.1 / 1.20.6 / 1.21.1 / 1.21.3–1.21.10**; 1.21.2 is skipped upstream (no official Forge userdev), **1.21.11 is sunset** — use NeoForge for 1.21.x
-- Forge support on 1.20.1 is provided by the neoforge subproject (`loom.platform=forge`); the standalone forge subproject builds only 1.20.6 / 1.21.x
-- Forge 1.20.6 keeps a one-off Forge Config API Port bridge because it shares `ModConfigSpec` with NeoForge
+- **Forge is available on 1.20.1 / 1.21.1 / 1.21.3–1.21.10**; 1.21.2 is skipped upstream (no official Forge userdev), **1.21.11 is sunset** — use NeoForge for 1.21.x
+- The FCAP Forge bridge was retired with Forge 1.20.6 support (2026-08-22)
 
 ---
 
-## Nine-segment anchors (compile matrix)
+## Seven-segment anchors (compile matrix)
 
 Each segment is represented by one anchor that participates in compile and self-checks:
 
 | Segment | Anchor | Other versions in segment | Key change (summary) |
 | --- | --- | --- | --- |
 | A | **1.20.1** | — | Baseline: legacy networking + all legacy APIs |
-| B | **1.20.2** | 1.20.3 | CustomPayload plumbing; NeoForge package rename |
-| C | **1.20.5** | 1.20.6 | StreamCodec; `Packet.write` etc. removed |
-| D | **1.21.1** | — | `DisconnectionDetails`; RL constructor privatized |
+| D | **1.21.1** | — | Modern baseline: StreamCodec, `DisconnectionDetails`; RL constructor privatized |
 | E | **1.21.2** | 1.21.3, 1.21.4 | `SerializableChunkData`, `lookupOrThrow` |
 | F | **1.21.5** | — | CompoundTag API; ProtocolInfo Unbound split; client cache **not cross-MC-version compatible** |
 | G | **1.21.6** | 1.21.7, 1.21.8 | `serverLevel()`→`level()`; Connection.send listener; NeoForge EBS bus removed |

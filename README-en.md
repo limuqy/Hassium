@@ -49,14 +49,12 @@ Clients without the mod can connect by default (`compat.requireClientMod = false
 | Minecraft | Fabric | Forge | NeoForge |
 | --- | --- | --- | --- |
 | 1.20.1 | ✅ | ✅ | ✅ |
-| 1.20.2–1.20.5 | ✅ | — | ✅ |
-| 1.20.6 | ✅ | ✅ | ✅ |
 | 1.21.1 | ✅ | ✅ | ✅ |
 | 1.21.2 | ✅ | — | ✅ |
 | 1.21.3–1.21.10 | ✅ | ✅ | ✅ |
 | 1.21.11 | ✅ | — | ✅ |
 
-See [`docs/version-segments.md`](docs/version-segments.md) for the nine adaptation segments.
+See [`docs/version-segments.md`](docs/version-segments.md) for the seven adaptation segments.
 
 ---
 

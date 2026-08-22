@@ -52,7 +52,7 @@ A: No. It is multiplayer-only; singleplayer has no server-side `view-distance` l
 
 ### Q: With RD set to 48 I see far chunks pop in through the fog. Why?
 
-A: Known limitation. The Fog Mixin is not implemented across the nine version segments; with RD > 32 the fog distance follows `getEffectiveRenderDistance` and far chunks may pop in. Recommended to keep RD ≤ 32.
+A: Known limitation. The Fog Mixin is not implemented across the seven version segments; with RD > 32 the fog distance follows `getEffectiveRenderDistance` and far chunks may pop in. Recommended to keep RD ≤ 32.
 
 ### Q: How much memory does the beyond-view ring use?
 

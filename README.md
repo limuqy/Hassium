@@ -49,14 +49,12 @@
 | Minecraft | Fabric | Forge | NeoForge |
 | --- | --- | --- | --- |
 | 1.20.1 | ✅ | ✅ | ✅ |
-| 1.20.2–1.20.5 | ✅ | — | ✅ |
-| 1.20.6 | ✅ | ✅ | ✅ |
 | 1.21.1 | ✅ | ✅ | ✅ |
 | 1.21.2 | ✅ | — | ✅ |
 | 1.21.3–1.21.10 | ✅ | ✅ | ✅ |
 | 1.21.11 | ✅ | — | ✅ |
 
-完整九段锚点与编译矩阵见 [`docs/version-segments.md`](docs/version-segments.md)。
+完整七段锚点与编译矩阵见 [`docs/version-segments.md`](docs/version-segments.md)。
 
 ---
 
@@ -186,7 +184,7 @@ flowchart LR
 | --- | --- |
 | [`docs/architecture.md`](docs/architecture.md) | 能力总览与场景、模块架构、客户端数据流、存储格式、配置、日志、命令 |
 | [`docs/chunk-cache.md`](docs/chunk-cache.md) | 区块缓存推送、超视渲染（§10）、磁盘 NBT（§11）、导出（§12） |
-| [`docs/version-segments.md`](docs/version-segments.md) | 多版本九段适配真相源 |
+| [`docs/version-segments.md`](docs/version-segments.md) | 多版本七段适配真相源 |
 | [`docs/mod-compat.md`](docs/mod-compat.md) | 多 Mod 兼容边界与配置逃生 |
 
 ---

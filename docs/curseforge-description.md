@@ -71,8 +71,6 @@ Clients without the mod can connect by default (`compat.requireClientMod = false
 | Minecraft | Fabric | Forge | NeoForge |
 | --- | --- | --- | --- |
 | 1.20.1 | Yes | Yes | Yes |
-| 1.20.2–1.20.5 | Yes | — | Yes |
-| 1.20.6 | Yes | Yes | Yes |
 | 1.21.1 | Yes | Yes | Yes |
 | 1.21.2 | Yes | — | Yes |
 | 1.21.3–1.21.10 | Yes | Yes | Yes |
@@ -133,8 +131,6 @@ Complete matrix: [Support Matrix](https://github.com/limuqy/Hassium/wiki/Support
 | Minecraft | Fabric | Forge | NeoForge |
 | --- | --- | --- | --- |
 | 1.20.1 | ✅ | ✅ | ✅ |
-| 1.20.2–1.20.5 | ✅ | — | ✅ |
-| 1.20.6 | ✅ | ✅ | ✅ |
 | 1.21.1 | ✅ | ✅ | ✅ |
 | 1.21.2 | ✅ | — | ✅ |
 | 1.21.3–1.21.10 | ✅ | ✅ | ✅ |

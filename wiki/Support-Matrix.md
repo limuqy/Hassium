@@ -4,7 +4,7 @@
 
 > **English**: [Support-Matrix-en](Support-Matrix-en) · 中文
 
-Hassium 覆盖 Minecraft **1.20.1–1.21.11**，按 **9 个版本段 × 加载器** 适配。一版一段，段内版本以锚点编译代表。
+Hassium 覆盖 Minecraft **1.20.1 / 1.21.1–1.21.11**，按 **7 个版本段 × 加载器** 适配。段内版本以锚点编译代表。
 
 ---
 
@@ -13,11 +13,6 @@ Hassium 覆盖 Minecraft **1.20.1–1.21.11**，按 **9 个版本段 × 加载�
 | Minecraft | Fabric | Forge | NeoForge |
 | --- | --- | --- | --- |
 | 1.20.1 | ✅ | ✅ | ✅ |
-| 1.20.2 | ✅ | — | ✅ |
-| 1.20.3 | ✅ | — | ✅ |
-| 1.20.4 | ✅ | — | ✅ |
-| 1.20.5 | ✅ | — | ✅ |
-| 1.20.6 | ✅ | ✅ | ✅ |
 | 1.21.1 | ✅ | ✅ | ✅ |
 | 1.21.2 | ✅ | — | ✅ |
 | 1.21.3 | ✅ | ✅ | ✅ |
@@ -30,22 +25,19 @@ Hassium 覆盖 Minecraft **1.20.1–1.21.11**，按 **9 个版本段 × 加载�
 | 1.21.10 | ✅ | ✅ | ✅ |
 | 1.21.11 | ✅ | — | ✅ |
 
-- **Forge 支持 1.20.1 / 1.20.6 / 1.21.1 / 1.21.3–1.21.10**；1.21.2 上游未发布 Forge userdev（官方跳过），**1.21.11 起 sunset**，1.21.x 推荐使用 NeoForge
-- 1.20.1 的 Forge 兼容由 neoforge 子项目（`loom.platform=forge`）承担；独立 forge 子项目仅构建 1.20.6 / 1.21.x
-- 1.20.6 因与 NeoForge 共用 `ModConfigSpec`，仅 Forge 1.20.6 一处保留 Forge Config API Port 桥接
+- **Forge 支持 1.20.1 / 1.21.1 / 1.21.3–1.21.10**；1.21.2 上游未发布 Forge userdev（官方跳过），**1.21.11 起 sunset**，1.21.x 推荐使用 NeoForge
+- FCAP Forge 桥已随 Forge 1.20.6 支持退役（2026-08-22）
 
 ---
 
-## 九段锚点（编译矩阵）
+## 七段锚点（编译矩阵）
 
 各版本段以一个锚点版本为代表参与编译与自检：
 
 | 段 | 锚点 | 段内其余版本 | 关键变化（摘要） |
 | --- | --- | --- | --- |
 | A | **1.20.1** | — | 基准：旧网络 + 全部旧 API |
-| B | **1.20.2** | 1.20.3 | CustomPayload 路径；NeoForge 包名 |
-| C | **1.20.5** | 1.20.6 | StreamCodec；`Packet.write` 等移除 |
-| D | **1.21.1** | — | `DisconnectionDetails`；ResourceLocation 构造私有化 |
+| D | **1.21.1** | — | 现代基线：StreamCodec、`DisconnectionDetails`；RL 构造私有化 |
 | E | **1.21.2** | 1.21.3, 1.21.4 | `SerializableChunkData`、`lookupOrThrow` |
 | F | **1.21.5** | — | CompoundTag API；ProtocolInfo Unbound 拆分；客户端缓存**不跨 MC 大版本兼容** |
 | G | **1.21.6** | 1.21.7, 1.21.8 | `serverLevel()`→`level()`；Connection.send 监听器；NeoForge EBS bus 移除 |

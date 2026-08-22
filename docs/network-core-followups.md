@@ -14,7 +14,7 @@
 | A2 | 主控 CONFIG_S2C 丢弃 | ✅ 已验证 | 双路径（vanilla TCP config 主通道 + 帧通道，后者仅登录桥/续流物化路径启用）6 会话 0 registry 重复/冲突/崩溃 → 丢弃正确，**无需补转发** | 证据：`work/RealE2EVerification-TASK.md`（T9v4 段2/段3 A2 观察）；s2c=0 语义裁决见该文 0. 节 |
 | A3 | custom-payload 直发 | ✅ 已完成 | `ClientMetadataHandler` 无 `.send(`/sendPacket/channel.write 直发点（467 行全扫 + T9v4 复核 grep 0 命中）→ 已收口，无待办 | 复核：`work/RealE2EVerification-TASK.md`（T9v4 A3 观察） |
 | A4 | pending-attach TTL | ✅ 已完成 | `PENDING_ATTACH_TTL_MS=10_000L` 兜底在位，超时 warn 后走登录桥/重连兜底；6 会话 + 驻留全程 0 告警 → **保持告警语义** | `server/GatewayPlayerBridge.java`（L97-98 常量、L123-126 告警）；证据：`work/RealE2EVerification-TASK.md`（T9v4 A4 观察） |
-| A5 | 1.20.2–1.20.4 非锚点段 | ⚠️ 范围外 | 10 处历史遗留编译错误已修复，**10 版本编译全绿**（编译保证达成）；该段运行时冒烟明确不属本波，归发布前另行安排 | T8b（BoundaryCompileFix）；证据：任务交接 `BoundaryCompileFix` / T8 记录 |
+| A5 | 1.20.2–1.20.4 非锚点段 | ✅ 作废 | 2026-08-22 已裁剪 1.20.2–1.20.6 支持；该段不再发版、不再冒烟。历史编译修复记录保留于 T8b / BoundaryCompileFix | 产品矩阵见 `docs/version-segments.md`（1.20.1 + 1.21.1–1.21.11） |
 | A6 | 续流玩家占位名 + 空数据 | ✅ 已完成 | `PlayerDataStorage` 磁盘加载链路落地，续流 resume data loaded（背包/末影箱/位置从 playerdata 恢复）；固定用户名 HassiumDev 后命中 UUID 676f0bd1-8e18-374c-b04d-a01048faeb67，实证加载 | `server/PlayerDataStorage.java`、`server/GatewayPlayerBridge.java`（L544-549 resume data loaded 日志）；证据：`work/T10-MigrationDrill-TASK.md`（V5，3 版本 × 双路径） |
 | A7 | lightComputeSupported 未进帧握手 | ✅ 已完成 | 握手帧 C2S 追加第 5 字段（append-only，旧端忽略尾字节），Bridge 读取 → 剥光 gate 按客户端能力；剥光恢复待真实光照场景观察 | `network/HandshakeStateTail.java`（C2S 记录 L21-23、写 L64-65、读 L99-105）、`network/core/NetworkCore.java`（L1037-1041 值源）、`server/ServerChunkPushManager.java`（L108-112 / L1788-1791 剥光协商）、`server/GatewayPlayerBridge.java`（L585-587） |
 | A8 | ZSTD 对称时序 | ✅ 已验证 | 平台 setZstd 与客户端配置同源 + CompressionReady ACK 已在；6 会话真实双端跑通（T9 默认配置）；深度压测留作可选增强，非阻塞项 | 修复：`network/ZstdContextDecoder.java`（frameAware）；证据：`work/RealE2EVerification-TASK.md`（T9v4 6/6 PASS） |
@@ -34,7 +34,7 @@
 | # | 项 | 状态 | 最终结论 | 实现位置 / 验证证据 |
 |---|---|---|---|---|
 | C1 | 1.20.1 双 ServerPlayer | ✅ 已验证 | T9 两会话 0 冲突/覆盖（"UUID of added entity already exists: Bat" 为影子端实体同步 vanilla WARN，无关）；附着逻辑真实联调通过 | 证据：`work/RealE2EVerification-TASK.md`（T9v4 C1 观察）+ `work/T10-MigrationDrill-TASK.md`（1.20.1 迁移 PASS） |
-| C2 | config 中继 1.20.2–1.20.4 | ⚠️ 范围外 | 该段 CONFIG 帧路径仅编译级保证（随 A5 一并达成 10 版本编译全绿）；运行时验证随 A5 归发布前冒烟 | T8b（BoundaryCompileFix）；证据：任务交接 `BoundaryCompileFix` / T8 记录 |
+| C2 | config 中继 1.20.2–1.20.4 | ✅ 作废 | 同 A5：该段已裁剪，无现行 CONFIG 帧路径需冒烟 | `docs/version-segments.md` |
 
 ## D. ViaFabric 兼容（桥已落地；实测用户拍板不属本波）
 

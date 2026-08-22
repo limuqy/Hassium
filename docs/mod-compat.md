@@ -92,7 +92,7 @@ Sodium / Iris / Lithium / FerriteCore / EntityCulling / ImmediatelyFast 等通�
 | **Mod Menu**（Fabric） | 软兼容：单独安装即可打开 Cloth 配置屏 |
 | **Cloth Config** | Fabric / Forge / NeoForge 均 **jiJ**；配置屏主路径 |
 | **Configured** | Forge/NeoForge 可选；Fabric 不依赖 |
-| **Forge Config API Port** | Fabric **不使用**（Night Config 自管 toml）；仅 Forge **1.20.6** jiJ（ModConfigSpec 桥接）；NeoForge 原生 Spec |
+| **Forge Config API Port** | Fabric **不使用**（Night Config 自管 toml）；FCAP Forge 桥已随 Forge 1.20.6 退役；NeoForge 原生 Spec |
 
 配置文件（双文件模型）：物理客户端读 `config/hassium/hassium-client.toml`；专用服读 `config/hassium/hassium-server.toml`（旧三文件 `common.toml` 模型已废弃）。
 

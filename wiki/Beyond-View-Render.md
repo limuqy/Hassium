@@ -77,7 +77,7 @@ flowchart TD
 - 视距外向服务器请求 `ChunkDataRequestC2S` 或放宽 BE 视距校验
 - 分段增量接回超视渲染（仍是 hit/miss 二分；miss 永远静默回滚）
 - 抬高 vanilla 滑块上限 > 32（跨段签名差异大；用户自行编辑 `options.txt`）
-- 雾距钳制 Mixin（Fog Mixin 跨 9 段签名差异与 RenderSystem API 变化大，未实现）
+- 雾距钳制 Mixin（Fog Mixin 跨七段签名差异与 RenderSystem API 变化大，未实现）
 
 ---
 

@@ -10,7 +10,7 @@
 | [architecture.md](architecture.md) | 架构总览：模块架构、存储格式、配置、命令、卖点特性 | 当前 |
 | [chunk-cache.md](chunk-cache.md) | 区块缓存推送、chunkHash、超视渲染（§10）、磁盘 NBT（§11）、导出（§12） | 当前 |
 | [client-chunk-light-flow.md](client-chunk-light-flow.md) | 客户端收包 → apply → 光照落地全链路 | 当前 |
-| [version-segments.md](version-segments.md) | 多版本九段适配真相源 | 当前 |
+| [version-segments.md](version-segments.md) | 多版本七段适配真相源 | 当前 |
 | [mod-compat.md](mod-compat.md) | 多 Mod 兼容边界与配置逃生 | 当前 |
 | [runtime-smoke-test.md](runtime-smoke-test.md) | 多版本运行时自检与网关双主控迁移冒烟 | 当前 |
 | [ai-functional-test.md](ai-functional-test.md) | 面向 AI 的游戏内功能测试操作（minecraft-mod-mcp） | 当前 |

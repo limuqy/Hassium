@@ -1,8 +1,8 @@
 # 有效版本区间（Version Segments）
 
-本文档是 Hassium 多版本适配的**唯一真相源**。工作单位不是「17 个 MC 版本 × 3 加载器」，而是 **9 个有效代码段 × `builds_for` 中的加载器**。
+本文档是 Hassium 多版本适配的**唯一真相源**。工作单位不是「12 个 MC 版本 × 3 加载器」，而是 **7 个有效代码段 × `builds_for` 中的加载器**。
 
-相关：Manifold `#if MC_VER`（多版本源码预处理，见 AGENTS.md 模块与包地图）、`versionProperties/*.properties`。
+相关：Manifold `#if MC_VER`（多版本源码预处理，见 AGENTS.md 与 [`.cursor/skills/hassium-manifold/SKILL.md`](../.cursor/skills/hassium-manifold/SKILL.md)）、`versionProperties/*.properties`。
 
 ---
 
@@ -19,10 +19,7 @@
 
 | 分界常量 | common 变因 | fabric 特有 | forge 特有 | neoforge 特有 |
 |----------|-------------|-------------|------------|---------------|
-| `MC_1_20_2` | `onDisconnect` 上移、`CustomPayload` 包路径、`createPacket` | — | 旧 `newSimpleChannel` 断；1.20.6+ 用 `ChannelBuilder` | forge→neoforge 包名；1.20.2/1.20.3 仍用 SimpleChannel + `PlayNetworkDirection`（非 StreamCodec） |
-| `MC_1_20_4` | —（仅 NeoForge 网络子分界） | — | — | **NeoForge 20.4 移除 SimpleChannel**：改用 `RegisterPayloadHandlerEvent`（注意 1.20.5+ 改名 `RegisterPayloadHandlersEvent`） + `CustomPacketPayload.write/id`（无 StreamCodec / Type\<T\>） |
-| `MC_1_20_5` | `Packet.write()` 移除、`BlockEntity.load()` 移除、`getPacketsByIds` 移除 | 网络改 StreamCodec | ChunkPacket STREAM_CODEC（若构建） | Payload + StreamCodec（`RegisterPayloadHandlersEvent`） |
-| `MC_1_21_1` | `Component` → `DisconnectionDetails`；RL 构造私有化；`GameProtocols.CLIENTBOUND/SERVERBOUND` → `*_TEMPLATE`；`ChunkHolder.pos` 上移至 `GenerationChunkHolder`；`ProtocolInfo.Unbound.listPackets` | — | — | — |
+| `MC_1_21_1` | 1.20.1 vs 现代基线总缝：`CustomPayload` 包路径（game→common）、`createPacket`/`getPacketId` 移除（改 codec）、`onDisconnect` 上移、`Packet.write()` 移除、`BlockEntity.load()` 移除、`getPacketsByIds` 移除、Fabric 网络改 StreamCodec、NeoForge 改 Payload + `RegisterPayloadHandlersEvent`、`Component` → `DisconnectionDetails`；RL 构造私有化；`GameProtocols.CLIENTBOUND/SERVERBOUND` → `*_TEMPLATE`；`ChunkHolder.pos` 上移至 `GenerationChunkHolder`；`ProtocolInfo.Unbound.listPackets` | — | — | — |
 | `MC_1_21_2` | `ChunkSerializer` → `SerializableChunkData`、`registryOrThrow` → `lookupOrThrow` | — | — | — |
 | `MC_1_21_5` | `CompoundTag` API（`getAllKeys`→`keySet` 等）；`ProtocolInfo.Unbound` → `SimpleUnboundProtocol` / `UnboundProtocol`（SERVERBOUND 需 `GameProtocols.Context`）；`ClientboundLevelChunkPacketData` heightmaps NBT→StreamCodec | — | — | — |
 | `MC_1_21_6` | `serverLevel()` → `level()`；`ServerPlayer` 构造精简；`Connection.send` 监听器 `PacketSendListener`→`ChannelFutureListener`；`BlockEntity.load*` → `ValueInput` | — | `SubscribeEvent` 包路径 | `EventBusSubscriber.bus` 移除（按事件自动选总线） |
@@ -34,11 +31,7 @@
 ### 合法 `#if` 边界白名单（扫描用）
 
 ```
-MC_1_20_2
-MC_1_20_3
-MC_1_20_4
-MC_1_20_5
-MC_1_20_6
+MC_1_20_1
 MC_1_21_1
 MC_1_21_2
 MC_1_21_5
@@ -47,23 +40,21 @@ MC_1_21_9
 MC_1_21_11
 ```
 
-（`MC_1_20_1` 为基准，通常只出现在注释；比较式用 `< MC_1_20_2` 表达 1.20.1。）
+（比较式用 `< MC_1_21_1` 表达 1.20.1。）
+
 
 历史遗留：代码中偶见 `MC_1_21_4`（与 `MC_1_21_5` 等价边界）。新代码禁止新增；清扫时统一为 `MC_1_21_5`。
 
-> **关于 `MC_1_20_3`**：`MinecraftServer.getAverageTickTime()` 在 1.20.3 改名 `getAverageTickTimeNanos()`（返回值 float→long，纳秒），ServerLoadReporter 需此子分界（历史 commit edca91c 亦曾以此边界处理 tickTimes）。
-> **关于 `MC_1_20_4` / `MC_1_20_6`**：均为 NeoForge 网络子系统在段 B/C 内的**子分界**（仅影响 neoforge 模块）。NeoForge 20.4 移除 SimpleChannel，1.20.4 必须改用 `RegisterPayloadHandlerEvent` + `CustomPacketPayload.write/id`；NeoForge 20.6 的 `IPayloadContext` 移除 `connection()` 改 `listener()`（NeoForgeNetworkManager:2331 使用）。引入这些子分界是技术必要，非"碎片边界"。
+> **历史（2026-08-22 版本收缩前）**：`MC_1_20_2/3/4/5/6` 子分界已随 1.20.2–1.20.6 支持裁剪全部退役（原 NeoForge 网络 4 段 / Fabric·Forge 3 段归拢为「1.20.1 vs ≥1.21.1」两段；tick 计时、NbtIo 等微补丁并入 `< MC_1_21_1`）。
 
 ---
 
-## 九段 × 锚点
+## 七段 × 锚点
 
 | 段 | 锚点（必编 / 必测） | 段内其余版本 | 进入本段后的关键变化 |
 |----|---------------------|--------------|----------------------|
-| A | **1.20.1** | — | 基准：旧网络 + 全部旧 API |
-| B | **1.20.2** | 1.20.3 | CustomPayload / NeoForge 包名；段内无 Forge builds_for。NeoForge 1.20.4 因移除 SimpleChannel 走独立子分界 `MC_1_20_4`（见上） |
-| C | **1.20.5** | 1.20.6 | StreamCodec；`Packet.write` 等移除（无 1.21.0 属性文件时以 1.20.6 为段尾） |
-| D | **1.21.1** | — | `DisconnectionDetails`；RL 构造私有化；`GameProtocols.*_TEMPLATE` |
+| A | **1.20.1** | — | 基准：旧网络 + 全部旧 API（Java 17） |
+| D | **1.21.1** | — | 现代基线：StreamCodec、`DisconnectionDetails`；RL 构造私有化；`GameProtocols.*_TEMPLATE`（Java 21） |
 | E | **1.21.2** | 1.21.3, 1.21.4 | `SerializableChunkData`、`lookupOrThrow` |
 | F | **1.21.5** | — | CompoundTag API；ProtocolInfo Unbound 拆分；chunk heightmaps 线格式；**客户端缓存不跨 MC 版本兼容**（见文末附录） |
 | G | **1.21.6** | 1.21.7, 1.21.8 | `serverLevel()`→`level()`；Connection.send 监听器；NeoForge EBS.bus 移除 |
@@ -77,8 +68,6 @@ MC_1_21_11
 | 锚点 | 加载器 |
 |------|--------|
 | 1.20.1 | fabric, forge, neoforge |
-| 1.20.2 | fabric, neoforge |
-| 1.20.5 | fabric, neoforge |
 | 1.21.1 | fabric, neoforge, forge |
 | 1.21.2 | fabric, neoforge |
 | 1.21.5 | fabric, neoforge, forge |
@@ -86,9 +75,9 @@ MC_1_21_11
 | 1.21.9 | fabric, neoforge, forge |
 | 1.21.11 | fabric, neoforge |
 
-> **Forge 支持 1.20.1 / 1.20.6 / 1.21.1 / 1.21.3 / 1.21.4 / 1.21.5 / 1.21.6 / 1.21.7 / 1.21.8 / 1.21.9 / 1.21.10**；**1.21.11 起 sunset**（architectury-loom 在 merged jar 重映射阶段打散 anonymous inner class `$N` 编号，outer class `<clinit>` 调用方与实际 class 文件名错位：loom 1.13.469 崩点在 `ByteBufCodecs$N`，loom 1.17.491（2026-07-29 验证 + Gradle 9.6.1）漂移到 `CompoundTag$N` 且 1.21.10 runServer 证实到 `Done`，root cause 同源未修复，详见附录「Forge 1.21.x 适配」）。**1.21.2 上游未发布 Forge userdev**（官方跳过），1.21.11 及后续不构建 Forge，1.21.x 请用 NeoForge。
+> **Forge 支持 1.20.1 / 1.21.1 / 1.21.3 / 1.21.4 / 1.21.5 / 1.21.6 / 1.21.7 / 1.21.8 / 1.21.9 / 1.21.10**；**1.21.11 起 sunset**（architectury-loom 在 merged jar 重映射阶段打散 anonymous inner class `$N` 编号，outer class `<clinit>` 调用方与实际 class 文件名错位：loom 1.13.469 崩点在 `ByteBufCodecs$N`，loom 1.17.491（2026-07-29 验证 + Gradle 9.6.1）漂移到 `CompoundTag$N` 且 1.21.10 runServer 证实到 `Done`，root cause 同源未修复，详见附录「Forge 1.21.x 适配」）。**1.21.2 上游未发布 Forge userdev**（官方跳过），1.21.11 及后续不构建 Forge，1.21.x 请用 NeoForge。Forge 1.20.6 支持已随 1.20.x 收缩退役（2026-08-22）。
 >
-> **Fabric 配置**：自管 toml + Cloth/Mod Menu，**不依赖 FCAP**。FCAP 仅 Forge 1.20.6 桥接保留。
+> **Fabric 配置**：自管 toml + Cloth/Mod Menu，**不依赖 FCAP**。FCAP Forge 桥已随 Forge 1.20.6 退役。
 
 本地 / CI：
 
@@ -97,7 +86,7 @@ MC_1_21_11
 ./gradlew compileAnchors          # 或 scripts/compile-anchors.ps1 / .sh
 ```
 
-推进顺序：按 **A → I** 锚点推进；禁止并行铺满九段。当前状态见文末附录。
+推进顺序：按 **A → D → I** 锚点推进；禁止并行铺满七段。当前状态见文末附录。
 
 ---
 
@@ -118,20 +107,16 @@ MC_1_21_11
 | 分界 | 动作 |
 |------|------|
 | 1.20.1 | 基准：现有网络实现。**历史（1.1.2）**：UDP 数据面 + TCP 控制 Failover（主控热切 + 加权分流）落地点（Task 1-9 commit `22c9c3f`），九锚适配由 `931b393`（Fabric launcher 跨版本守卫）与 `e9a9e69`（NeoForge 主控热切 + 加权分流接线 + kcp io.netty split-package 剥离）完成，Fabric + NeoForge × 九锚点 compile 矩阵全 BUILD SUCCESSFUL；L2 恢复表现（`recoveryFreeze` 定格/无感切换）后铺开全版本（commit `f89a691`，冻结注入与终端拆除按段适配）。**2.0.0 客户端 failover 已退役**（`729d92e` 删 ClientFailoverIdentity/ClientRecoveryState/ControlReconnect\*/ControlEndpoint\*/定格 MixinGui/notifyFallback 等，见 handoff docs/handoff/handoff-2026-08-09-docs-2.0.md）：客户端恢复语义由**网络核心 L1 迁移引擎**承担（`network/core/migration/`，`network.dataPlane.recoveryWindowMs` 语义迁移为其故障静默超时，MigrationPolicy.java:22-23 明注沿用）；UDP 数据面保留为网关↔主控通道 bulk 载体（默认关）。1.20.1/1.21.1/1.21.11 三段 nginx 真实断链冒烟 PASS 为 failover 时代记录（历史语境） |
-| 1.20.2 | CustomPayload 路径；段内无 Forge；1.20.6+ Forge 用 ChannelBuilder play() |
-| 1.20.4 | **仅 NeoForge**：SimpleChannel 被移除，改用 `RegisterPayloadHandlerEvent` + `CustomPacketPayload.write/id`（1.20.5+ 才有 StreamCodec） |
-| 1.20.5 | STREAM_CODEC / `type()`；聚合写包、原版包枚举等 common 能力 |
+| ≥1.21.1 | 现代基线：STREAM_CODEC / `type()`、Payload + `RegisterPayloadHandlersEvent`（NeoForge）、Forge ChannelBuilder；聚合写包、原版包枚举等 common 能力 |
 | 其后 | 多为 common API；网络协议少变 |
 
-加载器内网络适配器允许整段实现块：
-- **NeoForge**：4 段（`<1.20.2` / `1.20.2–1.20.3` / `1.20.4` / `≥1.20.5`）
-- **Fabric / Forge**：3 段（`<1.20.2` / `1.20.2–1.20.4` / `≥1.20.5`）
+加载器内网络适配器允许整段实现块（两分界）：
+- **NeoForge**：2 段（`< MC_1_21_1` SimpleChannel(forge 包名) / `≥ MC_1_21_1` Payload + StreamCodec）
+- **Fabric / Forge**：2 段（`< MC_1_21_1` buf 收发 / `≥ MC_1_21_1` StreamCodec）
 
-禁止每个 send/receive 再套一层碎片 `#if`。
+### 功能门控
 
-### 功能门控（段 C 已完成）
-
-段 C 完成后 `NetworkCapability.isCustomChannelFullySupported()` 恒为 true；`CommonClass.init()` 不再因版本强制关闭网络。
+`NetworkCapability.isCustomChannelFullySupported()` 恒为 true；`CommonClass.init()` 不因版本强制关闭网络。
 
 - 各加载器 `registerChannels` / 握手入口仍尊重配置项 `HassiumConfigService.isNetworkCompressionEnabled()`
 - 实现细节见 `PacketCodecCompat`（StreamCodec / GameProtocols / IdDispatchCodec）
@@ -168,19 +153,19 @@ MC_1_21_11
 
 | 类 | 分界 | 职责 |
 |----|------|------|
-| `PacketPayloadCompat` | 1.20.2 / 1.20.5 / 1.21.11 | CustomPayload ID / 数据 / 构造 |
+| `PacketPayloadCompat` | 1.21.1 / 1.21.11 | CustomPayload ID / 数据 / 构造 |
 | `ResourceLocationCompat` | 1.21.1 / 1.21.11 | RL / Identifier 创建 |
 | `RegistryCompat` | 1.21.2 | registryOrThrow / lookupOrThrow |
 | `DisconnectCompat` | 1.21.1 | onDisconnect 参数 |
 | `PermissionCompat` | 1.21.11 | 命令权限 API |
-| `PlayerCompat` | 1.20.2 / 1.21.6 / 1.21.9 | `serverLevel()` / `level()`；`getServer()`→`level().getServer()`；`getConnection` 沿继承链取 `connection` |
-| `BlockEntityCompat` | 1.20.5 / 1.21.6 | `load` / `loadWithComponents(CompoundTag)` / `ValueInput` |
+| `PlayerCompat` | 1.21.1 / 1.21.6 / 1.21.9 | `serverLevel()` / `level()`；`getServer()`→`level().getServer()`；`getConnection` 沿继承链取 `connection` |
+| `BlockEntityCompat` | 1.21.1 / 1.21.6 | `load` / `loadWithComponents(CompoundTag)` / `ValueInput` |
 | `LevelChunkSectionCompat` | 1.21.9 | Section 构造 |
 | `CompoundTagCompat` | 1.21.5 | keys / 标量读取 |
 | `ChunkPacketDataCompat` | 1.21.5 | chunk packet heightmaps 跳过/复制（NBT→StreamCodec） |
 | `ChunkDataCompat` | 1.21.2 | Mixin 目标类说明（序列化入口） |
-| `NetworkCapability` | 1.20.5 | 自定义通道是否完整可用（段 C 后恒 true） |
-| `PacketCodecCompat` | 1.20.5 / 1.21.1 / 1.21.5 / 1.21.11 | StreamCodec 聚合写包 / GameProtocols 包枚举 / ProtocolInfo bind / Payload 提取；`listPackets` 自 1.21.1（此前走 IdDispatchCodec）；`readResourceLocation`→`readIdentifier` |
+| `NetworkCapability` | — | 自定义通道是否完整可用（恒 true，历史 1.20.5 分界已退役） |
+| `PacketCodecCompat` | 1.21.1 / 1.21.5 / 1.21.11 | StreamCodec 聚合写包 / GameProtocols 包枚举 / ProtocolInfo bind / Payload 提取；`listPackets` 自 1.21.1（此前走 IdDispatchCodec）；`readResourceLocation`→`readIdentifier` |
 
 ---
 
@@ -190,15 +175,16 @@ MC_1_21_11
 - 不追求每个小版本手测
 - 不在 `builds_for` 不含 forge 的版本上硬撑 Forge 网络
 - **不在 1.21.11 上构建 Forge**（暂时搁置，根因见附录「Forge 1.21.x 适配」）
-- **Fabric 不引入 FCAP**（自管 toml + Cloth）；不在 Forge 1.20.6 以外硬撑 FCAP
+- **Fabric 不引入 FCAP**（自管 toml + Cloth）；FCAP Forge 桥已随 Forge 1.20.6 支持退役
 - 不把 Identifier rename 散落到业务文件
 
 ---
 
-## 附录：九段适配状态（2026-07-28）
+## 附录：适配状态
 
-**九段适配已全部完成。** 关键运行时回归：1.20.1 / 1.20.5 / 1.21.1 / 1.21.11 通过。  
-多 Mod 冒烟（Fabric 1.20.1 优化包 + C2ME）见 [`mod-compat.md`](mod-compat.md) §11。
+**历史（2026-07-28，九段时代）九段适配曾全部完成**；关键运行时回归：1.20.1 / 1.20.5 / 1.21.1 / 1.21.11 通过。  
+多 Mod 冒烟（Fabric 1.20.1 优化包 + C2ME）见 [`mod-compat.md`](mod-compat.md) §11。  
+**2026-08-22 起版本收缩为 1.20.1 + 1.21.1+（七段），以下涉及段 B/C 与 1.20.2–1.20.6 的记录均为历史语境。**
 
 ### Forge 1.20.6 重新兼容（2026-07-28）
 
@@ -263,7 +249,6 @@ Forge 自 1.21.x 起仍为 Forge 风格 API，与 NeoForge 不兼容；Hassium �
 | MC 版本 | Forge |
 |---------|-------|
 | 1.20.1 | ✅ `builds_for` 含 forge |
-| 1.20.6 | ✅（段 C 段尾） |
 | 1.21.1 | ✅（Phase R pass，commit 1461705） |
 | 1.21.5 | ✅（Phase R pass，commit 6114071） |
 | 1.21.3 / 1.21.4 | ✅ `builds_for` 含 forge（loom 1.17.491 `:forge:compileJava` 通过 2026-07-29） |
@@ -280,5 +265,3 @@ Forge 自 1.21.x 起仍为 Forge 风格 API，与 NeoForge 不兼容；Hassium �
 |--------|----------|-----|
 | Fabric | Night Config toml（自管） | Mod Menu + Cloth（jiJ） |
 | NeoForge | 原生 ModConfigSpec | Cloth（jiJ，模组列表配置） |
-| Forge 1.20.1 | 原生 ForgeConfigSpec | Cloth（jiJ） |
-| Forge 1.20.6 | ModConfigSpec + FCAP Forge jiJ | Cloth（jiJ） |

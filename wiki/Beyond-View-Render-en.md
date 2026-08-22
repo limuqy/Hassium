@@ -77,7 +77,7 @@ Ring size grows with the gap between client RD and server view distance. Hassium
 - Out-of-range `ChunkDataRequestC2S` or widened BE view checks
 - Section delta for beyond-view hit paths (still hit/miss binary; miss is always silent)
 - Raising the vanilla slider cap above 32 (segment signature differences; users edit `options.txt` manually)
-- Fog-distance clamp Mixin (segment signatures and RenderSystem API differ too much across the nine segments; not implemented)
+- Fog-distance clamp Mixin (segment signatures and RenderSystem API differ too much across the seven segments; not implemented)
 
 ---
 

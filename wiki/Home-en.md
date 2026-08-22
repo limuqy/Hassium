@@ -72,14 +72,12 @@ Details: [Installation](Installation-en).
 | Minecraft | Fabric | Forge | NeoForge |
 | --- | --- | --- | --- |
 | 1.20.1 | ✅ | ✅ | ✅ |
-| 1.20.2–1.20.5 | ✅ | — | ✅ |
-| 1.20.6 | ✅ | ✅ | ✅ |
 | 1.21.1 | ✅ | ✅ | ✅ |
 | 1.21.2 | ✅ | — | ✅ |
 | 1.21.3–1.21.10 | ✅ | ✅ | ✅ |
 | 1.21.11 | ✅ | — | ✅ |
 
-Full nine-segment table: [Support-Matrix](Support-Matrix-en).
+Full seven-segment table: [Support-Matrix](Support-Matrix-en).
 
 ---
 

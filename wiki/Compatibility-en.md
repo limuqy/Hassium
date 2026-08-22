@@ -62,7 +62,7 @@ Hassium compatibility with common optimization mods, plus escape hatches. Every 
 | **Mod Menu** (Fabric) | Soft-compatible; install separately to open the Cloth screen |
 | **Cloth Config** | jiJ on Fabric / Forge / NeoForge; main config screen path |
 | **Configured** | Optional on Forge/NeoForge; Fabric does not need it |
-| **Forge Config API Port** | Fabric does not use it (Night Config manages TOML); only Forge 1.20.6 jiJs it for the ModConfigSpec bridge |
+| **Forge Config API Port** | Fabric does not use it (Night Config manages TOML); the FCAP Forge bridge was retired with Forge 1.20.6 support |
 
 ---
 

@@ -4,7 +4,7 @@ Hassium 跨版本（1.20.1–1.21.11）× 多加载器（fabric / neoforge）的
 
 ## 概述
 
-- **测试矩阵**：17 个 MC 版本 × 2 个加载器（fabric / neoforge）= 34 个默认会话；额外可显式 `-Loaders fabric,forge,neoforge` 跑 Forge，**Forge 仅有 1.20.1 / 1.20.6 有 `builds_for`**（`forge` 子项目独立、经 `loom-forge.gradle`），其它版本会自动 SKIP。批量脚本读取每版本 `versionProperties/<ver>.properties` 的 `builds_for` 决定是否跳过该 loader，未列入 `builds_for` 的不会强行起 `:forge:runServer`（否则 `settings.gradle` 未 include forge 子项目会直接失败）。
+- **测试矩阵**：12 个 MC 版本 × 2 个加载器（fabric / neoforge）= 24 个默认会话；额外可显式 `-Loaders fabric,forge,neoforge` 跑 Forge，**Forge 仅 1.20.1 / 1.21.1 / 1.21.3–1.21.10 有 `builds_for`**（`forge` 子项目独立、经 `loom-forge.gradle`），其它版本会自动 SKIP。批量脚本读取每版本 `versionProperties/<ver>.properties` 的 `builds_for` 决定是否跳过该 loader，未列入 `builds_for` 的不会强行起 `:forge:runServer`（否则 `settings.gradle` 未 include forge 子项目会直接失败）。
 - **执行方式**：PowerShell 脚本驱动 Gradle `runServer` / `runClient`，注入 `-Dhassium.smokeTest=true` 等 JVM 属性
 - **dev 专用**：测试代码（`ClientSmokeTest` / `ServerSmokeTest`）只在 dev 环境启用，正常生产 jar 不受影响
 - **输出位置**：`build/smoke-test/`（已在 `.gitignore` 范围内）
@@ -23,7 +23,7 @@ Hassium 跨版本（1.20.1–1.21.11）× 多加载器（fabric / neoforge）的
 # 单次会话（1.20.1 fabric，初始轮）
 .\scripts\runtime-smoke-test.ps1 -Ver 1.20.1 -Loader fabric -Phase I -SessionId "1.20.1_fabric_I"
 
-# 全量初始轮（17 版 × 2 加载器，约 4–6 小时）
+# 全量初始轮（12 版 × 2 加载器，约 4–6 小时）
 .\scripts\runtime-smoke-test-batch.ps1 -Phase I
 
 # 并行跑全量初始轮（fabric+neoforge 同时，节省约一半时间，约 20–30 分钟）
@@ -66,7 +66,7 @@ Hassium 跨版本（1.20.1–1.21.11）× 多加载器（fabric / neoforge）的
 | 参数 | 必填 | 默认 | 说明 |
 |------|------|------|------|
 | `-Phase` | 是 | — | `I` 或 `R` |
-| `-Versions` | 否 | 全部 17 版 | 指定版本子集 |
+| `-Versions` | 否 | 全部 12 版 | 指定版本子集 |
 | `-Loaders` | 否 | `fabric,neoforge` | 加载器子集 |
 | `-MaxRetries` | 否 | `3` | 单会话失败重试次数上限 |
 | `-Parallel` | 否 | false | 同版本 fabric+neoforge 并行跑（Start-Process） |
@@ -322,7 +322,7 @@ build/smoke-test/
 | 1.21.5 / 1.21.7–1.21.11 | fabric | `setViewDistance` 切换后区块包序列化出现 `readerIndex out of bounds`，客户端崩溃；ROUND2 大概率 FAIL |
 | 高 ZSTD 级别（≥9） | 全部 | ZSTD-9 压缩速度远慢于 ZSTD-3（~50% @16KB, ~95% @256KB+），导致服务端无法在超时前推送完初始区块；客户端 100s 超时 FAIL；默认 ZSTD-3 稳定 |
 | 慢加载版本 | 全部 | 部分版本首次进服需要区块替换，8s 不够；可调 `-DelayMs 20000` |
-| Forge 1.20.1 / 1.20.6 | forge | 当前脚本未单独跑 forge 子项目；用 neoforge 子项目 + `loom.platform='forge'` 覆盖（见 `settings.gradle`） |
+| Forge 1.20.1 / 1.21.1 / 1.21.3–1.21.10 | forge | 当前脚本未单独跑 forge 子项目；用 neoforge 子项目 + `loom.platform='forge'` 覆盖（见 `settings.gradle`） |
 
 ## Java 侧开关参考
 

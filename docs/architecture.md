@@ -13,7 +13,7 @@ Hassium 是 Minecraft 多加载器模组（Fabric / Forge / NeoForge），围绕
 - **光照优化** —— Hassium 引擎（影子端统一算光 + 官方通道回传）、光照剥离、光照缓存；并行光照为可选（安装 Promethium 后开启）
 - **实用工具** —— 流量监控
 
-目标版本：Minecraft **1.20.1–1.21.11**（九段适配，见 version-segments）。Forge 支持 **1.20.1 / 1.20.6 / 1.21.1 / 1.21.3–1.21.10**（1.21.2 无上游 userdev；1.21.11 sunset）。
+目标版本：Minecraft **1.20.1 / 1.21.1–1.21.11**（七段适配，见 version-segments）。Forge 支持 **1.20.1 / 1.21.1 / 1.21.3–1.21.10**（1.21.2 无上游 userdev；1.21.11 sunset）。
 
 ## 2. 解决什么问题（场景举例）
 
@@ -183,7 +183,7 @@ Sector 2+:    [length(4)][type=126][magic 0x48][hash(8)][ZSTD 压缩数据]
 
 游戏内编辑：
 - **Fabric**：Night Config 自管 toml + jiJ **Cloth**；安装 **Mod Menu** 即可打开。不依赖 FCAP / Configured。
-- **Forge / NeoForge**：原生 ConfigSpec + jiJ **Cloth**（模组列表「配置」按钮）；亦可手改 toml。Configured 仍可选。Forge **1.20.6** 因与 NeoForge 共用 `ModConfigSpec`，仅该端保留 FCAP Forge 桥接。
+- **Forge / NeoForge**：原生 ConfigSpec + jiJ **Cloth**（模组列表「配置」按钮）；亦可手改 toml。Configured 仍可选。FCAP Forge 桥已随 Forge 1.20.6 退役。
 
 各项 GUI 文案见 `assets/hassium/lang/*`；toml 注释仍为中文。
 
@@ -329,7 +329,7 @@ ERROR / WARN 始终输出。
 
 - [`chunk-cache.md`](chunk-cache.md) — 区块缓存推送、超视渲染（§10）、磁盘 NBT（§11）、导出（§12）
 - [`network-core-followups.md`](network-core-followups.md) — 网络核心未达项交接清单（后续波）
-- [`version-segments.md`](version-segments.md) — 九段适配真相源
+- [`version-segments.md`](version-segments.md) — 七段适配真相源
 - [`mod-compat.md`](mod-compat.md) — 多 Mod 兼容边界与配置逃生
 - [`config-audit.md`](config-audit.md) — 配置项审计与清理记录
 - [`runtime-smoke-test.md`](runtime-smoke-test.md) — 多版本运行时自检与网关双主控迁移冒烟

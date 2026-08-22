@@ -11,7 +11,7 @@
 | 加载器 | 后端 | 文件 / 模型 |
 |--------|------|-------------|
 | Fabric | `FabricTomlConfigIO` | **双文件模型**：`hassium/hassium-client.toml`（CLIENT scope）/ `hassium/hassium-server.toml`（SERVER scope）；物理客户端读 client，专用服读 server（FabricTomlConfigIO.java:24,31-38） |
-| NeoForge | `NeoForgeConfigBackend` | `ModConfigSpec`（1.20.2+）；<1.20.2 为 `ForgeConfigSpec`；按 ConfigScope 生成 **CLIENT / SERVER 双 spec**（NeoForgeConfigBackend.java:24-46） |
+| NeoForge | `NeoForgeConfigBackend` | 1.21.1+ `ModConfigSpec`；1.20.1 为 `ForgeConfigSpec`；按 ConfigScope 生成 **CLIENT / SERVER 双 spec**（NeoForgeConfigBackend.java:24-46） |
 | Forge | `ForgeConfigBackend` | `ForgeConfigSpec`；CLIENT / SERVER 双 spec（ForgeConfigBackend.java:13-16） |
 
 生效加载链：`HassiumConfigService.loadFromToml`（HassiumConfigService.java:59-77）→ `Services.CONFIG.load(scope)` → 三端 backend → `ConfigSnapshotAdapter.fromValues`（ConfigSnapshotAdapter.java:33-40,76-90）。
