@@ -84,6 +84,29 @@ public abstract class MixinMinecraft implements MinecraftAccessor {
      * （Netty 线程 execute 排队先于 vanilla handleDisconnection，无此竞态）。
      */
 #if MC_VER < MC_1_21_1
+    /**
+     * 影子注册表门（写侧）：{@code clearLevel(Screen)} 是 1.20.1 forge/neoforge 所有客户端
+     * 断连路径的汇聚点，forge patch 在其中注入 {@code ForgeHooksClient.handleClientLevelClosing}
+     * → 同步执行 {@code GameData.revertToFrozen()}（清空重灌 ACTIVE 注册表的 BiMap）。
+     * 写锁覆盖本方法全程（含 revert），与影子端序列化路径的读锁
+     * （{@link io.github.limuqy.mc.hassium.compat.ShadowRegistryGate#withReadAccess}）
+     * 结构性互斥——write/read 永不落在重建窗口内，vanilla
+     * {@code Unknown registry element} ERROR 行不再出现。
+     * fabric 无重建机制：写锁无竞争方，零开销。
+     */
+    @Inject(method = "clearLevel(Lnet/minecraft/client/gui/screens/Screen;)V", at = @At("HEAD"))
+    private void hassium$registryGateAcquire(CallbackInfo ci) {
+        io.github.limuqy.mc.hassium.compat.ShadowRegistryGate.acquireWrite();
+    }
+
+    /** 与 {@link #hassium$registryGateAcquire} 成对：世界拆除 + revert 完成后放行影子序列化。 */
+    @Inject(method = "clearLevel(Lnet/minecraft/client/gui/screens/Screen;)V", at = @At("TAIL"))
+    private void hassium$registryGateRelease(CallbackInfo ci) {
+        io.github.limuqy.mc.hassium.compat.ShadowRegistryGate.releaseWrite();
+    }
+#endif
+
+#if MC_VER < MC_1_21_1
     @Inject(method = "clearLevel", at = @At("HEAD"))
     private void hassium$dumpCacheOnDisconnect(CallbackInfo ci) {
         ClientLifecycleHelper.cleanupOnDisconnect();

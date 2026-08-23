@@ -163,8 +163,11 @@ public final class ShadowServerCompat {
     public static ChunkAccess parseChunkNbt(
             ServerLevel level, String levelId, ChunkPos pos, CompoundTag tag) {
 #if MC_VER < MC_1_21_1
-        return ChunkSerializer.read(
-                level, level.getPoiManager(), pos, tag);
+        // 读盘解码同样查该 BiMap（byNameCodec 解码方向）；撞上重建窗口会把未知
+        // 调色板项静默替换成 air（promotePartial 只记日志）。ShadowRegistryGate 读锁
+        // 保证解码全程不落在 revertToFrozen 重建窗口内（同 serializeChunk）。
+        return ShadowRegistryGate.withReadAccess(() -> ChunkSerializer.read(
+                level, level.getPoiManager(), pos, tag));
 #elif MC_VER < MC_1_21_2
         return ChunkSerializer.read(
                 level, level.getPoiManager(),
@@ -182,7 +185,13 @@ public final class ShadowServerCompat {
      * {@code ≥ 1.21.2}：{@code SerializableChunkData.copyOf(...).write()}。
      */
     public static CompoundTag serializeChunk(ServerLevel level, LevelChunk chunk) {
-#if MC_VER < MC_1_21_2
+#if MC_VER < MC_1_21_1
+        // handleClientLevelClosing 会同步执行 GameData.revertToFrozen，清空重灌
+        // ForgeRegistry 的 ids/names/keys BiMap（NamespacedWrapper.getResourceKey 直接
+        // 委托该 BiMap）。ShadowRegistryGate 以读写门保证 write 全程不落在重建窗口内
+        // （MixinMinecraft 在 clearLevel HEAD→TAIL 持写锁；结构性互斥，非概率探测）。
+        return ShadowRegistryGate.withReadAccess(() -> ChunkSerializer.write(level, chunk));
+#elif MC_VER < MC_1_21_2
         return ChunkSerializer.write(level, chunk);
 #else
         return SerializableChunkData.copyOf(level, chunk).write();
