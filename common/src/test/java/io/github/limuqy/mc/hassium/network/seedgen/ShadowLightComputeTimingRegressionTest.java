@@ -218,12 +218,16 @@ class ShadowLightComputeTimingRegressionTest {
                 "走近触发的 hash 命中再推全量会把 emptySkyYMask 盖掉光桥屋檐光");
         assertFalse(ShadowLightCompute.shouldSkipRedundantFullPush(false),
                 "加载屏 blocks-only / 尚未影子落地：仍要首次带光回传");
-        assertTrue(ShadowLightCompute.shouldSkipUnchangedRepush(true, false, false),
-                "Bloom 直推没有 remoteHash，已落地不得再整柱 REPLACE");
-        assertTrue(ShadowLightCompute.shouldSkipUnchangedRepush(true, true, true));
-        assertFalse(ShadowLightCompute.shouldSkipUnchangedRepush(true, true, false),
+        assertTrue(ShadowLightCompute.shouldSkipUnchangedRepush(true, false, false, true),
+                "Bloom 直推没有 remoteHash，已落地且光完备不得再整柱 REPLACE");
+        assertTrue(ShadowLightCompute.shouldSkipUnchangedRepush(true, true, true, true));
+        assertFalse(ShadowLightCompute.shouldSkipUnchangedRepush(true, true, false, true),
                 "hash 不一致：方块变了，必须注入");
-        assertFalse(ShadowLightCompute.shouldSkipUnchangedRepush(false, false, false));
+        assertFalse(ShadowLightCompute.shouldSkipUnchangedRepush(false, false, false, true));
+        assertFalse(ShadowLightCompute.shouldSkipUnchangedRepush(true, false, false, false),
+                "B1 欠光直推也算已落地——光没齐时跳过会让屏障 waiter 被丢弃后无人补光");
+        assertFalse(ShadowLightCompute.shouldSkipUnchangedRepush(true, true, true, false),
+                "光未完备：hash 命中也不得跳过，必须走屏障重算");
     }
 
     @Test
@@ -232,5 +236,29 @@ class ShadowLightComputeTimingRegressionTest {
         assertTrue(ShadowLightCompute.shouldAccountServerPushAsApplied(false));
         assertFalse(ShadowLightCompute.shouldAccountServerPushAsApplied(true),
                 "hash miss 已 recordFullChunkRequests，注入不得再加分母");
+    }
+
+    @Test
+    @DisplayName("林火 LightDelta 不得作废整柱首包；只作废 LIGHT_ONLY")
+    void lightDeltaDoesNotSupersedeFullChunkBarrier() {
+        assertFalse(ShadowLightCompute.isSupersededByNewerWork(true, false, true),
+                "整柱 PENDING/GENERATED/DELTA 在途时 LightDelta 只排队，finishLight 后再 relight");
+        assertTrue(ShadowLightCompute.isSupersededByNewerWork(true, true, false),
+                "新方块投递才取消在途整柱");
+        assertTrue(ShadowLightCompute.isSupersededByNewerWork(true, true, true));
+        assertTrue(ShadowLightCompute.isSupersededByNewerWork(false, false, true),
+                "后续 LightDelta 取消过时的 LIGHT_ONLY");
+        assertTrue(ShadowLightCompute.isSupersededByNewerWork(false, true, false));
+        assertFalse(ShadowLightCompute.isSupersededByNewerWork(true, false, false));
+        assertFalse(ShadowLightCompute.isSupersededByNewerWork(false, false, false));
+    }
+
+    @Test
+    @DisplayName("整柱屏障在途时不启动 LightDelta，等首包完成触发")
+    void defersLightDeltaUntilFullChunkBarrierFinishes() {
+        assertFalse(ShadowLightCompute.canStartLightDeltaNow(true),
+                "同柱 inflight/waiting/pending 时 LightDelta 不得开第二条屏障");
+        assertTrue(ShadowLightCompute.canStartLightDeltaNow(false),
+                "整柱已推完：LightDelta 由 finishLight 的 pump 触发");
     }
 }

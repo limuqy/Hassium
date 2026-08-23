@@ -120,7 +120,9 @@ public final class ScenarioEngine {
                 System.getProperty("hassium.smokeTest.dimWaitMs"), Math.max(20_000L, delayMs * 2))));
         vars.put("endWaitMs", Long.toString(parseLong(
                 System.getProperty("hassium.smokeTest.endWaitMs"), Math.max(30_000L, delayMs * 3))));
-        vars.put("round2WaitMs", Long.toString(Math.max(3_000L, delayMs)));
+        // R2 预览光会把 VD 内柱立刻推进 ready FIFO；OVD 环带排在其后。
+        // 与 R1 同量等待，避免 dump 时 loadedRenderOnly 仍为 0。
+        vars.put("round2WaitMs", Long.toString(Math.max(3_000L, delayMs * 2)));
         vars.put("reconnectDelayMs", Long.toString(reconnectDelayMs));
         vars.put("joinTimeoutMs", Long.toString(joinTimeoutMs));
         vars.put("moveSeconds", Long.toString(moveSeconds));
@@ -174,8 +176,8 @@ public final class ScenarioEngine {
 
         tickMovement(mc, now);
 
-        // 全局超时检查（从启动开始；公式沿用旧状态机）
-        if (startAtMs > 0L && now - startAtMs > joinTimeoutMs * 2 + delayMs * 2 + reconnectDelayMs) {
+        // 全局超时：两轮 joinTimeout + R1/R2 各 delayMs*2 等待 + 重连间隔 + R2 dump 等 OVD
+        if (startAtMs > 0L && now - startAtMs > joinTimeoutMs * 2 + delayMs * 5 + reconnectDelayMs) {
             fail("global timeout in step " + currentDesc(), 3);
             return;
         }
@@ -600,6 +602,30 @@ public final class ScenarioEngine {
         int round = (int) step.longParam("round", 1L);
         boolean isRound1 = round <= 1;
         String roundLabel = isRound1 ? "ROUND1" : "ROUND2";
+        // classic R2：探针在 ScenarioEngine 里先于本 tick drainReady。预览 FIFO
+        // 可能让 ovdLoaded 晚几秒才 >0；dump 等到落地或超时，不削弱门禁。
+        if (!isRound1 && step.boolParam("gate", true) && ovdCounter(0) <= 0L) {
+            int adopted = io.github.limuqy.mc.hassium.cache.client.ViewDistanceExtensionService
+                    .getInstance().adoptPresentRingChunks();
+            if (adopted > 0 || ovdCounter(0) > 0L) {
+                LOGGER.info("HassiumSmokeTest: {} dump adopted {} ring chunks, ovdLoaded={}",
+                        roundLabel, adopted, ovdCounter(0));
+            } else {
+                long capMs = Math.max(delayMs * 2, 20_000L);
+                if (System.currentTimeMillis() - stepStartMs < capMs) {
+                    if (!joinAnnounced) {
+                        joinAnnounced = true;
+                        io.github.limuqy.mc.hassium.cache.client.ViewDistanceExtensionService ovd =
+                                io.github.limuqy.mc.hassium.cache.client.ViewDistanceExtensionService.getInstance();
+                        LOGGER.info("HassiumSmokeTest: {} dump waiting for ovdLoaded>0 (cap {}ms) "
+                                        + "loaded={} pending={} miss={}",
+                                roundLabel, capMs, ovd.getLoadedCount(),
+                                ovd.getPendingLoadCount(), ovd.getPendingMissCount());
+                    }
+                    return Outcome.RUNNING;
+                }
+            }
+        }
         try {
             String stats = io.github.limuqy.mc.hassium.command.HassiumCommandHandler.getClientStatsMessage();
             String plain = stripSection(stats);

@@ -111,6 +111,8 @@ public class ViewDistanceExtensionService {
      * {@link #onClientStorageReady()} 重新评估，无跨会话残留。
      */
     private volatile boolean rescanDeferred = false;
+    /** pending 卡住时下次再 request 的墙钟 */
+    private long lastPendingKickMs = 0L;
 
     private final AtomicLong missTotal = new AtomicLong();
     private final AtomicLong retryTotal = new AtomicLong();
@@ -295,6 +297,21 @@ public class ViewDistanceExtensionService {
             return;
         }
 
+        // 环带应存在但 loaded 仍空：站立 R2 无 geometryChanged，且 pending 可能卡在
+        // 光屏障里。强制重扫；每 2s 对 pending 再 request（队列已消费则重新投递）。
+        if (loadedRenderOnly.isEmpty()) {
+            forceRescan = true;
+            long now = System.currentTimeMillis();
+            if (now - lastPendingKickMs >= 2000L) {
+                lastPendingKickMs = now;
+                for (ChunkPos pos : new HashSet<>(pendingRenderOnly)) {
+                    pendingRenderOnly.remove(pos);
+                    io.github.limuqy.mc.hassium.network.seedgen.OvdLocalGenerator.request(pos);
+                    pendingRenderOnly.add(pos);
+                }
+            }
+        }
+
         // 关键：每 tick 都必须 expand。原版 SetChunkCacheRadius 会把半径缩回 serverVD；
         // 即使玩家未移动，也要在 early-return 之前守护半径，否则 apply 会 inRange 失败。
         // 使用 effective clientVD（含 maxRenderDistance 上限）。
@@ -381,22 +398,34 @@ public class ViewDistanceExtensionService {
 
         int enqueued = 0;
         int cursor = 0;
+        // loaded 仍空时不与影子读盘抢 cache-read：R2 每 tick 磁盘 hash 抽干配额会让
+        // 环带 0 入队，站立后又写 last* 不再扫（偶发 ovdLoaded=0）。
+        boolean bypassCacheReadCap = loadedRenderOnly.isEmpty();
         for (; cursor < toLoad.size(); cursor++) {
-            if (!ClientMainThreadBudget.tryAcquireCacheRead()) {
+            if (!bypassCacheReadCap && !ClientMainThreadBudget.tryAcquireCacheRead()) {
                 break;
             }
             if (loadRenderOnlyChunk(toLoad.get(cursor))) {
                 enqueued++;
-            } else {
+            } else if (!bypassCacheReadCap) {
                 ClientMainThreadBudget.refundCacheRead();
             }
         }
 
         // 本 tick 未扫完 toLoad（预算打满）→ 不写 last*，下 tick geometryChanged 继续近距灌队
-        // storage 未就绪时 load 全失败会扫完列表并更新 last*；就绪后由 onClientStorageReady 强制 rescan
         if (cursor < toLoad.size()) {
             Constants.LOG.debug("Hassium: OVD enqueue {}/{} this tick (cache-read cap exhausted), defer rest",
                     enqueued, toLoad.size());
+            return;
+        }
+        // load 全失败（握手/影子未就绪、hasChunk 幽灵、isLoadEnabled 尚未开）若仍写 last*，
+        // 站立 R2 再无 geometryChanged，环带永远 0（ovd2：16/10 已加载 0 缺失 0）。
+        // 有环带却 0 入队时保持 dirty，下 tick 重试。
+        if (enqueued == 0 && !toLoad.isEmpty()) {
+            lastClientVD = clientVD;
+            lastServerVD = serverVD;
+            Constants.LOG.debug("Hassium: OVD enqueue 0/{} this tick (loads failed), retry next tick",
+                    toLoad.size());
             return;
         }
 
@@ -557,14 +586,15 @@ public class ViewDistanceExtensionService {
         if (level == null || mc.player == null) {
             return false;
         }
-        // 防御：环带内已有真实区块（非 renderOnly）时不得用 OVD 历史/磁盘数据覆盖。
+        // 环带内已有真实区块（非 renderOnly）：不得用 OVD 历史/磁盘数据覆盖。
         // 正常路径服务器 Forget 会 tryRetainOnServerForget 转 renderOnly，但影子回传
-        // (drainReady) 曾直接走 vanilla 通道，可能留下未标记的真实区块；此处跳过可避免
-        // “真实区块刚生成 → OVD 又用旧缓存覆盖成虚空”的环带覆盖。
+        // (drainReady) 曾直接走 vanilla 通道，可能留下未标记的真实区块。R2 缩 VD 后
+        // Forget 未必再来——跳过会让 loadedRenderOnly 永远为 0（ovdLoaded_not_positive）。
+        // 原地收养为 renderOnly，与 Forget 保留同口径，不覆盖块数据。
         if (((ClientLevelAccessor) level).hassium$getChunkSource().hasChunk(pos.x, pos.z)
                 && !isRenderOnly(pos)
                 && !((IClientLevelExtension) level).hassium$isRenderOnly(pos.toLong())) {
-            return false;
+            return shouldKeepAsRenderOnly(pos) && adoptExistingAsRenderOnly(pos);
         }
 
         // 影子模式（客户端零侵入架构）：OVD 数据源 = 影子端——R1 落盘读回优先
@@ -582,6 +612,62 @@ public class ViewDistanceExtensionService {
 
         // 非影子模式（纯网络优化）：OVD 禁用，不加载 renderOnly
         return false;
+    }
+
+    /**
+     * 环带内已有未标记的真实区块：原地标 renderOnly 并计入 {@link #loadedRenderOnly}。
+     * 不改块数据（避免用磁盘历史覆盖刚落地的权威/影子块）。
+     */
+    private boolean adoptExistingAsRenderOnly(ChunkPos pos) {
+        Minecraft mc = Minecraft.getInstance();
+        ClientLevel level = mc.level;
+        if (level == null || pos == null) {
+            return false;
+        }
+        LevelChunk chunk = level.getChunkSource().getChunkNow(pos.x, pos.z);
+        if (chunk == null) {
+            return false;
+        }
+        pendingRenderOnly.remove(pos);
+        loadedRenderOnly.add(pos);
+        delayedUnloadAt.remove(pos);
+        missRetryAt.remove(pos);
+        missRetryCount.remove(pos);
+        ((IClientLevelExtension) level).hassium$addRenderOnlyChunk(pos.toLong());
+        return true;
+    }
+
+    /**
+     * 把环带内已在 ClientChunkCache、但尚未记入 {@link #loadedRenderOnly} 的柱原地收养。
+     * R2 影子 FIFO 可能以非 renderOnly 落地环带重叠柱，Forget 不再来；冒烟 dump 前补记。
+     *
+     * @return 新收养数量
+     */
+    public int adoptPresentRingChunks() {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc == null || mc.player == null || mc.level == null || !isEnabled()) {
+            return 0;
+        }
+        if (!io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.isEnabled()) {
+            return 0;
+        }
+        int clientVD = resolveEffectiveClientVD(mc);
+        int serverVD = resolveServerVD(mc);
+        if (serverVD <= 0 || clientVD <= serverVD) {
+            return 0;
+        }
+        ClientLevel level = mc.level;
+        ClientChunkCache cache = ((ClientLevelAccessor) level).hassium$getChunkSource();
+        int adopted = 0;
+        for (ChunkPos pos : calculateNeededChunks(mc.player.chunkPosition(), serverVD, clientVD)) {
+            if (loadedRenderOnly.contains(pos)) {
+                continue;
+            }
+            if (cache.hasChunk(pos.x, pos.z) && adoptExistingAsRenderOnly(pos)) {
+                adopted++;
+            }
+        }
+        return adopted;
     }
 
     /**
