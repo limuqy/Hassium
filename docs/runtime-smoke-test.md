@@ -32,7 +32,7 @@ Hassium 跨版本（1.20.1–1.21.11）× 多加载器（fabric / neoforge）的
 
 ## 快速开始
 
-代理等待：这条 ps1 **会退出**。等它印 `=== RESULT:`（或读 `build/smoke-test/results/result_<SessionId>.json`），不要 `sleep 240` 再 `ls logs`，也不要 `| tail`。240 是 `-ClientTimeoutSec` 内部上限，不是会话时长。
+代理等待：这条 ps1 **会退出**。等它印 `=== RESULT:`（或读 `build/smoke-test/results/result_<SessionId>.json`），不要 `sleep 240` 再 `ls logs`，也不要 `| tail`。240 是 `-ClientTimeoutSec` 内部上限，不是会话时长。Git Bash 没有对应 `.sh`，用 `pwsh -File ./scripts/runtime-smoke-test.ps1 ...`（不要 `-NoProfile`）。
 
 ```powershell
 # 单次会话（1.20.1 fabric，classic 场景）

@@ -10,21 +10,50 @@ Minecraft 1.20.1 / 1.21.1–1.21.11 多加载器模组（Fabric / Forge / NeoFor
 
 `gradle.properties` 已开 `org.gradle.daemon=true`（8G）。**编译 / 测试 / 打包走 daemon，不要加 `--no-daemon`。**
 
-本会话 Shell 已是 **pwsh 7**，直接跑（Windows 用 `.bat`）：
+先认当前 Shell，用对应启动器，不要跨壳套一层：
+
+| | **pwsh 7** | **Git Bash** |
+|--|------------|--------------|
+| Gradle | `.\gradlew.bat common:compileJava` | `./gradlew common:compileJava` |
+| 锚点编译 | `.\gradlew.bat compileAnchors` 或 `.\scripts\compile-anchors.ps1` | `./gradlew compileAnchors` 或 `./scripts/compile-anchors.sh` |
+| 冒烟 | `.\scripts\runtime-smoke-test.ps1 ...` | `pwsh -File ./scripts/runtime-smoke-test.ps1 ...`（**无 .sh**；不要 `-NoProfile`） |
+| `-Pmc_ver` | **必须** `"-Pmc_ver=1.20.1"`，否则被拆成 `1` | `-Pmc_ver=1.20.1` 即可（bash 不拆点号） |
 
 ```powershell
-.\gradlew.bat common:decompile          # 首次 / 缺反编译产物
-.\gradlew.bat common:compileJava        # 改 common 后先编
+# pwsh
+.\gradlew.bat common:decompile
+.\gradlew.bat common:compileJava
 .\gradlew.bat fabric:compileJava
 .\gradlew.bat forge:compileJava
 .\gradlew.bat neoforge:compileJava
 .\gradlew.bat build
 .\gradlew.bat common:test
 .\gradlew.bat scanVersionBoundaries
-.\gradlew.bat compileAnchors            # 或 scripts/compile-anchors.ps1（锚点间会 --stop）
+.\gradlew.bat compileAnchors
 ```
 
-**禁止套壳**：不要 `cmd /c "gradlew.bat --no-daemon ..."`，也不要再包一层 `pwsh -NoProfile ...`。命令已经在 pwsh 里；套 `cmd` 无收益，`--no-daemon` 见下节。
+```bash
+# Git Bash（同一批任务，启动器换成 ./gradlew）
+./gradlew common:decompile
+./gradlew common:compileJava
+./gradlew fabric:compileJava
+./gradlew forge:compileJava
+./gradlew neoforge:compileJava
+./gradlew build
+./gradlew common:test
+./gradlew scanVersionBoundaries
+./gradlew compileAnchors
+```
+
+**禁止套壳**（两壳都适用）：不要 `cmd /c "gradlew.bat --no-daemon ..."`，不要再包 `pwsh -NoProfile ...`，不要从 Git Bash 再 `cmd.exe /c` 去跑 `.bat`。Git Bash 直接 `./gradlew`；pwsh 直接 `.\gradlew.bat`。`--no-daemon` 见下节。
+
+**Git Bash 额外陷阱**：
+
+- **不要** `./gradlew ... 2>&1 | tail -15`（`tail` 等 EOF 才吐行，长任务看起来像卡住，还丢掉进度）。等命令自己退出，或 Await 同一 job。
+- **不要** `sleep 240; ls -t build/smoke-test/logs | head`（见等待节）。
+- **不要** `kill -9` / `pkill -f java` / `taskkill /F /IM java.exe`（会杀掉 daemon 和其它 Java）。
+- MSYS 可能把看似路径的参数改写成 Windows 路径。Gradle `-P`/`-D` 出怪参数时，在该条命令前加 `MSYS_NO_PATHCONV=1`（或 `MSYS2_ARG_CONV_EXCL='*'`）。
+- 冒烟、写 toml 仍走 **pwsh 7**（`.ps1` 用了 `Get-NetTCPConnection` / `Start-Process`；5.1 的 `utf8` 带 BOM）。调用时用 `pwsh -File`，不要 `powershell.exe`，不要 `-NoProfile`。
 
 ### Gradle daemon 与等待（AI 必读）
 
@@ -43,16 +72,24 @@ Minecraft 1.20.1 / 1.21.1–1.21.11 多加载器模组（Fabric / Forge / NeoFor
 - **仅这些用 `--no-daemon`**：直接跑 `runClient` / `runServer`（游戏 JVM 长驻）。等的是就绪日志（服务端 `Done!`），不是进程退出。**冒烟不要自己去等 `Done!`**：`runtime-smoke-test.ps1` 内部已经在等，你等脚本印 `=== RESULT:` 后退出即可。
 
 ```powershell
+# pwsh
 .\gradlew.bat --no-daemon :fabric:runClient
 .\gradlew.bat --no-daemon :forge:runServer
 .\gradlew.bat --no-daemon :neoforge:runClient
 ```
 
-PowerShell：**一律用 pwsh 7**（`pwsh`，勿用 Windows PowerShell 5.1——其 `utf8` 带 BOM 且不支持 `utf8NoBOM`）。
+```bash
+# Git Bash
+./gradlew --no-daemon :fabric:runClient
+./gradlew --no-daemon :forge:runServer
+./gradlew --no-daemon :neoforge:runClient
+```
+
+写文件 / 读日志：**pwsh 7**（`pwsh`，勿用 Windows PowerShell 5.1——其 `utf8` 带 BOM 且不支持 `utf8NoBOM`）。Git Bash 里编 Gradle 用 `./gradlew`；改 toml、跑冒烟仍调 `pwsh`。
 
 - **写文件**：pwsh 7 的 `Set-Content`/`Out-File` 默认即 UTF-8 无 BOM，写 toml/properties **不必** `-Encoding`；night-config 对 BOM 敏感（BOM 会导致整份配置静默回落默认）。
 - **读日志**：Cursor 捕获 stdout 走管道、无真实控制台时，pwsh 会把输出编码锁成系统 ACP（中文 Windows = GBK），且首次输出后改不了。本机 profile 在任何输出前把 `[Console]::OutputEncoding` / `$OutputEncoding` 设为 UTF-8 无 BOM。**代理命令不要加 `-NoProfile`**，否则这段被跳过、中文乱码。`-NoProfile` 只留给必须隔离的内部子进程（如 Gradle 调 `compile-anchors.ps1`），不要套在自己的 Shell 命令外层。
-传参始终写 `"-Pmc_ver=1.20.1"`（引号必须），否则 `1.20.1` 会被截成 `1`。
+`-Pmc_ver`：pwsh 必须 `"-Pmc_ver=1.20.1"`（引号）；Git Bash 写 `-Pmc_ver=1.20.1` 即可。
 子工程构建产物按版本分目录（`<module>/build/<mc_ver 下划线化>/`，如 `common/build/1_21_11/`）：common 切 `-Pmc_ver` 互不覆盖、切回即 up-to-date；但 **fabric/forge/neoforge loader 子项目还会产出不分版本的泛型 `build/classes`**，跨版本切换可能残留旧变体类与版本目录并存（症状：loader 启动即崩，如 NeoForge 报 `must have exactly 1 public constructor, found 2`）。切版本后 loader 起不来时先删 `<loader>/build` 整目录再跑。根项目 `build/`（jdt-cp、smoke-test 日志）不分版本。
 
 **IDE 编译输出目录（`<module>/bin/main`、`<module>/out/production`）同样会进运行时 classpath**：loom 组装 MOD_CLASSES 时会把存在的 Eclipse（`.classpath`→`bin/main`）与 IntelliJ（`out/production`）输出目录一并列为 mod 坐标（debug.log 可见 5 个坐标）。VS Code JDT / Eclipse 增量编译留下的**陈旧副本**会让 FML 加载到旧类——2026-08-23 实证：`neoforge/bin/main` 里 01:58 的旧 `HassiumNeoForge.class`（双构造器版）压过 04:54 新构建导致 runServer 必崩，且删 `build/` 无效。loader 起不来且 `build/` 已清时，删全部 `<module>/bin`、`<module>/out` 再跑。
@@ -162,11 +199,18 @@ fabric/ | forge/ | neoforge/
 | L2 | 场景目录 | 锚点集：seedgen / dimension / migrate 等 |
 | L3 | minecraft-mod-mcp | 人工专项，不进自动 PASS 门禁 |
 
-当前 pwsh 里直接跑（不要再套 `pwsh -NoProfile`，不要 `| tail`）：
+冒烟只有 `.ps1`（依赖 Windows 网络/进程 cmdlet），没有 bash 版。
 
 ```powershell
+# pwsh：当前壳里直接跑
 .\scripts\runtime-smoke-test.ps1 -Ver 1.20.1 -Loader fabric -Phase I -SessionId "1.20.1_fabric_I"
 .\scripts\runtime-smoke-test.ps1 -Ver 1.20.1 -Loader fabric -Phase I -SessionId "1.20.1_fabric_I_seedgen" -Scenario seedgen
+```
+
+```bash
+# Git Bash：调 pwsh 跑同一脚本（不要 -NoProfile，不要 | tail）
+pwsh -File ./scripts/runtime-smoke-test.ps1 -Ver 1.20.1 -Loader fabric -Phase I -SessionId "1.20.1_fabric_I"
+pwsh -File ./scripts/runtime-smoke-test.ps1 -Ver 1.20.1 -Loader fabric -Phase I -SessionId "1.20.1_fabric_I_seedgen" -Scenario seedgen
 ```
 
 **这条 ps1 会自己结束**（起服 → 等 `Done!` → 起客户端 → 两轮 → 写 JSON → 印 `=== RESULT: PASS|FAIL ===` → 退出码 0/2/3）。典型 4–12 min，最坏约 `ServerReadyTimeoutSec`(160) + `ClientTimeoutSec`(240) + 收尾。
