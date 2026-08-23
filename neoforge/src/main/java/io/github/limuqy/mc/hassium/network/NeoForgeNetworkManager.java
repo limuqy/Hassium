@@ -2026,15 +2026,34 @@ public class NeoForgeNetworkManager implements NetworkManager {
 
     @Override
     public void sendLightDeltaPacket(ServerPlayer player, FriendlyByteBuf buf) {
-        byte[] data = new byte[buf.readableBytes()];
-        buf.readBytes(data);
+        // 三端一致收口（2026-08-23 裁决）：vanilla 通道 LightDelta 三端客户端均不消费
+        // （legacy Wrapper / modern Payload 接收端本就是 no-op），唯一消费在网关帧链路；
+        // 本实现仅消费 buf 所有权，不再发 payload（两段注册保留，最小 diff）。
         buf.release();
+    }
+
+    @Override
+    public void sendClientBloomSync(FriendlyByteBuf buf) {
 #if MC_VER < MC_1_21_1
-        CHANNEL.sendTo(new LightDeltaWrapper(data), player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
+        if (net.minecraft.client.Minecraft.getInstance().getConnection() != null) {
+            byte[] data = new byte[buf.readableBytes()];
+            buf.readBytes(data);
+            buf.release();
+            CHANNEL.sendToServer(new ClientBloomSyncWrapper(data));
+        } else {
+            buf.release();
+        }
 #else
-        LightDeltaPayload payload = new LightDeltaPayload(data);
-        player.connection.send(payload);
-        LOGGER.debug("Hassium: Sent light delta packet to {}", player.getName().getString());
+        if (net.minecraft.client.Minecraft.getInstance().getConnection() != null) {
+            byte[] data = new byte[buf.readableBytes()];
+            buf.readBytes(data);
+            buf.release();
+            ClientBloomSyncPayload payload = new ClientBloomSyncPayload(data);
+            net.minecraft.client.Minecraft.getInstance().getConnection().send(payload);
+            LOGGER.debug("Hassium: Sent client bloom sync");
+        } else {
+            buf.release();
+        }
 #endif
     }
 

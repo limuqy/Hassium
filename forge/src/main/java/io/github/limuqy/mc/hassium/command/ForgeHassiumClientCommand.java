@@ -11,31 +11,24 @@ import io.github.limuqy.mc.hassium.platform.Services;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.network.chat.Component;
-
-import java.util.concurrent.CompletableFuture;
-#if MC_VER < MC_1_21_1
 import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.client.event.RegisterClientCommandsEvent;
-import net.minecraftforge.eventbus.api.SubscribeEvent;
-import net.minecraftforge.fml.common.Mod;
+#if MC_VER > MC_1_21_5
+import net.minecraftforge.eventbus.api.listener.SubscribeEvent;
 #else
-import net.neoforged.api.distmarker.Dist;
-import net.neoforged.neoforge.client.event.RegisterClientCommandsEvent;
-import net.neoforged.bus.api.SubscribeEvent;
-import net.neoforged.fml.common.EventBusSubscriber;
+import net.minecraftforge.eventbus.api.SubscribeEvent;
 #endif
+import net.minecraftforge.fml.common.Mod;
+
+import java.util.concurrent.CompletableFuture;
 
 /**
- * NeoForge 客户端命令注册（/hassiumc）。
+ * Forge 客户端命令注册（/hassiumc）。
  * <p>
  * 仅在 Dist.CLIENT 加载，避免专用服务端解析 RegisterClientCommandsEvent。
  */
-#if MC_VER < MC_1_21_1
 @Mod.EventBusSubscriber(modid = Constants.MOD_ID, value = Dist.CLIENT)
-#else
-@EventBusSubscriber(modid = Constants.MOD_ID, value = Dist.CLIENT)
-#endif
-public class NeoForgeHassiumClientCommand {
+public class ForgeHassiumClientCommand {
 
     @SubscribeEvent
     public static void onRegisterClientCommands(RegisterClientCommandsEvent event) {
@@ -46,12 +39,12 @@ public class NeoForgeHassiumClientCommand {
         LiteralArgumentBuilder<CommandSourceStack> hassiumc = Commands.literal("hassiumc")
                 .then(Commands.literal("stats")
                         .requires(source -> HassiumCommandHandler.isMetricsEnabled())
-                        .executes(NeoForgeHassiumClientCommand::showClientStats))
+                        .executes(ForgeHassiumClientCommand::showClientStats))
                 .then(Commands.literal("export")
-                        .executes(NeoForgeHassiumClientCommand::exportCurrentWorld)
+                        .executes(ForgeHassiumClientCommand::exportCurrentWorld)
                         .then(Commands.argument("args", StringArgumentType.greedyString())
-                                .suggests(NeoForgeHassiumClientCommand::suggestCachedServers)
-                                .executes(NeoForgeHassiumClientCommand::exportWithArgs)
+                                .suggests(ForgeHassiumClientCommand::suggestCachedServers)
+                                .executes(ForgeHassiumClientCommand::exportWithArgs)
                         )
                 );
         // migrate 仅开发环境：正式包不暴露演练入口；runClient / 冒烟仍可用
@@ -75,10 +68,10 @@ public class NeoForgeHassiumClientCommand {
      */
     private static LiteralArgumentBuilder<CommandSourceStack> migrateSubtree() {
         return Commands.literal("migrate")
-                .executes(NeoForgeHassiumClientCommand::migrateUsage)
+                .executes(ForgeHassiumClientCommand::migrateUsage)
                 .then(Commands.argument("args", StringArgumentType.greedyString())
-                        .suggests(NeoForgeHassiumClientCommand::suggestMigrate)
-                        .executes(NeoForgeHassiumClientCommand::migrateDispatch));
+                        .suggests(ForgeHassiumClientCommand::suggestMigrate)
+                        .executes(ForgeHassiumClientCommand::migrateDispatch));
     }
 
     private static CompletableFuture<Suggestions> suggestMigrate(

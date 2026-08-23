@@ -28,6 +28,7 @@ public final class FabricPayloadRegistry {
 
     private static final Logger LOGGER = LoggerFactory.getLogger("Hassium/PayloadRegistry");
     private static volatile boolean registered = false;
+    private static volatile boolean gatewayRegistered = false;
 
     // ===== S2C payload types (server -> client) =====
 
@@ -110,15 +111,39 @@ public final class FabricPayloadRegistry {
     }
 
     /**
-     * 注册所有 payload 类型到 PayloadTypeRegistry
+     * 仅注册 gateway_info S2C payload 类型（无条件路径，镜像 NeoForge registerPayloads
+     * 先于 master.enabled 守卫注册 gateway_info 的语义）：ServerGatewayInfoSender.canSend
+     * （dedicated + master.enabled）与网络守卫判定可能脱钩，未注册 S2C payload 在
+     * 1.20.5+ 类型化通道会被客户端丢弃（DiscardedPayload 回退）。服务端不发送时注册无副作用。
+     * <p>
+     * 幂等，多次调用安全；{@link #registerAll()} 内部亦经由本方法。
+     */
+    public static void registerGatewayInfo() {
+        if (gatewayRegistered) {
+            return;
+        }
+        gatewayRegistered = true;
+
+        // 服务端经 compat createClientboundPayload 直发；注册后 1.20.5+ 类型化
+        // 编解码走 RawCustomPayload codec（未注册 → DiscardedPayload 回退 CCE / 客户端数据被丢弃）。
+        PayloadTypeRegistry.playS2C().register(GATEWAY_INFO_S2C_TYPE,
+                PacketPayloadCompat.rawPayloadCodec(ResourceLocationCompat.create(HassiumPacketIds.GATEWAY_INFO_S2C)));
+    }
+
+    /**
+     * 注册除 gateway_info 外的所有 payload 类型到 PayloadTypeRegistry
      * <p>
      * 必须在注册 receiver 之前调用。幂等，多次调用安全。
+     * gateway_info 走 {@link #registerGatewayInfo()} 无条件路径，不受 master.enabled 守卫约束。
      */
     public static void registerAll() {
         if (registered) {
             return;
         }
         registered = true;
+
+        // gateway_info 无条件路径（可能已由 registerChannels 守卫前注册，幂等）
+        registerGatewayInfo();
 
         // S2C types
         PayloadTypeRegistry.playS2C().register(CHUNK_PAYLOAD_S2C_TYPE, codec(CHUNK_PAYLOAD_S2C_TYPE));
@@ -130,11 +155,6 @@ public final class FabricPayloadRegistry {
         PayloadTypeRegistry.playS2C().register(SEED_REF_S2C_TYPE, codec(SEED_REF_S2C_TYPE));
         PayloadTypeRegistry.playS2C().register(SECTION_DELTA_S2C_TYPE, codec(SECTION_DELTA_S2C_TYPE));
         PayloadTypeRegistry.playS2C().register(BLOCK_ENTITY_DATA_S2C_TYPE, codec(BLOCK_ENTITY_DATA_S2C_TYPE));
-
-        // gateway_info：服务端经 compat createClientboundPayload 直发；注册后 1.20.5+ 类型化
-        // 编解码走 RawCustomPayload codec（未注册 → DiscardedPayload 回退 CCE / 客户端数据被丢弃）。
-        PayloadTypeRegistry.playS2C().register(GATEWAY_INFO_S2C_TYPE,
-                PacketPayloadCompat.rawPayloadCodec(ResourceLocationCompat.create(HassiumPacketIds.GATEWAY_INFO_S2C)));
         PayloadTypeRegistry.playS2C().register(LIGHT_DELTA_S2C_TYPE, codec(LIGHT_DELTA_S2C_TYPE));
 
         // C2S types
@@ -149,8 +169,9 @@ public final class FabricPayloadRegistry {
                 io.github.limuqy.mc.hassium.network.PreHandshakePayload.TYPE,
                 io.github.limuqy.mc.hassium.network.PreHandshakePayload.STREAM_CODEC);
 
-        // review-fix: T10-3: 实际注册 11 S2C（含 gateway_info，T5f 新增）+ 6 C2S + 1 configurationC2S
-        LOGGER.info("Hassium: Registered 11 S2C and 6 C2S (+1 config) payload types for 1.21.1+");
+        // review-fix: T10-3: 本方法注册 10 S2C + 6 C2S + 1 configurationC2S；
+        // gateway_info 经 registerGatewayInfo 单独无条件注册（合计 11 S2C）
+        LOGGER.info("Hassium: Registered 10 S2C and 6 C2S (+1 config) payload types for 1.21.1+ (gateway_info via unconditional path)");
     }
 
     /**

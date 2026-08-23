@@ -35,7 +35,8 @@ public class HassiumMod implements ModInitializer {
             }
             // 未走 Data 通道 → 走 Primary，记分流统计（口径 = encode() 总长度，与 Data 侧对齐）
             io.github.limuqy.mc.hassium.metrics.NetworkStats.recordBulkSentPrimary(payload.length);
-            FabricNetworkManager.sendCompressedChunk(player, compressed);
+            // review-fix: T11-19 传已编码 payload，避免 sendCompressedChunk 内部二次 encode()（重复分配+拷贝）
+            FabricNetworkManager.sendCompressedChunk(player, payload);
         });
 
         // 注册命令

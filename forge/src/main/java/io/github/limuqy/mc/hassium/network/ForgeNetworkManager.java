@@ -78,6 +78,12 @@ public class ForgeNetworkManager implements NetworkManager {
 
     @Override
     public void registerChannels() {
+        // gateway_info S2C 注册必须先于 master.enabled 守卫（与 NeoForge registerPayloads 对齐）：
+        // ServerGatewayInfoSender.canSend（dedicated + master.enabled）与注册状态可能脱钩，
+        // Forge 侧未注册时 vanilla 直发经 fallback codec 被静默丢弃（DiscardedPayload）。
+#if MC_VER >= MC_1_21_1
+        ForgeGatewayInfoRegistry.init();
+#endif
         if (!HassiumConfigService.getInstance().isNetworkCompressionEnabled()) {
             LOGGER.warn("Hassium: master.enabled=false, skipping Forge channel registration");
             return;
@@ -103,6 +109,21 @@ public class ForgeNetworkManager implements NetworkManager {
             } else {
                 LOGGER.error("Cannot send aggregation packet: connection has no player");
                 buf.release();
+            }
+        });
+
+        // 字典热推回调：服务端字典重建后向全体在线玩家推送 DictionarySync（镜像 NeoForge/NeoForgeNetworkManager）
+        DictionaryManager.setPushCallback(dictionary -> {
+            try {
+                net.minecraft.server.MinecraftServer server =
+                        net.minecraftforge.server.ServerLifecycleHooks.getCurrentServer();
+                if (server != null) {
+                    for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+                        sendDictionarySyncPacket(player);
+                    }
+                }
+            } catch (Exception e) {
+                LOGGER.error("Failed to push dictionary to clients", e);
             }
         });
     }
@@ -992,25 +1013,42 @@ public class ForgeNetworkManager implements NetworkManager {
     }
 
     @Override
-    // review-fix: T10-8: LightDelta 客户端不消费（原 handler 即 no-op），S2C 通道整体退役——注册已删，
-    // SimpleChannel 发送未注册消息会抛异常；此处仅消费 buf 所有权（release）不再发送。
+    // 三端一致收口（2026-08-23 裁决）：vanilla 通道 LightDelta 三端客户端均不消费，
+    // 唯一消费在网关帧链路；此处仅消费 buf 所有权（release）不再发送。
     public void sendLightDeltaPacket(ServerPlayer player, FriendlyByteBuf buf) {
         buf.release();
     }
 
+    @Override
+    public void sendClientBloomSync(FriendlyByteBuf buf) {
+        if (net.minecraft.client.Minecraft.getInstance().getConnection() != null) {
+            byte[] data = new byte[buf.readableBytes()];
+            buf.readBytes(data);
+            buf.release();
+#if MC_VER < MC_1_21_1
+            CHANNEL.sendToServer(new ClientBloomSyncWrapper(data));
+#else
+            sendToServer(new ClientBloomSyncWrapper(data));
+#endif
+            LOGGER.debug("Hassium: Sent client bloom sync");
+        } else {
+            // 连接不存在，释放缓冲区
+            buf.release();
+        }
+    }
+
     /**
-     * 发送压缩的区块数据到指定玩家
+     * 发送已编码的压缩区块负载到指定玩家（payload 由调用方 encode 一次；review-fix: T11-19）
      */
-    public static void sendCompressedChunk(ServerPlayer player, ChunkCompressionHandler.CompressedChunkData compressed) {
+    public static void sendCompressedChunk(ServerPlayer player, byte[] data) {
         try {
-            byte[] data = compressed.encode();
 #if MC_VER < MC_1_21_1
             CHANNEL.sendTo(new CompressedPayloadWrapper(data), player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
 #else
             sendToPlayer(player, new CompressedPayloadWrapper(data));
 #endif
-            LOGGER.debug("Hassium: Sent compressed chunk [{}, {}] to player {}",
-                    compressed.chunkX, compressed.chunkZ, player.getName().getString());
+            LOGGER.debug("Hassium: Sent compressed chunk to player {} (size={})",
+                    player.getName().getString(), data.length);
         } catch (Exception e) {
             LOGGER.error("Hassium: Failed to send compressed chunk to player {}", player.getName().getString(), e);
         }

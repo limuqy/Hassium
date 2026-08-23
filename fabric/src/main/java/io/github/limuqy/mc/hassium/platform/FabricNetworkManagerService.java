@@ -91,7 +91,9 @@ public class FabricNetworkManagerService implements INetworkManagerService {
                 player, io.github.limuqy.mc.hassium.network.core.GatewayPacketCodec.HassiumSub.LIGHT_DELTA.id(), buf)) {
             return;
         }
-        FabricSendCompat.sendToPlayer(player, HassiumChannels.LIGHT_DELTA_S2C, buf);
+        // 三端一致收口（2026-08-23 裁决）：vanilla 通道 LightDelta 三端客户端均不消费，
+        // 唯一消费在网关帧链路；非网关回退仅消费 buf 所有权，不再发 payload。
+        buf.release();
     }
 
     @Override

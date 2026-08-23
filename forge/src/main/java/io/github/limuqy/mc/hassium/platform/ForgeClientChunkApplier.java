@@ -21,6 +21,11 @@ import net.minecraft.world.level.ChunkPos;
  */
 public class ForgeClientChunkApplier implements IClientChunkApplier {
 
+    /**
+     * 断连窗口（ClientPacketListener.level 已置 null）的一次性说明日志标志，避免每个 chunk 刷屏。
+     */
+    private static final java.util.concurrent.atomic.AtomicBoolean listenerLevelTornDownLogged =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
     @Override
     public void applyToLevelFromByteBuf(ClientLevel level, ChunkPos pos, FriendlyByteBuf buf, boolean renderOnly) {
         try {
@@ -45,6 +50,18 @@ public class ForgeClientChunkApplier implements IClientChunkApplier {
             ClientPacketListener packetListener = mc.getConnection();
 
             if (packetListener != null) {
+                // 断连时序防护（neoforge 1.20.2+ NPE 根因）：Minecraft 的断开流程会先执行
+                // connection.close()（ClientPacketListener.level=null），而 mc.level 尚未清空，
+                // 断连清理 / tick drain 会在这个窗口继续 apply 缓存区块。此时
+                // handleLevelChunkWithLight → updateLevelChunk 内 this.level 为 null 直接 NPE。
+                // level 已销毁时这些 chunk 无法进入世界，跳过 apply 是正确语义（非降级）。
+                if (packetListener.getLevel() == null) {
+                    if (listenerLevelTornDownLogged.compareAndSet(false, true)) {
+                        Constants.LOG.info("Hassium: Skipping chunk apply - ClientPacketListener level already torn down (disconnect window)");
+                    }
+                    // 抛预期竞态异常，让 applyChunkData 的 catch 块统一返回失败（不刷 ERROR 堆栈）
+                    throw new ChunkOutOfViewException(pos);
+                }
                 IClientLevelExtension mixinAccessor = (IClientLevelExtension) level;
                 if (!renderOnly) {
                     // 真实区块到达：apply 前清除可能的 renderOnly 标记（边界替换）

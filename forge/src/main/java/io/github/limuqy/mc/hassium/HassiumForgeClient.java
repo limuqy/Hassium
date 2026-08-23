@@ -18,10 +18,12 @@ import net.minecraftforge.api.distmarker.OnlyIn;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.network.NetworkHooks;
 #elif MC_VER > MC_1_21_5
+import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.eventbus.api.listener.SubscribeEvent;
 import net.minecraftforge.network.ConnectionType;
 import net.minecraftforge.network.NetworkContext;
 #else
+import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.network.ConnectionType;
 import net.minecraftforge.network.NetworkContext;
@@ -39,7 +41,7 @@ import net.minecraftforge.network.NetworkContext;
 @OnlyIn(Dist.CLIENT)
 @Mod.EventBusSubscriber(modid = Constants.MOD_ID, value = Dist.CLIENT, bus = Mod.EventBusSubscriber.Bus.MOD)
 #else
-@Mod.EventBusSubscriber(modid = Constants.MOD_ID, bus = Mod.EventBusSubscriber.Bus.MOD)
+@Mod.EventBusSubscriber(modid = Constants.MOD_ID, value = Dist.CLIENT, bus = Mod.EventBusSubscriber.Bus.MOD)
 #endif
 public class HassiumForgeClient {
 

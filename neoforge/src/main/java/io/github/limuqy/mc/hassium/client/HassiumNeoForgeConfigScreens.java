@@ -48,9 +48,13 @@ public final class HassiumNeoForgeConfigScreens {
 
     private static boolean isClothAvailable() {
         try {
-            Class.forName("me.shedaniel.cloth.config2.api.ConfigBuilder");
+            // 真实 cloth 包名是 me.shedaniel.clothconfig2.api（非 me.shedaniel.cloth.config2）。
+            Class.forName("me.shedaniel.clothconfig2.api.ConfigBuilder");
+            // 还要确保自身 cloth UI 源码能加载（调用即失败 -> false）。
+            Class.forName("io.github.limuqy.mc.hassium.client.HassiumClothConfigScreen", false,
+                    HassiumNeoForgeConfigScreens.class.getClassLoader());
             return true;
-        } catch (ClassNotFoundException e) {
+        } catch (ClassNotFoundException | NoClassDefFoundError e) {
             return false;
         }
     }

@@ -209,8 +209,15 @@ LIGHT_DELTA_S2C = ResourceLocationCompat.vanilla(HassiumChannels.LIGHT_DELTA_S2C
 
     @Override
     public void registerChannels() {
+        // review-fix T11-19：gateway_info 无条件注册（先于 master.enabled 守卫），镜像 NeoForge
+        // registerPayloads 语义：ServerGatewayInfoSender.canSend（dedicated + master.enabled）与
+        // 本守卫判定可能脱钩，未注册 S2C payload 在 1.20.5+ 类型化通道会被客户端丢弃。
+        // MC_VER < MC_1_21_1 无类型化 payload registry，vanilla 直发无需注册，本就无此问题。
+#if MC_VER >= MC_1_21_1
+        FabricPayloadRegistry.registerGatewayInfo();
+#endif
         if (!HassiumConfigService.getInstance().isNetworkCompressionEnabled()) {
-            LOGGER.warn("Hassium: master.enabled=false, skipping Fabric channel registration");
+            LOGGER.warn("Hassium: master.enabled=false, skipping Fabric channel registration (gateway_info already registered)");
             return;
         }
         LOGGER.debug("Hassium: Registering Fabric network channels");
@@ -360,24 +367,22 @@ LIGHT_DELTA_S2C = ResourceLocationCompat.vanilla(HassiumChannels.LIGHT_DELTA_S2C
 
     @Override
     public void sendLightDeltaPacket(ServerPlayer player, FriendlyByteBuf buf) {
-#if MC_VER < MC_1_21_1
-        ServerPlayNetworking.send(player, LIGHT_DELTA_S2C, buf);
-#else
-        ServerPlayNetworking.send(player, FabricPayloadRegistry.toPayload(FabricPayloadRegistry.LIGHT_DELTA_S2C_TYPE, buf));
-#endif
+        // 三端一致收口（2026-08-23 裁决）：vanilla 通道 LightDelta 三端客户端均不消费
+        // （Fabric 客户端自 T12 起不注册 HASSIUM 业务 receiver，见 HassiumClientMod），
+        // 唯一消费在网关帧链路；本实现仅消费 buf 所有权，不再发 payload。
+        buf.release();
     }
 
     /**
-     * 发送压缩的区块数据到指定玩家
+     * 发送已编码的压缩区块负载到指定玩家（payload 由调用方 encode 一次；review-fix: T11-19，
+     * 镜像 NeoForge 同名方法，避免内部二次 encode() 的重复分配+拷贝）
      */
-    public static void sendCompressedChunk(ServerPlayer player, ChunkCompressionHandler.CompressedChunkData compressed) {
+    public static void sendCompressedChunk(ServerPlayer player, byte[] data) {
         try {
             DebugLogger.info(LogType.COMPRESSION,
-                    "[SEND_CHUNK] Sending compressed chunk [{}, {}] to player {} (compressedSize={}, algorithm={})",
-                    compressed.chunkX, compressed.chunkZ, player.getName().getString(),
-                    compressed.compressedData.length, compressed.algorithm);
+                    "[SEND_CHUNK] Sending compressed chunk to player {} (compressedSize={})",
+                    player.getName().getString(), data.length);
 
-            byte[] data = compressed.encode();
             FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
             buf.writeVarInt(data.length);
             buf.writeBytes(data);
