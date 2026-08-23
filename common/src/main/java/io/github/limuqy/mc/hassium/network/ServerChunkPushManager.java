@@ -2646,24 +2646,24 @@ public class ServerChunkPushManager {
         private final LinkedHashMap<ChunkAdmissionController.ChunkDeliveryKey, DataRequestTask> entries =
                 new LinkedHashMap<>();
 
-        int size() {
+        synchronized int size() {
             return entries.size();
         }
 
-        boolean isEmpty() {
+        synchronized boolean isEmpty() {
             return entries.isEmpty();
         }
 
-        void clear() {
+        synchronized void clear() {
             entries.clear();
         }
 
-        DataRequestTask peek() {
+        synchronized DataRequestTask peek() {
             var it = entries.entrySet().iterator();
             return it.hasNext() ? it.next().getValue() : null;
         }
 
-        DataRequestTask poll() {
+        synchronized DataRequestTask poll() {
             var it = entries.entrySet().iterator();
             if (!it.hasNext()) {
                 return null;
@@ -2673,11 +2673,11 @@ public class ServerChunkPushManager {
             return task;
         }
 
-        void offer(ChunkAdmissionController.ChunkDeliveryKey key, DataRequestTask task) {
+        synchronized void offer(ChunkAdmissionController.ChunkDeliveryKey key, DataRequestTask task) {
             entries.put(key, task);
         }
 
-        void removeIf(java.util.function.Predicate<DataRequestTask> predicate) {
+        synchronized void removeIf(java.util.function.Predicate<DataRequestTask> predicate) {
             entries.entrySet().removeIf(e -> predicate.test(e.getValue()));
         }
     }

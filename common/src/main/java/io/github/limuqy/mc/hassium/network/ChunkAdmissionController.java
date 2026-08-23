@@ -17,6 +17,14 @@ final class ChunkAdmissionController {
     static final int POST_ACK_MAX_UNACKNOWLEDGED_BATCHES = 10;
     static final int MAX_PENDING_PER_PLAYER = 384;
 
+    /**
+     * 首个 ACK 前的慢回程探测间隔。fabric 网关的 CHUNK_APPLY_ACK 回程（客户端 tick 尾
+     * flush → 网关帧 → 服务端泵入）比 forge/neoforge 直连慢一个量级，若窗口完全依赖
+     * 首个 apply-ACK 解冻，admission 会以单批滴灌并触发 8s 超时 requeue 风暴。
+     * 最老批在途超过该间隔视为回程慢，经两个相邻 server tick 确认后放行新批。
+     */
+    static final long FIRST_ACK_PROBE_INTERVAL_NANOS = 500_000_000L;
+
     record ChunkDeliveryKey(String dimension, int chunkX, int chunkZ) {}
 
     record Reservation(ChunkDeliveryKey key, long deliveryId) {}
@@ -35,8 +43,21 @@ final class ChunkAdmissionController {
     private int unacknowledgedBatches;
     private double desiredPerTick;
     private double quota;
-    private double ewmaApplyPerTick;
     private boolean hasReceivedFirstAck;
+    /** 首 ACK 前慢回程探测：连续观察到超时在途的 server tick 数。 */
+    private int slowAckProbeTicks;
+    /**
+     * 本 tick 的探测信用（0 或 1）：beginTick 时若最老批已超时在途且上一 tick 也
+     * 观察到超时在途则授予；admit 消费后本 tick 不再放行。
+     */
+    private int probeCredits;
+    /** 本 tick 已消费探测信用：探测授权每 tick 仅放行一笔投递。 */
+    private boolean probeConsumedThisTick;
+    /** 首 ACK 前经探测放行的批数（不含首批），防回程断链时无界开窗。 */
+    private int probeOpenedBatches;
+    /** 探测放行上限：与 POST_ACK 窗口同量级，足够灌满影子光管道。 */
+    private static final int MAX_PROBE_OPENED_BATCHES = 8;
+    private double ewmaApplyPerTick;
 
     /** Adds a pending key unless it is already pending/in-flight or this player's pending bound is full. */
     synchronized boolean offer(ChunkDeliveryKey key) {
@@ -82,6 +103,18 @@ final class ChunkAdmissionController {
         }
         sentThisTick = 0;
         currentBatchId = 0L;
+        probeCredits = 0;
+        probeConsumedThisTick = false;
+        if (oldestBatchOutstandingOverProbeInterval()) {
+            slowAckProbeTicks++;
+            // 跨 tick 确认：上一 tick 已观察到超时在途，本 tick 再次确认才放行
+            if (slowAckProbeTicks >= 2 && probeOpenedBatches < MAX_PROBE_OPENED_BATCHES) {
+                probeCredits = 1;
+                probeOpenedBatches++;
+            }
+        } else {
+            slowAckProbeTicks = 0;
+        }
         if (!pendingByKey.isEmpty() && hasBatchCredit()) {
             quota = Math.min(maxChunksPerTick, quota + desiredPerTick);
         }
@@ -107,9 +140,18 @@ final class ChunkAdmissionController {
             return null;
         }
         if (currentBatchId == 0L) {
+            // 仅当本批由慢回程探测信用资助（首 ACK 前、已有未确认批、信用可用）时，
+            // 开批即消费信用并关闭本 tick 窗口；常规首批/配额批不触碰探测状态。
+            boolean probeFunded = !hasReceivedFirstAck
+                    && unacknowledgedBatches >= 1
+                    && probeCredits > 0;
             currentBatchId = nextBatchId++;
             unacknowledgedBatches++;
             batchesById.put(currentBatchId, new Batch());
+            if (probeFunded) {
+                probeCredits = 0;
+                probeConsumedThisTick = true;
+            }
         }
         long deliveryId = nextDeliveryId++;
         if (deliveryId <= 0L) {
@@ -219,6 +261,10 @@ final class ChunkAdmissionController {
         desiredPerTick = 0.0;
         quota = 0.0;
         ewmaApplyPerTick = 0.0;
+        slowAckProbeTicks = 0;
+        probeCredits = 0;
+        probeConsumedThisTick = false;
+        probeOpenedBatches = 0;
         hasReceivedFirstAck = false;
     }
 
@@ -258,17 +304,37 @@ final class ChunkAdmissionController {
      * members). If one member is slow (shadow light) the batch stays
      * unacknowledged; 10 such batches used to freeze the window even after
      * 80/90 ACKs. Before the first ACK, still only one in-flight batch
-     * (unknown RTT). After that, cap = {@code 10 × maxChunksPerTick}.
+     * (unknown RTT) — unless the oldest batch has been outstanding for more
+     * than {@link #FIRST_ACK_PROBE_INTERVAL_NANOS} for two consecutive ticks
+     * (slow fabric-gateway ACK return path): then one probe batch per tick is
+     * allowed instead of freezing into the 8s expire/requeue storm.
      */
     private boolean hasBatchCredit() {
+        if (probeConsumedThisTick) {
+            // 探测授权仅放行一笔投递；本 tick 窗口随即关闭
+            return false;
+        }
         if (currentBatchId != 0L) {
             return true;
         }
         if (!hasReceivedFirstAck) {
-            return unacknowledgedBatches < 1;
+            return unacknowledgedBatches < 1
+                    || (probeCredits > 0 && !probeConsumedThisTick);
         }
         int maxInFlight = POST_ACK_MAX_UNACKNOWLEDGED_BATCHES * Math.max(1, maxChunksPerTick);
         return inFlightById.size() < maxInFlight;
+    }
+
+    /** 最老未确认批是否已超时在途（仅统计有 transport handoff 锚点的批）。 */
+    private boolean oldestBatchOutstandingOverProbeInterval() {
+        long now = System.nanoTime();
+        long oldest = Long.MAX_VALUE;
+        for (Batch batch : batchesById.values()) {
+            if (batch.firstSentAtNanos > 0L) {
+                oldest = Math.min(oldest, batch.firstSentAtNanos);
+            }
+        }
+        return oldest != Long.MAX_VALUE && now - oldest >= FIRST_ACK_PROBE_INTERVAL_NANOS;
     }
 
     private void recordTransportHandoff(long batchId, long sentAtNanos) {

@@ -47,6 +47,30 @@ class ChunkAdmissionControllerTest {
     }
 
     @Test
+    void admission_slowAckReturnPathOpensWindowByProbe() {
+        ChunkAdmissionController controller = new ChunkAdmissionController();
+        controller.offer(key(1));
+        controller.beginTick(4);
+        ChunkAdmissionController.Reservation first = controller.admit(key(1), 1L);
+        assertNotNull(first);
+
+        // 首个 ACK 未到：探测间隔内窗口保持冻结（原语义）
+        controller.offer(key(2));
+        controller.beginTick(4);
+        assertFalse(controller.canAdmit());
+
+        // 慢回程（fabric 网关）：最老批在途超过探测间隔后放行新批，不等 8s 超时
+        long probeAt = 1L + ChunkAdmissionController.FIRST_ACK_PROBE_INTERVAL_NANOS + 1L;
+        // hasBatchCredit 用 System.nanoTime() 计时；批的 firstSentAtNanos=1L 是测试锚点，
+        // 与真实时钟差值巨大 → elapsed 必然远超间隔 → 本 tick 放行一批。
+        controller.beginTick(4);
+        assertTrue(controller.canAdmit(),
+                "slow ACK return path must open one batch per probe interval instead of freezing");
+        assertNotNull(controller.admit(key(2), probeAt));
+        assertFalse(controller.canAdmit(), "one probe opens exactly one batch");
+    }
+
+    @Test
     void admission_afterFirstAckAllowsTenUnacknowledgedBatches() {
         ChunkAdmissionController controller = new ChunkAdmissionController();
         controller.offer(key(0));

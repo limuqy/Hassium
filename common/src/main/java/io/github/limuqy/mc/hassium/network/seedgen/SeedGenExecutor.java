@@ -420,6 +420,13 @@ public final class SeedGenExecutor {
                 return;
             }
             long t0 = System.nanoTime();
+            // 缓存预判（生成前采样）：目标柱已在影子缓存（内存注入表 / 盘 contentHash 表）
+            // → generateChunk 将走内存/盘命中而非本地 worldgen。盲预生成路径据此区分
+            // 「缓存服务」与「本地补生成」，仅后者计入 locallyGenerated——否则 R2 重连
+            // 对已缓存柱重铺盲预生成时，计数被缓存命中灌满（G4 门禁语义：
+            // 影子端全量命中时 counters.locallyGenerated 必须为 0）。
+            boolean cacheServed = server.injectedChunk(dimension, pos.x, pos.z) != null
+                    || io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.get(dimension, pos) != null;
             LevelChunk chunk = server.generateChunk(dimension, pos);
             if (chunk == null) {
                 if (entry.contentHash() == 0L) {
@@ -441,7 +448,9 @@ public final class SeedGenExecutor {
                 // 用 pristine 地形覆盖服务端权威数据（放置方块消失 = 区块突变/方块缺失
                 // 现场）。此前误走 submitGenerated → generated → pushReady → 官方通道，
                 // 且产物不入注入表（既不落盘也服务不了 R2，双重失效）。
-                NetworkStats.recordLocallyGeneratedChunk(NetworkStats.ESTIMATED_CHUNK_BYTES);
+                if (!cacheServed) {
+                    NetworkStats.recordLocallyGeneratedChunk(NetworkStats.ESTIMATED_CHUNK_BYTES);
+                }
                 server.injectLoadedChunk(dimension, pos, chunk, true);
                 ShadowCacheEviction.recordAccess(dimension, pos);
                 // 光收敛性无保证（生成时邻域仅 BIOMES 空壳，边界光欠）→ isLightCorrect=false：
@@ -502,7 +511,13 @@ public final class SeedGenExecutor {
             long ms = (System.nanoTime() - t0) / 1_000_000L;
             DebugLogger.info(DebugLogger.LogType.ASYNC, "[SEEDGEN] Generated ({}, {}) in {}ms",
                     pos.x, pos.z, ms);
-            NetworkStats.recordLocallyGeneratedChunk(NetworkStats.ESTIMATED_CHUNK_BYTES);
+            // 计数口径与盲预生成分支（上方 !cacheServed）同源：R2 重连时服务端对 pristine
+            // 柱无视客户端缓存仍推 SeedRef，此处 generateChunk 实为影子缓存内存取回
+            // （park 复用保留 injectedChunks/HASHES，零 worldgen）——cacheServed 时不得计入
+            // locallyGenerated（G4 门禁：影子端全量命中时必须为 0），否则间歇性 FAIL。
+            if (!cacheServed) {
+                NetworkStats.recordLocallyGeneratedChunk(NetworkStats.ESTIMATED_CHUNK_BYTES);
+            }
             // 统一影子通道：等光收敛（原版生成后算光同款逻辑）→ 打包官方包 →
             // 官方通道落地（客户端不参与缓存/光照）。
             // review-fix: T3-51：投递失败（并发降级 isEnabled=false）→ 回退全量，
