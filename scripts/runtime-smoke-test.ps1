@@ -11,9 +11,11 @@ param(
     [Parameter(Mandatory=$true)][ValidateSet("fabric","forge","neoforge")][string]$Loader,
     [Parameter(Mandatory=$true)][ValidateSet("I","R")][string]$Phase,
     [Parameter(Mandatory=$true)][string]$SessionId,
+    # -CleanWorld：重置本 loader×ver 的隔离存档目录 $serverLevelName（parity_<loader>_<ver>，
+    # 见路径推导段）；非 CleanWorld 时该目录跨轮持久复用。旧固定 world/ 目录不再使用、不主动删除。
     [switch]$CleanWorld,
     # -PregenOnly：只跑服务端预生成（SmokePhases=pregen，49×49 区域），
-    # 等 PREGEN_DONE marker 后停服并把 world 复制到 build/smoke-test/pregen-world/<Loader>-<Ver>/，
+    # 等 PREGEN_DONE marker 后停服并把存档复制到 build/smoke-test/pregen-world/<Loader>-<Ver>/world，
     # 供后续冒烟 CleanWorld 时恢复（消除 worldgen 供给波动）。不启客户端。
     [switch]$PregenOnly,
     [string]$SmokeHost = "",
@@ -71,6 +73,12 @@ $clientErr = Join-Path $logDir "client_${SessionId}_err.log"
 $loaderRunDir = Join-Path $projectRoot "$Loader\run"
 $clientRunDir = Join-Path $loaderRunDir "client"
 $serverRunDir = Join-Path $loaderRunDir "server"
+
+# 服务端存档按 loader×MC版本 隔离（消除跨版本世界污染：高版本存档的 trial_chambers/
+# Unidentified mapping 等会卡低版本冒烟的日志审计门禁）。命名与 build 产物目录风格
+# 一致（1.20.1 → 1_20_1）。旧固定 world/ 目录不主动删除，仅不再使用。
+$serverLevelName = "parity_${Loader}_" + ($Ver -replace '\.', '_')
+$serverLevelDir = Join-Path $serverRunDir $serverLevelName
 
 # Loader × MC 版本支持校验：真相源是 versionProperties/{Ver}.properties 的 builds_for
 # （settings.gradle 从这里 include 模块）。提前报错，避免 gradle "project not found" 模糊失败。
@@ -187,6 +195,7 @@ if (-not $precheck.Skipped) {
 }
 
 # 写服务端 server.properties（§2 配置 + §4.1 自动避让改端口后同步重写共用）。
+# level-name 指向 $serverLevelName（loader×ver 隔离存档目录，见路径推导段）。
 # T8：本脚本要求 PowerShell 7 运行——配置文件写出统一 -Encoding utf8NoBOM。背景：
 # Windows PowerShell 5.1 的 -Encoding UTF8 带 BOM，night-config 对 BOM 敏感直接
 # ParsingException → 双端配置整份回落默认（seedgen 三跑根因）。被 mod/服务端消费的
@@ -195,9 +204,11 @@ function Write-SmokeServerProperties {
     param(
         [Parameter(Mandatory=$true)][string]$Dir,
         [Parameter(Mandatory=$true)][int]$Port,
+        [Parameter(Mandatory=$true)][string]$LevelName,
         [int]$ViewDistance = 16
     )
     $props = @"
+level-name=$LevelName
 server-port=$Port
 view-distance=$ViewDistance
 online-mode=false
@@ -342,26 +353,26 @@ Set-Content -Path (Join-Path $serverRunDir "eula.txt") -Value "eula=true" -NoNew
 # 2. 配置服务端（view-distance 由 ServerSmokeTest 控制，这里设基础值）
 Write-Host "[$SessionId] [2/9] 配置服务端 ($Loader/run/server/)..."
 New-Item -ItemType Directory -Force -Path $serverRunDir -ErrorAction SilentlyContinue | Out-Null
-Write-SmokeServerProperties -Dir $serverRunDir -Port $ServerPort -ViewDistance $Vd1
+Write-SmokeServerProperties -Dir $serverRunDir -Port $ServerPort -LevelName $serverLevelName -ViewDistance $Vd1
 
-# 创建 world\serverconfig 目录（部分 neoforge / forge 50 版本不会自动创建）
-New-Item -ItemType Directory -Force -Path (Join-Path $serverRunDir "world\serverconfig") -ErrorAction SilentlyContinue | Out-Null
+# 创建 <level>\serverconfig 目录（部分 neoforge / forge 50 版本不会自动创建）
+New-Item -ItemType Directory -Force -Path (Join-Path $serverLevelDir "serverconfig") -ErrorAction SilentlyContinue | Out-Null
 # 防御性清理（仅旧存档）：Hassium 服务端配置早已迁移 COMMON 级（config/hassium/，不写 world/serverconfig/），
 # 但历史存档可能残留 world/serverconfig/hassium/*.toml.bak——FML ConfigTracker 会把整套 parent 路径
 # 重复拼到 tmp 文件名前导致起服崩溃。此处仅清理旧存档残留，新存档不会触发。
 $needConfigTrackerClean = ($Loader -eq "neoforge") -or ($Loader -eq "forge" -and $Ver -ge "1.20.6")
 if ($needConfigTrackerClean) {
-    $hassiumServerConfig = Join-Path $serverRunDir "world\serverconfig\hassium"
+    $hassiumServerConfig = Join-Path $serverLevelDir "serverconfig\hassium"
     if (Test-Path $hassiumServerConfig) {
         Get-ChildItem -Path $hassiumServerConfig -File -Filter "*.toml*" -ErrorAction SilentlyContinue |
             Remove-Item -Force -ErrorAction SilentlyContinue
-        Write-Host "[$SessionId] 清理 $Loader world/serverconfig/hassium 残留 toml（绕过 FML ConfigTracker 路径拼接 bug）"
+        Write-Host "[$SessionId] 清理 $Loader 存档 serverconfig/hassium 残留 toml（绕过 FML ConfigTracker 路径拼接 bug）"
     }
 }
 
 if ($Scenario -in @("seedgen", "dimension")) {
     if (-not $CleanWorld) {
-        Write-Host "[$SessionId] 场景 '$Scenario' 强制 -CleanWorld（干净世界前置）"
+        Write-Host "[$SessionId] 场景 '$Scenario' 强制 -CleanWorld（重置 ${Loader}/${Ver} 存档目录）"
     }
     $CleanWorld = $true
 }
@@ -400,33 +411,30 @@ Reset-SmokeControlEndpoints -ClientRunDir $clientRunDir -ServerRunDir $serverRun
 Invoke-SmokeProfilePatch -Name $Scenario -ClientRunDir $clientRunDir -ServerRunDir $serverRunDir -SessionTag $SessionId
 
 # 3. 清理存档（batch：loader 首轮 / 退版本 / 失败重试 会传 -CleanWorld；单会话默认不清理）
-#    CleanWorld 时优先从预生成存档恢复（build/smoke-test/pregen-world/<Loader>-<Ver>/），
-#    消除 worldgen 供给波动；无预生成存档则删空从头生成。
+#    CleanWorld = 重置本 loader×ver 的 $serverLevelName 目录：优先从预生成存档恢复
+#    （build/smoke-test/pregen-world/<Loader>-<Ver>/，源布局不变），消除 worldgen 供给波动；
+#    无预生成存档则删空从头生成。非 CleanWorld 时该目录跨轮持久复用；旧固定 world/ 不动。
 if ($CleanWorld) {
     $pregenRoot = Join-Path $logRoot "pregen-world"
     $pregenSrc = Join-Path $pregenRoot "${Loader}-${Ver}\world"
     if (-not $PregenOnly -and (Test-Path $pregenSrc)) {
         Write-Host "[$SessionId] [3/9] 恢复预生成存档 ($pregenSrc)..."
-        Remove-Item -Recurse -Force (Join-Path $serverRunDir "world") -ErrorAction SilentlyContinue
-        Remove-Item -Recurse -Force (Join-Path $serverRunDir "world_nether") -ErrorAction SilentlyContinue
-        Remove-Item -Recurse -Force (Join-Path $serverRunDir "world_the_end") -ErrorAction SilentlyContinue
+        Remove-Item -Recurse -Force $serverLevelDir -ErrorAction SilentlyContinue
         Remove-Item -Recurse -Force (Join-Path $serverRunDir "cache") -ErrorAction SilentlyContinue
-        New-Item -ItemType Directory -Force -Path (Join-Path $serverRunDir "world") | Out-Null
-        Copy-Item -Path $pregenSrc -Destination (Join-Path $serverRunDir "world") -Recurse -Force
+        New-Item -ItemType Directory -Force -Path $serverLevelDir | Out-Null
+        Copy-Item -Path $pregenSrc -Destination $serverLevelDir -Recurse -Force
         # serverconfig 不随预生成存档复制（Hassium 配置在 config/hassium/；
         # NeoForge/Forge 自身的 serverconfig 由服务端启动自动重建，复制反而带旧配置）
-        Remove-Item -Recurse -Force (Join-Path $serverRunDir "world\serverconfig") -ErrorAction SilentlyContinue
-        New-Item -ItemType Directory -Force -Path (Join-Path $serverRunDir "world\serverconfig") -ErrorAction SilentlyContinue | Out-Null
+        Remove-Item -Recurse -Force (Join-Path $serverLevelDir "serverconfig") -ErrorAction SilentlyContinue
+        New-Item -ItemType Directory -Force -Path (Join-Path $serverLevelDir "serverconfig") -ErrorAction SilentlyContinue | Out-Null
     } else {
-        Write-Host "[$SessionId] [3/9] 清理服务端存档 ($Loader/run/server/world/)..."
-        Remove-Item -Recurse -Force (Join-Path $serverRunDir "world") -ErrorAction SilentlyContinue
-        Remove-Item -Recurse -Force (Join-Path $serverRunDir "world_nether") -ErrorAction SilentlyContinue
-        Remove-Item -Recurse -Force (Join-Path $serverRunDir "world_the_end") -ErrorAction SilentlyContinue
+        Write-Host "[$SessionId] [3/9] 清理服务端存档 ($Loader/run/server/$serverLevelName/)..."
+        Remove-Item -Recurse -Force $serverLevelDir -ErrorAction SilentlyContinue
         Remove-Item -Recurse -Force (Join-Path $serverRunDir "cache") -ErrorAction SilentlyContinue
-        New-Item -ItemType Directory -Force -Path (Join-Path $serverRunDir "world\serverconfig") -ErrorAction SilentlyContinue | Out-Null
+        New-Item -ItemType Directory -Force -Path (Join-Path $serverLevelDir "serverconfig") -ErrorAction SilentlyContinue | Out-Null
     }
 } else {
-    Write-Host "[$SessionId] [3/9] 跳过存档清理（复用已有 world）"
+    Write-Host "[$SessionId] [3/9] 跳过存档清理（复用已有 $serverLevelName）"
 }
 
 # 4. 释放 $ServerPort 端口：只杀「本工程 loom 服务端」占用者；他人进程（其他会话/项目）
@@ -474,7 +482,7 @@ if (-not $PSBoundParameters.ContainsKey('ServerPort')) {
             Write-Host "[$SessionId] 端口 $ServerPort 被占用（PID $($probe[0].OwningProcess)），自动改用 $newPort"
             $ServerPort = $newPort
             # §2 已写 properties（旧端口），同步重写
-            Write-SmokeServerProperties -Dir $serverRunDir -Port $ServerPort -ViewDistance $Vd1
+            Write-SmokeServerProperties -Dir $serverRunDir -Port $ServerPort -LevelName $serverLevelName -ViewDistance $Vd1
             # effectiveHost 在脚本开头按旧端口快照，同步重建（SmokeHost 显式优先语义保持）
             if (-not ($SmokeHost -and $SmokeHost -ne "")) {
                 $effectiveHost = "127.0.0.1:$ServerPort"
@@ -486,15 +494,13 @@ if (-not $PSBoundParameters.ContainsKey('ServerPort')) {
 }
 
 # 4.5 -PregenOnly：只跑服务端预生成（49×49 区域），不启客户端。
-# 等 PREGEN_DONE marker 后停服并复制 world 到 build/smoke-test/pregen-world/<Loader>-<Ver>/。
+# 等 PREGEN_DONE marker 后停服并把 $serverLevelName 存档复制到 build/smoke-test/pregen-world/<Loader>-<Ver>/world。
 if ($PregenOnly) {
     Write-Host "[$SessionId] [PregenOnly] 预生成模式：起服 → 等 PREGEN_DONE → 停服 → 复制存档"
     # 全新世界（预生成一次后存档复用）
-    Remove-Item -Recurse -Force (Join-Path $serverRunDir "world") -ErrorAction SilentlyContinue
-    Remove-Item -Recurse -Force (Join-Path $serverRunDir "world_nether") -ErrorAction SilentlyContinue
-    Remove-Item -Recurse -Force (Join-Path $serverRunDir "world_the_end") -ErrorAction SilentlyContinue
+    Remove-Item -Recurse -Force $serverLevelDir -ErrorAction SilentlyContinue
     Remove-Item -Recurse -Force (Join-Path $serverRunDir "cache") -ErrorAction SilentlyContinue
-    New-Item -ItemType Directory -Force -Path (Join-Path $serverRunDir "world\serverconfig") -ErrorAction SilentlyContinue | Out-Null
+    New-Item -ItemType Directory -Force -Path (Join-Path $serverLevelDir "serverconfig") -ErrorAction SilentlyContinue | Out-Null
 
     $pregenGradlew = Join-Path $projectRoot "gradlew.bat"
     # 不调 gradlew --stop：全局停 daemon 会误杀并行会话/其他项目的构建；--no-daemon 不依赖 daemon。
@@ -531,7 +537,7 @@ if ($PregenOnly) {
         $pregenDest = Join-Path $pregenRoot "${Loader}-${Ver}"
         Remove-Item -Recurse -Force $pregenDest -ErrorAction SilentlyContinue
         New-Item -ItemType Directory -Force -Path $pregenDest | Out-Null
-        Copy-Item -Path (Join-Path $serverRunDir "world") -Destination (Join-Path $pregenDest "world") -Recurse -Force
+        Copy-Item -Path $serverLevelDir -Destination (Join-Path $pregenDest "world") -Recurse -Force
         # serverconfig 不随预生成存档复制（Hassium 配置在 config/hassium/；
         # NeoForge/Forge 自身的 serverconfig 由服务端启动自动重建，复制反而带旧配置）
         Remove-Item -Recurse -Force (Join-Path $pregenDest "world\serverconfig") -ErrorAction SilentlyContinue
@@ -884,13 +890,19 @@ $logAuditAllow = @(
     # NeoForge dev 环境良性：unprotect 处理器转换率提示（非 mod 错误）
     "ClassTransformStatistics.*suspiciously high",
     # NeoForge dev dist 清理器：客户端类在 dedicated server 侧被拦截的提示
-    "DistCleaner|not present on the dedicated server"
+    "DistCleaner|not present on the dedicated server",
+    # 原版 Realms 启动联网探测失败（离线/防火墙环境噪音，与 mod 无关）
+    "mojang/RealmsClient\]: Failed to fetch Realms feature flags",
+    # 原版 profile key pair 联网获取失败（离线环境噪音，与 mod 无关）
+    "\(Minecraft\) Failed to retrieve profile key pair"
 ) + @($AllowErrorPatterns)
 $logAuditFailures = @()
 foreach ($auditLog in @($serverLog, $clientLog)) {
     if (-not (Test-Path $auditLog)) { continue }
     $tag = Split-Path -Leaf $auditLog
     foreach ($line in Get-Content $auditLog) {
+        # 客户端日志含 ANSI 颜色码（\x1b[...m），先剥离再做门禁匹配
+        $line = $line -replace '\x1b\[[0-9;]*[A-Za-z]', ''
         if ($line -notmatch "/(ERROR|FATAL)\]|FATAL") { continue }
         $allowHit = $false
         foreach ($pat in $logAuditAllow) {
