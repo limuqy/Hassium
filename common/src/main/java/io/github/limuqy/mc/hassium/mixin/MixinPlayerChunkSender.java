@@ -118,7 +118,7 @@ public abstract class MixinPlayerChunkSender {
             return;
         }
         String dimension = LevelCompat.getDimensionId(player.level());
-        ServerChunkPushManager.getInstance().releasePlayerChunkDelivery(player.getUUID(), dimension, pos);
+        ServerChunkPushManager.getInstance().discardUntrackedChunk(player.getUUID(), dimension, pos);
     }
 #endif
 #endif

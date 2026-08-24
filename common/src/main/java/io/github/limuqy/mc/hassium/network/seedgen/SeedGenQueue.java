@@ -30,15 +30,6 @@ public final class SeedGenQueue {
     /** 深度自适应上限（最坏超时 = BASE + MAX_EXTRA ≈ 90s）。 */
     public static final long FALLBACK_TIMEOUT_MAX_EXTRA_MS = 60_000L;
 
-    /**
-     * 活体 SeedRef（deliveryId>0）回退硬截止：必须早于服务端 admission 投递预算
-     * （ServerChunkPushManager.DELIVERY_TIMEOUT_NANOS = 8s）到期，携带原 deliveryId 的
-     * 回退全量请求才能命中服务端 reservation 释放窗口（enqueueDataRequest 的
-     * release+re-admit 原子转换）。晚于 8s 到达时服务端已 expire/requeue，旧 id 变
-     * unknown → 预约槽泄漏 → inFlight 窗口被 SeedRef 重发循环钉死，full push 停摆
-     * （T2-fabric-r1 第三层：R1 landed 崩至 175-231 实证）。留 1.5s 余量覆盖网关往返。
-     */
-    public static final long LIVE_SEEDREF_FALLBACK_DEADLINE_MS = 6_500L;
 
     /**
      * 按当前队列深度计算回退超时：深度越大尾部块等待越久，超时随之放大，
@@ -58,13 +49,10 @@ public final class SeedGenQueue {
     }
 
     /**
-     * 条目回退截止：活体 SeedRef（deliveryId>0）用硬截止（对齐服务端 8s 投递预算），
-     * 其余（盲预生成等）用深度自适应公式。
+     * 条目回退截止：统一用深度自适应公式。
      */
     static long entryDeadlineMs(Entry entry, int queueDepth) {
-        return entry.deliveryId() > 0L
-                ? LIVE_SEEDREF_FALLBACK_DEADLINE_MS
-                : fallbackTimeoutMs(queueDepth);
+        return fallbackTimeoutMs(queueDepth);
     }
 
     /** 该条目是否已过回退截止。 */
@@ -74,21 +62,13 @@ public final class SeedGenQueue {
 
 
     /** 入队条目（不可变快照）。 */
-    public record Entry(ChunkPos pos, long contentHash, long[] sectionHashes, long deliveryId, long enqueueTimeMs) {}
+    public record Entry(ChunkPos pos, long contentHash, long[] sectionHashes, long enqueueTimeMs) {}
 
     private final Map<Long, Entry> pending = new ConcurrentHashMap<>();
 
-    /** 兼容盲预生成与不需 ACK 的旧调用。 */
+    /** 入队。 */
     public boolean enqueue(ChunkPos pos, long contentHash, long[] sectionHashes) {
-        return enqueue(pos, contentHash, sectionHashes, 0L);
-    }
-
-    /** 入队。正 deliveryId 必须随同本次 SeedRef 生成直到 authoritative apply。 */
-    public boolean enqueue(ChunkPos pos, long contentHash, long[] sectionHashes, long deliveryId) {
-        if (deliveryId < 0L) {
-            throw new IllegalArgumentException("deliveryId must be non-negative");
-        }
-        Entry entry = new Entry(pos, contentHash, sectionHashes, deliveryId, nowMs());
+        Entry entry = new Entry(pos, contentHash, sectionHashes, nowMs());
         long key = ChunkPos.asLong(pos.x, pos.z);
         if (contentHash == 0L) {
             return pending.putIfAbsent(key, entry) == null;

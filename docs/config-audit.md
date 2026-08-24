@@ -83,14 +83,14 @@
 | `master.globalCompressionThreshold` | `256` | 全局压缩阈值 |
 | `master.useContextCompression` | `true` | 上下文压缩 |
 | `master.enablePacketAggregation` | `true` | 包聚合 |
-| `master.aggregationMinBatchSize` | `4` | 聚合最小批量 |
-| `master.aggregationMaxWaitTimeMs` | `20` | 聚合最大等待（ms） |
+| `master.aggregationMinBatchSize` | `2` | 聚合最小批量 |
+| `master.aggregationMaxWaitTimeMs` | `50` | 聚合最大等待（ms） |
 | `master.aggregationMaxSize` | `262144`（256KB） | 聚合最大大小 |
 | `master.enableCompactHeader` | `true` | 紧凑包头 |
 | `master.compressionBlacklist` | 10 项默认黑名单（CHUNK_PAYLOAD/SECTION_DELTA/HANDSHAKE/DICTIONARY_SYNC/INDEX_SYNC/CHUNK_HASH/LIGHT_DELTA/BLOCK_ENTITY_DATA/MAIN_CHANNEL/AGGREGATION） | 压缩/聚合黑名单；默认源 HassiumConfig.java:225-235 |
 | `master.metricsEnabled` | `false` | 主控网络指标 |
 | `master.maxChunksPerTick` | `4` | 每玩家每 tick 提交序列化区块上限（满 tick ≈ 80/s） |
-| `master.serverChunkPushThreads` | `4` | 服务端区块推送固定线程数（encode / hash / ZSTD） |
+| `master.serverChunkPushThreads` | `4` | 服务端区块推送消费线程数（取批调度；实际计算走 CPU 核数全局池） |
 | `master.controlReachableEndpoints` | `[]` | 网关监听/outbound 端点（网关监听地址源） |
 | `master.migrationFaultTimeoutMs` | `60000` | L1 迁移故障超时（ms；faultTimeout 未覆盖时生效） |
 

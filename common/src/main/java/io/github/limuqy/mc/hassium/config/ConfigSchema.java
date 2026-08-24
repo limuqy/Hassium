@@ -95,9 +95,9 @@ public final class ConfigSchema {
             "是否使用上下文压缩", "Use context compression");
     public static final ConfigKey<Boolean> MASTER_PACKET_AGGREGATION = bool("master.enablePacketAggregation", ConfigScope.SERVER, Domain.MASTER_CORE, true,
             "是否启用包聚合", "Enable packet aggregation");
-    public static final ConfigKey<Integer> MASTER_AGGREGATION_MIN_BATCH = integer("master.aggregationMinBatchSize", ConfigScope.SERVER, Domain.MASTER_CORE, 4, 1, 256,
+    public static final ConfigKey<Integer> MASTER_AGGREGATION_MIN_BATCH = integer("master.aggregationMinBatchSize", ConfigScope.SERVER, Domain.MASTER_CORE, 2, 1, 256,
             "聚合最小批量", "Aggregation minimum batch size");
-    public static final ConfigKey<Long> MASTER_AGGREGATION_MAX_WAIT = longValue("master.aggregationMaxWaitTimeMs", ConfigScope.SERVER, Domain.MASTER_CORE, 20L, 1L, 5000L,
+    public static final ConfigKey<Long> MASTER_AGGREGATION_MAX_WAIT = longValue("master.aggregationMaxWaitTimeMs", ConfigScope.SERVER, Domain.MASTER_CORE, 50L, 1L, 5000L,
             "聚合最大等待时间（ms）", "Aggregation max wait time (ms)");
     public static final ConfigKey<Integer> MASTER_AGGREGATION_MAX_SIZE = integer("master.aggregationMaxSize", ConfigScope.SERVER, Domain.MASTER_CORE, 256 * 1024, 1024, 8 * 1024 * 1024,
             "聚合最大大小", "Aggregation max size (bytes)");
@@ -112,8 +112,8 @@ public final class ConfigSchema {
             "每玩家每 tick 提交到后台序列化的区块上限（满 tick ≈ 本值×20/s）",
             "Per-player per-tick chunk submit cap (≈ value×20/s at full tick)");
     public static final ConfigKey<Integer> MASTER_SERVER_PUSH_THREADS = integer("master.serverChunkPushThreads", ConfigScope.SERVER, Domain.MASTER_CORE, 4, 1, 64,
-            "服务端区块推送线程数（encode/hash/ZSTD 固定后台池）",
-            "Server chunk-push thread count (fixed encode/hash/ZSTD pool)");
+            "服务端区块推送消费线程数（取批调度；实际计算走 CPU 核数全局池）",
+            "Server chunk-push consumer thread count (batch dispatch; compute runs on the global CPU-count pool)");
     public static final ConfigKey<List<String>> MASTER_CONTROL_ENDPOINTS = stringList("master.controlReachableEndpoints", ConfigScope.SERVER, Domain.MASTER_CORE, List::of,
             "网关监听端点（服务端绑定/下发；客户端经 gateway_info 同步，无需本地配置）",
             "Gateway listen endpoints (server bind/publish; clients get them via gateway_info)");

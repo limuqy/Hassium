@@ -128,7 +128,7 @@ public final class SeedGenExecutor {
         // 同 pos 盲预生成条目若还在低优先级缓冲，交给活体 SeedRef 取代（防重复 worldgen）。
         pendingPregen.remove(pos);
         DIMENSION_CONTEXT.put(ChunkPos.asLong(pos.x, pos.z), dimension);
-        pendingLive.enqueue(pos, packet.contentHash(), packet.sectionHashes(), packet.deliveryId());
+        pendingLive.enqueue(pos, packet.contentHash(), packet.sectionHashes());
         DebugLogger.info(DebugLogger.LogType.ASYNC, "[SEEDGEN] Claimed ({}, {}) dim={} hash={} (bufferedLive={}, bufferedPregen={}, queue={})",
                 packet.chunkX(), packet.chunkZ(), dimension, Long.toHexString(packet.contentHash()),
                 pendingLive.size(), pendingPregen.size(), queue.size());
@@ -354,7 +354,7 @@ public final class SeedGenExecutor {
             if (!source.tryTake(entry)) {
                 continue;
             }
-            workQueue.enqueue(entry.pos(), entry.contentHash(), entry.sectionHashes(), entry.deliveryId());
+            workQueue.enqueue(entry.pos(), entry.contentHash(), entry.sectionHashes());
             released++;
             DebugLogger.info(DebugLogger.LogType.ASYNC,
                     "[SEEDGEN] Released ({}, {}) into work queue (queue={}, live={}, pregen={})",
@@ -363,24 +363,22 @@ public final class SeedGenExecutor {
         }
     }
 
-    /** SeedRef 回退必须携带原 deliveryId 与维度；盲预生成等无 admission 的条目为 0。 */
-    private record FallbackRequest(ChunkPos pos, long deliveryId, String dimension) {}
+    /** SeedRef 回退必须携带维度。 */
+    private record FallbackRequest(ChunkPos pos, String dimension) {}
 
     /** 登记回退：出队 + 攒批（实际发送由 {@link #flushFallback} 按批合包）。 */
     private void addFallback(List<FallbackRequest> buffer, SeedGenQueue.Entry entry) {
-        addFallback(buffer, entry.pos(), entry.deliveryId(), dimensionOf(entry.pos()));
+        addFallback(buffer, entry.pos(), dimensionOf(entry.pos()));
     }
 
-    private void addFallback(List<FallbackRequest> buffer, ChunkPos pos, long deliveryId, String dimension) {
+    private void addFallback(List<FallbackRequest> buffer, ChunkPos pos, String dimension) {
         queue.remove(pos);
         DIMENSION_CONTEXT.remove(ChunkPos.asLong(pos.x, pos.z));
-        buffer.add(new FallbackRequest(pos, deliveryId, dimension));
+        buffer.add(new FallbackRequest(pos, dimension));
     }
 
     /**
-     * 攒批发送回退全量请求：无 deliveryId 的条目按 {@link #FALLBACK_BATCH_MAX} 合包；
-     * 正 deliveryId 必须单柱直发，否则服务端无法释放 SeedRef reservation。
-     * 断连时清缓冲丢弃。
+     * 攒批发送回退全量请求：按 {@link #FALLBACK_BATCH_MAX} 合包；断连时清缓冲丢弃。
      */
     private void flushFallback(List<FallbackRequest> buffer) {
         if (buffer.isEmpty()) {
@@ -399,14 +397,7 @@ public final class SeedGenExecutor {
             if (batchDimension == null) {
                 batchDimension = item.dimension();
             }
-            if (item.deliveryId() > 0L) {
-                ShadowLightCompute.tryRequestMiss(item.pos());
-                DebugLogger.warn(DebugLogger.LogType.ASYNC,
-                        "[SEEDGEN] Fallback ({}, {}) dim={} deliveryId={}",
-                        item.pos().x, item.pos().z, item.dimension(), item.deliveryId());
-                ClientMetadataHandler.requestFullChunksPublic(
-                        item.dimension(), List.of(item.pos()), false, item.deliveryId());
-            } else if (ShadowLightCompute.tryRequestMiss(item.pos())) {
+            if (ShadowLightCompute.tryRequestMiss(item.pos())) {
                 toRequest.add(item.pos());
             }
         }
@@ -522,7 +513,7 @@ public final class SeedGenExecutor {
                             pos.x, pos.z, SectionDeltaPlanner.FALLBACK_THRESHOLD_PCT);
                     ShadowLightCompute.tryRequestMiss(pos);
                     ClientMetadataHandler.requestFullChunksPublic(
-                            dimension, List.of(pos), false, entry.deliveryId());
+                            dimension, List.of(pos), false);
                 } else {
                     server.injectLoadedChunk(dimension, pos, chunk, true);
                     ShadowLightCompute.requestSectionDeltas(dimension, List.of(pos));
@@ -544,7 +535,7 @@ public final class SeedGenExecutor {
             // 官方通道落地（客户端不参与缓存/光照）。
             // review-fix: T3-51：投递失败（并发降级 isEnabled=false）→ 回退全量，
             // 防止生成结果静默丢弃后该柱客户端虚空
-            if (!ShadowLightCompute.submitGenerated(pos, chunk, level, entry.deliveryId())) {
+            if (!ShadowLightCompute.submitGenerated(pos, chunk, level)) {
                 addFallback(fallbackBuffer, entry);
                 return;
             }

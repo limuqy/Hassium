@@ -47,7 +47,7 @@ public enum ControlFrameType {
     /** 主控 → 客户端：配置阶段 S2C 包（payload = kind0 原版 configuration 包完整编码，T10）。 */
     CONFIG_S2C(12),
 
-    /** 客户端 → 主控：已 authoritative apply 的 full/SeedGen delivery ACK。 */
+    /** 保留的 append-only 帧序号；不得收发或处理。 */
     CHUNK_APPLY_ACK(13);
 
     private static final Map<Integer, ControlFrameType> BY_ID = new HashMap<>();

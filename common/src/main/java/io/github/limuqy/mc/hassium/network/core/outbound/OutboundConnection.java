@@ -252,16 +252,6 @@ public final class OutboundConnection {
         sendFrame(ControlFrameType.HEARTBEAT, Unpooled.EMPTY_BUFFER);
     }
 
-    /**
-     * 发送 authoritative apply ACK（客户端最终落地逻辑由调用方决定）。
-     * payload 所有权在本方法内创建并由 {@link #sendFrame} 释放。
-     */
-    public void sendChunkApplyAck(ChunkApplyAck ack) {
-        java.util.Objects.requireNonNull(ack, "ack");
-        ByteBuf payload = Unpooled.buffer(1 + ack.size() * Long.BYTES);
-        ack.encode(payload);
-        sendFrame(ControlFrameType.CHUNK_APPLY_ACK, payload);
-    }
 
     /**
      * 注册入站活动监听（任意入站帧触发；T8 心跳超时监测的 liveness 信号）。
@@ -530,7 +520,7 @@ public final class OutboundConnection {
                     case HEARTBEAT -> {
                         // T7：迁移引擎存活判定输入（心跳定时器）
                     }
-                    case PACKET_C2S, AGGREGATED, HANDSHAKE_C2S, LOGIN_C2S, CONFIG_C2S, PONG, CHUNK_APPLY_ACK ->
+                    case PACKET_C2S, AGGREGATED, HANDSHAKE_C2S, LOGIN_C2S, CONFIG_C2S, PONG ->
                             LOGGER.warn("Hassium: unexpected inbound control frame {}", frame.type());
                 }
             } finally {

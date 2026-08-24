@@ -1,7 +1,6 @@
 package io.github.limuqy.mc.hassium.network.gateway;
 
 import io.github.limuqy.mc.hassium.network.core.outbound.HandshakeCodec;
-import io.github.limuqy.mc.hassium.network.core.outbound.ChunkApplyAck;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
@@ -82,9 +81,6 @@ public final class GatewayServer {
     private volatile int zstdLevel = 3;
     /** D-M2: 可选握手鉴权 token（master.authToken；默认空 = 不鉴权）。 */
     private volatile String authToken = "";
-    private volatile BiConsumer<java.util.UUID, ChunkApplyAck> chunkApplyAckSink;
-    /** Session-aware ACK sink used by platform wiring to reject ACKs from replaced sessions. */
-    private volatile BiConsumer<GatewayPlayerSession, ChunkApplyAck> chunkApplyAckSessionSink;
 
     private GatewayServer() {
     }
@@ -236,33 +232,6 @@ public final class GatewayServer {
         return loginSink;
     }
 
-    /**
-     * 兼容旧接线的 UUID ACK 接收缝。新平台接线必须使用
-     * {@link #setChunkApplyAckSessionSink(BiConsumer)}，以免旧会话的已排队 ACK 命中重置后的 id。
-     */
-    public void setChunkApplyAckSink(BiConsumer<java.util.UUID, ChunkApplyAck> sink) {
-        chunkApplyAckSink = sink;
-    }
-
-    /**
-     * 注册携带不可变会话身份的 ACK 接收缝；回调在网关 Netty event loop 执行。
-     * 平台在切换到服务端线程后必须验证该会话仍是 registry 当前身份。
-     */
-    public void setChunkApplyAckSessionSink(BiConsumer<GatewayPlayerSession, ChunkApplyAck> sink) {
-        chunkApplyAckSessionSink = sink;
-    }
-
-    void onChunkApplyAck(GatewayPlayerSession session, ChunkApplyAck ack) {
-        BiConsumer<GatewayPlayerSession, ChunkApplyAck> sessionSink = chunkApplyAckSessionSink;
-        if (sessionSink != null) {
-            sessionSink.accept(session, ack);
-            return;
-        }
-        BiConsumer<java.util.UUID, ChunkApplyAck> sink = chunkApplyAckSink;
-        if (sink != null) {
-            sink.accept(session.playerId(), ack);
-        }
-    }
 
     /**
      * ZSTD 阈值/等级（globalCompressionAccepted 时安装）。平台必须与客户端侧

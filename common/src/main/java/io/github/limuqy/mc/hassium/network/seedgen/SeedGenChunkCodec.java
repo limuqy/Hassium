@@ -45,9 +45,9 @@ public final class SeedGenChunkCodec {
     }
 
     /** 压缩为线上传输格式（ZSTD + LZ4 按既有链）；失败返回 null。 */
-    public static byte[] compress(byte[] chunkData, int x, int z, long deliveryId) {
+    public static byte[] compress(byte[] chunkData, int x, int z) {
         ChunkCompressionHandler.CompressedChunkData compressed =
-                ChunkCompressionHandler.compressChunkData(chunkData, x, z, deliveryId);
+                ChunkCompressionHandler.compressChunkData(chunkData, x, z);
         return compressed == null ? null : compressed.encode();
     }
 }

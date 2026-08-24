@@ -176,8 +176,7 @@ public class ClientMetadataHandler {
      */
     private static void fallbackToFullRequest(Minecraft mc, SeedRefS2CPacket packet) {
         String dimension = LevelCompat.getDimensionId(mc.level);
-        requestFullChunks(dimension, List.of(new ChunkPos(packet.chunkX(), packet.chunkZ())), true, 0,
-                packet.deliveryId());
+        requestFullChunks(dimension, List.of(new ChunkPos(packet.chunkX(), packet.chunkZ())), true, 0);
     }
 
     /**
@@ -190,7 +189,7 @@ public class ClientMetadataHandler {
             return;
         }
         String dimension = LevelCompat.getDimensionId(mc.level);
-        requestFullChunks(dimension, List.of(pos), true, 0, 0L);
+        requestFullChunks(dimension, List.of(pos), true, 0);
     }
 
     /**
@@ -324,7 +323,7 @@ public class ClientMetadataHandler {
                 DebugLogger.warn(LogType.METADATA,
                         "[CHUNK_HASH] {} full requests timed out, retrying (attempt {})",
                         grp.getValue().size(), grp.getKey() + 1);
-                requestFullChunks(dim, grp.getValue(), true, grp.getKey() + 1, 0L);
+                requestFullChunks(dim, grp.getValue(), true, grp.getKey() + 1);
             }
         }
     }
@@ -394,7 +393,6 @@ public class ClientMetadataHandler {
         PENDING_BE_REQUESTS.clear();
         PENDING_BLOCK_ENTITIES.clear();
         PENDING_FULL_REQUESTS.clear();
-        ClientChunkHandler.clearChunkApplyAcks();
         // SeedGen 影子服务端登出保活（同 serverId 重进复用；idle/换服再 shutdown）
         io.github.limuqy.mc.hassium.network.seedgen.SeedGenExecutor.getInstance().onDisconnect();
         // 影子光照管线随断连清空（投递/回传；影子服务端由上面 registry park）
@@ -406,17 +404,9 @@ public class ClientMetadataHandler {
      * requestFullChunks 内部有 not-in-game 兜底与距离排序）。
      */
     public static void requestFullChunksPublic(String dimension, List<ChunkPos> chunks, boolean staleOrFallback) {
-        requestFullChunks(dimension, chunks, staleOrFallback, 0, 0L);
+        requestFullChunks(dimension, chunks, staleOrFallback, 0);
     }
 
-    /**
-     * SeedRef 生成失败/超时回退：正 {@code fallbackDeliveryId} 必须随单柱请求发出，
-     * 服务端才能释放对应 admission reservation 并接纳全量入队。
-     */
-    public static void requestFullChunksPublic(String dimension, List<ChunkPos> chunks, boolean staleOrFallback,
-                                               long fallbackDeliveryId) {
-        requestFullChunks(dimension, chunks, staleOrFallback, 0, fallbackDeliveryId);
-    }
 
     /**
      * 请求完整区块数据（无缓存时的回退；批量合包）。
@@ -426,7 +416,7 @@ public class ClientMetadataHandler {
      * （未过期）→ 去重跳过发包（服务端 KeyedPriorityQueue REPLACE 语义下重复请求零增益）。
      */
     private static void requestFullChunks(String dimension, List<ChunkPos> chunks, boolean staleOrFallback,
-                                          int retries, long fallbackDeliveryId) {
+                                          int retries) {
         // 兜底：断连后不再发包，避免 Cannot send packets when not in game!
         // 异步回调（applyChunkHashResult 等）与 tickPendingHashGate 之间存在竞态，
         // 即使上层已检查，这里仍兜一道。
@@ -448,7 +438,7 @@ public class ClientMetadataHandler {
             ordered.sort(Comparator.comparingDouble(
                     p -> ChunkDistancePriority.distSq(p, playerChunkX, playerChunkZ)));
         }
-        // 普通请求按同区块同维度未过期登记去重；SeedRef 回退必须直发原 deliveryId，以释放服务端 reservation。
+        // 普通请求按同区块同维度未过期登记去重（服务端 KeyedPriorityQueue REPLACE 语义下重复请求零增益）。
         long now = System.currentTimeMillis();
         int inFlightBefore = PENDING_FULL_REQUESTS.size();
         long deadline = now + fullRequestTimeoutMs(ordered.size(), inFlightBefore);
@@ -456,7 +446,7 @@ public class ClientMetadataHandler {
         for (ChunkPos pos : ordered) {
             long key = DimensionKey.key(dimension, pos.x, pos.z);
             PendingFullRequest existing = PENDING_FULL_REQUESTS.get(key);
-            if (fallbackDeliveryId == 0L && existing != null && existing.deadlineMs() > now
+            if (existing != null && existing.deadlineMs() > now
                     && existing.dimension().equals(dimension)) {
                 continue;
             }
@@ -466,28 +456,38 @@ public class ClientMetadataHandler {
         if (toRequest.isEmpty()) {
             return;
         }
-        if (fallbackDeliveryId != 0L) {
-            sendFullChunkRequest(dimension, toRequest, fallbackDeliveryId, staleOrFallback);
-            return;
-        }
         for (List<ChunkPos> batch : ChunkDataRequestC2SPacket.partition(toRequest)) {
-            sendFullChunkRequest(dimension, batch, 0L, staleOrFallback);
+            sendFullChunkRequest(dimension, batch, staleOrFallback);
         }
     }
 
+    /**
+     * 影子端 hash 比对完成后回发回执：hit 柱以空列表 + RESULT_HIT 发送
+     * （ShadowLightCompute 后台线程调用）。
+     */
+    public static void sendChunkDataResult(String dimension, List<ChunkPos> hits) {
+        if (hits == null || hits.isEmpty()) {
+            return;
+        }
+        sendChunkDataFrame(dimension, List.of(), ChunkDataRequestC2SPacket.RESULT_HIT);
+    }
+
     private static void sendFullChunkRequest(String dimension, List<ChunkPos> toRequest,
-                                             long fallbackDeliveryId, boolean staleOrFallback) {
-        ChunkDataRequestC2SPacket request = new ChunkDataRequestC2SPacket(dimension, toRequest, fallbackDeliveryId);
+                                             boolean staleOrFallback) {
+        sendChunkDataFrame(dimension, toRequest, ChunkDataRequestC2SPacket.RESULT_MISS);
+    }
+
+    private static void sendChunkDataFrame(String dimension, List<ChunkPos> chunks, int result) {
+        ChunkDataRequestC2SPacket request = new ChunkDataRequestC2SPacket(dimension, chunks, result);
         FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
         boolean sent = false;
         try {
             request.encode(buf);
             Services.NETWORK_MANAGER.sendChunkDataRequest(buf);
             sent = true;
-            NetworkStats.recordDataRequestsSent(toRequest.size());
-            NetworkStats.recordFullChunkRequests(toRequest.size(), toRequest.size() * ESTIMATED_CHUNK_BYTES, staleOrFallback);
+            NetworkStats.recordDataRequestsSent(chunks.size());
         } catch (Exception e) {
-            DebugLogger.error("[CHUNK_HASH] Failed to request full chunks", e);
+            DebugLogger.error("[CHUNK_HASH] Failed to send chunk data frame", e);
         } finally {
             if (!sent && buf != null) buf.release();
         }

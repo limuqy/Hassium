@@ -7,26 +7,79 @@ import net.minecraft.world.level.ChunkPos;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ChunkDataRequestC2SPacketTest {
 
     @Test
-    void fallbackDeliveryIdRoundTripsAndOrdinaryRequestUsesZero() {
-        assertRoundTrip(0L);
-        assertRoundTrip(91L);
+    void resultConstantsAndWireOrderAreStable() {
+        assertEquals(0, ChunkDataRequestC2SPacket.RESULT_MISS);
+        assertEquals(1, ChunkDataRequestC2SPacket.RESULT_HIT);
+
+        FriendlyByteBuf buffer = new FriendlyByteBuf(Unpooled.buffer());
+        try {
+            new ChunkDataRequestC2SPacket("minecraft:overworld", List.of(new ChunkPos(3, -4)),
+                    ChunkDataRequestC2SPacket.RESULT_MISS).encode(buffer);
+
+            assertEquals("minecraft:overworld", buffer.readUtf());
+            assertEquals(1, buffer.readVarInt());
+            assertEquals(3, buffer.readVarInt());
+            assertEquals(-4, buffer.readVarInt());
+            assertEquals(ChunkDataRequestC2SPacket.RESULT_MISS, buffer.readByte());
+            assertFalse(buffer.isReadable());
+        } finally {
+            buffer.release();
+        }
     }
 
-    private static void assertRoundTrip(long fallbackDeliveryId) {
+    @Test
+    void missAndHitFramesRoundTripWithTheirRequiredChunkShapes() {
+        assertRoundTrip(ChunkDataRequestC2SPacket.RESULT_MISS, List.of(new ChunkPos(3, -4)));
+        assertRoundTrip(ChunkDataRequestC2SPacket.RESULT_HIT, List.of());
+    }
+
+    @Test
+    void resultShapeSelectsLoaderBoundaryAction() {
+        assertTrue(new ChunkDataRequestC2SPacket("minecraft:overworld", List.of(new ChunkPos(0, 0)),
+                ChunkDataRequestC2SPacket.RESULT_MISS).requestsFullChunks());
+        assertFalse(new ChunkDataRequestC2SPacket("minecraft:overworld", List.of(),
+                ChunkDataRequestC2SPacket.RESULT_HIT).requestsFullChunks());
+    }
+
+    @Test
+    void rejectsInvalidResultShapesAndTrailingPayload() {
+        assertThrows(IllegalArgumentException.class, () -> new ChunkDataRequestC2SPacket(
+                "minecraft:overworld", List.of(), ChunkDataRequestC2SPacket.RESULT_MISS));
+        assertThrows(IllegalArgumentException.class, () -> new ChunkDataRequestC2SPacket(
+                "minecraft:overworld", List.of(new ChunkPos(0, 0)), ChunkDataRequestC2SPacket.RESULT_HIT));
+        assertThrows(IllegalArgumentException.class, () -> new ChunkDataRequestC2SPacket(
+                "minecraft:overworld", List.of(), 2));
+
+        FriendlyByteBuf buffer = new FriendlyByteBuf(Unpooled.buffer());
+        try {
+            buffer.writeUtf("minecraft:overworld");
+            buffer.writeVarInt(0);
+            buffer.writeByte(ChunkDataRequestC2SPacket.RESULT_HIT);
+            buffer.writeByte(0);
+            assertThrows(IllegalArgumentException.class, () -> ChunkDataRequestC2SPacket.decode(buffer));
+        } finally {
+            buffer.release();
+        }
+    }
+
+    private static void assertRoundTrip(int result, List<ChunkPos> chunks) {
         FriendlyByteBuf buffer = new FriendlyByteBuf(Unpooled.buffer());
         try {
             ChunkDataRequestC2SPacket original = new ChunkDataRequestC2SPacket(
-                    "minecraft:overworld", List.of(new ChunkPos(3, -4)), fallbackDeliveryId);
+                    "minecraft:overworld", chunks, result);
             original.encode(buffer);
 
             ChunkDataRequestC2SPacket decoded = ChunkDataRequestC2SPacket.decode(buffer);
             assertEquals(original.dimension(), decoded.dimension());
             assertEquals(original.chunks(), decoded.chunks());
-            assertEquals(fallbackDeliveryId, decoded.fallbackDeliveryId());
+            assertEquals(result, decoded.result());
         } finally {
             buffer.release();
         }

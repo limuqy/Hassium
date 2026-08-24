@@ -91,8 +91,7 @@ public class ClientChunkHandler {
      * @return true=柱已进入客户端缓存（可关加载屏）；false=视距外丢弃等失败
      */
     public static boolean applyLoadingScreenBlocksOnly(
-            net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket packet,
-            long deliveryId) {
+            net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket packet) {
         if (packet == null) {
             return false;
         }
@@ -125,8 +124,6 @@ public class ClientChunkHandler {
             level.getLightEngine().setLightEnabled(pos, false);
             io.github.limuqy.mc.hassium.cache.client.ClientMainThreadBudget.noteChunkApplyActivity();
             NetworkStats.recordChunkApplied(chunkX, chunkZ);
-            ClientMetadataHandler.onChunkApplied(pos);
-            recordAuthoritativeApply(deliveryId, false, true);
             DebugLogger.info(LogType.CHUNK_APPLY,
                     "[APPLY_CHUNK] Loading-screen blocks-only ({}, {}) — light deferred to shadow",
                     chunkX, chunkZ);
@@ -153,30 +150,6 @@ public class ClientChunkHandler {
         ClientChunkPipeline.getInstance().resetStorage();
     }
 
-    /**
-     * 最终落地回调：成功消费带正 {@code deliveryId} 的权威投递即进入 ACK 聚合器。
-     * OVD / {@code redirect_render_only} 仍会落地该包（{@code renderOnly=true}），必须 ACK 以释放服务端 in-flight。
-     * 接收、解码、提交失败不得记为成功。
-     */
-    public static void recordAuthoritativeApply(long deliveryId, boolean renderOnly, boolean applied) {
-        if (shouldRecordAuthoritativeApply(deliveryId, renderOnly, applied)) {
-            ClientChunkPipeline.getInstance().recordAuthoritativeApply(deliveryId);
-        }
-    }
-
-    static boolean shouldRecordAuthoritativeApply(long deliveryId, boolean renderOnly, boolean applied) {
-        return applied && deliveryId > 0L;
-    }
-
-    /** 断线时清除本会话尚未发送的 delivery ACK。 */
-    public static void clearChunkApplyAcks() {
-        ClientChunkPipeline.getInstance().clearChunkApplyAcks();
-    }
-
-    /** 客户端 tick 尾冲刷本连接已完成的 authoritative delivery。 */
-    public static void flushChunkApplyAcks() {
-        ClientChunkPipeline.getInstance().flushChunkApplyAcks();
-    }
 
     /**
      * 暂存 contentHash，供后续收到区块数据时使用（转发 pipeline）
@@ -264,12 +237,11 @@ public class ClientChunkHandler {
                         // 立刻 ACK；光完全由影子端回传，避免客户端自算与影子重复。
                         if (shouldFastApplyForLoadingScreen(pos)) {
                             MainThreadDispatcher.execute(() -> applyLoadingScreenBlocksOnly(
-                                    packet, compressed.deliveryId), pos);
-                            io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.submit(pos, packet, 0L);
+                                    packet), pos);
+                            io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.submit(pos, packet);
                             return;
                         }
-                        io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.submit(
-                                pos, packet, compressed.deliveryId);
+                        io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.submit(pos, packet);
                         return;
                     }
                     // decode 失败：回退直接 apply（数据仍需落地；方案 A 无客户端入库）
@@ -281,7 +253,7 @@ public class ClientChunkHandler {
                 // 回主线程应用区块（距离优先级依赖 updatePlayerPosition）
                 MainThreadDispatcher.execute(() -> {
                     DebugLogger.info(LogType.COMPRESSION, "[HANDLE_COMPRESSED] Applying chunk [{}, {}] to world", chunkX, chunkZ);
-                    if (applyChunkData(chunkX, chunkZ, decompressed, false, compressed.deliveryId)) {
+                    if (applyChunkData(chunkX, chunkZ, decompressed, false)) {
                         DebugLogger.info(LogType.COMPRESSION, "[HANDLE_COMPRESSED] Successfully applied chunk [{}, {}] from server", chunkX, chunkZ);
                     } else {
                         DebugLogger.warn(LogType.COMPRESSION, "[HANDLE_COMPRESSED] Failed to apply chunk [{}, {}] from server", chunkX, chunkZ);
@@ -315,14 +287,13 @@ public class ClientChunkHandler {
                         decodeChunkPacket(decompressed);
                 if (packet != null) {
                     io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.submit(
-                            new ChunkPos(compressed.chunkX, compressed.chunkZ), packet, compressed.deliveryId);
+                            new ChunkPos(compressed.chunkX, compressed.chunkZ), packet);
                     return;
                 }
             }
 
             // 应用区块
-            boolean applied = applyChunkData(compressed.chunkX, compressed.chunkZ, decompressed, false,
-                    compressed.deliveryId);
+            boolean applied = applyChunkData(compressed.chunkX, compressed.chunkZ, decompressed, false);
             if (applied) {
                 Constants.LOG.debug("Hassium: Applied chunk [{}, {}] from server",
                         compressed.chunkX, compressed.chunkZ);
@@ -384,17 +355,11 @@ public class ClientChunkHandler {
      * @param renderOnly true=仅渲染不参与逻辑tick
      */
     public static boolean applyChunkData(int chunkX, int chunkZ, byte[] chunkData, boolean renderOnly) {
-        return applyChunkData(chunkX, chunkZ, chunkData, renderOnly, 0L);
-    }
-
-    /** 应用 full delivery；仅成功的非 render-only 路径会确认正 deliveryId。 */
-    public static boolean applyChunkData(int chunkX, int chunkZ, byte[] chunkData, boolean renderOnly,
-                                         long deliveryId) {
-        return applyChunkDataInternal(chunkX, chunkZ, chunkData, renderOnly, false, deliveryId);
+        return applyChunkDataInternal(chunkX, chunkZ, chunkData, renderOnly, false);
     }
 
     private static boolean applyChunkDataInternal(int chunkX, int chunkZ, byte[] chunkData,
-                                                  boolean renderOnly, boolean hasCachedLight, long deliveryId) {
+                                                  boolean renderOnly, boolean hasCachedLight) {
         DebugLogger.info(LogType.CHUNK_APPLY,
                 "[APPLY_CHUNK] Applying chunk [{}, {}] (dataSize={}, renderOnly={}, hasCachedLight={})",
                 chunkX, chunkZ, chunkData.length, renderOnly, hasCachedLight);
@@ -423,7 +388,7 @@ public class ClientChunkHandler {
             // 竞态窗口，由下方 ChunkOutOfViewException 兜底。
             if (!renderOnly && ViewDistanceExtensionService.getInstance().shouldKeepAsRenderOnly(pos)) {
                 logChunkApplyEvent("redirect_render_only", pos, false, mc);
-                return applyChunkDataInternal(chunkX, chunkZ, chunkData, true, hasCachedLight, deliveryId);
+                return applyChunkDataInternal(chunkX, chunkZ, chunkData, true, hasCachedLight);
             }
 
             // 超视渲染 / 缓存 apply 前先保证 Storage 半径 ≥ clientVD（防 server 缩半径窗口）
@@ -486,8 +451,6 @@ public class ClientChunkHandler {
                 ViewDistanceExtensionService.getInstance().onRenderOnlyApplied(pos);
             }
             // 诊断探针（debug.chunkApplyLogging 开启时输出）：apply#/光照/方块采样
-            probeChunkState(pos, level, renderOnly ? "ovd" : "apply");
-            recordAuthoritativeApply(deliveryId, renderOnly, true);
 
             return true;
 

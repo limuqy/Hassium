@@ -86,10 +86,10 @@ public final class GatewayS2CRouter implements Consumer<Packet<?>> {
                 Minecraft loadingMc = Minecraft.getInstance();
                 if (loadingMc == null || loadingMc.isSameThread()) {
                     io.github.limuqy.mc.hassium.network.ClientChunkHandler
-                            .applyLoadingScreenBlocksOnly(packet, 0L);
+                            .applyLoadingScreenBlocksOnly(packet);
                 } else {
                     MainThreadDispatcher.execute(() -> io.github.limuqy.mc.hassium.network.ClientChunkHandler
-                            .applyLoadingScreenBlocksOnly(packet, 0L), pos);
+                            .applyLoadingScreenBlocksOnly(packet), pos);
                 }
             }
             io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.submit(pos, packet);

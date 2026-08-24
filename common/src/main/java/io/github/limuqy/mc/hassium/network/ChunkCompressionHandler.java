@@ -23,7 +23,7 @@ public class ChunkCompressionHandler {
      * @param chunkData 原始区块数据
      * @return 压缩后的数据包
      */
-    public static CompressedChunkData compressChunkData(byte[] chunkData, int chunkX, int chunkZ, long deliveryId) {
+    public static CompressedChunkData compressChunkData(byte[] chunkData, int chunkX, int chunkZ) {
         long startTime = System.nanoTime();
 
         try {
@@ -42,7 +42,7 @@ public class ChunkCompressionHandler {
                     chunkX, chunkZ, chunkData.length, compressed.length,
                     String.format("%.2f", compressionRatio), String.format("%.2f", durationMs));
 
-            return new CompressedChunkData(chunkX, chunkZ, compressed, chunkData.length, algorithm, deliveryId);
+            return new CompressedChunkData(chunkX, chunkZ, compressed, chunkData.length, algorithm);
 
         } catch (Exception e) {
             Constants.LOG.error("Hassium/Network: Failed to compress chunk [{}, {}]", chunkX, chunkZ, e);
@@ -136,20 +136,13 @@ public class ChunkCompressionHandler {
         public final byte[] compressedData;
         public final int originalSize;
         public final String algorithm;
-        /** 0 仅表示明确的非 flow-controlled 全量路径；admission 分配的投递必须为正。 */
-        public final long deliveryId;
-
         public CompressedChunkData(int chunkX, int chunkZ, byte[] compressedData,
-                                   int originalSize, String algorithm, long deliveryId) {
-            if (deliveryId < 0) {
-                throw new IllegalArgumentException("deliveryId must be non-negative");
-            }
+                                   int originalSize, String algorithm) {
             this.chunkX = chunkX;
             this.chunkZ = chunkZ;
             this.compressedData = compressedData;
             this.originalSize = originalSize;
             this.algorithm = algorithm;
-            this.deliveryId = deliveryId;
         }
 
         public byte[] encode() {
@@ -162,7 +155,6 @@ public class ChunkCompressionHandler {
                 dos.writeUTF(algorithm);
                 dos.writeInt(compressedData.length);
                 dos.write(compressedData);
-                dos.writeLong(deliveryId);
 
                 return baos.toByteArray();
             } catch (Exception e) {
@@ -180,16 +172,15 @@ public class ChunkCompressionHandler {
                 int originalSize = dis.readInt();
                 String algorithm = dis.readUTF();
                 int compressedLength = dis.readInt();
-                if (compressedLength < 0 || compressedLength > dis.available() - Long.BYTES) {
+                if (compressedLength < 0 || compressedLength > dis.available()) {
                     throw new IllegalArgumentException("Invalid compressed chunk length");
                 }
                 byte[] compressedData = new byte[compressedLength];
                 dis.readFully(compressedData);
-                long deliveryId = dis.readLong();
-                if (deliveryId < 0 || dis.available() != 0) {
+                if (dis.available() != 0) {
                     throw new IllegalArgumentException("Malformed compressed chunk payload");
                 }
-                return new CompressedChunkData(chunkX, chunkZ, compressedData, originalSize, algorithm, deliveryId);
+                return new CompressedChunkData(chunkX, chunkZ, compressedData, originalSize, algorithm);
             } catch (Exception e) {
                 Constants.LOG.error("Failed to decode compressed chunk data", e);
                 return null;
