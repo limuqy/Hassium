@@ -153,13 +153,29 @@ R2 列格式 `landed / cacheHit（命中率 hit/(hit+new)）`；OVD 为 R2 探�
 2. 全量键比对表（Schema 默认 × fabric × forge × neoforge）逐键一致，重点视距类键（`chunk.maxRenderDistance`=16 [2,64] 等）三端相同。
 3. 本轮顺带修正 `docs/config-audit.md` 键计数：**71 → 74**（按 ConfigSchema.java 实测唯一 path×scope 计数 CLIENT 38 + SERVER 36；统计表 `master.*` 行 21→28，合计行校验求和=74）。
 
-## 七、遗留项清单
+## 七、遗留项清单（2026-08-24 清偿核销）
 
-1. **MC≥1.21.2 fabric R1 landed 吞吐差距（最高优先）**：applied~1000 vs landed~210-240（neoforge ~1050）。定性：ACK 回流速率 < 发放速率（unackedBatches 13-17 堆积 → admission 冻结）。下一步：深挖双 loader ACK 回程路径差异（fabric 网关 event-loop vs neoforge 直连），候选方向：ACK 批量合并上报、inFlight 窗口自适应（按 RTT）、unackedBatches 超时回收加速。
-2. **屋檐光照残余偏差**：影子收敛终值 E=3 vs vanilla E=5（差 2 级）。需按 T3 打点方案做运行时逐块对比（方块状态保真 vs 播种丢项）。
-3. **docs/config-audit.md 计数过时**：✅ 本轮已修正（71→74，含 master.* 分类行 21→28）。
-4. **LogAudit 豁免清单**：可考虑加入退出窗口 vanilla REE 行（`ProcessorMailbox.registerForExecution` / `Cound not schedule mailbox`）——触发源已由 SeedGenLevelCompat ioPool 门控消除，但 halt/closeStorage 内部 vanilla 提交的零星残留仍可能污染审计门禁。
-5. **1.21.1_fabric 补一轮复验**：R2 ovdLoaded_not_positive FAIL（SeedGen 接管停滞同域），修复已合入但该格未复验，需确认 OVD 恢复（Main 裁决列入清单，本轮不补跑）。
+1. **MC≥1.21.2 fabric R1 landed 吞吐差距**：✅ **已清偿**（commit 67f8620，BDP 自适应 inFlight 窗口 + 水位分级回收）。1.21.2_fabric landed 213→325（+52.6%），neoforge/forge 对照格零回归；服务端 admission 冻结指纹消除（ackPend/dispQ 全程 0）。新瓶颈已移至客户端请求侧（fullReq 峰值 286-510 vs 基线 808），后续提升需另立项。
+2. **屋檐光照残余偏差**：✅ **结构性缺陷已定位并修复两轮**（E1 LightReadinessRegistry + 方案 D converged=true 传播）。首跑欠光错值（E=7）已被 SURROUNDED 整柱重算校正访问消除；剩余残差（sky=3 vs 真值 5）定性为**边界证据死锁 + 官方引擎非确定性方差**（官方光照本就常不收敛到不动点）：视距边缘柱西侧邻永不到达 → settledAtMs 永假 → 证据链断。方向修正为"有界自愈"（宽限期后按当前值强制重算一次），留 follow-up 工单，见 `.omp/workflows/loader-parity-leftovers/work/LightConverge-TASK.md` 终章。
+3. **docs/config-audit.md 计数过时**：✅ 已修正（71→74）。
+4. **LogAudit 豁免清单**：✅ 已落地（退出窗口限定豁免 `ProcessorMailbox.registerForExecution` / `Cound not schedule mailbox`，非全局）；lightfinal 两轮冒烟 LogAudit 0 失败实证有效。
+5. **1.21.1_fabric 补一轮复验**：✅ 已复验 PASS（R2 ovdLoaded=308>0，R1 landed=839/applied=1206）。
+
+### 遗留项清偿复验矩阵（2026-08-24，result JSON 在 build/smoke-test/results/）
+
+| 格 | R1 landed/applied | 结论 |
+|---|---|---|
+| 1.21.2 fabric (leftover) | 325/1187 | 主验证格，+52.6%，无回归 |
+| 1.21.3 fabric (leftover) | 210/506 | 与基线持平 |
+| 1.21.1 fabric (leftover) | 839/1206, OVD=308 | 遗留项⑤核销 |
+| 1.20.1 neoforge (leftover) | 1529/1529 | 回归对照通过 |
+| 1.21.6 forge (leftover) | 1057/1065 | 回归对照通过 |
+| 1.21.2 fabric seedgen (lightdiag/lightfinal) | — | 光照取证与方案 D 复验 |
+
+### 新增 follow-up（非本轮范围）
+1. 光照有界自愈重算（宽限期机制，见 LightConverge-TASK.md 终章方案）。
+2. seedgen 场景门禁 `locallyGenerated>0` 语义更新：A1 后直推先注入影子存档，SeedRef 目标缓存命中不计数恒 FAIL；需改为 SEED_REF 服务端发送计数或等价可观测面。
+3. fabric R1 客户端请求侧瓶颈（fullReq 峰值下降限制 landed 上限）。
 
 ## 八、数据文件索引
 
