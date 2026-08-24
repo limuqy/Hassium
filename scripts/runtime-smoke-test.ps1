@@ -896,17 +896,34 @@ $logAuditAllow = @(
     # 原版 profile key pair 联网获取失败（离线环境噪音，与 mod 无关）
     "\(Minecraft\) Failed to retrieve profile key pair"
 ) + @($AllowErrorPatterns)
+# 退出窗口限定豁免（仅 halt/closeStorage 之后生效，非全局）：客户端 Stopping! →
+# vanilla Util.shutdownExecutors() 关停共享 ioPool 后，引擎/存档内部对半死池的零星
+# 提交触发 vanilla REE 行（含原版日志的真实拼写错误 "Cound not schedule mailbox"）。
+# 触发源已由 SeedGenLevelCompat ioPool 门控消除，此处兜底 halt 内部残留（报告 §7-4）。
+$logAuditExitWindowAllow = @(
+    "ProcessorMailbox\.registerForExecution",
+    "Cound not schedule mailbox"
+)
+# 进入退出窗口的日志标记：vanilla 双端停机横幅 + Hassium exit-window / storage close 提示。
+$logAuditExitWindowMarker = "Stopping!|Stopping server|client exit window|storage manager close"
 $logAuditFailures = @()
 foreach ($auditLog in @($serverLog, $clientLog)) {
     if (-not (Test-Path $auditLog)) { continue }
     $tag = Split-Path -Leaf $auditLog
+    $inExitWindow = $false
     foreach ($line in Get-Content $auditLog) {
         # 客户端日志含 ANSI 颜色码（\x1b[...m），先剥离再做门禁匹配
         $line = $line -replace '\x1b\[[0-9;]*[A-Za-z]', ''
+        if ($line -match $logAuditExitWindowMarker) { $inExitWindow = $true }
         if ($line -notmatch "/(ERROR|FATAL)\]|FATAL") { continue }
         $allowHit = $false
         foreach ($pat in $logAuditAllow) {
             if ($pat -and $line -match $pat) { $allowHit = $true; break }
+        }
+        if (-not $allowHit -and $inExitWindow) {
+            foreach ($pat in $logAuditExitWindowAllow) {
+                if ($pat -and $line -match $pat) { $allowHit = $true; break }
+            }
         }
         if (-not $allowHit) { $logAuditFailures += "${tag}: $line" }
     }

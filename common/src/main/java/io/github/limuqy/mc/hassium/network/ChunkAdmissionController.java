@@ -58,6 +58,11 @@ final class ChunkAdmissionController {
     /** 探测放行上限：与 POST_ACK 窗口同量级，足够灌满影子光管道。 */
     private static final int MAX_PROBE_OPENED_BATCHES = 8;
     private double ewmaApplyPerTick;
+    /** 完整批 ACK 回程 RTT EWMA（firstSent → lastAck，纳秒）；0 = 尚无样本。 */
+    private long ewmaRttNanos;
+
+    /** 一个 server tick 的时长（20 tps），RTT 换算 tick 数用。 */
+    static final long TICK_NANOS = 50_000_000L;
 
     /** Adds a pending key unless it is already pending/in-flight or this player's pending bound is full. */
     synchronized boolean offer(ChunkDeliveryKey key) {
@@ -259,7 +264,7 @@ final class ChunkAdmissionController {
         sentThisTick = 0;
         unacknowledgedBatches = 0;
         desiredPerTick = 0.0;
-        quota = 0.0;
+        ewmaRttNanos = 0L;
         ewmaApplyPerTick = 0.0;
         slowAckProbeTicks = 0;
         probeCredits = 0;
@@ -295,6 +300,8 @@ final class ChunkAdmissionController {
                 + " firstAck=" + hasReceivedFirstAck
                 + " quota=" + String.format("%.1f", quota)
                 + " desired=" + String.format("%.1f", desiredPerTick)
+                + " rttMs=" + String.format("%.1f", ewmaRttNanos / 1_000_000.0)
+                + " win=" + postAckInFlightChunkCap()
                 + " canAdmit=" + canAdmit();
     }
 
@@ -321,7 +328,7 @@ final class ChunkAdmissionController {
             return unacknowledgedBatches < 1
                     || (probeCredits > 0 && !probeConsumedThisTick);
         }
-        int maxInFlight = POST_ACK_MAX_UNACKNOWLEDGED_BATCHES * Math.max(1, maxChunksPerTick);
+        int maxInFlight = postAckInFlightChunkCap();
         return inFlightById.size() < maxInFlight;
     }
 
@@ -335,6 +342,43 @@ final class ChunkAdmissionController {
             }
         }
         return oldest != Long.MAX_VALUE && now - oldest >= FIRST_ACK_PROBE_INTERVAL_NANOS;
+    }
+
+    /**
+     * 首 ACK 后的在途 chunk 窗口：下限保持既有 10 批 × maxChunksPerTick 语义；
+     * 拿到完整批 RTT 样本后按带宽时延积（期望速率 × 往返 tick 数）放宽，
+     * 硬顶 {@link #MAX_PENDING_PER_PLAYER} 防雪崩。
+     * <p>
+     * 固定小窗口下稳态吞吐 ≈ window/RTT：fabric 网关回程慢（RTT 数百 ms）时
+     * 吞吐被钉死在 landed≈200/s 平台期；BDP 开窗让在途量覆盖整个回程管道。
+     */
+    synchronized int postAckInFlightChunkCap() {
+        int base = POST_ACK_MAX_UNACKNOWLEDGED_BATCHES * Math.max(1, maxChunksPerTick);
+        if (ewmaRttNanos <= 0L || desiredPerTick <= 0.0) {
+            return base;
+        }
+        long rttTicks = Math.max(1L, (ewmaRttNanos + TICK_NANOS - 1) / TICK_NANOS);
+        long bdpChunks = (long) Math.ceil(desiredPerTick * rttTicks);
+        return (int) Math.min(MAX_PENDING_PER_PLAYER, Math.max(base, bdpChunks));
+    }
+
+    /**
+     * 分级投递超时：水位越高回收越快。基线对齐调用方 8s 常量；在途达到窗口
+     * 3/4 用半档（4s），窗口打满（admission 已冻结、q=384 满）用短档（2s）。
+     * <p>
+     * 依据：FIRST_ACK_PROBE_INTERVAL=500ms 探针已证明活路径回程 ≤1s；冻结期
+     * 在途 ≥2s 未 ACK 的投递几乎必是丢失/卡死帧，快速 requeue 比等满 8s 更能
+     * 解冻窗口。SeedRef 6.5s 回退即使晚于短档到达也安全：服务端 expire 已把
+     * 任务移出 inFlightTasks，enqueueDataRequest 走 task==null 原地改写分支。
+     */
+    static long tieredDeliveryTimeoutNanos(int inFlightChunks, int windowChunks, long baseTimeoutNanos) {
+        if (windowChunks <= 0 || inFlightChunks >= windowChunks) {
+            return baseTimeoutNanos / 4;
+        }
+        if ((long) inFlightChunks * 4 >= (long) windowChunks * 3) {
+            return baseTimeoutNanos / 2;
+        }
+        return baseTimeoutNanos;
     }
 
     private void recordTransportHandoff(long batchId, long sentAtNanos) {
@@ -372,6 +416,9 @@ final class ChunkAdmissionController {
             return;
         }
         long elapsedNanos = Math.max(1L, batch.lastAcknowledgedAtNanos - batch.firstSentAtNanos);
+        ewmaRttNanos = ewmaRttNanos == 0L
+                ? elapsedNanos
+                : (long) (ewmaRttNanos * 0.75 + elapsedNanos * 0.25);
         double observedPerTick = batch.acknowledgedCount * 20_000_000.0 / elapsedNanos;
         ewmaApplyPerTick = ewmaApplyPerTick == 0.0
                 ? observedPerTick

@@ -409,6 +409,7 @@ public class ShadowSeedServer extends MinecraftServer {
                     "[SHADOW_INJECT] pos=({},{}) sections={} nonAirSections={} sectionBytes={} heightmapKeys={}",
                     pos.x, pos.z, chunk.getSections().length, nonAirSections, sectionBytes,
                     data.getHeightmaps().size());
+            ShadowLightProbe.onInjected(dimension, pos, chunk);
             boolean fresh = previous == null;
             if (!fresh) {
                 // 重注入（REPLACE 覆盖）：旧光必须物理清除再重算。全新柱无任何引擎状态
@@ -440,6 +441,8 @@ public class ShadowSeedServer extends MinecraftServer {
                 // （fresh 柱零投递，size 检查立即通过零开销）。
                 awaitLightTaskDrain(level);
             }
+            // E1：注入成功 = INGESTED（重注入清光 → 注册表回退，防旧 LIT 语义泄漏）
+            LightReadinessRegistry.markIngested(key);
             return true;
         } catch (Throwable t) {
             if (previous != null) {
@@ -1356,7 +1359,7 @@ public class ShadowSeedServer extends MinecraftServer {
     public void injectLoadedChunk(String dimension, ChunkPos pos,
                                   net.minecraft.world.level.chunk.LevelChunk chunk, boolean dirty) {
         long key = DimensionKey.key(dimension, pos.x, pos.z);
-        injectedChunks.put(key, chunk);
+        LightReadinessRegistry.markIngested(key); // E1：缓存命中/读盘直载入口
         if (dirty) {
             io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.markContentDirty(key);
         } else {
@@ -1399,6 +1402,12 @@ public class ShadowSeedServer extends MinecraftServer {
         for (Map.Entry<Long, LevelChunk> e : injectedChunks.entrySet()) {
             LevelChunk chunk = e.getValue();
             if (chunk == null || chunk.isLightCorrect()) {
+                continue;
+            }
+            // E1 存档终态门：仅 SURROUNDED 且无待收敛重算的列允许落盘光
+            // （isLightOn + 光层 NBT）；其余保持 false → 落盘省略光，读盘强制续算，
+            // 堵死「错误定值随 type 126 存档复活」。
+            if (!LightReadinessRegistry.isSettled(e.getKey())) {
                 continue;
             }
             ChunkPos pos = chunk.getPos();

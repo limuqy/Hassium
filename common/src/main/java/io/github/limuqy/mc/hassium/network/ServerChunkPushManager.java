@@ -453,7 +453,7 @@ public class ServerChunkPushManager {
 
             Constants.LOG.info("Hassium: ServerChunkPushManager initialized with {} threads", threads);
             io.github.limuqy.mc.hassium.utils.StallDiag.event(
-                    "pushManager timeoutMs={} maxInFlightWindow={}",
+                    "pushManager timeoutMs={} maxInFlightWindow={} (adaptive, tiered 8s/4s/2s by water level)",
                     TimeUnit.NANOSECONDS.toMillis(DELIVERY_TIMEOUT_NANOS),
                     ChunkAdmissionController.POST_ACK_MAX_UNACKNOWLEDGED_BATCHES);
         }
@@ -2157,8 +2157,10 @@ public class ServerChunkPushManager {
         Map<Long, DataRequestTask> tasks = inFlightTasks.get(player.getUUID());
         int expiredCount = 0;
         int requeued = 0;
+        long timeoutNanos = ChunkAdmissionController.tieredDeliveryTimeoutNanos(
+                controller.inFlightCount(), controller.postAckInFlightChunkCap(), DELIVERY_TIMEOUT_NANOS);
         for (ChunkAdmissionController.ExpiredDelivery expired :
-                controller.expire(nowNanos, DELIVERY_TIMEOUT_NANOS)) {
+                controller.expire(nowNanos, timeoutNanos)) {
             expiredCount++;
             DataRequestTask task = tasks != null ? tasks.remove(expired.deliveryId()) : null;
             if (task != null && isStillTracking(player, task)) {
@@ -2171,7 +2173,7 @@ public class ServerChunkPushManager {
         if (expiredCount > 0) {
             io.github.limuqy.mc.hassium.utils.StallDiag.event(
                     "expire n={} requeued={} timeoutMs={} {}",
-                    expiredCount, requeued, TimeUnit.NANOSECONDS.toMillis(DELIVERY_TIMEOUT_NANOS),
+                    expiredCount, requeued, TimeUnit.NANOSECONDS.toMillis(timeoutNanos),
                     controller.diagLine());
         }
     }

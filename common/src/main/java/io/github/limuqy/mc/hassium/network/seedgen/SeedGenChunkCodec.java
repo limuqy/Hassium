@@ -26,7 +26,10 @@ public final class SeedGenChunkCodec {
     public static ClientboundLevelChunkWithLightPacket buildPacket(LevelChunk chunk, ServerLevel level) {
         try {
             LevelLightEngine engine = level.getLightEngine();
-            return new ClientboundLevelChunkWithLightPacket(chunk, engine, null, null);
+            ClientboundLevelChunkWithLightPacket packet =
+                    new ClientboundLevelChunkWithLightPacket(chunk, engine, null, null);
+            ShadowLightProbe.onReturnPacket(chunk, engine, packet);
+            return packet;
         } catch (Exception e) {
             Constants.LOG.error("Hassium: SeedGen failed to build chunk packet {}", chunk.getPos(), e);
             return null;

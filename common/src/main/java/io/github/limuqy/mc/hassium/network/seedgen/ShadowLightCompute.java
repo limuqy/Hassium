@@ -1279,8 +1279,54 @@ public final class ShadowLightCompute {
             consumeRunning.set(false); // 池已停（断连竞态），队列由 onDisconnect 清空
         }
     }
+    static {
+        // E1「事件做骨」：SURROUNDED 收敛重算触发回调（LightReadinessRegistry 纯状态机，
+        // 反向依赖经此注入，避免 clinit 环）。
+        LightReadinessRegistry.setRelightTrigger(ShadowLightCompute::enqueueSurroundedRelight);
+    }
+
+    /**
+     * SURROUNDED 触发的整柱 LIGHT_ONLY 清层重算（E1「整柱重算」面）：任一邻柱晚于本柱
+     * 末次会话内计算变 LIT（或本柱光来自存档复用 lastCompute=0）时，由
+     * {@link LightReadinessRegistry} 回调。全 section 掩码并入 pendingLightUpdates
+     * （REPLACE 并集语义与 LightDelta 一致），复用既有 LIGHT_ONLY 屏障 + delta 回传链路；
+     * 重算完成（lightChunk COMPUTED 事件）才由注册表出队。
+     * <p>
+     * 引擎回调线程调用；只做并发安全入队 + pump。目标柱未注入/维度未装配 → 放弃本次
+     * 收敛登记（{@link LightReadinessRegistry#abandonConverge}），待后续事件重评。
+     */
+    private static void enqueueSurroundedRelight(long key) {
+        if (!isEnabled()) {
+            return; // 断连/降级：注册表将随 clear() 清理，无需 abandon
+        }
+        ShadowSeedServer server = ShadowServerRegistry.getInstance().get();
+        if (server == null) {
+            return;
+        }
+        String dimension = DimensionKey.dimensionOf(key);
+        ChunkPos pos = new ChunkPos(DimensionKey.chunkXOf(key), DimensionKey.chunkZOf(key));
+        net.minecraft.server.level.ServerLevel level = server.level(dimension);
+        if (level == null || server.injectedChunk(dimension, pos.x, pos.z) == null) {
+            LightReadinessRegistry.abandonConverge(key);
+            return;
+        }
+        net.minecraft.world.level.lighting.LevelLightEngine engine =
+                level.getChunkSource().getLightEngine();
+        int sectionCount = engine.getLightSectionCount();
+        java.util.BitSet allSections = new java.util.BitSet(sectionCount);
+        allSections.set(0, sectionCount);
+        LightWork work = new LightWork((java.util.BitSet) allSections.clone(),
+                (java.util.BitSet) allSections.clone(),
+                new java.util.BitSet(), new java.util.BitSet());
+        pendingLightUpdates.merge(key, work, LightWork::merged);
+        DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
+                "[SHADOW_LIGHT] Surrounded relight queued ({}, {}) sections={}",
+                pos.x, pos.z, sectionCount);
+        pump();
+    }
     /**
      * 后台消费循环（管道化）：取批（≤{@link #CONSUME_BATCH_LIMIT}，受在途余量约束）→
+
      * 注入/应用/收集 → 提交 per-chunk 两阶段光屏障（{@link #submitLightBatch}，无等待）→
      * 立即回循环取下一批（批间零空转，不再 allOf 全等）。提交即从投递队列移除
      * （管道化前提，条件移除 = REPLACE 守卫）；在途（已提交未完成）上限
@@ -1308,6 +1354,7 @@ public final class ShadowLightCompute {
                     inflightLight.clear();
                     waitingForLight.clear();
                     initializedLight.clear();
+                    LightReadinessRegistry.clear();
                     return;
                 }
                 sweepLightTimeouts(); // 超时兜底第二扫描点（主线程帧尾为主，低帧率兜底）
@@ -1419,6 +1466,7 @@ public final class ShadowLightCompute {
                         generated.clear();
                         pendingLightUpdates.clear();
                         inflightLight.clear();
+                        LightReadinessRegistry.clear();
                         ShadowServerRegistry.getInstance().failShadowServer();
                         return;
                     }
@@ -1881,14 +1929,30 @@ public final class ShadowLightCompute {
                         (inf.level != null ? inf.level : server.overworld())
                                 .getChunkSource().getLightEngine();
         boolean hasExistingLight = lightChunkHasExistingLight(inf.metric == LightMetric.REUSE_CACHE);
+        ShadowLightProbe.onBeforeLightChunk(server, engine, inf.chunk);
         java.util.concurrent.CompletableFuture<net.minecraft.world.level.chunk.ChunkAccess> lightFuture =
                 engine.lightChunk(inf.chunk, hasExistingLight);
         // converged 必须含「8 邻 lightChunk 也已完成」：仅 throwable==null 时邻柱可能仍在途，
         // 本柱边界 section 的跨柱蔓延尚未写入（屋檐跨界暗区根因）。未齐 → converged=false，
         // 走 finishLight 的 defer/欠光路径，由邻柱完成时的 promoteDeferredAfterNeighborsLocked 重推。
-        lightFuture.whenComplete((chunkAccess, throwable) ->
-                completeLight(inf, throwable == null
-                        && areVanillaLightNeighborsConverged(server, inf)));
+        lightFuture.whenComplete((chunkAccess, throwable) -> {
+            // 方案 D：LIGHT_ONLY 收敛重算的完成判定走注册表视图（并发 relight 波中
+            // 引擎三表恒有在途 → 三表判定恒 false → settled 证据永不达成）；其余来源
+            // （首跑跃迁波）保持引擎三表严格判定。
+            boolean converged = throwable == null && (inf.source == LightSource.LIGHT_ONLY
+                    ? areRegistryNeighborsSettled(inf.key)
+                    : areVanillaLightNeighborsConverged(server, inf));
+            ShadowLightProbe.onLightChunkComplete(engine, inf.chunk, throwable, converged);
+            if (throwable == null) {
+                // E1 LIT 唯一事件源：覆盖 PENDING/GENERATED/DELTA/LIGHT_ONLY 全部屏障来源。
+                // REUSE_CACHE 的值来自存档/既有层 → 记「未在会话内计算」，SURROUNDED 时
+                // 恒触发一次性校验重算（错误定值不得随 type 126 存档复活）。
+                LightReadinessRegistry.onLightComputed(inf.key,
+                        inf.metric == LightMetric.REUSE_CACHE, converged,
+                        System.currentTimeMillis());
+            }
+            completeLight(inf, converged);
+        });
     }
 
     /**
@@ -1898,6 +1962,17 @@ public final class ShadowLightCompute {
      */
     private static boolean areVanillaLightNeighborsConverged(ShadowSeedServer server, InflightLight inf) {
         return areVanillaLightNeighborsConverged(inf.key);
+    }
+
+    /**
+     * 方案 D：LIGHT_ONLY 收敛重算完成时的 converged 判定用注册表视图——
+     * 并发 relight 波中邻柱常在 inflight/waiting（引擎三表），恒判 false 会使
+     * settled=true 终值证据永不达成、传播死锁。registry 视图语义：
+     * 8 邻 phase==LIT 且无 pendingConverge（park 未 LIT 的邻柱按未就绪计，
+     * 与官方 INITIALIZE_LIGHT 硬依赖对齐）。跃迁波首跑仍用引擎三表严格判定。
+     */
+    private static boolean areRegistryNeighborsSettled(long key) {
+        return LightReadinessRegistry.areNeighborsSettled(key);
     }
 
     /** 同上，按复合键判定（deferred 任务重推前使用）。 */
@@ -2199,6 +2274,7 @@ public final class ShadowLightCompute {
             DebugLogger.warn(DebugLogger.LogType.ASYNC,
                     "[SHADOW_LIGHT] Light incomplete/timeout ({}, {}), pushing first packet with partial light",
                     pos.x, pos.z);
+
         }
         deferredLightPush.remove(task.key);
         try {
@@ -2214,7 +2290,8 @@ public final class ShadowLightCompute {
                     "[SHADOW_CHUNK] Build failed ({}, {})", pos.x, pos.z);
         }
         if (server != null && task.chunk != null) {
-            server.syncLightCorrect(task.chunk, pushConverged);
+            server.syncLightCorrect(task.chunk,
+                    pushConverged && LightReadinessRegistry.isSettled(task.key));
         }
         if (inflightLight.size() < PIPELINE_LOW_WATER
                 && hasStartablePendingWork()
@@ -2236,8 +2313,8 @@ public final class ShadowLightCompute {
             {0, -1}, {0, 1},
             {1, -1}, {1, 0}, {1, 1}
     };
-
     /** 丢弃某柱已收集、尚未消费的光照更新掩码，以及回传队列里尚未落地的旧光包。 */
+
     private static void discardLightMask(long key) {
         LightMask mask = lightUpdates.remove(key);
         if (mask != null) {
@@ -2426,6 +2503,7 @@ public final class ShadowLightCompute {
     public static void drainReady(long deadlineNs) {
         io.github.limuqy.mc.hassium.utils.ChunkFlowTiming.noteFrame(); // T0b 诊断：每帧 apply 计数
         tickChunkUnload();
+        ShadowLightProbe.onEngineTick(); // T3 探针：引擎终态周期快照（debug.lightVerify 门控）
         confirmLightsCorrectIfConverged();
         flushDeferredLightPushes();
         sweepLightTimeouts(); // per-chunk 光屏障 5s 超时兜底（主扫描点；低帧率由消费轮顶兜底）
@@ -2717,7 +2795,8 @@ public final class ShadowLightCompute {
                 pushReady(task.key, task.chunk, task.level, complete, task.renderOnly,
                         task.traceOrigin, task.deliveryId);
             }
-            server.syncLightCorrect(task.chunk, complete);
+            server.syncLightCorrect(task.chunk,
+                    complete && LightReadinessRegistry.isSettled(task.key));
         } catch (Throwable t) {
             DebugLogger.warn(DebugLogger.LogType.ASYNC,
                     "[SHADOW_LIGHT] Deferred push failed ({}, {})", pos.x, pos.z);
@@ -2826,6 +2905,7 @@ public final class ShadowLightCompute {
             }
             it.remove();
             discardLightMask(key); // 已卸载柱的光更新掩码作废（防跨会话残留 + drain 空转）
+            LightReadinessRegistry.remove(key); // E1：卸载列退出就绪状态机（再入重建）
             shadowApplyEpochs.remove(key); // 客户端柱已卸载：光桥不再向其发增量光
             unloaded++;
             DebugLogger.info(DebugLogger.LogType.ASYNC,
@@ -3060,6 +3140,7 @@ public final class ShadowLightCompute {
         generated.clear();
         pendingLightUpdates.clear();
         inflightLight.clear(); // 在途光屏障：回调侧条件移除失败即短路丢弃（断连竞态）
+        LightReadinessRegistry.clear(); // E1：就绪状态机对齐断连清理面
         waitingForLight.clear();
         initializedLight.clear();
         deferredLightPush.clear();

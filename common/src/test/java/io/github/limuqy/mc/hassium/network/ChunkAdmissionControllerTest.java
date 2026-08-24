@@ -327,4 +327,83 @@ class ChunkAdmissionControllerTest {
     private static ChunkAdmissionController.ChunkDeliveryKey key(int x) {
         return new ChunkAdmissionController.ChunkDeliveryKey("minecraft:overworld", x, 0);
     }
+
+    @Test
+    void admission_windowWidensToBandwidthDelayProductAfterMeasuredRtt() {
+        ChunkAdmissionController controller = new ChunkAdmissionController();
+        // 首批：maxChunksPerTick=5、完整批 1s RTT → desiredPerTick 钉在 floor=5，
+        // ewmaRtt=1s → rttTicks=20 → BDP=desired×rttTicks=100 > 基线 10×5=50。
+        controller.offer(key(0));
+        controller.beginTick(5);
+        assertNotNull(controller.admit(key(0), 1L));
+        assertTrue(controller.acknowledge(1L, 1_000_000_000L));
+
+        int admitted = fillToWindowCap(controller, 5, 400, 2_000_000_000L);
+        assertEquals(100, admitted, "慢回程实测后窗口必须按 BDP 放宽到 100 个在途 chunk");
+        assertFalse(controller.canAdmit(), "达到自适应窗口后必须停止放行");
+    }
+
+    @Test
+    void admission_adaptiveWindowHardCapsAtPendingBound() {
+        ChunkAdmissionController controller = new ChunkAdmissionController();
+        controller.offer(key(0));
+        controller.beginTick(5);
+        assertNotNull(controller.admit(key(0), 1L));
+        assertTrue(controller.acknowledge(1L, 1L + 60_000_000_000L)); // 60s 极端 RTT
+
+        int admitted = fillToWindowCap(controller, 5, 500, 61_000_000_000L);
+        assertEquals(ChunkAdmissionController.MAX_PENDING_PER_PLAYER, admitted,
+                "极端 RTT 下窗口必须被 MAX_PENDING_PER_PLAYER 硬顶防雪崩");
+    }
+
+    @Test
+    void tieredTimeout_waterLevelBoundaries() {
+        long base = java.util.concurrent.TimeUnit.SECONDS.toNanos(8L);
+        assertEquals(base, ChunkAdmissionController.tieredDeliveryTimeoutNanos(0, 100, base));
+        assertEquals(base, ChunkAdmissionController.tieredDeliveryTimeoutNanos(74, 100, base),
+                "水位低于窗口 3/4 保持基线档");
+        assertEquals(base / 2, ChunkAdmissionController.tieredDeliveryTimeoutNanos(75, 100, base),
+                "水位达窗口 3/4 用半档");
+        assertEquals(base / 4, ChunkAdmissionController.tieredDeliveryTimeoutNanos(100, 100, base),
+                "窗口打满用短档");
+        assertEquals(base / 4, ChunkAdmissionController.tieredDeliveryTimeoutNanos(150, 100, base));
+    }
+
+    @Test
+    void admission_saturatedWindowRecyclesFasterThanBaseline() {
+        ChunkAdmissionController controller = new ChunkAdmissionController();
+        // 无 RTT 样本 → postAckInFlightChunkCap 走基线 10×10=100；灌满到饱和水位。
+        controller.offer(key(0));
+        controller.beginTick(10);
+        assertNotNull(controller.admit(key(0), 1L));
+        assertTrue(controller.acknowledge(1L, 2L));
+        fillToWindowCap(controller, 10, 200, 3L);
+        assertEquals(100, controller.inFlightCount());
+
+        long base = java.util.concurrent.TimeUnit.SECONDS.toNanos(8L);
+        long nowNanos = 4_000_000_000L; // 在途龄 4s：基线档不回收，短档（2s）全回收
+        long tiered = ChunkAdmissionController.tieredDeliveryTimeoutNanos(
+                controller.inFlightCount(), controller.postAckInFlightChunkCap(), base);
+        assertEquals(base / 4, tiered);
+        assertTrue(controller.expire(nowNanos, base).isEmpty(),
+                "基线 8s 档下 4s 龄投递不得回收");
+        assertFalse(controller.expire(nowNanos, tiered).isEmpty(),
+                "饱和水位的冻结窗口必须按短档快速回收解冻 admission");
+    }
+
+    /** 逐 key offer→beginTick→admit，返回成功入窗的在途数（不 ACK）。 */
+    private static int fillToWindowCap(ChunkAdmissionController controller, int maxChunksPerTick,
+                                       int maxKeys, long sentBaseNanos) {
+        int admitted = 0;
+        for (int x = 1; x <= maxKeys; x++) {
+            if (!controller.offer(key(x))) {
+                continue;
+            }
+            controller.beginTick(maxChunksPerTick);
+            if (controller.admit(key(x), sentBaseNanos + x) != null) {
+                admitted++;
+            }
+        }
+        return admitted;
+    }
 }
