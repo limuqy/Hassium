@@ -45,6 +45,7 @@ import java.util.ArrayList;
 import java.util.ArrayDeque;
 import java.util.Comparator;
 import java.util.Deque;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -77,6 +78,8 @@ public class ServerChunkPushManager {
     private static final int MAX_PREPARED_PER_PLAYER = 384;
     /** 每玩家 authoritative data queue 与 admission pending 的共同硬上限。 */
     private static final int MAX_DATA_QUEUE_PER_PLAYER = ChunkAdmissionController.MAX_PENDING_PER_PLAYER;
+    /** peekPrioritized 队头数据优先扫描窗口：跳过 SeedRef 元数据找 full 任务的有限深度。 */
+    private static final int PRIORITY_SCAN_BOUND = 64;
 
 
     /**
@@ -851,15 +854,15 @@ public class ServerChunkPushManager {
             UUID playerId = player.getUUID();
             PlayerBloomLayers layers = bloomLayers.computeIfAbsent(playerId, k -> new PlayerBloomLayers());
             if (packet.full()) {
-                layers.reset(filter);
+                layers.reset(packet.dimension(), filter);
                 DebugLogger.info(LogType.NETWORK,
-                        "[BLOOM_SYNC] Full bloom from {} ({} bytes) — resync unblocked",
-                        player.getName().getString(), packet.bloomBytes().length);
+                        "[BLOOM_SYNC] Full bloom from {} (dimension={}, {} bytes) — resync unblocked",
+                        player.getName().getString(), packet.dimension(), packet.bloomBytes().length);
             } else {
-                layers.append(filter);
+                layers.append(packet.dimension(), filter);
                 DebugLogger.info(LogType.NETWORK,
-                        "[BLOOM_SYNC] Incremental bloom from {} ({} bytes)", player.getName().getString(),
-                        packet.bloomBytes().length);
+                        "[BLOOM_SYNC] Incremental bloom from {} (dimension={}, {} bytes)",
+                        player.getName().getString(), packet.dimension(), packet.bloomBytes().length);
             }
         } catch (Exception e) {
             Constants.LOG.error("[BLOOM_SYNC] Failed to handle bloom sync from player {}",
@@ -932,50 +935,64 @@ public class ServerChunkPushManager {
 
     /**
      * 包可见：供单测覆盖 empty / unready / miss / hit。
-     * 未就绪（{@code layers == null}）或空层：不直推，走 hash，避免 Bloom 尚未上报时
-     * R2 被当 ROUND1。已收到 Bloom 后 miss 才直推（再由会话表决定是否复用）。
+     * 未就绪（{@code layers == null} 或该维度无层）或空层：不直推，走 hash，避免 Bloom 尚未上报时
+     * R2 被当 ROUND1。已收到该维度 Bloom 后 miss 才直推（再由会话表决定是否复用）。
      */
     static boolean shouldPushFull(PlayerBloomLayers layers, int chunkX, int chunkZ, String dimension) {
-        if (!isBloomReady(layers)) {
+        if (!isBloomReady(layers, dimension)) {
             return false;
         }
         return !layers.mightContain(chunkX, chunkZ, dimension);
     }
 
-    /** 已收到至少一层 Bloom。空过滤器（ROUND1 无缓存）也算就绪。 */
-    static boolean isBloomReady(PlayerBloomLayers layers) {
-        return layers != null && !layers.isEmpty();
+    /** 已收到至少一层该维度 Bloom。空过滤器（ROUND1 无缓存）也算就绪。 */
+    static boolean isBloomReady(PlayerBloomLayers layers, String dimension) {
+        return layers != null && !layers.isEmpty(dimension);
     }
 
-    /** 每玩家 bloom 层（full 重置 / 增量追加；查询任一命中即可能缓存）。包可见供单测构造。 */
+    /**
+     * 每玩家 bloom 层，按维度分桶（full 重置该维度 / 增量追加；查询同维度任一层命中即可能缓存）。
+     * T2-fabric-r1 no-hash 回归修复：维度必须参与分桶——三维度各发一帧 full 时，
+     * 若共用一个层列表，后到的空 nether/end 帧会把 overworld 层清掉，
+     * R2 查询恒 miss → 整视距被误判 ROUND1 直推且不带 hash（cacheHitFullChunkCount=0）。
+     */
     static final class PlayerBloomLayers {
-        private final List<io.github.limuqy.mc.hassium.cache.client.ChunkBloomFilter> layers = new ArrayList<>();
+        private final Map<String, List<io.github.limuqy.mc.hassium.cache.client.ChunkBloomFilter>> byDimension =
+                new HashMap<>();
 
-        void reset(io.github.limuqy.mc.hassium.cache.client.ChunkBloomFilter filter) {
-            synchronized (layers) {
-                layers.clear();
-                layers.add(filter);
+        void reset(String dimension, io.github.limuqy.mc.hassium.cache.client.ChunkBloomFilter filter) {
+            synchronized (byDimension) {
+                List<io.github.limuqy.mc.hassium.cache.client.ChunkBloomFilter> list = new ArrayList<>();
+                list.add(filter);
+                byDimension.put(dimension, list);
             }
         }
 
-        void append(io.github.limuqy.mc.hassium.cache.client.ChunkBloomFilter filter) {
-            synchronized (layers) {
-                if (layers.size() >= BLOOM_MAX_LAYERS) {
-                    layers.remove(0);
+        void append(String dimension, io.github.limuqy.mc.hassium.cache.client.ChunkBloomFilter filter) {
+            synchronized (byDimension) {
+                List<io.github.limuqy.mc.hassium.cache.client.ChunkBloomFilter> list =
+                        byDimension.computeIfAbsent(dimension, ignored -> new ArrayList<>());
+                if (list.size() >= BLOOM_MAX_LAYERS) {
+                    list.remove(0);
                 }
-                layers.add(filter);
+                list.add(filter);
             }
         }
 
-        boolean isEmpty() {
-            synchronized (layers) {
-                return layers.isEmpty();
+        boolean isEmpty(String dimension) {
+            synchronized (byDimension) {
+                List<io.github.limuqy.mc.hassium.cache.client.ChunkBloomFilter> list = byDimension.get(dimension);
+                return list == null || list.isEmpty();
             }
         }
 
         boolean mightContain(int chunkX, int chunkZ, String dimension) {
-            synchronized (layers) {
-                for (io.github.limuqy.mc.hassium.cache.client.ChunkBloomFilter layer : layers) {
+            synchronized (byDimension) {
+                List<io.github.limuqy.mc.hassium.cache.client.ChunkBloomFilter> list = byDimension.get(dimension);
+                if (list == null) {
+                    return false;
+                }
+                for (io.github.limuqy.mc.hassium.cache.client.ChunkBloomFilter layer : list) {
                     if (layer.mightContain(chunkX, chunkZ, dimension)) {
                         return true;
                     }
@@ -1052,10 +1069,37 @@ public class ServerChunkPushManager {
         String dimension = LevelCompat.getDimensionId(level);
 
         // 不再把整盘 hash 灌进 pendingResync（曾 2s dump 上千条，绕开原版定额）。
-        // 1.20.2+：PlayerChunkSender 已近距定额 sendChunk。
         // 1.20.1：只把已加载柱登记进 pendingSends，由 tick drain 出队。
+        // 1.21.2+：正常路径依赖 vanilla PlayerChunkSender.sendChunk 拦截驱动 hash/push；
+        // 但 warm-world 重连时该触发偶发不火（1.21.8_neoforge_fin R2 实证：pending=0、
+        // gatewayS2c=4、带宽 204B、landed=4，而 1.21.7/9/10/11 同流程全绿）——vanilla
+        // tracking 对已 FULL 的暖柱未重发。故兜底把视距内已加载柱也排进 pendingResync，
+        // 由 drainPendingResync 按 RESYNC_PER_TICK 定额走 submitMetadataTaskFromChunk
+        // （bloom 感知：hit→只发 hash；miss→hash+直推，会话表去重）。与 vanilla 触发并存无害：
+        // 重复 hash 帧幂等，重复直推被 lastSessionPushedHash 去重。
 #if MC_VER < MC_1_21_1
+         int marked = 0;
+         for (int dx = -radius; dx <= radius; dx++) {
+             for (int dz = -radius; dz <= radius; dz++) {
+                 int cx = centerX + dx;
+                 int cz = centerZ + dz;
+                 if (!isServerChunkInRange(cx, cz, centerX, centerZ, viewDistance)) {
+                     continue;
+                 }
+                 if (level.getChunkSource().getChunkNow(cx, cz) == null) {
+                     continue;
+                 }
+                 markChunkPendingToSend(player, new ChunkPos(cx, cz), dimension);
+                 marked++;
+             }
+         }
+         DebugLogger.info(LogType.CHUNK_APPLY,
+                 "Hassium: Pending {} loaded chunks for paced send (player={}, vd={})",
+                 marked, player.getName().getString(), viewDistance);
+#else
         int marked = 0;
+        Deque<ResyncEntry> queue =
+                pendingResync.computeIfAbsent(player.getUUID(), ignored -> new java.util.ArrayDeque<>());
         for (int dx = -radius; dx <= radius; dx++) {
             for (int dz = -radius; dz <= radius; dz++) {
                 int cx = centerX + dx;
@@ -1066,15 +1110,20 @@ public class ServerChunkPushManager {
                 if (level.getChunkSource().getChunkNow(cx, cz) == null) {
                     continue;
                 }
-                markChunkPendingToSend(player, new ChunkPos(cx, cz), dimension);
-                marked++;
+                ResyncEntry entry = new ResyncEntry(new ChunkPos(cx, cz), dimension);
+                if (!queue.contains(entry)) {
+                    queue.addLast(entry);
+                    marked++;
+                }
             }
         }
-        DebugLogger.info(LogType.CHUNK_APPLY,
-                "Hassium: Pending {} loaded chunks for paced send (player={}, vd={})",
-                marked, player.getName().getString(), viewDistance);
+        if (marked > 0) {
+            DebugLogger.info(LogType.CHUNK_APPLY,
+                    "Hassium: Resync {} loaded chunks queued for paced metadata (player={}, vd={})",
+                    marked, player.getName().getString(), viewDistance);
+        }
 #endif
-    }
+     }
 
     /**
      * 1.20.1：登记待发送柱。出队见 {@link #drainPendingSends}。
@@ -1212,7 +1261,7 @@ public class ServerChunkPushManager {
             int x = ChunkPos.getX(packed);
             int z = ChunkPos.getZ(packed);
             PlayerBloomLayers layers = bloomLayers.get(playerId);
-            boolean bloomReady = isBloomReady(layers);
+            boolean bloomReady = isBloomReady(layers, dimension);
             boolean bloomMiss = shouldPushFull(layers, x, z, dimension);
             Long lastSent = lastSessionPushedHash(playerId, dimension, x, z);
             boolean directNoHash = shouldDirectPushWithoutHash(bloomMiss, lastSent, bloomReady);
@@ -1903,11 +1952,32 @@ public class ServerChunkPushManager {
         UUID playerId = player.getUUID();
         DataRequestTask task = inFlightTasks.getOrDefault(playerId, Map.of()).get(fallbackDeliveryId);
         ChunkPos pos = chunks.get(0);
-        if (task == null || task.seedRef() == null || !task.dimension().equals(dimension)
+        ChunkAdmissionController controller = admissionControllers.get(playerId);
+        if (task == null) {
+            // 客户端已放弃该 SeedRef（6.5s 截止回退），但其任务可能仍滞留 pending（未到 inFlight，
+            // R1 探测批速率 ~4/tick 时 384 个 SeedRef 大多排队中）。此时原逻辑直接 return —— 客户端
+            // 的 full 回退被静默丢弃，而滞留 SeedRef 继续占着 admission 槽：客户端影子重启窗口内
+            // 零 ACK × full 回退全被 q 满/槽满拒绝 → 互等死锁（1.21.2_fabric_fin2 FAIL×2 实证）。
+            // 修复：同 key 原地改写队列条目为 full 任务（FifoChunkQueue.offer 按 key put 覆盖）——
+            // 不撤 admission、不产生拒绝，paced send 到达时直接发权威数据。
+            if (controller != null && controller.contains(admissionKey(
+                    new DataRequestTask(pos, dimension, null, 0L)))) {
+                dataQueues.computeIfAbsent(playerId, ignored -> new FifoChunkQueue())
+                        .offer(new ChunkAdmissionController.ChunkDeliveryKey(dimension, pos.x, pos.z),
+                                new DataRequestTask(pos, dimension, null, 0L));
+                NetworkStats.recordDataRequestReceived();
+            } else {
+                // 该柱已不在任何追踪态（可能已投递/出界释放）：按普通客户端请求入队，
+                // offerPendingTask 内部去重/限流兜底。
+                NetworkStats.recordDataRequestReceived();
+                enqueueInternal(player, dimension, chunks, true);
+            }
+            return;
+        }
+        if (task.seedRef() == null || !task.dimension().equals(dimension)
                 || task.pos().x != pos.x || task.pos().z != pos.z) {
             return;
         }
-        ChunkAdmissionController controller = admissionControllers.get(playerId);
         if (controller == null || !controller.release(admissionKey(task), fallbackDeliveryId)) {
             return;
         }
@@ -2045,9 +2115,10 @@ public class ServerChunkPushManager {
     }
 
     /**
-     * 网关 ACK 经 {@code MinecraftServer.execute} 切入服务器线程后调用。
-     * 会话对象是网关附着时创建的不可变身份；重连覆盖后，旧 event-loop 回调无法释放
-     * 新会话从 1 重新分配的 delivery id。
+     * 网关 ACK 处理（T2-fabric-r1 起在网关 event-loop 线程直接调用，不经主线程队列——
+     * 主线程积压会把流控回路拖死）。仅触达 ConcurrentHashMap 与 synchronized 的
+     * ChunkAdmissionController，线程安全。会话对象是网关附着时创建的不可变身份；
+     * 重连覆盖后，旧 event-loop 回调无法释放新会话从 1 重新分配的 delivery id。
      */
     public void handleChunkApplyAck(GatewayPlayerSession session, ChunkApplyAck ack) {
         if (session == null || ack == null
@@ -2186,16 +2257,19 @@ public class ServerChunkPushManager {
                     return;
                 }
 
-                DataRequestTask task = queue.peek();
-                if (task == null) {
+                // 数据优先：SeedRef 元数据不可 ACK，若占住队头会冻结 admission 窗口（见
+                // FifoChunkQueue.peekPrioritized 注释）。窗口内找得到 full 任务则优先投递。
+                var head = queue.peekPrioritized();
+                if (head == null) {
                     break;
                 }
-                ChunkAdmissionController.ChunkDeliveryKey deliveryKey = admissionKey(task);
+                DataRequestTask task = head.getValue();
+                ChunkAdmissionController.ChunkDeliveryKey deliveryKey = head.getKey();
 
                 // 任务排队期间玩家可能已移出权威视距：不静默丢弃（客户端无重试 → 永久虚空 bug 根因），
                 // 转入待命集合，玩家折返/静止后重新在视距内时恢复入队；超时（10s）才真丢弃。
                 if (!isServerChunkInRange(task.pos().x, task.pos().z, playerChunk.x, playerChunk.z, serverVD)) {
-                    queue.poll();
+                    queue.pollByKey(deliveryKey);
                     controller.release(deliveryKey);
                     Map<Long, DeferredTask> deferred = deferredChunks.computeIfAbsent(
                             playerId, k -> new ConcurrentHashMap<>());
@@ -2220,10 +2294,10 @@ public class ServerChunkPushManager {
                     if (controller.isPending(deliveryKey)) {
                         break;
                     }
-                    queue.poll();
+                    queue.pollByKey(deliveryKey);
                     continue;
                 }
-                queue.poll();
+                queue.pollByKey(deliveryKey);
                 inFlightTasks.computeIfAbsent(playerId, ignored -> new ConcurrentHashMap<>())
                         .put(reservation.deliveryId(), task);
                 if (task.seedRef() != null) {
@@ -2673,15 +2747,51 @@ public class ServerChunkPushManager {
             return task;
         }
 
+        /**
+         * 同 key 原地改写：条目已存在则覆盖任务（不撤 admission、不触发 enqReject），
+         * 用于 SeedRef→full 回退的原地升级；新 key 追加队尾。
+         */
         synchronized void offer(ChunkAdmissionController.ChunkDeliveryKey key, DataRequestTask task) {
             entries.put(key, task);
+        }
+
+        /**
+         * 数据优先选择：先在队头有限窗口内找 full-data 任务。SeedRef 元数据不可 ACK——若首批
+         * 投递全为 SeedRef（pristine 柱洪峰时 FIFO 队头即如此），客户端无数据可应用 → 无
+         * apply-ACK → admission 窗口冻结在慢启动滴灌（fabric 慢回程下 firstAck 迟到 20s+，
+         * R1 落地 230/1064，neoforge 直连回程快同流程却 1057/1057）。找到则连同 key 返回；
+         * 窗口内无 full 任务（纯 SeedRef 队列）则退回队头，行为与 FIFO 一致。
+         */
+        synchronized java.util.Map.Entry<ChunkAdmissionController.ChunkDeliveryKey, DataRequestTask> peekPrioritized() {
+            if (entries.isEmpty()) {
+                return null;
+            }
+            var it = entries.entrySet().iterator();
+            java.util.Map.Entry<ChunkAdmissionController.ChunkDeliveryKey, DataRequestTask> head =
+                    it.next();
+            DataRequestTask headTask = head.getValue();
+            if (headTask.seedRef() == null) {
+                return head;
+            }
+            int scanned = 1;
+            while (it.hasNext() && scanned < PRIORITY_SCAN_BOUND) {
+                var e = it.next();
+                scanned++;
+                if (e.getValue().seedRef() == null) {
+                    return e;
+                }
+            }
+            return head;
+        }
+
+        synchronized DataRequestTask pollByKey(ChunkAdmissionController.ChunkDeliveryKey key) {
+            return entries.remove(key);
         }
 
         synchronized void removeIf(java.util.function.Predicate<DataRequestTask> predicate) {
             entries.entrySet().removeIf(e -> predicate.test(e.getValue()));
         }
     }
-
     private static final class SeedRefWork {
         private final long chunkHash;
         private final long[] sectionHashes;

@@ -31,6 +31,16 @@ public final class SeedGenQueue {
     public static final long FALLBACK_TIMEOUT_MAX_EXTRA_MS = 60_000L;
 
     /**
+     * 活体 SeedRef（deliveryId>0）回退硬截止：必须早于服务端 admission 投递预算
+     * （ServerChunkPushManager.DELIVERY_TIMEOUT_NANOS = 8s）到期，携带原 deliveryId 的
+     * 回退全量请求才能命中服务端 reservation 释放窗口（enqueueDataRequest 的
+     * release+re-admit 原子转换）。晚于 8s 到达时服务端已 expire/requeue，旧 id 变
+     * unknown → 预约槽泄漏 → inFlight 窗口被 SeedRef 重发循环钉死，full push 停摆
+     * （T2-fabric-r1 第三层：R1 landed 崩至 175-231 实证）。留 1.5s 余量覆盖网关往返。
+     */
+    public static final long LIVE_SEEDREF_FALLBACK_DEADLINE_MS = 6_500L;
+
+    /**
      * 按当前队列深度计算回退超时：深度越大尾部块等待越久，超时随之放大，
      * 避免深队尾块在正常生成进度下误回退（旧 8s 在 1784 深队下必然误触发风暴）。
      */
@@ -43,8 +53,25 @@ public final class SeedGenQueue {
     static volatile long clockOverrideMs = -1L;
 
     private static long nowMs() {
-        return clockOverrideMs >= 0 ? clockOverrideMs : System.currentTimeMillis();
+        long override = clockOverrideMs;
+        return override >= 0L ? override : System.currentTimeMillis();
     }
+
+    /**
+     * 条目回退截止：活体 SeedRef（deliveryId>0）用硬截止（对齐服务端 8s 投递预算），
+     * 其余（盲预生成等）用深度自适应公式。
+     */
+    static long entryDeadlineMs(Entry entry, int queueDepth) {
+        return entry.deliveryId() > 0L
+                ? LIVE_SEEDREF_FALLBACK_DEADLINE_MS
+                : fallbackTimeoutMs(queueDepth);
+    }
+
+    /** 该条目是否已过回退截止。 */
+    static boolean isExpired(Entry entry, long nowMs, int queueDepth) {
+        return entry.contentHash() != 0L && nowMs - entry.enqueueTimeMs() > entryDeadlineMs(entry, queueDepth);
+    }
+
 
     /** 入队条目（不可变快照）。 */
     public record Entry(ChunkPos pos, long contentHash, long[] sectionHashes, long deliveryId, long enqueueTimeMs) {}
@@ -76,10 +103,7 @@ public final class SeedGenQueue {
         Entry best = null;
         int bestDist = Integer.MAX_VALUE;
         for (Entry e : pending.values()) {
-            // 盲预生成条目（contentHash=0）永不超时（expire() 同样只回收 hash 条目）；
-            // 否则它们到期后既不被 peekNearest 选中也不被 expire 移除，会永久卡死队列。
-            if (e.contentHash() != 0L
-                    && nowMs() - e.enqueueTimeMs() > fallbackTimeoutMs(pending.size())) {
+            if (isExpired(e, nowMs(), pending.size())) {
                 continue; // 超时条目由 expire() 统一回收
             }
             int dist = Math.abs(e.pos().x - playerChunkX) + Math.abs(e.pos().z - playerChunkZ);
@@ -96,10 +120,10 @@ public final class SeedGenQueue {
     public List<Entry> expire() {
         List<Entry> expired = new ArrayList<>();
         long now = nowMs();
-        long timeout = fallbackTimeoutMs(pending.size());
+        int depth = pending.size();
         pending.entrySet().removeIf(e -> {
             Entry entry = e.getValue();
-            if (entry.contentHash() != 0L && now - entry.enqueueTimeMs() > timeout) {
+            if (isExpired(entry, now, depth)) {
                 expired.add(entry);
                 return true;
             }

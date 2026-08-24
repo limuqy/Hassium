@@ -52,6 +52,9 @@ class GatewayPacketCodecTest {
             // vanilla packet 在 1.21.2 前无 equals（非 record），按字段断言
 #if MC_VER < MC_1_21_2
             assertEquals(7, ((net.minecraft.network.protocol.game.ClientboundSetCarriedItemPacket) decoded).getSlot());
+#elif MC_VER < MC_1_21_4
+            // 1.21.2-1.21.3：类已改名 HeldSlot 但仍为普通类（getSlot），1.21.4 起 record 化
+            assertEquals(7, ((net.minecraft.network.protocol.game.ClientboundSetHeldSlotPacket) decoded).getSlot());
 #else
             assertEquals(7, ((net.minecraft.network.protocol.game.ClientboundSetHeldSlotPacket) decoded).slot());
 #endif
@@ -70,8 +73,8 @@ class GatewayPacketCodecTest {
             assertEquals(GatewayPacketCodec.KIND_VANILLA, GatewayPacketCodec.peekKind(payload));
             Packet<?> decoded = GatewayPacketCodec.decodeVanilla(
                     payload, PacketFlow.CLIENTBOUND, GatewayPacketCodec.GatewayProtocol.LOGIN, RegistryAccess.EMPTY);
-            // ClientboundLoginDisconnectPacket 1.21.2 前为普通类（getReason），后为 record（reason）
-#if MC_VER < MC_1_21_2
+            // ClientboundLoginDisconnectPacket：1.21.5 及以前为普通类（getReason），1.21.6 起 record（reason）
+#if MC_VER < MC_1_21_6
             assertEquals(Component.literal("relay-test"),
                     ((ClientboundLoginDisconnectPacket) decoded).getReason());
 #else

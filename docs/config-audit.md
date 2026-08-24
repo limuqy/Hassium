@@ -18,7 +18,7 @@
 
 > 历史（1.1.2 及更早）：Fabric 三文件模型（`client.toml` + `common.toml` + `server.toml`）、Forge/NeoForge 三 spec（CLIENT/COMMON/SERVER）——2.0.0 已统一为**双文件 / 双 scope** 模型，旧模型不再适用。
 
-## 二、全部配置键逐项审计（ConfigSchema，71 留存键 + 删键 4 标注）
+## 二、全部配置项逐项审计（ConfigSchema，74 留存键 + 删键 4 标注）
 
 键名前缀定稿（REQ 决策 4）：区块核心 `chunk.*` / 网络核心 `net.*`（客户端网关）/ 主控核心 `master.*`（服务端网络与推送）/ 数据面 `dataplane.*`；`storage.*` / `compat.*` / `debug.*` 前缀保留。
 
@@ -194,9 +194,9 @@
 | `net.*` | 网络核心 | 3 | `metricsEnabled`=false |
 | `debug.*` CLIENT | 调试 | 8 | 全 false |
 | `storage.*` | 存储 | 2 | `enabled`=false |
-| `master.*` | 主控核心 | 21 | `metricsEnabled`=false、`controlReachableEndpoints`=[] |
+| `master.*` | 主控核心 | 28 | `metricsEnabled`=false、`controlReachableEndpoints`=[]（CLIENT 6 + SERVER 22） |
 | `chunk.*` SERVER | 区块核心 | 2 | `seedGenEnabled`=false |
 | `dataplane.*` | 数据面 | 2 | `enabled`=false（UDP 默认关） |
 | `compat.*` | 兼容 | 2 | `requireClientMod`=false |
 | `debug.*` SERVER | 调试 | 6 | 全 false |
-| **留存合计** | | **71** | **删键 4**（recoveryFreeze/controlStallMs/failoverExpiryMs/storage.mode） |
+| **留存合计** | | **74** | **删键 4**（recoveryFreeze/controlStallMs/failoverExpiryMs/storage.mode） |

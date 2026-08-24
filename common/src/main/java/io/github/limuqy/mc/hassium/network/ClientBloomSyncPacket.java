@@ -4,23 +4,28 @@ import net.minecraft.network.FriendlyByteBuf;
 import io.netty.handler.codec.DecoderException;
 
 /**
- * 客户端 -> 服务端：同步缓存 Bloom 位图
+ * 客户端 -> 服务端：同步缓存 Bloom 位图（按维度）
  * <p>
  * 客户端把「磁盘缓存可能含有哪些区块」以 Bloom 位图形式同步给服务端，
  * 服务端据此分流：miss（确定无缓存）→ 主动直推数据；hit（可能有）→ 发 hash 让客户端对比。
+ * 位图按维度构建与查询：客户端每维度各发一帧，服务端按维度分桶保存——
+ * 否则后到的空维度帧会覆盖先到的非空维度层，导致 R2 全量误判为 ROUND1 直推。
  * <p>
- * {@code full=true}：进服时全量位图（当前存储 Bloom 快照），服务端覆盖旧层；
- * {@code full=false}：会话内增量批次位图（新缓存块），服务端追加一层。
- * 查询语义 = 任一层命中（OR）。
+ * {@code full=true}：进服时全量位图（当前存储 Bloom 快照），服务端覆盖该维度旧层；
+ * {@code full=false}：会话内增量批次位图（新缓存块），服务端向该维度追加一层。
+ * 查询语义 = 同维度任一层命中（OR）。
  */
 public record ClientBloomSyncPacket(
         boolean full,
+        String dimension,
         byte[] bloomBytes
 ) {
     /** review-fix: T3-53：恶意/损坏包 length 驱动 new byte[length] 可 OOM 客户端；
      *  位图正常规模（createDefault 10k/0.01 ≈ 12KB，数万区块 < 1MB）；对齐原版
      *  ClientboundLevelChunkPacketData.TWO_MEGABYTES */
     private static final int TWO_MEGABYTES = 2 * 1024 * 1024;
+    /** 维度 id 长度上限（namespace:path 正常 <64）。 */
+    private static final int MAX_DIMENSION_LENGTH = 256;
 
 
     /**
@@ -28,6 +33,7 @@ public record ClientBloomSyncPacket(
      */
     public void encode(FriendlyByteBuf buf) {
         buf.writeBoolean(full);
+        buf.writeUtf(dimension, MAX_DIMENSION_LENGTH);
         buf.writeVarInt(bloomBytes.length);
         buf.writeBytes(bloomBytes);
     }
@@ -37,12 +43,13 @@ public record ClientBloomSyncPacket(
      */
     public static ClientBloomSyncPacket decode(FriendlyByteBuf buf) {
         boolean full = buf.readBoolean();
+        String dimension = buf.readUtf(MAX_DIMENSION_LENGTH);
         int length = buf.readVarInt();
         if (length < 0 || length > TWO_MEGABYTES) {
             throw new DecoderException("ClientBloomSyncPacket bloom length too large: " + length);
         }
         byte[] bloomBytes = new byte[length];
         buf.readBytes(bloomBytes);
-        return new ClientBloomSyncPacket(full, bloomBytes);
+        return new ClientBloomSyncPacket(full, dimension, bloomBytes);
     }
 }

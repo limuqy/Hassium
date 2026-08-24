@@ -290,7 +290,7 @@ public final class ShadowServerRegistry {
                             created.buildBloomFilter(dimension);
                     byte[] bytes = bloom.toByteArray();
                     io.github.limuqy.mc.hassium.network.ClientBloomSyncPacket packet =
-                            new io.github.limuqy.mc.hassium.network.ClientBloomSyncPacket(true, bytes);
+                            new io.github.limuqy.mc.hassium.network.ClientBloomSyncPacket(true, dimension, bytes);
                     io.netty.buffer.ByteBuf buf = io.netty.buffer.Unpooled.buffer();
                     boolean sent = false;
                     try {

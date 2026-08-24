@@ -61,8 +61,15 @@ public final class GatewayPlatformWiring {
             GatewayServer gateway = GatewayServer.getInstance();
             gateway.setInfoProvider((channel, request) -> resolveServerInfo(server));
             gateway.setLoginSink((ch, payload) -> GatewayPlayerBridge.dispatchLoginFrame(ch, payload, server));
+            // T2-fabric-r1：CHUNK_APPLY_ACK 不再经 server.execute 切主线程。R1 冷生成期
+            // 主线程积压会把 ACK 处理拖后数秒，admission 窗口只能靠 8s 超时释放 →
+            // fabric 1.21.2+ R1 landed 崩到 neoforge 的 ~60%（实证：server_1.21.6_fabric
+            // inFlight 钉死 40、pending 顶满 384、expire 50 次；neoforge 同拓扑全绿）。
+            // 本方法仅触达 ConcurrentHashMap 与 synchronized 的 ChunkAdmissionController，
+            // 会话身份校验（registry().get != session）已在网关侧挡住重连竞态，可直接在
+            // 网关 event-loop 线程处理。
             gateway.setChunkApplyAckSessionSink((session, ack) ->
-                    server.execute(() -> ServerChunkPushManager.getInstance().handleChunkApplyAck(session, ack)));
+                    ServerChunkPushManager.getInstance().handleChunkApplyAck(session, ack));
             HassiumConfigService config = HassiumConfigService.getInstance();
             gateway.setZstd(config.getGlobalCompressionThreshold(), config.getGlobalCompressionLevel());
             // D-M2: 可选握手鉴权（master.authToken；空 = 不鉴权，保持既有行为）

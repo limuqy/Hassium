@@ -140,4 +140,27 @@ class SeedGenQueueTest {
         q.clear();
         assertTrue(q.isEmpty());
     }
+    @Test
+    @DisplayName("活体 SeedRef（deliveryId>0）按 6.5s 硬截止回退，早于服务端 8s 投递预算")
+    void liveSeedRefFallsBackBeforeServerDeliveryTimeout() {
+        SeedGenQueue q = new SeedGenQueue();
+        long t0 = 1_000_000L;
+        SeedGenQueue.clockOverrideMs = t0;
+        try {
+            // 活体 SeedRef：hash≠0 且 deliveryId>0
+            q.enqueue(new ChunkPos(5, 5), 42L, new long[]{7}, 123L);
+            // 盲预生成：hash=0，不受短截止影响
+            q.enqueue(new ChunkPos(6, 6), 0L, new long[0]);
+
+            // 7s：已过活体硬截止、未到深度自适应公式（30s 基数）
+            SeedGenQueue.clockOverrideMs = t0 + 7_000L;
+            List<SeedGenQueue.Entry> expired = q.expire();
+            assertEquals(1, expired.size(), "活体 SeedRef 必须在服务端 8s 投递超时前回退");
+            assertEquals(123L, expired.get(0).deliveryId());
+            assertTrue(q.isPending(new ChunkPos(6, 6)), "盲预生成条目不回收");
+        } finally {
+            SeedGenQueue.clockOverrideMs = -1L;
+        }
+    }
 }
+

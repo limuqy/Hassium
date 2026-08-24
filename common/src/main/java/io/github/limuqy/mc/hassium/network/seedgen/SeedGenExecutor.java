@@ -241,13 +241,23 @@ public final class SeedGenExecutor {
             }
         }
         int target = Math.max(1, HassiumConfigService.getInstance().getSeedGenThreads());
-        while (activeWorkers.get() < target) {
-            activeWorkers.incrementAndGet();
-            try {
-                p.submit(this::drain);
-            } catch (java.util.concurrent.RejectedExecutionException e) {
-                activeWorkers.decrementAndGet(); // 池已停（断连竞态），丢弃本次
+        // CAS 认领式补足（非 get()<target 读判）：先占计数再提交，消除「pump 读到旧 activeWorkers
+        // ==target 不提交 × 退出 worker 尚未 decrement」交错导致的丢失唤醒——该窗口正是
+        // 1.21.2_fabric_fin2 R1 零落地死区：SeedRef 入 pendingLive 后无 worker 认领，
+        // pendingLive.expire() 只在 drain 循环头执行 → 超时条目既不释放也不回退。
+        while (true) {
+            int n = activeWorkers.get();
+            if (n >= target) {
                 break;
+            }
+            if (activeWorkers.compareAndSet(n, n + 1)) {
+                try {
+                    p.submit(this::drain);
+                    break;
+                } catch (java.util.concurrent.RejectedExecutionException e) {
+                    activeWorkers.decrementAndGet(); // 池已停（断连竞态），丢弃本次认领
+                    break;
+                }
             }
         }
     }
@@ -276,6 +286,18 @@ public final class SeedGenExecutor {
                     flushFallback(fallbackBuffer);
                 }
                 releasePendingWork(playerChunkX, playerChunkZ);
+                // 退出前兜底：循环头 expire 之后、此刻之前新过截止的条目（影子重启窗口内
+                // 到达的 SeedRef 尤甚）必须在本 worker 消亡前回收回退——否则若补足 pump
+                // 因竞态未接上，条目将卡「不释放也不回收」死区（1.21.2_fabric_fin2 R1 实证）。
+                for (SeedGenQueue.Entry expired : queue.expire()) {
+                    addFallback(fallbackBuffer, expired);
+                }
+                for (SeedGenQueue.Entry expired : pendingLive.expire()) {
+                    addFallback(fallbackBuffer, expired);
+                }
+                if (!fallbackBuffer.isEmpty()) {
+                    flushFallback(fallbackBuffer);
+                }
                 SeedGenQueue.Entry entry = queue.peekNearest(playerChunkX, playerChunkZ);
                 if (entry == null) {
                     break;

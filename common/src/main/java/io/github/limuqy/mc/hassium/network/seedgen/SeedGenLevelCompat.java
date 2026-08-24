@@ -438,12 +438,36 @@ public final class SeedGenLevelCompat {
             }
         }
         // 3) 全量保存区块（此时 R2 可并发创建影子端并读盘；本端写盘与任何其他端无并发）
+        // 退出窗口守卫：客户端 Stopping! → vanilla Util.shutdownExecutors() 关停共享 ioPool
+        // 后，saveAll 的 IOWorker.store → mailbox.registerForExecution 会对半死池提交任务，
+        // 触发 vanilla "Cound not schedule mailbox" ERROR + RejectedExecutionException（污染
+        // LogAudit 门禁，无害但吵）。JVM 即将退出时存档已无后续消费者，跳过保存是安全的；
+        // park-for-reuse（客户端存活）路径 ioPool 未关停，守卫不生效。
+#if MC_VER >= MC_1_21_11
+        // 1.21.11+：Util 迁移至 net.minecraft.util 包，ioPool() 返回 TracingExecutor（record 包装，
+        // 无 isShutdown），取 service 访问器
+        boolean exitWindow = net.minecraft.util.Util.ioPool().service().isShutdown();
+#elif MC_VER >= MC_1_21_2
+        // 1.21.2-1.21.10：Util.ioPool() 返回 TracingExecutor（record 包装，无 isShutdown），取 service 访问器
+        boolean exitWindow = net.minecraft.Util.ioPool().service().isShutdown();
+#else
+        boolean exitWindow = net.minecraft.Util.ioPool().isShutdown();
+#endif
         if (skipSave) {
             Constants.LOG.warn("Hassium: Shadow seed server save skipped "
                     + "(previous shutdown incomplete; data re-pushed on next session)");
+        } else if (exitWindow) {
+            Constants.LOG.info("Hassium: Shadow seed server save skipped (client exit window: "
+                    + "ioPool shut down; no consumer left for this session's data)");
         } else {
             try {
                 server.saveAll();
+            } catch (java.util.concurrent.RejectedExecutionException e) {
+                // 与守卫同语义的窄兜底：守卫检查与 saveAll 内部提交之间存在退出竞速窗口
+                //（Stopping! 可在检查后瞬间关停 ioPool）。此时任务被拒即丢弃，JVM 退出后
+                // 无消费者，静默即可；非退出场景的 REE 不应出现，仍走通用 catch 记 warn。
+                Constants.LOG.info("Hassium: Shadow seed server save aborted by exit race "
+                        + "(RejectedExecutionException; data re-pushed on next session)");
             } catch (Exception e) {
                 Constants.LOG.warn("Hassium: Shadow seed server save failed", e);
             }

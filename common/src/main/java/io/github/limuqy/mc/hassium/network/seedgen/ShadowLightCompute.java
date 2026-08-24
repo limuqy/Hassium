@@ -1832,6 +1832,9 @@ public final class ShadowLightCompute {
                     parkForVanillaLightNeighbors(inf);
                 }
                 flushWaitingAroundLocked(server, DimensionKey.dimensionOf(inf.key), pos);
+                // 末根邻柱 init 完成时，把 9 柱内因「邻未收敛」被 defer 的任务按真收敛态重推
+                //（屋檐跨界 section 的后到光由此补齐；见 areVanillaLightNeighborsConverged）。
+                promoteDeferredAfterNeighborsLocked(server, DimensionKey.dimensionOf(inf.key), pos);
             }
         } catch (Throwable ex) {
             completeLight(inf, false);
@@ -1880,8 +1883,65 @@ public final class ShadowLightCompute {
         boolean hasExistingLight = lightChunkHasExistingLight(inf.metric == LightMetric.REUSE_CACHE);
         java.util.concurrent.CompletableFuture<net.minecraft.world.level.chunk.ChunkAccess> lightFuture =
                 engine.lightChunk(inf.chunk, hasExistingLight);
+        // converged 必须含「8 邻 lightChunk 也已完成」：仅 throwable==null 时邻柱可能仍在途，
+        // 本柱边界 section 的跨柱蔓延尚未写入（屋檐跨界暗区根因）。未齐 → converged=false，
+        // 走 finishLight 的 defer/欠光路径，由邻柱完成时的 promoteDeferredAfterNeighborsLocked 重推。
         lightFuture.whenComplete((chunkAccess, throwable) ->
-                completeLight(inf, throwable == null));
+                completeLight(inf, throwable == null
+                        && areVanillaLightNeighborsConverged(server, inf)));
+    }
+
+    /**
+     * 8 邻 lightChunk 均已完成（已 initializeLight 且不在等待/在途表）。
+     * 只读三个 ConcurrentHashMap 快照，map 本身线程安全；调用方通常已持
+     * {@link #LIGHT_ENGINE_MUTEX}（与 {@link #canStartVanillaLightStageNow} 同视图）。
+     */
+    private static boolean areVanillaLightNeighborsConverged(ShadowSeedServer server, InflightLight inf) {
+        return areVanillaLightNeighborsConverged(inf.key);
+    }
+
+    /** 同上，按复合键判定（deferred 任务重推前使用）。 */
+    private static boolean areVanillaLightNeighborsConverged(long key) {
+        String dimension = DimensionKey.dimensionOf(key);
+        int cx = DimensionKey.chunkXOf(key);
+        int cz = DimensionKey.chunkZOf(key);
+        for (int[] d : LIGHT_NEIGHBOR_OFFSETS) {
+            long nKey = DimensionKey.key(dimension, cx + d[0], cz + d[1]);
+            if (!initializedLight.containsKey(nKey)
+                    || waitingForLight.containsKey(nKey)
+                    || inflightLight.containsKey(nKey)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * 本柱 init 完成后（调用方持 {@link #LIGHT_ENGINE_MUTEX}）：扫本柱+8 邻的
+     * deferredLightPush，凡 8 邻 lightChunk 已齐（{@link #areVanillaLightNeighborsConverged}）
+     * 的任务移出暂缓表并按 converged=true 重推——先完成柱此前以 false 推送/defer，
+     * 其边界 section 的跨柱蔓延由末根邻柱完成时的这次重推补齐。
+     */
+    private static void promoteDeferredAfterNeighborsLocked(ShadowSeedServer server,
+                                                            String dimension, ChunkPos pos) {
+        if (server == null || deferredLightPush.isEmpty()) {
+            return;
+        }
+        for (int[] d : LIGHT_STAGE_OFFSETS) {
+            long key = DimensionKey.key(dimension, pos.x + d[0], pos.z + d[1]);
+            LightTask task = deferredLightPush.get(key);
+            if (task == null || isSuperseded(task)
+                    || inflightLight.containsKey(key) || waitingForLight.containsKey(key)) {
+                continue;
+            }
+            if (!areVanillaLightNeighborsConverged(key)) {
+                continue;
+            }
+            if (!deferredLightPush.remove(key, task)) {
+                continue;
+            }
+            enqueueDeferredPush(server, task, true);
+        }
     }
 
     /** 在途槽位腾出时由 {@link #completeLight} 触发；邻柱 init 完成走 {@link #flushWaitingAroundLocked}。 */
@@ -1959,6 +2019,14 @@ public final class ShadowLightCompute {
             if (isVanillaLightNeighborReadyNow(server, dimension, nx, nz)) {
                 ready++;
             }
+        }
+        if (canStartVanillaLightStage(ready, expected, timedOut) && timedOut && ready < expected) {
+            // 超时放行且仍有邻柱未就绪：propagateLightSources 对缺失邻柱回退 emptyChunkSources
+            //（NEGATIVE_INFINITY → 该方向播种 flag 永不置位），边界列播种静默丢失（E=3 vs E=5 形态）。
+            DebugLogger.warn(DebugLogger.LogType.ASYNC,
+                    "[SHADOW_LIGHT] Neighbor wait timed out with {} of {} neighbors not ready at ({}, {}),"
+                            + " border seeding may be incomplete",
+                    expected - ready, expected, pos.x, pos.z);
         }
         return canStartVanillaLightStage(ready, expected, timedOut);
     }
