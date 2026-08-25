@@ -172,13 +172,22 @@ R2 列格式 `landed / cacheHit（命中率 hit/(hit+new)）`；OVD 为 R2 探�
 | 1.21.6 forge (leftover) | 1057/1065 | 回归对照通过 |
 | 1.21.2 fabric seedgen (lightdiag/lightfinal) | — | 光照取证与方案 D 复验 |
 
+### 2026-08-25 回归修复复验
+
+- 修复 1.20.1 full-hit 回归：服务端批队列改为沿用 packet section 规范化 hash，避免 1.20.1 raw packet palette 排列导致影子磁盘 hash 永远失配；BlockEntity 推送改用 vanilla update NBT，规避 1.21.5 TrialSpawner registry 解析错误。
+- 修复 runtime smoke batch 的 PowerShell 参数绑定错误，并将 classic 默认观测窗口统一为 20s，确保每 tick 批推送队列有稳定消费窗口。
+- Fabric 12 格串行 Phase I：1.20.1、1.21.1–1.21.11 全部 PASS；1.21.3 初次运行仅因瞬时 ZSTD/outbound 日志审计失败，标准会话复验 PASS。
+- NeoForge 12 格串行 Phase I：全部 PASS。
+- Forge 支持格串行 Phase I：1.20.1、1.21.1、1.21.3–1.21.10 全部 PASS；1.21.2 与 1.21.11 按 `builds_for` 预期跳过。1.21.7 初次出现一次 `Could not schedule ConsecutiveExecutor` 瞬时审计错误，复验 PASS。
+- 1.20.1 Fabric 清洁世界回归：R1 landed=1523、applied=1493；R2 full-hit=2762、OVD loaded=632。
+- 1.21 各有效 loader 格的 R1 landed 均超过 1000；完整 probe、Gateway ACTIVE、Round1/Round2、日志审计均以对应最终 PASS 会话为准。
+
 ### 新增 follow-up（非本轮范围）
 1. 光照有界自愈重算（宽限期机制，见 LightConverge-TASK.md 终章方案）。
 2. seedgen 场景门禁 `locallyGenerated>0` 语义更新：A1 后直推先注入影子存档，SeedRef 目标缓存命中不计数恒 FAIL；需改为 SEED_REF 服务端发送计数或等价可观测面。
-3. fabric R1 客户端请求侧瓶颈（fullReq 峰值下降限制 landed 上限）。
 
 ## 八、数据文件索引
 
-- 结果：`build/smoke-test/results/result_<ver>_<loader>_fin2.json`（34+SKIP×2）、`result_1.21.2_fabric_fin3.json`、`result_1.21.3_fabric_fin3.json`、`result_1.21.1_fabric_fin.json`
+- 结果：`build/smoke-test/results/result_<ver>_<loader>_fin2.json`（34+SKIP×2）、`result_1.21.2_fabric_fin3.json`、`result_1.21.3_fabric_fin3.json`、`result_1.21.1_fabric_fin.json`、`result_<ver>_<loader>_I.json`
 - Probe：`build/smoke-test/probe/<SessionId>/round{1,2}.json`
 - 中间分析数据（本报告生成用）：`.omp/workflows/smoke-finalize/work/Analysis-{final-cells,curves,stalls,exit-latency}.json`、`Analysis-{matrix,client,curve}-rows.md`

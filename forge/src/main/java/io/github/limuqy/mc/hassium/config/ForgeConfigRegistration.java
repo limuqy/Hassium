@@ -21,3 +21,4 @@ public final class ForgeConfigRegistration {
         // Hassium 自己的 ConfigScope.SERVER 仍由 ForgeConfigBackend.load(SERVER) 消费，不受影响。
         ModLoadingContext.get().registerConfig(ModConfig.Type.COMMON, SERVER_SPEC, serverFile);
     }
+}

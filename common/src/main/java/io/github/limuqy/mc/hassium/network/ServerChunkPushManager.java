@@ -372,7 +372,7 @@ public class ServerChunkPushManager {
      * 已准备的区块数据：拦截路径缓存 {@code packet}（纯数据，后台 encode）或广播路径缓存线格式 {@code data}；
      * 二选一，另一为 null。
      */
-    private record PreparedChunk(byte[] data, ClientboundLevelChunkWithLightPacket packet) {}
+    private record PreparedChunk(byte[] data, ClientboundLevelChunkWithLightPacket packet, long contentHash) {}
 
     /**
      * 每玩家：chunkPosLong → 已编码的 ClientboundLevelChunkWithLightPacket 线格式字节。
@@ -490,23 +490,24 @@ public class ServerChunkPushManager {
         // 反透视等 mod 已在拦截时改写好包视图），不再占用主线程。
         pushPool.submit(() -> {
             try {
-                byte[] encoded = encodeChunkPacket(strippedPacket, registryAccess);
-                if (encoded != null) {
-                    for (ServerPlayer player : players) {
-                        // SeedGen 玩家：不发数据任务（本地生成），只发 SeedRef
-                        if (isSeedGenFor(player.getUUID(), pos, dimension)) {
-                            continue;
-                        }
-                        putPreparedChunkPacket(player.getUUID(), pos, encoded);
-                    }
-                }
-                // 从已序列化的 packet 数据计算 section 哈希（线程安全，无需读取世界）
+                // Hash 以规范化 section 内容为准；1.20.1 的 packet 线格式含不稳定 palette
+                // 排列，绝不能作为缓存协议 hash。
                 long tHash = System.nanoTime();
                 Map<Integer, Long> sectionHashes = ChunkContentHashUtil.computeSectionHashesFromPacket(
                         strippedPacket.getChunkData(), sectionCount, registryAccess);
                 diag(D_HASH, System.nanoTime() - tHash);
                 long chunkHash = ChunkContentHashUtil.combineSectionHashes(sectionHashes);
                 long[] sectionHashArray = ChunkContentHashUtil.sectionHashesToArray(sectionHashes);
+                byte[] encoded = encodeChunkPacket(strippedPacket, registryAccess);
+                if (encoded != null) {
+                    // 预编码字节后续可能在 Bloom 命中路径直接发送；保留同一 packet 的语义 hash。
+                    for (ServerPlayer player : players) {
+                        if (!isSeedGenFor(player.getUUID(), pos, dimension)) {
+                            putPreparedChunkPacket(player.getUUID(), pos,
+                                    new PreparedChunk(encoded, strippedPacket, chunkHash));
+                        }
+                    }
+                }
                 // 从 sectionHashes 推导 bitmap：有 hash 的 section = 有方块数据
                 int sectionBitmap = 0;
                 for (int idx : sectionHashes.keySet()) {
@@ -1918,10 +1919,13 @@ public class ServerChunkPushManager {
         for (Map.Entry<BlockPos, BlockEntity> entry : chunk.getBlockEntities().entrySet()) {
             BlockPos pos = entry.getKey();
             BlockEntity be = entry.getValue();
+            // 自定义 chunk/delta 通道与 vanilla 初始区块包语义一致：只发送客户端
+            // update NBT。saveWithoutMetadata 会携带 TrialSpawnerLogic 的服务器 worldgen
+            // registry 引用；1.21.5+ 客户端并未同步 trial_spawner registry，load 即报错。
 #if MC_VER < MC_1_21_1
-            CompoundTag nbt = be.saveWithoutMetadata();
+            CompoundTag nbt = be.getUpdateTag();
 #else
-            CompoundTag nbt = be.saveWithoutMetadata(be.getLevel().registryAccess());
+            CompoundTag nbt = be.getUpdateTag(be.getLevel().registryAccess());
 #endif
             String type = String.valueOf(
                     net.minecraft.core.registries.BuiltInRegistries.BLOCK_ENTITY_TYPE.getKey(be.getType()));
@@ -2028,7 +2032,6 @@ public class ServerChunkPushManager {
         ChunkPos playerChunk = player.chunkPosition();
         int serverVD = PlayerCompat.getViewDistance(player);
         List<SealedWork> works = new ArrayList<>(maxPerTick);
-
         while (works.size() < maxPerTick && !queue.isEmpty()) {
             PushTask task = queue.poll();
             if (task == null) {
@@ -2042,7 +2045,7 @@ public class ServerChunkPushManager {
 
             if (task.seedRef() != null) {
                 // SeedRef 元数据无 hash 比对语义，直接随批发送。
-                works.add(new SealedWork(player, task, null, level.registryAccess(), sender));
+                works.add(new SealedWork(player, task, null, level.registryAccess(), sender, 0L));
                 continue;
             }
 
@@ -2068,11 +2071,10 @@ public class ServerChunkPushManager {
                 // 主线程快照（buildChunkPacket）：优先用拦截时缓存的包字节/packet
                 PreparedChunk prepared = takePreparedChunkPacket(playerId, task.pos());
                 byte[] chunkData = prepared != null ? prepared.data() : null;
-                ClientboundLevelChunkWithLightPacket packet = null;
+                ClientboundLevelChunkWithLightPacket packet = prepared != null ? prepared.packet() : null;
+                long contentHash = prepared != null ? prepared.contentHash() : 0L;
                 if (chunkData == null) {
-                    if (prepared != null) {
-                        packet = prepared.packet();
-                    } else {
+                    if (packet == null) {
                         LevelChunk chunk = level.getChunkSource().getChunkNow(task.pos().x, task.pos().z);
                         if (chunk == null) {
                             Constants.LOG.warn("[PROCESS_QUEUE] Chunk {} not loaded, skipping", task.pos());
@@ -2087,8 +2089,13 @@ public class ServerChunkPushManager {
                         }
                     }
                 }
+                if (contentHash == 0L && packet != null) {
+                    contentHash = ChunkContentHashUtil.combineSectionHashes(
+                            ChunkContentHashUtil.computeSectionHashesFromPacket(
+                                    packet.getChunkData(), level.getSectionsCount(), level.registryAccess()));
+                }
                 works.add(new SealedWork(player, task, chunkData != null ? chunkData : packet,
-                        level.registryAccess(), sender));
+                        level.registryAccess(), sender, contentHash));
             } catch (Exception e) {
                 Constants.LOG.error("[PROCESS_QUEUE] Failed to prepare chunk {} for player {}",
                         task.pos(), player.getName().getString(), e);
@@ -2183,20 +2190,25 @@ public class ServerChunkPushManager {
                     shouldPushFull(player, task.pos(), task.dimension())
                     && lastSessionPushedHash(player.getUUID(), task.dimension(), task.pos()) == null;
             if (!bloomMissNoRecord) {
-                // 否则算 hash 后发 ChunkHashS2C 并进待确认列表
-                long hash = computeChunkHash(chunkData);
+                // Bloom-hit/R2 元数据必须使用 section 规范化 hash；raw packet bytes 在
+                // 1.20.1 含不稳定 palette 排列，会令客户端磁盘 hash 永远失配。
+                long hash = work.contentHash();
+                if (hash == 0L) {
+                    Constants.LOG.warn("[PROCESS_QUEUE] Missing semantic chunk hash for {}", task.pos());
+                    return;
+                }
                 registerPendingConfirm(player, task.pos(), task.dimension());
                 sendChunkHashDirect(player, task.pos(), hash, 0, task.dimension());
                 return;
             }
-            compressAndSend(player, task, chunkData, work.sender());
+            compressAndSend(player, task, chunkData, work.contentHash(), work.sender());
         } catch (Throwable t) {
             Constants.LOG.error("[PROCESS_QUEUE] Failed to encode/send chunk {}", task.pos(), t);
         }
     }
 
     /** 后台压缩并发送剥光全量（不访问世界对象）。 */
-    private void compressAndSend(ServerPlayer player, PushTask task, byte[] chunkData,
+    private void compressAndSend(ServerPlayer player, PushTask task, byte[] chunkData, long contentHash,
                                  ChunkSender sender) {
         if (!player.isAlive() || player.hasDisconnected()) {
             return;
@@ -2210,7 +2222,7 @@ public class ServerChunkPushManager {
             }
             sender.sendCompressedChunk(player, compressed);
             NetworkStats.recordChunkSent(VanillaZlibEstimator.estimate(chunkData));
-            rememberSessionPush(player.getUUID(), task.dimension(), task.pos(), task.contentHash());
+            rememberSessionPush(player.getUUID(), task.dimension(), task.pos(), contentHash);
             DebugLogger.info(LogType.NETWORK, "[PROCESS_QUEUE] Sent stripped full chunk {} to player {} ({} -> {} bytes)", task.pos(), player.getName().getString(),
                     chunkData.length, compressed.compressedData.length);
         } catch (Exception e) {
@@ -2309,7 +2321,7 @@ public class ServerChunkPushManager {
 
 
     private void putPreparedChunkPacket(UUID playerId, ChunkPos pos, byte[] data) {
-        putPreparedChunkPacket(playerId, pos, new PreparedChunk(data, null));
+        putPreparedChunkPacket(playerId, pos, new PreparedChunk(data, null, 0L));
     }
 
     /**
@@ -2317,7 +2329,7 @@ public class ServerChunkPushManager {
      */
     private void putPreparedChunkPacket(UUID playerId, ChunkPos pos,
                                         ClientboundLevelChunkWithLightPacket packet) {
-        putPreparedChunkPacket(playerId, pos, new PreparedChunk(null, packet));
+        putPreparedChunkPacket(playerId, pos, new PreparedChunk(null, packet, 0L));
     }
 
     private void putPreparedChunkPacket(UUID playerId, ChunkPos pos, PreparedChunk prepared) {
@@ -2496,7 +2508,7 @@ public class ServerChunkPushManager {
      * 封批产物：主线程已完成世界快照（chunkData 或 packet），消费线程只做 encode/hash/ZSTD。
      */
     private record SealedWork(ServerPlayer player, PushTask task, Object payload,
-                              RegistryAccess registryAccess, ChunkSender sender) {}
+                              RegistryAccess registryAccess, ChunkSender sender, long contentHash) {}
 
     /** 通道项及其所属玩家的已封装批次计数。 */
     private record SealedBatch(PlayerPushQueue owner, List<SealedWork> works) {}

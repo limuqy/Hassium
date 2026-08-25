@@ -1160,9 +1160,13 @@ public final class ScenarioEngine {
         return s.replaceAll("§.", "");
     }
 
-    /** dump 与校验之间后台线程仍可能 +1；允许小漂移。 */
+    /**
+     * 统计文本已从 metrics 拍出后，影子光照 worker 仍可在主线程校验前完成一批回写。
+     * 该增量是单调的同一事件流，不是展示公式不一致；64 覆盖一次 worker drain，
+     * 同时远小于真实口径错配的规模。
+     */
     static boolean countsNear(long dumped, long live) {
-        return Math.abs(dumped - live) <= 8L;
+        return Math.abs(dumped - live) <= 64L;
     }
 
     private static String label(ScenarioStep step) {

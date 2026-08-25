@@ -32,7 +32,7 @@ param(
     [int]$BasePort = 25565,
     [int]$ServerReadyTimeoutSec = 300,
     [int]$ClientTimeoutSec = 600,
-    [int]$DelayMs = 10000,
+    [int]$DelayMs = 20000,
     [int]$ReconnectDelayMs = 3000
 )
 
@@ -200,23 +200,25 @@ function Invoke-Session {
             $pregenSrc = Join-Path $projectRoot "build\smoke-test\pregen-world\${Loader}-${Ver}\world"
             if (-not (Test-Path $pregenSrc)) {
                 Write-Host "[$sessionId] 预生成存档缺失，先执行预生成 (${Loader}/${Ver})..."
-                $pregenArgs = @("-Ver", $Ver, "-Loader", $Loader, "-Phase", $Phase,
-                    "-SessionId", "${sessionId}_pregen", "-PregenOnly",
-                    "-ServerPort", $ServerPort, "-ServerReadyTimeoutSec", $ServerReadyTimeoutSec)
-                if ($Scenario -ne "classic") { $pregenArgs += @("-Scenario", $Scenario) }
+                $pregenArgs = @{
+                    Ver = $Ver; Loader = $Loader; Phase = $Phase
+                    SessionId = "${sessionId}_pregen"; PregenOnly = $true
+                    ServerPort = $ServerPort; ServerReadyTimeoutSec = $ServerReadyTimeoutSec
+                }
+                if ($Scenario -ne "classic") { $pregenArgs.Scenario = $Scenario }
                 & $scriptPath @pregenArgs
                 if ($LASTEXITCODE -ne 0) {
                     Write-Host "[$sessionId] 预生成失败，降级为正常 worldgen 冒烟" -ForegroundColor Yellow
                 }
             }
         }
-        $sessionArgs = @("-Ver", $Ver, "-Loader", $Loader, "-Phase", $Phase,
-            "-SessionId", $sessionId, "-CleanWorld:$doClean",
-            "-ServerPort", $ServerPort,
-            "-ServerReadyTimeoutSec", $ServerReadyTimeoutSec,
-            "-ClientTimeoutSec", $ClientTimeoutSec,
-            "-DelayMs", $DelayMs, "-ReconnectDelayMs", $ReconnectDelayMs)
-        if ($Scenario -ne "classic") { $sessionArgs += @("-Scenario", $Scenario) }
+        $sessionArgs = @{
+            Ver = $Ver; Loader = $Loader; Phase = $Phase; SessionId = $sessionId
+            CleanWorld = $doClean; ServerPort = $ServerPort
+            ServerReadyTimeoutSec = $ServerReadyTimeoutSec; ClientTimeoutSec = $ClientTimeoutSec
+            DelayMs = $DelayMs; ReconnectDelayMs = $ReconnectDelayMs
+        }
+        if ($Scenario -ne "classic") { $sessionArgs.Scenario = $Scenario }
         $result = & $scriptPath @sessionArgs
 
         if ($result -eq "PASS") {
@@ -497,7 +499,8 @@ foreach ($entry in $scenarioPlan) {
             Write-Host "--- $sessionId ($cleanLabel) ---"
 
             $r = Invoke-Session -Ver $ver -Loader $loader -Phase $Phase -Scenario $scenario -ServerPort $BasePort -MaxRetries $MaxRetries `
-                -CleanWorld:$cleanWorld -ServerReadyTimeoutSec $ServerReadyTimeoutSec -ClientTimeoutSec $ClientTimeoutSec
+                -CleanWorld:$cleanWorld -ServerReadyTimeoutSec $ServerReadyTimeoutSec -ClientTimeoutSec $ClientTimeoutSec `
+                -DelayMs $DelayMs -ReconnectDelayMs $ReconnectDelayMs
             $results += $r
             $prevVerByLoader[$loader] = $ver
 

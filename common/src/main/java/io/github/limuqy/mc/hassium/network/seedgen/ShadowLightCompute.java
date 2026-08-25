@@ -3121,10 +3121,6 @@ public final class ShadowLightCompute {
                     .combineSectionHashes(io.github.limuqy.mc.hassium.cache.ChunkContentHashUtil
                             .computeSectionHashes(chunk));
             io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.put(dimension, pos, diskHash);
-            if (diskHash != remoteHash) {
-                org.slf4j.LoggerFactory.getLogger("Hassium/ShadowDisk")
-                        .debug("Shadow disk hash MISMATCH disk={} remote={}", diskHash, remoteHash);
-            }
             return diskHash == remoteHash;
         } catch (Throwable t) {
             return false;
