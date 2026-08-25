@@ -188,11 +188,15 @@ public class ClientChunkHandler {
                 compressed.chunkX, compressed.chunkZ, compressed.compressedData.length,
                 compressed.originalSize, compressed.algorithm);
 
-        // 清除全量请求超时登记（数据已到达，服务端丢弃/积压兜底结束）
-        ClientMetadataHandler.onChunkDataReceived(compressed.chunkX, compressed.chunkZ);
-
-        // 只记原版等价；actual wire 由管线 ZstdContextDecoder / UDP onBulkArrived 统一记，禁止应用层双计。
+        // Halo 也是真实收到的剥光柱，原版等价必须计入，否则 actual 含 Halo 压缩字节、
+        // vanilla 只有可见柱 → ROUND2 会变成 当前 > 原版、压缩率假 0%。
+        if (compressed.role == ShadowChunkRole.VISIBLE) {
+            ClientMetadataHandler.onChunkDataReceived(compressed.chunkX, compressed.chunkZ);
+        }
         NetworkStats.recordChunkReceived(VanillaZlibEstimator.estimate(compressed.originalSize));
+        // 压缩区块走自定义 payload。网关 ZstdContextDecoder 记的是包裹帧；
+        // 冒烟实证 ROUND1 actual 只剩几十 B（控制帧），本通道 payload 必须在此记。
+        NetworkStats.recordWireBytesReceived(compressed.compressedData.length);
 
         HassiumTaskExecutor executor = HassiumTaskExecutor.getClient();
         if (executor == null) {
@@ -206,6 +210,7 @@ public class ClientChunkHandler {
         final int chunkZ = compressed.chunkZ;
         final byte[] compData = compressed.compressedData;
         final String algorithm = compressed.algorithm;
+        final ShadowChunkRole role = compressed.role;
 
         // 提交 ZSTD 解压到后台线程池
         executor.submit(() -> {
@@ -225,29 +230,38 @@ public class ClientChunkHandler {
                 DebugLogger.info(LogType.COMPRESSION, "[HANDLE_COMPRESSED] Decompressed chunk [{}, {}] ({} -> {} bytes)",
                     chunkX, chunkZ, compData.length, decompressed.length);
 
-                // 影子链路（服务端已装 MOD + 引擎开启）：还原官方包 → 投递影子端
-                // （注入 → 原版算光 → 打包官方包 → 官方通道落地）；缓存读写由影子端
-                // 世界存档承担，客户端不再 apply/入库。
+                // 剥光包必须先按角色送入影子服务端。HALO 永不落地 ClientLevel，
+                // 解码失败也不能回退为可见区块。
                 if (io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.isEnabled()) {
                     net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket packet =
                             decodeChunkPacket(decompressed);
-                    if (packet != null) {
-                        ChunkPos pos = new ChunkPos(chunkX, chunkZ);
-                        // 加载屏要等脚下柱 compiled：只落地方块（不 enableChunkLight），
-                        // 立刻 ACK；光完全由影子端回传，避免客户端自算与影子重复。
-                        if (shouldFastApplyForLoadingScreen(pos)) {
-                            MainThreadDispatcher.execute(() -> applyLoadingScreenBlocksOnly(
-                                    packet), pos);
-                            io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.submit(pos, packet);
-                            return;
+                    if (packet == null) {
+                        ClientChunkPipeline.getInstance().setShadowServerFailed(true);
+                        if (role == ShadowChunkRole.VISIBLE) {
+                            ClientMetadataHandler.requestFullChunksPublic(
+                                    io.github.limuqy.mc.hassium.network.seedgen.ShadowVanillaLightPipeline.currentDimension(),
+                                    List.of(new ChunkPos(chunkX, chunkZ)), true);
                         }
-                        io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.submit(pos, packet);
                         return;
                     }
-                    // decode 失败：回退直接 apply（数据仍需落地；方案 A 无客户端入库）
-                    DebugLogger.warn(LogType.COMPRESSION,
-                            "[HANDLE_COMPRESSED] Packet decode failed for [{}, {}], fallback direct apply",
-                            chunkX, chunkZ);
+                    ChunkPos pos = new ChunkPos(chunkX, chunkZ);
+                    String dimension = io.github.limuqy.mc.hassium.network.seedgen.ShadowVanillaLightPipeline
+                            .currentDimension();
+                    if (role == ShadowChunkRole.HALO) {
+                        io.github.limuqy.mc.hassium.network.seedgen.ShadowVanillaLightPipeline
+                                .submitHalo(dimension, pos, packet);
+                        return;
+                    }
+                    if (shouldFastApplyForLoadingScreen(pos)) {
+                        MainThreadDispatcher.execute(() -> applyLoadingScreenBlocksOnly(packet), pos);
+                    }
+                    io.github.limuqy.mc.hassium.network.seedgen.ShadowVanillaLightPipeline
+                            .submitVisible(dimension, pos, packet, traceOriginIfLoggingEnabled(TraceOrigin.SERVER_PUSH));
+                    return;
+                }
+
+                if (role == ShadowChunkRole.HALO) {
+                    return;
                 }
 
                 // 回主线程应用区块（距离优先级依赖 updatePlayerPosition）
@@ -281,15 +295,33 @@ public class ClientChunkHandler {
             Constants.LOG.debug("Hassium: Decompressed chunk [{}, {}] on main thread (fallback), size: {} -> {} bytes",
                 compressed.chunkX, compressed.chunkZ, compressed.compressedData.length, decompressed.length);
 
-            // 影子链路分流（同异步路径）
+            // 同步回退也必须保持角色语义：Halo 仅注入影子端，绝不直接应用。
             if (io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.isEnabled()) {
                 net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket packet =
                         decodeChunkPacket(decompressed);
-                if (packet != null) {
-                    io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.submit(
-                            new ChunkPos(compressed.chunkX, compressed.chunkZ), packet);
+                if (packet == null) {
+                    ClientChunkPipeline.getInstance().setShadowServerFailed(true);
+                    if (compressed.role == ShadowChunkRole.VISIBLE) {
+                        ClientMetadataHandler.requestFullChunksPublic(
+                                io.github.limuqy.mc.hassium.network.seedgen.ShadowVanillaLightPipeline.currentDimension(),
+                                List.of(new ChunkPos(compressed.chunkX, compressed.chunkZ)), true);
+                    }
                     return;
                 }
+                ChunkPos pos = new ChunkPos(compressed.chunkX, compressed.chunkZ);
+                String dimension = io.github.limuqy.mc.hassium.network.seedgen.ShadowVanillaLightPipeline
+                        .currentDimension();
+                if (compressed.role == ShadowChunkRole.HALO) {
+                    io.github.limuqy.mc.hassium.network.seedgen.ShadowVanillaLightPipeline
+                            .submitHalo(dimension, pos, packet);
+                    return;
+                }
+                io.github.limuqy.mc.hassium.network.seedgen.ShadowVanillaLightPipeline
+                        .submitVisible(dimension, pos, packet, traceOriginIfLoggingEnabled(TraceOrigin.SERVER_PUSH));
+                return;
+            }
+            if (compressed.role == ShadowChunkRole.HALO) {
+                return;
             }
 
             // 应用区块

@@ -117,12 +117,18 @@ public class ShadowSeedServer extends MinecraftServer {
             injectedChunks = new java.util.concurrent.ConcurrentHashMap<>();
     /** 本端为注入柱加上的 UNKNOWN FULL 票（与注入表同阶，卸载还票）。 */
     private final java.util.Set<Long> injectTickets = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    /** 注入列角色决定其 ChunkHolder 目标状态与卸载时归还的同类票据。 */
+    private final java.util.concurrent.ConcurrentHashMap<Long, io.github.limuqy.mc.hassium.network.ShadowChunkRole>
+            injectedRoles = new java.util.concurrent.ConcurrentHashMap<>();
 
+    /** Halo 柱只保留方块状态；可见柱晋升后会从此集合移除。 */
+    private final java.util.Set<Long> haloBlocksOnly = java.util.concurrent.ConcurrentHashMap.newKeySet();
     /**
      * 按维度目录落盘的存储管理器（dimension id → manager，各绑定
      * {@link #regionDir(String)} 对应的 vanilla 布局 region 目录）。
      * 断连 saveAll 是否需要重写该柱：脏位在 {@link io.github.limuqy.mc.hassium.storage.ShadowStorageHashes}
-     * （contentDirty / lightDirty）。活数据仍在 {@link #injectedChunks} 的 LevelChunk。
+     * （contentDirty / lightDirty / mutation / lightReady）。活数据仍在 {@link #injectedChunks} 的 LevelChunk。
+     * 光收敛后立即入存储队列；定时刷新只刷 mutation；saveAll 终态快照后再 {@code flushRemaining}。
      */
     private volatile java.util.concurrent.ConcurrentHashMap<String, io.github.limuqy.mc.hassium.storage.ShadowStorageManager> storages;
 
@@ -135,10 +141,18 @@ public class ShadowSeedServer extends MinecraftServer {
      * 内存驻留/比对 miss 兜底。
      */
     private volatile boolean ownShutdownInProgress;
+    /** 中途变更定时入队（墙钟，影子端 tickCount 不前进）。 */
+    private volatile long lastMutationFlushMs;
+    private static final long MUTATION_FLUSH_INTERVAL_MS = 30_000L;
 
     /** 关停保存开始（SeedGenLevelCompat.shutdown 首步调用）：写 gate 对本端保存放行。 */
     void beginShutdownSave() {
         this.ownShutdownInProgress = true;
+    }
+
+    private boolean canWriteStorage() {
+        return ownShutdownInProgress
+                || ShadowServerRegistry.getInstance().isPreviousShutdownComplete();
     }
 
     private ShadowSeedServer(Thread thread,
@@ -342,18 +356,21 @@ public class ShadowSeedServer extends MinecraftServer {
      * ThreadedLevelLightEngine 异步任务（runMainLoop 已驱动 tryScheduleUpdate）。
      * 注入失败返回 false（调用方走单柱兜底）。
      */
-    /** 注入一个服务端区块包（主世界；过渡期兼容签名）。 */
+    /** 兼容本地调用：常规网络柱均为可见柱。 */
     public boolean injectChunk(ChunkPos pos, ClientboundLevelChunkWithLightPacket packet) {
-        return injectChunk(DimensionKey.OVERWORLD, pos, packet);
+        return injectChunk(DimensionKey.OVERWORLD, pos, packet,
+                io.github.limuqy.mc.hassium.network.ShadowChunkRole.VISIBLE);
     }
 
     /**
      * 注入一个服务端区块包到指定维度（任意线程可调）：键走
      * {@link DimensionKey} 复合键；hash/脏位/热度均带维度。
      */
-    public boolean injectChunk(String dimension, ChunkPos pos, ClientboundLevelChunkWithLightPacket packet) {
+    public boolean injectChunk(String dimension, ChunkPos pos, ClientboundLevelChunkWithLightPacket packet,
+                               io.github.limuqy.mc.hassium.network.ShadowChunkRole role) {
         long key = DimensionKey.key(dimension, pos.x, pos.z);
         LevelChunk previous = this.injectedChunks.get(key);
+        io.github.limuqy.mc.hassium.network.ShadowChunkRole previousRole = injectedRoles.get(key);
         try {
             ServerLevel level = level(dimension);
             if (level == null) {
@@ -370,6 +387,8 @@ public class ShadowSeedServer extends MinecraftServer {
             // initializeLightSources / BE → ServerLevel.getChunk，把 Proto 强转 LevelChunk。
             // 必须先让 getChunk mixin 命中本柱，decode 失败再还原。
             this.injectedChunks.put(key, chunk);
+            injectedRoles.put(key, role);
+            updateInjectTicket(dimension, pos, previousRole, role);
             ClientboundLevelChunkPacketData data = packet.getChunkData();
             // 显式把 section 读游标复位到 0：getReadBuffer() 返回的是包内 byte[] 的
             // 新包装，正常应本来就是 0，但这里不依赖该假设——防止某些 Netty/FriendlyByteBuf
@@ -435,7 +454,10 @@ public class ShadowSeedServer extends MinecraftServer {
                     SectionDeltaSnapshots.put(dimension, pos, SectionDeltaSnapshot.capture(captured)));
             io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.markContentDirty(key);
             ShadowCacheEviction.recordAccess(dimension, pos);
-            registerInjectTicket(pos);
+            registerInjectTicket(dimension, pos, role);
+            if (role == io.github.limuqy.mc.hassium.network.ShadowChunkRole.HALO) {
+                enqueueColumnIfWritable(dimension, pos);
+            }
             if (!fresh) {
                 // 重注入清光投递 48+ 个 PRE 任务：按柱排水，防连续重注入叠加越 1000 阈值
                 // （fresh 柱零投递，size 检查立即通过零开销）。
@@ -446,6 +468,11 @@ public class ShadowSeedServer extends MinecraftServer {
             return true;
         } catch (Throwable t) {
             if (previous != null) {
+                if (previousRole == null) {
+                    injectedRoles.remove(key);
+                } else {
+                    injectedRoles.put(key, previousRole);
+                }
                 this.injectedChunks.put(key, previous);
             } else {
                 this.injectedChunks.remove(key);
@@ -453,6 +480,39 @@ public class ShadowSeedServer extends MinecraftServer {
             LOGGER.warn("Hassium: Shadow light inject failed for {}", pos, t);
             return false;
         }
+    }
+
+    /**
+     * 在影子服务端主线程、注入票已生效后请求原版 ChunkHolder FULL future。
+     * 原版 LIGHT 只完成单柱光照；FULL 才经过原版区块首包的完成门槛。
+     * injectChunk 允许后台调用，不能在其返回线程直接请求，否则会早于
+     * registerInjectTicket 的队列任务而看见未建 holder。
+     */
+    public java.util.concurrent.CompletableFuture<LevelChunk> requestNativeLight(
+            String dimension, ChunkPos pos) {
+        java.util.concurrent.CompletableFuture<LevelChunk> result =
+                new java.util.concurrent.CompletableFuture<>();
+        this.execute(() -> {
+            try {
+                ServerLevel level = level(dimension);
+                if (level == null || injectedChunk(dimension, pos.x, pos.z) == null) {
+                    result.complete(null);
+                    return;
+                }
+                io.github.limuqy.mc.hassium.compat.ShadowServerCompat
+                        .requestFullChunk(level.getChunkSource(), pos)
+                        .whenComplete((ignored, failure) -> {
+                            if (failure != null) {
+                                result.completeExceptionally(failure);
+                            } else {
+                                result.complete(injectedChunk(dimension, pos.x, pos.z));
+                            }
+                        });
+            } catch (Throwable failure) {
+                result.completeExceptionally(failure);
+            }
+        });
+        return result;
     }
 
     /**
@@ -1218,6 +1278,24 @@ public class ShadowSeedServer extends MinecraftServer {
     public net.minecraft.world.level.chunk.LevelChunk injectedChunk(String dimension, int x, int z) {
         return injectedChunks.get(DimensionKey.key(dimension, x, z));
     }
+    /**
+     * 原版玩家首包要求中心及 R=1 邻域均持有 FULL 柱。
+     * 网络柱与 Halo 均已注入才允许请求 native FULL future，避免把先到柱过早打包。
+     */
+    boolean hasVisibleFullNeighborhood(String dimension, ChunkPos center) {
+        if (center == null || injectedRoles.get(DimensionKey.key(dimension, center.x, center.z))
+                != io.github.limuqy.mc.hassium.network.ShadowChunkRole.VISIBLE) {
+            return false;
+        }
+        for (int dz = -1; dz <= 1; dz++) {
+            for (int dx = -1; dx <= 1; dx++) {
+                if (!injectedChunks.containsKey(DimensionKey.key(dimension, center.x + dx, center.z + dz))) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
 
     /**
      * 维度取 level（CONTRACTS §2）：三维度可取；未知维度返回 null。
@@ -1282,49 +1360,60 @@ public class ShadowSeedServer extends MinecraftServer {
         return pos != null && injectTickets.contains(ChunkPos.asLong(pos.x, pos.z));
     }
 
-    /**
-     * 注入成功后加 {@code TicketType.UNKNOWN}、{@code ChunkLevel.byStatus(FULL)}
-     * （非 32/31 ticking）。主循环 {@code pollTask} 会 {@code runDistanceManagerUpdates}。
-     */
-    void registerInjectTicket(ChunkPos pos) {
-        if (pos == null) {
+    /** 注入角色决定原版 ChunkHolder 所需状态；票据在影子主线程变更。 */
+    void registerInjectTicket(String dimension, ChunkPos pos,
+                              io.github.limuqy.mc.hassium.network.ShadowChunkRole role) {
+        if (pos == null || role == null) {
             return;
         }
-        long key = ChunkPos.asLong(pos.x, pos.z);
+        long key = DimensionKey.key(dimension, pos.x, pos.z);
         if (!ShadowChunkMapCompat.rememberTicketKey(injectTickets, key)) {
             return;
         }
-        ChunkPos ticketPos = new ChunkPos(pos.x, pos.z);
         runOnShadowMain(() -> {
-            try {
-                ServerChunkCache cache = (ServerChunkCache) this.overworld().getChunkSource();
-                ShadowChunkMapCompat.addFullUnknownTicket(cache, ticketPos);
-            } catch (Throwable t) {
+            ServerLevel level = level(dimension);
+            if (level == null) {
                 injectTickets.remove(key);
-                LOGGER.debug("Hassium: shadow inject ticket add failed for {}", ticketPos);
+                return;
+            }
+            ShadowChunkMapCompat.addShadowRoleTicket(level.getChunkSource(), pos, role);
+        });
+    }
+
+    /** 角色升级时替换票据，避免 Halo 的 INITIALIZE_LIGHT 票阻断可见 LIGHT future。 */
+    private void updateInjectTicket(String dimension, ChunkPos pos,
+                                    io.github.limuqy.mc.hassium.network.ShadowChunkRole previous,
+                                    io.github.limuqy.mc.hassium.network.ShadowChunkRole next) {
+        if (previous == next || previous == null || next == null) {
+            return;
+        }
+        runOnShadowMain(() -> {
+            ServerLevel level = level(dimension);
+            if (level == null) {
+                return;
+            }
+            ShadowChunkMapCompat.removeShadowRoleTicket(level.getChunkSource(), pos, previous);
+            ShadowChunkMapCompat.addShadowRoleTicket(level.getChunkSource(), pos, next);
+        });
+    }
+
+    void unregisterInjectTicket(String dimension, ChunkPos pos) {
+        if (pos == null) {
+            return;
+        }
+        long key = DimensionKey.key(dimension, pos.x, pos.z);
+        io.github.limuqy.mc.hassium.network.ShadowChunkRole role = injectedRoles.remove(key);
+        if (role == null || !ShadowChunkMapCompat.forgetTicketKey(injectTickets, key)) {
+            return;
+        }
+        runOnShadowMain(() -> {
+            ServerLevel level = level(dimension);
+            if (level != null) {
+                ShadowChunkMapCompat.removeShadowRoleTicket(level.getChunkSource(), pos, role);
             }
         });
     }
 
-    /** 卸载成功后还同一 UNKNOWN 票，避免 holder 泄漏。 */
-    void unregisterInjectTicket(ChunkPos pos) {
-        if (pos == null) {
-            return;
-        }
-        long key = ChunkPos.asLong(pos.x, pos.z);
-        if (!ShadowChunkMapCompat.forgetTicketKey(injectTickets, key)) {
-            return;
-        }
-        ChunkPos ticketPos = new ChunkPos(pos.x, pos.z);
-        runOnShadowMain(() -> {
-            try {
-                ServerChunkCache cache = (ServerChunkCache) this.overworld().getChunkSource();
-                ShadowChunkMapCompat.removeFullUnknownTicket(cache, ticketPos);
-            } catch (Throwable t) {
-                LOGGER.debug("Hassium: shadow inject ticket remove failed for {}", ticketPos);
-            }
-        });
-    }
 
     private void runOnShadowMain(Runnable job) {
         if (this.isSameThread()) {
@@ -1353,8 +1442,7 @@ public class ShadowSeedServer extends MinecraftServer {
     /**
      * 加载进影子端表并显式指定是否需要 saveAll 重写。
      *
-     * @param dirty true = 该柱是本地新生成/与磁盘不一致的数据，saveAll 必须重写；
-     *              false = 该柱刚从磁盘加载且未被修改，可跳过重写。
+     * @param dirty true = 本地新生成或与磁盘不一致；false = 磁盘 clean 命中
      */
     public void injectLoadedChunk(String dimension, ChunkPos pos,
                                   net.minecraft.world.level.chunk.LevelChunk chunk, boolean dirty) {
@@ -1364,15 +1452,17 @@ public class ShadowSeedServer extends MinecraftServer {
             io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.markContentDirty(key);
         } else {
             io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.claimDirty(key);
+            io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.markPersisted(key);
         }
         ShadowLightCompute.withChunkLock(pos, () ->
                 SectionDeltaSnapshots.put(dimension, pos, SectionDeltaSnapshot.capture(chunk)));
-        registerInjectTicket(pos);
+        injectedRoles.put(key, io.github.limuqy.mc.hassium.network.ShadowChunkRole.VISIBLE);
+        registerInjectTicket(dimension, pos, io.github.limuqy.mc.hassium.network.ShadowChunkRole.VISIBLE);
     }
 
     /**
      * 与原版 {@code ChunkSerializer} 对齐：{@code isLightCorrect} 决定落盘是否写
-     * {@code isLightOn}。变更后加入 dirtyChunks，saveAll 才会重写该柱。
+     * {@code isLightOn}。光收敛后立即入存储队列，不等待 saveAll。
      */
     public void syncLightCorrect(LevelChunk chunk, boolean correct) {
         if (chunk == null) {
@@ -1383,16 +1473,18 @@ public class ShadowSeedServer extends MinecraftServer {
         }
         chunk.setLightCorrect(correct);
         ChunkPos pos = chunk.getPos();
-        if (correct) {
-            io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.markLightReady(pos);
+        String dimension = LevelCompat.getDimensionId(chunkLevel(chunk));
+        boolean blocksOnly = haloBlocksOnly.contains(DimensionKey.key(dimension, pos.x, pos.z));
+        if (correct && !blocksOnly) {
+            persistLightReady(dimension, pos);
         } else {
-            io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.markLightDirty(pos);
+            io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.markLightDirty(dimension, pos);
         }
     }
 
     /**
      * 引擎任务排空后，仅把「层已齐全」的内存柱改回 {@code isLightCorrect=true}，
-     * 随后 saveAll 写入 isLightOn。层不齐的柱保持 false，避免误 reuse 空光。
+     * 并立即入存储队列。层不齐的柱保持 false，避免误 reuse 空光。
      */
     public void confirmLightsCorrectIfConverged() {
         if (!isLightConverged()) {
@@ -1401,7 +1493,7 @@ public class ShadowSeedServer extends MinecraftServer {
         boolean any = false;
         for (Map.Entry<Long, LevelChunk> e : injectedChunks.entrySet()) {
             LevelChunk chunk = e.getValue();
-            if (chunk == null || chunk.isLightCorrect()) {
+            if (chunk == null || chunk.isLightCorrect() || haloBlocksOnly.contains(e.getKey())) {
                 continue;
             }
             // E1 存档终态门：仅 SURROUNDED 且无待收敛重算的列允许落盘光
@@ -1415,7 +1507,10 @@ public class ShadowSeedServer extends MinecraftServer {
                 continue;
             }
             chunk.setLightCorrect(true);
-            io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.markLightReady(pos);
+            String dim = DimensionKey.dimensionOf(e.getKey());
+            if (dim != null) {
+                persistLightReady(dim, pos);
+            }
             any = true;
         }
         if (any) {
@@ -1506,6 +1601,23 @@ public class ShadowSeedServer extends MinecraftServer {
                 io.github.limuqy.mc.hassium.storage.ShadowStorageManager.DEFAULT_FLUSH_TIMEOUT_MS);
     }
 
+
+    public boolean saveChunkToDisk(String dimension, ChunkPos pos, LevelChunk chunk,
+                                   io.github.limuqy.mc.hassium.network.ShadowChunkRole role) {
+        setPersistenceRole(dimension, pos, role == io.github.limuqy.mc.hassium.network.ShadowChunkRole.HALO
+                ? ShadowChunkPersistenceRole.HALO_BLOCKS_ONLY
+                : ShadowChunkPersistenceRole.VISIBLE_FULL_LIGHT);
+        return saveChunkToDisk(dimension, pos, chunk);
+    }
+
+    void setPersistenceRole(String dimension, ChunkPos pos, ShadowChunkPersistenceRole role) {
+        long key = DimensionKey.key(dimension, pos.x, pos.z);
+        if (role == ShadowChunkPersistenceRole.HALO_BLOCKS_ONLY) {
+            haloBlocksOnly.add(key);
+        } else {
+            haloBlocksOnly.remove(key);
+        }
+    }
     public boolean saveChunkToDisk(ChunkPos pos, LevelChunk chunk) {
         return saveChunkToDisk(DimensionKey.OVERWORLD, pos, chunk);
     }
@@ -1545,6 +1657,9 @@ public class ShadowSeedServer extends MinecraftServer {
                 }
             }
             net.minecraft.nbt.CompoundTag nbt = serializeChunkForSave(level(dimension), chunk);
+            if (haloBlocksOnly.contains(DimensionKey.key(dimension, pos.x, pos.z))) {
+                io.github.limuqy.mc.hassium.compat.ShadowChunkNbtCompat.stripLightData(nbt);
+            }
             java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
             net.minecraft.nbt.NbtIo.write(nbt, new java.io.DataOutputStream(baos));
             return baos.toByteArray();
@@ -1584,10 +1699,6 @@ public class ShadowSeedServer extends MinecraftServer {
             chunk.setLightCorrect(false);
             io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.markLightDirty(dimension, pos);
         }
-        if (!ownShutdownInProgress
-                && !ShadowServerRegistry.getInstance().isPreviousShutdownComplete()) {
-            return false;
-        }
         io.github.limuqy.mc.hassium.storage.ShadowStorageManager mgr = storage(dimension);
         if (mgr != null
                 && io.github.limuqy.mc.hassium.storage.ShadowStorageHashes
@@ -1598,7 +1709,7 @@ public class ShadowSeedServer extends MinecraftServer {
         }
         long key = DimensionKey.key(dimension, pos.x, pos.z);
         injectedChunks.remove(key, chunk);
-        unregisterInjectTicket(pos);
+        unregisterInjectTicket(dimension, pos);
         if (mgr != null) {
             mgr.unmountIdleRegions();
         }
@@ -1611,7 +1722,9 @@ public class ShadowSeedServer extends MinecraftServer {
     }
 
     /**
-     * 断连/关停保存：只扫 HashIndex 脏∩注入柱，从 LevelChunk 序列化压缩落盘。
+     * 断连/关停保存：等引擎排空后按当前光层重刷已点亮柱，再刷全部剩余脏柱。
+     * 定时路径仍只刷 mutation；此处必须带上屋檐邻光进层后的终态，否则 R2 会读到
+     * 首次收敛入队时的欠光快照。
      */
     public void saveAll() {
         long saveStartNs = System.nanoTime();
@@ -1624,13 +1737,15 @@ public class ShadowSeedServer extends MinecraftServer {
             int abandoned = 0;
             boolean timedOut = false;
             java.util.concurrent.ConcurrentHashMap<String, io.github.limuqy.mc.hassium.storage.ShadowStorageManager> map = storages;
-            if (map != null && !map.isEmpty()
-                    && (ownShutdownInProgress
-                    || ShadowServerRegistry.getInstance().isPreviousShutdownComplete())) {
+            if (map != null && !map.isEmpty() && canWriteStorage()) {
+                awaitLightQuiet(5_000L);
+                confirmLightsCorrectIfConverged();
+                snapshotLitColumnsForExit();
                 for (io.github.limuqy.mc.hassium.storage.ShadowStorageManager mgr : map.values()) {
+                    mgr.enqueueLightReady();
                     for (int pass = 0; pass < 3; pass++) {
                         io.github.limuqy.mc.hassium.storage.ShadowStorageManager.FlushResult result =
-                                mgr.flush(io.github.limuqy.mc.hassium.storage.ShadowStorageManager
+                                mgr.flushRemaining(io.github.limuqy.mc.hassium.storage.ShadowStorageManager
                                         .DEFAULT_FLUSH_TIMEOUT_MS);
                         savedCount += result.written();
                         abandoned += result.abandoned();
@@ -1639,6 +1754,11 @@ public class ShadowSeedServer extends MinecraftServer {
                             break;
                         }
                     }
+                    io.github.limuqy.mc.hassium.storage.ShadowStorageManager.FlushResult drained =
+                            mgr.drain(io.github.limuqy.mc.hassium.storage.ShadowStorageManager
+                                    .DEFAULT_FLUSH_TIMEOUT_MS);
+                    timedOut |= drained.timedOut();
+                    abandoned += drained.abandoned();
                     mgr.unmountIdleRegions();
                 }
             }
@@ -1654,6 +1774,77 @@ public class ShadowSeedServer extends MinecraftServer {
                     io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.dirtyKeys().size());
         } catch (Throwable t) {
             LOGGER.warn("Hassium: Shadow server save failed", t);
+        }
+    }
+
+    /** 有界等待光照引擎排空，让屋檐跨柱光进入 DataLayer 再快照。 */
+    private void awaitLightQuiet(long timeoutMs) {
+        long deadline = System.currentTimeMillis() + Math.max(0L, timeoutMs);
+        while (!isLightConverged() && System.currentTimeMillis() < deadline) {
+            try {
+                Thread.sleep(20L);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+        }
+    }
+
+    /**
+     * 退出终态：已点亮柱按当前引擎光层再入队（覆盖首次收敛时尚未含邻光的快照）。
+     */
+    private void snapshotLitColumnsForExit() {
+        for (Map.Entry<Long, LevelChunk> e : injectedChunks.entrySet()) {
+            LevelChunk chunk = e.getValue();
+            if (chunk == null || !chunk.isLightCorrect() || haloBlocksOnly.contains(e.getKey())) {
+                continue;
+            }
+            String dim = DimensionKey.dimensionOf(e.getKey());
+            if (dim != null) {
+                persistLightReady(dim, chunk.getPos());
+            }
+        }
+    }
+
+    /**
+     * 定时刷新：光收敛残留补推 + 中途变更入队，不等待 IO。
+     * 客户端 tick 调用；影子端 tickCount 不前进，用墙钟节流。
+     */
+    public void tickStorageFlush() {
+        if (!canWriteStorage()) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        if (now - lastMutationFlushMs < MUTATION_FLUSH_INTERVAL_MS) {
+            return;
+        }
+        lastMutationFlushMs = now;
+        java.util.concurrent.ConcurrentHashMap<String, io.github.limuqy.mc.hassium.storage.ShadowStorageManager> map = storages;
+        if (map == null) {
+            return;
+        }
+        for (io.github.limuqy.mc.hassium.storage.ShadowStorageManager mgr : map.values()) {
+            mgr.enqueueLightReady();
+            mgr.enqueueMutations();
+        }
+    }
+
+    private void persistLightReady(String dimension, ChunkPos pos) {
+        io.github.limuqy.mc.hassium.storage.ShadowStorageManager mgr = storage(dimension);
+        if (mgr != null && canWriteStorage()) {
+            mgr.markLightReady(pos);
+        } else {
+            io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.markLightReady(dimension, pos);
+        }
+    }
+
+    private void enqueueColumnIfWritable(String dimension, ChunkPos pos) {
+        if (!canWriteStorage()) {
+            return;
+        }
+        io.github.limuqy.mc.hassium.storage.ShadowStorageManager mgr = storage(dimension);
+        if (mgr != null) {
+            mgr.enqueue(pos);
         }
     }
 
@@ -1699,23 +1890,17 @@ public class ShadowSeedServer extends MinecraftServer {
     }
 
     /**
-     * 影子服务端主循环：持续驱动 {@link ServerChunkCache#pollTask()}。
-     * <p>
-     * 本 server 的 ServerChunkCache.mainThread 是装配线程（=本循环线程），
-     * pollTask 覆写链 = runDistanceManagerUpdates（提交 worldgen 任务）+ 队列回调，
-     * 等价 GameTestRunner 对 GameTestServer 的 tick 驱动，但不跑完整 tick（无玩家/实体）。
+     * 影子端不跑完整 server tick；每轮必须消费 MinecraftServer 的 execute() 队列与
+     * ServerChunkCache.mainThreadProcessor。前者在无 tick 预算时不会消费后者。
      */
     void runMainLoop() {
         ServerChunkCache cache = (ServerChunkCache) this.overworld().getChunkSource();
-        // 服务端光照任务驱动：1.20.1~1.21.10 的任务邮箱由 ServerLevel.tick 的
-        // tryScheduleUpdate 投递（影子端不跑完整 tick）；1.21.11 ConsecutiveExecutor
-        // 自驱动，此处幂等无害。pre-update 任务（queueSectionData/updateSectionStatus/
-        // propagateLightSources）与传播（runLightUpdates）都经它执行。
         ThreadedLevelLightEngine lightEngine = cache.getLightEngine();
         while (!Thread.currentThread().isInterrupted()) {
             boolean worked;
             try {
-                worked = cache.pollTask();
+                worked = this.pollTask();
+                worked |= cache.pollTask();
             } catch (Throwable ignored) {
                 break; // server 已 halt
             }
@@ -1725,8 +1910,7 @@ public class ShadowSeedServer extends MinecraftServer {
                 // 光照任务驱动失败不影响 worldgen 主循环
             }
             if (!worked) {
-                // managedBlock 同款：pollTask 覆写优先 runDistanceManagerUpdates，
-                // 只有其返回 false 的间隙才消费 mainThreadProcessor 队列；park 100µs 保证高频重试。
+                // 两条原版队列均为空时短暂停驻。
                 LockSupport.parkNanos("hassium-seedgen-main", 100_000L);
             }
         }
@@ -1891,6 +2075,12 @@ public class ShadowSeedServer extends MinecraftServer {
     public void waitUntilNextTick() {
         this.runAllTasks();
     }
+    @Override
+    protected boolean shouldRun(net.minecraft.server.TickTask task) {
+        // 影子端不 tickServer，tickCount 恒定；所有任务均来自本进程的影子调度，须立即执行。
+        return true;
+    }
+
 
     @Override
     public SystemReport fillServerSystemReport(SystemReport systemReport) {

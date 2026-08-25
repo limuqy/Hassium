@@ -65,6 +65,30 @@ class ShadowStorageHashesTest {
     }
 
     @Test
+    @DisplayName("欠光 markLightDirty 不标 lightReady")
+    void markLightDirtyDoesNotSetLightReady() {
+        ChunkPos pos = new ChunkPos(4, 4);
+        ShadowStorageHashes.markLightDirty(pos);
+        long key = DimensionKey.key(DimensionKey.OVERWORLD, pos.x, pos.z);
+        assertTrue(ShadowStorageHashes.isLightDirty(key));
+        assertFalse(ShadowStorageHashes.isLightReady(key));
+    }
+
+    @Test
+    @DisplayName("已落盘后再 markContentDirty 才是 mutation")
+    void mutationOnlyAfterPersisted() {
+        ChunkPos pos = new ChunkPos(5, 5);
+        long key = DimensionKey.key(DimensionKey.OVERWORLD, pos.x, pos.z);
+        ShadowStorageHashes.markContentDirty(pos);
+        assertFalse(ShadowStorageHashes.isMutation(key));
+        ShadowStorageHashes.claimDirty(key);
+        ShadowStorageHashes.markPersisted(key);
+        ShadowStorageHashes.markContentDirty(pos);
+        assertTrue(ShadowStorageHashes.isMutation(key));
+        assertTrue(ShadowStorageHashes.isContentDirty(key));
+    }
+
+    @Test
     @DisplayName("markContentDirty 只改脏位")
     void markContentDirtyIsFlagOnly() {
         ChunkPos pos = new ChunkPos(0, 1);

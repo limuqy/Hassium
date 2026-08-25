@@ -107,6 +107,34 @@ public final class ShadowServerCompat {
     }
 
     /**
+     * 获取注入柱原版 3×3 FULL 屏障。
+     * 原版 ChunkMap 在 playerLoadedChunk 前显式等待中心及一圈邻柱的 FULL future；
+     * 单柱 LIGHT/FULL future 都不足以代表这个首包时机。
+     */
+    public static CompletableFuture<ChunkAccess> requestFullChunk(ServerChunkCache cache, ChunkPos pos) {
+        @SuppressWarnings("unchecked")
+        CompletableFuture<ChunkAccess>[] futures = new CompletableFuture[9];
+        int index = 0;
+        for (int dz = -1; dz <= 1; dz++) {
+            for (int dx = -1; dx <= 1; dx++) {
+                futures[index++] = requestSingleFull(cache, pos.x + dx, pos.z + dz);
+            }
+        }
+        CompletableFuture<ChunkAccess> center = requestSingleFull(cache, pos.x, pos.z);
+        return CompletableFuture.allOf(futures).thenCombine(center, (ignored, result) -> result);
+    }
+
+    private static CompletableFuture<ChunkAccess> requestSingleFull(ServerChunkCache cache, int x, int z) {
+#if MC_VER < MC_1_21_1
+        return cache.getChunkFuture(x, z, ChunkStatus.FULL, false)
+                .thenApply(result -> result.left().orElse(null));
+#else
+        return cache.getChunkFuture(x, z, ChunkStatus.FULL, false)
+                .thenApply(result -> result.orElse(null));
+#endif
+    }
+
+    /**
      * 注入柱 {@code LevelChunk.setBlockState}。
      * {@code < 1.21.5}：第三参 {@code boolean}（{@code false} = 不算邻接更新）；
      * {@code ≥ 1.21.5}：第三参改为 {@code int} flags（与 {@code level.setBlock(..., 3)} 同值）。

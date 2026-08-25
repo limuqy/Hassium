@@ -64,9 +64,7 @@ class ShadowStorageManagerTest {
 
         injected.add(ChunkPos.asLong(pos.x, pos.z));
         ShadowStorageHashes.put(pos, 42L);
-        manager.markContentDirty(pos);
-        ShadowStorageManager.FlushResult flushed = manager.flush(5_000L);
-        assertEquals(1, flushed.written());
+        persistIngest(pos);
         manager.close();
         manager = new ShadowStorageManager(regionDir, pos2 -> nbtPayload.clone(), injected::contains, 1);
 
@@ -77,17 +75,62 @@ class ShadowStorageManagerTest {
     }
 
     @Test
-    @DisplayName("markDirty 不分配 NBT；flush 才 serialize+compress")
-    void markDirtyDoesNotSerializeUntilFlush() {
+    @DisplayName("markDirty 不分配 NBT；光收敛才入队 serialize")
+    void markDirtyDoesNotSerializeUntilLightReady() {
         ChunkPos pos = new ChunkPos(1, 1);
         injected.add(ChunkPos.asLong(pos.x, pos.z));
         ShadowStorageHashes.put(pos, 7L);
         manager.markContentDirty(pos);
         assertEquals(0, serializeCalls.get());
         assertTrue(ShadowStorageHashes.isDirty(pos));
-        ShadowStorageManager.FlushResult result = manager.flush(5_000L);
-        assertEquals(1, result.written());
+        assertEquals(0, manager.flush(5_000L).written(), "首次注入未收敛，flush 不刷");
+        assertEquals(0, serializeCalls.get());
+        manager.markLightReady(pos);
         assertEquals(1, serializeCalls.get());
+        assertFalse(manager.drain(5_000L).timedOut());
+        assertFalse(ShadowStorageHashes.isDirty(pos));
+        assertTrue(ShadowStorageHashes.isPersisted(
+                DimensionKey.key(DimensionKey.OVERWORLD, pos.x, pos.z)));
+    }
+
+    @Test
+    @DisplayName("定时 flush 只刷 mutation；退出 flushRemaining 刷首次注入残留")
+    void flushOnlyWritesMutations() {
+        ChunkPos ingest = new ChunkPos(2, 2);
+        ChunkPos mutated = new ChunkPos(3, 3);
+        injected.add(ChunkPos.asLong(ingest.x, ingest.z));
+        injected.add(ChunkPos.asLong(mutated.x, mutated.z));
+        ShadowStorageHashes.put(ingest, 1L);
+        ShadowStorageHashes.put(mutated, 2L);
+        manager.markContentDirty(ingest);
+        ShadowStorageHashes.markPersisted(
+                DimensionKey.key(DimensionKey.OVERWORLD, mutated.x, mutated.z));
+        manager.markContentDirty(mutated);
+        assertTrue(ShadowStorageHashes.isMutation(
+                DimensionKey.key(DimensionKey.OVERWORLD, mutated.x, mutated.z)));
+        assertFalse(ShadowStorageHashes.isMutation(
+                DimensionKey.key(DimensionKey.OVERWORLD, ingest.x, ingest.z)));
+        assertEquals(1, manager.flush(5_000L).written());
+        assertTrue(ShadowStorageHashes.isDirty(ingest), "首次注入仍等光");
+        assertFalse(ShadowStorageHashes.isDirty(mutated));
+        assertEquals(1, manager.flushRemaining(5_000L).written(), "退出 flushRemaining 应刷首次注入残留");
+        assertFalse(ShadowStorageHashes.isDirty(ingest));
+    }
+
+    @Test
+    @DisplayName("已 persist 的点亮柱退出再 markLightReady 会按当前层重写")
+    void lightReadyAfterPersistRewritesColumn() {
+        ChunkPos pos = new ChunkPos(4, 4);
+        injected.add(ChunkPos.asLong(pos.x, pos.z));
+        ShadowStorageHashes.put(pos, 9L);
+        persistIngest(pos);
+        assertEquals(1, serializeCalls.get());
+        assertTrue(ShadowStorageHashes.isPersisted(
+                DimensionKey.key(DimensionKey.OVERWORLD, pos.x, pos.z)));
+        assertFalse(ShadowStorageHashes.isDirty(pos));
+        manager.markLightReady(pos);
+        assertFalse(manager.drain(5_000L).timedOut());
+        assertEquals(2, serializeCalls.get(), "退出终态快照应再序列化一次");
         assertFalse(ShadowStorageHashes.isDirty(pos));
     }
 
@@ -99,7 +142,7 @@ class ShadowStorageManagerTest {
         ShadowStorageHashes.put(pos, 11L);
         manager.markContentDirty(pos);
         assertFalse(manager.hasUncompressedMirror(pos));
-        manager.flush(5_000L);
+        persistIngest(pos);
         assertFalse(manager.hasUncompressedMirror(pos));
         assertTrue(manager.mountedRegionCount() <= 1);
     }
@@ -126,9 +169,8 @@ class ShadowStorageManagerTest {
         injected.add(ChunkPos.asLong(b.x, b.z));
         ShadowStorageHashes.put(a, 1L);
         ShadowStorageHashes.put(b, 2L);
-        manager.markContentDirty(a);
-        manager.markContentDirty(b);
-        manager.flush(5_000L);
+        persistIngest(a);
+        persistIngest(b);
         var log = manager.snapshotWriteLog();
         assertEquals(2, log.size());
         assertEquals(1, manager.mountedRegionCount());
@@ -141,6 +183,8 @@ class ShadowStorageManagerTest {
         ChunkPos pos = new ChunkPos(5, 5);
         injected.add(ChunkPos.asLong(pos.x, pos.z));
         ShadowStorageHashes.put(pos, 3L);
+        ShadowStorageHashes.markPersisted(
+                DimensionKey.key(DimensionKey.OVERWORLD, pos.x, pos.z));
         manager.markContentDirty(pos);
         manager.testWriteDelayMs = 400L;
         ShadowStorageManager.FlushResult result = manager.flush(50L);
@@ -154,8 +198,7 @@ class ShadowStorageManagerTest {
         ChunkPos pos = new ChunkPos(10, 10);
         injected.add(ChunkPos.asLong(pos.x, pos.z));
         ShadowStorageHashes.put(pos, 99L);
-        manager.markContentDirty(pos);
-        assertEquals(1, manager.flush(5_000L).written());
+        persistIngest(pos);
         injected.clear();
         manager.unmountIdleRegions();
         assertEquals(0, manager.mountedRegionCount());
@@ -182,7 +225,8 @@ class ShadowStorageManagerTest {
             ShadowStorageHashes.clear();
             return nbt;
         }, injected::contains, 1);
-        assertEquals(1, manager.flush(5_000L).written());
+        manager.markLightReady(pos);
+        assertFalse(manager.drain(5_000L).timedOut());
         manager.close();
         manager = new ShadowStorageManager(regionDir, pos2 -> nbtPayload.clone(), injected::contains, 1);
         assertTrue(manager.probeHash(pos, 0xCAFEBABEL).match());
@@ -195,8 +239,7 @@ class ShadowStorageManagerTest {
         ChunkPos pos = new ChunkPos(7, 2);
         injected.add(ChunkPos.asLong(pos.x, pos.z));
         ShadowStorageHashes.put(pos, 0x1111L);
-        manager.markContentDirty(pos);
-        assertEquals(1, manager.flush(5_000L).written());
+        persistIngest(pos);
         injected.clear();
         manager.unmountIdleRegions();
         ShadowStorageHashes.put(pos, 0xDEADL); // 脏表
@@ -211,8 +254,7 @@ class ShadowStorageManagerTest {
         ChunkPos pos = new ChunkPos(3, 1);
         injected.add(ChunkPos.asLong(pos.x, pos.z));
         ShadowStorageHashes.put(pos, 5L);
-        manager.markContentDirty(pos);
-        assertEquals(1, manager.flush(5_000L).written());
+        persistIngest(pos);
         Path file = RegionCache.regionFile(regionDir, pos.x, pos.z);
         byte[] header = java.nio.file.Files.readAllBytes(file);
         header = java.util.Arrays.copyOf(header, RegionCache.SECTOR_SIZE);
@@ -233,9 +275,8 @@ class ShadowStorageManagerTest {
         injected.add(ChunkPos.asLong(b.x, b.z));
         ShadowStorageHashes.put(a, 1L);
         ShadowStorageHashes.put(b, 2L);
-        manager.markContentDirty(a);
-        manager.markContentDirty(b);
-        manager.flush(5_000L);
+        persistIngest(a);
+        persistIngest(b);
         manager.probeHash(a, 1L);
         manager.probeHash(b, 2L);
         assertEquals(1, manager.mountedRegionCount());
@@ -266,5 +307,11 @@ class ShadowStorageManagerTest {
         } finally {
             nether.close();
         }
+    }
+
+    private void persistIngest(ChunkPos pos) {
+        manager.markContentDirty(pos);
+        manager.markLightReady(pos);
+        assertFalse(manager.drain(5_000L).timedOut());
     }
 }

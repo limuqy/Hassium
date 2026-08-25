@@ -14,6 +14,7 @@ import io.github.limuqy.mc.hassium.compat.ResourceLocationCompat;
 import io.github.limuqy.mc.hassium.server.RuntimeServerContext;
 import io.github.limuqy.mc.hassium.utils.DebugLogger;
 import io.github.limuqy.mc.hassium.compat.LevelCompat;
+import io.github.limuqy.mc.hassium.compat.ShadowChunkMapCompat;
 import io.github.limuqy.mc.hassium.utils.TickMonitor;
 import io.github.limuqy.mc.hassium.network.gateway.GatewayPlayerSession;
 import io.github.limuqy.mc.hassium.network.gateway.GatewayServer;
@@ -33,6 +34,7 @@ import net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.server.level.ServerChunkCache;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.biome.Biome;
@@ -126,6 +128,9 @@ public class ServerChunkPushManager {
      * 避免一次性提交数百个任务卡住主线程。
      */
     private final Map<UUID, Deque<ResyncEntry>> pendingResync = new ConcurrentHashMap<>();
+    /** 每玩家 R+1 Halo 窗口；Halo 票据由所有玩家共享引用计数。 */
+    private final Map<UUID, HaloPlayerState> haloPlayers = new ConcurrentHashMap<>();
+    private final Map<HaloTicketKey, Integer> haloTicketReferences = new ConcurrentHashMap<>();
 
     /** resync 待补发条目 */
     private record ResyncEntry(ChunkPos pos, String dimension) {}
@@ -1146,7 +1151,7 @@ public class ServerChunkPushManager {
         if (player == null || pos == null || dimension == null) {
             return;
         }
-        enqueuePushTask(player, pos, dimension, PushKind.FULL);
+        enqueuePushTask(player, pos, dimension, PushKind.FULL_VISIBLE);
     }
 
     /**
@@ -1210,7 +1215,7 @@ public class ServerChunkPushManager {
             }
             queue.enqueue(new PushTask(new ChunkPos(x, z), dimension,
                     new DataRequestTask(new ChunkPos(x, z), dimension, null, 0L),
-                    PushKind.FULL));
+                    PushKind.FULL_VISIBLE));
             pending.remove(packed);
         }
         if (pending.isEmpty()) {
@@ -1341,7 +1346,7 @@ public class ServerChunkPushManager {
     /**
      * 与原版 {@code ChunkMap.isChunkInRange} 一致的视距判定（圆柱近似）。
      */
-    private static boolean isServerChunkInRange(int chunkX, int chunkZ, int centerX, int centerZ, int viewDistance) {
+    static boolean isServerChunkInRange(int chunkX, int chunkZ, int centerX, int centerZ, int viewDistance) {
         int dx = Math.max(0, Math.abs(chunkX - centerX) - 1);
         int dz = Math.max(0, Math.abs(chunkZ - centerZ) - 1);
         long outer = Math.max(0, Math.max(dx, dz) - 1);
@@ -1369,6 +1374,7 @@ public class ServerChunkPushManager {
         long drainQueueNs = 0L;
         for (ServerPlayer player : server.getPlayerList().getPlayers()) {
             flushPlayerHashBatchIfDue(player, now);
+            reconcileHaloWindow(player);
             long t0 = System.nanoTime();
             drainPendingSends(player);
             drainPendingNs += System.nanoTime() - t0;
@@ -1514,7 +1520,7 @@ public class ServerChunkPushManager {
     private void directPushStrippedFull(ServerPlayer player, String dimension, List<ChunkPos> chunks) {
         PlayerPushQueue queue = pushQueues.computeIfAbsent(player.getUUID(), ignored -> new PlayerPushQueue());
         for (ChunkPos pos : chunks) {
-            queue.enqueue(new PushTask(pos, dimension, null, PushKind.FULL));
+            queue.enqueue(new PushTask(pos, dimension, null, PushKind.FULL_VISIBLE));
         }
     }
 
@@ -1953,7 +1959,7 @@ public class ServerChunkPushManager {
     public void enqueueDataRequest(ServerPlayer player, String dimension, List<ChunkPos> chunks) {
         NetworkStats.recordDataRequestReceived();
         for (ChunkPos pos : chunks) {
-            enqueuePushTask(player, pos, dimension, PushKind.FULL);
+            enqueuePushTask(player, pos, dimension, PushKind.FULL_VISIBLE);
         }
     }
 
@@ -1970,7 +1976,7 @@ public class ServerChunkPushManager {
                 chunks.size(), player.getName().getString(), dimension);
         boolean all = true;
         for (ChunkPos pos : chunks) {
-            all &= enqueuePushTask(player, pos, dimension, PushKind.FULL);
+            all &= enqueuePushTask(player, pos, dimension, PushKind.FULL_VISIBLE);
         }
         return all;
     }
@@ -2049,8 +2055,10 @@ public class ServerChunkPushManager {
                 continue;
             }
 
-            // 任务排队期间玩家可能已移出权威视距：转入待命集合，折返后复活；超时才真丢弃
-            if (!isServerChunkInRange(task.pos().x, task.pos().z, playerChunk.x, playerChunk.z, serverVD)) {
+            // Halo 是可见区块原版 LIGHT 的前置边界，允许精确的 R+1 环；其余任务仍按 R。
+            int taskViewDistance = task.kind() == PushKind.FULL_HALO ? serverVD + 1 : serverVD;
+            if (!isServerChunkInRange(task.pos().x, task.pos().z,
+                    playerChunk.x, playerChunk.z, taskViewDistance)) {
                 Map<Long, DeferredTask> deferred = deferredChunks.computeIfAbsent(
                         playerId, k -> new ConcurrentHashMap<>());
                 if (deferred.size() >= MAX_DEFERRED_PER_PLAYER) {
@@ -2063,7 +2071,7 @@ public class ServerChunkPushManager {
                         new DeferredTask(task.pos(), task.dimension(), System.currentTimeMillis()));
                 DebugLogger.info(LogType.NETWORK,
                         "[PROCESS_QUEUE] Deferring chunk {} (out of range, vd={}) — retry when back in range",
-                        task.pos(), serverVD);
+                        task.pos(), taskViewDistance);
                 continue;
             }
 
@@ -2185,6 +2193,11 @@ public class ServerChunkPushManager {
                 return;
             }
 
+            // Halo 不参与 bloom/hash 协商：它必须在可见柱 LIGHT 前到达影子端。
+            if (task.kind() == PushKind.FULL_HALO) {
+                compressAndSend(player, task, chunkData, work.contentHash(), work.sender());
+                return;
+            }
             // 先判定后计算：bloom miss 且 session 无记录 → 只 encode 直发剥光全量（不算 hash）
             boolean bloomMissNoRecord =
                     shouldPushFull(player, task.pos(), task.dimension())
@@ -2214,8 +2227,10 @@ public class ServerChunkPushManager {
             return;
         }
         try {
+            ShadowChunkRole role = task.kind() == PushKind.FULL_HALO
+                    ? ShadowChunkRole.HALO : ShadowChunkRole.VISIBLE;
             ChunkCompressionHandler.CompressedChunkData compressed =
-                    ChunkCompressionHandler.compressChunkData(chunkData, task.pos().x, task.pos().z);
+                    ChunkCompressionHandler.compressChunkData(chunkData, task.pos().x, task.pos().z, role);
             if (compressed == null) {
                 Constants.LOG.warn("[PROCESS_QUEUE] Failed to compress chunk {}", task.pos());
                 return;
@@ -2408,6 +2423,7 @@ public class ServerChunkPushManager {
         playerLightComputeSupported.remove(playerId);
         seedGenDisabledPlayers.remove(playerId);
         seedGenFallbackCounts.remove(playerId);
+        releaseHaloWindow(haloPlayers.remove(playerId));
     }
 
     /**
@@ -2431,6 +2447,9 @@ public class ServerChunkPushManager {
         playerLightComputeSupported.clear();
         seedGenDisabledPlayers.clear();
         seedGenFallbackCounts.clear();
+        haloPlayers.values().forEach(this::releaseHaloWindow);
+        haloPlayers.clear();
+        haloTicketReferences.clear();
         if (pushPool != null) {
             pushPool.shutdownNow();
         }
@@ -2501,8 +2520,92 @@ public class ServerChunkPushManager {
         }
     }
 
-    /** 推送任务类型：全量数据 / 元数据快照 / SeedRef。 */
-    enum PushKind { FULL, METADATA, SEED_REF }
+    private void reconcileHaloWindow(ServerPlayer player) {
+        if (!Boolean.TRUE.equals(playerLightComputeSupported.get(player.getUUID()))) {
+            releaseHaloWindow(haloPlayers.remove(player.getUUID()));
+            return;
+        }
+        ServerLevel level = PlayerCompat.getServerLevel(player);
+        if (level == null) {
+            return;
+        }
+        ServerChunkCache chunkSource = level.getChunkSource();
+        String dimension = LevelCompat.getDimensionId(level);
+        Set<Long> desired = ShadowHaloWindow.positions(player.chunkPosition(), PlayerCompat.getViewDistance(player));
+        HaloPlayerState state = haloPlayers.get(player.getUUID());
+        if (state != null && (state.chunkSource != chunkSource || !state.dimension.equals(dimension))) {
+            releaseHaloWindow(state);
+            state = null;
+        }
+        if (state == null) {
+            state = new HaloPlayerState(dimension, chunkSource);
+        }
+        for (long packed : Set.copyOf(state.desired)) {
+            if (!desired.contains(packed)) {
+                releaseHaloTicket(chunkSource, packed);
+                state.desired.remove(packed);
+                state.queued.remove(packed);
+                state.sentContentHashes.remove(packed);
+                state.dirty.remove(packed);
+            }
+        }
+        for (long packed : desired) {
+            if (state.desired.add(packed)) {
+                retainHaloTicket(chunkSource, packed);
+                state.dirty.add(packed);
+            }
+            if (state.queued.add(packed)) {
+                enqueuePushTask(player, new ChunkPos(ChunkPos.getX(packed), ChunkPos.getZ(packed)),
+                        dimension, PushKind.FULL_HALO);
+            }
+        }
+        haloPlayers.put(player.getUUID(), state);
+    }
+
+    private void retainHaloTicket(ServerChunkCache chunkSource, long packed) {
+        HaloTicketKey key = new HaloTicketKey(chunkSource, packed);
+        if (haloTicketReferences.merge(key, 1, Integer::sum) == 1) {
+            ShadowChunkMapCompat.addFullUnknownTicket(chunkSource,
+                    new ChunkPos(ChunkPos.getX(packed), ChunkPos.getZ(packed)));
+        }
+    }
+
+    private void releaseHaloWindow(HaloPlayerState state) {
+        if (state != null) {
+            state.desired.forEach(packed -> releaseHaloTicket(state.chunkSource, packed));
+        }
+    }
+
+    private void releaseHaloTicket(ServerChunkCache chunkSource, long packed) {
+        HaloTicketKey key = new HaloTicketKey(chunkSource, packed);
+        haloTicketReferences.computeIfPresent(key, (ignored, references) -> {
+            if (references == 1) {
+                ShadowChunkMapCompat.removeFullUnknownTicket(chunkSource,
+                        new ChunkPos(ChunkPos.getX(packed), ChunkPos.getZ(packed)));
+                return null;
+            }
+            return references - 1;
+        });
+    }
+
+    private record HaloTicketKey(ServerChunkCache chunkSource, long packedPos) {}
+
+    private static final class HaloPlayerState {
+        private final String dimension;
+        private final ServerChunkCache chunkSource;
+        private final Set<Long> desired = ConcurrentHashMap.newKeySet();
+        private final Set<Long> queued = ConcurrentHashMap.newKeySet();
+        private final Map<Long, Long> sentContentHashes = new ConcurrentHashMap<>();
+        private final Set<Long> dirty = ConcurrentHashMap.newKeySet();
+
+        private HaloPlayerState(String dimension, ServerChunkCache chunkSource) {
+            this.dimension = dimension;
+            this.chunkSource = chunkSource;
+        }
+    }
+
+    /** 推送任务类型：可见全量、仅影子端 Halo、元数据快照、SeedRef。 */
+    enum PushKind { FULL_VISIBLE, FULL_HALO, METADATA, SEED_REF }
 
     /**
      * 封批产物：主线程已完成世界快照（chunkData 或 packet），消费线程只做 encode/hash/ZSTD。
@@ -2610,7 +2713,11 @@ public class ServerChunkPushManager {
                 return false;
             }
 
-            tasks.addLast(task);
+            if (task.kind() == PushKind.FULL_HALO) {
+                tasks.addFirst(task);
+            } else {
+                tasks.addLast(task);
+            }
             return true;
         }
 

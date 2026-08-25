@@ -133,6 +133,17 @@ public class MixinClientTick {
             // 忽略
         }
 
+        // 缓存存储定时刷新：只刷中途变更 + 光收敛残留补推（首次注入已在光收敛时入队）
+        try {
+            io.github.limuqy.mc.hassium.network.seedgen.ShadowSeedServer shadow =
+                    io.github.limuqy.mc.hassium.network.seedgen.ShadowServerRegistry.getInstance().get();
+            if (shadow != null) {
+                shadow.tickStorageFlush();
+            }
+        } catch (Exception e) {
+            // 忽略
+        }
+
         // 影子光照回传落地：帧尾渲染前，影子端（启用态）算好的光统一落地，
         // 黑块窗口 = 0（apply 后立即落地）。随后单柱失败兜底（注入失败/超时柱走
         // 客户端重算；正常流程不触发）。

@@ -184,6 +184,15 @@ public class NetworkStats {
     }
 
     /**
+     * 记录服务端直推（server_push）且实际落地的权威区块。
+     * 直推不经过全量请求/缓存命中/本地生成/增量任一分母入口，独立计数并入分母。
+     */
+    public static void recordServerPushApplied(int chunkX, int chunkZ) {
+        if (!enabled) return;
+        metrics.recordServerPushApplied(net.minecraft.world.level.ChunkPos.asLong(chunkX, chunkZ));
+    }
+
+    /**
      * 线缆出站帧字节（管线 encode 后 out 增量）。
      * 仅应被 {@code ZstdContextEncoder} / {@code SkipAwareZstdEncoder} 调用。
      */

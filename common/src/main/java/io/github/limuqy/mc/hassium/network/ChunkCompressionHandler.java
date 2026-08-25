@@ -24,6 +24,11 @@ public class ChunkCompressionHandler {
      * @return 压缩后的数据包
      */
     public static CompressedChunkData compressChunkData(byte[] chunkData, int chunkX, int chunkZ) {
+        return compressChunkData(chunkData, chunkX, chunkZ, ShadowChunkRole.VISIBLE);
+    }
+
+    public static CompressedChunkData compressChunkData(byte[] chunkData, int chunkX, int chunkZ,
+                                                         ShadowChunkRole role) {
         long startTime = System.nanoTime();
 
         try {
@@ -42,7 +47,7 @@ public class ChunkCompressionHandler {
                     chunkX, chunkZ, chunkData.length, compressed.length,
                     String.format("%.2f", compressionRatio), String.format("%.2f", durationMs));
 
-            return new CompressedChunkData(chunkX, chunkZ, compressed, chunkData.length, algorithm);
+            return new CompressedChunkData(chunkX, chunkZ, compressed, chunkData.length, algorithm, role);
 
         } catch (Exception e) {
             Constants.LOG.error("Hassium/Network: Failed to compress chunk [{}, {}]", chunkX, chunkZ, e);
@@ -136,13 +141,21 @@ public class ChunkCompressionHandler {
         public final byte[] compressedData;
         public final int originalSize;
         public final String algorithm;
+        public final ShadowChunkRole role;
+
         public CompressedChunkData(int chunkX, int chunkZ, byte[] compressedData,
                                    int originalSize, String algorithm) {
+            this(chunkX, chunkZ, compressedData, originalSize, algorithm, ShadowChunkRole.VISIBLE);
+        }
+
+        public CompressedChunkData(int chunkX, int chunkZ, byte[] compressedData,
+                                   int originalSize, String algorithm, ShadowChunkRole role) {
             this.chunkX = chunkX;
             this.chunkZ = chunkZ;
-            this.compressedData = compressedData;
+            this.compressedData = java.util.Objects.requireNonNull(compressedData, "compressedData");
             this.originalSize = originalSize;
-            this.algorithm = algorithm;
+            this.algorithm = java.util.Objects.requireNonNull(algorithm, "algorithm");
+            this.role = java.util.Objects.requireNonNull(role, "role");
         }
 
         public byte[] encode() {
@@ -152,6 +165,7 @@ public class ChunkCompressionHandler {
                 dos.writeInt(chunkX);
                 dos.writeInt(chunkZ);
                 dos.writeInt(originalSize);
+                dos.writeByte(role.wireValue());
                 dos.writeUTF(algorithm);
                 dos.writeInt(compressedData.length);
                 dos.write(compressedData);
@@ -170,6 +184,7 @@ public class ChunkCompressionHandler {
                 int chunkX = dis.readInt();
                 int chunkZ = dis.readInt();
                 int originalSize = dis.readInt();
+                ShadowChunkRole role = ShadowChunkRole.fromWire(dis.readByte());
                 String algorithm = dis.readUTF();
                 int compressedLength = dis.readInt();
                 if (compressedLength < 0 || compressedLength > dis.available()) {
@@ -180,7 +195,7 @@ public class ChunkCompressionHandler {
                 if (dis.available() != 0) {
                     throw new IllegalArgumentException("Malformed compressed chunk payload");
                 }
-                return new CompressedChunkData(chunkX, chunkZ, compressedData, originalSize, algorithm);
+                return new CompressedChunkData(chunkX, chunkZ, compressedData, originalSize, algorithm, role);
             } catch (Exception e) {
                 Constants.LOG.error("Failed to decode compressed chunk data", e);
                 return null;

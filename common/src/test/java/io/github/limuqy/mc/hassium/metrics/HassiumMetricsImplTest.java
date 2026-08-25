@@ -69,6 +69,19 @@ class HassiumMetricsImplTest {
     }
 
     @Test
+    void clientAppliedBytesIncludeServerPush() {
+        HassiumMetricsImpl metrics = new HassiumMetricsImpl();
+
+        metrics.recordFullChunkRequests(1, 16_384, false);
+        metrics.recordServerPushApplied(99L);
+
+        assertEquals(2, metrics.getClientAppliedChunkCount());
+        assertEquals(32_768, metrics.getClientAppliedChunkBytes());
+        assertEquals(1, metrics.getServerPushAppliedCount());
+        assertEquals(1, metrics.getClientLandedChunkCount());
+    }
+
+    @Test
     void clientLandedChunkCountDeduplicatesPositions() {
         HassiumMetricsImpl metrics = new HassiumMetricsImpl();
 

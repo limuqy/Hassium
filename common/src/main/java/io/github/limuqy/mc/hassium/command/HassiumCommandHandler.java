@@ -72,13 +72,15 @@ public class HassiumCommandHandler {
         long deltaBytes = metrics.getCacheDeltaSavedBytes();
         long shardBytes = metrics.getCacheShardBytes();
         long fullRequests = metrics.getFullChunkRequestCount();
-        long appliedBytes = metrics.getFullChunkRequestBytes() + fullHitBytes + deltaBytes;
+        long serverPush = metrics.getServerPushAppliedCount();
+        long appliedBytes = metrics.getFullChunkRequestBytes() + fullHitBytes + deltaBytes
+                + serverPush * NetworkStats.ESTIMATED_CHUNK_BYTES;
         StringBuilder sb = new StringBuilder();
         sb.append("§6=== Hassium 客户端统计 ===§r\n");
         sb.append(formatBandwidthLine(metrics)).append('\n');
         sb.append(formatChunkCacheLine(fullHitCount, fullHitBytes, deltaCount, deltaBytes,
                 shardBytes, appliedBytes)).append('\n');
-        sb.append(formatChunkLoadLine(metrics, fullRequests, localCount)).append('\n');
+        sb.append(formatChunkLoadLine(metrics, fullRequests + serverPush, localCount)).append('\n');
         sb.append(formatLightCacheLine(metrics)).append('\n');
         sb.append(formatOvdLine()).append('\n');
         sb.append(formatSavingsLine(metrics)).append('\n');
@@ -123,14 +125,16 @@ public class HassiumCommandHandler {
                 MetricsTextFormatter.formatBytes(appliedBytes));
     }
 
-    private static String formatChunkLoadLine(HassiumMetricsImpl m, long fullRequests, long localCount) {
-        long newRequests = m.getNewFullChunkRequestCount();
+    private static String formatChunkLoadLine(HassiumMetricsImpl m, long loadedCount, long localCount) {
+        long serverPush = m.getServerPushAppliedCount();
+        long newRequests = m.getNewFullChunkRequestCount() + serverPush;
         long staleRequests = m.getStaleFullChunkRequestCount();
-        long newRequestBytes = m.getNewFullChunkRequestBytes();
+        long newRequestBytes = m.getNewFullChunkRequestBytes()
+                + serverPush * NetworkStats.ESTIMATED_CHUNK_BYTES;
         long staleRequestBytes = m.getStaleFullChunkRequestBytes();
         long localBytes = m.getLocallyGeneratedChunkBytes();
         return String.format("§e区块加载：§r%d（新增 %d/%s，过期 %d/%s，本地 %d/%s）",
-                fullRequests,
+                loadedCount,
                 newRequests, MetricsTextFormatter.formatBytes(newRequestBytes),
                 staleRequests, MetricsTextFormatter.formatBytes(staleRequestBytes),
                 localCount, MetricsTextFormatter.formatBytes(localBytes));
@@ -162,9 +166,9 @@ public class HassiumCommandHandler {
         // 「命中」，不再单列。
         // 命中率按内容等价值字节计（口径与 getLightCacheHitRate 一致，对齐区块缓存行）：
         // （直连命中字节 + 影子复用字节）/（命中 + 本地重算）。影子端本会话重算的光
-        // （远程全量注入 / 分段增量 / LightDelta / 磁盘光脏续算）在光屏障提交时记
-        // lightCacheMiss——权威区块未收敛光/无光不算命中；OVD/renderOnly 柱由本地影子端
-        // 全量服务，记复用不进重算分母（无 MOD 时服务端本来也不推该环带）。
+        // （远程全量注入 / 分段增量 / 磁盘光脏续算）按柱记一次 lightCacheMiss。
+        // 邻柱 LIGHT_ONLY 收敛补光不进重算分母（按引擎任务计会把一柱刷成几十次）。
+        // OVD/renderOnly 柱由本地影子端全量服务，记复用不进重算分母。
         long lightHit = m.getLightCacheHitCount() + m.getLightReuseShadowCount();
         long lightHitBytes = m.getLightCacheHitBytes() + m.getLightReuseShadowBytes();
         long lightMiss = m.getLightCacheMissCount();

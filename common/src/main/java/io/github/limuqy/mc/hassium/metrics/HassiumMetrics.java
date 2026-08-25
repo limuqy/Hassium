@@ -152,24 +152,30 @@ public interface HassiumMetrics {
 
     /**
      * 客户端应用来源柱数（冒烟结构门禁 / 区块加载对照）：
-     * {@code 全量请求 + 缓存全命中 + SeedGen 本地生成 + 分段增量}。
+     * {@code 全量请求 + 缓存全命中 + SeedGen 本地生成 + 分段增量 + 服务端直推}。
+     * 直推（server_push）不经过前四项任一入口，是独立第五分量。
      * 缓存命中率分母用 {@link #getClientAppliedChunkBytes()}，不含本地生成。
      */
     default long getClientAppliedChunkCount() {
         return getFullChunkRequestCount()
                 + getCacheHitFullChunkCount()
                 + getLocallyGeneratedChunkCount()
-                + getCacheDeltaCount();
+                + getCacheDeltaCount()
+                + getServerPushAppliedCount();
     }
+
+    /** 服务端直推且实际落地的区块数（独立分母分量；reset 清零）。 */
+    long getServerPushAppliedCount();
 
     /**
      * 客户端应用内容等价值字节（缓存命中率分母）：
-     * 全量请求 + 缓存全命中 + 分段增量基线柱。不含 SeedGen 本地生成。
+     * 全量请求 + 缓存全命中 + 分段增量基线柱 + 服务端直推。不含 SeedGen 本地生成。
      */
     default long getClientAppliedChunkBytes() {
         return getFullChunkRequestBytes()
                 + getCacheHitFullChunkBytes()
-                + getCacheDeltaSavedBytes();
+                + getCacheDeltaSavedBytes()
+                + getServerPushAppliedCount() * NetworkStats.ESTIMATED_CHUNK_BYTES;
     }
 
     /**
@@ -512,7 +518,8 @@ public interface HassiumMetrics {
      * （直连命中 + 影子复用）/（命中 + 本地重算）。剥光协商下直连命中
      * （{@link #getLightCacheHitCount()}）恒 0，实际复用由影子链路
      * （{@link #getLightReuseShadowBytes()}）承担；本地重算（光标脏缓存命中）
-     * 计入 {@link #getLightCacheMissBytes()}。OVD/renderOnly 柱不进本口径
+     * 计入 {@link #getLightCacheMissBytes()}。邻柱 LIGHT_ONLY 补光不计入。
+     * OVD/renderOnly 柱不进本口径
      * （无 MOD 时服务端本来也不推，同 {@link #getNoModReceiveBytes()} 的排除原则，
      * 其光照由本地影子端全量服务、复用率恒视作 100%）。
      */

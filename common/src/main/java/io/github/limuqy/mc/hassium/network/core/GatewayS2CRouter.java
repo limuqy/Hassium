@@ -92,7 +92,13 @@ public final class GatewayS2CRouter implements Consumer<Packet<?>> {
                             .applyLoadingScreenBlocksOnly(packet), pos);
                 }
             }
-            io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.submit(pos, packet);
+            io.github.limuqy.mc.hassium.metrics.NetworkStats.recordChunkReceived(
+                    io.github.limuqy.mc.hassium.metrics.VanillaZlibEstimator.estimate(
+                            (int) io.github.limuqy.mc.hassium.metrics.NetworkStats.ESTIMATED_CHUNK_BYTES));
+            io.github.limuqy.mc.hassium.network.seedgen.ShadowVanillaLightPipeline.submitVisible(
+                    io.github.limuqy.mc.hassium.network.seedgen.ShadowVanillaLightPipeline.currentDimension(),
+                    pos, packet,
+                    io.github.limuqy.mc.hassium.network.ClientChunkHandler.TraceOrigin.SERVER_PUSH);
             return;
         }
         Minecraft mc = Minecraft.getInstance();

@@ -1,6 +1,10 @@
 package io.github.limuqy.mc.hassium.network.seedgen;
 
 import io.github.limuqy.mc.hassium.compat.ShadowChunkMapCompat;
+import io.github.limuqy.mc.hassium.metrics.NetworkStats;
+import io.github.limuqy.mc.hassium.network.ShadowChunkRole;
+import io.github.limuqy.mc.hassium.utils.DimensionKey;
+import net.minecraft.world.level.ChunkPos;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -39,11 +43,11 @@ class ShadowLightComputeTimingRegressionTest {
     }
 
     @Test
-    @DisplayName("客户端已有柱时欠光首包必须暂缓，防先亮后暗")
+    @DisplayName("欠光暂缓覆盖只针对已落地影子全量包；加载屏占位柱仍推首包")
     void defersIncompleteOverwriteWhenClientAlreadyHasChunk() {
         assertTrue(ShadowLightCompute.shouldDeferIncompleteClientOverwrite(true, false));
         assertFalse(ShadowLightCompute.shouldDeferIncompleteClientOverwrite(false, false),
-                "客户端尚无柱：欠光首包仍可推（先暗后亮）");
+                "尚未影子落地（含加载屏占位）：欠光首包仍可推，避免着火区 R1 空洞");
         assertFalse(ShadowLightCompute.shouldDeferIncompleteClientOverwrite(true, true));
         assertFalse(ShadowLightCompute.shouldDeferIncompleteClientOverwrite(false, true));
     }
@@ -164,6 +168,27 @@ class ShadowLightComputeTimingRegressionTest {
                 "SeedGen generateChunk 期间允许 worldgen");
         assertFalse(ShadowChunkMapCompat.shouldPassthroughGenerationStep(true, false, true),
                 "EMPTY 不透传，走 scheduleChunkLoad");
+        assertFalse(ShadowChunkMapCompat.shouldPassthroughGenerationStep(true, false, false, true),
+                "INITIALIZE_LIGHT/LIGHT 必须执行原版任务");
+    }
+
+    @Test
+    @DisplayName("剥光注入柱 persisted=FULL 且 isLightCorrect=false：native FULL 不能当已算光")
+    void strippedInjectNativeFullDoesNotMeanLighted() {
+        assertFalse(ShadowLightCompute.nativeFullMeansLighted(true, false),
+                "FULL + 欠光：vanilla 只 load，不会 generate LIGHT");
+        assertTrue(ShadowLightCompute.nativeFullMeansLighted(true, true),
+                "磁盘已亮柱：native FULL 才等于已算光");
+        assertFalse(ShadowLightCompute.nativeFullMeansLighted(false, false));
+    }
+
+    @Test
+    @DisplayName("Halo 算光后不得发布到 ClientLevel")
+    void haloMustNotPublishToClient() {
+        assertFalse(ShadowLightCompute.shouldPublishToClient(true));
+        assertTrue(ShadowLightCompute.shouldPublishToClient(false));
+        assertTrue(ShadowVanillaLightPipeline.isRenderable(ShadowChunkRole.VISIBLE));
+        assertFalse(ShadowVanillaLightPipeline.isRenderable(ShadowChunkRole.HALO));
     }
 
     @Test
@@ -181,7 +206,7 @@ class ShadowLightComputeTimingRegressionTest {
     }
 
     @Test
-    @DisplayName("UNKNOWN FULL 票集合加/卸对称")
+    @DisplayName("UNKNOWN FULL 票集合加卸与 Halo 首包邻域对称")
     void injectTicketAddRemoveAreSymmetric() {
         java.util.Set<Long> keys = new java.util.HashSet<>();
         long a = net.minecraft.world.level.ChunkPos.asLong(3, -7);
@@ -239,18 +264,119 @@ class ShadowLightComputeTimingRegressionTest {
     }
 
     @Test
-    @DisplayName("林火 LightDelta 不得作废整柱首包；只作废 LIGHT_ONLY")
+    @DisplayName("可见柱 native 入站：inject 当时记全量+光照重算，同柱只记一次")
+    void visibleNetworkIngressAccountsOnceBeforeNativeLight() {
+        NetworkStats.reset();
+        NetworkStats.setEnabled(true);
+        try {
+            ChunkPos pos = new ChunkPos(7, -3);
+            ShadowLightCompute.accountVisibleNetworkIngress(DimensionKey.OVERWORLD, pos);
+            ShadowLightCompute.accountVisibleNetworkIngress(DimensionKey.OVERWORLD, pos);
+
+            assertEquals(1, NetworkStats.getMetrics().getFullChunkRequestCount());
+            assertEquals(1, NetworkStats.getMetrics().getNewFullChunkRequestCount());
+            assertEquals(NetworkStats.ESTIMATED_CHUNK_BYTES,
+                    NetworkStats.getMetrics().getFullChunkRequestBytes());
+            assertEquals(1, NetworkStats.getMetrics().getLightCacheMissCount());
+            assertEquals(NetworkStats.ESTIMATED_LIGHT_BYTES,
+                    NetworkStats.getMetrics().getLightCacheMissBytes());
+        } finally {
+            ShadowLightCompute.onDisconnect();
+            NetworkStats.reset();
+            NetworkStats.setEnabled(false);
+        }
+    }
+
+    @Test
+    @DisplayName("hash 全命中按柱去重：磁盘后再走内存不得记两次")
+    void cacheFullHitAccountsOncePerColumn() {
+        NetworkStats.reset();
+        NetworkStats.setEnabled(true);
+        try {
+            ChunkPos pos = new ChunkPos(4, 9);
+            assertTrue(ShadowLightCompute.accountCacheFullHit(DimensionKey.OVERWORLD, pos));
+            assertFalse(ShadowLightCompute.accountCacheFullHit(DimensionKey.OVERWORLD, pos),
+                    "同一柱磁盘命中后再收到 hash 会走内存命中，全命中不得翻倍");
+            assertEquals(1, NetworkStats.getMetrics().getCacheHitFullChunkCount());
+            assertEquals(NetworkStats.ESTIMATED_CHUNK_BYTES,
+                    NetworkStats.getMetrics().getCacheHitFullChunkBytes());
+        } finally {
+            ShadowLightCompute.onDisconnect();
+            NetworkStats.reset();
+            NetworkStats.setEnabled(false);
+        }
+    }
+
+    @Test
+    @DisplayName("光照按柱去重；LIGHT_ONLY 邻柱补光不进重算")
+    void lightColumnAccountsOnceAndSkipsLightOnly() {
+        NetworkStats.reset();
+        NetworkStats.setEnabled(true);
+        try {
+            ChunkPos pos = new ChunkPos(-2, 8);
+            assertTrue(ShadowLightCompute.accountLightColumn(DimensionKey.OVERWORLD, pos, false));
+            assertFalse(ShadowLightCompute.accountLightColumn(DimensionKey.OVERWORLD, pos, false));
+            assertFalse(ShadowLightCompute.accountLightColumn(DimensionKey.OVERWORLD, pos, true),
+                    "同柱已记重算后不得再记复用");
+            assertEquals(1, NetworkStats.getMetrics().getLightCacheMissCount());
+            assertEquals(0, NetworkStats.getMetrics().getLightReuseShadowCount());
+            assertFalse(ShadowLightCompute.shouldAccountLightBarrierMetric(true),
+                    "邻柱 LIGHT_ONLY 不是区块级光照缓存事件");
+            assertTrue(ShadowLightCompute.shouldAccountLightBarrierMetric(false));
+        } finally {
+            ShadowLightCompute.onDisconnect();
+            NetworkStats.reset();
+            NetworkStats.setEnabled(false);
+        }
+    }
+
+    @Test
+    @DisplayName("林火 LightDelta / 分段增量不得作废整柱首包；只作废 LIGHT_ONLY")
     void lightDeltaDoesNotSupersedeFullChunkBarrier() {
         assertFalse(ShadowLightCompute.isSupersededByNewerWork(true, false, true),
                 "整柱 PENDING/GENERATED/DELTA 在途时 LightDelta 只排队，finishLight 后再 relight");
+        assertFalse(ShadowLightCompute.isSupersededByNewerWork(true, false, false),
+                "section delta 不算 hasBlockWork：岩浆/着火方块蔓延不得取消首包");
         assertTrue(ShadowLightCompute.isSupersededByNewerWork(true, true, false),
-                "新方块投递才取消在途整柱");
+                "整柱重推（pending/generated）才取消在途整柱");
         assertTrue(ShadowLightCompute.isSupersededByNewerWork(true, true, true));
         assertTrue(ShadowLightCompute.isSupersededByNewerWork(false, false, true),
                 "后续 LightDelta 取消过时的 LIGHT_ONLY");
         assertTrue(ShadowLightCompute.isSupersededByNewerWork(false, true, false));
-        assertFalse(ShadowLightCompute.isSupersededByNewerWork(true, false, false));
         assertFalse(ShadowLightCompute.isSupersededByNewerWork(false, false, false));
+    }
+
+    @Test
+    @DisplayName("首包：本柱 lightChunk 成功即可发布，邻柱林火不得挡住")
+    void firstPacketPublishesWhenOwnLightChunkOk() {
+        assertTrue(ShadowLightCompute.firstPacketLightReady(true, false, false),
+                "邻柱 LIGHT_ONLY 在途时仍发首包");
+        assertFalse(ShadowLightCompute.firstPacketLightReady(false, true, false),
+                "本柱 lightChunk 失败不得发完备首包");
+        assertTrue(ShadowLightCompute.firstPacketLightReady(true, true, false));
+        assertFalse(ShadowLightCompute.firstPacketLightReady(true, false, true),
+                "LIGHT_ONLY 仍要邻域 idle");
+        assertTrue(ShadowLightCompute.firstPacketLightReady(true, true, true));
+    }
+
+    @Test
+    @DisplayName("有未发布首包 waiter 时林火不得占满光管道")
+    void lightOnlyYieldsToWaitingFirstPackets() {
+        assertFalse(ShadowLightCompute.canStartLightOnlyWhileFirstPacketsWait(true));
+        assertTrue(ShadowLightCompute.canStartLightOnlyWhileFirstPacketsWait(false));
+    }
+
+    @Test
+    @DisplayName("隔离预览：lightChunk 已提交仍推；仅影子已落地或屏障结束才丢")
+    void isolatedPreviewStillPushesWhileLightChunkInFlight() {
+        assertTrue(ShadowLightCompute.shouldPushIsolatedPreview(false, false, true),
+                "屏障仍在（含已提交 lightChunk）且未影子落地：推预览填空洞");
+        assertFalse(ShadowLightCompute.shouldPushIsolatedPreview(true, false, true),
+                "已落地影子全量包：丢预览，防盖暗");
+        assertFalse(ShadowLightCompute.shouldPushIsolatedPreview(false, true, true),
+                "已被整柱重推作废");
+        assertFalse(ShadowLightCompute.shouldPushIsolatedPreview(false, false, false),
+                "屏障已结束：等收敛包");
     }
 
     @Test

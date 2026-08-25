@@ -16,6 +16,7 @@ import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.LongPredicate;
 import net.minecraft.world.level.ChunkPos;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -24,8 +25,9 @@ import org.slf4j.LoggerFactory;
  * 影子缓存存储管理器：脏位 + 按 region 串行写压缩 .mca。
  * <p>
  * 活柱工作集仍是 {@code LevelChunk}。本类不保留未压缩 NBT 镜像。
- * {@link #markContentDirty} / {@link #markLightReady} 只改 HashIndex 脏位；
- * {@link #flush} 才从注入柱序列化压缩落盘。
+ * 光收敛 {@link #markLightReady} 立即快照 NBT 并入 RegionWorker 队列；
+ * {@link #flush} / 定时刷新只刷中途变更（{@code mutation}）；
+ * 退出 {@link #flushRemaining} 刷全部剩余脏柱。
  * <p>
  * <b>多维度兼容</b>：每个 manager 绑定一个维度（{@link #dimension()}），HashIndex
  * 键走 {@link DimensionKey#key(String, int, int)} 复合键；regionDir 仍由构造方给
@@ -40,7 +42,7 @@ public final class ShadowStorageManager implements AutoCloseable {
 
     @FunctionalInterface
     public interface ColumnSerializer {
-        /** 注入柱的未压缩 NBT；未注入或失败返回 null。仅 flush 调用。 */
+        /** 注入柱的未压缩 NBT；未注入或失败返回 null。flush / enqueue 调用。 */
         byte[] serialize(ChunkPos pos);
     }
 
@@ -77,6 +79,8 @@ public final class ShadowStorageManager implements AutoCloseable {
     private final ConcurrentHashMap<Long, RegionCache.Image> images = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<Long, RegionWorker> workers = new ConcurrentHashMap<>();
     private final AtomicInteger decompressCount = new AtomicInteger();
+    private final AtomicInteger outstandingWrites = new AtomicInteger();
+    private final Object drainMonitor = new Object();
     private final List<ChunkPos> writeLog = new ArrayList<>();
     private volatile boolean closed;
     /** 测试钩子：worker 写盘前睡眠，用于 flush 超时。 */
@@ -113,6 +117,7 @@ public final class ShadowStorageManager implements AutoCloseable {
 
     public void markLightReady(ChunkPos pos) {
         ShadowStorageHashes.markLightReady(dimension, pos);
+        enqueue(pos);
     }
 
     /**
@@ -200,62 +205,76 @@ public final class ShadowStorageManager implements AutoCloseable {
     }
 
     /**
-     * 对 dirty∩injected 从 serializer 取 NBT、提交对应 RegionWorker 压缩写盘。超时放弃。
+     * 光收敛即时入队：认领脏位、快照 NBT、提交 RegionWorker，不等待 IO。
+     * 未注入 / 未脏 / 已关闭则 no-op。
      */
-    public FlushResult flush(long timeoutMs) {
+    public void enqueue(ChunkPos pos) {
         if (closed) {
-            return new FlushResult(0, 0, true);
+            return;
         }
-        List<PendingWrite> pending = new ArrayList<>();
-        // 只刷本维度脏键；复合键反解坐标后以裸 posKey 查注入表（注入表签名由 T2 收口）。
-        for (Long key : ShadowStorageHashes.dirtyKeys(dimension)) {
-            int cx = DimensionKey.chunkXOf(key);
-            int cz = DimensionKey.chunkZOf(key);
-            if (!injected.test(ChunkPos.asLong(cx, cz))) {
-                continue;
-            }
-            boolean content = ShadowStorageHashes.isContentDirty(key);
-            boolean light = ShadowStorageHashes.isLightDirty(key);
-            if (!ShadowStorageHashes.claimDirty(key)) {
-                continue;
-            }
-            ChunkPos pos = new ChunkPos(cx, cz);
-            Long hash = ShadowStorageHashes.get(dimension, pos);
-            byte[] nbt = serializer.serialize(pos);
-            if (nbt == null) {
-                ShadowStorageHashes.restoreDirty(key, content, light);
-                continue;
-            }
-            if (hash == null) {
-                hash = ShadowStorageHashes.get(dimension, pos);
-            }
-            // 钉死 hash：worker 跑之前 HashIndex 被新会话 clear() 也不丢 0x48 头。
-            pending.add(new PendingWrite(pos, nbt, content, light, hash));
+        PendingWrite write = claimAndSerialize(pos);
+        if (write != null) {
+            submitAsync(List.of(write));
         }
-        return submitAndWait(pending, timeoutMs);
     }
 
-    /** T5 单柱：若仍脏则序列化压缩写盘。 */
+    /** 光收敛残留：把仍挂 lightReady 的注入柱入队（写 gate 刚放行时的补推）。 */
+    public void enqueueLightReady() {
+        enqueueMatching(ShadowStorageHashes::isLightReady);
+    }
+
+    /** 中途变更入队（定时刷新；不等待 IO）。 */
+    public void enqueueMutations() {
+        enqueueMatching(ShadowStorageHashes::isMutation);
+    }
+
+    /**
+     * 对 mutation∩injected 从 serializer 取 NBT、提交对应 RegionWorker 压缩写盘并等待。
+     * 定时刷新用：首次注入、尚未光收敛的柱不在此列。
+     */
+    public FlushResult flush(long timeoutMs) {
+        return flushMatching(timeoutMs, ShadowStorageHashes::isMutation);
+    }
+
+    /**
+     * 退出用：刷本维度全部剩余脏柱（首次注入残留 / 欠光 / lightReady / mutation）。
+     * 欠光柱按当时 {@code isLightCorrect} 写 isLightOn，R2 读盘会续算。
+     */
+    public FlushResult flushRemaining(long timeoutMs) {
+        return flushMatching(timeoutMs, ShadowStorageHashes::isDirty);
+    }
+
+    /** 等待异步入队写盘结束（退出 saveAll 排空队列）。 */
+    public FlushResult drain(long timeoutMs) {
+        long deadline = System.currentTimeMillis() + Math.max(0L, timeoutMs);
+        synchronized (drainMonitor) {
+            while (outstandingWrites.get() > 0) {
+                long remaining = deadline - System.currentTimeMillis();
+                if (remaining <= 0L) {
+                    return new FlushResult(0, outstandingWrites.get(), true);
+                }
+                try {
+                    drainMonitor.wait(remaining);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return new FlushResult(0, outstandingWrites.get(), true);
+                }
+            }
+        }
+        return new FlushResult(0, 0, false);
+    }
+
+    /** T5 单柱：若仍脏则序列化压缩写盘（卸载路径，含尚未光收敛的首次注入柱）。 */
     public boolean flushColumn(ChunkPos pos, long timeoutMs) {
         long key = DimensionKey.key(dimension, pos.x, pos.z);
         if (!ShadowStorageHashes.isDirty(key)) {
             return true;
         }
-        boolean content = ShadowStorageHashes.isContentDirty(key);
-        boolean light = ShadowStorageHashes.isLightDirty(key);
-        ShadowStorageHashes.claimDirty(key);
-        Long hash = ShadowStorageHashes.get(dimension, pos);
-        byte[] nbt = serializer.serialize(pos);
-        if (nbt == null) {
-            ShadowStorageHashes.restoreDirty(key, content, light);
-            return false;
+        PendingWrite write = claimAndSerialize(pos);
+        if (write == null) {
+            return !ShadowStorageHashes.isDirty(key);
         }
-        if (hash == null) {
-            hash = ShadowStorageHashes.get(dimension, pos);
-        }
-        FlushResult result = submitAndWait(
-                List.of(new PendingWrite(pos, nbt, content, light, hash)),
-                timeoutMs);
+        FlushResult result = submitAndWait(List.of(write), timeoutMs);
         return result.abandoned() == 0 && !result.timedOut();
     }
 
@@ -306,6 +325,7 @@ public final class ShadowStorageManager implements AutoCloseable {
     @Override
     public void close() {
         closed = true;
+        drain(1_000L);
         for (RegionWorker worker : workers.values()) {
             worker.shutdown();
         }
@@ -318,6 +338,102 @@ public final class ShadowStorageManager implements AutoCloseable {
             }
         }
         images.clear();
+    }
+
+    private void enqueueMatching(LongPredicate filter) {
+        if (closed) {
+            return;
+        }
+        List<PendingWrite> pending = new ArrayList<>();
+        for (Long key : ShadowStorageHashes.dirtyKeys(dimension)) {
+            if (!filter.test(key)) {
+                continue;
+            }
+            PendingWrite write = claimAndSerialize(
+                    new ChunkPos(DimensionKey.chunkXOf(key), DimensionKey.chunkZOf(key)));
+            if (write != null) {
+                pending.add(write);
+            }
+        }
+        submitAsync(pending);
+    }
+
+    private FlushResult flushMatching(long timeoutMs, LongPredicate filter) {
+        if (closed) {
+            return new FlushResult(0, 0, true);
+        }
+        List<PendingWrite> pending = new ArrayList<>();
+        for (Long key : ShadowStorageHashes.dirtyKeys(dimension)) {
+            if (!filter.test(key)) {
+                continue;
+            }
+            PendingWrite write = claimAndSerialize(
+                    new ChunkPos(DimensionKey.chunkXOf(key), DimensionKey.chunkZOf(key)));
+            if (write != null) {
+                pending.add(write);
+            }
+        }
+        return submitAndWait(pending, timeoutMs);
+    }
+
+    private PendingWrite claimAndSerialize(ChunkPos pos) {
+        long key = DimensionKey.key(dimension, pos.x, pos.z);
+        if (!injected.test(ChunkPos.asLong(pos.x, pos.z))) {
+            return null;
+        }
+        boolean content = ShadowStorageHashes.isContentDirty(key);
+        boolean light = ShadowStorageHashes.isLightDirty(key);
+        boolean mutation = ShadowStorageHashes.isMutation(key);
+        boolean lightReady = ShadowStorageHashes.isLightReady(key);
+        if (!ShadowStorageHashes.claimDirty(key)) {
+            return null;
+        }
+        Long hash = ShadowStorageHashes.get(dimension, pos);
+        byte[] nbt = serializer.serialize(pos);
+        if (nbt == null) {
+            ShadowStorageHashes.restoreDirty(key, content, light, mutation, lightReady);
+            return null;
+        }
+        if (hash == null) {
+            hash = ShadowStorageHashes.get(dimension, pos);
+        }
+        return new PendingWrite(pos, nbt, content, light, mutation, lightReady, hash);
+    }
+
+    private void submitAsync(List<PendingWrite> pending) {
+        if (pending.isEmpty()) {
+            return;
+        }
+        Map<Long, List<PendingWrite>> byRegion = new HashMap<>();
+        for (PendingWrite write : pending) {
+            byRegion.computeIfAbsent(RegionCache.regionKey(write.pos.x, write.pos.z), k -> new ArrayList<>())
+                    .add(write);
+        }
+        AtomicInteger written = new AtomicInteger();
+        for (var e : byRegion.entrySet()) {
+            RegionWorker worker = worker(e.getKey());
+            List<PendingWrite> batch = e.getValue();
+            outstandingWrites.incrementAndGet();
+            try {
+                worker.submit(() -> {
+                    try {
+                        writeBatch(batch, written);
+                    } finally {
+                        completeWrite();
+                    }
+                });
+            } catch (RejectedExecutionException ex) {
+                restoreAll(batch);
+                completeWrite();
+            }
+        }
+    }
+
+    private void completeWrite() {
+        outstandingWrites.decrementAndGet();
+        synchronized (drainMonitor) {
+            drainMonitor.notifyAll();
+        }
     }
 
     private FlushResult submitAndWait(List<PendingWrite> pending, long timeoutMs) {
@@ -415,7 +531,8 @@ public final class ShadowStorageManager implements AutoCloseable {
             } catch (Exception e) {
                 LOGGER.warn("Hassium: region write failed for {}", write.pos, e);
                 ShadowStorageHashes.restoreDirty(
-                        DimensionKey.key(dimension, write.pos.x, write.pos.z), write.content, write.light);
+                        DimensionKey.key(dimension, write.pos.x, write.pos.z),
+                        write.content, write.light, write.mutation, write.lightReady);
             }
         }
         if (image == null || regionFile == null || encoded.isEmpty()) {
@@ -424,6 +541,9 @@ public final class ShadowStorageManager implements AutoCloseable {
         try {
             image.save(regionFile);
             written.addAndGet(encoded.size());
+            for (PendingWrite write : encoded) {
+                ShadowStorageHashes.markPersisted(dimension, write.pos);
+            }
             synchronized (writeLog) {
                 for (PendingWrite write : encoded) {
                     writeLog.add(write.pos);
@@ -438,7 +558,8 @@ public final class ShadowStorageManager implements AutoCloseable {
     private void restoreAll(List<PendingWrite> batch) {
         for (PendingWrite write : batch) {
             ShadowStorageHashes.restoreDirty(
-                    DimensionKey.key(dimension, write.pos.x, write.pos.z), write.content, write.light);
+                    DimensionKey.key(dimension, write.pos.x, write.pos.z),
+                    write.content, write.light, write.mutation, write.lightReady);
         }
     }
 
@@ -488,7 +609,8 @@ public final class ShadowStorageManager implements AutoCloseable {
         return false;
     }
 
-    private record PendingWrite(ChunkPos pos, byte[] nbt, boolean content, boolean light, Long hash) {}
+    private record PendingWrite(ChunkPos pos, byte[] nbt, boolean content, boolean light,
+                                boolean mutation, boolean lightReady, Long hash) {}
 
     /** 每 {@code r.x.z} 单线程队列。 */
     static final class RegionWorker {

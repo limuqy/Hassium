@@ -14,16 +14,17 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 class ChunkPayloadWireFormatTest {
 
     @Test
-    void compressedChunkDataCarriesOnlyItsEstablishedPayloadFields() throws Exception {
+    void compressedChunkDataCarriesItsRoleInTheWireFormat() throws Exception {
         byte[] compressed = {7, 8, 9};
         ChunkCompressionHandler.CompressedChunkData payload =
-                new ChunkCompressionHandler.CompressedChunkData(-5, 12, compressed, 4096, "zstd");
+                new ChunkCompressionHandler.CompressedChunkData(-5, 12, compressed, 4096, "zstd", ShadowChunkRole.HALO);
         byte[] encoded = payload.encode();
 
         try (DataInputStream input = new DataInputStream(new ByteArrayInputStream(encoded))) {
             assertEquals(-5, input.readInt());
             assertEquals(12, input.readInt());
             assertEquals(4096, input.readInt());
+            assertEquals(ShadowChunkRole.HALO.wireValue(), input.readByte());
             assertEquals("zstd", input.readUTF());
             assertEquals(3, input.readInt());
             assertArrayEquals(compressed, input.readNBytes(3));
@@ -37,6 +38,7 @@ class ChunkPayloadWireFormatTest {
         assertEquals(12, decoded.chunkZ);
         assertEquals(4096, decoded.originalSize);
         assertEquals("zstd", decoded.algorithm);
+        assertEquals(ShadowChunkRole.HALO, decoded.role);
         assertArrayEquals(compressed, decoded.compressedData);
     }
 

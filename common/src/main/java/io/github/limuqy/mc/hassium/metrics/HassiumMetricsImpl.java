@@ -48,6 +48,12 @@ public class HassiumMetricsImpl implements HassiumMetrics {
     private final AtomicLong clientAppliedChunkCount = new AtomicLong(0);
     private final java.util.Set<Long> clientAppliedChunkKeys = java.util.concurrent.ConcurrentHashMap.newKeySet();
     /**
+     * 服务端主动直推（server_push）且客户端实际落地的区块数。
+     * 该路径不经过全量请求/缓存命中/本地生成/增量任一入口，
+     * 是「客户端应用区块」分母的独立分量（与 {@link #clientAppliedChunkKeys} 同去重键）。
+     */
+    private final AtomicLong serverPushAppliedCount = new AtomicLong(0);
+    /**
      * 网络已推送完整区块、客户端仍改用本地缓存命中的区块（count/bytes）。
      * 对缓存命中率是命中；对流量节省不是「少推」，必须从缓存节省项中扣除，防止
      * 与 {@code vanillaBytesReceived}（已含该完整区块 wire）双重计数。
@@ -257,8 +263,15 @@ public class HassiumMetricsImpl implements HassiumMetrics {
         return getFullChunkRequestCount()
                 + getCacheHitFullChunkCount()
                 + getLocallyGeneratedChunkCount()
-                + getCacheDeltaCount();
+                + getCacheDeltaCount()
+                + serverPushAppliedCount.get();
     }
+
+    @Override
+    public long getServerPushAppliedCount() {
+        return serverPushAppliedCount.get();
+    }
+
 
     @Override
     public long getClientLandedChunkCount() {
@@ -472,6 +485,9 @@ public class HassiumMetricsImpl implements HassiumMetrics {
         cacheLoadEligibleBytes.set(0);
         cacheHitFullChunkBytes.set(0);
         cacheHitFullChunkCount.set(0);
+        clientAppliedChunkCount.set(0);
+        clientAppliedChunkKeys.clear();
+        serverPushAppliedCount.set(0);
         cacheDeltaSavedBytes.set(0);
         cacheDeltaCount.set(0);
         cacheShardBytes.set(0);
@@ -483,8 +499,6 @@ public class HassiumMetricsImpl implements HassiumMetrics {
         staleFullChunkRequestBytes.set(0);
         locallyGeneratedChunkCount.set(0);
         locallyGeneratedChunkBytes.set(0);
-        clientAppliedChunkCount.set(0);
-        clientAppliedChunkKeys.clear();
         cacheHitNetworkReplacedCount.set(0);
         cacheHitNetworkReplacedBytes.set(0);
         networkBytesSaved.set(0);
@@ -685,13 +699,20 @@ public class HassiumMetricsImpl implements HassiumMetrics {
         }
     }
 
-    /**
-     * 记录一个权威区块已成功应用到客户端世界（按 {@code chunkPosKey} 去重）。
-     * renderOnly（OVD）区块不得调用本方法。
-     */
     public void recordClientChunkApplied(long chunkPosKey) {
         if (clientAppliedChunkKeys.add(chunkPosKey)) {
             clientAppliedChunkCount.incrementAndGet();
+        }
+    }
+
+    /**
+     * 直推（server_push）落地独立分量：按键去重后自增，并入「客户端应用区块」分母。
+     * 直推不经过全量请求/缓存命中/本地生成/增量任一入口，是该分母的第五个独立来源。
+     */
+    public void recordServerPushApplied(long chunkPosKey) {
+        if (clientAppliedChunkKeys.add(chunkPosKey)) {
+            clientAppliedChunkCount.incrementAndGet();
+            serverPushAppliedCount.incrementAndGet();
         }
     }
 

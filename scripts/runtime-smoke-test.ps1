@@ -23,7 +23,7 @@ param(
     # 20s 覆盖 maxChunksPerTick=4 的稳态批队列消费；10s 在 1.21+ 会稳定截断
     # 正常加载流，导致 landed 不能反映完整首屏覆盖。
     [int]$DelayMs = 20000,
-    [int]$ReconnectDelayMs = 3000,
+    [int]$ReconnectDelayMs = 1500,
     # 客户端进服等待超时（0=不覆盖，用 ClientSmokeTest 默认 120s）。调长 -DelayMs
     # 时必须同步调大（classic 模式 ROUND1 等待 delayMs*2，超时从客户端启动算起）。
     [int]$JoinTimeoutMs = 0,

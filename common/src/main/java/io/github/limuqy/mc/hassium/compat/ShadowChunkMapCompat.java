@@ -60,20 +60,21 @@ public final class ShadowChunkMapCompat {
     public static boolean shouldShortCircuitScheduleLoad(boolean shadowContext, boolean injectedPresent) {
         return shadowContext && injectedPresent;
     }
-
-    /**
-     * 非 EMPTY 步在注入票路径上改为透传（含 LIGHT/FULL，以免与我们的屏障双算光，
-     * 也禁止噪声地形）。EMPTY 仍走 {@code scheduleChunkLoad}（注入表短路）。
-     */
-    public static boolean shouldPassthroughGenerationStep(boolean shadowContext, boolean worldgenAllowed,
-                                                          boolean emptyStatus) {
-        return shadowContext && !worldgenAllowed && !emptyStatus;
-    }
-
     public static boolean isEmptyStatus(ChunkStatus status) {
         return status == ChunkStatus.EMPTY;
     }
 
+
+    /** 除 LIGHT 外透传注入柱的地形步骤；LIGHT 必须执行原版任务。 */
+    public static boolean shouldPassthroughGenerationStep(boolean shadowContext, boolean worldgenAllowed,
+                                                          boolean emptyStatus, boolean lightStatus) {
+        return shadowContext && !worldgenAllowed && !emptyStatus && !lightStatus;
+    }
+
+    public static boolean shouldPassthroughGenerationStep(boolean shadowContext, boolean worldgenAllowed,
+                                                          boolean emptyStatus) {
+        return shouldPassthroughGenerationStep(shadowContext, worldgenAllowed, emptyStatus, false);
+    }
     public static boolean isFullOrAfter(ChunkStatus status) {
         return status != null && status.isOrAfter(ChunkStatus.FULL);
     }
@@ -105,34 +106,54 @@ public final class ShadowChunkMapCompat {
         return CompletableFuture.completedFuture(asImposter(chunk));
     }
 
-    public static int fullTicketLevel() {
-        return net.minecraft.server.level.ChunkLevel.byStatus(ChunkStatus.FULL);
+    public static int ticketLevel(ChunkStatus status) {
+        return net.minecraft.server.level.ChunkLevel.byStatus(status);
     }
 
-    public static void addFullUnknownTicket(ServerChunkCache cache, ChunkPos pos) {
-        if (cache == null || pos == null) {
+    public static void addUnknownTicket(ServerChunkCache cache, ChunkPos pos, ChunkStatus status) {
+        if (cache == null || pos == null || status == null) {
             return;
         }
-        int level = fullTicketLevel();
 #if MC_VER < MC_1_21_5
-        // ≤1.21.4：DistanceManager.addTicket(TicketType, ChunkPos, int, ChunkPos)
-        cache.chunkMap.getDistanceManager().addTicket(TicketType.UNKNOWN, pos, level, pos);
+        cache.chunkMap.getDistanceManager().addTicket(TicketType.UNKNOWN, pos, ticketLevel(status), pos);
 #else
-        // ≥1.21.5：TicketStorage 重构，ServerChunkCache.addTicketWithRadius（radius 0 → ticket level = ChunkLevel.byStatus(FULL)；UNKNOWN 不含 SIMULATION 位）
+        // 1.21.5+ exposes only the radius API for UNKNOWN; LIGHT/FULL resolve to
+        // the same zero-radius holder ticket and the requested status comes from lightFuture.
         cache.addTicketWithRadius(TicketType.UNKNOWN, pos, 0);
 #endif
     }
 
-    public static void removeFullUnknownTicket(ServerChunkCache cache, ChunkPos pos) {
-        if (cache == null || pos == null) {
+    public static void removeUnknownTicket(ServerChunkCache cache, ChunkPos pos, ChunkStatus status) {
+        if (cache == null || pos == null || status == null) {
             return;
         }
-        int level = fullTicketLevel();
 #if MC_VER < MC_1_21_5
-        cache.chunkMap.getDistanceManager().removeTicket(TicketType.UNKNOWN, pos, level, pos);
+        cache.chunkMap.getDistanceManager().removeTicket(TicketType.UNKNOWN, pos, ticketLevel(status), pos);
 #else
         cache.removeTicketWithRadius(TicketType.UNKNOWN, pos, 0);
 #endif
+    }
+
+    public static void addFullUnknownTicket(ServerChunkCache cache, ChunkPos pos) {
+        addUnknownTicket(cache, pos, ChunkStatus.FULL);
+    }
+
+    public static void removeFullUnknownTicket(ServerChunkCache cache, ChunkPos pos) {
+        removeUnknownTicket(cache, pos, ChunkStatus.FULL);
+    }
+    /**
+     * 原版首次区块包在中心及一圈邻柱均为 FULL 后发送。
+     * Halo 是可见柱的该邻域，必须与可见柱同持 FULL ticket；
+     * INITIALIZE_LIGHT 只足以参与 lightChunk，无法满足原版首包时机。
+     */
+    public static void addShadowRoleTicket(ServerChunkCache cache, ChunkPos pos,
+                                           io.github.limuqy.mc.hassium.network.ShadowChunkRole role) {
+        addUnknownTicket(cache, pos, ChunkStatus.FULL);
+    }
+
+    public static void removeShadowRoleTicket(ServerChunkCache cache, ChunkPos pos,
+                                              io.github.limuqy.mc.hassium.network.ShadowChunkRole role) {
+        removeUnknownTicket(cache, pos, ChunkStatus.FULL);
     }
 
     /**

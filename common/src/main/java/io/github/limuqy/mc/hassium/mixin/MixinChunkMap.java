@@ -127,7 +127,8 @@ public class MixinChunkMap {
         if (!ShadowChunkMapCompat.shouldPassthroughGenerationStep(
                 RuntimeServerContext.isShadowServerContext(),
                 ShadowChunkMapCompat.isWorldgenAllowed(),
-                ShadowChunkMapCompat.isEmptyStatus(status))) {
+                ShadowChunkMapCompat.isEmptyStatus(status),
+                status == ChunkStatus.INITIALIZE_LIGHT || status == ChunkStatus.LIGHT)) {
             return;
         }
         ChunkAccess parent = holder.getChunkIfPresentUnchecked(status.getParent());
@@ -167,7 +168,8 @@ public class MixinChunkMap {
             return null;
         }
         if (!ShadowChunkMapCompat.shouldPassthroughGenerationStep(true, false,
-                ShadowChunkMapCompat.isEmptyStatus(status))) {
+                ShadowChunkMapCompat.isEmptyStatus(status),
+                status == ChunkStatus.INITIALIZE_LIGHT || status == ChunkStatus.LIGHT)) {
             return null;
         }
         return holder.getLastAvailable();
