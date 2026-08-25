@@ -249,7 +249,11 @@ public final class ShadowLightCompute {
                 new ThreadPoolExecutor.DiscardOldestPolicy());
     }
 
-    /** 与注入/hash 比对/apply 共用同一把 per-chunk 锁。 */
+    /**
+     * 与注入/hash 比对/apply/落盘序列化共用同一把 per-chunk 锁。
+     * {@code injectChunk.replaceWithPacketData} 与 {@code ChunkSerializer.pack}
+     * 必须互斥，否则 1.20.1 PalettedContainer ThreadingDetector 会崩影子端。
+     */
     public static void withChunkLock(ChunkPos pos, Runnable action) {
         synchronized (chunkLock(pos)) {
             action.run();
@@ -981,12 +985,12 @@ public final class ShadowLightCompute {
                                 accountLightColumn(dimension, pos, true);
                             }
                             long memoryKey = DimensionKey.key(dimension, pos.x, pos.z);
+                            collectHitReceipt(hits, pos);
                             if (alreadyShadowApplied(memoryKey)) {
                                 DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
                                         "[SHADOW_CHUNK] Skip redundant full push ({}, {}): memory hit, client already applied",
                                         pos.x, pos.z);
                                 scheduleBeRefreshOnHashHit(dimension, pos, true, beImmediate);
-                                hits.add(pos);
                                 continue;
                             }
                             // 回传统一走 generated → consumeLoop 光屏障（submitLightBatch）：
@@ -1049,12 +1053,12 @@ public final class ShadowLightCompute {
                             accountLightColumn(dimension, pos, true);
                         }
                         long diskKey = DimensionKey.key(dimension, pos.x, pos.z);
+                        collectHitReceipt(hits, pos);
                         if (alreadyShadowApplied(diskKey)) {
                             DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
                                     "[SHADOW_CHUNK] Skip redundant full push ({}, {}): disk hit, client already applied",
                                     pos.x, pos.z);
                             scheduleBeRefreshOnHashHit(dimension, pos, true, beImmediate);
-                            hits.add(pos);
                             continue;
                         }
                         scheduleBeRefreshOnHashHit(dimension, pos, false, beImmediate);
@@ -1073,7 +1077,8 @@ public final class ShadowLightCompute {
             misses.add(pos);
         }
         if (!hits.isEmpty()) {
-            // 契约6：hit 柱收集后回发 RESULT_HIT 空柱回执（服务端据此释放 reservation）。
+            // 契约6：hash 命中（含尚未落地、仍要本地回传）回发 RESULT_HIT 空柱回执，
+            // 服务端释放 pending-confirm。HIT 帧不得带柱列表，也不能当 MISS 拉全量。
             io.github.limuqy.mc.hassium.network.ClientMetadataHandler
                     .sendChunkDataResult(dimension, hits);
         }
@@ -1097,6 +1102,17 @@ public final class ShadowLightCompute {
             }
         }
         return leftover;
+    }
+
+    /**
+     * hash 命中必须进 HIT 回执列表。b629fd0 引入回执时只在 alreadyShadowApplied
+     * 跳过重复推的分支 add，本地仍要 generated 回传的命中从未进列表，R2 会 5s 超时 FORCE_FULL。
+     */
+    static void collectHitReceipt(List<ChunkPos> hits, ChunkPos pos) {
+        if (hits == null || pos == null) {
+            return;
+        }
+        hits.add(pos);
     }
 
     /**

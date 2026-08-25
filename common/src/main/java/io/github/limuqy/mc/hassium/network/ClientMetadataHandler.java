@@ -463,7 +463,7 @@ public class ClientMetadataHandler {
 
     /**
      * 影子端 hash 比对完成后回发回执：hit 柱以空列表 + RESULT_HIT 发送
-     * （ShadowLightCompute 后台线程调用）。
+     * （ShadowLightCompute 后台线程调用）。空列表 HIT 不是拉取请求。
      */
     public static void sendChunkDataResult(String dimension, List<ChunkPos> hits) {
         if (hits == null || hits.isEmpty()) {
@@ -485,7 +485,10 @@ public class ClientMetadataHandler {
             request.encode(buf);
             Services.NETWORK_MANAGER.sendChunkDataRequest(buf);
             sent = true;
-            NetworkStats.recordDataRequestsSent(chunks.size());
+            // HIT 空柱回执只收敛 pending-confirm，不得记成全量拉取。
+            if (request.requestsFullChunks()) {
+                NetworkStats.recordDataRequestsSent(chunks.size());
+            }
         } catch (Exception e) {
             DebugLogger.error("[CHUNK_HASH] Failed to send chunk data frame", e);
         } finally {

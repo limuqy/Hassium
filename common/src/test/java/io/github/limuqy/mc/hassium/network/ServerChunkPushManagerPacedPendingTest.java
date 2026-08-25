@@ -81,8 +81,10 @@ class ServerChunkPushManagerPacedPendingTest {
                 "非 pending 的 miss 不是二次出口");
 
         long sentAt = 1_000L;
-        assertFalse(ServerChunkPushManager.isPendingConfirmExpired(sentAt, sentAt + 5_000L));
-        assertTrue(ServerChunkPushManager.isPendingConfirmExpired(sentAt, sentAt + 5_001L));
+        long timeout = ServerChunkPushManager.PENDING_CONFIRM_TIMEOUT_MS;
+        assertEquals(10_000L, timeout);
+        assertFalse(ServerChunkPushManager.isPendingConfirmExpired(sentAt, sentAt + timeout));
+        assertTrue(ServerChunkPushManager.isPendingConfirmExpired(sentAt, sentAt + timeout + 1L));
     }
 
     @Test
@@ -137,11 +139,13 @@ class ServerChunkPushManagerPacedPendingTest {
     void hitDoesNotRequestFullChunks_mustStillReachConfirmHandler() {
         ChunkDataRequestC2SPacket hit = new ChunkDataRequestC2SPacket(
                 "minecraft:overworld", List.of(), ChunkDataRequestC2SPacket.RESULT_HIT);
-        assertFalse(hit.requestsFullChunks());
+        assertFalse(hit.requestsFullChunks(), "HIT 空柱回执不得当成拉取全量");
         ChunkDataRequestC2SPacket miss = new ChunkDataRequestC2SPacket(
                 "minecraft:overworld", List.of(new net.minecraft.world.level.ChunkPos(0, 0)),
                 ChunkDataRequestC2SPacket.RESULT_MISS);
         assertTrue(miss.requestsFullChunks());
+        assertFalse(ServerChunkPushManager.shouldPushFullOnConfirmResult(
+                hit.result(), true), "服务端收到 HIT 即使曾 pending 也不得 FORCE_FULL");
     }
 
     @Test

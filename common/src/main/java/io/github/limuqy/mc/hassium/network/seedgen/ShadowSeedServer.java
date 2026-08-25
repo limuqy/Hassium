@@ -368,6 +368,11 @@ public class ShadowSeedServer extends MinecraftServer {
     /**
      * 注入一个服务端区块包到指定维度（任意线程可调）：键走
      * {@link DimensionKey} 复合键；hash/脏位/热度均带维度。
+     * <p>
+     * {@code replaceWithPacketData} 写 PalettedContainer，必须与
+     * {@link #serializeInjectedColumn} 持同一把 {@code chunkLock}。1.20.1
+     * ThreadingDetector 否则会 {@code Accessing PalettedContainer from multiple threads}
+     * （region worker pack vs 解压线程 read）。
      */
     public boolean injectChunk(String dimension, ChunkPos pos, ClientboundLevelChunkWithLightPacket packet,
                                io.github.limuqy.mc.hassium.network.ShadowChunkRole role) {
@@ -385,52 +390,9 @@ public class ShadowSeedServer extends MinecraftServer {
                         pos.x, pos.z, dimension);
                 return false;
             }
-            LevelChunk chunk = new LevelChunk(level, pos); // 空壳，不 worldgen
-            // FULL 票扩散后本柱可能已有 ProtoChunk holder。replaceWithPacketData 会走
-            // initializeLightSources / BE → ServerLevel.getChunk，把 Proto 强转 LevelChunk。
-            // 必须先让 getChunk mixin 命中本柱，decode 失败再还原。
-            this.injectedChunks.put(key, chunk);
-            injectedRoles.put(key, role);
+            LevelChunk chunk = ShadowLightCompute.withChunkLock(pos, () ->
+                    decodeInjectedPacketLocked(dimension, key, pos, role, level, packet));
             updateInjectTicket(dimension, pos, previousRole, role);
-            ClientboundLevelChunkPacketData data = packet.getChunkData();
-            // 显式把 section 读游标复位到 0：getReadBuffer() 返回的是包内 byte[] 的
-            // 新包装，正常应本来就是 0，但这里不依赖该假设——防止某些 Netty/FriendlyByteBuf
-            // 路径把 readerIndex 留在尾部导致整柱 section 全部被跳过（区块只剩高度图/空气）。
-            FriendlyByteBuf sectionBuf = data.getReadBuffer();
-            sectionBuf.readerIndex(0);
-            int sectionBytes = sectionBuf.readableBytes();
-            chunk.replaceWithPacketData(sectionBuf, data.getHeightmaps(),
-                    data.getBlockEntitiesTagsConsumer(pos.x, pos.z));
-            int nonAirSections = 0;
-            for (net.minecraft.world.level.chunk.LevelChunkSection section : chunk.getSections()) {
-                if (!section.hasOnlyAir()) {
-                    nonAirSections++;
-                }
-            }
-            // 防御：包内确实有 section 字节却解析成整柱空气时，用全新的 LevelChunk 和
-            // 全新的 read buffer 再试一次（不沿用可能已被推进/污染的包装）。
-            if (nonAirSections == 0 && sectionBytes > 0) {
-                DebugLogger.warn(DebugLogger.LogType.ASYNC,
-                        "[SHADOW_INJECT] Empty sections detected for ({}, {}), retrying with fresh read buffer "
-                                + "(sections={}, sectionBytes={}, heightmapKeys={})",
-                        pos.x, pos.z, chunk.getSections().length, sectionBytes, data.getHeightmaps().size());
-                chunk = new LevelChunk(level, pos);
-                this.injectedChunks.put(key, chunk);
-                FriendlyByteBuf retryBuf = data.getReadBuffer();
-                retryBuf.readerIndex(0);
-                chunk.replaceWithPacketData(retryBuf, data.getHeightmaps(),
-                        data.getBlockEntitiesTagsConsumer(pos.x, pos.z));
-                nonAirSections = 0;
-                for (net.minecraft.world.level.chunk.LevelChunkSection section : chunk.getSections()) {
-                    if (!section.hasOnlyAir()) {
-                        nonAirSections++;
-                    }
-                }
-            }
-            DebugLogger.debug(DebugLogger.LogType.ASYNC,
-                    "[SHADOW_INJECT] pos=({},{}) sections={} nonAirSections={} sectionBytes={} heightmapKeys={}",
-                    pos.x, pos.z, chunk.getSections().length, nonAirSections, sectionBytes,
-                    data.getHeightmaps().size());
             ShadowLightProbe.onInjected(dimension, pos, chunk);
             boolean fresh = previous == null;
             if (!fresh) {
@@ -442,19 +404,6 @@ public class ShadowSeedServer extends MinecraftServer {
                 // lightChunk 直接初始化。
                 clearChunkLight(pos, chunk);
             }
-            // 网络注入：packet 内容可能与磁盘表 hash 不同，必须现算并覆盖。
-            // 读盘柱走 injectLoadedChunk，hash 已由 MixinRegionFile 回填，禁止在此重复现算。
-            try {
-                long contentHash = io.github.limuqy.mc.hassium.cache.ChunkContentHashUtil
-                        .combineSectionHashes(io.github.limuqy.mc.hassium.cache.ChunkContentHashUtil
-                                .computeSectionHashes(chunk));
-                io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.put(dimension, pos, contentHash);
-            } catch (Throwable hashError) {
-                LOGGER.debug("Hassium: Shadow contentHash compute failed for {}, skip hash write", pos);
-            }
-            LevelChunk captured = chunk;
-            ShadowLightCompute.withChunkLock(pos, () ->
-                    SectionDeltaSnapshots.put(dimension, pos, SectionDeltaSnapshot.capture(captured)));
             io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.markContentDirty(key);
             ShadowCacheEviction.recordAccess(dimension, pos);
             registerInjectTicket(dimension, pos, role);
@@ -470,18 +419,91 @@ public class ShadowSeedServer extends MinecraftServer {
             LightReadinessRegistry.markIngested(key);
             return true;
         } catch (Throwable t) {
-            if (previous != null) {
-                if (previousRole == null) {
-                    injectedRoles.remove(key);
-                } else {
-                    injectedRoles.put(key, previousRole);
-                }
-                this.injectedChunks.put(key, previous);
-            } else {
-                this.injectedChunks.remove(key);
-            }
+            ShadowLightCompute.withChunkLock(pos, () -> restoreInjectedChunk(key, previous, previousRole));
             LOGGER.warn("Hassium: Shadow light inject failed for {}", pos, t);
             return false;
+        }
+    }
+
+    /**
+     * 空壳入表 + {@code replaceWithPacketData} + hash/快照。调用方必须已持
+     * {@code chunkLock}：入表发生在 decode 完成前，region worker 会立刻
+     * {@code ChunkSerializer.pack} 同一份 PalettedContainer。
+     */
+    private LevelChunk decodeInjectedPacketLocked(String dimension, long key, ChunkPos pos,
+                                                  io.github.limuqy.mc.hassium.network.ShadowChunkRole role,
+                                                  ServerLevel level,
+                                                  ClientboundLevelChunkWithLightPacket packet) {
+        LevelChunk chunk = new LevelChunk(level, pos); // 空壳，不 worldgen
+        // FULL 票扩散后本柱可能已有 ProtoChunk holder。replaceWithPacketData 会走
+        // initializeLightSources / BE → ServerLevel.getChunk，把 Proto 强转 LevelChunk。
+        // 必须先让 getChunk mixin 命中本柱，decode 失败再还原。
+        this.injectedChunks.put(key, chunk);
+        injectedRoles.put(key, role);
+        ClientboundLevelChunkPacketData data = packet.getChunkData();
+        // 显式把 section 读游标复位到 0：getReadBuffer() 返回的是包内 byte[] 的
+        // 新包装，正常应本来就是 0，但这里不依赖该假设——防止某些 Netty/FriendlyByteBuf
+        // 路径把 readerIndex 留在尾部导致整柱 section 全部被跳过（区块只剩高度图/空气）。
+        FriendlyByteBuf sectionBuf = data.getReadBuffer();
+        sectionBuf.readerIndex(0);
+        int sectionBytes = sectionBuf.readableBytes();
+        chunk.replaceWithPacketData(sectionBuf, data.getHeightmaps(),
+                data.getBlockEntitiesTagsConsumer(pos.x, pos.z));
+        int nonAirSections = countNonAirSections(chunk);
+        // 防御：包内确实有 section 字节却解析成整柱空气时，用全新的 LevelChunk 和
+        // 全新的 read buffer 再试一次（不沿用可能已被推进/污染的包装）。
+        if (nonAirSections == 0 && sectionBytes > 0) {
+            DebugLogger.warn(DebugLogger.LogType.ASYNC,
+                    "[SHADOW_INJECT] Empty sections detected for ({}, {}), retrying with fresh read buffer "
+                            + "(sections={}, sectionBytes={}, heightmapKeys={})",
+                    pos.x, pos.z, chunk.getSections().length, sectionBytes, data.getHeightmaps().size());
+            chunk = new LevelChunk(level, pos);
+            this.injectedChunks.put(key, chunk);
+            FriendlyByteBuf retryBuf = data.getReadBuffer();
+            retryBuf.readerIndex(0);
+            chunk.replaceWithPacketData(retryBuf, data.getHeightmaps(),
+                    data.getBlockEntitiesTagsConsumer(pos.x, pos.z));
+            nonAirSections = countNonAirSections(chunk);
+        }
+        DebugLogger.debug(DebugLogger.LogType.ASYNC,
+                "[SHADOW_INJECT] pos=({},{}) sections={} nonAirSections={} sectionBytes={} heightmapKeys={}",
+                pos.x, pos.z, chunk.getSections().length, nonAirSections, sectionBytes,
+                data.getHeightmaps().size());
+        // 网络注入：packet 内容可能与磁盘表 hash 不同，必须现算并覆盖。
+        // 读盘柱走 injectLoadedChunk，hash 已由 MixinRegionFile 回填，禁止在此重复现算。
+        try {
+            long contentHash = io.github.limuqy.mc.hassium.cache.ChunkContentHashUtil
+                    .combineSectionHashes(io.github.limuqy.mc.hassium.cache.ChunkContentHashUtil
+                            .computeSectionHashes(chunk));
+            io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.put(dimension, pos, contentHash);
+        } catch (Throwable hashError) {
+            LOGGER.debug("Hassium: Shadow contentHash compute failed for {}, skip hash write", pos);
+        }
+        SectionDeltaSnapshots.put(dimension, pos, SectionDeltaSnapshot.capture(chunk));
+        return chunk;
+    }
+
+    private static int countNonAirSections(LevelChunk chunk) {
+        int nonAirSections = 0;
+        for (net.minecraft.world.level.chunk.LevelChunkSection section : chunk.getSections()) {
+            if (!section.hasOnlyAir()) {
+                nonAirSections++;
+            }
+        }
+        return nonAirSections;
+    }
+
+    private void restoreInjectedChunk(long key, LevelChunk previous,
+                                      io.github.limuqy.mc.hassium.network.ShadowChunkRole previousRole) {
+        if (previous != null) {
+            if (previousRole == null) {
+                injectedRoles.remove(key);
+            } else {
+                injectedRoles.put(key, previousRole);
+            }
+            this.injectedChunks.put(key, previous);
+        } else {
+            this.injectedChunks.remove(key);
         }
     }
 
@@ -1454,9 +1476,10 @@ public class ShadowSeedServer extends MinecraftServer {
             io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.claimDirty(key);
             io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.markPersisted(key);
         }
-        this.injectedChunks.put(key, chunk);
-        ShadowLightCompute.withChunkLock(pos, () ->
-                SectionDeltaSnapshots.put(dimension, pos, SectionDeltaSnapshot.capture(chunk)));
+        ShadowLightCompute.withChunkLock(pos, () -> {
+            this.injectedChunks.put(key, chunk);
+            SectionDeltaSnapshots.put(dimension, pos, SectionDeltaSnapshot.capture(chunk));
+        });
         injectedRoles.put(key, io.github.limuqy.mc.hassium.network.ShadowChunkRole.VISIBLE);
         registerInjectTicket(dimension, pos, io.github.limuqy.mc.hassium.network.ShadowChunkRole.VISIBLE);
     }

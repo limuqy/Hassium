@@ -5,6 +5,8 @@ import io.github.limuqy.mc.hassium.metrics.NetworkStats;
 import io.github.limuqy.mc.hassium.network.ClientChunkHandler;
 import io.github.limuqy.mc.hassium.network.ShadowChunkRole;
 import io.github.limuqy.mc.hassium.utils.DimensionKey;
+import java.util.ArrayList;
+import java.util.List;
 import net.minecraft.world.level.ChunkPos;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -338,6 +340,29 @@ class ShadowLightComputeTimingRegressionTest {
             NetworkStats.reset();
             NetworkStats.setEnabled(false);
         }
+    }
+
+    @Test
+    @DisplayName("hash 命中无论是否已落地都必须进 HIT 回执列表")
+    void hashHitAlwaysCollectsReceiptEvenIfNotYetApplied() {
+        List<ChunkPos> hits = new ArrayList<>();
+        ChunkPos pos = new ChunkPos(2, -4);
+        ShadowLightCompute.collectHitReceipt(hits, pos);
+        ShadowLightCompute.collectHitReceipt(null, pos);
+        ShadowLightCompute.collectHitReceipt(hits, null);
+        assertEquals(List.of(pos), hits);
+    }
+
+    @Test
+    @DisplayName("chunkLock 可重入：inject 持锁内再 capture/hash 不得自死锁")
+    void chunkLockIsReentrant() {
+        ChunkPos pos = new ChunkPos(0, -12);
+        int[] n = {0};
+        ShadowLightCompute.withChunkLock(pos, () -> {
+            ShadowLightCompute.withChunkLock(pos, () -> n[0]++);
+            n[0]++;
+        });
+        assertEquals(2, n[0]);
     }
 
     @Test

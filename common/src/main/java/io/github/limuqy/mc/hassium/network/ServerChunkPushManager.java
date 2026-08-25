@@ -80,7 +80,7 @@ public class ServerChunkPushManager {
     /** 每玩家已封装且仍在通道中排队的批次上限；满则跳过本 tick 封批。 */
     static final int MAX_QUEUED_BATCHES_PER_PLAYER = 10;
     /** 待确认（已发 ChunkHashS2C 等客户端回执）超时：超时绕过批次队列异步直发剥光全量。 */
-    private static final long PENDING_CONFIRM_TIMEOUT_MS = 5_000L;
+    static final long PENDING_CONFIRM_TIMEOUT_MS = 10_000L;
     /** peekPrioritized 队头数据优先扫描窗口：跳过 SeedRef 元数据找 full 任务的有限深度。 */
     private static final int PRIORITY_SCAN_BOUND = 64;
 
@@ -1393,7 +1393,7 @@ public class ServerChunkPushManager {
         }
         TickMonitor.addHassiumDrainNs(drainPendingNs, drainQueueNs);
 
-        // 待确认扫描：超时 >5s 绕过批次队列异步批量直发剥光全量并移除
+        // 待确认扫描：超时 >10s 绕过批次队列异步批量直发剥光全量并移除
         expirePendingConfirms(server, now);
 
         // 出界待命任务周期重评估（玩家折返/静止后恢复入队，防永久虚空）
@@ -1526,7 +1526,7 @@ public class ServerChunkPushManager {
         }
     }
 
-    /** pending-confirm 超过五秒后必须收敛为全量直推。 */
+    /** pending-confirm 超过十秒后必须收敛为全量直推。 */
     static boolean isPendingConfirmExpired(long sentAtMs, long nowMs) {
         return nowMs - sentAtMs > PENDING_CONFIRM_TIMEOUT_MS;
     }
