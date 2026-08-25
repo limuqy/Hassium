@@ -90,9 +90,9 @@ class ServerChunkPushManagerBloomSplitTest {
     }
 
     @Test
-    void directPushStillPairsHashSoClientCanAccountAndDiskHit() {
-        assertTrue(ServerChunkPushManager.shouldPairHashWithDirectPush(),
-                "Bloom miss 直推必须附带 hash，否则 ROUND2 缓存命中为 0");
+    void directPushDoesNotPairASeparateHashProbe() {
+        assertFalse(ServerChunkPushManager.shouldPairHashWithDirectPush(),
+                "Bloom miss 直推只发剥光全量；hash 由客户端 inject 现算，R2 靠 Bloom hit 的探测包");
     }
     @Test
     void otherDimensionFullBloomMustNotAnswerOverworldQuery() {

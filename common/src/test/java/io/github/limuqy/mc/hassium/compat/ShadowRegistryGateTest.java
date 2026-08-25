@@ -88,5 +88,30 @@ class ShadowRegistryGateTest {
         r2.join(5000);
         assertEquals(2, maxConcurrent.get());
     }
+
+    @Test
+    void writerIsNotStarvedByReaderStream() throws Exception {
+        java.util.concurrent.atomic.AtomicBoolean stop = new java.util.concurrent.atomic.AtomicBoolean(false);
+        Thread reader = new Thread(() -> {
+            while (!stop.get()) {
+                ShadowRegistryGate.withReadAccess(() -> null);
+            }
+        }, "gate-reader-stream");
+        reader.start();
+        Thread.sleep(20L);
+        long t0 = System.nanoTime();
+        ShadowRegistryGate.acquireWrite();
+        long waitedMs = (System.nanoTime() - t0) / 1_000_000L;
+        ShadowRegistryGate.releaseWrite();
+        stop.set(true);
+        reader.join(2_000L);
+        assertTrue(waitedMs < 1_000L, "fair lock: writer must not wait a full encode burst, waited=" + waitedMs);
+    }
+
+    @Test
+    void writeLockNeededQueryDoesNotThrow() {
+        // 单测无 Fabric/Forge loader 时保守为 true；不得因查 platform 抛错。
+        assertTrue(ShadowRegistryGate.shouldHoldWriteLockDuringClearLevel());
+    }
 }
 #endif

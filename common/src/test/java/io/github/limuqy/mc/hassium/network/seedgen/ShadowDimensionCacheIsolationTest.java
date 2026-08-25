@@ -129,7 +129,7 @@ class ShadowDimensionCacheIsolationTest {
     }
 
     @Test
-    @DisplayName("热度索引复合键：recordAccess/remove 跨维互不串扰；旧签名=OVERWORLD")
+    @DisplayName("热度索引按 region 文件 + 维度隔离：跨维互不串扰；旧签名=OVERWORLD")
     void heatIndexIsDimensionScoped() {
         ChunkPos pos = new ChunkPos(15, -63);
 

@@ -41,6 +41,16 @@ public class MixinClientTick {
             // 冒烟失败不阻断正常 tick
         }
 
+        // pauseEncoding 只挡住 ChunkSerializer 入队（clearLevel 写锁 vs 读锁）。
+        // 无世界时跳过 drain/OVD，避免 connect 空 clearLevel 的 tick 把 ready 清掉；
+        // 已进服仍 pause（connect 误 pause / unpark 死锁）则继续消费，否则 landed=0。
+        if (io.github.limuqy.mc.hassium.storage.ShadowStorageManager.isEncodingPaused()) {
+            Minecraft pausedMc = Minecraft.getInstance();
+            if (pausedMc == null || pausedMc.level == null || pausedMc.getConnection() == null) {
+                return;
+            }
+        }
+
         try {
             io.github.limuqy.mc.hassium.network.dataplane.DataPlaneClientLifecycle.getInstance()
                     .tick(System.currentTimeMillis());
@@ -80,6 +90,12 @@ public class MixinClientTick {
             io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.flushDeferredRemoteHashes();
         } catch (Exception e) {
             // 缓存读盘配额用尽后的续抽；失败不得中断 tick
+        }
+        try {
+            io.github.limuqy.mc.hassium.network.seedgen.ShadowServerRegistry.getInstance()
+                    .flushPendingBloomSync();
+        } catch (Exception e) {
+            // Bloom 推迟到握手后；tick 补发失败不得中断
         }
 
         // 主线程时间预算：网络回调 vs 影子落地。JoinBoost 或影子管线仍有 backlog

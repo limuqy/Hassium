@@ -29,11 +29,31 @@ public final class ShadowVanillaLightPipeline {
         submit(dimension, pos, packet, ShadowChunkRole.HALO, TraceOrigin.SERVER_PUSH);
     }
 
+    /**
+     * 影子端尚未装配（gameDir 未记、创建中）时不得 {@code failShadowServer}：
+     * 旧 {@code submit()} 只是入队等 ready；永久降级会让后续包走直 apply，
+     * 分母 applied=0 且 NeoForge 进服窗口内 landed 对不上。
+     */
+    static boolean shouldFailShadowWhenServerUnavailable() {
+        return false;
+    }
+
     private static void submit(String dimension, ChunkPos pos, ClientboundLevelChunkWithLightPacket packet,
                                ShadowChunkRole role, TraceOrigin origin) {
+        if (pos == null || packet == null) {
+            return;
+        }
         ShadowSeedServer server = ShadowServerRegistry.getInstance().getOrCreate();
-        if (server == null || pos == null || packet == null) {
-            ShadowServerRegistry.getInstance().failShadowServer();
+        if (server == null) {
+            if (shouldFailShadowWhenServerUnavailable()) {
+                ShadowServerRegistry.getInstance().failShadowServer();
+                return;
+            }
+            if (role == ShadowChunkRole.HALO) {
+                ShadowLightCompute.submitHalo(dimension, pos, packet);
+            } else {
+                ShadowLightCompute.submitVisible(dimension, pos, packet);
+            }
             return;
         }
         String resolvedDimension = dimension == null ? currentDimension() : dimension;

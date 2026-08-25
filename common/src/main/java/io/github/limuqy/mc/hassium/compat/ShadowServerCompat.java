@@ -227,11 +227,29 @@ public final class ShadowServerCompat {
     }
 
     /**
+     * 客户端 Stopping! 后 vanilla 会关停进程级共享 ioPool。
+     * 此时再向 IOWorker mailbox 提交会挂起或刷 {@code Cound not schedule mailbox}。
+     */
+    public static boolean isSharedIoPoolShutdown() {
+#if MC_VER >= MC_1_21_11
+        return net.minecraft.util.Util.ioPool().service().isShutdown();
+#elif MC_VER >= MC_1_21_2
+        return net.minecraft.Util.ioPool().service().isShutdown();
+#else
+        return net.minecraft.Util.ioPool().isShutdown();
+#endif
+    }
+
+    /**
      * 同步等待 ChunkMap IO 落盘。
      * {@code < 1.21.11}：{@code chunkMap.flushWorker()}；
      * {@code ≥ 1.21.11}：{@code chunkMap.synchronize(true).join()}。
+     * 共享 ioPool 已关停时直接返回，避免退出窗口无限等待。
      */
     public static void flushChunkWorker(ServerLevel level) {
+        if (isSharedIoPoolShutdown()) {
+            return;
+        }
 #if MC_VER < MC_1_21_11
         level.getChunkSource().chunkMap.flushWorker();
 #else

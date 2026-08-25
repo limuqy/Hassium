@@ -74,7 +74,7 @@ Hassium 用一套客户端 + 服务端配合，从**高效压缩、网络优化�
 - **目标**：再次进入同一区域少传全量区块
 - **怎么做的**：服务端在推送前算 chunkHash；客户端用本地缓存里的 contentHash 比对，命中直接走本地解压 apply，跳过原版全量下载
 - **配置**：`chunk.enabled`（默认 `true`）
-- **细节**：缓存由影子端承担——进服区块统一落盘原版存档 `hassium_cache/<serverId>/world`（type 126 + chunkHash；旧 HBT1 客户端缓存格式已裁剪）；按热度淘汰（`heat.idx` 跨会话累计）。分段增量、超视渲染、世界导出都复用同一份缓存数据（见下）
+- **细节**：缓存由影子端承担——进服区块统一落盘原版存档 `hassium_cache/<serverId>/world`（type 126 + chunkHash；旧 HBT1 客户端缓存格式已裁剪）；按 region 文件热度淘汰（`heat.idx` 跨会话累计，整文件删除 `.mca`）。分段增量、超视渲染、世界导出都复用同一份缓存数据（见下）
 
 ---
 

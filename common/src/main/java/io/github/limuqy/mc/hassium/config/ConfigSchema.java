@@ -18,8 +18,8 @@ public final class ConfigSchema {
     public static final ConfigKey<Integer> CHUNK_COMPRESSION_LEVEL = integer("chunk.compressionLevel", ConfigScope.CLIENT, Domain.CHUNK_CORE, 3, 1, 22,
             "缓存压缩等级", "Cache ZSTD compression level");
     public static final ConfigKey<Double> CHUNK_HOT_SCORE_THRESHOLD = decimal("chunk.hotScoreThreshold", ConfigScope.CLIENT, Domain.CHUNK_CORE, 0.3, 0.0, 1.0,
-            "热点分数阈值（低于此值视为冷区块，清理时优先淘汰）",
-            "Heat-score threshold (below = cold; preferred for eviction)");
+            "热点分数阈值（低于此值视为冷 region 文件，清理时优先淘汰）",
+            "Heat-score threshold (below = cold region file; preferred for eviction)");
     public static final ConfigKey<Double> CHUNK_RECENCY_WEIGHT = decimal("chunk.recencyWeight", ConfigScope.CLIENT, Domain.CHUNK_CORE, 0.7, 0.0, 1.0,
             "最近访问权重", "Recency weight in heat score");
     public static final ConfigKey<Double> CHUNK_FREQUENCY_WEIGHT = decimal("chunk.frequencyWeight", ConfigScope.CLIENT, Domain.CHUNK_CORE, 0.3, 0.0, 1.0,
@@ -29,7 +29,7 @@ public final class ConfigSchema {
     public static final ConfigKey<Integer> CHUNK_TARGET_SIZE_MB = integer("chunk.targetSizeMb", ConfigScope.CLIENT, Domain.CHUNK_CORE, 0, 0, 1024 * 1024,
             "目标缓存大小（MB；0=自动）", "Target cache size in MB (0 = auto)");
     public static final ConfigKey<Integer> CHUNK_MIN_CLEANUP_BATCH_SIZE = integer("chunk.minCleanupBatchSize", ConfigScope.CLIENT, Domain.CHUNK_CORE, 100, 1, 100000,
-            "每次最少清理区块数", "Minimum chunks evicted per cleanup pass");
+            "每轮最多淘汰的 region 文件数", "Max region files evicted per cleanup pass");
     public static final ConfigKey<Boolean> CHUNK_SECTION_DELTA_ENABLED = bool("chunk.sectionDeltaEnabled", ConfigScope.CLIENT, Domain.CHUNK_CORE, true,
             "是否启用分段增量（GatewayPacketCodec/NetworkCore/DataPlaneClientBundle 活跃消费）",
             "Enable section delta (active in gateway / network core / data plane)");
@@ -192,7 +192,7 @@ public final class ConfigSchema {
     public static final ConfigKey<Boolean> CLIENT_DEBUG_CACHE = bool("debug.cacheLogging", ConfigScope.CLIENT, Domain.DEBUG, false,
             "缓存调试日志", "Cache debug logging");
     public static final ConfigKey<Boolean> CLIENT_DEBUG_LIGHT_VERIFY = bool("debug.lightVerify", ConfigScope.CLIENT, Domain.DEBUG, false,
-            "光照验算（官方引擎对照 BFS 结果）", "Light verification (compare against official engine BFS)");
+            "光照验算与光包落地探针", "Light verification and light-packet apply probes");
 
     // === 调试（debug.*；SERVER 6 键：数据面为服务端专属；不含元数据/缓存/光照验算）===
     public static final ConfigKey<Boolean> SERVER_DEBUG_DISPATCHER = bool("debug.dispatcherLogging", ConfigScope.SERVER, Domain.DEBUG, false,

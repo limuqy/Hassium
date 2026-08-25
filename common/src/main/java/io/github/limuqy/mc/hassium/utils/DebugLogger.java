@@ -20,16 +20,17 @@ public class DebugLogger {
         DISPATCHER,     // 主线程调度器 (MAIN_DISPATCHER)
         ASYNC,          // 异步任务 (ASYNC)
         COMPRESSION,    // 压缩/解压 (HANDLE_COMPRESSED)
-        CHUNK_APPLY,    // 区块应用 (APPLY_CHUNK)
+        CHUNK_APPLY,    // 区块应用 (APPLY_CHUNK / CHUNK_PROBE 非 light)
         NETWORK,        // 网络传输
         CACHE,          // 缓存操作
-        DATAPLANE       // 多通道数据面 (Data Plane PoC: bind/路由/解密/keepalive/帧计数)
+        DATAPLANE,      // 多通道数据面 (Data Plane PoC: bind/路由/解密/keepalive/帧计数)
+        LIGHT_VERIFY    // 光照验算 + 光包落地探针 (CHUNK_PROBE source=light)
     }
 
     /**
      * review-fix: T8-26: 热路径开销——isEnabled 原实现每调用走 getInstance()+isConfigLoaded()+
-     * getConfig()（读锁）+switch 取 8 个 debug 布尔位；MainThreadDispatcher 每任务每帧 3+ 条
-     * info 日志，日志关闭时判断成本仍在。缓存「配置实例身份（=配置变更版本号）+ 8 位布尔位」，
+     * getConfig()（读锁）+switch 取 debug 布尔位；MainThreadDispatcher 每任务每帧 3+ 条
+     * info 日志，日志关闭时判断成本仍在。缓存「配置实例身份（=配置变更版本号）+ 位图」，
      * 配置加载（applyLoaded 替换 config 实例）后首次调用自动重算；两字段 volatile 发布，
      * 竞态仅致一次性陈旧位，下次调用自愈。
      */
@@ -64,7 +65,7 @@ public class DebugLogger {
         }
     }
 
-    /** review-fix: T8-26: 一次性把 8 个 debug 位打包成 int（按 LogType.ordinal() 置位）。 */
+    /** 一次性把 debug 位打包成 int（按 LogType.ordinal() 置位）。 */
     private static int computeEnabledBits(HassiumConfig config) {
         HassiumConfig.DebugConfig debug = config.debug();
         int bits = 0;
@@ -76,6 +77,7 @@ public class DebugLogger {
         if (debug.networkLogging()) bits |= 1 << LogType.NETWORK.ordinal();
         if (debug.cacheLogging()) bits |= 1 << LogType.CACHE.ordinal();
         if (debug.dataplaneLogging()) bits |= 1 << LogType.DATAPLANE.ordinal();
+        if (debug.lightVerify()) bits |= 1 << LogType.LIGHT_VERIFY.ordinal();
         return bits;
     }
 

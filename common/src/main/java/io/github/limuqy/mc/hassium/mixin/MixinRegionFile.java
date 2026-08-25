@@ -153,8 +153,8 @@ public abstract class MixinRegionFile {
     @Inject(method = "getChunkDataInputStream", at = @At("HEAD"), cancellable = true)
     private void hassium$onGetChunkDataInputStream(ChunkPos pos, CallbackInfoReturnable<DataInputStream> cir) {
         HassiumConfigService configService = HassiumConfigService.getInstance();
-        if (!configService.isStorageEnabled()
-                && !io.github.limuqy.mc.hassium.server.RuntimeServerContext.isShadowServerContext()) {
+        boolean shadow = io.github.limuqy.mc.hassium.server.RuntimeServerContext.isShadowServerContext();
+        if (!configService.isStorageEnabled() && !shadow) {
             return;
         }
 
@@ -162,9 +162,19 @@ public abstract class MixinRegionFile {
             DataInputStream result = hassium$tryReadHassiumChunk(pos);
             if (result != null) {
                 cir.setReturnValue(result);
+                return;
+            }
+            if (io.github.limuqy.mc.hassium.compat.ShadowChunkMapCompat
+                    .shouldSkipVanillaChunkParse(shadow, false)) {
+                // 非 126 / 槽空 / 解压失败：影子存档禁止原版当 zlib 解析（负长度风暴）。
+                cir.setReturnValue(null);
             }
         } catch (Exception e) {
-            hassium$LOGGER.error("Failed to read Hassium chunk at {}, falling back to vanilla", pos, e);
+            hassium$LOGGER.error("Failed to read Hassium chunk at {}", pos, e);
+            if (io.github.limuqy.mc.hassium.compat.ShadowChunkMapCompat
+                    .shouldSkipVanillaChunkParse(shadow, false)) {
+                cir.setReturnValue(null);
+            }
         }
     }
 

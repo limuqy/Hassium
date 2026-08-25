@@ -36,7 +36,7 @@
 | `chunk.frequencyWeight` | `0.3` | 访问频率权重 |
 | `chunk.cleanupIntervalTicks` | `6000` | 清理检查间隔（刻） |
 | `chunk.targetSizeMb` | `0` | 目标容量（0=自动=容量上限×0.8） |
-| `chunk.minCleanupBatchSize` | `100` | 每次最少清理区块数 |
+| `chunk.minCleanupBatchSize` | `100` | 每轮最多淘汰的 region 文件数 |
 | `chunk.sectionDeltaEnabled` | `true` | 分段增量控制位（GatewayPacketCodec/NetworkCore/DataPlaneClientBundle 活跃消费） |
 | `chunk.joinBoostEnabled` | `true` | 进服加速 |
 | `chunk.viewDistanceExtensionEnabled` | `true` | 超视渲染（OVD）开关 |

@@ -60,6 +60,11 @@ public final class ShadowServerRegistry {
     private final AtomicLong idleEpoch = new AtomicLong();
     /** park 代际：unpark / 新 park 递增，使在途 park 线程的 clearHot 失效。 */
     private final AtomicLong parkEpoch = new AtomicLong();
+    /**
+     * Bloom C2S 尚未发出：投机创建 / onLogin 早于网关 ACTIVE 时
+     * {@link #scheduleBloomSync} 只记 pending，握手后再发。
+     */
+    private volatile boolean bloomSyncPending;
     private volatile ScheduledFuture<?> speculativeWatchdogFuture;
     private volatile ScheduledFuture<?> idleTimeoutFuture;
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
@@ -149,6 +154,7 @@ public final class ShadowServerRegistry {
                 parked = false;
                 boundServerId = ClientChunkPipeline.getInstance().getServerId();
                 cancelIdleTimeout();
+                io.github.limuqy.mc.hassium.storage.ShadowStorageManager.resumeEncoding();
                 ClientChunkPipeline.getInstance().setShadowServerReady(true);
                 ShadowLightCompute.onShadowServerReady();
                 io.github.limuqy.mc.hassium.cache.client.ViewDistanceExtensionService.getInstance()
@@ -255,12 +261,22 @@ public final class ShadowServerRegistry {
             scheduler.submit(rebuild);
         }
     }
+    /**
+     * 断连 {@code pauseEncoding} 窗口内禁止 unpark：hash 比对 / consumeLoop 的
+     * {@link #getOrCreate()} 不得把刚 park 的实例拉回 ACTIVE（resumeEncoding
+     * 会让 RegionWorker 再抢注册表读锁，卡住 clearLevel 写锁）。
+     */
+    static boolean shouldUnpark(boolean parked, boolean encodingPaused) {
+        return parked && !encodingPaused;
+    }
+
     /** park → 活跃：取消 idle，标记 ready，唤醒消费者。 */
     private ShadowSeedServer unparkIfNeeded(ShadowSeedServer s) {
-        if (parked) {
+        if (shouldUnpark(parked, io.github.limuqy.mc.hassium.storage.ShadowStorageManager.isEncodingPaused())) {
             parkEpoch.incrementAndGet(); // 使在途 park 线程的 clearHot/idle 失效
             parked = false;
             cancelIdleTimeout();
+            io.github.limuqy.mc.hassium.storage.ShadowStorageManager.resumeEncoding();
             ClientChunkPipeline.getInstance().setShadowServerReady(true);
             ShadowLightCompute.onShadowServerReady();
             io.github.limuqy.mc.hassium.cache.client.ViewDistanceExtensionService.getInstance()
@@ -273,13 +289,52 @@ public final class ShadowServerRegistry {
         return s;
     }
 
+    /**
+     * Bloom 必须走 PLAY C2S 且网关已 ACTIVE：更早发出时要么 getSender()==null 被丢，
+     * 要么 HANDSHAKING passthrough 打到尚未物化的玩家。服务端 Bloom 未就绪会把
+     * 1.20.1 paced FULL_VISIBLE 折成 hash，冷 R1 miss→FORCE_FULL 抢配额。
+     */
+    static boolean canSendBloomSync(boolean handshakeDone, boolean hasPlayer,
+                                    boolean hasConnection, boolean networkActive) {
+        return handshakeDone && hasPlayer && hasConnection && networkActive;
+    }
+
+    /** 握手 ACTIVE 后补发被推迟的 Bloom（幂等：无 pending 则跳过）。 */
+    public void flushPendingBloomSync() {
+        if (!bloomSyncPending) {
+            return;
+        }
+        ShadowSeedServer s = server;
+        if (s == null || parked) {
+            return;
+        }
+        scheduleBloomSync(s);
+    }
+
+    private boolean canSendBloomSyncNow() {
+        Minecraft mc = Minecraft.getInstance();
+        boolean hasPlayer = mc != null && mc.player != null;
+        boolean hasConnection = mc != null && mc.getConnection() != null;
+        boolean handshakeDone = ClientChunkPipeline.getInstance().isHassiumHandshakeDone();
+        boolean networkActive = io.github.limuqy.mc.hassium.network.core.NetworkCore.getInstance()
+                .state() == io.github.limuqy.mc.hassium.network.core.NetworkCoreState.ACTIVE;
+        return canSendBloomSync(handshakeDone, hasPlayer, hasConnection, networkActive);
+    }
+
     private void scheduleBloomSync(ShadowSeedServer created) {
         io.github.limuqy.mc.hassium.concurrent.HassiumTaskExecutor executor =
                 io.github.limuqy.mc.hassium.concurrent.HassiumTaskExecutor.getClient();
         if (executor == null || !executor.isRunning()) {
+            bloomSyncPending = true;
             return;
         }
         executor.submit(() -> {
+            if (!canSendBloomSyncNow()) {
+                bloomSyncPending = true;
+                Constants.LOG.info("Hassium: Shadow bloom deferred (waiting handshake/player/ACTIVE)");
+                return;
+            }
+            bloomSyncPending = false;
             // per-dimension bloom：三维度各构建一帧 full bloom（服务端按维度查询）。
             for (String dimension : new String[] {
                     io.github.limuqy.mc.hassium.utils.DimensionKey.OVERWORLD,
@@ -467,6 +522,7 @@ public final class ShadowServerRegistry {
             boundServerId = null;
             parked = false;
             failed = false;
+            bloomSyncPending = false;
             previous = previousShutdownFuture;
             if (s == null) {
                 return;

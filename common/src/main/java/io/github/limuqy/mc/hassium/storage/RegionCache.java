@@ -6,6 +6,8 @@ import java.nio.ByteOrder;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import net.minecraft.world.level.ChunkPos;
 
 /**
@@ -16,6 +18,8 @@ public final class RegionCache {
 
     static final int SECTOR_SIZE = 4096;
     static final int SLOTS = 1024;
+    private static final Pattern REGION_FILE_NAME =
+            Pattern.compile("r\\.(-?\\d+)\\.(-?\\d+)\\.mca");
 
     private RegionCache() {}
 
@@ -37,6 +41,33 @@ public final class RegionCache {
 
     public static int localIndex(int chunkX, int chunkZ) {
         return (chunkX & 31) + (chunkZ & 31) * 32;
+    }
+
+    public static int regionXOf(long regionKey) {
+        return (int) regionKey;
+    }
+
+    public static int regionZOf(long regionKey) {
+        return (int) (regionKey >> 32);
+    }
+
+    /**
+     * 从 {@code r.X.Z.mca} 解析 region 键（{@link ChunkPos#asLong(int, int)}）；
+     * 文件名不符返回 {@code null}。只认名字，不打开文件。
+     */
+    public static Long regionKeyFromFileName(String name) {
+        if (name == null) {
+            return null;
+        }
+        Matcher matcher = REGION_FILE_NAME.matcher(name);
+        if (!matcher.matches()) {
+            return null;
+        }
+        try {
+            return ChunkPos.asLong(Integer.parseInt(matcher.group(1)), Integer.parseInt(matcher.group(2)));
+        } catch (NumberFormatException e) {
+            return null;
+        }
     }
 
     /**
@@ -107,25 +138,25 @@ public final class RegionCache {
             return image;
         }
 
-        public boolean isEmptySlot(int index) {
+        public synchronized boolean isEmptySlot(int index) {
             return index < 0 || index >= SLOTS || payloads[index] == null;
         }
 
-        public Long probeHash(int index) {
+        public synchronized Long probeHash(int index) {
             if (isEmptySlot(index)) {
                 return null;
             }
             return hashes[index];
         }
 
-        public boolean hasSlot(int index) {
+        public synchronized boolean hasSlot(int index) {
             return !isEmptySlot(index);
         }
 
         /**
          * 解压该槽。调用方负责 inject；映像不保留 NBT。
          */
-        public byte[] readDecompressed(int index, AtomicInteger decompressCount) throws IOException {
+        public synchronized byte[] readDecompressed(int index, AtomicInteger decompressCount) throws IOException {
             if (isEmptySlot(index)) {
                 return null;
             }
@@ -139,21 +170,21 @@ public final class RegionCache {
             return decoded.nbt();
         }
 
-        public void writePayload(int index, byte[] payloadAfterType, Long hash) {
+        public synchronized void writePayload(int index, byte[] payloadAfterType, Long hash) {
             payloads[index] = payloadAfterType;
             hashes[index] = hash;
             timestamps[index] = (int) (System.currentTimeMillis() / 1000L);
             fileDirty = true;
         }
 
-        public void clearSlot(int index) {
+        public synchronized void clearSlot(int index) {
             payloads[index] = null;
             hashes[index] = null;
             timestamps[index] = 0;
             fileDirty = true;
         }
 
-        public boolean hasAnySlot() {
+        public synchronized boolean hasAnySlot() {
             for (byte[] payload : payloads) {
                 if (payload != null) {
                     return true;
@@ -162,7 +193,12 @@ public final class RegionCache {
             return false;
         }
 
-        public void save(Path file) throws IOException {
+        /** 内存槽已改、尚未 {@link #save}。 */
+        public synchronized boolean isFileDirty() {
+            return fileDirty;
+        }
+
+        public synchronized void save(Path file) throws IOException {
             if (!fileDirty) {
                 return;
             }

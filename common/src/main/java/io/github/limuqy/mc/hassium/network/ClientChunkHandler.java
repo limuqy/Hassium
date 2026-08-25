@@ -548,8 +548,8 @@ public class ClientChunkHandler {
     /**
      * 客户端区块应用探针（debug.chunkApplyLogging 开启时输出；关闭时零开销短路）：
      * per-pos apply 计数 + 区块光照采样（地表 sky / 高空 sky / 地下 block）+
-     * 地表方块采样。同 pos 多次 apply（apply# > 1）或 skyTop=0 即「突变 / 黑块」嫌疑，
-     * 用于诊断区块错位、已加载区块突然变、黑块问题。诊断专用，不参与任何逻辑。
+     * 地表方块采样。同 pos 多次 apply（apply# > 1）或 skyTop=0 即「突变 / 黑块」嫌疑。
+     * {@code source=light} 走 {@link #probeShadowLightState}，门控是 debug.lightVerify。
      */
     public static void probeChunkState(ChunkPos pos, ClientLevel level, String source) {
         probeChunkState(pos, level, source, true, null, false, -1L, -1L, -1L, false, true);
@@ -557,6 +557,7 @@ public class ClientChunkHandler {
 
     /**
      * 光照包落地后的复采样：保留最近一次全量区块应用上下文，但不增加 apply 计数。
+     * 门控 {@code debug.lightVerify}（与区块 apply 日志分离：光包远密于全量柱）。
      */
     public static void probeShadowLightState(ChunkPos pos, ClientLevel level, TraceOrigin fullOrigin,
                                              boolean fullRenderOnly, long fullApplySequence, long fullApplyAgeMs,
@@ -570,7 +571,8 @@ public class ClientChunkHandler {
                                         TraceOrigin fullOrigin, boolean fullRenderOnly, long fullApplySequence,
                                         long fullApplyAgeMs, long lightQueueDelayMs,
                                         boolean fullAppliedAfterLightQueued, boolean chunkPresent) {
-        if (!DebugLogger.isEnabled(LogType.CHUNK_APPLY)) {
+        boolean lightProbe = !countAsApply;
+        if (!DebugLogger.isEnabled(lightProbe ? LogType.LIGHT_VERIFY : LogType.CHUNK_APPLY)) {
             return;
         }
         if (level == null || pos == null) {
@@ -579,7 +581,7 @@ public class ClientChunkHandler {
         String origin = fullOrigin == null ? "unknown" : fullOrigin.logValue;
         String fullView = fullApplySequence < 0L ? "unknown" : fullRenderOnly ? "ovd" : "authoritative";
         if (!countAsApply && !chunkPresent) {
-            DebugLogger.info(LogType.CHUNK_APPLY,
+            DebugLogger.info(LogType.LIGHT_VERIFY,
                     "[CHUNK_PROBE] source=light pos=({},{}) fullOrigin={} fullView={} fullApplySeq={} fullApplyAgeMs={} lightQueueDelayMs={} fullAppliedAfterLightQueued={} chunkPresent=false",
                     pos.x, pos.z, origin, fullView, fullApplySequence, fullApplyAgeMs, lightQueueDelayMs,
                     fullAppliedAfterLightQueued);
@@ -615,7 +617,7 @@ public class ClientChunkHandler {
         int skyN = level.getBrightness(LightLayer.SKY, new BlockPos(bx, midY, originZ));
         int skyS = level.getBrightness(LightLayer.SKY, new BlockPos(bx, midY, originZ + 15));
         if (!countAsApply) {
-            DebugLogger.info(LogType.CHUNK_APPLY,
+            DebugLogger.info(LogType.LIGHT_VERIFY,
                     "[CHUNK_PROBE] source=light pos=({},{}) apply#={} fullOrigin={} fullView={} fullApplySeq={} fullApplyAgeMs={} lightQueueDelayMs={} fullAppliedAfterLightQueued={} chunkPresent=true topY={} skyTop={} skyAir={} blockLow={} topBlock={} fixedY={} fixedBlock={} secY={} skyMid={} skyW={} skyE={} skyN={} skyS={}",
                     pos.x, pos.z, count, origin, fullView, fullApplySequence, fullApplyAgeMs, lightQueueDelayMs,
                     fullAppliedAfterLightQueued, topY, skyTop, skyAir, blockLow, topBlock, fixedY, fixedBlock,

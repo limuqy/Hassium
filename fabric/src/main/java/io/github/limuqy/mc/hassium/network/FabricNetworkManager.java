@@ -931,10 +931,8 @@ LIGHT_DELTA_S2C = ResourceLocationCompat.vanilla(HassiumChannels.LIGHT_DELTA_S2C
 
                 server.execute(() -> {
                     try {
-                        if (request.requestsFullChunks()) {
-                            ServerChunkPushManager.getInstance().enqueueDataRequest(
-                                    player, request.dimension(), request.chunks());
-                        }
+                        ServerChunkPushManager.getInstance()
+                                .handleClientChunkDataRequest(player, request);
                     } catch (Exception e) {
                         LOGGER.error("[SERVER] Failed to handle chunk data request", e);
                     }
@@ -957,10 +955,8 @@ LIGHT_DELTA_S2C = ResourceLocationCompat.vanilla(HassiumChannels.LIGHT_DELTA_S2C
 
                 server.execute(() -> {
                     try {
-                        if (request.requestsFullChunks()) {
-                            ServerChunkPushManager.getInstance().enqueueDataRequest(
-                                    player, request.dimension(), request.chunks());
-                        }
+                        ServerChunkPushManager.getInstance()
+                                .handleClientChunkDataRequest(player, request);
                     } catch (Exception e) {
                         LOGGER.error("[SERVER] Failed to handle chunk data request", e);
                     }

@@ -5,192 +5,86 @@ import io.github.limuqy.mc.hassium.concurrent.HassiumTaskExecutor;
 import io.github.limuqy.mc.hassium.concurrent.TaskCategory;
 import io.github.limuqy.mc.hassium.config.HassiumConfig;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
-import java.io.BufferedInputStream;
-import java.io.BufferedOutputStream;
-import java.io.DataInputStream;
-import java.io.DataOutputStream;
-import java.io.EOFException;
-import java.io.IOException;
-import java.nio.file.Files;
+import io.github.limuqy.mc.hassium.storage.ShadowRegionHeat;
+import io.github.limuqy.mc.hassium.utils.DimensionKey;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.Set;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import net.minecraft.world.level.ChunkPos;
 
 /**
- * 影子端缓存清理（容量上限 + 热度淘汰）。
+ * 影子端缓存清理（容量上限 + region 文件热度淘汰）。
  * <p>
- * 迁移自旧客户端缓存清理（HBT1 时代的 {@code CacheEvictionManager}，其数据库/热度索引
- * 已随旧链删除），语义对齐：
+ * 热度索引在 {@link ShadowRegionHeat}（{@code heat.idx}，按 {@code r.X.Z.mca} 计）：
+ * 装配时解析文件内容加载、断连 {@code saveAll} 落盘；存储管理器写盘时回写文件大小。
+ * 容量扫描只列 region 目录 + 文件体积，不拆 Anvil 头。
  * <ul>
- *   <li>热度公式保留：{@code hotScore = recencyWeight * 1/(1+ageTicks)
- *       + frequencyWeight * 1/(1+accessCount)}；时间基从游戏 tick 改为 epoch 毫秒
- *       （影子端存档跨会话持久，游戏时间每会话重置不可比），ageTicks = 毫秒差 / 50。</li>
- *   <li>容量 = 全部 region 文件 offset 表实际分配扇区之和。文件大小不可用：Anvil
- *       删除后扇区仅标记释放、文件不缩小，按文件大小会永远超限触发。</li>
+ *   <li>热度公式：{@code hotScore = recencyWeight * 1/(1+ageTicks)
+ *       + frequencyWeight * 1/(1+accessCount)}；ageTicks = 毫秒差 / 50。</li>
+ *   <li>容量 = 各维度 {@code *.mca} 的 {@code Files.size} 之和。整文件删除会真实缩小占用。</li>
  *   <li>触发：客户端主线程帧尾 tick（{@code MixinClientTick}），按
- *       {@code cleanupIntervalTicks} 节流；超限时后台池执行（扫描 → 排序 → 逐柱删除，
- *       每轮最多 {@code minCleanupBatchSize} 柱）。</li>
- *   <li>删除 = {@code chunkMap.write(pos, null)}（1.21.2+ 传 {@code () -> null}）→
- *       IOWorker → {@code RegionFile.clear}：offset 置 0 + 释放扇区；内存注入表 /
- *       hash 桥同步移除。</li>
- *   <li>安全 gate：仅删除<b>不在 {@code injectedChunks}（本会话使用中）</b>的磁盘区块——
- *       会话内数据保留，清理目标是历史会话残留（R1/R2 之前落盘的冷数据）。</li>
+ *       {@code cleanupIntervalTicks} 节流；超限时后台池执行。</li>
+ *   <li>删除 = {@link ShadowSeedServer#deleteRegion} → 存储管理器卸映像并删 {@code .mca}。</li>
+ *   <li>安全 gate：本会话 {@code injectedChunks} 落到的 region 整文件跳过。</li>
  * </ul>
- * 热度索引持久化：{@code heat.idx}（{@code hassium_cache/<serverId>/heat.idx}，per-server），
- * 影子端装配时加载、断连 saveAll 时落盘；跨会话累计（多轮 R1/R2 的访问历史都参与评分）。
- * <p>
- * 线程模型：{@link #recordAccess} 任意线程（注入/读盘链）；{@link #tick} 客户端主线程；
- * 清理执行在后台池（与 consumeLoop 同池，不阻塞主线程/Netty）。
  */
 public final class ShadowCacheEviction {
 
-    /** heat.idx 魔数（"HSH1"）与版本。 */
-    private static final int HEAT_MAGIC = 0x48534831;
-    private static final int HEAT_VERSION = 1;
-    /** 加载时条目数上限（防损坏文件撑爆内存；4GB 上限对应 ~26 万柱）。 */
-    private static final int HEAT_MAX_ENTRIES = 10_000_000;
-
-    private static final int SECTOR_SIZE = 4096;
-    /** 原版 RegionFile 头 = offset 表 + timestamp 表（2 sectors，非旧 HassiumRegionFile 的 3-sector）。 */
-    private static final long HEADER_BYTES = (long) SECTOR_SIZE * 2;
-
-    /** 可缓存维度白名单（与 DimensionKey.isCacheableDimension 同源）。 */
     private static final String[] DIMENSIONS = {
-            io.github.limuqy.mc.hassium.utils.DimensionKey.OVERWORLD,
-            io.github.limuqy.mc.hassium.utils.DimensionKey.NETHER,
-            io.github.limuqy.mc.hassium.utils.DimensionKey.END
+            DimensionKey.OVERWORLD,
+            DimensionKey.NETHER,
+            DimensionKey.END
     };
-    private static final ConcurrentHashMap<Long, HotEntry> HEAT = new ConcurrentHashMap<>();
     private static final AtomicBoolean cleanupRunning = new AtomicBoolean(false);
     private static int tickCounter = 0;
 
-    private record HotEntry(int accessCount, long lastAccessMillis) {}
-
-    /** 清理候选：磁盘存在的区块 + 占用量。 */
-    private record Candidate(String dimension, ChunkPos pos, long sizeBytes, HotEntry hot) {}
-
     private ShadowCacheEviction() {}
 
-    // === 热度记录（任意线程） ===
-
-    /** 记录一次区块访问（主世界；过渡期兼容签名）。 */
     public static void recordAccess(ChunkPos pos) {
-        recordAccess(io.github.limuqy.mc.hassium.utils.DimensionKey.OVERWORLD, pos);
+        ShadowRegionHeat.recordAccess(pos);
     }
 
-    /** 记录一次指定维度区块访问（注入 / 读盘命中时调用）。键 = DimensionKey 复合键。 */
     public static void recordAccess(String dimension, ChunkPos pos) {
-        long key = io.github.limuqy.mc.hassium.utils.DimensionKey.key(dimension, pos.x, pos.z);
-        long now = System.currentTimeMillis();
-        HEAT.compute(key, (k, h) -> new HotEntry(h == null ? 1 : h.accessCount + 1, now));
+        ShadowRegionHeat.recordAccess(dimension, pos);
     }
 
-    /** 删除区块时同步移除热度条目（主世界；过渡期兼容签名）。 */
     public static void remove(ChunkPos pos) {
-        remove(io.github.limuqy.mc.hassium.utils.DimensionKey.OVERWORLD, pos);
+        ShadowRegionHeat.remove(pos);
     }
 
-    /** 删除指定维度区块时同步移除热度条目。 */
     public static void remove(String dimension, ChunkPos pos) {
-        HEAT.remove(io.github.limuqy.mc.hassium.utils.DimensionKey.key(dimension, pos.x, pos.z));
+        ShadowRegionHeat.remove(dimension, pos);
     }
 
-    // === 热度索引持久化（影子端生命周期挂钩） ===
-
-    /** 装配时加载（影子端 initServer 后调用）；文件缺失/损坏 → 空索引。 */
     public static void load(Path worldRoot) {
-        HEAT.clear();
-        Path file = worldRoot.resolve("heat.idx");
-        if (!Files.exists(file)) {
-            return;
-        }
-        try (DataInputStream in = new DataInputStream(
-                new BufferedInputStream(Files.newInputStream(file)))) {
-            if (in.readInt() != HEAT_MAGIC || in.readInt() != HEAT_VERSION) {
-                Constants.LOG.warn("Hassium: [SHADOW_CLEANUP] heat.idx version mismatch, reset");
-                return;
-            }
-            int count = in.readInt();
-            if (count < 0 || count > HEAT_MAX_ENTRIES) {
-                Constants.LOG.warn("Hassium: [SHADOW_CLEANUP] heat.idx corrupt count={}, reset", count);
-                return;
-            }
-            for (int i = 0; i < count; i++) {
-                long key = in.readLong();
-                int accessCount = in.readInt();
-                long lastAccessMillis = in.readLong();
-                HEAT.put(key, new HotEntry(accessCount, lastAccessMillis));
-            }
-            Constants.LOG.info("Hassium: [SHADOW_CLEANUP] heat.idx loaded {} entries", HEAT.size());
-        } catch (EOFException e) {
-            Constants.LOG.warn("Hassium: [SHADOW_CLEANUP] heat.idx truncated, reset");
-            HEAT.clear();
-        } catch (IOException e) {
-            Constants.LOG.warn("Hassium: [SHADOW_CLEANUP] heat.idx load failed, reset", e);
-            HEAT.clear();
-        }
+        ShadowRegionHeat.load(worldRoot);
     }
 
-    /** 断连 saveAll 时落盘（临时文件 + 原子替换，防进程中断留半截文件）。 */
     public static void save(Path worldRoot) {
-        if (HEAT.isEmpty()) {
-            return;
-        }
-        try {
-            Path file = worldRoot.resolve("heat.idx");
-            Path tmp = worldRoot.resolve("heat.idx.tmp");
-            try (DataOutputStream out = new DataOutputStream(
-                    new BufferedOutputStream(Files.newOutputStream(tmp)))) {
-                out.writeInt(HEAT_MAGIC);
-                out.writeInt(HEAT_VERSION);
-                out.writeInt(HEAT.size());
-                for (var e : HEAT.entrySet()) {
-                    HotEntry h = e.getValue();
-                    out.writeLong(e.getKey());
-                    out.writeInt(h.accessCount);
-                    out.writeLong(h.lastAccessMillis);
-                }
-            }
-            Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
-        } catch (IOException e) {
-            Constants.LOG.warn("Hassium: [SHADOW_CLEANUP] heat.idx save failed", e);
-        }
+        ShadowRegionHeat.save(worldRoot);
     }
 
-    /** 断连关停后清内存（磁盘索引保留，重连加载）。 */
     public static void reset() {
-        HEAT.clear();
+        ShadowRegionHeat.reset();
     }
 
-    /** 诊断：区块访问次数（主世界；无记录返回 0）。 */
     public static int accessCountOf(ChunkPos pos) {
-        return accessCountOf(io.github.limuqy.mc.hassium.utils.DimensionKey.OVERWORLD, pos);
+        return ShadowRegionHeat.accessCountOf(pos);
     }
 
-    /** 诊断：指定维度区块访问次数（无记录返回 0）。 */
     public static int accessCountOf(String dimension, ChunkPos pos) {
-        HotEntry h = HEAT.get(io.github.limuqy.mc.hassium.utils.DimensionKey.key(dimension, pos.x, pos.z));
-        return h == null ? 0 : h.accessCount();
+        return ShadowRegionHeat.accessCountOf(dimension, pos);
     }
 
-    /** 诊断：热度索引条目数（测试/排障用）。 */
     public static int entryCount() {
-        return HEAT.size();
+        return ShadowRegionHeat.entryCount();
     }
 
-
-    // === 驱动（客户端主线程帧尾） ===
-
-    /**
-     * 帧尾 tick：按 cleanupIntervalTicks 节流，超限时提交后台清理任务。
-     * 主线程只做计数与提交（扫描/删除在后台池，不卡帧）。
-     */
     public static void tick() {
         HassiumConfigService cfg = HassiumConfigService.getInstance();
         if (!cfg.isClientCacheEnabled() || !cfg.isHassiumEngineEnabled()) {
@@ -201,7 +95,7 @@ public final class ShadowCacheEviction {
             return;
         }
         if (!cleanupRunning.compareAndSet(false, true)) {
-            return; // 上一轮还在跑
+            return;
         }
         HassiumTaskExecutor executor = HassiumTaskExecutor.getClient();
         if (executor == null || !executor.isRunning()) {
@@ -217,16 +111,14 @@ public final class ShadowCacheEviction {
                 }
             }, TaskCategory.BEST_EFFORT);
         } catch (RejectedExecutionException e) {
-            cleanupRunning.set(false); // 断连竞态：池已停
+            cleanupRunning.set(false);
         }
     }
-
-    // === 清理执行（后台池） ===
 
     private static void runCleanup() {
         ShadowSeedServer server = ShadowServerRegistry.getInstance().get();
         if (server == null) {
-            return; // 影子端未创建/已关停
+            return;
         }
         HassiumConfigService cfg = HassiumConfigService.getInstance();
         HassiumConfig.ChunkCoreConfig cc = cfg.getConfig().chunk();
@@ -235,8 +127,8 @@ public final class ShadowCacheEviction {
             return;
         }
         long targetBytes = cc.targetCacheSizeBytes();
-        List<Candidate> candidates = new ArrayList<>();
-        long currentBytes = scanRegions(server, candidates);
+        List<ShadowRegionHeat.RegionFileStat> candidates = new ArrayList<>();
+        long currentBytes = scanRegionFiles(server, candidates);
         if (!shouldCleanup(currentBytes, maxBytes, targetBytes)) {
             return;
         }
@@ -245,10 +137,11 @@ public final class ShadowCacheEviction {
         double recencyWeight = cc.recencyWeight();
         double frequencyWeight = cc.frequencyWeight();
         double threshold = cc.hotScoreThreshold();
-        int budget = Math.max(cc.minCleanupBatchSize(), 100);
+        int budget = Math.max(cc.minCleanupBatchSize(), 1);
         candidates.sort(Comparator
-                .comparingDouble((Candidate c) -> hotScoreOf(c, now, recencyWeight, frequencyWeight))
-                .thenComparingLong(c -> ChunkPos.asLong(c.pos().x, c.pos().z)));
+                .comparingDouble((ShadowRegionHeat.RegionFileStat c) ->
+                        hotScoreOf(c, now, recencyWeight, frequencyWeight))
+                .thenComparingLong(c -> ChunkPos.asLong(c.regionX(), c.regionZ())));
 
         Constants.LOG.info("Hassium: [SHADOW_CLEANUP] Triggered: current={}MB, target={}MB, needToFree={}MB, candidates={}",
                 currentBytes >> 20, targetBytes >> 20, sizeToFree >> 20, candidates.size());
@@ -256,103 +149,57 @@ public final class ShadowCacheEviction {
         int removed = 0;
         long freed = 0;
         for (int i = 0; i < candidates.size() && i < budget && freed < sizeToFree; i++) {
-            Candidate c = candidates.get(i);
+            ShadowRegionHeat.RegionFileStat c = candidates.get(i);
             double score = hotScoreOf(c, now, recencyWeight, frequencyWeight);
             if (score > threshold) {
-                continue; // 热度过高：不清理（更冷的在后面，继续看）
-            }
-            // review-fix: T3-50：扫描与删除间的 TOCTOU——复核注入表；扫描后被
-            // consumeLoop 注入的区块跳过（deleteChunk 会无条件摘注入 + 清磁盘，
-            // 导致该柱回传跳过、磁盘缓存丢失）
-            if (server.injectedChunk(c.dimension(), c.pos().x, c.pos().z) != null) {
                 continue;
             }
-            server.deleteChunk(c.dimension(), c.pos());
+            if (server.regionHasInjected(c.dimension(), c.regionX(), c.regionZ())) {
+                continue;
+            }
+            server.deleteRegion(c.dimension(), c.regionX(), c.regionZ());
             removed++;
             freed += c.sizeBytes();
-            Constants.LOG.debug("Hassium: [SHADOW_CLEANUP] Removed chunk [{}, {}] (hotScore={}, size={}KB)",
-                    c.pos().x, c.pos().z, String.format("%.3f", score), c.sizeBytes() >> 10);
+            Constants.LOG.debug("Hassium: [SHADOW_CLEANUP] Removed region [{}, {}] dim={} (hotScore={}, size={}KB)",
+                    c.regionX(), c.regionZ(), c.dimension(), String.format("%.3f", score), c.sizeBytes() >> 10);
         }
-        Constants.LOG.info("Hassium: [SHADOW_CLEANUP] Complete: removed {} chunks, freed {}MB",
+        Constants.LOG.info("Hassium: [SHADOW_CLEANUP] Complete: removed {} region files, freed {}MB",
                 removed, freed >> 20);
     }
 
-    /**
-     * 扫描影子端全部 region 文件：返回有效容量（offset 表分配扇区 + 文件头），
-     * 并把「磁盘存在且不在内存注入表」的区块收进候选。
-     * 与 {@code ShadowSeedServer.buildBloomFilter} 同款轻量只读（4096B 头，无锁）。
-     */
-    private static long scanRegions(ShadowSeedServer server, List<Candidate> out) {
-        long total = 0;
-        // 分维度目录扫描（vanilla 布局）：overworld→region、nether→DIM-1/region、end→DIM1/region。
+    private static long scanRegionFiles(ShadowSeedServer server,
+                                        List<ShadowRegionHeat.RegionFileStat> out) {
+        long total = 0L;
         for (String dimension : DIMENSIONS) {
-            total += scanRegionDir(server, server.regionDir(dimension).toFile(), dimension, out);
+            Set<Long> live = liveRegionKeys(server, dimension);
+            total += ShadowRegionHeat.collectRegionFiles(
+                    server.regionDir(dimension), dimension, live, out);
         }
         return total;
     }
 
-    /** 扫描单个维度 region 目录：返回有效容量，候选收进 out（含维度复合键热度）。 */
-    private static long scanRegionDir(ShadowSeedServer server, java.io.File regionDir,
-                                      String dimension, List<Candidate> out) {
-        java.io.File[] files = regionDir.listFiles((dir, name) -> name.endsWith(".mca"));
-        if (files == null) {
-            return 0;
-        }
-        long total = 0;
-        for (java.io.File f : files) {
-            int regionX;
-            int regionZ;
-            try {
-                java.util.regex.Matcher m = java.util.regex.Pattern
-                        .compile("r\\.(-?\\d+)\\.(-?\\d+)\\.mca").matcher(f.getName());
-                if (!m.matches()) {
-                    continue;
-                }
-                regionX = Integer.parseInt(m.group(1));
-                regionZ = Integer.parseInt(m.group(2));
-            } catch (Exception e) {
+    private static Set<Long> liveRegionKeys(ShadowSeedServer server, String dimension) {
+        Set<Long> live = new HashSet<>();
+        for (Long key : server.injectedKeys()) {
+            if (!dimension.equals(DimensionKey.dimensionOf(key))) {
                 continue;
             }
-            try (java.io.RandomAccessFile raf = new java.io.RandomAccessFile(f, "r")) {
-                byte[] header = new byte[SECTOR_SIZE];
-                raf.readFully(header);
-                for (int i = 0; i < 1024; i++) {
-                    int offset = (header[i] & 0xFF) << 16 | (header[i + 1024] & 0xFF) << 8 | (header[i + 2048] & 0xFF);
-                    if (offset == 0) {
-                        continue;
-                    }
-                    int sectorCount = header[i + 3072] & 0xFF;
-                    long sizeBytes = (long) sectorCount * SECTOR_SIZE;
-                    total += sizeBytes;
-                    if (out != null) {
-                        int chunkX = regionX * 32 + (i % 32);
-                        int chunkZ = regionZ * 32 + (i / 32);
-                        if (server.injectedChunk(dimension, chunkX, chunkZ) == null) {
-                            out.add(new Candidate(dimension, new ChunkPos(chunkX, chunkZ), sizeBytes,
-                                    HEAT.get(io.github.limuqy.mc.hassium.utils.DimensionKey.key(
-                                            dimension, chunkX, chunkZ))));
-                        }
-                    }
-                }
-            } catch (Throwable t) {
-                Constants.LOG.debug("Hassium: [SHADOW_CLEANUP] region scan failed for {}", f.getName(), t);
-            }
-            total += HEADER_BYTES;
+            int rx = Math.floorDiv(DimensionKey.chunkXOf(key), 32);
+            int rz = Math.floorDiv(DimensionKey.chunkZOf(key), 32);
+            live.add(ChunkPos.asLong(rx, rz));
         }
-        return total;
+        return live;
     }
-    private static double hotScoreOf(Candidate c, long nowMillis,
+
+    private static double hotScoreOf(ShadowRegionHeat.RegionFileStat c, long nowMillis,
                                      double recencyWeight, double frequencyWeight) {
-        HotEntry h = c.hot();
+        ShadowRegionHeat.HotEntry h = c.hot();
         return hotScore(h == null ? 0 : h.accessCount(),
                 h == null ? 0L : h.lastAccessMillis(), nowMillis, recencyWeight, frequencyWeight);
     }
 
-    // === 纯逻辑（单测直接覆盖） ===
-
     /**
-     * 热度评分（迁移旧 CacheEvictionManager 公式）：
-     * {@code recencyWeight * 1/(1+ageTicks) + frequencyWeight * 1/(1+accessCount)}，
+     * 热度评分：{@code recencyWeight * 1/(1+ageTicks) + frequencyWeight * 1/(1+accessCount)}，
      * ageTicks = 毫秒差 / 50（1 tick = 50ms）。
      */
     public static double hotScore(int accessCount, long lastAccessMillis, long nowMillis,

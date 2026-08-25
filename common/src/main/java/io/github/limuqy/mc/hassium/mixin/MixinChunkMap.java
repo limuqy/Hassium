@@ -1,13 +1,17 @@
 package io.github.limuqy.mc.hassium.mixin;
 
+import io.github.limuqy.mc.hassium.compat.LevelCompat;
 import io.github.limuqy.mc.hassium.compat.ShadowChunkMapCompat;
 import io.github.limuqy.mc.hassium.network.seedgen.ShadowSeedServer;
 import io.github.limuqy.mc.hassium.server.RuntimeServerContext;
 import java.util.concurrent.CompletableFuture;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.chunk.ChunkAccess;
 import net.minecraft.world.level.chunk.LevelChunk;
+import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
@@ -18,7 +22,6 @@ import net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.level.ThreadedLevelLightEngine;
 import org.apache.commons.lang3.mutable.MutableObject;
-import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.ModifyVariable;
 #endif
 #if MC_VER < MC_1_21_1
@@ -33,11 +36,15 @@ import net.minecraft.world.level.chunk.status.ChunkStatus;
 import net.minecraft.world.level.chunk.status.ChunkStep;
 #endif
 
-/**
- * 影子端 ChunkMap：注入表命中则短路 {@code scheduleChunkLoad} 为
- * {@code ImposterProtoChunk}（对齐原版读盘 FULL 柱），避免 getChunkFuture
- * 把已 decode 的柱顶成噪声地形。SeedGen {@code generateChunk} 期间
- * {@link ShadowChunkMapCompat#isWorldgenAllowed()} 为 true，本拦截不抢生成柱。
+    /**
+     * 影子端 ChunkMap：注入表命中则短路 {@code scheduleChunkLoad} 为
+     * {@code ImposterProtoChunk}（对齐原版读盘 FULL 柱），避免 getChunkFuture
+     * 把已 decode 的柱顶成噪声地形。未命中不得在票据路径上 {@code loadFromDisk}——
+     * FULL 票会向外扩散，邻柱同步解压会把算光拖成几秒一格，并和 hash miss 全量请求抢带宽。
+     * 磁盘复用只走 hash 探活（{@code processRemoteHashes}）。
+     * {@code MixinRegionFile} 对非 126 返回 null，空槽走 createEmpty + 地形步透传。
+     * SeedGen {@code generateChunk} 期间
+     * {@link ShadowChunkMapCompat#isWorldgenAllowed()} 为 true，本拦截不抢生成柱。
  * <p>
  * 探活：FULL 注入柱 persisted=FULL，不能赌金字塔从 FULL 再跑 LIGHT 作为唯一算光路径
  * （邻柱无盘会 GENERATION_PYRAMID）。光仍由 {@code ShadowLightCompute} 提交官方
@@ -45,6 +52,10 @@ import net.minecraft.world.level.chunk.status.ChunkStep;
  */
 @Mixin(net.minecraft.server.level.ChunkMap.class)
 public class MixinChunkMap {
+
+    @Shadow
+    @Final
+    ServerLevel level;
 
 #if MC_VER < MC_1_21_1
     @Shadow
@@ -87,11 +98,13 @@ public class MixinChunkMap {
     @Inject(method = "scheduleChunkLoad", at = @At("HEAD"), cancellable = true)
     private void hassium$shortCircuitInjectLoad(ChunkPos pos,
             CallbackInfoReturnable<CompletableFuture<Either<ChunkAccess, ChunkHolder.ChunkLoadingFailure>>> cir) {
-        LevelChunk injected = hassium$injectedIfShortCircuit(pos);
-        if (injected == null) {
+        LevelChunk loaded = hassium$chunkForScheduleLoad(pos);
+        if (loaded == null) {
+            // 未命中不 cancel：空槽由 MixinRegionFile 返回 null → createEmpty + 透传，
+            // 不得在这里 loadFromDisk（FULL 票邻柱会同步解压整圈）。
             return;
         }
-        ImposterProtoChunk wrapped = ShadowChunkMapCompat.asImposter(injected);
+        ImposterProtoChunk wrapped = ShadowChunkMapCompat.asImposter(loaded);
         cir.setReturnValue(CompletableFuture.completedFuture(Either.left(wrapped)));
     }
 
@@ -109,11 +122,11 @@ public class MixinChunkMap {
     @Inject(method = "scheduleChunkLoad", at = @At("HEAD"), cancellable = true)
     private void hassium$shortCircuitInjectLoad(ChunkPos pos,
             CallbackInfoReturnable<CompletableFuture<ChunkAccess>> cir) {
-        LevelChunk injected = hassium$injectedIfShortCircuit(pos);
-        if (injected == null) {
-            return;
+        LevelChunk loaded = hassium$chunkForScheduleLoad(pos);
+        if (loaded != null) {
+            cir.setReturnValue(ShadowChunkMapCompat.completedImposter(loaded));
         }
-        cir.setReturnValue(ShadowChunkMapCompat.completedImposter(injected));
+        // 未命中不 cancel：MixinRegionFile 对非 126 返回 null，避免 completedFuture(null) NPE。
     }
 
     @Inject(method = "applyStep", at = @At("HEAD"), cancellable = true)
@@ -140,24 +153,27 @@ public class MixinChunkMap {
 #endif
 
     @Unique
-    private static LevelChunk hassium$injectedIfShortCircuit(ChunkPos pos) {
+    private LevelChunk hassium$chunkForScheduleLoad(ChunkPos pos) {
         if (pos == null || !RuntimeServerContext.isShadowServerContext()) {
             return null;
-        }
-        if (ShadowChunkMapCompat.isWorldgenAllowed()) {
-            // SeedGen 生成中：仅当该 pos 已在注入表时抢 load，避免生成任务把注入柱顶掉
-            ShadowSeedServer server = ShadowChunkMapCompat.shadowServerOrNull();
-            return server == null ? null : server.injectedChunk(pos.x, pos.z);
         }
         ShadowSeedServer server = ShadowChunkMapCompat.shadowServerOrNull();
         if (server == null) {
             return null;
         }
-        LevelChunk injected = server.injectedChunk(pos.x, pos.z);
-        if (!ShadowChunkMapCompat.shouldShortCircuitScheduleLoad(true, injected != null)) {
-            return null;
+        String dimension = LevelCompat.getDimensionId(this.level);
+        if (dimension == null) {
+            dimension = io.github.limuqy.mc.hassium.utils.DimensionKey.OVERWORLD;
         }
-        return injected;
+        LevelChunk injected = server.injectedChunk(dimension, pos.x, pos.z);
+        if (ShadowChunkMapCompat.isWorldgenAllowed()) {
+            // SeedGen 生成中：仅当该 pos 已在注入表时抢 load，避免生成任务把注入柱顶掉
+            return injected;
+        }
+        if (ShadowChunkMapCompat.shouldShortCircuitScheduleLoad(true, injected != null)) {
+            return injected;
+        }
+        return null;
     }
 
 #if MC_VER < MC_1_21_1

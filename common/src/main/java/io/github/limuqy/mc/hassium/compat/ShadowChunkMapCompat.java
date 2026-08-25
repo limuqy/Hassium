@@ -60,10 +60,24 @@ public final class ShadowChunkMapCompat {
     public static boolean shouldShortCircuitScheduleLoad(boolean shadowContext, boolean injectedPresent) {
         return shadowContext && injectedPresent;
     }
+
+    /**
+     * 注入表未命中时：非 SeedGen 不得走原版 IOWorker 读 type 126。
+     * {@code ShadowStorageManager} 会整文件重写 .mca，原版 RegionFile 扇区表过期后
+     * 会把邻槽/半写头解析成「负长度 / 错位 / 外部流」，再当权威柱推到客户端（虚空）。
+     */
+    public static boolean shouldBypassVanillaRegionRead(boolean shadowContext, boolean worldgenAllowed) {
+        return shadowContext && !worldgenAllowed;
+    }
+
+    /** 影子存档只有 type 126；非 126 槽不得交给原版 zlib 解析。 */
+    public static boolean shouldSkipVanillaChunkParse(boolean shadowContext, boolean hassiumType126) {
+        return shadowContext && !hassiumType126;
+    }
+
     public static boolean isEmptyStatus(ChunkStatus status) {
         return status == ChunkStatus.EMPTY;
     }
-
 
     /** 除 LIGHT 外透传注入柱的地形步骤；LIGHT 必须执行原版任务。 */
     public static boolean shouldPassthroughGenerationStep(boolean shadowContext, boolean worldgenAllowed,

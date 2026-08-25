@@ -123,7 +123,7 @@ class LightReadinessRegistryTest {
     }
 
     @Test
-    @DisplayName("存档复用光（REUSE_CACHE）：lastCompute=0 恒触发一次性校验重算；完成才出队")
+    @DisplayName("存档复用光（REUSE_CACHE）：8 邻 settled 后才校验重算；完成才出队")
     void reusedStorageLight_triggersVerificationRelight_untilRecomputeCompletes() {
         ingestAll();
         // center 光来自存档复用（reused=true），邻柱会话内后算
@@ -133,7 +133,7 @@ class LightReadinessRegistryTest {
         for (int i = 0; i < 8; i++) {
             LightReadinessRegistry.onLightComputed(ring.get(i), false, true, 150 + i);
         }
-        assertEquals(List.of(center), triggered, "存档光必须校验重算一次");
+        assertEquals(List.of(center), triggered, "8 邻光层齐后必须校验重算一次");
         assertFalse(LightReadinessRegistry.isSettled(center));
         // 整柱重算完成（COMPUTED 事件）→ 出队 + 刷新 lastCompute → settled
         LightReadinessRegistry.onLightComputed(center, false, true, 900);
@@ -143,6 +143,29 @@ class LightReadinessRegistryTest {
         // 出队后邻列重复 COMPUTED（非新跃迁）不再触发
         LightReadinessRegistry.onLightComputed(ring.get(3), false, true, 800);
         assertEquals(List.of(center), triggered);
+    }
+
+    @Test
+    @DisplayName("存档复用：邻柱仅 LIT 未 settled 时不得清掉屋檐光")
+    void reusedStorageLight_waitsForNeighborSettledLayers() {
+        ingestAll();
+        LightReadinessRegistry.onLightComputed(center, true, false, 100);
+        for (int i = 0; i < 8; i++) {
+            LightReadinessRegistry.onLightComputed(ring.get(i), false, false, 150 + i);
+        }
+        assertEquals(LightReadinessRegistry.Phase.SURROUNDED,
+                LightReadinessRegistry.phaseOf(center));
+        assertTrue(triggered.isEmpty(), "邻柱尚未 converged=true，不得清复用屋檐光");
+        assertFalse(LightReadinessRegistry.areNeighborsFullySettled(center));
+        LightReadinessRegistry.onLightComputed(ring.get(0), false, true, 400);
+        assertTrue(triggered.isEmpty(), "尚未 8 邻 settled");
+        for (int i = 1; i < 8; i++) {
+            LightReadinessRegistry.onLightComputed(ring.get(i), false, true, 400 + i);
+        }
+        assertEquals(List.of(center), triggered, "8 邻光层齐才校验重算");
+        assertTrue(LightReadinessRegistry.shouldTriggerRelight(0L, true, 407L));
+        assertFalse(LightReadinessRegistry.shouldTriggerRelight(0L, false, 407L),
+                "邻柱光层未齐：保持复用");
     }
 
     @Test
@@ -301,9 +324,41 @@ class LightReadinessRegistryTest {
         int triggersB = (int) triggered.stream().filter(k -> k == b).count();
         assertTrue(triggersA <= 1 && triggersB <= 1,
                 "每柱对每邻至多响应一次，A/B 不乒乓: A=" + triggersA + " B=" + triggersB);
-        // A 重算完成(true, t=300) 后 B 不得再次触发（A 的证据已早于 B 的 lastCompute）
+        // A 重算完成(true, t=300) 后不得把 settledAt 从 100 顶到 300，否则 B 会再触发
         LightReadinessRegistry.onLightComputed(a, false, true, 300);
+        assertEquals(100L, LightReadinessRegistry.settledAtOf(a),
+                "重算完成不得顶高已落下的终值证据");
         assertTrue((int) triggered.stream().filter(k -> k == b).count() <= triggersB,
                 "true 波必终止，不得交替无限触发");
+    }
+
+    @Test
+    @DisplayName("方案D·内部场：全场 SURROUNDED 后重算完成不得乒乓邻柱")
+    void interiorField_relightCompletion_doesNotPingPongNeighbors() {
+        for (int dx = -2; dx <= 2; dx++) {
+            for (int dz = -2; dz <= 2; dz++) {
+                LightReadinessRegistry.markIngested(DimensionKey.key(DIM, dx, dz));
+            }
+        }
+        long t = 10L;
+        for (int dx = -2; dx <= 2; dx++) {
+            for (int dz = -2; dz <= 2; dz++) {
+                LightReadinessRegistry.onLightComputed(
+                        DimensionKey.key(DIM, dx, dz), false, true, t++);
+            }
+        }
+        long a = DimensionKey.key(DIM, 0, 0);
+        long b = DimensionKey.key(DIM, 1, 0);
+        assertEquals(LightReadinessRegistry.Phase.SURROUNDED,
+                LightReadinessRegistry.phaseOf(a));
+        assertEquals(LightReadinessRegistry.Phase.SURROUNDED,
+                LightReadinessRegistry.phaseOf(b));
+        long aSettled = LightReadinessRegistry.settledAtOf(a);
+        triggered.clear();
+        LightReadinessRegistry.onLightComputed(a, false, true, 10_000L);
+        assertEquals(aSettled, LightReadinessRegistry.settledAtOf(a),
+                "内部场重算完成不得顶高 settledAt");
+        assertEquals(0, triggered.stream().filter(k -> k == b).count(),
+                "A 重算完成不得再触发已 settled 的邻柱 B");
     }
 }

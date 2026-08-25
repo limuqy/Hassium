@@ -27,8 +27,35 @@ public final class ClientLifecycleHelper {
 
     private static volatile boolean initialized = false;
     private static final AtomicBoolean finalized = new AtomicBoolean(false);
+    /**
+     * 本次会话拆除已跑过 {@link #cleanupOnDisconnect()}。{@link #finalizeDisconnectIfTerminal()}
+     * 只在此标志为真时关执行器——避免 {@code ConnectScreen.startConnecting} 的空 {@code clearLevel}
+     * 把投机影子的 executor 杀掉。
+     */
+    private static final AtomicBoolean disconnectCleanupArmed = new AtomicBoolean(false);
 
     private ClientLifecycleHelper() {
+    }
+
+    /**
+     * 是否有可拆除的客户端会话。{@code ConnectScreen.startConnecting} 一进来就
+     * {@code minecraft.clearLevel()}，标题画面 level/player 皆空且尚未 {@link #onLogin()}——
+     * 那不是断连，不能 pause 编码、不能关 executor。
+     */
+    public static boolean hasActiveClientSession() {
+        if (initialized) {
+            return true;
+        }
+        Minecraft mc = Minecraft.getInstance();
+        if (mc == null) {
+            return false;
+        }
+        return hasActiveClientSession(false, mc.level != null, mc.player != null);
+    }
+
+    /** 测试缝：会话门纯函数（不碰 Minecraft）。 */
+    static boolean hasActiveClientSession(boolean sessionInitialized, boolean hasLevel, boolean hasPlayer) {
+        return sessionInitialized || hasLevel || hasPlayer;
     }
 
     /**
@@ -37,6 +64,10 @@ public final class ClientLifecycleHelper {
      */
     public static void onLogin() {
         io.github.limuqy.mc.hassium.utils.LoginTiming.markLogin(); // T0b 诊断：handleLogin 时刻（总耗时起点）
+        // connect 的 clearLevel 可能已 pauseEncoding；handleLogin 时 revert 已结束，必须放行
+        // drainReady / hash 抽干 / unpark（否则 NeoForge 易卡在暂停态 → landed=0）。
+        io.github.limuqy.mc.hassium.storage.ShadowStorageManager.resumeEncoding();
+        io.github.limuqy.mc.hassium.network.seedgen.ShadowServerRegistry.getInstance().getOrCreate();
         if (initialized) {
             return;
         }
@@ -205,6 +236,11 @@ public final class ClientLifecycleHelper {
      * 挡住（曾实测 {@code queued=0, skippedClean=1452, dirtyLeft=0}，光照/方块不落盘）。
      */
     public static void cleanupOnDisconnect() {
+        if (!hasActiveClientSession()) {
+            Constants.LOG.debug("Hassium: cleanupOnDisconnect skipped (no active client session)");
+            return;
+        }
+        io.github.limuqy.mc.hassium.storage.ShadowStorageManager.pauseEncoding();
         // 手动登出会经两条路径触发（主线程 disconnect HEAD + Netty onDisconnect），
         // 冷却防二次 dump/flush 与 save 线程停启竞态。
         long now = System.nanoTime();
@@ -220,6 +256,7 @@ public final class ClientLifecycleHelper {
 
         initialized = false;
         finalized.set(false);
+        disconnectCleanupArmed.set(true);
         ClientMainThreadBudget.clearJoinBoost();
         // 网络核心（网关）：关 outbound → IDLE（T4 骨架）
         io.github.limuqy.mc.hassium.network.core.NetworkCore.getInstance().onDisconnect();
@@ -262,6 +299,7 @@ public final class ClientLifecycleHelper {
      */
     public static void finalizeDisconnect() {
         if (!finalized.compareAndSet(false, true)) return;
+        disconnectCleanupArmed.set(false);
         // 会话真正终止：影子端由断连链 SeedGenLevelCompat.shutdown 关闭（含 saveAll）；
         // 无客户端恢复期预填充。
         // ⑩ 登出自动重置指标：恢复中此方法被短路，故仅在真正终止时清零；
@@ -280,12 +318,14 @@ public final class ClientLifecycleHelper {
     }
 
     /**
-     * 最终清理入口（恢复感知已退役：客户端 failover 删除后无条件直接关闭）。
-     * <p>
-     * 保持方法名/调用点不变：{@link MixinMinecraft} 与各加载器 DISCONNECT 事件
-     * 均调用此方法；幂等由 {@link #finalizeDisconnect()} 的 AtomicBoolean 保证。
+     * 最终清理入口。仅当事先跑过 {@link #cleanupOnDisconnect()}（真实会话拆除）时关执行器；
+     * {@code ConnectScreen.startConnecting} 的空 {@code clearLevel} 不得走这条路径。
+     * 幂等由 {@link #finalizeDisconnect()} 的 {@code AtomicBoolean} 保证。
      */
     public static void finalizeDisconnectIfTerminal() {
+        if (!disconnectCleanupArmed.get()) {
+            return;
+        }
         finalizeDisconnect();
     }
 

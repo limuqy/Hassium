@@ -57,7 +57,7 @@ public record HassiumConfig(
             boolean enabled,
             int maxSizeMb,
             int compressionLevel,
-            // === 热度清理（影子端容量/热度淘汰：heat.idx 热度索引 + 逐柱删除，saveAll 不再只写不删）===
+            // === 热度清理（影子端容量/热度淘汰：heat.idx 按 region 文件 + 整文件删除）===
             double hotScoreThreshold,
             double recencyWeight,
             double frequencyWeight,

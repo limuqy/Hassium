@@ -2,6 +2,7 @@ package io.github.limuqy.mc.hassium.network.seedgen;
 
 import com.mojang.serialization.Lifecycle;
 import io.github.limuqy.mc.hassium.Constants;
+import io.github.limuqy.mc.hassium.compat.ShadowServerCompat;
 import io.github.limuqy.mc.hassium.utils.DebugLogger;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -443,16 +444,7 @@ public final class SeedGenLevelCompat {
         // 触发 vanilla "Cound not schedule mailbox" ERROR + RejectedExecutionException（污染
         // LogAudit 门禁，无害但吵）。JVM 即将退出时存档已无后续消费者，跳过保存是安全的；
         // park-for-reuse（客户端存活）路径 ioPool 未关停，守卫不生效。
-#if MC_VER >= MC_1_21_11
-        // 1.21.11+：Util 迁移至 net.minecraft.util 包，ioPool() 返回 TracingExecutor（record 包装，
-        // 无 isShutdown），取 service 访问器
-        boolean exitWindow = net.minecraft.util.Util.ioPool().service().isShutdown();
-#elif MC_VER >= MC_1_21_2
-        // 1.21.2-1.21.10：Util.ioPool() 返回 TracingExecutor（record 包装，无 isShutdown），取 service 访问器
-        boolean exitWindow = net.minecraft.Util.ioPool().service().isShutdown();
-#else
-        boolean exitWindow = net.minecraft.Util.ioPool().isShutdown();
-#endif
+        boolean exitWindow = ShadowServerCompat.isSharedIoPoolShutdown();
         if (skipSave) {
             Constants.LOG.warn("Hassium: Shadow seed server save skipped "
                     + "(previous shutdown incomplete; data re-pushed on next session)");

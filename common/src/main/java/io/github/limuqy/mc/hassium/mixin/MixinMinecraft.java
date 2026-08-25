@@ -4,6 +4,7 @@ import io.github.limuqy.mc.hassium.cache.client.ClientLifecycleHelper;
 import io.github.limuqy.mc.hassium.client.MinecraftAccessor;
 import net.minecraft.client.Minecraft;
 import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.gen.Accessor;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
@@ -84,6 +85,20 @@ public abstract class MixinMinecraft implements MinecraftAccessor {
      * （Netty 线程 execute 排队先于 vanilla handleDisconnection，无此竞态）。
      */
 #if MC_VER < MC_1_21_1
+    /** 与 {@link #hassium$registryGateAcquire} 成对：仅当 HEAD 真正取到写锁时 TAIL 才释放。 */
+    @Unique
+    private boolean hassium$registryWriteHeld;
+
+    @Inject(method = "clearLevel(Lnet/minecraft/client/gui/screens/Screen;)V", at = @At("HEAD"))
+    private void hassium$pauseShadowEncode(CallbackInfo ci) {
+        // ConnectScreen.startConnecting 的空 clearLevel 不是会话拆除：pause 会卡住
+        // drainReady（MixinClientTick）且 unpark 被 shouldUnpark 挡住 → NeoForge landed=0。
+        if (!ClientLifecycleHelper.hasActiveClientSession()) {
+            return;
+        }
+        io.github.limuqy.mc.hassium.storage.ShadowStorageManager.pauseEncoding();
+    }
+
     /**
      * 影子注册表门（写侧）：{@code clearLevel(Screen)} 是 1.20.1 forge/neoforge 所有客户端
      * 断连路径的汇聚点，forge patch 在其中注入 {@code ForgeHooksClient.handleClientLevelClosing}
@@ -93,15 +108,29 @@ public abstract class MixinMinecraft implements MinecraftAccessor {
      * 结构性互斥——write/read 永不落在重建窗口内，vanilla
      * {@code Unknown registry element} ERROR 行不再出现。
      * fabric 无重建机制：写锁无竞争方，零开销。
+     * 须在 {@link #hassium$pauseShadowEncode} 之后取写锁，避免新编码再抢读锁。
+     * 无会话的 connect 空 clearLevel 不取写锁（无 revert），以免堵住投机 WorldLoader。
      */
     @Inject(method = "clearLevel(Lnet/minecraft/client/gui/screens/Screen;)V", at = @At("HEAD"))
     private void hassium$registryGateAcquire(CallbackInfo ci) {
+        hassium$registryWriteHeld = false;
+        if (!io.github.limuqy.mc.hassium.compat.ShadowRegistryGate.shouldHoldWriteLockDuringClearLevel()) {
+            return;
+        }
+        if (!ClientLifecycleHelper.hasActiveClientSession()) {
+            return;
+        }
         io.github.limuqy.mc.hassium.compat.ShadowRegistryGate.acquireWrite();
+        hassium$registryWriteHeld = true;
     }
 
     /** 与 {@link #hassium$registryGateAcquire} 成对：世界拆除 + revert 完成后放行影子序列化。 */
     @Inject(method = "clearLevel(Lnet/minecraft/client/gui/screens/Screen;)V", at = @At("TAIL"))
     private void hassium$registryGateRelease(CallbackInfo ci) {
+        if (!hassium$registryWriteHeld) {
+            return;
+        }
+        hassium$registryWriteHeld = false;
         io.github.limuqy.mc.hassium.compat.ShadowRegistryGate.releaseWrite();
     }
 #endif

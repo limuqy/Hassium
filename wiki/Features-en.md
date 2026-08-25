@@ -74,7 +74,7 @@ Hassium is a single client + server suite that optimizes Minecraft from six dire
 - **Goal**: Revisiting an area should skip full chunk downloads
 - **How**: The server computes chunkHash before pushing; the client compares against the local cache contentHash; on hit it decompresses and applies locally, skipping the vanilla full download
 - **Config**: `chunk.enabled` (default `true`)
-- **Details**: The cache lives in the shadow engine — visited chunks are saved into a vanilla-format world at `hassium_cache/<serverId>/world` (type 126 + chunkHash; the old HBT1 client-cache format has been removed); eviction is per-chunk by heat (`heat.idx`, accumulated across sessions). Section delta, beyond-view rendering and world export all reuse the same cache data (below)
+- **Details**: The cache lives in the shadow engine — visited chunks are saved into a vanilla-format world at `hassium_cache/<serverId>/world` (type 126 + chunkHash; the old HBT1 client-cache format has been removed); eviction is per region file by heat (`heat.idx`, accumulated across sessions). Section delta, beyond-view rendering and world export all reuse the same cache data (below)
 
 ---
 

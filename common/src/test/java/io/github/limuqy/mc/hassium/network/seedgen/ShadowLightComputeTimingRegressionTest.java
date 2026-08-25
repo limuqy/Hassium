@@ -2,6 +2,7 @@ package io.github.limuqy.mc.hassium.network.seedgen;
 
 import io.github.limuqy.mc.hassium.compat.ShadowChunkMapCompat;
 import io.github.limuqy.mc.hassium.metrics.NetworkStats;
+import io.github.limuqy.mc.hassium.network.ClientChunkHandler;
 import io.github.limuqy.mc.hassium.network.ShadowChunkRole;
 import io.github.limuqy.mc.hassium.utils.DimensionKey;
 import net.minecraft.world.level.ChunkPos;
@@ -59,6 +60,27 @@ class ShadowLightComputeTimingRegressionTest {
                 "isLightCorrect → lightReuse，lightChunk(true) 跳过 propagate");
         assertTrue(ShadowLightCompute.diskNeedRelight(false),
                 "isLightOn=false → lightChunk(false) 播种+传播续算");
+        assertFalse(ShadowLightCompute.diskHitNeedRelight(false, true),
+                "盘上已亮且光不脏：R2 复用，不得因引擎层尚未安装而重算屋檐光");
+        assertTrue(ShadowLightCompute.diskHitNeedRelight(true, true),
+                "光脏位仍强制续算");
+        assertTrue(ShadowLightCompute.diskHitNeedRelight(false, false));
+    }
+
+    @Test
+    @DisplayName("可见柱回传亮光即落盘；Halo / 欠光包不写 isLightOn")
+    void persistsPublishedVisibleLightWithoutSurroundedGate() {
+        assertTrue(ShadowLightCompute.shouldPersistPublishedLight(false, true),
+                "R1 已回传的屋檐光必须进 type 126");
+        assertFalse(ShadowLightCompute.shouldPersistPublishedLight(true, true),
+                "Halo 只提供边界，剥光落盘");
+        assertFalse(ShadowLightCompute.shouldPersistPublishedLight(false, false),
+                "欠光/超时首包不得把空层写成 isLightOn");
+        assertTrue(ShadowLightCompute.shouldRestoreLightCorrectOnExit(false, false, true),
+                "退出时层已齐的可见柱补 isLightCorrect，不看 SURROUNDED");
+        assertFalse(ShadowLightCompute.shouldRestoreLightCorrectOnExit(true, false, true));
+        assertFalse(ShadowLightCompute.shouldRestoreLightCorrectOnExit(false, true, true));
+        assertFalse(ShadowLightCompute.shouldRestoreLightCorrectOnExit(false, false, false));
     }
 
     @Test
@@ -156,12 +178,23 @@ class ShadowLightComputeTimingRegressionTest {
     }
 
     @Test
-    @DisplayName("scheduleChunkLoad 短路：仅影子+注入表命中；SeedGen 允许 worldgen")
+    @DisplayName("scheduleChunkLoad 短路：仅注入表；未命中禁止原版读 126")
     void scheduleChunkLoadShortCircuitDoesNotWorldgenOnInject() {
         assertTrue(ShadowChunkMapCompat.shouldShortCircuitScheduleLoad(true, true));
         assertFalse(ShadowChunkMapCompat.shouldShortCircuitScheduleLoad(true, false),
                 "未命中注入表：不得短路成注入柱，但也不得在注入路径 worldgen");
         assertFalse(ShadowChunkMapCompat.shouldShortCircuitScheduleLoad(false, true));
+        assertTrue(ShadowChunkMapCompat.shouldBypassVanillaRegionRead(true, false),
+                "注入路径：未命中注入表也不得走 IOWorker 读 type 126");
+        assertFalse(ShadowChunkMapCompat.shouldBypassVanillaRegionRead(true, true),
+                "SeedGen generateChunk 期间允许原版空槽生成");
+        assertFalse(ShadowChunkMapCompat.shouldBypassVanillaRegionRead(false, false));
+        assertTrue(ShadowChunkMapCompat.shouldSkipVanillaChunkParse(true, false),
+                "影子非 126 槽禁止原版当 zlib 解析");
+        assertFalse(ShadowChunkMapCompat.shouldSkipVanillaChunkParse(true, true),
+                "type 126 由 MixinRegionFile 解压");
+        assertFalse(ShadowChunkMapCompat.shouldSkipVanillaChunkParse(false, false),
+                "专用服非影子存档仍可混有原版槽");
         assertTrue(ShadowChunkMapCompat.shouldPassthroughGenerationStep(true, false, false),
                 "注入票路径：地形步透传");
         assertFalse(ShadowChunkMapCompat.shouldPassthroughGenerationStep(true, true, false),
@@ -305,6 +338,58 @@ class ShadowLightComputeTimingRegressionTest {
             NetworkStats.reset();
             NetworkStats.setEnabled(false);
         }
+    }
+
+    @Test
+    @DisplayName("落地兜底：内存复用记缓存命中，直推记全量；同柱不与 inject 记账叠加")
+    void authoritativeLandedAccountsByOriginWithoutDoubleCount() {
+        NetworkStats.reset();
+        NetworkStats.setEnabled(true);
+        try {
+            ChunkPos memory = new ChunkPos(1, 2);
+            ChunkPos push = new ChunkPos(3, 4);
+            ShadowLightCompute.accountAuthoritativeLanded(DimensionKey.OVERWORLD, memory,
+                    ClientChunkHandler.TraceOrigin.SHADOW_MEMORY_CACHE);
+            ShadowLightCompute.accountAuthoritativeLanded(DimensionKey.OVERWORLD, memory,
+                    ClientChunkHandler.TraceOrigin.SHADOW_MEMORY_CACHE);
+            ShadowLightCompute.accountVisibleNetworkIngress(DimensionKey.OVERWORLD, push);
+            ShadowLightCompute.accountAuthoritativeLanded(DimensionKey.OVERWORLD, push,
+                    ClientChunkHandler.TraceOrigin.SERVER_PUSH);
+
+            assertEquals(1, NetworkStats.getMetrics().getCacheHitFullChunkCount());
+            assertEquals(1, NetworkStats.getMetrics().getFullChunkRequestCount());
+            assertEquals(2, NetworkStats.getMetrics().getClientAppliedChunkCount());
+        } finally {
+            ShadowLightCompute.onDisconnect();
+            NetworkStats.reset();
+            NetworkStats.setEnabled(false);
+        }
+    }
+
+    @Test
+    @DisplayName("hash miss 先 tryRequestMiss 不得挡住直推分母记账")
+    void hashMissDebounceDoesNotSuppressIngressAccounting() {
+        NetworkStats.reset();
+        NetworkStats.setEnabled(true);
+        try {
+            ChunkPos pos = new ChunkPos(8, 8);
+            assertTrue(ShadowLightCompute.tryRequestMiss(DimensionKey.OVERWORLD, pos));
+            assertFalse(ShadowLightCompute.isAuthoritativeIngressInFlight(
+                    DimensionKey.key(DimensionKey.OVERWORLD, pos.x, pos.z)));
+            ShadowLightCompute.accountVisibleNetworkIngress(DimensionKey.OVERWORLD, pos);
+            assertEquals(1, NetworkStats.getMetrics().getFullChunkRequestCount());
+            assertEquals(1, NetworkStats.getMetrics().getClientAppliedChunkCount());
+        } finally {
+            ShadowLightCompute.onDisconnect();
+            NetworkStats.reset();
+            NetworkStats.setEnabled(false);
+        }
+    }
+
+    @Test
+    @DisplayName("影子未就绪时入站不得永久 failShadowServer")
+    void missingShadowServerDoesNotFailEngine() {
+        assertFalse(ShadowVanillaLightPipeline.shouldFailShadowWhenServerUnavailable());
     }
 
     @Test

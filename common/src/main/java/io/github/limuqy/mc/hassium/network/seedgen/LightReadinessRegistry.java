@@ -23,17 +23,17 @@ import java.util.concurrent.atomic.AtomicLong;
  *       （覆盖 PENDING/GENERATED/DELTA/LIGHT_ONLY 全部屏障来源；缓存复用
  *       {@code REUSE_CACHE} 也走屏障，只是值来自存档、记为「未在会话内计算」）。</li>
  *   <li><b>SURROUNDED</b>：自身 LIT 且 8 邻全 LIT。触发整柱 LIGHT_ONLY 清层重算的
- *       证据线（方案 D，LightFinal 根因修复）：存在「晚于本柱末次会话内计算」达成
- *       converged=true 终值的邻柱，或本柱光来自存档复用（lastCompute=0）。重算完成才
- *       出队；已 SURROUNDED 的列在邻列 settled 证据到达后仍参与重评。</li>
+ *       证据线（方案 D）：存在「晚于本柱末次会话内计算」达成 converged=true 终值的
+ *       邻柱。存档复用（lastCompute=0）只在 8 邻都已 settledAt&gt;0 后才校验重算，
+ *       避免邻柱光层未齐时清掉已复用的屋檐光。重算完成才出队。</li>
  * </ul>
  *
- * <p>时间戳不变量（L0 单测锁死）：{@code litAtMs} 只在 INGESTED→LIT 跃迁时刷新；
- * {@code settledAtMs} 只在 converged=true 完成时刷新且单调不回退——它是唯一传播源。
- * 终止性：触发源 = 「某柱新达成 true」这一单调事件；true 柱的 8 邻已全部完成过计算，
- * 自身不再被 relight 清层 → 证据不回退、有向无环；每柱对每个邻柱的 true 达成至多响应
- * 一次，总重算上界 ~9N。（对比：若以原始完成时刻为判据，A/B 交替重算互相顶高对方
- * 时间戳 → 无限乒乓，已被证伪。）
+     * <p>时间戳不变量（L0 单测锁死）：{@code litAtMs} 只在 INGESTED→LIT 跃迁时刷新；
+     * {@code settledAtMs} 只在<b>首次</b> converged=true 达成时落下，之后不顶高——
+     * 它是唯一传播源。终止性：触发源 = 「某柱新达成 true」这一单调事件；重算完成若
+     * 再写 settledAt，邻柱会看到 lastCompute &lt; 新 settledAt → A/B 无限乒乓
+     * （进服站着虚空 + 数万条 Surrounded relight）。每柱对每个邻柱的 true 达成至多
+     * 响应一次，总重算上界 ~9N。
  *
  * <p>纯 Java、无 Minecraft 依赖；时间戳由调用方注入以便单测确定序。线程安全：
  * 事件来自引擎 ForkJoinPool / 消费循环 / 主线程多面，per-column 锁只覆盖单列字段
@@ -67,8 +67,8 @@ final class LightReadinessRegistry {
         /** 末次「会话内真实计算」（lightChunk 非 REUSE_CACHE 完成）时刻；0 = 光来自存档复用/未知。 */
         volatile long lastComputeAtMs;
         /**
-         * 邻列可见的「终值证据」：本柱最近一次以 converged=true 完成整柱计算的时刻；
-         * 0 = 尚无终值。方案 D 唯一传播源——见类 javadoc 终止性论证。
+         * 邻列可见的「终值证据」：本柱<b>首次</b> converged=true 的时刻；0 = 尚无终值。
+         * 重算完成不得改写（否则邻柱 lastCompute &lt; 新 settledAt → 乒乓）。
          */
         volatile long settledAtMs;
         /** 收敛重算已入队未完成（重算完成才出队；防重复入队）。 */
@@ -134,12 +134,12 @@ final class LightReadinessRegistry {
                 boolean wasPending = col.pendingConverge;
                 col.pendingConverge = false;
                 if (converged) {
-                    // 方案 D：converged=true 完成 = 终值证据（唯一传播源）。
-                    // false 完成不记录——其值可能仍基于邻列旧层，不构成对邻居的修正依据。
-                    if (nowMs > col.settledAtMs) {
+                    // 方案 D：首次 true = 终值证据。重算再写会把 settledAt 顶高，
+                    // 邻柱 lastCompute < 新值 → 无限乒乓。
+                    if (col.settledAtMs == 0L) {
                         col.settledAtMs = nowMs;
+                        eventCount.incrementAndGet();
                     }
-                    eventCount.incrementAndGet();
                 } else if (wasPending) {
                     // 待收敛重算以 false 落地：重新武装，等待邻列 true 证据再评
                     eventCount.incrementAndGet();
@@ -247,8 +247,8 @@ final class LightReadinessRegistry {
      * <ul>
      *   <li><b>settled 证据线</b>：newestNeighborSettledAt &gt; lastComputeAt——
      *       park 柱迟到 lightChunk 完成(true)即走此线修正 LightFinal 根因；</li>
-     *   <li><b>存档复用线</b>：lastComputeAt==0 恒触发一次性校验重算（错误定值不得
-     *       随存档复活）。</li>
+     *   <li><b>存档复用线</b>：lastComputeAt==0 且 8 邻均已 settled（光层齐）才校验重算。
+     *       邻柱尚未 converged=true 时保持复用层，避免屋檐/洞口被清成黑块。</li>
      * </ul>
      * pendingConverge 去重：重算完成才允许再次触发。终止性见类 javadoc：
      * true 达成单调不回退，每柱对每邻至多响应一次，上界 ~9N。
@@ -258,8 +258,8 @@ final class LightReadinessRegistry {
             if (col.pendingConverge || col.phase != Phase.SURROUNDED) {
                 return;
             }
-            boolean needed = col.lastComputeAtMs == 0L
-                    || newestNeighborSettledAt(key) > col.lastComputeAtMs;
+            boolean needed = shouldTriggerRelight(col.lastComputeAtMs,
+                    areNeighborsFullySettled(key), newestNeighborSettledAt(key));
             if (!needed) {
                 return;
             }
@@ -277,6 +277,39 @@ final class LightReadinessRegistry {
     }
 
     /**
+     * 存档复用校验：8 邻都必须已有 converged=true 终值（光层已写入引擎）。
+     * 缺邻 / 仅 LIT 未 settled → 不得清掉已复用的屋檐光。
+     */
+    static boolean areNeighborsFullySettled(long key) {
+        String dimension = DimensionKey.dimensionOf(key);
+        int cx = DimensionKey.chunkXOf(key);
+        int cz = DimensionKey.chunkZOf(key);
+        for (int[] d : NEIGHBORS) {
+            long nKey = DimensionKey.key(dimension, cx + d[0], cz + d[1]);
+            Column n = columns.get(nKey);
+            if (n == null || n.settledAtMs == 0L || n.pendingConverge) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * 是否触发整柱校验重算。包内可见供 L0 锁死屋檐/洞口复用契约。
+     *
+     * @param lastComputeAtMs        0 = 光来自存档复用
+     * @param neighborsFullySettled  8 邻均 settledAt&gt;0 且无 pendingConverge
+     * @param newestNeighborSettledAt 邻柱最晚 converged=true 时刻
+     */
+    static boolean shouldTriggerRelight(long lastComputeAtMs, boolean neighborsFullySettled,
+                                        long newestNeighborSettledAt) {
+        if (lastComputeAtMs == 0L) {
+            return neighborsFullySettled;
+        }
+        return newestNeighborSettledAt > lastComputeAtMs;
+    }
+
+    /**
      * 放弃待收敛登记：目标柱不可重算（未注入 / 维度未装配）时由触发方回调，
      * 允许后续事件重新评估，防 pendingConverge 永久卡死泄漏。
      */
@@ -290,11 +323,6 @@ final class LightReadinessRegistry {
         }
     }
 
-    /**
-     * 存档终态门：仅「SURROUNDED 且无待收敛重算」的列允许把 {@code isLightCorrect=true}
-     * 落盘（写 isLightOn + 光层 NBT）。其余列落盘省略光 → 下次读盘强制续算，
-     * 堵死「错误定值随 type 126 存档复活」。注册表缺失（未接线/已清理）按 false 保守处理。
-     */
     /**
      * 8 邻是否全部处于「已 LIT 且无待收敛重算」的稳定态（方案 D：LIGHT_ONLY 收敛
      * 重算完成时的 converged 判定依据）。park 未 LIT（INGESTED）邻柱按未就绪计，
@@ -315,6 +343,9 @@ final class LightReadinessRegistry {
         return true;
     }
 
+    /**
+     * 本柱是否 SURROUNDED 且无待收敛重算。校验重算/邻域 idle 用；可见柱落盘不再看此门。
+     */
     static boolean isSettled(long key) {
         Column col = columns.get(key);
         if (col == null) {

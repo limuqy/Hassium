@@ -9,9 +9,9 @@ import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
 /**
- * {@code ChunkMap} 磁盘加载访问器：官方 {@code scheduleChunkLoad}（readChunk + 解析 +
- * 主线程回调完整链）。影子端读盘（R2 缓存命中 / OVD 环带回填）复用官方加载路径，
- * 保证 126 解压（MixinRegionFile 读 hook）与 light 恢复语义与正式加载一致。
+ * {@code ChunkMap} 访问器：官方 {@code readChunk}/{@code scheduleChunkLoad}、
+ * POI、可见 holder。影子端 type 126 读盘走 {@code ShadowStorageManager}，
+ * 不再回落本访问器打开原版 RegionFile（与映像整文件重写双写同一 .mca）。
  * <p>
  * 签名分段：{@code < MC_1_21_2} 返回 {@code Either<ChunkAccess, ChunkLoadingFailure>}；
  * 1.21.2+ 重构后直接返回 {@code CompletableFuture<ChunkAccess>}。

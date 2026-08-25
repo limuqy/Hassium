@@ -829,10 +829,8 @@ public class ForgeNetworkManager implements NetworkManager {
             }
             FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data()));
             ChunkDataRequestC2SPacket request = ChunkDataRequestC2SPacket.decode(buf);
-            if (request.requestsFullChunks()) {
-                ServerChunkPushManager.getInstance().enqueueDataRequest(
-                        player, request.dimension(), request.chunks());
-            }
+            ServerChunkPushManager.getInstance()
+                    .handleClientChunkDataRequest(player, request);
         } catch (Exception e) {
             LOGGER.error("Hassium: Failed to handle chunk data request", e);
         }
@@ -841,6 +839,7 @@ public class ForgeNetworkManager implements NetworkManager {
     private static void handleClientBloomSync(ClientBloomSyncWrapper msg, ServerPlayer player) {
         try {
             if (player == null) {
+                LOGGER.warn("Hassium: Dropped client bloom sync (sender null — PLAY player not ready)");
                 return;
             }
             FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data()));

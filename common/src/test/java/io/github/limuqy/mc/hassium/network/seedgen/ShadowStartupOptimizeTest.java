@@ -36,4 +36,18 @@ class ShadowStartupOptimizeTest {
         assertTrue(ShadowServerRegistry.shouldReuseParkedInstance(null, "server_a", true));
         assertTrue(ShadowServerRegistry.shouldReuseParkedInstance("server_a", null, true));
     }
+
+    @Test
+    void dirtyInjectedColumn_defersUnloadUntilEncoded() {
+        assertTrue(ShadowLightCompute.shouldDeferUnloadUntilEncoded(true));
+        assertFalse(ShadowLightCompute.shouldDeferUnloadUntilEncoded(false));
+    }
+
+    @Test
+    void unparkBlockedWhileEncodingPaused() {
+        assertFalse(ShadowServerRegistry.shouldUnpark(true, true));
+        assertTrue(ShadowServerRegistry.shouldUnpark(true, false));
+        assertFalse(ShadowServerRegistry.shouldUnpark(false, false));
+        assertFalse(ShadowServerRegistry.shouldUnpark(false, true));
+    }
 }

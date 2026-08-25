@@ -111,7 +111,7 @@ public final class ShadowStorageHashes {
     }
 
     /**
-     * 全量光收敛：标 light 脏 + lightReady。调用方应立即入存储队列。
+     * 全量光收敛：标 light 脏 + lightReady。调用方应立即入内存映像队列（不实时写盘）。
      * R2 contentHash 仍可命中。
      */
     public static void markLightReady(ChunkPos pos) {
@@ -300,6 +300,18 @@ public final class ShadowStorageHashes {
         long key = DimensionKey.key(dimension, pos.x, pos.z);
         HASHES.remove(key);
         FLAGS.remove(key);
+    }
+
+    /** 删除整个 region（32×32）内本维 hash / 脏位。 */
+    public static void removeRegion(String dimension, int regionX, int regionZ) {
+        HASHES.keySet().removeIf(key -> inRegion(dimension, regionX, regionZ, key));
+        FLAGS.keySet().removeIf(key -> inRegion(dimension, regionX, regionZ, key));
+    }
+
+    private static boolean inRegion(String dimension, int regionX, int regionZ, long key) {
+        return dimension.equals(DimensionKey.dimensionOf(key))
+                && Math.floorDiv(DimensionKey.chunkXOf(key), 32) == regionX
+                && Math.floorDiv(DimensionKey.chunkZOf(key), 32) == regionZ;
     }
 
     /** 清空 hash 表（影子端装配/关停时调用）。 */

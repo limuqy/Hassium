@@ -890,13 +890,13 @@ public final class ScenarioEngine {
         } else {
             LOGGER.error("{} round1={} round2={}", MARKER_FAIL, round1Pass, round2Pass);
         }
-        // T6 实体冒烟增强（dev 测试代码）：R2 断线 → 影子端异步保存（daemon 线程）。
-        // 不主动断连直接退出时，JVM 终止会打断 daemon saveAll，R2 期间新转发的实体
-        // 来不及落盘。这里先走被动断连路径，再等保存完成（heat.idx mtime 变化）后才退出。
+        // T6 实体冒烟增强（dev 测试代码）：R2 断线 → 影子端异步保存（park 线程）。
+        // 不主动断连直接退出时，JVM 终止会打断 daemon saveAll。先被动断连，关闭线程
+        // 等 saveAll 序号递增后再 stop()，不占客户端 tick。
         dumpShadowEntities();
+        long saveSeq = io.github.limuqy.mc.hassium.network.seedgen.ShadowSeedServer.saveAllSeq();
         triggerDisconnect(mc);
-        awaitShadowSaveComplete();
-        scheduleExit(allPass ? 0 : 2);
+        scheduleExit(allPass ? 0 : 2, saveSeq);
         finished = true;
         return Outcome.DONE;
     }
@@ -914,9 +914,10 @@ public final class ScenarioEngine {
                 return;
             }
             net.minecraft.server.level.ServerLevel level = server.overworld();
-            // 超大固定 AABB 覆盖影子世界全范围（1.20.1 无 WorldBorder.getBounds）
-            net.minecraft.world.phys.AABB bounds = new net.minecraft.world.phys.AABB(
-                    -3.0E7, -64.0, -3.0E7, 3.0E7, 512.0, 3.0E7);
+            net.minecraft.client.player.LocalPlayer player = Minecraft.getInstance().player;
+            net.minecraft.world.phys.AABB bounds = player == null
+                    ? new net.minecraft.world.phys.AABB(-64, -64, -64, 64, 320, 64)
+                    : player.getBoundingBox().inflate(128.0);
             java.util.List<net.minecraft.world.entity.Entity> all =
                     level.getEntitiesOfClass(net.minecraft.world.entity.Entity.class, bounds, e -> true);
             LOGGER.info("HassiumSmokeTest: shadow dump: {} entities", all.size());
@@ -933,32 +934,25 @@ public final class ScenarioEngine {
 
     /**
      * T6 实体冒烟增强（dev 测试代码）：等待影子端断连保存完成。
-     * 完成信号 = {@code hassium_cache/<serverId>/heat.idx} mtime 变化
-     * （{@code ShadowCacheEviction.save} 是 saveAll 的最后一步）；15s 超时兜底不阻塞退出。
+     * 完成信号 = {@link io.github.limuqy.mc.hassium.network.seedgen.ShadowSeedServer#saveAllSeq()}
+     * 递增。须在 {@code triggerDisconnect} 之前采样序号：park 的 saveAll 常在数毫秒内结束，
+     * 若事后再看 heat.idx mtime，文件可能已写完 → 空等到 15s 超时，R2 退出像卡死。
      */
-    private static void awaitShadowSaveComplete() {
+    private static void awaitShadowSaveComplete(long saveSeqBeforeDisconnect) {
         try {
-            io.github.limuqy.mc.hassium.network.ClientChunkPipeline pipeline =
-                    io.github.limuqy.mc.hassium.network.ClientChunkPipeline.getInstance();
-            java.nio.file.Path gameDir = pipeline.getGameDir();
-            String serverId = pipeline.getServerId();
-            if (gameDir == null || serverId == null) {
-                LOGGER.warn("HassiumSmokeTest: shadow save wait skipped (cache location unknown)");
-                return;
-            }
-            java.nio.file.Path heatIdx = gameDir.resolve("hassium_cache").resolve(serverId)
-                    .resolve("heat.idx");
-            long before = heatIdx.toFile().lastModified();
-            long deadline = System.currentTimeMillis() + 15_000L;
+            long deadline = System.currentTimeMillis() + 2_000L;
             while (System.currentTimeMillis() < deadline) {
-                Thread.sleep(500L);
-                long now = heatIdx.toFile().lastModified();
-                if (now != before && now > 0L) {
-                    LOGGER.info("HassiumSmokeTest: shadow save completed (heat.idx {} -> {})", before, now);
+                if (io.github.limuqy.mc.hassium.network.seedgen.ShadowSeedServer.saveAllSeq()
+                        > saveSeqBeforeDisconnect) {
+                    LOGGER.info("HassiumSmokeTest: shadow save completed (seq {} -> {})",
+                            saveSeqBeforeDisconnect,
+                            io.github.limuqy.mc.hassium.network.seedgen.ShadowSeedServer.saveAllSeq());
                     return;
                 }
+                Thread.sleep(20L);
             }
-            LOGGER.warn("HassiumSmokeTest: shadow save wait timed out (heat.idx mtime unchanged {})", before);
+            LOGGER.warn("HassiumSmokeTest: shadow save wait timed out (seq still {})",
+                    saveSeqBeforeDisconnect);
         } catch (Throwable t) {
             LOGGER.warn("HassiumSmokeTest: shadow save wait failed, continuing", t);
         }
@@ -973,6 +967,10 @@ public final class ScenarioEngine {
     }
 
     private static void scheduleExit(int exitCode) {
+        scheduleExit(exitCode, Long.MIN_VALUE);
+    }
+
+    private static void scheduleExit(int exitCode, long saveSeqBeforeDisconnect) {
         Thread shutdown = new Thread(() -> {
             try {
                 Thread.sleep(500L);
@@ -995,6 +993,9 @@ public final class ScenarioEngine {
                 Runtime.getRuntime().halt(exitCode);
                 return;
             }
+            if (saveSeqBeforeDisconnect != Long.MIN_VALUE) {
+                awaitShadowSaveComplete(saveSeqBeforeDisconnect);
+            }
             try {
                 Minecraft.getInstance().execute(() -> {
                     try {
@@ -1004,7 +1005,7 @@ public final class ScenarioEngine {
                         forceExit(exitCode);
                     }
                 });
-                Thread.sleep(8_000L);
+                Thread.sleep(2_000L);
                 LOGGER.warn("HassiumSmokeTest: force System.exit({}) after stop()", exitCode);
                 forceExit(exitCode);
             } catch (Throwable t) {

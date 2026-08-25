@@ -19,6 +19,7 @@ import io.github.limuqy.mc.hassium.network.core.outbound.UdpDataPlane;
 import io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail;
 import io.github.limuqy.mc.hassium.network.core.viafabric.ViaFabricCompat;
 import io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute;
+import io.github.limuqy.mc.hassium.network.seedgen.ShadowServerRegistry;
 import io.github.limuqy.mc.hassium.server.GatewayPlayerBridge;
 import io.github.limuqy.mc.hassium.platform.Services;
 import io.netty.buffer.ByteBuf;
@@ -612,6 +613,11 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
         // N1：续流就绪（resumeAccepted）→ 位置回退到断线时上报快照（服务端续流物化权威位置）
         if (resumeAccepted) {
             rollbackPlayerPosition();
+        }
+        try {
+            ShadowServerRegistry.getInstance().flushPendingBloomSync();
+        } catch (Throwable t) {
+            LOGGER.debug("Hassium: bloom flush after handshake skipped", t);
         }
     }
 

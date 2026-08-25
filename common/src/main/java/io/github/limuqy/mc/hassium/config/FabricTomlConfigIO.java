@@ -448,7 +448,7 @@ public final class FabricTomlConfigIO {
         set(cfg, "chunk.frequencyWeight", c.frequencyWeight(), "访问频率权重");
         set(cfg, "chunk.cleanupIntervalTicks", c.cleanupIntervalTicks(), "清理检查间隔（刻）");
         set(cfg, "chunk.targetSizeMb", c.targetSizeMb(), "目标缓存大小（MB；0=自动）");
-        set(cfg, "chunk.minCleanupBatchSize", c.minCleanupBatchSize(), "每次最少清理区块数");
+        set(cfg, "chunk.minCleanupBatchSize", c.minCleanupBatchSize(), "每轮最多淘汰的 region 文件数");
         set(cfg, "chunk.sectionDeltaEnabled", c.sectionDeltaEnabled(),
                 "分段增量（GatewayPacketCodec/NetworkCore/DataPlaneClientBundle 活跃消费；默认 true）");
         set(cfg, "chunk.joinBoostEnabled", c.joinBoostEnabled(),
@@ -608,7 +608,7 @@ public final class FabricTomlConfigIO {
         set(cfg, "debug.chunkApplyLogging", d.chunkApplyLogging(), "区块 apply 调试日志");
         set(cfg, "debug.networkLogging", d.networkLogging(), "网络调试日志");
         set(cfg, "debug.cacheLogging", d.cacheLogging(), "缓存调试日志");
-        set(cfg, "debug.lightVerify", d.lightVerify(), "光照验算（官方引擎对照 BFS 结果）");
+        set(cfg, "debug.lightVerify", d.lightVerify(), "光照验算与光包落地探针（CHUNK_PROBE source=light）");
     }
 
     private static void writeServerDebug(CommentedConfig cfg, HassiumConfig.DebugConfig d) {

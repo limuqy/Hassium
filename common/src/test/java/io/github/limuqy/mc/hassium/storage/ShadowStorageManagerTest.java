@@ -16,6 +16,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ShadowStorageManagerTest {
@@ -36,6 +37,7 @@ class ShadowStorageManagerTest {
 
     @BeforeEach
     void setUp() {
+        ShadowStorageManager.resumeEncoding();
         ShadowStorageHashes.clear();
         serializeCalls.set(0);
         injected.clear();
@@ -50,7 +52,24 @@ class ShadowStorageManagerTest {
         if (manager != null) {
             manager.close();
         }
+        ShadowStorageManager.resumeEncoding();
         ShadowStorageHashes.clear();
+        ShadowRegionHeat.reset();
+    }
+
+    @Test
+    @DisplayName("光收敛只进内存映像，drain 不写 .mca")
+    void lightReadyDoesNotWriteRegionFileUntilSave() throws Exception {
+        ChunkPos pos = new ChunkPos(1, 2);
+        injected.add(ChunkPos.asLong(pos.x, pos.z));
+        ShadowStorageHashes.put(pos, 8L);
+        manager.markContentDirty(pos);
+        manager.markLightReady(pos);
+        assertFalse(manager.drain(5_000L).timedOut());
+        Path file = RegionCache.regionFile(regionDir, pos.x, pos.z);
+        assertFalse(java.nio.file.Files.isRegularFile(file), "热路径不得整文件落盘");
+        assertFalse(manager.saveDirtyRegions(5_000L).timedOut());
+        assertTrue(java.nio.file.Files.isRegularFile(file));
     }
 
     @Test
@@ -86,8 +105,8 @@ class ShadowStorageManagerTest {
         assertEquals(0, manager.flush(5_000L).written(), "首次注入未收敛，flush 不刷");
         assertEquals(0, serializeCalls.get());
         manager.markLightReady(pos);
-        assertEquals(1, serializeCalls.get());
         assertFalse(manager.drain(5_000L).timedOut());
+        assertEquals(1, serializeCalls.get());
         assertFalse(ShadowStorageHashes.isDirty(pos));
         assertTrue(ShadowStorageHashes.isPersisted(
                 DimensionKey.key(DimensionKey.OVERWORLD, pos.x, pos.z)));
@@ -115,6 +134,35 @@ class ShadowStorageManagerTest {
         assertFalse(ShadowStorageHashes.isDirty(mutated));
         assertEquals(1, manager.flushRemaining(5_000L).written(), "退出 flushRemaining 应刷首次注入残留");
         assertFalse(ShadowStorageHashes.isDirty(ingest));
+    }
+
+    @Test
+    @DisplayName("pauseEncoding 后 enqueue 不再序列化")
+    void pauseEncodingSkipsEnqueue() {
+        ChunkPos pos = new ChunkPos(11, 11);
+        injected.add(ChunkPos.asLong(pos.x, pos.z));
+        ShadowStorageHashes.put(pos, 21L);
+        manager.markContentDirty(pos);
+        ShadowStorageManager.pauseEncoding();
+        assertTrue(ShadowStorageManager.isEncodingPaused());
+        manager.markLightReady(pos);
+        assertEquals(0, serializeCalls.get());
+        ShadowStorageManager.resumeEncoding();
+        manager.enqueue(pos);
+        assertFalse(manager.drain(5_000L).timedOut());
+        assertEquals(1, serializeCalls.get());
+    }
+
+    @Test
+    @DisplayName("saveDirtyRegions 只写已编码映像，不再走 ChunkSerializer")
+    void saveDirtyRegionsDoesNotSerialize() {
+        ChunkPos pos = new ChunkPos(9, 9);
+        injected.add(ChunkPos.asLong(pos.x, pos.z));
+        ShadowStorageHashes.put(pos, 13L);
+        persistIngest(pos);
+        int before = serializeCalls.get();
+        assertFalse(manager.saveDirtyRegions(5_000L).timedOut());
+        assertEquals(before, serializeCalls.get(), "退出落盘不得再序列化活柱");
     }
 
     @Test
@@ -313,5 +361,22 @@ class ShadowStorageManagerTest {
         manager.markContentDirty(pos);
         manager.markLightReady(pos);
         assertFalse(manager.drain(5_000L).timedOut());
+        assertFalse(manager.saveDirtyRegions(5_000L).timedOut());
+    }
+
+    @Test
+    @DisplayName("deleteRegion 删除整个 .mca 并清 hash / 热度")
+    void deleteRegionRemovesFileAndHeat() throws Exception {
+        ChunkPos pos = new ChunkPos(1, 2);
+        injected.add(ChunkPos.asLong(pos.x, pos.z));
+        ShadowStorageHashes.put(pos, 8L);
+        persistIngest(pos);
+        Path file = RegionCache.regionFile(regionDir, pos.x, pos.z);
+        assertTrue(java.nio.file.Files.isRegularFile(file));
+        injected.remove(ChunkPos.asLong(pos.x, pos.z));
+        manager.deleteRegion(Math.floorDiv(pos.x, 32), Math.floorDiv(pos.z, 32));
+        assertFalse(java.nio.file.Files.isRegularFile(file));
+        assertNull(ShadowStorageHashes.get(pos));
+        assertEquals(0, ShadowRegionHeat.entryCount());
     }
 }

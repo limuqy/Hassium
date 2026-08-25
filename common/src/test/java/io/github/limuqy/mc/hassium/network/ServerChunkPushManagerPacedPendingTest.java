@@ -2,6 +2,7 @@ package io.github.limuqy.mc.hassium.network;
 
 import io.github.limuqy.mc.hassium.server.RuntimeServerContext;
 import java.util.Arrays;
+import java.util.List;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -59,7 +60,8 @@ class ServerChunkPushManagerPacedPendingTest {
         assertFalse(ServerChunkPushManager.shouldDirectPushWithoutHash(true, 42L, true));
         assertFalse(ServerChunkPushManager.shouldDirectPushWithoutHash(false, null, true));
         assertFalse(ServerChunkPushManager.shouldDirectPushWithoutHash(true, null, false));
-        assertTrue(ServerChunkPushManager.shouldPairHashWithDirectPush());
+        assertFalse(ServerChunkPushManager.shouldPairHashWithDirectPush(),
+                "直推已有剥光全量，不得再发一份 ChunkHashS2C");
     }
 
     @Test
@@ -70,6 +72,13 @@ class ServerChunkPushManagerPacedPendingTest {
                 ChunkDataRequestC2SPacket.RESULT_MISS, false));
         assertTrue(ServerChunkPushManager.shouldPushFullOnConfirmResult(
                 ChunkDataRequestC2SPacket.RESULT_MISS, true));
+
+        assertTrue(ServerChunkPushManager.shouldBypassTickCapOnConfirmMiss(true, true),
+                "已封批且有快照的 miss 必须绕开 4/t");
+        assertFalse(ServerChunkPushManager.shouldBypassTickCapOnConfirmMiss(true, false),
+                "尚无快照 = 还没付过封批成本");
+        assertFalse(ServerChunkPushManager.shouldBypassTickCapOnConfirmMiss(false, true),
+                "非 pending 的 miss 不是二次出口");
 
         long sentAt = 1_000L;
         assertFalse(ServerChunkPushManager.isPendingConfirmExpired(sentAt, sentAt + 5_000L));
@@ -84,6 +93,55 @@ class ServerChunkPushManagerPacedPendingTest {
                 ChunkDataRequestC2SPacket.RESULT_HIT, "minecraft:overworld", "minecraft:the_nether"));
         assertFalse(ServerChunkPushManager.shouldClearPendingConfirmOnEmptyHit(
                 ChunkDataRequestC2SPacket.RESULT_MISS, "minecraft:overworld", "minecraft:overworld"));
+    }
+
+    @Test
+    void sameHash_inFlightOrConfirmed_isNotResent() {
+        assertTrue(ServerChunkPushManager.shouldSkipRedundantHash(42L, true, null, 42L));
+        assertTrue(ServerChunkPushManager.shouldSkipRedundantHash(null, false, 42L, 42L));
+        assertFalse(ServerChunkPushManager.shouldSkipRedundantHash(42L, true, null, 99L),
+                "内容变了必须重发");
+        assertFalse(ServerChunkPushManager.shouldSkipRedundantHash(42L, false, null, 42L),
+                "pending 已超时不得再当在途跳过");
+        assertFalse(ServerChunkPushManager.shouldSkipRedundantHash(null, false, null, 42L));
+        assertFalse(ServerChunkPushManager.shouldSkipRedundantHash(42L, true, 42L, 0L));
+    }
+
+    @Test
+    void forceFull_neverFoldsBackToHash() {
+        assertFalse(ServerChunkPushManager.shouldSendHashInsteadOfFull(
+                ServerChunkPushManager.PushKind.FORCE_FULL, false));
+        assertFalse(ServerChunkPushManager.shouldSendHashInsteadOfFull(
+                ServerChunkPushManager.PushKind.FULL_HALO, false));
+        assertTrue(ServerChunkPushManager.shouldSendHashInsteadOfFull(
+                ServerChunkPushManager.PushKind.FULL_VISIBLE, false),
+                "bloom hit 的 FULL_VISIBLE 仍可只发 hash");
+        assertFalse(ServerChunkPushManager.shouldSendHashInsteadOfFull(
+                ServerChunkPushManager.PushKind.FULL_VISIBLE, true));
+    }
+
+    @Test
+    void forceFull_upgradesQueuedVisiblePush() {
+        assertTrue(ServerChunkPushManager.shouldReplaceQueuedPush(
+                ServerChunkPushManager.PushKind.FULL_VISIBLE,
+                ServerChunkPushManager.PushKind.FORCE_FULL));
+        assertFalse(ServerChunkPushManager.shouldReplaceQueuedPush(
+                ServerChunkPushManager.PushKind.FORCE_FULL,
+                ServerChunkPushManager.PushKind.FULL_VISIBLE));
+        assertFalse(ServerChunkPushManager.shouldReplaceQueuedPush(
+                ServerChunkPushManager.PushKind.FULL_VISIBLE,
+                ServerChunkPushManager.PushKind.FULL_VISIBLE));
+    }
+
+    @Test
+    void hitDoesNotRequestFullChunks_mustStillReachConfirmHandler() {
+        ChunkDataRequestC2SPacket hit = new ChunkDataRequestC2SPacket(
+                "minecraft:overworld", List.of(), ChunkDataRequestC2SPacket.RESULT_HIT);
+        assertFalse(hit.requestsFullChunks());
+        ChunkDataRequestC2SPacket miss = new ChunkDataRequestC2SPacket(
+                "minecraft:overworld", List.of(new net.minecraft.world.level.ChunkPos(0, 0)),
+                ChunkDataRequestC2SPacket.RESULT_MISS);
+        assertTrue(miss.requestsFullChunks());
     }
 
     @Test

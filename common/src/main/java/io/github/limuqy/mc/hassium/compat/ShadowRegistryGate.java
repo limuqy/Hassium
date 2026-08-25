@@ -22,21 +22,21 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
  *   <li><b>写锁</b>：{@code clearLevel(Screen)} HEAD 获取、TAIL 释放（Render 线程），
  *       覆盖 vanilla 世界拆除 + {@code handleClientLevelClosing}（revertToFrozen）全程。</li>
  *   <li><b>读锁</b>：影子端 {@code ChunkSerializer.write} / {@code ChunkSerializer.read}
- *       全程持有（park/save 线程）。</li>
+ *       全程持有（RegionWorker 编码线程）。</li>
  * </ul>
- * 由此获得结构保证而非概率探测：write/read 要么整体在 revert 前完成（读锁先获，
- * 写锁等待），要么整体在 revert 后进行（写锁先获，读锁等待）；编码永不落在
- * BiMap 清空窗口内，vanilla ERROR 行不再出现。fabric 无重建机制，读写锁无竞争
- * （写侧仅在 forge patch 存在时获取，见 MixinMinecraft 平台守卫），零开销直通。
+ * 公平锁：编码循环不得饿死 {@code clearLevel} 写方。断连路径不再持读锁。
  * <p>
- * 死锁安全：saveAll 序列化路径不依赖 Render 线程（flush 回调同步执行，
- * 无主线程泵），读锁持有期间不会等待写锁方；写锁方为 Render 线程自身。
+ * 死锁安全：编码不依赖 Render 线程；写锁方为 Render 线程；断连先
+ * {@code pauseEncoding} 再取写锁，新编码不再入队。
+ * Fabric 无 {@code revertToFrozen}：写锁无竞争方，{@link #shouldHoldWriteLockDuringClearLevel()}
+ * 为 false 时 mixin 跳过获取——否则 Render 线程会在 {@code acquireWrite} 上等在途
+ * {@code ChunkSerializer.write} 读锁（跑图后脏柱多时实测可卡到 idle 60s）。
  */
 public final class ShadowRegistryGate {
 
     private ShadowRegistryGate() {}
 
-    private static final ReadWriteLock GATE = new ReentrantReadWriteLock();
+    private static final ReadWriteLock GATE = new ReentrantReadWriteLock(true);
 
     /** 影子端序列化/反序列化入口：注册表访问全程持读锁。 */
     public static <T> T withReadAccess(java.util.function.Supplier<T> action) {
@@ -45,6 +45,19 @@ public final class ShadowRegistryGate {
             return action.get();
         } finally {
             GATE.readLock().unlock();
+        }
+    }
+
+    /**
+     * Fabric 无注册表重建窗口，clearLevel 不必持写锁。
+     * 未加载 platform（单测）时保守返回 true。
+     */
+    public static boolean shouldHoldWriteLockDuringClearLevel() {
+        try {
+            return !"Fabric".equalsIgnoreCase(
+                    io.github.limuqy.mc.hassium.platform.Services.PLATFORM.getPlatformName());
+        } catch (Throwable ignored) {
+            return true;
         }
     }
 

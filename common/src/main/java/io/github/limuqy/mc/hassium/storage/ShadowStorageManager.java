@@ -6,8 +6,10 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -22,12 +24,17 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * 影子缓存存储管理器：脏位 + 按 region 串行写压缩 .mca。
+ * 影子缓存存储管理器：脏位 + 内存 region 压缩映像；磁盘 .mca 不实时写。
  * <p>
  * 活柱工作集仍是 {@code LevelChunk}。本类不保留未压缩 NBT 镜像。
- * 光收敛 {@link #markLightReady} 立即快照 NBT 并入 RegionWorker 队列；
- * {@link #flush} / 定时刷新只刷中途变更（{@code mutation}）；
- * 退出 {@link #flushRemaining} 刷全部剩余脏柱。
+ * 两平面互不等待：
+ * <ul>
+ *   <li><b>编码</b>：{@link #markLightReady} / {@link #enqueue} 把 NBT 写入内存
+ *       {@link RegionCache.Image}，不写盘、不断连路径调用。</li>
+ *   <li><b>落盘</b>：按 region 把已脏映像 {@code Files.write}；玩法中定时 / 编码后合并提交，
+ *       断连 {@link #saveDirtyRegions} 只补写尚未落盘的映像，不等编码、不跑
+ *       {@link #flushRemaining}。</li>
+ * </ul>
  * <p>
  * <b>多维度兼容</b>：每个 manager 绑定一个维度（{@link #dimension()}），HashIndex
  * 键走 {@link DimensionKey#key(String, int, int)} 复合键；regionDir 仍由构造方给
@@ -83,7 +90,13 @@ public final class ShadowStorageManager implements AutoCloseable {
     private final Object drainMonitor = new Object();
     private final List<ChunkPos> writeLog = new ArrayList<>();
     private volatile boolean closed;
-    /** 测试钩子：worker 写盘前睡眠，用于 flush 超时。 */
+    /**
+     * 断连后停止新编码：clearLevel 写锁与 ChunkSerializer 读锁不再互等。
+     * 进程级（所有维度 manager 共用）；R2 unpark 后 {@link #resumeEncoding()}。
+     */
+    private static final java.util.concurrent.atomic.AtomicBoolean ENCODING_PAUSED =
+            new java.util.concurrent.atomic.AtomicBoolean();
+    /** 测试钩子：worker 编码前睡眠，用于 flush 超时。 */
     volatile long testWriteDelayMs;
     /** 本 manager 服务的维度（HashIndex 复合键的维度段）。 */
     private final String dimension;
@@ -113,6 +126,18 @@ public final class ShadowStorageManager implements AutoCloseable {
 
     public void markContentDirty(ChunkPos pos) {
         ShadowStorageHashes.markContentDirty(dimension, pos);
+    }
+
+    public static void pauseEncoding() {
+        ENCODING_PAUSED.set(true);
+    }
+
+    public static boolean isEncodingPaused() {
+        return ENCODING_PAUSED.get();
+    }
+
+    public static void resumeEncoding() {
+        ENCODING_PAUSED.set(false);
     }
 
     public void markLightReady(ChunkPos pos) {
@@ -205,14 +230,14 @@ public final class ShadowStorageManager implements AutoCloseable {
     }
 
     /**
-     * 光收敛即时入队：认领脏位、快照 NBT、提交 RegionWorker，不等待 IO。
-     * 未注入 / 未脏 / 已关闭则 no-op。
+     * 光收敛即时入队：认领脏位后丢给 RegionWorker 做 NBT 快照。
+     * 调用方（finishLight / 主线程）不得同步 {@code ChunkSerializer}，否则加载世界会卡死。
      */
     public void enqueue(ChunkPos pos) {
-        if (closed) {
+        if (closed || ENCODING_PAUSED.get()) {
             return;
         }
-        PendingWrite write = claimAndSerialize(pos);
+        PendingWrite write = claimForWorker(pos);
         if (write != null) {
             submitAsync(List.of(write));
         }
@@ -229,7 +254,7 @@ public final class ShadowStorageManager implements AutoCloseable {
     }
 
     /**
-     * 对 mutation∩injected 从 serializer 取 NBT、提交对应 RegionWorker 压缩写盘并等待。
+     * 对 mutation∩injected 从 serializer 取 NBT 写入内存映像，再按 region 各落盘一次。
      * 定时刷新用：首次注入、尚未光收敛的柱不在此列。
      */
     public FlushResult flush(long timeoutMs) {
@@ -237,14 +262,14 @@ public final class ShadowStorageManager implements AutoCloseable {
     }
 
     /**
-     * 退出用：刷本维度全部剩余脏柱（首次注入残留 / 欠光 / lightReady / mutation）。
-     * 欠光柱按当时 {@code isLightCorrect} 写 isLightOn，R2 读盘会续算。
+     * 测试 / 显式全量：刷本维度剩余脏柱到内存映像再落盘。
+     * 断连路径不要调用——那会在退出窗口同步 {@code ChunkSerializer}。
      */
     public FlushResult flushRemaining(long timeoutMs) {
         return flushMatching(timeoutMs, ShadowStorageHashes::isDirty);
     }
 
-    /** 等待异步入队写盘结束（退出 saveAll 排空队列）。 */
+    /** 等待异步入队（内存编码）结束。 */
     public FlushResult drain(long timeoutMs) {
         long deadline = System.currentTimeMillis() + Math.max(0L, timeoutMs);
         synchronized (drainMonitor) {
@@ -264,18 +289,49 @@ public final class ShadowStorageManager implements AutoCloseable {
         return new FlushResult(0, 0, false);
     }
 
-    /** T5 单柱：若仍脏则序列化压缩写盘（卸载路径，含尚未光收敛的首次注入柱）。 */
+    /** T5 单柱：若仍脏则写入内存映像，再把该 region 落盘一次（卸载路径）。 */
     public boolean flushColumn(ChunkPos pos, long timeoutMs) {
-        long key = DimensionKey.key(dimension, pos.x, pos.z);
-        if (!ShadowStorageHashes.isDirty(key)) {
+        if (ENCODING_PAUSED.get()) {
+            saveDirtyRegionsAsync();
             return true;
         }
-        PendingWrite write = claimAndSerialize(pos);
-        if (write == null) {
-            return !ShadowStorageHashes.isDirty(key);
+        long key = DimensionKey.key(dimension, pos.x, pos.z);
+        if (ShadowStorageHashes.isDirty(key)) {
+            PendingWrite write = claimAndSerialize(pos);
+            if (write == null) {
+                if (ShadowStorageHashes.isDirty(key)) {
+                    return false;
+                }
+            } else {
+                FlushResult result = submitAndWait(List.of(write), timeoutMs);
+                if (result.abandoned() != 0 || result.timedOut()) {
+                    return false;
+                }
+            }
         }
-        FlushResult result = submitAndWait(List.of(write), timeoutMs);
-        return result.abandoned() == 0 && !result.timedOut();
+        saveDirtyRegionsAsync();
+        return true;
+    }
+
+    /**
+     * 把已脏内存映像写盘（调用线程；只写 {@code isFileDirty} 的 region）。
+     * 不是全量区块序列化。热路径请用 {@link #saveDirtyRegionsAsync()}。
+     */
+    public FlushResult saveDirtyRegions(long timeoutMs) {
+        return saveRegions(timeoutMs, null);
+    }
+
+    /**
+     * 把落盘任务接到各 region worker 队尾：排在已排队的内存编码之后，不阻塞调用方。
+     */
+    public void saveDirtyRegionsAsync() {
+        if (closed) {
+            return;
+        }
+        for (Long regionKey : regionKeysToSave()) {
+            Path file = RegionCache.regionFileByKey(regionDir, regionKey);
+            worker(regionKey).requestPersist(() -> saveImage(regionKey, file));
+        }
     }
 
     /**
@@ -294,7 +350,9 @@ public final class ShadowStorageManager implements AutoCloseable {
             }
             if (image != null) {
                 try {
-                    image.save(RegionCache.regionFileByKey(regionDir, regionKey));
+                    Path file = RegionCache.regionFileByKey(regionDir, regionKey);
+                    image.save(file);
+                    touchHeatSize(regionKey, file);
                 } catch (IOException e) {
                     LOGGER.debug("Hassium: idle region save failed {}", regionKey, e);
                 }
@@ -315,24 +373,46 @@ public final class ShadowStorageManager implements AutoCloseable {
         if (image != null) {
             image.clearSlot(RegionCache.localIndex(pos.x, pos.z));
             try {
-                image.save(RegionCache.regionFile(regionDir, pos.x, pos.z));
+                Path file = RegionCache.regionFile(regionDir, pos.x, pos.z);
+                image.save(file);
+                touchHeatSize(RegionCache.regionKey(pos.x, pos.z), file);
             } catch (IOException e) {
                 LOGGER.debug("Hassium: deleteColumn save failed for {}", pos, e);
             }
         }
     }
 
+    /** 卸映像、停 worker、删整个 {@code r.X.Z.mca}，并清该 region 的 hash / 热度。 */
+    public void deleteRegion(int regionX, int regionZ) {
+        long regionKey = ChunkPos.asLong(regionX, regionZ);
+        RegionWorker worker = workers.remove(regionKey);
+        if (worker != null) {
+            worker.shutdown();
+        }
+        images.remove(regionKey);
+        Path file = RegionCache.regionFileByKey(regionDir, regionKey);
+        try {
+            Files.deleteIfExists(file);
+        } catch (IOException e) {
+            LOGGER.debug("Hassium: deleteRegion failed {}", file, e);
+        }
+        ShadowStorageHashes.removeRegion(dimension, regionX, regionZ);
+        ShadowRegionHeat.removeRegion(dimension, regionX, regionZ);
+    }
+
     @Override
     public void close() {
         closed = true;
-        drain(1_000L);
+        drain(200L);
         for (RegionWorker worker : workers.values()) {
             worker.shutdown();
         }
         workers.clear();
         for (var e : images.entrySet()) {
             try {
-                e.getValue().save(RegionCache.regionFileByKey(regionDir, e.getKey()));
+                Path file = RegionCache.regionFileByKey(regionDir, e.getKey());
+                e.getValue().save(file);
+                touchHeatSize(e.getKey(), file);
             } catch (IOException ex) {
                 LOGGER.debug("Hassium: region save on close failed {}", e.getKey(), ex);
             }
@@ -341,7 +421,7 @@ public final class ShadowStorageManager implements AutoCloseable {
     }
 
     private void enqueueMatching(LongPredicate filter) {
-        if (closed) {
+        if (closed || ENCODING_PAUSED.get()) {
             return;
         }
         List<PendingWrite> pending = new ArrayList<>();
@@ -349,7 +429,7 @@ public final class ShadowStorageManager implements AutoCloseable {
             if (!filter.test(key)) {
                 continue;
             }
-            PendingWrite write = claimAndSerialize(
+            PendingWrite write = claimForWorker(
                     new ChunkPos(DimensionKey.chunkXOf(key), DimensionKey.chunkZOf(key)));
             if (write != null) {
                 pending.add(write);
@@ -373,7 +453,30 @@ public final class ShadowStorageManager implements AutoCloseable {
                 pending.add(write);
             }
         }
-        return submitAndWait(pending, timeoutMs);
+        FlushResult encoded = submitAndWait(pending, timeoutMs);
+        if (encoded.timedOut() || encoded.abandoned() > 0) {
+            return encoded;
+        }
+        FlushResult saved = saveRegions(timeoutMs, null);
+        return new FlushResult(encoded.written(), encoded.abandoned() + saved.abandoned(),
+                encoded.timedOut() || saved.timedOut());
+    }
+
+    /** 认领脏位，NBT 由 RegionWorker 再快照（热路径不得同步序列化）。 */
+    private PendingWrite claimForWorker(ChunkPos pos) {
+        long key = DimensionKey.key(dimension, pos.x, pos.z);
+        if (!injected.test(ChunkPos.asLong(pos.x, pos.z))) {
+            return null;
+        }
+        boolean content = ShadowStorageHashes.isContentDirty(key);
+        boolean light = ShadowStorageHashes.isLightDirty(key);
+        boolean mutation = ShadowStorageHashes.isMutation(key);
+        boolean lightReady = ShadowStorageHashes.isLightReady(key);
+        if (!ShadowStorageHashes.claimDirty(key)) {
+            return null;
+        }
+        Long hash = ShadowStorageHashes.get(dimension, pos);
+        return new PendingWrite(pos, null, content, light, mutation, lightReady, hash);
     }
 
     private PendingWrite claimAndSerialize(ChunkPos pos) {
@@ -501,10 +604,9 @@ public final class ShadowStorageManager implements AutoCloseable {
         }
         List<PendingWrite> encoded = new ArrayList<>();
         RegionCache.Image image = null;
-        Path regionFile = null;
         for (int i = 0; i < batch.size(); i++) {
             PendingWrite write = batch.get(i);
-            if (Thread.currentThread().isInterrupted()) {
+            if (ENCODING_PAUSED.get() || Thread.currentThread().isInterrupted()) {
                 restoreAll(encoded);
                 restoreAll(batch.subList(i, batch.size()));
                 return;
@@ -520,38 +622,104 @@ public final class ShadowStorageManager implements AutoCloseable {
                 }
             }
             try {
-                byte[] sector = HassiumType126Codec.encodeSector(write.nbt, write.hash, zstdLevel);
+                byte[] nbt = write.nbt;
+                if (nbt == null) {
+                    nbt = serializer.serialize(write.pos);
+                    if (nbt == null) {
+                        ShadowStorageHashes.restoreDirty(
+                                DimensionKey.key(dimension, write.pos.x, write.pos.z),
+                                write.content, write.light, write.mutation, write.lightReady);
+                        continue;
+                    }
+                }
+                Long hash = write.hash;
+                if (hash == null) {
+                    hash = ShadowStorageHashes.get(dimension, write.pos);
+                }
+                byte[] sector = HassiumType126Codec.encodeSector(nbt, hash, zstdLevel);
                 byte[] payload = HassiumType126Codec.payloadAfterType(sector);
                 if (image == null) {
                     image = imageFor(write.pos, true);
-                    regionFile = RegionCache.regionFile(regionDir, write.pos.x, write.pos.z);
                 }
-                image.writePayload(RegionCache.localIndex(write.pos.x, write.pos.z), payload, write.hash);
+                image.writePayload(RegionCache.localIndex(write.pos.x, write.pos.z), payload, hash);
                 encoded.add(write);
             } catch (Exception e) {
-                LOGGER.warn("Hassium: region write failed for {}", write.pos, e);
+                LOGGER.warn("Hassium: region encode failed for {}", write.pos, e);
                 ShadowStorageHashes.restoreDirty(
                         DimensionKey.key(dimension, write.pos.x, write.pos.z),
                         write.content, write.light, write.mutation, write.lightReady);
             }
         }
-        if (image == null || regionFile == null || encoded.isEmpty()) {
+        if (encoded.isEmpty()) {
             return;
         }
-        try {
-            image.save(regionFile);
-            written.addAndGet(encoded.size());
+        written.addAndGet(encoded.size());
+        for (PendingWrite write : encoded) {
+            ShadowStorageHashes.markPersisted(dimension, write.pos);
+        }
+        synchronized (writeLog) {
             for (PendingWrite write : encoded) {
-                ShadowStorageHashes.markPersisted(dimension, write.pos);
+                writeLog.add(write.pos);
             }
-            synchronized (writeLog) {
-                for (PendingWrite write : encoded) {
-                    writeLog.add(write.pos);
+        }
+    }
+
+    private FlushResult saveRegions(long timeoutMs, Long onlyRegionKey) {
+        long deadline = System.currentTimeMillis() + Math.max(0L, timeoutMs);
+        int saved = 0;
+        int abandoned = 0;
+        boolean timedOut = false;
+        for (Long regionKey : regionKeysToSave()) {
+            if (onlyRegionKey != null && !onlyRegionKey.equals(regionKey)) {
+                continue;
+            }
+            if (System.currentTimeMillis() > deadline) {
+                timedOut = true;
+                abandoned++;
+                continue;
+            }
+            Path file = RegionCache.regionFileByKey(regionDir, regionKey);
+            try {
+                if (saveImage(regionKey, file)) {
+                    saved++;
                 }
+            } catch (Exception e) {
+                abandoned++;
             }
-        } catch (Exception e) {
-            LOGGER.warn("Hassium: region file save failed {}", regionFile, e);
-            restoreAll(encoded);
+        }
+        return new FlushResult(saved, abandoned, timedOut);
+    }
+
+    private Set<Long> regionKeysToSave() {
+        Set<Long> keys = new HashSet<>();
+        keys.addAll(images.keySet());
+        keys.addAll(workers.keySet());
+        return keys;
+    }
+
+    private boolean saveImage(long regionKey, Path file) {
+        RegionCache.Image image = images.get(regionKey);
+        if (image == null || !image.isFileDirty()) {
+            return false;
+        }
+        try {
+            image.save(file);
+            touchHeatSize(regionKey, file);
+            return true;
+        } catch (IOException e) {
+            LOGGER.warn("Hassium: region file save failed {}", file, e);
+            return false;
+        }
+    }
+
+    private void touchHeatSize(long regionKey, Path file) {
+        try {
+            if (Files.isRegularFile(file)) {
+                ShadowRegionHeat.updateRegionSize(dimension,
+                        RegionCache.regionXOf(regionKey), RegionCache.regionZOf(regionKey),
+                        Files.size(file));
+            }
+        } catch (IOException ignored) {
         }
     }
 
@@ -612,9 +780,11 @@ public final class ShadowStorageManager implements AutoCloseable {
     private record PendingWrite(ChunkPos pos, byte[] nbt, boolean content, boolean light,
                                 boolean mutation, boolean lightReady, Long hash) {}
 
-    /** 每 {@code r.x.z} 单线程队列。 */
+    /** 每 {@code r.x.z} 单线程队列：编码与落盘同队列，落盘排在已排队编码之后。 */
     static final class RegionWorker {
         private final ExecutorService executor;
+        private final java.util.concurrent.atomic.AtomicBoolean persistQueued =
+                new java.util.concurrent.atomic.AtomicBoolean();
 
         RegionWorker(long regionKey) {
             int rx = (int) regionKey;
@@ -630,10 +800,28 @@ public final class ShadowStorageManager implements AutoCloseable {
             return executor.submit(task);
         }
 
+        /** 合并落盘：突发 writeBatch 只追加一次 persist 任务。 */
+        void requestPersist(Runnable persist) {
+            if (!persistQueued.compareAndSet(false, true)) {
+                return;
+            }
+            try {
+                executor.submit(() -> {
+                    try {
+                        persist.run();
+                    } finally {
+                        persistQueued.set(false);
+                    }
+                });
+            } catch (RejectedExecutionException e) {
+                persistQueued.set(false);
+            }
+        }
+
         void shutdown() {
             executor.shutdown();
             try {
-                if (!executor.awaitTermination(1, TimeUnit.SECONDS)) {
+                if (!executor.awaitTermination(200, TimeUnit.MILLISECONDS)) {
                     executor.shutdownNow();
                 }
             } catch (InterruptedException e) {

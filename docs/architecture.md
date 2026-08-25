@@ -92,7 +92,7 @@ Hassium/
 
 | 包 | 职责 |
 |----|------|
-| `storage/`（存储域） | `HassiumChunkWriteBuffer`（type 126 payload 写缓冲）、`ShadowStorageHashes`（进程内 chunkHash/光脏桥）；type 126 压缩由 `compression/CompressionService` 收口 |
+| `storage/`（存储域） | `HassiumChunkWriteBuffer`（type 126 payload 写缓冲）、`ShadowStorageHashes`（进程内 chunkHash/光脏桥）、`ShadowStorageManager` / `ShadowRegionHeat`（region 映像 + `heat.idx`）；type 126 压缩由 `compression/CompressionService` 收口 |
 | `compression/`（存储域） | `CompressionCodec` / `CompressionService`、字典注册 |
 | `network/`（**主控核心**） | 服务端网络与推送：握手（`HassiumHandshake` / `PreHandshakeProtocol` / `SeedGenTail`）、管线 ZSTD 与聚合（`ZstdPipelineSwitcher` / `ZstdNegotiationTracker` / `HassiumAggregationManager`）、chunkHash / section-delta / light-delta / BlockEntity 推送、`ServerChunkPushManager` / `ChunkSender` / `ServerLoadReporter`、续流票据（`ResumeTicket` / `ResumeTicketValidator`） |
 | `network/seedgen/`（区块核心 = 影子端后端引擎） | 影子端：`ShadowSeedServer` / `ShadowLightCompute` / `ShadowServerRegistry` / `SeedGenLevelCompat` / `SeedGenChunkCodec` / `SeedGenQueue` / `SeedGenExecutor` / `ShadowCacheEviction` / `OvdLocalGenerator` |
@@ -137,9 +137,9 @@ flowchart LR
 - **影子端算光**：`injectChunk` 建空壳 `LevelChunk` + `replaceWithPacketData` 填数据 + 清光（`queueSectionData(null)`）→ 官方 `ThreadedLevelLightEngine` 传播重算（与区块生成后算光同款逻辑，无特殊机制）；`SeedGenExecutor.generateOne` 生成的区块走 `submitGenerated` 同链
 - **收敛等待**：后台单循环注入全部 → 20ms 轮询等全局收敛（5s 上限）→ `SeedGenChunkCodec.buildPacket` 打包（带权威光）入 ready；**收敛超时仍打包直推**（数据完整、光欠由后续传播/相邻块补齐——客户端不参与光照计算）
 - **官方通道落地**：主线程帧尾 `drainReady` 直接调 `connection.handleLevelChunkWithLight`（原版 apply 路径）；预算化由 `MixinVanillaChunkApplyBudget` 原样生效
-- **世界保存**：断连 `saveAll()`（`ChunkSerializer.write` → `chunkMap.write` → IOWorker）落盘 `hassium_cache/<serverId>/world`（**原版存档结构**，非旧 HBT1 客户端缓存；数据不迁移）。影子端固定走 Hassium 服务端压缩存储（type 126 + chunkHash，`MixinRegionFile` shadow 上下文 gate）；重连复用目录。热度索引 `heat.idx` 随 saveAll 落盘（`ShadowCacheEviction.save`），装配时加载（跨会话累计）
+- **世界保存**：断连 `saveAll()` 把尚未落盘的脏 region 映像写出（`hassium_cache/<serverId>/world`，**原版存档结构**，type 126 + chunkHash）。热度索引 `heat.idx` 由 `ShadowRegionHeat` 解析文件内容加载/落盘（按 `r.X.Z.mca` 计，跨会话累计；存储管理器写盘时回写文件大小）
 - **失败语义**：**注入失败 = 握手失败等价**——`failShadowServer` 整体降级（关闭缓存/超视渲染/SeedGen + 游戏内提示），不做逐柱兜底；旧链 `MixinLightRecompute` 仅覆盖非影子模式（引擎关闭/服务端未剥光）的空光块
-- **缓存清理**（`ShadowCacheEviction`）：容量上限（`chunk.maxSizeMb` 等 7 键）超限后按热度（`hotScore = recencyWeight·1/(1+ageTicks) + frequencyWeight·1/(1+accessCount)`）淘汰冷区块——`chunkMap.write(pos, null)` 逐柱删除（offset 置 0 + 释放扇区），仅删不在 `injectedChunks`（本会话使用中）的磁盘残留；客户端主线程帧尾节流驱动（`chunk.cleanupIntervalTicks`），扫描/删除在后台池
+- **缓存清理**（`ShadowCacheEviction`）：容量上限（`chunk.maxSizeMb` 等 7 键）超限后按热度（`hotScore = recencyWeight·1/(1+ageTicks) + frequencyWeight·1/(1+accessCount)`）淘汰冷 **region 文件**——列目录 + `Files.size`（不拆 Anvil 头），`ShadowStorageManager.deleteRegion` 删整个 `.mca`；本会话 `injectedChunks` 落到的 region 跳过；客户端主线程帧尾节流驱动（`chunk.cleanupIntervalTicks`），扫描/删除在后台池
 
 ## 7. 存储格式
 
@@ -155,7 +155,7 @@ Sector 2+:    [length(4)][type=126][magic 0x48][hash(8)][ZSTD 压缩数据]
 - 服务端：`MixinRegionFile`（需 `storage.enabled`；仅专用服务器写，单人/局域网保持原版格式，读兼容）
 - **影子端**（客户端进程内世界后端）：固定写 Hassium 格式（type 126）——`MixinRegionFile` 写 gate 在 shadow 上下文放行，payload 带 chunkHash（存储桥 `ShadowStorageHashes` 提供）；落盘目录 `hassium_cache/<serverId>/world`（原版存档结构，非旧 HBT1 客户端缓存）
 - 旧客户端缓存（`ClientHassiumStorage` / HBT1 磁盘缓存 / `HassiumRegionFile` 等）**已裁剪**；数据不迁移
-- 客户端辅存：`heat.idx`（影子端热度索引，`hassium_cache/<serverId>/heat.idx` 按服务器分离；容量/热度淘汰用）
+- 客户端辅存：`heat.idx`（region 文件级热度索引，`hassium_cache/<serverId>/heat.idx`；解析文件内容，不靠 mtime）
 - 字典缺失时拒绝写入 Hassium payload，回退原版
 
 ## 8. 网络压缩
@@ -285,7 +285,7 @@ ERROR / WARN 始终输出。
 | 特性 | 配置 / 命令 | 要点 | 详文 |
 |------|-------------|------|------|
 | **影子端世界保存** | `chunk.enabled`（默认 true） | 进服区块统一由进程内影子服务端（完整 MinecraftServer）落盘原版存档（`hassium_cache/<serverId>/world`，type 126 + chunkHash），断连保存、重连复用；旧 HBT1 客户端磁盘缓存已裁剪 | [`chunk-cache.md`](chunk-cache.md) |
-| **容量/热度淘汰** | `chunk.maxSizeMb`、`chunk.hotScoreThreshold`、`chunk.recencyWeight`、`chunk.frequencyWeight`、`chunk.cleanupIntervalTicks`、`chunk.targetSizeMb`、`chunk.minCleanupBatchSize` | 影子端存档超限后按热度淘汰冷区块（heat.idx 跨会话累计；`chunkMap.write(pos,null)` 逐柱删除；仅删非本会话使用中的磁盘残留） | [`chunk-cache.md`](chunk-cache.md) |
+| **容量/热度淘汰** | `chunk.maxSizeMb`、`chunk.hotScoreThreshold`、`chunk.recencyWeight`、`chunk.frequencyWeight`、`chunk.cleanupIntervalTicks`、`chunk.targetSizeMb`、`chunk.minCleanupBatchSize` | 影子端存档超限后按热度淘汰冷 **region 文件**（heat.idx 跨会话累计；`deleteRegion` 删整个 `.mca`；本会话占用中的 region 跳过） | [`chunk-cache.md`](chunk-cache.md) |
 | **分段增量** | `chunk.sectionDeltaEnabled`（默认 true） | MISMATCH 时按平面综合征补变更方块，过多则整段，≥75% 则整块；失败回退全量 | [`chunk-cache.md`](chunk-cache.md) §11.5 |
 | **超视渲染** | `chunk.viewDistanceExtensionEnabled`、`chunk.maxRenderDistance`、`chunk.ovdUnloadDelaySecs` | 多人、clientVD>serverVD 时本地缓存回填环带；Forget 原地 renderOnly；不向服索要视距外区块/BE | [`chunk-cache.md`](chunk-cache.md) §10 |
 | **OVD 本地生成** | `chunk.ovdLocalGeneration`（默认 false） | 超视渲染区域缓存 miss 时用 Hassium 引擎按服务端世界种子本地生成区块（与服务器地形一致），renderOnly 落地并存入本地缓存；无种子（服务端未装 MOD）时自动关闭生成 | [`chunk-cache.md`](chunk-cache.md) §10 |

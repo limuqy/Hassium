@@ -163,7 +163,7 @@ fabric/ | forge/ | neoforge/
 | `dataplane.enabled` | **false** | UDP 数据面；默认 listener 仅 `127.0.0.1` |
 | `debug.*` | false | 热路径用 `DebugLogger` |
 
-存档格式 type **126**（非 127）；元数据推送字段为 **chunkHash**（非 inhabitedTime）。客户端影子端世界 = `hassium_cache/<serverId>/world`（原版存档结构 + type 126 + chunkHash 落盘，`MixinRegionFile` shadow 上下文 gate）；旧 HBT1 客户端磁盘缓存已裁剪（热度清理逻辑迁移为影子端 `ShadowCacheEviction`：heat.idx 容量/热度淘汰，`hassium_cache/<serverId>/heat.idx` per-server）。
+存档格式 type **126**（非 127）；元数据推送字段为 **chunkHash**（非 inhabitedTime）。客户端影子端世界 = `hassium_cache/<serverId>/world`（原版存档结构 + type 126 + chunkHash 落盘，`MixinRegionFile` shadow 上下文 gate）；旧 HBT1 客户端磁盘缓存已裁剪（热度清理为影子端 `ShadowCacheEviction` + `ShadowRegionHeat`：`heat.idx` 按 region 文件计，`hassium_cache/<serverId>/heat.idx` per-server）。
 
 ## 三核心速记（2.0.0）
 
@@ -186,7 +186,7 @@ fabric/ | forge/ | neoforge/
 
 ## 卖点（已实现，按类）
 
-**高效压缩**——存储压缩（ZSTD 落盘 type 126）、网络压缩（网关↔主控通道：全局包/包聚合）；**网络优化**——平滑推送（每 tick 提交上限限速 + 全路径后台化）、主控无感切换（网关换 outbound + 续流票据，客户端零重载）、L1 负载均衡（策略驱动迁移，故障/负载阈值/维护窗口/演练）；**区块缓存**——影子端世界保存（进服区块由进程内影子服务端落盘原版存档 `hassium_cache/<serverId>/world`，断连保存重连复用；目录 key 稳定不受主控切换影响）、容量/热度淘汰（heat.idx + 逐柱删除）、分段增量、本地生成（SeedGen：pristine 区块发坐标引用，客户端同种子本地生成；**服务端开启会泄露世界种子**；失败回退全量）、超视渲染、`/hassiumc export` 世界导出；**光照优化**——Hassium 引擎（影子端统一算光 + 官方通道回传，客户端不计算；剥光握手协商）、光照剥离。
+**高效压缩**——存储压缩（ZSTD 落盘 type 126）、网络压缩（网关↔主控通道：全局包/包聚合）；**网络优化**——平滑推送（每 tick 提交上限限速 + 全路径后台化）、主控无感切换（网关换 outbound + 续流票据，客户端零重载）、L1 负载均衡（策略驱动迁移，故障/负载阈值/维护窗口/演练）；**区块缓存**——影子端世界保存（进服区块由进程内影子服务端落盘原版存档 `hassium_cache/<serverId>/world`，断连保存重连复用；目录 key 稳定不受主控切换影响）、容量/热度淘汰（heat.idx + 整文件删除 `.mca`）、分段增量、本地生成（SeedGen：pristine 区块发坐标引用，客户端同种子本地生成；**服务端开启会泄露世界种子**；失败回退全量）、超视渲染、`/hassiumc export` 世界导出；**光照优化**——Hassium 引擎（影子端统一算光 + 官方通道回传，客户端不计算；剥光握手协商）、光照剥离。
 
 ## 运行时冒烟
 
