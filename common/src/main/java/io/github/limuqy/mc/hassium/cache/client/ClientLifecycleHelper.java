@@ -67,33 +67,36 @@ public final class ClientLifecycleHelper {
         // connect 的 clearLevel 可能已 pauseEncoding；handleLogin 时 revert 已结束，必须放行
         // drainReady / hash 抽干 / unpark（否则 NeoForge 易卡在暂停态 → landed=0）。
         io.github.limuqy.mc.hassium.storage.ShadowStorageManager.resumeEncoding();
+        if (!initialized) {
+            // 先重建执行器再 unpark：投机 ConnectScreen 不得在 park 实例上抢跑 pump。
+            HassiumTaskExecutor.initClient(HassiumTaskExecutor.DEFAULT_CLIENT_THREADS);
+
+            // 尽早写入玩家坐标，避免首波 hash/payload 在首 tick 前用 (0,0) 算优先级
+            try {
+                MainThreadDispatcher.updatePlayerPosition();
+            } catch (Exception ignored) {
+                // ignore
+            }
+
+            // 进服吞吐加速：临时提高主线程时间预算
+            ClientMainThreadBudget.startJoinBoost();
+
+            // 影子端世界根定位：gameDir/serverId 同步记录（异步任务与影子端预创建竞态，
+            // 影子端装配需要此信息——先于 initializeCacheAsync/onLogin 完成）。
+            recordCacheLocationSync();
+            io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.onCacheLocationReady();
+
+            // M2: 异步初始化存储（热度索引 / section 哈希在后台线程）
+            initializeCacheAsync();
+            // 影子端预创建（可能已在 ConnectScreen/CONNECTING 投机启动；此处幂等补齐）。
+            // 握手只开 isEnabled() 消费闸；无握手约 3s 后关停投机影子。
+            startShadowIfConfigured();
+        }
+        io.github.limuqy.mc.hassium.network.seedgen.ShadowServerRegistry.getInstance().permitUnparkForLogin();
         io.github.limuqy.mc.hassium.network.seedgen.ShadowServerRegistry.getInstance().getOrCreate();
         if (initialized) {
             return;
         }
-        // 初始化统一后台执行器（chunk.loadThreads 配置已删除，固定默认线程数；虚拟线程模式下忽略）
-        HassiumTaskExecutor.initClient(HassiumTaskExecutor.DEFAULT_CLIENT_THREADS);
-
-        // 尽早写入玩家坐标，避免首波 hash/payload 在首 tick 前用 (0,0) 算优先级
-        try {
-            MainThreadDispatcher.updatePlayerPosition();
-        } catch (Exception ignored) {
-            // ignore
-        }
-
-        // 进服吞吐加速：临时提高主线程时间预算
-        ClientMainThreadBudget.startJoinBoost();
-
-        // 影子端世界根定位：gameDir/serverId 同步记录（异步任务与影子端预创建竞态，
-        // 影子端装配需要此信息——先于 initializeCacheAsync/onLogin 完成）。
-        recordCacheLocationSync();
-        io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.onCacheLocationReady();
-
-        // M2: 异步初始化存储（热度索引 / section 哈希在后台线程）
-        initializeCacheAsync();
-        // 影子端预创建（可能已在 ConnectScreen/CONNECTING 投机启动；此处幂等补齐）。
-        // 握手只开 isEnabled() 消费闸；无握手约 3s 后关停投机影子。
-        startShadowIfConfigured();
         // 网络核心（网关）：进入 CONNECTING 并尽力自动建立 outbound（T4 骨架）
         io.github.limuqy.mc.hassium.network.core.NetworkCore.getInstance().onLogin();
         initialized = true;
@@ -222,27 +225,18 @@ public final class ClientLifecycleHelper {
             new java.util.concurrent.atomic.AtomicLong(0);
 
     /**
-     * 断开连接时清理（{@code onDisconnect} HEAD，世界拆除之前）。
+     * 断开连接时清理（世界拆除之前）：关网关、清客户端队列。
      * <p>
-     * 轻量清理：拉高预算消费加载队列，排空已有 save 队列，取消后台任务。
-     * 保留 save 线程和 executor 存活，供随后的 unload / 批量 enqueue 消费。
-     * <p>
-     * 重量清理（executor shutdown、storage close）推迟到 {@link #finalizeDisconnect()}。
-     * <p>
-     * 手动登出（PauseScreen 保存并退出）由 {@code MixinMinecraft.disconnect(Screen[,Z])} /
-     * {@code clearLevel} HEAD 注入触发，主线程同步执行——必须早于 vanilla 拆除流程：
-     * 否则经 {@code mc.execute} 排队会晚于 {@code disconnect} TAIL 的
-     * {@code finalizeDisconnect}（dirty clearAll + storage close），dump 全被 dirty gate
-     * 挡住（曾实测 {@code queued=0, skippedClean=1452, dirtyLeft=0}，光照/方块不落盘）。
+     * 不在这里 {@code pauseEncoding}，也不 park 影子端。1.20.1 Forge 注册表窗口
+     * 由 {@code MixinMinecraft.clearLevel} HEAD/TAIL 短暂停编码；落盘在拆除
+     * <b>之后</b>（{@link #finalizeDisconnectIfTerminal()}）从还活着的 ChunkMap 刷脏。
      */
     public static void cleanupOnDisconnect() {
         if (!hasActiveClientSession()) {
             Constants.LOG.debug("Hassium: cleanupOnDisconnect skipped (no active client session)");
             return;
         }
-        io.github.limuqy.mc.hassium.storage.ShadowStorageManager.pauseEncoding();
-        // 手动登出会经两条路径触发（主线程 disconnect HEAD + Netty onDisconnect），
-        // 冷却防二次 dump/flush 与 save 线程停启竞态。
+        // 手动登出会经两条路径触发（主线程 disconnect HEAD + Netty onDisconnect）。
         long now = System.nanoTime();
         long prev = LAST_CLEANUP_NANO.get();
         if (now - prev < CLEANUP_COOLDOWN_NS) {
@@ -258,69 +252,44 @@ public final class ClientLifecycleHelper {
         finalized.set(false);
         disconnectCleanupArmed.set(true);
         ClientMainThreadBudget.clearJoinBoost();
-        // 网络核心（网关）：关 outbound → IDLE（T4 骨架）
         io.github.limuqy.mc.hassium.network.core.NetworkCore.getInstance().onDisconnect();
 
-        Minecraft mc = Minecraft.getInstance();
-        if (mc != null && !mc.isSameThread()) {
-            // 被动断开（服务器踢/断网）：onDisconnect 在 Netty 线程触发。
-            // 新架构断连落盘由影子端 saveAll 承担（SeedGenLevelCompat.shutdown），
-            // 客户端无 dump 队列，无需等主线程。
-        }
-
-        // 主线程无关的清理（线程安全容器）
-        // ③ 影子端存档由 SeedGenLevelCompat.shutdown(saveAll) 承担，无客户端加载队列
         ViewDistanceExtensionService.getInstance().clearAllRenderOnly();
         ChunkMeshCompileLog.reset();
 
-        // ④ 取消后台任务（但不关闭 executor，save 还需要它）
         HassiumTaskExecutor clientExecutor = HassiumTaskExecutor.getClient();
         if (clientExecutor != null) {
             clientExecutor.cancelAll(TaskCategory.SAFE_TO_CANCEL);
         }
 
-        // ⑤ 清空主线程回调队列 + 玩家坐标缓存
         MainThreadDispatcher.clearClient(false);
         MainThreadDispatcher.clearPlayerPosition();
         ClientMetadataHandler.clearPendingState();
 
-        // ⑥ finalizeDisconnect：MixinMinecraft disconnect/clearLevel TAIL，或加载器 DISCONNECT 兜底
-
-        Constants.LOG.info("Hassium: Disconnect cleanup done (shadow park-for-reuse via SeedGenExecutor)");
+        Constants.LOG.info("Hassium: Disconnect cleanup done (shadow flush deferred to teardown TAIL)");
     }
 
     /**
      * 断开连接最终清理（vanilla 世界拆除之后）。
      * <p>
-     * 由 {@link io.github.limuqy.mc.hassium.mixin.MixinMinecraft}（clearLevel / disconnect TAIL）
-     * 与各加载器 DISCONNECT / LoggingOut 事件共同触发；{@code AtomicBoolean} 保证幂等。
-     * <p>
-     * 排空残余 save 任务，然后关闭所有基础设施。
+     * 先恢复编码并 park 影子端（调用线程从还活着的 ChunkMap 刷脏落盘），再关客户端 executor。
      */
     public static void finalizeDisconnect() {
         if (!finalized.compareAndSet(false, true)) return;
         disconnectCleanupArmed.set(false);
-        // 会话真正终止：影子端由断连链 SeedGenLevelCompat.shutdown 关闭（含 saveAll）；
-        // 无客户端恢复期预填充。
-        // ⑩ 登出自动重置指标：恢复中此方法被短路，故仅在真正终止时清零；
-        // failover 恢复成功后计数跨断线保留，符合「同一会话」语义。
-        // 与冒烟测试 ROUND2 入口的重置保持一致：NetworkStats + DataPlane PoC 计数器一并清。
+        io.github.limuqy.mc.hassium.storage.ShadowStorageManager.resumeEncoding();
+        io.github.limuqy.mc.hassium.network.seedgen.ShadowServerRegistry.getInstance().parkForReuse();
         if (HassiumConfigService.getInstance().isMetricsAutoResetEnabled()) {
             io.github.limuqy.mc.hassium.metrics.NetworkStats.reset();
             io.github.limuqy.mc.hassium.network.dataplane.DataPlaneClientBundle.resetDataBulkCounters();
         }
-
-        // ⑥ 关闭 executor（影子端已在断连链 park 保活或 idle 超时后 shutdown；无客户端 save 线程）
         HassiumTaskExecutor.shutdownClient(5000);
-
-        // ⑦ 清理会话状态
         ClientChunkHandler.resetStorage();
     }
 
     /**
      * 最终清理入口。仅当事先跑过 {@link #cleanupOnDisconnect()}（真实会话拆除）时关执行器；
      * {@code ConnectScreen.startConnecting} 的空 {@code clearLevel} 不得走这条路径。
-     * 幂等由 {@link #finalizeDisconnect()} 的 {@code AtomicBoolean} 保证。
      */
     public static void finalizeDisconnectIfTerminal() {
         if (!disconnectCleanupArmed.get()) {

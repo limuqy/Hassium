@@ -38,7 +38,9 @@ public class ClientChunkHandler {
         SERVER_PUSH("server_push"),
         SHADOW_MEMORY_CACHE("shadow_memory_cache"),
         SHADOW_DISK_CACHE("shadow_disk_cache"),
-        LOCAL_GENERATION("local_generation");
+        LOCAL_GENERATION("local_generation"),
+        /** 分段增量就地合并后回传；不是服务端整柱直推，不得记入全量 miss。 */
+        SECTION_DELTA("section_delta");
 
         private final String logValue;
 

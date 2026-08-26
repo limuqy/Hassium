@@ -91,8 +91,8 @@ public abstract class MixinMinecraft implements MinecraftAccessor {
 
     @Inject(method = "clearLevel(Lnet/minecraft/client/gui/screens/Screen;)V", at = @At("HEAD"))
     private void hassium$pauseShadowEncode(CallbackInfo ci) {
-        // ConnectScreen.startConnecting 的空 clearLevel 不是会话拆除：pause 会卡住
-        // drainReady（MixinClientTick）且 unpark 被 shouldUnpark 挡住 → NeoForge landed=0。
+        // 仅挡住 revert 窗口内的新 ChunkSerializer，避免饿死注册表写锁。
+        // ConnectScreen 空 clearLevel 不是会话拆除：pause 会卡住 drainReady。
         if (!ClientLifecycleHelper.hasActiveClientSession()) {
             return;
         }
@@ -127,11 +127,12 @@ public abstract class MixinMinecraft implements MinecraftAccessor {
     /** 与 {@link #hassium$registryGateAcquire} 成对：世界拆除 + revert 完成后放行影子序列化。 */
     @Inject(method = "clearLevel(Lnet/minecraft/client/gui/screens/Screen;)V", at = @At("TAIL"))
     private void hassium$registryGateRelease(CallbackInfo ci) {
-        if (!hassium$registryWriteHeld) {
-            return;
+        if (hassium$registryWriteHeld) {
+            hassium$registryWriteHeld = false;
+            io.github.limuqy.mc.hassium.compat.ShadowRegistryGate.releaseWrite();
         }
-        hassium$registryWriteHeld = false;
-        io.github.limuqy.mc.hassium.compat.ShadowRegistryGate.releaseWrite();
+        // revert 窗口已过：放行从还活着的影子 ChunkMap 刷脏（park 在 finalize TAIL）。
+        io.github.limuqy.mc.hassium.storage.ShadowStorageManager.resumeEncoding();
     }
 #endif
 

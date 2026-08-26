@@ -180,6 +180,12 @@ public final class SmokeProbeWriter {
         field(sb, "ovdLoaded", ovdLoaded);
         field(sb, "ovdPendingMiss", ovdPendingMiss);
         field(sb, "ovdShadowServed", ovdShadowServed);
+        field(sb, "hashMemoryHit", io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.hashMemoryHitCount());
+        field(sb, "hashMemoryMismatch", io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.hashMemoryMismatchCount());
+        field(sb, "hashDiskHit", io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.hashDiskHitCount());
+        field(sb, "hashDiskMismatch", io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.hashDiskMismatchCount());
+        field(sb, "hashAbsent", io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.hashAbsentCount());
+        field(sb, "hashLeftover", io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.hashLeftoverCount());
         field(sb, "sectionDeltaRequestsSent", m.getSectionDeltaRequestsSent());
         field(sb, "sectionDeltaApplied", m.getSectionDeltaChunksReceived());
         field(sb, "lightSegRecalc", m.getLightCacheMissCount());

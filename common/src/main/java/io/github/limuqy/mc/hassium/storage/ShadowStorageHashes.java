@@ -15,11 +15,14 @@ import net.minecraft.world.level.ChunkPos;
  * {@link #remove} → 缓存失效。{@code lightDirty} 只表示光照需本地续算/重写槽，
  * 不得当成 content miss。
  * <p>
- * 落盘职责拆分：
+ * 落盘职责：热路径只标脏；定时 {@code scheduleFlush} 与退出 {@code flushDirty}
+ * 从活柱（ChunkMap）快照编码再写 .mca。
  * <ul>
- *   <li>首次注入（未 {@code persisted}）→ 等光照收敛 {@link #markLightReady} 后立即入存储队列</li>
- *   <li>已落盘后再改（BE / 方块 / 增量）→ {@code mutation}，由定时刷新与退出 flush 刷盘</li>
- *   <li>{@link #markLightDirty} 只标欠光，不入队</li>
+ *   <li>服务端全量注入 → {@link #markContentDirty}（缺光槽）</li>
+ *   <li>回传客户端初版/欠光 → {@link #markLightDirty}（半成品 DataLayer）；
+ *       已 {@code persisted} 时兼标 {@code mutation}</li>
+ *   <li>光收敛 → {@link #markLightReady}</li>
+ *   <li>已落盘后再改方块/BE → {@code mutation}</li>
  * </ul>
  * <p>
  * <b>键布局（多维度兼容）</b>：HASHES/FLAGS 两表键统一为
@@ -111,8 +114,7 @@ public final class ShadowStorageHashes {
     }
 
     /**
-     * 全量光收敛：标 light 脏 + lightReady。调用方应立即入内存映像队列（不实时写盘）。
-     * R2 contentHash 仍可命中。
+     * 全量光收敛：标 light 脏 + lightReady。编码由定时/退出刷脏负责。
      */
     public static void markLightReady(ChunkPos pos) {
         markLightReady(DimensionKey.OVERWORLD, pos);
@@ -127,18 +129,26 @@ public final class ShadowStorageHashes {
         FLAGS.merge(key, LIGHT_DIRTY | LIGHT_READY, (a, b) -> a | b);
     }
 
-    /** 欠光/超时：只标 light 脏，清 lightReady，不入存储队列。 */
+    /**
+     * 欠光/半成品：标 light 脏，清 lightReady。已落盘柱兼标 {@code mutation}。
+     */
     public static void markLightDirty(ChunkPos pos) {
         markLightDirty(DimensionKey.OVERWORLD, pos);
     }
 
-    /** 指定维度欠光/超时：只标 light 脏，清 lightReady。 */
+    /** 指定维度欠光/半成品：标 light 脏，清 lightReady。 */
     public static void markLightDirty(String dimension, ChunkPos pos) {
         markLightDirty(DimensionKey.key(dimension, pos.x, pos.z));
     }
 
     public static void markLightDirty(long key) {
-        FLAGS.merge(key, LIGHT_DIRTY, (a, b) -> (a | LIGHT_DIRTY) & ~LIGHT_READY);
+        FLAGS.merge(key, LIGHT_DIRTY, (a, b) -> {
+            int next = (a | LIGHT_DIRTY) & ~LIGHT_READY;
+            if ((a & PERSISTED) != 0) {
+                next |= MUTATION;
+            }
+            return next;
+        });
     }
 
     /** 读盘命中 / 写盘成功：该柱已有磁盘副本。后续 content 脏视为中途变更。 */

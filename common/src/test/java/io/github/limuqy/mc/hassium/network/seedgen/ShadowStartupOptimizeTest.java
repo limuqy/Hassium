@@ -44,10 +44,11 @@ class ShadowStartupOptimizeTest {
     }
 
     @Test
-    void unparkBlockedWhileEncodingPaused() {
-        assertFalse(ShadowServerRegistry.shouldUnpark(true, true));
-        assertTrue(ShadowServerRegistry.shouldUnpark(true, false));
-        assertFalse(ShadowServerRegistry.shouldUnpark(false, false));
-        assertFalse(ShadowServerRegistry.shouldUnpark(false, true));
+    void unparkBlockedUntilLoginAndEncodingResume() {
+        assertFalse(ShadowServerRegistry.shouldUnpark(true, true, true));
+        assertFalse(ShadowServerRegistry.shouldUnpark(true, false, false));
+        assertTrue(ShadowServerRegistry.shouldUnpark(true, false, true));
+        assertFalse(ShadowServerRegistry.shouldUnpark(false, false, true));
+        assertFalse(ShadowServerRegistry.shouldUnpark(false, true, true));
     }
 }

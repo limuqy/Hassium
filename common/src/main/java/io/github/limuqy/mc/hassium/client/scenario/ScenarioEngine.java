@@ -513,6 +513,7 @@ public final class ScenarioEngine {
     private static void resetNetworkStatsForRound2() {
         try {
             io.github.limuqy.mc.hassium.metrics.NetworkStats.reset();
+            io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.resetHashClassify();
             io.github.limuqy.mc.hassium.network.dataplane.DataPlaneClientBundle.resetDataBulkCounters();
             LOGGER.info("HassiumSmokeTest: network stats reset for ROUND2");
         } catch (Throwable t) {

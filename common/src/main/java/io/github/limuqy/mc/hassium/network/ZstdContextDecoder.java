@@ -97,6 +97,11 @@ public class ZstdContextDecoder extends ByteToMessageDecoder {
         }
 
         int inStart = in.readerIndex();
+        if (!hasCompleteVarInt(in)) {
+            // 半包：VarInt 头被 TCP 截断。读一个字节都会 IOB，必须等后续段，
+            // 否则 DecoderException → 网关 FAILOVER 把 ACTIVE 打成 IDLE。
+            return;
+        }
         FriendlyByteBuf friendlyBuf = new FriendlyByteBuf(in);
         int uncompressedLength = friendlyBuf.readVarInt();
 
@@ -186,6 +191,25 @@ public class ZstdContextDecoder extends ByteToMessageDecoder {
         // 仅成功消费路径记账；半包回退（readerIndex 已还原）不记，避免重复累计。
         NetworkStats.recordWireBytesReceived(in.readerIndex() - inStart);
     }
+
+    /**
+     * 压缩单元前缀是 VarInt(uncompressedLength)。TCP 段可能只到续组字节，
+     * {@code FriendlyByteBuf.readVarInt} 会 IOB；半包必须等待，不得关连接。
+     */
+    static boolean hasCompleteVarInt(ByteBuf in) {
+        int idx = in.readerIndex();
+        int end = in.writerIndex();
+        for (int i = 0; i < 5; i++) {
+            if (idx + i >= end) {
+                return false;
+            }
+            if ((in.getByte(idx + i) & 0x80) == 0) {
+                return true;
+            }
+        }
+        return true;
+    }
+
     /**
      * 解析 zstd 帧（RFC 8878）首帧的压缩体长度（含 magic/帧头/全部数据块/内容校验和）。
      * 压缩单元可能与后续单元同段粘包（M3 冒烟实测），压缩体长度必须按帧边界确定，

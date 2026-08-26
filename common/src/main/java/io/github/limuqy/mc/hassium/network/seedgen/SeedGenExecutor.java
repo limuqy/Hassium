@@ -150,7 +150,7 @@ public final class SeedGenExecutor {
         return ClientChunkPipeline.getInstance().isServerSeedGenEnabled();
     }
 
-    /** 断连清理：停池、清队列；影子端 park 保活（同 serverId 重进复用，见 registry）。 */
+    /** 断连清理：停池、清队列。影子端 park/落盘在世界拆除 TAIL（{@code finalizeDisconnect}）。 */
     public void onDisconnect() {
         queue.clear();
         pendingLive.clear();
@@ -162,7 +162,6 @@ public final class SeedGenExecutor {
         if (p != null) {
             p.shutdownNow();
         }
-        ShadowServerRegistry.getInstance().parkForReuse();
     }
     /** 影子端就绪回调（ShadowServerRegistry.getOrCreate 创建成功后调用，任意线程）：
      *  铺开盲预生成——不依赖 SeedRef（T3 复验实证：R1 期间服务端可能 0 个 SeedRef，

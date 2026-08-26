@@ -58,14 +58,14 @@ class ShadowStorageManagerTest {
     }
 
     @Test
-    @DisplayName("光收敛只进内存映像，drain 不写 .mca")
+    @DisplayName("光收敛只进内存映像，encodeDirty 不写 .mca")
     void lightReadyDoesNotWriteRegionFileUntilSave() throws Exception {
         ChunkPos pos = new ChunkPos(1, 2);
         injected.add(ChunkPos.asLong(pos.x, pos.z));
         ShadowStorageHashes.put(pos, 8L);
         manager.markContentDirty(pos);
         manager.markLightReady(pos);
-        assertFalse(manager.drain(5_000L).timedOut());
+        assertFalse(manager.encodeDirty(5_000L).timedOut());
         Path file = RegionCache.regionFile(regionDir, pos.x, pos.z);
         assertFalse(java.nio.file.Files.isRegularFile(file), "热路径不得整文件落盘");
         assertFalse(manager.saveDirtyRegions(5_000L).timedOut());
@@ -94,18 +94,18 @@ class ShadowStorageManagerTest {
     }
 
     @Test
-    @DisplayName("markDirty 不分配 NBT；光收敛才入队 serialize")
-    void markDirtyDoesNotSerializeUntilLightReady() {
+    @DisplayName("markDirty 不分配 NBT；未刷脏的首次注入不进 flush()")
+    void markDirtyDoesNotSerializeUntilFlush() {
         ChunkPos pos = new ChunkPos(1, 1);
         injected.add(ChunkPos.asLong(pos.x, pos.z));
         ShadowStorageHashes.put(pos, 7L);
         manager.markContentDirty(pos);
         assertEquals(0, serializeCalls.get());
         assertTrue(ShadowStorageHashes.isDirty(pos));
-        assertEquals(0, manager.flush(5_000L).written(), "首次注入未收敛，flush 不刷");
+        assertEquals(0, manager.flush(5_000L).written(), "首次注入未 mutation，flush 不刷");
         assertEquals(0, serializeCalls.get());
         manager.markLightReady(pos);
-        assertFalse(manager.drain(5_000L).timedOut());
+        assertFalse(manager.encodeDirty(5_000L).timedOut());
         assertEquals(1, serializeCalls.get());
         assertFalse(ShadowStorageHashes.isDirty(pos));
         assertTrue(ShadowStorageHashes.isPersisted(
@@ -113,7 +113,56 @@ class ShadowStorageManagerTest {
     }
 
     @Test
-    @DisplayName("定时 flush 只刷 mutation；退出 flushRemaining 刷首次注入残留")
+    @DisplayName("encodeDirty 只进映像，不写 .mca")
+    void encodeDirtyDoesNotWriteRegionFile() throws Exception {
+        ChunkPos pos = new ChunkPos(14, 1);
+        injected.add(ChunkPos.asLong(pos.x, pos.z));
+        ShadowStorageHashes.put(pos, 33L);
+        manager.markContentDirty(pos);
+        manager.encodeDirty(5_000L);
+        Path file = RegionCache.regionFile(regionDir, pos.x, pos.z);
+        assertFalse(java.nio.file.Files.isRegularFile(file), "刷脏编码不得落盘");
+        assertEquals(1, serializeCalls.get());
+        assertFalse(manager.saveDirtyRegions(5_000L).timedOut());
+        assertTrue(java.nio.file.Files.isRegularFile(file));
+    }
+
+    @Test
+    @DisplayName("enqueueDirty 刷 contentDirty；saveDirtyRegions 才落盘")
+    void enqueueDirtyPicksContentDirtyThenSaveWritesFile() throws Exception {
+        ChunkPos pos = new ChunkPos(15, 1);
+        injected.add(ChunkPos.asLong(pos.x, pos.z));
+        ShadowStorageHashes.put(pos, 34L);
+        manager.markContentDirty(pos);
+        assertEquals(0, serializeCalls.get());
+        manager.enqueueDirty();
+        assertEquals(1, serializeCalls.get());
+        Path file = RegionCache.regionFile(regionDir, pos.x, pos.z);
+        assertFalse(java.nio.file.Files.isRegularFile(file), "刷脏入队仍不落盘");
+        assertFalse(manager.saveDirtyRegions(5_000L).timedOut());
+        assertTrue(java.nio.file.Files.isRegularFile(file));
+        assertFalse(ShadowStorageHashes.isDirty(pos));
+    }
+
+    @Test
+    @DisplayName("阶段2：已 persist 后再 markLightDirty+encodeDirty 再序列化")
+    void lightDirtyAfterPersistReenqueues() {
+        ChunkPos pos = new ChunkPos(13, 1);
+        injected.add(ChunkPos.asLong(pos.x, pos.z));
+        ShadowStorageHashes.put(pos, 32L);
+        persistIngest(pos);
+        assertEquals(1, serializeCalls.get());
+        long key = DimensionKey.key(DimensionKey.OVERWORLD, pos.x, pos.z);
+        ShadowStorageHashes.markLightDirty(pos);
+        assertTrue(ShadowStorageHashes.isMutation(key));
+        assertFalse(manager.encodeDirty(5_000L).timedOut());
+        assertEquals(2, serializeCalls.get());
+        assertFalse(ShadowStorageHashes.isDirty(pos));
+        assertTrue(ShadowStorageHashes.isPersisted(key));
+    }
+
+    @Test
+    @DisplayName("flush() 仍只刷 mutation；enqueueDirty 才刷首次注入 contentDirty")
     void flushOnlyWritesMutations() {
         ChunkPos ingest = new ChunkPos(2, 2);
         ChunkPos mutated = new ChunkPos(3, 3);
@@ -130,14 +179,15 @@ class ShadowStorageManagerTest {
         assertFalse(ShadowStorageHashes.isMutation(
                 DimensionKey.key(DimensionKey.OVERWORLD, ingest.x, ingest.z)));
         assertEquals(1, manager.flush(5_000L).written());
-        assertTrue(ShadowStorageHashes.isDirty(ingest), "首次注入仍等光");
+        assertTrue(ShadowStorageHashes.isDirty(ingest), "未 mutation 的首次注入仍不进 flush()");
         assertFalse(ShadowStorageHashes.isDirty(mutated));
-        assertEquals(1, manager.flushRemaining(5_000L).written(), "退出 flushRemaining 应刷首次注入残留");
+        manager.enqueueDirty();
+        assertFalse(manager.saveDirtyRegions(5_000L).timedOut());
         assertFalse(ShadowStorageHashes.isDirty(ingest));
     }
 
     @Test
-    @DisplayName("pauseEncoding 后 enqueue 不再序列化")
+    @DisplayName("pauseEncoding 后 encodeDirty 不再序列化")
     void pauseEncodingSkipsEnqueue() {
         ChunkPos pos = new ChunkPos(11, 11);
         injected.add(ChunkPos.asLong(pos.x, pos.z));
@@ -145,11 +195,10 @@ class ShadowStorageManagerTest {
         manager.markContentDirty(pos);
         ShadowStorageManager.pauseEncoding();
         assertTrue(ShadowStorageManager.isEncodingPaused());
-        manager.markLightReady(pos);
+        manager.encodeDirty(5_000L);
         assertEquals(0, serializeCalls.get());
         ShadowStorageManager.resumeEncoding();
-        manager.enqueue(pos);
-        assertFalse(manager.drain(5_000L).timedOut());
+        assertFalse(manager.encodeDirty(5_000L).timedOut());
         assertEquals(1, serializeCalls.get());
     }
 
@@ -177,7 +226,7 @@ class ShadowStorageManagerTest {
                 DimensionKey.key(DimensionKey.OVERWORLD, pos.x, pos.z)));
         assertFalse(ShadowStorageHashes.isDirty(pos));
         manager.markLightReady(pos);
-        assertFalse(manager.drain(5_000L).timedOut());
+        assertFalse(manager.encodeDirty(5_000L).timedOut());
         assertEquals(2, serializeCalls.get(), "退出终态快照应再序列化一次");
         assertFalse(ShadowStorageHashes.isDirty(pos));
     }
@@ -274,7 +323,7 @@ class ShadowStorageManagerTest {
             return nbt;
         }, injected::contains, 1);
         manager.markLightReady(pos);
-        assertFalse(manager.drain(5_000L).timedOut());
+        assertFalse(manager.encodeDirty(5_000L).timedOut());
         manager.close();
         manager = new ShadowStorageManager(regionDir, pos2 -> nbtPayload.clone(), injected::contains, 1);
         assertTrue(manager.probeHash(pos, 0xCAFEBABEL).match());
@@ -360,7 +409,7 @@ class ShadowStorageManagerTest {
     private void persistIngest(ChunkPos pos) {
         manager.markContentDirty(pos);
         manager.markLightReady(pos);
-        assertFalse(manager.drain(5_000L).timedOut());
+        assertFalse(manager.encodeDirty(5_000L).timedOut());
         assertFalse(manager.saveDirtyRegions(5_000L).timedOut());
     }
 

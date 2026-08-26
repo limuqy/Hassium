@@ -43,6 +43,12 @@ public final class ShadowServerRegistry {
     private volatile String boundServerId;
     private volatile boolean failed;
     private volatile boolean parked;
+    /**
+     * 仅 {@link #permitUnparkForLogin()}（onLogin）允许把 park 实例拉回 ACTIVE。
+     * ConnectScreen 投机 {@code getOrCreate} 不得在网关/执行器就绪前 unpark——
+     * 否则 onLogin {@code initClient} 会拆掉刚拉起的 pump，R2 入站帧半包。
+     */
+    private volatile boolean unparkPermitted;
     /** 当前实例装配用的 world seed（投机创建时可为 0；seed 到达后触发重建判定）。 */
     private volatile long assembledSeed;
     /** createShadowServerWithLockRetry 进行中（onServerSeedArrived 重试等待该标志）。 */
@@ -262,17 +268,26 @@ public final class ShadowServerRegistry {
         }
     }
     /**
-     * 断连 {@code pauseEncoding} 窗口内禁止 unpark：hash 比对 / consumeLoop 的
-     * {@link #getOrCreate()} 不得把刚 park 的实例拉回 ACTIVE（resumeEncoding
-     * 会让 RegionWorker 再抢注册表读锁，卡住 clearLevel 写锁）。
+     * 登录前 / 注册表窗口内禁止 unpark。
+     * <p>
+     * {@code encodingPaused}：1.20.1 Forge {@code revertToFrozen} 窗口（{@code pauseEncoding}）。
+     * {@code unparkPermitted}：仅 onLogin 放行——去掉 HEAD 全局 pause 后，投机
+     * {@code getOrCreate} 不能再靠 {@code !encodingPaused} 立刻把 park 实例拉活。
      */
-    static boolean shouldUnpark(boolean parked, boolean encodingPaused) {
-        return parked && !encodingPaused;
+    static boolean shouldUnpark(boolean parked, boolean encodingPaused, boolean unparkPermitted) {
+        return parked && !encodingPaused && unparkPermitted;
+    }
+
+    /** 登录会话已就绪：允许 {@link #getOrCreate()} 复用 park 实例。 */
+    public void permitUnparkForLogin() {
+        unparkPermitted = true;
     }
 
     /** park → 活跃：取消 idle，标记 ready，唤醒消费者。 */
     private ShadowSeedServer unparkIfNeeded(ShadowSeedServer s) {
-        if (shouldUnpark(parked, io.github.limuqy.mc.hassium.storage.ShadowStorageManager.isEncodingPaused())) {
+        if (shouldUnpark(parked,
+                io.github.limuqy.mc.hassium.storage.ShadowStorageManager.isEncodingPaused(),
+                unparkPermitted)) {
             parkEpoch.incrementAndGet(); // 使在途 park 线程的 clearHot/idle 失效
             parked = false;
             cancelIdleTimeout();
@@ -425,7 +440,8 @@ public final class ShadowServerRegistry {
     }
 
     /**
-     * 断连保活：save 脏柱 + 清 injected/dirty 热表，不 halt、不放 session.lock。
+     * 断连保活：在调用线程刷脏落盘，再清热表、不 halt、不放 session.lock。
+     * 必须等 saveAll 结束再返回，这样 finalize 才能先写缓存再关执行器。
      * 同 serverId 重进经 {@link #getOrCreate()} 复用。空闲 {@link #IDLE_TIMEOUT_MS} 后
      * {@link #shutdown()}。
      */
@@ -439,30 +455,27 @@ public final class ShadowServerRegistry {
                 return;
             }
             parked = true;
+            unparkPermitted = false;
             epoch = parkEpoch.incrementAndGet();
             ClientChunkPipeline.getInstance().setShadowServerReady(false);
         }
         DebugLogger.info(DebugLogger.LogType.ASYNC,
                 "[SHADOW] Parking shadow server for reuse (serverId={})", boundServerId);
-        Thread parker = new Thread(() -> {
-            try {
-                // previousShutdownComplete 仍为 true：无需 beginShutdownSave 即可落盘
-                s.saveAll();
-                synchronized (lock) {
-                    // 快速重进已 unpark（parkEpoch 已变）→ 不得清新会话热表
-                    if (parked && parkEpoch.get() == epoch) {
-                        s.clearHotStateAfterPark();
-                    }
+        try {
+            // previousShutdownComplete 仍为 true：无需 beginShutdownSave 即可落盘
+            s.saveAll();
+            synchronized (lock) {
+                // 快速重进已 unpark（parkEpoch 已变）→ 不得清新会话热表
+                if (parked && parkEpoch.get() == epoch) {
+                    s.clearHotStateAfterPark();
                 }
-            } catch (Throwable t) {
-                Constants.LOG.warn("Hassium: Shadow park save/clear failed; keeping instance", t);
             }
-            if (parked && parkEpoch.get() == epoch) {
-                scheduleIdleTimeout(IDLE_TIMEOUT_MS);
-            }
-        }, "hassium-shadow-park");
-        parker.setDaemon(true);
-        parker.start();
+        } catch (Throwable t) {
+            Constants.LOG.warn("Hassium: Shadow park save/clear failed; keeping instance", t);
+        }
+        if (parked && parkEpoch.get() == epoch) {
+            scheduleIdleTimeout(IDLE_TIMEOUT_MS);
+        }
     }
 
     private void scheduleIdleTimeout(long timeoutMs) {
@@ -521,6 +534,7 @@ public final class ShadowServerRegistry {
             server = null;
             boundServerId = null;
             parked = false;
+            unparkPermitted = false;
             failed = false;
             bloomSyncPending = false;
             previous = previousShutdownFuture;

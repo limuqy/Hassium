@@ -130,4 +130,37 @@ public class ZstdContextDecoderFrameAwareTest {
             ch.finishAndReleaseAll();
         }
     }
+
+    /** 半包守卫：VarInt 头被截断时不得 IOB/关连接，补齐后解出。 */
+    @Test
+    public void testPartialVarIntWaitsThenDecodes() {
+        Random rnd = new Random(11);
+        byte[] payload = new byte[400];
+        rnd.nextBytes(payload);
+        byte[] comp = compress(payload);
+
+        ByteBuf header = Unpooled.buffer();
+        writeVarInt(header, payload.length);
+        assertTrue(header.readableBytes() >= 2, "payload length must be a multi-byte varint");
+
+        ByteBuf first = Unpooled.buffer();
+        first.writeByte(header.getByte(header.readerIndex()));
+
+        EmbeddedChannel ch = new EmbeddedChannel(new ZstdContextDecoder(THRESHOLD, true, false, true));
+        try {
+            assertFalse(ch.writeInbound(first), "truncated varint must not throw or produce output");
+            assertNull(ch.readInbound());
+
+            ByteBuf rest = Unpooled.buffer();
+            rest.writeBytes(header, header.readerIndex() + 1, header.readableBytes() - 1);
+            rest.writeBytes(comp);
+            assertTrue(ch.writeInbound(rest));
+            ByteBuf out = ch.readInbound();
+            assertNotNull(out);
+            assertArrayEquals(payload, readAll(out));
+        } finally {
+            header.release();
+            ch.finishAndReleaseAll();
+        }
+    }
 }

@@ -3,6 +3,7 @@ package io.github.limuqy.mc.hassium.network.seedgen;
 import io.github.limuqy.mc.hassium.compat.ShadowChunkMapCompat;
 import io.github.limuqy.mc.hassium.metrics.NetworkStats;
 import io.github.limuqy.mc.hassium.network.ClientChunkHandler;
+import io.github.limuqy.mc.hassium.network.ClientMetadataHandler;
 import io.github.limuqy.mc.hassium.network.ShadowChunkRole;
 import io.github.limuqy.mc.hassium.utils.DimensionKey;
 import java.util.ArrayList;
@@ -78,6 +79,14 @@ class ShadowLightComputeTimingRegressionTest {
                 "Halo 只提供边界，剥光落盘");
         assertFalse(ShadowLightCompute.shouldPersistPublishedLight(false, false),
                 "欠光/超时首包不得把空层写成 isLightOn");
+        assertTrue(ShadowLightCompute.shouldEnqueuePartialLightSnapshot(false, true, false),
+                "真引擎已推欠光首包：半成品 DataLayer 入队");
+        assertFalse(ShadowLightCompute.shouldEnqueuePartialLightSnapshot(true, true, false),
+                "Halo 不走阶段 2");
+        assertFalse(ShadowLightCompute.shouldEnqueuePartialLightSnapshot(false, false, false),
+                "未推客户端不得入队半成品光");
+        assertFalse(ShadowLightCompute.shouldEnqueuePartialLightSnapshot(false, true, true),
+                "已收敛走 isLightOn，不走阶段 2");
         assertTrue(ShadowLightCompute.shouldRestoreLightCorrectOnExit(false, false, true),
                 "退出时层已齐的可见柱补 isLightCorrect，不看 SURROUNDED");
         assertFalse(ShadowLightCompute.shouldRestoreLightCorrectOnExit(true, false, true));
@@ -383,12 +392,40 @@ class ShadowLightComputeTimingRegressionTest {
 
             assertEquals(1, NetworkStats.getMetrics().getCacheHitFullChunkCount());
             assertEquals(1, NetworkStats.getMetrics().getFullChunkRequestCount());
-            assertEquals(2, NetworkStats.getMetrics().getClientAppliedChunkCount());
         } finally {
             ShadowLightCompute.onDisconnect();
             NetworkStats.reset();
             NetworkStats.setEnabled(false);
         }
+    }
+
+    @Test
+    @DisplayName("分段增量落地不得记全量 miss；磁盘复用记命中")
+    void deltaLandDoesNotCountAsFullRequestAndDiskCountsAsHit() {
+        NetworkStats.reset();
+        NetworkStats.setEnabled(true);
+        try {
+            ChunkPos delta = new ChunkPos(5, 6);
+            ChunkPos disk = new ChunkPos(7, 8);
+            ShadowLightCompute.accountAuthoritativeLanded(DimensionKey.OVERWORLD, delta,
+                    ClientChunkHandler.TraceOrigin.SECTION_DELTA);
+            ShadowLightCompute.accountAuthoritativeLanded(DimensionKey.OVERWORLD, disk,
+                    ClientChunkHandler.TraceOrigin.SHADOW_DISK_CACHE);
+            assertEquals(1, NetworkStats.getMetrics().getCacheHitFullChunkCount());
+            assertEquals(0, NetworkStats.getMetrics().getFullChunkRequestCount());
+            assertEquals(0, NetworkStats.getMetrics().getNewFullChunkRequestCount());
+        } finally {
+            ShadowLightCompute.onDisconnect();
+            NetworkStats.reset();
+            NetworkStats.setEnabled(false);
+        }
+    }
+
+    @Test
+    @DisplayName("超视渲染环带禁止向主控请求全量")
+    void ovdRingMustNotRequestFullChunksFromServer() {
+        assertFalse(ClientMetadataHandler.allowFullChunkRequestFromServer(true));
+        assertTrue(ClientMetadataHandler.allowFullChunkRequestFromServer(false));
     }
 
     @Test

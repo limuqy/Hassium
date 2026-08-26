@@ -41,9 +41,8 @@ public class MixinClientTick {
             // 冒烟失败不阻断正常 tick
         }
 
-        // pauseEncoding 只挡住 ChunkSerializer 入队（clearLevel 写锁 vs 读锁）。
-        // 无世界时跳过 drain/OVD，避免 connect 空 clearLevel 的 tick 把 ready 清掉；
-        // 已进服仍 pause（connect 误 pause / unpark 死锁）则继续消费，否则 landed=0。
+        // 1.20.1 Forge revert 窗口内 pauseEncoding 只挡新的 ChunkSerializer。
+        // 无世界时跳过 drain/OVD；窗口 TAIL 已 resume，标题画面仍可 tickStorageFlush。
         if (io.github.limuqy.mc.hassium.storage.ShadowStorageManager.isEncodingPaused()) {
             Minecraft pausedMc = Minecraft.getInstance();
             if (pausedMc == null || pausedMc.level == null || pausedMc.getConnection() == null) {
@@ -149,11 +148,13 @@ public class MixinClientTick {
             // 忽略
         }
 
-        // 缓存存储定时刷新：只刷中途变更 + 光收敛残留补推（首次注入已在光收敛时入队）
+        // 缓存存储定时刷新：后台从 ChunkMap 刷脏，不堵 tick。park 保活期间不刷，
+        // 避免标题画面 / 重连投机把刚落盘的实例再拉进编码。
         try {
-            io.github.limuqy.mc.hassium.network.seedgen.ShadowSeedServer shadow =
-                    io.github.limuqy.mc.hassium.network.seedgen.ShadowServerRegistry.getInstance().get();
-            if (shadow != null) {
+            io.github.limuqy.mc.hassium.network.seedgen.ShadowServerRegistry registry =
+                    io.github.limuqy.mc.hassium.network.seedgen.ShadowServerRegistry.getInstance();
+            io.github.limuqy.mc.hassium.network.seedgen.ShadowSeedServer shadow = registry.get();
+            if (shadow != null && !registry.isParked()) {
                 shadow.tickStorageFlush();
             }
         } catch (Exception e) {

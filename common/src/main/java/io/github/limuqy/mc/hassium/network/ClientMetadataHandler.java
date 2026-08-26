@@ -6,6 +6,7 @@ import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.compat.LevelCompat;
 import io.github.limuqy.mc.hassium.metrics.NetworkStats;
 import io.github.limuqy.mc.hassium.metrics.VanillaZlibEstimator;
+import io.github.limuqy.mc.hassium.cache.client.ViewDistanceExtensionService;
 import io.github.limuqy.mc.hassium.concurrent.ChunkDistancePriority;
 import io.github.limuqy.mc.hassium.concurrent.HassiumTaskExecutor;
 import io.github.limuqy.mc.hassium.concurrent.MainThreadDispatcher;
@@ -427,6 +428,10 @@ public class ClientMetadataHandler {
                     chunks.size());
             return;
         }
+        chunks = dropOvdFullChunkRequests(chunks);
+        if (chunks.isEmpty()) {
+            return;
+        }
         // 同步刷新主线程调度器的玩家坐标（hash 结果可能在首 tick 前到达）
         MainThreadDispatcher.updatePlayerPosition(mc.player.getX(), mc.player.getZ());
         // 按距玩家距离排序：近处先请求，配合服务端 data 队列距离优先
@@ -459,6 +464,38 @@ public class ClientMetadataHandler {
         for (List<ChunkPos> batch : ChunkDataRequestC2SPacket.partition(toRequest)) {
             sendFullChunkRequest(dimension, batch, staleOrFallback);
         }
+    }
+
+    /**
+     * 红线：超视渲染环带只走影子端本地（内存/磁盘/生成），禁止向主控拉全量。
+     */
+    public static boolean allowFullChunkRequestFromServer(boolean shouldKeepAsRenderOnly) {
+        return !shouldKeepAsRenderOnly;
+    }
+
+    static List<ChunkPos> dropOvdFullChunkRequests(List<ChunkPos> chunks) {
+        if (chunks == null || chunks.isEmpty()) {
+            return List.of();
+        }
+        ViewDistanceExtensionService ovd = ViewDistanceExtensionService.getInstance();
+        List<ChunkPos> tracked = new ArrayList<>(chunks.size());
+        int dropped = 0;
+        for (ChunkPos pos : chunks) {
+            if (pos == null) {
+                continue;
+            }
+            if (!allowFullChunkRequestFromServer(ovd.shouldKeepAsRenderOnly(pos))) {
+                dropped++;
+                continue;
+            }
+            tracked.add(pos);
+        }
+        if (dropped > 0) {
+            DebugLogger.warn(LogType.METADATA,
+                    "[CHUNK_HASH] Dropped {} OVD columns from full-chunk request (local shadow only)",
+                    dropped);
+        }
+        return tracked;
     }
 
     /**

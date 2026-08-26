@@ -72,6 +72,23 @@ class ShadowStorageHashesTest {
         long key = DimensionKey.key(DimensionKey.OVERWORLD, pos.x, pos.z);
         assertTrue(ShadowStorageHashes.isLightDirty(key));
         assertFalse(ShadowStorageHashes.isLightReady(key));
+        assertFalse(ShadowStorageHashes.isMutation(key), "未 persist 不得兼标 mutation");
+    }
+
+    @Test
+    @DisplayName("已 persist 后再 markLightDirty 兼标 mutation")
+    void markLightDirtyAfterPersistSetsMutation() {
+        ChunkPos pos = new ChunkPos(6, 6);
+        long key = DimensionKey.key(DimensionKey.OVERWORLD, pos.x, pos.z);
+        ShadowStorageHashes.markContentDirty(pos);
+        ShadowStorageHashes.claimDirty(key);
+        ShadowStorageHashes.markPersisted(key);
+        assertFalse(ShadowStorageHashes.isMutation(key));
+        ShadowStorageHashes.markLightDirty(pos);
+        assertTrue(ShadowStorageHashes.isLightDirty(key));
+        assertTrue(ShadowStorageHashes.isMutation(key));
+        assertFalse(ShadowStorageHashes.isLightReady(key));
+        assertTrue(ShadowStorageHashes.isPersisted(key));
     }
 
     @Test

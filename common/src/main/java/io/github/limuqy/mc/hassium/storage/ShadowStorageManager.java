@@ -17,6 +17,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.LongPredicate;
 import net.minecraft.world.level.ChunkPos;
@@ -26,20 +27,9 @@ import org.slf4j.LoggerFactory;
 /**
  * 影子缓存存储管理器：脏位 + 内存 region 压缩映像；磁盘 .mca 不实时写。
  * <p>
- * 活柱工作集仍是 {@code LevelChunk}。本类不保留未压缩 NBT 镜像。
- * 两平面互不等待：
- * <ul>
- *   <li><b>编码</b>：{@link #markLightReady} / {@link #enqueue} 把 NBT 写入内存
- *       {@link RegionCache.Image}，不写盘、不断连路径调用。</li>
- *   <li><b>落盘</b>：按 region 把已脏映像 {@code Files.write}；玩法中定时 / 编码后合并提交，
- *       断连 {@link #saveDirtyRegions} 只补写尚未落盘的映像，不等编码、不跑
- *       {@link #flushRemaining}。</li>
- * </ul>
- * <p>
- * <b>多维度兼容</b>：每个 manager 绑定一个维度（{@link #dimension()}），HashIndex
- * 键走 {@link DimensionKey#key(String, int, int)} 复合键；regionDir 仍由构造方给
- * 定（per-dimension 目录隔离由装配层负责）。旧无维度构造器/方法委托到
- * {@link DimensionKey#OVERWORLD}，主世界行为与现网一致。
+ * 热路径只标脏，不 {@code ChunkSerializer}。定时 {@link #scheduleFlush()}（不堵 tick）
+ * 与退出 {@link #flushDirty} 从活柱快照编进映像再落盘；刷脏与 region persist 队列分离，
+ * 写映像前暂停 worker 消费。
  */
 public final class ShadowStorageManager implements AutoCloseable {
 
@@ -88,11 +78,14 @@ public final class ShadowStorageManager implements AutoCloseable {
     private final AtomicInteger decompressCount = new AtomicInteger();
     private final AtomicInteger outstandingWrites = new AtomicInteger();
     private final Object drainMonitor = new Object();
+    private final Object flushLock = new Object();
+    private final AtomicBoolean flushQueued = new AtomicBoolean();
+    private final ExecutorService flushExecutor;
     private final List<ChunkPos> writeLog = new ArrayList<>();
     private volatile boolean closed;
     /**
-     * 断连后停止新编码：clearLevel 写锁与 ChunkSerializer 读锁不再互等。
-     * 进程级（所有维度 manager 共用）；R2 unpark 后 {@link #resumeEncoding()}。
+     * 仅 1.20.1 Forge {@code revertToFrozen} 窗口：挡住新的 {@code ChunkSerializer}
+     * 以免饿死注册表写锁。窗口 TAIL 即 {@link #resumeEncoding()}，退出落盘在恢复之后。
      */
     private static final java.util.concurrent.atomic.AtomicBoolean ENCODING_PAUSED =
             new java.util.concurrent.atomic.AtomicBoolean();
@@ -117,6 +110,12 @@ public final class ShadowStorageManager implements AutoCloseable {
         this.serializer = serializer;
         this.injected = injected;
         this.zstdLevel = zstdLevel;
+        String threadName = "hassium-shadow-flush-" + dimension.replace(':', '_');
+        this.flushExecutor = Executors.newSingleThreadExecutor(r -> {
+            Thread t = new Thread(r, threadName);
+            t.setDaemon(true);
+            return t;
+        });
     }
 
     /** 本 manager 绑定的维度 id。 */
@@ -142,7 +141,6 @@ public final class ShadowStorageManager implements AutoCloseable {
 
     public void markLightReady(ChunkPos pos) {
         ShadowStorageHashes.markLightReady(dimension, pos);
-        enqueue(pos);
     }
 
     /**
@@ -230,46 +228,100 @@ public final class ShadowStorageManager implements AutoCloseable {
     }
 
     /**
-     * 光收敛即时入队：认领脏位后丢给 RegionWorker 做 NBT 快照。
-     * 调用方（finishLight / 主线程）不得同步 {@code ChunkSerializer}，否则加载世界会卡死。
+     * 热路径不得序列化。保留空实现以免旧调用方误入 RegionWorker。
      */
     public void enqueue(ChunkPos pos) {
+        // 只脏位由调用方 mark*；编码走 scheduleFlush / flushDirty / encodeDirty
+    }
+
+    /**
+     * 测试：本维度脏柱编进映像，不落盘。
+     */
+    public void enqueueDirty() {
+        encodeDirty(DEFAULT_FLUSH_TIMEOUT_MS);
+    }
+
+    /** 光收敛残留：编进映像，不落盘。 */
+    public void enqueueLightReady() {
+        synchronized (flushLock) {
+            runFlushCycle(false, ShadowStorageHashes::isLightReady, DEFAULT_FLUSH_TIMEOUT_MS);
+        }
+    }
+
+    /** 中途变更编进映像，不落盘。 */
+    public void enqueueMutations() {
+        synchronized (flushLock) {
+            runFlushCycle(false, ShadowStorageHashes::isMutation, DEFAULT_FLUSH_TIMEOUT_MS);
+        }
+    }
+
+    /**
+     * 定时入口：不堵调用线程。暂停 region worker 后从活柱刷脏进映像并落盘。
+     */
+    public void scheduleFlush() {
         if (closed || ENCODING_PAUSED.get()) {
             return;
         }
-        PendingWrite write = claimForWorker(pos);
-        if (write != null) {
-            submitAsync(List.of(write));
+        if (!flushQueued.compareAndSet(false, true)) {
+            return;
+        }
+        outstandingWrites.incrementAndGet();
+        try {
+            flushExecutor.execute(() -> {
+                try {
+                    synchronized (flushLock) {
+                        flushQueued.set(false);
+                        runFlushCycle(true, ShadowStorageHashes::isDirty, DEFAULT_FLUSH_TIMEOUT_MS);
+                    }
+                } finally {
+                    completeWrite();
+                }
+            });
+        } catch (RejectedExecutionException e) {
+            flushQueued.set(false);
+            completeWrite();
         }
     }
 
-    /** 光收敛残留：把仍挂 lightReady 的注入柱入队（写 gate 刚放行时的补推）。 */
-    public void enqueueLightReady() {
-        enqueueMatching(ShadowStorageHashes::isLightReady);
+    /**
+     * 退出 / 测试：同步刷全部脏柱进映像并落盘。可与 {@link #scheduleFlush} 互斥等待。
+     */
+    public FlushResult flushDirty(long timeoutMs) {
+        if (closed) {
+            return new FlushResult(0, 0, true);
+        }
+        synchronized (flushLock) {
+            return runFlushCycle(true, ShadowStorageHashes::isDirty, timeoutMs);
+        }
     }
 
-    /** 中途变更入队（定时刷新；不等待 IO）。 */
-    public void enqueueMutations() {
-        enqueueMatching(ShadowStorageHashes::isMutation);
+    /** 测试：脏柱只进映像，不写 .mca。 */
+    public FlushResult encodeDirty(long timeoutMs) {
+        if (closed) {
+            return new FlushResult(0, 0, true);
+        }
+        synchronized (flushLock) {
+            return runFlushCycle(false, ShadowStorageHashes::isDirty, timeoutMs);
+        }
     }
 
     /**
-     * 对 mutation∩injected 从 serializer 取 NBT 写入内存映像，再按 region 各落盘一次。
-     * 定时刷新用：首次注入、尚未光收敛的柱不在此列。
+     * 同步：mutation∩injected 编码进映像再落盘。
      */
     public FlushResult flush(long timeoutMs) {
-        return flushMatching(timeoutMs, ShadowStorageHashes::isMutation);
+        if (closed) {
+            return new FlushResult(0, 0, true);
+        }
+        synchronized (flushLock) {
+            return runFlushCycle(true, ShadowStorageHashes::isMutation, timeoutMs);
+        }
     }
 
-    /**
-     * 测试 / 显式全量：刷本维度剩余脏柱到内存映像再落盘。
-     * 断连路径不要调用——那会在退出窗口同步 {@code ChunkSerializer}。
-     */
     public FlushResult flushRemaining(long timeoutMs) {
-        return flushMatching(timeoutMs, ShadowStorageHashes::isDirty);
+        return flushDirty(timeoutMs);
     }
 
-    /** 等待异步入队（内存编码）结束。 */
+    /** 等待 {@link #scheduleFlush} 结束。 */
     public FlushResult drain(long timeoutMs) {
         long deadline = System.currentTimeMillis() + Math.max(0L, timeoutMs);
         synchronized (drainMonitor) {
@@ -289,25 +341,11 @@ public final class ShadowStorageManager implements AutoCloseable {
         return new FlushResult(0, 0, false);
     }
 
-    /** T5 单柱：若仍脏则写入内存映像，再把该 region 落盘一次（卸载路径）。 */
+    /** T5：脏柱不在调用线程序列化，留给定时/退出刷脏。 */
     public boolean flushColumn(ChunkPos pos, long timeoutMs) {
-        if (ENCODING_PAUSED.get()) {
-            saveDirtyRegionsAsync();
-            return true;
-        }
         long key = DimensionKey.key(dimension, pos.x, pos.z);
         if (ShadowStorageHashes.isDirty(key)) {
-            PendingWrite write = claimAndSerialize(pos);
-            if (write == null) {
-                if (ShadowStorageHashes.isDirty(key)) {
-                    return false;
-                }
-            } else {
-                FlushResult result = submitAndWait(List.of(write), timeoutMs);
-                if (result.abandoned() != 0 || result.timedOut()) {
-                    return false;
-                }
-            }
+            return false;
         }
         saveDirtyRegionsAsync();
         return true;
@@ -403,6 +441,14 @@ public final class ShadowStorageManager implements AutoCloseable {
     @Override
     public void close() {
         closed = true;
+        flushExecutor.shutdownNow();
+        try {
+            if (!flushExecutor.awaitTermination(200, TimeUnit.MILLISECONDS)) {
+                LOGGER.debug("Hassium: flush executor still running on close");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
         drain(200L);
         for (RegionWorker worker : workers.values()) {
             worker.shutdown();
@@ -420,10 +466,34 @@ public final class ShadowStorageManager implements AutoCloseable {
         images.clear();
     }
 
-    private void enqueueMatching(LongPredicate filter) {
-        if (closed || ENCODING_PAUSED.get()) {
-            return;
+    private FlushResult runFlushCycle(boolean persist, LongPredicate filter, long timeoutMs) {
+        if (closed) {
+            return new FlushResult(0, 0, true);
         }
+        pauseAllWorkers();
+        boolean idle = awaitAllWorkersIdle(Math.min(Math.max(0L, timeoutMs), 5_000L));
+        int written = 0;
+        int abandoned = 0;
+        boolean timedOut = !idle;
+        try {
+            if (!ENCODING_PAUSED.get()) {
+                FlushResult encoded = encodeDirtyOnThisThread(filter, timeoutMs);
+                written = encoded.written();
+                abandoned += encoded.abandoned();
+                timedOut |= encoded.timedOut();
+            }
+            if (persist) {
+                FlushResult saved = saveRegions(timeoutMs, null);
+                abandoned += saved.abandoned();
+                timedOut |= saved.timedOut();
+            }
+        } finally {
+            resumeAllWorkers();
+        }
+        return new FlushResult(written, abandoned, timedOut);
+    }
+
+    private FlushResult encodeDirtyOnThisThread(LongPredicate filter, long timeoutMs) {
         List<PendingWrite> pending = new ArrayList<>();
         for (Long key : ShadowStorageHashes.dirtyKeys(dimension)) {
             if (!filter.test(key)) {
@@ -435,31 +505,44 @@ public final class ShadowStorageManager implements AutoCloseable {
                 pending.add(write);
             }
         }
-        submitAsync(pending);
+        AtomicInteger written = new AtomicInteger();
+        long deadline = System.currentTimeMillis() + Math.max(0L, timeoutMs);
+        writeBatch(pending, written, deadline);
+        int abandoned = 0;
+        for (PendingWrite write : pending) {
+            if (ShadowStorageHashes.isDirty(DimensionKey.key(dimension, write.pos.x, write.pos.z))
+                    && write.nbt == null) {
+                // 超时还原后仍脏，不计入 written
+            }
+        }
+        boolean timedOut = System.currentTimeMillis() > deadline && written.get() < pending.size();
+        return new FlushResult(written.get(), abandoned, timedOut);
     }
 
-    private FlushResult flushMatching(long timeoutMs, LongPredicate filter) {
-        if (closed) {
-            return new FlushResult(0, 0, true);
+    private void pauseAllWorkers() {
+        for (RegionWorker worker : workers.values()) {
+            worker.pause();
         }
-        List<PendingWrite> pending = new ArrayList<>();
-        for (Long key : ShadowStorageHashes.dirtyKeys(dimension)) {
-            if (!filter.test(key)) {
-                continue;
+    }
+
+    private void resumeAllWorkers() {
+        for (RegionWorker worker : workers.values()) {
+            worker.resume();
+        }
+    }
+
+    private boolean awaitAllWorkersIdle(long timeoutMs) {
+        long deadline = System.currentTimeMillis() + Math.max(0L, timeoutMs);
+        for (RegionWorker worker : workers.values()) {
+            long remaining = deadline - System.currentTimeMillis();
+            if (remaining <= 0L) {
+                return false;
             }
-            PendingWrite write = claimAndSerialize(
-                    new ChunkPos(DimensionKey.chunkXOf(key), DimensionKey.chunkZOf(key)));
-            if (write != null) {
-                pending.add(write);
+            if (!worker.awaitIdle(remaining)) {
+                return false;
             }
         }
-        FlushResult encoded = submitAndWait(pending, timeoutMs);
-        if (encoded.timedOut() || encoded.abandoned() > 0) {
-            return encoded;
-        }
-        FlushResult saved = saveRegions(timeoutMs, null);
-        return new FlushResult(encoded.written(), encoded.abandoned() + saved.abandoned(),
-                encoded.timedOut() || saved.timedOut());
+        return true;
     }
 
     /** 认领脏位，NBT 由 RegionWorker 再快照（热路径不得同步序列化）。 */
@@ -599,6 +682,10 @@ public final class ShadowStorageManager implements AutoCloseable {
     }
 
     private void writeBatch(List<PendingWrite> batch, AtomicInteger written) {
+        writeBatch(batch, written, Long.MAX_VALUE);
+    }
+
+    private void writeBatch(List<PendingWrite> batch, AtomicInteger written, long deadlineMs) {
         if (batch.isEmpty()) {
             return;
         }
@@ -606,20 +693,24 @@ public final class ShadowStorageManager implements AutoCloseable {
         RegionCache.Image image = null;
         for (int i = 0; i < batch.size(); i++) {
             PendingWrite write = batch.get(i);
-            if (ENCODING_PAUSED.get() || Thread.currentThread().isInterrupted()) {
-                restoreAll(encoded);
+            if (ENCODING_PAUSED.get() || Thread.currentThread().isInterrupted()
+                    || System.currentTimeMillis() > deadlineMs) {
                 restoreAll(batch.subList(i, batch.size()));
-                return;
+                break;
             }
             if (testWriteDelayMs > 0L) {
                 try {
                     Thread.sleep(testWriteDelayMs);
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
-                    restoreAll(encoded);
                     restoreAll(batch.subList(i, batch.size()));
-                    return;
+                    break;
                 }
+            }
+            if (ENCODING_PAUSED.get() || Thread.currentThread().isInterrupted()
+                    || System.currentTimeMillis() > deadlineMs) {
+                restoreAll(batch.subList(i, batch.size()));
+                break;
             }
             try {
                 byte[] nbt = write.nbt;
@@ -780,11 +871,14 @@ public final class ShadowStorageManager implements AutoCloseable {
     private record PendingWrite(ChunkPos pos, byte[] nbt, boolean content, boolean light,
                                 boolean mutation, boolean lightReady, Long hash) {}
 
-    /** 每 {@code r.x.z} 单线程队列：编码与落盘同队列，落盘排在已排队编码之后。 */
+    /** 每 {@code r.x.z} 单线程队列：仅 persist；刷脏编码在 flush 线程，写映像前暂停本队列。 */
     static final class RegionWorker {
         private final ExecutorService executor;
         private final java.util.concurrent.atomic.AtomicBoolean persistQueued =
                 new java.util.concurrent.atomic.AtomicBoolean();
+        private final AtomicBoolean paused = new AtomicBoolean();
+        private final AtomicInteger inflight = new AtomicInteger();
+        private final Object idleMonitor = new Object();
 
         RegionWorker(long regionKey) {
             int rx = (int) regionKey;
@@ -796,25 +890,77 @@ public final class ShadowStorageManager implements AutoCloseable {
             });
         }
 
-        Future<?> submit(Runnable task) {
-            return executor.submit(task);
+        void pause() {
+            paused.set(true);
         }
 
-        /** 合并落盘：突发 writeBatch 只追加一次 persist 任务。 */
+        void resume() {
+            paused.set(false);
+        }
+
+        boolean awaitIdle(long timeoutMs) {
+            long deadline = System.currentTimeMillis() + Math.max(0L, timeoutMs);
+            synchronized (idleMonitor) {
+                while (inflight.get() > 0) {
+                    long remaining = deadline - System.currentTimeMillis();
+                    if (remaining <= 0L) {
+                        return false;
+                    }
+                    try {
+                        idleMonitor.wait(remaining);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        return false;
+                    }
+                }
+            }
+            return true;
+        }
+
+        Future<?> submit(Runnable task) {
+            inflight.incrementAndGet();
+            try {
+                return executor.submit(() -> {
+                    try {
+                        task.run();
+                    } finally {
+                        done();
+                    }
+                });
+            } catch (RejectedExecutionException e) {
+                done();
+                throw e;
+            }
+        }
+
         void requestPersist(Runnable persist) {
+            if (paused.get()) {
+                return;
+            }
             if (!persistQueued.compareAndSet(false, true)) {
                 return;
             }
+            inflight.incrementAndGet();
             try {
                 executor.submit(() -> {
                     try {
                         persist.run();
                     } finally {
                         persistQueued.set(false);
+                        done();
                     }
                 });
             } catch (RejectedExecutionException e) {
                 persistQueued.set(false);
+                done();
+            }
+        }
+
+        private void done() {
+            if (inflight.decrementAndGet() == 0) {
+                synchronized (idleMonitor) {
+                    idleMonitor.notifyAll();
+                }
             }
         }
 

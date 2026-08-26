@@ -8,6 +8,7 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import net.minecraft.server.level.ChunkHolder;
 import net.minecraft.server.level.ServerChunkCache;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.TicketType;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.chunk.ChunkAccess;
@@ -214,5 +215,41 @@ public final class ShadowChunkMapCompat {
             return null;
         }
         return ShadowServerRegistry.getInstance().get();
+    }
+
+    /**
+     * 可见 FULL 柱：优先 ChunkMap holder，Imposter 解包为 {@link LevelChunk}。
+     * 存储刷脏用；未进 map 时返回 null（调用方回落注入表）。
+     */
+    public static LevelChunk fullLevelChunkIfPresent(ServerLevel level, ChunkPos pos) {
+        if (level == null || pos == null) {
+            return null;
+        }
+        try {
+            ChunkMapAccessor map = (ChunkMapAccessor) (Object) level.getChunkSource().chunkMap;
+            ChunkHolder holder = map.hassium$getVisibleChunkIfPresent(pos.toLong());
+            if (holder == null) {
+                return null;
+            }
+#if MC_VER < MC_1_21_1
+            ChunkAccess access = holder.getFutureIfPresentUnchecked(ChunkStatus.FULL)
+                    .getNow(ChunkHolder.UNLOADED_CHUNK).left().orElse(null);
+#else
+            ChunkAccess access = holder.getChunkIfPresentUnchecked(ChunkStatus.FULL);
+#endif
+            return unwrapLevelChunk(access);
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    public static LevelChunk unwrapLevelChunk(ChunkAccess access) {
+        if (access instanceof LevelChunk levelChunk) {
+            return levelChunk;
+        }
+        if (access instanceof ImposterProtoChunk imposter) {
+            return imposter.getWrapped();
+        }
+        return null;
     }
 }

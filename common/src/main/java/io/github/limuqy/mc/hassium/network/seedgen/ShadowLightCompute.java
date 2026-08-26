@@ -209,6 +209,14 @@ public final class ShadowLightCompute {
     /** 光照命中/重算已记账柱（复合键）。邻柱 LIGHT_ONLY 补光会把同一片柱刷成千上万次。 */
     private static final java.util.Set<Long> accountedLights = java.util.concurrent.ConcurrentHashMap.newKeySet();
 
+    /** hash 分流计数（会话累计；断连清零）。冒烟探针用，分辨整柱 miss 是内存漂移还是盘上无槽。 */
+    private static final AtomicLong hashMemoryHits = new AtomicLong();
+    private static final AtomicLong hashMemoryMismatches = new AtomicLong();
+    private static final AtomicLong hashDiskHits = new AtomicLong();
+    private static final AtomicLong hashDiskMismatches = new AtomicLong();
+    private static final AtomicLong hashAbsents = new AtomicLong();
+    private static final AtomicLong hashLeftovers = new AtomicLong();
+
     /**
      * P1（T7）：注入 chunk section 容器（PalettedContainer）并发锁——hash 比对线程
      * （processRemoteHashes→chunkHashOf / requestSectionDeltas→computeSectionHashes）与
@@ -608,20 +616,59 @@ public final class ShadowLightCompute {
         return true;
     }
 
+    public static long hashMemoryHitCount() {
+        return hashMemoryHits.get();
+    }
+
+    public static long hashMemoryMismatchCount() {
+        return hashMemoryMismatches.get();
+    }
+
+    public static long hashDiskHitCount() {
+        return hashDiskHits.get();
+    }
+
+    public static long hashDiskMismatchCount() {
+        return hashDiskMismatches.get();
+    }
+
+    public static long hashAbsentCount() {
+        return hashAbsents.get();
+    }
+
+    public static long hashLeftoverCount() {
+        return hashLeftovers.get();
+    }
+
+    public static void resetHashClassify() {
+        hashMemoryHits.set(0);
+        hashMemoryMismatches.set(0);
+        hashDiskHits.set(0);
+        hashDiskMismatches.set(0);
+        hashAbsents.set(0);
+        hashLeftovers.set(0);
+    }
+
     /**
      * 权威柱真正落到 ClientChunkCache 时补记分母。inject 当时已记的路径
      * （{@link #accountVisibleNetworkIngress} / {@link #accountCacheFullHit}）按键去重，
      * 不会把同一柱计两次。Bloom/磁盘内存复用没有 inject 记账时，这里是 R1 applied>0 的兜底。
+     * <p>
+     * 分段增量已在 consumeLoop 记 {@code cacheDeltaCount}，落地不得再记全量 miss。
+     * {@code origin == null}（应用日志关闭剥离诊断源）表示 inject/hash 路径已记账。
      */
     static void accountAuthoritativeLanded(String dimension, ChunkPos pos, TraceOrigin origin) {
         if (pos == null) {
             return;
         }
-        if (origin == TraceOrigin.SHADOW_MEMORY_CACHE) {
+        if (origin == TraceOrigin.SHADOW_MEMORY_CACHE || origin == TraceOrigin.SHADOW_DISK_CACHE) {
             accountCacheFullHit(dimension, pos);
-        } else {
-            accountVisibleNetworkIngress(dimension, pos);
+            return;
         }
+        if (origin == TraceOrigin.SECTION_DELTA || origin == null) {
+            return;
+        }
+        accountVisibleNetworkIngress(dimension, pos);
     }
 
     /**
@@ -786,6 +833,14 @@ public final class ShadowLightCompute {
      */
     static boolean shouldPersistPublishedLight(boolean halo, boolean pushConverged) {
         return !halo && pushConverged;
+    }
+
+    /**
+     * 真引擎已推给客户端、但尚未收敛：半成品 DataLayer 入队，保持 {@code isLightOn} 缺省。
+     * Halo / 未发布 / 已收敛都不走阶段 2。
+     */
+    static boolean shouldEnqueuePartialLightSnapshot(boolean halo, boolean published, boolean converged) {
+        return published && !halo && !converged;
     }
 
     /**
@@ -963,6 +1018,7 @@ public final class ShadowLightCompute {
             try {
                 if (isAuthoritativeIngressInFlight(key)) {
                     leftover.add(entry);
+                    hashLeftovers.incrementAndGet();
                     continue;
                 }
                 if (server != null) {
@@ -976,6 +1032,7 @@ public final class ShadowLightCompute {
                             hashHit = chunkHashOf(dimension, loaded, pos, remoteHash);
                         }
                         if (hashHit) {
+                            hashMemoryHits.incrementAndGet();
                             DebugLogger.info(DebugLogger.LogType.CACHE,
                                     "Shadow hash cache hit ({}, {}), memory push", pos.x, pos.z);
                             // T5g：区块缓存全命中——与磁盘直推同口径；同柱只记一次。
@@ -1003,6 +1060,7 @@ public final class ShadowLightCompute {
                         }
                         // 内存数据过期（hash MISMATCH）→ 分段增量候选：
                         // 本地 section hashes 上报，服务端只回变更 section。光由后续屏障处理。
+                        hashMemoryMismatches.incrementAndGet();
                         if (deltaEnabled()) {
                             deltaCandidates.add(pos);
                             continue;
@@ -1019,9 +1077,11 @@ public final class ShadowLightCompute {
                                             io.github.limuqy.mc.hassium.storage.ShadowStorageManager.ProbeStatus.ABSENT);
                     if (!probe.match()) {
                         if (probe.present() && deltaEnabled()) {
+                            hashDiskMismatches.incrementAndGet();
                             if (cacheReadBudgetExhausted || !ClientMainThreadBudget.tryAcquireCacheRead()) {
                                 cacheReadBudgetExhausted = true;
                                 leftover.add(entry);
+                                hashLeftovers.incrementAndGet();
                                 continue;
                             }
                             LevelChunk fromDisk = server.loadFromDisk(dimension, pos);
@@ -1030,6 +1090,10 @@ public final class ShadowLightCompute {
                                 deltaCandidates.add(pos);
                                 continue;
                             }
+                        } else if (probe.present()) {
+                            hashDiskMismatches.incrementAndGet();
+                        } else {
+                            hashAbsents.incrementAndGet();
                         }
                         misses.add(pos);
                         continue;
@@ -1037,10 +1101,12 @@ public final class ShadowLightCompute {
                     if (cacheReadBudgetExhausted || !ClientMainThreadBudget.tryAcquireCacheRead()) {
                         cacheReadBudgetExhausted = true;
                         leftover.add(entry);
+                        hashLeftovers.incrementAndGet();
                         continue;
                     }
                     LevelChunk fromDisk = server.loadFromDisk(dimension, pos);
                     if (fromDisk != null) {
+                        hashDiskHits.incrementAndGet();
                         server.injectLoadedChunk(dimension, pos, fromDisk);
                         boolean needRelight = diskHitNeedRelight(
                                 io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.isLightDirty(dimension, pos),
@@ -1067,6 +1133,7 @@ public final class ShadowLightCompute {
                         continue;
                     }
                     misses.add(pos);
+                    hashAbsents.incrementAndGet();
                     continue;
                 }
             } catch (Throwable t) {
@@ -1074,6 +1141,7 @@ public final class ShadowLightCompute {
                         "[SHADOW_HASH] Compare failed ({}, {})", pos.x, pos.z);
             }
             // 3) 不中 / 影子端不可用：请求数据
+            hashAbsents.incrementAndGet();
             misses.add(pos);
         }
         if (!hits.isEmpty()) {
@@ -1773,7 +1841,7 @@ public final class ShadowLightCompute {
                         } else {
                             lightTasks.add(new LightTask(key, LightSource.DELTA, null,
                                     baseline, server.level(work.dimension()), LightMetric.RECOMPUTE,
-                                    false, traceOrigin(TraceOrigin.SERVER_PUSH)));
+                                    false, traceOrigin(TraceOrigin.SECTION_DELTA)));
                         }
                     }
                 }
@@ -2540,8 +2608,8 @@ public final class ShadowLightCompute {
                     "[SHADOW_CHUNK] Build failed ({}, {})", pos.x, pos.z);
         }
         if (server != null && task.chunk != null) {
-            server.syncLightCorrect(task.chunk,
-                    shouldPersistPublishedLight(haloKeys.containsKey(task.key), pushConverged));
+            server.persistAfterClientLightPush(task.chunk,
+                    haloKeys.containsKey(task.key), pushConverged);
         }
         if (inflightLight.size() < PIPELINE_LOW_WATER
                 && hasStartablePendingWork()
@@ -3071,8 +3139,8 @@ public final class ShadowLightCompute {
                 pushReady(task.key, task.chunk, task.level, complete, task.renderOnly,
                         task.traceOrigin);
             }
-            server.syncLightCorrect(task.chunk,
-                    shouldPersistPublishedLight(haloKeys.containsKey(task.key), complete));
+            server.persistAfterClientLightPush(task.chunk,
+                    haloKeys.containsKey(task.key), complete);
         } catch (Throwable t) {
             DebugLogger.warn(DebugLogger.LogType.ASYNC,
                     "[SHADOW_LIGHT] Deferred push failed ({}, {})", pos.x, pos.z);
@@ -3445,6 +3513,7 @@ public final class ShadowLightCompute {
         accountedIngress.clear();
         accountedCacheHits.clear();
         accountedLights.clear();
+        resetHashClassify();
         shadowApplyEpochs.clear();
         fullApplyTraces.clear();
         deferredRemoteHashes.clear();

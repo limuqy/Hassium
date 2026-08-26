@@ -67,7 +67,8 @@ public class MixinClientLevel implements IClientLevelExtension {
     /**
      * 区块卸载时：
      * <p>
-     * 新架构（客户端零侵入）：断连落盘由影子端 saveAll 统一承担；OVD 区块
+     * 新架构（客户端零侵入）：断连落盘在世界拆除 TAIL 由影子端从还活着的 ChunkMap
+     * 刷脏承担；OVD 区块
      * 数据常驻影子端存档，卸载直接 drop（重进环带 OVD 读盘快速补）。
      * 仅维护 renderOnly 标记的摘除。
      */
