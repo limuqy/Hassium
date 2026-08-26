@@ -136,4 +136,16 @@ public final class CompoundTagCompat {
     public static boolean containsList(CompoundTag tag, String key) {
         return tag.get(key) instanceof ListTag;
     }
+
+    /**
+     * 读取 ListTag 第 {@code index} 个 Compound（1.21.5+ Optional 兼容）。
+     * 越界/非 Compound 返回 {@code null}。
+     */
+    public static CompoundTag getCompound(ListTag list, int index) {
+#if MC_VER < MC_1_21_5
+        return list.getCompound(index);
+#else
+        return list.getCompound(index).orElse(null);
+#endif
+    }
 }

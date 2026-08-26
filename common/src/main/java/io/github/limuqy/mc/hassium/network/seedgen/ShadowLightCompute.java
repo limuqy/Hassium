@@ -1426,12 +1426,14 @@ public final class ShadowLightCompute {
                                          net.minecraft.server.level.ServerLevel level,
                                          TraceOrigin origin) {
         try {
-            ClientboundLevelChunkWithLightPacket packet;
-            synchronized (chunkLock(pos)) {
-                packet = SeedGenChunkCodec.buildPacket(chunk, level);
-            }
-            offerReady(DimensionKey.key(dimension, pos.x, pos.z), pos, packet,
-                    true, false, origin);
+            runBuildOnShadowMain(pos, () -> {
+                ClientboundLevelChunkWithLightPacket packet;
+                synchronized (chunkLock(pos)) {
+                    packet = SeedGenChunkCodec.buildPacket(chunk, level);
+                }
+                offerReady(DimensionKey.key(dimension, pos.x, pos.z), pos, packet,
+                        true, false, origin);
+            });
         } catch (Throwable failure) {
             ShadowServerRegistry.getInstance().failShadowServer();
         }
@@ -2649,11 +2651,34 @@ public final class ShadowLightCompute {
         // LevelChunkSection.write → PalettedContainer.acquire）——与 hash 比对线程
         // （chunkHashOf / computeSectionHashes）同 chunk 锁互斥，消除 1.21.11
         // ThreadingDetector 崩溃（T7 线程转储：consumeLoop pushReady 打包 vs hash 线程）。
-        ClientboundLevelChunkWithLightPacket packet;
-        synchronized (chunkLock(pos)) {
-            packet = SeedGenChunkCodec.buildPacket(chunk, level);
+        runBuildOnShadowMain(pos, () -> {
+            ClientboundLevelChunkWithLightPacket packet;
+            synchronized (chunkLock(pos)) {
+                packet = SeedGenChunkCodec.buildPacket(chunk, level);
+            }
+            offerReady(key, pos, packet, converged, renderOnly, traceOrigin);
+        });
+    }
+
+    /**
+     * PalettedContainer.write/getAndSet 只能与影子主循环串行：后台 finishLight
+     * 与 applyBlockUpdate（seedgen-main setBlock）并发会触发 1.21+
+     * ThreadingDetector（Accessing PalettedContainer from multiple threads），
+     * 打包失败后光屏障不回传，R2 drain 卡死。已在主线程则原地执行。
+     */
+    private static void runBuildOnShadowMain(ChunkPos pos, Runnable buildAndOffer) {
+        ShadowSeedServer server = ShadowServerRegistry.getInstance().get();
+        if (server != null && !server.isSameThread()) {
+            try {
+                server.execute(buildAndOffer);
+                return;
+            } catch (java.util.concurrent.RejectedExecutionException ignored) {
+                DebugLogger.warn(DebugLogger.LogType.ASYNC,
+                        "[SHADOW_CHUNK] Shadow main stopped, drop pack ({}, {})", pos.x, pos.z);
+                return;
+            }
         }
-        offerReady(key, pos, packet, converged, renderOnly, traceOrigin);
+        buildAndOffer.run();
     }
 
     /**

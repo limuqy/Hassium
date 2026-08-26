@@ -980,8 +980,17 @@ public class ShadowSeedServer extends MinecraftServer {
                     } else if (packet instanceof ClientboundSectionBlocksUpdatePacket section) {
                         java.util.Set<Long> affected = new java.util.HashSet<>();
                         section.runUpdates((pos, state) -> {
-                            this.level(dimension).setBlock(pos, state, 3);
-                            affected.add(ChunkPos.asLong(pos.getX() >> 4, pos.getZ() >> 4));
+                            long key = DimensionKey.key(dimension, pos.getX() >> 4, pos.getZ() >> 4);
+                            LevelChunk chunk = injectedChunks.get(key);
+                            if (chunk != null) {
+                                ChunkPos cp = new ChunkPos(pos);
+                                // 禁止 level.setBlock：会邻接更新并 scheduleTick，
+                                // 影子端 ChunkMap 未加载邻柱时 1.21.2+ 刷
+                                // "Trying to schedule tick in not loaded position" ERROR。
+                                ShadowLightCompute.withChunkLock(cp, () ->
+                                        ShadowServerCompat.setBlockState(chunk, pos, state));
+                            }
+                            affected.add(key);
                         });
                         invalidateChunkContent(dimension, affected);
                     } else if (packet instanceof ClientboundBlockEntityDataPacket blockEntity) {
@@ -1002,7 +1011,9 @@ public class ShadowSeedServer extends MinecraftServer {
         LevelChunk chunk = injectedChunks.get(key);
         if (chunk != null) {
             // review-fix: T13-FixT3Chunk-2：注入区块不经 ChunkMap，level.setBlock 会触发幻影 worldgen——直接对注入 chunk 应用
-            ShadowServerCompat.setBlockState(chunk, pos, state);
+            ChunkPos cp = new ChunkPos(pos.getX() >> 4, pos.getZ() >> 4);
+            ShadowLightCompute.withChunkLock(cp, () ->
+                    ShadowServerCompat.setBlockState(chunk, pos, state));
         }
         invalidateChunkContent(dimension, java.util.Collections.singleton(key));
     }

@@ -33,10 +33,16 @@ param(
     [int]$ServerReadyTimeoutSec = 300,
     [int]$ClientTimeoutSec = 600,
     [int]$DelayMs = 20000,
-    [int]$ReconnectDelayMs = 3000
+    [int]$ReconnectDelayMs = 3000,
+    [string]$SessionSuffix
 )
 
 $ErrorActionPreference = "Continue"
+if ($PSVersionTable.PSVersion.Major -lt 7) {
+    Write-Error 'runtime-smoke-test-batch.ps1 requires PowerShell 7+ (pwsh).'
+    exit 3
+}
+
 
 # 路径自推导（脚本位于 <repo>/scripts/，项目根是父目录）
 $projectRoot = Split-Path -Parent $PSScriptRoot
@@ -128,6 +134,19 @@ function IsSameVersion($current, $previous) {
 
 # T2 PROBE JSON v1：把单会话 result JSON 的 Probe.RoundN 摘要成一行短串（joined/gateway/counters），
 # 供 CSV 增列观测；无 probe（旧客户端或解析失败）时返回空串。
+
+function Get-SmokeSessionIdSuffix {
+    param(
+        [string]$Scenario,
+        [string]$SessionSuffix
+    )
+    $parts = @()
+    if ($SessionSuffix) { $parts += $SessionSuffix }
+    if ($Scenario -and $Scenario -ne "classic") { $parts += $Scenario }
+    if ($parts.Count -eq 0) { return "" }
+    return "_" + ($parts -join "_")
+}
+
 function Format-SmokeProbeRound {
     param($Round)
     if (-not $Round) { return "" }
@@ -176,10 +195,10 @@ function Invoke-Session {
         [int]$ServerReadyTimeoutSec = 180,
         [int]$ClientTimeoutSec = 300,
         [int]$DelayMs = 10000,
-        [int]$ReconnectDelayMs = 3000
+        [int]$ReconnectDelayMs = 3000,
+        [string]$SessionSuffix = ""
     )
-    # 非 classic 场景 sessionId 追加 _<scenario> 后缀，避免与 classic 会话 result JSON 冲突
-    $sfx = if ($Scenario -and $Scenario -ne "classic") { "_${Scenario}" } else { "" }
+    $sfx = Get-SmokeSessionIdSuffix -Scenario $Scenario -SessionSuffix $SessionSuffix
     $sessionId = "${Ver}_${Loader}_${Phase}${sfx}"
     $sessionResult = $null
     $attempt = 0
@@ -283,8 +302,7 @@ $gradlewPath = Join-Path $projectRoot "gradlew.bat"
 foreach ($entry in $scenarioPlan) {
     $scenario = $entry.Scenario
     $ver = $entry.Ver
-    # 非 classic 场景 sessionId 后缀（classic 保持原 sessionId 不变）
-    $sfx = if ($scenario -ne "classic") { "_${scenario}" } else { "" }
+    $sfx = Get-SmokeSessionIdSuffix -Scenario $scenario -SessionSuffix $SessionSuffix
     Write-Host ""
     Write-Host "============================================"
     Write-Host "=== Testing: $ver (scenario: $scenario, loaders: $($Loaders -join ','))"
@@ -500,7 +518,7 @@ foreach ($entry in $scenarioPlan) {
 
             $r = Invoke-Session -Ver $ver -Loader $loader -Phase $Phase -Scenario $scenario -ServerPort $BasePort -MaxRetries $MaxRetries `
                 -CleanWorld:$cleanWorld -ServerReadyTimeoutSec $ServerReadyTimeoutSec -ClientTimeoutSec $ClientTimeoutSec `
-                -DelayMs $DelayMs -ReconnectDelayMs $ReconnectDelayMs
+                -DelayMs $DelayMs -ReconnectDelayMs $ReconnectDelayMs -SessionSuffix $SessionSuffix
             $results += $r
             $prevVerByLoader[$loader] = $ver
 

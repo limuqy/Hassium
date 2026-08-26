@@ -137,13 +137,14 @@ public final class ShadowServerCompat {
     /**
      * 注入柱 {@code LevelChunk.setBlockState}。
      * {@code < 1.21.5}：第三参 {@code boolean}（{@code false} = 不算邻接更新）；
-     * {@code ≥ 1.21.5}：第三参改为 {@code int} flags（与 {@code level.setBlock(..., 3)} 同值）。
+     * {@code ≥ 1.21.5}：第三参改为 {@code int} flags，用 {@code 0}（UPDATE_NONE）
+     * 对齐旧版 {@code false}，禁止邻接更新 / scheduleTick。
      */
     public static BlockState setBlockState(LevelChunk chunk, BlockPos pos, BlockState state) {
 #if MC_VER < MC_1_21_5
         return chunk.setBlockState(pos, state, false);
 #else
-        return chunk.setBlockState(pos, state, 3);
+        return chunk.setBlockState(pos, state, 0);
 #endif
     }
 

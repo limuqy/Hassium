@@ -2,7 +2,6 @@ package io.github.limuqy.mc.hassium.compat;
 
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
-import net.minecraft.nbt.Tag;
 
 /** Cross-version removal of derived light state from shadow-only halo snapshots. */
 public final class ShadowChunkNbtCompat {
@@ -12,13 +11,16 @@ public final class ShadowChunkNbtCompat {
         chunkTag.remove("isLightOn");
         chunkTag.remove("isLightCorrect");
         chunkTag.remove("LightCorrect");
-        stripSections(chunkTag.getList("sections", Tag.TAG_COMPOUND));
-        stripSections(chunkTag.getList("Sections", Tag.TAG_COMPOUND));
+        stripSections(CompoundTagCompat.getList(chunkTag, "sections"));
+        stripSections(CompoundTagCompat.getList(chunkTag, "Sections"));
     }
 
     private static void stripSections(ListTag sections) {
         for (int index = 0; index < sections.size(); index++) {
-            CompoundTag section = sections.getCompound(index);
+            CompoundTag section = CompoundTagCompat.getCompound(sections, index);
+            if (section == null) {
+                continue;
+            }
             section.remove("SkyLight");
             section.remove("BlockLight");
             section.remove("sky_light");

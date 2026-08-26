@@ -75,6 +75,7 @@ Hassium 跨版本（1.20.1–1.21.11）× 多加载器（fabric / neoforge）的
 | `-JoinTimeoutMs` | 否 | `0`（→ Java 侧 120s） | 客户端进服等待超时；调大 `-DelayMs` 时须同步调大 |
 | `-MoveSeconds` | 否 | `0` | 进服后飞行移动秒数（先爬升再平飞；0=不动），驱动「进服即移动」补给顺序，非标准默认行为 |
 | `-Vd1` / `-Vd2` | 否 | `20` / `10` | 服务端两轮视距 |
+| `-ClientRenderDistance` | 否 | `32`（且 ≥ Vd1） | 钉死 `<loader>/run/client/options.txt` 的 `renderDistance` 滑块。1.21+ 跟踪半径 = `min(滑块, 服务器 VD)`；三端必须同一值，否则新 run 目录默认 12/16，R1 只喂满 VD16 圆柱（1021 / 1.21.4+ 1057）。OVD 上界仍是 `chunk.maxRenderDistance=16`，与滑块无关 |
 | `-ServerReadyTimeoutSec` | 否 | `160` | 服务端 `Done!` 出现超时 |
 | `-ClientTimeoutSec` | 否 | `240` | 客户端退出超时 |
 | `-SmokePhases` | 否 | `classic` | Java 侧阶段：`classic`（经典两轮）/ `pregen`（预生成，经 `-PregenOnly` 使用） |
@@ -108,6 +109,7 @@ Hassium 跨版本（1.20.1–1.21.11）× 多加载器（fabric / neoforge）的
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
 │  1. 清理 <loader>/run/client/hassium_cache + crash-reports             │
+│     钉死 options.txt renderDistance=32（三端同一滑块，≥ Vd1）           │
 │  2. 写 <loader>/run/server/server.properties (VD=20, online-mode=false) │
 │  3. (CleanWorld) 删 <loader>/run/server/world*                          │
 │     （有预生成存档时优先从 build/smoke-test/pregen-world/ 恢复）          │
@@ -135,7 +137,18 @@ Hassium 跨版本（1.20.1–1.21.11）× 多加载器（fabric / neoforge）的
 
 **为什么进服后才开始计时？** 部分版本进服很慢（需要区块替换、服务端处理）；如果 player 对象一创建就开始计时，统计时区块还没加载完，`hits + misses == 0`。改为等玩家位置被服务端确认后才进入等待窗口。
 
-**R2 方块变化注入（2.0.0 起）**：玩家离线窗口内，`ServerSmokeTest` 在世界出生点上方放置一堵 4 格高石墙（x∈[-160,160)、y∈[64,68)、z∈[2,4)，横跨 VD10 全宽）。R2 客户端从区块核心缓存读回该区域时 chunkHash 不一致 → 请求 section hash → 服务端回 `SectionDeltaS2CPacket` → 客户端 merge 后变化 section 缺光字段 → 触发增量分段光照重算路径（`[LIGHT-SEG]`）。无变化时该路径不会走，因此注入是 ROUND2 冒烟触发 section-delta / 分段光照的前置条件（`ServerSmokeTest.injectR2BlockChange`）。
+**R2 方块变化注入（2.0.0 起）**：玩家离线窗口内，`ServerSmokeTest` 在世界出生点上方放置一堵 4 格高石墙（x∈[-160,160)、y∈[64,68)、z∈[2,4)，横跨 VD10 全宽）。R2 客户端从区块核心缓存读回该区域时 chunkHash 不一致 → 请求 section hash → 服务端回 `SectionDeltaS2CPacket` → 客户端 merge 后变化 section 缺光字段 → 触发增量分段光照重算路径（`[LIGHT-SEG]`）。无变化时该路径不会走，因此注入是 ROUND2 冒烟触发 section-delta / 分段光照的前置条件（`ServerSmokeTest.injectR2BlockChange`）。约 20 柱 hash 必变，R2 全命中上限约为 `453 − 20 ≈ 433`，不是 453/453。
+
+**classic 几何口径**（`MoveSeconds=0` 站桩；不要拿 `(2N+1)²` 方阵当满分）：
+
+| 集合 | 几何 | 块数 |
+|------|------|------|
+| R1 权威环 VD=20 | 原版 `isChunkInRange` 圆柱（`contains(..., extra=true)`） | **1529**（1.20.1–1.21.3）；**1573**（1.21.4+ 改 `isWithinDistance`） |
+| R1 若滑块=16 | 同上，半径 16 | **1021** / **1057**（1.21.4+） |
+| R2 权威环 VD=10 | Hassium `isServerChunkInRange` 仍走 1.20.1 公式 | **453**（全矩阵稳定值） |
+| R2 OVD 环 | 客户端 RD 方阵 16 − VD10 圆柱 = `33² − 453` | **636**（dump 只等 `ovdLoaded>0`，632 缺四角属时序） |
+
+1.21+ `ChunkMap.getPlayerViewDistance = clamp(客户端滑块, 2, 服务器 VD)`。1.20.1 无此钳制。harness 因此钉死三端 `options.txt` `renderDistance=32`（≥ Vd1）；`chunk.maxRenderDistance=16` 只钳 OVD/雾，不抬 1.21 的 `requestedViewDistance`。
 
 ## PROBE JSON v1（结构化探针）
 

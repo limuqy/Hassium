@@ -1,7 +1,7 @@
 # 运行时冒烟测试 — 单次会话脚本（两轮连服版）
 # 用法: .\scripts\runtime-smoke-test.ps1 -Ver 1.20.1 -Loader fabric -Phase I -SessionId "1.20.1_fabric_I"
 #       .\scripts\runtime-smoke-test.ps1 -Ver 1.20.6 -Loader forge -Phase I -SessionId "1.20.6_forge_I"   # forge 支持范围见 versionProperties/{Ver}.properties 的 builds_for
-# 流程: 服务端启动 VD=20 → 客户端连服 → 进世界后等 DelayMs → ROUND1 统计 → 主动断开 → 服务端切 VD=10 → 等 ReconnectDelayMs → 重连 → 进世界后等 DelayMs → ROUND2 统计 → 退出
+# 流程: 钉死客户端 options.txt renderDistance=32 → 服务端启动 VD=20 → 客户端连服 → 进世界后等 DelayMs → ROUND1 统计 → 主动断开 → 服务端切 VD=10 → 等 ReconnectDelayMs → 重连 → 进世界后等 DelayMs → ROUND2 统计 → 退出
 # 关键真相源：Loom runDir 在子项目目录下（fabric/run/client、neoforge/run/server 等），不是根目录 run/
 # 退出码: 0=PASS / 2=FAIL / 3=server_not_ready
 # 端口: 默认 25565；并行模式由 batch 脚本传 -ServerPort 25566 等避免冲突
@@ -33,8 +33,13 @@ param(
     # Server view-distance: ROUND1=Vd1, switch to Vd2 after first disconnect.
     [int]$Vd1 = 20,
     [int]$Vd2 = 10,
-    [int]$ServerReadyTimeoutSec = 160,
-    [int]$ClientTimeoutSec = 240,
+    # 客户端视频 RD 滑块（options.txt renderDistance）。1.21+ 服务端跟踪半径 =
+    # min(滑块, 服务器 VD)；三端必须钉死同一值，否则 Forge/NeoForge 新 run 目录
+    # 默认 12/16，R1 只会喂满 VD16 圆柱（1021/1057），和 Fabric 遗留 32 滑块的
+    # 1529/1573 不可比。OVD 上界仍受 chunk.maxRenderDistance=16 钳制，与本滑块无关。
+    [int]$ClientRenderDistance = 32,
+    [int]$ServerReadyTimeoutSec = 60,
+    [int]$ClientTimeoutSec = 90,
     [string]$SmokePhases = "classic",
     # T8 场景引擎：-Scenario <name> 加载 common/src/main/resources/hassium/smoke/scenario/<name>.scenario。
     # 默认 classic 不注入 -Dhassium.smokeScenario（保持既有 ClientSmokeTest 经典路径零行为变化）；
@@ -226,6 +231,41 @@ spawn-protection=0
     Set-Content -Path (Join-Path $Dir "server.properties") -Value $props -Encoding utf8NoBOM
 }
 
+# 钉死客户端 options.txt 的 renderDistance，三端同一滑块。
+# 1.21+ ChunkMap.getPlayerViewDistance = clamp(requestedViewDistance, 2, serverVD)；
+# 滑块 < Vd1 时 R1 权威环被钳成客户端 RD（VD16 圆柱 1021 / 1.21.4+ 1057）。
+# 文件不存在（全新 run 目录）则只写这一键，其余选项由原版首启补默认。
+function Set-SmokeClientRenderDistance {
+    param(
+        [Parameter(Mandatory=$true)][string]$ClientRunDir,
+        [Parameter(Mandatory=$true)][int]$RenderDistance,
+        [string]$SessionTag = ""
+    )
+    New-Item -ItemType Directory -Force -Path $ClientRunDir -ErrorAction SilentlyContinue | Out-Null
+    $path = Join-Path $ClientRunDir "options.txt"
+    $line = "renderDistance:$RenderDistance"
+    if (Test-Path $path) {
+        $lines = @(Get-Content -Path $path)
+        $found = $false
+        $newLines = foreach ($l in $lines) {
+            if ($l -match '^renderDistance\s*:') {
+                $found = $true
+                $line
+            } else {
+                $l
+            }
+        }
+        if (-not $found) {
+            $newLines = @($newLines) + $line
+        }
+        Set-Content -Path $path -Value $newLines -Encoding utf8NoBOM
+    } else {
+        Set-Content -Path $path -Value $line -Encoding utf8NoBOM
+    }
+    $prefix = if ($SessionTag) { "[$SessionTag] " } else { "" }
+    Write-Host "${prefix}pinned client options.txt renderDistance=$RenderDistance"
+}
+
 # T8 场景配置档案落盘：读取 scripts/smoke/profiles/<Name>.profile.properties（行式
 # key=value，# 注释；value 须为合法 TOML 字面量，字符串自带引号），按键值对 patch 双端
 # hassium toml（客户端 run/client/config/hassium/hassium-client.toml、服务端
@@ -352,6 +392,8 @@ Remove-Item -Recurse -Force (Join-Path $clientRunDir "crash-reports") -ErrorActi
 # 服务端 crash-reports 同步清理（日志审计门禁以「会话内非空」为失败信号，历史残留会误报）
 Remove-Item -Recurse -Force (Join-Path $serverRunDir "crash-reports") -ErrorAction SilentlyContinue
 Set-Content -Path (Join-Path $serverRunDir "eula.txt") -Value "eula=true" -NoNewline -Encoding utf8NoBOM
+$pinnedClientRd = [Math]::Max($ClientRenderDistance, $Vd1)
+Set-SmokeClientRenderDistance -ClientRunDir $clientRunDir -RenderDistance $pinnedClientRd -SessionTag $SessionId
 # 2. 配置服务端（view-distance 由 ServerSmokeTest 控制，这里设基础值）
 Write-Host "[$SessionId] [2/9] 配置服务端 ($Loader/run/server/)..."
 New-Item -ItemType Directory -Force -Path $serverRunDir -ErrorAction SilentlyContinue | Out-Null
@@ -896,7 +938,9 @@ $logAuditAllow = @(
     # 原版 Realms 启动联网探测失败（离线/防火墙环境噪音，与 mod 无关）
     "mojang/RealmsClient\]: Failed to fetch Realms feature flags",
     # 原版 profile key pair 联网获取失败（离线环境噪音，与 mod 无关）
-    "\(Minecraft\) Failed to retrieve profile key pair"
+    "\(Minecraft\) Failed to retrieve profile key pair",
+    # 原版 OpenAL：断连停声时 alSourceStop 遇到已失效 source（1.21.2+ 开发环境 ERROR，与 mod 无关）
+    "Sound engine.*Stop: Invalid name parameter"
 ) + @($AllowErrorPatterns)
 # 退出窗口限定豁免（仅 halt/closeStorage 之后生效，非全局）：客户端 Stopping! →
 # vanilla Util.shutdownExecutors() 关停共享 ioPool 后，引擎/存档内部对半死池的零星
