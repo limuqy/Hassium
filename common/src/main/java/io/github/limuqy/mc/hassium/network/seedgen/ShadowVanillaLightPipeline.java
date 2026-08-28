@@ -73,12 +73,6 @@ public final class ShadowVanillaLightPipeline {
         if (role == ShadowChunkRole.VISIBLE) {
             ShadowLightCompute.accountVisibleNetworkIngress(resolvedDimension, pos);
         }
-        if (ShadowLightCompute.shouldSkipLightCompute()) {
-            if (role == ShadowChunkRole.VISIBLE) {
-                ShadowLightCompute.publishWithoutLightCompute(resolvedDimension, pos, packet, origin);
-            }
-            return;
-        }
         ShadowLightCompute.enqueueInjectedForLight(resolvedDimension, pos, role, origin);
 
     }

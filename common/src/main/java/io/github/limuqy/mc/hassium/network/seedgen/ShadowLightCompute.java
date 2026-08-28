@@ -77,12 +77,6 @@ import net.minecraft.world.level.lighting.LevelLightEngine;
  */
 public final class ShadowLightCompute {
 
-    /** 临时诊断：保留影子端区块注入，但跳过影子光照重算，直接观察黑区块。 */
-    private static final boolean TEMP_SKIP_LIGHT_COMPUTE = true;
-
-    public static boolean shouldSkipLightCompute() {
-        return TEMP_SKIP_LIGHT_COMPUTE;
-    }
 
 
     /** 投递队列：DimensionKey 复合键 -> 服务端 packet 与仅诊断来源（REPLACE）。 */
@@ -1542,19 +1536,6 @@ public final class ShadowLightCompute {
         pending.put(key, new PendingEntry(packet, traceOrigin(TraceOrigin.SERVER_PUSH)));
         pump();
     }
-
-    /** 诊断路径：区块仍写入影子端，但不启动光照计算，原包只应用一次。 */
-    public static void publishWithoutLightCompute(String dimension, ChunkPos pos,
-                                                   ClientboundLevelChunkWithLightPacket packet,
-                                                   TraceOrigin origin) {
-        if (pos == null || packet == null || !isEnabled()) {
-            return;
-        }
-        String activeDimension = dimension == null ? currentDimension() : dimension;
-        offerReady(DimensionKey.key(activeDimension, pos.x, pos.z), pos, packet,
-                true, false, origin == null ? TraceOrigin.SERVER_PUSH : origin);
-    }
-
 
     /** 投递仅影子端 Halo；其光照结果只能服务相邻可见柱。 */
     public static void submitHalo(String dimension, ChunkPos pos,
