@@ -691,6 +691,7 @@ public final class ShadowStorageManager implements AutoCloseable {
         }
         List<PendingWrite> encoded = new ArrayList<>();
         RegionCache.Image image = null;
+        long imageRegionKey = Long.MIN_VALUE;
         for (int i = 0; i < batch.size(); i++) {
             PendingWrite write = batch.get(i);
             if (ENCODING_PAUSED.get() || Thread.currentThread().isInterrupted()
@@ -729,8 +730,15 @@ public final class ShadowStorageManager implements AutoCloseable {
                 }
                 byte[] sector = HassiumType126Codec.encodeSector(nbt, hash, zstdLevel);
                 byte[] payload = HassiumType126Codec.payloadAfterType(sector);
-                if (image == null) {
+                // review-fix: image 仅同 region 复用。encodeDirtyOnThisThread 的批次来自脏表、
+                // 不按 region 分组；若固定首块 region，后续柱会带着自己的 localIndex(x&31,z&31)
+                // 写进首块 .mca 的同槽位——与相邻 region 镜像柱（差 32）互串，原版按坐标读时
+                // 报 wrong location 且内容错位（relocating）。submitAsync/submitAndWait 已按
+                // region 分组，本修复让混批路径同样安全。
+                long writeRegionKey = RegionCache.regionKey(write.pos.x, write.pos.z);
+                if (image == null || imageRegionKey != writeRegionKey) {
                     image = imageFor(write.pos, true);
+                    imageRegionKey = writeRegionKey;
                 }
                 image.writePayload(RegionCache.localIndex(write.pos.x, write.pos.z), payload, hash);
                 encoded.add(write);

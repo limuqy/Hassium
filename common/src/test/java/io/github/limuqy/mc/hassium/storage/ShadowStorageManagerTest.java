@@ -428,4 +428,39 @@ class ShadowStorageManagerTest {
         assertNull(ShadowStorageHashes.get(pos));
         assertEquals(0, ShadowRegionHeat.entryCount());
     }
+
+    @Test
+    @DisplayName("跨 region 混批 flush：镜像槽位互不串写（wrong location 回归）")
+    void mixedRegionFlushKeepsMirroredSlotsSeparate() {
+        // (19,4) 与 (-13,4) 同 localIndex(x&31=19)、分属 region (0,0)/(-1,0)。
+        // writeBatch 曾固定首块柱的 region image，把后写柱带进前者 .mca 的同槽位，
+        // 原版按坐标读取即报 wrong location 且内容错位（冒烟 1.20.1 fabric 114 条实证）。
+        ChunkPos positive = new ChunkPos(19, 4);
+        ChunkPos negative = new ChunkPos(-13, 4);
+        assertEquals(RegionCache.localIndex(positive.x, positive.z),
+                RegionCache.localIndex(negative.x, negative.z), "前置：镜像槽位");
+        injected.add(ChunkPos.asLong(positive.x, positive.z));
+        injected.add(ChunkPos.asLong(negative.x, negative.z));
+        ShadowStorageHashes.put(positive, 0x111L);
+        ShadowStorageHashes.put(negative, 0x222L);
+        manager.markContentDirty(positive);
+        manager.markContentDirty(negative);
+        manager.markLightReady(positive);
+        manager.markLightReady(negative);
+        assertFalse(manager.flushDirty(5_000L).timedOut());
+
+        // 清表走映像路径（HashIndex 命中会短路，掩盖文件/映像错位）
+        ShadowStorageHashes.remove(DimensionKey.OVERWORLD, positive);
+        ShadowStorageHashes.remove(DimensionKey.OVERWORLD, negative);
+        assertTrue(manager.probeHash(positive, 0x111L).match(), "正 region 柱保留自己的槽位");
+        assertTrue(manager.probeHash(negative, 0x222L).match(), "负 region 柱不得写进镜像文件");
+
+        // 重开校验磁盘（文件同样必须按 region 归位）
+        manager.close();
+        manager = new ShadowStorageManager(regionDir, pos2 -> nbtPayload.clone(), injected::contains, 1);
+        ShadowStorageHashes.remove(DimensionKey.OVERWORLD, positive);
+        ShadowStorageHashes.remove(DimensionKey.OVERWORLD, negative);
+        assertTrue(manager.probeHash(positive, 0x111L).match(), "落盘后正 region 文件自持");
+        assertTrue(manager.probeHash(negative, 0x222L).match(), "落盘后负 region 文件自持");
+    }
 }
