@@ -38,6 +38,41 @@ class SpatialCheckTest(unittest.TestCase):
             analysis = analyze_result(result, root)
             self.assertIn("R2_FULL_CHUNK_TRANSFER", {item["code"] for item in analysis["failures"]})
 
+    def test_missing_probe_fails_classic(self):
+        from scripts.smoke.analyzer import analyze_result
+        from pathlib import Path
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "logs").mkdir()
+            (root / "logs" / "s.log").write_text("HassiumSmokeTest:PASS\nCLIENT_STATS ROUND1 begin\nCLIENT_STATS ROUND1 end\nCLIENT_STATS ROUND2 begin\nCLIENT_STATS ROUND2 end\n")
+            result = {"SessionId": "s", "Scenario": "classic", "ServerSwitched": True,
+                      "GatewayRound1": {"gatewayState": "ACTIVE", "gatewayC2s": 1},
+                      "GatewayRound2": {"gatewayState": "ACTIVE", "gatewayC2s": 1, "gatewayS2c": 1}}
+            analysis = analyze_result(result, root)
+            self.assertIn("PROBE_MISSING", {item["code"] for item in analysis["failures"]})
+
+    def test_expected_trace_gap_fails(self):
+        from scripts.smoke.analyzer import analyze_result
+        from pathlib import Path
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "logs").mkdir()
+            (root / "logs" / "s.log").write_text("HassiumSmokeTest:PASS\nCLIENT_STATS ROUND1 begin\nCLIENT_STATS ROUND1 end\nCLIENT_STATS ROUND2 begin\nCLIENT_STATS ROUND2 end\n")
+            probe = {"chunkTrace": {"networkReceived": {"positions": [[0, 0]]},
+                                     "shadowInjected": {"positions": [[0, 0]]},
+                                     "shadowReady": {"positions": [[0, 0]]},
+                                     "clientApplied": {"positions": []},
+                                     "meshCompiled": {"positions": []}},
+                     "clientCache": {"actualPresent": {"positions": []}}}
+            result = {"SessionId": "s", "Scenario": "classic", "ServerSwitched": True,
+                      "Probe": {"Round1": probe, "Round2": probe},
+                      "GatewayRound1": {"gatewayState": "ACTIVE", "gatewayC2s": 1},
+                      "GatewayRound2": {"gatewayState": "ACTIVE", "gatewayC2s": 1, "gatewayS2c": 1}}
+            analysis = analyze_result(result, root)
+            self.assertIn("TRACE_EXPECTED_NOT_PRESENT", {item["code"] for item in analysis["failures"]})
+
 
 if __name__ == "__main__":
     unittest.main()

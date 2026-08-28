@@ -887,7 +887,7 @@ if (Test-Path $analysisPath) {
         $resultObj.Result = $result
         $resultObj.Analysis = $analysis
         $resultObj.ProbeGateFailures = @($analysis.failures | ForEach-Object { $_.code })
-        $resultObj.LogAuditFailures = @($analysis.failures | Where-Object { $_.code -eq "LOG_AUDIT_FAILURE" } | ForEach-Object { $_.detail })
+        $resultObj.LogAuditFailures = @($analysis.failures | Where-Object { $_.code -eq "PROCESS_FATAL" } | ForEach-Object { $_.detail })
         $resultObj | ConvertTo-Json -Depth 8 | Out-File $resultPath
     } catch {
         $result = "FAIL"
