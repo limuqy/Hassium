@@ -76,6 +76,10 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
     private final AtomicReference<NetworkCoreState> state = new AtomicReference<>(NetworkCoreState.IDLE);
     private final AtomicLong s2cDispatched = new AtomicLong();
     private final AtomicLong c2sRouted = new AtomicLong();
+    // [BATCH-CLI] 诊断探针计数：vanilla 批协议 ACK 回路两端可见性（临时，闭环后移除）
+    private final AtomicLong c2sBatchAckSeen = new AtomicLong();
+    private final AtomicLong s2cBatchStartSeen = new AtomicLong();
+    private final AtomicLong s2cBatchFinishSeen = new AtomicLong();
     private final AtomicLong loginRelayed = new AtomicLong();
     private final AtomicLong configRelayed = new AtomicLong();
     private final CopyOnWriteArrayList<Consumer<Packet<?>>> s2cInjectors = new CopyOnWriteArrayList<>();
@@ -885,6 +889,20 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
      */
     public void dispatchS2C(Packet<?> packet) {
         s2cDispatched.incrementAndGet();
+#if MC_VER >= MC_1_21_1
+        // [BATCH-S2C] 客户端是否收到 vanilla 批协议控制包（供给环 S2C 端可见性）
+        if (packet instanceof net.minecraft.network.protocol.game.ClientboundChunkBatchStartPacket) {
+            long n = s2cBatchStartSeen.incrementAndGet();
+            if (n <= 5 || n % 100 == 0) {
+                LOGGER.info("[BATCH-S2C] batch-start#{}", n);
+            }
+        } else if (packet instanceof net.minecraft.network.protocol.game.ClientboundChunkBatchFinishedPacket fin) {
+            long n = s2cBatchFinishSeen.incrementAndGet();
+            if (n <= 5 || n % 100 == 0) {
+                LOGGER.info("[BATCH-S2C] batch-finished#{} batchSize={}", n, fin.batchSize());
+            }
+        }
+#endif
         Function<Packet<?>, Packet<?>> translator = s2cTranslator.get();
         if (translator != null) {
             try {
@@ -1056,6 +1074,15 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
      * 计数 {@link #c2sRoutedCount()} 每次调用 +1（可验证）。
      */
     public boolean routeC2S(Packet<?> packet) {
+#if MC_VER >= MC_1_21_1
+        // [BATCH-C2S] 客户端捕获 vanilla 批 ACK（供给环 C2S 端可见性；节流记录）
+        if (packet instanceof net.minecraft.network.protocol.game.ServerboundChunkBatchReceivedPacket batchAck) {
+            long n = c2sBatchAckSeen.incrementAndGet();
+            if (n <= 5 || n % 20 == 0) {
+                LOGGER.info("[BATCH-C2S] client captured ack#{} f={}", n, batchAck.desiredChunksPerTick());
+            }
+        }
+#endif
 #if MC_VER >= MC_1_21_1
         // 配置阶段终包兜底：handleConfigurationFinished 先换 PLAY 监听器再 send(FinishConfiguration)，
         // mixin 的监听器判定已失真，这里按包类型兜底——必须原版发送（vanilla 依赖该包编码时

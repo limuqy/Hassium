@@ -271,7 +271,11 @@ public final class GatewayChannel {
 
     /** PACKET_C2S 帧（PLAY 阶段，会话已附着）→ 会话 sink（event loop 线程）。 */
     void handleC2SPayload(ByteBuf payload) {
-        c2sFramesReceived.incrementAndGet();
+        long frames = c2sFramesReceived.incrementAndGet();
+        // [GATEWAY-C2S] 诊断探针：C2S 帧到达节奏（临时，闭环后移除）
+        if (frames <= 5 || frames % 200 == 0) {
+            LOGGER.info("[GATEWAY-C2S] frames#{} ({}B) from {}", frames, payload.readableBytes(), remote());
+        }
         server.onC2SFrame();
         GatewayPlayerSession session = playerSession;
         if (session == null) {

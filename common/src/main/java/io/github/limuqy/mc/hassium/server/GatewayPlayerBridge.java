@@ -94,6 +94,10 @@ public final class GatewayPlayerBridge {
     private static final Map<Connection, BridgeState> BRIDGED = new ConcurrentHashMap<>();
     private static final Map<GatewayChannel, LoginBridgeState> LOGIN_BRIDGES = new ConcurrentHashMap<>();
 
+    // [BATCH-INJECT] 诊断探针：网关 C2S 帧注入 vanilla 批 ACK 计数（临时，闭环后移除）
+    private static final java.util.concurrent.atomic.AtomicLong BATCH_ACK_INJECTED =
+            new java.util.concurrent.atomic.AtomicLong();
+
     /** T10 标准流程 pending attach：握手身份已登记但 vanilla 玩家未物化（tick 泵轮询）。 */
     private static final Map<GatewayPlayerSession, Long> PENDING_ATTACH = new ConcurrentHashMap<>();
     private static final long PENDING_ATTACH_TTL_MS = 10_000L;
@@ -673,6 +677,14 @@ public final class GatewayPlayerBridge {
                     if (packet == null) {
                         return;
                     }
+#if MC_VER >= MC_1_21_1
+                    if (packet instanceof net.minecraft.network.protocol.game.ServerboundChunkBatchReceivedPacket ack) {
+                        long n = BATCH_ACK_INJECTED.incrementAndGet();
+                        if (n <= 5 || n % 20 == 0) {
+                            LOGGER.info("[BATCH-INJECT] server injected ack#{} f={}", n, ack.desiredChunksPerTick());
+                        }
+                    }
+#endif
                     @SuppressWarnings({"rawtypes", "unchecked"})
                     PacketListener listener = player.connection;
                     ((Packet) packet).handle(listener);

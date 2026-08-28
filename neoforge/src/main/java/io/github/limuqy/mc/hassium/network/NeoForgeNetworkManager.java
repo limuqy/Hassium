@@ -1918,6 +1918,13 @@ public class NeoForgeNetworkManager implements NetworkManager {
 #endif
     }
 
+#if MC_VER >= MC_1_21_1
+    /** NeoForge payload 发送必须经服务端主线程，避免异步推送批次丢失。 */
+    private static void sendServerPayload(ServerPlayer player, CustomPacketPayload payload) {
+        player.getServer().execute(() -> player.connection.send(payload));
+    }
+#endif
+
 
     @Override
     public void sendChunkHashPacket(ServerPlayer player, FriendlyByteBuf buf) {
@@ -1928,7 +1935,7 @@ public class NeoForgeNetworkManager implements NetworkManager {
         CHANNEL.sendTo(new ChunkHashWrapper(data), player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
 #else
         ChunkHashPayload payload = new ChunkHashPayload(data);
-        player.connection.send(payload);
+        sendServerPayload(player, payload);
         LOGGER.debug("Hassium: Sent chunk hash packet to {}", player.getName().getString());
 #endif
     }
@@ -1942,7 +1949,7 @@ public class NeoForgeNetworkManager implements NetworkManager {
         CHANNEL.sendTo(new SeedRefWrapper(data), player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
 #else
         SeedRefPayload payload = new SeedRefPayload(data);
-        player.connection.send(payload);
+        sendServerPayload(player, payload);
         LOGGER.debug("Hassium: Sent seed ref to {}", player.getName().getString());
 #endif
     }
@@ -1981,7 +1988,7 @@ public class NeoForgeNetworkManager implements NetworkManager {
         CHANNEL.sendTo(new SectionDeltaWrapper(data), player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
 #else
         SectionDeltaPayload payload = new SectionDeltaPayload(data);
-        player.connection.send(payload);
+        sendServerPayload(player, payload);
         LOGGER.debug("Hassium: Sent section delta packet to {}", player.getName().getString());
 #endif
     }
@@ -2020,7 +2027,7 @@ public class NeoForgeNetworkManager implements NetworkManager {
         CHANNEL.sendTo(new BlockEntityDataWrapper(data), player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
 #else
         BlockEntityDataPayload payload = new BlockEntityDataPayload(data);
-        player.connection.send(payload);
+        sendServerPayload(player, payload);
         LOGGER.debug("Hassium: Sent block entity data packet to {}", player.getName().getString());
 #endif
     }
@@ -2050,7 +2057,11 @@ public class NeoForgeNetworkManager implements NetworkManager {
             buf.readBytes(data);
             buf.release();
             ClientBloomSyncPayload payload = new ClientBloomSyncPayload(data);
-            net.minecraft.client.Minecraft.getInstance().getConnection().send(payload);
+            // NeoForge 1.21+ 的 Connection.send(CustomPacketPayload) 需在客户端主线程排队；
+            // Bloom 在影子端线程连续发送三维度时，工作线程直调会导致前两帧未可靠进入
+            // vanilla Connection，服务端直到 R2 才收到 overworld Bloom。
+            net.minecraft.client.Minecraft.getInstance().execute(() ->
+                    net.minecraft.client.Minecraft.getInstance().getConnection().send(payload));
             LOGGER.debug("Hassium: Sent client bloom sync");
         } else {
             buf.release();
@@ -2071,7 +2082,7 @@ public class NeoForgeNetworkManager implements NetworkManager {
             CHANNEL.sendTo(new CompressedChunkWrapper(data), player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
 #else
             CompressedChunkPayload payload = new CompressedChunkPayload(data);
-            player.connection.send(payload);
+            sendServerPayload(player, payload);
 #endif
             LOGGER.debug("[SEND_CHUNK] Successfully sent chunk to {}",
                     player.getName().getString());

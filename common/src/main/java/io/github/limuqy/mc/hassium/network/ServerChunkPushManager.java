@@ -866,6 +866,15 @@ public class ServerChunkPushManager {
                 Constants.LOG.info("[BLOOM_SYNC] Incremental bloom from {} (dimension={}, {} bytes)",
                         player.getName().getString(), packet.dimension(), packet.bloomBytes().length);
             }
+            // Bloom 可能在 vanilla 初始 tracking 已排空后才到达（NeoForge 1.21+ 常见）：
+            // 仅更新 bloom 会留下“已发 hash、未再补 full”的空洞，R2 便没有可复用的 OVD。
+            // 当前维度重新登记已加载视距柱；contains 去重，Bloom 命中仍只发 hash，miss 才直推。
+            if (packet.full()) {
+                ServerLevel level = PlayerCompat.getServerLevel(player);
+                if (level != null && packet.dimension().equals(LevelCompat.getDimensionId(level))) {
+                    resyncTrackedChunks(player);
+                }
+            }
         } catch (Exception e) {
             Constants.LOG.error("[BLOOM_SYNC] Failed to handle bloom sync from player {}",
                     player.getName().getString(), e);
@@ -1107,9 +1116,6 @@ public class ServerChunkPushManager {
                 int cx = centerX + dx;
                 int cz = centerZ + dz;
                 if (!isServerChunkInRange(cx, cz, centerX, centerZ, viewDistance)) {
-                    continue;
-                }
-                if (level.getChunkSource().getChunkNow(cx, cz) == null) {
                     continue;
                 }
                 ResyncEntry entry = new ResyncEntry(new ChunkPos(cx, cz), dimension);

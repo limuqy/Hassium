@@ -103,7 +103,7 @@ FAIL 分解：
 
 ## 残留与后续
 
-- **P0 专项（最高优先）**：neoforge ≥1.21.1 推送吞吐坍缩 + 1.21.1/1.21.2 R2 重连卡死（见"未决 blocker"节；jstack/日志证据齐备，疑似 `c33dc37` confirm 流控在该段回路迟滞）。
+- **P0 专项（最高优先）**：neoforge ≥1.21.1 推送吞吐坍缩 + 1.21.1/1.21.2 R2 重连卡死（见"未决 blocker"节；jstack/日志证据齐备，疑似 `c33dc37` confirm 流控在该段回路迟滞）。→ **2026-08-29 探针定位轮已开工并暂停：confirm 流控假说已被探针排除，断点收窄到服务端出站帧写路径，见 [`classic-matrix-fix-progress-2026-08-29.md`](classic-matrix-fix-progress-2026-08-29.md)。**
 - **P0 门禁口径**：`R2_FULL_CHUNK_TRANSFER` 是否改为"fallback 可解释即放行"（13 格受影响），按上轮决策维持原样，待专项。
 - 1.21.4 neoforge R2 full=384：R1 仅 69 柱导致 R2 几乎全量拉取——同属吞吐坍缩下游，门禁未覆盖该形态（landed 不设门），后续专项一并考虑。
 - 本轮代码改动未提交（工作区）：`common/.../storage/ShadowStorageManager.java`、`common/src/test/.../ShadowStorageManagerTest.java`、`neoforge/.../HassiumNeoForgeClient.java`；诊断脚本在 `build/smoke-test/diag/`（gitignore 范围）。

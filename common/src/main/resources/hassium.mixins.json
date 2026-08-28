@@ -27,6 +27,7 @@
         "MixinLevelTicks",
         "MixinPlayerChunkSender",
         "MixinLightDataWrite",
+        "ThreadedLevelLightEngineAccessor",
         "LightUpdatePacketAccessor",
         "LevelChunkWithLightPacketAccessor",
         "ServerLevelAccessor",
@@ -46,7 +47,6 @@
       "ClientLevelAccessor",
       "LevelLightEngineAccessor",
       "LightEngineAccessor",
-      "ThreadedLevelLightEngineAccessor",
       "MixinLayerLightSectionStorage"
     ],
     "server": [
