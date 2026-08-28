@@ -3,6 +3,7 @@ package io.github.limuqy.mc.hassium.network;
 import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.cache.ChunkContentHashUtil;
 import io.github.limuqy.mc.hassium.compat.LevelChunkSectionCompat;
+import io.github.limuqy.mc.hassium.compat.ChunkPacketDataCompat;
 
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.metrics.NetworkStats;
@@ -22,6 +23,7 @@ import io.github.limuqy.mc.hassium.network.sectiondelta.SectionDeltaPlanner;
 import io.github.limuqy.mc.hassium.network.sectiondelta.SectionDeltaSnapshot;
 import io.github.limuqy.mc.hassium.network.sectiondelta.SectionPlaneSyndrome;
 import io.github.limuqy.mc.hassium.utils.DebugLogger.LogType;
+import io.github.limuqy.mc.hassium.mixin.LevelChunkWithLightPacketAccessor;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Registry;
 import net.minecraft.core.RegistryAccess;
@@ -31,6 +33,7 @@ import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.network.protocol.Packet;
 import net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket;
+import net.minecraft.network.protocol.game.ClientboundLightUpdatePacketData;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
@@ -75,10 +78,10 @@ public class ServerChunkPushManager {
 
     private static final ServerChunkPushManager INSTANCE = new ServerChunkPushManager();
 
-    /** 每玩家已准备包字节缓存上限，防止永不 miss 时泄漏 */
-    private static final int MAX_PREPARED_PER_PLAYER = 384;
     /** 每玩家已封装且仍在通道中排队的批次上限；满则跳过本 tick 封批。 */
     static final int MAX_QUEUED_BATCHES_PER_PLAYER = 10;
+    /** 已准入任务满时的全量数据溢出上限；覆盖单玩家最大可见区，避免静默丢柱。 */
+    private static final int MAX_OVERFLOW_TASKS_PER_PLAYER = 8192;
     /** 待确认（已发 ChunkHashS2C 等客户端回执）超时：超时绕过批次队列异步直发剥光全量。 */
     static final long PENDING_CONFIRM_TIMEOUT_MS = 10_000L;
     /** peekPrioritized 队头数据优先扫描窗口：跳过 SeedRef 元数据找 full 任务的有限深度。 */
@@ -157,13 +160,6 @@ public class ServerChunkPushManager {
     private final Map<UUID, Set<Long>> pendingSends = new ConcurrentHashMap<>();
     private final Map<UUID, String> pendingSendDimension = new ConcurrentHashMap<>();
 
-    /**
-     * 客户端明确要全量数据（C2S miss / 入队被挤出）的待发集。只走
-     * {@link #enqueueDirectPush}；任务队列满则留到下 tick，禁止当成功丢掉。
-     * 与 {@link #pendingSends} 分离：后者在 Bloom 未就绪时只发 hash 就会出队。
-     */
-    private final Map<UUID, Set<Long>> pendingFullSends = new ConcurrentHashMap<>();
-    private final Map<UUID, String> pendingFullDimension = new ConcurrentHashMap<>();
 
     /**
      * 每玩家 SeedGen 能力（握手 C2S 上报 seedGenSupported；默认 false）。
@@ -493,10 +489,11 @@ public class ServerChunkPushManager {
         final RegistryAccess registryAccess = firstLevel.registryAccess();
         // 主线程登记 pristine（生成完成 → 首次推送时机；此后 setBlockState 修改即移除）
         PristineRegistry.markIfPristine(firstLevel, pos);
-        // 统一剥光：broadcast 传入的是原版带光包，按配置重建空 mask 剥光包
-        // （主线程调用；1.21.2+ ThreadingDetector 允许主线程读 chunk）
+        // broadcast 已持有原版或兼容 Mod 改写后的 packet；仅替换其 light payload，
+        // 避免回读 LevelChunk 并重建整包。混合 light capability 时保留原 light，
+        // 防止共享 packet 使关闭引擎的 Hassium 客户端收到剥光包。
         long tBuild = System.nanoTime();
-        final ClientboundLevelChunkWithLightPacket strippedPacket = stripLightIfConfigured(players.get(0), pos, packet);
+        final ClientboundLevelChunkWithLightPacket strippedPacket = stripLightIfConfigured(players, pos, packet);
         diag(D_BUILD, System.nanoTime() - tBuild);
         // 包字节编码挪 pushPool 后台：packet 为已构建完的纯数据（只读编码线程安全，
         // 反透视等 mod 已在拦截时改写好包视图），不再占用主线程。
@@ -554,8 +551,7 @@ public class ServerChunkPushManager {
         }
         final Packet<?> effectivePacket;
         if (chunkPacket instanceof ClientboundLevelChunkWithLightPacket lightPacket) {
-            // 统一剥光：trackChunk 传入的是原版带光包，按配置重建空 mask 剥光包
-            // （主线程调用；1.21.2+ ThreadingDetector 允许主线程读 chunk）
+            // 拦截点传入的原版已构造包：仅替换 light payload，保留原 chunk data 快照。
             long tBuild = System.nanoTime();
             effectivePacket = stripLightIfConfigured(player, pos, lightPacket);
             diag(D_BUILD, System.nanoTime() - tBuild);
@@ -611,44 +607,30 @@ public class ServerChunkPushManager {
         });
     }
 
+
     /**
-     * 异步计算 sectionHashes → chunkHash 并发送阶段一元数据（从 PlayerChunkSender.sendChunk 调用，1.20.2+）。
-     * <p>
-     * 1.20.2+ 移除了 {@code ServerPlayer.trackChunk}，初始区块发送改走
-     * {@code PlayerChunkSender.sendChunk}。packet 构建在**调用线程**同步完成：
-     * 1.21.2+ 的 PalettedContainer ThreadingDetector 禁止跨线程读 chunk，只有主线程/
-     * 原版 ChunkSender 线程合法（拦截点正是这两个线程之一）；<1.21.2 无检测但同样
-     * 在调用线程构建（拦截点即主线程）。编码不再占用调用线程：packet 为纯数据，
-     * 由 drain 消费方在 pushPool 后台 encode；hash 计算同样下推 pushPool。
+     * 重同步队列没有原版发送包时才从 {@link LevelChunk} 构建快照。常规 PlayerChunkSender
+     * 路径改由 {@link #submitMetadataTask(ServerPlayer, ChunkPos, Packet, String)} 接收原包。
+     * 调用方必须在主线程或原版 ChunkSender 线程，1.21.2+ 的
+     * {@code PalettedContainer.ThreadingDetector} 不允许后台读 chunk。
      *
-     * @param player    目标玩家
-     * @param pos       区块位置
-     * @param chunk     区块对象（须在主线程或原版 ChunkSender 线程调用）
-     * @param dimension 维度标识
-     */
-    /**
-     * @return true if the metadata/hash path was actually submitted (packet built + async work queued)
+     * @return {@code true} 表示已构建快照并排入异步 hash 工作
      */
     public boolean submitMetadataTaskFromChunk(ServerPlayer player, ChunkPos pos,
-                                             LevelChunk chunk, String dimension) {
+                                               LevelChunk chunk, String dimension) {
         ensureInitialized();
         ServerLevel level = PlayerCompat.getServerLevel(player);
         final int sectionCount = level.getSectionsCount();
         final RegistryAccess registryAccess = level.registryAccess();
 
-        ClientboundLevelChunkWithLightPacket packet;
         long tBuild = System.nanoTime();
-        packet = buildChunkPacket(chunk, level);
+        ClientboundLevelChunkWithLightPacket packet = buildChunkPacket(chunk, level);
         diag(D_BUILD, System.nanoTime() - tBuild);
         if (packet == null) {
             Constants.LOG.warn("[ASYNC_METADATA] Failed to build chunk packet for {}", pos);
             return false;
         }
-        // 主线程登记 pristine（resync 时区块可能早已生成且未被修改——登记语义：会话内生成完成
-        // 且未修改；已是 FULL 的旧块 inhabitedTime==0 同样满足候选，登记无副作用）
         PristineRegistry.markIfPristine(level, pos);
-        // 同步缓存已构建的 packet：encode 留给 drain 消费方后台执行，主线程不再付线格式编码成本；
-        // packet 为纯数据（构造后不碰 chunk），后台 hash/encode 并发读安全。
         if (!isSeedGenFor(player.getUUID(), pos, dimension)) {
             putPreparedChunkPacket(player.getUUID(), pos, packet);
         }
@@ -740,6 +722,10 @@ public class ServerChunkPushManager {
             boolean inBloom = !shouldPushFull(player, pos, dimension);
             if (inBloom) {
                 if (shouldSkipRedundantHashSend(player.getUUID(), dimension, pos, chunkHash)) {
+                    if (shouldDiscardPreparedWhenHashSendSkipped(
+                            hasMatchingUnexpiredPendingConfirm(player.getUUID(), dimension, pos, chunkHash))) {
+                        discardPreparedChunkPacket(player.getUUID(), pos);
+                    }
                     continue;
                 }
                 registerPendingConfirm(player, pos, dimension, chunkHash);
@@ -749,6 +735,10 @@ public class ServerChunkPushManager {
             Long lastSent = lastSessionPushedHash(player.getUUID(), dimension, pos);
             if (shouldReuseSessionPush(inBloom, lastSent, chunkHash)) {
                 if (shouldSkipRedundantHashSend(player.getUUID(), dimension, pos, chunkHash)) {
+                    if (shouldDiscardPreparedWhenHashSendSkipped(
+                            hasMatchingUnexpiredPendingConfirm(player.getUUID(), dimension, pos, chunkHash))) {
+                        discardPreparedChunkPacket(player.getUUID(), pos);
+                    }
                     continue;
                 }
                 registerPendingConfirm(player, pos, dimension, chunkHash);
@@ -1150,24 +1140,6 @@ public class ServerChunkPushManager {
                 .add(ChunkPos.asLong(pos.x, pos.z));
     }
 
-    /**
-     * 全量数据义务：C2S miss 或出界复活的柱。统一入 {@link PlayerPushQueue} 批次队列，
-     * 由每 tick 封批（≤maxChunksPerTick）后交消费线程。
-     */
-    void markPendingFullSend(ServerPlayer player, ChunkPos pos, String dimension) {
-        if (player == null || pos == null || dimension == null) {
-            return;
-        }
-        enqueuePushTask(player, pos, dimension, PushKind.FULL_VISIBLE);
-    }
-
-    /**
-     * 每 tick 把 C2S/挤出 backlog 定额 {@link #enqueueDirectPush}；任务队列满则停下，
-     * 绝不把未入队 key 当作已发送丢弃。
-     */
-    private void drainPendingFullSends(ServerPlayer player) {
-        // 全量义务已改为直接入 PlayerPushQueue，无需 per-tick backlog 泵
-    }
 
     /**
      * 每 tick 从 pending 取距玩家最近、且已加载的柱出队。
@@ -1222,9 +1194,11 @@ public class ServerChunkPushManager {
             }
             ChunkPos pos = new ChunkPos(x, z);
             putPreparedChunkPacket(playerId, pos, packet);
-            queue.enqueue(new PushTask(pos, dimension,
+            if (!queue.enqueue(new PushTask(pos, dimension,
                     new DataRequestTask(pos, dimension, null, 0L),
-                    PushKind.FULL_VISIBLE));
+                    PushKind.FULL_VISIBLE))) {
+                break;
+            }
             pending.remove(packed);
         }
         if (pending.isEmpty()) {
@@ -1384,6 +1358,10 @@ public class ServerChunkPushManager {
         for (ServerPlayer player : server.getPlayerList().getPlayers()) {
             flushPlayerHashBatchIfDue(player, now);
             reconcileHaloWindow(player);
+            PlayerPushQueue playerQueue = pushQueues.get(player.getUUID());
+            if (playerQueue != null) {
+                playerQueue.promoteOverflow();
+            }
             long t0 = System.nanoTime();
             drainPendingSends(player);
             drainPendingNs += System.nanoTime() - t0;
@@ -1486,9 +1464,9 @@ public class ServerChunkPushManager {
                             result, dimension, pc.dimension())) {
                         return false;
                     }
-                    rememberConfirmedHash(playerId, pc.dimension(),
-                            new ChunkPos(ChunkPos.getX(entry.getKey()), ChunkPos.getZ(entry.getKey())),
-                            pc.chunkHash());
+                    ChunkPos pos = new ChunkPos(ChunkPos.getX(entry.getKey()), ChunkPos.getZ(entry.getKey()));
+                    rememberConfirmedHash(playerId, pc.dimension(), pos, pc.chunkHash());
+                    discardPreparedChunkPacket(playerId, pos);
                     return true;
                 });
             }
@@ -1502,6 +1480,12 @@ public class ServerChunkPushManager {
         for (ChunkPos pos : chunks) {
             long packed = ChunkPos.asLong(pos.x, pos.z);
             PendingConfirm removed = confirms != null ? confirms.remove(packed) : null;
+            if (result == ChunkDataRequestC2SPacket.RESULT_HIT
+                    && shouldDiscardPreparedOnConfirmResult(result, removed != null,
+                    removed != null && java.util.Objects.equals(dimension, removed.dimension()))) {
+                rememberConfirmedHash(playerId, removed.dimension(), pos, removed.chunkHash());
+                discardPreparedChunkPacket(playerId, pos);
+            }
             if (result != ChunkDataRequestC2SPacket.RESULT_MISS) {
                 continue;
             }
@@ -1534,6 +1518,17 @@ public class ServerChunkPushManager {
     /** 只有待确认的 C2S miss 才触发全量直推；hit 和未知项均为幂等收敛。 */
     static boolean shouldPushFullOnConfirmResult(int result, boolean wasPending) {
         return result == ChunkDataRequestC2SPacket.RESULT_MISS && wasPending;
+    }
+
+    /** HIT 收敛已匹配的 pending 后，预编码快照不再需要；MISS/未知项保留给全量路径。 */
+    static boolean shouldDiscardPreparedOnConfirmResult(int result, boolean wasPending,
+                                                        boolean dimensionMatches) {
+        return result == ChunkDataRequestC2SPacket.RESULT_HIT && wasPending && dimensionMatches;
+    }
+
+    /** 冗余 hash 因在途 pending 跳过时必须保留快照；因已确认跳过时必须立即释放。 */
+    static boolean shouldDiscardPreparedWhenHashSendSkipped(boolean hasMatchingUnexpiredPendingConfirm) {
+        return !hasMatchingUnexpiredPendingConfirm;
     }
 
     /** 空列表 HIT 代表该维度没有缺失柱，必须收敛其全部待确认项。 */
@@ -1595,6 +1590,16 @@ public class ServerChunkPushManager {
         Long pendingHash = pending != null ? Long.valueOf(pending.chunkHash()) : null;
         return shouldSkipRedundantHash(pendingHash, pendingUnexpired,
                 lastConfirmedHash(playerId, dimension, pos), chunkHash);
+    }
+
+    private boolean hasMatchingUnexpiredPendingConfirm(UUID playerId, String dimension,
+                                                        ChunkPos pos, long chunkHash) {
+        Map<Long, PendingConfirm> confirms = pendingConfirms.get(playerId);
+        PendingConfirm pending = confirms != null ? confirms.get(ChunkPos.asLong(pos.x, pos.z)) : null;
+        return pending != null
+                && dimension.equals(pending.dimension())
+                && pending.chunkHash() == chunkHash
+                && !isPendingConfirmExpired(pending.sentAtMs(), System.currentTimeMillis());
     }
 
     private Long lastConfirmedHash(UUID playerId, String dimension, ChunkPos pos) {
@@ -1712,12 +1717,12 @@ public class ServerChunkPushManager {
                 it.remove();
                 continue;
             }
-            if (isServerChunkInRange(task.pos().x, task.pos().z, playerChunk.x, playerChunk.z, serverVD)) {
+            if (isServerChunkInRange(task.pos().x, task.pos().z, playerChunk.x, playerChunk.z, serverVD)
+                    && enqueueDirectPush(player, task.dimension(), List.of(task.pos()))) {
                 it.remove();
                 DebugLogger.info(LogType.NETWORK,
                         "[PROCESS_QUEUE] Re-enqueueing deferred chunk {} (back in range)",
                         task.pos());
-                enqueueDirectPush(player, task.dimension(), List.of(task.pos()));
             }
         }
     }
@@ -2164,7 +2169,11 @@ public class ServerChunkPushManager {
     private void sealPlayerBatch(ServerPlayer player) {
         UUID playerId = player.getUUID();
         PlayerPushQueue queue = pushQueues.get(playerId);
-        if (queue == null || queue.isEmpty() || !queue.tryReserveSealedBatch()) {
+        if (queue == null) {
+            return;
+        }
+        queue.promoteOverflow();
+        if (queue.isEmpty() || !queue.tryReserveSealedBatch()) {
             return;
         }
 
@@ -2367,6 +2376,10 @@ public class ServerChunkPushManager {
                 putPreparedChunkPacket(player.getUUID(), task.pos(),
                         new PreparedChunk(chunkData, null, hash));
                 if (shouldSkipRedundantHashSend(player.getUUID(), task.dimension(), task.pos(), hash)) {
+                    if (shouldDiscardPreparedWhenHashSendSkipped(hasMatchingUnexpiredPendingConfirm(
+                            player.getUUID(), task.dimension(), task.pos(), hash))) {
+                        discardPreparedChunkPacket(player.getUUID(), task.pos());
+                    }
                     return;
                 }
                 registerPendingConfirm(player, task.pos(), task.dimension(), hash);
@@ -2408,34 +2421,45 @@ public class ServerChunkPushManager {
 
 
     /**
-     * 拦截路径统一剥光：原版 trackChunk/broadcast 传入的 packet 带真实 light，
-     * 此处按配置在主线程重建空 mask 剥光包，保证 Hassium 客户端全链路
-     * （剥光 + 限流 + hash 元数据）一致生效。重建失败或 lightStrip 关闭时回退原包。
+     * 仅替换既有 packet 的 light payload；chunk data 保持原版/兼容 Mod 已写入的不可变视图。
+     * 广播包会被所有 Hassium 玩家共享，混合 light capability 时不能原地修改，整体回退原 light。
      */
     private ClientboundLevelChunkWithLightPacket stripLightIfConfigured(
-            ServerPlayer player, ChunkPos pos, ClientboundLevelChunkWithLightPacket packet) {
-        if (!HassiumConfigService.getInstance().isServerLightStrip()) {
+            List<ServerPlayer> players, ChunkPos pos, ClientboundLevelChunkWithLightPacket packet) {
+        if (!HassiumConfigService.getInstance().isServerLightStrip() || players == null || players.isEmpty()) {
             return packet;
         }
-        // 剥光协商：仅客户端声明可算光（握手 lightComputeSupported = hassiumEngineEnabled）
-        // 才剥——客户端没装 MOD / 关闭引擎时服务端不剥，光随包自带（否则客户端黑块）。
-        if (!isPlayerLightComputeSupported(player.getUUID())) {
-            return packet;
-        }
-        try {
-            ServerLevel level = PlayerCompat.getServerLevel(player);
-            LevelChunk chunk = level.getChunkSource().getChunkNow(pos.x, pos.z);
-            if (chunk == null) {
+        for (ServerPlayer player : players) {
+            if (!isPlayerLightComputeSupported(player.getUUID())) {
                 return packet;
             }
-            if (chunk.getPos().x != pos.x || chunk.getPos().z != pos.z) {
-                Constants.LOG.warn("[LIGHT-STRIP] CHUNK POS MISMATCH pos=[{}, {}] chunk=[{}, {}]",
-                        pos.x, pos.z, chunk.getPos().x, chunk.getPos().z);
-            }            ClientboundLevelChunkWithLightPacket stripped = buildChunkPacket(chunk, level);
-            return stripped != null ? stripped : packet;
-        } catch (Exception e) {
-            Constants.LOG.warn("[LIGHT-STRIP] Failed to rebuild stripped chunk packet at {}", pos, e);
+        }
+        return stripLightInPlace(pos, packet);
+    }
+
+    private ClientboundLevelChunkWithLightPacket stripLightIfConfigured(
+            ServerPlayer player, ChunkPos pos, ClientboundLevelChunkWithLightPacket packet) {
+        if (!HassiumConfigService.getInstance().isServerLightStrip()
+                || !isPlayerLightComputeSupported(player.getUUID())) {
             return packet;
+        }
+        return stripLightInPlace(pos, packet);
+    }
+
+    private ClientboundLevelChunkWithLightPacket stripLightInPlace(
+            ChunkPos pos, ClientboundLevelChunkWithLightPacket packet) {
+        FriendlyByteBuf buffer = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
+        try {
+            ChunkPacketDataCompat.writeEmptyLightData(buffer);
+            ClientboundLightUpdatePacketData emptyLight =
+                    new ClientboundLightUpdatePacketData(buffer, pos.x, pos.z);
+            ((LevelChunkWithLightPacketAccessor) (Object) packet).hassium$setLightData(emptyLight);
+            return packet;
+        } catch (Exception e) {
+            Constants.LOG.warn("[LIGHT-STRIP] Failed to replace light payload at {}; retaining vanilla light", pos, e);
+            return packet;
+        } finally {
+            buffer.release();
         }
     }
 
@@ -2510,14 +2534,6 @@ public class ServerChunkPushManager {
         ConcurrentHashMap<Long, PreparedChunk> map =
                 preparedChunkPackets.computeIfAbsent(playerId, k -> new ConcurrentHashMap<>());
         map.put(ChunkPos.asLong(pos.x, pos.z), prepared);
-        if (map.size() > MAX_PREPARED_PER_PLAYER) {
-            int toRemove = map.size() - MAX_PREPARED_PER_PLAYER;
-            var it = map.keySet().iterator();
-            while (toRemove-- > 0 && it.hasNext()) {
-                it.next();
-                it.remove();
-            }
-        }
     }
 
     private PreparedChunk takePreparedChunkPacket(UUID playerId, ChunkPos pos) {
@@ -2525,7 +2541,22 @@ public class ServerChunkPushManager {
         if (map == null) {
             return null;
         }
-        return map.remove(ChunkPos.asLong(pos.x, pos.z));
+        PreparedChunk prepared = map.remove(ChunkPos.asLong(pos.x, pos.z));
+        if (map.isEmpty()) {
+            preparedChunkPackets.remove(playerId, map);
+        }
+        return prepared;
+    }
+
+    private void discardPreparedChunkPacket(UUID playerId, ChunkPos pos) {
+        ConcurrentHashMap<Long, PreparedChunk> map = preparedChunkPackets.get(playerId);
+        if (map == null) {
+            return;
+        }
+        map.remove(ChunkPos.asLong(pos.x, pos.z));
+        if (map.isEmpty()) {
+            preparedChunkPackets.remove(playerId, map);
+        }
     }
 
     /**
@@ -2554,6 +2585,7 @@ public class ServerChunkPushManager {
         if (confirms != null) {
             confirms.remove(posLong);
         }
+        discardPreparedChunkPacket(playerId, pos);
         forgetConfirmedHash(playerId, dimension, pos);
     }
 
@@ -2575,8 +2607,6 @@ public class ServerChunkPushManager {
         pendingResync.remove(playerId);
         pendingSends.remove(playerId);
         pendingSendDimension.remove(playerId);
-        pendingFullSends.remove(playerId);
-        pendingFullDimension.remove(playerId);
         deferredChunks.remove(playerId);
         initialPlayerChunkPos.remove(playerId);
         bloomLayers.remove(playerId);
@@ -2628,7 +2658,7 @@ public class ServerChunkPushManager {
     public String getStats() {
         int totalQueues = pushQueues.size();
         int totalPending = pushQueues.values().stream()
-                .mapToInt(PlayerPushQueue::size)
+                .mapToInt(PlayerPushQueue::pendingCount)
                 .sum();
         int poolSize = pushPool != null ? pushPool.getPoolSize() : 0;
         int activeThreads = pushPool != null ? pushPool.getActiveCount() : 0;
@@ -2668,7 +2698,10 @@ public class ServerChunkPushManager {
                                        RegistryAccess registryAccess) {}
 
     /** 批次队列任务：柱 + 维度 + SeedRef 元数据（可空）。 */
-    private record PushTask(ChunkPos pos, String dimension, DataRequestTask data, PushKind kind) {
+    static record PushTask(ChunkPos pos, String dimension, DataRequestTask data, PushKind kind) {
+        static PushTask full(ChunkPos pos, String dimension, PushKind kind) {
+            return new PushTask(pos, dimension, null, kind);
+        }
         SeedRefWork seedRef() {
             return data != null ? data.seedRef() : null;
         }
@@ -2830,10 +2863,21 @@ public class ServerChunkPushManager {
 
     static final class PlayerPushQueue {
         private final java.util.ArrayDeque<PushTask> tasks = new java.util.ArrayDeque<>();
+        /** 已到达但尚未获准进入主 FIFO 的推送义务，严格保持首次入队顺序。 */
+        private final java.util.ArrayDeque<PushTask> overflow = new java.util.ArrayDeque<>();
         private int queuedBatches;
 
+        /** 仅统计可在本 tick 封批的主 FIFO；背压判定不得把 overflow 当作可用槽位。 */
         synchronized int size() {
             return tasks.size();
+        }
+
+        synchronized int pendingCount() {
+            return tasks.size() + overflow.size();
+        }
+
+        synchronized int overflowSize() {
+            return overflow.size();
         }
 
         synchronized int queuedBatchCount() {
@@ -2842,6 +2886,15 @@ public class ServerChunkPushManager {
 
         synchronized boolean isEmpty() {
             return tasks.isEmpty();
+        }
+
+        /**
+         * 把溢出 FIFO 队头回填至主 FIFO。调用方必须在接纳新任务前执行，禁止后来任务插队。
+         */
+        synchronized void promoteOverflow() {
+            while (!overflow.isEmpty() && tasks.size() < queueCapacity()) {
+                tasks.addLast(overflow.removeFirst());
+            }
         }
 
         /** 预留一个已封装批次名额；满时本 tick 不从任务队列取任何任务。 */
@@ -2867,30 +2920,62 @@ public class ServerChunkPushManager {
             }
         }
 
-        /** 同柱已有任务排队则视为成功（幂等）；FORCE_FULL 可升级已排队的弱义务。 */
+        /**
+         * 同柱已有任务视为成功；FORCE_FULL 原地升级弱义务。主 FIFO 满时改入 overflow，
+         * 并在 overflow 未清空前拒绝后来任务直接进入主 FIFO，避免失败柱被后到任务反超。
+         */
         synchronized boolean enqueue(PushTask task) {
-            java.util.Iterator<PushTask> it = tasks.iterator();
-            while (it.hasNext()) {
-                PushTask existing = it.next();
-                if (existing.pos().equals(task.pos())
-                        && existing.dimension().equals(task.dimension())) {
-                    if (!shouldReplaceQueuedPush(existing.kind(), task.kind())) {
-                        return true;
-                    }
-                    it.remove();
-                    break;
+            PushTask existing = findSameTask(tasks, task);
+            if (existing != null) {
+                upgradeInPlace(tasks, existing, task);
+                return true;
+            }
+            existing = findSameTask(overflow, task);
+            if (existing != null) {
+                upgradeInPlace(overflow, existing, task);
+                return true;
+            }
+            if (!overflow.isEmpty() || tasks.size() >= queueCapacity()) {
+                if (overflow.size() >= MAX_OVERFLOW_TASKS_PER_PLAYER) {
+                    Constants.LOG.warn("[PROCESS_QUEUE] Full-data overflow full (size={}); cannot stage chunk {}",
+                            overflow.size(), task.pos());
+                    return false;
+                }
+                overflow.addLast(task);
+                return true;
+            }
+            addToPrimary(task);
+            return true;
+        }
+
+        private static PushTask findSameTask(java.util.ArrayDeque<PushTask> queue, PushTask task) {
+            for (PushTask existing : queue) {
+                if (existing.pos().equals(task.pos()) && existing.dimension().equals(task.dimension())) {
+                    return existing;
                 }
             }
-            if (tasks.size() >= queueCapacity()) {
-                return false;
-            }
+            return null;
+        }
 
+        private static void upgradeInPlace(java.util.ArrayDeque<PushTask> queue,
+                                           PushTask existing, PushTask replacement) {
+            if (!shouldReplaceQueuedPush(existing.kind(), replacement.kind())) {
+                return;
+            }
+            java.util.ArrayDeque<PushTask> rebuilt = new java.util.ArrayDeque<>(queue.size());
+            while (!queue.isEmpty()) {
+                PushTask current = queue.removeFirst();
+                rebuilt.addLast(current == existing ? replacement : current);
+            }
+            queue.addAll(rebuilt);
+        }
+
+        private void addToPrimary(PushTask task) {
             if (task.kind() == PushKind.FULL_HALO) {
                 tasks.addFirst(task);
             } else {
                 tasks.addLast(task);
             }
-            return true;
         }
 
         synchronized PushTask poll() {
@@ -2899,11 +2984,13 @@ public class ServerChunkPushManager {
 
         synchronized void clear() {
             tasks.clear();
+            overflow.clear();
             queuedBatches = 0;
         }
 
         synchronized void removeIf(java.util.function.Predicate<PushTask> predicate) {
             tasks.removeIf(predicate);
+            overflow.removeIf(predicate);
         }
     }
 }

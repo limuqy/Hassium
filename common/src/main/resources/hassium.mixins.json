@@ -28,6 +28,7 @@
         "MixinPlayerChunkSender",
         "MixinLightDataWrite",
         "LightUpdatePacketAccessor",
+        "LevelChunkWithLightPacketAccessor",
         "ServerLevelAccessor",
         "MixinReloadableServerResources"
     ],

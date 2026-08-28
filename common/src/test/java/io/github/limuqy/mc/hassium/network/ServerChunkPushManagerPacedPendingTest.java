@@ -53,6 +53,61 @@ class ServerChunkPushManagerPacedPendingTest {
         assertEquals(4, ServerChunkPushManager.normalizeMaxChunksPerTick(0));
         assertEquals(4, ServerChunkPushManager.normalizeMaxChunksPerTick(-1));
     }
+    @Test
+    void fullTasksOverflowWithoutLossAndPromoteInFifoOrder() {
+        ServerChunkPushManager.PlayerPushQueue queue = new ServerChunkPushManager.PlayerPushQueue();
+        int submitted = 0;
+        while (queue.overflowSize() == 0) {
+            assertTrue(queue.enqueue(fullTask(submitted++)));
+        }
+        int primaryCapacity = submitted - 1;
+        assertEquals(primaryCapacity, queue.size());
+        assertEquals(1, queue.overflowSize());
+
+        assertEquals(0, queue.poll().pos().x);
+        queue.promoteOverflow();
+        for (int x = 1; x < submitted; x++) {
+            assertEquals(x, queue.poll().pos().x);
+        }
+        assertTrue(queue.isEmpty());
+        assertEquals(0, queue.overflowSize());
+    }
+
+    @Test
+    void laterFullTaskCannotOvertakeExistingOverflow() {
+        ServerChunkPushManager.PlayerPushQueue queue = new ServerChunkPushManager.PlayerPushQueue();
+        int submitted = 0;
+        while (queue.overflowSize() == 0) {
+            assertTrue(queue.enqueue(fullTask(submitted++)));
+        }
+        assertEquals(0, queue.poll().pos().x);
+        assertTrue(queue.enqueue(fullTask(submitted)));
+        queue.promoteOverflow();
+        for (int x = 1; x < submitted; x++) {
+            assertEquals(x, queue.poll().pos().x);
+        }
+        queue.promoteOverflow();
+        assertEquals(submitted, queue.poll().pos().x);
+    }
+
+    @Test
+    void forceFullUpgradesTheExistingTaskWithoutReordering() {
+        ServerChunkPushManager.PlayerPushQueue queue = new ServerChunkPushManager.PlayerPushQueue();
+        assertTrue(queue.enqueue(fullTask(0)));
+        assertTrue(queue.enqueue(fullTask(1)));
+        assertTrue(queue.enqueue(ServerChunkPushManager.PushTask.full(
+                new net.minecraft.world.level.ChunkPos(0, 0), "minecraft:overworld",
+                ServerChunkPushManager.PushKind.FORCE_FULL)));
+
+        assertEquals(ServerChunkPushManager.PushKind.FORCE_FULL, queue.poll().kind());
+        assertEquals(1, queue.poll().pos().x);
+    }
+
+    private static ServerChunkPushManager.PushTask fullTask(int x) {
+        return ServerChunkPushManager.PushTask.full(
+                new net.minecraft.world.level.ChunkPos(x, 0), "minecraft:overworld",
+                ServerChunkPushManager.PushKind.FULL_VISIBLE);
+    }
 
     @Test
     void bloomMissWithoutSessionRecord_skipsHashBeforeStrippedFull() {
@@ -85,6 +140,21 @@ class ServerChunkPushManagerPacedPendingTest {
         assertEquals(10_000L, timeout);
         assertFalse(ServerChunkPushManager.isPendingConfirmExpired(sentAt, sentAt + timeout));
         assertTrue(ServerChunkPushManager.isPendingConfirmExpired(sentAt, sentAt + timeout + 1L));
+    }
+
+    @Test
+    void preparedSnapshot_lifecycleFollowsConfirmOutcome() {
+        assertTrue(ServerChunkPushManager.shouldDiscardPreparedOnConfirmResult(
+                ChunkDataRequestC2SPacket.RESULT_HIT, true, true));
+        assertFalse(ServerChunkPushManager.shouldDiscardPreparedOnConfirmResult(
+                ChunkDataRequestC2SPacket.RESULT_MISS, true, true));
+        assertFalse(ServerChunkPushManager.shouldDiscardPreparedOnConfirmResult(
+                ChunkDataRequestC2SPacket.RESULT_HIT, true, false));
+
+        assertFalse(ServerChunkPushManager.shouldDiscardPreparedWhenHashSendSkipped(true),
+                "在途 pending 仍需要快照处理 miss/timeout");
+        assertTrue(ServerChunkPushManager.shouldDiscardPreparedWhenHashSendSkipped(false),
+                "已确认的冗余 hash 不得遗留快照");
     }
 
     @Test

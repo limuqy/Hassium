@@ -4,11 +4,11 @@ import io.github.limuqy.mc.hassium.compat.LevelCompat;
 import io.github.limuqy.mc.hassium.network.ServerChunkPushManager;
 import io.github.limuqy.mc.hassium.network.gateway.GatewayServer;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
-import net.minecraft.server.level.ServerLevel;
+import net.minecraft.network.protocol.Packet;
+import net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.network.ServerGamePacketListenerImpl;
 import net.minecraft.world.level.ChunkPos;
-import net.minecraft.world.level.chunk.LevelChunk;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
@@ -46,7 +46,7 @@ public abstract class MixinPlayerChunkSender {
 
     /**
      * 源头定额：把原版 {@code sendNextChunks} 的 batch 钳到 {@code maxChunksPerTick}。
-     * 与压缩/网关会话无关；{@link #hassium$onSendChunk} 仍按会话决定是否改走元数据。
+     * 与压缩/网关会话无关；{@link #hassium$onChunkPacketSend} 仍按会话决定是否改走元数据。
      */
     @Inject(method = "sendNextChunks", at = @At("HEAD"))
     private void hassium$capSourceRate(ServerPlayer player, CallbackInfo ci) {
@@ -77,29 +77,29 @@ public abstract class MixinPlayerChunkSender {
     }
 
     /**
-     * 拦截 sendChunk：对 Hassium 客户端异步发送 chunkHash 元数据，取消原版区块包。
-     * <p>
-     * sendChunk 是 private static，注入方法也必须为 private static。
+     * 截获原版已构造的首个 level-chunk packet。Hassium 客户端复用此快照计算 hash/编码，
+     * 只原地替换 light payload；不再从 {@link net.minecraft.world.level.chunk.LevelChunk} 重建。
      */
-    @Inject(method = "sendChunk", at = @At("HEAD"), cancellable = true)
-    private static void hassium$onSendChunk(ServerGamePacketListenerImpl listener, ServerLevel level,
-                                             LevelChunk chunk, CallbackInfo ci) {
+    @org.spongepowered.asm.mixin.injection.Redirect(method = "sendChunk",
+            at = @At(value = "INVOKE",
+                    target = "Lnet/minecraft/server/network/ServerGamePacketListenerImpl;send(Lnet/minecraft/network/protocol/Packet;)V",
+                    ordinal = 0))
+    private static void hassium$onChunkPacketSend(ServerGamePacketListenerImpl listener, Packet<?> packet) {
+        if (!(packet instanceof ClientboundLevelChunkWithLightPacket chunkPacket)) {
+            listener.send(packet);
+            return;
+        }
         ServerPlayer player = listener.getPlayer();
-        // 拦截 gate = 网关会话存在：有会话即 Hassium 客户端（网关握手已确认身份）→ 转元数据
-        // （chunkHash/seedgen 帧走网关自有通道，不依赖 ZSTD/压缩启用）；无网关会话（原版
-        // 客户端）放行原版发送。不等压缩启用：enableCompression 在物化后 finishLoginBridge
-        // 才置位，ChunkSender 抢跑窗口内必须已拦截，否则原版直发 → 客户端影子端无数据。
+        // 网关会话在物化后即标识 Hassium 客户端；无会话时严格保留原版发送。
         if (GatewayServer.getInstance().registry().get(player.getUUID()) == null) {
+            listener.send(packet);
             return;
         }
 
-        ChunkPos pos = chunk.getPos();
-        String dimension = LevelCompat.getDimensionId(level);
-
-        // 异步计算 hash 并发送元数据
-        ServerChunkPushManager.getInstance().submitMetadataTaskFromChunk(player, pos, chunk, dimension);
-
-        ci.cancel(); // 取消原版区块包发送
+        ChunkPos pos = new ChunkPos(chunkPacket.getX(), chunkPacket.getZ());
+        String dimension = LevelCompat.getDimensionId(player.level());
+        ServerChunkPushManager.getInstance().submitMetadataTask(player, pos, chunkPacket, dimension);
+        // 不调用 listener.send：自有 hash/full 路径取代这份原版区块包。
     }
 
     /** PlayerChunkSender.dropChunk 是 1.20.2+ 的精确 tracking-view 移除回调。 */
