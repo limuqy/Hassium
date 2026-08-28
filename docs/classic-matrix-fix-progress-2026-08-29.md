@@ -58,9 +58,9 @@
 
 ## 回归与收尾状态
 
-NeoForge R2 卡死已由 `sendServerPayload` 统一切换到服务端主线程执行，随后完成针对性回归：`1.21.1`、`1.21.2`、`1.21.5`、`1.21.9`、`1.21.11` 两轮均通过。
+NeoForge R2 卡死已由 `sendServerPayload` 统一切换到服务端主线程执行，随后完成完整版本段回归：`1.21.1`、`1.21.2`、`1.21.3`、`1.21.4`、`1.21.5`、`1.21.6`、`1.21.7`、`1.21.8`、`1.21.9`、`1.21.10`、`1.21.11` 两轮均通过。
 
-关键指标：R1 均加载 1529 柱；R2 均无新增整柱；OVD 均已加载 632、缺失 0。`1.21.11` R2 光照缓存命中 1064/1085（98.1%），G2 已恢复；各分析器均为 `failures=[]`。
+关键指标：上述版本 R1 均加载 1529 柱；R2 均无新增整柱；OVD 均已加载 632、缺失 0。`1.21.11` R2 光照缓存命中 1064/1085（98.1%），G2 已恢复；各分析器均为 `failures=[]`。
 
 临时 `[BATCH-SRV]`、`[BATCH-LIGHT]`、`[BATCH-CHAN]`、`[GATEWAY-C2S]` 诊断探针已清理，业务逻辑保留。
 
@@ -78,6 +78,8 @@ NeoForge R2 卡死已由 `sendServerPayload` 统一切换到服务端主线程�
 
 修复内容：NeoForge resync 队列现在保留视距范围内的全部 `ResyncEntry`，由 `drainPendingResync` 在区块可用后重试；Bloom full sync 继续触发当前维度 resync。
 
-验证会话：`1.21.5_neoforge_I_resyncall`、`1.21.1_neoforge_I_batchprobe7`、`1.21.2_neoforge_I_batchprobe7`、`1.21.9_neoforge_I_resyncall2`、`1.21.11_neoforge_I_resyncall2` 均为 `PASS`。
+验证会话：`1.21.5_neoforge_I_resyncall`、`1.21.1_neoforge_I_batchprobe7`、`1.21.2_neoforge_I_batchprobe7`、`1.21.3_neoforge_I_resyncall2`、`1.21.4_neoforge_I_resyncall2`、`1.21.6_neoforge_I_resyncall2`、`1.21.7_neoforge_I_resyncall2`、`1.21.8_neoforge_I_resyncall2`、`1.21.9_neoforge_I_resyncall2`、`1.21.10_neoforge_I_resyncall2`、`1.21.11_neoforge_I_resyncall2` 均为 `PASS`。
 
-提交：`50139d0 fix NeoForge OVD resync`；收尾提交 `7c5878b fix NeoForge payload thread compatibility`。
+分析器仍有 `TRACE_APPLIED_NOT_MESHED` P1 观察警告，属于应用与 mesh 完成事件时序差，不构成丢柱或失败门禁。
+
+提交：`50139d0 fix NeoForge OVD resync`；收尾提交 `7c5878b fix NeoForge payload thread compatibility`；本次矩阵文档更新另行提交。
