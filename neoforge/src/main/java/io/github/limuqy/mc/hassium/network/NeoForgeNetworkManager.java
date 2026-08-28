@@ -1921,7 +1921,11 @@ public class NeoForgeNetworkManager implements NetworkManager {
 #if MC_VER >= MC_1_21_1
     /** NeoForge payload 发送必须经服务端主线程，避免异步推送批次丢失。 */
     private static void sendServerPayload(ServerPlayer player, CustomPacketPayload payload) {
-        player.getServer().execute(() -> player.connection.send(payload));
+        net.minecraft.server.MinecraftServer server =
+                io.github.limuqy.mc.hassium.compat.PlayerCompat.getMinecraftServer(player);
+        if (server != null) {
+            server.execute(() -> player.connection.send(payload));
+        }
     }
 #endif
 

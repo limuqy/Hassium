@@ -50,37 +50,34 @@
 | `RuntimeServerContext.isDedicatedServerContext()` 三端不一致导致 clamp 单边生效 | `MixinMinecraftServer` 统一 `setDedicatedServer(server.isDedicatedServer())` |
 | `chunk.lightStrip`/服务端光照引擎被抑制 | 剥光仅包级替换(`stripLightIfConfigured`),`MixinLightDataWrite` 纯度量 |
 
-## 当前最强假设(下一轮先验证)
+## 已闭环的出站假设
 
-**服务端 → 客户端的网关帧写路径在首轮大批量(5.7MB/6s)之后停发。** 两个候选机制:
+旧假设“网关 writable 长期为 false 或发送路径静默丢帧”已被 `batchprobe7` 排除：1.21.1/1.21.2 回归中 `writable=true`、`nettyWritable=true`、`bytesBeforeUnwritable=65537`，批次 ACK 持续增长，R2 两轮均完成。
 
-- **(a) netty 出站水位闸**:`GatewayChannel.isWritable()`(netty 默认高水位 64KB)在批量推送后长期不回落 → `isFullDeliveryChannelWritable`(`ServerChunkPushManager.java:2827`)与 hash/整柱发送被全部闸死。需解释为何不回落(客户端读取停滞?未发现 autoRead gate)。
-- **(b) 发送路径静默丢帧**:某处 writable 判 false 后直接 drop(无日志)。
+实际修复点是 NeoForge `CustomPacketPayload` 异步发送时序：payload 统一排入服务端主线程后，批量推送与 Bloom/resync 顺序稳定。
 
-**已布好 `[BATCH-CHAN]` 探针(writable/nettyWritable/bytesBeforeUnwritable/state,每 5s 采样)但未跑——这是暂停点的第一步。**
+## 回归与收尾状态
 
-## 建议下一步(按序)
+NeoForge R2 卡死已由 `sendServerPayload` 统一切换到服务端主线程执行，随后完成针对性回归：`1.21.1`、`1.21.2`、`1.21.5`、`1.21.9`、`1.21.11` 两轮均通过。
 
-1. 跑 `.\scripts\runtime-smoke-test.ps1 -Ver 1.21.1 -Loader neoforge -Phase I -SessionId "1.21.1_neoforge_I_batchprobe7"`,读 `[BATCH-CHAN]`:停摆期 `writable` 是否长期 false、`bytesBeforeUnwritable` 是否 ≤0。
-2. 若 unwritable:查 GatewayServer bootstrap 的 `WRITE_BUFFER_HIGH_WATER_MARK` 配置、客户端读路径、full-push 对 unwritable 的处置(静默丢 or 排队等恢复——现状疑似"排队但永不恢复")。
-3. 若 writable:在 `ChunkSender`/`tryRouteS2C`/`routeS2C` 写帧处加计数,定位静默丢帧点。
-4. R1 修复后复验 R2 卡死(大概率同根因:通道断流 → idle → RST)。
-5. **清理全部 `[BATCH-*]`/`[GATEWAY-C2S]` 探针**(`MixinPlayerChunkSender`、`NetworkCore`、`GatewayPlayerBridge`、`GatewayChannel`),并把 `ThreadedLevelLightEngineAccessor` 移回 mixins.json client 段。
-6. 补跑受影响格:1.21.1/1.21.2/1.21.9 neoforge + 一个 `R2_FULL_CHUNK_TRANSFER` 门禁格;`compileAnchors` + `common:test`。
+关键指标：R1 均加载 1529 柱；R2 均无新增整柱；OVD 均已加载 632、缺失 0。`1.21.11` R2 光照缓存命中 1064/1085（98.1%），G2 已恢复；各分析器均为 `failures=[]`。
 
-## 工作区状态(暂停时,未提交)
+临时 `[BATCH-SRV]`、`[BATCH-LIGHT]`、`[BATCH-CHAN]`、`[GATEWAY-C2S]` 诊断探针已清理，业务逻辑保留。
 
-- **探针代码(临时)**:`MixinPlayerChunkSender.java`、`NetworkCore.java`、`GatewayPlayerBridge.java`、`GatewayChannel.java`、`hassium.mixins.json`(ThreadedLevelLightEngineAccessor 移至 common 段)。
-- **独立修复(应保留)**:`GatewayPacketCodecTest.java` 移除白名单外 `MC_1_21_4` 碎片段(改测试内反射取 `getSlot`/`slot` accessor)。HEAD 上 `scanVersionBoundaries` 本就红,此修复使其转绿。
-- 编译:`common:compileJava -Pmc_ver=1.21.1` 与 `-Pmc_ver=1.20.1` 绿(含 [BATCH-CHAN] 探针)。
-- 端口/daemon:无遗留占用;Gradle daemon 正常保留。
+1.21.11 编译暴露的版本 API 差异也已修复：`ServerPlayer.getServer()` 改为通过 `PlayerCompat.getMinecraftServer(player)` 获取服务端并切主线程执行 payload。
+
+验证：`common:test`、`neoforge:compileJava -Pmc_ver=1.20.1`、`-Pmc_ver=1.21.1`、`-Pmc_ver=1.21.11` 均通过。
+
+## 旧探针暂停点（历史记录）
+
+旧探针曾用于确认停摆期 `writable`、`bytesBeforeUnwritable`、批次 ACK 与光照队列状态；结果已证明本次修复后的出站路径正常，因此不再保留探针代码。
 
 ## 后续闭环记录
 
 静态与运行时证据确认：NeoForge 首轮 Bloom full sync 到达时，`resyncTrackedChunks` 会跳过尚未由 `getChunkNow()` 物化的区块；这些区块不会再次进入 resync 队列，导致 R1 缓存基数不足并连带造成 R2 OVD 缺失。
 
-修复内容：NeoForge resync 队列现在保留视距范围内的全部 `ResyncEntry`，由 `drainPendingResync` 在区块可用后重试；Bloom full sync 继续触发当前维度 resync。临时 payload 计数日志已移除。
+修复内容：NeoForge resync 队列现在保留视距范围内的全部 `ResyncEntry`，由 `drainPendingResync` 在区块可用后重试；Bloom full sync 继续触发当前维度 resync。
 
-验证会话：`1.21.5_neoforge_I_resyncall` 为 `PASS`。R1 加载 1529 柱；R2 全命中 438，新增整柱 0；OVD 已加载 632、缺失 0；分析器 `failures=[]`。`common:test` 与 `neoforge:compileJava -Pmc_ver=1.21.5` 均通过。
+验证会话：`1.21.5_neoforge_I_resyncall`、`1.21.1_neoforge_I_batchprobe7`、`1.21.2_neoforge_I_batchprobe7`、`1.21.9_neoforge_I_resyncall2`、`1.21.11_neoforge_I_resyncall2` 均为 `PASS`。
 
-提交：`50139d0 fix NeoForge OVD resync`。1.21.1/1.21.2 R2 重连卡死及全矩阵复验仍是独立事项。
+提交：`50139d0 fix NeoForge OVD resync`；文档提交 `8c5fd3f`。当前 1.21.11 API 兼容修复与诊断探针清理待提交。

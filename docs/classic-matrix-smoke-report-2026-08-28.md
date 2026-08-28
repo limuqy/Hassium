@@ -99,15 +99,17 @@ FAIL 分解：
 
 ## 重试记录（非代码）
 
-- 1.21.1 neoforge：首跑 R2 卡死（复用存档）→ `_retry`（CleanWorld）卡死 → `_diag`（CleanWorld）卡死 → `_diag2`（CleanWorld，jstack 采样）卡死。共 4 次，全复现。
-- 1.21.2 neoforge：首跑客户端 mod 构造崩（root cause 2，修复）→ 修复后重跑 R2 卡死 → `_retry`（CleanWorld）卡死。共 3 次，后两次全复现。
+- 1.21.1 neoforge：旧探针轮曾连续复现 R2 卡死；本次修复后 `batchprobe7` 两轮正常完成。
+- 1.21.2 neoforge：旧轮在客户端构造问题修复后仍复现 R2 卡死；`batchprobe7` 修复回归后两轮正常完成。
 - 1.21.2 fabric / 1.21.3 fabric：首跑即 PASS。
 
 ## 残留与后续
 
-- **已闭环**：NeoForge resync 未生成区块丢登记导致的 R1 吞吐坍缩与 R2 OVD 缺失。针对性会话 `1.21.5_neoforge_I_resyncall` 通过：R1=1529 柱，R2 全命中 438，OVD 已加载 632、缺失 0。
-- 1.21.1/1.21.2 R2 重连卡死及其它版本矩阵仍需独立专项验证，不因本次 1.21.5 修复宣称全矩阵闭环。
-- **P0 门禁口径**：`R2_FULL_CHUNK_TRANSFER` 继续保持现有严格口径；fallback 仍全量记录并由分析器单独判定。
-- 验证：`common:test`、`neoforge:compileJava -Pmc_ver=1.21.5` 均通过；修复提交为 `50139d0`。
+- **已闭环**：NeoForge resync 未生成区块丢登记导致的 R1 吞吐坍缩与 R2 OVD 缺失。`1.21.5_neoforge_I_resyncall` 通过：R1=1529 柱，R2 全命中 438，OVD 已加载 632、缺失 0。
+- **已回归**：`1.21.1`、`1.21.2`、`1.21.9`、`1.21.11` NeoForge 均完成两轮；R1 均加载 1529 柱，R2 新增整柱均为 0，OVD 均已加载 632、缺失 0，分析器 `failures=[]`。
+- **1.21.11 兼容修复**：`ServerPlayer.getServer()` 在该版本已移除，NeoForge payload 主线程切换改经 `PlayerCompat.getMinecraftServer(player)`；`neoforge:compileJava -Pmc_ver=1.21.11` 与 `-Pmc_ver=1.20.1` 均通过。
+- **G2 已恢复**：1.21.11 R2 光照缓存命中 1064/1085（98.1%），不再触发 `SECTION_DELTA_OR_LIGHT_RECALC_ABSENT`。
+- **P0 门禁**：上述四个关键版本分析器均无失败；`R2_FULL_CHUNK_TRANSFER` 严格口径保持不变，未放宽 fallback 判定。
+- `common:test` 与 `neoforge:compileJava -Pmc_ver=1.21.1` 均通过；修复提交 `50139d0`，后续兼容修复待单独提交。
 - Gradle daemon 保留（正常）；25565/25566 已释放。
-- 诊断探针已移除临时 payload 计数日志；`.comate/` 未纳入提交。
+- `.comate/` 未纳入提交。
