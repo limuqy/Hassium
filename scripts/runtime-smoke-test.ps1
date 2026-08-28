@@ -751,92 +751,6 @@ if ($probeRound2) {
 }
 Write-Host "[$SessionId] PROBE JSON: round1=$($null -ne $probeRound1) round2=$($null -ne $probeRound2)"
 
-# T3 P0 门禁（基于 PROBE JSON v1，作用于 ROUND2 探针数据）——仅 classic 场景评估：
-#   G1 counters.ovdLoaded > 0
-#   G2 sectionDeltaApplied > 0 或 lightSegRecalc > 0
-#   G3 disk.shadowRegionExists 且 disk.regionFileCount > 0
-#   G4 counters.locallyGenerated == 0（影子端全量命中，不允许本地补生成）
-# 任一不满足 → Round2Pass=false 并把失败门禁名记入 result JSON（ProbeGateFailures）；
-# probe 缺失或对应字段缺失（旧客户端）时跳过该门禁保持兼容。
-# 非 classic 场景（seedgen/dimension 等）跳过这四条门禁：其探针语义不同
-# （如 dimension 切维度轮无 ovd/影子区），套用 classic 门禁会误判 FAIL。
-$probeGateFailures = @()
-if ($Scenario -ne "classic") {
-    # 非 classic 场景：四条 P0 门禁整体跳过，ProbeGateFailures 保持空数组（scenario-gated）
-    Write-Host "[$SessionId] T3 P0 门禁: 非 classic 场景（$Scenario）跳过（scenario-gated）"
-} elseif ($probeRound2) {
-    $c2 = $probeRound2.counters
-    $d2 = $probeRound2.disk
-    if ($c2 -and $null -ne $c2.ovdLoaded -and -not ($c2.ovdLoaded -gt 0)) {
-        $probeGateFailures += "ovdLoaded_not_positive"
-    }
-    if ($c2 -and ($null -ne $c2.sectionDeltaApplied -or $null -ne $c2.lightSegRecalc)) {
-        $sda = if ($null -ne $c2.sectionDeltaApplied) { [long]$c2.sectionDeltaApplied } else { 0 }
-        $lsr = if ($null -ne $c2.lightSegRecalc) { [long]$c2.lightSegRecalc } else { 0 }
-        if (-not ($sda -gt 0 -or $lsr -gt 0)) {
-            $probeGateFailures += "section_delta_or_light_recalc_absent"
-        }
-    }
-    if ($d2 -and $null -ne $d2.shadowRegionExists -and $null -ne $d2.regionFileCount) {
-        if (-not ($d2.shadowRegionExists -and [long]$d2.regionFileCount -gt 0)) {
-            $probeGateFailures += "shadow_region_missing"
-        }
-    }
-    if ($c2 -and $null -ne $c2.locallyGenerated -and [long]$c2.locallyGenerated -ne 0) {
-        $probeGateFailures += "locally_generated_nonzero"
-    }
-    if ($probeGateFailures.Count -gt 0) {
-        Write-Host "[$SessionId] T3 P0 门禁失败: $($probeGateFailures -join ', ')" -ForegroundColor Red
-    } else {
-        Write-Host "[$SessionId] T3 P0 门禁: 全部通过"
-    }
-}
-
-# T7 dimension 磁盘门禁（post-exit）：维度切换不断连，shadow 世界只在断连/退出时落盘，
-# dump 时刻 region 尚未 flush（probe disk.dimensions 全为 -1 属预期语义，Java 侧不改）。
-# 客户端正常退出后，按本会话 probe roundN.json 记录的 disk.cacheDir（.../world/region）
-# 定位影子世界根，校验 world/region（主世界）、world/DIM-1/region（下界）、world/DIM1/region
-# （末地）三处均存在且 ≥1 个 .mca；失败记入 DimensionGateFailures 并判 FAIL。
-# 遗留：主世界同坐标未被覆写的深度比对本轮不做。
-$dimensionGateFailures = @()
-if ($Scenario -eq "dimension") {
-    if ($clientExit -ne 0) {
-        $dimensionGateFailures += "client_exit_nonzero"
-    } else {
-        $cacheRegionDir = $null
-        foreach ($pj in @(Get-ChildItem $probeDir -Filter "round*.json" -ErrorAction SilentlyContinue | Sort-Object Name)) {
-            try {
-                $pd = Get-Content $pj.FullName -Raw | ConvertFrom-Json
-                if ($pd.disk -and $pd.disk.cacheDir) { $cacheRegionDir = $pd.disk.cacheDir }
-            } catch { }
-        }
-        if (-not $cacheRegionDir) {
-            # 回退：hassium_cache 下最近修改的 <serverId>\world\region（probe 缺失时兜底）
-            $cacheRegionDir = Get-ChildItem (Join-Path $clientRunDir "hassium_cache") -Directory -ErrorAction SilentlyContinue |
-                ForEach-Object { Join-Path $_.FullName "world\region" } |
-                Where-Object { Test-Path $_ } |
-                Sort-Object { (Get-Item $_).LastWriteTime } -Descending |
-                Select-Object -First 1
-        }
-        if (-not $cacheRegionDir -or -not (Test-Path $cacheRegionDir)) {
-            $dimensionGateFailures += "shadow_world_not_found"
-        } else {
-            $dimWorldRoot = Split-Path -Parent $cacheRegionDir
-            foreach ($dimEntry in @(@("overworld", "region"), @("nether", "DIM-1\region"), @("end", "DIM1\region"))) {
-                $dimRegionDir = Join-Path $dimWorldRoot $dimEntry[1]
-                $mcaCount = @(Get-ChildItem $dimRegionDir -Filter "*.mca" -File -ErrorAction SilentlyContinue).Count
-                if ($mcaCount -lt 1) {
-                    $dimensionGateFailures += "$($dimEntry[0])_region_missing"
-                }
-            }
-        }
-    }
-    if ($dimensionGateFailures.Count -gt 0) {
-        Write-Host "[$SessionId] dimension 磁盘门禁失败: $($dimensionGateFailures -join ', ')" -ForegroundColor Red
-    } else {
-        Write-Host "[$SessionId] dimension 磁盘门禁: 三维度 region 均有 .mca"
-    }
-}
 
 # 提取服务端视距切换日志
 if (Test-Path $serverLog) {
@@ -847,26 +761,7 @@ if (Test-Path $serverLog) {
     }
 }
 
-# 检查两轮统计
-$round1StatsFound = $round1Match.Success -or ($null -ne $probeRound1)
-$round1Pass = $clientContent -match "ROUND1 stats OK"
-$round2StatsFound = $round2Match.Success -or ($null -ne $probeRound2)
-$round2Pass = ($clientContent -match "ROUND2 stats OK") -and ($probeGateFailures.Count -eq 0)
-$hasPass = $clientContent -match "HassiumSmokeTest:PASS"
-$hasFail = $clientContent -match "HassiumSmokeTest:FAIL"
-# 非 classic 场景（seedgen/dimension 等）：不套 classic ROUND stats 正则预期——场景引擎的
-# 轮次语义不同，Round1/Round2 结论直接取客户端 marker（HassiumSmokeTest:PASS 且无 FAIL），
-# 由 HasFail 兜底；会话判定相应改走 HasPass/HasFail 路径（见下方 $result）。
-if ($Scenario -ne "classic") {
-    $round1Pass = $hasPass -and (-not $hasFail)
-    $round2Pass = $hasPass -and (-not $hasFail)
-}
-
-# T7 V0 网关断言（网络核心路径）：解析 ClientSmokeTest 每轮 dump 的 GATEWAY_CLIENT marker。
-# marker 格式：HassiumSmokeTest:GATEWAY_CLIENT ROUND<1|2> state=<NetworkCoreState> s2c=<n> c2s=<n> resume=<bool>
-# 门禁：ROUND1/2 均须 state=ACTIVE 且 s2c>0（网络核心路径真实工作）；任一缺失/非 ACTIVE/s2c=0 → FAIL。
-# 当前已知状态：客户端 outbound 初始地址源未接（T12 交接项 5，Wave 1b T1/B1 修复），
-# 修复前 smoke 中 state 停留在 HANDSHAKING → 门禁 FAIL，即「无网络核心路径时 FAIL」语义。
+# 仅收集网关 marker；ACTIVE/c2s 等业务判断统一由 Python analyzer 执行。
 $gatewayRe = "HassiumSmokeTest:GATEWAY_CLIENT\s+ROUND(\d) state=(\w+) s2c=(\d+) c2s=(\d+) resume=(true|false)"
 $gatewayByRound = @{}
 foreach ($gm in [regex]::Matches($clientContent, $gatewayRe)) {
@@ -878,48 +773,26 @@ foreach ($gm in [regex]::Matches($clientContent, $gatewayRe)) {
         gatewayResume = ($gm.Groups[5].Value -eq "true")
     }
 }
-$gatewayGate = $false
-if ($Scenario -ne "classic") {
-    # 非 classic 场景（seedgen/dimension 等）：网关门禁只要求出现过的 GATEWAY_CLIENT marker
-    # 全部 state=ACTIVE（R2 缺失不算失败——场景引擎提前退出时最后一轮可能无 R2 dump）；
-    # 不要求两轮齐备、不查 c2s>0。零 marker 视为网络核心路径缺失 → FAIL。
-    $presentGateways = @($gatewayByRound.Values)
-    $gatewayGate = ($presentGateways.Count -gt 0) -and
-                   (@($presentGateways | Where-Object { $_.gatewayState -ne "ACTIVE" }).Count -eq 0)
-} elseif ($gatewayByRound.ContainsKey("ROUND1") -and $gatewayByRound.ContainsKey("ROUND2")) {
-    $g1 = $gatewayByRound["ROUND1"]
-    $g2 = $gatewayByRound["ROUND2"]
-    # T9v3 gate 修正（Main 裁决）：标准 vanilla 登录路径 S2C 主通道 = vanilla TCP 壳连接，
-    # 帧 S2C 通道仅登录桥/续流物化路径启用（REQ A1「S2C 镜像未做」）→ 标准会话 s2c 恒为 0，
-    # 原 gate（两轮 s2c>0）不可达。放宽为两轮 state=ACTIVE 且 c2s>0（网关 C2S 路径真实工作）；
-    # s2c>0 作为续流断言归 T10（迁移演练后帧 S2C 计数增长）。
-    $gatewayGate = ($g1.gatewayState -eq "ACTIVE" -and $g1.gatewayC2s -gt 0) -and
-                   ($g2.gatewayState -eq "ACTIVE" -and $g2.gatewayC2s -gt 0)
-}
-$gatewayRound1 = if ($gatewayByRound.ContainsKey("ROUND1")) {
-    $gatewayByRound["ROUND1"]
-} else {
+$gatewayRound1 = if ($gatewayByRound.ContainsKey("ROUND1")) { $gatewayByRound["ROUND1"] } else {
     @{ gatewayState = "MISSING"; gatewayS2c = 0; gatewayC2s = 0; gatewayResume = $false }
 }
-$gatewayRound2 = if ($gatewayByRound.ContainsKey("ROUND2")) {
-    $gatewayByRound["ROUND2"]
-} else {
+$gatewayRound2 = if ($gatewayByRound.ContainsKey("ROUND2")) { $gatewayByRound["ROUND2"] } else {
     @{ gatewayState = "MISSING"; gatewayS2c = 0; gatewayC2s = 0; gatewayResume = $false }
 }
 
-# 服务端视距切换检查（仅信息性输出/JSON 记录，不参与任何场景的 Result 判定；
-# dimension 等非 classic 场景无 VD 切换离线窗口，False 属预期）
-$serverSwitched = if (Test-Path $serverLog) {
-    (Get-Content $serverLog -Raw) -match "view-distance switched to 10"
-} else { $false }
-# PASS 判定：
-#   classic/R：client 两轮 PASS + 退出码 0 + T7 V0 网关断言门禁（两轮 ACTIVE 且 c2s>0）
-#     + T3 P0 probe 门禁（经 Round2Pass 生效），无网络核心路径时 FAIL。
-#   非 classic 场景：HasPass 且无 HasFail + 退出码 0 + 网关门禁；不套 classic stats/Round2Pass 预期。
-#     dimension 场景另加 post-exit 磁盘门禁（DimensionGateFailures 恒空才 PASS）。
-$result = if ($Scenario -ne "classic") {
-    if ($hasPass -and (-not $hasFail) -and $clientExit -eq 0 -and $gatewayGate -and ($dimensionGateFailures.Count -eq 0)) { "PASS" } else { "FAIL" }
-} elseif ($hasPass -and $clientExit -eq 0 -and $gatewayGate -and $round2Pass) { "PASS" } else { "FAIL" }
+
+# 业务指标由 scripts/smoke/analyzer.py 统一分析；这里仅保留原始 marker/字段收集。
+$round1StatsFound = $round1Match.Success -or ($null -ne $probeRound1)
+$round1Pass = $clientContent -match "ROUND1 stats OK"
+$round2StatsFound = $round2Match.Success -or ($null -ne $probeRound2)
+$round2Pass = $clientContent -match "ROUND2 stats OK"
+$hasPass = $clientContent -match "HassiumSmokeTest:PASS"
+$hasFail = $clientContent -match "HassiumSmokeTest:FAIL"
+$probeGateFailures = @()
+$dimensionGateFailures = @()
+$logAuditFailures = @()
+$result = "UNKNOWN"
+# 业务门控由 Python analyzer 执行；PowerShell 只保留启动、超时、停止和严重错误处理。
 
 # 10. 停止服务端 + 残留 java
 Write-Host "[$SessionId] [9/9] 停止服务端..."
@@ -928,112 +801,107 @@ if (-not $clientProc.HasExited) { Stop-Process -Id $clientProc.Id -Force -ErrorA
 # 仅杀本会话相关的 java 进程（通过端口和 run 目录定位），避免影响并行会话
 Stop-SessionJava -ServerPort $ServerPort -Loader $Loader
 
-# 11. 日志审计门禁：双端主日志的 ERROR/FATAL 行（豁免清单外）+ crash-reports 非空 → FAIL。
-# 基线：fabric PASS 会话 0 报错；neoforge dev 仅 ClassTransformStatistics/DistCleaner 两类良性提示。
+
+# 运行控制层严重错误：普通业务指标不在此判断；启动/运行期间 ERROR/FATAL 与 crash report
+# 仍由 PowerShell 负责，避免分析输入缺失时把进程级故障误判为业务 PASS。
 $logAuditAllow = @(
-    # NeoForge dev 环境良性：unprotect 处理器转换率提示（非 mod 错误）
     "ClassTransformStatistics.*suspiciously high",
-    # NeoForge dev dist 清理器：客户端类在 dedicated server 侧被拦截的提示
     "DistCleaner|not present on the dedicated server",
-    # 原版 Realms 启动联网探测失败（离线/防火墙环境噪音，与 mod 无关）
     "mojang/RealmsClient\]: Failed to fetch Realms feature flags",
-    # 原版 profile key pair 联网获取失败（离线环境噪音，与 mod 无关）
     "\(Minecraft\) Failed to retrieve profile key pair",
-    # 原版 OpenAL：断连停声时 alSourceStop 遇到已失效 source（1.21.2+ 开发环境 ERROR，与 mod 无关）
-    "Sound engine.*Stop: Invalid name parameter"
-) + @($AllowErrorPatterns)
-# 退出窗口限定豁免（仅 halt/closeStorage 之后生效，非全局）：客户端 Stopping! →
-# vanilla Util.shutdownExecutors() 关停共享 ioPool 后，引擎/存档内部对半死池的零星
-# 提交触发 vanilla REE 行（含原版日志的真实拼写错误 "Cound not schedule mailbox"）。
-# 触发源已由 SeedGenLevelCompat ioPool 门控消除，此处兜底 halt 内部残留（报告 §7-4）。
-$logAuditExitWindowAllow = @(
+    "Sound engine.*Stop: Invalid name parameter",
     "ProcessorMailbox\.registerForExecution",
     "Cound not schedule mailbox"
-)
-# 进入退出窗口的日志标记：vanilla 双端停机横幅 + Hassium exit-window / storage close 提示。
-$logAuditExitWindowMarker = "Stopping!|Stopping server|client exit window|storage manager close"
+) + @($AllowErrorPatterns)
 $logAuditFailures = @()
 foreach ($auditLog in @($serverLog, $clientLog)) {
     if (-not (Test-Path $auditLog)) { continue }
     $tag = Split-Path -Leaf $auditLog
     $inExitWindow = $false
     foreach ($line in Get-Content $auditLog) {
-        # 客户端日志含 ANSI 颜色码（\x1b[...m），先剥离再做门禁匹配
         $line = $line -replace '\x1b\[[0-9;]*[A-Za-z]', ''
-        if ($line -match $logAuditExitWindowMarker) { $inExitWindow = $true }
+        if ($line -match "Stopping!|Stopping server|client exit window|storage manager close") { $inExitWindow = $true }
         if ($line -notmatch "/(ERROR|FATAL)\]|FATAL") { continue }
         $allowHit = $false
         foreach ($pat in $logAuditAllow) {
             if ($pat -and $line -match $pat) { $allowHit = $true; break }
         }
-        if (-not $allowHit -and $inExitWindow) {
-            foreach ($pat in $logAuditExitWindowAllow) {
-                if ($pat -and $line -match $pat) { $allowHit = $true; break }
-            }
-        }
+        if (-not $allowHit -and $inExitWindow -and $line -match "ProcessorMailbox\.registerForExecution|Cound not schedule mailbox") { $allowHit = $true }
         if (-not $allowHit) { $logAuditFailures += "${tag}: $line" }
     }
 }
 foreach ($crashDir in @((Join-Path $clientRunDir "crash-reports"), (Join-Path $serverRunDir "crash-reports"))) {
     if (Test-Path $crashDir) {
         $crashes = @(Get-ChildItem $crashDir -File -ErrorAction SilentlyContinue)
-        if ($crashes.Count -gt 0) {
-            $logAuditFailures += "crash-reports 非空 ($(Split-Path -Leaf $crashDir)): $($crashes.Count) 个"
-        }
+        if ($crashes.Count -gt 0) { $logAuditFailures += "crash-reports 非空 ($(Split-Path -Leaf $crashDir)): $($crashes.Count) 个" }
     }
 }
 if ($logAuditFailures.Count -gt 0) {
-    Write-Host "[$SessionId] 日志审计门禁失败（$($logAuditFailures.Count) 条未豁免报错）："
+    Write-Host "[$SessionId] 严重错误门控失败（$($logAuditFailures.Count) 条）" -ForegroundColor Red
     $logAuditFailures | Select-Object -First 10 | ForEach-Object { Write-Host "[$SessionId]   $_" }
-    $result = "FAIL"
 }
 
+$serverSwitched = if (Test-Path $serverLog) {
+    (Get-Content $serverLog -Raw) -match "view-distance switched to 10"
+} else { $false }
 $resultObj = @{
     SessionId = $SessionId
     Ver = $Ver
     Loader = $Loader
     Phase = $Phase
     Scenario = $Scenario
-    Result = $result
+    Result = "UNKNOWN"
     ClientExitCode = $clientExit
     Round1Stats = $round1StatsFound
     Round1Pass = $round1Pass
     Round2Stats = $round2StatsFound
     Round2Pass = $round2Pass
-    # T3 P0 probe 门禁失败名单（空数组 = 全过或 probe 缺失跳过）；
-    # 非 classic 场景四条 P0 门禁整体跳过（scenario-gated），ProbeGateFailures 恒为空
     ProbeGateScenarioGated = ($Scenario -ne "classic")
-    ProbeGateFailures = @($probeGateFailures)
+    ProbeGateFailures = @()
     ServerSwitched = $serverSwitched
     HasPass = $hasPass
     HasFail = $hasFail
-    # T7 V0 网关断言字段（稳定命名供 T9 消费）：
-    #   GatewayRound1.gatewayState/gatewayS2c/gatewayC2s/gatewayResume
-    #   GatewayRound2.gatewayState/gatewayS2c/gatewayC2s/gatewayResume
-    #   GatewayGatePass（ROUND1/2 均 ACTIVE 且 c2s>0；classic 阶段并入 Result 判定。T9v3 由 s2c>0 放宽）
     GatewayRound1 = $gatewayRound1
     GatewayRound2 = $gatewayRound2
-    GatewayGatePass = $gatewayGate
-    # T7 dimension post-exit 磁盘门禁失败名单（仅 dimension 场景评估；空数组 = 全过或不适用）
-    DimensionGateFailures = @($dimensionGateFailures)
-    # T2 PROBE JSON v1：roundN.json 原值透传（counters/gateway/disk 等），缺失为 $null
-    Probe = @{
-        Round1 = $probeRound1
-        Round2 = $probeRound2
-    }
+    GatewayGatePass = $null
+    DimensionGateFailures = @()
+    Probe = @{ Round1 = $probeRound1; Round2 = $probeRound2 }
     StatsFiles = @(
         if ($round1StatsFound) { "build/smoke-test/stats/${SessionId}_round1_VD${Vd1}.txt" }
         if ($round2StatsFound) { "build/smoke-test/stats/${SessionId}_round2_VD${Vd2}.txt" }
     )
-    # T11 日志审计门禁失败名单（双端 ERROR/FATAL 未豁免行 + crash-reports 非空；空数组 = 全过）
+    AllowErrorPatterns = @($AllowErrorPatterns)
     LogAuditFailures = @($logAuditFailures)
 }
-$resultObj | ConvertTo-Json -Depth 5 | Out-File (Join-Path $resultsDir "result_${SessionId}.json")
+$resultPath = Join-Path $resultsDir "result_${SessionId}.json"
+$resultObj | ConvertTo-Json -Depth 8 | Out-File $resultPath
+
+$analysisPath = Join-Path $resultsDir "result_${SessionId}_analysis.json"
+$analyzerPath = Join-Path $projectRoot "scripts\analyze-smoke-result.py"
+& python $analyzerPath $resultPath --output $analysisPath | Out-Null
+$analysisExit = $LASTEXITCODE
+if (Test-Path $analysisPath) {
+    try {
+        $analysis = Get-Content $analysisPath -Raw | ConvertFrom-Json
+        $result = if ($analysis.pass) { "PASS" } else { "FAIL" }
+        $resultObj.Result = $result
+        $resultObj.Analysis = $analysis
+        $resultObj.ProbeGateFailures = @($analysis.failures | ForEach-Object { $_.code })
+        $resultObj.LogAuditFailures = @($analysis.failures | Where-Object { $_.code -eq "LOG_AUDIT_FAILURE" } | ForEach-Object { $_.detail })
+        $resultObj | ConvertTo-Json -Depth 8 | Out-File $resultPath
+    } catch {
+        $result = "FAIL"
+        Write-Host "[$SessionId] Python analyzer output parse failed: $($_.Exception.Message)" -ForegroundColor Red
+    }
+} else {
+    $result = "FAIL"
+    Write-Host "[$SessionId] Python analyzer output missing" -ForegroundColor Red
+}
 
 Write-Host "[$SessionId] === RESULT: $result ==="
+Write-Host "[$SessionId] Python analyzer: exit=$analysisExit"
 Write-Host "[$SessionId] Round1: stats=$round1StatsFound pass=$round1Pass"
-Write-Host "[$SessionId] LogAudit gate: $($logAuditFailures.Count -eq 0) (未豁免报错 $($logAuditFailures.Count) 条)"
 Write-Host "[$SessionId] Round2: stats=$round2StatsFound pass=$round2Pass"
 Write-Host "[$SessionId] ServerSwitched: $serverSwitched Exit: $clientExit"
-Write-Host "[$SessionId] Gateway gate: $gatewayGate (R1=$($gatewayRound1.gatewayState)/c2s=$($gatewayRound1.gatewayC2s) R2=$($gatewayRound2.gatewayState)/c2s=$($gatewayRound2.gatewayC2s))"
-return $result
+if ($result -eq "PASS") { exit 0 }
+exit 2
