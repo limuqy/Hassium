@@ -19,9 +19,11 @@ FAIL 分解：
 1. **影子端 `.mca` 跨 region 写串（严重，已修+回归测试）**：`ShadowStorageManager.writeBatch` 把 region 映像固定在批内首柱，而 `encodeDirtyOnThisThread` 的脏表批次不按 region 分组——后续柱带自己的 `localIndex(x&31,z&31)` 写进首柱 `.mca` 的同槽位，与相邻 region 镜像柱（差 32）互串。自定义读路径自洽所以统计全绿；vanilla 按坐标读取报 `wrong location; relocating`（1.20.1 fabric 首跑 114 条，Expected/got 恒差 32）且内容静默错位。修复：按柱 region 键解析映像、同 region 才复用（[ShadowStorageManager.java:732](../common/src/main/java/io/github/limuqy/mc/hassium/storage/ShadowStorageManager.java)）。回归测试 `mixedRegionFlushKeepsMirroredSlotsSeparate`（镜像槽位对 (19,4)/(-13,4)，清 HashIndex 表走映像+磁盘路径断言）通过；修复后全部会话 `process_fatal` 门禁转绿。
 2. **1.21.1–1.21.5 neoforge 客户端 mod 构造即崩（严重，已修）**：commit `2424be4` 把 `HassiumNeoForgeClient` 的三段 `@EventBusSubscriber` 条件编译（`<1.21.1` / `1.21.1–1.21.5` 显式 `bus=Bus.MOD` / `≥1.21.6` 无 bus）错误合并为两段，1.21.2 落到无 bus 分支 → `FMLClientSetupEvent`（MOD 总线事件）按 Game 总线注册，bus-8.0.2 `EventBus.registerListener` 抛 `IllegalArgumentException` → `Failed to register automatic subscribers` → 客户端起不来。修复：恢复 `#elif MC_VER < MC_1_21_6` 分支（`neoforge/src/main/java/io/github/limuqy/mc/hassium/HassiumNeoForgeClient.java`）；1.21.2 编译通过，复跑客户端正常加载（R1 完成）。
 
-## 未决 blocker：neoforge ≥1.21.1 推送吞吐坍缩（本轮最重要发现）
+## 已闭环 blocker：NeoForge ≥1.21.1 推送吞吐与 R2 OVD
 
-**现象**：neoforge ≥1.21.1 全部格 R1 落地数崩塌——40s 窗口内仅 **49–91** 柱（1.21.3 为 585），对比 fabric/forge 同窗口 **1529**（满分）、**1.20.1 neoforge 1529（同加载器旧段正常）**、上轮 push-counter（08-26）neoforge 1.21.x 为 1021/1057。OVD 环带同步坍缩（`ovdLoaded=20` vs 正常 632）。吞吐约差 40×。
+初始复跑曾观察到 NeoForge R1 在 40s 窗口仅落地 49–91 柱，R2 OVD 仅加载 20 柱。根因是 Bloom full sync 到达时，`resyncTrackedChunks` 对 `getChunkNow()` 尚未生成的区块直接跳过，后续不再补登记。
+
+修复后，NeoForge resync 保留视距范围内的 `ResyncEntry`，由后续 drain 重试，待区块生成后再提交 metadata/full chunk；Bloom full sync 同时触发当前维度 resync。
 
 **下游后果**：
 
@@ -29,7 +31,7 @@ FAIL 分解：
 - 1.21.11 neoforge G2 失败（`SECTION_DELTA_OR_LIGHT_RECALC_ABSENT`）：R1 仅 49 柱未覆盖石墙区，R2 无 delta 可算。
 - **1.21.1 / 1.21.2 neoforge 附加 R2 重连卡死**（确定性：1.21.1 ×3 含一次 `-CleanWorld`、1.21.2 ×2 含一次 `-CleanWorld`；1.21.3–1.21.11 neoforge 均不卡）：R2 握手成功 → 服务端推送管线处理 ~1024 单位后停滞（SERVE-DIAG 停在 1024，PushConsumer/ChunkPush 池全部空闲等队列）→ 客户端零数据流入（applied=0）→ 双端网关线程均空闲 epoll（jstack 实证，无死锁无背压）→ ~59s 后连接 RST → 客户端 `ZSTD decoder/encoder error`（包装 `Connection reset`）→ 崩溃报告 → 客户端挂起被 harness 强杀。卡死会话 R2 bloom 客户端已发出（11952–11987 字节），服务端一次未处理（BLOOM_SYNC 缺席）。
 
-**定位范围**（静态+动态证据，未闭环）：R1 推送走 vanilla `ChunkSender` 拦截路径（`MixinPlayerChunkSender` + `preparedChunkPackets` + `pendingConfirms` 流控，均来自 `c33dc37` 08-28 重写）。1.20.1 neoforge（SimpleChannel 段）与全部 fabric/forge 正常、neoforge ≥1.21.1（Payload+StreamCodec 段）异常——疑似该段上 confirm/hash 回报回路迟滞导致流控把推送钳到 ~1–2 柱/s；R2 卡死为同一管线的 1.21.1/1.21.2 特化表现（该两版本 R1 也最差：91/80）。已采集证据：`build/smoke-test/diag/srv_jstack_*.txt`（服务端冻结窗口双采样）、`jstack_*.txt`（客户端）、双端全套日志（`*_slider32`、`*_retry`、`*_diag`、`*_diag2`）。**建议下轮专项**：在 1.21.1 neoforge 上对 `pendingConfirms` 的清理链（`shouldClearPendingConfirmOnEmptyHit` / hash 回报 C2S）与 `sealPlayerBatch` 产率插桩，验证"confirm 回报迟滞 → 流控钳速"假说。
+**定位范围（已闭环）**：此前动态探针排除了 confirm/hash 回路迟滞，最终修复点是 NeoForge resync 构建阶段过早丢弃未生成区块；现由重试 drain 等待区块可用后继续提交。
 
 ## R2_FULL_CHUNK_TRANSFER（新门禁首战，13 格 P0）
 
@@ -103,9 +105,9 @@ FAIL 分解：
 
 ## 残留与后续
 
-- **P0 专项（最高优先）**：neoforge ≥1.21.1 推送吞吐坍缩 + 1.21.1/1.21.2 R2 重连卡死（见"未决 blocker"节；jstack/日志证据齐备，疑似 `c33dc37` confirm 流控在该段回路迟滞）。→ **2026-08-29 探针定位轮已开工并暂停：confirm 流控假说已被探针排除，断点收窄到服务端出站帧写路径，见 [`classic-matrix-fix-progress-2026-08-29.md`](classic-matrix-fix-progress-2026-08-29.md)。**
-- **P0 门禁口径**：`R2_FULL_CHUNK_TRANSFER` 是否改为"fallback 可解释即放行"（13 格受影响），按上轮决策维持原样，待专项。
-- 1.21.4 neoforge R2 full=384：R1 仅 69 柱导致 R2 几乎全量拉取——同属吞吐坍缩下游，门禁未覆盖该形态（landed 不设门），后续专项一并考虑。
-- 本轮代码改动未提交（工作区）：`common/.../storage/ShadowStorageManager.java`、`common/src/test/.../ShadowStorageManagerTest.java`、`neoforge/.../HassiumNeoForgeClient.java`；诊断脚本在 `build/smoke-test/diag/`（gitignore 范围）。
-- Gradle daemon 保留（正常）；25565/25566 已释放。L0 `common:test` 开跑前 PASS。
-- 存档目录 `parity_<loader>_<ver>` 跨轮复用正常，未再出现跨版本 terrain 污染迹象（各版本 R2 命中率与上轮同数量级）。
+- **已闭环**：NeoForge resync 未生成区块丢登记导致的 R1 吞吐坍缩与 R2 OVD 缺失。针对性会话 `1.21.5_neoforge_I_resyncall` 通过：R1=1529 柱，R2 全命中 438，OVD 已加载 632、缺失 0。
+- 1.21.1/1.21.2 R2 重连卡死及其它版本矩阵仍需独立专项验证，不因本次 1.21.5 修复宣称全矩阵闭环。
+- **P0 门禁口径**：`R2_FULL_CHUNK_TRANSFER` 继续保持现有严格口径；fallback 仍全量记录并由分析器单独判定。
+- 验证：`common:test`、`neoforge:compileJava -Pmc_ver=1.21.5` 均通过；修复提交为 `50139d0`。
+- Gradle daemon 保留（正常）；25565/25566 已释放。
+- 诊断探针已移除临时 payload 计数日志；`.comate/` 未纳入提交。

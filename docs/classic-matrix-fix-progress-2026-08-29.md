@@ -1,4 +1,4 @@
-# Classic 矩阵修复进度(探针定位轮,暂停点)
+# Classic 矩阵修复进度（NeoForge OVD resync 已闭环）
 
 日期:2026-08-29。上游报告:[`classic-matrix-smoke-report-2026-08-28.md`](classic-matrix-smoke-report-2026-08-28.md)(P0 blocker:neoforge ≥1.21.1 推送吞吐坍缩 + 1.21.1/1.21.2 neoforge R2 重连卡死)。
 
@@ -74,3 +74,13 @@
 - **独立修复(应保留)**:`GatewayPacketCodecTest.java` 移除白名单外 `MC_1_21_4` 碎片段(改测试内反射取 `getSlot`/`slot` accessor)。HEAD 上 `scanVersionBoundaries` 本就红,此修复使其转绿。
 - 编译:`common:compileJava -Pmc_ver=1.21.1` 与 `-Pmc_ver=1.20.1` 绿(含 [BATCH-CHAN] 探针)。
 - 端口/daemon:无遗留占用;Gradle daemon 正常保留。
+
+## 后续闭环记录
+
+静态与运行时证据确认：NeoForge 首轮 Bloom full sync 到达时，`resyncTrackedChunks` 会跳过尚未由 `getChunkNow()` 物化的区块；这些区块不会再次进入 resync 队列，导致 R1 缓存基数不足并连带造成 R2 OVD 缺失。
+
+修复内容：NeoForge resync 队列现在保留视距范围内的全部 `ResyncEntry`，由 `drainPendingResync` 在区块可用后重试；Bloom full sync 继续触发当前维度 resync。临时 payload 计数日志已移除。
+
+验证会话：`1.21.5_neoforge_I_resyncall` 为 `PASS`。R1 加载 1529 柱；R2 全命中 438，新增整柱 0；OVD 已加载 632、缺失 0；分析器 `failures=[]`。`common:test` 与 `neoforge:compileJava -Pmc_ver=1.21.5` 均通过。
+
+提交：`50139d0 fix NeoForge OVD resync`。1.21.1/1.21.2 R2 重连卡死及全矩阵复验仍是独立事项。
