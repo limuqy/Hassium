@@ -77,6 +77,14 @@ import net.minecraft.world.level.lighting.LevelLightEngine;
  */
 public final class ShadowLightCompute {
 
+    /** 临时诊断：保留影子端区块注入，但跳过影子光照重算，直接观察黑区块。 */
+    private static final boolean TEMP_SKIP_LIGHT_COMPUTE = true;
+
+    public static boolean shouldSkipLightCompute() {
+        return TEMP_SKIP_LIGHT_COMPUTE;
+    }
+
+
     /** 投递队列：DimensionKey 复合键 -> 服务端 packet 与仅诊断来源（REPLACE）。 */
     private static final ConcurrentHashMap<Long, PendingEntry> pending =
             new ConcurrentHashMap<>();
@@ -216,6 +224,97 @@ public final class ShadowLightCompute {
     private static final AtomicLong hashDiskMismatches = new AtomicLong();
     private static final AtomicLong hashAbsents = new AtomicLong();
     private static final AtomicLong hashLeftovers = new AtomicLong();
+    /** 哈希分类诊断：按 (维度坐标复合键, 远程 hash) 识别重复元数据与重复分类。 */
+    private record HashObservation(long chunkKey, long remoteHash) {
+    }
+
+    private static final Set<HashObservation> hashEntriesSeen = ConcurrentHashMap.newKeySet();
+    private static final Set<Long> hashChunkKeysSeen = ConcurrentHashMap.newKeySet();
+    private static final Set<HashObservation> hashMemoryMismatchEntries = ConcurrentHashMap.newKeySet();
+    private static final Set<HashObservation> hashDiskMismatchEntries = ConcurrentHashMap.newKeySet();
+    private static final Set<HashObservation> hashLeftoverEntries = ConcurrentHashMap.newKeySet();
+    private static final AtomicLong hashEntriesProcessed = new AtomicLong();
+    private static final AtomicLong hashEntryDuplicates = new AtomicLong();
+    private static final AtomicLong hashMemoryMismatchDuplicates = new AtomicLong();
+    private static final AtomicLong hashDiskMismatchDuplicates = new AtomicLong();
+    private static final AtomicLong hashLeftoverDuplicates = new AtomicLong();
+
+    private static HashObservation observeHashEntry(long chunkKey, long remoteHash) {
+        hashEntriesProcessed.incrementAndGet();
+        hashChunkKeysSeen.add(chunkKey);
+        HashObservation observation = new HashObservation(chunkKey, remoteHash);
+        if (!hashEntriesSeen.add(observation)) {
+            hashEntryDuplicates.incrementAndGet();
+        }
+        return observation;
+    }
+
+    private static void observeMemoryMismatch(HashObservation observation) {
+        if (!hashMemoryMismatchEntries.add(observation)) {
+            hashMemoryMismatchDuplicates.incrementAndGet();
+        }
+    }
+
+    private static void observeDiskMismatch(HashObservation observation) {
+        if (!hashDiskMismatchEntries.add(observation)) {
+            hashDiskMismatchDuplicates.incrementAndGet();
+        }
+    }
+
+    private static void observeLeftover(HashObservation observation) {
+        if (!hashLeftoverEntries.add(observation)) {
+            hashLeftoverDuplicates.incrementAndGet();
+        }
+    }
+
+    public static long hashEntriesProcessedCount() {
+        return hashEntriesProcessed.get();
+    }
+
+    public static long hashEntriesUniqueCount() {
+        return hashEntriesSeen.size();
+    }
+
+    public static long hashChunkKeysUniqueCount() {
+        return hashChunkKeysSeen.size();
+    }
+
+    public static long hashEntryDuplicatesCount() {
+        return hashEntryDuplicates.get();
+    }
+
+    public static long hashMemoryMismatchUniqueCount() {
+        return hashMemoryMismatchEntries.size();
+    }
+
+    public static long hashMemoryMismatchDuplicatesCount() {
+        return hashMemoryMismatchDuplicates.get();
+    }
+
+    public static long hashDiskMismatchUniqueCount() {
+        return hashDiskMismatchEntries.size();
+    }
+
+    public static long hashDiskMismatchDuplicatesCount() {
+        return hashDiskMismatchDuplicates.get();
+    }
+
+    public static long hashLeftoverUniqueCount() {
+        return hashLeftoverEntries.size();
+    }
+
+    public static long hashLeftoverUniqueChunkKeysCount() {
+        Set<Long> keys = new HashSet<>();
+        for (HashObservation observation : hashLeftoverEntries) {
+            keys.add(observation.chunkKey());
+        }
+        return keys.size();
+    }
+
+    public static long hashLeftoverDuplicatesCount() {
+        return hashLeftoverDuplicates.get();
+    }
+
 
     /**
      * P1（T7）：注入 chunk section 容器（PalettedContainer）并发锁——hash 比对线程
@@ -647,7 +746,18 @@ public final class ShadowLightCompute {
         hashDiskMismatches.set(0);
         hashAbsents.set(0);
         hashLeftovers.set(0);
+        hashEntriesProcessed.set(0);
+        hashEntryDuplicates.set(0);
+        hashMemoryMismatchDuplicates.set(0);
+        hashDiskMismatchDuplicates.set(0);
+        hashLeftoverDuplicates.set(0);
+        hashEntriesSeen.clear();
+        hashChunkKeysSeen.clear();
+        hashMemoryMismatchEntries.clear();
+        hashDiskMismatchEntries.clear();
+        hashLeftoverEntries.clear();
     }
+
 
     /**
      * 权威柱真正落到 ClientChunkCache 时补记分母。inject 当时已记的路径
@@ -1015,9 +1125,11 @@ public final class ShadowLightCompute {
             ChunkPos pos = new ChunkPos(entry.chunkX(), entry.chunkZ());
             long remoteHash = entry.chunkHash();
             long key = DimensionKey.key(dimension, pos.x, pos.z);
+            HashObservation observation = observeHashEntry(key, remoteHash);
             try {
                 if (isAuthoritativeIngressInFlight(key)) {
                     leftover.add(entry);
+                    observeLeftover(observation);
                     hashLeftovers.incrementAndGet();
                     continue;
                 }
@@ -1060,6 +1172,7 @@ public final class ShadowLightCompute {
                         }
                         // 内存数据过期（hash MISMATCH）→ 分段增量候选：
                         // 本地 section hashes 上报，服务端只回变更 section。光由后续屏障处理。
+                        observeMemoryMismatch(observation);
                         hashMemoryMismatches.incrementAndGet();
                         if (deltaEnabled()) {
                             deltaCandidates.add(pos);
@@ -1077,10 +1190,12 @@ public final class ShadowLightCompute {
                                             io.github.limuqy.mc.hassium.storage.ShadowStorageManager.ProbeStatus.ABSENT);
                     if (!probe.match()) {
                         if (probe.present() && deltaEnabled()) {
+                            observeDiskMismatch(observation);
                             hashDiskMismatches.incrementAndGet();
                             if (cacheReadBudgetExhausted || !ClientMainThreadBudget.tryAcquireCacheRead()) {
                                 cacheReadBudgetExhausted = true;
                                 leftover.add(entry);
+                                observeLeftover(observation);
                                 hashLeftovers.incrementAndGet();
                                 continue;
                             }
@@ -1091,8 +1206,8 @@ public final class ShadowLightCompute {
                                 continue;
                             }
                         } else if (probe.present()) {
+                            observeDiskMismatch(observation);
                             hashDiskMismatches.incrementAndGet();
-                        } else {
                             hashAbsents.incrementAndGet();
                         }
                         misses.add(pos);
@@ -1101,6 +1216,7 @@ public final class ShadowLightCompute {
                     if (cacheReadBudgetExhausted || !ClientMainThreadBudget.tryAcquireCacheRead()) {
                         cacheReadBudgetExhausted = true;
                         leftover.add(entry);
+                        observeLeftover(observation);
                         hashLeftovers.incrementAndGet();
                         continue;
                     }
@@ -1402,6 +1518,7 @@ public final class ShadowLightCompute {
         }
         // 全量数据到达 = 该柱不再等 delta 响应（delta 请求超时登记清除）
         long key = DimensionKey.key(dimension, pos.x, pos.z);
+        SmokeChunkTrace.recordNetworkReceived(dimension, pos);
         pendingDeltaRequests.remove(key);
         pending.put(key, new PendingEntry(packet, traceOrigin(TraceOrigin.SERVER_PUSH)));
         pump();
@@ -1421,9 +1538,23 @@ public final class ShadowLightCompute {
             server.setPersistenceRole(activeDimension, pos, ShadowChunkPersistenceRole.VISIBLE_FULL_LIGHT);
         }
         pendingDeltaRequests.remove(key);
+        SmokeChunkTrace.recordNetworkReceived(activeDimension, pos);
         pending.put(key, new PendingEntry(packet, traceOrigin(TraceOrigin.SERVER_PUSH)));
         pump();
     }
+
+    /** 诊断路径：区块仍写入影子端，但不启动光照计算，原包只应用一次。 */
+    public static void publishWithoutLightCompute(String dimension, ChunkPos pos,
+                                                   ClientboundLevelChunkWithLightPacket packet,
+                                                   TraceOrigin origin) {
+        if (pos == null || packet == null || !isEnabled()) {
+            return;
+        }
+        String activeDimension = dimension == null ? currentDimension() : dimension;
+        offerReady(DimensionKey.key(activeDimension, pos.x, pos.z), pos, packet,
+                true, false, origin == null ? TraceOrigin.SERVER_PUSH : origin);
+    }
+
 
     /** 投递仅影子端 Halo；其光照结果只能服务相邻可见柱。 */
     public static void submitHalo(String dimension, ChunkPos pos,
@@ -1763,6 +1894,7 @@ public final class ShadowLightCompute {
                                         pos.x, pos.z, hashKnown);
                                 continue;
                             }
+                            SmokeChunkTrace.recordShadowInjected(dimension, pos);
                             accountAuthoritativeLanded(dimension, pos, TraceOrigin.SHADOW_MEMORY_CACHE);
                             generated.put(e.getKey(), new GenEntry(existing, server.level(dimension), !needRelight,
                                     false, traceOrigin(TraceOrigin.SHADOW_MEMORY_CACHE)));
@@ -1783,6 +1915,7 @@ public final class ShadowLightCompute {
                         ShadowServerRegistry.getInstance().failShadowServer();
                         return;
                     }
+                    SmokeChunkTrace.recordShadowInjected(dimension, pos);
                     if (shouldAccountServerPushAsApplied(requestedMisses.contains(e.getKey()))) {
                         requestedMisses.add(e.getKey());
                     }
@@ -2760,6 +2893,9 @@ public final class ShadowLightCompute {
             return;
         }
         io.github.limuqy.mc.hassium.utils.ChunkFlowTiming.recordReady(key);
+        if (!renderOnly) {
+            SmokeChunkTrace.recordShadowReady(DimensionKey.dimensionOf(key), pos);
+        }
         dropQueuedLights(pos);
         ready.offer(new ReadyItem(packet, null, renderOnly, traceOrigin, null, null),
                 new KeyedPriorityQueue.Key(ChunkPos.asLong(pos.x, pos.z),
@@ -3007,6 +3143,9 @@ public final class ShadowLightCompute {
                     item.traceOrigin());
             shadowApplyEpochs.put(chunkKey, shadowApplyEpoch.incrementAndGet());
             recordFullApplyTrace(chunkKey, renderOnly, item.traceOrigin());
+            if (!renderOnly) {
+                SmokeChunkTrace.recordClientApplied(entry.key().dimension(), chunkPos);
+            }
             if (!renderOnly) {
                 // 落地快照 + 分母兜底（inject 当时已记的按键去重）。内存复用没有
                 // accountVisibleNetworkIngress 时，缺这行 R1 会 landed>0 而 applied==0。

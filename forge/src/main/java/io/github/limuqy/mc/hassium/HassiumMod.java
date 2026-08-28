@@ -1,7 +1,6 @@
 package io.github.limuqy.mc.hassium;
 
 import io.github.limuqy.mc.hassium.config.ForgeConfigBackend;
-import io.github.limuqy.mc.hassium.config.ForgeConfigRegistration;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.metrics.NetworkStats;
 import io.github.limuqy.mc.hassium.network.ChunkSender;
@@ -14,8 +13,10 @@ import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.eventbus.api.listener.SubscribeEvent;
 #endif
 import net.minecraftforge.fml.common.Mod;
+import net.minecraftforge.fml.config.ModConfig;
 import net.minecraftforge.fml.event.config.ModConfigEvent;
 import net.minecraftforge.fml.event.lifecycle.FMLCommonSetupEvent;
+import net.minecraftforge.fml.javafmlmod.FMLJavaModLoadingContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -25,8 +26,9 @@ public class HassiumMod {
     private static final Logger LOGGER = LoggerFactory.getLogger("Hassium/Mod");
     private static final ForgeConfigBackend CONFIG = (ForgeConfigBackend) io.github.limuqy.mc.hassium.platform.Services.CONFIG;
 
-    public HassiumMod() {
-        ForgeConfigRegistration.register(CONFIG, Constants.CONFIG_CLIENT_FILE, Constants.CONFIG_SERVER_FILE);
+    public HassiumMod(FMLJavaModLoadingContext context) {
+        context.registerConfig(ModConfig.Type.CLIENT, CONFIG.clientSpec(), Constants.CONFIG_CLIENT_FILE);
+        context.registerConfig(ModConfig.Type.COMMON, CONFIG.serverSpec(), Constants.CONFIG_SERVER_FILE);
         CommonClass.init();
 
         // review-fix: T10-M1：数据面 BULK 路由对齐 Fabric——先查 UDP 数据面可用（未启用/未绑定/无会话时

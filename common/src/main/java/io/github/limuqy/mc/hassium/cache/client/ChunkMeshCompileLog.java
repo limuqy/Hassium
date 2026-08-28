@@ -41,6 +41,11 @@ public final class ChunkMeshCompileLog {
         int sectionY = originY >> 4;
         boolean firstColumn = FIRST_COLUMN.add(ChunkPos.asLong(cx, cz));
         Minecraft mc = Minecraft.getInstance();
+        if (firstColumn) {
+            io.github.limuqy.mc.hassium.network.seedgen.SmokeChunkTrace.recordMeshCompiled(
+                    io.github.limuqy.mc.hassium.network.seedgen.ShadowVanillaLightPipeline.currentDimension(),
+                    new ChunkPos(cx, cz));
+        }
         int playerSectionY = Integer.MIN_VALUE;
         int pcx = 0;
         int pcz = 0;

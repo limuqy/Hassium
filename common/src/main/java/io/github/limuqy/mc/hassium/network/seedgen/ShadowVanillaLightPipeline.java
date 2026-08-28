@@ -60,14 +60,27 @@ public final class ShadowVanillaLightPipeline {
         server.setPersistenceRole(resolvedDimension, pos,
                 role == ShadowChunkRole.HALO ? ShadowChunkPersistenceRole.HALO_BLOCKS_ONLY
                         : ShadowChunkPersistenceRole.VISIBLE_FULL_LIGHT);
+        if (role == ShadowChunkRole.VISIBLE) {
+            SmokeChunkTrace.recordNetworkReceived(resolvedDimension, pos);
+        }
         if (!server.injectChunk(resolvedDimension, pos, packet, role)) {
             ShadowServerRegistry.getInstance().failShadowServer();
             return;
         }
         if (role == ShadowChunkRole.VISIBLE) {
+            SmokeChunkTrace.recordShadowInjected(resolvedDimension, pos);
+        }
+        if (role == ShadowChunkRole.VISIBLE) {
             ShadowLightCompute.accountVisibleNetworkIngress(resolvedDimension, pos);
         }
+        if (ShadowLightCompute.shouldSkipLightCompute()) {
+            if (role == ShadowChunkRole.VISIBLE) {
+                ShadowLightCompute.publishWithoutLightCompute(resolvedDimension, pos, packet, origin);
+            }
+            return;
+        }
         ShadowLightCompute.enqueueInjectedForLight(resolvedDimension, pos, role, origin);
+
     }
 
     public static String currentDimension() {

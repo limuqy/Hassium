@@ -66,6 +66,7 @@ public final class ScenarioEngine {
     // 当前步骤局部状态（advance 时复位）
     private static long stepStartMs;
     private static boolean joinAnnounced;
+    private static boolean dumpWaitAnnounced;
 
     // 飞行注入：爬升阶段到期 → 转平飞；平飞到期或玩家消失 → 复位按键
     private static long moveUntilMs = -1L;
@@ -203,6 +204,7 @@ public final class ScenarioEngine {
         index++;
         stepStartMs = System.currentTimeMillis();
         joinAnnounced = false;
+        dumpWaitAnnounced = false;
         migratedAtMs = -1L;
     }
 
@@ -515,6 +517,7 @@ public final class ScenarioEngine {
             io.github.limuqy.mc.hassium.metrics.NetworkStats.reset();
             io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.resetHashClassify();
             io.github.limuqy.mc.hassium.network.dataplane.DataPlaneClientBundle.resetDataBulkCounters();
+            io.github.limuqy.mc.hassium.network.seedgen.SmokeChunkTrace.reset();
             LOGGER.info("HassiumSmokeTest: network stats reset for ROUND2");
         } catch (Throwable t) {
             LOGGER.warn("HassiumSmokeTest: failed to reset network stats", t);
@@ -638,36 +641,23 @@ public final class ScenarioEngine {
                 LOGGER.info("{} {} | {}", MARKER_STATS, roundLabel, line);
             }
             LOGGER.info("{} {} end", MARKER_STATS, roundLabel);
-
-            // T7 V0 网关断言 dump：ROUND1/ROUND2 各一条稳定 marker。
-            // 仅供 harness 解析判定（PASS 需两轮 state=ACTIVE 且 c2s>0——T9v3 gate 修正：
-            // 标准登录 S2C 主通道=vanilla TCP 壳，帧 S2C 仅登录桥/续流路径启用，s2c 恒 0），
-            // 不改任何生产代码。
             dumpGatewayAssertion(roundLabel);
-
-            // T1 PROBE JSON 落盘：probeDir 未设置时 no-op（零行为变化）；
-            // 失败只 warn，不影响引擎判定。
             SmokeProbeWriter.writeRound(round, mc);
-            // gate=false：中段轮（如切维后 nether/end）没有完整缓存命中口径，跳过
-            // validateStats 且不动 round1Pass/round2Pass（门禁由场景内 assertProbe 承担）。
             if (!step.boolParam("gate", true)) {
                 LOGGER.info("{} {} stats gate=false (validation skipped)", MARKER_STATS, roundLabel);
                 return Outcome.DONE;
             }
-
             boolean ok = validateStats(plain, roundLabel);
             if (isRound1) {
                 round1Pass = ok;
             } else {
                 round2Pass = ok;
             }
-
             if (ok) {
                 LOGGER.info("{} {} stats OK", MARKER_STATS, roundLabel);
             } else {
                 LOGGER.error("{} {} stats validation FAILED", MARKER_FAIL, roundLabel);
             }
-
             try {
                 System.out.flush();
                 System.err.flush();
@@ -897,6 +887,8 @@ public final class ScenarioEngine {
         dumpShadowEntities();
         long saveSeq = io.github.limuqy.mc.hassium.network.seedgen.ShadowSeedServer.saveAllSeq();
         triggerDisconnect(mc);
+        LOGGER.info("HassiumSmokeTest: ROUND2 exit scheduling code={} saveSeq={}",
+                allPass ? 0 : 2, saveSeq);
         scheduleExit(allPass ? 0 : 2, saveSeq);
         finished = true;
         return Outcome.DONE;
@@ -978,14 +970,9 @@ public final class ScenarioEngine {
             } catch (InterruptedException ignored) {
                 Thread.currentThread().interrupt();
             }
-            // T7 e2e 修正：非 0 退出码（校验/断言失败、超时）必须 fail-fast 直接强退——
-            // 原路径先 stop() 再等 8s 兜底 forceExit，但 stop() 的正常 JVM 终止固定退出码 0，
-            // 几乎总能赢得竞态（现象：assertProbe FAILED marker 已打出，进程 Exit: 0）。
-            // PASS(0) 路径保持既有 stop() 优雅收尾 + 强退兜底不变。
+            // T7 e2e 修正：非 0 退出码（校验/断言失败、超时）必须 fail-fast 直接强退。
             if (exitCode != 0) {
                 LOGGER.error("HassiumSmokeTest: exiting with code {} (fail-fast, skipping graceful stop)", exitCode);
-                // T7 e2e 二次修正：System.exit 会跑 shutdown hook，hook 挂起时退出码丢失
-                //（harness 观测 Exit: 0）——halt 跳过全部 hook，保证 code 必达。
                 try {
                     System.out.flush();
                     System.err.flush();

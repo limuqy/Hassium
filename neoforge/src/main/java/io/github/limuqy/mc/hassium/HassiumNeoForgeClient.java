@@ -35,10 +35,8 @@ import net.neoforged.fml.event.lifecycle.FMLClientSetupEvent;
  */
 #if MC_VER < MC_1_21_1
 @Mod.EventBusSubscriber(modid = Constants.MOD_ID, value = Dist.CLIENT, bus = Mod.EventBusSubscriber.Bus.MOD)
-#elif MC_VER < MC_1_21_6
-@EventBusSubscriber(modid = Constants.MOD_ID, value = Dist.CLIENT, bus = EventBusSubscriber.Bus.MOD)
-#elif MC_VER >= MC_1_21_6
-// 1.21.6+：bus 参数已移除，FML 按事件类型自动挂到 Mod / Game 总线
+#else
+// bus 参数已移除，FML 按事件类型自动挂到 Mod / Game 总线
 @EventBusSubscriber(modid = Constants.MOD_ID, value = Dist.CLIENT)
 #endif
 public class HassiumNeoForgeClient {

@@ -39,7 +39,7 @@ param(
     # 1529/1573 不可比。OVD 上界仍受 chunk.maxRenderDistance=16 钳制，与本滑块无关。
     [int]$ClientRenderDistance = 32,
     [int]$ServerReadyTimeoutSec = 60,
-    [int]$ClientTimeoutSec = 240,
+    [int]$ClientTimeoutSec = 120,
     [string]$SmokePhases = "classic",
     # T8 场景引擎：-Scenario <name> 加载 common/src/main/resources/hassium/smoke/scenario/<name>.scenario。
     # 默认 classic 不注入 -Dhassium.smokeScenario（保持既有 ClientSmokeTest 经典路径零行为变化）；

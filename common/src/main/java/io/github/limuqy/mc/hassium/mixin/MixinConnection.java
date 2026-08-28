@@ -10,11 +10,6 @@ import io.github.limuqy.mc.hassium.network.PacketTypeHelper;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import net.minecraft.network.Connection;
 import net.minecraft.network.PacketListener;
-#if MC_VER < MC_1_21_6
-import net.minecraft.network.PacketSendListener;
-#else
-import io.netty.channel.ChannelFutureListener;
-#endif
 import net.minecraft.network.protocol.Packet;
 import net.minecraft.server.network.ServerGamePacketListenerImpl;
 import org.spongepowered.asm.mixin.Mixin;
@@ -43,12 +38,12 @@ public class MixinConnection {
     // review-fix: T7-59: handler 统一加 hassium$ 前缀（Mixin 惯例，避免与目标类未来同名成员 merge 冲突）
 #if MC_VER < MC_1_21_6
     @Inject(method = "send(Lnet/minecraft/network/protocol/Packet;Lnet/minecraft/network/PacketSendListener;)V", at = @At("HEAD"), cancellable = true)
-    private void hassium$onSendPacket(Packet<?> packet, PacketSendListener sendListener, CallbackInfo ci) {
+    private void hassium$onSendPacket(Packet<?> packet, net.minecraft.network.PacketSendListener sendListener, CallbackInfo ci) {
         hassium$tryAggregate(packet, sendListener != null, ci);
     }
 #else
     @Inject(method = "send(Lnet/minecraft/network/protocol/Packet;Lio/netty/channel/ChannelFutureListener;)V", at = @At("HEAD"), cancellable = true)
-    private void hassium$onSendPacket(Packet<?> packet, ChannelFutureListener sendListener, CallbackInfo ci) {
+    private void hassium$onSendPacket(Packet<?> packet, io.netty.channel.ChannelFutureListener sendListener, CallbackInfo ci) {
         hassium$tryAggregate(packet, sendListener != null, ci);
     }
 #endif
@@ -71,12 +66,12 @@ public class MixinConnection {
      */
 #if MC_VER < MC_1_21_6
     @Inject(method = "send(Lnet/minecraft/network/protocol/Packet;Lnet/minecraft/network/PacketSendListener;)V", at = @At("HEAD"), cancellable = true)
-    private void hassium$routeC2SToGateway(Packet<?> packet, PacketSendListener sendListener, CallbackInfo ci) {
+    private void hassium$routeC2SToGateway(Packet<?> packet, net.minecraft.network.PacketSendListener sendListener, CallbackInfo ci) {
         hassium$routeC2S(packet, ci);
     }
 #else
     @Inject(method = "send(Lnet/minecraft/network/protocol/Packet;Lio/netty/channel/ChannelFutureListener;)V", at = @At("HEAD"), cancellable = true)
-    private void hassium$routeC2SToGateway(Packet<?> packet, ChannelFutureListener sendListener, CallbackInfo ci) {
+    private void hassium$routeC2SToGateway(Packet<?> packet, io.netty.channel.ChannelFutureListener sendListener, CallbackInfo ci) {
         hassium$routeC2S(packet, ci);
     }
 #endif

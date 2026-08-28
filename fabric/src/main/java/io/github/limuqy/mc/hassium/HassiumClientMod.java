@@ -6,17 +6,10 @@ import io.github.limuqy.mc.hassium.command.FabricHassiumCommand;
 import io.github.limuqy.mc.hassium.network.ClientChunkHandler;
 import io.github.limuqy.mc.hassium.network.DictionaryManager;
 import io.github.limuqy.mc.hassium.network.dataplane.DataPlaneClientLifecycle;
-import io.github.limuqy.mc.hassium.network.FabricNetworkManager;
-#if MC_VER >= MC_1_21_1
-import io.github.limuqy.mc.hassium.network.FabricPayloadRegistry;
-#endif
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import org.slf4j.Logger;
-#if MC_VER >= MC_1_21_1
-import net.minecraft.network.FriendlyByteBuf;
-#endif
 import org.slf4j.LoggerFactory;
 
 public class HassiumClientMod implements ClientModInitializer {
@@ -57,7 +50,7 @@ public class HassiumClientMod implements ClientModInitializer {
 
         // CHUNK_PAYLOAD_S2C 客户端 receiver：全量压缩区块直收（网关 kind=0 vanilla 帧转发，非 HASSIUM 帧）。
 #if MC_VER < MC_1_21_1
-        ClientPlayNetworking.registerGlobalReceiver(FabricNetworkManager.CHUNK_PAYLOAD_S2C,
+        ClientPlayNetworking.registerGlobalReceiver(io.github.limuqy.mc.hassium.network.FabricNetworkManager.CHUNK_PAYLOAD_S2C,
                 (client, handler, buf, responseSender) -> {
                     int len = buf.readVarInt();
                     byte[] data = new byte[len];
@@ -65,9 +58,9 @@ public class HassiumClientMod implements ClientModInitializer {
                     ClientChunkHandler.handleCompressedChunk(data);
                 });
 #else
-        ClientPlayNetworking.registerGlobalReceiver(FabricPayloadRegistry.CHUNK_PAYLOAD_S2C_TYPE,
+        ClientPlayNetworking.registerGlobalReceiver(io.github.limuqy.mc.hassium.network.FabricPayloadRegistry.CHUNK_PAYLOAD_S2C_TYPE,
                 (payload, context) -> {
-                    FriendlyByteBuf buf = FabricPayloadRegistry.fromPayload(payload);
+                    net.minecraft.network.FriendlyByteBuf buf = io.github.limuqy.mc.hassium.network.FabricPayloadRegistry.fromPayload(payload);
                     int len = buf.readVarInt();
                     byte[] data = new byte[len];
                     buf.readBytes(data);

@@ -47,25 +47,24 @@ public final class SmokeProbeWriter {
         }
         try {
             boolean joined = mc != null && mc.player != null && mc.level != null;
-            StringBuilder sb = new StringBuilder(4096);
-            sb.append("{\n");
-            sb.append("  \"round\": ").append(round).append(",\n");
-            sb.append("  \"timestampMs\": ").append(System.currentTimeMillis()).append(",\n");
-            sb.append("  \"joined\": ").append(joined).append(",\n");
-            sb.append("  \"dimension\": ");
+            String dimension = null;
             if (joined) {
                 // 与 ClientSmokeTest MIGRATE_POS_* 同款跨版本取法（1.21.11 起 ResourceKey 改 identifier()）
-                String dim = mc.player.level().dimension()
+                dimension = mc.player.level().dimension()
 #if MC_VER < MC_1_21_11
                         .location()
 #else
                         .identifier()
 #endif
                         .toString();
-                sb.append(jsonString(dim));
-            } else {
-                sb.append("null");
             }
+            StringBuilder sb = new StringBuilder(4096);
+            sb.append("{\n");
+            sb.append("  \"round\": ").append(round).append(",\n");
+            sb.append("  \"timestampMs\": ").append(System.currentTimeMillis()).append(",\n");
+            sb.append("  \"joined\": ").append(joined).append(",\n");
+            sb.append("  \"dimension\": ");
+            sb.append(dimension == null ? "null" : jsonString(dimension));
             sb.append(",\n");
             sb.append("  \"playerPos\": ");
             if (joined) {
@@ -78,9 +77,11 @@ public final class SmokeProbeWriter {
             }
             sb.append(",\n");
             appendStats(sb, NetworkStats.getMetrics());
+            appendClientCache(sb, mc);
             appendGateway(sb);
             appendCounters(sb);
             appendDisk(sb);
+            appendChunkTrace(sb, dimension);
             sb.append("}\n");
 
             Path out = Path.of(dir, "round" + round + ".json");
@@ -122,10 +123,32 @@ public final class SmokeProbeWriter {
         field(sb, "lightReuseShadowCount", m.getLightReuseShadowCount());
         field(sb, "lightReuseShadowBytes", m.getLightReuseShadowBytes());
         field(sb, "lightCacheMissCount", m.getLightCacheMissCount());
-        field(sb, "lightCacheMissBytes", m.getLightCacheMissBytes());
         lastField(sb, "noModReceiveBytes", m.getNoModReceiveBytes());
         sb.append("  },\n");
     }
+    /** 客户端实际缓存快照：用于区分统计已应用与 ClientChunkCache 中真实存在的区块。 */
+    private static void appendClientCache(StringBuilder sb, net.minecraft.client.Minecraft mc) {
+        long loaded = -1L;
+        long renderOnly = -1L;
+        if (mc != null && mc.level != null) {
+            try {
+                net.minecraft.client.multiplayer.ClientLevel level = mc.level;
+                loaded = ((io.github.limuqy.mc.hassium.mixin.ClientLevelAccessor) level)
+                        .hassium$getChunkSource().getLoadedChunksCount();
+                renderOnly = ((io.github.limuqy.mc.hassium.cache.client.IClientLevelExtension) level)
+                        .hassium$getRenderOnlyChunks().size();
+            } catch (Throwable ignored) {
+                // 保持未知值，探针失败不影响场景状态机。
+            }
+        }
+        sb.append("  \"clientCache\": {\n");
+        field(sb, "loadedChunks", loaded);
+        field(sb, "renderOnlyChunks", renderOnly);
+        lastField(sb, "authoritativeEstimate", loaded >= 0L && renderOnly >= 0L
+                ? Math.max(0L, loaded - renderOnly) : -1L);
+        sb.append("  },\n");
+    }
+
 
     /** gateway：NetworkCore 只读公开 API；读取异常按 dumpGatewayAssertion 同语义降级为 ERROR。 */
     private static void appendGateway(StringBuilder sb) {
@@ -186,6 +209,17 @@ public final class SmokeProbeWriter {
         field(sb, "hashDiskMismatch", io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.hashDiskMismatchCount());
         field(sb, "hashAbsent", io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.hashAbsentCount());
         field(sb, "hashLeftover", io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.hashLeftoverCount());
+        field(sb, "hashEntriesProcessed", io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.hashEntriesProcessedCount());
+        field(sb, "hashEntriesUnique", io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.hashEntriesUniqueCount());
+        field(sb, "hashChunkKeysUnique", io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.hashChunkKeysUniqueCount());
+        field(sb, "hashEntryDuplicates", io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.hashEntryDuplicatesCount());
+        field(sb, "hashMemoryMismatchUnique", io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.hashMemoryMismatchUniqueCount());
+        field(sb, "hashMemoryMismatchDuplicates", io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.hashMemoryMismatchDuplicatesCount());
+        field(sb, "hashDiskMismatchUnique", io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.hashDiskMismatchUniqueCount());
+        field(sb, "hashDiskMismatchDuplicates", io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.hashDiskMismatchDuplicatesCount());
+        field(sb, "hashLeftoverUnique", io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.hashLeftoverUniqueCount());
+        field(sb, "hashLeftoverUniqueChunkKeys", io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.hashLeftoverUniqueChunkKeysCount());
+        field(sb, "hashLeftoverDuplicates", io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.hashLeftoverDuplicatesCount());
         field(sb, "sectionDeltaRequestsSent", m.getSectionDeltaRequestsSent());
         field(sb, "sectionDeltaApplied", m.getSectionDeltaChunksReceived());
         field(sb, "lightSegRecalc", m.getLightCacheMissCount());
@@ -234,7 +268,41 @@ public final class SmokeProbeWriter {
         sb.append("      \"nether\": {\"regionFileCount\": ").append(netherRegions).append("},\n");
         sb.append("      \"end\": {\"regionFileCount\": ").append(endRegions).append("}\n");
         sb.append("    }\n");
+        sb.append("  },\n");
+    }
+    private static void appendChunkTrace(StringBuilder sb, String dimension) {
+        io.github.limuqy.mc.hassium.network.seedgen.SmokeChunkTrace.Snapshot trace =
+                io.github.limuqy.mc.hassium.network.seedgen.SmokeChunkTrace.snapshot(dimension);
+        sb.append("  \"chunkTrace\": {\n");
+        appendTraceStage(sb, "networkReceived", trace.networkReceived(), true);
+        appendTraceStage(sb, "shadowInjected", trace.shadowInjected(), true);
+        appendTraceStage(sb, "shadowReady", trace.shadowReady(), true);
+        appendTraceStage(sb, "clientApplied", trace.clientApplied(), true);
+        appendTraceStage(sb, "meshCompiled", trace.meshCompiled(), true);
+        appendTraceStage(sb, "receivedNotInjected", trace.receivedNotInjected(), true);
+        appendTraceStage(sb, "injectedNotReady", trace.injectedNotReady(), true);
+        appendTraceStage(sb, "readyNotApplied", trace.readyNotApplied(), true);
+        appendTraceStage(sb, "appliedNotMeshed", trace.appliedNotMeshed(), false);
         sb.append("  }\n");
+    }
+
+    private static void appendTraceStage(StringBuilder sb, String name,
+                                         java.util.List<net.minecraft.world.level.ChunkPos> positions,
+                                         boolean trailingComma) {
+        sb.append("    \"").append(name).append("\": {\"count\": ")
+                .append(positions.size()).append(", \"positions\": [");
+        for (int i = 0; i < positions.size(); i++) {
+            net.minecraft.world.level.ChunkPos pos = positions.get(i);
+            if (i > 0) {
+                sb.append(", ");
+            }
+            sb.append('[').append(pos.x).append(", ").append(pos.z).append(']');
+        }
+        sb.append("]}");
+        if (trailingComma) {
+            sb.append(',');
+        }
+        sb.append('\n');
     }
 
     /** 统计维度 region 目录下的常规文件数；目录不存在返回 -1（与未知/未落盘区分）。 */

@@ -25,12 +25,10 @@ public final class ResourceLocationCompat {
     create(String namespace, String path) {
 #if MC_VER < MC_1_21_1
         return new ResourceLocation(namespace, path);
-#else
-#if MC_VER < MC_1_21_11
+#elif MC_VER < MC_1_21_11
         return ResourceLocation.fromNamespaceAndPath(namespace, path);
 #else
         return Identifier.fromNamespaceAndPath(namespace, path);
-#endif
 #endif
     }
 
@@ -49,12 +47,10 @@ public final class ResourceLocationCompat {
     create(String location) {
 #if MC_VER < MC_1_21_1
         return new ResourceLocation(location);
-#else
-#if MC_VER < MC_1_21_11
+#elif MC_VER < MC_1_21_11
         return ResourceLocation.parse(location);
 #else
         return Identifier.parse(location);
-#endif
 #endif
     }
 

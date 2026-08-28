@@ -341,7 +341,7 @@ class ReliableDatagramSessionTest {
         // 零缓存的专用 pooled direct allocator：cache 全 0 → 每次 alloc/dealloc 都触及 arena；
         // directArenas().get(0).numActiveAllocations() = 当前尚未 dealloc 的 direct buffer 数（即「泄漏」计数）。
         PooledByteBufAllocator leakProbe =
-                new PooledByteBufAllocator(true, 1, 1, 8192, 11, 0, 0, 0);
+                new PooledByteBufAllocator(true, 1, 1, 8192, 11, 0, 0, false, 8192);
         ReliableDatagramSession.ALLOC_OVERRIDE = leakProbe;
         try {
             AtomicInteger deliverCount = new AtomicInteger();

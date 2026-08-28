@@ -3,24 +3,15 @@ package io.github.limuqy.mc.hassium.mixin;
 import io.github.limuqy.mc.hassium.compat.LevelCompat;
 import io.github.limuqy.mc.hassium.network.ServerChunkPushManager;
 import io.github.limuqy.mc.hassium.network.gateway.GatewayServer;
-#if MC_VER >= MC_1_21_1
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
-#endif
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.network.ServerGamePacketListenerImpl;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.chunk.LevelChunk;
 import org.spongepowered.asm.mixin.Mixin;
-#if MC_VER >= MC_1_21_1
-import org.spongepowered.asm.mixin.Shadow;
-import org.spongepowered.asm.mixin.Unique;
-#endif
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
-#if MC_VER >= MC_1_21_1
-import org.spongepowered.asm.mixin.injection.Redirect;
-#endif
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
@@ -43,14 +34,14 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public abstract class MixinPlayerChunkSender {
 
 #if MC_VER >= MC_1_21_1
-    @Shadow
+    @org.spongepowered.asm.mixin.Shadow
     private boolean memoryConnection;
-    @Shadow
+    @org.spongepowered.asm.mixin.Shadow
     private float desiredChunksPerTick;
-    @Shadow
+    @org.spongepowered.asm.mixin.Shadow
     private float batchQuota;
 
-    @Unique
+    @org.spongepowered.asm.mixin.Unique
     private boolean hassium$forceQuota;
 
     /**
@@ -78,7 +69,7 @@ public abstract class MixinPlayerChunkSender {
     /**
      * 本机连接（integrated）会无视 quota 一次吐完全部 pending。Hassium 路径强制走定额 nearest-N。
      */
-    @Redirect(method = "collectChunksToSend",
+    @org.spongepowered.asm.mixin.injection.Redirect(method = "collectChunksToSend",
             at = @At(value = "FIELD",
                     target = "Lnet/minecraft/server/network/PlayerChunkSender;memoryConnection:Z"))
     private boolean hassium$quotaLimitedCollect(net.minecraft.server.network.PlayerChunkSender self) {
@@ -110,7 +101,7 @@ public abstract class MixinPlayerChunkSender {
 
         ci.cancel(); // 取消原版区块包发送
     }
-#if MC_VER >= MC_1_21_1
+
     /** PlayerChunkSender.dropChunk 是 1.20.2+ 的精确 tracking-view 移除回调。 */
     @Inject(method = "dropChunk", at = @At("HEAD"))
     private void hassium$onDropChunk(ServerPlayer player, ChunkPos pos, CallbackInfo ci) {
@@ -120,6 +111,5 @@ public abstract class MixinPlayerChunkSender {
         String dimension = LevelCompat.getDimensionId(player.level());
         ServerChunkPushManager.getInstance().discardUntrackedChunk(player.getUUID(), dimension, pos);
     }
-#endif
 #endif
 }
