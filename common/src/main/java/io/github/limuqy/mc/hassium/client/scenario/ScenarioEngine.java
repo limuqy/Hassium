@@ -895,8 +895,8 @@ public final class ScenarioEngine {
     }
 
     /**
-     * T6 实体冒烟增强（dev 测试代码）：打印影子端内存中的实体清单
-     * （验证 R2 期间转发的实体是否已被影子端应用，含 UUID/坐标/名字）。
+     * T6 实体冒烟增强（dev 测试代码）：打印影子端内存中的实体清单。
+     * 该方法只在客户端 exit 阶段调用；不要让 dedicated server 类加载 LocalPlayer。
      */
     private static void dumpShadowEntities() {
         try {
@@ -907,10 +907,8 @@ public final class ScenarioEngine {
                 return;
             }
             net.minecraft.server.level.ServerLevel level = server.overworld();
-            net.minecraft.client.player.LocalPlayer player = Minecraft.getInstance().player;
-            net.minecraft.world.phys.AABB bounds = player == null
-                    ? new net.minecraft.world.phys.AABB(-64, -64, -64, 64, 320, 64)
-                    : player.getBoundingBox().inflate(128.0);
+            net.minecraft.world.phys.AABB bounds =
+                    new net.minecraft.world.phys.AABB(-64, -64, -64, 64, 320, 64);
             java.util.List<net.minecraft.world.entity.Entity> all =
                     level.getEntitiesOfClass(net.minecraft.world.entity.Entity.class, bounds, e -> true);
             LOGGER.info("HassiumSmokeTest: shadow dump: {} entities", all.size());

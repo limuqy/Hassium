@@ -137,7 +137,7 @@ class ServerChunkPushManagerPacedPendingTest {
 
         long sentAt = 1_000L;
         long timeout = ServerChunkPushManager.PENDING_CONFIRM_TIMEOUT_MS;
-        assertEquals(10_000L, timeout);
+        assertEquals(60_000L, timeout);
         assertFalse(ServerChunkPushManager.isPendingConfirmExpired(sentAt, sentAt + timeout));
         assertTrue(ServerChunkPushManager.isPendingConfirmExpired(sentAt, sentAt + timeout + 1L));
     }

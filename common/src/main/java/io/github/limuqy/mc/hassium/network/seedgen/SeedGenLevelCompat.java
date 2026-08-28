@@ -206,8 +206,8 @@ public final class SeedGenLevelCompat {
                                     WorldStem::new,
                                     Util.backgroundExecutor(),
                                     executor)
-                    )
-                    .get(120, TimeUnit.SECONDS);
+            )
+            .get(120, TimeUnit.SECONDS);
         long tStemNs = System.nanoTime();
         ShadowSeedServer server = ShadowSeedServer.create(
                 Thread.currentThread(), access, repo, stem, seed, worldRoot);

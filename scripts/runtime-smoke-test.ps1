@@ -227,6 +227,7 @@ max-players=20
 white-list=false
 enforce-whitelist=false
 spawn-protection=0
+randomTickSpeed=0
 "@
     Set-Content -Path (Join-Path $Dir "server.properties") -Value $props -Encoding utf8NoBOM
 }

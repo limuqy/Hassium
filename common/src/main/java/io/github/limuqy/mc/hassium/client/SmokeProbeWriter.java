@@ -300,7 +300,9 @@ public final class SmokeProbeWriter {
         appendTraceStage(sb, "receivedNotInjected", trace.receivedNotInjected(), true);
         appendTraceStage(sb, "injectedNotReady", trace.injectedNotReady(), true);
         appendTraceStage(sb, "readyNotApplied", trace.readyNotApplied(), true);
-        appendTraceStage(sb, "appliedNotMeshed", trace.appliedNotMeshed(), false);
+        appendTraceStage(sb, "appliedNotMeshed", trace.appliedNotMeshed(), true);
+        appendTraceTimes(sb, "networkReceivedAtMs", trace.networkReceivedAtMs(), true);
+        appendTraceTimes(sb, "clientAppliedAtMs", trace.clientAppliedAtMs(), false);
         sb.append("  }\n");
     }
 
@@ -317,6 +319,23 @@ public final class SmokeProbeWriter {
             sb.append('[').append(pos.x).append(", ").append(pos.z).append(']');
         }
         sb.append("]}");
+        if (trailingComma) {
+            sb.append(',');
+        }
+        sb.append('\n');
+    }
+    private static void appendTraceTimes(StringBuilder sb, String name,
+                                         java.util.Map<Long, Long> times, boolean trailingComma) {
+        sb.append("    \"").append(name).append("\": {");
+        boolean first = true;
+        for (var entry : times.entrySet()) {
+            if (!first) {
+                sb.append(", ");
+            }
+            first = false;
+            sb.append('\"').append(entry.getKey()).append("\": ").append(entry.getValue());
+        }
+        sb.append('}');
         if (trailingComma) {
             sb.append(',');
         }

@@ -7,6 +7,7 @@ import net.minecraft.world.level.ChunkPos;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -23,6 +24,8 @@ public final class SmokeChunkTrace {
     private static final Set<Long> SHADOW_READY = newTraceSet();
     private static final Set<Long> CLIENT_APPLIED = newTraceSet();
     private static final Set<Long> MESH_COMPILED = newTraceSet();
+    private static final ConcurrentHashMap<Long, Long> NETWORK_RECEIVED_AT_MS = new ConcurrentHashMap<>();
+    private static final ConcurrentHashMap<Long, Long> CLIENT_APPLIED_AT_MS = new ConcurrentHashMap<>();
 
     private SmokeChunkTrace() {
     }
@@ -36,23 +39,23 @@ public final class SmokeChunkTrace {
     }
 
     public static void recordNetworkReceived(String dimension, ChunkPos pos) {
-        record(NETWORK_RECEIVED, dimension, pos);
+        record(NETWORK_RECEIVED, NETWORK_RECEIVED_AT_MS, dimension, pos);
     }
 
     public static void recordShadowInjected(String dimension, ChunkPos pos) {
-        record(SHADOW_INJECTED, dimension, pos);
+        record(SHADOW_INJECTED, null, dimension, pos);
     }
 
     public static void recordShadowReady(String dimension, ChunkPos pos) {
-        record(SHADOW_READY, dimension, pos);
+        record(SHADOW_READY, null, dimension, pos);
     }
 
     public static void recordClientApplied(String dimension, ChunkPos pos) {
-        record(CLIENT_APPLIED, dimension, pos);
+        record(CLIENT_APPLIED, CLIENT_APPLIED_AT_MS, dimension, pos);
     }
 
     public static void recordMeshCompiled(String dimension, ChunkPos pos) {
-        record(MESH_COMPILED, dimension, pos);
+        record(MESH_COMPILED, null, dimension, pos);
     }
 
     public static void reset() {
@@ -64,6 +67,8 @@ public final class SmokeChunkTrace {
         SHADOW_READY.clear();
         CLIENT_APPLIED.clear();
         MESH_COMPILED.clear();
+        NETWORK_RECEIVED_AT_MS.clear();
+        CLIENT_APPLIED_AT_MS.clear();
     }
 
     public static Snapshot snapshot(String dimension) {
@@ -83,13 +88,20 @@ public final class SmokeChunkTrace {
                 toPositions(difference(networkReceived, shadowInjected)),
                 toPositions(difference(shadowInjected, shadowReady)),
                 toPositions(difference(shadowReady, clientApplied)),
-                toPositions(difference(clientApplied, positionsForDimension(MESH_COMPILED, dimension)))
+                toPositions(difference(clientApplied, positionsForDimension(MESH_COMPILED, dimension))),
+                timesForDimension(NETWORK_RECEIVED_AT_MS, dimension),
+                timesForDimension(CLIENT_APPLIED_AT_MS, dimension)
         );
     }
 
-    private static void record(Set<Long> destination, String dimension, ChunkPos pos) {
+    private static void record(Set<Long> destination, ConcurrentHashMap<Long, Long> times,
+                               String dimension, ChunkPos pos) {
         if (ENABLED && pos != null && DimensionKey.isCacheableDimension(dimension)) {
-            destination.add(DimensionKey.key(dimension, pos.x, pos.z));
+            long key = DimensionKey.key(dimension, pos.x, pos.z);
+            destination.add(key);
+            if (times != null) {
+                times.putIfAbsent(key, System.currentTimeMillis());
+            }
         }
     }
 
@@ -101,6 +113,17 @@ public final class SmokeChunkTrace {
             }
         }
         return positions;
+    }
+    private static java.util.Map<Long, Long> timesForDimension(
+            ConcurrentHashMap<Long, Long> source, String dimension) {
+        java.util.Map<Long, Long> result = new java.util.HashMap<>();
+        for (var entry : source.entrySet()) {
+            if (dimension.equals(DimensionKey.dimensionOf(entry.getKey()))) {
+                result.put(ChunkPos.asLong(DimensionKey.chunkXOf(entry.getKey()),
+                        DimensionKey.chunkZOf(entry.getKey())), entry.getValue());
+            }
+        }
+        return java.util.Map.copyOf(result);
     }
 
     private static Set<Long> difference(Set<Long> left, Set<Long> right) {
@@ -132,11 +155,13 @@ public final class SmokeChunkTrace {
             List<ChunkPos> receivedNotInjected,
             List<ChunkPos> injectedNotReady,
             List<ChunkPos> readyNotApplied,
-            List<ChunkPos> appliedNotMeshed
+            List<ChunkPos> appliedNotMeshed,
+            java.util.Map<Long, Long> networkReceivedAtMs,
+            java.util.Map<Long, Long> clientAppliedAtMs
     ) {
         private static Snapshot empty() {
             return new Snapshot(List.of(), List.of(), List.of(), List.of(), List.of(),
-                    List.of(), List.of(), List.of(), List.of());
+                    List.of(), List.of(), List.of(), List.of(), Map.of(), Map.of());
         }
     }
 }

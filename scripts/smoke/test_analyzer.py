@@ -1,6 +1,6 @@
 import unittest
 
-from scripts.smoke.analyzer import _spatial_check
+from scripts.smoke.analyzer import _late_near_player, _server_full_push_timeouts, _spatial_check
 
 
 class SpatialCheckTest(unittest.TestCase):
@@ -74,5 +74,26 @@ class SpatialCheckTest(unittest.TestCase):
             self.assertIn("TRACE_EXPECTED_NOT_PRESENT", {item["code"] for item in analysis["failures"]})
 
 
+
+    def test_late_near_player_chunk_is_diagnostic_input(self):
+        def packed(x, z):
+            return str((z & 0xffffffff) << 32 | (x & 0xffffffff))
+
+        probe = {
+            "playerPos": [-16, 64, -16],
+            "chunkTrace": {"clientAppliedAtMs": {
+                packed(20, 20): 1_000,
+                packed(-1, -1): 12_000,
+            }},
+        }
+        result = _late_near_player(probe)
+        self.assertEqual(result[0]["position"], [-1, -1])
+        self.assertEqual(result[0]["networkDelayMs"], 11_000)
+
+    def test_server_full_push_timeout_is_parsed(self):
+        text = "[PENDING_CONFIRM] 2 confirms timed out (>60000ms), direct-pushing stripped full to Player"
+        self.assertEqual(_server_full_push_timeouts(text), [{
+            "count": 2, "timeoutMs": 60000, "player": "Player"
+        }])
 if __name__ == "__main__":
     unittest.main()

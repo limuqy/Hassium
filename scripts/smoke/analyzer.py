@@ -68,6 +68,17 @@ def _gateway_markers(text: str) -> dict[str, dict[str, Any]]:
                                    "gatewayC2s": int(m.group(4)), "gatewayResume": m.group(5) == "true"}
             for m in pattern.finditer(text)}
 
+def _server_full_push_timeouts(text: str) -> list[dict[str, Any]]:
+    """读取服务端明确记录的 pending-confirm 超时全量直推事件。"""
+    pattern = re.compile(
+        r"\[PENDING_CONFIRM\]\s+(\d+)\s+confirms timed out\s+\(>(\d+)ms\),\s+"
+        r"direct-pushing stripped full to\s+(.+?)\s*$",
+        re.MULTILINE,
+    )
+    return [{"count": int(match.group(1)), "timeoutMs": int(match.group(2)),
+             "player": match.group(3).strip()}
+            for match in pattern.finditer(text)]
+
 
 def _check_probe_metrics(probe: dict[str, Any], round_number: int) -> list[dict[str, Any]]:
     failures: list[dict[str, Any]] = []
@@ -134,6 +145,42 @@ def _spatial_check(probe: dict[str, Any]) -> dict[str, Any]:
     return {"available": True, "observed": len(observed), "expected": len(expected),
             "cardinalHoles": sorted(cardinal), "diagonalHoles": sorted(diagonal)}
 
+def _late_near_player(probe: dict[str, Any], threshold_ms: int = 10_000) -> list[dict[str, Any]]:
+    """发现近玩家柱相对本轮首批落地长期延迟，覆盖 full/cache/delta 三条路径。"""
+    trace = _obj(probe.get("chunkTrace"))
+    received = _obj(trace.get("networkReceivedAtMs"))
+    applied = _obj(trace.get("clientAppliedAtMs"))
+    player = probe.get("playerPos")
+    if not applied or not isinstance(player, list) or len(player) < 3:
+        return []
+    try:
+        px, pz = int(player[0] // 16), int(player[2] // 16)
+        first_applied = min(int(value) for value in applied.values())
+    except (TypeError, ValueError):
+        return []
+    late: list[dict[str, Any]] = []
+    for packed, applied_at in applied.items():
+        try:
+            key = int(packed)
+            x = key & 0xffffffff
+            z = (key >> 32) & 0xffffffff
+            if x >= 0x80000000:
+                x -= 0x100000000
+            if z >= 0x80000000:
+                z -= 0x100000000
+            if max(abs(x - px), abs(z - pz)) > 3:
+                continue
+            applied_at = int(applied_at)
+            received_at = int(received.get(packed, applied_at))
+            delay_from_first = applied_at - first_applied
+            apply_delay = applied_at - received_at
+            if delay_from_first >= threshold_ms or apply_delay >= threshold_ms:
+                late.append({"position": [x, z], "networkDelayMs": delay_from_first,
+                             "applyDelayMs": apply_delay})
+        except (TypeError, ValueError):
+            continue
+    return sorted(late, key=lambda item: (item["networkDelayMs"], item["applyDelayMs"]), reverse=True)
+
 
 def analyze_result(result: dict[str, Any], root: Path) -> dict[str, Any]:
     scenario = str(result.get("Scenario") or "classic")
@@ -157,6 +204,8 @@ def analyze_result(result: dict[str, Any], root: Path) -> dict[str, Any]:
         failures.append(_failure("SMOKE_FAIL_MARKER_PRESENT"))
     checks["smoke_markers"] = "PASS" if has_pass and not has_fail else "FAIL"
     client_exit = result.get("ClientExitCode")
+    for timeout in _server_full_push_timeouts(log_text):
+        failures.append(_failure("SERVER_FULL_PUSH_TIMEOUT", **timeout))
     if client_exit not in (None, 0):
         failures.append(_failure("CLIENT_EXIT_NONZERO", exitCode=client_exit))
     checks["client_exit"] = "PASS" if client_exit in (None, 0) else "FAIL"
@@ -180,6 +229,12 @@ def analyze_result(result: dict[str, Any], root: Path) -> dict[str, Any]:
         trace_reports[f"round{number}"] = trace_report
         spatial = _spatial_check(probe)
         spatial_reports[f"round{number}"] = spatial
+        if scenario == "classic":
+            late_near_player = _late_near_player(probe)
+            if late_near_player:
+                warnings.append(_failure("LATE_NEAR_PLAYER_CHUNK", severity="P1", round=number,
+                                         thresholdMs=10_000, chunks=late_near_player[:64],
+                                         truncated=len(late_near_player) > 64))
         gateway = markers.get(f"ROUND{number}", _obj(result.get(f"GatewayRound{number}")))
         if scenario == "classic" or gateway:
             c2s = _num(gateway.get("gatewayC2s"))

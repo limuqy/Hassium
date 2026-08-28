@@ -688,9 +688,7 @@ public final class ShadowLightCompute {
         accountLightColumn(resolved, pos, false);
     }
 
-    /**
-     * hash 全命中按柱去重。磁盘命中会 inject 进内存，后续同柱再比 hash 会再走内存分支。
-     */
+    /** hash 全命中按柱去重；同一柱磁盘命中后再收到 hash 会走内存命中。 */
     static boolean accountCacheFullHit(String dimension, ChunkPos pos) {
         if (pos == null) {
             return false;
@@ -1092,9 +1090,6 @@ public final class ShadowLightCompute {
                     pump();
                 } finally {
                     remoteHashDrainRunning.set(false);
-                    if (!deferredRemoteHashes.isEmpty()) {
-                        tryDrainRemoteHashes();
-                    }
                 }
             }, TaskCategory.BEST_EFFORT);
         } catch (java.util.concurrent.RejectedExecutionException e) {
@@ -1106,7 +1101,8 @@ public final class ShadowLightCompute {
             String dimension,
             List<io.github.limuqy.mc.hassium.network.ChunkHashS2CPacket.Entry> entries) {
         if (io.github.limuqy.mc.hassium.storage.ShadowStorageManager.isEncodingPaused()) {
-            return List.of();
+            // 暂停只是暂缓处理，不能返回空列表，否则调用方会把尚未处理的 hash 丢掉。
+            return entries;
         }
         ShadowSeedServer server = ShadowServerRegistry.getInstance().getOrCreate();
         List<ChunkPos> misses = new ArrayList<>();
@@ -1131,6 +1127,15 @@ public final class ShadowLightCompute {
                     // 1) 内存已加载：hash 表优先（注入时已算），无表现算（OVD 生成块）
                     LevelChunk loaded = server.injectedChunk(dimension, pos.x, pos.z);
                     if (loaded != null) {
+                        // 当前会话已因该柱发出全量请求/直推：后续乱序到达的重复 hash
+                        // 不能再把同一柱标成 memory cache hit，也不能重新排 delta。
+                        // loaded 只表示 shadow 已收到权威包，不表示客户端此前有缓存。
+                        if (requestedMisses.contains(key)) {
+                            DebugLogger.info(DebugLogger.LogType.METADATA,
+                                    "[CHUNK_HASH] Ignore reordered hash for in-flight/current network chunk ({}, {})",
+                                    pos.x, pos.z);
+                            continue;
+                        }
                         // P1（T7）：hash 比对读注入 chunk section 容器，与 consumeLoop 打包
                         // （pushReady→buildPacket）/ delta 应用（applySectionDelta）同 chunk 锁互斥。
                         boolean hashHit;

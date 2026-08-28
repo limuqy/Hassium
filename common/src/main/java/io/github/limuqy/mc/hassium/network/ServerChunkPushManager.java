@@ -82,8 +82,8 @@ public class ServerChunkPushManager {
     static final int MAX_QUEUED_BATCHES_PER_PLAYER = 10;
     /** 已准入任务满时的全量数据溢出上限；覆盖单玩家最大可见区，避免静默丢柱。 */
     private static final int MAX_OVERFLOW_TASKS_PER_PLAYER = 8192;
-    /** 待确认（已发 ChunkHashS2C 等客户端回执）超时：超时绕过批次队列异步直发剥光全量。 */
-    static final long PENDING_CONFIRM_TIMEOUT_MS = 10_000L;
+    /** 待确认超时：必须覆盖大批量 hash 比对/回执排空窗口，避免正常 R2 被误判为 full。 */
+    static final long PENDING_CONFIRM_TIMEOUT_MS = 60_000L;
     /** peekPrioritized 队头数据优先扫描窗口：跳过 SeedRef 元数据找 full 任务的有限深度。 */
     private static final int PRIORITY_SCAN_BOUND = 64;
 

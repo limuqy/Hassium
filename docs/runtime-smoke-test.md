@@ -248,6 +248,8 @@ Hassium 跨版本（1.20.1–1.21.11）× 多加载器（fabric / neoforge）的
 
 任一不满足 → `Round2Pass=false`，失败名单记入 result JSON `ProbeGateFailures`。probe 缺失或对应字段缺失（旧客户端）时跳过该门禁保持兼容。
 
+Python analyzer 以服务端日志中的 `[PENDING_CONFIRM] ... confirms timed out (...), direct-pushing stripped full ...` 为唯一的超时全量推送 P0 门禁，错误码为 `SERVER_FULL_PUSH_TIMEOUT`。客户端 trace 的 `LATE_NEAR_PLAYER_CHUNK` 仅为 P1 诊断：表示玩家区块半径 3 内的区块，相对本轮首个落地区块延迟至少 10 秒才应用；覆盖 full、cache、delta 三条应用路径。该诊断用于发现客户端队列阻塞或重复入队，不再反推服务端 confirm 超时。
+
 **非 classic 场景四条门禁整体跳过**（`ProbeGateScenarioGated=true`，`ProbeGateFailures` 恒空）：其探针语义不同（如 dimension 切维轮无 ovd/影子区），套用 classic 口径会误判 FAIL。
 
 ### 非 classic 场景会话判定

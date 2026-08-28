@@ -416,6 +416,7 @@ public class ClientMetadataHandler {
      * 1000+ 块尾部服务 ≈18s，旧 8s 固定窗口必然误触发级联重发）；同区块同维度已在途
      * （未过期）→ 去重跳过发包（服务端 KeyedPriorityQueue REPLACE 语义下重复请求零增益）。
      */
+
     private static void requestFullChunks(String dimension, List<ChunkPos> chunks, boolean staleOrFallback,
                                           int retries) {
         // 兜底：断连后不再发包，避免 Cannot send packets when not in game!
