@@ -80,4 +80,4 @@ NeoForge R2 卡死已由 `sendServerPayload` 统一切换到服务端主线程�
 
 验证会话：`1.21.5_neoforge_I_resyncall`、`1.21.1_neoforge_I_batchprobe7`、`1.21.2_neoforge_I_batchprobe7`、`1.21.9_neoforge_I_resyncall2`、`1.21.11_neoforge_I_resyncall2` 均为 `PASS`。
 
-提交：`50139d0 fix NeoForge OVD resync`；文档提交 `8c5fd3f`。当前 1.21.11 API 兼容修复与诊断探针清理待提交。
+提交：`50139d0 fix NeoForge OVD resync`；收尾提交 `7c5878b fix NeoForge payload thread compatibility`。

@@ -110,6 +110,6 @@ FAIL 分解：
 - **1.21.11 兼容修复**：`ServerPlayer.getServer()` 在该版本已移除，NeoForge payload 主线程切换改经 `PlayerCompat.getMinecraftServer(player)`；`neoforge:compileJava -Pmc_ver=1.21.11` 与 `-Pmc_ver=1.20.1` 均通过。
 - **G2 已恢复**：1.21.11 R2 光照缓存命中 1064/1085（98.1%），不再触发 `SECTION_DELTA_OR_LIGHT_RECALC_ABSENT`。
 - **P0 门禁**：上述四个关键版本分析器均无失败；`R2_FULL_CHUNK_TRANSFER` 严格口径保持不变，未放宽 fallback 判定。
-- `common:test` 与 `neoforge:compileJava -Pmc_ver=1.21.1` 均通过；修复提交 `50139d0`，后续兼容修复待单独提交。
+- `common:test` 与 `neoforge:compileJava -Pmc_ver=1.21.1` 均通过；修复提交 `50139d0`，兼容与探针清理提交 `7c5878b`。
 - Gradle daemon 保留（正常）；25565/25566 已释放。
 - `.comate/` 未纳入提交。
