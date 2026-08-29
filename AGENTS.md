@@ -143,7 +143,7 @@ fabric/ | forge/ | neoforge/
 
 ## 配置红线
 
-键集真相源：`ConfigSchema`；审计表见 [`docs/config-audit.md`](docs/config-audit.md)。Fabric 双文件 `hassium-client.toml` / `hassium-server.toml`；Forge/NeoForge 双 spec。
+键集真相源：`ConfigSchema`；审计表见 [`docs/config-audit.md`](docs/config-audit.md)。Fabric 双文件 `hassium-client.toml` / `hassium-server.toml`（按物理端二选一）；Forge/NeoForge 双 spec 亦按物理端二选一注册（客户端仅 CLIENT，专用服仅 COMMON，客户端不生成 server toml）。
 
 | 项 | 默认 | 注意 |
 |----|------|------|

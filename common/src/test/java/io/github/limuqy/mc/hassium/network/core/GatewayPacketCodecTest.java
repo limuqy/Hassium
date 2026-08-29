@@ -50,8 +50,8 @@ class GatewayPacketCodecTest {
             Packet<?> decoded = GatewayPacketCodec.decodeVanilla(
                     payload, PacketFlow.CLIENTBOUND, GatewayPacketCodec.GatewayProtocol.PLAY, RegistryAccess.EMPTY);
             // vanilla packet 在 1.21.2 前无 equals（非 record），按字段断言。
-            // 1.21.2-1.21.3 普通类 getSlot()，1.21.4+ record slot()——白名单禁 MC_1_21_4
-            // 碎片段，测试内反射取 accessor（getSlot 优先，record 回退 slot）。
+            // 1.21.2-1.21.3 普通类 getSlot()，1.21.4+ record slot()——1.21.4 为白名单外
+            // 碎片段（无段常量），测试内反射取 accessor（getSlot 优先，record 回退 slot）。
             int slot;
             try {
                 slot = (Integer) decoded.getClass().getMethod("getSlot").invoke(decoded);

@@ -27,8 +27,12 @@ public class HassiumMod {
     private static final ForgeConfigBackend CONFIG = (ForgeConfigBackend) io.github.limuqy.mc.hassium.platform.Services.CONFIG;
 
     public HassiumMod(FMLJavaModLoadingContext context) {
-        context.registerConfig(ModConfig.Type.CLIENT, CONFIG.clientSpec(), Constants.CONFIG_CLIENT_FILE);
-        context.registerConfig(ModConfig.Type.COMMON, CONFIG.serverSpec(), Constants.CONFIG_SERVER_FILE);
+        // 按物理端二选一注册（对齐 Fabric 单文件行为）：客户端只出 client toml，专用服只出 server toml。
+        if (io.github.limuqy.mc.hassium.platform.Services.PLATFORM.isPhysicalClient()) {
+            context.registerConfig(ModConfig.Type.CLIENT, CONFIG.clientSpec(), Constants.CONFIG_CLIENT_FILE);
+        } else {
+            context.registerConfig(ModConfig.Type.COMMON, CONFIG.serverSpec(), Constants.CONFIG_SERVER_FILE);
+        }
         CommonClass.init();
 
         // review-fix: T10-M1：数据面 BULK 路由对齐 Fabric——先查 UDP 数据面可用（未启用/未绑定/无会话时
