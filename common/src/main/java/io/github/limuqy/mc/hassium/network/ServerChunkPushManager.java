@@ -109,6 +109,8 @@ public class ServerChunkPushManager {
 
     /** 已发送 hash 等待客户端回执的柱：playerId → (packedPos → 待确认条目)。 */
     private final Map<UUID, Map<Long, PendingConfirm>> pendingConfirms = new ConcurrentHashMap<>();
+    /** 每次 hash 发送的服务端诊断序列；不进入网络协议，仅用于跨日志关联。 */
+    private final AtomicLong hashTraceSequence = new AtomicLong();
 
     /**
      * 本会话已收到 HIT 的 (维度, 柱) → hash。untrack 时清除，走近再发；
@@ -117,8 +119,8 @@ public class ServerChunkPushManager {
     private final Map<UUID, ConcurrentHashMap<SessionPushKey, Long>> sessionConfirmedHashes =
             new ConcurrentHashMap<>();
 
-    /** 待确认条目：维度、发送时间、当时发出的 contentHash。 */
-    private record PendingConfirm(String dimension, long sentAtMs, long chunkHash) {}
+    /** 待确认条目：维度、发送时间、当时发出的 contentHash、诊断序列。 */
+    private record PendingConfirm(String dimension, long sentAtMs, long chunkHash, long traceId) {}
 
     /**
      * 批次通道：主线程封批后投递，serverChunkPushThreads 条常驻消费者共享抢批。
@@ -729,6 +731,9 @@ public class ServerChunkPushManager {
                     continue;
                 }
                 registerPendingConfirm(player, pos, dimension, chunkHash);
+                DebugLogger.info(LogType.NETWORK,
+                        "[CHUNK_HASH_TRACE] register+send player={} dimension={} pos=({}, {}) hash={} source=bloom-hit",
+                        player.getName().getString(), dimension, pos.x, pos.z, Long.toHexString(chunkHash));
                 sendChunkHashDirect(player, pos, chunkHash, sectionBitmap, dimension);
                 continue;
             }
@@ -791,6 +796,9 @@ public class ServerChunkPushManager {
             buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
             packet.encode(buf);
             int bytes = buf.readableBytes();
+            DebugLogger.info(LogType.NETWORK,
+                    "[CHUNK_HASH_TRACE] write player={} dimension={} pos=({}, {}) hash={} bytes={}",
+                    player.getName().getString(), dimension, pos.x, pos.z, Long.toHexString(chunkHash), bytes);
             Services.NETWORK_MANAGER.sendChunkHashPacket(player, buf);
             sent = true;
             NetworkStats.recordMetadataSent(bytes);
@@ -1404,9 +1412,17 @@ public class ServerChunkPushManager {
         if (player == null || pos == null || dimension == null) {
             return;
         }
-        pendingConfirms.computeIfAbsent(player.getUUID(), ignored -> new ConcurrentHashMap<>())
-                .put(ChunkPos.asLong(pos.x, pos.z),
-                        new PendingConfirm(dimension, System.currentTimeMillis(), chunkHash));
+        Map<Long, PendingConfirm> confirms =
+                pendingConfirms.computeIfAbsent(player.getUUID(), ignored -> new ConcurrentHashMap<>());
+        long packed = ChunkPos.asLong(pos.x, pos.z);
+        PendingConfirm previous = confirms.put(packed,
+                new PendingConfirm(dimension, System.currentTimeMillis(), chunkHash,
+                        hashTraceSequence.incrementAndGet()));
+        PendingConfirm current = confirms.get(packed);
+        DebugLogger.info(LogType.NETWORK,
+                "[CHUNK_HASH_TRACE] pending player={} dimension={} pos=({}, {}) hash={} traceId={} previous={} pendingCount={}",
+                player.getName().getString(), dimension, pos.x, pos.z, Long.toHexString(chunkHash),
+                current.traceId(), previous == null ? "none" : previous.traceId(), confirms.size());
     }
 
     /**
@@ -1423,6 +1439,7 @@ public class ServerChunkPushManager {
                 continue;
             }
             List<ChunkPos> expired = new ArrayList<>();
+            List<Long> expiredTraceIds = new ArrayList<>();
             String dimension = null;
             for (Map.Entry<Long, PendingConfirm> e : playerEntry.getValue().entrySet()) {
                 PendingConfirm pc = e.getValue();
@@ -1430,6 +1447,7 @@ public class ServerChunkPushManager {
                     continue;
                 }
                 expired.add(new ChunkPos(ChunkPos.getX(e.getKey()), ChunkPos.getZ(e.getKey())));
+                expiredTraceIds.add(pc.traceId());
                 dimension = pc.dimension();
             }
             if (expired.isEmpty() || dimension == null) {
@@ -1439,8 +1457,9 @@ public class ServerChunkPushManager {
                 playerEntry.getValue().remove(ChunkPos.asLong(pos.x, pos.z));
             }
             DebugLogger.info(LogType.NETWORK,
-                    "[PENDING_CONFIRM] {} confirms timed out (>{}ms), direct-pushing stripped full to {}",
-                    expired.size(), Long.valueOf(PENDING_CONFIRM_TIMEOUT_MS), player.getName().getString());
+                    "[PENDING_CONFIRM] {} confirms timed out (>{}ms), direct-pushing stripped full to {} positions={} traceIds={}",
+                    expired.size(), Long.valueOf(PENDING_CONFIRM_TIMEOUT_MS), player.getName().getString(), expired,
+                    expiredTraceIds);
             // 超时必须 FORCE_FULL：FULL_VISIBLE 在 bloom hit 时会被折回只发 hash，死循环。
             String finalDimension = dimension;
             pushPool.execute(() -> directPushStrippedFull(player, finalDimension, expired));
@@ -1462,6 +1481,9 @@ public class ServerChunkPushManager {
         }
         UUID playerId = player.getUUID();
         Map<Long, PendingConfirm> confirms = pendingConfirms.get(playerId);
+        DebugLogger.info(LogType.NETWORK,
+                "[CHUNK_HASH_TRACE] result-received player={} dimension={} result={} chunks={} pendingBefore={}",
+                player.getName().getString(), dimension, result, chunks, confirms == null ? 0 : confirms.size());
         if (result == ChunkDataRequestC2SPacket.RESULT_HIT && chunks.isEmpty()) {
             if (confirms != null) {
                 confirms.entrySet().removeIf(entry -> {
@@ -1504,8 +1526,8 @@ public class ServerChunkPushManager {
         }
         if (!bypass.isEmpty()) {
             DebugLogger.info(LogType.NETWORK,
-                    "[PENDING_CONFIRM] result=miss n={} from {}, bypassing tick cap with prepared snapshot",
-                    bypass.size(), player.getName().getString());
+                    "[PENDING_CONFIRM] result=miss n={} from {}, bypassing tick cap with prepared snapshot positions={}",
+                    bypass.size(), player.getName().getString(), bypass);
             ensureInitialized();
             pushPool.execute(() -> directPushStrippedFull(player, dimension, bypass));
         }
@@ -2232,7 +2254,7 @@ public class ServerChunkPushManager {
         int serverVD = PlayerCompat.getViewDistance(player);
         List<SealedWork> works = new ArrayList<>(maxPerTick);
         while (works.size() < maxPerTick && !queue.isEmpty()) {
-            PushTask task = queue.poll();
+            PushTask task = queue.pollNearest(playerChunk.x, playerChunk.z);
             if (task == null) {
                 break;
             }
@@ -2912,7 +2934,7 @@ public class ServerChunkPushManager {
         }
 
         synchronized boolean isEmpty() {
-            return tasks.isEmpty();
+            return tasks.isEmpty() && overflow.isEmpty();
         }
 
         /**
@@ -3007,6 +3029,30 @@ public class ServerChunkPushManager {
 
         synchronized PushTask poll() {
             return tasks.pollFirst();
+        }
+        synchronized PushTask pollNearest(int centerX, int centerZ) {
+            PushTask nearest = null;
+            java.util.ArrayDeque<PushTask> source = null;
+            int nearestDistance = Integer.MAX_VALUE;
+            for (java.util.ArrayDeque<PushTask> candidateQueue :
+                    java.util.List.of(tasks, overflow)) {
+                for (PushTask candidate : candidateQueue) {
+                    int distance = Math.abs(candidate.pos().x - centerX)
+                            + Math.abs(candidate.pos().z - centerZ);
+                    if (nearest == null || distance < nearestDistance
+                            || (distance == nearestDistance
+                            && candidate.kind() == PushKind.FULL_HALO
+                            && nearest.kind() != PushKind.FULL_HALO)) {
+                        nearest = candidate;
+                        nearestDistance = distance;
+                        source = candidateQueue;
+                    }
+                }
+            }
+            if (nearest != null) {
+                source.remove(nearest);
+            }
+            return nearest;
         }
 
         synchronized void clear() {

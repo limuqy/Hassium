@@ -97,6 +97,8 @@ public final class GatewayPlayerBridge {
     // [BATCH-INJECT] 诊断探针：网关 C2S 帧注入 vanilla 批 ACK 计数（临时，闭环后移除）
     private static final java.util.concurrent.atomic.AtomicLong BATCH_ACK_INJECTED =
             new java.util.concurrent.atomic.AtomicLong();
+    private static final java.util.concurrent.atomic.AtomicLong MOVEMENT_INJECTED =
+            new java.util.concurrent.atomic.AtomicLong();
 
     /** T10 标准流程 pending attach：握手身份已登记但 vanilla 玩家未物化（tick 泵轮询）。 */
     private static final Map<GatewayPlayerSession, Long> PENDING_ATTACH = new ConcurrentHashMap<>();
@@ -677,6 +679,15 @@ public final class GatewayPlayerBridge {
                     if (packet == null) {
                         return;
                     }
+                    boolean movementPacket = packet instanceof net.minecraft.network.protocol.game.ServerboundMovePlayerPacket;
+                    String packetName = packet.getClass().getName();
+                    if (movementPacket) {
+                        long n = MOVEMENT_INJECTED.incrementAndGet();
+                        if (n <= 5 || n % 20 == 0) {
+                            LOGGER.info("[GATEWAY-MOVE] before #{} player={} packet={} pos=({}, {}, {})",
+                                    n, playerId, packetName, player.getX(), player.getY(), player.getZ());
+                        }
+                    }
 #if MC_VER >= MC_1_21_1
                     if (packet instanceof net.minecraft.network.protocol.game.ServerboundChunkBatchReceivedPacket ack) {
                         long n = BATCH_ACK_INJECTED.incrementAndGet();
@@ -688,6 +699,14 @@ public final class GatewayPlayerBridge {
                     @SuppressWarnings({"rawtypes", "unchecked"})
                     PacketListener listener = player.connection;
                     ((Packet) packet).handle(listener);
+                    if (movementPacket) {
+                        long n = MOVEMENT_INJECTED.get();
+                        if (n <= 5 || n % 20 == 0) {
+                            LOGGER.info("[GATEWAY-MOVE] after #{} player={} pos=({}, {}, {}) chunk=({}, {})",
+                                    n, playerId, player.getX(), player.getY(), player.getZ(),
+                                    player.chunkPosition().x, player.chunkPosition().z);
+                        }
+                    }
                 } catch (Throwable t) {
                     LOGGER.error("[GATEWAY] C2S inject failed for {}", playerId, t);
                 }

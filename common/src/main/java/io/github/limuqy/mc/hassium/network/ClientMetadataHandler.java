@@ -204,11 +204,15 @@ public class ClientMetadataHandler {
         if (mc.player == null) {
             // 首登过渡窗口：同上，入队缓冲待 world 就绪重放
             PENDING_CHUNK_HASHES.add(packet);
+            DebugLogger.info(LogType.NETWORK,
+                    "[CHUNK_HASH_TRACE] buffered-before-world dimension={} entries={} payload={}",
+                    packet.dimension(), packet.entries().size(), packet.entries());
             return;
         }
 
-        DebugLogger.info(LogType.METADATA, "[RECV_HASH] Received chunk hash packet: {} entries, dimension={}",
-                packet.entries().size(), packet.dimension());
+        DebugLogger.info(LogType.NETWORK,
+                "[CHUNK_HASH_TRACE] dispatch-client dimension={} entries={} payload={}",
+                packet.dimension(), packet.entries().size(), packet.entries());
 
         // 记录收到元数据（估算大小：dimension字符串 + 每条记录约16字节）
         int estimatedSize = packet.dimension().length() + packet.entries().size() * 16 + 8;
@@ -507,6 +511,9 @@ public class ClientMetadataHandler {
         if (hits == null || hits.isEmpty()) {
             return;
         }
+        DebugLogger.info(LogType.NETWORK,
+                "[CHUNK_HASH_TRACE] emit-result dimension={} result=hit positions={} transport=empty-hit-list",
+                dimension, hits);
         sendChunkDataFrame(dimension, List.of(), ChunkDataRequestC2SPacket.RESULT_HIT);
     }
 
@@ -521,6 +528,9 @@ public class ClientMetadataHandler {
         boolean sent = false;
         try {
             request.encode(buf);
+            DebugLogger.info(LogType.NETWORK,
+                    "[CHUNK_HASH_TRACE] emit-result-frame dimension={} result={} chunks={}",
+                    dimension, result, chunks);
             Services.NETWORK_MANAGER.sendChunkDataRequest(buf);
             sent = true;
             // HIT 空柱回执只收敛 pending-confirm，不得记成全量拉取。

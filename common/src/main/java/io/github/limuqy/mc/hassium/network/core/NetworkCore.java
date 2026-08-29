@@ -79,6 +79,7 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
     // [BATCH-CLI] 诊断探针计数：vanilla 批协议 ACK 回路两端可见性（临时，闭环后移除）
     private final AtomicLong c2sBatchAckSeen = new AtomicLong();
     private final AtomicLong s2cBatchStartSeen = new AtomicLong();
+    private final AtomicLong movementC2SSeen = new AtomicLong();
     private final AtomicLong s2cBatchFinishSeen = new AtomicLong();
     private final AtomicLong loginRelayed = new AtomicLong();
     private final AtomicLong configRelayed = new AtomicLong();
@@ -1074,6 +1075,12 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
      * 计数 {@link #c2sRoutedCount()} 每次调用 +1（可验证）。
      */
     public boolean routeC2S(Packet<?> packet) {
+        boolean movementPacket = packet instanceof net.minecraft.network.protocol.game.ServerboundMovePlayerPacket;
+        long movementCount = movementPacket ? movementC2SSeen.incrementAndGet() : 0L;
+        if (movementPacket && (movementCount <= 5 || movementCount % 20 == 0)) {
+            LOGGER.info("[CLIENT-MOVE] routeC2S #{} packet={} state={} playerState={}",
+                    movementCount, packet.getClass().getSimpleName(), state.get(), clientPlayerState());
+        }
 #if MC_VER >= MC_1_21_1
         // [BATCH-C2S] 客户端捕获 vanilla 批 ACK（供给环 C2S 端可见性；节流记录）
         if (packet instanceof net.minecraft.network.protocol.game.ServerboundChunkBatchReceivedPacket batchAck) {
@@ -1144,6 +1151,10 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
         }
         if (payload != null) {
             oc.sendC2S(payload);
+            if (movementPacket && (movementCount <= 5 || movementCount % 20 == 0)) {
+                LOGGER.info("[CLIENT-MOVE] routed #{} packet={} outbound={}", movementCount,
+                        packet.getClass().getSimpleName(), oc.isOpen());
+            }
             return true;
         }
         return false;

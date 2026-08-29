@@ -1259,6 +1259,9 @@ public final class ShadowLightCompute {
             hashAbsents.incrementAndGet();
             misses.add(pos);
         }
+        DebugLogger.info(DebugLogger.LogType.NETWORK,
+                "[CHUNK_HASH_TRACE] verdict dimension={} hits={} misses={} deltas={} beRefresh={} leftovers={}",
+                dimension, hits, misses, deltaCandidates.size(), beImmediate.size(), leftover.size());
         if (!hits.isEmpty()) {
             // 契约6：hash 命中（含尚未落地、仍要本地回传）回发 RESULT_HIT 空柱回执，
             // 服务端释放 pending-confirm。HIT 帧不得带柱列表，也不能当 MISS 拉全量。
@@ -2771,6 +2774,27 @@ public final class ShadowLightCompute {
     }
 
     /**
+     * 区块卸载前取消该柱所有尚未完成的影子光照/回传工作。
+     * 正在执行的 worker 通过 inflight 条目条件移除失效；完成回调不会再发布旧结果。
+     */
+    public static void cancelChunkWork(long key) {
+        pending.remove(key);
+        generated.remove(key);
+        pendingDeltas.remove(key);
+        pendingLightUpdates.remove(key);
+        waitingForLight.remove(key);
+        inflightLight.remove(key);
+        deferredLightPush.remove(key);
+        lightUpdates.remove(key);
+        haloKeys.remove(key);
+        shadowApplyEpochs.remove(key);
+        discardLightMask(key);
+        DebugLogger.info(DebugLogger.LogType.ASYNC,
+                "[SHADOW_LIGHT] Cancelled work before unload ({}, {})",
+                DimensionKey.chunkXOf(key), DimensionKey.chunkZOf(key));
+    }
+
+    /**
      * per-chunk 超时兜底扫表（提交 5s 未完成 → 仍推首包 + 欠光标脏，补光走光照更新桥梁）：
      * 主线程帧尾 {@link #drainReady} 为主扫描点 + 消费循环轮顶第二扫描点。
      * 与完成回调竞速同一 {@link #completeLight}（条件移除 exactly-once），谁先赢谁回传；
@@ -3374,6 +3398,7 @@ public final class ShadowLightCompute {
             }
             // 卸载前释放回传队列中该柱条目（待回传不卸载；KeyedPriorityQueue.removeIf）
             releaseReadyEntries(key);
+            cancelChunkWork(key);
             if (!server.unloadChunk(dimension, pos, chunk, false)) {
                 continue; // 摘除失败：保留 pending 下扫再试
             }
