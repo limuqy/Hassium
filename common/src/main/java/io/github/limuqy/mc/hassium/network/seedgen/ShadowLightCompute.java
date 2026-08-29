@@ -396,6 +396,30 @@ public final class ShadowLightCompute {
      *  并发 runUpdate 阈值），且比旧值 300 更少触发 5s 忙等。仅由 ShadowSeedServer 的
      *  清光路径使用。 */
     private static final int ENGINE_TASK_LOW_WATER = 450;
+    /**
+     * 清光会一次性向原版 sorter 投递大量 PRE 任务；在下一柱前把队列压回低水位，
+     * 避免超过 vanilla sorter 的并发阈值后出现任务错序与空光层。
+     */
+    static void awaitEngineTaskDrain(net.minecraft.server.level.ThreadedLevelLightEngine engine) {
+        try {
+            io.github.limuqy.mc.hassium.mixin.ThreadedLevelLightEngineAccessor acc =
+                    (io.github.limuqy.mc.hassium.mixin.ThreadedLevelLightEngineAccessor) engine;
+            long deadline = System.currentTimeMillis() + CONVERGENCE_WAIT_TIMEOUT_MS;
+            while (acc.hassium$getLightTasks().size() > ENGINE_TASK_LOW_WATER
+                    && System.currentTimeMillis() < deadline) {
+                try {
+                    engine.tryScheduleUpdate();
+                } catch (Throwable ignored) {
+                    // 引擎关闭/断连竞态：由超时兜底退出。
+                }
+                LockSupport.parkNanos(200_000L);
+            }
+        } catch (Throwable ignored) {
+            // accessor 或版本差异：跳过水位控制，保留正常光照链路。
+        }
+    }
+
+
     /** 管道低水位：在途低于此值才由完成回调重新 pump（= 1 批：低水位→满水位恰好补一批，
      *  避免每完成一块就一次 executor 往返）。 */
     private static final int PIPELINE_LOW_WATER = CONSUME_BATCH_LIMIT;
@@ -927,7 +951,7 @@ public final class ShadowLightCompute {
                                     "Shadow hash cache hit ({}, {}), memory push", pos.x, pos.z);
                             // T5g：区块缓存全命中——与磁盘直推同口径；同柱只记一次。
                             accountCacheFullHit(dimension, pos);
-                            boolean lightReuse = loaded.isLightCorrect();
+                            boolean lightReuse = server.isChunkLightComplete(pos, loaded);
                             long memoryKey = DimensionKey.key(dimension, pos.x, pos.z);
                             collectHitReceipt(hits, pos);
                             if (alreadyShadowApplied(memoryKey)) {
@@ -1622,6 +1646,9 @@ public final class ShadowLightCompute {
                             accountAuthoritativeLanded(dimension, pos, TraceOrigin.SHADOW_MEMORY_CACHE);
                             generated.put(e.getKey(), new GenEntry(existing, server.level(dimension), !needRelight,
                                     false, traceOrigin(TraceOrigin.SHADOW_MEMORY_CACHE)));
+                            // 已有内存柱且 hash 未知/一致：复用现有柱，只把它送入光照阶段。
+                            // 必须跳过下面的 injectChunk；REPLACE 会清空刚由邻柱传播来的光。
+                            continue;
                         }
                     }
                     // R1 全量直推：禁 loadFromDisk。内存未命中则注入网络包。
@@ -1845,7 +1872,8 @@ public final class ShadowLightCompute {
             net.minecraft.server.level.ServerLevel level = t.level != null
                     ? t.level : server.overworld();
             inf.nativeChunk = io.github.limuqy.mc.hassium.compat.ShadowServerCompat
-                    .createNativeLightChunk(level, t.chunk);
+                    .createNativeLightChunk(level, t.chunk,
+                            lightChunkHasExistingLight(t.metric == LightMetric.REUSE_CACHE));
             io.github.limuqy.mc.hassium.compat.ShadowServerCompat
                     .initializeNativeLight(level, inf.nativeChunk)
                     .thenCompose(ignored -> io.github.limuqy.mc.hassium.compat.ShadowServerCompat
@@ -2121,6 +2149,10 @@ public final class ShadowLightCompute {
     public static void drainReady(long deadlineNs) {
         io.github.limuqy.mc.hassium.utils.ChunkFlowTiming.noteFrame(); // T0b 诊断：每帧 apply 计数
         tickChunkUnload();
+        ShadowSeedServer server = ShadowServerRegistry.getInstance().get();
+        if (server != null && server.isLightConverged()) {
+            server.confirmLightsCorrectIfConverged();
+        }
         ShadowLightProbe.onEngineTick(); // T3 探针：引擎终态周期快照（debug.lightVerify 门控）
         sweepLightTimeouts(); // per-chunk 光屏障 5s 超时兜底（主扫描点；低帧率由消费轮顶兜底）
         boolean joinBoost = ClientMainThreadBudget.isJoinBoostActive();

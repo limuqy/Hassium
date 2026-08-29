@@ -386,17 +386,23 @@ public class ShadowSeedServer extends MinecraftServer {
                         pos.x, pos.z, dimension);
                 return false;
             }
+            boolean fresh = previous == null;
             LevelChunk chunk = ShadowLightCompute.withChunkLock(pos, () ->
                     decodeInjectedPacketLocked(dimension, key, pos, role, level, packet));
             updateInjectTicket(dimension, pos, previousRole, role);
             ShadowLightProbe.onInjected(dimension, pos, chunk);
+            if (!fresh) {
+                clearChunkLight(pos, chunk);
+            }
             io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.markContentDirty(key);
             if (role != io.github.limuqy.mc.hassium.network.ShadowChunkRole.HALO) {
                 chunk.setLightCorrect(false);
             }
             ShadowCacheEviction.recordAccess(dimension, pos);
             registerInjectTicket(dimension, pos, role);
-            // 注入只提供方块数据；原版 LIGHT future 完成前保持 isLightCorrect=false。
+            if (!fresh) {
+                awaitLightTaskDrain(level);
+            }
             return true;
         } catch (Throwable t) {
             ShadowLightCompute.withChunkLock(pos, () -> restoreInjectedChunk(key, previous, previousRole));
@@ -625,9 +631,71 @@ public class ShadowSeedServer extends MinecraftServer {
         }
     }
 
-    /** 原版 LIGHT future 的唯一完成标志。 */
+    /** 原版 LIGHT future 的唯一完成标志，并校验引擎层确实已安装。 */
     public boolean isChunkLightComplete(ChunkPos pos, LevelChunk chunk) {
-        return chunk != null && chunk.isLightCorrect();
+        try {
+            if (chunk == null || !chunk.isLightCorrect()) {
+                return false;
+            }
+            return hasCompleteLightLayers(pos, chunk);
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /**
+     * 检查非空 section 的 block 光层，以及有天空光源 section 的 sky 光层。
+     * {@code isLightCorrect} 可能先于异步 light engine 层安装完成，不能单独作为
+     * R2 缓存光照复用条件。
+     */
+    boolean hasCompleteLightLayers(ChunkPos pos, LevelChunk chunk) {
+        try {
+            ServerLevel owner = chunkLevel(chunk);
+            net.minecraft.world.level.lighting.LevelLightEngine lightEngine =
+                    owner.getChunkSource().getLightEngine();
+            boolean hasSky = owner.dimensionType().hasSkyLight();
+            net.minecraft.world.level.lighting.ChunkSkyLightSources skySources =
+                    hasSky ? chunk.getSkyLightSources() : null;
+            int minSection = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMinSection(chunk);
+            int maxSection = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMaxSectionExclusive(chunk);
+            for (int y = minSection; y < maxSection; y++) {
+                SectionPos sp = SectionPos.of(pos, y);
+                net.minecraft.world.level.chunk.LevelChunkSection section =
+                        chunk.getSection(chunk.getSectionIndexFromSectionY(y));
+                if (section == null || section.hasOnlyAir()) {
+                    continue;
+                }
+                if (lightEngine.getLayerListener(LightLayer.BLOCK).getDataLayerData(sp) == null) {
+                    return false;
+                }
+                if (hasSky && lightEngine.getLayerListener(LightLayer.SKY).getDataLayerData(sp) == null
+                        && sectionAtOrAboveAnySkySource(skySources, y,
+                                io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMinBlockY(owner))) {
+                    return false;
+                }
+            }
+            return true;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    static boolean sectionAtOrAboveAnySkySource(
+            net.minecraft.world.level.lighting.ChunkSkyLightSources sources,
+            int sectionY, int minBlockY) {
+        if (sources == null) {
+            return false;
+        }
+        int sectionTop = SectionPos.sectionToBlockCoord(sectionY) + 15;
+        for (int x = 0; x < 16; x++) {
+            for (int z = 0; z < 16; z++) {
+                int src = sources.getLowestSourceY(x, z);
+                if (src >= minBlockY && src <= sectionTop) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     private static ServerLevel chunkLevel(LevelChunk chunk) {
@@ -641,8 +709,20 @@ public class ShadowSeedServer extends MinecraftServer {
         chunk.setLightCorrect(false);
         io.github.limuqy.mc.hassium.storage.ShadowStorageHashes
                 .markLightDirty(dimensionId(chunkLevel(chunk)), pos);
-        // 光照重算由 ShadowLightCompute 的原版 LIGHT future 统一调度。
+        clearChunkLight(pos, chunk);
+        awaitLightTaskDrain(chunkLevel(chunk));
     }
+    /** 清光投递后的引擎任务水位控制，避免批量 relight 越过原版 sorter 阈值。 */
+    private void awaitLightTaskDrain(ServerLevel level) {
+        try {
+            ThreadedLevelLightEngine lightEngine =
+                    (ThreadedLevelLightEngine) level.getChunkSource().getLightEngine();
+            ShadowLightCompute.awaitEngineTaskDrain(lightEngine);
+        } catch (Throwable ignored) {
+            // 引擎不可用时跳过排水，不阻塞影子端。
+        }
+    }
+
 
     /**
      * 应用服务端分段增量（SectionDeltaS2CPacket）到已注入区块。
@@ -1690,10 +1770,11 @@ public class ShadowSeedServer extends MinecraftServer {
             syncLightCorrect(chunk, false);
             return;
         }
-        if (converged) {
+        if (converged && hasCompleteLightLayers(chunk.getPos(), chunk)) {
             syncLightCorrect(chunk, true);
             return;
         }
+        // future 完成不等于所有 section DataLayer 已安装；半成品绝不能写 isLightOn。
         persistPartialLight(chunk);
     }
 
@@ -1718,6 +1799,24 @@ public class ShadowSeedServer extends MinecraftServer {
             return true;
         } catch (Throwable t) {
             return false;
+        }
+    }
+    /**
+     * 已确认引擎收敛后，把所有可见且两层光数据完整的柱标记为可安全复用。
+     * 这是异步 LIGHT future 回调之外的最终持久化收口。
+     */
+    public void confirmLightsCorrectIfConverged() {
+        for (Map.Entry<Long, LevelChunk> entry : injectedChunks.entrySet()) {
+            LevelChunk chunk = entry.getValue();
+            if (chunk == null || haloBlocksOnly.contains(entry.getKey())) {
+                continue;
+            }
+            boolean complete = hasCompleteLightLayers(chunk.getPos(), chunk);
+            if (complete && !chunk.isLightCorrect()) {
+                syncLightCorrect(chunk, true);
+            } else if (!complete && chunk.isLightCorrect()) {
+                persistPartialLight(chunk);
+            }
         }
     }
 

@@ -349,7 +349,7 @@ public final class ShadowServerCompat {
      * 光照入口需要的 ProtoChunk，不接管 ChunkMap/IOWorker 存储生命周期。
      */
     public static net.minecraft.world.level.chunk.ProtoChunk createNativeLightChunk(
-            ServerLevel level, LevelChunk source) {
+            ServerLevel level, LevelChunk source, boolean lightCorrect) {
         net.minecraft.world.level.chunk.ProtoChunk proto =
                 new net.minecraft.world.level.chunk.ProtoChunk(
                         source.getPos(),
@@ -361,10 +361,10 @@ public final class ShadowServerCompat {
                         level.registryAccess().registryOrThrow(
                                 net.minecraft.core.registries.Registries.BIOME),
                         source.getBlendingData());
-        proto.setStatus(source.isLightCorrect()
+        proto.setStatus(lightCorrect
                 ? ChunkStatus.LIGHT
                 : ChunkStatus.INITIALIZE_LIGHT);
-        proto.setLightCorrect(source.isLightCorrect());
+        proto.setLightCorrect(lightCorrect);
         return proto;
     }
 
