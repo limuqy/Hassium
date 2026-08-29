@@ -1516,7 +1516,7 @@ public class ServerChunkPushManager {
         }
     }
 
-    /** pending-confirm 超过十秒后必须收敛为全量直推。 */
+    /** pending-confirm 超过 {@link #PENDING_CONFIRM_TIMEOUT_MS} 后必须收敛为全量直推。 */
     static boolean isPendingConfirmExpired(long sentAtMs, long nowMs) {
         return nowMs - sentAtMs > PENDING_CONFIRM_TIMEOUT_MS;
     }

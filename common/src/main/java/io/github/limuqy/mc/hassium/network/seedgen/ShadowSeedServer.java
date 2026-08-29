@@ -2,6 +2,7 @@ package io.github.limuqy.mc.hassium.network.seedgen;
 
 import com.mojang.logging.LogUtils;
 import io.github.limuqy.mc.hassium.compat.BlockEntityCompat;
+import io.github.limuqy.mc.hassium.compat.ChunkDataCompat;
 import io.github.limuqy.mc.hassium.compat.EntityPacketCompat;
 import io.github.limuqy.mc.hassium.compat.LevelChunkSectionCompat;
 import io.github.limuqy.mc.hassium.compat.LevelCompat;
@@ -1035,7 +1036,7 @@ public class ShadowSeedServer extends MinecraftServer {
         BlockEntityCompat.loadFromTag(be, packet.getTag(), level.registryAccess());
         // Shadow world 的 BE setChanged 会触发邻居区块查询；影子端邻柱可能尚未装载。
         // 直接标记所属柱 dirty，避免 1.21.1 的 Should always be able to create a chunk!。
-        chunk.setUnsaved(true);
+        ChunkDataCompat.markUnsaved(chunk);
         // BE NBT 不进 chunkHash：只标脏落盘，不要丢掉方块 hash 表（否则下次比对无谓重算）。
         io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.markContentDirty(
                 dimension, new ChunkPos(DimensionKey.chunkXOf(key), DimensionKey.chunkZOf(key)));
@@ -1070,7 +1071,7 @@ public class ShadowSeedServer extends MinecraftServer {
                     copy.putInt("z", bed.pos().getZ());
                     BlockEntityCompat.loadFromTag(be, copy, this.overworld().registryAccess());
                     // 同上：只标记所属 shadow column dirty，不触发邻柱查询。
-                    chunk.setUnsaved(true);
+                    ChunkDataCompat.markUnsaved(chunk);
                 }
                 io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.markContentDirty(dimension, pos);
             });

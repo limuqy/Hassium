@@ -452,9 +452,9 @@ public final class ScenarioEngine {
         if (disconnectAtMs > 0L && now - disconnectAtMs < wait) {
             return Outcome.RUNNING;
         }
-        // 玩家仍在游戏：断开未生效（被动断连失败）。跳过重连直接进入后续等待；
-        // 若后续统计时 player 持续在场，stats 数据仍为当前连接，不影响判定。
-        if (mc.player != null) {
+        // 仅当玩家和连接仍完整存在时，才视为断连未生效并跳过重连。
+        // channelInactive 期间 player 可能尚未清空；此时必须继续重连，否则后续 join 会一直等待连接。
+        if (mc.player != null && mc.getConnection() != null && mc.level != null) {
             return Outcome.DONE;
         }
         LOGGER.info("HassiumSmokeTest: reconnecting to {}", host);

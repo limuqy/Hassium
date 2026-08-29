@@ -22,4 +22,13 @@ public final class ChunkDataCompat {
         return true;
 #endif
     }
+
+    /** 标记影子区块需要落盘；1.21.2 起 API 改为 {@code markUnsaved()}。 */
+    public static void markUnsaved(net.minecraft.world.level.chunk.LevelChunk chunk) {
+#if MC_VER < MC_1_21_2
+        chunk.setUnsaved(true);
+#else
+        chunk.markUnsaved();
+#endif
+    }
 }
