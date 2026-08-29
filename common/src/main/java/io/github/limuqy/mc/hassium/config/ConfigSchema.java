@@ -33,8 +33,6 @@ public final class ConfigSchema {
     public static final ConfigKey<Boolean> CHUNK_SECTION_DELTA_ENABLED = bool("chunk.sectionDeltaEnabled", ConfigScope.CLIENT, Domain.CHUNK_CORE, true,
             "是否启用分段增量（GatewayPacketCodec/NetworkCore/DataPlaneClientBundle 活跃消费）",
             "Enable section delta (active in gateway / network core / data plane)");
-    public static final ConfigKey<Boolean> CHUNK_JOIN_BOOST_ENABLED = bool("chunk.joinBoostEnabled", ConfigScope.CLIENT, Domain.CHUNK_CORE, true,
-            "是否启用进服加速", "Enable join boost");
     public static final ConfigKey<Boolean> CHUNK_VIEW_DISTANCE_EXTENSION_ENABLED = bool("chunk.viewDistanceExtensionEnabled", ConfigScope.CLIENT, Domain.CHUNK_CORE, true,
             "是否启用超视渲染", "Enable beyond-view rendering");
     public static final ConfigKey<Integer> CHUNK_MAX_RENDER_DISTANCE = integer("chunk.maxRenderDistance", ConfigScope.CLIENT, Domain.CHUNK_CORE, 16, 2, 64,
@@ -49,9 +47,6 @@ public final class ConfigSchema {
             "Per-tick cache-read production cap (OVD enqueue + shadow disk); consume is time-budget only");
     public static final ConfigKey<Integer> CHUNK_MAIN_THREAD_CHUNK_BUDGET_MS = integer("chunk.mainThreadChunkBudgetMs", ConfigScope.CLIENT, Domain.CHUNK_CORE, 15, 1, 50,
             "主线程 apply 预算（ms）", "Main-thread apply budget in ms");
-    public static final ConfigKey<Boolean> CHUNK_HASSIUM_ENGINE_ENABLED = bool("chunk.hassiumEngineEnabled", ConfigScope.CLIENT, Domain.CHUNK_CORE, true,
-            "是否启用 Hassium 引擎（默认 true）：进服启动引擎统一算光；失败自动降级。与 chunk.seedGenEnabled 相互独立",
-            "Enable Hassium engine (default true): owns lighting; degrades on failure. Independent of seedGenEnabled");
     public static final ConfigKey<Boolean> CHUNK_OVD_LOCAL_GENERATION = bool("chunk.ovdLocalGeneration", ConfigScope.CLIENT, Domain.CHUNK_CORE, false,
             "OVD 本地生成（默认 false）：超视 miss 时按服务端种子本地生成并缓存；需引擎可用",
             "Beyond-view local generation on cache miss (default false); requires engine");
@@ -62,14 +57,6 @@ public final class ConfigSchema {
             "是否启用 SeedGen（本地生成 pristine 区块；需双端同版本，默认关）。服务端开启时会下发世界种子",
             "Enable SeedGen (local pristine chunks; both sides same version; default off). Server enablement sends the world seed");
 
-    // === 网络核心（net.*；CLIENT 3 键）===
-    public static final ConfigKey<Boolean> NET_ENABLED = bool("net.enabled", ConfigScope.CLIENT, Domain.NETWORK_CORE, true,
-            "是否启用客户端网络核心（2.0.0 进程内网关与帧连接总开关）",
-            "Enable client network core (in-process gateway / frame channel)");
-    public static final ConfigKey<Boolean> NET_METRICS_ENABLED = bool("net.metricsEnabled", ConfigScope.CLIENT, Domain.NETWORK_CORE, false,
-            "是否启用客户端网络指标", "Enable client network metrics");
-    public static final ConfigKey<Boolean> NET_METRICS_AUTO_RESET = bool("net.metricsAutoReset", ConfigScope.CLIENT, Domain.NETWORK_CORE, true,
-            "登出服务器时自动重置指标计数", "Auto-reset metrics when leaving a server");
 
     // === 存储域（storage.*；SERVER 2 键）===
     public static final ConfigKey<Boolean> STORAGE_ENABLED = bool("storage.enabled", ConfigScope.SERVER, Domain.STORAGE, false,
@@ -193,6 +180,10 @@ public final class ConfigSchema {
             "缓存调试日志", "Cache debug logging");
     public static final ConfigKey<Boolean> CLIENT_DEBUG_LIGHT_VERIFY = bool("debug.lightVerify", ConfigScope.CLIENT, Domain.DEBUG, false,
             "光照验算与光包落地探针", "Light verification and light-packet apply probes");
+    public static final ConfigKey<Boolean> CLIENT_DEBUG_NETWORK_METRICS = bool("debug.networkMetricsEnabled", ConfigScope.CLIENT, Domain.DEBUG, false,
+            "是否启用客户端网络指标", "Enable client network metrics");
+    public static final ConfigKey<Boolean> CLIENT_DEBUG_NETWORK_METRICS_AUTO_RESET = bool("debug.networkMetricsAutoReset", ConfigScope.CLIENT, Domain.DEBUG, true,
+            "登出服务器时自动重置网络指标", "Auto-reset network metrics when leaving a server");
 
     // === 调试（debug.*；SERVER 6 键：数据面为服务端专属；不含元数据/缓存/光照验算）===
     public static final ConfigKey<Boolean> SERVER_DEBUG_DISPATCHER = bool("debug.dispatcherLogging", ConfigScope.SERVER, Domain.DEBUG, false,

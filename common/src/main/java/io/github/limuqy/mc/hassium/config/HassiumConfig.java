@@ -7,13 +7,12 @@ import java.util.Set;
 /**
  * Hassium 配置（运行时快照）。
  * <p>
- * 物理客户端从 client.toml 加载：ChunkCoreConfig + NetCoreConfig + DebugConfig。
+ * 物理客户端从 client.toml 加载：ChunkCoreConfig + DebugConfig + 客户端迁移策略。
  * 专用服从 server.toml 加载：StorageConfig + MasterCoreConfig + CompatConfig + DebugConfig。
  */
 public record HassiumConfig(
         StorageConfig storage,
         ChunkCoreConfig chunk,
-        NetCoreConfig net,
         MasterCoreConfig master,
         CompatConfig compat,
         DebugConfig debug
@@ -21,17 +20,13 @@ public record HassiumConfig(
     public static final HassiumConfig DEFAULT = new HassiumConfig(
             StorageConfig.DEFAULT,
             ChunkCoreConfig.DEFAULT,
-            NetCoreConfig.DEFAULT,
             MasterCoreConfig.DEFAULT,
             CompatConfig.DEFAULT,
             DebugConfig.DEFAULT
     );
-    public HassiumConfig withNet(NetCoreConfig net) {
-        return new HassiumConfig(storage, chunk, net, master, compat, debug);
-    }
 
     public HassiumConfig withDebug(DebugConfig debug) {
-        return new HassiumConfig(storage, chunk, net, master, compat, debug);
+        return new HassiumConfig(storage, chunk, master, compat, debug);
     }
 
     /**
@@ -66,8 +61,6 @@ public record HassiumConfig(
             int minCleanupBatchSize,
             // === 分段增量（GatewayPacketCodec/NetworkCore/DataPlaneClientBundle 活跃消费）===
             boolean sectionDeltaEnabled,
-            // === JoinBoost ===
-            boolean joinBoostEnabled,
             // === 超视渲染 ===
             boolean viewDistanceExtensionEnabled,
             int maxRenderDistance,
@@ -79,8 +72,6 @@ public record HassiumConfig(
             int mainThreadChunkBudgetMs,
             // === SeedGen 本地生成线程数（Phase 2；0=禁用本地生成）===
             int seedGenThreads,
-            // === 影子端（非网络向功能总开关；默认 true）===
-            boolean hassiumEngineEnabled,
             // === OVD 本地生成（默认 false；miss 时影子端按世界种子本地生成 + 存缓存）===
             boolean ovdLocalGeneration,
             // === SeedGen 总开关（双端同名键；物理端各自加载）===
@@ -99,18 +90,16 @@ public record HassiumConfig(
                 0,       // targetSizeMb (auto)
                 100,     // minCleanupBatchSize
                 true,    // sectionDeltaEnabled
-                true,    // joinBoostEnabled
                 true,    // viewDistanceExtensionEnabled
                 16,      // maxRenderDistance
                 5,       // ovdUnloadDelaySecs
-                30,      // unloadDelaySecs（影子端内存区块回收延迟；0=禁用回收）
+                30,      // unloadDelaySecs
                 6,       // maxChunksPerFrame
                 15,      // mainThreadChunkBudgetMs
-                2,       // seedGenThreads（本地生成线程数；0=禁用）
-                true,    // hassiumEngineEnabled（默认 true：进服启动影子端承担光照计算；失败降级关闭缓存/OVD/SeedGen）
-                false,   // ovdLocalGeneration（默认 false：OVD miss 时影子端本地生成 + 存缓存）
-                false,   // seedGenEnabled（默认关；需双端同版本）
-                true     // lightStrip（仅服务端消费；物理客户端默认值不参与加载）
+                2,       // seedGenThreads
+                false,   // ovdLocalGeneration
+                false,   // seedGenEnabled
+                true     // lightStrip（仅服务端消费）
         );
 
         public long maxCacheSizeBytes() {
@@ -126,16 +115,6 @@ public record HassiumConfig(
         }
     }
 
-    /**
-     * 网络核心配置（仅物理客户端；client.toml net.*）。
-     */
-    public record NetCoreConfig(
-            boolean enabled,
-            boolean metricsEnabled,
-            boolean metricsAutoReset
-    ) {
-        public static final NetCoreConfig DEFAULT = new NetCoreConfig(true, false, true);
-    }
 
     /**
      * 客户端可达地址。bind 地址绝不使用本类型，避免 wildcard 被下发给客户端。
@@ -345,10 +324,12 @@ public record HassiumConfig(
             boolean networkLogging,
             boolean cacheLogging,
             boolean dataplaneLogging,
-            boolean lightVerify
+            boolean lightVerify,
+            boolean networkMetricsEnabled,
+            boolean networkMetricsAutoReset
     ) {
         public static final DebugConfig DEFAULT = new DebugConfig(
-                false, false, false, false, false, false, false, false, false
+                false, false, false, false, false, false, false, false, false, false, true
         );
     }
 }

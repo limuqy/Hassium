@@ -43,6 +43,7 @@ public class MixinClientPacketListener {
         ClientLifecycleHelper.onLogin();
     }
 
+
     // ===== 实体数据转发（T3）：HEAD 注入 7 类官方实体包 handler，不 cancel、不解析、纯转发 =====
 #if MC_VER < MC_1_21_1
     /**

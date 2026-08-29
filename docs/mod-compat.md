@@ -64,7 +64,7 @@ Hassium 主要改动：
 
 Sodium / Iris / Lithium / FerriteCore / EntityCulling / ImmediatelyFast 等通常不抢 Region 压缩类型与区块广播接管。
 
-常见摩擦：默认 `chunk.hassiumEngineEnabled = true`（进服启动影子端统一算光，客户端不再本地算光）。出现光照异常时关闭即可（关闭后服务端不剥光，光照随包自带）。
+常见摩擦：默认 `chunk.hassiumEngineEnabled = true`（进服启动影子端统一算光并回传类原版光照包，客户端光照计算仍保持 vanilla 默认开启）。出现光照异常时关闭即可（关闭后服务端不剥光，光照随包自带）。
 
 ## 7. C2ME
 

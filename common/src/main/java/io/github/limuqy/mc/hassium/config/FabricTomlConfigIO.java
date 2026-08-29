@@ -231,12 +231,11 @@ public final class FabricTomlConfigIO {
         } catch (java.io.IOException e) {
             throw new IllegalStateException("无法创建临时客户端配置目录", e);
         }
-        writeClient(configRoot.resolve(Constants.CONFIG_CLIENT_FILE), config.chunk(), config.net(), config.master(), config.debug());
+        writeClient(configRoot.resolve(Constants.CONFIG_CLIENT_FILE), config.chunk(), config.master(), config.debug());
     }
 
     private static HassiumConfig loadClientFile(Path client) throws java.io.IOException {
         HassiumConfig.ChunkCoreConfig chunk = HassiumConfig.ChunkCoreConfig.DEFAULT;
-        HassiumConfig.NetCoreConfig net = HassiumConfig.NetCoreConfig.DEFAULT;
         HassiumConfig.MasterCoreConfig master = HassiumConfig.MasterCoreConfig.DEFAULT;
         HassiumConfig.DebugConfig debug = HassiumConfig.DebugConfig.DEFAULT;
 
@@ -246,20 +245,18 @@ public final class FabricTomlConfigIO {
             try (CommentedFileConfig cfg = open(client)) {
                 cfg.load();
                 chunk = readChunkCore(cfg);
-                net = readNetCore(cfg);
                 master = readClientMigrationPolicy(cfg, master);
                 debug = readDebug(cfg);
             } catch (Exception e) {
                 LOGGER.warn("Hassium: 读取 {} 失败，使用默认客户端配置", client, e);
             }
         } else {
-            writeClient(client, chunk, net, master, debug);
+            writeClient(client, chunk, master, debug);
         }
 
         return new HassiumConfig(
                 HassiumConfig.StorageConfig.DEFAULT,
                 chunk,
-                net,
                 master,
                 HassiumConfig.CompatConfig.DEFAULT,
                 debug
@@ -305,13 +302,8 @@ public final class FabricTomlConfigIO {
         } else {
             writeServer(server, storage, chunk, master, compat, debug);
         }
-        return new HassiumConfig(storage, chunk,
-                HassiumConfig.NetCoreConfig.DEFAULT, master, compat, debug);
+        return new HassiumConfig(storage, chunk, master, compat, debug);
     }
-
-    /**
-     * 按物理端保存：物理客户端写 client.toml；专用服写 server.toml。
-     */
     public static void save(HassiumConfig config) {
         try {
             boolean physicalClient = Services.PLATFORM.isPhysicalClient();
@@ -319,11 +311,10 @@ public final class FabricTomlConfigIO {
                     physicalClient ? clientPath().getParent() : serverPath().getParent()
             );
             if (physicalClient) {
-                writeClient(clientPath(), config.chunk(), config.net(), config.master(), config.debug());
+                writeClient(clientPath(), config.chunk(), config.master(), config.debug());
             } else {
                 writeServer(serverPath(), config.storage(), config.chunk(), config.master(), config.compat(), config.debug());
             }
-            LOGGER.info("Hassium: Toml 配置已保存");
         } catch (Exception e) {
             LOGGER.error("Hassium: Toml 配置保存失败", e);
         }
@@ -347,20 +338,16 @@ public final class FabricTomlConfigIO {
     private static void writeClient(
             Path path,
             HassiumConfig.ChunkCoreConfig chunk,
-            HassiumConfig.NetCoreConfig net,
             HassiumConfig.MasterCoreConfig master,
             HassiumConfig.DebugConfig debug
     ) {
         try (CommentedFileConfig cfg = open(path)) {
             writeChunkCore(cfg, chunk);
-            writeNetCore(cfg, net);
             writeClientMigrationPolicy(cfg, master);
             writeClientDebug(cfg, debug);
             cfg.save();
         }
     }
-
-    /** 客户端 toml 的 master 迁移策略键（CLIENT scope；缺省回退传入默认）。端点/鉴权由 gateway_info 下发，不读写。 */
     private static HassiumConfig.MasterCoreConfig readClientMigrationPolicy(
             CommentedConfig cfg, HassiumConfig.MasterCoreConfig d
     ) {
@@ -424,7 +411,6 @@ public final class FabricTomlConfigIO {
                 getInt(cfg, "chunk.targetSizeMb", d.targetSizeMb()),
                 getInt(cfg, "chunk.minCleanupBatchSize", d.minCleanupBatchSize()),
                 getBool(cfg, "chunk.sectionDeltaEnabled", d.sectionDeltaEnabled()),
-                getBool(cfg, "chunk.joinBoostEnabled", d.joinBoostEnabled()),
                 getBool(cfg, "chunk.viewDistanceExtensionEnabled", d.viewDistanceExtensionEnabled()),
                 getInt(cfg, "chunk.maxRenderDistance", d.maxRenderDistance()),
                 getInt(cfg, "chunk.ovdUnloadDelaySecs", d.ovdUnloadDelaySecs()),
@@ -432,7 +418,6 @@ public final class FabricTomlConfigIO {
                 getInt(cfg, "chunk.maxChunksPerFrame", d.maxChunksPerFrame()),
                 getInt(cfg, "chunk.mainThreadChunkBudgetMs", d.mainThreadChunkBudgetMs()),
                 getInt(cfg, "chunk.seedGenThreads", d.seedGenThreads()),
-                getBool(cfg, "chunk.hassiumEngineEnabled", d.hassiumEngineEnabled()),
                 getBool(cfg, "chunk.ovdLocalGeneration", d.ovdLocalGeneration()),
                 getBool(cfg, "chunk.seedGenEnabled", d.seedGenEnabled()),
                 getBool(cfg, "chunk.lightStrip", d.lightStrip())
@@ -441,51 +426,27 @@ public final class FabricTomlConfigIO {
 
     private static void writeChunkCore(CommentedConfig cfg, HassiumConfig.ChunkCoreConfig c) {
         set(cfg, "chunk.enabled", c.enabled(), "是否启用区块核心缓存");
-        set(cfg, "chunk.maxSizeMb", c.maxSizeMb(), "缓存最大容量（MB；影子端存档容量上限，超限触发热度淘汰）");
+        set(cfg, "chunk.maxSizeMb", c.maxSizeMb(), "缓存最大容量");
         set(cfg, "chunk.compressionLevel", c.compressionLevel(), "缓存压缩等级");
         set(cfg, "chunk.hotScoreThreshold", c.hotScoreThreshold(), "热点分数阈值");
         set(cfg, "chunk.recencyWeight", c.recencyWeight(), "最近访问权重");
         set(cfg, "chunk.frequencyWeight", c.frequencyWeight(), "访问频率权重");
-        set(cfg, "chunk.cleanupIntervalTicks", c.cleanupIntervalTicks(), "清理检查间隔（刻）");
-        set(cfg, "chunk.targetSizeMb", c.targetSizeMb(), "目标缓存大小（MB；0=自动）");
-        set(cfg, "chunk.minCleanupBatchSize", c.minCleanupBatchSize(), "每轮最多淘汰的 region 文件数");
-        set(cfg, "chunk.sectionDeltaEnabled", c.sectionDeltaEnabled(),
-                "分段增量（GatewayPacketCodec/NetworkCore/DataPlaneClientBundle 活跃消费；默认 true）");
-        set(cfg, "chunk.joinBoostEnabled", c.joinBoostEnabled(),
-                "进服后短时提高主线程预算加速加载（默认 true）");
-        set(cfg, "chunk.viewDistanceExtensionEnabled", c.viewDistanceExtensionEnabled(),
-                "是否启用超视渲染（客户端 RD > 服务端视距时本地缓存回填环带）");
-        set(cfg, "chunk.maxRenderDistance", c.maxRenderDistance(), "超视渲染 / 有效 RD 上限（Fog/内存约束）");
-        set(cfg, "chunk.ovdUnloadDelaySecs", c.ovdUnloadDelaySecs(), "离开超视渲染环带后延迟卸载秒数");
-        set(cfg, "chunk.unloadDelaySecs", c.unloadDelaySecs(), "影子端内存区块回收延迟秒数（离开卸载边界后计时，超时落盘并清内存；0=禁用回收）");
-        set(cfg, "chunk.maxChunksPerFrame", c.maxChunksPerFrame(), "每 tick 缓存读取生产上限（OVD 入队 + 影子读盘；主线程消费只受时间预算）");
-        set(cfg, "chunk.mainThreadChunkBudgetMs", c.mainThreadChunkBudgetMs(), "主线程 apply 预算（ms）");
-        set(cfg, "chunk.hassiumEngineEnabled", c.hassiumEngineEnabled(),
-                "是否启用Hassium 引擎（默认 true）：进服启动Hassium 引擎服务端统一承担区块光照计算，客户端不再计算。启动失败自动降级：客户端缓存/超视渲染/SeedGen/Hassium 引擎光照关闭并游戏内提示；false=不启动Hassium 引擎（此时服务端不剥光，光照随包自带）");
-        set(cfg, "chunk.ovdLocalGeneration", c.ovdLocalGeneration(),
-                "OVD 本地生成（默认 false）：超视渲染区域缓存 miss 时用Hassium 引擎按服务端世界种子本地生成区块并存入本地缓存；无种子（服务端未装 MOD）时自动关闭生成");
-        set(cfg, "chunk.seedGenThreads", c.seedGenThreads(),
-                "SeedGen 本地生成线程数（固定平台线程池；0=禁用本地生成，SeedRef 一律回退全量）");
-        set(cfg, "chunk.seedGenEnabled", c.seedGenEnabled(),
-                "是否启用 SeedGen（本地生成 pristine 区块；需双端同版本，默认关）");
+        set(cfg, "chunk.cleanupIntervalTicks", c.cleanupIntervalTicks(), "清理检查间隔");
+        set(cfg, "chunk.targetSizeMb", c.targetSizeMb(), "目标缓存大小");
+        set(cfg, "chunk.minCleanupBatchSize", c.minCleanupBatchSize(), "每轮淘汰 region 文件数");
+        set(cfg, "chunk.sectionDeltaEnabled", c.sectionDeltaEnabled(), "启用分段增量");
+        set(cfg, "chunk.viewDistanceExtensionEnabled", c.viewDistanceExtensionEnabled(), "启用超视距渲染");
+        set(cfg, "chunk.maxRenderDistance", c.maxRenderDistance(), "超视距渲染最大距离");
+        set(cfg, "chunk.ovdUnloadDelaySecs", c.ovdUnloadDelaySecs(), "超视区块卸载延迟秒数");
+        set(cfg, "chunk.unloadDelaySecs", c.unloadDelaySecs(), "影子端区块卸载延迟秒数");
+        set(cfg, "chunk.maxChunksPerFrame", c.maxChunksPerFrame(), "每帧最大区块数");
+        set(cfg, "chunk.mainThreadChunkBudgetMs", c.mainThreadChunkBudgetMs(), "主线程区块预算");
+        set(cfg, "chunk.seedGenThreads", c.seedGenThreads(), "SeedGen 线程数");
+        set(cfg, "chunk.ovdLocalGeneration", c.ovdLocalGeneration(), "启用 OVD 本地生成");
+        set(cfg, "chunk.seedGenEnabled", c.seedGenEnabled(), "启用 SeedGen");
+        set(cfg, "chunk.lightStrip", c.lightStrip(), "启用服务端光照剥离");
     }
 
-    private static HassiumConfig.NetCoreConfig readNetCore(CommentedConfig cfg) {
-        var d = HassiumConfig.NetCoreConfig.DEFAULT;
-        return new HassiumConfig.NetCoreConfig(
-                getBool(cfg, "net.enabled", d.enabled()),
-                getBool(cfg, "net.metricsEnabled", d.metricsEnabled()),
-                getBool(cfg, "net.metricsAutoReset", d.metricsAutoReset())
-        );
-    }
-
-    private static void writeNetCore(CommentedConfig cfg, HassiumConfig.NetCoreConfig n) {
-        set(cfg, "net.enabled", n.enabled(), "是否启用客户端网络核心（2.0.0 进程内网关与帧连接总开关）");
-        set(cfg, "net.metricsEnabled", n.metricsEnabled(), "是否启用指标收集");
-        set(cfg, "net.metricsAutoReset", n.metricsAutoReset(), "登出服务器时自动重置指标计数（默认 true）");
-    }
-
-    // --- SERVER ---
 
     private static HassiumConfig.StorageConfig readStorage(CommentedConfig cfg) {
         var d = HassiumConfig.StorageConfig.DEFAULT;
@@ -596,7 +557,9 @@ public final class FabricTomlConfigIO {
                 getBool(cfg, "debug.networkLogging", d.networkLogging()),
                 getBool(cfg, "debug.cacheLogging", d.cacheLogging()),
                 getBool(cfg, "debug.dataplaneLogging", d.dataplaneLogging()),
-                getBool(cfg, "debug.lightVerify", d.lightVerify())
+                getBool(cfg, "debug.lightVerify", d.lightVerify()),
+                getBool(cfg, "debug.networkMetricsEnabled", d.networkMetricsEnabled()),
+                getBool(cfg, "debug.networkMetricsAutoReset", d.networkMetricsAutoReset())
         );
     }
 
@@ -609,6 +572,8 @@ public final class FabricTomlConfigIO {
         set(cfg, "debug.networkLogging", d.networkLogging(), "网络调试日志");
         set(cfg, "debug.cacheLogging", d.cacheLogging(), "缓存调试日志");
         set(cfg, "debug.lightVerify", d.lightVerify(), "光照验算与光包落地探针（CHUNK_PROBE source=light）");
+        set(cfg, "debug.networkMetricsEnabled", d.networkMetricsEnabled(), "客户端网络指标");
+        set(cfg, "debug.networkMetricsAutoReset", d.networkMetricsAutoReset(), "退出服务器时自动复位网络指标");
     }
 
     private static void writeServerDebug(CommentedConfig cfg, HassiumConfig.DebugConfig d) {

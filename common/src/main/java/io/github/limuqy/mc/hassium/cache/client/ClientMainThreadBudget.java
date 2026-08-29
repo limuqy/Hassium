@@ -49,8 +49,7 @@ public final class ClientMainThreadBudget {
     /**
      * 进服时启动 JoinBoost 窗口。
      * <p>
-     * 若配置 {@code chunk.joinBoostEnabled=false} 则不启动（预算始终为 normalBudgetMs，
-     * OVD_LOAD_THRESHOLD 限流始终生效）。
+     * 客户端区块核心关闭时不启动（预算始终为 normalBudgetMs，OVD_LOAD_THRESHOLD 限流始终生效）。
      */
     public static void startJoinBoost() {
         if (!HassiumConfigService.getInstance().isJoinBoostEnabled()) {

@@ -27,7 +27,7 @@ class ConfigCommentsTest {
         try (com.electronwill.nightconfig.core.file.CommentedFileConfig cfg =
                      com.electronwill.nightconfig.core.file.CommentedFileConfig.builder(file).sync().build()) {
             for (ConfigEntry<?> entry : ConfigSchema.clientEntries()) {
-                if (entry.path().equals("net.enabled")) {
+                if (entry.path().equals("debug.networkMetricsEnabled")) {
                     cfg.setComment(entry.path(), entry.comment());
                     cfg.set(entry.path(), entry.defaultValue());
                 }
@@ -35,9 +35,9 @@ class ConfigCommentsTest {
             cfg.save();
         }
         String text = Files.readString(file);
-        assertTrue(text.contains("是否启用客户端网络核心"), text);
-        assertTrue(text.contains("Enable client network core"), text);
-        assertTrue(text.indexOf("是否启用客户端网络核心") < text.indexOf("Enable client network core"), text);
+        assertTrue(text.contains("是否启用客户端网络指标"), text);
+        assertTrue(text.contains("Enable client network metrics"), text);
+        assertTrue(text.indexOf("是否启用客户端网络指标") < text.indexOf("Enable client network metrics"), text);
     }
 
     @Test

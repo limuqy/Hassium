@@ -46,15 +46,6 @@ class ShadowLightComputeTimingRegressionTest {
         assertFalse(ShadowLightCompute.lightChunkHasExistingLight(false));
     }
 
-    @Test
-    @DisplayName("欠光暂缓覆盖只针对已落地影子全量包；加载屏占位柱仍推首包")
-    void defersIncompleteOverwriteWhenClientAlreadyHasChunk() {
-        assertTrue(ShadowLightCompute.shouldDeferIncompleteClientOverwrite(true, false));
-        assertFalse(ShadowLightCompute.shouldDeferIncompleteClientOverwrite(false, false),
-                "尚未影子落地（含加载屏占位）：欠光首包仍可推，避免着火区 R1 空洞");
-        assertFalse(ShadowLightCompute.shouldDeferIncompleteClientOverwrite(true, true));
-        assertFalse(ShadowLightCompute.shouldDeferIncompleteClientOverwrite(false, true));
-    }
 
     @Test
     @DisplayName("磁盘命中续算：只看 isLightCorrect（NBT isLightOn），不另管脏表")
@@ -70,43 +61,7 @@ class ShadowLightComputeTimingRegressionTest {
         assertTrue(ShadowLightCompute.diskHitNeedRelight(false, false));
     }
 
-    @Test
-    @DisplayName("可见柱回传亮光即落盘；Halo / 欠光包不写 isLightOn")
-    void persistsPublishedVisibleLightWithoutSurroundedGate() {
-        assertTrue(ShadowLightCompute.shouldPersistPublishedLight(false, true),
-                "R1 已回传的屋檐光必须进 type 126");
-        assertFalse(ShadowLightCompute.shouldPersistPublishedLight(true, true),
-                "Halo 只提供边界，剥光落盘");
-        assertFalse(ShadowLightCompute.shouldPersistPublishedLight(false, false),
-                "欠光/超时首包不得把空层写成 isLightOn");
-        assertTrue(ShadowLightCompute.shouldEnqueuePartialLightSnapshot(false, true, false),
-                "真引擎已推欠光首包：半成品 DataLayer 入队");
-        assertFalse(ShadowLightCompute.shouldEnqueuePartialLightSnapshot(true, true, false),
-                "Halo 不走阶段 2");
-        assertFalse(ShadowLightCompute.shouldEnqueuePartialLightSnapshot(false, false, false),
-                "未推客户端不得入队半成品光");
-        assertFalse(ShadowLightCompute.shouldEnqueuePartialLightSnapshot(false, true, true),
-                "已收敛走 isLightOn，不走阶段 2");
-        assertTrue(ShadowLightCompute.shouldRestoreLightCorrectOnExit(false, false, true),
-                "退出时层已齐的可见柱补 isLightCorrect，不看 SURROUNDED");
-        assertFalse(ShadowLightCompute.shouldRestoreLightCorrectOnExit(true, false, true));
-        assertFalse(ShadowLightCompute.shouldRestoreLightCorrectOnExit(false, true, true));
-        assertFalse(ShadowLightCompute.shouldRestoreLightCorrectOnExit(false, false, false));
-    }
 
-    @Test
-    @DisplayName("光桥打包：须已有影子区块包，且跳过屏障/欠光暂缓/等待 LIGHT")
-    void lightMaskBudgetSkipsInflightAndDeferred() {
-        assertTrue(ShadowLightCompute.canDrainLightMaskThisFrame(false, false, true, false));
-        assertFalse(ShadowLightCompute.canDrainLightMaskThisFrame(false, false, false, false),
-                "加载屏 blocks-only 柱不得套光包");
-        assertFalse(ShadowLightCompute.canDrainLightMaskThisFrame(true, false, true, false),
-                "屏障中的柱不得占光桥预算");
-        assertFalse(ShadowLightCompute.canDrainLightMaskThisFrame(false, true, true, false),
-                "欠光暂缓覆盖的柱不得占光桥预算");
-        assertFalse(ShadowLightCompute.canDrainLightMaskThisFrame(false, false, true, true),
-                "尚未 lightChunk（等邻柱 INITIALIZE_LIGHT）不得快照");
-    }
 
     @Test
     @DisplayName("JoinBoost：有 chunk 在等时本帧不落地光包")
@@ -153,40 +108,6 @@ class ShadowLightComputeTimingRegressionTest {
         assertTrue(first < second, "入队序号必须单调递增，drainReady 按到达顺序 apply");
     }
 
-    @Test
-    @DisplayName("LIGHT：全量重算等 8 邻建层才 lightChunk，光桥/增量不等邻")
-    void waitsForVanillaLightNeighborsBeforeLightChunk() {
-        assertTrue(ShadowLightCompute.needsVanillaLightNeighborWait(true),
-                "全量重算必须等 8 邻 initializeLight：先算柱播种要推进后算柱已建的层");
-        assertFalse(ShadowLightCompute.needsVanillaLightNeighborWait(false),
-                "光桥/增量/磁盘复用不等邻柱");
-        assertFalse(ShadowLightCompute.canStartVanillaLightStage(4, 8, false),
-                "未齐 8 邻不得进 lightChunk（屋檐跨边界传播依赖邻柱建层）");
-        assertTrue(ShadowLightCompute.canStartVanillaLightStage(8, 8, false),
-                "8 邻都已 initializeLight：进入 LIGHT");
-        assertTrue(ShadowLightCompute.canStartVanillaLightStage(0, 0, false),
-                "地图边缘没有邻柱：与 ChunkMap 邻柱不存在相同，立即 LIGHT");
-        assertTrue(ShadowLightCompute.canStartVanillaLightStage(4, 8, true),
-                "超时按视距边缘处理");
-    }
-
-    @Test
-    @DisplayName("邻柱就绪谓词：holder INITIALIZE_LIGHT parent / 无 holder / 超时当边缘")
-    void neighborReadyUsesHolderInitializeLightParent() {
-        assertTrue(ShadowLightCompute.isVanillaLightNeighborReady(true, false),
-                "holder 已有 INITIALIZE_LIGHT parent → 可 lightChunk");
-        assertTrue(ShadowLightCompute.isVanillaLightNeighborReady(false, true),
-                "本端 initializeLight 已完成（票尚未消化）→ 可 lightChunk");
-        assertFalse(ShadowLightCompute.isVanillaLightNeighborReady(false, false),
-                "无 holder 且未 initializeLight");
-        assertTrue(ShadowLightCompute.isVanillaLightNeighborExpected(true, false, false));
-        assertTrue(ShadowLightCompute.isVanillaLightNeighborExpected(false, true, false));
-        assertTrue(ShadowLightCompute.isVanillaLightNeighborExpected(false, false, true),
-                "视距内回退：票尚未落地");
-        assertFalse(ShadowLightCompute.isVanillaLightNeighborExpected(false, false, false));
-        assertTrue(ShadowLightCompute.canStartVanillaLightStage(0, 1, true),
-                "超时当边缘：不等缺失 holder");
-    }
 
     @Test
     @DisplayName("scheduleChunkLoad 短路：仅注入表；未命中禁止原版读 126")
@@ -266,19 +187,6 @@ class ShadowLightComputeTimingRegressionTest {
         assertTrue(keys.isEmpty());
     }
 
-    @Test
-    @DisplayName("空 sky 层：源之上仍打包，源之下省略——仅未收敛光包路径仍用该谓词")
-    void omitsEmptySkyBelowSourcesFromPacket() {
-        assertTrue(ShadowLightCompute.shouldIncludeSkySectionInPacket(true, false, true),
-                "非空层必须进包（(-13,3) sectionY=5 柱心已是 15）");
-        assertTrue(ShadowLightCompute.shouldIncludeSkySectionInPacket(true, false, false));
-        assertTrue(ShadowLightCompute.shouldIncludeSkySectionInPacket(true, true, true),
-                "源之上空层仍要 empty 掩码，否则客户端按缺层向上继承成 15");
-        assertFalse(ShadowLightCompute.shouldIncludeSkySectionInPacket(true, true, false),
-                "源之下空层不得 emptySkyYMask（仅未收敛光包）");
-        assertFalse(ShadowLightCompute.shouldIncludeSkySectionInPacket(false, false, true));
-        assertFalse(ShadowLightCompute.shouldIncludeSkySectionInPacket(false, true, false));
-    }
 
     @Test
     @DisplayName("客户端已落地影子全量包时 hash 命中不得整柱重推")
@@ -493,38 +401,6 @@ class ShadowLightComputeTimingRegressionTest {
         assertFalse(ShadowLightCompute.isSupersededByNewerWork(false, false, false));
     }
 
-    @Test
-    @DisplayName("首包：本柱 lightChunk 成功即可发布，邻柱林火不得挡住")
-    void firstPacketPublishesWhenOwnLightChunkOk() {
-        assertTrue(ShadowLightCompute.firstPacketLightReady(true, false, false),
-                "邻柱 LIGHT_ONLY 在途时仍发首包");
-        assertFalse(ShadowLightCompute.firstPacketLightReady(false, true, false),
-                "本柱 lightChunk 失败不得发完备首包");
-        assertTrue(ShadowLightCompute.firstPacketLightReady(true, true, false));
-        assertFalse(ShadowLightCompute.firstPacketLightReady(true, false, true),
-                "LIGHT_ONLY 仍要邻域 idle");
-        assertTrue(ShadowLightCompute.firstPacketLightReady(true, true, true));
-    }
-
-    @Test
-    @DisplayName("有未发布首包 waiter 时林火不得占满光管道")
-    void lightOnlyYieldsToWaitingFirstPackets() {
-        assertFalse(ShadowLightCompute.canStartLightOnlyWhileFirstPacketsWait(true));
-        assertTrue(ShadowLightCompute.canStartLightOnlyWhileFirstPacketsWait(false));
-    }
-
-    @Test
-    @DisplayName("隔离预览：lightChunk 已提交仍推；仅影子已落地或屏障结束才丢")
-    void isolatedPreviewStillPushesWhileLightChunkInFlight() {
-        assertTrue(ShadowLightCompute.shouldPushIsolatedPreview(false, false, true),
-                "屏障仍在（含已提交 lightChunk）且未影子落地：推预览填空洞");
-        assertFalse(ShadowLightCompute.shouldPushIsolatedPreview(true, false, true),
-                "已落地影子全量包：丢预览，防盖暗");
-        assertFalse(ShadowLightCompute.shouldPushIsolatedPreview(false, true, true),
-                "已被整柱重推作废");
-        assertFalse(ShadowLightCompute.shouldPushIsolatedPreview(false, false, false),
-                "屏障已结束：等收敛包");
-    }
 
     @Test
     @DisplayName("整柱屏障在途时不启动 LightDelta，等首包完成触发")

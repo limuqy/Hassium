@@ -7,10 +7,10 @@ import java.util.List;
 public final class ConfigSnapshotAdapter {
     private ConfigSnapshotAdapter() {
     }
-
     public static ConfigValues toValues(HassiumConfig config) {
         ConfigValues values = ConfigValues.defaults(ConfigSchema.entries());
         HassiumConfig.ChunkCoreConfig chunk = config.chunk();
+        HassiumConfig.MasterCoreConfig master = config.master();
         values = values.with(ConfigSchema.CHUNK_ENABLED, chunk.enabled())
                 .with(ConfigSchema.CHUNK_MAX_SIZE_MB, chunk.maxSizeMb())
                 .with(ConfigSchema.CHUNK_COMPRESSION_LEVEL, chunk.compressionLevel())
@@ -20,25 +20,17 @@ public final class ConfigSnapshotAdapter {
                 .with(ConfigSchema.CHUNK_CLEANUP_INTERVAL_TICKS, chunk.cleanupIntervalTicks())
                 .with(ConfigSchema.CHUNK_TARGET_SIZE_MB, chunk.targetSizeMb())
                 .with(ConfigSchema.CHUNK_MIN_CLEANUP_BATCH_SIZE, chunk.minCleanupBatchSize())
+                .with(ConfigSchema.CHUNK_SECTION_DELTA_ENABLED, chunk.sectionDeltaEnabled())
                 .with(ConfigSchema.CHUNK_VIEW_DISTANCE_EXTENSION_ENABLED, chunk.viewDistanceExtensionEnabled())
                 .with(ConfigSchema.CHUNK_MAX_RENDER_DISTANCE, chunk.maxRenderDistance())
                 .with(ConfigSchema.CHUNK_OVD_UNLOAD_DELAY_SECS, chunk.ovdUnloadDelaySecs())
-                .with(ConfigSchema.CHUNK_SECTION_DELTA_ENABLED, chunk.sectionDeltaEnabled())
-                .with(ConfigSchema.CHUNK_JOIN_BOOST_ENABLED, chunk.joinBoostEnabled())
                 .with(ConfigSchema.CHUNK_UNLOAD_DELAY_SECS, chunk.unloadDelaySecs())
                 .with(ConfigSchema.CHUNK_MAX_CHUNKS_PER_FRAME, chunk.maxChunksPerFrame())
                 .with(ConfigSchema.CHUNK_MAIN_THREAD_CHUNK_BUDGET_MS, chunk.mainThreadChunkBudgetMs())
                 .with(ConfigSchema.CHUNK_SEED_GEN_THREADS, chunk.seedGenThreads())
-                .with(ConfigSchema.CHUNK_HASSIUM_ENGINE_ENABLED, chunk.hassiumEngineEnabled())
                 .with(ConfigSchema.CHUNK_OVD_LOCAL_GENERATION, chunk.ovdLocalGeneration())
                 .with(ConfigSchema.CLIENT_CHUNK_SEED_GEN_ENABLED, chunk.seedGenEnabled())
                 .with(ConfigSchema.CHUNK_LIGHT_STRIP, chunk.lightStrip());
-
-        HassiumConfig.NetCoreConfig net = config.net();
-        values = values.with(ConfigSchema.NET_ENABLED, net.enabled())
-                .with(ConfigSchema.NET_METRICS_ENABLED, net.metricsEnabled())
-                .with(ConfigSchema.NET_METRICS_AUTO_RESET, net.metricsAutoReset());
-
         HassiumConfig.DebugConfig debug = config.debug();
         values = values.with(ConfigSchema.CLIENT_DEBUG_METADATA, debug.metadataLogging())
                 .with(ConfigSchema.CLIENT_DEBUG_DISPATCHER, debug.dispatcherLogging())
@@ -47,8 +39,15 @@ public final class ConfigSnapshotAdapter {
                 .with(ConfigSchema.CLIENT_DEBUG_CHUNK_APPLY, debug.chunkApplyLogging())
                 .with(ConfigSchema.CLIENT_DEBUG_NETWORK, debug.networkLogging())
                 .with(ConfigSchema.CLIENT_DEBUG_CACHE, debug.cacheLogging())
-                .with(ConfigSchema.CLIENT_DEBUG_LIGHT_VERIFY, debug.lightVerify());
-        HassiumConfig.MasterCoreConfig master = config.master();
+                .with(ConfigSchema.CLIENT_DEBUG_LIGHT_VERIFY, debug.lightVerify())
+                .with(ConfigSchema.CLIENT_DEBUG_NETWORK_METRICS, debug.networkMetricsEnabled())
+                .with(ConfigSchema.CLIENT_DEBUG_NETWORK_METRICS_AUTO_RESET, debug.networkMetricsAutoReset())
+                .with(ConfigSchema.SERVER_DEBUG_DISPATCHER, debug.dispatcherLogging())
+                .with(ConfigSchema.SERVER_DEBUG_ASYNC, debug.asyncLogging())
+                .with(ConfigSchema.SERVER_DEBUG_COMPRESSION, debug.compressionLogging())
+                .with(ConfigSchema.SERVER_DEBUG_CHUNK_APPLY, debug.chunkApplyLogging())
+                .with(ConfigSchema.SERVER_DEBUG_NETWORK, debug.networkLogging())
+                .with(ConfigSchema.SERVER_DEBUG_DATAPLANE, debug.dataplaneLogging());
         values = values.with(ConfigSchema.STORAGE_ENABLED, config.storage().enabled())
                 .with(ConfigSchema.STORAGE_ZSTD_LEVEL, config.storage().zstdLevel())
                 .with(ConfigSchema.MASTER_ENABLED, master.enabled())
@@ -113,27 +112,22 @@ public final class ConfigSnapshotAdapter {
                 values.get(ConfigSchema.CHUNK_RECENCY_WEIGHT), values.get(ConfigSchema.CHUNK_FREQUENCY_WEIGHT),
                 values.get(ConfigSchema.CHUNK_CLEANUP_INTERVAL_TICKS), values.get(ConfigSchema.CHUNK_TARGET_SIZE_MB),
                 values.get(ConfigSchema.CHUNK_MIN_CLEANUP_BATCH_SIZE), values.get(ConfigSchema.CHUNK_SECTION_DELTA_ENABLED),
-                values.get(ConfigSchema.CHUNK_JOIN_BOOST_ENABLED), values.get(ConfigSchema.CHUNK_VIEW_DISTANCE_EXTENSION_ENABLED),
+                values.get(ConfigSchema.CHUNK_VIEW_DISTANCE_EXTENSION_ENABLED),
                 values.get(ConfigSchema.CHUNK_MAX_RENDER_DISTANCE), values.get(ConfigSchema.CHUNK_OVD_UNLOAD_DELAY_SECS),
-                values.get(ConfigSchema.CHUNK_UNLOAD_DELAY_SECS),
-                values.get(ConfigSchema.CHUNK_MAX_CHUNKS_PER_FRAME),
-                values.get(ConfigSchema.CHUNK_MAIN_THREAD_CHUNK_BUDGET_MS),
-                values.get(ConfigSchema.CHUNK_SEED_GEN_THREADS),
-                values.get(ConfigSchema.CHUNK_HASSIUM_ENGINE_ENABLED),
+                values.get(ConfigSchema.CHUNK_UNLOAD_DELAY_SECS), values.get(ConfigSchema.CHUNK_MAX_CHUNKS_PER_FRAME),
+                values.get(ConfigSchema.CHUNK_MAIN_THREAD_CHUNK_BUDGET_MS), values.get(ConfigSchema.CHUNK_SEED_GEN_THREADS),
                 values.get(ConfigSchema.CHUNK_OVD_LOCAL_GENERATION),
                 seedGenValue(values, physicalClient, ConfigSchema.CLIENT_CHUNK_SEED_GEN_ENABLED, ConfigSchema.SERVER_CHUNK_SEED_GEN_ENABLED),
                 values.get(ConfigSchema.CHUNK_LIGHT_STRIP));
-
-        // 物理客户端：端点/鉴权由 gateway_info 下发，本地 master 快照不保留；仅消费 CLIENT 的 migration* 策略键。
-        List<HassiumConfig.ReachableEndpoint> controlEndpoints = physicalClient
-                ? List.of()
-                : values.get(ConfigSchema.MASTER_CONTROL_ENDPOINTS).stream()
-                        .map(DataPlaneEndpointConfig::decodeReachable).toList();
-        String authToken = physicalClient ? "" : values.get(ConfigSchema.MASTER_AUTH_TOKEN);
         List<HassiumConfig.UdpListenerConfig> listeners = values.get(ConfigSchema.DATAPLANE_UDP_LISTENERS).stream()
                 .map(DataPlaneEndpointConfig::decodeListener).toList();
         HassiumConfig.DataPlaneConfig dataPlane = new HassiumConfig.DataPlaneConfig(
                 values.get(ConfigSchema.DATAPLANE_ENABLED), listeners);
+        String authToken = physicalClient ? "" : values.get(ConfigSchema.MASTER_AUTH_TOKEN);
+        List<HassiumConfig.ReachableEndpoint> controlEndpoints = physicalClient
+                ? List.of()
+                : values.get(ConfigSchema.MASTER_CONTROL_ENDPOINTS).stream()
+                .map(DataPlaneEndpointConfig::decodeReachable).toList();
         HassiumConfig.MasterCoreConfig master = new HassiumConfig.MasterCoreConfig(
                 values.get(ConfigSchema.MASTER_ENABLED), values.get(ConfigSchema.MASTER_COMPRESSION_LEVEL),
                 values.get(ConfigSchema.MASTER_MAGICLESS_ZSTD), values.get(ConfigSchema.MASTER_GLOBAL_PACKET_COMPRESSION),
@@ -166,13 +160,12 @@ public final class ConfigSnapshotAdapter {
                 debugValue(values, physicalClient, ConfigSchema.CLIENT_DEBUG_NETWORK, ConfigSchema.SERVER_DEBUG_NETWORK),
                 values.get(ConfigSchema.CLIENT_DEBUG_CACHE),
                 values.get(ConfigSchema.SERVER_DEBUG_DATAPLANE),
-                values.get(ConfigSchema.CLIENT_DEBUG_LIGHT_VERIFY));
+                values.get(ConfigSchema.CLIENT_DEBUG_LIGHT_VERIFY),
+                values.get(ConfigSchema.CLIENT_DEBUG_NETWORK_METRICS),
+                values.get(ConfigSchema.CLIENT_DEBUG_NETWORK_METRICS_AUTO_RESET));
         return new HassiumConfig(new HassiumConfig.StorageConfig(
                 values.get(ConfigSchema.STORAGE_ENABLED), values.get(ConfigSchema.STORAGE_ZSTD_LEVEL)),
-                chunk, new HassiumConfig.NetCoreConfig(
-                        values.get(ConfigSchema.NET_ENABLED), values.get(ConfigSchema.NET_METRICS_ENABLED),
-                        values.get(ConfigSchema.NET_METRICS_AUTO_RESET)),
-                master, compat, debug);
+                chunk, master, compat, debug);
     }
     private static boolean debugValue(ConfigValues values, boolean physicalClient,
                                        ConfigKey<Boolean> clientKey, ConfigKey<Boolean> serverKey) {

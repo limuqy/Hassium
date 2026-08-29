@@ -10,9 +10,12 @@ import io.github.limuqy.mc.hassium.network.ClientMetadataHandler;
 import io.github.limuqy.mc.hassium.network.GatewayInfoCodec;
 import io.github.limuqy.mc.hassium.network.HandshakeStateTail;
 import io.github.limuqy.mc.hassium.network.PlayerStateReport;
+import io.github.limuqy.mc.hassium.network.ShadowChunkLoaderRuntime;
+import io.github.limuqy.mc.hassium.network.ShadowPullRequestC2SPacket;
 import io.github.limuqy.mc.hassium.network.core.migration.MigrationEndpoint;
 import io.github.limuqy.mc.hassium.network.core.migration.MigrationEngine;
 import io.github.limuqy.mc.hassium.network.core.migration.PrewarmSession;
+import io.github.limuqy.mc.hassium.network.core.outbound.ControlFrameCodec;
 import io.github.limuqy.mc.hassium.network.core.outbound.HandshakeCodec;
 import io.github.limuqy.mc.hassium.network.core.outbound.OutboundConnection;
 import io.github.limuqy.mc.hassium.network.core.outbound.UdpDataPlane;
@@ -27,6 +30,7 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.core.RegistryAccess;
 import net.minecraft.network.PacketListener;
 import net.minecraft.network.protocol.Packet;
+import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.network.protocol.PacketFlow;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -214,15 +218,13 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
             stale.close();
             outbound = null;
         }
-        // 新连接分支：新连接周期从零开始，全量复位（含 s2cDispatched）
+        // 原版服务端不会发送 gateway_info；进入等待态但不探测 host:25566。
         resetSessionCounters(true);
-        ViaFabricCompat.INSTANCE.onLogin();
-        migration.start();
         transitionTo(NetworkCoreState.CONNECTING);
-        LOGGER.info("Hassium: NetworkCore onLogin -> CONNECTING");
-        autoConnect();
-    }
+        LOGGER.info("Hassium: NetworkCore onLogin waiting for gateway_info");
+        return;
 
+    }
     /** 会话周期复位（onLogin 三分支共用）：连接周期计数/握手标记/迁移尝试归零。
      *  {@code resetS2cDispatched}=true 时 s2cDispatched 一并清零（新连接分支）；
      *  false 时保留（仅网关登录 / bootstrap 分支——outbound 跨 onLogin 为同一连接周期，
@@ -285,8 +287,12 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
         lastGatewayInfo = info;
         List<GatewayInfoCodec.Endpoint> eps = info.endpoints();
         if (eps.isEmpty()) {
-            LOGGER.info("Hassium: gateway_info received (proto={}, no endpoints — server on default gateway port)",
-                    info.protocolVersion());
+            String host = serverDataHost();
+            if (host != null && !host.isBlank()) {
+                connect(host, GatewayPlayerBridge.DEFAULT_GATEWAY_PORT, buildAutoTail(), info.authToken());
+                LOGGER.info("Hassium: gateway_info bootstrap connect -> {}:{} (default)",
+                        host, GatewayPlayerBridge.DEFAULT_GATEWAY_PORT);
+            }
             return;
         }
         List<MigrationEndpoint> pool = eps.stream()
@@ -347,11 +353,6 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
     public void connect(String host, int port, HandshakeStateTail.C2S tail, String authToken) {
         if (state.get() == NetworkCoreState.IDLE) {
             transition(NetworkCoreState.IDLE, NetworkCoreState.CONNECTING);
-            try {
-                io.github.limuqy.mc.hassium.cache.client.ClientLifecycleHelper.startShadowIfConfigured();
-            } catch (Throwable t) {
-                LOGGER.debug("Hassium: early shadow start on CONNECTING skipped", t);
-            }
         }
         // A-M2: 握手总超时起算（从 CONNECTING 起算 15s；onOpen 时在 event loop 排到期任务）
         handshakeDeadlineMs = System.currentTimeMillis() + HANDSHAKE_TIMEOUT_MS;
@@ -1014,6 +1015,12 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
                     (io.github.limuqy.mc.hassium.network.SeedRefS2CPacket) hp.packet());
             case BLOCK_ENTITY_DATA -> ClientMetadataHandler.handleBlockEntityDataPacket(
                     (io.github.limuqy.mc.hassium.network.BlockEntityDataS2CPacket) hp.packet());
+            case SHADOW_PULL_RESPONSE -> {
+                io.github.limuqy.mc.hassium.network.ShadowPullResponseS2CPacket response =
+                        (io.github.limuqy.mc.hassium.network.ShadowPullResponseS2CPacket) hp.packet();
+                Minecraft.getInstance().execute(() ->
+                        io.github.limuqy.mc.hassium.network.ShadowChunkLoaderRuntime.handleResponse(response));
+            }
         }
     }
 
@@ -1158,6 +1165,26 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
             return true;
         }
         return false;
+    }
+
+    /** 通过当前 gateway outbound 发送 shadowPullV1 业务 C2S 帧。 */
+    public boolean sendShadowPull(ShadowPullRequestC2SPacket request) {
+        OutboundConnection oc = outbound;
+        if (oc == null || !oc.isOpen() || request == null) {
+            return false;
+        }
+        ByteBuf payload = io.netty.buffer.Unpooled.buffer();
+        try {
+            payload.writeByte(GatewayPacketCodec.KIND_HASSIUM);
+            ControlFrameCodec.writeVarInt(payload, GatewayPacketCodec.HassiumSub.SHADOW_PULL_REQUEST.id());
+            request.encode(new FriendlyByteBuf(payload));
+            oc.sendC2S(payload);
+            return true;
+        } catch (Throwable t) {
+            if (payload.refCnt() > 0) payload.release();
+            LOGGER.warn("Hassium: shadowPullV1 gateway send failed", t);
+            return false;
+        }
     }
 
 
@@ -1359,12 +1386,6 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
         this.gatewayOnlyServerData = serverData;
         this.gatewayOnlyParentScreen = parentScreen;
         this.gatewayOnlyAttempted = false;
-        // 连服意图即投机启动影子（与 vanilla 连接/握手并行；WorldLoader 重叠 login）
-        try {
-            io.github.limuqy.mc.hassium.cache.client.ClientLifecycleHelper.startShadowIfConfigured(serverData);
-        } catch (Throwable t) {
-            LOGGER.debug("Hassium: early shadow start on connect intent skipped", t);
-        }
     }
 
     /**
@@ -1568,7 +1589,7 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
      */
     static HandshakeStateTail.C2S buildAutoTail() {
         return new HandshakeStateTail.C2S(clientPlayerState(), false, null, clientPlayerId(),
-                HassiumConfigService.getInstance().isHassiumEngineEnabled());
+                HassiumConfigService.getInstance().isHassiumEngineEnabled(), true);
     }
 
     // ==================== 状态机 ====================

@@ -163,7 +163,7 @@ Sector 2+:    [length(4)][type=126][magic 0x48][hash(8)][ZSTD 压缩数据]
 | 能力 | 说明 | 默认 |
 |------|------|------|
 | 网关帧协议 | 客户端 outbound（网络核心）↔ 主控 `GatewayServer`（主控核心）的 TCP 控制面（`ControlFrameCodec`：varint 帧长 + type + payload，纯 Netty 零 MC 依赖）；ZSTD 装于帧协议之外（握手协商后 `OutboundConnection.installZstd` / `GatewayChannel.installZstd`） | 网络核心路径 |
-| 自定义通道 | `hassium:*` ZSTD 传区块等（经网关帧中继可达） | `net.enabled=true` |
+| 自定义通道 | `hassium:*` ZSTD 传区块等（仅收到 `gateway_info` 并完成 Hassium 能力握手后启用；原版服务端连接保持 vanilla） | `master.enabled` / 握手能力 |
 | 全局包压缩 | Pipeline 替换原版 Zlib（主控侧 vanilla 路径；网关通道复用其阈值/等级） | `master.globalPacketCompression=true` |
 | 上下文 / magicless | 提升压缩比 | 均默认启用 |
 | 包聚合 | 仅主控侧 vanilla 路径（`MixinConnection` 仅对 `ServerGamePacketListenerImpl` 生效）；网关通道不聚合 | `master.enablePacketAggregation=true` |
@@ -201,9 +201,9 @@ Sector 2+:    [length(4)][type=126][magic 0x48][hash(8)][ZSTD 压缩数据]
 | `chunk.hassiumEngineEnabled` | **true** | Hassium 引擎（非网络向功能总开关）：进服启动进程内影子服务端（完整 MinecraftServer）统一承担**世界保存（缓存）+ 区块光照计算 + 打包官方区块包**（官方通道回传）。启动失败自动降级：客户端缓存/超视渲染/SeedGen 关闭并游戏内提示，仅保留网络向优化；false=不启动（此时服务端不剥光——剥光在握手协商，光照随包自带） |
 | `chunk.ovdLocalGeneration` | false | 超视渲染本地生成：超视渲染区域缓存 miss 时用 Hassium 引擎按服务端世界种子本地生成区块（与服务器地形一致）并存入本地缓存；无种子（服务端未装 MOD）时自动关闭生成 |
 | `chunk.seedGenEnabled` | **false** | 本地区块生成（双端同版本，默认关）。**服务端开启会向客户端下发世界种子（泄露服务端种子）**；对 pristine 区块发 SeedRef 替代区块数据；客户端本地生成，失败/超时回退全量 |
-| `chunk.lightStrip` | true | 光照剥离：服务端发包带空 lightMask；实际剥光由握手协商门控（客户端声明 `lightComputeSupported` 才剥，否则光随包自带） |
-| `net.enabled` | true | 客户端网络核心总开关（进程内网关与优化通道） |
-| `net.metricsEnabled` | false | 客户端网络指标 |
+| `chunk.lightStrip` | true | 服务端光照剥离，必须经 Hassium 能力握手 |
+| `debug.networkMetricsEnabled` | false | 客户端网络指标 |
+| `debug.networkMetricsAutoReset` | true | 客户端退出自动复位指标 |
 | `master.enabled` | true | 服务端网络通道总开关 |
 | `master.globalPacketCompression` | true | 全局 ZSTD（主控侧 vanilla 路径） |
 | `master.compressionLevel` | 3 | 网络压缩等级（速度优先） |
@@ -269,7 +269,7 @@ ERROR / WARN 始终输出。
 | 特性 | 配置 / 命令 | 要点 | 详文 |
 |------|-------------|------|------|
 | **存储压缩** | `storage.enabled`（默认 false，仅专用服）、`storage.zstdLevel`（3） | chunk payload ZSTD 落盘 type 126；外层 Region 不变；启用改写落盘格式需备份 | [`chunk-cache.md`](chunk-cache.md) |
-| **网络压缩** | `net.enabled`（客户端网关）、`master.globalPacketCompression`、`master.compressionLevel`、`master.enablePacketAggregation` | `hassium:*` 通道 ZSTD + 可选全局管道替换 Zlib + 聚合/紧凑包头/上下文压缩 | [`chunk-cache.md`](chunk-cache.md) |
+| **网络压缩** | `master.globalPacketCompression`、`master.compressionLevel`、`master.enablePacketAggregation` | `hassium:*` 通道只在 Hassium 握手后建立；原版服务端连接不探测、不接管 |
 
 ### 12.2 网络优化
 

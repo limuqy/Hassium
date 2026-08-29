@@ -78,8 +78,8 @@ public final class GatewayS2CRouter implements Consumer<Packet<?>> {
 
     private void routeChunk(ClientboundLevelChunkWithLightPacket packet) {
         ChunkPos pos = new ChunkPos(packet.getX(), packet.getZ());
-        // 剥光包（四个掩码全空）先交给影子端重算。加载屏脚下 3×3 只落地方块
-        // （不 enableChunkLight），避免客户端自算光与影子重复、先亮后暗。
+        // 剥光包（四个掩码全空）先交给影子端重算。加载屏脚下 3×3 先落地方块；
+        // 客户端光照引擎保持 vanilla 默认开启，影子端完成后再按类原版光照包收敛。
         if (isLightStripped(packet)
                 && io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.isEnabled()) {
             if (io.github.limuqy.mc.hassium.network.ClientChunkHandler.shouldFastApplyForLoadingScreen(pos)) {

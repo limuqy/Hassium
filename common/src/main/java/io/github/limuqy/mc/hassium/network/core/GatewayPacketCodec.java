@@ -59,7 +59,9 @@ public final class GatewayPacketCodec {
         SECTION_DELTA(2),
         LIGHT_DELTA(3),
         SEED_REF(4),
-        BLOCK_ENTITY_DATA(5);
+        BLOCK_ENTITY_DATA(5),
+        SHADOW_PULL_REQUEST(6),
+        SHADOW_PULL_RESPONSE(7);
 
         private final int id;
 
@@ -220,6 +222,8 @@ public final class GatewayPacketCodec {
             case LIGHT_DELTA -> new HassiumPacket(sub, io.github.limuqy.mc.hassium.network.LightDeltaS2CPacket.decode(fbuf));
             case SEED_REF -> new HassiumPacket(sub, io.github.limuqy.mc.hassium.network.SeedRefS2CPacket.decode(fbuf));
             case BLOCK_ENTITY_DATA -> new HassiumPacket(sub, io.github.limuqy.mc.hassium.network.BlockEntityDataS2CPacket.decode(fbuf));
+            case SHADOW_PULL_REQUEST -> new HassiumPacket(sub, io.github.limuqy.mc.hassium.network.ShadowPullRequestC2SPacket.decode(fbuf));
+            case SHADOW_PULL_RESPONSE -> new HassiumPacket(sub, io.github.limuqy.mc.hassium.network.ShadowPullResponseS2CPacket.decode(fbuf));
         };
     }
 

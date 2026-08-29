@@ -62,7 +62,7 @@ class DataPlaneEnabledGuardTest {
                 master.migrationMaintenanceWindow(), master.migrationHeartbeatIntervalMs(),
                 master.migrationIdleWindowMs(), master.migrationSilentTimeoutMs(),
                 master.migrationPrewarmTtlMs(), master.resumeTicketTtlMs(), replacement);
-        return new HassiumConfig(config.storage(), config.chunk(), config.net(), updatedMaster,
+        return new HassiumConfig(config.storage(), config.chunk(), updatedMaster,
                 config.compat(), config.debug());
     }
 
@@ -110,7 +110,7 @@ class DataPlaneEnabledGuardTest {
                 master.migrationMaintenanceWindow(), master.migrationHeartbeatIntervalMs(),
                 master.migrationIdleWindowMs(), master.migrationSilentTimeoutMs(),
                 master.migrationPrewarmTtlMs(), master.resumeTicketTtlMs(), master.dataPlane());
-        return new HassiumConfig(config.storage(), config.chunk(), config.net(), updatedMaster,
+        return new HassiumConfig(config.storage(), config.chunk(), updatedMaster,
                 config.compat(), config.debug());
     }
 

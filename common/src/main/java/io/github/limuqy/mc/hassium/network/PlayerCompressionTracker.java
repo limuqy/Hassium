@@ -56,15 +56,13 @@ public class PlayerCompressionTracker {
     }
 
     /**
-     * {@code ServerPlayer} 创建时（placeNewPlayer，主线程）调用：
-     * 预握手已完成的玩家立即启用压缩，使进服第一圈 trackChunk/sendChunk
-     * 全部走 Hassium 链（剥光 + 限流 + hash 元数据），消除握手前原版直发窗口。
+     * 消费登录阶段的 Hassium 标记，但不在 ServerPlayer 刚创建时启用压缩。
+     * 此时 GatewayPlayerSession 尚未必建立；若提前发送 CHUNK_HASH，1.20.1
+     * 客户端会把业务 payload 当作未知 custom payload 丢弃，随后卡在等待确认。
+     * 真正的压缩启用由 Play 阶段完整握手调用 {@link #enableCompression(ServerPlayer)}。
      */
     public static void tryEnableOnPlayerJoin(ServerPlayer player) {
-        UUID playerId = player.getUUID();
-        if (preHandshakeDone.remove(playerId)) {
-            compressionEnabled.put(playerId, true);
-        }
+        preHandshakeDone.remove(player.getUUID());
     }
 
     /**

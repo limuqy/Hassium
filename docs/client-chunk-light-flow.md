@@ -111,9 +111,8 @@ ShadowLightCompute.drainLightMasks() →  in-flight 柱暂缓，其余光更新�
 - **带光**：权威光照随包落地（官方 `handleLevelChunkWithLight`）。
 - **剥光包**（服务端 `chunk.lightStrip`，握手声明引擎后才发生）：不直接 apply——
   先投递 `ShadowLightCompute.submit(pos, packet)`；影子端算完打包带光区块包回传，
-  客户端从源头就不会看到无光区块。
-  加载屏脚下 3×3 走 `applyLoadingScreenBlocksOnly`（只写方块，`setLightEnabled(false)`），
-  **禁止客户端自算光**；影子带光包到达后再 `handleLevelChunkWithLight`。
+  客户端光照引擎仍保持 vanilla 默认开启，最终由类原版光照包收敛结果。
+  加载屏脚下 3×3 走 `applyLoadingScreenBlocksOnly`（只提前写方块，不关闭客户端光照）。
 
 ### 探活结论（ChunkMap / ChunkStatusTasks，1.20.1 与 1.21.1）
 

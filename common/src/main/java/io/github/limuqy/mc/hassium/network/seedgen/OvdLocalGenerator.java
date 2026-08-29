@@ -55,12 +55,13 @@ public final class OvdLocalGenerator {
     public static boolean submitGeneratedRenderOnly(ChunkPos pos,
                                                     net.minecraft.world.level.chunk.LevelChunk chunk,
                                                     net.minecraft.server.level.ServerLevel level,
-                                                    TraceOrigin traceOrigin) {
+                                                    TraceOrigin traceOrigin,
+                                                    ShadowChunkSource source) {
         if (pos == null || chunk == null || !isLoadEnabled()
                 || !ViewDistanceExtensionService.getInstance().shouldKeepAsRenderOnly(pos)) {
             return false;
         }
-        return ShadowLightCompute.submitGenerated(pos, chunk, level, true, traceOrigin);
+        return ShadowLightCompute.submitPreLight(source, pos, chunk, level, true, traceOrigin);
     }
     private static final AtomicBoolean drainRunning = new AtomicBoolean(false);
 
@@ -248,7 +249,12 @@ public final class OvdLocalGenerator {
                     default -> null;
                 };
             }
-            if (!submitGeneratedRenderOnly(pos, chunk, level, traceOrigin)) {
+            ShadowChunkSource source = switch (dataSource) {
+                case "generate" -> ShadowChunkSource.SEEDGEN;
+                case "injected", "disk" -> ShadowChunkSource.CACHE_SNAPSHOT;
+                default -> null;
+            };
+            if (!submitGeneratedRenderOnly(pos, chunk, level, traceOrigin, source)) {
                 DebugLogger.warn(DebugLogger.LogType.ASYNC,
                         "[OVD_GEN] Failed to submit chunk ({}, {}) to light pipeline (dataSource={})",
                         pos.x, pos.z, dataSource);

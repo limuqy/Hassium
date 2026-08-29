@@ -13,6 +13,12 @@ public interface INetworkManagerService {
      * 发送区块数据请求到服务端（客户端调用）
      */
     void sendChunkDataRequest(FriendlyByteBuf buf);
+    /** 发送 shadowPullV1 区块请求到服务端（客户端调用）。 */
+    default void sendShadowPullRequest(FriendlyByteBuf buf) {
+        if (buf != null && buf.refCnt() > 0) {
+            buf.release();
+        }
+    }
 
     /**
      * 发送区块哈希广播到客户端（阶段一，服务端调用）

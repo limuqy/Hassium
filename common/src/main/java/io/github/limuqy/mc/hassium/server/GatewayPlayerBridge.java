@@ -8,6 +8,10 @@ import io.github.limuqy.mc.hassium.network.HandshakeStateTail;
 import io.github.limuqy.mc.hassium.network.PlayerCompressionTracker;
 import io.github.limuqy.mc.hassium.network.PlayerStateReport;
 import io.github.limuqy.mc.hassium.network.ServerChunkPushManager;
+import io.github.limuqy.mc.hassium.network.ShadowPullHandler;
+import io.github.limuqy.mc.hassium.network.ShadowPullRequestC2SPacket;
+import io.github.limuqy.mc.hassium.network.ShadowPullRequestLedger;
+import io.github.limuqy.mc.hassium.network.ShadowPullResponseS2CPacket;
 import io.github.limuqy.mc.hassium.network.core.GatewayPacketCodec;
 import io.github.limuqy.mc.hassium.network.core.outbound.ControlFrameCodec;
 import io.github.limuqy.mc.hassium.network.gateway.C2SPayloadSink;
@@ -88,6 +92,8 @@ public final class GatewayPlayerBridge {
 
     private static final Logger LOGGER = LoggerFactory.getLogger("Hassium/GatewayPlayerBridge");
 
+    private static final ShadowPullHandler SHADOW_PULL_HANDLER =
+            new ShadowPullHandler(new ShadowPullRequestLedger());
     /** 未配置 controlReachableEndpoints 时的网关监听端口兜底（与 vanilla 端口错开）。 */
     public static final int DEFAULT_GATEWAY_PORT = 25566;
 
@@ -602,10 +608,10 @@ public final class GatewayPlayerBridge {
         push.setPlayerSeedGenSupported(playerId,
                 session.channel().handshakeOptions() != null
                         && session.channel().handshakeOptions().seedGenSupported());
-        // A7：帧握手尾携带 lightComputeSupported（旧端/缺尾默认 false）→ 剥光 gate 按客户端能力
+        // shadowPullV1 客户端由影子 loader 主动取数，禁止旧 admission 初始区块链路。
         HandshakeStateTail.C2S stateTail = session.channel().stateTail();
+        push.setPlayerShadowPullSupported(playerId, stateTail != null && stateTail.shadowPullSupported());
         push.setPlayerLightComputeSupported(playerId, stateTail != null && stateTail.lightComputeSupported());
-        PlayerCompressionTracker.enableCompression(player);
 
         // muted placeNewPlayer：join S2C 风暴吞掉（续流客户端已持有世界）；server 侧簿记全走 vanilla
         Connection connection = createGatewayConnection();
@@ -675,6 +681,21 @@ public final class GatewayPlayerBridge {
                     if (player.hasDisconnected()) {
                         return;
                     }
+                    FriendlyByteBuf inbound = new FriendlyByteBuf(Unpooled.wrappedBuffer(bytes));
+                    try {
+                        int kind = inbound.readVarInt();
+                        if (kind == GatewayPacketCodec.KIND_HASSIUM) {
+                            int sub = inbound.readVarInt();
+                            if (sub == GatewayPacketCodec.HassiumSub.SHADOW_PULL_REQUEST.id()) {
+                                handleShadowPullRequest(player, ShadowPullRequestC2SPacket.decode(inbound));
+                            } else {
+                                LOGGER.warn("[GATEWAY] unexpected Hassium C2S sub {} from {}", sub, playerId);
+                            }
+                            return;
+                        }
+                    } finally {
+                        inbound.release();
+                    }
                     Packet<?> packet = decodeServerboundPlay(bytes, server.registryAccess());
                     if (packet == null) {
                         return;
@@ -712,6 +733,23 @@ public final class GatewayPlayerBridge {
                 }
             });
         };
+    }
+
+    private static void handleShadowPullRequest(ServerPlayer player, ShadowPullRequestC2SPacket request) {
+        String dimension = LevelCompat.getDimensionId(player.level());
+        ShadowPullResponseS2CPacket response = SHADOW_PULL_HANDLER.handle(
+                player.getUUID(), request, dimension, request.epoch(), player.chunkPosition().x,
+                player.chunkPosition().z, io.github.limuqy.mc.hassium.compat.PlayerCompat.getViewDistance(player) + 1,
+                ServerChunkPushManager.getInstance().isPlayerShadowPullSupported(player.getUUID()),
+                player.isAlive() && !player.hasDisconnected(),
+                entry -> ServerChunkPushManager.getInstance().resolveShadowPull(player, entry, dimension));
+        FriendlyByteBuf out = new FriendlyByteBuf(Unpooled.buffer());
+        response.encode(out);
+        if (!tryRouteS2C(player, GatewayPacketCodec.HassiumSub.SHADOW_PULL_RESPONSE.id(), out)) {
+            out.release();
+        }
+        LOGGER.info("[SHADOW_PULL] gateway response player={} count={} epoch={}", player.getUUID(),
+                response.results().size(), response.epoch());
     }
 
     /** PLAY SERVERBOUND 解码（kind=0：[varint 0][varint id][body]）。 */

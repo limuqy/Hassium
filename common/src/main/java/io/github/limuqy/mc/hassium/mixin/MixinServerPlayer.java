@@ -43,9 +43,8 @@ public abstract class MixinServerPlayer extends Player {
     private void hassium$onPlayerInit(CallbackInfo ci) {
         ServerPlayer self = (ServerPlayer) (Object) this;
         PlayerCompressionTracker.setConnected(self);
-        // login/配置阶段预握手的玩家在此提升：placeNewPlayer 创建 ServerPlayer 时
-        // 立即启用压缩，进服第一圈 trackChunk/sendChunk 全部走 Hassium 链
-        // （剥光 + maxChunksPerTick 限流 + chunkHash 元数据），消灭握手前原版直发窗口。
+        // 仅消费 login/config 预握手标记；GatewayPlayerSession 尚未建立前保持原版首包，
+        // 避免 CHUNK_HASH 走到 1.20.1 未注册的 custom payload 通道。完整握手后再启用压缩。
         PlayerCompressionTracker.tryEnableOnPlayerJoin(self);
         // M1 bootstrap：玩家物化后经 vanilla 通道下发 gateway_info（connection 未挂时登记待发，
         // 由 MixinMinecraftServer tick 泵补发；仅专用服 + master.enabled，见 CONTRACTS §2）。

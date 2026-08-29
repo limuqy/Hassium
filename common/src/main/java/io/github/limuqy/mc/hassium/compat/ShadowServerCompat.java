@@ -106,11 +106,22 @@ public final class ShadowServerCompat {
 #endif
     }
 
-    /**
-     * 获取注入柱原版 3×3 FULL 屏障。
-     * 原版 ChunkMap 在 playerLoadedChunk 前显式等待中心及一圈邻柱的 FULL future；
-     * 单柱 LIGHT/FULL future 都不足以代表这个首包时机。
-     */
+    /** 获取注入柱的原版 LIGHT future；邻柱由 LightEngine 的 getter 读取，不单独请求 holder。 */
+    public static CompletableFuture<ChunkAccess> requestLightChunk(ServerChunkCache cache, ChunkPos pos) {
+        return requestSingleLight(cache, pos.x, pos.z);
+    }
+
+    private static CompletableFuture<ChunkAccess> requestSingleLight(ServerChunkCache cache, int x, int z) {
+#if MC_VER < MC_1_21_1
+        return cache.getChunkFuture(x, z, ChunkStatus.LIGHT, false)
+                .thenApply(result -> result.left().orElse(null));
+#else
+        return cache.getChunkFuture(x, z, ChunkStatus.LIGHT, false)
+                .thenApply(result -> result.orElse(null));
+#endif
+    }
+
+    /** 获取注入柱原版 3×3 FULL 屏障（仅保留给确实需要 FULL 的旧调用方）。 */
     public static CompletableFuture<ChunkAccess> requestFullChunk(ServerChunkCache cache, ChunkPos pos) {
         @SuppressWarnings("unchecked")
         CompletableFuture<ChunkAccess>[] futures = new CompletableFuture[9];
@@ -329,6 +340,66 @@ public final class ShadowServerCompat {
         }
 #endif
     }
+
+#if MC_VER < MC_1_21_1
+    /**
+     * 将已装载的区块 section 作为原版 pre-light ProtoChunk 视图使用。
+     * <p>
+     * 影子存储仍由 ShadowStorageManager 管理；此处只建立 native ChunkStatus
+     * 光照入口需要的 ProtoChunk，不接管 ChunkMap/IOWorker 存储生命周期。
+     */
+    public static net.minecraft.world.level.chunk.ProtoChunk createNativeLightChunk(
+            ServerLevel level, LevelChunk source) {
+        net.minecraft.world.level.chunk.ProtoChunk proto =
+                new net.minecraft.world.level.chunk.ProtoChunk(
+                        source.getPos(),
+                        net.minecraft.world.level.chunk.UpgradeData.EMPTY,
+                        source.getSections(),
+                        new net.minecraft.world.ticks.ProtoChunkTicks<>(),
+                        new net.minecraft.world.ticks.ProtoChunkTicks<>(),
+                        level,
+                        level.registryAccess().registryOrThrow(
+                                net.minecraft.core.registries.Registries.BIOME),
+                        source.getBlendingData());
+        proto.setStatus(source.isLightCorrect()
+                ? ChunkStatus.LIGHT
+                : ChunkStatus.INITIALIZE_LIGHT);
+        proto.setLightCorrect(source.isLightCorrect());
+        return proto;
+    }
+
+    /** 使用原版 ChunkStatus.INITIALIZE_LIGHT loading task，而不是直接调用引擎方法。 */
+    public static CompletableFuture<ChunkAccess> initializeNativeLight(
+            ServerLevel level, ChunkAccess chunk) {
+        return ChunkStatus.INITIALIZE_LIGHT.load(
+                        level,
+                        level.getStructureManager(),
+                        (net.minecraft.server.level.ThreadedLevelLightEngine)
+                                level.getChunkSource().getLightEngine(),
+                        value -> CompletableFuture.completedFuture(Either.left(value)),
+                        chunk)
+                .thenApply(result -> result.left().orElseThrow(
+                        () -> new IllegalStateException("native INITIALIZE_LIGHT failed")));
+    }
+
+    /** 使用原版 ChunkStatus.LIGHT loading task，而不是直接调用引擎方法。 */
+    public static CompletableFuture<ChunkAccess> completeNativeLight(
+            ServerLevel level, ChunkAccess chunk) {
+        if (chunk instanceof net.minecraft.world.level.chunk.ProtoChunk proto
+                && !proto.getStatus().isOrAfter(ChunkStatus.LIGHT)) {
+            proto.setStatus(ChunkStatus.LIGHT);
+        }
+        return ChunkStatus.LIGHT.load(
+                        level,
+                        level.getStructureManager(),
+                        (net.minecraft.server.level.ThreadedLevelLightEngine)
+                                level.getChunkSource().getLightEngine(),
+                        value -> CompletableFuture.completedFuture(Either.left(value)),
+                        chunk)
+                .thenApply(result -> result.left().orElseThrow(
+                        () -> new IllegalStateException("native LIGHT failed")));
+    }
+#endif
 
     private static boolean awaitDone(CompletableFuture<?> future, long deadlineNanos) {
         while (!future.isDone()) {

@@ -37,26 +37,23 @@
 | `chunk.cleanupIntervalTicks` | `6000` | 清理检查间隔（刻） |
 | `chunk.targetSizeMb` | `0` | 目标容量（0=自动=容量上限×0.8） |
 | `chunk.minCleanupBatchSize` | `100` | 每轮最多淘汰的 region 文件数 |
-| `chunk.sectionDeltaEnabled` | `true` | 分段增量控制位（GatewayPacketCodec/NetworkCore/DataPlaneClientBundle 活跃消费） |
-| `chunk.joinBoostEnabled` | `true` | 进服加速 |
-| `chunk.viewDistanceExtensionEnabled` | `true` | 超视渲染（OVD）开关 |
+| `chunk.sectionDeltaEnabled` | `true` | 分段增量控制位（仅 Hassium 握手后生效） |
+| `chunk.viewDistanceExtensionEnabled` | `true` | 超视渲染（仅 Hassium 握手后生效） |
 | `chunk.maxRenderDistance` | `16` | 超视渲染 / 有效 RD 上限 |
 | `chunk.ovdUnloadDelaySecs` | `5` | 超视卸载延迟秒 |
-| `chunk.unloadDelaySecs` | `30` | 影子端内存区块回收延迟秒数（离开卸载边界后计时，超时落盘并清内存；0=禁用回收） |
-| `chunk.maxChunksPerFrame` | `6` | 每 tick 缓存读取生产上限（OVD 入队 + 影子读盘；主线程消费只受时间预算） |
+| `chunk.unloadDelaySecs` | `5` | 影子端卸载延迟秒 |
 | `chunk.mainThreadChunkBudgetMs` | `15` | 主线程 apply 预算（ms） |
-| `chunk.hassiumEngineEnabled` | `true` | Hassium 引擎总开关（进服启动承担光照计算；失败降级关闭缓存/OVD/SeedGen 并游戏内提示） |
-| `chunk.ovdLocalGeneration` | `false` | OVD 本地生成（miss 时影子端按世界种子本地生成，renderOnly 落地；需引擎可用） |
-| `chunk.seedGenThreads` | `2` | SeedGen 本地生成线程数（0=禁用本地生成，SeedRef 回退全量） |
-| `chunk.seedGenEnabled` | `false` | SeedGen 开关（收到 SeedRef 本地复算；需双端同版本）。服务端开启会下发世界种子 |
+| `chunk.hassiumEngineEnabled` | `true` | （兼容旧命名；实际由 chunk-core gate 控制） |
+| `chunk.ovdLocalGeneration` | `false` | OVD 本地生成（仅 Hassium 握手后生效） |
+| `chunk.seedGenThreads` | `2` | SeedGen 本地生成线程数 |
+| `chunk.seedGenEnabled` | `false` | SeedGen 开关；服务端开启会下发世界种子 |
+| `chunk.lightStrip` | `true` | 服务端光照剥离，必须经 Hassium 能力握手 |
 
-**A2. net.\*（3 键，网络核心）**
+**A2. master.*（服务端网络与客户端迁移策略）**
+客户端不再有独立 `net.*` 配置。未收到 `gateway_info` 时保持原版连接，不探测网关端口。
 
-| 配置项 | 默认值 | 说明 |
-|--------|--------|------|
-| `net.enabled` | `true` | 客户端网络核心总开关（进程内网关与帧连接） |
-| `net.metricsEnabled` | `false` | 客户端网络指标 |
-| `net.metricsAutoReset` | `true` | 登出自动重置指标 |
+**A3. debug.*（双端调试键）**
+客户端网络指标使用 `debug.networkMetricsEnabled` / `debug.networkMetricsAutoReset`。
 
 **A3. debug.\*（8 键，支撑设施；不含数据面）**
 
@@ -137,14 +134,14 @@
 1. **键名重排（不兼容 1.x toml、无迁移逻辑；2.0.0 本来就不兼容 1.X）**：
    - `clientCache.*` 全族 → `chunk.*`（20 键，叶名微调：`cacheCompressionLevel`→`compressionLevel`、`targetCacheSizeMb`→`targetSizeMb`）
    - `network.seedGen.enabled`（双端）→ `chunk.seedGenEnabled`（叶名合并）
-   - `network.enabled` 分端：CLIENT → `net.enabled`、SERVER → `master.enabled`
-   - `network.metricsEnabled` / `metricsAutoReset`（CLIENT）→ `net.metrics*`；`network.metricsEnabled`（SERVER）→ `master.metricsEnabled`
+   - `network.enabled` 分端：SERVER → `master.enabled`；CLIENT 不再独立暴露网络开关，原版服务端由 `gateway_info` 能力门控
+   - `network.metricsEnabled` / `metricsAutoReset`（CLIENT）→ `debug.networkMetricsEnabled` / `debug.networkMetricsAutoReset`；SERVER → `master.metricsEnabled`
    - `network.*` SERVER 压缩/聚合/推送/端点键 → `master.*`；`network.lightStrip` → `chunk.lightStrip`
    - `network.dataPlane.enabled` / `udpListeners` → `dataplane.*`；`network.dataPlane.recoveryWindowMs` → `master.migrationFaultTimeoutMs`（语义 = L1 迁移 faultTimeout）
    - 保留：`storage.enabled/zstdLevel`、`compat.*`、`debug.*`（路径不变）
 2. **删除 4 键**（见 §二.C）；ControlFailoverHandler 引用字段改为固定常量（6000/30000）。
 3. **默认值口径**：生效默认 = ConfigSchema（三端 backend 均从 schema 生成）。`maxChunksPerTick` / `serverChunkPushThreads` 默认 **4**。
-4. **注释修正**（与 T1 同步）：`recoveryWindowMs`→migrationFaultTimeoutMs 语义、`controlReachableEndpoints` = 网关监听/outbound 端点、`sectionDeltaEnabled` 活跃消费、`net.enabled` = 网络核心总开关。
+4. **注释修正**：`recoveryWindowMs`→`migrationFaultTimeoutMs` 语义、`controlReachableEndpoints` = 网关监听/outbound 端点、`sectionDeltaEnabled` 仅 Hassium 握手后活跃消费。
 
 ## 五、gateway 端口事实（无新增配置键的依据）
 
@@ -165,7 +162,7 @@
 | 命令 | 行为 | 指标键 |
 |------|------|--------|
 | `/hassium stats`（+`reset`/`toggle`）、`/hassium metrics on/off` | 服务端统计/重置/开关（requires metrics 开启；level 2） | `master.metricsEnabled`（SERVER） |
-| `/hassiumc stats` | 客户端统计 7 行（requires metrics 开启） | `net.metricsEnabled`（CLIENT） |
+| `/hassiumc stats` | 客户端统计 7 行（requires metrics 开启） | `debug.networkMetricsEnabled`（CLIENT） |
 | `/hassiumc export [<serverIp> [seed]]` | 拷贝影子端 `world`（含原版写出的 `level.dat`）→ `hassium_exports/<cacheId>`；也可手工拷到 `saves/` | — |
 
 ## 八、问题总结

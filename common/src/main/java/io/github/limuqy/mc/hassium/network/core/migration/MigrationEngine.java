@@ -572,9 +572,8 @@ public final class MigrationEngine {
         }
         // T10：C2S 尾追加玩家 UUID 字段（标准流程握手附着；续流路径 = 票据身份）
         // A7：lightComputeSupported 值源 = config.isHassiumEngineEnabled()（与
-        // ClientRequestOptions.engineEnabled() 同源；主控据此开剥光 gate）
         return new HandshakeStateTail.C2S(state, resumeRequested, ticket, playerId,
-                HassiumConfigService.getInstance().isHassiumEngineEnabled());
+                HassiumConfigService.getInstance().isHassiumEngineEnabled(), true);
     }
 
     /**

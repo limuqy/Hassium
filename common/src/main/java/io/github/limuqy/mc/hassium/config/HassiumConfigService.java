@@ -40,7 +40,7 @@ public class HassiumConfigService {
 
     public HassiumConfigService(HassiumConfig config) {
         this.config = config;
-        this.networkCompressionEnabled.set(config.net().enabled() || config.master().enabled());
+        this.networkCompressionEnabled.set(resolveNetworkEnabled(config));
         this.storageEnabled.set(config.storage().enabled());
     }
 
@@ -131,7 +131,7 @@ public class HassiumConfigService {
 
     private void applyLoaded(HassiumConfig loaded) {
         this.config = loaded;
-        this.networkCompressionEnabled.set(loaded.net().enabled() || loaded.master().enabled());
+        this.networkCompressionEnabled.set(resolveNetworkEnabled(loaded));
         this.storageEnabled.set(loaded.storage().enabled());
         this.configLoaded.set(true);
         NetworkStats.setEnabled(resolveMetricsEnabled(loaded));
@@ -212,7 +212,7 @@ public class HassiumConfigService {
         lock.writeLock().lock();
         try {
             this.config = newConfig;
-            this.networkCompressionEnabled.set(newConfig.net().enabled() || newConfig.master().enabled());
+            this.networkCompressionEnabled.set(resolveNetworkEnabled(newConfig));
             this.storageEnabled.set(newConfig.storage().enabled());
             NetworkStats.setEnabled(resolveMetricsEnabled(newConfig));
         } finally {
@@ -242,7 +242,7 @@ public class HassiumConfigService {
 
     /** 影子端配置开关（默认 true）。false 时客户端缓存/超视渲染/SeedGen/影子光照全 gate 关闭。 */
     public boolean isHassiumEngineEnabled() {
-        return config.chunk().hassiumEngineEnabled();
+        return config.chunk().enabled();
     }
 
     /** 分段增量：MISMATCH 时补变更方块，过多则整段/整块（影子端消费）。 */
@@ -257,27 +257,22 @@ public class HassiumConfigService {
 
     /**
      * 影子端运行时可用（= 配置开启 && 服务端已装 MOD && 影子服务端创建成功，启用态）。
-     * 启用态下客户端不再计算光照，区块光照统一投递影子端计算。
+     * 启用态下影子端负责权威光照与回传；客户端光照引擎仍保持 vanilla 默认开启。
      */
     public boolean isShadowEngineAvailable() {
         return isHassiumEngineEnabled()
                 && io.github.limuqy.mc.hassium.network.ClientChunkPipeline.getInstance().isShadowEngineAvailable();
     }
 
-    /**
-     * 客户端非网络向功能总 gate：配置关（hassiumEngineEnabled=false）或影子端创建失败
-     * （降级态）时关闭客户端缓存 / 超视渲染 / SeedGen / 世界导出。
-     * <p>
-     * 服务端未装 Hassium MOD（握手未到达）时仍开放：OVD、客户端缓存、世界导出是纯客户端
-     * 能力，不依赖服务端；仅影子端不启动、光照回退客户端重算。
-     */
+    /** 客户端功能 gate；仅在 Hassium 能力握手完成后开放 legacy fallback。 */
     public boolean isClientFeatureGateOpen() {
         if (!isHassiumEngineEnabled()) {
             return false;
         }
-        return !io.github.limuqy.mc.hassium.network.ClientChunkPipeline.getInstance().isShadowServerFailed();
+        io.github.limuqy.mc.hassium.network.ClientChunkPipeline pipeline =
+                io.github.limuqy.mc.hassium.network.ClientChunkPipeline.getInstance();
+        return pipeline.isHassiumHandshakeDone() && !pipeline.isShadowServerFailed();
     }
-
     /**
      * 网络压缩算法（固定 ZSTD，无其它实现可选）。
      */
@@ -560,7 +555,7 @@ public class HassiumConfigService {
      * 登出服务器时是否自动重置指标计数（仅客户端字段）。
      */
     public boolean isMetricsAutoResetEnabled() {
-        return config.net().metricsAutoReset();
+        return config.debug().networkMetricsAutoReset();
     }
 
     /** 是否启用 SeedGen（服务端：对 pristine 区块发 SeedRef 替代区块数据；默认关）。 */
@@ -591,10 +586,20 @@ public class HassiumConfigService {
 
     /** 是否启用 JoinBoost（进服后短时提高主线程预算加速加载） */
     public boolean isJoinBoostEnabled() {
-        return config.chunk().joinBoostEnabled();
+        return config.chunk().enabled();
     }
 
     // --- internal helpers ---
+    private static boolean resolveNetworkEnabled(HassiumConfig cfg) {
+        try {
+            return Services.PLATFORM.isPhysicalClient()
+                    ? cfg.chunk().enabled()
+                    : cfg.master().enabled();
+        } catch (Throwable ignored) {
+            return cfg.master().enabled();
+        }
+    }
+
 
     /**
      * 根据物理端解析 metricsEnabled：
@@ -606,9 +611,6 @@ public class HassiumConfigService {
                 || Boolean.parseBoolean(System.getProperty("hassium.serverSmokeTest", "false"))) {
             return true;
         }
-        if (Services.PLATFORM.isPhysicalClient()) {
-            return cfg.net().metricsEnabled();
-        }
-        return cfg.master().metricsEnabled();
+        return cfg.debug().networkMetricsEnabled();
     }
 }

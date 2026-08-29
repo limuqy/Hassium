@@ -1,5 +1,6 @@
 package io.github.limuqy.mc.hassium.network;
 
+import io.github.limuqy.mc.hassium.network.seedgen.ShadowVanillaLightPipeline;
 import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.cache.client.ChunkOutOfViewException;
 import io.github.limuqy.mc.hassium.cache.client.ViewDistanceExtensionService;
@@ -56,9 +57,8 @@ public class ClientChunkHandler {
 
     /**
      * 加载地形屏未关时，玩家脚下切比雪夫 ≤1 的柱先落地方块，避免影子光屏障挡住
-     * {@code LevelRenderer.isChunkCompiled}。必须走 {@link #applyLoadingScreenBlocksOnly}，
-     * 不得官方 {@code handleLevelChunkWithLight}：剥光包会 {@code enableChunkLight} 触发
-     * 客户端自算光，与影子端重复并造成先亮后暗。
+     * {@code LevelRenderer.isChunkCompiled}。加载屏快路径只提前安装方块数据；光照计算
+     * 保持原版默认开启，后续影子端完成的光照包仍可按原版路径校正结果。
      */
     public static boolean shouldFastApplyForLoadingScreen(ChunkPos pos) {
         Minecraft mc = Minecraft.getInstance();
@@ -85,8 +85,8 @@ public class ClientChunkHandler {
     }
 
     /**
-     * 加载屏快路径：只写入方块/高度图/BE，并标脏 mesh；不 {@code applyLightData}/
-     * {@code enableChunkLight}。对齐单人「服务端算光、客户端只装」——此处权威光由影子端后补。
+     * 加载屏快路径：只提前写入方块/高度图/BE，并标脏 mesh；客户端光照引擎保持默认开启。
+     * 影子端完成后仍通过类原版光照包发布权威结果。
      * <p>
      * 必须在客户端主线程调用。
      *
@@ -117,17 +117,16 @@ public class ClientChunkHandler {
                 logChunkApplyEvent("loading_blocks_miss", pos, false, mc);
                 return false;
             }
-            // 只催 mesh，不打开光照 section（避免 LevelRenderer.runLightUpdates 自算）。
+            // 先催 mesh；光照计算保持 vanilla 默认开启，影子端后续光照包负责收敛权威结果。
             int minSection = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMinSection(level);
             int maxSection = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMaxSectionExclusive(level);
             for (int sectionY = minSection; sectionY < maxSection; sectionY++) {
                 level.setSectionDirtyWithNeighbors(chunkX, sectionY, chunkZ);
             }
-            level.getLightEngine().setLightEnabled(pos, false);
             io.github.limuqy.mc.hassium.cache.client.ClientMainThreadBudget.noteChunkApplyActivity();
             NetworkStats.recordChunkApplied(chunkX, chunkZ);
             DebugLogger.info(LogType.CHUNK_APPLY,
-                    "[APPLY_CHUNK] Loading-screen blocks-only ({}, {}) — light deferred to shadow",
+                    "[APPLY_CHUNK] Loading-screen blocks-only ({}, {}) — client light remains enabled",
                     chunkX, chunkZ);
             return true;
         } catch (Throwable t) {
@@ -376,6 +375,28 @@ public class ClientChunkHandler {
             return null;
         }
     }
+
+    /** 处理 shadowPullV1 的 FULL 原版区块包；响应 payload 已经是 packet 线格式。 */
+    public static boolean handleShadowPullPayload(String dimension, int chunkX, int chunkZ,
+                                                  ShadowChunkRole role, byte[] payload) {
+        if (payload == null || payload.length == 0 || role == null) {
+            return false;
+        }
+        net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket packet =
+                decodeChunkPacket(payload);
+        if (packet == null) {
+            ClientChunkPipeline.getInstance().setShadowServerFailed(true);
+            return false;
+        }
+        if (role == ShadowChunkRole.HALO) {
+            ShadowVanillaLightPipeline.submitHalo(dimension, new ChunkPos(chunkX, chunkZ), packet);
+        } else {
+            ShadowVanillaLightPipeline.submitVisible(dimension, new ChunkPos(chunkX, chunkZ), packet,
+                    traceOriginIfLoggingEnabled(TraceOrigin.SERVER_PUSH));
+        }
+        return true;
+    }
+
 
     /**
      * 将解压后的区块数据应用到客户端世界

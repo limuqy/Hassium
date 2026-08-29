@@ -186,6 +186,57 @@ public class ServerChunkPushManager {
      * 服务端据此决定是否剥光：客户端声明可本地/影子端算光才剥（stripLightIfConfigured gate）。
      */
     private final Map<UUID, Boolean> playerLightComputeSupported = new ConcurrentHashMap<>();
+    /** 每玩家 shadowPullV1 能力；未协商客户端永远走旧 admission。 */
+    private final Map<UUID, Boolean> playerShadowPullSupported = new ConcurrentHashMap<>();
+
+    public void setPlayerShadowPullSupported(UUID playerId, boolean supported) {
+        if (supported) {
+            playerShadowPullSupported.put(playerId, Boolean.TRUE);
+        } else {
+            playerShadowPullSupported.remove(playerId);
+        }
+    }
+
+    public boolean isPlayerShadowPullSupported(UUID playerId) {
+        return Boolean.TRUE.equals(playerShadowPullSupported.get(playerId));
+    }
+
+    /** 在服务端主线程构建单区块 pull 终态；不读取客户端提交的 payload。 */
+    public ShadowPullResponseS2CPacket.Result resolveShadowPull(ServerPlayer player,
+                                                                  ShadowPullRequestC2SPacket.Entry entry,
+                                                                  String dimension) {
+        if (player == null || entry == null) {
+            return null;
+        }
+        ServerLevel level = PlayerCompat.getServerLevel(player);
+        if (level == null || !LevelCompat.getDimensionId(level).equals(dimension)) {
+            return ShadowPullResponseS2CPacket.Result.error(entry.chunkX(), entry.chunkZ(), "dimension");
+        }
+        ChunkPos pos = new ChunkPos(entry.chunkX(), entry.chunkZ());
+        try {
+            LevelChunk chunk = level.getChunk(pos.x, pos.z);
+            Map<Integer, Long> hashes = ChunkContentHashUtil.computeSectionHashes(chunk);
+            long chunkHash = ChunkContentHashUtil.combineSectionHashes(hashes);
+            long[] sectionHashArray = ChunkContentHashUtil.sectionHashesToArray(hashes);
+            List<Long> sectionHashList = new ArrayList<>(sectionHashArray.length);
+            for (long hash : sectionHashArray) {
+                sectionHashList.add(hash);
+            }
+            if (entry.chunkHash() == chunkHash && entry.sectionHashes().equals(sectionHashList)) {
+                return ShadowPullResponseS2CPacket.Result.unchanged(entry.chunkX(), entry.chunkZ(),
+                        chunkHash, sectionHashList);
+            }
+            ClientboundLevelChunkWithLightPacket packet = buildChunkPacket(chunk, level);
+            byte[] payload = packet == null ? null : encodeChunkPacket(packet, level.registryAccess());
+            return payload == null
+                    ? ShadowPullResponseS2CPacket.Result.error(entry.chunkX(), entry.chunkZ(), "encode")
+                    : ShadowPullResponseS2CPacket.Result.payload(entry.chunkX(), entry.chunkZ(),
+                    ShadowPullResponseS2CPacket.Kind.FULL, chunkHash, sectionHashList, payload);
+        } catch (Throwable t) {
+            Constants.LOG.warn("Hassium: shadowPullV1 failed for {}", pos, t);
+            return ShadowPullResponseS2CPacket.Result.error(entry.chunkX(), entry.chunkZ(), "load");
+        }
+    }
 
     /**
      * 每玩家影子端存档布隆位图层（客户端握手上报；bloom hit → 只发 hash 让影子端比对）。
@@ -1153,6 +1204,45 @@ public class ServerChunkPushManager {
         pendingSends.computeIfAbsent(playerId, ignored -> ConcurrentHashMap.newKeySet())
                 .add(ChunkPos.asLong(pos.x, pos.z));
     }
+
+#if MC_VER < MC_1_21_1
+    /**
+     * 1.20.1 gateway 注入移动包后显式补齐 tracking 新进入的边带。
+     * vanilla ChunkMap 的移动 tracking 仍维护实体状态，但自定义 trackChunk 拦截后
+     * 不再可靠地产生新的 Hassium pending；这里只扫描新视距边带，不重复扫描整个视距。
+     */
+    public void onGatewayPlayerChunkMove(ServerPlayer player, ChunkPos oldPos, ChunkPos newPos) {
+        if (player == null || oldPos == null || newPos == null || oldPos.equals(newPos)
+                || !PlayerCompressionTracker.isCompressionEnabled(player)) {
+            return;
+        }
+        ServerLevel level = PlayerCompat.getServerLevel(player);
+        if (level == null) {
+            return;
+        }
+        int viewDistance = PlayerCompat.getViewDistance(player);
+        int radius = Math.max(2, viewDistance + 1);
+        String dimension = LevelCompat.getDimensionId(level);
+        int marked = 0;
+        for (int dx = -radius; dx <= radius; dx++) {
+            for (int dz = -radius; dz <= radius; dz++) {
+                int cx = newPos.x + dx;
+                int cz = newPos.z + dz;
+                if (!isServerChunkInRange(cx, cz, newPos.x, newPos.z, viewDistance)
+                        || isServerChunkInRange(cx, cz, oldPos.x, oldPos.z, viewDistance)) {
+                    continue;
+                }
+                markChunkPendingToSend(player, new ChunkPos(cx, cz), dimension);
+                marked++;
+            }
+        }
+        if (marked > 0) {
+            DebugLogger.info(LogType.NETWORK,
+                    "[GATEWAY-MOVE] queued {} newly visible chunks player={} old=({}, {}) new=({}, {})",
+                    marked, player.getName().getString(), oldPos.x, oldPos.z, newPos.x, newPos.z);
+        }
+    }
+#endif
 
 
     /**
@@ -2664,6 +2754,7 @@ public class ServerChunkPushManager {
         playerStateReports.remove(playerId);
         // review-fix: T3-52：能力表随玩家清理（防 per-player 表无界增长）
         playerSeedGenSupported.remove(playerId);
+        playerShadowPullSupported.remove(playerId);
         playerLightComputeSupported.remove(playerId);
         seedGenDisabledPlayers.remove(playerId);
         seedGenFallbackCounts.remove(playerId);

@@ -30,7 +30,6 @@ class FabricTomlDataPlaneConfigTest {
         FabricTomlConfigIO.saveServer(root, new HassiumConfig(
                 HassiumConfig.StorageConfig.DEFAULT,
                 HassiumConfig.ChunkCoreConfig.DEFAULT,
-                HassiumConfig.NetCoreConfig.DEFAULT,
                 master,
                 HassiumConfig.CompatConfig.DEFAULT,
                 HassiumConfig.DebugConfig.DEFAULT));

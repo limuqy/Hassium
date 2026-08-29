@@ -316,22 +316,6 @@ public class ShadowSeedServer extends MinecraftServer {
         }
     }
 
-    /**
-     * 大批量光任务投递后的引擎任务水位排水（委托
-     * {@link ShadowLightCompute#awaitEngineTaskDrain}）：仅 injectChunk（重注入清光）与
-     * relightChunk 使用——两柱清光单柱可投 48+ 个 PRE 任务，连续多柱叠加会越过
-     * vanilla sorter 并发 runUpdate 阈值（1000）→ 任务错序 → 空光层打包黑块。
-     * 每柱末尾调用：水位已达标时零开销（一次 size 读），积压时忙等 mailbox 消化。
-     */
-    private void awaitLightTaskDrain(ServerLevel level) {
-        try {
-            ThreadedLevelLightEngine lightEngine =
-                    (ThreadedLevelLightEngine) level.getChunkSource().getLightEngine();
-            ShadowLightCompute.awaitEngineTaskDrain(lightEngine);
-        } catch (Throwable ignored) {
-            // 引擎不可用：排水跳过（不阻塞注入链）
-        }
-    }
     /** shutdown 用：资源引用 */
     WorldStem stem() {
         return stem;
@@ -346,25 +330,36 @@ public class ShadowSeedServer extends MinecraftServer {
      * 影子端是冻结后端：区块数据只来源于服务端 packet（{@code replaceWithPacketData}
      * 整柱替换），本 server 不生成世界。种子仅用于 ServerLevel 装配，不影响注入数据。
      * <p>
-     * 把剥光 S2C 包 decode 成 {@code LevelChunk} 写入注入表，并加 UNKNOWN FULL 票
-     * 进入 ChunkMap（{@code scheduleChunkLoad} 短路为 ImposterProtoChunk）。
+     * 把剥光 S2C 包 decode 成 {@code LevelChunk} 写入注入表，并加 UNKNOWN LIGHT 票
+     * 进入 ChunkMap（{@code scheduleChunkLoad} 短路为允许读取真实 sections 的
+     * {@code ImposterProtoChunk}）。
      * <p>
-     * 探活（vanilla ChunkMap / ChunkStatusTasks）：FULL 柱 persisted 恒 FULL；
-     * {@code isLighted==false} 时 LIGHT task <em>可能</em>仍被调用，但 LIGHT range=1
-     * 会拉邻柱，无盘邻柱走 GENERATION_PYRAMID。注入路径禁止 worldgen，因此不算光
-     * 不依赖金字塔重跑 LIGHT；清光仍用 {@link #clearChunkLight}（禁止换成
-     * {@code updateChunkStatus}）。
-     * <p>
-     * 清光只在重注入（REPLACE 覆盖）时执行（强制覆盖共享空光层，见
-     * {@link #clearChunkLight}）；全新柱无引擎状态直接跳过。全部经
-     * ThreadedLevelLightEngine 异步任务（runMainLoop 已驱动 tryScheduleUpdate）。
-     * 注入失败返回 false（调用方走单柱兜底）。
+     * 原版 {@code ChunkStatus.LIGHT} future 负责 INITIALIZE_LIGHT/LIGHT 任务和邻柱
+     * holder 依赖；影子端不请求 FULL，因此不会把无盘邻柱送入 GENERATION_PYRAMID。
+     * 重注入只标记 {@code lightCorrect=false}，由同一 LIGHT future 重新计算，不直接
+     * 清理或排水 {@code ThreadedLevelLightEngine}。注入失败返回 false（调用方走单柱兜底）。
      */
     /** 兼容本地调用：常规网络柱均为可见柱。 */
     public boolean injectChunk(ChunkPos pos, ClientboundLevelChunkWithLightPacket packet) {
         return injectChunk(DimensionKey.OVERWORLD, pos, packet,
                 io.github.limuqy.mc.hassium.network.ShadowChunkRole.VISIBLE);
     }
+    /**
+     * 统一 packet-backed pre-LIGHT 入口。远程 full 与缓存快照都先进入影子
+     * {@code LevelChunk}，再由调用方提交同一官方光照队列；SeedGen 不允许伪装成 packet。
+     * <p>
+     * T1 只收口入口，不改变现有 {@link #injectChunk} 的替换、持久化和失败语义。
+     */
+    public boolean injectPreLight(String dimension, ChunkPos pos,
+                                  ClientboundLevelChunkWithLightPacket packet,
+                                  io.github.limuqy.mc.hassium.network.ShadowChunkRole role,
+                                  ShadowChunkSource source) {
+        if (source == null || !source.isPacketSnapshot()) {
+            return false;
+        }
+        return injectChunk(dimension, pos, packet, role);
+    }
+
 
     /**
      * 注入一个服务端区块包到指定维度（任意线程可调）：键走
@@ -395,29 +390,13 @@ public class ShadowSeedServer extends MinecraftServer {
                     decodeInjectedPacketLocked(dimension, key, pos, role, level, packet));
             updateInjectTicket(dimension, pos, previousRole, role);
             ShadowLightProbe.onInjected(dimension, pos, chunk);
-            boolean fresh = previous == null;
-            if (!fresh) {
-                // 重注入（REPLACE 覆盖）：旧光必须物理清除再重算。全新柱无任何引擎状态
-                // （section 状态 0、无数据层），跳过清光——省 2×~30 个引擎任务，避免首波
-                // 并发任务量越过 ThreadedLevelLightEngine 1000 阈值触发 sorter 线程并发
-                // runUpdate → 任务错序（propagateLightSources 先于 updateSectionStatus）→
-                // 空光层被打包推送（客户端黑面/黑块）。全新柱由官方 initializeLight +
-                // lightChunk 直接初始化。
-                clearChunkLight(pos, chunk);
-            }
             io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.markContentDirty(key);
             if (role != io.github.limuqy.mc.hassium.network.ShadowChunkRole.HALO) {
                 chunk.setLightCorrect(false);
             }
             ShadowCacheEviction.recordAccess(dimension, pos);
             registerInjectTicket(dimension, pos, role);
-            if (!fresh) {
-                // 重注入清光投递 48+ 个 PRE 任务：按柱排水，防连续重注入叠加越 1000 阈值
-                // （fresh 柱零投递，size 检查立即通过零开销）。
-                awaitLightTaskDrain(level);
-            }
-            // E1：注入成功 = INGESTED（重注入清光 → 注册表回退，防旧 LIT 语义泄漏）
-            LightReadinessRegistry.markIngested(key);
+            // 注入只提供方块数据；原版 LIGHT future 完成前保持 isLightCorrect=false。
             return true;
         } catch (Throwable t) {
             ShadowLightCompute.withChunkLock(pos, () -> restoreInjectedChunk(key, previous, previousRole));
@@ -509,8 +488,8 @@ public class ShadowSeedServer extends MinecraftServer {
     }
 
     /**
-     * 在影子服务端主线程、注入票已生效后请求原版 ChunkHolder FULL future。
-     * 原版 LIGHT 只完成单柱光照；FULL 才经过原版区块首包的完成门槛。
+     * 在影子服务端主线程、注入票已生效后请求原版 ChunkHolder 3×3 LIGHT future。
+     * 影子柱只需要原版光照步骤；使用 FULL 会向邻柱扩散并误触发地形 worldgen。
      * injectChunk 允许后台调用，不能在其返回线程直接请求，否则会早于
      * registerInjectTicket 的队列任务而看见未建 holder。
      */
@@ -526,7 +505,7 @@ public class ShadowSeedServer extends MinecraftServer {
                     return;
                 }
                 io.github.limuqy.mc.hassium.compat.ShadowServerCompat
-                        .requestFullChunk(level.getChunkSource(), pos)
+                        .requestLightChunk(level.getChunkSource(), pos)
                         .whenComplete((ignored, failure) -> {
                             if (failure != null) {
                                 result.completeExceptionally(failure);
@@ -646,167 +625,23 @@ public class ShadowSeedServer extends MinecraftServer {
         }
     }
 
-    /**
-     * 整柱实际 section 的权威光是否全部就绪：sky/block 两层 DataLayer 非 null，且
-     * <b>位于任一行天空源的 section 的 sky 层必须非全空</b>。
-     * <p>
-     * 供 {@code ShadowLightCompute.finishLight} 对齐原版 {@code isLightCorrect}：
-     * 不全 → {@code setLightCorrect(false)} + 仍推首包；补光走 drainLightMasks。
-     * 补光走 drainLightMasks。不再用于挡首包或续投屏障。
-     * <p>
-     * 官方 {@code ClientboundLightUpdatePacketData} 对 null DataLayer 是「静默省略」（新柱
-     * apply 后该 section 无光数据 → 黑块）；对全空层则打包成 empty 掩码——客户端收到后
-     * 把该 section 置为全 0 光。全空 sky 层只在「该行全部天空源都低于本 section 顶」时合法；
-     * 位于源的 section 全空 = 播种/fill 未跑到（引擎任务错序），按未完备处理。
-     */
+    /** 原版 LIGHT future 的唯一完成标志。 */
     public boolean isChunkLightComplete(ChunkPos pos, LevelChunk chunk) {
-        try {
-            // lightCorrect=false 只出现在异常路径 / 尚未跑完 LIGHT，按未完备处理。
-            if (!chunk.isLightCorrect()) {
-                return false;
-            }
-            return hasCompleteLightLayers(pos, chunk);
-        } catch (Throwable t) {
-            return false;
-        }
+        return chunk != null && chunk.isLightCorrect();
     }
 
-    /**
-     * 引擎层是否已齐（不看 {@code isLightCorrect}）。退出落盘用：标志仍为 false 时
-     * 不能走 {@link #isChunkLightComplete}，否则永远无法从 false 拉回 true。
-     */
-    boolean hasCompleteLightLayers(ChunkPos pos, LevelChunk chunk) {
-        try {
-            ServerLevel owner = chunkLevel(chunk);
-            LevelLightEngine lightEngine = owner.getChunkSource().getLightEngine();
-            boolean hasSky = owner.dimensionType().hasSkyLight();
-            net.minecraft.world.level.lighting.ChunkSkyLightSources skySources =
-                    hasSky ? chunk.getSkyLightSources() : null;
-            int minSection = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMinSection(chunk);
-            int maxSection = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMaxSectionExclusive(chunk);
-            for (int y = minSection; y < maxSection; y++) {
-                SectionPos sp = SectionPos.of(pos, y);
-                net.minecraft.world.level.chunk.LevelChunkSection section = chunk.getSection(chunk.getSectionIndexFromSectionY(y));
-                if (section == null || section.hasOnlyAir()) {
-                    continue;
-                }
-                if (lightEngine.getLayerListener(LightLayer.BLOCK).getDataLayerData(sp) == null) {
-                    return false;
-                }
-                if (hasSky && lightEngine.getLayerListener(LightLayer.SKY).getDataLayerData(sp) == null
-                        && sectionAtOrAboveAnySkySource(skySources, y,
-                                io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMinBlockY(owner))) {
-                    return false;
-                }
-            }
-            return true;
-        } catch (Throwable t) {
-            return false;
-        }
-    }
-
-    /**
-     * 打包前天空光校验（只读）——官方 {@code lightChunk} / {@code propagateLightSources}
-     * 应已把源及其上方写成 15。缺失只告警，不回写 queuedSections。
-     */
-    public void fillSkySectionsForPacket(ChunkPos pos, LevelChunk chunk) {
-        if (!isSkySeeded(pos, chunk)) {
-            DebugLogger.warn(DebugLogger.LogType.ASYNC,
-                    "[SHADOW_LIGHT] Sky seed missing ({}, {}) — verify-only after vanilla lightChunk",
-                    pos.x, pos.z);
-        }
-    }
-
-    /**
-     * 打包可见的天空光是否已把「源及其上方」写成 15。
-     */
-    public boolean isSkySeeded(ChunkPos pos, LevelChunk chunk) {
-        try {
-            // 天光判定按 chunk 所属 level：下界无天光直接视为已播种（无 sky 层语义）。
-            ServerLevel owner = chunkLevel(chunk);
-            if (!owner.dimensionType().hasSkyLight()) {
-                return true;
-            }
-            net.minecraft.world.level.lighting.ChunkSkyLightSources sources =
-                    chunk.getSkyLightSources();
-            LevelLightEngine levelLightEngine = owner.getChunkSource().getLightEngine();
-            LightEngine<?, ?> skyEngine =
-                    ((io.github.limuqy.mc.hassium.mixin.LevelLightEngineAccessor) levelLightEngine)
-                            .hassium$getSkyEngine();
-            if (skyEngine == null) {
-                return true;
-            }
-            int minBlockY = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMinBlockY(owner);
-            int minSection = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMinSection(chunk);
-            int maxSection = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMaxSectionExclusive(chunk);
-            for (int y = minSection; y < maxSection; y++) {
-                if (!sectionAtOrAboveAnySkySource(sources, y, minBlockY)) {
-                    continue;
-                }
-                SectionPos sp = SectionPos.of(pos, y);
-                DataLayer sky = skyEngine.getDataLayerData(sp);
-                int sectionTop = SectionPos.sectionToBlockCoord(y) + 15;
-                for (int x = 0; x < 16; x++) {
-                    for (int z = 0; z < 16; z++) {
-                        int src = sources.getLowestSourceY(x, z);
-                        if (src < minBlockY || src > sectionTop) {
-                            continue;
-                        }
-                        int fromY = Math.max(src, SectionPos.sectionToBlockCoord(y));
-                        for (int by = fromY; by <= sectionTop; by++) {
-                            if (sky == null || sky.get(x, SectionPos.sectionRelative(by), z) != 15) {
-                                return false;
-                            }
-                        }
-                    }
-                }
-            }
-            return true;
-        } catch (Throwable t) {
-            DebugLogger.warn(DebugLogger.LogType.ASYNC,
-                    "[SHADOW_LIGHT] Sky seed check failed ({}, {}): {}", pos.x, pos.z, t.toString());
-            return false;
-        }
-    }
-
-    /**
-     * 解析 chunk 所属 ServerLevel（{@code LevelChunk.getLevel()} 即装配时的 level 引用，
-     * 全版本统一；1.21.11 亦无 {@code level()} 访问器）。
-     * 光照引擎/天光判定按此 level 的 dimensionType——下界无天光，恒用 overworld
-     * 会把 nether 柱误判需要 sky 层（REQ 明细5）。
-     */
     private static ServerLevel chunkLevel(LevelChunk chunk) {
         return (ServerLevel) chunk.getLevel();
     }
-
-
-    /** 是否存在真实天空源（非 {@code NEGATIVE_INFINITY} 哨兵）位于 sectionTop 或以下。 */
-    static boolean sectionAtOrAboveAnySkySource(
-            net.minecraft.world.level.lighting.ChunkSkyLightSources sources,
-            int sectionY, int minBlockY) {
-        int sectionTop = SectionPos.sectionToBlockCoord(sectionY) + 15;
-        for (int x = 0; x < 16; x++) {
-            for (int z = 0; z < 16; z++) {
-                int src = sources.getLowestSourceY(x, z);
-                if (src >= minBlockY && src <= sectionTop) {
-                    return true;
-                }
-            }
-        }
-        return false;
-    }
-
     /**
      * 磁盘命中 + hash 一致但 {@code !isLightCorrect}：本地重算光照（不请求网络全量）。
-     * 清光后引擎传播期间保持 {@code isLightCorrect=false}，收敛由 finishLight /
-     * confirmLightsCorrectIfConverged 写回。
+     * 清光后引擎传播期间保持 {@code isLightCorrect=false}，完成后由原版 LIGHT future 写回。
      */
     public void relightChunk(ChunkPos pos, LevelChunk chunk) {
         chunk.setLightCorrect(false);
         io.github.limuqy.mc.hassium.storage.ShadowStorageHashes
                 .markLightDirty(dimensionId(chunkLevel(chunk)), pos);
-        clearChunkLight(pos, chunk);
-        awaitLightTaskDrain(chunkLevel(chunk)); // 清光投递 48+ PRE 任务：按柱排水（processRemoteHashes 批量 relight 叠加防护）
+        // 光照重算由 ShadowLightCompute 的原版 LIGHT future 统一调度。
     }
 
     /**
@@ -1484,7 +1319,6 @@ public class ShadowSeedServer extends MinecraftServer {
             return;
         }
         long key = DimensionKey.key(dimension, pos.x, pos.z);
-        LightReadinessRegistry.markIngested(key); // E1：缓存命中/读盘直载入口
         if (dirty) {
             io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.markContentDirty(key);
         } else {
@@ -1521,36 +1355,6 @@ public class ShadowSeedServer extends MinecraftServer {
         }
     }
 
-    /**
-     * 引擎任务排空后，把「层已齐全」的可见柱改回 {@code isLightCorrect=true} 并入存储队列。
-     * 不要求注册表 SURROUNDED：屋檐邻光已在本柱 DataLayer 里，R1 回传亮光必须能落盘。
-     * Halo 仍省略光。层不齐的柱保持 false，避免误 reuse 空光。
-     */
-    public void confirmLightsCorrectIfConverged() {
-        boolean any = false;
-        for (Map.Entry<Long, LevelChunk> e : injectedChunks.entrySet()) {
-            LevelChunk chunk = e.getValue();
-            if (chunk == null) {
-                continue;
-            }
-            ChunkPos pos = chunk.getPos();
-            boolean halo = haloBlocksOnly.contains(e.getKey());
-            if (!ShadowLightCompute.shouldRestoreLightCorrectOnExit(
-                    halo, chunk.isLightCorrect(), hasCompleteLightLayers(pos, chunk))) {
-                continue;
-            }
-            chunk.setLightCorrect(true);
-            String dim = DimensionKey.dimensionOf(e.getKey());
-            if (dim != null) {
-                persistLightReady(dim, pos);
-            }
-            any = true;
-        }
-        if (any) {
-            DebugLogger.info(DebugLogger.LogType.ASYNC,
-                    "[SHADOW_LIGHT] Visible columns with complete layers marked isLightCorrect");
-        }
-    }
 
     /**
      * 影子端存档布隆位图（R2 重连握手上报）：扫描全部 region 文件头部位图

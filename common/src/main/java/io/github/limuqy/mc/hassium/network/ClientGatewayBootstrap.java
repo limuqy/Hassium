@@ -46,9 +46,21 @@ public final class ClientGatewayBootstrap {
             if (data == null) {
                 return;
             }
+            handleGatewayInfoData(data);
+            ci.cancel(); // 本通道已消费：vanilla 无注册表项，取消避免 Unknown payload 告警
+        } catch (Throwable t) {
+            LOGGER.warn("Hassium: gateway_info payload handling failed", t);
+        }
+    }
+
+    /** 供 Fabric 1.20.1 ClientPlayNetworking receiver 使用的原始字节入口。 */
+    public static void handleGatewayInfoData(byte[] data) {
+        if (data == null) {
+            return;
+        }
+        try {
             GatewayInfoCodec.GatewayInfo info = GatewayInfoCodec.decode(data);
             NetworkCore.getInstance().onGatewayInfo(info);
-            ci.cancel(); // 本通道已消费：vanilla 无注册表项，取消避免 Unknown payload 告警
         } catch (Throwable t) {
             LOGGER.warn("Hassium: gateway_info payload handling failed", t);
         }

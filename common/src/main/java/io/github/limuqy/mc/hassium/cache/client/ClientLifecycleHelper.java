@@ -88,16 +88,12 @@ public final class ClientLifecycleHelper {
 
             // M2: 异步初始化存储（热度索引 / section 哈希在后台线程）
             initializeCacheAsync();
-            // 影子端预创建（可能已在 ConnectScreen/CONNECTING 投机启动；此处幂等补齐）。
-            // 握手只开 isEnabled() 消费闸；无握手约 3s 后关停投机影子。
-            startShadowIfConfigured();
+            // 影子端只在 Hassium 能力握手确认后启动；原版服务端保持纯原版客户端路径。
         }
-        io.github.limuqy.mc.hassium.network.seedgen.ShadowServerRegistry.getInstance().permitUnparkForLogin();
-        io.github.limuqy.mc.hassium.network.seedgen.ShadowServerRegistry.getInstance().getOrCreate();
         if (initialized) {
             return;
         }
-        // 网络核心（网关）：进入 CONNECTING 并尽力自动建立 outbound（T4 骨架）
+        // 网络核心仅等待 gateway_info；不得在原版登录完成时探测 host:25566。
         io.github.limuqy.mc.hassium.network.core.NetworkCore.getInstance().onLogin();
         initialized = true;
     }
@@ -118,12 +114,9 @@ public final class ClientLifecycleHelper {
      *                   {@link #currentServerIp()}
      */
     public static void startShadowIfConfigured(net.minecraft.client.multiplayer.ServerData serverData) {
-        if (!HassiumConfigService.getInstance().isHassiumEngineEnabled()) {
+        if (!HassiumConfigService.getInstance().isHassiumEngineEnabled()
+                || !io.github.limuqy.mc.hassium.network.ClientChunkPipeline.getInstance().isHassiumHandshakeDone()) {
             return;
-        }
-        HassiumTaskExecutor executor = HassiumTaskExecutor.getClient();
-        if (executor == null || !executor.isRunning()) {
-            HassiumTaskExecutor.initClient(HassiumTaskExecutor.DEFAULT_CLIENT_THREADS);
         }
         recordCacheLocationForConnect(serverData);
         io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.onCacheLocationReady();
@@ -253,6 +246,8 @@ public final class ClientLifecycleHelper {
         disconnectCleanupArmed.set(true);
         ClientMainThreadBudget.clearJoinBoost();
         io.github.limuqy.mc.hassium.network.core.NetworkCore.getInstance().onDisconnect();
+        // 先于世界拆除清掉 shadow pull 的 pending/epoch，避免快速 R2 复用旧响应或旧 desired-set。
+        io.github.limuqy.mc.hassium.network.ShadowChunkLoaderRuntime.reset();
 
         ViewDistanceExtensionService.getInstance().clearAllRenderOnly();
         ChunkMeshCompileLog.reset();

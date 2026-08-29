@@ -121,23 +121,19 @@ MC_1_21_11
 - 各加载器 `registerChannels` / 握手入口仍尊重配置项 `HassiumConfigService.isNetworkCompressionEnabled()`
 - 实现细节见 `PacketCodecCompat`（StreamCodec / GameProtocols / IdDispatchCodec）
 
-### 预握手（历史：login / 配置阶段声明 Hassium 能力）→ 2.0.0 网关自有通道握手
+### 预握手：首批区块能力声明 → 2.0.0 网关自有通道握手
 
-**历史（1.1.2）**：1.20.1 进服初始区块 88%（1614/1842）在 Play 握手完成前经 `trackChunk` 原版直发（真实 light、不受 `maxChunksPerTick` 限流、无 chunkHash 元数据）。治本方案：客户端在 **login（1.20.1）/ 配置阶段（1.20.2+）** 提前发送预握手（`hassium:prehandshake_c2s`），服务端仅 `PlayerCompressionTracker.markPreHandshake(UUID)`；`ServerPlayer` 创建时（`MixinServerPlayer` `<init>` TAIL → `tryEnableOnPlayerJoin`）自动提升压缩 → 进服第一圈 `trackChunk`/`sendChunk` 100% 走 Hassium 链（剥光 + 限流 + hash 元数据）。ZSTD/聚合/数据面/位置协商仍在 Play 完整握手（幂等）。历史载体（**客户端发送端已删**）：
+服务端剥光不是由 packet 类别决定，而是由 `chunk.lightStrip` 与客户端 Hassium 能力共同决定。为避免在 Play 握手完成前错过首批区块，具备 pre-Play API 的载体提前声明 Hassium；`ServerPlayer` 创建时由 `MixinServerPlayer` 的 `<init>` TAIL → `tryEnableOnPlayerJoin` 自动启用压缩，首圈 `trackChunk` 即进入 Hassium 链（剥光 + 限流 + hash 元数据）。ZSTD/聚合/数据面/位置协商仍在 Play 完整握手完成。
 
-| 段 | 客户端发送（已删） | 服务端接收（保留） |
+| 段 | 当前首批区块策略 | 能力声明 |
 |----|-----------|-----------|
-| fabric 1.20.1 | `ClientLoginNetworking` 回复 login query（`CompletableFuture` 回能力位） | `ServerLoginConnectionEvents.QUERY_START` 发 query + `ServerLoginNetworking` 收；UUID 按类型反射取 `gameProfile`（1.20.1 无访问器；离线服 login 阶段已派生 OfflinePlayer UUID） |
-| fabric 1.20.2–1.20.4 | `C2SConfigurationChannelEvents.REGISTER` → `ClientConfigurationNetworking.send`（legacy Identifier 通道） | `ServerConfigurationNetworking.registerGlobalReceiver` |
-| fabric 1.20.5+ | 同上（`PreHandshakePayload`，CustomPacketPayload） | `ServerConfigurationNetworking.registerGlobalReceiver(PayloadType)` |
-| neoforge 1.20.5+ | 历史：不发送（预握手 mixin 仅 Forge 生效，neoforge 客户端无独立发送端） | `registrar.configurationToServer(PreHandshakePayload.TYPE, ...)`（收 fabric 客户端发来的预握手；`handlePreHandshake` 按 listener owner UUID 标记） |
-| forge 1.20.6 | 历史 mixin（`ClientHandshakePacketListenerImpl.handleGameProfile` TAIL；1.21.2+ 改名 `handleLoginFinished`） | `SimpleChannel.messageBuilder(..., NetworkDirection.CONFIGURATION_TO_SERVER)` |
-| neoforge 1.20.2–1.20.4 / forge 1.20.1 | 历史：无 login/配置阶段通道 API，不预握手（保留 Play 握手；1.20.2+ 原版 batch ack 节流使窗口本就 ≤ 前几批 ~9 块/tick） | — |
+| fabric 1.20.1 | 首圈直接进入 Hassium 链 | `ClientLoginNetworking` 回复 login query；服务端 `ServerLoginConnectionEvents.QUERY_START` / `ServerLoginNetworking` 接收 |
+| fabric ≥1.21.1 | 支持配置阶段预握手 | `ClientConfigurationNetworking.send(PreHandshakePayload.create())`；服务端 `ServerConfigurationNetworking` 接收 |
+| 无 pre-Play API 的 loader/version | 不等待、不阻塞；首批发送带完整光照的 vanilla 包，Play 握手完成后切换 Hassium 优化链 | 仅使用 Play 阶段能力上报 |
 
-**2.0.0 现状**：客户端预握手**发送端已删**（`MixinClientConfigurationPacketListenerImpl` 与 `hassium$doSendPreHandshake` 零残留，删除清单见 `docs/handoff/handoff-2026-08-09-docs-2.0.md`）——能力声明改由**网关自有通道握手**承担：网络核心（`NetworkCore`）↔ 主控核心（`GatewayChannel`）的网关帧连接内完成握手，`NetworkCore.applyHandshake` 于握手响应 `globalCompressionAccepted` 时安装 ZSTD / 启停 UDP 数据面（NetworkCore.java:395-402）；服务端预握手接收端（`registerPreHandshakeServer` / `PreHandshakeProtocol.handlePreHandshake` / `PlayerCompressionTracker.markPreHandshake` + `MixinServerPlayer.tryEnableOnPlayerJoin`）代码保留、仍注册，但无客户端发送端 → 实际不触发（兼容接收；压缩启用现由 Play 完整握手 `PlayerCompressionTracker.enableCompression` 驱动）。
+**当前语义**：不得使用固定 10 秒区块门控。无法在 pre-Play 阶段识别客户端时，立即走完整光照回退；已识别的 Hassium 客户端从首圈进入优化链。预握手只是能力提前声明，不替代网关自有通道的完整握手。
 
-共用载体（历史）：`PreHandshakeProtocol`（legacy buf 编解码）/ `PreHandshakePayload`（1.20.5+ payload，StreamCodec 为 FriendlyByteBuf 级，无 registry 依赖）。能力字段：协议版本、mod 版本、clientCache、globalCompression、compactHeader。客户端侧 hash 处理已有 storage 未就绪缓冲（`PENDING_HASH_PACKETS`），提前推 hash 安全（历史设计依据）。
-
+共用载体：`PreHandshakeProtocol`（legacy buf 编解码）/ `PreHandshakePayload`（1.21.1+ payload，StreamCodec 为 FriendlyByteBuf 级，无 registry 依赖）。能力字段：协议版本、mod 版本、clientCache、globalCompression、compactHeader。
 运行时验证优先级：**1.20.1 → 1.21.1 → 1.21.11**；UDP 数据面断链冒烟经 `UdpFailover` harness 承载（nginx stream 代理 TCP 主控，`scripts/runtime-smoke-test.ps1`）——2.0.0 客户端 failover marker（`FAILOVER_RECONNECT_OK` / `FAILOVER_TERMINAL_OK` / `CACHE_RESUME_HIT`）已随客户端 failover 退役（729d92e），现有效数据面 marker 为服务端 `UDP_BIND_OK` / `UDP_WRR_OK`（`FAILOVER_PERMIT_OK` 仍在服务端 permit 签发链上，正常链路不再由客户端请求触发）；其余锚点以编译 + 短冒烟为主。详见 [`runtime-smoke-test.md`](runtime-smoke-test.md)。
 
 ### KCP 依赖现状（数据面传输层）

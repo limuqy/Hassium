@@ -20,6 +20,9 @@ public final class HassiumChannels {
     public static final PacketId BLOCK_ENTITY_REQUEST_C2S = new PacketId(Constants.MOD_ID, "block_entity_request_c2s");
 
     public static final PacketId CHUNK_DATA_REQUEST_C2S = new PacketId(Constants.MOD_ID, "chunk_data_request_c2s");
+    public static final PacketId SHADOW_PULL_REQUEST_C2S = new PacketId(Constants.MOD_ID, "shadow_pull_request_c2s");
+
+    public static final PacketId SHADOW_PULL_RESPONSE_S2C = new PacketId(Constants.MOD_ID, "shadow_pull_response_s2c");
 
     public static final PacketId CHUNK_HASH_S2C = new PacketId(Constants.MOD_ID, "chunk_hash_s2c");
 

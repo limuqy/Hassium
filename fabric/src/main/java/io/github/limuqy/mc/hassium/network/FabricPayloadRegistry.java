@@ -52,6 +52,8 @@ public final class FabricPayloadRegistry {
             type("block_entity_data_s2c");
     public static final CustomPacketPayload.Type<RawPayload> LIGHT_DELTA_S2C_TYPE =
             type("light_delta_s2c");
+    public static final CustomPacketPayload.Type<RawPayload> SHADOW_PULL_RESPONSE_S2C_TYPE =
+            type("shadow_pull_response_s2c");
 
     /** gateway_info：M1 bootstrap 握手（ServerGatewayInfoSender → PacketPayloadCompat.createClientboundPayload 直发）。 */
     public static final CustomPacketPayload.Type<PacketPayloadCompat.RawCustomPayload> GATEWAY_INFO_S2C_TYPE =
@@ -71,6 +73,8 @@ public final class FabricPayloadRegistry {
             type("block_entity_request_c2s");
     public static final CustomPacketPayload.Type<RawPayload> CLIENT_BLOOM_SYNC_C2S_TYPE =
             type("client_bloom_sync_c2s");
+    public static final CustomPacketPayload.Type<RawPayload> SHADOW_PULL_REQUEST_C2S_TYPE =
+            type("shadow_pull_request_c2s");
 
     // ===== Helper methods =====
 
@@ -156,6 +160,7 @@ public final class FabricPayloadRegistry {
         PayloadTypeRegistry.playS2C().register(SECTION_DELTA_S2C_TYPE, codec(SECTION_DELTA_S2C_TYPE));
         PayloadTypeRegistry.playS2C().register(BLOCK_ENTITY_DATA_S2C_TYPE, codec(BLOCK_ENTITY_DATA_S2C_TYPE));
         PayloadTypeRegistry.playS2C().register(LIGHT_DELTA_S2C_TYPE, codec(LIGHT_DELTA_S2C_TYPE));
+        PayloadTypeRegistry.playS2C().register(SHADOW_PULL_RESPONSE_S2C_TYPE, codec(SHADOW_PULL_RESPONSE_S2C_TYPE));
 
         // C2S types
         PayloadTypeRegistry.playC2S().register(HANDSHAKE_C2S_TYPE, codec(HANDSHAKE_C2S_TYPE));
@@ -164,6 +169,7 @@ public final class FabricPayloadRegistry {
         PayloadTypeRegistry.playC2S().register(SECTION_HASH_REQUEST_C2S_TYPE, codec(SECTION_HASH_REQUEST_C2S_TYPE));
         PayloadTypeRegistry.playC2S().register(BLOCK_ENTITY_REQUEST_C2S_TYPE, codec(BLOCK_ENTITY_REQUEST_C2S_TYPE));
         PayloadTypeRegistry.playC2S().register(CLIENT_BLOOM_SYNC_C2S_TYPE, codec(CLIENT_BLOOM_SYNC_C2S_TYPE));
+        PayloadTypeRegistry.playC2S().register(SHADOW_PULL_REQUEST_C2S_TYPE, codec(SHADOW_PULL_REQUEST_C2S_TYPE));
         // 预握手（login/配置阶段声明能力）：configuration 阶段 C2S payload
         PayloadTypeRegistry.configurationC2S().register(
                 io.github.limuqy.mc.hassium.network.PreHandshakePayload.TYPE,

@@ -22,16 +22,11 @@ import net.minecraft.world.level.chunk.status.ChunkStatus;
 
 /**
  * 影子端 ChunkMap 票/holder 跨版本适配。
- * <p>
- * 探活结论（1.20.1 / 1.21.1 ChunkMap + ChunkStatusTasks）：{@code LevelChunk.getPersistedStatus()}
- * 恒为 {@code FULL}。{@code ChunkStep.apply} 在 persisted 已达目标时仍会调用 task；
- * {@code isLighted} 在 {@code !isLightCorrect} 时为 false，故 LIGHT 步<strong>有可能</strong>
- * 对 {@code ImposterProtoChunk} 跑 {@code initializeLight}+{@code lightChunk}。
- * 但 FULL 票会向外扩散（约 {@code RADIUS_AROUND_FULL_CHUNK}=8），邻柱无盘则走
- * GENERATION_PYRAMID（噪声地形）。注入路径禁止 worldgen，因此<strong>不能</strong>把金字塔
- * 当作 FULL 注入柱的唯一算光路径；官方 {@code initializeLight}/{@code lightChunk} 仍由
- * {@code ShadowLightCompute} 两阶段屏障提交。Ticket + {@code scheduleChunkLoad} 短路只负责
- * 让注入柱进入 ChunkMap。
+ * 探活结论（1.20.1 / 1.21.1 ChunkMap + ChunkStatusTasks）：影子注入柱以 LIGHT 级别票进入
+ * ChunkMap，原版 LIGHT task 负责光照；FULL 票会向外扩散（约
+ * {@code RADIUS_AROUND_FULL_CHUNK}=8），邻柱无盘则走 GENERATION_PYRAMID（噪声地形）。
+ * 注入路径禁止 worldgen，因此不能把 FULL 金字塔当作算光路径；票据与
+ * {@code scheduleChunkLoad} 短路只负责让注入柱进入 LIGHT holder。
  */
 public final class ShadowChunkMapCompat {
 
@@ -156,19 +151,15 @@ public final class ShadowChunkMapCompat {
     public static void removeFullUnknownTicket(ServerChunkCache cache, ChunkPos pos) {
         removeUnknownTicket(cache, pos, ChunkStatus.FULL);
     }
-    /**
-     * 原版首次区块包在中心及一圈邻柱均为 FULL 后发送。
-     * Halo 是可见柱的该邻域，必须与可见柱同持 FULL ticket；
-     * INITIALIZE_LIGHT 只足以参与 lightChunk，无法满足原版首包时机。
-     */
+    /** 影子区块统一以 LIGHT ticket 进入原版 ChunkMap，禁止 FULL 级 worldgen 扩散。 */
     public static void addShadowRoleTicket(ServerChunkCache cache, ChunkPos pos,
                                            io.github.limuqy.mc.hassium.network.ShadowChunkRole role) {
-        addUnknownTicket(cache, pos, ChunkStatus.FULL);
+        addUnknownTicket(cache, pos, ChunkStatus.LIGHT);
     }
 
     public static void removeShadowRoleTicket(ServerChunkCache cache, ChunkPos pos,
                                               io.github.limuqy.mc.hassium.network.ShadowChunkRole role) {
-        removeUnknownTicket(cache, pos, ChunkStatus.FULL);
+        removeUnknownTicket(cache, pos, ChunkStatus.LIGHT);
     }
 
     /**

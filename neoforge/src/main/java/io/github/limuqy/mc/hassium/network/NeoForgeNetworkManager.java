@@ -46,6 +46,8 @@ public class NeoForgeNetworkManager implements NetworkManager {
 
     private static final Logger LOGGER = LoggerFactory.getLogger("Hassium/NeoForgeNetwork");
     private static final String PROTOCOL_VERSION = "1";
+    private static final ShadowPullHandler SHADOW_PULL_HANDLER =
+            new ShadowPullHandler(new ShadowPullRequestLedger());
     // review-fix: T11-15 握手算法列表上限（防恶意 varint 超大分配 / NegativeArraySizeException）
     private static final int MAX_HANDSHAKE_ALGORITHMS = 64;
 
@@ -880,6 +882,23 @@ public class NeoForgeNetworkManager implements NetworkManager {
             return TYPE;
         }
     }
+    public record ShadowPullRequestPayload(byte[] data) implements CustomPacketPayload {
+        public static final Type<ShadowPullRequestPayload> TYPE = new Type<>(
+                ResourceLocationCompat.create(Constants.MOD_ID, "shadow_pull_request_c2s"));
+        public static final StreamCodec<FriendlyByteBuf, ShadowPullRequestPayload> STREAM_CODEC =
+                StreamCodec.composite(ByteBufCodecs.BYTE_ARRAY, ShadowPullRequestPayload::data,
+                        ShadowPullRequestPayload::new);
+        @Override public Type<ShadowPullRequestPayload> type() { return TYPE; }
+    }
+
+    public record ShadowPullResponsePayload(byte[] data) implements CustomPacketPayload {
+        public static final Type<ShadowPullResponsePayload> TYPE = new Type<>(
+                ResourceLocationCompat.create(Constants.MOD_ID, "shadow_pull_response_s2c"));
+        public static final StreamCodec<FriendlyByteBuf, ShadowPullResponsePayload> STREAM_CODEC =
+                StreamCodec.composite(ByteBufCodecs.BYTE_ARRAY, ShadowPullResponsePayload::data,
+                        ShadowPullResponsePayload::new);
+        @Override public Type<ShadowPullResponsePayload> type() { return TYPE; }
+    }
 
     /**
      * 客户端缓存 Bloom 位图同步 Payload (C2S)
@@ -1576,6 +1595,8 @@ public class NeoForgeNetworkManager implements NetworkManager {
                 ChunkDataRequestPayload.STREAM_CODEC,
                 NeoForgeNetworkManager::handleChunkDataRequest
         );
+        registrar.playToServer(ShadowPullRequestPayload.TYPE, ShadowPullRequestPayload.STREAM_CODEC,
+                NeoForgeNetworkManager::handleShadowPullRequest);
 
         // 注册客户端缓存 Bloom 位图同步 (C2S)
         registrar.playToServer(
@@ -1634,6 +1655,8 @@ public class NeoForgeNetworkManager implements NetworkManager {
         // BlockEntityData S2C
         registrar.playToClient(BlockEntityDataPayload.TYPE, BlockEntityDataPayload.STREAM_CODEC,
                 NeoForgeNetworkManager::handleBlockEntityDataS2C);
+        registrar.playToClient(ShadowPullResponsePayload.TYPE, ShadowPullResponsePayload.STREAM_CODEC,
+                (payload, context) -> { });
 
         // LightDelta S2C（方案 A：客户端不消费，no-op 标记已处理）
         registrar.playToClient(LightDeltaPayload.TYPE, LightDeltaPayload.STREAM_CODEC,
@@ -1746,6 +1769,27 @@ public class NeoForgeNetworkManager implements NetworkManager {
                 }
             } catch (Exception e) {
                 LOGGER.error("[SERVER] Failed to handle chunk data request", e);
+            }
+        });
+    }
+    private static void handleShadowPullRequest(ShadowPullRequestPayload payload, IPayloadContext context) {
+        context.enqueueWork(() -> {
+            if (!(context.player() instanceof ServerPlayer player)) {
+                return;
+            }
+            try {
+                FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(payload.data()));
+                ShadowPullRequestC2SPacket request = ShadowPullRequestC2SPacket.decode(buf);
+                ShadowPullResponseS2CPacket response = SHADOW_PULL_HANDLER.handle(player.getUUID(), request,
+                        request.dimension(), request.epoch(), 0, 0, 0,
+                        false, false, entry -> null);
+                FriendlyByteBuf out = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
+                response.encode(out);
+                byte[] data = new byte[out.readableBytes()];
+                out.readBytes(data);
+                sendServerPayload(player, new ShadowPullResponsePayload(data));
+            } catch (Exception e) {
+                LOGGER.warn("[SERVER] Failed to handle shadowPullV1 request", e);
             }
         });
     }

@@ -117,6 +117,7 @@ public final class ClientChunkPipeline {
     public void resetStorage() {
         pendingContentHashes.clear();
         pendingSectionHashes.clear();
+        ShadowChunkLoaderRuntime.reset();
         serverSeed = 0L;
         serverLevelStemNbt = null;
         serverSeedGenEnabled = false;
@@ -133,6 +134,11 @@ public final class ClientChunkPipeline {
         this.serverLevelStemNbt = levelStemNbt;
         this.serverSeedGenEnabled = enabled;
         this.hassiumHandshakeDone = true; // 握手响应到达 = 服务端已装 Hassium MOD
+        try {
+            io.github.limuqy.mc.hassium.cache.client.ClientLifecycleHelper.startShadowIfConfigured();
+        } catch (Throwable t) {
+            Constants.LOG.debug("Hassium: post-handshake shadow start skipped", t);
+        }
         // 取消投机看门狗（已确认 Hassium 服，勿关停刚拉起的影子）
         try {
             io.github.limuqy.mc.hassium.network.seedgen.ShadowServerRegistry.getInstance()
@@ -166,7 +172,7 @@ public final class ClientChunkPipeline {
     }
 
     /**
-     * 影子端启用态（客户端不再计算光照，区块光照统一投递影子端）：
+     * 影子端启用态（影子端负责权威光照回传，客户端光照引擎保持 vanilla 默认开启）：
      * 配置开启 && 服务端已装 MOD && 影子服务端创建成功。
      */
     public boolean isShadowEngineAvailable() {

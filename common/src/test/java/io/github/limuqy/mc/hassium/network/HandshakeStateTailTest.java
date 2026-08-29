@@ -51,12 +51,13 @@ class HandshakeStateTailTest {
         ByteBuf legacy = Unpooled.buffer();
         HandshakeStateTail.writeC2S(legacy, new HandshakeStateTail.C2S(state, true, new byte[]{1}, null, true));
         ByteBuf truncated = Unpooled.buffer();
-        truncated.writeBytes(legacy, 0, legacy.readableBytes() - 1); // 截掉 light 布尔字节（模拟旧客户端尾）
+        truncated.writeBytes(legacy, 0, legacy.readableBytes() - 2); // 截掉 light/pull 能力字节（模拟旧客户端尾）
         HandshakeStateTail.C2S legacyDecoded = HandshakeStateTail.readC2S(truncated);
         assertNotNull(legacyDecoded);
         assertNull(legacyDecoded.playerId(), "旧格式无 playerId → null");
         assertTrue(legacyDecoded.resumeRequested());
-        assertFalse(legacyDecoded.lightComputeSupported(), "缺尾默认 false");
+        assertFalse(legacyDecoded.lightComputeSupported(), "缺 light 尾默认 false");
+        assertFalse(legacyDecoded.shadowPullSupported(), "缺 pull 尾默认 false");
         legacy.release();
         truncated.release();
     }

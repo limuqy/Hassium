@@ -1,10 +1,12 @@
 package io.github.limuqy.mc.hassium.mixin;
 
 import io.github.limuqy.mc.hassium.cache.client.ClientMainThreadBudget;
+import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.cache.client.ViewDistanceExtensionService;
 import io.github.limuqy.mc.hassium.client.ClientSmokeTest;
 import io.github.limuqy.mc.hassium.concurrent.MainThreadDispatcher;
 import io.github.limuqy.mc.hassium.network.ClientMetadataHandler;
+import io.github.limuqy.mc.hassium.network.ShadowChunkLoaderRuntime;
 import io.github.limuqy.mc.hassium.utils.TickMonitor;
 import net.minecraft.client.Minecraft;
 import org.spongepowered.asm.mixin.Mixin;
@@ -68,6 +70,12 @@ public class MixinClientTick {
             }
         } catch (Exception e) {
             // UDP 数据面可选；延迟启动失败不得中断客户端 tick。
+        }
+        try {
+            ShadowChunkLoaderRuntime.tick();
+        } catch (Throwable t) {
+            // Pull 失败必须触发旧链路 fallback，不得打断原版客户端 tick。
+            Constants.LOG.debug("Hassium: shadowPullV1 tick failed", t);
         }
 
         // 更新玩家坐标，用于 MainThreadDispatcher 距离优先级计算

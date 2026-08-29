@@ -19,14 +19,25 @@ public final class ShadowVanillaLightPipeline {
 
     public static void submitVisible(String dimension, ChunkPos pos,
                                      ClientboundLevelChunkWithLightPacket packet,
-                                     Object traceOrigin) {
+                                     TraceOrigin traceOrigin) {
         submit(dimension, pos, packet, ShadowChunkRole.VISIBLE,
-                traceOrigin instanceof TraceOrigin origin ? origin : TraceOrigin.SERVER_PUSH);
+                ShadowChunkSource.REMOTE_FULL,
+                traceOrigin == null ? TraceOrigin.SERVER_PUSH : traceOrigin);
+    }
+
+    /** 缓存快照的 packet 入口；与远程 full 共享同一 pre-LIGHT 路径。 */
+    public static void submitCacheSnapshot(String dimension, ChunkPos pos,
+                                           ClientboundLevelChunkWithLightPacket packet,
+                                           TraceOrigin traceOrigin) {
+        submit(dimension, pos, packet, ShadowChunkRole.VISIBLE,
+                ShadowChunkSource.CACHE_SNAPSHOT,
+                traceOrigin == null ? TraceOrigin.SHADOW_DISK_CACHE : traceOrigin);
     }
 
     public static void submitHalo(String dimension, ChunkPos pos,
                                   ClientboundLevelChunkWithLightPacket packet) {
-        submit(dimension, pos, packet, ShadowChunkRole.HALO, TraceOrigin.SERVER_PUSH);
+        submit(dimension, pos, packet, ShadowChunkRole.HALO,
+                ShadowChunkSource.REMOTE_FULL, TraceOrigin.SERVER_PUSH);
     }
 
     /**
@@ -39,7 +50,7 @@ public final class ShadowVanillaLightPipeline {
     }
 
     private static void submit(String dimension, ChunkPos pos, ClientboundLevelChunkWithLightPacket packet,
-                               ShadowChunkRole role, TraceOrigin origin) {
+                               ShadowChunkRole role, ShadowChunkSource source, TraceOrigin origin) {
         if (pos == null || packet == null) {
             return;
         }
@@ -63,7 +74,7 @@ public final class ShadowVanillaLightPipeline {
         if (role == ShadowChunkRole.VISIBLE) {
             SmokeChunkTrace.recordNetworkReceived(resolvedDimension, pos);
         }
-        if (!server.injectChunk(resolvedDimension, pos, packet, role)) {
+        if (!server.injectPreLight(resolvedDimension, pos, packet, role, source)) {
             ShadowServerRegistry.getInstance().failShadowServer();
             return;
         }

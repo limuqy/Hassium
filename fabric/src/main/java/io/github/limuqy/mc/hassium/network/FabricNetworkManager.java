@@ -198,6 +198,13 @@ ResourceLocation
 #else
 Identifier
 #endif
+GATEWAY_INFO_S2C = ResourceLocationCompat.create(Constants.MOD_ID, "gateway_info");
+    public static final
+#if MC_VER < MC_1_21_11
+ResourceLocation
+#else
+Identifier
+#endif
 INDEX_SYNC_S2C = ResourceLocationCompat.create(Constants.MOD_ID, "index_sync_s2c");
     public static final
 #if MC_VER < MC_1_21_11
@@ -206,6 +213,20 @@ ResourceLocation
 Identifier
 #endif
 LIGHT_DELTA_S2C = ResourceLocationCompat.vanilla(HassiumChannels.LIGHT_DELTA_S2C);
+    public static final
+#if MC_VER < MC_1_21_11
+ResourceLocation
+#else
+Identifier
+#endif
+SHADOW_PULL_REQUEST_C2S = ResourceLocationCompat.vanilla(HassiumChannels.SHADOW_PULL_REQUEST_C2S);
+    public static final
+#if MC_VER < MC_1_21_11
+ResourceLocation
+#else
+Identifier
+#endif
+SHADOW_PULL_RESPONSE_S2C = ResourceLocationCompat.vanilla(HassiumChannels.SHADOW_PULL_RESPONSE_S2C);
 
     @Override
     public void registerChannels() {
@@ -270,6 +291,18 @@ LIGHT_DELTA_S2C = ResourceLocationCompat.vanilla(HassiumChannels.LIGHT_DELTA_S2C
             buf.release();
         }
     }
+    @Override
+    public void sendShadowPullRequest(FriendlyByteBuf buf) {
+        if (Minecraft.getInstance().getConnection() != null) {
+#if MC_VER < MC_1_21_1
+            ClientPlayNetworking.send(SHADOW_PULL_REQUEST_C2S, buf);
+#else
+            ClientPlayNetworking.send(FabricPayloadRegistry.toPayload(FabricPayloadRegistry.SHADOW_PULL_REQUEST_C2S_TYPE, buf));
+#endif
+        } else if (buf != null && buf.refCnt() > 0) {
+            buf.release();
+        }
+    }
 
     @Override
     public void sendClientBloomSync(FriendlyByteBuf buf) {
@@ -291,6 +324,10 @@ LIGHT_DELTA_S2C = ResourceLocationCompat.vanilla(HassiumChannels.LIGHT_DELTA_S2C
 
     @Override
     public void sendChunkHashPacket(ServerPlayer player, FriendlyByteBuf buf) {
+        if (io.github.limuqy.mc.hassium.server.GatewayPlayerBridge.tryRouteS2C(
+                player, io.github.limuqy.mc.hassium.network.core.GatewayPacketCodec.HassiumSub.CHUNK_HASH.id(), buf)) {
+            return;
+        }
 #if MC_VER < MC_1_21_1
         ServerPlayNetworking.send(player, CHUNK_HASH_S2C, buf);
 #else
@@ -300,6 +337,10 @@ LIGHT_DELTA_S2C = ResourceLocationCompat.vanilla(HassiumChannels.LIGHT_DELTA_S2C
 
     @Override
     public void sendSeedRef(ServerPlayer player, FriendlyByteBuf buf) {
+        if (io.github.limuqy.mc.hassium.server.GatewayPlayerBridge.tryRouteS2C(
+                player, io.github.limuqy.mc.hassium.network.core.GatewayPacketCodec.HassiumSub.SEED_REF.id(), buf)) {
+            return;
+        }
 #if MC_VER < MC_1_21_1
         ServerPlayNetworking.send(player, SEED_REF_S2C, buf);
 #else
@@ -322,8 +363,11 @@ LIGHT_DELTA_S2C = ResourceLocationCompat.vanilla(HassiumChannels.LIGHT_DELTA_S2C
 
     @Override
     public void sendSectionDeltaPacket(ServerPlayer player, FriendlyByteBuf buf) {
-        // 路由器在数据面未启用、未绑定或无可用会话时返回 false；保留 Primary 路径。
-        // 非破坏抽取保持 reader index，以便回退时 Primary 仍能读到完整 payload。
+        if (io.github.limuqy.mc.hassium.server.GatewayPlayerBridge.tryRouteS2C(
+                player, io.github.limuqy.mc.hassium.network.core.GatewayPacketCodec.HassiumSub.SECTION_DELTA.id(), buf)) {
+            return;
+        }
+        // 无网关会话时保留 UDP / Fabric 原版回退路径。
         int len = buf.readableBytes();
         byte[] payload = new byte[len];
         if (len > 0) {
@@ -334,7 +378,7 @@ LIGHT_DELTA_S2C = ResourceLocationCompat.vanilla(HassiumChannels.LIGHT_DELTA_S2C
                 io.github.limuqy.mc.hassium.network.dataplane.DataPlaneFrame.TYPE_BULK_SECTION_DELTA,
                 payload)) {
             buf.release();
-            return; // 已走 UDP 数据面
+            return;
         }
 #if MC_VER < MC_1_21_1
         ServerPlayNetworking.send(player, SECTION_DELTA_S2C, buf);
@@ -358,6 +402,10 @@ LIGHT_DELTA_S2C = ResourceLocationCompat.vanilla(HassiumChannels.LIGHT_DELTA_S2C
 
     @Override
     public void sendBlockEntityData(ServerPlayer player, FriendlyByteBuf buf) {
+        if (io.github.limuqy.mc.hassium.server.GatewayPlayerBridge.tryRouteS2C(
+                player, io.github.limuqy.mc.hassium.network.core.GatewayPacketCodec.HassiumSub.BLOCK_ENTITY_DATA.id(), buf)) {
+            return;
+        }
 #if MC_VER < MC_1_21_1
         ServerPlayNetworking.send(player, BLOCK_ENTITY_DATA_S2C, buf);
 #else
@@ -367,9 +415,11 @@ LIGHT_DELTA_S2C = ResourceLocationCompat.vanilla(HassiumChannels.LIGHT_DELTA_S2C
 
     @Override
     public void sendLightDeltaPacket(ServerPlayer player, FriendlyByteBuf buf) {
-        // 三端一致收口（2026-08-23 裁决）：vanilla 通道 LightDelta 三端客户端均不消费
-        // （Fabric 客户端自 T12 起不注册 HASSIUM 业务 receiver，见 HassiumClientMod），
-        // 唯一消费在网关帧链路；本实现仅消费 buf 所有权，不再发 payload。
+        if (io.github.limuqy.mc.hassium.server.GatewayPlayerBridge.tryRouteS2C(
+                player, io.github.limuqy.mc.hassium.network.core.GatewayPacketCodec.HassiumSub.LIGHT_DELTA.id(), buf)) {
+            return;
+        }
+        // 无网关会话时没有可消费的 Fabric 业务 receiver，释放所有权。
         buf.release();
     }
 
@@ -665,8 +715,8 @@ LIGHT_DELTA_S2C = ResourceLocationCompat.vanilla(HassiumChannels.LIGHT_DELTA_S2C
      * 服务端预握手注册：{@code MC_VER < MC_1_21_1}（1.20.1）login query；1.21.1+ 配置阶段接收。
      * <p>
      * 收到后仅 {@code PlayerCompressionTracker.markPreHandshake(UUID)}；
-     * {@code ServerPlayer} 创建时（{@code MixinServerPlayer} TAIL）自动提升为
-     * 压缩启用，完整协商（ZSTD/聚合/数据面/位置）仍在 Play 阶段握手。
+     * {@code ServerPlayer} 创建时只消费该标记，不提前启用压缩。完整协商（ZSTD/聚合/
+     * 数据面/位置）在 Play 阶段握手完成后才接管区块业务帧。
      */
     private void registerPreHandshakeServer() {
 #if MC_VER < MC_1_21_1
@@ -757,7 +807,8 @@ LIGHT_DELTA_S2C = ResourceLocationCompat.vanilla(HassiumChannels.LIGHT_DELTA_S2C
             ServerChunkPushManager.getInstance().setPlayerLightComputeSupported(player.getUUID(), lightComputeSupported);
             // T7 状态尾部（append-only；旧客户端无此字段 → null）
             HandshakeStateTail.C2S stateTail = HandshakeStateTail.readC2S(buf);
-
+            ServerChunkPushManager.getInstance().setPlayerShadowPullSupported(player.getUUID(),
+                    stateTail != null && stateTail.shadowPullSupported());
             DebugLogger.debug(LogType.NETWORK,
                     "[HANDSHAKE] Details from {}: protocol={}, modVersion={}, algorithms={}, clientCache={}, globalCompression={}, compactHeader={}",
                     player.getName().getString(), protocolVersion, modVersion, String.join(", ", algorithms),
@@ -847,7 +898,8 @@ LIGHT_DELTA_S2C = ResourceLocationCompat.vanilla(HassiumChannels.LIGHT_DELTA_S2C
                 ServerChunkPushManager.getInstance().setPlayerLightComputeSupported(player.getUUID(), lightComputeSupported);
                 // T7 状态尾部（append-only；旧客户端无此字段 → null）
                 HandshakeStateTail.C2S stateTail = HandshakeStateTail.readC2S(buf);
-
+                ServerChunkPushManager.getInstance().setPlayerShadowPullSupported(player.getUUID(),
+                        stateTail != null && stateTail.shadowPullSupported());
                 DebugLogger.debug(LogType.NETWORK,
                         "[HANDSHAKE] Details from {}: protocol={}, modVersion={}, algorithms={}, clientCache={}, globalCompression={}, compactHeader={}",
                         player.getName().getString(), protocolVersion, modVersion, String.join(", ", algorithms),
@@ -922,47 +974,67 @@ LIGHT_DELTA_S2C = ResourceLocationCompat.vanilla(HassiumChannels.LIGHT_DELTA_S2C
 #if MC_VER < MC_1_21_1
         ServerPlayNetworking.registerGlobalReceiver(CHUNK_DATA_REQUEST_C2S, (server, player, handler, buf, sender) -> {
             try {
-                DebugLogger.debug(LogType.NETWORK, "[SERVER] Received chunk data request from player {}",
-                        player.getName().getString());
-                // review-fix: T10-1: 直接 decode 原 buf（Fabric 回调结束后负责释放），避免副本泄漏
                 ChunkDataRequestC2SPacket request = ChunkDataRequestC2SPacket.decode(buf);
-                DebugLogger.debug(LogType.NETWORK, "[SERVER] Decoded chunk data request: {} chunks, dimension={}",
-                        request.chunks().size(), request.dimension());
-
-                server.execute(() -> {
-                    try {
-                        ServerChunkPushManager.getInstance()
-                                .handleClientChunkDataRequest(player, request);
-                    } catch (Exception e) {
-                        LOGGER.error("[SERVER] Failed to handle chunk data request", e);
-                    }
-                });
+                server.execute(() -> ServerChunkPushManager.getInstance().handleClientChunkDataRequest(player, request));
             } catch (Exception e) {
-                LOGGER.error("[SERVER] Failed to decode chunk data request", e);
+                LOGGER.error("[SERVER] Failed to handle chunk data request", e);
             }
         });
 #else
         ServerPlayNetworking.registerGlobalReceiver(FabricPayloadRegistry.CHUNK_DATA_REQUEST_C2S_TYPE, (payload, context) -> {
             FriendlyByteBuf buf = FabricPayloadRegistry.fromPayload(payload);
             try {
-                ServerPlayer player = context.player();
-                net.minecraft.server.MinecraftServer server = io.github.limuqy.mc.hassium.compat.PlayerCompat.getMinecraftServer(player);
-                DebugLogger.debug(LogType.NETWORK, "[SERVER] Received chunk data request from player {}",
-                        player.getName().getString());
                 ChunkDataRequestC2SPacket request = ChunkDataRequestC2SPacket.decode(buf);
-                DebugLogger.debug(LogType.NETWORK, "[SERVER] Decoded chunk data request: {} chunks, dimension={}",
-                        request.chunks().size(), request.dimension());
+                context.server().execute(() -> ServerChunkPushManager.getInstance().handleClientChunkDataRequest(
+                        (ServerPlayer) context.player(), request));
+            } finally {
+                buf.release();
+            }
+        });
+#endif
 
+        // shadowPullV1：common handler 负责校验、幂等和逐区块权威响应。
+#if MC_VER < MC_1_21_1
+        ServerPlayNetworking.registerGlobalReceiver(SHADOW_PULL_REQUEST_C2S, (server, player, handler, buf, sender) -> {
+            try {
+                ShadowPullRequestC2SPacket request = ShadowPullRequestC2SPacket.decode(buf);
                 server.execute(() -> {
-                    try {
-                        ServerChunkPushManager.getInstance()
-                                .handleClientChunkDataRequest(player, request);
-                    } catch (Exception e) {
-                        LOGGER.error("[SERVER] Failed to handle chunk data request", e);
-                    }
+                    String dimension = io.github.limuqy.mc.hassium.compat.LevelCompat.getDimensionId(player.level());
+                    LOGGER.info("[SHADOW_PULL] server request player={} count={} epoch={}", player.getUUID(),
+                            request.entries().size(), request.epoch());
+                    ShadowPullResponseS2CPacket response = new ShadowPullHandler(new ShadowPullRequestLedger()).handle(
+                            player.getUUID(), request, dimension, request.epoch(), player.chunkPosition().x,
+                            player.chunkPosition().z, io.github.limuqy.mc.hassium.compat.PlayerCompat.getViewDistance(player) + 1,
+                            ServerChunkPushManager.getInstance().isPlayerShadowPullSupported(player.getUUID()),
+                            player.isAlive() && !player.hasDisconnected(),
+                            entry -> ServerChunkPushManager.getInstance().resolveShadowPull(player, entry, dimension));
+                    FriendlyByteBuf out = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
+                    response.encode(out);
+                    ServerPlayNetworking.send(player, SHADOW_PULL_RESPONSE_S2C, out);
                 });
-            } catch (Exception e) {
-                LOGGER.error("[SERVER] Failed to decode chunk data request", e);
+            } catch (Throwable t) {
+                LOGGER.error("[SERVER] Failed to handle shadowPullV1", t);
+            }
+        });
+#else
+        ServerPlayNetworking.registerGlobalReceiver(FabricPayloadRegistry.SHADOW_PULL_REQUEST_C2S_TYPE, (payload, context) -> {
+            FriendlyByteBuf buf = FabricPayloadRegistry.fromPayload(payload);
+            try {
+                ShadowPullRequestC2SPacket request = ShadowPullRequestC2SPacket.decode(buf);
+                context.server().execute(() -> {
+                    ServerPlayer player = (ServerPlayer) context.player();
+                    String dimension = io.github.limuqy.mc.hassium.compat.LevelCompat.getDimensionId(player.level());
+                    ShadowPullResponseS2CPacket response = new ShadowPullHandler(new ShadowPullRequestLedger()).handle(
+                            player.getUUID(), request, dimension, request.epoch(), player.chunkPosition().x,
+                            player.chunkPosition().z, io.github.limuqy.mc.hassium.compat.PlayerCompat.getViewDistance(player) + 1,
+                            ServerChunkPushManager.getInstance().isPlayerShadowPullSupported(player.getUUID()),
+                            player.isAlive() && !player.hasDisconnected(),
+                            entry -> ServerChunkPushManager.getInstance().resolveShadowPull(player, entry, dimension));
+                    FriendlyByteBuf out = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
+                    response.encode(out);
+                    ServerPlayNetworking.send(player, FabricPayloadRegistry.toPayload(
+                            FabricPayloadRegistry.SHADOW_PULL_RESPONSE_S2C_TYPE, out));
+                });
             } finally {
                 buf.release();
             }

@@ -18,14 +18,10 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.ThreadPoolExecutor;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.LockSupport;
 import net.minecraft.client.Minecraft;
@@ -34,13 +30,10 @@ import net.minecraft.core.SectionPos;
 import net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket;
 import net.minecraft.network.protocol.game.ClientboundLightUpdatePacket;
 import net.minecraft.util.Mth;
-import net.minecraft.world.level.BlockGetter;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.LightLayer;
 import net.minecraft.world.level.chunk.DataLayer;
 import net.minecraft.world.level.chunk.LevelChunk;
-import net.minecraft.world.level.chunk.LightChunk;
-import net.minecraft.world.level.chunk.LightChunkGetter;
 import net.minecraft.world.level.lighting.LevelLightEngine;
 
 /**
@@ -55,13 +48,11 @@ import net.minecraft.world.level.lighting.LevelLightEngine;
  * <ul>
  *   <li>投递（{@link #submit} / {@link #submitGenerated}）：任意线程（解压后台 /
  *       主线程 / SeedGen 生成池），pos→数据 REPLACE 覆盖（同柱新数据盖旧）</li>
- *   <li>消费（后台池单循环 CAS，管道化）：取批 → 注入 → 官方 {@code initializeLight}
- *       （对齐 {@code ChunkStatus.INITIALIZE_LIGHT}，range=0）→ 全量重算等 8 邻建层后
- *       {@code lightChunk}（对齐原版 LIGHT range=1；光桥/增量/磁盘复用不等邻）→ 打包回传。
- *       在途上限 {@link #PIPELINE_MAX_INFLIGHT} 只计正在跑引擎任务的柱。
- *       5s 超时兜底欠光标脏，由光照更新桥梁事件驱动补发</li>
- *   <li>光照收集（{@link #collectLightUpdate}）：影子端 light 线程（引擎每完成
- *       一个 section 的光计算）</li>
+ *   <li>消费（后台池单循环 CAS，管道化）：取批 → 注入 → 请求原版 {@code ChunkMap} 的
+ *       {@code ChunkStatus.LIGHT} future（含 holder 依赖）→ 打包回传。本类不直接驱动
+ *       {@code LightEngine}，也不创建隔离预览引擎；在途上限
+ *       {@link #PIPELINE_MAX_INFLIGHT} 只计等待原版 future 的柱</li>
+ *   <li>光照完成（原版 LIGHT future 回调）：{@link #completeLight} exactly-once 收口</li>
  *   <li>客户端主线程：{@link #drainReady}（帧尾，MixinClientTick）攒批 light 包入
  *       同一 FIFO 回传队列，按到达顺序落地（时间预算）</li>
  * </ul>
@@ -100,19 +91,6 @@ public final class ShadowLightCompute {
     /** 管道在途光屏障：复合键 -> 提交上下文（submitLightBatch 提交，completeLight/超时扫表
      *  条件移除；size = 在途计数，上限 {@link #PIPELINE_MAX_INFLIGHT}，断连清空）。 */
     private static final ConcurrentHashMap<Long, InflightLight> inflightLight = new ConcurrentHashMap<>();
-    /**
-     * 已完成官方 {@code initializeLight}、等待 8 邻建层后 {@code lightChunk}
-     * （全量重算的邻居门槛；光桥/增量/磁盘复用不 park）。不计入
-     * {@link #PIPELINE_MAX_INFLIGHT}。
-     */
-    private static final ConcurrentHashMap<Long, InflightLight> waitingForLight = new ConcurrentHashMap<>();
-    /** 已完成 {@code initializeLight} 的柱（含已打包）；邻柱 LIGHT 门槛看这张表。 */
-    private static final ConcurrentHashMap<Long, Boolean> initializedLight = new ConcurrentHashMap<>();
-    /**
-     * 客户端已有柱、影子光未完备：暂缓 push，并挡住 {@link #drainLightMasks} 中间态，
-     * 避免加载屏快路径自算亮光后被欠光包盖暗。
-     */
-    private static final ConcurrentHashMap<Long, LightTask> deferredLightPush = new ConcurrentHashMap<>();
     /**
      * 握手尚未完成时到达的 chunkHash：R2 有缓存路径只发 hash，丢弃则既不读盘也不请求 → 空窗。
      */
@@ -172,20 +150,7 @@ public final class ShadowLightCompute {
 
     private static final AtomicBoolean consumeRunning = new AtomicBoolean(false);
 
-    /**
-     * 影子端光照引擎互斥锁：所有「光照任务投递」串行化——注入/重算/增量的清光
-     * （{@code ShadowSeedServer.clearChunkLight}）与光屏障提交（{@link #submitLightBatch}）。
-     * <p>
-     * 2026-08-14 1.20.1 定位：{@code ThreadedLevelLightEngine} 的任务经
-     * ChunkTaskPriorityQueueSorter 在 ForkJoinPool（Worker-Main-*）<b>多线程并行</b>执行，
-     * 锁只能串行化<b>投递</b>、无法串行化<b>执行</b>——相邻柱的「清光」（removeSection
-     * 延迟删除 → swapSectionMap 物理删除）与「传播」（{@code propagateIncreases} 读
-     * DataLayer）在 Worker 线程交错 → {@code getStoredLevel} 拿 null → NPE → 队列残留
-     * → isLightConverged 恒 false → 全批超时欠光推送黑块。执行层窗口由
-     * {@code MixinLayerLightSectionStorage} 的 null 兜底消灭（DataLayer null → 光级 0，
-     * 不 NPE 不残留）；本锁把窗口压到最小（提交屏障期间无新清光投递）。锁内仅投递任务
-     * （addTask，微秒级）——管道化后等待已不在锁内：完成回调/超时扫表/打包回传全部锁外。
-     */
+    /** 原版 LIGHT future 请求的提交顺序锁；不持有该锁等待 future 或执行打包。 */
     static final Object LIGHT_ENGINE_MUTEX = new Object();
 
     /**
@@ -328,27 +293,6 @@ public final class ShadowLightCompute {
         return chunkLocks.computeIfAbsent(chunkPosKey(pos), k -> new Object());
     }
 
-    /**
-     * 隔离预览算光池：与真引擎 {@code lightChunk} 并行。饱和丢最旧柱（
-     * {@link ThreadPoolExecutor.DiscardOldestPolicy}）——被丢柱由收敛
-     * {@code finishLight → pushReady(converged=true)} 兜底，不影响正确性。
-     */
-    private static final ThreadPoolExecutor PREVIEW_POOL = createPreviewPool();
-
-    private static ThreadPoolExecutor createPreviewPool() {
-        int threads = Mth.clamp(Runtime.getRuntime().availableProcessors() - 2, 2, 8);
-        AtomicInteger seq = new AtomicInteger();
-        return new ThreadPoolExecutor(
-                threads, threads,
-                0L, TimeUnit.MILLISECONDS,
-                new ArrayBlockingQueue<>(64),
-                r -> {
-                    Thread t = new Thread(r, "Hassium-PreviewLight-" + seq.getAndIncrement());
-                    t.setDaemon(true);
-                    return t;
-                },
-                new ThreadPoolExecutor.DiscardOldestPolicy());
-    }
 
     /**
      * 与注入/hash 比对/apply/落盘序列化共用同一把 per-chunk 锁。
@@ -416,8 +360,7 @@ public final class ShadowLightCompute {
     static boolean isAuthoritativeIngressInFlight(long key) {
         return pending.containsKey(key)
                 || generated.containsKey(key)
-                || inflightLight.containsKey(key)
-                || waitingForLight.containsKey(key);
+                || inflightLight.containsKey(key);
     }
 
     /** P2（T7）：回退请求去重过滤——只保留 requestedMisses 首次登记的 chunk（杜绝同 chunk 重复回退）。 */
@@ -532,109 +475,40 @@ public final class ShadowLightCompute {
     }
 
     /**
-     * 已落地过影子全量包 + 本次回传欠光 → 暂缓覆盖。
-     * 加载屏快路径会先官方 apply 剥光包（{@code hasClientChunk} 为真），但尚未记
-     * {@code shadowApplyEpochs}；那种占位柱必须仍推首包，否则着火/岩浆让引擎一直忙时
-     * R1 会留下长时间空洞。欠光盖暗只防「影子包已落地后再被半成品 REPLACE」。
-     */
-    static boolean shouldDeferIncompleteClientOverwrite(boolean alreadyShadowApplied, boolean pushConverged) {
-        return alreadyShadowApplied && !pushConverged;
-    }
-
-    /**
      * 客户端已落地过影子全量包时，相同方块不得再整柱重推。
-     * Bloom 未就绪会走直推（没有 remoteHash）；方块变更走 section delta，不是整柱。
-     * 官方全量包会把引擎里仍为空的 sky section 打成 emptySkyYMask，盖掉屋檐光。
      */
     static boolean shouldSkipRedundantFullPush(boolean alreadyShadowApplied) {
         return alreadyShadowApplied;
     }
 
     /**
-     * @param remoteHashPresent true=对端给了 contentHash，可以判定是否同一份方块
-     * @param hashMatches       仅 remoteHashPresent 时有意义
-     * @param lightComplete     客户端已落地副本的光照是否完备（isChunkLightComplete）。
-     *                          B1 欠光直推也会置 alreadyShadowApplied——光没齐时不得跳过，
-     *                          否则屏障 waiter 被方块级新投递作废后无人再触发
-     *                          {@code lightChunk}，该柱永久黑（2026-08-23 R1 随机黑根因）。
+     * 远程 hash 已知且相同，或无远程 hash 时，已落地柱无需重复整柱推送。
      */
     static boolean shouldSkipUnchangedRepush(boolean alreadyShadowApplied,
                                              boolean remoteHashPresent, boolean hashMatches,
                                              boolean lightComplete) {
-        if (!alreadyShadowApplied || !lightComplete) {
-            return false;
-        }
-        return !remoteHashPresent || hashMatches;
+        return alreadyShadowApplied && lightComplete
+                && (!remoteHashPresent || hashMatches);
     }
 
-    /**
-     * 在途屏障是否被更新的投递作废（触发式，不靠超时扫表）。
-     * <p>
-     * 整柱重推（pending / generated）取消任何在途任务。分段增量与 LightDelta 都不取消
-     * 整柱首包：岩浆/着火会持续改方块并刷 LightDelta，若每次都作废首包，客户端永远
-     * 拿不到柱、R1 留下无法愈合的空洞。增量方块并入在途注入柱，首包打包时带上最新
-     * 方块；LightDelta 等 {@code finishLight} 后再 {@code pump}。
-     *
-     * @param fullChunkTask true=PENDING/GENERATED/DELTA（回传 chunk 包）；false=LIGHT_ONLY
-     * @param hasBlockWork  仅整柱重推（pending/generated），不含 section delta
-     */
+    /** 在途屏障被新的整柱方块或同柱光增量取代。 */
     static boolean isSupersededByNewerWork(boolean fullChunkTask, boolean hasBlockWork,
                                            boolean hasLightDelta) {
-        if (hasBlockWork) {
-            return true;
-        }
-        return !fullChunkTask && hasLightDelta;
+        return hasBlockWork || (!fullChunkTask && hasLightDelta);
     }
 
-    /**
-     * 同柱整柱屏障在途时 LightDelta 只排队，等 {@code finishLight} 后再 {@code pump}。
-     * 不靠每帧扫描，也不开第二条屏障顶掉首包。
-     */
     static boolean canStartLightDeltaNow(boolean chunkBarrierBusy) {
         return !chunkBarrierBusy;
     }
 
-    /**
-     * 有未发布首包在等邻柱/槽位时，林火 {@code LIGHT_ONLY} 不得占满管道。
-     * 否则 parked waiter 要等满 {@link #NEIGHBOR_PACK_WAIT_MS} 才豁免上限，R1 着火区空洞数秒。
-     */
-    static boolean canStartLightOnlyWhileFirstPacketsWait(boolean waitingFirstPackets) {
-        return !waitingFirstPackets;
-    }
-
-    /**
-     * 本柱 {@code lightChunk} 完成后，这条回传是否立刻视为可发布。
-     * 首包只看本柱成功：邻柱林火 {@code LIGHT_ONLY} 会让
-     * {@link #areVanillaLightNeighborsConverged} 恒为 false，不得因此挡住尚未落地的柱。
-     * {@code LIGHT_ONLY} 仍要求邻域 idle（屋檐质量）。
-     */
-    static boolean firstPacketLightReady(boolean lightChunkOk, boolean neighborColumnsIdle,
-                                         boolean lightOnlyRelight) {
-        if (!lightChunkOk) {
-            return false;
-        }
-        return lightOnlyRelight ? neighborColumnsIdle : true;
-    }
-
-    /**
-     * 隔离预览是否仍应推给客户端。邻柱已齐时会立刻 {@code lightChunk}，预览不得因此丢弃——
-     * 林火占满真引擎时 future 会迟到，R1 出现空洞。屏障已结束则等收敛包。
-     */
-    static boolean shouldPushIsolatedPreview(boolean alreadyShadowApplied, boolean superseded,
-                                             boolean barrierStillLive) {
-        return barrierStillLive && !alreadyShadowApplied && !superseded;
-    }
-
     private static boolean isChunkBarrierBusy(long key) {
         return inflightLight.containsKey(key)
-                || waitingForLight.containsKey(key)
                 || pending.containsKey(key)
                 || generated.containsKey(key)
                 || pendingDeltas.containsKey(key);
     }
 
     private static boolean hasQueuedBlockWork(long key) {
-        // 仅整柱重推取消在途首包。section delta 并入注入柱，由当前屏障打包。
         return pending.containsKey(key) || generated.containsKey(key);
     }
 
@@ -645,34 +519,25 @@ public final class ShadowLightCompute {
                 pendingLightUpdates.containsKey(t.key));
     }
 
-    /** 现在就能开屏障的投递（排队的 LightDelta 若同柱整柱未完，不算可开工）。 */
+    /** 现在就能开屏障的投递。 */
     private static boolean hasStartablePendingWork() {
         if (!pending.isEmpty() || !pendingDeltas.isEmpty() || !generated.isEmpty()) {
             return true;
         }
-        boolean waitingFirstPackets = !waitingForLight.isEmpty();
         for (Long key : pendingLightUpdates.keySet()) {
-            if (canStartLightDeltaNow(isChunkBarrierBusy(key))
-                    && canStartLightOnlyWhileFirstPacketsWait(waitingFirstPackets)) {
+            if (canStartLightDeltaNow(isChunkBarrierBusy(key))) {
                 return true;
             }
         }
         return false;
     }
 
-    /**
-     * 服务端直推注入：hash miss 已经 {@code recordFullChunkRequests} 过的柱不再记一次。
-     * 直推若不带 hash，这条是「应用区块」分母的唯一来源。
-     */
+    /** 服务端直推注入：同一柱的 hash miss 只记一次。 */
     static boolean shouldAccountServerPushAsApplied(boolean alreadyRequested) {
         return !alreadyRequested;
     }
 
-    /**
-     * 可见柱网络入站记账（与 consumeLoop 直推同口径）。
-     * 光屏障要等邻柱 initializeLight，dump 往往发生在落地之前；必须在 inject 当时记
-     * 全量请求 + 光照重算，Halo 不走这里。
-     */
+    /** 可见柱网络入站记账。 */
     static void accountVisibleNetworkIngress(String dimension, ChunkPos pos) {
         if (pos == null) {
             return;
@@ -800,41 +665,6 @@ public final class ShadowLightCompute {
         return !lightOnly;
     }
 
-    /**
-     * 对齐原版 {@code ChunkStatus.LIGHT}（range=1）：邻柱 holder 已有
-     * {@code INITIALIZE_LIGHT} parent（与 {@code getChunkForLighting} 同一条件）
-     * 或本端已 {@code initializeLight} 后才 {@code lightChunk}。{@code expected==0}
-     * 表示视距外/地图边缘，立即进入 LIGHT。探活：金字塔不会可靠地只重跑 LIGHT，
-     * 两阶段屏障保留；不再把自研 {@code initializedLight} 表当作唯一真相。
-     */
-    static boolean canStartVanillaLightStage(int readyNeighbors, int expectedNeighbors,
-                                             boolean timedOut) {
-        return timedOut || readyNeighbors >= expectedNeighbors;
-    }
-
-    /** 邻柱就绪：holder 已有 INITIALIZE_LIGHT parent，或本端 initializeLight 已完成。 */
-    static boolean isVanillaLightNeighborReady(boolean holderHasInitLightParent,
-                                               boolean selfInitializedLight) {
-        return holderHasInitLightParent || selfInitializedLight;
-    }
-
-    /** 邻柱是否算「应该存在」：有 holder / 注入表 / 管道中；超时当边缘。 */
-    static boolean isVanillaLightNeighborExpected(boolean holderPresent, boolean inInjectOrPipeline,
-                                                  boolean withinViewFallback) {
-        return holderPresent || inInjectOrPipeline || withinViewFallback;
-    }
-
-    /**
-     * 对齐原版 {@code ChunkStatus.LIGHT}：全量重算（PENDING/GENERATED 且非
-     * REUSE_CACHE）须等 8 邻 {@code initializeLight} 建层后才 {@code lightChunk}——
-     * 先算柱播种时读后算柱的 {@code ChunkSkyLightSources} 几何高度图，把跨边界
-     * increase 推进后算柱已建的层；不等邻则先算柱播种止步边界、后算柱屋檐列
-     * （lowestSourceY &gt; sectionTop）播种循环空转，凹槽永久缺光（2026-08-22
-     * (-13,3) 屋檐根因）。光桥 / 分段增量 / 磁盘复用仍不等邻。
-     */
-    static boolean needsVanillaLightNeighborWait(boolean fullChunkRecompute) {
-        return fullChunkRecompute;
-    }
 
     /**
      * JoinBoost：队列里还有 chunk 时本帧不落地光包（reoffer 到本帧 chunk 过完）。
@@ -870,24 +700,6 @@ public final class ShadowLightCompute {
         return packedThisFrame == 0 || !deadlineHit;
     }
 
-    /**
-     * 官方 {@code ClientboundLightUpdatePacketData.prepareSectionData}：空 DataLayer
-     * 会打进 emptySkyYMask，客户端把该 section <em>显式置 0</em>。
-     * <p>
-     * 源之上的空层是播种失败，仍要发出去（否则客户端会按缺层向上继承成 15）。
-     * 源之下的空层则是屋檐/侧向漏光还没被邻柱 increase 写入——省略该 section，
-     * 等光桥带真实数据；不要用 empty 掩码把屋檐钉死成黑。
-     */
-    static boolean shouldIncludeSkySectionInPacket(boolean layerPresent, boolean layerEmpty,
-                                                   boolean sectionAtOrAboveAnySkySource) {
-        if (!layerPresent) {
-            return false;
-        }
-        if (!layerEmpty) {
-            return true;
-        }
-        return sectionAtOrAboveAnySkySource;
-    }
 
     private static boolean alreadyShadowApplied(long key) {
         return shouldSkipRedundantFullPush(shadowApplyEpochs.containsKey(key));
@@ -900,15 +712,6 @@ public final class ShadowLightCompute {
         return applyOfferSeq.getAndIncrement();
     }
 
-    /**
-     * 光桥本帧是否打包该柱：必须已有影子带光区块包落地，且不在屏障 / 欠光暂缓 /
-     * 等待邻柱 LIGHT 中。加载屏 blocks-only 不算落地——对其套光包会把空层打到客户端，
-     * 形成向外扩的黑圈。
-     */
-    static boolean canDrainLightMaskThisFrame(boolean inflight, boolean deferredOverwrite,
-                                              boolean hasShadowEpoch, boolean waitingForLightStage) {
-        return hasShadowEpoch && !inflight && !deferredOverwrite && !waitingForLightStage;
-    }
 
     /**
      * 磁盘命中后是否还需 LIGHT 续算：只看原版 {@code isLightCorrect()}
@@ -929,30 +732,6 @@ public final class ShadowLightCompute {
         return lightDirty || diskNeedRelight(lightCorrect);
     }
 
-    /**
-     * 可见柱把回传给客户端的光当权威落盘。Halo 只提供边界，不写 {@code isLightOn}。
-     * 不要求注册表 SURROUNDED：R1 客户端已亮的屋檐光必须能进 type 126，否则 R2 强制续算。
-     */
-    static boolean shouldPersistPublishedLight(boolean halo, boolean pushConverged) {
-        return !halo && pushConverged;
-    }
-
-    /**
-     * 真引擎已推给客户端、但尚未收敛：半成品 DataLayer 入队，保持 {@code isLightOn} 缺省。
-     * Halo / 未发布 / 已收敛都不走阶段 2。
-     */
-    static boolean shouldEnqueuePartialLightSnapshot(boolean halo, boolean published, boolean converged) {
-        return published && !halo && !converged;
-    }
-
-    /**
-     * 退出快照：可见柱引擎层已齐则补 {@code isLightCorrect}，不看 SURROUNDED。
-     * {@code isChunkLightComplete} 以 isLightCorrect 短路，不能用来从 false 拉回 true。
-     */
-    static boolean shouldRestoreLightCorrectOnExit(boolean halo, boolean alreadyCorrect,
-                                                   boolean layersComplete) {
-        return !halo && !alreadyCorrect && layersComplete;
-    }
 
     private static boolean hasPendingWork() {
         return !pending.isEmpty() || !pendingDeltas.isEmpty() || !generated.isEmpty()
@@ -1148,10 +927,7 @@ public final class ShadowLightCompute {
                                     "Shadow hash cache hit ({}, {}), memory push", pos.x, pos.z);
                             // T5g：区块缓存全命中——与磁盘直推同口径；同柱只记一次。
                             accountCacheFullHit(dimension, pos);
-                            boolean lightReuse = server.isChunkLightComplete(pos, loaded);
-                            if (lightReuse) {
-                                accountLightColumn(dimension, pos, true);
-                            }
+                            boolean lightReuse = loaded.isLightCorrect();
                             long memoryKey = DimensionKey.key(dimension, pos.x, pos.z);
                             collectHitReceipt(hits, pos);
                             if (alreadyShadowApplied(memoryKey)) {
@@ -1245,7 +1021,6 @@ public final class ShadowLightCompute {
                         scheduleBeRefreshOnHashHit(dimension, pos, false, beImmediate);
                         generated.put(diskKey, new GenEntry(fromDisk, server.level(dimension), !needRelight,
                                 false, traceOrigin(TraceOrigin.SHADOW_DISK_CACHE)));
-                        continue;
                     }
                     misses.add(pos);
                     hashAbsents.incrementAndGet();
@@ -1666,32 +1441,26 @@ public final class ShadowLightCompute {
     public static boolean submitGenerated(ChunkPos pos,
                                           net.minecraft.world.level.chunk.LevelChunk chunk,
                                           net.minecraft.server.level.ServerLevel level) {
-        return submitGenerated(pos, chunk, level, false, traceOrigin(TraceOrigin.LOCAL_GENERATION));
+        return submitPreLight(ShadowChunkSource.SEEDGEN, pos, chunk, level, false,
+                traceOrigin(TraceOrigin.LOCAL_GENERATION));
     }
 
     /**
-     * 投递本地生成/磁盘/注入区块到影子光照管线。
+     * 投递本地 materialized 区块到统一 pre-LIGHT 入口。
      *
-     * @param renderOnly true=OVD 超视渲染区块，算光后经 drainReady 以 renderOnly 落地；
-     *                   false=普通影子回传（权威区块）。
+     * @param source 必须是 CACHE_SNAPSHOT 或 SEEDGEN；packet-backed 来源走
+     *               {@link ShadowSeedServer#injectPreLight}。
+     * @param renderOnly true=OVD 超视渲染区块；false=普通影子回传。
      */
-    public static boolean submitGenerated(ChunkPos pos,
-                                          net.minecraft.world.level.chunk.LevelChunk chunk,
-                                          net.minecraft.server.level.ServerLevel level,
-                                          boolean renderOnly) {
-        return submitGenerated(pos, chunk, level, renderOnly, traceOrigin(TraceOrigin.LOCAL_GENERATION));
-    }
-
-    /** 投递带有可选诊断来源的本地区块；来源仅在 chunkApplyLogging 开启时非 null。 */
-    public static boolean submitGenerated(ChunkPos pos,
-                                            net.minecraft.world.level.chunk.LevelChunk chunk,
-                                            net.minecraft.server.level.ServerLevel level,
-                                            boolean renderOnly,
-                                            TraceOrigin traceOrigin) {
-        if (pos == null || chunk == null || !isEnabled()) {
+    public static boolean submitPreLight(ShadowChunkSource source,
+                                         ChunkPos pos,
+                                         net.minecraft.world.level.chunk.LevelChunk chunk,
+                                         net.minecraft.server.level.ServerLevel level,
+                                         boolean renderOnly,
+                                         TraceOrigin traceOrigin) {
+        if (source == null || !source.isLocalChunk() || pos == null || chunk == null || !isEnabled()) {
             return false;
         }
-        // 维度从 level 推导（SeedGenExecutor 调用点无需改签名）；非缓存维度不入影子管线。
         String dimension = level != null ? ShadowSeedServer.dimensionId(level) : null;
         if (dimension == null || !DimensionKey.isCacheableDimension(dimension)) {
             return false;
@@ -1700,6 +1469,23 @@ public final class ShadowLightCompute {
                 new GenEntry(chunk, level, false, renderOnly, traceOrigin));
         pump();
         return true;
+    }
+
+    public static boolean submitGenerated(ChunkPos pos,
+                                          net.minecraft.world.level.chunk.LevelChunk chunk,
+                                          net.minecraft.server.level.ServerLevel level,
+                                          boolean renderOnly) {
+        return submitPreLight(ShadowChunkSource.SEEDGEN, pos, chunk, level, renderOnly,
+                traceOrigin(TraceOrigin.LOCAL_GENERATION));
+    }
+
+    /** 投递带有可选诊断来源的 SeedGen 区块。 */
+    public static boolean submitGenerated(ChunkPos pos,
+                                          net.minecraft.world.level.chunk.LevelChunk chunk,
+                                          net.minecraft.server.level.ServerLevel level,
+                                          boolean renderOnly,
+                                          TraceOrigin traceOrigin) {
+        return submitPreLight(ShadowChunkSource.SEEDGEN, pos, chunk, level, renderOnly, traceOrigin);
     }
 
     /** 触发消费循环（CAS 防并发；已失败/未握手时静默）。 */
@@ -1718,51 +1504,7 @@ public final class ShadowLightCompute {
             consumeRunning.set(false); // 池已停（断连竞态），队列由 onDisconnect 清空
         }
     }
-    static {
-        // E1「事件做骨」：SURROUNDED 收敛重算触发回调（LightReadinessRegistry 纯状态机，
-        // 反向依赖经此注入，避免 clinit 环）。
-        LightReadinessRegistry.setRelightTrigger(ShadowLightCompute::enqueueSurroundedRelight);
-    }
 
-    /**
-     * SURROUNDED 触发的整柱 LIGHT_ONLY 清层重算（E1「整柱重算」面）：任一邻柱晚于本柱
-     * 末次会话内计算变 LIT（或本柱光来自存档复用 lastCompute=0）时，由
-     * {@link LightReadinessRegistry} 回调。全 section 掩码并入 pendingLightUpdates
-     * （REPLACE 并集语义与 LightDelta 一致），复用既有 LIGHT_ONLY 屏障 + delta 回传链路；
-     * 重算完成（lightChunk COMPUTED 事件）才由注册表出队。
-     * <p>
-     * 引擎回调线程调用；只做并发安全入队 + pump。目标柱未注入/维度未装配 → 放弃本次
-     * 收敛登记（{@link LightReadinessRegistry#abandonConverge}），待后续事件重评。
-     */
-    private static void enqueueSurroundedRelight(long key) {
-        if (!isEnabled()) {
-            return; // 断连/降级：注册表将随 clear() 清理，无需 abandon
-        }
-        ShadowSeedServer server = ShadowServerRegistry.getInstance().get();
-        if (server == null) {
-            return;
-        }
-        String dimension = DimensionKey.dimensionOf(key);
-        ChunkPos pos = new ChunkPos(DimensionKey.chunkXOf(key), DimensionKey.chunkZOf(key));
-        net.minecraft.server.level.ServerLevel level = server.level(dimension);
-        if (level == null || server.injectedChunk(dimension, pos.x, pos.z) == null) {
-            LightReadinessRegistry.abandonConverge(key);
-            return;
-        }
-        net.minecraft.world.level.lighting.LevelLightEngine engine =
-                level.getChunkSource().getLightEngine();
-        int sectionCount = engine.getLightSectionCount();
-        java.util.BitSet allSections = new java.util.BitSet(sectionCount);
-        allSections.set(0, sectionCount);
-        LightWork work = new LightWork((java.util.BitSet) allSections.clone(),
-                (java.util.BitSet) allSections.clone(),
-                new java.util.BitSet(), new java.util.BitSet());
-        pendingLightUpdates.merge(key, work, LightWork::merged);
-        DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
-                "[SHADOW_LIGHT] Surrounded relight queued ({}, {}) sections={}",
-                pos.x, pos.z, sectionCount);
-        pump();
-    }
     /**
      * 后台消费循环（管道化）：取批（≤{@link #CONSUME_BATCH_LIMIT}，受在途余量约束）→
 
@@ -1791,13 +1533,9 @@ public final class ShadowLightCompute {
                     generated.clear();
                     pendingLightUpdates.clear();
                     inflightLight.clear();
-                    waitingForLight.clear();
-                    initializedLight.clear();
-                    LightReadinessRegistry.clear();
                     return;
                 }
                 sweepLightTimeouts(); // 超时兜底第二扫描点（主线程帧尾为主，低帧率兜底）
-                tryFlushWaitingLight(server); // 首包 waiter 优先于林火 LIGHT_ONLY 占槽
                 int inFlight = inflightLight.size();
                 if (inFlight >= PIPELINE_MAX_INFLIGHT) {
                     break; // 管道已满：等完成回调释放容量（低于低水位时重新 pump）
@@ -1831,15 +1569,13 @@ public final class ShadowLightCompute {
                     deltaBatch.add(e);
                 }
                 remaining -= deltaBatch.size();
-                boolean waitingFirstPackets = !waitingForLight.isEmpty();
                 List<Map.Entry<Long, LightWork>> lightBatch = new ArrayList<>();
                 for (Map.Entry<Long, LightWork> e : pendingLightUpdates.entrySet()) {
                     if (lightBatch.size() >= remaining) {
                         break;
                     }
-                    if (!canStartLightDeltaNow(isChunkBarrierBusy(e.getKey()))
-                            || !canStartLightOnlyWhileFirstPacketsWait(waitingFirstPackets)) {
-                        continue; // 整柱未完或首包仍在等：林火不进本批
+                    if (!canStartLightDeltaNow(isChunkBarrierBusy(e.getKey()))) {
+                        continue;
                     }
                     lightBatch.add(e);
                 }
@@ -1870,7 +1606,7 @@ public final class ShadowLightCompute {
                             }
                         }
                     if (!hashKnown || hashMatches) {
-                            boolean needRelight = !server.isChunkLightComplete(pos, existing);
+                            boolean needRelight = !existing.isLightCorrect();
                             if (!pending.remove(e.getKey(), pendingEntry)) {
                                 continue;
                             }
@@ -1886,7 +1622,6 @@ public final class ShadowLightCompute {
                             accountAuthoritativeLanded(dimension, pos, TraceOrigin.SHADOW_MEMORY_CACHE);
                             generated.put(e.getKey(), new GenEntry(existing, server.level(dimension), !needRelight,
                                     false, traceOrigin(TraceOrigin.SHADOW_MEMORY_CACHE)));
-                            continue;
                         }
                     }
                     // R1 全量直推：禁 loadFromDisk。内存未命中则注入网络包。
@@ -1899,7 +1634,6 @@ public final class ShadowLightCompute {
                         generated.clear();
                         pendingLightUpdates.clear();
                         inflightLight.clear();
-                        LightReadinessRegistry.clear();
                         ShadowServerRegistry.getInstance().failShadowServer();
                         return;
                     }
@@ -1956,10 +1690,7 @@ public final class ShadowLightCompute {
                         io.github.limuqy.mc.hassium.metrics.NetworkStats.recordSectionDeltaReceived(1,
                                 io.github.limuqy.mc.hassium.metrics.VanillaZlibEstimator.estimate(
                                         (int) io.github.limuqy.mc.hassium.metrics.NetworkStats.ESTIMATED_CHUNK_BYTES));
-                        if (isChunkBarrierBusy(key)) {
-                            // 方块已并入在途首包的注入柱；不得另开 DELTA 屏障取消首包。
-                            enqueueSurroundedRelight(key);
-                        } else {
+                        if (!isChunkBarrierBusy(key)) {
                             lightTasks.add(new LightTask(key, LightSource.DELTA, null,
                                     baseline, server.level(work.dimension()), LightMetric.RECOMPUTE,
                                     false, traceOrigin(TraceOrigin.SECTION_DELTA)));
@@ -1987,8 +1718,7 @@ public final class ShadowLightCompute {
                         pendingLightUpdates.remove(key, work);
                         continue;
                     }
-                    if (!canStartLightDeltaNow(isChunkBarrierBusy(key))
-                            || !canStartLightOnlyWhileFirstPacketsWait(!waitingForLight.isEmpty())) {
+                    if (!canStartLightDeltaNow(isChunkBarrierBusy(e.getKey()))) {
                         // 竞态：收集后又有整柱投递 / 首包 waiter。LightDelta 留队。
                         continue;
                     }
@@ -2031,27 +1761,13 @@ public final class ShadowLightCompute {
         }
     }
 
+
     /**
-     * 管道化两阶段光屏障提交（原 {@code awaitBatchLight} 的提交半段；批级 allOf 全等已移除）：
-     * 对每柱先提交官方 {@code initializeLight(chunk, isLighted)}（range=0，不等邻柱），
-     * 其 future 完成后再等 8 邻也完成建层，才提交 {@code lightChunk}（见
-     * {@link #startLightBarrier}）。对齐原版 ChunkMap：{@code LIGHT} range=1，
-     * 邻柱方块与 DataLayer 已在，一次 {@code propagateLightSources} 就能把天空光
-     * increase 进屋檐；算完再打官方 {@code ClientboundLevelChunkWithLightPacket}。
+     * 将已注入区块交给原版 {@code ChunkMap} 的 {@code ChunkStatus.LIGHT} future。
+     * 原版 holder 负责邻柱依赖、INITIALIZE_LIGHT/LIGHT 顺序和引擎执行；本类只做
+     * REPLACE 条件移除、在途计数与完成后的唯一 packet 出口。
      * <p>
-     * 提交即从投递队列条件移除（管道化前提：否则消费循环会重复取同一批）——
-     * {@code pending.remove(key, token)} / {@code generated.remove(key, gen)} 即
-     * REPLACE 守卫：屏障前已被同 key 新投递覆盖的旧包放弃本屏障（新包下一轮消费处理）。
-     * {@link #LIGHT_ENGINE_MUTEX} 只覆盖本提交循环（addTask，微秒级），绝不覆盖
-     * 等待/回调/回传：与 {@code ShadowSeedServer.clearChunkLight} 等清光投递互斥，
-     * 串行化「投递」顺序；执行层交错由 {@code MixinLayerLightSectionStorage} null 兜底
-     * （2026-08-14 1.20.1 定位，读取层勿动）。
-     * <p>
-     * per-chunk 完成回调（引擎线程）→ {@link #completeLight}（条件移除在途条目 =
-     * exactly-once + 断连短路）→ 移交后台池 {@link #finishLight} 立即打包回传
-     * （buildPacket ~ms 级，不得占引擎 Worker 线程）；提交失败 / 5s 超时 → 欠光标脏
-     * 仍推首包（{@link #sweepLightTimeouts}）。禁止以 isChunkLightComplete 重试挡首包，
-     * 以免 PIPELINE_MAX_INFLIGHT 被占满导致吞吐塌缩。
+     * 提交失败和 future 异常进入欠光回退，不能阻塞后续区块。
      */
     private static void submitLightBatch(ShadowSeedServer server, List<LightTask> tasks) {
         if (server == null || tasks == null || tasks.isEmpty()) {
@@ -2077,9 +1793,6 @@ public final class ShadowLightCompute {
                     case DELTA:
                         break; // delta 条目已在 apply 时移除
                     case LIGHT_ONLY:
-                        if (inflightLight.containsKey(t.key) || waitingForLight.containsKey(t.key)) {
-                            continue; // 不顶掉整柱；LightDelta 仍在队列，等首包 finishLight → pump
-                        }
                         if (!pendingLightUpdates.remove(t.key, t.token)) {
                             continue; // 同柱有更新的 LightDelta 并集：下一轮处理
                         }
@@ -2111,571 +1824,80 @@ public final class ShadowLightCompute {
                         }
                     }
                 } catch (Throwable ex) {
-                    // 提交失败：欠光兜底（旧 result.put(key, FALSE) 同语义）——同步守卫+回传
-                    finishLight(t, false);
+                    abortLight(t.key);
                 }
             }
         }
     }
 
     /**
-     * 两阶段光屏障起始（vanilla {@code ChunkStatus.INITIALIZE_LIGHT} → {@code LIGHT}）：
-     * {@code chunk.initializeLightSources()} + {@code engine.initializeLight(chunk, isLighted)}
-     * （range=0），8 邻建层后再 {@code lightChunk}。
-     * {@code isLighted} 仅磁盘/引擎已有光为 true（跳过 propagate），与原版
-     * {@code ChunkStatus.isLighted} 同义。
-     * <p>
-     * 引擎 per-dimension：取目标 chunk 所属 level（{@code t.level}）的光照引擎，
-     * 不再恒用 overworld——nether/end 柱的 initializeLight/lightChunk 必须路由到
-     * 对应 ServerLevel 的引擎（REQ 明细6）。
-     * <p>
-     * 调用方必须已持有 {@link #LIGHT_ENGINE_MUTEX}（提交循环内）；本方法只投递任务。
+     * 影子区块统一通过原版 {@code ChunkStatus.INITIALIZE_LIGHT} → {@code LIGHT} task。
+     * 这里使用真实 sections 构造 pre-light {@code ProtoChunk}，不进入 ChunkMap 的
+     * FULL/worldgen 金字塔；本类只负责 future 完成后的唯一 packet 出口。
      */
     private static void startLightBarrier(ShadowSeedServer server,
                                           LightTask t, long deadlineMs) {
-        net.minecraft.server.level.ThreadedLevelLightEngine engine =
-                (net.minecraft.server.level.ThreadedLevelLightEngine)
-                        (t.level != null ? t.level : server.overworld())
-                                .getChunkSource().getLightEngine();
-        if (t.source != LightSource.LIGHT_ONLY) {
-            waitingForLight.remove(t.key);
-            initializedLight.remove(t.key);
-        }
-        t.chunk.initializeLightSources();
-        boolean lighted = lightChunkHasExistingLight(t.metric == LightMetric.REUSE_CACHE);
-        java.util.concurrent.CompletableFuture<net.minecraft.world.level.chunk.ChunkAccess> initFuture =
-                engine.initializeLight(t.chunk, lighted);
         InflightLight inf = new InflightLight(t.key, t.source, t.token,
                 t.chunk, t.level, deadlineMs, t.metric, t.renderOnly, t.traceOrigin);
         inf.submittedAtNs = System.nanoTime();
         inflightLight.put(t.key, inf);
-        initFuture.whenComplete((chunkAccess, throwable) ->
-                onInitializeComplete(server, inf, throwable == null));
-        if (server != null && t.metric == LightMetric.RECOMPUTE
-                && (t.source == LightSource.PENDING || t.source == LightSource.GENERATED)) {
-            submitPreviewLight(server, t, initFuture);
-        }
-    }
-
-    /**
-     * 提交隔离预览算光。计算与 {@code initializeLight} 重叠；首推等到 init
-     * 完成。邻柱已齐、已提交 {@code lightChunk} 时仍推预览，避免林火把真引擎
-     * 队列拖死导致 R1 空洞。已落地影子全量包或屏障结束则丢预览。
-     */
-    private static void submitPreviewLight(ShadowSeedServer server, LightTask t,
-                                           CompletableFuture<?> initDone) {
-        if (server == null || t == null || t.chunk == null) {
-            return;
-        }
-        PREVIEW_POOL.execute(() -> computeAndPushPreview(server, t, initDone));
-    }
-
-    /**
-     * 隔离官方 {@link LevelLightEngine} 逐柱预计算，用该隔离实例打包首包
-     * （{@link #offerReady} converged=false）。<b>不</b>写入真引擎
-     * {@code queuedSections} / {@code updatingSectionData}。
-     * <p>
-     * T1 曾经 {@code LightEngine.queueSectionData} 同步 put 真引擎 queued，以便
-     * {@code getDataLayerData} 立刻可读。非空 put 会置 {@code hasInconsistencies}，
-     * 任意柱 Worker {@code runUpdate → markNewInconsistencies} 用 {@code fastIterator}
-     * 扫全局 queued——synchronized map 的 iterator 不锁整段，与预览线程 put 并发
-     * → Worker-Main 异常（ovd1 LogAudit {@code Caught exception in thread
-     * Worker-Main-*}）。park 期间下一次 {@code runUpdate} 还会把隔离层采纳进
-     * updating；{@code queueSectionData(null)} 只删 queued，清不掉已采纳层。
-     * <p>
-     * <b>欠估不变量</b>：shim 只返回本柱，邻柱 {@code getChunkForLighting=null}
-     * → {@code getState} 回落基岩，无入流 ⇒ 预览 ≤ 收敛终值。真引擎
-     * {@code lightChunk} 只播种 + 增加传播；隔离结果不进真引擎，无过亮残留。
-     * 收敛仍走 {@code finishLight → pushReady(converged=true)} REPLACE。
-     * <p>
-     * 锁序（CONTRACTS，禁止新的 chunkLock × LIGHT_ENGINE_MUTEX 嵌套）：
-     * 隔离计算与从隔离引擎打包持 {@link #chunkLock}（PalettedContainer 同域），
-     * <b>不</b>持 {@link #LIGHT_ENGINE_MUTEX}。
-     */
-    private static void computeAndPushPreview(ShadowSeedServer server, LightTask t,
-                                              CompletableFuture<?> initDone) {
-        if (!isEnabled() || server == null || t == null || t.chunk == null) {
-            return;
-        }
-        LevelLightEngine isolated;
-        ChunkPos pos = t.chunk.getPos();
-        synchronized (chunkLock(pos)) {
-            try {
-                isolated = computeIsolatedPreviewEngine(t.chunk);
-            } catch (Throwable ignored) {
-                return;
-            }
-        }
-        if (isolated == null) {
-            return;
-        }
-        if (initDone != null) {
-            try {
-                initDone.join();
-            } catch (Throwable ignored) {
-                return; // init 失败：onInitializeComplete 已走欠光路径，丢预览
-            }
-        }
-        waitUntilInitChoseStage(t);
-        InflightLight live = waitingForLight.get(t.key);
-        if (live == null) {
-            live = inflightLight.get(t.key);
-        }
-        boolean barrierStillLive = live != null && live.chunk == t.chunk;
-        if (!shouldPushIsolatedPreview(alreadyShadowApplied(t.key), isSuperseded(t), barrierStillLive)
-                || !isEnabled()
-                || server.injectedChunk(DimensionKey.dimensionOf(t.key), pos.x, pos.z) != t.chunk) {
-            return;
-        }
         try {
-            ClientboundLevelChunkWithLightPacket packet;
-            synchronized (chunkLock(pos)) {
-                packet = new ClientboundLevelChunkWithLightPacket(t.chunk, isolated, null, null);
-            }
-            offerReady(t.key, pos, packet, false, t.renderOnly, t.traceOrigin);
-        } catch (Throwable ignored) {
-            // 预览失败由收敛兜底
+            net.minecraft.server.level.ServerLevel level = t.level != null
+                    ? t.level : server.overworld();
+            inf.nativeChunk = io.github.limuqy.mc.hassium.compat.ShadowServerCompat
+                    .createNativeLightChunk(level, t.chunk);
+            io.github.limuqy.mc.hassium.compat.ShadowServerCompat
+                    .initializeNativeLight(level, inf.nativeChunk)
+                    .thenCompose(ignored -> io.github.limuqy.mc.hassium.compat.ShadowServerCompat
+                            .completeNativeLight(level, inf.nativeChunk))
+                    .whenComplete((ignored, throwable) -> {
+                        if (throwable != null) {
+                            abortLight(t.key);
+                        } else {
+                            completeLight(inf, true);
+                        }
+                    });
+        } catch (Throwable failure) {
+            abortLight(t.key);
         }
     }
 
-    /**
-     * join(init) 之后 {@code whenComplete → onInitializeComplete} 可能尚未跑完
-     * （CompletableFuture 依赖栈 LIFO）。等到 park / lightChunk 已提交 / 屏障消失。
-     */
-    private static void waitUntilInitChoseStage(LightTask t) {
-        long deadlineNs = System.nanoTime() + 50_000_000L;
-        while (System.nanoTime() < deadlineNs) {
-            if (waitingForLight.containsKey(t.key)) {
-                return;
-            }
-            InflightLight inf = inflightLight.get(t.key);
-            if (inf == null || inf.lightChunkSubmitted) {
-                return;
-            }
-            LockSupport.parkNanos(100_000L);
-        }
-    }
-
-    /**
-     * 官方流水线（禁止自研 BFS）：非空 section {@code updateSectionStatus(present)}
-     * → {@code setLightEnabled(true)}（真引擎 init(lighted=false) 会关掉 sources；
-     * 隔离引擎必须为 true，否则 {@code columnsWithSources} 空、天光 15 不会填）
-     * → {@code propagateLightSources} → {@code runLightUpdates}。
-     * 调用方从返回的隔离引擎打包，不把层写入真引擎。
-     */
-    private static LevelLightEngine computeIsolatedPreviewEngine(LevelChunk chunk) {
-        ChunkPos pos = chunk.getPos();
-        SingleChunkGetter shim = new SingleChunkGetter(chunk);
-        // 欠估不变量：隔离引擎无邻柱入流 ⇒ 预览 ≤ 收敛终值；真引擎 lightChunk 只增加传播。
-        LevelLightEngine isolated = new LevelLightEngine(shim, true, true);
-        net.minecraft.world.level.chunk.LevelChunkSection[] sections = chunk.getSections();
-        int minSection = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMinSection(chunk);
-        for (int i = 0; i < chunk.getSectionsCount(); i++) {
-            if (!sections[i].hasOnlyAir()) {
-                isolated.updateSectionStatus(SectionPos.of(pos, minSection + i), false);
-            }
-        }
-        isolated.setLightEnabled(pos, true);
-        isolated.propagateLightSources(pos);
-        isolated.runLightUpdates();
-        return isolated;
-    }
-
-    /** 阶段①完成 → 全量重算等 8 邻建层后进阶段② {@code lightChunk}（光桥/增量不等邻）。 */
-    private static void onInitializeComplete(ShadowSeedServer server, InflightLight inf, boolean converged) {
-        if (!isEnabled() || (inflightLight.get(inf.key) != inf && waitingForLight.get(inf.key) != inf)) {
-            return; // 断连 / 同 key 新屏障 REPLACE：旧链路短路
-        }
-        if (!converged) {
-            completeLight(inf, false);
-            return;
-        }
-        initializedLight.put(inf.key, Boolean.TRUE);
-        try {
-            synchronized (LIGHT_ENGINE_MUTEX) {
-                if (inflightLight.get(inf.key) != inf || isSuperseded(inf)) {
-                    completeLight(inf, false); // 新数据已接管：旧任务让位（finishLight 的 REPLACE 守卫会短路）
-                    return;
-                }
-                ChunkPos pos = new ChunkPos(DimensionKey.chunkXOf(inf.key),
-                        DimensionKey.chunkZOf(inf.key));
-                if (canStartVanillaLightStageNow(server, pos, inf)) {
-                    submitLightChunkLocked(server, inf);
-                } else {
-                    // park 的柱不推欠光包（对齐原版单人：区块包只在 LIGHT 完成后发一次）。
-                    // 欠光预览要么整柱黑（RECOMPUTE init 后引擎层仍空），要么诱发客户端
-                    // 自算+影子收敛的双重计算；超时由 sweep 兜底放行，不会无限挂。
-                    parkForVanillaLightNeighbors(inf);
-                }
-                flushWaitingAroundLocked(server, DimensionKey.dimensionOf(inf.key), pos);
-                // 末根邻柱 init 完成时，把 9 柱内因「邻未收敛」被 defer 的任务按真收敛态重推
-                //（屋檐跨界 section 的后到光由此补齐；见 areVanillaLightNeighborsConverged）。
-                promoteDeferredAfterNeighborsLocked(server, DimensionKey.dimensionOf(inf.key), pos);
-            }
-        } catch (Throwable ex) {
-            completeLight(inf, false);
-        }
-        if (inflightLight.size() < PIPELINE_LOW_WATER
-                && hasStartablePendingWork()
-                && isEnabled()) {
-            pump();
-        }
-    }
-
-    private static boolean needsVanillaLightNeighborWait(LightTask task) {
-        if (task.source == LightSource.LIGHT_ONLY || task.source == LightSource.DELTA) {
-            return false;
-        }
-        return needsVanillaLightNeighborWait(task.metric != LightMetric.REUSE_CACHE);
-    }
-
-    private static void parkForVanillaLightNeighbors(InflightLight inf) {
-        if (inf.packWaitStartMs == 0L) {
-            inf.packWaitStartMs = System.currentTimeMillis();
-        }
-        if (!inflightLight.remove(inf.key, inf)) {
-            return;
-        }
-        waitingForLight.put(inf.key, inf);
-        ChunkPos pos = new ChunkPos(DimensionKey.chunkXOf(inf.key), DimensionKey.chunkZOf(inf.key));
-        DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
-                "[SHADOW_LIGHT] Wait neighbors before lightChunk ({}, {})", pos.x, pos.z);
-    }
-
-    private static void submitLightChunkLocked(ShadowSeedServer server, InflightLight inf) {
-        if (inflightLight.get(inf.key) != inf) {
-            return;
-        }
-        if (isSuperseded(inf)) {
-            completeLight(inf, false);
-            return;
-        }
-        inf.lightChunkSubmitted = true;
-        // 引擎 per-dimension：lightChunk 路由到目标 chunk 所属 level 的引擎（同 startLightBarrier）。
-        net.minecraft.server.level.ThreadedLevelLightEngine engine =
-                (net.minecraft.server.level.ThreadedLevelLightEngine)
-                        (inf.level != null ? inf.level : server.overworld())
-                                .getChunkSource().getLightEngine();
-        boolean hasExistingLight = lightChunkHasExistingLight(inf.metric == LightMetric.REUSE_CACHE);
-        ShadowLightProbe.onBeforeLightChunk(server, engine, inf.chunk);
-        java.util.concurrent.CompletableFuture<net.minecraft.world.level.chunk.ChunkAccess> lightFuture =
-                engine.lightChunk(inf.chunk, hasExistingLight);
-        // 屋檐跨界：邻柱 lightChunk 未完时边界 section 可能欠光。那只影响 LIGHT_ONLY
-        // 的 settled 证据与后续补光；首包不得等邻柱林火停（否则 R1 着火区长时间空洞）。
-        lightFuture.whenComplete((chunkAccess, throwable) -> {
-            // LIGHT_ONLY 收敛重算走注册表视图（并发 relight 波中引擎三表恒有在途）。
-            // 首包只看本柱 lightChunk 成功：邻柱林火不得把尚未落地的柱标成未收敛。
-            boolean lightOk = throwable == null;
-            boolean neighborsIdle = inf.source == LightSource.LIGHT_ONLY
-                    ? areRegistryNeighborsSettled(inf.key)
-                    : areVanillaLightNeighborsConverged(server, inf);
-            boolean publishReady = firstPacketLightReady(lightOk, neighborsIdle,
-                    inf.source == LightSource.LIGHT_ONLY);
-            ShadowLightProbe.onLightChunkComplete(engine, inf.chunk, throwable, neighborsIdle);
-            if (throwable == null) {
-                // E1 LIT 唯一事件源：覆盖 PENDING/GENERATED/DELTA/LIGHT_ONLY 全部屏障来源。
-                // REUSE_CACHE 的值来自存档/既有层 → 记「未在会话内计算」；校验重算等到
-                // 8 邻 settled（光层齐）才清层，避免屋檐/洞口被单独重算盖暗。
-                LightReadinessRegistry.onLightComputed(inf.key,
-                        inf.metric == LightMetric.REUSE_CACHE, lightOk && neighborsIdle,
-                        System.currentTimeMillis());
-            }
-            completeLight(inf, publishReady);
-        });
-    }
-
-    /**
-     * 8 邻 lightChunk 均已完成（已 initializeLight 且不在等待/在途表）。
-     * 只读三个 ConcurrentHashMap 快照，map 本身线程安全；调用方通常已持
-     * {@link #LIGHT_ENGINE_MUTEX}（与 {@link #canStartVanillaLightStageNow} 同视图）。
-     */
-    private static boolean areVanillaLightNeighborsConverged(ShadowSeedServer server, InflightLight inf) {
-        return areVanillaLightNeighborsConverged(inf.key);
-    }
-
-    /**
-     * 方案 D：LIGHT_ONLY 收敛重算完成时的 converged 判定用注册表视图——
-     * 并发 relight 波中邻柱常在 inflight/waiting（引擎三表），恒判 false 会使
-     * settled=true 终值证据永不达成、传播死锁。registry 视图语义：
-     * 8 邻 phase==LIT 且无 pendingConverge（park 未 LIT 的邻柱按未就绪计，
-     * 与官方 INITIALIZE_LIGHT 硬依赖对齐）。跃迁波首跑仍用引擎三表严格判定。
-     */
-    private static boolean areRegistryNeighborsSettled(long key) {
-        return LightReadinessRegistry.areNeighborsSettled(key);
-    }
-
-    /** 同上，按复合键判定（deferred 任务重推前使用）。 */
-    private static boolean areVanillaLightNeighborsConverged(long key) {
-        String dimension = DimensionKey.dimensionOf(key);
-        int cx = DimensionKey.chunkXOf(key);
-        int cz = DimensionKey.chunkZOf(key);
-        for (int[] d : LIGHT_NEIGHBOR_OFFSETS) {
-            long nKey = DimensionKey.key(dimension, cx + d[0], cz + d[1]);
-            if (!initializedLight.containsKey(nKey)
-                    || waitingForLight.containsKey(nKey)
-                    || inflightLight.containsKey(nKey)) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    /**
-     * 本柱 init 完成后（调用方持 {@link #LIGHT_ENGINE_MUTEX}）：扫本柱+8 邻的
-     * deferredLightPush，凡 8 邻 lightChunk 已齐（{@link #areVanillaLightNeighborsConverged}）
-     * 的任务移出暂缓表并按 converged=true 重推——先完成柱此前以 false 推送/defer，
-     * 其边界 section 的跨柱蔓延由末根邻柱完成时的这次重推补齐。
-     */
-    private static void promoteDeferredAfterNeighborsLocked(ShadowSeedServer server,
-                                                            String dimension, ChunkPos pos) {
-        if (server == null || deferredLightPush.isEmpty()) {
-            return;
-        }
-        for (int[] d : LIGHT_STAGE_OFFSETS) {
-            long key = DimensionKey.key(dimension, pos.x + d[0], pos.z + d[1]);
-            LightTask task = deferredLightPush.get(key);
-            if (task == null || isSuperseded(task)
-                    || inflightLight.containsKey(key) || waitingForLight.containsKey(key)) {
-                continue;
-            }
-            if (!areVanillaLightNeighborsConverged(key)) {
-                continue;
-            }
-            if (!deferredLightPush.remove(key, task)) {
-                continue;
-            }
-            enqueueDeferredPush(server, task, true);
-        }
-    }
-
-    /** 在途槽位腾出时由 {@link #completeLight} 触发；邻柱 init 完成走 {@link #flushWaitingAroundLocked}。 */
-    private static void tryFlushWaitingLight(ShadowSeedServer server) {
-        if (server == null || waitingForLight.isEmpty()) {
-            return;
-        }
-        synchronized (LIGHT_ENGINE_MUTEX) {
-            for (InflightLight inf : new ArrayList<>(waitingForLight.values())) {
-                if (inflightLight.size() >= PIPELINE_MAX_INFLIGHT) {
-                    break;
-                }
-                promoteWaitingToLightChunkLocked(server, inf);
-            }
-        }
-    }
-
-    private static void flushWaitingAroundLocked(ShadowSeedServer server, String dimension, ChunkPos pos) {
-        if (server == null || pos == null || dimension == null) {
-            return;
-        }
-        for (int[] d : LIGHT_STAGE_OFFSETS) {
-            if (inflightLight.size() >= PIPELINE_MAX_INFLIGHT) {
-                return;
-            }
-            // 邻柱键与等待表同维：waitingForLight 键已携带维度，裸 pos 查找恒 miss
-            long nKey = DimensionKey.key(dimension, pos.x + d[0], pos.z + d[1]);
-            InflightLight waiter = waitingForLight.get(nKey);
-            if (waiter != null) {
-                promoteWaitingToLightChunkLocked(server, waiter);
-            }
-        }
-    }
-
-    private static void promoteWaitingToLightChunkLocked(ShadowSeedServer server, InflightLight inf) {
-        if (inf == null || server == null) {
-            return;
-        }
-        ChunkPos pos = new ChunkPos(DimensionKey.chunkXOf(inf.key), DimensionKey.chunkZOf(inf.key));
-        if (!canStartVanillaLightStageNow(server, pos, inf)) {
-            return;
-        }
-        if (isSuperseded(inf)) {
-            waitingForLight.remove(inf.key, inf);
-            return;
-        }
-        if (!waitingForLight.remove(inf.key, inf)) {
-            return;
-        }
-        inflightLight.put(inf.key, inf);
-        submitLightChunkLocked(server, inf);
-    }
-
-    private static boolean canStartVanillaLightStageNow(ShadowSeedServer server, ChunkPos pos,
-                                                        InflightLight inf) {
-        // 对齐原版 ChunkStatus.LIGHT：全量重算等 8 邻 initializeLight；超时按视距边缘。
-        if (!needsVanillaLightNeighborWait(inf)) {
-            return true;
-        }
-        long waitedMs = inf.packWaitStartMs <= 0L
-                ? 0L
-                : Math.max(0L, System.currentTimeMillis() - inf.packWaitStartMs);
-        boolean timedOut = waitedMs >= NEIGHBOR_PACK_WAIT_MS
-                || System.currentTimeMillis() >= inf.deadlineMs;
-        String dimension = DimensionKey.dimensionOf(inf.key);
-        int expected = 0;
-        int ready = 0;
-        for (int[] d : LIGHT_NEIGHBOR_OFFSETS) {
-            int nx = pos.x + d[0];
-            int nz = pos.z + d[1];
-            if (!isVanillaLightNeighborExpected(server, dimension, nx, nz)) {
-                continue;
-            }
-            expected++;
-            if (isVanillaLightNeighborReadyNow(server, dimension, nx, nz)) {
-                ready++;
-            }
-        }
-        if (canStartVanillaLightStage(ready, expected, timedOut) && timedOut && ready < expected) {
-            // 超时放行且仍有邻柱未就绪：propagateLightSources 对缺失邻柱回退 emptyChunkSources
-            //（NEGATIVE_INFINITY → 该方向播种 flag 永不置位），边界列播种静默丢失（E=3 vs E=5 形态）。
-            DebugLogger.warn(DebugLogger.LogType.ASYNC,
-                    "[SHADOW_LIGHT] Neighbor wait timed out with {} of {} neighbors not ready at ({}, {}),"
-                            + " border seeding may be incomplete",
-                    expected - ready, expected, pos.x, pos.z);
-        }
-        return canStartVanillaLightStage(ready, expected, timedOut);
-    }
-
-    private static boolean isVanillaLightNeighborExpected(ShadowSeedServer server, String dimension,
-                                                          int nx, int nz) {
-        boolean holderPresent = server != null && server.hasVisibleChunkHolder(nx, nz);
-        long nKey = DimensionKey.key(dimension, nx, nz);
-        boolean inInjectOrPipeline = initializedLight.containsKey(nKey)
-                || waitingForLight.containsKey(nKey)
-                || inflightLight.containsKey(nKey)
-                || pending.containsKey(nKey)
-                || generated.containsKey(nKey)
-                || (server != null && server.injectedChunk(dimension, nx, nz) != null);
-        return isVanillaLightNeighborExpected(holderPresent, inInjectOrPipeline, withinLightTicket(nx, nz));
-    }
-
-    private static boolean isVanillaLightNeighborReadyNow(ShadowSeedServer server, String dimension,
-                                                          int nx, int nz) {
-        boolean holderParent = server != null && server.hasInitializeLightParent(nx, nz);
-        boolean selfInit = initializedLight.containsKey(DimensionKey.key(dimension, nx, nz));
-        return isVanillaLightNeighborReady(holderParent, selfInit);
-    }
-
-    /**
-     * 原版 ChunkMap 用 ticket/holder 决定邻柱是否存在。票尚未被 pollTask 消化时
-     * 用玩家视距方形窗口近似，避免同波包还在解码时 expected==0 立刻 lightChunk。
-     */
-    private static boolean withinLightTicket(int nx, int nz) {
-        try {
-            Minecraft mc = Minecraft.getInstance();
-            if (mc == null || mc.player == null) {
-                return false;
-            }
-            int px = (int) Math.floor(mc.player.getX()) >> 4;
-            int pz = (int) Math.floor(mc.player.getZ()) >> 4;
-            int radius = io.github.limuqy.mc.hassium.cache.client.ViewDistanceExtensionService
-                    .resolveEffectiveClientVD(mc) + 3;
-            return Math.max(Math.abs(nx - px), Math.abs(nz - pz)) <= radius;
-        } catch (Throwable ignored) {
-            return false;
-        }
-    }
-
-    /**
-     * 锁外忙等：把 {@code ThreadedLevelLightEngine.lightTasks} 压回
-     * {@link #ENGINE_TASK_LOW_WATER}。目标：任务总量恒 < 1000（vanilla addTask 的
-     * sorter 线程并发 runUpdate 阈值）——sorter 线程与 taskMailbox 线程并发 runUpdate
-     * 同一 lightTasks 列表（非线程安全）时任务错序（propagateLightSources 先于
-     * updateSectionStatus / POST 先于 PRE）→ 播种在建层前执行 → 空光层打包 → 客户端
-     * 黑块。忙等期间主动 {@code tryScheduleUpdate} 驱动 mailbox 消化（不必等影子端
-     * 主循环 100µs 轮询）；5s 超时兜底防死锁（超时继续，由 sweepLightTimeouts
-     * 欠光首包兜底，不阻塞投递链）。
-     * <p>
-     * 包可见：ShadowSeedServer 的大批量清光/重算投递路径（injectChunk 重注入、
-     * relightChunk、invalidateLightSections）同样需要按柱 drain，防单次投递越阈值。
-     * 忙等无锁依赖（只等 mailbox 消化），可在任意非引擎线程调用。
-     */
-    static void awaitEngineTaskDrain(net.minecraft.server.level.ThreadedLevelLightEngine engine) {
-        try {
-            io.github.limuqy.mc.hassium.mixin.ThreadedLevelLightEngineAccessor acc =
-                    (io.github.limuqy.mc.hassium.mixin.ThreadedLevelLightEngineAccessor) engine;
-            long deadline = System.currentTimeMillis() + CONVERGENCE_WAIT_TIMEOUT_MS;
-            while (acc.hassium$getLightTasks().size() > ENGINE_TASK_LOW_WATER
-                    && System.currentTimeMillis() < deadline) {
-                try {
-                    engine.tryScheduleUpdate();
-                } catch (Throwable ignored) {
-                    // 引擎关闭/断连竞态：忙等靠超时兜底退出
-                }
-                java.util.concurrent.locks.LockSupport.parkNanos(200_000L);
-            }
-        } catch (Throwable ignored) {
-            // 类型转换/accessor 异常（版本差异）：跳过水位控制（保守降级为旧行为）
-        }
-    }
-
-    /**
-     * 光屏障完成入口（回调 = 引擎 Worker 线程；超时扫表 = 主线程/消费线程）：条件移除
-     * 在途条目——移除成功 = 本条目胜出（exactly-once：完成回调 vs 超时兜底）；移除失败 =
-     * 已被同 key 新屏障 REPLACE / 断连清理（{@link #onDisconnect} 清表）/ 超时已处理 →
-     * 短路丢弃（旧回调不得覆盖新投递，断连竞态兜底）。
-     * <p>
-     * 只做簿记（微秒级）后移交后台池执行回传：{@code whenComplete} 运行在引擎
-     * ForkJoinPool Worker 线程，直接 {@link #pushReady}（buildPacket 序列化 ~ms 级）
-     * 会占住引擎算光线程拖垮吞吐，故由 HassiumTaskExecutor 承接打包。
-     *
-     * @return true=本条目胜出并移交回传（超时扫表据此打日志）
-     */
+    /** 原版 LIGHT future 完成后的唯一完成收口。 */
     private static boolean completeLight(InflightLight inf, boolean converged) {
-        boolean parked = waitingForLight.remove(inf.key, inf);
-        boolean inflight = inflightLight.remove(inf.key, inf);
-        if (!parked && !inflight) {
-            return false; // 已被超时兜底 / 断连清理 / 同 key 新投递 REPLACE：短路丢弃
+        if (!inflightLight.remove(inf.key, inf)) {
+            return false;
         }
-        // 屏障胜出 = 该柱即将由 finishLight 回传全量光（chunk 包或全柱光包）——
-        // 立即丢弃已收集未消费的光更新掩码，堵住「completeLight 移除在途后、
-        // finishLight offer 前，drainLightMasks 把中间态（含空层）打成光包」的窗口。
         discardLightMask(inf.key);
-        ShadowSeedServer wakeServer = ShadowServerRegistry.getInstance().get();
-        if (wakeServer != null) {
-            // 在途槽位腾出：触发式重试因 PIPELINE 满而没能 promote 的 waiter，
-            // 不等 consumeLoop / 帧尾扫表。
-            tryFlushWaitingLight(wakeServer);
-        }
         HassiumTaskExecutor executor = HassiumTaskExecutor.getClient();
         if (executor == null || !executor.isRunning() || !isEnabled()) {
-            return true; // 断连竞态：影子已关/队列已清（onDisconnect 清空 pending/generated/ready）→ 丢弃
+            return true;
         }
         Minecraft mc = Minecraft.getInstance();
         if (mc != null && mc.isSameThread()) {
-            // drainReady / sweepLightTimeouts 已在主线程：同步打包入 ready，
-            // 同帧就能 apply+ACK。丢给线程池会让本帧 ready 仍空、early-return，
-            // 服务端 10-batch 窗口卡到 delivery timeout。
             finishLight(inf, converged);
-            if (inflightLight.size() < PIPELINE_LOW_WATER && hasStartablePendingWork() && isEnabled()) {
-                pump();
-            }
             return true;
         }
         try {
             executor.submit(() -> finishLight(inf, converged), TaskCategory.BEST_EFFORT);
-        } catch (java.util.concurrent.RejectedExecutionException e) {
-            // 池已停（断连竞态）：丢弃
+        } catch (java.util.concurrent.RejectedExecutionException ignored) {
+            // 断连竞态：执行器已停止，丢弃本次回传。
         }
         return true;
     }
+    /** LIGHT 未完成时退出影子光照，不广播 partial 数据，后续包走完整回退。 */
+    private static void abortLight(long key) {
+        inflightLight.remove(key);
+        pendingLightUpdates.remove(key);
+        ShadowServerRegistry.getInstance().failShadowServer();
+    }
 
-    /**
-     * 回传执行（后台池）：{@code lightChunk} future / 超时兜底到达后立即首包。
-     * 对齐单人：LIGHT 完成才发包，不再忙等播种或补跑 propagate。
-     */
+    /** 原版 LIGHT future 完成后的唯一完成收口。 */
     private static void finishLight(LightTask task, boolean converged) {
-        if (!isEnabled()) {
-            return; // 断连竞态：影子已关（队列已清，守卫亦短路）
-        }
-        // 方块级新投递才作废旧回传。LightDelta 不取消整柱首包：林火只排队，
-        // 本方法推完 chunk 后再 pump 触发 relight。
-        if (isSuperseded(task)) {
-            deferredLightPush.remove(task.key, task);
+        if (!isEnabled() || isSuperseded(task)) {
             return;
         }
         ChunkPos pos = new ChunkPos(DimensionKey.chunkXOf(task.key), DimensionKey.chunkZOf(task.key));
         ShadowSeedServer server = ShadowServerRegistry.getInstance().get();
-        boolean pushConverged = converged;
         if (task.metric == LightMetric.RECOMPUTE) {
             long elapsedNs = task.submittedAtNs > 0L
                     ? Math.max(0L, System.nanoTime() - task.submittedAtNs)
@@ -2686,42 +1908,17 @@ public final class ShadowLightCompute {
             if (server != null && task.chunk != null) {
                 server.syncLightCorrect(task.chunk, false);
             }
-            if (inflightLight.size() < PIPELINE_LOW_WATER
-                    && hasStartablePendingWork()
-                    && isEnabled()) {
+            if (inflightLight.size() < PIPELINE_LOW_WATER && hasStartablePendingWork() && isEnabled()) {
                 pump();
             }
             return;
         }
-        boolean alreadyApplied = alreadyShadowApplied(task.key);
-        if (shouldDeferIncompleteClientOverwrite(alreadyApplied, pushConverged)) {
-            deferredLightPush.put(task.key, task);
-            if (server != null && task.chunk != null) {
-                server.syncLightCorrect(task.chunk, false);
-            }
-            DebugLogger.warn(DebugLogger.LogType.ASYNC,
-                    "[SHADOW_LIGHT] Defer incomplete overwrite ({}, {}): shadow chunk already applied",
-                    pos.x, pos.z);
-            if (inflightLight.size() < PIPELINE_LOW_WATER
-                    && hasStartablePendingWork()
-                    && isEnabled()) {
-                pump();
-            }
-            return;
-        }
-        if (!pushConverged) {
-            DebugLogger.warn(DebugLogger.LogType.ASYNC,
-                    "[SHADOW_LIGHT] Light incomplete/timeout ({}, {}), pushing first packet with partial light",
-                    pos.x, pos.z);
-
-        }
-        deferredLightPush.remove(task.key);
         try {
             if (task.source == LightSource.LIGHT_ONLY) {
                 LightWork work = task.token instanceof LightWork w ? w : null;
-                pushLightReady(pos, task.level, task.chunk, pushConverged, work);
+                pushLightReady(pos, task.level, task.chunk, converged, work);
             } else {
-                pushReady(task.key, task.chunk, task.level, pushConverged, task.renderOnly,
+                pushReady(task.key, task.chunk, task.level, converged, task.renderOnly,
                         task.traceOrigin);
             }
         } catch (Throwable t) {
@@ -2730,30 +1927,14 @@ public final class ShadowLightCompute {
         }
         if (server != null && task.chunk != null) {
             server.persistAfterClientLightPush(task.chunk,
-                    haloKeys.containsKey(task.key), pushConverged);
+                    haloKeys.containsKey(task.key), converged);
         }
-        if (inflightLight.size() < PIPELINE_LOW_WATER
-                && hasStartablePendingWork()
-                && isEnabled()) {
+        if (inflightLight.size() < PIPELINE_LOW_WATER && hasStartablePendingWork() && isEnabled()) {
             pump();
         }
     }
 
-    /** 原版 LIGHT range=1：含对角的 8 邻。 */
-    private static final int[][] LIGHT_NEIGHBOR_OFFSETS = {
-            {-1, -1}, {-1, 0}, {-1, 1},
-            {0, -1}, {0, 1},
-            {1, -1}, {1, 0}, {1, 1}
-    };
-    /** 本柱 + 8 邻，用于唤醒等待 LIGHT 的柱。 */
-    private static final int[][] LIGHT_STAGE_OFFSETS = {
-            {0, 0},
-            {-1, -1}, {-1, 0}, {-1, 1},
-            {0, -1}, {0, 1},
-            {1, -1}, {1, 0}, {1, 1}
-    };
-    /** 丢弃某柱已收集、尚未消费的光照更新掩码，以及回传队列里尚未落地的旧光包。 */
-
+    /** 丢弃某柱尚未消费的光照更新与回传队列中的旧光包。 */
     private static void discardLightMask(long key) {
         LightMask mask = lightUpdates.remove(key);
         if (mask != null) {
@@ -2763,28 +1944,21 @@ public final class ShadowLightCompute {
                 mask.blockSections.clear();
             }
         }
-        ChunkPos pos = new ChunkPos(DimensionKey.chunkXOf(key), DimensionKey.chunkZOf(key));
-        dropQueuedLights(pos);
+        dropQueuedLights(new ChunkPos(DimensionKey.chunkXOf(key), DimensionKey.chunkZOf(key)));
     }
 
-    /** 区块首包入队前丢掉该柱旧光，避免 FIFO 下旧空光排在新区块包之后盖暗。 */
     private static void dropQueuedLights(ChunkPos pos) {
         ready.removeIf(item -> item.lightPacket != null
                 && item.lightPacket.getX() == pos.x && item.lightPacket.getZ() == pos.z);
     }
 
-    /**
-     * 区块卸载前取消该柱所有尚未完成的影子光照/回传工作。
-     * 正在执行的 worker 通过 inflight 条目条件移除失效；完成回调不会再发布旧结果。
-     */
+    /** 区块卸载前取消该柱所有尚未完成的影子光照/回传工作。 */
     public static void cancelChunkWork(long key) {
         pending.remove(key);
         generated.remove(key);
         pendingDeltas.remove(key);
         pendingLightUpdates.remove(key);
-        waitingForLight.remove(key);
         inflightLight.remove(key);
-        deferredLightPush.remove(key);
         lightUpdates.remove(key);
         haloKeys.remove(key);
         shadowApplyEpochs.remove(key);
@@ -2794,48 +1968,17 @@ public final class ShadowLightCompute {
                 DimensionKey.chunkXOf(key), DimensionKey.chunkZOf(key));
     }
 
-    /**
-     * per-chunk 超时兜底扫表（提交 5s 未完成 → 仍推首包 + 欠光标脏，补光走光照更新桥梁）：
-     * 主线程帧尾 {@link #drainReady} 为主扫描点 + 消费循环轮顶第二扫描点。
-     * 与完成回调竞速同一 {@link #completeLight}（条件移除 exactly-once），谁先赢谁回传；
-     * 不重跑屏障等待层齐全。
-     */
+    /** LIGHT future 超时只触发完整回退，不广播 partial 光照。 */
     private static void sweepLightTimeouts() {
         ShadowSeedServer server = ShadowServerRegistry.getInstance().get();
         long now = System.currentTimeMillis();
-        if (server != null && !waitingForLight.isEmpty()) {
-            synchronized (LIGHT_ENGINE_MUTEX) {
-                for (InflightLight inf : new ArrayList<>(waitingForLight.values())) {
-                    if (now >= inf.deadlineMs) {
-                        if (waitingForLight.remove(inf.key, inf)) {
-                            completeLight(inf, false);
-                            DebugLogger.warn(DebugLogger.LogType.ASYNC,
-                                    "[SHADOW_LIGHT] Light timeout ({}ms) ({}, {}), pushing with partial light",
-                                    CONVERGENCE_WAIT_TIMEOUT_MS, DimensionKey.chunkXOf(inf.key),
-                                    DimensionKey.chunkZOf(inf.key));
-                        }
-                        continue;
-                    }
-                    if (inflightLight.size() >= PIPELINE_MAX_INFLIGHT) {
-                        // 已等满邻居门槛等待期的 waiter 豁免在途上限：parked 不占引擎
-                        // 任务位，饱和期无限顺延会把欠光窗口拉长到秒级（R1 随机黑放大器）。
-                        long waitedMs = inf.packWaitStartMs <= 0L ? 0L
-                                : Math.max(0L, now - inf.packWaitStartMs);
-                        if (waitedMs < NEIGHBOR_PACK_WAIT_MS) {
-                            continue;
-                        }
-                    }
-                    promoteWaitingToLightChunkLocked(server, inf);
-                }
-            }
-        }
-        if (inflightLight.isEmpty()) {
-            return;
-        }
         for (InflightLight inf : inflightLight.values()) {
-            if (now >= inf.deadlineMs && completeLight(inf, false)) {
+            if (now >= inf.deadlineMs && inflightLight.remove(inf.key, inf)) {
+                if (server != null) {
+                    ShadowServerRegistry.getInstance().failShadowServer();
+                }
                 DebugLogger.warn(DebugLogger.LogType.ASYNC,
-                        "[SHADOW_LIGHT] Light timeout ({}ms) ({}, {}), pushing with partial light",
+                        "[SHADOW_LIGHT] Light timeout ({}ms) ({}, {}), switching to vanilla fallback",
                         CONVERGENCE_WAIT_TIMEOUT_MS, DimensionKey.chunkXOf(inf.key),
                         DimensionKey.chunkZOf(inf.key));
             }
@@ -2912,11 +2055,6 @@ public final class ShadowLightCompute {
                         DimensionKey.dimensionOf(key)),
                 fifoApplyPriority(),
                 KeyedPriorityQueue.OfferPolicy.REPLACE);
-        if (!converged) {
-            DebugLogger.warn(DebugLogger.LogType.ASYNC,
-                    "[SHADOW_CHUNK] Converge pending ({}, {}), pushing with partial light",
-                    pos.x, pos.z);
-        }
     }
 
     /**
@@ -2939,11 +2077,6 @@ public final class ShadowLightCompute {
             skyMask.or(work.emptySkyMask());
             blockMask = (BitSet) work.blockMask().clone();
             blockMask.or(work.emptyBlockMask());
-        }
-        if (!converged && skyMask != null) {
-            ShadowSeedServer server = ShadowServerRegistry.getInstance().get();
-            omitUnlitEavesFromSkyMask(skyMask, pos, level.getLightEngine(),
-                    level.getLightEngine().getMinLightSection(), server, level);
         }
         ClientboundLightUpdatePacket packet =
                 new ClientboundLightUpdatePacket(pos, level.getLightEngine(), skyMask, blockMask);
@@ -2989,8 +2122,6 @@ public final class ShadowLightCompute {
         io.github.limuqy.mc.hassium.utils.ChunkFlowTiming.noteFrame(); // T0b 诊断：每帧 apply 计数
         tickChunkUnload();
         ShadowLightProbe.onEngineTick(); // T3 探针：引擎终态周期快照（debug.lightVerify 门控）
-        confirmLightsCorrectIfConverged();
-        flushDeferredLightPushes();
         sweepLightTimeouts(); // per-chunk 光屏障 5s 超时兜底（主扫描点；低帧率由消费轮顶兜底）
         boolean joinBoost = ClientMainThreadBudget.isJoinBoostActive();
         if (!joinBoost) {
@@ -3060,9 +2191,12 @@ public final class ShadowLightCompute {
                     chunksAppliedThisFrame++;
                     releaseEntry = applyReadyChunk(mc, connection, entry, item);
                 } else if (isLight) {
-                    if (!shadowApplyEpochs.containsKey(DimensionKey.key(
-                            entry.key().dimension(), entry.key().posLong()))) {
-                        // 尚无影子区块包：丢掉这条旧光，等带光首包。
+                    long chunkKey = DimensionKey.key(entry.key().dimension(), entry.key().posLong());
+                    if (!shadowApplyEpochs.containsKey(chunkKey)
+                            || !hasClientChunk(mc, (int) entry.key().posLong(),
+                            (int) (entry.key().posLong() >> 32))) {
+                        // 光包可先于区块包抵达；保留并重排队，不能静默丢弃。
+                        releaseEntry = false;
                         continue;
                     }
                     forceOne = false;
@@ -3215,102 +2349,6 @@ public final class ShadowLightCompute {
                 lightQueueDelayMs, fullAppliedAfterLightQueued, chunkPresent);
     }
 
-    /**
-     * 帧尾：引擎任务排空或单柱层齐全时，把暂缓的欠光覆盖补推出去。
-     * 引擎已全局收敛仍不齐全 → 仍推当前光（不会再变好），避免永久卡住。
-     */
-    private static void flushDeferredLightPushes() {
-        if (deferredLightPush.isEmpty()) {
-            return;
-        }
-        ShadowSeedServer server = ShadowServerRegistry.getInstance().get();
-        if (server == null) {
-            deferredLightPush.clear();
-            return;
-        }
-        boolean engineIdle = false;
-        try {
-            engineIdle = server.isLightConverged();
-        } catch (Throwable ignored) {
-            // 保守：不因探测失败清空暂缓表
-        }
-        for (Map.Entry<Long, LightTask> e : new ArrayList<>(deferredLightPush.entrySet())) {
-            LightTask task = e.getValue();
-            if (task == null || !deferredLightPush.containsKey(e.getKey())) {
-                continue;
-            }
-            if (isSuperseded(task) || inflightLight.containsKey(task.key)
-                    || waitingForLight.containsKey(task.key)) {
-                deferredLightPush.remove(e.getKey(), task);
-                continue;
-            }
-            ChunkPos pos = new ChunkPos(DimensionKey.chunkXOf(task.key), DimensionKey.chunkZOf(task.key));
-            boolean complete = server.isChunkLightComplete(pos, task.chunk);
-            if (!complete && !engineIdle) {
-                continue;
-            }
-            if (!deferredLightPush.remove(e.getKey(), task)) {
-                continue;
-            }
-            enqueueDeferredPush(server, task, complete);
-        }
-    }
-
-    /**
-     * 暂缓柱打包放到后台池：主线程帧尾不能做序列化。
-     */
-    private static void enqueueDeferredPush(ShadowSeedServer server, LightTask task, boolean complete) {
-        Runnable job = () -> pushDeferredNow(server, task, complete);
-        HassiumTaskExecutor executor = HassiumTaskExecutor.getClient();
-        if (executor == null || !executor.isRunning()) {
-            job.run();
-            return;
-        }
-        try {
-            executor.submit(job, TaskCategory.BEST_EFFORT);
-        } catch (java.util.concurrent.RejectedExecutionException e) {
-            job.run();
-        }
-    }
-
-    private static void pushDeferredNow(ShadowSeedServer server, LightTask task, boolean complete) {
-        ChunkPos pos = new ChunkPos(DimensionKey.chunkXOf(task.key), DimensionKey.chunkZOf(task.key));
-        try {
-            if (!shouldPublishToClient(haloKeys.containsKey(task.key))) {
-                server.syncLightCorrect(task.chunk, false);
-                return;
-            }
-            if (task.source == LightSource.LIGHT_ONLY) {
-                LightWork work = task.token instanceof LightWork w ? w : null;
-                pushLightReady(pos, task.level, task.chunk, complete, work);
-            } else {
-                pushReady(task.key, task.chunk, task.level, complete, task.renderOnly,
-                        task.traceOrigin);
-            }
-            server.persistAfterClientLightPush(task.chunk,
-                    haloKeys.containsKey(task.key), complete);
-        } catch (Throwable t) {
-            DebugLogger.warn(DebugLogger.LogType.ASYNC,
-                    "[SHADOW_LIGHT] Deferred push failed ({}, {})", pos.x, pos.z);
-        }
-    }
-
-    /**
-     * 帧尾：引擎队列已空时把内存柱 {@code isLightCorrect} 打回 true，
-     * 使随后 saveAll 写入 {@code isLightOn}（原版 LIGHT 完成后的落盘语义）。
-     * 未排空则不动，欠光柱保持 isLightOn 缺省，重载再跑 LIGHT。
-     */
-    private static void confirmLightsCorrectIfConverged() {
-        ShadowSeedServer server = ShadowServerRegistry.getInstance().get();
-        if (server == null) {
-            return;
-        }
-        try {
-            server.confirmLightsCorrectIfConverged();
-        } catch (Throwable t) {
-            DebugLogger.warn(DebugLogger.LogType.ASYNC, "[SHADOW_LIGHT] Convergence check failed", t);
-        }
-    }
 
     /**
      * 出界卸载检查（客户端主线程帧尾，drainReady 开头；节流扫描）。
@@ -3407,7 +2445,6 @@ public final class ShadowLightCompute {
                 unloadedDims.add(dimension);
             }
             discardLightMask(key); // 已卸载柱的光更新掩码作废（防跨会话残留 + drain 空转）
-            LightReadinessRegistry.remove(key); // E1：卸载列退出就绪状态机（再入重建）
             shadowApplyEpochs.remove(key); // 客户端柱已卸载：光桥不再向其发增量光
             DebugLogger.info(DebugLogger.LogType.ASYNC,
                     "[SHADOW_UNLOAD] Unloaded ({}, {}) after leaving boundary, unloadDelay={}s",
@@ -3489,11 +2526,7 @@ public final class ShadowLightCompute {
                     deadlineHit, packedThisFrame)) {
                 break;
             }
-            if (!canDrainLightMaskThisFrame(
-                    inflightLight.containsKey(key) || waitingForLight.containsKey(key),
-                    deferredLightPush.containsKey(key),
-                    shadowApplyEpochs.containsKey(key),
-                    false)) {
+            if (!shadowApplyEpochs.containsKey(key)) {
                 continue;
             }
             keys.add(key);
@@ -3561,34 +2594,6 @@ public final class ShadowLightCompute {
         return bits;
     }
 
-    /**
-     * 仅超时/未收敛光包使用：不要把「源之下仍全空」的 sky section 打成 emptySkyYMask。
-     * 收敛后的 {@code ClientboundLightUpdatePacket} 用引擎掩码，不再按天空源裁空层。
-     */
-    private static void omitUnlitEavesFromSkyMask(BitSet skyMask, ChunkPos pos, LevelLightEngine engine,
-                                                  int minLightSection, ShadowSeedServer server,
-                                                  net.minecraft.server.level.ServerLevel level) {
-        if (skyMask.isEmpty() || server == null || pos == null) {
-            return;
-        }
-        // per-dimension：天空剖面判断用目标 chunk 所属 level（nether 无天光直接短路）
-        net.minecraft.server.level.ServerLevel dim = level != null ? level : server.overworld();
-        LevelChunk chunk = server.injectedChunk(pos.x, pos.z);
-        if (chunk == null || !dim.dimensionType().hasSkyLight()) {
-            return;
-        }
-        net.minecraft.world.level.lighting.ChunkSkyLightSources sources = chunk.getSkyLightSources();
-        int minBlockY = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMinBlockY(dim);
-        for (int bit = skyMask.nextSetBit(0); bit >= 0; bit = skyMask.nextSetBit(bit + 1)) {
-            int sectionY = minLightSection + bit;
-            DataLayer sky = engine.getLayerListener(LightLayer.SKY)
-                    .getDataLayerData(SectionPos.of(pos, sectionY));
-            boolean atOrAbove = ShadowSeedServer.sectionAtOrAboveAnySkySource(sources, sectionY, minBlockY);
-            if (!shouldIncludeSkySectionInPacket(sky != null, sky != null && sky.isEmpty(), atOrAbove)) {
-                skyMask.clear(bit);
-            }
-        }
-    }
 
     /**
      * 光照更新收集（影子端 light 线程入口；MixinServerChunkCache.onLightUpdate HEAD
@@ -3651,10 +2656,6 @@ public final class ShadowLightCompute {
         generated.clear();
         pendingLightUpdates.clear();
         inflightLight.clear(); // 在途光屏障：回调侧条件移除失败即短路丢弃（断连竞态）
-        LightReadinessRegistry.clear(); // E1：就绪状态机对齐断连清理面
-        waitingForLight.clear();
-        initializedLight.clear();
-        deferredLightPush.clear();
         ready.clear();
         lightUpdates.clear();
         unloadPending.clear();
@@ -3718,8 +2719,7 @@ public final class ShadowLightCompute {
      * 100% 预算给 dispatcher，pending 抽不出来、ACK 停、服务端窗口卡死。
      */
     public static boolean hasBacklog() {
-        return readyCount() > 0 || hasPendingWork()
-                || !inflightLight.isEmpty() || !waitingForLight.isEmpty();
+        return readyCount() > 0 || hasPendingWork() || !inflightLight.isEmpty();
     }
 
     /** 冒烟卡顿诊断：影子管线队列快照。 */
@@ -3729,7 +2729,6 @@ public final class ShadowLightCompute {
                 + " gen=" + generated.size()
                 + " delta=" + pendingDeltas.size()
                 + " inflightLight=" + inflightLight.size()
-                + " waiting=" + waitingForLight.size()
                 + " consume=" + consumeRunning.get();
     }
 
@@ -3761,6 +2760,8 @@ public final class ShadowLightCompute {
         final Object token;
         final net.minecraft.world.level.chunk.LevelChunk chunk;
         final net.minecraft.server.level.ServerLevel level;
+        /** 1.20.1 native ChunkStatus loading task 使用的 pre-light ProtoChunk。 */
+        volatile net.minecraft.world.level.chunk.ChunkAccess nativeChunk;
         final LightMetric metric;
         /** true=OVD 提交的 renderOnly 区块；false=普通影子回传。 */
         final boolean renderOnly;
@@ -3802,29 +2803,6 @@ public final class ShadowLightCompute {
         }
     }
 
-    /**
-     * 隔离 {@link LevelLightEngine} 的 {@link LightChunkGetter}：只暴露本柱。
-     * 邻柱 null → 引擎视作无入流（getState 回落基岩），预览欠估。
-     */
-    private static final class SingleChunkGetter implements LightChunkGetter {
-        private final LevelChunk chunk;
-
-        SingleChunkGetter(LevelChunk chunk) {
-            this.chunk = chunk;
-        }
-
-        @Override
-        public LightChunk getChunkForLighting(int x, int z) {
-            ChunkPos pos = chunk.getPos();
-            return x == pos.x && z == pos.z ? chunk : null;
-        }
-
-        @Override
-        public BlockGetter getLevel() {
-            BlockGetter level = chunk.getLevel();
-            return level != null ? level : chunk;
-        }
-    }
 
     private record PendingEntry(ClientboundLevelChunkWithLightPacket packet, TraceOrigin traceOrigin) {}
     private record FullApplyTrace(long sequence, long appliedAtMs, boolean renderOnly, TraceOrigin origin) {}

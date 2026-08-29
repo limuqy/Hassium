@@ -37,6 +37,14 @@ public class FabricNetworkManagerService implements INetworkManagerService {
             buf.release();
         }
     }
+    @Override
+    public void sendShadowPullRequest(FriendlyByteBuf buf) {
+        if (Minecraft.getInstance().getConnection() != null) {
+            FabricSendCompat.sendToServer(HassiumChannels.SHADOW_PULL_REQUEST_C2S, buf);
+        } else if (buf != null && buf.refCnt() > 0) {
+            buf.release();
+        }
+    }
 
     @Override
     public void sendChunkHashPacket(ServerPlayer player, FriendlyByteBuf buf) {

@@ -74,6 +74,9 @@ public class MixinChunkHolder {
         List<ServerPlayer> hassiumPlayers = null;
         for (ServerPlayer player : players) {
             if (PlayerCompressionTracker.isCompressionEnabled(player)) {
+                if (ServerChunkPushManager.getInstance().isPlayerShadowPullSupported(player.getUUID())) {
+                    continue;
+                }
                 if (hassiumPlayers == null) {
                     hassiumPlayers = new ArrayList<>();
                 }

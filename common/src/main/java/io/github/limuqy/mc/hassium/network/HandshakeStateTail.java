@@ -18,16 +18,21 @@ import java.util.UUID;
  */
 public final class HandshakeStateTail {
 
-    /** C2S：完整玩家状态 + 是否请求续流 + 票据字节 + 玩家 UUID（T10 标准流程握手附着用）+ lightComputeSupported（A7 客户端影子光照能力） */
+    /** C2S：完整玩家状态 + 是否请求续流 + 票据字节 + 玩家 UUID + light + shadowPullV1 能力。 */
     public record C2S(PlayerStateReport state, boolean resumeRequested, byte[] resumeTicket, UUID playerId,
-                      boolean lightComputeSupported) {
+                      boolean lightComputeSupported, boolean shadowPullSupported) {
+        public C2S(PlayerStateReport state, boolean resumeRequested, byte[] resumeTicket, UUID playerId,
+                   boolean lightComputeSupported) {
+            this(state, resumeRequested, resumeTicket, playerId, lightComputeSupported, false);
+        }
+
         public static C2S noResume(PlayerStateReport state) {
-            return new C2S(state, false, null, null, false);
+            return new C2S(state, false, null, null, false, false);
         }
 
         /** 标准流程（非续流）：携带玩家 UUID，主控据此把网关会话附着到 vanilla 物化玩家。 */
         public static C2S ident(PlayerStateReport state, UUID playerId) {
-            return new C2S(state, false, null, playerId, false);
+            return new C2S(state, false, null, playerId, false, false);
         }
     }
 
@@ -69,8 +74,10 @@ public final class HandshakeStateTail {
         }
         // A7 追加字段（append-only）：lightComputeSupported（客户端影子光照能力；恒写，旧端忽略尾字节）
         buf.writeBoolean(tail.lightComputeSupported());
-    }
+        // shadowPullV1 追加能力；缺失时读端默认 false，旧客户端安全回退旧 admission。
+        buf.writeBoolean(tail.shadowPullSupported());
 
+    }
     /** 读取 C2S 尾部；无可读字节或解析失败 → null */
     public static C2S readC2S(ByteBuf buf) {
         if (buf == null || !buf.isReadable()) {
@@ -107,8 +114,12 @@ public final class HandshakeStateTail {
             if (buf.isReadable()) {
                 lightComputeSupported = buf.readBoolean();
             }
+            boolean shadowPullSupported = false;
+            if (buf.isReadable()) {
+                shadowPullSupported = buf.readBoolean();
+            }
             return new C2S(new PlayerStateReport(x, y, z, yaw, pitch, dimension), resumeRequested, ticket, playerId,
-                    lightComputeSupported);
+                    lightComputeSupported, shadowPullSupported);
         } catch (Exception e) {
             return null;
         }

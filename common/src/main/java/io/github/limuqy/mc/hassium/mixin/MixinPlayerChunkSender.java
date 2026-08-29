@@ -90,7 +90,10 @@ public abstract class MixinPlayerChunkSender {
             return;
         }
         ServerPlayer player = listener.getPlayer();
-        // 网关会话在物化后即标识 Hassium 客户端；无会话时严格保留原版发送。
+        // shadowPullV1 客户端由客户端 loader 主动取数，旧 admission 不得重复发送。
+        if (ServerChunkPushManager.getInstance().isPlayerShadowPullSupported(player.getUUID())) {
+            return;
+        }
         if (GatewayServer.getInstance().registry().get(player.getUUID()) == null) {
             listener.send(packet);
             return;

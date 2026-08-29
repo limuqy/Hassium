@@ -12,9 +12,9 @@ import java.util.UUID;
  * 预握手协议（login / 配置阶段，早于 Play 完整握手）。
  * <p>
  * 目的：让服务端在 {@code ServerPlayer} 创建前就知道客户端是 Hassium，
- * {@link PlayerCompressionTracker#tryEnableOnPlayerJoin} 在进服第一圈
- * trackChunk/sendChunk 前启用压缩 → 初始区块 100% 走 Hassium 链
- * （剥光 + maxChunksPerTick 限流 + chunkHash 元数据），消灭握手前原版直发窗口。
+ * 但首个 Play 区块保持原版通道，直到 GatewayPlayerSession 与完整握手建立。
+ * 这样 1.20.1 不会在网关尚未接管时丢弃 CHUNK_HASH 等业务 payload；完整握手后
+ * 才启用剥光、限流与业务帧路由。
  * <p>
  * 载体分三段：
  * <ul>
