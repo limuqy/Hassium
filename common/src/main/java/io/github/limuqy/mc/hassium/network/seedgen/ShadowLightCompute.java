@@ -1372,8 +1372,7 @@ public final class ShadowLightCompute {
                 pendingDeltaRequests.remove(DimensionKey.key(dimension, e.chunkX(), e.chunkZ()));
             }
             DebugLogger.warn(DebugLogger.LogType.ASYNC,
-                    "[SHADOW_DELTA] Request send failed, fallback full ({} chunks)", entries.size());
-            // P2（T7）：失败回退走 new 路径（hash-miss 正轨）+ requestedMisses 去重
+                    "[SHADOW_DELTA] Request send failed, fallback full ({})", entries.size());
             List<ChunkPos> fallback = dedupeFallback(dimension, chunks);
             if (!fallback.isEmpty()) {
                 io.github.limuqy.mc.hassium.network.ClientMetadataHandler

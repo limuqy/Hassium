@@ -1980,7 +1980,7 @@ public class ServerChunkPushManager {
         SectionDeltaPlanner.ChunkDecision decision = SectionDeltaPlanner.plan(clientSnap, serverSnap);
         if (decision.skipWholeChunk()) {
             DebugLogger.info(LogType.NETWORK,
-                    "[SECTION_DELTA] Fallback to full for [{}, {}]: changed sections >= {}%",
+                    "[SECTION_DELTA] Fallback to full for [{}, {}]: FULL sections >= {}%",
                     clientEntry.chunkX(), clientEntry.chunkZ(),
                     SectionDeltaPlanner.FALLBACK_THRESHOLD_PCT);
             return null;
@@ -2010,6 +2010,27 @@ public class ServerChunkPushManager {
                 changedSections.add(new SectionDeltaS2CPacket.SectionData(
                         sd.sectionIndex(), SectionDeltaS2CPacket.KIND_FULL, full));
             }
+        }
+        int nonEmptySections = 0;
+        int fullSections = 0;
+        for (int idx = 0; idx < serverSnap.sectionCount(); idx++) {
+            if (serverSnap.sectionHash(idx) != 0L) {
+                nonEmptySections++;
+            }
+        }
+        for (SectionDeltaS2CPacket.SectionData sectionData : changedSections) {
+            if (sectionData.kind() == SectionDeltaS2CPacket.KIND_FULL
+                    && serverSnap.sectionHash(sectionData.sectionIndex()) != 0L) {
+                fullSections++;
+            }
+        }
+        if (nonEmptySections > 0 && fullSections > 0
+                && fullSections * 100 / nonEmptySections >= SectionDeltaPlanner.FALLBACK_THRESHOLD_PCT) {
+            DebugLogger.info(LogType.NETWORK,
+                    "[SECTION_DELTA] Fallback to full for [{}, {}]: encoded FULL sections >= {}% ({}/{})",
+                    clientEntry.chunkX(), clientEntry.chunkZ(),
+                    SectionDeltaPlanner.FALLBACK_THRESHOLD_PCT, fullSections, nonEmptySections);
+            return null;
         }
         long expectedChunkHash = ChunkContentHashUtil.combineSectionHashesFromArray(serverSnap.sectionHashes());
         return new SectionDeltaS2CPacket.DeltaEntry(

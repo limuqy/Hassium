@@ -8,7 +8,6 @@ import io.github.limuqy.mc.hassium.network.ClientChunkHandler;
 import io.github.limuqy.mc.hassium.network.ClientChunkPipeline;
 import io.github.limuqy.mc.hassium.network.ClientMetadataHandler;
 import io.github.limuqy.mc.hassium.network.SeedRefS2CPacket;
-import io.github.limuqy.mc.hassium.network.sectiondelta.SectionDeltaPlanner;
 import io.github.limuqy.mc.hassium.metrics.NetworkStats;
 import io.github.limuqy.mc.hassium.compat.LevelCompat;
 import io.github.limuqy.mc.hassium.utils.DebugLogger;
@@ -495,28 +494,14 @@ public final class SeedGenExecutor {
             }
             if (localHash != entry.contentHash()) {
                 DebugLogger.warn(DebugLogger.LogType.ASYNC,
-                        "[SEEDGEN] Hash mismatch ({}, {}): local={} server={} -> full-request fallback",
+                        "[SEEDGEN] Hash mismatch ({}, {}): local={} server={} -> section-delta reconciliation",
                         pos.x, pos.z, Long.toHexString(localHash), Long.toHexString(entry.contentHash()));
-                // P2 诊断埋点（T7）：mismatch 数据 dump——逐 section hash 对比 + 首个差异
-                // section 块状态摘要 + 影子端 seed/LevelStem 身份摘要，供下轮定案 P2 机制。
+                // 仅服务端在拿到真实 section payload 后决定 FULL section 数量；
+                // 客户端只有 section hash，不能把“每个 section 有一个差异”误当成整柱 FULL。
                 dumpMismatchDiagnostics(pos, entry, chunk, localSectionHashes, localHash, server, dimension);
-                // P2 缓解（T7）：不匹配回退改走 new 请求路径（hash-miss 正轨，注入数据路径
-                // hash 忠实已被 R2 磁盘命中实证）——预判全量分支不再注入本地块作 delta 基线，
-                // 也不再 stale=true 请求。保留 delta 预判（>=75% 变更服务端必跳过 delta →
-                // 直接 full）；<75% 仍可先试 delta（本地块作基线），delta 链失败兜底
-                // （发送失败/超时/skipped/apply 失败）已统一改走 new 路径。
                 queue.remove(pos);
-                if (wouldServerSkipDelta(entry, localSectionHashes)) {
-                    DebugLogger.warn(DebugLogger.LogType.ASYNC,
-                            "[SEEDGEN] Delta preempted ({}, {}): >= {}% non-empty sections differ -> direct full request",
-                            pos.x, pos.z, SectionDeltaPlanner.FALLBACK_THRESHOLD_PCT);
-                    ShadowLightCompute.tryRequestMiss(pos);
-                    ClientMetadataHandler.requestFullChunksPublic(
-                            dimension, List.of(pos), false);
-                } else {
-                    server.injectLoadedChunk(dimension, pos, chunk, true);
-                    ShadowLightCompute.requestSectionDeltas(dimension, List.of(pos));
-                }
+                server.injectLoadedChunk(dimension, pos, chunk, true);
+                ShadowLightCompute.requestSectionDeltas(dimension, List.of(pos));
                 return;
             }
             ServerLevel level = server.level(dimension);
@@ -545,22 +530,6 @@ public final class SeedGenExecutor {
             Constants.LOG.error("Hassium: SeedGen generation failed for {}", pos, e);
             addFallback(fallbackBuffer, entry);
         }
-    }
-
-    /**
-     * 镜像服务端 section-delta 回退判定：按完整索引比对双方
-     * section 哈希（0 = 空 section），「变更 section × 100 / 服务端非空 section 数 ≥ 75%」时
-     * 服务端跳过 delta 回退全量。客户端持有 SeedRef 下发的服务端 sectionHashes 与本地生成哈希，
-     * 可精确预判；无服务端哈希（空数组）时维持原 delta 路径由服务端自行判定。
-     */
-    private static boolean wouldServerSkipDelta(SeedGenQueue.Entry entry,
-                                                Map<Integer, Long> localSectionHashes) {
-        long[] serverHashes = entry.sectionHashes();
-        if (serverHashes == null || serverHashes.length == 0) {
-            return false;
-        }
-        long[] localHashes = ChunkContentHashUtil.sectionHashesToArray(localSectionHashes);
-        return SectionDeltaPlanner.shouldFallbackFullChunk(localHashes, serverHashes);
     }
 
     /**

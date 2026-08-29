@@ -42,39 +42,36 @@ public final class SectionDeltaPlanner {
     private SectionDeltaPlanner() {}
 
     /**
-     * 镜像原 {@code ServerChunkPushManager} / {@code SeedGenExecutor} 的 75% 判定：
-     * 按完整索引比对（0 = 空 section），分母为<b>服务端</b>非空 section 数。
-     * 客户端哈希为空数组时返回 false（维持原 delta 路径由服务端自行判定）。
+     * 按最终 section 决策统计整柱回退：分母为服务端非空 section 数。
+     * 仅 {@link Kind#FULL} section 计入；单个 section 内少量 BLOCKS 差异不能触发整柱回退。
      */
-    public static boolean shouldFallbackFullChunk(long[] clientHashes, long[] serverHashes) {
-        if (serverHashes == null || serverHashes.length == 0) {
+    public static boolean shouldFallbackFullChunk(List<SectionDecision> decisions, long[] serverHashes) {
+        if (decisions == null || serverHashes == null || serverHashes.length == 0) {
             return false;
         }
-        if (clientHashes == null) {
-            clientHashes = new long[0];
-        }
-        int len = Math.max(serverHashes.length, clientHashes.length);
-        int changed = 0;
         int nonEmpty = 0;
-        for (int idx = 0; idx < len; idx++) {
-            long serverHash = idx < serverHashes.length ? serverHashes[idx] : 0L;
-            long clientHash = idx < clientHashes.length ? clientHashes[idx] : 0L;
-            if (serverHash != 0L) {
+        for (long hash : serverHashes) {
+            if (hash != 0L) {
                 nonEmpty++;
             }
-            if (serverHash != clientHash) {
-                changed++;
+        }
+        if (nonEmpty == 0) {
+            return false;
+        }
+        int full = 0;
+        for (SectionDecision decision : decisions) {
+            if (decision != null && decision.kind() == Kind.FULL
+                    && decision.sectionIndex() >= 0
+                    && decision.sectionIndex() < serverHashes.length
+                    && serverHashes[decision.sectionIndex()] != 0L) {
+                full++;
             }
         }
-        return nonEmpty > 0 && changed > 0
-                && changed * 100 / nonEmpty >= FALLBACK_THRESHOLD_PCT;
+        return full > 0 && full * 100 / nonEmpty >= FALLBACK_THRESHOLD_PCT;
     }
 
     public static ChunkDecision plan(SectionDeltaSnapshot client, SectionDeltaSnapshot server) {
         if (client == null || server == null) {
-            return new ChunkDecision(true, List.of());
-        }
-        if (shouldFallbackFullChunk(client.sectionHashes(), server.sectionHashes())) {
             return new ChunkDecision(true, List.of());
         }
         int sectionCount = Math.max(client.sectionCount(), server.sectionCount());
@@ -83,7 +80,7 @@ public final class SectionDeltaPlanner {
             sections.add(planSection(idx, client.sectionHash(idx), client.planes(idx),
                     server.sectionHash(idx), server.planes(idx)));
         }
-        return new ChunkDecision(false, sections);
+        return new ChunkDecision(shouldFallbackFullChunk(sections, server.sectionHashes()), sections);
     }
 
     /**

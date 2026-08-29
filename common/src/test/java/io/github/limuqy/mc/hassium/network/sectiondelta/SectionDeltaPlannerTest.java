@@ -79,26 +79,44 @@ class SectionDeltaPlannerTest {
     }
 
     @Test
-    @DisplayName("75% 柱回退：3/4 非空变更 → skipped；1/4 → 不回退")
-    void chunkFallbackAt75Percent() {
-        long[] server = {1L, 2L, 3L, 4L};
-        long[] client75 = {0L, 2L, 0L, 0L};
-        assertTrue(SectionDeltaPlanner.shouldFallbackFullChunk(client75, server));
-
-        long[] client25 = {1L, 2L, 0L, 4L};
-        assertFalse(SectionDeltaPlanner.shouldFallbackFullChunk(client25, server));
-
-        SectionDeltaSnapshot clientSnap = new SectionDeltaSnapshot(client75, new int[4][]);
-        SectionDeltaSnapshot serverSnap = new SectionDeltaSnapshot(server, new int[4][]);
-        assertTrue(SectionDeltaPlanner.plan(clientSnap, serverSnap).skipWholeChunk());
+    @DisplayName("少量格子分散在各 section：不触发整柱回退")
+    void sparseChangesAcrossSectionsDoNotFallbackWholeChunk() {
+        int[][] clientPlanes = new int[4][];
+        int[][] serverPlanes = new int[4][];
+        for (int section = 0; section < 4; section++) {
+            int[] client = air();
+            int[] server = air();
+            client[SectionPlaneSyndrome.index(1, 1, 1)] = STONE;
+            server[SectionPlaneSyndrome.index(1, 1, 1)] = STONE + 1;
+            clientPlanes[section] = SectionPlaneSyndrome.compute(client);
+            serverPlanes[section] = SectionPlaneSyndrome.compute(server);
+        }
+        SectionDeltaPlanner.ChunkDecision decision = SectionDeltaPlanner.plan(
+                new SectionDeltaSnapshot(new long[] {1L, 2L, 3L, 4L}, clientPlanes),
+                new SectionDeltaSnapshot(new long[] {5L, 6L, 7L, 8L}, serverPlanes));
+        assertFalse(decision.skipWholeChunk());
+        assertEquals(SectionDeltaPlanner.Kind.BLOCKS, decision.sections().get(0).kind());
     }
 
     @Test
-    @DisplayName("无服务端哈希 → 不预判回退")
-    void emptyServerHashesDoNotPreempt() {
-        assertFalse(SectionDeltaPlanner.shouldFallbackFullChunk(new long[] {1L}, new long[0]));
-        assertFalse(SectionDeltaPlanner.shouldFallbackFullChunk(new long[] {1L}, null));
+    @DisplayName("75% FULL section：触发整柱回退")
+    void fullSectionsAt75PercentFallbackWholeChunk() {
+        long[] server = {1L, 2L, 3L, 4L};
+        java.util.List<SectionDeltaPlanner.SectionDecision> decisions = java.util.List.of(
+                new SectionDeltaPlanner.SectionDecision(0, SectionDeltaPlanner.Kind.FULL, new int[0]),
+                new SectionDeltaPlanner.SectionDecision(1, SectionDeltaPlanner.Kind.FULL, new int[0]),
+                new SectionDeltaPlanner.SectionDecision(2, SectionDeltaPlanner.Kind.FULL, new int[0]),
+                new SectionDeltaPlanner.SectionDecision(3, SectionDeltaPlanner.Kind.BLOCKS, new int[] {1}));
+        assertTrue(SectionDeltaPlanner.shouldFallbackFullChunk(decisions, server));
     }
+
+    @Test
+    @DisplayName("无服务端哈希：不预判回退")
+    void emptyServerHashesDoNotPreempt() {
+        assertFalse(SectionDeltaPlanner.shouldFallbackFullChunk(java.util.List.of(), new long[0]));
+        assertFalse(SectionDeltaPlanner.shouldFallbackFullChunk(java.util.List.of(), null));
+    }
+
 
     private static SectionDeltaPlanner.SectionDecision planOne(int[] clientCells, int[] serverCells) {
         return SectionDeltaPlanner.plan(

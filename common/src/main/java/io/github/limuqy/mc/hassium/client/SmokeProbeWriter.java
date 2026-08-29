@@ -28,11 +28,11 @@ import java.util.stream.Stream;
  * 未进服轮次 {@code joined=false}，dimension/playerPos 为 null。
  */
 public final class SmokeProbeWriter {
+    private SmokeProbeWriter() {
+    }
 
     private static final Logger LOGGER = LoggerFactory.getLogger("Hassium/SmokeTest");
 
-    private SmokeProbeWriter() {
-    }
 
     /**
      * 写一轮探针文件。任何内部失败只记 warn，绝不影响冒烟状态机判定/退出码。

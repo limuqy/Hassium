@@ -59,15 +59,45 @@ FAIL 集中于 `1.20.1`：三个 loader 均完成服务端启动、客户端两�
 
 `common:compileJava -Pmc_ver=1.21.2` 通过；`1.21.2 Fabric/NeoForge` 冒烟通过。
 
-## 未闭环问题
+## 已修复问题
 
-`1.20.1` 三端仍存在 R2 期间的全量区块请求：
+`1.20.1` 的整柱回退误判已修复。旧实现把“section hash 不同”直接计为 changed section；逐格诊断显示 10 个区块仅变化 0.906% 的格子，但差异分散到全部非空 section，因此旧逻辑把它们误判为 `>=75%`，直接跳过 section delta。
 
-- Fabric：`newFullChunkRequestCount=1`；
-- Forge：`newFullChunkRequestCount=2`；
-- NeoForge：`newFullChunkRequestCount=5`。
+修复内容：
 
-这不是通过放宽 analyzer 或降低门禁解决的问题。当前 `PENDING_CONFIRM_TIMEOUT_MS=60000` 保持生产行为不变；本轮证据表明 1.20.1 的 R2 hash 确认/全量回退链路仍需单独修复。
+- `SectionDeltaPlanner` 现在按 section 决策中的 `Kind.FULL` 计数，不再按任意 hash mismatch 计数；少量 `BLOCKS` 差异不触发整柱回退。
+- `ServerChunkPushManager` 在完成 `BLOCKS` 与 `FULL` 编码体积比较后再次统计最终 `FULL` section，只有最终 FULL section 达到非空 section 的 75% 才返回整柱回退。
+- `SeedGenExecutor` 不再仅凭客户端 section hash 预判整柱回退，统一交给服务端拿到真实 section payload 后判定。
+
+因此两层回退现在符合预期：
+
+```text
+section hash mismatch
+  → section candidates
+  → BLOCKS / FULL section（按候选数量和编码体积选择）
+  → 最终 FULL section >= 75% → full chunk
+```
+
+剩余的 0.906% R1/R2 内容差异仍需单独追踪其 baseline 来源，但它不再因为“分散在多个 section”而升级为整柱全量传输。
+
+## 仍需观察
+
+`1.20.1` 三端旧冒烟结果中的全量区块请求：Fabric `1`、Forge `2`、NeoForge `5`，均来自修复前实现；需重新运行对应冒烟确认请求数下降。
+修复后验证会话：`1.20.1_fabric_I_r2fix_20260829`。服务端日志中已无 `Fallback to full ... changed sections >= 75%`，R2 统计为 `fullChunkRequestCount=1`、`sectionDelta` 正常发送；该 1 次来自独立的 delta 应用失败回退路径，不再是 75% section 阈值误判。analyzer 仍将该独立回退标为 FAIL，后续应单独修复 `applySectionDelta=false` 的具体原因。
+
+### 逐格回退诊断（1.20.1 Fabric）
+
+为区分“全量回退比例”和“方块内容差异”，使用一次 `1.20.1 Fabric` clean-world 会话逐格抓取 R2 回退区块：
+
+- 会话：`1.20.1_fabric_I_r2cell_20260829`；10 个回退区块，R1/R2 内存快照均为每区块 98,304 格，共比较 983,040 格。
+- 变化：8,911 格，约 **0.906%**；差异分布覆盖 16 个 section，没有整列坐标偏移。
+- 主要目标状态：`stone` 4,719 格、`deepslate[axis=y]` 3,065 格，合计占差异 87.35%。主要转换为 `tuff → deepslate`、`andesite/diorite/granite → stone`。
+- 原始全量包头部坐标与回退文件名逐格一致；因此没有证据表明回退包被错配到邻区块。
+- 9 个回退由 `server-skipped` 触发，1 个由 `delta-apply-failed` 触发。
+
+结论：报告中的“R2 全量”是**传输/请求路径指标**，不是 75% 方块被替换。逐格结果显示全量包只修正约 0.9% 的 shadow 内存内容，主要修正了 R1 基线中的石材变体/矿物/深层方块差异；R2 全量包本身未发现坐标错配或整块损坏。未闭环根因仍是：R1 shadow 基线为何与 R2 权威区块存在这些差异，以及 `server-skipped`/`delta-apply-failed` 触发前的 hash、delta baseline 一致性。
+
+诊断产物：`build/smoke-test/probe/1.20.1_fabric_I_r2cell_20260829/r2-full-fallback/`；离线分析器：`scripts/analyze-r2-fallback.py`。逐格探针已在分析后清理，未改变生产行为。
 
 ## 验证命令
 
