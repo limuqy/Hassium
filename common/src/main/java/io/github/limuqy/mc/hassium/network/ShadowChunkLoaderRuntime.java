@@ -5,6 +5,7 @@ import io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute;
 import net.minecraft.client.Minecraft;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -62,6 +63,12 @@ public final class ShadowChunkLoaderRuntime {
                 io.github.limuqy.mc.hassium.config.HassiumConfigService.getInstance().getMaxRenderDistance());
         if (!dimension.equals(lastDimension) || centerX != lastCenterX || centerZ != lastCenterZ || radius != lastRadius) {
             LOADER.updateView(dimension, centerX, centerZ, radius);
+            for (ShadowChunkLoader.ChunkKey key : LOADER.desired()) {
+                if (LOADER.role(key).orElse(null) == ShadowChunkRole.VISIBLE) {
+                    ShadowLightCompute.promoteToVisible(dimension,
+                            new net.minecraft.world.level.ChunkPos(key.chunkX(), key.chunkZ()));
+                }
+            }
             PENDING.clear();
             PENDING_DEADLINES.clear();
             lastDimension = dimension;
@@ -70,8 +77,14 @@ public final class ShadowChunkLoaderRuntime {
             lastRadius = radius;
         }
 
+        List<ShadowChunkLoader.ChunkKey> desired = new ArrayList<>(LOADER.desired());
+        desired.sort(Comparator
+                .comparingInt((ShadowChunkLoader.ChunkKey key) ->
+                        Math.max(Math.abs(key.chunkX() - centerX), Math.abs(key.chunkZ() - centerZ)))
+                .thenComparingInt(key -> key.chunkX())
+                .thenComparingInt(key -> key.chunkZ()));
         List<ShadowChunkLoader.LoadTicket> tickets = new ArrayList<>(REQUEST_BATCH);
-        for (ShadowChunkLoader.ChunkKey key : LOADER.desired()) {
+        for (ShadowChunkLoader.ChunkKey key : desired) {
             if (tickets.size() >= REQUEST_BATCH) {
                 break;
             }

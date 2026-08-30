@@ -1364,6 +1364,41 @@ public final class ShadowLightCompute {
     }
 
     /**
+     * 玩家移动后，原先作为 Halo 预取但已进入可见范围的区块必须升格为可见柱。
+     * 若 Halo 光照已经完成且此前被抑制发布，这里重新排入同一光屏障，确保最终
+     * 进入 ClientLevel，而不是只留在影子端。
+     */
+    public static void promoteToVisible(String dimension, ChunkPos pos) {
+        if (pos == null || !isEnabled()) {
+            return;
+        }
+        String resolved = dimension == null ? currentDimension() : dimension;
+        long key = DimensionKey.key(resolved, pos.x, pos.z);
+        if (!haloKeys.remove(key, Boolean.TRUE)) {
+            return;
+        }
+        ShadowSeedServer server = ShadowServerRegistry.getInstance().get();
+        if (server == null) {
+            return;
+        }
+        server.setPersistenceRole(resolved, pos, ShadowChunkPersistenceRole.VISIBLE_FULL_LIGHT);
+        if (shadowApplyEpochs.containsKey(key)
+                || pending.containsKey(key)
+                || generated.containsKey(key)
+                || inflightLight.containsKey(key)) {
+            return;
+        }
+        LevelChunk chunk = server.injectedChunk(resolved, pos.x, pos.z);
+        net.minecraft.server.level.ServerLevel level = server.level(resolved);
+        if (chunk == null || level == null) {
+            return;
+        }
+        generated.putIfAbsent(key, new GenEntry(chunk, level, chunk.isLightCorrect(), false,
+                TraceOrigin.SERVER_PUSH));
+        pump();
+    }
+
+    /**
      * 注入后入官方光屏障。剥光柱 persisted=FULL 且 {@code isLightCorrect=false}，
      * native {@code getChunkFuture(FULL)} 只 {@code load} 不 {@code generate} LIGHT，
      * 不能当发布门控。

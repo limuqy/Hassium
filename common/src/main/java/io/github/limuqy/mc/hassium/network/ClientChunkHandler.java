@@ -465,6 +465,10 @@ public class ClientChunkHandler {
             pipeline.setApplyInProgress(true);
             try {
                 Services.getClientChunkApplier().applyToLevelFromByteBuf(level, pos, friendlyBuf, renderOnly);
+                // Shadow 区块可能在邻居尚未到达时先进入 ClientLevel。原版包路径会
+                // 依赖邻居后续变更触发重编译；shadow 批次按行到达时该触发可能缺失，
+                // 导致边缘柱永久没有可见 mesh。应用完成后显式刷新整柱及邻居。
+                markChunkSectionsDirty(level, chunkX, chunkZ);
             } finally {
                 pipeline.setApplyInProgress(false);
             }
@@ -528,6 +532,14 @@ public class ClientChunkHandler {
             return false;
         }
     }
+    private static void markChunkSectionsDirty(ClientLevel level, int chunkX, int chunkZ) {
+        int minSection = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMinSection(level);
+        int maxSection = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMaxSectionExclusive(level);
+        for (int sectionY = minSection; sectionY < maxSection; sectionY++) {
+            level.setSectionDirtyWithNeighbors(chunkX, sectionY, chunkZ);
+        }
+    }
+
     /**
      * 诊断日志：同一条区块应用生命周期事件记录毫秒时间、来源、视图角色、目标区块与当前玩家位置。
      * 仅在 debug.chunkApplyLogging 开启时读取时钟和玩家坐标，避免正常热路径额外工作。

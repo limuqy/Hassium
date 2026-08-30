@@ -45,7 +45,7 @@ public final class ShadowChunkLoader {
                              ShadowChunkRole role, ShadowChunkSource source) {}
 
     private static final class Entry {
-        private final ShadowChunkRole role;
+        private ShadowChunkRole role;
         private State state;
         private long generation;
 
@@ -95,7 +95,11 @@ public final class ShadowChunkLoader {
         this.dimension = dimension;
         this.centerX = centerX;
         this.centerZ = centerZ;
-        this.entries.clear();
+
+        // Keep completed overlap chunks. Rebuilding the whole workset on every
+        // chunk boundary starves the newly entered edge while the player moves.
+        Map<ChunkKey, Entry> previous = new LinkedHashMap<>(entries);
+        entries.clear();
         this.inFlight = 0;
         int haloRadius = visibleRadius + 1;
         for (int x = centerX - haloRadius; x <= centerX + haloRadius; x++) {
@@ -103,7 +107,18 @@ public final class ShadowChunkLoader {
                 int distance = Math.max(Math.abs(x - centerX), Math.abs(z - centerZ));
                 ShadowChunkRole role = distance <= visibleRadius
                         ? ShadowChunkRole.VISIBLE : ShadowChunkRole.HALO;
-                entries.put(new ChunkKey(dimension, x, z), new Entry(role));
+                ChunkKey key = new ChunkKey(dimension, x, z);
+                Entry old = previous.get(key);
+                if (old != null && old.state == State.READY) {
+                    old.role = role;
+                    entries.put(key, old);
+                } else {
+                    Entry next = new Entry(role);
+                    if (old != null) {
+                        next.generation = old.generation + 1L;
+                    }
+                    entries.put(key, next);
+                }
             }
         }
         return epoch;

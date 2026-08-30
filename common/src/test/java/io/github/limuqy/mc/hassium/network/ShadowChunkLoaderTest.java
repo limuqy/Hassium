@@ -23,6 +23,24 @@ class ShadowChunkLoaderTest {
     }
 
     @Test
+    @DisplayName("movement preserves completed overlap chunks")
+    void preservesReadyOverlapOnMovement() {
+        ShadowChunkLoader loader = new ShadowChunkLoader();
+        loader.updateView("minecraft:overworld", 0, 0, 1);
+        ShadowChunkLoader.ChunkKey overlap =
+                new ShadowChunkLoader.ChunkKey("minecraft:overworld", 0, 0);
+        ShadowChunkLoader.LoadTicket ticket = loader.beginLoad(overlap, false, false, false).orElseThrow();
+        assertEquals(ShadowChunkLoader.Completion.READY, loader.complete(ticket, true));
+
+        loader.updateView("minecraft:overworld", 1, 0, 1);
+
+        assertEquals(ShadowChunkLoader.State.READY, loader.state(overlap).orElseThrow());
+        assertEquals(0, loader.inFlight());
+        assertEquals(ShadowChunkLoader.State.DESIRED,
+                loader.state(new ShadowChunkLoader.ChunkKey("minecraft:overworld", 3, 0)).orElseThrow());
+    }
+
+    @Test
     @DisplayName("source priority prefers complete cache then pristine SeedGen then remote full")
     void choosesSourceByCandidateValidity() {
         assertEquals(ShadowChunkSource.CACHE_SNAPSHOT,
