@@ -1,10 +1,10 @@
 package io.github.limuqy.mc.hassium.network;
 
+#if MC_VER >= MC_1_21_1
 import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.compat.ResourceLocationCompat;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import net.minecraft.network.FriendlyByteBuf;
-#if MC_VER >= MC_1_21_1
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 #endif

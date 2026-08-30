@@ -578,7 +578,7 @@ public final class ShadowLightCompute {
     }
 
     /** hash 全命中按柱去重；同一柱磁盘命中后再收到 hash 会走内存命中。 */
-    static boolean accountCacheFullHit(String dimension, ChunkPos pos) {
+    public static boolean accountCacheFullHit(String dimension, ChunkPos pos) {
         if (pos == null) {
             return false;
         }

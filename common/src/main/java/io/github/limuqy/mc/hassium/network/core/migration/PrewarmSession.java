@@ -12,9 +12,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * 预热会话（L1 骨架，REQ §C14）：迁移前先连目标主控、以续流票据建立玩家会话——
- * B 侧 {@code GatewayPlayerBridge} 物化玩家 + {@code resyncTrackedChunks} 预同步
- * （T12 已落地，[RESUME] 日志可验证），迁移时直接接管该连接（增量趋近零）。
+ * 预热会话：迁移前先连目标主控、以续流票据建立玩家会话；区块在接管后由 shadowPull
+ * 按需获取，不再依赖旧 resync 预同步。
  *
  * <p>独立于 {@link NetworkCore} 主监听器：预热握手完成前不触碰主状态机
  * （主 outbound 继续服务）。{@link Callback#onReady} 触发后由迁移引擎决定接管时机。
@@ -194,8 +193,7 @@ public final class PrewarmSession {
         ready = true;
         resumeAccepted = accepted;
         handshakeResponse = response;
-        // 主控可能即刻推送（resyncTrackedChunks 等）：接管前先装 ZSTD（与 NetworkCore 对称），
-        // 入站数据先 drain（计数；接管时消费者被 NetworkCore 覆盖，数据开始流入世界侧）
+        // 主控切换期间入站帧先进入 outbound 缓冲；区块由 shadowPull 在接管后按需获取。
         OutboundConnection conn = connection;
         if (conn != null) {
             conn.setS2CPayloadConsumer(buf -> {

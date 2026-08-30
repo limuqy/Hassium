@@ -48,6 +48,8 @@ public class ForgeNetworkManager implements NetworkManager {
     private static final Logger LOGGER = LoggerFactory.getLogger("Hassium/Network");
     private static final String PROTOCOL_VERSION = "1";
     private static final int PROTOCOL_VERSION_INT = 1;
+    private static final ShadowPullHandler SHADOW_PULL_HANDLER =
+            new ShadowPullHandler(new ShadowPullRequestLedger());
 
     // review-fix: T10-M2：共享调度器，防每次握手新建单线程调度执行器泄漏线程；JVM 关闭钩子回收
     private static final java.util.concurrent.ScheduledExecutorService PENDING_TIMEOUT_SCHEDULER =
@@ -315,6 +317,22 @@ public class ForgeNetworkManager implements NetworkManager {
                 },
                 java.util.Optional.of(NetworkDirection.PLAY_TO_SERVER)
         );
+        CHANNEL.<ShadowPullRequestWrapper>registerMessage(
+                packetId++, ShadowPullRequestWrapper.class,
+                ShadowPullRequestWrapper::encode, ShadowPullRequestWrapper::decode,
+                (msg, ctx) -> {
+                    ctx.get().enqueueWork(() -> handleShadowPullRequest(msg, ctx.get().getSender()));
+                    ctx.get().setPacketHandled(true);
+                }, java.util.Optional.of(NetworkDirection.PLAY_TO_SERVER)
+        );
+        CHANNEL.<ShadowPullResponseWrapper>registerMessage(
+                packetId++, ShadowPullResponseWrapper.class,
+                ShadowPullResponseWrapper::encode, ShadowPullResponseWrapper::decode,
+                (msg, ctx) -> {
+                    ctx.get().enqueueWork(() -> handleShadowPullResponse(msg));
+                    ctx.get().setPacketHandled(true);
+                }, java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT)
+        );
 
         LOGGER.info("Hassium: Registered {} network packets", packetId);
     }
@@ -359,6 +377,9 @@ public class ForgeNetworkManager implements NetworkManager {
                         .addMain(ClientBloomSyncWrapper.class,
                                 playCodec(ClientBloomSyncWrapper::encode, ClientBloomSyncWrapper::decode),
                                 ForgeNetworkManager::onClientBloomSync)
+                        .addMain(ShadowPullRequestWrapper.class,
+                                playCodec(ShadowPullRequestWrapper::encode, ShadowPullRequestWrapper::decode),
+                                ForgeNetworkManager::onShadowPullRequest)
                     .clientbound()
                         .addMain(HandshakeResponsePacket.class,
                                 playCodec(HandshakeResponsePacket::encode, HandshakeResponsePacket::decode),
@@ -383,9 +404,11 @@ public class ForgeNetworkManager implements NetworkManager {
                                 ForgeNetworkManager::onDictionarySync)
                         .addMain(IndexSyncWrapper.class, playCodec(IndexSyncWrapper::encode, IndexSyncWrapper::decode),
                                 ForgeNetworkManager::onIndexSync)
+                        .addMain(ShadowPullResponseWrapper.class,
+                                playCodec(ShadowPullResponseWrapper::encode, ShadowPullResponseWrapper::decode),
+                                ForgeNetworkManager::onShadowPullResponse)
                 .build();
-
-        LOGGER.info("Hassium: Registered Forge 50+ ChannelBuilder play channel (6 C2S + 9 S2C)");
+        LOGGER.info("Hassium: Registered Forge 50+ ChannelBuilder play channel (7 C2S + 10 S2C)");
     }
 
     private static <M> StreamCodec<RegistryFriendlyByteBuf, M> playCodec(
@@ -446,6 +469,38 @@ public class ForgeNetworkManager implements NetworkManager {
     private static void onSectionHashRequest(SectionHashRequestWrapper msg, CustomPayloadEvent.Context ctx) {
         ctx.enqueueWork(() -> handleSectionHashRequest(msg, ctx.getSender()));
     }
+    private static void onShadowPullRequest(ShadowPullRequestWrapper msg, CustomPayloadEvent.Context ctx) {
+        ctx.enqueueWork(() -> handleShadowPullRequest(msg, ctx.getSender()));
+    }
+
+    private static void onShadowPullResponse(ShadowPullResponseWrapper msg, CustomPayloadEvent.Context ctx) {
+        ctx.enqueueWork(() -> handleShadowPullResponse(msg));
+    }
+
+    @Override
+    public void sendShadowPullRequest(FriendlyByteBuf buf) {
+        if (buf == null) {
+            return;
+        }
+        try {
+            byte[] data = new byte[buf.readableBytes()];
+            buf.readBytes(data);
+#if MC_VER < MC_1_21_1
+            if (CHANNEL != null) {
+                CHANNEL.sendToServer(new ShadowPullRequestWrapper(data));
+            }
+#else
+            sendToServer(new ShadowPullRequestWrapper(data));
+#endif
+        } catch (Exception e) {
+            LOGGER.warn("Hassium: Failed to send shadowPullV1 request", e);
+        } finally {
+            if (buf.refCnt() > 0) {
+                buf.release();
+            }
+        }
+    }
+
 
     private static void onSectionDelta(SectionDeltaWrapper msg, CustomPayloadEvent.Context ctx) {
         ctx.enqueueWork(() -> handleSectionDelta(msg));
@@ -602,10 +657,6 @@ public class ForgeNetworkManager implements NetworkManager {
         reply.accept(response);
         LOGGER.info("Hassium: Server handshake for {}: accepted={}, globalCompression={}, compactHeader={}",
                 player.getName().getString(), accepted, useGlobalCompression, useCompactHeader);
-        // globalCompression=false 时不会走 CompressionReady→ZSTD 路径，直接补发 chunkHash
-        if (accepted && !useGlobalCompression) {
-            ServerChunkPushManager.getInstance().resyncTrackedChunks(player);
-        }
     }
 
     private static byte[] createServerTail(ServerPlayer player, HandshakePacket msg) {
@@ -737,7 +788,6 @@ public class ForgeNetworkManager implements NetworkManager {
             Runnable afterSwitch = () -> {
                 sendDictionarySyncPacket(player);
                 sendIndexSyncPacket(player);
-                ServerChunkPushManager.getInstance().resyncTrackedChunks(player);
                 if (connection != null) {
                     HassiumConnectionRegistry.markPending(connection);
                     HassiumAggregationManager.init();
@@ -802,6 +852,7 @@ public class ForgeNetworkManager implements NetworkManager {
     }
 
     private static void handleAggregationClient(AggregationWrapper msg) {
+
         FriendlyByteBuf packetBuf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data()));
         try {
             var clientConn = net.minecraft.client.Minecraft.getInstance().getConnection();
@@ -819,6 +870,50 @@ public class ForgeNetworkManager implements NetworkManager {
             LOGGER.error("Hassium: Failed to handle aggregation packet", e);
         } finally {
             packetBuf.release();
+        }
+    }
+    private static void handleShadowPullResponse(ShadowPullResponseWrapper msg) {
+        FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data()));
+        try {
+            ShadowPullResponseS2CPacket response = ShadowPullResponseS2CPacket.decode(buf);
+            ShadowChunkLoaderRuntime.handleResponse(response);
+        } catch (Exception e) {
+            LOGGER.error("[CLIENT] Failed to handle shadowPullV1 response", e);
+        } finally {
+            buf.release();
+        }
+    }
+
+    private static void handleShadowPullRequest(ShadowPullRequestWrapper msg, ServerPlayer player) {
+        if (player == null) {
+            return;
+        }
+        FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data()));
+        try {
+            ShadowPullRequestC2SPacket request = ShadowPullRequestC2SPacket.decode(buf);
+            ShadowPullResponseS2CPacket response = SHADOW_PULL_HANDLER.handle(player.getUUID(), request,
+                    request.dimension(), request.epoch(), 0, 0, 0,
+                    false, false, entry -> null);
+            FriendlyByteBuf out = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
+            try {
+                response.encode(out);
+                byte[] data = new byte[out.readableBytes()];
+                out.readBytes(data);
+#if MC_VER < MC_1_21_1
+                if (CHANNEL != null) {
+                    CHANNEL.sendTo(new ShadowPullResponseWrapper(data),
+                            player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
+                }
+#else
+                sendToPlayer(player, new ShadowPullResponseWrapper(data));
+#endif
+            } finally {
+                out.release();
+            }
+        } catch (Exception e) {
+            LOGGER.warn("[SERVER] Failed to handle shadowPullV1 request", e);
+        } finally {
+            buf.release();
         }
     }
 
@@ -1243,6 +1338,26 @@ public class ForgeNetworkManager implements NetworkManager {
         byte[] data = new byte[length];
         buf.readBytes(data);
         return data;
+    }
+
+    public record ShadowPullRequestWrapper(byte[] data) {
+        public void encode(FriendlyByteBuf buf) { buf.writeVarInt(data.length); buf.writeBytes(data); }
+        public static ShadowPullRequestWrapper decode(FriendlyByteBuf buf) {
+            int length = buf.readVarInt();
+            if (length < 0 || length > buf.readableBytes()) throw new IllegalArgumentException("invalid shadow pull request length");
+            byte[] data = new byte[length]; buf.readBytes(data); return new ShadowPullRequestWrapper(data);
+        }
+    }
+
+    public record ShadowPullResponseWrapper(byte[] data) {
+        public void encode(FriendlyByteBuf buf) { buf.writeVarInt(data.length); buf.writeBytes(data); }
+        public static ShadowPullResponseWrapper decode(FriendlyByteBuf buf) {
+            int length = buf.readVarInt();
+            if (length < 0 || length > ShadowPullResponseS2CPacket.MAX_PAYLOAD_BYTES || length > buf.readableBytes()) {
+                throw new IllegalArgumentException("invalid shadow pull response length");
+            }
+            byte[] data = new byte[length]; buf.readBytes(data); return new ShadowPullResponseWrapper(data);
+        }
     }
 
     public record CompressedPayloadWrapper(byte[] data) {

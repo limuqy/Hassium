@@ -1,11 +1,8 @@
 package io.github.limuqy.mc.hassium.mixin;
 
-import io.github.limuqy.mc.hassium.compat.LevelCompat;
-import io.github.limuqy.mc.hassium.compat.ResourceLocationCompat;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.network.LightDeltaS2CPacket;
 import io.github.limuqy.mc.hassium.network.PlayerCompressionTracker;
-import io.github.limuqy.mc.hassium.network.ServerChunkPushManager;
 import io.github.limuqy.mc.hassium.platform.Services;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.protocol.Packet;
@@ -22,7 +19,6 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
-import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -54,11 +50,6 @@ public class MixinChunkHolder {
             return;
         }
 
-        // 异步计算 hash 并发送元数据到 pushPool 工作线程
-        ChunkPos chunkPos = new ChunkPos(chunkPacket.getX(), chunkPacket.getZ());
-        String dimension = LevelCompat.getDimensionId(hassiumPlayers.get(0).level());
-        ServerChunkPushManager.getInstance().submitMetadataTask(
-                hassiumPlayers, chunkPos, chunkPacket, dimension);
 
         ci.cancel();
     }
@@ -71,29 +62,20 @@ public class MixinChunkHolder {
     // 提取为共用私有方法消除两分支行为不一致
     @Unique
     private List<ServerPlayer> hassium$separatePlayers(List<ServerPlayer> players, Packet<?> vanillaPacket) {
-        List<ServerPlayer> hassiumPlayers = null;
         for (ServerPlayer player : players) {
             if (PlayerCompressionTracker.isCompressionEnabled(player)) {
-                if (ServerChunkPushManager.getInstance().isPlayerShadowPullSupported(player.getUUID())) {
-                    continue;
-                }
-                if (hassiumPlayers == null) {
-                    hassiumPlayers = new ArrayList<>();
-                }
-                hassiumPlayers.add(player);
-            } else {
-                // 检查是否强制要求客户端 Mod
-                if (HassiumConfigService.getInstance().isRequireClientMod()
-                        && PlayerCompressionTracker.isHandshakeTimeout(player)) {
-                    player.connection.disconnect(Component.literal(
-                            "This server requires the Hassium mod. Please install it to join."));
-                    continue;
-                }
-                // 非 Hassium 玩家在主线程上发送原版 packet
-                player.connection.send(vanillaPacket);
+                // shadowPullV1 客户端主动拉取；禁止原版广播重复发送区块/光照。
+                continue;
             }
+            if (HassiumConfigService.getInstance().isRequireClientMod()
+                    && PlayerCompressionTracker.isHandshakeTimeout(player)) {
+                player.connection.disconnect(Component.literal(
+                        "This server requires the Hassium mod. Please install it to join."));
+                continue;
+            }
+            player.connection.send(vanillaPacket);
         }
-        return hassiumPlayers;
+        return null;
     }
 
     /**

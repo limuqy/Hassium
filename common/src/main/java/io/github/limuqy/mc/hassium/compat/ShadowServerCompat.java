@@ -19,6 +19,9 @@ import net.minecraft.world.level.chunk.ChunkAccess;
 import net.minecraft.world.level.chunk.LevelChunk;
 import net.minecraft.world.level.storage.PlayerDataStorage;
 import com.mojang.authlib.yggdrasil.ServicesKeySet;
+#if MC_VER >= MC_1_21_9
+import net.minecraft.world.level.chunk.PalettedContainerFactory;
+#endif
 #if MC_VER < MC_1_21_1
 import com.mojang.datafixers.util.Either;
 import net.minecraft.server.level.ChunkHolder;
@@ -398,6 +401,59 @@ public final class ShadowServerCompat {
                         chunk)
                 .thenApply(result -> result.left().orElseThrow(
                         () -> new IllegalStateException("native LIGHT failed")));
+    }
+#else
+    /** Modern versions expose native light stages directly on ThreadedLevelLightEngine. */
+    public static net.minecraft.world.level.chunk.ProtoChunk createNativeLightChunk(
+            ServerLevel level, LevelChunk source, boolean lightCorrect) {
+#if MC_VER < MC_1_21_9
+        net.minecraft.world.level.chunk.ProtoChunk proto =
+                new net.minecraft.world.level.chunk.ProtoChunk(
+                        source.getPos(),
+                        net.minecraft.world.level.chunk.UpgradeData.EMPTY,
+                        source.getSections(),
+                        new net.minecraft.world.ticks.ProtoChunkTicks<>(),
+                        new net.minecraft.world.ticks.ProtoChunkTicks<>(),
+                        level,
+#if MC_VER < MC_1_21_2
+                        level.registryAccess().registryOrThrow(
+                                net.minecraft.core.registries.Registries.BIOME),
+#else
+                        (net.minecraft.core.Registry<net.minecraft.world.level.biome.Biome>)
+                                level.registryAccess().lookupOrThrow(
+                                        net.minecraft.core.registries.Registries.BIOME),
+#endif
+                        source.getBlendingData());
+#else
+        net.minecraft.world.level.chunk.ProtoChunk proto =
+                new net.minecraft.world.level.chunk.ProtoChunk(
+                        source.getPos(),
+                        net.minecraft.world.level.chunk.UpgradeData.EMPTY,
+                        source.getSections(),
+                        new net.minecraft.world.ticks.ProtoChunkTicks<>(),
+                        new net.minecraft.world.ticks.ProtoChunkTicks<>(),
+                        level,
+                        PalettedContainerFactory.create(level.registryAccess()),
+                        source.getBlendingData());
+#endif
+        proto.setLightCorrect(lightCorrect);
+        return proto;
+    }
+
+    public static CompletableFuture<ChunkAccess> initializeNativeLight(
+            ServerLevel level, ChunkAccess chunk) {
+        net.minecraft.server.level.ThreadedLevelLightEngine engine =
+                (net.minecraft.server.level.ThreadedLevelLightEngine)
+                        level.getChunkSource().getLightEngine();
+        return engine.initializeLight(chunk, chunk.isLightCorrect());
+    }
+
+    public static CompletableFuture<ChunkAccess> completeNativeLight(
+            ServerLevel level, ChunkAccess chunk) {
+        net.minecraft.server.level.ThreadedLevelLightEngine engine =
+                (net.minecraft.server.level.ThreadedLevelLightEngine)
+                        level.getChunkSource().getLightEngine();
+        return engine.lightChunk(chunk, chunk.isLightCorrect());
     }
 #endif
 

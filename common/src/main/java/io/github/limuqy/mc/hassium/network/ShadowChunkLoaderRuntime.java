@@ -1,6 +1,7 @@
 package io.github.limuqy.mc.hassium.network;
 
 import io.github.limuqy.mc.hassium.Constants;
+import io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute;
 import net.minecraft.client.Minecraft;
 
 import java.util.ArrayList;
@@ -57,7 +58,8 @@ public final class ShadowChunkLoaderRuntime {
         String dimension = io.github.limuqy.mc.hassium.compat.LevelCompat.getDimensionId(mc.level);
         int centerX = mc.player.chunkPosition().x;
         int centerZ = mc.player.chunkPosition().z;
-        int radius = Math.max(0, mc.options.renderDistance().get());
+        int radius = Math.min(Math.max(0, mc.options.renderDistance().get()),
+                io.github.limuqy.mc.hassium.config.HassiumConfigService.getInstance().getMaxRenderDistance());
         if (!dimension.equals(lastDimension) || centerX != lastCenterX || centerZ != lastCenterZ || radius != lastRadius) {
             LOADER.updateView(dimension, centerX, centerZ, radius);
             PENDING.clear();
@@ -89,8 +91,11 @@ public final class ShadowChunkLoaderRuntime {
         }
         List<ShadowPullRequestC2SPacket.Entry> entries = new ArrayList<>(tickets.size());
         for (ShadowChunkLoader.LoadTicket ticket : tickets) {
+            Long cachedHash = io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.get(
+                    dimension, new net.minecraft.world.level.ChunkPos(ticket.key().chunkX(), ticket.key().chunkZ()));
             entries.add(new ShadowPullRequestC2SPacket.Entry(
-                    ticket.key().chunkX(), ticket.key().chunkZ(), 0L, List.of(), 0));
+                    ticket.key().chunkX(), ticket.key().chunkZ(), cachedHash == null ? 0L : cachedHash,
+                    List.of(), 0));
         }
         Constants.LOG.info("[SHADOW_PULL] request dimension={} epoch={} count={} center=[{},{}]", dimension,
                 LOADER.epoch(), tickets.size(), centerX, centerZ);
@@ -117,6 +122,10 @@ public final class ShadowChunkLoaderRuntime {
         String currentDimension = LOADER.dimension();
         if (response == null || currentDimension == null || !response.dimension().equals(currentDimension)
                 || response.epoch() != LOADER.epoch()) {
+            if (response != null) {
+                Constants.LOG.warn("[SHADOW_PULL] response ignored dimension={} current={} epoch={} expected={}",
+                        response.dimension(), currentDimension, response.epoch(), LOADER.epoch());
+            }
             return;
         }
         for (ShadowPullResponseS2CPacket.Result result : response.results()) {
@@ -131,7 +140,16 @@ public final class ShadowChunkLoaderRuntime {
             if (result.kind() == ShadowPullResponseS2CPacket.Kind.FULL) {
                 success = ClientChunkHandler.handleShadowPullPayload(
                         response.dimension(), result.chunkX(), result.chunkZ(), ticket.role(), result.payload());
+                if (success) {
+                    io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.put(response.dimension(),
+                            new net.minecraft.world.level.ChunkPos(result.chunkX(), result.chunkZ()), result.chunkHash());
+                }
+            } else if (success) {
+                ShadowLightCompute.accountCacheFullHit(response.dimension(),
+                        new net.minecraft.world.level.ChunkPos(result.chunkX(), result.chunkZ()));
             }
+            Constants.LOG.info("[SHADOW_PULL] apply result kind={} chunk=[{},{}] success={}",
+                    result.kind(), result.chunkX(), result.chunkZ(), success);
             LOADER.complete(ticket, success);
         }
     }

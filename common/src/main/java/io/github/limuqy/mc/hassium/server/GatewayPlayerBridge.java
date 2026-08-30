@@ -477,7 +477,6 @@ public final class GatewayPlayerBridge {
         ServerPlayer player = server.getPlayerList().getPlayer(playerId);
         if (player != null) {
             PlayerCompressionTracker.enableCompression(player);
-            ServerChunkPushManager.getInstance().resyncTrackedChunks(player);
             session.setC2SSink(createC2SSink(server, player));
         }
         LOGGER.info("[GATEWAY] Login bridge completed for {} — 会话附着 + C2S sink 挂载", playerId);
@@ -537,11 +536,7 @@ public final class GatewayPlayerBridge {
             // （双 ServerPlayer 冲突结构性不可达，见 T10-TASK.md 论证；此分支亦兜续流握手
             // 早于 vanilla 物化的时序竞态）
             ServerPlayer existing = server.getPlayerList().getPlayer(playerId);
-            // T5b：与 finishLoginBridge 对齐 —— 压缩启用 + 区块重同步（resyncTrackedChunks
-            // 内守卫 isCompressionEnabled=false 直接 return，缺 enableCompression 则推送链
-            // 零 hash 零推送 → 客户端数据面全 0）；两调用幂等，先于 sink 挂载执行
             PlayerCompressionTracker.enableCompression(existing);
-            ServerChunkPushManager.getInstance().resyncTrackedChunks(existing);
             if (session.c2sSink() == null) {
                 session.setC2SSink(createC2SSink(server, existing));
                 LOGGER.info("[GATEWAY] Player {} — attached to existing vanilla player (C2S sink 挂载)",
@@ -610,7 +605,6 @@ public final class GatewayPlayerBridge {
                         && session.channel().handshakeOptions().seedGenSupported());
         // shadowPullV1 客户端由影子 loader 主动取数，禁止旧 admission 初始区块链路。
         HandshakeStateTail.C2S stateTail = session.channel().stateTail();
-        push.setPlayerShadowPullSupported(playerId, stateTail != null && stateTail.shadowPullSupported());
         push.setPlayerLightComputeSupported(playerId, stateTail != null && stateTail.lightComputeSupported());
 
         // muted placeNewPlayer：join S2C 风暴吞掉（续流客户端已持有世界）；server 侧簿记全走 vanilla
@@ -623,12 +617,6 @@ public final class GatewayPlayerBridge {
         placeNewPlayer(server, connection, player);
         bridge.muted = false;
 
-        // 续流就绪：按上报位置重发视距 hash（[RESUME] 日志；initialPlayerChunkPos 已由握手设置）
-        push.resyncTrackedChunks(player);
-        session.setC2SSink(createC2SSink(server, player));
-        LOGGER.info("[GATEWAY] Player {} materialized at ({}, {}, {}) dim={} — resyncTrackedChunks 触发",
-                playerId, player.getX(), player.getY(), player.getZ(),
-                LevelCompat.getDimensionId(level));
     }
 
     private static ServerPlayer createServerPlayer(MinecraftServer server, ServerLevel level,
@@ -739,8 +727,10 @@ public final class GatewayPlayerBridge {
         String dimension = LevelCompat.getDimensionId(player.level());
         ShadowPullResponseS2CPacket response = SHADOW_PULL_HANDLER.handle(
                 player.getUUID(), request, dimension, request.epoch(), player.chunkPosition().x,
-                player.chunkPosition().z, io.github.limuqy.mc.hassium.compat.PlayerCompat.getViewDistance(player) + 1,
-                ServerChunkPushManager.getInstance().isPlayerShadowPullSupported(player.getUUID()),
+                player.chunkPosition().z,
+                Math.max(io.github.limuqy.mc.hassium.config.HassiumConfigService.getInstance().getMaxRenderDistance() + 1,
+                        io.github.limuqy.mc.hassium.compat.PlayerCompat.getViewDistance(player) + 1),
+                true,
                 player.isAlive() && !player.hasDisconnected(),
                 entry -> ServerChunkPushManager.getInstance().resolveShadowPull(player, entry, dimension));
         FriendlyByteBuf out = new FriendlyByteBuf(Unpooled.buffer());

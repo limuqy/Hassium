@@ -12,7 +12,6 @@ import io.github.limuqy.mc.hassium.platform.Services;
 import io.github.limuqy.mc.hassium.compat.PlayerCompat;
 import io.github.limuqy.mc.hassium.compat.RegistryCompat;
 import io.github.limuqy.mc.hassium.compat.ResourceLocationCompat;
-import io.github.limuqy.mc.hassium.server.RuntimeServerContext;
 import io.github.limuqy.mc.hassium.utils.DebugLogger;
 import io.github.limuqy.mc.hassium.compat.LevelCompat;
 import io.github.limuqy.mc.hassium.compat.ShadowChunkMapCompat;
@@ -82,18 +81,7 @@ public class ServerChunkPushManager {
     static final int MAX_QUEUED_BATCHES_PER_PLAYER = 10;
     /** 已准入任务满时的全量数据溢出上限；覆盖单玩家最大可见区，避免静默丢柱。 */
     private static final int MAX_OVERFLOW_TASKS_PER_PLAYER = 8192;
-    /** 待确认超时：必须覆盖大批量 hash 比对/回执排空窗口，避免正常 R2 被误判为 full。 */
-    static final long PENDING_CONFIRM_TIMEOUT_MS = 60_000L;
-    /** peekPrioritized 队头数据优先扫描窗口：跳过 SeedRef 元数据找 full 任务的有限深度。 */
-    private static final int PRIORITY_SCAN_BOUND = 64;
-
-
-    /**
-     * 握手后 resync 分批补发：每 tick 最多处理的区块数。
-     * 避免一次性提交数百个 submitMetadataTaskFromChunk 卡住主线程，
-     * 且减缓客户端 ChunkDataRequest 风暴导致 readyQueue 堆积。
-     */
-    private static final int RESYNC_PER_TICK = 32;
+    private static final long PENDING_CONFIRM_TIMEOUT_MS = 60_000L;
 
     /**
      * Bloom hit 只发 hash：不占 full chunk 批队列配额。
@@ -106,21 +94,14 @@ public class ServerChunkPushManager {
      * 主线程 buildChunkPacket 快照在封批前完成，encode/hash/ZSTD 在消费线程。
      */
     private final Map<UUID, PlayerPushQueue> pushQueues = new ConcurrentHashMap<>();
-
-    /** 已发送 hash 等待客户端回执的柱：playerId → (packedPos → 待确认条目)。 */
+    /** 已发送 hash 等待客户端回执的柱。 */
     private final Map<UUID, Map<Long, PendingConfirm>> pendingConfirms = new ConcurrentHashMap<>();
-    /** 每次 hash 发送的服务端诊断序列；不进入网络协议，仅用于跨日志关联。 */
     private final AtomicLong hashTraceSequence = new AtomicLong();
-
-    /**
-     * 本会话已收到 HIT 的 (维度, 柱) → hash。untrack 时清除，走近再发；
-     * 同 hash 在跟踪期内不再重发。
-     */
     private final Map<UUID, ConcurrentHashMap<SessionPushKey, Long>> sessionConfirmedHashes =
             new ConcurrentHashMap<>();
-
-    /** 待确认条目：维度、发送时间、当时发出的 contentHash、诊断序列。 */
     private record PendingConfirm(String dimension, long sentAtMs, long chunkHash, long traceId) {}
+
+
 
     /**
      * 批次通道：主线程封批后投递，serverChunkPushThreads 条常驻消费者共享抢批。
@@ -133,34 +114,11 @@ public class ServerChunkPushManager {
      * 每玩家待发送的 chunkHash 批次
      */
     private final Map<UUID, PendingHashBatch> hashBatches = new ConcurrentHashMap<>();
-
-    /**
-     * 握手后 resync 待补发队列：playerId → 待补发 entry 队列。
-     * resyncTrackedChunks 入队，onServerTick 每 tick 最多补发 RESYNC_PER_TICK 个，
-     * 避免一次性提交数百个任务卡住主线程。
-     */
-    private final Map<UUID, Deque<ResyncEntry>> pendingResync = new ConcurrentHashMap<>();
-    /** 每玩家 R+1 Halo 窗口；Halo 票据由所有玩家共享引用计数。 */
     private final Map<UUID, HaloPlayerState> haloPlayers = new ConcurrentHashMap<>();
     private final Map<HaloTicketKey, Integer> haloTicketReferences = new ConcurrentHashMap<>();
 
-    /** resync 待补发条目 */
-    private record ResyncEntry(ChunkPos pos, String dimension) {}
 
     /**
-     * 源头定额与压缩/握手无关：专用服一律按 {@code master.maxChunksPerTick} 滴灌。
-     * 压缩只决定 drain 时走原版包还是 Hassium 元数据。
-     */
-    public static boolean shouldPaceChunkSends() {
-        return RuntimeServerContext.isDedicatedServerContext();
-    }
-
-    /**
-     * 1.20.1：仿 {@code PlayerChunkSender} pending。trackChunk 只登记，tick 近距定额出队。
-     * 1.20.2+ 由原版 PlayerChunkSender 定额 sendChunk，不用本表。
-     */
-    private final Map<UUID, Set<Long>> pendingSends = new ConcurrentHashMap<>();
-    private final Map<UUID, String> pendingSendDimension = new ConcurrentHashMap<>();
 
 
     /**
@@ -186,20 +144,6 @@ public class ServerChunkPushManager {
      * 服务端据此决定是否剥光：客户端声明可本地/影子端算光才剥（stripLightIfConfigured gate）。
      */
     private final Map<UUID, Boolean> playerLightComputeSupported = new ConcurrentHashMap<>();
-    /** 每玩家 shadowPullV1 能力；未协商客户端永远走旧 admission。 */
-    private final Map<UUID, Boolean> playerShadowPullSupported = new ConcurrentHashMap<>();
-
-    public void setPlayerShadowPullSupported(UUID playerId, boolean supported) {
-        if (supported) {
-            playerShadowPullSupported.put(playerId, Boolean.TRUE);
-        } else {
-            playerShadowPullSupported.remove(playerId);
-        }
-    }
-
-    public boolean isPlayerShadowPullSupported(UUID playerId) {
-        return Boolean.TRUE.equals(playerShadowPullSupported.get(playerId));
-    }
 
     /** 在服务端主线程构建单区块 pull 终态；不读取客户端提交的 payload。 */
     public ShadowPullResponseS2CPacket.Result resolveShadowPull(ServerPlayer player,
@@ -222,7 +166,9 @@ public class ServerChunkPushManager {
             for (long hash : sectionHashArray) {
                 sectionHashList.add(hash);
             }
-            if (entry.chunkHash() == chunkHash && entry.sectionHashes().equals(sectionHashList)) {
+            boolean hashMatch = entry.chunkHash() != 0L && entry.chunkHash() == chunkHash;
+            boolean sectionsMatch = entry.sectionHashes().isEmpty() || entry.sectionHashes().equals(sectionHashList);
+            if (hashMatch && sectionsMatch) {
                 return ShadowPullResponseS2CPacket.Result.unchanged(entry.chunkX(), entry.chunkZ(),
                         chunkHash, sectionHashList);
             }
@@ -359,8 +305,8 @@ public class ServerChunkPushManager {
      */
     /**
      * 续流已接受玩家：UUID → 接受的续流票据 epoch（T7 验票通过后标记；removePlayer 清理）。
-     * 续流模式下客户端跳过 login/维度初始化，服务端按上报位置续发视距内 hash（见
-     * {@link #resyncTrackedChunks} 的 [RESUME] 日志与现有 hash 连续性机制）。
+     * 续流模式下客户端跳过 login/维度初始化；新 shadowPull 请求携带位置与 hash，
+     * 服务端按请求结果返回区块终态。
      */
     private final Map<UUID, Long> resumePlayers = new ConcurrentHashMap<>();
 
@@ -375,8 +321,7 @@ public class ServerChunkPushManager {
     }
 
     /**
-     * 网关帧侧握手路径（T11）：无 ServerPlayer 时按 UUID 记录初始位置（续流玩家实体
-     * 尚未物化；resyncTrackedChunks 与后续会话同步消费同一张表）。removePlayer 清理。
+     * 网关帧侧握手路径：无 ServerPlayer 时按 UUID 记录初始位置，removePlayer 清理。
      */
     public void setInitialPlayerPosition(UUID playerId, PlayerStateReport state) {
         if (playerId == null || state == null) {
@@ -534,183 +479,6 @@ public class ServerChunkPushManager {
      * @param packet    已构建的区块数据包（只读，线程安全）
      * @param dimension 维度标识
      */
-    public void submitMetadataTask(List<ServerPlayer> players, ChunkPos pos,
-                                   ClientboundLevelChunkWithLightPacket packet, String dimension) {
-        ensureInitialized();
-        final ServerLevel firstLevel = PlayerCompat.getServerLevel(players.get(0));
-        final int sectionCount = firstLevel.getSectionsCount();
-        final RegistryAccess registryAccess = firstLevel.registryAccess();
-        // 主线程登记 pristine（生成完成 → 首次推送时机；此后 setBlockState 修改即移除）
-        PristineRegistry.markIfPristine(firstLevel, pos);
-        // broadcast 已持有原版或兼容 Mod 改写后的 packet；仅替换其 light payload，
-        // 避免回读 LevelChunk 并重建整包。混合 light capability 时保留原 light，
-        // 防止共享 packet 使关闭引擎的 Hassium 客户端收到剥光包。
-        long tBuild = System.nanoTime();
-        final ClientboundLevelChunkWithLightPacket strippedPacket = stripLightIfConfigured(players, pos, packet);
-        diag(D_BUILD, System.nanoTime() - tBuild);
-        // 包字节编码挪 pushPool 后台：packet 为已构建完的纯数据（只读编码线程安全，
-        // 反透视等 mod 已在拦截时改写好包视图），不再占用主线程。
-        pushPool.submit(() -> {
-            try {
-                // Hash 以规范化 section 内容为准；1.20.1 的 packet 线格式含不稳定 palette
-                // 排列，绝不能作为缓存协议 hash。
-                long tHash = System.nanoTime();
-                Map<Integer, Long> sectionHashes = ChunkContentHashUtil.computeSectionHashesFromPacket(
-                        strippedPacket.getChunkData(), sectionCount, registryAccess);
-                diag(D_HASH, System.nanoTime() - tHash);
-                long chunkHash = ChunkContentHashUtil.combineSectionHashes(sectionHashes);
-                long[] sectionHashArray = ChunkContentHashUtil.sectionHashesToArray(sectionHashes);
-                byte[] encoded = encodeChunkPacket(strippedPacket, registryAccess);
-                if (encoded != null) {
-                    // 预编码字节后续可能在 Bloom 命中路径直接发送；保留同一 packet 的语义 hash。
-                    for (ServerPlayer player : players) {
-                        if (!isSeedGenFor(player.getUUID(), pos, dimension)) {
-                            putPreparedChunkPacket(player.getUUID(), pos,
-                                    new PreparedChunk(encoded, strippedPacket, chunkHash));
-                        }
-                    }
-                }
-                // 从 sectionHashes 推导 bitmap：有 hash 的 section = 有方块数据
-                int sectionBitmap = 0;
-                for (int idx : sectionHashes.keySet()) {
-                    sectionBitmap |= (1 << idx);
-                }
-
-                sendChunkHashAndMaybePush(players, pos, chunkHash, sectionHashArray, sectionBitmap, dimension);
-            } catch (Exception e) {
-                Constants.LOG.error("[ASYNC_METADATA] Failed to compute chunkHash for chunk {}", pos, e);
-            }
-        });
-    }
-
-    /**
-     * 异步计算 sectionHashes → chunkHash 并发送阶段一元数据（从 trackChunk 调用，单玩家）。
-     * <p>
-     * 先计算 per-section 哈希（不含 blockEntity），再组合为 chunkHash。
-     * 通过 ChunkHashS2CPacket 发送 chunkHash + sectionBitmap。
-     *
-     * @param player      目标玩家
-     * @param pos         区块位置
-     * @param chunkPacket 区块数据包（可能是 ClientboundLevelChunkWithLightPacket 或其他类型）
-     * @param dimension   维度标识
-     */
-    public void submitMetadataTask(ServerPlayer player, ChunkPos pos,
-                                   Packet<?> chunkPacket, String dimension) {
-        ensureInitialized();
-        // 主线程登记 pristine（trackChunk 时机 = 生成完成 → 首次推送）
-        ServerLevel playerLevel0 = PlayerCompat.getServerLevel(player);
-        if (playerLevel0 != null) {
-            PristineRegistry.markIfPristine(playerLevel0, pos);
-        }
-        final Packet<?> effectivePacket;
-        if (chunkPacket instanceof ClientboundLevelChunkWithLightPacket lightPacket) {
-            // 拦截点传入的原版已构造包：仅替换 light payload，保留原 chunk data 快照。
-            long tBuild = System.nanoTime();
-            effectivePacket = stripLightIfConfigured(player, pos, lightPacket);
-            diag(D_BUILD, System.nanoTime() - tBuild);
-        } else {
-            effectivePacket = chunkPacket;
-        }
-        final ServerLevel playerLevel = PlayerCompat.getServerLevel(player);
-        final int sectionCount = playerLevel.getSectionsCount();
-        final RegistryAccess registryAccess = playerLevel.registryAccess();
-        // 编码 + hash 计算 + 发送全部在 pushPool（packet 纯数据只读编码，线程安全）
-        pushPool.submit(() -> {
-            try {
-                if (effectivePacket instanceof ClientboundLevelChunkWithLightPacket lightPacket) {
-                    // SeedGen 玩家：不发数据任务（本地生成），只发 SeedRef
-                    if (!isSeedGenFor(player.getUUID(), pos, dimension)) {
-                        byte[] encoded = encodeChunkPacket(lightPacket, registryAccess);
-                        if (encoded != null) {
-                            putPreparedChunkPacket(player.getUUID(), pos, encoded);
-                        }
-                    }
-                }
-                Map<Integer, Long> sectionHashes;
-                int sectionBitmap;
-
-                if (effectivePacket instanceof ClientboundLevelChunkWithLightPacket lightPacket) {
-                    // 从已序列化的 packet 数据计算（线程安全）
-                    long tHash = System.nanoTime();
-                    sectionHashes = ChunkContentHashUtil.computeSectionHashesFromPacket(
-                            lightPacket.getChunkData(), sectionCount, registryAccess);
-                    diag(D_HASH, System.nanoTime() - tHash);
-                    sectionBitmap = 0;
-                    for (int idx : sectionHashes.keySet()) {
-                        sectionBitmap |= (1 << idx);
-                    }
-                } else {
-                    // 回退：从世界读取（非标准 packet 类型）
-                    ServerLevel level = PlayerCompat.getServerLevel(player);
-                    LevelChunk chunk = level.getChunk(pos.x, pos.z);
-                    sectionHashes = ChunkContentHashUtil.computeSectionHashes(chunk);
-                    sectionBitmap = computeSectionBitmap(chunk);
-                }
-
-                long chunkHash = ChunkContentHashUtil.combineSectionHashes(sectionHashes);
-                long[] sectionHashArray = ChunkContentHashUtil.sectionHashesToArray(sectionHashes);
-
-                if (player.isAlive() && !player.hasDisconnected()) {
-                    sendChunkHashAndMaybePush(List.of(player), pos, chunkHash, sectionHashArray, sectionBitmap, dimension);
-                }
-            } catch (Exception e) {
-                Constants.LOG.error("[ASYNC_METADATA] Failed to compute chunkHash for chunk {} (player={})",
-                        pos, player.getName().getString(), e);
-            }
-        });
-    }
-
-
-    /**
-     * 重同步队列没有原版发送包时才从 {@link LevelChunk} 构建快照。常规 PlayerChunkSender
-     * 路径改由 {@link #submitMetadataTask(ServerPlayer, ChunkPos, Packet, String)} 接收原包。
-     * 调用方必须在主线程或原版 ChunkSender 线程，1.21.2+ 的
-     * {@code PalettedContainer.ThreadingDetector} 不允许后台读 chunk。
-     *
-     * @return {@code true} 表示已构建快照并排入异步 hash 工作
-     */
-    public boolean submitMetadataTaskFromChunk(ServerPlayer player, ChunkPos pos,
-                                               LevelChunk chunk, String dimension) {
-        ensureInitialized();
-        ServerLevel level = PlayerCompat.getServerLevel(player);
-        final int sectionCount = level.getSectionsCount();
-        final RegistryAccess registryAccess = level.registryAccess();
-
-        long tBuild = System.nanoTime();
-        ClientboundLevelChunkWithLightPacket packet = buildChunkPacket(chunk, level);
-        diag(D_BUILD, System.nanoTime() - tBuild);
-        if (packet == null) {
-            Constants.LOG.warn("[ASYNC_METADATA] Failed to build chunk packet for {}", pos);
-            return false;
-        }
-        PristineRegistry.markIfPristine(level, pos);
-        if (!isSeedGenFor(player.getUUID(), pos, dimension)) {
-            putPreparedChunkPacket(player.getUUID(), pos, packet);
-        }
-
-        pushPool.submit(() -> {
-            try {
-                long tHash = System.nanoTime();
-                Map<Integer, Long> sectionHashes = ChunkContentHashUtil.computeSectionHashesFromPacket(
-                        packet.getChunkData(), sectionCount, registryAccess);
-                diag(D_HASH, System.nanoTime() - tHash);
-                int sectionBitmap = 0;
-                for (int idx : sectionHashes.keySet()) {
-                    sectionBitmap |= (1 << idx);
-                }
-                long chunkHash = ChunkContentHashUtil.combineSectionHashes(sectionHashes);
-                long[] sectionHashArray = ChunkContentHashUtil.sectionHashesToArray(sectionHashes);
-
-                if (player.isAlive() && !player.hasDisconnected()) {
-                    sendChunkHashAndMaybePush(List.of(player), pos, chunkHash, sectionHashArray, sectionBitmap, dimension);
-                }
-            } catch (Throwable e) {
-                Constants.LOG.error("[ASYNC_METADATA] Failed to compute chunkHash for chunk {} (player={})",
-                        pos, player.getName().getString(), e);
-            }
-        });
-        return true;
-    }
 
     /**
      * 将阶段一 chunkHash 加入短窗口批次（由 server tick 限流发送；维度切换时立即冲刷）。
@@ -925,15 +693,6 @@ public class ServerChunkPushManager {
                 Constants.LOG.info("[BLOOM_SYNC] Incremental bloom from {} (dimension={}, {} bytes)",
                         player.getName().getString(), packet.dimension(), packet.bloomBytes().length);
             }
-            // Bloom 可能在 vanilla 初始 tracking 已排空后才到达（NeoForge 1.21+ 常见）：
-            // 仅更新 bloom 会留下“已发 hash、未再补 full”的空洞，R2 便没有可复用的 OVD。
-            // 当前维度重新登记已加载视距柱；contains 去重，Bloom 命中仍只发 hash，miss 才直推。
-            if (packet.full()) {
-                ServerLevel level = PlayerCompat.getServerLevel(player);
-                if (level != null && packet.dimension().equals(LevelCompat.getDimensionId(level))) {
-                    resyncTrackedChunks(player);
-                }
-            }
         } catch (Exception e) {
             Constants.LOG.error("[BLOOM_SYNC] Failed to handle bloom sync from player {}",
                     player.getName().getString(), e);
@@ -1072,297 +831,12 @@ public class ServerChunkPushManager {
         }
     }
 
-    /**
-     * 握手成功后：1.20.1 把已加载视距柱登记进 paced pending；1.20.2+ 不 dump 整盘 hash
-     * （由 PlayerChunkSender 定额 sendChunk）。必须在主线程调用。
-     */
-    public void resyncTrackedChunks(ServerPlayer player) {
-        if (player == null || !player.isAlive() || player.hasDisconnected()) {
-            return;
-        }
-        if (!PlayerCompressionTracker.isCompressionEnabled(player)) {
-            return;
-        }
-        if (!HassiumConfigService.getInstance().isNetworkCompressionEnabled()
-                || !HassiumConfigService.getInstance().isClientCacheEnabled()) {
-            return;
-        }
 
-        ensureInitialized();
-        ServerLevel level = PlayerCompat.getServerLevel(player);
-        if (level == null) {
-            return;
-        }
-
-        int viewDistance = PlayerCompat.getViewDistance(player);
-        // 与 ChunkMap 扫描余量一致，略扩一圈避免边界遗漏
-        int radius = Math.max(2, viewDistance + 1);
-        // 位置选择：普通登录/重连时 vanilla 已按 playerdata 物化，player.chunkPosition()
-        // 是权威位置；握手上报位置可能是旧出生点/未更新快照，不能覆盖真实位置。
-        // 续流（resume）路径按上报位置物化玩家，此时上报位置才是权威。
-        // 额外保留旧 failover 兜底：若玩家对象仍滞留在出生点且上报位置非出生点，
-        // 说明真实位置尚未同步，仍以上报位置为准。
-        ChunkPos reportedPos = initialPlayerChunkPos.remove(player.getUUID());
-        ChunkPos actualPos = player.chunkPosition();
-        ChunkPos spawnPos;
-#if MC_VER < MC_1_21_9
-        spawnPos = new ChunkPos(level.getSharedSpawnPos());
-#else
-        spawnPos = new ChunkPos(level.getRespawnData().pos());
-#endif
-        boolean resume = isPlayerResumeActive(player.getUUID());
-        boolean actualStillAtSpawn = actualPos.x == spawnPos.x && actualPos.z == spawnPos.z
-                && reportedPos != null
-                && (reportedPos.x != spawnPos.x || reportedPos.z != spawnPos.z);
-        boolean preferReported = (resume || actualStillAtSpawn) && reportedPos != null;
-        int centerX;
-        int centerZ;
-        if (preferReported) {
-            centerX = reportedPos.x;
-            centerZ = reportedPos.z;
-        } else {
-            centerX = actualPos.x;
-            centerZ = actualPos.z;
-            if (reportedPos != null && (reportedPos.x != actualPos.x || reportedPos.z != actualPos.z)) {
-                DebugLogger.info(LogType.NETWORK,
-                        "[RESYNC] Ignoring stale reported position ({}, {}) for player {} — using actual player chunk ({}, {})",
-                        reportedPos.x, reportedPos.z, player.getName().getString(), centerX, centerZ);
-            }
-        }
-        // T7 续流：验票通过后走同一 resync 机制 —— 按上报位置重发视距 hash，
-        // 客户端与本地 ShadowStorageHashes 比对后只请求增量（hash 连续性）。
-        if (resume) {
-            DebugLogger.info(LogType.NETWORK,
-                    "[RESUME] Player {} — 续流模式：按上报位置 ({}, {}) 续发视距 chunkHash",
-                    player.getName().getString(), centerX, centerZ);
-        }
-        String dimension = LevelCompat.getDimensionId(level);
-
-        // 不再把整盘 hash 灌进 pendingResync（曾 2s dump 上千条，绕开原版定额）。
-        // 1.20.1：只把已加载柱登记进 pendingSends，由 tick drain 出队。
-        // 1.21.2+：正常路径依赖 vanilla PlayerChunkSender.sendChunk 拦截驱动 hash/push；
-        // 但 warm-world 重连时该触发偶发不火（1.21.8_neoforge_fin R2 实证：pending=0、
-        // gatewayS2c=4、带宽 204B、landed=4，而 1.21.7/9/10/11 同流程全绿）——vanilla
-        // tracking 对已 FULL 的暖柱未重发。故兜底把视距内已加载柱也排进 pendingResync，
-        // 由 drainPendingResync 按 RESYNC_PER_TICK 定额走 submitMetadataTaskFromChunk
-        // （bloom 感知：hit→只发 hash；miss→hash+直推，会话表去重）。与 vanilla 触发并存无害：
-        // 重复 hash 帧幂等，重复直推被 lastSessionPushedHash 去重。
-#if MC_VER < MC_1_21_1
-         int marked = 0;
-         for (int dx = -radius; dx <= radius; dx++) {
-             for (int dz = -radius; dz <= radius; dz++) {
-                 int cx = centerX + dx;
-                 int cz = centerZ + dz;
-                 if (!isServerChunkInRange(cx, cz, centerX, centerZ, viewDistance)) {
-                     continue;
-                 }
-                 if (level.getChunkSource().getChunkNow(cx, cz) == null) {
-                     continue;
-                 }
-                 markChunkPendingToSend(player, new ChunkPos(cx, cz), dimension);
-                 marked++;
-             }
-         }
-         DebugLogger.info(LogType.CHUNK_APPLY,
-                 "Hassium: Pending {} loaded chunks for paced send (player={}, vd={})",
-                 marked, player.getName().getString(), viewDistance);
-#else
-        int marked = 0;
-        Deque<ResyncEntry> queue =
-                pendingResync.computeIfAbsent(player.getUUID(), ignored -> new java.util.ArrayDeque<>());
-        for (int dx = -radius; dx <= radius; dx++) {
-            for (int dz = -radius; dz <= radius; dz++) {
-                int cx = centerX + dx;
-                int cz = centerZ + dz;
-                if (!isServerChunkInRange(cx, cz, centerX, centerZ, viewDistance)) {
-                    continue;
-                }
-                ResyncEntry entry = new ResyncEntry(new ChunkPos(cx, cz), dimension);
-                if (!queue.contains(entry)) {
-                    queue.addLast(entry);
-                    marked++;
-                }
-            }
-        }
-        if (marked > 0) {
-            DebugLogger.info(LogType.CHUNK_APPLY,
-                    "Hassium: Resync {} loaded chunks queued for paced metadata (player={}, vd={})",
-                    marked, player.getName().getString(), viewDistance);
-        }
-#endif
-     }
-
-    /**
-     * 1.20.1：登记待发送柱。出队见 {@link #drainPendingSends}。
-     */
-    public void markChunkPendingToSend(ServerPlayer player, ChunkPos pos, String dimension) {
-        if (player == null || pos == null || dimension == null) {
-            return;
-        }
-        UUID playerId = player.getUUID();
-        pendingSendDimension.put(playerId, dimension);
-        pendingSends.computeIfAbsent(playerId, ignored -> ConcurrentHashMap.newKeySet())
-                .add(ChunkPos.asLong(pos.x, pos.z));
-    }
-
-#if MC_VER < MC_1_21_1
-    /**
-     * 1.20.1 gateway 注入移动包后显式补齐 tracking 新进入的边带。
-     * vanilla ChunkMap 的移动 tracking 仍维护实体状态，但自定义 trackChunk 拦截后
-     * 不再可靠地产生新的 Hassium pending；这里只扫描新视距边带，不重复扫描整个视距。
-     */
-    public void onGatewayPlayerChunkMove(ServerPlayer player, ChunkPos oldPos, ChunkPos newPos) {
-        if (player == null || oldPos == null || newPos == null || oldPos.equals(newPos)
-                || !PlayerCompressionTracker.isCompressionEnabled(player)) {
-            return;
-        }
-        ServerLevel level = PlayerCompat.getServerLevel(player);
-        if (level == null) {
-            return;
-        }
-        int viewDistance = PlayerCompat.getViewDistance(player);
-        int radius = Math.max(2, viewDistance + 1);
-        String dimension = LevelCompat.getDimensionId(level);
-        int marked = 0;
-        for (int dx = -radius; dx <= radius; dx++) {
-            for (int dz = -radius; dz <= radius; dz++) {
-                int cx = newPos.x + dx;
-                int cz = newPos.z + dz;
-                if (!isServerChunkInRange(cx, cz, newPos.x, newPos.z, viewDistance)
-                        || isServerChunkInRange(cx, cz, oldPos.x, oldPos.z, viewDistance)) {
-                    continue;
-                }
-                markChunkPendingToSend(player, new ChunkPos(cx, cz), dimension);
-                marked++;
-            }
-        }
-        if (marked > 0) {
-            DebugLogger.info(LogType.NETWORK,
-                    "[GATEWAY-MOVE] queued {} newly visible chunks player={} old=({}, {}) new=({}, {})",
-                    marked, player.getName().getString(), oldPos.x, oldPos.z, newPos.x, newPos.z);
-        }
-    }
-#endif
-
-
-    /**
-     * 每 tick 从 pending 取距玩家最近、且已加载的柱出队。
-     * <p>
-     * 先按 packed key 距离排序（不碰世界），再 {@code getChunkNow} 直到填满本 tick
-     * 入队预算即停，禁止每 tick 扫满 VD 方阵。主线程不算 section hash：仅当 Bloom
-     * 已到且 miss、且 {@code lastSessionPushedHash==null} 才直推剥光全量；
-     * 未就绪 / hit / 会话复用走 hash 路径。所有柱统一入 {@link PlayerPushQueue}
-     * 批次队列，由封批 + 消费线程处理。
-     */
-    private void drainPendingSends(ServerPlayer player) {
-        UUID playerId = player.getUUID();
-        Set<Long> pending = pendingSends.get(playerId);
-        if (pending == null || pending.isEmpty()) {
-            return;
-        }
-        String dimension = pendingSendDimension.get(playerId);
-        if (dimension == null) {
-            pending.clear();
-            return;
-        }
-        ServerLevel level = PlayerCompat.getServerLevel(player);
-        if (level == null) {
-            return;
-        }
-        int maxPerTick = normalizeMaxChunksPerTick(
-                HassiumConfigService.getInstance().getConfig().master().maxChunksPerTick());
-        if (!PlayerCompressionTracker.isCompressionEnabled(player)) {
-            drainVanillaPacedSends(player, pending, level, maxPerTick);
-            return;
-        }
-        PlayerPushQueue queue = pushQueues.computeIfAbsent(playerId, ignored -> new PlayerPushQueue());
-        ChunkPos center = player.chunkPosition();
-        List<Long> ordered = new ArrayList<>(pending);
-        sortPackedKeysByDistance(ordered, center.x, center.z);
-        for (Long packed : ordered) {
-            int x = ChunkPos.getX(packed);
-            int z = ChunkPos.getZ(packed);
-            if (queue.size() >= queueCapacity()) {
-                // 排队满：本 tick 停止封批，剩余柱留待下 tick
-                break;
-            }
-            LevelChunk chunk = level.getChunkSource().getChunkNow(x, z);
-            if (chunk == null) {
-                // 未加载：保留在 pendingSends，等 getChunkNow != null 再试
-                continue;
-            }
-            // 主线程快照在入队前完成；封批复用，hash 折回后 miss 也复用，不再走 4/t。
-            ClientboundLevelChunkWithLightPacket packet = buildChunkPacket(chunk, level);
-            if (packet == null) {
-                continue;
-            }
-            ChunkPos pos = new ChunkPos(x, z);
-            putPreparedChunkPacket(playerId, pos, packet);
-            if (!queue.enqueue(new PushTask(pos, dimension,
-                    new DataRequestTask(pos, dimension, null, 0L),
-                    PushKind.FULL_VISIBLE))) {
-                break;
-            }
-            pending.remove(packed);
-        }
-        if (pending.isEmpty()) {
-            pendingSends.remove(playerId);
-            pendingSendDimension.remove(playerId);
-        }
-    }
-
-    /**
-     * packed key 按距中心平方距离排序，不访问世界。
-     */
-    static void sortPackedKeysByDistance(List<Long> packedKeys, int centerChunkX, int centerChunkZ) {
-        packedKeys.sort(Comparator.comparingLong(packed -> {
-            long dx = (long) ChunkPos.getX(packed) - centerChunkX;
-            long dz = (long) ChunkPos.getZ(packed) - centerChunkZ;
-            return dx * dx + dz * dz;
-        }));
-    }
-
-    /**
-     * 压缩尚未启用时按原版包滴灌。走 {@code connection.send}，不经过 {@code trackChunk} mixin。
-     */
-    private void drainVanillaPacedSends(ServerPlayer player, Set<Long> pending, ServerLevel level,
-                                        int maxPerTick) {
-        ChunkPos center = player.chunkPosition();
-        List<Long> ordered = new ArrayList<>(pending);
-        sortPackedKeysByDistance(ordered, center.x, center.z);
-        int sent = 0;
-        for (Long packed : ordered) {
-            if (sent >= maxPerTick) {
-                break;
-            }
-            int x = ChunkPos.getX(packed);
-            int z = ChunkPos.getZ(packed);
-            LevelChunk chunk = level.getChunkSource().getChunkNow(x, z);
-            if (chunk == null) {
-                continue;
-            }
-            ClientboundLevelChunkWithLightPacket packet;
-            try {
-                packet = new ClientboundLevelChunkWithLightPacket(chunk, level.getLightEngine(), null, null);
-            } catch (Exception e) {
-                Constants.LOG.error("Hassium: Failed to build paced vanilla chunk packet [{}, {}]", x, z, e);
-                continue;
-            }
-            player.connection.send(packet);
-            pending.remove(packed);
-            sent++;
-        }
-        if (pending.isEmpty()) {
-            pendingSends.remove(player.getUUID());
-            pendingSendDimension.remove(player.getUUID());
-        }
-    }
 
     /**
      * ROUND1 / Bloom 已上报且 miss、本会话尚未直推过：跳过主线程 hash，直接入队。
      * 直推仅此条件：Bloom 存在但不命中，且会话表无记录。
-     * Bloom 未就绪必须走 pushPool hash（R2 重连上报前）；hit 或会话复用同样走
-     * {@link #submitMetadataTaskFromChunk}。
+     * Bloom 未就绪必须走 pushPool hash（兼容旧客户端路径）；新客户端由 shadowPull 主动请求。
      */
     static boolean shouldDirectPushWithoutHash(boolean bloomMiss, Long lastSessionPushedHash) {
         return shouldDirectPushWithoutHash(bloomMiss, lastSessionPushedHash, true);
@@ -1378,57 +852,6 @@ public class ServerChunkPushManager {
     }
 
 
-    /**
-     * 每 tick 分批补发 resync 队列：每玩家最多 RESYNC_PER_TICK 个。
-     * 在主线程调用（getChunkNow 读世界区块）。
-     */
-    private void drainPendingResync(net.minecraft.server.MinecraftServer server) {
-        if (pendingResync.isEmpty()) {
-            return;
-        }
-        try {
-            for (ServerPlayer player : server.getPlayerList().getPlayers()) {
-                Deque<ResyncEntry> queue = pendingResync.get(player.getUUID());
-                if (queue == null || queue.isEmpty()) {
-                    continue;
-                }
-                ServerLevel level = PlayerCompat.getServerLevel(player);
-                if (level == null) {
-                    continue;
-                }
-                // 方案 A：客户端无缓存/Bloom，resync 无需等待，直接提交
-                int processed = 0;
-                int skipped = 0;
-                // skipped 计入 tick 配额：null 条目放回队尾后若仅约束 processed，
-                // 同 tick 内全 null 时会 poll→addLast 无限循环；processed+skipped 封顶保证有界。
-                while (!queue.isEmpty() && processed + skipped < RESYNC_PER_TICK) {
-                    ResyncEntry entry = queue.poll();
-                    // chunk 可能尚未生成（1.21.11 首次登录大部分区块未生成）或已被卸载；
-                    // getChunkNow 返回 null 时放回队尾，留待后续 tick 重试，避免永久丢弃补发
-                    LevelChunk chunk = level.getChunkSource().getChunkNow(entry.pos().x, entry.pos().z);
-                    if (chunk == null) {
-                        skipped++;
-                        queue.addLast(entry);
-                        continue;
-                    }
-                    submitMetadataTaskFromChunk(player, entry.pos(), chunk, entry.dimension());
-                    processed++;
-                }
-                if (processed > 0) {
-                    DebugLogger.info(LogType.CHUNK_APPLY,
-                            "Hassium: Resync drain for {} — submitted {}, skipped {}, remaining {}",
-                            player.getName().getString(), processed, skipped, queue.size());
-                }
-                if (queue.isEmpty()) {
-                    pendingResync.remove(player.getUUID());
-                }
-            }
-            // 清理已离线玩家的队列
-            pendingResync.keySet().removeIf(id -> server.getPlayerList().getPlayer(id) == null);
-        } catch (Exception e) {
-            Constants.LOG.error("Hassium: drainPendingResync failed", e);
-        }
-    }
 
     /**
      * 与原版 {@code ChunkMap.isChunkInRange} 一致的视距判定（圆柱近似）。
@@ -1450,8 +873,7 @@ public class ServerChunkPushManager {
         if (server == null) {
             return;
         }
-        if (!initialized.get() && pushQueues.isEmpty() && hashBatches.isEmpty()
-                && pendingResync.isEmpty() && pendingSends.isEmpty()) {
+        if (!initialized.get() && pushQueues.isEmpty() && hashBatches.isEmpty()) {
             return;
         }
         ensureInitialized();
@@ -1467,8 +889,6 @@ public class ServerChunkPushManager {
                 playerQueue.promoteOverflow();
             }
             long t0 = System.nanoTime();
-            drainPendingSends(player);
-            drainPendingNs += System.nanoTime() - t0;
             t0 = System.nanoTime();
             sealPlayerBatch(player);
             drainQueueNs += System.nanoTime() - t0;
@@ -1486,8 +906,6 @@ public class ServerChunkPushManager {
             }
         }
 
-        // 分批补发握手后 resync 队列（每 tick 最多 RESYNC_PER_TICK 个/玩家）
-        drainPendingResync(server);
 
         // 清理已离线玩家的批次
         hashBatches.keySet().removeIf(id -> server.getPlayerList().getPlayer(id) == null);
@@ -2698,35 +2116,6 @@ public class ServerChunkPushManager {
         }
     }
 
-    /**
-     * 丢弃玩家已不再 tracking 的柱的未封批任务、待命项和旧 pending 标记。
-     * Version-specific tracking hooks can call this when their mapped untrack callback is available.
-     */
-    public void discardUntrackedChunk(UUID playerId, String dimension, ChunkPos pos) {
-        if (playerId == null || dimension == null || pos == null) {
-            return;
-        }
-        long posLong = ChunkPos.asLong(pos.x, pos.z);
-        Set<Long> pending = pendingSends.get(playerId);
-        if (pending != null) {
-            pending.remove(posLong);
-        }
-        Map<Long, DeferredTask> deferred = deferredChunks.get(playerId);
-        if (deferred != null) {
-            deferred.remove(posLong);
-        }
-        PlayerPushQueue queue = pushQueues.get(playerId);
-        if (queue != null) {
-            queue.removeIf(task -> dimension.equals(task.dimension())
-                    && task.pos().x == pos.x && task.pos().z == pos.z);
-        }
-        Map<Long, PendingConfirm> confirms = pendingConfirms.get(playerId);
-        if (confirms != null) {
-            confirms.remove(posLong);
-        }
-        discardPreparedChunkPacket(playerId, pos);
-        forgetConfirmedHash(playerId, dimension, pos);
-    }
 
 
     /**
@@ -2743,18 +2132,12 @@ public class ServerChunkPushManager {
         pendingConfirms.remove(playerId);
         sessionConfirmedHashes.remove(playerId);
         preparedChunkPackets.remove(playerId);
-        pendingResync.remove(playerId);
-        pendingSends.remove(playerId);
-        pendingSendDimension.remove(playerId);
         deferredChunks.remove(playerId);
         initialPlayerChunkPos.remove(playerId);
         bloomLayers.remove(playerId);
         sessionPushedHashes.remove(playerId);
         resumePlayers.remove(playerId);
         playerStateReports.remove(playerId);
-        // review-fix: T3-52：能力表随玩家清理（防 per-player 表无界增长）
-        playerSeedGenSupported.remove(playerId);
-        playerShadowPullSupported.remove(playerId);
         playerLightComputeSupported.remove(playerId);
         seedGenDisabledPlayers.remove(playerId);
         seedGenFallbackCounts.remove(playerId);
@@ -2770,9 +2153,6 @@ public class ServerChunkPushManager {
         sessionConfirmedHashes.clear();
         hashBatches.clear();
         preparedChunkPackets.clear();
-        pendingResync.clear();
-        pendingSends.clear();
-        pendingSendDimension.clear();
         deferredChunks.clear();
         initialPlayerChunkPos.clear();
         resumePlayers.clear();

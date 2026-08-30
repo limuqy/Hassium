@@ -377,9 +377,8 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
     }
 
     /**
-     * L1 迁移入口（预热感知，REQ C 节）：ACTIVE → MIGRATING。预热启用时先建目标主控
-     * 玩家会话（位置上报 + resyncTrackedChunks，T12 服务端已落地），就绪后关旧 outbound
-     * 并接管预热连接（重叠切换：旧连接服务至预热就绪）；预热失败/禁用 → 直接续流连接。
+     * 玩家会话以位置上报建立；区块数据由目标主控的 shadowPull 请求链路按需返回，
+     * 就绪后关闭旧 outbound 并接管目标连接。
      */
     public void migrateTo(MigrationEndpoint endpoint) {
         if (!transition(NetworkCoreState.ACTIVE, NetworkCoreState.MIGRATING)) {

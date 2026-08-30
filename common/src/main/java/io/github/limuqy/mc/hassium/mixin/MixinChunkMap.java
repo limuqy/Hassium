@@ -3,6 +3,7 @@ package io.github.limuqy.mc.hassium.mixin;
 import io.github.limuqy.mc.hassium.compat.LevelCompat;
 import io.github.limuqy.mc.hassium.compat.ShadowChunkMapCompat;
 import io.github.limuqy.mc.hassium.network.seedgen.ShadowSeedServer;
+import io.github.limuqy.mc.hassium.network.PlayerCompressionTracker;
 import io.github.limuqy.mc.hassium.server.RuntimeServerContext;
 import java.util.concurrent.CompletableFuture;
 import net.minecraft.server.level.ServerLevel;
@@ -17,7 +18,6 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 #if MC_VER < MC_1_21_1
-import io.github.limuqy.mc.hassium.network.ServerChunkPushManager;
 import net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.level.ThreadedLevelLightEngine;
@@ -76,7 +76,7 @@ public class MixinChunkMap {
             LevelChunk chunk) {
         if (RuntimeServerContext.isShadowServerContext()
                 || player == null
-                || !ServerChunkPushManager.shouldPaceChunkSends()) {
+                || !PlayerCompressionTracker.isCompressionEnabled(player)) {
             return holder;
         }
         MutableObject<ClientboundLevelChunkWithLightPacket> isolated = new MutableObject<>();

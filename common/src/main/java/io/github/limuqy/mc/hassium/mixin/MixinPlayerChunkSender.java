@@ -1,8 +1,6 @@
 package io.github.limuqy.mc.hassium.mixin;
 
-import io.github.limuqy.mc.hassium.compat.LevelCompat;
-import io.github.limuqy.mc.hassium.network.ServerChunkPushManager;
-import io.github.limuqy.mc.hassium.network.gateway.GatewayServer;
+import io.github.limuqy.mc.hassium.network.PlayerCompressionTracker;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import net.minecraft.network.protocol.Packet;
 import net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket;
@@ -15,8 +13,8 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
- * 1.20.2+：拦截 {@code PlayerChunkSender.sendChunk}，对 Hassium 客户端发送元数据替代原版区块包。
- * <p>
+ * 1.20.2+：拦截 {@code PlayerChunkSender.sendChunk}，为 Hassium 客户端保留 shadowPull
+ * 的主动取数路径，同时让非 shadowPull 客户端继续走原版区块包发送。
  * 1.20.2 移除了 {@code ServerPlayer.trackChunk}，初始区块发送改走
  * {@code PlayerChunkSender.sendChunk}（private static）。此 Mixin 在 1.20.2+ 替代
  * {@link MixinServerPlayer} 的 trackChunk 注入。
@@ -46,7 +44,7 @@ public abstract class MixinPlayerChunkSender {
 
     /**
      * 源头定额：把原版 {@code sendNextChunks} 的 batch 钳到 {@code maxChunksPerTick}。
-     * 与压缩/网关会话无关；{@link #hassium$onChunkPacketSend} 仍按会话决定是否改走元数据。
+     * 与压缩/网关会话无关；shadowPull 客户端由主动取数路径接管区块数据。
      */
     @Inject(method = "sendNextChunks", at = @At("HEAD"))
     private void hassium$capSourceRate(ServerPlayer player, CallbackInfo ci) {
@@ -77,42 +75,20 @@ public abstract class MixinPlayerChunkSender {
     }
 
     /**
-     * 截获原版已构造的首个 level-chunk packet。Hassium 客户端复用此快照计算 hash/编码，
-     * 只原地替换 light payload；不再从 {@link net.minecraft.world.level.chunk.LevelChunk} 重建。
+     * 截获原版已构造的首个 level-chunk packet：Hassium 客户端统一由 shadowPull 主动取数，
+     * 其他客户端原样交回原版发送路径。
      */
     @org.spongepowered.asm.mixin.injection.Redirect(method = "sendChunk",
             at = @At(value = "INVOKE",
                     target = "Lnet/minecraft/server/network/ServerGamePacketListenerImpl;send(Lnet/minecraft/network/protocol/Packet;)V",
                     ordinal = 0))
     private static void hassium$onChunkPacketSend(ServerGamePacketListenerImpl listener, Packet<?> packet) {
-        if (!(packet instanceof ClientboundLevelChunkWithLightPacket chunkPacket)) {
-            listener.send(packet);
+        if (packet instanceof ClientboundLevelChunkWithLightPacket
+                && PlayerCompressionTracker.isCompressionEnabled(listener.getPlayer())) {
             return;
         }
-        ServerPlayer player = listener.getPlayer();
-        // shadowPullV1 客户端由客户端 loader 主动取数，旧 admission 不得重复发送。
-        if (ServerChunkPushManager.getInstance().isPlayerShadowPullSupported(player.getUUID())) {
-            return;
-        }
-        if (GatewayServer.getInstance().registry().get(player.getUUID()) == null) {
-            listener.send(packet);
-            return;
-        }
-
-        ChunkPos pos = new ChunkPos(chunkPacket.getX(), chunkPacket.getZ());
-        String dimension = LevelCompat.getDimensionId(player.level());
-        ServerChunkPushManager.getInstance().submitMetadataTask(player, pos, chunkPacket, dimension);
-        // 不调用 listener.send：自有 hash/full 路径取代这份原版区块包。
+        listener.send(packet);
     }
 
-    /** PlayerChunkSender.dropChunk 是 1.20.2+ 的精确 tracking-view 移除回调。 */
-    @Inject(method = "dropChunk", at = @At("HEAD"))
-    private void hassium$onDropChunk(ServerPlayer player, ChunkPos pos, CallbackInfo ci) {
-        if (GatewayServer.getInstance().registry().get(player.getUUID()) == null) {
-            return;
-        }
-        String dimension = LevelCompat.getDimensionId(player.level());
-        ServerChunkPushManager.getInstance().discardUntrackedChunk(player.getUUID(), dimension, pos);
-    }
 #endif
 }

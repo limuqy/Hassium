@@ -45,10 +45,8 @@ import java.util.function.Supplier;
  *       为后续波）。</li>
  * </ul>
  *
- * <p><b>编排</b>：{@link #prewarm}（策略路径）→ 目标主控会话先建（PrewarmSession 携
- * 续流票据握手 → B 侧物化 + resyncTrackedChunks）→ {@link #takePrewarm} 接管；
- * 故障路径不预热，直接 {@link NetworkCore#migrateToImmediate}。票据 epoch 进程生命周期
- * 单调递增（各主控 validator 表跨会话不清理，恒递增防重放）。
+ * <p><b>编排</b>：{@code prewarm} 建立目标主控会话并携带续流票据；目标侧
+ * 通过 shadowPull 按需返回区块，完成后 {@code takePrewarm} 接管连接。
  *
  * <p><b>UDP 会话迁移决策（记录）</b>：帧连接即控制连接（T12 udpTail 恒
  * {@code udpSupported=false}、epoch=0），beginControlConnection 不参与；UDP 数据面
@@ -577,8 +575,7 @@ public final class MigrationEngine {
     }
 
     /**
-     * 启动预热（策略路径）：连接目标主控 + 续流票据握手（B 侧物化 + resyncTrackedChunks
-     * 预同步）。已在飞（同端点未 ready）→ 返回既有会话；不同端点/陈旧 → 关闭重建。
+     * 启动预热：连接目标主控并以续流票据建立玩家会话；区块由 shadowPull 按需同步。
      * 完成后经 {@link #takePrewarm} 由迁移发起方接管。
      */
     public PrewarmSession prewarm(MigrationEndpoint endpoint, PrewarmSession.Callback callback) {

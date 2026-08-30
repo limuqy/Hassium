@@ -338,22 +338,16 @@ public final class PacketCodecCompat {
 #endif
     }
 
-#if MC_VER < MC_1_21_5
+#if MC_VER >= MC_1_21_1 && MC_VER < MC_1_21_5
     /**
-     * 1.20.5–1.20.6：{@code GameProtocols.CLIENTBOUND/SERVERBOUND}
-     * 1.21.1–1.21.4：{@code CLIENTBOUND_TEMPLATE/SERVERBOUND_TEMPLATE}（仍为 {@code ProtocolInfo.Unbound}）
+     * 1.21.1–1.21.4：{@code GameProtocols.CLIENTBOUND_TEMPLATE/SERVERBOUND_TEMPLATE}
+     * 仍通过 {@code ProtocolInfo.Unbound} 绑定。
      */
     @SuppressWarnings({"rawtypes", "unchecked"})
     private static net.minecraft.network.ProtocolInfo.Unbound playUnbound(PacketFlow flow) {
-#if MC_VER < MC_1_21_1
-        return flow == PacketFlow.CLIENTBOUND
-                ? net.minecraft.network.protocol.game.GameProtocols.CLIENTBOUND
-                : net.minecraft.network.protocol.game.GameProtocols.SERVERBOUND;
-#else
         return flow == PacketFlow.CLIENTBOUND
                 ? net.minecraft.network.protocol.game.GameProtocols.CLIENTBOUND_TEMPLATE
                 : net.minecraft.network.protocol.game.GameProtocols.SERVERBOUND_TEMPLATE;
-#endif
     }
 #endif
 

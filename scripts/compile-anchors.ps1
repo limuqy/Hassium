@@ -90,26 +90,19 @@ foreach ($ver in $Anchors) {
     }
     $loaders = $buildsFor.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ }
 
-    $tasks = @()
     foreach ($loader in $loaders) {
-        $tasks += ":${loader}:compileJava"
-    }
-
-    Write-Host "`n=== Anchor $ver ($($loaders -join ',')) ===" -ForegroundColor Cyan
-    Assert-NoForeignLoomLock
-
-    # PowerShell 会拆开 1.20.1，必须给 -P 参数加引号；勿加 --no-daemon
-    & $Gradlew @tasks "-Pmc_ver=$ver" --console=plain
-    $code = $LASTEXITCODE
-
-    # 无论成败都释放 Daemon / loom 锁，再进下一锚点
-    Stop-GradleDaemons
-
-    if ($code -ne 0) {
-        $failed += "$ver"
-        Write-Host "FAILED: $ver (exit $code)" -ForegroundColor Red
-    } else {
-        Write-Host "OK: $ver" -ForegroundColor Green
+        Write-Host "`n--- $ver / $loader ---" -ForegroundColor DarkCyan
+        # 每个 loader 独立 Gradle invocation，避免同一 daemon 在 common:compileJava
+        # 绑定前一个 loader 的 Loom classpath，导致 Manifold 版本条件错配。
+        & $Gradlew ":${loader}:compileJava" "-Pmc_ver=$ver" --console=plain
+        $code = $LASTEXITCODE
+        Stop-GradleDaemons
+        if ($code -ne 0) {
+            $failed += "$ver/$loader"
+            Write-Host "FAILED: $ver/$loader (exit $code)" -ForegroundColor Red
+        } else {
+            Write-Host "OK: $ver/$loader" -ForegroundColor Green
+        }
     }
 }
 

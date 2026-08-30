@@ -128,7 +128,6 @@ public class NeoForgeNetworkManager implements NetworkManager {
             ZstdNegotiationTracker.markNegotiated(channel);
             sendDictionarySyncPacket(player);
             sendIndexSyncPacket(player);
-            ServerChunkPushManager.getInstance().resyncTrackedChunks(player);
             if (connection != null) {
                 HassiumConnectionRegistry.markPending(connection);
                 HassiumAggregationManager.init();
@@ -1484,10 +1483,6 @@ public class NeoForgeNetworkManager implements NetworkManager {
         CHANNEL.sendTo(response, player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
         LOGGER.info("Hassium: Server handshake for {}: accepted={}, globalCompression={}, compactHeader={}",
                 player.getName().getString(), accepted, useGlobalCompression, useCompactHeader);
-        // globalCompression=false 时不会走 ZSTD ready→Dict/Index 路径，直接补发 chunkHash
-        if (accepted && !useGlobalCompression) {
-            ServerChunkPushManager.getInstance().resyncTrackedChunks(player);
-        }
     }
 
     private void handleHandshakeResponseSimple(HandshakeResponseWrapper msg) {
@@ -1656,7 +1651,7 @@ public class NeoForgeNetworkManager implements NetworkManager {
         registrar.playToClient(BlockEntityDataPayload.TYPE, BlockEntityDataPayload.STREAM_CODEC,
                 NeoForgeNetworkManager::handleBlockEntityDataS2C);
         registrar.playToClient(ShadowPullResponsePayload.TYPE, ShadowPullResponsePayload.STREAM_CODEC,
-                (payload, context) -> { });
+                NeoForgeNetworkManager::handleShadowPullResponse);
 
         // LightDelta S2C（方案 A：客户端不消费，no-op 标记已处理）
         registrar.playToClient(LightDeltaPayload.TYPE, LightDeltaPayload.STREAM_CODEC,
@@ -1750,10 +1745,6 @@ public class NeoForgeNetworkManager implements NetworkManager {
                 player.connection.send(response);
                 LOGGER.info("Hassium: Server handshake for {}: accepted={}, globalCompression={}, compactHeader={}",
                         player.getName().getString(), accepted, useGlobalCompression, useCompactHeader);
-                // globalCompression=false 时不会走 ZSTD ready→Dict/Index 路径，直接补发 chunkHash
-                if (accepted && !useGlobalCompression) {
-                    ServerChunkPushManager.getInstance().resyncTrackedChunks(player);
-                }
             }
         });
     }
@@ -1772,24 +1763,56 @@ public class NeoForgeNetworkManager implements NetworkManager {
             }
         });
     }
+
+    private static void handleShadowPullResponse(ShadowPullResponsePayload payload, IPayloadContext context) {
+        context.enqueueWork(() -> {
+            FriendlyByteBuf buf = null;
+            try {
+                if (payload == null || payload.data() == null) {
+                    throw new IllegalArgumentException("shadowPullV1 response payload is null");
+                }
+                buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(payload.data()));
+                ShadowPullResponseS2CPacket response = ShadowPullResponseS2CPacket.decode(buf);
+                ShadowChunkLoaderRuntime.handleResponse(response);
+            } catch (Exception e) {
+                LOGGER.error("[CLIENT] Failed to handle shadowPullV1 response", e);
+            } finally {
+                if (buf != null) {
+                    buf.release();
+                }
+            }
+        });
+    }
     private static void handleShadowPullRequest(ShadowPullRequestPayload payload, IPayloadContext context) {
         context.enqueueWork(() -> {
             if (!(context.player() instanceof ServerPlayer player)) {
                 return;
             }
+            FriendlyByteBuf buf = null;
+            FriendlyByteBuf out = null;
             try {
-                FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(payload.data()));
+                if (payload == null || payload.data() == null) {
+                    throw new IllegalArgumentException("shadowPullV1 request payload is null");
+                }
+                buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(payload.data()));
                 ShadowPullRequestC2SPacket request = ShadowPullRequestC2SPacket.decode(buf);
                 ShadowPullResponseS2CPacket response = SHADOW_PULL_HANDLER.handle(player.getUUID(), request,
                         request.dimension(), request.epoch(), 0, 0, 0,
                         false, false, entry -> null);
-                FriendlyByteBuf out = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
+                out = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
                 response.encode(out);
                 byte[] data = new byte[out.readableBytes()];
                 out.readBytes(data);
                 sendServerPayload(player, new ShadowPullResponsePayload(data));
             } catch (Exception e) {
                 LOGGER.warn("[SERVER] Failed to handle shadowPullV1 request", e);
+            } finally {
+                if (buf != null) {
+                    buf.release();
+                }
+                if (out != null) {
+                    out.release();
+                }
             }
         });
     }

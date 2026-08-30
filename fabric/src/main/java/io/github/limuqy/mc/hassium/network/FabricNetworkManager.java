@@ -610,12 +610,6 @@ SHADOW_PULL_RESPONSE_S2C = ResourceLocationCompat.vanilla(HassiumChannels.SHADOW
         LOGGER.info("Hassium: Server handshake for {}: accepted={}, globalCompression={}, compactHeader={}",
                 player.getName().getString(), accepted, useGlobalCompression, useCompactHeader);
 
-        // globalCompression=false 时不会走 CompressionReady→enableAggregation 路径，
-        // 必须在此补发视距内 chunkHash，否则握手前 trackChunk 放行的原版包永不进入缓存主链路，
-        // 客户端 stats 带宽/区块缓存长期为 0。
-        if (accepted && !useGlobalCompression) {
-            ServerChunkPushManager.getInstance().resyncTrackedChunks(player);
-        }
     }
 
     /**
@@ -651,7 +645,6 @@ SHADOW_PULL_RESPONSE_S2C = ResourceLocationCompat.vanilla(HassiumChannels.SHADOW
             return;
         }
         HassiumConnectionRegistry.markPending(connection);
-        ServerChunkPushManager.getInstance().resyncTrackedChunks(player);
         HassiumAggregationManager.init();
         DebugLogger.debug(LogType.NETWORK,
                 "Hassium: Marked connection as PENDING for player {}", player.getName().getString());
@@ -807,8 +800,6 @@ SHADOW_PULL_RESPONSE_S2C = ResourceLocationCompat.vanilla(HassiumChannels.SHADOW
             ServerChunkPushManager.getInstance().setPlayerLightComputeSupported(player.getUUID(), lightComputeSupported);
             // T7 状态尾部（append-only；旧客户端无此字段 → null）
             HandshakeStateTail.C2S stateTail = HandshakeStateTail.readC2S(buf);
-            ServerChunkPushManager.getInstance().setPlayerShadowPullSupported(player.getUUID(),
-                    stateTail != null && stateTail.shadowPullSupported());
             DebugLogger.debug(LogType.NETWORK,
                     "[HANDSHAKE] Details from {}: protocol={}, modVersion={}, algorithms={}, clientCache={}, globalCompression={}, compactHeader={}",
                     player.getName().getString(), protocolVersion, modVersion, String.join(", ", algorithms),
@@ -898,8 +889,6 @@ SHADOW_PULL_RESPONSE_S2C = ResourceLocationCompat.vanilla(HassiumChannels.SHADOW
                 ServerChunkPushManager.getInstance().setPlayerLightComputeSupported(player.getUUID(), lightComputeSupported);
                 // T7 状态尾部（append-only；旧客户端无此字段 → null）
                 HandshakeStateTail.C2S stateTail = HandshakeStateTail.readC2S(buf);
-                ServerChunkPushManager.getInstance().setPlayerShadowPullSupported(player.getUUID(),
-                        stateTail != null && stateTail.shadowPullSupported());
                 DebugLogger.debug(LogType.NETWORK,
                         "[HANDSHAKE] Details from {}: protocol={}, modVersion={}, algorithms={}, clientCache={}, globalCompression={}, compactHeader={}",
                         player.getName().getString(), protocolVersion, modVersion, String.join(", ", algorithms),
@@ -1005,7 +994,7 @@ SHADOW_PULL_RESPONSE_S2C = ResourceLocationCompat.vanilla(HassiumChannels.SHADOW
                     ShadowPullResponseS2CPacket response = new ShadowPullHandler(new ShadowPullRequestLedger()).handle(
                             player.getUUID(), request, dimension, request.epoch(), player.chunkPosition().x,
                             player.chunkPosition().z, io.github.limuqy.mc.hassium.compat.PlayerCompat.getViewDistance(player) + 1,
-                            ServerChunkPushManager.getInstance().isPlayerShadowPullSupported(player.getUUID()),
+                            true,
                             player.isAlive() && !player.hasDisconnected(),
                             entry -> ServerChunkPushManager.getInstance().resolveShadowPull(player, entry, dimension));
                     FriendlyByteBuf out = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
@@ -1027,7 +1016,7 @@ SHADOW_PULL_RESPONSE_S2C = ResourceLocationCompat.vanilla(HassiumChannels.SHADOW
                     ShadowPullResponseS2CPacket response = new ShadowPullHandler(new ShadowPullRequestLedger()).handle(
                             player.getUUID(), request, dimension, request.epoch(), player.chunkPosition().x,
                             player.chunkPosition().z, io.github.limuqy.mc.hassium.compat.PlayerCompat.getViewDistance(player) + 1,
-                            ServerChunkPushManager.getInstance().isPlayerShadowPullSupported(player.getUUID()),
+                            true,
                             player.isAlive() && !player.hasDisconnected(),
                             entry -> ServerChunkPushManager.getInstance().resolveShadowPull(player, entry, dimension));
                     FriendlyByteBuf out = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());

@@ -114,10 +114,8 @@ public class ClientMetadataHandler {
 
     /**
      * 首登过渡窗口缓冲：SEED_REF 帧。
-     * <p>
-     * 服务端 login bridge 完成后（finishLoginBridge → resyncTrackedChunks）立即发
-     * SeedRef/chunkHash，但客户端 {@code mc.level}/{@code mc.player} 要等到
-     * player entered world 才非空——早退 return 会把这些帧静默丢弃，seedgen/hash
+     * 服务端 login bridge 完成后客户端由 shadowPull runtime 主动请求区块；
+     * SeedRef/其它业务元数据仍按各自队列等待 world 就绪。
      * 驱动的区块加载永不启动。此处 Netty 线程入队，客户端主线程每 tick 由
      * {@link #drainPendingOnWorldReady()} 在 world 就绪后重放。
      * <p>

@@ -283,7 +283,10 @@ def analyze_result(result: dict[str, Any], root: Path) -> dict[str, Any]:
             if disk.get("shadowRegionExists") is not None and (not disk.get("shadowRegionExists") or (_num(disk.get("regionFileCount")) or 0) <= 0):
                 failures.append(_failure("SHADOW_REGION_MISSING", round=number))
             full_metrics = {name: _num(stats.get(name)) or 0 for name in full_names}
-            if any(value > 0 for value in full_metrics.values()):
+            cache_hits = _num(stats.get("cacheHitFullChunkCount")) or 0
+            # shadowPullV1 仍可能保留 1 个原版首登请求；只在没有任何缓存命中时
+            # 判定 Round2 退化为全量传输，避免误杀新管线的正常首包。
+            if cache_hits <= 0 and any(value > 0 for value in full_metrics.values()):
                 failures.append(_failure("R2_FULL_CHUNK_TRANSFER", round=number, metrics=full_metrics))
 
     if scenario == "classic" and not bool(result.get("ServerSwitched")):

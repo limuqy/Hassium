@@ -1,12 +1,8 @@
 package io.github.limuqy.mc.hassium.mixin;
 
 import com.mojang.authlib.GameProfile;
-import io.github.limuqy.mc.hassium.compat.LevelCompat;
 import io.github.limuqy.mc.hassium.network.PlayerCompressionTracker;
-import io.github.limuqy.mc.hassium.network.ServerChunkPushManager;
 import io.github.limuqy.mc.hassium.network.ServerGatewayInfoSender;
-import io.github.limuqy.mc.hassium.utils.DebugLogger;
-import io.github.limuqy.mc.hassium.utils.DebugLogger.LogType;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.protocol.Packet;
 import net.minecraft.server.level.ServerPlayer;
@@ -52,39 +48,13 @@ public abstract class MixinServerPlayer extends Player {
     }
 
 #if MC_VER < MC_1_21_1
-    /**
-     * 拦截 trackChunk：1.20.1 无 {@code PlayerChunkSender}，原版会对已加载视距一窝蜂调用。
-     * 专用服只登记 pending（与压缩无关），由 tick 按 {@code maxChunksPerTick} 定额 drain。
-     * 区块更新广播仍由 {@link MixinChunkHolder#hassium$onBroadcast} 拦截。
-     */
+    /** 1.20.1：Hassium 客户端统一由 shadowPull 主动取数，阻止原版主动发送。 */
     @Inject(method = "trackChunk", at = @At("HEAD"), cancellable = true)
     private void hassium$onTrackChunk(ChunkPos pos, Packet<?> chunkPacket, CallbackInfo ci) {
         ServerPlayer self = (ServerPlayer) (Object) this;
-        if (!ServerChunkPushManager.shouldPaceChunkSends()) {
-            return;
+        if (PlayerCompressionTracker.isCompressionEnabled(self)) {
+            ci.cancel();
         }
-
-        DebugLogger.info(LogType.NETWORK, "[TRACK_CHUNK] Player {} tracking chunk {} (paced)",
-                self.getName().getString(), pos);
-
-        String dimension = LevelCompat.getDimensionId(self.level());
-        ServerChunkPushManager.getInstance().markChunkPendingToSend(self, pos, dimension);
-
-        ci.cancel();
-    }
-
-    /**
-     * 1.20.1 无 {@code PlayerChunkSender.dropChunk}：vanilla {@code untrackChunk} 是 tracking-view
-     * 移除的对称回调，必须清除已出界柱的未封批任务和待命项。
-     */
-    @Inject(method = "untrackChunk", at = @At("HEAD"))
-    private void hassium$onUntrackChunk(ChunkPos pos, CallbackInfo ci) {
-        ServerPlayer self = (ServerPlayer) (Object) this;
-        if (!ServerChunkPushManager.shouldPaceChunkSends()) {
-            return;
-        }
-        String dimension = LevelCompat.getDimensionId(self.level());
-        ServerChunkPushManager.getInstance().discardUntrackedChunk(self.getUUID(), dimension, pos);
     }
 #endif
 }

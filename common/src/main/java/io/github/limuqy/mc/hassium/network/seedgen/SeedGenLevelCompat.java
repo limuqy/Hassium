@@ -26,18 +26,17 @@ import net.minecraft.server.WorldLoader;
 import net.minecraft.server.WorldStem;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.packs.repository.PackRepository;
-#if MC_VER < MC_1_21_1
 import net.minecraft.server.packs.repository.ServerPacksSource;
+#if MC_VER >= MC_1_21_1
+import net.minecraft.world.level.validation.DirectoryValidator;
+#endif
+#if MC_VER < MC_1_21_1
+import net.minecraft.server.level.progress.ChunkProgressListenerFactory;
+import net.minecraft.server.level.progress.LoggerChunkProgressListener;
+#elif MC_VER < MC_1_21_9
 import net.minecraft.server.level.progress.ChunkProgressListenerFactory;
 import net.minecraft.server.level.progress.LoggerChunkProgressListener;
 #else
-import net.minecraft.server.packs.repository.ServerPacksSource;
-import net.minecraft.world.level.validation.DirectoryValidator;
-#endif
-#if MC_VER >= MC_1_21_1 && MC_VER < MC_1_21_9
-import net.minecraft.server.level.progress.ChunkProgressListenerFactory;
-import net.minecraft.server.level.progress.LoggerChunkProgressListener;
-#elif MC_VER >= MC_1_21_9
 import net.minecraft.server.level.progress.LoggingLevelLoadListener;
 #endif
 #if MC_VER >= MC_1_21_11
