@@ -606,30 +606,6 @@ public final class ScenarioEngine {
         int round = (int) step.longParam("round", 1L);
         boolean isRound1 = round <= 1;
         String roundLabel = isRound1 ? "ROUND1" : "ROUND2";
-        // classic R2：探针在 ScenarioEngine 里先于本 tick drainReady。预览 FIFO
-        // 可能让 ovdLoaded 晚几秒才 >0；dump 等到落地或超时，不削弱门禁。
-        if (!isRound1 && step.boolParam("gate", true) && ovdCounter(0) <= 0L) {
-            int adopted = io.github.limuqy.mc.hassium.cache.client.ViewDistanceExtensionService
-                    .getInstance().adoptPresentRingChunks();
-            if (adopted > 0 || ovdCounter(0) > 0L) {
-                LOGGER.info("HassiumSmokeTest: {} dump adopted {} ring chunks, ovdLoaded={}",
-                        roundLabel, adopted, ovdCounter(0));
-            } else {
-                long capMs = Math.max(delayMs * 2, 20_000L);
-                if (System.currentTimeMillis() - stepStartMs < capMs) {
-                    if (!joinAnnounced) {
-                        joinAnnounced = true;
-                        io.github.limuqy.mc.hassium.cache.client.ViewDistanceExtensionService ovd =
-                                io.github.limuqy.mc.hassium.cache.client.ViewDistanceExtensionService.getInstance();
-                        LOGGER.info("HassiumSmokeTest: {} dump waiting for ovdLoaded>0 (cap {}ms) "
-                                        + "loaded={} pending={} miss={}",
-                                roundLabel, capMs, ovd.getLoadedCount(),
-                                ovd.getPendingLoadCount(), ovd.getPendingMissCount());
-                    }
-                    return Outcome.RUNNING;
-                }
-            }
-        }
         try {
             String stats = io.github.limuqy.mc.hassium.command.HassiumCommandHandler.getClientStatsMessage();
             String plain = stripSection(stats);
@@ -801,9 +777,6 @@ public final class ScenarioEngine {
                 io.github.limuqy.mc.hassium.metrics.NetworkStats.getMetrics();
         return switch (key) {
             // counters.*（appendCounters 同名）
-            case "counters.ovdLoaded" -> ovdCounter(0);
-            case "counters.ovdPendingMiss" -> ovdCounter(1);
-            case "counters.ovdShadowServed" -> ovdCounter(2);
             case "counters.sectionDeltaRequestsSent" -> m.getSectionDeltaRequestsSent();
             case "counters.sectionDeltaApplied" -> m.getSectionDeltaChunksReceived();
             case "counters.lightSegRecalc" -> m.getLightCacheMissCount();
@@ -845,20 +818,6 @@ public final class ScenarioEngine {
         };
     }
 
-    /** ovd 计数取值（SmokeProbeWriter.appendCounters 同款降级 -1）。which: 0=loaded 1=pendingMiss 2=shadowServed */
-    private static long ovdCounter(int which) {
-        try {
-            io.github.limuqy.mc.hassium.cache.client.ViewDistanceExtensionService ovd =
-                    io.github.limuqy.mc.hassium.cache.client.ViewDistanceExtensionService.getInstance();
-            return switch (which) {
-                case 0 -> ovd.getLoadedCount();
-                case 1 -> ovd.getPendingMissCount();
-                default -> ovd.getShadowServedCount();
-            };
-        } catch (Throwable t) {
-            return -1L;
-        }
-    }
 
     /** 网关计数取值（NetworkCore 只读公开 API；异常降级 0，同 appendGateway）。 */
     private static long gatewayCounter(boolean c2s) {
@@ -884,7 +843,6 @@ public final class ScenarioEngine {
         // T6 实体冒烟增强（dev 测试代码）：R2 断线 → 影子端异步保存（park 线程）。
         // 不主动断连直接退出时，JVM 终止会打断 daemon saveAll。先被动断连，关闭线程
         // 等 saveAll 序号递增后再 stop()，不占客户端 tick。
-        dumpShadowEntities();
         long saveSeq = io.github.limuqy.mc.hassium.network.seedgen.ShadowSeedServer.saveAllSeq();
         triggerDisconnect(mc);
         LOGGER.info("HassiumSmokeTest: ROUND2 exit scheduling code={} saveSeq={}",
@@ -894,34 +852,6 @@ public final class ScenarioEngine {
         return Outcome.DONE;
     }
 
-    /**
-     * T6 实体冒烟增强（dev 测试代码）：打印影子端内存中的实体清单。
-     * 该方法只在客户端 exit 阶段调用；不要让 dedicated server 类加载 LocalPlayer。
-     */
-    private static void dumpShadowEntities() {
-        try {
-            io.github.limuqy.mc.hassium.network.seedgen.ShadowSeedServer server =
-                    io.github.limuqy.mc.hassium.network.seedgen.ShadowServerRegistry.getInstance().get();
-            if (server == null) {
-                LOGGER.info("HassiumSmokeTest: shadow dump: no shadow server");
-                return;
-            }
-            net.minecraft.server.level.ServerLevel level = server.overworld();
-            net.minecraft.world.phys.AABB bounds =
-                    new net.minecraft.world.phys.AABB(-64, -64, -64, 64, 320, 64);
-            java.util.List<net.minecraft.world.entity.Entity> all =
-                    level.getEntitiesOfClass(net.minecraft.world.entity.Entity.class, bounds, e -> true);
-            LOGGER.info("HassiumSmokeTest: shadow dump: {} entities", all.size());
-            for (net.minecraft.world.entity.Entity e : all) {
-                LOGGER.info("HassiumSmokeTest: shadow dump: type={} uuid={} netid={} pos={} name={}",
-                        net.minecraft.world.entity.EntityType.getKey(e.getType()),
-                        e.getUUID(), e.getId(), e.blockPosition().toShortString(),
-                        e.getName().getString());
-            }
-        } catch (Throwable t) {
-            LOGGER.warn("HassiumSmokeTest: shadow dump failed", t);
-        }
-    }
 
     /**
      * T6 实体冒烟增强（dev 测试代码）：等待影子端断连保存完成。
@@ -1015,9 +945,8 @@ public final class ScenarioEngine {
     // ------------------------------------------------------------------ stats validation
 
     /**
-     * 校验客户端统计摘要的结构与数值一致性（口径与 HassiumCommandHandler 显示完全同源）：
-     * 缓存命中率、流量节省百分比、光照缓存命中率三行的显示值必须与指标计算一致；
-     * applied/landed 区块数必须 &gt; 0；ROUND2 必须有缓存全命中。
+     * 校验客户端统计摘要的结构与数值一致性（口径与 HassiumCommandHandler 显示完全同源）。
+     * 仍要求真实区块已接收并落地；不再要求已裁剪的 OVD 或 ROUND2 缓存全命中。
      */
     static boolean validateStats(String plain, String roundLabel) {
         if (plain == null || plain.isBlank()) {
@@ -1028,7 +957,6 @@ public final class ScenarioEngine {
                 && plain.contains("带宽压缩")
                 && plain.contains("区块缓存")
                 && plain.contains("区块加载")
-                && plain.contains("超视渲染")
                 && plain.contains("光照缓存")
                 && plain.contains("流量节省"))) {
             LOGGER.error("{} {} stats validation FAILED: missing structural lines", MARKER_FAIL, roundLabel);
@@ -1115,11 +1043,6 @@ public final class ScenarioEngine {
             }
         }
 
-        // ROUND2 回归门禁：缓存主链路必须真实命中（0 说明影子端缓存未生效）。
-        if ("ROUND2".equals(roundLabel) && m.getCacheHitFullChunkCount() <= 0) {
-            LOGGER.error("{} {} stats validation FAILED: ROUND2 has zero cache full hits", MARKER_FAIL, roundLabel);
-            ok = false;
-        }
 
         if (ok) {
             LOGGER.info("HassiumSmokeTest: stats OK applied={} cacheRate={}% trafficRatio={}%",

@@ -11,12 +11,7 @@ public interface IClientChunkApplier {
 
 
     /**
-     * 从FriendlyByteBuf格式的数据将区块应用到客户端世界
-     *
-     * @param level      客户端世界实例
-     * @param pos        区块坐标
-     * @param buf        FriendlyByteBuf格式的区块数据包数据
-     * @param renderOnly true=仅渲染不参与逻辑tick, false=完全加载
+     * 从 FriendlyByteBuf 格式的数据将区块应用到客户端世界。
      */
-    void applyToLevelFromByteBuf(ClientLevel level, ChunkPos pos, FriendlyByteBuf buf, boolean renderOnly);
+    void applyToLevelFromByteBuf(ClientLevel level, ChunkPos pos, FriendlyByteBuf buf);
 }

@@ -14,10 +14,6 @@ public interface NetworkManager {
      */
     void registerChannels();
 
-    /**
-     * 发送区块数据请求到服务端（客户端调用）
-     */
-    void sendChunkDataRequest(FriendlyByteBuf buf);
     /** 发送 shadowPullV1 区块请求到服务端（客户端调用）。 */
     default void sendShadowPullRequest(FriendlyByteBuf buf) {
         if (buf != null && buf.refCnt() > 0) {
@@ -35,10 +31,6 @@ public interface NetworkManager {
     default void sendCompressedPayload(CompressedPayloadPacket packet) {
     }
 
-    /**
-     * 发送区块哈希广播到客户端（阶段一，服务端调用）
-     */
-    void sendChunkHashPacket(ServerPlayer player, FriendlyByteBuf buf);
 
     /**
      * 发送 SeedRef（SeedGen 区块引用）到客户端（服务端调用）
@@ -73,13 +65,5 @@ public interface NetworkManager {
      */
     void sendLightDeltaPacket(ServerPlayer player, FriendlyByteBuf buf);
 
-    /**
-     * 发送客户端影子端存档 Bloom 位图同步包到服务端（客户端调用）。
-     * default no-op：影子端 bloom 同步仅 fabric 1.20.1 闭环覆盖（Service 层
-     * {@code INetworkManagerService#sendClientBloomSync} default 语义一致），
-     * forge/neoforge 版本推广时补实现。
-     */
-    default void sendClientBloomSync(FriendlyByteBuf buf) {
-    }
 
 }

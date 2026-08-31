@@ -44,7 +44,7 @@ public final class ClientChunkPipeline {
     private volatile long serverSeed = 0L;
     private volatile byte[] serverLevelStemNbt = null;
     private volatile boolean serverSeedGenEnabled = false;
-
+    private volatile boolean serverSeedAvailable = false;
     // === 影子端状态（非网络向功能总开关） ===
     /** 服务端已装 Hassium MOD（能力握手响应到达；setServerSeedInfo 调用点 = 三加载器握手解码）。 */
     private volatile boolean hassiumHandshakeDone = false;
@@ -117,7 +117,6 @@ public final class ClientChunkPipeline {
     public void resetStorage() {
         pendingContentHashes.clear();
         pendingSectionHashes.clear();
-        ShadowChunkLoaderRuntime.reset();
         serverSeed = 0L;
         serverLevelStemNbt = null;
         serverSeedGenEnabled = false;
@@ -133,6 +132,7 @@ public final class ClientChunkPipeline {
         this.serverSeed = seed;
         this.serverLevelStemNbt = levelStemNbt;
         this.serverSeedGenEnabled = enabled;
+        this.serverSeedAvailable = enabled && levelStemNbt != null && levelStemNbt.length > 0;
         this.hassiumHandshakeDone = true; // 握手响应到达 = 服务端已装 Hassium MOD
         try {
             io.github.limuqy.mc.hassium.cache.client.ClientLifecycleHelper.startShadowIfConfigured();
@@ -203,9 +203,13 @@ public final class ClientChunkPipeline {
         return serverLevelStemNbt;
     }
 
+    /** 服务端明确下发真实 seed 与 LevelStem 后才允许本地生成。 */
     /** 服务端是否启用 SeedGen（握手下发）。 */
     public boolean isServerSeedGenEnabled() {
         return serverSeedGenEnabled;
+    }
+    public boolean isServerSeedAvailable() {
+        return serverSeedAvailable;
     }
 
     /**

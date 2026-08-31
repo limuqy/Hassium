@@ -94,7 +94,7 @@ flowchart TD
 固定顺序：
 
 ```
-flushClientUntil(帧预算)   →  MainThreadDispatcher 出队（区块/实体/BE）
+flushClientUntil(帧预算)   →  MainThreadDispatcher 出队（区块/BE）
 ShadowLightCompute.drainReady()   →  影子端算好的光/区块批量落地（官方 handler）
 ShadowLightCompute.drainLightMasks() →  in-flight 柱暂缓，其余光更新攒批入队
 ```

@@ -1,21 +1,13 @@
 package io.github.limuqy.mc.hassium.network.core;
 
 import io.github.limuqy.mc.hassium.concurrent.MainThreadDispatcher;
-import io.github.limuqy.mc.hassium.network.ClientMetadataHandler;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientPacketListener;
 import net.minecraft.network.protocol.game.ClientGamePacketListener;
 import net.minecraft.network.protocol.login.ClientLoginPacketListener;
 import net.minecraft.network.PacketListener;
 import net.minecraft.network.protocol.Packet;
-import net.minecraft.network.protocol.game.ClientboundAddEntityPacket;
 import net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket;
-import net.minecraft.network.protocol.game.ClientboundMoveEntityPacket;
-import net.minecraft.network.protocol.game.ClientboundRemoveEntitiesPacket;
-import net.minecraft.network.protocol.game.ClientboundRotateHeadPacket;
-import net.minecraft.network.protocol.game.ClientboundSetEntityDataPacket;
-import net.minecraft.network.protocol.game.ClientboundSetEntityMotionPacket;
-import net.minecraft.network.protocol.game.ClientboundTeleportEntityPacket;
 import net.minecraft.world.level.ChunkPos;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -33,8 +25,6 @@ import java.util.function.Consumer;
  *       mod 全可见）。T6 后无客户端预算注入（MixinVanillaChunkApplyBudget 已退役）：
  *       区块 apply 直接走 vanilla 主线程路径（T0 事实表：ensureRunningOnSameThread
  *       免费保证线程语义），无死循环/风暴。</li>
- *   <li><b>实体包</b>（7 类）：复用 {@link ClientMetadataHandler#forwardEntityPacket}
- *       转发调用面——注入触发影子端转发，放行原版（不调 vanilla handler）。</li>
  *   <li><b>其他原版包</b>（含登录响应 S2C）：{@code packet.handle(listener)} 官方分发
  *       到对应 handler（1.20.1 handleLogin 的 ensure 非首句 → 仅主线程执行本路径，
  *       HEAD 注入先例同款 isSameThread 语义）。</li>
@@ -65,10 +55,6 @@ public final class GatewayS2CRouter implements Consumer<Packet<?>> {
     private void route(Packet<?> packet) {
         if (packet instanceof ClientboundLevelChunkWithLightPacket chunk) {
             routeChunk(chunk);
-            return;
-        }
-        if (isEntityPacket(packet)) {
-            forwardEntity(packet);
             return;
         }
         dispatchToListener(packet);
@@ -138,27 +124,6 @@ public final class GatewayS2CRouter implements Consumer<Packet<?>> {
         listener.handleLevelChunkWithLight(packet);
     }
 
-    // ==================== 实体包 7 类：注入触发 + 放行原版 ====================
-
-    /** 与 MixinClientPacketListener 7 处 HEAD 注入完全同集（mojmap 全段一致）。 */
-    private boolean isEntityPacket(Packet<?> packet) {
-        return packet instanceof ClientboundAddEntityPacket
-                || packet instanceof ClientboundSetEntityDataPacket
-                || packet instanceof ClientboundMoveEntityPacket
-                || packet instanceof ClientboundTeleportEntityPacket
-                || packet instanceof ClientboundSetEntityMotionPacket
-                || packet instanceof ClientboundRotateHeadPacket
-                || packet instanceof ClientboundRemoveEntitiesPacket;
-    }
-
-    private void forwardEntity(Packet<?> packet) {
-        Minecraft mc = Minecraft.getInstance();
-        if (mc == null || mc.isSameThread()) {
-            ClientMetadataHandler.forwardEntityPacket(packet);
-            return;
-        }
-        MainThreadDispatcher.execute(() -> ClientMetadataHandler.forwardEntityPacket(packet));
-    }
 
     // ==================== 其他原版包：官方 handler 分发 ====================
 

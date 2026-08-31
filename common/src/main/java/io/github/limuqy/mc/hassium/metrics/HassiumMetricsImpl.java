@@ -42,7 +42,7 @@ public class HassiumMetricsImpl implements HassiumMetrics {
     private final AtomicLong locallyGeneratedChunkCount = new AtomicLong(0);
     private final AtomicLong locallyGeneratedChunkBytes = new AtomicLong(0);
     /**
-     * 客户端实际落地的权威区块计数（按 chunkPos 去重；renderOnly/OVD 不计入）。
+     * 客户端实际落地的权威区块计数（按 chunkPos 去重）。
      * 冒烟「确有落地」门禁用；缓存命中率分母是 {@link #getClientAppliedChunkBytes()}。
      */
     private final AtomicLong clientAppliedChunkCount = new AtomicLong(0);

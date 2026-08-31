@@ -4,8 +4,6 @@ import io.github.limuqy.mc.hassium.cache.client.ClientLifecycleHelper;
 import io.github.limuqy.mc.hassium.client.ClientSmokeTest;
 import io.github.limuqy.mc.hassium.command.FabricHassiumCommand;
 import io.github.limuqy.mc.hassium.network.ClientChunkHandler;
-import io.github.limuqy.mc.hassium.network.ShadowChunkLoaderRuntime;
-import io.github.limuqy.mc.hassium.network.ShadowPullResponseS2CPacket;
 import io.github.limuqy.mc.hassium.network.ClientGatewayBootstrap;
 import io.github.limuqy.mc.hassium.network.DictionaryManager;
 import io.github.limuqy.mc.hassium.network.dataplane.DataPlaneClientLifecycle;
@@ -69,7 +67,7 @@ public class HassiumClientMod implements ClientModInitializer {
         // GatewayS2CRouter.dispatchToListener → 官方 handleCustomPayload → Fabric ClientPlayNetworking 分发，
         // 不走 dispatchS2CBusiness，因此必须保留客户端 receiver（缺失时全量压缩区块被静默丢弃，即「过期
         // 3007」根因；receiver 注册见下）。
-        LOGGER.warn("Hassium: Fabric client registers no HASSIUM business S2C receivers (CHUNK_HASH/SECTION_DELTA/SEED_REF/LIGHT_DELTA/BLOCK_ENTITY_DATA) — those packets are only consumed via the gateway topology (T12). CHUNK_PAYLOAD_S2C is the exception: it is a vanilla CustomPayload delivered via handleCustomPayload → ClientPlayNetworking, with a receiver registered below.");
+        LOGGER.warn("Hassium: Fabric client registers no HASSIUM business S2C receivers (CHUNK_HASH/SECTION_DELTA/SEED_REF/LIGHT_DELTA/BLOCK_ENTITY_DATA); those packets are only consumed via the gateway topology (T12). CHUNK_PAYLOAD_S2C and SHADOW_PULL_RESPONSE_S2C are vanilla CustomPayload exceptions with receivers registered below.");
         // Fabric 1.20.1 会在 ClientPlayNetworking 层拦截未注册 custom payload；显式注册
         // gateway_info，保证 gateway bootstrap 不依赖 vanilla unknown-payload 路径。
 #if MC_VER < MC_1_21_1
@@ -101,24 +99,37 @@ public class HassiumClientMod implements ClientModInitializer {
                     ClientChunkHandler.handleCompressedChunk(data);
                 });
 #endif
+        // shadowPullV1 FULL 回退：服务端返回的原版 chunk+light 线格式统一交给 GatewayS2CRouter 注入。
 #if MC_VER < MC_1_21_1
         ClientPlayNetworking.registerGlobalReceiver(io.github.limuqy.mc.hassium.network.FabricNetworkManager.SHADOW_PULL_RESPONSE_S2C,
                 (client, handler, buf, responseSender) -> {
-                    ShadowPullResponseS2CPacket response = ShadowPullResponseS2CPacket.decode(buf);
-                    client.execute(() -> ShadowChunkLoaderRuntime.handleResponse(response));
+                    byte[] data = new byte[buf.readableBytes()];
+                    buf.readBytes(data);
+                    client.execute(() -> {
+                        net.minecraft.network.FriendlyByteBuf response = new net.minecraft.network.FriendlyByteBuf(
+                                io.netty.buffer.Unpooled.wrappedBuffer(data));
+                        try {
+                            io.github.limuqy.mc.hassium.network.ShadowPullClient.handleResponse(
+                                    io.github.limuqy.mc.hassium.network.ShadowPullResponseS2CPacket.decode(response));
+                        } finally {
+                            response.release();
+                        }
+                    });
                 });
 #else
         ClientPlayNetworking.registerGlobalReceiver(io.github.limuqy.mc.hassium.network.FabricPayloadRegistry.SHADOW_PULL_RESPONSE_S2C_TYPE,
                 (payload, context) -> {
-                    net.minecraft.network.FriendlyByteBuf buf = io.github.limuqy.mc.hassium.network.FabricPayloadRegistry.fromPayload(payload);
+                    net.minecraft.network.FriendlyByteBuf response =
+                            io.github.limuqy.mc.hassium.network.FabricPayloadRegistry.fromPayload(payload);
                     try {
-                        ShadowPullResponseS2CPacket response = ShadowPullResponseS2CPacket.decode(buf);
-                        context.client().execute(() -> ShadowChunkLoaderRuntime.handleResponse(response));
+                        io.github.limuqy.mc.hassium.network.ShadowPullClient.handleResponse(
+                                io.github.limuqy.mc.hassium.network.ShadowPullResponseS2CPacket.decode(response));
                     } finally {
-                        buf.release();
+                        response.release();
                     }
                 });
 #endif
+
         LOGGER.info("Hassium: Fabric client-side initialization complete");
     }
 }

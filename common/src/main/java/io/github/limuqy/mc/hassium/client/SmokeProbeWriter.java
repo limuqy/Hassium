@@ -1,6 +1,5 @@
 package io.github.limuqy.mc.hassium.client;
 
-import io.github.limuqy.mc.hassium.cache.client.ViewDistanceExtensionService;
 import io.github.limuqy.mc.hassium.metrics.HassiumMetricsImpl;
 import io.github.limuqy.mc.hassium.metrics.NetworkStats;
 import io.github.limuqy.mc.hassium.network.ClientChunkPipeline;
@@ -23,7 +22,7 @@ import java.util.stream.Stream;
  * JSON v1 顶层键（T2 harness 依赖，只增不改名不删）：
  * {@code round, timestampMs, joined, dimension, playerPos[x,y,z],
  * stats, gateway{state,resumeAccepted,c2s,s2c},
- * counters{ovdLoaded,sectionDeltaApplied,lightSegRecalc,locallyGenerated,...},
+ * counters{sectionDeltaApplied,lightSegRecalc,locallyGenerated,...},
  * disk{shadowRegionExists,regionFileCount,cacheDir,dimensions{overworld|nether|end:{regionFileCount}}}。
  * 未进服轮次 {@code joined=false}，dimension/playerPos 为 null。
  */
@@ -132,15 +131,12 @@ public final class SmokeProbeWriter {
      */
     private static void appendClientCache(StringBuilder sb, net.minecraft.client.Minecraft mc, String dimension) {
         long loaded = -1L;
-        long renderOnly = -1L;
         java.util.List<net.minecraft.world.level.ChunkPos> actualPresent = java.util.List.of();
         if (mc != null && mc.level != null) {
             try {
                 net.minecraft.client.multiplayer.ClientChunkCache cache =
                         ((io.github.limuqy.mc.hassium.mixin.ClientLevelAccessor) mc.level).hassium$getChunkSource();
                 loaded = cache.getLoadedChunksCount();
-                renderOnly = ((io.github.limuqy.mc.hassium.cache.client.IClientLevelExtension) mc.level)
-                        .hassium$getRenderOnlyChunks().size();
                 io.github.limuqy.mc.hassium.network.seedgen.SmokeChunkTrace.Snapshot trace =
                         io.github.limuqy.mc.hassium.network.seedgen.SmokeChunkTrace.snapshot(dimension);
                 java.util.List<net.minecraft.world.level.ChunkPos> candidates = trace.networkReceived();
@@ -160,9 +156,6 @@ public final class SmokeProbeWriter {
         }
         sb.append("  \"clientCache\": {\n");
         field(sb, "loadedChunks", loaded);
-        field(sb, "renderOnlyChunks", renderOnly);
-        field(sb, "authoritativeEstimate", loaded >= 0L && renderOnly >= 0L
-                ? Math.max(0L, loaded - renderOnly) : -1L);
         appendTraceStage(sb, "actualPresent", actualPresent, false);
         sb.append("  },\n");
     }
@@ -197,30 +190,13 @@ public final class SmokeProbeWriter {
 
     /**
      * counters：真实字段来源——
-     * ovdLoaded = ViewDistanceExtensionService.loadedRenderOnly（getLoadedCount）；
      * sectionDeltaApplied = HassiumMetricsImpl.sectionDeltaChunksReceived；
      * lightSegRecalc = lightCacheMissCount（[LIGHT-SEG] 增量分段重算在光屏障提交时记 recordLightCacheMiss）；
      * locallyGenerated = locallyGeneratedChunkCount（SeedGen 本地生成）。
      */
     private static void appendCounters(StringBuilder sb) {
         HassiumMetricsImpl m = NetworkStats.getMetrics();
-        ViewDistanceExtensionService ovd = ViewDistanceExtensionService.getInstance();
-        long ovdLoaded;
-        long ovdPendingMiss;
-        long ovdShadowServed;
-        try {
-            ovdLoaded = ovd.getLoadedCount();
-            ovdPendingMiss = ovd.getPendingMissCount();
-            ovdShadowServed = ovd.getShadowServedCount();
-        } catch (Throwable t) {
-            ovdLoaded = -1L;
-            ovdPendingMiss = -1L;
-            ovdShadowServed = -1L;
-        }
         sb.append("  \"counters\": {\n");
-        field(sb, "ovdLoaded", ovdLoaded);
-        field(sb, "ovdPendingMiss", ovdPendingMiss);
-        field(sb, "ovdShadowServed", ovdShadowServed);
         field(sb, "hashMemoryHit", io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.hashMemoryHitCount());
         field(sb, "hashMemoryMismatch", io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.hashMemoryMismatchCount());
         field(sb, "hashDiskHit", io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.hashDiskHitCount());

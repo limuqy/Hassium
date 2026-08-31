@@ -87,7 +87,6 @@ public final class ClientLifecycleHelper {
             io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.onCacheLocationReady();
 
             // M2: 异步初始化存储（热度索引 / section 哈希在后台线程）
-            initializeCacheAsync();
             // 影子端只在 Hassium 能力握手确认后启动；原版服务端保持纯原版客户端路径。
         }
         if (initialized) {
@@ -246,10 +245,7 @@ public final class ClientLifecycleHelper {
         disconnectCleanupArmed.set(true);
         ClientMainThreadBudget.clearJoinBoost();
         io.github.limuqy.mc.hassium.network.core.NetworkCore.getInstance().onDisconnect();
-        // 先于世界拆除清掉 shadow pull 的 pending/epoch，避免快速 R2 复用旧响应或旧 desired-set。
-        io.github.limuqy.mc.hassium.network.ShadowChunkLoaderRuntime.reset();
 
-        ViewDistanceExtensionService.getInstance().clearAllRenderOnly();
         ChunkMeshCompileLog.reset();
 
         HassiumTaskExecutor clientExecutor = HassiumTaskExecutor.getClient();
@@ -259,7 +255,7 @@ public final class ClientLifecycleHelper {
 
         MainThreadDispatcher.clearClient(false);
         MainThreadDispatcher.clearPlayerPosition();
-        ClientMetadataHandler.clearPendingState();
+        ClientMetadataHandler.clearPendingOnDisconnect();
 
         Constants.LOG.info("Hassium: Disconnect cleanup done (shadow flush deferred to teardown TAIL)");
     }
@@ -293,43 +289,4 @@ public final class ClientLifecycleHelper {
         finalizeDisconnect();
     }
 
-    /**
-     * 异步初始化客户端缓存系统（新架构：无 HBT1 存储初始化，影子端存档目录由
-     * SeedGenLevelCompat 推导；此处仅触发 OVD 环带重扫）。
-     */
-    private static void initializeCacheAsync() {
-        try {
-            // 降级态（shadowEngineEnabled=false / 影子端创建失败）：不建 storage，
-            // 缓存读回/写盘/导出经 getClientStorage()==null 全 gate；服务端未装 MOD 时保留。
-            if (!HassiumConfigService.getInstance().isClientFeatureGateOpen()) {
-                Constants.LOG.info("Hassium: Client cache disabled (shadow engine gate closed)");
-                return;
-            }
-            Minecraft mc = Minecraft.getInstance();
-
-            // 单人游戏不需要客户端缓存
-            if (mc.getSingleplayerServer() != null) {
-                Constants.LOG.debug("Hassium: Skipping client cache for single-player");
-                return;
-            }
-
-            if (mc.getConnection() == null || mc.player == null) {
-                Constants.LOG.warn("Hassium: Cannot initialize cache - connection={}, player={}",
-                        mc.getConnection(), mc.player);
-                return;
-            }
-
-            final String serverIp = mc.getConnection().getServerData().ip;
-            final Path gameDir = mc.gameDirectory.toPath();
-            // review-fix: T8-27: serverId sanitize 收敛到 utils/ServerIdUtil
-            final String serverId = io.github.limuqy.mc.hassium.utils.ServerIdUtil.sanitize(serverIp);
-
-            // 新架构：客户端无 HBT1 存储；影子端存档目录由 SeedGenLevelCompat 按
-            // gameDir/serverId 推导（hassium_cache/<serverId>/world），此处仅保留
-            // OVD 环带重扫（影子模式就绪后强制补扫）。
-            ViewDistanceExtensionService.getInstance().onClientStorageReady();
-        } catch (Exception e) {
-            Constants.LOG.error("Hassium: Failed to initialize client cache", e);
-        }
-    }
 }

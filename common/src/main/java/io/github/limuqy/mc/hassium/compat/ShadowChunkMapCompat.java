@@ -52,42 +52,12 @@ public final class ShadowChunkMapCompat {
         return WORLDGEN_DEPTH.get() > 0;
     }
 
-    /** 影子上下文且注入表命中：抢 {@code scheduleChunkLoad}，不得落到噪声生成。 */
-    public static boolean shouldShortCircuitScheduleLoad(boolean shadowContext, boolean injectedPresent) {
-        return shadowContext && injectedPresent;
-    }
-
-    /**
-     * 注入表未命中时：非 SeedGen 不得走原版 IOWorker 读 type 126。
-     * {@code ShadowStorageManager} 会整文件重写 .mca，原版 RegionFile 扇区表过期后
-     * 会把邻槽/半写头解析成「负长度 / 错位 / 外部流」，再当权威柱推到客户端（虚空）。
-     */
-    public static boolean shouldBypassVanillaRegionRead(boolean shadowContext, boolean worldgenAllowed) {
-        return shadowContext && !worldgenAllowed;
-    }
 
     /** 影子存档只有 type 126；非 126 槽不得交给原版 zlib 解析。 */
     public static boolean shouldSkipVanillaChunkParse(boolean shadowContext, boolean hassiumType126) {
         return shadowContext && !hassiumType126;
     }
 
-    public static boolean isEmptyStatus(ChunkStatus status) {
-        return status == ChunkStatus.EMPTY;
-    }
-
-    /** 除 LIGHT 外透传注入柱的地形步骤；LIGHT 必须执行原版任务。 */
-    public static boolean shouldPassthroughGenerationStep(boolean shadowContext, boolean worldgenAllowed,
-                                                          boolean emptyStatus, boolean lightStatus) {
-        return shadowContext && !worldgenAllowed && !emptyStatus && !lightStatus;
-    }
-
-    public static boolean shouldPassthroughGenerationStep(boolean shadowContext, boolean worldgenAllowed,
-                                                          boolean emptyStatus) {
-        return shouldPassthroughGenerationStep(shadowContext, worldgenAllowed, emptyStatus, false);
-    }
-    public static boolean isFullOrAfter(ChunkStatus status) {
-        return status != null && status.isOrAfter(ChunkStatus.FULL);
-    }
 
     /**
      * FULL 票会向外扩散，邻柱可能只有 ProtoChunk holder。
@@ -98,16 +68,6 @@ public final class ShadowChunkMapCompat {
                                                               boolean injectedPresent, boolean fullOrAfter) {
         return shadowContext && !worldgenAllowed && !injectedPresent && fullOrAfter;
     }
-
-    /** 包可见：票集合加/卸对称（测试用）。 */
-    public static boolean rememberTicketKey(Set<Long> keys, long chunkKey) {
-        return keys != null && keys.add(chunkKey);
-    }
-
-    public static boolean forgetTicketKey(Set<Long> keys, long chunkKey) {
-        return keys != null && keys.remove(chunkKey);
-    }
-
     public static ImposterProtoChunk asImposter(LevelChunk chunk) {
         return new ImposterProtoChunk(chunk, false);
     }
@@ -116,51 +76,6 @@ public final class ShadowChunkMapCompat {
         return CompletableFuture.completedFuture(asImposter(chunk));
     }
 
-    public static int ticketLevel(ChunkStatus status) {
-        return net.minecraft.server.level.ChunkLevel.byStatus(status);
-    }
-
-    public static void addUnknownTicket(ServerChunkCache cache, ChunkPos pos, ChunkStatus status) {
-        if (cache == null || pos == null || status == null) {
-            return;
-        }
-#if MC_VER < MC_1_21_5
-        cache.chunkMap.getDistanceManager().addTicket(TicketType.UNKNOWN, pos, ticketLevel(status), pos);
-#else
-        // 1.21.5+ exposes only the radius API for UNKNOWN; LIGHT/FULL resolve to
-        // the same zero-radius holder ticket and the requested status comes from lightFuture.
-        cache.addTicketWithRadius(TicketType.UNKNOWN, pos, 0);
-#endif
-    }
-
-    public static void removeUnknownTicket(ServerChunkCache cache, ChunkPos pos, ChunkStatus status) {
-        if (cache == null || pos == null || status == null) {
-            return;
-        }
-#if MC_VER < MC_1_21_5
-        cache.chunkMap.getDistanceManager().removeTicket(TicketType.UNKNOWN, pos, ticketLevel(status), pos);
-#else
-        cache.removeTicketWithRadius(TicketType.UNKNOWN, pos, 0);
-#endif
-    }
-
-    public static void addFullUnknownTicket(ServerChunkCache cache, ChunkPos pos) {
-        addUnknownTicket(cache, pos, ChunkStatus.FULL);
-    }
-
-    public static void removeFullUnknownTicket(ServerChunkCache cache, ChunkPos pos) {
-        removeUnknownTicket(cache, pos, ChunkStatus.FULL);
-    }
-    /** 影子区块统一以 LIGHT ticket 进入原版 ChunkMap，禁止 FULL 级 worldgen 扩散。 */
-    public static void addShadowRoleTicket(ServerChunkCache cache, ChunkPos pos,
-                                           io.github.limuqy.mc.hassium.network.ShadowChunkRole role) {
-        addUnknownTicket(cache, pos, ChunkStatus.LIGHT);
-    }
-
-    public static void removeShadowRoleTicket(ServerChunkCache cache, ChunkPos pos,
-                                              io.github.limuqy.mc.hassium.network.ShadowChunkRole role) {
-        removeUnknownTicket(cache, pos, ChunkStatus.LIGHT);
-    }
 
     /**
      * 与原版 {@code ServerChunkCache.getChunkForLighting} 同一条件：holder 上已有

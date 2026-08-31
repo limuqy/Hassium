@@ -41,36 +41,6 @@ class ChunkDistancePriorityTest {
                 < ChunkDistancePriority.authoritative(far, pcx, pcz));
     }
 
-    @Test
-    @DisplayName("renderOnly 永远低于同位置权威块")
-    void renderOnlyAlwaysAfterAuthoritative() {
-        ChunkPos pos = new ChunkPos(3, -7);
-        double auth = ChunkDistancePriority.authoritativeFromWorld(pos, 48.0, -112.0);
-        double ovd = ChunkDistancePriority.renderOnlyFromWorld(pos, 48.0, -112.0);
-        assertTrue(auth < ovd);
-        // 极远权威仍应优于极近 OVD
-        ChunkPos farAuth = new ChunkPos(400, 400);
-        double farAuthPri = ChunkDistancePriority.authoritative(farAuth, 0, 0);
-        double nearOvd = ChunkDistancePriority.renderOnly(new ChunkPos(0, 0), 0, 0);
-        assertTrue(farAuthPri < nearOvd,
-                "tier bias must dominate: farAuth=" + farAuthPri + " nearOvd=" + nearOvd);
-    }
-
-    @Test
-    @DisplayName("层序：权威 < 未知任务 < 环带（数值越小越优先）")
-    void tierOrderAuthoritativeThenUnknownThenRenderOnly() {
-        double farAuth = ChunkDistancePriority.authoritative(new ChunkPos(400, 400), 0, 0);
-        double unknown = ChunkDistancePriority.unknown();
-        double nearOvd = ChunkDistancePriority.renderOnly(new ChunkPos(0, 0), 0, 0);
-        assertTrue(farAuth < unknown, "auth < unknown: farAuth=" + farAuth + " unknown=" + unknown);
-        assertTrue(unknown < nearOvd, "unknown < ovd: unknown=" + unknown + " nearOvd=" + nearOvd);
-
-        // 坐标未知时仅 base：权威 base < 未知 base < 环带 base
-        assertTrue(ChunkDistancePriority.ofUnknownDistance(ChunkDistancePriority.Tier.AUTHORITATIVE)
-                < ChunkDistancePriority.unknown());
-        assertTrue(ChunkDistancePriority.unknown()
-                < ChunkDistancePriority.ofUnknownDistance(ChunkDistancePriority.Tier.RENDER_ONLY));
-    }
 
     @Test
     @DisplayName("世界坐标与 chunk 分式坐标一致")

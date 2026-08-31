@@ -158,112 +158,29 @@ MISMATCH 时客户端上报每段 hash 与 48 条平面综合征；服务端只�
 
 1. **触发**：故障 = outbound 入站静默超时（`MigrationPolicy.faultTimeoutMs`，沿用 `master.migrationFaultTimeoutMs` 键语义）；策略 = 主控负载上报（TPS / 负载均值 / 维护窗口阈值）
 2. **换 outbound**：`NetworkCore` ACTIVE → MIGRATING → 关闭旧 outbound → 连接新主控，握手携带 `ResumeTicket` 续流票据（玩家 UUID + 递增 epoch + 共享密钥 HMAC 签名）
-3. **续流**：主控验签通过且 epoch 递增（`ResumeTicketValidator`，防重放）→ S2C 尾 `resumeAccepted=true` → 复用既有推送链（UUID-keyed 会话表，`resyncTrackedChunks`），迁移后的 `ChunkHashS2C` 继续按正常 HIT/MISS/MISMATCH 分支处理；`resumeAccepted=false`（票据无效 / 重放）→ 会话未附着，数据推送不流入，走登录桥 / 重连兜底
+3. **续流**：主控验签通过且 epoch 递增（`ResumeTicketValidator`，防重放）→ S2C 尾 `resumeAccepted=true` → 复用影子虚拟玩家的原版 `ChunkMap` tracking 与缓存状态；`resumeAccepted=false`（票据无效 / 重放）→ 会话未附着，走登录桥 / 重连兜底
 4. **客户端 `Connection` 不断**：无定格、无候选重连窗口，迁移期间既有缓存照常命中，断连清理不触发
 5. **终态清理只在迁移失败回退时**：迁移端点候选耗尽 / 重试超限 → 回退为真正断连（outbound 关 → IDLE → 断连清理链），影子端 `saveAll` 落盘与资源终态清理此时才执行一次
 
 UDP/KCP 的拓扑、地址配置见 [`architecture.md`](architecture.md) §9 尾段（`master.controlReachableEndpoints` / `udpListeners`）与 §12.6；运行时冒烟见 [`runtime-smoke-test.md`](runtime-smoke-test.md#网关双主控迁移冒烟t7)。
 
-## 10. 超视渲染（renderOnly）
+## 10. 超视渲染（当前链路不启用）
 
-### 10.1 目标
+影子端原版化后，区块 admission、加载、卸载和推送全部由影子 `ServerPlayer` 对应的 `ServerChunkCache` / `ChunkMap` 管理。本节旧的 `renderOnly` 环带逻辑不属于当前 chunk-core 链路，不能参与远程区块请求或客户端区块生命周期。
 
-客户端渲染距离（RD） > 服务端 `view-distance` 时，用本地 `hassium_cache` 历史区块回填 `serverVD < dist ≤ clientVD` 的环形带，**仅参与渲染，不参与模拟**，且不向服务器请求视距外区块 / BE。不改服务端协议；stale 接受为「历史快照」。
+历史实现仍可能存在于兼容类或旧配置说明中，但不得作为当前链路行为依据；相关代码清理以 `.omp/workflows/shadow-chunk-loader-originalization/REQ.md` 为准。
 
-### 10.2 解锁渲染距离
+### 10.1 当前边界
 
-`MixinOptions` 注入 `Options#getEffectiveRenderDistance`（HEAD cancellable）：当 `chunk.enabled && viewDistanceExtensionEnabled && 多人游戏` 时返回客户端滑块值，绕过原版 `serverRenderDistance` 钳制。ViewArea 随之扩大（原版自动）。单人游戏不启用。
+当前 chunk-core 不启用旧的 `renderOnly` 环带、客户端视距扩展或独立 OVD admission。影子端的虚拟 `ServerPlayer`、`ServerChunkCache` 和 `ChunkMap` 是区块 tracking、加载、卸载及推送的唯一 owner。
 
-`serverRenderDistance` 经 `OptionsAccessor`（Mixin `@Accessor`）从 Options private 字段读取；未登录时 fallback `simulationDistance`。
+旧实现的设计记录不再作为运行时契约；需要查询历史方案时使用版本控制记录，不在本文件继续维护已删除的客户端区块状态机。
 
-### 10.3 数据流
+### 10.2 不做
 
-```
-MixinClientTick.tick
-  → ViewDistanceExtensionService.update()（单例）
-    → serverVD = OptionsAccessor.getServerRenderDistance()
-    → 环带 = {pos : serverVD < dist(pos,player) ≤ clientVD}（圆形）
-    → toLoad：跳过已 loaded/pending/未到期 miss；按切比雪夫(+欧氏次键)近距排序
-    → 每 tick 最多 enqueue maxChunksPerFrame 个（缓存读取生产配额，与影子读盘共用）
-    → ClientCacheLoadQueue.enqueue(pos, MainThreadDispatcher.renderOnlyPriority(pos), renderOnly=true)
-      // RENDER_ONLY 层（tier*BIAS+distSq）；层序恒为 权威 > 未知任务 > 环带；priority 越小越优先
-    → 未扫完 toLoad 不更新 lastPlayerPos → 下 tick 继续灌；另有 pendingLoad>128 门槛（JoinBoost 跳过）
-        ├ 命中：applyChunkData(renderOnly=true)
-        │   → applier.applyToLevelFromByteBuf → handleLevelChunkWithLight + addRenderOnlyChunk
-        │   → 跳过 ClientMetadataHandler.onChunkApplied（不请求 BE）
-        └ miss/异常：静默，调 ViewDistanceExtensionService.onRenderOnlyMiss(pos)
-            → loadedRenderOnly.remove + level.hassium$removeRenderOnlyChunk
-            → 【不】requestChunkFromServer
-```
-
-### 10.4 边界替换（P1）
-
-真实区块到达 renderOnly pos 时（`ChunkHash` 命中或全量包），三端 applier 在 `handleLevelChunkWithLight` 前调 `hassium$removeRenderOnlyChunk(pos)` + `ViewDistanceExtensionService.onRealChunkApplied(pos)`，覆盖为正常区块并请求 BE。
-
-### 10.5 真正卸载（P1）
-
-`ViewDistanceExtensionService.unloadRenderOnlyChunk` 反射 `ClientChunkCache.Storage.drop(x, z)` 拿到旧 `LevelChunk`，调 `level.unload(old)` 触发 BE 清理 + 缓存保存（经 `MixinClientLevel.hassium$onUnload`）。P0 阶段仅清标记，不 drop。
-
-### 10.6 断连清理
-
-`ClientLifecycleHelper.cleanupOnDisconnect`（vanilla 断连 / 登出链 HEAD）调 `ViewDistanceExtensionService.clearAllRenderOnly()`，清空 `loadedRenderOnly` + level 标记，避免重连后残留。断连落盘由影子端 `saveAll` 统一承担（`SeedGenLevelCompat.shutdown`，含 heat.idx 热度索引落盘），客户端无 dump 队列。
-
-清理只在**真正断连**时触发——网络核心内主控迁移（§9.1）不经过断连链：迁移期间 outbound 换向、客户端 `Connection` 不断，区块核心（缓存 / 影子端 / OVD 标记）全程保留；终态资源清理仅在迁移失败回退为断连后执行。
-
-### 10.7 关键组件
-
-| 组件 | 职责 |
-|------|------|
-| `MixinOptions` | 解除 `getEffectiveRenderDistance` 钳制 |
-| `OptionsAccessor` | 读取 `Options.serverRenderDistance` |
-| `ViewDistanceExtensionService` | 单例；环带计算 / enqueue / miss 回调 / 清理 |
-| `ClientCacheLoadQueue` | renderOnly miss 静默（不请求服务器） |
-| `ClientChunkHandler.applyChunkData` | renderOnly 跳过 `onChunkApplied`（不请求 BE） |
-| `MixinClientLevel` | `hassium$renderOnlyChunks` 标记集合 |
-
-### 10.8 边界条件
-
-| 场景 | 处理 |
-|------|------|
-| 单人游戏 | `MixinOptions` / `ViewDistanceExtensionService` 均检查 `mc.getSingleplayerServer() != null` → 跳过超视渲染 |
-| `serverRenderDistance == 0`（未登录） | fallback `simulationDistance`；仍 ≤0 则 `clearAllRenderOnly` |
-| `clientVD <= serverVD` | `clearAllRenderOnly`，恢复原版 |
-| 配置关（`viewDistanceExtensionEnabled=false`） | `clearAllRenderOnly`；`MixinOptions` 不 cancel（原版钳制） |
-| 缓存 miss（renderOnly） | 静默 + 回滚标记，不向服务器请求 |
-| RD > 32（手改 options.txt） | 可工作；雾距跟随 `getEffectiveRenderDistance` 扩大，可能穿帮（Fog Mixin 未实现，见下）。建议保持 RD ≤ 32 |
-
-### 10.10 Fog 钳制（未实现）
-
-`maxRenderDistance < clientVD` 时钳制雾距的 MixinFogRenderer **未实现**。理由：
-
-- 默认配置（`maxRenderDistance=16`，vanilla 滑块上限 32）下客户端滑块 >16 时有效 RD 被钳 16、雾距仍按滑块渲染，存在穿帮可能（默认 32 时本为 no-op）
-- `FogRenderer.setupFog` 跨 9 段签名差异大（1.20.1 vs 1.21.x 参数列表重构）
-- `RenderSystem` fog API 在 1.20.1（`fogEnd` field）与 1.21+（`setShaderFogEnd` method）间不兼容
-
-RD > 32（需手改 `options.txt`）时雾距会跟随 `getEffectiveRenderDistance` 扩大，远端区块可能突然显现（穿帮）。若需 RD > 32，建议接受此视觉影响或等待后续按段实现 Fog Mixin。
-
-### 10.11 内存估算
-
-超视渲染环带区块数 ≈ `π × (clientVD² − serverVD²)`（圆形），每块完整 `LevelChunk` 约 20–50 KB（视方块密度与生物群系复杂度）。
-
-示例：
-
-| serverVD | clientVD | 环带区块数 | 估算内存 |
-|----------|----------|-----------|---------|
-| 8 | 16 | ~600 | ~12–30 MB |
-| 8 | 24 | ~1700 | ~34–85 MB |
-| 8 | 32 | ~3100 | ~62–155 MB |
-| 12 | 32 | ~2500 | ~50–125 MB |
-
-建议保持 RD ≤ 32（vanilla 滑块上限）。RD > 32 时内存显著增长且雾可能穿帮（§10.10）。依赖现有 `ClientHeatIndex` 缓存淘汰，不新增内存池。
-
-### 10.9 不做
-
-- Bobby FakeChunk / 独立 `.bobby` 目录
-- 视距外向服务器 `ChunkDataRequestC2S` / 放宽 BE 视距校验
-- 分段增量接回超视渲染
-- 抬高 vanilla 滑块上限 >32（版本差异大，用户编辑 options.txt）
-
+- 不由真实客户端枚举影子区块或维护 halo。
+- 不向服务端请求影子玩家 tracking 范围之外的区块。
+- 不以客户端 `hasChunk`、Bloom、chunk hash 回执或 pending-confirm 决定影子端 admission。
 ## 11. 磁盘 NBT 缓存格式
 
 > **本节为旧 HBT1 客户端缓存格式的历史记录**：新架构下客户端不再读写磁盘缓存——缓存由影子端原版存档承担（`hassium_cache/<serverId>/world`，type 126 + chunkHash，见 architecture.md §6），清理由 `ShadowCacheEviction`（`heat.idx` region 文件级热度淘汰）负责。`HassiumRegionFile` / `ClientCacheDatabase` / `CacheEvictionManager` 等旧类已裁剪。
@@ -414,65 +331,14 @@ hassium_exports/server_192.168.1.100_25565/
 
 目录结构与 `hassium_cache/server_192.168.1.100_25565/world/` 一致；完成后聊天回报 `导出完成: <目标路径>`。
 
-## 13. 客户端 Bloom 同步与服务端直推（永久虚空修复）
+## 13. 原版 tracking 与缓存边界
 
-### 13.1 背景：永久虚空根因
+影子端不再维护客户端 `ShadowChunkLoader`、halo、Bloom admission 或 chunkHash 探活。唯一 tracking owner 是影子 `ServerPlayer` 对应的 `ServerChunkCache` / `ChunkMap`：
 
-服务端数据队列（`ServerChunkPushManager.enqueueDataRequest`）在 drain 时对已出视距的任务**静默丢弃**：飞行中队列积压（`master.maxChunksPerTick` 默认 5）时，轮到处理时玩家已前移，任务被丢弃；客户端请求无超时重试，且静止后不再触发新的 `trackChunk`（块已在视距内），→ 前方 30° 扇形虚空永久存在。方向加权（`FORWARD_BIAS`）只改变优先级，堵不住丢弃漏洞。
+1. 真实玩家位置单向同步给影子虚拟玩家。
+2. 原版 `ChunkMap` 决定 `ChunkHolder` 的加载和卸载范围。
+3. `scheduleChunkLoad` 先通过 `MixinRegionFile` 读取 type 126；未命中时进入原版生成链。
+4. 服务端校验允许的 SeedGen 结果在 pre-LIGHT 汇合，由影子 `ThreadedLevelLightEngine` 算光。
+5. 影子 vanilla connection 发送官方 chunk+light 与 forget packet；真实客户端不提交 admission 请求。
 
-### 13.2 机制
-
-```
-客户端（ClientBloomSyncTracker）
-  ├─ storage 就绪 → 发全量位图（本地 ChunkBloomFilter 序列化，full=true）
-  ├─ 新缓存落盘（persist）→ 攒增量 → ≥64 块且冷却 5s → 按批构建独立位图（full=false）
-  └─ 断连（clearPendingState）→ 重置，重连后重发全量
-
-服务端（ServerChunkPushManager）
-  ├─ per-player Bloom 层列表：full → 覆盖；append → 追加（上限 64 层，溢出丢最旧）
-  ├─ 分流（trackChunk / sendChunk / resync 提交点）：
-  │    mightContain(pos, dim) == false（确定无缓存）→ 发 hash（contentHash 先行）+ 主动入队直推
-  │    命中或 Bloom 未就绪 → 仅发 hash（客户端对比 HIT/MISS/MISMATCH）
-  ├─ 入队去重（per-player 在队集合）：直推与客户端请求同块不重复推
-  ├─ 出界不丢弃 → 待命集合，折返/静止后重新在视距内时恢复入队；10s 超时才真丢
-  └─ resync 等待首个 Bloom（≤5s，旧客户端无 Bloom 则超时后原路径 fallback）
-```
-
-### 13.3 为什么正确
-
-- Bloom 无假阴性：miss = 确定客户端无缓存 → 直推不会浪费（hash 先行保证客户端能暂存 contentHash，避免 0→1 翻转）
-- 假阳性由客户端 hash 对比 MISS/MISMATCH 兜底：MISS → 请求 → 服务端直推链路；MISMATCH → section delta
-- 位图只增不减：客户端淘汰/过期不通知服务端（假 hit 成本 = 一次 hash 包，无害）
-- 增量丢失无害：服务端 miss → 直推（正确性兜底）
-- 直推任务出界丢弃无害：trackChunk 触发时机与丢弃判定一致，丢弃 = 客户端不再需要
-
-### 13.4 协议
-
-`ClientBloomSyncPacket`（C2S，`client_bloom_sync_c2s`）：`boolean full + byte[] bloomBytes`（`[4B size][4B hashCount][bitSet]`）。
-
-握手包（C2S）尾部追加客户端坐标（`double x, double z`，append-only 兼容旧服务端）：服务端校正 resync 视距中心（迁移/重连时服务端玩家对象位置滞后在出生点）；客户端发送握手时同步刷新 `MainThreadDispatcher` 位置缓存（不等首帧 tick）。
-
-### 13.5 兜底
-
-- 客户端全量请求超时重试（8s）：`PENDING_FULL_REQUESTS`，收到数据（`onChunkDataReceived`）清除
-- 服务端 resync 等 Bloom 超时 5s → 无 Bloom 原路径（发 hash）
-- 出界任务待命 10min 超时 → 真丢弃（玩家已远离；10s 对移动探索太短，
-  frontline 任务被过早丢弃后客户端静止/折返时无新请求可触发，会造成“永久”扇形/十字虚空）
-
-### 13.6 SeedGen 两级缓冲（FIFO 头部阻塞修复）
-
-`SeedGenExecutor` 的缓冲分两级：`pendingLive`（服务端 SeedRef）与 `pendingPregen`
-（盲预生成，contentHash=0），由 drain 按当前玩家位置**最近优先**释放进有界工作队列
-（≤96 槽），活体 SeedRef 永远先于盲预生成。原实现为单条 FIFO（`ConcurrentLinkedQueue`），
-移动探索时新到达的当前视野 SeedRef 排在更早路径/初始 resync/441 个盲预生成条目之后：
-工作队列 96 槽被旧块占满，近处块几十秒后才生成，落地时玩家已走远被 vanilla
-丢弃（`Ignoring chunk since it's not in the view range`）→ 身边持续空洞。
-盲预生成条目永不超时（`SeedGenQueue.expire` 与 `peekNearest` 均只对 hash≠0 生效）。
-
-### 13.7 SeedGen 自愈熔断与出界待命延长（mismatch 风暴修复）
-
-同一会话内若客户端对 pristine 区块大量回退全量（说明本地世界gen与服务端不一致，
-例如跨版本/数据包/客户端侧世界gen差异），`ServerChunkPushManager` 会在连续
-`SEED_GEN_DISABLE_THRESHOLD`（16）次 pristine 全量请求后对该玩家**自动停发 SeedRef**，
-改走全量推送；同时把出界待命任务超时从 10s 提高到 10min，避免移动时前排任务
-被过早丢弃后无法自动补回。熔断状态随玩家断开/服务端停止清理。
+缓存目录仍为 `hassium_cache/<serverId>/world`，存储和热度淘汰由影子服务端承担。Bloom、`CHUNK_HASH`、`PENDING_FULL_REQUESTS` 和旧客户端主动 pull 不属于当前区块生命周期；若协议类型仍保留，仅作为兼容定义，不得有运行时发送调用。

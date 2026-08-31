@@ -17,8 +17,7 @@ import java.util.function.Predicate;
  * 主线程在 {@link #flushClient()} 中按优先级批量执行。
  * <p>
  * 优先级由 {@link ChunkDistancePriority} 在入队瞬间冻结（数值越小越优先）；
- * 玩家移动不改写已入队 key。
- * 层序恒为：权威 &gt; 未知任务（无锚点） &gt; 环带（renderOnly）。
+ * 玩家移动不改写已入队 key。区块范围与 admission 由影子端原版 tracking 决定。
  * <p>
  * 队列为 {@link KeyedPriorityQueue}：同 chunk 位置同语义（op）的新任务入队时
  * <b>取代</b>旧任务（旧任务从堆中摘除、新任务带最新优先级），消费侧执行前做
@@ -137,17 +136,8 @@ public final class MainThreadDispatcher {
         return priorityOf(ChunkDistancePriority.Tier.AUTHORITATIVE, chunkX, chunkZ);
     }
 
-    /**
-     * renderOnly 层优先级。坐标未知时仍为 {@link ChunkDistancePriority.Tier#RENDER_ONLY} 层
-     *（{@code base+0}），保证<strong>环带始终晚于权威与未知任务</strong>。
-     */
-    public static double renderOnlyPriority(ChunkPos chunkPos) {
-        return priorityOf(ChunkDistancePriority.Tier.RENDER_ONLY, chunkPos);
-    }
-
     private static double priorityOf(ChunkDistancePriority.Tier tier, ChunkPos chunkPos) {
         if (chunkPos == null || tier == null) {
-            // 无锚点：UNKNOWN 层（夹在权威与环带之间），勿用绝对 MAX
             return ChunkDistancePriority.unknown();
         }
         return priorityOf(tier, chunkPos.x, chunkPos.z);

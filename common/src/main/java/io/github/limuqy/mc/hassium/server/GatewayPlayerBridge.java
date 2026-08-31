@@ -597,13 +597,12 @@ public final class GatewayPlayerBridge {
         player.setYRot(present ? state.yaw() : player.getYRot());
         player.setXRot(present ? state.pitch() : player.getXRot());
 
-        // 能力标记先于物化：MixinPlayerChunkSender/MixinChunkHolder 拦截 gate =
-        // PlayerCompressionTracker.isCompressionEnabled；推送链按 flag 走 hash 主链路
+        // 影子端承担唯一 chunk admission；真实玩家仅保留控制面连接，
+        // 影子虚拟玩家的位置同步后由其 ServerChunkCache/ChunkMap 维护 tracking。
         ServerChunkPushManager push = ServerChunkPushManager.getInstance();
         push.setPlayerSeedGenSupported(playerId,
                 session.channel().handshakeOptions() != null
                         && session.channel().handshakeOptions().seedGenSupported());
-        // shadowPullV1 客户端由影子 loader 主动取数，禁止旧 admission 初始区块链路。
         HandshakeStateTail.C2S stateTail = session.channel().stateTail();
         push.setPlayerLightComputeSupported(playerId, stateTail != null && stateTail.lightComputeSupported());
 

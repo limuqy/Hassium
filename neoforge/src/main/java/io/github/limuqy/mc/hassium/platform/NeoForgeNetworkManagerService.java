@@ -11,27 +11,12 @@ import net.minecraft.server.level.ServerPlayer;
  */
 public class NeoForgeNetworkManagerService implements INetworkManagerService {
 
-
     private final NeoForgeNetworkManager networkManager;
 
     public NeoForgeNetworkManagerService() {
         this.networkManager = new NeoForgeNetworkManager();
     }
 
-    @Override
-    public void sendChunkDataRequest(FriendlyByteBuf buf) {
-        networkManager.sendChunkDataRequest(buf);
-    }
-
-    @Override
-    public void sendChunkHashPacket(ServerPlayer player, FriendlyByteBuf buf) {
-        // T12 网关收口：网关玩家走 kind=1 HASSIUM 帧（客户端 receiver 已退役，回落 CustomPayload 是死路径）
-        if (io.github.limuqy.mc.hassium.server.GatewayPlayerBridge.tryRouteS2C(
-                player, io.github.limuqy.mc.hassium.network.core.GatewayPacketCodec.HassiumSub.CHUNK_HASH.id(), buf)) {
-            return;
-        }
-        networkManager.sendChunkHashPacket(player, buf);
-    }
 
     @Override
     public void sendSeedRef(ServerPlayer player, FriendlyByteBuf buf) {
@@ -77,10 +62,5 @@ public class NeoForgeNetworkManagerService implements INetworkManagerService {
             return;
         }
         networkManager.sendLightDeltaPacket(player, buf);
-    }
-
-    @Override
-    public void sendClientBloomSync(FriendlyByteBuf buf) {
-        networkManager.sendClientBloomSync(buf);
     }
 }

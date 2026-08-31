@@ -111,9 +111,16 @@ public final class GatewayPlatformWiring {
             seed = SeedGenTail.handshakeWorldSeed(overworld, seedGenEnabled);
             if (seedGenEnabled) {
                 stemNbt = SeedGenTail.encodeLevelStemNbt(overworld);
+                if (stemNbt == null || stemNbt.length == 0) {
+                    seedGenEnabled = false;
+                    seed = 0L;
+                }
             }
         } catch (Throwable t) {
-            LOGGER.warn("[GATEWAY] world seed/stem resolve failed — 回落保守默认", t);
+            seedGenEnabled = false;
+            seed = 0L;
+            stemNbt = null;
+            LOGGER.warn("[GATEWAY] world seed/stem resolve failed — SeedGen disabled", t);
         }
         try {
             // 帧连接即控制连接：不 beginControlConnection（UDP 会话 T8 并入票据 epoch 口径）。

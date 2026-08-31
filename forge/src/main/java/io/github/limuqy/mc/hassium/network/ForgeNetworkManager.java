@@ -185,41 +185,8 @@ public class ForgeNetworkManager implements NetworkManager {
                 java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT)
         );
 
-        CHANNEL.<DataRequestWrapper>registerMessage(
-                packetId++,
-                DataRequestWrapper.class,
-                DataRequestWrapper::encode,
-                DataRequestWrapper::decode,
-                (msg, ctx) -> {
-                    ctx.get().enqueueWork(() -> handleDataRequest(msg, ctx.get().getSender()));
-                    ctx.get().setPacketHandled(true);
-                },
-                java.util.Optional.of(NetworkDirection.PLAY_TO_SERVER)
-        );
 
-        CHANNEL.<ClientBloomSyncWrapper>registerMessage(
-                packetId++,
-                ClientBloomSyncWrapper.class,
-                ClientBloomSyncWrapper::encode,
-                ClientBloomSyncWrapper::decode,
-                (msg, ctx) -> {
-                    ctx.get().enqueueWork(() -> handleClientBloomSync(msg, ctx.get().getSender()));
-                    ctx.get().setPacketHandled(true);
-                },
-                java.util.Optional.of(NetworkDirection.PLAY_TO_SERVER)
-        );
 
-        CHANNEL.<ChunkHashWrapper>registerMessage(
-                packetId++,
-                ChunkHashWrapper.class,
-                ChunkHashWrapper::encode,
-                ChunkHashWrapper::decode,
-                (msg, ctx) -> {
-                    ctx.get().enqueueWork(() -> handleChunkHash(msg));
-                    ctx.get().setPacketHandled(true);
-                },
-                java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT)
-        );
 
         CHANNEL.<SeedRefWrapper>registerMessage(
                 packetId++,
@@ -363,8 +330,6 @@ public class ForgeNetworkManager implements NetworkManager {
                     .serverbound()
                         .addMain(HandshakePacket.class, playCodec(HandshakePacket::encode, HandshakePacket::decode),
                                 ForgeNetworkManager::onHandshakeC2S)
-                        .addMain(DataRequestWrapper.class, playCodec(DataRequestWrapper::encode, DataRequestWrapper::decode),
-                                ForgeNetworkManager::onDataRequest)
                         .addMain(SectionHashRequestWrapper.class,
                                 playCodec(SectionHashRequestWrapper::encode, SectionHashRequestWrapper::decode),
                                 ForgeNetworkManager::onSectionHashRequest)
@@ -374,9 +339,6 @@ public class ForgeNetworkManager implements NetworkManager {
                         .addMain(CompressionReadyWrapper.class,
                                 playCodec(CompressionReadyWrapper::encode, CompressionReadyWrapper::decode),
                                 ForgeNetworkManager::onCompressionReady)
-                        .addMain(ClientBloomSyncWrapper.class,
-                                playCodec(ClientBloomSyncWrapper::encode, ClientBloomSyncWrapper::decode),
-                                ForgeNetworkManager::onClientBloomSync)
                         .addMain(ShadowPullRequestWrapper.class,
                                 playCodec(ShadowPullRequestWrapper::encode, ShadowPullRequestWrapper::decode),
                                 ForgeNetworkManager::onShadowPullRequest)
@@ -390,13 +352,14 @@ public class ForgeNetworkManager implements NetworkManager {
                         .addMain(AggregationWrapper.class,
                                 playCodec(AggregationWrapper::encode, AggregationWrapper::decode),
                                 ForgeNetworkManager::onAggregationClient)
-                        .addMain(ChunkHashWrapper.class, playCodec(ChunkHashWrapper::encode, ChunkHashWrapper::decode),
-                                ForgeNetworkManager::onChunkHash)
                         .addMain(SectionDeltaWrapper.class, playCodec(SectionDeltaWrapper::encode, SectionDeltaWrapper::decode),
                                 ForgeNetworkManager::onSectionDelta)
                         .addMain(BlockEntityDataWrapper.class,
                                 playCodec(BlockEntityDataWrapper::encode, BlockEntityDataWrapper::decode),
                                 ForgeNetworkManager::onBlockEntityData)
+                        .addMain(ShadowPullResponseWrapper.class,
+                                playCodec(ShadowPullResponseWrapper::encode, ShadowPullResponseWrapper::decode),
+                                ForgeNetworkManager::onShadowPullResponse)
                         .addMain(SeedRefWrapper.class, playCodec(SeedRefWrapper::encode, SeedRefWrapper::decode),
                                 ForgeNetworkManager::onSeedRef)
                         .addMain(DictionarySyncWrapper.class,
@@ -450,17 +413,7 @@ public class ForgeNetworkManager implements NetworkManager {
         ctx.enqueueWork(() -> handleAggregationClient(msg));
     }
 
-    private static void onDataRequest(DataRequestWrapper msg, CustomPayloadEvent.Context ctx) {
-        ctx.enqueueWork(() -> handleDataRequest(msg, ctx.getSender()));
-    }
 
-    private static void onClientBloomSync(ClientBloomSyncWrapper msg, CustomPayloadEvent.Context ctx) {
-        ctx.enqueueWork(() -> handleClientBloomSync(msg, ctx.getSender()));
-    }
-
-    private static void onChunkHash(ChunkHashWrapper msg, CustomPayloadEvent.Context ctx) {
-        ctx.enqueueWork(() -> handleChunkHash(msg));
-    }
 
     private static void onSeedRef(SeedRefWrapper msg, CustomPayloadEvent.Context ctx) {
         ctx.enqueueWork(() -> handleSeedRef(msg));
@@ -476,6 +429,7 @@ public class ForgeNetworkManager implements NetworkManager {
     private static void onShadowPullResponse(ShadowPullResponseWrapper msg, CustomPayloadEvent.Context ctx) {
         ctx.enqueueWork(() -> handleShadowPullResponse(msg));
     }
+
 
     @Override
     public void sendShadowPullRequest(FriendlyByteBuf buf) {
@@ -872,17 +826,6 @@ public class ForgeNetworkManager implements NetworkManager {
             packetBuf.release();
         }
     }
-    private static void handleShadowPullResponse(ShadowPullResponseWrapper msg) {
-        FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data()));
-        try {
-            ShadowPullResponseS2CPacket response = ShadowPullResponseS2CPacket.decode(buf);
-            ShadowChunkLoaderRuntime.handleResponse(response);
-        } catch (Exception e) {
-            LOGGER.error("[CLIENT] Failed to handle shadowPullV1 response", e);
-        } finally {
-            buf.release();
-        }
-    }
 
     private static void handleShadowPullRequest(ShadowPullRequestWrapper msg, ServerPlayer player) {
         if (player == null) {
@@ -891,9 +834,12 @@ public class ForgeNetworkManager implements NetworkManager {
         FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data()));
         try {
             ShadowPullRequestC2SPacket request = ShadowPullRequestC2SPacket.decode(buf);
+            String dimension = io.github.limuqy.mc.hassium.compat.LevelCompat.getDimensionId(player.level());
             ShadowPullResponseS2CPacket response = SHADOW_PULL_HANDLER.handle(player.getUUID(), request,
-                    request.dimension(), request.epoch(), 0, 0, 0,
-                    false, false, entry -> null);
+                    dimension, request.epoch(), player.chunkPosition().x, player.chunkPosition().z,
+                    io.github.limuqy.mc.hassium.compat.PlayerCompat.getViewDistance(player) + 1,
+                    true, player.isAlive() && !player.hasDisconnected(),
+                    entry -> ServerChunkPushManager.getInstance().resolveShadowPull(player, entry, dimension));
             FriendlyByteBuf out = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
             try {
                 response.encode(out);
@@ -917,41 +863,17 @@ public class ForgeNetworkManager implements NetworkManager {
         }
     }
 
-    private static void handleDataRequest(DataRequestWrapper msg, ServerPlayer player) {
-        try {
-            if (player == null) {
-                return;
-            }
-            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data()));
-            ChunkDataRequestC2SPacket request = ChunkDataRequestC2SPacket.decode(buf);
-            ServerChunkPushManager.getInstance()
-                    .handleClientChunkDataRequest(player, request);
-        } catch (Exception e) {
-            LOGGER.error("Hassium: Failed to handle chunk data request", e);
-        }
-    }
 
-    private static void handleClientBloomSync(ClientBloomSyncWrapper msg, ServerPlayer player) {
-        try {
-            if (player == null) {
-                LOGGER.warn("Hassium: Dropped client bloom sync (sender null — PLAY player not ready)");
-                return;
-            }
-            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data()));
-            ClientBloomSyncPacket packet = ClientBloomSyncPacket.decode(buf);
-            ServerChunkPushManager.getInstance().handleClientBloomSync(player, packet);
-        } catch (Exception e) {
-            LOGGER.error("Hassium: Failed to handle client bloom sync", e);
-        }
-    }
 
-    private static void handleChunkHash(ChunkHashWrapper msg) {
+
+    private static void handleShadowPullResponse(ShadowPullResponseWrapper msg) {
+        FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data()));
         try {
-            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data()));
-            ChunkHashS2CPacket packet = ChunkHashS2CPacket.decode(buf);
-            ClientMetadataHandler.handleChunkHashPacket(packet);
+            ShadowPullClient.handleResponse(ShadowPullResponseS2CPacket.decode(buf));
         } catch (Exception e) {
-            LOGGER.error("Hassium: Failed to handle chunk hash packet", e);
+            LOGGER.warn("[CLIENT] Failed to handle shadowPullV1 response", e);
+        } finally {
+            buf.release();
         }
     }
 
@@ -1016,37 +938,9 @@ public class ForgeNetworkManager implements NetworkManager {
     }
 
 
-    @Override
-    public void sendChunkDataRequest(FriendlyByteBuf buf) {
-        // review-fix: T10-7: 未连接时 sendToServer → PacketDistributor.SERVER 抛 IllegalStateException（buf 已 release 丢失）→ 对齐 NeoForge:2555 先查连接
-        if (net.minecraft.client.Minecraft.getInstance().getConnection() != null) {
-            byte[] data = new byte[buf.readableBytes()];
-            buf.readBytes(data);
-            buf.release();
-#if MC_VER < MC_1_21_1
-            CHANNEL.sendToServer(new DataRequestWrapper(data));
-#else
-            sendToServer(new DataRequestWrapper(data));
-#endif
-            LOGGER.debug("Hassium: Sent chunk data request");
-        } else {
-            buf.release();
-        }
-    }
 
     // review-fix: T11-14 sendCompressedPayload 退役（common 接口 default no-op，无调用方）
 
-    @Override
-    public void sendChunkHashPacket(ServerPlayer player, FriendlyByteBuf buf) {
-        byte[] data = new byte[buf.readableBytes()];
-        buf.readBytes(data);
-        buf.release();
-#if MC_VER < MC_1_21_1
-        CHANNEL.sendTo(new ChunkHashWrapper(data), player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
-#else
-        sendToPlayer(player, new ChunkHashWrapper(data));
-#endif
-    }
 
     @Override
     public void sendSeedRef(ServerPlayer player, FriendlyByteBuf buf) {
@@ -1113,24 +1007,6 @@ public class ForgeNetworkManager implements NetworkManager {
     // 唯一消费在网关帧链路；此处仅消费 buf 所有权（release）不再发送。
     public void sendLightDeltaPacket(ServerPlayer player, FriendlyByteBuf buf) {
         buf.release();
-    }
-
-    @Override
-    public void sendClientBloomSync(FriendlyByteBuf buf) {
-        if (net.minecraft.client.Minecraft.getInstance().getConnection() != null) {
-            byte[] data = new byte[buf.readableBytes()];
-            buf.readBytes(data);
-            buf.release();
-#if MC_VER < MC_1_21_1
-            CHANNEL.sendToServer(new ClientBloomSyncWrapper(data));
-#else
-            sendToServer(new ClientBloomSyncWrapper(data));
-#endif
-            LOGGER.debug("Hassium: Sent client bloom sync");
-        } else {
-            // 连接不存在，释放缓冲区
-            buf.release();
-        }
     }
 
     /**
@@ -1396,59 +1272,6 @@ public class ForgeNetworkManager implements NetworkManager {
         }
     }
 
-    public record DataRequestWrapper(byte[] data) {
-        public void encode(FriendlyByteBuf buf) {
-            buf.writeVarInt(data.length);
-            buf.writeBytes(data);
-        }
-
-        public static DataRequestWrapper decode(FriendlyByteBuf buf) {
-            // review-fix: T10-9: length 无上限 → readTail 式校验（恶意超大 varInt 拒绝分配）
-            int length = buf.readVarInt();
-            if (length < 0 || length > buf.readableBytes()) {
-                throw new IllegalArgumentException("invalid DataRequestWrapper length: " + length);
-            }
-            byte[] data = new byte[length];
-            buf.readBytes(data);
-            return new DataRequestWrapper(data);
-        }
-    }
-
-    public record ClientBloomSyncWrapper(byte[] data) {
-        public void encode(FriendlyByteBuf buf) {
-            buf.writeVarInt(data.length);
-            buf.writeBytes(data);
-        }
-
-        public static ClientBloomSyncWrapper decode(FriendlyByteBuf buf) {
-            // review-fix: T10-9: length 无上限 → readTail 式校验（恶意超大 varInt 拒绝分配）
-            int length = buf.readVarInt();
-            if (length < 0 || length > buf.readableBytes()) {
-                throw new IllegalArgumentException("invalid ClientBloomSyncWrapper length: " + length);
-            }
-            byte[] data = new byte[length];
-            buf.readBytes(data);
-            return new ClientBloomSyncWrapper(data);
-        }
-    }
-
-    public record ChunkHashWrapper(byte[] data) {
-        public void encode(FriendlyByteBuf buf) {
-            buf.writeVarInt(data.length);
-            buf.writeBytes(data);
-        }
-
-        public static ChunkHashWrapper decode(FriendlyByteBuf buf) {
-            // review-fix: T10-9: length 无上限 → readTail 式校验（恶意超大 varInt 拒绝分配）
-            int length = buf.readVarInt();
-            if (length < 0 || length > buf.readableBytes()) {
-                throw new IllegalArgumentException("invalid ChunkHashWrapper length: " + length);
-            }
-            byte[] data = new byte[length];
-            buf.readBytes(data);
-            return new ChunkHashWrapper(data);
-        }
-    }
 
     public record SectionHashRequestWrapper(byte[] data) {
         public void encode(FriendlyByteBuf buf) {

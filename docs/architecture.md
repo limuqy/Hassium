@@ -7,10 +7,10 @@
 Hassium 是 Minecraft 多加载器模组（Fabric / Forge / NeoForge），围绕「**更小的网络传输 + 更快的本地加载**」优化存档与区块传输。对应 [README 特性表](../README.md) 的五大能力类：
 
 - **高效压缩** —— 存储压缩、网络压缩
-- **网络优化** —— 平滑推送（含反馈式渐进 admission）、网关帧协议、L1 无感迁移（切换 outbound + 续流票据）
-- **区块缓存** —— 影子端世界保存（进服区块统一由进程内影子服务端落盘原版存档）、超视渲染、世界导出
-- **本地生成** —— SeedGen：大片未探索地形（pristine 区块）服务端只发坐标引用，客户端同种子本地生成（需双端同版本，默认关）。**开启服务端开关会向客户端下发世界种子，等同泄露服务端种子**
-- **光照优化** —— Hassium 引擎（影子端统一算光 + 官方通道回传）、光照剥离、光照缓存；并行光照为可选（安装 Promethium 后开启）
+- **网络优化** —— 平滑推送（由影子虚拟服务端原版 tracking 决定区块 admission）、网关帧协议、L1 无感迁移（切换 outbound + 续流票据）
+- **区块缓存** —— 影子端世界保存（进程内影子服务端按原版区块机制加载、落盘和推送）、世界导出
+- **本地生成** —— SeedGen：影子端对 pristine 区块执行生成前权威校验后再进入原版 ChunkStatus/LightEngine。**开启服务端开关会向客户端下发世界种子，等同泄露服务端种子**
+- **光照优化** —— 影子端原版 LightEngine 统一算光并通过官方 vanilla packet 回传；服务端不恢复完整 light admission
 - **实用工具** —— 流量监控
 
 目标版本：Minecraft **1.20.1 / 1.21.1–1.21.11**（七段适配，见 version-segments）。Forge 支持 **1.20.1 / 1.21.1 / 1.21.3–1.21.10**（1.21.2 无上游 userdev；1.21.11 sunset）。
@@ -22,15 +22,13 @@ Hassium 是 Minecraft 多加载器模组（Fabric / Forge / NeoForge），围绕
 | 进服/探图，区块一直转圈 | 服务端推全量区块包，带宽慢、主线程卡 | **网络压缩 + 平滑推送**：ZSTD 替代 Zlib，每 tick 限速推送、encode/压缩/发送全部后台化；进服首波不再卡主线程 |
 | 重连服务器 / 再次进入同一区域 | 同一片区域又要重新下载一遍 | **影子端世界保存**：进服区块统一由进程内影子服务端（完整 MinecraftServer）算光并落盘原版存档（`hassium_cache/<serverId>/world`），断连保存、重连复用 |
 | 缓存过期（服务器里东西变了） | 整块重传 | **分段增量**：稀疏只补变更方块，过多则整段/整块 |
-| 服务器视距小，远处白茫茫 | 客户端想渲染更远，但服务端不推 | **超视渲染**：用本地缓存回填视距外环带（仅渲染，不向服索要） |
-| 光照数据占传输大头 | 每个区块包都带一整柱光照 | **光照剥离 + Hassium 引擎**：服务端剥光（握手协商），由客户端进程内影子服务端统一计算光照并打包官方区块包，经官方通道回传落地 |
-| 大片未探索地形（pristine 区块） | 服务端也要逐块生成并传输 | **本地生成（SeedGen）**：服务端发坐标引用，客户端用同 seed 本地生成。**开启会泄露服务端种子** |
+| 服务端视距与客户端接收 | 旧实现由服务端主动 admission、客户端 hash/缓存状态共同决定 | **影子虚拟 ServerPlayer + ServerChunkCache/ChunkMap**：影子端根据同步位置执行原版 tracking，真实客户端只接收 vanilla chunk+light/forget packet |
+| 大片未探索地形（pristine 区块） | 服务端也要逐块生成并传输 | **影子端本地生成**：先经服务端权威校验，再进入影子端原版 ChunkStatus/LightEngine；**开启服务端开关会泄露世界种子** |
 | 主控服务器网络抖动 | 直接断线回大厅 | **网络核心无感迁移**：主控故障/断流时由 L1 迁移引擎切换 outbound 连接，持续流票据在新主控续流，区块缓存/进度无感延续 |
 
 ## 3. 谁适合启用
 
-- **普通玩家**：装上即用。默认全开：网络压缩、影子端世界保存、分段增量、超视渲染、光照剥离/缓存/同步模式、Hassium 引擎（进程内影子服务端统一算光与保存）。无需配置。
-- **服主**：`storage.enabled`（存储压缩）**默认关**——开启会改写存档格式（type 126），**启用前请备份世界**；`chunk.seedGenEnabled` 默认关——本地生成需要**双端同版本**且客户端开同项，pristine 区块才走本地生成，否则自动回退全量推送。**开启服务端本地生成会向客户端下发世界种子，等同泄露服务端种子**（探图/种子地图/导出存档均可利用）。
+- **服主**：`storage.enabled`（存储压缩）**默认关**——开启会改写存档格式（type 126），**启用前请备份世界**；`chunk.seedGenEnabled` 默认关——本地生成需要**双端同版本**且客户端开同项，pristine 区块才走本地生成，否则由影子端向服务端受控取数。**开启服务端本地生成会向客户端下发世界种子，等同泄露服务端种子**（探图/种子地图/导出存档均可利用）。
 - **公网部署（UDP 数据面/网关）**：默认端点是 `127.0.0.1`，仅本机可用；必须把 `dataplane.udpListeners[*].reachableEndpoints` 改为公网可达地址并放行 UDP 端口（网关监听端口取 `master.controlReachableEndpoints[0]`，兜底 25566），见 §13。
 
 ---
@@ -94,52 +92,56 @@ Hassium/
 |----|------|
 | `storage/`（存储域） | `HassiumChunkWriteBuffer`（type 126 payload 写缓冲）、`ShadowStorageHashes`（进程内 chunkHash/光脏桥）、`ShadowStorageManager` / `ShadowRegionHeat`（region 映像 + `heat.idx`）；type 126 压缩由 `compression/CompressionService` 收口 |
 | `compression/`（存储域） | `CompressionCodec` / `CompressionService`、字典注册 |
-| `network/`（**主控核心**） | 服务端网络与推送：握手（`HassiumHandshake` / `PreHandshakeProtocol` / `SeedGenTail`）、管线 ZSTD 与聚合（`ZstdPipelineSwitcher` / `ZstdNegotiationTracker` / `HassiumAggregationManager`）、chunkHash / section-delta / light-delta / BlockEntity 推送、`ServerChunkPushManager` / `ChunkSender` / `ServerLoadReporter`、续流票据（`ResumeTicket` / `ResumeTicketValidator`） |
-| `network/seedgen/`（区块核心 = 影子端后端引擎） | 影子端：`ShadowSeedServer` / `ShadowLightCompute` / `ShadowServerRegistry` / `SeedGenLevelCompat` / `SeedGenChunkCodec` / `SeedGenQueue` / `SeedGenExecutor` / `ShadowCacheEviction` / `OvdLocalGenerator` |
-| `network/dataplane/`（数据面，支撑域） | UDP 数据面：`DataPlaneUdpServer` / `DataPlaneClientBundle` / `ReliableDatagramSession` / `UdpBulkRouter` / `ControlFailoverHandler` / `DataPlaneFrame` / `Hkdf` 等 |
-| `network/core/`（**网络核心**） | 客户端进程内网关：`NetworkCore`（状态机 `NetworkCoreState`：IDLE/CONNECTING/HANDSHAKING/ACTIVE/MIGRATING）、`GatewayS2CRouter`（S2C 注入器）、`GatewayPacketCodec`（帧内原版/Hassium 子协议编解码）；`core/outbound/` outbound 帧协议（`OutboundConnection` / `ControlFrameCodec` / `HandshakeCodec` / `UdpDataPlane`）；`core/migration/` L1 迁移引擎（`MigrationEngine` / `MigrationPolicy` / `PrewarmSession` / `IdleWindowDetector` / `MigrationEndpoint`）；`core/viafabric/`（`ViaFabricCompat` / `ViaDecodeBridge`） |
-| `network/gateway/`（**主控核心**） | 服务端网关接入：`GatewayServer`（帧监听）/ `GatewayChannel`（帧连接，outbound 对称端）/ `GatewayPlayerSession` / `GatewayPlayerRegistry` / `GatewayServerInfoProvider` / 登录桥（`LoginPayloadSink` / `C2SPayloadSink`） |
-| `network/ClientChunkHandler` → `ClientChunkPipeline`（区块核心） | 客户端区块摄入管线的门面与状态容器（Phase 0 隔离：storage / pending hash / SeedGen 握手信息全收拢为单例状态）；S2C 区块数据由网络核心经网关帧注入原版监听器后 handler 层直调 |
-| `cache/`（区块核心） | 客户端侧轻量设施：`ChunkContentHashUtil`（section hash 算法）；`cache/client/` OVD 超视渲染（`ViewDistanceExtensionService` / `IClientLevelExtension`）、主线程预算（`ClientMainThreadBudget`）、Bloom（`ChunkBloomFilter`）、生命周期（`ClientLifecycleHelper`）；**缓存存储与清理由影子端承担**（`seedgen/ShadowSeedServer` 存档 + `seedgen/ShadowCacheEviction` 热度淘汰，heat.idx 按服务器分离） |
-| `config/` / `metrics/` / `compat/` / `mixin/`（支撑设施） | `HassiumConfigService` 门面（Fabric：`FabricTomlConfigIO`；Forge/NeoForge：`ModConfigSpec`）；`NetworkStats` 零分配指标（`HassiumMetricsImpl`）；Manifold 跨版本 API 桥接；全部 Mixin（common only） |
-| `migration/` / `api/`（支撑设施） | 存档迁移工具（`MigrationTool`）与对外 API（`HassiumApi` / `HassiumCapabilities`） |
+| `network/`（主控核心） | 服务端网络与推送：握手、网关帧、`ServerChunkPushManager`、`SeedRef`/vanilla chunk push；不再以客户端 Bloom/hash 决定 admission |
+| `network/seedgen/`（区块核心 = 影子端后端引擎） | `ShadowSeedServer` 运行虚拟 `ServerPlayer`，由 `ServerChunkCache` / `ChunkMap` / `ChunkHolder` 管理加载、卸载、ChunkStatus 与光照；`ShadowCacheEviction` 负责缓存淘汰 |
+| `network/core/`（网络核心） | 客户端进程内网关与迁移；S2C 原版包注入影子端连接，C2S 只同步玩家状态/控制面 |
+| `network/gateway/`（主控核心） | 服务端网关接入与会话管理 |
+| `network/ClientChunkHandler` → `ClientChunkPipeline` | 仅负责网关帧解包、官方 packet apply 与状态降级；不维护独立视距/halo |
+| `cache/`（区块核心支撑） | 客户端轻量预算与生命周期；缓存存储、读盘和清理由影子服务端承担 |
+| `config/` / `metrics/` / `compat/` / `mixin/`（支撑设施） | `HassiumConfigService` 门面；`NetworkStats` 指标；Manifold 跨版本 API 桥接；全部 Mixin（common only） |
+| `migration/` / `api/`（支撑设施） | 存档迁移工具与对外 API |
 
 ## 6. 客户端区块数据流
 
-**影子端架构**：客户端进程内运行一个完整 `MinecraftServer`（`ShadowSeedServer`，专用线程驱动主循环），统一承担**世界保存（缓存）+ 光照计算 + 打包官方区块包**。2.0.0 起所有 Hassium 数据经**网络核心网关帧**进入客户端：S2C 由 `GatewayS2CRouter` 注入原版监听器（handler 层直调），区块数据解包后与 SeedGen 生成一样投递影子端（区块核心后端引擎）算光，再把带权威光的官方区块包经官方通道 apply；客户端本身不再读写缓存、不再计算光照，只保留注入直调 + 官方通道 apply。
+**影子端架构**：客户端进程内运行完整 `MinecraftServer`（`ShadowSeedServer`）。真实玩家位置只同步给唯一虚拟 `ServerPlayer`；影子 `ServerChunkCache` / `ChunkMap` 负责 tracking、读盘、生成、光照和 unload。客户端不枚举视距、不维护 halo；每个被原版 tracking 选中的区块都进入同一个“对比并拉取”协议。
 
 ```mermaid
 flowchart LR
-    subgraph IN["网关注入 S2C（网络核心 → 区块核心）"]
-        A1["帧中继原版包<br/>（KIND_VANILLA，含 chunk packet）"]
-        A2["Hassium 子协议包<br/>CHUNK_HASH / SECTION_DELTA / LIGHT_DELTA / SEED_REF"]
-        A3["SeedGen 本地生成"]
-    end
-    A1 --> B["GatewayS2CRouter 注入原版监听器<br/>→ handleCompressedChunk → decodeChunkPacket<br/>还原官方包（后台解压）"]
-    A2 --> B
-    A3 --> D["SeedGenExecutor.generateOne<br/>submitGenerated(pos, chunk, level)"]
-    B --> C["ShadowLightCompute.submit(pos, packet)"]
-    D --> C
-    C --> E["影子端 consumeLoop<br/>注入空壳 LevelChunk + packet 数据<br/>清光 → 官方引擎传播重算"]
-    E --> F["20ms 轮询等全局收敛（5s 上限）"]
-    F --> G["SeedGenChunkCodec.buildPacket<br/>带权威光官方包 → ready 队列"]
-    G --> H["主线程帧尾 drainReady<br/>handleLevelChunkWithLight<br/>官方通道 vanilla apply"]
-    E -.->|"注入失败"| I["failShadowServer 整体降级<br/>关缓存/OVD/SeedGen + 游戏内提示"]
-    F -.->|"收敛超时"| G
-    E -.->|"断连 saveAll"| J["hassium_cache/<serverId>/world<br/>原版存档结构 + type 126 + chunkHash"]
-    J -.->|"R2 复用目录"| E
+    A[真实玩家位置/维度] --> B[唯一影子 ServerPlayer]
+    B --> C[原版 ServerChunkCache / ChunkMap tracking]
+    C --> D{存档是否有区块}
+    D -->|有| E[原版读盘 type126 / ChunkSerializer]
+    D -->|没有| F{本地生成开启且已获真实 seed?}
+    F -->|是| G[影子端原版生成并算光前校验]
+    F -->|否| H[不生成，保留服务端请求路径]
+    E --> I[统一 Compare+Pull]
+    G --> I
+    H --> I
+    I -->|chunkPos + contentHash + sectionHashes + lightGeneration| J[服务端校验与差异比较]
+    J -->|FULL| K[服务端完整区块数据]
+    J -->|DELTA| L[服务端差异 section 数据]
+    J -->|ERROR| M[错误结果 / 触发安全重试]
+    K --> N[影子端 pre-LIGHT / 原版光照]
+    L --> N
+    M --> N
+    N --> O[影子 vanilla connection packet sink]
+    O --> P[真实客户端 chunk+light / forget]
 ```
+
+统一协议的关键不是“缓存命中就不请求”：存档命中、影子本地生成和纯服务端取数都先形成同一份本地基线（若存在），携带 `chunkPos`、`contentHash`、`sectionHashes`、`lightGeneration` 进入一次合并后的 Compare+Pull。服务端是权威比较者，只返回 `FULL`、`DELTA` 或 `ERROR`；客户端不得根据 section hash 自行猜测 FULL/DELTA。
+
+本地生成门控是硬条件：客户端本地生成开关开启、服务端 SeedGen 开启、并且握手已收到真实 `seed + LevelStem` 才允许生成；任一条件不满足，直接跳过生成，交给服务端请求/原版 tracking，不以默认 seed 或伪造基线继续。
+
+区块数据流的边界：影子 `ChunkMap` 决定进入和离开 tracking，统一 Compare+Pull 只决定被选中区块的数据形态；所有结果在 `pre-LIGHT` 汇合，之后由原版 `ThreadedLevelLightEngine` 和 packet sink 推送。客户端不决定推送集合，也不实现第二套 unload。
 
 要点：
 
-- **统一汇合**：网关注入的原版包/Hassium 子协议包（`GatewayS2CRouter` → handler 直调 → `handleCompressedChunk` → `decodeChunkPacket` 还原官方 `ClientboundLevelChunkWithLightPacket`）与 SeedGen 生成区块（`submitGenerated`）全部投递 `ShadowLightCompute`（任意线程可投，同柱 REPLACE 覆盖）；服务端未装 MOD（无网关/Hassium 通道）时走原版直发，影子端不启动，光随包自带
-- **出站收口**：PLAY 期客户端 C2S 由 `MixinConnection` 截获 → `NetworkCore.routeC2S` → `GatewayPacketCodec` 编码进 `PACKET_C2S` 帧经 outbound 发往主控 `GatewayChannel`（主控按会话 sink 分发）；世界侧壳连接仅 keep-alive 响应走 vanilla TCP
-- **影子端算光**：`injectChunk` 建空壳 `LevelChunk` + `replaceWithPacketData` 填数据 + 清光（`queueSectionData(null)`）→ 官方 `ThreadedLevelLightEngine` 传播重算（与区块生成后算光同款逻辑，无特殊机制）；`SeedGenExecutor.generateOne` 生成的区块走 `submitGenerated` 同链
-- **收敛等待**：后台单循环注入全部 → 20ms 轮询等全局收敛（5s 上限）→ `SeedGenChunkCodec.buildPacket` 打包（带权威光）入 ready；**收敛超时仍打包直推**（数据完整、光欠由后续传播/相邻块补齐——客户端不参与光照计算）
-- **官方通道落地**：主线程帧尾 `drainReady` 直接调 `connection.handleLevelChunkWithLight`（原版 apply 路径）；预算化由 `MixinVanillaChunkApplyBudget` 原样生效
-- **世界保存**：断连 `saveAll()` 把尚未落盘的脏 region 映像写出（`hassium_cache/<serverId>/world`，**原版存档结构**，type 126 + chunkHash）。热度索引 `heat.idx` 由 `ShadowRegionHeat` 解析文件内容加载/落盘（按 `r.X.Z.mca` 计，跨会话累计；存储管理器写盘时回写文件大小）
-- **失败语义**：**注入失败 = 握手失败等价**——`failShadowServer` 整体降级（关闭缓存/超视渲染/SeedGen + 游戏内提示），不做逐柱兜底；旧链 `MixinLightRecompute` 仅覆盖非影子模式（引擎关闭/服务端未剥光）的空光块
-- **缓存清理**（`ShadowCacheEviction`）：容量上限（`chunk.maxSizeMb` 等 7 键）超限后按热度（`hotScore = recencyWeight·1/(1+ageTicks) + frequencyWeight·1/(1+accessCount)`）淘汰冷 **region 文件**——列目录 + `Files.size`（不拆 Anvil 头），`ShadowStorageManager.deleteRegion` 删整个 `.mca`；本会话 `injectedChunks` 落到的 region 跳过；客户端主线程帧尾节流驱动（`chunk.cleanupIntervalTicks`），扫描/删除在后台池
+- **读盘优先**：`scheduleChunkLoad` 命中 type 126 时继续原版 `ChunkSerializer`；缺失才进入生成/请求分支。
+- **统一比较**：cache、local generation、纯 pull 都走同一个 Compare+Pull，服务端统一输出 `FULL` / `DELTA` / `ERROR`。
+- **生成安全**：没有真实 seed 或本地生成未开启时不生成；不得把本地猜测结果推到客户端。
+- **推送与卸载**：影子虚拟玩家触发原版 tracking；packet sink 透传 vanilla chunk+light 与 forget。
+- **世界保存**：影子 `saveAll()` 写入 `hassium_cache/<serverId>/world` 的 type 126 原版存档结构，热度淘汰由 `ShadowCacheEviction` 承担。
+
 
 ## 7. 存储格式
 
@@ -233,7 +235,7 @@ Sector 2+:    [length(4)][type=126][magic 0x48][hash(8)][ZSTD 压缩数据]
 
 | 配置键 | 端 | 含义 |
 |--------|----|------|
-| `debug.metadataLogging` | 客户端 | chunkHash / 元数据比对 |
+| `debug.metadataLogging` | 客户端 | ShadowPull 请求/响应与来源校验（不再用于客户端 chunkHash admission） |
 | `debug.dispatcherLogging` | 双端 | 主线程调度 / MSPT |
 | `debug.asyncLogging` | 双端 | 异步任务（客户端含 SeedGen 生成/超时） |
 | `debug.compressionLogging` | 双端 | 压缩/解压 |

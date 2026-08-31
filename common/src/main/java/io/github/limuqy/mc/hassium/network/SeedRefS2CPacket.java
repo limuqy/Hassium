@@ -10,7 +10,7 @@ import net.minecraft.network.FriendlyByteBuf;
  * 复算并按 hash 校验；不支持/校验失败时回退全量请求。替代 ChunkHashS2C 的
  * 数据任务（几十字节 vs 全量区块数据）。
  *
- * @param sectionHashes per-section hash 数组（与 ChunkHashS2CPacket bitmap 对应的完整数组）
+ * @param sectionHashes per-section hash 数组
  */
 public record SeedRefS2CPacket(
         int chunkX,

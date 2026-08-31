@@ -97,53 +97,7 @@ class MainThreadDispatcherPriorityTest {
         assertEquals(0, MainThreadDispatcher.getClientQueueSize());
     }
 
-    @Test
-    @DisplayName("坐标未知时权威仍为 AUTHORITATIVE 层、环带仍为 RENDER_ONLY 层（层序不破）")
-    void unknownPosKeepsTierOrderAuthoritativeAboveRenderOnly() {
-        double auth = MainThreadDispatcher.authoritativePriority(new ChunkPos(0, 0));
-        double ovd = MainThreadDispatcher.renderOnlyPriority(new ChunkPos(3, -7));
-        double unknown = MainThreadDispatcher.PRIORITY_UNKNOWN;
 
-        assertEquals(ChunkDistancePriority.ofUnknownDistance(ChunkDistancePriority.Tier.AUTHORITATIVE), auth);
-        assertEquals(ChunkDistancePriority.ofUnknownDistance(ChunkDistancePriority.Tier.RENDER_ONLY), ovd);
-        assertTrue(auth < unknown, "auth < unknown");
-        assertTrue(unknown < ovd, "unknown < ovd");
-        // 任意坐标未知权威均同键（不伪装原点）
-        assertEquals(auth, MainThreadDispatcher.authoritativePriority(new ChunkPos(400, 400)));
-    }
-
-    @Test
-    @DisplayName("坐标已知时 renderOnly 仍低于同位置权威")
-    void knownPosRenderOnlyAfterAuthoritative() {
-        MainThreadDispatcher.updatePlayerPosition(48.0, -112.0);
-        ChunkPos pos = new ChunkPos(3, -7);
-        assertTrue(MainThreadDispatcher.authoritativePriority(pos)
-                < MainThreadDispatcher.renderOnlyPriority(pos));
-    }
-
-    @Test
-    @DisplayName("主线程调度：权威 > 无锚点未知任务 > 环带")
-    void dispatchOrderAuthThenUnknownThenRenderOnly() {
-        MainThreadDispatcher.updatePlayerPosition(0, 0);
-
-        List<String> applied = new ArrayList<>();
-        // 先入队环带（用显式 renderOnly 键）与未知（无锚点 execute）
-        MainThreadDispatcher.execute(
-                () -> applied.add("ovd"),
-                MainThreadDispatcher.renderOnlyPriority(new ChunkPos(1, 0)),
-                TaskCategory.SAFE_TO_CANCEL);
-        MainThreadDispatcher.execute(() -> applied.add("unknown")); // PRIORITY_UNKNOWN
-        // 极远权威仍应先于未知
-        MainThreadDispatcher.execute(
-                () -> applied.add("authFar"),
-                new ChunkPos(100, 100));
-        MainThreadDispatcher.execute(
-                () -> applied.add("authNear"),
-                new ChunkPos(0, 0));
-
-        MainThreadDispatcher.flushClient(10);
-        assertEquals(List.of("authNear", "authFar", "unknown", "ovd"), applied);
-    }
 
     @Test
     @DisplayName("同位置重复入队：新任务取代旧任务，只执行一次")

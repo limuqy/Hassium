@@ -2,11 +2,9 @@ package io.github.limuqy.mc.hassium.mixin;
 
 import io.github.limuqy.mc.hassium.cache.client.ClientMainThreadBudget;
 import io.github.limuqy.mc.hassium.Constants;
-import io.github.limuqy.mc.hassium.cache.client.ViewDistanceExtensionService;
 import io.github.limuqy.mc.hassium.client.ClientSmokeTest;
 import io.github.limuqy.mc.hassium.concurrent.MainThreadDispatcher;
 import io.github.limuqy.mc.hassium.network.ClientMetadataHandler;
-import io.github.limuqy.mc.hassium.network.ShadowChunkLoaderRuntime;
 import io.github.limuqy.mc.hassium.utils.TickMonitor;
 import net.minecraft.client.Minecraft;
 import org.spongepowered.asm.mixin.Mixin;
@@ -71,12 +69,6 @@ public class MixinClientTick {
         } catch (Exception e) {
             // UDP 数据面可选；延迟启动失败不得中断客户端 tick。
         }
-        try {
-            ShadowChunkLoaderRuntime.tick();
-        } catch (Throwable t) {
-            // Pull 失败必须触发旧链路 fallback，不得打断原版客户端 tick。
-            Constants.LOG.debug("Hassium: shadowPullV1 tick failed", t);
-        }
 
         // 更新玩家坐标，用于 MainThreadDispatcher 距离优先级计算
         try {
@@ -88,24 +80,6 @@ public class MixinClientTick {
             // 忽略
         }
 
-        try {
-            ViewDistanceExtensionService.getInstance().update();
-        } catch (Exception e) {
-            // 忽略更新错误
-        }
-        try {
-            io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.flushDeferredRemoteHashes();
-        } catch (Exception e) {
-            // 缓存读盘配额用尽后的续抽；失败不得中断 tick
-        }
-        try {
-            io.github.limuqy.mc.hassium.network.seedgen.ShadowServerRegistry.getInstance()
-                    .flushPendingBloomSync();
-        } catch (Exception e) {
-            // Bloom 推迟到握手后；tick 补发失败不得中断
-        }
-
-        // 主线程时间预算：网络回调 vs 影子落地。JoinBoost 或影子管线仍有 backlog
         // （ready / pending / 在途光）时预留一半给 drainReady，避免 dispatcher 先把
         // deadline 用尽导致整帧 0 chunk（ROUND1 在 JoinBoost 10s 到期后曾因此卡 22s）。
         long budgetNs = ClientMainThreadBudget.getBudgetNs();
@@ -127,12 +101,6 @@ public class MixinClientTick {
             MainThreadDispatcher.flushClientUntil(dispatcherDeadlineNs);
         }
 
-        // 全量请求超时重发（fallback 链兜底；SeedGen 影子端接管时无请求）
-        try {
-            io.github.limuqy.mc.hassium.network.ClientMetadataHandler.tickPendingFullRequestTimeouts();
-        } catch (Exception e) {
-            // 忽略
-        }
 
         // 首登 SEED_REF/chunkHash 缓冲重放：login bridge 完成后服务端早于客户端 world
         // 就绪发包，world 就绪后每 tick 重放（登录过渡窗口内帧不丢，seedgen 不哑火）

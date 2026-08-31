@@ -46,25 +46,19 @@ public final class FabricSendCompat {
 
 #if MC_VER >= MC_1_21_1
     private static CustomPacketPayload c2sPayload(PacketId channel, FriendlyByteBuf buf) {
-        if (channel.equals(HassiumChannels.CHUNK_DATA_REQUEST_C2S)) {
-            return FabricPayloadRegistry.toPayload(FabricPayloadRegistry.CHUNK_DATA_REQUEST_C2S_TYPE, buf);
-        }
         if (channel.equals(HassiumChannels.SECTION_HASH_REQUEST_C2S)) {
             return FabricPayloadRegistry.toPayload(FabricPayloadRegistry.SECTION_HASH_REQUEST_C2S_TYPE, buf);
         }
         if (channel.equals(HassiumChannels.BLOCK_ENTITY_REQUEST_C2S)) {
             return FabricPayloadRegistry.toPayload(FabricPayloadRegistry.BLOCK_ENTITY_REQUEST_C2S_TYPE, buf);
         }
-        if (channel.equals(HassiumChannels.CLIENT_BLOOM_SYNC_C2S)) {
-            return FabricPayloadRegistry.toPayload(FabricPayloadRegistry.CLIENT_BLOOM_SYNC_C2S_TYPE, buf);
+        if (channel.equals(HassiumChannels.SHADOW_PULL_REQUEST_C2S)) {
+            return FabricPayloadRegistry.toPayload(FabricPayloadRegistry.SHADOW_PULL_REQUEST_C2S_TYPE, buf);
         }
         throw new IllegalArgumentException("Unknown Hassium C2S channel: " + channel);
     }
 
     private static CustomPacketPayload s2cPayload(PacketId channel, FriendlyByteBuf buf) {
-        if (channel.equals(HassiumChannels.CHUNK_HASH_S2C)) {
-            return FabricPayloadRegistry.toPayload(FabricPayloadRegistry.CHUNK_HASH_S2C_TYPE, buf);
-        }
         if (channel.equals(HassiumChannels.SEED_REF_S2C)) {
             return FabricPayloadRegistry.toPayload(FabricPayloadRegistry.SEED_REF_S2C_TYPE, buf);
         }

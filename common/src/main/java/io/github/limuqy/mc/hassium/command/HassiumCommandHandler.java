@@ -1,7 +1,6 @@
 package io.github.limuqy.mc.hassium.command;
 
 
-import io.github.limuqy.mc.hassium.cache.client.ViewDistanceExtensionService;
 import io.github.limuqy.mc.hassium.metrics.HassiumMetricsImpl;
 import io.github.limuqy.mc.hassium.metrics.MetricsTextFormatter;
 import io.github.limuqy.mc.hassium.metrics.NetworkStats;
@@ -82,7 +81,6 @@ public class HassiumCommandHandler {
                 shardBytes, appliedBytes)).append('\n');
         sb.append(formatChunkLoadLine(metrics, fullRequests + serverPush, localCount)).append('\n');
         sb.append(formatLightCacheLine(metrics)).append('\n');
-        sb.append(formatOvdLine()).append('\n');
         sb.append(formatSavingsLine(metrics)).append('\n');
         // 每行末尾统一带 \n；冒烟 strip 后用 split("\\R", -1) 已能容忍空末行。
         return sb.toString();
@@ -138,25 +136,6 @@ public class HassiumCommandHandler {
                 localCount, MetricsTextFormatter.formatBytes(localBytes));
     }
 
-    private static String formatOvdLine() {
-        ViewDistanceExtensionService ovd = ViewDistanceExtensionService.getInstance();
-        if (!ovd.isEnabled()) {
-            return "§e超视渲染：§r§7OFF§r";
-        }
-        // 拆分"渲染 N/M"与"已加载/缺失"两段，一目了然区分客户端渲染半径 vs 服务端推送半径
-        // 影子复用 = 影子端 hash 比对命中（内存/磁盘读回）直接服务的区块数（T5g）：
-        // 这些区块经官方通道以普通区块落地，不进入 loaded 集合，单独展示；
-        // 「已加载」仍为 renderOnly 落地数（既有语义不变）。
-        // T7 口径对齐：「环带服务」= 已加载 + 影子复用（会话内环带由本地存储服务的累计数），
-        // 与 slm_final 长会话基线 OVD loaded（>1100，长会话累计）同族可比——基线只统计
-        // renderOnly 落地，本值并入影子端直推后口径更全；窗口语义（10s/20s 快照 vs 长会话）
-        // 由对比文档标注，不作为单值跨窗口硬比。
-        long ringServed = ovd.getLoadedCount() + ovd.getShadowServedCount();
-        return String.format(
-                "§e超视渲染：§r§aON§r（§a渲染 %d/%d§r，已加载 %d，缺失 %d，影子复用 %d，环带服务 %d）",
-                ovd.getLastClientVD(), ovd.getLastServerVD(),
-                ovd.getLoadedCount(), ovd.getPendingMissCount(), ovd.getShadowServedCount(), ringServed);
-    }
 
     private static String formatLightCacheLine(HassiumMetricsImpl m) {
         // 剥光协商（lightComputeSupported=true）下 hasCachedLight 恒 false → 直连命中口径
@@ -246,15 +225,10 @@ public class HassiumCommandHandler {
     }
 
     /**
-     * 导出影子端世界为完整存档目录（客户端命令）。
+     * 导出影子端世界为不含实体数据的完整存档目录（客户端命令）。
      * <p>
-     * 直接拷贝影子端世界目录 {@code hassium_cache/<serverId>/world}
-     * 到 {@code hassium_exports/<serverId>}。{@code level.dat} 由影子端用原版
-     * {@code saveDataTag} 写出（含 WorldOptions 种子），导出不再改写 NBT。
-     * 亦可不进游戏，把该 {@code world} 目录复制到 {@code saves/} 当单机存档
-     * （须已离开服务器，避免 session.lock；格式仍为 type 126）。
-     * <p>
-     * 异步执行；进度通过聊天回报。
+     * 复制影子端世界的区块、POI 和 level.dat；任何路径段为 {@code entities}
+     * 的实体存储目录均跳过。影子玩家只存在于当前会话内，不进入导出存档。
      *
      * @param serverIp 服务器 IP:Port（null/空时导出当前连接的服务器缓存）
      * @param seed     保留参数（种子已在影子端 level.dat 中，拷贝即可）
@@ -289,8 +263,7 @@ public class HassiumCommandHandler {
             copyTreeAsync(src, dst, cacheId);
             return "§a开始导出 " + cacheId + " 的影子端世界...§r"
                     + "\n§7目标: " + dst + "§r"
-                    + "\n§7亦可把 hassium_cache/" + cacheId + "/world 直接复制到 saves/§r"
-                    + "\n§7(保留 type 126 + chunkHash；level.dat 为影子端原版写出)§r";
+                    + "\n§7(不导出 entities；保留 type 126 + chunkHash；level.dat 为影子端原版写出)§r";
         } catch (Exception e) {
             return "§c导出启动失败: " + e.getMessage() + "§r";
         }
@@ -321,7 +294,14 @@ public class HassiumCommandHandler {
         try (java.util.stream.Stream<Path> stream = Files.walk(src)) {
             java.util.List<Path> paths = stream.toList();
             for (Path p : paths) {
-                Path target = dst.resolve(src.relativize(p).toString());
+                Path relative = src.relativize(p);
+                boolean entityPath = relative.iterator().hasNext()
+                        && java.util.stream.StreamSupport.stream(relative.spliterator(), false)
+                        .anyMatch(part -> "entities".equals(part.toString()));
+                if (entityPath) {
+                    continue;
+                }
+                Path target = dst.resolve(relative.toString());
                 if (Files.isDirectory(p)) {
                     Files.createDirectories(target);
                 } else if ("session.lock".equals(p.getFileName().toString())) {
@@ -333,7 +313,6 @@ public class HassiumCommandHandler {
             }
         }
     }
-
     /** 将服务器 IP:Port 转换为缓存目录名（review-fix: T8-27: 收敛到 utils/ServerIdUtil 单一实现）。 */
     private static String sanitizeServerIp(String serverIp) {
         return io.github.limuqy.mc.hassium.utils.ServerIdUtil.sanitize(serverIp);

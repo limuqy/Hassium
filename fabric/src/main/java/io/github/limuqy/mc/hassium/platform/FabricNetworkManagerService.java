@@ -1,42 +1,20 @@
 package io.github.limuqy.mc.hassium.platform;
 
 import io.github.limuqy.mc.hassium.compat.HassiumChannels;
-import io.github.limuqy.mc.hassium.network.ChunkDataRequestC2SPacket;
-import io.github.limuqy.mc.hassium.network.ChunkHashS2CPacket;
-import io.github.limuqy.mc.hassium.network.SeedRefS2CPacket;
 import io.github.limuqy.mc.hassium.network.FabricNetworkManager;
-import io.github.limuqy.mc.hassium.network.LightDeltaS2CPacket;
-import io.github.limuqy.mc.hassium.network.SectionDeltaS2CPacket;
-import io.github.limuqy.mc.hassium.network.BlockEntityDataS2CPacket;
-import io.github.limuqy.mc.hassium.network.BlockEntityRequestC2SPacket;
-import io.github.limuqy.mc.hassium.network.SectionHashRequestC2SPacket;
 import io.github.limuqy.mc.hassium.platform.services.INetworkManagerService;
-import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
-import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.minecraft.client.Minecraft;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.server.level.ServerPlayer;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 /**
  * Fabric 平台的网络管理器服务实现
  */
 public class FabricNetworkManagerService implements INetworkManagerService {
 
-    private static final Logger LOGGER = LoggerFactory.getLogger("Hassium/Network");
-
     private static final FabricNetworkManager NETWORK_MANAGER = new FabricNetworkManager();
 
-    @Override
-    public void sendChunkDataRequest(FriendlyByteBuf buf) {
-        // review-fix: T10-6: 无 connection 检查直接 send → 断线竞态下 Fabric send 抛异常且 buf 未释放；对齐 FabricNetworkManager:250-263
-        if (Minecraft.getInstance().getConnection() != null) {
-            FabricSendCompat.sendToServer(HassiumChannels.CHUNK_DATA_REQUEST_C2S, buf);
-        } else {
-            buf.release();
-        }
-    }
+
     @Override
     public void sendShadowPullRequest(FriendlyByteBuf buf) {
         if (Minecraft.getInstance().getConnection() != null) {
@@ -44,16 +22,6 @@ public class FabricNetworkManagerService implements INetworkManagerService {
         } else if (buf != null && buf.refCnt() > 0) {
             buf.release();
         }
-    }
-
-    @Override
-    public void sendChunkHashPacket(ServerPlayer player, FriendlyByteBuf buf) {
-        // T12 网关收口：网关玩家走 kind=1 HASSIUM 帧（客户端 receiver 已退役，回落 CustomPayload 是死路径）
-        if (io.github.limuqy.mc.hassium.server.GatewayPlayerBridge.tryRouteS2C(
-                player, io.github.limuqy.mc.hassium.network.core.GatewayPacketCodec.HassiumSub.CHUNK_HASH.id(), buf)) {
-            return;
-        }
-        FabricSendCompat.sendToPlayer(player, HassiumChannels.CHUNK_HASH_S2C, buf);
     }
 
     @Override
@@ -99,13 +67,6 @@ public class FabricNetworkManagerService implements INetworkManagerService {
                 player, io.github.limuqy.mc.hassium.network.core.GatewayPacketCodec.HassiumSub.LIGHT_DELTA.id(), buf)) {
             return;
         }
-        // 三端一致收口（2026-08-23 裁决）：vanilla 通道 LightDelta 三端客户端均不消费，
-        // 唯一消费在网关帧链路；非网关回退仅消费 buf 所有权，不再发 payload。
         buf.release();
-    }
-
-    @Override
-    public void sendClientBloomSync(FriendlyByteBuf buf) {
-        FabricSendCompat.sendToServer(HassiumChannels.CLIENT_BLOOM_SYNC_C2S, buf);
     }
 }

@@ -5,8 +5,8 @@ import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.gen.Accessor;
 
 /**
- * 区块/实体存储层统一 worker 访问器：1.21.2+ 的 {@code SimpleRegionStorage}
- * （ChunkMap / EntityStorage 均持有）与旧版的 {@code ChunkStorage}（1.21.2 移除）
+ * 区块/POI 存储层统一 worker 访问器：1.21.2+ 的 {@code SimpleRegionStorage}
+ * （ChunkMap / PoiManager）与旧版的 {@code ChunkStorage}（1.21.2 移除）
  * 都有 {@code worker}（IOWorker）字段——双目标 + 同字段名，跨段零 #if 调用。
  * <p>
  * 用途：跨会话并发场景下刷新 region 文件缓存（影子端

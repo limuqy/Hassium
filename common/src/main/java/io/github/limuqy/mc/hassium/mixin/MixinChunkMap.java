@@ -36,19 +36,9 @@ import net.minecraft.world.level.chunk.status.ChunkStatus;
 import net.minecraft.world.level.chunk.status.ChunkStep;
 #endif
 
-    /**
-     * 影子端 ChunkMap：注入表命中则短路 {@code scheduleChunkLoad} 为
-     * {@code ImposterProtoChunk}（对齐原版读盘 FULL 柱），避免 getChunkFuture
-     * 把已 decode 的柱顶成噪声地形。未命中不得在票据路径上 {@code loadFromDisk}——
-     * FULL 票会向外扩散，邻柱同步解压会把算光拖成几秒一格，并和 hash miss 全量请求抢带宽。
-     * 磁盘复用只走 hash 探活（{@code processRemoteHashes}）。
-     * {@code MixinRegionFile} 对非 126 返回 null，空槽走 createEmpty + 地形步透传。
-     * SeedGen {@code generateChunk} 期间
-     * {@link ShadowChunkMapCompat#isWorldgenAllowed()} 为 true，本拦截不抢生成柱。
- * <p>
- * 探活：FULL 注入柱 persisted=FULL，不能赌金字塔从 FULL 再跑 LIGHT 作为唯一算光路径
- * （邻柱无盘会 GENERATION_PYRAMID）。光仍由 {@code ShadowLightCompute} 提交官方
- * {@code initializeLight}+{@code lightChunk}。非 EMPTY 地形步在注入票路径上透传。
+/**
+ * 影子端只接管两处：已 materialize 的区块读盘结果进入原版 {@code scheduleChunkLoad}，
+ * 其余区块完全交给原版 ChunkMap 生成与光照流水线。玩家视距、halo、主动 admission 不在此实现。
  */
 @Mixin(net.minecraft.server.level.ChunkMap.class)
 public class MixinChunkMap {
@@ -108,15 +98,6 @@ public class MixinChunkMap {
         cir.setReturnValue(CompletableFuture.completedFuture(Either.left(wrapped)));
     }
 
-    @Inject(method = "scheduleChunkGeneration", at = @At("HEAD"), cancellable = true)
-    private void hassium$passthroughInjectWorldgen(ChunkHolder holder, ChunkStatus status,
-            CallbackInfoReturnable<CompletableFuture<Either<ChunkAccess, ChunkHolder.ChunkLoadingFailure>>> cir) {
-        ChunkAccess available = hassium$passthroughChunk(holder, status);
-        if (available == null) {
-            return;
-        }
-        cir.setReturnValue(CompletableFuture.completedFuture(Either.left(available)));
-    }
     // 1.20.5–1.20.6 的 ChunkResult/ChunkHolder 中间层注入已随版本支持裁剪删除（API 自 1.21.1 起变化）
 #else
     @Inject(method = "scheduleChunkLoad", at = @At("HEAD"), cancellable = true)
@@ -129,27 +110,6 @@ public class MixinChunkMap {
         // 未命中不 cancel：MixinRegionFile 对非 126 返回 null，避免 completedFuture(null) NPE。
     }
 
-    @Inject(method = "applyStep", at = @At("HEAD"), cancellable = true)
-    private void hassium$passthroughInjectWorldgen(GenerationChunkHolder holder, ChunkStep step,
-            StaticCache2D<GenerationChunkHolder> cache,
-            CallbackInfoReturnable<CompletableFuture<ChunkAccess>> cir) {
-        if (step == null) {
-            return;
-        }
-        ChunkStatus status = step.targetStatus();
-        if (!ShadowChunkMapCompat.shouldPassthroughGenerationStep(
-                RuntimeServerContext.isShadowServerContext(),
-                ShadowChunkMapCompat.isWorldgenAllowed(),
-                ShadowChunkMapCompat.isEmptyStatus(status),
-                status == ChunkStatus.INITIALIZE_LIGHT || status == ChunkStatus.LIGHT)) {
-            return;
-        }
-        ChunkAccess parent = holder.getChunkIfPresentUnchecked(status.getParent());
-        if (parent == null) {
-            return;
-        }
-        cir.setReturnValue(CompletableFuture.completedFuture(parent));
-    }
 #endif
 
     @Unique
@@ -166,29 +126,11 @@ public class MixinChunkMap {
             dimension = io.github.limuqy.mc.hassium.utils.DimensionKey.OVERWORLD;
         }
         LevelChunk injected = server.injectedChunk(dimension, pos.x, pos.z);
-        if (ShadowChunkMapCompat.isWorldgenAllowed()) {
-            // SeedGen 生成中：仅当该 pos 已在注入表时抢 load，避免生成任务把注入柱顶掉
+        if (injected != null) {
             return injected;
         }
-        if (ShadowChunkMapCompat.shouldShortCircuitScheduleLoad(true, injected != null)) {
-            return injected;
-        }
+        // 无 materialized 区块：不 cancel，让原版 IOWorker/type126 读盘或生成链决定下一步。
         return null;
     }
 
-#if MC_VER < MC_1_21_1
-    @Unique
-    private static ChunkAccess hassium$passthroughChunk(ChunkHolder holder, ChunkStatus status) {
-        if (holder == null || !RuntimeServerContext.isShadowServerContext()
-                || ShadowChunkMapCompat.isWorldgenAllowed()) {
-            return null;
-        }
-        if (!ShadowChunkMapCompat.shouldPassthroughGenerationStep(true, false,
-                ShadowChunkMapCompat.isEmptyStatus(status),
-                status == ChunkStatus.INITIALIZE_LIGHT || status == ChunkStatus.LIGHT)) {
-            return null;
-        }
-        return holder.getLastAvailable();
-    }
-#endif
 }

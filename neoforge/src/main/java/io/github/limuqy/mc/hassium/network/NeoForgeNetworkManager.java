@@ -228,18 +228,6 @@ public class NeoForgeNetworkManager implements NetworkManager {
     private static boolean packetsRegistered = false;
 
     // 1.20.1 包装类定义
-    public record ChunkHashWrapper(byte[] data) {
-        public void encode(FriendlyByteBuf buf) {
-            buf.writeVarInt(data.length);
-            buf.writeBytes(data);
-        }
-        public static ChunkHashWrapper decode(FriendlyByteBuf buf) {
-            int length = buf.readVarInt();
-            byte[] data = new byte[length];
-            buf.readBytes(data);
-            return new ChunkHashWrapper(data);
-        }
-    }
 
     public record SeedRefWrapper(byte[] data) {
         public void encode(FriendlyByteBuf buf) {
@@ -354,31 +342,7 @@ public class NeoForgeNetworkManager implements NetworkManager {
         }
     }
 
-    public record ChunkDataRequestWrapper(byte[] data) {
-        public void encode(FriendlyByteBuf buf) {
-            buf.writeVarInt(data.length);
-            buf.writeBytes(data);
-        }
-        public static ChunkDataRequestWrapper decode(FriendlyByteBuf buf) {
-            int length = buf.readVarInt();
-            byte[] data = new byte[length];
-            buf.readBytes(data);
-            return new ChunkDataRequestWrapper(data);
-        }
-    }
 
-    public record ClientBloomSyncWrapper(byte[] data) {
-        public void encode(FriendlyByteBuf buf) {
-            buf.writeVarInt(data.length);
-            buf.writeBytes(data);
-        }
-        public static ClientBloomSyncWrapper decode(FriendlyByteBuf buf) {
-            int length = buf.readVarInt();
-            byte[] data = new byte[length];
-            buf.readBytes(data);
-            return new ClientBloomSyncWrapper(data);
-        }
-    }
 
     public record SectionHashRequestWrapper(byte[] data) {
         public void encode(FriendlyByteBuf buf) {
@@ -862,25 +826,6 @@ public class NeoForgeNetworkManager implements NetworkManager {
         }
     }
 
-    /**
-     * 区块数据请求 Payload (C2S)
-     */
-    public record ChunkDataRequestPayload(byte[] data) implements CustomPacketPayload {
-
-        public static final Type<ChunkDataRequestPayload> TYPE = new Type<>(
-                ResourceLocationCompat.create(Constants.MOD_ID, "chunk_data_request_c2s")
-        );
-
-        public static final StreamCodec<FriendlyByteBuf, ChunkDataRequestPayload> STREAM_CODEC = StreamCodec.composite(
-                ByteBufCodecs.BYTE_ARRAY, ChunkDataRequestPayload::data,
-                ChunkDataRequestPayload::new
-        );
-
-        @Override
-        public Type<ChunkDataRequestPayload> type() {
-            return TYPE;
-        }
-    }
     public record ShadowPullRequestPayload(byte[] data) implements CustomPacketPayload {
         public static final Type<ShadowPullRequestPayload> TYPE = new Type<>(
                 ResourceLocationCompat.create(Constants.MOD_ID, "shadow_pull_request_c2s"));
@@ -902,40 +847,10 @@ public class NeoForgeNetworkManager implements NetworkManager {
     /**
      * 客户端缓存 Bloom 位图同步 Payload (C2S)
      */
-    public record ClientBloomSyncPayload(byte[] data) implements CustomPacketPayload {
-
-        public static final Type<ClientBloomSyncPayload> TYPE = new Type<>(ResourceLocationCompat.vanilla(HassiumChannels.CLIENT_BLOOM_SYNC_C2S));
-
-        public static final StreamCodec<FriendlyByteBuf, ClientBloomSyncPayload> STREAM_CODEC = StreamCodec.composite(
-                ByteBufCodecs.BYTE_ARRAY, ClientBloomSyncPayload::data,
-                ClientBloomSyncPayload::new
-        );
-
-        @Override
-        public Type<ClientBloomSyncPayload> type() {
-            return TYPE;
-        }
-    }
 
     /**
      * 区块哈希 Payload (S2C)
      */
-    public record ChunkHashPayload(byte[] data) implements CustomPacketPayload {
-
-        public static final Type<ChunkHashPayload> TYPE = new Type<>(
-                ResourceLocationCompat.create(Constants.MOD_ID, "chunk_hash_s2c")
-        );
-
-        public static final StreamCodec<FriendlyByteBuf, ChunkHashPayload> STREAM_CODEC = StreamCodec.composite(
-                ByteBufCodecs.BYTE_ARRAY, ChunkHashPayload::data,
-                ChunkHashPayload::new
-        );
-
-        @Override
-        public Type<ChunkHashPayload> type() {
-            return TYPE;
-        }
-    }
 
     /**
      * SeedRef Payload (S2C，1.21.1+)
@@ -1164,42 +1079,7 @@ public class NeoForgeNetworkManager implements NetworkManager {
                 },
                 java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT));
 
-        // 4: 区块数据请求 C2S
-        CHANNEL.registerMessage(packetId++, ChunkDataRequestWrapper.class,
-                ChunkDataRequestWrapper::encode, ChunkDataRequestWrapper::decode,
-                (msg, ctx) -> {
-                    ctx.get().enqueueWork(() -> {
-                        ServerPlayer player = ctx.get().getSender();
-                        if (player == null) return;
-                        try {
-                            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data()));
-                            ChunkDataRequestC2SPacket request = ChunkDataRequestC2SPacket.decode(buf);
-                            ServerChunkPushManager.getInstance()
-                                    .handleClientChunkDataRequest(player, request);
-                        } catch (Exception e) {
-                            LOGGER.error("[SERVER] Failed to handle chunk data request", e);
-                        }
-                    });
-                    ctx.get().setPacketHandled(true);
-                },
-                java.util.Optional.of(NetworkDirection.PLAY_TO_SERVER));
 
-        // 5: 区块哈希 S2C
-        CHANNEL.registerMessage(packetId++, ChunkHashWrapper.class,
-                ChunkHashWrapper::encode, ChunkHashWrapper::decode,
-                (msg, ctx) -> {
-                    ctx.get().enqueueWork(() -> {
-                        try {
-                            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data()));
-                            ChunkHashS2CPacket packet = ChunkHashS2CPacket.decode(buf);
-                            ClientMetadataHandler.handleChunkHashPacket(packet);
-                        } catch (Exception e) {
-                            LOGGER.error("[CLIENT] Failed to handle chunk hash", e);
-                        }
-                    });
-                    ctx.get().setPacketHandled(true);
-                },
-                java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT));
 
         // 5b: SeedRef S2C
         CHANNEL.registerMessage(packetId++, SeedRefWrapper.class,
@@ -1340,15 +1220,6 @@ public class NeoForgeNetworkManager implements NetworkManager {
                 },
                 java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT));
 
-        // 15: 客户端缓存 Bloom 位图同步 C2S
-        CHANNEL.registerMessage(packetId++, ClientBloomSyncWrapper.class,
-                ClientBloomSyncWrapper::encode, ClientBloomSyncWrapper::decode,
-                (msg, ctx) -> {
-                    ctx.get().enqueueWork(() -> handleClientBloomSync(msg, ctx.get().getSender()));
-                    ctx.get().setPacketHandled(true);
-                },
-                java.util.Optional.of(NetworkDirection.PLAY_TO_SERVER));
-
         HassiumAggregationManager.setSender((connection, buf) -> {
             try {
                 if (connection.getPacketListener() instanceof net.minecraft.server.network.ServerGamePacketListenerImpl handler) {
@@ -1382,22 +1253,6 @@ public class NeoForgeNetworkManager implements NetworkManager {
         LOGGER.info("Hassium: Registered {} SimpleChannel packets", packetId);
     }
 
-    /**
-     * SimpleChannel 段（MC_VER &lt; MC_1_21_1）：处理客户端缓存 Bloom 位图同步。
-     */
-    private void handleClientBloomSync(ClientBloomSyncWrapper msg, ServerPlayer player) {
-        if (player == null) {
-            LOGGER.warn("Hassium: Dropped client bloom sync (sender null — PLAY player not ready)");
-            return;
-        }
-        try {
-            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data()));
-            ClientBloomSyncPacket packet = ClientBloomSyncPacket.decode(buf);
-            ServerChunkPushManager.getInstance().handleClientBloomSync(player, packet);
-        } catch (Exception e) {
-            LOGGER.error("[SERVER] Failed to handle client bloom sync", e);
-        }
-    }
 
     private void handleHandshakeSimple(ServerPlayer player, HandshakeWrapper msg) {
         // 客户端上报位置：校正 resync 视距中心（failover/重连时服务端玩家对象位置滞后）
@@ -1584,21 +1439,12 @@ public class NeoForgeNetworkManager implements NetworkManager {
                 NeoForgeNetworkManager::handleHandshake
         );
 
-        // 注册区块数据请求 (C2S)
-        registrar.playToServer(
-                ChunkDataRequestPayload.TYPE,
-                ChunkDataRequestPayload.STREAM_CODEC,
-                NeoForgeNetworkManager::handleChunkDataRequest
-        );
         registrar.playToServer(ShadowPullRequestPayload.TYPE, ShadowPullRequestPayload.STREAM_CODEC,
                 NeoForgeNetworkManager::handleShadowPullRequest);
+        registrar.playToClient(ShadowPullResponsePayload.TYPE, ShadowPullResponsePayload.STREAM_CODEC,
+                NeoForgeNetworkManager::handleShadowPullResponse);
 
         // 注册客户端缓存 Bloom 位图同步 (C2S)
-        registrar.playToServer(
-                ClientBloomSyncPayload.TYPE,
-                ClientBloomSyncPayload.STREAM_CODEC,
-                NeoForgeNetworkManager::handleClientBloomSync
-        );
 
         // 注册 Section 哈希请求 (C2S)
         registrar.playToServer(
@@ -1635,9 +1481,6 @@ public class NeoForgeNetworkManager implements NetworkManager {
         registrar.playToClient(CompressedChunkPayload.TYPE, CompressedChunkPayload.STREAM_CODEC,
                 NeoForgeNetworkManager::handleCompressedChunkS2C);
 
-        // 区块哈希 S2C
-        registrar.playToClient(ChunkHashPayload.TYPE, ChunkHashPayload.STREAM_CODEC,
-                NeoForgeNetworkManager::handleChunkHashS2C);
 
         // SeedRef S2C
         registrar.playToClient(SeedRefPayload.TYPE, SeedRefPayload.STREAM_CODEC,
@@ -1650,8 +1493,6 @@ public class NeoForgeNetworkManager implements NetworkManager {
         // BlockEntityData S2C
         registrar.playToClient(BlockEntityDataPayload.TYPE, BlockEntityDataPayload.STREAM_CODEC,
                 NeoForgeNetworkManager::handleBlockEntityDataS2C);
-        registrar.playToClient(ShadowPullResponsePayload.TYPE, ShadowPullResponsePayload.STREAM_CODEC,
-                NeoForgeNetworkManager::handleShadowPullResponse);
 
         // LightDelta S2C（方案 A：客户端不消费，no-op 标记已处理）
         registrar.playToClient(LightDeltaPayload.TYPE, LightDeltaPayload.STREAM_CODEC,
@@ -1749,40 +1590,7 @@ public class NeoForgeNetworkManager implements NetworkManager {
         });
     }
 
-    private static void handleChunkDataRequest(ChunkDataRequestPayload payload, IPayloadContext context) {
-        context.enqueueWork(() -> {
-            try {
-                if (context.player() instanceof ServerPlayer player) {
-                    FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(payload.data()));
-                    ChunkDataRequestC2SPacket request = ChunkDataRequestC2SPacket.decode(buf);
-                    ServerChunkPushManager.getInstance()
-                            .handleClientChunkDataRequest(player, request);
-                }
-            } catch (Exception e) {
-                LOGGER.error("[SERVER] Failed to handle chunk data request", e);
-            }
-        });
-    }
 
-    private static void handleShadowPullResponse(ShadowPullResponsePayload payload, IPayloadContext context) {
-        context.enqueueWork(() -> {
-            FriendlyByteBuf buf = null;
-            try {
-                if (payload == null || payload.data() == null) {
-                    throw new IllegalArgumentException("shadowPullV1 response payload is null");
-                }
-                buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(payload.data()));
-                ShadowPullResponseS2CPacket response = ShadowPullResponseS2CPacket.decode(buf);
-                ShadowChunkLoaderRuntime.handleResponse(response);
-            } catch (Exception e) {
-                LOGGER.error("[CLIENT] Failed to handle shadowPullV1 response", e);
-            } finally {
-                if (buf != null) {
-                    buf.release();
-                }
-            }
-        });
-    }
     private static void handleShadowPullRequest(ShadowPullRequestPayload payload, IPayloadContext context) {
         context.enqueueWork(() -> {
             if (!(context.player() instanceof ServerPlayer player)) {
@@ -1796,9 +1604,12 @@ public class NeoForgeNetworkManager implements NetworkManager {
                 }
                 buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(payload.data()));
                 ShadowPullRequestC2SPacket request = ShadowPullRequestC2SPacket.decode(buf);
+                String dimension = io.github.limuqy.mc.hassium.compat.LevelCompat.getDimensionId(player.level());
                 ShadowPullResponseS2CPacket response = SHADOW_PULL_HANDLER.handle(player.getUUID(), request,
-                        request.dimension(), request.epoch(), 0, 0, 0,
-                        false, false, entry -> null);
+                        dimension, request.epoch(), player.chunkPosition().x, player.chunkPosition().z,
+                        io.github.limuqy.mc.hassium.compat.PlayerCompat.getViewDistance(player) + 1,
+                        true, player.isAlive() && !player.hasDisconnected(),
+                        entry -> ServerChunkPushManager.getInstance().resolveShadowPull(player, entry, dimension));
                 out = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
                 response.encode(out);
                 byte[] data = new byte[out.readableBytes()];
@@ -1817,19 +1628,25 @@ public class NeoForgeNetworkManager implements NetworkManager {
         });
     }
 
-    private static void handleClientBloomSync(ClientBloomSyncPayload payload, IPayloadContext context) {
+    private static void handleShadowPullResponse(ShadowPullResponsePayload payload, IPayloadContext context) {
         context.enqueueWork(() -> {
+            FriendlyByteBuf buf = null;
             try {
-                if (context.player() instanceof ServerPlayer player) {
-                    FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(payload.data()));
-                    ClientBloomSyncPacket packet = ClientBloomSyncPacket.decode(buf);
-                    ServerChunkPushManager.getInstance().handleClientBloomSync(player, packet);
+                if (payload == null || payload.data() == null) {
+                    throw new IllegalArgumentException("shadowPullV1 response payload is null");
                 }
+                buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(payload.data()));
+                ShadowPullClient.handleResponse(ShadowPullResponseS2CPacket.decode(buf));
             } catch (Exception e) {
-                LOGGER.error("[SERVER] Failed to handle client bloom sync", e);
+                LOGGER.warn("[CLIENT] Failed to handle shadowPullV1 response", e);
+            } finally {
+                if (buf != null) {
+                    buf.release();
+                }
             }
         });
     }
+
 
     private static void handleSectionHashRequest(SectionHashRequestPayload payload, IPayloadContext context) {
         context.enqueueWork(() -> {
@@ -1906,17 +1723,6 @@ public class NeoForgeNetworkManager implements NetworkManager {
         });
     }
 
-    private static void handleChunkHashS2C(ChunkHashPayload payload, IPayloadContext context) {
-        context.enqueueWork(() -> {
-            try {
-                FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(payload.data()));
-                ChunkHashS2CPacket packet = ChunkHashS2CPacket.decode(buf);
-                ClientMetadataHandler.handleChunkHashPacket(packet);
-            } catch (Exception e) {
-                LOGGER.error("[CLIENT] Failed to handle chunk hash", e);
-            }
-        });
-    }
 
     private static void handleSeedRefS2C(SeedRefPayload payload, IPayloadContext context) {
         context.enqueueWork(() -> {
@@ -1959,31 +1765,6 @@ public class NeoForgeNetworkManager implements NetworkManager {
 
     // ========== 发送方法实现 ==========
 
-    @Override
-    public void sendChunkDataRequest(FriendlyByteBuf buf) {
-#if MC_VER < MC_1_21_1
-        if (net.minecraft.client.Minecraft.getInstance().getConnection() != null) {
-            byte[] data = new byte[buf.readableBytes()];
-            buf.readBytes(data);
-            buf.release();
-            CHANNEL.sendToServer(new ChunkDataRequestWrapper(data));
-            LOGGER.debug("Hassium: Sent chunk data request (SimpleChannel)");
-        } else {
-            buf.release();
-        }
-#else
-        if (net.minecraft.client.Minecraft.getInstance().getConnection() != null) {
-            byte[] data = new byte[buf.readableBytes()];
-            buf.readBytes(data);
-            buf.release();
-            ChunkDataRequestPayload payload = new ChunkDataRequestPayload(data);
-            net.minecraft.client.Minecraft.getInstance().getConnection().send(payload);
-            LOGGER.debug("Hassium: Sent chunk data request (Payload)");
-        } else {
-            buf.release();
-        }
-#endif
-    }
 
 #if MC_VER >= MC_1_21_1
     /** NeoForge payload 发送必须经服务端主线程，避免异步推送批次丢失。 */
@@ -1997,19 +1778,6 @@ public class NeoForgeNetworkManager implements NetworkManager {
 #endif
 
 
-    @Override
-    public void sendChunkHashPacket(ServerPlayer player, FriendlyByteBuf buf) {
-        byte[] data = new byte[buf.readableBytes()];
-        buf.readBytes(data);
-        buf.release();
-#if MC_VER < MC_1_21_1
-        CHANNEL.sendTo(new ChunkHashWrapper(data), player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
-#else
-        ChunkHashPayload payload = new ChunkHashPayload(data);
-        sendServerPayload(player, payload);
-        LOGGER.debug("Hassium: Sent chunk hash packet to {}", player.getName().getString());
-#endif
-    }
 
     @Override
     public void sendSeedRef(ServerPlayer player, FriendlyByteBuf buf) {
@@ -2111,34 +1879,6 @@ public class NeoForgeNetworkManager implements NetworkManager {
         buf.release();
     }
 
-    @Override
-    public void sendClientBloomSync(FriendlyByteBuf buf) {
-#if MC_VER < MC_1_21_1
-        if (net.minecraft.client.Minecraft.getInstance().getConnection() != null) {
-            byte[] data = new byte[buf.readableBytes()];
-            buf.readBytes(data);
-            buf.release();
-            CHANNEL.sendToServer(new ClientBloomSyncWrapper(data));
-        } else {
-            buf.release();
-        }
-#else
-        if (net.minecraft.client.Minecraft.getInstance().getConnection() != null) {
-            byte[] data = new byte[buf.readableBytes()];
-            buf.readBytes(data);
-            buf.release();
-            ClientBloomSyncPayload payload = new ClientBloomSyncPayload(data);
-            // NeoForge 1.21+ 的 Connection.send(CustomPacketPayload) 需在客户端主线程排队；
-            // Bloom 在影子端线程连续发送三维度时，工作线程直调会导致前两帧未可靠进入
-            // vanilla Connection，服务端直到 R2 才收到 overworld Bloom。
-            net.minecraft.client.Minecraft.getInstance().execute(() ->
-                    net.minecraft.client.Minecraft.getInstance().getConnection().send(payload));
-            LOGGER.debug("Hassium: Sent client bloom sync");
-        } else {
-            buf.release();
-        }
-#endif
-    }
 
     /**
      * 发送已编码的压缩区块负载到指定玩家（payload 由调用方 encode 一次；review-fix: T11-19）

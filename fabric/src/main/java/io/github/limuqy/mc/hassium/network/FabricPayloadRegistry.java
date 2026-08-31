@@ -42,8 +42,6 @@ public final class FabricPayloadRegistry {
             type("index_sync_s2c");
     public static final CustomPacketPayload.Type<RawPayload> AGGREGATION_S2C_TYPE =
             type("aggregation");
-    public static final CustomPacketPayload.Type<RawPayload> CHUNK_HASH_S2C_TYPE =
-            type("chunk_hash_s2c");
     public static final CustomPacketPayload.Type<RawPayload> SEED_REF_S2C_TYPE =
             type("seed_ref_s2c");
     public static final CustomPacketPayload.Type<RawPayload> SECTION_DELTA_S2C_TYPE =
@@ -65,14 +63,10 @@ public final class FabricPayloadRegistry {
             type("handshake_c2s");
     public static final CustomPacketPayload.Type<RawPayload> COMPRESSION_READY_C2S_TYPE =
             type("compression_ready_c2s");
-    public static final CustomPacketPayload.Type<RawPayload> CHUNK_DATA_REQUEST_C2S_TYPE =
-            type("chunk_data_request_c2s");
     public static final CustomPacketPayload.Type<RawPayload> SECTION_HASH_REQUEST_C2S_TYPE =
             type("section_hash_request_c2s");
     public static final CustomPacketPayload.Type<RawPayload> BLOCK_ENTITY_REQUEST_C2S_TYPE =
             type("block_entity_request_c2s");
-    public static final CustomPacketPayload.Type<RawPayload> CLIENT_BLOOM_SYNC_C2S_TYPE =
-            type("client_bloom_sync_c2s");
     public static final CustomPacketPayload.Type<RawPayload> SHADOW_PULL_REQUEST_C2S_TYPE =
             type("shadow_pull_request_c2s");
 
@@ -132,7 +126,6 @@ public final class FabricPayloadRegistry {
         // 编解码走 RawCustomPayload codec（未注册 → DiscardedPayload 回退 CCE / 客户端数据被丢弃）。
         PayloadTypeRegistry.playS2C().register(GATEWAY_INFO_S2C_TYPE,
                 PacketPayloadCompat.rawPayloadCodec(ResourceLocationCompat.create(HassiumPacketIds.GATEWAY_INFO_S2C)));
-    }
 
     /**
      * 注册除 gateway_info 外的所有 payload 类型到 PayloadTypeRegistry
@@ -147,37 +140,30 @@ public final class FabricPayloadRegistry {
         registered = true;
 
         // gateway_info 无条件路径（可能已由 registerChannels 守卫前注册，幂等）
-        registerGatewayInfo();
-
         // S2C types
         PayloadTypeRegistry.playS2C().register(CHUNK_PAYLOAD_S2C_TYPE, codec(CHUNK_PAYLOAD_S2C_TYPE));
         PayloadTypeRegistry.playS2C().register(DICTIONARY_SYNC_S2C_TYPE, codec(DICTIONARY_SYNC_S2C_TYPE));
         PayloadTypeRegistry.playS2C().register(HANDSHAKE_S2C_TYPE, codec(HANDSHAKE_S2C_TYPE));
         PayloadTypeRegistry.playS2C().register(INDEX_SYNC_S2C_TYPE, codec(INDEX_SYNC_S2C_TYPE));
         PayloadTypeRegistry.playS2C().register(AGGREGATION_S2C_TYPE, codec(AGGREGATION_S2C_TYPE));
-        PayloadTypeRegistry.playS2C().register(CHUNK_HASH_S2C_TYPE, codec(CHUNK_HASH_S2C_TYPE));
         PayloadTypeRegistry.playS2C().register(SEED_REF_S2C_TYPE, codec(SEED_REF_S2C_TYPE));
         PayloadTypeRegistry.playS2C().register(SECTION_DELTA_S2C_TYPE, codec(SECTION_DELTA_S2C_TYPE));
         PayloadTypeRegistry.playS2C().register(BLOCK_ENTITY_DATA_S2C_TYPE, codec(BLOCK_ENTITY_DATA_S2C_TYPE));
         PayloadTypeRegistry.playS2C().register(LIGHT_DELTA_S2C_TYPE, codec(LIGHT_DELTA_S2C_TYPE));
         PayloadTypeRegistry.playS2C().register(SHADOW_PULL_RESPONSE_S2C_TYPE, codec(SHADOW_PULL_RESPONSE_S2C_TYPE));
 
-        // C2S types
         PayloadTypeRegistry.playC2S().register(HANDSHAKE_C2S_TYPE, codec(HANDSHAKE_C2S_TYPE));
         PayloadTypeRegistry.playC2S().register(COMPRESSION_READY_C2S_TYPE, codec(COMPRESSION_READY_C2S_TYPE));
-        PayloadTypeRegistry.playC2S().register(CHUNK_DATA_REQUEST_C2S_TYPE, codec(CHUNK_DATA_REQUEST_C2S_TYPE));
         PayloadTypeRegistry.playC2S().register(SECTION_HASH_REQUEST_C2S_TYPE, codec(SECTION_HASH_REQUEST_C2S_TYPE));
         PayloadTypeRegistry.playC2S().register(BLOCK_ENTITY_REQUEST_C2S_TYPE, codec(BLOCK_ENTITY_REQUEST_C2S_TYPE));
-        PayloadTypeRegistry.playC2S().register(CLIENT_BLOOM_SYNC_C2S_TYPE, codec(CLIENT_BLOOM_SYNC_C2S_TYPE));
         PayloadTypeRegistry.playC2S().register(SHADOW_PULL_REQUEST_C2S_TYPE, codec(SHADOW_PULL_REQUEST_C2S_TYPE));
         // 预握手（login/配置阶段声明能力）：configuration 阶段 C2S payload
         PayloadTypeRegistry.configurationC2S().register(
                 io.github.limuqy.mc.hassium.network.PreHandshakePayload.TYPE,
                 io.github.limuqy.mc.hassium.network.PreHandshakePayload.STREAM_CODEC);
 
-        // review-fix: T10-3: 本方法注册 10 S2C + 6 C2S + 1 configurationC2S；
-        // gateway_info 经 registerGatewayInfo 单独无条件注册（合计 11 S2C）
-        LOGGER.info("Hassium: Registered 10 S2C and 6 C2S (+1 config) payload types for 1.21.1+ (gateway_info via unconditional path)");
+        // 注册 9 S2C + 5 C2S + 1 configurationC2S；gateway_info 单独无条件注册。
+        LOGGER.info("Hassium: Registered 9 S2C and 5 C2S (+1 config) payload types for 1.21.1+ (gateway_info via unconditional path)");
     }
 
     /**

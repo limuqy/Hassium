@@ -10,8 +10,6 @@ import io.github.limuqy.mc.hassium.network.ClientMetadataHandler;
 import io.github.limuqy.mc.hassium.network.GatewayInfoCodec;
 import io.github.limuqy.mc.hassium.network.HandshakeStateTail;
 import io.github.limuqy.mc.hassium.network.PlayerStateReport;
-import io.github.limuqy.mc.hassium.network.ShadowChunkLoaderRuntime;
-import io.github.limuqy.mc.hassium.network.ShadowPullRequestC2SPacket;
 import io.github.limuqy.mc.hassium.network.core.migration.MigrationEndpoint;
 import io.github.limuqy.mc.hassium.network.core.migration.MigrationEngine;
 import io.github.limuqy.mc.hassium.network.core.migration.PrewarmSession;
@@ -618,11 +616,6 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
         if (resumeAccepted) {
             rollbackPlayerPosition();
         }
-        try {
-            ShadowServerRegistry.getInstance().flushPendingBloomSync();
-        } catch (Throwable t) {
-            LOGGER.debug("Hassium: bloom flush after handshake skipped", t);
-        }
     }
 
     /**
@@ -680,7 +673,6 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
             // SeedGen 尾部透传 ClientChunkPipeline 现有状态（与三端内联解码同语义）
             ClientChunkPipeline.getInstance().setServerSeedInfo(
                     response.worldSeed(), response.levelStemNbt(), response.seedGenEnabled());
-            ShadowLightCompute.flushDeferredRemoteHashes();
         } catch (Throwable t) {
             LOGGER.warn("Hassium: setServerSeedInfo failed", t);
         }
@@ -991,12 +983,6 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
     private void dispatchS2CBusiness(GatewayPacketCodec.HassiumPacket hp) {
         s2cDispatched.incrementAndGet();
         switch (hp.sub()) {
-            case CHUNK_HASH -> {
-                // review-fix: T1-66 空闲窗口判定移除——区块 hash 活动仅消费方为已删检测器，
-                // 收口只做元数据分发（增量未收敛信号不再接线）
-                ClientMetadataHandler.handleChunkHashPacket(
-                        (io.github.limuqy.mc.hassium.network.ChunkHashS2CPacket) hp.packet());
-            }
             case SECTION_DELTA -> ShadowLightCompute.submitDelta(
                     (io.github.limuqy.mc.hassium.network.SectionDeltaS2CPacket) hp.packet());
             case LIGHT_DELTA -> {
@@ -1014,12 +1000,8 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
                     (io.github.limuqy.mc.hassium.network.SeedRefS2CPacket) hp.packet());
             case BLOCK_ENTITY_DATA -> ClientMetadataHandler.handleBlockEntityDataPacket(
                     (io.github.limuqy.mc.hassium.network.BlockEntityDataS2CPacket) hp.packet());
-            case SHADOW_PULL_RESPONSE -> {
-                io.github.limuqy.mc.hassium.network.ShadowPullResponseS2CPacket response =
-                        (io.github.limuqy.mc.hassium.network.ShadowPullResponseS2CPacket) hp.packet();
-                Minecraft.getInstance().execute(() ->
-                        io.github.limuqy.mc.hassium.network.ShadowChunkLoaderRuntime.handleResponse(response));
-            }
+            case SHADOW_PULL_RESPONSE -> io.github.limuqy.mc.hassium.network.ShadowPullClient.handleResponse(
+                    (io.github.limuqy.mc.hassium.network.ShadowPullResponseS2CPacket) hp.packet());
         }
     }
 
@@ -1166,25 +1148,6 @@ public final class NetworkCore implements OutboundConnection.Listener, Migration
         return false;
     }
 
-    /** 通过当前 gateway outbound 发送 shadowPullV1 业务 C2S 帧。 */
-    public boolean sendShadowPull(ShadowPullRequestC2SPacket request) {
-        OutboundConnection oc = outbound;
-        if (oc == null || !oc.isOpen() || request == null) {
-            return false;
-        }
-        ByteBuf payload = io.netty.buffer.Unpooled.buffer();
-        try {
-            payload.writeByte(GatewayPacketCodec.KIND_HASSIUM);
-            ControlFrameCodec.writeVarInt(payload, GatewayPacketCodec.HassiumSub.SHADOW_PULL_REQUEST.id());
-            request.encode(new FriendlyByteBuf(payload));
-            oc.sendC2S(payload);
-            return true;
-        } catch (Throwable t) {
-            if (payload.refCnt() > 0) payload.release();
-            LOGGER.warn("Hassium: shadowPullV1 gateway send failed", t);
-            return false;
-        }
-    }
 
 
     public long c2sRoutedCount() {

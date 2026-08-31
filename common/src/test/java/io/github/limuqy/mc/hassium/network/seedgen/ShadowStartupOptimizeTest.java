@@ -38,12 +38,6 @@ class ShadowStartupOptimizeTest {
     }
 
     @Test
-    void dirtyInjectedColumn_defersUnloadUntilEncoded() {
-        assertTrue(ShadowLightCompute.shouldDeferUnloadUntilEncoded(true));
-        assertFalse(ShadowLightCompute.shouldDeferUnloadUntilEncoded(false));
-    }
-
-    @Test
     void unparkBlockedUntilLoginAndEncodingResume() {
         assertFalse(ShadowServerRegistry.shouldUnpark(true, true, true));
         assertFalse(ShadowServerRegistry.shouldUnpark(true, false, false));

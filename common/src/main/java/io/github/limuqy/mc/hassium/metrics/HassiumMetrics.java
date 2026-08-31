@@ -190,7 +190,7 @@ public interface HassiumMetrics {
     }
 
     /**
-     * 获取客户端实际落地的权威区块数（按区块位置去重；renderOnly/OVD 不计入）。
+     * 获取客户端实际落地的权威区块数（按区块位置去重）。
      * <p>
      * 冒烟测试用它做「确有区块落地」的运行时门禁；命中率分母用
      * {@link #getClientAppliedChunkCount()} 的来源汇总口径。
@@ -519,9 +519,7 @@ public interface HassiumMetrics {
      * （{@link #getLightCacheHitCount()}）恒 0，实际复用由影子链路
      * （{@link #getLightReuseShadowBytes()}）承担；本地重算（光标脏缓存命中）
      * 计入 {@link #getLightCacheMissBytes()}。邻柱 LIGHT_ONLY 补光不计入。
-     * OVD/renderOnly 柱不进本口径
-     * （无 MOD 时服务端本来也不推，同 {@link #getNoModReceiveBytes()} 的排除原则，
-     * 其光照由本地影子端全量服务、复用率恒视作 100%）。
+     * 所有区块均由影子端原版光照链路提供，不再区分 OVD/renderOnly 柱。
      */
     default double getLightCacheHitRate() {
         long hitBytes = getLightCacheHitBytes() + getLightReuseShadowBytes();

@@ -100,17 +100,12 @@ public final class HassiumPacketIds {
     /**
      * 客户端 -> 服务端：请求区块数据
      */
-    public static final String CHUNK_DATA_REQUEST_C2S = "hassium:chunk_data_request_c2s";
     public static final String SHADOW_PULL_REQUEST_C2S = "hassium:shadow_pull_request_c2s";
 
     public static final String SHADOW_PULL_RESPONSE_S2C = "hassium:shadow_pull_response_s2c";
 
     // ===== Per-Section 缓存优化相关包 =====
 
-    /**
-     * 服务端 -> 客户端：区块哈希广播（阶段一，轻量）
-     */
-    public static final String CHUNK_HASH_S2C = "hassium:chunk_hash_s2c";
 
     /**
      * 客户端 -> 服务端：请求 section 详情（阶段二）

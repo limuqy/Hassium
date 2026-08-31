@@ -135,20 +135,6 @@ ResourceLocation
 #else
 Identifier
 #endif
-CHUNK_DATA_REQUEST_C2S = ResourceLocationCompat.vanilla(HassiumChannels.CHUNK_DATA_REQUEST_C2S);
-    public static final
-#if MC_VER < MC_1_21_11
-ResourceLocation
-#else
-Identifier
-#endif
-CHUNK_HASH_S2C = ResourceLocationCompat.vanilla(HassiumChannels.CHUNK_HASH_S2C);
-    public static final
-#if MC_VER < MC_1_21_11
-ResourceLocation
-#else
-Identifier
-#endif
 SEED_REF_S2C = ResourceLocationCompat.vanilla(HassiumChannels.SEED_REF_S2C);
     public static final
 #if MC_VER < MC_1_21_11
@@ -171,13 +157,6 @@ ResourceLocation
 Identifier
 #endif
 BLOCK_ENTITY_REQUEST_C2S = ResourceLocationCompat.vanilla(HassiumChannels.BLOCK_ENTITY_REQUEST_C2S);
-    public static final
-#if MC_VER < MC_1_21_11
-ResourceLocation
-#else
-Identifier
-#endif
-CLIENT_BLOOM_SYNC_C2S = ResourceLocationCompat.vanilla(HassiumChannels.CLIENT_BLOOM_SYNC_C2S);
     public static final
 #if MC_VER < MC_1_21_11
 ResourceLocation
@@ -278,20 +257,6 @@ SHADOW_PULL_RESPONSE_S2C = ResourceLocationCompat.vanilla(HassiumChannels.SHADOW
     }
 
     @Override
-    public void sendChunkDataRequest(FriendlyByteBuf buf) {
-        if (Minecraft.getInstance().getConnection() != null) {
-#if MC_VER < MC_1_21_1
-            ClientPlayNetworking.send(CHUNK_DATA_REQUEST_C2S, buf);
-#else
-            ClientPlayNetworking.send(FabricPayloadRegistry.toPayload(FabricPayloadRegistry.CHUNK_DATA_REQUEST_C2S_TYPE, buf));
-#endif
-            LOGGER.debug("Hassium: Sent chunk data request");
-        } else {
-            // 连接不存在，释放缓冲区
-            buf.release();
-        }
-    }
-    @Override
     public void sendShadowPullRequest(FriendlyByteBuf buf) {
         if (Minecraft.getInstance().getConnection() != null) {
 #if MC_VER < MC_1_21_1
@@ -304,36 +269,10 @@ SHADOW_PULL_RESPONSE_S2C = ResourceLocationCompat.vanilla(HassiumChannels.SHADOW
         }
     }
 
-    @Override
-    public void sendClientBloomSync(FriendlyByteBuf buf) {
-        if (Minecraft.getInstance().getConnection() != null) {
-#if MC_VER < MC_1_21_1
-            ClientPlayNetworking.send(CLIENT_BLOOM_SYNC_C2S, buf);
-#else
-            ClientPlayNetworking.send(FabricPayloadRegistry.toPayload(FabricPayloadRegistry.CLIENT_BLOOM_SYNC_C2S_TYPE, buf));
-#endif
-            LOGGER.debug("Hassium: Sent client bloom sync");
-        } else {
-            // 连接不存在，释放缓冲区
-            buf.release();
-        }
-    }
 
 
     // review-fix: T11-14 sendCompressedPayload 退役（common 接口 default no-op，无调用方）
 
-    @Override
-    public void sendChunkHashPacket(ServerPlayer player, FriendlyByteBuf buf) {
-        if (io.github.limuqy.mc.hassium.server.GatewayPlayerBridge.tryRouteS2C(
-                player, io.github.limuqy.mc.hassium.network.core.GatewayPacketCodec.HassiumSub.CHUNK_HASH.id(), buf)) {
-            return;
-        }
-#if MC_VER < MC_1_21_1
-        ServerPlayNetworking.send(player, CHUNK_HASH_S2C, buf);
-#else
-        ServerPlayNetworking.send(player, FabricPayloadRegistry.toPayload(FabricPayloadRegistry.CHUNK_HASH_S2C_TYPE, buf));
-#endif
-    }
 
     @Override
     public void sendSeedRef(ServerPlayer player, FriendlyByteBuf buf) {
@@ -959,28 +898,6 @@ SHADOW_PULL_RESPONSE_S2C = ResourceLocationCompat.vanilla(HassiumChannels.SHADOW
         });
 #endif
 
-        // 注册区块数据请求（新协议）
-#if MC_VER < MC_1_21_1
-        ServerPlayNetworking.registerGlobalReceiver(CHUNK_DATA_REQUEST_C2S, (server, player, handler, buf, sender) -> {
-            try {
-                ChunkDataRequestC2SPacket request = ChunkDataRequestC2SPacket.decode(buf);
-                server.execute(() -> ServerChunkPushManager.getInstance().handleClientChunkDataRequest(player, request));
-            } catch (Exception e) {
-                LOGGER.error("[SERVER] Failed to handle chunk data request", e);
-            }
-        });
-#else
-        ServerPlayNetworking.registerGlobalReceiver(FabricPayloadRegistry.CHUNK_DATA_REQUEST_C2S_TYPE, (payload, context) -> {
-            FriendlyByteBuf buf = FabricPayloadRegistry.fromPayload(payload);
-            try {
-                ChunkDataRequestC2SPacket request = ChunkDataRequestC2SPacket.decode(buf);
-                context.server().execute(() -> ServerChunkPushManager.getInstance().handleClientChunkDataRequest(
-                        (ServerPlayer) context.player(), request));
-            } finally {
-                buf.release();
-            }
-        });
-#endif
 
         // shadowPullV1：common handler 负责校验、幂等和逐区块权威响应。
 #if MC_VER < MC_1_21_1
@@ -1110,47 +1027,6 @@ SHADOW_PULL_RESPONSE_S2C = ResourceLocationCompat.vanilla(HassiumChannels.SHADOW
                 });
             } catch (Exception e) {
                 LOGGER.error("[SERVER] Failed to decode block entity request", e);
-            } finally {
-                buf.release();
-            }
-        });
-#endif
-
-        // 注册客户端缓存 Bloom 位图同步（C2S）
-#if MC_VER < MC_1_21_1
-        ServerPlayNetworking.registerGlobalReceiver(CLIENT_BLOOM_SYNC_C2S, (server, player, handler, buf, sender) -> {
-            try {
-                // review-fix: T10-1: 直接 decode 原 buf（Fabric 回调结束后负责释放），避免副本泄漏
-                ClientBloomSyncPacket packet = ClientBloomSyncPacket.decode(buf);
-
-                server.execute(() -> {
-                    try {
-                        ServerChunkPushManager.getInstance().handleClientBloomSync(player, packet);
-                    } catch (Exception e) {
-                        LOGGER.error("[SERVER] Failed to handle client bloom sync", e);
-                    }
-                });
-            } catch (Exception e) {
-                LOGGER.error("[SERVER] Failed to decode client bloom sync", e);
-            }
-        });
-#else
-        ServerPlayNetworking.registerGlobalReceiver(FabricPayloadRegistry.CLIENT_BLOOM_SYNC_C2S_TYPE, (payload, context) -> {
-            FriendlyByteBuf buf = FabricPayloadRegistry.fromPayload(payload);
-            try {
-                ServerPlayer player = context.player();
-                net.minecraft.server.MinecraftServer server = io.github.limuqy.mc.hassium.compat.PlayerCompat.getMinecraftServer(player);
-                ClientBloomSyncPacket packet = ClientBloomSyncPacket.decode(buf);
-
-                server.execute(() -> {
-                    try {
-                        ServerChunkPushManager.getInstance().handleClientBloomSync(player, packet);
-                    } catch (Exception e) {
-                        LOGGER.error("[SERVER] Failed to handle client bloom sync", e);
-                    }
-                });
-            } catch (Exception e) {
-                LOGGER.error("[SERVER] Failed to decode client bloom sync", e);
             } finally {
                 buf.release();
             }

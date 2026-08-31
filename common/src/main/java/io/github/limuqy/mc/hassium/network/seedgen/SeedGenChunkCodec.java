@@ -34,8 +34,7 @@ public final class SeedGenChunkCodec {
 
     public static byte[] compress(byte[] chunkData, int x, int z) {
         ChunkCompressionHandler.CompressedChunkData compressed =
-                ChunkCompressionHandler.compressChunkData(chunkData, x, z,
-                        io.github.limuqy.mc.hassium.network.ShadowChunkRole.VISIBLE);
+                ChunkCompressionHandler.compressChunkData(chunkData, x, z);
         return compressed == null ? null : compressed.encode();
     }
 }

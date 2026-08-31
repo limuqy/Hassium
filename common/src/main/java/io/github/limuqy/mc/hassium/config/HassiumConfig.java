@@ -262,7 +262,6 @@ public record HassiumConfig(
                 HassiumPacketIds.HANDSHAKE_S2C,
                 HassiumPacketIds.DICTIONARY_SYNC_S2C,
                 HassiumPacketIds.INDEX_SYNC_S2C,
-                HassiumPacketIds.CHUNK_HASH_S2C,
                 HassiumPacketIds.LIGHT_DELTA_S2C,
                 HassiumPacketIds.BLOCK_ENTITY_DATA_S2C,
                 HassiumPacketIds.MAIN_CHANNEL,

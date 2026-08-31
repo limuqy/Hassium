@@ -9,10 +9,6 @@ import net.minecraft.server.level.ServerPlayer;
  */
 public interface INetworkManagerService {
 
-    /**
-     * 发送区块数据请求到服务端（客户端调用）
-     */
-    void sendChunkDataRequest(FriendlyByteBuf buf);
     /** 发送 shadowPullV1 区块请求到服务端（客户端调用）。 */
     default void sendShadowPullRequest(FriendlyByteBuf buf) {
         if (buf != null && buf.refCnt() > 0) {
@@ -20,10 +16,6 @@ public interface INetworkManagerService {
         }
     }
 
-    /**
-     * 发送区块哈希广播到客户端（阶段一，服务端调用）
-     */
-    void sendChunkHashPacket(ServerPlayer player, FriendlyByteBuf buf);
 
     /**
      * 发送 section 哈希请求到服务端（阶段二，客户端调用）
@@ -55,13 +47,4 @@ public interface INetworkManagerService {
      */
     void sendSeedRef(ServerPlayer player, FriendlyByteBuf buf);
 
-    /**
-     * 客户端上报影子端存档布隆位图（C2S，full=true 覆盖旧层）。default 空实现：
-     * 仅 fabric 1.20.1 闭环覆盖；neoforge/forge 版本推广时补实现。
-     */
-    default void sendClientBloomSync(FriendlyByteBuf buf) {
-        if (buf != null && buf.refCnt() > 0) {
-            buf.release();
-        }
-    }
 }

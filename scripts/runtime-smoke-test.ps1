@@ -709,6 +709,8 @@ $clientExit = if ($clientProc.ExitCode) { $clientProc.ExitCode } else { 0 }
 
 # 9. 解析结果 + 提取统计
 Write-Host "[$SessionId] [8/9] 解析结果 (客户端退出码: $clientExit)..."
+# 单轮场景没有 ROUND2；不得把未运行的轮次写成 stats=false / pass=false。
+$requiresRound2 = $Scenario -ne "seedgen"
 $clientContent = if (Test-Path $clientLog) { Get-Content $clientLog -Raw } else { "" }
 
 # 提取 ROUND1 统计（begin 到 end 之间的行）
@@ -719,12 +721,15 @@ if ($round1Match.Success) {
     Write-Host "[$SessionId] ROUND1 统计已保存到 stats/${SessionId}_round1_VD${Vd1}.txt"
 }
 
-# 提取 ROUND2 统计
-$round2Match = [regex]::Match($clientContent, "HassiumSmokeTest:CLIENT_STATS ROUND2 begin(.+?)HassiumSmokeTest:CLIENT_STATS ROUND2 end", [System.Text.RegularExpressions.RegexOptions]::Singleline)
-if ($round2Match.Success) {
-    $round2Stats = $round2Match.Groups[1].Value.Trim()
-    $round2Stats | Out-File (Join-Path $statsDir "${SessionId}_round2_VD${Vd2}.txt") -Encoding UTF8
-    Write-Host "[$SessionId] ROUND2 统计已保存到 stats/${SessionId}_round2_VD${Vd2}.txt"
+# 仅双轮场景提取 ROUND2 统计。
+$round2Match = $null
+if ($requiresRound2) {
+    $round2Match = [regex]::Match($clientContent, "HassiumSmokeTest:CLIENT_STATS ROUND2 begin(.+?)HassiumSmokeTest:CLIENT_STATS ROUND2 end", [System.Text.RegularExpressions.RegexOptions]::Singleline)
+    if ($round2Match.Success) {
+        $round2Stats = $round2Match.Groups[1].Value.Trim()
+        $round2Stats | Out-File (Join-Path $statsDir "${SessionId}_round2_VD${Vd2}.txt") -Encoding UTF8
+        Write-Host "[$SessionId] ROUND2 统计已保存到 stats/${SessionId}_round2_VD${Vd2}.txt"
+    }
 }
 
 # T2 PROBE JSON v1：优先读客户端写入的 roundN.json（结构化 counters/gateway/disk）；
@@ -743,14 +748,14 @@ function Read-SmokeRoundProbe {
     }
 }
 $probeRound1 = Read-SmokeRoundProbe -Dir $probeDir -RoundNum 1
-$probeRound2 = Read-SmokeRoundProbe -Dir $probeDir -RoundNum 2
+$probeRound2 = if ($requiresRound2) { Read-SmokeRoundProbe -Dir $probeDir -RoundNum 2 } else { $null }
 if ($probeRound1) {
     ($probeRound1 | ConvertTo-Json -Depth 5) | Out-File (Join-Path $statsDir "${SessionId}_round1_probe.json") -Encoding UTF8
 }
 if ($probeRound2) {
     ($probeRound2 | ConvertTo-Json -Depth 5) | Out-File (Join-Path $statsDir "${SessionId}_round2_probe.json") -Encoding UTF8
 }
-Write-Host "[$SessionId] PROBE JSON: round1=$($null -ne $probeRound1) round2=$($null -ne $probeRound2)"
+Write-Host "[$SessionId] PROBE JSON: round1=$($null -ne $probeRound1) round2=$(if ($requiresRound2) { $null -ne $probeRound2 } else { 'n/a' })"
 
 
 # 提取服务端视距切换日志
@@ -777,16 +782,16 @@ foreach ($gm in [regex]::Matches($clientContent, $gatewayRe)) {
 $gatewayRound1 = if ($gatewayByRound.ContainsKey("ROUND1")) { $gatewayByRound["ROUND1"] } else {
     @{ gatewayState = "MISSING"; gatewayS2c = 0; gatewayC2s = 0; gatewayResume = $false }
 }
-$gatewayRound2 = if ($gatewayByRound.ContainsKey("ROUND2")) { $gatewayByRound["ROUND2"] } else {
-    @{ gatewayState = "MISSING"; gatewayS2c = 0; gatewayC2s = 0; gatewayResume = $false }
+$gatewayRound2 = if ($requiresRound2 -and $gatewayByRound.ContainsKey("ROUND2")) { $gatewayByRound["ROUND2"] } else {
+    @{ gatewayState = "NOT_REQUIRED"; gatewayS2c = 0; gatewayC2s = 0; gatewayResume = $false }
 }
 
 
 # 业务指标由 scripts/smoke/analyzer.py 统一分析；这里仅保留原始 marker/字段收集。
 $round1StatsFound = $round1Match.Success -or ($null -ne $probeRound1)
 $round1Pass = $clientContent -match "ROUND1 stats OK"
-$round2StatsFound = $round2Match.Success -or ($null -ne $probeRound2)
-$round2Pass = $clientContent -match "ROUND2 stats OK"
+$round2StatsFound = if ($requiresRound2) { $round2Match.Success -or ($null -ne $probeRound2) } else { $null }
+$round2Pass = if ($requiresRound2) { $clientContent -match "ROUND2 stats OK" } else { $null }
 $hasPass = $clientContent -match "HassiumSmokeTest:PASS"
 $hasFail = $clientContent -match "HassiumSmokeTest:FAIL"
 $probeGateFailures = @()
@@ -857,6 +862,7 @@ $resultObj = @{
     Round1Pass = $round1Pass
     Round2Stats = $round2StatsFound
     Round2Pass = $round2Pass
+    Round2Required = $requiresRound2
     ProbeGateScenarioGated = ($Scenario -ne "classic")
     ProbeGateFailures = @()
     ServerSwitched = $serverSwitched
@@ -902,7 +908,11 @@ if (Test-Path $analysisPath) {
 Write-Host "[$SessionId] === RESULT: $result ==="
 Write-Host "[$SessionId] Python analyzer: exit=$analysisExit"
 Write-Host "[$SessionId] Round1: stats=$round1StatsFound pass=$round1Pass"
-Write-Host "[$SessionId] Round2: stats=$round2StatsFound pass=$round2Pass"
+if ($requiresRound2) {
+    Write-Host "[$SessionId] Round2: stats=$round2StatsFound pass=$round2Pass"
+} else {
+    Write-Host "[$SessionId] Round2: n/a（单轮场景）"
+}
 Write-Host "[$SessionId] ServerSwitched: $serverSwitched Exit: $clientExit"
 if ($result -eq "PASS") { exit 0 }
 exit 2

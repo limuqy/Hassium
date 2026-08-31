@@ -1,6 +1,5 @@
 package io.github.limuqy.mc.hassium.network.core;
 
-import io.github.limuqy.mc.hassium.network.ChunkHashS2CPacket;
 import io.github.limuqy.mc.hassium.network.core.outbound.ControlFrameCodec;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
@@ -13,7 +12,6 @@ import net.minecraft.network.protocol.login.ClientboundLoginDisconnectPacket;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
-import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
@@ -114,26 +112,6 @@ class GatewayPacketCodecTest {
     }
 #endif
 
-    @Test
-    void hassiumBusinessPacketDecode() {
-        ChunkHashS2CPacket original = new ChunkHashS2CPacket("minecraft:overworld",
-                List.of(new ChunkHashS2CPacket.Entry(1, 2, 0xDEADBEEFL, 3)));
-        // 手工构造 kind=1 帧 payload（与主控侧 T11 发送格式一致）
-        ByteBuf payload = Unpooled.buffer();
-        try {
-            payload.writeByte(GatewayPacketCodec.KIND_HASSIUM);
-            payload.writeByte(GatewayPacketCodec.HassiumSub.CHUNK_HASH.id());
-            original.encode(new FriendlyByteBuf(payload));
-
-            assertEquals(GatewayPacketCodec.KIND_HASSIUM, GatewayPacketCodec.peekKind(payload));
-            GatewayPacketCodec.HassiumPacket hp = GatewayPacketCodec.decodeHassium(payload);
-            assertEquals(GatewayPacketCodec.HassiumSub.CHUNK_HASH, hp.sub());
-            ChunkHashS2CPacket decoded = assertInstanceOf(ChunkHashS2CPacket.class, hp.packet());
-            assertEquals(original, decoded);
-        } finally {
-            payload.release();
-        }
-    }
 
     @Test
     void unknownKindAndSubRejected() {

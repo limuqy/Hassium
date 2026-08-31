@@ -4,7 +4,6 @@ import io.github.limuqy.mc.hassium.compat.ShadowChunkMapCompat;
 import io.github.limuqy.mc.hassium.metrics.NetworkStats;
 import io.github.limuqy.mc.hassium.network.ClientChunkHandler;
 import io.github.limuqy.mc.hassium.network.ClientMetadataHandler;
-import io.github.limuqy.mc.hassium.network.ShadowChunkRole;
 import io.github.limuqy.mc.hassium.utils.DimensionKey;
 import java.util.ArrayList;
 import java.util.List;
@@ -110,31 +109,14 @@ class ShadowLightComputeTimingRegressionTest {
 
 
     @Test
-    @DisplayName("scheduleChunkLoad 短路：仅注入表；未命中禁止原版读 126")
-    void scheduleChunkLoadShortCircuitDoesNotWorldgenOnInject() {
-        assertTrue(ShadowChunkMapCompat.shouldShortCircuitScheduleLoad(true, true));
-        assertFalse(ShadowChunkMapCompat.shouldShortCircuitScheduleLoad(true, false),
-                "未命中注入表：不得短路成注入柱，但也不得在注入路径 worldgen");
-        assertFalse(ShadowChunkMapCompat.shouldShortCircuitScheduleLoad(false, true));
-        assertTrue(ShadowChunkMapCompat.shouldBypassVanillaRegionRead(true, false),
-                "注入路径：未命中注入表也不得走 IOWorker 读 type 126");
-        assertFalse(ShadowChunkMapCompat.shouldBypassVanillaRegionRead(true, true),
-                "SeedGen generateChunk 期间允许原版空槽生成");
-        assertFalse(ShadowChunkMapCompat.shouldBypassVanillaRegionRead(false, false));
+    @DisplayName("影子存档：仅 type126 进入原版 RegionFile 解析")
+    void shadowRegionFileAcceptsOnlyType126() {
         assertTrue(ShadowChunkMapCompat.shouldSkipVanillaChunkParse(true, false),
                 "影子非 126 槽禁止原版当 zlib 解析");
         assertFalse(ShadowChunkMapCompat.shouldSkipVanillaChunkParse(true, true),
                 "type 126 由 MixinRegionFile 解压");
         assertFalse(ShadowChunkMapCompat.shouldSkipVanillaChunkParse(false, false),
                 "专用服非影子存档仍可混有原版槽");
-        assertTrue(ShadowChunkMapCompat.shouldPassthroughGenerationStep(true, false, false),
-                "注入票路径：地形步透传");
-        assertFalse(ShadowChunkMapCompat.shouldPassthroughGenerationStep(true, true, false),
-                "SeedGen generateChunk 期间允许 worldgen");
-        assertFalse(ShadowChunkMapCompat.shouldPassthroughGenerationStep(true, false, true),
-                "EMPTY 不透传，走 scheduleChunkLoad");
-        assertFalse(ShadowChunkMapCompat.shouldPassthroughGenerationStep(true, false, false, true),
-                "INITIALIZE_LIGHT/LIGHT 必须执行原版任务");
     }
 
     @Test
@@ -147,14 +129,6 @@ class ShadowLightComputeTimingRegressionTest {
         assertFalse(ShadowLightCompute.nativeFullMeansLighted(false, false));
     }
 
-    @Test
-    @DisplayName("Halo 算光后不得发布到 ClientLevel")
-    void haloMustNotPublishToClient() {
-        assertFalse(ShadowLightCompute.shouldPublishToClient(true));
-        assertTrue(ShadowLightCompute.shouldPublishToClient(false));
-        assertTrue(ShadowVanillaLightPipeline.isRenderable(ShadowChunkRole.VISIBLE));
-        assertFalse(ShadowVanillaLightPipeline.isRenderable(ShadowChunkRole.HALO));
-    }
 
     @Test
     @DisplayName("FULL 取数：注入表未命中不得把票扩散 ProtoChunk 交给 ServerLevel.getChunk")
@@ -170,22 +144,6 @@ class ShadowLightComputeTimingRegressionTest {
         assertFalse(ShadowChunkMapCompat.shouldSuppressUninjectedFullGetChunk(false, false, false, true));
     }
 
-    @Test
-    @DisplayName("UNKNOWN FULL 票集合加卸与 Halo 首包邻域对称")
-    void injectTicketAddRemoveAreSymmetric() {
-        java.util.Set<Long> keys = new java.util.HashSet<>();
-        long a = net.minecraft.world.level.ChunkPos.asLong(3, -7);
-        long b = net.minecraft.world.level.ChunkPos.asLong(4, -7);
-        assertTrue(ShadowChunkMapCompat.rememberTicketKey(keys, a));
-        assertFalse(ShadowChunkMapCompat.rememberTicketKey(keys, a), "同柱不重复加票");
-        assertTrue(ShadowChunkMapCompat.rememberTicketKey(keys, b));
-        assertEquals(2, keys.size());
-        assertTrue(ShadowChunkMapCompat.forgetTicketKey(keys, a));
-        assertFalse(ShadowChunkMapCompat.forgetTicketKey(keys, a), "还票后不再 remove");
-        assertEquals(1, keys.size());
-        assertTrue(ShadowChunkMapCompat.forgetTicketKey(keys, b));
-        assertTrue(keys.isEmpty());
-    }
 
 
     @Test
@@ -216,8 +174,8 @@ class ShadowLightComputeTimingRegressionTest {
     }
 
     @Test
-    @DisplayName("可见柱 native 入站：inject 当时记全量+光照重算，同柱只记一次")
-    void visibleNetworkIngressAccountsOnceBeforeNativeLight() {
+    @DisplayName("可见柱来源仅在落地记账；光照等待实际光屏障")
+    void visibleNetworkIngressAccountsFullSourceWithoutPrematureLightMetric() {
         NetworkStats.reset();
         NetworkStats.setEnabled(true);
         try {
@@ -229,9 +187,8 @@ class ShadowLightComputeTimingRegressionTest {
             assertEquals(1, NetworkStats.getMetrics().getNewFullChunkRequestCount());
             assertEquals(NetworkStats.ESTIMATED_CHUNK_BYTES,
                     NetworkStats.getMetrics().getFullChunkRequestBytes());
-            assertEquals(1, NetworkStats.getMetrics().getLightCacheMissCount());
-            assertEquals(NetworkStats.ESTIMATED_LIGHT_BYTES,
-                    NetworkStats.getMetrics().getLightCacheMissBytes());
+            assertEquals(0, NetworkStats.getMetrics().getLightCacheMissCount(),
+                    "packet 入站/区块来源不能冒充已提交的光照重算");
         } finally {
             ShadowLightCompute.onDisconnect();
             NetworkStats.reset();
@@ -259,16 +216,6 @@ class ShadowLightComputeTimingRegressionTest {
         }
     }
 
-    @Test
-    @DisplayName("hash 命中无论是否已落地都必须进 HIT 回执列表")
-    void hashHitAlwaysCollectsReceiptEvenIfNotYetApplied() {
-        List<ChunkPos> hits = new ArrayList<>();
-        ChunkPos pos = new ChunkPos(2, -4);
-        ShadowLightCompute.collectHitReceipt(hits, pos);
-        ShadowLightCompute.collectHitReceipt(null, pos);
-        ShadowLightCompute.collectHitReceipt(hits, null);
-        assertEquals(List.of(pos), hits);
-    }
 
     @Test
     @DisplayName("chunkLock 可重入：inject 持锁内再 capture/hash 不得自死锁")
@@ -329,12 +276,6 @@ class ShadowLightComputeTimingRegressionTest {
         }
     }
 
-    @Test
-    @DisplayName("超视渲染环带禁止向主控请求全量")
-    void ovdRingMustNotRequestFullChunksFromServer() {
-        assertFalse(ClientMetadataHandler.allowFullChunkRequestFromServer(true));
-        assertTrue(ClientMetadataHandler.allowFullChunkRequestFromServer(false));
-    }
 
     @Test
     @DisplayName("hash miss 先 tryRequestMiss 不得挡住直推分母记账")
@@ -363,18 +304,21 @@ class ShadowLightComputeTimingRegressionTest {
     }
 
     @Test
-    @DisplayName("光照按柱去重；LIGHT_ONLY 邻柱补光不进重算")
-    void lightColumnAccountsOnceAndSkipsLightOnly() {
+    @DisplayName("光照仅在引擎已有已应用光时计缓存复用；欠光缓存计重算")
+    void lightColumnAccountsOnlyEngineReadyCacheReuse() {
         NetworkStats.reset();
         NetworkStats.setEnabled(true);
         try {
-            ChunkPos pos = new ChunkPos(-2, 8);
-            assertTrue(ShadowLightCompute.accountLightColumn(DimensionKey.OVERWORLD, pos, false));
-            assertFalse(ShadowLightCompute.accountLightColumn(DimensionKey.OVERWORLD, pos, false));
-            assertFalse(ShadowLightCompute.accountLightColumn(DimensionKey.OVERWORLD, pos, true),
-                    "同柱已记重算后不得再记复用");
+            ChunkPos relit = new ChunkPos(-2, 8);
+            ChunkPos reused = new ChunkPos(-3, 8);
+            assertTrue(ShadowLightCompute.accountLightColumn(DimensionKey.OVERWORLD, relit, false),
+                    "缓存柱欠光仍必须记重算");
+            assertFalse(ShadowLightCompute.accountLightColumn(DimensionKey.OVERWORLD, relit, true),
+                    "同一柱已记重算后不得再伪装为复用");
+            assertTrue(ShadowLightCompute.accountLightColumn(DimensionKey.OVERWORLD, reused, true),
+                    "仅传入引擎已应用的光时才记复用");
             assertEquals(1, NetworkStats.getMetrics().getLightCacheMissCount());
-            assertEquals(0, NetworkStats.getMetrics().getLightReuseShadowCount());
+            assertEquals(1, NetworkStats.getMetrics().getLightReuseShadowCount());
             assertFalse(ShadowLightCompute.shouldAccountLightBarrierMetric(true),
                     "邻柱 LIGHT_ONLY 不是区块级光照缓存事件");
             assertTrue(ShadowLightCompute.shouldAccountLightBarrierMetric(false));

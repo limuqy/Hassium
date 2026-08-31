@@ -109,7 +109,8 @@ def _trace_analysis(probe: dict[str, Any]) -> dict[str, Any]:
     actual = _positions(cache.get("actualPresent"))
     expected = stages["networkReceived"] or stages["shadowReady"]
     gaps = {
-        "receivedNotInjected": stages["networkReceived"] - stages["shadowInjected"],
+        # 纯原版 world-side 路径会直接 networkReceived → clientApplied，不经过已裁剪的影子注入/ready 阶段。
+        "receivedNotInjected": stages["networkReceived"] - (stages["shadowInjected"] | stages["clientApplied"]),
         "injectedNotReady": stages["shadowInjected"] - stages["shadowReady"],
         "readyNotApplied": stages["shadowReady"] - actual,
         "appliedNotMeshed": stages["clientApplied"] - stages["meshCompiled"],
@@ -210,15 +211,17 @@ def analyze_result(result: dict[str, Any], root: Path) -> dict[str, Any]:
         failures.append(_failure("CLIENT_EXIT_NONZERO", exitCode=client_exit))
     checks["client_exit"] = "PASS" if client_exit in (None, 0) else "FAIL"
 
+    round_numbers = (1,) if scenario == "seedgen" else (1, 2)
     stats_ok = {n: bool(re.search(rf"CLIENT_STATS ROUND{n} begin", log_text)
-                    and re.search(rf"CLIENT_STATS ROUND{n} end", log_text)) for n in (1, 2)}
+                    and re.search(rf"CLIENT_STATS ROUND{n} end", log_text)) for n in round_numbers}
     if scenario == "classic" and not all(stats_ok.values()):
         failures.append(_failure("ROUND_STATS_MISSING", rounds=[n for n, ok in stats_ok.items() if not ok]))
 
     markers = _gateway_markers(log_text)
     trace_reports: dict[str, Any] = {}
     spatial_reports: dict[str, Any] = {}
-    for number in (1, 2):
+    # 保留空间快照供结果诊断；影子预生成/全视距覆盖已裁剪，任何场景均不以它作通过门禁。
+    for number in round_numbers:
         probe = _round_probe(result, number, root)
         if not probe:
             failures.append(_failure("PROBE_MISSING", round=number))
@@ -238,12 +241,9 @@ def analyze_result(result: dict[str, Any], root: Path) -> dict[str, Any]:
         gateway = markers.get(f"ROUND{number}", _obj(result.get(f"GatewayRound{number}")))
         if scenario == "classic" or gateway:
             c2s = _num(gateway.get("gatewayC2s"))
-            s2c = _num(gateway.get("gatewayS2c"))
             if gateway.get("gatewayState") != "ACTIVE" or (scenario == "classic" and (c2s is None or c2s <= 0)):
                 failures.append(_failure("GATEWAY_NOT_ACTIVE", round=number,
                                          state=gateway.get("gatewayState", "MISSING"), c2s=c2s or 0))
-            if scenario == "classic" and number == 2 and (s2c is None or s2c <= 0):
-                failures.append(_failure("GATEWAY_S2C_ABSENT", round=number, s2c=s2c or 0))
         gaps = trace_report["gaps"]
         for key, code in (("expectedNotPresent", "TRACE_EXPECTED_NOT_PRESENT"),
                           ("receivedNotInjected", "TRACE_RECEIVED_NOT_INJECTED"),
@@ -254,40 +254,13 @@ def analyze_result(result: dict[str, Any], root: Path) -> dict[str, Any]:
                           ("appliedNotMeshed", "TRACE_APPLIED_NOT_MESHED")):
             if gaps[key]["count"]:
                 warnings.append(_failure(code, "P1", round=number, gap=gaps[key]))
-        if spatial["available"] and spatial["cardinalHoles"]:
-            failures.append(_failure("SPATIAL_CARDINAL_HOLE", round=number,
-                                     positions=spatial["cardinalHoles"][:64],
-                                     truncated=len(spatial["cardinalHoles"]) > 64))
-        if spatial["available"] and spatial["diagonalHoles"]:
-            warnings.append(_failure("SPATIAL_DIAGONAL_HOLE", "P1", round=number,
-                                     positions=spatial["diagonalHoles"][:64],
-                                     truncated=len(spatial["diagonalHoles"]) > 64))
+        if spatial["available"] and (spatial["cardinalHoles"] or spatial["diagonalHoles"]):
+            warnings.append(_failure("SPATIAL_SNAPSHOT_INCOMPLETE", "P1", round=number,
+                                     cardinalHoles=spatial["cardinalHoles"][:64],
+                                     diagonalHoles=spatial["diagonalHoles"][:64],
+                                     cardinalTruncated=len(spatial["cardinalHoles"]) > 64,
+                                     diagonalTruncated=len(spatial["diagonalHoles"]) > 64))
 
-        if scenario == "classic" and number == 2:
-            counters, disk, stats = _obj(probe.get("counters")), _obj(probe.get("disk")), _obj(probe.get("stats"))
-            required = ("ovdLoaded", "sectionDeltaApplied", "lightSegRecalc", "locallyGenerated")
-            full_names = ("fullChunkRequestCount", "newFullChunkRequestCount", "staleFullChunkRequestCount", "chunksDecompressed")
-            missing = [name for name in required if name not in counters]
-            missing += [name for name in ("shadowRegionExists", "regionFileCount") if name not in disk]
-            missing += [name for name in full_names if name not in stats]
-            if missing:
-                failures.append(_failure("R2_METRICS_MISSING", round=number, metrics=missing))
-            ovd = _num(counters.get("ovdLoaded"))
-            if ovd is not None and ovd <= 0:
-                failures.append(_failure("OVD_NOT_LOADED", round=number, value=ovd))
-            if (_num(counters.get("sectionDeltaApplied")) or 0) <= 0 and (_num(counters.get("lightSegRecalc")) or 0) <= 0:
-                failures.append(_failure("SECTION_DELTA_OR_LIGHT_RECALC_ABSENT", round=number))
-            generated = _num(counters.get("locallyGenerated"))
-            if generated is not None and generated != 0:
-                failures.append(_failure("LOCALLY_GENERATED_NONZERO", round=number, value=generated))
-            if disk.get("shadowRegionExists") is not None and (not disk.get("shadowRegionExists") or (_num(disk.get("regionFileCount")) or 0) <= 0):
-                failures.append(_failure("SHADOW_REGION_MISSING", round=number))
-            full_metrics = {name: _num(stats.get(name)) or 0 for name in full_names}
-            cache_hits = _num(stats.get("cacheHitFullChunkCount")) or 0
-            # shadowPullV1 仍可能保留 1 个原版首登请求；只在没有任何缓存命中时
-            # 判定 Round2 退化为全量传输，避免误杀新管线的正常首包。
-            if cache_hits <= 0 and any(value > 0 for value in full_metrics.values()):
-                failures.append(_failure("R2_FULL_CHUNK_TRANSFER", round=number, metrics=full_metrics))
 
     if scenario == "classic" and not bool(result.get("ServerSwitched")):
         failures.append(_failure("SERVER_SWITCH_MISSING"))

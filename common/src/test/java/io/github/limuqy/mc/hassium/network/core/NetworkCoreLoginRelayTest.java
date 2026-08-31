@@ -1,7 +1,6 @@
 package io.github.limuqy.mc.hassium.network.core;
 
 import io.github.limuqy.mc.hassium.Constants;
-import io.github.limuqy.mc.hassium.network.ChunkHashS2CPacket;
 import io.github.limuqy.mc.hassium.network.core.outbound.ControlFrameCodec;
 import io.github.limuqy.mc.hassium.network.core.outbound.ControlFrameType;
 import io.github.limuqy.mc.hassium.network.core.outbound.HandshakeCodec;
@@ -171,20 +170,8 @@ class NetworkCoreLoginRelayTest {
         embedded.writeInbound(ControlFrameCodec.encodeFrame(ControlFrameType.PACKET_S2C, vanilla));
         vanilla.release();
 
-        // kind=1 Hassium 业务包（chunkHash → ClientMetadataHandler 现有收口；空环境内玩家检查安全跳过）
-        ChunkHashS2CPacket hash = new ChunkHashS2CPacket("minecraft:overworld",
-                List.of(new ChunkHashS2CPacket.Entry(0, 0, 42L, 1)));
-        ByteBuf business = Unpooled.buffer();
-        try {
-            business.writeByte(GatewayPacketCodec.KIND_HASSIUM);
-            business.writeByte(GatewayPacketCodec.HassiumSub.CHUNK_HASH.id());
-            hash.encode(new FriendlyByteBuf(business));
-            embedded.writeInbound(ControlFrameCodec.encodeFrame(ControlFrameType.PACKET_S2C, business));
-        } finally {
-            business.release();
-        }
 
-        assertEquals(before + 2, core.s2cDispatchedCount(), "原版包与业务包都应计数");
+        assertEquals(before + 1, core.s2cDispatchedCount(), "原版包应计数");
         core.onDisconnect();
     }
 

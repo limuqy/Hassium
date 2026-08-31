@@ -1,27 +1,21 @@
 package io.github.limuqy.mc.hassium.network.seedgen;
 
 import io.github.limuqy.mc.hassium.network.ClientChunkHandler.TraceOrigin;
-import io.github.limuqy.mc.hassium.network.ShadowChunkRole;
 import net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket;
 import net.minecraft.world.level.ChunkPos;
 
 /**
- * Role-aware stripped-chunk ingress. Injects the column, then enqueues the official
- * {@code initializeLight}+{@code lightChunk} barrier. Native {@code getChunkFuture(FULL)}
- * cannot be the publish gate: injected ImposterProtoChunks already report FULL, so
- * vanilla only {@code load}s and never {@code generate}s LIGHT — packing that result
- * sends empty sky/block layers (R1 all-black). Halos are lighted for neighbors but
- * never rendered.
+ * 区块来源统一进入影子端 pre-LIGHT 管线。
+ *
+ * <p>不再维护 halo；范围和生命周期由影子 ServerPlayer/ChunkMap 决定。</p>
  */
 public final class ShadowVanillaLightPipeline {
-
     private ShadowVanillaLightPipeline() {}
 
     public static void submitVisible(String dimension, ChunkPos pos,
                                      ClientboundLevelChunkWithLightPacket packet,
                                      TraceOrigin traceOrigin) {
-        submit(dimension, pos, packet, ShadowChunkRole.VISIBLE,
-                ShadowChunkSource.REMOTE_FULL,
+        submit(dimension, pos, packet, ShadowChunkSource.REMOTE_FULL,
                 traceOrigin == null ? TraceOrigin.SERVER_PUSH : traceOrigin);
     }
 
@@ -29,28 +23,18 @@ public final class ShadowVanillaLightPipeline {
     public static void submitCacheSnapshot(String dimension, ChunkPos pos,
                                            ClientboundLevelChunkWithLightPacket packet,
                                            TraceOrigin traceOrigin) {
-        submit(dimension, pos, packet, ShadowChunkRole.VISIBLE,
-                ShadowChunkSource.CACHE_SNAPSHOT,
+        submit(dimension, pos, packet, ShadowChunkSource.CACHE_SNAPSHOT,
                 traceOrigin == null ? TraceOrigin.SHADOW_DISK_CACHE : traceOrigin);
     }
 
-    public static void submitHalo(String dimension, ChunkPos pos,
-                                  ClientboundLevelChunkWithLightPacket packet) {
-        submit(dimension, pos, packet, ShadowChunkRole.HALO,
-                ShadowChunkSource.REMOTE_FULL, TraceOrigin.SERVER_PUSH);
-    }
-
-    /**
-     * 影子端尚未装配（gameDir 未记、创建中）时不得 {@code failShadowServer}：
-     * 旧 {@code submit()} 只是入队等 ready；永久降级会让后续包走直 apply，
-     * 分母 applied=0 且 NeoForge 进服窗口内 landed 对不上。
-     */
+    /** 影子端尚未装配时不把一次竞态误判为永久失败。 */
     static boolean shouldFailShadowWhenServerUnavailable() {
         return false;
     }
 
-    private static void submit(String dimension, ChunkPos pos, ClientboundLevelChunkWithLightPacket packet,
-                               ShadowChunkRole role, ShadowChunkSource source, TraceOrigin origin) {
+    private static void submit(String dimension, ChunkPos pos,
+                               ClientboundLevelChunkWithLightPacket packet,
+                               ShadowChunkSource source, TraceOrigin origin) {
         if (pos == null || packet == null) {
             return;
         }
@@ -60,39 +44,27 @@ public final class ShadowVanillaLightPipeline {
                 ShadowServerRegistry.getInstance().failShadowServer();
                 return;
             }
-            if (role == ShadowChunkRole.HALO) {
-                ShadowLightCompute.submitHalo(dimension, pos, packet);
-            } else {
-                ShadowLightCompute.submitVisible(dimension, pos, packet);
-            }
+            ShadowLightCompute.submitVisible(dimension, pos, packet);
             return;
         }
         String resolvedDimension = dimension == null ? currentDimension() : dimension;
         server.setPersistenceRole(resolvedDimension, pos,
-                role == ShadowChunkRole.HALO ? ShadowChunkPersistenceRole.HALO_BLOCKS_ONLY
-                        : ShadowChunkPersistenceRole.VISIBLE_FULL_LIGHT);
-        if (role == ShadowChunkRole.VISIBLE) {
+                ShadowChunkPersistenceRole.VISIBLE_FULL_LIGHT);
+        if (source == ShadowChunkSource.REMOTE_FULL) {
             SmokeChunkTrace.recordNetworkReceived(resolvedDimension, pos);
         }
-        if (!server.injectPreLight(resolvedDimension, pos, packet, role, source)) {
+        if (!server.injectPreLight(resolvedDimension, pos, packet, source)) {
             ShadowServerRegistry.getInstance().failShadowServer();
             return;
         }
-        if (role == ShadowChunkRole.VISIBLE) {
-            SmokeChunkTrace.recordShadowInjected(resolvedDimension, pos);
-        }
-        if (role == ShadowChunkRole.VISIBLE) {
-            ShadowLightCompute.accountVisibleNetworkIngress(resolvedDimension, pos);
-        }
-        ShadowLightCompute.enqueueInjectedForLight(resolvedDimension, pos, role, origin);
-
+        SmokeChunkTrace.recordShadowInjected(resolvedDimension, pos);
+        // 区块来源指标只能在 ClientChunkCache 实际落地后记账；此处仅排入光屏障。
+        // CACHE_SNAPSHOT 因此不会伪装成网络 full miss。
+        ShadowLightCompute.enqueueInjectedForLight(resolvedDimension, pos, origin);
     }
 
     public static String currentDimension() {
         return ShadowLightCompute.currentDimension();
     }
 
-    public static boolean isRenderable(ShadowChunkRole role) {
-        return role == ShadowChunkRole.VISIBLE;
-    }
 }

@@ -13,8 +13,6 @@
         "SimpleRegionStorageAccessor",
         "IOWorkerAccessor",
         "SectionStorageAccessor",
-        "EntityStorageAccessor",
-        "PersistentEntitySectionManagerAccessor",
         "MixinServerGamePacketListenerImpl",
         "MixinMinecraftServer",
         "MixinConnection",
@@ -30,7 +28,6 @@
         "ThreadedLevelLightEngineAccessor",
         "LightUpdatePacketAccessor",
         "LevelChunkWithLightPacketAccessor",
-        "ServerLevelAccessor",
         "MixinReloadableServerResources"
     ],
     "client": [
@@ -39,11 +36,8 @@
       "MixinClientPacketListener",
       "MixinClientCommonPacketListenerImpl",
       "MixinClientLevel",
-      "MixinLevel",
       "MixinClientTick",
       "MixinLevelRenderer",
-      "MixinOptions",
-      "OptionsAccessor",
       "ClientLevelAccessor",
       "LevelLightEngineAccessor",
       "LightEngineAccessor",

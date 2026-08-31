@@ -101,12 +101,5 @@ public class MixinServerChunkCache {
             cir.setReturnValue(chunk);
             return;
         }
-        if (ShadowChunkMapCompat.shouldSuppressUninjectedFullGetChunk(
-                true,
-                ShadowChunkMapCompat.isWorldgenAllowed(),
-                false,
-                ShadowChunkMapCompat.isFullOrAfter(status))) {
-            cir.setReturnValue(null);
-        }
     }
 }

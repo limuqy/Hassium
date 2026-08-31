@@ -175,7 +175,7 @@ public class NetworkStats {
     }
 
     /**
-     * 记录一个权威区块已成功应用到客户端世界（按区块坐标去重；renderOnly 不计入）。
+     * 记录一个权威区块已成功应用到客户端世界（按区块坐标去重）。
      * 供缓存命中率分母「客户端应用区块」使用。
      */
     public static void recordChunkApplied(int chunkX, int chunkZ) {

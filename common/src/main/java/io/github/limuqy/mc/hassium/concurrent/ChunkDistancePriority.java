@@ -20,8 +20,7 @@ import net.minecraft.world.level.ChunkPos;
  * 需要随移动自愈的队列请用 {@link KeyedPriorityQueue}（消费时按当前锚点重算键）。
  * <p>
  * 玩家坐标缓存见 {@link MainThreadDispatcher#updatePlayerPosition}；客户端路径应先刷新缓存再算。
- * 门控入口见 {@link MainThreadDispatcher#authoritativePriority} /
- * {@link MainThreadDispatcher#renderOnlyPriority}。
+ * 门控入口见 {@link MainThreadDispatcher#authoritativePriority}，不再区分环带任务。
  */
 public final class ChunkDistancePriority {
 
@@ -42,16 +41,13 @@ public final class ChunkDistancePriority {
     /**
      * 优先级层：先比 tier，再比层内 distSq。
      * <p>
-     * 序：{@link #AUTHORITATIVE} &lt; {@link #UNKNOWN} &lt; {@link #RENDER_ONLY}
-     *（数值越小越优先 → 权威始终最先，环带始终最后）。
+     * 序：{@link #AUTHORITATIVE} &lt; {@link #UNKNOWN}（数值越小越优先）。
      */
     public enum Tier {
         /** serverVD 内权威块（chunkHash 命中、全量推送 apply 等） */
         AUTHORITATIVE(0),
         /** 无 chunk 锚点 / 全局回调；夹在权威与环带之间 */
-        UNKNOWN(1),
-        /** 超视渲染环带 renderOnly，永远低于权威与未知任务 */
-        RENDER_ONLY(2);
+        UNKNOWN(1);
 
         private final int index;
 
@@ -179,12 +175,4 @@ public final class ChunkDistancePriority {
         return ofCenter(Tier.AUTHORITATIVE, pos, centerChunkX, centerChunkZ);
     }
 
-    /** 超视 renderOnly 层：永远排在权威与未知任务之后。 */
-    public static double renderOnly(ChunkPos pos, double playerChunkX, double playerChunkZ) {
-        return of(Tier.RENDER_ONLY, pos, playerChunkX, playerChunkZ);
-    }
-
-    public static double renderOnlyFromWorld(ChunkPos pos, double worldX, double worldZ) {
-        return ofWorld(Tier.RENDER_ONLY, pos, worldX, worldZ);
-    }
 }

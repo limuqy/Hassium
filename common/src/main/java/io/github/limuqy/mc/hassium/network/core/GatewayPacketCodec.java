@@ -55,7 +55,6 @@ public final class GatewayPacketCodec {
 
     /** Hassium 业务 S2C 包子类型注册表（append-only；与主控侧 T11 协商固定）。 */
     public enum HassiumSub {
-        CHUNK_HASH(1),
         SECTION_DELTA(2),
         LIGHT_DELTA(3),
         SEED_REF(4),
@@ -217,7 +216,6 @@ public final class GatewayPacketCodec {
         }
         FriendlyByteBuf fbuf = new FriendlyByteBuf(payload);
         return switch (sub) {
-            case CHUNK_HASH -> new HassiumPacket(sub, io.github.limuqy.mc.hassium.network.ChunkHashS2CPacket.decode(fbuf));
             case SECTION_DELTA -> new HassiumPacket(sub, io.github.limuqy.mc.hassium.network.SectionDeltaS2CPacket.decode(fbuf));
             case LIGHT_DELTA -> new HassiumPacket(sub, io.github.limuqy.mc.hassium.network.LightDeltaS2CPacket.decode(fbuf));
             case SEED_REF -> new HassiumPacket(sub, io.github.limuqy.mc.hassium.network.SeedRefS2CPacket.decode(fbuf));

@@ -1,7 +1,6 @@
 package io.github.limuqy.mc.hassium.network.seedgen;
 
-/** Internal on-disk policy; unlike ShadowChunkRole it is never serialized on the wire. */
+/** 影子端统一保存完整区块与完整光照。 */
 enum ShadowChunkPersistenceRole {
-    VISIBLE_FULL_LIGHT,
-    HALO_BLOCKS_ONLY
+    VISIBLE_FULL_LIGHT
 }
