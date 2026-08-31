@@ -269,7 +269,7 @@ public record HassiumConfig(
         );
 
         public static final MasterCoreConfig DEFAULT = new MasterCoreConfig(
-                true,              // enabled
+                false,             // enabled（单25565原版基线：旧25566 gateway sidecar 暂停，代理核心重构后另行启用）
                 3,                 // compressionLevel
                 true,              // magiclessZstd
                 true,              // globalPacketCompression

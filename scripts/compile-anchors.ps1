@@ -1,9 +1,8 @@
 # 按 docs/version-segments.md 对 7 个锚点 × builds_for 执行 compileJava。
-# 单次 Gradle 进程只能绑定一个 mc_ver，故本脚本多次调用。
+# 单次 Gradle 进程只能绑定一个 mc_ver，故本脚本多次前台调用。
 #
-# 卡住常见原因：fabric-loom 全局锁被 IDEA Gradle Sync 或其他 Gradle 占用，
-# 会无限打印 "Waiting for lock..."。本脚本在启动前检测存活持锁进程并直接失败；
-# 每个锚点结束后 --stop，避免 Daemon/锁残留拖死下一版本。
+# 每个 Gradle 调用均在当前脚本中阻塞至退出。严禁调用 `gradlew --stop`：本脚本可能由
+# 根项目的 `compileAnchors` Gradle task 启动，--stop 会终止该父 daemon 并中断自身。
 $ErrorActionPreference = 'Stop'
 
 $Root = Split-Path -Parent $PSScriptRoot
@@ -24,9 +23,7 @@ if (-not (Test-Path $Gradlew)) {
     $Gradlew = Join-Path $Root 'gradlew'
 }
 
-function Stop-GradleDaemons {
-    & $Gradlew --stop 2>$null | Out-Null
-}
+
 
 function Get-LoomLockHolderPids {
     $pids = [System.Collections.Generic.HashSet[int]]::new()
@@ -69,8 +66,6 @@ function Assert-NoForeignLoomLock {
     }
 }
 
-Write-Host "Stopping existing Gradle daemons..." -ForegroundColor DarkGray
-Stop-GradleDaemons
 Assert-NoForeignLoomLock
 
 $failed = @()
@@ -94,9 +89,9 @@ foreach ($ver in $Anchors) {
         Write-Host "`n--- $ver / $loader ---" -ForegroundColor DarkCyan
         # 每个 loader 独立 Gradle invocation，避免同一 daemon 在 common:compileJava
         # 绑定前一个 loader 的 Loom classpath，导致 Manifold 版本条件错配。
+        # 前台调用会阻塞至本次 gradlew 退出；不停止 daemon，避免终止父 compileAnchors task。
         & $Gradlew ":${loader}:compileJava" "-Pmc_ver=$ver" --console=plain
         $code = $LASTEXITCODE
-        Stop-GradleDaemons
         if ($code -ne 0) {
             $failed += "$ver/$loader"
             Write-Host "FAILED: $ver/$loader (exit $code)" -ForegroundColor Red

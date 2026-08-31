@@ -41,52 +41,60 @@ chunkHash   = combineSectionHashes(sectionIndex → sectionHash)
 
 ## 3. 现行数据流
 
-> **阶段二 分段增量**（默认开）：缓存过期（MISMATCH）走 `SectionHashRequest` → 影子端 apply（失败回退全量）。详见 §11。
+> 区块**可见范围与卸载**由影子虚拟 `ServerPlayer` 的原版 tracking 决定；客户端 `ClientChunkCache` 是唯一的客户端生命周期真相源。Hassium 不维护第二套 admission/unload 状态。
 
-### 服务端
-
-```
-ChunkHolder.broadcast / ServerPlayer.trackChunk / PlayerChunkSender
-        │  (握手后 Mixin 拦截，cancel 原版全量包)
-        │  主线程：编码并缓存已构建包字节（反透视兼容，见 mod-compat.md）
-        ▼
-pushPool: computeSectionHashes → combine → chunkHash
-        ▼
-短窗口批量 sendChunkHash（≤16 entries 或约 10ms）
-        ▼  ChunkHashS2C（控制面黑名单）
-客户端 miss → ChunkDataRequestC2S
-        ▼
-enqueueDataRequest（距离优先）→ per-player `ChunkAdmissionController`（keyed pending/in-flight）
-        ▼
-onServerTick（真实 server tick 限流 + ACK 背压）:
-  主线程: 优先 take 缓存包字节，否则 getChunk + serialize
-         ≤ master.maxChunksPerTick，且受未确认批次窗口约束
-         （首次 ACK 前 1 批，之后最多 10 批；deliveryId 单调）
-  pushPool: ZSTD + ChunkPayloadS2C / SeedRef
-        ▼
-客户端 authoritative apply 成功 → `CHUNK_APPLY_ACK`（批量 deliveryId）
-        ▼
-服务端幂等释放 in-flight / 放行下一批
-
-### 客户端
+### 正常 tracking 推送
 
 ```
-ChunkHashS2C
-        │
-storage 未就绪 → 暂存；就绪后批量比对（超时约 2s 回退全量）
-        │
-readChunkHash（MetadataTable，必要时 SectionHashStore combine）
-        │
-   ┌────┴────────┬────────────┐
-  HIT              MISS         MISMATCH（过期）
-   │                 │              │
-直接回传          全量请求     分段增量（默认开）
-   │                 │         SectionHashRequest
-（影子端数据）  ChunkPayload    → SectionDelta → 影子端 apply
-   └────────┬────────┘              │（失败/skipped/超时 → 全量）
-            └───────────┬───────────┘
-drainReady 帧尾 apply；原版包经网关注入（handler 直调 handleLevelChunkWithLight）
+影子虚拟 ServerPlayer / ServerChunkCache / ChunkMap
+        │  原版 tracking 决定 visible / forget
+        │  Mixin 阻止世界侧壳连接重复发送
+        ▼
+GatewayServer PACKET_S2C（原版 ClientboundLevelChunkWithLightPacket）
+        ▼
+GatewayS2CRouter
+   ┌────┴───────────────────────────────────────────┐
+带权威光                                                   剥光（仅握手声明引擎时）
+   │                                                        │
+   ▼                                                        ▼
+ClientPacketListener.handleLevelChunkWithLight       ShadowLightCompute
+   │                                                   → 影子端注入 / 原版 LightEngine
+   ▼                                                   → drainReady 回传官方区块包
+ClientChunkCache.replaceWithPacketData                         │
+   └──────────────────────────────────────────────────────────┘
+                              ▼
+                  原版 ClientChunkCache / renderer
 ```
+
+正常直推必须记为 `serverPushAppliedCount`，不是 `fullChunkRequestCount`；后者只表示客户端 Compare + Pull 的权威 FULL 请求。探针还同时记录累计 apply、完整 `ClientChunkCache.loadedChunks`，以及 trace 候选在采样时刻实际驻留的数量。
+
+### Compare + Pull / Generate + Validate
+
+该分支只处理**需要客户端选择数据来源**的场景：`SeedRef`、影子缓存重放、SectionDelta 失败/超时/skipped，以及影子端本地生成失败。它不替代原版 tracking。
+
+```
+SeedRef / 缓存重放 / delta 回退
+        ▼
+客户端读取 ShadowStorageHashes 作为本地 baseline
+        ▼
+ShadowPullRequestC2S(chunkHash, sectionHashes)
+        ▼
+服务端权威比较
+   ┌────┼───────────────┐
+UNCHANGED       FULL          ERROR
+   │              │              │
+影子内存/磁盘     影子端注入     明确记录；不伪报命中
+重放→光照→官方包  →光照→官方包
+   │              │
+   └──────┬───────┘
+          ▼
+ClientPacketListener.handleLevelChunkWithLight
+```
+
+- `UNCHANGED` 只有在影子端能实际 materialize 该柱时才算命中；hash 有记录但内存/磁盘找不到柱，立即重试无 baseline 的权威 FULL。
+- `SeedRef` 的本地生成必须同时满足客户端开关、服务端许可、真实 seed 和 content hash；任何条件缺失、生成失败或 hash mismatch 都回退 FULL。
+- 分段增量使用独立 `SectionHashRequestC2SPacket → SectionDeltaS2CPacket`。它的 send 失败、server skipped 或 timeout 均回退权威 FULL。`ShadowPullResponseS2CPacket.Kind.DELTA` 不是现行 payload 语义；若收到该协议错配响应，客户端回退 FULL，绝不静默丢柱。
+
 ## 4. 主线程限流
 
 | 机制 | 说明 |
@@ -95,22 +103,15 @@ drainReady 帧尾 apply；原版包经网关注入（handler 直调 handleLevelC
 | JoinBoost | 进服约 10s，预算从约 30ms 线性退坡到 `mainThreadChunkBudgetMs` |
 | `maxChunksPerFrame` | 每 tick 缓存读取生产上限（默认 6；OVD 入队 + 影子读盘） |
 
-控制面包（hash / 握手 / index sync 等）在 `PacketCompressionBlacklist`，避免进 PENDING 聚合窗口。
+控制面包（握手、Compare + Pull、SectionDelta 等）不进入聚合窗口。
 
-## 5. 协议（阶段一 / 阶段二）
-
-### 阶段一（现行）
+## 5. 协议边界
 
 ```java
-ChunkHashS2CPacket(dimension, List<Entry>)
-// Entry(chunkX, chunkZ, chunkHash, sectionBitmap)
-```
-
-### 阶段二：分段增量（默认开启，可关闭）
-
-```java
-SectionHashRequestC2SPacket  // 客户端 → 服务端（section hashes + 平面综合征）
-SectionDeltaS2CPacket        // 服务端 → 客户端（BLOCKS 方块列表或 FULL 整段 + heightmaps + BE）
+ShadowPullRequestC2SPacket  // 客户端带影子本地 baseline 请求权威比较
+ShadowPullResponseS2CPacket // UNCHANGED / FULL / ERROR；DELTA 值收到即按协议错配回退 FULL
+SectionHashRequestC2SPacket // 客户端 → 服务端（section hashes + 平面综合征）
+SectionDeltaS2CPacket       // 服务端 → 客户端（BLOCKS 或 FULL section + heightmaps + BE）
 ```
 
 门控：`chunk.sectionDeltaEnabled`（默认 `true`；需同时 `chunk.enabled`）。

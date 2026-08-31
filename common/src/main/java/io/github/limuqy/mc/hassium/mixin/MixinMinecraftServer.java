@@ -90,9 +90,9 @@ public class MixinMinecraftServer {
         } catch (Throwable t) {
             Constants.LOG.warn("Hassium: Failed to bind UDP dataplane, server will run without it", t);
         }
-        // T12 网关接入（主控专用）：真实握手字段 + 登录桥 + 续流物化 + S2C 推送路由。
-        // 失败仅日志（GatewayPlatformWiring 内部兜底）——vanilla TCP 不受影响。
-        if (RuntimeServerContext.isDedicatedServerContext()) {
+        // 单25565原版基线：旧 GatewayServer 独立监听 25566 仅在显式启用主控时启动。
+        if (RuntimeServerContext.isDedicatedServerContext()
+                && HassiumConfigService.getInstance().isMasterEnabled()) {
             GatewayPlatformWiring.install(server);
         }
         // T2 票据防重放：epoch 表启动加载 + 有效期配置（config 目录 hassium-state.json）。

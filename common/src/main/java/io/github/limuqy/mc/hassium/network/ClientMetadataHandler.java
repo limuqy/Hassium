@@ -4,6 +4,7 @@ import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.client.ClientSmokeTest;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.compat.LevelCompat;
+import io.github.limuqy.mc.hassium.storage.ShadowStorageHashes;
 import io.github.limuqy.mc.hassium.metrics.NetworkStats;
 import io.github.limuqy.mc.hassium.metrics.VanillaZlibEstimator;
 import io.github.limuqy.mc.hassium.concurrent.ChunkDistancePriority;
@@ -91,14 +92,25 @@ public class ClientMetadataHandler {
         int estimatedSize = 4 + 4 + 8 + 4 + packet.sectionHashes().length * 8;
         NetworkStats.recordMetadataReceived(estimatedSize);
 
+        ChunkPos pos = new ChunkPos(packet.chunkX(), packet.chunkZ());
+        String dimension = LevelCompat.getDimensionId(mc.level);
+
+        // SeedRef 携带服务端权威 hash。已有影子内存/磁盘 baseline 时必须先走统一
+        // compare-and-pull：UNCHANGED 才发布缓存，FULL 则由服务端权威数据覆盖旧基线。
+        // 不直接把「本地有文件」算作命中，避免 stale cache 被误记为有效。
+        if (ShadowStorageHashes.get(dimension, pos) != null) {
+            if (io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.tryRequestMiss(dimension, pos)) {
+                ShadowPullClient.requestFull(dimension, List.of(pos));
+            }
+            return;
+        }
+
         if (HassiumConfigService.getInstance().isClientSeedGenEnabled()
                 && ClientChunkPipeline.getInstance().isServerSeedGenEnabled()
                 && ClientChunkPipeline.getInstance().isServerSeedAvailable()
                 && io.github.limuqy.mc.hassium.network.seedgen.SeedGenExecutor.getInstance().handleSeedRef(packet)) {
             return;
         }
-        String dimension = LevelCompat.getDimensionId(mc.level);
-        ChunkPos pos = new ChunkPos(packet.chunkX(), packet.chunkZ());
         if (io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.tryRequestMiss(dimension, pos)) {
             Constants.LOG.warn("[SEED_REF] Local generation unavailable for ({}, {}) -> shadowPull FULL",
                     packet.chunkX(), packet.chunkZ());

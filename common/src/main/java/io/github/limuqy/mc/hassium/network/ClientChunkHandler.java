@@ -290,19 +290,39 @@ public class ClientChunkHandler {
                 return;
             }
 
-            // 应用区块
-            boolean applied = applyChunkData(compressed.chunkX, compressed.chunkZ, decompressed);
-            if (applied) {
-                Constants.LOG.debug("Hassium: Applied chunk [{}, {}] from server",
-                        compressed.chunkX, compressed.chunkZ);
-            } else {
-                Constants.LOG.warn("Hassium: Failed to apply chunk [{}, {}] from server",
-                        compressed.chunkX, compressed.chunkZ);
+            dispatchDecompressedChunkApply(decompressed, compressed.chunkX, compressed.chunkZ);
+         } catch (Exception e) {
+             Constants.LOG.error("Hassium: Error in fallback decompress for chunk [{}, {}]",
+                 compressed.chunkX, compressed.chunkZ, e);
+         }
+     }
+
+    /** executor 尚未启动时也必须把客户端 world/renderer 操作延后到 Render thread。 */
+    private static void dispatchDecompressedChunkApply(byte[] data, int chunkX, int chunkZ) {
+        final ChunkPos pos = new ChunkPos(chunkX, chunkZ);
+        MainThreadDispatcher.execute(() -> {
+            Minecraft mc = Minecraft.getInstance();
+            if (mc == null || mc.level == null) {
+                // login 尚未完成时保留任务；断连清理会移除 SAFE_TO_CANCEL 回调。
+                dispatchDecompressedChunkApply(data, chunkX, chunkZ);
+                return;
             }
-        } catch (Exception e) {
-            Constants.LOG.error("Hassium: Error in fallback decompress for chunk [{}, {}]",
-                compressed.chunkX, compressed.chunkZ, e);
-        }
+            if (io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.isEnabled()) {
+                net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket packet =
+                        decodeChunkPacket(data);
+                if (packet != null) {
+                    io.github.limuqy.mc.hassium.network.seedgen.ShadowVanillaLightPipeline.submitVisible(
+                            io.github.limuqy.mc.hassium.network.seedgen.ShadowVanillaLightPipeline.currentDimension(),
+                            pos, packet, traceOriginIfLoggingEnabled(TraceOrigin.SERVER_PUSH));
+                    return;
+                }
+            }
+            if (!applyChunkData(chunkX, chunkZ, data)) {
+                DebugLogger.warn(LogType.COMPRESSION,
+                        "[HANDLE_COMPRESSED] Failed to apply fallback chunk [{}, {}] from server",
+                        chunkX, chunkZ);
+            }
+        }, pos, TaskCategory.SAFE_TO_CANCEL);
     }
 
     /**

@@ -797,6 +797,8 @@ $hasFail = $clientContent -match "HassiumSmokeTest:FAIL"
 $probeGateFailures = @()
 $dimensionGateFailures = @()
 $logAuditFailures = @()
+# Phase 0 单25565原版基线：经典冒烟验证原版区块流，不要求已暂停的 Gateway ACTIVE。
+$gatewayRequired = $false
 $result = "UNKNOWN"
 # 业务门控由 Python analyzer 执行；PowerShell 只保留启动、超时、停止和严重错误处理。
 
@@ -871,6 +873,7 @@ $resultObj = @{
     GatewayRound1 = $gatewayRound1
     GatewayRound2 = $gatewayRound2
     GatewayGatePass = $null
+    GatewayRequired = $gatewayRequired
     DimensionGateFailures = @()
     Probe = @{ Round1 = $probeRound1; Round2 = $probeRound2 }
     StatsFiles = @(

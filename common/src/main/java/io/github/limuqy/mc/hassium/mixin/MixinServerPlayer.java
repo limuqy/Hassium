@@ -42,8 +42,8 @@ public abstract class MixinServerPlayer extends Player {
             return;
         }
         PlayerCompressionTracker.setConnected(self);
-        // 仅消费 login/config 预握手标记；GatewayPlayerSession 尚未建立前保持原版首包，
-        // 避免 CHUNK_HASH 走到 1.20.1 未注册的 custom payload 通道。完整握手后再启用压缩。
+        // login/config 预握手已确认客户端支持 Hassium；从首个 tracking 柱开始
+        // 交给 ServerChunkPushManager，避免首圈原版直推绕过压缩/影子链路。
         PlayerCompressionTracker.tryEnableOnPlayerJoin(self);
         // M1 bootstrap：玩家物化后经 vanilla 通道下发 gateway_info（connection 未挂时登记待发，
         // 由 MixinMinecraftServer tick 泵补发；仅专用服 + master.enabled，见 CONTRACTS §2）。
@@ -51,7 +51,7 @@ public abstract class MixinServerPlayer extends Player {
     }
 
 #if MC_VER < MC_1_21_1
-    /** 1.20.1：真实服务端不直接向 Hassium 客户端发送区块。 */
+    /** 1.20.1：把 vanilla tracking 产生的首包转为 Hassium 推送任务。 */
     @Inject(method = "trackChunk", at = @At("HEAD"), cancellable = true)
     private void hassium$onTrackChunk(ChunkPos pos, Packet<?> chunkPacket, CallbackInfo ci) {
         ServerPlayer self = (ServerPlayer) (Object) this;
@@ -59,6 +59,12 @@ public abstract class MixinServerPlayer extends Player {
             return;
         }
         if (PlayerCompressionTracker.isCompressionEnabled(self)) {
+            String dimension = io.github.limuqy.mc.hassium.compat.LevelCompat.getDimensionId(self.level());
+            if (dimension == null) {
+                dimension = io.github.limuqy.mc.hassium.utils.DimensionKey.OVERWORLD;
+            }
+            io.github.limuqy.mc.hassium.network.ServerChunkPushManager.getInstance()
+                    .enqueueDirectPush(self, dimension, java.util.List.of(pos));
             ci.cancel();
         }
     }

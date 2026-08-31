@@ -320,6 +320,20 @@ public class NeoForgeNetworkManager implements NetworkManager {
         }
     }
 
+    /** 1.20.1 网关 bootstrap；必须经 SimpleChannel 进入 NeoForge 频道协商。 */
+    public record GatewayInfoWrapper(byte[] data) {
+        public void encode(FriendlyByteBuf buf) {
+            buf.writeVarInt(data.length);
+            buf.writeBytes(data);
+        }
+        public static GatewayInfoWrapper decode(FriendlyByteBuf buf) {
+            int length = buf.readVarInt();
+            byte[] data = new byte[length];
+            buf.readBytes(data);
+            return new GatewayInfoWrapper(data);
+        }
+    }
+
     public record CompressionReadyWrapper(boolean ready) {
         public void encode(FriendlyByteBuf buf) {
             buf.writeBoolean(ready);
@@ -1220,6 +1234,17 @@ public class NeoForgeNetworkManager implements NetworkManager {
                 },
                 java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT));
 
+        // 15: gateway bootstrap S2C。1.20.1 客户端不会声明裸 CustomPayload 通道，
+        // 必须经 SimpleChannel 才能在首轮登录前送达 NetworkCore。
+        CHANNEL.registerMessage(packetId++, GatewayInfoWrapper.class,
+                GatewayInfoWrapper::encode, GatewayInfoWrapper::decode,
+                (msg, ctx) -> {
+                    ctx.get().enqueueWork(() -> io.github.limuqy.mc.hassium.network.ClientGatewayBootstrap
+                            .handleGatewayInfoData(msg.data()));
+                    ctx.get().setPacketHandled(true);
+                },
+                java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT));
+
         HassiumAggregationManager.setSender((connection, buf) -> {
             try {
                 if (connection.getPacketListener() instanceof net.minecraft.server.network.ServerGamePacketListenerImpl handler) {
@@ -1778,6 +1803,17 @@ public class NeoForgeNetworkManager implements NetworkManager {
 #endif
 
 
+
+    /** 平台 bootstrap 发送口；旧 NeoForge 必须经协商后的 SimpleChannel。 */
+    public void sendGatewayInfo(ServerPlayer player, byte[] data) {
+#if MC_VER < MC_1_21_1
+        CHANNEL.sendTo(new GatewayInfoWrapper(data), player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
+#else
+        sendServerPayload(player, io.github.limuqy.mc.hassium.compat.PacketPayloadCompat.createClientboundPayload(
+                io.github.limuqy.mc.hassium.compat.PacketId.parse(
+                        io.github.limuqy.mc.hassium.network.HassiumPacketIds.GATEWAY_INFO_S2C), data));
+#endif
+    }
 
     @Override
     public void sendSeedRef(ServerPlayer player, FriendlyByteBuf buf) {

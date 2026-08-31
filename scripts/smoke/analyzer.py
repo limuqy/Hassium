@@ -96,9 +96,16 @@ def _check_probe_metrics(probe: dict[str, Any], round_number: int) -> list[dict[
     cache = _obj(probe.get("clientCache"))
     actual = _positions(cache.get("actualPresent"))
     loaded = _num(cache.get("loadedChunks"))
+    tracked = _num(cache.get("trackedCandidateCount"))
     if loaded is not None and loaded >= 0 and len(actual) > loaded:
         failures.append(_failure("METRIC_ACTUAL_ABOVE_LOADED", round=round_number,
                                  actual=len(actual), loaded=loaded))
+    if applied is not None and applied > 0 and loaded is not None and loaded <= 0:
+        failures.append(_failure("CLIENT_CACHE_EMPTY", round=round_number, applied=applied,
+                                 loaded=loaded))
+    if tracked is not None and tracked >= 0 and len(actual) > tracked:
+        failures.append(_failure("METRIC_PRESENT_ABOVE_TRACKED", round=round_number,
+                                 actual=len(actual), tracked=tracked))
     return failures
 
 
@@ -220,6 +227,7 @@ def analyze_result(result: dict[str, Any], root: Path) -> dict[str, Any]:
     markers = _gateway_markers(log_text)
     trace_reports: dict[str, Any] = {}
     spatial_reports: dict[str, Any] = {}
+    gateway_required = bool(result.get("GatewayRequired", True))
     # 保留空间快照供结果诊断；影子预生成/全视距覆盖已裁剪，任何场景均不以它作通过门禁。
     for number in round_numbers:
         probe = _round_probe(result, number, root)
@@ -239,7 +247,7 @@ def analyze_result(result: dict[str, Any], root: Path) -> dict[str, Any]:
                                          thresholdMs=10_000, chunks=late_near_player[:64],
                                          truncated=len(late_near_player) > 64))
         gateway = markers.get(f"ROUND{number}", _obj(result.get(f"GatewayRound{number}")))
-        if scenario == "classic" or gateway:
+        if gateway_required and (scenario == "classic" or gateway):
             c2s = _num(gateway.get("gatewayC2s"))
             if gateway.get("gatewayState") != "ACTIVE" or (scenario == "classic" and (c2s is None or c2s <= 0)):
                 failures.append(_failure("GATEWAY_NOT_ACTIVE", round=number,
@@ -250,10 +258,13 @@ def analyze_result(result: dict[str, Any], root: Path) -> dict[str, Any]:
                           ("injectedNotReady", "TRACE_INJECTED_NOT_READY")):
             if gaps[key]["count"]:
                 failures.append(_failure(code, round=number, gap=gaps[key]))
-        for key, code in (("readyNotApplied", "TRACE_READY_NOT_APPLIED"),
-                          ("appliedNotMeshed", "TRACE_APPLIED_NOT_MESHED")):
+        for key, code in (("readyNotApplied", "TRACE_READY_NOT_APPLIED"),):
             if gaps[key]["count"]:
                 warnings.append(_failure(code, "P1", round=number, gap=gaps[key]))
+        if gaps["appliedNotMeshed"]["count"]:
+            skipped.append(_failure("TRACE_MESH_PENDING", "INFO", round=number,
+                                    gap=gaps["appliedNotMeshed"],
+                                    detail="mesh compilation is asynchronous; resident cache is the smoke gate"))
         if spatial["available"] and (spatial["cardinalHoles"] or spatial["diagonalHoles"]):
             warnings.append(_failure("SPATIAL_SNAPSHOT_INCOMPLETE", "P1", round=number,
                                      cardinalHoles=spatial["cardinalHoles"][:64],

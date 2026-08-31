@@ -18,7 +18,11 @@ public final class NativeChunkMetrics {
     private NativeChunkMetrics() {
     }
 
-    /** 记录一个已由原版客户端应用的完整区块。 */
+    /**
+     * Records a complete chunk successfully installed by the vanilla world-side handler.
+     * This is a server push, not a client compare/pull request; counting it as a request made
+     * normal smoke reports pretend every direct chunk was a cache miss.
+     */
     public static void recordAppliedFullChunk(String dimension, int chunkX, int chunkZ, int payloadBytes) {
         if (payloadBytes <= 0) {
             return;
@@ -26,8 +30,7 @@ public final class NativeChunkMetrics {
         ChunkPos pos = new ChunkPos(chunkX, chunkZ);
         NetworkStats.recordChunkReceived(payloadBytes);
         NetworkStats.recordWireBytesReceived(payloadBytes);
-        NetworkStats.recordFullChunkRequests(1, payloadBytes, false);
-        NetworkStats.recordChunkApplied(chunkX, chunkZ);
+        NetworkStats.recordServerPushApplied(chunkX, chunkZ);
         SmokeChunkTrace.recordNetworkReceived(dimension, pos);
         SmokeChunkTrace.recordClientApplied(dimension, pos);
     }

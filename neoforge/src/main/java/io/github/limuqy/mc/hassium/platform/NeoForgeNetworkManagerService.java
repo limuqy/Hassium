@@ -19,6 +19,11 @@ public class NeoForgeNetworkManagerService implements INetworkManagerService {
 
 
     @Override
+    public void sendGatewayInfo(ServerPlayer player, byte[] data) {
+        networkManager.sendGatewayInfo(player, data);
+    }
+
+    @Override
     public void sendSeedRef(ServerPlayer player, FriendlyByteBuf buf) {
         if (io.github.limuqy.mc.hassium.server.GatewayPlayerBridge.tryRouteS2C(
                 player, io.github.limuqy.mc.hassium.network.core.GatewayPacketCodec.HassiumSub.SEED_REF.id(), buf)) {

@@ -126,6 +126,7 @@ public final class FabricPayloadRegistry {
         // 编解码走 RawCustomPayload codec（未注册 → DiscardedPayload 回退 CCE / 客户端数据被丢弃）。
         PayloadTypeRegistry.playS2C().register(GATEWAY_INFO_S2C_TYPE,
                 PacketPayloadCompat.rawPayloadCodec(ResourceLocationCompat.create(HassiumPacketIds.GATEWAY_INFO_S2C)));
+    }
 
     /**
      * 注册除 gateway_info 外的所有 payload 类型到 PayloadTypeRegistry

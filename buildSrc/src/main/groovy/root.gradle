@@ -67,7 +67,7 @@ tasks.register('compileAnchors') {
             throw new GradleException("Missing ${script}")
         }
         def pb = isWindows
-                ? new ProcessBuilder('powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script.absolutePath)
+                ? new ProcessBuilder('pwsh', '-ExecutionPolicy', 'Bypass', '-File', script.absolutePath)
                 : new ProcessBuilder('bash', script.absolutePath)
         pb.directory(rootDir)
         pb.inheritIO()

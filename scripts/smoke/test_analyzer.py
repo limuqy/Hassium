@@ -37,6 +37,17 @@ class SpatialCheckTest(unittest.TestCase):
             codes = {item["code"] for item in analysis["failures"]}
             self.assertNotIn("PROBE_MISSING", codes)
             self.assertNotIn("R2_FULL_CHUNK_TRANSFER", codes)
+
+    def test_applied_without_resident_client_chunk_fails(self):
+        from scripts.smoke.analyzer import _check_probe_metrics
+
+        failures = _check_probe_metrics({
+            "stats": {"clientAppliedChunkCount": 1, "clientLandedChunkCount": 1},
+            "clientCache": {"loadedChunks": 0, "trackedCandidateCount": 1,
+                            "actualPresent": {"positions": []}},
+        }, 1)
+
+        self.assertIn("CLIENT_CACHE_EMPTY", {item["code"] for item in failures})
     def test_native_trace_skips_removed_shadow_stages(self):
         from scripts.smoke.analyzer import _trace_analysis
 

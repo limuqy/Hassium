@@ -24,6 +24,7 @@ public class FabricNetworkManagerService implements INetworkManagerService {
         }
     }
 
+
     @Override
     public void sendSeedRef(ServerPlayer player, FriendlyByteBuf buf) {
         if (io.github.limuqy.mc.hassium.server.GatewayPlayerBridge.tryRouteS2C(

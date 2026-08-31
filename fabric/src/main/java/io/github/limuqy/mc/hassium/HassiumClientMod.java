@@ -77,6 +77,11 @@ public class HassiumClientMod implements ClientModInitializer {
                     buf.readBytes(data);
                     client.execute(() -> ClientGatewayBootstrap.handleGatewayInfoData(data));
                 });
+#else
+        ClientPlayNetworking.registerGlobalReceiver(
+                io.github.limuqy.mc.hassium.network.FabricPayloadRegistry.GATEWAY_INFO_S2C_TYPE,
+                (payload, context) -> context.client().execute(
+                        () -> ClientGatewayBootstrap.handleGatewayInfoData(payload.data())));
 #endif
 
 

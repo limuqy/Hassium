@@ -331,6 +331,14 @@ public final class ShadowLightCompute {
         return tryRequestMiss(DimensionKey.OVERWORLD, pos);
     }
 
+    /**
+     * 保活重连的会话边界：保留影子缓存基线，但允许同一柱再次发起 Compare + Pull。
+     * 不得调用 {@link #onDisconnect()}，它会同时清空待处理工作和指标去重状态。
+     */
+    public static void resetRequestDedupForReconnect() {
+        requestedMisses.clear();
+    }
+
     /** 直推已在影子管线里：hash miss 不得再打全量，否则和进服推送抢 4/tick 配额留下虚空。 */
     static boolean isAuthoritativeIngressInFlight(long key) {
         return pending.containsKey(key)
@@ -537,6 +545,16 @@ public final class ShadowLightCompute {
 
     /** 可见柱实际落到 ClientChunkCache 后的全量来源记账；光照另在光屏障提交时记。 */
     static void accountVisibleNetworkIngress(String dimension, ChunkPos pos) {
+        accountVisibleNetworkIngress(dimension, pos, false);
+    }
+
+    /**
+     * 网络直推柱落地记账（新增 / 过期二选一分类）。
+     *
+     * @param staleOrFallback true = 影子副本 hash 与远端不一致的重推（旧口径「过期」，
+     *                        {@code recordFullChunkRequests(stale=true)} 分类），false = 全新柱
+     */
+    static void accountVisibleNetworkIngress(String dimension, ChunkPos pos, boolean staleOrFallback) {
         if (pos == null) {
             return;
         }
@@ -547,7 +565,7 @@ public final class ShadowLightCompute {
         }
         requestedMisses.add(key);
         io.github.limuqy.mc.hassium.metrics.NetworkStats.recordFullChunkRequests(
-                1, io.github.limuqy.mc.hassium.metrics.NetworkStats.ESTIMATED_CHUNK_BYTES, false);
+                1, io.github.limuqy.mc.hassium.metrics.NetworkStats.ESTIMATED_CHUNK_BYTES, staleOrFallback);
     }
 
     /** 客户端实际落地的缓存全量柱按键去重，磁盘与内存复用不得重复记账。 */
@@ -565,6 +583,40 @@ public final class ShadowLightCompute {
         io.github.limuqy.mc.hassium.metrics.NetworkStats.recordCacheFullHit(
                 io.github.limuqy.mc.hassium.metrics.NetworkStats.ESTIMATED_CHUNK_BYTES);
         return true;
+    }
+
+    /**
+     * Publishes a server-confirmed local baseline through the same shadow light and vanilla apply
+     * path as remote data. A confirmed hash without a materializable chunk is not a hit and lets
+     * the caller retry an unconditional FULL.
+     */
+    public static boolean publishCachedChunk(String dimension, ChunkPos pos) {
+        if (pos == null || !isEnabled()) {
+            return false;
+        }
+        String resolved = dimension == null ? currentDimension() : dimension;
+        ShadowSeedServer server = ShadowServerRegistry.getInstance().getOrCreate();
+        if (server == null) {
+            return false;
+        }
+        net.minecraft.server.level.ServerLevel level = server.level(resolved);
+        if (level == null) {
+            return false;
+        }
+        net.minecraft.world.level.chunk.LevelChunk chunk = server.injectedChunk(resolved, pos.x, pos.z);
+        TraceOrigin origin = TraceOrigin.SHADOW_MEMORY_CACHE;
+        if (chunk == null) {
+            chunk = server.loadFromDisk(resolved, pos);
+            origin = TraceOrigin.SHADOW_DISK_CACHE;
+            if (chunk != null) {
+                server.injectLoadedChunk(resolved, pos, chunk);
+            }
+        }
+        if (chunk == null) {
+            return false;
+        }
+        return submitPreLight(ShadowChunkSource.CACHE_SNAPSHOT, pos, chunk, level,
+                traceOrigin(origin));
     }
 
     public static long hashMemoryHitCount() {
@@ -846,14 +898,14 @@ public final class ShadowLightCompute {
             DebugLogger.info(DebugLogger.LogType.ASYNC,
                     "[SHADOW_DELTA] Requested {} section-delta chunks (dimension={})", entries.size(), dimension);
         } catch (Throwable t) {
-            // 发送失败 → 立即回退全量（登记的请求清掉，避免超时重复回退）
+            // Sending a delta request failed; immediately recover the affected columns from authority.
             for (var e : entries) {
                 pendingDeltaRequests.remove(DimensionKey.key(dimension, e.chunkX(), e.chunkZ()));
             }
             DebugLogger.warn(DebugLogger.LogType.ASYNC,
                     "[SHADOW_DELTA] Request send failed, fallback full ({})", entries.size());
             List<ChunkPos> fallback = dedupeFallback(dimension, chunks);
-            io.github.limuqy.mc.hassium.network.ClientChunkPipeline.getInstance().setShadowServerFailed(true);
+            io.github.limuqy.mc.hassium.network.ShadowPullClient.requestAuthoritativeFull(dimension, fallback);
         } finally {
             if (!sent && buf != null) {
                 buf.release();
@@ -889,9 +941,8 @@ public final class ShadowLightCompute {
             }
             DebugLogger.info(DebugLogger.LogType.ASYNC,
                     "[SHADOW_DELTA] {} chunks skipped by server, fallback full", skipped.size());
-            // P2（T7）：失败回退走 new 路径 + requestedMisses 去重
             List<net.minecraft.world.level.ChunkPos> fallback = dedupeFallback(dimension, skipped);
-            io.github.limuqy.mc.hassium.network.ClientChunkPipeline.getInstance().setShadowServerFailed(true);
+            io.github.limuqy.mc.hassium.network.ShadowPullClient.requestAuthoritativeFull(dimension, fallback);
         }
         pump();
     }
@@ -950,9 +1001,8 @@ public final class ShadowLightCompute {
         for (var e : timedOut.entrySet()) {
             DebugLogger.warn(DebugLogger.LogType.ASYNC,
                     "[SHADOW_DELTA] {} delta requests timed out, fallback full", e.getValue().size());
-            // P2（T7）：失败回退走 new 路径 + requestedMisses 去重
             List<net.minecraft.world.level.ChunkPos> fallback = dedupeFallback(e.getKey(), e.getValue());
-            io.github.limuqy.mc.hassium.network.ClientChunkPipeline.getInstance().setShadowServerFailed(true);
+            io.github.limuqy.mc.hassium.network.ShadowPullClient.requestAuthoritativeFull(e.getKey(), fallback);
         }
     }
 
@@ -1102,8 +1152,17 @@ public final class ShadowLightCompute {
     public static boolean submitGenerated(ChunkPos pos,
                                           net.minecraft.world.level.chunk.LevelChunk chunk,
                                           net.minecraft.server.level.ServerLevel level) {
-        return submitPreLight(ShadowChunkSource.SEEDGEN, pos, chunk, level,
-                traceOrigin(TraceOrigin.LOCAL_GENERATION));
+        return submitGenerated(pos, chunk, level, false);
+    }
+
+    /** 提交已物化区块；cacheServed=true 时保留缓存来源，供落地指标正确记账。 */
+    public static boolean submitGenerated(ChunkPos pos,
+                                          net.minecraft.world.level.chunk.LevelChunk chunk,
+                                          net.minecraft.server.level.ServerLevel level,
+                                          boolean cacheServed) {
+        ShadowChunkSource source = cacheServed ? ShadowChunkSource.CACHE_SNAPSHOT : ShadowChunkSource.SEEDGEN;
+        TraceOrigin origin = cacheServed ? TraceOrigin.SHADOW_MEMORY_CACHE : TraceOrigin.LOCAL_GENERATION;
+        return submitPreLight(source, pos, chunk, level, traceOrigin(origin));
     }
 
     /**
@@ -1240,6 +1299,7 @@ public final class ShadowLightCompute {
                             .getInstance().peekPendingContentHash(dimension, pos.x, pos.z);
                     // 影子内存已有该柱：禁止 injectChunk REPLACE（clearChunkLight 会
                     // 清掉邻柱推进来的屋檐光）。Bloom 直推没有 remoteHash，已落地则直接丢掉。
+                    boolean staleRepush = false;
                     LevelChunk existing = server.injectedChunk(dimension, pos.x, pos.z);
                     if (existing != null) {
                         boolean hashKnown = remoteHash != 0L;
@@ -1269,6 +1329,8 @@ public final class ShadowLightCompute {
                             // 必须跳过下面的 injectChunk；REPLACE 会清空刚由邻柱传播来的光。
                             continue;
                         }
+                        // hash 已知且不匹配：影子副本过期，覆盖注入（走下方 injectChunk）。
+                        staleRepush = true;
                     }
                     // R1 全量直推：禁 loadFromDisk。内存未命中则注入网络包。
                     if (!server.injectChunk(dimension, pos, pendingEntry.packet())) {
@@ -1286,7 +1348,7 @@ public final class ShadowLightCompute {
                     if (shouldAccountServerPushAsApplied(requestedMisses.contains(e.getKey()))) {
                         requestedMisses.add(e.getKey());
                     }
-                    accountVisibleNetworkIngress(dimension, pos);
+                    accountVisibleNetworkIngress(dimension, pos, staleRepush);
                     LevelChunk injected = server.injectedChunk(dimension, pos.x, pos.z);
                     lightTasks.add(new LightTask(e.getKey(), LightSource.PENDING, pendingEntry,
                             injected, server.level(dimension), LightMetric.RECOMPUTE,
@@ -1451,8 +1513,9 @@ public final class ShadowLightCompute {
                     startLightBarrier(server, t, deadlineMs);
                     // 光照统计在提交成功时记（而非回传完成时）：冒烟快照窗口内光屏障可能还在
                     // 在途，等 finishLight 再记会让「分片增量已发生但光照重算仍显示 0」。
-                    if (t.source != LightSource.PENDING
-                            && shouldAccountLightBarrierMetric(t.source == LightSource.LIGHT_ONLY)) {
+                    // PENDING（服务端直推剥光柱）同样计入：任务建时就带 RECOMPUTE metric，
+                    // 排除它会让剥光会话 round1 的重算量整体漏记（光照行恒 0/0 死区）。
+                    if (shouldAccountLightBarrierMetric(t.source == LightSource.LIGHT_ONLY)) {
                         ChunkPos metricPos = new ChunkPos(
                                 DimensionKey.chunkXOf(t.key), DimensionKey.chunkZOf(t.key));
                         String metricDim = DimensionKey.dimensionOf(t.key);

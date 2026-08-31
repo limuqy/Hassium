@@ -356,12 +356,17 @@ public final class SeedGenExecutor {
             }
             if (localHash != entry.contentHash()) {
                 dumpMismatchDiagnostics(pos, entry, chunk, localSectionHashes, localHash, server, dimension);
-                DebugLogger.error("[SEEDGEN] Validation mismatch ({}, {}) -> request authoritative FULL",
+                // 生成结果只对当前柱失效：权威 FULL 是该柱的正确回退，不应因一柱
+                // 的 worldgen/datapack 差异关闭整个影子光照与缓存引擎。
+                DebugLogger.warn(DebugLogger.LogType.ASYNC,
+                        "[SEEDGEN] Validation mismatch ({}, {}) -> request authoritative FULL",
                         pos.x, pos.z);
-                ShadowServerRegistry.getInstance().failShadowServer();
                 addFallback(fallbackBuffer, entry);
                 return;
             }
+            // 通过服务端 hash 校验的本地生成结果也是可复用基线。必须立即回填索引，
+            // 否则下一次 SeedRef 会误作无缓存，再次进入 worldgen 而非统一 Compare + Pull。
+            io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.put(dimension, pos, localHash);
             ServerLevel level = server.level(dimension);
             long ms = (System.nanoTime() - t0) / 1_000_000L;
             DebugLogger.info(DebugLogger.LogType.ASYNC, "[SEEDGEN] Generated ({}, {}) in {}ms",
@@ -377,7 +382,7 @@ public final class SeedGenExecutor {
             // 官方通道落地（客户端不参与缓存/光照）。
             // review-fix: T3-51：投递失败（并发降级 isEnabled=false）→ 回退全量，
             // 防止生成结果静默丢弃后该柱客户端虚空
-            if (!ShadowLightCompute.submitGenerated(pos, chunk, level)) {
+            if (!ShadowLightCompute.submitGenerated(pos, chunk, level, cacheServed)) {
                 addFallback(fallbackBuffer, entry);
                 return;
             }

@@ -16,55 +16,23 @@
 
 ```mermaid
 flowchart TD
-    subgraph GW["网络核心（网关 outbound / UDP 数据面）"]
-        A["Bulk 区块 payload<br/>（网关 outbound ZSTD 解码 / UDP 数据面）<br/>ClientChunkHandler.handleCompressedChunk"]
-        B["原版包（网关注入，handler 直调）<br/>ClientboundLevelChunkWithLightPacket"]
-        C["LightDelta 增量包<br/>（坐标+section 掩码，含 empty 掩码）"]
-    end
-
-    subgraph BG["后台线程池 (HassiumTaskExecutor 客户端实例)"]
-        D["ZSTD 解压 + NBT 转换<br/>（虚拟线程；Java 17 回退平台池）"]
-        E["scheduleAsyncCacheIngest<br/>→ CacheSaveQueue 异步写盘"]
-        F["MainThreadDispatcher.execute<br/>按玩家距离优先级入队"]
-    end
-
-    subgraph BG2["后台读盘 (ClientCacheLoadQueue)"]
-        U["region 任务读磁盘缓存 (R2)<br/>每 region 至多一个在跑"]
-        V["readyQueue 就绪队列"]
-    end
-
-    subgraph MAIN["主线程 (Render thread) — 每帧预算循环 (MixinClientTick)"]
-        G["① flushClientUntil<br/>时间预算内出队<br/>（JoinBoost 30ms / normal 15ms，无数量硬顶）"]
-        G2["② processQueueUntil<br/>预算内 apply 缓存读回"]
-        H["applyChunkData<br/>→ Services.getClientChunkApplier<br/>.applyToLevelFromByteBuf<br/>区块落地（此刻可见）"]
-        I{"包带光?"}
-        J["权威光随包落地<br/>无需投递（握手声明引擎才剥光）"]
-        K["剥光包拦截<br/>GatewayS2CRouter.isLightStripped"]
-        K2["ShadowLightCompute.submit<br/>（pending 队列，后台消费线程）"]
-        P["submitLightDelta<br/>pendingLightUpdates 并集<br/>→ invalidateLightSections"]
-    end
-
-    subgraph SHADOW["影子服务端（Hassium 引擎，后台）"]
-        Q["consumeLoop 批量注入<br/>injectChunk + UNKNOWN FULL 票<br/>scheduleChunkLoad → ImposterProtoChunk"]
-        R["两阶段屏障<br/>initializeLight → 邻柱 holder parent<br/>→ lightChunk"]
-        S["buildPacket(chunk, engine, null, null)<br/>drainReady → handleLevelChunkWithLight"]
-    end
-
-    A --> D --> E
-    D --> F
-    B --> F
-    U --> V
-    F --> G
-    V --> G2
-    G --> H
-    G2 --> H
-    H --> I
-    I -- "带光" --> J
-    I -- "无光（服务端剥离，仅握手声明引擎后发生）" --> K
-    K --> K2 --> Q --> R --> S
-    C --> P
-    S --> T["帧尾 drainReady<br/>swapDataLayer 双缓冲落地<br/>+ markDirty（收敛光写盘）"]
+    A["影子 tracking 的 Gateway S2C 原版区块包"] --> B{"服务端是否剥光"}
+    B -- "否：权威光随包" --> C["GatewayS2CRouter → ClientPacketListener.handleLevelChunkWithLight"]
+    B -- "是：仅握手声明引擎" --> D["ShadowVanillaLightPipeline / ShadowLightCompute"]
+    D --> E["影子 ServerLevel 注入"]
+    E --> F["原版 LightEngine 两阶段屏障"]
+    F --> G["drainReady 构造官方带光区块包"]
+    G --> C
+    H["SeedRef / 缓存 UNCHANGED / delta 回退"] --> I["Compare + Pull 或 Generate + Validate"]
+    I -- "缓存可 materialize" --> D
+    I -- "FULL" --> D
+    I -- "生成失败 / mismatch / delta 失败" --> J["无 baseline 的权威 FULL"]
+    J --> D
+    C --> K["ClientChunkCache.replaceWithPacketData"]
+    K --> L["renderer 异步 mesh 编译"]
 ```
+
+**生命周期边界**：Hassium 只选择/处理数据来源；`ClientChunkCache` 仍是区块驻留和卸载的唯一真相源。`clientAppliedChunkCount` 是会话累计成功 apply，`clientCache.loadedChunks` 是采样时刻完整驻留量；二者不能用 mesh trace 的一次快照互相替代。
 
 ## 2. 线程与队列全景
 

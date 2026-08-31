@@ -92,8 +92,7 @@ public final class ClientLifecycleHelper {
         if (initialized) {
             return;
         }
-        // 网络核心仅等待 gateway_info；不得在原版登录完成时探测 host:25566。
-        io.github.limuqy.mc.hassium.network.core.NetworkCore.getInstance().onLogin();
+        // 单25565原版基线：不启动旧 NetworkCore gateway bootstrap；客户端保持原版连接。
         initialized = true;
     }
 
@@ -245,6 +244,7 @@ public final class ClientLifecycleHelper {
         disconnectCleanupArmed.set(true);
         ClientMainThreadBudget.clearJoinBoost();
         io.github.limuqy.mc.hassium.network.core.NetworkCore.getInstance().onDisconnect();
+        io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.resetRequestDedupForReconnect();
 
         ChunkMeshCompileLog.reset();
 

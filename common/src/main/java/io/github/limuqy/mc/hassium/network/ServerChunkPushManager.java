@@ -905,6 +905,11 @@ public class ServerChunkPushManager {
                 chunks.size(), player.getName().getString(), dimension);
         boolean all = true;
         for (ChunkPos pos : chunks) {
+            // 首次 vanilla tracking 是 pristine 的唯一可靠登记点：此时 chunk 已经完成 FULL
+            // 构造，后续 processOne 才能安全地把该柱转换为 SeedRef。
+            if (pos != null) {
+                PristineRegistry.markIfPristine(player.level(), pos);
+            }
             all &= enqueuePushTask(player, pos, dimension, PushKind.FULL_VISIBLE);
         }
         return all;
@@ -1014,6 +1019,21 @@ public class ServerChunkPushManager {
                     contentHash = ChunkContentHashUtil.combineSectionHashes(
                             ChunkContentHashUtil.computeSectionHashesFromPacket(
                                     packet.getChunkData(), level.getSectionsCount(), level.registryAccess()));
+                }
+                if (task.kind() == PushKind.FULL_VISIBLE
+                        && packet != null
+                        && isSeedGenFor(playerId, task.pos(), task.dimension())) {
+                    Map<Integer, Long> sectionHashes = ChunkContentHashUtil.computeSectionHashesFromPacket(
+                            packet.getChunkData(), level.getSectionsCount(), level.registryAccess());
+                    long seedGenHash = ChunkContentHashUtil.combineSectionHashes(sectionHashes);
+                    PushTask seedRefTask = new PushTask(task.pos(), task.dimension(),
+                            new DataRequestTask(task.pos(), task.dimension(),
+                                    new SeedRefWork(seedGenHash,
+                                            ChunkContentHashUtil.sectionHashesToArray(sectionHashes)), seedGenHash),
+                            PushKind.SEED_REF);
+                    works.add(new SealedWork(player, seedRefTask, null,
+                            level.registryAccess(), sender, 0L));
+                    continue;
                 }
                 works.add(new SealedWork(player, task, chunkData != null ? chunkData : packet,
                         level.registryAccess(), sender, contentHash));

@@ -970,8 +970,11 @@ public final class ScenarioEngine {
             LOGGER.error("{} {} stats validation FAILED: client applied chunks == 0", MARKER_FAIL, roundLabel);
             return false;
         }
-        if (m.getClientLandedChunkCount() <= 0) {
-            LOGGER.error("{} {} stats validation FAILED: no chunk actually landed on client", MARKER_FAIL, roundLabel);
+        long resident = io.github.limuqy.mc.hassium.client.SmokeProbeWriter
+                .currentLoadedChunkCount(Minecraft.getInstance());
+        if (resident <= 0) {
+            LOGGER.error("{} {} stats validation FAILED: ClientChunkCache has no resident chunks (applied={})",
+                    MARKER_FAIL, roundLabel, applied);
             return false;
         }
 

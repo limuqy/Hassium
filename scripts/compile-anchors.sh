@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # 按 docs/version-segments.md 对 7 个锚点 × builds_for 执行 compileJava。
-# 每个锚点结束后 --stop，避免 loom 全局锁 / Daemon 残留导致下一版本无限等待。
+# 每次 gradlew 前台阻塞至退出；严禁 `--stop`，因为此脚本也可能由根 Gradle task 调用，
+# 此时会把正在等待脚本的父 daemon 一并终止。
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -18,9 +19,7 @@ ANCHORS=(
 
 GRADLEW=./gradlew
 
-stop_daemons() {
-  "$GRADLEW" --stop >/dev/null 2>&1 || true
-}
+
 
 assert_no_foreign_loom_lock() {
   local loom="${HOME}/.gradle/caches/fabric-loom"
@@ -42,8 +41,6 @@ EOF
   done < <(find "$loom" -name '*.lock' 2>/dev/null || true)
 }
 
-echo "Stopping existing Gradle daemons..."
-stop_daemons
 assert_no_foreign_loom_lock
 
 failed=()
@@ -70,7 +67,6 @@ for ver in "${ANCHORS[@]}"; do
   "$GRADLEW" "${tasks[@]}" "-Pmc_ver=$ver" --console=plain
   code=$?
   set -e
-  stop_daemons
 
   if [[ $code -ne 0 ]]; then
     failed+=("$ver")

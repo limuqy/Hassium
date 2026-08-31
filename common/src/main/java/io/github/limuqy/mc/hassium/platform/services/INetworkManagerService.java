@@ -18,6 +18,16 @@ public interface INetworkManagerService {
 
 
     /**
+     * 发送网关 bootstrap 信息。默认走 vanilla CustomPayload；旧 NeoForge 需覆写为
+     * SimpleChannel，以便在 loader 的频道协商中声明该 S2C 通道。
+     */
+    default void sendGatewayInfo(ServerPlayer player, byte[] data) {
+        player.connection.send(io.github.limuqy.mc.hassium.compat.PacketPayloadCompat.createClientboundPayload(
+                io.github.limuqy.mc.hassium.compat.PacketId.parse(
+                        io.github.limuqy.mc.hassium.network.HassiumPacketIds.GATEWAY_INFO_S2C), data));
+    }
+
+    /**
      * 发送 section 哈希请求到服务端（阶段二，客户端调用）
      */
     void sendSectionHashRequest(FriendlyByteBuf buf);

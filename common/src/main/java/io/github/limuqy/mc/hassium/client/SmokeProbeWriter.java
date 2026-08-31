@@ -115,6 +115,7 @@ public final class SmokeProbeWriter {
         field(sb, "locallyGeneratedChunkBytes", m.getLocallyGeneratedChunkBytes());
         field(sb, "clientAppliedChunkCount", m.getClientAppliedChunkCount());
         field(sb, "clientLandedChunkCount", m.getClientLandedChunkCount());
+        field(sb, "serverPushAppliedCount", m.getServerPushAppliedCount());
         field(sb, "sectionDeltaRequestsSent", m.getSectionDeltaRequestsSent());
         field(sb, "sectionDeltaChunksReceived", m.getSectionDeltaChunksReceived());
         field(sb, "lightCacheHitCount", m.getLightCacheHitCount());
@@ -125,23 +126,38 @@ public final class SmokeProbeWriter {
         lastField(sb, "noModReceiveBytes", m.getNoModReceiveBytes());
         sb.append("  },\n");
     }
-    /** 客户端实际缓存快照：用于区分统计已应用与 ClientChunkCache 中真实存在的区块。 */
+    /** 客户端实际缓存快照：区分累计 apply 与采样时刻仍驻留的 ClientChunkCache 柱。 */
+    public static long currentLoadedChunkCount(net.minecraft.client.Minecraft mc) {
+        if (mc == null || mc.level == null) {
+            return -1L;
+        }
+        try {
+            net.minecraft.client.multiplayer.ClientChunkCache cache =
+                    ((io.github.limuqy.mc.hassium.mixin.ClientLevelAccessor) mc.level).hassium$getChunkSource();
+            return cache.getLoadedChunksCount();
+        } catch (Throwable ignored) {
+            return -1L;
+        }
+    }
+
     /**
-     * 客户端实际缓存快照：只检查本轮已接收柱在 dump 时刻是否仍存在于 ClientChunkCache。
+     * `loadedChunks` is the ClientChunkCache's complete resident count. `actualPresent` samples only
+     * trace candidates, so its cardinality must never be used as the world's loaded count.
      */
     private static void appendClientCache(StringBuilder sb, net.minecraft.client.Minecraft mc, String dimension) {
-        long loaded = -1L;
+        long loaded = currentLoadedChunkCount(mc);
         java.util.List<net.minecraft.world.level.ChunkPos> actualPresent = java.util.List.of();
+        long trackedCandidates = 0L;
         if (mc != null && mc.level != null) {
             try {
                 net.minecraft.client.multiplayer.ClientChunkCache cache =
                         ((io.github.limuqy.mc.hassium.mixin.ClientLevelAccessor) mc.level).hassium$getChunkSource();
-                loaded = cache.getLoadedChunksCount();
                 io.github.limuqy.mc.hassium.network.seedgen.SmokeChunkTrace.Snapshot trace =
                         io.github.limuqy.mc.hassium.network.seedgen.SmokeChunkTrace.snapshot(dimension);
                 java.util.List<net.minecraft.world.level.ChunkPos> candidates = trace.networkReceived();
                 if (candidates.isEmpty()) candidates = trace.shadowReady();
                 if (candidates.isEmpty()) candidates = trace.clientApplied();
+                trackedCandidates = candidates.size();
                 java.util.ArrayList<net.minecraft.world.level.ChunkPos> present =
                         new java.util.ArrayList<>(candidates.size());
                 for (net.minecraft.world.level.ChunkPos pos : candidates) {
@@ -156,6 +172,7 @@ public final class SmokeProbeWriter {
         }
         sb.append("  \"clientCache\": {\n");
         field(sb, "loadedChunks", loaded);
+        field(sb, "trackedCandidateCount", trackedCandidates);
         appendTraceStage(sb, "actualPresent", actualPresent, false);
         sb.append("  },\n");
     }

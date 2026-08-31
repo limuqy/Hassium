@@ -75,16 +75,29 @@ public abstract class MixinPlayerChunkSender {
     }
 
     /**
-     * 截获原版已构造的首个 level-chunk packet：Hassium 客户端统一由 shadowPull 主动取数，
-     * 其他客户端原样交回原版发送路径。
+     * 截获原版已构造的首个 level-chunk packet：Hassium 客户端交给统一推送队列，
+     * 由压缩/影子光照管线发送；其他客户端原样交回原版发送路径。
+     *
+     * 1.20.2+ 的 {@code PlayerChunkSender.sendChunk} 是首包入口，不能只丢弃 packet；
+     * 否则客户端既收不到原版包，也不会进入 Hassium 的替代数据流。
      */
     @org.spongepowered.asm.mixin.injection.Redirect(method = "sendChunk",
             at = @At(value = "INVOKE",
                     target = "Lnet/minecraft/server/network/ServerGamePacketListenerImpl;send(Lnet/minecraft/network/protocol/Packet;)V",
                     ordinal = 0))
     private static void hassium$onChunkPacketSend(ServerGamePacketListenerImpl listener, Packet<?> packet) {
-        if (packet instanceof ClientboundLevelChunkWithLightPacket
-                && PlayerCompressionTracker.isCompressionEnabled(listener.getPlayer())) {
+        ServerPlayer player = listener.getPlayer();
+        if (packet instanceof ClientboundLevelChunkWithLightPacket chunkPacket
+                && PlayerCompressionTracker.isCompressionEnabled(player)) {
+            if (!io.github.limuqy.mc.hassium.server.RuntimeServerContext.isShadowServerContext()) {
+                String dimension = io.github.limuqy.mc.hassium.compat.LevelCompat.getDimensionId(player.level());
+                if (dimension == null) {
+                    dimension = io.github.limuqy.mc.hassium.utils.DimensionKey.OVERWORLD;
+                }
+                io.github.limuqy.mc.hassium.network.ServerChunkPushManager.getInstance()
+                        .enqueueDirectPush(player, dimension,
+                                java.util.List.of(new ChunkPos(chunkPacket.getX(), chunkPacket.getZ())));
+            }
             return;
         }
         listener.send(packet);

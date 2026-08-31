@@ -72,7 +72,7 @@
 
 | 配置项 | 默认值 | 说明 |
 |--------|--------|------|
-| `master.enabled` | `true` | 主控核心网络通道总开关 |
+| `master.enabled` | `false` | 旧 `25566` 主控 sidecar 暂停；单 `25565` 原版基线 |
 | `master.compressionLevel` | `3` | 自有通道 ZSTD 压缩等级 |
 | `master.magiclessZstd` | `true` | 无 magic 的 ZSTD |
 | `master.globalPacketCompression` | `true` | 全局包压缩（管线级 ZSTD 替换 Zlib） |

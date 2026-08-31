@@ -206,7 +206,7 @@ Sector 2+:    [length(4)][type=126][magic 0x48][hash(8)][ZSTD 压缩数据]
 | `chunk.lightStrip` | true | 服务端光照剥离，必须经 Hassium 能力握手 |
 | `debug.networkMetricsEnabled` | false | 客户端网络指标 |
 | `debug.networkMetricsAutoReset` | true | 客户端退出自动复位指标 |
-| `master.enabled` | true | 服务端网络通道总开关 |
+| `master.enabled` | false | 旧 `25566` 主控 sidecar 暂停；单 `25565` 原版基线，代理核心重构后另行恢复 |
 | `master.globalPacketCompression` | true | 全局 ZSTD（主控侧 vanilla 路径） |
 | `master.compressionLevel` | 3 | 网络压缩等级（速度优先） |
 | `master.maxChunksPerTick` | **4** | 每玩家每 tick 提交上限（主线程序列化快照上限；发送速率 = 本值 × tick 节奏，满 tick ≈ 80/s） |
@@ -260,7 +260,7 @@ ERROR / WARN 始终输出。
 
 实现：`metrics/NetworkStats`（`AtomicLong`，可关闭）。指标关闭时相关 stats 命令不可用。导出走 `CacheWorldExporter`（异步，见 `chunk-cache.md` §12）。
 
-客户端 stats 的「区块加载」行口径：`新增` = 无本地缓存的全量请求；`过期` = 缓存过期/技术性回退；`本地` = SeedGen 影子服务端本地生成（等价一次全量请求）。区块缓存命中率 = `(全命中 + 部分命中 − 增量) / 应用`（内容等价值字节；部分命中 = 缓存柱作基线的分段增量；增量 = `FULL` 整段 / `BLOCKS` 按格折算；不含 SeedGen；OVD 不计入）；流量节省 = 实际推送 / 无MOD应收（数据包+本地重算+客户端缓存+光照，不含 OVD），统一按原版 Zlib 等价 wire 计。
+客户端 stats 的「区块加载」行口径：`新增` = 客户端 Compare + Pull 发出的无本地 baseline FULL；`过期` = 缓存过期/技术性回退 FULL；`本地` = SeedGen 影子服务端本地生成。正常影子 tracking 的原版整柱推送单列为 `serverPushApplied`，**不得**计为客户端 FULL 请求。运行时 Probe 同时输出累计 `clientAppliedChunkCount`、`ClientChunkCache.loadedChunks` 和 trace 候选的 `actualPresent`；mesh 是异步渲染阶段，单次探针的未编译柱只作 `TRACE_MESH_PENDING` 诊断，不能取代实际驻留门禁。
 
 ## 12. 卖点特性（已实现摘要）
 

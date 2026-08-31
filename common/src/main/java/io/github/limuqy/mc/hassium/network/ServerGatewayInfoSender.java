@@ -32,6 +32,11 @@ public final class ServerGatewayInfoSender {
 
     /** 待 tick 泵补发的玩家 UUID（Set 语义：同一玩家只发一次）。 */
     private static final Set<UUID> pendingPlayers = ConcurrentHashMap.newKeySet();
+    /** 已发送的当前在线会话；离线即移除，同 UUID 重连须重新 bootstrap。 */
+    private static final Set<UUID> sentPlayers = ConcurrentHashMap.newKeySet();
+    /** 玩家进入服务端列表的时刻；等待 PLAY 链路就绪后再发送 bootstrap。 */
+    private static final java.util.concurrent.ConcurrentHashMap<UUID, Long> onlineSinceMs =
+            new java.util.concurrent.ConcurrentHashMap<>();
 
     private ServerGatewayInfoSender() {
         // 工具类，禁止实例化
@@ -57,7 +62,26 @@ public final class ServerGatewayInfoSender {
      * 待发玩家物化（connection 挂载、进入玩家表）后发送并移除；玩家已消失则 evict 防泄漏。
      */
     public static void drainPending(MinecraftServer server) {
-        if (!canSend() || pendingPlayers.isEmpty()) {
+        if (!canSend()) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        Set<UUID> online = new java.util.HashSet<>();
+        for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+            UUID playerId = player.getUUID();
+            online.add(playerId);
+            long onlineSince = onlineSinceMs.computeIfAbsent(playerId, ignored -> now);
+            // 玩家对象进入列表不等于客户端已完成 configuration/login；过早的 play
+            // CustomPayload 会被 loader 丢弃且无法重放。250ms 后统一补发。
+            if (!sentPlayers.contains(playerId) && now - onlineSince >= 250L) {
+                pendingPlayers.add(playerId);
+            }
+        }
+        // 重连使用相同 UUID，离线会话不得阻止下一次 gateway_info 下发。
+        sentPlayers.retainAll(online);
+        pendingPlayers.retainAll(online);
+        onlineSinceMs.keySet().retainAll(online);
+        if (pendingPlayers.isEmpty()) {
             return;
         }
         for (UUID playerId : pendingPlayers) {
@@ -69,6 +93,7 @@ public final class ServerGatewayInfoSender {
             }
             if (player.connection != null) {
                 sendTo(player);
+                sentPlayers.add(playerId);
                 pendingPlayers.remove(playerId);
             }
         }
@@ -95,8 +120,7 @@ public final class ServerGatewayInfoSender {
                 config.isSeedGenEnabled(),
                 config.isHassiumEngineEnabled());
         byte[] data = GatewayInfoCodec.encode(info);
-        player.connection.send(PacketPayloadCompat.createClientboundPayload(
-                PacketId.parse(HassiumPacketIds.GATEWAY_INFO_S2C), data));
+        io.github.limuqy.mc.hassium.platform.Services.NETWORK_MANAGER.sendGatewayInfo(player, data);
         DebugLogger.info(LogType.NETWORK, "Hassium: gateway_info sent to {} (endpoints={}, auth={})",
                 player.getName().getString(), endpoints.size(),
                 config.getMasterAuthToken().isEmpty() ? "none" : "set");

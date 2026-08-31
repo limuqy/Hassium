@@ -75,6 +75,18 @@ class NetworkStatsBandwidthTest {
     }
 
     @Test
+    void nativeServerPushIsNotReportedAsClientPull() {
+        NetworkStats.setEnabled(true);
+
+        io.github.limuqy.mc.hassium.network.NativeChunkMetrics.recordAppliedFullChunk(
+                "minecraft:overworld", 1, 2, 1024);
+
+        assertEquals(0, NetworkStats.getMetrics().getFullChunkRequestCount());
+        assertEquals(1, NetworkStats.getMetrics().getServerPushAppliedCount());
+        assertEquals(1, NetworkStats.getMetrics().getClientAppliedChunkCount());
+    }
+
+    @Test
     void noModReceiveUsesDataPacketsLocalGenCacheAndLight() {
         NetworkStats.setEnabled(true);
         HassiumMetricsImpl m = NetworkStats.getMetrics();

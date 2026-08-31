@@ -56,13 +56,17 @@ public class PlayerCompressionTracker {
     }
 
     /**
-     * 消费登录阶段的 Hassium 标记，但不在 ServerPlayer 刚创建时启用压缩。
-     * 此时 GatewayPlayerSession 尚未必建立；若提前发送 CHUNK_HASH，1.20.1
-     * 客户端会把业务 payload 当作未知 custom payload 丢弃，随后卡在等待确认。
-     * 真正的压缩启用由 Play 阶段完整握手调用 {@link #enableCompression(ServerPlayer)}。
+     * 玩家物化时消费 login/config 预握手。此时客户端已明确安装 Hassium，
+     * 因此首批 vanilla tracking 区块必须交给 ServerChunkPushManager，不能直接下发。
      */
     public static void tryEnableOnPlayerJoin(ServerPlayer player) {
-        preHandshakeDone.remove(player.getUUID());
+        if (player == null) {
+            return;
+        }
+        UUID id = player.getUUID();
+        if (preHandshakeDone.remove(id)) {
+            compressionEnabled.put(id, true);
+        }
     }
 
     /**
