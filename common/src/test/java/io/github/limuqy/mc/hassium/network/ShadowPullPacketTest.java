@@ -16,11 +16,23 @@ class ShadowPullPacketTest {
     void roundTripsMixedResults() {
         ShadowPullRequestC2SPacket request = new ShadowPullRequestC2SPacket(
                 "minecraft:overworld", 3L, 7L,
-                List.of(new ShadowPullRequestC2SPacket.Entry(1, -2, 11L, List.of(12L, 13L), 4)));
+                List.of(new ShadowPullRequestC2SPacket.Entry(1, -2, 11L, List.of(12L, 13L),
+                        new int[][] {new int[] {1, 2, 3}, new int[] {4, 5, 6}}, 4)));
         FriendlyByteBuf requestBuf = new FriendlyByteBuf(Unpooled.buffer());
         request.encode(requestBuf);
         ShadowPullRequestC2SPacket decodedRequest = ShadowPullRequestC2SPacket.decode(requestBuf);
-        assertEquals(request, decodedRequest);
+        assertEquals(request.dimension(), decodedRequest.dimension());
+        assertEquals(request.epoch(), decodedRequest.epoch());
+        assertEquals(request.requestId(), decodedRequest.requestId());
+        assertEquals(1, decodedRequest.entries().size());
+        ShadowPullRequestC2SPacket.Entry decodedEntry = decodedRequest.entries().get(0);
+        assertEquals(1, decodedEntry.chunkX());
+        assertEquals(-2, decodedEntry.chunkZ());
+        assertEquals(11L, decodedEntry.chunkHash());
+        assertEquals(List.of(12L, 13L), decodedEntry.sectionHashes());
+        assertEquals(4, decodedEntry.lightGeneration());
+        assertArrayEquals(new int[] {1, 2, 3}, decodedEntry.planes()[0]);
+        assertArrayEquals(new int[] {4, 5, 6}, decodedEntry.planes()[1]);
 
         ShadowPullResponseS2CPacket response = new ShadowPullResponseS2CPacket(
                 "minecraft:overworld", 3L, 7L,

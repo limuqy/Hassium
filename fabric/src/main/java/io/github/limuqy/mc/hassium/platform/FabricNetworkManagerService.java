@@ -34,19 +34,6 @@ public class FabricNetworkManagerService implements INetworkManagerService {
         FabricSendCompat.sendToPlayer(player, HassiumChannels.SEED_REF_S2C, buf);
     }
 
-    @Override
-    public void sendSectionHashRequest(FriendlyByteBuf buf) {
-        FabricSendCompat.sendToServer(HassiumChannels.SECTION_HASH_REQUEST_C2S, buf);
-    }
-
-    @Override
-    public void sendSectionDeltaPacket(ServerPlayer player, FriendlyByteBuf buf) {
-        if (io.github.limuqy.mc.hassium.server.GatewayPlayerBridge.tryRouteS2C(
-                player, io.github.limuqy.mc.hassium.network.core.GatewayPacketCodec.HassiumSub.SECTION_DELTA.id(), buf)) {
-            return;
-        }
-        FabricSendCompat.sendToPlayer(player, HassiumChannels.SECTION_DELTA_S2C, buf);
-    }
 
     @Override
     public void sendBlockEntityRequest(FriendlyByteBuf buf) {

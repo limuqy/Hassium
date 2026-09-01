@@ -162,6 +162,25 @@ public class ServerChunkPushManager {
                 return ShadowPullResponseS2CPacket.Result.unchanged(entry.chunkX(), entry.chunkZ(),
                         chunkHash, sectionHashList);
             }
+            if (!entry.sectionHashes().isEmpty()
+                    && HassiumConfigService.getInstance().isSectionDeltaEnabled()) {
+                SectionDeltaS2CPacket.DeltaEntry planned = planAndSerialize(
+                        snapshotSectionDeltaColumn(chunk), entry);
+                if (planned != null) {
+                    SectionDeltaS2CPacket delta = new SectionDeltaS2CPacket(
+                            dimension, List.of(planned), List.of());
+                    FriendlyByteBuf deltaBuf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
+                    try {
+                        delta.encode(deltaBuf);
+                        byte[] payload = new byte[deltaBuf.readableBytes()];
+                        deltaBuf.readBytes(payload);
+                        return ShadowPullResponseS2CPacket.Result.payload(entry.chunkX(), entry.chunkZ(),
+                                ShadowPullResponseS2CPacket.Kind.DELTA, chunkHash, sectionHashList, payload);
+                    } finally {
+                        deltaBuf.release();
+                    }
+                }
+            }
             ClientboundLevelChunkWithLightPacket packet = buildChunkPacket(chunk, level);
             byte[] payload = packet == null ? null : encodeChunkPacket(packet, level.registryAccess());
             return payload == null
@@ -546,132 +565,6 @@ public class ServerChunkPushManager {
     }
 
 
-    /**
-     * 从 LevelChunk 计算 sectionBitmap（哪些 section 有方块数据）。
-     * 禁止 {@code getChunk} 同步读盘。hash / 平面 / 规划 / write / 回包全部下推
-     * {@code pushPool}：live {@link LevelChunk} 不能给后台读（ThreadingDetector）。
-     * 每次请求都回包：可服务的进 {@code entries}，超距/失败的进 {@code skipped}（客户端回退全量）。
-     */
-    public void handleSectionHashRequest(ServerPlayer player, SectionHashRequestC2SPacket request) {
-        if (!player.isAlive() || player.hasDisconnected()) { return; }
-        ensureInitialized();
-
-        ServerLevel level = PlayerCompat.getServerLevel(player);
-        if (level == null) {
-            return;
-        }
-        int maxDist = PlayerCompat.getViewDistance(player) + SECTION_DELTA_VIEW_MARGIN;
-        ChunkPos playerChunkPos = player.chunkPosition();
-        List<SectionDeltaS2CPacket.SkippedChunk> skipped = new ArrayList<>();
-        List<SectionDeltaWork> works = new ArrayList<>();
-
-        for (var entry : request.entries()) {
-            int dx = Math.abs(entry.chunkX() - playerChunkPos.x);
-            int dz = Math.abs(entry.chunkZ() - playerChunkPos.z);
-            if (dx > maxDist || dz > maxDist) {
-                DebugLogger.info(LogType.NETWORK,
-                        "[SECTION_DELTA] Skip [{}, {}] out of range (dx={}, dz={}, maxDist={}, player=[{}, {}])",
-                        entry.chunkX(), entry.chunkZ(), dx, dz, maxDist,
-                        playerChunkPos.x, playerChunkPos.z);
-                skipped.add(new SectionDeltaS2CPacket.SkippedChunk(entry.chunkX(), entry.chunkZ()));
-                continue;
-            }
-
-            LevelChunk chunk = level.getChunkSource().getChunkNow(entry.chunkX(), entry.chunkZ());
-            if (chunk == null) {
-                skipped.add(new SectionDeltaS2CPacket.SkippedChunk(entry.chunkX(), entry.chunkZ()));
-                continue;
-            }
-
-            try {
-                works.add(new SectionDeltaWork(snapshotSectionDeltaColumn(chunk), entry));
-            } catch (Exception e) {
-                Constants.LOG.error("[SECTION_DELTA] Failed to snapshot chunk [{}, {}]",
-                        entry.chunkX(), entry.chunkZ(), e);
-                skipped.add(new SectionDeltaS2CPacket.SkippedChunk(entry.chunkX(), entry.chunkZ()));
-            }
-        }
-
-        String dimension = request.dimension();
-        pushPool.submit(() -> {
-            if (player.hasDisconnected()) {
-                return;
-            }
-            List<SectionDeltaS2CPacket.DeltaEntry> deltas = new ArrayList<>();
-            List<SectionDeltaS2CPacket.SkippedChunk> skippedOut = new ArrayList<>(skipped);
-            for (SectionDeltaWork work : works) {
-                try {
-                    SectionDeltaS2CPacket.DeltaEntry planned = planAndSerialize(work.snap(), work.entry());
-                    if (planned == null) {
-                        skippedOut.add(new SectionDeltaS2CPacket.SkippedChunk(
-                                work.entry().chunkX(), work.entry().chunkZ()));
-                        continue;
-                    }
-                    deltas.add(planned);
-                } catch (Exception e) {
-                    Constants.LOG.error("[SECTION_DELTA] Failed to process chunk [{}, {}]",
-                            work.entry().chunkX(), work.entry().chunkZ(), e);
-                    skippedOut.add(new SectionDeltaS2CPacket.SkippedChunk(
-                            work.entry().chunkX(), work.entry().chunkZ()));
-                }
-            }
-            sendSectionDeltaResponse(player, dimension, deltas, skippedOut);
-        });
-    }
-
-    /**
-     * 组包并发送阶段二响应（Data 通道优先，回退 Primary）。
-     */
-    private void sendSectionDeltaResponse(ServerPlayer player, String dimension,
-                                          List<SectionDeltaS2CPacket.DeltaEntry> deltas,
-                                          List<SectionDeltaS2CPacket.SkippedChunk> skipped) {
-        // 始终回包，避免客户端悬等（含 entries/skipped 皆空的边界）
-        FriendlyByteBuf buf = null;
-        boolean sent = false;
-        boolean routedViaData = false;
-        try {
-            SectionDeltaS2CPacket deltaPacket = new SectionDeltaS2CPacket(
-                    dimension, deltas, skipped);
-            buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
-            deltaPacket.encode(buf);
-
-            // §14 第 3 步：Data 通道优先分流（与 ChunkSender BulkCompressedChunk 路径同构）
-            // 口径等价 Primary：delta 已独立压缩，本路径不再进 ZSTD；payload = encode 后原始字节
-            int payloadLen = buf.readableBytes();
-            byte[] bulkPayload = new byte[payloadLen];
-            buf.getBytes(buf.readerIndex(), bulkPayload);
-            routedViaData = io.github.limuqy.mc.hassium.network.dataplane.DataPlaneServer.tryRouteBulk(
-                            player.getUUID(),
-                            io.github.limuqy.mc.hassium.network.dataplane.DataPlaneFrame.TYPE_BULK_SECTION_DELTA,
-                            bulkPayload);
-            // §14 v2 后续重建：feature 侧 DataPlaneServer.tryRouteBulk façade 内部自检未启用/未 bound/无会话
-            // → 直接调用；去掉 master 旧 DataPlanePoCConfig.isEnabled() 短路守卫（方法已不存在）。
-            if (routedViaData) {
-                // tryRouteBulk 内部已 recordBulkSentData + recordBulkSentDataByPort(endpointIdx+1, payloadLen)；
-                // 端点维度累加由 router routeAndPick 暴露 chosen.target.endpointId() 后在调用站点记。此处不再二次累加。
-                sent = true;
-                DebugLogger.info(LogType.NETWORK,
-                        "[SECTION_DELTA] Sent via Data plane (frameType=4) deltas={} skipped={} (dimension={})",
-                        deltas.size(), skipped.size(), dimension);
-            } else {
-                // 走 Primary：口径与 ChunkSender Primary fallback 一致
-                io.github.limuqy.mc.hassium.metrics.NetworkStats.recordBulkSentPrimary(payloadLen);
-                Services.NETWORK_MANAGER.sendSectionDeltaPacket(player, buf);
-                sent = true;
-                DebugLogger.info(LogType.NETWORK,
-                        "[SECTION_DELTA] Sent via Primary: {} deltas, {} skipped (dimension={})",
-                        deltas.size(), skipped.size(), dimension);
-            }
-        } catch (Exception e) {
-            Constants.LOG.error("[SECTION_DELTA] Failed to send delta response", e);
-        } finally {
-            // sendSectionDeltaPacket 会 release buf；Data 路径未消费 buf，需主动释放
-            // Primary 路径（sendSectionDeltaPacket）内部 release buf；Data 路径未消费 buf，需兜底 release；异常路径同样需兜底
-            if (buf != null && (!sent || routedViaData)) {
-                buf.release();
-            }
-        }
-    }
 
     /**
      * 处理客户端的 blockEntity 数据请求。
@@ -738,10 +631,13 @@ public class ServerChunkPushManager {
      * 返回 null 表示整块 skipped（75% 回退）。
      */
     private SectionDeltaS2CPacket.DeltaEntry planAndSerialize(SectionDeltaColumnSnap snap,
-                                                             SectionHashRequestC2SPacket.Entry clientEntry) {
+                                                             ShadowPullRequestC2SPacket.Entry clientEntry) {
         SectionDeltaSnapshot serverSnap = SectionDeltaSnapshot.capture(snap.sections());
-        SectionDeltaSnapshot clientSnap = new SectionDeltaSnapshot(
-                clientEntry.sectionHashes(), clientEntry.planes());
+        long[] clientSectionHashes = new long[clientEntry.sectionHashes().size()];
+        for (int index = 0; index < clientSectionHashes.length; index++) {
+            clientSectionHashes[index] = clientEntry.sectionHashes().get(index);
+        }
+        SectionDeltaSnapshot clientSnap = new SectionDeltaSnapshot(clientSectionHashes, clientEntry.planes());
         SectionDeltaPlanner.ChunkDecision decision = SectionDeltaPlanner.plan(clientSnap, serverSnap);
         if (decision.skipWholeChunk()) {
             DebugLogger.info(LogType.NETWORK,
@@ -1417,8 +1313,6 @@ public class ServerChunkPushManager {
 
     /** 通道项及其所属玩家的已封装批次计数。 */
     private record SealedBatch(PlayerPushQueue owner, List<SealedWork> works) {}
-    /** 主线程拷贝 + 客户端请求条目，交给 pushPool 规划/序列化。 */
-    private record SectionDeltaWork(SectionDeltaColumnSnap snap, SectionHashRequestC2SPacket.Entry entry) {}
 
     /** 已脱离 live world 的柱数据；后台可自由读。 */
     private record SectionDeltaColumnSnap(

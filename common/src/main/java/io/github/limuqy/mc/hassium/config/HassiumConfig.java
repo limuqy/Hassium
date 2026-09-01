@@ -258,7 +258,6 @@ public record HassiumConfig(
         );
         public static final Set<String> DEFAULT_COMPRESSION_BLACKLIST = Set.of(
                 HassiumPacketIds.CHUNK_PAYLOAD_S2C,
-                HassiumPacketIds.SECTION_DELTA_S2C,
                 HassiumPacketIds.HANDSHAKE_S2C,
                 HassiumPacketIds.DICTIONARY_SYNC_S2C,
                 HassiumPacketIds.INDEX_SYNC_S2C,

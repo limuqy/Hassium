@@ -85,6 +85,8 @@ public final class ClientLifecycleHelper {
             // 影子端装配需要此信息——先于 initializeCacheAsync/onLogin 完成）。
             recordCacheLocationSync();
             io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.onCacheLocationReady();
+            io.github.limuqy.mc.hassium.network.seedgen.ShadowServerRegistry.getInstance().permitUnparkForLogin();
+            io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.onLogin();
 
             // M2: 异步初始化存储（热度索引 / section 哈希在后台线程）
             // 影子端只在 Hassium 能力握手确认后启动；原版服务端保持纯原版客户端路径。
@@ -112,8 +114,7 @@ public final class ClientLifecycleHelper {
      *                   {@link #currentServerIp()}
      */
     public static void startShadowIfConfigured(net.minecraft.client.multiplayer.ServerData serverData) {
-        if (!HassiumConfigService.getInstance().isHassiumEngineEnabled()
-                || !io.github.limuqy.mc.hassium.network.ClientChunkPipeline.getInstance().isHassiumHandshakeDone()) {
+        if (!HassiumConfigService.getInstance().isHassiumEngineEnabled()) {
             return;
         }
         recordCacheLocationForConnect(serverData);

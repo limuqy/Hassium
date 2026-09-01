@@ -252,7 +252,7 @@ public final class ShadowLightCompute {
 
     /**
      * P1（T7）：注入 chunk section 容器（PalettedContainer）并发锁——hash 比对线程
-     * （processRemoteHashes→chunkHashOf / requestSectionDeltas→computeSectionHashes）与
+     * （processRemoteHashes→chunkHashOf / localPullEntry→computeSectionHashes）与
      * consumeLoop 打包线程（pushReady→SeedGenChunkCodec.buildPacket / applySectionDelta）
      * 对同一注入 LevelChunk 的容器并发触碰 → 1.21.11 ThreadingDetector 崩溃（全 miss 触发
      * delta 洪峰时）。按 chunk 粒度互斥：key = 裸 ChunkPos.asLong（刻意维度无关——
@@ -337,6 +337,9 @@ public final class ShadowLightCompute {
      */
     public static void resetRequestDedupForReconnect() {
         requestedMisses.clear();
+        accountedIngress.clear();
+        accountedCacheHits.clear();
+        accountedLights.clear();
     }
 
     /** 直推已在影子管线里：hash miss 不得再打全量，否则和进服推送抢 4/tick 配额留下虚空。 */
@@ -406,11 +409,6 @@ public final class ShadowLightCompute {
     /** 管道低水位：在途低于此值才由完成回调重新 pump（= 1 批：低水位→满水位恰好补一批，
      *  避免每完成一块就一次 executor 往返）。 */
     private static final int PIPELINE_LOW_WATER = CONSUME_BATCH_LIMIT;
-    /** 已发出、未收到 delta 响应的请求（DimensionKey 复合键 → 维度 + 截止时间）；超时回退全量。 */
-    private static final ConcurrentHashMap<Long, PendingDelta> pendingDeltaRequests =
-            new ConcurrentHashMap<>();
-
-    private record PendingDelta(String dimension, long deadlineMs) {}
 
     private record DeltaWork(String dimension, io.github.limuqy.mc.hassium.network.SectionDeltaS2CPacket.DeltaEntry entry) {}
 
@@ -786,28 +784,22 @@ public final class ShadowLightCompute {
                 || !pendingLightUpdates.isEmpty();
     }
 
-    /** 影子链路可用（引擎开启 && 握手完成 && 影子端未失败）。 */
+    /** 影子链路可用：引擎开启且影子端未失败；不再依赖旧 NetworkCore 握手。 */
     public static boolean isEnabled() {
         return HassiumConfigService.getInstance().isHassiumEngineEnabled()
-                && ClientChunkPipeline.getInstance().isHassiumHandshakeDone()
                 && !ClientChunkPipeline.getInstance().isShadowServerFailed();
     }
 
     /**
-     * 登录初始化入口（兼容旧调用点）：等价 {@link #startShadowSpeculative()}。
-     * 握手不再阻塞创建；无握手约 3s 后关停投机影子。
+     * 登录初始化入口：单端点原版会话没有旧 gateway 握手，影子端按配置常驻至断连 park。
      */
     public static void onLogin() {
         startShadowSpeculative();
     }
 
-    /** 投机创建超时：无握手则关停刚拉起的影子（原版服不常驻）。 */
-    static final long SPECULATIVE_HANDSHAKE_TIMEOUT_MS = 3_000L;
-
     /**
-     * 配置就绪即后台 getOrCreate（不等握手）。已存在实例则幂等返回；
-     * 创建时若尚未握手，武装 3s 看门狗——超时仍无握手则 {@link ShadowServerRegistry#shutdown()}。
-     * {@link #isEnabled()} 仍要求握手，避免原版服走剥光路径。
+     * 配置就绪即后台 getOrCreate；单端点区块流以第一个原版 FULL 柱确认会话，
+     * 不再因不存在的旧网关握手销毁影子端。
      */
     public static void startShadowSpeculative() {
         if (!HassiumConfigService.getInstance().isHassiumEngineEnabled()) {
@@ -817,28 +809,7 @@ public final class ShadowLightCompute {
         if (executor == null || !executor.isRunning()) {
             return;
         }
-        executor.submit(() -> {
-            boolean hadHandshake = ClientChunkPipeline.getInstance().isHassiumHandshakeDone();
-            DebugLogger.info(DebugLogger.LogType.NETWORK,
-                    "[LOGIN-DIAG] startShadowSpeculative handshakeDone={} (no wait)",
-                    hadHandshake);
-            ShadowSeedServer created = ShadowServerRegistry.getInstance().getOrCreate();
-            if (created != null && !hadHandshake
-                    && shouldArmSpeculativeWatchdog(hadHandshake)) {
-                ShadowServerRegistry.getInstance().armSpeculativeHandshakeWatchdog(
-                        SPECULATIVE_HANDSHAKE_TIMEOUT_MS);
-            }
-        }, TaskCategory.BEST_EFFORT);
-    }
-
-    /** 测试缝：仅当创建时尚未握手才武装看门狗。 */
-    static boolean shouldArmSpeculativeWatchdog(boolean handshakeDoneAtCreate) {
-        return !handshakeDoneAtCreate;
-    }
-
-    /** 测试缝：超时且仍无握手 → 应关停投机影子。 */
-    static boolean shouldShutdownSpeculativeShadow(boolean handshakeDone, long elapsedMs, long timeoutMs) {
-        return !handshakeDone && elapsedMs >= timeoutMs;
+        executor.submit(ShadowServerRegistry.getInstance()::getOrCreate, TaskCategory.BEST_EFFORT);
     }
 
     /** 分段增量门控：配置开启 && 影子链路可用。 */
@@ -847,70 +818,53 @@ public final class ShadowLightCompute {
                 && isEnabled();
     }
 
-    /**
-     * 上报本地 section hashes 请求分段增量（后台池 / SeedGen 生成线程调用）：影子端本地有旧数据
-     * （内存/磁盘）但 contentHash 与远程权威不一致 → 服务端按 section 比对只回
-     * 变更 section + heightmaps + BE。登记超时（{@link #tickPendingDeltaTimeouts}）。
-     */
-    public static void requestSectionDeltas(String dimension, List<ChunkPos> chunks) {
-        ShadowSeedServer server = ShadowServerRegistry.getInstance().getOrCreate();
-        if (server == null || chunks.isEmpty()) {
-            return;
-        }
-        List<io.github.limuqy.mc.hassium.network.SectionHashRequestC2SPacket.Entry> entries = new ArrayList<>(chunks.size());
-        // P3（T7）：自适应超时——镜像 full 路径（基数 + 每块 + 每在途 + 上限），固定 8s
-        // 在深队/服务端逐 section 比对下过紧，会误触发回退风暴。
-        long deadline = System.currentTimeMillis()
-                + deltaRequestTimeoutMs(chunks.size(), pendingDeltaRequests.size());
-        for (ChunkPos pos : chunks) {
-            LevelChunk chunk = server.injectedChunk(dimension, pos.x, pos.z);
-            if (chunk == null) {
-                continue; // 已被移除/竞态：数据由服务端直推兜底
-            }
-            long[] sectionHashes;
-            int[][] planes;
-            // P1（T7）：读注入 chunk section 容器，与 consumeLoop
-            // 打包/写路径（buildPacket/applySectionDelta）同 chunk 锁互斥。
+    /** 构造统一 ShadowPull 的本地基线；影子端未就绪时仅携带 chunkHash。 */
+    public static io.github.limuqy.mc.hassium.network.ShadowPullRequestC2SPacket.Entry localPullEntry(
+            String dimension, ChunkPos pos) {
+        Long localHash = io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.get(dimension, pos);
+        ShadowSeedServer shadow = ShadowServerRegistry.getInstance().get();
+        net.minecraft.world.level.chunk.LevelChunk chunk = shadow == null ? null
+                : shadow.injectedChunk(dimension, pos.x, pos.z);
+        if (localHash == null && chunk != null) {
             synchronized (chunkLock(pos)) {
-                io.github.limuqy.mc.hassium.network.sectiondelta.SectionDeltaSnapshot snap =
-                                io.github.limuqy.mc.hassium.network.sectiondelta.SectionDeltaSnapshots
-                                        .getOrCapture(dimension, pos, chunk);
-                sectionHashes = snap.sectionHashes();
-                planes = snap.planes();
-            }
-            entries.add(new io.github.limuqy.mc.hassium.network.SectionHashRequestC2SPacket.Entry(
-                    pos.x, pos.z, sectionHashes, planes));
-            pendingDeltaRequests.put(DimensionKey.key(dimension, pos.x, pos.z),
-                    new PendingDelta(dimension, deadline));
-        }
-        if (entries.isEmpty()) {
-            return;
-        }
-        net.minecraft.network.FriendlyByteBuf buf = new net.minecraft.network.FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
-        boolean sent = false;
-        try {
-            new io.github.limuqy.mc.hassium.network.SectionHashRequestC2SPacket(dimension, entries).encode(buf);
-            io.github.limuqy.mc.hassium.platform.Services.NETWORK_MANAGER.sendSectionHashRequest(buf);
-            sent = true;
-            io.github.limuqy.mc.hassium.metrics.NetworkStats.recordSectionDeltaRequestsSent(entries.size());
-            io.github.limuqy.mc.hassium.metrics.NetworkStats.recordCacheLoadEligible(
-                    entries.size() * io.github.limuqy.mc.hassium.metrics.NetworkStats.ESTIMATED_CHUNK_BYTES);
-            DebugLogger.info(DebugLogger.LogType.ASYNC,
-                    "[SHADOW_DELTA] Requested {} section-delta chunks (dimension={})", entries.size(), dimension);
-        } catch (Throwable t) {
-            // Sending a delta request failed; immediately recover the affected columns from authority.
-            for (var e : entries) {
-                pendingDeltaRequests.remove(DimensionKey.key(dimension, e.chunkX(), e.chunkZ()));
-            }
-            DebugLogger.warn(DebugLogger.LogType.ASYNC,
-                    "[SHADOW_DELTA] Request send failed, fallback full ({})", entries.size());
-            List<ChunkPos> fallback = dedupeFallback(dimension, chunks);
-            io.github.limuqy.mc.hassium.network.ShadowPullClient.requestAuthoritativeFull(dimension, fallback);
-        } finally {
-            if (!sent && buf != null) {
-                buf.release();
+                localHash = io.github.limuqy.mc.hassium.cache.ChunkContentHashUtil
+                        .combineSectionHashes(io.github.limuqy.mc.hassium.cache.ChunkContentHashUtil
+                                .computeSectionHashes(chunk));
+                io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.put(dimension, pos, localHash);
             }
         }
+        if (localHash == null) {
+            return new io.github.limuqy.mc.hassium.network.ShadowPullRequestC2SPacket.Entry(
+                    pos.x, pos.z, 0L, List.of(), 0);
+        }
+        if (chunk == null) {
+            return new io.github.limuqy.mc.hassium.network.ShadowPullRequestC2SPacket.Entry(
+                    pos.x, pos.z, localHash, List.of(), 0);
+        }
+        synchronized (chunkLock(pos)) {
+            io.github.limuqy.mc.hassium.network.sectiondelta.SectionDeltaSnapshot snapshot =
+                    io.github.limuqy.mc.hassium.network.sectiondelta.SectionDeltaSnapshots
+                            .getOrCapture(dimension, pos, chunk);
+            long[] hashes = snapshot.sectionHashes();
+            List<Long> sectionHashes = new ArrayList<>(hashes.length);
+            for (long hash : hashes) {
+                sectionHashes.add(hash);
+            }
+            return new io.github.limuqy.mc.hassium.network.ShadowPullRequestC2SPacket.Entry(
+                    pos.x, pos.z, localHash, sectionHashes, snapshot.planes(), 0);
+        }
+    }
+
+    /** 已登记 hash 或驻留影子柱均可作为统一比较拉取的本地基线。 */
+    public static boolean hasLocalPullBaseline(String dimension, ChunkPos pos) {
+        if (dimension == null || pos == null) {
+            return false;
+        }
+        if (io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.get(dimension, pos) != null) {
+            return true;
+        }
+        ShadowSeedServer shadow = ShadowServerRegistry.getInstance().get();
+        return shadow != null && shadow.injectedChunk(dimension, pos.x, pos.z) != null;
     }
 
     /**
@@ -928,7 +882,6 @@ public final class ShadowLightCompute {
         for (var entry : packet.entries()) {
             long key = DimensionKey.key(dimension, entry.chunkX(), entry.chunkZ());
             pendingDeltas.put(key, new DeltaWork(dimension, entry));
-            pendingDeltaRequests.remove(key);
         }
         // 全量等价流量不在此处记：apply 失败会回退全量，收到即记会在「delta + 回退全量」
         // 场景把同一区块计两次。成功应用后由 consumeLoop 记 recordSectionDeltaReceived。
@@ -936,7 +889,6 @@ public final class ShadowLightCompute {
             List<net.minecraft.world.level.ChunkPos> skipped = new ArrayList<>(packet.skipped().size());
             for (var s : packet.skipped()) {
                 long key = DimensionKey.key(dimension, s.chunkX(), s.chunkZ());
-                pendingDeltaRequests.remove(key);
                 skipped.add(new net.minecraft.world.level.ChunkPos(s.chunkX(), s.chunkZ()));
             }
             DebugLogger.info(DebugLogger.LogType.ASYNC,
@@ -982,29 +934,6 @@ public final class ShadowLightCompute {
         }
     }
 
-    /** 主线程帧尾（MixinClientTick）：delta 请求超时回退全量（服务端始终回包，仅丢包兜底）。 */
-    public static void tickPendingDeltaTimeouts() {
-        if (pendingDeltaRequests.isEmpty()) {
-            return;
-        }
-        long now = System.currentTimeMillis();
-        java.util.Map<String, List<net.minecraft.world.level.ChunkPos>> timedOut = new java.util.HashMap<>();
-        for (var it = pendingDeltaRequests.entrySet().iterator(); it.hasNext(); ) {
-            var e = it.next();
-            if (now >= e.getValue().deadlineMs()) {
-                net.minecraft.world.level.ChunkPos pos = new net.minecraft.world.level.ChunkPos(
-                        DimensionKey.chunkXOf(e.getKey()), DimensionKey.chunkZOf(e.getKey()));
-                timedOut.computeIfAbsent(e.getValue().dimension(), k -> new ArrayList<>()).add(pos);
-                it.remove();
-            }
-        }
-        for (var e : timedOut.entrySet()) {
-            DebugLogger.warn(DebugLogger.LogType.ASYNC,
-                    "[SHADOW_DELTA] {} delta requests timed out, fallback full", e.getValue().size());
-            List<net.minecraft.world.level.ChunkPos> fallback = dedupeFallback(e.getKey(), e.getValue());
-            io.github.limuqy.mc.hassium.network.ShadowPullClient.requestAuthoritativeFull(e.getKey(), fallback);
-        }
-    }
 
     /** 客户端当前维度 id（{@code namespace:path}；mc.level 不可用回退 OVERWORLD）。 */
     static String currentDimension() {
@@ -1028,20 +957,16 @@ public final class ShadowLightCompute {
         if (pos == null || packet == null || !isEnabled()) {
             return;
         }
-        // 自定义维度透传（REQ 明细7）：非缓存维度不走影子管线，直接原版落地。
         String dimension = currentDimension();
         if (!DimensionKey.isCacheableDimension(dimension)) {
             applyVanillaDirect(pos, packet);
             return;
         }
-        // 全量数据到达 = 该柱不再等 delta 响应（delta 请求超时登记清除）
         long key = DimensionKey.key(dimension, pos.x, pos.z);
         SmokeChunkTrace.recordNetworkReceived(dimension, pos);
-        pendingDeltaRequests.remove(key);
         pending.put(key, new PendingEntry(packet, traceOrigin(TraceOrigin.SERVER_PUSH)));
         pump();
     }
-
     /** 投递可渲染柱；区块追踪与邻域由影子端原版 ChunkMap 管理。 */
     public static void submitVisible(String dimension, ChunkPos pos,
                                      ClientboundLevelChunkWithLightPacket packet) {
@@ -1054,7 +979,6 @@ public final class ShadowLightCompute {
             server.setPersistenceRole(activeDimension, pos, ShadowChunkPersistenceRole.VISIBLE_FULL_LIGHT);
         }
         long key = DimensionKey.key(activeDimension, pos.x, pos.z);
-        pendingDeltaRequests.remove(key);
         SmokeChunkTrace.recordNetworkReceived(activeDimension, pos);
         pending.put(key, new PendingEntry(packet, traceOrigin(TraceOrigin.SERVER_PUSH)));
         pump();
@@ -1835,7 +1759,7 @@ public final class ShadowLightCompute {
         // consumeLoop 不会被 pump，pending 会一直趴着直到 30s delivery timeout。
         // 只用可开工的投递唤醒：林火 LightDelta 在整柱屏障后排队，等 finishLight 触发，
         // 不在每帧 drain 里空转扫描。
-        if (hasStartablePendingWork()
+        if ((hasStartablePendingWork() || !ready.isEmpty())
                 && inflightLight.size() < PIPELINE_MAX_INFLIGHT
                 && isEnabled()) {
             pump();
@@ -1946,7 +1870,13 @@ public final class ShadowLightCompute {
         ChunkPos chunkPos = new ChunkPos(chunkX, chunkZ);
         long chunkKey = DimensionKey.key(entry.key().dimension(), chunkX, chunkZ);
         ClientChunkHandler.logShadowChunkApplyEvent("shadow_attempt", chunkPos, false, item.traceOrigin());
-        connection.handleLevelChunkWithLight(item.chunkPacket);
+        ClientChunkPipeline pipeline = ClientChunkPipeline.getInstance();
+        pipeline.setApplyInProgress(true);
+        try {
+            connection.handleLevelChunkWithLight(item.chunkPacket);
+        } finally {
+            pipeline.setApplyInProgress(false);
+        }
         if (hasClientChunk(mc, chunkX, chunkZ)) {
             ClientChunkHandler.logShadowChunkApplyEvent("shadow_applied", chunkPos, false, item.traceOrigin());
             shadowApplyEpochs.put(chunkKey, shadowApplyEpoch.incrementAndGet());
@@ -2159,7 +2089,6 @@ public final class ShadowLightCompute {
     public static void onDisconnect() {
         pending.clear();
         pendingDeltas.clear();
-        pendingDeltaRequests.clear();
         generated.clear();
         pendingLightUpdates.clear();
         inflightLight.clear(); // 在途光屏障：回调侧条件移除失败即短路丢弃（断连竞态）

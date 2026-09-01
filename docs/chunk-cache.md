@@ -1,8 +1,7 @@
 # 区块缓存推送与进服加载
 
-本文档是 **chunkHash 元数据推送 + 客户端缓存命中** 流水线的唯一真相源。存储文件格式见 [`architecture.md`](architecture.md)。
-
-功能域归属：客户端侧缓存 / 影子端链路属**区块核心**（客户端进程内区块域，影子端 = 其后端引擎），网络传输经**网络核心**（客户端进程内网关）outbound 承载；服务端推送侧属**主控核心**。配置键 `chunk.*` 为区块核心配置族（2026-08-09 config-restructure：原 `clientCache.*` 重排为 `chunk.*`）。
+本文是 **ShadowPull 统一 Compare + Pull 流水线** 的真相源。客户端和服务端通过原版 `CustomPayload` 传输 ShadowPull；旧 `25566` Gateway 不参与本功能。
+功能域归属：客户端侧缓存 / 影子端链路属**区块核心**；服务端以原版 `25565` 连接接收 ShadowPull。配置键 `chunk.*` 为区块核心配置族。
 
 **相关专文（细节不在此重复）：**
 
@@ -39,61 +38,80 @@ chunkHash   = combineSectionHashes(sectionIndex → sectionHash)
 2. 未注入 → `ShadowSeedServer.loadFromDisk` 读影子端存档比对（光脏标记拦截欠光块）
 3. 与服务端 `chunkHash` 相等 → 命中直接回传；不等且光干净 → 分段增量候选
 
+### 3.1 统一 ShadowPull
+
+原版 `ClientPacketListener.handleLevelChunkWithLight` 收到区块时，已有本地影子基线的柱进入唯一 `ShadowPull` 请求；无基线时保留原版 FULL 作为首次建基线路径。请求同时携带 `chunkHash`、`sectionHash` 和 section 平面综合征。
+
+服务端统一返回：
+
+```text
+UNCHANGED → 复用影子缓存
+DELTA     → 复用现有 SectionDeltaPlanner / SectionDeltaS2CPacket
+FULL      → 返回原版 chunk+light payload
+ERROR     → 客户端重新请求权威 FULL
+```
+
+`DELTA` 不再走独立的客户端入口；它作为 ShadowPull 的终态复用现有分段增量编码和应用逻辑。
+
+```text
+原版 25565 CustomPayload
+    └─ shadow_pull_request_c2s
+         └─ ShadowPullHandler
+              └─ UNCHANGED / DELTA / FULL / ERROR
+```
+
+### 3.2 正常 tracking 推送
+
 ## 3. 现行数据流
 
-> 区块**可见范围与卸载**由影子虚拟 `ServerPlayer` 的原版 tracking 决定；客户端 `ClientChunkCache` 是唯一的客户端生命周期真相源。Hassium 不维护第二套 admission/unload 状态。
+> 服务端原版 `ServerPlayer` / `ChunkMap` 决定区块 tracking、可见范围与 forget；原版 `ClientChunkCache` 是唯一客户端生命周期真相源。Hassium 不维护第二套 admission/unload 状态。
 
 ### 正常 tracking 推送
 
-```
-影子虚拟 ServerPlayer / ServerChunkCache / ChunkMap
-        │  原版 tracking 决定 visible / forget
-        │  Mixin 阻止世界侧壳连接重复发送
+```text
+ServerPlayer / ServerChunkCache / ChunkMap
+        │  原版 tracking 决定 chunk / forget
         ▼
-GatewayServer PACKET_S2C（原版 ClientboundLevelChunkWithLightPacket）
+标准 25565 Connection
+        │  ClientboundLevelChunkWithLightPacket
         ▼
-GatewayS2CRouter
-   ┌────┴───────────────────────────────────────────┐
-带权威光                                                   剥光（仅握手声明引擎时）
-   │                                                        │
-   ▼                                                        ▼
-ClientPacketListener.handleLevelChunkWithLight       ShadowLightCompute
-   │                                                   → 影子端注入 / 原版 LightEngine
-   ▼                                                   → drainReady 回传官方区块包
-ClientChunkCache.replaceWithPacketData                         │
-   └──────────────────────────────────────────────────────────┘
-                              ▼
-                  原版 ClientChunkCache / renderer
+ClientPacketListener.handleLevelChunkWithLight
+        │
+        ├─ 无影子基线 → 原版 apply，建立首次基线
+        └─ 有影子基线 → ShadowPull Compare + Pull
+        ▼
+ClientChunkCache.replaceWithPacketData → renderer
 ```
 
-正常直推必须记为 `serverPushAppliedCount`，不是 `fullChunkRequestCount`；后者只表示客户端 Compare + Pull 的权威 FULL 请求。探针还同时记录累计 apply、完整 `ClientChunkCache.loadedChunks`，以及 trace 候选在采样时刻实际驻留的数量。
+正常原版首包应记为 `serverPushAppliedCount`；`fullChunkRequestCount` 只表示 ShadowPull 回退的权威 FULL。探针还记录累计 apply、完整 `ClientChunkCache.loadedChunks`，以及 trace 候选在采样时刻实际驻留的数量。
 
 ### Compare + Pull / Generate + Validate
 
-该分支只处理**需要客户端选择数据来源**的场景：`SeedRef`、影子缓存重放、SectionDelta 失败/超时/skipped，以及影子端本地生成失败。它不替代原版 tracking。
+该分支处理 `SeedRef`、影子缓存重放和本地生成失败；不参与区块可见范围或卸载决策。
 
-```
-SeedRef / 缓存重放 / delta 回退
-        ▼
-客户端读取 ShadowStorageHashes 作为本地 baseline
-        ▼
-ShadowPullRequestC2S(chunkHash, sectionHashes)
-        ▼
+```text
+候选区块
+    │
+    ├─ 本地生成：必须同时有客户端开关、服务端许可和真实 seed
+    └─ 磁盘缓存：读取 ShadowStorageHashes / 影子端存档
+    │
+    ▼
+ShadowPullRequestC2S(chunkHash, sectionHashes, planes)
+    │
+    ▼
 服务端权威比较
-   ┌────┼───────────────┐
-UNCHANGED       FULL          ERROR
-   │              │              │
-影子内存/磁盘     影子端注入     明确记录；不伪报命中
-重放→光照→官方包  →光照→官方包
-   │              │
-   └──────┬───────┘
-          ▼
+    ├─ UNCHANGED → 影子端 materialize 后回传官方 chunk+light
+    ├─ DELTA     → 复用 SectionDeltaS2CPacket → 影子端 apply + 重算光照
+    ├─ FULL      → 影子端注入服务端原版 chunk+light payload
+    └─ ERROR     → 无 baseline ShadowPull 请求权威 FULL
+    │
+    ▼
 ClientPacketListener.handleLevelChunkWithLight
 ```
 
-- `UNCHANGED` 只有在影子端能实际 materialize 该柱时才算命中；hash 有记录但内存/磁盘找不到柱，立即重试无 baseline 的权威 FULL。
-- `SeedRef` 的本地生成必须同时满足客户端开关、服务端许可、真实 seed 和 content hash；任何条件缺失、生成失败或 hash mismatch 都回退 FULL。
-- 分段增量使用独立 `SectionHashRequestC2SPacket → SectionDeltaS2CPacket`。它的 send 失败、server skipped 或 timeout 均回退权威 FULL。`ShadowPullResponseS2CPacket.Kind.DELTA` 不是现行 payload 语义；若收到该协议错配响应，客户端回退 FULL，绝不静默丢柱。
+- `UNCHANGED` 只有影子端实际 materialize 柱时才算命中；hash 有记录但找不到柱时立即重试无 baseline 的权威 FULL。
+- 本地生成必须同时满足客户端开关、服务端许可、真实 seed 和 content hash；任一条件缺失、生成失败或 hash mismatch 均提交无 baseline ShadowPull。
+- `DELTA` 的编码、传输、应用和失败回退全部由统一 ShadowPull 管理，不再发送旧独立分段请求。
 
 ## 4. 主线程限流
 
@@ -103,40 +121,34 @@ ClientPacketListener.handleLevelChunkWithLight
 | JoinBoost | 进服约 10s，预算从约 30ms 线性退坡到 `mainThreadChunkBudgetMs` |
 | `maxChunksPerFrame` | 每 tick 缓存读取生产上限（默认 6；OVD 入队 + 影子读盘） |
 
-控制面包（握手、Compare + Pull、SectionDelta 等）不进入聚合窗口。
+ShadowPull 通过原版 `CustomPayload` 发送；它不使用旧 Gateway Envelope、UDP 或独立数据面。
 
 ## 5. 协议边界
 
 ```java
 ShadowPullRequestC2SPacket  // 客户端带影子本地 baseline 请求权威比较
-ShadowPullResponseS2CPacket // UNCHANGED / FULL / ERROR；DELTA 值收到即按协议错配回退 FULL
-SectionHashRequestC2SPacket // 客户端 → 服务端（section hashes + 平面综合征）
-SectionDeltaS2CPacket       // 服务端 → 客户端（BLOCKS 或 FULL section + heightmaps + BE）
+ShadowPullResponseS2CPacket // UNCHANGED / DELTA / FULL / ERROR
+SectionDeltaS2CPacket       // ShadowPull 的 DELTA payload 编码
 ```
 
 门控：`chunk.sectionDeltaEnabled`（默认 `true`；需同时 `chunk.enabled`）。
 
-| 比对结果 | 开关关 | 开关开（默认） |
-|----------|--------|----------------|
-| HIT | 缓存队列 | 影子端直接回传 |
-| MISS | 全量 | 全量 |
-| MISMATCH（过期） | 全量 | 分段增量（失败回退全量） |
+| 比对结果 | 分段增量关闭 | 分段增量开启（默认） |
+|----------|--------------|----------------------|
+| UNCHANGED | 影子端回放 | 影子端回放 |
+| 不同      | FULL        | DELTA，规划失败则 FULL |
 
-MISMATCH 时客户端上报每段 hash 与 48 条平面综合征；服务端只补变更格（`BLOCKS`），变更过多或 paletted 更小则整段（`FULL`），变更段 ≥75% 则整块。详见 §11.5。
-
-旧 `ChunkMetadataS2C`（contentHash 批量元数据）协议已删除。
 
 ## 6. 关键组件
 
 | 组件 | 职责 |
 |------|------|
-| `ServerChunkPushManager` | hash 批量、数据队列、tick 序列化、pushPool、delta 比对回包 |
-| `MixinChunkHolder` / `MixinServerPlayer` / `MixinPlayerChunkSender` | 拦截原版全量推送 |
-| `ClientMetadataHandler` | hash 比对、全量请求、blockEntity 请求 |
-| `ShadowLightCompute` | 影子端 hash 比对、delta 候选/请求/超时回退、consumeLoop 应用与回传 |
-| `ShadowSeedServer.applySectionDelta` | 影子端 FULL/BLOCKS 覆盖 + 清光重算 + contentHash 落表 |
-| `ChunkBloomFilter` | 减少无效磁盘 IO |
-| `ShadowStorageHashes` | 影子端 contentHash 表 + 光脏标记（R2 命中判定） |
+| `ServerChunkPushManager` | 服务端原版 tracking 推送、ShadowPull 权威比较、复用分段增量规划 |
+| `MixinChunkHolder` / `MixinServerPlayer` / `MixinPlayerChunkSender` | 拦截已废弃的旧推送路径 |
+| `ShadowPullClient` | 原版首包命中时发起 Compare + Pull，收口 UNCHANGED / DELTA / FULL / ERROR |
+| `ShadowLightCompute` | 影子端基线快照、缓存回放、分段增量应用与光照收敛 |
+| `ShadowSeedServer.applySectionDelta` | 影子端 FULL/BLOCKS 覆盖、清光重算、contentHash 落表 |
+| `ShadowStorageHashes` | 影子端 contentHash 表与光脏标记 |
 
 ## 7. 客户端淘汰
 
@@ -151,19 +163,6 @@ MISMATCH 时客户端上报每段 hash 与 48 条平面综合征；服务端只�
 - 方向性区块预加载（提高推送优先级，不改变协议）
 - warm-stash 优化（收包后暂存 NBT，卸载时 dirty=false 则 flush warm 跳过 live 重算）
 
-## 9.1 数据面与恢复（网络核心内无感迁移）
-
-`ChunkHashS2C`、握手、index sync 与 `SectionHashRequest` 都是 TCP 控制面：经网络核心网关 outbound 帧协议（`ControlFrameCodec`）承载，在压缩黑名单中，不进入聚合 PENDING 缓冲，也不走 UDP。`ChunkPayloadS2C` 与 `SectionDeltaS2CPacket` 在已 Bind 的 UDP/KCP session 可用时经 `DataPlaneClientBundle.safeDispatch` 送入既有 `SectionDeltaDispatcher` / chunk apply 路径；无 session 或路由失败时仍由 TCP 发送，缓存一致性协议不变。
-
-主控故障或负载触发时的恢复由**网络核心内部 L1 迁移引擎**完成（旧候选重连 / 世界定格语义已退役），对客户端原版 `Connection` 与区块核心（缓存 / 影子端）全程无感：
-
-1. **触发**：故障 = outbound 入站静默超时（`MigrationPolicy.faultTimeoutMs`，沿用 `master.migrationFaultTimeoutMs` 键语义）；策略 = 主控负载上报（TPS / 负载均值 / 维护窗口阈值）
-2. **换 outbound**：`NetworkCore` ACTIVE → MIGRATING → 关闭旧 outbound → 连接新主控，握手携带 `ResumeTicket` 续流票据（玩家 UUID + 递增 epoch + 共享密钥 HMAC 签名）
-3. **续流**：主控验签通过且 epoch 递增（`ResumeTicketValidator`，防重放）→ S2C 尾 `resumeAccepted=true` → 复用影子虚拟玩家的原版 `ChunkMap` tracking 与缓存状态；`resumeAccepted=false`（票据无效 / 重放）→ 会话未附着，走登录桥 / 重连兜底
-4. **客户端 `Connection` 不断**：无定格、无候选重连窗口，迁移期间既有缓存照常命中，断连清理不触发
-5. **终态清理只在迁移失败回退时**：迁移端点候选耗尽 / 重试超限 → 回退为真正断连（outbound 关 → IDLE → 断连清理链），影子端 `saveAll` 落盘与资源终态清理此时才执行一次
-
-UDP/KCP 的拓扑、地址配置见 [`architecture.md`](architecture.md) §9 尾段（`master.controlReachableEndpoints` / `udpListeners`）与 §12.6；运行时冒烟见 [`runtime-smoke-test.md`](runtime-smoke-test.md#网关双主控迁移冒烟t7)。
 
 ## 10. 超视渲染（当前链路不启用）
 
@@ -211,21 +210,22 @@ UDP/KCP 的拓扑、地址配置见 [`architecture.md`](architecture.md) §9 尾
 
 **光照数据存储**：当 `is_light_on=1` 时，每个 section 的 NBT 可能包含 `sky_light` 和 `block_light`（各 2048 bytes）。
 
-**光照缓存流水线**（Hassium 引擎统一算光，客户端本地无光照计算）：
-1. 首次加载（剥光协商生效，服务端 lightStrip=true 且客户端声明 `lightComputeSupported`）：空光包 → `GatewayS2CRouter` 先投影子端而不直接 apply → `ShadowLightCompute` 注入清光 → 屏障前 sky 预播种（`ensureChunkLightLayers`：Threaded 引擎任务逐列把「源及其上方」queued 成 15，恒先于 initializeLight 执行）→ per-chunk 两阶段屏障（`initializeLight` → `lightChunk`）→ `isChunkLightComplete` 通过后才打包收敛光回传，断连 `saveAll` 落盘收敛光
-2. 缓存命中（含超视 renderOnly）：影子端存档 `loadFromDisk` 同样走预播种 + 两阶段光屏障后回传（存档即收敛光；光脏标记拦截欠光块 → 走重算链）
-3. 方块变更：`LightDeltaS2CPacket`（含 empty 掩码）→ `ShadowLightCompute.submitLightDelta` → `invalidateLightSections` 清对应 section → 重算收敛 → 光包回传且掩码仅含服务端声明的变更 section（未变化 section 客户端保留旧光，不回传区块数据）；SectionDelta 变更 section 清光重算（`applySectionDelta`，heightmap 覆盖后重算 sky 光源表）
-4. 区块卸载 / 断连 dump：`saveAll` 全量重写（含收敛光）；欠光块 `markLightDirty`（R2 命中判定拦截）
-5. 屏障完成但光层不全自动重试（≤6 轮），5s 超时后短暂续投（≤2 轮），仍不全：欠光打包 + 标脏 + 后台补发（引擎传播完成后重新回传覆盖，黑块不残留）；屏障完成瞬间丢弃该柱未消费的光桥掩码（杜绝「移除在途→最终光 offer 前」的中间态光包）；「邻柱补光」已移除（2026-08-15：光包风暴放大器，边界补光由跨柱传播 + collectLightUpdate → drainLightMasks 桥梁事件驱动覆盖，光桥只对影子区块包已落地且客户端未卸载的柱发送）；<b>打包瞬间严禁直写 raw skyEngine.queuedSections</b>（2026-08-16：与 `markNewInconsistencies` 的 fastutil 迭代器并发 → `LongArrayList.wrapped is null` NPE → runLightUpdates 中断 → POST 永不执行 → 批量超时/空层，改由 Threaded 引擎任务预播种 + 只读核验）
+**光照缓存流水线**（影子端统一算光，真实客户端只消费标准原版区块包）：
+1. 首次 FULL：服务端标准 `ClientboundLevelChunkWithLightPacket` 进入原版 `ClientPacketListener`；影子端以同一权威数据建立或更新本地基线。
+2. `UNCHANGED` 缓存回放：影子端存档 `loadFromDisk` 走预播种 + 两阶段光屏障后回传标准 chunk+light；光脏标记拦截欠光块并回退权威 FULL。
+3. `DELTA`：`ShadowPullResponseS2CPacket` 内嵌的 `SectionDeltaS2CPacket` 进入 `ShadowLightCompute.submitDelta`，变更 section 清光重算；heightmap 覆盖后重算 sky 光源表。
+4. 区块卸载 / 断连 dump：`saveAll` 全量重写收敛光；欠光块 `markLightDirty`。
+5. 屏障完成但光层不全自动重试（≤6 轮），5s 超时后短暂续投（≤2 轮）；仍不全则欠光打包、标脏并在传播完成后回传覆盖。打包瞬间不直写 `skyEngine.queuedSections`，预播种由 Threaded 引擎任务完成。
 
-**引擎失败降级**：影子端启动失败 / 未握手种子 → `ShadowLightCompute` 引擎关闭，但服务端剥光同样经握手 gate 关闭（无 `lightComputeSupported` 声明 → 光随包自带），客户端无黑块。
+**引擎失败降级**：影子端未启动、未获许可或没有真实 seed 时，不发生本地生成；统一 ShadowPull 请求服务端 FULL，客户端仍消费随原版包携带的光照。
 
 **指标语义**（`/hassiumc stats`）：
 - 展示：`区块缓存：xx%（全命中 N/B，部分命中 N/B，增量 B，应用 B）`
 - 命中率 = `(全命中 + 部分命中 − 增量) / 应用`
-- **全命中**：影子端存档/内存直接回传
-- **部分命中**：delta 成功（整柱等价值）
-- **增量**：实际变更内容（`FULL` 整段 / `BLOCKS` 按格），从命中分子扣除
+- **全命中**：收到 `UNCHANGED` 后影子端存档/内存实际 materialize 并回传；仅 hash 相等但无柱时不记命中。
+- **部分命中**：`DELTA` 成功提交；`sectionDeltaRequestsSent` 计实际收到的 `DELTA` 终态，不存在独立分段请求包。
+- **过期**：带 baseline 的 ShadowPull 返回 `FULL`；**未命中**：无 baseline 的权威 FULL 返回。两者按响应 `requestId` 模式分类，断连时清理在途状态。
+- **增量**：实际变更内容（`FULL` 整段 / `BLOCKS` 按格），从命中分子扣除。
 
 **renderOnly**：`ClientCacheLoadQueue.ReadyChunk.hasCachedLight` 为 true 时不再投递影子端（空光仍经 TAIL 投递一次，Handler 只补内存 NBT 回写）。
 
@@ -248,7 +248,7 @@ UDP/KCP 的拓扑、地址配置见 [`architecture.md`](architecture.md) §9 尾
 
 ### 11.5 分段增量（缓存过期 / MISMATCH）
 
-`chunk.sectionDeltaEnabled`（默认开）。影子端 MISMATCH 且光干净时上报本地 section hash + 每非空段 48×u32 平面综合征；服务端按需比对（不常驻缓存）：
+`chunk.sectionDeltaEnabled`（默认开）。影子端 MISMATCH 且光干净时，`ShadowPullRequestC2SPacket` 携带本地 section hash + 每非空段 48×u32 平面综合征；服务端按需比对（不常驻缓存）：
 
 - 稀疏变更（矿道、树、岩浆柱等）→ `BLOCKS` 方块列表
 - 过多（AABB ≥400 格，如炸坑）或整段 paletted 更小（铺平/灌水）→ `FULL` 整段
@@ -261,10 +261,10 @@ UDP/KCP 的拓扑、地址配置见 [`architecture.md`](architecture.md) §9 尾
 
 | 组件 | 职责 |
 |------|------|
-| `ShadowLightCompute` | hash 比对、delta 候选判定、请求/超时/回退、consumeLoop 应用与回传 |
+| `ShadowLightCompute` | 影子基线快照、缓存 materialize、DELTA 应用与光照收敛 |
 | `ShadowSeedServer.applySectionDelta` | FULL 整段覆盖 / BLOCKS 逐格写入；hash 校验 + 清光 |
 | `SectionDeltaPlanner` | 柱级 75% 整块回退；段级 BLOCKS vs FULL |
-| `DataPlaneClientBundle` | 数据面帧 `TYPE_BULK_SECTION_DELTA` 分发 → `submitDelta`（默认 dispatcher） |
+| `ShadowPullClient` | 将响应 DELTA 提交到 `submitDelta`，失败统一回退权威 FULL |
 
 ## 12. 缓存导出（`/hassiumc export`）
 
@@ -341,5 +341,4 @@ hassium_exports/server_192.168.1.100_25565/
 3. `scheduleChunkLoad` 先通过 `MixinRegionFile` 读取 type 126；未命中时进入原版生成链。
 4. 服务端校验允许的 SeedGen 结果在 pre-LIGHT 汇合，由影子 `ThreadedLevelLightEngine` 算光。
 5. 影子 vanilla connection 发送官方 chunk+light 与 forget packet；真实客户端不提交 admission 请求。
-
-缓存目录仍为 `hassium_cache/<serverId>/world`，存储和热度淘汰由影子服务端承担。Bloom、`CHUNK_HASH`、`PENDING_FULL_REQUESTS` 和旧客户端主动 pull 不属于当前区块生命周期；若协议类型仍保留，仅作为兼容定义，不得有运行时发送调用。
+缓存目录仍为 `hassium_cache/<serverId>/world`，存储和热度淘汰由影子服务端承担。Bloom、`CHUNK_HASH` 和旧独立分段请求不属于当前客户端区块入口；分段增量现作为统一 `ShadowPull` 的 `DELTA` 终态复用。

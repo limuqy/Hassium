@@ -104,18 +104,6 @@ public final class HassiumPacketIds {
 
     public static final String SHADOW_PULL_RESPONSE_S2C = "hassium:shadow_pull_response_s2c";
 
-    // ===== Per-Section 缓存优化相关包 =====
-
-
-    /**
-     * 客户端 -> 服务端：请求 section 详情（阶段二）
-     */
-    public static final String SECTION_HASH_REQUEST_C2S = "hassium:section_hash_request_c2s";
-
-    /**
-     * 服务端 -> 客户端：分段增量响应（阶段二）
-     */
-    public static final String SECTION_DELTA_S2C = "hassium:section_delta_s2c";
 
     /**
      * 服务端 -> 客户端：光照增量通知

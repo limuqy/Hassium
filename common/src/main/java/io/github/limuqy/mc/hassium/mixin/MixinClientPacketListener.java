@@ -37,10 +37,25 @@ public class MixinClientPacketListener {
     /**
      * 自定义 Shadow/压缩回放也会调用原版 handler；该路径已由其唯一收口记账，不能重复计入 native。
      */
-    @Inject(method = "handleLevelChunkWithLight", at = @At("HEAD"))
+    @Inject(method = "handleLevelChunkWithLight", at = @At("HEAD"), cancellable = true)
     private void hassium$captureNativeChunkMetric(
             net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket packet,
             CallbackInfo ci) {
+        if (io.github.limuqy.mc.hassium.network.ShadowPullClient.handleNativeChunk(packet)) {
+            this.hassium$recordNativeChunk = false;
+            ci.cancel();
+            return;
+        }
+        if (!io.github.limuqy.mc.hassium.network.ClientChunkPipeline.getInstance().isApplyInProgress()
+                && io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.isEnabled()) {
+            io.github.limuqy.mc.hassium.network.seedgen.ShadowVanillaLightPipeline.submitVisible(
+                    io.github.limuqy.mc.hassium.network.seedgen.ShadowVanillaLightPipeline.currentDimension(),
+                    new net.minecraft.world.level.ChunkPos(packet.getX(), packet.getZ()), packet,
+                    io.github.limuqy.mc.hassium.network.ClientChunkHandler.TraceOrigin.SERVER_PUSH);
+            this.hassium$recordNativeChunk = false;
+            ci.cancel();
+            return;
+        }
         this.hassium$recordNativeChunk = !io.github.limuqy.mc.hassium.network.ClientChunkPipeline
                 .getInstance().isApplyInProgress();
         if (!this.hassium$recordNativeChunk) {

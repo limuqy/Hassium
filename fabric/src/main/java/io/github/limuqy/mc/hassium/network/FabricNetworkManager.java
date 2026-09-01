@@ -142,20 +142,6 @@ ResourceLocation
 #else
 Identifier
 #endif
-SECTION_HASH_REQUEST_C2S = ResourceLocationCompat.vanilla(HassiumChannels.SECTION_HASH_REQUEST_C2S);
-    public static final
-#if MC_VER < MC_1_21_11
-ResourceLocation
-#else
-Identifier
-#endif
-SECTION_DELTA_S2C = ResourceLocationCompat.vanilla(HassiumChannels.SECTION_DELTA_S2C);
-    public static final
-#if MC_VER < MC_1_21_11
-ResourceLocation
-#else
-Identifier
-#endif
 BLOCK_ENTITY_REQUEST_C2S = ResourceLocationCompat.vanilla(HassiumChannels.BLOCK_ENTITY_REQUEST_C2S);
     public static final
 #if MC_VER < MC_1_21_11
@@ -216,8 +202,9 @@ SHADOW_PULL_RESPONSE_S2C = ResourceLocationCompat.vanilla(HassiumChannels.SHADOW
 #if MC_VER >= MC_1_21_1
         FabricPayloadRegistry.registerGatewayInfo();
 #endif
-        if (!HassiumConfigService.getInstance().isNetworkCompressionEnabled()) {
-            LOGGER.warn("Hassium: master.enabled=false, skipping Fabric channel registration (gateway_info already registered)");
+        if (!HassiumConfigService.getInstance().isNetworkCompressionEnabled()
+                && !HassiumConfigService.getInstance().isClientCacheEnabled()) {
+            LOGGER.warn("Hassium: master.enabled=false and chunk.enabled=false, skipping channel registration");
             return;
         }
         LOGGER.debug("Hassium: Registering Fabric network channels");
@@ -287,44 +274,6 @@ SHADOW_PULL_RESPONSE_S2C = ResourceLocationCompat.vanilla(HassiumChannels.SHADOW
 #endif
     }
 
-    @Override
-    public void sendSectionHashRequest(FriendlyByteBuf buf) {
-        if (Minecraft.getInstance().getConnection() != null) {
-#if MC_VER < MC_1_21_1
-            ClientPlayNetworking.send(SECTION_HASH_REQUEST_C2S, buf);
-#else
-            ClientPlayNetworking.send(FabricPayloadRegistry.toPayload(FabricPayloadRegistry.SECTION_HASH_REQUEST_C2S_TYPE, buf));
-#endif
-        } else {
-            buf.release();
-        }
-    }
-
-    @Override
-    public void sendSectionDeltaPacket(ServerPlayer player, FriendlyByteBuf buf) {
-        if (io.github.limuqy.mc.hassium.server.GatewayPlayerBridge.tryRouteS2C(
-                player, io.github.limuqy.mc.hassium.network.core.GatewayPacketCodec.HassiumSub.SECTION_DELTA.id(), buf)) {
-            return;
-        }
-        // 无网关会话时保留 UDP / Fabric 原版回退路径。
-        int len = buf.readableBytes();
-        byte[] payload = new byte[len];
-        if (len > 0) {
-            buf.getBytes(buf.readerIndex(), payload);
-        }
-        if (io.github.limuqy.mc.hassium.network.dataplane.DataPlaneServer.tryRouteBulk(
-                player.getUUID(),
-                io.github.limuqy.mc.hassium.network.dataplane.DataPlaneFrame.TYPE_BULK_SECTION_DELTA,
-                payload)) {
-            buf.release();
-            return;
-        }
-#if MC_VER < MC_1_21_1
-        ServerPlayNetworking.send(player, SECTION_DELTA_S2C, buf);
-#else
-        ServerPlayNetworking.send(player, FabricPayloadRegistry.toPayload(FabricPayloadRegistry.SECTION_DELTA_S2C_TYPE, buf));
-#endif
-    }
 
     @Override
     public void sendBlockEntityRequest(FriendlyByteBuf buf) {
@@ -947,48 +896,6 @@ SHADOW_PULL_RESPONSE_S2C = ResourceLocationCompat.vanilla(HassiumChannels.SHADOW
         });
 #endif
 
-        // 注册 section 哈希请求（阶段二）
-#if MC_VER < MC_1_21_1
-        ServerPlayNetworking.registerGlobalReceiver(SECTION_HASH_REQUEST_C2S, (server, player, handler, buf, sender) -> {
-            try {
-                // review-fix: T10-1: 直接 decode 原 buf（Fabric 回调结束后负责释放），避免副本泄漏
-                SectionHashRequestC2SPacket request = SectionHashRequestC2SPacket.decode(buf);
-
-                server.execute(() -> {
-                    try {
-                        ServerChunkPushManager.getInstance().handleSectionHashRequest(
-                                player, request);
-                    } catch (Exception e) {
-                        LOGGER.error("[SERVER] Failed to handle section hash request", e);
-                    }
-                });
-            } catch (Exception e) {
-                LOGGER.error("[SERVER] Failed to decode section hash request", e);
-            }
-        });
-#else
-        ServerPlayNetworking.registerGlobalReceiver(FabricPayloadRegistry.SECTION_HASH_REQUEST_C2S_TYPE, (payload, context) -> {
-            FriendlyByteBuf buf = FabricPayloadRegistry.fromPayload(payload);
-            try {
-                ServerPlayer player = context.player();
-                net.minecraft.server.MinecraftServer server = io.github.limuqy.mc.hassium.compat.PlayerCompat.getMinecraftServer(player);
-                SectionHashRequestC2SPacket request = SectionHashRequestC2SPacket.decode(buf);
-
-                server.execute(() -> {
-                    try {
-                        ServerChunkPushManager.getInstance().handleSectionHashRequest(
-                                player, request);
-                    } catch (Exception e) {
-                        LOGGER.error("[SERVER] Failed to handle section hash request", e);
-                    }
-                });
-            } catch (Exception e) {
-                LOGGER.error("[SERVER] Failed to decode section hash request", e);
-            } finally {
-                buf.release();
-            }
-        });
-#endif
 
         // 注册 blockEntity 数据请求
 #if MC_VER < MC_1_21_1

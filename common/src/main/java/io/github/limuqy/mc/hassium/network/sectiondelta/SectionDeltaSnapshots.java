@@ -21,7 +21,7 @@ public final class SectionDeltaSnapshots {
         return getOrCapture(DimensionKey.OVERWORLD, pos, chunk);
     }
 
-    /** 指定维度取用/捕获（requestSectionDeltas 调用；dimension 来自请求上下文）。 */
+    /** 指定维度取用或捕获影子基线；维度来自统一 ShadowPull 请求上下文。 */
     public static SectionDeltaSnapshot getOrCapture(String dimension, ChunkPos pos, LevelChunk chunk) {
         long key = DimensionKey.key(dimension, pos.x, pos.z);
         SectionDeltaSnapshot existing = MEMO.get(key);

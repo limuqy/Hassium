@@ -88,7 +88,7 @@ Minecraft 1.20.1 / 1.21.1–1.21.11 多加载器模组（Fabric / Forge / NeoFor
 写文件 / 读日志：**pwsh 7**（`pwsh`，勿用 Windows PowerShell 5.1——其 `utf8` 带 BOM 且不支持 `utf8NoBOM`）。Git Bash 里编 Gradle 用 `./gradlew`；改 toml、跑冒烟仍调 `pwsh`。
 
 - **写文件**：pwsh 7 的 `Set-Content`/`Out-File` 默认即 UTF-8 无 BOM，写 toml/properties **不必** `-Encoding`；night-config 对 BOM 敏感（BOM 会导致整份配置静默回落默认）。
-- **读日志**：Cursor 捕获 stdout 走管道、无真实控制台时，pwsh 会把输出编码锁成系统 ACP（中文 Windows = GBK），且首次输出后改不了。本机 profile 在任何输出前把 `[Console]::OutputEncoding` / `$OutputEncoding` 设为 UTF-8 无 BOM。**代理命令不要加 `-NoProfile`**，否则这段被跳过、中文乱码。`-NoProfile` 只留给必须隔离的内部子进程（如 Gradle 调 `compile-anchors.ps1`），不要套在自己的 Shell 命令外层。
+- **读日志**：捕获 stdout 走管道、无真实控制台时，pwsh 会把输出编码锁成系统 ACP（中文 Windows = GBK），且首次输出后改不了。本机 profile 在任何输出前把 `[Console]::OutputEncoding` / `$OutputEncoding` 设为 UTF-8 无 BOM。**代理命令不要加 `-NoProfile`**，否则这段被跳过、中文乱码。`-NoProfile` 只留给必须隔离的内部子进程（如 Gradle 调 `compile-anchors.ps1`），不要套在自己的 Shell 命令外层。
 `-Pmc_ver`：pwsh 必须 `"-Pmc_ver=1.20.1"`（引号）；Git Bash 写 `-Pmc_ver=1.20.1` 即可。
 子工程构建产物按版本分目录（`<module>/build/<mc_ver 下划线化>/`，如 `common/build/1_21_11/`）：common 切 `-Pmc_ver` 互不覆盖、切回即 up-to-date；但 **fabric/forge/neoforge loader 子项目还会产出不分版本的泛型 `build/classes`**，跨版本切换可能残留旧变体类与版本目录并存（症状：loader 启动即崩，如 NeoForge 报 `must have exactly 1 public constructor, found 2`）。切版本后 loader 起不来时先删 `<loader>/build` 整目录再跑。根项目 `build/`（jdt-cp、smoke-test 日志）不分版本。
 
@@ -102,8 +102,6 @@ Minecraft 1.20.1 / 1.21.1–1.21.11 多加载器模组（Fabric / Forge / NeoFor
 - `analyze_mixin` / `validate_access_transformer` / `validate_access_widener` / `analyze_mod_jar` — 验证 Mixin / AT / AW / 第三方 mod
 
 查本仓库代码优先用 **codegraph**（`codegraph_explore`），不要先 grep/Read 扫一遍。
-
-游戏内看屏/点 UI/跑功能测试用 **minecraft-mod-mcp**（stdio 桥 `npx -y minecraft-mod-mcp`，配置见项目根 `.cursor/mcp.json`）。**不要**把 Cursor MCP 配成指向 `localhost:9876` 的 SSE。操作手册：[`docs/ai-functional-test.md`](docs/ai-functional-test.md)。与 minecraft-dev 职责不同，禁止混用（动游戏找 mod-mcp，看代码找 dev）。**现状**：dev `runClient` 尚未挂 companion mod，冒烟起的客户端目前不能被该桥驱动。
 
 ## 模块与包地图
 
@@ -227,7 +225,7 @@ pwsh -File ./scripts/runtime-smoke-test.ps1 -Ver 1.20.1 -Loader fabric -Phase I 
 ## Skills
 
 Manifold / 七段 / `#if MC_VER` / `PacketId` / `Identifier` 改代码时自动采用项目 skill：
-[`.cursor/skills/hassium-manifold/SKILL.md`](.cursor/skills/hassium-manifold/SKILL.md)。
+[`.omp/skills/hassium-manifold/SKILL.md`](.omp/skills/hassium-manifold/SKILL.md)。
 
 ## 文档
 

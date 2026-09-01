@@ -168,7 +168,6 @@ public class NetworkOptimizationTest {
                 HassiumPacketIds.LIGHT_DELTA_S2C,
                 HassiumPacketIds.BLOCK_ENTITY_DATA_S2C,
                 HassiumPacketIds.CHUNK_PAYLOAD_S2C,
-                HassiumPacketIds.SECTION_DELTA_S2C,
                 HassiumPacketIds.MAIN_CHANNEL,
                 HassiumPacketIds.AGGREGATION_S2C
         };

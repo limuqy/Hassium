@@ -24,16 +24,11 @@ eclipse
 run
 logs
 /.codegraph/
-/.cursor/
-/.omc/
+/.comate/
 /.vscode/
 /.idea/
-/common/.omc/
 /common/logs/
-/.mimocode/
 /.omp/
-/.claude/settings.json
-/.claude/settings.local.json
 .worktrees/
 
 .wiki-publish/

@@ -30,9 +30,6 @@ public final class HassiumChannels {
 
     public static final PacketId LIGHT_DELTA_S2C = new PacketId(Constants.MOD_ID, "light_delta_s2c");
 
-    public static final PacketId SECTION_DELTA_S2C = new PacketId(Constants.MOD_ID, "section_delta_s2c");
-
-    public static final PacketId SECTION_HASH_REQUEST_C2S = new PacketId(Constants.MOD_ID, "section_hash_request_c2s");
 
     public static final PacketId SEED_REF_S2C = new PacketId(Constants.MOD_ID, "seed_ref_s2c");
 }

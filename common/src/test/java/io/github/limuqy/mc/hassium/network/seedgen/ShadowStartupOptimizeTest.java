@@ -10,19 +10,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class ShadowStartupOptimizeTest {
 
-    @Test
-    void speculativeWatchdogArmedOnlyWithoutHandshake() {
-        assertTrue(ShadowLightCompute.shouldArmSpeculativeWatchdog(false));
-        assertFalse(ShadowLightCompute.shouldArmSpeculativeWatchdog(true));
-    }
-
-    @Test
-    void speculativeShutdownWhenHandshakeMissingAfterTimeout() {
-        assertTrue(ShadowLightCompute.shouldShutdownSpeculativeShadow(false, 3000L, 3000L));
-        assertTrue(ShadowLightCompute.shouldShutdownSpeculativeShadow(false, 5000L, 3000L));
-        assertFalse(ShadowLightCompute.shouldShutdownSpeculativeShadow(true, 5000L, 3000L));
-        assertFalse(ShadowLightCompute.shouldShutdownSpeculativeShadow(false, 1000L, 3000L));
-    }
 
     @Test
     void reuseParkedInstanceSameServerId() {

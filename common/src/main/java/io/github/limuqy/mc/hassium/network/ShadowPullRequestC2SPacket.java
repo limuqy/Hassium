@@ -15,11 +15,38 @@ public record ShadowPullRequestC2SPacket(
     public static final int MAX_DIMENSION_LENGTH = 128;
 
     public record Entry(int chunkX, int chunkZ, long chunkHash,
-                        List<Long> sectionHashes, int lightGeneration) {
+                        List<Long> sectionHashes, int[][] planes, int lightGeneration) {
+        public Entry(int chunkX, int chunkZ, long chunkHash,
+                     List<Long> sectionHashes, int lightGeneration) {
+            this(chunkX, chunkZ, chunkHash, sectionHashes, null, lightGeneration);
+        }
+
         public Entry {
-            if (sectionHashes == null || sectionHashes.size() > 64) {
+            if (sectionHashes == null || sectionHashes.size() > 64
+                    || (planes != null && planes.length > 64)) {
                 throw new IllegalArgumentException("sectionHashes exceeds limit");
             }
+            if (planes != null) {
+                boolean anyPlane = false;
+                for (int[] plane : planes) {
+                    anyPlane |= plane != null;
+                }
+                if (!anyPlane) {
+                    planes = null;
+                }
+            }
+        }
+        @Override
+        public boolean equals(Object other) {
+            if (!(other instanceof Entry that)) return false;
+            return chunkX == that.chunkX && chunkZ == that.chunkZ && chunkHash == that.chunkHash
+                    && lightGeneration == that.lightGeneration
+                    && java.util.Objects.equals(sectionHashes, that.sectionHashes)
+                    && (planes == null || that.planes == null || java.util.Arrays.deepEquals(planes, that.planes));
+        }
+        @Override
+        public int hashCode() {
+            return java.util.Objects.hash(chunkX, chunkZ, chunkHash, sectionHashes, lightGeneration);
         }
     }
 
@@ -44,8 +71,16 @@ public record ShadowPullRequestC2SPacket(
             buf.writeLong(entry.chunkHash());
             buf.writeVarInt(entry.lightGeneration());
             buf.writeVarInt(entry.sectionHashes().size());
-            for (long hash : entry.sectionHashes()) {
+            for (int i = 0; i < entry.sectionHashes().size(); i++) {
+                long hash = entry.sectionHashes().get(i);
                 buf.writeLong(hash);
+                if (hash != 0L) {
+                    int[] plane = entry.planes() != null && i < entry.planes().length
+                            ? entry.planes()[i] : null;
+                    for (int p = 0; p < io.github.limuqy.mc.hassium.network.sectiondelta.SectionPlaneSyndrome.PLANE_COUNT; p++) {
+                        buf.writeInt(plane != null && p < plane.length ? plane[p] : 0);
+                    }
+                }
             }
         }
     }
@@ -69,10 +104,19 @@ public record ShadowPullRequestC2SPacket(
                 throw new IllegalArgumentException("shadowPullV1 section count exceeds limit");
             }
             List<Long> sectionHashes = new ArrayList<>(sectionCount);
+            int[][] planes = new int[sectionCount][];
             for (int j = 0; j < sectionCount; j++) {
-                sectionHashes.add(buf.readLong());
+                long hash = buf.readLong();
+                sectionHashes.add(hash);
+                if (hash != 0L) {
+                    int[] plane = new int[io.github.limuqy.mc.hassium.network.sectiondelta.SectionPlaneSyndrome.PLANE_COUNT];
+                    for (int p = 0; p < plane.length; p++) {
+                        plane[p] = buf.readInt();
+                    }
+                    planes[j] = plane;
+                }
             }
-            entries.add(new Entry(x, z, chunkHash, sectionHashes, lightGeneration));
+            entries.add(new Entry(x, z, chunkHash, sectionHashes, planes, lightGeneration));
         }
         return new ShadowPullRequestC2SPacket(dimension, epoch, requestId, entries);
     }

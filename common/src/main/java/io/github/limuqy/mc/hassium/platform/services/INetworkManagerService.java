@@ -27,15 +27,6 @@ public interface INetworkManagerService {
                         io.github.limuqy.mc.hassium.network.HassiumPacketIds.GATEWAY_INFO_S2C), data));
     }
 
-    /**
-     * 发送 section 哈希请求到服务端（阶段二，客户端调用）
-     */
-    void sendSectionHashRequest(FriendlyByteBuf buf);
-
-    /**
-     * 发送分段增量响应到客户端（阶段二，服务端调用）
-     */
-    void sendSectionDeltaPacket(ServerPlayer player, FriendlyByteBuf buf);
 
     /**
      * 发送 blockEntity 数据请求到服务端（客户端调用）

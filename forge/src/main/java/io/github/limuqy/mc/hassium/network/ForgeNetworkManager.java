@@ -86,8 +86,9 @@ public class ForgeNetworkManager implements NetworkManager {
 #if MC_VER >= MC_1_21_1
         ForgeGatewayInfoRegistry.init();
 #endif
-        if (!HassiumConfigService.getInstance().isNetworkCompressionEnabled()) {
-            LOGGER.warn("Hassium: master.enabled=false, skipping Forge channel registration");
+        if (!HassiumConfigService.getInstance().isNetworkCompressionEnabled()
+                && !HassiumConfigService.getInstance().isClientCacheEnabled()) {
+            LOGGER.warn("Hassium: master.enabled=false and chunk.enabled=false, skipping Forge channel registration");
             return;
         }
         LOGGER.debug("Hassium: Registering Forge network channels");
@@ -200,29 +201,6 @@ public class ForgeNetworkManager implements NetworkManager {
                 java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT)
         );
 
-        CHANNEL.<SectionHashRequestWrapper>registerMessage(
-                packetId++,
-                SectionHashRequestWrapper.class,
-                SectionHashRequestWrapper::encode,
-                SectionHashRequestWrapper::decode,
-                (msg, ctx) -> {
-                    ctx.get().enqueueWork(() -> handleSectionHashRequest(msg, ctx.get().getSender()));
-                    ctx.get().setPacketHandled(true);
-                },
-                java.util.Optional.of(NetworkDirection.PLAY_TO_SERVER)
-        );
-
-        CHANNEL.<SectionDeltaWrapper>registerMessage(
-                packetId++,
-                SectionDeltaWrapper.class,
-                SectionDeltaWrapper::encode,
-                SectionDeltaWrapper::decode,
-                (msg, ctx) -> {
-                    ctx.get().enqueueWork(() -> handleSectionDelta(msg));
-                    ctx.get().setPacketHandled(true);
-                },
-                java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT)
-        );
 
         CHANNEL.<BlockEntityRequestWrapper>registerMessage(
                 packetId++,
@@ -330,9 +308,6 @@ public class ForgeNetworkManager implements NetworkManager {
                     .serverbound()
                         .addMain(HandshakePacket.class, playCodec(HandshakePacket::encode, HandshakePacket::decode),
                                 ForgeNetworkManager::onHandshakeC2S)
-                        .addMain(SectionHashRequestWrapper.class,
-                                playCodec(SectionHashRequestWrapper::encode, SectionHashRequestWrapper::decode),
-                                ForgeNetworkManager::onSectionHashRequest)
                         .addMain(BlockEntityRequestWrapper.class,
                                 playCodec(BlockEntityRequestWrapper::encode, BlockEntityRequestWrapper::decode),
                                 ForgeNetworkManager::onBlockEntityRequest)
@@ -352,8 +327,6 @@ public class ForgeNetworkManager implements NetworkManager {
                         .addMain(AggregationWrapper.class,
                                 playCodec(AggregationWrapper::encode, AggregationWrapper::decode),
                                 ForgeNetworkManager::onAggregationClient)
-                        .addMain(SectionDeltaWrapper.class, playCodec(SectionDeltaWrapper::encode, SectionDeltaWrapper::decode),
-                                ForgeNetworkManager::onSectionDelta)
                         .addMain(BlockEntityDataWrapper.class,
                                 playCodec(BlockEntityDataWrapper::encode, BlockEntityDataWrapper::decode),
                                 ForgeNetworkManager::onBlockEntityData)
@@ -419,9 +392,6 @@ public class ForgeNetworkManager implements NetworkManager {
         ctx.enqueueWork(() -> handleSeedRef(msg));
     }
 
-    private static void onSectionHashRequest(SectionHashRequestWrapper msg, CustomPayloadEvent.Context ctx) {
-        ctx.enqueueWork(() -> handleSectionHashRequest(msg, ctx.getSender()));
-    }
     private static void onShadowPullRequest(ShadowPullRequestWrapper msg, CustomPayloadEvent.Context ctx) {
         ctx.enqueueWork(() -> handleShadowPullRequest(msg, ctx.getSender()));
     }
@@ -456,9 +426,6 @@ public class ForgeNetworkManager implements NetworkManager {
     }
 
 
-    private static void onSectionDelta(SectionDeltaWrapper msg, CustomPayloadEvent.Context ctx) {
-        ctx.enqueueWork(() -> handleSectionDelta(msg));
-    }
 
     private static void onBlockEntityRequest(BlockEntityRequestWrapper msg, CustomPayloadEvent.Context ctx) {
         ctx.enqueueWork(() -> handleBlockEntityRequest(msg, ctx.getSender()));
@@ -887,32 +854,6 @@ public class ForgeNetworkManager implements NetworkManager {
         }
     }
 
-    private static void handleSectionHashRequest(SectionHashRequestWrapper msg, ServerPlayer player) {
-        try {
-            if (player == null) {
-                return;
-            }
-            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data()));
-            SectionHashRequestC2SPacket request = SectionHashRequestC2SPacket.decode(buf);
-            ServerChunkPushManager.getInstance().handleSectionHashRequest(player, request);
-        } catch (Exception e) {
-            LOGGER.error("Hassium: Failed to handle section hash request", e);
-        }
-    }
-
-    private static void handleSectionDelta(SectionDeltaWrapper msg) {
-        try {
-            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data()));
-            try {
-                SectionDeltaS2CPacket packet = SectionDeltaS2CPacket.decode(buf);
-                io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.submitDelta(packet);
-            } finally {
-                buf.release();
-            }
-        } catch (Exception e) {
-            LOGGER.error("Hassium: Failed to handle section delta packet", e);
-        }
-    }
 
     private static void handleBlockEntityRequest(BlockEntityRequestWrapper msg, ServerPlayer player) {
         try {
@@ -954,29 +895,6 @@ public class ForgeNetworkManager implements NetworkManager {
 #endif
     }
 
-    @Override
-    public void sendSectionHashRequest(FriendlyByteBuf buf) {
-        byte[] data = new byte[buf.readableBytes()];
-        buf.readBytes(data);
-        buf.release();
-#if MC_VER < MC_1_21_1
-        CHANNEL.sendToServer(new SectionHashRequestWrapper(data));
-#else
-        sendToServer(new SectionHashRequestWrapper(data));
-#endif
-    }
-
-    @Override
-    public void sendSectionDeltaPacket(ServerPlayer player, FriendlyByteBuf buf) {
-        byte[] data = new byte[buf.readableBytes()];
-        buf.readBytes(data);
-        buf.release();
-#if MC_VER < MC_1_21_1
-        CHANNEL.sendTo(new SectionDeltaWrapper(data), player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
-#else
-        sendToPlayer(player, new SectionDeltaWrapper(data));
-#endif
-    }
 
     @Override
     public void sendBlockEntityRequest(FriendlyByteBuf buf) {
@@ -1273,41 +1191,6 @@ public class ForgeNetworkManager implements NetworkManager {
     }
 
 
-    public record SectionHashRequestWrapper(byte[] data) {
-        public void encode(FriendlyByteBuf buf) {
-            buf.writeVarInt(data.length);
-            buf.writeBytes(data);
-        }
-
-        public static SectionHashRequestWrapper decode(FriendlyByteBuf buf) {
-            // review-fix: T10-9: length 无上限 → readTail 式校验（恶意超大 varInt 拒绝分配）
-            int length = buf.readVarInt();
-            if (length < 0 || length > buf.readableBytes()) {
-                throw new IllegalArgumentException("invalid SectionHashRequestWrapper length: " + length);
-            }
-            byte[] data = new byte[length];
-            buf.readBytes(data);
-            return new SectionHashRequestWrapper(data);
-        }
-    }
-
-    public record SectionDeltaWrapper(byte[] data) {
-        public void encode(FriendlyByteBuf buf) {
-            buf.writeVarInt(data.length);
-            buf.writeBytes(data);
-        }
-
-        public static SectionDeltaWrapper decode(FriendlyByteBuf buf) {
-            // review-fix: T10-9: length 无上限 → readTail 式校验（恶意超大 varInt 拒绝分配）
-            int length = buf.readVarInt();
-            if (length < 0 || length > buf.readableBytes()) {
-                throw new IllegalArgumentException("invalid SectionDeltaWrapper length: " + length);
-            }
-            byte[] data = new byte[length];
-            buf.readBytes(data);
-            return new SectionDeltaWrapper(data);
-        }
-    }
 
     public record SeedRefWrapper(byte[] data) {
         public void encode(FriendlyByteBuf buf) {

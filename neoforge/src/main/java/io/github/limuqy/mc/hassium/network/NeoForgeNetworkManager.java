@@ -242,18 +242,6 @@ public class NeoForgeNetworkManager implements NetworkManager {
         }
     }
 
-    public record SectionDeltaWrapper(byte[] data) {
-        public void encode(FriendlyByteBuf buf) {
-            buf.writeVarInt(data.length);
-            buf.writeBytes(data);
-        }
-        public static SectionDeltaWrapper decode(FriendlyByteBuf buf) {
-            int length = buf.readVarInt();
-            byte[] data = new byte[length];
-            buf.readBytes(data);
-            return new SectionDeltaWrapper(data);
-        }
-    }
 
     public record BlockEntityDataWrapper(byte[] data) {
         public void encode(FriendlyByteBuf buf) {
@@ -358,18 +346,6 @@ public class NeoForgeNetworkManager implements NetworkManager {
 
 
 
-    public record SectionHashRequestWrapper(byte[] data) {
-        public void encode(FriendlyByteBuf buf) {
-            buf.writeVarInt(data.length);
-            buf.writeBytes(data);
-        }
-        public static SectionHashRequestWrapper decode(FriendlyByteBuf buf) {
-            int length = buf.readVarInt();
-            byte[] data = new byte[length];
-            buf.readBytes(data);
-            return new SectionHashRequestWrapper(data);
-        }
-    }
 
     public record BlockEntityRequestWrapper(byte[] data) {
         public void encode(FriendlyByteBuf buf) {
@@ -887,46 +863,6 @@ public class NeoForgeNetworkManager implements NetworkManager {
     }
 
     /**
-     * Section 哈希请求 Payload (C2S)
-     */
-    public record SectionHashRequestPayload(byte[] data) implements CustomPacketPayload {
-
-        public static final Type<SectionHashRequestPayload> TYPE = new Type<>(
-                ResourceLocationCompat.create(Constants.MOD_ID, "section_hash_request_c2s")
-        );
-
-        public static final StreamCodec<FriendlyByteBuf, SectionHashRequestPayload> STREAM_CODEC = StreamCodec.composite(
-                ByteBufCodecs.BYTE_ARRAY, SectionHashRequestPayload::data,
-                SectionHashRequestPayload::new
-        );
-
-        @Override
-        public Type<SectionHashRequestPayload> type() {
-            return TYPE;
-        }
-    }
-
-    /**
-     * Section Delta Payload (S2C)
-     */
-    public record SectionDeltaPayload(byte[] data) implements CustomPacketPayload {
-
-        public static final Type<SectionDeltaPayload> TYPE = new Type<>(
-                ResourceLocationCompat.create(Constants.MOD_ID, "section_delta_s2c")
-        );
-
-        public static final StreamCodec<FriendlyByteBuf, SectionDeltaPayload> STREAM_CODEC = StreamCodec.composite(
-                ByteBufCodecs.BYTE_ARRAY, SectionDeltaPayload::data,
-                SectionDeltaPayload::new
-        );
-
-        @Override
-        public Type<SectionDeltaPayload> type() {
-            return TYPE;
-        }
-    }
-
-    /**
      * BlockEntity 请求 Payload (C2S)
      */
     public record BlockEntityRequestPayload(byte[] data) implements CustomPacketPayload {
@@ -1030,8 +966,9 @@ public class NeoForgeNetworkManager implements NetworkManager {
 
     @Override
     public void registerChannels() {
-        if (!HassiumConfigService.getInstance().isNetworkCompressionEnabled()) {
-            LOGGER.warn("Hassium: master.enabled=false, skipping NeoForge channel registration");
+        if (!HassiumConfigService.getInstance().isNetworkCompressionEnabled()
+                && !HassiumConfigService.getInstance().isClientCacheEnabled()) {
+            LOGGER.warn("Hassium: master.enabled=false and chunk.enabled=false, skipping NeoForge channel registration");
             return;
         }
         LOGGER.debug("Hassium: NeoForge network channels will be registered via event");
@@ -1112,41 +1049,6 @@ public class NeoForgeNetworkManager implements NetworkManager {
                 },
                 java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT));
 
-        // 6: Section 哈希请求 C2S
-        CHANNEL.registerMessage(packetId++, SectionHashRequestWrapper.class,
-                SectionHashRequestWrapper::encode, SectionHashRequestWrapper::decode,
-                (msg, ctx) -> {
-                    ctx.get().enqueueWork(() -> {
-                        ServerPlayer player = ctx.get().getSender();
-                        if (player == null) return;
-                        try {
-                            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data()));
-                            SectionHashRequestC2SPacket request = SectionHashRequestC2SPacket.decode(buf);
-                            ServerChunkPushManager.getInstance().handleSectionHashRequest(player, request);
-                        } catch (Exception e) {
-                            LOGGER.error("[SERVER] Failed to handle section hash request", e);
-                        }
-                    });
-                    ctx.get().setPacketHandled(true);
-                },
-                java.util.Optional.of(NetworkDirection.PLAY_TO_SERVER));
-
-        // 7: Section Delta S2C
-        CHANNEL.registerMessage(packetId++, SectionDeltaWrapper.class,
-                SectionDeltaWrapper::encode, SectionDeltaWrapper::decode,
-                (msg, ctx) -> {
-                    ctx.get().enqueueWork(() -> {
-                        try {
-                            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data()));
-                            SectionDeltaS2CPacket packet = SectionDeltaS2CPacket.decode(buf);
-                            io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.submitDelta(packet);
-                        } catch (Exception e) {
-                            LOGGER.error("[CLIENT] Failed to handle section delta", e);
-                        }
-                    });
-                    ctx.get().setPacketHandled(true);
-                },
-                java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT));
 
         // 8: BlockEntity 请求 C2S
         CHANNEL.registerMessage(packetId++, BlockEntityRequestWrapper.class,
@@ -1441,8 +1343,9 @@ public class NeoForgeNetworkManager implements NetworkManager {
                 })
         );
 
-        if (!HassiumConfigService.getInstance().isNetworkCompressionEnabled()) {
-            LOGGER.warn("Hassium: network core disabled, skipping remaining NeoForge Payload registration");
+        if (!HassiumConfigService.getInstance().isNetworkCompressionEnabled()
+                && !HassiumConfigService.getInstance().isClientCacheEnabled()) {
+            LOGGER.warn("Hassium: network core and chunk cache disabled, skipping remaining NeoForge Payload registration");
             return;
         }
         LOGGER.debug("Hassium: Registering NeoForge Payload handlers");
@@ -1469,14 +1372,6 @@ public class NeoForgeNetworkManager implements NetworkManager {
         registrar.playToClient(ShadowPullResponsePayload.TYPE, ShadowPullResponsePayload.STREAM_CODEC,
                 NeoForgeNetworkManager::handleShadowPullResponse);
 
-        // 注册客户端缓存 Bloom 位图同步 (C2S)
-
-        // 注册 Section 哈希请求 (C2S)
-        registrar.playToServer(
-                SectionHashRequestPayload.TYPE,
-                SectionHashRequestPayload.STREAM_CODEC,
-                NeoForgeNetworkManager::handleSectionHashRequest
-        );
 
         // 注册 BlockEntity 请求 (C2S)
         registrar.playToServer(
@@ -1511,9 +1406,6 @@ public class NeoForgeNetworkManager implements NetworkManager {
         registrar.playToClient(SeedRefPayload.TYPE, SeedRefPayload.STREAM_CODEC,
                 NeoForgeNetworkManager::handleSeedRefS2C);
 
-        // SectionDelta S2C
-        registrar.playToClient(SectionDeltaPayload.TYPE, SectionDeltaPayload.STREAM_CODEC,
-                NeoForgeNetworkManager::handleSectionDeltaS2C);
 
         // BlockEntityData S2C
         registrar.playToClient(BlockEntityDataPayload.TYPE, BlockEntityDataPayload.STREAM_CODEC,
@@ -1673,19 +1565,6 @@ public class NeoForgeNetworkManager implements NetworkManager {
     }
 
 
-    private static void handleSectionHashRequest(SectionHashRequestPayload payload, IPayloadContext context) {
-        context.enqueueWork(() -> {
-            try {
-                if (context.player() instanceof ServerPlayer player) {
-                    FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(payload.data()));
-                    SectionHashRequestC2SPacket request = SectionHashRequestC2SPacket.decode(buf);
-                    ServerChunkPushManager.getInstance().handleSectionHashRequest(player, request);
-                }
-            } catch (Exception e) {
-                LOGGER.error("[SERVER] Failed to handle section hash request", e);
-            }
-        });
-    }
 
     private static void handleBlockEntityRequest(BlockEntityRequestPayload payload, IPayloadContext context) {
         context.enqueueWork(() -> {
@@ -1761,11 +1640,6 @@ public class NeoForgeNetworkManager implements NetworkManager {
         });
     }
 
-    private static void handleSectionDeltaS2C(SectionDeltaPayload payload, IPayloadContext context) {
-        // 与 SimpleChannel 注册块一致：submitDelta 自带线程封送，不再包 enqueueWork
-        io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.submitDelta(
-                SectionDeltaS2CPacket.decode(new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(payload.data()))));
-    }
 
     private static void handleBlockEntityDataS2C(BlockEntityDataPayload payload, IPayloadContext context) {
         context.enqueueWork(() -> {
@@ -1829,44 +1703,6 @@ public class NeoForgeNetworkManager implements NetworkManager {
 #endif
     }
 
-    @Override
-    public void sendSectionHashRequest(FriendlyByteBuf buf) {
-#if MC_VER < MC_1_21_1
-        if (net.minecraft.client.Minecraft.getInstance().getConnection() != null) {
-            byte[] data = new byte[buf.readableBytes()];
-            buf.readBytes(data);
-            buf.release();
-            CHANNEL.sendToServer(new SectionHashRequestWrapper(data));
-        } else {
-            buf.release();
-        }
-#else
-        if (net.minecraft.client.Minecraft.getInstance().getConnection() != null) {
-            byte[] data = new byte[buf.readableBytes()];
-            buf.readBytes(data);
-            buf.release();
-            SectionHashRequestPayload payload = new SectionHashRequestPayload(data);
-            net.minecraft.client.Minecraft.getInstance().getConnection().send(payload);
-            LOGGER.debug("Hassium: Sent section hash request");
-        } else {
-            buf.release();
-        }
-#endif
-    }
-
-    @Override
-    public void sendSectionDeltaPacket(ServerPlayer player, FriendlyByteBuf buf) {
-        byte[] data = new byte[buf.readableBytes()];
-        buf.readBytes(data);
-        buf.release();
-#if MC_VER < MC_1_21_1
-        CHANNEL.sendTo(new SectionDeltaWrapper(data), player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
-#else
-        SectionDeltaPayload payload = new SectionDeltaPayload(data);
-        sendServerPayload(player, payload);
-        LOGGER.debug("Hassium: Sent section delta packet to {}", player.getName().getString());
-#endif
-    }
 
     @Override
     public void sendBlockEntityRequest(FriendlyByteBuf buf) {

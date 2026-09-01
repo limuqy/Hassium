@@ -35,8 +35,8 @@ import net.minecraft.world.level.chunk.LevelChunk;
  *   <li>每 worker 一个独立 drain 循环（{@link #activeWorkers} 记账，补足到 seedGenThreads 个），
  *       并行生成（影子端 getChunkFuture 任意线程可调；队列原子取出防重复接管）</li>
  * </ul>
- * 生成失败/超时统一回退全量请求（{@link ClientMetadataHandler#fallbackToFullRequest}）；hash mismatch
- * 走分片增量（{@link ShadowLightCompute#requestSectionDeltas}，delta 链路失败内部兜底全量），正确性优先。
+ * 生成失败、无服务端许可或 hash mismatch 均走统一 {@link ClientMetadataHandler#fallbackToFullRequest}；
+ * 比对和分段增量由 ShadowPull 管理，正确性优先。
  */
 public final class SeedGenExecutor {
 

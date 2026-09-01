@@ -22,19 +22,6 @@ public class ForgeNetworkManagerService implements INetworkManagerService {
         NETWORK_MANAGER.sendSeedRef(player, buf);
     }
 
-    @Override
-    public void sendSectionHashRequest(FriendlyByteBuf buf) {
-        NETWORK_MANAGER.sendSectionHashRequest(buf);
-    }
-
-    @Override
-    public void sendSectionDeltaPacket(ServerPlayer player, FriendlyByteBuf buf) {
-        if (io.github.limuqy.mc.hassium.server.GatewayPlayerBridge.tryRouteS2C(
-                player, io.github.limuqy.mc.hassium.network.core.GatewayPacketCodec.HassiumSub.SECTION_DELTA.id(), buf)) {
-            return;
-        }
-        NETWORK_MANAGER.sendSectionDeltaPacket(player, buf);
-    }
 
     @Override
     public void sendBlockEntityRequest(FriendlyByteBuf buf) {

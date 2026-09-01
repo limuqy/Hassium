@@ -110,12 +110,6 @@ public class MixinClientTick {
             // 忽略
         }
 
-        // 分段增量请求超时回退全量（服务端始终回包，仅丢包/断连竞态兜底）
-        try {
-            io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.tickPendingDeltaTimeouts();
-        } catch (Exception e) {
-            // 忽略
-        }
 
         // 影子端缓存清理节流检查（容量/热度淘汰；超限时后台执行，不卡帧）
         try {

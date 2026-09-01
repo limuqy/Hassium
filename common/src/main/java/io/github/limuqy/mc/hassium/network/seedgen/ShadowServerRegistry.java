@@ -62,11 +62,9 @@ public final class ShadowServerRegistry {
     /** 关停是否仍在进行（写 gate 主状态；shutdown 开始置 false，saver 结束置 true）。 */
     private volatile boolean previousShutdownComplete = true;
 
-    private final AtomicLong speculativeWatchdogEpoch = new AtomicLong();
     private final AtomicLong idleEpoch = new AtomicLong();
     /** park 代际：unpark / 新 park 递增，使在途 park 线程的 clearHot 失效。 */
     private final AtomicLong parkEpoch = new AtomicLong();
-    private volatile ScheduledFuture<?> speculativeWatchdogFuture;
     private volatile ScheduledFuture<?> idleTimeoutFuture;
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread t = new Thread(r, "hassium-shadow-lifecycle");
@@ -319,34 +317,6 @@ public final class ShadowServerRegistry {
         }
     }
 
-    /**
-     * 投机创建看门狗：超时仍无 Hassium 握手 → 关停刚拉起的影子（原版服）。
-     * 握手到达或实例已关则 noop。
-     */
-    public void armSpeculativeHandshakeWatchdog(long timeoutMs) {
-        long epoch = speculativeWatchdogEpoch.incrementAndGet();
-        ScheduledFuture<?> prev = speculativeWatchdogFuture;
-        if (prev != null) {
-            prev.cancel(false);
-        }
-        speculativeWatchdogFuture = scheduler.schedule(() -> {
-            if (epoch != speculativeWatchdogEpoch.get()) {
-                return;
-            }
-            if (ClientChunkPipeline.getInstance().isHassiumHandshakeDone()) {
-                return;
-            }
-            if (server == null) {
-                return;
-            }
-            if (ShadowLightCompute.shouldShutdownSpeculativeShadow(
-                    false, timeoutMs, timeoutMs)) {
-                DebugLogger.info(DebugLogger.LogType.ASYNC,
-                        "[SHADOW] Speculative shadow shutdown (no handshake in {}ms)", timeoutMs);
-                shutdown();
-            }
-        }, Math.max(1L, timeoutMs), TimeUnit.MILLISECONDS);
-    }
 
     /**
      * 断连保活：在调用线程刷脏落盘，再清热表、不 halt、不放 session.lock。
@@ -355,7 +325,6 @@ public final class ShadowServerRegistry {
      * {@link #shutdown()}。
      */
     public void parkForReuse() {
-        cancelSpeculativeWatchdog();
         final ShadowSeedServer s;
         final long epoch;
         synchronized (lock) {
@@ -415,27 +384,12 @@ public final class ShadowServerRegistry {
         }
     }
 
-    private void cancelSpeculativeWatchdog() {
-        speculativeWatchdogEpoch.incrementAndGet();
-        ScheduledFuture<?> f = speculativeWatchdogFuture;
-        if (f != null) {
-            f.cancel(false);
-            speculativeWatchdogFuture = null;
-        }
-    }
-
-    /** 握手到达：取消投机看门狗（公开给 ClientChunkPipeline）。 */
-    public void cancelSpeculativeWatchdogPublic() {
-        cancelSpeculativeWatchdog();
-    }
 
     /**
      * 断连清理（幂等；重连后允许重建）。保存全链（saveAll → halt → chunkMap.close）
      * 提交后台守护线程执行——登出/断连不卡主线程。
      */
     public void shutdown() {
-        cancelSpeculativeWatchdog();
-        cancelIdleTimeout();
         final ShadowSeedServer s;
         final java.util.concurrent.CompletableFuture<Void> previous;
         synchronized (lock) {

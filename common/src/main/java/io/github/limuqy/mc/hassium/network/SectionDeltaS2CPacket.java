@@ -14,18 +14,14 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * 服务端 -> 客户端：分段增量响应（阶段二）
+ * ShadowPull {@code DELTA} 终态的内嵌分段增量 payload。
  * <p>
- * 服务端比对客户端的 section 哈希 + 平面综合征后，发送变更 section（整段 FULL 或
- * 方块列表 BLOCKS）和全部 blockEntity 数据。客户端组装：缓存的 sections + 新数据 + 实体。
+ * 服务端比较客户端随 {@link ShadowPullRequestC2SPacket} 提交的 section hash 与平面综合征后，
+ * 编码变更 section（整段 FULL 或方块列表 BLOCKS）以及 block entity 数据。客户端在影子基线
+ * 上组装；规划不可用或超出范围时，外层 ShadowPull 改返回权威 FULL。
  * <p>
- * {@code skipped}：本请求中因超视距等原因未处理的区块；客户端应立即回退全量。
- * 服务端对每次 SectionHashRequest 都会回包（entries/skipped 可空），避免客户端悬等。
- * <p>
- * 由客户端 {@code chunk.sectionDeltaEnabled} 门控：开启时 MISMATCH 走分段增量，关闭时全量。
- * <p>
- * 独立 ZSTD 压缩：entries+skipped payload 经 ZSTD 压缩后发送（黑名单排除全局 Pipeline 压缩，
- * 避免双重压缩）。压缩比 < 1 时自动回退未压缩。
+ * {@code chunk.sectionDeltaEnabled} 开启时才会产生该终态。entries+skipped 仍独立 ZSTD 压缩，
+ * 压缩比 < 1 时自动保留未压缩编码。
  */
 public record SectionDeltaS2CPacket(
         String dimension,

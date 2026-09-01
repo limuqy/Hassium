@@ -32,19 +32,6 @@ public class NeoForgeNetworkManagerService implements INetworkManagerService {
         networkManager.sendSeedRef(player, buf);
     }
 
-    @Override
-    public void sendSectionHashRequest(FriendlyByteBuf buf) {
-        networkManager.sendSectionHashRequest(buf);
-    }
-
-    @Override
-    public void sendSectionDeltaPacket(ServerPlayer player, FriendlyByteBuf buf) {
-        if (io.github.limuqy.mc.hassium.server.GatewayPlayerBridge.tryRouteS2C(
-                player, io.github.limuqy.mc.hassium.network.core.GatewayPacketCodec.HassiumSub.SECTION_DELTA.id(), buf)) {
-            return;
-        }
-        networkManager.sendSectionDeltaPacket(player, buf);
-    }
 
     @Override
     public void sendBlockEntityRequest(FriendlyByteBuf buf) {

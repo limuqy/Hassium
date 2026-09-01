@@ -44,8 +44,6 @@ public final class FabricPayloadRegistry {
             type("aggregation");
     public static final CustomPacketPayload.Type<RawPayload> SEED_REF_S2C_TYPE =
             type("seed_ref_s2c");
-    public static final CustomPacketPayload.Type<RawPayload> SECTION_DELTA_S2C_TYPE =
-            type("section_delta_s2c");
     public static final CustomPacketPayload.Type<RawPayload> BLOCK_ENTITY_DATA_S2C_TYPE =
             type("block_entity_data_s2c");
     public static final CustomPacketPayload.Type<RawPayload> LIGHT_DELTA_S2C_TYPE =
@@ -63,8 +61,6 @@ public final class FabricPayloadRegistry {
             type("handshake_c2s");
     public static final CustomPacketPayload.Type<RawPayload> COMPRESSION_READY_C2S_TYPE =
             type("compression_ready_c2s");
-    public static final CustomPacketPayload.Type<RawPayload> SECTION_HASH_REQUEST_C2S_TYPE =
-            type("section_hash_request_c2s");
     public static final CustomPacketPayload.Type<RawPayload> BLOCK_ENTITY_REQUEST_C2S_TYPE =
             type("block_entity_request_c2s");
     public static final CustomPacketPayload.Type<RawPayload> SHADOW_PULL_REQUEST_C2S_TYPE =
@@ -148,14 +144,12 @@ public final class FabricPayloadRegistry {
         PayloadTypeRegistry.playS2C().register(INDEX_SYNC_S2C_TYPE, codec(INDEX_SYNC_S2C_TYPE));
         PayloadTypeRegistry.playS2C().register(AGGREGATION_S2C_TYPE, codec(AGGREGATION_S2C_TYPE));
         PayloadTypeRegistry.playS2C().register(SEED_REF_S2C_TYPE, codec(SEED_REF_S2C_TYPE));
-        PayloadTypeRegistry.playS2C().register(SECTION_DELTA_S2C_TYPE, codec(SECTION_DELTA_S2C_TYPE));
         PayloadTypeRegistry.playS2C().register(BLOCK_ENTITY_DATA_S2C_TYPE, codec(BLOCK_ENTITY_DATA_S2C_TYPE));
         PayloadTypeRegistry.playS2C().register(LIGHT_DELTA_S2C_TYPE, codec(LIGHT_DELTA_S2C_TYPE));
         PayloadTypeRegistry.playS2C().register(SHADOW_PULL_RESPONSE_S2C_TYPE, codec(SHADOW_PULL_RESPONSE_S2C_TYPE));
 
         PayloadTypeRegistry.playC2S().register(HANDSHAKE_C2S_TYPE, codec(HANDSHAKE_C2S_TYPE));
         PayloadTypeRegistry.playC2S().register(COMPRESSION_READY_C2S_TYPE, codec(COMPRESSION_READY_C2S_TYPE));
-        PayloadTypeRegistry.playC2S().register(SECTION_HASH_REQUEST_C2S_TYPE, codec(SECTION_HASH_REQUEST_C2S_TYPE));
         PayloadTypeRegistry.playC2S().register(BLOCK_ENTITY_REQUEST_C2S_TYPE, codec(BLOCK_ENTITY_REQUEST_C2S_TYPE));
         PayloadTypeRegistry.playC2S().register(SHADOW_PULL_REQUEST_C2S_TYPE, codec(SHADOW_PULL_REQUEST_C2S_TYPE));
         // 预握手（login/配置阶段声明能力）：configuration 阶段 C2S payload

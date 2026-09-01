@@ -13,29 +13,30 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 class SectionDeltaProtocolTest {
 
     @Test
-    @DisplayName("SectionHashRequest：非 0 hash 后跟 48×u32 平面")
-    void sectionHashRequestRoundTripsPlanes() {
+    @DisplayName("ShadowPull：非 0 section hash 后跟 48×u32 平面")
+    void shadowPullRequestRoundTripsPlanes() {
         int[] planes = new int[SectionPlaneSyndrome.PLANE_COUNT];
         for (int i = 0; i < planes.length; i++) {
             planes[i] = 0x1000 + i;
         }
         long[] hashes = {0L, 0xABCDEFL, 0L};
         int[][] planeTable = {null, planes, null};
-        SectionHashRequestC2SPacket original = new SectionHashRequestC2SPacket(
-                "minecraft:overworld",
-                List.of(new SectionHashRequestC2SPacket.Entry(3, -4, hashes, planeTable)));
+        ShadowPullRequestC2SPacket original = new ShadowPullRequestC2SPacket(
+                "minecraft:overworld", 0L, 1L,
+                List.of(new ShadowPullRequestC2SPacket.Entry(3, -4, 0x1234L,
+                        List.of(hashes[0], hashes[1], hashes[2]), planeTable, 0)));
 
         FriendlyByteBuf buffer = new FriendlyByteBuf(Unpooled.buffer());
         try {
             original.encode(buffer);
-            SectionHashRequestC2SPacket decoded = SectionHashRequestC2SPacket.decode(buffer);
+            ShadowPullRequestC2SPacket decoded = ShadowPullRequestC2SPacket.decode(buffer);
             assertEquals(original.dimension(), decoded.dimension());
-            SectionHashRequestC2SPacket.Entry entry = decoded.entries().get(0);
+            ShadowPullRequestC2SPacket.Entry entry = decoded.entries().get(0);
             assertEquals(3, entry.chunkX());
             assertEquals(-4, entry.chunkZ());
-            assertArrayEquals(hashes, entry.sectionHashes());
-            assertArrayEquals(planes, entry.planes(1));
-            assertEquals(null, entry.planes(0));
+            assertEquals(List.of(0L, 0xABCDEFL, 0L), entry.sectionHashes());
+            assertArrayEquals(planes, entry.planes()[1]);
+            assertEquals(null, entry.planes()[0]);
         } finally {
             buffer.release();
         }
