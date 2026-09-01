@@ -32,6 +32,11 @@ public class NeoForgeNetworkManagerService implements INetworkManagerService {
         networkManager.sendSeedRef(player, buf);
     }
 
+    @Override
+    public void sendClientHandshake(io.github.limuqy.mc.hassium.network.ClientHandshakeRequest request) {
+        networkManager.sendClientHandshake(request);
+    }
+
 
     @Override
     public void sendBlockEntityRequest(FriendlyByteBuf buf) {

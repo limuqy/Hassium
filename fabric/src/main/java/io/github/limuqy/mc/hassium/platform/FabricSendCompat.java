@@ -52,6 +52,9 @@ public final class FabricSendCompat {
         if (channel.equals(HassiumChannels.SHADOW_PULL_REQUEST_C2S)) {
             return FabricPayloadRegistry.toPayload(FabricPayloadRegistry.SHADOW_PULL_REQUEST_C2S_TYPE, buf);
         }
+        if (channel.equals(HassiumChannels.HANDSHAKE_C2S)) {
+            return FabricPayloadRegistry.toPayload(FabricPayloadRegistry.HANDSHAKE_C2S_TYPE, buf);
+        }
         throw new IllegalArgumentException("Unknown Hassium C2S channel: " + channel);
     }
 

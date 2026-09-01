@@ -47,5 +47,11 @@ public interface INetworkManagerService {
      * 发送 SeedRef 到客户端（SeedGen：pristine 区块引用替代区块数据；服务端调用）
      */
     void sendSeedRef(ServerPlayer player, FriendlyByteBuf buf);
+    /**
+     * 发送客户端握手请求到服务端（无网关拓扑：Play 阶段进入后由
+     * {@code ClientHandshakeSender} 一次性调用；网关拓扑下不发送）。
+     */
+    default void sendClientHandshake(io.github.limuqy.mc.hassium.network.ClientHandshakeRequest request) {
+    }
 
 }

@@ -24,6 +24,35 @@ public class FabricNetworkManagerService implements INetworkManagerService {
         }
     }
 
+    @Override
+    public void sendClientHandshake(io.github.limuqy.mc.hassium.network.ClientHandshakeRequest request) {
+        FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
+        try {
+            buf.writeVarInt(request.protocolVersion());
+            buf.writeUtf(request.modVersion());
+            buf.writeVarInt(request.supportedAlgorithms().length);
+            for (String algo : request.supportedAlgorithms()) {
+                buf.writeUtf(algo);
+            }
+            buf.writeBoolean(request.clientCacheSupported());
+            buf.writeBoolean(request.chunkRevisionSupported());
+            buf.writeBoolean(request.scheme127Supported());
+            buf.writeBoolean(request.globalPacketCompressionSupported());
+            buf.writeBoolean(request.compactHeaderSupported());
+            io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail.writeC2S(
+                    buf, request.dataplaneCapabilities());
+            buf.writeDouble(request.posX());
+            buf.writeDouble(request.posZ());
+            buf.writeBoolean(request.seedGenSupported());
+            buf.writeBoolean(request.lightComputeSupported());
+            FabricSendCompat.sendToServer(HassiumChannels.HANDSHAKE_C2S, buf);
+        } catch (Throwable t) {
+            if (buf.refCnt() > 0) {
+                buf.release();
+            }
+        }
+    }
+
 
     @Override
     public void sendSeedRef(ServerPlayer player, FriendlyByteBuf buf) {

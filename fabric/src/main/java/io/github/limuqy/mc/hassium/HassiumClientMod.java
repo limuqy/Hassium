@@ -134,7 +134,110 @@ public class HassiumClientMod implements ClientModInitializer {
                     }
                 });
 #endif
+        // SEED_REF_S2C 客户端 receiver：无网关拓扑下 SeedRef（pristine 区块引用）直收 → 本地生成。
+#if MC_VER < MC_1_21_1
+        ClientPlayNetworking.registerGlobalReceiver(io.github.limuqy.mc.hassium.network.FabricNetworkManager.SEED_REF_S2C,
+                (client, handler, buf, responseSender) -> {
+                    byte[] data = new byte[buf.readableBytes()];
+                    buf.readBytes(data);
+                    client.execute(() -> {
+                        net.minecraft.network.FriendlyByteBuf seedRefBuf = new net.minecraft.network.FriendlyByteBuf(
+                                io.netty.buffer.Unpooled.wrappedBuffer(data));
+                        try {
+                            io.github.limuqy.mc.hassium.network.ClientMetadataHandler.handleSeedRefPacket(
+                                    io.github.limuqy.mc.hassium.network.SeedRefS2CPacket.decode(seedRefBuf));
+                        } finally {
+                            seedRefBuf.release();
+                        }
+                    });
+                });
+#else
+        ClientPlayNetworking.registerGlobalReceiver(io.github.limuqy.mc.hassium.network.FabricPayloadRegistry.SEED_REF_S2C_TYPE,
+                (payload, context) -> {
+                    net.minecraft.network.FriendlyByteBuf seedRefBuf =
+                            io.github.limuqy.mc.hassium.network.FabricPayloadRegistry.fromPayload(payload);
+                    try {
+                        io.github.limuqy.mc.hassium.network.ClientMetadataHandler.handleSeedRefPacket(
+                                io.github.limuqy.mc.hassium.network.SeedRefS2CPacket.decode(seedRefBuf));
+                    } finally {
+                        seedRefBuf.release();
+                    }
+                });
+#endif
+        // HANDSHAKE_S2C 客户端 receiver：无网关拓扑下握手响应直收（SeedGen 种子/LevelStem 尾 + UDP 数据面尾）。
+#if MC_VER < MC_1_21_1
+        ClientPlayNetworking.registerGlobalReceiver(io.github.limuqy.mc.hassium.network.FabricNetworkManager.HANDSHAKE_S2C,
+                (client, handler, buf, responseSender) -> {
+                    byte[] data = new byte[buf.readableBytes()];
+                    buf.readBytes(data);
+                    client.execute(() -> handleHandshakeS2C(data));
+                });
+#else
+        ClientPlayNetworking.registerGlobalReceiver(io.github.limuqy.mc.hassium.network.FabricPayloadRegistry.HANDSHAKE_S2C_TYPE,
+                (payload, context) -> {
+                    net.minecraft.network.FriendlyByteBuf buf =
+                            io.github.limuqy.mc.hassium.network.FabricPayloadRegistry.fromPayload(payload);
+                    byte[] data = new byte[buf.readableBytes()];
+                    buf.readBytes(data);
+                    buf.release();
+                    context.client().execute(() -> handleHandshakeS2C(data));
+                });
+#endif
 
         LOGGER.info("Hassium: Fabric client-side initialization complete");
+    }
+    /** 无网关拓扑：解码服务端握手响应（与 Forge handleHandshakeS2C 同语义；尾段 append-only）。 */
+    private static void handleHandshakeS2C(byte[] data) {
+        net.minecraft.network.FriendlyByteBuf buf = new net.minecraft.network.FriendlyByteBuf(
+                io.netty.buffer.Unpooled.wrappedBuffer(data));
+        try {
+            int protocolVersion = buf.readVarInt();
+            boolean accepted = buf.readBoolean();
+            boolean globalCompression = buf.readBoolean();
+            boolean compactHeader = buf.readBoolean();
+            LOGGER.info("Hassium: Client handshake response: accepted={}, globalCompression={}, compactHeader={}",
+                    accepted, globalCompression, compactHeader);
+            if (!accepted) {
+                return;
+            }
+            // UDP 数据面尾（control-only 服务器同样下发；客户端未启用数据面时 hasUdpDataplane=false）
+            io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail.S2CTail tail =
+                    io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail.readS2C(buf);
+            if (tail.hasUdpDataplane()) {
+                var mc = net.minecraft.client.Minecraft.getInstance();
+                if (mc.player != null) {
+                    java.util.UUID pid = mc.player.getUUID();
+                    long epoch = tail.connectionEpoch();
+                    mc.execute(() -> {
+                        try {
+                            io.github.limuqy.mc.hassium.network.dataplane.DataPlaneClientLifecycle
+                                    .getInstance().startUdp(pid, epoch, tail);
+                        } catch (Throwable t) {
+                            LOGGER.warn("Hassium: UDP dataplane start failed", t);
+                        }
+                    });
+                }
+            }
+            // SeedGen 尾（worldSeed + LevelStem NBT + enabled）
+            long worldSeed = buf.readLong();
+            long stemLen = buf.readVarInt();
+            byte[] stemNbt = null;
+            if (stemLen > 0 && stemLen <= buf.readableBytes()) {
+                stemNbt = new byte[(int) stemLen];
+                buf.readBytes(stemNbt);
+            }
+            boolean seedGenEnabled = buf.readableBytes() >= 1 && buf.readBoolean();
+            io.github.limuqy.mc.hassium.network.ClientChunkPipeline.getInstance()
+                    .setServerSeedInfo(worldSeed, stemNbt, seedGenEnabled);
+            // 续流尾（append-only；未请求时为 false）
+            boolean resumeAccepted = buf.readableBytes() >= 1 && buf.readBoolean();
+            if (resumeAccepted) {
+                LOGGER.info("Hassium: [RESUME] Server accepted resume — 续流就绪");
+            }
+        } catch (Throwable e) {
+            LOGGER.debug("Hassium: failed to decode handshake tail (legacy server?)", e);
+        } finally {
+            buf.release();
+        }
     }
 }

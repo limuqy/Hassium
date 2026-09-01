@@ -40,6 +40,12 @@ public class MixinClientTick {
         } catch (Exception e) {
             // 冒烟失败不阻断正常 tick
         }
+        // 无网关拓扑：进服后一次性发客户端握手（SeedGen 种子/LevelStem、剥光协商、位置上报）
+        try {
+            io.github.limuqy.mc.hassium.network.ClientHandshakeSender.tick(Minecraft.getInstance());
+        } catch (Exception ignored) {
+            // 握手失败不阻断正常 tick（服务端旧版无 HANDSHAKE 接收时自然忽略）
+        }
 
         // 1.20.1 Forge revert 窗口内 pauseEncoding 只挡新的 ChunkSerializer。
         // 无世界时跳过 drain/OVD；窗口 TAIL 已 resume，标题画面仍可 tickStorageFlush。
@@ -78,6 +84,13 @@ public class MixinClientTick {
             }
         } catch (Exception e) {
             // 忽略
+        }
+
+        // Compare+Pull 在途拦截超时回退：响应未到则用已收网络数据注入（防区块黑洞）
+        try {
+            io.github.limuqy.mc.hassium.network.ShadowPullClient.expirePending();
+        } catch (Exception e) {
+            // 超时回退失败不阻断 tick
         }
 
         // （ready / pending / 在途光）时预留一半给 drainReady，避免 dispatcher 先把

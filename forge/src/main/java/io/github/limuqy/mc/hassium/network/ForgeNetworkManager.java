@@ -895,6 +895,29 @@ public class ForgeNetworkManager implements NetworkManager {
 #endif
     }
 
+    /** 无网关拓扑：客户端握手请求（构造 HandshakePacket 发送；字段与 common 参数一致）。 */
+    public static void sendClientHandshake(io.github.limuqy.mc.hassium.network.ClientHandshakeRequest request) {
+        byte[] dataplaneTail;
+        {
+            FriendlyByteBuf tb = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
+            io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail.writeC2S(tb, request.dataplaneCapabilities());
+            dataplaneTail = new byte[tb.readableBytes()];
+            tb.readBytes(dataplaneTail);
+            tb.release();
+        }
+        HandshakePacket packet = new HandshakePacket(
+                request.protocolVersion(), request.modVersion(), request.supportedAlgorithms(),
+                request.clientCacheSupported(), request.chunkRevisionSupported(), request.scheme127Supported(),
+                request.globalPacketCompressionSupported(), request.compactHeaderSupported(),
+                dataplaneTail, request.posX(), request.posZ(),
+                request.seedGenSupported(), request.lightComputeSupported(), null);
+#if MC_VER < MC_1_21_1
+        CHANNEL.sendToServer(packet);
+#else
+        sendToServer(packet);
+#endif
+    }
+
 
     @Override
     public void sendBlockEntityRequest(FriendlyByteBuf buf) {

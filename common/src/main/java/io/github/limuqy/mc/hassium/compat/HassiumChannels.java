@@ -22,6 +22,7 @@ public final class HassiumChannels {
     public static final PacketId SHADOW_PULL_REQUEST_C2S = new PacketId(Constants.MOD_ID, "shadow_pull_request_c2s");
 
     public static final PacketId SHADOW_PULL_RESPONSE_S2C = new PacketId(Constants.MOD_ID, "shadow_pull_response_s2c");
+    public static final PacketId HANDSHAKE_C2S = new PacketId(Constants.MOD_ID, "handshake_c2s");
 
 
     public static final PacketId COMPRESSION_READY_C2S = new PacketId(Constants.MOD_ID, "compression_ready_c2s");

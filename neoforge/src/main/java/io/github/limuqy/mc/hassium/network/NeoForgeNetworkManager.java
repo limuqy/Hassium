@@ -1676,16 +1676,20 @@ public class NeoForgeNetworkManager implements NetworkManager {
     }
 #endif
 
-
-
     /** 平台 bootstrap 发送口；旧 NeoForge 必须经协商后的 SimpleChannel。 */
     public void sendGatewayInfo(ServerPlayer player, byte[] data) {
 #if MC_VER < MC_1_21_1
         CHANNEL.sendTo(new GatewayInfoWrapper(data), player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
 #else
-        sendServerPayload(player, io.github.limuqy.mc.hassium.compat.PacketPayloadCompat.createClientboundPayload(
-                io.github.limuqy.mc.hassium.compat.PacketId.parse(
-                        io.github.limuqy.mc.hassium.network.HassiumPacketIds.GATEWAY_INFO_S2C), data));
+        net.minecraft.network.protocol.Packet<?> packet =
+                io.github.limuqy.mc.hassium.compat.PacketPayloadCompat.createClientboundPayload(
+                        io.github.limuqy.mc.hassium.compat.PacketId.parse(
+                                io.github.limuqy.mc.hassium.network.HassiumPacketIds.GATEWAY_INFO_S2C), data);
+        net.minecraft.server.MinecraftServer server =
+                io.github.limuqy.mc.hassium.compat.PlayerCompat.getMinecraftServer(player);
+        if (server != null) {
+            server.execute(() -> player.connection.send(packet));
+        }
 #endif
     }
 
@@ -1700,6 +1704,29 @@ public class NeoForgeNetworkManager implements NetworkManager {
         SeedRefPayload payload = new SeedRefPayload(data);
         sendServerPayload(player, payload);
         LOGGER.debug("Hassium: Sent seed ref to {}", player.getName().getString());
+#endif
+    }
+
+    /** 无网关拓扑：客户端握手请求（构造 HandshakeWrapper/HandshakePayload 发送；字段与 common 参数一致）。 */
+    public void sendClientHandshake(io.github.limuqy.mc.hassium.network.ClientHandshakeRequest request) {
+#if MC_VER < MC_1_21_1
+        CHANNEL.sendToServer(new HandshakeWrapper(
+                request.protocolVersion(), request.modVersion(), request.supportedAlgorithms(),
+                request.clientCacheSupported(), request.chunkRevisionSupported(), request.scheme127Supported(),
+                request.globalPacketCompressionSupported(), request.compactHeaderSupported(),
+                request.dataplaneCapabilities(), request.posX(), request.posZ(),
+                request.seedGenSupported(), request.lightComputeSupported(), null));
+#else
+        HandshakePayload payload = new HandshakePayload(
+                request.protocolVersion(), request.modVersion(), request.supportedAlgorithms(),
+                request.clientCacheSupported(), request.chunkRevisionSupported(), request.scheme127Supported(),
+                request.globalPacketCompressionSupported(), request.compactHeaderSupported(),
+                request.dataplaneCapabilities(), request.posX(), request.posZ(),
+                request.seedGenSupported(), request.lightComputeSupported(), null);
+        var connection = net.minecraft.client.Minecraft.getInstance().getConnection();
+        if (connection != null) {
+            connection.send(payload);
+        }
 #endif
     }
 

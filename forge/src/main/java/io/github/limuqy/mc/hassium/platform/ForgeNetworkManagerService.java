@@ -22,6 +22,11 @@ public class ForgeNetworkManagerService implements INetworkManagerService {
         NETWORK_MANAGER.sendSeedRef(player, buf);
     }
 
+    @Override
+    public void sendClientHandshake(io.github.limuqy.mc.hassium.network.ClientHandshakeRequest request) {
+        ForgeNetworkManager.sendClientHandshake(request);
+    }
+
 
     @Override
     public void sendBlockEntityRequest(FriendlyByteBuf buf) {
