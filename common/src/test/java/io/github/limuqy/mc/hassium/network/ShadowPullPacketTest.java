@@ -14,10 +14,18 @@ class ShadowPullPacketTest {
     @Test
     @DisplayName("shadowPullV1 round-trips bounded mixed results")
     void roundTripsMixedResults() {
+        int[] plane0 = new int[io.github.limuqy.mc.hassium.network.sectiondelta.SectionPlaneSyndrome.PLANE_COUNT];
+        plane0[0] = 1;
+        plane0[1] = 2;
+        plane0[2] = 3;
+        int[] plane1 = new int[io.github.limuqy.mc.hassium.network.sectiondelta.SectionPlaneSyndrome.PLANE_COUNT];
+        plane1[0] = 4;
+        plane1[1] = 5;
+        plane1[2] = 6;
         ShadowPullRequestC2SPacket request = new ShadowPullRequestC2SPacket(
                 "minecraft:overworld", 3L, 7L,
                 List.of(new ShadowPullRequestC2SPacket.Entry(1, -2, 11L, List.of(12L, 13L),
-                        new int[][] {new int[] {1, 2, 3}, new int[] {4, 5, 6}}, 4)));
+                        new int[][] {plane0, plane1}, 4)));
         FriendlyByteBuf requestBuf = new FriendlyByteBuf(Unpooled.buffer());
         request.encode(requestBuf);
         ShadowPullRequestC2SPacket decodedRequest = ShadowPullRequestC2SPacket.decode(requestBuf);
@@ -31,8 +39,8 @@ class ShadowPullPacketTest {
         assertEquals(11L, decodedEntry.chunkHash());
         assertEquals(List.of(12L, 13L), decodedEntry.sectionHashes());
         assertEquals(4, decodedEntry.lightGeneration());
-        assertArrayEquals(new int[] {1, 2, 3}, decodedEntry.planes()[0]);
-        assertArrayEquals(new int[] {4, 5, 6}, decodedEntry.planes()[1]);
+        assertArrayEquals(plane0, decodedEntry.planes()[0]);
+        assertArrayEquals(plane1, decodedEntry.planes()[1]);
 
         ShadowPullResponseS2CPacket response = new ShadowPullResponseS2CPacket(
                 "minecraft:overworld", 3L, 7L,

@@ -230,7 +230,7 @@ class ConfigRestructureRoundTripTest {
         assertEquals(16, values.get(ConfigSchema.CHUNK_MAX_RENDER_DISTANCE));
         assertEquals(6000, values.get(ConfigSchema.CHUNK_CLEANUP_INTERVAL_TICKS));
         assertEquals(0.3, values.get(ConfigSchema.CHUNK_HOT_SCORE_THRESHOLD));
-        // 黑名单 9 项
-        assertEquals(9, values.get(ConfigSchema.MASTER_COMPRESSION_BLACKLIST).size());
+        // 黑名单 8 项（旧 SECTION_DELTA_S2C 随独立 SectionHash 通道删除而移除）
+        assertEquals(8, values.get(ConfigSchema.MASTER_COMPRESSION_BLACKLIST).size());
     }
 }

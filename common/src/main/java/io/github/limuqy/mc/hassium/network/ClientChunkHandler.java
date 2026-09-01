@@ -237,6 +237,12 @@ public class ClientChunkHandler {
                     if (shouldFastApplyForLoadingScreen(pos)) {
                         MainThreadDispatcher.execute(() -> applyLoadingScreenBlocksOnly(packet), pos);
                     }
+                    if (io.github.limuqy.mc.hassium.network.ShadowPullClient.tryInterceptForCompare(
+                            dimension, pos, () -> io.github.limuqy.mc.hassium.network.seedgen.ShadowVanillaLightPipeline
+                                    .submitVisible(dimension, pos, packet,
+                                            traceOriginIfLoggingEnabled(TraceOrigin.SERVER_PUSH)))) {
+                        return;
+                    }
                     io.github.limuqy.mc.hassium.network.seedgen.ShadowVanillaLightPipeline
                             .submitVisible(dimension, pos, packet, traceOriginIfLoggingEnabled(TraceOrigin.SERVER_PUSH));
                     return;
@@ -285,6 +291,12 @@ public class ClientChunkHandler {
                 ChunkPos pos = new ChunkPos(compressed.chunkX, compressed.chunkZ);
                 String dimension = io.github.limuqy.mc.hassium.network.seedgen.ShadowVanillaLightPipeline
                         .currentDimension();
+                if (io.github.limuqy.mc.hassium.network.ShadowPullClient.tryInterceptForCompare(
+                        dimension, pos, () -> io.github.limuqy.mc.hassium.network.seedgen.ShadowVanillaLightPipeline
+                                .submitVisible(dimension, pos, packet,
+                                        traceOriginIfLoggingEnabled(TraceOrigin.SERVER_PUSH)))) {
+                    return;
+                }
                 io.github.limuqy.mc.hassium.network.seedgen.ShadowVanillaLightPipeline
                         .submitVisible(dimension, pos, packet, traceOriginIfLoggingEnabled(TraceOrigin.SERVER_PUSH));
                 return;
@@ -311,9 +323,16 @@ public class ClientChunkHandler {
                 net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket packet =
                         decodeChunkPacket(data);
                 if (packet != null) {
+                    String dimension = io.github.limuqy.mc.hassium.network.seedgen.ShadowVanillaLightPipeline
+                            .currentDimension();
+                    if (io.github.limuqy.mc.hassium.network.ShadowPullClient.tryInterceptForCompare(
+                            dimension, pos, () -> io.github.limuqy.mc.hassium.network.seedgen.ShadowVanillaLightPipeline
+                                    .submitVisible(dimension, pos, packet,
+                                            traceOriginIfLoggingEnabled(TraceOrigin.SERVER_PUSH)))) {
+                        return;
+                    }
                     io.github.limuqy.mc.hassium.network.seedgen.ShadowVanillaLightPipeline.submitVisible(
-                            io.github.limuqy.mc.hassium.network.seedgen.ShadowVanillaLightPipeline.currentDimension(),
-                            pos, packet, traceOriginIfLoggingEnabled(TraceOrigin.SERVER_PUSH));
+                            dimension, pos, packet, traceOriginIfLoggingEnabled(TraceOrigin.SERVER_PUSH));
                     return;
                 }
             }

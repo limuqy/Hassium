@@ -81,9 +81,16 @@ public final class GatewayS2CRouter implements Consumer<Packet<?>> {
             io.github.limuqy.mc.hassium.metrics.NetworkStats.recordChunkReceived(
                     io.github.limuqy.mc.hassium.metrics.VanillaZlibEstimator.estimate(
                             (int) io.github.limuqy.mc.hassium.metrics.NetworkStats.ESTIMATED_CHUNK_BYTES));
+            String dimension = io.github.limuqy.mc.hassium.network.seedgen.ShadowVanillaLightPipeline
+                    .currentDimension();
+            if (io.github.limuqy.mc.hassium.network.ShadowPullClient.tryInterceptForCompare(
+                    dimension, pos, () -> io.github.limuqy.mc.hassium.network.seedgen.ShadowVanillaLightPipeline
+                            .submitVisible(dimension, pos, packet,
+                                    io.github.limuqy.mc.hassium.network.ClientChunkHandler.TraceOrigin.SERVER_PUSH))) {
+                return;
+            }
             io.github.limuqy.mc.hassium.network.seedgen.ShadowVanillaLightPipeline.submitVisible(
-                    io.github.limuqy.mc.hassium.network.seedgen.ShadowVanillaLightPipeline.currentDimension(),
-                    pos, packet,
+                    dimension, pos, packet,
                     io.github.limuqy.mc.hassium.network.ClientChunkHandler.TraceOrigin.SERVER_PUSH);
             return;
         }

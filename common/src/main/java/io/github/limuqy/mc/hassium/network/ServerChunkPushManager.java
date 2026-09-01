@@ -156,9 +156,12 @@ public class ServerChunkPushManager {
             for (long hash : sectionHashArray) {
                 sectionHashList.add(hash);
             }
+            // 命中判定：客户端基线（chunkHash 或非空 sectionHashes）与服务端权威一致即 UNCHANGED。
+            // chunkHash = combine(sectionHashes)（确定性，空 section 不计），二者等价；
+            // 客户端重连后影子端重建会清 hash 表（chunkHash=0），此时非空 sectionHashes 全一致仍判命中。
             boolean hashMatch = entry.chunkHash() != 0L && entry.chunkHash() == chunkHash;
-            boolean sectionsMatch = entry.sectionHashes().isEmpty() || entry.sectionHashes().equals(sectionHashList);
-            if (hashMatch && sectionsMatch) {
+            boolean sectionsMatch = !entry.sectionHashes().isEmpty() && entry.sectionHashes().equals(sectionHashList);
+            if (hashMatch || sectionsMatch) {
                 return ShadowPullResponseS2CPacket.Result.unchanged(entry.chunkX(), entry.chunkZ(),
                         chunkHash, sectionHashList);
             }

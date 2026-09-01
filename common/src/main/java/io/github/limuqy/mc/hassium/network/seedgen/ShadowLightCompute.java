@@ -2102,6 +2102,7 @@ public final class ShadowLightCompute {
         shadowApplyEpochs.clear();
         fullApplyTraces.clear();
         consumeRunning.set(false);
+        io.github.limuqy.mc.hassium.network.ShadowPullClient.reset();
     }
 
     /**
