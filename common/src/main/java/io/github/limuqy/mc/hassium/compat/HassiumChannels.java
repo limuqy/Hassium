@@ -33,4 +33,10 @@ public final class HassiumChannels {
 
 
     public static final PacketId SEED_REF_S2C = new PacketId(Constants.MOD_ID, "seed_ref_s2c");
+
+    /** Play 期激活（登录协商结果 + SeedGen 种子；S2C）。 */
+    public static final PacketId PLAY_INIT_S2C = new PacketId(Constants.MOD_ID, "play_init_s2c");
+
+    /** 包索引同步（紧凑包头两级 VarInt 命名空间索引；S2C）。 */
+    public static final PacketId INDEX_SYNC_S2C = new PacketId(Constants.MOD_ID, "index_sync_s2c");
 }

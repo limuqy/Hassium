@@ -99,13 +99,6 @@ public class MixinClientPacketListener {
         ClientLifecycleHelper.cleanupOnDisconnect();
     }
 #endif
-#if MC_VER < MC_1_21_1
-    // ===== M1 bootstrap：gateway_info 接收（仅 1.20.1：handleCustomPayload 仍在 game 包 ClientPacketListener） =====
-    @Inject(method = "handleCustomPayload", at = @At("HEAD"), cancellable = true)
-    private void hassium$onCustomPayload(net.minecraft.network.protocol.game.ClientboundCustomPayloadPacket packet, CallbackInfo ci) {
-        io.github.limuqy.mc.hassium.network.ClientGatewayBootstrap.handleCustomPayload(packet, ci);
-    }
-#endif
 
 
     // ===== 方块更新转发（T2）：HEAD 注入 3 类方块包 handler，不 cancel、不解析、纯转发 =====

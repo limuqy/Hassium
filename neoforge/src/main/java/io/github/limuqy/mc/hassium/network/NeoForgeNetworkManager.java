@@ -25,12 +25,13 @@ import net.neoforged.neoforge.network.event.RegisterPayloadHandlersEvent;
 import net.neoforged.neoforge.network.handling.IPayloadContext;
 #endif
 
-import java.lang.reflect.Field;
 import java.util.UUID;
 import io.github.limuqy.mc.hassium.network.HassiumConnectionRegistry;
 import io.github.limuqy.mc.hassium.network.HassiumAggregationManager;
-import io.github.limuqy.mc.hassium.network.ZstdNegotiationTracker;
-import io.netty.channel.Channel;
+import io.github.limuqy.mc.hassium.network.handshake.LoginHandshake;
+import io.github.limuqy.mc.hassium.network.handshake.PlayInitClient;
+import io.github.limuqy.mc.hassium.network.handshake.ServerHandshakeActivation;
+import io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute;
 
 /**
  * NeoForge 平台网络管理器实现。
@@ -48,21 +49,7 @@ public class NeoForgeNetworkManager implements NetworkManager {
     private static final String PROTOCOL_VERSION = "1";
     private static final ShadowPullHandler SHADOW_PULL_HANDLER =
             new ShadowPullHandler(new ShadowPullRequestLedger());
-    // review-fix: T11-15 握手算法列表上限（防恶意 varint 超大分配 / NegativeArraySizeException）
-    private static final int MAX_HANDSHAKE_ALGORITHMS = 64;
 
-    // review-fix: T10-M2（同 REPORT T11-M2）：共享调度器，防每次握手新建单线程调度执行器泄漏线程；JVM 关闭钩子回收
-    private static final java.util.concurrent.ScheduledExecutorService PENDING_TIMEOUT_SCHEDULER =
-            java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
-                Thread t = new Thread(r, "Hassium-PendingTimeout");
-                t.setDaemon(true);
-                return t;
-            });
-
-    static {
-        Runtime.getRuntime().addShutdownHook(
-                new Thread(PENDING_TIMEOUT_SCHEDULER::shutdownNow, "Hassium-PendingTimeoutShutdown"));
-    }
 
     // 缓存服务器实例
     private static volatile net.minecraft.server.MinecraftServer cachedServer;
@@ -75,142 +62,10 @@ public class NeoForgeNetworkManager implements NetworkManager {
     }
 
     /**
-     * 通过反射获取 Connection 的 channel 字段（委托 common 类型匹配实现，SRG/intermediary 安全）
-     */
-    private static io.netty.channel.Channel getConnectionChannel(net.minecraft.network.Connection connection) {
-        return ZstdPipelineSwitcher.getConnectionChannel(connection);
-    }
-
-    /**
      * 通过反射获取 ServerPlayer 的 Connection
      */
     private static net.minecraft.network.Connection getPlayerConnection(ServerPlayer player) {
         return io.github.limuqy.mc.hassium.compat.PlayerCompat.getConnection(player);
-    }
-
-    /**
-     * 客户端收到 HandshakeResponse(globalCompression=true) 后安装 ZSTD 管线。
-     * 管线未就绪时由 {@link ZstdPipelineSwitcher#switchToZstdWhenReady} 短间隔重试。
-     */
-    private static void tryInstallClientZstdPipeline() {
-        var mc = net.minecraft.client.Minecraft.getInstance();
-        var conn = mc.getConnection();
-        if (conn == null) {
-            LOGGER.warn("Hassium: Cannot install client ZSTD pipeline — no connection");
-            return;
-        }
-        Channel channel = getConnectionChannel(conn.getConnection());
-        if (channel == null) {
-            LOGGER.warn("Hassium: Cannot install client ZSTD pipeline — no channel");
-            return;
-        }
-        int level = HassiumConfigService.getInstance().getGlobalCompressionLevel();
-        int threshold = HassiumConfigService.getInstance().getGlobalCompressionThreshold();
-        // 安装成功后再 markNegotiated + ACK：服务端仍发未压缩帧，双方可安全对齐
-        ZstdPipelineSwitcher.switchToZstdWhenReady(channel, threshold, level, () -> {
-            ZstdNegotiationTracker.markNegotiated(channel);
-            // 对齐 forge：装 ZSTD 后暂停出站压缩（只发明文帧），服务端装好
-            // ZSTD 并发 IndexSync 后恢复——防客户端压缩大包（bloom manifest 等）
-            // 在服务端就绪前到达被 zlib 解炸（1.21.11 fabric R2 已复现）
-            ZstdPipelineSwitcher.pauseOutboundCompression(channel);
-            sendCompressionReadyToServer();
-            LOGGER.info("Hassium: Client ZSTD pipeline installed, sent ready ACK (outbound paused)");
-        });
-    }
-
-    /**
-     * 服务端在收到客户端 ZSTD ready ACK 后安装管线并同步 Dict/Index/chunkHash。
-     */
-    private static void installServerZstdAfterClientReady(ServerPlayer player, Connection connection, Channel channel) {
-        int level = HassiumConfigService.getInstance().getGlobalCompressionLevel();
-        int threshold = HassiumConfigService.getInstance().getGlobalCompressionThreshold();
-        ZstdPipelineSwitcher.switchToZstdWhenReady(channel, threshold, level, () -> {
-            ZstdNegotiationTracker.markNegotiated(channel);
-            sendDictionarySyncPacket(player);
-            sendIndexSyncPacket(player);
-            if (connection != null) {
-                HassiumConnectionRegistry.markPending(connection);
-                HassiumAggregationManager.init();
-                schedulePendingTimeout(connection, player.getName().getString());
-            }
-            LOGGER.info("Hassium: Server ZSTD pipeline installed for {}", player.getName().getString());
-        });
-    }
-
-    /**
-     * 从当前已绑定 listener 与当前 TCP master 构造 append-only 数据面握手尾部。
-     * 控制恢复与 UDP bind 独立协商，因此即使 UDP 未绑定也为 control-only 会话分配 epoch。
-     */
-    private static io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail.S2CTail
-    createDataPlaneHandshakeTail(
-            ServerPlayer player,
-            boolean accepted,
-            io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail.C2STail clientCapabilities) {
-        if (!accepted) {
-            return io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail.S2CTail.disabled();
-        }
-        io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail.C2STail capabilities =
-                clientCapabilities == null
-                        ? new io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail.C2STail(false, false)
-                        : clientCapabilities;
-        try {
-            Connection master = getPlayerConnection(player);
-            if (master == null) {
-                throw new IllegalStateException("missing player connection");
-            }
-            long epoch = io.github.limuqy.mc.hassium.network.dataplane.DataPlaneUdpServer.beginControlConnection(
-                    player.getUUID(), () -> master.disconnect(net.minecraft.network.chat.Component.empty()));
-            boolean udpBound = io.github.limuqy.mc.hassium.network.dataplane.DataPlaneUdpServer.isBound();
-            return io.github.limuqy.mc.hassium.network.dataplane.DataPlaneHandshakeAdvertisement.create(
-                    io.github.limuqy.mc.hassium.network.dataplane.DataPlaneUdpServer.advertisedControlEndpoints(),
-                    io.github.limuqy.mc.hassium.network.dataplane.DataPlaneUdpServer.boundEndpoints(),
-                    // D-M1: per-player per-epoch bind token（epoch 变更即轮换；旧 token 直接失效）
-                    udpBound
-                            ? io.github.limuqy.mc.hassium.network.dataplane.DataPlaneUdpServer.getBindToken(
-                                    player.getUUID(), epoch)
-                            : null,
-                    epoch,
-                    capabilities.udpDataplaneSupported() && udpBound,
-                    capabilities.controlFailoverSupported());
-        } catch (RuntimeException ex) {
-            LOGGER.warn("Hassium: Failed to append dataplane tail for {}", player.getName().getString(), ex);
-            return io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail.S2CTail.disabled();
-        }
-    }
-
-    /** 在各 NeoForge payload context 的主线程执行；非法 tail 绝不作为部分 UDP 配置继续使用。 */
-    private static void startUdpFromHandshakeTail(byte[] rawTail) {
-        if (rawTail == null || rawTail.length == 0) {
-            return;
-        }
-        final io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail.S2CTail tail;
-        try {
-            tail = io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail.readS2C(
-                    io.netty.buffer.Unpooled.wrappedBuffer(rawTail));
-        } catch (IllegalArgumentException ex) {
-            LOGGER.warn("Hassium: Invalid dataplane tail in handshake response", ex);
-            return;
-        }
-        LOGGER.info("Hassium: Client dataplane handshake tail: udp={}, controlFailover={}, groups={}, playerReady={}",
-                tail.hasUdpDataplane(), tail.hasControlFailover(), tail.udpListenerGroups().size(),
-                net.minecraft.client.Minecraft.getInstance().player != null);
-        // T6：客户端 failover 已退役——不再灌 advertised control 候选 / 不再确认真实恢复，
-        // 仅保留 UDP 数据面启动（网关 outbound 传输层）。
-        var player = net.minecraft.client.Minecraft.getInstance().player;
-        if (player == null) {
-            io.github.limuqy.mc.hassium.network.dataplane.DataPlaneClientLifecycle.getInstance().deferUdpStart(tail);
-            LOGGER.debug("Hassium: Deferred UDP dataplane start until client player exists");
-            return;
-        }
-        try {
-            io.github.limuqy.mc.hassium.network.dataplane.DataPlaneClientLifecycle.getInstance()
-                    .startUdp(player.getUUID(), tail.connectionEpoch(), tail);
-        } catch (RuntimeException ex) {
-            LOGGER.warn("Hassium: UDP dataplane start failed", ex);
-        }
-        catch (LinkageError ex) {
-            LOGGER.warn("Hassium: UDP dataplane linkage failed; keeping primary transport", ex);
-        }
     }
 
 #if MC_VER < MC_1_21_1
@@ -308,17 +163,18 @@ public class NeoForgeNetworkManager implements NetworkManager {
         }
     }
 
-    /** 1.20.1 网关 bootstrap；必须经 SimpleChannel 进入 NeoForge 频道协商。 */
-    public record GatewayInfoWrapper(byte[] data) {
+
+    /** Play 期激活 S2C（登录协商结果 + SeedGen 种子；common LoginHandshake.PlayInitPayload 线格式）。 */
+    public record PlayInitWrapper(byte[] data) {
         public void encode(FriendlyByteBuf buf) {
             buf.writeVarInt(data.length);
             buf.writeBytes(data);
         }
-        public static GatewayInfoWrapper decode(FriendlyByteBuf buf) {
+        public static PlayInitWrapper decode(FriendlyByteBuf buf) {
             int length = buf.readVarInt();
             byte[] data = new byte[length];
             buf.readBytes(data);
-            return new GatewayInfoWrapper(data);
+            return new PlayInitWrapper(data);
         }
     }
 
@@ -360,441 +216,8 @@ public class NeoForgeNetworkManager implements NetworkManager {
         }
     }
 
-    public record HandshakeWrapper(
-            int protocolVersion,
-            String modVersion,
-            String[] supportedAlgorithms,
-            boolean clientCacheSupported,
-            boolean chunkRevisionSupported,
-            boolean scheme127Supported,
-            boolean globalPacketCompressionSupported,
-            boolean compactHeaderSupported,
-            io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail.C2STail dataplaneCapabilities,
-            double playerX,
-            double playerZ,
-            boolean seedGenSupported,
-            boolean lightComputeSupported,
-            HandshakeStateTail.C2S stateTail
-    ) {
-        public HandshakeWrapper(int protocolVersion, String modVersion, String[] supportedAlgorithms,
-                                boolean clientCacheSupported, boolean chunkRevisionSupported,
-                                boolean scheme127Supported, boolean globalPacketCompressionSupported,
-                                boolean compactHeaderSupported) {
-            this(protocolVersion, modVersion, supportedAlgorithms, clientCacheSupported, chunkRevisionSupported,
-                    scheme127Supported, globalPacketCompressionSupported, compactHeaderSupported,
-                    new io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail.C2STail(false, false),
-                    0.0, 0.0, false, false, null);
-        }
-
-        public void encode(FriendlyByteBuf buf) {
-            buf.writeVarInt(protocolVersion);
-            buf.writeUtf(modVersion);
-            buf.writeVarInt(supportedAlgorithms.length);
-            for (String algo : supportedAlgorithms) {
-                buf.writeUtf(algo);
-            }
-            buf.writeBoolean(clientCacheSupported);
-            buf.writeBoolean(chunkRevisionSupported);
-            buf.writeBoolean(scheme127Supported);
-            buf.writeBoolean(globalPacketCompressionSupported);
-            buf.writeBoolean(compactHeaderSupported);
-            io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail.writeC2S(buf, dataplaneCapabilities);
-            buf.writeDouble(playerX);
-            buf.writeDouble(playerZ);
-            buf.writeBoolean(seedGenSupported);
-            buf.writeBoolean(lightComputeSupported);
-            // T7 状态尾部（append-only；旧服务端忽略尾字节）
-            if (stateTail != null) {
-                HandshakeStateTail.writeC2S(buf, stateTail);
-            }
-        }
-
-        public static HandshakeWrapper decode(FriendlyByteBuf buf) {
-            int protocolVersion = buf.readVarInt();
-            String modVersion = buf.readUtf();
-            // review-fix: T11-15 上限校验（防恶意 varint OOM/NegativeArraySizeException）
-            int algoCount = buf.readVarInt();
-            if (algoCount < 0 || algoCount > MAX_HANDSHAKE_ALGORITHMS) {
-                throw new IllegalArgumentException("Handshake algorithm count out of range: " + algoCount);
-            }
-            String[] algorithms = new String[algoCount];
-            for (int i = 0; i < algoCount; i++) {
-                algorithms[i] = buf.readUtf();
-            }
-            boolean clientCache = buf.readBoolean();
-            boolean chunkRevision = buf.readBoolean();
-            boolean scheme127 = buf.readBoolean();
-            boolean globalPacketCompression = buf.readBoolean();
-            boolean compactHeader = buf.readBoolean();
-            io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail.C2STail tail =
-                    io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail.readC2S(buf);
-            // 坐标在握手尾部（append-only；旧客户端无此字段）
-            double playerX = 0.0;
-            double playerZ = 0.0;
-            if (buf.isReadable()) {
-                try {
-                    playerX = buf.readDouble();
-                    playerZ = buf.readDouble();
-                } catch (Exception ignored) {
-                }
-            }
-            // SeedGen 能力（append-only；旧客户端无此字段）
-            boolean seedGenSupported = false;
-            if (buf.isReadable()) {
-                try {
-                    seedGenSupported = buf.readBoolean();
-                } catch (Exception ignored) {
-                }
-            }
-            // 光照计算能力（append-only；旧客户端无此字段 → false = 不剥光）
-            boolean lightComputeSupported = false;
-            if (buf.isReadable()) {
-                try {
-                    lightComputeSupported = buf.readBoolean();
-                } catch (Exception ignored) {
-                }
-            }
-            // T7 状态尾部（append-only；旧客户端无此字段 → null）
-            HandshakeStateTail.C2S stateTail = null;
-            if (buf.isReadable()) {
-                stateTail = HandshakeStateTail.readC2S(buf);
-            }
-            return new HandshakeWrapper(protocolVersion, modVersion, algorithms, clientCache, chunkRevision,
-                    scheme127, globalPacketCompression, compactHeader, tail, playerX, playerZ, seedGenSupported,
-                    lightComputeSupported, stateTail);
-        }
-    }
-
-    public record HandshakeResponseWrapper(
-            int protocolVersion,
-            boolean accepted,
-            boolean globalCompressionAccepted,
-            boolean compactHeaderAccepted,
-            byte[] dataplaneTail,
-            long worldSeed,
-            byte[] seedGenTail,
-            boolean seedGenEnabled,
-            boolean newFormat,
-            boolean resumeAccepted
-    ) {
-        public HandshakeResponseWrapper {
-            dataplaneTail = dataplaneTail == null ? new byte[0] : dataplaneTail.clone();
-            seedGenTail = seedGenTail == null ? new byte[0] : seedGenTail.clone();
-        }
-
-        public HandshakeResponseWrapper(int protocolVersion, boolean accepted,
-                                        boolean globalCompressionAccepted, boolean compactHeaderAccepted) {
-            this(protocolVersion, accepted, globalCompressionAccepted, compactHeaderAccepted, new byte[0],
-                    0L, new byte[0], false, false, false);
-        }
-
-        public void encode(FriendlyByteBuf buf) {
-            buf.writeVarInt(protocolVersion);
-            buf.writeBoolean(accepted);
-            buf.writeBoolean(globalCompressionAccepted);
-            buf.writeBoolean(compactHeaderAccepted);
-            if (newFormat) {
-                // 新格式（仅当客户端 C2S 上报 seedGenSupported=true 时使用）：
-                // varint tailLen + tail + worldSeed + varint seedLen + seed + enabled + resumeAccepted
-                buf.writeVarInt(dataplaneTail.length);
-                buf.writeBytes(dataplaneTail);
-                buf.writeLong(worldSeed);
-                buf.writeVarInt(seedGenTail.length);
-                buf.writeBytes(seedGenTail);
-                buf.writeBoolean(seedGenEnabled);
-                // T7 续流就绪标记（append-only；旧客户端忽略尾字节）
-                buf.writeBoolean(resumeAccepted);
-            } else {
-                // 旧格式：tail 无长度前缀（旧客户端读剩余全部）
-                buf.writeBytes(dataplaneTail);
-            }
-        }
-
-        public static HandshakeResponseWrapper decode(FriendlyByteBuf buf) {
-            int protocolVersion = buf.readVarInt();
-            boolean accepted = buf.readBoolean();
-            boolean globalCompressionAccepted = buf.readBoolean();
-            boolean compactHeaderAccepted = buf.readBoolean();
-            byte[] dataplaneTail;
-            long worldSeed = 0L;
-            byte[] seedGenTail = new byte[0];
-            boolean seedGenEnabled = false;
-            // 本客户端上报 true 时服务端保证用新格式；解析失败/旧服务端 → 回退旧格式
-            if (io.github.limuqy.mc.hassium.config.HassiumConfigService.getInstance().isClientSeedGenEnabled()) {
-                try {
-                    int tailLen = buf.readVarInt();
-                    if (tailLen >= 0 && tailLen <= buf.readableBytes()) {
-                        dataplaneTail = new byte[tailLen];
-                        buf.readBytes(dataplaneTail);
-                        worldSeed = buf.readLong();
-                        int seedLen = buf.readVarInt();
-                        if (seedLen > 0 && seedLen <= buf.readableBytes()) {
-                            seedGenTail = new byte[seedLen];
-                            buf.readBytes(seedGenTail);
-                        }
-                        if (buf.readableBytes() >= 1) {
-                            seedGenEnabled = buf.readBoolean();
-                        }
-                    } else {
-                        dataplaneTail = new byte[buf.readableBytes()];
-                        buf.readBytes(dataplaneTail);
-                    }
-                } catch (Exception e) {
-                    dataplaneTail = new byte[buf.readableBytes()];
-                    buf.readBytes(dataplaneTail);
-                }
-            } else {
-                dataplaneTail = new byte[buf.readableBytes()];
-                buf.readBytes(dataplaneTail);
-            }
-            // T7 续流就绪标记（append-only；旧服务端无此字段 → false）
-            boolean resumeAccepted = false;
-            if (buf.isReadable()) {
-                try {
-                    resumeAccepted = buf.readBoolean();
-                } catch (Exception ignored) {
-                }
-            }
-            return new HandshakeResponseWrapper(protocolVersion, accepted, globalCompressionAccepted,
-                    compactHeaderAccepted, dataplaneTail, worldSeed, seedGenTail, seedGenEnabled, true,
-                    resumeAccepted);
-        }
-    }
-
 #else
     // 1.21.1+: 使用 Payload + StreamCodec
-
-    /**
-     * 握手请求 Payload (C2S)
-     */
-    public record HandshakePayload(
-            int protocolVersion,
-            String modVersion,
-            String[] supportedAlgorithms,
-            boolean clientCacheSupported,
-            boolean chunkRevisionSupported,
-            boolean scheme127Supported,
-            boolean globalPacketCompressionSupported,
-            boolean compactHeaderSupported,
-            io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail.C2STail dataplaneCapabilities,
-            double playerX,
-            double playerZ,
-            boolean seedGenSupported,
-            boolean lightComputeSupported,
-            HandshakeStateTail.C2S stateTail
-    ) implements CustomPacketPayload {
-
-        public static final Type<HandshakePayload> TYPE = new Type<>(
-                ResourceLocationCompat.create(Constants.MOD_ID, "handshake_c2s")
-        );
-
-        // StreamCodec.composite 最多 6 字段；握手有附加 capability tail，使用手写编解码。
-        public static final StreamCodec<FriendlyByteBuf, HandshakePayload> STREAM_CODEC = StreamCodec.of(
-                (buf, p) -> {
-                    buf.writeVarInt(p.protocolVersion());
-                    buf.writeUtf(p.modVersion());
-                    buf.writeVarInt(p.supportedAlgorithms().length);
-                    for (String alg : p.supportedAlgorithms()) {
-                        buf.writeUtf(alg);
-                    }
-                    buf.writeBoolean(p.clientCacheSupported());
-                    buf.writeBoolean(p.chunkRevisionSupported());
-                    buf.writeBoolean(p.scheme127Supported());
-                    buf.writeBoolean(p.globalPacketCompressionSupported());
-                    buf.writeBoolean(p.compactHeaderSupported());
-                    io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail.writeC2S(
-                            buf, p.dataplaneCapabilities());
-                    buf.writeDouble(p.playerX());
-                    buf.writeDouble(p.playerZ());
-                    buf.writeBoolean(p.seedGenSupported());
-                    buf.writeBoolean(p.lightComputeSupported());
-                    // T7 状态尾部（append-only；旧服务端忽略尾字节）
-                    if (p.stateTail() != null) {
-                        HandshakeStateTail.writeC2S(buf, p.stateTail());
-                    }
-                },
-                buf -> {
-                    int protocolVersion = buf.readVarInt();
-                    String modVersion = buf.readUtf();
-                    // review-fix: T11-15 上限校验（防恶意 varint OOM/NegativeArraySizeException）
-                    int algCount = buf.readVarInt();
-                    if (algCount < 0 || algCount > MAX_HANDSHAKE_ALGORITHMS) {
-                        throw new IllegalArgumentException("Handshake algorithm count out of range: " + algCount);
-                    }
-                    String[] algorithms = new String[algCount];
-                    for (int i = 0; i < algCount; i++) {
-                        algorithms[i] = buf.readUtf();
-                    }
-                    boolean clientCache = buf.readBoolean();
-                    boolean chunkRevision = buf.readBoolean();
-                    boolean scheme127 = buf.readBoolean();
-                    boolean globalCompression = buf.readBoolean();
-                    boolean compactHeader = buf.readBoolean();
-                    io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail.C2STail tail =
-                            io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail.readC2S(buf);
-                    // 坐标在握手尾部（append-only；旧客户端无此字段）
-                    double playerX = 0.0;
-                    double playerZ = 0.0;
-                    if (buf.isReadable()) {
-                        try {
-                            playerX = buf.readDouble();
-                            playerZ = buf.readDouble();
-                        } catch (Exception ignored) {
-                        }
-                    }
-                    // SeedGen 能力（append-only；旧客户端无此字段）
-                    boolean seedGenSupported = false;
-                    if (buf.isReadable()) {
-                        try {
-                            seedGenSupported = buf.readBoolean();
-                        } catch (Exception ignored) {
-                        }
-                    }
-                    // 光照计算能力（append-only；旧客户端无此字段 → false = 不剥光）
-                    boolean lightComputeSupported = false;
-                    if (buf.isReadable()) {
-                        try {
-                            lightComputeSupported = buf.readBoolean();
-                        } catch (Exception ignored) {
-                        }
-                    }
-                    // T7 状态尾部（append-only；旧客户端无此字段 → null）
-                    HandshakeStateTail.C2S stateTail = null;
-                    if (buf.isReadable()) {
-                        stateTail = HandshakeStateTail.readC2S(buf);
-                    }
-                    return new HandshakePayload(protocolVersion, modVersion, algorithms, clientCache, chunkRevision,
-                            scheme127, globalCompression, compactHeader, tail, playerX, playerZ, seedGenSupported,
-                            lightComputeSupported, stateTail);
-                }
-        );
-
-        public HandshakePayload(int protocolVersion, String modVersion, String[] supportedAlgorithms,
-                                boolean clientCacheSupported, boolean chunkRevisionSupported,
-                                boolean scheme127Supported, boolean globalPacketCompressionSupported,
-                                boolean compactHeaderSupported) {
-            this(protocolVersion, modVersion, supportedAlgorithms, clientCacheSupported, chunkRevisionSupported,
-                    scheme127Supported, globalPacketCompressionSupported, compactHeaderSupported,
-                    new io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail.C2STail(false, false),
-                    0.0, 0.0, false, false, null);
-        }
-
-        @Override
-        public Type<HandshakePayload> type() {
-            return TYPE;
-        }
-    }
-
-    /**
-     * 握手响应 Payload (S2C)
-     */
-    public record HandshakeResponsePayload(
-            int protocolVersion,
-            boolean accepted,
-            boolean globalCompressionAccepted,
-            boolean compactHeaderAccepted,
-            byte[] dataplaneTail,
-            long worldSeed,
-            byte[] seedGenTail,
-            boolean seedGenEnabled,
-            boolean newFormat,
-            boolean resumeAccepted
-    ) implements CustomPacketPayload {
-
-        public static final Type<HandshakeResponsePayload> TYPE = new Type<>(
-                ResourceLocationCompat.create(Constants.MOD_ID, "handshake_s2c")
-        );
-
-        public static final StreamCodec<FriendlyByteBuf, HandshakeResponsePayload> STREAM_CODEC = StreamCodec.of(
-                (buf, p) -> {
-                    buf.writeVarInt(p.protocolVersion());
-                    buf.writeBoolean(p.accepted());
-                    buf.writeBoolean(p.globalCompressionAccepted());
-                    buf.writeBoolean(p.compactHeaderAccepted());
-                    if (p.newFormat()) {
-                        buf.writeVarInt(p.dataplaneTail().length);
-                        buf.writeBytes(p.dataplaneTail());
-                        buf.writeLong(p.worldSeed());
-                        buf.writeVarInt(p.seedGenTail().length);
-                        buf.writeBytes(p.seedGenTail());
-                        buf.writeBoolean(p.seedGenEnabled());
-                        // T7 续流就绪标记（append-only；旧客户端忽略尾字节）
-                        buf.writeBoolean(p.resumeAccepted());
-                    } else {
-                        buf.writeBytes(p.dataplaneTail());
-                    }
-                },
-                buf -> {
-                    int protocolVersion = buf.readVarInt();
-                    boolean accepted = buf.readBoolean();
-                    boolean globalCompressionAccepted = buf.readBoolean();
-                    boolean compactHeaderAccepted = buf.readBoolean();
-                    byte[] dataplaneTail;
-                    long worldSeed = 0L;
-                    byte[] seedGenTail = new byte[0];
-                    boolean seedGenEnabled = false;
-                    if (io.github.limuqy.mc.hassium.config.HassiumConfigService.getInstance().isClientSeedGenEnabled()) {
-                        try {
-                            int tailLen = buf.readVarInt();
-                            if (tailLen >= 0 && tailLen <= buf.readableBytes()) {
-                                dataplaneTail = new byte[tailLen];
-                                buf.readBytes(dataplaneTail);
-                                worldSeed = buf.readLong();
-                                int seedLen = buf.readVarInt();
-                                if (seedLen > 0 && seedLen <= buf.readableBytes()) {
-                                    seedGenTail = new byte[seedLen];
-                                    buf.readBytes(seedGenTail);
-                                }
-                                if (buf.readableBytes() >= 1) {
-                                    seedGenEnabled = buf.readBoolean();
-                                }
-                            } else {
-                                dataplaneTail = new byte[buf.readableBytes()];
-                                buf.readBytes(dataplaneTail);
-                            }
-                        } catch (Exception e) {
-                            dataplaneTail = new byte[buf.readableBytes()];
-                            buf.readBytes(dataplaneTail);
-                        }
-                    } else {
-                        dataplaneTail = new byte[buf.readableBytes()];
-                        buf.readBytes(dataplaneTail);
-                    }
-                    // T7 续流就绪标记（append-only；旧服务端无此字段 → false）
-                    boolean resumeAccepted = false;
-                    if (buf.readableBytes() >= 1) {
-                        try {
-                            resumeAccepted = buf.readBoolean();
-                        } catch (Exception ignored) {
-                        }
-                    }
-                    return new HandshakeResponsePayload(protocolVersion, accepted, globalCompressionAccepted,
-                            compactHeaderAccepted, dataplaneTail, worldSeed, seedGenTail, seedGenEnabled, true,
-                            resumeAccepted);
-                }
-        );
-
-        public HandshakeResponsePayload {
-            dataplaneTail = dataplaneTail == null ? new byte[0] : dataplaneTail.clone();
-            seedGenTail = seedGenTail == null ? new byte[0] : seedGenTail.clone();
-        }
-
-        public HandshakeResponsePayload(int protocolVersion, boolean accepted,
-                                        boolean globalCompressionAccepted, boolean compactHeaderAccepted) {
-            this(protocolVersion, accepted, globalCompressionAccepted, compactHeaderAccepted, new byte[0],
-                    0L, new byte[0], false, false, false);
-        }
-
-        @Override
-        public byte[] dataplaneTail() {
-            return dataplaneTail.clone();
-        }
-
-        @Override
-        public Type<HandshakeResponsePayload> type() {
-            return TYPE;
-        }
-    }
 
     /**
      * 压缩区块数据 Payload (S2C)
@@ -960,6 +383,31 @@ public class NeoForgeNetworkManager implements NetworkManager {
         }
     }
 
+    /**
+     * Play 期激活 Payload (S2C)：登录协商结果 + SeedGen 种子
+     * （线格式 = common {@link LoginHandshake.PlayInitPayload}）。
+     */
+    public record PlayInitNeoPayload(int negotiatedCaps, long worldSeed, byte[] stemNbt,
+                                     boolean seedGenEnabled) implements CustomPacketPayload {
+        public static final Type<PlayInitNeoPayload> TYPE =
+                new Type<>(ResourceLocationCompat.vanilla(HassiumChannels.PLAY_INIT_S2C));
+
+        public static final StreamCodec<FriendlyByteBuf, PlayInitNeoPayload> STREAM_CODEC = StreamCodec.of(
+                (buf, p) -> new LoginHandshake.PlayInitPayload(
+                        p.negotiatedCaps(), p.worldSeed(), p.stemNbt(), p.seedGenEnabled()).encode(buf),
+                buf -> {
+                    LoginHandshake.PlayInitPayload payload = LoginHandshake.PlayInitPayload.decode(buf);
+                    return new PlayInitNeoPayload(payload.negotiatedCaps(), payload.worldSeed(),
+                            payload.stemNbt(), payload.seedGenEnabled());
+                }
+        );
+
+        @Override
+        public Type<PlayInitNeoPayload> type() {
+            return TYPE;
+        }
+    }
+
 #endif
 
     // ========== 注册方法 ==========
@@ -992,28 +440,6 @@ public class NeoForgeNetworkManager implements NetworkManager {
         // 必须 setPacketHandled(true)，否则会把包交给原版 → Unknown custom packet identifier: hassium:main
         // S2C / C2S 必须带方向枚举，避免方向校验失败
         // 注意：Forge 1.20.1 的 consumer 参数是 Supplier<Context>
-
-        // 0: 握手请求 C2S
-        CHANNEL.registerMessage(packetId++, HandshakeWrapper.class,
-                HandshakeWrapper::encode, HandshakeWrapper::decode,
-                (msg, ctx) -> {
-                    ctx.get().enqueueWork(() -> {
-                        ServerPlayer player = ctx.get().getSender();
-                        if (player == null) return;
-                        handleHandshakeSimple(player, msg);
-                    });
-                    ctx.get().setPacketHandled(true);
-                },
-                java.util.Optional.of(NetworkDirection.PLAY_TO_SERVER));
-
-        // 1: 握手响应 S2C
-        CHANNEL.registerMessage(packetId++, HandshakeResponseWrapper.class,
-                HandshakeResponseWrapper::encode, HandshakeResponseWrapper::decode,
-                (msg, ctx) -> {
-                    ctx.get().enqueueWork(() -> handleHandshakeResponseSimple(msg));
-                    ctx.get().setPacketHandled(true);
-                },
-                java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT));
 
         // 2: 压缩区块 S2C
         CHANNEL.registerMessage(packetId++, CompressedChunkWrapper.class,
@@ -1086,11 +512,17 @@ public class NeoForgeNetworkManager implements NetworkManager {
                 },
                 java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT));
 
-        // 10: 光照增量更新 S2C
+        // 10: 光照增量更新 S2C（直连拓扑：网关帧链路已裁剪，客户端影子端经 vanilla 通道消费）
         CHANNEL.registerMessage(packetId++, LightDeltaWrapper.class,
                 LightDeltaWrapper::encode, LightDeltaWrapper::decode,
                 (msg, ctx) -> {
-                    // 方案 A：客户端不消费 LightDelta，no-op
+                    try {
+                        LightDeltaS2CPacket packet = LightDeltaS2CPacket.decode(
+                                new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data())));
+                        ShadowLightCompute.submitLightDelta(packet);
+                    } catch (Exception e) {
+                        LOGGER.error("[CLIENT] Failed to handle light delta", e);
+                    }
                     ctx.get().setPacketHandled(true);
                 },
                 java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT));
@@ -1113,14 +545,14 @@ public class NeoForgeNetworkManager implements NetworkManager {
                 },
                 java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT));
 
-        // 13: CompressionReady C2S
+        // 13: CompressionReady C2S（直连拓扑：转调 common 激活链，时序与 Play 期一致）
         CHANNEL.registerMessage(packetId++, CompressionReadyWrapper.class,
                 CompressionReadyWrapper::encode, CompressionReadyWrapper::decode,
                 (msg, ctx) -> {
                     ctx.get().enqueueWork(() -> {
                         ServerPlayer player = ctx.get().getSender();
-                        if (player != null) {
-                            handleCompressionReadyServer(player, msg.ready());
+                        if (player != null && msg.ready()) {
+                            ServerHandshakeActivation.handleActivationReady(player);
                         }
                     });
                     ctx.get().setPacketHandled(true);
@@ -1136,13 +568,19 @@ public class NeoForgeNetworkManager implements NetworkManager {
                 },
                 java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT));
 
-        // 15: gateway bootstrap S2C。1.20.1 客户端不会声明裸 CustomPayload 通道，
-        // 必须经 SimpleChannel 才能在首轮登录前送达 NetworkCore。
-        CHANNEL.registerMessage(packetId++, GatewayInfoWrapper.class,
-                GatewayInfoWrapper::encode, GatewayInfoWrapper::decode,
+        // 16: Play 期激活 S2C（登录协商结果 + SeedGen 种子 → PlayInitClient）
+        CHANNEL.registerMessage(packetId++, PlayInitWrapper.class,
+                PlayInitWrapper::encode, PlayInitWrapper::decode,
                 (msg, ctx) -> {
-                    ctx.get().enqueueWork(() -> io.github.limuqy.mc.hassium.network.ClientGatewayBootstrap
-                            .handleGatewayInfoData(msg.data()));
+                    ctx.get().enqueueWork(() -> {
+                        try {
+                            LoginHandshake.PlayInitPayload payload = LoginHandshake.PlayInitPayload.decode(
+                                    new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data())));
+                            PlayInitClient.handle(payload);
+                        } catch (Exception e) {
+                            LOGGER.error("[CLIENT] Failed to handle play init", e);
+                        }
+                    });
                     ctx.get().setPacketHandled(true);
                 },
                 java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT));
@@ -1181,126 +619,6 @@ public class NeoForgeNetworkManager implements NetworkManager {
     }
 
 
-    private void handleHandshakeSimple(ServerPlayer player, HandshakeWrapper msg) {
-        // 客户端上报位置：校正 resync 视距中心（failover/重连时服务端玩家对象位置滞后）
-        // T7 位置上报扩展：完整玩家状态（y/yaw/pitch/维度）
-        HandshakeStateTail.C2S stateTail = msg.stateTail();
-        PlayerStateReport reportedState = stateTail != null && stateTail.state() != null && stateTail.state().present()
-                ? stateTail.state()
-                : PlayerStateReport.fromXZ(msg.playerX(), msg.playerZ());
-        ServerChunkPushManager.getInstance().setInitialPlayerPosition(player, reportedState);
-        // T7 续流验票（验签 + epoch 防重放）→ 续流就绪 → 复用现有推送链
-        boolean resumeAccepted = false;
-        if (stateTail != null && stateTail.resumeRequested()) {
-            ResumeTicketValidator.Verification resume =
-                    ResumeTicketValidator.verifyRequest(player.getUUID(), stateTail.resumeTicket());
-            if (resume.accepted()) {
-                resumeAccepted = true;
-                ServerChunkPushManager.getInstance().markPlayerResumeActive(player.getUUID(), resume.epoch());
-                LOGGER.info("Hassium: [RESUME] {} ticket verified (epoch={}) — 续流就绪，跳过 login/维度初始化",
-                        player.getName().getString(), resume.epoch());
-            } else {
-                LOGGER.warn("Hassium: [RESUME] {} ticket REJECTED (签名无效/epoch 重放) — 回退完整握手",
-                        player.getName().getString());
-            }
-        }
-        // SeedGen 能力记录
-        ServerChunkPushManager.getInstance().setPlayerSeedGenSupported(player.getUUID(), msg.seedGenSupported());
-        ServerChunkPushManager.getInstance().setPlayerLightComputeSupported(player.getUUID(), msg.lightComputeSupported());
-        PlayerCompressionTracker.enableCompression(player);
-        boolean serverSupportsGlobalCompression = HassiumConfigService.getInstance().isGlobalPacketCompressionEnabled();
-        boolean useGlobalCompression = serverSupportsGlobalCompression && msg.globalPacketCompressionSupported();
-        boolean serverSupportsCompactHeader = HassiumConfigService.getInstance().isCompactHeaderEnabled();
-        boolean useCompactHeader = serverSupportsCompactHeader && msg.compactHeaderSupported();
-
-        boolean accepted = true;
-        // SeedGen 尾部：仅当客户端上报能力时用新格式（带长度前缀），旧客户端保持旧格式
-        long worldSeed = 0L;
-        byte[] seedGenTail = new byte[0];
-        boolean seedGenEnabled = false;
-        if (msg.seedGenSupported()) {
-            try {
-                net.minecraft.server.level.ServerLevel seedLevel = player.serverLevel();
-                seedGenEnabled = HassiumConfigService.getInstance().isSeedGenEnabled();
-                worldSeed = SeedGenTail.handshakeWorldSeed(seedLevel, seedGenEnabled);
-                io.netty.buffer.ByteBuf sb = io.netty.buffer.Unpooled.buffer();
-                SeedGenTail.writeS2C(new FriendlyByteBuf(sb), seedLevel, seedGenEnabled);
-                seedGenTail = new byte[sb.readableBytes()];
-                sb.readBytes(seedGenTail);
-                sb.release();
-            } catch (Throwable e) {
-                LOGGER.warn("Hassium: Failed to create NeoForge seedGen handshake tail", e);
-            }
-        }
-        var advertisedTail = createDataPlaneHandshakeTail(player, accepted, msg.dataplaneCapabilities());
-        io.netty.buffer.ByteBuf tailBuffer = io.netty.buffer.Unpooled.buffer();
-        io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail.writeS2C(tailBuffer, advertisedTail);
-        byte[] dataplaneTail = new byte[tailBuffer.readableBytes()];
-        tailBuffer.readBytes(dataplaneTail);
-        LOGGER.info("Hassium: Server dataplane handshake tail for {}: udp={}, controlFailover={}, groups={}, bytes={}",
-                player.getName().getString(), advertisedTail.hasUdpDataplane(), advertisedTail.hasControlFailover(),
-                advertisedTail.udpListenerGroups().size(), dataplaneTail.length);
-        HandshakeResponseWrapper response = new HandshakeResponseWrapper(
-                Constants.CURRENT_PROTOCOL_VERSION,
-                accepted,
-                useGlobalCompression,
-                useCompactHeader,
-                dataplaneTail,
-                worldSeed,
-                seedGenTail,
-                seedGenEnabled,
-                msg.seedGenSupported(),
-                resumeAccepted
-        );
-        if (useGlobalCompression) {
-            DictionaryManager.init();
-            IndexSyncManager.getInstance().initializeServerIndex();
-            Connection connection = getPlayerConnection(player);
-            Channel channel = connection != null ? getConnectionChannel(connection) : null;
-            if (channel != null) {
-                // 先暂停出站压缩，再发 HandshakeResponse，避免响应后的包仍走 Zlib
-                ZstdPipelineSwitcher.pauseOutboundCompression(channel);
-            }
-        }
-        CHANNEL.sendTo(response, player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
-        LOGGER.info("Hassium: Server handshake for {}: accepted={}, globalCompression={}, compactHeader={}",
-                player.getName().getString(), accepted, useGlobalCompression, useCompactHeader);
-    }
-
-    private void handleHandshakeResponseSimple(HandshakeResponseWrapper msg) {
-
-        LOGGER.info("Hassium: Client handshake response: accepted={}, globalCompression={}, compactHeader={}, resumeAccepted={}",
-                msg.accepted(), msg.globalCompressionAccepted(), msg.compactHeaderAccepted(), msg.resumeAccepted());
-        if (msg.resumeAccepted()) {
-            LOGGER.info("Hassium: [RESUME] Server accepted resume — 续流就绪，网关可跳过 login/维度初始化");
-        }
-        // SeedGen 信息（新格式下服务端保证带尾部；旧服务端默认不启用）
-        if (msg.seedGenTail().length > 0) {
-            try {
-                io.netty.buffer.ByteBuf sb = io.netty.buffer.Unpooled.wrappedBuffer(msg.seedGenTail());
-                FriendlyByteBuf seedBuf = new FriendlyByteBuf(sb);
-                seedBuf.readLong(); // 布局内 worldSeed（与 msg.worldSeed() 相同，跳过）
-                long stemLen = seedBuf.readVarInt();
-                byte[] stemNbt = null;
-                if (stemLen > 0 && stemLen <= seedBuf.readableBytes()) {
-                    stemNbt = new byte[(int) stemLen];
-                    seedBuf.readBytes(stemNbt);
-                }
-                boolean seedGenEnabled = seedBuf.readableBytes() >= 1 && seedBuf.readBoolean();
-                ClientChunkPipeline.getInstance().setServerSeedInfo(msg.worldSeed(), stemNbt, seedGenEnabled);
-                sb.release();
-            } catch (Throwable e) {
-                LOGGER.debug("Hassium: failed to decode SeedGen tail (legacy server?)", e);
-            }
-        }
-        if (msg.accepted() && msg.globalCompressionAccepted()) {
-            tryInstallClientZstdPipeline();
-        }
-        if (msg.accepted()) {
-            startUdpFromHandshakeTail(msg.dataplaneTail());
-        }
-    }
-
 #else
     /**
      * 注册所有 Payload (1.21.1+)
@@ -1308,7 +626,7 @@ public class NeoForgeNetworkManager implements NetworkManager {
     private static void handlePreHandshake(PreHandshakePayload payload, net.neoforged.neoforge.network.handling.IPayloadContext context) {
         // 配置阶段无 ServerPlayer：按 listener owner（GameProfile）UUID 标记，
         // ServerPlayer 创建时（MixinServerPlayer TAIL）自动提升为压缩启用。
-        // 完整协商（ZSTD/聚合/数据面/位置）仍在 Play 阶段 handleHandshake 完成。
+        // Play 期激活（协商结果 + SeedGen 种子）经 play_init_s2c 下发（ServerHandshakeActivation）。
         UUID playerId = null;
         if (context.listener() instanceof net.minecraft.server.network.ServerConfigurationPacketListenerImpl configListener) {
             playerId = io.github.limuqy.mc.hassium.compat.PlayerCompat.getProfileId(configListener.getOwner());
@@ -1318,29 +636,17 @@ public class NeoForgeNetworkManager implements NetworkManager {
 
     @SubscribeEvent
     public static void registerPayloads(RegisterPayloadHandlersEvent event) {
-        // gateway_info S2C 必须无条件注册（先于下方守卫）：守卫任一路径关闭
-        // （net/master 全关，或 NetworkCapability 能力降级经 setNetworkCompressionEnabled(false)
-        // 强制关注册）时，ServerGatewayInfoSender.canSend（dedicated + master.enabled）
-        // 与注册状态可能脱钩——NeoForge checkPacket 对未注册 S2C payload 直接抛异常炸 tick。
-        // 服务端不发送时注册无副作用。vanilla 通道直发（tick 内 drainPending）；
-        // 与 fabric FabricPayloadRegistry 同模式：RawCustomPayload 字节流 codec，
-        // 客户端消费走同一 common 链（GatewayInfoCodec.decode → NetworkCore.onGatewayInfo）。
+        // play_init S2C 必须无条件注册（先于下方守卫）：登录协商位非零即下发 play_init
+        //（即便 net/master 全关，SHADOW_PULL 位恒协商成功）——NeoForge checkPacket 对未注册
+        // S2C payload 直接抛异常炸 tick。服务端不发送时注册无副作用。
         var registrar = event.registrar(PROTOCOL_VERSION);
         registrar.playToClient(
-                io.github.limuqy.mc.hassium.compat.PacketPayloadCompat.payloadType(
-                        ResourceLocationCompat.create(io.github.limuqy.mc.hassium.network.HassiumPacketIds.GATEWAY_INFO_S2C)),
-                io.github.limuqy.mc.hassium.compat.PacketPayloadCompat.rawPayloadCodec(
-                        ResourceLocationCompat.create(io.github.limuqy.mc.hassium.network.HassiumPacketIds.GATEWAY_INFO_S2C)),
-                (payload, context) -> context.enqueueWork(() -> {
-                    try {
-                        GatewayInfoCodec.GatewayInfo info =
-                                GatewayInfoCodec.decode(payload.data());
-                        io.github.limuqy.mc.hassium.network.core.NetworkCore.getInstance()
-                                .onGatewayInfo(info);
-                    } catch (Exception e) {
-                        LOGGER.error("[CLIENT] Failed to handle gateway_info", e);
-                    }
-                })
+                PlayInitNeoPayload.TYPE,
+                PlayInitNeoPayload.STREAM_CODEC,
+                (payload, context) -> context.enqueueWork(() ->
+                        PlayInitClient.handle(new LoginHandshake.PlayInitPayload(
+                                payload.negotiatedCaps(), payload.worldSeed(),
+                                payload.stemNbt(), payload.seedGenEnabled())))
         );
 
         if (!HassiumConfigService.getInstance().isNetworkCompressionEnabled()
@@ -1360,13 +666,6 @@ public class NeoForgeNetworkManager implements NetworkManager {
         );
 
 
-        // 注册握手请求 (C2S)
-        registrar.playToServer(
-                HandshakePayload.TYPE,
-                HandshakePayload.STREAM_CODEC,
-                NeoForgeNetworkManager::handleHandshake
-        );
-
         registrar.playToServer(ShadowPullRequestPayload.TYPE, ShadowPullRequestPayload.STREAM_CODEC,
                 NeoForgeNetworkManager::handleShadowPullRequest);
         registrar.playToClient(ShadowPullResponsePayload.TYPE, ShadowPullResponsePayload.STREAM_CODEC,
@@ -1384,18 +683,14 @@ public class NeoForgeNetworkManager implements NetworkManager {
                 CompressionReadyNeoPayload.TYPE,
                 CompressionReadyNeoPayload.STREAM_CODEC,
                 (payload, ctx) -> ctx.enqueueWork(() -> {
-                    if (ctx.player() instanceof ServerPlayer player) {
-                        handleCompressionReadyServer(player, payload.ready());
+                    if (ctx.player() instanceof ServerPlayer player && payload.ready()) {
+                        // 直连拓扑：转调 common 激活链（服务端 ZSTD 切换 + Dict/Index 同步 + 聚合放行）
+                        ServerHandshakeActivation.handleActivationReady(player);
                     }
                 })
         );
 
         // ===== S2C（客户端处理；与服务端发送方向一一对应）=====
-        // review-fix: T11-M1：此前只注册 C2S，9 个 S2C payload 客户端零注册 → 直连回退路径功能性死亡
-
-        // 握手响应 S2C
-        registrar.playToClient(HandshakeResponsePayload.TYPE, HandshakeResponsePayload.STREAM_CODEC,
-                NeoForgeNetworkManager::handleHandshakeResponseS2C);
 
         // 压缩区块 S2C
         registrar.playToClient(CompressedChunkPayload.TYPE, CompressedChunkPayload.STREAM_CODEC,
@@ -1411,9 +706,16 @@ public class NeoForgeNetworkManager implements NetworkManager {
         registrar.playToClient(BlockEntityDataPayload.TYPE, BlockEntityDataPayload.STREAM_CODEC,
                 NeoForgeNetworkManager::handleBlockEntityDataS2C);
 
-        // LightDelta S2C（方案 A：客户端不消费，no-op 标记已处理）
+        // LightDelta S2C（直连拓扑：网关帧链路已裁剪，客户端影子端经 vanilla 通道消费）
         registrar.playToClient(LightDeltaPayload.TYPE, LightDeltaPayload.STREAM_CODEC,
                 (payload, ctx) -> {
+                    try {
+                        LightDeltaS2CPacket packet = LightDeltaS2CPacket.decode(
+                                new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(payload.data())));
+                        ShadowLightCompute.submitLightDelta(packet);
+                    } catch (Exception e) {
+                        LOGGER.error("[CLIENT] Failed to handle light delta", e);
+                    }
                 });
 
         // 字典同步 S2C
@@ -1426,87 +728,6 @@ public class NeoForgeNetworkManager implements NetworkManager {
 
         LOGGER.info("Hassium: Registered all NeoForge payload handlers");
     }
-
-    private static void handleHandshake(HandshakePayload payload, IPayloadContext context) {
-        context.enqueueWork(() -> {
-            if (context.player() instanceof ServerPlayer player) {
-                // 客户端上报位置：校正 resync 视距中心（failover/重连时服务端玩家对象位置滞后）
-                // T7 位置上报扩展：完整玩家状态（y/yaw/pitch/维度）
-                HandshakeStateTail.C2S stateTail = payload.stateTail();
-                PlayerStateReport reportedState = stateTail != null && stateTail.state() != null && stateTail.state().present()
-                        ? stateTail.state()
-                        : PlayerStateReport.fromXZ(payload.playerX(), payload.playerZ());
-                ServerChunkPushManager.getInstance().setInitialPlayerPosition(player, reportedState);
-                // T7 续流验票（验签 + epoch 防重放）→ 续流就绪 → 复用现有推送链
-                boolean resumeAccepted = false;
-                if (stateTail != null && stateTail.resumeRequested()) {
-                    ResumeTicketValidator.Verification resume =
-                            ResumeTicketValidator.verifyRequest(player.getUUID(), stateTail.resumeTicket());
-                    if (resume.accepted()) {
-                        resumeAccepted = true;
-                        ServerChunkPushManager.getInstance().markPlayerResumeActive(player.getUUID(), resume.epoch());
-                        LOGGER.info("Hassium: [RESUME] {} ticket verified (epoch={}) — 续流就绪，跳过 login/维度初始化",
-                                player.getName().getString(), resume.epoch());
-                    } else {
-                        LOGGER.warn("Hassium: [RESUME] {} ticket REJECTED (签名无效/epoch 重放) — 回退完整握手",
-                                player.getName().getString());
-                    }
-                }
-                // SeedGen 能力记录
-                ServerChunkPushManager.getInstance().setPlayerSeedGenSupported(player.getUUID(), payload.seedGenSupported());
-                ServerChunkPushManager.getInstance().setPlayerLightComputeSupported(player.getUUID(), payload.lightComputeSupported());
-                PlayerCompressionTracker.enableCompression(player);
-                boolean useGlobalCompression = HassiumConfigService.getInstance().isGlobalPacketCompressionEnabled()
-                        && payload.globalPacketCompressionSupported();
-                boolean useCompactHeader = HassiumConfigService.getInstance().isCompactHeaderEnabled()
-                        && payload.compactHeaderSupported();
-                boolean accepted = true;
-
-                // SeedGen 尾部：仅当客户端上报能力时用新格式（带长度前缀），旧客户端保持旧格式
-                long worldSeed = 0L;
-                byte[] seedGenTail = new byte[0];
-                boolean seedGenEnabled = false;
-                if (payload.seedGenSupported()) {
-                    try {
-                        net.minecraft.server.level.ServerLevel seedLevel =
-                                io.github.limuqy.mc.hassium.compat.PlayerCompat.getServerLevel(player);
-                        seedGenEnabled = HassiumConfigService.getInstance().isSeedGenEnabled();
-                        worldSeed = SeedGenTail.handshakeWorldSeed(seedLevel, seedGenEnabled);
-                        io.netty.buffer.ByteBuf sb = io.netty.buffer.Unpooled.buffer();
-                        SeedGenTail.writeS2C(new FriendlyByteBuf(sb), seedLevel, seedGenEnabled);
-                        seedGenTail = new byte[sb.readableBytes()];
-                        sb.readBytes(seedGenTail);
-                        sb.release();
-                    } catch (Throwable e) {
-                        LOGGER.warn("Hassium: Failed to create NeoForge seedGen handshake tail", e);
-                    }
-                }
-                io.netty.buffer.ByteBuf tailBuffer = io.netty.buffer.Unpooled.buffer();
-                io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail.writeS2C(tailBuffer,
-                        createDataPlaneHandshakeTail(player, accepted, payload.dataplaneCapabilities()));
-                byte[] dataplaneTail = new byte[tailBuffer.readableBytes()];
-                tailBuffer.readBytes(dataplaneTail);
-                HandshakeResponsePayload response = new HandshakeResponsePayload(
-                        Constants.CURRENT_PROTOCOL_VERSION, accepted, useGlobalCompression, useCompactHeader,
-                        dataplaneTail, worldSeed, seedGenTail, seedGenEnabled, payload.seedGenSupported(),
-                        resumeAccepted);
-                // 先暂停出站压缩，再发 HandshakeResponse，避免响应后的包仍走 Zlib
-                if (useGlobalCompression) {
-                    DictionaryManager.init();
-                    IndexSyncManager.getInstance().initializeServerIndex();
-                    Connection connection = getPlayerConnection(player);
-                    Channel channel = connection != null ? getConnectionChannel(connection) : null;
-                    if (channel != null) {
-                        ZstdPipelineSwitcher.pauseOutboundCompression(channel);
-                    }
-                }
-                player.connection.send(response);
-                LOGGER.info("Hassium: Server handshake for {}: accepted={}, globalCompression={}, compactHeader={}",
-                        player.getName().getString(), accepted, useGlobalCompression, useCompactHeader);
-            }
-        });
-    }
-
 
     private static void handleShadowPullRequest(ShadowPullRequestPayload payload, IPayloadContext context) {
         context.enqueueWork(() -> {
@@ -1582,41 +803,6 @@ public class NeoForgeNetworkManager implements NetworkManager {
 
     // ===== S2C 客户端处理（1.21.1+；处理逻辑对齐 SimpleChannel 注册块）=====
 
-    private static void handleHandshakeResponseS2C(HandshakeResponsePayload payload, IPayloadContext context) {
-        context.enqueueWork(() -> {
-            LOGGER.info("Hassium: Client handshake response: accepted={}, globalCompression={}, compactHeader={}, resumeAccepted={}",
-                    payload.accepted(), payload.globalCompressionAccepted(), payload.compactHeaderAccepted(), payload.resumeAccepted());
-            if (payload.resumeAccepted()) {
-                LOGGER.info("Hassium: [RESUME] Server accepted resume — 续流就绪，网关可跳过 login/维度初始化");
-            }
-            // SeedGen 信息（新格式下服务端保证带尾部；旧服务端默认不启用）
-            if (payload.seedGenTail().length > 0) {
-                try {
-                    io.netty.buffer.ByteBuf sb = io.netty.buffer.Unpooled.wrappedBuffer(payload.seedGenTail());
-                    FriendlyByteBuf seedBuf = new FriendlyByteBuf(sb);
-                    seedBuf.readLong(); // 布局内 worldSeed（与 payload.worldSeed() 相同，跳过）
-                    long stemLen = seedBuf.readVarInt();
-                    byte[] stemNbt = null;
-                    if (stemLen > 0 && stemLen <= seedBuf.readableBytes()) {
-                        stemNbt = new byte[(int) stemLen];
-                        seedBuf.readBytes(stemNbt);
-                    }
-                    boolean seedGenEnabled = seedBuf.readableBytes() >= 1 && seedBuf.readBoolean();
-                    ClientChunkPipeline.getInstance().setServerSeedInfo(payload.worldSeed(), stemNbt, seedGenEnabled);
-                    sb.release();
-                } catch (Throwable e) {
-                    LOGGER.debug("Hassium: failed to decode SeedGen tail (legacy server?)", e);
-                }
-            }
-            if (payload.accepted() && payload.globalCompressionAccepted()) {
-                tryInstallClientZstdPipeline();
-            }
-            if (payload.accepted()) {
-                startUdpFromHandshakeTail(payload.dataplaneTail());
-            }
-        });
-    }
-
     private static void handleCompressedChunkS2C(CompressedChunkPayload payload, IPayloadContext context) {
         context.enqueueWork(() -> {
             try {
@@ -1676,23 +862,6 @@ public class NeoForgeNetworkManager implements NetworkManager {
     }
 #endif
 
-    /** 平台 bootstrap 发送口；旧 NeoForge 必须经协商后的 SimpleChannel。 */
-    public void sendGatewayInfo(ServerPlayer player, byte[] data) {
-#if MC_VER < MC_1_21_1
-        CHANNEL.sendTo(new GatewayInfoWrapper(data), player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
-#else
-        net.minecraft.network.protocol.Packet<?> packet =
-                io.github.limuqy.mc.hassium.compat.PacketPayloadCompat.createClientboundPayload(
-                        io.github.limuqy.mc.hassium.compat.PacketId.parse(
-                                io.github.limuqy.mc.hassium.network.HassiumPacketIds.GATEWAY_INFO_S2C), data);
-        net.minecraft.server.MinecraftServer server =
-                io.github.limuqy.mc.hassium.compat.PlayerCompat.getMinecraftServer(player);
-        if (server != null) {
-            server.execute(() -> player.connection.send(packet));
-        }
-#endif
-    }
-
     @Override
     public void sendSeedRef(ServerPlayer player, FriendlyByteBuf buf) {
         byte[] data = new byte[buf.readableBytes()];
@@ -1706,30 +875,6 @@ public class NeoForgeNetworkManager implements NetworkManager {
         LOGGER.debug("Hassium: Sent seed ref to {}", player.getName().getString());
 #endif
     }
-
-    /** 无网关拓扑：客户端握手请求（构造 HandshakeWrapper/HandshakePayload 发送；字段与 common 参数一致）。 */
-    public void sendClientHandshake(io.github.limuqy.mc.hassium.network.ClientHandshakeRequest request) {
-#if MC_VER < MC_1_21_1
-        CHANNEL.sendToServer(new HandshakeWrapper(
-                request.protocolVersion(), request.modVersion(), request.supportedAlgorithms(),
-                request.clientCacheSupported(), request.chunkRevisionSupported(), request.scheme127Supported(),
-                request.globalPacketCompressionSupported(), request.compactHeaderSupported(),
-                request.dataplaneCapabilities(), request.posX(), request.posZ(),
-                request.seedGenSupported(), request.lightComputeSupported(), null));
-#else
-        HandshakePayload payload = new HandshakePayload(
-                request.protocolVersion(), request.modVersion(), request.supportedAlgorithms(),
-                request.clientCacheSupported(), request.chunkRevisionSupported(), request.scheme127Supported(),
-                request.globalPacketCompressionSupported(), request.compactHeaderSupported(),
-                request.dataplaneCapabilities(), request.posX(), request.posZ(),
-                request.seedGenSupported(), request.lightComputeSupported(), null);
-        var connection = net.minecraft.client.Minecraft.getInstance().getConnection();
-        if (connection != null) {
-            connection.send(payload);
-        }
-#endif
-    }
-
 
     @Override
     public void sendBlockEntityRequest(FriendlyByteBuf buf) {
@@ -1772,10 +917,40 @@ public class NeoForgeNetworkManager implements NetworkManager {
 
     @Override
     public void sendLightDeltaPacket(ServerPlayer player, FriendlyByteBuf buf) {
-        // 三端一致收口（2026-08-23 裁决）：vanilla 通道 LightDelta 三端客户端均不消费
-        // （legacy Wrapper / modern Payload 接收端本就是 no-op），唯一消费在网关帧链路；
-        // 本实现仅消费 buf 所有权，不再发 payload（两段注册保留，最小 diff）。
+        // 直连拓扑：网关帧链路（LIGHT_DELTA 原唯一消费方）已裁剪，改经 vanilla play S2C payload
+        // 下发，客户端影子端 ShadowLightCompute 直连消费（任意线程安全）。
+        byte[] data = new byte[buf.readableBytes()];
+        buf.readBytes(data);
         buf.release();
+#if MC_VER < MC_1_21_1
+        CHANNEL.sendTo(new LightDeltaWrapper(data), player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
+#else
+        sendServerPayload(player, new LightDeltaPayload(data));
+#endif
+    }
+
+    /**
+     * 发送 Play 期激活包（协商结果 + SeedGen 种子；直连拓扑 S2C payload）。
+     */
+    public static void sendPlayInit(ServerPlayer player, int negotiatedCaps, long worldSeed,
+                                    byte[] stemNbt, boolean seedGenEnabled) {
+        try {
+#if MC_VER < MC_1_21_1
+            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
+            new LoginHandshake.PlayInitPayload(negotiatedCaps, worldSeed, stemNbt, seedGenEnabled).encode(buf);
+            byte[] data = new byte[buf.readableBytes()];
+            buf.readBytes(data);
+            buf.release();
+            CHANNEL.sendTo(new PlayInitWrapper(data), player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
+#else
+            sendServerPayload(player, new PlayInitNeoPayload(
+                    negotiatedCaps, worldSeed, stemNbt, seedGenEnabled));
+#endif
+            LOGGER.debug("Hassium: Sent play init to {} (caps={})",
+                    player.getName().getString(), LoginHandshake.describeCaps(negotiatedCaps));
+        } catch (Exception e) {
+            LOGGER.error("Hassium: Failed to send play init packet", e);
+        }
     }
 
 
@@ -1801,7 +976,8 @@ public class NeoForgeNetworkManager implements NetworkManager {
         }
     }
 
-    private static void sendDictionarySyncPacket(ServerPlayer player) {
+    /** 发送聚合字典同步到客户端（SPI：Services.NETWORK_MANAGER.sendDictionarySync 转调）。 */
+    public static void sendDictionarySyncPacket(ServerPlayer player) {
         try {
             byte[] aggregationDict = DictionaryManager.getAggregationDict();
             if (aggregationDict == null) {
@@ -1823,7 +999,8 @@ public class NeoForgeNetworkManager implements NetworkManager {
         }
     }
 
-    private static void sendIndexSyncPacket(ServerPlayer player) {
+    /** 发送包索引同步到客户端（SPI：Services.NETWORK_MANAGER.sendIndexSync 转调）。 */
+    public static void sendIndexSyncPacket(ServerPlayer player) {
         try {
             IndexSyncManager indexSyncManager = IndexSyncManager.getInstance();
             indexSyncManager.initializeServerIndex();
@@ -1873,13 +1050,6 @@ public class NeoForgeNetworkManager implements NetworkManager {
                 Connection connection = conn.getConnection();
                 HassiumConnectionRegistry.markEnabled(connection);
                 HassiumAggregationManager.init();
-                // 服务端已装 ZSTD（能发来 IndexSync）：恢复客户端出站压缩阈值
-                //（装 ZSTD 时暂停，见 tryInstallClientZstdPipeline；对齐 forge）
-                io.netty.channel.Channel channel = getConnectionChannel(connection);
-                if (channel != null) {
-                    int threshold = HassiumConfigService.getInstance().getGlobalCompressionThreshold();
-                    ZstdPipelineSwitcher.setOutboundCompressionThreshold(channel, threshold);
-                }
                 sendCompressionReadyToServer();
             }
             LOGGER.debug("Hassium: Received index sync ({} types), sent compression ready",
@@ -1910,7 +1080,23 @@ public class NeoForgeNetworkManager implements NetworkManager {
         }
     }
 
-    private static void sendCompressionReadyToServer() {
+    /**
+     * 配置阶段 C2S 能力声明（MixinClientConfigurationPacketListenerImpl 每连接一次性调用）。
+     * <p>
+     * 配置期 {@code Minecraft.getConnection()} 恒为 null（play listener 未创建），必须用
+     * mixin 反射取出的配置监听器 connection 直发 vanilla 自定义包；NeoForge 按当前
+     * CONFIGURATION 协议分派 {@code configurationToServer} 注册的 codec（未注册 id 才落
+     * DiscardedPayload，原版客户端零干扰）。
+     */
+    public static void announcePreHandshake(net.minecraft.network.Connection connection) {
+#if MC_VER >= MC_1_21_1
+        if (connection != null && connection.isConnected()) {
+            connection.send(new net.minecraft.network.protocol.common.ServerboundCustomPayloadPacket(
+                    io.github.limuqy.mc.hassium.network.PreHandshakePayload.create()));
+        }
+#endif
+    }
+    public static void sendCompressionReadyToServer() {
         try {
 #if MC_VER < MC_1_21_1
             CHANNEL.sendToServer(new CompressionReadyWrapper(true));
@@ -1925,31 +1111,4 @@ public class NeoForgeNetworkManager implements NetworkManager {
         }
     }
 
-    private static void handleCompressionReadyServer(ServerPlayer player, boolean ready) {
-        if (!ready) {
-            return;
-        }
-        Connection connection = getPlayerConnection(player);
-        Channel channel = connection != null ? getConnectionChannel(connection) : null;
-        // 第一次 ready：客户端已装 ZSTD → 服务端切管线并同步 Dict/Index
-        if (channel != null && !ZstdPipelineSwitcher.isZstdInstalled(channel)) {
-            installServerZstdAfterClientReady(player, connection, channel);
-            return;
-        }
-        // 第二次 ready：IndexSync 已处理 → 启用聚合
-        if (connection != null) {
-            HassiumConnectionRegistry.markEnabled(connection);
-            HassiumAggregationManager.flushConnection(connection);
-            LOGGER.debug("Hassium: Marked connection ENABLED for {}", player.getName().getString());
-        }
-    }
-
-    private static void schedulePendingTimeout(Connection connection, String playerName) {
-        PENDING_TIMEOUT_SCHEDULER.schedule(() -> {
-            if (HassiumConnectionRegistry.tryDemoteFromPending(connection)) {
-                HassiumAggregationManager.discardConnection(connection);
-                LOGGER.warn("Hassium: Ack timeout for {}, disabling aggregation", playerName);
-            }
-        }, 5, java.util.concurrent.TimeUnit.SECONDS);
-    }
 }

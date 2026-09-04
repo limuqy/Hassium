@@ -2,7 +2,6 @@ package io.github.limuqy.mc.hassium.mixin;
 
 import com.mojang.authlib.GameProfile;
 import io.github.limuqy.mc.hassium.network.PlayerCompressionTracker;
-import io.github.limuqy.mc.hassium.network.ServerGatewayInfoSender;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.protocol.Packet;
 import net.minecraft.server.level.ServerPlayer;
@@ -41,13 +40,9 @@ public abstract class MixinServerPlayer extends Player {
         if (io.github.limuqy.mc.hassium.server.RuntimeServerContext.isShadowServerContext()) {
             return;
         }
-        PlayerCompressionTracker.setConnected(self);
-        // login/config 预握手已确认客户端支持 Hassium；从首个 tracking 柱开始
-        // 交给 ServerChunkPushManager，避免首圈原版直推绕过压缩/影子链路。
-        PlayerCompressionTracker.tryEnableOnPlayerJoin(self);
-        // M1 bootstrap：玩家物化后经 vanilla 通道下发 gateway_info（connection 未挂时登记待发，
-        // 由 MixinMinecraftServer tick 泵补发；仅专用服 + master.enabled，见 CONTRACTS §2）。
-        ServerGatewayInfoSender.onPlayerInit(self);
+        // 登录期握手协商结果消费：启用压缩门（原版区块窗口自此压制）+ Play 激活入队。
+        // M1 gateway_info 引导已随网络核心裁剪移除（直连拓扑无网关地址可下发）。
+        io.github.limuqy.mc.hassium.network.handshake.ServerHandshakeActivation.onPlayerInit(self);
     }
 
 #if MC_VER < MC_1_21_1

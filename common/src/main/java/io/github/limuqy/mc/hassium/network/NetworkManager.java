@@ -49,10 +49,8 @@ public interface NetworkManager {
     void sendBlockEntityData(ServerPlayer player, FriendlyByteBuf buf);
 
     /**
-     * 发送光照增量通知到客户端（服务端调用）。
-     * 口径（2026-08-23 裁决，三端一致收口）：vanilla 通道 LightDelta 三端客户端均不消费，
-     * 唯一消费在网关帧链路（GatewayPacketCodec LIGHT_DELTA → NetworkCore → ShadowLightCompute）；
-     * 实现仅在网关路由未命中时消费 buf 所有权（release），不得再经 vanilla 通道发送。
+     * 发送光照增量通知到客户端（服务端调用；vanilla play S2C 通道直发）。
+     * 直连拓扑下客户端经 loader receiver → 影子光照管线消费。
      */
     void sendLightDeltaPacket(ServerPlayer player, FriendlyByteBuf buf);
 

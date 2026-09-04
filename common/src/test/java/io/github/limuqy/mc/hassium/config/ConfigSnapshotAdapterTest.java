@@ -14,13 +14,4 @@ class ConfigSnapshotAdapterTest {
 
         assertEquals(original, restored);
     }
-
-    @Test
-    void endpointAndDataPlaneValuesRoundTrip() {
-        HassiumConfig original = HassiumConfig.DEFAULT;
-        HassiumConfig restored = ConfigSnapshotAdapter.fromValues(ConfigSnapshotAdapter.toValues(original));
-
-        assertEquals(original.master().controlReachableEndpoints(), restored.master().controlReachableEndpoints());
-        assertEquals(original.master().dataPlane(), restored.master().dataPlane());
-    }
 }

@@ -97,11 +97,6 @@ public class HassiumConfigService {
         return tomlBackend.get();
     }
 
-    /** 服务端 debug.dataplaneLogging：数据面热路径诊断日志（默认 false，需要时打开）。 */
-    public boolean isDataplaneLogging() {
-        return config.debug().dataplaneLogging();
-    }
-
     /**
      * 从 ConfigSpec 同步快照与门闩（ModConfig load/reload 与初始化时调用）。
      * Fabric toml 后端下为空操作。
@@ -292,22 +287,6 @@ public class HassiumConfigService {
         return getInstance().getCompressionLevel();
     }
 
-    public int getGlobalCompressionLevel() {
-        return config.master().globalCompressionLevel();
-    }
-
-    public static int getNetworkGlobalCompressionLevel() {
-        return getInstance().getGlobalCompressionLevel();
-    }
-
-    public int getGlobalCompressionThreshold() {
-        return config.master().globalCompressionThreshold();
-    }
-
-    public static int getNetworkGlobalCompressionThreshold() {
-        return getInstance().getGlobalCompressionThreshold();
-    }
-
 
     public int getStorageCompressionLevel() {
         return config.storage().zstdLevel();
@@ -349,81 +328,6 @@ public class HassiumConfigService {
         return config.chunk().targetCacheSizeBytes();
     }
 
-    public HassiumConfig.DataPlaneConfig getDataPlaneConfig() {
-        return config.master().dataPlane();
-    }
-
-    /** L1 迁移故障静默超时（ms；faultTimeout 仍为默认值时覆盖 MigrationEngine/MigrationPolicy）。 */
-    public long getMigrationFaultTimeoutMs() {
-        return config.master().migrationFaultTimeoutMs();
-    }
-
-    /** L1 迁移策略：主控 TPS 低于此值触发迁移（默认 15.0）。 */
-    public double getMigrationMinTps() {
-        return config.master().migrationMinTps();
-    }
-
-    /** L1 迁移策略：主控系统负载均值高于此值触发迁移（默认 4.0；-1 无信号）。 */
-    public double getMigrationMaxLoadAverage() {
-        return config.master().migrationMaxLoadAverage();
-    }
-
-    /** L1 迁移策略：维护窗口 "HH:MM-HH:MM"（本地时区，含跨午夜；空串=禁用）。 */
-    public String getMigrationMaintenanceWindow() {
-        return config.master().migrationMaintenanceWindow();
-    }
-
-    /** L1 迁移：应用层 HEARTBEAT 发送周期（ms；默认 5000）。 */
-    public long getMigrationHeartbeatIntervalMs() {
-        return config.master().migrationHeartbeatIntervalMs();
-    }
-
-    /** L1 迁移：空闲窗口判定时长（ms；默认 10000）。 */
-    public long getMigrationIdleWindowMs() {
-        return config.master().migrationIdleWindowMs();
-    }
-
-    /**
-     * L1 迁移：outbound 入站静默超时（ms；默认 10000 使失效识别 ≤15s）。
-     * 未配置（仍为默认值）时经 {@link MigrationPolicyConfig} 回退 faultTimeout 语义。
-     */
-    public long getMigrationSilentTimeoutMs() {
-        return config.master().migrationSilentTimeoutMs();
-    }
-
-    /** 预热会话 TTL（ms；B 侧预热物化会话清理；T4 交付键）。 */
-    public long getMigrationPrewarmTtlMs() {
-        return config.master().migrationPrewarmTtlMs();
-    }
-
-    /** L1 迁移策略配置快照（MigrationEngine.applyMigrationPolicyFromConfig 消费）。 */
-    public MigrationPolicyConfig getMigrationPolicyConfig() {
-        HassiumConfig.MasterCoreConfig m = config.master();
-        return new MigrationPolicyConfig(
-                m.migrationMinTps(),
-                m.migrationMaxLoadAverage(),
-                m.migrationMaintenanceWindow(),
-                m.migrationHeartbeatIntervalMs(),
-                m.migrationIdleWindowMs(),
-                m.migrationSilentTimeoutMs(),
-                m.migrationFaultTimeoutMs());
-    }
-
-    public java.util.List<HassiumConfig.ReachableEndpoint> getControlReachableEndpoints() {
-        return config.master().controlReachableEndpoints();
-    }
-
-    /** 网关监听 bind host（D-M2：默认 127.0.0.1 回环；空串 = 0.0.0.0 全网卡）。 */
-    public String getMasterBindHost() {
-        return config.master().bindHost();
-    }
-
-    /** 网关握手鉴权 token（服务端配置；客户端经 gateway_info 下发，本地配置不再保留）。 */
-    public String getMasterAuthToken() {
-        return config.master().authToken();
-    }
-
-    /** 网关主控核心是否启用（仅 master.enabled 时服务端下发 gateway_info bootstrap）。 */
     public boolean isMasterEnabled() {
         return config.master().enabled();
     }
@@ -460,10 +364,6 @@ public class HassiumConfigService {
         return configLoaded.get();
     }
 
-    public boolean isGlobalPacketCompressionEnabled() {
-        return config.master().globalPacketCompression();
-    }
-
     public Set<String> getCompressionBlacklist() {
         return config.master().compressionBlacklist();
     }
@@ -474,10 +374,6 @@ public class HassiumConfigService {
 
     public boolean isUseContextCompression() {
         return config.master().useContextCompression();
-    }
-
-    public boolean isMagiclessZstd() {
-        return config.master().magiclessZstd();
     }
 
     public boolean isPacketAggregationEnabled() {

@@ -1,10 +1,9 @@
 package io.github.limuqy.mc.hassium.mixin;
 
 import io.github.limuqy.mc.hassium.Constants;
-import io.github.limuqy.mc.hassium.network.HassiumAggregationManager;
+import io.github.limuqy.mc.hassium.network.handshake.LoginHandshakeManager;
 import io.github.limuqy.mc.hassium.network.HassiumConnectionRegistry;
-import io.github.limuqy.mc.hassium.network.ZstdNegotiationTracker;
-import io.netty.channel.Channel;
+import io.github.limuqy.mc.hassium.network.HassiumAggregationManager;
 import io.github.limuqy.mc.hassium.network.PacketCompressionBlacklist;
 import io.github.limuqy.mc.hassium.network.PacketTypeHelper;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
@@ -20,20 +19,18 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
- * 拦截网络连接发送数据包，实现 Hassium 聚合压缩
+ * 拦截网络连接发送数据包，实现 Hassium 聚合压缩（服务端 → vanilla 直连）。
  * <p>
  * 注意：区块数据包不再经过此拦截，由 ServerChunkPushManager 直接发送。
  * <p>
- * 1.21.6+：{@code Connection.send} 第二参数由 {@code PacketSendListener} 改为 {@code ChannelFutureListener}。
+ * 1.21.6+：{@code Connection.send} 第二参数由 {@code PacketSendListener} 改为
+ * {@code ChannelFutureListener}。
  */
 @Mixin(value = Connection.class, priority = 1)
 public class MixinConnection {
 
     @Shadow
     private PacketListener packetListener;
-
-    @Shadow
-    private Channel channel;
 
     // review-fix: T7-59: handler 统一加 hassium$ 前缀（Mixin 惯例，避免与目标类未来同名成员 merge 冲突）
 #if MC_VER < MC_1_21_6
@@ -47,86 +44,6 @@ public class MixinConnection {
         hassium$tryAggregate(packet, sendListener != null, ci);
     }
 #endif
-
-    /**
-     * T5/T10 C2S 通路截获（按 packetListener 阶段分发，send HEAD，可 cancel）：
-     * <ul>
-     *   <li>服务端方向（send 的是 S2C）：零开销放行——先判定服务端监听器，后续客户端类
-     *       instanceof 不执行（dedicated server 客户端类不存在，禁止解析）。</li>
-     *   <li>客户端登录阶段（ClientHandshakePacketListenerImpl）：纯旁路中继 LOGIN_C2S
-     *       （T5；不 cancel——vanilla 登录照常，主控会话由网关独立复刻）。</li>
-     *   <li>客户端配置阶段（ClientConfigurationPacketListenerImpl，1.20.2+）：纯旁路中继
-     *       CONFIG_C2S（T10；不 cancel——客户端配置由 vanilla TCP 完成，镜像供主控阶段推进）。</li>
-     *   <li>客户端 PLAY 阶段（ClientPacketListener）：routeC2S 编码进 outbound（PACKET_C2S），
-     *       返回 true 时 cancel 原版发送——原版连接为壳，C2S 全走网关；keep-alive 响应例外
-     *       （壳连接保活镜像，下波任务）。未路由（outbound 未开/编码失败）原版放行降级。</li>
-     * </ul>
-     * 与 {@link #hassium$tryAggregate}（服务端聚合，cancel 语义独立）互斥：两端监听器类型
-     * 不相交，顺序无关。
-     */
-#if MC_VER < MC_1_21_6
-    @Inject(method = "send(Lnet/minecraft/network/protocol/Packet;Lnet/minecraft/network/PacketSendListener;)V", at = @At("HEAD"), cancellable = true)
-    private void hassium$routeC2SToGateway(Packet<?> packet, net.minecraft.network.PacketSendListener sendListener, CallbackInfo ci) {
-        hassium$routeC2S(packet, ci);
-    }
-#else
-    @Inject(method = "send(Lnet/minecraft/network/protocol/Packet;Lio/netty/channel/ChannelFutureListener;)V", at = @At("HEAD"), cancellable = true)
-    private void hassium$routeC2SToGateway(Packet<?> packet, io.netty.channel.ChannelFutureListener sendListener, CallbackInfo ci) {
-        hassium$routeC2S(packet, ci);
-    }
-#endif
-
-    @Unique
-    private void hassium$routeC2S(Packet<?> packet, CallbackInfo ci) {
-        // 服务端方向零开销：S2C 发送不路由（客户端类引用不得解析——dedicated server 无客户端类）
-        if (packetListener instanceof ServerGamePacketListenerImpl
-                || packetListener instanceof net.minecraft.server.network.ServerLoginPacketListenerImpl
-                || packetListener instanceof net.minecraft.server.network.ServerHandshakePacketListenerImpl
-                || packetListener instanceof net.minecraft.server.network.ServerStatusPacketListenerImpl) {
-            return;
-        }
-#if MC_VER >= MC_1_21_1
-        if (packetListener instanceof net.minecraft.server.network.ServerConfigurationPacketListenerImpl) {
-            return;
-        }
-#endif
-        io.github.limuqy.mc.hassium.network.core.NetworkCore core =
-                io.github.limuqy.mc.hassium.network.core.NetworkCore.getInstance();
-        // 客户端 vanilla Connection 暂存（CONFIG_S2C 分发回退用；登录期同步登记）
-        core.setVanillaConnection((Connection) (Object) this);
-        if (packetListener instanceof net.minecraft.client.multiplayer.ClientHandshakePacketListenerImpl) {
-            core.relayLoginPacket(packet);
-            return;
-        }
-#if MC_VER >= MC_1_21_1
-        if (packetListener instanceof net.minecraft.client.multiplayer.ClientConfigurationPacketListenerImpl) {
-            core.relayConfigPacket(packet);
-            return;
-        }
-#endif
-        if (packetListener instanceof net.minecraft.client.multiplayer.ClientPacketListener) {
-            // 壳保活：正常会话（有壳）keep-alive 响应走 vanilla TCP（网关会话为主，
-            // 壳连接不被服务端踢）；仅网关登录无壳连接——keep-alive 走网关 PACKET_C2S
-            // （原版发送会进 EmbeddedChannel 队列永不送达 → 服务端踢人）。
-            if (hassium$isKeepAlive(packet)
-                    && !io.github.limuqy.mc.hassium.network.core.NetworkCore.getInstance().isGatewayOnlyLogin()) {
-                return;
-            }
-            if (core.routeC2S(packet)) {
-                ci.cancel();
-            }
-        }
-    }
-
-    /** keep-alive 响应判定（1.20.1 在 game 包；1.20.2+ 在 common 包——按监听器阶段已收敛，包类仅防误伤）。 */
-    @Unique
-    private static boolean hassium$isKeepAlive(Packet<?> packet) {
-#if MC_VER < MC_1_21_1
-        return packet instanceof net.minecraft.network.protocol.game.ServerboundKeepAlivePacket;
-#else
-        return packet instanceof net.minecraft.network.protocol.common.ServerboundKeepAlivePacket;
-#endif
-    }
 
     /**
      * 聚合拦截公共逻辑（需回调的包不聚合）。
@@ -193,9 +110,6 @@ public class MixinConnection {
         Connection self = (Connection) (Object) this;
         HassiumConnectionRegistry.markDisabled(self);
         HassiumAggregationManager.discardConnection(self);
-        io.github.limuqy.mc.hassium.network.core.NetworkCore.getInstance().setVanillaConnection(null);
-        if (this.channel != null) {
-            ZstdNegotiationTracker.removeChannel(this.channel);
-        }
+        LoginHandshakeManager.onDisconnect(self);
     }
 }

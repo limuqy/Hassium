@@ -12,18 +12,19 @@ import java.util.Locale;
 import java.util.stream.Stream;
 
 /**
- * T1 PROBE JSON 落盘：每轮冒烟统计输出时，把 metrics 原值 / 网关状态 / 计数器 /
+ * T1 PROBE JSON 落盘：每轮冒烟统计输出时，把 metrics 原值 / 计数器 /
  * 影子端 region 目录状态写成 {@code roundN.json}（手拼字符串，零新依赖）。
  * <p>
  * 目标目录由 JVM 属性 {@code hassium.smokeTest.probeDir} 指定（harness 注入
  * {@code build/smoke-test/probe}）；属性未设置时本类整体 no-op——不建目录、
  * 不写文件、无任何日志输出，行为与未接入前完全一致。
  * <p>
- * JSON v1 顶层键（T2 harness 依赖，只增不改名不删）：
+ * JSON v1 顶层键（T2 harness 依赖，只增不改名；gateway 对象已随网关轮次退役删除）：
  * {@code round, timestampMs, joined, dimension, playerPos[x,y,z],
- * stats, gateway{state,resumeAccepted,c2s,s2c},
+ * stats, clientCache{loadedChunks,trackedCandidateCount,actualPresent},
  * counters{sectionDeltaApplied,lightSegRecalc,locallyGenerated,...},
- * disk{shadowRegionExists,regionFileCount,cacheDir,dimensions{overworld|nether|end:{regionFileCount}}}。
+ * disk{shadowRegionExists,regionFileCount,cacheDir,dimensions{overworld|nether|end:{regionFileCount}}},
+ * chunkTrace{...}。
  * 未进服轮次 {@code joined=false}，dimension/playerPos 为 null。
  */
 public final class SmokeProbeWriter {
@@ -77,7 +78,6 @@ public final class SmokeProbeWriter {
             sb.append(",\n");
             appendStats(sb, NetworkStats.getMetrics());
             appendClientCache(sb, mc, dimension);
-            appendGateway(sb);
             appendCounters(sb);
             appendDisk(sb);
             appendChunkTrace(sb, dimension);
@@ -177,33 +177,6 @@ public final class SmokeProbeWriter {
         sb.append("  },\n");
     }
 
-
-    /** gateway：NetworkCore 只读公开 API；读取异常按 dumpGatewayAssertion 同语义降级为 ERROR。 */
-    private static void appendGateway(StringBuilder sb) {
-        String state;
-        boolean resumeAccepted;
-        long c2s;
-        long s2c;
-        try {
-            io.github.limuqy.mc.hassium.network.core.NetworkCore core =
-                    io.github.limuqy.mc.hassium.network.core.NetworkCore.getInstance();
-            state = core.state().toString();
-            resumeAccepted = core.lastResumeAccepted();
-            c2s = core.c2sRoutedCount();
-            s2c = core.s2cDispatchedCount();
-        } catch (Throwable t) {
-            state = "ERROR";
-            resumeAccepted = false;
-            c2s = 0L;
-            s2c = 0L;
-        }
-        sb.append("  \"gateway\": {\n");
-        strField(sb, "state", state);
-        sb.append("    \"resumeAccepted\": ").append(resumeAccepted).append(",\n");
-        field(sb, "c2s", c2s);
-        lastField(sb, "s2c", s2c);
-        sb.append("  },\n");
-    }
 
     /**
      * counters：真实字段来源——
@@ -355,11 +328,6 @@ public final class SmokeProbeWriter {
     /** 对象末位数值字段（无尾逗号）。 */
     private static void lastField(StringBuilder sb, String name, long value) {
         sb.append("    \"").append(name).append("\": ").append(value).append('\n');
-    }
-
-    /** 带尾逗号的字符串字段。 */
-    private static void strField(StringBuilder sb, String name, String value) {
-        sb.append("    \"").append(name).append("\": ").append(jsonString(value)).append(",\n");
     }
 
     /** 坐标用定点小数（6 位），避免科学计数法进 JSON。 */

@@ -1,5 +1,7 @@
 # Hassium 配置项全面审计报告
 
+> **⚠ 时效标注（2026-09-04，直连拓扑回归 / 全局包压缩退役）**：本文为 2026-08-09 时点审计快照。直连拓扑裁剪后以下键族已删除（真相源以当前 `ConfigSchema` 为准）：`dataplane.*`（2 键）、`master.controlReachableEndpoints` / `bindHost` / `authToken`、`master.migration*` 7 键、`master.resumeTicketTtlMs`；同日退役 **管线级全局包压缩**：`master.globalPacketCompression` / `master.globalCompressionLevel` / `master.globalCompressionThreshold` / `master.magiclessZstd` 4 键删除（通道压缩由聚合字典 ZSTD + 区块推送自有压缩承担，`master.aggregationMaxWaitTimeMs` 默认 20→50）；`master.enabled` 默认恢复 true；`net.*` 语义改为「客户端优化通道协商开关」。文中相关表格仅作历史参考。
+
 审计日期：2026-08-09（config-restructure 工作流 T3 按定稿键表 `work/key-mapping.md` 全文重写；键名重排 2026-08-09 生效，**不兼容 1.x toml、无迁移逻辑**）
 原审计：2026-07-21（基于 1.1.2 旧结构）与 2026-08-09 首轮（基于 2.0.0 旧键名）——键集/默认值/键名均已过时，本次全文重写。
 术语按 `.omp/workflows/docs-2.0/work/domain-naming.md`（网络核心 / 区块核心 / 主控核心；影子端 = 区块核心后端引擎）。

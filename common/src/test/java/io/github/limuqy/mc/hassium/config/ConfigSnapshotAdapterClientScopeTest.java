@@ -108,33 +108,17 @@ class ConfigSnapshotAdapterClientScopeTest {
     }
 
     @Test
-    void clientMasterKeysAreMigrationPolicyOnly() {
-        // 端点/鉴权/续流 TTL 仅 SERVER；客户端 schema 只暴露 L1 迁移策略 6 键
+    void clientMasterKeysAreRetired() {
+        // 网关拓扑退役：master.* 迁移策略 6 键与端点/鉴权/续流 TTL 键全族删除；
+        // 客户端 schema 不再有任何 master.* 键，dataplane.* 键族整体删除
         assertTrue(ConfigSchema.clientEntries().stream()
+                .noneMatch(e -> e.path().startsWith("master.")));
+        assertTrue(ConfigSchema.entries().stream()
+                .noneMatch(e -> e.path().startsWith("dataplane.")));
+        assertTrue(ConfigSchema.entries().stream()
                 .noneMatch(e -> e.path().equals("master.authToken")
                         || e.path().equals("master.controlReachableEndpoints")
-                        || e.path().equals("master.resumeTicketTtlMs")));
-        long migrationKeys = ConfigSchema.clientEntries().stream()
-                .filter(e -> e.path().startsWith("master."))
-                .count();
-        assertEquals(6, migrationKeys);
-    }
-
-    @Test
-    void physicalClientSnapshotClearsServerOnlyMasterControl() {
-        HassiumConfig.MasterCoreConfig serverish = HassiumConfig.MasterCoreConfig.DEFAULT
-                .withGatewayAuth("0.0.0.0", "secret")
-                .withMigrationPolicy(12.0, 5.5, "01:00-02:00", 3000L, 8000L, 9000L);
-        HassiumConfig original = new HassiumConfig(
-                HassiumConfig.StorageConfig.DEFAULT,
-                HassiumConfig.ChunkCoreConfig.DEFAULT,
-                serverish,
-                HassiumConfig.CompatConfig.DEFAULT,
-                HassiumConfig.DebugConfig.DEFAULT);
-        ConfigValues values = ConfigSnapshotAdapter.toValues(original);
-        HassiumConfig restored = ConfigSnapshotAdapter.fromValues(values, true);
-        assertEquals("", restored.master().authToken());
-        assertTrue(restored.master().controlReachableEndpoints().isEmpty());
-        assertEquals(12.0, restored.master().migrationMinTps());
+                        || e.path().equals("master.resumeTicketTtlMs")
+                        || e.path().equals("master.bindHost")));
     }
 }

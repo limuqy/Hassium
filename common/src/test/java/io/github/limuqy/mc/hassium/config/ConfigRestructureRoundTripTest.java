@@ -19,11 +19,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * T4 config-restructure 一次性 round-trip 验证（.omp/workflows/config-restructure）。
  * <p>
- * 验证点（对照 work/key-mapping.md）：
- * 1. defaults 生成 71 键，前缀分布 23/3/21/18/2/2/2
+ * 验证点（对照 work/key-mapping.md；网关拓扑退役波后更新）：
+ * 1. defaults 生成 57 键，前缀分布 21/16/16/2/2
  * 2. client/server toml 写读 round-trip（含全部新键组）
- * 3. 新键可加载抽查（chunk.seedGenEnabled 双端 / master.migrationFaultTimeoutMs / dataplane.udpListeners 复杂值）
- * 4. 删键（recoveryFreeze / controlStallMs / failoverExpiryMs / storage.mode / chunk.loadThreads）不再出现在写出的 toml
+ * 3. 新键可加载抽查（chunk.seedGenEnabled 双端 / master.* 聚合键族）
+ * 4. 删键（recoveryFreeze / controlStallMs / failoverExpiryMs / storage.mode / chunk.loadThreads /
+ *    网关监听/鉴权/控制面端点/L1 迁移/续流票据/dataplane.*）不再出现在写出的 toml
  * 5. 默认值语义抽查 ≥5 键对照 key-mapping.md
  * <p>
  * 复跑：sh gradlew --no-daemon common:test --tests ConfigRestructureRoundTripTest
@@ -32,9 +33,14 @@ class ConfigRestructureRoundTripTest {
 
     private static final List<String> DELETED_KEYS =
             List.of("recoveryFreeze", "controlStallMs", "failoverExpiryMs", "storage.mode", "loadThreads",
-                    "dynamicThreadPoolEnabled", "minPushThreads", "maxPushThreads");
+                    "dynamicThreadPoolEnabled", "minPushThreads", "maxPushThreads",
+                    // 网关拓扑退役键族（toml 侧按裸键名扫描；schema 侧由 ConfigSchemaTest 兜底）
+                    "migrationMinTps", "migrationMaxLoadAverage", "migrationMaintenanceWindow",
+                    "migrationHeartbeatIntervalMs", "migrationIdleWindowMs", "migrationSilentTimeoutMs",
+                    "migrationFaultTimeoutMs", "migrationPrewarmTtlMs", "resumeTicketTtlMs",
+                    "bindHost", "authToken", "controlReachableEndpoints", "udpListeners");
 
-    // === 1. defaults 生成：71 键齐全 ===
+    // === 1. defaults 生成：57 键齐全 ===
 
     @Test
     void defaultsCoverAll78NewKeys() {
@@ -42,14 +48,14 @@ class ConfigRestructureRoundTripTest {
         Map<String, ConfigEntry<?>> byPath = ConfigSchema.entries().stream()
                 .collect(Collectors.toMap(e -> e.scope() + "/" + e.path(), Function.identity()));
 
-        assertEquals(71, ConfigSchema.entries().size(), "schema 留存键数");
-        assertEquals(71, values.asMap().size(), "defaults 键数");
+        assertEquals(53, ConfigSchema.entries().size(), "schema 留存键数");
+        assertEquals(53, values.asMap().size(), "defaults 键数");
 
         Map<String, Long> prefixCounts = ConfigSchema.entries().stream()
                 .collect(Collectors.groupingBy(e -> e.path().substring(0, e.path().indexOf('.') + 1),
                         Collectors.counting()));
-        assertEquals(Map.of("chunk.", 21L, "master.", 28L, "debug.", 16L,
-                "dataplane.", 2L, "storage.", 2L, "compat.", 2L), prefixCounts);
+        assertEquals(Map.of("chunk.", 21L, "master.", 12L, "debug.", 16L,
+                "storage.", 2L, "compat.", 2L), prefixCounts);
 
         // 双端同名键 chunk.seedGenEnabled 各一
         assertEquals(1L, ConfigSchema.entries().stream()
@@ -75,8 +81,8 @@ class ConfigRestructureRoundTripTest {
                 true, false, 32, 10, 45, 12, 30, 4, true, true, true);
         HassiumConfig.DebugConfig debug = new HassiumConfig.DebugConfig(
                 true, false, true, false, true, false, true, false, true, true, false);
-        HassiumConfig.MasterCoreConfig master = HassiumConfig.MasterCoreConfig.DEFAULT.withMigrationPolicy(
-                12.0, 5.5, "01:00-02:00", 3000L, 8000L, 9000L);
+        // 网关拓扑退役：client.toml 不再承载任何 master.* 键（原迁移策略 6 键已删）
+        HassiumConfig.MasterCoreConfig master = HassiumConfig.MasterCoreConfig.DEFAULT;
         HassiumConfig original = new HassiumConfig(
                 HassiumConfig.StorageConfig.DEFAULT, chunk, master,
                 HassiumConfig.CompatConfig.DEFAULT, debug);
@@ -84,52 +90,25 @@ class ConfigRestructureRoundTripTest {
         HassiumConfig loaded = FabricTomlConfigIO.loadClient(root);
         assertEquals(chunk, loaded.chunk(), "chunk.* round-trip");
         assertEquals(debug, loaded.debug(), "debug.* round-trip");
-        assertEquals(master.migrationMinTps(), loaded.master().migrationMinTps());
+        assertEquals(master, loaded.master(), "client toml 不再写 master.* 键 → 读回 DEFAULT");
         String toml = Files.readString(root.resolve("hassium/hassium-client.toml"));
-        assertTrue(toml.contains("lightVerify = true"), "client toml 缺 debug.lightVerify=true");
+        assertTrue(toml.contains("lightVerify = true"), "client toml 缺 debug.lightVerify=true:\n" + toml);
         assertFalse(toml.contains("dataplaneLogging"), "client toml 不应含服务端专属 debug.dataplaneLogging:\n" + toml);
-        // B2：迁移策略键进 client.toml（CLIENT scope）
-        assertTrue(toml.contains("migrationMinTps = 12.0"), "client toml 缺 migrationMinTps=12.0:\n" + toml);
-        assertTrue(toml.contains("migrationMaxLoadAverage = 5.5"), "client toml 缺 migrationMaxLoadAverage=5.5:\n" + toml);
-        assertTrue(toml.contains("migrationMaintenanceWindow = \"01:00-02:00\""),
-                "client toml 缺 migrationMaintenanceWindow:\n" + toml);
-        assertTrue(toml.contains("migrationHeartbeatIntervalMs = 3000"), "client toml 缺 migrationHeartbeatIntervalMs:\n" + toml);
-        assertTrue(toml.contains("migrationIdleWindowMs = 8000"), "client toml 缺 migrationIdleWindowMs:\n" + toml);
-        assertTrue(toml.contains("migrationSilentTimeoutMs = 9000"), "client toml 缺 migrationSilentTimeoutMs:\n" + toml);
-        assertFalse(toml.contains("authToken"), "client.toml 不应再写 master.authToken（改由 gateway_info 下发）:\n" + toml);
+        // 网关退役键族不得出现在 client.toml
+        assertFalse(toml.contains("migrationMinTps"), "client.toml 不应含已退役 master.migrationMinTps:\n" + toml);
+        assertFalse(toml.contains("migrationSilentTimeoutMs"), "client.toml 不应含已退役 master.migrationSilentTimeoutMs:\n" + toml);
+        assertFalse(toml.contains("authToken"), "client.toml 不应再写 master.authToken:\n" + toml);
         assertFalse(toml.contains("controlReachableEndpoints"),
                 "client.toml 不应再写 master.controlReachableEndpoints:\n" + toml);
     }
 
-    // === 2+3. server toml round-trip（master./dataplane./storage./compat./chunk.lightStrip）===
+    // === 2+3. server toml round-trip（master./storage./compat./chunk.lightStrip）===
 
     @Test
     void serverTomlRoundTripsNewKeys(@TempDir Path root) throws IOException {
         HassiumConfig.MasterCoreConfig master = new HassiumConfig.MasterCoreConfig(
-                true, 9, false, false, 5, 512, false, false, 8, 50L, 131072, false,
-                Set.of("CHUNK_PAYLOAD_S2C", "MAIN_CHANNEL"), true, 7, 4,
-                // D-M2 网关监听/鉴权（server.toml 往返）
-                "10.0.0.5", "secret-token",
-                List.of(new HassiumConfig.ReachableEndpoint("play.example", 25565, 100),
-                        new HassiumConfig.ReachableEndpoint("backup.example", 25565, 80)),
-                90_000L,
-                // CLIENT scope 迁移策略键：server.toml 不落盘（物理客户端经 client.toml 加载）→ 传默认值保证 record 往返相等
-                HassiumConfig.MasterCoreConfig.DEFAULT.migrationMinTps(),
-                HassiumConfig.MasterCoreConfig.DEFAULT.migrationMaxLoadAverage(),
-                HassiumConfig.MasterCoreConfig.DEFAULT.migrationMaintenanceWindow(),
-                HassiumConfig.MasterCoreConfig.DEFAULT.migrationHeartbeatIntervalMs(),
-                HassiumConfig.MasterCoreConfig.DEFAULT.migrationIdleWindowMs(),
-                HassiumConfig.MasterCoreConfig.DEFAULT.migrationSilentTimeoutMs(),
-                // SERVER scope：预热会话 TTL（T4 交付键，toml 往返）
-                120_000L,
-                // SERVER scope：续流票据有效期（T2 防重放时间窗口，toml 往返）
-                450_000L,
-                new HassiumConfig.DataPlaneConfig(true, List.of(
-                        new HassiumConfig.UdpListenerConfig("0.0.0.0", 31001, 60, List.of(
-                                new HassiumConfig.ReachableEndpoint("edge-a.example", 41001, 100),
-                                new HassiumConfig.ReachableEndpoint("edge-b.example", 42001, 80))),
-                        new HassiumConfig.UdpListenerConfig("10.0.0.10", 31002, 40, List.of(
-                                new HassiumConfig.ReachableEndpoint("edge-a.example", 43001, 100))))));
+                true, 9, false, false, 8, 50L, 131072, false,
+                Set.of("CHUNK_PAYLOAD_S2C", "MAIN_CHANNEL"), true, 7, 4);
         HassiumConfig.StorageConfig storage = new HassiumConfig.StorageConfig(true, 9);
         // server toml 只写 chunk.lightStrip/chunk.seedGenEnabled 两键，其余键读回默认 → 仅改这两键
         HassiumConfig.ChunkCoreConfig chunk = new HassiumConfig.ChunkCoreConfig(
@@ -146,20 +125,21 @@ class ConfigRestructureRoundTripTest {
         assertEquals(storage, loaded.storage(), "storage.* round-trip");
         assertEquals(chunk.seedGenEnabled(), loaded.chunk().seedGenEnabled(), "chunk.seedGenEnabled round-trip");
         assertEquals(chunk.lightStrip(), loaded.chunk().lightStrip(), "chunk.lightStrip round-trip");
-        assertEquals(master, loaded.master(), "master.*+dataplane.* round-trip（含 migrationFaultTimeoutMs/udpListeners 复杂值）");
+        assertEquals(master, loaded.master(), "master.* round-trip（含聚合键族与压缩黑名单）");
         assertEquals(compat, loaded.compat(), "compat.* round-trip");
         assertEquals(debug, loaded.debug(), "debug.* round-trip");
 
         String toml = Files.readString(root.resolve("hassium/hassium-server.toml"));
-        assertTrue(toml.contains("[[dataplane.udpListeners]]"));
-        assertTrue(toml.contains("[[dataplane.udpListeners.reachableEndpoints]]"));
-        assertTrue(toml.contains("[[master.controlReachableEndpoints]]"));
-        // nightconfig 嵌套表格式：scalar 键在 [master] 表内
-        assertTrue(toml.contains("migrationFaultTimeoutMs = 90000"), "server toml 缺 migrationFaultTimeoutMs=90000:\n" + toml);
-        assertTrue(toml.contains("migrationPrewarmTtlMs = 120000"), "server toml 缺 migrationPrewarmTtlMs=120000:\n" + toml);
-        // CLIENT scope 迁移策略键不得出现在 server toml
-        assertFalse(toml.contains("migrationMinTps"), "server toml 不应含 CLIENT scope 键 migrationMinTps:\n" + toml);
-        assertFalse(toml.contains("migrationSilentTimeoutMs"), "server toml 不应含 CLIENT scope 键 migrationSilentTimeoutMs:\n" + toml);
+        // 网关退役键族不得出现在 server.toml（写侧 legacy cfg.remove 同步清理旧文件残留）
+        assertFalse(toml.contains("[[dataplane.udpListeners]]"), "server toml 不应含已退役 dataplane.udpListeners:\n" + toml);
+        assertFalse(toml.contains("[[master.controlReachableEndpoints]]"),
+                "server toml 不应含已退役 master.controlReachableEndpoints:\n" + toml);
+        assertFalse(toml.contains("migrationFaultTimeoutMs"), "server toml 不应含已退役 migrationFaultTimeoutMs:\n" + toml);
+        assertFalse(toml.contains("migrationPrewarmTtlMs"), "server toml 不应含已退役 migrationPrewarmTtlMs:\n" + toml);
+        assertFalse(toml.contains("migrationMinTps"), "server toml 不应含已退役 migrationMinTps:\n" + toml);
+        assertFalse(toml.contains("resumeTicketTtlMs"), "server toml 不应含已退役 resumeTicketTtlMs:\n" + toml);
+        assertFalse(toml.contains("bindHost"), "server toml 不应含已退役 master.bindHost:\n" + toml);
+        assertFalse(toml.contains("authToken"), "server toml 不应含已退役 master.authToken:\n" + toml);
         assertTrue(toml.contains("seedGenEnabled = false"), "server toml 缺 chunk.seedGenEnabled=false");
         assertTrue(toml.contains("lightStrip = false"), "server toml 缺 chunk.lightStrip=false");
         assertTrue(toml.contains("zstdLevel = 9"), "server toml 缺 storage.zstdLevel=9");
@@ -201,26 +181,15 @@ class ConfigRestructureRoundTripTest {
         // chunk.seedGenEnabled 双端默认 false（network.seedGen.enabled → chunk.seedGenEnabled, false）
         assertEquals(false, values.get(ConfigSchema.CLIENT_CHUNK_SEED_GEN_ENABLED));
         assertEquals(false, values.get(ConfigSchema.SERVER_CHUNK_SEED_GEN_ENABLED));
-        // recoveryWindowMs → master.migrationFaultTimeoutMs = 60000（语义化迁移；silentTimeout 未配置时的回退值）
-        assertEquals(60_000L, values.get(ConfigSchema.MASTER_MIGRATION_FAULT_TIMEOUT_MS));
-        // B2/N2：默认静默超时 10000（失效识别 ≤15s），显式配置时优先于 faultTimeout
-        assertEquals(10_000L, values.get(ConfigSchema.MASTER_MIGRATION_SILENT_TIMEOUT_MS));
-        assertTrue(values.get(ConfigSchema.MASTER_MIGRATION_SILENT_TIMEOUT_MS) <= 15_000L,
-                "默认静默超时 ≤15s（N2 快速失效）");
-        assertEquals(5_000L, values.get(ConfigSchema.MASTER_MIGRATION_HEARTBEAT_INTERVAL_MS));
-        assertEquals(10_000L, values.get(ConfigSchema.MASTER_MIGRATION_IDLE_WINDOW_MS));
-        assertEquals(15.0, values.get(ConfigSchema.MASTER_MIGRATION_MIN_TPS));
-        assertEquals(4.0, values.get(ConfigSchema.MASTER_MIGRATION_MAX_LOAD_AVERAGE));
-        assertEquals("", values.get(ConfigSchema.MASTER_MIGRATION_MAINTENANCE_WINDOW));
-        assertEquals(60_000L, values.get(ConfigSchema.MASTER_MIGRATION_PREWARM_TTL_MS));
+        // master 聚合键族默认（enablePacketAggregation=true / minBatch=4 / maxWait=20ms / maxSize=256KiB / compactHeader=true）
+        assertEquals(true, values.get(ConfigSchema.MASTER_PACKET_AGGREGATION));
+        assertEquals(4, values.get(ConfigSchema.MASTER_AGGREGATION_MIN_BATCH));
+        assertEquals(50L, values.get(ConfigSchema.MASTER_AGGREGATION_MAX_WAIT));
+        assertEquals(256 * 1024, values.get(ConfigSchema.MASTER_AGGREGATION_MAX_SIZE));
+        assertEquals(true, values.get(ConfigSchema.MASTER_COMPACT_HEADER));
         // master.maxChunksPerTick / serverChunkPushThreads 默认 4
         assertEquals(4, values.get(ConfigSchema.MASTER_MAX_CHUNKS_PER_TICK));
         assertEquals(4, values.get(ConfigSchema.MASTER_SERVER_PUSH_THREADS));
-        // dataplane.udpListeners 默认编码 [0.0.0.0:25565 (w=100) → 127.0.0.1:25565 (w=100)]
-        assertEquals(List.of("0.0.0.0,25565,100;127.0.0.1,25565,100"),
-                values.get(ConfigSchema.DATAPLANE_UDP_LISTENERS));
-        // master.controlReachableEndpoints 默认空表
-        assertEquals(List.of(), values.get(ConfigSchema.MASTER_CONTROL_ENDPOINTS));
         // storage.enabled 默认 false（REQ 决策 6 修正 lang 错误）
         assertEquals(false, values.get(ConfigSchema.STORAGE_ENABLED));
         // debug.* 客户端网络指标默认关闭，退出自动复位默认开启

@@ -3,7 +3,6 @@ package io.github.limuqy.mc.hassium;
 import io.github.limuqy.mc.hassium.cache.client.ClientLifecycleHelper;
 import io.github.limuqy.mc.hassium.client.ClientSmokeTest;
 import io.github.limuqy.mc.hassium.network.DictionaryManager;
-import io.github.limuqy.mc.hassium.network.dataplane.DataPlaneClientLifecycle;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -30,8 +29,8 @@ import net.neoforged.fml.event.lifecycle.FMLClientSetupEvent;
  * 处理客户端特定的事件和网络初始化。
  * 侧边隔离由 {@code @EventBusSubscriber(value = Dist.CLIENT)} 负责，勿再使用已失效的 {@code @OnlyIn}。
  * <p>
- * T6：客户端 failover 已退役——不再初始化控制面重连单例 / 不再发送握手请求
- * （新架构客户端不发 vanilla 握手，服务端旧握手链休眠）；LoggingOut 直接全量清理。
+ * 直连拓扑：客户端不发 vanilla 握手（登录/配置期协商 + play_init_s2c 激活）；
+ * LoggingOut 直接全量清理。
  */
 #if MC_VER < MC_1_21_1
 @Mod.EventBusSubscriber(modid = Constants.MOD_ID, value = Dist.CLIENT, bus = Mod.EventBusSubscriber.Bus.MOD)
@@ -83,14 +82,8 @@ public class HassiumNeoForgeClient {
          */
         @SubscribeEvent
         public void onPlayerLoggedOut(ClientPlayerNetworkEvent.LoggingOut event) {
-            // 客户端 failover 已退役（T6）：无恢复态 begin / orchestrator 轮转，
-            // 直接全量清理 + 关闭 UDP 数据面 + 延后 finalize（与 Mixin TAIL 幂等）。
+            // 直连拓扑：无网关/UDP 数据面，断连即全量清理 + 延后 finalize（与 Mixin TAIL 幂等）。
             ClientLifecycleHelper.cleanupOnDisconnect();
-            try {
-                DataPlaneClientLifecycle.getInstance().stopUdp(false);
-            } catch (Throwable ignored) {
-                // UDP 数据面可选；关闭失败不得阻断断连清理
-            }
             // 延后到下一 tick：等世界拆除；与 MixinMinecraft TAIL 幂等兜底
             net.minecraft.client.Minecraft.getInstance().execute(ClientLifecycleHelper::finalizeDisconnectIfTerminal);
         }

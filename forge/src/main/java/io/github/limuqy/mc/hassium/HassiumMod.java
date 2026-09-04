@@ -5,8 +5,6 @@ import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.metrics.NetworkStats;
 import io.github.limuqy.mc.hassium.network.ChunkSender;
 import io.github.limuqy.mc.hassium.network.ForgeNetworkManager;
-import io.github.limuqy.mc.hassium.network.dataplane.DataPlaneFrame;
-import io.github.limuqy.mc.hassium.network.dataplane.DataPlaneServer;
 #if MC_VER < MC_1_21_6
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 #else
@@ -35,17 +33,9 @@ public class HassiumMod {
         }
         CommonClass.init();
 
-        // review-fix: T10-M1：数据面 BULK 路由对齐 Fabric——先查 UDP 数据面可用（未启用/未绑定/无会话时
-        // DataPlaneServer.tryRouteBulk 自检返回 false），命中则走 BULK 通道；否则回退帧通道 Primary
+        // 直连拓扑（2.0.0 裁剪）：UDP 数据面退役，压缩区块全走 hassium:main 通道 Primary 直发
         ChunkSender.setInstance((player, compressed) -> {
             byte[] payload = compressed.encode();
-            if (DataPlaneServer.tryRouteBulk(
-                    player.getUUID(),
-                    DataPlaneFrame.TYPE_BULK_COMPRESSED_CHUNK,
-                    payload)) {
-                return; // 已走 Data 通道
-            }
-            // 未走 Data 通道 → 走 Primary（帧通道），记分流统计（口径 = encode() 总长度，与 Data 侧对齐）
             NetworkStats.recordBulkSentPrimary(payload.length);
             // review-fix: T11-19 传已编码 payload，避免 sendCompressedChunk 内部二次 encode()（重复分配+拷贝）
             ForgeNetworkManager.sendCompressedChunk(player, payload);

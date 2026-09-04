@@ -3,7 +3,7 @@ package io.github.limuqy.mc.hassium.network;
 #if MC_VER >= MC_1_21_1
 import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.compat.ResourceLocationCompat;
-import io.github.limuqy.mc.hassium.config.HassiumConfigService;
+import io.github.limuqy.mc.hassium.network.handshake.LoginCaps;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
@@ -12,20 +12,18 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 /**
  * 预握手 C2S payload（配置阶段声明 Hassium 能力；1.20.2+ 配置阶段协议原生支持）。
  * <p>
- * 与 {@link PreHandshakeProtocol#encodeFields} 的 legacy 布局字段一致；
- * 服务端收到后仅 {@link PlayerCompressionTracker#markPreHandshake}，
- * 完整协商（ZSTD/聚合/数据面/位置）仍在 Play 阶段握手完成。
+ * 直连拓扑下的 1.20.2+ 能力协商载体：字段带客户端声明位（{@link LoginCaps} 语义），
+ * 服务端按位与后 {@link LoginHandshakeManager#markNegotiated}（认证已完成，
+ * {@code getOwner()} 可取 UUID）；Play 期 {@code play_init_s2c} 下发协商结果。
  * <p>
  * 仅 {@code MC_VER >= MC_1_21_1} 编译（1.20.1 无 common 包 CustomPacketPayload；
- * fabric 旧段走 legacy Identifier 通道）。
+ * 1.20.1 走 vanilla login query，见 {@code MixinServerLoginPacketListenerImpl}）。
  */
 #if MC_VER >= MC_1_21_1
 public record PreHandshakePayload(
         int protocolVersion,
         String modVersion,
-        boolean clientCache,
-        boolean globalCompression,
-        boolean compactHeader
+        int clientCaps
 ) implements CustomPacketPayload {
 
     public static final Type<PreHandshakePayload> TYPE =
@@ -35,30 +33,23 @@ public record PreHandshakePayload(
             StreamCodec.of(PreHandshakePayload::encode, PreHandshakePayload::decode);
 
     public static PreHandshakePayload create() {
-        HassiumConfigService cfg = HassiumConfigService.getInstance();
         return new PreHandshakePayload(
                 Constants.CURRENT_PROTOCOL_VERSION,
                 Constants.MOD_VERSION,
-                cfg.isClientCacheEnabled(),
-                cfg.isGlobalPacketCompressionEnabled(),
-                cfg.isCompactHeaderEnabled());
+                LoginCaps.buildClientCaps());
     }
 
     private static void encode(FriendlyByteBuf buf, PreHandshakePayload payload) {
         buf.writeVarInt(payload.protocolVersion);
-        buf.writeUtf(payload.modVersion);
-        buf.writeBoolean(payload.clientCache);
-        buf.writeBoolean(payload.globalCompression);
-        buf.writeBoolean(payload.compactHeader);
+        buf.writeUtf(payload.modVersion, 128);
+        buf.writeVarInt(payload.clientCaps);
     }
 
     private static PreHandshakePayload decode(FriendlyByteBuf buf) {
         return new PreHandshakePayload(
                 buf.readVarInt(),
                 buf.readUtf(128),
-                buf.readBoolean(),
-                buf.readBoolean(),
-                buf.readBoolean());
+                buf.readVarInt());
     }
 
     @Override
@@ -67,6 +58,6 @@ public record PreHandshakePayload(
     }
 }
 #else
-class PreHandshakePayload { // 1.20.2-1.20.4 / 1.20.1：不使用 payload 形态（fabric legacy / login query）
+class PreHandshakePayload { // 1.20.1：不使用 payload 形态（login query 载体）
 }
 #endif

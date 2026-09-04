@@ -2,18 +2,11 @@ package io.github.limuqy.mc.hassium.mixin;
 
 import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.concurrent.MainThreadDispatcher;
-import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.network.PlayerCompressionTracker;
-import io.github.limuqy.mc.hassium.network.ResumeTicketValidator;
 import io.github.limuqy.mc.hassium.network.ServerChunkPushManager;
-import io.github.limuqy.mc.hassium.network.ServerLoadReporter;
-import io.github.limuqy.mc.hassium.network.ServerGatewayInfoSender;
-import io.github.limuqy.mc.hassium.network.dataplane.DataPlaneUdpServer;
-import io.github.limuqy.mc.hassium.platform.Services;
+import io.github.limuqy.mc.hassium.network.handshake.ServerHandshakeActivation;
 import io.github.limuqy.mc.hassium.server.RuntimeServerContext;
 import io.github.limuqy.mc.hassium.server.ServerSmokeTest;
-import io.github.limuqy.mc.hassium.server.GatewayPlatformWiring;
-import io.github.limuqy.mc.hassium.server.GatewayPlayerBridge;
 import io.github.limuqy.mc.hassium.utils.TickMonitor;
 import net.minecraft.server.MinecraftServer;
 import org.spongepowered.asm.mixin.Mixin;
@@ -27,7 +20,7 @@ import java.util.function.BooleanSupplier;
 /**
  * Mixin to MinecraftServer
  * <p>
- * 在服务器关闭时清理 ServerChunkPushManager
+ * 在服务器关闭时清理 ServerChunkPushManager；tick 泵聚合刷新 + 区块推送 + Play 激活。
  */
 @Mixin(MinecraftServer.class)
 public class MixinMinecraftServer {
@@ -49,22 +42,14 @@ public class MixinMinecraftServer {
         MinecraftServer server = (MinecraftServer) (Object) this;
         if (RuntimeServerContext.isDedicatedServerContext()) {
             ServerChunkPushManager.getInstance().onServerTick(server);
-            // T7 负载上报（REQ §B12）：周期采样 CPU/TPS/内存/玩家数，日志输出；
-            // 网关侧接收口 TODO(T8)。
-            ServerLoadReporter.onServerTick(server);
-            // M1 bootstrap：补发 <init> 时 connection 未挂载玩家的 gateway_info（CONTRACTS §2）
-            ServerGatewayInfoSender.drainPending(server);
+            // 登录协商结果 → Play 激活（connection 挂载后下发 play_init；空转零成本）
+            ServerHandshakeActivation.drainPending(server);
         }
         // 服务端冒烟测试：检测玩家退出后切换视距
         ServerSmokeTest.onServerTick(server);
-        DataPlaneUdpServer.tick(System.currentTimeMillis());
-        // T12 网关登录桥泵（登录监听器 tick + 物化检测 + 断连清理；空转零成本）
-        GatewayPlayerBridge.tick(server);
         // mspt 采样（debug.dispatcherLogging 开启时每秒输出一行 [MSPT]）
         TickMonitor.finishHassiumTick();
         TickMonitor.sampleServerTick(server, tickCount);
-        // T2 票据防重放：epoch 表定期落盘（内部 60s 限频；停机窗口重放由 5min 时间窗口兜底）
-        ResumeTicketValidator.persistIfDue();
     }
 
     // review-fix: T7-59: handler 统一加 hassium$ 前缀
@@ -83,29 +68,6 @@ public class MixinMinecraftServer {
         }
         // 初始化服务端冒烟测试（设置初始 VD=20）
         ServerSmokeTest.initIfEnabled(server);
-        // 绑定 UDP 数据端口（Task 3 cutover：旧 PoC TCP DataPlaneServer 已退役为 façade）。
-        // 绑定失败不得拖垮 vanilla TCP——主控/缓存路径仍可用；UDP 数据面与加权分流降级。
-        try {
-            DataPlaneUdpServer.bind();
-        } catch (Throwable t) {
-            Constants.LOG.warn("Hassium: Failed to bind UDP dataplane, server will run without it", t);
-        }
-        // 单25565原版基线：旧 GatewayServer 独立监听 25566 仅在显式启用主控时启动。
-        if (RuntimeServerContext.isDedicatedServerContext()
-                && HassiumConfigService.getInstance().isMasterEnabled()) {
-            GatewayPlatformWiring.install(server);
-        }
-        // T2 票据防重放：epoch 表启动加载 + 有效期配置（config 目录 hassium-state.json）。
-        // 配置读取失败仅告警并回退默认 TTL——防重放持久化不阻断服务器启动。
-        try {
-            ResumeTicketValidator.configureStateFile(
-                    Services.PLATFORM.getConfigDirectory().resolve("hassium-state.json"));
-            ResumeTicketValidator.configureTtlMs(
-                    HassiumConfigService.getInstance().getConfig().master().resumeTicketTtlMs());
-            ResumeTicketValidator.load();
-        } catch (Throwable t) {
-            Constants.LOG.warn("Hassium: ResumeTicketValidator init failed (fallback defaults): {}", t.toString());
-        }
     }
 
     // review-fix: T7-59: handler 统一加 hassium$ 前缀
@@ -115,14 +77,8 @@ public class MixinMinecraftServer {
         // 服务器关闭时清理推送管理器
         ServerChunkPushManager.getInstance().shutdown();
         Constants.LOG.info("Hassium: ServerChunkPushManager shutdown");
-        // 关闭 UDP 数据端口
-        DataPlaneUdpServer.shutdown();
-        // T12 网关停机（桥清理 + 会话完整清理；幂等）
-        GatewayPlatformWiring.shutdown(server);
         // 清理玩家压缩状态追踪
         PlayerCompressionTracker.clear();
         Constants.LOG.info("Hassium: PlayerCompressionTracker cleared");
-        // T2 票据防重放：epoch 表停机落盘（原子写；重启后 load 继续防重放）
-        ResumeTicketValidator.save();
     }
 }

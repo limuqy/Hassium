@@ -40,18 +40,5 @@ public class MixinClientCommonPacketListenerImpl {
             CallbackInfo ci) {
         ClientLifecycleHelper.cleanupOnDisconnect();
     }
-
-#if MC_VER >= MC_1_21_1
-    /**
-     * M1 bootstrap：gateway_info 接收（1.20.2+：handleCustomPayload 在 common 包
-     * ClientCommonPacketListenerImpl）。非 gateway_info 通道直接放行（不 cancel）。
-     * 1.20.1 的注入在 {@link MixinClientPacketListener}（game 包），双端各只注入一处。
-     */
-    @Inject(method = "handleCustomPayload", at = @At("HEAD"), cancellable = true)
-    private void hassium$onCustomPayload(net.minecraft.network.protocol.common.ClientboundCustomPayloadPacket packet, CallbackInfo ci) {
-        io.github.limuqy.mc.hassium.network.ClientGatewayBootstrap.handleCustomPayload(packet, ci);
-    }
-#endif
-
 #endif
 }

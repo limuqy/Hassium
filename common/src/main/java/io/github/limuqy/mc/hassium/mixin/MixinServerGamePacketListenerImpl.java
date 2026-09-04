@@ -3,13 +3,11 @@ package io.github.limuqy.mc.hassium.mixin;
 import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.network.PlayerCompressionTracker;
 import io.github.limuqy.mc.hassium.network.ServerChunkPushManager;
-import io.github.limuqy.mc.hassium.network.dataplane.ControlFailoverHandler;
-import io.github.limuqy.mc.hassium.network.dataplane.DataPlaneUdpServer;
+import io.github.limuqy.mc.hassium.network.handshake.ServerHandshakeActivation;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.network.ServerGamePacketListenerImpl;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
-import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
@@ -23,14 +21,6 @@ public class MixinServerGamePacketListenerImpl {
     @Shadow
     public ServerPlayer player;
 
-    @Inject(method = "tick", at = @At("HEAD"))
-    private void hassium$recordControlActivity(CallbackInfo ci) {
-        long epoch = DataPlaneUdpServer.currentControlEpoch(player.getUUID());
-        if (epoch != 0L) {
-            DataPlaneUdpServer.recordControlActivity(player.getUUID(), epoch, System.currentTimeMillis());
-        }
-    }
-
     // review-fix: T7-59: handler 统一加 hassium$ 前缀
     @Inject(method = "onDisconnect", at = @At("HEAD"))
     private void hassium$onPlayerDisconnect(
@@ -43,10 +33,6 @@ public class MixinServerGamePacketListenerImpl {
         Constants.LOG.info("Hassium: Player {} disconnected, push queue cleaned up", player.getName().getString());
         PlayerCompressionTracker.removePlayer(player);
         ServerChunkPushManager.getInstance().removePlayer(player.getUUID());
-        long epoch = DataPlaneUdpServer.currentControlEpoch(player.getUUID());
-        if (epoch != 0L) {
-            DataPlaneUdpServer.onPrimaryDisconnect(player.getUUID(), epoch, System.currentTimeMillis());
-        }
-        ControlFailoverHandler.getInstance().remove(player.getUUID());
+        ServerHandshakeActivation.removePlayer(player.getUUID());
     }
 }

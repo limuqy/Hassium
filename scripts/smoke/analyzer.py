@@ -59,15 +59,6 @@ def _round_probe(result: dict[str, Any], number: int, root: Path | None = None) 
     return _obj(_obj(result.get("Probe")).get(f"Round{number}"))
 
 
-def _gateway_markers(text: str) -> dict[str, dict[str, Any]]:
-    pattern = re.compile(
-        r"HassiumSmokeTest:GATEWAY_CLIENT\s+ROUND(\d)\s+state=(\w+)\s+"
-        r"s2c=(\d+)\s+c2s=(\d+)\s+resume=(true|false)"
-    )
-    return {f"ROUND{m.group(1)}": {"gatewayState": m.group(2), "gatewayS2c": int(m.group(3)),
-                                   "gatewayC2s": int(m.group(4)), "gatewayResume": m.group(5) == "true"}
-            for m in pattern.finditer(text)}
-
 def _server_full_push_timeouts(text: str) -> list[dict[str, Any]]:
     """读取服务端明确记录的 pending-confirm 超时全量直推事件。"""
     pattern = re.compile(
@@ -218,17 +209,28 @@ def analyze_result(result: dict[str, Any], root: Path) -> dict[str, Any]:
         failures.append(_failure("CLIENT_EXIT_NONZERO", exitCode=client_exit))
     checks["client_exit"] = "PASS" if client_exit in (None, 0) else "FAIL"
 
+    # 直连拓扑门禁：登录期握手完成（play_init 激活）+ 聚合激活确认（PENDING→ENABLED）。
+    # 两处 marker 均为 Constants.LOG 常驻输出（不依赖 debug.* 开关）；
+    # 区块落地由 probe 指标（CLIENT_CACHE_EMPTY / METRIC_*）把守。
+    # 管线级全局包压缩已退役（run9 退役波）：原 ZSTD_NOT_ACTIVE 门由聚合门替代。
+    has_handshake = "Hassium: play init (caps=" in log_text
+    has_agg = "Hassium: Aggregation enabled for" in log_text
+    if not has_handshake:
+        failures.append(_failure("HANDSHAKE_NOT_NEGOTIATED"))
+    if not has_agg:
+        failures.append(_failure("AGGREGATION_NOT_ACTIVE"))
+    checks["login_handshake"] = "PASS" if has_handshake else "FAIL"
+    checks["zstd_pipeline"] = "PASS" if has_agg else "FAIL"
+
     round_numbers = (1,) if scenario == "seedgen" else (1, 2)
     stats_ok = {n: bool(re.search(rf"CLIENT_STATS ROUND{n} begin", log_text)
                     and re.search(rf"CLIENT_STATS ROUND{n} end", log_text)) for n in round_numbers}
     if scenario == "classic" and not all(stats_ok.values()):
         failures.append(_failure("ROUND_STATS_MISSING", rounds=[n for n, ok in stats_ok.items() if not ok]))
 
-    markers = _gateway_markers(log_text)
     trace_reports: dict[str, Any] = {}
     spatial_reports: dict[str, Any] = {}
-    gateway_required = bool(result.get("GatewayRequired", True))
-    # 保留空间快照供结果诊断；影子预生成/全视距覆盖已裁剪，任何场景均不以它作通过门禁。
+    # 空间快照仅作结果诊断；区块落地门禁由 probe 指标承担（shadow 预生成/全视距已裁剪）。
     for number in round_numbers:
         probe = _round_probe(result, number, root)
         if not probe:
@@ -246,12 +248,6 @@ def analyze_result(result: dict[str, Any], root: Path) -> dict[str, Any]:
                 warnings.append(_failure("LATE_NEAR_PLAYER_CHUNK", severity="P1", round=number,
                                          thresholdMs=10_000, chunks=late_near_player[:64],
                                          truncated=len(late_near_player) > 64))
-        gateway = markers.get(f"ROUND{number}", _obj(result.get(f"GatewayRound{number}")))
-        if gateway_required and (scenario == "classic" or gateway):
-            c2s = _num(gateway.get("gatewayC2s"))
-            if gateway.get("gatewayState") != "ACTIVE" or (scenario == "classic" and (c2s is None or c2s <= 0)):
-                failures.append(_failure("GATEWAY_NOT_ACTIVE", round=number,
-                                         state=gateway.get("gatewayState", "MISSING"), c2s=c2s or 0))
         gaps = trace_report["gaps"]
         for key, code in (("expectedNotPresent", "TRACE_EXPECTED_NOT_PRESENT"),
                           ("receivedNotInjected", "TRACE_RECEIVED_NOT_INJECTED"),
@@ -276,10 +272,6 @@ def analyze_result(result: dict[str, Any], root: Path) -> dict[str, Any]:
     if scenario == "classic" and not bool(result.get("ServerSwitched")):
         failures.append(_failure("SERVER_SWITCH_MISSING"))
     checks["server_switch"] = "PASS" if scenario != "classic" or bool(result.get("ServerSwitched")) else "FAIL"
-    if scenario == "migrate":
-        resumed = _obj(_round_probe(result, 2, root).get("gateway")).get("resumeAccepted")
-        if resumed is not True:
-            failures.append(_failure("MIGRATION_RESUME_NOT_ACCEPTED", value=resumed))
 
     fatal = result.get("LogAuditFailures")
     fatal = fatal if isinstance(fatal, list) else []

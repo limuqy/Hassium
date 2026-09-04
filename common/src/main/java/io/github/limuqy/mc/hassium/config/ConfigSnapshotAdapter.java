@@ -52,10 +52,6 @@ public final class ConfigSnapshotAdapter {
                 .with(ConfigSchema.STORAGE_ZSTD_LEVEL, config.storage().zstdLevel())
                 .with(ConfigSchema.MASTER_ENABLED, master.enabled())
                 .with(ConfigSchema.MASTER_COMPRESSION_LEVEL, master.compressionLevel())
-                .with(ConfigSchema.MASTER_MAGICLESS_ZSTD, master.magiclessZstd())
-                .with(ConfigSchema.MASTER_GLOBAL_PACKET_COMPRESSION, master.globalPacketCompression())
-                .with(ConfigSchema.MASTER_GLOBAL_COMPRESSION_LEVEL, master.globalCompressionLevel())
-                .with(ConfigSchema.MASTER_GLOBAL_COMPRESSION_THRESHOLD, master.globalCompressionThreshold())
                 .with(ConfigSchema.MASTER_USE_CONTEXT_COMPRESSION, master.useContextCompression())
                 .with(ConfigSchema.MASTER_PACKET_AGGREGATION, master.enablePacketAggregation())
                 .with(ConfigSchema.MASTER_AGGREGATION_MIN_BATCH, master.aggregationMinBatchSize())
@@ -66,21 +62,7 @@ public final class ConfigSnapshotAdapter {
                 .with(ConfigSchema.MASTER_METRICS_ENABLED, master.metricsEnabled())
                 .with(ConfigSchema.MASTER_MAX_CHUNKS_PER_TICK, master.maxChunksPerTick())
                 .with(ConfigSchema.MASTER_SERVER_PUSH_THREADS, master.serverChunkPushThreads())
-                .with(ConfigSchema.MASTER_BIND_HOST, master.bindHost())
-                .with(ConfigSchema.MASTER_AUTH_TOKEN, master.authToken())
-                .with(ConfigSchema.MASTER_CONTROL_ENDPOINTS, master.controlReachableEndpoints().stream().map(DataPlaneEndpointConfig::encodeReachable).toList())
-                .with(ConfigSchema.MASTER_MIGRATION_FAULT_TIMEOUT_MS, master.migrationFaultTimeoutMs())
-                .with(ConfigSchema.MASTER_MIGRATION_MIN_TPS, master.migrationMinTps())
-                .with(ConfigSchema.MASTER_MIGRATION_MAX_LOAD_AVERAGE, master.migrationMaxLoadAverage())
-                .with(ConfigSchema.MASTER_MIGRATION_MAINTENANCE_WINDOW, master.migrationMaintenanceWindow())
-                .with(ConfigSchema.MASTER_MIGRATION_HEARTBEAT_INTERVAL_MS, master.migrationHeartbeatIntervalMs())
-                .with(ConfigSchema.MASTER_MIGRATION_IDLE_WINDOW_MS, master.migrationIdleWindowMs())
-                .with(ConfigSchema.MASTER_MIGRATION_SILENT_TIMEOUT_MS, master.migrationSilentTimeoutMs())
-                .with(ConfigSchema.MASTER_MIGRATION_PREWARM_TTL_MS, master.migrationPrewarmTtlMs())
-                .with(ConfigSchema.MASTER_RESUME_TICKET_TTL_MS, master.resumeTicketTtlMs())
-                .with(ConfigSchema.SERVER_CHUNK_SEED_GEN_ENABLED, chunk.seedGenEnabled())
-                .with(ConfigSchema.DATAPLANE_ENABLED, master.dataPlane().enabled())
-                .with(ConfigSchema.DATAPLANE_UDP_LISTENERS, master.dataPlane().udpListeners().stream().map(DataPlaneEndpointConfig::encodeListener).toList());
+                .with(ConfigSchema.SERVER_CHUNK_SEED_GEN_ENABLED, chunk.seedGenEnabled());
 
         HassiumConfig.CompatConfig compat = config.compat();
         values = values.with(ConfigSchema.COMPAT_REQUIRE_CLIENT_MOD, compat.requireClientMod())
@@ -119,36 +101,13 @@ public final class ConfigSnapshotAdapter {
                 values.get(ConfigSchema.CHUNK_OVD_LOCAL_GENERATION),
                 seedGenValue(values, physicalClient, ConfigSchema.CLIENT_CHUNK_SEED_GEN_ENABLED, ConfigSchema.SERVER_CHUNK_SEED_GEN_ENABLED),
                 values.get(ConfigSchema.CHUNK_LIGHT_STRIP));
-        List<HassiumConfig.UdpListenerConfig> listeners = values.get(ConfigSchema.DATAPLANE_UDP_LISTENERS).stream()
-                .map(DataPlaneEndpointConfig::decodeListener).toList();
-        HassiumConfig.DataPlaneConfig dataPlane = new HassiumConfig.DataPlaneConfig(
-                values.get(ConfigSchema.DATAPLANE_ENABLED), listeners);
-        String authToken = physicalClient ? "" : values.get(ConfigSchema.MASTER_AUTH_TOKEN);
-        List<HassiumConfig.ReachableEndpoint> controlEndpoints = physicalClient
-                ? List.of()
-                : values.get(ConfigSchema.MASTER_CONTROL_ENDPOINTS).stream()
-                .map(DataPlaneEndpointConfig::decodeReachable).toList();
         HassiumConfig.MasterCoreConfig master = new HassiumConfig.MasterCoreConfig(
                 values.get(ConfigSchema.MASTER_ENABLED), values.get(ConfigSchema.MASTER_COMPRESSION_LEVEL),
-                values.get(ConfigSchema.MASTER_MAGICLESS_ZSTD), values.get(ConfigSchema.MASTER_GLOBAL_PACKET_COMPRESSION),
-                values.get(ConfigSchema.MASTER_GLOBAL_COMPRESSION_LEVEL), values.get(ConfigSchema.MASTER_GLOBAL_COMPRESSION_THRESHOLD),
                 values.get(ConfigSchema.MASTER_USE_CONTEXT_COMPRESSION), values.get(ConfigSchema.MASTER_PACKET_AGGREGATION),
                 values.get(ConfigSchema.MASTER_AGGREGATION_MIN_BATCH), values.get(ConfigSchema.MASTER_AGGREGATION_MAX_WAIT),
                 values.get(ConfigSchema.MASTER_AGGREGATION_MAX_SIZE), values.get(ConfigSchema.MASTER_COMPACT_HEADER),
                 SetCopy.copy(values.get(ConfigSchema.MASTER_COMPRESSION_BLACKLIST)), values.get(ConfigSchema.MASTER_METRICS_ENABLED),
-                values.get(ConfigSchema.MASTER_MAX_CHUNKS_PER_TICK), values.get(ConfigSchema.MASTER_SERVER_PUSH_THREADS),
-                values.get(ConfigSchema.MASTER_BIND_HOST),
-                authToken,
-                controlEndpoints, values.get(ConfigSchema.MASTER_MIGRATION_FAULT_TIMEOUT_MS),
-                values.get(ConfigSchema.MASTER_MIGRATION_MIN_TPS),
-                values.get(ConfigSchema.MASTER_MIGRATION_MAX_LOAD_AVERAGE),
-                values.get(ConfigSchema.MASTER_MIGRATION_MAINTENANCE_WINDOW),
-                values.get(ConfigSchema.MASTER_MIGRATION_HEARTBEAT_INTERVAL_MS),
-                values.get(ConfigSchema.MASTER_MIGRATION_IDLE_WINDOW_MS),
-                values.get(ConfigSchema.MASTER_MIGRATION_SILENT_TIMEOUT_MS),
-                values.get(ConfigSchema.MASTER_MIGRATION_PREWARM_TTL_MS),
-                values.get(ConfigSchema.MASTER_RESUME_TICKET_TTL_MS),
-                dataPlane);
+                values.get(ConfigSchema.MASTER_MAX_CHUNKS_PER_TICK), values.get(ConfigSchema.MASTER_SERVER_PUSH_THREADS));
         HassiumConfig.CompatConfig compat = new HassiumConfig.CompatConfig(
                 values.get(ConfigSchema.COMPAT_REQUIRE_CLIENT_MOD), values.get(ConfigSchema.COMPAT_AUTO_DOWNGRADE));
         HassiumConfig.DebugConfig debug = new HassiumConfig.DebugConfig(

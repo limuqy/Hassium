@@ -21,6 +21,11 @@ public class PlayerCompressionTracker {
     private static final java.util.Set<UUID> preHandshakeDone = ConcurrentHashMap.newKeySet();
 
     /**
+     * 登录期能力协商结果（UUID → 协商能力位；{@code ServerPlayer} 创建时消费）。
+     */
+    private static final Map<UUID, Integer> negotiatedCaps = new ConcurrentHashMap<>();
+
+    /**
      * 握手超时时间（毫秒）
      */
     private static final long HANDSHAKE_TIMEOUT_MS = 10_000;
@@ -70,6 +75,26 @@ public class PlayerCompressionTracker {
     }
 
     /**
+     * 登记登录期能力协商结果（握手阶段线程安全写入；物化时消费）。
+     */
+    public static void markNegotiatedCaps(UUID playerId, int caps) {
+        if (playerId != null) {
+            negotiatedCaps.put(playerId, caps);
+        }
+    }
+
+    /**
+     * 物化时消费协商位（消费即移除；无登记返回 0）。
+     */
+    public static int consumeNegotiatedCaps(ServerPlayer player) {
+        if (player == null) {
+            return 0;
+        }
+        Integer caps = negotiatedCaps.remove(player.getUUID());
+        return caps != null ? caps : 0;
+    }
+
+    /**
      * 检查玩家握手是否超时
      *
      * @return true 表示已超时（未在规定时间内完成握手）
@@ -88,6 +113,7 @@ public class PlayerCompressionTracker {
         compressionEnabled.remove(playerId);
         connectedAt.remove(playerId);
         preHandshakeDone.remove(playerId);
+        negotiatedCaps.remove(playerId);
     }
 
     /**
@@ -97,5 +123,6 @@ public class PlayerCompressionTracker {
         compressionEnabled.clear();
         connectedAt.clear();
         preHandshakeDone.clear();
+        negotiatedCaps.clear();
     }
 }

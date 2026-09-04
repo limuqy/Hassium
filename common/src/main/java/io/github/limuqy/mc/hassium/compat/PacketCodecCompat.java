@@ -95,7 +95,6 @@ public final class PacketCodecCompat {
     /**
      * 服务端 RegistryAccess（{@code <1.21.1} 无 registry 形态，恒 {@link RegistryAccess#EMPTY}；
      * {@code >=1.21.1} 返回 {@code server.registryAccess()}，server 为 null 时 EMPTY）。
-     * 网关桥 BridgeState 单源。
      */
     public static RegistryAccess serverRegistryAccess(net.minecraft.server.MinecraftServer server) {
 #if MC_VER < MC_1_21_1
@@ -108,7 +107,7 @@ public final class PacketCodecCompat {
     /**
      * 登录完成包判定（{@code <1.21.2 ClientboundGameProfilePacket} /
      * {@code >=1.21.2 ClientboundLoginFinishedPacket} 双类名收口；
-     * GatewayPlayerBridge.detectProtocol 与 GatewayS2CRouter.isLoginPhasePacket 同宏分界单源）。
+     * 1.21.2 宏分界的单一判定入口，登录/Play 阶段判定共用）。
      */
     public static boolean isLoginFinishedPacket(Packet<?> packet) {
 #if MC_VER < MC_1_21_2
@@ -290,7 +289,7 @@ public final class PacketCodecCompat {
 
 #if MC_VER >= MC_1_21_1
     /**
-     * 绑定 PLAY 协议编解码器（单源：网关编解码 GatewayPacketCodec 亦复用）。
+     * 绑定 PLAY 协议编解码器（单源：原版路径与自有通道共用）。
      * <ul>
      *   <li>1.20.5–1.21.4：{@code ProtocolInfo.Unbound.bind(decorator)}</li>
      *   <li>1.21.5+：CLIENTBOUND 为 {@code SimpleUnboundProtocol}；
@@ -353,7 +352,6 @@ public final class PacketCodecCompat {
 
     /**
      * 登录协议已绑定信息（FriendlyByteBuf；登录包无注册表内容）。
-     * 单源：网关编解码 GatewayPacketCodec 亦复用（网关 LOGIN 协议仅 1.20.5+ 使用）。
      */
 #if MC_VER >= MC_1_21_1
     public static net.minecraft.network.ProtocolInfo<?> loginInfo(PacketFlow flow) {
@@ -365,7 +363,6 @@ public final class PacketCodecCompat {
 
     /**
      * 配置协议已绑定信息（FriendlyByteBuf；配置含注册表数据包，但编解码不依赖本地注册表）。
-     * 单源：网关编解码 GatewayPacketCodec 复用（T10 CONFIG_C2S/CONFIG_S2C 帧）。
      */
 #if MC_VER >= MC_1_21_1
     public static net.minecraft.network.ProtocolInfo<?> configInfo(PacketFlow flow) {

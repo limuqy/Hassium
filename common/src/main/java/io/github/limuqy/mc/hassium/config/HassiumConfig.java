@@ -7,7 +7,7 @@ import java.util.Set;
 /**
  * Hassium 配置（运行时快照）。
  * <p>
- * 物理客户端从 client.toml 加载：ChunkCoreConfig + DebugConfig + 客户端迁移策略。
+ * 物理客户端从 client.toml 加载：ChunkCoreConfig + DebugConfig。
  * 专用服从 server.toml 加载：StorageConfig + MasterCoreConfig + CompatConfig + DebugConfig。
  */
 public record HassiumConfig(
@@ -59,7 +59,7 @@ public record HassiumConfig(
             int cleanupIntervalTicks,
             int targetSizeMb,
             int minCleanupBatchSize,
-            // === 分段增量（GatewayPacketCodec/NetworkCore/DataPlaneClientBundle 活跃消费）===
+            // === 分段增量（服务端规划 + 客户端应用，MixinConnection/sectiondelta 链路活跃消费）===
             boolean sectionDeltaEnabled,
             // === 超视渲染 ===
             boolean viewDistanceExtensionEnabled,
@@ -117,57 +117,14 @@ public record HassiumConfig(
 
 
     /**
-     * 客户端可达地址。bind 地址绝不使用本类型，避免 wildcard 被下发给客户端。
-     */
-    public record ReachableEndpoint(String host, int port, int priority) {
-        public ReachableEndpoint {
-            host = DataPlaneEndpointConfig.validateReachableHost(host, "reachable endpoint");
-            DataPlaneEndpointConfig.validatePort(port, "reachable endpoint");
-            DataPlaneEndpointConfig.validateNonNegative(priority, "reachable endpoint priority");
-        }
-    }
-
-    /**
-     * 一个本地 UDP socket 与其按优先级尝试的客户端可达地址。
-     */
-    public record UdpListenerConfig(String bindHost, int bindPort, int weight,
-                                    List<ReachableEndpoint> reachableEndpoints) {
-        public UdpListenerConfig {
-            bindHost = DataPlaneEndpointConfig.validateBindHost(bindHost);
-            DataPlaneEndpointConfig.validatePort(bindPort, "UDP bind port");
-            DataPlaneEndpointConfig.validateNonNegative(weight, "UDP listener weight");
-            reachableEndpoints = DataPlaneEndpointConfig.normalizeReachableEndpoints(
-                    reachableEndpoints, 8, "UDP listener reachableEndpoints");
-        }
-    }
-
-    /**
-     * UDP 数据面配置（仅专用服；server.toml dataplane.*）。
-     */
-    public record DataPlaneConfig(boolean enabled, List<UdpListenerConfig> udpListeners) {
-        public DataPlaneConfig {
-            udpListeners = DataPlaneEndpointConfig.normalizeUdpListeners(enabled, udpListeners);
-        }
-    }
-
-    /**
-     * 主控核心配置（专用服；server.toml master.* + dataplane.*）。
+     * 主控核心配置（专用服；server.toml master.*）。
      * <p>
-     * 服务端网络行为（压缩/聚合/推送/端点）与 L1 迁移故障超时；
-     * 数据面键（dataplane.enabled/udpListeners）经 {@link DataPlaneConfig} 挂载。
-     * <p>
-     * L1 迁移策略参数（migrationMinTps 等）为 CLIENT scope 键：客户端 MigrationEngine
-     * 消费，物理客户端经 client.toml 加载（服务端加载时取默认值不参与）；唯一例外是
-     * migrationPrewarmTtlMs（SERVER scope，B 侧预热会话清理，T4 消费）。
+     * 服务端网络行为（压缩/聚合/推送）。原网关监听/鉴权/控制面端点/L1 迁移/续流票据/
+     * 数据面（dataplane.*）键族已随 2.0.0 网关拓扑退役删除。
      */
     public record MasterCoreConfig(
             boolean enabled,
             int compressionLevel,
-            boolean magiclessZstd,
-            // === 全局包压缩（管线级 ZSTD 替换 Zlib）===
-            boolean globalPacketCompression,
-            int globalCompressionLevel,
-            int globalCompressionThreshold,
             // === 上下文压缩 ===
             boolean useContextCompression,
             // === 包聚合（应用层，MixinConnection 拦截）===
@@ -183,79 +140,13 @@ public record HassiumConfig(
             boolean metricsEnabled,
             // === 服务端推送 ===
             int maxChunksPerTick,
-            int serverChunkPushThreads,
-            // === 网关监听与鉴权（D-M2：默认回环绑定 + 可选握手鉴权）===
-            String bindHost,
-            String authToken,
-            // === 控制面端点与 L1 迁移 ===
-            List<ReachableEndpoint> controlReachableEndpoints,
-            long migrationFaultTimeoutMs,
-            // === L1 迁移策略（CLIENT scope 键；客户端经 client.toml 加载）===
-            double migrationMinTps,
-            double migrationMaxLoadAverage,
-            String migrationMaintenanceWindow,
-            long migrationHeartbeatIntervalMs,
-            long migrationIdleWindowMs,
-            long migrationSilentTimeoutMs,
-            // === 预热会话 TTL（SERVER scope；T4 交付键，只实现+getter）===
-            long migrationPrewarmTtlMs,
-            // === 续流票据有效期（SERVER scope；T2 防重放时间窗口，服务端校验消费）===
-            long resumeTicketTtlMs,
-            DataPlaneConfig dataPlane
+            int serverChunkPushThreads
     ) {
         public MasterCoreConfig {
             compressionBlacklist = Set.copyOf(compressionBlacklist);
-            controlReachableEndpoints = DataPlaneEndpointConfig.normalizeReachableEndpoints(
-                    controlReachableEndpoints, 4, "control reachable endpoints");
-            DataPlaneEndpointConfig.validatePositive(migrationFaultTimeoutMs, "migrationFaultTimeoutMs");
-            if (!(migrationMinTps > 0)) {
-                throw new IllegalArgumentException("migrationMinTps must be positive");
-            }
-            if (!(migrationMaxLoadAverage > 0)) {
-                throw new IllegalArgumentException("migrationMaxLoadAverage must be positive");
-            }
-            DataPlaneEndpointConfig.validatePositive(migrationHeartbeatIntervalMs, "migrationHeartbeatIntervalMs");
-            DataPlaneEndpointConfig.validatePositive(migrationIdleWindowMs, "migrationIdleWindowMs");
-            DataPlaneEndpointConfig.validatePositive(migrationSilentTimeoutMs, "migrationSilentTimeoutMs");
-            DataPlaneEndpointConfig.validatePositive(migrationPrewarmTtlMs, "migrationPrewarmTtlMs");
-            DataPlaneEndpointConfig.validatePositive(resumeTicketTtlMs, "resumeTicketTtlMs");
-        }
-
-        /**
-         * 便捷构造：保留既有主控字段，仅替换 L1 迁移策略参数（cloth-ui 保存路径用；
-         * 其余迁移字段保持本实例值）。
-         */
-        public MasterCoreConfig withMigrationPolicy(double minTps, double maxLoadAverage, String maintenanceWindow,
-                                                    long heartbeatIntervalMs, long idleWindowMs, long silentTimeoutMs) {
-            return new MasterCoreConfig(enabled, compressionLevel, magiclessZstd,
-                    globalPacketCompression, globalCompressionLevel, globalCompressionThreshold,
-                    useContextCompression, enablePacketAggregation, aggregationMinBatchSize,
-                    aggregationMaxWaitTimeMs, aggregationMaxSize, enableCompactHeader, compressionBlacklist,
-                    metricsEnabled, maxChunksPerTick, serverChunkPushThreads, bindHost, authToken, controlReachableEndpoints, migrationFaultTimeoutMs,
-                    minTps, maxLoadAverage, maintenanceWindow, heartbeatIntervalMs, idleWindowMs,
-                    silentTimeoutMs, migrationPrewarmTtlMs, resumeTicketTtlMs, dataPlane);
-        }
-
-        /**
-         * 便捷构造：仅替换网关监听/鉴权字段（服务端平台接线用；其余字段保持本实例值）。
-         */
-        public MasterCoreConfig withGatewayAuth(String bindHost, String authToken) {
-            return new MasterCoreConfig(enabled, compressionLevel, magiclessZstd,
-                    globalPacketCompression, globalCompressionLevel, globalCompressionThreshold,
-                    useContextCompression, enablePacketAggregation, aggregationMinBatchSize,
-                    aggregationMaxWaitTimeMs, aggregationMaxSize, enableCompactHeader, compressionBlacklist,
-                    metricsEnabled, maxChunksPerTick, serverChunkPushThreads, bindHost, authToken, controlReachableEndpoints, migrationFaultTimeoutMs,
-                    migrationMinTps, migrationMaxLoadAverage, migrationMaintenanceWindow, migrationHeartbeatIntervalMs,
-                    migrationIdleWindowMs, migrationSilentTimeoutMs, migrationPrewarmTtlMs, resumeTicketTtlMs, dataPlane);
         }
 
         // 127.0.0.1 仅供本地开发；公网部署必须配置客户端实际可达的地址。
-        private static final DataPlaneConfig DEFAULT_DATA_PLANE = new DataPlaneConfig(
-                false,
-                List.of(new UdpListenerConfig(
-                        "0.0.0.0", 25565, 100,
-                        List.of(new ReachableEndpoint("127.0.0.1", 25565, 100))))
-        );
         public static final Set<String> DEFAULT_COMPRESSION_BLACKLIST = Set.of(
                 HassiumPacketIds.CHUNK_PAYLOAD_S2C,
                 HassiumPacketIds.HANDSHAKE_S2C,
@@ -268,35 +159,18 @@ public record HassiumConfig(
         );
 
         public static final MasterCoreConfig DEFAULT = new MasterCoreConfig(
-                false,             // enabled（单25565原版基线：旧25566 gateway sidecar 暂停，代理核心重构后另行启用）
+                true,              // enabled（服务端网络通道总开关；直连拓扑下登录期握手/聚合均以此为门）
                 3,                 // compressionLevel
-                true,              // magiclessZstd
-                true,              // globalPacketCompression
-                3,                 // globalCompressionLevel（实测流畅档：压缩等级 3 平衡 CPU 与省带宽；默认低等级减少高负载下主线程/推送线程 CPU 争用）
-                256,               // globalCompressionThreshold
                 true,              // useContextCompression
                 true,              // enablePacketAggregation
                 4,                 // aggregationMinBatchSize
-                20,                // aggregationMaxWaitTimeMs
+                50,                // aggregationMaxWaitTimeMs
                 256 * 1024,        // aggregationMaxSize
                 true,              // enableCompactHeader
                 DEFAULT_COMPRESSION_BLACKLIST,
                 false,              // metricsEnabled
                 4,                 // maxChunksPerTick（满 tick ≈ 80/s）
-                4,                 // serverChunkPushThreads
-                "127.0.0.1",       // bindHost（D-M2 默认回环绑定；空串=0.0.0.0 全网卡，生产多网卡显式声明）
-                "",                // authToken（D-M2 默认空=不鉴权）
-                List.of(),         // controlReachableEndpoints
-                60_000L,           // migrationFaultTimeoutMs（L1 迁移故障静默超时；silentTimeout 未配置时的回退值）
-                15.0,              // migrationMinTps
-                4.0,               // migrationMaxLoadAverage
-                "",                // migrationMaintenanceWindow（空串=禁用）
-                5000L,             // migrationHeartbeatIntervalMs
-                10000L,            // migrationIdleWindowMs
-                10000L,            // migrationSilentTimeoutMs（默认 10s：失效识别 ≤15s；显式配置时优先于 faultTimeout）
-                60_000L,           // migrationPrewarmTtlMs（预热会话 TTL；T4 消费）
-                300_000L,          // resumeTicketTtlMs（续流票据有效期；T2 防重放时间窗口，默认 5min）
-                DEFAULT_DATA_PLANE
+                4                  // serverChunkPushThreads
         );
     }
 

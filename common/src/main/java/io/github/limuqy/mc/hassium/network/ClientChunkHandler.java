@@ -346,14 +346,20 @@ public class ClientChunkHandler {
 
     /**
      * 应用 shadowPullV1 返回的权威 FULL 包。payload 是原版
-     * {@code ClientboundLevelChunkWithLightPacket} 线格式，必须复用网关原版注入器。
+     * {@code ClientboundLevelChunkWithLightPacket} 线格式，经原版 listener 派发
+     * （{@code MixinClientPacketListener} HEAD 钩子接管影子光照管线）。
      */
     public static boolean applyShadowPullFull(byte[] payload) {
         net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket packet = decodeChunkPacket(payload);
         if (packet == null) {
             return false;
         }
-        io.github.limuqy.mc.hassium.network.core.GatewayS2CRouter.INSTANCE.accept(packet);
+        net.minecraft.client.Minecraft mc = net.minecraft.client.Minecraft.getInstance();
+        net.minecraft.client.multiplayer.ClientPacketListener listener = mc.getConnection();
+        if (listener == null) {
+            return false;
+        }
+        mc.execute(() -> listener.handleLevelChunkWithLight(packet));
         return true;
     }
 

@@ -31,8 +31,8 @@ public final class ConfigSchema {
     public static final ConfigKey<Integer> CHUNK_MIN_CLEANUP_BATCH_SIZE = integer("chunk.minCleanupBatchSize", ConfigScope.CLIENT, Domain.CHUNK_CORE, 100, 1, 100000,
             "每轮最多淘汰的 region 文件数", "Max region files evicted per cleanup pass");
     public static final ConfigKey<Boolean> CHUNK_SECTION_DELTA_ENABLED = bool("chunk.sectionDeltaEnabled", ConfigScope.CLIENT, Domain.CHUNK_CORE, true,
-            "是否启用分段增量（GatewayPacketCodec/NetworkCore/DataPlaneClientBundle 活跃消费）",
-            "Enable section delta (active in gateway / network core / data plane)");
+            "是否启用分段增量（服务端规划 + 客户端应用）",
+            "Enable section delta (server-side planning + client-side apply)");
     public static final ConfigKey<Boolean> CHUNK_VIEW_DISTANCE_EXTENSION_ENABLED = bool("chunk.viewDistanceExtensionEnabled", ConfigScope.CLIENT, Domain.CHUNK_CORE, true,
             "是否启用超视渲染", "Enable beyond-view rendering");
     public static final ConfigKey<Integer> CHUNK_MAX_RENDER_DISTANCE = integer("chunk.maxRenderDistance", ConfigScope.CLIENT, Domain.CHUNK_CORE, 16, 2, 64,
@@ -70,19 +70,11 @@ public final class ConfigSchema {
             "是否启用主控核心网络通道", "Enable master-core network channel");
     public static final ConfigKey<Integer> MASTER_COMPRESSION_LEVEL = integer("master.compressionLevel", ConfigScope.SERVER, Domain.MASTER_CORE, 3, 1, 22,
             "自有通道 ZSTD 压缩等级", "Private-channel ZSTD level");
-    public static final ConfigKey<Boolean> MASTER_MAGICLESS_ZSTD = bool("master.magiclessZstd", ConfigScope.SERVER, Domain.MASTER_CORE, true,
-            "是否使用无 magic 的 ZSTD", "Use magicless ZSTD");
-    public static final ConfigKey<Boolean> MASTER_GLOBAL_PACKET_COMPRESSION = bool("master.globalPacketCompression", ConfigScope.SERVER, Domain.MASTER_CORE, true,
-            "是否启用全局包压缩", "Enable global packet compression");
-    public static final ConfigKey<Integer> MASTER_GLOBAL_COMPRESSION_LEVEL = integer("master.globalCompressionLevel", ConfigScope.SERVER, Domain.MASTER_CORE, 3, 1, 22,
-            "全局压缩等级", "Global compression level");
-    public static final ConfigKey<Integer> MASTER_GLOBAL_COMPRESSION_THRESHOLD = integer("master.globalCompressionThreshold", ConfigScope.SERVER, Domain.MASTER_CORE, 256, 0, 65536,
-            "全局压缩阈值", "Global compression threshold (bytes)");
     public static final ConfigKey<Boolean> MASTER_USE_CONTEXT_COMPRESSION = bool("master.useContextCompression", ConfigScope.SERVER, Domain.MASTER_CORE, true,
             "是否使用上下文压缩", "Use context compression");
     public static final ConfigKey<Boolean> MASTER_PACKET_AGGREGATION = bool("master.enablePacketAggregation", ConfigScope.SERVER, Domain.MASTER_CORE, true,
             "是否启用包聚合", "Enable packet aggregation");
-    public static final ConfigKey<Integer> MASTER_AGGREGATION_MIN_BATCH = integer("master.aggregationMinBatchSize", ConfigScope.SERVER, Domain.MASTER_CORE, 2, 1, 256,
+    public static final ConfigKey<Integer> MASTER_AGGREGATION_MIN_BATCH = integer("master.aggregationMinBatchSize", ConfigScope.SERVER, Domain.MASTER_CORE, 4, 1, 256,
             "聚合最小批量", "Aggregation minimum batch size");
     public static final ConfigKey<Long> MASTER_AGGREGATION_MAX_WAIT = longValue("master.aggregationMaxWaitTimeMs", ConfigScope.SERVER, Domain.MASTER_CORE, 50L, 1L, 5000L,
             "聚合最大等待时间（ms）", "Aggregation max wait time (ms)");
@@ -101,41 +93,6 @@ public final class ConfigSchema {
     public static final ConfigKey<Integer> MASTER_SERVER_PUSH_THREADS = integer("master.serverChunkPushThreads", ConfigScope.SERVER, Domain.MASTER_CORE, 4, 1, 64,
             "服务端区块推送消费线程数（取批调度；实际计算走 CPU 核数全局池）",
             "Server chunk-push consumer thread count (batch dispatch; compute runs on the global CPU-count pool)");
-    public static final ConfigKey<List<String>> MASTER_CONTROL_ENDPOINTS = stringList("master.controlReachableEndpoints", ConfigScope.SERVER, Domain.MASTER_CORE, List::of,
-            "网关监听端点（服务端绑定/下发；客户端经 gateway_info 同步，无需本地配置）",
-            "Gateway listen endpoints (server bind/publish; clients get them via gateway_info)");
-
-    // === 网关监听与鉴权（仅 SERVER）===
-    public static final ConfigKey<String> MASTER_BIND_HOST = string("master.bindHost", ConfigScope.SERVER, Domain.MASTER_CORE, "127.0.0.1",
-            "网关监听 bind host（默认 127.0.0.1 回环；空串=0.0.0.0 全网卡）",
-            "Gateway bind host (default 127.0.0.1; empty = 0.0.0.0)");
-    public static final ConfigKey<String> MASTER_AUTH_TOKEN = string("master.authToken", ConfigScope.SERVER, Domain.MASTER_CORE, "",
-            "网关握手鉴权 token（默认空=不鉴权；经 gateway_info 下发客户端）",
-            "Gateway handshake auth token (empty = off; published via gateway_info)");
-
-    public static final ConfigKey<Long> MASTER_MIGRATION_FAULT_TIMEOUT_MS = longValue("master.migrationFaultTimeoutMs", ConfigScope.SERVER, Domain.MASTER_CORE, 60000L, 1L, Long.MAX_VALUE,
-            "L1 迁移故障超时（ms；silentTimeout 未配置时回退本值）",
-            "L1 migration fault timeout (ms; fallback when silentTimeout unset)");
-
-    // === L1 迁移策略（CLIENT 仅此 6 键）===
-    public static final ConfigKey<Double> MASTER_MIGRATION_MIN_TPS = decimal("master.migrationMinTps", ConfigScope.CLIENT, Domain.MASTER_CORE, 15.0, 0.1, 100.0,
-            "L1 迁移策略：主控 TPS 低于此值触发迁移",
-            "L1 migration: trigger when master TPS drops below this");
-    public static final ConfigKey<Double> MASTER_MIGRATION_MAX_LOAD_AVERAGE = decimal("master.migrationMaxLoadAverage", ConfigScope.CLIENT, Domain.MASTER_CORE, 4.0, 0.1, 100.0,
-            "L1 迁移策略：主控系统负载均值高于此值触发迁移（getSystemLoadAverage 为 -1 视为无信号）",
-            "L1 migration: trigger when system load average exceeds this (-1 = no signal)");
-    public static final ConfigKey<String> MASTER_MIGRATION_MAINTENANCE_WINDOW = string("master.migrationMaintenanceWindow", ConfigScope.CLIENT, Domain.MASTER_CORE, "",
-            "L1 迁移策略：维护窗口 \"HH:MM-HH:MM\"（本地时区，含跨午夜）；空串=禁用",
-            "L1 migration: maintenance window \"HH:MM-HH:MM\" (local tz; empty = off)");
-    public static final ConfigKey<Long> MASTER_MIGRATION_HEARTBEAT_INTERVAL_MS = longValue("master.migrationHeartbeatIntervalMs", ConfigScope.CLIENT, Domain.MASTER_CORE, 5000L, 100L, 60000L,
-            "L1 迁移：应用层 HEARTBEAT 发送周期（ms）",
-            "L1 migration: application HEARTBEAT interval (ms)");
-    public static final ConfigKey<Long> MASTER_MIGRATION_IDLE_WINDOW_MS = longValue("master.migrationIdleWindowMs", ConfigScope.CLIENT, Domain.MASTER_CORE, 10000L, 1000L, 600000L,
-            "L1 迁移：空闲窗口判定时长（ms；玩家静止 + 区块 hash 稳定）",
-            "L1 migration: idle-window duration (ms; player still + stable chunk hashes)");
-    public static final ConfigKey<Long> MASTER_MIGRATION_SILENT_TIMEOUT_MS = longValue("master.migrationSilentTimeoutMs", ConfigScope.CLIENT, Domain.MASTER_CORE, 10000L, 1000L, 600000L,
-            "L1 迁移：outbound 入站静默超时（ms；默认 10s；未配置时回退 migrationFaultTimeoutMs）",
-            "L1 migration: inbound silence timeout (ms; default 10s; falls back to faultTimeout)");
 
     // === 区块核心（chunk.*；SERVER 2 键）===
     public static final ConfigKey<Boolean> SERVER_CHUNK_SEED_GEN_ENABLED = bool("chunk.seedGenEnabled", ConfigScope.SERVER, Domain.CHUNK_CORE, false,
@@ -144,20 +101,7 @@ public final class ConfigSchema {
     public static final ConfigKey<Boolean> CHUNK_LIGHT_STRIP = bool("chunk.lightStrip", ConfigScope.SERVER, Domain.CHUNK_CORE, true,
             "是否启用光照剥离", "Enable light stripping");
 
-    // === 数据面（dataplane.*；SERVER 2 键）===
-    public static final ConfigKey<Boolean> DATAPLANE_ENABLED = bool("dataplane.enabled", ConfigScope.SERVER, Domain.DATAPLANE, false,
-            "是否启用 UDP/KCP Data Plane", "Enable UDP/KCP Data Plane");
-    public static final ConfigKey<List<String>> DATAPLANE_UDP_LISTENERS = stringList("dataplane.udpListeners", ConfigScope.SERVER, Domain.DATAPLANE,
-            () -> HassiumConfig.MasterCoreConfig.DEFAULT.dataPlane().udpListeners().stream().map(DataPlaneEndpointConfig::encodeListener).toList(),
-            "UDP listener 编码列表", "Encoded UDP listener list");
-
-    // === 兼容性 / 续流 TTL（SERVER）===
-    public static final ConfigKey<Long> MASTER_MIGRATION_PREWARM_TTL_MS = longValue("master.migrationPrewarmTtlMs", ConfigScope.SERVER, Domain.MASTER_CORE, 60000L, 1000L, Long.MAX_VALUE,
-            "预热会话 TTL（ms；无续流完成的预热物化会话到期清理）",
-            "Prewarm session TTL (ms; expire unfinished prewarm materializations)");
-    public static final ConfigKey<Long> MASTER_RESUME_TICKET_TTL_MS = longValue("master.resumeTicketTtlMs", ConfigScope.SERVER, Domain.MASTER_CORE, 300000L, 1000L, Long.MAX_VALUE,
-            "续流票据有效期（ms；T2 防重放时间窗口，默认 5min）",
-            "Resume-ticket TTL (ms; anti-replay window, default 5 min)");
+    // === 兼容性（SERVER）===
     public static final ConfigKey<Boolean> COMPAT_REQUIRE_CLIENT_MOD = bool("compat.requireClientMod", ConfigScope.SERVER, Domain.COMPAT, false,
             "是否强制要求客户端安装 Hassium", "Require the Hassium client mod");
     public static final ConfigKey<Boolean> COMPAT_AUTO_DOWNGRADE = bool("compat.autoDowngradeOnError", ConfigScope.SERVER, Domain.COMPAT, true,
@@ -251,11 +195,6 @@ public final class ConfigSchema {
     private static ConfigKey<Double> decimal(String path, ConfigScope scope, Domain domain, double defaultValue, double min, double max,
                                              String commentZh, String commentEn) {
         return add(path, scope, domain, ConfigType.DOUBLE, defaultValue, min, max, commentZh, commentEn, Double.class);
-    }
-
-    private static ConfigKey<String> string(String path, ConfigScope scope, Domain domain, String defaultValue,
-                                            String commentZh, String commentEn) {
-        return add(path, scope, domain, ConfigType.STRING, defaultValue, null, null, commentZh, commentEn, String.class);
     }
 
     private static ConfigKey<List<String>> stringList(String path, ConfigScope scope, Domain domain,

@@ -1,10 +1,10 @@
 # AGENTS.md
 
-AI Agent 速查。多版本真相源见 [`docs/version-segments.md`](docs/version-segments.md)；2.0.0 网络核心架构见 [`docs/architecture.md`](docs/architecture.md)。收尾核销见 [`docs/network-core-followups.md`](docs/network-core-followups.md)（主体已落地；UDP 会话迁移等后续波见文）。
+AI Agent 速查。多版本真相源见 [`docs/version-segments.md`](docs/version-segments.md)；直连拓扑架构见 [`docs/architecture.md`](docs/architecture.md)。[`docs/network-core-followups.md`](docs/network-core-followups.md) 已归档（网络核心/主控/UDP 数据面随直连拓扑裁剪）。
 
 ## 项目身份
 
-Minecraft 1.20.1 / 1.21.1–1.21.11 多加载器模组（Fabric / Forge / NeoForge），ZSTD 优化存档与网络；七段适配单位见 version-segments。Forge 支持 **1.20.1 / 1.21.1 / 1.21.3–1.21.10**（1.21.2 上游无 Forge userdev；**1.21.11 起 sunset**，该段用 NeoForge）。**2.0.0** 起客户端网络由进程内网关（网络核心）接管：客户端↔世界侧纯原版协议，网关↔主控自有通道（ZSTD/UDP 数据面/hash/delta 保留；聚合为主控侧 vanilla 路径），主控切换为无感续流迁移（旧 failover 已退役）。
+Minecraft 1.20.1 / 1.21.1–1.21.11 多加载器模组（Fabric / Forge / NeoForge），ZSTD 优化存档与网络；七段适配单位见 version-segments。Forge 支持 **1.20.1 / 1.21.1 / 1.21.3–1.21.10**（1.21.2 上游无 Forge userdev；**1.21.11 起 sunset**，该段用 NeoForge）。**回归直连拓扑**：客户端↔服务端唯一 vanilla TCP（登录期能力握手——1.20.1 走 `hassium:login_hello` login query，1.20.2+ 走配置阶段 `PreHandshakePayload`；Play 期 `play_init_s2c` 激活）；ZSTD 管线压缩/包聚合/区块推送/分段增量/SeedGen/ShadowPull 全走 vanilla 通道，网络核心（进程内网关）/UDP 数据面/续流迁移已裁剪。
 
 ## 关键构建命令
 
@@ -117,7 +117,7 @@ fabric/ | forge/ | neoforge/
 |----|------|
 | `storage/` | type 126 写缓冲 / chunkHash 桥；压缩由 `compression/CompressionService` 收口 |
 | `compression/` | codec / 字典 |
-| `network/` | 网络核心：`network/core/`（`NetworkCore` 五态状态机、`outbound/` 帧协议、`migration/` L1 迁移引擎、`viafabric/` 兼容桥）；区块核心：`network/seedgen/` 影子端（`ShadowSeedServer` 等，= 区块核心后端引擎）+ 顶层客户端摄入管线（ClientChunkPipeline / ClientMetadataHandler / `ServerChunkPushManager`）；主控核心：`network/gateway/`（`GatewayServer` / 玩家会话）+ 聚合与 ZstdPipeline 链（HassiumAggregationManager / ZstdPipelineSwitcher）；数据面：`network/dataplane/` |
+| `network/` | 直连传输面：登录期握手 `network/handshake/`（LoginHandshake / LoginCaps / 双端激活）+ 客户端摄入管线（ClientChunkPipeline / ClientMetadataHandler）+ 服务端区块推送（ServerChunkPushManager / ChunkSender）+ 聚合与 ZstdPipeline 链（HassiumAggregationManager / ZstdPipelineSwitcher）；区块核心：`network/seedgen/` 影子端（`ShadowSeedServer` 等，= 区块核心后端引擎） |
 | `cache/` | 客户端轻量设施（OVD、预算、Bloom、生命周期）；缓存存储与清理由影子端承担 |
 | `config/` `metrics/` `compat/` `mixin/` | 配置、指标、跨版本桥、Mixin |
 | `migration/` `api/` | 存档迁移工具与对外 API |
@@ -146,11 +146,9 @@ fabric/ | forge/ | neoforge/
 | 项 | 默认 | 注意 |
 |----|------|------|
 | `storage.enabled` | **false** | 默认关；开启后改存档格式（type 126）→ 提醒备份；仅专用服务器写，单人/局域网保持原版格式（读兼容）；客户端影子端（hassium_cache）固定写 126，不受本开关约束 |
-| `net.enabled` | true | 客户端网络核心总开关 |
-| `master.enabled` | true | 服务端网络通道总开关 |
-| `master.globalPacketCompression` | true | |
+| `net.enabled` | true | 客户端优化通道总开关（与开启 Hassium 的服务端协商启用；关闭后全程原版路径） |
+| `master.enabled` | true | 服务端网络通道总开关（登录期握手/聚合的门） |
 | `master.maxChunksPerTick` | 4 | 每玩家每 tick 提交上限（满 tick ≈ 80/s） |
-| `master.controlReachableEndpoints` | 空→25566 | 网关监听；公网须改可达地址 |
 | `chunk.enabled` | true | |
 | `chunk.hassiumEngineEnabled` | true | 影子端统一算光；失败降级关缓存/OVD/SeedGen |
 | `chunk.seedGenEnabled` | **false** | 双端同版本；**服务端开启会泄露世界种子** |
@@ -158,33 +156,31 @@ fabric/ | forge/ | neoforge/
 | `chunk.viewDistanceExtensionEnabled` | true | 超视渲染（多人；≠ Bobby） |
 | `chunk.maxRenderDistance` | 16 | 超视渲染环带上限（2–64） |
 | `chunk.ovdUnloadDelaySecs` | 5 | 超视渲染卸载延迟 |
-| `dataplane.enabled` | **false** | UDP 数据面；默认 listener 仅 `127.0.0.1` |
 | `debug.*` | false | 热路径用 `DebugLogger` |
 
 存档格式 type **126**（非 127）；元数据推送字段为 **chunkHash**（非 inhabitedTime）。客户端影子端世界 = `hassium_cache/<serverId>/world`（原版存档结构 + type 126 + chunkHash 落盘，`MixinRegionFile` shadow 上下文 gate）；旧 HBT1 客户端磁盘缓存已裁剪（热度清理为影子端 `ShadowCacheEviction` + `ShadowRegionHeat`：`heat.idx` 按 region 文件计，`hassium_cache/<serverId>/heat.idx` per-server）。
 
-## 三核心速记（2.0.0）
+## 直连拓扑速记
 
-**网络核心**（客户端进程内网关，`network/core/`）——NetworkCore 五态状态机（IDLE/CONNECTING/HANDSHAKING/ACTIVE/MIGRATING）+ `outbound/` 帧协议（TCP 控制面 + UDP 数据面启停）+ `migration/` L1 迁移引擎 + `viafabric/` 兼容桥；S2C handler 直调注入（dispatchS2C → GatewayS2CRouter），C2S routeC2S 收口；主控切换 = 换 outbound + 续流票据（ResumeTicket，epoch 防重放），客户端零重载。
+**握手链**（`network/handshake/`）——1.20.1 服务端 `handleHello` HEAD 发 `hassium:login_hello` query、`handleCustomQueryPacket` 解析应答；1.20.2+ 走配置阶段 `PreHandshakePayload`（loader 注册，认证完成后）；能力位 `LoginCaps`（agg/hdr/push/delta/seed/light/pull/ovd）按位与协商，结果入 `PlayerCompressionTracker`。`ServerPlayer <init>` TAIL 消费（`ServerHandshakeActivation.onPlayerInit`：压制原版区块窗口），tick 泵激活：dictionary_sync/index_sync → 聚合 PENDING（5s 无 ACK 降级直发）→ `play_init_s2c`（协商位 + SeedGen 种子）→ 客户端 index_sync 后回激活 ACK → 聚合 ENABLED。**管线级全局包压缩已退役（run9 退役波）**：原版压缩层全程不触碰，通道压缩 = 聚合包内部字典 ZSTD（EventLoop 阈值翻折防双重压缩）+ 区块推送自有压缩。
 
-**区块核心**（客户端进程内区块域）——`network/seedgen/` 影子端（= 本域后端引擎：生成/算光/落盘/淘汰）+ `network/` 顶层摄入管线（ClientChunkPipeline / ClientMetadataHandler / ChunkHash 客户端侧）+ `cache/`（OVD / MainThreadBudget / Bloom / 生命周期）；`chunk.*` 键族 = 本域配置族（2026-08-09 config-restructure：原 `clientCache.*` 重排为 `chunk.*`）。
+**区块核心**（客户端进程内区块域）——`network/seedgen/` 影子端（= 本域后端引擎：生成/算光/落盘/淘汰）+ `network/` 顶层摄入管线（ClientChunkPipeline / ClientMetadataHandler / ChunkHash 客户端侧）+ `cache/`（OVD / MainThreadBudget / Bloom / 生命周期）；`chunk.*` 键族 = 本域配置族。
 
-**主控核心**（服务端进程内网络与推送）——`network/gateway/` 接入层（GatewayServer / GatewayChannel / GatewayPlayerSession / GatewayPlayerRegistry，端口 = `master.controlReachableEndpoints[0]` 或 25566 兜底）+ 服务端区块推送（ServerChunkPushManager / ChunkHashS2C / ChunkSender / SectionDelta 服务端 / ServerLoadReporter）+ 服务端聚合与 ZstdPipeline 兼容链（HassiumAggregationManager / ZstdPipelineSwitcher）。
+**服务端传输面**——区块推送（ServerChunkPushManager / ChunkSender / SectionDelta 服务端）+ 聚合链（HassiumAggregationManager / ConnectionChannelAccess）；`master.*` 键族 = 本域配置族。
 
 ```
-客户端 world 侧（纯原版协议）── 网络核心（网关）── 帧连接 ── 主控核心（GatewayServer）
-   ├ S2C 直调注入（区块/实体/业务）
-   ├ C2S routeC2S 收口（keep-alive 例外走壳连接）
-   ├ 续流票据 resumeAccepted → 复用推送链
-   └ 主控切换 = MigrationEngine.migrateTo：关旧 outbound → 新握手带续流尾 → ACTIVE（无感）
+Mod 客户端 ←──唯一 vanilla TCP（登录期握手 + Play 期自定义 payload）──→ Mod 服务端
+   ├ 登录期：login_hello / PreHandshakePayload 协商能力位（空应答=原版路径，不依赖超时）
+   ├ Play 期：dict/index → 聚合 PENDING → play_init 激活 → 客户端 ACK → 聚合放行
+   └ 区块/实体/业务自定义 payload 全走 vanilla 通道（chunk_payload/seed_ref/shadow_pull/block_entity/section_delta/light_delta）
 ```
 
-- 客户端↔世界侧**零压缩/零聚合/零自定义包**；网关↔主控自有通道（ZSTD/聚合/UDP 数据面/hash/delta 全保留；聚合仅主控侧 vanilla 路径生效）
-- 存储域（`storage/` `compression/`）、UDP 数据面（`network/dataplane/`）= 支撑域，不立核心名；「影子端」仅指区块核心后端引擎
+- 网络核心（`network/core/` 进程内网关）、UDP 数据面（`network/dataplane/`）、续流迁移（ResumeTicket）均已裁剪，不复活
+- 「影子端」仅指区块核心后端引擎（`network/seedgen/`）
 
 ## 卖点（已实现，按类）
 
-**高效压缩**——存储压缩（ZSTD 落盘 type 126）、网络压缩（网关↔主控通道：全局包/包聚合）；**网络优化**——平滑推送（每 tick 提交上限限速 + 全路径后台化）、主控无感切换（网关换 outbound + 续流票据，客户端零重载）、L1 负载均衡（策略驱动迁移，故障/负载阈值/维护窗口/演练）；**区块缓存**——影子端世界保存（进服区块由进程内影子服务端落盘原版存档 `hassium_cache/<serverId>/world`，断连保存重连复用；目录 key 稳定不受主控切换影响）、容量/热度淘汰（heat.idx + 整文件删除 `.mca`）、分段增量、本地生成（SeedGen：pristine 区块发坐标引用，客户端同种子本地生成；**服务端开启会泄露世界种子**；失败回退全量）、超视渲染、`/hassiumc export` 世界导出；**光照优化**——Hassium 引擎（影子端统一算光 + 官方通道回传，客户端不计算；剥光握手协商）、光照剥离。
+**高效压缩**——存储压缩（ZSTD 落盘 type 126）、通道压缩（聚合包内部字典 ZSTD + 区块推送自有压缩；管线级全局包压缩已退役——不触碰 vanilla 压缩层，无跨 mod 管线冲突面）；**网络优化**——平滑推送（每 tick 提交上限限速 + 全路径后台化）、登录期能力握手（无超时依赖、原版客户端零干扰）；**区块缓存**——影子端世界保存（进服区块由进程内影子服务端落盘原版存档 `hassium_cache/<serverId>/world`，断连保存重连复用）、容量/热度淘汰（heat.idx + 整文件删除 `.mca`）、分段增量、本地生成（SeedGen：pristine 区块发坐标引用，客户端同种子本地生成；**服务端开启会泄露世界种子**；失败回退全量）、超视渲染、`/hassiumc export` 世界导出；**光照优化**——Hassium 引擎（影子端统一算光 + 官方通道回传，客户端不计算；剥光握手协商）、光照剥离。
 
 ## 运行时冒烟
 
@@ -192,9 +188,9 @@ fabric/ | forge/ | neoforge/
 
 | 层 | 载体 | 说明 |
 |----|------|------|
-| L0 | `common:test` | 无 MC 实例（如网关握手/续流单测） |
+| L0 | `common:test` | 无 MC 实例（如登录期握手编解码/协商单测） |
 | L1 | classic 场景 | 全矩阵（12 版 × fabric/neoforge） |
-| L2 | 场景目录 | 锚点集：seedgen / dimension / migrate 等 |
+| L2 | 场景目录 | 锚点集：seedgen / dimension（migrate 场景已退役为 log-and-skip） |
 | L3 | minecraft-mod-mcp | 人工专项，不进自动 PASS 门禁 |
 
 冒烟只有 `.ps1`（依赖 Windows 网络/进程 cmdlet），没有 bash 版。
@@ -238,4 +234,4 @@ Manifold / 七段 / `#if MC_VER` / `PacketId` / `Identifier` 改代码时自动�
 - [`docs/runtime-smoke-test.md`](docs/runtime-smoke-test.md) — 运行时冒烟（L0–L3、PROBE、场景引擎）
 - [`docs/ai-functional-test.md`](docs/ai-functional-test.md) — AI 游戏内功能测试（minecraft-mod-mcp）
 - [`docs/config-audit.md`](docs/config-audit.md) — 配置项审计
-- [`docs/network-core-followups.md`](docs/network-core-followups.md) — 网络核心收尾核销（后续波）
+- [`docs/network-core-followups.md`](docs/network-core-followups.md) — 网络核心收尾核销（**已归档**：直连拓扑下仅存档参考）

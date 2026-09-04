@@ -41,6 +41,18 @@ public final class ReflectionCompat {
     /**
      * 取对象上第一个声明类型为 {@code fieldType} 的实例字段值。
      */
+
+    /**
+     * {@link #getFieldByType} 的安静变体：反射失败返回 null（登录/物化等一次性调用点
+     * 不愿为 checked 异常污染签名时使用）。
+     */
+    public static Object getFieldByTypeOrNull(Object target, Class<?> fieldType, boolean traverseSuperclasses) {
+        try {
+            return getFieldByType(target, fieldType, traverseSuperclasses);
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            return null;
+        }
+    }
     public static Object getFieldByType(Object target, Class<?> fieldType, boolean traverseSuperclasses)
             throws ReflectiveOperationException {
         Field field = findFieldByType(target.getClass(), fieldType, traverseSuperclasses);
@@ -65,3 +77,4 @@ public final class ReflectionCompat {
         throw new NoSuchFieldException("no member-class field on " + clazz.getName());
     }
 }
+

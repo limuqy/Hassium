@@ -16,8 +16,7 @@
         "MixinServerGamePacketListenerImpl",
         "MixinMinecraftServer",
         "MixinConnection",
-        "MixinConnectionGatewayServer",
-        "MixinConnectionSetupCompression",
+        "MixinServerLoginPacketListenerImpl",
         "MixinChunkHolder",
         "MixinChunkAccess",
         "MixinServerPlayer",
@@ -31,10 +30,11 @@
         "MixinReloadableServerResources"
     ],
     "client": [
-      "MixinConnectScreen",
       "MixinMinecraft",
       "MixinClientPacketListener",
       "MixinClientCommonPacketListenerImpl",
+      "MixinClientConfigurationPacketListenerImpl",
+      "MixinClientHandshakePacketListenerImpl",
       "MixinClientLevel",
       "MixinClientTick",
       "MixinLevelRenderer",

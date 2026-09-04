@@ -199,15 +199,6 @@ public final class ClientLifecycleHelper {
                 return ip;
             }
         }
-        // 仅网关登录兜底：网关会话本地壳连接的当前监听器
-        net.minecraft.network.PacketListener gateway =
-                io.github.limuqy.mc.hassium.network.core.NetworkCore.getInstance().gatewayOnlyLoginListener();
-        if (gateway instanceof net.minecraft.client.multiplayer.ClientPacketListener cpl) {
-            net.minecraft.client.multiplayer.ServerData sd = cpl.getServerData();
-            if (sd != null && sd.ip != null && !sd.ip.isBlank()) {
-                return sd.ip;
-            }
-        }
         return null;
     }
 
@@ -244,7 +235,7 @@ public final class ClientLifecycleHelper {
         finalized.set(false);
         disconnectCleanupArmed.set(true);
         ClientMainThreadBudget.clearJoinBoost();
-        io.github.limuqy.mc.hassium.network.core.NetworkCore.getInstance().onDisconnect();
+        io.github.limuqy.mc.hassium.network.handshake.ClientLoginNegotiation.clear();
         io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.resetRequestDedupForReconnect();
 
         ChunkMeshCompileLog.reset();
@@ -273,7 +264,6 @@ public final class ClientLifecycleHelper {
         io.github.limuqy.mc.hassium.network.seedgen.ShadowServerRegistry.getInstance().parkForReuse();
         if (HassiumConfigService.getInstance().isMetricsAutoResetEnabled()) {
             io.github.limuqy.mc.hassium.metrics.NetworkStats.reset();
-            io.github.limuqy.mc.hassium.network.dataplane.DataPlaneClientBundle.resetDataBulkCounters();
         }
         HassiumTaskExecutor.shutdownClient(5000);
         ClientChunkHandler.resetStorage();

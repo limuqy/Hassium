@@ -16,8 +16,6 @@ import io.github.limuqy.mc.hassium.utils.DebugLogger;
 import io.github.limuqy.mc.hassium.compat.LevelCompat;
 import io.github.limuqy.mc.hassium.compat.ShadowChunkMapCompat;
 import io.github.limuqy.mc.hassium.utils.TickMonitor;
-import io.github.limuqy.mc.hassium.network.gateway.GatewayPlayerSession;
-import io.github.limuqy.mc.hassium.network.gateway.GatewayServer;
 import io.github.limuqy.mc.hassium.network.sectiondelta.SectionDeltaPlanner;
 import io.github.limuqy.mc.hassium.network.sectiondelta.SectionDeltaSnapshot;
 import io.github.limuqy.mc.hassium.network.sectiondelta.SectionPlaneSyndrome;
@@ -289,49 +287,19 @@ public class ServerChunkPushManager {
      */
     private final Map<UUID, Long> resumePlayers = new ConcurrentHashMap<>();
 
-    /**
-     * 握手时客户端上报的完整玩家状态（x/y/z/yaw/pitch/维度），供续流/会话同步使用。
-     */
-    private final Map<UUID, PlayerStateReport> playerStateReports = new ConcurrentHashMap<>();
-
-    /** 仅位置兜底（旧客户端上报 x/z） */
+    /** 玩家就绪时记录初始位置（直连拓扑：服务端玩家对象自带坐标；removePlayer 清理）。 */
     public void setInitialPlayerPosition(ServerPlayer player, double x, double z) {
-        setInitialPlayerPosition(player, PlayerStateReport.fromXZ(x, z));
-    }
-
-    /**
-     * 网关帧侧握手路径：无 ServerPlayer 时按 UUID 记录初始位置，removePlayer 清理。
-     */
-    public void setInitialPlayerPosition(UUID playerId, PlayerStateReport state) {
-        if (playerId == null || state == null) {
+        if (player == null) {
             return;
         }
-        ChunkPos pos = new ChunkPos((int) Math.floor(state.x() / 16.0), (int) Math.floor(state.z() / 16.0));
-        initialPlayerChunkPos.put(playerId, pos);
-        if (state.present()) {
-            playerStateReports.put(playerId, state);
-        }
-        DebugLogger.info(LogType.NETWORK,
-                "[GATEWAY] Player {} reported initial position {} → chunk ({}, {})",
-                playerId, state.describe(), pos.x, pos.z);
-    }
-
-    /** 完整玩家状态（T7 位置上报扩展；present=false 时仅取 x/z） */
-    public void setInitialPlayerPosition(ServerPlayer player, PlayerStateReport state) {
-        if (player == null || state == null) {
-            return;
-        }
-        ChunkPos pos = new ChunkPos((int) Math.floor(state.x() / 16.0), (int) Math.floor(state.z() / 16.0));
+        ChunkPos pos = new ChunkPos((int) Math.floor(x / 16.0), (int) Math.floor(z / 16.0));
         initialPlayerChunkPos.put(player.getUUID(), pos);
-        if (state.present()) {
-            playerStateReports.put(player.getUUID(), state);
-        }
         DebugLogger.info(LogType.NETWORK,
-                "[HANDSHAKE] Player {} reported initial position {} → chunk ({}, {})",
-                player.getName().getString(), state.describe(), pos.x, pos.z);
+                "[PLAY_INIT] Player {} initial position ({}, {}) → chunk ({}, {})",
+                player.getName().getString(), x, z, pos.x, pos.z);
     }
 
-    /** 续流验票通过后标记（epoch = 票据 epoch）；removePlayer 清理 */
+    /** 续流/会话状态登记（直连拓扑保留空实现位，无票据来源）。 */
     public void markPlayerResumeActive(UUID playerId, long epoch) {
         resumePlayers.put(playerId, epoch);
         DebugLogger.info(LogType.NETWORK, "[RESUME] Player {} resume ready (epoch={})", playerId, epoch);
@@ -343,11 +311,6 @@ public class ServerChunkPushManager {
 
     public long playerResumeEpoch(UUID playerId) {
         return resumePlayers.getOrDefault(playerId, Long.MIN_VALUE);
-    }
-
-    /** 最近一次上报的完整玩家状态（无上报 → null） */
-    public PlayerStateReport getPlayerStateReport(UUID playerId) {
-        return playerStateReports.get(playerId);
     }
 
     /**
@@ -1212,7 +1175,6 @@ public class ServerChunkPushManager {
         preparedChunkPackets.remove(playerId);
         initialPlayerChunkPos.remove(playerId);
         resumePlayers.remove(playerId);
-        playerStateReports.remove(playerId);
         playerLightComputeSupported.remove(playerId);
         seedGenDisabledPlayers.remove(playerId);
         seedGenFallbackCounts.remove(playerId);
@@ -1226,7 +1188,6 @@ public class ServerChunkPushManager {
         preparedChunkPackets.clear();
         initialPlayerChunkPos.clear();
         resumePlayers.clear();
-        playerStateReports.clear();
         // review-fix: T3-52：能力表一并清理
         playerSeedGenSupported.clear();
         playerLightComputeSupported.clear();
@@ -1323,12 +1284,9 @@ public class ServerChunkPushManager {
             List<SectionDeltaS2CPacket.HeightmapData> heightmaps,
             List<SectionDeltaS2CPacket.BlockEntityData> blockEntities) {}
 
-    /** Gateway 会话存在时，full 推送只在 writable 的 channel 上推进（发送前最后一道闸）。 */
+    /** 直连拓扑：full 推送仅受 vanilla 通道可写性约束（网关会话背压已退役）。 */
     private static boolean isFullDeliveryChannelWritable(ServerPlayer player) {
-        io.github.limuqy.mc.hassium.network.gateway.GatewayPlayerSession session =
-                io.github.limuqy.mc.hassium.network.gateway.GatewayServer.getInstance()
-                        .registry().get(player.getUUID());
-        return session == null || session.channel().isWritable();
+        return true;
     }
 
     /**

@@ -8,12 +8,13 @@ import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.server.level.ServerPlayer;
 
 /**
- * Fabric 平台的网络管理器服务实现
+ * Fabric 平台的网络管理器服务实现（直连拓扑）
+ * <p>
+ * C2S/S2C 收发经 {@link FabricSendCompat} 收口；聚合配套（Dict/Index）、Play 期激活
+ * （play_init）与 compression_ready ACK 委托 {@link FabricNetworkManager} 静态实现
+ * （common {@code ServerHandshakeActivation} / {@code PlayInitClient} 消费）。
  */
 public class FabricNetworkManagerService implements INetworkManagerService {
-
-    private static final FabricNetworkManager NETWORK_MANAGER = new FabricNetworkManager();
-
 
     @Override
     public void sendShadowPullRequest(FriendlyByteBuf buf) {
@@ -25,41 +26,7 @@ public class FabricNetworkManagerService implements INetworkManagerService {
     }
 
     @Override
-    public void sendClientHandshake(io.github.limuqy.mc.hassium.network.ClientHandshakeRequest request) {
-        FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
-        try {
-            buf.writeVarInt(request.protocolVersion());
-            buf.writeUtf(request.modVersion());
-            buf.writeVarInt(request.supportedAlgorithms().length);
-            for (String algo : request.supportedAlgorithms()) {
-                buf.writeUtf(algo);
-            }
-            buf.writeBoolean(request.clientCacheSupported());
-            buf.writeBoolean(request.chunkRevisionSupported());
-            buf.writeBoolean(request.scheme127Supported());
-            buf.writeBoolean(request.globalPacketCompressionSupported());
-            buf.writeBoolean(request.compactHeaderSupported());
-            io.github.limuqy.mc.hassium.network.dataplane.UdpDataPlaneHandshakeTail.writeC2S(
-                    buf, request.dataplaneCapabilities());
-            buf.writeDouble(request.posX());
-            buf.writeDouble(request.posZ());
-            buf.writeBoolean(request.seedGenSupported());
-            buf.writeBoolean(request.lightComputeSupported());
-            FabricSendCompat.sendToServer(HassiumChannels.HANDSHAKE_C2S, buf);
-        } catch (Throwable t) {
-            if (buf.refCnt() > 0) {
-                buf.release();
-            }
-        }
-    }
-
-
-    @Override
     public void sendSeedRef(ServerPlayer player, FriendlyByteBuf buf) {
-        if (io.github.limuqy.mc.hassium.server.GatewayPlayerBridge.tryRouteS2C(
-                player, io.github.limuqy.mc.hassium.network.core.GatewayPacketCodec.HassiumSub.SEED_REF.id(), buf)) {
-            return;
-        }
         FabricSendCompat.sendToPlayer(player, HassiumChannels.SEED_REF_S2C, buf);
     }
 
@@ -71,19 +38,27 @@ public class FabricNetworkManagerService implements INetworkManagerService {
 
     @Override
     public void sendBlockEntityData(ServerPlayer player, FriendlyByteBuf buf) {
-        if (io.github.limuqy.mc.hassium.server.GatewayPlayerBridge.tryRouteS2C(
-                player, io.github.limuqy.mc.hassium.network.core.GatewayPacketCodec.HassiumSub.BLOCK_ENTITY_DATA.id(), buf)) {
-            return;
-        }
         FabricSendCompat.sendToPlayer(player, HassiumChannels.BLOCK_ENTITY_DATA_S2C, buf);
     }
 
     @Override
     public void sendLightDeltaPacket(ServerPlayer player, FriendlyByteBuf buf) {
-        if (io.github.limuqy.mc.hassium.server.GatewayPlayerBridge.tryRouteS2C(
-                player, io.github.limuqy.mc.hassium.network.core.GatewayPacketCodec.HassiumSub.LIGHT_DELTA.id(), buf)) {
-            return;
-        }
-        buf.release();
+        FabricSendCompat.sendToPlayer(player, HassiumChannels.LIGHT_DELTA_S2C, buf);
+    }
+
+    @Override
+    public void sendDictionarySync(ServerPlayer player) {
+        FabricNetworkManager.sendDictionarySync(player);
+    }
+
+    @Override
+    public void sendIndexSync(ServerPlayer player) {
+        FabricNetworkManager.sendIndexSync(player);
+    }
+
+    @Override
+    public void sendPlayInit(ServerPlayer player, int negotiatedCaps, long worldSeed,
+                             byte[] stemNbt, boolean seedGenEnabled) {
+        FabricNetworkManager.sendPlayInit(player, negotiatedCaps, worldSeed, stemNbt, seedGenEnabled);
     }
 }

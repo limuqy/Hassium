@@ -32,29 +32,26 @@ class ConfigSchemaTest {
     }
 
     @Test
-    void migrationPolicyKeysRegisteredWithContractScopes() {
+    void gatewayMigrationDataplaneKeysRetired() {
         ConfigValues values = ConfigValues.defaults(ConfigSchema.entries());
-
-        // CLIENT scope 6 键（B2 策略参数全链接线；客户端 MigrationEngine 消费，cloth 屏可见）
-        assertEquals(ConfigScope.CLIENT, ConfigSchema.MASTER_MIGRATION_MIN_TPS.scope());
-        assertEquals(15.0, values.get(ConfigSchema.MASTER_MIGRATION_MIN_TPS));
-        assertEquals(ConfigScope.CLIENT, ConfigSchema.MASTER_MIGRATION_MAX_LOAD_AVERAGE.scope());
-        assertEquals(4.0, values.get(ConfigSchema.MASTER_MIGRATION_MAX_LOAD_AVERAGE));
-        assertEquals(ConfigScope.CLIENT, ConfigSchema.MASTER_MIGRATION_MAINTENANCE_WINDOW.scope());
-        assertEquals("", values.get(ConfigSchema.MASTER_MIGRATION_MAINTENANCE_WINDOW));
-        assertEquals(ConfigScope.CLIENT, ConfigSchema.MASTER_MIGRATION_HEARTBEAT_INTERVAL_MS.scope());
-        assertEquals(5000L, values.get(ConfigSchema.MASTER_MIGRATION_HEARTBEAT_INTERVAL_MS));
-        assertEquals(ConfigScope.CLIENT, ConfigSchema.MASTER_MIGRATION_IDLE_WINDOW_MS.scope());
-        assertEquals(10000L, values.get(ConfigSchema.MASTER_MIGRATION_IDLE_WINDOW_MS));
-        assertEquals(ConfigScope.CLIENT, ConfigSchema.MASTER_MIGRATION_SILENT_TIMEOUT_MS.scope());
-        // N2：默认静默超时 ≤15s（失效识别目标）
-        assertTrue(values.get(ConfigSchema.MASTER_MIGRATION_SILENT_TIMEOUT_MS) <= 15_000L,
-                "默认静默超时必须 ≤15s，实际 " + values.get(ConfigSchema.MASTER_MIGRATION_SILENT_TIMEOUT_MS));
-
-        // SERVER scope：预热 TTL（T4 交付键）+ 既有 faultTimeout 兼容键保留
-        assertEquals(ConfigScope.SERVER, ConfigSchema.MASTER_MIGRATION_PREWARM_TTL_MS.scope());
-        assertEquals(60_000L, values.get(ConfigSchema.MASTER_MIGRATION_PREWARM_TTL_MS));
-        assertEquals(ConfigScope.SERVER, ConfigSchema.MASTER_MIGRATION_FAULT_TIMEOUT_MS.scope());
-        assertEquals(60_000L, values.get(ConfigSchema.MASTER_MIGRATION_FAULT_TIMEOUT_MS));
+        // 网关拓扑退役：master 网关监听/鉴权/控制面端点/L1 迁移/续流票据与 dataplane.* 键族全删
+        String[] retiredPaths = {
+                "master.bindHost", "master.authToken", "master.controlReachableEndpoints",
+                "master.migrationFaultTimeoutMs", "master.migrationMinTps", "master.migrationMaxLoadAverage",
+                "master.migrationMaintenanceWindow", "master.migrationHeartbeatIntervalMs",
+                "master.migrationIdleWindowMs", "master.migrationSilentTimeoutMs",
+                "master.migrationPrewarmTtlMs", "master.resumeTicketTtlMs",
+                "dataplane.enabled", "dataplane.udpListeners"
+        };
+        for (String path : retiredPaths) {
+            assertTrue(ConfigSchema.entries().stream().noneMatch(e -> e.path().equals(path)),
+                    "退役键不应再注册: " + path);
+        }
+        // 聚合键族（保留）默认值抽查
+        assertEquals(true, values.get(ConfigSchema.MASTER_PACKET_AGGREGATION));
+        assertEquals(4, values.get(ConfigSchema.MASTER_AGGREGATION_MIN_BATCH));
+        assertEquals(50L, values.get(ConfigSchema.MASTER_AGGREGATION_MAX_WAIT));
+        assertEquals(256 * 1024, values.get(ConfigSchema.MASTER_AGGREGATION_MAX_SIZE));
+        assertEquals(true, values.get(ConfigSchema.MASTER_COMPACT_HEADER));
     }
 }

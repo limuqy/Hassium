@@ -110,11 +110,13 @@ public final class HassiumPacketIds {
      */
     public static final String LIGHT_DELTA_S2C = "hassium:light_delta_s2c";
 
-    // ===== 网关 bootstrap 相关包 =====
+    // ===== 遗留通道 id（网关拓扑退役）=====
 
     /**
-     * 服务端 -> 客户端：网关 bootstrap 信息（玩家 join 首帧经 vanilla 通道下发；
-     * 载荷 = {@link GatewayInfoCodec.GatewayInfo}，见 CONTRACTS §1）。
+     * 服务端 -> 客户端：网关 bootstrap 信息（legacy）。
+     * <p>
+     * 2.0.0 网关拓扑退役后服务端不再下发 gateway_info；通道 id 保留，
+     * 供加载器通道注册兼容（NeoForge 通道表仍登记该 id）。
      */
     public static final String GATEWAY_INFO_S2C = "hassium:gateway_info";
 

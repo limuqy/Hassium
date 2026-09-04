@@ -32,7 +32,8 @@ import java.util.concurrent.TimeUnit;
 public class HassiumAggregationManager {
     private static int minBatchPackets = 4;
     private static int maxWaitCycles = 2;
-    private static final int FLUSH_PERIOD_MS = 20;
+    /** 定时器粒度；maxWaitCycles = aggregationMaxWaitTimeMs / 本值（默认 50ms → 5 周期）。 */
+    private static final int FLUSH_PERIOD_MS = 10;
     private static int maxAggregationSize = 256 * 1024;
 
     private static final ConcurrentHashMap<Connection, List<AggregatedSubPacket>> PACKET_BUFFER = new ConcurrentHashMap<>();
@@ -280,15 +281,7 @@ public class HassiumAggregationManager {
             aggregationPacket.encode(buf);
 
             if (sender != null) {
-                // 聚合包内部已有字典 ZSTD：标记下一帧跳过管线压缩
-                ZstdPipelineSwitcher.markSkipNextPipelineCompression(connection);
-                try {
-                    sender.send(connection, buf);
-                } catch (Exception e) {
-                    // review-fix: T2-74: 发送异常时清理残留 skip 标记，避免下一普通帧跳过压缩明文写出
-                    ZstdPipelineSwitcher.clearSkipNextPipelineCompression(connection);
-                    throw e;
-                }
+                sendAggregateBypassingVanillaCompression(connection, buf);
             } else {
                 // review-fix: T2-76: sender 缺失（初始化顺序异常窗口）时回队兜底，不丢数据
                 Constants.LOG.warn("AggregationSender not set, re-queueing {} packets", batch.size());
@@ -304,6 +297,69 @@ public class HassiumAggregationManager {
         } catch (Exception e) {
             Constants.LOG.error("Failed to flush aggregation batch", e);
         }
+    }
+
+    /**
+     * 聚合帧直通发送（run9 退役波）：聚合包内部已有字典 ZSTD，若经 vanilla zlib
+     * 再压即双重压缩——在<b>同一个 EventLoop 任务内</b>做阈值翻折
+     * {@code setThreshold(MAX) → write → setThreshold(原值)}，聚合帧按
+     * {@code VarInt(0)+明文} 出站。EventLoop FIFO 保证翻折窗口对其他写包原子；
+     * vanilla zlib 对普通包的行为不受影响。
+     * <p>
+     * 原值取 {@code server.getCompressionThreshold()}（与 vanilla SetCompression 同源，
+     * 编码端阈值必须等于解码端阈值）；原版压缩未启用（threshold&lt;0 或无 compress
+     * handler）时聚合帧本就直通，无需翻折。
+     */
+    private static void sendAggregateBypassingVanillaCompression(Connection connection, FriendlyByteBuf buf) {
+        io.netty.channel.Channel channel = ConnectionChannelAccess.getConnectionChannel(connection);
+        if (channel == null) {
+            sender.send(connection, buf);
+            return;
+        }
+        Runnable send = () -> sender.send(connection, buf);
+        if (!channel.eventLoop().inEventLoop()) {
+            channel.eventLoop().execute(() -> sendAggregateBypassingVanillaCompression(connection, buf));
+            return;
+        }
+        io.netty.channel.ChannelHandler compress = channel.pipeline().get("compress");
+        if (compress instanceof net.minecraft.network.CompressionEncoder encoder) {
+            int vanillaThreshold = resolveVanillaCompressionThreshold(connection);
+            if (vanillaThreshold < 0) {
+                send.run();
+                return;
+            }
+            encoder.setThreshold(Integer.MAX_VALUE);
+            try {
+                send.run();
+            } finally {
+                encoder.setThreshold(vanillaThreshold);
+            }
+        } else {
+            send.run();
+        }
+    }
+
+    /**
+     * 解析连接所属专用服的原版压缩阈值（server.properties 同源）；无法解析时回退
+     * 原版默认 256。仅在压缩已启用（有 compress handler）时被调用。
+     * <p>
+     * 经 packet listener 按类型反射取 {@code MinecraftServer}（1.21.x 起
+     * {@code ServerGamePacketListenerImpl.player} 字段可见性/形态跨版本不稳，
+     * 类型匹配对 SRG/intermediary/改名免疫，见 {@code ReflectionCompat}）。
+     */
+    private static int resolveVanillaCompressionThreshold(Connection connection) {
+        try {
+            Object listener = connection.getPacketListener();
+            net.minecraft.server.MinecraftServer server = (net.minecraft.server.MinecraftServer)
+                    io.github.limuqy.mc.hassium.compat.ReflectionCompat.getFieldByTypeOrNull(
+                            listener, net.minecraft.server.MinecraftServer.class, true);
+            if (server != null) {
+                return server.getCompressionThreshold();
+            }
+        } catch (Exception e) {
+            Constants.LOG.debug("Hassium: failed to resolve vanilla compression threshold: {}", e.toString());
+        }
+        return 256;
     }
 
     /**

@@ -4,7 +4,6 @@ import io.github.limuqy.mc.hassium.cache.client.ClientLifecycleHelper;
 import io.github.limuqy.mc.hassium.client.ClientSmokeTest;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.network.DictionaryManager;
-import io.github.limuqy.mc.hassium.network.dataplane.DataPlaneClientLifecycle;
 import net.minecraftforge.client.event.ClientPlayerNetworkEvent;
 import net.minecraftforge.common.MinecraftForge;
 import net.minecraftforge.fml.common.Mod;
@@ -32,10 +31,11 @@ import net.minecraftforge.network.NetworkContext;
 /**
  * Forge 客户端初始化：加载字典、断开时清理缓存。
  * <p>
- * T6：客户端 failover 已退役——不再初始化控制面重连单例 / 不再发送握手请求
- * （新架构客户端不发 vanilla 握手，服务端旧握手链休眠）；LoggingOut 直接全量清理。
+ * 直连拓扑（2.0.0）：登录期能力协商经 vanilla login query（1.20.1，common mixin 应答）/
+ * 配置阶段 pre-handshake（1.21.1+，服务端 receiver），客户端 LoggingIn 无需操作；
+ * LoggingOut 直接全量清理。
  * <p>
- * 客户端统计依赖握手成功后的元数据/压缩区块路径；未握手时 {@code /hassiumc stats} 会全为 0。
+ * 客户端统计依赖协商成功后的元数据/压缩区块路径；未协商时 {@code /hassiumc stats} 会全为 0。
  */
 #if MC_VER < MC_1_21_1
 @OnlyIn(Dist.CLIENT)
@@ -83,20 +83,14 @@ public class HassiumForgeClient {
                 return;
             }
 #endif
-            // 新架构（T5/T6）：客户端不再主动发送 Hassium 握手；网关握手经
-            // MixinConnection.relayLoginToGateway → NetworkCore 中继，此处无需操作。
+            // 直连拓扑：登录期能力协商经 vanilla login query（1.20.1）/ 配置阶段
+            // pre-handshake（1.21.1+，服务端 receiver），客户端 LoggingIn 无需操作。
         }
 
         @SubscribeEvent
         public void onPlayerLoggedOut(ClientPlayerNetworkEvent.LoggingOut event) {
-            // 客户端 failover 已退役（T6）：无恢复态 begin / orchestrator 轮转，
-            // 直接全量清理 + 关闭 UDP 数据面 + 延后 finalize（与 Mixin TAIL 幂等）。
+            // 全量清理 + 延后 finalize（与 Mixin TAIL 幂等）。
             ClientLifecycleHelper.cleanupOnDisconnect();
-            try {
-                DataPlaneClientLifecycle.getInstance().stopUdp(false);
-            } catch (Throwable ignored) {
-                // UDP 数据面可选；关闭失败不得阻断断连清理
-            }
             // 延后到下一 tick：等世界拆除；与 MixinMinecraft TAIL 幂等兜底
             net.minecraft.client.Minecraft.getInstance()
                     .execute(ClientLifecycleHelper::finalizeDisconnectIfTerminal);

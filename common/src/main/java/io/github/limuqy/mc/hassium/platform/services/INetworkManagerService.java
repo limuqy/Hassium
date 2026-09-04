@@ -1,5 +1,6 @@
 package io.github.limuqy.mc.hassium.platform.services;
 
+import net.minecraft.network.Connection;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.server.level.ServerPlayer;
 
@@ -16,18 +17,6 @@ public interface INetworkManagerService {
         }
     }
 
-
-    /**
-     * 发送网关 bootstrap 信息。默认走 vanilla CustomPayload；旧 NeoForge 需覆写为
-     * SimpleChannel，以便在 loader 的频道协商中声明该 S2C 通道。
-     */
-    default void sendGatewayInfo(ServerPlayer player, byte[] data) {
-        player.connection.send(io.github.limuqy.mc.hassium.compat.PacketPayloadCompat.createClientboundPayload(
-                io.github.limuqy.mc.hassium.compat.PacketId.parse(
-                        io.github.limuqy.mc.hassium.network.HassiumPacketIds.GATEWAY_INFO_S2C), data));
-    }
-
-
     /**
      * 发送 blockEntity 数据请求到服务端（客户端调用）
      */
@@ -39,7 +28,7 @@ public interface INetworkManagerService {
     void sendBlockEntityData(ServerPlayer player, FriendlyByteBuf buf);
 
     /**
-     * 发送光照增量通知到客户端（服务端调用）
+     * 发送光照增量通知到客户端（服务端调用；vanilla 通道 play S2C 直发）
      */
     void sendLightDeltaPacket(ServerPlayer player, FriendlyByteBuf buf);
 
@@ -47,11 +36,40 @@ public interface INetworkManagerService {
      * 发送 SeedRef 到客户端（SeedGen：pristine 区块引用替代区块数据；服务端调用）
      */
     void sendSeedRef(ServerPlayer player, FriendlyByteBuf buf);
+
     /**
-     * 发送客户端握手请求到服务端（无网关拓扑：Play 阶段进入后由
-     * {@code ClientHandshakeSender} 一次性调用；网关拓扑下不发送）。
+     * 发送聚合字典同步到客户端（服务端调用；Play 期 ZSTD 安装后）。
+     * 三端各自走已注册的 dictionary_sync 通道。
      */
-    default void sendClientHandshake(io.github.limuqy.mc.hassium.network.ClientHandshakeRequest request) {
+    default void sendDictionarySync(ServerPlayer player) {
     }
 
+    /**
+     * 发送包索引同步到客户端（服务端调用；Play 期 ZSTD 安装后）。
+     */
+    default void sendIndexSync(ServerPlayer player) {
+    }
+
+    /**
+     * 发送 Play 期激活包到客户端（服务端调用；登录协商完成后玩家就绪时）。
+     *
+     * @param negotiatedCaps 服务端按位与后的协商能力位
+     * @param worldSeed      主世界种子；seedGenEnabled=false 时为 0
+     * @param stemNbt        LevelStem NBT（可空）
+     * @param seedGenEnabled 服务端 SeedGen 开关
+     */
+    default void sendPlayInit(ServerPlayer player, int negotiatedCaps, long worldSeed,
+                              byte[] stemNbt, boolean seedGenEnabled) {
+    }
+
+    /**
+     * 客户端配置阶段能力声明（C2S {@code PreHandshakePayload}；仅 1.21.1+，
+     * mixin {@code MixinClientConfigurationPacketListenerImpl} 每连接一次性调用，传入
+     * 配置监听器的 {@link Connection}——配置期 {@code Minecraft.getConnection()} 恒为
+     * null（play listener 尚未创建），实现不得自行获取连接）。
+     * 1.20.1 走 login query 应答（{@code MixinClientHandshakePacketListenerImpl}），本方法空实现；
+     * fabric 由 {@code ClientConfigurationConnectionEvents.START} 经 API 直发，默认实现不发送。
+     */
+    default void announcePreHandshake(Connection connection) {
+    }
 }

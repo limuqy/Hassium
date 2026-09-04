@@ -148,13 +148,6 @@ public final class FabricTomlConfigIO {
     }
 
     private static Object readSchemaValue(CommentedConfig cfg, ConfigEntry<?> entry) {
-        if (entry.key() == ConfigSchema.MASTER_CONTROL_ENDPOINTS) {
-            return readReachableEndpoints(cfg, entry.path(), entry.path(), MAX_CONTROL_ENDPOINTS).stream()
-                    .map(DataPlaneEndpointConfig::encodeReachable).toList();
-        }
-        if (entry.key() == ConfigSchema.DATAPLANE_UDP_LISTENERS) {
-            return readUdpListeners(cfg).stream().map(DataPlaneEndpointConfig::encodeListener).toList();
-        }
         return coerceSchemaValue(cfg.get(entry.path()), entry);
     }
 
@@ -195,26 +188,7 @@ public final class FabricTomlConfigIO {
 
     @SuppressWarnings("unchecked")
     private static void writeSchemaValue(CommentedConfig cfg, ConfigEntry<?> entry, Object value) {
-        if (entry.key() == ConfigSchema.MASTER_CONTROL_ENDPOINTS) {
-            writeReachableEndpoints(cfg, entry.path(), ((List<String>) value).stream()
-                    .map(DataPlaneEndpointConfig::decodeReachable).toList(), entry.comment());
-        } else if (entry.key() == ConfigSchema.DATAPLANE_UDP_LISTENERS) {
-            cfg.remove(entry.path());
-            List<CommentedConfig> listeners = new ArrayList<>();
-            for (String encoded : (List<String>) value) {
-                HassiumConfig.UdpListenerConfig listener = DataPlaneEndpointConfig.decodeListener(encoded);
-                CommentedConfig table = cfg.createSubConfig();
-                table.set("bindHost", listener.bindHost());
-                table.set("bindPort", listener.bindPort());
-                table.set("weight", listener.weight());
-                writeReachableEndpoints(table, "reachableEndpoints", listener.reachableEndpoints(), entry.comment());
-                listeners.add(table);
-            }
-            cfg.setComment(entry.path(), entry.comment());
-            cfg.set(entry.path(), listeners);
-        } else {
-            set(cfg, entry.path(), value, entry.comment());
-        }
+        set(cfg, entry.path(), value, entry.comment());
     }
 
 
@@ -231,7 +205,7 @@ public final class FabricTomlConfigIO {
         } catch (java.io.IOException e) {
             throw new IllegalStateException("无法创建临时客户端配置目录", e);
         }
-        writeClient(configRoot.resolve(Constants.CONFIG_CLIENT_FILE), config.chunk(), config.master(), config.debug());
+        writeClient(configRoot.resolve(Constants.CONFIG_CLIENT_FILE), config.chunk(), config.debug());
     }
 
     private static HassiumConfig loadClientFile(Path client) throws java.io.IOException {
@@ -245,13 +219,12 @@ public final class FabricTomlConfigIO {
             try (CommentedFileConfig cfg = open(client)) {
                 cfg.load();
                 chunk = readChunkCore(cfg);
-                master = readClientMigrationPolicy(cfg, master);
                 debug = readDebug(cfg);
             } catch (Exception e) {
                 LOGGER.warn("Hassium: 读取 {} 失败，使用默认客户端配置", client, e);
             }
         } else {
-            writeClient(client, chunk, master, debug);
+            writeClient(client, chunk, debug);
         }
 
         return new HassiumConfig(
@@ -311,7 +284,7 @@ public final class FabricTomlConfigIO {
                     physicalClient ? clientPath().getParent() : serverPath().getParent()
             );
             if (physicalClient) {
-                writeClient(clientPath(), config.chunk(), config.master(), config.debug());
+                writeClient(clientPath(), config.chunk(), config.debug());
             } else {
                 writeServer(serverPath(), config.storage(), config.chunk(), config.master(), config.compat(), config.debug());
             }
@@ -338,37 +311,13 @@ public final class FabricTomlConfigIO {
     private static void writeClient(
             Path path,
             HassiumConfig.ChunkCoreConfig chunk,
-            HassiumConfig.MasterCoreConfig master,
             HassiumConfig.DebugConfig debug
     ) {
         try (CommentedFileConfig cfg = open(path)) {
             writeChunkCore(cfg, chunk);
-            writeClientMigrationPolicy(cfg, master);
             writeClientDebug(cfg, debug);
             cfg.save();
         }
-    }
-    private static HassiumConfig.MasterCoreConfig readClientMigrationPolicy(
-            CommentedConfig cfg, HassiumConfig.MasterCoreConfig d
-    ) {
-        return d.withMigrationPolicy(
-                getDouble(cfg, "master.migrationMinTps", d.migrationMinTps()),
-                getDouble(cfg, "master.migrationMaxLoadAverage", d.migrationMaxLoadAverage()),
-                getString(cfg, "master.migrationMaintenanceWindow", d.migrationMaintenanceWindow()),
-                getPositiveLong(cfg, "master.migrationHeartbeatIntervalMs", d.migrationHeartbeatIntervalMs()),
-                getPositiveLong(cfg, "master.migrationIdleWindowMs", d.migrationIdleWindowMs()),
-                getPositiveLong(cfg, "master.migrationSilentTimeoutMs", d.migrationSilentTimeoutMs()));
-    }
-
-    /** 客户端 toml 的 master 迁移策略键（CLIENT scope；仅 migration* 6 键）。 */
-    private static void writeClientMigrationPolicy(CommentedConfig cfg, HassiumConfig.MasterCoreConfig master) {
-        set(cfg, "master.migrationMinTps", master.migrationMinTps(), "L1 迁移策略：主控 TPS 低于此值触发迁移");
-        set(cfg, "master.migrationMaxLoadAverage", master.migrationMaxLoadAverage(), "L1 迁移策略：主控系统负载均值高于此值触发迁移（getSystemLoadAverage 为 -1 视为无信号）");
-        set(cfg, "master.migrationMaintenanceWindow", master.migrationMaintenanceWindow(), "L1 迁移策略：维护窗口 \"HH:MM-HH:MM\"（本地时区，含跨午夜）；空串=禁用");
-        set(cfg, "master.migrationHeartbeatIntervalMs", master.migrationHeartbeatIntervalMs(), "L1 迁移：应用层 HEARTBEAT 发送周期（ms）");
-        set(cfg, "master.migrationIdleWindowMs", master.migrationIdleWindowMs(), "L1 迁移：空闲窗口判定时长（ms；玩家静止 + 区块 hash 稳定，适合迁移的时机）");
-        set(cfg, "master.migrationSilentTimeoutMs", master.migrationSilentTimeoutMs(),
-                "L1 迁移：outbound 入站静默超时（ms；默认 10s 使失效识别 ≤15s；未配置时回退 master.migrationFaultTimeoutMs 语义）");
     }
 
     private static void writeServer(
@@ -466,10 +415,6 @@ public final class FabricTomlConfigIO {
         return new HassiumConfig.MasterCoreConfig(
                 getBool(cfg, "master.enabled", d.enabled()),
                 getInt(cfg, "master.compressionLevel", d.compressionLevel()),
-                getBool(cfg, "master.magiclessZstd", d.magiclessZstd()),
-                getBool(cfg, "master.globalPacketCompression", d.globalPacketCompression()),
-                getInt(cfg, "master.globalCompressionLevel", d.globalCompressionLevel()),
-                getInt(cfg, "master.globalCompressionThreshold", d.globalCompressionThreshold()),
                 getBool(cfg, "master.useContextCompression", d.useContextCompression()),
                 getBool(cfg, "master.enablePacketAggregation", d.enablePacketAggregation()),
                 getInt(cfg, "master.aggregationMinBatchSize", d.aggregationMinBatchSize()),
@@ -479,32 +424,13 @@ public final class FabricTomlConfigIO {
                 getStringSet(cfg, "master.compressionBlacklist", d.compressionBlacklist()),
                 getBool(cfg, "master.metricsEnabled", d.metricsEnabled()),
                 getInt(cfg, "master.maxChunksPerTick", d.maxChunksPerTick()),
-                getInt(cfg, "master.serverChunkPushThreads", d.serverChunkPushThreads()),
-                getString(cfg, "master.bindHost", d.bindHost()),
-                getString(cfg, "master.authToken", d.authToken()),
-                readReachableEndpoints(cfg, "master.controlReachableEndpoints", "master.controlReachableEndpoints",
-                        MAX_CONTROL_ENDPOINTS),
-                getPositiveLong(cfg, "master.migrationFaultTimeoutMs", d.migrationFaultTimeoutMs()),
-                // CLIENT scope 迁移策略键不在 server.toml（物理客户端经 client.toml 加载）→ 默认值
-                d.migrationMinTps(),
-                d.migrationMaxLoadAverage(),
-                d.migrationMaintenanceWindow(),
-                d.migrationHeartbeatIntervalMs(),
-                d.migrationIdleWindowMs(),
-                d.migrationSilentTimeoutMs(),
-                getPositiveLong(cfg, "master.migrationPrewarmTtlMs", d.migrationPrewarmTtlMs()),
-                getPositiveLong(cfg, "master.resumeTicketTtlMs", d.resumeTicketTtlMs()),
-                readDataPlane(cfg, d.dataPlane())
+                getInt(cfg, "master.serverChunkPushThreads", d.serverChunkPushThreads())
         );
     }
 
     private static void writeMasterCore(CommentedConfig cfg, HassiumConfig.MasterCoreConfig n) {
         set(cfg, "master.enabled", n.enabled(), "是否启用主控核心网络通道");
         set(cfg, "master.compressionLevel", n.compressionLevel(), "自有通道 ZSTD 等级");
-        set(cfg, "master.magiclessZstd", n.magiclessZstd(), "是否使用无 magic 的 ZSTD");
-        set(cfg, "master.globalPacketCompression", n.globalPacketCompression(), "是否启用全局 ZSTD");
-        set(cfg, "master.globalCompressionLevel", n.globalCompressionLevel(), "全局压缩等级");
-        set(cfg, "master.globalCompressionThreshold", n.globalCompressionThreshold(), "全局压缩阈值（字节）");
         set(cfg, "master.useContextCompression", n.useContextCompression(), "是否使用上下文压缩");
         set(cfg, "master.enablePacketAggregation", n.enablePacketAggregation(), "是否启用包聚合");
         set(cfg, "master.aggregationMinBatchSize", n.aggregationMinBatchSize(), "聚合最小批量");
@@ -515,22 +441,30 @@ public final class FabricTomlConfigIO {
         set(cfg, "master.metricsEnabled", n.metricsEnabled(), "是否启用指标收集");
         set(cfg, "master.maxChunksPerTick", n.maxChunksPerTick(), "每玩家每 tick 提交到后台序列化的区块上限（发送速率 = 本值 × tick 节奏，满 tick ≈ 本值×20/s，仅服务端）");
         set(cfg, "master.serverChunkPushThreads", n.serverChunkPushThreads(), "服务端区块推送线程数（encode/hash/ZSTD 固定后台池，仅服务端）");
+        // legacy 键清理：网关监听/鉴权/控制面端点/L1 迁移/续流票据/数据面已随网关拓扑退役；
+        // 管线级全局包压缩（globalPacketCompression/globalCompressionLevel/globalCompressionThreshold/magiclessZstd）
+        // 已随直连拓扑退役（通道压缩由聚合字典 ZSTD + 区块推送自有压缩承担）
         cfg.remove("master.dynamicThreadPoolEnabled");
         cfg.remove("master.minPushThreads");
         cfg.remove("master.maxPushThreads");
-        set(cfg, "master.bindHost", n.bindHost(),
-                "网关监听 bind host（默认 127.0.0.1 回环；空串=0.0.0.0 全网卡，生产多网卡显式声明）");
-        set(cfg, "master.authToken", n.authToken(),
-                "网关握手鉴权 token（默认空=不鉴权；非空时客户端握手帧需携带同值，校验失败断开）");
-        writeReachableEndpoints(cfg, "master.controlReachableEndpoints", n.controlReachableEndpoints(),
-                "网关监听/outbound 端点（网关监听地址源；客户端 outbound 地址源 = 迁移引擎）");
-        set(cfg, "master.migrationFaultTimeoutMs", n.migrationFaultTimeoutMs(),
-                "L1 迁移故障超时（ms；silentTimeout 未配置时的回退值）");
-        set(cfg, "master.migrationPrewarmTtlMs", n.migrationPrewarmTtlMs(),
-                "预热会话 TTL（ms；无续流完成的预热物化会话到期清理）");
-        set(cfg, "master.resumeTicketTtlMs", n.resumeTicketTtlMs(),
-                "续流票据有效期（ms；T2 票据防重放时间窗口，默认 5min；旧格式票据不受限）");
-        writeDataPlane(cfg, n.dataPlane());
+        cfg.remove("master.magiclessZstd");
+        cfg.remove("master.globalPacketCompression");
+        cfg.remove("master.globalCompressionLevel");
+        cfg.remove("master.globalCompressionThreshold");
+        cfg.remove("master.bindHost");
+        cfg.remove("master.authToken");
+        cfg.remove("master.controlReachableEndpoints");
+        cfg.remove("master.migrationFaultTimeoutMs");
+        cfg.remove("master.migrationPrewarmTtlMs");
+        cfg.remove("master.resumeTicketTtlMs");
+        cfg.remove("master.migrationMinTps");
+        cfg.remove("master.migrationMaxLoadAverage");
+        cfg.remove("master.migrationMaintenanceWindow");
+        cfg.remove("master.migrationHeartbeatIntervalMs");
+        cfg.remove("master.migrationIdleWindowMs");
+        cfg.remove("master.migrationSilentTimeoutMs");
+        cfg.remove("dataplane.enabled");
+        cfg.remove("dataplane.udpListeners");
     }
 
     private static HassiumConfig.CompatConfig readCompat(CommentedConfig cfg) {
@@ -637,14 +571,6 @@ public final class FabricTomlConfigIO {
         return def;
     }
 
-    private static String getString(CommentedConfig cfg, String path, String def) {
-        Object v = cfg.get(path);
-        if (v instanceof String s) {
-            return s;
-        }
-        return def;
-    }
-
     private static Set<String> getStringSet(CommentedConfig cfg, String path, Set<String> def) {
         Object v = cfg.get(path);
         if (v instanceof List<?> list) {
@@ -657,125 +583,5 @@ public final class FabricTomlConfigIO {
             return Set.copyOf(out);
         }
         return def;
-    }
-    /**
-     * control 端点上限（与 {@link HassiumConfig.MasterCoreConfig} 构造钳位 4 一致）。
-     * 读侧按同一上限归一化：手工编辑 toml 含 5-8 个 control 端点时仅丢端点，
-     * 不再读侧放行→构造侧抛异常→整份配置静默回退默认。
-     */
-    private static final int MAX_CONTROL_ENDPOINTS = 4;
-    /** UDP listener reachable 端点上限（与 {@link HassiumConfig.UdpListenerConfig} 钳位 8 一致）。 */
-    private static final int MAX_LISTENER_ENDPOINTS = 8;
-
-    /**
-     * 读取并归一化 reachable 端点表；超过 {@code maxEntries} 时记 warn 并返回空表（仅丢该端点组）。
-     */
-    private static List<HassiumConfig.ReachableEndpoint> readReachableEndpoints(
-            CommentedConfig cfg, String path, String fieldName, int maxEntries
-    ) {
-        Object value = cfg.get(path);
-        if (!(value instanceof List<?> entries)) {
-            return List.of();
-        }
-        List<HassiumConfig.ReachableEndpoint> endpoints = new ArrayList<>();
-        for (Object entry : entries) {
-            if (!(entry instanceof CommentedConfig endpoint)) {
-                LOGGER.warn("Hassium: 忽略 {} 中的非表端点", fieldName);
-                continue;
-            }
-            try {
-                endpoints.add(new HassiumConfig.ReachableEndpoint(
-                        getString(endpoint, "host", ""), getInt(endpoint, "port", -1),
-                        getInt(endpoint, "priority", -1)));
-            } catch (IllegalArgumentException e) {
-                LOGGER.warn("Hassium: 忽略 {} 中的无效端点: {}", fieldName, e.getMessage());
-            }
-        }
-        try {
-            // review-fix: T6-57 按调用方传入上限归一化（control=4、listener=8），与构造侧钳位一致
-            return DataPlaneEndpointConfig.normalizeReachableEndpoints(endpoints, maxEntries, fieldName);
-        } catch (IllegalArgumentException e) {
-            LOGGER.warn("Hassium: 忽略 {}: {}", fieldName, e.getMessage());
-            return List.of();
-        }
-    }
-
-    private static HassiumConfig.DataPlaneConfig readDataPlane(
-            CommentedConfig cfg, HassiumConfig.DataPlaneConfig defaults
-    ) {
-        boolean enabled = getBool(cfg, "dataplane.enabled", defaults.enabled());
-        List<HassiumConfig.UdpListenerConfig> listeners = readUdpListeners(cfg);
-        if (listeners.isEmpty() && enabled) {
-            LOGGER.warn("Hassium: UDP data-plane 没有有效 listener，回退默认 data-plane 配置");
-            return defaults;
-        }
-        try {
-            return new HassiumConfig.DataPlaneConfig(enabled, listeners);
-        } catch (IllegalArgumentException e) {
-            LOGGER.warn("Hassium: UDP data-plane 配置无效，回退默认: {}", e.getMessage());
-            return defaults;
-        }
-    }
-
-    private static List<HassiumConfig.UdpListenerConfig> readUdpListeners(CommentedConfig cfg) {
-        Object value = cfg.get("dataplane.udpListeners");
-        if (!(value instanceof List<?> entries)) {
-            return List.of();
-        }
-        List<HassiumConfig.UdpListenerConfig> listeners = new ArrayList<>();
-        for (Object entry : entries) {
-            if (!(entry instanceof CommentedConfig listener)) {
-                LOGGER.warn("Hassium: 忽略 dataplane.udpListeners 中的非表 listener");
-                continue;
-            }
-            try {
-                listeners.add(new HassiumConfig.UdpListenerConfig(
-                        getString(listener, "bindHost", ""), getInt(listener, "bindPort", -1),
-                        getInt(listener, "weight", -1),
-                        readReachableEndpoints(listener, "reachableEndpoints",
-                                "dataplane.udpListeners.reachableEndpoints", MAX_LISTENER_ENDPOINTS)));
-            } catch (IllegalArgumentException e) {
-                LOGGER.warn("Hassium: 忽略无效 UDP listener: {}", e.getMessage());
-            }
-        }
-        return listeners;
-    }
-
-    private static long getPositiveLong(CommentedConfig cfg, String path, long defaults) {
-        long value = getLong(cfg, path, defaults);
-        return value > 0 ? value : defaults;
-    }
-
-    private static void writeDataPlane(CommentedConfig cfg, HassiumConfig.DataPlaneConfig dataPlane) {
-        set(cfg, "dataplane.enabled", dataPlane.enabled(), "是否启用 UDP/KCP Data Plane");
-        cfg.remove("dataplane.udpListeners");
-        List<CommentedConfig> listeners = new ArrayList<>();
-        for (HassiumConfig.UdpListenerConfig listener : dataPlane.udpListeners()) {
-            CommentedConfig table = cfg.createSubConfig();
-            table.set("bindHost", listener.bindHost());
-            table.set("bindPort", listener.bindPort());
-            table.set("weight", listener.weight());
-            writeReachableEndpoints(table, "reachableEndpoints", listener.reachableEndpoints(),
-                    "客户端可达 UDP 端点；bindHost 绝不下发");
-            listeners.add(table);
-        }
-        cfg.setComment("dataplane.udpListeners", "UDP listener；bind 仅限服务端本机，reachable 用于客户端连接");
-        cfg.set("dataplane.udpListeners", listeners);
-    }
-
-    private static void writeReachableEndpoints(
-            CommentedConfig cfg, String path, List<HassiumConfig.ReachableEndpoint> endpoints, String comment
-    ) {
-        cfg.remove(path);
-        List<CommentedConfig> tables = new ArrayList<>();
-        for (HassiumConfig.ReachableEndpoint endpoint : endpoints) {
-            CommentedConfig table = cfg.createSubConfig();
-            table.set("host", endpoint.host());
-            table.set("port", endpoint.port());
-            table.set("priority", endpoint.priority());
-            tables.add(table);
-        }
-        cfg.setComment(path, comment);
-        cfg.set(path, tables);
     }
 }

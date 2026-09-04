@@ -24,8 +24,8 @@ import java.util.regex.Pattern;
  * {@code /hassium/smoke/scenario/<name>.scenario} 加载。
  * <p>
  * 退出码语义沿用旧状态机：0 两轮均通过；2 统计校验/迁移失败；3 进服超时；
- * 非 0 其它为运行错误。契约 marker（CLIENT_STATS/GATEWAY_CLIENT/PASS/FAIL/CLIENT_MODE）
- * 输出格式与时机不变。
+ * 非 0 其它为运行错误。契约 marker（CLIENT_STATS/CLIENT/GATEWAY_CLIENT/PASS/FAIL/CLIENT_MODE）
+ * 输出格式与时机不变（GATEWAY_CLIENT 行保留 state=RETIRED 兼容旧 harness grep）。
  */
 public final class ScenarioEngine {
 
@@ -33,7 +33,9 @@ public final class ScenarioEngine {
     static final String MARKER_STATS = "HassiumSmokeTest:CLIENT_STATS";
     static final String MARKER_PASS = "HassiumSmokeTest:PASS";
     static final String MARKER_FAIL = "HassiumSmokeTest:FAIL";
-    /** T7 V0 网关断言 marker：每轮统计时 dump NetworkCore 状态/计数，供 runtime-smoke-test.ps1 解析。 */
+    /** 每轮统计时输出 vanilla 直连会话状态与区块收发计数（新 harness 消费）。 */
+    static final String MARKER_CLIENT = "HassiumSmokeTest:CLIENT";
+    /** 旧网关断言 marker：网关轮次已退役，行保留且 state=RETIRED，兼容旧 harness grep 不崩。 */
     static final String MARKER_GATEWAY = "HassiumSmokeTest:GATEWAY_CLIENT";
 
     private enum Outcome { RUNNING, DONE }
@@ -50,12 +52,13 @@ public final class ScenarioEngine {
     private static long joinTimeoutMs = 120_000L;
     private static String host = "127.0.0.1:25565";
 
-    // T10 迁移演练参数（语义保留）
+    // T10 迁移演练参数（网关轮次退役：migrateTo/migrateImmediate 仅用于 migrate 场景选择与
+    // 场景文件变量注入；command mode=migrate 步骤 log-and-skip，wait until=migrated 降级为
+    // common 握手 session-ready 等待）
     private static String migrateTo;
     private static boolean migrateImmediate;
     private static long migrateWaitTimeoutMs = 120_000L;
-    private static long migrateTriggeredAtMs = -1L;
-    /** 迁移完成时刻（resumeAccepted=true 检测到；再等 settle 让帧 S2C 流入后统计）。 */
+    /** session-ready 检测到（协商位非 0）后，再等 settle 让区块 S2C 流入后统计。 */
     private static long migratedAtMs = -1L;
 
     // 步间共享状态
@@ -137,7 +140,6 @@ public final class ScenarioEngine {
         index = 0;
         stepStartMs = startAtMs = System.currentTimeMillis();
         disconnectAtMs = -1L;
-        migrateTriggeredAtMs = -1L;
         migratedAtMs = -1L;
         round1Pass = false;
         round2Pass = false;
@@ -262,28 +264,19 @@ public final class ScenarioEngine {
         if (!"migrated".equals(step.param("until"))) {
             return now - stepStartMs >= step.longParam("ms", 0L) ? Outcome.DONE : Outcome.RUNNING;
         }
-        // until=migrated：等 NetworkCore 回到 ACTIVE 且 resumeAccepted=true（T10 迁移完成）
-        boolean done = false;
-        boolean resume = false;
-        try {
-            io.github.limuqy.mc.hassium.network.core.NetworkCore core =
-                    io.github.limuqy.mc.hassium.network.core.NetworkCore.getInstance();
-            done = core.state() == io.github.limuqy.mc.hassium.network.core.NetworkCoreState.ACTIVE
-                    && core.lastResumeAccepted();
-            resume = core.lastResumeAccepted();
-        } catch (Throwable t) {
-            LOGGER.warn("HassiumSmokeTest: NetworkCore probe failed", t);
-        }
+        // until=migrated（migrate 场景步骤，网关轮次退役后降级为 session-ready 等待）：
+        // 等 common 握手协商位就绪（ClientLoginNegotiation.current() != 0，协商 caps 已知）。
+        boolean done = io.github.limuqy.mc.hassium.network.handshake.ClientLoginNegotiation.current() != 0;
         if (done) {
             long settleMs = step.longParam("settleMs", Math.max(3_000L, delayMs));
             if (migratedAtMs < 0L) {
                 migratedAtMs = now;
-                LOGGER.info("HassiumSmokeTest: migration completed (resumeAccepted=true) — waiting {} ms for frame S2C inflow",
+                LOGGER.info("HassiumSmokeTest: session ready (negotiated caps known) — waiting {} ms for chunk S2C inflow",
                         settleMs);
             }
             if (now - migratedAtMs >= settleMs) {
                 if (step.boolParam("posAfter", false) && mc.player != null) {
-                    // N1 观察点：迁移完成后位置（回退后应回到快照/权威位置）
+                    // N1 观察点：session-ready 后位置
                     LOGGER.info("HassiumSmokeTest:MIGRATE_POS_AFTER pos=({}, {}, {}) dim={}",
                             mc.player.getX(), mc.player.getY(), mc.player.getZ(),
                             dimensionId(mc.player.level().dimension()));
@@ -292,16 +285,11 @@ public final class ScenarioEngine {
             }
             return Outcome.RUNNING;
         }
-        long triggerBase = migrateTriggeredAtMs > 0L ? migrateTriggeredAtMs : stepStartMs;
-        if (now - triggerBase > step.longParam("timeoutMs", migrateWaitTimeoutMs)) {
-            try {
-                LOGGER.error("HassiumSmokeTest:MIGRATE_FAIL timeout ({} ms) state={} resumeAccepted={}",
-                        migrateWaitTimeoutMs,
-                        io.github.limuqy.mc.hassium.network.core.NetworkCore.getInstance().state(), resume);
-            } catch (Throwable t) {
-                LOGGER.error("HassiumSmokeTest:MIGRATE_FAIL timeout ({} ms)", migrateWaitTimeoutMs, t);
-            }
-            fail("migrate wait timeout: resumeAccepted=" + resume, 2);
+        if (now - stepStartMs > step.longParam("timeoutMs", migrateWaitTimeoutMs)) {
+            LOGGER.error("HassiumSmokeTest:MIGRATE_FAIL timeout ({} ms) negotiatedCaps={}",
+                    migrateWaitTimeoutMs,
+                    io.github.limuqy.mc.hassium.network.handshake.ClientLoginNegotiation.current());
+            fail("session-ready wait timeout: negotiated caps still 0", 2);
         }
         return Outcome.RUNNING;
     }
@@ -365,35 +353,9 @@ public final class ScenarioEngine {
     private static Outcome execCommand(ScenarioStep step, Minecraft mc, long now) {
         ClientPacketListener conn = mc.getConnection();
         if ("migrate".equals(step.param("mode"))) {
-            // 迁移触发需等连接就绪（ROUND1 统计后连接必然在场，防御性等待）
-            if (conn == null || mc.player == null) {
-                return Outcome.RUNNING;
-            }
-            if (step.boolParam("posBefore", false)) {
-                // N1 观察点：迁移触发前客户端位置（断线窗口起点）
-                LOGGER.info("HassiumSmokeTest:MIGRATE_POS_BEFORE pos=({}, {}, {}) dim={}",
-                        mc.player.getX(), mc.player.getY(), mc.player.getZ(),
-                        dimensionId(mc.player.level().dimension()));
-            }
-            try {
-                if (step.boolParam("immediate", false)) {
-                    // N1 路径：immediate 迁移（API 直调——命令面无 immediate 子命令，故障路径内部 API）。
-                    // 有真实断线窗口（closeOldOutbound → 续流连接重建），窗口内客户端预测移动可观察回退。
-                    LOGGER.info("HassiumSmokeTest: triggering immediate migrate to {} (API migrateToImmediate)", migrateTo);
-                    String[] hp = migrateTo.split(":");
-                    io.github.limuqy.mc.hassium.network.core.NetworkCore.getInstance().migrateToImmediate(
-                            new io.github.limuqy.mc.hassium.network.core.migration.MigrationEndpoint(hp[0],
-                                    Integer.parseInt(hp[1])));
-                } else {
-                    LOGGER.info("HassiumSmokeTest: triggering client command '/hassium migrate {}'", migrateTo);
-                    conn.sendCommand("hassium migrate " + migrateTo);
-                }
-            } catch (Throwable t) {
-                LOGGER.error("HassiumSmokeTest:MIGRATE_FAIL sendCommand failed", t);
-                fail("sendCommand(hassium migrate) failed: " + t, 2);
-                return Outcome.DONE;
-            }
-            migrateTriggeredAtMs = now;
+            // 迁移演练步骤随网关拓扑退役（NetworkCore/migrateToImmediate/'/hassium migrate' 已删）：
+            // log-and-skip，不触发任何动作。
+            LOGGER.info("HassiumSmokeTest: migrate command step skipped (gateway rounds retired): {}", step);
             return Outcome.DONE;
         }
         // 通用客户端命令原语
@@ -516,7 +478,6 @@ public final class ScenarioEngine {
         try {
             io.github.limuqy.mc.hassium.metrics.NetworkStats.reset();
             io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.resetHashClassify();
-            io.github.limuqy.mc.hassium.network.dataplane.DataPlaneClientBundle.resetDataBulkCounters();
             io.github.limuqy.mc.hassium.network.seedgen.SmokeChunkTrace.reset();
             LOGGER.info("HassiumSmokeTest: network stats reset for ROUND2");
         } catch (Throwable t) {
@@ -617,7 +578,7 @@ public final class ScenarioEngine {
                 LOGGER.info("{} {} | {}", MARKER_STATS, roundLabel, line);
             }
             LOGGER.info("{} {} end", MARKER_STATS, roundLabel);
-            dumpGatewayAssertion(roundLabel);
+            dumpRoundMarkers(roundLabel);
             SmokeProbeWriter.writeRound(round, mc);
             if (!step.boolParam("gate", true)) {
                 LOGGER.info("{} {} stats gate=false (validation skipped)", MARKER_STATS, roundLabel);
@@ -651,20 +612,27 @@ public final class ScenarioEngine {
     }
 
     /**
-     * T7 V0 网关断言：dump NetworkCore 状态与计数（只读现有公开 API）。
-     * marker 格式：{@code HassiumSmokeTest:GATEWAY_CLIENT ROUND<n> state=<NetworkCoreState> s2c=<n> c2s=<n> resume=<bool>}
+     * 每轮统计 marker：
+     * <ul>
+     *   <li>新行 {@code HassiumSmokeTest:CLIENT ROUND<n> state=READY s2c=<applied> c2s=<requests> resume=false}
+     *       —— vanilla 直连会话就绪 + 客户端区块收发计数；</li>
+     *   <li>旧行 {@code HassiumSmokeTest:GATEWAY_CLIENT ROUND<n> state=RETIRED s2c=0 c2s=0 resume=false}
+     *       —— 网关轮次已退役，保留同格式行（state=RETIRED）兼容旧 harness grep 不崩。</li>
+     * </ul>
      */
-    private static void dumpGatewayAssertion(String roundLabel) {
+    private static void dumpRoundMarkers(String roundLabel) {
         try {
-            io.github.limuqy.mc.hassium.network.core.NetworkCore core =
-                    io.github.limuqy.mc.hassium.network.core.NetworkCore.getInstance();
-            LOGGER.info("{} {} state={} s2c={} c2s={} resume={}",
-                    MARKER_GATEWAY, roundLabel, core.state(), core.s2cDispatchedCount(),
-                    core.c2sRoutedCount(), core.lastResumeAccepted());
+            io.github.limuqy.mc.hassium.metrics.HassiumMetricsImpl m =
+                    io.github.limuqy.mc.hassium.metrics.NetworkStats.getMetrics();
+            long applied = m.getClientAppliedChunkCount();
+            long requests = m.getFullChunkRequestCount();
+            LOGGER.info("{} {} state=READY s2c={} c2s={} resume=false",
+                    MARKER_CLIENT, roundLabel, applied, requests);
         } catch (Throwable t) {
             LOGGER.error("{} {} state=ERROR s2c=0 c2s=0 resume=false (dump failed: {})",
-                    MARKER_GATEWAY, roundLabel, t.toString());
+                    MARKER_CLIENT, roundLabel, t.toString());
         }
+        LOGGER.info("{} {} state=RETIRED s2c=0 c2s=0 resume=false", MARKER_GATEWAY, roundLabel);
     }
 
     // ---------------------------------------------------------- assertProbe
@@ -678,9 +646,9 @@ public final class ScenarioEngine {
      *   assertProbe key=dimension op=eq value=minecraft:the_nether
      * </pre>
      * key path 与 {@link SmokeProbeWriter} PROBE JSON 键同名（counters.* / stats.* /
-     * gateway.c2s|s2c|resumeAccepted / 顶层 joined、dimension）。数值字段支持
-     * gt/ge/lt/le/eq，且可用 vs=&lt;path&gt; 做字段对字段比较；布尔字段（joined/
-     * gateway.resumeAccepted）与字符串字段（dimension）只支持 eq。断言失败按统计
+     * 顶层 joined、dimension）。数值字段支持
+     * gt/ge/lt/le/eq，且可用 vs=&lt;path&gt; 做字段对字段比较；布尔字段（joined）
+     * 与字符串字段（dimension）只支持 eq。断言失败按统计
      * 校验失败语义 fail(code 2)；key/op 非法属场景配置错误，fail(code 1)。
      */
     private static Outcome execAssertProbe(ScenarioStep step, Minecraft mc) {
@@ -700,21 +668,9 @@ public final class ScenarioEngine {
             probeResult(step, key, op, step.param("value"), actual, ok);
             return Outcome.DONE;
         }
-        // 布尔等值：joined / gateway.resumeAccepted（value=true/false 字面量）
-        if ("joined".equals(key) || "gateway.resumeAccepted".equals(key)) {
-            boolean actual;
-            if ("joined".equals(key)) {
-                actual = mc != null && mc.player != null && mc.level != null;
-            } else {
-                boolean resume = false;
-                try {
-                    resume = io.github.limuqy.mc.hassium.network.core.NetworkCore.getInstance()
-                            .lastResumeAccepted();
-                } catch (Throwable ignored) {
-                    // 与 dumpGatewayAssertion 同语义降级为 false
-                }
-                actual = resume;
-            }
+        // 布尔等值：joined（value=true/false 字面量）
+        if ("joined".equals(key)) {
+            boolean actual = mc != null && mc.player != null && mc.level != null;
             boolean expected = step.boolParam("value", false);
             boolean ok = "eq".equals(op) && actual == expected;
             probeResult(step, key, op, Boolean.toString(expected), Boolean.toString(actual), ok);
@@ -768,8 +724,8 @@ public final class ScenarioEngine {
     }
 
     /**
-     * assertProbe 数值取值：键名与 {@link SmokeProbeWriter} appendStats/appendCounters/
-     * appendGateway 一一对应（PROBE JSON 消费方可用同名键写场景断言）。
+     * assertProbe 数值取值：键名与 {@link SmokeProbeWriter} appendStats/appendCounters
+     * 一一对应（PROBE JSON 消费方可用同名键写场景断言）。
      * 返回 null = 未知键。
      */
     private static Long readNumericProbe(String key) {
@@ -811,23 +767,8 @@ public final class ScenarioEngine {
             case "stats.lightCacheMissCount" -> m.getLightCacheMissCount();
             case "stats.lightCacheMissBytes" -> m.getLightCacheMissBytes();
             case "stats.noModReceiveBytes" -> m.getNoModReceiveBytes();
-            // gateway.*（appendGateway 同名；resumeAccepted 是布尔走专用分支）
-            case "gateway.c2s" -> gatewayCounter(true);
-            case "gateway.s2c" -> gatewayCounter(false);
             default -> null;
         };
-    }
-
-
-    /** 网关计数取值（NetworkCore 只读公开 API；异常降级 0，同 appendGateway）。 */
-    private static long gatewayCounter(boolean c2s) {
-        try {
-            io.github.limuqy.mc.hassium.network.core.NetworkCore core =
-                    io.github.limuqy.mc.hassium.network.core.NetworkCore.getInstance();
-            return c2s ? core.c2sRoutedCount() : core.s2cDispatchedCount();
-        } catch (Throwable t) {
-            return 0L;
-        }
     }
 
     // ------------------------------------------------------------------ exit

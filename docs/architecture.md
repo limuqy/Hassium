@@ -7,7 +7,7 @@
 Hassium 是 Minecraft 多加载器模组（Fabric / Forge / NeoForge），围绕「**更小的网络传输 + 更快的本地加载**」优化存档与区块传输。对应 [README 特性表](../README.md) 的五大能力类：
 
 - **高效压缩** —— 存储压缩、网络压缩
-- **网络优化** —— 平滑推送（由影子虚拟服务端原版 tracking 决定区块 admission）、网关帧协议、L1 无感迁移（切换 outbound + 续流票据）
+- **网络优化** —— 平滑推送（由影子虚拟服务端原版 tracking 决定区块 admission）、登录期能力握手 + ZSTD 管线/包聚合（客户端↔服务端 vanilla 通道）
 - **区块缓存** —— 影子端世界保存（进程内影子服务端按原版区块机制加载、落盘和推送）、世界导出
 - **本地生成** —— SeedGen：影子端对 pristine 区块执行生成前权威校验后再进入原版 ChunkStatus/LightEngine。**开启服务端开关会向客户端下发世界种子，等同泄露服务端种子**
 - **光照优化** —— 影子端原版 LightEngine 统一算光并通过官方 vanilla packet 回传；服务端不恢复完整 light admission
@@ -24,55 +24,52 @@ Hassium 是 Minecraft 多加载器模组（Fabric / Forge / NeoForge），围绕
 | 缓存过期（服务器里东西变了） | 整块重传 | **分段增量**：稀疏只补变更方块，过多则整段/整块 |
 | 服务端视距与客户端接收 | 旧实现由服务端主动 admission、客户端 hash/缓存状态共同决定 | **影子虚拟 ServerPlayer + ServerChunkCache/ChunkMap**：影子端根据同步位置执行原版 tracking，真实客户端只接收 vanilla chunk+light/forget packet |
 | 大片未探索地形（pristine 区块） | 服务端也要逐块生成并传输 | **影子端本地生成**：先经服务端权威校验，再进入影子端原版 ChunkStatus/LightEngine；**开启服务端开关会泄露世界种子** |
-| 主控服务器网络抖动 | 直接断线回大厅 | **网络核心无感迁移**：主控故障/断流时由 L1 迁移引擎切换 outbound 连接，持续流票据在新主控续流，区块缓存/进度无感延续 |
+| 主控服务器网络抖动 | 直接断线回大厅 | **直连 vanilla TCP + 区块缓存**：断连保存、重连复用影子端存档（`hassium_cache/<serverId>/world`），回服无需重新下载全部区块 |
 
 ## 3. 谁适合启用
 
 - **服主**：`storage.enabled`（存储压缩）**默认关**——开启会改写存档格式（type 126），**启用前请备份世界**；`chunk.seedGenEnabled` 默认关——本地生成需要**双端同版本**且客户端开同项，pristine 区块才走本地生成，否则由影子端向服务端受控取数。**开启服务端本地生成会向客户端下发世界种子，等同泄露服务端种子**（探图/种子地图/导出存档均可利用）。
-- **公网部署（UDP 数据面/网关）**：默认端点是 `127.0.0.1`，仅本机可用；必须把 `dataplane.udpListeners[*].reachableEndpoints` 改为公网可达地址并放行 UDP 端口（网关监听端口取 `master.controlReachableEndpoints[0]`，兜底 25566），见 §13。
+- **公网部署**：直连拓扑下客户端与服务端之间只有一条 vanilla TCP（游戏端口），无 UDP/网关端口需要放行；仅注意 `chunk.seedGenEnabled` 的种子泄露面（见上）。
 
 ---
 
 # 技术细节（面向有运维能力的服主与开发者；普通玩家可跳过）
 
-## 4. 2.0.0 三核心
+## 4. 直连拓扑（登录期握手 + Play 期激活）
 
-2.0.0 起按**进程归属**划分三个功能核心（命名体系见 `.omp/workflows/docs-2.0/work/domain-naming.md`；类名/包名/配置键一律不改，仅文档术语）：
+直连拓扑下客户端与服务端之间**只有一条 vanilla TCP 连接**：登录期用 vanilla login custom query / 配置阶段 payload 协商能力位，Play 期所有自定义 payload（区块/实体/业务）都走 vanilla 通道。网络核心（进程内网关）、UDP 数据面、续流迁移已裁剪。
 
-| 核心 | 进程 | 职责 | 代码范围 |
+| 域 | 进程 | 职责 | 代码范围 |
 |------|------|------|----------|
-| **网络核心**（Network Core） | 客户端 | 进程内网关：outbound 帧连接、握手、L1 迁移引擎、UDP 数据面启停、ViaFabric 桥 | `network/core/` |
+| **登录握手**（handshake） | 双端 | 能力位协商（agg/hdr/push/delta/seed/light/pull/ovd 按位与）+ Play 激活链 | `network/handshake/` |
 | **区块核心**（Chunk Core） | 客户端 | 区块摄入管线 + 缓存 + 超视渲染 + 本地生成；**影子端**（`network/seedgen/`）= 其后端引擎（生成/算光/落盘/淘汰） | `network/` 顶层摄入管线 + `network/seedgen/` + `cache/` |
-| **主控核心**（Master Core） | 服务端 | 网关接入 + 区块推送 + 压缩/聚合 | `network/gateway/` + `ServerChunkPushManager` / `ChunkSender` + `ZstdPipelineSwitcher` / `HassiumAggregationManager` |
+| **服务端传输面** | 服务端 | 区块推送 + 聚合（字典 ZSTD；EventLoop 阈值翻折防双重压缩） | `ServerChunkPushManager` / `ChunkSender` + `HassiumAggregationManager` / `ConnectionChannelAccess` |
 
-存储（`storage/` / `compression/`）、UDP 数据面（`network/dataplane/`）、配置/指标/兼容等为**支撑域**，不立核心名。
+存储（`storage/` / `compression/`）、配置/指标/兼容等为**支撑域**，不立核心名。
 
-### 数据路径总览
-
-客户端与主控的通信由网络核心接管：原版 Connection（世界侧壳连接）仅保留 keep-alive，PLAY 期数据全经**帧协议**（`ControlFrameCodec`：varint 帧长 + type + payload，纯 Netty 零 MC 依赖）走 outbound ↔ 主控 `GatewayServer`。
+### 握手与激活时序
 
 ```mermaid
-flowchart LR
-    subgraph CLIENT["客户端进程"]
-        V["纯原版视图（世界状态/渲染）"]
-        NC["网络核心 network/core/<br/>outbound 帧连接 · 握手 · L1 迁移"]
-        CC["区块核心<br/>摄入管线 + 影子端引擎 + cache/"]
-    end
-    subgraph SERVER["服务端进程"]
-        MC["主控核心 network/gateway/<br/>GatewayServer / GatewayChannel<br/>+ 区块推送 + 聚合"]
-    end
-    V <-->|"S2C 注入（handler 层直调）<br/>C2S 收口 routeC2S"| NC
-    NC <-->|"帧协议 ControlFrameCodec<br/>ZSTD 帧外 · UDP 数据面 bulk"| MC
-    NC -->|"区块数据解包投递"| CC
+sequenceDiagram
+  participant C as Mod客户端
+  participant S as Mod服务端
+  Note over S: 1.20.1：handleHello 后（加密/SetCompression 前）
+  S->>C: login query `hassium:login_hello`
+  C->>S: query answer（客户端能力位；原版客户端恒空应答→原版路径）
+  Note over C,S: 1.20.2+：原版 codec 丢弃 login query 应答体，<br/>改走配置阶段 PreHandshakePayload（认证完成后）
+  S->>S: 能力位按位与 → PlayerCompressionTracker 登记
+  Note over C,S: 登录完成进入 Play
+  S->>S: ServerPlayer <init> TAIL 消费协商位（压制原版区块窗口）
+  S->>C: dictionary_sync / index_sync → 聚合 PENDING（5s 无 ACK 降级直发）
+  S->>C: `hassium:play_init_s2c`（协商位 + SeedGen 种子）
+  C->>C: 影子端种子初始化（原版压缩层不触碰）
+  C->>S: 激活 ACK（compression_ready 通道，index_sync 后）
+  S->>S: 聚合 PENDING→ENABLED（缓冲帧冲出）
 ```
 
-**注入**：主控 S2C 推送经 `GatewayChannel.sendS2CPayload` → `PACKET_S2C` 帧 → 客户端 outbound 解码 → `GatewayS2CRouter`（注册于 `NetworkCore.registerS2CInjector`）注入原版监听器 handler 层直调（`ClientPacketListener.handleXxx`，区块走 `handleLevelChunkWithLight` vanilla apply）；客户端 C2S 由 `MixinConnection` 截获 → `NetworkCore.routeC2S` 编码进 `PACKET_C2S` 帧。**切换主控只换 outbound，注入/路由不动**。
-
-**续流**：迁移时 `MigrationEngine` 签发 `ResumeTicket`（HMAC-SHA256 签名 + epoch 防重放）随握手请求续流；主控 `ResumeTicketValidator` 验签通过 → `ServerChunkPushManager.markPlayerResumeActive` → 推送断点续流，区块缓存直接续用（`resumeAccepted=true`）；验票失败则会话待登录桥附着。
-
-**迁移**：`NetworkCoreState` 状态机（IDLE/CONNECTING/HANDSHAKING/ACTIVE/MIGRATING）。触发 = 故障（outbound 入站静默超时，生效默认 `master.migrationSilentTimeoutMs`）或策略（TPS/负载/维护窗口，`MigrationPolicy`）或演练（`/hassium migrate`，仅开发环境）；执行 = `PrewarmSession` 预连就绪后无缝切换或直连切换，详见 §12.6。
-
-网络核心未达项交接见 [`network-core-followups.md`](network-core-followups.md)（后续波）。
+- **无超时依赖**：空应答或无共同能力位 → 服务端原版路径（`compat.requireClientMod=true` 时登录期踢出）
+- **原版零干扰**：只消费 `hassium:login_hello` 通道与本模组 transactionId，velocity/FML 等未知 query 原样放行
+- **原版压缩层不触碰**：管线级全局包压缩已退役（run9 退役波）；通道压缩 = 聚合包内部字典 ZSTD（EventLoop 阈值翻折防与 vanilla zlib 双重压缩）+ 区块推送自有压缩
 
 ## 5. 模块结构
 
@@ -92,11 +89,10 @@ Hassium/
 |----|------|
 | `storage/`（存储域） | `HassiumChunkWriteBuffer`（type 126 payload 写缓冲）、`ShadowStorageHashes`（进程内 chunkHash/光脏桥）、`ShadowStorageManager` / `ShadowRegionHeat`（region 映像 + `heat.idx`）；type 126 压缩由 `compression/CompressionService` 收口 |
 | `compression/`（存储域） | `CompressionCodec` / `CompressionService`、字典注册 |
-| `network/`（主控核心） | 服务端网络与推送：握手、网关帧、`ServerChunkPushManager`、`SeedRef`/vanilla chunk push；不再以客户端 Bloom/hash 决定 admission |
+| `network/`（直连传输面） | 登录期握手（`network/handshake/`）+ 服务端区块推送（`ServerChunkPushManager`、`SeedRef`/vanilla chunk push）+ 聚合链（字典 ZSTD；`ConnectionChannelAccess`）；不再以客户端 Bloom/hash 决定 admission |
 | `network/seedgen/`（区块核心 = 影子端后端引擎） | `ShadowSeedServer` 运行虚拟 `ServerPlayer`，由 `ServerChunkCache` / `ChunkMap` / `ChunkHolder` 管理加载、卸载、ChunkStatus 与光照；`ShadowCacheEviction` 负责缓存淘汰 |
-| `network/core/`（网络核心） | 客户端进程内网关与迁移；S2C 原版包注入影子端连接，C2S 只同步玩家状态/控制面 |
-| `network/gateway/`（主控核心） | 服务端网关接入与会话管理 |
-| `network/ClientChunkHandler` → `ClientChunkPipeline` | 仅负责网关帧解包、官方 packet apply 与状态降级；不维护独立视距/halo |
+| `network/handshake/`（登录握手） | 双端能力协商与 Play 激活链（1.20.1 login query / 1.20.2+ 配置阶段 payload） |
+| `network/ClientChunkHandler` → `ClientChunkPipeline` | 仅负责 vanilla payload 解包、官方 packet apply 与状态降级；不维护独立视距/halo |
 | `cache/`（区块核心支撑） | 客户端轻量预算与生命周期；缓存存储、读盘和清理由影子服务端承担 |
 | `config/` / `metrics/` / `compat/` / `mixin/`（支撑设施） | `HassiumConfigService` 门面；`NetworkStats` 指标；Manifold 跨版本 API 桥接；全部 Mixin（common only） |
 | `migration/` / `api/`（支撑设施） | 存档迁移工具与对外 API |
@@ -164,24 +160,20 @@ Sector 2+:    [length(4)][type=126][magic 0x48][hash(8)][ZSTD 压缩数据]
 
 | 能力 | 说明 | 默认 |
 |------|------|------|
-| 网关帧协议 | 客户端 outbound（网络核心）↔ 主控 `GatewayServer`（主控核心）的 TCP 控制面（`ControlFrameCodec`：varint 帧长 + type + payload，纯 Netty 零 MC 依赖）；ZSTD 装于帧协议之外（握手协商后 `OutboundConnection.installZstd` / `GatewayChannel.installZstd`） | 网络核心路径 |
-| 自定义通道 | `hassium:*` ZSTD 传区块等（仅收到 `gateway_info` 并完成 Hassium 能力握手后启用；原版服务端连接保持 vanilla） | `master.enabled` / 握手能力 |
-| 全局包压缩 | Pipeline 替换原版 Zlib（主控侧 vanilla 路径；网关通道复用其阈值/等级） | `master.globalPacketCompression=true` |
-| 上下文 / magicless | 提升压缩比 | 均默认启用 |
-| 包聚合 | 仅主控侧 vanilla 路径（`MixinConnection` 仅对 `ServerGamePacketListenerImpl` 生效）；网关通道不聚合 | `master.enablePacketAggregation=true` |
-| 紧凑包头 | 聚合包内 `CompactHeaderCodec`（主控侧） | 默认启用 |
-| 平滑推送 | 每 tick 提交上限限速（`master.maxChunksPerTick=4`，满 tick ≈ 80/s，掉刻自然降速）；主线程构建 packet 快照，encode/压缩/hash/发送在固定推送池（`master.serverChunkPushThreads=4`）；**反馈式渐进 admission**（客户端 authoritative apply ACK / `CHUNK_APPLY_ACK`：首次 ACK 前单未确认批次，之后最多 10 批；`deliveryId` 贯穿 full/SeedGen；实现已交付，Fabric 进服曲线待独立验收） | 默认启用 |
-| UDP/KCP 数据面 | 网关↔主控通道的 bulk 载体：每个 `udpListeners` 项建立独立 KCP session；按 `weight` 加权轮询发送 S2C bulk，异常时自动回落帧连接；握手尾 `udpTail.hasUdpDataplane()` 触发客户端 `UdpDataPlane.start` | `dataplane.enabled=false`（默认关；默认端点仅本机可用） |
-| 网关控制恢复（L1 迁移） | outbound 入站静默超时（生效默认 `master.migrationSilentTimeoutMs`=10000；`migrationFaultTimeoutMs`=60000 为 legacy 回退）或策略/演练触发切换；`ResumeTicket` 续流票据（HMAC-SHA256 + epoch 防重放）验签后续流；服务端 failover permit 链保留（`controlStallMs`/`failoverExpiryMs` 键已删，`ControlFailoverHandler` 引用固定常量 6000/30000） | 迁移引擎默认开启 |
+| 自定义通道 | `hassium:*` 携区块/业务帧（登录期能力协商 + Play 期 `play_init_s2c` 激活后启用；原版服务端连接不探测、不接管） | `master.enabled` / 协商能力位 |
+| 通道压缩 | **仅两处，均不触碰 vanilla 压缩层**：聚合包内部字典 ZSTD（发送时 EventLoop 阈值翻折防双重压缩）+ 区块推送自有压缩。管线级全局包压缩已退役（run9 退役波） | — |
+| 包聚合 | 服务端 vanilla 路径（`MixinConnection` 拦截）；客户端反聚合 receiver；ACK 超时 5s 降级；批次等待默认 50ms | `master.enablePacketAggregation=true` |
+| 紧凑包头 | 聚合包内 `CompactHeaderCodec` | 默认启用 |
+| 平滑推送 | 每 tick 提交上限限速（`master.maxChunksPerTick=4`，满 tick ≈ 80/s，掉刻自然降速）；主线程构建 packet 快照，encode/压缩/hash/发送在固定推送池（`master.serverChunkPushThreads=4`） | 默认启用 |
 
-控制面（握手、index sync、chunkHash 等）在压缩黑名单，不进 PENDING 聚合缓冲，也不走 UDP 数据面；UDP 只承载 Bind 后的 S2C bulk，网关帧连接即控制连接。聚合仅主控侧 vanilla 路径，网关通道不聚合；客户端↔世界侧壳连接不再承载 Hassium 压缩/聚合数据流。多通道的早期裸 TCP PoC 已退役（归档）；运行时验证见 [`runtime-smoke-test.md`](runtime-smoke-test.md#网关双主控迁移冒烟t7)「网关双主控迁移冒烟（T7）」节。
+控制面（握手、index sync、chunkHash 等）在压缩黑名单，不进 PENDING 聚合缓冲。UDP 数据面/网关帧协议/L1 迁移已随直连拓扑裁剪（历史见 [`network-core-followups.md`](network-core-followups.md)，已归档）。
 
 ## 9. 配置默认值（安全与行为）
 
 配置文件（双文件按物理端加载）：
 
-- `config/hassium/hassium-client.toml` — 仅物理客户端（`chunk.*` / `net.*` / 客户端侧迁移策略 `master.migration*` 6 键 / `debug.*`；端点与鉴权由握手 `gateway_info` 同步，**不靠本文件手填**）
-- `config/hassium/hassium-server.toml` — 仅专用服（`storage.*` / `master.*` 含 `controlReachableEndpoints` / `dataplane.*` / `compat.*` / `debug.*`）
+- `config/hassium/hassium-client.toml` — 仅物理客户端（`chunk.*` / `net.*` / `debug.*`）
+- `config/hassium/hassium-server.toml` — 仅专用服（`storage.*` / `master.*` / `compat.*` / `debug.*`）
 
 游戏内编辑：
 - **Fabric**：Night Config 自管 toml + jiJ **Cloth**；安装 **Mod Menu** 即可打开。不依赖 FCAP / Configured。
@@ -206,26 +198,19 @@ Sector 2+:    [length(4)][type=126][magic 0x48][hash(8)][ZSTD 压缩数据]
 | `chunk.lightStrip` | true | 服务端光照剥离，必须经 Hassium 能力握手 |
 | `debug.networkMetricsEnabled` | false | 客户端网络指标 |
 | `debug.networkMetricsAutoReset` | true | 客户端退出自动复位指标 |
-| `master.enabled` | false | 旧 `25566` 主控 sidecar 暂停；单 `25565` 原版基线，代理核心重构后另行恢复 |
-| `master.globalPacketCompression` | true | 全局 ZSTD（主控侧 vanilla 路径） |
+| `master.enabled` | true | 服务端网络通道总开关（登录期握手/压缩/聚合的门） |
+| `master.globalPacketCompression` | true | 全局 ZSTD（客户端↔服务端通道） |
 | `master.compressionLevel` | 3 | 网络压缩等级（速度优先） |
 | `master.maxChunksPerTick` | **4** | 每玩家每 tick 提交上限（主线程序列化快照上限；发送速率 = 本值 × tick 节奏，满 tick ≈ 80/s） |
 | `master.serverChunkPushThreads` | **4** | 服务端区块推送固定线程数（encode / hash / ZSTD） |
 | `master.metricsEnabled` | false | 服务端网络指标 |
-| `master.controlReachableEndpoints` | `[]` | **服务端**网关监听/通告端点（`endpoints[0]` 即网关端口，兜底 25566）；经握手尾 / `GatewayInfo` 同步给客户端作迁移候选——**客户端无需主动配置** |
-| `master.bindHost` | `127.0.0.1` | 网关监听 bind host（默认回环；空串=`0.0.0.0`） |
-| `master.authToken` | `""` | 网关握手鉴权（空=不鉴权；非空时客户端须同值）；双端同名键（客户端可手填，亦可由 `GatewayInfo` 下发） |
-| `master.migrationFaultTimeoutMs` | 60000 | L1 迁移 legacy 故障超时回退（ms）；客户端 failover 已退役 |
-| `master.migrationSilentTimeoutMs` | 10000 | outbound 入站静默超时（ms；默认生效值，失效识别 ≤15s）；显式改 fault 键时可回退 |
-| `master.migrationMinTps` / `maxLoadAverage` / `maintenanceWindow` | `15` / `4` / `""` | L1 策略触发（CLIENT；空窗口=禁用） |
-| `master.migrationHeartbeatIntervalMs` / `idleWindowMs` | `5000` / `10000` | 心跳周期 / 空闲窗口判定（CLIENT） |
-| `master.migrationPrewarmTtlMs` | 60000 | 预热会话 TTL（SERVER；未物化续流则到期清扫） |
-| `master.resumeTicketTtlMs` | 300000 | 续流票据有效期（ms；双端同名键） |
-| `dataplane.enabled` | **false** | 启用 UDP/KCP 数据面（网关↔主控通道的 bulk 载体）；关后不启动 UDP listener、不广告端点 |
-| `compat.requireClientMod` | false | 无模组客户端可连 |
+| `master.enablePacketAggregation` / `aggregationMinBatchSize` / `aggregationMaxWaitTimeMs` / `aggregationMaxSize` | `true` / `2` / `20ms` / `256KB` | 包聚合（服务端拦截 + 客户端反聚合；ACK 超时 5s 自动降级） |
+| `master.enableCompactHeader` | true | 聚合包内紧凑包头 |
+| `master.compressionBlacklist` | 控制面键集 | 压缩/聚合黑名单（控制面不进聚合缓冲） |
+| `compat.requireClientMod` | false | 无模组客户端可连（true 时登录期握手失败即踢出，替代超时等待） |
 | `debug.*` | 全 false | 调试分类日志，见 §10 |
 
-`master.controlReachableEndpoints`（`host:port` 列表）是主控核心的**网关监听与通告地址源**——`resolveBindPort` 取 `endpoints[0]` 端口（0<port<65536 时使用），否则兜底 `GatewayPlayerBridge.DEFAULT_GATEWAY_PORT=25566`。客户端迁移候选**不靠手填 client.toml**：主控经握手尾 `controlEndpoints` 与登录期 `GatewayInfo` 同步；客户端落盘 `failover-endpoints.properties`（`ClientEndpointStore`）并喂入 `MigrationEngine`。client.toml 同名键仅作可选 bootstrap 覆盖（显式配置优先于探测兜底）。`dataplane.udpListeners` 是服务端 UDP socket 与其客户端可达地址的列表；每项为 `{ bindHost, bindPort, weight, reachableEndpoints }`，其中 `reachableEndpoints` 为 `{ host, port, priority }` 列表。`bindHost` 只在服务端绑定，绝不下发给客户端；公网服必须把默认的 `127.0.0.1:25565` 改成客户端实际可达的 UDP 地址，并放行对应 UDP 端口。
+网关监听/端点/鉴权（`controlReachableEndpoints` / `bindHost` / `authToken`）、L1 迁移（`master.migration*` 7 键）、续流票据（`resumeTicketTtlMs`）、UDP 数据面（`dataplane.*`）键族已随直连拓扑退役删除；旧 toml 中的残留键由加载器静默清除（legacy key hygiene）。
 
 ## 10. 日志策略
 
@@ -243,7 +228,7 @@ Sector 2+:    [length(4)][type=126][magic 0x48][hash(8)][ZSTD 压缩数据]
 | `debug.networkLogging` | 双端 | 网络收发 |
 | `debug.cacheLogging` | 客户端 | 缓存读写 |
 | `debug.lightVerify` | 客户端 | 光照验算 |
-| `debug.dataplaneLogging` | 服务端 | UDP 数据面热路径 |
+| `debug.dataplaneLogging` | 服务端 | 数据面日志（历史键；直连拓扑下无数据面热路径） |
 
 ERROR / WARN 始终输出。
 
@@ -256,7 +241,7 @@ ERROR / WARN 始终输出。
 | `/hassium metrics on\|off` | 服务端 | 运行时开关指标 |
 | `/hassiumc stats` | 客户端 | 接收/缓存命中（全命中+部分命中−增量 / 应用，按字节；本地生成不算缓存）/超视渲染/光照/区块加载（新增/过期/**本地生成**）/流量节省（实际/无MOD应收）统计 |
 | `/hassiumc export [<服务器IP>] [seed]` | 客户端 | 拷贝影子端 `world` 目录。`level.dat` 已由影子端原版写出；亦可手工把 `hassium_cache/<id>/world` 复制到 `saves/` |
-| `/hassium migrate` / `list` / `status` / `<host:port>` | 客户端（仅开发环境） | L1 迁移演练入口（`NetworkCore.migrateTo`；正式包不注册） |
+| `/hassium migrate` / `list` / `status` / `<host:port>` | 客户端 | 已退役（直连拓扑无迁移面）：保留为退役提示，不执行任何迁移 |
 
 实现：`metrics/NetworkStats`（`AtomicLong`，可关闭）。指标关闭时相关 stats 命令不可用。导出走 `CacheWorldExporter`（异步，见 `chunk-cache.md` §12）。
 
@@ -277,9 +262,8 @@ ERROR / WARN 始终输出。
 
 | 特性 | 配置 / 命令 | 要点 | 详文 |
 |------|-------------|------|------|
-| **平滑推送** | `master.maxChunksPerTick`（4）、`master.serverChunkPushThreads`（4） | 每 tick 提交上限限速（满 tick ≈ 80/s，掉刻自然降速）；主线程构建 packet 快照，encode/压缩/hash/发送在固定推送池；**反馈式渐进 admission**（`ChunkAdmissionController` + `ChunkApplyAck`：客户端 authoritative 落地后 ACK，背压服务端 full/SeedGen 生产）；实现与单测已交付，Fabric 1.20.1 进服/移动曲线待独立验收 | [`chunk-cache.md`](chunk-cache.md)、[`network-core-followups.md`](network-core-followups.md)、[`runtime-smoke-test.md`](runtime-smoke-test.md) |
-| **网关帧协议** | 无专属配置键（网关端口 = `master.controlReachableEndpoints[0]`，兜底 25566） | 客户端 outbound（网络核心）↔ 主控 `GatewayServer`（主控核心）的 TCP 控制面：varint 帧长 + type + payload；ZSTD 装于帧协议之外（握手协商后安装）；S2C 推送经 `PACKET_S2C` 帧回传，C2S 经 `PACKET_C2S` 帧收口 | §4、§8 |
-| **L1 迁移（无感续流）** | `master.migrationSilentTimeoutMs`（默认 10000）+ `migrationFaultTimeoutMs`（60000 legacy 回退）；`/hassium migrate`（仅开发环境） | 主控故障/断流时切换 outbound 至新主控：`PrewarmSession` 预连 + `ResumeTicket` 续流票据（HMAC-SHA256 + epoch 防重放）→ 主控 `ResumeTicketValidator` 验签 → `markPlayerResumeActive` 推送续流；无需重进世界，区块缓存直接续用；策略/演练触发见 §12.6 | [`runtime-smoke-test.md`](runtime-smoke-test.md#网关双主控迁移冒烟t7) |
+| **平滑推送** | `master.maxChunksPerTick`（4）、`master.serverChunkPushThreads`（4） | 每 tick 提交上限限速（满 tick ≈ 80/s，掉刻自然降速）；主线程构建 packet 快照，encode/压缩/hash/发送在固定推送池 | [`chunk-cache.md`](chunk-cache.md)、[`runtime-smoke-test.md`](runtime-smoke-test.md) |
+| **登录期能力握手** | `master.enabled`、`net.enabled` | 1.20.1 login query / 1.20.2+ 配置阶段 payload 协商能力位（空应答=原版路径、无超时依赖）；Play 期 dict/index → 聚合 PENDING → `play_init_s2c` 激活 → 客户端 ACK → 聚合放行（管线级压缩已退役） | §4、§8 |
 | **多通道数据面（历史）** | 早期 `DataPlanePoCConfig` | 1.20.1 Fabric 的双裸 TCP PoC 已退役，不是生产配置或运维入口 | [`archive/multi-channel_network_research.md`](archive/multi-channel_network_research.md) |
 
 ### 12.3 区块缓存
@@ -308,33 +292,18 @@ ERROR / WARN 始终输出。
 
 本地生成的区块与直推同链：推送即入库（本地缓存同样受益），stats「区块加载」行计入「本地」计数，并计入流量节省的无MOD应收（原版 Zlib 等价）。**不计入**区块缓存命中分子（命中只统计本地区块缓存复用）。
 
-### 12.6 网络核心 L1 迁移运维
+### 12.6 网络核心 L1 迁移运维（已退役）
 
-**拓扑与职责**：原版 Minecraft TCP 连接仍承担 login 与兼容回退路径；客户端网络核心 outbound 帧连接（↔ 主控 `GatewayServer`）承载控制面与数据面调度；UDP/KCP 数据面只承载已 Bind session 的 S2C bulk。服务端从 `dataplane.udpListeners` 广告可达 UDP 地址；网关监听端口取 `master.controlReachableEndpoints[0]`（无有效端口时兜底 `GatewayPlayerBridge.DEFAULT_GATEWAY_PORT=25566`，与 vanilla 端口错开），同列表经握手尾 / `GatewayInfo` **同步到客户端**作迁移候选（客户端落盘 `ClientEndpointStore`，无需手填 toml）。两类地址必须分别配置：前者需要 UDP 防火墙/NAT 放行，后者必须能建立完整 Minecraft TCP 会话。
-
-**迁移触发**（`MigrationEngine`）：
-
-- **故障触发**：outbound 入站静默超过生效值 `MigrationPolicy.resolvedSilentTimeoutMs()`（默认 **`master.migrationSilentTimeoutMs=10000`**；显式改 `migrationFaultTimeoutMs` 时可回退该 legacy 键）→ 立即切换 outbound；心跳按 `migrationHeartbeatIntervalMs`（默认 5000）发送；
-- **策略触发**（`MigrationPolicy`）：主控 TPS 低于 `migrationMinTps`（默认 15）、系统负载高于 `migrationMaxLoadAverage`（默认 4）、或处于 `migrationMaintenanceWindow`（`HH:mm-HH:mm`，默认空 = 不启用）→ 主动迁移；
-- **演练触发**：客户端 `/hassium migrate <host:port>`（或 `list` / `status`）→ `NetworkCore.migrateTo`（仅开发环境注册；正式包不可用）；
-- **执行**：`PrewarmSession` 向新主控预连（握手 + 续流票据）就绪后无缝切换（`ACTIVE → MIGRATING → ACTIVE`）；预连未就绪时直连迁移（带续流）；切换只换 outbound，客户端注入/路由不动。
-
-**续流票据**：迁移时客户端持 `ResumeTicket`（HMAC-SHA256 签名 + epoch 防重放）在新主控握手请求续流；主控 `ResumeTicketValidator` 验签通过 → `ServerChunkPushManager.markPlayerResumeActive` → S2C 推送从断点续流（区块缓存/进度无感延续）；验票失败 → `resumeAccepted=false`，会话待登录桥附着，数据推送不流入。
-
-**维护窗口**：`maintenanceWindow` 配置为计划内迁移窗口——进入窗口即触发迁移（配合 prewarm 预连实现无感主控切换）；迁移期间玩家无需重进世界，磁盘缓存直接续用。
-
-**配置原则**：默认 listener `0.0.0.0:25565` 仅将 `127.0.0.1:25565` 作为客户端可达地址，适合本机开发，不能直接用于公网服。公网部署必须为每个 listener 填写可从客户端访问的 `reachableEndpoints`，避免把 wildcard 或内网 bind 地址下发；使用不同公网端口时，网关 TCP 与 UDP 可达端点应分别写入并放行。
-
-**自检验证**：`dataplane.enabled=false` 时必须不存在 UDP listener/Bind（冒烟打标；`recoveryFreeze` 键已删（2026-08-09 config-restructure），历史仅冒烟打标）。网关双主控迁移冒烟见 [`runtime-smoke-test.md`](runtime-smoke-test.md#网关双主控迁移冒烟t7)「网关双主控迁移冒烟（T7）」节（`GatewaySmokeTest` 真实 TCP 双端；UDP 数据面默认关、不在冒烟范围；1.1.2 的 `UdpFailover` phase 已退役）。
+网络核心（客户端进程内网关）、UDP/KCP 数据面、续流迁移（ResumeTicket/PrewarmSession/MigrationEngine）与 `/hassium migrate` 命令已随**直连拓扑**裁剪（2026-09 回归）。历史设计决策与实现细节见 [`network-core-followups.md`](network-core-followups.md)（归档）；早期 failover/数据面研究见 [`archive/multi-channel_network_research.md`](archive/multi-channel_network_research.md)。
 
 ## 13. 相关文档
 
 - [`chunk-cache.md`](chunk-cache.md) — 区块缓存推送、超视渲染（§10）、磁盘 NBT（§11）、导出（§12）
-- [`network-core-followups.md`](network-core-followups.md) — 网络核心未达项交接清单（后续波）
+- [`network-core-followups.md`](network-core-followups.md) — 网络核心收尾核销（**已归档**：直连拓扑下仅存档参考）
 - [`version-segments.md`](version-segments.md) — 七段适配真相源
 - [`mod-compat.md`](mod-compat.md) — 多 Mod 兼容边界与配置逃生
 - [`config-audit.md`](config-audit.md) — 配置项审计与清理记录
-- [`runtime-smoke-test.md`](runtime-smoke-test.md) — 多版本运行时自检与网关双主控迁移冒烟
+- [`runtime-smoke-test.md`](runtime-smoke-test.md) — 多版本运行时自检（直连拓扑门禁：握手 + ZSTD + 区块落地）
 - [`archive/multi-channel_network_research.md`](archive/multi-channel_network_research.md) — 多通道设计与已退役裸 TCP PoC 的历史记录（归档）
 - [`handoff/handoff-2026-08-09-network-core.md`](handoff/handoff-2026-08-09-network-core.md) — 网络核心 2.0.0 决策锚点交接
 - 根目录 `README.md` — 用户安装与特性

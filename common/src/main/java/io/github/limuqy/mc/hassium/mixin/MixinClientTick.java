@@ -40,12 +40,6 @@ public class MixinClientTick {
         } catch (Exception e) {
             // 冒烟失败不阻断正常 tick
         }
-        // 无网关拓扑：进服后一次性发客户端握手（SeedGen 种子/LevelStem、剥光协商、位置上报）
-        try {
-            io.github.limuqy.mc.hassium.network.ClientHandshakeSender.tick(Minecraft.getInstance());
-        } catch (Exception ignored) {
-            // 握手失败不阻断正常 tick（服务端旧版无 HANDSHAKE 接收时自然忽略）
-        }
 
         // 1.20.1 Forge revert 窗口内 pauseEncoding 只挡新的 ChunkSerializer。
         // 无世界时跳过 drain/OVD；窗口 TAIL 已 resume，标题画面仍可 tickStorageFlush。
@@ -54,26 +48,6 @@ public class MixinClientTick {
             if (pausedMc == null || pausedMc.level == null || pausedMc.getConnection() == null) {
                 return;
             }
-        }
-
-        try {
-            io.github.limuqy.mc.hassium.network.dataplane.DataPlaneClientLifecycle.getInstance()
-                    .tick(System.currentTimeMillis());
-        } catch (Exception e) {
-            // 数据面可选；时钟故障不得中断客户端 tick。
-        }
-
-        try {
-            Minecraft mc = Minecraft.getInstance();
-            if (mc.player != null) {
-                var lifecycle = io.github.limuqy.mc.hassium.network.dataplane.DataPlaneClientLifecycle.getInstance();
-                var pending = lifecycle.takePendingUdpStart();
-                if (pending != null) {
-                    lifecycle.startUdp(mc.player.getUUID(), pending.connectionEpoch(), pending);
-                }
-            }
-        } catch (Exception e) {
-            // UDP 数据面可选；延迟启动失败不得中断客户端 tick。
         }
 
         // 更新玩家坐标，用于 MainThreadDispatcher 距离优先级计算

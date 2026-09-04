@@ -1,5 +1,7 @@
 # Network Core 未达项交接清单（收尾版）
 
+> **🗄 已归档（2026-09-04，直连拓扑回归）**：网络核心（进程内网关）/主控接入层/UDP 数据面/续流迁移已随 `feature/vanilla-direct-network` 裁剪删除，本文所涉类（`NetworkCore` / `GatewayServer` / `ResumeTicket` / `MigrationEngine` 等）不再存在。保留本文仅作历史设计决策与验证证据的存档参考；现行架构见 [`architecture.md`](architecture.md) §4。
+
 > 来源：T8/T9/T10/T11/T12 任务交接记录。网络核心 2.0.0 架构主体已落地并提交
 > （`eb05ba5..11f3470`）；本文为后续波逐项核销后的最终状态（T11 收尾，2026-08-10）。
 > 编号稳定可引用：A1-A8 / B1-B5 / C1-C2 / D1-D3 / E1-E2。

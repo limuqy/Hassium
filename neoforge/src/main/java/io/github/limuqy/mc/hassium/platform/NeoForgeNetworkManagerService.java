@@ -11,32 +11,12 @@ import net.minecraft.server.level.ServerPlayer;
  */
 public class NeoForgeNetworkManagerService implements INetworkManagerService {
 
-    private final NeoForgeNetworkManager networkManager;
-
-    public NeoForgeNetworkManagerService() {
-        this.networkManager = new NeoForgeNetworkManager();
-    }
-
-
-    @Override
-    public void sendGatewayInfo(ServerPlayer player, byte[] data) {
-        networkManager.sendGatewayInfo(player, data);
-    }
+    private final NeoForgeNetworkManager networkManager = new NeoForgeNetworkManager();
 
     @Override
     public void sendSeedRef(ServerPlayer player, FriendlyByteBuf buf) {
-        if (io.github.limuqy.mc.hassium.server.GatewayPlayerBridge.tryRouteS2C(
-                player, io.github.limuqy.mc.hassium.network.core.GatewayPacketCodec.HassiumSub.SEED_REF.id(), buf)) {
-            return;
-        }
         networkManager.sendSeedRef(player, buf);
     }
-
-    @Override
-    public void sendClientHandshake(io.github.limuqy.mc.hassium.network.ClientHandshakeRequest request) {
-        networkManager.sendClientHandshake(request);
-    }
-
 
     @Override
     public void sendBlockEntityRequest(FriendlyByteBuf buf) {
@@ -45,19 +25,33 @@ public class NeoForgeNetworkManagerService implements INetworkManagerService {
 
     @Override
     public void sendBlockEntityData(ServerPlayer player, FriendlyByteBuf buf) {
-        if (io.github.limuqy.mc.hassium.server.GatewayPlayerBridge.tryRouteS2C(
-                player, io.github.limuqy.mc.hassium.network.core.GatewayPacketCodec.HassiumSub.BLOCK_ENTITY_DATA.id(), buf)) {
-            return;
-        }
         networkManager.sendBlockEntityData(player, buf);
     }
 
     @Override
     public void sendLightDeltaPacket(ServerPlayer player, FriendlyByteBuf buf) {
-        if (io.github.limuqy.mc.hassium.server.GatewayPlayerBridge.tryRouteS2C(
-                player, io.github.limuqy.mc.hassium.network.core.GatewayPacketCodec.HassiumSub.LIGHT_DELTA.id(), buf)) {
-            return;
-        }
         networkManager.sendLightDeltaPacket(player, buf);
     }
+
+    @Override
+    public void sendDictionarySync(ServerPlayer player) {
+        NeoForgeNetworkManager.sendDictionarySyncPacket(player);
+    }
+
+    @Override
+    public void sendIndexSync(ServerPlayer player) {
+        NeoForgeNetworkManager.sendIndexSyncPacket(player);
+    }
+
+    @Override
+    public void sendPlayInit(ServerPlayer player, int negotiatedCaps, long worldSeed,
+                             byte[] stemNbt, boolean seedGenEnabled) {
+        NeoForgeNetworkManager.sendPlayInit(player, negotiatedCaps, worldSeed, stemNbt, seedGenEnabled);
+    }
+
+    @Override
+    public void announcePreHandshake(net.minecraft.network.Connection connection) {
+        NeoForgeNetworkManager.announcePreHandshake(connection);
+    }
 }
+

@@ -5,8 +5,6 @@ import io.github.limuqy.mc.hassium.platform.NeoForgeConfigBackend;
 import io.github.limuqy.mc.hassium.platform.NeoForgeConfigRegistration;
 import io.github.limuqy.mc.hassium.network.ChunkSender;
 import io.github.limuqy.mc.hassium.network.NeoForgeNetworkManager;
-import io.github.limuqy.mc.hassium.network.dataplane.DataPlaneFrame;
-import io.github.limuqy.mc.hassium.network.dataplane.DataPlaneServer;
 
 #if MC_VER < MC_1_21_1
 import net.minecraftforge.fml.ModLoadingContext;
@@ -63,15 +61,8 @@ public class HassiumNeoForge {
         CommonClass.init();
 
         ChunkSender.setInstance((player, compressed) -> {
-            // 路由器在数据面未启用、未绑定或无可用会话时返回 false，保持 Primary 回退。
+            // 直连拓扑：UDP 数据面已退役，区块推送全走 vanilla play S2C 通道
             byte[] payload = compressed.encode();
-            if (DataPlaneServer.tryRouteBulk(
-                    player.getUUID(),
-                    DataPlaneFrame.TYPE_BULK_COMPRESSED_CHUNK,
-                    payload)) {
-                return; // 已走 Data 通道
-            }
-            // 未走 Data 通道 → 走 Primary，记分流统计（口径 = encode() 总长度，与 Data 侧对齐）
             io.github.limuqy.mc.hassium.metrics.NetworkStats.recordBulkSentPrimary(payload.length);
             // review-fix: T11-19 传已编码 payload，避免 sendCompressedChunk 内部二次 encode()（重复分配+拷贝）
             NeoForgeNetworkManager.sendCompressedChunk(player, payload);

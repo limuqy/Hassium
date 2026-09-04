@@ -100,34 +100,13 @@ public final class HassiumClothConfigScreen {
         rendering.addEntry(bool(entries, "hassium.configuration.chunk.seedGenEnabled",
                 draft.seedGenEnabled, dCache.seedGenEnabled(), v -> draft.seedGenEnabled = v));
 
-        // === Category 3: 网络与连接（3 项 + L1 迁移策略 6 项）===
+        // === Category 3: 网络与连接===
         ConfigCategory networkCat = builder.getOrCreateCategory(
                 Component.translatable("hassium.configuration.category.network"));
         networkCat.addEntry(bool(entries, "hassium.configuration.debug.networkMetricsEnabled",
                 draft.metricsEnabled, dDebug.networkMetricsEnabled(), v -> draft.metricsEnabled = v));
         networkCat.addEntry(bool(entries, "hassium.configuration.debug.networkMetricsAutoReset",
                 draft.metricsAutoReset, dDebug.networkMetricsAutoReset(), v -> draft.metricsAutoReset = v));
-
-        // L1 迁移策略（客户端仅保留的 master.*；端点/鉴权由 gateway_info 下发）
-        var dMaster = HassiumConfig.MasterCoreConfig.DEFAULT;
-        networkCat.addEntry(doubleRange(entries, "hassium.configuration.master.migrationMinTps",
-                draft.migrationMinTps, dMaster.migrationMinTps(), 0.1, 100.0,
-                v -> draft.migrationMinTps = v));
-        networkCat.addEntry(doubleRange(entries, "hassium.configuration.master.migrationMaxLoadAverage",
-                draft.migrationMaxLoadAverage, dMaster.migrationMaxLoadAverage(), 0.1, 100.0,
-                v -> draft.migrationMaxLoadAverage = v));
-        networkCat.addEntry(str(entries, "hassium.configuration.master.migrationMaintenanceWindow",
-                draft.migrationMaintenanceWindow, dMaster.migrationMaintenanceWindow(),
-                v -> draft.migrationMaintenanceWindow = v));
-        networkCat.addEntry(intRange(entries, "hassium.configuration.master.migrationHeartbeatIntervalMs",
-                (int) draft.migrationHeartbeatIntervalMs, (int) dMaster.migrationHeartbeatIntervalMs(),
-                100, 60000, v -> draft.migrationHeartbeatIntervalMs = v));
-        networkCat.addEntry(intRange(entries, "hassium.configuration.master.migrationIdleWindowMs",
-                (int) draft.migrationIdleWindowMs, (int) dMaster.migrationIdleWindowMs(),
-                1000, 600000, v -> draft.migrationIdleWindowMs = v));
-        networkCat.addEntry(intRange(entries, "hassium.configuration.master.migrationSilentTimeoutMs",
-                (int) draft.migrationSilentTimeoutMs, (int) dMaster.migrationSilentTimeoutMs(),
-                1000, 600000, v -> draft.migrationSilentTimeoutMs = v));
 
         // === Category 4: 调试（客户端 8 项；dataplaneLogging 仅服务端 toml）===
         ConfigCategory debugCat = builder.getOrCreateCategory(
@@ -223,12 +202,6 @@ public final class HassiumClothConfigScreen {
         boolean seedGenEnabled;
         boolean metricsEnabled;
         boolean metricsAutoReset;
-        double migrationMinTps;
-        double migrationMaxLoadAverage;
-        String migrationMaintenanceWindow;
-        long migrationHeartbeatIntervalMs;
-        long migrationIdleWindowMs;
-        long migrationSilentTimeoutMs;
         boolean metadataLogging;
         boolean dispatcherLogging;
         boolean asyncLogging;
@@ -264,13 +237,6 @@ public final class HassiumClothConfigScreen {
             d.seedGenEnabled = cache.seedGenEnabled();
             d.metricsEnabled = debug.networkMetricsEnabled();
             d.metricsAutoReset = debug.networkMetricsAutoReset();
-            var master = c.master();
-            d.migrationMinTps = master.migrationMinTps();
-            d.migrationMaxLoadAverage = master.migrationMaxLoadAverage();
-            d.migrationMaintenanceWindow = master.migrationMaintenanceWindow();
-            d.migrationHeartbeatIntervalMs = master.migrationHeartbeatIntervalMs();
-            d.migrationIdleWindowMs = master.migrationIdleWindowMs();
-            d.migrationSilentTimeoutMs = master.migrationSilentTimeoutMs();
             d.metadataLogging = debug.metadataLogging();
             d.dispatcherLogging = debug.dispatcherLogging();
             d.asyncLogging = debug.asyncLogging();
@@ -295,9 +261,7 @@ public final class HassiumClothConfigScreen {
                             maxChunksPerFrame, mainThreadChunkBudgetMs, seedGenThreads,
                             ovdLocalGeneration, seedGenEnabled,
                             HassiumConfig.ChunkCoreConfig.DEFAULT.lightStrip()),
-                    HassiumConfig.MasterCoreConfig.DEFAULT.withMigrationPolicy(
-                            migrationMinTps, migrationMaxLoadAverage, migrationMaintenanceWindow,
-                            migrationHeartbeatIntervalMs, migrationIdleWindowMs, migrationSilentTimeoutMs),
+                    HassiumConfig.MasterCoreConfig.DEFAULT,
                     HassiumConfig.CompatConfig.DEFAULT,
                     new HassiumConfig.DebugConfig(
                             metadataLogging, dispatcherLogging, asyncLogging, compressionLogging,
@@ -306,3 +270,4 @@ public final class HassiumClothConfigScreen {
         }
     }
 }
+

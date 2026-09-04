@@ -271,8 +271,9 @@ function Set-SmokeClientRenderDistance {
 # key=value，# 注释；value 须为合法 TOML 字面量，字符串自带引号），按键值对 patch 双端
 # hassium toml（客户端 run/client/config/hassium/hassium-client.toml、服务端
 # run/server/config/hassium/hassium-server.toml）。键路径写法与 smoke-config-patch.ps1
-# 既有机制一致：按行正则 ^\s*<key>\s*= 匹配并保留原行缩进替换。仅 patch 文件中已存在的
-# 键；toml 文件或键缺失时告警跳过，不阻断冒烟。profile 文件不存在时整体 no-op。
+# 既有机制一致：按行正则 ^\s*<key>\s*= 匹配并保留原行缩进替换。键已存在则原位替换；
+# 键缺失时按 key 前缀定位 `[section]` 表尾插入（旧生成 toml 键集残缺时自愈，§4.3）；
+# toml 文件或 section 缺失时告警跳过，不阻断冒烟。profile 文件不存在时整体 no-op。
 function Invoke-SmokeProfilePatch {
     param(
         [string]$Name,
@@ -302,7 +303,8 @@ function Invoke-SmokeProfilePatch {
             Write-Host "[$SessionTag] profile '$Name' 跳过 ${toml}：文件不存在（全新 run 目录由 mod 首启生成默认值）" -ForegroundColor Yellow
             continue
         }
-        $lines = Get-Content $toml
+        $lines = @(Get-Content $toml)
+        $leaf = Split-Path -Leaf $toml
         foreach ($kv in $kvPairs) {
             $keyEsc = [regex]::Escape($kv.Key)
             $patched = $false
@@ -314,13 +316,56 @@ function Invoke-SmokeProfilePatch {
                     $l
                 }
             }
-            $lines = @($newLines)
-            $leaf = Split-Path -Leaf $toml
             if ($patched) {
+                $lines = @($newLines)
                 Write-Host "[$SessionTag] profile '$Name': $($kv.Key) = $($kv.Value) -> $leaf"
-            } else {
-                Write-Host "[$SessionTag] profile '$Name': 键 $($kv.Key) 在 $leaf 中不存在，跳过" -ForegroundColor Yellow
+                continue
             }
+            # 键缺失自愈：按 key 前缀定位 [section]。toml 为 [section] + 裸叶子键格式
+            # （night-config 点路径序列化结果），故先在表内找叶子键原位替换（防重复键），
+            # 找不到才插到该表最后一个键之后（下个 [section] 前）。
+            $section = if ($kv.Key -match '^([^.]+)\.') { $Matches[1] } else { $null }
+            $leafKey = if ($kv.Key -match '\.([^.]+)$') { $Matches[1] } else { $kv.Key }
+            if (-not $section) {
+                Write-Host "[$SessionTag] profile '$Name': 键 $($kv.Key) 无法定位 section，跳过" -ForegroundColor Yellow
+                continue
+            }
+            $secStart = -1
+            $secEnd = $lines.Count
+            for ($i = 0; $i -lt $lines.Count; $i++) {
+                if ($lines[$i] -match "^\s*\[${section}\]\s*(#.*)?$") {
+                    $secStart = $i
+                    for ($j = $secStart + 1; $j -lt $lines.Count; $j++) {
+                        if ($lines[$j] -match '^\s*\[') { $secEnd = $j; break }
+                    }
+                    break
+                }
+            }
+            if ($secStart -lt 0) {
+                Write-Host "[$SessionTag] profile '$Name': $leaf 无 [${section}] 表，键 $($kv.Key) 跳过" -ForegroundColor Yellow
+                continue
+            }
+            # 表内叶子键原位替换（保留缩进）
+            $leafEsc = [regex]::Escape($leafKey)
+            $replaced = $false
+            for ($i = $secStart + 1; $i -lt $secEnd; $i++) {
+                if ($lines[$i] -match "^(\s*)${leafEsc}\s*=.*$") {
+                    $lines[$i] = "$($Matches[1])$leafKey = $($kv.Value)"
+                    $replaced = $true
+                    Write-Host "[$SessionTag] profile '$Name': 替换 [$section] $leafKey = $($kv.Value) -> $leaf"
+                    break
+                }
+            }
+            if ($replaced) { continue }
+            $insertAt = $secEnd
+            $out = New-Object System.Collections.Generic.List[string]
+            for ($i = 0; $i -lt $lines.Count; $i++) {
+                if ($i -eq $insertAt) { $out.Add("$leafKey = $($kv.Value)") }
+                $out.Add($lines[$i])
+            }
+            if ($insertAt -ge $lines.Count) { $out.Add("$leafKey = $($kv.Value)") }
+            $lines = $out.ToArray()
+            Write-Host "[$SessionTag] profile '$Name': 插入 [$section] $leafKey = $($kv.Value) -> $leaf"
         }
         Set-Content -Path $toml -Value $lines -Encoding utf8NoBom
     }
@@ -421,35 +466,6 @@ if ($Scenario -in @("seedgen", "dimension")) {
     }
     $CleanWorld = $true
 }
-
-# T8 harness 卫生（等价清缓存，不改产品默认）：中和历史演练遗留的
-# master.controlReachableEndpoints——残留端点表会让网关绑定非默认端口（如 25567）而客户端
-# 仍找默认 25566，握手永不成立。双端 toml 该键统一写空列表，两端一致回落默认；
-# 随后 Invoke-SmokeProfilePatch 可按 profile 显式覆盖（profile 为准）。
-function Reset-SmokeControlEndpoints {
-    param([string]$ClientRunDir, [string]$ServerRunDir, [string]$SessionTag)
-    foreach ($toml in @(
-        (Join-Path $ClientRunDir "config\hassium\hassium-client.toml"),
-        (Join-Path $ServerRunDir "config\hassium\hassium-server.toml")
-    )) {
-        if (-not (Test-Path $toml)) { continue }
-        $lines = Get-Content $toml
-        $newLines = @(
-            foreach ($l in $lines) {
-                if ($l -match "^(\s*)controlReachableEndpoints\s*=.*$") {
-                    "$($Matches[1])controlReachableEndpoints = []"
-                } else {
-                    $l
-                }
-            }
-        )
-        if (($newLines -join "`n") -ne ($lines -join "`n")) {
-            Set-Content -Path $toml -Value $newLines -Encoding utf8NoBom
-            Write-Host "[$SessionTag] harness 卫生: controlReachableEndpoints 中和为 [] -> $(Split-Path -Leaf $toml)"
-        }
-    }
-}
-Reset-SmokeControlEndpoints -ClientRunDir $clientRunDir -ServerRunDir $serverRunDir -SessionTag $SessionId
 
 # T8 场景配置档案落盘：存在 scripts/smoke/profiles/<Scenario>.profile.properties 时，
 # 按键值对 patch 双端 hassium toml（须在服务端/客户端启动前完成）。文件不存在则 no-op。
@@ -797,7 +813,7 @@ $hasFail = $clientContent -match "HassiumSmokeTest:FAIL"
 $probeGateFailures = @()
 $dimensionGateFailures = @()
 $logAuditFailures = @()
-# Phase 0 单25565原版基线：经典冒烟验证原版区块流，不要求已暂停的 Gateway ACTIVE。
+# 直连拓扑：网关轮次退役；业务门禁（登录期握手 + ZSTD 生效 + 区块落地）由 Python analyzer 执行。
 $gatewayRequired = $false
 $result = "UNKNOWN"
 # 业务门控由 Python analyzer 执行；PowerShell 只保留启动、超时、停止和严重错误处理。
