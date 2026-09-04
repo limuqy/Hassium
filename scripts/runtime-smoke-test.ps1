@@ -835,7 +835,10 @@ $logAuditAllow = @(
     "\(Minecraft\) Failed to retrieve profile key pair",
     "Sound engine.*Stop: Invalid name parameter",
     "ProcessorMailbox\.registerForExecution",
-    "Cound not schedule mailbox"
+    "Cound not schedule mailbox",
+    # 环境性网络噪音（外网不可达时的拉取失败，与模组功能无关）
+    "Yggdrasil Key Fetcher.*Failed to request yggdrasil public key",
+    "Mod Menu/Update Checker.*Error checking for updates"
 ) + @($AllowErrorPatterns)
 $logAuditFailures = @()
 foreach ($auditLog in @($serverLog, $clientLog)) {
