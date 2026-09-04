@@ -81,21 +81,21 @@ public class HassiumCommandHandler {
     }
 
     private static String formatBandwidthLine(HassiumMetricsImpl m) {
-        long vanillaRecv = m.getVanillaBytesReceived();
-        long actualRecv = m.getActualBytesReceived();
-        // 「压缩」行只看压缩算法本身带来的节省（不含缓存/光照/OVD）：
-        //   压缩节省 = (vanilla_Zlib_wire - actual_ZSTD_wire) / vanilla_Zlib_wire × 100
-        // 当 actual > vanilla（Hassium ZSTD 反而比 vanilla Zlib 多用字节）→ 节省为负，
-        // 由 formatPercent 下限 0% 体现「无压缩优势」，不再 ratio>100 clamp 假性 100% 误导。
-        // 同时压缩比 1.X:1 = vanilla/actual 保留：>1 表示 ZSTD 比 Zlib 省，<1 表示反而膨胀。
-        double saving = vanillaRecv > 0
-                ? (double) (vanillaRecv - actualRecv) / vanillaRecv * 100.0
+        long originalBytes = m.getZstdOriginalBytes();
+        long compressedBytes = m.getZstdCompressedBytes();
+        // 「带宽压缩」行 = 聚合包压缩帧 + shadow pull 分段增量（SectionDeltaS2CPacket 内嵌
+        // 载荷，decode 全库唯一调用点在 ShadowPullClient DELTA 终态）：压缩前原始 payload
+        // vs 压缩后线缆字节，chunk_payload 等其他通道与未压缩帧不计入。
+        // 整体「比无 MOD 少收多少」由下方「流量节省」行汇总（含缓存/光照/SeedGen），
+        // 其「数据包」项只累计区块域埋点，聚合全局包不计。
+        double saving = originalBytes > 0
+                ? (double) (originalBytes - compressedBytes) / originalBytes * 100.0
                 : 0.0;
-        return String.format("§e带宽压缩：§r%s（当前 %s，原版 %s，压缩比 %s）",
+        return String.format("§e带宽压缩：§r%s（原始 %s，压缩后 %s，压缩比 %s）",
                 MetricsTextFormatter.formatPercent(saving),
-                MetricsTextFormatter.formatBytes(actualRecv),
-                MetricsTextFormatter.formatBytes(vanillaRecv),
-                MetricsTextFormatter.formatCompressionRatio(vanillaRecv, actualRecv));
+                MetricsTextFormatter.formatBytes(originalBytes),
+                MetricsTextFormatter.formatBytes(compressedBytes),
+                MetricsTextFormatter.formatCompressionRatio(originalBytes, compressedBytes));
     }
 
     private static String formatChunkCacheLine(long fullHitCount, long fullHitBytes,

@@ -232,6 +232,16 @@ public class NetworkStats {
     }
 
     /**
+     * 通道 zstd 解压字节数（压缩前原始 vs 压缩后线缆，按解压事件累加）。
+     * 「带宽压缩」= 聚合包压缩帧 + shadow pull 分段增量（SectionDeltaS2CPacket 内嵌载荷，
+     * 其 decode 全库唯一调用点在 ShadowPullClient DELTA 终态）；chunk_payload 等其他通道不计。
+     */
+    public static void recordZstdDecompressed(long originalBytes, long compressedBytes) {
+        if (!enabled) return;
+        metrics.recordZstdDecompressed(originalBytes, compressedBytes);
+    }
+
+    /**
      * 记录收到元数据
      *
      * @param bytes 元数据包大小（字节）

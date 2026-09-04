@@ -99,6 +99,8 @@ public final class SmokeProbeWriter {
         field(sb, "actualBytesReceived", m.getActualBytesReceived());
         field(sb, "vanillaBytesSent", m.getVanillaBytesSent());
         field(sb, "actualBytesSent", m.getActualBytesSent());
+        field(sb, "zstdOriginalBytes", m.getZstdOriginalBytes());
+        field(sb, "zstdCompressedBytes", m.getZstdCompressedBytes());
         field(sb, "metadataBytesSent", m.getMetadataBytesSent());
         field(sb, "metadataBytesReceived", m.getMetadataBytesReceived());
         field(sb, "chunksCompressed", m.getChunksCompressed());

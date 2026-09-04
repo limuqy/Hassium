@@ -25,9 +25,24 @@ class NetworkStatsBandwidthTest {
         NetworkStats.recordChunkSent(1000);
         NetworkStats.recordWireBytesSent(200);
         NetworkStats.recordVanillaBytesSent(500);
+        NetworkStats.recordZstdDecompressed(1_000L, 100L);
         assertEquals(0, NetworkStats.getMetrics().getVanillaBytesSent());
         assertEquals(0, NetworkStats.getMetrics().getActualBytesSent());
         assertEquals(0, NetworkStats.getMetrics().getChunksCompressed());
+        assertEquals(0, NetworkStats.getMetrics().getZstdOriginalBytes());
+        assertEquals(0, NetworkStats.getMetrics().getZstdCompressedBytes());
+    }
+
+    @Test
+    void zstdDecompressPairsOriginalWithCompressed() {
+        NetworkStats.setEnabled(true);
+        NetworkStats.recordZstdDecompressed(10_000L, 2_000L);
+        // 非正值按侧忽略，不进任何一侧
+        NetworkStats.recordZstdDecompressed(0, 0);
+        NetworkStats.recordZstdDecompressed(-1, -1);
+        assertEquals(10_000L, NetworkStats.getMetrics().getZstdOriginalBytes());
+        assertEquals(2_000L, NetworkStats.getMetrics().getZstdCompressedBytes());
+        assertEquals("5.00:1", MetricsTextFormatter.formatCompressionRatio(10_000L, 2_000L));
     }
 
     @Test

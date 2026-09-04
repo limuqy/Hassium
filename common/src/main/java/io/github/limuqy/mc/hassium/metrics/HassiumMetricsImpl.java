@@ -71,6 +71,10 @@ public class HassiumMetricsImpl implements HassiumMetrics {
     private final AtomicLong actualBytesSent = new AtomicLong(0);
     private final AtomicLong vanillaBytesReceived = new AtomicLong(0);
     private final AtomicLong actualBytesReceived = new AtomicLong(0);
+    /** 通道 zstd 解压的压缩前原始字节（仅实际经过压缩的帧；未压缩帧不计，避免稀释压缩效率）。 */
+    private final AtomicLong zstdOriginalBytes = new AtomicLong(0);
+    /** 通道 zstd 解压的压缩后线缆字节（与 zstdOriginalBytes 按解压事件配对累加）。 */
+    private final AtomicLong zstdCompressedBytes = new AtomicLong(0);
     private final AtomicLong metadataBytesSent = new AtomicLong(0);
     private final AtomicLong metadataBytesReceived = new AtomicLong(0);
     private final AtomicLong dataRequestsSent = new AtomicLong(0);
@@ -325,6 +329,16 @@ public class HassiumMetricsImpl implements HassiumMetrics {
         return actualBytesReceived.get();
     }
 
+    /** 通道压缩效率口径：压缩前原始字节（见 {@link #recordZstdDecompressed}）。 */
+    public long getZstdOriginalBytes() {
+        return zstdOriginalBytes.get();
+    }
+
+    /** 通道压缩效率口径：压缩后线缆字节（见 {@link #recordZstdDecompressed}）。 */
+    public long getZstdCompressedBytes() {
+        return zstdCompressedBytes.get();
+    }
+
     @Override
     public long getMetadataBytesSent() {
         return metadataBytesSent.get();
@@ -508,6 +522,8 @@ public class HassiumMetricsImpl implements HassiumMetrics {
         actualBytesSent.set(0);
         vanillaBytesReceived.set(0);
         actualBytesReceived.set(0);
+        zstdOriginalBytes.set(0);
+        zstdCompressedBytes.set(0);
         metadataBytesSent.set(0);
         sendBulkFramesByPort.clear();
         sendBulkBytesByPort.clear();
@@ -885,6 +901,20 @@ public class HassiumMetricsImpl implements HassiumMetrics {
      */
     public void recordActualBytesReceived(long bytes) {
         actualBytesReceived.addAndGet(bytes);
+    }
+
+    /**
+     * 记录一次通道 zstd 解压的压缩前/压缩后字节数（按解压事件独立累加）。
+     * 「带宽压缩」= 聚合包压缩帧 + shadow pull 分段增量；chunk_payload 等其他通道与
+     * 未压缩帧不计入。
+     */
+    public void recordZstdDecompressed(long originalBytes, long compressedBytes) {
+        if (originalBytes > 0) {
+            zstdOriginalBytes.addAndGet(originalBytes);
+        }
+        if (compressedBytes > 0) {
+            zstdCompressedBytes.addAndGet(compressedBytes);
+        }
     }
 
     /**

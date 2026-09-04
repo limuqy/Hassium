@@ -191,6 +191,8 @@ public class ClientChunkHandler {
         // 压缩区块走自定义 payload。网关 ZstdContextDecoder 记的是包裹帧；
         // 冒烟实证 ROUND1 actual 只剩几十 B（控制帧），本通道 payload 必须在此记。
         NetworkStats.recordWireBytesReceived(compressed.compressedData.length);
+        // chunk_payload 全量请求通道不计入「带宽压缩」（该行只看聚合包 + shadow pull），
+        // 但 vanilla/wire 记账保留，供「流量节省」行使用。
 
         HassiumTaskExecutor executor = HassiumTaskExecutor.getClient();
         if (executor == null) {

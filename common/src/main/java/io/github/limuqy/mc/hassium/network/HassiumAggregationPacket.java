@@ -160,6 +160,9 @@ public class HassiumAggregationPacket {
 
             rawData = decompressCtx.decompress(compressed, uncompressedLength);
             decompressCtx.close();
+            // 带宽压缩行锚点（聚合包）：该帧实际经过 zstd（原始 vs 压缩后线缆字节）。
+            // 带宽压缩 = 聚合包压缩帧 + shadow pull 分段增量，chunk_payload 等其他通道不计。
+            NetworkStats.recordZstdDecompressed(rawData.length, compressedLength);
         } else {
             // 未压缩
             rawData = new byte[buf.readableBytes()];
@@ -182,7 +185,7 @@ public class HassiumAggregationPacket {
                 subPackets.add(AggregatedSubPacket.decode(rawBuf, indexManager));
             }
 
-            NetworkStats.recordVanillaBytesReceived(VanillaZlibEstimator.estimate(rawData));
+            // 聚合帧 = 全局 vanilla 包流，不计入「流量节省」的「数据包」项（区块域埋点各自记账）。
             return new HassiumAggregationPacket(subPackets, indexManager);
         } finally {
             rawBuf.release();

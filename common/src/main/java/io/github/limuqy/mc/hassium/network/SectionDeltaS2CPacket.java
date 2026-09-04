@@ -4,6 +4,7 @@ import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.compression.CompressionException;
 import io.github.limuqy.mc.hassium.compression.CompressionService;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
+import io.github.limuqy.mc.hassium.metrics.NetworkStats;
 import net.minecraft.core.BlockPos;
 import net.minecraft.nbt.CompoundTag;
 import io.netty.handler.codec.DecoderException;
@@ -241,6 +242,10 @@ public record SectionDeltaS2CPacket(
             } catch (CompressionException e) {
                 throw new RuntimeException("Failed to decompress section delta payload", e);
             }
+            // 带宽压缩行锚点（shadow pull 分段增量）：本 decode 全库唯一调用点在
+            // ShadowPullClient 的 DELTA 终态（独立 section_delta 通道已随 SectionHash 通道删除），
+            // 故此处记账即 shadow pull 侧的 zstd 压缩对（原始 vs 压缩后线缆字节）。
+            NetworkStats.recordZstdDecompressed(originalSize, compressedLen);
             payloadBuf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(raw));
         } else {
             // 未压缩：读 rawLen + rawBytes
