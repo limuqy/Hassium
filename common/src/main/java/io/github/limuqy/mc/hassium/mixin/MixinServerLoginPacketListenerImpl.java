@@ -1,7 +1,6 @@
 package io.github.limuqy.mc.hassium.mixin;
 
 import io.github.limuqy.mc.hassium.Constants;
-import io.github.limuqy.mc.hassium.compat.ReflectionCompat;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.network.handshake.LoginCaps;
 import io.github.limuqy.mc.hassium.network.handshake.LoginHandshake;
@@ -12,10 +11,9 @@ import io.github.limuqy.mc.hassium.utils.DebugLogger.LogType;
 import io.netty.buffer.Unpooled;
 import net.minecraft.network.Connection;
 import net.minecraft.network.FriendlyByteBuf;
-import net.minecraft.network.protocol.login.ServerboundHelloPacket;
+import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
-import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
@@ -24,49 +22,47 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
  * 登录期能力握手——服务端 1.20.1 login query 载体（1.20.2+ 走配置阶段
  * PreHandshakePayload，见各 loader 注册；原版 codec 对未知 login query 应答体
  * 逐字节丢弃，登录期无法携带能力体）。
- * <p>
- * {@code handleHello} HEAD（收到 Login Start 后、EncryptionRequest/离线验证之前，
- * 明文，在线/离线统一插入点）发送 {@code hassium:login_hello} query；vanilla 客户端
- * 恒回空应答 → 原版路径，不依赖超时。应答在 {@code handleCustomQueryPacket} HEAD
- * 解析（仅消费本模组 transactionId）。
- * <p>
- * 仅专用服 + master.enabled 时发送（单人/局域网/影子端不发）。
- * <p>
- * <b>T2-91 接受兜底（slow_login 根因）</b>：vanilla 在 Netty IO 线程写非 volatile 的
- * {@code state=READY_TO_ACCEPT}，server 线程在 {@code tick()} 读取并执行 accept。冒烟
- * 实证（seedgen1/2/3/5/6 复现、classic 与带逐 tick 日志探针的 seedgen8 不复现）：C2
- * 对该热路径做 LICM 后，server 线程的 state 读永远命中陈旧 HELLO（JMM 允许对普通
- * 字段做单线程假设），600 tick 后 {@code slow_login} 踢人；探针的反射读与日志锁恰好
- * 屏障化后即恢复正常——纯可见性竞争，非状态机逻辑问题。修复：应答处理完成后向
- * server 线程投递一次受 state 守卫的 {@code handleAcceptedLogin} 兜底
- * （BlockableEventLoop 队列出队自带 happens-before，与 vanilla tick 在同一线程严格
- * 串行，双重 {@code state==READY_TO_ACCEPT} 守卫 + 一次性标记保证恰好执行一次）。
+ *
+ * <p><b>query 发送时机（帧化竞态修复）</b>：query 必须在 vanilla
+ * {@code handleAcceptedLogin} 的 LoginCompression flush <b>之后</b>、GameProfile 之前发出。
+ * 曾在 {@code handleHello} HEAD 发送——此刻客户端尚未装压缩编码器，应答是裸包；若服务端
+ * 已 flush LoginCompression 并装上解码器（flush 回调即刻安装），裸应答的首个 varint
+ * （packetId 0x02）被当作解压尺寸 → {@code Badly compressed packet - size of 2 is below
+ * server threshold of 256} 断连（冒烟 pullagg2 实证，负载下偶发）。业界同题两解：
+ * Fabric API 在首个 query tick 先发 compression（源码注释 "so clients receive compressed
+ * login queries"），Forge 用 NEGOTIATING 状态把 LoginCompression 推迟到应答收齐——共同
+ * 原则是 query 往返与压缩切换不重叠，本修复取 Fabric 式先行。注入点选在
+ * {@code ClientboundGameProfilePacket} 构造之前：事件循环 FIFO 保证 query 写入晚于
+ * 解码器安装；客户端 listener 仍是握手类（GameProfile 未发）；单机/内网
+ * （isMemoryConnection 跳过 compression）分支同样覆盖。
+ *
+ * <p>vanilla 客户端恒回空应答 → 原版路径，不依赖超时。应答在
+ * {@code handleCustomQueryPacket} HEAD 解析（仅消费本模组 transactionId）。
+ * <p>仅专用服 + master.enabled 时发送（单人/局域网/影子端不发）。
+ *
+ * <p><b>T2-91 历史注记</b>：旧实现曾以「应答后向 server 线程投递受 state 守卫的
+ * handleAcceptedLogin 兜底」对抗 C2 LICM 导致的 slow_login 陈旧读。query 挪至
+ * handleAcceptedLogin 后：accept 不再依赖应答（query 在 state=ACCEPTED 之后才发出），
+ * 兜底守卫（READY_TO_ACCEPT）恒不成立；且 Hello→accept 之间已无任何模组代码，
+ * 原触发面消失，兜底随之移除。
  */
 #if MC_VER < MC_1_21_1
 @Mixin(net.minecraft.server.network.ServerLoginPacketListenerImpl.class)
 public abstract class MixinServerLoginPacketListenerImpl {
 
     @Shadow
-    public abstract void handleAcceptedLogin();
+    @Final
+    private Connection connection;
 
-    @Unique
-    private static volatile java.lang.reflect.Field hassium$stateField;
-
-    @Unique
-    private volatile boolean hassium$acceptFallbackScheduled;
-
-    @Unique
-    private volatile boolean hassium$accepted;
-
-    @Inject(method = "handleHello(Lnet/minecraft/network/protocol/login/ServerboundHelloPacket;)V",
-            at = @At("HEAD"))
-    private void hassium$onLoginHello(ServerboundHelloPacket packet, CallbackInfo ci) {
+    @Inject(method = "handleAcceptedLogin()V",
+            at = @At(value = "INVOKE",
+                     target = "Lnet/minecraft/network/protocol/login/ClientboundGameProfilePacket;<init>(Lcom/mojang/authlib/GameProfile;)V"))
+    private void hassium$onAcceptedSendQuery(CallbackInfo ci) {
         if (!RuntimeServerContext.isDedicatedServerContext()
                 || !HassiumConfigService.getInstance().isMasterEnabled()) {
             return;
         }
-        Connection connection = (Connection) ReflectionCompat.getFieldByTypeOrNull(this, Connection.class, true);
-        if (connection == null || !connection.isConnected()) {
+        if (!connection.isConnected()) {
             return;
         }
         int serverCaps = LoginCaps.buildServerCaps();
@@ -79,7 +75,7 @@ public abstract class MixinServerLoginPacketListenerImpl {
                     LoginHandshake.TRANSACTION_ID,
                     new net.minecraft.resources.ResourceLocation(Constants.MOD_ID, LoginHandshake.HELLO_CHANNEL),
                     body));
-            DebugLogger.info(LogType.NETWORK, "[LOGIN_HELLO] query sent (serverCaps=0x{})",
+            DebugLogger.info(LogType.NETWORK, "[LOGIN_HELLO] query sent post-compression (serverCaps=0x{})",
                     Integer.toHexString(serverCaps));
         } catch (Exception e) {
             body.release();
@@ -94,62 +90,8 @@ public abstract class MixinServerLoginPacketListenerImpl {
         if (packet.getTransactionId() != LoginHandshake.TRANSACTION_ID) {
             return;
         }
-        Connection connection = (Connection) ReflectionCompat.getFieldByTypeOrNull(this, Connection.class, true);
-        if (connection != null) {
-            LoginHandshakeManager.handleAnswer(this, connection, packet.getData());
-            hassium$scheduleAcceptFallback();
-        }
+        LoginHandshakeManager.handleAnswer(this, connection, packet.getData());
         ci.cancel();
-    }
-
-    /**
-     * T2-91 接受兜底：把 accept 推到 server 线程执行（见类注释）。handleAnswer 的
-     * PENDING_QUERY_CAPS.remove 语义保证每个连接只应答一次，本方法天然单次调度。
-     */
-    @Unique
-    private void hassium$scheduleAcceptFallback() {
-        if (hassium$acceptFallbackScheduled) {
-            return;
-        }
-        hassium$acceptFallbackScheduled = true;
-        Object serverObj = ReflectionCompat.getFieldByTypeOrNull(
-                this, net.minecraft.server.MinecraftServer.class, true);
-        if (!(serverObj instanceof net.minecraft.server.MinecraftServer server)) {
-            Constants.LOG.warn("Hassium: login accept fallback skipped (server unavailable)");
-            return;
-        }
-        server.submit(() -> {
-            if (hassium$accepted) {
-                return;
-            }
-            try {
-                Object state = hassium$readState();
-                // vanilla tick（fresh 读）可能已先 accept（state=ACCEPTED）；stale 读恒为
-                // HELLO 也不会走到这里——两个方向都不会双发。
-                if (state != null && "READY_TO_ACCEPT".contentEquals(state.toString())) {
-                    hassium$accepted = true;
-                    handleAcceptedLogin();
-                    DebugLogger.info(LogType.NETWORK, "[LOGIN_HELLO] accept fallback executed");
-                }
-            } catch (Exception e) {
-                Constants.LOG.warn("Hassium: login accept fallback failed", e);
-            }
-        });
-    }
-
-    @Unique
-    private Object hassium$readState() {
-        try {
-            java.lang.reflect.Field f = hassium$stateField;
-            if (f == null) {
-                f = this.getClass().getDeclaredField("state");
-                f.setAccessible(true);
-                hassium$stateField = f;
-            }
-            return f.get(this);
-        } catch (Exception e) {
-            return null;
-        }
     }
 }
 #else
