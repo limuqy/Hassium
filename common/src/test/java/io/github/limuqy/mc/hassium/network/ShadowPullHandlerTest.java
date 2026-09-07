@@ -6,6 +6,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ShadowPullHandlerTest {
     @Test
@@ -17,7 +18,7 @@ class ShadowPullHandlerTest {
         ShadowPullHandler handler = new ShadowPullHandler(new ShadowPullRequestLedger());
         ShadowPullResponseS2CPacket response = handler.handle(UUID.randomUUID(), request,
                 "minecraft:overworld", 1L, 0, 0, 1, true, true,
-                entry -> ShadowPullResponseS2CPacket.Result.unchanged(
+                (req, entry) -> ShadowPullResponseS2CPacket.Result.unchanged(
                         entry.chunkX(), entry.chunkZ(), entry.chunkHash(), entry.sectionHashes()));
         assertEquals(ShadowPullResponseS2CPacket.Kind.UNCHANGED, response.results().get(0).kind());
     }
@@ -30,7 +31,11 @@ class ShadowPullHandlerTest {
                 List.of(new ShadowPullRequestC2SPacket.Entry(4, 0, 3L, List.of(), 1)));
         ShadowPullHandler handler = new ShadowPullHandler(new ShadowPullRequestLedger());
         ShadowPullResponseS2CPacket response = handler.handle(UUID.randomUUID(), request,
-                "minecraft:overworld", 1L, 0, 0, 1, true, true, entry -> null);
-        assertEquals(ShadowPullResponseS2CPacket.Kind.ERROR, response.results().get(0).kind());
+                "minecraft:overworld", 1L, 0, 0, 1, true, true, (req, entry) -> null);
+        // resolver null = 未就绪柱已入待推送队列：响应省略该柱（不再产生 negative 错误）
+        assertTrue(response.results().isEmpty());
     }
 }
+
+
+

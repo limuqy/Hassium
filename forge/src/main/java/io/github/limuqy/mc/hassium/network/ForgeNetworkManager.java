@@ -547,9 +547,10 @@ public class ForgeNetworkManager implements NetworkManager {
             String dimension = io.github.limuqy.mc.hassium.compat.LevelCompat.getDimensionId(player.level());
             ShadowPullResponseS2CPacket response = SHADOW_PULL_HANDLER.handle(player.getUUID(), request,
                     dimension, request.epoch(), player.chunkPosition().x, player.chunkPosition().z,
-                    io.github.limuqy.mc.hassium.compat.PlayerCompat.getViewDistance(player) + 1,
+                    io.github.limuqy.mc.hassium.compat.PlayerCompat.getViewDistance(player)
+                            + io.github.limuqy.mc.hassium.network.ShadowPullRadii.AUTHORITY_MARGIN,
                     true, player.isAlive() && !player.hasDisconnected(),
-                    entry -> ServerChunkPushManager.getInstance().resolveShadowPull(player, entry, dimension));
+                    (req, entry) -> ServerChunkPushManager.getInstance().resolveShadowPull(player, req, entry, dimension));
             FriendlyByteBuf out = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
             try {
                 response.encode(out);
@@ -635,6 +636,19 @@ public class ForgeNetworkManager implements NetworkManager {
         CHANNEL.sendTo(new SeedRefWrapper(data), player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
 #else
         sendToPlayer(player, new SeedRefWrapper(data));
+#endif
+    }
+    @Override
+    public void sendShadowPullResponse(ServerPlayer player, FriendlyByteBuf buf) {
+        byte[] data = new byte[buf.readableBytes()];
+        buf.readBytes(data);
+        buf.release();
+#if MC_VER < MC_1_21_1
+        if (CHANNEL != null) {
+            CHANNEL.sendTo(new ShadowPullResponseWrapper(data), player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
+        }
+#else
+        sendToPlayer(player, new ShadowPullResponseWrapper(data));
 #endif
     }
 
@@ -1030,3 +1044,5 @@ public class ForgeNetworkManager implements NetworkManager {
         sendCompressionReadyToServer();
     }
 }
+
+

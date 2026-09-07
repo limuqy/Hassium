@@ -37,6 +37,16 @@ public interface NetworkManager {
      */
     void sendSeedRef(ServerPlayer player, FriendlyByteBuf buf);
 
+    /**
+     * 服务端主动推送 shadowPullV1 响应（待推送队列泵用；复用原 requestId）。
+     * buf 所有权转移给实现（未消费时释放）。
+     */
+    default void sendShadowPullResponse(ServerPlayer player, FriendlyByteBuf buf) {
+        if (buf != null && buf.refCnt() > 0) {
+            buf.release();
+        }
+    }
+
 
     /**
      * 发送 blockEntity 数据请求到服务端（客户端调用）

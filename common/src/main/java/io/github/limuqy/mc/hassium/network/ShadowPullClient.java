@@ -39,6 +39,14 @@ public final class ShadowPullClient {
             new java.util.concurrent.ConcurrentHashMap<>();
     /** 拦截后响应未到达的最长等待；超时回退为网络数据注入，防区块黑洞。 */
     private static final long COMPARE_TIMEOUT_MS = 10_000L;
+    /**
+     * 已失败过一次的柱（复合键）：ERROR / UNCHANGED 无基线 / FULL 应用失败的重试上限。
+     * 每柱每会话只重试一次——服务端 range 拒绝（柱在权威半径外）会无限复现，无上限重试
+     * 会打出请求风暴拖垮客户端（pull9 实证：610 柱 × ~600 次重试）。二次失败即放弃，
+     * 后续由玩家移动触发的 vanilla tracking 再自然触达。
+     */
+    private static final java.util.Set<Long> RETRIED =
+            java.util.concurrent.ConcurrentHashMap.newKeySet();
 
     private record PendingCompare(String dimension, long timestampMs, Runnable fallback) {}
 
@@ -150,6 +158,38 @@ public final class ShadowPullClient {
                         io.github.limuqy.mc.hassium.network.ClientChunkHandler.TraceOrigin.SERVER_PUSH));
     }
 
+    /**
+     * pull FULL 载荷固定 zstd 解压（与 {@code ServerChunkPushManager#compressPullFullPayload}
+     * 配对）。带宽压缩行锚点：原始 vs 压缩后线缆字节在此配对记账——通道压缩
+     * = 包聚合帧 + shadow pull FULL（本处）+ DELTA 分段增量（SectionDeltaS2CPacket.decode）。
+     * 解压失败返回空载荷 → applyShadowPullFull 失败 → 走 requestAuthoritativeFull 重试。
+     */
+    private static byte[] decompressPullFull(ShadowPullResponseS2CPacket.Result result) {
+        byte[] compressed = result.payload();
+        try {
+            byte[] raw = io.github.limuqy.mc.hassium.compression.CompressionService.getInstance()
+                    .decompress(compressed, Constants.NETWORK_COMPRESSION_ALGORITHM);
+            io.github.limuqy.mc.hassium.metrics.NetworkStats.recordZstdDecompressed(
+                    raw.length, compressed.length);
+            // 原版等价 / 线缆字节记账收口到 pull 链（chunk_payload 通道退役观察期后归零）
+            io.github.limuqy.mc.hassium.metrics.NetworkStats.recordChunkReceived(raw.length);
+            io.github.limuqy.mc.hassium.metrics.NetworkStats.recordWireBytesReceived(compressed.length);
+            return raw;
+        } catch (Exception e) {
+            Constants.LOG.warn("[SHADOW_PULL] FULL payload decompress failed ({}, {})",
+                    result.chunkX(), result.chunkZ(), e);
+            return new byte[0];
+        }
+    }
+
+    /** 带重试上限的权威 FULL 重试：每柱每会话仅一次（见 {@link #RETRIED}）。 */
+    private static void retryAuthoritativeFullOnce(String dimension, ChunkPos pos) {
+        long key = io.github.limuqy.mc.hassium.utils.DimensionKey.key(dimension, pos.x, pos.z);
+        if (RETRIED.add(key)) {
+            requestAuthoritativeFull(dimension, List.of(pos));
+        }
+    }
+
     /** Applies compare-and-pull responses for the current client dimension. */
     public static void handleResponse(ShadowPullResponseS2CPacket response) {
         if (response == null) {
@@ -168,11 +208,11 @@ public final class ShadowPullClient {
             if (result.kind() == ShadowPullResponseS2CPacket.Kind.FULL) {
                 recordFullResult(comparedBaseline);
                 if (pending != null) {
-                    // 拦截模式：已收网络数据即权威，响应载荷丢弃
+                    // 拦截模式：已收网络数据即权威，响应载荷丢弃（不解压）
                     pending.fallback().run();
-                } else if (!ClientChunkHandler.applyShadowPullFull(result.payload())) {
+                } else if (!ClientChunkHandler.applyShadowPullFull(decompressPullFull(result))) {
                     Constants.LOG.warn("[SHADOW_PULL] Failed to apply FULL ({}, {})", result.chunkX(), result.chunkZ());
-                    requestAuthoritativeFull(response.dimension(), List.of(pos));
+                    retryAuthoritativeFullOnce(response.dimension(), pos);
                 }
             } else if (result.kind() == ShadowPullResponseS2CPacket.Kind.DELTA) {
                 net.minecraft.network.FriendlyByteBuf buffer = new net.minecraft.network.FriendlyByteBuf(
@@ -186,7 +226,7 @@ public final class ShadowPullClient {
                     if (pending != null) {
                         pending.fallback().run();
                     } else {
-                        requestAuthoritativeFull(response.dimension(), List.of(pos));
+                        retryAuthoritativeFullOnce(response.dimension(), pos);
                     }
                 } finally {
                     buffer.release();
@@ -198,7 +238,7 @@ public final class ShadowPullClient {
                     if (pending != null) {
                         pending.fallback().run();
                     } else {
-                        requestAuthoritativeFull(response.dimension(), List.of(pos));
+                        retryAuthoritativeFullOnce(response.dimension(), pos);
                     }
                 }
             } else {
@@ -206,9 +246,9 @@ public final class ShadowPullClient {
                         result.chunkX(), result.chunkZ(), result.error());
                 if (pending != null) {
                     pending.fallback().run();
-                } else {
-                    requestAuthoritativeFull(response.dimension(), List.of(pos));
                 }
+                // 终态拒绝（range/unloaded/timeout 等）：失败即放弃，不重试——
+                // 柱已不在服务端权威范围内，重试只会复现同一拒绝（pull9 风暴实证）
             }
         }
     }
@@ -240,5 +280,9 @@ public final class ShadowPullClient {
         NEXT_REQUEST_ID.set(0L);
         REQUEST_MODES.clear();
         PENDING_COMPARE.clear();
+        RETRIED.clear();
     }
 }
+
+
+

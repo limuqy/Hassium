@@ -99,6 +99,11 @@ Hassium/
 
 ## 6. 客户端区块数据流
 
+> **状态：已对齐（现状）**。影子虚拟 `ServerPlayer` tracking + 统一 Compare+Pull 已实现
+> （2026-09-05 对齐波）：pull-mode 协商（`LoginCaps.PULL_MODE`）后服务端停发 chunk_payload，
+> 区块数据由客户端影子 tracking 驱动的 Compare+Pull 承担；pull FULL 响应走固定 zstd，
+> 与包聚合同列通道压缩（全部固定算法）。
+
 **影子端架构**：客户端进程内运行完整 `MinecraftServer`（`ShadowSeedServer`）。真实玩家位置只同步给唯一虚拟 `ServerPlayer`；影子 `ServerChunkCache` / `ChunkMap` 负责 tracking、读盘、生成、光照和 unload。客户端不枚举视距、不维护 halo；每个被原版 tracking 选中的区块都进入同一个“对比并拉取”协议。
 
 ```mermaid

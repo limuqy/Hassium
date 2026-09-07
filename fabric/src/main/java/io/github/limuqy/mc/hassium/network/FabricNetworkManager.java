@@ -205,6 +205,15 @@ PLAY_INIT_S2C = ResourceLocationCompat.vanilla(HassiumChannels.PLAY_INIT_S2C);
 #endif
     }
 
+    @Override
+    public void sendShadowPullResponse(ServerPlayer player, FriendlyByteBuf buf) {
+#if MC_VER < MC_1_21_1
+        ServerPlayNetworking.send(player, SHADOW_PULL_RESPONSE_S2C, buf);
+#else
+        ServerPlayNetworking.send(player, FabricPayloadRegistry.toPayload(FabricPayloadRegistry.SHADOW_PULL_RESPONSE_S2C_TYPE, buf));
+#endif
+    }
+
 
     @Override
     public void sendBlockEntityRequest(FriendlyByteBuf buf) {
@@ -469,10 +478,11 @@ PLAY_INIT_S2C = ResourceLocationCompat.vanilla(HassiumChannels.PLAY_INIT_S2C);
                             request.entries().size(), request.epoch());
                     ShadowPullResponseS2CPacket response = new ShadowPullHandler(new ShadowPullRequestLedger()).handle(
                             player.getUUID(), request, dimension, request.epoch(), player.chunkPosition().x,
-                            player.chunkPosition().z, io.github.limuqy.mc.hassium.compat.PlayerCompat.getViewDistance(player) + 1,
+                            player.chunkPosition().z, io.github.limuqy.mc.hassium.compat.PlayerCompat.getViewDistance(player)
+                                    + io.github.limuqy.mc.hassium.network.ShadowPullRadii.AUTHORITY_MARGIN,
                             true,
                             player.isAlive() && !player.hasDisconnected(),
-                            entry -> ServerChunkPushManager.getInstance().resolveShadowPull(player, entry, dimension));
+                            (req, entry) -> ServerChunkPushManager.getInstance().resolveShadowPull(player, req, entry, dimension));
                     FriendlyByteBuf out = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
                     response.encode(out);
                     ServerPlayNetworking.send(player, SHADOW_PULL_RESPONSE_S2C, out);
@@ -491,10 +501,11 @@ PLAY_INIT_S2C = ResourceLocationCompat.vanilla(HassiumChannels.PLAY_INIT_S2C);
                     String dimension = io.github.limuqy.mc.hassium.compat.LevelCompat.getDimensionId(player.level());
                     ShadowPullResponseS2CPacket response = new ShadowPullHandler(new ShadowPullRequestLedger()).handle(
                             player.getUUID(), request, dimension, request.epoch(), player.chunkPosition().x,
-                            player.chunkPosition().z, io.github.limuqy.mc.hassium.compat.PlayerCompat.getViewDistance(player) + 1,
+                            player.chunkPosition().z, io.github.limuqy.mc.hassium.compat.PlayerCompat.getViewDistance(player)
+                                    + io.github.limuqy.mc.hassium.network.ShadowPullRadii.AUTHORITY_MARGIN,
                             true,
                             player.isAlive() && !player.hasDisconnected(),
-                            entry -> ServerChunkPushManager.getInstance().resolveShadowPull(player, entry, dimension));
+                            (req, entry) -> ServerChunkPushManager.getInstance().resolveShadowPull(player, req, entry, dimension));
                     FriendlyByteBuf out = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
                     response.encode(out);
                     ServerPlayNetworking.send(player, FabricPayloadRegistry.toPayload(
@@ -551,3 +562,5 @@ PLAY_INIT_S2C = ResourceLocationCompat.vanilla(HassiumChannels.PLAY_INIT_S2C);
 #endif
     }
 }
+
+

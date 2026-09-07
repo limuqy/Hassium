@@ -67,6 +67,15 @@ public class MixinClientTick {
             // 超时回退失败不阻断 tick
         }
 
+        // 影子虚拟玩家 tracking：真实玩家位置/维度单向同步（发布 volatile 状态，
+        // 影子主循环消费；见 ShadowTrackingSession）
+        try {
+            io.github.limuqy.mc.hassium.network.seedgen.ShadowTrackingSession
+                    .onClientTick(net.minecraft.client.Minecraft.getInstance());
+        } catch (Exception e) {
+            // 位置同步失败不阻断 tick
+        }
+
         // （ready / pending / 在途光）时预留一半给 drainReady，避免 dispatcher 先把
         // deadline 用尽导致整帧 0 chunk（ROUND1 在 JoinBoost 10s 到期后曾因此卡 22s）。
         long budgetNs = ClientMainThreadBudget.getBudgetNs();

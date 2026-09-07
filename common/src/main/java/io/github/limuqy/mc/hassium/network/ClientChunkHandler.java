@@ -35,6 +35,8 @@ public class ClientChunkHandler {
     /** 仅诊断链路使用的区块数据来源；绝不编码进网络包或存档。 */
     public enum TraceOrigin {
         SERVER_PUSH("server_push"),
+        /** Compare+Pull 响应 FULL 落地（影子 tracking 采集；非服务端自主推送）。 */
+        REMOTE_PULL("remote_pull"),
         SHADOW_MEMORY_CACHE("shadow_memory_cache"),
         SHADOW_DISK_CACHE("shadow_disk_cache"),
         LOCAL_GENERATION("local_generation"),
@@ -46,6 +48,20 @@ public class ClientChunkHandler {
         TraceOrigin(String logValue) {
             this.logValue = logValue;
         }
+    }
+
+    /** 在途 pull FULL 落地标记（ChunkPos.asLong；applyShadowPullFull 置位，listener 消费）。 */
+    private static final java.util.concurrent.atomic.AtomicLong PENDING_PULL_APPLY =
+            new java.util.concurrent.atomic.AtomicLong(Long.MIN_VALUE);
+
+    /** pull FULL 响应落地前调用；listener 据此以 REMOTE_PULL 归因（仅诊断链路）。 */
+    static void markPullApply(int chunkX, int chunkZ) {
+        PENDING_PULL_APPLY.set(ChunkPos.asLong(chunkX, chunkZ));
+    }
+
+    /** listener 分支消费：该柱是否为在途 pull FULL 落地；命中即清除。 */
+    public static boolean consumePullApplyOrigin(int chunkX, int chunkZ) {
+        return PENDING_PULL_APPLY.compareAndSet(ChunkPos.asLong(chunkX, chunkZ), Long.MIN_VALUE);
     }
 
     /** 仅在区块应用日志开启时让内部队列携带来源元数据。 */
@@ -356,6 +372,7 @@ public class ClientChunkHandler {
         if (packet == null) {
             return false;
         }
+        markPullApply(packet.getX(), packet.getZ());
         net.minecraft.client.Minecraft mc = net.minecraft.client.Minecraft.getInstance();
         net.minecraft.client.multiplayer.ClientPacketListener listener = mc.getConnection();
         if (listener == null) {

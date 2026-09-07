@@ -325,6 +325,9 @@ public class ShadowSeedServer extends MinecraftServer {
             if (!fresh) {
                 awaitLightTaskDrain(level);
             }
+            // 悬置柱放行：数据到位后原版加载链恢复推进（LIGHT→FULL→playerLoadedChunk 桥，
+            // R2 重连比对触达的前提；holder 永卡 EMPTY 会让 tracking 静默失明）
+            ShadowChunkMapCompat.completeSuspendedLoad(dimension, pos, chunk);
             return true;
         } catch (Throwable t) {
             ShadowLightCompute.withChunkLock(pos, () -> restoreInjectedChunk(key, previous));
@@ -1054,6 +1057,8 @@ public class ShadowSeedServer extends MinecraftServer {
             this.injectedChunks.put(key, chunk);
             SectionDeltaSnapshots.put(dimension, pos, SectionDeltaSnapshot.capture(chunk));
         });
+        // 悬置柱放行（同 injectChunk）：读盘/生成柱入表即恢复原版加载链
+        ShadowChunkMapCompat.completeSuspendedLoad(dimension, pos, chunk);
     }
 
     /**
@@ -1399,6 +1404,9 @@ public class ShadowSeedServer extends MinecraftServer {
             try {
                 worked = this.pollTask();
                 worked |= cache.pollTask();
+                // 影子虚拟玩家 tracking 会话：位置同步消费 + chunk 系统簿记 + pull 请求分批
+                io.github.limuqy.mc.hassium.network.seedgen.ShadowTrackingSession.getInstance()
+                        .consumeOnShadowLoop();
             } catch (Throwable ignored) {
                 break; // server 已 halt
             }
@@ -1515,6 +1523,7 @@ public class ShadowSeedServer extends MinecraftServer {
      * Bloom/内存双空，R2 被当 ROUND1 直推。
      */
     void clearHotStateAfterPark() {
+        ShadowChunkMapCompat.clearSuspendedLoads();
         java.util.concurrent.ConcurrentHashMap<String, io.github.limuqy.mc.hassium.storage.ShadowStorageManager> map = storages;
         if (map != null) {
             for (io.github.limuqy.mc.hassium.storage.ShadowStorageManager mgr : map.values()) {

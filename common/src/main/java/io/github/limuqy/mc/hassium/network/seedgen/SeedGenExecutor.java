@@ -134,12 +134,23 @@ public final class SeedGenExecutor {
         return pipeline.isServerSeedGenEnabled() && pipeline.isServerSeedAvailable();
     }
 
+    /**
+     * §6 本地生成硬门控（{@code isEnabled} 公开化）：影子虚拟玩家 tracking 触发
+     * 原版生成链的判定（客户端本地生成开启 + 服务端 SeedGen 开启 + 真实 seed 已到达）。
+     */
+    public boolean isGenerationGateOpen() {
+        return isEnabled();
+    }
+
     /** 断连清理：停池、清队列并重置 pull 请求号。 */
     public void onDisconnect() {
         queue.clear();
         pendingLive.clear();
         DIMENSION_CONTEXT.clear();
         io.github.limuqy.mc.hassium.network.ShadowPullClient.reset();
+        // 影子虚拟玩家 tracking 会话一并重置：R2 复用 park 实例时旧虚拟玩家仍在影子世界，
+        // 位置未变则不会重新选柱 → R2 黑洞；重置后下次进服重建虚拟玩家重新 tracking
+        ShadowTrackingSession.reset();
         ExecutorService p = pool;
         pool = null;
         if (p != null) {

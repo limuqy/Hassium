@@ -32,6 +32,17 @@ public final class ShadowChunkMapCompat {
 
     private static final ThreadLocal<Integer> WORLDGEN_DEPTH = ThreadLocal.withInitial(() -> 0);
 
+    /**
+     * worldgen 压制柱的悬置 load future（{@code scheduleChunkLoad} mixin 登记）。
+     * 数据到位（packet 注入 / 读盘柱入表）时以 Imposter 放行，holder 恢复
+     * LIGHT→FULL 推进 → {@code playerLoadedChunk} 桥重新触达。若不放行，悬置
+     * holder 永卡 EMPTY：重连 tracking 既无新 {@code scheduleChunkLoad}（holder
+     * 已存在）也无 ticking chunk（{@code getTickingChunk()} 为 null）→ 比对请求
+     * 永不触发（R2 虚空根因）。
+     */
+    private static final java.util.concurrent.ConcurrentHashMap<Long, java.util.concurrent.CompletableFuture<?>> SUSPENDED_LOADS =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
     private ShadowChunkMapCompat() {}
 
     /** SeedGen {@code generateChunk} 期间允许金字塔 worldgen；注入票路径禁止。 */
@@ -50,6 +61,45 @@ public final class ShadowChunkMapCompat {
 
     public static boolean isWorldgenAllowed() {
         return WORLDGEN_DEPTH.get() > 0;
+    }
+
+    /** 影子 worldgen 压制时登记悬置 load future（mixin suspend 分支调用）。 */
+    public static void registerSuspendedLoad(String dimension, ChunkPos pos,
+                                             java.util.concurrent.CompletableFuture<?> future) {
+        if (dimension == null || pos == null || future == null) {
+            return;
+        }
+        SUSPENDED_LOADS.put(io.github.limuqy.mc.hassium.utils.DimensionKey.key(dimension, pos.x, pos.z), future);
+    }
+
+    /**
+     * 悬置柱数据到位：放行原版加载链。返回 true = 有悬置 future 被放行。
+     * 完成值与 {@code scheduleChunkLoad} 短路分支一致（ImposterProtoChunk），
+     * vanilla 链对 Imposter 的 FULL 晋升/BE 注册即读盘命中路径同款。
+     */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    public static boolean completeSuspendedLoad(String dimension, ChunkPos pos, LevelChunk chunk) {
+        if (dimension == null || pos == null || chunk == null) {
+            return false;
+        }
+        java.util.concurrent.CompletableFuture<?> future =
+                SUSPENDED_LOADS.remove(io.github.limuqy.mc.hassium.utils.DimensionKey.key(dimension, pos.x, pos.z));
+        if (future == null) {
+            return false;
+        }
+        ImposterProtoChunk imposter = asImposter(chunk);
+#if MC_VER < MC_1_21_1
+        ((java.util.concurrent.CompletableFuture) future)
+                .complete(com.mojang.datafixers.util.Either.left((ChunkAccess) imposter));
+#else
+        ((java.util.concurrent.CompletableFuture) future).complete((ChunkAccess) imposter);
+#endif
+        return true;
+    }
+
+    /** 关停/park 清空：world 丢弃后悬置 future 无主，直接丢弃登记。 */
+    public static void clearSuspendedLoads() {
+        SUSPENDED_LOADS.clear();
     }
 
 

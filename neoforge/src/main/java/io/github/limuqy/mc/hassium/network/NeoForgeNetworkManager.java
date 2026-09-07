@@ -745,9 +745,10 @@ public class NeoForgeNetworkManager implements NetworkManager {
                 String dimension = io.github.limuqy.mc.hassium.compat.LevelCompat.getDimensionId(player.level());
                 ShadowPullResponseS2CPacket response = SHADOW_PULL_HANDLER.handle(player.getUUID(), request,
                         dimension, request.epoch(), player.chunkPosition().x, player.chunkPosition().z,
-                        io.github.limuqy.mc.hassium.compat.PlayerCompat.getViewDistance(player) + 1,
+                        io.github.limuqy.mc.hassium.compat.PlayerCompat.getViewDistance(player)
+                                + io.github.limuqy.mc.hassium.network.ShadowPullRadii.AUTHORITY_MARGIN,
                         true, player.isAlive() && !player.hasDisconnected(),
-                        entry -> ServerChunkPushManager.getInstance().resolveShadowPull(player, entry, dimension));
+                        (req, entry) -> ServerChunkPushManager.getInstance().resolveShadowPull(player, req, entry, dimension));
                 out = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
                 response.encode(out);
                 byte[] data = new byte[out.readableBytes()];
@@ -874,6 +875,13 @@ public class NeoForgeNetworkManager implements NetworkManager {
         sendServerPayload(player, payload);
         LOGGER.debug("Hassium: Sent seed ref to {}", player.getName().getString());
 #endif
+    }
+    @Override
+    public void sendShadowPullResponse(ServerPlayer player, FriendlyByteBuf buf) {
+        byte[] data = new byte[buf.readableBytes()];
+        buf.readBytes(data);
+        buf.release();
+        sendServerPayload(player, new ShadowPullResponsePayload(data));
     }
 
     @Override
@@ -1112,3 +1120,5 @@ public class NeoForgeNetworkManager implements NetworkManager {
     }
 
 }
+
+

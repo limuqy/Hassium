@@ -16,6 +16,7 @@ import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 #if MC_VER < MC_1_21_1
 import net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket;
@@ -57,6 +58,9 @@ public class MixinChunkMap {
     /**
      * 1.20.1：专用服用独立、已填充的 holder，跳过 {@code new ClientboundLevelChunkWithLightPacket}
      *（组包成本）。与压缩无关；{@link MixinServerPlayer} 登记 pending 并 cancel 发送。
+     * <p>
+     * 影子虚拟玩家上下文不走本钩子：{@code playerLoadedChunk} 在 HEAD 被
+     * {@link #hassium$shadowBridgeLoadedChunk} cancel 并转统一 Compare+Pull 桥。
      */
     @ModifyVariable(method = "playerLoadedChunk", at = @At("HEAD"), argsOnly = true, ordinal = 0)
     private MutableObject<ClientboundLevelChunkWithLightPacket> hassium$skipVanillaPacketBuild(
@@ -64,14 +68,33 @@ public class MixinChunkMap {
             ServerPlayer player,
             MutableObject<ClientboundLevelChunkWithLightPacket> ignored,
             LevelChunk chunk) {
-        if (RuntimeServerContext.isShadowServerContext()
-                || player == null
+        if (player == null
                 || !PlayerCompressionTracker.isCompressionEnabled(player)) {
             return holder;
         }
         MutableObject<ClientboundLevelChunkWithLightPacket> isolated = new MutableObject<>();
         isolated.setValue(hassium$dummyPacket(chunk));
         return isolated;
+    }
+
+    /**
+     * 影子虚拟玩家交付桥（§6 节点 E/G → I）：原版链产出的柱（type126 读盘命中 /
+     * 本地生成门控放行的生成柱）注入影子表形成本地基线，携带基线发统一比对请求；
+     * 服务端裁决 UNCHANGED/DELTA/FULL 后经既有响应路径落地。不走原版包发送。
+     * <p>
+     * 无数据被悬置的柱（worldgen 压制）FULL future 永不完成，不会进入本钩子——
+     * 其交付由悬置登记的空基线请求 FULL 响应承担。
+     */
+    @Inject(method = "playerLoadedChunk", at = @At("HEAD"), cancellable = true)
+    private void hassium$shadowBridgeLoadedChunk(ServerPlayer player,
+            MutableObject<ClientboundLevelChunkWithLightPacket> holder, LevelChunk chunk,
+            CallbackInfo ci) {
+        if (!RuntimeServerContext.isShadowServerContext() || chunk == null) {
+            return;
+        }
+        io.github.limuqy.mc.hassium.network.seedgen.ShadowTrackingSession.getInstance()
+                .onChunkMaterialized(hassium$shadowDimension(), chunk.getPos(), chunk);
+        ci.cancel();
     }
 
     @Unique
@@ -90,6 +113,17 @@ public class MixinChunkMap {
             CallbackInfoReturnable<CompletableFuture<Either<ChunkAccess, ChunkHolder.ChunkLoadingFailure>>> cir) {
         LevelChunk loaded = hassium$chunkForScheduleLoad(pos);
         if (loaded == null) {
+            if (hassium$shadowSuppressGeneration(pos)) {
+                // 影子虚拟玩家 tracking 选中且无数据：登记 pull 并悬置原版链
+                //（worldgen 禁止；永不完成的 future 无错误日志、无重试、无生成金字塔）。
+                // 悬置 future 在数据到位时由 ShadowChunkMapCompat.completeSuspendedLoad 放行，
+                // 否则 holder 永卡 EMPTY → R2 重连 tracking 无 ticking chunk → 比对黑洞。
+                CompletableFuture<Either<ChunkAccess, ChunkHolder.ChunkLoadingFailure>> suspended =
+                        new CompletableFuture<>();
+                ShadowChunkMapCompat.registerSuspendedLoad(hassium$shadowDimension(), pos, suspended);
+                cir.setReturnValue(suspended);
+                return;
+            }
             // 未命中不 cancel：空槽由 MixinRegionFile 返回 null → createEmpty + 透传，
             // 不得在这里 loadFromDisk（FULL 票邻柱会同步解压整圈）。
             return;
@@ -106,11 +140,64 @@ public class MixinChunkMap {
         LevelChunk loaded = hassium$chunkForScheduleLoad(pos);
         if (loaded != null) {
             cir.setReturnValue(ShadowChunkMapCompat.completedImposter(loaded));
+            return;
+        }
+        if (hassium$shadowSuppressGeneration(pos)) {
+            // 影子虚拟玩家 tracking 选中且无数据：登记 pull 并悬置原版链
+            //（worldgen 禁止；永不完成的 future 无错误日志、无重试、无生成金字塔）。
+            // 悬置 future 在数据到位时由 ShadowChunkMapCompat.completeSuspendedLoad 放行，
+            // 否则 holder 永卡 EMPTY → R2 重连 tracking 无 ticking chunk → 比对黑洞。
+            CompletableFuture<ChunkAccess> suspended = new CompletableFuture<>();
+            ShadowChunkMapCompat.registerSuspendedLoad(hassium$shadowDimension(), pos, suspended);
+            cir.setReturnValue(suspended);
         }
         // 未命中不 cancel：MixinRegionFile 对非 126 返回 null，避免 completedFuture(null) NPE。
     }
 
 #endif
+
+    /** 本 ChunkMap 所属维度（影子上下文；null 回落 OVERWORLD，与既有钩子同口径）。 */
+    @Unique
+    private String hassium$shadowDimension() {
+        String dimension = LevelCompat.getDimensionId(this.level);
+        if (dimension == null) {
+            dimension = io.github.limuqy.mc.hassium.utils.DimensionKey.OVERWORLD;
+        }
+        return dimension;
+    }
+
+    /**
+     * 影子虚拟玩家 tracking 的选柱登记 + worldgen 压制判定（1.20.1 / 1.21.1+ 共用）。
+     * <p>
+     * 返回 true = 悬置原版加载链（登记 pull 请求、禁止 worldgen）。
+     * 仅影子上下文且非 worldgen 窗口生效；登记在注入表未命中时进行——磁盘命中柱
+     * 同样登记（读盘 hash 由 MixinRegionFile 同步回填，分类延迟一个簿记周期即可携带基线，
+     * 服务端裁决 UNCHANGED/DELTA/FULL）。
+     * <p>
+     * 本地生成门控通过（客户端本地生成开启 + 服务端 SeedGen 开启 + 真实 seed 到达）：
+     * 选中缺失柱由虚拟玩家 tracking 触发影子原版生成链（§6 节点 F/G，真实种子），
+     * 不悬置、不登记 pull，交付仍走 SeedGenExecutor 校验/publish 既有路径。
+     */
+    @Unique
+    private boolean hassium$shadowSuppressGeneration(ChunkPos pos) {
+        if (!RuntimeServerContext.isShadowServerContext() || pos == null) {
+            return false;
+        }
+        if (ShadowChunkMapCompat.isWorldgenAllowed()) {
+            // SeedGen worldgen 窗口：依赖柱不登记、不压制
+            return false;
+        }
+        if (io.github.limuqy.mc.hassium.network.seedgen.SeedGenExecutor.getInstance()
+                .isGenerationGateOpen()) {
+            // 门控通过：虚拟玩家触发原版生成链（真实种子），产出经 playerLoadedChunk
+            // 桥转统一 Compare+Pull（生成内容作基线，服务端裁决）
+            return false;
+        }
+        String dimension = hassium$shadowDimension();
+        io.github.limuqy.mc.hassium.network.seedgen.ShadowTrackingSession.getInstance()
+                .onChunkSelected(dimension, pos.x, pos.z);
+        return true;
+    }
 
     @Unique
     private LevelChunk hassium$chunkForScheduleLoad(ChunkPos pos) {
@@ -121,11 +208,7 @@ public class MixinChunkMap {
         if (server == null) {
             return null;
         }
-        String dimension = LevelCompat.getDimensionId(this.level);
-        if (dimension == null) {
-            dimension = io.github.limuqy.mc.hassium.utils.DimensionKey.OVERWORLD;
-        }
-        LevelChunk injected = server.injectedChunk(dimension, pos.x, pos.z);
+        LevelChunk injected = server.injectedChunk(hassium$shadowDimension(), pos.x, pos.z);
         if (injected != null) {
             return injected;
         }

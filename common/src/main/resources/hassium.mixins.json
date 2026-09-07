@@ -27,7 +27,8 @@
         "ThreadedLevelLightEngineAccessor",
         "LightUpdatePacketAccessor",
         "LevelChunkWithLightPacketAccessor",
-        "MixinReloadableServerResources"
+        "MixinReloadableServerResources",
+        "MixinShadowConnectionAccessor"
     ],
     "client": [
       "MixinMinecraft",

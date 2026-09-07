@@ -36,6 +36,13 @@ public final class LoginCaps {
     /** 超视渲染（多人渲染环带扩展）。 */
     public static final int VIEW_DIST_EXT = 1 << 7;
 
+    /**
+     * Pull 模式（Compare+Pull 对齐）：协商通过后服务端对该玩家停发 chunk_payload
+     * 整柱推送（forget/元数据/SeedRef 照常），区块数据全部由客户端影子虚拟玩家
+     * tracking 驱动的统一 Compare+Pull 拉取；pull FULL 响应走固定 zstd。
+     */
+    public static final int PULL_MODE = 1 << 8;
+
     /** 服务端声明位（配置驱动；登录 query 发送时构建）。 */
     public static int buildServerCaps() {
         HassiumConfigService cfg = HassiumConfigService.getInstance();
@@ -48,6 +55,7 @@ public final class LoginCaps {
         }
         if (cfg.isClientCacheEnabled()) {
             caps |= CHUNK_PUSH;
+            caps |= PULL_MODE;
         }
         if (cfg.isSectionDeltaEnabled()) {
             caps |= SECTION_DELTA;
@@ -86,6 +94,9 @@ public final class LoginCaps {
         }
         if (cfg.isHassiumEngineEnabled()) {
             caps |= LIGHT_STRIP;
+            // 影子虚拟玩家 tracking 在位（引擎开启）才声明 pull 模式：
+            // 停推后区块数据完全依赖客户端 Compare+Pull 采集
+            caps |= PULL_MODE;
         }
         caps |= SHADOW_PULL;
         if (cfg.isViewDistanceExtensionEnabled()) {

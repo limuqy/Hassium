@@ -43,4 +43,20 @@ public final class LevelCompat {
         return level.getRespawnData().pos();
 #endif
     }
+    /**
+     * 非阻塞 FULL 柱查取：仅当该柱已在加载列表且达到 FULL 状态时返回，否则 null（不触发生成）。
+     * pull 待推送队列的就绪判定用；就绪柱的生成/算光由原版 chunk 系统异步推进。
+     */
+    public static net.minecraft.world.level.chunk.LevelChunk loadedFullChunk(ServerLevel level, int x, int z) {
+#if MC_VER < MC_1_21_1
+        return io.github.limuqy.mc.hassium.compat.ShadowChunkMapCompat.unwrapLevelChunk(
+                level.getChunk(x, z, net.minecraft.world.level.chunk.ChunkStatus.FULL, false));
+#else
+        return io.github.limuqy.mc.hassium.compat.ShadowChunkMapCompat.unwrapLevelChunk(
+                level.getChunk(x, z, net.minecraft.world.level.chunk.status.ChunkStatus.FULL, false));
+#endif
+    }
 }
+
+
+

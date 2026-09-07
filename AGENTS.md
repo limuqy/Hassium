@@ -162,7 +162,7 @@ fabric/ | forge/ | neoforge/
 
 ## 直连拓扑速记
 
-**握手链**（`network/handshake/`）——1.20.1 服务端 `handleHello` HEAD 发 `hassium:login_hello` query、`handleCustomQueryPacket` 解析应答；1.20.2+ 走配置阶段 `PreHandshakePayload`（loader 注册，认证完成后）；能力位 `LoginCaps`（agg/hdr/push/delta/seed/light/pull/ovd）按位与协商，结果入 `PlayerCompressionTracker`。`ServerPlayer <init>` TAIL 消费（`ServerHandshakeActivation.onPlayerInit`：压制原版区块窗口），tick 泵激活：dictionary_sync/index_sync → 聚合 PENDING（5s 无 ACK 降级直发）→ `play_init_s2c`（协商位 + SeedGen 种子）→ 客户端 index_sync 后回激活 ACK → 聚合 ENABLED。**管线级全局包压缩已退役（run9 退役波）**：原版压缩层全程不触碰，通道压缩 = 聚合包内部字典 ZSTD（EventLoop 阈值翻折防双重压缩）+ 区块推送自有压缩。
+**握手链**（`network/handshake/`）——1.20.1 服务端在 `handleAcceptedLogin` 内 **LoginCompression 之后、GameProfile 之前**发 `hassium:login_hello` query（压缩就绪后发包，消除裸应答被压缩解码器误读的竞态，见 `483e1fb`）、`handleCustomQueryPacket` 解析应答；1.20.2+ 走配置阶段 `PreHandshakePayload`（loader 注册，认证完成后）；能力位 `LoginCaps`（agg/hdr/push/delta/seed/light/pull/ovd）按位与协商，结果入 `PlayerCompressionTracker`。`ServerPlayer <init>` TAIL 消费（`ServerHandshakeActivation.onPlayerInit`：压制原版区块窗口），tick 泵激活：dictionary_sync/index_sync → 聚合 PENDING（5s 无 ACK 降级直发）→ `play_init_s2c`（协商位 + SeedGen 种子）→ 客户端 index_sync 后回激活 ACK → 聚合 ENABLED。**管线级全局包压缩已退役（run9 退役波）**：原版压缩层全程不触碰，通道压缩 = 聚合包内部字典 ZSTD（EventLoop 阈值翻折防双重压缩）+ 区块推送自有压缩。
 
 **区块核心**（客户端进程内区块域）——`network/seedgen/` 影子端（= 本域后端引擎：生成/算光/落盘/淘汰）+ `network/` 顶层摄入管线（ClientChunkPipeline / ClientMetadataHandler / ChunkHash 客户端侧）+ `cache/`（OVD / MainThreadBudget / Bloom / 生命周期）；`chunk.*` 键族 = 本域配置族。
 
@@ -235,3 +235,4 @@ Manifold / 七段 / `#if MC_VER` / `PacketId` / `Identifier` 改代码时自动�
 - [`docs/ai-functional-test.md`](docs/ai-functional-test.md) — AI 游戏内功能测试（minecraft-mod-mcp）
 - [`docs/config-audit.md`](docs/config-audit.md) — 配置项审计
 - [`docs/network-core-followups.md`](docs/network-core-followups.md) — 网络核心收尾核销（**已归档**：直连拓扑下仅存档参考）
+- [`docs/client-chunk-flow-handover.md`](docs/client-chunk-flow-handover.md) — **进行中**：客户端区块数据流对齐 §6 统一 Compare+Pull 的交接（过渡链路清单 / 开发计划 / 清理清单）

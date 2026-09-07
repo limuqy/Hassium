@@ -54,6 +54,13 @@ public abstract class MixinServerPlayer extends Player {
             return;
         }
         if (PlayerCompressionTracker.isCompressionEnabled(self)) {
+            // Pull 模式（Compare+Pull 对齐）：服务端停发 chunk_payload，整柱数据
+            // 由客户端影子 tracking 统一拉取；forget/元数据/SeedRef 不受影响
+            if (io.github.limuqy.mc.hassium.network.handshake.ServerHandshakeActivation.hasCaps(
+                    self.getUUID(), io.github.limuqy.mc.hassium.network.handshake.LoginCaps.PULL_MODE)) {
+                ci.cancel();
+                return;
+            }
             String dimension = io.github.limuqy.mc.hassium.compat.LevelCompat.getDimensionId(self.level());
             if (dimension == null) {
                 dimension = io.github.limuqy.mc.hassium.utils.DimensionKey.OVERWORLD;
@@ -63,6 +70,26 @@ public abstract class MixinServerPlayer extends Player {
             ci.cancel();
         }
     }
+
+    /**
+     * 影子端跳过出生点探测：{@code fudgeSpawnLocation} 会对影子世界做出生点区块
+     * 读/生成（{@code getChunk(FULL)}）——该柱可能被 tracking 悬置（worldgen 压制），
+     * 在影子主循环线程上等待永不完成的 future = 自我死锁。虚拟玩家位置随后由
+     * 真实玩家位置覆盖，出生点探测无意义。
+     */
+    @org.spongepowered.asm.mixin.injection.Redirect(
+            method = "<init>(Lnet/minecraft/server/MinecraftServer;Lnet/minecraft/server/level/ServerLevel;Lcom/mojang/authlib/GameProfile;)V",
+            at = @org.spongepowered.asm.mixin.injection.At(value = "INVOKE",
+                    target = "Lnet/minecraft/server/level/ServerPlayer;fudgeSpawnLocation(Lnet/minecraft/server/level/ServerLevel;)V"))
+    private static void hassium$skipFudgeSpawn(net.minecraft.server.level.ServerPlayer self,
+                                               net.minecraft.server.level.ServerLevel level) {
+        if (!io.github.limuqy.mc.hassium.server.RuntimeServerContext.isShadowServerContext()) {
+            ((MixinServerPlayer) (Object) self).invokeFudgeSpawnLocation(level);
+        }
+    }
+
+    @org.spongepowered.asm.mixin.gen.Invoker
+    public abstract void invokeFudgeSpawnLocation(net.minecraft.server.level.ServerLevel level);
 #endif
 }
 

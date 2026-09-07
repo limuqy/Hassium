@@ -38,6 +38,16 @@ public interface INetworkManagerService {
     void sendSeedRef(ServerPlayer player, FriendlyByteBuf buf);
 
     /**
+     * 服务端主动推送 shadowPullV1 响应（待推送队列泵用；复用原 requestId）。
+     * buf 所有权转移给实现（未消费时释放）。
+     */
+    default void sendShadowPullResponse(ServerPlayer player, FriendlyByteBuf buf) {
+        if (buf != null && buf.refCnt() > 0) {
+            buf.release();
+        }
+    }
+
+    /**
      * 发送聚合字典同步到客户端（服务端调用；Play 期 ZSTD 安装后）。
      * 三端各自走已注册的 dictionary_sync 通道。
      */
@@ -73,3 +83,4 @@ public interface INetworkManagerService {
     default void announcePreHandshake(Connection connection) {
     }
 }
+

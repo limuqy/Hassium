@@ -83,6 +83,12 @@ public final class ServerHandshakeActivation {
         PENDING.add(player);
     }
 
+    /** 该玩家协商位是否含指定能力（未知玩家返回 false）；P2 推送抑制判定用。 */
+    public static boolean hasCaps(java.util.UUID playerId, int bit) {
+        Integer caps = playerId == null ? null : ACTIVE_CAPS.get(playerId);
+        return caps != null && (caps & bit) != 0;
+    }
+
     /**
      * 每 tick 泵（MixinMinecraftServer tickServer TAIL；仅专用服）。
      */

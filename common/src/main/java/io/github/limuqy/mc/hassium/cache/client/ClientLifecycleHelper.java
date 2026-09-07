@@ -64,6 +64,9 @@ public final class ClientLifecycleHelper {
      */
     public static void onLogin() {
         io.github.limuqy.mc.hassium.utils.LoginTiming.markLogin(); // T0b 诊断：handleLogin 时刻（总耗时起点）
+        // 影子虚拟玩家 tracking 会话随新连接重置：R2 复用 park 实例时旧虚拟玩家仍在
+        // 影子世界且位置未变 → 不会重新选柱 → R2 黑洞；登录即重建会话重新 tracking
+        io.github.limuqy.mc.hassium.network.seedgen.ShadowTrackingSession.reset();
         // connect 的 clearLevel 可能已 pauseEncoding；handleLogin 时 revert 已结束，必须放行
         // drainReady / hash 抽干 / unpark（否则 NeoForge 易卡在暂停态 → landed=0）。
         io.github.limuqy.mc.hassium.storage.ShadowStorageManager.resumeEncoding();

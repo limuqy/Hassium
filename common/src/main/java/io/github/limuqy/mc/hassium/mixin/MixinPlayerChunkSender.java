@@ -90,6 +90,12 @@ public abstract class MixinPlayerChunkSender {
         if (packet instanceof ClientboundLevelChunkWithLightPacket chunkPacket
                 && PlayerCompressionTracker.isCompressionEnabled(player)) {
             if (!io.github.limuqy.mc.hassium.server.RuntimeServerContext.isShadowServerContext()) {
+                // Pull 模式（Compare+Pull 对齐）：服务端停发 chunk_payload，整柱数据
+                // 由客户端影子 tracking 统一拉取
+                if (io.github.limuqy.mc.hassium.network.handshake.ServerHandshakeActivation.hasCaps(
+                        player.getUUID(), io.github.limuqy.mc.hassium.network.handshake.LoginCaps.PULL_MODE)) {
+                    return;
+                }
                 String dimension = io.github.limuqy.mc.hassium.compat.LevelCompat.getDimensionId(player.level());
                 if (dimension == null) {
                     dimension = io.github.limuqy.mc.hassium.utils.DimensionKey.OVERWORLD;
