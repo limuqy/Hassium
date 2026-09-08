@@ -55,20 +55,31 @@ pull8 冒烟（`vdn_1_20_1_fabric_I_pull8`）双端日志定位出两个与 §3 
   3. `ShadowTrackingSession` 增设**静态基准光盘**：虚拟玩家坐下瞬间快照 homeChunk，
      以其为心把欧氏半径 r=22 的整圆柱逐环补齐（南北交替混合序 + 25ms 发射闸防洪峰），
      绕过移动窗口不对称：不进影子注入表的格子一律以无基线/FULL 形式进场。
-- **净效应（口径对账后修正，2026-09-08）**：早期「landed 1268→1384，残差 ~180 柱，下一级
-  瓶颈在服务端幽灵生成供应调度」的归因**被 bootgrid3 口径对账推翻**。`clientLandedChunkCount`
-  只计网络 FULL 落地，**不含 cacheHit（UNCHANGED 比对命中后本地缓存重交付）**；R1 是热缓存
-  场景（bootgrid 系列同世界连跑），一批盘面柱走 compare→UNCHANGED→cache 重交付，天然不计入
-  landed。对账（bootgrid3）：光盘 1517 = 网络 FULL 1135（盘内）+ UNCHANGED→cacheHit ≈167；
-  加上移动窗口盘外 215 柱，**R1 实际覆盖 = landed 1350 + cacheHit 178 = 1528 柱 ≈ 老推送
-  基线 1529（差 1）**——**R1 覆盖缺口已闭合**。跨轮核对：bootgrid1（方阵 2025 格，裁角前
-  代码）sum=1512、bootgrid2（编译红期陈旧二进制）sum=1398、bootgrid3（现行代码）sum=1528；
-  bootgrid2 的 1270 低谷是坏二进制伪影，非代码退化。服务端零失败、零超时、零 tick 拖延，
-  FORCED-demand 泵供应充足，**不存在待解决的供应调度瓶颈**；`repairPool` 预留位无需接线，
-  保留声明（低频回充已由 bootGridCells 一次发射覆盖）。
-- **遗留（低优先级）**：`clientLandedChunkCount` 口径偏窄导致跨轮误判（1268/1270/1350 的
-  波动实为 cacheHit 占比波动），后续可把 cacheHit 重交付并入 landed 或单列 `landedTotal`，
-  避免下一轮会话再次误归因。
+- **净效应（2026-09-08 二次修正，bootgrid4 根治）**：早期「landed 1268→1384，
+  残差 ~180 柱」的归因链条被两级修正：
+  1. **口径问题**（bootgrid3 对账发现）：`clientLandedChunkCount` 只计网络 FULL 落地，
+     不含 cacheHit（UNCHANGED 命中后缓存重交付）；R2 探针实证 cache 回放会进 applied trace
+     （R2: recv=0, applied=527=cacheHit, R2 ⊆ R1）——故 landed+cacheHit **不可相加**。
+  2. **发射 bug 根治**（bootgrid4 实证）：`drainBootGrid` 的 `bootGridArmed=false` 写在
+     **prime 填充块内部**（354 行），导致整张 1517 格光盘只在首轮发射了 ≤128 格
+     （最内环），随后 `!bootGridArmed` 直接 return，**外环（r15–22 西弧/南北滞环）
+     从未被请求**——这是 o 区 352 柱（老推送有/新 trace 无）的真实根因，与口径无关。
+     修复：解除武装移到发射循环掏空之后（`bootGridCells.isEmpty()` 时）。
+  3. **bootgrid4 结果（修复后，1.20.1 fabric classic PASS）**：R1 applied **1879** 柱
+     （≫ 老推送基线 1529），老形状 cheb21@(1,0) ∩ euclid²≤490@(1,0) 覆盖 **1508/1529
+     （98.6%）**，独缺 SE 楔形 21 柱（E:5+S:16，跨 bootgrid3/4 完全一致 = 系统性格局：
+     盘心 (0,0) vs 老推送中心 (1,0) 的一格偏移所致，量级 ≤1.4%，可不追）；另加 371 柱
+     bonus（东移窗口 cheb18@(4,0) + 盘面条纹）。R2 565 全缓存重交付（newFull=0, push=0）。
+     服务端零 stall 零 ERROR 零超时；385 个 range 拒绝全在 cheb≥22 界外或为已送达柱的
+     重复请求（44 个闸内侧拒绝柱全部另行 applied，无害）。
+- **追溯结论**：bootgrid1 的 1384 与 bootgrid2 的 1270 都是在光盘被腰斩状态下
+  （各轮只发首批 128 + 窗口贡献）测得的，「净效应」数字只有窗口贡献可比；光盘本体
+  直到 bootgrid4 才真正全额射出。`repairPool` 预留位维持不接线（bootGridCells 全额
+  发射已覆盖回充语义，无风暴）。
+- **遗留（低优先级）**：① `clientLandedChunkCount` 口径偏窄（不含 cacheHit 重交付），
+  建议并入或单列 `landedTotal` 供指标阅读；② 老推送中心 (1,0) 相对 homeChunk 的一格
+  SE 偏移若需 100% 形状重合，可从 vanilla ChunkMap 追踪中心推导后对齐光盘中心；
+  ③ aggregation splits 24 次（启动高峰）属正常。
 
 ## 1. 背景与结论速览
 

@@ -351,7 +351,6 @@ public final class ShadowTrackingSession {
             DebugLogger.info(DebugLogger.LogType.NETWORK,
                     "[SHADOW_TRACK] boot grid primed around ({},{}) radius={} cells={} (dimension={})",
                     homeChunk.x, homeChunk.z, radius, bootGridCells.size(), currentDimension);
-            bootGridArmed = false;
         }
         // 洪峰闸：两次光盘发射之间至少间隔 25ms，避免数百柱的无基线请求在同一心跳涌入服务端按需装载
         long nowMs = System.currentTimeMillis();
@@ -372,6 +371,12 @@ public final class ShadowTrackingSession {
         }
         if (sent > 0) {
             lastBootEmitMs = nowMs;
+        }
+        if (bootGridCells.isEmpty()) {
+            // 整盘发射完毕（本批恰好掏空）：本会话盘面交付结束；断连重连重新落座时再武装。
+            // 注意：不能在前面的 prime 块内解除武装——那会在首批发射后杀掉整张盘，
+            // 外环柱（西弧/南北滞环）永远不会被请求（bootgrid 系列空洞的根因）。
+            bootGridArmed = false;
         }
         emitPullGroups(withBaseline, withoutBaseline);
     }
