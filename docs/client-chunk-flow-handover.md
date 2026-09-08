@@ -55,16 +55,20 @@ pull8 冒烟（`vdn_1_20_1_fabric_I_pull8`）双端日志定位出两个与 §3 
   3. `ShadowTrackingSession` 增设**静态基准光盘**：虚拟玩家坐下瞬间快照 homeChunk，
      以其为心把欧氏半径 r=22 的整圆柱逐环补齐（南北交替混合序 + 25ms 发射闸防洪峰），
      绕过移动窗口不对称：不进影子注入表的格子一律以无基线/FULL 形式进场。
-- **净效应**：独特柱 1268 → **1384**（峰值环突破到 r22），全程无风暴；后续圆柱裁角 +
-  南北交替 + 间隙闸组合未再抬升（退化至 1270±），指向**下一级瓶颈在服务端幽灵生成
-  的供应调度**（绕物理邻近优先的 FORCED-demand 泵），不属于本文会话改动的收敛区间。
-- **会话收尾修复与复测（2026-09-07）**：`ShadowTrackingSession` 曾残留未定义符号
-  `niOffset` 与孤立 `QQQX` 行（编译红）。已修复：南北交替改为棋盘奇偶 50/50 分桶
-  （`((dr+dc)&1)==0`），`reset()` 补清 `repairPool`/`lastRepairSweepNs`（补给池字段当前
-  仅声明未接线，属下一级供应调度实验的预留位）。复测 `bootgrid3`（classic，PASS）：
-  **R1 landed 1350 / applied 1400**（pull12 基线 1268，+6.5%；bootgrid1 峰值 1384 的
-  -2.5% 以内，波动属会话间噪声量级），R2 527 全缓存重交付（newFull=0、push=0），
-  全程无风暴、零 ERROR。**1384/1350 双点确认光盘补环增益可复现，残差归因结论不变**。
+- **净效应（口径对账后修正，2026-09-08）**：早期「landed 1268→1384，残差 ~180 柱，下一级
+  瓶颈在服务端幽灵生成供应调度」的归因**被 bootgrid3 口径对账推翻**。`clientLandedChunkCount`
+  只计网络 FULL 落地，**不含 cacheHit（UNCHANGED 比对命中后本地缓存重交付）**；R1 是热缓存
+  场景（bootgrid 系列同世界连跑），一批盘面柱走 compare→UNCHANGED→cache 重交付，天然不计入
+  landed。对账（bootgrid3）：光盘 1517 = 网络 FULL 1135（盘内）+ UNCHANGED→cacheHit ≈167；
+  加上移动窗口盘外 215 柱，**R1 实际覆盖 = landed 1350 + cacheHit 178 = 1528 柱 ≈ 老推送
+  基线 1529（差 1）**——**R1 覆盖缺口已闭合**。跨轮核对：bootgrid1（方阵 2025 格，裁角前
+  代码）sum=1512、bootgrid2（编译红期陈旧二进制）sum=1398、bootgrid3（现行代码）sum=1528；
+  bootgrid2 的 1270 低谷是坏二进制伪影，非代码退化。服务端零失败、零超时、零 tick 拖延，
+  FORCED-demand 泵供应充足，**不存在待解决的供应调度瓶颈**；`repairPool` 预留位无需接线，
+  保留声明（低频回充已由 bootGridCells 一次发射覆盖）。
+- **遗留（低优先级）**：`clientLandedChunkCount` 口径偏窄导致跨轮误判（1268/1270/1350 的
+  波动实为 cacheHit 占比波动），后续可把 cacheHit 重交付并入 landed 或单列 `landedTotal`，
+  避免下一轮会话再次误归因。
 
 ## 1. 背景与结论速览
 
