@@ -64,7 +64,6 @@ See [Compatibility](Compatibility-en).
 
 - Repo: `https://github.com/limuqy/Hassium`
 - Build system: Architectury Loom + Manifold; `versionProperties/<ver>.properties` controls per-version dependencies
-- Anchor compile (developer): `./gradlew compileAnchors`
 - Version boundary scan: `./gradlew scanVersionBoundaries`
 
 ---

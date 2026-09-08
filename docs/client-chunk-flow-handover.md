@@ -175,7 +175,7 @@ pull8 冒烟（`vdn_1_20_1_fabric_I_pull8`）双端日志定位出两个与 §3 
 ## 7. 运维注意（本次会话实证）
 
 - 长 gradle 任务一律后台执行并等 `BUILD SUCCESSFUL|FAILED`；被 kill 的运行会留下僵尸 daemon 注册项（实测 9 busy），卡启动时 `.\gradlew.bat --stop` 清场。
-- `compileAnchors` 为重量级多版本任务，空闲时段单独跑；单版本段改动用 `common:compileJava` 校验即可。
+- 多版本改动以 `common:compileJava` 抽查受影响段即可（compileAnchors 全矩阵任务已移除）。
 - 冒烟前确认 server/client toml 的 `chunk.seedGenEnabled` 与场景匹配（classic 应为 false）。
 
 ## 8. 关键引用

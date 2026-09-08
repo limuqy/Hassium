@@ -15,7 +15,6 @@ Minecraft 1.20.1 / 1.21.1–1.21.11 多加载器模组（Fabric / Forge / NeoFor
 | | **pwsh 7** | **Git Bash** |
 |--|------------|--------------|
 | Gradle | `.\gradlew.bat common:compileJava` | `./gradlew common:compileJava` |
-| 锚点编译 | `.\gradlew.bat compileAnchors` 或 `.\scripts\compile-anchors.ps1` | `./gradlew compileAnchors` 或 `./scripts/compile-anchors.sh` |
 | 冒烟 | `.\scripts\runtime-smoke-test.ps1 ...` | `pwsh -File ./scripts/runtime-smoke-test.ps1 ...`（**无 .sh**；不要 `-NoProfile`） |
 | `-Pmc_ver` | **必须** `"-Pmc_ver=1.20.1"`，否则被拆成 `1` | `-Pmc_ver=1.20.1` 即可（bash 不拆点号） |
 
@@ -29,7 +28,6 @@ Minecraft 1.20.1 / 1.21.1–1.21.11 多加载器模组（Fabric / Forge / NeoFor
 .\gradlew.bat build
 .\gradlew.bat common:test
 .\gradlew.bat scanVersionBoundaries
-.\gradlew.bat compileAnchors
 ```
 
 ```bash
@@ -42,7 +40,6 @@ Minecraft 1.20.1 / 1.21.1–1.21.11 多加载器模组（Fabric / Forge / NeoFor
 ./gradlew build
 ./gradlew common:test
 ./gradlew scanVersionBoundaries
-./gradlew compileAnchors
 ```
 
 **禁止套壳**（两壳都适用）：不要 `cmd /c "gradlew.bat --no-daemon ..."`，不要再包 `pwsh -NoProfile ...`，不要从 Git Bash 再 `cmd.exe /c` 去跑 `.bat`。Git Bash 直接 `./gradlew`；pwsh 直接 `.\gradlew.bat`。`--no-daemon` 见下节。
@@ -88,7 +85,7 @@ Minecraft 1.20.1 / 1.21.1–1.21.11 多加载器模组（Fabric / Forge / NeoFor
 写文件 / 读日志：**pwsh 7**（`pwsh`，勿用 Windows PowerShell 5.1——其 `utf8` 带 BOM 且不支持 `utf8NoBOM`）。Git Bash 里编 Gradle 用 `./gradlew`；改 toml、跑冒烟仍调 `pwsh`。
 
 - **写文件**：pwsh 7 的 `Set-Content`/`Out-File` 默认即 UTF-8 无 BOM，写 toml/properties **不必** `-Encoding`；night-config 对 BOM 敏感（BOM 会导致整份配置静默回落默认）。
-- **读日志**：捕获 stdout 走管道、无真实控制台时，pwsh 会把输出编码锁成系统 ACP（中文 Windows = GBK），且首次输出后改不了。本机 profile 在任何输出前把 `[Console]::OutputEncoding` / `$OutputEncoding` 设为 UTF-8 无 BOM。**代理命令不要加 `-NoProfile`**，否则这段被跳过、中文乱码。`-NoProfile` 只留给必须隔离的内部子进程（如 Gradle 调 `compile-anchors.ps1`），不要套在自己的 Shell 命令外层。
+- **读日志**：捕获 stdout 走管道、无真实控制台时，pwsh 会把输出编码锁成系统 ACP（中文 Windows = GBK），且首次输出后改不了。本机 profile 在任何输出前把 `[Console]::OutputEncoding` / `$OutputEncoding` 设为 UTF-8 无 BOM。**代理命令不要加 `-NoProfile`**，否则这段被跳过、中文乱码。`-NoProfile` 只留给必须隔离的内部子进程，不要套在自己的 Shell 命令外层。
 `-Pmc_ver`：pwsh 必须 `"-Pmc_ver=1.20.1"`（引号）；Git Bash 写 `-Pmc_ver=1.20.1` 即可。
 子工程构建产物按版本分目录（`<module>/build/<mc_ver 下划线化>/`，如 `common/build/1_21_11/`）：common 切 `-Pmc_ver` 互不覆盖、切回即 up-to-date；但 **fabric/forge/neoforge loader 子项目还会产出不分版本的泛型 `build/classes`**，跨版本切换可能残留旧变体类与版本目录并存（症状：loader 启动即崩，如 NeoForge 报 `must have exactly 1 public constructor, found 2`）。切版本后 loader 起不来时先删 `<loader>/build` 整目录再跑。根项目 `build/`（jdt-cp、smoke-test 日志）不分版本。
 

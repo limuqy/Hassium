@@ -40,7 +40,7 @@ $versionList = @()
 if ($Versions) {
     $versionList = $Versions.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ }
 } elseif ($AnchorsOnly) {
-    # 锚点取自 docs/version-segments.md 的「编译锚点」表（段首 + 段尾），与 compileAnchors 保持一致。
+    # 锚点取自 docs/version-segments.md 的「编译锚点」表（段首 + 段尾）。
     $versionList = $AnchorList
 } else {
     # 全量：遍历 versionProperties 目录下全部 *.properties。按「版本号语义」排序，

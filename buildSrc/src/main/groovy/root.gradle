@@ -55,29 +55,6 @@ tasks.register('scanVersionBoundaries') {
     }
 }
 
-tasks.register('compileAnchors') {
-    group = 'verification'
-    description = 'Compile all 7 anchor MC versions × builds_for (invokes scripts/compile-anchors.*)'
-    doLast {
-        def isWindows = System.getProperty('os.name').toLowerCase().contains('windows')
-        def script = isWindows
-                ? file('scripts/compile-anchors.ps1')
-                : file('scripts/compile-anchors.sh')
-        if (!script.exists()) {
-            throw new GradleException("Missing ${script}")
-        }
-        def pb = isWindows
-                ? new ProcessBuilder('pwsh', '-ExecutionPolicy', 'Bypass', '-File', script.absolutePath)
-                : new ProcessBuilder('bash', script.absolutePath)
-        pb.directory(rootDir)
-        pb.inheritIO()
-        def code = pb.start().waitFor()
-        if (code != 0) {
-            throw new GradleException("compileAnchors failed with exit code ${code}")
-        }
-    }
-}
-
 // 当前 mc_ver 下已 include 的加载器 → 一并上传 CurseForge
 tasks.register('publishCurseForge') {
     group = 'publishing'

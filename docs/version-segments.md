@@ -83,7 +83,6 @@ MC_1_21_11
 
 ```bash
 ./gradlew scanVersionBoundaries
-./gradlew compileAnchors          # 或 scripts/compile-anchors.ps1 / .sh
 ```
 
 推进顺序：按 **A → D → I** 锚点推进；禁止并行铺满七段。当前状态见文末附录。
