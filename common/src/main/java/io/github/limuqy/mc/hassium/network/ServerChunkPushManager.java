@@ -499,21 +499,6 @@ public class ServerChunkPushManager {
     }
 
     /**
-     * 已编码包字节（与 chunkHash / 反透视视图一致的包数据）。
-     */
-    /**
-     * 已准备的区块数据：拦截路径缓存 {@code packet}（纯数据，后台 encode）或广播路径缓存线格式 {@code data}；
-     * 二选一，另一为 null。
-     */
-    private record PreparedChunk(byte[] data, ClientboundLevelChunkWithLightPacket packet, long contentHash) {}
-
-    /**
-     * 每玩家：chunkPosLong → 已编码的 ClientboundLevelChunkWithLightPacket 线格式字节。
-     * 在广播/初始发送拦截时写入，miss 全量请求时优先取出，避免从 LevelChunk 重建旁路反透视。
-     */
-    private final Map<UUID, ConcurrentHashMap<Long, PreparedChunk>> preparedChunkPackets = new ConcurrentHashMap<>();
-
-    /**
      * 数据请求处理线程池（hash 计算 + 压缩发送）
      */
     private volatile ThreadPoolExecutor pushPool;
@@ -657,49 +642,6 @@ public class ServerChunkPushManager {
 
 
 
-    /** FORCE_FULL 任务覆盖较弱的可见性推送任务。 */
-    static boolean shouldReplaceQueuedPush(PushKind existing, PushKind incoming) {
-        return incoming == PushKind.FORCE_FULL && existing != PushKind.FORCE_FULL;
-    }
-
-
-    /**
-     * 后台直发剥光全量：复用已准备的快照；无快照的柱回退到推送队列。
-     */
-    private void directPushStrippedFull(ServerPlayer player, String dimension, List<ChunkPos> chunks) {
-        ChunkSender sender = ChunkSender.getInstance();
-        if (sender == null) {
-            for (ChunkPos pos : chunks) {
-                enqueuePushTask(player, pos, dimension, PushKind.FORCE_FULL);
-            }
-            return;
-        }
-
-        ServerLevel level = PlayerCompat.getServerLevel(player);
-        net.minecraft.core.RegistryAccess registryAccess = level != null ? level.registryAccess() : null;
-        List<ChunkPos> firstGate = new ArrayList<>();
-        for (ChunkPos pos : chunks) {
-            PreparedChunk prepared = takePreparedChunkPacket(player.getUUID(), pos);
-            if (prepared == null) {
-                firstGate.add(pos);
-                continue;
-            }
-            byte[] chunkData = prepared.data();
-            if (chunkData == null && prepared.packet() != null && registryAccess != null) {
-                chunkData = encodeChunkPacket(prepared.packet(), registryAccess);
-            }
-            if (chunkData == null) {
-                firstGate.add(pos);
-                continue;
-            }
-            compressAndSend(player, new PushTask(pos, dimension, null, PushKind.FORCE_FULL),
-                    chunkData, prepared.contentHash(), sender);
-        }
-        for (ChunkPos pos : firstGate) {
-            enqueuePushTask(player, pos, dimension, PushKind.FORCE_FULL);
-        }
-    }
-
     /**
      * 统一入队入口：所有推送义务（fullReq、bloom miss 直推、resync 补发、出界复活、
      * section delta 响应）都经此进入 per-player FIFO 批次队列。排队批满则拒绝。
@@ -715,7 +657,7 @@ public class ServerChunkPushManager {
         }
         // 双保险：pull 模式玩家整柱数据类推送停发（元数据/SeedRef 不受影响）；
         // mixin 层（MixinServerPlayer / MixinPlayerChunkSender）已先行拦截
-        if ((kind == PushKind.FULL_VISIBLE || kind == PushKind.FORCE_FULL) && isPullMode(player)) {
+        if (kind == PushKind.FULL_VISIBLE && isPullMode(player)) {
             return false;
         }
         PlayerPushQueue queue = pushQueues.computeIfAbsent(player.getUUID(), ignored -> new PlayerPushQueue());
@@ -1055,34 +997,27 @@ public class ServerChunkPushManager {
 
 
             try {
-                // 主线程快照（buildChunkPacket）：优先用拦截时缓存的包字节/packet
-                PreparedChunk prepared = takePreparedChunkPacket(playerId, task.pos());
-                byte[] chunkData = prepared != null ? prepared.data() : null;
-                ClientboundLevelChunkWithLightPacket packet = prepared != null ? prepared.packet() : null;
-                long contentHash = prepared != null ? prepared.contentHash() : 0L;
-                if (chunkData == null) {
-                    if (packet == null) {
-                        LevelChunk chunk = level.getChunkSource().getChunkNow(task.pos().x, task.pos().z);
-                        if (chunk == null) {
-                            Constants.LOG.warn("[PROCESS_QUEUE] Chunk {} not loaded, skipping", task.pos());
-                            continue;
-                        }
-                        long tBuild = System.nanoTime();
-                        packet = buildChunkPacket(chunk, level);
-                        diag(D_BUILD, System.nanoTime() - tBuild);
-                        if (packet == null) {
-                            Constants.LOG.warn("[PROCESS_QUEUE] Failed to build chunk packet {}", task.pos());
-                            continue;
-                        }
-                    }
+                // 主线程快照（buildChunkPacket）
+                ClientboundLevelChunkWithLightPacket packet = null;
+                long contentHash = 0L;
+                LevelChunk chunk = level.getChunkSource().getChunkNow(task.pos().x, task.pos().z);
+                if (chunk == null) {
+                    Constants.LOG.warn("[PROCESS_QUEUE] Chunk {} not loaded, skipping", task.pos());
+                    continue;
                 }
-                if (contentHash == 0L && packet != null) {
+                long tBuild = System.nanoTime();
+                packet = buildChunkPacket(chunk, level);
+                diag(D_BUILD, System.nanoTime() - tBuild);
+                if (packet == null) {
+                    Constants.LOG.warn("[PROCESS_QUEUE] Failed to build chunk packet {}", task.pos());
+                    continue;
+                }
+                if (contentHash == 0L) {
                     contentHash = ChunkContentHashUtil.combineSectionHashes(
                             ChunkContentHashUtil.computeSectionHashesFromPacket(
                                     packet.getChunkData(), level.getSectionsCount(), level.registryAccess()));
                 }
                 if (task.kind() == PushKind.FULL_VISIBLE
-                        && packet != null
                         && isSeedGenFor(playerId, task.pos(), task.dimension())) {
                     Map<Integer, Long> sectionHashes = ChunkContentHashUtil.computeSectionHashesFromPacket(
                             packet.getChunkData(), level.getSectionsCount(), level.registryAccess());
@@ -1096,7 +1031,7 @@ public class ServerChunkPushManager {
                             level.registryAccess(), sender, 0L));
                     continue;
                 }
-                works.add(new SealedWork(player, task, chunkData != null ? chunkData : packet,
+                works.add(new SealedWork(player, task, packet,
                         level.registryAccess(), sender, contentHash));
             } catch (Exception e) {
                 Constants.LOG.error("[PROCESS_QUEUE] Failed to prepare chunk {} for player {}",
@@ -1317,49 +1252,6 @@ public class ServerChunkPushManager {
     }
 
 
-    private void putPreparedChunkPacket(UUID playerId, ChunkPos pos, byte[] data) {
-        putPreparedChunkPacket(playerId, pos, new PreparedChunk(data, null, 0L));
-    }
-
-    /**
-     * 拦截路径：同步缓存已构建的 packet（主线程零 encode），消费方（drain）后台 encode。
-     */
-    private void putPreparedChunkPacket(UUID playerId, ChunkPos pos,
-                                        ClientboundLevelChunkWithLightPacket packet) {
-        putPreparedChunkPacket(playerId, pos, new PreparedChunk(null, packet, 0L));
-    }
-
-    private void putPreparedChunkPacket(UUID playerId, ChunkPos pos, PreparedChunk prepared) {
-        ConcurrentHashMap<Long, PreparedChunk> map =
-                preparedChunkPackets.computeIfAbsent(playerId, k -> new ConcurrentHashMap<>());
-        map.put(ChunkPos.asLong(pos.x, pos.z), prepared);
-    }
-
-    private PreparedChunk takePreparedChunkPacket(UUID playerId, ChunkPos pos) {
-        ConcurrentHashMap<Long, PreparedChunk> map = preparedChunkPackets.get(playerId);
-        if (map == null) {
-            return null;
-        }
-        PreparedChunk prepared = map.remove(ChunkPos.asLong(pos.x, pos.z));
-        if (map.isEmpty()) {
-            preparedChunkPackets.remove(playerId, map);
-        }
-        return prepared;
-    }
-
-    private void discardPreparedChunkPacket(UUID playerId, ChunkPos pos) {
-        ConcurrentHashMap<Long, PreparedChunk> map = preparedChunkPackets.get(playerId);
-        if (map == null) {
-            return;
-        }
-        map.remove(ChunkPos.asLong(pos.x, pos.z));
-        if (map.isEmpty()) {
-            preparedChunkPackets.remove(playerId, map);
-        }
-    }
-
-
-
     /**
      * 移除玩家的所有队列（含 bloom 层——玩家断开后旧 bloom 必须失效：
      * 否则 R2 重连 trackChunk 会用 R1 残留的空 bloom 误判 miss → 全量直推，
@@ -1371,7 +1263,6 @@ public class ServerChunkPushManager {
         if (queue != null) {
             queue.clear();
         }
-        preparedChunkPackets.remove(playerId);
         initialPlayerChunkPos.remove(playerId);
         resumePlayers.remove(playerId);
         playerLightComputeSupported.remove(playerId);
@@ -1384,7 +1275,6 @@ public class ServerChunkPushManager {
      */
     public void shutdown() {
         pushQueues.clear();
-        preparedChunkPackets.clear();
         initialPlayerChunkPos.clear();
         resumePlayers.clear();
         // review-fix: T3-52：能力表一并清理
@@ -1464,8 +1354,8 @@ public class ServerChunkPushManager {
             return data != null ? data.contentHash() : 0L;
         }
     }
-    /** 推送任务类型：可见全量、强制全量、元数据快照、SeedRef。 */
-    enum PushKind { FULL_VISIBLE, FORCE_FULL, METADATA, SEED_REF }
+    /** 推送任务类型：可见全量、元数据快照、SeedRef。 */
+    enum PushKind { FULL_VISIBLE, METADATA, SEED_REF }
 
 
     /**
@@ -1569,18 +1459,12 @@ public class ServerChunkPushManager {
         }
 
         /**
-         * 同柱已有任务视为成功；FORCE_FULL 原地升级弱义务。主 FIFO 满时改入 overflow，
+         * 同柱已有任务视为成功（同类义务去重）。主 FIFO 满时改入 overflow，
          * 并在 overflow 未清空前拒绝后来任务直接进入主 FIFO，避免失败柱被后到任务反超。
          */
         synchronized boolean enqueue(PushTask task) {
-            PushTask existing = findSameTask(tasks, task);
-            if (existing != null) {
-                upgradeInPlace(tasks, existing, task);
-                return true;
-            }
-            existing = findSameTask(overflow, task);
-            if (existing != null) {
-                upgradeInPlace(overflow, existing, task);
+            // 同柱已有任务视为成功（同类义务去重）
+            if (findSameTask(tasks, task) != null || findSameTask(overflow, task) != null) {
                 return true;
             }
             if (!overflow.isEmpty() || tasks.size() >= queueCapacity()) {
@@ -1603,19 +1487,6 @@ public class ServerChunkPushManager {
                 }
             }
             return null;
-        }
-
-        private static void upgradeInPlace(java.util.ArrayDeque<PushTask> queue,
-                                           PushTask existing, PushTask replacement) {
-            if (!shouldReplaceQueuedPush(existing.kind(), replacement.kind())) {
-                return;
-            }
-            java.util.ArrayDeque<PushTask> rebuilt = new java.util.ArrayDeque<>(queue.size());
-            while (!queue.isEmpty()) {
-                PushTask current = queue.removeFirst();
-                rebuilt.addLast(current == existing ? replacement : current);
-            }
-            queue.addAll(rebuilt);
         }
 
         private void addToPrimary(PushTask task) {

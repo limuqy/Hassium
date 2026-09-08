@@ -34,6 +34,11 @@ import java.util.List;
 public class ClientChunkHandler {
     /** 仅诊断链路使用的区块数据来源；绝不编码进网络包或存档。 */
     public enum TraceOrigin {
+        /**
+         * 经 chunk_payload 归一通道到达的 FULL（Compare+Pull 响应正文 / 影子 tracking
+         * 本地存货 / 拦截模式先达数据）；历史命名为“服务端推送”，pull 模式下
+         * 不代表服务端自主灌输——稳态期间该来源应为零。
+         */
         SERVER_PUSH("server_push"),
         /** Compare+Pull 响应 FULL 落地（影子 tracking 采集；非服务端自主推送）。 */
         REMOTE_PULL("remote_pull"),
