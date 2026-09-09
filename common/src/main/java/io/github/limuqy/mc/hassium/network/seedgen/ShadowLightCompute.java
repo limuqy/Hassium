@@ -365,8 +365,6 @@ public final class ShadowLightCompute {
      * 不因层不全/全局收敛挡回传；超时仍 pushReady（标脏），补光走 drainLightMasks。
      */
     private static final long CONVERGENCE_WAIT_TIMEOUT_MS = 5_000L;
-    /** 等邻柱完成 INITIALIZE_LIGHT 再 lightChunk 的上限。超时按原版视距边缘处理。 */
-    static final long NEIGHBOR_PACK_WAIT_MS = 2_000L;
     /** 每轮消费循环「光屏障提交」总量上限（含 pending/generated/delta/light 全部来源，
      *  不再仅限 pending 批）。两阶段屏障每柱仅 ~3 个引擎任务（initializeLight PRE+POST、
      *  lightChunk PRE+POST 的提交单元），24 柱 ≈ 72 任务，远低于 1000 并发阈值。 */
@@ -2203,8 +2201,6 @@ public final class ShadowLightCompute {
         final TraceOrigin traceOrigin;
         /** 屏障提交时刻；光屏障完成时用于记重算耗时。 */
         volatile long submittedAtNs;
-        /** 等邻柱 INITIALIZE_LIGHT 的起点；0=尚未进入 LIGHT 等待。 */
-        volatile long packWaitStartMs;
 
         LightTask(long key, LightSource source, Object token,
                   net.minecraft.world.level.chunk.LevelChunk chunk,

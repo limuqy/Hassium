@@ -1,5 +1,6 @@
 package io.github.limuqy.mc.hassium.network.seedgen;
 
+import io.github.limuqy.mc.hassium.compat.ChunkShapeCompat;
 import io.github.limuqy.mc.hassium.compat.LevelCompat;
 import io.github.limuqy.mc.hassium.compat.ShadowPlayerCompat;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
@@ -265,12 +266,13 @@ public final class ShadowTrackingSession {
     }
 
     private int resolveViewDistance() {
-        // 服务端权威半径 + 外扩边距（与各 loader ShadowPullHandler maxDistance =
-        // 真实视距 + ShadowPullRadii.AUTHORITY_MARGIN 对齐）：确保阴影选择窗口 ⊇ 可签发
-        // 环形请求，身前身后对称补偿（身侧/身后滞留环也能被选择到）。
+        // 原版玩家 tracking 半径（ChunkMap.setViewDistance 用 viewDistance+1 构造 tracking
+        // view）：形状轴深 = vd+2，恰好 = 服务端签发上界（ShadowPullHandler maxDistance =
+        // vd + AUTHORITY_MARGIN）。光照邻域不再额外外扩——邻柱后到时 LightDelta
+        // 自愈链路（collectLightUpdate → drainLightMasks）修正边缘光。
         int radius = serverViewDistance > 0
-                ? serverViewDistance + io.github.limuqy.mc.hassium.network.ShadowPullRadii.AUTHORITY_MARGIN
-                : DEFAULT_VIEW_DISTANCE + io.github.limuqy.mc.hassium.network.ShadowPullRadii.AUTHORITY_MARGIN;
+                ? serverViewDistance + 1
+                : DEFAULT_VIEW_DISTANCE + 1;
         return Math.min(radius, MAX_VIEW_DISTANCE);
     }
 
@@ -315,19 +317,22 @@ public final class ShadowTrackingSession {
             if (!sel.dimension().equals(currentDimension)) {
                 continue; // 已切维度的旧选中柱作废
             }
-            ChunkPos pos = new ChunkPos(sel.x(), sel.z());
             // 预过滤中心 = 虚拟玩家实时位置（泵循环内 applyState 已先行移动，跟随真实玩家）；
             // 服务端校验中心同为真实玩家 chunkPosition()（逐请求实时取）。不能用 homeChunk——
-            // 那是落座快照，玩家移动超出 vd+2 后会把新区域柱全部错杀（服务端本可签发）。
-            ChunkPos center = virtualPlayer != null ? virtualPlayer.chunkPosition() : homeChunk;
+            // 那是落座快照，玩家移动超出窗口后会把新区域柱全部错杀（服务端本可签发）。
+            // 形状 = 原版玩家 tracking 圆角方形（range = vd+1，轴深 vd+2）：服务端签发域
+            // 上界恰好是 chebyshev vd+2，本形状 ⊆ 签发域，不会发出必拒请求；方形外圈
+            // （光照邻域外扩）不再拉取，边缘光由邻柱到位后的 LightDelta 自愈。
+            ChunkPos center = virtualPlayer == null ? null : virtualPlayer.chunkPosition();
             if (serverViewDistance > 0 && center != null
-                    && Math.max(Math.abs(sel.x() - center.x), Math.abs(sel.z() - center.z))
-                            > serverViewDistance + io.github.limuqy.mc.hassium.network.ShadowPullRadii.AUTHORITY_MARGIN) {
-                continue; // 越出服务端 maxDistance（chebyshev vd+2）签发域：必被拒，直接丢弃
+                    && !ChunkShapeCompat.contains(center.x, center.z, serverViewDistance + 1,
+                            sel.x(), sel.z())) {
+                continue; // 越出原版可见形状（轴深 vd+2 = 签发域上界）：拉了也用不上
             }
             if (shadow.injectedChunk(sel.dimension(), sel.x(), sel.z()) != null) {
                 continue; // 已物化（注入/本地生成），无需 pull
             }
+            ChunkPos pos = new ChunkPos(sel.x(), sel.z());
             if (ShadowLightCompute.hasLocalPullBaseline(sel.dimension(), pos)) {
                 withBaseline.add(pos);
             } else {
@@ -351,10 +356,10 @@ public final class ShadowTrackingSession {
             // 一张盘多次发射：原版圆角方形盘面绕落位点，路径序遍历（反向侧南方的起动冷负荷先前置、
             // 尽量均匀）而不是机械整数螺旋——练习周期太短时北方冷柱容易在场次收束前还没孵化。
             // 形状与 ticket/服务端校验同族 vanilla 几何（见 enumerateDiscBiased 注释）。
-            // radius = vd+1（resolveViewDistance-1）：vanilla 形状 range r 含 cheb≤r+1 角区，
-            // r=vd+1 恰好覆盖服务端签发域 cheb≤vd+2 且不越界（r=vd+2 会多出 60 个 cheb=vd+3
-            // 角区柱被服务端 RANGE 拒，1.20.1_fabric_I_shape 冒烟实证）。
-            int radius = Math.max(0, resolveViewDistance() - 1);
+            // radius = resolveViewDistance()（= vd+1）：vanilla 形状 range r 含 cheb≤r+1
+            // 角区，r=vd+1 恰好覆盖服务端签发域 cheb≤vd+2 且不越界（r=vd+2 会多出 60 个
+            // cheb=vd+3 角区柱被服务端 RANGE 拒，1.20.1_fabric_I_shape 冒烟实证）。
+            int radius = Math.max(0, resolveViewDistance());
             for (ChunkPos pos : enumerateDiscBiased(homeChunk.x, homeChunk.z, radius)) {
                 if (shadow.injectedChunk(currentDimension, pos.x, pos.z) != null) {
                     continue; // 已有本地数据（注入/读盘/已生成），无需请求

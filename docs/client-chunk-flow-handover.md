@@ -155,6 +155,32 @@ range 拒绝 215 柱来自 OVD 超视渲染」的早期猜测。OVD（超视渲�
   R1 range 拒 0；R2 44 拒仍为视距切换瞬态（R1 尾批在 R2 maxDistance=12 下应答）。
   跟进项 ③ `repairPool` 不接线决策维持。
 
+### 0.4 2026-09-09 追加：pull 域收口原版可见形状（光照邻域外扩退役，shape4）
+
+影子端首次加载成本曾比原版客户端多一圈（vd20 冷启动 2025 柱 vs 1529，+32%）：外扩柱唯一
+用途是给可见边缘柱当光照传播邻域。本轮收口为「最外层可见柱边缘光先错后自愈」：
+
+- `drainSelections` 预过滤改 `ChunkShapeCompat.contains(虚拟玩家实时位, vd+1, sel)`——
+  预过滤形状 = 原版玩家 tracking 圆角方形（轴深 vd+2 = 签发域上界，⊆ 服务端校验域），
+  光照邻域方形外圈不再拉取。
+- `resolveViewDistance` 从 vd+2 收到 **vd+1**（原版 `ChunkMap.setViewDistance` 玩家
+  tracking 半径同款）；`drainBootGrid` radius 同步为 `resolveViewDistance()` 无 `-1`
+  （几何不变：r=vd+1 覆盖 cheb≤vd+2 签发域且零越界）。
+- 服务端 `ShadowPullRadii.AUTHORITY_MARGIN=2` 不动（校验上界恰好覆盖新形状轴向边缘）。
+- **自愈依据**：光屏障从不死等邻柱（`NEIGHBOR_PACK_WAIT_MS` 系死代码已删）；邻柱后到
+  → 引擎跨边界传播 → `MixinServerChunkCache.onLightUpdate` → `collectLightUpdate` →
+  LightDelta 回传修正客户端。未收敛柱 `persistPartialLight` 强制 `isLightCorrect=false`
+  （NBT 不写 `isLightOn`），重连必重算，错光不固化。LIGHT_ONLY 补光不进
+  `lightCacheHit/Miss` 分母。
+- **shape4 冒烟（1.20.1 fabric classic，两轮 PASS）**：R1 applied 1635（bg5 为 1640），
+  玩家中心 vd20 形状 **1529/1529 全覆盖**（missingVisible=0），越形状柱仅 106
+  （bootGrid 西侧尾部闭环，预期行为），R1 range 拒绝 **0**，光照 ERROR 0。
+  冷启动注入/算光/落盘柱数与原版持平；首载拉满耗时按 80 柱/s 折算约省 6s（vd20）。
+- **代价**：最外圈可见柱（~200 柱）边缘光在邻柱到位前不准（屋檐/洞口/邻柱火把光的
+  跨界传播缺失；天光垂直分量不受影响），移动触发 LightDelta 自愈，重连重算。
+  同步删除死代码：`NEIGHBOR_PACK_WAIT_MS`/`packWaitStartMs`、
+  `hasInitializeLightParent`（compat + server 两处，原版 LIGHT future 自管邻柱依赖）。
+
 ## 1. 背景与结论速览
 
 冒烟实证（`vdn_1_20_1_fabric_I_final`，1.20.1 fabric classic）：R1 首进时 1529 个区块全部走 **chunk_payload 服务端推送**，shadow pull 零触发；R2 重连（有缓存基线）才出现 436 UNCHANGED + 9 DELTA。这与 §6 的目标态不符——**按文档，无基线的柱也必须进入统一 Compare+Pull（服务端答 FULL）**，实现却在无基线时放行推送包（见 §3.2 门控）。

@@ -1003,19 +1003,6 @@ public class ShadowSeedServer extends MinecraftServer {
         return map == null ? null : map.get(dimension);
     }
 
-    /**
-     * holder 上已有 {@code INITIALIZE_LIGHT} 的 parent chunk（与原版
-     * {@code getChunkForLighting} 同一条件）。无 holder 视为视距边缘。
-     */
-    public boolean hasInitializeLightParent(int x, int z) {
-        try {
-            return ShadowChunkMapCompat.hasInitializeLightParent(
-                    (ServerChunkCache) this.overworld().getChunkSource(), x, z);
-        } catch (Throwable ignored) {
-            return false;
-        }
-    }
-
     public boolean hasVisibleChunkHolder(int x, int z) {
         try {
             return ShadowChunkMapCompat.hasVisibleHolder(

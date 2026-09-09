@@ -122,38 +122,6 @@ public final class ShadowChunkMapCompat {
         return new ImposterProtoChunk(chunk, false);
     }
 
-    public static CompletableFuture<ChunkAccess> completedImposter(LevelChunk chunk) {
-        return CompletableFuture.completedFuture(asImposter(chunk));
-    }
-
-
-    /**
-     * 与原版 {@code ServerChunkCache.getChunkForLighting} 同一条件：holder 上已有
-     * {@code INITIALIZE_LIGHT} 的 parent（FEATURES）chunk。不经 getChunk mixin。
-     */
-    public static boolean hasInitializeLightParent(ServerChunkCache cache, int x, int z) {
-        if (cache == null) {
-            return false;
-        }
-        try {
-            ChunkMapAccessor map = (ChunkMapAccessor) (Object) cache.chunkMap;
-            ChunkHolder holder = map.hassium$getVisibleChunkIfPresent(ChunkPos.asLong(x, z));
-            if (holder == null) {
-                return false;
-            }
-            ChunkStatus parent = ChunkStatus.INITIALIZE_LIGHT.getParent();
-#if MC_VER < MC_1_21_1
-            return holder.getFutureIfPresentUnchecked(parent)
-                    .getNow(ChunkHolder.UNLOADED_CHUNK).left().isPresent();
-            // 1.20.5–1.20.6 的 Optional 中间层分支已随版本支持裁剪删除（API 自 1.21.1 起变化）
-#else
-            return holder.getChunkIfPresentUnchecked(parent) != null;
-#endif
-        } catch (Throwable ignored) {
-            return false;
-        }
-    }
-
     public static boolean hasVisibleHolder(ServerChunkCache cache, int x, int z) {
         if (cache == null) {
             return false;
