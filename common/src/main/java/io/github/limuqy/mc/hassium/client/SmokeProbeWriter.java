@@ -117,6 +117,8 @@ public final class SmokeProbeWriter {
         field(sb, "locallyGeneratedChunkBytes", m.getLocallyGeneratedChunkBytes());
         field(sb, "clientAppliedChunkCount", m.getClientAppliedChunkCount());
         field(sb, "clientLandedChunkCount", m.getClientLandedChunkCount());
+        // 唯一落地总数：与 clientLandedChunkCount 同值，显式暴露含 cacheHit 重交付口径
+        field(sb, "landedTotal", m.getLandedTotalCount());
         field(sb, "serverPushAppliedCount", m.getServerPushAppliedCount());
         field(sb, "sectionDeltaRequestsSent", m.getSectionDeltaRequestsSent());
         field(sb, "sectionDeltaChunksReceived", m.getSectionDeltaChunksReceived());

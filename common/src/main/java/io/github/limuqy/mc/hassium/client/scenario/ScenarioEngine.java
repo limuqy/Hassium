@@ -758,6 +758,7 @@ public final class ScenarioEngine {
             case "stats.locallyGeneratedChunkBytes" -> m.getLocallyGeneratedChunkBytes();
             case "stats.clientAppliedChunkCount" -> m.getClientAppliedChunkCount();
             case "stats.clientLandedChunkCount" -> m.getClientLandedChunkCount();
+            case "stats.landedTotal" -> m.getLandedTotalCount();
             case "stats.sectionDeltaRequestsSent" -> m.getSectionDeltaRequestsSent();
             case "stats.sectionDeltaChunksReceived" -> m.getSectionDeltaChunksReceived();
             case "stats.lightCacheHitCount" -> m.getLightCacheHitCount();

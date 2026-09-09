@@ -90,7 +90,21 @@ class HassiumMetricsImplTest {
         metrics.recordClientChunkApplied(2L);
 
         assertEquals(2, metrics.getClientLandedChunkCount());
+        assertEquals(2, metrics.getLandedTotalCount()); // landedTotal 与 landed 同值
         assertEquals(0, metrics.getClientAppliedChunkCount()); // 来源计数与落地快照互不影响
+    }
+
+    @Test
+    void appliedSourceSumCanExceedLandedWhenSourcesOverlap() {
+        HassiumMetricsImpl metrics = new HassiumMetricsImpl();
+
+        // 同一坐标：网络 FULL 来源 + cacheHit 来源 + 一次实际落地
+        metrics.recordFullChunkRequests(1, 16_384, false);
+        metrics.recordCacheFullHit(16_384);
+        metrics.recordClientChunkApplied(7L);
+
+        assertEquals(1, metrics.getLandedTotalCount());
+        assertEquals(2, metrics.getClientAppliedChunkCount()); // 来源和可 > landed（跨源双计）
     }
 
     @Test

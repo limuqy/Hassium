@@ -42,8 +42,9 @@ public class HassiumMetricsImpl implements HassiumMetrics {
     private final AtomicLong locallyGeneratedChunkCount = new AtomicLong(0);
     private final AtomicLong locallyGeneratedChunkBytes = new AtomicLong(0);
     /**
-     * 客户端实际落地的权威区块计数（按 chunkPos 去重）。
-     * 冒烟「确有落地」门禁用；缓存命中率分母是 {@link #getClientAppliedChunkBytes()}。
+     * 客户端实际落地的权威区块计数（按 chunkPos 去重，含 cacheHit 重交付）。
+     * 冒烟「确有落地」门禁与 {@code landedTotal} 用它；来源事件和见
+     * {@link #getClientAppliedChunkCount()}（可因跨源重复而更大）。
      */
     private final AtomicLong clientAppliedChunkCount = new AtomicLong(0);
     private final java.util.Set<Long> clientAppliedChunkKeys = java.util.concurrent.ConcurrentHashMap.newKeySet();
@@ -277,6 +278,10 @@ public class HassiumMetricsImpl implements HassiumMetrics {
     }
 
 
+    /**
+     * 唯一落地坐标数（含经 applyReadyChunk 的 cacheHit 重交付）。
+     * 与 {@link #getLandedTotalCount()} 同值；不是来源事件和。
+     */
     @Override
     public long getClientLandedChunkCount() {
         return clientAppliedChunkCount.get();

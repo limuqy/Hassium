@@ -1,7 +1,8 @@
 # 交接文档：客户端区块数据流对齐（统一 Compare+Pull）
 
 > 状态基线：`feature/vanilla-direct-network` @ `109ba1b`（2026-09-05）。
-> 目标真相源：[`architecture.md`](architecture.md) §6「客户端区块数据流」。
+> 2026-09-09 追加 §0.5：P2 推送抑制代码核对完成态回填；§6 探针「无基线 FULL」改读 `newFullChunkRequestCount`。
+> 目标真相源：[`architecture.md`](architecture.md) §6「客户端区块数据流」（**已标「已对齐（现状）」**）。
 > 本文回答三个问题：**哪些已完成不许再动**、**现行过渡链路有哪些（对齐后要清理什么）**、**对齐开发怎么做、怎么验收**。
 
 ## 0. 2026-09-05 追加：R1 半径 / R2 虚空定位与修复（pull8 实证）
@@ -57,9 +58,13 @@ pull8 冒烟（`vdn_1_20_1_fabric_I_pull8`）双端日志定位出两个与 §3 
      绕过移动窗口不对称：不进影子注入表的格子一律以无基线/FULL 形式进场。
 - **净效应（2026-09-08 二次修正，bootgrid4 根治）**：早期「landed 1268→1384，
   残差 ~180 柱」的归因链条被两级修正：
-  1. **口径问题**（bootgrid3 对账发现）：`clientLandedChunkCount` 只计网络 FULL 落地，
-     不含 cacheHit（UNCHANGED 命中后缓存重交付）；R2 探针实证 cache 回放会进 applied trace
-     （R2: recv=0, applied=527=cacheHit, R2 ⊆ R1）——故 landed+cacheHit **不可相加**。
+  1. **口径问题**（bootgrid3 对账发现，2026-09-09 二次澄清）：`clientLandedChunkCount`
+     是 position 去重的唯一落地数，**经 `applyReadyChunk` 已含 cacheHit 重交付**；
+     `getClientAppliedChunkCount()` 才是来源事件和（fullReq+cacheHit+…），可因跨源
+     同一坐标重复而 **大于** landed（shape4 R1：applied 2278 > landed 1635，差额 643
+     为网络 FULL 与 cacheHit 双计）。R2 探针实证 cache 回放进 applied trace
+     （R2: recv=0, applied=533=cacheHit 531+delta 2）。故 **landed+cacheHit 不可相加**；
+     读数一律用 `landedTotal`（= landed，含 cacheHit）。
   2. **发射 bug 根治**（bootgrid4 实证）：`drainBootGrid` 的 `bootGridArmed=false` 写在
      **prime 填充块内部**（354 行），导致整张 1517 格光盘只在首轮发射了 ≤128 格
      （最内环），随后 `!bootGridArmed` 直接 return，**外环（r15–22 西弧/南北滞环）
@@ -76,10 +81,14 @@ pull8 冒烟（`vdn_1_20_1_fabric_I_pull8`）双端日志定位出两个与 §3 
   （各轮只发首批 128 + 窗口贡献）测得的，「净效应」数字只有窗口贡献可比；光盘本体
   直到 bootgrid4 才真正全额射出。`repairPool` 预留位维持不接线（bootGridCells 全额
   发射已覆盖回充语义，无风暴）。
-- **遗留（低优先级）**：① `clientLandedChunkCount` 口径偏窄（不含 cacheHit 重交付），
-  建议并入或单列 `landedTotal` 供指标阅读；② 老推送中心 (1,0) 相对 homeChunk 的一格
-  SE 偏移若需 100% 形状重合，可从 vanilla ChunkMap 追踪中心推导后对齐光盘中心；
-  ③ aggregation splits 24 次（启动高峰）属正常。
+- **遗留（低优先级）**：① ~~`clientLandedChunkCount` 口径偏窄（不含 cacheHit 重交付），
+  建议并入或单列 `landedTotal`~~ **已修（2026-09-09）**：实测该断言过时——`clientLandedChunkCount`
+  （position 去重 AtomicLong）经 `applyReadyChunk → recordChunkApplied` **已含** cacheHit
+  重交付（shape4 R2：landed=533=cacheHit 531+delta 2）；真正问题是与
+  `getClientAppliedChunkCount()`（来源事件和，可含跨源同一坐标重复，R1 2278>landed 1635）
+  混淆。现单列 `landedTotal`（probe/ScenarioEngine）并文档化「不得 landed+cacheHit 相加」。
+  ② 老推送中心 (1,0) 相对 homeChunk 的一格 SE 偏移若需 100% 形状重合，可从 vanilla
+  ChunkMap 追踪中心推导后对齐光盘中心；③ aggregation splits 24 次（启动高峰）属正常。
 
 ## 0.2 2026-09-09 追加：bootgrid5 复盘——OVD 证伪、影子端加载越界与光盘欧氏盲区
 
@@ -174,12 +183,62 @@ range 拒绝 215 柱来自 OVD 超视渲染」的早期猜测。OVD（超视渲�
   `lightCacheHit/Miss` 分母。
 - **shape4 冒烟（1.20.1 fabric classic，两轮 PASS）**：R1 applied 1635（bg5 为 1640），
   玩家中心 vd20 形状 **1529/1529 全覆盖**（missingVisible=0），越形状柱仅 106
-  （bootGrid 西侧尾部闭环，预期行为），R1 range 拒绝 **0**，光照 ERROR 0。
+  （bootGrid 西侧尾部闭环，**已被 2026-09-09 收口取消**，见下），R1 range 拒绝 **0**，光照 ERROR 0。
   冷启动注入/算光/落盘柱数与原版持平；首载拉满耗时按 80 柱/s 折算约省 6s（vd20）。
 - **代价**：最外圈可见柱（~200 柱）边缘光在邻柱到位前不准（屋檐/洞口/邻柱火把光的
   跨界传播缺失；天光垂直分量不受影响），移动触发 LightDelta 自愈，重连重算。
   同步删除死代码：`NEIGHBOR_PACK_WAIT_MS`/`packWaitStartMs`、
   `hasInitializeLightParent`（compat + server 两处，原版 LIGHT future 自管邻柱依赖）。
+
+### 0.4.1 2026-09-09 追加：pull 域严格对齐原版可见形状（bootGrid/excess 收口）
+
+shape4 后 R1 仍 ~1633（原版 `isChunkInRange(20)` = **1529**），+104 越形状主要来自
+pull 域用了 `resolveViewDistance()=vd+1`（range=21 → 1665 格盘）而非通告视距。按
+「影子端只拉用户能看到的、边缘光邻域齐全后自愈」收口：
+
+- **统一谓词** `inVanillaVisibleShape(x,z)`：`ChunkShapeCompat.contains(实时中心, serverViewDistance, …)`
+  （VD20 → 1529）；半径未知时放行交给服务端校验。
+- **bootGrid**：盘半径 `resolveViewDistance()` → **`serverViewDistance`**（不再铺 authority 边距圈）。
+- **drainSelections**：预过滤 `vd+1` → **`vd`**。
+- **onChunkMaterialized**：影子 ticket 物化的越形状角区柱仍注入影子表（算光邻域），
+  **不再**向真实客户端 compare-pull。
+- **保留**：`setChunkViewDistance(vd+1)` 影子内部 tracking 略宽，仅服务算光；不进真实客户端落地集。
+- **预期**：R1 `landedTotal` 从 ~1633 收到贴近 **1529**（允许极少数瞬态/重复路径差）。
+
+### 0.5 2026-09-09 追加：P2 推送抑制代码核对（对齐波完成态回填）
+
+对照代码核对 §4 P2 与 §5 清理清单的实际落地（非冒烟，纯静态）：
+
+- **P2 已完整落地（此前文档未单独勾账）**——协商键 `LoginCaps.PULL_MODE`，三层抑制：
+  1. **1.20.1 源头拦截**：`MixinServerPlayer.hassium$onTrackChunk` pull 模式 `ci.cancel()`
+     （原版 tracking 首包不外发）；
+  2. **1.20.2+ 源头拦截**：`MixinPlayerChunkSender.hassium$onChunkPacketSend` pull 模式
+     直接 `return`，不转推送队列（1.20.1 该 mixin 为空壳）；
+  3. **队列双保险**：`ServerChunkPushManager.enqueuePushTask` 对
+     `FULL_VISIBLE && isPullMode(player)` 拒绝入队。
+  兼容路径保留：非 pull 模式仍走 `enqueueDirectPush` → `ChunkSender.sendCompressedChunk`。
+- **P1 空基线路径与 T2 旁路的关系**：R1 空基线请求走
+  `ShadowTrackingSession.emitPullGroups` → `requestAuthoritativeFull`，**不经**
+  `tryInterceptForCompare` 的 `hasLocalPullBaseline` 旁路。旁路只影响「仍会收到
+  vanilla 包」的场景（兼容期 / 非 pull 客户端）；对齐后 pull-mode 玩家整柱 vanilla
+  包已在服务端源头掐断，旁路实际触达面收窄。
+- **`architecture.md` §6 已标「已对齐（现状）」**（含 PULL_MODE 协商与 pull FULL zstd
+  叙述），§5 清理清单「文档改标现状」一项在架构侧已完成；本文档仍待对齐收尾后归档。
+- **§5 清理 6 项均未执行**（符合兼容期红线）：ChunkSender/推送段/`CHUNK_PAYLOAD_S2C`
+  三 loader 注册、`handleCompressedChunk`/`ChunkCompressionHandler`、基线旁路、统计双轨
+  全部存活。`SeedGenExecutor` 本地生成仍复用 `handleCompressedChunk` 解压/应用链——
+  删通道前需先评估该本地路径迁出。
+- **`fullChunkRequestCount` 语义收口结论（不改指标代码）**：`recordFullChunkRequests`
+  已按 `staleOrFallback` 拆出 `newFullChunkRequestCount` / `staleFullChunkRequestCount`
+  （probe 与 ScenarioEngine 均已暴露）；§6 探针断言「无基线 FULL」应对齐读
+  **`newFullChunkRequestCount`**，而非宽口径 `fullChunkRequestCount`（= new+stale）。
+  pull FULL 经 `accountAuthoritativeLanded` 落地时默认记 new（compare-stale 的 FULL
+  与空基线 FULL 在该分量暂不可分，量级被 R2 UNCHANGED/DELTA 分流后通常可忽略）。
+- **`landedTotal` 口径（2026-09-09 落地）**：单列 `getLandedTotalCount()` /
+  probe `stats.landedTotal` / ScenarioEngine `stats.landedTotal`，与
+  `clientLandedChunkCount` 同值（position 去重唯一落地，含 cacheHit 重交付）。
+  shape4 实证：R1 landed 1635 vs applied 来源和 2278（跨源双计 643），R2
+  landed 533 = cacheHit 531 + delta 2；`landed+cacheHit` 不得相加。
 
 ## 1. 背景与结论速览
 
@@ -241,9 +300,9 @@ range 拒绝 215 柱来自 OVD 超视渲染」的早期猜测。OVD（超视渲�
 - **P1 影子 tracking 驱动 pull（无基线也发请求）**
   - 影子 tracking 选中柱 → 有基线：携带 `chunkPos+contentHash+sectionHashes+lightGeneration` 比对请求；无基线：空基线请求（复用 `requestAuthoritativeFull` 的批量/限流框架 `MAX_TRACKED_REQUESTS`）。
   - 服务端已有权威比较（resolveShadowPull），空基线必答 FULL——服务端侧基本零改动。
-- **P2 服务端推送抑制**
-  - `ServerChunkPushManager` 对「客户端已纳入 pull 集合」的柱停止主动 chunk_payload 推送；抑制协商可复用握手能力位（`LoginCaps`/play_init）或动态声明。
-  - 保留：原版整柱推送兼容路径（vanilla 客户端 / 旧客户端版本差期间）。
+- **P2 服务端推送抑制** — ✅ **已落地**（2026-09-09 代码核对回填，见 §0.5）
+  - 协商键 `LoginCaps.PULL_MODE`；三层：mixin 源头拦截（1.20.1 `MixinServerPlayer.trackChunk` / 1.20.2+ `MixinPlayerChunkSender.sendChunk`）+ `enqueuePushTask` 对 `FULL_VISIBLE && isPullMode` 双保险。
+  - 保留：原版整柱推送兼容路径（vanilla 客户端 / 旧客户端版本差期间）——非 pull 模式仍走 `enqueueDirectPush`。
 - **P3 接收端收口**
   - pull FULL 统一 `applyShadowPullFull` → 影子管线；`ClientChunkHandler.handleCompressedChunk` 进入退役观察期（仅旧双端组合触达）。
   - 统计锚点迁移：`recordChunkReceived/recordWireBytesReceived` 收口到 pull 链；`serverPushAppliedCount` 目标态趋零。
@@ -255,11 +314,14 @@ range 拒绝 215 柱来自 OVD 超视渲染」的早期猜测。OVD（超视渲�
 
 ## 5. 清理清单（对齐完成 + 最低支持版本 ≥ 对齐版本后执行）
 
-- [ ] `ChunkSender` 接口 / `ChunkSenderHolder` / `ServerChunkPushManager:1011` 推送段 / 三 loader 的 `CHUNK_PAYLOAD_S2C` receiver 注册
-- [ ] `ClientChunkHandler.handleCompressedChunk` 及仅服务它的 `ChunkCompressionHandler` 分支（wire/vanilla 记账先迁移）
-- [ ] `ShadowPullClient.tryInterceptForCompare:116` 与 `handleNativeChunk` 的 `hasLocalPullBaseline` 旁路（收敛为链路可用性判断）
-- [ ] 统计：chunk_payload 调用点的 `recordChunkReceived/recordWireBytesReceived` 迁移；`fullChunkRequestCount` 语义对齐 doc 248 行
-- [ ] 文档：`architecture.md` §6 从「目标」改标「现状」；本文档归档
+> 2026-09-09 核对：6 项均未执行；`architecture.md` §6 侧文档项已完成（见 §0.5）。
+> `SeedGenExecutor` 本地生成仍依赖 `handleCompressedChunk` 解压/应用链，删通道前需先迁出该本地路径。
+
+- [ ] `ChunkSender` 接口 / `ChunkSenderHolder` / `ServerChunkPushManager` 推送段（`sendCompressedChunk` 调用点 ~:1145）/ 三 loader 的 `CHUNK_PAYLOAD_S2C` receiver 注册
+- [ ] `ClientChunkHandler.handleCompressedChunk` 及仅服务它的 `ChunkCompressionHandler` 分支（wire/vanilla 记账先迁移；**注意 SeedGenExecutor 本地生成复用此链**）
+- [ ] `ShadowPullClient.tryInterceptForCompare` 与 `handleNativeChunk` 的 `hasLocalPullBaseline` 旁路（收敛为链路可用性判断；对齐后 pull-mode 触达面已收窄，见 §0.5）
+- [ ] 统计：chunk_payload 调用点的 `recordChunkReceived/recordWireBytesReceived` 迁移（pull 链 `decompressPullFull` 已并行记账）；`fullChunkRequestCount` 语义——**探针读 `newFullChunkRequestCount`**，指标代码已拆分无需再改
+- [x] 文档：`architecture.md` §6 从「目标」改标「现状」（已完成：「已对齐（现状）」）；本文档仍待归档
 - [ ] 兼容期红线：清理前必须确认最低支持客户端/服务端版本均已含对齐改动，否则 chunk_payload 通道不可删
 
 ## 6. 验收门
@@ -268,7 +330,7 @@ range 拒绝 215 柱来自 OVD 超视渲染」的早期猜测。OVD（超视渲�
 |----|------|
 | L0 | `common:compileJava common:test` 全绿（mixin AP 校验注入目标） |
 | L1 冒烟 | `runtime-smoke-test.ps1` PASS；R1（无基线）`serverPushAppliedCount→0`、区块经 pull FULL 到达；R2（有基线）UNCHANGED/DELTA 占比与现值同量级 |
-| probe | `zstdOriginal/CompressedBytes` 仅来自聚合帧+DELTA；`fullChunkRequestCount` ≈ 无基线 FULL 数；`clientApplied==landed` |
+| probe | `zstdOriginal/CompressedBytes` 仅来自聚合帧+DELTA；**`newFullChunkRequestCount`** ≈ 无基线 FULL 数（`fullChunkRequestCount` = new+stale 宽口径，见 §0.5）；**`landedTotal`**（= 唯一落地，含 cacheHit）≥ `loadedChunks` 采样一致性；`applied` 来源和可 > landed，不作相等断言 |
 | 带宽压缩行 | classic 下仍以聚合帧为主属预期（FULL 无 hassium 压缩）；不得出现 0/0 之外的异常归零 |
 | 双端版本差 | 旧客户端连新服务端、新客户端连旧服务端各跑一轮 classic，chunk_payload 兼容路径可达 |
 

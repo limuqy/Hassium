@@ -83,7 +83,7 @@ ClientPacketListener.handleLevelChunkWithLight
 ClientChunkCache.replaceWithPacketData → renderer
 ```
 
-正常原版首包应记为 `serverPushAppliedCount`；`fullChunkRequestCount` 只表示 ShadowPull 回退的权威 FULL。探针还记录累计 apply、完整 `ClientChunkCache.loadedChunks`，以及 trace 候选在采样时刻实际驻留的数量。
+正常原版首包应记为 `serverPushAppliedCount`；`fullChunkRequestCount` = 网络权威 FULL 落地（new+stale，无基线读 `newFullChunkRequestCount`）。唯一落地总数读 `landedTotal`（= `clientLandedChunkCount`，含 cacheHit 重交付，按坐标去重）；`clientAppliedChunkCount` 是来源事件和，可因跨源同一坐标重复而大于 landed。探针还记录累计 apply、完整 `ClientChunkCache.loadedChunks`，以及 trace 候选在采样时刻实际驻留的数量。
 
 ### Compare + Pull / Generate + Validate
 

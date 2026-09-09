@@ -192,10 +192,24 @@ public interface HassiumMetrics {
     /**
      * 获取客户端实际落地的权威区块数（按区块位置去重）。
      * <p>
-     * 冒烟测试用它做「确有区块落地」的运行时门禁；命中率分母用
-     * {@link #getClientAppliedChunkCount()} 的来源汇总口径。
+     * <b>口径</b>：会话内成功写入 {@code ClientChunkCache} 的唯一坐标数——含网络 FULL、
+     * 缓存整柱重交付（UNCHANGED → publishCachedChunk）、分段增量落地与 server_push。
+     * 与 {@link #getLandedTotalCount()} 同值；冒烟「确有区块落地」门禁用它。
+     * <p>
+     * 注意：{@link #getClientAppliedChunkCount()} 是来源事件和（可含跨源同一坐标的
+     * 重复计数），可大于本值；<b>不得</b>把本值再与 {@code cacheHitFullChunkCount}
+     * 相加——cacheHit 重交付已计入本值。
      */
     long getClientLandedChunkCount();
+
+    /**
+     * 唯一落地总数（{@code landedTotal}）：与 {@link #getClientLandedChunkCount()} 同值。
+     * <p>
+     * 专供指标阅读/报告使用的显式名称，强调「含 cacheHit 重交付、按坐标去重」。
+     */
+    default long getLandedTotalCount() {
+        return getClientLandedChunkCount();
+    }
 
     /**
      * 获取「网络已推送完整区块，客户端仍改用本地缓存」的区块数。

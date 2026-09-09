@@ -61,8 +61,8 @@ public final class ShadowTrackingSession {
     private record SelectedChunk(String dimension, int x, int z) {}
 
     /** 会话落位基准点：首个稳定座位（虚拟玩家放置瞬间的 chunk）。用于补齐起飞后身侧/身后的
-     *  滞留环 —— 移动窗口天然不对称，绕该点为半径 22 的静态「基准光盘」恢复老推送时代
-     *  达成过的完整圆心柱形（1268 vs 1517 的缺口正是朝反向运动的半边圆环，见 handover §0）。 */
+     *  滞留环 —— 移动窗口天然不对称，绕该点铺静态「基准光盘」；半径 = 通告视距
+     *  （isChunkInRange 同款，≈ 原版可见 1529@VD20），不铺 authority 边距外圈。 */
     private ChunkPos homeChunk;
     /** 基准光盘已布防待铺（ensureVirtualPlayer 落位后置真；单元格耗尽清除）。 */
     private boolean bootGridArmed;
@@ -302,6 +302,23 @@ public final class ShadowTrackingSession {
     }
 
     /**
+     * 原版可见形状内？pull 域只拉用户能看到的柱（§0.4）：range = 通告视距 vd，
+     * 谓词 = {@code isChunkInRange}（VD20 → 1529）。影子 ticket 可略宽（vd+1）供
+     * 算光邻域，但越形状柱不向真实客户端 compare-pull；边缘光靠邻柱后到自愈。
+     * 中心 = 虚拟玩家实时位（半径未知时放行，交给服务端校验）。
+     */
+    private boolean inVanillaVisibleShape(int x, int z) {
+        if (serverViewDistance <= 0) {
+            return true;
+        }
+        ChunkPos center = virtualPlayer == null ? homeChunk : virtualPlayer.chunkPosition();
+        if (center == null) {
+            return true;
+        }
+        return ChunkShapeCompat.contains(center.x, center.z, serverViewDistance, x, z);
+    }
+
+    /**
      * 影子主循环分批发送悬置柱（worldgen 压制，无本地数据）的 pull 请求。
      * 读盘/生成柱不走此路径——它们由 onChunkMaterialized 桥携带基线进比对。
      */
@@ -320,14 +337,10 @@ public final class ShadowTrackingSession {
             // 预过滤中心 = 虚拟玩家实时位置（泵循环内 applyState 已先行移动，跟随真实玩家）；
             // 服务端校验中心同为真实玩家 chunkPosition()（逐请求实时取）。不能用 homeChunk——
             // 那是落座快照，玩家移动超出窗口后会把新区域柱全部错杀（服务端本可签发）。
-            // 形状 = 原版玩家 tracking 圆角方形（range = vd+1，轴深 vd+2）：服务端签发域
-            // 上界恰好是 chebyshev vd+2，本形状 ⊆ 签发域，不会发出必拒请求；方形外圈
-            // （光照邻域外扩）不再拉取，边缘光由邻柱到位后的 LightDelta 自愈。
-            ChunkPos center = virtualPlayer == null ? null : virtualPlayer.chunkPosition();
-            if (serverViewDistance > 0 && center != null
-                    && !ChunkShapeCompat.contains(center.x, center.z, serverViewDistance + 1,
-                            sel.x(), sel.z())) {
-                continue; // 越出原版可见形状（轴深 vd+2 = 签发域上界）：拉了也用不上
+            // 形状 = 原版可见圆角方形（range = 通告视距 vd，VD20 → 1529）：只拉用户能看到的；
+            // 影子 ticket 略宽的角区不在此路径请求，边缘光由邻柱 LightDelta 自愈。
+            if (!inVanillaVisibleShape(sel.x(), sel.z())) {
+                continue;
             }
             if (shadow.injectedChunk(sel.dimension(), sel.x(), sel.z()) != null) {
                 continue; // 已物化（注入/本地生成），无需 pull
@@ -355,11 +368,9 @@ public final class ShadowTrackingSession {
         if (bootGridCells.isEmpty()) {
             // 一张盘多次发射：原版圆角方形盘面绕落位点，路径序遍历（反向侧南方的起动冷负荷先前置、
             // 尽量均匀）而不是机械整数螺旋——练习周期太短时北方冷柱容易在场次收束前还没孵化。
-            // 形状与 ticket/服务端校验同族 vanilla 几何（见 enumerateDiscBiased 注释）。
-            // radius = resolveViewDistance()（= vd+1）：vanilla 形状 range r 含 cheb≤r+1
-            // 角区，r=vd+1 恰好覆盖服务端签发域 cheb≤vd+2 且不越界（r=vd+2 会多出 60 个
-            // cheb=vd+3 角区柱被服务端 RANGE 拒，1.20.1_fabric_I_shape 冒烟实证）。
-            int radius = Math.max(0, resolveViewDistance());
+            // 形状 = isChunkInRange(serverViewDistance)：与原版可见集合同几何（VD20 → 1529），
+            // 不铺 resolveViewDistance()=vd+1 的 authority 边距圈（那会多出 ~136 越形状柱）。
+            int radius = Math.max(0, serverViewDistance > 0 ? serverViewDistance : DEFAULT_VIEW_DISTANCE);
             for (ChunkPos pos : enumerateDiscBiased(homeChunk.x, homeChunk.z, radius)) {
                 if (shadow.injectedChunk(currentDimension, pos.x, pos.z) != null) {
                     continue; // 已有本地数据（注入/读盘/已生成），无需请求
@@ -400,9 +411,8 @@ public final class ShadowTrackingSession {
     }
 
     /** 逆飞行偏好枚举：先北方后南方交错混合，令背行侧冷柱提前获得按需装载机会。
-     *  形状 = 原版视距圆角方形（{@link ChunkShapeCompat}，玩家 tracking 同款），
-     *  range = resolveViewDistance()（= vd+2）直接作原版 range：形状轴上含 range+1，
-     *  轴向深度 vd+2 = 服务端 maxDistance（chebyshev），全盘可签发。 */
+     *  形状 = 原版可见圆角方形（{@link ChunkShapeCompat}，range = 通告视距 vd），
+     *  与 isChunkInRange(vd) 同几何（VD20 → 1529），不铺 authority 边距外圈。 */
     private static java.util.List<ChunkPos> enumerateDiscBiased(int cx, int cz, int range) {
         java.util.List<ChunkPos> northHalf = new java.util.ArrayList<>(range * range);
         java.util.List<ChunkPos> southHalf = new java.util.ArrayList<>(range * range);
@@ -496,6 +506,11 @@ public final class ShadowTrackingSession {
         }
         // 已物化柱（R2 复用影子世界）同样要发比对：影子世界有 ≠ 真实客户端新世界有，
         // UNCHANGED → publishCachedChunk 即完成向真实客户端的重交付。
+        // 影子 ticket 可能物化原版可见形状外的角区柱（setChunkViewDistance=vd+1）：
+        // 仍注入影子表供算光邻域，但不向真实客户端 pull（§0.4 只拉用户能看到的）。
+        if (!inVanillaVisibleShape(pos.x, pos.z)) {
+            return;
+        }
         if (ShadowLightCompute.tryRequestMiss(dimension, pos)) {
             DebugLogger.info(DebugLogger.LogType.NETWORK,
                     "[SHADOW_TRACK] materialized ({}, {}) alreadyMaterialized={} -> compare-pull (dimension={})",
