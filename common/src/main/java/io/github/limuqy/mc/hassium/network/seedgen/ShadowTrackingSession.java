@@ -316,6 +316,15 @@ public final class ShadowTrackingSession {
                 continue; // 已切维度的旧选中柱作废
             }
             ChunkPos pos = new ChunkPos(sel.x(), sel.z());
+            // 预过滤中心 = 虚拟玩家实时位置（泵循环内 applyState 已先行移动，跟随真实玩家）；
+            // 服务端校验中心同为真实玩家 chunkPosition()（逐请求实时取）。不能用 homeChunk——
+            // 那是落座快照，玩家移动超出 vd+2 后会把新区域柱全部错杀（服务端本可签发）。
+            ChunkPos center = virtualPlayer != null ? virtualPlayer.chunkPosition() : homeChunk;
+            if (serverViewDistance > 0 && center != null
+                    && Math.max(Math.abs(sel.x() - center.x), Math.abs(sel.z() - center.z))
+                            > serverViewDistance + io.github.limuqy.mc.hassium.network.ShadowPullRadii.AUTHORITY_MARGIN) {
+                continue; // 越出服务端 maxDistance（chebyshev vd+2）签发域：必被拒，直接丢弃
+            }
             if (shadow.injectedChunk(sel.dimension(), sel.x(), sel.z()) != null) {
                 continue; // 已物化（注入/本地生成），无需 pull
             }
@@ -339,9 +348,13 @@ public final class ShadowTrackingSession {
             return;
         }
         if (bootGridCells.isEmpty()) {
-            // 一张盘多次发射：chebyshev 直径盘面绕落位点，路径序遍历（反向侧南方的起动冷负荷先前置、
+            // 一张盘多次发射：原版圆角方形盘面绕落位点，路径序遍历（反向侧南方的起动冷负荷先前置、
             // 尽量均匀）而不是机械整数螺旋——练习周期太短时北方冷柱容易在场次收束前还没孵化。
-            int radius = resolveViewDistance();
+            // 形状与 ticket/服务端校验同族 vanilla 几何（见 enumerateDiscBiased 注释）。
+            // radius = vd+1（resolveViewDistance-1）：vanilla 形状 range r 含 cheb≤r+1 角区，
+            // r=vd+1 恰好覆盖服务端签发域 cheb≤vd+2 且不越界（r=vd+2 会多出 60 个 cheb=vd+3
+            // 角区柱被服务端 RANGE 拒，1.20.1_fabric_I_shape 冒烟实证）。
+            int radius = Math.max(0, resolveViewDistance() - 1);
             for (ChunkPos pos : enumerateDiscBiased(homeChunk.x, homeChunk.z, radius)) {
                 if (shadow.injectedChunk(currentDimension, pos.x, pos.z) != null) {
                     continue; // 已有本地数据（注入/读盘/已生成），无需请求
@@ -382,11 +395,13 @@ public final class ShadowTrackingSession {
     }
 
     /** 逆飞行偏好枚举：先北方后南方交错混合，令背行侧冷柱提前获得按需装载机会。
-     *  只枚举欧氏半径内（整圆柱，历史 VD20=1517 同类），正方形四角的鬼影不生成。 */
-    private static java.util.List<ChunkPos> enumerateDiscBiased(int cx, int cz, int radius) {
-        java.util.List<ChunkPos> northHalf = new java.util.ArrayList<>(radius * radius);
-        java.util.List<ChunkPos> southHalf = new java.util.ArrayList<>(radius * radius);
-        for (int ring = 0; ring <= radius; ring++) {
+     *  形状 = 原版视距圆角方形（{@link ChunkShapeCompat}，玩家 tracking 同款），
+     *  range = resolveViewDistance()（= vd+2）直接作原版 range：形状轴上含 range+1，
+     *  轴向深度 vd+2 = 服务端 maxDistance（chebyshev），全盘可签发。 */
+    private static java.util.List<ChunkPos> enumerateDiscBiased(int cx, int cz, int range) {
+        java.util.List<ChunkPos> northHalf = new java.util.ArrayList<>(range * range);
+        java.util.List<ChunkPos> southHalf = new java.util.ArrayList<>(range * range);
+        for (int ring = 0; ring <= range + 1; ring++) {
             int perimeter = ring == 0 ? 1 : 8 * ring;
             for (int i = 0; i < perimeter; i++) {
                 int x, z;
@@ -403,11 +418,11 @@ public final class ShadowTrackingSession {
                         default -> { x = cx + ring - step; z = cz - ring; } // 西缘 南→北
                     }
                 }
+                if (!io.github.limuqy.mc.hassium.compat.ChunkShapeCompat.contains(cx, cz, range, x, z)) {
+                    continue; // 原版形状外（角区鬼影）不进盘
+                }
                 int dr = x - cx;
                 int dc = z - cz;
-                if (dr * dr + dc * dc > radius * radius) {
-                    continue; // 直角四角裁掉，恢复历史整圆柱几何
-                }
                 if (((dr + dc) & 1) == 0) {
                     northHalf.add(new ChunkPos(x, z));
                 } else {

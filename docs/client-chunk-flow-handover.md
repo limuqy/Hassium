@@ -81,6 +81,80 @@ pull8 冒烟（`vdn_1_20_1_fabric_I_pull8`）双端日志定位出两个与 §3 
   SE 偏移若需 100% 形状重合，可从 vanilla ChunkMap 追踪中心推导后对齐光盘中心；
   ③ aggregation splits 24 次（启动高峰）属正常。
 
+## 0.2 2026-09-09 追加：bootgrid5 复盘——OVD 证伪、影子端加载越界与光盘欧氏盲区
+
+bootgrid5（1.20.1 fabric classic，R1 PASS / R2 PASS）的探针对账推翻了「extra 121 柱 +
+range 拒绝 215 柱来自 OVD 超视渲染」的早期猜测。OVD（超视渲染）在当前链路**不启用**
+（`chunk-cache.md` §10：影子端原版化后 admission/加载/卸载/推送全部由影子
+`ServerChunkCache/ChunkMap` 管理，旧 `renderOnly` 环带逻辑不属于当前链路；
+§10.2 明文「不向服务端请求影子玩家 tracking 范围之外的区块」），
+`chunk.maxRenderDistance=16` 是退役代码的配置残留，与 VD20 场景的真实行为无关。
+
+- **R1 观测 1640 柱的真实构成**：vanilla VD20 形状（`isChunkInRange` 圆角方形，
+  1529 柱）内 1519（覆盖 99.3%，缺 10）+ 影子端方形加载交付 121。
+  121 柱全部落在 `chebyshev≤22 方形 − vd20 形状` 的四角区（57/58 与该集合精确吻合，
+  57 柱 bg4 存档命中）：影子端 `setChunkViewDistance(22)` 后 vanilla ticket 加载范围是
+  **chebyshev 方形**（比 `isChunkInRange` 圆角方形更"方"），方形角柱被 ticket 加载 →
+  读盘命中 → `playerLoadedChunk` 物化桥 → compare-pull 交付。**不是 OVD**。
+- **range 拒绝 215 柱（R1）+ 44 柱（R2）的真实来源**：影子端 chunk 系统的加载范围
+  **超出服务端校验范围**。影子 ticket 加载 chebyshev ≤ vd+1（R1: 23），
+  光照计算邻域 ticket 外扩至最深 cheb 26（R1 实测拒绝柱分布 23:56 / 24:58 / 25:60 /
+  26:41，全部 17:41:05 一秒内成串拒绝）；这些柱经 `scheduleChunkLoad` →
+  `hassium$shadowSuppressGeneration` → `onChunkSelected` 悬置 → `drainSelections`
+  批量 auth-full pull → 服务端 `ShadowPullRequestValidator` 按
+  `maxDistance = vd + AUTHORITY_MARGIN = 22` 全拒。R2 同构验证：vd=10 时被拒柱
+  恰好是 cheb=13 整齐一环（44 柱），与 `maxDistance=12` 完全对应。
+  **`ShadowPullRadii` 的「window ⊇ request」契约被影子端加载范围违反**——
+  违反方向与设计预期相反：不是客户端窗口太小，而是影子端 chunk 系统
+  （ticket vd+1 + 光照邻域）比服务端校验（vd+2）更深。
+- **vd20 形状内缺 10 柱的根因 = 光盘欧氏裁角盲区**：缺失柱
+  `(-24,7) (-20,14) (-17,17) (-10,21) (4,21) (11,17) (14,-14) (14,14) (18,-7) (18,7)`
+  全部欧氏 d²=485/490（> r22²=484），在 `enumerateDiscBiased` 的
+  `dr*dr+dc*dc > radius*radius` 裁角线外 1–2 格，却在 `isChunkInRange(20)` 形状内
+  ——vanilla 形状比欧氏 r22 盘「方」，bootGrid 从未请求它们。
+  修复方向：bootGrid 遍历改 chebyshev 序或欧氏半径 +1（`radius+1` 平方裁角）。
+- **bonus 缩水（bg4 380 → bg5 121，vd20 外）**：bg4 的东移窗口 cheb18@(4,0) bonus
+  在 bg5 未复现，与 17:35 `ShadowTrackingSession` 改动后 bootGrid 发射行为变化相关；
+  R1 目标形状覆盖不受影响（99.3% > bg4 的 98.0%），不追。
+- **R2**：565 全缓存重交付（newFull=0, push=0），与 bg4 一致。
+- **跟进项**：① 影子端加载越界（ticket vd+1 = 23 实测；cheb 24–26 深度按光照计算
+  邻域 ticket 归因，机制推断）对 auth-full 的无效请求——服务端按 range 拒绝后
+  客户端 `RETRIED` 防重放，无风暴但白耗校验；若收敛，可在 `onChunkSelected`/
+  `drainSelections` 侧按服务端 `maxDistance` 预过滤。② bootGrid 欧氏盲区 10 柱
+  （上条修复方向）。③ `repairPool` 仍只声明未接线（`ShadowTrackingSession:81`，
+  bootgrid4 起维持不接线决策）。
+
+### 0.3 2026-09-09 追加：三层形状对齐（跟进项 ①② 落地）
+
+**方案**：形状判定收口原版 API，禁止业务自绘几何——
+
+- 新增 `compat/ChunkShapeCompat.contains(cx,cz,range,x,z)`：1.20.1 走
+  `ChunkMap.isChunkInRange`（public static，玩家 tracking 同款），1.21.1+ 走
+  `ChunkTrackingView.of().contains()`（`#if MC_VER < MC_1_21_1` 分流；两者公式同族）。
+- `enumerateDiscBiased` 欧氏裁角 → 原版圆角方形谓词；**radius = vd+1**（非 vd+2）：
+  vanilla 形状 range r 含 cheb≤r+1 角区，r=vd+1 恰覆盖服务端签发域 cheb≤vd+2
+  且零越界（r=vd+2 会多出 60 个 cheb=vd+3 角区柱被 RANGE 拒，`_shape` 冒烟实证）。
+- `drainSelections` 按服务端 `maxDistance`（cheb vd+2）预过滤 + 已物化跳过：
+  ticket 光照外扩柱（cheb 23–26）不再发出必拒请求。
+
+**冒烟对照（1.20.1 fabric classic，`_shape2` vs bootgrid5）**：
+
+| 指标 | bootgrid5 | shape2 |
+|---|---|---|
+| R1 landed | 1640（vd20 内 1519） | 1742（vd20 内 1521） |
+| vd20 形状覆盖 | 99.3%（缺 10 盲区柱） | **99.5%（缺 8 盘尾瞬态柱）** |
+| R1 range 拒绝 | 215 | **0** |
+| R2 range 拒绝 | 44 | 44（视距切换瞬态：R1 尾批在 R2 maxDistance=12 下应答，非预过滤漏） |
+- **移动语义核实（shape3 补验）**：拒绝非黑名单——`RETRIED` 只挡 retry 路径，
+  `pendingSelections` 无去重，服务端校验中心逐请求取真实玩家 `chunkPosition()`；
+  玩家移动后 ticket 重新选中被拒柱即可签发。据此发现并修复预过滤中心 bug：
+  初版用 `homeChunk`（落座快照），玩家移动超 vd+2 后会把新区域柱全部错杀——
+  已改为虚拟玩家实时位置（与服务端中心对齐，+2 边距吸收一拍延迟）。
+  `homeChunk` 保留作 bootGrid 静态盘锚点（设计意图不变）。
+- **shape3 冒烟（中心修复后）**：R1 落点 (-2,-1) 处 vd20 形状 **1529/1529 全覆盖**、
+  R1 range 拒 0；R2 44 拒仍为视距切换瞬态（R1 尾批在 R2 maxDistance=12 下应答）。
+  跟进项 ③ `repairPool` 不接线决策维持。
+
 ## 1. 背景与结论速览
 
 冒烟实证（`vdn_1_20_1_fabric_I_final`，1.20.1 fabric classic）：R1 首进时 1529 个区块全部走 **chunk_payload 服务端推送**，shadow pull 零触发；R2 重连（有缓存基线）才出现 436 UNCHANGED + 9 DELTA。这与 §6 的目标态不符——**按文档，无基线的柱也必须进入统一 Compare+Pull（服务端答 FULL）**，实现却在无基线时放行推送包（见 §3.2 门控）。
