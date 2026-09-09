@@ -465,7 +465,8 @@ public class ClientChunkHandler {
             return false;
         }
     }
-    private static void markChunkSectionsDirty(ClientLevel level, int chunkX, int chunkZ) {
+    /** 标记柱全部 section dirty 触发渲染重建（与原版 apply 后行为对齐）。 */
+    public static void markChunkSectionsDirty(ClientLevel level, int chunkX, int chunkZ) {
         int minSection = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMinSection(level);
         int maxSection = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMaxSectionExclusive(level);
         for (int sectionY = minSection; sectionY < maxSection; sectionY++) {

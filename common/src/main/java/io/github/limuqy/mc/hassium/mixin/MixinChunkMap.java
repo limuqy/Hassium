@@ -112,24 +112,24 @@ public class MixinChunkMap {
     private void hassium$shortCircuitInjectLoad(ChunkPos pos,
             CallbackInfoReturnable<CompletableFuture<Either<ChunkAccess, ChunkHolder.ChunkLoadingFailure>>> cir) {
         LevelChunk loaded = hassium$chunkForScheduleLoad(pos);
-        if (loaded == null) {
-            if (hassium$shadowSuppressGeneration(pos)) {
-                // 影子虚拟玩家 tracking 选中且无数据：登记 pull 并悬置原版链
-                //（worldgen 禁止；永不完成的 future 无错误日志、无重试、无生成金字塔）。
-                // 悬置 future 在数据到位时由 ShadowChunkMapCompat.completeSuspendedLoad 放行，
-                // 否则 holder 永卡 EMPTY → R2 重连 tracking 无 ticking chunk → 比对黑洞。
-                CompletableFuture<Either<ChunkAccess, ChunkHolder.ChunkLoadingFailure>> suspended =
-                        new CompletableFuture<>();
-                ShadowChunkMapCompat.registerSuspendedLoad(hassium$shadowDimension(), pos, suspended);
-                cir.setReturnValue(suspended);
-                return;
-            }
-            // 未命中不 cancel：空槽由 MixinRegionFile 返回 null → createEmpty + 透传，
-            // 不得在这里 loadFromDisk（FULL 票邻柱会同步解压整圈）。
+        if (loaded != null) {
+            ImposterProtoChunk wrapped = ShadowChunkMapCompat.asImposter(loaded);
+            cir.setReturnValue(CompletableFuture.completedFuture(Either.left(wrapped)));
             return;
         }
-        ImposterProtoChunk wrapped = ShadowChunkMapCompat.asImposter(loaded);
-        cir.setReturnValue(CompletableFuture.completedFuture(Either.left(wrapped)));
+        if (hassium$shadowSuppressGeneration(pos)) {
+            // 影子虚拟玩家 tracking 选中且无数据：返回悬置 future，等待 pull 响应。
+            // pull 响应到达后 injectChunk 注入真实数据 → completeSuspendedLoad 放行
+            // 原版链 → playerLoadedChunk(有数据) → onChunkMaterialized → compare-pull。
+            // 超时由 ShadowChunkMapCompat.sweepSuspendedTimeouts 兜底（完成为空柱）。
+            CompletableFuture<Either<ChunkAccess, ChunkHolder.ChunkLoadingFailure>> suspended =
+                    new CompletableFuture<>();
+            ShadowChunkMapCompat.registerSuspendedLoad(hassium$shadowDimension(), pos, suspended);
+            cir.setReturnValue(suspended);
+            return;
+        }
+        // 未命中不 cancel：空槽由 MixinRegionFile 返回 null → createEmpty + 透传，
+        // 不得在这里 loadFromDisk（FULL 票邻柱会同步解压整圈）。
     }
 
     // 1.20.5–1.20.6 的 ChunkResult/ChunkHolder 中间层注入已随版本支持裁剪删除（API 自 1.21.1 起变化）
@@ -143,10 +143,7 @@ public class MixinChunkMap {
             return;
         }
         if (hassium$shadowSuppressGeneration(pos)) {
-            // 影子虚拟玩家 tracking 选中且无数据：登记 pull 并悬置原版链
-            //（worldgen 禁止；永不完成的 future 无错误日志、无重试、无生成金字塔）。
-            // 悬置 future 在数据到位时由 ShadowChunkMapCompat.completeSuspendedLoad 放行，
-            // 否则 holder 永卡 EMPTY → R2 重连 tracking 无 ticking chunk → 比对黑洞。
+            // 悬置 future 等待 pull 响应（与 1.20.1 同款）。
             CompletableFuture<ChunkAccess> suspended = new CompletableFuture<>();
             ShadowChunkMapCompat.registerSuspendedLoad(hassium$shadowDimension(), pos, suspended);
             cir.setReturnValue(suspended);
@@ -169,14 +166,15 @@ public class MixinChunkMap {
     /**
      * 影子虚拟玩家 tracking 的选柱登记 + worldgen 压制判定（1.20.1 / 1.21.1+ 共用）。
      * <p>
-     * 返回 true = 悬置原版加载链（登记 pull 请求、禁止 worldgen）。
+     * 返回 true = 抑制 worldgen，改用悬置 future 等待 pull 响应（与原版读盘等 IOWorker
+     * 同模式：scheduleChunkLoad 返回未完成 future，数据到达后 completeSuspendedLoad 放行）。
      * 仅影子上下文且非 worldgen 窗口生效；登记在注入表未命中时进行——磁盘命中柱
      * 同样登记（读盘 hash 由 MixinRegionFile 同步回填，分类延迟一个簿记周期即可携带基线，
      * 服务端裁决 UNCHANGED/DELTA/FULL）。
      * <p>
      * 本地生成门控通过（客户端本地生成开启 + 服务端 SeedGen 开启 + 真实 seed 到达）：
      * 选中缺失柱由虚拟玩家 tracking 触发影子原版生成链（§6 节点 F/G，真实种子），
-     * 不悬置、不登记 pull，交付仍走 SeedGenExecutor 校验/publish 既有路径。
+     * 不压制、不登记 pull，交付仍走 SeedGenExecutor 校验/publish 既有路径。
      */
     @Unique
     private boolean hassium$shadowSuppressGeneration(ChunkPos pos) {

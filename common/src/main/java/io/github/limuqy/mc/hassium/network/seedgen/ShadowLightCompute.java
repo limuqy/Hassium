@@ -1883,6 +1883,11 @@ public final class ShadowLightCompute {
             io.github.limuqy.mc.hassium.metrics.NetworkStats.recordChunkApplied(chunkX, chunkZ);
             accountAuthoritativeLanded(entry.key().dimension(), chunkPos, item.traceOrigin());
             io.github.limuqy.mc.hassium.cache.client.ClientMainThreadBudget.noteChunkApplyActivity();
+            // 与原版对齐：apply 后标 dirty 触发 mesh 重建。isApplyInProgress 期间
+            // 原版 handler 可能跳过 dirty 标记，导致柱进缓存不进渲染队列（虚空）。
+            if (mc.level != null) {
+                ClientChunkHandler.markChunkSectionsDirty(mc.level, chunkX, chunkZ);
+            }
             ClientChunkHandler.probeChunkState(chunkPos, mc.level, "shadow");
             return true;
         }
@@ -2064,13 +2069,24 @@ public final class ShadowLightCompute {
         if (pos == null) {
             return;
         }
-        long chunkKey = DimensionKey.key(currentDimension(), pos.x, pos.z);
+        String dim = currentDimension();
+        long chunkKey = DimensionKey.key(dim, pos.x, pos.z);
         Long removedEpoch = shadowApplyEpochs.remove(chunkKey);
         fullApplyTraces.remove(chunkKey);
         if (removedEpoch != null) {
             DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
                     "[SHADOW_LIGHT] Client unload invalidated ({}, {}) epoch={}",
                     pos.x, pos.z, removedEpoch);
+        }
+        // 用现有 unloadChunk 卸载影子表区块：先 flush 到磁盘再摘表。
+        // 不用 removeInjectedChunk（只摘表不落盘）——会导致 flush 时序列化不到数据，
+        // 磁盘缓存丢失该区块，后续从磁盘加载得到空区块。
+        ShadowSeedServer server = ShadowServerRegistry.getInstance().get();
+        if (server != null) {
+            LevelChunk chunk = server.injectedChunk(dim, pos.x, pos.z);
+            if (chunk != null) {
+                server.unloadChunk(dim, pos, chunk, false);
+            }
         }
     }
 

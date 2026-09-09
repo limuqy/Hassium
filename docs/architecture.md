@@ -100,48 +100,65 @@ Hassium/
 ## 6. 客户端区块数据流
 
 > **状态：已对齐（现状）**。影子虚拟 `ServerPlayer` tracking + 统一 Compare+Pull 已实现
-> （2026-09-05 对齐波）：pull-mode 协商（`LoginCaps.PULL_MODE`）后服务端停发 chunk_payload，
-> 区块数据由客户端影子 tracking 驱动的 Compare+Pull 承担；pull FULL 响应走固定 zstd，
-> 与包聚合同列通道压缩（全部固定算法）。
+> （2026-09-05 对齐波）；2026-09-09 空区块占位方案：`scheduleChunkLoad` 对未注入柱
+> 返回空 ProtoChunk（与 vanilla `createEmptyChunk` 同款），原版链立即完成推进到
+> `playerLoadedChunk`，pull 独立异步进行——不再悬置 future 阻塞 vanilla 选柱链。
 
-**影子端架构**：客户端进程内运行完整 `MinecraftServer`（`ShadowSeedServer`）。真实玩家位置只同步给唯一虚拟 `ServerPlayer`；影子 `ServerChunkCache` / `ChunkMap` 负责 tracking、读盘、生成、光照和 unload。客户端不枚举视距、不维护 halo；每个被原版 tracking 选中的区块都进入同一个“对比并拉取”协议。
+**影子端架构**：客户端进程内运行完整 `MinecraftServer`（`ShadowSeedServer`）。真实玩家位置只同步给唯一虚拟 `ServerPlayer`；影子 `ServerChunkCache` / `ChunkMap` 负责 tracking、读盘、生成、光照和 unload。客户端不枚举视距、不维护 halo；每个被原版 tracking 选中的区块都进入同一个"对比并拉取"协议。
+
+### 6.1 区块选中与数据获取时序
+
+原版 `ChunkMap` 选中区块后，按以下优先级决定数据来源。**所有路径最终都进入统一 Compare+Pull**（服务端裁决 UNCHANGED/DELTA/FULL），保证数据准确性：
 
 ```mermaid
-flowchart LR
-    A[真实玩家位置/维度] --> B[唯一影子 ServerPlayer]
-    B --> C[原版 ServerChunkCache / ChunkMap tracking]
-    C --> D{存档是否有区块}
-    D -->|有| E[原版读盘 type126 / ChunkSerializer]
-    D -->|没有| F{本地生成开启且已获真实 seed?}
-    F -->|是| G[影子端原版生成并算光前校验]
-    F -->|否| H[不生成，保留服务端请求路径]
-    E --> I[统一 Compare+Pull]
-    G --> I
-    H --> I
-    I -->|chunkPos + contentHash + sectionHashes + lightGeneration| J[服务端校验与差异比较]
-    J -->|FULL| K[服务端完整区块数据]
-    J -->|DELTA| L[服务端差异 section 数据]
-    J -->|ERROR| M[错误结果 / 触发安全重试]
-    K --> N[影子端 pre-LIGHT / 原版光照]
-    L --> N
-    M --> N
-    N --> O[影子 vanilla connection packet sink]
-    O --> P[真实客户端 chunk+light / forget]
+flowchart TD
+    A[虚拟玩家移动] --> B[原版 ChunkMap 选柱<br/>scheduleChunkLoad]
+    B --> C{注入表已有区块?}
+    C -->|有| D[返回 ImposterProtoChunk<br/>立即完成原版链]
+    C -->|没有| E{本地生成门控开启?<br/>seedGenEnabled + 真实 seed}
+    E -->|是| F[原版 worldgen 生成]
+    E -->|否| G[返回空 ProtoChunk 占位<br/>status=FULL 立即完成原版链]
+    D --> I[playerLoadedChunk → onChunkMaterialized]
+    F --> I
+    I --> J{可见形状内?}
+    J -->|是| K[compare-pull<br/>携带 chunkPos + contentHash<br/>+ sectionHashes]
+    J -->|否| L[仅注入影子表<br/>供算光邻域]
+    G --> M[异步 pull 请求<br/>onChunkSelected → drainSelections]
+    M --> N[authoritative-full<br/>无基线直拉]
+    K --> O[服务端校验与差异比较]
+    N --> O
+    O -->|UNCHANGED| P[本地基线准确<br/>publishCachedChunk]
+    O -->|DELTA| Q[服务端差异 section 数据]
+    O -->|FULL| R[服务端完整区块数据]
+    P --> S[算光 + 打包官方包]
+    Q --> S
+    R --> S
+    S --> T[真实客户端 apply]
 ```
 
-统一协议的关键不是“缓存命中就不请求”：存档命中、影子本地生成和纯服务端取数都先形成同一份本地基线（若存在），携带 `chunkPos`、`contentHash`、`sectionHashes`、`lightGeneration` 进入一次合并后的 Compare+Pull。服务端是权威比较者，只返回 `FULL`、`DELTA` 或 `ERROR`；客户端不得根据 section hash 自行猜测 FULL/DELTA。
+### 6.2 各阶段说明
 
-本地生成门控是硬条件：客户端本地生成开关开启、服务端 SeedGen 开启、并且握手已收到真实 `seed + LevelStem` 才允许生成；任一条件不满足，直接跳过生成，交给服务端请求/原版 tracking，不以默认 seed 或伪造基线继续。
+| 阶段 | 触发条件 | 说明 |
+|------|----------|------|
+| **原版读盘** | `scheduleChunkLoad` 被调用 | 注入表已有 → 返回 `ImposterProtoChunk`；无 → 走空占位或生成分支。影子存档 type 126 由 `ShadowStorageManager` 读取 |
+| **本地生成** | SeedGen 门控开启（`seedGenEnabled` + 真实 seed + 客户端同开） | 原版 worldgen 生成，产出经 `playerLoadedChunk` 桥转 Compare+Pull |
+| **空区块占位** | 未注入且生成门控关闭 | 返回空 ProtoChunk（status=FULL），原版链立即完成；pull 独立异步 |
+| **compare-pull** | `onChunkMaterialized` 桥（读盘/生成路径） | 携带本地基线 hash 发服务端，服务端裁决 UNCHANGED/DELTA/FULL |
+| **authoritative-full** | `onChunkSelected` 登记（空占位路径） | 无本地基线，直接请求服务端完整区块 |
+| **服务端裁决** | 收到 pull 请求 | UNCHANGED=基线准确 / DELTA=差异 section / FULL=整块覆盖 |
+| **算光推送** | 数据落地后 | 影子端 `ThreadedLevelLightEngine` 算光 → 打包官方包 → 主线程 apply |
 
-区块数据流的边界：影子 `ChunkMap` 决定进入和离开 tracking，统一 Compare+Pull 只决定被选中区块的数据形态；所有结果在 `pre-LIGHT` 汇合，之后由原版 `ThreadedLevelLightEngine` 和 packet sink 推送。客户端不决定推送集合，也不实现第二套 unload。
+### 6.3 关键设计决策
 
-要点：
+**空区块占位（2026-09-09）**：原版 `scheduleChunkLoad` 永远返回已完成的 future（读盘失败也返回空区块）。影子端对齐此行为：未注入柱返回空 ProtoChunk 而非悬置 future。悬置 future 会阻塞 vanilla 选柱链（ChunkMap 等待 future 完成才继续选新柱），导致移动后新区块不加载。
 
-- **读盘优先**：`scheduleChunkLoad` 命中 type 126 时继续原版 `ChunkSerializer`；缺失才进入生成/请求分支。
-- **统一比较**：cache、local generation、纯 pull 都走同一个 Compare+Pull，服务端统一输出 `FULL` / `DELTA` / `ERROR`。
-- **生成安全**：没有真实 seed 或本地生成未开启时不生成；不得把本地猜测结果推到客户端。
-- **推送与卸载**：影子虚拟玩家触发原版 tracking；packet sink 透传 vanilla chunk+light 与 forget。
-- **世界保存**：影子 `saveAll()` 写入 `hassium_cache/<serverId>/world` 的 type 126 原版存档结构，热度淘汰由 `ShadowCacheEviction` 承担。
+**统一比较**：存档命中、本地生成和纯 pull 都先形成同一份本地基线（若存在），携带 `chunkPos`、`contentHash`、`sectionHashes`、`lightGeneration` 进入 Compare+Pull。服务端是权威比较者，只返回 `FULL`、`DELTA` 或 `ERROR`；客户端不得根据 section hash 自行猜测。
+
+**生成安全**：没有真实 seed 或本地生成未开启时不生成；不得把本地猜测结果推到客户端。
+
+**推送与卸载**：影子虚拟玩家触发原版 tracking；packet sink 透传 vanilla chunk+light 与 forget。
+
+**世界保存**：影子 `saveAll()` 写入 `hassium_cache/<serverId>/world` 的 type 126 原版存档结构，热度淘汰由 `ShadowCacheEviction` 承担。
 
 
 ## 7. 存储格式

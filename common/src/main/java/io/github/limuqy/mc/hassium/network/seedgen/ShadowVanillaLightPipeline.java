@@ -61,6 +61,11 @@ public final class ShadowVanillaLightPipeline {
         // 区块来源指标只能在 ClientChunkCache 实际落地后记账；此处仅排入光屏障。
         // CACHE_SNAPSHOT 因此不会伪装成网络 full miss。
         ShadowLightCompute.enqueueInjectedForLight(resolvedDimension, pos, origin);
+        // 兜底：pull FULL 注入后若无悬置 future，playerLoadedChunk 桥不会触发。
+        // REMOTE_FULL（权威 pull 响应）需要直接触发 compare-pull 到真实客户端。
+        if (source == ShadowChunkSource.REMOTE_FULL) {
+            ShadowTrackingSession.getInstance().onPullInjected(resolvedDimension, pos);
+        }
     }
 
     public static String currentDimension() {

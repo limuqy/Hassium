@@ -30,6 +30,10 @@ public interface ChunkMapAccessor {
     @Invoker("readChunk")
     CompletableFuture<Optional<CompoundTag>> hassium$readChunk(ChunkPos pos);
 
+    /** 标记位置为可替换（空区块占位；与 vanilla createEmptyChunk 同款）。 */
+    @Invoker("markPositionReplaceable")
+    void hassium$markPositionReplaceable(ChunkPos pos);
+
 #if MC_VER < MC_1_21_1
     @Invoker("scheduleChunkLoad")
     CompletableFuture<com.mojang.datafixers.util.Either<net.minecraft.world.level.chunk.ChunkAccess,

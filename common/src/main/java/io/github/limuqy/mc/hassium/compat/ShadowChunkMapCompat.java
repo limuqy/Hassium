@@ -102,6 +102,11 @@ public final class ShadowChunkMapCompat {
         SUSPENDED_LOADS.clear();
     }
 
+    /** 当前悬置 future 数量（诊断用）。 */
+    public static int suspendedLoadCount() {
+        return SUSPENDED_LOADS.size();
+    }
+
 
     /** 影子存档只有 type 126；非 126 槽不得交给原版 zlib 解析。 */
     public static boolean shouldSkipVanillaChunkParse(boolean shadowContext, boolean hassiumType126) {

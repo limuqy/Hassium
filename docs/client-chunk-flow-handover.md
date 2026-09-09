@@ -2,6 +2,11 @@
 
 > 状态基线：`feature/vanilla-direct-network` @ `109ba1b`（2026-09-05）。
 > 2026-09-09 追加 §0.5：P2 推送抑制代码核对完成态回填；§6 探针「无基线 FULL」改读 `newFullChunkRequestCount`。
+> **2026-09-09 空区块占位方案**：§0.2 提到的悬置 future 机制已被替换——
+> `scheduleChunkLoad` 对未注入柱返回空 ProtoChunk（status=FULL，与 vanilla
+> `createEmptyChunk` 同款），原版链立即完成推进到 `playerLoadedChunk`，
+> pull 独立异步进行。悬置 future 会阻塞 vanilla 选柱链（ChunkMap 等待 future
+> 完成才继续选新柱），导致移动后新区块不加载。详见 [`architecture.md`](architecture.md) §6.1。
 > 目标真相源：[`architecture.md`](architecture.md) §6「客户端区块数据流」（**已标「已对齐（现状）」**）。
 > 本文回答三个问题：**哪些已完成不许再动**、**现行过渡链路有哪些（对齐后要清理什么）**、**对齐开发怎么做、怎么验收**。
 

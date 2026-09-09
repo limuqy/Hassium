@@ -82,6 +82,21 @@ public final class ShadowTrackingSession {
     private final java.util.ArrayList<ChunkPos> repairPool = new java.util.ArrayList<>();
     private long lastRepairSweepNs;
 
+    /**
+     * 可见形状周期扫描间隔（毫秒）。移动后 vanilla 选柱链（scheduleChunkLoad →
+     * onChunkSelected → pendingSelections）会停——悬置 future 卡住或 2ms tick 预算被
+     * 卸载耗尽。本扫描不依赖 vanilla，直接枚举虚拟玩家当前可见形状内未注入柱补齐 pull。
+     */
+    private static final long SWEEP_INTERVAL_MS = 500L;
+    /** 单次形状扫描最多入队的缺失柱数（防单泵风暴；剩余下轮续扫）。 */
+    private static final int MAX_SWEEP_PER_PUMP = 128;
+    private long lastSweepMs;
+    /** 形状扫描在途柱（复合键 → 入队时刻）：已发 pull 未注入；注入后清除。防重复入队。
+     *  超时清除——pull 响应丢失/服务端拒绝时柱会永久卡在在途集导致形状出现永久洞。 */
+    private static final long SWEEP_INFLIGHT_TIMEOUT_MS = 15_000L;
+    private final java.util.Map<Long, Long> sweepInFlight =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
     /** 待移除虚拟玩家（{@link #reset} 在客户端主线程调用；vanilla remove 须留给影子主循环）。 */
     private record PendingRemoval(ShadowSeedServer server, ServerPlayer player) {}
 
@@ -156,7 +171,9 @@ public final class ShadowTrackingSession {
             currentDimension = null;
             createFailed = false;
             pendingSelections.clear();
+            sweepInFlight.clear();
             lastChunkTickMs = 0;
+            lastSweepMs = 0;
         }
         if (shadow == null || createFailed) {
             return;
@@ -186,6 +203,7 @@ public final class ShadowTrackingSession {
         }
         drainBootGrid(shadow, MAX_REQUESTS_PER_PUMP);
         drainSelections(shadow, MAX_REQUESTS_PER_PUMP);
+        sweepVisibleShape(shadow, now);
     }
 
     private void applyState(ShadowSeedServer shadow, PendingState state) {
@@ -356,6 +374,80 @@ public final class ShadowTrackingSession {
         emitPullGroups(withBaseline, withoutBaseline);
     }
 
+    /**
+     * 可见形状周期扫描：移动后 vanilla 选柱链（scheduleChunkLoad → onChunkSelected）会停
+     * ——悬置 future 卡住或 2ms tick 预算被卸载耗尽，pendingSelections 不再填充。
+     * 本扫描不依赖 vanilla，直接枚举虚拟玩家当前可见形状内「未注入且未在途」的柱补齐 pull。
+     * 形状 = isChunkInRange(serverViewDistance)；已注入 / 已请求（tryRequestMiss 已登记）跳过。
+     */
+    private void sweepVisibleShape(ShadowSeedServer shadow, long nowMs) {
+        if (virtualPlayer == null || currentDimension == null || serverViewDistance <= 0) {
+            return;
+        }
+        if (nowMs - lastSweepMs < SWEEP_INTERVAL_MS) {
+            return;
+        }
+        lastSweepMs = nowMs;
+        ChunkPos center = virtualPlayer.chunkPosition();
+        if (center == null) {
+            return;
+        }
+        // 过期在途清除：pull 响应丢失/服务端拒绝的柱超时后可重试，防形状永久洞
+        long expireBefore = nowMs - SWEEP_INFLIGHT_TIMEOUT_MS;
+        sweepInFlight.entrySet().removeIf(e -> e.getValue() < expireBefore);
+        java.util.List<ChunkPos> withBaseline = new java.util.ArrayList<>();
+        java.util.List<ChunkPos> withoutBaseline = new java.util.ArrayList<>();
+        int sent = 0;
+        int radius = serverViewDistance;
+        // 逐环由近及远扫描，优先补齐玩家脚下的洞
+        for (int ring = 0; ring <= radius && sent < MAX_SWEEP_PER_PUMP; ring++) {
+            int perimeter = ring == 0 ? 1 : 8 * ring;
+            for (int i = 0; i < perimeter && sent < MAX_SWEEP_PER_PUMP; i++) {
+                int x, z;
+                if (ring == 0) {
+                    x = center.x;
+                    z = center.z;
+                } else {
+                    int side = i / (2 * ring);
+                    int step = i % (2 * ring);
+                    switch (side) {
+                        case 0 -> { x = center.x - ring; z = center.z - ring + step; }
+                        case 1 -> { x = center.x - ring + step; z = center.z + ring; }
+                        case 2 -> { x = center.x + ring; z = center.z + ring - step; }
+                        default -> { x = center.x + ring - step; z = center.z - ring; }
+                    }
+                }
+                if (!ChunkShapeCompat.contains(center.x, center.z, radius, x, z)) {
+                    continue;
+                }
+                if (shadow.injectedChunk(currentDimension, x, z) != null) {
+                    sweepInFlight.remove(io.github.limuqy.mc.hassium.utils.DimensionKey
+                            .key(currentDimension, x, z));
+                    continue; // 已注入
+                }
+                // 在途防抖：已发 pull 未注入的柱不重复入队（超时后可重入）
+                long key = io.github.limuqy.mc.hassium.utils.DimensionKey
+                        .key(currentDimension, x, z);
+                if (sweepInFlight.putIfAbsent(key, nowMs) != null) {
+                    continue;
+                }
+                ChunkPos pos = new ChunkPos(x, z);
+                if (ShadowLightCompute.hasLocalPullBaseline(currentDimension, pos)) {
+                    withBaseline.add(pos);
+                } else {
+                    withoutBaseline.add(pos);
+                }
+                sent++;
+            }
+        }
+        if (sent > 0) {
+            DebugLogger.info(DebugLogger.LogType.NETWORK,
+                    "[SHADOW_TRACK] sweep missing={} center=({},{}) radius={} (dimension={})",
+                    sent, center.x, center.z, radius, currentDimension);
+        }
+        emitPullGroups(withBaseline, withoutBaseline);
+    }
+
     /** 会话静态基准光盘：起步时把身子背后没有窗口追随的滞留环逐环补齐（气球尾部闭环）。 */
     private void drainBootGrid(ShadowSeedServer shadow, int maxPerPump) {
         if (!bootGridArmed) {
@@ -519,6 +611,31 @@ public final class ShadowTrackingSession {
         }
     }
 
+    /**
+     * pull FULL 注入后兜底触发 compare-pull：{@code completeSuspendedLoad} 可能无悬置
+     * future（scheduleChunkLoad 尚未选中 / future 已完成），{@code playerLoadedChunk}
+     * 桥不会触发，真实客户端永远收不到该柱。形状过滤与 onChunkMaterialized 同口径；
+     * tryRequestMiss 会话级防抖，与 playerLoadedChunk 路径不重复请求。
+     * 任意线程可调（pull 响应落地路径在主线程）。
+     */
+    public void onPullInjected(String dimension, ChunkPos pos) {
+        if (boundServer == null || dimension == null || pos == null) {
+            return;
+        }
+        // 形状扫描在途登记清除：柱已注入，下轮扫描不会再拉
+        sweepInFlight.remove(io.github.limuqy.mc.hassium.utils.DimensionKey
+                .key(dimension, pos.x, pos.z));
+        if (!inVanillaVisibleShape(pos.x, pos.z)) {
+            return;
+        }
+        if (ShadowLightCompute.tryRequestMiss(dimension, pos)) {
+            DebugLogger.info(DebugLogger.LogType.NETWORK,
+                    "[SHADOW_TRACK] pull-injected ({}, {}) -> compare-pull (dimension={})",
+                    pos.x, pos.z, dimension);
+            ShadowPullClient.requestFull(dimension, java.util.List.of(pos));
+        }
+    }
+
     private static void logCreateFailed(Throwable t) {
         io.github.limuqy.mc.hassium.Constants.LOG.warn(
                 "Hassium: shadow virtual player tracking session failed; "
@@ -545,6 +662,7 @@ public final class ShadowTrackingSession {
         s.currentDimension = null;
         s.createFailed = false;
         s.pendingSelections.clear();
+        s.sweepInFlight.clear();
         s.homeChunk = null;
         s.bootGridArmed = false;
         s.bootGridCells.clear();
