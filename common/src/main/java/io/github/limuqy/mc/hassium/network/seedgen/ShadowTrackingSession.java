@@ -90,6 +90,11 @@ public final class ShadowTrackingSession {
     private static final long SWEEP_INTERVAL_MS = 500L;
     /** 单次形状扫描最多入队的缺失柱数（防单泵风暴；剩余下轮续扫）。 */
     private static final int MAX_SWEEP_PER_PUMP = 128;
+    /** 客户端 unload 后、影子仍在可见形状内时的重发队列（真实服 Forget 半径可能小于影子 vd）。 */
+    private final java.util.concurrent.ConcurrentLinkedQueue<ChunkPos> redeliverQueue =
+            new java.util.concurrent.ConcurrentLinkedQueue<>();
+    /** 单泵最多本地重发柱数。 */
+    private static final int MAX_REDELIVER_PER_PUMP = 32;
     private long lastSweepMs;
     /** 形状扫描在途柱（复合键 → 入队时刻）：已发 pull 未注入；注入后清除。防重复入队。
      *  超时清除——pull 响应丢失/服务端拒绝时柱会永久卡在在途集导致形状出现永久洞。 */
@@ -172,6 +177,7 @@ public final class ShadowTrackingSession {
             createFailed = false;
             pendingSelections.clear();
             sweepInFlight.clear();
+            redeliverQueue.clear();
             lastChunkTickMs = 0;
             lastSweepMs = 0;
         }
@@ -204,6 +210,52 @@ public final class ShadowTrackingSession {
         drainBootGrid(shadow, MAX_REQUESTS_PER_PUMP);
         drainSelections(shadow, MAX_REQUESTS_PER_PUMP);
         sweepVisibleShape(shadow, now);
+        drainRedeliver(shadow);
+    }
+
+    /**
+     * 真实客户端 unload 时调用（任意线程）：清光桥凭据；若影子仍在可见形状内且有数据，
+     * 入重发队列。对齐原版语义——服务端仍把你算在 tracking 窗内就必须有数据；
+     * 真实服 Forget 半径可能小于影子 vd，不能等 tracking 边沿。
+     */
+    public void onClientChunkUnloaded(ChunkPos pos) {
+        ShadowLightCompute.onClientChunkUnloaded(pos);
+        if (pos == null || boundServer == null || currentDimension == null) {
+            return;
+        }
+        if (!inVanillaVisibleShape(pos.x, pos.z)) {
+            return;
+        }
+        if (boundServer.injectedChunk(currentDimension, pos.x, pos.z) == null) {
+            return;
+        }
+        redeliverQueue.add(pos);
+    }
+
+    /** 影子主循环：把「窗内但客户端已无」的柱本地重发（等价原版 trackChunk）。 */
+    private void drainRedeliver(ShadowSeedServer shadow) {
+        int sent = 0;
+        ChunkPos pos;
+        while (sent < MAX_REDELIVER_PER_PUMP && (pos = redeliverQueue.poll()) != null) {
+            if (shadow == null || currentDimension == null) {
+                continue;
+            }
+            if (shadow.injectedChunk(currentDimension, pos.x, pos.z) == null) {
+                continue;
+            }
+            if (!inVanillaVisibleShape(pos.x, pos.z)) {
+                continue;
+            }
+            if (ShadowLightCompute.hasClientApplyEpoch(currentDimension, pos)) {
+                continue; // 已有落地凭据
+            }
+            if (ShadowLightCompute.publishCachedChunk(currentDimension, pos)) {
+                DebugLogger.info(DebugLogger.LogType.NETWORK,
+                        "[SHADOW_TRACK] redeliver ({}, {}) -> publishCached (dimension={})",
+                        pos.x, pos.z, currentDimension);
+                sent++;
+            }
+        }
     }
 
     private void applyState(ShadowSeedServer shadow, PendingState state) {
@@ -423,7 +475,14 @@ public final class ShadowTrackingSession {
                 if (shadow.injectedChunk(currentDimension, x, z) != null) {
                     sweepInFlight.remove(io.github.limuqy.mc.hassium.utils.DimensionKey
                             .key(currentDimension, x, z));
-                    continue; // 已注入
+                    // 已注入但客户端无落地凭据（真实服半径更小导致 Forget，或 tracking 边沿漏发）：
+                    // 入重发队列，由 drainRedeliver 限速 publish
+                    ChunkPos injectedPos = new ChunkPos(x, z);
+                    if (!ShadowLightCompute.hasClientApplyEpoch(currentDimension, injectedPos)
+                            && redeliverQueue.size() < MAX_REDELIVER_PER_PUMP * 4) {
+                        redeliverQueue.add(injectedPos);
+                    }
+                    continue;
                 }
                 // 在途防抖：已发 pull 未注入的柱不重复入队（超时后可重入）
                 long key = io.github.limuqy.mc.hassium.utils.DimensionKey
@@ -577,10 +636,10 @@ public final class ShadowTrackingSession {
     }
 
     /**
-     * 原版链产出桥（§6 节点 E/G → I）：读盘命中柱 / 本地生成柱注入影子表形成本地
-     * 基线，携带基线发统一比对请求；服务端裁决 UNCHANGED/DELTA/FULL 后经既有响应
-     * 路径落地（UNCHANGED → publishCachedChunk 发布注入物 / FULL → 服务端数据覆盖）。
-     * 影子主循环线程（playerLoadedChunk 派发）调用；tryRequestMiss 会话级防抖。
+     * 原版链产出桥 = **tracking 进范围边沿**（§6.0）：`playerLoadedChunk` HEAD 派发。
+     * 注入影子表形成本地基线后，**必向真实客户端交付**（等价原版 trackChunk），
+     * 不得用会话防抖挡交付。compare-pull 仅用于对真实服务端的新鲜度/省带宽。
+     * 影子主循环线程调用。
      */
     public void onChunkMaterialized(String dimension, ChunkPos pos,
                                     net.minecraft.world.level.chunk.LevelChunk chunk) {
@@ -589,33 +648,56 @@ public final class ShadowTrackingSession {
             return;
         }
         boolean alreadyMaterialized = shadow.injectedChunk(dimension, pos.x, pos.z) != null;
+        // 磁盘命中柱的 hash 在 scheduleChunkLoad 读盘时由 MixinRegionFile 回填；
+        // 生成柱无 hash → dirty（saveAll 落盘）。1.20.1 无 getPersistedStatus，按 hash 判别。
+        boolean diskHit = io.github.limuqy.mc.hassium.storage.ShadowStorageHashes
+                .get(dimension, pos) != null;
         if (!alreadyMaterialized) {
-            // 磁盘命中柱的 hash 在 scheduleChunkLoad 读盘时由 MixinRegionFile 回填；
-            // 生成柱无 hash → dirty（saveAll 落盘）。1.20.1 无 getPersistedStatus，按 hash 判别。
-            boolean diskHit = io.github.limuqy.mc.hassium.storage.ShadowStorageHashes
-                    .get(dimension, pos) != null;
             shadow.injectLoadedChunk(dimension, pos, chunk, !diskHit);
         }
-        // 已物化柱（R2 复用影子世界）同样要发比对：影子世界有 ≠ 真实客户端新世界有，
-        // UNCHANGED → publishCachedChunk 即完成向真实客户端的重交付。
         // 影子 ticket 可能物化原版可见形状外的角区柱（setChunkViewDistance=vd+1）：
-        // 仍注入影子表供算光邻域，但不向真实客户端 pull（§0.4 只拉用户能看到的）。
+        // 仍注入影子表供算光邻域，但不向真实客户端交付（§6.2 只推用户能看到的）。
         if (!inVanillaVisibleShape(pos.x, pos.z)) {
             return;
         }
-        if (ShadowLightCompute.tryRequestMiss(dimension, pos)) {
+        // 空占位/无盘命中的首注入：没有可发布的基线，先 pull 真实数据（禁止把空气柱推给客户端）
+        boolean hasLocalBaseline = alreadyMaterialized
+                || diskHit
+                || ShadowLightCompute.hasLocalPullBaseline(dimension, pos);
+        if (!hasLocalBaseline) {
             DebugLogger.info(DebugLogger.LogType.NETWORK,
-                    "[SHADOW_TRACK] materialized ({}, {}) alreadyMaterialized={} -> compare-pull (dimension={})",
-                    pos.x, pos.z, alreadyMaterialized, dimension);
+                    "[SHADOW_TRACK] materialized ({}, {}) no-local-baseline -> pull (dimension={})",
+                    pos.x, pos.z, dimension);
+            if (ShadowLightCompute.hasLocalPullBaseline(dimension, pos)) {
+                ShadowPullClient.requestFull(dimension, java.util.List.of(pos));
+            } else {
+                ShadowPullClient.requestAuthoritativeFull(dimension, java.util.List.of(pos));
+            }
+            return;
+        }
+        // 进边沿必交付：等价原版 trackChunk
+        boolean published = ShadowLightCompute.publishCachedChunk(dimension, pos);
+        if (!published) {
+            DebugLogger.info(DebugLogger.LogType.NETWORK,
+                    "[SHADOW_TRACK] materialized ({}, {}) publish-failed -> pull (dimension={})",
+                    pos.x, pos.z, dimension);
+            ShadowLightCompute.clearRequestMiss(dimension, pos);
+            ShadowPullClient.requestAuthoritativeFull(dimension, java.util.List.of(pos));
+            return;
+        }
+        DebugLogger.info(DebugLogger.LogType.NETWORK,
+                "[SHADOW_TRACK] materialized ({}, {}) alreadyMaterialized={} -> publishCached (dimension={})",
+                pos.x, pos.z, alreadyMaterialized, dimension);
+        // 已本地交付后，可选对真实服 compare 保新鲜；防抖只作用于网络请求
+        if (ShadowLightCompute.tryRequestMiss(dimension, pos)) {
             ShadowPullClient.requestFull(dimension, java.util.List.of(pos));
         }
     }
 
     /**
-     * pull FULL 注入后兜底触发 compare-pull：{@code completeSuspendedLoad} 可能无悬置
-     * future（scheduleChunkLoad 尚未选中 / future 已完成），{@code playerLoadedChunk}
-     * 桥不会触发，真实客户端永远收不到该柱。形状过滤与 onChunkMaterialized 同口径；
-     * tryRequestMiss 会话级防抖，与 playerLoadedChunk 路径不重复请求。
+     * pull FULL 注入后触发交付：数据已在影子表，走与 tracking 进边沿相同的
+     * publish 路径。`completeSuspendedLoad` 可能无悬置 future（holder 已完成），
+     * `playerLoadedChunk` 桥不会触发时靠本路径兜底。
      * 任意线程可调（pull 响应落地路径在主线程）。
      */
     public void onPullInjected(String dimension, ChunkPos pos) {
@@ -628,11 +710,13 @@ public final class ShadowTrackingSession {
         if (!inVanillaVisibleShape(pos.x, pos.z)) {
             return;
         }
-        if (ShadowLightCompute.tryRequestMiss(dimension, pos)) {
-            DebugLogger.info(DebugLogger.LogType.NETWORK,
-                    "[SHADOW_TRACK] pull-injected ({}, {}) -> compare-pull (dimension={})",
-                    pos.x, pos.z, dimension);
-            ShadowPullClient.requestFull(dimension, java.util.List.of(pos));
+        DebugLogger.info(DebugLogger.LogType.NETWORK,
+                "[SHADOW_TRACK] pull-injected ({}, {}) -> publishCached (dimension={})",
+                pos.x, pos.z, dimension);
+        if (!ShadowLightCompute.publishCachedChunk(dimension, pos)) {
+            // 注入表有柱但不可物化（异常）：再拉一次权威全量
+            ShadowLightCompute.clearRequestMiss(dimension, pos);
+            ShadowPullClient.requestAuthoritativeFull(dimension, java.util.List.of(pos));
         }
     }
 
@@ -663,6 +747,7 @@ public final class ShadowTrackingSession {
         s.createFailed = false;
         s.pendingSelections.clear();
         s.sweepInFlight.clear();
+        s.redeliverQueue.clear();
         s.homeChunk = null;
         s.bootGridArmed = false;
         s.bootGridCells.clear();

@@ -139,7 +139,8 @@ public final class ShadowLightCompute {
     static final Object LIGHT_ENGINE_MUTEX = new Object();
 
 
-    /** miss 已请求集合（复合键；会话内防抖：直推与请求并存时不重复请求；断连清空）。 */
+    /** miss 已请求集合（复合键；**仅**防对真实服务端的重复 pull；卸载后清除；断连清空）。
+     *  不得用于挡「影子 → 真实客户端」交付——原版进范围必重发。 */
     private static final java.util.Set<Long> requestedMisses = java.util.concurrent.ConcurrentHashMap.newKeySet();
     /**
      * 分母「应用区块」已记账柱。不得与 {@link #requestedMisses} 共用：hash miss 会先
@@ -329,6 +330,25 @@ public final class ShadowLightCompute {
     /** 旧签名（过渡期兼容）：语义 = OVERWORLD。 */
     public static boolean tryRequestMiss(ChunkPos pos) {
         return tryRequestMiss(DimensionKey.OVERWORLD, pos);
+    }
+
+    /** 客户端原版卸载后解除对真实服的 pull 防抖，允许再 compare（不挡本地 publish）。 */
+    public static void clearRequestMiss(String dimension, ChunkPos pos) {
+        if (dimension == null || pos == null) {
+            return;
+        }
+        requestedMisses.remove(DimensionKey.key(dimension, pos.x, pos.z));
+    }
+
+    /**
+     * 真实客户端是否仍持有该柱的影子全量落地凭据（apply 成功后写入，Forget/unload 时摘除）。
+     * 仅用于 server_push 路径的「已落地则跳过重复整柱」；**不是** tracking 进边沿的交付门禁。
+     */
+    public static boolean hasClientApplyEpoch(String dimension, ChunkPos pos) {
+        if (dimension == null || pos == null) {
+            return false;
+        }
+        return shadowApplyEpochs.containsKey(DimensionKey.key(dimension, pos.x, pos.z));
     }
 
     /**
@@ -2064,7 +2084,13 @@ public final class ShadowLightCompute {
             }
         }
     }
-    /** 客户端原版卸载立刻作废该柱的光桥凭据和未发送的光照掩码。 */
+    /**
+     * 客户端原版 unload 钩子：**只**作废光桥凭据（epoch / 未发 light 掩码依赖）。
+     * <p>
+     * 原版对齐：客户端卸载 ≠ 影子服务端卸载。影子注入表的回收只跟影子 tracking /
+     * {@code unloadDelaySecs} 走；这里不得 {@code unloadChunk} 拆表，也不得登记
+     * 「已请求」防抖——否则重进范围无法再交付，形成永久洞。
+     */
     public static void onClientChunkUnloaded(ChunkPos pos) {
         if (pos == null) {
             return;
@@ -2073,20 +2099,12 @@ public final class ShadowLightCompute {
         long chunkKey = DimensionKey.key(dim, pos.x, pos.z);
         Long removedEpoch = shadowApplyEpochs.remove(chunkKey);
         fullApplyTraces.remove(chunkKey);
+        // 允许对真实服再 compare（卸载后基线可能已过期）；不挡本地 publish
+        requestedMisses.remove(chunkKey);
         if (removedEpoch != null) {
             DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
                     "[SHADOW_LIGHT] Client unload invalidated ({}, {}) epoch={}",
                     pos.x, pos.z, removedEpoch);
-        }
-        // 用现有 unloadChunk 卸载影子表区块：先 flush 到磁盘再摘表。
-        // 不用 removeInjectedChunk（只摘表不落盘）——会导致 flush 时序列化不到数据，
-        // 磁盘缓存丢失该区块，后续从磁盘加载得到空区块。
-        ShadowSeedServer server = ShadowServerRegistry.getInstance().get();
-        if (server != null) {
-            LevelChunk chunk = server.injectedChunk(dim, pos.x, pos.z);
-            if (chunk != null) {
-                server.unloadChunk(dim, pos, chunk, false);
-            }
         }
     }
 

@@ -99,66 +99,125 @@ Hassium/
 
 ## 6. 客户端区块数据流
 
-> **状态：已对齐（现状）**。影子虚拟 `ServerPlayer` tracking + 统一 Compare+Pull 已实现
-> （2026-09-05 对齐波）；2026-09-09 空区块占位方案：`scheduleChunkLoad` 对未注入柱
-> 返回空 ProtoChunk（与 vanilla `createEmptyChunk` 同款），原版链立即完成推进到
-> `playerLoadedChunk`，pull 独立异步进行——不再悬置 future 阻塞 vanilla 选柱链。
+> **状态：原版对齐（2026-09-10 波）**。客户端对区块**全被动**（只收官方 chunk+light / forget）；
+> 影子端扮演「进程内原版服务端」：**只认 tracking 的 was/now 边沿**决定交付/Forget，
+> 不维护「本会话已发过」表，也不因客户端卸载拆影子注入表。
 
-**影子端架构**：客户端进程内运行完整 `MinecraftServer`（`ShadowSeedServer`）。真实玩家位置只同步给唯一虚拟 `ServerPlayer`；影子 `ServerChunkCache` / `ChunkMap` 负责 tracking、读盘、生成、光照和 unload。客户端不枚举视距、不维护 halo；每个被原版 tracking 选中的区块都进入同一个"对比并拉取"协议。
+### 6.0 对齐原则（相对原版 1.20.1 `ChunkMap`）
 
-### 6.1 区块选中与数据获取时序
+原版契约（mojmap 对照）：
 
-原版 `ChunkMap` 选中区块后，按以下优先级决定数据来源。**所有路径最终都进入统一 Compare+Pull**（服务端裁决 UNCHANGED/DELTA/FULL），保证数据准确性：
+| 边沿 | 原版行为 | Hassium 影子端 |
+|------|----------|----------------|
+| **进范围** `!was && now` | `playerLoadedChunk` → `trackChunk` **无条件**发 `ClientboundLevelChunkWithLightPacket` | `onChunkMaterialized` **必交付**：影子有数据 → `publishCachedChunk`；无数据 → pull 落地后再交付 |
+| **出范围** `was && !now` | `untrackChunk` → `ForgetLevelChunkPacket` | 影子 tracking 出窗 → 影子内存按自身 unload 语义回收；真实客户端 Forget 来自**真实服务端**几何 tracking（PULL 模式下 trackChunk 被压制，forget 仍透传） |
+| **客户端** | `ClientChunkCache` 槽位收包即写 / Forget 即 drop | 同左；`MixinClientLevel.unload` 清光桥凭据；若影子仍在可见形状内且有数据 → **入重发队列**（真实服 Forget 半径可能 &lt; 影子 vd，不能等 tracking 边沿） |
+| **「已发送」记忆** | **无** | **无**。`requestedMisses` 仅防「对真实服务端」的重复 compare-pull，**不得**挡「影子 → 真实客户端」交付 |
 
 ```mermaid
-flowchart TD
-    A[虚拟玩家移动] --> B[原版 ChunkMap 选柱<br/>scheduleChunkLoad]
-    B --> C{注入表已有区块?}
-    C -->|有| D[返回 ImposterProtoChunk<br/>立即完成原版链]
-    C -->|没有| E{本地生成门控开启?<br/>seedGenEnabled + 真实 seed}
-    E -->|是| F[原版 worldgen 生成]
-    E -->|否| G[返回空 ProtoChunk 占位<br/>status=FULL 立即完成原版链]
-    D --> I[playerLoadedChunk → onChunkMaterialized]
-    F --> I
-    I --> J{可见形状内?}
-    J -->|是| K[compare-pull<br/>携带 chunkPos + contentHash<br/>+ sectionHashes]
-    J -->|否| L[仅注入影子表<br/>供算光邻域]
-    G --> M[异步 pull 请求<br/>onChunkSelected → drainSelections]
-    M --> N[authoritative-full<br/>无基线直拉]
-    K --> O[服务端校验与差异比较]
-    N --> O
-    O -->|UNCHANGED| P[本地基线准确<br/>publishCachedChunk]
-    O -->|DELTA| Q[服务端差异 section 数据]
-    O -->|FULL| R[服务端完整区块数据]
-    P --> S[算光 + 打包官方包]
-    Q --> S
-    R --> S
-    S --> T[真实客户端 apply]
+flowchart LR
+  subgraph RS[真实服务端]
+    A[权威区块 + 几何 tracking]
+  end
+  subgraph SH[影子端 = 进程内原版服务端]
+    T["ChunkMap was/now 边沿"]
+    M[内存 / type126 盘 + LightEngine]
+  end
+  subgraph CL[真实客户端 被动]
+    C[ClientChunkCache 槽位]
+  end
+  A -->|"pull / compare-pull<br/>仅省真实服带宽"| M
+  M --> T
+  T -->|"进范围 必发 LevelChunkWithLight"| C
+  A -->|"出范围 Forget（PULL 模式仍透传）"| C
+  T -.->|"影子自身 unloadDelay / 票"| M
 ```
 
-### 6.2 各阶段说明
+### 6.1 端到端时序
 
-| 阶段 | 触发条件 | 说明 |
-|------|----------|------|
-| **原版读盘** | `scheduleChunkLoad` 被调用 | 注入表已有 → 返回 `ImposterProtoChunk`；无 → 走空占位或生成分支。影子存档 type 126 由 `ShadowStorageManager` 读取 |
-| **本地生成** | SeedGen 门控开启（`seedGenEnabled` + 真实 seed + 客户端同开） | 原版 worldgen 生成，产出经 `playerLoadedChunk` 桥转 Compare+Pull |
-| **空区块占位** | 未注入且生成门控关闭 | 返回空 ProtoChunk（status=FULL），原版链立即完成；pull 独立异步 |
-| **compare-pull** | `onChunkMaterialized` 桥（读盘/生成路径） | 携带本地基线 hash 发服务端，服务端裁决 UNCHANGED/DELTA/FULL |
-| **authoritative-full** | `onChunkSelected` 登记（空占位路径） | 无本地基线，直接请求服务端完整区块 |
-| **服务端裁决** | 收到 pull 请求 | UNCHANGED=基线准确 / DELTA=差异 section / FULL=整块覆盖 |
-| **算光推送** | 数据落地后 | 影子端 `ThreadedLevelLightEngine` 算光 → 打包官方包 → 主线程 apply |
+```mermaid
+sequenceDiagram
+  participant P as 真实玩家
+  participant RS as 真实服务端
+  participant SH as 影子 ChunkMap
+  participant LG as 影子 LightEngine
+  participant CL as 真实客户端
+  P->>SH: 位置同步（虚拟 ServerPlayer move）
+  SH->>SH: scheduleChunkLoad / tracking 边沿
+  alt 影子注入表已有
+    SH->>SH: ImposterProtoChunk 完成原版链
+    SH->>LG: playerLoadedChunk → onChunkMaterialized
+    LG->>CL: publishCachedChunk（算光后官方包）— 必交付
+    opt 基线新鲜度
+      SH->>RS: compare-pull（防抖只作用于此）
+      RS-->>SH: UNCHANGED / DELTA / FULL
+      SH->>LG: 覆盖注入 / 续算
+      LG->>CL: 再 apply（REPLACE）
+    end
+  else 影子无数据
+    SH->>RS: authoritative-full / compare-pull
+    RS-->>SH: FULL / DELTA
+    SH->>LG: inject + 算光
+    LG->>CL: 官方包 apply
+  end
+  Note over P,CL: 玩家走出范围
+  RS->>CL: ForgetLevelChunk（真实服几何）
+  CL->>CL: drop 槽位 + unload（仅清 epoch）
+  SH->>SH: 影子票/延迟卸载（不依赖客户端 unload）
+```
 
-### 6.3 关键设计决策
+### 6.2 供给路径（数据从哪来 → 怎么到客户端）
 
-**空区块占位（2026-09-09）**：原版 `scheduleChunkLoad` 永远返回已完成的 future（读盘失败也返回空区块）。影子端对齐此行为：未注入柱返回空 ProtoChunk 而非悬置 future。悬置 future 会阻塞 vanilla 选柱链（ChunkMap 等待 future 完成才继续选新柱），导致移动后新区块不加载。
+| 路径 | 触发 | 影子侧 | 客户端交付 |
+|------|------|--------|------------|
+| **盘/内存命中** | tracking 进范围且 `injectedChunk` / `loadFromDisk` 有货 | `publishCachedChunk` → `submitPreLight` | 必交付（等价原版 trackChunk） |
+| **本地 SeedGen** | 门控开 + 真实 seed | 原版 worldgen → 物化 → 同上 | 必交付 |
+| **网络 pull** | 影子无基线，或 compare 裁决 DELTA/FULL | `ShadowPullClient` → inject → 算光 | 必交付 |
+| **空占位 / 悬置** | 选柱时尚无数据 | 等 pull 落地 `completeSuspendedLoad` 再进物化桥 | 落地后必交付 |
+| **形状外角区** | ticket 比可见形状宽一环 | 只注入供算光邻域 | **不**向真实客户端交付 |
 
-**统一比较**：存档命中、本地生成和纯 pull 都先形成同一份本地基线（若存在），携带 `chunkPos`、`contentHash`、`sectionHashes`、`lightGeneration` 进入 Compare+Pull。服务端是权威比较者，只返回 `FULL`、`DELTA` 或 `ERROR`；客户端不得根据 section hash 自行猜测。
+### 6.3 客户端职责边界
 
-**生成安全**：没有真实 seed 或本地生成未开启时不生成；不得把本地猜测结果推到客户端。
+**做**：
 
-**推送与卸载**：影子虚拟玩家触发原版 tracking；packet sink 透传 vanilla chunk+light 与 forget。
+- 接收并 `apply` 影子发出的官方 `ClientboundLevelChunkWithLightPacket`
+- 接收真实服务端 `ForgetLevelChunkPacket` 并 `ClientChunkCache.drop`
+- unload 时清光桥 epoch（`shadowApplyEpochs`），供后续 light 包门控
 
-**世界保存**：影子 `saveAll()` 写入 `hassium_cache/<serverId>/world` 的 type 126 原版存档结构，热度淘汰由 `ShadowCacheEviction` 承担。
+**不做**（已从旧模型移除）：
+
+- 客户端 unload **拆影子注入表**（曾导致「影子有、客户端无」永久洞）
+- 会话级「已请求过就不再交付」防抖挡 **client 交付**
+- 客户端自算视距 halo / 独立 admission
+
+### 6.4 与真实服务端的带宽优化（非交付门禁）
+
+- **compare-pull**：影子有本地基线时请求真实服裁决 UNCHANGED/DELTA/FULL，避免重复下载整柱。
+- **`requestedMisses`**：只防对真实服的重复 pull（含回退风暴），**卸载后应清除**，允许再 compare。
+- **分段增量 / 字典 ZSTD / 聚合**：作用于影子↔真实服务端与通道压缩，不改变「进范围必交付」语义。
+
+### 6.5 关键实现锚点
+
+| 语义 | 代码 |
+|------|------|
+| 进范围交付桥 | `MixinChunkMap.hassium$shadowBridgeLoadedChunk` → `ShadowTrackingSession.onChunkMaterialized` |
+| 本地交付 | `ShadowLightCompute.publishCachedChunk` → 算光 → `drainReady` → `handleLevelChunkWithLight` |
+| 客户端卸载 | `MixinClientLevel` → `ShadowTrackingSession.onClientChunkUnloaded`（清 epoch；窗内有货则 `redeliverQueue`） |
+| 窗内重发 | `drainRedeliver` / sweep 对 `injected && !clientApplyEpoch` 限速 `publishCachedChunk` |
+| 真实服 Forget | 原版 `untrackChunk`（PULL 模式不压制 forget） |
+| 影子选柱/补洞 | `scheduleChunkLoad` 悬置 + `sweepVisibleShape`（只拉**未注入**柱） |
+
+### 6.6 关键设计决策
+
+**原版 tracking 边沿是唯一交付触发（2026-09-10）**：曾用 `requestedMisses` 会话防抖 + 客户端 unload 拆影子表，与原版「进范围必重发」相反，造成对角线永久洞。现对齐：边沿必交付；防抖只作用于对真实服的网络 pull。
+
+**空区块占位（2026-09-09）**：`scheduleChunkLoad` 对未注入柱返回空 ProtoChunk / 悬置 future，避免阻塞 vanilla 选柱链；数据到达后经物化桥交付。
+
+**统一比较（影子↔真实服）**：基线 hash + sectionHashes 交服务端裁决；客户端不得自猜。比较结果落地后走与盘命中相同的 `publishCached` / inject 管线。
+
+**生成安全**：无真实 seed 或 SeedGen 关闭时不生成；不得把本地猜测推到客户端。
+
+**世界保存**：影子 `saveAll()` 写 `hassium_cache/<serverId>/world` type 126；热度淘汰 `ShadowCacheEviction`。
 
 
 ## 7. 存储格式

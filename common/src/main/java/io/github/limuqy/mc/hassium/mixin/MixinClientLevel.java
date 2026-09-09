@@ -12,13 +12,15 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
-/** 客户端区块卸载诊断与影子光照生命周期钩子。 */
+/** 客户端区块卸载：只作废光桥凭据（§6.0 原版对齐，不拆影子注入表）。 */
 @Mixin(ClientLevel.class)
 public class MixinClientLevel {
     @Inject(method = "unload", at = @At("HEAD"))
     private void hassium$onUnload(LevelChunk chunk, CallbackInfo ci) {
         ChunkPos pos = chunk.getPos();
-        io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.onClientChunkUnloaded(pos);
+        // 清光桥凭据；若影子仍在 tracking 窗内则入重发队列（§6.0）
+        io.github.limuqy.mc.hassium.network.seedgen.ShadowTrackingSession.getInstance()
+                .onClientChunkUnloaded(pos);
         hassium$logChunkUnload(pos);
     }
 
