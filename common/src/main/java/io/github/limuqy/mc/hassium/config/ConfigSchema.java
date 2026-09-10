@@ -42,6 +42,15 @@ public final class ConfigSchema {
     public static final ConfigKey<Boolean> CLIENT_CHUNK_SEED_GEN_ENABLED = bool("chunk.seedGenEnabled", ConfigScope.CLIENT, Domain.CHUNK_CORE, false,
             "是否启用 SeedGen（本地生成 pristine 区块；需双端同版本，默认关）。服务端开启时会下发世界种子",
             "Enable SeedGen (local pristine chunks; both sides same version; default off). Server enablement sends the world seed");
+    public static final ConfigKey<Boolean> CHUNK_VIEW_DISTANCE_EXTENSION_ENABLED = bool("chunk.viewDistanceExtensionEnabled", ConfigScope.CLIENT, Domain.CHUNK_CORE, true,
+            "超视渲染 OVD（影子双窗：clientRD>serverVD 时本地源回填环带）",
+            "Beyond-view render OVD (shadow dual-window: local fill when clientRD > serverVD)");
+    public static final ConfigKey<Integer> CHUNK_MAX_RENDER_DISTANCE = integer("chunk.maxRenderDistance", ConfigScope.CLIENT, Domain.CHUNK_CORE, 16, 2, 64,
+            "超视渲染 effective clientRD 上限",
+            "Max effective client render distance for OVD");
+    public static final ConfigKey<Boolean> CHUNK_OVD_LOCAL_GENERATION = bool("chunk.ovdLocalGeneration", ConfigScope.CLIENT, Domain.CHUNK_CORE, false,
+            "OVD 窗缓存 miss 时按服务端种子本地生成",
+            "Generate OVD-window chunks locally from the server seed on cache miss");
 
 
     // === 存储域（storage.*；SERVER 2 键）===

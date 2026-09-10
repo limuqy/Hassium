@@ -48,13 +48,13 @@ class ConfigRestructureRoundTripTest {
         Map<String, ConfigEntry<?>> byPath = ConfigSchema.entries().stream()
                 .collect(Collectors.toMap(e -> e.scope() + "/" + e.path(), Function.identity()));
 
-        assertEquals(44, ConfigSchema.entries().size(), "schema 留存键数");
-        assertEquals(44, values.asMap().size(), "defaults 键数");
+        assertEquals(47, ConfigSchema.entries().size(), "schema 留存键数");
+        assertEquals(47, values.asMap().size(), "defaults 键数");
 
         Map<String, Long> prefixCounts = ConfigSchema.entries().stream()
                 .collect(Collectors.groupingBy(e -> e.path().substring(0, e.path().indexOf('.') + 1),
                         Collectors.counting()));
-        assertEquals(Map.of("chunk.", 15L, "master.", 10L, "debug.", 15L,
+        assertEquals(Map.of("chunk.", 18L, "master.", 10L, "debug.", 15L,
                 "storage.", 2L, "compat.", 2L), prefixCounts);
 
         // 双端同名键 chunk.seedGenEnabled 各一
@@ -78,7 +78,7 @@ class ConfigRestructureRoundTripTest {
     void clientTomlRoundTripsNewKeys(@TempDir Path root) throws IOException {
         HassiumConfig.ChunkCoreConfig chunk = new HassiumConfig.ChunkCoreConfig(
                 true, 8192, 0.5, 0.8, 0.2, 1200, 1024, 200,
-                true, 12, 30, 4, true, true);
+                true, true, 16, false, 12, 30, 4, true, true);
         HassiumConfig.DebugConfig debug = new HassiumConfig.DebugConfig(
                 true, false, true, false, true, false, true, true, true, false);
         // 网关拓扑退役：client.toml 不再承载任何 master.* 键（原迁移策略 6 键已删）
@@ -112,7 +112,7 @@ class ConfigRestructureRoundTripTest {
         // server toml 只写 chunk.lightStrip/chunk.seedGenEnabled 两键，其余键读回默认 → 仅改这两键
         HassiumConfig.ChunkCoreConfig chunk = new HassiumConfig.ChunkCoreConfig(
                 true, 4096, 0.3, 0.7, 0.3, 6000, 0, 100,
-                true, 6, 15, 2, false, false);
+                true, true, 16, false, 6, 15, 2, false, false);
         HassiumConfig.CompatConfig compat = new HassiumConfig.CompatConfig(true, false);
         HassiumConfig.DebugConfig debug = new HassiumConfig.DebugConfig(
                 false, true, false, true, false, true, false, false, false, true);

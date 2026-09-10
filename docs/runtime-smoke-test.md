@@ -224,10 +224,11 @@ Hassium 跨版本（1.20.1–1.21.11）× 多加载器（fabric / neoforge）的
 | `classic.scenario` | 两轮连服 VD 切换（join → R1 dump → disconnect → reconnect → R2 dump → exit），行为不变迁移自旧状态机 | classic 门禁（analyzer 全集）+ validateStats |
 | `seedgen.scenario` | 单轮原版区块流冒烟（join → R1 dump → exit rounds=1）。需 profile=`seedgen` 覆盖影子端兼容配置 + 干净世界；门禁不再把已裁剪的 SeedGen 回退当必经路径 | `stats.clientAppliedChunkCount > 0`；`stats.clientLandedChunkCount > 0` |
 | `dimension.scenario` | 四轮切维冒烟：主世界 → 下界 → 末地 → 回主世界（单连接不断开）；中段轮 `gate=false`；整体 PASS 只看 R1 统计 + 各轮 assertProbe | 每轮 `joined` 且 `dimension` 正确；harness 另加 post-exit 三维度磁盘门禁 |
+| `ovdgen.scenario` | classic 两轮 + OVD 本地生成：profile 开双端 `seedGenEnabled`、客户端 `ovdLocalGeneration`、`maxRenderDistance=24`；强制 CleanWorld。**跑法**：`-Scenario ovdgen -ClientTimeoutSec 300 -AllowErrorPatterns "wrong location\|ZSTD dictionary decompression failed\|No key palette"`（生成柱只进内存不落盘；region 读回噪声为已知副作用，见 §10.9） | validateStats（含 G1 `ovdLoaded>0`）+ `counters.ovdLoaded > 0`；TRACE 缺口门禁仅 classic |
 
 存在 `scripts/smoke/profiles/<name>.profile.properties` 时，单会话脚本按键值对 patch 双端 hassium toml（客户端 `run/client/config/hassium/hassium-client.toml`、服务端 `run/server/config/hassium/hassium-server.toml`）。行式 `key=value`、`#` 注释；value 须为合法 TOML 字面量（字符串自带引号）。profile 文件不存在时整体 no-op。
 
-例：seedgen 场景需要 `seedgen` 档案提供双端 `chunk.seedGenEnabled=true`；dimension 场景无 toml 改动需求，无档案文件。
+例：seedgen 场景需要 `seedgen` 档案提供双端 `chunk.seedGenEnabled=true`；ovdgen 场景需要 `ovdgen` 档案（`seedGenEnabled` + `ovdLocalGeneration` + `maxRenderDistance=24`）；dimension 场景无 toml 改动需求，无档案文件。
 
 ## 门禁与会话判定
 

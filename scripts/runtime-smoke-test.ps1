@@ -460,7 +460,7 @@ if ($needConfigTrackerClean) {
     }
 }
 
-if ($Scenario -in @("seedgen", "dimension")) {
+if ($Scenario -in @("seedgen", "dimension", "ovdgen")) {
     if (-not $CleanWorld) {
         Write-Host "[$SessionId] 场景 '$Scenario' 强制 -CleanWorld（重置 ${Loader}/${Ver} 存档目录）"
     }

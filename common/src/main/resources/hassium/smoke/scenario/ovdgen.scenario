@@ -1,0 +1,21 @@
+# ovdgen 场景：classic 两轮 VD 切换 + OVD 本地生成（盘 miss 用服务端种子补洞）
+#
+# 依赖档案 scripts/smoke/profiles/ovdgen.profile.properties：
+#   chunk.seedGenEnabled=true     → 握手下发世界种子（泄露种子，仅冒烟）
+#   chunk.ovdLocalGeneration=true → OVD 窗 miss 走 generateChunk
+#   chunk.maxRenderDistance=24    → effective RD 抬到 24，环带越过 R1 VD20 形状，制造可生成 miss
+#
+# 门禁：ROUND2 validateStats（含 G1 ovdLoaded>0）+ counters.ovdLoaded>0
+# 强制 CleanWorld（与 seedgen 同）：保证 R1 建基线、R2 环带有可控 miss。
+join label=WAIT_JOIN_1 since=start timeoutMs=${joinTimeoutMs}
+fly seconds=${moveSeconds} tag=MOVE_
+wait ms=${round1WaitMs}
+dump label=ROUND1 round=1
+disconnect
+reconnect delayMs=${reconnectDelayMs}
+join label=WAIT_JOIN_2 since=disconnect timeoutMs=${joinTimeoutMs}
+fly seconds=${moveSeconds} tag=MOVE_
+wait ms=${round2WaitMs}
+dump label=ROUND2 round=2
+assertProbe key=counters.ovdLoaded op=gt value=0
+exit

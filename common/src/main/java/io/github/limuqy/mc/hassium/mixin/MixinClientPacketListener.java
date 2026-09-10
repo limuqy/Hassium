@@ -125,6 +125,26 @@ public class MixinClientPacketListener {
 #endif
 
 
+    /**
+     * 真服 Forget 保留：OVD 窗内取消 drop（玩家走出权威圈时柱尚在 client 窗）。
+     * 1.20.1 与 1.21.1+ 方法名一致。
+     */
+    @Inject(method = "handleForgetLevelChunk", at = @At("HEAD"), cancellable = true)
+    private void hassium$retainOvdOnForget(
+            net.minecraft.network.protocol.game.ClientboundForgetLevelChunkPacket packet,
+            CallbackInfo ci) {
+        try {
+            net.minecraft.world.level.ChunkPos pos =
+                    io.github.limuqy.mc.hassium.compat.ChunkPacketDataCompat.forgetChunkPos(packet);
+            if (io.github.limuqy.mc.hassium.cache.client.OvdClientLifecycle.shouldRetainOnForget(pos)) {
+                ci.cancel();
+            }
+        } catch (Throwable ignored) {
+            // OVD 保留失败则走原版 drop
+        }
+    }
+
+
     // ===== 方块更新转发（T2）：HEAD 注入 3 类方块包 handler，不 cancel、不解析、纯转发 =====
     // handler 方法名/参数 mojmap 全段一致（1.20.1 / 1.21.11 已双版本验证），无需 #if 分界。
 

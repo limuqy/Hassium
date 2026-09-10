@@ -226,7 +226,7 @@ OVD 回传记 ovd 指标，不进缓存命中率分母
 |----|------|------|
 | `chunk.viewDistanceExtensionEnabled` | true | 超视渲染总开关（依赖 `chunk.enabled`；与 Bobby 互斥） |
 | `chunk.maxRenderDistance` | 16 | effective clientRD 上限（2–64） |
-| `chunk.ovdLocalGeneration` | false | OVD 窗缓存 miss 时本地生成（需真实 seed；无种子自动关） |
+| `chunk.ovdLocalGeneration` | false | OVD 窗缓存 miss 时本地生成（需握手已下发真实 seed，即服务端 `seedGenEnabled`；无种子自动不生成，只读盘） |
 
 `chunk.ovdUnloadDelaySecs` **不再恢复**（延迟卸载取消）。
 
@@ -252,6 +252,8 @@ OVD 回传记 ovd 指标，不进缓存命中率分母
 1. 扩窗使 `processUnloads` / 光邻域 ticket 按 clientVD 走，OVD 柱占影子内存与算光队列 → 权威队列深时暂停 OVD 泵。
 2. 与 Bobby 等视距模组双主冲突不变。
 3. 若 P0 触发 pull 契约回归，回退 = `setChunkViewDistance` 改回 `serverVD+1`，双窗分流代码可保留作旁路开关。
+4. **OVD 本地生成**：`generateChunk` 必须异步（在影子主循环同步等 worldgen future 会自锁）；产物经队列回影子主循环 `injectLoadedChunk`；**生成柱 `dirty=false` 只进内存**——曾以 dirty 落盘写出缺 palette 的 section，IO 读回即 `wrong location` / ZSTD 解压失败。冒烟 `ovdgen` 需 `-AllowErrorPatterns` 豁免该类 region 噪声。
+5. **重连回放**：`resetRequestDedupForReconnect` 必须清 `shadowApplyEpochs`；否则上一 `ClientChunkCache` 的落地凭据会让 materialize/redeliver 误判「客户端已有」，R2 只回放部分柱（实测 1529→775，移动新区不出现）。
 
 ## 11. 磁盘 NBT 缓存格式（影子端存档）
 

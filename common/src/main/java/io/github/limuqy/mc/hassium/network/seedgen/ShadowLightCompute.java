@@ -359,6 +359,8 @@ public final class ShadowLightCompute {
 
     /**
      * 保活重连的会话边界：保留影子缓存基线，但允许同一柱再次发起 Compare + Pull。
+     * 必须清 {@code shadowApplyEpochs}：那是上一 ClientChunkCache 的落地凭据。
+     * 不清会让 materialize/redeliver 认为「客户端已有」，R2 只回放部分柱（实测 1529→775）。
      * 不得调用 {@link #onDisconnect()}，它会同时清空待处理工作和指标去重状态。
      */
     public static void resetRequestDedupForReconnect() {
@@ -367,6 +369,8 @@ public final class ShadowLightCompute {
         networkInFlight.clear();
         accountedCacheHits.clear();
         accountedLights.clear();
+        shadowApplyEpochs.clear();
+        fullApplyTraces.clear();
     }
 
     /** 直推已在影子管线里：hash miss 不得再打全量，否则和进服推送抢 4/tick 配额留下虚空。 */

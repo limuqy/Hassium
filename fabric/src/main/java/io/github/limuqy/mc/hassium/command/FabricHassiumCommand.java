@@ -74,7 +74,8 @@ public class FabricHassiumCommand {
                                 .suggests(FabricHassiumCommand::suggestCachedServers)
                                 .executes(FabricHassiumCommand::exportWithArgs)
                         )
-                );
+        );
+        dispatcher.register(hassiumc);
     }
 
     private static CompletableFuture<Suggestions> suggestCachedServers(

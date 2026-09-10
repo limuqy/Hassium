@@ -41,6 +41,9 @@ public class HassiumMetricsImpl implements HassiumMetrics {
     /** SeedGen 本地生成（影子服务端）区块数/等价值字节；避免一次全量请求。 */
     private final AtomicLong locallyGeneratedChunkCount = new AtomicLong(0);
     private final AtomicLong locallyGeneratedChunkBytes = new AtomicLong(0);
+    /** OVD 窗：本地源服务成功 / 无源空置（禁止 ShadowPull）。 */
+    private final AtomicLong ovdLoadedCount = new AtomicLong(0);
+    private final AtomicLong ovdMissCount = new AtomicLong(0);
     /**
      * 客户端实际落地的权威区块计数（按 chunkPos 去重，含 cacheHit 重交付）。
      * 冒烟「确有落地」门禁与 {@code landedTotal} 用它；来源事件和见
@@ -261,6 +264,24 @@ public class HassiumMetricsImpl implements HassiumMetrics {
     @Override
     public long getLocallyGeneratedChunkBytes() {
         return locallyGeneratedChunkBytes.get();
+    }
+
+    @Override
+    public long getOvdLoadedCount() {
+        return ovdLoadedCount.get();
+    }
+
+    @Override
+    public long getOvdMissCount() {
+        return ovdMissCount.get();
+    }
+
+    public void recordOvdLoaded() {
+        ovdLoadedCount.incrementAndGet();
+    }
+
+    public void recordOvdMiss() {
+        ovdMissCount.incrementAndGet();
     }
 
     @Override
@@ -518,6 +539,8 @@ public class HassiumMetricsImpl implements HassiumMetrics {
         staleFullChunkRequestBytes.set(0);
         locallyGeneratedChunkCount.set(0);
         locallyGeneratedChunkBytes.set(0);
+        ovdLoadedCount.set(0);
+        ovdMissCount.set(0);
         cacheHitNetworkReplacedCount.set(0);
         cacheHitNetworkReplacedBytes.set(0);
         networkBytesSaved.set(0);

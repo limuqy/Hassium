@@ -165,6 +165,12 @@ public interface HassiumMetrics {
      */
     long getLocallyGeneratedChunkCount();
 
+    /** OVD 窗本地源成功服务柱数（disk/inject/gen；不进缓存命中分母）。 */
+    long getOvdLoadedCount();
+
+    /** OVD 窗本地源缺失柱数（无盘无生成，空置不 pull）。 */
+    long getOvdMissCount();
+
     /**
      * 获取 SeedGen 本地生成区块等价值字节数（与 {@link #getLocallyGeneratedChunkCount()} 同步累加）。
      */

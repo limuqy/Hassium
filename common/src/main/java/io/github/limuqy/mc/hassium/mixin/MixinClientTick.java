@@ -76,6 +76,14 @@ public class MixinClientTick {
             // 位置同步失败不阻断 tick
         }
 
+        // 超视渲染客户端边界：抬 ClientChunkCache 半径 + 发布 effective clientRD
+        try {
+            io.github.limuqy.mc.hassium.cache.client.OvdClientLifecycle
+                    .onClientTick(net.minecraft.client.Minecraft.getInstance());
+        } catch (Exception e) {
+            // OVD 可选；异常不得中断 tick
+        }
+
         // （ready / pending / 在途光）时预留一半给 drainReady，避免 dispatcher 先把
         // deadline 用尽导致整帧 0 chunk（ROUND1 在 JoinBoost 10s 到期后曾因此卡 22s）。
         long budgetNs = ClientMainThreadBudget.getBudgetNs();

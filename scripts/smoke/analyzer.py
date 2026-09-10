@@ -249,14 +249,16 @@ def analyze_result(result: dict[str, Any], root: Path) -> dict[str, Any]:
                                          thresholdMs=10_000, chunks=late_near_player[:64],
                                          truncated=len(late_near_player) > 64))
         gaps = trace_report["gaps"]
-        for key, code in (("expectedNotPresent", "TRACE_EXPECTED_NOT_PRESENT"),
-                          ("receivedNotInjected", "TRACE_RECEIVED_NOT_INJECTED"),
-                          ("injectedNotReady", "TRACE_INJECTED_NOT_READY")):
-            if gaps[key]["count"]:
-                failures.append(_failure(code, round=number, gap=gaps[key]))
-        for key, code in (("readyNotApplied", "TRACE_READY_NOT_APPLIED"),):
-            if gaps[key]["count"]:
-                warnings.append(_failure(code, "P1", round=number, gap=gaps[key]))
+        # TRACE 缺口门禁仅 classic：ovdgen 等场景的本地生成/盘回填不走同一 trace 契约
+        if scenario == "classic":
+            for key, code in (("expectedNotPresent", "TRACE_EXPECTED_NOT_PRESENT"),
+                              ("receivedNotInjected", "TRACE_RECEIVED_NOT_INJECTED"),
+                              ("injectedNotReady", "TRACE_INJECTED_NOT_READY")):
+                if gaps[key]["count"]:
+                    failures.append(_failure(code, round=number, gap=gaps[key]))
+            for key, code in (("readyNotApplied", "TRACE_READY_NOT_APPLIED"),):
+                if gaps[key]["count"]:
+                    warnings.append(_failure(code, "P1", round=number, gap=gaps[key]))
         if gaps["appliedNotMeshed"]["count"]:
             skipped.append(_failure("TRACE_MESH_PENDING", "INFO", round=number,
                                     gap=gaps["appliedNotMeshed"],

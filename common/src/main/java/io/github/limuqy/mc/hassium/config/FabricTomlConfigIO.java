@@ -359,6 +359,9 @@ public final class FabricTomlConfigIO {
                 getInt(cfg, "chunk.targetSizeMb", d.targetSizeMb()),
                 getInt(cfg, "chunk.minCleanupBatchSize", d.minCleanupBatchSize()),
                 getBool(cfg, "chunk.sectionDeltaEnabled", d.sectionDeltaEnabled()),
+                getBool(cfg, "chunk.viewDistanceExtensionEnabled", d.viewDistanceExtensionEnabled()),
+                getInt(cfg, "chunk.maxRenderDistance", d.maxRenderDistance()),
+                getBool(cfg, "chunk.ovdLocalGeneration", d.ovdLocalGeneration()),
                 getInt(cfg, "chunk.maxChunksPerFrame", d.maxChunksPerFrame()),
                 getInt(cfg, "chunk.mainThreadChunkBudgetMs", d.mainThreadChunkBudgetMs()),
                 getInt(cfg, "chunk.seedGenThreads", d.seedGenThreads()),
@@ -377,6 +380,9 @@ public final class FabricTomlConfigIO {
         set(cfg, "chunk.targetSizeMb", c.targetSizeMb(), "目标缓存大小");
         set(cfg, "chunk.minCleanupBatchSize", c.minCleanupBatchSize(), "每轮淘汰 region 文件数");
         set(cfg, "chunk.sectionDeltaEnabled", c.sectionDeltaEnabled(), "启用分段增量");
+        set(cfg, "chunk.viewDistanceExtensionEnabled", c.viewDistanceExtensionEnabled(), "启用超视渲染 OVD");
+        set(cfg, "chunk.maxRenderDistance", c.maxRenderDistance(), "超视渲染 effective clientRD 上限");
+        set(cfg, "chunk.ovdLocalGeneration", c.ovdLocalGeneration(), "OVD 窗缓存 miss 本地生成");
         set(cfg, "chunk.maxChunksPerFrame", c.maxChunksPerFrame(), "每帧最大区块数");
         set(cfg, "chunk.mainThreadChunkBudgetMs", c.mainThreadChunkBudgetMs(), "主线程区块预算");
         set(cfg, "chunk.seedGenThreads", c.seedGenThreads(), "SeedGen 线程数");
@@ -428,6 +434,8 @@ public final class FabricTomlConfigIO {
         // legacy 键清理：网关监听/鉴权/控制面端点/L1 迁移/续流票据/数据面已随网关拓扑退役；
         // 管线级全局包压缩（globalPacketCompression/globalCompressionLevel/globalCompressionThreshold/magiclessZstd）
         // 已随直连拓扑退役（通道压缩由聚合字典 ZSTD + 区块推送自有压缩承担）
+        // ovdUnloadDelaySecs：延迟卸载取消，双窗 OVD 不恢复
+        cfg.remove("chunk.ovdUnloadDelaySecs");
         cfg.remove("master.dynamicThreadPoolEnabled");
         cfg.remove("master.minPushThreads");
         cfg.remove("master.maxPushThreads");

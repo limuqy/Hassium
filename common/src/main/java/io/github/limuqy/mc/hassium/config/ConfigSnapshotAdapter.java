@@ -20,6 +20,9 @@ public final class ConfigSnapshotAdapter {
                 .with(ConfigSchema.CHUNK_TARGET_SIZE_MB, chunk.targetSizeMb())
                 .with(ConfigSchema.CHUNK_MIN_CLEANUP_BATCH_SIZE, chunk.minCleanupBatchSize())
                 .with(ConfigSchema.CHUNK_SECTION_DELTA_ENABLED, chunk.sectionDeltaEnabled())
+                .with(ConfigSchema.CHUNK_VIEW_DISTANCE_EXTENSION_ENABLED, chunk.viewDistanceExtensionEnabled())
+                .with(ConfigSchema.CHUNK_MAX_RENDER_DISTANCE, chunk.maxRenderDistance())
+                .with(ConfigSchema.CHUNK_OVD_LOCAL_GENERATION, chunk.ovdLocalGeneration())
                 .with(ConfigSchema.CHUNK_MAX_CHUNKS_PER_FRAME, chunk.maxChunksPerFrame())
                 .with(ConfigSchema.CHUNK_MAIN_THREAD_CHUNK_BUDGET_MS, chunk.mainThreadChunkBudgetMs())
                 .with(ConfigSchema.CHUNK_SEED_GEN_THREADS, chunk.seedGenThreads())
@@ -84,6 +87,9 @@ public final class ConfigSnapshotAdapter {
                 values.get(ConfigSchema.CHUNK_RECENCY_WEIGHT), values.get(ConfigSchema.CHUNK_FREQUENCY_WEIGHT),
                 values.get(ConfigSchema.CHUNK_CLEANUP_INTERVAL_TICKS), values.get(ConfigSchema.CHUNK_TARGET_SIZE_MB),
                 values.get(ConfigSchema.CHUNK_MIN_CLEANUP_BATCH_SIZE), values.get(ConfigSchema.CHUNK_SECTION_DELTA_ENABLED),
+                values.get(ConfigSchema.CHUNK_VIEW_DISTANCE_EXTENSION_ENABLED),
+                values.get(ConfigSchema.CHUNK_MAX_RENDER_DISTANCE),
+                values.get(ConfigSchema.CHUNK_OVD_LOCAL_GENERATION),
                 values.get(ConfigSchema.CHUNK_MAX_CHUNKS_PER_FRAME),
                 values.get(ConfigSchema.CHUNK_MAIN_THREAD_CHUNK_BUDGET_MS), values.get(ConfigSchema.CHUNK_SEED_GEN_THREADS),
                 seedGenValue(values, physicalClient, ConfigSchema.CLIENT_CHUNK_SEED_GEN_ENABLED, ConfigSchema.SERVER_CHUNK_SEED_GEN_ENABLED),

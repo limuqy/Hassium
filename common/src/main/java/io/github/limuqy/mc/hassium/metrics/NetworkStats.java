@@ -176,6 +176,18 @@ public class NetworkStats {
         metrics.recordLocallyGeneratedChunk(bytes);
     }
 
+    /** OVD 窗本地源成功服务（disk/inject/gen）。 */
+    public static void recordOvdLoaded() {
+        if (!enabled) return;
+        metrics.recordOvdLoaded();
+    }
+
+    /** OVD 窗本地源缺失（不 pull）。 */
+    public static void recordOvdMiss() {
+        if (!enabled) return;
+        metrics.recordOvdMiss();
+    }
+
     /**
      * 记录一个权威区块已成功应用到客户端世界（按区块坐标去重）。
      * 供缓存命中率分母「客户端应用区块」使用。

@@ -669,6 +669,8 @@ public final class ScenarioEngine {
             case "counters.sectionDeltaRequestsSent" -> m.getSectionDeltaRequestsSent();
             case "counters.sectionDeltaApplied" -> m.getSectionDeltaChunksReceived();
             case "counters.lightSegRecalc" -> m.getLightCacheMissCount();
+            case "counters.ovdLoaded" -> m.getOvdLoadedCount();
+            case "counters.ovdMiss" -> m.getOvdMissCount();
             case "counters.locallyGenerated" -> m.getLocallyGeneratedChunkCount();
             // stats.*（appendStats 同名）
             case "stats.vanillaBytesReceived" -> m.getVanillaBytesReceived();
@@ -821,7 +823,8 @@ public final class ScenarioEngine {
 
     /**
      * 校验客户端统计摘要的结构与数值一致性（口径与 HassiumCommandHandler 显示完全同源）。
-     * 仍要求真实区块已接收并落地；不再要求已裁剪的 OVD 或 ROUND2 缓存全命中。
+     * 仍要求真实区块已接收并落地；ROUND2 另要求 G1：{@code ovdLoaded > 0}（影子双窗 OVD
+     * 本地源回填生效）。不要求 ROUND2 缓存全命中。
      */
     static boolean validateStats(String plain, String roundLabel) {
         if (plain == null || plain.isBlank()) {
@@ -850,6 +853,13 @@ public final class ScenarioEngine {
         if (resident <= 0) {
             LOGGER.error("{} {} stats validation FAILED: ClientChunkCache has no resident chunks (applied={})",
                     MARKER_FAIL, roundLabel, applied);
+            return false;
+        }
+
+        // G1：classic ROUND2 超视渲染（影子双窗本地源）必须至少装载一柱
+        if ("ROUND2".equals(roundLabel) && m.getOvdLoadedCount() <= 0) {
+            LOGGER.error("{} {} stats validation FAILED: G1 ovdLoaded==0 (shadow dual-window OVD)",
+                    MARKER_FAIL, roundLabel);
             return false;
         }
 

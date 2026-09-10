@@ -211,6 +211,8 @@ public final class SmokeProbeWriter {
         field(sb, "sectionDeltaRequestsSent", m.getSectionDeltaRequestsSent());
         field(sb, "sectionDeltaApplied", m.getSectionDeltaChunksReceived());
         field(sb, "lightSegRecalc", m.getLightCacheMissCount());
+        field(sb, "ovdLoaded", m.getOvdLoadedCount());
+        field(sb, "ovdMiss", m.getOvdMissCount());
         lastField(sb, "locallyGenerated", m.getLocallyGeneratedChunkCount());
         sb.append("  },\n");
     }

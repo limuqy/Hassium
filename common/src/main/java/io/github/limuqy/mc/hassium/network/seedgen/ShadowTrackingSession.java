@@ -2,8 +2,10 @@ package io.github.limuqy.mc.hassium.network.seedgen;
 
 import io.github.limuqy.mc.hassium.compat.ChunkShapeCompat;
 import io.github.limuqy.mc.hassium.compat.LevelCompat;
+import io.github.limuqy.mc.hassium.compat.ShadowChunkMapCompat;
 import io.github.limuqy.mc.hassium.compat.ShadowPlayerCompat;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
+import io.github.limuqy.mc.hassium.network.ClientChunkPipeline;
 import io.github.limuqy.mc.hassium.network.ShadowPullClient;
 import io.github.limuqy.mc.hassium.utils.DebugLogger;
 import net.minecraft.client.Minecraft;
@@ -47,6 +49,8 @@ public final class ShadowTrackingSession {
     private volatile PendingState pending;
     /** 服务端下发的 chunk cache 半径（ClientboundSetChunkCacheRadiusPacket 捕获；-1 = 未知）。 */
     private volatile int serverViewDistance = -1;
+    /** 客户端发布的 effective clientRD（OVD 开时 = min(滑块, maxRenderDistance)；否则 = serverVD）。 */
+    private volatile int effectiveClientVD = -1;
 
     /** 影子主循环线程持有的会话状态（仅影子线程读写）。 */
     private ShadowSeedServer boundServer;
@@ -91,6 +95,20 @@ public final class ShadowTrackingSession {
     private static final long SWEEP_INFLIGHT_TIMEOUT_MS = 15_000L;
     private final java.util.Map<Long, Long> sweepInFlight =
             new java.util.concurrent.ConcurrentHashMap<>();
+    /** 本会话已计 OVD 的坐标（防 materialize/sweep 双计；reset 清空）。 */
+    private final java.util.Set<Long> ovdCounted = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    /** OVD miss 冷却（key → 下次允许重试 epoch ms；避免空盘格每 500ms 重读）。 */
+    private final java.util.Map<Long, Long> ovdMissRetryAt =
+            new java.util.concurrent.ConcurrentHashMap<>();
+    /** OVD 生成在途（key → 在生成；防重复 submit）。 */
+    private final java.util.Set<Long> ovdGenInFlight =
+            java.util.concurrent.ConcurrentHashMap.newKeySet();
+    /** 生成完成待注入（仅影子主循环消费；避免与 saveAll/IO 抢 region）。 */
+    private final java.util.concurrent.ConcurrentLinkedQueue<PendingOvdInject> ovdInjectQueue =
+            new java.util.concurrent.ConcurrentLinkedQueue<>();
+    private record PendingOvdInject(ShadowSeedServer server, String dimension,
+                                    ChunkPos pos, net.minecraft.world.level.chunk.LevelChunk chunk) {}
+    private long lastOvdSweepMs;
 
     /** 待移除虚拟玩家（{@link #reset} 在客户端主线程调用；vanilla remove 须留给影子主循环）。 */
     private record PendingRemoval(ShadowSeedServer server, ServerPlayer player) {}
@@ -141,6 +159,22 @@ public final class ShadowTrackingSession {
         if (radius > 0) {
             INSTANCE.serverViewDistance = radius;
         }
+    }
+
+    /** 当前服务端通告视距（未知 -1）。 */
+    public static int serverViewDistance() {
+        return INSTANCE.serverViewDistance;
+    }
+
+    /** 客户端 tick 发布 effective clientRD（OVD 双窗）。 */
+    public static void publishEffectiveClientVD(int radius) {
+        if (radius > 0) {
+            INSTANCE.effectiveClientVD = radius;
+        }
+    }
+
+    public static int effectiveClientVD() {
+        return INSTANCE.effectiveClientVD;
     }
 
     /** 影子主循环泵读取的当前跟踪维度 level（无会话/未跟踪返回 null）。 */
@@ -200,7 +234,115 @@ public final class ShadowTrackingSession {
         drainBootGrid(shadow, MAX_REQUESTS_PER_PUMP);
         drainSelections(shadow, MAX_REQUESTS_PER_PUMP);
         sweepVisibleShape(shadow, now);
+        sweepOvdRing(shadow, now);
+        drainOvdInjects(shadow);
         drainRedeliver(shadow);
+    }
+
+    /** 影子主循环消费异步 OVD 生成产物：inject + completeSuspendedLoad（与 saveAll 同线程）。 */
+    private void drainOvdInjects(ShadowSeedServer shadow) {
+        int n = 0;
+        PendingOvdInject item;
+        while (n < 32 && (item = ovdInjectQueue.poll()) != null) {
+            if (item.server() != shadow) {
+                continue;
+            }
+            if (shadow.injectedChunk(item.dimension(), item.pos().x, item.pos().z) == null) {
+                // dirty=false：OVD 生成柱只进内存服务渲染，不落盘——
+                // 生成柱走 type126 重写曾写出缺 palette 的 section，IO 读回即坏柱。
+                shadow.injectLoadedChunk(item.dimension(), item.pos(), item.chunk(), false);
+                ShadowChunkMapCompat.completeSuspendedLoad(item.dimension(), item.pos(), item.chunk());
+                io.github.limuqy.mc.hassium.Constants.LOG.info(
+                        "[SHADOW_TRACK] OVD generate ({}, {})", item.pos().x, item.pos().z);
+            }
+            n++;
+        }
+    }
+
+    /**
+     * OVD 环带周期扫描：park 复用 / 短路已注入柱可能不走悬置选柱路径，
+     * 这里补齐「已注入未交付」的 publish 与「未注入」的本地盘/生成服务。
+     * <p>
+     * 只扫环带（chebyshev ∈ (serverVD, clientVD]），内环优先；
+     * 盘读与 publish 分开计预算，避免权威方阵空转扫 33²。
+     */
+    private static final int OVD_DISK_BUDGET = 32;
+    private static final int OVD_PUBLISH_BUDGET = 16;
+    private static final long OVD_SWEEP_INTERVAL_MS = 100L;
+
+    private void sweepOvdRing(ShadowSeedServer shadow, long nowMs) {
+        if (shadow == null || virtualPlayer == null || currentDimension == null) {
+            return;
+        }
+        int serverVD = serverViewDistance;
+        int clientVD = effectiveClientVD;
+        if (serverVD <= 0 || clientVD <= serverVD) {
+            return;
+        }
+        if (nowMs - lastOvdSweepMs < OVD_SWEEP_INTERVAL_MS) {
+            return;
+        }
+        lastOvdSweepMs = nowMs;
+        ChunkPos center = virtualPlayer.chunkPosition();
+        int diskTried = 0;
+        int published = 0;
+        // 按 chebyshev 周长内环优先；角柱可能 cheb≤serverVD 但落在 isChunkInRange 圆角外，
+        // 必须整环扫 + inOvdWindow 过滤，不能只扫 cheb>serverVD。
+        outer:
+        for (int cheb = 1; cheb <= clientVD; cheb++) {
+            for (int dx = -cheb; dx <= cheb; dx++) {
+                int dzPos = cheb - Math.abs(dx);
+                for (int s = 0; s < 2; s++) {
+                    int dz = (s == 0) ? dzPos : -dzPos;
+                    if (s == 1 && dzPos == 0) {
+                        break;
+                    }
+                    if (diskTried >= OVD_DISK_BUDGET && published >= OVD_PUBLISH_BUDGET) {
+                        break outer;
+                    }
+                    int x = center.x + dx;
+                    int z = center.z + dz;
+                    if (!inOvdWindow(x, z)) {
+                        continue;
+                    }
+                    long key = io.github.limuqy.mc.hassium.utils.DimensionKey
+                            .key(currentDimension, x, z);
+                    if (ovdCounted.contains(key)) {
+                        continue;
+                    }
+                    Long missAt = ovdMissRetryAt.get(key);
+                    if (missAt != null && nowMs < missAt) {
+                        continue;
+                    }
+                    ChunkPos pos = new ChunkPos(x, z);
+                    var injected = shadow.injectedChunk(currentDimension, x, z);
+                    if (injected != null) {
+                        if (published >= OVD_PUBLISH_BUDGET) {
+                            continue;
+                        }
+                        if (ShadowLightCompute.hasClientApplyEpoch(currentDimension, pos)) {
+                            recordOvdLoadedOnce(currentDimension, pos);
+                            continue;
+                        }
+                        if (ShadowLightCompute.publishCachedChunk(currentDimension, pos)) {
+                            recordOvdLoadedOnce(currentDimension, pos);
+                            published++;
+                        }
+                    } else {
+                        if (diskTried >= OVD_DISK_BUDGET) {
+                            continue;
+                        }
+                        tryServeOvdLocal(shadow, new SelectedChunk(currentDimension, x, z));
+                        diskTried++;
+                    }
+                }
+            }
+        }
+        if (diskTried > 0 || published > 0) {
+            DebugLogger.info(DebugLogger.LogType.NETWORK,
+                    "[SHADOW_TRACK] OVD sweep disk={} publish={} center=({},{}) ring={}..{} (dimension={})",
+                    diskTried, published, center.x, center.z, serverVD + 1, clientVD, currentDimension);
+        }
     }
 
     /**
@@ -213,7 +355,7 @@ public final class ShadowTrackingSession {
         if (pos == null || boundServer == null || currentDimension == null) {
             return;
         }
-        if (!inVanillaVisibleShape(pos.x, pos.z)) {
+        if (!inVanillaVisibleShape(pos.x, pos.z) && !inOvdWindow(pos.x, pos.z)) {
             return;
         }
         if (boundServer.injectedChunk(currentDimension, pos.x, pos.z) == null) {
@@ -233,14 +375,15 @@ public final class ShadowTrackingSession {
             if (shadow.injectedChunk(currentDimension, pos.x, pos.z) == null) {
                 continue;
             }
-            if (!inVanillaVisibleShape(pos.x, pos.z)) {
+            if (!inVanillaVisibleShape(pos.x, pos.z) && !inOvdWindow(pos.x, pos.z)) {
                 continue;
             }
             if (ShadowLightCompute.hasClientApplyEpoch(currentDimension, pos)) {
-                continue; // 已有落地凭据
+                continue; // 本会话已有落地凭据
             }
             // 本会话网络路径已在途/已记账：redeliver 不得再记成缓存全命中
-            if (ShadowLightCompute.wasNetworkIngress(currentDimension, pos)) {
+            if (ShadowLightCompute.wasNetworkIngress(currentDimension, pos)
+                    && ShadowLightCompute.hasClientApplyEpoch(currentDimension, pos)) {
                 continue;
             }
             if (ShadowLightCompute.publishCachedChunk(currentDimension, pos)) {
@@ -309,8 +452,8 @@ public final class ShadowTrackingSession {
             return;
         }
         io.github.limuqy.mc.hassium.Constants.LOG.info(
-                "[SHADOW_TRACK] creating virtual player (dimension={}, serverRadius={})",
-                state.dimension(), serverViewDistance);
+                "[SHADOW_TRACK] creating virtual player (dimension={}, serverRadius={}, effectiveClientVD={})",
+                state.dimension(), serverViewDistance, effectiveClientVD);
         try {
             int viewDistance = resolveViewDistance();
             ShadowPlayerCompat.setChunkViewDistance(level, viewDistance);
@@ -343,14 +486,50 @@ public final class ShadowTrackingSession {
     }
 
     private int resolveViewDistance() {
-        // 原版玩家 tracking 半径（ChunkMap.setViewDistance 用 viewDistance+1 构造 tracking
-        // view）：形状轴深 = vd+2，恰好 = 服务端签发上界（ShadowPullHandler maxDistance =
-        // vd + AUTHORITY_MARGIN）。光照邻域不再额外外扩——邻柱后到时 LightDelta
-        // 自愈链路（collectLightUpdate → drainLightMasks）修正边缘光。
-        int radius = serverViewDistance > 0
+        // 权威边距：原版玩家 tracking 半径（ChunkMap.setViewDistance 用 viewDistance+1 构造
+        // tracking view）：形状轴深 = vd+2 = 服务端签发上界（AUTHORITY_MARGIN）。
+        int authority = serverViewDistance > 0
                 ? serverViewDistance + 1
                 : DEFAULT_VIEW_DISTANCE + 1;
-        return Math.min(radius, MAX_VIEW_DISTANCE);
+        // OVD 双窗：effective clientRD > 权威边距时扩窗到 effective（ticket 覆盖环带）。
+        // pull 域仍由 inVanillaVisibleShape（serverVD）裁决，扩窗不扩大真服请求。
+        int effective = effectiveClientVD;
+        if (effective > authority && isOvdConfigActive()) {
+            return Math.min(effective, MAX_VIEW_DISTANCE);
+        }
+        return Math.min(authority, MAX_VIEW_DISTANCE);
+    }
+
+    private static boolean isOvdConfigActive() {
+        HassiumConfigService cfg = HassiumConfigService.getInstance();
+        return cfg.isClientCacheEnabled() && cfg.isViewDistanceExtensionEnabled();
+    }
+
+    /** 权威窗：原版可见形状（pull / bootGrid / sweep 唯一几何）。 */
+    private boolean inVanillaVisibleShape(int x, int z) {
+        if (serverViewDistance <= 0) {
+            return true;
+        }
+        ChunkPos center = virtualPlayer == null ? homeChunk : virtualPlayer.chunkPosition();
+        if (center == null) {
+            return true;
+        }
+        return ChunkShapeCompat.contains(center.x, center.z, serverViewDistance, x, z);
+    }
+
+    /** OVD 窗：client chebyshev 窗内且权威窗外；本地源服务，禁止 pull。 */
+    private boolean inOvdWindow(int x, int z) {
+        if (serverViewDistance <= 0 || effectiveClientVD <= serverViewDistance) {
+            return false;
+        }
+        ChunkPos center = virtualPlayer == null ? homeChunk : virtualPlayer.chunkPosition();
+        if (center == null) {
+            return false;
+        }
+        int dx = Math.abs(x - center.x);
+        int dz = Math.abs(z - center.z);
+        return dx <= effectiveClientVD && dz <= effectiveClientVD
+                && !ChunkShapeCompat.contains(center.x, center.z, serverViewDistance, x, z);
     }
 
     /**
@@ -379,23 +558,6 @@ public final class ShadowTrackingSession {
     }
 
     /**
-     * 原版可见形状内？pull 域只拉用户能看到的柱（§0.4）：range = 通告视距 vd，
-     * 谓词 = {@code isChunkInRange}（VD20 → 1529）。影子 ticket 可略宽（vd+1）供
-     * 算光邻域，但越形状柱不向真实客户端 compare-pull；边缘光靠邻柱后到自愈。
-     * 中心 = 虚拟玩家实时位（半径未知时放行，交给服务端校验）。
-     */
-    private boolean inVanillaVisibleShape(int x, int z) {
-        if (serverViewDistance <= 0) {
-            return true;
-        }
-        ChunkPos center = virtualPlayer == null ? homeChunk : virtualPlayer.chunkPosition();
-        if (center == null) {
-            return true;
-        }
-        return ChunkShapeCompat.contains(center.x, center.z, serverViewDistance, x, z);
-    }
-
-    /**
      * 影子主循环分批发送悬置柱（worldgen 压制，无本地数据）的 pull 请求。
      * 读盘/生成柱不走此路径——它们由 onChunkMaterialized 桥携带基线进比对。
      */
@@ -417,6 +579,10 @@ public final class ShadowTrackingSession {
             // 形状 = 原版可见圆角方形（range = 通告视距 vd，VD20 → 1529）：只拉用户能看到的；
             // 影子 ticket 略宽的角区不在此路径请求，边缘光由邻柱 LightDelta 自愈。
             if (!inVanillaVisibleShape(sel.x(), sel.z())) {
+                // OVD 窗：仅本地源，禁止 ShadowPull
+                if (inOvdWindow(sel.x(), sel.z())) {
+                    tryServeOvdLocal(shadow, sel);
+                }
                 continue;
             }
             if (shadow.injectedChunk(sel.dimension(), sel.x(), sel.z()) != null) {
@@ -617,6 +783,100 @@ public final class ShadowTrackingSession {
         return mixed;
     }
 
+    /** OVD 窗本地源：injected / disk /（可选）异步 generate；绝不发 ShadowPull。 */
+    private void tryServeOvdLocal(ShadowSeedServer shadow, SelectedChunk sel) {
+        if (shadow == null || currentDimension == null) {
+            return;
+        }
+        ChunkPos pos = new ChunkPos(sel.x(), sel.z());
+        if (shadow.injectedChunk(sel.dimension(), pos.x, pos.z) != null) {
+            return; // 已物化，tracking 边沿会交付
+        }
+        net.minecraft.world.level.chunk.LevelChunk chunk = shadow.loadFromDisk(sel.dimension(), pos);
+        if (chunk == null) {
+            if (canOvdLocalGenerate() && tryQueueOvdGenerate(shadow, sel.dimension(), pos)) {
+                return; // 生成在途：不算 miss，不阻塞影子主循环
+            }
+            long missKey = io.github.limuqy.mc.hassium.utils.DimensionKey
+                    .key(sel.dimension(), pos.x, pos.z);
+            ovdMissRetryAt.put(missKey, System.currentTimeMillis() + 2_000L);
+            io.github.limuqy.mc.hassium.metrics.NetworkStats.recordOvdMiss();
+            return; // 无本地数据：空置，不 pull
+        }
+        boolean diskHit = io.github.limuqy.mc.hassium.storage.ShadowStorageHashes
+                .get(sel.dimension(), pos) != null;
+        shadow.injectLoadedChunk(sel.dimension(), pos, chunk, !diskHit);
+        ShadowChunkMapCompat.completeSuspendedLoad(sel.dimension(), pos, chunk);
+        DebugLogger.info(DebugLogger.LogType.NETWORK,
+                "[SHADOW_TRACK] OVD local serve ({}, {}) diskHit={}",
+                pos.x, pos.z, diskHit);
+    }
+
+    /**
+     * OVD 生成必须异步：{@code generateChunk} 同步等 worldgen future，而 future 依赖
+     * 影子主循环 {@code pollTask}。在 consumeOnShadowLoop 里同步 generate 会自锁。
+     */
+    private boolean tryQueueOvdGenerate(ShadowSeedServer shadow, String dimension, ChunkPos pos) {
+        // 限制并发：大量并行 worldgen + region 写会打爆 IO/映像
+        if (ovdGenInFlight.size() >= 2) {
+            return true;
+        }
+        long key = io.github.limuqy.mc.hassium.utils.DimensionKey.key(dimension, pos.x, pos.z);
+        if (!ovdGenInFlight.add(key)) {
+            return true; // 已在生成
+        }
+        io.github.limuqy.mc.hassium.concurrent.HassiumTaskExecutor executor =
+                io.github.limuqy.mc.hassium.concurrent.HassiumTaskExecutor.getClient();
+        if (executor == null || !executor.isRunning()) {
+            ovdGenInFlight.remove(key);
+            return false;
+        }
+        try {
+            executor.submit(() -> {
+                try {
+                    if (boundServer != shadow || virtualPlayer == null
+                            || !inOvdWindow(pos.x, pos.z)) {
+                        return;
+                    }
+                    net.minecraft.world.level.chunk.LevelChunk gen =
+                            shadow.generateChunk(dimension, pos);
+                    if (gen == null) {
+                        return;
+                    }
+                    // 只入队，由影子主循环 inject——与 saveAll/RegionFile 同线程，避免竞态
+                    ovdInjectQueue.offer(new PendingOvdInject(shadow, dimension, pos, gen));
+                } catch (Throwable t) {
+                    DebugLogger.warn(DebugLogger.LogType.ASYNC,
+                            "[SHADOW_TRACK] OVD generate failed ({}, {})", pos.x, pos.z, t);
+                    ovdMissRetryAt.put(key, System.currentTimeMillis() + 5_000L);
+                } finally {
+                    ovdGenInFlight.remove(key);
+                }
+            }, io.github.limuqy.mc.hassium.concurrent.TaskCategory.BEST_EFFORT);
+            return true;
+        } catch (java.util.concurrent.RejectedExecutionException e) {
+            ovdGenInFlight.remove(key);
+            return false;
+        }
+    }
+
+    /** OVD 本地生成：配置开 + 握手已下发真实世界种子（无种子自动关，避免猜地形）。 */
+    private static boolean canOvdLocalGenerate() {
+        if (!HassiumConfigService.getInstance().isOvdLocalGenerationEnabled()) {
+            return false;
+        }
+        ClientChunkPipeline pipeline = ClientChunkPipeline.getInstance();
+        return pipeline.isServerSeedGenEnabled() && pipeline.isServerSeedAvailable();
+    }
+
+    /** OVD 已加载计数（会话内按坐标去重，防 materialize+sweep 双计）。 */
+    private void recordOvdLoadedOnce(String dimension, ChunkPos pos) {
+        long key = io.github.limuqy.mc.hassium.utils.DimensionKey.key(dimension, pos.x, pos.z);
+        if (ovdCounted.add(key)) {
+            io.github.limuqy.mc.hassium.metrics.NetworkStats.recordOvdLoaded();
+        }
+    }
+
     /** 统一的 pull 分组发射（悬置柱 / 基准光盘共用）：有基线走 compare，无基线走权威 FULL。 */
     private void emitPullGroups(java.util.List<ChunkPos> withBaseline, java.util.List<ChunkPos> withoutBaseline) {
         String dimension = currentDimension;
@@ -662,9 +922,20 @@ public final class ShadowTrackingSession {
         if (!alreadyMaterialized) {
             shadow.injectLoadedChunk(dimension, pos, chunk, !diskHit);
         }
-        // 影子 ticket 可能物化原版可见形状外的角区柱（setChunkViewDistance=vd+1）：
-        // 仍注入影子表供算光邻域，但不向真实客户端交付（§6.2 只推用户能看到的）。
+        // 影子 ticket 可能物化原版可见形状外的角区柱 / OVD 环带。
+        // OVD 窗：客户端 ClientChunkCache 重连后是空的——必须重新 publish。
+        // 不得复用权威路径的「已有 networkIngress / applyEpoch 则跳过」门：
+        // 那些凭据属于上一世界/上一会话，留着会让 R2 环带静默空洞（G1 ovdLoaded=0）。
         if (!inVanillaVisibleShape(pos.x, pos.z)) {
+            if (inOvdWindow(pos.x, pos.z)) {
+                boolean published = ShadowLightCompute.publishCachedChunk(dimension, pos);
+                if (published) {
+                    recordOvdLoadedOnce(dimension, pos);
+                }
+                DebugLogger.info(DebugLogger.LogType.NETWORK,
+                        "[SHADOW_TRACK] OVD materialized ({}, {}) -> publish {} (dimension={})",
+                        pos.x, pos.z, published, dimension);
+            }
             return;
         }
         // 空占位/无盘命中的首注入：没有可发布的基线，先 pull 真实数据（禁止把空气柱推给客户端）
@@ -679,6 +950,24 @@ public final class ShadowTrackingSession {
                 ShadowPullClient.requestFull(dimension, java.util.List.of(pos));
             } else {
                 ShadowPullClient.requestAuthoritativeFull(dimension, java.util.List.of(pos));
+            }
+            return;
+        }
+        // 本会话客户端尚未落地（重连后新 ClientChunkCache）：必须重新 publish。
+        // 不得因 wasNetworkIngress（上一会话/generated 残留）改走 pull 而丢交付——
+        // 实测 park 复用时 R1 1529 柱只回放 775，移动新区也不出现。
+        if (alreadyMaterialized && !ShadowLightCompute.hasClientApplyEpoch(dimension, pos)) {
+            boolean published = ShadowLightCompute.publishCachedChunk(dimension, pos);
+            if (!published) {
+                DebugLogger.info(DebugLogger.LogType.NETWORK,
+                        "[SHADOW_TRACK] materialized ({}, {}) redeliver-publish-failed -> pull (dimension={})",
+                        pos.x, pos.z, dimension);
+                ShadowLightCompute.clearRequestMiss(dimension, pos);
+                ShadowPullClient.requestAuthoritativeFull(dimension, java.util.List.of(pos));
+                return;
+            }
+            if (ShadowLightCompute.tryRequestMiss(dimension, pos)) {
+                ShadowPullClient.requestFull(dimension, java.util.List.of(pos));
             }
             return;
         }
@@ -770,6 +1059,7 @@ public final class ShadowTrackingSession {
         }
         s.pending = null;
         s.serverViewDistance = -1;
+        s.effectiveClientVD = -1;
         s.appliedViewDistance = -1;
         s.boundServer = null;
         s.virtualPlayer = null;
@@ -778,6 +1068,11 @@ public final class ShadowTrackingSession {
         s.pendingSelections.clear();
         s.sweepInFlight.clear();
         s.redeliverQueue.clear();
+        s.ovdCounted.clear();
+        s.ovdMissRetryAt.clear();
+        s.ovdGenInFlight.clear();
+        s.ovdInjectQueue.clear();
+        s.lastOvdSweepMs = 0;
         s.homeChunk = null;
         s.bootGridArmed = false;
         s.bootGridCells.clear();

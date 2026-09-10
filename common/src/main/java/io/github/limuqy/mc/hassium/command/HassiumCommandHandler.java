@@ -80,6 +80,7 @@ public class HassiumCommandHandler {
         sb.append(formatChunkCacheLine(fullHitCount, fullHitBytes, deltaCount, deltaBytes,
                 shardBytes, appliedBytes)).append('\n');
         sb.append(formatChunkLoadLine(metrics, fullRequests + serverPush, localCount)).append('\n');
+        sb.append(formatOvdLine(metrics)).append('\n');
         sb.append(formatLightCacheLine(metrics)).append('\n');
         sb.append(formatSavingsLine(metrics)).append('\n');
         // 每行末尾统一带 \n；冒烟 strip 后用 split("\\R", -1) 已能容忍空末行。
@@ -144,6 +145,12 @@ public class HassiumCommandHandler {
                 MetricsTextFormatter.formatPercent(localHitRate));
     }
 
+
+    private static String formatOvdLine(HassiumMetricsImpl m) {
+        // 超视渲染（OVD）：影子双窗本地源服务；不进缓存命中率分母，不计流量节省。
+        return String.format("§e超视渲染：§r已加载 %d，缺失 %d",
+                m.getOvdLoadedCount(), m.getOvdMissCount());
+    }
 
     private static String formatLightCacheLine(HassiumMetricsImpl m) {
         // MetricsSemantics §3：命中=影子复用(已收敛光)；重算=FULL/DELTA/欠光续算。
