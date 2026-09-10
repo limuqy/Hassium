@@ -115,13 +115,10 @@ public final class LoginHandshake {
         StringBuilder sb = new StringBuilder("[");
         boolean first = true;
         first = appendBit(sb, first, caps, LoginCaps.AGGREGATION, "agg");
-        first = appendBit(sb, first, caps, LoginCaps.COMPACT_HEADER, "hdr");
-        first = appendBit(sb, first, caps, LoginCaps.CHUNK_PUSH, "push");
         first = appendBit(sb, first, caps, LoginCaps.SECTION_DELTA, "delta");
         first = appendBit(sb, first, caps, LoginCaps.SEED_GEN, "seed");
         first = appendBit(sb, first, caps, LoginCaps.LIGHT_STRIP, "light");
-        first = appendBit(sb, first, caps, LoginCaps.SHADOW_PULL, "pull");
-        appendBit(sb, first, caps, LoginCaps.VIEW_DIST_EXT, "ovd");
+        appendBit(sb, first, caps, LoginCaps.SHADOW_PULL, "pull");
         return sb.append(']').toString();
     }
 

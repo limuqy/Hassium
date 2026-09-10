@@ -60,7 +60,7 @@ public final class ClientLifecycleHelper {
 
     /**
      * 玩家登录时初始化缓存系统（新架构：无 HBT1 客户端存储，影子端承担保存；
-     * 此处仅初始化后台执行器 + OVD 环带重扫）。
+     * 此处仅初始化后台执行器 + 影子虚拟玩家 tracking 会话）。
      */
     public static void onLogin() {
         io.github.limuqy.mc.hassium.utils.LoginTiming.markLogin(); // T0b 诊断：handleLogin 时刻（总耗时起点）

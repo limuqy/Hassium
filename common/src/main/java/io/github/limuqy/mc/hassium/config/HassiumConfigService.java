@@ -133,18 +133,6 @@ public class HassiumConfigService {
     }
 
     /**
-     * @deprecated 使用 {@link #syncFromSpec()} / {@link #loadFromToml()}。
-     */
-    @Deprecated
-    public void loadConfig() {
-        if (tomlBackend.get()) {
-            loadFromToml();
-        } else {
-            syncFromSpec();
-        }
-    }
-
-    /**
      * 持久化当前快照：Fabric 写 toml；Forge/NeoForge 写回 Spec。
      */
     public void saveConfig() {
@@ -168,22 +156,6 @@ public class HassiumConfigService {
         } catch (Exception e) {
             LOGGER.error("Hassium: Failed to persist configuration", e);
         }
-    }
-
-    /**
-     * @deprecated 不再使用自定义配置目录。
-     */
-    @Deprecated
-    public void setConfigDir(java.nio.file.Path configDir) {
-        // no-op
-    }
-
-    /**
-     * @deprecated 客户端/服务端由 CLIENT/COMMON Spec 分文件隔离。
-     */
-    @Deprecated
-    public void setPhysicalClient(boolean isPhysicalClient) {
-        // no-op
     }
 
     public void reloadConfig() {
@@ -245,11 +217,6 @@ public class HassiumConfigService {
         return config.chunk().sectionDeltaEnabled();
     }
 
-    /** OVD 本地生成开关（默认 false）：OVD miss 时影子端按世界种子本地生成 + 存缓存。 */
-    public boolean isOvdLocalGenerationEnabled() {
-        return config.chunk().ovdLocalGeneration();
-    }
-
     /**
      * 影子端运行时可用（= 配置开启 && 服务端已装 MOD && 影子服务端创建成功，启用态）。
      * 启用态下影子端负责权威光照与回传；客户端光照引擎仍保持 vanilla 默认开启。
@@ -298,10 +265,6 @@ public class HassiumConfigService {
 
     public int getMaxCacheSizeMb() {
         return config.chunk().maxSizeMb();
-    }
-
-    public int getCacheCompressionLevel() {
-        return config.chunk().compressionLevel();
     }
 
     public double getHotScoreThreshold() {
@@ -392,10 +355,6 @@ public class HassiumConfigService {
         return config.master().aggregationMaxSize();
     }
 
-    public boolean isCompactHeaderEnabled() {
-        return config.master().enableCompactHeader();
-    }
-
     public int getServerChunkPushThreads() {
         return Math.max(1, Math.min(64, config.master().serverChunkPushThreads()));
     }
@@ -415,11 +374,6 @@ public class HassiumConfigService {
 
     public int getMaxChunksPerFrame() {
         return Math.max(1, config.chunk().maxChunksPerFrame());
-    }
-
-    /** 影子端内存区块回收延迟（秒；0=禁用回收）。 */
-    public int getChunkUnloadDelaySecs() {
-        return config.chunk().unloadDelaySecs();
     }
 
     /** SeedGen 本地生成线程数（0=禁用本地生成，SeedRef 一律回退全量）。 */
@@ -462,22 +416,6 @@ public class HassiumConfigService {
     /** 客户端是否启用 SeedGen（上报握手能力 + 本地生成开关；默认关）。 */
     public boolean isClientSeedGenEnabled() {
         return config.chunk().seedGenEnabled();
-    }
-
-    /**
-     * 是否启用超视渲染；仍依赖 chunk.enabled */
-    public boolean isViewDistanceExtensionEnabled() {
-        return config.chunk().viewDistanceExtensionEnabled();
-    }
-
-    /** 渲染距离上限（Fog/内存约束） */
-    public int getMaxRenderDistance() {
-        return Math.max(2, config.chunk().maxRenderDistance());
-    }
-
-    /** 离开超视渲染环带后延迟卸载秒数（0=同步卸载） */
-    public int getOvdUnloadDelaySecs() {
-        return Math.max(0, config.chunk().ovdUnloadDelaySecs());
     }
 
     /** 是否启用 JoinBoost（进服后短时提高主线程预算加速加载） */

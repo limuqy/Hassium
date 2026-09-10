@@ -14,14 +14,14 @@ import org.slf4j.LoggerFactory;
  * 启用方式（JVM 系统属性）：
  * <ul>
  *   <li>{@code -Dhassium.smokeTest=true} 开启</li>
- *   <li>{@code -Dhassium.smokeScenario=classic|seedgen|dimension|migrate} 场景选择（可选）</li>
+ *   <li>{@code -Dhassium.smokeScenario=classic|seedgen|dimension} 场景选择（可选）</li>
  *   <li>{@code -Dhassium.smokeTest.delayMs=6000} 每轮进服后等待毫秒（默认 10000；ROUND1 窗口=delayMs×2，ROUND2=max(3000,delayMs)）</li>
  *   <li>{@code -Dhassium.smokeTest.reconnectDelayMs=3000} 两轮间隔毫秒（默认 3000）</li>
  *   <li>{@code -Dhassium.smokeTest.joinTimeoutMs=120000} 未进服超时（默认 120s）</li>
  *   <li>{@code -Dhassium.smokeTest.host=127.0.0.1:25565} 重连目标地址</li>
  *   <li>{@code -Dhassium.smokeTest.moveSeconds=6} 进服后飞行移动秒数（0=不动）</li>
  * </ul>
- * 网关轮次/迁移演练已随 2.0.0 网关拓扑退役（migrate 场景步骤 log-and-skip）。
+ * 网关轮次/迁移演练已随 2.0.0 网关拓扑退役。
  * 退出码：0 两轮均通过；2 统计校验失败；3 进服超时；非 0 其它为运行错误。
  */
 public final class ClientSmokeTest {

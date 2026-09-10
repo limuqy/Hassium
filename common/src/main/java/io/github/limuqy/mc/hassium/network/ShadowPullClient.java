@@ -2,6 +2,8 @@ package io.github.limuqy.mc.hassium.network;
 
 import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.compat.LevelCompat;
+import io.github.limuqy.mc.hassium.network.handshake.ClientLoginNegotiation;
+import io.github.limuqy.mc.hassium.network.handshake.LoginCaps;
 import io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute;
 import io.github.limuqy.mc.hassium.platform.Services;
 import io.github.limuqy.mc.hassium.storage.ShadowStorageHashes;
@@ -110,10 +112,12 @@ public final class ShadowPullClient {
     /**
      * 统一 Compare+Pull 拦截（原版包 / 压缩通道 / 网关剥光包共入口）。
      * <p>
-     * 有本地基线且该 pos 本会话未在途 → 暂存网络数据 apply 回调并发出比较请求，
-     * 返回 {@code true}（调用方必须丢弃网络数据，不得注入/落地）；响应或超时后按
-     * 服务端裁决落地。无基线 / 已比较过 / 链路不可用 → 返回 {@code false}，调用方
-     * 走原有网络注入路径。
+     * 该 pos 本会话未在途 → 暂存网络数据 apply 回调并发出比较请求，返回
+     * {@code true}（调用方必须丢弃网络数据，不得注入/落地）；响应或超时后按
+     * 服务端裁决落地。有本地基线走 hash 比较（UNCHANGED/DELTA/FULL 裁决），
+     * 无本地基线走空基线请求（服务端必答 FULL）——chunk_payload 通道退役后的
+     * 统一权威路径。链路不可用（未协商 ShadowPull / cache 关 / 原版服务端）
+     * → 返回 {@code false}，调用方走原有网络注入路径。
      */
     public static boolean tryInterceptForCompare(String dimension, ChunkPos pos, Runnable networkApply) {
         if (dimension == null || pos == null || networkApply == null
@@ -121,7 +125,9 @@ public final class ShadowPullClient {
                 || !ShadowLightCompute.isEnabled()) {
             return false;
         }
-        if (!ShadowLightCompute.hasLocalPullBaseline(dimension, pos)) {
+        // 仅协商过 ShadowPull 的服务端会应答比较请求；原版服务端 / 未握手场景
+        // 放行网络注入（拦截后无人应答会挂起 10s 才超时回退，区块延迟不可接受）。
+        if (!LoginCaps.has(ClientLoginNegotiation.current(), LoginCaps.SHADOW_PULL)) {
             return false;
         }
         long key = io.github.limuqy.mc.hassium.utils.DimensionKey.key(dimension, pos.x, pos.z);
@@ -130,7 +136,14 @@ public final class ShadowPullClient {
             // 已在途：重复推送直接丢弃，等响应落地
             return true;
         }
-        requestFull(dimension, List.of(pos));
+        if (ShadowLightCompute.hasLocalPullBaseline(dimension, pos)) {
+            // 有本地基线：发出 hash 比较请求（服务端按 UNCHANGED/DELTA/FULL 裁决）
+            requestFull(dimension, List.of(pos));
+        } else {
+            // 无本地基线：空基线请求，服务端必答 FULL——统一 Compare+Pull，
+            // 不再放行未经服务端裁决的网络注入
+            requestAuthoritativeFull(dimension, List.of(pos));
+        }
         return true;
     }
 

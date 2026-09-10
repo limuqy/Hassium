@@ -1028,9 +1028,9 @@ public class HassiumMetricsImpl implements HassiumMetrics {
     // ===== 数据面分流记录方法 =====
 
     /**
-     * 记录经 Primary 路径发送的 bulk 帧（PoC 多通道路由统计）。
+     * 记录经 Primary 路径发送的 bulk 帧（chunk_payload 通道退役后无调用方）。
      *
-     * @param bytes CompressedChunkData.encode() 输出长度（与 Data 侧口径一致）
+     * @param bytes 已编码 chunk payload 长度
      */
     public void recordBulkSentPrimary(long bytes) {
         bulkFramesPrimary.incrementAndGet();

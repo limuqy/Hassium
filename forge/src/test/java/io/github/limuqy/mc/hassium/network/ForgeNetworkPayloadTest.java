@@ -5,7 +5,6 @@ import net.minecraft.network.FriendlyByteBuf;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
-import static org.junit.jupiter.api.Assertions.assertNotEquals;
 
 class ForgeNetworkPayloadTest {
 
@@ -19,8 +18,6 @@ class ForgeNetworkPayloadTest {
             ForgeNetworkManager.AggregationWrapper decoded = ForgeNetworkManager.AggregationWrapper.decode(buf);
 
             assertArrayEquals(data, decoded.data());
-            assertNotEquals(ForgeNetworkManager.CompressedPayloadWrapper.class,
-                    ForgeNetworkManager.AggregationWrapper.class);
         } finally {
             buf.release();
         }

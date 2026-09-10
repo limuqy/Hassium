@@ -19,11 +19,10 @@ public class DebugLogger {
         METADATA,       // 元数据相关 (CLIENT_METADATA, COMPARE_METADATA, APPLY_METADATA)
         DISPATCHER,     // 主线程调度器 (MAIN_DISPATCHER)
         ASYNC,          // 异步任务 (ASYNC)
-        COMPRESSION,    // 压缩/解压 (HANDLE_COMPRESSED)
+        COMPRESSION,    // 压缩/解压（ZSTD 管线）
         CHUNK_APPLY,    // 区块应用 (APPLY_CHUNK / CHUNK_PROBE 非 light)
         NETWORK,        // 网络传输
         CACHE,          // 缓存操作
-        DATAPLANE,      // 多通道数据面 (Data Plane PoC: bind/路由/解密/keepalive/帧计数)
         LIGHT_VERIFY    // 光照验算 + 光包落地探针 (CHUNK_PROBE source=light)
     }
 
@@ -76,7 +75,6 @@ public class DebugLogger {
         if (debug.chunkApplyLogging()) bits |= 1 << LogType.CHUNK_APPLY.ordinal();
         if (debug.networkLogging()) bits |= 1 << LogType.NETWORK.ordinal();
         if (debug.cacheLogging()) bits |= 1 << LogType.CACHE.ordinal();
-        if (debug.dataplaneLogging()) bits |= 1 << LogType.DATAPLANE.ordinal();
         if (debug.lightVerify()) bits |= 1 << LogType.LIGHT_VERIFY.ordinal();
         return bits;
     }

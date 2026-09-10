@@ -66,7 +66,7 @@ class DictionaryLoadingTest {
 
         byte[] testData = "This is test NBT data for Minecraft chunk compression".repeat(10).getBytes();
 
-        CompressionOptions options = new CompressionOptions(3, Optional.of("hassium-dictionary"), true);
+        CompressionOptions options = new CompressionOptions(3, Optional.of("hassium-dictionary"));
 
         byte[] compressed = codec.compress(testData, options);
         assertNotNull(compressed, "Compressed data should not be null");
@@ -81,7 +81,7 @@ class DictionaryLoadingTest {
         ZstdDictionaryCompressionCodec codec = new ZstdDictionaryCompressionCodec(registry);
 
         byte[] testData = "test data".getBytes();
-        CompressionOptions options = new CompressionOptions(3, Optional.of("nonexistent-dict"), true);
+        CompressionOptions options = new CompressionOptions(3, Optional.of("nonexistent-dict"));
 
         assertThrows(CompressionException.class, () -> {
             codec.compress(testData, options);

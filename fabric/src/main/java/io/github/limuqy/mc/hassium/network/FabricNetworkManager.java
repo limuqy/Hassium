@@ -102,13 +102,6 @@ ResourceLocation
 #else
 Identifier
 #endif
-CHUNK_PAYLOAD_S2C = ResourceLocationCompat.create(Constants.MOD_ID, "chunk_payload_s2c");
-    public static final
-#if MC_VER < MC_1_21_11
-ResourceLocation
-#else
-Identifier
-#endif
 INDEX_SYNC_S2C = ResourceLocationCompat.vanilla(HassiumChannels.INDEX_SYNC_S2C);
     public static final
 #if MC_VER < MC_1_21_11
@@ -245,37 +238,6 @@ PLAY_INIT_S2C = ResourceLocationCompat.vanilla(HassiumChannels.PLAY_INIT_S2C);
 #else
         ServerPlayNetworking.send(player, FabricPayloadRegistry.toPayload(FabricPayloadRegistry.LIGHT_DELTA_S2C_TYPE, buf));
 #endif
-    }
-
-    /**
-     * 发送已编码的压缩区块负载到指定玩家（payload 由调用方 encode 一次；review-fix: T11-19，
-     * 镜像 NeoForge 同名方法，避免内部二次 encode() 的重复分配+拷贝）
-     */
-    public static void sendCompressedChunk(ServerPlayer player, byte[] data) {
-        try {
-            DebugLogger.info(LogType.COMPRESSION,
-                    "[SEND_CHUNK] Sending compressed chunk to player {} (compressedSize={})",
-                    player.getName().getString(), data.length);
-
-            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
-            buf.writeVarInt(data.length);
-            buf.writeBytes(data);
-
-            DebugLogger.debug(LogType.NETWORK, "[SEND_CHUNK] Encoded chunk data ({} bytes), sending via network", data.length);
-#if MC_VER < MC_1_21_1
-            // review-fix: T10-2: send 抛异常时 Fabric 不会释放 buf → 失败路径手动 release 后重抛（成功路径由 Fabric 负责释放）
-            try {
-                ServerPlayNetworking.send(player, CHUNK_PAYLOAD_S2C, buf);
-            } catch (Exception e) {
-                buf.release();
-                throw e;
-            }
-#else
-            ServerPlayNetworking.send(player, FabricPayloadRegistry.toPayload(FabricPayloadRegistry.CHUNK_PAYLOAD_S2C_TYPE, buf));
-#endif
-        } catch (Exception e) {
-            LOGGER.error("[SEND_CHUNK] Failed to send compressed chunk to player {}", player.getName().getString(), e);
-        }
     }
 
     /**

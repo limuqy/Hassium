@@ -52,6 +52,5 @@ class ConfigSchemaTest {
         assertEquals(4, values.get(ConfigSchema.MASTER_AGGREGATION_MIN_BATCH));
         assertEquals(50L, values.get(ConfigSchema.MASTER_AGGREGATION_MAX_WAIT));
         assertEquals(256 * 1024, values.get(ConfigSchema.MASTER_AGGREGATION_MAX_SIZE));
-        assertEquals(true, values.get(ConfigSchema.MASTER_COMPACT_HEADER));
     }
 }

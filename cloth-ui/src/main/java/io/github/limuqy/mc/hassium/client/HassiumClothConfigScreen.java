@@ -17,7 +17,7 @@ import java.util.function.Consumer;
  * <p>
  * 仅显示客户端字段；服务端字段不出现 GUI 中，toConfig() 用 DEFAULT 填充。
  * <p>
- * UI 4 类分组（REQ 决策 5）：区块缓存（11 项）/ 渲染与生成（10 项）/ 网络与连接（3 项）/ 调试（8 项）。
+ * UI 4 类分组（REQ 决策 5）：区块缓存（10 项）/ 渲染与生成（5 项）/ 网络与连接（2 项）/ 调试（8 项）。
  */
 public final class HassiumClothConfigScreen {
 
@@ -48,9 +48,6 @@ public final class HassiumClothConfigScreen {
                 draft.cacheEnabled, dCache.enabled(), v -> draft.cacheEnabled = v));
         chunkCache.addEntry(intRange(entries, "hassium.configuration.chunk.maxSizeMb",
                 draft.cacheMaxSizeMb, dCache.maxSizeMb(), 64, 1024 * 1024, v -> draft.cacheMaxSizeMb = v));
-        chunkCache.addEntry(intRange(entries, "hassium.configuration.chunk.compressionLevel",
-                draft.cacheCompressionLevel, dCache.compressionLevel(), 1, 22,
-                v -> draft.cacheCompressionLevel = v));
         chunkCache.addEntry(doubleRange(entries, "hassium.configuration.chunk.hotScoreThreshold",
                 draft.cacheHotScoreThreshold, dCache.hotScoreThreshold(), 0.0, 1.0,
                 v -> draft.cacheHotScoreThreshold = v));
@@ -71,29 +68,14 @@ public final class HassiumClothConfigScreen {
                 draft.cacheSectionDeltaEnabled, dCache.sectionDeltaEnabled(),
                 v -> draft.cacheSectionDeltaEnabled = v));
 
-        // === Category 2: 渲染与生成（10 项）===
+        // === Category 2: 渲染与生成（5 项）===
         ConfigCategory rendering = builder.getOrCreateCategory(
                 Component.translatable("hassium.configuration.category.rendering"));
-        rendering.addEntry(bool(entries, "hassium.configuration.chunk.viewDistanceExtensionEnabled",
-                draft.cacheViewDistanceExtensionEnabled, dCache.viewDistanceExtensionEnabled(),
-                v -> draft.cacheViewDistanceExtensionEnabled = v));
-        rendering.addEntry(intRange(entries, "hassium.configuration.chunk.maxRenderDistance",
-                draft.cacheMaxRenderDistance, dCache.maxRenderDistance(), 2, 64,
-                v -> draft.cacheMaxRenderDistance = v));
-        rendering.addEntry(intRange(entries, "hassium.configuration.chunk.ovdUnloadDelaySecs",
-                draft.cacheOvdUnloadDelaySecs, dCache.ovdUnloadDelaySecs(), 0, 60,
-                v -> draft.cacheOvdUnloadDelaySecs = v));
-        rendering.addEntry(intRange(entries, "hassium.configuration.chunk.unloadDelaySecs",
-                draft.cacheUnloadDelaySecs, dCache.unloadDelaySecs(), 0, 600,
-                v -> draft.cacheUnloadDelaySecs = v));
         rendering.addEntry(intRange(entries, "hassium.configuration.chunk.maxChunksPerFrame",
                 draft.maxChunksPerFrame, dCache.maxChunksPerFrame(), 1, 512, v -> draft.maxChunksPerFrame = v));
         rendering.addEntry(intRange(entries, "hassium.configuration.chunk.mainThreadChunkBudgetMs",
                 draft.mainThreadChunkBudgetMs, dCache.mainThreadChunkBudgetMs(), 1, 50,
                 v -> draft.mainThreadChunkBudgetMs = v));
-        rendering.addEntry(bool(entries, "hassium.configuration.chunk.ovdLocalGeneration",
-                draft.ovdLocalGeneration, dCache.ovdLocalGeneration(),
-                v -> draft.ovdLocalGeneration = v));
         rendering.addEntry(intRange(entries, "hassium.configuration.chunk.seedGenThreads",
                 draft.seedGenThreads, dCache.seedGenThreads(), 0, 64,
                 v -> draft.seedGenThreads = v));
@@ -108,7 +90,7 @@ public final class HassiumClothConfigScreen {
         networkCat.addEntry(bool(entries, "hassium.configuration.debug.networkMetricsAutoReset",
                 draft.metricsAutoReset, dDebug.networkMetricsAutoReset(), v -> draft.metricsAutoReset = v));
 
-        // === Category 4: 调试（客户端 8 项；dataplaneLogging 仅服务端 toml）===
+        // === Category 4: 调试（客户端 8 项）===
         ConfigCategory debugCat = builder.getOrCreateCategory(
                 Component.translatable("hassium.configuration.category.debug"));
         debugCat.addEntry(bool(entries, "hassium.configuration.debug.metadataLogging",
@@ -183,22 +165,16 @@ public final class HassiumClothConfigScreen {
     private static final class Draft {
         boolean cacheEnabled;
         int cacheMaxSizeMb;
-        int cacheCompressionLevel;
         double cacheHotScoreThreshold;
         double cacheRecencyWeight;
         double cacheFrequencyWeight;
         int cacheCleanupIntervalTicks;
         int cacheTargetCacheSizeMb;
         int cacheMinCleanupBatchSize;
-        boolean cacheViewDistanceExtensionEnabled;
-        int cacheMaxRenderDistance;
-        int cacheOvdUnloadDelaySecs;
         boolean cacheSectionDeltaEnabled;
-        int cacheUnloadDelaySecs;
         int maxChunksPerFrame;
         int mainThreadChunkBudgetMs;
         int seedGenThreads;
-        boolean ovdLocalGeneration;
         boolean seedGenEnabled;
         boolean metricsEnabled;
         boolean metricsAutoReset;
@@ -209,7 +185,6 @@ public final class HassiumClothConfigScreen {
         boolean chunkApplyLogging;
         boolean networkLogging;
         boolean cacheLogging;
-        boolean dataplaneLogging;
         boolean lightVerify;
 
         static Draft from(HassiumConfig c) {
@@ -218,22 +193,16 @@ public final class HassiumClothConfigScreen {
             var debug = c.debug();
             d.cacheEnabled = cache.enabled();
             d.cacheMaxSizeMb = cache.maxSizeMb();
-            d.cacheCompressionLevel = cache.compressionLevel();
             d.cacheHotScoreThreshold = cache.hotScoreThreshold();
             d.cacheRecencyWeight = cache.recencyWeight();
             d.cacheFrequencyWeight = cache.frequencyWeight();
             d.cacheCleanupIntervalTicks = cache.cleanupIntervalTicks();
             d.cacheTargetCacheSizeMb = cache.targetSizeMb();
             d.cacheMinCleanupBatchSize = cache.minCleanupBatchSize();
-            d.cacheViewDistanceExtensionEnabled = cache.viewDistanceExtensionEnabled();
-            d.cacheMaxRenderDistance = cache.maxRenderDistance();
-            d.cacheOvdUnloadDelaySecs = cache.ovdUnloadDelaySecs();
             d.cacheSectionDeltaEnabled = cache.sectionDeltaEnabled();
-            d.cacheUnloadDelaySecs = cache.unloadDelaySecs();
             d.maxChunksPerFrame = cache.maxChunksPerFrame();
             d.mainThreadChunkBudgetMs = cache.mainThreadChunkBudgetMs();
             d.seedGenThreads = cache.seedGenThreads();
-            d.ovdLocalGeneration = cache.ovdLocalGeneration();
             d.seedGenEnabled = cache.seedGenEnabled();
             d.metricsEnabled = debug.networkMetricsEnabled();
             d.metricsAutoReset = debug.networkMetricsAutoReset();
@@ -244,7 +213,6 @@ public final class HassiumClothConfigScreen {
             d.chunkApplyLogging = debug.chunkApplyLogging();
             d.networkLogging = debug.networkLogging();
             d.cacheLogging = debug.cacheLogging();
-            d.dataplaneLogging = debug.dataplaneLogging();
             d.lightVerify = debug.lightVerify();
             return d;
         }
@@ -253,19 +221,18 @@ public final class HassiumClothConfigScreen {
             return new HassiumConfig(
                     HassiumConfig.StorageConfig.DEFAULT,
                     new HassiumConfig.ChunkCoreConfig(
-                            cacheEnabled, cacheMaxSizeMb, cacheCompressionLevel,
+                            cacheEnabled, cacheMaxSizeMb,
                             cacheHotScoreThreshold, cacheRecencyWeight, cacheFrequencyWeight,
                             cacheCleanupIntervalTicks, cacheTargetCacheSizeMb, cacheMinCleanupBatchSize,
-                            cacheSectionDeltaEnabled, cacheViewDistanceExtensionEnabled,
-                            cacheMaxRenderDistance, cacheOvdUnloadDelaySecs, cacheUnloadDelaySecs,
+                            cacheSectionDeltaEnabled,
                             maxChunksPerFrame, mainThreadChunkBudgetMs, seedGenThreads,
-                            ovdLocalGeneration, seedGenEnabled,
+                            seedGenEnabled,
                             HassiumConfig.ChunkCoreConfig.DEFAULT.lightStrip()),
                     HassiumConfig.MasterCoreConfig.DEFAULT,
                     HassiumConfig.CompatConfig.DEFAULT,
                     new HassiumConfig.DebugConfig(
                             metadataLogging, dispatcherLogging, asyncLogging, compressionLogging,
-                            chunkApplyLogging, networkLogging, cacheLogging, dataplaneLogging,
+                            chunkApplyLogging, networkLogging, cacheLogging,
                             lightVerify, metricsEnabled, metricsAutoReset));
         }
     }

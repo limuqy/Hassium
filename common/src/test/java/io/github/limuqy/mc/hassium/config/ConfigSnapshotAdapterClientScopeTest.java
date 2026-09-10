@@ -43,7 +43,7 @@ class ConfigSnapshotAdapterClientScopeTest {
     @Test
     void clientDebugFlagsRoundTripThroughValues() {
         HassiumConfig.DebugConfig debug = new HassiumConfig.DebugConfig(
-                true, false, true, false, true, false, true, false, true, true, false);
+                true, false, true, false, true, false, true, true, true, false);
         HassiumConfig original = HassiumConfig.DEFAULT.withDebug(debug);
 
         ConfigValues values = ConfigSnapshotAdapter.toValues(original);
@@ -56,13 +56,12 @@ class ConfigSnapshotAdapterClientScopeTest {
         assertEquals(false, values.get(ConfigSchema.CLIENT_DEBUG_NETWORK));
         assertEquals(true, values.get(ConfigSchema.CLIENT_DEBUG_CACHE));
         assertEquals(true, values.get(ConfigSchema.CLIENT_DEBUG_LIGHT_VERIFY));
-        assertEquals(false, values.get(ConfigSchema.SERVER_DEBUG_DATAPLANE));
     }
 
     @Test
     void fromValuesOnClientSideReadsClientDebugFlags() {
         HassiumConfig.DebugConfig debug = new HassiumConfig.DebugConfig(
-                true, false, true, false, true, false, true, false, true, true, false);
+                true, false, true, false, true, false, true, true, true, false);
         HassiumConfig original = HassiumConfig.DEFAULT.withDebug(debug);
 
         ConfigValues values = ConfigSnapshotAdapter.toValues(original);
@@ -74,7 +73,7 @@ class ConfigSnapshotAdapterClientScopeTest {
     @Test
     void fromValuesOnServerSideReadsServerDebugFlags() {
         HassiumConfig.DebugConfig debug = new HassiumConfig.DebugConfig(
-                false, true, false, true, false, true, false, true, false, false, true);
+                false, true, false, true, false, true, false, false, false, true);
         HassiumConfig original = HassiumConfig.DEFAULT.withDebug(debug);
 
         ConfigValues values = ConfigSnapshotAdapter.toValues(original);
@@ -88,8 +87,6 @@ class ConfigSnapshotAdapterClientScopeTest {
         // Sanity: schema must keep CLIENT_DEBUG_* out of serverEntries(), per design L233.
         assertTrue(ConfigSchema.serverEntries().stream()
                 .noneMatch(e -> e.key() == ConfigSchema.CLIENT_DEBUG_METADATA));
-        assertTrue(ConfigSchema.clientEntries().stream()
-                .noneMatch(e -> e.key() == ConfigSchema.SERVER_DEBUG_DATAPLANE));
         assertFalse(ConfigSchema.clientEntries().isEmpty());
         assertFalse(ConfigSchema.serverEntries().isEmpty());
     }
@@ -99,9 +96,8 @@ class ConfigSnapshotAdapterClientScopeTest {
         assertTrue(ConfigSchema.clientEntries().stream().anyMatch(e -> e.path().equals("debug.metadataLogging")));
         assertTrue(ConfigSchema.clientEntries().stream().anyMatch(e -> e.path().equals("debug.lightVerify")));
         assertTrue(ConfigSchema.clientEntries().stream().anyMatch(e -> e.path().equals("debug.cacheLogging")));
-        assertTrue(ConfigSchema.clientEntries().stream().noneMatch(e -> e.path().equals("debug.dataplaneLogging")));
 
-        assertTrue(ConfigSchema.serverEntries().stream().anyMatch(e -> e.path().equals("debug.dataplaneLogging")));
+        assertTrue(ConfigSchema.serverEntries().stream().anyMatch(e -> e.path().equals("debug.networkLogging")));
         assertTrue(ConfigSchema.serverEntries().stream().noneMatch(e -> e.path().equals("debug.metadataLogging")));
         assertTrue(ConfigSchema.serverEntries().stream().noneMatch(e -> e.path().equals("debug.cacheLogging")));
         assertTrue(ConfigSchema.serverEntries().stream().noneMatch(e -> e.path().equals("debug.lightVerify")));

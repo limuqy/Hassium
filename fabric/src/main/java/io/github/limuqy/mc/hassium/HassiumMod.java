@@ -1,7 +1,6 @@
 package io.github.limuqy.mc.hassium;
 
 import io.github.limuqy.mc.hassium.command.FabricHassiumCommand;
-import io.github.limuqy.mc.hassium.network.ChunkSender;
 import io.github.limuqy.mc.hassium.network.FabricNetworkManager;
 import net.fabricmc.api.ModInitializer;
 import org.slf4j.Logger;
@@ -20,14 +19,6 @@ public class HassiumMod implements ModInitializer {
         LOGGER.info("Hassium: Initializing Fabric network channels");
         FabricNetworkManager networkManager = new FabricNetworkManager();
         networkManager.registerChannels();
-
-        // 设置区块发送器（直连拓扑：单一 Primary 路径，vanilla play S2C 通道直发）
-        ChunkSender.setInstance((player, compressed) -> {
-            byte[] payload = compressed.encode();
-            io.github.limuqy.mc.hassium.metrics.NetworkStats.recordBulkSentPrimary(payload.length);
-            // review-fix: T11-19 传已编码 payload，避免 sendCompressedChunk 内部二次 encode()（重复分配+拷贝）
-            FabricNetworkManager.sendCompressedChunk(player, payload);
-        });
 
         // 注册命令
         FabricHassiumCommand.register();

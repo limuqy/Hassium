@@ -352,7 +352,6 @@ public final class FabricTomlConfigIO {
         return new HassiumConfig.ChunkCoreConfig(
                 getBool(cfg, "chunk.enabled", d.enabled()),
                 getInt(cfg, "chunk.maxSizeMb", d.maxSizeMb()),
-                getInt(cfg, "chunk.compressionLevel", d.compressionLevel()),
                 getDouble(cfg, "chunk.hotScoreThreshold", d.hotScoreThreshold()),
                 getDouble(cfg, "chunk.recencyWeight", d.recencyWeight()),
                 getDouble(cfg, "chunk.frequencyWeight", d.frequencyWeight()),
@@ -360,14 +359,9 @@ public final class FabricTomlConfigIO {
                 getInt(cfg, "chunk.targetSizeMb", d.targetSizeMb()),
                 getInt(cfg, "chunk.minCleanupBatchSize", d.minCleanupBatchSize()),
                 getBool(cfg, "chunk.sectionDeltaEnabled", d.sectionDeltaEnabled()),
-                getBool(cfg, "chunk.viewDistanceExtensionEnabled", d.viewDistanceExtensionEnabled()),
-                getInt(cfg, "chunk.maxRenderDistance", d.maxRenderDistance()),
-                getInt(cfg, "chunk.ovdUnloadDelaySecs", d.ovdUnloadDelaySecs()),
-                getInt(cfg, "chunk.unloadDelaySecs", d.unloadDelaySecs()),
                 getInt(cfg, "chunk.maxChunksPerFrame", d.maxChunksPerFrame()),
                 getInt(cfg, "chunk.mainThreadChunkBudgetMs", d.mainThreadChunkBudgetMs()),
                 getInt(cfg, "chunk.seedGenThreads", d.seedGenThreads()),
-                getBool(cfg, "chunk.ovdLocalGeneration", d.ovdLocalGeneration()),
                 getBool(cfg, "chunk.seedGenEnabled", d.seedGenEnabled()),
                 getBool(cfg, "chunk.lightStrip", d.lightStrip())
         );
@@ -376,7 +370,6 @@ public final class FabricTomlConfigIO {
     private static void writeChunkCore(CommentedConfig cfg, HassiumConfig.ChunkCoreConfig c) {
         set(cfg, "chunk.enabled", c.enabled(), "是否启用区块核心缓存");
         set(cfg, "chunk.maxSizeMb", c.maxSizeMb(), "缓存最大容量");
-        set(cfg, "chunk.compressionLevel", c.compressionLevel(), "缓存压缩等级");
         set(cfg, "chunk.hotScoreThreshold", c.hotScoreThreshold(), "热点分数阈值");
         set(cfg, "chunk.recencyWeight", c.recencyWeight(), "最近访问权重");
         set(cfg, "chunk.frequencyWeight", c.frequencyWeight(), "访问频率权重");
@@ -384,14 +377,9 @@ public final class FabricTomlConfigIO {
         set(cfg, "chunk.targetSizeMb", c.targetSizeMb(), "目标缓存大小");
         set(cfg, "chunk.minCleanupBatchSize", c.minCleanupBatchSize(), "每轮淘汰 region 文件数");
         set(cfg, "chunk.sectionDeltaEnabled", c.sectionDeltaEnabled(), "启用分段增量");
-        set(cfg, "chunk.viewDistanceExtensionEnabled", c.viewDistanceExtensionEnabled(), "启用超视距渲染");
-        set(cfg, "chunk.maxRenderDistance", c.maxRenderDistance(), "超视距渲染最大距离");
-        set(cfg, "chunk.ovdUnloadDelaySecs", c.ovdUnloadDelaySecs(), "超视区块卸载延迟秒数");
-        set(cfg, "chunk.unloadDelaySecs", c.unloadDelaySecs(), "影子端区块卸载延迟秒数");
         set(cfg, "chunk.maxChunksPerFrame", c.maxChunksPerFrame(), "每帧最大区块数");
         set(cfg, "chunk.mainThreadChunkBudgetMs", c.mainThreadChunkBudgetMs(), "主线程区块预算");
         set(cfg, "chunk.seedGenThreads", c.seedGenThreads(), "SeedGen 线程数");
-        set(cfg, "chunk.ovdLocalGeneration", c.ovdLocalGeneration(), "启用 OVD 本地生成");
         set(cfg, "chunk.seedGenEnabled", c.seedGenEnabled(), "启用 SeedGen");
         set(cfg, "chunk.lightStrip", c.lightStrip(), "启用服务端光照剥离");
     }
@@ -420,9 +408,7 @@ public final class FabricTomlConfigIO {
                 getInt(cfg, "master.aggregationMinBatchSize", d.aggregationMinBatchSize()),
                 getLong(cfg, "master.aggregationMaxWaitTimeMs", d.aggregationMaxWaitTimeMs()),
                 getInt(cfg, "master.aggregationMaxSize", d.aggregationMaxSize()),
-                getBool(cfg, "master.enableCompactHeader", d.enableCompactHeader()),
                 getStringSet(cfg, "master.compressionBlacklist", d.compressionBlacklist()),
-                getBool(cfg, "master.metricsEnabled", d.metricsEnabled()),
                 getInt(cfg, "master.maxChunksPerTick", d.maxChunksPerTick()),
                 getInt(cfg, "master.serverChunkPushThreads", d.serverChunkPushThreads())
         );
@@ -436,9 +422,7 @@ public final class FabricTomlConfigIO {
         set(cfg, "master.aggregationMinBatchSize", n.aggregationMinBatchSize(), "聚合最小批量");
         set(cfg, "master.aggregationMaxWaitTimeMs", (int) n.aggregationMaxWaitTimeMs(), "聚合最大等待（ms）");
         set(cfg, "master.aggregationMaxSize", n.aggregationMaxSize(), "聚合最大大小（字节）");
-        set(cfg, "master.enableCompactHeader", n.enableCompactHeader(), "是否启用紧凑包头");
         set(cfg, "master.compressionBlacklist", new ArrayList<>(n.compressionBlacklist()), "压缩/聚合黑名单");
-        set(cfg, "master.metricsEnabled", n.metricsEnabled(), "是否启用指标收集");
         set(cfg, "master.maxChunksPerTick", n.maxChunksPerTick(), "每玩家每 tick 提交到后台序列化的区块上限（发送速率 = 本值 × tick 节奏，满 tick ≈ 本值×20/s，仅服务端）");
         set(cfg, "master.serverChunkPushThreads", n.serverChunkPushThreads(), "服务端区块推送线程数（encode/hash/ZSTD 固定后台池，仅服务端）");
         // legacy 键清理：网关监听/鉴权/控制面端点/L1 迁移/续流票据/数据面已随网关拓扑退役；
@@ -490,7 +474,6 @@ public final class FabricTomlConfigIO {
                 getBool(cfg, "debug.chunkApplyLogging", d.chunkApplyLogging()),
                 getBool(cfg, "debug.networkLogging", d.networkLogging()),
                 getBool(cfg, "debug.cacheLogging", d.cacheLogging()),
-                getBool(cfg, "debug.dataplaneLogging", d.dataplaneLogging()),
                 getBool(cfg, "debug.lightVerify", d.lightVerify()),
                 getBool(cfg, "debug.networkMetricsEnabled", d.networkMetricsEnabled()),
                 getBool(cfg, "debug.networkMetricsAutoReset", d.networkMetricsAutoReset())
@@ -516,7 +499,6 @@ public final class FabricTomlConfigIO {
         set(cfg, "debug.compressionLogging", d.compressionLogging(), "压缩调试日志");
         set(cfg, "debug.chunkApplyLogging", d.chunkApplyLogging(), "区块 apply 调试日志");
         set(cfg, "debug.networkLogging", d.networkLogging(), "网络调试日志");
-        set(cfg, "debug.dataplaneLogging", d.dataplaneLogging(), "数据面（多通道 Data Plane）热路径日志 — 默认 false 以避免高频刷屏");
     }
 
     // --- value helpers ---

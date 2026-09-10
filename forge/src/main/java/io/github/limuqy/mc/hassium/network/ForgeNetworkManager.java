@@ -116,18 +116,6 @@ public class ForgeNetworkManager implements NetworkManager {
         // 必须 setPacketHandled(true)（在 enqueueWork 外），否则 Forge 会把包交给原版
         // S2C / C2S 必须带 NetworkDirection，避免方向校验失败
 
-        CHANNEL.<CompressedPayloadWrapper>registerMessage(
-                packetId++,
-                CompressedPayloadWrapper.class,
-                CompressedPayloadWrapper::encode,
-                CompressedPayloadWrapper::decode,
-                (msg, ctx) -> {
-                    ctx.get().enqueueWork(() -> handleCompressedPayload(msg));
-                    ctx.get().setPacketHandled(true);
-                },
-                java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT)
-        );
-
         CHANNEL.<AggregationWrapper>registerMessage(
                 packetId++,
                 AggregationWrapper.class,
@@ -288,9 +276,6 @@ public class ForgeNetworkManager implements NetworkManager {
                                 playCodec(ShadowPullRequestWrapper::encode, ShadowPullRequestWrapper::decode),
                                 ForgeNetworkManager::onShadowPullRequest)
                     .clientbound()
-                        .addMain(CompressedPayloadWrapper.class,
-                                playCodec(CompressedPayloadWrapper::encode, CompressedPayloadWrapper::decode),
-                                ForgeNetworkManager::onCompressedPayload)
                         .addMain(AggregationWrapper.class,
                                 playCodec(AggregationWrapper::encode, AggregationWrapper::decode),
                                 ForgeNetworkManager::onAggregationClient)
@@ -346,10 +331,6 @@ public class ForgeNetworkManager implements NetworkManager {
 
     private static void onLightDelta(LightDeltaWrapper msg, CustomPayloadEvent.Context ctx) {
         ctx.enqueueWork(() -> handleLightDelta(msg));
-    }
-
-    private static void onCompressedPayload(CompressedPayloadWrapper msg, CustomPayloadEvent.Context ctx) {
-        ctx.enqueueWork(() -> handleCompressedPayload(msg));
     }
 
     private static void onAggregationClient(AggregationWrapper msg, CustomPayloadEvent.Context ctx) {
@@ -504,14 +485,6 @@ public class ForgeNetworkManager implements NetworkManager {
 #endif
         } catch (Exception e) {
             LOGGER.error("Hassium: Failed to send compression ready", e);
-        }
-    }
-
-    private static void handleCompressedPayload(CompressedPayloadWrapper msg) {
-        try {
-            ClientChunkHandler.handleCompressedChunk(msg.data());
-        } catch (Exception e) {
-            LOGGER.error("Hassium: Failed to handle compressed payload", e);
         }
     }
 
@@ -692,23 +665,6 @@ public class ForgeNetworkManager implements NetworkManager {
 #endif
     }
 
-    /**
-     * 发送已编码的压缩区块负载到指定玩家（payload 由调用方 encode 一次；review-fix: T11-19）
-     */
-    public static void sendCompressedChunk(ServerPlayer player, byte[] data) {
-        try {
-#if MC_VER < MC_1_21_1
-            CHANNEL.sendTo(new CompressedPayloadWrapper(data), player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
-#else
-            sendToPlayer(player, new CompressedPayloadWrapper(data));
-#endif
-            LOGGER.debug("Hassium: Sent compressed chunk to player {} (size={})",
-                    player.getName().getString(), data.length);
-        } catch (Exception e) {
-            LOGGER.error("Hassium: Failed to send compressed chunk to player {}", player.getName().getString(), e);
-        }
-    }
-
     // ========== 数据包记录 ==========
 
     /**
@@ -759,24 +715,6 @@ public class ForgeNetworkManager implements NetworkManager {
                 throw new IllegalArgumentException("invalid shadow pull response length");
             }
             byte[] data = new byte[length]; buf.readBytes(data); return new ShadowPullResponseWrapper(data);
-        }
-    }
-
-    public record CompressedPayloadWrapper(byte[] data) {
-        public void encode(FriendlyByteBuf buf) {
-            buf.writeVarInt(data.length);
-            buf.writeBytes(data);
-        }
-
-        public static CompressedPayloadWrapper decode(FriendlyByteBuf buf) {
-            // review-fix: T10-9: length 无上限 → readTail 式校验（恶意超大 varInt 拒绝分配）
-            int length = buf.readVarInt();
-            if (length < 0 || length > buf.readableBytes()) {
-                throw new IllegalArgumentException("invalid CompressedPayloadWrapper length: " + length);
-            }
-            byte[] data = new byte[length];
-            buf.readBytes(data);
-            return new CompressedPayloadWrapper(data);
         }
     }
 

@@ -39,13 +39,6 @@ public final class MainThreadDispatcher {
      */
     public static final double PRIORITY_UNKNOWN = ChunkDistancePriority.unknown();
 
-    /**
-     * @deprecated 语义已变为「未知层」而非绝对垫底；请用 {@link #PRIORITY_UNKNOWN}。
-     *             保留别名避免外部/历史调用编译失败。
-     */
-    @Deprecated
-    public static final double PRIORITY_LOWEST = PRIORITY_UNKNOWN;
-
     // ============== 任务语义 op（KeyedPriorityQueue.Key.op）==============
 
     /** 全量区块数据 apply（压缩通道 / 原版 packet 预算化）。同位置互取代。 */

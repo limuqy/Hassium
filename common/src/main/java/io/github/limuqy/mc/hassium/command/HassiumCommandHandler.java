@@ -154,7 +154,7 @@ public class HassiumCommandHandler {
         // （直连命中字节 + 影子复用字节）/（命中 + 本地重算）。影子端本会话重算的光
         // （远程全量注入 / 分段增量 / 磁盘光脏续算）按柱记一次 lightCacheMiss。
         // 邻柱 LIGHT_ONLY 收敛补光不进重算分母（按引擎任务计会把一柱刷成几十次）。
-        // OVD/renderOnly 柱由本地影子端全量服务，记复用不进重算分母。
+        // 未注入柱（Compare+Pull 对齐路径）由本地影子端全量服务，记复用不进重算分母。
         long lightHit = m.getLightCacheHitCount() + m.getLightReuseShadowCount();
         long lightHitBytes = m.getLightCacheHitBytes() + m.getLightReuseShadowBytes();
         long lightMiss = m.getLightCacheMissCount();
@@ -170,7 +170,7 @@ public class HassiumCommandHandler {
         // actual 仅管线层 recordWireBytesReceived（含 SectionDelta payload）。
         // 无 MOD 应收 = 数据包 + 本地重算（SeedGen）+ 客户端缓存 + 光照（直连命中/影子复用/本地重算），
         // 统一为原版 Zlib 等价 wire。分段增量已按「若走全量的原版 Zlib 等价」计入数据包
-        // （recordSectionDeltaReceived），不再单列；OVD 环带不计入（无 MOD 时服务端本来也不推）。
+        // （recordSectionDeltaReceived），不再单列；影子端本地全量柱不计入（无 MOD 时服务端本来也不推）。
         // 第一段百分比 = 已节省（= 100% - 实际/无MOD），括号内给当前/无MOD 绝对值便于阅读。
         long noModReceive = m.getNoModReceiveBytes();
         long current = m.getActualBytesReceived();
@@ -350,45 +350,5 @@ public class HassiumCommandHandler {
     /** 查询当前导出状态。 */
     public static String getCacheExportStatus() {
         return "§a无导出任务（目录拷贝同步完成，见聊天回报）§r";
-    }
-
-    // ==================== /hassium migrate（B4 迁移演练；仅开发环境注册） ====================
-
-    /** 客户端命令上下文检查：migrate 依赖客户端进程内的 NetworkCore 网关单例。 */
-    private static boolean isClientContext() {
-        return Minecraft.getInstance() != null;
-    }
-
-    private static String clientOnlyMessage() {
-        return "§c/hassium migrate 是客户端命令，需在客户端执行§r";
-    }
-
-    /** migrate 无参数：用法帮助。L1 迁移已随网络核心裁剪退役，命令保留为退役提示。 */
-    public static String migrateUsage() {
-        return "§7/hassium migrate 已随主控无感切换裁剪退役（直连拓扑无迁移面）§r";
-    }
-
-    /** migrate list：已退役。 */
-    public static String migrateList() {
-        if (!isClientContext()) {
-            return clientOnlyMessage();
-        }
-        return migrateUsage();
-    }
-
-    /** migrate &lt;host:port&gt;：已退役。 */
-    public static String migrateTo(String hostPort) {
-        if (!isClientContext()) {
-            return clientOnlyMessage();
-        }
-        return migrateUsage();
-    }
-
-    /** migrate status：已退役。 */
-    public static String migrateStatus() {
-        if (!isClientContext()) {
-            return clientOnlyMessage();
-        }
-        return migrateUsage();
     }
 }

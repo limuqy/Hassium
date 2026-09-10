@@ -48,13 +48,13 @@ class ConfigRestructureRoundTripTest {
         Map<String, ConfigEntry<?>> byPath = ConfigSchema.entries().stream()
                 .collect(Collectors.toMap(e -> e.scope() + "/" + e.path(), Function.identity()));
 
-        assertEquals(53, ConfigSchema.entries().size(), "schema 留存键数");
-        assertEquals(53, values.asMap().size(), "defaults 键数");
+        assertEquals(44, ConfigSchema.entries().size(), "schema 留存键数");
+        assertEquals(44, values.asMap().size(), "defaults 键数");
 
         Map<String, Long> prefixCounts = ConfigSchema.entries().stream()
                 .collect(Collectors.groupingBy(e -> e.path().substring(0, e.path().indexOf('.') + 1),
                         Collectors.counting()));
-        assertEquals(Map.of("chunk.", 21L, "master.", 12L, "debug.", 16L,
+        assertEquals(Map.of("chunk.", 15L, "master.", 10L, "debug.", 15L,
                 "storage.", 2L, "compat.", 2L), prefixCounts);
 
         // 双端同名键 chunk.seedGenEnabled 各一
@@ -77,10 +77,10 @@ class ConfigRestructureRoundTripTest {
     @Test
     void clientTomlRoundTripsNewKeys(@TempDir Path root) throws IOException {
         HassiumConfig.ChunkCoreConfig chunk = new HassiumConfig.ChunkCoreConfig(
-                true, 8192, 7, 0.5, 0.8, 0.2, 1200, 1024, 200,
-                true, false, 32, 10, 45, 12, 30, 4, true, true, true);
+                true, 8192, 0.5, 0.8, 0.2, 1200, 1024, 200,
+                true, 12, 30, 4, true, true);
         HassiumConfig.DebugConfig debug = new HassiumConfig.DebugConfig(
-                true, false, true, false, true, false, true, false, true, true, false);
+                true, false, true, false, true, false, true, true, true, false);
         // 网关拓扑退役：client.toml 不再承载任何 master.* 键（原迁移策略 6 键已删）
         HassiumConfig.MasterCoreConfig master = HassiumConfig.MasterCoreConfig.DEFAULT;
         HassiumConfig original = new HassiumConfig(
@@ -93,7 +93,6 @@ class ConfigRestructureRoundTripTest {
         assertEquals(master, loaded.master(), "client toml 不再写 master.* 键 → 读回 DEFAULT");
         String toml = Files.readString(root.resolve("hassium/hassium-client.toml"));
         assertTrue(toml.contains("lightVerify = true"), "client toml 缺 debug.lightVerify=true:\n" + toml);
-        assertFalse(toml.contains("dataplaneLogging"), "client toml 不应含服务端专属 debug.dataplaneLogging:\n" + toml);
         // 网关退役键族不得出现在 client.toml
         assertFalse(toml.contains("migrationMinTps"), "client.toml 不应含已退役 master.migrationMinTps:\n" + toml);
         assertFalse(toml.contains("migrationSilentTimeoutMs"), "client.toml 不应含已退役 master.migrationSilentTimeoutMs:\n" + toml);
@@ -107,16 +106,16 @@ class ConfigRestructureRoundTripTest {
     @Test
     void serverTomlRoundTripsNewKeys(@TempDir Path root) throws IOException {
         HassiumConfig.MasterCoreConfig master = new HassiumConfig.MasterCoreConfig(
-                true, 9, false, false, 8, 50L, 131072, false,
-                Set.of("CHUNK_PAYLOAD_S2C", "MAIN_CHANNEL"), true, 7, 4);
+                true, 9, false, false, 8, 50L, 131072,
+                Set.of("MAIN_CHANNEL"), 7, 4);
         HassiumConfig.StorageConfig storage = new HassiumConfig.StorageConfig(true, 9);
         // server toml 只写 chunk.lightStrip/chunk.seedGenEnabled 两键，其余键读回默认 → 仅改这两键
         HassiumConfig.ChunkCoreConfig chunk = new HassiumConfig.ChunkCoreConfig(
-                true, 4096, 3, 0.3, 0.7, 0.3, 6000, 0, 100,
-                true, true, 16, 5, 30, 6, 15, 2, true, false, false);
+                true, 4096, 0.3, 0.7, 0.3, 6000, 0, 100,
+                true, 6, 15, 2, false, false);
         HassiumConfig.CompatConfig compat = new HassiumConfig.CompatConfig(true, false);
         HassiumConfig.DebugConfig debug = new HassiumConfig.DebugConfig(
-                false, true, false, true, false, true, false, true, false, false, true);
+                false, true, false, true, false, true, false, false, false, true);
 
         HassiumConfig original = new HassiumConfig(storage, chunk, master, compat, debug);
         FabricTomlConfigIO.saveServer(root, original);
@@ -144,7 +143,6 @@ class ConfigRestructureRoundTripTest {
         assertTrue(toml.contains("lightStrip = false"), "server toml 缺 chunk.lightStrip=false");
         assertTrue(toml.contains("zstdLevel = 9"), "server toml 缺 storage.zstdLevel=9");
         assertTrue(toml.contains("autoDowngradeOnError = false"), "server toml 缺 compat.autoDowngradeOnError=false");
-        assertTrue(toml.contains("dataplaneLogging = true"), "server toml 缺 debug.dataplaneLogging=true:\n" + toml);
         assertFalse(toml.contains("metadataLogging"), "server toml 不应含客户端专属 debug.metadataLogging:\n" + toml);
         assertFalse(toml.contains("cacheLogging"), "server toml 不应含客户端专属 debug.cacheLogging:\n" + toml);
         assertFalse(toml.contains("lightVerify"), "server toml 不应含客户端专属 debug.lightVerify:\n" + toml);
@@ -186,7 +184,6 @@ class ConfigRestructureRoundTripTest {
         assertEquals(4, values.get(ConfigSchema.MASTER_AGGREGATION_MIN_BATCH));
         assertEquals(50L, values.get(ConfigSchema.MASTER_AGGREGATION_MAX_WAIT));
         assertEquals(256 * 1024, values.get(ConfigSchema.MASTER_AGGREGATION_MAX_SIZE));
-        assertEquals(true, values.get(ConfigSchema.MASTER_COMPACT_HEADER));
         // master.maxChunksPerTick / serverChunkPushThreads 默认 4
         assertEquals(4, values.get(ConfigSchema.MASTER_MAX_CHUNKS_PER_TICK));
         assertEquals(4, values.get(ConfigSchema.MASTER_SERVER_PUSH_THREADS));
@@ -196,10 +193,9 @@ class ConfigRestructureRoundTripTest {
         assertEquals(false, values.get(ConfigSchema.CLIENT_DEBUG_NETWORK_METRICS));
         assertEquals(true, values.get(ConfigSchema.CLIENT_DEBUG_NETWORK_METRICS_AUTO_RESET));
         // chunk 区块核心抽查
-        assertEquals(16, values.get(ConfigSchema.CHUNK_MAX_RENDER_DISTANCE));
         assertEquals(6000, values.get(ConfigSchema.CHUNK_CLEANUP_INTERVAL_TICKS));
         assertEquals(0.3, values.get(ConfigSchema.CHUNK_HOT_SCORE_THRESHOLD));
-        // 黑名单 8 项（旧 SECTION_DELTA_S2C 随独立 SectionHash 通道删除而移除）
-        assertEquals(8, values.get(ConfigSchema.MASTER_COMPRESSION_BLACKLIST).size());
+        // 黑名单 7 项（CHUNK_PAYLOAD_S2C 随 chunk_payload 通道退役移除；旧 SECTION_DELTA_S2C 更早随独立通道删除）
+        assertEquals(7, values.get(ConfigSchema.MASTER_COMPRESSION_BLACKLIST).size());
     }
 }

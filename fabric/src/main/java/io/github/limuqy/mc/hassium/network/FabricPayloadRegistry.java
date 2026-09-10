@@ -25,8 +25,6 @@ public final class FabricPayloadRegistry {
 
     // ===== S2C payload types (server -> client) =====
 
-    public static final CustomPacketPayload.Type<RawPayload> CHUNK_PAYLOAD_S2C_TYPE =
-            type("chunk_payload_s2c");
     public static final CustomPacketPayload.Type<RawPayload> DICTIONARY_SYNC_S2C_TYPE =
             type("dictionary_sync");
     public static final CustomPacketPayload.Type<RawPayload> INDEX_SYNC_S2C_TYPE =
@@ -104,7 +102,6 @@ public final class FabricPayloadRegistry {
         registered = true;
 
         // S2C types
-        PayloadTypeRegistry.playS2C().register(CHUNK_PAYLOAD_S2C_TYPE, codec(CHUNK_PAYLOAD_S2C_TYPE));
         PayloadTypeRegistry.playS2C().register(DICTIONARY_SYNC_S2C_TYPE, codec(DICTIONARY_SYNC_S2C_TYPE));
         PayloadTypeRegistry.playS2C().register(INDEX_SYNC_S2C_TYPE, codec(INDEX_SYNC_S2C_TYPE));
         PayloadTypeRegistry.playS2C().register(AGGREGATION_S2C_TYPE, codec(AGGREGATION_S2C_TYPE));

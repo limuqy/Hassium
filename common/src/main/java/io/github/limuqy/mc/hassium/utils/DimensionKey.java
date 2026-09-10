@@ -101,7 +101,7 @@ public final class DimensionKey {
 
     /**
      * 维度白名单判定：仅三主维度可进客户端缓存链路；
-     * null / 自定义维度一律 false（调用方透传，不进影子比对/OVD/落盘/SeedGen）。
+     * null / 自定义维度一律 false（调用方透传，不进影子比对/落盘/SeedGen）。
      */
     public static boolean isCacheableDimension(String dimension) {
         return OVERWORLD.equals(dimension) || NETHER.equals(dimension) || END.equals(dimension);

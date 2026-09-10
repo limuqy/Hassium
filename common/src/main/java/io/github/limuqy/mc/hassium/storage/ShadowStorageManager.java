@@ -178,7 +178,7 @@ public final class ShadowStorageManager implements AutoCloseable {
     }
 
     /**
-     * 仅 R2/OVD 未注入柱：解压该槽。管理器不保留 NBT。
+     * 未注入柱（Compare+Pull 对齐路径）：解压该槽。管理器不保留 NBT。
      */
     public byte[] readChunk(ChunkPos pos) {
         return readChunk(dimension, pos);

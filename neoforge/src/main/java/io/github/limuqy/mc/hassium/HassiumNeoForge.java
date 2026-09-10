@@ -3,7 +3,6 @@ package io.github.limuqy.mc.hassium;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.platform.NeoForgeConfigBackend;
 import io.github.limuqy.mc.hassium.platform.NeoForgeConfigRegistration;
-import io.github.limuqy.mc.hassium.network.ChunkSender;
 import io.github.limuqy.mc.hassium.network.NeoForgeNetworkManager;
 
 #if MC_VER < MC_1_21_1
@@ -59,15 +58,6 @@ public class HassiumNeoForge {
         modEventBus.addListener(this::onConfigReload);
 
         CommonClass.init();
-
-        ChunkSender.setInstance((player, compressed) -> {
-            // 直连拓扑：UDP 数据面已退役，区块推送全走 vanilla play S2C 通道
-            byte[] payload = compressed.encode();
-            io.github.limuqy.mc.hassium.metrics.NetworkStats.recordBulkSentPrimary(payload.length);
-            // review-fix: T11-19 传已编码 payload，避免 sendCompressedChunk 内部二次 encode()（重复分配+拷贝）
-            NeoForgeNetworkManager.sendCompressedChunk(player, payload);
-        });
-        LOGGER.info("Hassium: ChunkSender registered for NeoForge");
 
 #if MC_VER < MC_1_21_1
         modEventBus.addListener(this::commonSetup);

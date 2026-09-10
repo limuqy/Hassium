@@ -2,7 +2,6 @@ package io.github.limuqy.mc.hassium.network.seedgen;
 
 import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.compat.ShadowServerCompat;
-import io.github.limuqy.mc.hassium.network.ChunkCompressionHandler;
 import net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.chunk.LevelChunk;
@@ -30,11 +29,5 @@ public final class SeedGenChunkCodec {
     public static byte[] encode(ClientboundLevelChunkWithLightPacket chunkPacket,
                                  net.minecraft.core.RegistryAccess registryAccess) {
         return ShadowServerCompat.encodeLevelChunkPacket(chunkPacket, registryAccess);
-    }
-
-    public static byte[] compress(byte[] chunkData, int x, int z) {
-        ChunkCompressionHandler.CompressedChunkData compressed =
-                ChunkCompressionHandler.compressChunkData(chunkData, x, z);
-        return compressed == null ? null : compressed.encode();
     }
 }

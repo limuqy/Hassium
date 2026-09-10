@@ -18,12 +18,11 @@ import java.util.regex.Pattern;
  * T4 数据驱动场景引擎：在客户端 tick 中逐步执行 {@link ScenarioStep} 序列，
  * 替代旧 ClientSmokeTest 硬编码 switch 状态机。
  * <p>
- * 场景选择：JVM 属性 {@code hassium.smokeScenario=<name>}；未设置时
- * {@code hassium.smokeTest.migrateTo} 非空 → {@code migrate}，否则 {@code classic}
+ * 场景选择：JVM 属性 {@code hassium.smokeScenario=<name>}；未设置时默认 {@code classic}
  * （与旧状态机默认行为完全一致）。场景文件从 classpath
  * {@code /hassium/smoke/scenario/<name>.scenario} 加载。
  * <p>
- * 退出码语义沿用旧状态机：0 两轮均通过；2 统计校验/迁移失败；3 进服超时；
+ * 退出码语义沿用旧状态机：0 两轮均通过；2 统计校验失败；3 进服超时；
  * 非 0 其它为运行错误。契约 marker（CLIENT_STATS/CLIENT/GATEWAY_CLIENT/PASS/FAIL/CLIENT_MODE）
  * 输出格式与时机不变（GATEWAY_CLIENT 行保留 state=RETIRED 兼容旧 harness grep）。
  */
@@ -51,16 +50,6 @@ public final class ScenarioEngine {
     private static long reconnectDelayMs = 3_000L;
     private static long joinTimeoutMs = 120_000L;
     private static String host = "127.0.0.1:25565";
-
-    // T10 迁移演练参数（网关轮次退役：migrateTo/migrateImmediate 仅用于 migrate 场景选择与
-    // 场景文件变量注入；command mode=migrate 步骤 log-and-skip，wait until=migrated 降级为
-    // common 握手 session-ready 等待）
-    private static String migrateTo;
-    private static boolean migrateImmediate;
-    private static long migrateWaitTimeoutMs = 120_000L;
-    /** session-ready 检测到（协商位非 0）后，再等 settle 让区块 S2C 流入后统计。 */
-    private static long migratedAtMs = -1L;
-
     // 步间共享状态
     private static long disconnectAtMs = -1L;
     private static boolean round1Pass;
@@ -91,19 +80,10 @@ public final class ScenarioEngine {
         joinTimeoutMs = parseLong(System.getProperty("hassium.smokeTest.joinTimeoutMs"), 120_000L);
         long moveSeconds = parseLong(System.getProperty("hassium.smokeTest.moveSeconds"), 0L);
         host = System.getProperty("hassium.smokeTest.host", "127.0.0.1:25565");
-        migrateTo = System.getProperty("hassium.smokeTest.migrateTo");
-        if (migrateTo != null && migrateTo.isBlank()) {
-            migrateTo = null;
-        }
-        migrateWaitTimeoutMs = parseLong(System.getProperty("hassium.smokeTest.migrateWaitTimeoutMs"), joinTimeoutMs);
-        migrateImmediate = Boolean.parseBoolean(
-                System.getProperty("hassium.smokeTest.migrateImmediate", "false"));
-        long migrateMoveSeconds = parseLong(System.getProperty("hassium.smokeTest.migrateMoveSeconds"), 0L);
 
         String name = System.getProperty("hassium.smokeScenario");
         if (name == null || name.isBlank()) {
-            // 默认场景：迁移演练属性存在 → migrate，否则 classic（与旧状态机分支一致）
-            name = migrateTo != null ? "migrate" : "classic";
+            name = "classic";
         }
         String resource = "/hassium/smoke/scenario/" + name + ".scenario";
         List<String> lines;
@@ -122,25 +102,17 @@ public final class ScenarioEngine {
         // 可用 hassium.smokeTest.dimWaitMs / endWaitMs 覆盖）
         vars.put("dimWaitMs", Long.toString(parseLong(
                 System.getProperty("hassium.smokeTest.dimWaitMs"), Math.max(20_000L, delayMs * 2))));
-        vars.put("endWaitMs", Long.toString(parseLong(
-                System.getProperty("hassium.smokeTest.endWaitMs"), Math.max(30_000L, delayMs * 3))));
-        // R2 预览光会把 VD 内柱立刻推进 ready FIFO；OVD 环带排在其后。
-        // 与 R1 同量等待，避免 dump 时 loadedRenderOnly 仍为 0。
+        // R2 预览光会把 VD 内柱立刻推进 ready FIFO；与 R1 同量等待，
+        // 避免 dump 时 loadedRenderOnly 仍为 0。
         vars.put("round2WaitMs", Long.toString(Math.max(3_000L, delayMs * 2)));
         vars.put("reconnectDelayMs", Long.toString(reconnectDelayMs));
         vars.put("joinTimeoutMs", Long.toString(joinTimeoutMs));
         vars.put("moveSeconds", Long.toString(moveSeconds));
         vars.put("host", host);
-        vars.put("migrateMoveSeconds", Long.toString(migrateMoveSeconds));
-        vars.put("migrateWaitTimeoutMs", Long.toString(migrateWaitTimeoutMs));
-        vars.put("migrateImmediate", Boolean.toString(migrateImmediate));
-        vars.put("migratedSettleMs", Long.toString(Math.max(3_000L, delayMs)));
 
         steps = ScenarioStep.parse(lines, vars);
         index = 0;
         stepStartMs = startAtMs = System.currentTimeMillis();
-        disconnectAtMs = -1L;
-        migratedAtMs = -1L;
         round1Pass = false;
         round2Pass = false;
         finished = false;
@@ -185,7 +157,8 @@ public final class ScenarioEngine {
             return;
         }
 
-        // 瞬时步骤（fly/disconnect/command/dump/exit）同 tick 内连续推进
+        // 瞬时步骤（fly/disconnect/command/dump/exit）同 tick 内连续推进；
+        // join/wait 等阻塞步骤 RUNNING 时让出本 tick
         for (int guard = 0; guard < 16 && !finished; guard++) {
             ScenarioStep step = steps.get(index);
             Outcome outcome = execute(step, mc, System.currentTimeMillis());
@@ -206,8 +179,6 @@ public final class ScenarioEngine {
         index++;
         stepStartMs = System.currentTimeMillis();
         joinAnnounced = false;
-        dumpWaitAnnounced = false;
-        migratedAtMs = -1L;
     }
 
     private static String currentDesc() {
@@ -261,40 +232,8 @@ public final class ScenarioEngine {
     // ------------------------------------------------------------------ wait
 
     private static Outcome execWait(ScenarioStep step, Minecraft mc, long now) {
-        if (!"migrated".equals(step.param("until"))) {
-            return now - stepStartMs >= step.longParam("ms", 0L) ? Outcome.DONE : Outcome.RUNNING;
-        }
-        // until=migrated（migrate 场景步骤，网关轮次退役后降级为 session-ready 等待）：
-        // 等 common 握手协商位就绪（ClientLoginNegotiation.current() != 0，协商 caps 已知）。
-        boolean done = io.github.limuqy.mc.hassium.network.handshake.ClientLoginNegotiation.current() != 0;
-        if (done) {
-            long settleMs = step.longParam("settleMs", Math.max(3_000L, delayMs));
-            if (migratedAtMs < 0L) {
-                migratedAtMs = now;
-                LOGGER.info("HassiumSmokeTest: session ready (negotiated caps known) — waiting {} ms for chunk S2C inflow",
-                        settleMs);
-            }
-            if (now - migratedAtMs >= settleMs) {
-                if (step.boolParam("posAfter", false) && mc.player != null) {
-                    // N1 观察点：session-ready 后位置
-                    LOGGER.info("HassiumSmokeTest:MIGRATE_POS_AFTER pos=({}, {}, {}) dim={}",
-                            mc.player.getX(), mc.player.getY(), mc.player.getZ(),
-                            dimensionId(mc.player.level().dimension()));
-                }
-                return Outcome.DONE;
-            }
-            return Outcome.RUNNING;
-        }
-        if (now - stepStartMs > step.longParam("timeoutMs", migrateWaitTimeoutMs)) {
-            LOGGER.error("HassiumSmokeTest:MIGRATE_FAIL timeout ({} ms) negotiatedCaps={}",
-                    migrateWaitTimeoutMs,
-                    io.github.limuqy.mc.hassium.network.handshake.ClientLoginNegotiation.current());
-            fail("session-ready wait timeout: negotiated caps still 0", 2);
-        }
-        return Outcome.RUNNING;
+        return now - stepStartMs >= step.longParam("ms", 0L) ? Outcome.DONE : Outcome.RUNNING;
     }
-
-    // ------------------------------------------------------------------ fly
 
     /** 非阻塞飞行注入：creative 冒烟本地激活飞行，先爬升 2s 再平飞 Ns（seconds=0 不动）。 */
     private static Outcome execFly(ScenarioStep step, Minecraft mc, long now) {
@@ -352,12 +291,6 @@ public final class ScenarioEngine {
 
     private static Outcome execCommand(ScenarioStep step, Minecraft mc, long now) {
         ClientPacketListener conn = mc.getConnection();
-        if ("migrate".equals(step.param("mode"))) {
-            // 迁移演练步骤随网关拓扑退役（NetworkCore/migrateToImmediate/'/hassium migrate' 已删）：
-            // log-and-skip，不触发任何动作。
-            LOGGER.info("HassiumSmokeTest: migrate command step skipped (gateway rounds retired): {}", step);
-            return Outcome.DONE;
-        }
         // 通用客户端命令原语
         String text = step.param("text");
         if (text == null || text.isBlank()) {

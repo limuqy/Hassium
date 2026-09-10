@@ -73,7 +73,7 @@ public class CompressionService {
         if (codec == null) {
             throw new CompressionException.CompressionFailedException("Unknown compression algorithm: " + algorithmId);
         }
-        CompressionOptions options = new CompressionOptions(level, Optional.empty(), true);
+        CompressionOptions options = new CompressionOptions(level, Optional.empty());
         return codec.compress(data, options);
     }
 

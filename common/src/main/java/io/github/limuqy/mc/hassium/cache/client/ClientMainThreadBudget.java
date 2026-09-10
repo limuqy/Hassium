@@ -7,7 +7,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  * 客户端主线程区块应用时间预算，以及影子端缓存读取生产配额。
  * <p>
  * 消费（apply / 回调 / 影子回传落地）只用本帧 {@code nanoTime} 预算；
- * {@code chunk.maxChunksPerFrame} 只约束缓存读取生产（OVD 入队、影子读盘），
+ * {@code chunk.maxChunksPerFrame} 只约束缓存读取生产（影子入队、影子读盘），
  * 服务端推送有自己的限流，客户端不重复掐。
  * 进服后短时 JoinBoost 提高时间预算与读盘配额，摊平「停顿后突进」。
  * JoinBoost 自 {@link #startJoinBoost()} 起 30s 宽松封顶：apply 活跃可续期，但总窗口不超 30s。
@@ -40,7 +40,7 @@ public final class ClientMainThreadBudget {
     /** 最近一次权威区块 apply 的时间戳（settle 写回判定：加载风暴停止的安静窗口）。 */
     private static volatile long lastApplyNano = 0L;
 
-    /** 本 tick 剩余缓存读取次数（OVD 入队 + 影子 {@code loadFromDisk}）。 */
+    /** 本 tick 剩余缓存读取次数（影子入队 + 影子 {@code loadFromDisk}）。 */
     private static final AtomicInteger cacheReadsRemaining = new AtomicInteger();
 
     private ClientMainThreadBudget() {
@@ -49,7 +49,7 @@ public final class ClientMainThreadBudget {
     /**
      * 进服时启动 JoinBoost 窗口。
      * <p>
-     * 客户端区块核心关闭时不启动（预算始终为 normalBudgetMs，OVD_LOAD_THRESHOLD 限流始终生效）。
+     * 客户端区块核心关闭时不启动（预算始终为 normalBudgetMs，读盘限流始终生效）。
      */
     public static void startJoinBoost() {
         if (!HassiumConfigService.getInstance().isJoinBoostEnabled()) {
@@ -186,7 +186,7 @@ public final class ClientMainThreadBudget {
     }
 
     /**
-     * 占用一次缓存读取（OVD 入队或影子读盘）。配额用尽返回 {@code false}，调用方应把剩余工作留到下 tick。
+     * 占用一次缓存读取（影子入队或影子读盘）。配额用尽返回 {@code false}，调用方应把剩余工作留到下 tick。
      */
     public static boolean tryAcquireCacheRead() {
         while (true) {

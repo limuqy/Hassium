@@ -26,12 +26,12 @@ import net.minecraft.world.level.chunk.LevelChunk;
 
 /**
  * SeedGen 生成执行器（Phase 2）：接收 SeedRef → 影子服务端本地生成 FULL 区块
- * → 按直推同格式压缩 → 喂给 {@link ClientChunkHandler#handleCompressedChunk}（复用解压/应用链）。
+ * → 经 {@link ShadowLightCompute#submitGenerated} 统一影子通道回传（等光收敛打包官方包）。
  * <p>
  * 线程模型：
  * <ul>
  *   <li>网络线程入队（{@link #enqueue}，非阻塞）</li>
- *   <li>平台线程池（seedGenThreads，CPU 密集：worldgen + 编码 + 压缩，避免虚拟线程超订）</li>
+ *   <li>平台线程池（seedGenThreads，CPU 密集：worldgen + 编码，避免虚拟线程超订）</li>
  *   <li>每 worker 一个独立 drain 循环（{@link #activeWorkers} 记账，补足到 seedGenThreads 个），
  *       并行生成（影子端 getChunkFuture 任意线程可调；队列原子取出防重复接管）</li>
  * </ul>

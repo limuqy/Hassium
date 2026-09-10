@@ -22,10 +22,10 @@ import java.util.function.BooleanSupplier;
  * <p>
  * 虚拟玩家配方 = 原版 {@code GameTestHelper.makeMockServerPlayerInLevel()}：
  * {@code new ServerPlayer(server, level, profile)} + {@code PlayerList.placeNewPlayer(connection, player)}。
- * 连接桩技术沿袭网关时代 {@code GatewayPlayerBridge}（EmbeddedChannel + dummy 管道）：
- * vanilla {@code setupCompression/setEncryptionKey} 按名操作管道，splitter/decoder/
- * prepender/encoder 四件套必须存在（不装 packet_handler 防重名）；EmbeddedChannel
- * 常开 → {@code isConnected()/hasDisconnected()} = 已连接，S2C 全部进 dummy 管道丢弃。
+ * 连接桩 = 常开 {@code EmbeddedChannel} + dummy 管道（vanilla {@code setupCompression/
+ * setEncryptionKey} 按名操作管道，splitter/decoder/prepender/encoder 四件套必须存在，
+ * 不装 packet_handler 防重名）→ {@code isConnected()/hasDisconnected()} = 已连接，
+ * S2C 全部进 dummy 管道丢弃。
  */
 public final class ShadowPlayerCompat {
 
@@ -93,13 +93,23 @@ public final class ShadowPlayerCompat {
 
     /** 同维度位置更新后驱动原版 player tracking（票更新 + 在途区块玩家通知）。 */
     public static void moveVirtualPlayer(ServerPlayer player) {
+#if MC_VER < MC_1_21_6
         player.serverLevel().getChunkSource().move(player);
+#else
+        // 1.21.6+：ServerPlayer.serverLevel() 移除（收敛至 Entity.level()）
+        ((net.minecraft.server.level.ServerLevel) player.level()).getChunkSource().move(player);
+#endif
     }
 
     /** 跨维度传送（/tp 语义：changeDimension + 玩家簿记；S2C 进 dummy 管道）。 */
     public static void teleportVirtualPlayer(ServerPlayer player, ServerLevel level,
                                              double x, double y, double z, float yRot, float xRot) {
+#if MC_VER < MC_1_21_2
         player.teleportTo(level, x, y, z, yRot, xRot);
+#else
+        // 1.21.2+：6 参 teleportTo(ServerLevel,...) 移除，改为绝对坐标 + 无 relative 标志
+        player.teleportTo(level, x, y, z, java.util.Set.of(), yRot, xRot, true);
+#endif
     }
 
     /**

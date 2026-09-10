@@ -6,13 +6,13 @@ import net.minecraft.world.level.ChunkPos;
  * 区块距离优先级（统一入口）。
  * <p>
  * <b>约定</b>：数值 <strong>越小越优先</strong>。
- * 排序键为 {@code tier * TIER_BIAS + distSq}（权威 / 未知 / 超视分层），比较与排序用平方距离，
+ * 排序键为 {@code tier * TIER_BIAS + distSq}（权威 / 未知分层），比较与排序用平方距离，
  * 避免重复 {@code sqrt}；仅日志展示时可调 {@link #distance}。
  * <p>
  * <b>层序（始终）</b>：
- * {@link Tier#AUTHORITATIVE} &gt; {@link Tier#UNKNOWN} &gt; {@link Tier#RENDER_ONLY}。
+ * {@link Tier#AUTHORITATIVE} &gt; {@link Tier#UNKNOWN}。
  * 无 chunk 锚点的全局回调用 {@link #unknown()}；
- * 坐标未知时权威 / 环带仍落在各自层（{@code base + 0}），不伪装 (0,0)，也不互相越层。
+ * 坐标未知时权威层仍落在自身层（{@code base + 0}），不伪装 (0,0)，也不越层。
  * <p>
  * <b>冻结语义</b>：调用方在入队瞬间算出 {@code double} 后写入任务记录；
  * 之后玩家移动<strong>不会</strong>改写已入队任务的优先级（{@link java.util.concurrent.PriorityBlockingQueue}
@@ -26,7 +26,7 @@ public final class ChunkDistancePriority {
 
     /**
      * 绝对垫底（非法入口、null 等）。正常路径应使用 {@link Tier} 键，
-     * 全局无锚点任务用 {@link #unknown()}（落在 UNKNOWN 层，仍优先于环带）。
+     * 全局无锚点任务用 {@link #unknown()}。
      */
     public static final double LOWEST = Double.MAX_VALUE;
 

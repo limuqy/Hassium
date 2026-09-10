@@ -41,7 +41,6 @@ public abstract class MixinServerPlayer extends Player {
             return;
         }
         // 登录期握手协商结果消费：启用压缩门（原版区块窗口自此压制）+ Play 激活入队。
-        // M1 gateway_info 引导已随网络核心裁剪移除（直连拓扑无网关地址可下发）。
         io.github.limuqy.mc.hassium.network.handshake.ServerHandshakeActivation.onPlayerInit(self);
     }
 

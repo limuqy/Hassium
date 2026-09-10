@@ -14,7 +14,9 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
  * 1.20.2+：拦截 {@code PlayerChunkSender.sendChunk}，为 Hassium 客户端保留 shadowPull
- * 的主动取数路径，同时让非 shadowPull 客户端继续走原版区块包发送。
+ * 的主动取数路径；Pull 玩家停发整柱（客户端 Compare+Pull 自取），非 Pull 玩家转
+ * {@link io.github.limuqy.mc.hassium.network.ServerChunkPushManager#enqueueDirectPush}
+ * （FULL_VISIBLE 队列仅 seedgen 玩家转换 SeedRef；chunk_payload 通道已退役）。
  * 1.20.2 移除了 {@code ServerPlayer.trackChunk}，初始区块发送改走
  * {@code PlayerChunkSender.sendChunk}（private static）。此 Mixin 在 1.20.2+ 替代
  * {@link MixinServerPlayer} 的 trackChunk 注入。

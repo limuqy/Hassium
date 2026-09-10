@@ -33,8 +33,6 @@ public class PacketCompressionBlacklist {
      *    导致 chunkHash / IndexSync 等永不触达业务处理器）
      */
     private static final Set<String> HARDCODED_BLACKLIST = Set.of(
-            // 已独立 ZSTD 压缩的数据面包
-            HassiumPacketIds.CHUNK_PAYLOAD_S2C,
             // 控制面：握手 / 字典 / 索引 / hash / 光照增量 / BE 数据
             HassiumPacketIds.HANDSHAKE_S2C,
             HassiumPacketIds.DICTIONARY_SYNC_S2C,

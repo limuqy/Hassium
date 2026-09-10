@@ -21,6 +21,7 @@
         "MixinChunkAccess",
         "MixinServerPlayer",
         "MixinServerChunkCache",
+        "ServerChunkCacheAccessor",
         "MixinLevelTicks",
         "MixinPlayerChunkSender",
         "MixinLightDataWrite",

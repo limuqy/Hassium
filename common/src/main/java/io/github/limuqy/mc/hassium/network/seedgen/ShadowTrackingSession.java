@@ -72,16 +72,6 @@ public final class ShadowTrackingSession {
     private static final long BOOT_EMIT_MIN_GAP_MS = 25L;
     private long lastBootEmitMs;
 
-    /** 修复补给池扫描周期：boot 首轮一次性燃烧完毕后，每隔此间隔从池中回充仍未落地的列。 */
-    private static final long REPAIR_INTERVAL_NS = 2_000_000_000L;
-    /** 每次修复扫描最多回充发射队列的格子数（≈ 48/2s = 24/s 补给流量，
-     *  与服务端 FORCED-demand 按需装载预算同量级，不会重现 pull9 风暴量级）。 */
-    private static final int MAX_REPAIR_PER_SWEEP = 521;
-    /** 修复补给池（与基准光盘同源的欧氏半径圆柱清单）：已取得基线/注入的列在被扫描时
-     *  永久退休；尚未落地者在发射间隙低频回充 bootGridCells 排队（同一 25ms 闸限流）。 */
-    private final java.util.ArrayList<ChunkPos> repairPool = new java.util.ArrayList<>();
-    private long lastRepairSweepNs;
-
     /**
      * 可见形状周期扫描间隔（毫秒）。移动后 vanilla 选柱链（scheduleChunkLoad →
      * onChunkSelected → pendingSelections）会停——悬置 future 卡住或 2ms tick 预算被
@@ -294,7 +284,14 @@ public final class ShadowTrackingSession {
         }
         ChunkPos lastChunk = virtualPlayer.chunkPosition();
         if (newChunk.x != lastChunk.x || newChunk.z != lastChunk.z) {
+#if MC_VER < MC_1_21_5
             virtualPlayer.absMoveTo(state.x(), state.y(), state.z(), state.yRot(), state.xRot());
+#else
+            // 1.21.5+：absMoveTo/moveTo(5 参) 移除，teleportTo(3 参)+旋转同语义（绝对位置设置）
+            virtualPlayer.teleportTo(state.x(), state.y(), state.z());
+            virtualPlayer.setYRot(state.yRot());
+            virtualPlayer.setXRot(state.xRot());
+#endif
             try {
                 ShadowPlayerCompat.moveVirtualPlayer(virtualPlayer);
             } catch (Throwable t) {
@@ -321,7 +318,13 @@ public final class ShadowTrackingSession {
             net.minecraft.network.Connection connection = ShadowPlayerCompat.createConnectionStub();
             ServerPlayer player = ShadowPlayerCompat.createVirtualPlayer(shadow, level);
             ShadowPlayerCompat.placePlayer(shadow, connection, player);
+#if MC_VER < MC_1_21_5
             player.absMoveTo(state.x(), state.y(), state.z(), state.yRot(), state.xRot());
+#else
+            player.teleportTo(state.x(), state.y(), state.z());
+            player.setYRot(state.yRot());
+            player.setXRot(state.xRot());
+#endif
             ShadowPlayerCompat.moveVirtualPlayer(player);
             virtualPlayer = player;
             currentDimension = state.dimension();
@@ -779,8 +782,6 @@ public final class ShadowTrackingSession {
         s.bootGridArmed = false;
         s.bootGridCells.clear();
         s.lastBootEmitMs = 0;
-        s.repairPool.clear();
-        s.lastRepairSweepNs = 0;
         s.lastChunkTickMs = 0;
     }
 

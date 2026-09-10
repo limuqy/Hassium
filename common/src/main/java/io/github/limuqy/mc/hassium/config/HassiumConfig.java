@@ -42,7 +42,7 @@ public record HassiumConfig(
     }
 
     /**
-     * 区块核心配置（双端；client.toml chunk.* CLIENT 21 键 + 服务端 chunk.lightStrip/chunk.seedGenEnabled）。
+     * 区块核心配置（双端；client.toml chunk.* CLIENT 15 键 + 服务端 chunk.lightStrip/chunk.seedGenEnabled）。
      * <p>
      * 吸收原 ClientCacheConfig 全族与 network.seedGen.enabled（双端同名键，按物理端加载）。
      * Bloom filter 参数硬编码（enabled=true, insertions=10000, fpp=0.01）。
@@ -51,7 +51,6 @@ public record HassiumConfig(
     public record ChunkCoreConfig(
             boolean enabled,
             int maxSizeMb,
-            int compressionLevel,
             // === 热度清理（影子端容量/热度淘汰：heat.idx 按 region 文件 + 整文件删除）===
             double hotScoreThreshold,
             double recencyWeight,
@@ -61,19 +60,11 @@ public record HassiumConfig(
             int minCleanupBatchSize,
             // === 分段增量（服务端规划 + 客户端应用，MixinConnection/sectiondelta 链路活跃消费）===
             boolean sectionDeltaEnabled,
-            // === 超视渲染 ===
-            boolean viewDistanceExtensionEnabled,
-            int maxRenderDistance,
-            int ovdUnloadDelaySecs,
-            // === 影子端内存区块回收（离开卸载边界后计时，超时落盘并清内存；0=禁用回收）===
-            int unloadDelaySecs,
             // === 线程与应用（从原 NetworkConfig 吸收的客户端字段）===
             int maxChunksPerFrame,
             int mainThreadChunkBudgetMs,
             // === SeedGen 本地生成线程数（Phase 2；0=禁用本地生成）===
             int seedGenThreads,
-            // === OVD 本地生成（默认 false；miss 时影子端按世界种子本地生成 + 存缓存）===
-            boolean ovdLocalGeneration,
             // === SeedGen 总开关（双端同名键；物理端各自加载）===
             boolean seedGenEnabled,
             // === 光照剥离（仅专用服；服务端控制是否发包时剥离 LightData）===
@@ -82,7 +73,6 @@ public record HassiumConfig(
         public static final ChunkCoreConfig DEFAULT = new ChunkCoreConfig(
                 true,    // enabled
                 4096,    // maxSizeMb
-                3,       // compressionLevel
                 0.3,     // hotScoreThreshold
                 0.7,     // recencyWeight
                 0.3,     // frequencyWeight
@@ -90,14 +80,9 @@ public record HassiumConfig(
                 0,       // targetSizeMb (auto)
                 100,     // minCleanupBatchSize
                 true,    // sectionDeltaEnabled
-                true,    // viewDistanceExtensionEnabled
-                16,      // maxRenderDistance
-                5,       // ovdUnloadDelaySecs
-                30,      // unloadDelaySecs
                 6,       // maxChunksPerFrame
                 15,      // mainThreadChunkBudgetMs
                 2,       // seedGenThreads
-                false,   // ovdLocalGeneration
                 false,   // seedGenEnabled
                 true     // lightStrip（仅服务端消费）
         );
@@ -132,12 +117,8 @@ public record HassiumConfig(
             int aggregationMinBatchSize,
             long aggregationMaxWaitTimeMs,
             int aggregationMaxSize,
-            // === 紧凑包头（聚合包内部 VarInt 索引）===
-            boolean enableCompactHeader,
             // === 黑名单 ===
             Set<String> compressionBlacklist,
-            // === 指标 ===
-            boolean metricsEnabled,
             // === 服务端推送 ===
             int maxChunksPerTick,
             int serverChunkPushThreads
@@ -148,7 +129,6 @@ public record HassiumConfig(
 
         // 127.0.0.1 仅供本地开发；公网部署必须配置客户端实际可达的地址。
         public static final Set<String> DEFAULT_COMPRESSION_BLACKLIST = Set.of(
-                HassiumPacketIds.CHUNK_PAYLOAD_S2C,
                 HassiumPacketIds.HANDSHAKE_S2C,
                 HassiumPacketIds.DICTIONARY_SYNC_S2C,
                 HassiumPacketIds.INDEX_SYNC_S2C,
@@ -166,9 +146,7 @@ public record HassiumConfig(
                 4,                 // aggregationMinBatchSize
                 50,                // aggregationMaxWaitTimeMs
                 256 * 1024,        // aggregationMaxSize
-                true,              // enableCompactHeader
                 DEFAULT_COMPRESSION_BLACKLIST,
-                false,              // metricsEnabled
                 4,                 // maxChunksPerTick（满 tick ≈ 80/s）
                 4                  // serverChunkPushThreads
         );
@@ -195,13 +173,12 @@ public record HassiumConfig(
             boolean chunkApplyLogging,
             boolean networkLogging,
             boolean cacheLogging,
-            boolean dataplaneLogging,
             boolean lightVerify,
             boolean networkMetricsEnabled,
             boolean networkMetricsAutoReset
     ) {
         public static final DebugConfig DEFAULT = new DebugConfig(
-                false, false, false, false, false, false, false, false, false, false, true
+                false, false, false, false, false, false, false, false, false, true
         );
     }
 }

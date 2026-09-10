@@ -26,10 +26,6 @@ public final class ClientLoginNegotiation {
         return NEGOTIATED.get();
     }
 
-    public static boolean has(int bit) {
-        return LoginCaps.has(NEGOTIATED.get(), bit);
-    }
-
     /** 断连清零。 */
     public static void clear() {
         NEGOTIATED.set(0);

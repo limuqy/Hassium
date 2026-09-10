@@ -24,12 +24,12 @@ public final class ScenarioStep {
     public enum Type {
         /** 等待进服（player/level/connection 就绪、非内嵌服、y&gt;0）。 */
         JOIN,
-        /** 等待：定时（ms）或条件（until=migrated）。 */
+        /** 等待：定时（ms）。 */
         WAIT,
+        /** 发送客户端命令。 */
+        COMMAND,
         /** 非阻塞飞行注入：爬升 2s + 平飞 Ns。 */
         FLY,
-        /** 发送客户端命令；mode=migrate 走迁移触发语义。 */
-        COMMAND,
         /** 切换维度（/execute in）。 */
         DIMENSION,
         /** 主动断开连接（netty channel 关闭路径）。 */

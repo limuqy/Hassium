@@ -55,9 +55,9 @@ import net.minecraft.world.level.lighting.LevelLightEngine;
  *   <li>客户端主线程：{@link #drainReady}（帧尾，MixinClientTick）攒批 light 包入
  *       同一 FIFO 回传队列，按到达顺序落地（时间预算）</li>
  * </ul>
- * 影子端不可用（未握手 / 创建失败 / 引擎关闭）时不投递——调用方（
- * {@link ClientChunkHandler#handleCompressedChunk}）走既有客户端直连链（apply +
- * 本地缓存），剥光仅在握手声明引擎可用后发生。
+ * 影子端不可用（未握手 / 创建失败 / 引擎关闭）时不投递——调用方
+ * （Compare+Pull 客户端摄入链）走原版/拉取回退（apply + 本地缓存），剥光仅在
+ * 握手声明引擎可用后发生。
  * <p>
  * <b>注入失败 = 影子链路整体失败</b>：直接置 {@code shadowServerFailed}（与握手失败 /
  * 引擎创建失败同级的降级态——关闭缓存/OVD/SeedGen + 游戏内提示），不做逐柱兜底。
@@ -1116,9 +1116,8 @@ public final class ShadowLightCompute {
 
 
     /**
-     * 自定义维度透传：绕过影子管线，主线程直接原版落地（与 ClientChunkHandler
-     * 原版直发路径同语义）。CompressedChunkData 无维度字段，submit 只能以客户端
-     * 当前维度判定；非缓存维度在此恢复原版行为。
+     * 自定义维度透传：绕过影子管线，主线程直接原版落地（与 Compare+Pull
+     * 客户端摄入链同语义）。非缓存维度在此恢复原版行为。
      */
     private static void applyVanillaDirect(ChunkPos pos,
                                            ClientboundLevelChunkWithLightPacket packet) {

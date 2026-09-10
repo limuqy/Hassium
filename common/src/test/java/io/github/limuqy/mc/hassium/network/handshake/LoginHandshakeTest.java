@@ -89,8 +89,8 @@ class LoginHandshakeTest {
 
     @Test
     void describeCapsListsNegotiatedBitsStably() {
-        int caps = LoginCaps.AGGREGATION | LoginCaps.SEED_GEN | LoginCaps.VIEW_DIST_EXT;
-        assertEquals("[agg,seed,ovd]", LoginHandshake.describeCaps(caps));
+        int caps = LoginCaps.AGGREGATION | LoginCaps.SEED_GEN | LoginCaps.SHADOW_PULL;
+        assertEquals("[agg,seed,pull]", LoginHandshake.describeCaps(caps));
         assertEquals("[]", LoginHandshake.describeCaps(0));
     }
 

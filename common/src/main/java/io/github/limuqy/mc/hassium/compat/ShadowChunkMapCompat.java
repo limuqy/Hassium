@@ -127,6 +127,15 @@ public final class ShadowChunkMapCompat {
         return new ImposterProtoChunk(chunk, false);
     }
 
+    /**
+     * 1.21.1+ {@code scheduleChunkLoad} 短路：已 materialize 柱直接以 Imposter 完成
+     * （与 1.20.1 段 {@code completedFuture(Either.left(imposter))} 同语义，返回类型
+     * 由版本差异决定）。
+     */
+    public static CompletableFuture<ChunkAccess> completedImposter(LevelChunk chunk) {
+        return CompletableFuture.completedFuture(asImposter(chunk));
+    }
+
     public static boolean hasVisibleHolder(ServerChunkCache cache, int x, int z) {
         if (cache == null) {
             return false;

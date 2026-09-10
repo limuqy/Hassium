@@ -9,14 +9,12 @@ import java.util.function.Supplier;
 public final class ConfigSchema {
     private static final List<ConfigEntry<?>> ENTRIES = new ArrayList<>();
 
-    // === 区块核心（chunk.*；CLIENT 21 键）===
+    // === 区块核心（chunk.*；CLIENT 15 键）===
     public static final ConfigKey<Boolean> CHUNK_ENABLED = bool("chunk.enabled", ConfigScope.CLIENT, Domain.CHUNK_CORE, true,
             "是否启用区块核心缓存", "Whether to enable the chunk-core cache");
     public static final ConfigKey<Integer> CHUNK_MAX_SIZE_MB = integer("chunk.maxSizeMb", ConfigScope.CLIENT, Domain.CHUNK_CORE, 4096, 64, 1024 * 1024,
             "缓存最大容量（MB；影子端存档容量上限，超限触发热度淘汰）",
             "Max cache size in MB (shadow-world disk cap; excess triggers heat eviction)");
-    public static final ConfigKey<Integer> CHUNK_COMPRESSION_LEVEL = integer("chunk.compressionLevel", ConfigScope.CLIENT, Domain.CHUNK_CORE, 3, 1, 22,
-            "缓存压缩等级", "Cache ZSTD compression level");
     public static final ConfigKey<Double> CHUNK_HOT_SCORE_THRESHOLD = decimal("chunk.hotScoreThreshold", ConfigScope.CLIENT, Domain.CHUNK_CORE, 0.3, 0.0, 1.0,
             "热点分数阈值（低于此值视为冷 region 文件，清理时优先淘汰）",
             "Heat-score threshold (below = cold region file; preferred for eviction)");
@@ -33,23 +31,11 @@ public final class ConfigSchema {
     public static final ConfigKey<Boolean> CHUNK_SECTION_DELTA_ENABLED = bool("chunk.sectionDeltaEnabled", ConfigScope.CLIENT, Domain.CHUNK_CORE, true,
             "是否启用分段增量（服务端规划 + 客户端应用）",
             "Enable section delta (server-side planning + client-side apply)");
-    public static final ConfigKey<Boolean> CHUNK_VIEW_DISTANCE_EXTENSION_ENABLED = bool("chunk.viewDistanceExtensionEnabled", ConfigScope.CLIENT, Domain.CHUNK_CORE, true,
-            "是否启用超视渲染", "Enable beyond-view rendering");
-    public static final ConfigKey<Integer> CHUNK_MAX_RENDER_DISTANCE = integer("chunk.maxRenderDistance", ConfigScope.CLIENT, Domain.CHUNK_CORE, 16, 2, 64,
-            "超视渲染有效距离上限", "Beyond-view / effective render-distance cap");
-    public static final ConfigKey<Integer> CHUNK_OVD_UNLOAD_DELAY_SECS = integer("chunk.ovdUnloadDelaySecs", ConfigScope.CLIENT, Domain.CHUNK_CORE, 5, 0, 60,
-            "超视渲染卸载延迟秒数", "Beyond-view unload delay in seconds");
-    public static final ConfigKey<Integer> CHUNK_UNLOAD_DELAY_SECS = integer("chunk.unloadDelaySecs", ConfigScope.CLIENT, Domain.CHUNK_CORE, 30, 0, 600,
-            "影子端内存区块回收延迟秒数（离开卸载边界后计时，超时落盘并清内存；0=禁用回收）",
-            "Shadow in-memory chunk recycle delay in seconds (0 = disable)");
     public static final ConfigKey<Integer> CHUNK_MAX_CHUNKS_PER_FRAME = integer("chunk.maxChunksPerFrame", ConfigScope.CLIENT, Domain.CHUNK_CORE, 6, 1, 512,
-            "每 tick 缓存读取生产上限（OVD 入队 + 影子读盘；主线程消费只受时间预算）",
-            "Per-tick cache-read production cap (OVD enqueue + shadow disk); consume is time-budget only");
+            "每 tick 缓存读取生产上限（影子入队 + 影子读盘；主线程消费只受时间预算）",
+            "Per-tick cache-read production cap (shadow enqueue + shadow disk); consume is time-budget only");
     public static final ConfigKey<Integer> CHUNK_MAIN_THREAD_CHUNK_BUDGET_MS = integer("chunk.mainThreadChunkBudgetMs", ConfigScope.CLIENT, Domain.CHUNK_CORE, 15, 1, 50,
             "主线程 apply 预算（ms）", "Main-thread apply budget in ms");
-    public static final ConfigKey<Boolean> CHUNK_OVD_LOCAL_GENERATION = bool("chunk.ovdLocalGeneration", ConfigScope.CLIENT, Domain.CHUNK_CORE, false,
-            "OVD 本地生成（默认 false）：超视 miss 时按服务端种子本地生成并缓存；需引擎可用",
-            "Beyond-view local generation on cache miss (default false); requires engine");
     public static final ConfigKey<Integer> CHUNK_SEED_GEN_THREADS = integer("chunk.seedGenThreads", ConfigScope.CLIENT, Domain.CHUNK_CORE, 2, 0, 64,
             "SeedGen 本地生成线程数（0=禁用本地生成，SeedRef 一律回退全量）",
             "SeedGen local-generation thread count (0 = disable; SeedRef falls back to full chunk)");
@@ -80,13 +66,9 @@ public final class ConfigSchema {
             "聚合最大等待时间（ms）", "Aggregation max wait time (ms)");
     public static final ConfigKey<Integer> MASTER_AGGREGATION_MAX_SIZE = integer("master.aggregationMaxSize", ConfigScope.SERVER, Domain.MASTER_CORE, 256 * 1024, 1024, 8 * 1024 * 1024,
             "聚合最大大小", "Aggregation max size (bytes)");
-    public static final ConfigKey<Boolean> MASTER_COMPACT_HEADER = bool("master.enableCompactHeader", ConfigScope.SERVER, Domain.MASTER_CORE, true,
-            "是否启用紧凑包头", "Enable compact packet headers");
     public static final ConfigKey<List<String>> MASTER_COMPRESSION_BLACKLIST = stringList("master.compressionBlacklist", ConfigScope.SERVER, Domain.MASTER_CORE,
             () -> new ArrayList<>(HassiumConfig.MasterCoreConfig.DEFAULT_COMPRESSION_BLACKLIST),
             "压缩/聚合黑名单", "Compression / aggregation blacklist");
-    public static final ConfigKey<Boolean> MASTER_METRICS_ENABLED = bool("master.metricsEnabled", ConfigScope.SERVER, Domain.MASTER_CORE, false,
-            "是否启用主控网络指标", "Enable master network metrics");
     public static final ConfigKey<Integer> MASTER_MAX_CHUNKS_PER_TICK = integer("master.maxChunksPerTick", ConfigScope.SERVER, Domain.MASTER_CORE, 4, 1, 256,
             "每玩家每 tick 提交到后台序列化的区块上限（满 tick ≈ 本值×20/s）",
             "Per-player per-tick chunk submit cap (≈ value×20/s at full tick)");
@@ -107,7 +89,7 @@ public final class ConfigSchema {
     public static final ConfigKey<Boolean> COMPAT_AUTO_DOWNGRADE = bool("compat.autoDowngradeOnError", ConfigScope.SERVER, Domain.COMPAT, true,
             "出错时是否自动降级", "Auto-downgrade on error");
 
-    // === 调试（debug.*；CLIENT 8 键：元数据/缓存/光照验算为客户端专属；数据面不在此端）===
+    // === 调试（debug.*；CLIENT 8 键：元数据/缓存/光照验算为客户端专属）===
     public static final ConfigKey<Boolean> CLIENT_DEBUG_METADATA = bool("debug.metadataLogging", ConfigScope.CLIENT, Domain.DEBUG, false,
             "元数据调试日志", "Metadata debug logging");
     public static final ConfigKey<Boolean> CLIENT_DEBUG_DISPATCHER = bool("debug.dispatcherLogging", ConfigScope.CLIENT, Domain.DEBUG, false,
@@ -140,8 +122,6 @@ public final class ConfigSchema {
             "区块 apply 调试日志", "Chunk-apply debug logging");
     public static final ConfigKey<Boolean> SERVER_DEBUG_NETWORK = bool("debug.networkLogging", ConfigScope.SERVER, Domain.DEBUG, false,
             "网络调试日志", "Network debug logging");
-    public static final ConfigKey<Boolean> SERVER_DEBUG_DATAPLANE = bool("debug.dataplaneLogging", ConfigScope.SERVER, Domain.DEBUG, false,
-            "数据面调试日志", "Data-plane debug logging");
 
     static {
         validateUniquePaths();

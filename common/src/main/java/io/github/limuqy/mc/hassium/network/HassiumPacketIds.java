@@ -71,11 +71,6 @@ public final class HassiumPacketIds {
      */
     public static final String CHUNK_CACHE_DECISION_S2C = "hassium:chunk_cache_decision_s2c";
 
-    /**
-     * 服务端 -> 客户端：压缩区块数据
-     */
-    public static final String CHUNK_PAYLOAD_S2C = "hassium:chunk_payload_s2c";
-
     // ===== 字典相关包 =====
 
     /**
@@ -109,16 +104,6 @@ public final class HassiumPacketIds {
      * 服务端 -> 客户端：光照增量通知
      */
     public static final String LIGHT_DELTA_S2C = "hassium:light_delta_s2c";
-
-    // ===== 遗留通道 id（网关拓扑退役）=====
-
-    /**
-     * 服务端 -> 客户端：网关 bootstrap 信息（legacy）。
-     * <p>
-     * 2.0.0 网关拓扑退役后服务端不再下发 gateway_info；通道 id 保留，
-     * 供加载器通道注册兼容（NeoForge 通道表仍登记该 id）。
-     */
-    public static final String GATEWAY_INFO_S2C = "hassium:gateway_info";
 
     /**
      * 检查是否为 Hassium 数据包

@@ -15,12 +15,6 @@ public final class LoginCaps {
     /** 服务端包聚合（客户端需带反聚合 receiver）。 */
     public static final int AGGREGATION = 1 << 0;
 
-    /** 紧凑包头（NamespaceIndexManager 两级 VarInt 索引）。 */
-    public static final int COMPACT_HEADER = 1 << 1;
-
-    /** 区块推送链（chunkHash/缓存/压缩 full 区块业务帧）。 */
-    public static final int CHUNK_PUSH = 1 << 2;
-
     /** 分段增量（SectionDelta）。 */
     public static final int SECTION_DELTA = 1 << 3;
 
@@ -32,9 +26,6 @@ public final class LoginCaps {
 
     /** ShadowPull（缓存未命中/比对不一致时的区块回源通道）。 */
     public static final int SHADOW_PULL = 1 << 6;
-
-    /** 超视渲染（多人渲染环带扩展）。 */
-    public static final int VIEW_DIST_EXT = 1 << 7;
 
     /**
      * Pull 模式（Compare+Pull 对齐）：协商通过后服务端对该玩家停发 chunk_payload
@@ -50,11 +41,7 @@ public final class LoginCaps {
         if (cfg.isPacketAggregationEnabled()) {
             caps |= AGGREGATION;
         }
-        if (cfg.isCompactHeaderEnabled()) {
-            caps |= COMPACT_HEADER;
-        }
         if (cfg.isClientCacheEnabled()) {
-            caps |= CHUNK_PUSH;
             caps |= PULL_MODE;
         }
         if (cfg.isSectionDeltaEnabled()) {
@@ -67,9 +54,6 @@ public final class LoginCaps {
             caps |= LIGHT_STRIP;
         }
         caps |= SHADOW_PULL;
-        if (cfg.isViewDistanceExtensionEnabled()) {
-            caps |= VIEW_DIST_EXT;
-        }
         return caps;
     }
 
@@ -79,12 +63,6 @@ public final class LoginCaps {
         int caps = 0;
         if (cfg.isPacketAggregationEnabled()) {
             caps |= AGGREGATION;
-        }
-        if (cfg.isCompactHeaderEnabled()) {
-            caps |= COMPACT_HEADER;
-        }
-        if (cfg.isClientCacheEnabled()) {
-            caps |= CHUNK_PUSH;
         }
         if (cfg.isSectionDeltaEnabled()) {
             caps |= SECTION_DELTA;
@@ -99,9 +77,6 @@ public final class LoginCaps {
             caps |= PULL_MODE;
         }
         caps |= SHADOW_PULL;
-        if (cfg.isViewDistanceExtensionEnabled()) {
-            caps |= VIEW_DIST_EXT;
-        }
         return caps;
     }
 

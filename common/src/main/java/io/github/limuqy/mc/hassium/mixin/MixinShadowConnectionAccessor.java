@@ -15,7 +15,6 @@ import java.net.SocketAddress;
  * {@code channelActive}（真网络握手）赋值；虚拟玩家没有真网络，经本 accessor
  * 直接注入常开 EmbeddedChannel，使 {@code isConnected()} / {@code hasDisconnected()}
  * 语义为已连接、S2C 发送进入 dummy 管道丢弃（而非积压进 {@code pendingActions} 队列）。
- * 技术沿袭网关时代 {@code GatewayPlayerBridge} 的 Connection 桥（2.0.0 裁剪前实现）。
  * <p>
  * 1.20.1–1.21.11 字段名一致（mojmap {@code channel} / {@code address}），零 #if。
  */

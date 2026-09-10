@@ -187,22 +187,6 @@ public class NeoForgeNetworkManager implements NetworkManager {
         }
     }
 
-    public record CompressedChunkWrapper(byte[] data) {
-        public void encode(FriendlyByteBuf buf) {
-            buf.writeVarInt(data.length);
-            buf.writeBytes(data);
-        }
-        public static CompressedChunkWrapper decode(FriendlyByteBuf buf) {
-            int length = buf.readVarInt();
-            byte[] data = new byte[length];
-            buf.readBytes(data);
-            return new CompressedChunkWrapper(data);
-        }
-    }
-
-
-
-
     public record BlockEntityRequestWrapper(byte[] data) {
         public void encode(FriendlyByteBuf buf) {
             buf.writeVarInt(data.length);
@@ -218,26 +202,6 @@ public class NeoForgeNetworkManager implements NetworkManager {
 
 #else
     // 1.21.1+: 使用 Payload + StreamCodec
-
-    /**
-     * 压缩区块数据 Payload (S2C)
-     */
-    public record CompressedChunkPayload(byte[] data) implements CustomPacketPayload {
-
-        public static final Type<CompressedChunkPayload> TYPE = new Type<>(
-                ResourceLocationCompat.create(Constants.MOD_ID, "chunk_payload_s2c")
-        );
-
-        public static final StreamCodec<FriendlyByteBuf, CompressedChunkPayload> STREAM_CODEC = StreamCodec.composite(
-                ByteBufCodecs.BYTE_ARRAY, CompressedChunkPayload::data,
-                CompressedChunkPayload::new
-        );
-
-        @Override
-        public Type<CompressedChunkPayload> type() {
-            return TYPE;
-        }
-    }
 
     public record ShadowPullRequestPayload(byte[] data) implements CustomPacketPayload {
         public static final Type<ShadowPullRequestPayload> TYPE = new Type<>(
@@ -440,23 +404,6 @@ public class NeoForgeNetworkManager implements NetworkManager {
         // 必须 setPacketHandled(true)，否则会把包交给原版 → Unknown custom packet identifier: hassium:main
         // S2C / C2S 必须带方向枚举，避免方向校验失败
         // 注意：Forge 1.20.1 的 consumer 参数是 Supplier<Context>
-
-        // 2: 压缩区块 S2C
-        CHANNEL.registerMessage(packetId++, CompressedChunkWrapper.class,
-                CompressedChunkWrapper::encode, CompressedChunkWrapper::decode,
-                (msg, ctx) -> {
-                    ctx.get().enqueueWork(() -> {
-                        try {
-                            ClientChunkHandler.handleCompressedChunk(msg.data());
-                        } catch (Exception e) {
-                            LOGGER.error("[CLIENT] Failed to handle compressed chunk", e);
-                        }
-                    });
-                    ctx.get().setPacketHandled(true);
-                },
-                java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT));
-
-
 
         // 5b: SeedRef S2C
         CHANNEL.registerMessage(packetId++, SeedRefWrapper.class,
@@ -692,11 +639,6 @@ public class NeoForgeNetworkManager implements NetworkManager {
 
         // ===== S2C（客户端处理；与服务端发送方向一一对应）=====
 
-        // 压缩区块 S2C
-        registrar.playToClient(CompressedChunkPayload.TYPE, CompressedChunkPayload.STREAM_CODEC,
-                NeoForgeNetworkManager::handleCompressedChunkS2C);
-
-
         // SeedRef S2C
         registrar.playToClient(SeedRefPayload.TYPE, SeedRefPayload.STREAM_CODEC,
                 NeoForgeNetworkManager::handleSeedRefS2C);
@@ -804,17 +746,6 @@ public class NeoForgeNetworkManager implements NetworkManager {
 
     // ===== S2C 客户端处理（1.21.1+；处理逻辑对齐 SimpleChannel 注册块）=====
 
-    private static void handleCompressedChunkS2C(CompressedChunkPayload payload, IPayloadContext context) {
-        context.enqueueWork(() -> {
-            try {
-                ClientChunkHandler.handleCompressedChunk(payload.data());
-            } catch (Exception e) {
-                LOGGER.error("[CLIENT] Failed to handle compressed chunk", e);
-            }
-        });
-    }
-
-
     private static void handleSeedRefS2C(SeedRefPayload payload, IPayloadContext context) {
         context.enqueueWork(() -> {
             try {
@@ -881,7 +812,13 @@ public class NeoForgeNetworkManager implements NetworkManager {
         byte[] data = new byte[buf.readableBytes()];
         buf.readBytes(data);
         buf.release();
+#if MC_VER < MC_1_21_1
+        // 1.20.1（Forge userdev）：ShadowPull 链路未注册（无响应通道），
+        // 客户端请求走 ShadowPullClient 超时回退（原版注入），此处不发送。
+        LOGGER.debug("Hassium: shadow_pull response suppressed on 1.20.1 (no channel)");
+#else
         sendServerPayload(player, new ShadowPullResponsePayload(data));
+#endif
     }
 
     @Override
@@ -961,28 +898,6 @@ public class NeoForgeNetworkManager implements NetworkManager {
         }
     }
 
-
-    /**
-     * 发送已编码的压缩区块负载到指定玩家（payload 由调用方 encode 一次；review-fix: T11-19）
-     */
-    public static void sendCompressedChunk(ServerPlayer player, byte[] data) {
-        try {
-            LOGGER.debug("[SEND_CHUNK] Sending compressed chunk to player {} (size={})",
-                    player.getName().getString(), data.length);
-
-
-#if MC_VER < MC_1_21_1
-            CHANNEL.sendTo(new CompressedChunkWrapper(data), player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
-#else
-            CompressedChunkPayload payload = new CompressedChunkPayload(data);
-            sendServerPayload(player, payload);
-#endif
-            LOGGER.debug("[SEND_CHUNK] Successfully sent chunk to {}",
-                    player.getName().getString());
-        } catch (Exception e) {
-            LOGGER.error("[SEND_CHUNK] Failed to send chunk to {}", player.getName().getString(), e);
-        }
-    }
 
     /** 发送聚合字典同步到客户端（SPI：Services.NETWORK_MANAGER.sendDictionarySync 转调）。 */
     public static void sendDictionarySyncPacket(ServerPlayer player) {

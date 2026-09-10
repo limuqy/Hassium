@@ -110,9 +110,9 @@ public class NetworkStats {
     // ===== 数据面分流埋点 =====
 
     /**
-     * 记录经 Primary 路径发送的 bulk 帧（PoC 多通道路由统计）。
+     * 记录经 Primary 路径发送的 bulk 帧（PoC 多通道路由统计；chunk_payload 通道退役后无调用方）。
      *
-     * @param bytes CompressedChunkData.encode() 输出长度
+     * @param bytes 已编码 chunk payload 长度
      */
     public static void recordBulkSentPrimary(long bytes) {
         if (!enabled) return;

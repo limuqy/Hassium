@@ -8,7 +8,6 @@ import com.mojang.brigadier.suggestion.Suggestions;
 import com.mojang.brigadier.suggestion.SuggestionsBuilder;
 import io.github.limuqy.mc.hassium.compat.PermissionCompat;
 import io.github.limuqy.mc.hassium.metrics.NetworkStats;
-import io.github.limuqy.mc.hassium.platform.Services;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.network.chat.Component;
@@ -76,73 +75,6 @@ public class FabricHassiumCommand {
                                 .executes(FabricHassiumCommand::exportWithArgs)
                         )
                 );
-        // migrate 仅开发环境：正式包不暴露演练入口；runClient / 冒烟仍可用
-        if (Services.PLATFORM.isDevelopmentEnvironment()) {
-            hassiumc.then(migrateSubtree());
-            dispatcher.register(
-                    ClientCommandManager.literal("hassium")
-                            .then(migrateSubtree())
-            );
-        }
-        dispatcher.register(hassiumc);
-    }
-
-    /**
-     * migrate 子树（/hassiumc migrate 与 /hassium migrate 共用；仅开发环境注册）。
-     * <p>
-     * 单一 greedyString 参数分发 list/status/endpoint：字面量子命令（list/status）与
-     * 字符串参数（endpoint）注册为兄弟节点时 brigadier 必然报参数歧义告警
-     * （"Ambiguity between arguments ..."），合并后零歧义；tab 补全经
-     * {@link #suggestMigrate} 给出 list/status/缓存服务器列表。
-     */
-    private static LiteralArgumentBuilder<FabricClientCommandSource> migrateSubtree() {
-        return ClientCommandManager.literal("migrate")
-                .executes(FabricHassiumCommand::migrateUsage)
-                .then(ClientCommandManager.argument("args", StringArgumentType.greedyString())
-                        .suggests(FabricHassiumCommand::suggestMigrate)
-                        .executes(FabricHassiumCommand::migrateDispatch));
-    }
-
-    private static CompletableFuture<Suggestions> suggestMigrate(
-            CommandContext<FabricClientCommandSource> context, SuggestionsBuilder builder) {
-        builder.suggest("list");
-        builder.suggest("status");
-        HassiumCommandHandler.getCachedServerIds().forEach(builder::suggest);
-        return builder.buildFuture();
-    }
-
-    /** migrate <list|status|host:port> 统一分发。 */
-    private static int migrateDispatch(CommandContext<FabricClientCommandSource> context) {
-        String args = StringArgumentType.getString(context, "args");
-        switch (args) {
-            case "list" -> migrateList(context);
-            case "status" -> migrateStatus(context);
-            default -> migrateToEndpoint(context);
-        }
-        return 1;
-    }
-
-    /** migrate 无参数：用法帮助 */
-    private static int migrateUsage(CommandContext<FabricClientCommandSource> context) {
-        context.getSource().sendFeedback(Component.literal(HassiumCommandHandler.migrateUsage()));
-        return 1;
-    }
-
-    private static int migrateList(CommandContext<FabricClientCommandSource> context) {
-        context.getSource().sendFeedback(Component.literal(HassiumCommandHandler.migrateList()));
-        return 1;
-    }
-
-    /** 解析端点参数：migrate <host:port> */
-    private static int migrateToEndpoint(CommandContext<FabricClientCommandSource> context) {
-        String endpoint = StringArgumentType.getString(context, "args");
-        context.getSource().sendFeedback(Component.literal(HassiumCommandHandler.migrateTo(endpoint)));
-        return 1;
-    }
-
-    private static int migrateStatus(CommandContext<FabricClientCommandSource> context) {
-        context.getSource().sendFeedback(Component.literal(HassiumCommandHandler.migrateStatus()));
-        return 1;
     }
 
     private static CompletableFuture<Suggestions> suggestCachedServers(

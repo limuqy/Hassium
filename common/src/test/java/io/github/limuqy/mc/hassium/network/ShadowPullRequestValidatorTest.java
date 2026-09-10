@@ -5,6 +5,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ShadowPullRequestValidatorTest {
     private static ShadowPullRequestC2SPacket request(String dimension, long epoch, int x, int z) {
@@ -13,7 +15,7 @@ class ShadowPullRequestValidatorTest {
     }
 
     @Test
-    @DisplayName("pull validation gates capability, permission, dimension, epoch, and range")
+    @DisplayName("pull validation gates capability, permission, dimension, epoch, and per-entry range")
     void validatesServerBoundary() {
         assertEquals(ShadowPullRequestValidator.Rejection.CAPABILITY,
                 validate(request("minecraft:overworld", 4, 0, 0), false, true));
@@ -23,10 +25,17 @@ class ShadowPullRequestValidatorTest {
                 validate(request("minecraft:the_nether", 4, 0, 0), true, true));
         assertEquals(ShadowPullRequestValidator.Rejection.EPOCH,
                 validate(request("minecraft:overworld", 3, 0, 0), true, true));
-        assertEquals(ShadowPullRequestValidator.Rejection.RANGE,
+        // 整批不再做 RANGE 拒绝（pull11：逐条目，避免牵连同批在范围内柱）：
+        // 越界柱由 inRange 逐条终端化
+        assertEquals(ShadowPullRequestValidator.Rejection.NONE,
                 validate(request("minecraft:overworld", 4, 2, 0), true, true));
         assertEquals(ShadowPullRequestValidator.Rejection.NONE,
                 validate(request("minecraft:overworld", 4, 1, -1), true, true));
+        // 逐条目切比雪夫范围
+        assertFalse(ShadowPullRequestValidator.inRange(
+                new ShadowPullRequestC2SPacket.Entry(2, 0, 0L, List.of(), 0), 0, 0, 1));
+        assertTrue(ShadowPullRequestValidator.inRange(
+                new ShadowPullRequestC2SPacket.Entry(1, -1, 0L, List.of(), 0), 0, 0, 1));
     }
 
     private static ShadowPullRequestValidator.Rejection validate(

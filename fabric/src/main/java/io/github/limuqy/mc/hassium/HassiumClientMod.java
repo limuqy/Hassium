@@ -45,32 +45,13 @@ public class HassiumClientMod implements ClientModInitializer {
         // 注册客户端命令
         FabricHassiumCommand.registerClientCommands();
         // 直连拓扑：HASSIUM 业务 S2C 通道全部经 vanilla CustomPayload 直收（服务端
-        // ServerPlayNetworking.send 直发）。客户端 receiver：CHUNK_PAYLOAD_S2C（全量压缩区块）、
-        // SHADOW_PULL_RESPONSE_S2C（shadowPullV1 FULL 回退）、SEED_REF_S2C（pristine 区块引用）、
-        // PLAY_INIT_S2C（Play 期激活）、LIGHT_DELTA_S2C（光照增量）、DICTIONARY_SYNC/INDEX_SYNC/
-        // AGGREGATION（聚合链）。CHUNK_HASH/SECTION_DELTA 等区块核心增量通道由
-        // common 客户端摄入管线（ClientChunkPipeline / ClientMetadataHandler）消费。
-        LOGGER.info("Hassium: Fabric client registers direct-play S2C receivers (CHUNK_PAYLOAD_S2C / SHADOW_PULL_RESPONSE_S2C / SEED_REF_S2C / PLAY_INIT_S2C / LIGHT_DELTA_S2C / DICTIONARY_SYNC_S2C / INDEX_SYNC_S2C / AGGREGATION_S2C).");
+        // ServerPlayNetworking.send 直发）。客户端 receiver：SHADOW_PULL_RESPONSE_S2C
+        // （shadowPullV1 FULL 回退）、SEED_REF_S2C（pristine 区块引用）、PLAY_INIT_S2C（Play 期激活）、
+        // LIGHT_DELTA_S2C（光照增量）、DICTIONARY_SYNC/INDEX_SYNC/AGGREGATION（聚合链）。
+        // CHUNK_PAYLOAD_S2C 通道已退役（纯 Compare+Pull）；CHUNK_HASH/SECTION_DELTA 等区块
+        // 核心增量通道由 common 客户端摄入管线（ClientChunkPipeline / ClientMetadataHandler）消费。
+        LOGGER.info("Hassium: Fabric client registers direct-play S2C receivers (SHADOW_PULL_RESPONSE_S2C / SEED_REF_S2C / PLAY_INIT_S2C / LIGHT_DELTA_S2C / DICTIONARY_SYNC_S2C / INDEX_SYNC_S2C / AGGREGATION_S2C).");
 
-        // CHUNK_PAYLOAD_S2C 客户端 receiver：全量压缩区块直收。
-#if MC_VER < MC_1_21_1
-        ClientPlayNetworking.registerGlobalReceiver(io.github.limuqy.mc.hassium.network.FabricNetworkManager.CHUNK_PAYLOAD_S2C,
-                (client, handler, buf, responseSender) -> {
-                    int len = buf.readVarInt();
-                    byte[] data = new byte[len];
-                    buf.readBytes(data);
-                    ClientChunkHandler.handleCompressedChunk(data);
-                });
-#else
-        ClientPlayNetworking.registerGlobalReceiver(io.github.limuqy.mc.hassium.network.FabricPayloadRegistry.CHUNK_PAYLOAD_S2C_TYPE,
-                (payload, context) -> {
-                    net.minecraft.network.FriendlyByteBuf buf = io.github.limuqy.mc.hassium.network.FabricPayloadRegistry.fromPayload(payload);
-                    int len = buf.readVarInt();
-                    byte[] data = new byte[len];
-                    buf.readBytes(data);
-                    ClientChunkHandler.handleCompressedChunk(data);
-                });
-#endif
         // shadowPullV1 FULL 回退：服务端返回的原版 chunk+light 线格式统一交给 ShadowPullClient 注入。
 #if MC_VER < MC_1_21_1
         ClientPlayNetworking.registerGlobalReceiver(io.github.limuqy.mc.hassium.network.FabricNetworkManager.SHADOW_PULL_RESPONSE_S2C,

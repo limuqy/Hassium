@@ -2,8 +2,6 @@ package io.github.limuqy.mc.hassium;
 
 import io.github.limuqy.mc.hassium.config.ForgeConfigBackend;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
-import io.github.limuqy.mc.hassium.metrics.NetworkStats;
-import io.github.limuqy.mc.hassium.network.ChunkSender;
 import io.github.limuqy.mc.hassium.network.ForgeNetworkManager;
 #if MC_VER < MC_1_21_6
 import net.minecraftforge.eventbus.api.SubscribeEvent;
@@ -32,15 +30,6 @@ public class HassiumMod {
             context.registerConfig(ModConfig.Type.COMMON, CONFIG.serverSpec(), Constants.CONFIG_SERVER_FILE);
         }
         CommonClass.init();
-
-        // 直连拓扑（2.0.0 裁剪）：UDP 数据面退役，压缩区块全走 hassium:main 通道 Primary 直发
-        ChunkSender.setInstance((player, compressed) -> {
-            byte[] payload = compressed.encode();
-            NetworkStats.recordBulkSentPrimary(payload.length);
-            // review-fix: T11-19 传已编码 payload，避免 sendCompressedChunk 内部二次 encode()（重复分配+拷贝）
-            ForgeNetworkManager.sendCompressedChunk(player, payload);
-        });
-        LOGGER.info("Hassium: ChunkSender registered for Forge");
     }
 
     @Mod.EventBusSubscriber(modid = Constants.MOD_ID, bus = Mod.EventBusSubscriber.Bus.MOD)

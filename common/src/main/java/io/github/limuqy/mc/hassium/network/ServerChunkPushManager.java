@@ -9,7 +9,6 @@ import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.compression.CompressionService;
 import io.github.limuqy.mc.hassium.compression.CompressionException;
 import io.github.limuqy.mc.hassium.metrics.NetworkStats;
-import io.github.limuqy.mc.hassium.metrics.VanillaZlibEstimator;
 import io.github.limuqy.mc.hassium.platform.Services;
 import io.github.limuqy.mc.hassium.compat.PlayerCompat;
 import io.github.limuqy.mc.hassium.compat.RegistryCompat;
@@ -182,7 +181,18 @@ public class ServerChunkPushManager {
         long key = pos.toLong();
         int refs = demandTicketRefs.merge(key, 1, Integer::sum);
         if (refs == 1) {
+#if MC_VER < MC_1_21_5
             level.getChunkSource().addRegionTicket(net.minecraft.server.level.TicketType.FORCED, pos, 0, pos);
+#else
+            // 1.21.5+：ticket API 收敛至 TicketStorage（ServerChunkCache/DistanceManager 公开方法移除）
+            try {
+                ((io.github.limuqy.mc.hassium.mixin.ServerChunkCacheAccessor) (Object) level.getChunkSource())
+                        .hassium$getTicketStorage()
+                        .addTicketWithRadius(net.minecraft.server.level.TicketType.FORCED, pos, 0);
+            } catch (Throwable ignored) {
+                // ticketStorage 不可达时按无票处理（world 启动期 / 异常关闭）
+            }
+#endif
         }
         pendingPulls.add(new PendingPull(player, level, dimension, entry,
                 request.requestId(), request.epoch(), System.nanoTime()));
@@ -198,7 +208,13 @@ public class ServerChunkPushManager {
         if (refs <= 1) {
             demandTicketRefs.remove(key);
             try {
+#if MC_VER < MC_1_21_5
                 pending.level().getChunkSource().removeRegionTicket(net.minecraft.server.level.TicketType.FORCED, pos, 0, pos);
+#else
+                ((io.github.limuqy.mc.hassium.mixin.ServerChunkCacheAccessor) (Object) pending.level().getChunkSource())
+                        .hassium$getTicketStorage()
+                        .removeTicketWithRadius(net.minecraft.server.level.TicketType.FORCED, pos, 0);
+#endif
             } catch (Throwable ignored) {
                 // world 已停：票随实例销毁
             }
@@ -963,14 +979,6 @@ public class ServerChunkPushManager {
             return;
         }
 
-        ChunkSender sender = ChunkSender.getInstance();
-        if (sender == null) {
-            queue.releaseSealedBatchReservation();
-            Constants.LOG.error("[PROCESS_QUEUE] ChunkSender not initialized, cannot send chunk data "
-                    + "(loader must call ChunkSender.setInstance in mod init)");
-            return;
-        }
-
         int maxPerTick = normalizeMaxChunksPerTick(
                 HassiumConfigService.getInstance().getConfig().master().maxChunksPerTick());
 
@@ -991,15 +999,19 @@ public class ServerChunkPushManager {
 
             if (task.seedRef() != null) {
                 // SeedRef 元数据无 hash 比对语义，直接随批发送。
-                works.add(new SealedWork(player, task, null, level.registryAccess(), sender, 0L));
+                works.add(new SealedWork(player, task));
                 continue;
             }
 
-
+            // chunk_payload 通道已退役（纯 Compare+Pull）：FULL_VISIBLE 任务仅服务于
+            // seedgen 玩家的 SeedRef 转换；非 seedgen 玩家（原版/降级组合）不在此发
+            // 区块推送，客户端经影子 tracking 的 Compare+Pull 主动拉取。
+            if (!isSeedGenFor(playerId, task.pos(), task.dimension())) {
+                continue;
+            }
             try {
                 // 主线程快照（buildChunkPacket）
                 ClientboundLevelChunkWithLightPacket packet = null;
-                long contentHash = 0L;
                 LevelChunk chunk = level.getChunkSource().getChunkNow(task.pos().x, task.pos().z);
                 if (chunk == null) {
                     Constants.LOG.warn("[PROCESS_QUEUE] Chunk {} not loaded, skipping", task.pos());
@@ -1012,27 +1024,15 @@ public class ServerChunkPushManager {
                     Constants.LOG.warn("[PROCESS_QUEUE] Failed to build chunk packet {}", task.pos());
                     continue;
                 }
-                if (contentHash == 0L) {
-                    contentHash = ChunkContentHashUtil.combineSectionHashes(
-                            ChunkContentHashUtil.computeSectionHashesFromPacket(
-                                    packet.getChunkData(), level.getSectionsCount(), level.registryAccess()));
-                }
-                if (task.kind() == PushKind.FULL_VISIBLE
-                        && isSeedGenFor(playerId, task.pos(), task.dimension())) {
-                    Map<Integer, Long> sectionHashes = ChunkContentHashUtil.computeSectionHashesFromPacket(
-                            packet.getChunkData(), level.getSectionsCount(), level.registryAccess());
-                    long seedGenHash = ChunkContentHashUtil.combineSectionHashes(sectionHashes);
-                    PushTask seedRefTask = new PushTask(task.pos(), task.dimension(),
-                            new DataRequestTask(task.pos(), task.dimension(),
-                                    new SeedRefWork(seedGenHash,
-                                            ChunkContentHashUtil.sectionHashesToArray(sectionHashes)), seedGenHash),
-                            PushKind.SEED_REF);
-                    works.add(new SealedWork(player, seedRefTask, null,
-                            level.registryAccess(), sender, 0L));
-                    continue;
-                }
-                works.add(new SealedWork(player, task, packet,
-                        level.registryAccess(), sender, contentHash));
+                Map<Integer, Long> sectionHashes = ChunkContentHashUtil.computeSectionHashesFromPacket(
+                        packet.getChunkData(), level.getSectionsCount(), level.registryAccess());
+                long seedGenHash = ChunkContentHashUtil.combineSectionHashes(sectionHashes);
+                PushTask seedRefTask = new PushTask(task.pos(), task.dimension(),
+                        new DataRequestTask(task.pos(), task.dimension(),
+                                new SeedRefWork(seedGenHash,
+                                        ChunkContentHashUtil.sectionHashesToArray(sectionHashes)), seedGenHash),
+                        PushKind.SEED_REF);
+                works.add(new SealedWork(player, seedRefTask));
             } catch (Exception e) {
                 Constants.LOG.error("[PROCESS_QUEUE] Failed to prepare chunk {} for player {}",
                         task.pos(), player.getName().getString(), e);
@@ -1105,50 +1105,6 @@ public class ServerChunkPushManager {
         }
         if (task.seedRef() != null) {
             sendSeedRef(player, task.data());
-            return;
-        }
-        try {
-            byte[] chunkData;
-            if (work.payload() instanceof byte[] bytes) {
-                chunkData = bytes;
-            } else {
-                long tEnc = System.nanoTime();
-                chunkData = encodeChunkPacket((ClientboundLevelChunkWithLightPacket) work.payload(),
-                        work.registryAccess());
-                diag(D_ENCODE, System.nanoTime() - tEnc);
-            }
-            if (chunkData == null) {
-                Constants.LOG.warn("[PROCESS_QUEUE] Failed to encode chunk {}", task.pos());
-                return;
-            }
-
-            // 原版 tracking 产生的任务统一发送权威 full snapshot；不做 Bloom/hash 二次 admission。
-            compressAndSend(player, task, chunkData, work.contentHash(), work.sender());
-        } catch (Throwable t) {
-            Constants.LOG.error("[PROCESS_QUEUE] Failed to encode/send chunk {}", task.pos(), t);
-        }
-    }
-
-    /** 后台压缩并发送剥光全量（不访问世界对象）。 */
-    private void compressAndSend(ServerPlayer player, PushTask task, byte[] chunkData, long contentHash,
-                                 ChunkSender sender) {
-        if (!player.isAlive() || player.hasDisconnected()) {
-            return;
-        }
-        try {
-            ChunkCompressionHandler.CompressedChunkData compressed =
-                    ChunkCompressionHandler.compressChunkData(chunkData, task.pos().x, task.pos().z);
-            if (compressed == null) {
-                Constants.LOG.warn("[PROCESS_QUEUE] Failed to compress chunk {}", task.pos());
-                return;
-            }
-            sender.sendCompressedChunk(player, compressed);
-            NetworkStats.recordChunkSent(VanillaZlibEstimator.estimate(chunkData));
-            DebugLogger.info(LogType.NETWORK, "[PROCESS_QUEUE] Sent stripped full chunk {} to player {} ({} -> {} bytes)", task.pos(), player.getName().getString(),
-                    chunkData.length, compressed.compressedData.length);
-        } catch (Exception e) {
-            Constants.LOG.error("[PROCESS_QUEUE] Failed to compress/send chunk {} for player {}",
-                    task.pos(), player.getName().getString(), e);
         }
     }
 
@@ -1325,14 +1281,6 @@ public class ServerChunkPushManager {
         }
     }
 
-    /**
-     * 工作项携带已构建 packet 或已编码字节；二者均不再读取世界对象，后台 encode 安全。
-     * registryAccess 在服务端启动后只读。
-     */
-    private record SerializedChunkWork(ServerPlayer player, DataRequestTask task,
-                                       byte[] chunkData, ClientboundLevelChunkWithLightPacket packet,
-                                       RegistryAccess registryAccess) {}
-
     /** 批次队列任务：柱 + 维度 + SeedRef 元数据（可空）。 */
     static record PushTask(ChunkPos pos, String dimension, DataRequestTask data, PushKind kind) {
         static PushTask full(ChunkPos pos, String dimension, PushKind kind) {
@@ -1354,15 +1302,14 @@ public class ServerChunkPushManager {
             return data != null ? data.contentHash() : 0L;
         }
     }
-    /** 推送任务类型：可见全量、元数据快照、SeedRef。 */
-    enum PushKind { FULL_VISIBLE, METADATA, SEED_REF }
+    /** 推送任务类型：可见全量（仅 seedgen 转换用）、SeedRef。 */
+    enum PushKind { FULL_VISIBLE, SEED_REF }
 
 
     /**
      * 封批产物：主线程已完成世界快照（chunkData 或 packet），消费线程只做 encode/hash/ZSTD。
      */
-    private record SealedWork(ServerPlayer player, PushTask task, Object payload,
-                              RegistryAccess registryAccess, ChunkSender sender, long contentHash) {}
+    private record SealedWork(ServerPlayer player, PushTask task) {}
 
     /** 通道项及其所属玩家的已封装批次计数。 */
     private record SealedBatch(PlayerPushQueue owner, List<SealedWork> works) {}
