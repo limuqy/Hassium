@@ -83,7 +83,7 @@ loom {
             if (project.hasProperty('hassiumSmokeTest') && project.property('hassiumSmokeTest').toString() == 'true') {
                 programArguments.add('nogui')
                 def phases = project.findProperty('hassiumSmokePhases') ?: 'classic'
-                // 服务端冒烟：启动 VD=20，玩家退出后切 VD=8；phases 含 dataplane/udp-failover 时驱动对应状态机
+                // 服务端冒烟：启动 VD=20，玩家退出后切 VD=8
                 jvmArguments.addAll([
                         "-Dhassium.serverSmokeTest=true",
                         "-Dhassium.smokePhases=${phases}"

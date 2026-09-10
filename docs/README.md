@@ -34,7 +34,7 @@
 |------|------|------|
 | [archive/RELEASE-1.0.0.md](archive/RELEASE-1.0.0.md) | 1.0.0 发布说明 | 归档 |
 | [archive/smoke-blackchunk-handoff-20260808.md](archive/smoke-blackchunk-handoff-20260808.md) | 冒烟黑块交接（一次性会话记录） | 归档 |
-| [archive/findings-kcp-jij-stuck.md](archive/findings-kcp-jij-stuck.md) | kcp JiJ 内嵌卡点排查（已解决；KCP 依赖本体已死重待清理） | 归档 |
+| [archive/findings-kcp-jij-stuck.md](archive/findings-kcp-jij-stuck.md) | kcp JiJ 内嵌卡点排查（已解决） | 归档 |
 | [archive/storage-format-unification.md](archive/storage-format-unification.md) | 存储路径整理方案（已完成） | 归档 |
 | [archive/server-chunk-surface-shell.md](archive/server-chunk-surface-shell.md) | 服务端空心区块壳层设计提案（未实现，已退役） | 归档 |
 | [archive/multi-channel_network_research.md](archive/multi-channel_network_research.md) | 多通道数据面研究（TCP PoC 已退役，被 UDP/KCP 取代；UDP/KCP 本身亦已随直连拓扑退役） | 归档 |

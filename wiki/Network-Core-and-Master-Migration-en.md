@@ -42,7 +42,7 @@ After negotiation (`pull_mode` capability) the server stops pushing full chunk p
 | In-process gateway (NetworkCore, `network/core/`) | **retired** | The shell-connection + private-channel architecture is gone; I/O returned to the vanilla Netty path |
 | Seamless master migration (ResumeTicket / MigrationEngine) | **retired** | Resume tickets, warmup, idle windows, all four triggers gone; disconnects use vanilla reconnect + shadow-cache reuse |
 | L1 load balancing (`master.migration*`, 7 keys) | **retired** | Keys deleted |
-| UDP data plane (`network/dataplane/`, KCP) | **retired** | `dataplane.*` keys deleted; the KCP dependency is dead weight pending cleanup |
+| UDP data plane (`network/dataplane/`) | **retired** | `dataplane.*` keys deleted |
 | Client failover (candidate endpoints / recovery UI) | **retired** (`729d92e`) | Disconnect/reconnect uses the vanilla path |
 | `/hassium migrate` command | **removed** | Retired with the migration engine |
 | Gateway listeners/auth (`controlReachableEndpoints` / `bindHost` / `authToken`) | **removed** | No gateway/UDP ports to open |

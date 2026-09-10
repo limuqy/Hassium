@@ -1,7 +1,3 @@
-import java.util.zip.ZipEntry
-import java.util.zip.ZipInputStream
-import java.util.zip.ZipOutputStream
-
 plugins {
     id 'loom-neoforge'
 }
@@ -16,96 +12,15 @@ sourceSets {
 
 configurations {
     library
-    // 原始 kcp 坐标；剥离 io.netty.bootstrap 后再进 game layer（见 stripKcpNettyBootstrapPackage）
-    kcpIncoming
 }
-// Keep these libs on the compile/shade classpath...
 configurations.implementation.extendsFrom(configurations.library)
-// ...and inject them into the FML game-layer classpath (legacy_classpath.txt) so they
-// load in dev runs, not just in the shaded production jar.
 configurations.minecraftLibraries.extendsFrom(configurations.library)
 configurations.minecraftRuntimeLibraries.extendsFrom(configurations.library)
-
-// common 的 implementation kcp 会经 project(':common') 透传；必须挡住未剥离副本，
-// 否则与 library 的剥离 jar 并存时，仍可能由未剥离 jar 抢占 io.netty.bootstrap。
-configurations.implementation {
-    exclude group: 'moe.sdl.kcp', module: 'kcp-netty'
-}
-configurations.runtimeClasspath {
-    exclude group: 'moe.sdl.kcp', module: 'kcp-netty'
-}
-
-/**
- * kcp-netty 自带 {@code io.netty.bootstrap.UkcpServerBootstrap}，与 MC 的
- * {@code Bootstrap}/{@code ServerBootstrap} 同包。Forge SecureJarHandler 的 PackageTracker
- * 按「先到的 jar 独占包」处理——kcp 先占 {@code io.netty.bootstrap} 后，MC/mod 侧
- * {@code Class.forName(Bootstrap)} 直接 ClassNotFoundException（vanilla TCP 监听也会挂）。
- * Hassium 只用 {@code io.jpower.kcp.netty.Kcp}，不需要 Ukcp* Bootstrap；剥离整个 {@code io/netty/}。
- */
-def hassiumStripKcpNettyBootstrap = { File src, File out ->
-    out.parentFile.mkdirs()
-    out.withOutputStream { fos ->
-        def zos = new ZipOutputStream(fos)
-        src.withInputStream { fis ->
-            def zis = new ZipInputStream(fis)
-            ZipEntry entry
-            while ((entry = zis.nextEntry) != null) {
-                if (entry.name.startsWith('io/netty/')) {
-                    zis.closeEntry()
-                    continue
-                }
-                if (!entry.isDirectory()) {
-                    zos.putNextEntry(new ZipEntry(entry.name))
-                    zis.transferTo(zos)
-                    zos.closeEntry()
-                }
-                zis.closeEntry()
-            }
-            zis.close()
-        }
-        zos.close()
-    }
-    return out
-}
-
-def patchedKcpJar = layout.buildDirectory.file('patched-kcp/kcp-netty-1.6.2-no-netty-bootstrap.jar')
-
-def stripKcpTask = tasks.register('stripKcpNettyBootstrapPackage') {
-    description = 'Strip io.netty.bootstrap.* from kcp-netty so Forge JPMS package ownership stays with MC Netty'
-    inputs.files(configurations.kcpIncoming)
-    outputs.file(patchedKcpJar)
-    doLast {
-        def src = configurations.kcpIncoming.files.find { it.name.startsWith('kcp-netty-') }
-        if (src == null) {
-            throw new GradleException("kcp-netty jar not found in kcpIncoming: ${configurations.kcpIncoming.files}")
-        }
-        def out = patchedKcpJar.get().asFile
-        def stamp = new File(out.parentFile, out.name + '.stamp')
-        def stampVal = "${src.canonicalPath}|${src.lastModified()}|${src.length()}"
-        if (out.exists() && stamp.exists() && stamp.text.trim() == stampVal) {
-            return
-        }
-        hassiumStripKcpNettyBootstrap(src, out)
-        stamp.text = stampVal
-    }
-}
-
 dependencies {
     library 'com.github.luben:zstd-jni:1.5.5-7'
     library 'org.lz4:lz4-java:1.8.0'
     library 'com.google.code.findbugs:jsr305:3.0.1'
 
-    // 原始坐标仅用于剥离任务输入；真正进 compile / game layer / JiJ 的是剥离后的 jar。
-    kcpIncoming('moe.sdl.kcp:kcp-netty:1.6.2') {
-        exclude group: 'io.netty'
-    }
-    // files(task) 会把 task outputs 挂到依赖图，compile/run 自动 dependsOn 剥离任务。
-    library files(stripKcpTask)
-    // 生产 jar 内嵌剥离版 kcp：不再用 include（Loom processIncludeJars 拒收裸 File
-    // artifact），改走 zstd-jni 同款 shade——直接把剥离 jar 解包合并进主 jar 任务的产物。
-    // 见本文件末尾 jar {} 的 from(zipTree(patchedKcpJar)) 块。
-
-    // Cloth Config：编译期需要；可选依赖，不 jiJ
     if (gradle.ext.has('cloth_config_version')) {
         def clothArtifact = gradle.ext.minecraft_version == '1.20.1'
                 ? 'cloth-config-forge'
@@ -113,15 +28,7 @@ dependencies {
         modCompileOnly("me.shedaniel.cloth:${clothArtifact}:${gradle.ext.cloth_config_version}")
     }
 
-    // IMBlocker：仅开发环境 runClient 体验（中文输入法自动阻断）。modLocalRuntime 只进本地
-    // dev 运行时，不进生产 jar。1.20.1 的 neoforge 子项目实为 forge 平台（loom.platform=forge），
-    // 必须用 forge 变体（neoforge 变体最低 1.20.6）；1.20.2+ 用 neoforge 变体。
-    // 坐标用 project ID WMDesFsZ（slug "imblocker" 在 Modrinth Maven 上指向旧项目 1.0.x）。
     if (gradle.ext.has('imblocker_version')) {
-        // 1.20.1（forge 平台）：IMBlocker 5.5.4-forge 的动态 mixin 插件在 dev 环境引用
-        // net.minecraft.client.MainWindow 抛 ClassMetadataNotFoundException（MixinTransformerError
-        // 崩 runClient，实测 2026-08-10）；该 mod 仅开发输入法体验，冒烟自动化无人工输入不需要 →
-        // 1.20.1 跳过。1.20.2+ neoforge 变体正常。
         def imSkip = gradle.ext.minecraft_version == '1.20.1'
         def imFilter = gradle.ext.minecraft_version == '1.20.1' ? 'forge' : 'neoforge'
         if (!imSkip) {
@@ -130,10 +37,6 @@ dependencies {
     }
 }
 
-// IMBlocker 为 client-only mod：neoforge 变体无 environment 声明，dev runServer（merged jar
-// 含客户端类）会加载并执行其 @Mod 构造器/静态初始化（引 net.minecraft.client.*），实测
-// ExceptionInInitializerError → ModLoadingException 崩启动（1.21.1 runServer 验证）。
-// runServer 从 classpath 排除 IMBlocker remap 产物（loom 命名 WMDesFsZ-<hash>-<ver>-<loader>.jar）。
 afterEvaluate {
     tasks.named('runServer').configure { t ->
         if (t instanceof JavaExec) {
@@ -142,20 +45,9 @@ afterEvaluate {
     }
 }
 
-// Mixin AP 配置：禁用目标验证（architectury-loom 的 remapping 会在运行时处理）
 tasks.withType(JavaCompile).configureEach {
     options.compilerArgs.add('-Arequires=0')
     options.compilerArgs.add('-AdefaultObfuscationEnv=mojang')
 }
 
-// 生产 jar 内嵌剥离版 kcp（zstd-jni 同款 shade，非 Loom JiJ）：把剥离后的 kcp jar
-// 解包合并进主 jar 任务，随 Hassium mod 类一起被 mod loader 加载。绕开 Loom
-// processIncludeJars 对裸 File artifact 的 module-component 校验（见 docs/archive/findings-kcp-jij-stuck.md）。
-// patchedKcpJar 是 stripKcpNettyBootstrapPackage 任务的 outputs.file，from(zipTree(...))
-// 会让 jar 任务自动 dependsOn 剥离任务；显式声明一次以求稳。
-jar {
-    dependsOn stripKcpTask
-    from(zipTree(patchedKcpJar.get().asFile)) {
-        exclude 'META-INF/**'
-    }
-}
+

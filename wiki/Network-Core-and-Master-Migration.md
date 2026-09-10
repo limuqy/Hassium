@@ -42,7 +42,7 @@
 | 进程内网关（NetworkCore，`network/core/`） | **已裁剪** | 客户端世界侧壳连接 + 网关自有通道架构整体退役；收发回归 vanilla Netty 路径 |
 | 无感主控迁移（ResumeTicket / MigrationEngine） | **已裁剪** | 续流票据、预热、空闲窗口、四类触发全部退役；断连即走原版重连 + 影子端缓存复用 |
 | L1 负载均衡（`master.migration*` 7 键） | **已裁剪** | 配置键删除 |
-| UDP 数据面（`network/dataplane/`，KCP） | **已裁剪** | `dataplane.*` 键删除；KCP 依赖为死重待清理 |
+| UDP 数据面（`network/dataplane/`） | **已裁剪** | `dataplane.*` 键删除 |
 | 客户端 failover（候选端点表 / 恢复界面） | **已裁剪**（`729d92e`） | 断连重连走原版路径 |
 | `/hassium migrate` 命令 | **已删** | 随迁移引擎退役 |
 | 网关监听/鉴权（`controlReachableEndpoints` / `bindHost` / `authToken`） | **已删** | 无网关端口需要放行 |

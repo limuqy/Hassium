@@ -103,7 +103,7 @@ MC_1_21_11
 
 ## 网络子系统分段
 
-直连拓扑（2026-09-04 回归，`handoff-2026-09-04-vanilla-direct-network.md`）：客户端↔服务端唯一 vanilla TCP；网络核心（进程内网关）、UDP 数据面（KCP）、主控迁移/续流、客户端 failover 均已裁剪。网络层版本差异只剩「登录/配置期握手 + Play 期 payload 注册」两处。
+直连拓扑（2026-09-04 回归，`handoff-2026-09-04-vanilla-direct-network.md`）：客户端↔服务端唯一 vanilla TCP；网络核心（进程内网关）、UDP 数据面、主控迁移/续流、客户端 failover 均已裁剪。网络层版本差异只剩「登录/配置期握手 + Play 期 payload 注册」两处。
 
 | 分界 | 动作 |
 |------|------|
@@ -136,10 +136,6 @@ MC_1_21_11
 
 共用载体：`PreHandshakeProtocol`（legacy buf 编解码）/ `PreHandshakePayload`（1.21.1+ payload，StreamCodec 为 FriendlyByteBuf 级，无 registry 依赖）。能力字段：协议版本、mod 版本、clientCache、globalCompression、compactHeader。
 运行时验证优先级：**1.20.1 → 1.21.1 → 1.21.11**；直连拓扑下无 UDP 断链冒烟（`UdpFailover` harness 与 `FAILOVER_*` / `UDP_*` marker 已随数据面退役）；其余锚点以编译 + 短冒烟为主。详见 [`runtime-smoke-test.md`](runtime-smoke-test.md)。
-
-### KCP 依赖（已退役，待清理）
-
-UDP 数据面已随直连拓扑裁剪：`DataPlaneUdpServer` / `ReliableDatagramSession` 等类已删，`common/build.gradle:12` 的 `moe.sdl.kcp:kcp-netty:1.6.2` 依赖与三端 `kcpIncoming` 配置 + `stripKcpNettyBootstrapPackage` 剥离任务为**死重**（代码零引用），待后续清理提交移除。
 
 ---
 
@@ -182,13 +178,12 @@ UDP 数据面已随直连拓扑裁剪：`DataPlaneUdpServer` / `ReliableDatagram
 
 ### Forge 1.20.6 重新兼容（2026-07-28）
 
-Forge 1.20.6（段 C 段尾）此前因 kcp-netty 依赖未接入与 `ForgeNetworkManager` 的 Manifold `#endif` 缺失等问题从 `builds_for` 暂时移除，今已重新兼容并通过 `forge:compileJava -Pmc_ver=1.20.6`。修复点：
+Forge 1.20.6（段 C 段尾）此前因 `ForgeNetworkManager` 的 Manifold `#endif` 缺失等问题从 `builds_for` 暂时移除，今已重新兼容并通过 `forge:compileJava -Pmc_ver=1.20.6`。修复点：
 
 - `versionProperties/1.20.6.properties`：`builds_for` 恢复 `fabric,neoforge,forge`
 - `ForgeNetworkManager.java`：补齐 89 行 `#if MC_VER < MC_1_20_2` 块缺失的 `#endif`（1.20.6 走 `#else` 方暴露 EOF 报错，即当初"一直解决不了"的根因）；`Channel` 局部变量改 `io.netty.channel.Channel` 全限定名，避免与新 import 的 `net.minecraftforge.network.Channel` 歧义；`sendIndexSyncPacket` 改用 `IndexSyncManager.createSyncPacket()` 对齐 fabric/neoforge
 - `ForgeNetworkManagerService.java`：补 `sendLightDeltaPacket` 委托实现接口
 - `ForgeNetworkManager.java`：补齐 `LightDeltaWrapper` / `DictionarySyncWrapper` / `IndexSyncWrapper` / `CompressionReadyWrapper` 通道；握手改为与 Fabric/NeoForge 同构的 CompressionReady ACK（客户端装 ZSTD 后暂停出站，待 IndexSync 再恢复），修复重连 `incorrect header check` 断连
-- `forge/build.gradle`：移植 neoforge 的 `kcpIncoming` 配置 + `stripKcpNettyBootstrapPackage` 剥离任务，剥除 `io.netty.bootstrap.*` 后进 compile/game-layer/JiJ，规避 Forge 50+ SecureJarHandler 包占有冲突
 - `forge/build.gradle`：FCAP Forge JiJ 的 `mixinextras-forge`（内嵌 `MixinExtras`）与传递依赖 `mixinextras-common` 在 Forge 50 JPMS 下双模块同包导出 → `ResolutionException`；`stripFcapMixinExtrasJij` 剥除 FCAP 内嵌 JiJ，只保留单一 `mixinextras-common`
 
 | 段 | 锚点 | 状态 |
