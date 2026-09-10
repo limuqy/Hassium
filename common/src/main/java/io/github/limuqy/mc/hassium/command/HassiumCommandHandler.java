@@ -14,6 +14,9 @@ import java.util.List;
  * <p>
  * 提供命令逻辑，由 Fabric/Forge 各自注册到命令系统。
  * 服务端和客户端在不同 JVM 中运行，各自有独立的 NetworkStats 实例。
+ * <p>
+ * 客户端统计四行的语义/公式/锚点见 {@link io.github.limuqy.mc.hassium.metrics.MetricsSemantics}；
+ * 本类只做展示格式化，不重新定义口径。
  */
 public class HassiumCommandHandler {
 
@@ -52,7 +55,10 @@ public class HassiumCommandHandler {
     }
 
     /**
-     * 获取客户端统计信息（客户端执行时显示）
+     * 获取客户端统计信息（客户端执行时显示）。
+     * <p>
+     * 四行语义与公式真相源：{@link io.github.limuqy.mc.hassium.metrics.MetricsSemantics}。
+     * 本方法只快照 metrics 并格式化，不改口径。
      */
     public static String getClientStatsMessage() {
         HassiumMetricsImpl metrics = NetworkStats.getMetrics();
@@ -101,7 +107,7 @@ public class HassiumCommandHandler {
     private static String formatChunkCacheLine(long fullHitCount, long fullHitBytes,
                                               long partialCount, long partialBytes,
                                               long shardBytes, long appliedBytes) {
-        // 缓存命中 = (全命中 + 部分命中 - 增量) / 应用来源等价字节，按内容等价值计算。
+        // MetricsSemantics §1：命中 = (全命中 + 部分命中 − 增量) / 应用。
         long hitBytes = Math.max(0L, fullHitBytes + partialBytes - shardBytes);
         double rate = appliedBytes <= 0L
                 ? 0.0
@@ -116,22 +122,31 @@ public class HassiumCommandHandler {
     }
 
     private static String formatChunkLoadLine(HassiumMetricsImpl m, long loadedCount, long localCount) {
+        // MetricsSemantics §2：展示「新增 / 本地 / 本地命中」；不再展示「过期」。
+        // 新增 = 网络全量（authoritative-full + compare-pull FULL + serverPush）。
+        // 本地 = SeedGen；本地命中 = 本地生成字节 / (网络全量 + 本地生成)，
+        // 口径对齐区块缓存命中率（以本地生成为基线的省下载占比）。
         long serverPush = m.getServerPushAppliedCount();
-        long newRequests = m.getNewFullChunkRequestCount() + serverPush;
-        long staleRequests = m.getStaleFullChunkRequestCount();
+        long staleCount = m.getStaleFullChunkRequestCount();
+        long newRequests = m.getNewFullChunkRequestCount() + staleCount + serverPush;
         long newRequestBytes = m.getNewFullChunkRequestBytes()
+                + m.getStaleFullChunkRequestBytes()
                 + serverPush * NetworkStats.ESTIMATED_CHUNK_BYTES;
-        long staleRequestBytes = m.getStaleFullChunkRequestBytes();
         long localBytes = m.getLocallyGeneratedChunkBytes();
-        return String.format("§e区块加载：§r%d（新增 %d/%s，过期 %d/%s，本地 %d/%s）",
+        long localBaseline = newRequestBytes + localBytes;
+        double localHitRate = localBaseline <= 0L
+                ? 0.0
+                : (double) Math.min(localBytes, localBaseline) / localBaseline * 100.0;
+        return String.format("§e区块加载：§r%d（新增 %d/%s，本地 %d/%s，本地命中 %s）",
                 loadedCount,
                 newRequests, MetricsTextFormatter.formatBytes(newRequestBytes),
-                staleRequests, MetricsTextFormatter.formatBytes(staleRequestBytes),
-                localCount, MetricsTextFormatter.formatBytes(localBytes));
+                localCount, MetricsTextFormatter.formatBytes(localBytes),
+                MetricsTextFormatter.formatPercent(localHitRate));
     }
 
 
     private static String formatLightCacheLine(HassiumMetricsImpl m) {
+        // MetricsSemantics §3：命中=影子复用(已收敛光)；重算=FULL/DELTA/欠光续算。
         // 剥光协商（lightComputeSupported=true）下 hasCachedLight 恒 false → 直连命中口径
         // 恒 0；光照复用由影子链路承担（key light.reuse.shadow.*），与直连命中合并展示为
         // 「命中」，不再单列。
@@ -150,7 +165,9 @@ public class HassiumCommandHandler {
     }
 
     private static String formatSavingsLine(HassiumMetricsImpl m) {
-        // 「流量节省」line（用户定稿）：流量节省 = 服务端实际推送 / 无 MOD 时要接收。
+        // MetricsSemantics §4：节省 = (noMod − actual) / noMod。
+        // noMod = 数据包 + 本地重算(SeedGen) + 避免的缓存全命中 + 光照柱等价 wire。
+        // actual 仅管线层 recordWireBytesReceived（含 SectionDelta payload）。
         // 无 MOD 应收 = 数据包 + 本地重算（SeedGen）+ 客户端缓存 + 光照（直连命中/影子复用/本地重算），
         // 统一为原版 Zlib 等价 wire。分段增量已按「若走全量的原版 Zlib 等价」计入数据包
         // （recordSectionDeltaReceived），不再单列；OVD 环带不计入（无 MOD 时服务端本来也不推）。

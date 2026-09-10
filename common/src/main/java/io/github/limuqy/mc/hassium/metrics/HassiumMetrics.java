@@ -1,7 +1,11 @@
 package io.github.limuqy.mc.hassium.metrics;
 
 /**
- * Hassium 性能指标接口
+ * Hassium 性能指标接口。
+ * <p>
+ * 客户端统计四行（区块缓存 / 区块加载 / 光照缓存 / 流量节省）的
+ * <b>语义真相源、展示公式、锚点表</b>见 {@link MetricsSemantics}。
+ * 出问题先对照那里区分「计算逻辑错」还是「取值锚点错」。
  */
 public interface HassiumMetrics {
 
@@ -86,21 +90,29 @@ public interface HassiumMetrics {
 
     /**
      * 获取直接从本地缓存加载的完整区块等价值字节数。
+     * <p>
+     * {@link MetricsSemantics} §1 全命中：影子端读取 + 服务端 UNCHANGED。
      */
     long getCacheHitFullChunkBytes();
 
     /**
      * 获取直接从本地缓存加载完整区块的区块数（与 {@link #getCacheHitFullChunkBytes()} 同步累加）。
+     * <p>
+     * {@link MetricsSemantics} §1 全命中计数。
      */
     long getCacheHitFullChunkCount();
 
     /**
      * 获取成功应用分段增量后计入部分命中的完整区块等价值字节数。
+     * <p>
+     * {@link MetricsSemantics} §1 部分命中/增量：DELTA 合并成功。
      */
     long getCacheDeltaSavedBytes();
 
     /**
      * 获取分段增量命中区块数（与 {@link #getCacheDeltaSavedBytes()} 同步累加）。
+     * <p>
+     * {@link MetricsSemantics} §1 部分命中计数。
      */
     long getCacheDeltaCount();
 
@@ -122,11 +134,17 @@ public interface HassiumMetrics {
 
     /**
      * 获取由无本地缓存导致的完整区块请求数。
+     * <p>
+     * {@link MetricsSemantics} §2：authoritative-full（SERVER_PUSH）分量。
+     * 展示「新增」= 本值 + stale + serverPush（与过期不互斥）。
      */
     long getNewFullChunkRequestCount();
 
     /**
      * 获取由缓存过期或技术性回退导致的完整区块请求数。
+     * <p>
+     * {@link MetricsSemantics} §2：compare-pull FULL（REMOTE_PULL）。
+     * 展示「过期」= 本值，是「新增」的子集标注，不是互斥分桶。
      */
     long getStaleFullChunkRequestCount();
 
@@ -142,6 +160,8 @@ public interface HassiumMetrics {
 
     /**
      * 获取 SeedGen 本地生成（影子服务端）区块数（无需向服务端请求）。
+     * <p>
+     * {@link MetricsSemantics} §2 本地：SeedGen，字节 = 整柱等价，不是 DELTA。
      */
     long getLocallyGeneratedChunkCount();
 
@@ -325,8 +345,9 @@ public interface HassiumMetrics {
 
     /**
      * 获取影子链路光照复用次数（key：light.reuse.shadow.count）。
-     * 剥光协商下直连口径 lightCacheHitCount 恒 0，影子命中路径的复用事件独立记账；
-     * 与直连口径同构、互不合并。
+     * <p>
+     * {@link MetricsSemantics} §3 命中：影子端读取已收敛光照（区块缓存全命中且
+     * isLightCorrect；或 OVD/renderOnly）。剥光协商下直连 lightCacheHitCount 恒 0。
      */
     long getLightReuseShadowCount();
 
@@ -338,6 +359,8 @@ public interface HassiumMetrics {
 
     /**
      * 获取缓存不含光照数据需重算的区块数（is_light_on=0）
+     * <p>
+     * {@link MetricsSemantics} §3 重算：所有需算光场景（FULL/DELTA/欠光续算）。
      */
     long getLightCacheMissCount();
 
@@ -452,7 +475,9 @@ public interface HassiumMetrics {
     }
 
     /**
-     * 无 MOD 时要接收的数据量（原版 Zlib 等价 wire）：
+     * 无 MOD 时要接收的数据量（原版 Zlib 等价 wire）。
+     * <p>
+     * {@link MetricsSemantics} §4 noMod 公式与锚点。
      * <p>
      * {@code 数据包 + 本地重算 + 客户端缓存 + 光照}：
      * <ul>

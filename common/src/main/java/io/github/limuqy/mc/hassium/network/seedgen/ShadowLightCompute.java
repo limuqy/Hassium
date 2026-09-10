@@ -147,6 +147,12 @@ public final class ShadowLightCompute {
      * {@code tryRequestMiss}，若共用则后续 inject/落地不再记，R1 applied 恒为 0。
      */
     private static final java.util.Set<Long> accountedIngress = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    /**
+     * 网络全量已入影子管线、尚未完成落地记账的柱。注入时登记，落地/断连清除。
+     * 用于堵 generated→inflight 竞态窗口：tracking redeliver/materialize 在此窗口
+     * 看到「已注入但无 accountedIngress」会把网络柱误 publish 成缓存全命中。
+     */
+    private static final java.util.Set<Long> networkInFlight = java.util.concurrent.ConcurrentHashMap.newKeySet();
     /** hash 全命中已记账柱（复合键）。同一柱磁盘命中后再收到 hash 会走内存命中，不得再加一次。 */
     private static final java.util.Set<Long> accountedCacheHits = java.util.concurrent.ConcurrentHashMap.newKeySet();
     /** 光照命中/重算已记账柱（复合键）。邻柱 LIGHT_ONLY 补光会把同一片柱刷成千上万次。 */
@@ -358,6 +364,7 @@ public final class ShadowLightCompute {
     public static void resetRequestDedupForReconnect() {
         requestedMisses.clear();
         accountedIngress.clear();
+        networkInFlight.clear();
         accountedCacheHits.clear();
         accountedLights.clear();
     }
@@ -566,9 +573,12 @@ public final class ShadowLightCompute {
 
     /**
      * 网络直推柱落地记账（新增 / 过期二选一分类）。
+     * <p>
+     * MetricsSemantics §2：stale=false 新增（SERVER_PUSH）；stale=true 过期（REMOTE_PULL
+     * compare-pull FULL，或服务端 hash 不匹配重推）。
      *
-     * @param staleOrFallback true = 影子副本 hash 与远端不一致的重推（旧口径「过期」，
-     *                        {@code recordFullChunkRequests(stale=true)} 分类），false = 全新柱
+     * @param staleOrFallback true = 影子副本 hash 与远端不一致的重推 / compare-pull FULL
+     *                        （过期桶），false = 全新柱 / authoritative-full（新增桶）
      */
     static void accountVisibleNetworkIngress(String dimension, ChunkPos pos, boolean staleOrFallback) {
         if (pos == null) {
@@ -576,21 +586,34 @@ public final class ShadowLightCompute {
         }
         String resolved = dimension == null ? currentDimension() : dimension;
         long key = DimensionKey.key(resolved, pos.x, pos.z);
+        // 同柱已按缓存全命中记账：不得再记网络全量（防跨路径双计）
+        if (accountedCacheHits.contains(key)) {
+            return;
+        }
         if (!accountedIngress.add(key)) {
             return;
         }
         requestedMisses.add(key);
+        networkInFlight.remove(key);
         io.github.limuqy.mc.hassium.metrics.NetworkStats.recordFullChunkRequests(
                 1, io.github.limuqy.mc.hassium.metrics.NetworkStats.ESTIMATED_CHUNK_BYTES, staleOrFallback);
     }
 
-    /** 客户端实际落地的缓存全量柱按键去重，磁盘与内存复用不得重复记账。 */
+    /**
+     * 客户端实际落地的缓存全量柱按键去重，磁盘与内存复用不得重复记账。
+     * <p>
+     * MetricsSemantics §1 全命中锚点：UNCHANGED / 内存 hash 一致复用落地时调用。
+     */
     public static boolean accountCacheFullHit(String dimension, ChunkPos pos) {
         if (pos == null) {
             return false;
         }
         String resolved = dimension == null ? currentDimension() : dimension;
         long key = DimensionKey.key(resolved, pos.x, pos.z);
+        // 同柱已按网络全量记账：不得再记缓存命中（R1 双路径假命中）
+        if (accountedIngress.contains(key)) {
+            return false;
+        }
         if (!accountedCacheHits.add(key)) {
             return false;
         }
@@ -608,6 +631,12 @@ public final class ShadowLightCompute {
      */
     public static boolean publishCachedChunk(String dimension, ChunkPos pos) {
         if (pos == null || !isEnabled()) {
+            return false;
+        }
+        // 仅挡「当前在途」的网络全量：历史 accountedIngress 属于上一会话/已落地，
+        // 不得阻止 R2 UNCHANGED 缓存复用。
+        if (pos != null && networkInFlight.contains(
+                DimensionKey.key(dimension == null ? currentDimension() : dimension, pos.x, pos.z))) {
             return false;
         }
         String resolved = dimension == null ? currentDimension() : dimension;
@@ -637,6 +666,24 @@ public final class ShadowLightCompute {
 
     public static long hashMemoryHitCount() {
         return hashMemoryHits.get();
+    }
+
+    /** 本会话已按网络全量记过账（SERVER_PUSH/REMOTE_PULL 落地或注入）。 */
+    public static boolean wasNetworkIngress(String dimension, ChunkPos pos) {
+        if (pos == null) {
+            return false;
+        }
+        String resolved = dimension == null ? currentDimension() : dimension;
+        long key = DimensionKey.key(resolved, pos.x, pos.z);
+        if (accountedIngress.contains(key) || networkInFlight.contains(key) || hasClientApplyEpoch(resolved, pos)) {
+            return true;
+        }
+        GenEntry queued = generated.get(key);
+        if (queued != null && isNetworkOrigin(queued.traceOrigin)) {
+            return true;
+        }
+        InflightLight inflight = inflightLight.get(key);
+        return inflight != null && isNetworkOrigin(inflight.traceOrigin);
     }
 
     public static long hashMemoryMismatchCount() {
@@ -695,6 +742,14 @@ public final class ShadowLightCompute {
             return;
         }
         if (origin == TraceOrigin.SECTION_DELTA || origin == null) {
+            return;
+        }
+        // 区块加载分桶（MetricsSemantics §2）：新增与过期不互斥。
+        //   REMOTE_PULL（compare-pull FULL）→ stale=true，展示时作为「过期」子集标注，
+        //   同时计入「新增」（网络全量）。
+        //   SERVER_PUSH → stale=false，仅计「新增」。
+        if (origin == TraceOrigin.REMOTE_PULL) {
+            accountVisibleNetworkIngress(dimension, pos, true);
             return;
         }
         accountVisibleNetworkIngress(dimension, pos);
@@ -1024,6 +1079,9 @@ public final class ShadowLightCompute {
         if (chunk == null || level == null) {
             return;
         }
+        if (isNetworkOrigin(origin == null ? TraceOrigin.SERVER_PUSH : origin)) {
+            networkInFlight.add(key);
+        }
         generated.put(key, new GenEntry(chunk, level, false, false,
                 origin == null ? TraceOrigin.SERVER_PUSH : origin));
         pump();
@@ -1125,10 +1183,24 @@ public final class ShadowLightCompute {
         if (dimension == null || !DimensionKey.isCacheableDimension(dimension)) {
             return false;
         }
-        generated.put(DimensionKey.key(dimension, pos.x, pos.z),
-                new GenEntry(chunk, level, false, false, traceOrigin));
+        // 光照缓存命中锚点：存档/引擎光已收敛时记 REUSE_CACHE，否则 RECOMPUTE。
+        // 与内存 hash 一致复用路径（!needRelight = isLightCorrect）同源。
+        // 写死 false 会让 UNCHANGED 全命中轮光照 100% 重算。
+        boolean lightReuse = chunk.isLightCorrect();
+        long key = DimensionKey.key(dimension, pos.x, pos.z);
+        // 同柱已有网络来源（SERVER_PUSH/REMOTE_PULL）时禁止被 cache publish 覆盖来源——
+        // 否则 R1 首进全量推送会被改写成 MEMORY_CACHE 假全命中。
+        GenEntry queued = generated.get(key);
+        if (queued != null && isNetworkOrigin(queued.traceOrigin) && !isNetworkOrigin(traceOrigin)) {
+            return true;
+        }
+        generated.put(key, new GenEntry(chunk, level, lightReuse, false, traceOrigin));
         pump();
         return true;
+    }
+
+    private static boolean isNetworkOrigin(TraceOrigin origin) {
+        return origin == TraceOrigin.SERVER_PUSH || origin == TraceOrigin.REMOTE_PULL;
     }
 
 
@@ -1265,8 +1337,14 @@ public final class ShadowLightCompute {
                                 continue;
                             }
                             SmokeChunkTrace.recordShadowInjected(dimension, pos);
+                            // 已有内存柱：优先保留原投递来源（SERVER_PUSH/REMOTE_PULL）。
+                            // 无条件写 MEMORY_CACHE 会把「shadow 未就绪时进 pending、
+                            // 就绪后 existing 命中」的 R1 网络柱改记成假缓存全命中。
+                            TraceOrigin reuseOrigin = pendingEntry.traceOrigin() != null
+                                    ? pendingEntry.traceOrigin()
+                                    : traceOrigin(TraceOrigin.SHADOW_MEMORY_CACHE);
                             generated.put(e.getKey(), new GenEntry(existing, server.level(dimension), !needRelight,
-                                    false, traceOrigin(TraceOrigin.SHADOW_MEMORY_CACHE)));
+                                    false, reuseOrigin));
                             // 已有内存柱且 hash 未知/一致：复用现有柱，只把它送入光照阶段。
                             // 必须跳过下面的 injectChunk；REPLACE 会清空刚由邻柱传播来的光。
                             continue;
@@ -1334,10 +1412,14 @@ public final class ShadowLightCompute {
                         io.github.limuqy.mc.hassium.metrics.NetworkStats.recordSectionDeltaReceived(1,
                                 io.github.limuqy.mc.hassium.metrics.VanillaZlibEstimator.estimate(
                                         (int) io.github.limuqy.mc.hassium.metrics.NetworkStats.ESTIMATED_CHUNK_BYTES));
+                        // 区块已变必须重算光。barrier 忙时不得静默丢弃——回队下轮再提交，
+                        // 否则 R2「部分命中>0 但光照重算=0」。
                         if (!isChunkBarrierBusy(key)) {
                             lightTasks.add(new LightTask(key, LightSource.DELTA, null,
                                     baseline, server.level(work.dimension()), LightMetric.RECOMPUTE,
                                     false, traceOrigin(TraceOrigin.SECTION_DELTA)));
+                        } else {
+                            pendingDeltas.put(key, work);
                         }
                     }
                 }
@@ -2128,6 +2210,7 @@ public final class ShadowLightCompute {
         lightUpdates.clear();
         requestedMisses.clear();
         accountedIngress.clear();
+        networkInFlight.clear();
         accountedCacheHits.clear();
         accountedLights.clear();
         resetHashClassify();
@@ -2159,7 +2242,8 @@ public final class ShadowLightCompute {
     }
 
     private static TraceOrigin traceOrigin(TraceOrigin origin) {
-        return ClientChunkHandler.traceOriginIfLoggingEnabled(origin);
+        // 统计归因不得依赖 CHUNK_APPLY 日志开关；日志关时 strip 成 null 会让落地记账整段跳过。
+        return origin;
     }
 
     private static long chunkPosKey(ChunkPos pos) {

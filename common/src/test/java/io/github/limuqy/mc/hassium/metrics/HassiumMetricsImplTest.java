@@ -44,19 +44,23 @@ class HassiumMetricsImplTest {
     void shardEquivBytesScalesByChangedSections() {
         assertEquals(0L, NetworkStats.shardEquivBytes(0, 24));
         assertEquals(0L, NetworkStats.shardEquivBytes(2, 0));
-        assertEquals(16_384L * 2 / 24, NetworkStats.shardEquivBytes(2, 24));
+        // 向上取整：16KB×2/24 = 1365 余 8 → 1366
+        assertEquals(1_366L, NetworkStats.shardEquivBytes(2, 24));
         assertEquals(16_384L, NetworkStats.shardEquivBytes(24, 24));
         assertEquals(16_384L, NetworkStats.shardEquivBytes(30, 24));
     }
 
     @Test
     void shardEquivBytesProratesBlockListCells() {
-        // 1×2 巷道 32 格 / 24 段：16KB × 32 / (24×4096) = 5
-        assertEquals(16_384L * 32 / (24 * 4096), NetworkStats.shardEquivBytes(32L, 24));
+        // 32 格 / 24 段：16KB×32/98304 = 5.33 → 向上取整 6
+        assertEquals(6L, NetworkStats.shardEquivBytes(32L, 24));
         // 一段 FULL = 4096 格，与「1 个变更 section」同值
         assertEquals(NetworkStats.shardEquivBytes(1, 24), NetworkStats.shardEquivBytes(4096L, 24));
         assertEquals(0L, NetworkStats.shardEquivBytes(0L, 24));
         assertEquals(16_384L, NetworkStats.shardEquivBytes(24L * 4096, 24));
+        // 小改动不得被整除成 0（R2 部分命中>0、增量=0 假象）
+        assertEquals(1L, NetworkStats.shardEquivBytes(1L, 24));
+        assertEquals(1L, NetworkStats.shardEquivBytes(5L, 24));
     }
 
     @Test

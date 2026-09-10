@@ -320,13 +320,13 @@ ERROR / WARN 始终输出。
 | `/hassium stats` | 服务端 | 压缩/发送统计（需 OP 2） |
 | `/hassium stats reset` / `toggle` | 服务端 | 重置计数器 / 切换指标收集 |
 | `/hassium metrics on\|off` | 服务端 | 运行时开关指标 |
-| `/hassiumc stats` | 客户端 | 接收/缓存命中（全命中+部分命中−增量 / 应用，按字节；本地生成不算缓存）/超视渲染/光照/区块加载（新增/过期/**本地生成**）/流量节省（实际/无MOD应收）统计 |
+| `/hassiumc stats` | 客户端 | 接收/缓存命中（全命中+部分命中−增量 / 应用，按字节；本地生成不算缓存）/超视渲染/光照/区块加载（新增/**本地**/**本地命中**）/流量节省（实际/无MOD应收）统计 |
 | `/hassiumc export [<服务器IP>] [seed]` | 客户端 | 拷贝影子端 `world` 目录。`level.dat` 已由影子端原版写出；亦可手工把 `hassium_cache/<id>/world` 复制到 `saves/` |
 | `/hassium migrate` / `list` / `status` / `<host:port>` | 客户端 | 已退役（直连拓扑无迁移面）：保留为退役提示，不执行任何迁移 |
 
 实现：`metrics/NetworkStats`（`AtomicLong`，可关闭）。指标关闭时相关 stats 命令不可用。导出走 `CacheWorldExporter`（异步，见 `chunk-cache.md` §12）。
 
-客户端 stats 的「区块加载」行口径：`新增` = 客户端 Compare + Pull 发出的无本地 baseline FULL；`过期` = 缓存过期/技术性回退 FULL；`本地` = SeedGen 影子服务端本地生成。正常影子 tracking 的原版整柱推送单列为 `serverPushApplied`，**不得**计为客户端 FULL 请求。运行时 Probe 同时输出累计 `clientAppliedChunkCount`、`ClientChunkCache.loadedChunks` 和 trace 候选的 `actualPresent`；mesh 是异步渲染阶段，单次探针的未编译柱只作 `TRACE_MESH_PENDING` 诊断，不能取代实际驻留门禁。
+客户端 stats 的「区块加载」行口径：`新增` = 网络全量落地（authoritative-full SERVER_PUSH + compare-pull FULL REMOTE_PULL）；`本地` = SeedGen 影子服务端本地生成；`本地命中` = 本地生成字节 / (网络全量 + 本地生成)。不再展示「过期」（内部 `staleFullChunkRequestCount` 仍供探针）。真相源见 `MetricsSemantics` §2。运行时 Probe 同时输出累计 `clientAppliedChunkCount`、`ClientChunkCache.loadedChunks` 和 trace 候选的 `actualPresent`；mesh 是异步渲染阶段，单次探针的未编译柱只作 `TRACE_MESH_PENDING` 诊断，不能取代实际驻留门禁。
 
 ## 12. 卖点特性（已实现摘要）
 

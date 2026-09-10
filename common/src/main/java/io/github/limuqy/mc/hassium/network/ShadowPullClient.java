@@ -220,6 +220,11 @@ public final class ShadowPullClient {
                 try {
                     ShadowLightCompute.submitDelta(SectionDeltaS2CPacket.decode(buffer));
                     io.github.limuqy.mc.hassium.metrics.NetworkStats.recordSectionDeltaRequestsSent(1);
+                    // 流量节省 actual 锚点：SectionDelta 线缆字节。decode 只记 zstd 对，
+                    // 禁止在 recordSectionDeltaReceived 写 actual（防双重计数）。
+                    // 漏记会让重连轮 actual=0 → 流量节省虚高 100%。
+                    io.github.limuqy.mc.hassium.metrics.NetworkStats.recordWireBytesReceived(
+                            result.payload().length);
                 } catch (Throwable t) {
                     Constants.LOG.warn("[SHADOW_PULL] Failed to apply DELTA ({}, {}), retrying FULL",
                             result.chunkX(), result.chunkZ(), t);

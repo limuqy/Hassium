@@ -249,6 +249,10 @@ public final class ShadowTrackingSession {
             if (ShadowLightCompute.hasClientApplyEpoch(currentDimension, pos)) {
                 continue; // 已有落地凭据
             }
+            // 本会话网络路径已在途/已记账：redeliver 不得再记成缓存全命中
+            if (ShadowLightCompute.wasNetworkIngress(currentDimension, pos)) {
+                continue;
+            }
             if (ShadowLightCompute.publishCachedChunk(currentDimension, pos)) {
                 DebugLogger.info(DebugLogger.LogType.NETWORK,
                         "[SHADOW_TRACK] redeliver ({}, {}) -> publishCached (dimension={})",
@@ -675,7 +679,17 @@ public final class ShadowTrackingSession {
             }
             return;
         }
-        // 进边沿必交付：等价原版 trackChunk
+        // 本会话网络全量已注入/落地：交付由 SERVER_PUSH/REMOTE_PULL 路径完成。
+        // 再 publishCachedChunk 会把同一柱改记成 MEMORY_CACHE 假全命中（R1 1219 假命中根因）。
+        if (alreadyMaterialized
+                && (ShadowLightCompute.wasNetworkIngress(dimension, pos)
+                    || ShadowLightCompute.hasClientApplyEpoch(dimension, pos))) {
+            if (ShadowLightCompute.tryRequestMiss(dimension, pos)) {
+                ShadowPullClient.requestFull(dimension, java.util.List.of(pos));
+            }
+            return;
+        }
+        // 进边沿必交付：等价原版 trackChunk（仅真正的本地基线：盘上命中 / 上一会话缓存）
         boolean published = ShadowLightCompute.publishCachedChunk(dimension, pos);
         if (!published) {
             DebugLogger.info(DebugLogger.LogType.NETWORK,
@@ -692,6 +706,19 @@ public final class ShadowTrackingSession {
         if (ShadowLightCompute.tryRequestMiss(dimension, pos)) {
             ShadowPullClient.requestFull(dimension, java.util.List.of(pos));
         }
+    }
+
+    /**
+     * 网络全量已由 {@code enqueueInjectedForLight} 入 generated（保留网络来源）。
+     * 本方法只清形状扫描在途登记，<b>不得</b>再 publishCachedChunk——否则同一柱
+     * 来源被覆盖成 MEMORY_CACHE，R1 首进被误记成缓存全命中。
+     */
+    public void onNetworkChunkQueued(String dimension, ChunkPos pos) {
+        if (pos == null) {
+            return;
+        }
+        sweepInFlight.remove(io.github.limuqy.mc.hassium.utils.DimensionKey
+                .key(dimension == null ? currentDimension : dimension, pos.x, pos.z));
     }
 
     /**

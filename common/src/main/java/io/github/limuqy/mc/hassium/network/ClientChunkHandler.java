@@ -69,9 +69,12 @@ public class ClientChunkHandler {
         return PENDING_PULL_APPLY.compareAndSet(ChunkPos.asLong(chunkX, chunkZ), Long.MIN_VALUE);
     }
 
-    /** 仅在区块应用日志开启时让内部队列携带来源元数据。 */
+    /**
+     * 统计/落地归因必须始终携带真实来源。曾经按 CHUNK_APPLY 日志开关 strip 成 null，
+     * 导致生产（日志关）下 {@code accountAuthoritativeLanded} 整段跳过、区块加载恒 0。
+     */
     public static TraceOrigin traceOriginIfLoggingEnabled(TraceOrigin origin) {
-        return DebugLogger.isEnabled(LogType.CHUNK_APPLY) ? origin : null;
+        return origin;
     }
 
     /**

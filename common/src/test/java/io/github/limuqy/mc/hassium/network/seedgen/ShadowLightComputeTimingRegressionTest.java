@@ -255,6 +255,32 @@ class ShadowLightComputeTimingRegressionTest {
     }
 
     @Test
+    @DisplayName("MetricsSemantics §2：SERVER_PUSH→新增分量；REMOTE_PULL→过期标注（不互斥）")
+    void comparePullFullBucketsAsStaleNotNew() {
+        NetworkStats.reset();
+        NetworkStats.setEnabled(true);
+        try {
+            ChunkPos push = new ChunkPos(10, 11);
+            ChunkPos pullFull = new ChunkPos(12, 13);
+            ShadowLightCompute.accountAuthoritativeLanded(DimensionKey.OVERWORLD, push,
+                    ClientChunkHandler.TraceOrigin.SERVER_PUSH);
+            ShadowLightCompute.accountAuthoritativeLanded(DimensionKey.OVERWORLD, pullFull,
+                    ClientChunkHandler.TraceOrigin.REMOTE_PULL);
+
+            assertEquals(1, NetworkStats.getMetrics().getNewFullChunkRequestCount(),
+                    "authoritative-full 记入新增分量");
+            assertEquals(1, NetworkStats.getMetrics().getStaleFullChunkRequestCount(),
+                    "compare-pull FULL 记入过期标注");
+            assertEquals(2, NetworkStats.getMetrics().getFullChunkRequestCount(),
+                    "新增展示口径 = new + stale，二者不互斥对冲");
+        } finally {
+            ShadowLightCompute.onDisconnect();
+            NetworkStats.reset();
+            NetworkStats.setEnabled(false);
+        }
+    }
+
+    @Test
     @DisplayName("分段增量落地不得记全量 miss；磁盘复用记命中")
     void deltaLandDoesNotCountAsFullRequestAndDiskCountsAsHit() {
         NetworkStats.reset();

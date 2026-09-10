@@ -663,6 +663,8 @@ public class HassiumMetricsImpl implements HassiumMetrics {
 
     /**
      * 记录直接从本地缓存加载的完整区块等价值。每调用 1 次计 1 chunk。
+     * <p>
+     * {@link MetricsSemantics} §1 全命中锚点实现。
      */
     public void recordCacheFullHit(long bytes) {
         cacheHitFullChunkCount.incrementAndGet();
@@ -673,6 +675,8 @@ public class HassiumMetricsImpl implements HassiumMetrics {
 
     /**
      * 记录成功应用分段增量后避免加载完整区块的字节数。每调用 1 次计 1 delta chunk。
+     * <p>
+     * {@link MetricsSemantics} §1 部分命中/增量锚点实现。
      */
     public void recordCacheDeltaSaved(long bytes) {
         cacheDeltaCount.incrementAndGet();
@@ -693,6 +697,8 @@ public class HassiumMetricsImpl implements HassiumMetrics {
 
     /**
      * 记录已成功发出的完整区块请求。
+     * <p>
+     * {@link MetricsSemantics} §2：新增与过期不互斥——stale 是新增中 compare-pull FULL 的子集标注。
      */
     public void recordFullChunkRequests(long chunkCount, long bytes, boolean staleOrFallback) {
         if (chunkCount <= 0 || bytes <= 0) {
@@ -712,6 +718,8 @@ public class HassiumMetricsImpl implements HassiumMetrics {
     /**
      * 记录 SeedGen 本地生成成功的完整区块。每调用 1 次计 1 chunk；bytes 为其等价值
      * （本地生成替代一次全量请求，口径与 {@link NetworkStats#ESTIMATED_CHUNK_BYTES} 一致）。
+     * <p>
+     * {@link MetricsSemantics} §2 本地锚点实现：整柱等价，不是 DELTA。
      */
     public void recordLocallyGeneratedChunk(long bytes) {
         locallyGeneratedChunkCount.incrementAndGet();
@@ -794,6 +802,8 @@ public class HassiumMetricsImpl implements HassiumMetrics {
      * {@link #recordLightCacheHit(long)} 不触发）。影子端内存/磁盘缓存命中 + 收敛光直接回传
      * 的复用事件由本方法独立记账（key：light.reuse.shadow.count / light.reuse.shadow.bytes），
      * 与直连口径同构、互不合并（指标可区分直连/影子口径）。
+     * <p>
+     * {@link MetricsSemantics} §3 命中锚点实现。
      *
      * @param bytes 等价字节数（口径与 {@link NetworkStats#ESTIMATED_LIGHT_BYTES} 一致，每 chunk 16KB）
      */
@@ -813,6 +823,8 @@ public class HassiumMetricsImpl implements HassiumMetrics {
 
     /**
      * 记录光照缓存未命中及等价字节数。
+     * <p>
+     * {@link MetricsSemantics} §3 重算锚点实现。
      */
     public void recordLightCacheMiss(long bytes) {
         lightCacheMissCount.incrementAndGet();
@@ -970,8 +982,9 @@ public class HassiumMetricsImpl implements HassiumMetrics {
 
     /**
      * 记录分段增量成功应用：计入 vanilla 等价字节（vanilla 不发 delta，会发整 chunk Zlib wire）
-     * + sectionDelta 区块计数；与 actual（管线层 recordWireBytesReceived 累得 SectionDelta
-     * 入站 wire ZSTD 字节）口径一致。收到即记会在「apply 失败 → 回退全量」场景把同一区块计两次，
+     * + sectionDelta 区块计数。<b>actual 禁止在此写</b>——由 {@code ShadowPullClient}
+     * DELTA 成功路径调 {@code recordWireBytesReceived} 统一记线缆字节（见
+     * {@link MetricsSemantics} §4）。收到即记会在「apply 失败 → 回退全量」场景把同一区块计两次，
      * 因此仅在 consumeLoop 成功应用后调用。
      * <p>
      * SectionDelta 在 vanilla 等价 = vanilla 不发 delta，只会在 chunk 变化时发完整 chunk packet（含光）

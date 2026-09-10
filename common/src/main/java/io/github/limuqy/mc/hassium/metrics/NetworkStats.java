@@ -166,6 +166,8 @@ public class NetworkStats {
 
     /**
      * 记录 SeedGen 本地生成成功的完整区块（影子服务端生成，未向服务端请求）。
+     * <p>
+     * {@link MetricsSemantics} §2 本地锚点：字节 = 整柱等价，不是 DELTA。
      *
      * @param bytes 等价值字节（口径与 {@link #ESTIMATED_CHUNK_BYTES} 一致）
      */
@@ -203,10 +205,13 @@ public class NetworkStats {
 
     /**
      * 线缆入站帧字节（管线 decode 消费的 in 增量）。
-     * <p>Primary：{@code ZstdContextDecoder}；Data：{@code DataPlaneClientBundle#onBulkArrived}
-     * （UDP 应用帧 payload）。应用层（{@code ClientChunkHandler} 等）禁止再写，避免双重计数。
-     * 保证多通道场景下 {@code actualBytesReceived} 覆盖 Primary + Data 两路 actual wire 字节,
-     * 让 {@code getReceiveBandwidthSavingPercent} 公式 (vanilla - actual) / vanilla 不再漏算。
+     * <p>
+     * {@link MetricsSemantics} §4 流量节省 actual 唯一写入口。
+     * <p>
+     * Primary：{@code ZstdContextDecoder}；Data：{@code DataPlaneClientBundle#onBulkArrived}
+     * （UDP 应用帧 payload）。区块域：chunk_payload、shadow-pull FULL、
+     * <b>SectionDelta payload</b>（{@code ShadowPullClient} DELTA 成功路径）。
+     * 应用层其他路径禁止再写 actual，避免双重计数。
      */
     public static void recordWireBytesReceived(int wireBytes) {
         if (!enabled) return;
@@ -315,6 +320,8 @@ public class NetworkStats {
 
     /**
      * 记录直接从本地缓存加载的完整区块等价值。
+     * <p>
+     * {@link MetricsSemantics} §1 全命中锚点：UNCHANGED / 内存 hash 一致复用。
      */
     public static void recordCacheFullHit(long bytes) {
         if (!enabled) return;
@@ -333,6 +340,8 @@ public class NetworkStats {
 
     /**
      * 记录成功应用分段增量后避免加载完整区块的字节数。
+     * <p>
+     * {@link MetricsSemantics} §1 部分命中/增量锚点：DELTA 合并成功。
      */
     public static void recordCacheDeltaSaved(long bytes) {
         if (!enabled) return;
@@ -350,6 +359,7 @@ public class NetworkStats {
 
     /**
      * 变更格子折成完整区块等价值：{@code 16KB × changedCells / (sectionCount × 4096)}。
+     * 有变更时向上取整，避免小改动被整除成 0（R2「部分命中>0、增量=0」假象）。
      */
     public static long shardEquivBytes(long changedCells, int sectionCount) {
         if (changedCells <= 0L || sectionCount <= 0) {
@@ -357,7 +367,13 @@ public class NetworkStats {
         }
         long denom = (long) sectionCount * SectionPlaneSyndrome.CELLS;
         long cells = Math.min(changedCells, denom);
-        return ESTIMATED_CHUNK_BYTES * cells / denom;
+        long product = ESTIMATED_CHUNK_BYTES * cells;
+        long quotient = product / denom;
+        if (quotient == 0L) {
+            return 1L; // 有实际变更至少记 1 B，保证「增量」列可观察
+        }
+        long rem = product % denom;
+        return rem == 0L ? quotient : quotient + 1L;
     }
 
     /**
@@ -373,10 +389,13 @@ public class NetworkStats {
 
     /**
      * 记录已成功发出的完整区块请求及其来源。
+     * <p>
+     * {@link MetricsSemantics} §2：新增与过期不互斥——过期是新增中 compare-pull FULL 的子集。
+     * stale=false → SERVER_PUSH；stale=true → REMOTE_PULL（compare-pull FULL）。
      *
      * @param chunkCount       请求的区块数
      * @param bytes            统一完整区块等价值字节数
-     * @param staleOrFallback  是否由缓存过期或技术性回退触发
+     * @param staleOrFallback  是否 compare-pull FULL / hash 不匹配重推（过期标注）
      */
     public static void recordFullChunkRequests(int chunkCount, long bytes, boolean staleOrFallback) {
         if (!enabled) return;
@@ -408,7 +427,11 @@ public class NetworkStats {
     }
 
     /**
-     * 记录成功应用的分段增量（仅记 vanilla 等价 + 计数；actual 由管线层 recordWireBytesReceived 统一记）。
+     * 记录成功应用的分段增量（仅记 vanilla 等价 + 计数）。
+     * <p>
+     * {@link MetricsSemantics} §1 部分命中配套的 vanilla 等价；
+     * <b>actual 禁止在此写</b>——由 {@code ShadowPullClient} DELTA 成功路径
+     * 调 {@link #recordWireBytesReceived} 统一记线缆字节。
      * 收到即记会在「apply 失败 → 回退全量」场景重复计入同一区块，因此调用点 = 成功应用后。
      *
      * @param chunks       成功应用的区块数
@@ -439,6 +462,8 @@ public class NetworkStats {
 
     /**
      * 记录影子链路光照复用（key：{@code light.reuse.shadow.count} / {@code light.reuse.shadow.bytes}）。
+     * <p>
+     * {@link MetricsSemantics} §3 命中锚点：区块缓存全命中且 isLightCorrect / OVD。
      * 剥光协商（lightComputeSupported=true）后服务端包不带光 → hasCachedLight 恒 false，
      * 直连口径 {@link #recordLightCacheHit(long)} 不触发（P2 指标死区根因）；影子端
      * 内存/磁盘缓存命中 + 收敛光直接回传的复用事件由本方法独立记账，
@@ -475,6 +500,8 @@ public class NetworkStats {
 
     /**
      * 记录光照缓存未命中及等价字节数。
+     * <p>
+     * {@link MetricsSemantics} §3 重算锚点：FULL/DELTA/欠光续算光屏障提交。
      */
     public static void recordLightCacheMiss(long bytes) {
         if (!enabled) return;

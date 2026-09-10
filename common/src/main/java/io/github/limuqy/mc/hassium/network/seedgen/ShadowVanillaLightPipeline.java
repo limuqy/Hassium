@@ -61,10 +61,11 @@ public final class ShadowVanillaLightPipeline {
         // 区块来源指标只能在 ClientChunkCache 实际落地后记账；此处仅排入光屏障。
         // CACHE_SNAPSHOT 因此不会伪装成网络 full miss。
         ShadowLightCompute.enqueueInjectedForLight(resolvedDimension, pos, origin);
-        // 兜底：pull FULL 注入后若无悬置 future，playerLoadedChunk 桥不会触发。
-        // REMOTE_FULL（权威 pull 响应）需要直接触发 compare-pull 到真实客户端。
+        // 不得再走 onPullInjected → publishCachedChunk：那会把同一柱的 SERVER_PUSH/
+        // REMOTE_PULL 来源覆盖成 MEMORY_CACHE，R1 首进被误记成缓存全命中（区块加载恒 0）。
+        // 交付已由 enqueueInjectedForLight 入 generated 光屏障完成；这里只清形状扫描在途。
         if (source == ShadowChunkSource.REMOTE_FULL) {
-            ShadowTrackingSession.getInstance().onPullInjected(resolvedDimension, pos);
+            ShadowTrackingSession.getInstance().onNetworkChunkQueued(resolvedDimension, pos);
         }
     }
 

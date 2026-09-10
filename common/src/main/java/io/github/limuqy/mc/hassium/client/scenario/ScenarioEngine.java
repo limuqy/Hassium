@@ -989,10 +989,31 @@ public final class ScenarioEngine {
         }
 
 
+        // 4) R1 语义门禁：清缓存首进不得出现「网络全量=0 且缓存全命中>0」的假命中。
+        //    （来源被 publishCachedChunk 改写 / origin 被日志开关 strip 成 null 的回归锚）
+        if (roundLabel != null && roundLabel.contains("ROUND1")) {
+            long fullReq = m.getFullChunkRequestCount();
+            long fullHit = m.getCacheHitFullChunkCount();
+            if (fullReq == 0 && fullHit > 64) {
+                LOGGER.error("{} {} stats validation FAILED: R1 has no network full load " +
+                                "but cacheHitFull={} (origin misclassified as cache)",
+                        MARKER_FAIL, roundLabel, fullHit);
+                ok = false;
+            }
+        }
+
+        // 5) 区块加载行：结构须含「本地命中」，不再要求「过期」。
+        if (!plain.contains("本地命中")) {
+            LOGGER.error("{} {} stats validation FAILED: load line missing 本地命中", MARKER_FAIL, roundLabel);
+            ok = false;
+        }
+
         if (ok) {
-            LOGGER.info("HassiumSmokeTest: stats OK applied={} cacheRate={}% trafficRatio={}%",
+            LOGGER.info("HassiumSmokeTest: stats OK applied={} cacheRate={}% fullReq={} cacheHit={} trafficRatio={}%",
                     applied,
                     String.format(java.util.Locale.ROOT, "%.1f", m.getEffectiveCacheHitRate() * 100.0),
+                    m.getFullChunkRequestCount(),
+                    m.getCacheHitFullChunkCount(),
                     String.format(java.util.Locale.ROOT, "%.1f", m.getTrafficSavingsPercent()));
         }
         return ok;
