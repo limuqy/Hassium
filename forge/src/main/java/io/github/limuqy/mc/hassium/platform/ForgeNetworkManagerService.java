@@ -19,11 +19,6 @@ public class ForgeNetworkManagerService implements INetworkManagerService {
     private static final ForgeNetworkManager NETWORK_MANAGER = new ForgeNetworkManager();
 
     @Override
-    public void sendSeedRef(ServerPlayer player, FriendlyByteBuf buf) {
-        NETWORK_MANAGER.sendSeedRef(player, buf);
-    }
-
-    @Override
     public void sendBlockEntityRequest(FriendlyByteBuf buf) {
         NETWORK_MANAGER.sendBlockEntityRequest(buf);
     }

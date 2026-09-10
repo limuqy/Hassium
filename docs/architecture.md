@@ -89,7 +89,7 @@ Hassium/
 |----|------|
 | `storage/`（存储域） | `HassiumChunkWriteBuffer`（type 126 payload 写缓冲）、`ShadowStorageHashes`（进程内 chunkHash/光脏桥）、`ShadowStorageManager` / `ShadowRegionHeat`（region 映像 + `heat.idx`）；type 126 压缩由 `compression/CompressionService` 收口 |
 | `compression/`（存储域） | `CompressionCodec` / `CompressionService`、字典注册 |
-| `network/`（直连传输面） | 登录期握手（`network/handshake/`）+ 服务端区块推送（`ServerChunkPushManager`、`SeedRef`/vanilla chunk push）+ 聚合链（字典 ZSTD；`ConnectionChannelAccess`）；不再以客户端 Bloom/hash 决定 admission |
+| `network/`（直连传输面） | 登录期握手（`network/handshake/`）+ 统一 Compare+Pull（`ServerChunkPushManager.resolveShadowPull` / `ShadowPullClient`）+ 聚合链（字典 ZSTD；`ConnectionChannelAccess`）；SeedRef 推送已退役 |
 | `network/seedgen/`（区块核心 = 影子端后端引擎） | `ShadowSeedServer` 运行虚拟 `ServerPlayer`，由 `ServerChunkCache` / `ChunkMap` / `ChunkHolder` 管理加载、卸载、ChunkStatus 与光照；`ShadowCacheEviction` 负责缓存淘汰 |
 | `network/handshake/`（登录握手） | 双端能力协商与 Play 激活链（1.20.1 login query / 1.20.2+ 配置阶段 payload） |
 | `network/ClientChunkHandler` → `ClientChunkPipeline` | 仅负责 vanilla payload 解包、官方 packet apply 与状态降级；不维护独立视距/halo |
@@ -278,8 +278,8 @@ Sector 2+:    [length(4)][type=126][magic 0x48][hash(8)][ZSTD 压缩数据]
 | `chunk.cleanupIntervalTicks` | 6000 | 清理检查间隔（刻） |
 | `chunk.targetSizeMb` | 0（自动） | 目标缓存大小（MB） |
 | `chunk.minCleanupBatchSize` | 100 | 每轮最多淘汰的 region 文件数 |
-| `chunk.seedGenThreads` | 2 | 本地区块生成线程数（固定平台线程池；0=禁用本地生成，SeedRef 一律回退全量） |
-| `chunk.seedGenEnabled` | **false** | 本地区块生成（双端同版本，默认关）。**服务端开启会向客户端下发世界种子（泄露服务端种子）**；对 pristine 区块发 SeedRef 替代区块数据；客户端本地生成，失败/超时回退全量 |
+| `chunk.seedGenThreads` | 2 | 保留键（SeedRef 工作池已退役；本地生成由影子 tracking 触发 vanilla worldgen） |
+| `chunk.seedGenEnabled` | **false** | 本地区块生成（双端同版本，默认关）。**服务端开启会向客户端下发世界种子（泄露服务端种子）**；客户端门控开时影子 tracking 触发 vanilla worldgen，交付后 compare-pull |
 | `chunk.lightStrip` | true | 服务端光照剥离，必须经 Hassium 能力握手 |
 | `master.enabled` | true | 服务端网络通道总开关（登录期握手/压缩/聚合的门） |
 | `master.compressionLevel` | 3 | 自有通道 ZSTD 压缩等级（速度优先） |

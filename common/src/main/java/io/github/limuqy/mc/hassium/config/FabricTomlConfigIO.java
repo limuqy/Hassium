@@ -342,7 +342,7 @@ public final class FabricTomlConfigIO {
     private static void writeServerChunk(CommentedConfig cfg, HassiumConfig.ChunkCoreConfig chunk) {
         set(cfg, "chunk.lightStrip", chunk.lightStrip(), "是否启用光照剥离");
         set(cfg, "chunk.seedGenEnabled", chunk.seedGenEnabled(),
-                "是否启用 SeedGen（服务端对 pristine 区块发 SeedRef 替代区块数据；客户端本地生成，hash 校验兜底；需双端同版本，默认关）");
+                "是否启用 SeedGen（服务端开启下发世界种子；客户端门控开时影子 tracking 触发 vanilla worldgen 本地生成，再 compare-pull；需双端同版本，默认关）");
     }
 
     // --- CLIENT ---

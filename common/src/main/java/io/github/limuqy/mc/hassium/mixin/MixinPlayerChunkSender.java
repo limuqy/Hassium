@@ -14,9 +14,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
  * 1.20.2+：拦截 {@code PlayerChunkSender.sendChunk}，为 Hassium 客户端保留 shadowPull
- * 的主动取数路径；Pull 玩家停发整柱（客户端 Compare+Pull 自取），非 Pull 玩家转
- * {@link io.github.limuqy.mc.hassium.network.ServerChunkPushManager#enqueueDirectPush}
- * （FULL_VISIBLE 队列仅 seedgen 玩家转换 SeedRef；chunk_payload 通道已退役）。
+ * 的主动取数路径；Pull 玩家停发整柱（客户端 Compare+Pull 自取）。
  * 1.20.2 移除了 {@code ServerPlayer.trackChunk}，初始区块发送改走
  * {@code PlayerChunkSender.sendChunk}（private static）。此 Mixin 在 1.20.2+ 替代
  * {@link MixinServerPlayer} 的 trackChunk 注入。
@@ -92,19 +90,12 @@ public abstract class MixinPlayerChunkSender {
         if (packet instanceof ClientboundLevelChunkWithLightPacket chunkPacket
                 && PlayerCompressionTracker.isCompressionEnabled(player)) {
             if (!io.github.limuqy.mc.hassium.server.RuntimeServerContext.isShadowServerContext()) {
-                // Pull 模式（Compare+Pull 对齐）：服务端停发 chunk_payload，整柱数据
-                // 由客户端影子 tracking 统一拉取
+                // Pull 模式：服务端停发 chunk_payload，整柱数据由客户端影子 tracking 统一拉取
                 if (io.github.limuqy.mc.hassium.network.handshake.ServerHandshakeActivation.hasCaps(
                         player.getUUID(), io.github.limuqy.mc.hassium.network.handshake.LoginCaps.PULL_MODE)) {
                     return;
                 }
-                String dimension = io.github.limuqy.mc.hassium.compat.LevelCompat.getDimensionId(player.level());
-                if (dimension == null) {
-                    dimension = io.github.limuqy.mc.hassium.utils.DimensionKey.OVERWORLD;
-                }
-                io.github.limuqy.mc.hassium.network.ServerChunkPushManager.getInstance()
-                        .enqueueDirectPush(player, dimension,
-                                java.util.List.of(new ChunkPos(chunkPacket.getX(), chunkPacket.getZ())));
+                // 非 pull 兼容路径：放行原版 send（SeedRef 直推已退役）
             }
             return;
         }

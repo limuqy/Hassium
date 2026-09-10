@@ -934,10 +934,12 @@ public final class ScenarioEngine {
 
         // 4) R1 语义门禁：清缓存首进不得出现「网络全量=0 且缓存全命中>0」的假命中。
         //    （来源被 publishCachedChunk 改写 / origin 被日志开关 strip 成 null 的回归锚）
+        //    SeedGen 本地生成是合法的 R1 路径：fullReq=0 + locallyGenerated>0 不算假缓存。
         if (roundLabel != null && roundLabel.contains("ROUND1")) {
             long fullReq = m.getFullChunkRequestCount();
             long fullHit = m.getCacheHitFullChunkCount();
-            if (fullReq == 0 && fullHit > 64) {
+            long localGen = m.getLocallyGeneratedChunkCount();
+            if (fullReq == 0 && fullHit > 64 && localGen == 0) {
                 LOGGER.error("{} {} stats validation FAILED: R1 has no network full load " +
                                 "but cacheHitFull={} (origin misclassified as cache)",
                         MARKER_FAIL, roundLabel, fullHit);

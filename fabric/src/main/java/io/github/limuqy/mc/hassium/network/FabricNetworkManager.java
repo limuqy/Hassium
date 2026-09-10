@@ -81,13 +81,6 @@ ResourceLocation
 #else
 Identifier
 #endif
-SEED_REF_S2C = ResourceLocationCompat.vanilla(HassiumChannels.SEED_REF_S2C);
-    public static final
-#if MC_VER < MC_1_21_11
-ResourceLocation
-#else
-Identifier
-#endif
 BLOCK_ENTITY_REQUEST_C2S = ResourceLocationCompat.vanilla(HassiumChannels.BLOCK_ENTITY_REQUEST_C2S);
     public static final
 #if MC_VER < MC_1_21_11
@@ -187,15 +180,6 @@ PLAY_INIT_S2C = ResourceLocationCompat.vanilla(HassiumChannels.PLAY_INIT_S2C);
         } else if (buf != null && buf.refCnt() > 0) {
             buf.release();
         }
-    }
-
-    @Override
-    public void sendSeedRef(ServerPlayer player, FriendlyByteBuf buf) {
-#if MC_VER < MC_1_21_1
-        ServerPlayNetworking.send(player, SEED_REF_S2C, buf);
-#else
-        ServerPlayNetworking.send(player, FabricPayloadRegistry.toPayload(FabricPayloadRegistry.SEED_REF_S2C_TYPE, buf));
-#endif
     }
 
     @Override

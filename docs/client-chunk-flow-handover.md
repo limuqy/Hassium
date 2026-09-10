@@ -295,7 +295,7 @@ pull 域用了 `resolveViewDistance()=vd+1`（range=21 → 1665 格盘）而非�
 
 ### T5 已知遗留（不影响对齐，随版本演进处理）
 
-- `classic.profile.properties` 不复位 `chunk.seedGenEnabled`，seedgen 场景残留会带偏 classic 运行（本次已实证；建议 profile 加 `chunk.seedGenEnabled = false`）。
+- ~~`classic.profile.properties` 不复位 `chunk.seedGenEnabled`~~ **已修（2026-09-11）**：classic profile 增加 `chunk.seedGenEnabled = false`；本地生成柱改 `dirty=false` 只进内存，避免 type126 落盘坏 section。
 - 登录竞态已修（`483e1fb`）；若再现按该提交描述的帧化时序排查。
 
 ## 4. 对齐开发计划

@@ -391,7 +391,7 @@ public class HassiumConfigService {
         return Math.max(1, config.chunk().maxChunksPerFrame());
     }
 
-    /** SeedGen 本地生成线程数（0=禁用本地生成，SeedRef 一律回退全量）。 */
+    /** SeedGen 本地生成线程数（0=禁用本地生成，回退全量）。 */
     public int getSeedGenThreads() {
         return Math.max(0, config.chunk().seedGenThreads());
     }
@@ -423,7 +423,7 @@ public class HassiumConfigService {
         return config.debug().networkMetricsAutoReset();
     }
 
-    /** 是否启用 SeedGen（服务端：对 pristine 区块发 SeedRef 替代区块数据；默认关）。 */
+    /** 是否启用 SeedGen（服务端开启下发世界种子；客户端门控开时影子 tracking 触发 vanilla worldgen 本地生成，再 compare-pull；默认关）。 */
     public boolean isSeedGenEnabled() {
         return config.chunk().seedGenEnabled();
     }

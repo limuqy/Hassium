@@ -634,6 +634,14 @@ public final class ShadowLightCompute {
      * the caller retry an unconditional FULL.
      */
     public static boolean publishCachedChunk(String dimension, ChunkPos pos) {
+        return publishCachedChunk(dimension, pos, false);
+    }
+
+    /**
+     * @param localGeneration true = 本会话 vanilla worldgen 产物（门控开路径），
+     *                        按 {@link TraceOrigin#LOCAL_GENERATION} 投递，不计缓存全命中
+     */
+    public static boolean publishCachedChunk(String dimension, ChunkPos pos, boolean localGeneration) {
         if (pos == null || !isEnabled()) {
             return false;
         }
@@ -663,6 +671,9 @@ public final class ShadowLightCompute {
         }
         if (chunk == null) {
             return false;
+        }
+        if (localGeneration) {
+            return submitGenerated(pos, chunk, level, false);
         }
         return submitPreLight(ShadowChunkSource.CACHE_SNAPSHOT, pos, chunk, level,
                 traceOrigin(origin));
@@ -745,7 +756,9 @@ public final class ShadowLightCompute {
             accountCacheFullHit(dimension, pos);
             return;
         }
-        if (origin == TraceOrigin.SECTION_DELTA || origin == null) {
+        // 本地生成已在 onChunkMaterialized / SeedGenExecutor 记 locallyGenerated；
+        // 不得再计缓存全命中或网络全量（否则 R1 门禁把 SeedGen 误判成假缓存）。
+        if (origin == TraceOrigin.LOCAL_GENERATION || origin == TraceOrigin.SECTION_DELTA || origin == null) {
             return;
         }
         // 区块加载分桶（MetricsSemantics §2）：新增与过期不互斥。

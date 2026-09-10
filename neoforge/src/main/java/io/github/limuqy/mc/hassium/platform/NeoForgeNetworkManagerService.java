@@ -14,11 +14,6 @@ public class NeoForgeNetworkManagerService implements INetworkManagerService {
     private final NeoForgeNetworkManager networkManager = new NeoForgeNetworkManager();
 
     @Override
-    public void sendSeedRef(ServerPlayer player, FriendlyByteBuf buf) {
-        networkManager.sendSeedRef(player, buf);
-    }
-
-    @Override
     public void sendBlockEntityRequest(FriendlyByteBuf buf) {
         networkManager.sendBlockEntityRequest(buf);
     }

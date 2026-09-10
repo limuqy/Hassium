@@ -53,20 +53,12 @@ public abstract class MixinServerPlayer extends Player {
             return;
         }
         if (PlayerCompressionTracker.isCompressionEnabled(self)) {
-            // Pull 模式（Compare+Pull 对齐）：服务端停发 chunk_payload，整柱数据
-            // 由客户端影子 tracking 统一拉取；forget/元数据/SeedRef 不受影响
+            // Pull 模式：服务端停发 chunk_payload，整柱数据由客户端影子 tracking 统一拉取
             if (io.github.limuqy.mc.hassium.network.handshake.ServerHandshakeActivation.hasCaps(
                     self.getUUID(), io.github.limuqy.mc.hassium.network.handshake.LoginCaps.PULL_MODE)) {
                 ci.cancel();
-                return;
             }
-            String dimension = io.github.limuqy.mc.hassium.compat.LevelCompat.getDimensionId(self.level());
-            if (dimension == null) {
-                dimension = io.github.limuqy.mc.hassium.utils.DimensionKey.OVERWORLD;
-            }
-            io.github.limuqy.mc.hassium.network.ServerChunkPushManager.getInstance()
-                    .enqueueDirectPush(self, dimension, java.util.List.of(pos));
-            ci.cancel();
+            // 非 pull 兼容路径：放行原版 trackChunk（SeedRef 直推已退役）
         }
     }
 

@@ -33,11 +33,6 @@ public interface INetworkManagerService {
     void sendLightDeltaPacket(ServerPlayer player, FriendlyByteBuf buf);
 
     /**
-     * 发送 SeedRef 到客户端（SeedGen：pristine 区块引用替代区块数据；服务端调用）
-     */
-    void sendSeedRef(ServerPlayer player, FriendlyByteBuf buf);
-
-    /**
      * 服务端主动推送 shadowPullV1 响应（待推送队列泵用；复用原 requestId）。
      * buf 所有权转移给实现（未消费时释放）。
      */

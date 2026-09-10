@@ -31,8 +31,6 @@ public final class FabricPayloadRegistry {
             type("index_sync_s2c");
     public static final CustomPacketPayload.Type<RawPayload> AGGREGATION_S2C_TYPE =
             type("aggregation");
-    public static final CustomPacketPayload.Type<RawPayload> SEED_REF_S2C_TYPE =
-            type("seed_ref_s2c");
     public static final CustomPacketPayload.Type<RawPayload> BLOCK_ENTITY_DATA_S2C_TYPE =
             type("block_entity_data_s2c");
     public static final CustomPacketPayload.Type<RawPayload> LIGHT_DELTA_S2C_TYPE =
@@ -105,7 +103,6 @@ public final class FabricPayloadRegistry {
         PayloadTypeRegistry.playS2C().register(DICTIONARY_SYNC_S2C_TYPE, codec(DICTIONARY_SYNC_S2C_TYPE));
         PayloadTypeRegistry.playS2C().register(INDEX_SYNC_S2C_TYPE, codec(INDEX_SYNC_S2C_TYPE));
         PayloadTypeRegistry.playS2C().register(AGGREGATION_S2C_TYPE, codec(AGGREGATION_S2C_TYPE));
-        PayloadTypeRegistry.playS2C().register(SEED_REF_S2C_TYPE, codec(SEED_REF_S2C_TYPE));
         PayloadTypeRegistry.playS2C().register(BLOCK_ENTITY_DATA_S2C_TYPE, codec(BLOCK_ENTITY_DATA_S2C_TYPE));
         PayloadTypeRegistry.playS2C().register(LIGHT_DELTA_S2C_TYPE, codec(LIGHT_DELTA_S2C_TYPE));
         PayloadTypeRegistry.playS2C().register(SHADOW_PULL_RESPONSE_S2C_TYPE, codec(SHADOW_PULL_RESPONSE_S2C_TYPE));
@@ -119,8 +116,8 @@ public final class FabricPayloadRegistry {
                 io.github.limuqy.mc.hassium.network.PreHandshakePayload.TYPE,
                 io.github.limuqy.mc.hassium.network.PreHandshakePayload.STREAM_CODEC);
 
-        // 注册 9 S2C + 3 C2S + 1 configurationC2S
-        LOGGER.info("Hassium: Registered 9 S2C and 3 C2S (+1 config) payload types for 1.21.1+");
+        // 注册 7 S2C + 3 C2S + 1 configurationC2S
+        LOGGER.info("Hassium: Registered 7 S2C and 3 C2S (+1 config) payload types for 1.21.1+");
     }
 
     /**

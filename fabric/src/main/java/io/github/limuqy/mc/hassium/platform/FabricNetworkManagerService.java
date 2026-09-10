@@ -26,12 +26,6 @@ public class FabricNetworkManagerService implements INetworkManagerService {
     }
 
     @Override
-    public void sendSeedRef(ServerPlayer player, FriendlyByteBuf buf) {
-        FabricSendCompat.sendToPlayer(player, HassiumChannels.SEED_REF_S2C, buf);
-    }
-
-
-    @Override
     public void sendBlockEntityRequest(FriendlyByteBuf buf) {
         FabricSendCompat.sendToServer(HassiumChannels.BLOCK_ENTITY_REQUEST_C2S, buf);
     }

@@ -666,7 +666,7 @@ public final class ShadowTrackingSession {
                 ChunkPos pos = new ChunkPos(x, z);
                 if (ShadowLightCompute.hasLocalPullBaseline(currentDimension, pos)) {
                     withBaseline.add(pos);
-                } else {
+                } else if (!preferLocalGeneration()) {
                     withoutBaseline.add(pos);
                 }
                 sent++;
@@ -674,8 +674,8 @@ public final class ShadowTrackingSession {
         }
         if (sent > 0) {
             DebugLogger.info(DebugLogger.LogType.NETWORK,
-                    "[SHADOW_TRACK] sweep missing={} center=({},{}) radius={} (dimension={})",
-                    sent, center.x, center.z, radius, currentDimension);
+                    "[SHADOW_TRACK] sweep missing={} localGen={} center=({},{}) radius={} (dimension={})",
+                    sent, preferLocalGeneration(), center.x, center.z, radius, currentDimension);
         }
         emitPullGroups(withBaseline, withoutBaseline);
     }
@@ -717,7 +717,7 @@ public final class ShadowTrackingSession {
             ChunkPos pos = bootGridCells.pollFirst();
             if (ShadowLightCompute.hasLocalPullBaseline(currentDimension, pos)) {
                 withBaseline.add(pos);
-            } else {
+            } else if (!preferLocalGeneration()) {
                 withoutBaseline.add(pos);
             }
             sent++;
@@ -869,6 +869,15 @@ public final class ShadowTrackingSession {
         return pipeline.isServerSeedGenEnabled() && pipeline.isServerSeedAvailable();
     }
 
+    /**
+     * 本地生成优先（§6 供给路径）：门控开时 boot/sweep 不对无基线柱发
+     * authoritative-full，交给影子 tracking 触发 vanilla worldgen（真实种子）。
+     * 有基线柱仍走 compare-pull。
+     */
+    private static boolean preferLocalGeneration() {
+        return SeedGenExecutor.getInstance().isGenerationGateOpen();
+    }
+
     /** OVD 已加载计数（会话内按坐标去重，防 materialize+sweep 双计）。 */
     private void recordOvdLoadedOnce(String dimension, ChunkPos pos) {
         long key = io.github.limuqy.mc.hassium.utils.DimensionKey.key(dimension, pos.x, pos.z);
@@ -919,8 +928,21 @@ public final class ShadowTrackingSession {
         // 生成柱无 hash → dirty（saveAll 落盘）。1.20.1 无 getPersistedStatus，按 hash 判别。
         boolean diskHit = io.github.limuqy.mc.hassium.storage.ShadowStorageHashes
                 .get(dimension, pos) != null;
+        // 首注入且无盘 hash = 本会话 vanilla worldgen 本地生成（门控开路径）；
+        // 网络 FULL 经 injectChunk 入表后再走本桥时 alreadyMaterialized=true，不会误计。
+        boolean localWorldgen = !alreadyMaterialized && !diskHit;
         if (!alreadyMaterialized) {
-            shadow.injectLoadedChunk(dimension, pos, chunk, !diskHit);
+            // 本地生成柱 dirty=false 只进内存：与 OVD 同款——生成柱 type126 落盘
+            // 曾写出缺 palette 的 section，IO 读回即 wrong location / ZSTD 失败。
+            // 权威覆盖由后续 compare-pull FULL 负责；断连前不持久化半成品。
+            shadow.injectLoadedChunk(dimension, pos, chunk, !diskHit && !localWorldgen);
+        }
+        if (localWorldgen) {
+            io.github.limuqy.mc.hassium.metrics.NetworkStats.recordLocallyGeneratedChunk(
+                    io.github.limuqy.mc.hassium.metrics.NetworkStats.ESTIMATED_CHUNK_BYTES);
+            DebugLogger.info(DebugLogger.LogType.NETWORK,
+                    "[SHADOW_TRACK] local worldgen materialized ({}, {}) (dimension={})",
+                    pos.x, pos.z, dimension);
         }
         // 影子 ticket 可能物化原版可见形状外的角区柱 / OVD 环带。
         // OVD 窗：客户端 ClientChunkCache 重连后是空的——必须重新 publish。
@@ -981,8 +1003,8 @@ public final class ShadowTrackingSession {
             }
             return;
         }
-        // 进边沿必交付：等价原版 trackChunk（仅真正的本地基线：盘上命中 / 上一会话缓存）
-        boolean published = ShadowLightCompute.publishCachedChunk(dimension, pos);
+        // 进边沿必交付：等价原版 trackChunk（盘上命中 / 上一会话缓存 / 本会话本地生成）
+        boolean published = ShadowLightCompute.publishCachedChunk(dimension, pos, localWorldgen);
         if (!published) {
             DebugLogger.info(DebugLogger.LogType.NETWORK,
                     "[SHADOW_TRACK] materialized ({}, {}) publish-failed -> pull (dimension={})",

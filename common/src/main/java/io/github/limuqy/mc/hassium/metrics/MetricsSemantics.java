@@ -62,7 +62,7 @@ package io.github.limuqy.mc.hassium.metrics;
  * <ul>
  *   <li>{@code recordFullChunkRequests(stale=false)} ← SERVER_PUSH 落地</li>
  *   <li>{@code recordFullChunkRequests(stale=true)} ← REMOTE_PULL（compare-pull FULL）落地</li>
- *   <li>{@code recordLocallyGeneratedChunk} ← {@code SeedGenExecutor} 生成成功</li>
+ *   <li>{@code recordLocallyGeneratedChunk} ← 影子 tracking 本地 worldgen 物化（门控开）</li>
  * </ul>
  * <p>
  * <b>R1 归因红线</b>：清缓存首进的网络全量必须记「新增」，

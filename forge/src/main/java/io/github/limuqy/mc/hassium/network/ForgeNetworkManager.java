@@ -130,20 +130,6 @@ public class ForgeNetworkManager implements NetworkManager {
 
 
 
-
-        CHANNEL.<SeedRefWrapper>registerMessage(
-                packetId++,
-                SeedRefWrapper.class,
-                SeedRefWrapper::encode,
-                SeedRefWrapper::decode,
-                (msg, ctx) -> {
-                    ctx.get().enqueueWork(() -> handleSeedRef(msg));
-                    ctx.get().setPacketHandled(true);
-                },
-                java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT)
-        );
-
-
         CHANNEL.<BlockEntityRequestWrapper>registerMessage(
                 packetId++,
                 BlockEntityRequestWrapper.class,
@@ -285,8 +271,6 @@ public class ForgeNetworkManager implements NetworkManager {
                         .addMain(ShadowPullResponseWrapper.class,
                                 playCodec(ShadowPullResponseWrapper::encode, ShadowPullResponseWrapper::decode),
                                 ForgeNetworkManager::onShadowPullResponse)
-                        .addMain(SeedRefWrapper.class, playCodec(SeedRefWrapper::encode, SeedRefWrapper::decode),
-                                ForgeNetworkManager::onSeedRef)
                         .addMain(DictionarySyncWrapper.class,
                                 playCodec(DictionarySyncWrapper::encode, DictionarySyncWrapper::decode),
                                 ForgeNetworkManager::onDictionarySync)
@@ -299,7 +283,7 @@ public class ForgeNetworkManager implements NetworkManager {
                                 playCodec(LightDeltaWrapper::encode, LightDeltaWrapper::decode),
                                 ForgeNetworkManager::onLightDelta)
                 .build();
-        LOGGER.info("Hassium: Registered Forge 50+ ChannelBuilder play channel (3 C2S + 9 S2C)");
+        LOGGER.info("Hassium: Registered Forge 50+ ChannelBuilder play channel (3 C2S + 8 S2C)");
     }
 
     private static <M> StreamCodec<RegistryFriendlyByteBuf, M> playCodec(
@@ -338,10 +322,6 @@ public class ForgeNetworkManager implements NetworkManager {
     }
 
 
-
-    private static void onSeedRef(SeedRefWrapper msg, CustomPayloadEvent.Context ctx) {
-        ctx.enqueueWork(() -> handleSeedRef(msg));
-    }
 
     private static void onShadowPullRequest(ShadowPullRequestWrapper msg, CustomPayloadEvent.Context ctx) {
         ctx.enqueueWork(() -> handleShadowPullRequest(msg, ctx.getSender()));
@@ -561,17 +541,6 @@ public class ForgeNetworkManager implements NetworkManager {
         }
     }
 
-    private static void handleSeedRef(SeedRefWrapper msg) {
-        try {
-            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data()));
-            SeedRefS2CPacket packet = SeedRefS2CPacket.decode(buf);
-            ClientMetadataHandler.handleSeedRefPacket(packet);
-        } catch (Exception e) {
-            LOGGER.error("Hassium: Failed to handle seed ref packet", e);
-        }
-    }
-
-
     private static void handleBlockEntityRequest(BlockEntityRequestWrapper msg, ServerPlayer player) {
         try {
             if (player == null) {
@@ -600,17 +569,6 @@ public class ForgeNetworkManager implements NetworkManager {
     // review-fix: T11-14 sendCompressedPayload 退役（common 接口 default no-op，无调用方）
 
 
-    @Override
-    public void sendSeedRef(ServerPlayer player, FriendlyByteBuf buf) {
-        byte[] data = new byte[buf.readableBytes()];
-        buf.readBytes(data);
-        buf.release();
-#if MC_VER < MC_1_21_1
-        CHANNEL.sendTo(new SeedRefWrapper(data), player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
-#else
-        sendToPlayer(player, new SeedRefWrapper(data));
-#endif
-    }
     @Override
     public void sendShadowPullResponse(ServerPlayer player, FriendlyByteBuf buf) {
         byte[] data = new byte[buf.readableBytes()];
@@ -737,24 +695,6 @@ public class ForgeNetworkManager implements NetworkManager {
     }
 
 
-
-    public record SeedRefWrapper(byte[] data) {
-        public void encode(FriendlyByteBuf buf) {
-            buf.writeVarInt(data.length);
-            buf.writeBytes(data);
-        }
-
-        public static SeedRefWrapper decode(FriendlyByteBuf buf) {
-            // review-fix: T10-9: length 无上限 → readTail 式校验（恶意超大 varInt 拒绝分配）
-            int length = buf.readVarInt();
-            if (length < 0 || length > buf.readableBytes()) {
-                throw new IllegalArgumentException("invalid SeedRefWrapper length: " + length);
-            }
-            byte[] data = new byte[length];
-            buf.readBytes(data);
-            return new SeedRefWrapper(data);
-        }
-    }
 
     public record BlockEntityRequestWrapper(byte[] data) {
         public void encode(FriendlyByteBuf buf) {

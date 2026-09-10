@@ -46,11 +46,11 @@ public class HassiumClientMod implements ClientModInitializer {
         FabricHassiumCommand.registerClientCommands();
         // 直连拓扑：HASSIUM 业务 S2C 通道全部经 vanilla CustomPayload 直收（服务端
         // ServerPlayNetworking.send 直发）。客户端 receiver：SHADOW_PULL_RESPONSE_S2C
-        // （shadowPullV1 FULL 回退）、SEED_REF_S2C（pristine 区块引用）、PLAY_INIT_S2C（Play 期激活）、
+        // （shadowPullV1 FULL 回退）、PLAY_INIT_S2C（Play 期激活）、
         // LIGHT_DELTA_S2C（光照增量）、DICTIONARY_SYNC/INDEX_SYNC/AGGREGATION（聚合链）。
         // CHUNK_PAYLOAD_S2C 通道已退役（纯 Compare+Pull）；CHUNK_HASH/SECTION_DELTA 等区块
         // 核心增量通道由 common 客户端摄入管线（ClientChunkPipeline / ClientMetadataHandler）消费。
-        LOGGER.info("Hassium: Fabric client registers direct-play S2C receivers (SHADOW_PULL_RESPONSE_S2C / SEED_REF_S2C / PLAY_INIT_S2C / LIGHT_DELTA_S2C / DICTIONARY_SYNC_S2C / INDEX_SYNC_S2C / AGGREGATION_S2C).");
+        LOGGER.info("Hassium: Fabric client registers direct-play S2C receivers (SHADOW_PULL_RESPONSE_S2C / PLAY_INIT_S2C / LIGHT_DELTA_S2C / DICTIONARY_SYNC_S2C / INDEX_SYNC_S2C / AGGREGATION_S2C).");
 
         // shadowPullV1 FULL 回退：服务端返回的原版 chunk+light 线格式统一交给 ShadowPullClient 注入。
 #if MC_VER < MC_1_21_1
@@ -79,36 +79,6 @@ public class HassiumClientMod implements ClientModInitializer {
                                 io.github.limuqy.mc.hassium.network.ShadowPullResponseS2CPacket.decode(response));
                     } finally {
                         response.release();
-                    }
-                });
-#endif
-        // SEED_REF_S2C 客户端 receiver：SeedRef（pristine 区块引用）直收 → 本地生成。
-#if MC_VER < MC_1_21_1
-        ClientPlayNetworking.registerGlobalReceiver(io.github.limuqy.mc.hassium.network.FabricNetworkManager.SEED_REF_S2C,
-                (client, handler, buf, responseSender) -> {
-                    byte[] data = new byte[buf.readableBytes()];
-                    buf.readBytes(data);
-                    client.execute(() -> {
-                        net.minecraft.network.FriendlyByteBuf seedRefBuf = new net.minecraft.network.FriendlyByteBuf(
-                                io.netty.buffer.Unpooled.wrappedBuffer(data));
-                        try {
-                            io.github.limuqy.mc.hassium.network.ClientMetadataHandler.handleSeedRefPacket(
-                                    io.github.limuqy.mc.hassium.network.SeedRefS2CPacket.decode(seedRefBuf));
-                        } finally {
-                            seedRefBuf.release();
-                        }
-                    });
-                });
-#else
-        ClientPlayNetworking.registerGlobalReceiver(io.github.limuqy.mc.hassium.network.FabricPayloadRegistry.SEED_REF_S2C_TYPE,
-                (payload, context) -> {
-                    net.minecraft.network.FriendlyByteBuf seedRefBuf =
-                            io.github.limuqy.mc.hassium.network.FabricPayloadRegistry.fromPayload(payload);
-                    try {
-                        io.github.limuqy.mc.hassium.network.ClientMetadataHandler.handleSeedRefPacket(
-                                io.github.limuqy.mc.hassium.network.SeedRefS2CPacket.decode(seedRefBuf));
-                    } finally {
-                        seedRefBuf.release();
                     }
                 });
 #endif

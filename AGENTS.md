@@ -165,7 +165,7 @@ fabric/ | forge/ | neoforge/
 Mod 客户端 ←──唯一 vanilla TCP（登录期握手 + Play 期自定义 payload）──→ Mod 服务端
    ├ 登录期：login_hello / PreHandshakePayload 协商能力位（空应答=原版路径，不依赖超时）
    ├ Play 期：dict/index → 聚合 PENDING → play_init 激活 → 客户端 ACK → 聚合放行
-   └ 区块/实体/业务自定义 payload 全走 vanilla 通道（chunk_payload/seed_ref/shadow_pull/block_entity/section_delta/light_delta）
+   └ 区块/实体/业务自定义 payload 全走 vanilla 通道（shadow_pull/block_entity/section_delta/light_delta）
 ```
 
 - 网络核心（`network/core/` 进程内网关）、UDP 数据面（`network/dataplane/`）、续流迁移（ResumeTicket）均已裁剪，不复活
@@ -173,7 +173,7 @@ Mod 客户端 ←──唯一 vanilla TCP（登录期握手 + Play 期自定义 
 
 ## 卖点（已实现，按类）
 
-**高效压缩**——存储压缩（ZSTD 落盘 type 126）、通道压缩（聚合包内部字典 ZSTD + 区块推送自有压缩；管线级全局包压缩已退役——不触碰 vanilla 压缩层，无跨 mod 管线冲突面）；**网络优化**——平滑推送（每 tick 提交上限限速 + 全路径后台化）、登录期能力握手（无超时依赖、原版客户端零干扰）、Pull 模式（影子 tracking 驱动的统一 Compare+Pull）；**区块缓存**——影子端世界保存（进服区块由进程内影子服务端落盘原版存档 `hassium_cache/<serverId>/world`，断连保存重连复用）、容量/热度淘汰（heat.idx + 整文件删除 `.mca`）、分段增量、本地生成（SeedGen：pristine 区块发坐标引用，客户端同种子本地生成；**服务端开启会泄露世界种子**；失败回退全量）、`/hassiumc export` 世界导出；**光照优化**——Hassium 引擎（影子端统一算光 + 官方通道回传，客户端不计算；剥光握手协商）、光照剥离。
+**高效压缩**——存储压缩（ZSTD 落盘 type 126）、通道压缩（聚合包内部字典 ZSTD + 区块推送自有压缩；管线级全局包压缩已退役——不触碰 vanilla 压缩层，无跨 mod 管线冲突面）；**网络优化**——平滑推送（每 tick 提交上限限速 + 全路径后台化）、登录期能力握手（无超时依赖、原版客户端零干扰）、Pull 模式（影子 tracking 驱动的统一 Compare+Pull）；**区块缓存**——影子端世界保存（进服区块由进程内影子服务端落盘原版存档 `hassium_cache/<serverId>/world`，断连保存重连复用）、容量/热度淘汰（heat.idx + 整文件删除 `.mca`）、分段增量、本地生成（SeedGen：门控开时影子 tracking 触发 vanilla worldgen，交付后 compare-pull；**服务端开启会泄露世界种子**）、`/hassiumc export` 世界导出；**光照优化**——Hassium 引擎（影子端统一算光 + 官方通道回传，客户端不计算；剥光握手协商）、光照剥离。
 
 ## 运行时冒烟
 

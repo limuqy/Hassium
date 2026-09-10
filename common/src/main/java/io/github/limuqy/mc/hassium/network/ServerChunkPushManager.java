@@ -108,27 +108,6 @@ public class ServerChunkPushManager {
 
 
     /**
-
-
-    /**
-     * 每玩家 SeedGen 能力（握手 C2S 上报 seedGenSupported；默认 false）。
-     */
-    private final Map<UUID, Boolean> playerSeedGenSupported = new ConcurrentHashMap<>();
-
-    /**
-     * SeedGen 自愈熔断：客户端对 pristine 区块请求全量数据达到阈值后，
-     * 判定本会话 SeedGen 本地生成与服务器世界gen不一致（如跨版本/数据包差异），
-     * 对该玩家停发 SeedRef，改走全量推送，避免 mismatch 风暴打爆数据队列。
-     */
-    private final Set<UUID> seedGenDisabledPlayers = ConcurrentHashMap.newKeySet();
-
-    /** 每玩家 pristine 全量回退计数（仅客户端请求路径计数，直推不计）。 */
-    private final Map<UUID, Integer> seedGenFallbackCounts = new ConcurrentHashMap<>();
-
-    /** 触发 SeedGen 熔断的 pristine 全量请求数。 */
-    private static final int SEED_GEN_DISABLE_THRESHOLD = 16;
-
-    /**
      * 每玩家光照计算能力（握手 C2S 上报 lightComputeSupported = 客户端 hassiumEngineEnabled）。
      * 服务端据此决定是否剥光：客户端声明可本地/影子端算光才剥（stripLightIfConfigured gate）。
      */
@@ -376,7 +355,7 @@ public class ServerChunkPushManager {
         try {
             response.encode(buf);
             io.github.limuqy.mc.hassium.platform.Services.NETWORK_MANAGER.sendShadowPullResponse(player, buf);
-            // 所有权已转移：fabric send 直接持有 buf（与 sendSeedRef 同约定，不在此释放），
+            // 所有权已转移：fabric send 直接持有 buf（不在此释放），
             // forge/neoforge 实现内部已拷贝并释放。
             handedOff = true;
         } finally {
@@ -397,17 +376,6 @@ public class ServerChunkPushManager {
 
 
     /**
-     * 握手 C2S 能力上报后调用：记录玩家是否支持 SeedGen。
-     */
-    public void setPlayerSeedGenSupported(UUID playerId, boolean supported) {
-        if (supported) {
-            playerSeedGenSupported.put(playerId, Boolean.TRUE);
-        } else {
-            playerSeedGenSupported.remove(playerId);
-        }
-    }
-
-    /**
      * 握手 C2S 能力上报后调用：记录玩家是否支持光照计算（影子端/Hassium 引擎）。
      */
     public void setPlayerLightComputeSupported(UUID playerId, boolean supported) {
@@ -422,53 +390,6 @@ public class ServerChunkPushManager {
     public boolean isPlayerLightComputeSupported(UUID playerId) {
         return Boolean.TRUE.equals(playerLightComputeSupported.get(playerId));
     }
-
-    /**
-     * 该玩家 + 该区块是否走 SeedGen（SeedRef 替代区块数据）。
-     * <p>
-     * gate：客户端上报能力 && 服务端配置开启 && 主世界维度 && 区块 pristine
-     * （本会话生成且未修改）。非主世界维度不命中 pristine（静默走全量）。
-     */
-    public boolean isSeedGenFor(UUID playerId, ChunkPos pos, String dimension) {
-        if (seedGenDisabledPlayers.contains(playerId)) {
-            return false;
-        }
-        return isSeedGenCandidate(playerId, pos, dimension);
-    }
-
-    /**
-     * SeedGen 候选判定（不含熔断）：配置开启 + 玩家支持 + 主世界 pristine。
-     * 熔断前与 {@link #isSeedGenFor} 等价，供请求路径统计回退次数。
-     */
-    private boolean isSeedGenCandidate(UUID playerId, ChunkPos pos, String dimension) {
-        if (!HassiumConfigService.getInstance().isSeedGenEnabled()) {
-            return false;
-        }
-        if (!Boolean.TRUE.equals(playerSeedGenSupported.get(playerId))) {
-            return false;
-        }
-        ResourceKey<Level> dimKey = ResourceKey.create(Registries.DIMENSION,
-                ResourceLocationCompat.create(dimension));
-        return PristineRegistry.isPristine(dimKey, pos);
-    }
-
-    /**
-     * 记录一次 pristine 全量回退；达到阈值后对该玩家熔断 SeedGen。
-     */
-    private void recordSeedGenFallback(UUID playerId, ChunkPos pos, String dimension) {
-        if (seedGenDisabledPlayers.contains(playerId) || !isSeedGenCandidate(playerId, pos, dimension)) {
-            return;
-        }
-        int count = seedGenFallbackCounts.merge(playerId, 1, Integer::sum);
-        if (count >= SEED_GEN_DISABLE_THRESHOLD) {
-            seedGenDisabledPlayers.add(playerId);
-            DebugLogger.warn(LogType.NETWORK,
-                    "[SEEDGEN] Auto-disabling SeedGen for player {} after {} pristine full-data fallbacks "
-                            + "(local worldgen appears inconsistent with server) — falling back to full pushes",
-                    playerId, count);
-        }
-    }
-
 
     /**
      * 握手上报的玩家初始 chunk 位置（playerId → ChunkPos）。
@@ -596,36 +517,6 @@ public class ServerChunkPushManager {
     }
 
 
-    /** 发送 SeedRef 元数据（SeedGen 玩家本地生成，零区块数据流量；不需确认标识）。 */
-    private void sendSeedRef(ServerPlayer player, DataRequestTask task) {
-        SeedRefWork seedRef = task.seedRef();
-        SeedRefS2CPacket packet = new SeedRefS2CPacket(task.pos().x, task.pos().z, seedRef.chunkHash(),
-                seedRef.sectionHashes());
-        FriendlyByteBuf buf = null;
-        boolean sent = false;
-        try {
-            buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
-            packet.encode(buf);
-            int bytes = buf.readableBytes();
-            Services.NETWORK_MANAGER.sendSeedRef(player, buf);
-            sent = true;
-            NetworkStats.recordMetadataSent(bytes);
-            Constants.LOG.info("[SEED_REF] Sent ({}, {}) hash={} bytes={} to {}",
-                    task.pos().x, task.pos().z, Long.toHexString(seedRef.chunkHash()), bytes,
-                    player.getName().getString());
-        } catch (Exception e) {
-            Constants.LOG.error("[SEED_REF] Failed to send SeedRef to player {}",
-                    player.getName().getString(), e);
-        } finally {
-            if (!sent && buf != null) {
-                buf.release();
-            }
-        }
-    }
-
-
-
-
     /** 服务端每 tick：按原版 tracking 产生的推送队列限流序列化。 */
     public void onServerTick(net.minecraft.server.MinecraftServer server) {
         if (server == null) {
@@ -671,13 +562,12 @@ public class ServerChunkPushManager {
         if (!player.isAlive() || player.hasDisconnected()) {
             return false;
         }
-        // 双保险：pull 模式玩家整柱数据类推送停发（元数据/SeedRef 不受影响）；
-        // mixin 层（MixinServerPlayer / MixinPlayerChunkSender）已先行拦截
+        // 双保险：pull 模式玩家整柱数据类推送停发；mixin 层已先行拦截
         if (kind == PushKind.FULL_VISIBLE && isPullMode(player)) {
             return false;
         }
         PlayerPushQueue queue = pushQueues.computeIfAbsent(player.getUUID(), ignored -> new PlayerPushQueue());
-        return queue.enqueue(new PushTask(pos, dimension, null, kind));
+        return queue.enqueue(new PushTask(pos, dimension, kind));
     }
 
     /** 该玩家是否协商了 Pull 模式（服务端停发 chunk_payload 整柱推送）。 */
@@ -912,140 +802,25 @@ public class ServerChunkPushManager {
 
 
     /**
-     * Bloom miss 主动直推入队（服务端驱动，不计入客户端请求统计）。
-     * 统一入 {@link PlayerPushQueue} 批次队列。
+     * 旧服务端直推入队入口已退役：纯 Compare+Pull 下区块数据由客户端影子 tracking
+     * 主动拉取；本地生成由门控开时的 vanilla worldgen 承担（无 SeedRef）。
+     * 保留空实现供过渡期 mixin 调用，不入队。
      */
     public boolean enqueueDirectPush(ServerPlayer player, String dimension, List<ChunkPos> chunks) {
-        return enqueueDirectPush(player, dimension, chunks, 0L);
-    }
-
-    boolean enqueueDirectPush(ServerPlayer player, String dimension, List<ChunkPos> chunks, long contentHash) {
-        DebugLogger.info(LogType.NETWORK, "[ENQUEUE_DATA] Direct push {} chunks to player {} (dimension={})",
-                chunks.size(), player.getName().getString(), dimension);
-        boolean all = true;
-        for (ChunkPos pos : chunks) {
-            // 首次 vanilla tracking 是 pristine 的唯一可靠登记点：此时 chunk 已经完成 FULL
-            // 构造，后续 processOne 才能安全地把该柱转换为 SeedRef。
-            if (pos != null) {
-                PristineRegistry.markIfPristine(player.level(), pos);
-            }
-            all &= enqueuePushTask(player, pos, dimension, PushKind.FULL_VISIBLE);
-        }
-        return all;
+        return true;
     }
 
     /**
-     * SeedGen 玩家的 SeedRef 元数据入队（经批次队列消费线程发送）。
-     */
-    private void enqueueSeedRef(ServerPlayer player, ChunkPos pos, String dimension,
-                                long chunkHash, long[] sectionHashes) {
-        if (!player.isAlive() || player.hasDisconnected()) {
-            return;
-        }
-        PlayerPushQueue queue = pushQueues.computeIfAbsent(player.getUUID(), ignored -> new PlayerPushQueue());
-        queue.enqueue(new PushTask(pos, dimension,
-                new DataRequestTask(pos, dimension, new SeedRefWork(chunkHash, sectionHashes), 0L),
-                PushKind.SEED_REF));
-    }
-
-
-
-    /**
-     * 主线程封批：每玩家每 tick 取 ≤maxChunksPerTick 个任务快照成 1 批，投入批次通道。
-     * <p>
-     * 任何版本都不能让后台线程读 {@link LevelChunk}：其 {@code PalettedContainer}
-     * 会与服务端主线程并发访问并抛出 ThreadingDetector 异常。因此 buildChunkPacket
-     * 快照必须在封批前于本方法（主线程 tick 内）完成；encode/hash/ZSTD 在消费线程。
+     * 主线程封批：队列在纯 Compare+Pull 下已无 FULL_VISIBLE/SeedRef 任务源；
+     * 保留泵结构，有残留任务时直接掏空丢弃。
      */
     private void sealPlayerBatch(ServerPlayer player) {
         UUID playerId = player.getUUID();
         PlayerPushQueue queue = pushQueues.get(playerId);
-        if (queue == null) {
+        if (queue == null || queue.isEmpty()) {
             return;
         }
-        queue.promoteOverflow();
-        if (queue.isEmpty() || !queue.tryReserveSealedBatch()) {
-            return;
-        }
-
-        if (!player.isAlive() || player.hasDisconnected()) {
-            removePlayer(playerId);
-            return;
-        }
-
-        // 发送前最后一道闸：channel 不可写则释放本 tick 的封批名额，任务留到下 tick
-        if (!isFullDeliveryChannelWritable(player)) {
-            queue.releaseSealedBatchReservation();
-            return;
-        }
-
-        int maxPerTick = normalizeMaxChunksPerTick(
-                HassiumConfigService.getInstance().getConfig().master().maxChunksPerTick());
-
-        ServerLevel level = PlayerCompat.getServerLevel(player);
-        // 本 tick 位置快照仅用于队列距离优先级。
-        ChunkPos playerChunk = player.chunkPosition();
-        List<SealedWork> works = new ArrayList<>(maxPerTick);
-        while (works.size() < maxPerTick && !queue.isEmpty()) {
-            PushTask task = queue.pollNearest(playerChunk.x, playerChunk.z);
-            if (task == null) {
-                break;
-            }
-            if (!player.isAlive() || player.hasDisconnected()) {
-                queue.releaseSealedBatchReservation();
-                removePlayer(playerId);
-                return;
-            }
-
-            if (task.seedRef() != null) {
-                // SeedRef 元数据无 hash 比对语义，直接随批发送。
-                works.add(new SealedWork(player, task));
-                continue;
-            }
-
-            // chunk_payload 通道已退役（纯 Compare+Pull）：FULL_VISIBLE 任务仅服务于
-            // seedgen 玩家的 SeedRef 转换；非 seedgen 玩家（原版/降级组合）不在此发
-            // 区块推送，客户端经影子 tracking 的 Compare+Pull 主动拉取。
-            if (!isSeedGenFor(playerId, task.pos(), task.dimension())) {
-                continue;
-            }
-            try {
-                // 主线程快照（buildChunkPacket）
-                ClientboundLevelChunkWithLightPacket packet = null;
-                LevelChunk chunk = level.getChunkSource().getChunkNow(task.pos().x, task.pos().z);
-                if (chunk == null) {
-                    Constants.LOG.warn("[PROCESS_QUEUE] Chunk {} not loaded, skipping", task.pos());
-                    continue;
-                }
-                long tBuild = System.nanoTime();
-                packet = buildChunkPacket(chunk, level);
-                diag(D_BUILD, System.nanoTime() - tBuild);
-                if (packet == null) {
-                    Constants.LOG.warn("[PROCESS_QUEUE] Failed to build chunk packet {}", task.pos());
-                    continue;
-                }
-                Map<Integer, Long> sectionHashes = ChunkContentHashUtil.computeSectionHashesFromPacket(
-                        packet.getChunkData(), level.getSectionsCount(), level.registryAccess());
-                long seedGenHash = ChunkContentHashUtil.combineSectionHashes(sectionHashes);
-                PushTask seedRefTask = new PushTask(task.pos(), task.dimension(),
-                        new DataRequestTask(task.pos(), task.dimension(),
-                                new SeedRefWork(seedGenHash,
-                                        ChunkContentHashUtil.sectionHashesToArray(sectionHashes)), seedGenHash),
-                        PushKind.SEED_REF);
-                works.add(new SealedWork(player, seedRefTask));
-            } catch (Exception e) {
-                Constants.LOG.error("[PROCESS_QUEUE] Failed to prepare chunk {} for player {}",
-                        task.pos(), player.getName().getString(), e);
-            }
-        }
-
-        if (!works.isEmpty()) {
-            DebugLogger.info(LogType.NETWORK, "[PROCESS_QUEUE] Tick sealed batch for {}: size={}, remaining={}",
-                    player.getName().getString(), works.size(), queue.size());
-            batchChannel.offer(new SealedBatch(queue, works));
-        } else {
-            queue.releaseSealedBatchReservation();
-        }
+        queue.clear();
     }
 
     /**
@@ -1096,16 +871,8 @@ public class ServerChunkPushManager {
         }
     }
 
-    /** 单任务消费（pushPool 线程）：先判定后计算 + SeedRef 直发。 */
+    /** 单任务消费：SeedRef 路径已退役，无事可做。 */
     private void processOne(SealedWork work) {
-        ServerPlayer player = work.player();
-        PushTask task = work.task();
-        if (!player.isAlive() || player.hasDisconnected()) {
-            return;
-        }
-        if (task.seedRef() != null) {
-            sendSeedRef(player, task.data());
-        }
     }
 
 
@@ -1222,8 +989,6 @@ public class ServerChunkPushManager {
         initialPlayerChunkPos.remove(playerId);
         resumePlayers.remove(playerId);
         playerLightComputeSupported.remove(playerId);
-        seedGenDisabledPlayers.remove(playerId);
-        seedGenFallbackCounts.remove(playerId);
     }
 
     /**
@@ -1234,10 +999,7 @@ public class ServerChunkPushManager {
         initialPlayerChunkPos.clear();
         resumePlayers.clear();
         // review-fix: T3-52：能力表一并清理
-        playerSeedGenSupported.clear();
         playerLightComputeSupported.clear();
-        seedGenDisabledPlayers.clear();
-        seedGenFallbackCounts.clear();
         if (pushPool != null) {
             pushPool.shutdownNow();
         }
@@ -1258,36 +1020,10 @@ public class ServerChunkPushManager {
                 totalQueues, totalPending, activeThreads, poolSize);
     }
 
-    /** 区块数据请求任务。 */
-    private record DataRequestTask(ChunkPos pos, String dimension, SeedRefWork seedRef,
-                                   long contentHash) {
-    }
-
-    private static final class SeedRefWork {
-        private final long chunkHash;
-        private final long[] sectionHashes;
-
-        SeedRefWork(long chunkHash, long[] sectionHashes) {
-            this.chunkHash = chunkHash;
-            this.sectionHashes = sectionHashes != null ? sectionHashes.clone() : new long[0];
-        }
-
-        long chunkHash() {
-            return chunkHash;
-        }
-
-        long[] sectionHashes() {
-            return sectionHashes.clone();
-        }
-    }
-
-    /** 批次队列任务：柱 + 维度 + SeedRef 元数据（可空）。 */
-    static record PushTask(ChunkPos pos, String dimension, DataRequestTask data, PushKind kind) {
+    /** 批次队列任务（SeedRef 已退役，仅保留位置/维度字段）。 */
+    static record PushTask(ChunkPos pos, String dimension, PushKind kind) {
         static PushTask full(ChunkPos pos, String dimension, PushKind kind) {
-            return new PushTask(pos, dimension, null, kind);
-        }
-        SeedRefWork seedRef() {
-            return data != null ? data.seedRef() : null;
+            return new PushTask(pos, dimension, kind);
         }
 
         public ChunkPos pos() {
@@ -1297,13 +1033,9 @@ public class ServerChunkPushManager {
         public String dimension() {
             return dimension;
         }
-
-        long contentHash() {
-            return data != null ? data.contentHash() : 0L;
-        }
     }
-    /** 推送任务类型：可见全量（仅 seedgen 转换用）、SeedRef。 */
-    enum PushKind { FULL_VISIBLE, SEED_REF }
+    /** 推送任务类型（SeedRef 已退役；FULL_VISIBLE 仅作历史占位）。 */
+    enum PushKind { FULL_VISIBLE }
 
 
     /**

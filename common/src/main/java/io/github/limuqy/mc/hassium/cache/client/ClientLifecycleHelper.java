@@ -253,7 +253,6 @@ public final class ClientLifecycleHelper {
 
         MainThreadDispatcher.clearClient(false);
         MainThreadDispatcher.clearPlayerPosition();
-        ClientMetadataHandler.clearPendingOnDisconnect();
 
         Constants.LOG.info("Hassium: Disconnect cleanup done (shadow flush deferred to teardown TAIL)");
     }

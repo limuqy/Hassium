@@ -56,9 +56,6 @@ public final class FabricSendCompat {
     }
 
     private static CustomPacketPayload s2cPayload(PacketId channel, FriendlyByteBuf buf) {
-        if (channel.equals(HassiumChannels.SEED_REF_S2C)) {
-            return FabricPayloadRegistry.toPayload(FabricPayloadRegistry.SEED_REF_S2C_TYPE, buf);
-        }
         if (channel.equals(HassiumChannels.BLOCK_ENTITY_DATA_S2C)) {
             return FabricPayloadRegistry.toPayload(FabricPayloadRegistry.BLOCK_ENTITY_DATA_S2C_TYPE, buf);
         }

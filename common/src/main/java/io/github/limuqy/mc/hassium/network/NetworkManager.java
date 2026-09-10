@@ -22,11 +22,6 @@ public interface NetworkManager {
     }
 
     /**
-     * 发送 SeedRef（SeedGen 区块引用）到客户端（服务端调用）
-     */
-    void sendSeedRef(ServerPlayer player, FriendlyByteBuf buf);
-
-    /**
      * 服务端主动推送 shadowPullV1 响应（待推送队列泵用；复用原 requestId）。
      * buf 所有权转移给实现（未消费时释放）。
      */

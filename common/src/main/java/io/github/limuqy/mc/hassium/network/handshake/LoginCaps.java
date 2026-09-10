@@ -29,7 +29,7 @@ public final class LoginCaps {
 
     /**
      * Pull 模式（Compare+Pull 对齐）：协商通过后服务端对该玩家停发 chunk_payload
-     * 整柱推送（forget/元数据/SeedRef 照常），区块数据全部由客户端影子虚拟玩家
+     * 整柱推送（forget/元数据照常），区块数据全部由客户端影子虚拟玩家
      * tracking 驱动的统一 Compare+Pull 拉取；pull FULL 响应走固定 zstd。
      */
     public static final int PULL_MODE = 1 << 8;

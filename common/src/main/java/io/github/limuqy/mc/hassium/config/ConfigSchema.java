@@ -37,8 +37,8 @@ public final class ConfigSchema {
     public static final ConfigKey<Integer> CHUNK_MAIN_THREAD_CHUNK_BUDGET_MS = integer("chunk.mainThreadChunkBudgetMs", ConfigScope.CLIENT, Domain.CHUNK_CORE, 15, 1, 50,
             "主线程 apply 预算（ms）", "Main-thread apply budget in ms");
     public static final ConfigKey<Integer> CHUNK_SEED_GEN_THREADS = integer("chunk.seedGenThreads", ConfigScope.CLIENT, Domain.CHUNK_CORE, 2, 0, 64,
-            "SeedGen 本地生成线程数（0=禁用本地生成，SeedRef 一律回退全量）",
-            "SeedGen local-generation thread count (0 = disable; SeedRef falls back to full chunk)");
+            "SeedGen 本地生成线程数（0=禁用本地生成，回退全量）",
+            "SeedGen local-generation thread count (0 = disable; falls back to full chunk)");
     public static final ConfigKey<Boolean> CLIENT_CHUNK_SEED_GEN_ENABLED = bool("chunk.seedGenEnabled", ConfigScope.CLIENT, Domain.CHUNK_CORE, false,
             "是否启用 SeedGen（本地生成 pristine 区块；需双端同版本，默认关）。服务端开启时会下发世界种子",
             "Enable SeedGen (local pristine chunks; both sides same version; default off). Server enablement sends the world seed");
@@ -87,8 +87,8 @@ public final class ConfigSchema {
 
     // === 区块核心（chunk.*；SERVER 2 键）===
     public static final ConfigKey<Boolean> SERVER_CHUNK_SEED_GEN_ENABLED = bool("chunk.seedGenEnabled", ConfigScope.SERVER, Domain.CHUNK_CORE, false,
-            "是否启用 SeedGen（对 pristine 区块发 SeedRef；需双端同版本，默认关）。警告：开启会向客户端下发世界种子，等同泄露服务端种子",
-            "Enable SeedGen (SeedRef for pristine chunks; default off). WARNING: this leaks the server world seed to clients");
+            "是否启用 SeedGen（服务端开启下发世界种子；客户端门控开时影子 tracking 触发 vanilla worldgen 本地生成，再 compare-pull；需双端同版本，默认关）。警告：开启会向客户端下发世界种子，等同泄露服务端种子",
+            "Enable SeedGen (server sends world seed; client gates local worldgen via shadow tracking then compare-pull; both sides same version; default off). WARNING: this leaks the server world seed to clients");
     public static final ConfigKey<Boolean> CHUNK_LIGHT_STRIP = bool("chunk.lightStrip", ConfigScope.SERVER, Domain.CHUNK_CORE, true,
             "是否启用光照剥离", "Enable light stripping");
 

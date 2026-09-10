@@ -123,7 +123,6 @@ public final class ServerHandshakeActivation {
             return;
         }
         ServerChunkPushManager push = ServerChunkPushManager.getInstance();
-        push.setPlayerSeedGenSupported(player.getUUID(), LoginCaps.has(caps, LoginCaps.SEED_GEN));
         push.setPlayerLightComputeSupported(player.getUUID(), LoginCaps.has(caps, LoginCaps.LIGHT_STRIP));
         push.setInitialPlayerPosition(player, player.getX(), player.getZ());
 

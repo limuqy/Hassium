@@ -1,15 +1,17 @@
-# 单轮原版区块流场景：验证真实接收/落地指标，不再对已裁剪的 SeedGen 回退与本地生成设门禁。
+# 单轮原版区块流 + SeedGen 本地生成：门控开时 tracking 触发 vanilla worldgen，
+# 无基线柱不再被 boot/sweep 抢成 authoritative-full。
 #
-# 配置档案仍沿用 seedgen，便于覆盖影子端兼容配置；当前门禁不把该已退役支路当作必经路径。
-# 世界保持干净，避免旧缓存干扰首轮完整区块接收。
+# 配置档案 seedgen 双端 chunk.seedGenEnabled=true；CleanWorld 保证首轮无旧缓存。
 #
 # 门禁键与 SmokeProbeWriter PROBE JSON 同源：
 #   1) stats.clientAppliedChunkCount > 0 —— 原版客户端成功应用至少一柱。
 #   2) stats.clientLandedChunkCount > 0 —— 实际 ClientChunkCache 中存在落地柱。
+#   3) counters.locallyGenerated > 0 —— SeedGen 本地生成至少一柱（非网络 FULL）。
 join label=WAIT_JOIN_1 since=start timeoutMs=${joinTimeoutMs}
 fly seconds=${moveSeconds} tag=MOVE_
 wait ms=${round1WaitMs}
 dump label=ROUND1 round=1
 assertProbe key=stats.clientAppliedChunkCount op=gt value=0
 assertProbe key=stats.clientLandedChunkCount op=gt value=0
+assertProbe key=counters.locallyGenerated op=gt value=0
 exit rounds=1

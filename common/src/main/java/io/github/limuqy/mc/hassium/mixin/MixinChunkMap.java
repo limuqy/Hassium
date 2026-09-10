@@ -173,8 +173,8 @@ public class MixinChunkMap {
      * 服务端裁决 UNCHANGED/DELTA/FULL）。
      * <p>
      * 本地生成门控通过（客户端本地生成开启 + 服务端 SeedGen 开启 + 真实 seed 到达）：
-     * 选中缺失柱由虚拟玩家 tracking 触发影子原版生成链（§6 节点 F/G，真实种子），
-     * 不压制、不登记 pull，交付仍走 SeedGenExecutor 校验/publish 既有路径。
+     * 选中缺失柱由虚拟玩家 tracking 触发影子原版生成链（真实种子），
+     * 不压制、不登记 pull，交付走 onChunkMaterialized → LOCAL_GENERATION publish。
      */
     @Unique
     private boolean hassium$shadowSuppressGeneration(ChunkPos pos) {

@@ -84,20 +84,6 @@ public class NeoForgeNetworkManager implements NetworkManager {
 
     // 1.20.1 包装类定义
 
-    public record SeedRefWrapper(byte[] data) {
-        public void encode(FriendlyByteBuf buf) {
-            buf.writeVarInt(data.length);
-            buf.writeBytes(data);
-        }
-        public static SeedRefWrapper decode(FriendlyByteBuf buf) {
-            int length = buf.readVarInt();
-            byte[] data = new byte[length];
-            buf.readBytes(data);
-            return new SeedRefWrapper(data);
-        }
-    }
-
-
     public record BlockEntityDataWrapper(byte[] data) {
         public void encode(FriendlyByteBuf buf) {
             buf.writeVarInt(data.length);
@@ -228,26 +214,6 @@ public class NeoForgeNetworkManager implements NetworkManager {
     /**
      * 区块哈希 Payload (S2C)
      */
-
-    /**
-     * SeedRef Payload (S2C，1.21.1+)
-     */
-    public record SeedRefPayload(byte[] data) implements CustomPacketPayload {
-
-        public static final Type<SeedRefPayload> TYPE = new Type<>(
-                ResourceLocationCompat.create(Constants.MOD_ID, "seed_ref_s2c")
-        );
-
-        public static final StreamCodec<FriendlyByteBuf, SeedRefPayload> STREAM_CODEC = StreamCodec.composite(
-                ByteBufCodecs.BYTE_ARRAY, SeedRefPayload::data,
-                SeedRefPayload::new
-        );
-
-        @Override
-        public Type<SeedRefPayload> type() {
-            return TYPE;
-        }
-    }
 
     /**
      * BlockEntity 请求 Payload (C2S)
@@ -404,24 +370,6 @@ public class NeoForgeNetworkManager implements NetworkManager {
         // 必须 setPacketHandled(true)，否则会把包交给原版 → Unknown custom packet identifier: hassium:main
         // S2C / C2S 必须带方向枚举，避免方向校验失败
         // 注意：Forge 1.20.1 的 consumer 参数是 Supplier<Context>
-
-        // 5b: SeedRef S2C
-        CHANNEL.registerMessage(packetId++, SeedRefWrapper.class,
-                SeedRefWrapper::encode, SeedRefWrapper::decode,
-                (msg, ctx) -> {
-                    ctx.get().enqueueWork(() -> {
-                        try {
-                            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data()));
-                            SeedRefS2CPacket packet = SeedRefS2CPacket.decode(buf);
-                            ClientMetadataHandler.handleSeedRefPacket(packet);
-                        } catch (Exception e) {
-                            LOGGER.error("[CLIENT] Failed to handle seed ref", e);
-                        }
-                    });
-                    ctx.get().setPacketHandled(true);
-                },
-                java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT));
-
 
         // 8: BlockEntity 请求 C2S
         CHANNEL.registerMessage(packetId++, BlockEntityRequestWrapper.class,
@@ -639,11 +587,6 @@ public class NeoForgeNetworkManager implements NetworkManager {
 
         // ===== S2C（客户端处理；与服务端发送方向一一对应）=====
 
-        // SeedRef S2C
-        registrar.playToClient(SeedRefPayload.TYPE, SeedRefPayload.STREAM_CODEC,
-                NeoForgeNetworkManager::handleSeedRefS2C);
-
-
         // BlockEntityData S2C
         registrar.playToClient(BlockEntityDataPayload.TYPE, BlockEntityDataPayload.STREAM_CODEC,
                 NeoForgeNetworkManager::handleBlockEntityDataS2C);
@@ -746,19 +689,6 @@ public class NeoForgeNetworkManager implements NetworkManager {
 
     // ===== S2C 客户端处理（1.21.1+；处理逻辑对齐 SimpleChannel 注册块）=====
 
-    private static void handleSeedRefS2C(SeedRefPayload payload, IPayloadContext context) {
-        context.enqueueWork(() -> {
-            try {
-                FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(payload.data()));
-                SeedRefS2CPacket packet = SeedRefS2CPacket.decode(buf);
-                ClientMetadataHandler.handleSeedRefPacket(packet);
-            } catch (Exception e) {
-                LOGGER.error("[CLIENT] Failed to handle seed ref", e);
-            }
-        });
-    }
-
-
     private static void handleBlockEntityDataS2C(BlockEntityDataPayload payload, IPayloadContext context) {
         context.enqueueWork(() -> {
             try {
@@ -794,19 +724,6 @@ public class NeoForgeNetworkManager implements NetworkManager {
     }
 #endif
 
-    @Override
-    public void sendSeedRef(ServerPlayer player, FriendlyByteBuf buf) {
-        byte[] data = new byte[buf.readableBytes()];
-        buf.readBytes(data);
-        buf.release();
-#if MC_VER < MC_1_21_1
-        CHANNEL.sendTo(new SeedRefWrapper(data), player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
-#else
-        SeedRefPayload payload = new SeedRefPayload(data);
-        sendServerPayload(player, payload);
-        LOGGER.debug("Hassium: Sent seed ref to {}", player.getName().getString());
-#endif
-    }
     @Override
     public void sendShadowPullResponse(ServerPlayer player, FriendlyByteBuf buf) {
         byte[] data = new byte[buf.readableBytes()];
