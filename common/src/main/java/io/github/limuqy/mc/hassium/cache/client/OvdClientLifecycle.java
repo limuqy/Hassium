@@ -3,7 +3,6 @@ package io.github.limuqy.mc.hassium.cache.client;
 import io.github.limuqy.mc.hassium.compat.ChunkShapeCompat;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.mixin.ClientLevelAccessor;
-import io.github.limuqy.mc.hassium.network.ClientChunkPipeline;
 import io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute;
 import io.github.limuqy.mc.hassium.network.seedgen.ShadowTrackingSession;
 import io.github.limuqy.mc.hassium.utils.DebugLogger;
@@ -25,16 +24,12 @@ public final class OvdClientLifecycle {
         return cfg.isClientCacheEnabled() && cfg.isViewDistanceExtensionEnabled();
     }
 
-    /** OVD 可用：配置开 + 影子引擎可用 + 握手完成且未失败。 */
+    /**
+     * OVD 可用：纯影子端能力——配置开 + 影子引擎未失败。
+     * 不依赖服务端握手同意：环带只由本地源（盘/注入/可选生成）回填。
+     */
     public static boolean isEnabled() {
-        if (!isConfigEnabled()) {
-            return false;
-        }
-        if (!ShadowLightCompute.isEnabled()) {
-            return false;
-        }
-        ClientChunkPipeline pipeline = ClientChunkPipeline.getInstance();
-        return pipeline.isHassiumHandshakeDone() && !pipeline.isShadowServerFailed();
+        return isConfigEnabled() && ShadowLightCompute.isEnabled();
     }
 
     /** 服务端通告视距（登录包 / SetChunkCacheRadius；未知返回 -1）。 */

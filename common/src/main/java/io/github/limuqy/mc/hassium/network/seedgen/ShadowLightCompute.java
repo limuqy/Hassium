@@ -634,14 +634,21 @@ public final class ShadowLightCompute {
      * the caller retry an unconditional FULL.
      */
     public static boolean publishCachedChunk(String dimension, ChunkPos pos) {
-        return publishCachedChunk(dimension, pos, false);
+        return publishCachedChunk(dimension, pos, false, false);
+    }
+
+    /** OVD 环带回传：本地源全量服务，标记 renderOnly（不进权威缓存命中分母）。 */
+    public static boolean publishOvdCachedChunk(String dimension, ChunkPos pos) {
+        return publishCachedChunk(dimension, pos, false, true);
     }
 
     /**
      * @param localGeneration true = 本会话 vanilla worldgen 产物（门控开路径），
      *                        按 {@link TraceOrigin#LOCAL_GENERATION} 投递，不计缓存全命中
+     * @param renderOnly      true = OVD 环带：view=ovd / 不计权威 landed
      */
-    public static boolean publishCachedChunk(String dimension, ChunkPos pos, boolean localGeneration) {
+    public static boolean publishCachedChunk(String dimension, ChunkPos pos,
+                                             boolean localGeneration, boolean renderOnly) {
         if (pos == null || !isEnabled()) {
             return false;
         }
@@ -676,7 +683,7 @@ public final class ShadowLightCompute {
             return submitGenerated(pos, chunk, level, false);
         }
         return submitPreLight(ShadowChunkSource.CACHE_SNAPSHOT, pos, chunk, level,
-                traceOrigin(origin));
+                traceOrigin(origin), renderOnly);
     }
 
     public static long hashMemoryHitCount() {
@@ -1192,6 +1199,15 @@ public final class ShadowLightCompute {
                                          net.minecraft.world.level.chunk.LevelChunk chunk,
                                          net.minecraft.server.level.ServerLevel level,
                                          TraceOrigin traceOrigin) {
+        return submitPreLight(source, pos, chunk, level, traceOrigin, false);
+    }
+
+    public static boolean submitPreLight(ShadowChunkSource source,
+                                         ChunkPos pos,
+                                         net.minecraft.world.level.chunk.LevelChunk chunk,
+                                         net.minecraft.server.level.ServerLevel level,
+                                         TraceOrigin traceOrigin,
+                                         boolean renderOnly) {
         if (source == null || !source.isLocalChunk() || pos == null || chunk == null || !isEnabled()) {
             return false;
         }
@@ -1210,7 +1226,7 @@ public final class ShadowLightCompute {
         if (queued != null && isNetworkOrigin(queued.traceOrigin) && !isNetworkOrigin(traceOrigin)) {
             return true;
         }
-        generated.put(key, new GenEntry(chunk, level, lightReuse, false, traceOrigin));
+        generated.put(key, new GenEntry(chunk, level, lightReuse, renderOnly, traceOrigin));
         pump();
         return true;
     }
@@ -1985,7 +2001,7 @@ public final class ShadowLightCompute {
         int chunkZ = item.chunkPacket.getZ();
         ChunkPos chunkPos = new ChunkPos(chunkX, chunkZ);
         long chunkKey = DimensionKey.key(entry.key().dimension(), chunkX, chunkZ);
-        ClientChunkHandler.logShadowChunkApplyEvent("shadow_attempt", chunkPos, false, item.traceOrigin());
+        ClientChunkHandler.logShadowChunkApplyEvent("shadow_attempt", chunkPos, item.renderOnly(), item.traceOrigin());
         ClientChunkPipeline pipeline = ClientChunkPipeline.getInstance();
         pipeline.setApplyInProgress(true);
         try {
@@ -1994,9 +2010,9 @@ public final class ShadowLightCompute {
             pipeline.setApplyInProgress(false);
         }
         if (hasClientChunk(mc, chunkX, chunkZ)) {
-            ClientChunkHandler.logShadowChunkApplyEvent("shadow_applied", chunkPos, false, item.traceOrigin());
+            ClientChunkHandler.logShadowChunkApplyEvent("shadow_applied", chunkPos, item.renderOnly(), item.traceOrigin());
             shadowApplyEpochs.put(chunkKey, shadowApplyEpoch.incrementAndGet());
-            recordFullApplyTrace(chunkKey, false, item.traceOrigin());
+            recordFullApplyTrace(chunkKey, item.renderOnly(), item.traceOrigin());
             SmokeChunkTrace.recordClientApplied(entry.key().dimension(), chunkPos);
             io.github.limuqy.mc.hassium.metrics.NetworkStats.recordChunkApplied(chunkX, chunkZ);
             accountAuthoritativeLanded(entry.key().dimension(), chunkPos, item.traceOrigin());

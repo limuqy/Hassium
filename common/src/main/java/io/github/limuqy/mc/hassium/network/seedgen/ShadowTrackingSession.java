@@ -286,25 +286,31 @@ public final class ShadowTrackingSession {
         ChunkPos center = virtualPlayer.chunkPosition();
         int diskTried = 0;
         int published = 0;
-        // 按 chebyshev 周长内环优先；角柱可能 cheb≤serverVD 但落在 isChunkInRange 圆角外，
-        // 必须整环扫 + inOvdWindow 过滤，不能只扫 cheb>serverVD。
+        int windowCells = 0;
+        int notInjected = 0;
+        // 内环优先：按 chebyshev 周长枚举**方环**（四条边），不能用 |dx|+|dz| 菱形——
+        // 菱形会漏掉每环四角，外环 13–16 的角柱永远进不了 OVD（window 偏小、disk 恒 0）。
         outer:
         for (int cheb = 1; cheb <= clientVD; cheb++) {
-            for (int dx = -cheb; dx <= cheb; dx++) {
-                int dzPos = cheb - Math.abs(dx);
-                for (int s = 0; s < 2; s++) {
-                    int dz = (s == 0) ? dzPos : -dzPos;
-                    if (s == 1 && dzPos == 0) {
-                        break;
-                    }
+            for (int side = 0; side < 4; side++) {
+                for (int t = -cheb; t <= cheb; t++) {
                     if (diskTried >= OVD_DISK_BUDGET && published >= OVD_PUBLISH_BUDGET) {
                         break outer;
+                    }
+                    int dx;
+                    int dz;
+                    switch (side) {
+                        case 0 -> { dx = t; dz = cheb; }   // N
+                        case 1 -> { dx = t; dz = -cheb; }  // S
+                        case 2 -> { dx = cheb; dz = t; }   // E
+                        default -> { dx = -cheb; dz = t; } // W
                     }
                     int x = center.x + dx;
                     int z = center.z + dz;
                     if (!inOvdWindow(x, z)) {
                         continue;
                     }
+                    windowCells++;
                     long key = io.github.limuqy.mc.hassium.utils.DimensionKey
                             .key(currentDimension, x, z);
                     if (ovdCounted.contains(key)) {
@@ -324,11 +330,12 @@ public final class ShadowTrackingSession {
                             recordOvdLoadedOnce(currentDimension, pos);
                             continue;
                         }
-                        if (ShadowLightCompute.publishCachedChunk(currentDimension, pos)) {
+                        if (ShadowLightCompute.publishOvdCachedChunk(currentDimension, pos)) {
                             recordOvdLoadedOnce(currentDimension, pos);
                             published++;
                         }
                     } else {
+                        notInjected++;
                         if (diskTried >= OVD_DISK_BUDGET) {
                             continue;
                         }
@@ -340,8 +347,9 @@ public final class ShadowTrackingSession {
         }
         if (diskTried > 0 || published > 0) {
             DebugLogger.info(DebugLogger.LogType.NETWORK,
-                    "[SHADOW_TRACK] OVD sweep disk={} publish={} center=({},{}) ring={}..{} (dimension={})",
-                    diskTried, published, center.x, center.z, serverVD + 1, clientVD, currentDimension);
+                    "[SHADOW_TRACK] OVD sweep disk={} publish={} window={} missing={} center=({},{}) ring={}..{} (dimension={})",
+                    diskTried, published, windowCells, notInjected,
+                    center.x, center.z, serverVD + 1, clientVD, currentDimension);
         }
     }
 
@@ -386,10 +394,17 @@ public final class ShadowTrackingSession {
                     && ShadowLightCompute.hasClientApplyEpoch(currentDimension, pos)) {
                 continue;
             }
-            if (ShadowLightCompute.publishCachedChunk(currentDimension, pos)) {
+            boolean ovd = !inVanillaVisibleShape(pos.x, pos.z) && inOvdWindow(pos.x, pos.z);
+            boolean ok = ovd
+                    ? ShadowLightCompute.publishOvdCachedChunk(currentDimension, pos)
+                    : ShadowLightCompute.publishCachedChunk(currentDimension, pos);
+            if (ok) {
+                if (ovd) {
+                    recordOvdLoadedOnce(currentDimension, pos);
+                }
                 DebugLogger.info(DebugLogger.LogType.NETWORK,
-                        "[SHADOW_TRACK] redeliver ({}, {}) -> publishCached (dimension={})",
-                        pos.x, pos.z, currentDimension);
+                        "[SHADOW_TRACK] redeliver ({}, {}) -> publishCached ovd={} (dimension={})",
+                        pos.x, pos.z, ovd, currentDimension);
                 sent++;
             }
         }
@@ -807,9 +822,14 @@ public final class ShadowTrackingSession {
                 .get(sel.dimension(), pos) != null;
         shadow.injectLoadedChunk(sel.dimension(), pos, chunk, !diskHit);
         ShadowChunkMapCompat.completeSuspendedLoad(sel.dimension(), pos, chunk);
+        // 立即 publish：外环可能不走 tracking 边沿 materialize，只靠 sweep 会漏交付。
+        boolean published = ShadowLightCompute.publishOvdCachedChunk(sel.dimension(), pos);
+        if (published) {
+            recordOvdLoadedOnce(sel.dimension(), pos);
+        }
         DebugLogger.info(DebugLogger.LogType.NETWORK,
-                "[SHADOW_TRACK] OVD local serve ({}, {}) diskHit={}",
-                pos.x, pos.z, diskHit);
+                "[SHADOW_TRACK] OVD local serve ({}, {}) diskHit={} published={}",
+                pos.x, pos.z, diskHit, published);
     }
 
     /**
@@ -860,13 +880,15 @@ public final class ShadowTrackingSession {
         }
     }
 
-    /** OVD 本地生成：配置开 + 握手已下发真实世界种子（无种子自动关，避免猜地形）。 */
+    /**
+     * OVD 本地生成：客户端 {@code ovdLocalGeneration} + 握手已下发真实世界种子。
+     * 服务端只需开 SeedGen 下发种子；是否使用由影子端自行决定，不再单独协商。
+     */
     private static boolean canOvdLocalGenerate() {
         if (!HassiumConfigService.getInstance().isOvdLocalGenerationEnabled()) {
             return false;
         }
-        ClientChunkPipeline pipeline = ClientChunkPipeline.getInstance();
-        return pipeline.isServerSeedGenEnabled() && pipeline.isServerSeedAvailable();
+        return ClientChunkPipeline.getInstance().isServerSeedAvailable();
     }
 
     /**
@@ -950,7 +972,7 @@ public final class ShadowTrackingSession {
         // 那些凭据属于上一世界/上一会话，留着会让 R2 环带静默空洞（G1 ovdLoaded=0）。
         if (!inVanillaVisibleShape(pos.x, pos.z)) {
             if (inOvdWindow(pos.x, pos.z)) {
-                boolean published = ShadowLightCompute.publishCachedChunk(dimension, pos);
+                boolean published = ShadowLightCompute.publishOvdCachedChunk(dimension, pos);
                 if (published) {
                     recordOvdLoadedOnce(dimension, pos);
                 }
@@ -1004,7 +1026,7 @@ public final class ShadowTrackingSession {
             return;
         }
         // 进边沿必交付：等价原版 trackChunk（盘上命中 / 上一会话缓存 / 本会话本地生成）
-        boolean published = ShadowLightCompute.publishCachedChunk(dimension, pos, localWorldgen);
+        boolean published = ShadowLightCompute.publishCachedChunk(dimension, pos, localWorldgen, false);
         if (!published) {
             DebugLogger.info(DebugLogger.LogType.NETWORK,
                     "[SHADOW_TRACK] materialized ({}, {}) publish-failed -> pull (dimension={})",
