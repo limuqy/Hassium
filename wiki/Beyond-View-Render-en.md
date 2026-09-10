@@ -1,92 +1,29 @@
-# Beyond-View Render
+# Beyond-View Render (Planned)
 
 ---
 
-> **简体中文**: [Beyond-View-Render](Beyond-View-Render) · English
+> **English**: [Beyond-View-Render](Beyond-View-Render) · English
 
-Beyond-view render lets a multiplayer client with render distance (RD) greater than the server's view distance (serverVD) fill the `serverVD < dist ≤ clientVD` ring from the local cache — **render only, not simulated**, and never asks the server for chunks or block entities beyond `serverVD`.
-
----
-
-## When it applies
-
-- **Multiplayer only** — `MixinOptions` and `ViewDistanceExtensionService` both check `mc.getSingleplayerServer() != null`; singleplayer is skipped
-- Client RD greater than the server `view-distance`
-- Both `chunk.enabled` and `chunk.viewDistanceExtensionEnabled` enabled (both default true)
-- **Incompatible with Bobby** — Hassium ships its own beyond-view renderer; do not run Bobby alongside
+> **Status: planned, not enabled in the current build.** After the 2.0.0 direct-connection regression, chunk delivery is fully driven by the shadow server's vanilla tracking (must-deliver on range-enter, Forget on range-exit). The old OVD ring path (`renderOnly` chunks, `ClientHeatIndex` per-chunk eviction, out-of-range `ChunkDataRequestC2S`) was cut from the code, and its config keys (`chunk.viewDistanceExtensionEnabled` / `chunk.maxRenderDistance` / `chunk.ovdUnloadDelaySecs` / `chunk.ovdLocalGeneration`) were removed. This page keeps the design record; the "Enable" section and keys return when the feature ships.
 
 ---
 
-## How it works
+## Design goal
 
-```mermaid
-flowchart TD
-    tick["Every tick: ViewDistanceExtensionService.update"]
-    ring["Compute ring = serverVD < dist ≤ clientVD (circle)"]
-    enqueue["Cache hits go to ClientCacheLoadQueue (renderOnly)"]
-    miss["Cache misses roll back silently; never request from server"]
-    apply["Main thread applies renderOnly chunks; never requests BE"]
-    real["When a real chunk arrives it overrides the renderOnly marker and requests BE"]
+Beyond-view render lets a multiplayer client, when its render distance (RD) exceeds the server view distance (serverVD), backfill positions in the `serverVD < dist ≤ clientVD` ring from local cache — **render-only, no simulation**, and it never requests out-of-range chunks or block entities from the server.
 
-    tick --> ring --> enqueue
-    enqueue -->|hit| apply
-    enqueue -->|miss| miss
-    real -.-> apply
-```
+## Design notes (historical)
 
-- Ring size depends on the gap between client RD and server view distance; lower `chunk.maxRenderDistance` to limit resource use
-- Engages only when `clientVD > serverVD`; on `clientVD ≤ serverVD` it auto-clears and reverts to vanilla
-- Toggling `viewDistanceExtensionEnabled = false` clears and reverts to the vanilla RD clamp
+- **Multiplayer only**: not enabled in singleplayer
+- **Ring backfill**: cached chunks apply as renderOnly; cache misses roll back silently without requesting from the server
+- **Real chunks win**: when a real chunk arrives at a renderOnly position, it overrides the marker and requests BEs
+- **Exclusive with Bobby**: Hassium's own backfill; do not install together with Bobby
+- **Resource reuse**: reuses the shadow cache eviction machinery; no dedicated memory pool
+- **Boundaries**: auto-clears when `clientVD ≤ serverVD`; `serverRenderDistance == 0` falls back to simulationDistance
 
----
+## Current behavior
 
-## Config keys
-
-| Key | Default | Notes |
-| --- | --- | --- |
-| `chunk.viewDistanceExtensionEnabled` | `true` | Master switch |
-| `chunk.maxRenderDistance` | `16` | Beyond-view ring and effective RD cap (range 2–64) |
-| `chunk.ovdUnloadDelaySecs` | `5` | Seconds of delayed unload after leaving the ring (0 = sync) |
-
----
-
-## Resource use
-
-Ring size grows with the gap between client RD and server view distance. Hassium reuses the existing `ClientHeatIndex` cache eviction mechanism and creates no dedicated memory pool. Keeping RD ≤ 32 is recommended to avoid visual artifacts as fog distance expands.
-
----
-
-## Edge cases
-
-| Scenario | Behavior |
-| --- | --- |
-| Singleplayer | Skipped |
-| `serverRenderDistance == 0` (not logged in) | Falls back to `simulationDistance`; if still ≤0, clears |
-| `clientVD ≤ serverVD` | Cleared, vanilla behavior |
-| Config off (`viewDistanceExtensionEnabled = false`) | Cleared; `MixinOptions` does not cancel the vanilla clamp |
-| RenderOnly cache miss | Silent, marker rolled back, **never asks the server** |
-| RD > 32 (manual `options.txt` edit) | Works; fog distance follows `getEffectiveRenderDistance` and far chunks may pop in (Fog Mixin not implemented) |
-| Real chunk arrives at a renderOnly position | Overrides to normal and requests BE; no flicker or duplicate enqueue |
-| Client disconnect/reconnect | `ClientLifecycleHelper.cleanupOnDisconnect` clears `loadedRenderOnly` and level markers after `ClientCacheLoadQueue.clear()` |
-
----
-
-## What it does not do
-
-- Bobby-style FakeChunk / separate `.bobby` directory
-- Out-of-range `ChunkDataRequestC2S` or widened BE view checks
-- Section delta for beyond-view hit paths (still hit/miss binary; miss is always silent)
-- Raising the vanilla slider cap above 32 (segment signature differences; users edit `options.txt` manually)
-- Fog-distance clamp Mixin (segment signatures and RenderSystem API differ too much across the seven segments; not implemented)
-
----
-
-## Debugging
-
-- In F3: beyond-view chunks should be visible; no large out-of-range `ChunkDataRequestC2S` / `BlockEntityRequestC2S` traffic
-- Disable `chunk.viewDistanceExtensionEnabled` to verify the vanilla clamp returns
-- Client logs: enable `debug.cacheLogging` and `debug.chunkApplyLogging`
-- See [Troubleshooting](Troubleshooting-en)
+In the current build, in-range chunks are delivered by the shadow server (including cache-hit reuse and section delta); out-of-range terrain is not backfilled or requested — identical to vanilla. For out-of-range terrain previews, wait for this feature to ship.
 
 ---
 

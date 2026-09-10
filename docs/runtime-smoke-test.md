@@ -8,9 +8,9 @@ Hassium 跨版本（1.20.1–1.21.11）× 多加载器（fabric / neoforge）的
 
 | 层 | 载体 | 范围 | 说明 |
 |----|------|------|------|
-| **L0** | `common:test` | 随单元测试跑 | JUnit 代码级冒烟，无 MC 实例。代表：`GatewaySmokeTest`（真实 TCP 双端握手 / 续流票据 resume，见下文「网关双主控迁移冒烟」） |
-| **L1** | classic 场景 | 全矩阵（12 版 × fabric/neoforge） | 两轮连服 VD 切换（VD=20 → 断开 → VD=10），核心缓存 / OVD / 光照 / 网关全链路验证 |
-| **L2** | 场景目录 | 锚点集：1.20.1 fabric+neoforge、1.21.1 neoforge、1.21.11 neoforge | 数据驱动场景（seedgen / dimension / migrate 等），只在锚点版本×加载器组合上跑，控制总时长 |
+| **L0** | `common:test` | 随单元测试跑 | JUnit 代码级冒烟，无 MC 实例。代表：`LoginHandshakeTest`（登录期握手编解码/协商）、`ShadowPull*Test`（统一 Compare+Pull 协议族）、`SectionDeltaProtocolTest` |
+| **L1** | classic 场景 | 全矩阵（12 版 × fabric/neoforge） | 两轮连服 VD 切换（VD=20 → 断开 → VD=10），核心缓存 / 分段增量 / 光照 / 聚合通道全链路验证 |
+| **L2** | 场景目录 | 锚点集：1.20.1 fabric+neoforge、1.21.1 neoforge、1.21.11 neoforge | 数据驱动场景（seedgen / dimension），只在锚点版本×加载器组合上跑，控制总时长 |
 | **L3** | 人工专项 | 按需 | AI 辅助游戏内功能测试（minecraft-mod-mcp 桥），不进自动 PASS 门禁，见 [`ai-functional-test.md`](ai-functional-test.md) |
 
 ## 概述
@@ -75,7 +75,7 @@ Hassium 跨版本（1.20.1–1.21.11）× 多加载器（fabric / neoforge）的
 | `-JoinTimeoutMs` | 否 | `0`（→ Java 侧 120s） | 客户端进服等待超时；调大 `-DelayMs` 时须同步调大 |
 | `-MoveSeconds` | 否 | `0` | 进服后飞行移动秒数（先爬升再平飞；0=不动），驱动「进服即移动」补给顺序，非标准默认行为 |
 | `-Vd1` / `-Vd2` | 否 | `20` / `10` | 服务端两轮视距 |
-| `-ClientRenderDistance` | 否 | `32`（且 ≥ Vd1） | 钉死 `<loader>/run/client/options.txt` 的 `renderDistance` 滑块。1.21+ 跟踪半径 = `min(滑块, 服务器 VD)`；三端必须同一值，否则新 run 目录默认 12/16，R1 只喂满 VD16 圆柱（1021 / 1.21.4+ 1057）。OVD 上界仍是 `chunk.maxRenderDistance=16`，与滑块无关 |
+| `-ClientRenderDistance` | 否 | `32`（且 ≥ Vd1） | 钉死 `<loader>/run/client/options.txt` 的 `renderDistance` 滑块。1.21+ 跟踪半径 = `min(滑块, 服务器 VD)`；三端必须同一值，否则新 run 目录默认 12/16，R1 只喂满 VD16 圆柱（1021 / 1.21.4+ 1057） |
 | `-ServerReadyTimeoutSec` | 否 | `160` | 服务端 `Done!` 出现超时 |
 | `-ClientTimeoutSec` | 否 | `240` | 客户端退出超时 |
 | `-SmokePhases` | 否 | `classic` | Java 侧阶段：`classic`（经典两轮）/ `pregen`（预生成，经 `-PregenOnly` 使用） |
@@ -146,13 +146,11 @@ Hassium 跨版本（1.20.1–1.21.11）× 多加载器（fabric / neoforge）的
 | R1 权威环 VD=20 | 原版 `isChunkInRange` 圆柱（`contains(..., extra=true)`） | **1529**（1.20.1–1.21.3）；**1573**（1.21.4+ 改 `isWithinDistance`） |
 | R1 若滑块=16 | 同上，半径 16 | **1021** / **1057**（1.21.4+） |
 | R2 权威环 VD=10 | Hassium `isServerChunkInRange` 仍走 1.20.1 公式 | **453**（全矩阵稳定值） |
-| R2 OVD 环 | 客户端 RD 方阵 16 − VD10 圆柱 = `33² − 453` | **636**（dump 只等 `ovdLoaded>0`，632 缺四角属时序） |
 
-1.21+ `ChunkMap.getPlayerViewDistance = clamp(客户端滑块, 2, 服务器 VD)`。1.20.1 无此钳制。harness 因此钉死三端 `options.txt` `renderDistance=32`（≥ Vd1）；`chunk.maxRenderDistance=16` 只钳 OVD/雾，不抬 1.21 的 `requestedViewDistance`。
 
-## PROBE JSON v1（结构化探针）
+1.21+ `ChunkMap.getPlayerViewDistance = clamp(客户端滑块, 2, 服务器 VD)`。1.20.1 无此钳制。harness 因此钉死三端 `options.txt` `renderDistance=32`（≥ Vd1），不抬 1.21 的 `requestedViewDistance`。
 
-`SmokeProbeWriter` 在每轮统计输出时把 metrics 原值 / 网关状态 / 计数器 / 影子端磁盘状态写成 JSON：
+`SmokeProbeWriter` 在每轮统计输出时把 metrics 原值 / 计数器 / 影子端磁盘状态写成 JSON：
 
 - **路径**：`build/smoke-test/probe/<SessionId>/roundN.json`（由 JVM 属性 `hassium.smokeTest.probeDir` 注入；属性未设置时整体 no-op）
 - **消费方**：单会话 harness 解析结果时**优先读 probe**，缺失（旧客户端 / 写入失败）回退中文日志正则——两条路产出同一批 result 字段
@@ -168,16 +166,12 @@ Hassium 跨版本（1.20.1–1.21.11）× 多加载器（fabric / neoforge）的
   "dimension": "minecraft:overworld", // 未进服为 null（跨版本取法兼容 1.21.11 identifier()）
   "playerPos": [x, y, z],           // 定点 6 位小数；未进服为 null
   "stats": { /* NetworkStats metrics 原值快照，字段名同 HassiumMetricsImpl getter */ },
-  "gateway": {
-    "state": "ACTIVE",              // NetworkCoreState；读取异常降级 "ERROR"
-    "resumeAccepted": true,
-    "c2s": 123,                     // c2sRoutedCount
-    "s2c": 456                      // s2cDispatchedCount
+  "clientCache": {
+    "loadedChunks": 453,            // ClientChunkCache 驻留数
+    "trackedCandidateCount": 0,
+    "actualPresent": 0
   },
   "counters": {
-    "ovdLoaded": 120,               // OVD 已加载（ViewDistanceExtensionService.loadedRenderOnly）
-    "ovdPendingMiss": 3,            // OVD 缺失待补
-    "ovdShadowServed": 45,          // OVD 影子复用服务数
     "sectionDeltaRequestsSent": 2,
     "sectionDeltaApplied": 2,       // = stats.sectionDeltaChunksReceived
     "lightSegRecalc": 1,            // [LIGHT-SEG] 增量分段光重算（= lightCacheMissCount）
@@ -192,9 +186,12 @@ Hassium 跨版本（1.20.1–1.21.11）× 多加载器（fabric / neoforge）的
       "nether":     { "regionFileCount": 4  },   // world/DIM-1/region
       "end":        { "regionFileCount": 3  }    // world/DIM1/region
     }
-  }
+  },
+  "chunkTrace": { /* trace 候选与缺口（analyzer TRACE_* 门禁输入） */ }
 }
 ```
+
+> gateway 对象已随网关轮次退役删除；OVD 计数（`ovdLoaded` / `ovdPendingMiss` / `ovdShadowServed`）已随 OVD 退役删除。
 
 > 注意：dimension 场景的 dump 时刻影子世界尚未 flush（断连/退出才落盘），probe 内 `disk.dimensions` 全为 -1 属预期语义；真实磁盘校验由 harness post-exit 磁盘门禁完成（见下）。
 
@@ -202,7 +199,7 @@ Hassium 跨版本（1.20.1–1.21.11）× 多加载器（fabric / neoforge）的
 
 客户端行为不再硬编码在状态机里，而是由数据驱动的场景引擎执行：
 
-- **选择**：JVM 属性 `hassium.smokeScenario=<name>` → 从 classpath 加载 `/hassium/smoke/scenario/<name>.scenario`；**未设置时** `hassium.smokeTest.migrateTo` 非空 → `migrate`，否则 `classic`（与旧状态机默认分支一致）。`ClientSmokeTest` 已收薄为门面（init / marker 输出 / 反射工具），步骤执行全部在 `ScenarioEngine`
+- **选择**：JVM 属性 `hassium.smokeScenario=<name>` → 从 classpath 加载 `/hassium/smoke/scenario/<name>.scenario`；未设置时默认 `classic`。`ClientSmokeTest` 已收薄为门面（init / marker 输出 / 反射工具），步骤执行全部在 `ScenarioEngine`
 - **变量注入**：场景文件内的 `${delayMs}` / `${joinTimeoutMs}` 等占位符由 JVM 属性求值（含派生值 `round1WaitMs=delayMs*2`、`round2WaitMs=max(3000,delayMs)`、`dimWaitMs=max(20000,delayMs*2)`、`endWaitMs=max(30000,delayMs*3)`）
 
 ### 场景原语
@@ -210,9 +207,9 @@ Hassium 跨版本（1.20.1–1.21.11）× 多加载器（fabric / neoforge）的
 | 原语 | 关键参数 | 行为 |
 |------|----------|------|
 | `join` | `label`、`since=start\|disconnect`、`timeoutMs` | 等待进服（玩家位置被服务端确认） |
-| `wait` | `ms` / `until=migrated`、`settleMs`、`timeoutMs` | 定长等待或等迁移完成后再等 settle 让 S2C 流入 |
+| `wait` | `ms` | 定长等待（`execWait` 仅支持 `ms`；`until`/`settleMs` 为网关时代遗留参数，现无场景使用） |
 | `fly` | `seconds`、`tag` | 注入飞行移动（先爬升 2s 再平飞），驱动区块补给顺序 |
-| `command` | `mode=migrate`、`immediate`、`posBefore` | 发送命令；migrate 模式 `immediate=true` 走 `NetworkCore.migrateToImmediate` 直调（真实断线窗口），false 走 `/hassium migrate` 真实命令（无缝） |
+| `command` | `text` | 发送任意客户端命令（`conn.sendCommand(text)`） |
 | `dimension` | `to=nether\|end\|overworld` | `/execute in <dim> run tp @s ~ ~ ~` 切维（需 OP，服务端场景注入自动 op） |
 | `disconnect` | — | 主动断开（`manualLogout=true` 时走真实手动登出路径） |
 | `reconnect` | `delayMs` | 延迟后反射重连（跨版本 `startConnecting` 签名适配） |
@@ -224,12 +221,9 @@ Hassium 跨版本（1.20.1–1.21.11）× 多加载器（fabric / neoforge）的
 
 | 场景文件 | 内容 | 门禁 |
 |----------|------|------|
-| `classic.scenario` | 两轮连服 VD 切换（join → R1 dump → disconnect → reconnect → R2 dump → exit），行为不变迁移自旧状态机 | classic 四门禁 + validateStats |
-| `migrate.scenario` | 网关双主控迁移演练单轮模式（R1 → command migrate → fly → wait until=migrated → R2 dump）；`migrateImmediate` 选直调 API 或真实命令 | 迁移完成断言 + R2 统计 |
-| `seedgen.scenario` | SeedGen 本地生成单轮冒烟（join → R1 dump → exit rounds=1）。需 profile=`seedgen` 双端 `chunk.seedGenEnabled=true` + 干净世界 | `counters.locallyGenerated > 0`；`staleFullChunkRequestCount < clientAppliedChunkCount`（SeedRef 回退全量有界） |
+| `classic.scenario` | 两轮连服 VD 切换（join → R1 dump → disconnect → reconnect → R2 dump → exit），行为不变迁移自旧状态机 | classic 门禁（analyzer 全集）+ validateStats |
+| `seedgen.scenario` | 单轮原版区块流冒烟（join → R1 dump → exit rounds=1）。需 profile=`seedgen` 覆盖影子端兼容配置 + 干净世界；门禁不再把已裁剪的 SeedGen 回退当必经路径 | `stats.clientAppliedChunkCount > 0`；`stats.clientLandedChunkCount > 0` |
 | `dimension.scenario` | 四轮切维冒烟：主世界 → 下界 → 末地 → 回主世界（单连接不断开）；中段轮 `gate=false`；整体 PASS 只看 R1 统计 + 各轮 assertProbe | 每轮 `joined` 且 `dimension` 正确；harness 另加 post-exit 三维度磁盘门禁 |
-
-### 配置档案（profiles）
 
 存在 `scripts/smoke/profiles/<name>.profile.properties` 时，单会话脚本按键值对 patch 双端 hassium toml（客户端 `run/client/config/hassium/hassium-client.toml`、服务端 `run/server/config/hassium/hassium-server.toml`）。行式 `key=value`、`#` 注释；value 须为合法 TOML 字面量（字符串自带引号）。profile 文件不存在时整体 no-op。
 
@@ -237,27 +231,18 @@ Hassium 跨版本（1.20.1–1.21.11）× 多加载器（fabric / neoforge）的
 
 ## 门禁与会话判定
 
-### classic 四门禁（仅 classic 场景评估，作用于 ROUND2 探针）
+### classic 门禁（Python analyzer 全集，作用于两轮探针与日志）
 
-| 门禁 | 探针条件 | 失败标记 |
-|------|----------|----------|
-| G1 | `counters.ovdLoaded > 0` | `ovdLoaded_not_positive` |
-| G2 | `sectionDeltaApplied > 0` 或 `lightSegRecalc > 0` | `section_delta_or_light_recalc_absent` |
-| G3 | `disk.shadowRegionExists` 且 `disk.regionFileCount > 0` | `shadow_region_missing` |
-| G4 | `counters.locallyGenerated == 0`（影子端全量命中，不允许本地补生成） | `locally_generated_nonzero` |
+现行门禁由 `scripts/smoke/analyzer.py` 统一执行（全集见「直连拓扑门禁」节）：PASS/FAIL marker、客户端退出码、登录期握手（`play init (caps=`）、聚合激活（`Aggregation enabled for`）、ROUND 统计齐备、probe 指标一致性、trace 缺口、ServerSwitched、超时全量推送、日志审计。失败码记入 result JSON `ProbeGateFailures`。
 
-任一不满足 → `Round2Pass=false`，失败名单记入 result JSON `ProbeGateFailures`。probe 缺失或对应字段缺失（旧客户端）时跳过该门禁保持兼容。
+旧 classic 四门禁（G1 `ovdLoaded>0` / G2 `sectionDeltaApplied` / G3 `shadowRegionExists` / G4 `locallyGenerated==0`）中 G2–G4 已删除；**G1 已随影子双窗 OVD 恢复**（ROUND2 `ovdLoaded>0`，在 `ScenarioEngine.validateStats`）。现行 `validateStats` 另校验统计结构行 + 数值公式一致性 + `applied>0` + 驻留>0。
 
 Python analyzer 以服务端日志中的 `[PENDING_CONFIRM] ... confirms timed out (...), direct-pushing stripped full ...` 为唯一的超时全量推送 P0 门禁，错误码为 `SERVER_FULL_PUSH_TIMEOUT`。客户端 trace 的 `LATE_NEAR_PLAYER_CHUNK` 仅为 P1 诊断：表示玩家区块半径 3 内的区块，相对本轮首个落地区块延迟至少 10 秒才应用；覆盖 full、cache、delta 三条应用路径。该诊断用于发现客户端队列阻塞或重复入队，不再反推服务端 confirm 超时。
-
-**非 classic 场景四条门禁整体跳过**（`ProbeGateScenarioGated=true`，`ProbeGateFailures` 恒空）：其探针语义不同（如 dimension 切维轮无 ovd/影子区），套用 classic 口径会误判 FAIL。
 
 ### 非 classic 场景会话判定
 
 ```
-PASS ⇔ HasPass && !HasFail && exit==0
-       && 出现过的 GATEWAY_CLIENT marker 全部 state=ACTIVE（零 marker 视为网络核心路径缺失 → FAIL；
-          不要求两轮齐备、不查 c2s>0——场景引擎提前退出时最后一轮可能无 R2 dump）
+PASS ⇔ HasPass && !HasFail && exit==0 && analyzer 门禁全过
        && （仅 dimension）post-exit 磁盘门禁通过
 ```
 
@@ -266,7 +251,7 @@ PASS ⇔ HasPass && !HasFail && exit==0
 ### classic 场景会话判定
 
 ```
-PASS ⇔ HasPass && exit==0 && 网关门禁 && Round2Pass（含四门禁）
+PASS ⇔ HasPass && exit==0 && analyzer 门禁全过 && Round2Pass（validateStats 两轮）
 ```
 
 ### 日志审计门禁（classic 与场景会话通用，作用于收尾段）
@@ -298,11 +283,10 @@ PASS ⇔ HasPass && exit==0 && 网关门禁 && Round2Pass（含四门禁）
 |------|------|
 | **带宽压缩** | 压缩效率 = (原始 − 压缩后) / 原始 × 100%；括号内为 **聚合包压缩帧 + shadow pull 分段增量**（SectionDeltaS2CPacket 内嵌载荷，decode 全库唯一调用点在 ShadowPullClient DELTA 终态）的压缩前原始字节与压缩后线缆字节；chunk_payload 全量请求通道与未压缩帧不计入。整体「比无 MOD 少收多少」看下方**流量节省**行 |
 | **压缩比** | 原始 ÷ 压缩后，如 `3.32:1` 表示 zstd 把负载压到 1/3.32 |
-| **区块缓存** | `缓存命中 = (全命中 + 部分命中 − 增量) / 应用`，按内容等价值字节。全命中 = 本地缓存 contentHash 整柱复用；部分命中 = 缓存柱作基线的分段增量；增量 = `FULL` 整段 / `BLOCKS` 按格。**SeedGen 本地生成不算缓存命中**（只在「区块加载 / 本地」）。应用 = 全量请求 + 全命中 + 部分命中（OVD 不计入） |
+| **区块缓存** | `缓存命中 = (全命中 + 部分命中 − 增量) / 应用`，按内容等价值字节。全命中 = 本地缓存 contentHash 整柱复用；部分命中 = 缓存柱作基线的分段增量；增量 = `FULL` 整段 / `BLOCKS` 按格。**SeedGen 本地生成不算缓存命中**（只在「区块加载 / 本地」）。应用 = 全量请求 + 全命中 + 部分命中 |
 | **区块加载** | 总数（新增数/新增字节 + 本地生成数/字节 + 本地命中%）。`本地命中` = 本地生成字节/(网络全量+本地生成)；不再展示「过期」 |
-| **超视渲染（OVD）** | `已加载 / 缺失 / 影子复用 / 环带服务`；ROUND2 应非 0。OVD 环带不参与缓存命中率评估 |
+| **流量节省** | `服务端实际推送 / 无MOD应收 × 100%`（越小越省；已节省 = 100% − 该值）。无MOD应收 = 数据包（区块域埋点：chunk_payload / 分段增量等价 wire，**聚合全局包不计**）+ 本地重算 + 客户端缓存 + 光照 |
 | **光照缓存** | 命中率 = (直连命中 + 影子复用) / (命中 + 本地重算)。影子端本会话重算光（远程全量注入 / 分片增量 / LightDelta / SeedGen 本地生成 / 光脏缓存命中）都计为本地重算；ROUND1 重算为主（命中 0% 正常），ROUND2 有缓存复用且存在分片增量/全量请求时会低于 100% |
-| **流量节省** | `服务端实际推送 / 无MOD应收 × 100%`（越小越省；已节省 = 100% − 该值）。无MOD应收 = 数据包（区块域埋点：chunk_payload / 分段增量等价 wire，**聚合全局包不计**）+ 本地重算 + 客户端缓存 + 光照；**不含 OVD**（无 MOD 时服务端本来也不推 serverVD 之外区块） |
 
 > **注意：**"原版Zlib" 是 `VanillaZlibEstimator.estimate()` 对同负载模拟 `Deflater(level=6)` + 阈值 256 帧格式的输出估算值，并非真实原版管线实测。`estimate(int)`（无实际字节时使用）基于 MC 区块 NBT 典型压缩率 25–35% 校准。详见 `VanillaZlibEstimator` 和 `VanillaZlibVsZstdBenchmarkTest`。
 
@@ -325,7 +309,7 @@ build/smoke-test/
 ├── probe/<SessionId>/roundN.json        # PROBE JSON v1（SmokeProbeWriter 落盘）
 ├── stats/
 │   ├── <SessionId>_round1_VD20.txt      # 提取后的 ROUND1 统计（VD=20 场景）
-│   ├── <SessionId>_round2_VD10.txt      # 提取后的 ROUND2 统计（VD=10 + OVD 场景）
+│   ├── <SessionId>_round2_VD10.txt      # 提取后的 ROUND2 统计（VD=10）
 │   ├── <SessionId>_roundN_probe.json    # probe 原值副本（便于离线分析）
 │   └── <SessionId>_server.txt           # 服务端视距切换日志
 ├── results/
@@ -415,7 +399,7 @@ build/smoke-test/
 
 ### 7. ProbeGateFailures 非空
 
-- 对照上文门禁表定位失败项：G1 看 OVD 加载、G2 看石墙注入是否触发（server log `[LIGHT-SEG]` / stone wall 日志）、G3 看影子端 region 落盘、G4 出现本地生成为异常（classic 下不允许）
+- 对照「直连拓扑门禁」节失败码定位：`HANDSHAKE_NOT_NEGOTIATED` 看服务端 `play init (caps=`；`AGGREGATION_NOT_ACTIVE` 看 `Aggregation enabled for`；`SERVER_FULL_PUSH_TIMEOUT` 看 `[PENDING_CONFIRM]`；`TRACE_*` 看 probe `chunkTrace` 缺口；石墙注入触发看 server log `[LIGHT-SEG]` / stone wall 日志
 - probe 整体缺失：看 client log 有无 `PROBE_WRITTEN`；无则确认 `-PhassiumSmokeProbeDir` 透传链是否生效（`hassium.smokeTest.probeDir` 未设置时 SmokeProbeWriter 静默 no-op）
 
 ### 8. 并行模式下 Round2Pass=False（fabric PASS 但 neoforge FAIL）
@@ -451,41 +435,44 @@ build/smoke-test/
 
 **单 loader 模式**：若 `-Loaders fabric` 只指定一个加载器，`-Parallel` 仍生效但无并行意义，逻辑保持统一。
 
-## 网关双主控迁移冒烟（L0）
+## 直连拓扑门禁（L0，Python analyzer）
 
-2.0.0 的迁移冒烟焦点为**网关双主控迁移**：网络核心（客户端进程内网关，`network/core/`）在单主控故障/切换时，经迁移引擎（L1，`network/core/migration/`）带续流票据切到目标主控，世界侧无感、区块续流。当前**代码级冒烟已就位**（`GatewaySmokeTest`，真实 TCP 双端、本机环回，归 L0 层）；真实双端演练见 E1（[`network-core-followups.md`](network-core-followups.md)）。
+直连拓扑下业务门禁由 `scripts/analyze-smoke-result.py`（包装层 `scripts/smoke/analyzer.py`）执行；PowerShell 脚本只保留启动、超时、停止和严重错误处理（`GatewayRequired=false`，`GATEWAY_CLIENT` marker 行保留 `state=RETIRED` 仅兼容旧 grep，不参与判定）。
 
-### 冒烟依据：`GatewaySmokeTest`（真实 TCP 双端）
+### 门禁全集（`analyze_result`）
 
-`common/src/test/java/io/github/limuqy/mc/hassium/network/gateway/GatewaySmokeTest.java`（JUnit，随 `common:test` 运行）用真实 TCP socket 起**单主控**（`GatewayServer.start(port)`，`setInfoProvider(null)` 默认关压缩/UDP/SeedGen）与客户端**网络核心**（`NetworkCore.connect`），覆盖：
+| 门禁 | 依据 | 失败码 |
+|------|------|--------|
+| PASS/FAIL marker | 客户端日志 `HassiumSmokeTest:PASS` 出现且 `:FAIL` 不出现 | `SMOKE_PASS_MARKER_MISSING` / `SMOKE_FAIL_MARKER_PRESENT` |
+| 客户端退出码 | `ClientExitCode == 0` | `CLIENT_EXIT_NONZERO` |
+| 登录期握手 | 服务端日志 `Hassium: play init (caps=`（`play_init_s2c` 激活，常驻输出不依赖 debug.*） | `HANDSHAKE_NOT_NEGOTIATED` |
+| 聚合激活 | 服务端日志 `Hassium: Aggregation enabled for`（PENDING→ENABLED；管线级全局包压缩退役后由聚合门替代原 ZSTD_NOT_ACTIVE） | `AGGREGATION_NOT_ACTIVE` |
+| ROUND 统计 | classic 两轮 `CLIENT_STATS ROUNDn begin/end` 齐备（seedgen 单轮只查 R1） | `ROUND_STATS_MISSING` |
+| probe 指标 | `applied>0`、`landed>0`、`applied<=landed`、`actual<=loaded` 等一致性（`_check_probe_metrics`） | `CLIENT_CACHE_EMPTY` / `METRIC_*` |
+| trace 缺口 | expectedNotPresent / receivedNotInjected / injectedNotReady 为 P0；readyNotApplied 为 P1；appliedNotMeshed 为 INFO（mesh 异步） | `TRACE_*` |
+| 服务端切换 | classic 场景 `ServerSwitched=true` | `SERVER_SWITCH_MISSING` |
+| 超时全量推送 | 服务端日志 `[PENDING_CONFIRM] ... confirms timed out`（唯一 P0 门禁）；客户端 `LATE_NEAR_PLAYER_CHUNK`（半径 3 内延迟 ≥10s）仅 P1 诊断 | `SERVER_FULL_PUSH_TIMEOUT` / `LATE_NEAR_PLAYER_CHUNK` |
+| 日志审计 | 双端日志 ERROR/FATAL + crash-reports 非空（豁免清单见脚本 `-AllowErrorPattern`） | `PROCESS_FATAL` |
 
-| 用例 | 验证点 | 断言/日志依据 |
-|------|--------|----------------|
-| `endToEndStandardFlow` | 握手 accepted → 网络核心 ACTIVE → 会话注册 → S2C 推送 → C2S 路由 | `core.state() == NetworkCoreState.ACTIVE`；`server.registry().get(playerId) != null`；客户端 `s2cDispatchedCount` 递增；`c2sRoutedCount` + 主控 `c2sFramesReceived` 递增 |
-| `resumeFlowThroughRealTcp` | 续流票据握手 → `resumeAccepted=true` → 会话 resume → 区块续流 | 票据 = `ResumeTicket(playerId, 递增 epoch, 共享密钥签名)`；`session.resume()` / `resumeEpoch`；`ServerChunkPushManager.isPlayerResumeActive(playerId)`（`[RESUME]` 推送链标记） |
+空间快照（`SPATIAL_SNAPSHOT_INCOMPLETE`，基线/对角线洞）仅作 P1 诊断；区块落地门禁由 probe 指标承担（shadow 预生成/全视距已裁剪）。
 
-> 注：迁移冒烟基于 TCP 网关连接（握手即控制连接，`udpSupported=false`）；数据面 UDP 默认关（`dataplane.enabled=false`），不在本冒烟范围。
+### 退役的冒烟面
 
-### L1/L2 侧迁移入口
-
-- **`migrate.scenario`**（L2 场景）：单轮迁移演练，`command mode=migrate` 原语支持 `immediate=true`（`NetworkCore.migrateToImmediate` 直调，真实断线窗口）或 `false`（`/hassium migrate` 真实命令，预热感知无缝）；`wait until=migrated` 等迁移完成后统计。
-- 故障触发（生产语义）：迁移引擎心跳监测 outbound 入站静默 ≥ `faultTimeoutMs`（沿用 `master.migrationFaultTimeoutMs` 语义）→ `Sink.onFault` → `NetworkCore.onFault` → `migrateToImmediate`。
-- 迁移完成验证：MIGRATING→ACTIVE 且 `resumeAccepted=true`（probe `gateway.state`/`gateway.resumeAccepted` 可直接观测）；区块续流经推送链续流标记（`isPlayerResumeActive`）。
-
-代码级执行：`./gradlew common:test --tests 'io.github.limuqy.mc.hassium.network.gateway.GatewaySmokeTest'`。
+- **classic 四门禁（G1–G4）**：`ovdLoaded>0` / `sectionDeltaApplied` / `shadowRegionExists` / `locallyGenerated==0` 已从脚本删除；现行 `validateStats` 只校验统计结构行 + 数值公式一致性 + `applied>0` + 驻留>0（不再要求 OVD 或 ROUND2 缓存全命中）。
+- **网关双主控迁移冒烟**：`GatewaySmokeTest`（`network/core/gateway/`）已随网络核心裁剪删除；`migrate.scenario` 已从场景目录移除（现仅 classic / seedgen / dimension 三件套）。
+- **UDP failover harness**：见文末「退役说明」。
 
 ### 沿用可用部分（握手 / 缓存 / export 冒烟）
 
 | 能力 | 冒烟载体 | 出处 |
 |------|----------|------|
-| 握手冒烟 | `GatewaySmokeTest` 双用例（标准握手 accepted + 续流票据握手） | GatewaySmokeTest.java |
-| 缓存冒烟 | classic 两轮：ROUND2 区块核心缓存按字节口径命中（应用 = 全命中+全量请求+部分命中，不含 SeedGen）、OVD、光照缓存；`validateStats` 逐项核公式 | 场景引擎 classic.scenario / `/hassiumc stats` |
-| export 冒烟 | `/hassiumc export` 存续（影子端世界目录拷贝 → `hassium_exports/<cacheId>`，保留 type 126 + chunkHash）；当前 smoke 脚本未驱动 export，作为网关冒烟的手动/扩展项 | `HassiumCommandHandler.startCacheExport` |
+| 握手冒烟 | `LoginHandshakeTest`（`common/src/test/.../network/handshake/`，随 `common:test`） | LoginHandshakeTest.java |
+| 缓存冒烟 | classic 两轮：ROUND2 统计结构 + 公式一致性校验（应用 = 全命中+全量请求+部分命中，不含 SeedGen）、光照缓存 | 场景引擎 classic.scenario / `/hassiumc stats` |
+| export 冒烟 | `/hassiumc export` 存续（影子端世界目录拷贝 → `hassium_exports/<cacheId>`，保留 type 126 + chunkHash）；当前 smoke 脚本未驱动 export，作为手动/扩展项 | `HassiumCommandHandler` |
 
-### E1/E2 呼应（`docs/network-core-followups.md`）
+## E1 真实双端联调（历史）
 
-- **E1（真实双端联调）**：上述冒烟多为单测/桩测，`GatewaySmokeTest` 真实 TCP 仅本机环回；E1 =「真客户端 + 真主控跑本文档 classic 流程（ROUND1/2）」+「双主控迁移演练」。迁移命令入口 `/hassium migrate`（B4，仅开发环境）与双主控演练已交付（见 [`network-core-followups.md`](network-core-followups.md) B4/E1）；端点通告 CONFIG 帧（B1）状态见该清单。
-- **E2（ViaFabric 运行时冒烟，随 E1 一起）**：装 ViaFabric → 客户端日志出现 `Hassium: ViaFabric detected via classpath (<类>)` 或 `via mod list (<modId>)`（`ViaFabricCompat`）+ `Hassium: ViaFabric decode bridge installed (live <x> -> fresh <y>)`（`ViaDecodeBridge`）；不装 → 无桥日志（登录时重探测，`NetworkCore.onLogin`）。
+网关时代的 E1（真实双端联调 + 双主控迁移演练）/ E2（ViaFabric 运行时冒烟）随网络核心与 ViaFabric 桥裁剪而退役；现行真实双端验证即本文档 classic / seedgen / dimension 场景（`scripts/runtime-smoke-test.ps1`）。
 
 ## 已知限制
 
@@ -538,16 +525,10 @@ build/smoke-test/
 |------|------|
 | `common/.../client/scenario/ScenarioEngine.java` | 数据驱动场景引擎：解析 `.scenario` 步骤序列并在客户端 tick 中逐步执行（join/wait/fly/command/dimension/disconnect/reconnect/dump/assertProbe/exit）；契约 marker 与退出码语义不变 |
 | `common/.../client/scenario/ScenarioStep.java` | 场景步骤模型（类型 + 参数表） |
-| `common/src/main/resources/hassium/smoke/scenario/*.scenario` | 内置场景四件套：classic / migrate / seedgen / dimension |
+| `common/src/main/resources/hassium/smoke/scenario/*.scenario` | 内置场景三件套：classic / seedgen / dimension |
 | `common/.../client/ClientSmokeTest.java` | 客户端冒烟门面：init 装配场景引擎、marker 输出、跨版本反射重连工具、统计校验 |
-| `common/.../client/SmokeProbeWriter.java` | PROBE JSON v1 落盘（roundN.json：stats/gateway/counters/disk） |
+| `common/.../client/SmokeProbeWriter.java` | PROBE JSON v1 落盘（roundN.json：stats/counters/disk；gateway 对象已随网关轮次退役删除） |
 | `common/.../server/ServerSmokeTest.java` | 服务端视距切换 + R2 方块变化注入（section delta / `[LIGHT-SEG]` 分段光照触发）+ 场景玩家自动 OP |
-| `common/src/test/java/io/github/limuqy/mc/hassium/network/gateway/GatewaySmokeTest.java` | **L0 网关双主控迁移冒烟依据**：真实 TCP 双端（`GatewayServer.start` + `NetworkCore.connect`），握手/ACTIVE/会话注册/S2C 注入/C2S 路由/续流票据 resume + 推送链标记 |
-| `common/.../network/core/NetworkCore.java` / `migration/MigrationEngine.java` / `MigrationPolicy.java` | 网络核心状态机（IDLE→CONNECTING→HANDSHAKING→ACTIVE→MIGRATING）与 L1 迁移引擎（心跳/故障触发/续流票据） |
-| `common/.../network/gateway/GatewayServer.java` / `GatewayChannel.java` / `ServerChunkPushManager.java` | 主控核心接入（网关监听端口 = `master.controlReachableEndpoints[0]` 兜底 25566）；推送链续流标记（`isPlayerResumeActive`） |
-| `common/.../network/dataplane/DataPlaneUdpServer.java` / `ReliableDatagramSession.java` / `DataPlaneClientBundle.java` | 数据面 UDP/KCP 载体（网关↔主控通道 bulk 载体，默认关 `dataplane.enabled=false`） |
-| `common/.../config/HassiumConfigService.java` | 统一配置快照（含迁移引擎 `master.migrationFaultTimeoutMs` 接线） |
-| `common/.../network/core/viafabric/ViaFabricCompat.java` / `ViaDecodeBridge.java` | ViaFabric 探测与 S2C 解码桥（E2 运行时冒烟日志源） |
 | `scripts/runtime-smoke-test.ps1` | 单次会话脚本（场景选择、profiles patch、PROBE 解析、门禁评估、result JSON） |
 | `scripts/runtime-smoke-test-batch.ps1` | 批量脚本（`-Scenarios` 场景计划、锚点集过滤、CSV 汇总） |
 | `scripts/smoke/profiles/<name>.profile.properties` | 场景配置档案（patch 双端 hassium toml） |

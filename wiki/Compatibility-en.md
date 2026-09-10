@@ -2,28 +2,28 @@
 
 ---
 
-> **简体中文**: [Compatibility](Compatibility) · English
+> **English**: [Compatibility](Compatibility) · English
 
-Hassium compatibility with common optimization mods, plus escape hatches. Every verdict lists the action to take.
+Overview of Hassium's compatibility with common optimization mods, plus configuration escape hatches. Every conclusion includes a recommended action.
 
 ---
 
-## Compatibility overview
+## Overview
 
 | Target | Verdict | Notes |
 | --- | --- | --- |
-| **Bobby and similar client-side out-of-range caches** | ❌ **Incompatible** | Hassium ships its own beyond-view renderer; co-installation will conflict |
+| **Bobby / similar client-side beyond-view caches** | ❌ **Incompatible** | Hassium's shadow server manages caching and redelivery itself; do not co-install |
 | **Immersive Portals** | ❌ **Incompatible** | |
-| **Other compression / protocol-replacement mods (e.g. rewriting the Netty Zlib)** | ❌ **Incompatible** | Conflicts with `master.globalPacketCompression` |
-| **Starlight** | — **Not considered** | Already merged into vanilla lighting |
-| **Third-party packets hurt by aggregation** | ⚠️ Disable aggregation or blacklist | `master.enablePacketAggregation = false`, or add the channel ID to `master.compressionBlacklist` |
-| **Anti-x-ray (rewrites the outbound chunk packet)** | ✅ Likely compatible | miss path reuses the already-built packet bytes; if the rewriter only patches `Connection.send` after Hassium cancels, it may bypass |
-| **Distant Horizons / Voxy** | ✅ Likely compatible | Independent LOD channels; aggregation mishaps handled as above |
-| **ViaVersion** | ⚠️ Conditional | See below |
-| **Sodium / Iris / Lithium / FerriteCore / EntityCulling / ImmediatelyFast** | ✅ Compatibility-tested | Fabric 1.20.1 record in [Support-Matrix](Support-Matrix-en) |
-| **C2ME** | ✅ Soft compatible | Default modules pass; chunkio rewrite fully on is not promised; `storage.enabled = false` is the escape hatch |
-| **File-level server backup (incl. InstantBackup)** | ✅ Compatible | type 126 is transparent to backup tools |
-| **Tools that semantically unpack Anvil** | ❌ Incompatible | Won't recognize type 126 |
+| **Similar compression / protocol replacements (Netty Zlib swaps)** | ⚠️ Conditional | Hassium's channel compression never touches the vanilla compression layer; conflicts remain if the other mod replaces the vanilla pipeline — pick one |
+| **Starlight** | — **N/A** | Merged into vanilla lighting |
+| **Aggregation breaking third-party packets** | ⚠️ Disable aggregation or blacklist | `master.enablePacketAggregation = false` or `master.compressionBlacklist` |
+| **Anti-x-ray (rewrites outgoing chunk packets)** | ✅ Intended compatible | Miss path reuses already-built packet bytes; implementations that rewrite only on `Connection.send` after Hassium's cancel may bypass |
+| **Distant Horizons / Voxy** | ✅ Intended compatible | Independent LOD channels; same aggregation escape if needed |
+| **ViaVersion** | ⚠️ Conditional | See table below |
+| **Sodium / Iris / Lithium / FerriteCore / EntityCulling / ImmediatelyFast** | ✅ Tested | Fabric 1.20.1 session record in [Support-Matrix](Support-Matrix-en) |
+| **C2ME** | ✅ Soft compatible | Default modules tested; no promise with chunkio rewrite fully on; disable `storage.enabled` as the escape |
+| **File-level server backups (incl. InstantBackup)** | ✅ Compatible | 126 is transparent to backup tools |
+| **Semantic Anvil-decompressing tools** | ❌ Incompatible | They do not understand type 126 |
 
 ---
 
@@ -31,27 +31,25 @@ Hassium compatibility with common optimization mods, plus escape hatches. Every 
 
 | Topology | Verdict |
 | --- | --- |
-| Same version, both sides install Hassium | Via not involved; works |
-| Server Hassium + Via, client has no Hassium | Works: clients without the mod use the vanilla protocol, Via translates it |
-| Both sides install Hassium but MC versions differ (bridged by Via) | ❌ Unsupported (wire format is tied to `MC_VER`) |
+| Same version, Hassium on both sides | Via not involved; normal |
+| Server Hassium + Via, client **without** Hassium | Supported: the mod-less client speaks vanilla (empty login-handshake answer → vanilla path), Via translates vanilla |
+| Hassium on both sides but different MC versions (bridged by Via) | ❌ Not promised (capability negotiation assumes same versions; cross-version untested) |
 
-> Stacking `master.globalPacketCompression` with in-process Via can confuse compression frame assumptions. Recommend disabling global compression for in-process Via.
+> Channel compression applies only to players who completed the Hassium handshake; un-handshaked players (incl. Via-translated targets) use the vanilla path — no framing conflicts.
 
 ---
 
 ## Escape hatches
 
-| Goal | Tweak |
+| Goal | Change |
 | --- | --- |
-| Disable storage compression, keep network benefits | `storage.enabled = false` |
-| Disable custom channels and push | `master.enabled = false` |
-| Disable global ZSTD (coexist with protocol replacement) | `master.globalPacketCompression = false` |
+| Disable save compression, keep network optimizations | `storage.enabled = false` (off by default) |
+| Disable the custom channel and push | `master.enabled = false` |
 | Disable packet aggregation | `master.enablePacketAggregation = false` |
-| Exclude a third-party channel from compression/aggregation | `master.compressionBlacklist` |
-| Disable the Hassium engine (server then does not strip light) | `chunk.hassiumEngineEnabled = false` |
-| Disable section delta (stale = full fetch) | `chunk.sectionDeltaEnabled = false` |
-| Disable beyond-view render, restore vanilla RD clamp | `chunk.viewDistanceExtensionEnabled = false` |
-| Require the mod on clients | `compat.requireClientMod = true` |
+| Exclude third-party packets from compression/aggregation | `master.compressionBlacklist` |
+| Disable shadow side / cache (vanilla path; server stops stripping light) | `chunk.enabled = false` |
+| Disable section delta (stale goes full) | `chunk.sectionDeltaEnabled = false` |
+| Force the client mod | `compat.requireClientMod = true` |
 
 ---
 
@@ -59,44 +57,42 @@ Hassium compatibility with common optimization mods, plus escape hatches. Every 
 
 | Mod | Relationship |
 | --- | --- |
-| **Mod Menu** (Fabric) | Soft-compatible; install separately to open the Cloth screen |
-| **Cloth Config** | jiJ on Fabric / Forge / NeoForge; main config screen path |
-| **Configured** | Optional on Forge/NeoForge; Fabric does not need it |
-| **Forge Config API Port** | Fabric does not use it (Night Config manages TOML); the FCAP Forge bridge was retired with Forge 1.20.6 support |
+| **Mod Menu** (Fabric) | Soft-compatible; installing it alone opens the Cloth config |
+| **Cloth Config** | jiJ'd on Fabric / Forge / NeoForge; primary config UI |
+| **Configured** | Optional on Forge/NeoForge; not needed on Fabric |
+| **Forge Config API Port** | **Not used** on Fabric (self-managed Night Config toml); the FCAP Forge bridge retired with Forge 1.20.6 |
 
 ---
 
-## Save compatibility notes
+## Save-format notes
 
-- Hassium type 126 is a **ZSTD payload on disk**; the outer `.mca` layout stays vanilla
-- Uninstalling the mod leaves type 126 saves: reinstall a **matching version** of Hassium to read them
-- Client cache is **not guaranteed to be cross-MC-version compatible**: after an upgrade the old cover is lazily overwritten (MISS → refetch → persist); no full invalidate on start
-- After rollback, to read type 126 you must install the matching MC version of Hassium
-- File-level backup (whole-file/directory/zip/incremental blob, not unpacking compression types) is compatible; tools that unpack chunk → edit NBT → repack are not
+- Hassium type 126 is a **ZSTD payload on disk**; the outer `.mca` layout is unchanged
+- After uninstalling, saves remain 126: reinstall a **matching** Hassium version to read them
+- Client caches are **not guaranteed across MC major versions**: old caches are lazily overwritten (MISS → re-fetch → persist); no startup-time wipe
+- Reading 126 after a rollback: install the Hassium build matching that MC version
+- File-level backups (whole-file/dir/zip/incremental blobs, no compression-type parsing) are compatible; tools that decompress chunks → edit NBT → recompress are not
 
 ---
 
-## Compatibility test (2026-07, Fabric 1.20.1)
+## Compatibility test record (2026-07, Fabric 1.20.1)
 
-Environment: ~50 optimization-oriented mods (FO-style: Sodium / Iris / Lithium / FerriteCore / C2ME / EntityCulling / ImmediatelyFast / Mod Menu / Cloth etc.; **no** Bobby / ViaFabric / Immersive Portals installed).
+Environment: ~50 optimization mods (FO-style: Sodium / Iris / Lithium / FerriteCore / C2ME / EntityCulling / ImmediatelyFast / Mod Menu / Cloth, etc.; **without** Bobby / ViaFabric / Immersive Portals).
 
 | Check | Result |
 | --- | --- |
-| Launch and join | Pass; handshake `accepted=true`, `globalCompression=true` |
-| Client cache | Bloom / heat / CacheSaveQueue normal; disconnect cleanup normal |
-| Runtime stats | Use `/hassiumc stats` to inspect compression savings and cache hits |
-| `latest.log` for Hassium | No ERROR / Exception; only the dev-environment refmap WARN (see [Troubleshooting](Troubleshooting-en)) |
+| Startup and join | Pass; handshake `accepted=true` |
+| Client cache | Shadow save / heat / disconnect cleanup normal |
+| Runtime stats | `/hassiumc stats` shows compression savings and cache hits |
+| `latest.log` from Hassium | No ERROR / Exception; only a dev-environment refmap WARN (see [Troubleshooting](Troubleshooting-en)) |
 
-### Suggested coverage
+### Still recommended
 
-- [ ] Anti-x-ray + Hassium client: ores stay obfuscated
-- [ ] Distant Horizons both sides / Voxy + companion mod: LOD works
-- [ ] Via: vanilla clients connect; same-version Hassium clients have full features
+- [ ] Anti-x-ray + Hassium client: ores must stay hidden
+- [ ] Distant Horizons both sides / Voxy + companion: LOD works
+- [ ] Via: mod-less old clients can join; same-version Hassium clients fully functional
 - [ ] C2ME chunkio rewrite on/off × `storage` on/off matrix
-- [ ] Sodium + `hassiumEngineEnabled` on/off (light glitches)
-- [ ] Forge / NeoForge equivalent opt-pack compatibility test
-- [ ] Beyond-view in-circuit: multiplayer with `view-distance=8`, client RD=16, the visited ring is visible; F3 shows no large out-of-range requests
-- [ ] Beyond-view + Sodium: meshing stays correct as the ViewArea expands
+- [ ] Sodium + `chunk.enabled` on/off (lighting anomalies)
+- [ ] Forge / NeoForge equivalent optimization-pack smoke
 
 ---
 

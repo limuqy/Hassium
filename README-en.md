@@ -4,7 +4,7 @@
   <img src="common/src/main/resources/assets/hassium/logo.png" alt="Hassium Logo" width="200">
 </p>
 
-**Hassium** — high-performance chunk compression and client-side chunk storage for Minecraft, providing **efficient compression, network optimization, chunk cache, local generation, beyond-view rendering, and lighting optimization**.  
+**Hassium** — high-performance chunk compression and client-side chunk storage for Minecraft, providing **efficient compression, network optimization, chunk cache, local generation, and lighting optimization**.
 Smaller world saves and bandwidth than vanilla, local chunk reuse, and smoother joins. Supports Fabric / Forge / NeoForge across Minecraft 1.20.1–1.21.11.
 
 [简体中文](README.md) · **English**
@@ -24,23 +24,22 @@ Smaller world saves and bandwidth than vanilla, local chunk reuse, and smoother 
 | Category | Feature | Description |
 | --- | --- | --- |
 | **Efficient compression** | Storage compression | World chunk ZSTD on disk (type 126) for smaller saves; keeps vanilla Region (`.mca`) layout |
-| | Network compression | More efficient compression for chunks and packets (custom channels + global pipeline + packet aggregation) — less bandwidth and wait time |
-| **Network optimization** | Smooth push | Per-player per-tick submit cap (`master.maxChunksPerTick`, ≈ cap×20/s at full tick) + main-thread serialization cap with background encoding; join and view expansion never saturate the main thread |
-| | In-process gateway | Client-side in-process gateway (Network Core): vanilla client ↔ Network Core ↔ Master Core private channel; PLAY-phase traffic is routed through the gateway, the shell connection stays keep-alive only |
-| | Seamless migration / L1 load balancing | On master inbound silence timeout (default `master.migrationSilentTimeoutMs`=10000), the L1 migration engine switches the gateway with a warm cache — seamless migration; multiple lines balanced via L1 |
-| | UDP data plane | UDP/KCP bulk carrier for the gateway ↔ master-core channel (`dataplane.enabled`, off by default; control plane stays on vanilla TCP) |
-| **Chunk cache** | Shadow world save | Every chunk you visit is saved by the shadow engine (full MinecraftServer) into a vanilla-format save (`hassium_cache/<serverId>/world`, type 126 + chunkHash); saved on disconnect, reused on reconnect |
-| | Section delta | On cache mismatch, send changed blocks; too many → full section, then full chunk |
-| | Local generation (SeedGen) | For pristine (never-generated) chunks the server sends a tiny seed + position reference instead of chunk data; the client generates locally with the same seed — zero transfer. Falls back to full transfer on failure/timeout |
-| | **Beyond-view render** | When client RD exceeds server view distance (multiplayer), fill the outer ring from local cache (render-only; no out-of-range server requests); incompatible with Bobby |
-| | World export | `/hassiumc export` copies the shadow-side world directory wholesale to `hassium_exports/<cacheId>` (keeps the type 126 + chunkHash format; vanilla translation is planned later) |
-| **Lighting optimization** | Hassium engine | Master switch for non-network features (default on): an in-process shadow server (full MinecraftServer) owns world saving (cache) + chunk lighting + official chunk packet packing, delivered back over the vanilla channel; degrades automatically on startup failure |
-| | Light stripping | Server can strip light data; the Hassium engine (shadow side) computes lighting centrally and packs it back |
-| | Light cache | Shadow-side lighting is saved with the chunk (type 126 + chunkHash); reconnects reuse it, skipping recomputation |
-| | Parallel light engine | Light recomputation runs on a background thread pool; the main thread only submits snapshots (on by default) |
-| **Utilities** | Traffic metrics | `/hassium stats` (server) and `/hassiumc stats` (client) to inspect compression and cache results |
+| | Channel compression | Dictionary ZSTD inside aggregated packets + chunk-push native compression; never touches the vanilla compression layer, no cross-mod pipeline conflicts |
+| **Network optimization** | Smooth push | Per-player per-tick submit cap (`master.maxChunksPerTick`, ≈ cap×20/s at full tick) + fully backgrounded encode/compress/send; joins never saturate the main thread |
+| | Login-phase capability handshake | `hassium:login_hello` login query on 1.20.1, config-stage `PreHandshakePayload` on 1.20.2+; bitwise capability negotiation with no timeout dependency and zero interference for vanilla clients |
+| | Pull mode | After negotiation the server stops pushing full chunks; chunk data is fetched by the unified Compare+Pull driven by the client shadow virtual player's vanilla tracking (`ShadowPull`: UNCHANGED / DELTA / FULL / ERROR) |
+| **Chunk cache** | Shadow-world saving | Join chunks are lit and saved into a vanilla save dir (`hassium_cache/<serverId>/world`) by an in-process shadow server (full MinecraftServer); saved on disconnect, reused on reconnect |
+| | Section delta | On stale cache only changed blocks are sent (`SectionDelta`); whole section next, whole chunk beyond that |
+| | Capacity/heat eviction | `heat.idx` tracks heat per region file; over-capacity regions are deleted whole-file (`ShadowCacheEviction`) |
+| | World export | `/hassiumc export` copies the shadow world into an export save (`hassium_exports/<cacheId>`; keeps type 126 + chunkHash; vanilla translation pending) |
+| **Local generation** | SeedGen | For pristine chunks the server sends a coordinate reference (`SeedRef`, tens of bytes); the client generates locally with the same seed and verifies by hash; any failure falls back to full chunks. **Enabling the server switch sends the world seed to clients — equivalent to leaking the server seed** |
+| **Lighting** | Hassium engine | On join an in-process shadow server takes over **world saving (cache) + chunk lighting + packing official chunk packets** (returned over the official channel); the client no longer computes lighting; auto-degrades on startup failure |
+| | Light stripping | The server may strip light to save bandwidth (`chunk.lightStrip`); the shadow server computes lighting and packs it back |
+| **Utilities** | Traffic monitoring | `/hassium stats` (server) and `/hassiumc stats` (client) show compression and cache effectiveness |
 
-Clients without the mod can connect by default (`compat.requireClientMod = false`); install on both sides for full compression and cache benefits.
+> **Planned**: beyond-view rendering (OVD — backfill terrain beyond the server view distance from local cache when the client RD exceeds the server's). The current build does not enable this path; config keys and docs will return when the feature ships.
+
+Vanilla clients can join by default (`compat.requireClientMod = false`); install on both sides for full compression and caching.
 
 ---
 
@@ -54,57 +53,64 @@ Clients without the mod can connect by default (`compat.requireClientMod = false
 | 1.21.3–1.21.10 | ✅ | ✅ | ✅ |
 | 1.21.11 | ✅ | — | ✅ |
 
-See [`docs/version-segments.md`](docs/version-segments.md) for the seven adaptation segments.
+Forge supports 1.20.1 / 1.21.1 / 1.21.3–1.21.10 (no upstream Forge userdev for 1.21.2; **sunset from 1.21.11** — use NeoForge there). Full anchor matrix: [`docs/version-segments.md`](docs/version-segments.md).
 
 ---
 
-## Install
+## Installation
 
-1. Download the loader-specific JAR from [Releases](https://github.com/limuqy/Hassium/releases).
-2. Place it in `mods/` on client and/or server.
-3. Config is created at `config/hassium/hassium-client.toml` and `config/hassium/hassium-server.toml` (Fabric: Mod Menu + Cloth; Forge/NeoForge: Cloth from the mods list, or edit toml).
+1. Download the JAR for your loader from [Releases](https://github.com/limuqy/Hassium/releases).
+2. Drop it into the client or server `mods/`.
+3. On first launch the mod generates `config/hassium/hassium-client.toml` and `config/hassium/hassium-server.toml` (Fabric: Mod Menu + Cloth; Forge/NeoForge: Cloth screen from the mod list, or edit the toml directly).
 
-**Dependencies:** Fabric needs Fabric API; Forge / NeoForge have no required extras. Install on both sides for negotiated compression and caching.
+**Dependencies:** Fabric API on Fabric (Cloth is jiJ'd); no extra prerequisites on Forge / NeoForge. Install on both sides for negotiated compression and caching.
 
 ---
 
-## Defaults
+## Default behavior
 
 Enabled by default:
 
-- Hassium channel compression and global packet compression
-- Shadow world save (visited chunks persisted to `hassium_cache/<serverId>/world`, saved on disconnect, reused on reconnect)
-- In-process shadow server lighting (Hassium engine)
+- Login-phase handshake + Play-phase aggregation/dictionary compression channel
+- Shadow-world saving (join chunks land in `hassium_cache/<serverId>/world`; saved on disconnect, reused on reconnect)
+- In-process shadow server computing lighting (Hassium engine)
 
-> World storage compression (`storage.enabled`) is **off by default** — dedicated servers only. Enabling it rewrites on-disk chunk payloads; **back up worlds** first. Vanilla clients can connect by default (`compat.requireClientMod = false`).
+> Storage compression (`storage.enabled`) is **off** by default and dedicated-server only; enabling rewrites the chunk save format — **back up your world first**. Vanilla clients can join by default (`compat.requireClientMod = false`).
 
 ---
 
-## Config (summary)
+## Configuration summary
 
-Files: `config/hassium/hassium-client.toml`, `config/hassium/hassium-server.toml`
+Files: `config/hassium/hassium-client.toml`, `config/hassium/hassium-server.toml` (Fabric: the file matching the physical side wins; Forge/NeoForge registers both specs but only the physical side's applies). Key-set source of truth: `ConfigSchema`.
 
-| Key | Default | Notes |
+| Key | Default | Description |
 | --- | --- | --- |
-| `storage.enabled` | `false` | World ZSTD (**off by default**; dedicated servers only, **back up first**) |
-| `chunk.enabled` | `true` | Shadow world save (visited chunks saved to `hassium_cache/<serverId>/world`) |
-| `chunk.sectionDeltaEnabled` | `true` | On mismatch, send changed blocks (full section/chunk if too many) |
-| `chunk.viewDistanceExtensionEnabled` | `true` | Beyond-view render (multiplayer; exclusive with Bobby) |
-| `chunk.maxRenderDistance` | `16` | Beyond-view / effective RD cap (2–64) |
-| `chunk.ovdUnloadDelaySecs` | `5` | Delay unload after leaving beyond-view ring (s; 0=sync) |
-| `chunk.mainThreadChunkBudgetMs` | `15` | Client apply budget per frame (ms) |
-| `chunk.hassiumEngineEnabled` | `true` | Hassium engine (master switch for non-network features): starts an in-process shadow server on login that owns world saving (cache) + chunk lighting + official packet packing; degrades automatically on startup failure (cache/beyond-view render/SeedGen disabled with notice); when disabled the server does not strip light (negotiated at handshake) |
-| `chunk.ovdLocalGeneration` | `false` | Beyond-view local generation: generate on cache miss from the server's world seed and store; auto-disabled when no seed |
-| `net.enabled` | `true` | Master switch for the client network core (custom channels; off = revert to vanilla chunk packets) |
-| `net.metricsEnabled` | `false` | Client network metrics (off by default; auto-enabled during self-checks) |
-| `master.globalPacketCompression` | `true` | Global ZSTD |
-| `master.maxChunksPerTick` | `4` | Per-player submit cap per tick (send rate = cap × tick rhythm; ≈ 4×20/s ≈ 80/s at full tick, naturally slows on lag) |
-| `master.metricsEnabled` | `false` | Server network metrics (off by default; auto-enabled during self-checks) |
-| `master.controlReachableEndpoints` | `[]` | Gateway listen endpoints (`endpoints[0]` is the gateway port, falls back to 25566) |
-| `dataplane.enabled` | `false` | UDP/KCP data plane: bulk carrier for the gateway ↔ master-core channel (**off by default**); configure reachable endpoints (`dataplane.udpListeners[*].reachableEndpoints`) before enabling |
-| `debug.*` | `false` | Category debug logs (quiet by default) |
+| `chunk.enabled` | `true` | Chunk-core master switch (shadow-world saving/lighting/cache/Pull mode; off = vanilla path everywhere) |
+| `chunk.sectionDeltaEnabled` | `true` | Section delta (server-side planning + client-side apply) |
+| `chunk.seedGenEnabled` | `false` | SeedGen local generation (both sides same version; **server enablement leaks the world seed**) |
+| `chunk.seedGenThreads` | `2` | Local-generation thread count (0 = disable; SeedRef always falls back to full chunks) |
+| `chunk.mainThreadChunkBudgetMs` | `15` | Client per-frame apply budget (ms) |
+| `chunk.maxChunksPerFrame` | `6` | Per-tick cache-read production cap (shadow enqueue + shadow disk) |
+| `chunk.maxSizeMb` | `4096` | Cache size cap (MB; excess triggers heat eviction) |
+| `chunk.hotScoreThreshold` | `0.3` | Heat-score threshold (below = cold region, evicted first) |
+| `chunk.cleanupIntervalTicks` | `6000` | Cleanup check interval (ticks) |
+| `chunk.lightStrip` | `true` | Server light stripping (shadow server computes lighting) |
+| `storage.enabled` | `false` | World-save ZSTD (off by default; dedicated server only, back up first) |
+| `storage.zstdLevel` | `3` | Storage ZSTD level |
+| `master.enabled` | `true` | Server network-channel master switch (gate for login handshake/aggregation) |
+| `master.maxChunksPerTick` | `4` | Per-player per-tick submit cap (≈ cap×20/s at full tick) |
+| `master.enablePacketAggregation` | `true` | Packet aggregation |
+| `master.aggregationMaxWaitTimeMs` | `50` | Aggregation max wait (ms; ACK timeout 5s auto-downgrades to direct send) |
+| `master.aggregationMaxSize` | `262144` | Aggregation max size (bytes) |
+| `master.compressionLevel` | `3` | Private-channel ZSTD level |
+| `master.useContextCompression` | `true` | Context compression (dictionary ZSTD) |
+| `master.serverChunkPushThreads` | `4` | Server chunk-push background threads |
+| `master.compressionBlacklist` | control-plane keys | Compression/aggregation blacklist (control plane bypasses the aggregation buffer) |
+| `compat.requireClientMod` | `false` | Allow mod-less clients (true = kick when login handshake fails) |
+| `compat.autoDowngradeOnError` | `true` | Auto-downgrade on error |
+| `debug.*` | `false` | Categorized debug logging (quiet by default; hot paths use `DebugLogger`) |
 
-Full reference: [`docs/architecture.md`](docs/architecture.md).
+Full reference: [`docs/architecture.md`](docs/architecture.md) and the [config audit](docs/config-audit.md).
 
 ---
 
@@ -112,33 +118,38 @@ Full reference: [`docs/architecture.md`](docs/architecture.md).
 
 | Command | Description |
 | --- | --- |
-| `/hassium stats` | Server stats (OP 2) |
-| `/hassium metrics on\|off` | Toggle metrics |
+| `/hassium stats` | Server statistics (OP 2) |
 | `/hassium stats reset` | Reset counters |
-| `/hassiumc stats` | Client stats (cache / beyond-view) |
-| `/hassiumc export [<serverIp>] [seed]` | Copy the shadow-side world directory wholesale to `hassium_exports/<cacheId>` (keeps type 126 + chunkHash; vanilla translation planned later) |
+| `/hassium stats toggle` | Toggle stats |
+| `/hassium metrics on\|off` | Toggle metrics |
+| `/hassiumc stats` | Client statistics (cache hits / lighting / savings) |
+| `/hassiumc export [<serverIP>] [seed]` | Copy the shadow `world` into `hassium_exports/<cacheId>` (`level.dat` written by the shadow server); you can also copy that folder into `saves/` |
 
 ---
 
-## How it works
+## How it works (diagram)
 
 ```mermaid
 flowchart LR
-    client["Vanilla client connection"]
-    gw["Network Core (in-process gateway)"]
-    mc["Master Core private channel<br/>(GatewayServer / GatewayChannel)"]
-    wire["Hassium compressed channel<br/>chunk packets"]
-    decode["handleCompressedChunk<br/>→ decodeChunkPacket (vanilla packet)"]
-    shadow["Shadow engine (ShadowSeedServer)<br/>inject + vanilla light engine + converge"]
-    pack["Pack official packet with authoritative light"]
-    apply["Vanilla channel handleLevelChunkWithLight<br/>applied on main thread frame tail"]
-    save["Disconnect saveAll → hassium_cache/<serverId>/world<br/>type 126 + chunkHash"]
-    regen["SeedGen local generation → submitGenerated, same pipeline"]
+    client["Mod client"] <-->|"single vanilla TCP<br/>login handshake + Play custom payloads"| server["Mod server"]
+    subgraph Handshake & activation
+        hs["login_hello (1.20.1) /<br/>PreHandshakePayload (1.20.2+)<br/>bitwise capability negotiation"]
+        act["play_init_s2c activation<br/>dict/index → aggregation PENDING → ACK → ENABLED"]
+    end
+    subgraph Chunk data plane
+        push["Server vanilla tracking push<br/>(vanilla chunk+light / forget)"]
+        pull["ShadowPull Compare+Pull<br/>UNCHANGED / DELTA / FULL / ERROR"]
+        seed["SeedRef pristine refs<br/>client local generation"]
+    end
+    shadow["Shadow server (ShadowSeedServer)<br/>inject + official light engine + converge"]
+    pack["Pack official lit chunk packets"]
+    apply["Official channel handleLevelChunkWithLight<br/>main-thread frame-tail budgeted apply"]
+    save["Disconnect saveAll → hassium_cache/&lt;serverId&gt;/world<br/>type 126 + chunkHash"]
 
-    client <-->|"vanilla protocol"| gw
-    gw <-->|"frame protocol / control connection"| mc
-    mc --> wire --> decode --> shadow --> pack --> apply
-    regen --> shadow
+    server --> push --> shadow
+    client --> pull --> server
+    server --> seed --> client
+    shadow --> pack --> apply
     shadow -.-> save
     save -.->|"reconnect reuse"| shadow
 ```
@@ -147,9 +158,9 @@ Details: [`docs/architecture.md`](docs/architecture.md).
 
 ---
 
-## Build from source
+## Building from source
 
-JDK 17+ (newer MC versions may need a higher JDK — see `versionProperties`).
+Requires JDK 17+ (newer targets may need a higher Java; see the matching `versionProperties`).
 
 ```bash
 ./gradlew build
@@ -163,29 +174,32 @@ Developer entry point: [`AGENTS.md`](AGENTS.md).
 ---
 ## User documentation
 
-For installation, every configuration option, commands, feature guides, compatibility, and diagnostics, see the [GitHub Wiki](https://github.com/limuqy/Hassium/wiki/Home-en).
+Installation, full configuration, commands, features, compatibility, and troubleshooting: [GitHub Wiki](https://github.com/limuqy/Hassium/wiki/Home-en).
 
 | Page | Content |
 | --- | --- |
-| [Installation](https://github.com/limuqy/Hassium/wiki/Installation-en) | Download, dependencies, and loader notes |
-| [Configuration](https://github.com/limuqy/Hassium/wiki/Configuration-en) | Complete option reference and GUI paths |
+| [Installation](https://github.com/limuqy/Hassium/wiki/Installation-en) | Download, prerequisites, loader differences |
+| [Configuration](https://github.com/limuqy/Hassium/wiki/Configuration-en) | Full key reference and GUI paths |
 | [Commands](https://github.com/limuqy/Hassium/wiki/Commands-en) | `/hassium` and `/hassiumc` reference |
-| [Features](https://github.com/limuqy/Hassium/wiki/Features-en) | Cache, section delta, light optimization, and more |
-| [Beyond-view render](https://github.com/limuqy/Hassium/wiki/Beyond-View-Render-en) · [World export](https://github.com/limuqy/Hassium/wiki/World-Export-en) | Guides for both client features |
-| [Compatibility](https://github.com/limuqy/Hassium/wiki/Compatibility-en) · [Troubleshooting](https://github.com/limuqy/Hassium/wiki/Troubleshooting-en) | Coexistence with other mods and diagnostic paths |
-| [Network Core and Master Migration](https://github.com/limuqy/Hassium/wiki/Network-Core-and-Master-Migration-en) | Network Core (in-process gateway), master migration (seamless migration / L1 load balancing), and UDP/KCP data plane operations |
+| [Features](https://github.com/limuqy/Hassium/wiki/Features-en) | Cache, section delta, lighting details |
+| [World Export](https://github.com/limuqy/Hassium/wiki/World-Export-en) | Exporting the client cache as a save |
+| [Compatibility](https://github.com/limuqy/Hassium/wiki/Compatibility-en) · [Troubleshooting](https://github.com/limuqy/Hassium/wiki/Troubleshooting-en) | Coexistence with other mods and diagnostics |
+
 
 ---
-
 
 ## Developer documentation
 
 | Doc | Content |
 | --- | --- |
-| [`docs/architecture.md`](docs/architecture.md) | Architecture, storage, config, logging, commands |
-| [`docs/chunk-cache.md`](docs/chunk-cache.md) | Cache push, beyond-view render (§10), disk NBT (§11), export (§12) |
+| [`docs/architecture.md`](docs/architecture.md) | Capabilities & scenarios, direct-connection topology, module architecture, client data flow, storage format, config, logging, commands |
+| [`docs/chunk-cache.md`](docs/chunk-cache.md) | Cache push (unified ShadowPull Compare+Pull), disk NBT (§11), export (§12) |
+| [`docs/client-chunk-light-flow.md`](docs/client-chunk-light-flow.md) | Client receive → apply → lighting full chain |
+| [`docs/chunk-load-optimization.md`](docs/chunk-load-optimization.md) | Join/reconnect load paths and rate anchors |
 | [`docs/version-segments.md`](docs/version-segments.md) | Multi-version segments |
 | [`docs/mod-compat.md`](docs/mod-compat.md) | Multi-mod compatibility & config escapes |
+| [`docs/config-audit.md`](docs/config-audit.md) | Config key audit |
+| [`docs/runtime-smoke-test.md`](docs/runtime-smoke-test.md) | Runtime smoke tests (L0–L3, PROBE, scenario engine) |
 
 ---
 

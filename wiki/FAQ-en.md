@@ -2,97 +2,97 @@
 
 ---
 
-> **简体中文**: [FAQ](FAQ) · English
+> **English**: [FAQ](FAQ) · English
 
 ## Storage
 
 ### Q: Does enabling storage change the save format?
 
-A: Yes. With `storage.enabled = true`, chunk payloads are written as ZSTD type 126 inside the unchanged `.mca` shell. **Back up worlds before first enabling**.
+A: Yes. With `storage.enabled = true` chunk payloads on disk become ZSTD type 126; the `.mca` shell is unchanged. **Back up your world before first enable.**
 
 ### Q: Can I read saves after uninstalling Hassium?
 
-A: Saves remain type 126 and require reinstalling a **matching MC version** of Hassium. If you want to decouple: set `storage.enabled = false` (keeps network benefits until chunks are overwritten with vanilla Zlib) before uninstalling.
+A: Saves remain type 126 — **reinstall the Hassium build matching that MC version** to read them. To avoid the lock-in: set `storage.enabled = false` first (keeping network optimizations), let chunks be rewritten with vanilla Zlib, then uninstall.
 
-### Q: After rollback the save no longer loads?
+### Q: Saves unreadable after a rollback?
 
-A: Reinstall a Hassium version compatible with that save. Compression resources are bundled with Hassium; users do not install or configure them separately.
+A: Reinstall the Hassium version compatible with that save. Compression resources are bundled with Hassium; no separate install or config needed.
 
-### Q: Will my client cache survive a major-version upgrade?
+### Q: Do client caches survive an MC major-version upgrade?
 
-A: From 1.21.5 onward, the client cache is **not guaranteed to be cross-MC-version compatible**. Old chunks are lazily overwritten (MISS → refetch → persist); there is no full invalidate on start, but the first session may see more misses. See [Compatibility](Compatibility-en).
+A: Since 1.21.5 client caches are **not guaranteed across MC major versions**. Old caches are lazily overwritten (MISS → re-fetch → persist); nothing is wiped at startup, but the first session may see more MISSes. See [Compatibility](Compatibility-en).
 
 ---
 
 ## Network
 
-### Q: Can a client without Hassium connect to a Hassium-enabled server?
+### Q: Can a client without Hassium join my Hassium server?
 
-A: Yes by default. With `compat.requireClientMod = false` (default), vanilla clients connect via the vanilla protocol and benefit from server-side compression. Client cache, negotiated compression, and other advanced features require the mod on both sides.
+A: Yes, by default. With `compat.requireClientMod = false` (default) mod-less clients connect over vanilla and only get server-side compression; client caching and negotiated compression need the mod on both sides.
 
-### Q: I run another compression mod; can I coexist with Hassium?
+### Q: Can I run a similar compression mod alongside Hassium?
 
-A: No — it conflicts with `master.globalPacketCompression`. Escape hatches: `master.globalPacketCompression = false` or `master.enabled = false` (client cache only).
+A: Conditionally. Hassium's channel compression never touches the vanilla compression layer (pipeline-level global packet compression retired), but conflicts remain if the other mod replaces the vanilla pipeline. Pick one, or set `master.enabled = false` (client cache only).
 
-### Q: A third-party mod's packets break under Hassium aggregation. What now?
+### Q: A third-party mod's packets break inside Hassium aggregation?
 
-A: Escape via (1) `master.enablePacketAggregation = false`, or (2) add the packet ID to `master.compressionBlacklist`.
+A: Escape hatches: (1) `master.enablePacketAggregation = false`, or (2) add that packet ID to `master.compressionBlacklist`.
 
----
+### Q: Which ports does a public deployment need?
 
-## Beyond-view render
+A: Only the game port (vanilla TCP). The direct topology has no gateway/UDP ports (both retired).
 
-### Q: I am using Bobby and want to try Hassium's beyond-view renderer?
+### Q: Does a reconnect re-download all chunks?
 
-A: **Pick one.** Hassium is incompatible with Bobby. Remove Bobby from the client before enabling Hassium's beyond-view render.
-
-### Q: Does beyond-view render work in singleplayer?
-
-A: No. It is multiplayer-only; singleplayer has no server-side `view-distance` limit.
-
-### Q: With RD set to 48 I see far chunks pop in through the fog. Why?
-
-A: Known limitation. The Fog Mixin is not implemented across the seven version segments; with RD > 32 the fog distance follows `getEffectiveRenderDistance` and far chunks may pop in. Recommended to keep RD ≤ 32.
-
-### Q: How much memory does the beyond-view ring use?
-
-A: Ring size depends on the gap between client RD and server view distance. Lower `chunk.maxRenderDistance`, or disable `chunk.viewDistanceExtensionEnabled`, to limit resource use. Beyond-view rendering reuses the existing cache eviction mechanism and adds no dedicated memory pool.
+A: No. The shadow world is saved on disconnect (`hassium_cache/<serverId>/world`); after reconnecting, unchanged chunks hit the cache (UNCHANGED), changed chunks arrive as section delta (DELTA), and only missing chunks go full.
 
 ---
 
-## Network Core and migration
+## Local generation (SeedGen)
 
-### Q: Must the client run Hassium to connect through the gateway? Is the UDP data plane on by default?
+### Q: Does SeedGen leak my world seed?
 
-A: Connecting through the in-process gateway (Network Core) to the master core is the default path in 2.0.0; the UDP data plane (bulk carrier for the gateway↔master channel) is off by default (`dataplane.enabled = false`) and only needs to be enabled when you want data lines. See [Network Core and Master Migration](Network-Core-and-Master-Migration-en).
+A: **Yes**. With `chunk.seedGenEnabled` enabled on the server, the world seed is sent to clients — equivalent to leaking the server seed (seed maps / exported saves can exploit it). Weigh this for public servers.
 
-### Q: Will the client disconnect when the master disconnects or stalls?
+### Q: Can SeedGen work with mismatched client/server versions?
 
-A: Not immediately. The L1 migration engine decides based on the effective silence timeout (default `master.migrationSilentTimeoutMs`=`10000`; explicitly changing `migrationFaultTimeoutMs` can fall back) and migrates seamlessly: disk cache and save queue are preserved, the new session resumes directly, no "Connection lost" popup; a real disconnect happens only when the master cannot recover. Migration is smoother when the UDP data plane is enabled and healthy.
+A: No. Local generation requires both sides on the same version; mismatches automatically fall back to full requests.
 
 ---
 
 ## Export
 
-### Q: Can I open the exported world directly as a singleplayer world?
+### Q: Can exported worlds be loaded in singleplayer right away?
 
-A: Not yet. In 2.0.0 `export` copies the shadow-side world directory wholesale, keeping the type 126 + chunkHash on-disk format (vanilla translation is planned later); the export lands in `<gameDir>/hassium_exports/<cacheId>/`.
+A: Not yet. The 2.0.0 `export` copies the shadow world directory, keeping the type 126 + chunkHash format (vanilla translation pending); output goes to `<gameDir>/hassium_exports/<cacheId>/`.
 
-### Q: Does the exported world contain entities?
+### Q: Do exported worlds contain entities?
 
-A: **No.** The shadow-side world holds only chunk/light and block-entity data; no inventory, advancements, or world entities. See [World-Export](World-Export-en) for full caveats.
+A: **No**. The shadow world contains only chunks/lighting and block-entity data — no player inventories, advancements, or regular entities. Export limits: [World-Export](World-Export-en).
 
 ---
 
-## Debug
+## Beyond-view render
 
-### Q: `latest.log` shows a refmap WARN?
+### Q: Is beyond-view render available now?
 
-A: This only appears in dev environments (Loom runtime) and is safe to ignore. Released client/server jars bundle the refmap and resolve targets normally.
+A: **Not in the current build** (planned). After the 2.0.0 direct-connection regression the old ring path was cut from the code and its config keys removed; they return when the feature ships. Design notes: [Beyond-View-Render](Beyond-View-Render-en).
 
-### Q: The hot path has no logs?
+### Q: Does Bobby conflict?
 
-A: The hot path is quiet by default. Toggle `debug.*` as needed: `debug.metadataLogging` / `debug.networkLogging` / `debug.cacheLogging` / `debug.chunkApplyLogging` etc. See [Troubleshooting](Troubleshooting-en).
+A: Yes. Hassium's shadow server manages caching and redelivery itself and is incompatible with Bobby — do not co-install.
+
+---
+
+## Troubleshooting
+
+### Q: I see refmap load-failure WARNs in `latest.log`?
+
+A: Dev-environment (Loom runtime) only — ignorable and does not affect behavior. Release jars ship the refmap and parse normally.
+
+### Q: Why are there no hot-path logs?
+
+A: Hot paths are quiet by default. Enable specific `debug.*` keys when diagnosing: `debug.metadataLogging` / `debug.networkLogging` / `debug.cacheLogging` / `debug.chunkApplyLogging`, etc. See [Troubleshooting](Troubleshooting-en).
 
 ---
 

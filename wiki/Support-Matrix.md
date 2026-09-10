@@ -64,7 +64,7 @@ Hassium 覆盖 Minecraft **1.20.1 / 1.21.1–1.21.11**，按 **7 个版本段 ×
 
 - 仓库：`https://github.com/limuqy/Hassium`
 - 构建系统：Architectury Loom + Manifold，`versionProperties/<ver>.properties` 控制每版本依赖
-- 锚点编译命令（开发者）：`./gradlew compileAnchors`
+- 锚点编译命令（开发者）：`./gradlew <loader>:compileJava -Pmc_ver=<锚点>`（如 `./gradlew fabric:compileJava -Pmc_ver=1.20.1`；PowerShell 给 `-Pmc_ver` 加引号）
 - 版本边界扫描：`./gradlew scanVersionBoundaries`
 
 ---

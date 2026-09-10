@@ -2,154 +2,125 @@
 
 ---
 
-> **简体中文**: [Configuration](Configuration) · English
+> **English**: [Configuration](Configuration) · English
 
-Hassium generates two TOML files under `config/hassium/` on startup:
+Hassium generates two TOML files under `config/hassium/` on first launch:
 
 | File | Side | Contents |
 | --- | --- | --- |
-| `hassium-client.toml` | Physical client only | Chunk cache (`chunk.*`), rendering & generation, network core (`net.*`), client debug |
-| `hassium-server.toml` | Dedicated server only | Storage (`storage.*`), master core (`master.*`), data plane (`dataplane.*`), compat (`compat.*`), debug |
+| `hassium-client.toml` | Physical client only | Chunk core (`chunk.*`), client debug |
+| `hassium-server.toml` | Dedicated server only | Storage (`storage.*`), server transport (`master.*`), compat (`compat.*`), debug |
 
-In-game config screen entry points:
+In-game editors:
 
 | Loader | Entry | Notes |
 | --- | --- | --- |
-| Fabric | Install [Mod Menu](https://modrinth.com/mod/modmenu) and Cloth, then open from the Mod Menu list | No FCAP / Configured dependency |
-| Forge | "Configure" button in the mods list | Requires Cloth |
-| NeoForge | "Configure" button in the mods list | Requires Cloth; Configured optional |
+| Fabric | Install [Mod Menu](https://modrinth.com/mod/modmenu), open from the mod list | No FCAP / Configured dependency |
+| Forge | "Config" button in the mod list | Requires Cloth |
+| NeoForge | "Config" button in the mod list | Requires Cloth; Configured optional |
 
-> You can also edit the TOML directly and restart; GUI and TOML stay in sync.
-> The in-game UI has 4 categories: Chunk Cache / Rendering & Generation / Network & Connection / Debug (client keys only); server keys are edited directly in `hassium-server.toml`.
-> This page lists common keys only; migration candidate endpoints are synced by the server handshake / `GatewayInfo` — **clients do not fill** `master.controlReachableEndpoints`.
+> You can also edit the TOML files and restart; GUI and TOML stay in sync.
+> Key-set source of truth: `ConfigSchema` (38 keys); full audit in the repo [`docs/config-audit.md`](https://github.com/limuqy/Hassium/blob/master/docs/config-audit.md).
 
 ---
 
-## Full config reference
+## Full key reference
 
-### Chunk Cache (`chunk.*`, Chunk Core)
+### Chunk core (`chunk.*`, client)
 
-| Key | Default | Notes |
+| Key | Default | Description |
 | --- | --- | --- |
-| `chunk.enabled` | `true` | Master switch for the client chunk cache |
-| `chunk.maxSizeMb` | `4096` | Disk cap for the local cache (MB); overflow evicts least-recently-used chunks by heat |
-| `chunk.sectionDeltaEnabled` | `true` | On cache mismatch, send changed blocks (full section/chunk if too many); off = full re-fetch |
+| `chunk.enabled` | `true` | Chunk-core master switch (shadow-world saving/lighting/cache/Pull mode; off = vanilla path everywhere) |
+| `chunk.maxSizeMb` | `4096` | Cache size cap (MB); over-capacity cold regions (`.mca`) are deleted whole-file by heat |
+| `chunk.hotScoreThreshold` | `0.3` | Heat-score threshold (below = cold region, evicted first) |
+| `chunk.recencyWeight` | `0.7` | Recency weight in the heat score |
+| `chunk.frequencyWeight` | `0.3` | Frequency weight in the heat score |
+| `chunk.cleanupIntervalTicks` | `6000` | Cleanup check interval (ticks) |
+| `chunk.targetSizeMb` | `0` | Target cache size (MB; 0 = auto) |
+| `chunk.minCleanupBatchSize` | `100` | Max region files evicted per cleanup pass |
+| `chunk.sectionDeltaEnabled` | `true` | On stale cache send changed blocks only (whole section/chunk beyond that); off = stale goes full |
+| `chunk.maxChunksPerFrame` | `6` | Per-tick cache-read production cap (shadow enqueue + shadow disk); main-thread apply is bounded only by `mainThreadChunkBudgetMs` |
+| `chunk.mainThreadChunkBudgetMs` | `15` | Client per-frame apply budget (ms); JoinBoost temporarily raises it for 30s after join |
+| `chunk.seedGenThreads` | `2` | Local-generation thread count (0 = disable; SeedRef always falls back to full chunks) |
+| `chunk.seedGenEnabled` | `false` | Local generation (both sides): regenerate referenced chunks locally from the world seed (hash-verified) instead of downloading; both sides same version. **Server enablement sends the world seed (seed leak)** |
 
-### Rendering & Generation (`chunk.*`, Chunk Core)
+### Chunk core (`chunk.*`, server)
 
-| Key | Default | Notes |
+| Key | Default | Description |
 | --- | --- | --- |
-| `chunk.viewDistanceExtensionEnabled` | `true` | Beyond-view render (multiplayer, clientVD > serverVD ring fill; **incompatible with Bobby**) |
-| `chunk.maxRenderDistance` | `16` | Beyond-view ring and effective RD cap (range 2–64) |
-| `chunk.ovdUnloadDelaySecs` | `5` | Seconds of delayed unload after leaving the beyond-view ring (0 = sync) |
-| `chunk.unloadDelaySecs` | `30` | Shadow-server in-memory chunk recycle delay in seconds (starts counting once a chunk leaves the unload boundary; on timeout the chunk is flushed to disk and freed from memory; 0 = disable recycling) |
-| `chunk.maxChunksPerFrame` | `6` | Per-tick cache-read production cap (beyond-view enqueue + shadow disk). Main-thread apply is time-budget only; server push is throttled on the server |
-| `chunk.mainThreadChunkBudgetMs` | `15` | Per-frame chunk apply budget on the client (ms); JoinBoost temporarily raises it for ~10s after join |
-| `chunk.hassiumEngineEnabled` | `true` | Hassium engine (master switch for non-network features): starts an in-process shadow server on login that owns all chunk lighting computation (the client stops computing light itself); on startup failure it degrades automatically (client cache / beyond-view render / SeedGen disabled with an in-game notice); when disabled the server does not strip light (negotiated at handshake), light arrives with the packets |
-| `chunk.ovdLocalGeneration` | `false` | Beyond-view local generation: beyond-view-render chunks that miss the client cache are generated locally using the server's world seed and stored into the local cache; auto-disabled when no seed is available (server without the mod) |
-| `chunk.seedGenThreads` | `2` | Local generation threads (0 = disable local generation; chunks are always downloaded in full) |
-| `chunk.seedGenEnabled` | `false` | Local chunk generation (both sides): on SeedRef, regenerate the chunk locally from the world seed (hash-verified) instead of a full download; requires matching versions on both sides |
-| `chunk.lightStrip` | `true` | Light stripping (SERVER): packets may use an empty lightMask; actual stripping is handshake-gated (only when the client declares the engine available) |
-| `chunk.joinBoostEnabled` | `true` | Temporarily raise the main-thread apply budget after joining |
+| `chunk.lightStrip` | `true` | Light stripping: packets may carry an empty lightMask; actual stripping is negotiated at handshake |
 
-### Network Core (`net.*`)
+### Server transport (`master.*`)
 
-| Key | Default | Notes |
+| Key | Default | Description |
 | --- | --- | --- |
-| `net.enabled` | `true` | Master switch for the client network core (in-process gateway and optimized channels; off = revert to vanilla chunk packets) |
-| `net.metricsEnabled` | `false` | Client network metrics (off disables `/hassiumc stats`) |
-| `net.metricsAutoReset` | `true` | Reset the metric counters of the current session when leaving a server |
-
-### Master Core (`master.*`, server-side network & push)
-
-| Key | Default | Notes |
-| --- | --- | --- |
-| `master.enabled` | `true` | Master switch for the server-side network channels |
-| `master.globalPacketCompression` | `true` | Replace the vanilla Netty Zlib with ZSTD globally (off = coexist with protocol-replacement mods) |
-| `master.compressionLevel` | `3` | Own-channel compression level (speed-biased) |
-| `master.maxChunksPerTick` | `4` | Per-player submit cap per tick (send rate = cap × tick rhythm; ≈ 4×20 = 80/s at full tick, naturally slows on lag) |
-| `master.serverChunkPushThreads` | `4` | Fixed server chunk-push thread count (encode / hash / ZSTD pool) |
-| `master.enablePacketAggregation` | `true` | Packet aggregation; turn off if a third-party channel misbehaves |
-| `master.compressionBlacklist` | 10-item default | Packet ID list; matched packets bypass compression/aggregation (default includes CHUNK_PAYLOAD / SECTION_DELTA / HANDSHAKE / DICTIONARY_SYNC / INDEX_SYNC / CHUNK_HASH / LIGHT_DELTA / BLOCK_ENTITY_DATA / MAIN_CHANNEL / AGGREGATION) |
-| `master.metricsEnabled` | `false` | Server network metrics (off disables `/hassium stats` etc.) |
-| `master.controlReachableEndpoints` | `[]` | **Server** gateway listen endpoints (`endpoints[0]` is the gateway port; falls back to `25566`); synced to the client via handshake / `GatewayInfo` as migration candidates — **players do not fill this on the client** |
-| `master.bindHost` | `127.0.0.1` | Gateway bind host (loopback by default; empty = `0.0.0.0`) |
-| `master.authToken` | `""` | Gateway handshake auth token (empty = off); after the server sets it, `GatewayInfo` can deliver it (client may also set the same value manually) |
-| `master.migrationFaultTimeoutMs` | `60000` | L1 migration legacy fault-timeout fallback (ms) |
-| `master.migrationSilentTimeoutMs` | `10000` | Outbound inbound silence timeout (ms; effective default) |
-| `master.migrationMinTps` | `15.0` | Migrate when master TPS falls below this (CLIENT) |
-| `master.migrationMaxLoadAverage` | `4.0` | Migrate when system load average exceeds this (CLIENT) |
-| `master.migrationMaintenanceWindow` | `""` | Maintenance window `HH:MM-HH:MM` (empty = off; CLIENT) |
-| `master.migrationHeartbeatIntervalMs` | `5000` | Application HEARTBEAT interval (CLIENT) |
-| `master.migrationIdleWindowMs` | `10000` | Idle-window detection duration (CLIENT) |
-| `master.migrationPrewarmTtlMs` | `60000` | Prewarm session TTL (SERVER) |
-| `master.resumeTicketTtlMs` | `300000` | Resume ticket TTL (dual-scope) |
-
-### Data Plane (`dataplane.*`)
-
-| Key | Default | Notes |
-| --- | --- | --- |
-| `dataplane.enabled` | `false` | UDP data plane (bulk carrier for the gateway↔master channel; off by default — before enabling, configure publicly reachable listeners and open the UDP ports) |
-| `dataplane.udpListeners` | 1 default (`0.0.0.0:25565`, reachable `127.0.0.1:25565`) | UDP listener list; `reachableEndpoints` must be publicly reachable addresses |
+| `master.enabled` | `true` | Server network-channel master switch (gate for login handshake/aggregation) |
+| `master.compressionLevel` | `3` | Private-channel ZSTD level (speed-first) |
+| `master.useContextCompression` | `true` | Context compression (dictionary ZSTD) |
+| `master.enablePacketAggregation` | `true` | Packet aggregation; turn off if it breaks third-party channels |
+| `master.aggregationMinBatchSize` | `4` | Aggregation minimum batch size |
+| `master.aggregationMaxWaitTimeMs` | `50` | Aggregation max wait (ms; ACK timeout 5s auto-downgrades to direct send) |
+| `master.aggregationMaxSize` | `262144` | Aggregation max size (bytes) |
+| `master.compressionBlacklist` | control-plane keys | Packet IDs excluded from compression/aggregation (defaults cover control plane: handshake / dictionary / index / chunkHash / light delta / BE data, etc.) |
+| `master.maxChunksPerTick` | `4` | Per-player per-tick submit cap (send rate = value × tick pace, ≈ 4×20 = 80/s at full tick; degrades naturally on laggy ticks) |
+| `master.serverChunkPushThreads` | `4` | Server chunk-push fixed threads (encode / hash / ZSTD pool) |
 
 ### Storage (`storage.*`)
 
-| Key | Default | Notes |
+| Key | Default | Description |
 | --- | --- | --- |
-| `storage.enabled` | `false` | World save uses ZSTD type 126 (off by default; dedicated servers only — **back up worlds before first enable**) |
-| `storage.zstdLevel` | `3` | Storage compression level; higher = smaller saves, more CPU |
+| `storage.enabled` | `false` | World saves use ZSTD type 126 (off by default; dedicated server only, **back up your world before first enable**) |
+| `storage.zstdLevel` | `3` | Storage level; higher = smaller saves, heavier CPU |
 
 ### Compat (`compat.*`)
 
-| Key | Default | Notes |
+| Key | Default | Description |
 | --- | --- | --- |
-| `compat.requireClientMod` | `false` | Off = vanilla clients can join (server-only compression benefit); on = require the mod on clients |
-| `compat.autoDowngradeOnError` | `true` | Fall back to vanilla behavior on errors |
+| `compat.requireClientMod` | `false` | Off = mod-less clients can join (server-side compression only); on = kick when the login handshake fails |
+| `compat.autoDowngradeOnError` | `true` | Auto-fall-back to vanilla behavior on error |
 
-### Debug (`debug.*`, split by side)
+### Debug (`debug.*`, per side)
 
 Client `hassium-client.toml`:
 
-| Key | Default | Notes |
+| Key | Default | Description |
 | --- | --- | --- |
 | `debug.metadataLogging` | `false` | chunkHash / metadata comparison logs |
-| `debug.dispatcherLogging` | `false` | Main-thread dispatch logs |
+| `debug.dispatcherLogging` | `false` | Main-thread dispatcher logs |
 | `debug.asyncLogging` | `false` | Async task logs (incl. SeedGen / shadow) |
 | `debug.compressionLogging` | `false` | Decompression logs |
 | `debug.chunkApplyLogging` | `false` | Chunk apply logs |
-| `debug.networkLogging` | `false` | Network send / receive logs |
-| `debug.cacheLogging` | `false` | Cache read / write logs |
+| `debug.networkLogging` | `false` | Network send/receive logs |
+| `debug.cacheLogging` | `false` | Cache read/write logs |
 | `debug.lightVerify` | `false` | Light verification logs |
+| `debug.networkMetricsEnabled` | `false` | Client network metrics (force-enabled by smoke test `hassium.smokeTest=true`) |
+| `debug.networkMetricsAutoReset` | `true` | Auto-reset session metric counters on server disconnect |
 
 Server `hassium-server.toml`:
 
-| Key | Default | Notes |
+| Key | Default | Description |
 | --- | --- | --- |
 | `debug.dispatcherLogging` | `false` | Main-thread dispatch / MSPT logs |
 | `debug.asyncLogging` | `false` | Async task logs |
 | `debug.compressionLogging` | `false` | Compression send logs |
-| `debug.chunkApplyLogging` | `false` | Resync / catch-up logs |
-| `debug.networkLogging` | `false` | Network send / receive logs |
-| `debug.dataplaneLogging` | `false` | UDP data-plane hot-path logs |
+| `debug.chunkApplyLogging` | `false` | Chunk resend / resync logs |
+| `debug.networkLogging` | `false` | Network send/receive logs |
 
-The hot path is quiet by default (only a few lifecycle INFO logs). Toggle `debug.*` categories as needed while debugging. ERROR / WARN are always emitted. See [Troubleshooting](Troubleshooting-en).
+Hot paths are quiet by default (a few lifecycle INFO lines); enable specific `debug.*` keys when diagnosing. ERROR / WARN always print. See [Troubleshooting](Troubleshooting-en).
 
 ---
 
-## Common tweaks
+## Common adjustments
 
-| Goal | Tweak |
+| Goal | Change |
 | --- | --- |
-| Disable storage compression, keep network benefits | `storage.enabled = false` |
-| Back up worlds without format change first | Same — set `storage.enabled = false`, back up, then re-enable |
-| Disable beyond-view render, restore vanilla RD clamp | `chunk.viewDistanceExtensionEnabled = false` |
-| Raise beyond-view cap to 48 | `chunk.maxRenderDistance = 48`, and edit `options.txt` to raise the client slider; fog may show artifacts beyond RD 32 |
-| Disable the Hassium engine (no shadow server; server then does not strip light) | `chunk.hassiumEngineEnabled = false` |
-| Local chunk generation (matching versions on both sides) | `chunk.seedGenEnabled = true` on both sides |
-| Coexist with in-process Via bridges | Turn off `master.globalPacketCompression` |
-| Third-party channel hurt by aggregation | `master.enablePacketAggregation = false`, or add its channel ID to `master.compressionBlacklist` |
-| Enable the UDP data plane | `dataplane.enabled = true`, set `dataplane.udpListeners` reachable addresses to public ones, and open the UDP ports |
-| Client cache only (server does not install) | Install on the client only; server keeps `compat.requireClientMod = false` |
+| Disable save compression (keep network optimizations) | `storage.enabled = false` (off by default) |
+| Temporarily disable save compression before backing up | Same, then back up the world |
+| Disable shadow side / cache (vanilla path everywhere) | `chunk.enabled = false` (server stops stripping light; light arrives with packets) |
+| Local generation on join (same versions) | `chunk.seedGenEnabled = true` on both sides (mind the seed-leak surface) |
+| Aggregation breaks a third-party channel | Disable `master.enablePacketAggregation`, or add the channel ID to `master.compressionBlacklist` |
+| Client cache only (no server mod) | Install on the client alone; server default `compat.requireClientMod = false` |
+| Force the client mod | Server `compat.requireClientMod = true` |
 
 ---
 

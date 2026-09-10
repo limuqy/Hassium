@@ -17,7 +17,7 @@
 | Argument | Required | Notes |
 | --- | --- | --- |
 | `<serverIp>` | no | When given, exports that server's cache; defaults to the **currently connected** server. Format: `IP_port` or bare `IP` |
-| `seed` | no | Retained argument (a directory copy does not involve the seed) |
+| `seed` | no | **Ignored**. The seed is written into `level.dat` (`WorldOptions`) by the shadow server via vanilla `saveDataTag` — just copy |
 
 - Output directory: `<gameDir>/hassium_exports/<cacheId>/` (`cacheId` = `server_<IP>_<port>`, or the current server's serverId)
 - Source: wholesale copy of the shadow-side world directory `hassium_cache/<serverId>/world`
@@ -49,7 +49,7 @@ Chat reports `export finished: <target path>` on completion.
 
 - **No entities, no inventory, no advancements** — the shadow-side world holds only chunk/light and block-entity data
 - **Format stays type 126** — requires Hassium to read; vanilla translation is planned later
-- **A snapshot of the chunks you have visited** — empty chunks are filled by the world generator
+- **A snapshot of the chunks you have visited** — empty chunks are filled by the world generator from the `level.dat` seed (the server seed when local generation is on)
 - **Modded blocks need the same mods and a close MC version** — otherwise they may render as unknown
 - **BE availability depends on the shadow-side cache contents** — Live-Unload snapshots include BE; warm-stash from inbound packets may be missing
 - **Light is retained with the chunks** — chunks with `is_light_on=1` carry `SkyLight` / `BlockLight`

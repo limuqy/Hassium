@@ -32,43 +32,31 @@ A: 默认可以。`compat.requireClientMod = false`（默认）时未装模组�
 
 ### Q: 我装了同类压缩 mod，能和 Hassium 共存吗？
 
-A: 不行。与 `master.globalPacketCompression` 冲突。逃生口：`master.globalPacketCompression = false` 或 `master.enabled = false`（仅享受客户端缓存）。
+A: 有条件。Hassium 通道压缩不触碰原版压缩层（管线级全局包压缩已退役），但同类 mod 若替换原版压缩管线仍有冲突面。建议二选一；或 `master.enabled = false`（仅享受客户端缓存）。
 
 ### Q: 第三方 mod 的包被 Hassium 聚合后报错？
 
 A: 逃生：(1) `master.enablePacketAggregation = false`，或 (2) 把该包 ID 加进 `master.compressionBlacklist`。
 
----
+### Q: 公网部署需要放行哪些端口？
 
-## 超视渲染
+A: 只需游戏端口（vanilla TCP）。直连拓扑下无网关/UDP 端口（均已退役）。
 
-### Q: 我用 Bobby 想试试 Hassium 超视渲染怎么办？
+### Q: 断线重连会重新下载全部区块吗？
 
-A: **二选一**。Hassium 与 Bobby 不兼容；先把 Bobby 在客户端移除再启动 Hassium 的超视渲染。
-
-### Q: 单人服能开超视渲染吗？
-
-A: 不能。超视渲染仅在多人服启用，单人服单端 `view-distance` 不受限。
-
-### Q: 渲染距离拉到 48 后雾后面突然冒出区块？
-
-A: 这是已知限制。Fog Mixin 跨七段版本签名差异大未实现；RD > 32 时雾距跟随 `getEffectiveRenderDistance` 扩大，远端区块可能突然显现（穿帮）。建议保持 RD ≤ 32。
-
-### Q: 超视渲染环带内存占用大吗？
-
-A: 环带规模由客户端 RD 与服务端视距之差决定；可通过降低 `chunk.maxRenderDistance` 或关闭 `chunk.viewDistanceExtensionEnabled` 限制资源占用。超视渲染复用现有缓存淘汰机制，不新增专用内存池。
+A: 不会。断连时影子端世界已落盘（`hassium_cache/<serverId>/world`），重连后未变更区块走缓存命中（UNCHANGED），变更区块走分段增量（DELTA），仅缺失区块走全量。
 
 ---
 
-## 网络核心与迁移
+## 本地生成（SeedGen）
 
-### Q: 客户端必须装 Hassium 才能经网关接入吗？UDP 数据面默认开吗？
+### Q: SeedGen 会不会泄露我的世界种子？
 
-A: 客户端经进程内网关（网络核心）接入主控核心是 2.0.0 的默认接入路径；UDP 数据面（网关↔主控通道的 bulk 载体）默认关（`dataplane.enabled = false`），仅在需要数据线路时开启。详见 [网络核心与主控迁移](Network-Core-and-Master-Migration)。
+A: **会**。服务端开启 `chunk.seedGenEnabled` 时会向客户端下发世界种子，等同泄露服务端种子（探图/种子地图/导出存档均可利用）。公网服请权衡后决定。
 
-### Q: 主控断线/卡顿时会掉线吗？
+### Q: 客户端和服务端版本不一样能用 SeedGen 吗？
 
-A: 不会立即掉线。L1 迁移引擎按生效静默超时（默认 `master.migrationSilentTimeoutMs`=`10000`；显式改 `migrationFaultTimeoutMs` 时可回退）判定后无感迁移：磁盘缓存、保存队列全保留，新会话直接续上，不弹「连接丢失」；主控无法恢复时才真正断连。UDP 数据面开启且健康时迁移更平滑。
+A: 不能。本地生成要求双端同版本；版本不一致时自动回退全量请求。
 
 ---
 
@@ -81,6 +69,18 @@ A: 目前不能直接进。2.0.0 的 `export` 是影子端世界目录整体拷�
 ### Q: 导出的世界含实体吗？
 
 A: **不含**。影子端世界仅含区块/光照与方块实体数据，无玩家背包/成就/普通实体。导出限制详见 [World-Export](World-Export)。
+
+---
+
+## 超视渲染
+
+### Q: 超视渲染现在能用吗？
+
+A: **当前版本未启用**（规划中）。2.0.0 直连拓扑回归后旧的环带链路已从代码裁剪，配置键已删除；功能落地时恢复。设计记录见 [Beyond-View-Render](Beyond-View-Render)。
+
+### Q: 我用 Bobby 会冲突吗？
+
+A: 会。Hassium 影子端自行管理缓存与重交付，与 Bobby 不兼容，勿同装。
 
 ---
 

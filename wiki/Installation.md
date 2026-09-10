@@ -43,8 +43,8 @@
 
 ## 配置
 
-- Fabric：安装 **Mod Menu** 与 **Cloth** 后，在 Mod Menu 中打开配置。
-- Forge / NeoForge：在模组列表中点击「配置」按钮；需要安装 **Cloth**。
+- Fabric：安装 **Mod Menu** 后在 Mod Menu 中打开配置（Cloth 已 jiJ，无需单独安装）。
+- Forge / NeoForge：在模组列表中点击「配置」按钮（Cloth 已 jiJ）；Configured 可选。
 - 也可以直接编辑 `config/hassium/hassium-client.toml` 或 `config/hassium/hassium-server.toml` 中的 TOML 配置。
 
 ## 首次启用存储

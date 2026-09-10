@@ -2,9 +2,9 @@
 
 ---
 
-> **简体中文**: [Commands](Commands) · English
+> **English**: [Commands](Commands) · English
 
-Hassium exposes two command groups:
+Hassium provides two command sets:
 
 - Server: `/hassium ...` (requires OP 2)
 - Client: `/hassiumc ...` (client only, no permission required)
@@ -13,47 +13,32 @@ Hassium exposes two command groups:
 
 ## Server commands
 
-| Command | Purpose | Notes |
+| Command | Description | Notes |
 | --- | --- | --- |
-| `/hassium stats` | Show server-side compression and send statistics | Requires OP 2 |
+| `/hassium stats` | Server compression and send statistics | Requires OP 2 |
 | `/hassium stats reset` | Reset server-side counters | Requires OP 2 |
-| `/hassium stats toggle` | Toggle metrics collection | OP 2 |
-| `/hassium metrics on` | Runtime-enable metrics collection | OP 2 |
-| `/hassium metrics off` | Runtime-disable metrics collection | OP 2 |
+| `/hassium stats toggle` | Toggle metrics collection | Same |
+| `/hassium metrics on` | Enable metrics at runtime | Same |
+| `/hassium metrics off` | Disable metrics at runtime | Same |
 
-> `/hassium metrics off` also disables `/hassium stats`. Self-checks auto-enable metrics.
+> `/hassium metrics off` also makes `/hassium stats` unavailable; self-checks auto-enable it.
 
 ---
 
 ## Client commands
 
-| Command | Purpose |
+| Command | Description |
 | --- | --- |
-| `/hassiumc stats` | Show client stats: bandwidth compression, chunk cache (full hits + delta), chunk loading (new + stale + local), light cache, light recompute, beyond-view ON\|OFF, bandwidth savings |
-| `/hassiumc export [<serverIp>] [seed]` | Copy the shadow-side world directory wholesale as an export |
+| `/hassiumc stats` | Client statistics: bandwidth compression, chunk cache (full+partial−delta over applied, by bytes; local generation not counted as cache), chunk loading (new+stale+local), lighting cache, lighting recompute, traffic savings (actual / no-mod expected) |
+| `/hassiumc export [<serverIp>] [seed]` | Copy the shadow world into an export save |
 
 > `export` arguments:
 >
-> - `<serverIp>` is optional; defaults to the currently connected server (use `IP_port`, or a bare IP)
-> - `seed` is a retained argument (a directory copy does not involve the seed)
-> - Output directory: `<gameDir>/hassium_exports/<cacheId>/` (keeps the type 126 + chunkHash format; vanilla translation is planned later)
+> - `<serverIp>` optional; exports that server's cache instead of the currently connected one (format: `IP_port` or plain `IP`)
+> - `seed` optional; **ignored**. The seed is written into `level.dat` (`WorldOptions`) by the shadow server via vanilla `saveDataTag` — just copy
+> - Output directory: `<gameDir>/hassium_exports/<cacheId>/` (keeps type 126 + chunkHash; vanilla translation pending)
 >
 > See [World-Export](World-Export-en).
-
----
-
-## Client migration commands (`/hassium migrate`, development only)
-
-Master-switch drill entry; **registered only in a development environment** (`runClient` / IDE), not in release builds. Production migration is triggered automatically by fault/policy — no player action required.
-
-| Command | Purpose |
-| --- | --- |
-| `/hassium migrate` | Usage help |
-| `/hassium migrate list` | List available migration endpoints |
-| `/hassium migrate status` | Current Network Core / migration status |
-| `/hassium migrate <host:port>` | Migrate to the given master gateway endpoint (prewarm + resume ticket) |
-
-See [Network Core and Master Migration](Network-Core-and-Master-Migration-en).
 
 ---
 

@@ -4,9 +4,9 @@
   <img src="https://raw.githubusercontent.com/limuqy/Hassium/master/common/src/main/resources/assets/hassium/logo.png" alt="Hassium Logo" width="200">
 </p>
 
-**Hassium** is a high-performance Minecraft optimization mod providing **efficient storage, network optimization, chunk cache, local generation, beyond-view rendering, and lighting optimization**. Covers Minecraft **1.20.1–1.21.11** on **Fabric / Forge / NeoForge**.
+**Hassium** is a high-performance optimization mod for Minecraft, providing **efficient compression, network optimization, chunk cache, local generation, and lighting optimization**. Covers Minecraft **1.20.1–1.21.11** on **Fabric / Forge / NeoForge**.
 
-> Repo: [github.com/limuqy/Hassium](https://github.com/limuqy/Hassium) · [简体中文](Home)
+> Repository: [github.com/limuqy/Hassium](https://github.com/limuqy/Hassium) · [简体中文](Home)
 
 ![License](https://img.shields.io/badge/License-GPL--3.0-blue.svg)
 ![Minecraft](https://img.shields.io/badge/Minecraft-1.20.1--1.21.11-green.svg)
@@ -19,20 +19,21 @@
 
 | Category | Feature | Description |
 | --- | --- | --- |
-| **Efficient compression** | Storage compression | World chunk ZSTD on disk (type 126) for smaller saves; keeps vanilla Region (`.mca`) layout |
-| | Network compression | More efficient compression for chunks and packets (custom channels + optional global pipeline + aggregation) — less bandwidth and wait time |
-| **Network optimization** | Smooth push | Per-tick submit cap (`master.maxChunksPerTick` default `4` ≈ 80 chunks/s at full tick) with background serialization and client apply-ACK progressive admission; join and view expansion never saturate the main thread |
-| | Gateway migration | The client connects through an in-process gateway (Network Core) to the master core; on master disconnect/stall the L1 migration engine resumes seamlessly — the cache is not re-downloaded and the disconnect screen stays hidden |
-| | L1 load balancing | Multiple UDP lines share chunk downstream by weight; the UDP data plane is the gateway↔master bulk carrier (off by default) |
-| **Chunk cache** | Chunk cache | Loaded chunks are kept locally; revisiting an area hits via contentHash comparison instead of full downloads |
-| | Section delta | On cache mismatch, send changed blocks; too many → full section, then full chunk |
-| | Local generation (SeedGen) | For pristine (never-generated) chunks the server sends a tiny seed + position reference instead of chunk data; the client generates locally with the same seed — zero transfer. Falls back to full transfer on failure/timeout |
-| | **Beyond-view render** | When client RD exceeds server view distance (multiplayer), fill the outer ring from local cache (render-only; no out-of-range server requests); incompatible with Bobby |
-| | World export | `/hassiumc export` copies the shadow-side world directory wholesale as an export (keeps the type 126 format) |
-| **Lighting optimization** | Light stripping | Server can strip light data; the Hassium engine (shadow side) computes lighting centrally and persists the cache |
-| | Light cache | Light data is cached after first recompute; cache hits apply pre-computed lighting directly, skipping expensive recomputation |
-| | Parallel light engine | Optional: enable with Promethium installed; default path uses the shadow-side vanilla light engine asynchronously (frame-budget drain) |
-| **Utilities** | Traffic metrics | `/hassium stats` (server) and `/hassiumc stats` (client) to inspect compression and cache results |
+| **Efficient compression** | Storage compression | Chunk ZSTD on disk (type 126), significantly smaller saves; keeps vanilla Region (`.mca`) layout |
+| | Channel compression | Dictionary ZSTD inside aggregated packets + chunk-push native compression; never touches the vanilla compression layer, no cross-mod pipeline conflicts |
+| **Network optimization** | Smooth push | Server-side per-tick submit cap (`master.maxChunksPerTick`, degrades naturally on laggy ticks) + fully backgrounded encode/compress/send; joins never saturate the main thread |
+| | Login-phase capability handshake | `hassium:login_hello` login query on 1.20.1, config-stage payload on 1.20.2+; bitwise capability negotiation with no timeout dependency and zero interference for vanilla clients |
+| | Pull mode | After negotiation the server stops pushing full chunks; chunk data is fetched by the unified Compare+Pull driven by the client shadow virtual player's vanilla tracking |
+| **Chunk cache** | Shadow-world saving | Join chunks are lit and saved into a vanilla save dir (`hassium_cache/<serverId>/world`) by an in-process shadow server (full MinecraftServer); saved on disconnect, reused on reconnect |
+| | Section delta | On stale cache only changed blocks are sent; whole section next, whole chunk beyond that |
+| | Capacity/heat eviction | `heat.idx` tracks heat per region file; over-capacity regions are deleted whole-file |
+| | Local generation (SeedGen) | For pristine chunks the server sends only a seed + coordinate reference; the client generates locally with the same seed — zero-bandwidth chunk generation; failures fall back to full chunks. **Server enablement sends the world seed (seed leak)** |
+| | World export | `/hassiumc export` copies the shadow world into an export save (keeps type 126; vanilla translation pending) |
+| **Lighting** | Hassium engine | On join an in-process shadow server takes over world saving (cache) + chunk lighting + packing official chunk packets (returned over the official channel); auto-degrades on startup failure |
+| | Light stripping | The server may strip light to save bandwidth (`chunk.lightStrip`); the shadow server computes lighting and packs it back |
+| **Utilities** | Traffic monitoring | `/hassium stats` (server) and `/hassiumc stats` (client) show compression and cache effectiveness |
+
+> **Planned**: beyond-view rendering (OVD — backfill terrain beyond the server view distance from local cache when the client RD exceeds the server's). The current build does not enable this path; config keys and docs return when the feature ships (see [Beyond-View-Render](Beyond-View-Render)).
 
 Feature details: [Features](Features-en).
 
@@ -40,30 +41,30 @@ Feature details: [Features](Features-en).
 
 ## Quick start
 
-1. Download the loader-specific JAR from [GitHub Releases](https://github.com/limuqy/Hassium/releases) or [CurseForge](https://www.curseforge.com/minecraft/mc-mods/hassium).
-2. Drop it into `mods/` on client and/or server.
+1. Download the JAR for your loader from [GitHub Releases](https://github.com/limuqy/Hassium/releases) or [CurseForge](https://www.curseforge.com/minecraft/mc-mods/hassium).
+2. Drop it into the client/server `mods/` directory.
 3. Launch the game; config files are generated under `config/hassium/`.
-4. **Back up worlds before first enabling storage** (see [FAQ](FAQ-en)).
+4. **Back up your world before enabling storage** (see [FAQ](FAQ-en)).
 
-Details: [Installation](Installation-en).
+Installation and prerequisites: [Installation](Installation-en).
 
 ---
 
-## Docs
+## Documentation
 
 | Page | Content |
 | --- | --- |
-| [Installation](Installation-en) | Download, prerequisites, per-loader notes |
-| [Configuration](Configuration-en) | Full config table and GUI paths |
+| [Installation](Installation-en) | Download, prerequisites, loader differences |
+| [Configuration](Configuration-en) | Full key reference and GUI paths |
 | [Commands](Commands-en) | `/hassium` and `/hassiumc` reference |
-| [Features](Features-en) | Feature deep-dive |
-| [Beyond-View-Render](Beyond-View-Render-en) | Beyond-view render details |
+| [Features](Features-en) | Feature details |
+| [Beyond-View-Render](Beyond-View-Render-en) | Beyond-view render (planned) |
 | [World-Export](World-Export-en) | Cache world export |
-| [Compatibility](Compatibility-en) | Multi-mod compatibility table |
+| [Compatibility](Compatibility-en) | Multi-mod compatibility |
 | [Support-Matrix](Support-Matrix-en) | Version × loader matrix |
-| [Network-Core-and-Master-Migration](Network-Core-and-Master-Migration-en) | In-process gateway, seamless migration and the master core (server ops) |
-| [FAQ](FAQ-en) | Frequently asked questions |
-| [Troubleshooting](Troubleshooting-en) | Debug paths and logs |
+| [Network Architecture](Network-Core-and-Master-Migration-en) | Direct-connection topology |
+| [FAQ](FAQ-en) | Common questions |
+| [Troubleshooting](Troubleshooting-en) | Diagnostics and logs |
 
 ---
 
@@ -77,7 +78,7 @@ Details: [Installation](Installation-en).
 | 1.21.3–1.21.10 | ✅ | ✅ | ✅ |
 | 1.21.11 | ✅ | — | ✅ |
 
-Full seven-segment table: [Support-Matrix](Support-Matrix-en).
+Full segment details: [Support-Matrix](Support-Matrix-en).
 
 ---
 

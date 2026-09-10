@@ -1,25 +1,26 @@
 # 区块缓存推送与进服加载
 
-本文是 **ShadowPull 统一 Compare + Pull 流水线** 的真相源。客户端和服务端通过原版 `CustomPayload` 传输 ShadowPull；旧 `25566` Gateway 不参与本功能。
-功能域归属：客户端侧缓存 / 影子端链路属**区块核心**；服务端以原版 `25565` 连接接收 ShadowPull。配置键 `chunk.*` 为区块核心配置族。
+本文是 **ShadowPull 统一 Compare + Pull 流水线** 的真相源。客户端和服务端通过原版 `CustomPayload` 传输 ShadowPull。功能域归属：客户端侧缓存 / 影子端链路属**区块核心**；服务端以原版连接接收 ShadowPull。配置键 `chunk.*` 为区块核心配置族。
 
 **相关专文（细节不在此重复）：**
 
 | 主题 | 文档 | 本文摘要 |
 |------|------|----------|
-| 超视渲染 | 本文 §10 | §10 |
-| 磁盘 NBT / Live-Unload / 分段增量 | 本文 §11 | §11 |
+| 原版对齐交付边界 | [`architecture.md`](architecture.md) §6 | §13 |
+| 磁盘 NBT / 影子端存档 / 分段增量 | 本文 §11 | §11 |
 | 世界导出 | 本文 §12 | §12 |
 | 客户端收包 → apply → 光照落地全链路 | [`client-chunk-light-flow.md`](client-chunk-light-flow.md) | §3 客户端侧延伸 |
 
-**卖点特性（已实现）：** 分段增量（§3 阶段二 / §11）、超视渲染（§10）、`/hassiumc export`（§12）。本地生成（SeedGen）开启时握手下发世界种子，由影子端原版写入 `level.dat`（**泄露种子**）；导出或手工把 `hassium_cache/<id>/world` 拷到 `saves/` 即可当存档。
+**卖点特性（已实现）：** 统一 ShadowPull（§3）、分段增量（§11.5）、`/hassiumc export`（§12）。本地生成（SeedGen）开启时握手下发世界种子，由影子端原版写入 `level.dat`（**泄露种子**）；导出或手工把 `hassium_cache/<id>/world` 拷到 `saves/` 即可当存档。
+
+> **规划中**：超视渲染（OVD）。当前版本代码未启用该链路，影子端 vanilla tracking 是区块交付的唯一 owner（§10）。
 
 ## 1. 目标与约束
 
 - 用 **内容哈希**（非 `inhabitedTime`）判断缓存是否可复用
 - section 方块数据哈希排除会每 tick 变化的 blockEntity NBT
-- blockEntity 不进缓存命中域：区块 apply 后再走专用请求
-- 自 `disk-nbt-cache-and-export` 起：客户端缓存 payload 为 **磁盘 chunk `CompoundTag`**（含 `"HBT1"` magic 前缀），跨大版本约束放宽到 NBT schema 兼容
+- blockEntity 不进缓存命中域：区块 apply 后再走专用请求（`block_entity_request_c2s` / `block_entity_data_s2c`）
+- 客户端缓存 payload 为**磁盘 chunk `CompoundTag`**（影子端原版存档格式），跨大版本约束放宽到 NBT schema 兼容
 
 ## 2. 哈希
 
@@ -30,7 +31,7 @@ chunkHash   = combineSectionHashes(sectionIndex → sectionHash)
 
 实现：`ChunkContentHashUtil`。服务端与客户端算法一致。
 
-客户端落盘时 contentHash **必须**等于 `combine(sectionHashes)`（与 `ChunkHashS2C` 同值）。影子端 `ShadowStorageHashes` 表落盘同源（apply/注入时重算写入）。
+客户端落盘时 contentHash **必须**等于 `combine(sectionHashes)`（与 `SeedRefS2CPacket` 同值）。影子端 `ShadowStorageHashes` 表落盘同源（apply/注入时重算写入）。
 
 命中比对（影子端 `ShadowLightCompute` / 磁盘 `ShadowStorageHashes`）：
 
@@ -38,41 +39,17 @@ chunkHash   = combineSectionHashes(sectionIndex → sectionHash)
 2. 未注入 → `ShadowSeedServer.loadFromDisk` 读影子端存档比对（光脏标记拦截欠光块）
 3. 与服务端 `chunkHash` 相等 → 命中直接回传；不等且光干净 → 分段增量候选
 
-### 3.1 统一 ShadowPull
-
-原版 `ClientPacketListener.handleLevelChunkWithLight` 收到区块时，已有本地影子基线的柱进入唯一 `ShadowPull` 请求；无基线时保留原版 FULL 作为首次建基线路径。请求同时携带 `chunkHash`、`sectionHash` 和 section 平面综合征。
-
-服务端统一返回：
-
-```text
-UNCHANGED → 复用影子缓存
-DELTA     → 复用现有 SectionDeltaPlanner / SectionDeltaS2CPacket
-FULL      → 返回原版 chunk+light payload
-ERROR     → 客户端重新请求权威 FULL
-```
-
-`DELTA` 不再走独立的客户端入口；它作为 ShadowPull 的终态复用现有分段增量编码和应用逻辑。
-
-```text
-原版 25565 CustomPayload
-    └─ shadow_pull_request_c2s
-         └─ ShadowPullHandler
-              └─ UNCHANGED / DELTA / FULL / ERROR
-```
-
-### 3.2 正常 tracking 推送
-
 ## 3. 现行数据流
 
 > 服务端原版 `ServerPlayer` / `ChunkMap` 决定区块 tracking、可见范围与 forget；原版 `ClientChunkCache` 是唯一客户端生命周期真相源。Hassium 不维护第二套 admission/unload 状态。
 
-### 正常 tracking 推送
+### 3.1 正常 tracking 推送
 
 ```text
 ServerPlayer / ServerChunkCache / ChunkMap
         │  原版 tracking 决定 chunk / forget
         ▼
-标准 25565 Connection
+标准连接
         │  ClientboundLevelChunkWithLightPacket
         ▼
 ClientPacketListener.handleLevelChunkWithLight
@@ -85,7 +62,9 @@ ClientChunkCache.replaceWithPacketData → renderer
 
 正常原版首包应记为 `serverPushAppliedCount`；`fullChunkRequestCount` = 网络权威 FULL 落地（new+stale，无基线读 `newFullChunkRequestCount`）。唯一落地总数读 `landedTotal`（= `clientLandedChunkCount`，含 cacheHit 重交付，按坐标去重）；`clientAppliedChunkCount` 是来源事件和，可因跨源同一坐标重复而大于 landed。探针还记录累计 apply、完整 `ClientChunkCache.loadedChunks`，以及 trace 候选在采样时刻实际驻留的数量。
 
-### Compare + Pull / Generate + Validate
+### 3.2 统一 ShadowPull（Compare + Pull / Generate + Validate）
+
+原版 `ClientPacketListener.handleLevelChunkWithLight` 收到区块时，已有本地影子基线的柱进入唯一 `ShadowPull` 请求；无基线时保留原版 FULL 作为首次建基线路径。请求同时携带 `chunkHash`、`sectionHash` 和 section 平面综合征。
 
 该分支处理 `SeedRef`、影子缓存重放和本地生成失败；不参与区块可见范围或卸载决策。
 
@@ -118,26 +97,23 @@ ClientPacketListener.handleLevelChunkWithLight
 | 机制 | 说明 |
 |------|------|
 | `mainThreadChunkBudgetMs` | 每帧 apply/回调共享预算（默认 15ms） |
-| JoinBoost | 进服约 10s，预算从约 30ms 线性退坡到 `mainThreadChunkBudgetMs` |
-| `maxChunksPerFrame` | 每 tick 缓存读取生产上限（默认 6；OVD 入队 + 影子读盘） |
+| JoinBoost | 进服起 30s 宽松封顶窗口（`JOIN_BOOST_CAP_MS`），预算 30ms、apply 活跃可续期但总窗口不超 30s，之后回落 `mainThreadChunkBudgetMs` |
+| `maxChunksPerFrame` | 每 tick 缓存读取生产上限（默认 6；影子入队 + 影子读盘；主线程消费只受时间预算） |
 
-ShadowPull 通过原版 `CustomPayload` 发送；它不使用旧 Gateway Envelope、UDP 或独立数据面。
+ShadowPull 通过原版 `CustomPayload` 发送；不使用任何网关 Envelope、UDP 或独立数据面（均已退役）。
 
 ## 5. 协议边界
 
 ```java
 ShadowPullRequestC2SPacket  // 客户端带影子本地 baseline 请求权威比较
 ShadowPullResponseS2CPacket // UNCHANGED / DELTA / FULL / ERROR
-SectionDeltaS2CPacket       // ShadowPull 的 DELTA payload 编码
+SectionDeltaS2CPacket       // ShadowPull 的 DELTA 终态内嵌载荷
+SeedRefS2CPacket            // pristine 区块坐标引用（替代 ChunkHashS2C）
+BlockEntityRequestC2S / BlockEntityDataS2C  // BE 专用请求（不进缓存命中域）
+LightDeltaS2CPacket         // 增量光变更掩码
 ```
 
-门控：`chunk.sectionDeltaEnabled`（默认 `true`；需同时 `chunk.enabled`）。
-
-| 比对结果 | 分段增量关闭 | 分段增量开启（默认） |
-|----------|--------------|----------------------|
-| UNCHANGED | 影子端回放 | 影子端回放 |
-| 不同      | FULL        | DELTA，规划失败则 FULL |
-
+全部走原版 `CustomPayload`（`hassium:*` 命名空间，`PacketId` / `HassiumChannels` 注册）。
 
 ## 6. 关键组件
 
@@ -150,67 +126,153 @@ SectionDeltaS2CPacket       // ShadowPull 的 DELTA payload 编码
 | `ShadowSeedServer.applySectionDelta` | 影子端 FULL/BLOCKS 覆盖、清光重算、contentHash 落表 |
 | `ShadowStorageHashes` | 影子端 contentHash 表与光脏标记 |
 
-## 7. 客户端淘汰
+## 7. 缓存淘汰（影子端）
 
-`ClientHeatIndex` 按 `chunkBytes`（单块压缩大小）与热度评分清理；超过 `maxSizeMb` 等阈值时删 Region 内单块（`storage.remove`），不整文件删除 `.mca`。
+淘汰由影子服务端承担（旧客户端 `ClientHeatIndex` 单块删除已裁剪）：
+
+- 热度索引 `ShadowRegionHeat`（`heat.idx`，按 `r.X.Z.mca` region 文件计，per-server：`hassium_cache/<serverId>/heat.idx`）；解析文件内容计热度，不靠 mtime
+- 热度分数 = `recencyWeight`(0.7) × 最近访问 + `frequencyWeight`(0.3) × 访问频率；低于 `hotScoreThreshold`(0.3) 视为冷
+- 容量 = 各维度 `*.mca` 的 `Files.size` 之和，超 `maxSizeMb`(4096) 触发清理；`targetSizeMb`=0 自动
+- **删除粒度 = 整文件**：`ShadowSeedServer.deleteRegion` → 存储管理器卸映像并删 `.mca`（真实缩小占用；不删 region 内单块）
+- 安全 gate：本会话 `injectedChunks` 落到的 region 整文件跳过
+- 清理检查间隔 `cleanupIntervalTicks`(6000)；每轮最多 `minCleanupBatchSize`(100) 个 region 文件
 
 ## 8. 调试
 
-默认无热路径 INFO。排查时打开 `config/hassium/hassium-client.toml` 的 `debug.metadataLogging` / `debug.networkLogging` / `debug.cacheLogging` 等（见 architecture）。运行时统计：`/hassiumc stats`。
+默认无热路径 INFO。排查时打开 `config/hassium/hassium-client.toml` 的 `debug.metadataLogging` / `debug.cacheLogging` / `debug.chunkApplyLogging` 等（见 architecture §10）。运行时统计：`/hassiumc stats`。
 
 ## 9. 待实现
 
 - 方向性区块预加载（提高推送优先级，不改变协议）
 - warm-stash 优化（收包后暂存 NBT，卸载时 dirty=false 则 flush warm 跳过 live 重算）
 
+## 10. 超视渲染（OVD，影子双窗）
 
-## 10. 超视渲染（当前链路不启用）
+> 2026-09 设计重做：废弃旧「客户端环带 admission 状态机」（`ViewDistanceExtensionService` / `OvdLocalGenerator`，已删）。现行 OVD = **影子 tracking 扩窗 + 权威/OVD 双窗分流**；客户端只抬半径并拦 Forget，不枚举环带、不 miss 重试、无延迟卸载。
 
-影子端原版化后，区块 admission、加载、卸载和推送全部由影子 `ServerPlayer` 对应的 `ServerChunkCache` / `ChunkMap` 管理。本节旧的 `renderOnly` 环带逻辑不属于当前 chunk-core 链路，不能参与远程区块请求或客户端区块生命周期。
+### 10.1 目标
 
-历史实现仍可能存在于兼容类或旧配置说明中，但不得作为当前链路行为依据；相关代码清理以 `.omp/workflows/shadow-chunk-loader-originalization/REQ.md` 为准。
+多人服且客户端 RD 滑块 > 服务端视距时，用**影子端本地已有地形**（注入表 / 磁盘 / 可选本地生成）回填环带，使曾探索区域在视距外仍可见。
 
-### 10.1 当前边界
+| 场景 | 行为 |
+|------|------|
+| 单人 / 局域网 | 不启用（无 serverVD 钳制） |
+| `chunk.viewDistanceExtensionEnabled=false` | 半径回落 serverVD，走权威窗 only |
+| 影子引擎未激活 / 失败降级 | 同上 |
+| 滑块 ≤ serverVD | 无 OVD 窗 |
 
-当前 chunk-core 不启用旧的 `renderOnly` 环带、客户端视距扩展或独立 OVD admission。影子端的虚拟 `ServerPlayer`、`ServerChunkCache` 和 `ChunkMap` 是区块 tracking、加载、卸载及推送的唯一 owner。
+### 10.2 拓扑（双窗）
 
-旧实现的设计记录不再作为运行时契约；需要查询历史方案时使用版本控制记录，不在本文件继续维护已删除的客户端区块状态机。
+```text
+影子 ChunkMap viewDistance = effectiveClientVD
+  = OVD 开 && 滑块 > serverVD ? min(滑块, maxRenderDistance) : serverVD(+1 权威边距)
 
-### 10.2 不做
+┌─────────────────────────────────────┐
+│  影子 ticket 加载窗（chebyshev）     │
+│   ┌───────────────────────────┐     │
+│   │ 权威窗 = isChunkInRange(   │     │  → Compare+Pull / bootGrid / sweep
+│   │            serverVD)       │     │  → 真服务端数据源
+│   └───────────────────────────┘     │
+│   OVD 窗 = client 窗 − 权威窗        │  → injected → loadFromDisk → generate
+│                                     │  → 禁止 ShadowPull / 禁止真服请求
+└─────────────────────────────────────┘
+```
 
-- 不由真实客户端枚举影子区块或维护 halo。
-- 不向服务端请求影子玩家 tracking 范围之外的区块。
-- 不以客户端 `hasChunk`、Bloom、chunk hash 回执或 pending-confirm 决定影子端 admission。
-## 11. 磁盘 NBT 缓存格式
+**职责切分**
 
-> **本节为旧 HBT1 客户端缓存格式的历史记录**：新架构下客户端不再读写磁盘缓存——缓存由影子端原版存档承担（`hassium_cache/<serverId>/world`，type 126 + chunkHash，见 architecture.md §6），清理由 `ShadowCacheEviction`（`heat.idx` region 文件级热度淘汰）负责。`HassiumRegionFile` / `ClientCacheDatabase` / `CacheEvictionManager` 等旧类已裁剪。
+| 端 | 做 | 不做 |
+|----|----|------|
+| 客户端 | 捕获 serverVD；算 effectiveClientVD；抬 `ClientChunkCache` 半径；Forget 仍在 effective 窗内则取消 drop；几何同步给影子 | 环带枚举 / miss 退避 / 延迟卸载表 / 独立 admission |
+| 影子端 | 扩 `setChunkViewDistance(effective)`；权威窗 pull 契约不变；OVD 窗本地源分流；光管线 `renderOnly` 回传官方包 | 向真服请求 OVD 柱；OVD 柱发 `ShadowPullRequest` |
 
-自 `disk-nbt-cache-and-export` 起，客户端缓存 payload 从 packet 字节改为磁盘 chunk `CompoundTag`。
+### 10.3 数据流
 
-### 11.1 外层布局（不变）
+```text
+真服 tracking(serverVD) ──权威包──▶ 影子注入/算光/落盘
+                                      │
+影子 ticket(clientVD)                 │
+  ├─ 权威窗柱 → 现有 scheduleLoad / pending pull / compare
+  └─ OVD 窗柱 → injected? → disk? → generate?
+                 └─ 均无：空 Proto 站位（不 pull）
+                 └─ 有数据：submitPreLight(renderOnly=true)
+                         → 光收敛 → drainReady
+                         → 官方 ClientboundLevelChunkWithLight
+                         → 客户端（半径已抬高，Storage 接收）
+```
 
-仍为 `HassiumRegionFile` 的 3-sector header + `[length(4)][type=126][ZSTD 字典压缩 NBT 字节]`：
-- Sector 0: offset table（4096B）
-- Sector 1-2: MetadataTable（1024 × int64 contentHash）
-- Data: `[length(4)][type=126][ZSTD compressed NBT bytes]`
+**外圈→内圈基线**：OVD 柱物化后进 `injectedChunks`；玩家移动使该柱进入权威窗时，`drainSelections` 见 `injectedChunk != null` 跳过 pull，`onChunkMaterialized` 桥带基线走 Compare（UNCHANGED/DELTA），无需二次读盘。
 
-### 11.2 内层 NBT schema
+**预生成**：`chunk.ovdLocalGeneration=true` 时 OVD 窗 ticket 触发 `generate`，转入权威窗即有现成基线。
 
-解压后的字节为 `["HBT1" magic(4)][NBT binary]`，NBT 顶层 `CompoundTag`：
+### 10.4 客户端最小边界
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `x` | IntTag | chunkX |
-| `z` | IntTag | chunkZ |
-| `section_count` | IntTag | section 数量 |
-| `sections` | ListTag&lt;CompoundTag&gt; | 每个：`{"data": ByteArrayTag (LevelChunkSection 线格式), "has_only_air": ByteTag, "sky_light": ByteArrayTag[2048]?, "block_light": ByteArrayTag[2048]?}` |
-| `heightmaps` | CompoundTag | 1.21.5-: 直接 NBT；1.21.5+: `Map<Types, long[]>` 序列化为 CompoundTag |
-| `block_entities` | ListTag&lt;CompoundTag&gt; | 每个 BE 的完整 NBT |
-| `is_light_on` | ByteTag | 0 = 光照未存储（apply 时客户端重算）；1 = 光照已存储（直接应用） |
+1. **半径抬高**：`ClientChunkCache.updateViewRadius(effectiveClientVD)`（每 tick 守护，防 `SetChunkCacheRadius` 缩回后 apply 被 `inRange` 丢弃）。
+2. **Forget 保留**：真服 Forget 时若 pos 仍在 effective 窗（`!serverRange && clientRange`）→ 取消 drop。玩家走出权威圈时真服会 Forget，柱尚在 client 窗。
+3. **无延迟卸载**：`ovdUnloadDelaySecs` 功能取消；出 effective 窗后由 `ClientChunkCache` 原版 Storage 窗口自然 drop。
 
-**光照数据存储**：当 `is_light_on=1` 时，每个 section 的 NBT 可能包含 `sky_light` 和 `block_light`（各 2048 bytes）。
+### 10.5 门禁不变量
 
-**光照缓存流水线**（影子端统一算光，真实客户端只消费标准原版区块包）：
+```text
+∀ OVD 柱：ShadowPull 发送数 = 0
+∀ pull 柱：isChunkInRange(serverVD) == true   // AUTHORITY_MARGIN 契约不变
+bootGrid / sweepVisibleShape 半径仍是 serverVD，不被 clientVD 污染
+服务端 ShadowPullRequestValidator 仍是安全网（误发必 RANGE 拒绝）
+OVD 回传记 ovd 指标，不进缓存命中率分母
+```
+
+### 10.6 配置键（恢复，不含延迟卸载）
+
+| 键 | 默认 | 说明 |
+|----|------|------|
+| `chunk.viewDistanceExtensionEnabled` | true | 超视渲染总开关（依赖 `chunk.enabled`；与 Bobby 互斥） |
+| `chunk.maxRenderDistance` | 16 | effective clientRD 上限（2–64） |
+| `chunk.ovdLocalGeneration` | false | OVD 窗缓存 miss 时本地生成（需真实 seed；无种子自动关） |
+
+`chunk.ovdUnloadDelaySecs` **不再恢复**（延迟卸载取消）。
+
+### 10.7 不做（延续原版化边界）
+
+- 不由真实客户端枚举影子区块或维护 halo / pending / miss 表。
+- 不向服务端请求权威窗之外的区块；OVD 数据仅本地源。
+- 不以客户端 `hasChunk`、Bloom、chunk hash 回执决定影子 admission。
+- 不给 OVD 柱请求 blockEntity。
+- 不复活 HBT1 客户端磁盘缓存；不恢复 `LoginCaps.OVD`（纯客户端本地能力）。
+
+### 10.8 分期与验收
+
+| 阶段 | 内容 | 验收（1.20.1 fabric classic） |
+|------|------|------------------------------|
+| P0 | 影子扩窗 + 双窗分流 + 客户端半径/Forget | R2 环带可见；pull range 拒 = 0；OVD 发送 pull = 0 |
+| P1 | 指标 `ovdLoaded` 等 + miss 空置语义 | `/hassiumc stats` 超视行；G1 `ovdLoaded>0` |
+| P2 | `ovdLocalGeneration` | 开生成外圈补洞；转入内圈不再全量拉 |
+| P3 | L1 + mod-compat 超视条目 | 与 shape4/bootgrid 指标不回归 |
+
+### 10.9 风险
+
+1. 扩窗使 `processUnloads` / 光邻域 ticket 按 clientVD 走，OVD 柱占影子内存与算光队列 → 权威队列深时暂停 OVD 泵。
+2. 与 Bobby 等视距模组双主冲突不变。
+3. 若 P0 触发 pull 契约回归，回退 = `setChunkViewDistance` 改回 `serverVD+1`，双窗分流代码可保留作旁路开关。
+
+## 11. 磁盘 NBT 缓存格式（影子端存档）
+
+> 旧 HBT1 客户端磁盘缓存已裁剪（`HassiumRegionFile` / `ClientCacheDatabase` / `CacheEvictionManager` 等旧类已删，数据不迁移）。现行缓存 = 影子端原版存档 `hassium_cache/<serverId>/world`（type 126 + chunkHash，见 [`architecture.md`](architecture.md) §7）。
+
+### 11.1 外层布局
+
+原版 Anvil 外层（`.mca`，32×32，2-sector header）+ Hassium payload：
+
+```
+Sector 0:     Offset Table
+Sector 1:     Timestamp Table（原版）
+Sector 2+:    [length(4)][type=126][magic 0x48][hash(8)][ZSTD 压缩数据]
+```
+
+- **无** HassiumEnvelope / HSM1 / type 127 运行时写入（127 仅作未来原版 scheme 迁移规划）
+- 写 gate：`MixinRegionFile` shadow 上下文放行（影子端固定写 126）；真实服务端需 `storage.enabled`
+- 字典缺失时拒绝写入 Hassium payload，回退原版
+
+### 11.2 光照缓存流水线（影子端统一算光，真实客户端只消费标准原版区块包）
+
 1. 首次 FULL：服务端标准 `ClientboundLevelChunkWithLightPacket` 进入原版 `ClientPacketListener`；影子端以同一权威数据建立或更新本地基线。
 2. `UNCHANGED` 缓存回放：影子端存档 `loadFromDisk` 走预播种 + 两阶段光屏障后回传标准 chunk+light；光脏标记拦截欠光块并回退权威 FULL。
 3. `DELTA`：`ShadowPullResponseS2CPacket` 内嵌的 `SectionDeltaS2CPacket` 进入 `ShadowLightCompute.submitDelta`，变更 section 清光重算；heightmap 覆盖后重算 sky 光源表。
@@ -227,8 +289,6 @@ SectionDeltaS2CPacket       // ShadowPull 的 DELTA payload 编码
 - **过期**：带 baseline 的 ShadowPull 返回 `FULL`；**未命中**：无 baseline 的权威 FULL 返回。两者按响应 `requestId` 模式分类，断连时清理在途状态。
 - **增量**：实际变更内容（`FULL` 整段 / `BLOCKS` 按格），从命中分子扣除。
 
-**renderOnly**：`ClientCacheLoadQueue.ReadyChunk.hasCachedLight` 为 true 时不再投递影子端（空光仍经 TAIL 投递一次，Handler 只补内存 NBT 回写）。
-
 ### 11.3 影子端存档（主一致性方案）
 
 影子端 `ShadowSeedServer` 运行期维护注入区块，断连/卸载统一 `saveAll` 落盘：
@@ -240,13 +300,7 @@ SectionDeltaS2CPacket       // ShadowPull 的 DELTA payload 编码
 
 这保证「曾加载并收到更新」的块 R2 再进应 HIT。
 
-### 11.4 旧 packet 缓存识别
-
-`loadChunkDataFromCache` 解压后调 `ChunkDiskCodec.isValidChunkNbt`：
-- 合法 NBT（含 magic 前缀）→ 正常返回
-- 非法（旧 packet 字节）→ `clientStorage.remove(pos)` 删块 + 记 miss → 全量请求
-
-### 11.5 分段增量（缓存过期 / MISMATCH）
+### 11.4 分段增量（缓存过期 / MISMATCH）
 
 `chunk.sectionDeltaEnabled`（默认开）。影子端 MISMATCH 且光干净时，`ShadowPullRequestC2SPacket` 携带本地 section hash + 每非空段 48×u32 平面综合征；服务端按需比对（不常驻缓存）：
 
@@ -257,7 +311,7 @@ SectionDeltaS2CPacket       // ShadowPull 的 DELTA payload 编码
 
 影子端注入时把综合征放内存，活体方块更新失效后下次现算。BE / heightmap 仍随包；变更段清光重算。2.0.0 线格式不兼容历史。
 
-### 11.6 关键组件
+### 11.5 关键组件
 
 | 组件 | 职责 |
 |------|------|
@@ -310,7 +364,7 @@ SectionDeltaS2CPacket       // ShadowPull 的 DELTA payload 编码
 - **仅为「去过的区块」快照**：空洞区块由世界生成器按 `level.dat` 种子填充（本地生成开启时即为服务端种子）
 - **模组方块需相同模组与相近 MC 版本**：否则方块可能显示为未知
 - **BE 取决于影子端缓存是否含 NBT**：Live-Unload 快照包含 BE；收包 warm-stash 可能缺失
-- **光照随区块保留**：`is_light_on=1` 的区块携带 `SkyLight` / `BlockLight`
+- **光照随区块保留**：收敛完成的区块携带 `SkyLight` / `BlockLight`
 
 ### 12.5 示例
 
@@ -341,4 +395,5 @@ hassium_exports/server_192.168.1.100_25565/
 3. `scheduleChunkLoad` 先通过 `MixinRegionFile` 读取 type 126；未命中时进入原版生成链。
 4. 服务端校验允许的 SeedGen 结果在 pre-LIGHT 汇合，由影子 `ThreadedLevelLightEngine` 算光。
 5. 影子 vanilla connection 发送官方 chunk+light 与 forget packet；真实客户端不提交 admission 请求。
+
 缓存目录仍为 `hassium_cache/<serverId>/world`，存储和热度淘汰由影子服务端承担。Bloom、`CHUNK_HASH` 和旧独立分段请求不属于当前客户端区块入口；分段增量现作为统一 `ShadowPull` 的 `DELTA` 终态复用。

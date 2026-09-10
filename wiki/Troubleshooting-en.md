@@ -2,100 +2,84 @@
 
 ---
 
-> **简体中文**: [Troubleshooting](Troubleshooting) · English
+> **English**: [Troubleshooting](Troubleshooting) · English
 
-## Log file locations
+## Log locations
 
 | Environment | Path |
 | --- | --- |
-| Client (production) | `.minecraft/logs/latest.log` |
+| Client (release) | `.minecraft/logs/latest.log` |
 | Client (Loom dev) | `fabric/run/client/logs/latest.log`, `forge/run/client/logs/latest.log`, `neoforge/run/client/logs/latest.log` |
 | Server | `<server>/logs/latest.log` |
 
-> Historical logs roll to `yyyy-MM-dd-N.log.gz` in the same directory.
+> Rotated logs live next to `latest.log` as `yyyy-MM-dd-N.log.gz`.
 
 ---
 
-## Post-start checks
+## Post-launch check
 
-After starting the client or server, search `latest.log` for `Hassium`, `ERROR`, and `Exception`. When an ERROR / Exception appears, troubleshoot or report it together with the surrounding log window.
+After starting the client or server, search `latest.log` for `Hassium`, `ERROR`, and `Exception`. On ERROR / Exception, include the surrounding time window when reporting.
 
 ---
 
-## Debug toggles
+## Debug log switches
 
-The `debug.*` block near the bottom of `config/hassium/hassium-client.toml` or `config/hassium/hassium-server.toml` (keys differ by side):
+The `debug.*` block at the end of `config/hassium/hassium-client.toml` or `hassium-server.toml` (per side — the two sides do not share one key set):
 
 | Key | Side | Meaning |
 | --- | --- | --- |
-| `debug.metadataLogging` | client | chunkHash / metadata comparison |
-| `debug.dispatcherLogging` | both | Main-thread dispatch |
-| `debug.asyncLogging` | both | Async tasks |
-| `debug.compressionLogging` | both | Compression / decompression |
-| `debug.chunkApplyLogging` | both | Chunk apply |
-| `debug.networkLogging` | both | Network send / receive |
-| `debug.cacheLogging` | client | Cache read / write |
-| `debug.lightVerify` | client | Light verification |
-| `debug.dataplaneLogging` | server | UDP data-plane hot path |
+| `debug.metadataLogging` | Client | chunkHash / metadata comparison |
+| `debug.dispatcherLogging` | Both | Main-thread dispatcher |
+| `debug.asyncLogging` | Both | Async tasks |
+| `debug.compressionLogging` | Both | Compression/decompression |
+| `debug.chunkApplyLogging` | Both | Chunk apply |
+| `debug.networkLogging` | Both | Network send/receive |
+| `debug.cacheLogging` | Client | Cache read/write |
+| `debug.lightVerify` | Client | Light verification |
 
-Toggle the relevant category only; the hot path is quiet by default and enabling all of them will hurt FPS noticeably. `ERROR` / `WARN` are always emitted.
-
----
-
-## Symptoms and checks
-
-| Symptom | Likely cause | Action |
-| --- | --- | --- |
-| Joins are slower, not faster | Client cache is full or disk is slow | `/hassiumc stats` for hit ratio; check `hassium_cache` size and disk IO |
-| Far chunks flicker | Beyond-view render handoff with real chunks | Disable `chunk.viewDistanceExtensionEnabled` to validate; upgrade to a recent version |
-| Light glitches | `chunk.hassiumEngineEnabled` clash with Sodium | Disable `chunk.hassiumEngineEnabled` (the server then stops stripping light) |
-| Client logs show refmap WARN | Normal in Loom dev environments | Ignore; released jars do not replay this |
-| Server rejects clients | `compat.requireClientMod = true` and clients do not have the mod | Install Hassium on the client; or set `requireClientMod = false` |
-| Saves fail to load | Type 126 left behind after uninstall/downgrade | Reinstall the matching MC version of Hassium |
-| Third-party packets break under aggregation | Aggregation interferes | Disable `master.enablePacketAggregation`, or use `master.compressionBlacklist` |
-| Fog extends too far, far chunks pop in | RD > 32 with Fog Mixin not implemented | Keep RD ≤ 32 |
-| In-process Via bridge misbehaves | `master.globalPacketCompression` vs compression frame assumptions | Disable `master.globalPacketCompression` |
+Enable one category at a time; hot paths are quiet by default and enabling everything noticeably hurts FPS. ERROR / WARN always print.
 
 ---
 
-## Migration and gateway debugging
+## Common symptoms
 
 | Symptom | Likely cause | Action |
 | --- | --- | --- |
-| Client drops straight away on master failure, no migration | Gateway listener not ready / migration window too short | Confirm the master gateway port is reachable (`master.controlReachableEndpoints[0]`, falls back to `25566`); raise `master.migrationSilentTimeoutMs` (default `10000`) as needed; legacy fallback key is `migrationFaultTimeoutMs` |
-| Terrain re-downloads heavily after migration (resume refused) | Shadow-side save inconsistent with the master / cache directory broken | Check the `hassium_cache` entry and disk space; some MISS right after migration is normal, but if re-downloads persist, delete that server's cache directory and rejoin (below) |
-| UDP data plane configured but no UDP traffic | `dataplane.enabled` is off by default | Enable it explicitly; while off, all traffic goes through the gateway frame connection (TCP control channel) |
-| Gateway port already in use | Conflict with another service | Point `master.controlReachableEndpoints` at another port (fallback is `25566`) |
-
-See [Network Core and Master Migration](Network-Core-and-Master-Migration-en).
+| Joining feels slower than vanilla | Client cache dir full or slow disk | `/hassiumc stats` for cache hits; check `hassium_cache` size and disk IO |
+| Lighting anomalies | Shadow-side vs Sodium interaction | Disable `chunk.enabled` (server stops stripping light; light arrives with packets; vanilla path everywhere) |
+| refmap WARNs at client startup | Normal in Loom dev environments | Ignore; release jars do not reproduce |
+| Kicked from the server | `compat.requireClientMod = true` and the client lacks the mod | Install Hassium on the client; or set server `requireClientMod = false` |
+| Saves unreadable | type 126 left behind after uninstalling/downgrading | Reinstall the Hassium build matching the save |
+| Aggregation breaks third-party packets | Aggregation interference | Disable `master.enablePacketAggregation` or add `master.compressionBlacklist` |
+| Heavy re-downloads after reconnect | Shadow save out of sync with the server / cache dir broken | Check the matching `hassium_cache` dir and disk space; some MISSes on the first load are normal — persistent re-downloads: delete that server's cache dir and rejoin (below) |
 
 ---
 
 ## Resetting the client cache
 
-Full reset for one server only:
+Fully reset the client cache (for one server only):
 
-1. Leave the server
+1. Leave that server
 2. Close the game
-3. Delete `.minecraft/hassium_cache/<server-id>/` (the directory name usually embeds the server IP and port)
-4. Reconnect
+3. Delete `.minecraft/hassium_cache/<server-id>/` (the directory name usually contains the server IP and port)
+4. Rejoin
 
-> Use with care — deletion drops the cache hit ratio for that server. `hassium_cache` is partitioned per server, so removing one does not affect others.
+> **Caution**: this discards all cache-hit history for that server. `hassium_cache` is isolated per server; deleting one does not affect others.
 
 ---
 
-## Reporting feedback
+## Reporting
 
-If troubleshooting does not resolve the issue, when filing a GitHub Issue please include:
+If the steps above do not resolve it, open a GitHub issue with:
 
 - MC version
 - Loader and version (Fabric / Forge / NeoForge)
 - Hassium version
-- Relevant window of client/server `latest.log`
+- Client / server log excerpts (relevant `latest.log` window)
 - `/hassium stats` or `/hassiumc stats` output
 - Minimal reproduction steps
 
-Repo: https://github.com/limuqy/Hassium/issues
+Repository: https://github.com/limuqy/Hassium/issues
 
 ---
 

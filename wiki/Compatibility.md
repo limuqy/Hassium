@@ -12,9 +12,9 @@ Hassium 与常见优化 mod 的兼容性概览与配置逃生口。每条结论�
 
 | 目标 | 结论 | 备注 |
 | --- | --- | --- |
-| **Bobby / 同类客户端视距外缓存** | ❌ **不兼容** | Hassium 内置超视渲染；同装会冲突 |
+| **Bobby / 同类客户端视距外缓存** | ❌ **不兼容** | Hassium 影子端自行管理缓存与重交付；同装会冲突 |
 | **Immersive Portals** | ❌ **不兼容** | |
-| **同类压缩 / 协议替换（改 Netty Zlib 等）** | ❌ **不兼容** | 与 `master.globalPacketCompression` 冲突 |
+| **同类压缩 / 协议替换（改 Netty Zlib 等）** | ⚠️ 有条件 | Hassium 通道压缩不触碰原版压缩层；但同类 mod 若替换原版压缩管线仍有冲突面，建议二选一 |
 | **Starlight** | — **不考虑** | 已并入原版光照 |
 | **包聚合导致第三方包异常** | ⚠️ 关聚合或加黑名单 | `master.enablePacketAggregation = false` 或 `master.compressionBlacklist` |
 | **反透视（改即将发送的区块包）** | ✅ 希望兼容 | miss 路径复用已构建包字节；若只在 `Connection.send` 上改写且发生在 Hassium 取消之后可能旁路 |
@@ -32,10 +32,10 @@ Hassium 与常见优化 mod 的兼容性概览与配置逃生口。每条结论�
 | 拓扑 | 结论 |
 | --- | --- |
 | 同版本双端均装 Hassium | Via 不参与；正常 |
-| 服务端 Hassium + Via，客户端**无** Hassium | 支持：未装模组的客户端走原版协议，Via 翻译原版协议 |
-| 双端都装 Hassium 但 MC 版本不同（靠 Via 桥） | ❌ 不支持（线格式随 `MC_VER` 绑定） |
+| 服务端 Hassium + Via，客户端**无** Hassium | 支持：未装模组的客户端走原版协议（登录期握手空应答 → 服务端原版路径），Via 翻译原版协议 |
+| 双端都装 Hassium 但 MC 版本不同（靠 Via 桥） | ❌ 不承诺（Hassium 能力协商假设双端同版本；跨版本场景未验证） |
 
-> 同进程 Via 与 `master.globalPacketCompression` 叠用可能干扰压缩帧假设。建议同进程 Via 时关闭全局压缩。
+> 通道压缩仅对完成 Hassium 握手的玩家生效，未握手（含 Via 翻译目标）玩家走原版路径，无帧假设冲突。
 
 ---
 
@@ -43,14 +43,12 @@ Hassium 与常见优化 mod 的兼容性概览与配置逃生口。每条结论�
 
 | 想要的效果 | 改动 |
 | --- | --- |
-| 关闭存储压缩、保留网络优化 | `storage.enabled = false` |
+| 关闭存储压缩、保留网络优化 | `storage.enabled = false`（默认已关） |
 | 关闭自定义通道与推送 | `master.enabled = false` |
-| 关闭全局 ZSTD（与同类协议替换共存） | `master.globalPacketCompression = false` |
 | 关闭包聚合 | `master.enablePacketAggregation = false` |
 | 排除第三方包不进压缩/聚合 | `master.compressionBlacklist` |
-| 关闭 Hassium 引擎（服务端不剥光，光照随包自带） | `chunk.hassiumEngineEnabled = false` |
+| 关闭影子端/缓存（全程原版路径，服务端不剥光） | `chunk.enabled = false` |
 | 关闭分段增量（过期走全量） | `chunk.sectionDeltaEnabled = false` |
-| 关闭超视渲染恢复原版 RD 钳制 | `chunk.viewDistanceExtensionEnabled = false` |
 | 强制客户端装模组 | `compat.requireClientMod = true` |
 
 ---
@@ -82,8 +80,8 @@ Hassium 与常见优化 mod 的兼容性概览与配置逃生口。每条结论�
 
 | 检查项 | 结果 |
 | --- | --- |
-| 启动与进服 | 通过；握手 `accepted=true`，`globalCompression=true` |
-| 客户端缓存 | Bloom / heat / CacheSaveQueue 正常；断开清理正常 |
+| 启动与进服 | 通过；握手 `accepted=true` |
+| 客户端缓存 | 影子端存档 / heat / 断开清理正常 |
 | 运行时统计 | 可用 `/hassiumc stats` 查看压缩节省与缓存命中 |
 | `latest.log` 中 Hassium | 无 ERROR / Exception；仅开发环境 refmap WARN（见 [Troubleshooting](Troubleshooting)） |
 
@@ -93,10 +91,8 @@ Hassium 与常见优化 mod 的兼容性概览与配置逃生口。每条结论�
 - [ ] Distant Horizons 双端 / Voxy + 伴生：LOD 正常
 - [ ] Via：无 Hassium 旧客户端能进服；同版本 Hassium 客户端功能完整
 - [ ] C2ME chunkio rewrite 开/关 × `storage` 开/关 对照
-- [ ] Sodium + `hassiumEngineEnabled` 开/关（光照异常）
+- [ ] Sodium + `chunk.enabled` 开/关（光照异常）
 - [ ] Forge / NeoForge 同等优化包兼容测试
-- [ ] 超视渲染实机：多人服 `view-distance=8`、客户端 RD=16，走过的环带地形可见；F3 无大量视距外请求
-- [ ] 超视渲染 + Sodium：ViewArea 扩大后 mesh 正常
 
 ---
 

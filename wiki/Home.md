@@ -4,7 +4,7 @@
   <img src="https://raw.githubusercontent.com/limuqy/Hassium/master/common/src/main/resources/assets/hassium/logo.png" alt="Hassium Logo" width="200">
 </p>
 
-**Hassium** 是 Minecraft 的高性能优化模组，提供**高效存储、网络优化、区块缓存、本地生成、超视渲染与光照优化**。覆盖 Minecraft **1.20.1–1.21.11**，支持 **Fabric / Forge / NeoForge**。
+**Hassium** 是 Minecraft 的高性能优化模组，提供**高效压缩、网络优化、区块缓存、本地生成与光照优化**。覆盖 Minecraft **1.20.1–1.21.11**，支持 **Fabric / Forge / NeoForge**。
 
 > 仓库：[github.com/limuqy/Hassium](https://github.com/limuqy/Hassium) · [English](Home-en)
 
@@ -20,19 +20,20 @@
 | 分类 | 能力 | 说明 |
 | --- | --- | --- |
 | **高效压缩** | 存储压缩 | 区块 ZSTD 落盘（type 126），存档体积显著减小；仍兼容原版 Region（`.mca`）布局 |
-| | 网络压缩 | 区块与数据包 ZSTD 传输（自定义通道 + 可选全局管道 + 聚合），降低带宽与下载等待 |
-| **网络优化** | 平滑推送 | 服务端每 tick 提交上限限速（`master.maxChunksPerTick`，掉刻自然降速）+ 主线程序列化上限与后台化 + 客户端 apply ACK 驱动的渐进 admission；进服/扩展视野不卡主线程 |
-| | 网关迁移 | 客户端经进程内网关（网络核心）接入主控核心；主控断/卡时 L1 迁移引擎无感续流，缓存不重下、断连界面隐藏 |
-| | L1 负载均衡 | 多 UDP 线路按 weight 分担区块下行；UDP 数据面为网关↔主控 bulk 载体（默认关） |
-| **区块缓存** | 区块缓存 | 曾加载过的区块写入本地；再次进入同一区域时用 contentHash 比对命中，少传全量包 |
+| | 通道压缩 | 聚合包内部字典 ZSTD + 区块推送自有压缩；不触碰原版压缩层，无跨 mod 管线冲突面 |
+| **网络优化** | 平滑推送 | 服务端每 tick 提交上限限速（`master.maxChunksPerTick`，掉刻自然降速）+ encode/压缩/发送全路径后台化；进服不卡主线程 |
+| | 登录期能力握手 | 1.20.1 走 `hassium:login_hello` login query，1.20.2+ 走配置阶段 payload；按位与协商能力位，无超时依赖，原版客户端零干扰 |
+| | Pull 模式 | 协商通过后服务端停发整柱推送，区块数据由客户端影子虚拟玩家 tracking 驱动的统一 Compare+Pull 拉取 |
+| **区块缓存** | 影子端世界保存 | 进服区块统一由进程内影子服务端（完整 MinecraftServer）算光并落盘原版存档（`hassium_cache/<serverId>/world`），断连保存、重连复用 |
 | | 分段增量 | 缓存过期时只补变更方块；过多则整段，再多则整块 |
-| | 本地生成（SeedGen） | 服务端对 pristine 区块只发 seed + 坐标引用，客户端用同种子本地生成，零传输生成区块；失败/超时自动回退全量 |
-| | **超视渲染** | 多人服客户端 RD 大于服务端视距时，用本地缓存回填视距外地形（仅渲染、不向服索要视距外区块）；与 Bobby 互斥 |
-| | 世界导出 | `/hassiumc export` 把影子端世界目录整体拷贝为导出存档（保留 type 126 格式） |
-| **光照优化** | 光照剥离 | 服务端可剥光省流量，由 Hassium 引擎（影子端）统一计算光照并落盘缓存 |
-| | 光照缓存 | 首次加载重算后缓存光照数据，后续缓存命中直接应用，跳过同步重算 |
-| | 并行光照 | 可选：安装 Promethium 后开启；默认由影子端官方引擎异步算光（帧尾预算消费） |
+| | 容量/热度淘汰 | `heat.idx` 按 region 文件计热度，超限整文件删除 `.mca` |
+| | 本地生成（SeedGen） | 服务端对 pristine 区块只发 seed + 坐标引用，客户端用同种子本地生成，零传输生成区块；失败/超时自动回退全量。**服务端开启会下发世界种子（泄露种子）** |
+| | 世界导出 | `/hassiumc export` 把影子端世界目录整体拷贝为导出存档（保留 type 126 格式；原版翻译后续提供） |
+| **光照优化** | Hassium 引擎 | 进服启动进程内影子服务端统一承担世界保存（缓存）+ 区块光照计算 + 打包官方区块包（官方通道回传）；启动失败自动降级 |
+| | 光照剥离 | 服务端可剥光省流量（`chunk.lightStrip`），由影子端统一计算光照并打包回传 |
 | **实用工具** | 流量监控 | `/hassium stats`（服务端）、`/hassiumc stats`（客户端）查看压缩与缓存效果 |
+
+> **规划中**：超视渲染（OVD，多人服客户端 RD 大于服务端视距时用本地缓存回填视距外地形）。当前版本代码未启用该链路；功能落地时恢复配置键与文档（详见 [Beyond-View-Render](Beyond-View-Render)）。
 
 功能详情见 [Features](Features)。
 
@@ -57,11 +58,10 @@
 | [Configuration](Configuration) | 完整配置项表与 GUI 路径 |
 | [Commands](Commands) | `/hassium` 与 `/hassiumc` 命令参考 |
 | [Features](Features) | 功能特性详解 |
-| [Beyond-View-Render](Beyond-View-Render) | 超视渲染详解 |
+| [Beyond-View-Render](Beyond-View-Render) | 超视渲染（规划中） |
 | [World-Export](World-Export) | 缓存世界导出 |
 | [Compatibility](Compatibility) | 多 Mod 兼容对照表 |
 | [Support-Matrix](Support-Matrix) | 版本 × 加载器支持矩阵 |
-| [Network-Core-and-Master-Migration](Network-Core-and-Master-Migration) | 进程内网关、无感迁移与主控核心（服主向） |
 | [FAQ](FAQ) | 常见问题 |
 | [Troubleshooting](Troubleshooting) | 排查路径与日志 |
 

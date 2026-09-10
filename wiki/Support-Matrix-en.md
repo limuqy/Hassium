@@ -64,6 +64,7 @@ See [Compatibility](Compatibility-en).
 
 - Repo: `https://github.com/limuqy/Hassium`
 - Build system: Architectury Loom + Manifold; `versionProperties/<ver>.properties` controls per-version dependencies
+- Anchor compile (developers): `./gradlew <loader>:compileJava -Pmc_ver=<anchor>` (e.g. `./gradlew fabric:compileJava -Pmc_ver=1.20.1`; quote `-Pmc_ver` in PowerShell)
 - Version boundary scan: `./gradlew scanVersionBoundaries`
 
 ---

@@ -43,8 +43,8 @@ Download the JAR matching the Minecraft version and loader from [GitHub Releases
 
 ## Configuration
 
-- Fabric: install **Mod Menu** and **Cloth**, then open the configuration from Mod Menu.
-- Forge / NeoForge: click the **Configure** button in the mods list; **Cloth** is required.
+- Fabric: install **Mod Menu**, then open the configuration from Mod Menu (Cloth is jiJ'd — no separate install).
+- Forge / NeoForge: click the **Configure** button in the mods list (Cloth is jiJ'd); Configured optional.
 - TOML files can also be edited directly: `config/hassium/hassium-client.toml` or `config/hassium/hassium-server.toml`.
 
 ## Before enabling storage for the first time

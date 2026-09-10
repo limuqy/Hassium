@@ -103,10 +103,12 @@ MC_1_21_11
 
 ## 网络子系统分段
 
+直连拓扑（2026-09-04 回归，`handoff-2026-09-04-vanilla-direct-network.md`）：客户端↔服务端唯一 vanilla TCP；网络核心（进程内网关）、UDP 数据面（KCP）、主控迁移/续流、客户端 failover 均已裁剪。网络层版本差异只剩「登录/配置期握手 + Play 期 payload 注册」两处。
+
 | 分界 | 动作 |
 |------|------|
-| 1.20.1 | 基准：现有网络实现。**历史（1.1.2）**：UDP 数据面 + TCP 控制 Failover（主控热切 + 加权分流）落地点（Task 1-9 commit `22c9c3f`），九锚适配由 `931b393`（Fabric launcher 跨版本守卫）与 `e9a9e69`（NeoForge 主控热切 + 加权分流接线 + kcp io.netty split-package 剥离）完成，Fabric + NeoForge × 九锚点 compile 矩阵全 BUILD SUCCESSFUL；L2 恢复表现（`recoveryFreeze` 定格/无感切换）后铺开全版本（commit `f89a691`，冻结注入与终端拆除按段适配）。**2.0.0 客户端 failover 已退役**（`729d92e` 删 ClientFailoverIdentity/ClientRecoveryState/ControlReconnect\*/ControlEndpoint\*/定格 MixinGui/notifyFallback 等，见 handoff docs/handoff/handoff-2026-08-09-docs-2.0.md）：客户端恢复语义由**网络核心 L1 迁移引擎**承担（`network/core/migration/`，`network.dataPlane.recoveryWindowMs` 语义迁移为其故障静默超时，MigrationPolicy.java:22-23 明注沿用）；UDP 数据面保留为网关↔主控通道 bulk 载体（默认关）。1.20.1/1.21.1/1.21.11 三段 nginx 真实断链冒烟 PASS 为 failover 时代记录（历史语境） |
-| ≥1.21.1 | 现代基线：STREAM_CODEC / `type()`、Payload + `RegisterPayloadHandlersEvent`（NeoForge）、Forge ChannelBuilder；聚合写包、原版包枚举等 common 能力 |
+| 1.20.1 | 基准：login custom query（`hassium:login_hello`）+ buf 收发。**历史**：UDP 数据面 + TCP 控制 Failover（1.1.2，commit `22c9c3f` / `931b393` / `e9a9e69`）、客户端 failover 退役（`729d92e`）均为网关时代记录，随直连拓扑整体退役 |
+| ≥1.21.1 | 现代基线：STREAM_CODEC / `type()`、Payload + `RegisterPayloadHandlersEvent`（NeoForge）、Forge ChannelBuilder；配置阶段 `PreHandshakePayload` 预握手；聚合写包、原版包枚举等 common 能力 |
 | 其后 | 多为 common API；网络协议少变 |
 
 加载器内网络适配器允许整段实现块（两分界）：
@@ -117,12 +119,12 @@ MC_1_21_11
 
 `NetworkCapability.isCustomChannelFullySupported()` 恒为 true；`CommonClass.init()` 不因版本强制关闭网络。
 
-- 各加载器 `registerChannels` / 握手入口仍尊重配置项 `HassiumConfigService.isNetworkCompressionEnabled()`
+- 各加载器 `registerChannels` / 握手入口仍尊重配置项 `HassiumConfigService.isNetworkCompressionEnabled()`（客户端解析 `chunk.enabled`，服务端解析 `master.enabled`）
 - 实现细节见 `PacketCodecCompat`（StreamCodec / GameProtocols / IdDispatchCodec）
 
-### 预握手：首批区块能力声明 → 2.0.0 网关自有通道握手
+### 登录期握手：首批区块能力声明
 
-服务端剥光不是由 packet 类别决定，而是由 `chunk.lightStrip` 与客户端 Hassium 能力共同决定。为避免在 Play 握手完成前错过首批区块，具备 pre-Play API 的载体提前声明 Hassium；`ServerPlayer` 创建时由 `MixinServerPlayer` 的 `<init>` TAIL → `tryEnableOnPlayerJoin` 自动启用压缩，首圈 `trackChunk` 即进入 Hassium 链（剥光 + 限流 + hash 元数据）。ZSTD/聚合/数据面/位置协商仍在 Play 完整握手完成。
+服务端剥光不是由 packet 类别决定，而是由 `chunk.lightStrip` 与客户端 Hassium 能力共同决定。为避免在 Play 握手完成前错过首批区块，具备 pre-Play API 的载体提前声明 Hassium；`ServerPlayer` 创建时由 `MixinServerPlayer` 的 `<init>` TAIL → `ServerHandshakeActivation.onPlayerInit` 消费协商位并压制原版区块窗口，首圈 `trackChunk` 即进入 Hassium 链（剥光 + 限流 + hash 元数据）。ZSTD/聚合协商仍在 Play 完整握手完成。
 
 | 段 | 当前首批区块策略 | 能力声明 |
 |----|-----------|-----------|
@@ -130,17 +132,14 @@ MC_1_21_11
 | fabric ≥1.21.1 | 支持配置阶段预握手 | `ClientConfigurationNetworking.send(PreHandshakePayload.create())`；服务端 `ServerConfigurationNetworking` 接收 |
 | 无 pre-Play API 的 loader/version | 不等待、不阻塞；首批发送带完整光照的 vanilla 包，Play 握手完成后切换 Hassium 优化链 | 仅使用 Play 阶段能力上报 |
 
-**当前语义**：不得使用固定 10 秒区块门控。无法在 pre-Play 阶段识别客户端时，立即走完整光照回退；已识别的 Hassium 客户端从首圈进入优化链。预握手只是能力提前声明，不替代网关自有通道的完整握手。
+**当前语义**：不得使用固定 10 秒区块门控。无法在 pre-Play 阶段识别客户端时，立即走完整光照回退；已识别的 Hassium 客户端从首圈进入优化链。预握手只是能力提前声明，不替代 Play 期 `play_init_s2c` 完整激活。
 
 共用载体：`PreHandshakeProtocol`（legacy buf 编解码）/ `PreHandshakePayload`（1.21.1+ payload，StreamCodec 为 FriendlyByteBuf 级，无 registry 依赖）。能力字段：协议版本、mod 版本、clientCache、globalCompression、compactHeader。
-运行时验证优先级：**1.20.1 → 1.21.1 → 1.21.11**；UDP 数据面断链冒烟经 `UdpFailover` harness 承载（nginx stream 代理 TCP 主控，`scripts/runtime-smoke-test.ps1`）——2.0.0 客户端 failover marker（`FAILOVER_RECONNECT_OK` / `FAILOVER_TERMINAL_OK` / `CACHE_RESUME_HIT`）已随客户端 failover 退役（729d92e），现有效数据面 marker 为服务端 `UDP_BIND_OK` / `UDP_WRR_OK`（`FAILOVER_PERMIT_OK` 仍在服务端 permit 签发链上，正常链路不再由客户端请求触发）；其余锚点以编译 + 短冒烟为主。详见 [`runtime-smoke-test.md`](runtime-smoke-test.md)。
+运行时验证优先级：**1.20.1 → 1.21.1 → 1.21.11**；直连拓扑下无 UDP 断链冒烟（`UdpFailover` harness 与 `FAILOVER_*` / `UDP_*` marker 已随数据面退役）；其余锚点以编译 + 短冒烟为主。详见 [`runtime-smoke-test.md`](runtime-smoke-test.md)。
 
-### KCP 依赖现状（数据面传输层）
+### KCP 依赖（已退役，待清理）
 
-- **common**：`implementation 'moe.sdl.kcp:kcp-netty:1.6.2'`（common/build.gradle:12，KCP-over-UDP message mode）；生产仅经 `ReliableDatagramSession` 封装 `io.jpower.kcp.netty.Kcp`，路由 / Minecraft 层不得直用（"must not leak its API"）
-- **三端剥离**：kcp-netty 自带 `io.netty.bootstrap.UkcpServerBootstrap`，与 MC Netty 同包 → fabric / forge / neoforge 均有 `kcpIncoming` 配置 + `stripKcpNettyBootstrapPackage` 任务：fabric 剥 `io/netty/*` 后 shade 进主 jar；forge / neoforge 剥 `io.netty.bootstrap` 后进 compile / game-layer / JiJ（Forge SecureJarHandler 包独占冲突规避；详见附录 Forge 1.20.6 记录）
-| **服务端点**：`DataPlaneUdpServer`（KCP-over-UDP 单点，NioDatagramChannel，DataPlaneUdpServer.java:610-611），生命周期接 MixinMinecraftServer；`dataplane.enabled=false` 时跳过
-- **口径**（事实基线③）：UDP 数据面完整保留（默认关），为网关↔主控通道 bulk 载体；KCP 仅承载数据面 bulk，控制/握手走网关帧连接
+UDP 数据面已随直连拓扑裁剪：`DataPlaneUdpServer` / `ReliableDatagramSession` 等类已删，`common/build.gradle:12` 的 `moe.sdl.kcp:kcp-netty:1.6.2` 依赖与三端 `kcpIncoming` 配置 + `stripKcpNettyBootstrapPackage` 剥离任务为**死重**（代码零引用），待后续清理提交移除。
 
 ---
 

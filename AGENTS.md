@@ -115,7 +115,7 @@ fabric/ | forge/ | neoforge/
 | `storage/` | type 126 写缓冲 / chunkHash 桥；压缩由 `compression/CompressionService` 收口 |
 | `compression/` | codec / 字典 |
 | `network/` | 直连传输面：登录期握手 `network/handshake/`（LoginHandshake / LoginCaps / 双端激活）+ 客户端摄入管线（ClientChunkPipeline / ClientMetadataHandler）+ 服务端区块推送（ServerChunkPushManager / ChunkSender）+ 聚合与 ZstdPipeline 链（HassiumAggregationManager / ZstdPipelineSwitcher）；区块核心：`network/seedgen/` 影子端（`ShadowSeedServer` 等，= 区块核心后端引擎） |
-| `cache/` | 客户端轻量设施（OVD、预算、Bloom、生命周期）；缓存存储与清理由影子端承担 |
+| `cache/` | 客户端轻量设施（预算、生命周期、mesh 编译日志）；缓存存储与清理由影子端承担 |
 | `config/` `metrics/` `compat/` `mixin/` | 配置、指标、跨版本桥、Mixin |
 | `migration/` `api/` | 存档迁移工具与对外 API |
 
@@ -138,30 +138,26 @@ fabric/ | forge/ | neoforge/
 
 ## 配置红线
 
-键集真相源：`ConfigSchema`；审计表见 [`docs/config-audit.md`](docs/config-audit.md)。Fabric 双文件 `hassium-client.toml` / `hassium-server.toml`（按物理端二选一）；Forge/NeoForge 双 spec 亦按物理端二选一注册（客户端仅 CLIENT，专用服仅 COMMON，客户端不生成 server toml）。
+键集真相源：`ConfigSchema`；审计表见 [`docs/config-audit.md`](docs/config-audit.md)。Fabric 双文件 `hassium-client.toml` / `hassium-server.toml`（按物理端二选一）；Forge/NeoForge 双 spec 亦按物理端二选一注册（客户端仅 CLIENT，专用服仅 SERVER，客户端不生成 server toml）。
 
 | 项 | 默认 | 注意 |
 |----|------|------|
 | `storage.enabled` | **false** | 默认关；开启后改存档格式（type 126）→ 提醒备份；仅专用服务器写，单人/局域网保持原版格式（读兼容）；客户端影子端（hassium_cache）固定写 126，不受本开关约束 |
-| `net.enabled` | true | 客户端优化通道总开关（与开启 Hassium 的服务端协商启用；关闭后全程原版路径） |
 | `master.enabled` | true | 服务端网络通道总开关（登录期握手/聚合的门） |
 | `master.maxChunksPerTick` | 4 | 每玩家每 tick 提交上限（满 tick ≈ 80/s） |
-| `chunk.enabled` | true | |
-| `chunk.hassiumEngineEnabled` | true | 影子端统一算光；失败降级关缓存/OVD/SeedGen |
+| `chunk.enabled` | true | 区块核心总开关（影子端世界保存/算光/缓存/Pull 模式；关后全程原版路径） |
 | `chunk.seedGenEnabled` | **false** | 双端同版本；**服务端开启会泄露世界种子** |
 | `chunk.sectionDeltaEnabled` | true | 分段增量 |
-| `chunk.viewDistanceExtensionEnabled` | true | 超视渲染（多人；≠ Bobby） |
-| `chunk.maxRenderDistance` | 16 | 超视渲染环带上限（2–64） |
-| `chunk.ovdUnloadDelaySecs` | 5 | 超视渲染卸载延迟 |
+| `chunk.lightStrip` | true | 服务端光照剥离（影子端统一算光） |
 | `debug.*` | false | 热路径用 `DebugLogger` |
 
 存档格式 type **126**（非 127）；元数据推送字段为 **chunkHash**（非 inhabitedTime）。客户端影子端世界 = `hassium_cache/<serverId>/world`（原版存档结构 + type 126 + chunkHash 落盘，`MixinRegionFile` shadow 上下文 gate）；旧 HBT1 客户端磁盘缓存已裁剪（热度清理为影子端 `ShadowCacheEviction` + `ShadowRegionHeat`：`heat.idx` 按 region 文件计，`hassium_cache/<serverId>/heat.idx` per-server）。
 
 ## 直连拓扑速记
 
-**握手链**（`network/handshake/`）——1.20.1 服务端在 `handleAcceptedLogin` 内 **LoginCompression 之后、GameProfile 之前**发 `hassium:login_hello` query（压缩就绪后发包，消除裸应答被压缩解码器误读的竞态，见 `483e1fb`）、`handleCustomQueryPacket` 解析应答；1.20.2+ 走配置阶段 `PreHandshakePayload`（loader 注册，认证完成后）；能力位 `LoginCaps`（agg/hdr/push/delta/seed/light/pull/ovd）按位与协商，结果入 `PlayerCompressionTracker`。`ServerPlayer <init>` TAIL 消费（`ServerHandshakeActivation.onPlayerInit`：压制原版区块窗口），tick 泵激活：dictionary_sync/index_sync → 聚合 PENDING（5s 无 ACK 降级直发）→ `play_init_s2c`（协商位 + SeedGen 种子）→ 客户端 index_sync 后回激活 ACK → 聚合 ENABLED。**管线级全局包压缩已退役（run9 退役波）**：原版压缩层全程不触碰，通道压缩 = 聚合包内部字典 ZSTD（EventLoop 阈值翻折防双重压缩）+ 区块推送自有压缩。
+**握手链**（`network/handshake/`）——1.20.1 服务端在 `handleAcceptedLogin` 内 **LoginCompression 之后、GameProfile 之前**发 `hassium:login_hello` query（压缩就绪后发包，消除裸应答被压缩解码器误读的竞态，见 `483e1fb`）、`handleCustomQueryPacket` 解析应答；1.20.2+ 走配置阶段 `PreHandshakePayload`（loader 注册，认证完成后）；能力位 `LoginCaps`（agg/delta/seed/light/pull/shadow_pull/pull_mode）按位与协商，结果入 `PlayerCompressionTracker`。`ServerPlayer <init>` TAIL 消费（`ServerHandshakeActivation.onPlayerInit`：压制原版区块窗口），tick 泵激活：dictionary_sync/index_sync → 聚合 PENDING（5s 无 ACK 降级直发）→ `play_init_s2c`（协商位 + SeedGen 种子）→ 客户端 index_sync 后回激活 ACK → 聚合 ENABLED。**管线级全局包压缩已退役（run9 退役波）**：原版压缩层全程不触碰，通道压缩 = 聚合包内部字典 ZSTD（EventLoop 阈值翻折防双重压缩）+ 区块推送自有压缩。
 
-**区块核心**（客户端进程内区块域）——`network/seedgen/` 影子端（= 本域后端引擎：生成/算光/落盘/淘汰）+ `network/` 顶层摄入管线（ClientChunkPipeline / ClientMetadataHandler / ChunkHash 客户端侧）+ `cache/`（OVD / MainThreadBudget / Bloom / 生命周期）；`chunk.*` 键族 = 本域配置族。
+**区块核心**（客户端进程内区块域）——`network/seedgen/` 影子端（= 本域后端引擎：生成/算光/落盘/淘汰）+ `network/` 顶层摄入管线（ClientChunkPipeline / ClientMetadataHandler / ChunkHash 客户端侧）+ `cache/`（MainThreadBudget / 生命周期 / mesh 编译日志）；`chunk.*` 键族 = 本域配置族。
 
 **服务端传输面**——区块推送（ServerChunkPushManager / ChunkSender / SectionDelta 服务端）+ 聚合链（HassiumAggregationManager / ConnectionChannelAccess）；`master.*` 键族 = 本域配置族。
 
@@ -177,7 +173,7 @@ Mod 客户端 ←──唯一 vanilla TCP（登录期握手 + Play 期自定义 
 
 ## 卖点（已实现，按类）
 
-**高效压缩**——存储压缩（ZSTD 落盘 type 126）、通道压缩（聚合包内部字典 ZSTD + 区块推送自有压缩；管线级全局包压缩已退役——不触碰 vanilla 压缩层，无跨 mod 管线冲突面）；**网络优化**——平滑推送（每 tick 提交上限限速 + 全路径后台化）、登录期能力握手（无超时依赖、原版客户端零干扰）；**区块缓存**——影子端世界保存（进服区块由进程内影子服务端落盘原版存档 `hassium_cache/<serverId>/world`，断连保存重连复用）、容量/热度淘汰（heat.idx + 整文件删除 `.mca`）、分段增量、本地生成（SeedGen：pristine 区块发坐标引用，客户端同种子本地生成；**服务端开启会泄露世界种子**；失败回退全量）、超视渲染、`/hassiumc export` 世界导出；**光照优化**——Hassium 引擎（影子端统一算光 + 官方通道回传，客户端不计算；剥光握手协商）、光照剥离。
+**高效压缩**——存储压缩（ZSTD 落盘 type 126）、通道压缩（聚合包内部字典 ZSTD + 区块推送自有压缩；管线级全局包压缩已退役——不触碰 vanilla 压缩层，无跨 mod 管线冲突面）；**网络优化**——平滑推送（每 tick 提交上限限速 + 全路径后台化）、登录期能力握手（无超时依赖、原版客户端零干扰）、Pull 模式（影子 tracking 驱动的统一 Compare+Pull）；**区块缓存**——影子端世界保存（进服区块由进程内影子服务端落盘原版存档 `hassium_cache/<serverId>/world`，断连保存重连复用）、容量/热度淘汰（heat.idx + 整文件删除 `.mca`）、分段增量、本地生成（SeedGen：pristine 区块发坐标引用，客户端同种子本地生成；**服务端开启会泄露世界种子**；失败回退全量）、`/hassiumc export` 世界导出；**光照优化**——Hassium 引擎（影子端统一算光 + 官方通道回传，客户端不计算；剥光握手协商）、光照剥离。
 
 ## 运行时冒烟
 
@@ -223,7 +219,7 @@ Manifold / 七段 / `#if MC_VER` / `PacketId` / `Identifier` 改代码时自动�
 ## 文档
 
 - [`docs/architecture.md`](docs/architecture.md) — 架构总览
-- [`docs/chunk-cache.md`](docs/chunk-cache.md) — 缓存推送、超视渲染与磁盘细节（§10 超视渲染、§11 磁盘 NBT/分段增量、§12 导出）
+- [`docs/chunk-cache.md`](docs/chunk-cache.md) — 缓存推送（ShadowPull 统一 Compare+Pull）与磁盘细节（§11 磁盘 NBT/分段增量、§12 导出）
 - [`docs/client-chunk-light-flow.md`](docs/client-chunk-light-flow.md) — 客户端光照流
 - [`docs/chunk-load-optimization.md`](docs/chunk-load-optimization.md) — 进服/重连加载路径与速率锚点
 - [`docs/version-segments.md`](docs/version-segments.md) — 七段适配真相源
