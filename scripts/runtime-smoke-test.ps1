@@ -120,7 +120,7 @@ Set-Location $projectRoot
 # 结构检查，验证 Hassium "按类型找字段"（common/compat/ReflectionCompat）反射点
 # 在混淆名环境下可命中，防回归。预检失败即 FAIL 会话。
 # 检查项：
-#   Connection 存在 io.netty.channel.Channel 类型字段      → ZstdPipelineSwitcher.getConnectionChannel
+#   Connection 存在 io.netty.channel.Channel 类型字段      → ConnectionChannelAccess.getConnectionChannel
 #   ServerGamePacketListenerImpl(1.20.1) / ServerCommonPacketListenerImpl(1.20.2+)
 #     存在 net.minecraft.network.Connection 类型字段       → PlayerCompat.findConnectionField
 #   ClientChunkCache 存在 $Storage 成员类字段              → ViewDistanceExtensionService drop fallback
@@ -156,7 +156,7 @@ function Invoke-MappingFieldPrecheck {
     function Get-JavapOutput([string]$Class) {
         (& javap -p -classpath $srgJar.FullName $Class 2>&1) -join "`n"
     }
-    # 1. Connection.channel（ZstdPipelineSwitcher.getConnectionChannel）
+    # 1. Connection.channel（ConnectionChannelAccess.getConnectionChannel）
     $connOut = Get-JavapOutput "net.minecraft.network.Connection"
     if ($connOut -notmatch "io\.netty\.channel\.Channel") {
         $check.Ok = $false
@@ -270,8 +270,7 @@ function Set-SmokeClientRenderDistance {
 # T8 场景配置档案落盘：读取 scripts/smoke/profiles/<Name>.profile.properties（行式
 # key=value，# 注释；value 须为合法 TOML 字面量，字符串自带引号），按键值对 patch 双端
 # hassium toml（客户端 run/client/config/hassium/hassium-client.toml、服务端
-# run/server/config/hassium/hassium-server.toml）。键路径写法与 smoke-config-patch.ps1
-# 既有机制一致：按行正则 ^\s*<key>\s*= 匹配并保留原行缩进替换。键已存在则原位替换；
+# run/server/config/hassium/hassium-server.toml）。键路径写法：按行正则 ^\s*<key>\s*= 匹配并保留原行缩进替换。键已存在则原位替换；
 # 键缺失时按 key 前缀定位 `[section]` 表尾插入（旧生成 toml 键集残缺时自愈，§4.3）；
 # toml 文件或 section 缺失时告警跳过，不阻断冒烟。profile 文件不存在时整体 no-op。
 function Invoke-SmokeProfilePatch {

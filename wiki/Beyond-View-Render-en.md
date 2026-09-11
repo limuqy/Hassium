@@ -1,29 +1,34 @@
-# Beyond-View Render (Planned)
+# Beyond-View Render (OVD, shadow dual-window)
 
 ---
 
 > **English**: [Beyond-View-Render](Beyond-View-Render) · English
 
-> **Status: planned, not enabled in the current build.** After the 2.0.0 direct-connection regression, chunk delivery is fully driven by the shadow server's vanilla tracking (must-deliver on range-enter, Forget on range-exit). The old OVD ring path (`renderOnly` chunks, `ClientHeatIndex` per-chunk eviction, out-of-range `ChunkDataRequestC2S`) was cut from the code, and its config keys (`chunk.viewDistanceExtensionEnabled` / `chunk.maxRenderDistance` / `chunk.ovdUnloadDelaySecs` / `chunk.ovdLocalGeneration`) were removed. This page keeps the design record; the "Enable" section and keys return when the feature ships.
+> **Status: current feature.** Shadow dual-window OVD: tracking expands to effective clientRD; the authoritative window (serverVD) uses Compare+Pull, the OVD window fills from local sources only (disk / inject / optional generation) and never requests from the real server. The client only raises `ClientChunkCache` radius and intercepts Forget. See [`docs/chunk-cache.md`](../docs/chunk-cache.md) §10.
 
 ---
 
 ## Design goal
 
-Beyond-view render lets a multiplayer client, when its render distance (RD) exceeds the server view distance (serverVD), backfill positions in the `serverVD < dist ≤ clientVD` ring from local cache — **render-only, no simulation**, and it never requests out-of-range chunks or block entities from the server.
+When a multiplayer client's render distance (RD) exceeds the server view distance (serverVD), backfill the `serverVD < dist ≤ clientRD` ring from local cache — **render-only, no simulation**, and never request out-of-range chunks from the server.
 
-## Design notes (historical)
+## Current topology
 
-- **Multiplayer only**: not enabled in singleplayer
-- **Ring backfill**: cached chunks apply as renderOnly; cache misses roll back silently without requesting from the server
-- **Real chunks win**: when a real chunk arrives at a renderOnly position, it overrides the marker and requests BEs
+- **Authoritative window** (`dist ≤ serverVD`): shadow tracking drives unified Compare+Pull
+- **OVD window** (`serverVD < dist ≤ effective clientRD`): local sources only; with `chunk.ovdLocalGeneration=true` and a real seed from handshake, a miss may generate locally
+- **Client**: raise `ClientChunkCache` radius; intercept vanilla Forget so the ring stays loaded
+- **Off**: `chunk.viewDistanceExtensionEnabled=false` falls radius back to serverVD (authoritative window only)
 - **Exclusive with Bobby**: Hassium's own backfill; do not install together with Bobby
-- **Resource reuse**: reuses the shadow cache eviction machinery; no dedicated memory pool
-- **Boundaries**: auto-clears when `clientVD ≤ serverVD`; `serverRenderDistance == 0` falls back to simulationDistance
 
-## Current behavior
+## Config
 
-In the current build, in-range chunks are delivered by the shadow server (including cache-hit reuse and section delta); out-of-range terrain is not backfilled or requested — identical to vanilla. For out-of-range terrain previews, wait for this feature to ship.
+| Key | Default | Description |
+| --- | --- | --- |
+| `chunk.viewDistanceExtensionEnabled` | `true` | Beyond-view master switch (depends on `chunk.enabled`) |
+| `chunk.maxRenderDistance` | `16` | Max effective clientRD (2–64) |
+| `chunk.ovdLocalGeneration` | `false` | Generate OVD-window misses locally from the server seed (needs a real seed) |
+
+Delayed unload (`chunk.ovdUnloadDelaySecs`) was cancelled and is not restored with dual-window OVD.
 
 ---
 

@@ -15,13 +15,12 @@ import net.minecraft.world.level.dimension.LevelStem;
 /**
  * SeedGen 握手 S2C 尾部（append-only；三端 NetworkManager 复用）。
  * <p>
- * 布局（在 UDP dataplane tail 之后追加）：
+ * 布局：
  * <pre>
  *   long worldSeed        // 仅 seedGenEnabled=true 时为真实主世界 seed；否则 0（避免关功能仍泄露种子）
  *   varint stemLen + bytes // LevelStem NBT（0 = 未提供）
  *   boolean seedGenEnabled // 服务端 SeedGen 开关
  * </pre>
- * 旧客户端读到 UDP tail 结束即停，忽略尾部字节。
  * 开启 SeedGen 会向客户端下发世界种子，等同泄露服务端种子。
  */
 public final class SeedGenTail {

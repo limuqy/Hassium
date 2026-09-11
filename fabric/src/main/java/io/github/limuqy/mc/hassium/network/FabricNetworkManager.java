@@ -36,7 +36,7 @@ import java.util.UUID;
  *   <li>{@code MC_VER >= MC_1_21_1}：CustomPacketPayload + StreamCodec（{@link FabricPayloadRegistry}）</li>
  * </ul>
  * 能力协商在 login/config 阶段由 common（{@code LoginHandshakeManager} / mixin）完成；
- * Play 期激活（{@code play_init_s2c} 下发、compression_ready ACK、ZSTD 切换、Dict/Index）
+ * Play 期激活（{@code play_init_s2c} 下发、aggregation_ready ACK、Dict/Index）
  * 由 common {@link ServerHandshakeActivation} 收口，本类同时是 SPI
  * {@link INetworkManagerService} 实现（common {@code Services.NETWORK_MANAGER} 消费）。
  */
@@ -61,7 +61,7 @@ ResourceLocation
 #else
 Identifier
 #endif
-COMPRESSION_READY_C2S = ResourceLocationCompat.vanilla(HassiumChannels.COMPRESSION_READY_C2S);
+AGGREGATION_READY_C2S = ResourceLocationCompat.vanilla(HassiumChannels.AGGREGATION_READY_C2S);
     public static final
 #if MC_VER < MC_1_21_11
 ResourceLocation
@@ -76,20 +76,6 @@ ResourceLocation
 Identifier
 #endif
 DICTIONARY_SYNC_S2C = ResourceLocationCompat.vanilla(HassiumChannels.DICTIONARY_SYNC);
-    public static final
-#if MC_VER < MC_1_21_11
-ResourceLocation
-#else
-Identifier
-#endif
-BLOCK_ENTITY_REQUEST_C2S = ResourceLocationCompat.vanilla(HassiumChannels.BLOCK_ENTITY_REQUEST_C2S);
-    public static final
-#if MC_VER < MC_1_21_11
-ResourceLocation
-#else
-Identifier
-#endif
-BLOCK_ENTITY_DATA_S2C = ResourceLocationCompat.vanilla(HassiumChannels.BLOCK_ENTITY_DATA_S2C);
     public static final
 #if MC_VER < MC_1_21_11
 ResourceLocation
@@ -193,28 +179,6 @@ PLAY_INIT_S2C = ResourceLocationCompat.vanilla(HassiumChannels.PLAY_INIT_S2C);
     }
 
     @Override
-    public void sendBlockEntityRequest(FriendlyByteBuf buf) {
-        if (Minecraft.getInstance().getConnection() != null) {
-#if MC_VER < MC_1_21_1
-            ClientPlayNetworking.send(BLOCK_ENTITY_REQUEST_C2S, buf);
-#else
-            ClientPlayNetworking.send(FabricPayloadRegistry.toPayload(FabricPayloadRegistry.BLOCK_ENTITY_REQUEST_C2S_TYPE, buf));
-#endif
-        } else {
-            buf.release();
-        }
-    }
-
-    @Override
-    public void sendBlockEntityData(ServerPlayer player, FriendlyByteBuf buf) {
-#if MC_VER < MC_1_21_1
-        ServerPlayNetworking.send(player, BLOCK_ENTITY_DATA_S2C, buf);
-#else
-        ServerPlayNetworking.send(player, FabricPayloadRegistry.toPayload(FabricPayloadRegistry.BLOCK_ENTITY_DATA_S2C_TYPE, buf));
-#endif
-    }
-
-    @Override
     public void sendLightDeltaPacket(ServerPlayer player, FriendlyByteBuf buf) {
         // 直连拓扑：光照增量经 vanilla play S2C 通道直发，客户端 receiver 直收。
 #if MC_VER < MC_1_21_1
@@ -314,22 +278,22 @@ PLAY_INIT_S2C = ResourceLocationCompat.vanilla(HassiumChannels.PLAY_INIT_S2C);
      * SPI：客户端激活 ACK（index_sync 收到后回发；C2S；common {@code ClientActivation}
      * 经 Services.NETWORK_MANAGER 消费）。
      * <p>
-     * body = {@link CompressionReadyPayload}（ready=true），服务端 receiver 转调
+     * body = {@link AggregationReadyPayload}（ready=true），服务端 receiver 转调
      * common {@code ServerHandshakeActivation.handleActivationReady}（聚合 PENDING→ENABLED）。
      */
     @Override
-    public void sendCompressionReady() {
+    public void sendAggregationReady() {
         try {
             FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
-            new CompressionReadyPayload(true).encode(buf);
+            new AggregationReadyPayload(true).encode(buf);
 #if MC_VER < MC_1_21_1
-            ClientPlayNetworking.send(COMPRESSION_READY_C2S, buf);
+            ClientPlayNetworking.send(AGGREGATION_READY_C2S, buf);
 #else
-            ClientPlayNetworking.send(FabricPayloadRegistry.toPayload(FabricPayloadRegistry.COMPRESSION_READY_C2S_TYPE, buf));
+            ClientPlayNetworking.send(FabricPayloadRegistry.toPayload(FabricPayloadRegistry.AGGREGATION_READY_C2S_TYPE, buf));
 #endif
-            DebugLogger.debug(LogType.NETWORK, "Hassium: Sent compression ready ACK");
+            DebugLogger.debug(LogType.NETWORK, "Hassium: Sent aggregation ready ACK");
         } catch (Exception e) {
-            LOGGER.error("Hassium: Failed to send compression ready ACK", e);
+            LOGGER.error("Hassium: Failed to send aggregation ready ACK", e);
         }
     }
 
@@ -362,9 +326,9 @@ PLAY_INIT_S2C = ResourceLocationCompat.vanilla(HassiumChannels.PLAY_INIT_S2C);
 
         // 注册激活 ACK（客户端 index_sync 确认 → common 激活：聚合 PENDING→ENABLED）
 #if MC_VER < MC_1_21_1
-        ServerPlayNetworking.registerGlobalReceiver(COMPRESSION_READY_C2S, (server, player, handler, buf, sender) -> {
-            CompressionReadyPayload payload = CompressionReadyPayload.decode(buf);
-            DebugLogger.debug(LogType.NETWORK, "Hassium: Received compression ready from player {}, ready: {}",
+        ServerPlayNetworking.registerGlobalReceiver(AGGREGATION_READY_C2S, (server, player, handler, buf, sender) -> {
+            AggregationReadyPayload payload = AggregationReadyPayload.decode(buf);
+            DebugLogger.debug(LogType.NETWORK, "Hassium: Received aggregation ready from player {}, ready: {}",
                     player.getName().getString(), payload.isReady());
 
             if (payload.isReady()) {
@@ -372,18 +336,18 @@ PLAY_INIT_S2C = ResourceLocationCompat.vanilla(HassiumChannels.PLAY_INIT_S2C);
             }
         });
 #else
-        ServerPlayNetworking.registerGlobalReceiver(FabricPayloadRegistry.COMPRESSION_READY_C2S_TYPE, (payload, context) -> {
+        ServerPlayNetworking.registerGlobalReceiver(FabricPayloadRegistry.AGGREGATION_READY_C2S_TYPE, (payload, context) -> {
             FriendlyByteBuf buf = FabricPayloadRegistry.fromPayload(payload);
             try {
-                CompressionReadyPayload readyPayload = CompressionReadyPayload.decode(buf);
-                DebugLogger.debug(LogType.NETWORK, "Hassium: Received compression ready from player {}, ready: {}",
+                AggregationReadyPayload readyPayload = AggregationReadyPayload.decode(buf);
+                DebugLogger.debug(LogType.NETWORK, "Hassium: Received aggregation ready from player {}, ready: {}",
                         context.player().getName().getString(), readyPayload.isReady());
 
                 if (readyPayload.isReady()) {
                     ServerHandshakeActivation.handleActivationReady(context.player());
                 }
             } catch (Exception e) {
-                LOGGER.error("Failed to handle compression ready packet", e);
+                LOGGER.error("Failed to handle aggregation ready packet", e);
             } finally {
                 buf.release();
             }
@@ -423,50 +387,6 @@ PLAY_INIT_S2C = ResourceLocationCompat.vanilla(HassiumChannels.PLAY_INIT_S2C);
                     ServerPlayNetworking.send(player, FabricPayloadRegistry.toPayload(
                             FabricPayloadRegistry.SHADOW_PULL_RESPONSE_S2C_TYPE, out));
                 });
-            } finally {
-                buf.release();
-            }
-        });
-#endif
-
-
-        // 注册 blockEntity 数据请求
-#if MC_VER < MC_1_21_1
-        ServerPlayNetworking.registerGlobalReceiver(BLOCK_ENTITY_REQUEST_C2S, (server, player, handler, buf, sender) -> {
-            try {
-                // review-fix: T10-1: 直接 decode 原 buf（Fabric 回调结束后负责释放），避免副本泄漏
-                BlockEntityRequestC2SPacket request = BlockEntityRequestC2SPacket.decode(buf);
-
-                server.execute(() -> {
-                    try {
-                        ServerChunkPushManager.getInstance().handleBlockEntityRequest(
-                                player, request);
-                    } catch (Exception e) {
-                        LOGGER.error("[SERVER] Failed to handle block entity request", e);
-                    }
-                });
-            } catch (Exception e) {
-                LOGGER.error("[SERVER] Failed to decode block entity request", e);
-            }
-        });
-#else
-        ServerPlayNetworking.registerGlobalReceiver(FabricPayloadRegistry.BLOCK_ENTITY_REQUEST_C2S_TYPE, (payload, context) -> {
-            FriendlyByteBuf buf = FabricPayloadRegistry.fromPayload(payload);
-            try {
-                ServerPlayer player = context.player();
-                net.minecraft.server.MinecraftServer server = io.github.limuqy.mc.hassium.compat.PlayerCompat.getMinecraftServer(player);
-                BlockEntityRequestC2SPacket request = BlockEntityRequestC2SPacket.decode(buf);
-
-                server.execute(() -> {
-                    try {
-                        ServerChunkPushManager.getInstance().handleBlockEntityRequest(
-                                player, request);
-                    } catch (Exception e) {
-                        LOGGER.error("[SERVER] Failed to handle block entity request", e);
-                    }
-                });
-            } catch (Exception e) {
-                LOGGER.error("[SERVER] Failed to decode block entity request", e);
             } finally {
                 buf.release();
             }

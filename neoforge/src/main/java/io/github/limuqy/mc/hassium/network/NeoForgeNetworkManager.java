@@ -69,10 +69,6 @@ public class NeoForgeNetworkManager implements INetworkManagerService {
             payloadType(HassiumChannels.SHADOW_PULL_REQUEST_C2S);
     public static final CustomPacketPayload.Type<ByteArrayPayload> SHADOW_PULL_RESPONSE_TYPE =
             payloadType(HassiumChannels.SHADOW_PULL_RESPONSE_S2C);
-    public static final CustomPacketPayload.Type<ByteArrayPayload> BLOCK_ENTITY_REQUEST_TYPE =
-            payloadType(HassiumChannels.BLOCK_ENTITY_REQUEST_C2S);
-    public static final CustomPacketPayload.Type<ByteArrayPayload> BLOCK_ENTITY_DATA_TYPE =
-            payloadType(HassiumChannels.BLOCK_ENTITY_DATA_S2C);
     public static final CustomPacketPayload.Type<ByteArrayPayload> LIGHT_DELTA_TYPE =
             payloadType(HassiumChannels.LIGHT_DELTA_S2C);
     public static final CustomPacketPayload.Type<ByteArrayPayload> DICTIONARY_SYNC_TYPE =
@@ -93,14 +89,14 @@ public class NeoForgeNetworkManager implements INetworkManagerService {
                 buf -> new ByteArrayPayload(type, buf.readByteArray()));
     }
 
-    public record CompressionReadyNeoPayload(boolean ready) implements CustomPacketPayload {
-        public static final Type<CompressionReadyNeoPayload> TYPE = new Type<>(ResourceLocationCompat.vanilla(HassiumChannels.COMPRESSION_READY_C2S));
-        public static final StreamCodec<FriendlyByteBuf, CompressionReadyNeoPayload> STREAM_CODEC = StreamCodec.of(
+    public record AggregationReadyNeoPayload(boolean ready) implements CustomPacketPayload {
+        public static final Type<AggregationReadyNeoPayload> TYPE = new Type<>(ResourceLocationCompat.vanilla(HassiumChannels.AGGREGATION_READY_C2S));
+        public static final StreamCodec<FriendlyByteBuf, AggregationReadyNeoPayload> STREAM_CODEC = StreamCodec.of(
                 (buf, p) -> buf.writeBoolean(p.ready()),
-                buf -> new CompressionReadyNeoPayload(buf.readBoolean())
+                buf -> new AggregationReadyNeoPayload(buf.readBoolean())
         );
         @Override
-        public Type<CompressionReadyNeoPayload> type() {
+        public Type<AggregationReadyNeoPayload> type() {
             return TYPE;
         }
     }
@@ -277,13 +273,9 @@ public class NeoForgeNetworkManager implements INetworkManagerService {
                 NeoForgeNetworkManager::handleShadowPullResponse);
 
 
-        // 注册 BlockEntity 请求 (C2S)
-        registrar.playToServer(BLOCK_ENTITY_REQUEST_TYPE, codec(BLOCK_ENTITY_REQUEST_TYPE),
-                NeoForgeNetworkManager::handleBlockEntityRequest);
-
         registrar.playToServer(
-                CompressionReadyNeoPayload.TYPE,
-                CompressionReadyNeoPayload.STREAM_CODEC,
+                AggregationReadyNeoPayload.TYPE,
+                AggregationReadyNeoPayload.STREAM_CODEC,
                 (payload, ctx) -> ctx.enqueueWork(() -> {
                     if (ctx.player() instanceof ServerPlayer player && payload.ready()) {
                         // 直连拓扑：转调 common 激活链（服务端 ZSTD 切换 + Dict/Index 同步 + 聚合放行）
@@ -294,11 +286,7 @@ public class NeoForgeNetworkManager implements INetworkManagerService {
 
         // ===== S2C（客户端处理；与服务端发送方向一一对应）=====
 
-        // BlockEntityData S2C
-        registrar.playToClient(BLOCK_ENTITY_DATA_TYPE, codec(BLOCK_ENTITY_DATA_TYPE),
-                NeoForgeNetworkManager::handleBlockEntityDataS2C);
-
-        // LightDelta S2C（直连拓扑：网关帧链路已裁剪，客户端影子端经 vanilla 通道消费）
+        // LightDelta S2C（直连拓扑：客户端影子端经 vanilla 通道消费）
         registrar.playToClient(LIGHT_DELTA_TYPE, codec(LIGHT_DELTA_TYPE),
                 (payload, ctx) -> PayloadHandlers.handleLightDelta(payload.data()));
 
@@ -336,21 +324,7 @@ public class NeoForgeNetworkManager implements INetworkManagerService {
         context.enqueueWork(() -> PayloadHandlers.handleShadowPullResponse(payload.data()));
     }
 
-    private static void handleBlockEntityRequest(ByteArrayPayload payload, IPayloadContext context) {
-        context.enqueueWork(() -> {
-            if (context.player() instanceof ServerPlayer player) {
-                PayloadHandlers.handleBlockEntityRequest(payload.data(), player);
-            }
-        });
-    }
-
     // ===== S2C 客户端处理 =====
-
-    private static void handleBlockEntityDataS2C(ByteArrayPayload payload, IPayloadContext context) {
-        context.enqueueWork(() -> PayloadHandlers.handleBlockEntityData(payload.data()));
-    }
-
-    // ========== 发送方法实现 ==========
 
 
     /** NeoForge payload 发送必须经服务端主线程，避免异步推送批次丢失。 */
@@ -390,24 +364,6 @@ public class NeoForgeNetworkManager implements INetworkManagerService {
     @Override
     public void sendShadowPullResponse(ServerPlayer player, FriendlyByteBuf buf) {
         sendServerPayload(player, new ByteArrayPayload(SHADOW_PULL_RESPONSE_TYPE, PayloadHandlers.drain(buf)));
-    }
-
-    @Override
-    public void sendBlockEntityRequest(FriendlyByteBuf buf) {
-        if (net.minecraft.client.Minecraft.getInstance().getConnection() != null) {
-            byte[] data = PayloadHandlers.drain(buf);
-            net.minecraft.client.Minecraft.getInstance().getConnection()
-                    .send(new ByteArrayPayload(BLOCK_ENTITY_REQUEST_TYPE, data));
-            LOGGER.debug("Hassium: Sent block entity request");
-        } else {
-            buf.release();
-        }
-    }
-
-    @Override
-    public void sendBlockEntityData(ServerPlayer player, FriendlyByteBuf buf) {
-        sendServerPayload(player, new ByteArrayPayload(BLOCK_ENTITY_DATA_TYPE, PayloadHandlers.drain(buf)));
-        LOGGER.debug("Hassium: Sent block entity data packet to {}", player.getName().getString());
     }
 
     @Override
@@ -468,20 +424,20 @@ public class NeoForgeNetworkManager implements INetworkManagerService {
         }
     }
 
-    /** SPI：客户端 compression_ready ACK（C2S；common {@code ClientActivation} 经 Services.NETWORK_MANAGER 消费）。 */
+    /** SPI：客户端 aggregation_ready ACK（C2S；common {@code ClientActivation} 经 Services.NETWORK_MANAGER 消费）。 */
     @Override
-    public void sendCompressionReady() {
-        sendCompressionReadyToServer();
+    public void sendAggregationReady() {
+        sendAggregationReadyToServer();
     }
 
-    public static void sendCompressionReadyToServer() {
+    public static void sendAggregationReadyToServer() {
         try {
             var connection = net.minecraft.client.Minecraft.getInstance().getConnection();
             if (connection != null) {
-                connection.send(new CompressionReadyNeoPayload(true));
+                connection.send(new AggregationReadyNeoPayload(true));
             }
         } catch (Exception e) {
-            LOGGER.error("Hassium: Failed to send compression ready", e);
+            LOGGER.error("Hassium: Failed to send aggregation ready", e);
         }
     }
 

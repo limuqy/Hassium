@@ -5,7 +5,7 @@ import io.github.limuqy.mc.hassium.Constants;
 /**
  * Hassium 自定义包通道常量集中持有
  * <p>
- * 10 个自定义包的 CHANNEL 统一收口于此，类型为稳定值类型 {@link PacketId}
+ * 自定义包的 CHANNEL 统一收口于此，类型为稳定值类型 {@link PacketId}
  * （namespace + path 纯字符串对，<b>零</b> {@code #if}/{@code ResourceLocation}/
  * {@code Identifier} 出现）。
  * <p>
@@ -15,17 +15,11 @@ import io.github.limuqy.mc.hassium.Constants;
 public final class HassiumChannels {
     private HassiumChannels() {}
 
-    public static final PacketId BLOCK_ENTITY_DATA_S2C = new PacketId(Constants.MOD_ID, "block_entity_data_s2c");
-
-    public static final PacketId BLOCK_ENTITY_REQUEST_C2S = new PacketId(Constants.MOD_ID, "block_entity_request_c2s");
-
     public static final PacketId SHADOW_PULL_REQUEST_C2S = new PacketId(Constants.MOD_ID, "shadow_pull_request_c2s");
 
     public static final PacketId SHADOW_PULL_RESPONSE_S2C = new PacketId(Constants.MOD_ID, "shadow_pull_response_s2c");
-    public static final PacketId HANDSHAKE_C2S = new PacketId(Constants.MOD_ID, "handshake_c2s");
 
-
-    public static final PacketId COMPRESSION_READY_C2S = new PacketId(Constants.MOD_ID, "compression_ready_c2s");
+    public static final PacketId AGGREGATION_READY_C2S = new PacketId(Constants.MOD_ID, "aggregation_ready_c2s");
 
     public static final PacketId DICTIONARY_SYNC = new PacketId(Constants.MOD_ID, "dictionary_sync");
 

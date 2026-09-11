@@ -68,7 +68,7 @@ public final class HassiumClothConfigScreen {
                 draft.cacheSectionDeltaEnabled, dCache.sectionDeltaEnabled(),
                 v -> draft.cacheSectionDeltaEnabled = v));
 
-        // === Category 2: 渲染与生成（7 项）===
+        // === Category 2: 渲染与生成（6 项）===
         ConfigCategory rendering = builder.getOrCreateCategory(
                 Component.translatable("hassium.configuration.category.rendering"));
         rendering.addEntry(bool(entries, "hassium.configuration.chunk.viewDistanceExtensionEnabled",
@@ -82,9 +82,6 @@ public final class HassiumClothConfigScreen {
         rendering.addEntry(intRange(entries, "hassium.configuration.chunk.mainThreadChunkBudgetMs",
                 draft.mainThreadChunkBudgetMs, dCache.mainThreadChunkBudgetMs(), 1, 50,
                 v -> draft.mainThreadChunkBudgetMs = v));
-        rendering.addEntry(intRange(entries, "hassium.configuration.chunk.seedGenThreads",
-                draft.seedGenThreads, dCache.seedGenThreads(), 0, 64,
-                v -> draft.seedGenThreads = v));
         rendering.addEntry(bool(entries, "hassium.configuration.chunk.seedGenEnabled",
                 draft.seedGenEnabled, dCache.seedGenEnabled(), v -> draft.seedGenEnabled = v));
         rendering.addEntry(bool(entries, "hassium.configuration.chunk.ovdLocalGeneration",
@@ -182,7 +179,6 @@ public final class HassiumClothConfigScreen {
         boolean ovdLocalGeneration;
         int maxChunksPerFrame;
         int mainThreadChunkBudgetMs;
-        int seedGenThreads;
         boolean seedGenEnabled;
         boolean metricsEnabled;
         boolean metricsAutoReset;
@@ -213,7 +209,6 @@ public final class HassiumClothConfigScreen {
             d.ovdLocalGeneration = cache.ovdLocalGeneration();
             d.maxChunksPerFrame = cache.maxChunksPerFrame();
             d.mainThreadChunkBudgetMs = cache.mainThreadChunkBudgetMs();
-            d.seedGenThreads = cache.seedGenThreads();
             d.seedGenEnabled = cache.seedGenEnabled();
             d.metricsEnabled = debug.networkMetricsEnabled();
             d.metricsAutoReset = debug.networkMetricsAutoReset();
@@ -237,7 +232,7 @@ public final class HassiumClothConfigScreen {
                             cacheCleanupIntervalTicks, cacheTargetCacheSizeMb, cacheMinCleanupBatchSize,
                             cacheSectionDeltaEnabled,
                             viewDistanceExtensionEnabled, maxRenderDistance, ovdLocalGeneration,
-                            maxChunksPerFrame, mainThreadChunkBudgetMs, seedGenThreads,
+                            maxChunksPerFrame, mainThreadChunkBudgetMs,
                             seedGenEnabled,
                             HassiumConfig.ChunkCoreConfig.DEFAULT.lightStrip()),
                     HassiumConfig.MasterCoreConfig.DEFAULT,

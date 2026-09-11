@@ -27,7 +27,7 @@ import java.util.Map;
  * <p>
  * 输入域：各 section 的完整 BlockState（含朝向/含水/作物 age 等属性）。
  * 不含 biomes、LightData、heightmap、blockEntity NBT。BE 不参与命中判定，
- * 缓存命中后由 {@code BlockEntityRequest} 单独拉取。
+ * 缓存命中后由 vanilla 方块实体包 + pull FULL 线格式携带。
  * 生产算法：xxHash64（基准显著快于 Murmur3_64）。
  * <p>
  * 使用流式哈希计算，避免 ByteArrayOutputStream 临时对象分配。

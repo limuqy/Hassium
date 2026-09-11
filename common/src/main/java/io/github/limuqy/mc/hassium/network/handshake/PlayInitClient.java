@@ -8,7 +8,7 @@ import io.github.limuqy.mc.hassium.network.ClientChunkPipeline;
  * <p>
  * 只做两件事：登记协商位 + 注册 SeedGen 种子/LevelStem。原版压缩层全程不触碰
  * （管线级 ZSTD 已退役，见 {@code docs/architecture.md}）；聚合由 index_sync 后的
- * 激活 ACK（{@code compression_ready} 通道，语义=聚合确认）放行。
+ * 激活 ACK（{@code aggregation_ready} 通道，语义=聚合确认）放行。
  * <p>
  * 本类为 loader receiver 的统一转调点（三端注册 {@code hassium:play_init_s2c}）。
  */

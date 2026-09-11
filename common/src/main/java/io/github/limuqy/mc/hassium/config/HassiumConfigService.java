@@ -370,10 +370,6 @@ public class HassiumConfigService {
         return config.master().aggregationMaxSize();
     }
 
-    public int getServerChunkPushThreads() {
-        return Math.max(1, Math.min(64, config.master().serverChunkPushThreads()));
-    }
-
     public boolean isServerLightStrip() {
         return config.chunk().lightStrip();
     }
@@ -389,11 +385,6 @@ public class HassiumConfigService {
 
     public int getMaxChunksPerFrame() {
         return Math.max(1, config.chunk().maxChunksPerFrame());
-    }
-
-    /** SeedGen 本地生成线程数（0=禁用本地生成，回退全量）。 */
-    public int getSeedGenThreads() {
-        return Math.max(0, config.chunk().seedGenThreads());
     }
 
     /** 光照验算（官方引擎对照 BFS 结果；默认关）。 */

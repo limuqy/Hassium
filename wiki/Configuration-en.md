@@ -41,8 +41,7 @@ In-game editors:
 | `chunk.sectionDeltaEnabled` | `true` | On stale cache send changed blocks only (whole section/chunk beyond that); off = stale goes full |
 | `chunk.maxChunksPerFrame` | `6` | Per-tick cache-read production cap (shadow enqueue + shadow disk); main-thread apply is bounded only by `mainThreadChunkBudgetMs` |
 | `chunk.mainThreadChunkBudgetMs` | `15` | Client per-frame apply budget (ms); JoinBoost temporarily raises it for 30s after join |
-| `chunk.seedGenThreads` | `2` | Local-generation thread count (0 = disable; SeedRef always falls back to full chunks) |
-| `chunk.seedGenEnabled` | `false` | Local generation (both sides): regenerate referenced chunks locally from the world seed (hash-verified) instead of downloading; both sides same version. **Server enablement sends the world seed (seed leak)** |
+| `chunk.seedGenEnabled` | `false` | Local generation (both sides): shadow tracking triggers vanilla worldgen then compare-pull; both sides same version. **Server enablement sends the world seed (seed leak)** |
 
 ### Chunk core (`chunk.*`, server)
 
@@ -61,9 +60,8 @@ In-game editors:
 | `master.aggregationMinBatchSize` | `4` | Aggregation minimum batch size |
 | `master.aggregationMaxWaitTimeMs` | `50` | Aggregation max wait (ms; ACK timeout 5s auto-downgrades to direct send) |
 | `master.aggregationMaxSize` | `262144` | Aggregation max size (bytes) |
-| `master.compressionBlacklist` | control-plane keys | Packet IDs excluded from compression/aggregation (defaults cover control plane: handshake / dictionary / index / chunkHash / light delta / BE data, etc.) |
+| `master.compressionBlacklist` | control-plane keys | Packet IDs excluded from compression/aggregation (defaults cover control plane: dictionary / index / light delta / aggregation itself, etc.) |
 | `master.maxChunksPerTick` | `5` | Per-player per-tick Pull FULL/DELTA completion cap (send rate = value × tick pace, ≈ 5×20 = 100/s at full tick; UNCHANGED is a separate cap of 32; degrades naturally on laggy ticks) |
-| `master.serverChunkPushThreads` | `4` | Server chunk-push fixed threads (encode / hash / ZSTD pool) |
 
 ### Storage (`storage.*`)
 

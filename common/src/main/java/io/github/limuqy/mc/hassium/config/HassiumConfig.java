@@ -67,8 +67,6 @@ public record HassiumConfig(
             // === 线程与应用（从原 NetworkConfig 吸收的客户端字段）===
             int maxChunksPerFrame,
             int mainThreadChunkBudgetMs,
-            // === SeedGen 本地生成线程数（Phase 2；0=禁用本地生成）===
-            int seedGenThreads,
             // === SeedGen 总开关（双端同名键；物理端各自加载）===
             boolean seedGenEnabled,
             // === 光照剥离（仅专用服；服务端控制是否发包时剥离 LightData）===
@@ -89,7 +87,6 @@ public record HassiumConfig(
                 false,   // ovdLocalGeneration
                 6,       // maxChunksPerFrame
                 15,      // mainThreadChunkBudgetMs
-                2,       // seedGenThreads
                 false,   // seedGenEnabled
                 true     // lightStrip（仅服务端消费）
         );
@@ -127,8 +124,7 @@ public record HassiumConfig(
             // === 黑名单 ===
             Set<String> compressionBlacklist,
             // === 服务端推送 ===
-            int maxChunksPerTick,
-            int serverChunkPushThreads
+            int maxChunksPerTick
     ) {
         public MasterCoreConfig {
             compressionBlacklist = Set.copyOf(compressionBlacklist);
@@ -136,11 +132,9 @@ public record HassiumConfig(
 
         // 127.0.0.1 仅供本地开发；公网部署必须配置客户端实际可达的地址。
         public static final Set<String> DEFAULT_COMPRESSION_BLACKLIST = Set.of(
-                HassiumPacketIds.HANDSHAKE_S2C,
                 HassiumPacketIds.DICTIONARY_SYNC_S2C,
                 HassiumPacketIds.INDEX_SYNC_S2C,
                 HassiumPacketIds.LIGHT_DELTA_S2C,
-                HassiumPacketIds.BLOCK_ENTITY_DATA_S2C,
                 HassiumPacketIds.MAIN_CHANNEL,
                 HassiumPacketIds.AGGREGATION_S2C
         );
@@ -154,8 +148,7 @@ public record HassiumConfig(
                 50,                // aggregationMaxWaitTimeMs
                 256 * 1024,        // aggregationMaxSize
                 DEFAULT_COMPRESSION_BLACKLIST,
-                5,                 // maxChunksPerTick（Pull FULL/DELTA 完成配额，满 tick ≈ 100/s）
-                4                  // serverChunkPushThreads
+                5                  // maxChunksPerTick（Pull FULL/DELTA 完成配额，满 tick ≈ 100/s）
         );
     }
 

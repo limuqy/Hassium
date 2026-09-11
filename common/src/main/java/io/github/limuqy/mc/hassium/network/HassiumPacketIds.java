@@ -14,18 +14,6 @@ public final class HassiumPacketIds {
      */
     public static final String NAMESPACE = "hassium";
 
-    // ===== 握手包 =====
-
-    /**
-     * 客户端 -> 服务端：握手请求
-     */
-    public static final String HANDSHAKE_C2S = "hassium:handshake_c2s";
-
-    /**
-     * 服务端 -> 客户端：握手响应
-     */
-    public static final String HANDSHAKE_S2C = "hassium:handshake_s2c";
-
     /**
      * 客户端 -> 服务端：预握手（login / 配置阶段声明 Hassium 能力）。
      * <p>
@@ -50,47 +38,9 @@ public final class HassiumPacketIds {
     public static final String AGGREGATION_S2C = "hassium:aggregation";
 
     /**
-     * 服务端 -> 客户端：方块实体数据
-     */
-    public static final String BLOCK_ENTITY_DATA_S2C = "hassium:block_entity_data_s2c";
-
-    /**
      * Forge/NeoForge SimpleChannel 共用通道
      */
     public static final String MAIN_CHANNEL = "hassium:main";
-
-    // ===== 缓存相关包 =====
-
-    /**
-     * 客户端 -> 服务端：缓存查询
-     */
-    public static final String CHUNK_CACHE_QUERY_C2S = "hassium:chunk_cache_query_c2s";
-
-    /**
-     * 服务端 -> 客户端：缓存决策
-     */
-    public static final String CHUNK_CACHE_DECISION_S2C = "hassium:chunk_cache_decision_s2c";
-
-    // ===== 字典相关包 =====
-
-    /**
-     * 服务端 -> 客户端：字典清单
-     */
-    public static final String DICTIONARY_MANIFEST_S2C = "hassium:dictionary_manifest_s2c";
-
-    // ===== 指标相关包 =====
-
-    /**
-     * 客户端 -> 服务端：指标请求
-     */
-    public static final String METRICS_REQUEST_C2S = "hassium:metrics_request_c2s";
-
-    /**
-     * 服务端 -> 客户端：指标响应
-     */
-    public static final String METRICS_RESPONSE_S2C = "hassium:metrics_response_s2c";
-
-    // ===== 区块缓存推送相关包 =====
 
     /**
      * 客户端 -> 服务端：请求区块数据
@@ -101,7 +51,6 @@ public final class HassiumPacketIds {
 
     /** Play 期激活（协商位 + SeedGen 种子）；进服控制面，禁止进 PENDING 聚合。 */
     public static final String PLAY_INIT_S2C = "hassium:play_init_s2c";
-
 
     /**
      * 服务端 -> 客户端：光照增量通知

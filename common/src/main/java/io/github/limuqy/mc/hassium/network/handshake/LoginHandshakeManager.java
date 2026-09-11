@@ -1,5 +1,6 @@
 package io.github.limuqy.mc.hassium.network.handshake;
 
+import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.compat.PlayerCompat;
 import io.github.limuqy.mc.hassium.compat.ReflectionCompat;
 import io.github.limuqy.mc.hassium.network.PlayerCompressionTracker;
@@ -63,6 +64,13 @@ public final class LoginHandshakeManager {
                 return true;
             }
             LoginHandshake.HelloAnswer answer = LoginHandshake.HelloAnswer.decode(buf);
+            if (!LoginHandshake.isProtocolVersionAccepted(answer.protocolVersion(),
+                    Constants.CURRENT_PROTOCOL_VERSION)) {
+                DebugLogger.info(LogType.NETWORK,
+                        "[LOGIN_HELLO] Protocol {} from {} not accepted (need {}), vanilla path",
+                        answer.protocolVersion(), playerId, Constants.CURRENT_PROTOCOL_VERSION);
+                return true;
+            }
             if (!isValidModVersion(answer.modVersion())) {
                 DebugLogger.warn(LogType.NETWORK,
                         "[LOGIN_HELLO] Rejected malformed mod version from {}, vanilla path", playerId);

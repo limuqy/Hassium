@@ -37,7 +37,7 @@ public final class PacketCodecCompat {
     private static volatile List<PlayPacketEntry> cachedServerbound;
     /**
      * review-fix: T8-23: playBound 产物按 (flow, registryAccess) 缓存。registryAccess 每连接
-     * 恒定，bind 产物可复用；serializePacketBody/Full/deserializePacketById 每包调用一次
+     * 恒定，bind 产物可复用；serializePacketBody/deserializePacketById 每包调用一次
      * （ServerChunkPushManager 推送热路径），原实现每包 decorator+bind 造成重复分配。
      * 用 WeakHashMap 键（弱引用）避免随连接生命周期泄漏；值强引用 bind 产物，键存活则命中。
      * equals 语义：RegistryAccess 结构相等（同注册表内容）即视为同键，bind 结果等价。
@@ -164,7 +164,7 @@ public final class PacketCodecCompat {
     }
 
     /**
-     * 按协议数字 ID + body 反序列化包（flow 泛化版；T5 网关 outbound C2S/S2C 解码、T9 ViaFabric 链复用）。
+     * 按协议数字 ID + body 反序列化包（聚合拆包用；flow 泛化版）。
      */
     @SuppressWarnings({"unchecked", "rawtypes"})
     public static Packet<?> deserializePacketById(
@@ -186,73 +186,6 @@ public final class PacketCodecCompat {
         try {
             buf.writeVarInt(vanillaId);
             buf.writeBytes(body);
-            return (Packet<?>) ((net.minecraft.network.codec.StreamCodec) info.codec()).decode(buf);
-        } finally {
-            buf.release();
-        }
-#endif
-    }
-
-    /**
-     * 序列化完整原版包（含协议包 ID VarInt）——ViaFabric 转换链的输入线格式。
-     * <p>
-     * {@code flow} 参数：{@code <1.21.1} 段 {@link net.minecraft.network.ConnectionProtocol#getPacketId}
-     * 按 flow 查 ID 必需；{@code >=1.21.1} 段用于绑定协议编解码器。调用方负责传对 flow。
-     */
-    @SuppressWarnings({"rawtypes"})
-    public static byte[] serializePacketFull(
-            Packet<?> packet,
-            PacketFlow flow,
-            RegistryAccess registryAccess
-    ) {
-#if MC_VER < MC_1_21_1
-        FriendlyByteBuf buf = new FriendlyByteBuf(Unpooled.buffer());
-        try {
-            buf.writeVarInt(net.minecraft.network.ConnectionProtocol.PLAY.getPacketId(flow, packet));
-            packet.write(buf);
-            byte[] data = new byte[buf.readableBytes()];
-            buf.readBytes(data);
-            return data;
-        } finally {
-            buf.release();
-        }
-#else
-        if (registryAccess == null) {
-            registryAccess = RegistryAccess.EMPTY;
-        }
-        var info = playBound(flow, registryAccess);
-        ByteBuf buf = Unpooled.buffer();
-        try {
-            ((net.minecraft.network.codec.StreamCodec) info.codec()).encode(buf, packet);
-            byte[] data = new byte[buf.readableBytes()];
-            buf.readBytes(data);
-            return data;
-        } finally {
-            buf.release();
-        }
-#endif
-    }
-
-    /**
-     * 反序列化完整原版包（缓冲内含协议包 ID VarInt，解码后 ID 自行消费）——
-     * ViaFabric 转换链的输出线格式。未知 ID 返回 null（{@code <1.21.1} 段语义）。
-     */
-    @SuppressWarnings({"unchecked", "rawtypes"})
-    public static Packet<?> deserializePacketFull(
-            PacketFlow flow,
-            byte[] fullPacketBytes,
-            RegistryAccess registryAccess
-    ) {
-#if MC_VER < MC_1_21_1
-        FriendlyByteBuf pBuf = new FriendlyByteBuf(Unpooled.wrappedBuffer(fullPacketBytes));
-        return net.minecraft.network.ConnectionProtocol.PLAY.createPacket(flow, pBuf.readVarInt(), pBuf);
-#else
-        if (registryAccess == null) {
-            registryAccess = RegistryAccess.EMPTY;
-        }
-        var info = playBound(flow, registryAccess);
-        FriendlyByteBuf buf = new FriendlyByteBuf(Unpooled.wrappedBuffer(fullPacketBytes));
-        try {
             return (Packet<?>) ((net.minecraft.network.codec.StreamCodec) info.codec()).decode(buf);
         } finally {
             buf.release();

@@ -9,10 +9,10 @@ import net.minecraft.network.FriendlyByteBuf;
 
 /**
  * 客户端聚合激活统一入口：index_sync 到达后的「包索引登记 → registry markEnabled →
- * 聚合 init → compression_ready ACK」三端重复流程收敛点。
+ * 聚合 init → aggregation_ready ACK」三端重复流程收敛点。
  * <p>
  * 必须在客户端主线程调用（loader receiver 经 execute/enqueueWork 派发）；ACK 回发
- * 经 SPI {@code Services.NETWORK_MANAGER.sendCompressionReady()}，loader 只实现发送。
+ * 经 SPI {@code Services.NETWORK_MANAGER.sendAggregationReady()}，loader 只实现发送。
  */
 public final class ClientActivation {
 
@@ -35,9 +35,9 @@ public final class ClientActivation {
             if (conn != null) {
                 HassiumConnectionRegistry.markEnabled(conn.getConnection());
                 HassiumAggregationManager.init();
-                Services.NETWORK_MANAGER.sendCompressionReady();
+                Services.NETWORK_MANAGER.sendAggregationReady();
             }
-            DebugLogger.debug(LogType.NETWORK, "Hassium: Received index sync ({} types), sent compression ready",
+            DebugLogger.debug(LogType.NETWORK, "Hassium: Received index sync ({} types), sent aggregation ready",
                     clientIndexManager != null ? clientIndexManager.size() : 0);
         } catch (Exception e) {
             Constants.LOG.error("Hassium: Failed to handle index sync", e);

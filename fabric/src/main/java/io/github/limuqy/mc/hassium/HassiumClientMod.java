@@ -103,7 +103,7 @@ public class HassiumClientMod implements ClientModInitializer {
                 (payload, context) -> context.client().execute(() ->
                         PayloadHandlers.handleDictionarySync(payload.data())));
 #endif
-        // INDEX_SYNC_S2C 客户端 receiver：包索引登记 → 聚合激活 ACK（compression_ready）。
+        // INDEX_SYNC_S2C 客户端 receiver：包索引登记 → 聚合激活 ACK（aggregation_ready）。
 #if MC_VER < MC_1_21_1
         ClientPlayNetworking.registerGlobalReceiver(io.github.limuqy.mc.hassium.network.FabricNetworkManager.INDEX_SYNC_S2C,
                 (client, handler, buf, responseSender) -> {

@@ -38,12 +38,12 @@ public class NetworkOptimizationTest {
         // 注册包类型
         indexManager.register("minecraft:commands");
         indexManager.register("minecraft:login");
-        indexManager.register("hassium:handshake_c2s");
+        indexManager.register("hassium:play_init_s2c");
 
         // 验证注册
         assertTrue(indexManager.contains("minecraft:commands"));
         assertTrue(indexManager.contains("minecraft:login"));
-        assertTrue(indexManager.contains("hassium:handshake_c2s"));
+        assertTrue(indexManager.contains("hassium:play_init_s2c"));
         assertFalse(indexManager.contains("minecraft:unknown"));
 
         // 验证索引
@@ -57,7 +57,7 @@ public class NetworkOptimizationTest {
         assertEquals(1, index2[0]); // 同一个 namespace
         assertEquals(2, index2[1]); // 第二个 path
 
-        int[] index3 = indexManager.getIndex("hassium:handshake_c2s");
+        int[] index3 = indexManager.getIndex("hassium:play_init_s2c");
         assertNotNull(index3);
         assertEquals(2, index3[0]); // 第二个 namespace
         assertEquals(1, index3[1]); // 第一个 path
@@ -65,7 +65,7 @@ public class NetworkOptimizationTest {
         // 验证反向查找
         assertEquals("minecraft:commands", indexManager.getIdentifier(1, 1));
         assertEquals("minecraft:login", indexManager.getIdentifier(1, 2));
-        assertEquals("hassium:handshake_c2s", indexManager.getIdentifier(2, 1));
+        assertEquals("hassium:play_init_s2c", indexManager.getIdentifier(2, 1));
     }
 
     @Test
@@ -75,22 +75,22 @@ public class NetworkOptimizationTest {
         indexManager.registerAll(java.util.Arrays.asList(
                 "minecraft:commands",
                 "minecraft:login",
-                "hassium:handshake_c2s",
-                "hassium:handshake_s2c"
+                "hassium:dictionary_sync",
+                "hassium:play_init_s2c"
         ));
 
         // 验证数量
         assertEquals(4, indexManager.size());
 
         // 验证确定性排序（namespace 字典序，然后 path 字典序）
-        int[] index1 = indexManager.getIndex("hassium:handshake_c2s");
-        int[] index2 = indexManager.getIndex("hassium:handshake_s2c");
+        int[] index1 = indexManager.getIndex("hassium:dictionary_sync");
+        int[] index2 = indexManager.getIndex("hassium:play_init_s2c");
         int[] index3 = indexManager.getIndex("minecraft:commands");
         int[] index4 = indexManager.getIndex("minecraft:login");
 
         // hassium 在 minecraft 之前（字典序）
         assertTrue(index1[0] < index3[0]);
-        // handshake_c2s 在 handshake_s2c 之前
+        // dictionary_sync 在 play_init_s2c 之前
         assertTrue(index1[1] < index2[1]);
     }
 
@@ -101,8 +101,8 @@ public class NetworkOptimizationTest {
         indexManager.registerAll(java.util.Arrays.asList(
                 "minecraft:commands",
                 "minecraft:login",
-                "hassium:handshake_c2s",
-                "hassium:handshake_s2c"
+                "hassium:dictionary_sync",
+                "hassium:play_init_s2c"
         ));
 
         // 序列化
@@ -120,8 +120,8 @@ public class NetworkOptimizationTest {
         // 验证所有包类型都存在
         assertTrue(newIndexManager.contains("minecraft:commands"));
         assertTrue(newIndexManager.contains("minecraft:login"));
-        assertTrue(newIndexManager.contains("hassium:handshake_c2s"));
-        assertTrue(newIndexManager.contains("hassium:handshake_s2c"));
+        assertTrue(newIndexManager.contains("hassium:dictionary_sync"));
+        assertTrue(newIndexManager.contains("hassium:play_init_s2c"));
 
         // 验证索引一致
         int[] index1 = indexManager.getIndex("minecraft:commands");
@@ -162,13 +162,11 @@ public class NetworkOptimizationTest {
         // 文档约定：handshake / index sync / chunkHash 等控制面不进 PENDING 聚合缓冲。
         // 聚合拆包走 RawCustomPayload.handle 会绕开 Fabric/NeoForge receiver。
         String[] controlPlane = {
-                HassiumPacketIds.HANDSHAKE_S2C,
                 HassiumPacketIds.DICTIONARY_SYNC_S2C,
                 HassiumPacketIds.INDEX_SYNC_S2C,
                 HassiumPacketIds.PLAY_INIT_S2C,
                 HassiumPacketIds.SHADOW_PULL_RESPONSE_S2C,
                 HassiumPacketIds.LIGHT_DELTA_S2C,
-                HassiumPacketIds.BLOCK_ENTITY_DATA_S2C,
                 HassiumPacketIds.MAIN_CHANNEL,
                 HassiumPacketIds.AGGREGATION_S2C
         };

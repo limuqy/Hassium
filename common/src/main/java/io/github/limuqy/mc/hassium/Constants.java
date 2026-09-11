@@ -29,7 +29,7 @@ public class Constants {
 	/**
 	 * 当前协议版本
 	 */
-	public static final int CURRENT_PROTOCOL_VERSION = 1;
+	public static final int CURRENT_PROTOCOL_VERSION = 2;
 
 	/**
 	 * 网络自定义通道压缩算法（当前仅实现 ZSTD，不开放配置）

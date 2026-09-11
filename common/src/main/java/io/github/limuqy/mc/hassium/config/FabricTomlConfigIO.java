@@ -364,7 +364,6 @@ public final class FabricTomlConfigIO {
                 getBool(cfg, "chunk.ovdLocalGeneration", d.ovdLocalGeneration()),
                 getInt(cfg, "chunk.maxChunksPerFrame", d.maxChunksPerFrame()),
                 getInt(cfg, "chunk.mainThreadChunkBudgetMs", d.mainThreadChunkBudgetMs()),
-                getInt(cfg, "chunk.seedGenThreads", d.seedGenThreads()),
                 getBool(cfg, "chunk.seedGenEnabled", d.seedGenEnabled()),
                 getBool(cfg, "chunk.lightStrip", d.lightStrip())
         );
@@ -385,9 +384,9 @@ public final class FabricTomlConfigIO {
         set(cfg, "chunk.ovdLocalGeneration", c.ovdLocalGeneration(), "OVD 窗缓存 miss 本地生成");
         set(cfg, "chunk.maxChunksPerFrame", c.maxChunksPerFrame(), "每帧最大区块数");
         set(cfg, "chunk.mainThreadChunkBudgetMs", c.mainThreadChunkBudgetMs(), "主线程区块预算");
-        set(cfg, "chunk.seedGenThreads", c.seedGenThreads(), "SeedGen 线程数");
         set(cfg, "chunk.seedGenEnabled", c.seedGenEnabled(), "启用 SeedGen");
         set(cfg, "chunk.lightStrip", c.lightStrip(), "启用服务端光照剥离");
+        cfg.remove("chunk.seedGenThreads");
     }
 
 
@@ -415,8 +414,7 @@ public final class FabricTomlConfigIO {
                 getLong(cfg, "master.aggregationMaxWaitTimeMs", d.aggregationMaxWaitTimeMs()),
                 getInt(cfg, "master.aggregationMaxSize", d.aggregationMaxSize()),
                 getStringSet(cfg, "master.compressionBlacklist", d.compressionBlacklist()),
-                getInt(cfg, "master.maxChunksPerTick", d.maxChunksPerTick()),
-                getInt(cfg, "master.serverChunkPushThreads", d.serverChunkPushThreads())
+                getInt(cfg, "master.maxChunksPerTick", d.maxChunksPerTick())
         );
     }
 
@@ -430,11 +428,12 @@ public final class FabricTomlConfigIO {
         set(cfg, "master.aggregationMaxSize", n.aggregationMaxSize(), "聚合最大大小（字节）");
         set(cfg, "master.compressionBlacklist", new ArrayList<>(n.compressionBlacklist()), "压缩/聚合黑名单");
         set(cfg, "master.maxChunksPerTick", n.maxChunksPerTick(), "每玩家每 tick 完成的 Pull FULL/DELTA 上限（UNCHANGED 另额 32；满 tick ≈ 本值×20/s，仅服务端）");
-        set(cfg, "master.serverChunkPushThreads", n.serverChunkPushThreads(), "服务端区块推送线程数（encode/hash/ZSTD 固定后台池，仅服务端）");
         // legacy 键清理：网关监听/鉴权/控制面端点/L1 迁移/续流票据/数据面已随网关拓扑退役；
         // 管线级全局包压缩（globalPacketCompression/globalCompressionLevel/globalCompressionThreshold/magiclessZstd）
         // 已随直连拓扑退役（通道压缩由聚合字典 ZSTD + 区块推送自有压缩承担）
         // ovdUnloadDelaySecs：延迟卸载取消，双窗 OVD 不恢复
+        cfg.remove("chunk.seedGenThreads");
+        cfg.remove("master.serverChunkPushThreads");
         cfg.remove("chunk.ovdUnloadDelaySecs");
         cfg.remove("master.dynamicThreadPoolEnabled");
         cfg.remove("master.minPushThreads");

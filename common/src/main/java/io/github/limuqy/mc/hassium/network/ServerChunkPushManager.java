@@ -8,56 +8,36 @@ import io.github.limuqy.mc.hassium.compat.ChunkPacketDataCompat;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.compression.CompressionService;
 import io.github.limuqy.mc.hassium.compression.CompressionException;
-import io.github.limuqy.mc.hassium.metrics.NetworkStats;
-import io.github.limuqy.mc.hassium.platform.Services;
 import io.github.limuqy.mc.hassium.compat.PlayerCompat;
-import io.github.limuqy.mc.hassium.compat.RegistryCompat;
-import io.github.limuqy.mc.hassium.compat.ResourceLocationCompat;
 import io.github.limuqy.mc.hassium.utils.DebugLogger;
 import io.github.limuqy.mc.hassium.utils.DimensionKey;
 import io.github.limuqy.mc.hassium.compat.LevelCompat;
-import io.github.limuqy.mc.hassium.compat.ShadowChunkMapCompat;
-import io.github.limuqy.mc.hassium.utils.TickMonitor;
 import io.github.limuqy.mc.hassium.network.sectiondelta.SectionDeltaPlanner;
 import io.github.limuqy.mc.hassium.network.sectiondelta.SectionDeltaSnapshot;
 import io.github.limuqy.mc.hassium.network.sectiondelta.SectionPlaneSyndrome;
 import io.github.limuqy.mc.hassium.utils.DebugLogger.LogType;
 import io.github.limuqy.mc.hassium.mixin.LevelChunkWithLightPacketAccessor;
 import net.minecraft.core.BlockPos;
-import net.minecraft.core.Registry;
 import net.minecraft.core.RegistryAccess;
-import net.minecraft.core.registries.BuiltInRegistries;
-import net.minecraft.core.registries.Registries;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.FriendlyByteBuf;
-import net.minecraft.network.protocol.Packet;
 import net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket;
 import net.minecraft.network.protocol.game.ClientboundLightUpdatePacketData;
-import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.server.level.ServerChunkCache;
 import net.minecraft.world.level.ChunkPos;
-import net.minecraft.world.level.Level;
-import net.minecraft.world.level.biome.Biome;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.chunk.LevelChunk;
 import net.minecraft.world.level.chunk.LevelChunkSection;
 
 import java.util.ArrayList;
 import java.util.ArrayDeque;
-import java.util.Comparator;
-import java.util.Deque;
-import java.util.HashMap;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
-import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -67,45 +47,12 @@ import java.util.concurrent.atomic.AtomicLongArray;
 /**
  * 服务端区块推送管理器
  * <p>
- * 职责：
- * 1. 发送 chunkHash 元数据给客户端
- * 2. 管理区块数据请求队列：主线程序列化，线程池异步压缩发送
- * 3. 短窗口批量发送 ChunkHash，降低进服包风暴
- * 4. 缓存拦截时已构建的区块包字节，miss 全量时复用（兼容反透视等改包 mod）
+ * 纯 Compare+Pull：权威比较、待推送队列泵、FULL/DELTA 后台 encode+zstd。
+ * 原版 tracking 整柱推送由 mixin 在 pull 模式拦截；无直推队列。
  */
 public class ServerChunkPushManager {
 
     private static final ServerChunkPushManager INSTANCE = new ServerChunkPushManager();
-
-    /** 每玩家已封装且仍在通道中排队的批次上限；满则跳过本 tick 封批。 */
-    static final int MAX_QUEUED_BATCHES_PER_PLAYER = 10;
-    /** 已准入任务满时的全量数据溢出上限；覆盖单玩家最大可见区，避免静默丢柱。 */
-    private static final int MAX_OVERFLOW_TASKS_PER_PLAYER = 8192;
-    private static final long PENDING_CONFIRM_TIMEOUT_MS = 60_000L;
-    private static final int SECTION_DELTA_VIEW_MARGIN = 1;
-
-    /**
-     * UNCHANGED 每 tick 配额（不占 FULL/DELTA）。与 {@link PullPacingValve#UNCHANGED_PER_TICK} 同值。
-     */
-    static final int HASH_SENDS_PER_TICK = PullPacingValve.UNCHANGED_PER_TICK;
-
-    /**
-     * 每玩家推送队列：per-player FIFO 批次队列 + 每 tick 封批（≤maxChunksPerTick）。
-     * 主线程 buildChunkPacket 快照在封批前完成，encode/hash/ZSTD 在消费线程。
-     */
-    private final Map<UUID, PlayerPushQueue> pushQueues = new ConcurrentHashMap<>();
-
-
-    /**
-     * 批次通道：主线程封批后投递，serverChunkPushThreads 条常驻消费者共享抢批。
-     * 每个 {@link SealedBatch} 已在所属玩家队列中占用一个排队批次名额。
-     */
-    private final java.util.concurrent.LinkedBlockingQueue<SealedBatch> batchChannel =
-            new java.util.concurrent.LinkedBlockingQueue<>();
-
-    /**
-     * 每玩家待发送的 chunkHash 批次
-
 
     /**
      * 每玩家光照计算能力（握手 C2S 上报 lightComputeSupported = 客户端 hassiumEngineEnabled）。
@@ -626,17 +573,6 @@ public class ServerChunkPushManager {
      */
     private final Map<UUID, ChunkPos> initialPlayerChunkPos = new ConcurrentHashMap<>();
 
-    /**
-     * 握手时客户端上报的玩家位置（方块坐标），校正 resync 视距中心。
-     * 服务端玩家位置同步前（首个移动包到达前），客户端坐标是最新鲜的来源。
-     */
-    /**
-     * 续流已接受玩家：UUID → 接受的续流票据 epoch（T7 验票通过后标记；removePlayer 清理）。
-     * 续流模式下客户端跳过 login/维度初始化；新 shadowPull 请求携带位置与 hash，
-     * 服务端按请求结果返回区块终态。
-     */
-    private final Map<UUID, Long> resumePlayers = new ConcurrentHashMap<>();
-
     /** 玩家就绪时记录初始位置（直连拓扑：服务端玩家对象自带坐标；removePlayer 清理）。 */
     public void setInitialPlayerPosition(ServerPlayer player, double x, double z) {
         if (player == null) {
@@ -647,20 +583,6 @@ public class ServerChunkPushManager {
         DebugLogger.info(LogType.NETWORK,
                 "[PLAY_INIT] Player {} initial position ({}, {}) → chunk ({}, {})",
                 player.getName().getString(), x, z, pos.x, pos.z);
-    }
-
-    /** 续流/会话状态登记（直连拓扑保留空实现位，无票据来源）。 */
-    public void markPlayerResumeActive(UUID playerId, long epoch) {
-        resumePlayers.put(playerId, epoch);
-        DebugLogger.info(LogType.NETWORK, "[RESUME] Player {} resume ready (epoch={})", playerId, epoch);
-    }
-
-    public boolean isPlayerResumeActive(UUID playerId) {
-        return resumePlayers.containsKey(playerId);
-    }
-
-    public long playerResumeEpoch(UUID playerId) {
-        return resumePlayers.getOrDefault(playerId, Long.MIN_VALUE);
     }
 
     /**
@@ -678,12 +600,6 @@ public class ServerChunkPushManager {
     public static ServerChunkPushManager getInstance() {
         return INSTANCE;
     }
-
-    /** ChunkHash 单包最多 entries */
-    private static final int HASH_BATCH_MAX_ENTRIES = 16;
-
-    /** ChunkHash 批次最大等待（毫秒） */
-    private static final long HASH_BATCH_MAX_WAIT_MS = 10;
 
     /**
      * 服务端推送管线计时诊断（R1 供给版本差异排查：1.20.1 80/s vs 1.21.x 32/s）。
@@ -731,141 +647,22 @@ public class ServerChunkPushManager {
             );
             pushPool.allowCoreThreadTimeOut(true);
 
-            // 常驻消费者线程：serverChunkPushThreads 条共享抢批（LinkedBlockingQueue 批次通道）
-            int consumers = HassiumConfigService.getInstance().getServerChunkPushThreads();
-            for (int i = 0; i < consumers; i++) {
-                Thread t = new Thread(this::consumeBatchesLoop, "Hassium-PushConsumer-" + i);
-                t.setDaemon(true);
-                t.start();
-            }
-
-            Constants.LOG.info("Hassium: ServerChunkPushManager initialized with {} compute threads, {} consumer threads",
-                    threads, consumers);
+            Constants.LOG.info("Hassium: ServerChunkPushManager initialized with {} compute threads",
+                    threads);
         }
     }
 
 
-    /** 服务端每 tick：按原版 tracking 产生的推送队列限流序列化。 */
+    /** 服务端每 tick：泵待推送 Pull 队列。 */
     public void onServerTick(net.minecraft.server.MinecraftServer server) {
         if (server == null) {
             return;
         }
         ensureInitialized();
         pumpPendingPulls();
-
-        long now = System.currentTimeMillis();
-        long drainPendingNs = 0L;
-        long drainQueueNs = 0L;
-        for (ServerPlayer player : server.getPlayerList().getPlayers()) {
-            PlayerPushQueue playerQueue = pushQueues.get(player.getUUID());
-            if (playerQueue != null) {
-                playerQueue.promoteOverflow();
-            }
-            long t0 = System.nanoTime();
-            t0 = System.nanoTime();
-            sealPlayerBatch(player);
-            drainQueueNs += System.nanoTime() - t0;
-        }
-        TickMonitor.addHassiumDrainNs(drainPendingNs, drainQueueNs);
-
-
-
-
-        // 清理已离线玩家的批次
-        pushQueues.keySet().removeIf(id -> server.getPlayerList().getPlayer(id) == null);
     }
 
 
-
-    /**
-     * 统一入队入口：所有推送义务（fullReq、bloom miss 直推、resync 补发、出界复活、
-     * section delta 响应）都经此进入 per-player FIFO 批次队列。排队批满则拒绝。
-     *
-     * @return true 入队成功或同柱已有任务排队
-     */
-    boolean enqueuePushTask(ServerPlayer player, ChunkPos pos, String dimension, PushKind kind) {
-        if (player == null || pos == null || dimension == null) {
-            return false;
-        }
-        if (!player.isAlive() || player.hasDisconnected()) {
-            return false;
-        }
-        // 双保险：pull 模式玩家整柱数据类推送停发；mixin 层已先行拦截
-        if (kind == PushKind.FULL_VISIBLE && isPullMode(player)) {
-            return false;
-        }
-        PlayerPushQueue queue = pushQueues.computeIfAbsent(player.getUUID(), ignored -> new PlayerPushQueue());
-        return queue.enqueue(new PushTask(pos, dimension, kind));
-    }
-
-    /** 该玩家是否协商了 Pull 模式（服务端停发 chunk_payload 整柱推送）。 */
-    public boolean isPullMode(ServerPlayer player) {
-        return player != null && io.github.limuqy.mc.hassium.network.handshake.ServerHandshakeActivation
-                .hasCaps(player.getUUID(),
-                        io.github.limuqy.mc.hassium.network.handshake.LoginCaps.PULL_MODE);
-    }
-
-
-
-    /**
-     * 处理客户端的 blockEntity 数据请求。
-     * <p>
-     * 主线程只对已加载柱做 NBT 快照（{@code getChunkNow}）；组包发送下推 {@code pushPool}。
-     */
-    @SuppressWarnings("deprecation") // Forge: BuiltInRegistries 字段在 Forge patched jar 中被标记 @Deprecated
-    public void handleBlockEntityRequest(ServerPlayer player, BlockEntityRequestC2SPacket request) {
-        if (!player.isAlive() || player.hasDisconnected()) { return; }
-        ensureInitialized();
-
-        ServerLevel level = PlayerCompat.getServerLevel(player);
-        if (level == null) {
-            return;
-        }
-        int viewDistance = PlayerCompat.getViewDistance(player);
-        ChunkPos playerChunkPos = player.chunkPosition();
-        List<BlockEntityDataS2CPacket.ChunkBlockEntities> entries = new ArrayList<>();
-
-        for (ChunkPos pos : request.chunks()) {
-            try {
-                int dx = Math.abs(pos.x - playerChunkPos.x);
-                int dz = Math.abs(pos.z - playerChunkPos.z);
-                if (dx > viewDistance || dz > viewDistance) { continue; }
-
-                LevelChunk chunk = level.getChunkSource().getChunkNow(pos.x, pos.z);
-                if (chunk == null) { continue; }
-
-                entries.add(new BlockEntityDataS2CPacket.ChunkBlockEntities(
-                        pos.x, pos.z, collectRequestedBlockEntities(chunk)));
-            } catch (Exception e) {
-                Constants.LOG.error("[BLOCK_ENTITY] Failed to collect block entities for chunk {}", pos, e);
-            }
-        }
-
-        if (entries.isEmpty()) {
-            return;
-        }
-        String dimension = request.dimension();
-        pushPool.submit(() -> {
-            if (player.hasDisconnected()) {
-                return;
-            }
-            FriendlyByteBuf buf = null;
-            boolean sent = false;
-            try {
-                BlockEntityDataS2CPacket packet = new BlockEntityDataS2CPacket(dimension, entries);
-                buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
-                packet.encode(buf);
-                Services.NETWORK_MANAGER.sendBlockEntityData(player, buf);
-                sent = true;
-            } catch (Exception e) {
-                Constants.LOG.error("[BLOCK_ENTITY] Failed to send block entity data", e);
-            } finally {
-                if (!sent && buf != null) {
-                    buf.release();
-                }
-            }
-        });
-    }
 
     /**
      * 对已脱离 live world 的 section 拷贝做 Planner → FULL / BLOCKS。
@@ -1019,91 +816,6 @@ public class ServerChunkPushManager {
         return result;
     }
 
-    private List<BlockEntityDataS2CPacket.BlockEntityData> collectRequestedBlockEntities(LevelChunk chunk) {
-        List<SectionDeltaS2CPacket.BlockEntityData> src = collectBlockEntities(chunk);
-        List<BlockEntityDataS2CPacket.BlockEntityData> out = new ArrayList<>(src.size());
-        for (SectionDeltaS2CPacket.BlockEntityData be : src) {
-            out.add(new BlockEntityDataS2CPacket.BlockEntityData(be.pos(), be.type(), be.nbt()));
-        }
-        return out;
-    }
-
-
-    /**
-     * 旧服务端直推入队入口已退役：纯 Compare+Pull 下区块数据由客户端影子 tracking
-     * 主动拉取；本地生成由门控开时的 vanilla worldgen 承担（无 SeedRef）。
-     * 保留空实现供过渡期 mixin 调用，不入队。
-     */
-    public boolean enqueueDirectPush(ServerPlayer player, String dimension, List<ChunkPos> chunks) {
-        return true;
-    }
-
-    /**
-     * 主线程封批：队列在纯 Compare+Pull 下已无 FULL_VISIBLE/SeedRef 任务源；
-     * 保留泵结构，有残留任务时直接掏空丢弃。
-     */
-    private void sealPlayerBatch(ServerPlayer player) {
-        UUID playerId = player.getUUID();
-        PlayerPushQueue queue = pushQueues.get(playerId);
-        if (queue == null || queue.isEmpty()) {
-            return;
-        }
-        queue.clear();
-    }
-
-    /**
-     * 常驻消费者循环：与其它消费者共享抢批（batchChannel 阻塞队列）。
-     * 批内逐任务在 pushPool 上 encode/hash/ZSTD 后发送。
-     */
-    private void consumeBatchesLoop() {
-        while (true) {
-            SealedBatch sealed;
-            try {
-                sealed = batchChannel.take();
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                return;
-            }
-            sealed.owner().dequeueSealedBatch();
-            try {
-                processBatch(sealed.works());
-            } catch (Throwable t) {
-                Constants.LOG.error("Hassium: push consumer failed to process batch", t);
-            }
-        }
-    }
-
-    /** 消费一批：批>1 时 fan-out 全局池 invokeAll 同步等齐。 */
-    private void processBatch(List<SealedWork> batch) {
-        if (batch.isEmpty()) {
-            return;
-        }
-        if (batch.size() == 1) {
-            processOne(batch.get(0));
-            return;
-        }
-        try {
-            List<java.util.concurrent.Callable<Void>> callables = new ArrayList<>(batch.size());
-            for (SealedWork work : batch) {
-                callables.add(() -> {
-                    processOne(work);
-                    return null;
-                });
-            }
-            pushPool.invokeAll(callables);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            for (SealedWork work : batch) {
-                processOne(work);
-            }
-        }
-    }
-
-    /** 单任务消费：SeedRef 路径已退役，无事可做。 */
-    private void processOne(SealedWork work) {
-    }
-
-
 
     /**
      * 仅替换既有 packet 的 light payload；chunk data 保持原版/兼容 Mod 已写入的不可变视图。
@@ -1204,16 +916,9 @@ public class ServerChunkPushManager {
 
 
     /**
-     * 移除玩家的所有队列（含 bloom 层——玩家断开后旧 bloom 必须失效：
-     * 否则 R2 重连 trackChunk 会用 R1 残留的空 bloom 误判 miss → 全量直推，
-     * bloom 分流退化为无缓存形态。清空后 R2 上报前走"未就绪只发 hash"，
-     * 由影子端读盘比对决定本地回传/请求，语义正确）。
+     * 移除玩家的 Pull 队列与能力表。
      */
     public void removePlayer(UUID playerId) {
-        PlayerPushQueue queue = pushQueues.remove(playerId);
-        if (queue != null) {
-            queue.clear();
-        }
         ArrayDeque<PendingPull> pulls = pullQueues.remove(playerId);
         if (pulls != null) {
             for (PendingPull pending : pulls) {
@@ -1222,7 +927,6 @@ public class ServerChunkPushManager {
         }
         pullQueuedKeys.remove(playerId);
         initialPlayerChunkPos.remove(playerId);
-        resumePlayers.remove(playerId);
         playerLightComputeSupported.remove(playerId);
     }
 
@@ -1230,7 +934,6 @@ public class ServerChunkPushManager {
      * 清空所有队列并关闭线程池
      */
     public void shutdown() {
-        pushQueues.clear();
         for (ArrayDeque<PendingPull> pulls : pullQueues.values()) {
             for (PendingPull pending : pulls) {
                 releaseDemandTicket(pending);
@@ -1240,8 +943,6 @@ public class ServerChunkPushManager {
         pullQueuedKeys.clear();
         demandTicketRefs.clear();
         initialPlayerChunkPos.clear();
-        resumePlayers.clear();
-        // review-fix: T3-52：能力表一并清理
         playerLightComputeSupported.clear();
         if (pushPool != null) {
             pushPool.shutdownNow();
@@ -1253,207 +954,16 @@ public class ServerChunkPushManager {
      * 获取统计信息
      */
     public String getStats() {
-        int totalQueues = pushQueues.size();
-        int totalPending = pushQueues.values().stream()
-                .mapToInt(PlayerPushQueue::pendingCount)
-                .sum();
+        int totalPending = pullQueues.values().stream().mapToInt(ArrayDeque::size).sum();
         int poolSize = pushPool != null ? pushPool.getPoolSize() : 0;
         int activeThreads = pushPool != null ? pushPool.getActiveCount() : 0;
-        return String.format("Queues: %d, Pending: %d, Threads: %d/%d",
-                totalQueues, totalPending, activeThreads, poolSize);
+        return String.format("PendingPulls: %d, Threads: %d/%d",
+                totalPending, activeThreads, poolSize);
     }
-
-    /** 批次队列任务（SeedRef 已退役，仅保留位置/维度字段）。 */
-    static record PushTask(ChunkPos pos, String dimension, PushKind kind) {
-        static PushTask full(ChunkPos pos, String dimension, PushKind kind) {
-            return new PushTask(pos, dimension, kind);
-        }
-
-        public ChunkPos pos() {
-            return pos;
-        }
-
-        public String dimension() {
-            return dimension;
-        }
-    }
-    /** 推送任务类型（SeedRef 已退役；FULL_VISIBLE 仅作历史占位）。 */
-    enum PushKind { FULL_VISIBLE }
-
-
-    /**
-     * 封批产物：主线程已完成世界快照（chunkData 或 packet），消费线程只做 encode/hash/ZSTD。
-     */
-    private record SealedWork(ServerPlayer player, PushTask task) {}
-
-    /** 通道项及其所属玩家的已封装批次计数。 */
-    private record SealedBatch(PlayerPushQueue owner, List<SealedWork> works) {}
 
     /** 已脱离 live world 的柱数据；后台可自由读。 */
     private record SectionDeltaColumnSnap(
             LevelChunkSection[] sections,
             List<SectionDeltaS2CPacket.HeightmapData> heightmaps,
             List<SectionDeltaS2CPacket.BlockEntityData> blockEntities) {}
-
-    /** 直连拓扑：full 推送仅受 vanilla 通道可写性约束（网关会话背压已退役）。 */
-    private static boolean isFullDeliveryChannelWritable(ServerPlayer player) {
-        return true;
-    }
-
-    /**
-     * 短窗口 ChunkHash 批次
-     */
-
-    /**
-     * 每玩家 FIFO 任务队列。已封装批次在 {@link #queuedBatches} 中单独计数，
-     * 因而不会把尚未到 tick 封批时机的任务错误地当作已排队批次。
-     */
-
-
-    /** 配置异常时保留历史安全默认值；正常配置值即每 tick 单批任务上限。 */
-    static int normalizeMaxChunksPerTick(int configured) {
-        return PullPacingValve.fullDeltaBudget(configured);
-    }
-
-    /** 未封批任务背压最多容纳十个满批，已封装批次另由 PlayerPushQueue 单独限额。 */
-    private static int queueCapacity() {
-        return MAX_QUEUED_BATCHES_PER_PLAYER * normalizeMaxChunksPerTick(
-                HassiumConfigService.getInstance().getConfig().master().maxChunksPerTick());
-    }
-
-    static final class PlayerPushQueue {
-        private final java.util.ArrayDeque<PushTask> tasks = new java.util.ArrayDeque<>();
-        /** 已到达但尚未获准进入主 FIFO 的推送义务，严格保持首次入队顺序。 */
-        private final java.util.ArrayDeque<PushTask> overflow = new java.util.ArrayDeque<>();
-        private int queuedBatches;
-
-        /** 仅统计可在本 tick 封批的主 FIFO；背压判定不得把 overflow 当作可用槽位。 */
-        synchronized int size() {
-            return tasks.size();
-        }
-
-        synchronized int pendingCount() {
-            return tasks.size() + overflow.size();
-        }
-
-        synchronized int overflowSize() {
-            return overflow.size();
-        }
-
-        synchronized int queuedBatchCount() {
-            return queuedBatches;
-        }
-
-        synchronized boolean isEmpty() {
-            return tasks.isEmpty() && overflow.isEmpty();
-        }
-
-        /**
-         * 把溢出 FIFO 队头回填至主 FIFO。调用方必须在接纳新任务前执行，禁止后来任务插队。
-         */
-        synchronized void promoteOverflow() {
-            while (!overflow.isEmpty() && tasks.size() < queueCapacity()) {
-                tasks.addLast(overflow.removeFirst());
-            }
-        }
-
-        /** 预留一个已封装批次名额；满时本 tick 不从任务队列取任何任务。 */
-        synchronized boolean tryReserveSealedBatch() {
-            if (queuedBatches >= MAX_QUEUED_BATCHES_PER_PLAYER) {
-                return false;
-            }
-            queuedBatches++;
-            return true;
-        }
-
-        /** 封批未产出任何可消费工作时归还预留名额。 */
-        synchronized void releaseSealedBatchReservation() {
-            if (queuedBatches > 0) {
-                queuedBatches--;
-            }
-        }
-
-        /** 常驻消费者从通道取到批次后释放其排队名额。 */
-        synchronized void dequeueSealedBatch() {
-            if (queuedBatches > 0) {
-                queuedBatches--;
-            }
-        }
-
-        /**
-         * 同柱已有任务视为成功（同类义务去重）。主 FIFO 满时改入 overflow，
-         * 并在 overflow 未清空前拒绝后来任务直接进入主 FIFO，避免失败柱被后到任务反超。
-         */
-        synchronized boolean enqueue(PushTask task) {
-            // 同柱已有任务视为成功（同类义务去重）
-            if (findSameTask(tasks, task) != null || findSameTask(overflow, task) != null) {
-                return true;
-            }
-            if (!overflow.isEmpty() || tasks.size() >= queueCapacity()) {
-                if (overflow.size() >= MAX_OVERFLOW_TASKS_PER_PLAYER) {
-                    Constants.LOG.warn("[PROCESS_QUEUE] Full-data overflow full (size={}); cannot stage chunk {}",
-                            overflow.size(), task.pos());
-                    return false;
-                }
-                overflow.addLast(task);
-                return true;
-            }
-            addToPrimary(task);
-            return true;
-        }
-
-        private static PushTask findSameTask(java.util.ArrayDeque<PushTask> queue, PushTask task) {
-            for (PushTask existing : queue) {
-                if (existing.pos().equals(task.pos()) && existing.dimension().equals(task.dimension())) {
-                    return existing;
-                }
-            }
-            return null;
-        }
-
-        private void addToPrimary(PushTask task) {
-            tasks.addLast(task);
-        }
-
-        synchronized PushTask poll() {
-            return tasks.pollFirst();
-        }
-        synchronized PushTask pollNearest(int centerX, int centerZ) {
-            PushTask nearest = null;
-            java.util.ArrayDeque<PushTask> source = null;
-            int nearestDistance = Integer.MAX_VALUE;
-            for (java.util.ArrayDeque<PushTask> candidateQueue :
-                    java.util.List.of(tasks, overflow)) {
-                for (PushTask candidate : candidateQueue) {
-                    int distance = Math.abs(candidate.pos().x - centerX)
-                            + Math.abs(candidate.pos().z - centerZ);
-                    if (nearest == null || distance < nearestDistance) {
-                        nearest = candidate;
-                        nearestDistance = distance;
-                        source = candidateQueue;
-                    }
-                }
-            }
-            if (nearest != null) {
-                source.remove(nearest);
-            }
-            return nearest;
-        }
-
-        synchronized void clear() {
-            tasks.clear();
-            overflow.clear();
-            queuedBatches = 0;
-        }
-
-        synchronized void removeIf(java.util.function.Predicate<PushTask> predicate) {
-            tasks.removeIf(predicate);
-            overflow.removeIf(predicate);
-        }
-    }
 }
-
-
-
-
-

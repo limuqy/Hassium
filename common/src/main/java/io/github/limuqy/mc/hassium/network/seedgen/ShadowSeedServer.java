@@ -8,7 +8,6 @@ import io.github.limuqy.mc.hassium.compat.ShadowChunkMapCompat;
 import io.github.limuqy.mc.hassium.compat.ShadowServerCompat;
 import io.github.limuqy.mc.hassium.compat.LevelChunkSectionCompat;
 import io.github.limuqy.mc.hassium.mixin.ThreadedLevelLightEngineAccessor;
-import io.github.limuqy.mc.hassium.network.BlockEntityDataS2CPacket;
 import io.github.limuqy.mc.hassium.network.SectionDeltaS2CPacket;
 import io.github.limuqy.mc.hassium.network.sectiondelta.SectionDeltaSnapshot;
 import io.github.limuqy.mc.hassium.network.sectiondelta.SectionDeltaSnapshots;
@@ -865,44 +864,6 @@ public class ShadowSeedServer extends MinecraftServer {
         // BE NBT 不进 chunkHash：只标脏落盘，不要丢掉方块 hash 表（否则下次比对无谓重算）。
         io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.markContentDirty(
                 dimension, new ChunkPos(DimensionKey.chunkXOf(key), DimensionKey.chunkZOf(key)));
-    }
-
-    /**
-     * 缓存命中后主控 BE 快照：覆盖影子柱 NBT 并标脏落盘。不改 contentHash（方块未变）。
-     * 投递影子主循环；主循环已停则丢弃（下次进服再拉）。
-     */
-    public void applyBlockEntitySnapshot(String dimension, ChunkPos pos,
-                                         List<BlockEntityDataS2CPacket.BlockEntityData> blockEntities) {
-        if (pos == null || blockEntities == null || blockEntities.isEmpty()) {
-            return;
-        }
-        try {
-            this.execute(() -> {
-                LevelChunk chunk = injectedChunks.get(DimensionKey.key(dimension, pos.x, pos.z));
-                if (chunk == null) {
-                    return;
-                }
-                for (BlockEntityDataS2CPacket.BlockEntityData bed : blockEntities) {
-                    if (bed == null || bed.nbt() == null) {
-                        continue;
-                    }
-                    net.minecraft.world.level.block.entity.BlockEntity be = chunk.getBlockEntity(bed.pos());
-                    if (be == null) {
-                        continue;
-                    }
-                    CompoundTag copy = bed.nbt().copy();
-                    copy.putInt("x", bed.pos().getX());
-                    copy.putInt("y", bed.pos().getY());
-                    copy.putInt("z", bed.pos().getZ());
-                    BlockEntityCompat.loadFromTag(be, copy, this.overworld().registryAccess());
-                    // 同上：只标记所属 shadow column dirty，不触发邻柱查询。
-                    ChunkDataCompat.markUnsaved(chunk);
-                }
-                io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.markContentDirty(dimension, pos);
-            });
-        } catch (java.util.concurrent.RejectedExecutionException ignored) {
-            // 主循环已停：下次进服 hash 命中会再拉 BE
-        }
     }
 
     /**

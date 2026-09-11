@@ -9,7 +9,6 @@ import io.github.limuqy.mc.hassium.network.ClientChunkHandler;
 import io.github.limuqy.mc.hassium.network.ClientMetadataHandler;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
-import net.minecraft.client.multiplayer.ClientPacketListener;
 
 import java.nio.file.Path;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -114,7 +113,7 @@ public final class ClientLifecycleHelper {
         if (initialized) {
             return;
         }
-        // 单25565原版基线：不启动旧 NetworkCore gateway bootstrap；客户端保持原版连接。
+        // 单 25565 原版基线：客户端保持原版连接。
         initialized = true;
     }
 
@@ -210,9 +209,9 @@ public final class ClientLifecycleHelper {
     /**
      * 同步记录 gameDir/serverId（影子端世界目录定位；与 initializeCacheAsync 同口径）。
      * <p>
-     * P3 修复：gateway-only 首连时 vanilla 监听器晚于影子创建（{@code mc.getConnection()}
+     * P3 修复：首连时 vanilla 监听器可能晚于影子创建（{@code mc.getConnection()}
      * 的 serverData 不可用），此前此处静默跳过 → 影子端 worldRoot 回落 TEMP（进程退出
-     * 即丢）→ 重连读空盘全量 miss。现经网关会话监听器兜底（{@link #currentServerIp()}），
+     * 即丢）→ 重连读空盘全量 miss。现经 {@link #currentServerIp()} 兜底，
      * 保证握手完成前 serverId 即已记录——影子创建前置条件（握手完成）恒晚于本记录。
      */
     private static void recordCacheLocationSync() {
@@ -241,10 +240,6 @@ public final class ClientLifecycleHelper {
      * 来源优先级（与 SeedGenLevelCompat.resolveShadowWorldRoot 的 serverIp 兜底同源）：
      * <ol>
      *   <li>{@code mc.getConnection().getServerData().ip}——正常路径（vanilla 监听器已挂载）</li>
-     *   <li>{@code NetworkCore.gatewayOnlyLoginListener()} 的 serverData.ip——仅网关登录
-     *       期 vanilla 监听器未挂载时的兜底：网关会话从连接意图（MixinConnectScreen）起即持有
-     *       用户输入的 ServerData，handleGameProfile 后其监听器为携带该 ServerData 的
-     *       {@link ClientPacketListener}</li>
      * </ol>
      */
     public static String currentServerIp() {
@@ -267,7 +262,7 @@ public final class ClientLifecycleHelper {
             new java.util.concurrent.atomic.AtomicLong(0);
 
     /**
-     * 断开连接时清理（世界拆除之前）：关网关、清客户端队列。
+     * 断开连接时清理（世界拆除之前）：清客户端队列。
      * <p>
      * 不在这里 {@code pauseEncoding}，也不 park 影子端。1.20.1 Forge 注册表窗口
      * 由 {@code MixinMinecraft.clearLevel} HEAD/TAIL 短暂停编码；落盘在拆除

@@ -47,7 +47,8 @@ public class MixinClientHandshakePacketListenerImpl {
         int clientCaps = LoginCaps.buildClientCaps();
         FriendlyByteBuf answer = new FriendlyByteBuf(Unpooled.buffer());
         try {
-            new LoginHandshake.HelloAnswer(clientCaps, Constants.MOD_VERSION).encode(answer);
+            new LoginHandshake.HelloAnswer(clientCaps, Constants.MOD_VERSION,
+                    Constants.CURRENT_PROTOCOL_VERSION).encode(answer);
             connection.send(new net.minecraft.network.protocol.login.ServerboundCustomQueryPacket(
                     packet.getTransactionId(), answer));
             Constants.LOG.info("Hassium: login hello answered (clientCaps=0x{})",

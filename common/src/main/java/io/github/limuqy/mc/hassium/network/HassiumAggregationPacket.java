@@ -80,13 +80,9 @@ public class HassiumAggregationPacket {
             if (compress) {
                 // 使用 ZSTD 压缩（支持聚合包字典）
                 int level = config.getCompressionLevel();
-                boolean magicless = true; // 聚合包统一 ZSTD，硬编码
-
                 ZstdCompressCtx compressCtx = new ZstdCompressCtx();
                 compressCtx.setLevel(level);
-                if (magicless) {
-                    compressCtx.setMagicless(true);
-                }
+                compressCtx.setMagicless(true);
 
                 // 加载聚合包字典（如果有）
                 byte[] dict = DictionaryManager.getAggregationDict();
@@ -141,12 +137,8 @@ public class HassiumAggregationPacket {
             byte[] compressed = new byte[compressedLength];
             buf.readBytes(compressed);
 
-            boolean magicless = true; // 聚合包统一 ZSTD，硬编码
-
             ZstdDecompressCtx decompressCtx = new ZstdDecompressCtx();
-            if (magicless) {
-                decompressCtx.setMagicless(true);
-            }
+            decompressCtx.setMagicless(true);
 
             // 只有当标志位指示使用了字典时，才加载字典
             if (flag == COMPRESSED_WITH_DICT_FLAG) {

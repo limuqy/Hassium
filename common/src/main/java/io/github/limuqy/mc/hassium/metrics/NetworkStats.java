@@ -11,21 +11,16 @@ import io.github.limuqy.mc.hassium.network.sectiondelta.SectionPlaneSyndrome;
  * 单一口径：
  * <ul>
  *   <li>{@code vanillaBytes*} — 仅由应用层（区块 / 聚合子包 / section-delta）写入</li>
- *   <li>{@code actualBytes*} — 仅由 Netty 管线（{@code ZstdContextEncoder} /
- *       {@code SkipAwareZstdEncoder} / {@code ZstdContextDecoder}）的 {@code recordWire*}
- *       写入</li>
+ *   <li>{@code actualBytes*} — 仅由 Netty 出站/入站计量写入</li>
  * </ul>
  * 应用层禁止再写 actual，避免双重计数。紧凑包头不单独埋点（体现在聚合 vanilla vs 线缆 actual 之差）。
  * <p>
  * 使用方式：
  * <pre>
- * // 在服务端区块发送后（仅记 vanilla；actual 由管线层 recordWireBytes* 写入）
+ * // 在服务端区块发送后（仅记 vanilla）
  * NetworkStats.recordChunkSent(vanillaSize);
  *
- * // 管线编码后记录线缆字节（ZstdContextEncoder.encode 结尾）
- * NetworkStats.recordWireBytesSent(out.writerIndex() - outStart);
- *
- * // 客户端收到压缩区块后（仅记 vanilla；actual 由管线层写入）
+ * // 客户端收到压缩区块后（仅记 vanilla）
  * NetworkStats.recordChunkReceived(compressed.originalSize);
  *
  * // 聚合包编码后记录原版等价总字节（encode 循环累加后调用一次）

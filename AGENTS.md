@@ -114,7 +114,7 @@ fabric/ | forge/ | neoforge/
 |----|------|
 | `storage/` | type 126 写缓冲 / chunkHash 桥；压缩由 `compression/CompressionService` 收口 |
 | `compression/` | codec / 字典 |
-| `network/` | 直连传输面：登录期握手 `network/handshake/`（LoginHandshake / LoginCaps / 双端激活）+ 客户端摄入管线（ClientChunkPipeline / ClientMetadataHandler）+ 服务端区块推送（ServerChunkPushManager / ChunkSender）+ 聚合与 ZstdPipeline 链（HassiumAggregationManager / ZstdPipelineSwitcher）；区块核心：`network/seedgen/` 影子端（`ShadowSeedServer` 等，= 区块核心后端引擎） |
+| `network/` | 直连传输面：登录期握手 `network/handshake/`（LoginHandshake / LoginCaps / 双端激活）+ 客户端摄入管线（ClientChunkPipeline / ClientMetadataHandler）+ 服务端区块推送（ServerChunkPushManager）+ 聚合链（HassiumAggregationManager）；区块核心：`network/seedgen/` 影子端（`ShadowSeedServer` 等，= 区块核心后端引擎） |
 | `cache/` | 客户端轻量设施（预算、生命周期、mesh 编译日志）；缓存存储与清理由影子端承担 |
 | `config/` `metrics/` `compat/` `mixin/` | 配置、指标、跨版本桥、Mixin |
 | `migration/` `api/` | 存档迁移工具与对外 API |
@@ -159,13 +159,13 @@ fabric/ | forge/ | neoforge/
 
 **区块核心**（客户端进程内区块域）——`network/seedgen/` 影子端（= 本域后端引擎：生成/算光/落盘/淘汰）+ `network/` 顶层摄入管线（ClientChunkPipeline / ClientMetadataHandler / ChunkHash 客户端侧）+ `cache/`（MainThreadBudget / 生命周期 / mesh 编译日志）；`chunk.*` 键族 = 本域配置族。
 
-**服务端传输面**——区块推送（ServerChunkPushManager / ChunkSender / SectionDelta 服务端）+ 聚合链（HassiumAggregationManager / ConnectionChannelAccess）；`master.*` 键族 = 本域配置族。
+**服务端传输面**——区块推送（ServerChunkPushManager / SectionDelta 服务端）+ 聚合链（HassiumAggregationManager / ConnectionChannelAccess）；`master.*` 键族 = 本域配置族。
 
 ```
 Mod 客户端 ←──唯一 vanilla TCP（登录期握手 + Play 期自定义 payload）──→ Mod 服务端
    ├ 登录期：login_hello（1.20.1）/ 配置任务 hello + PreHandshakePayload 应答（1.21.1+，Fabric 为 START 主动声明）
-   ├ Play 期：dict/index → 聚合 PENDING → play_init 激活 → 客户端 ACK → 聚合放行
-   └ 区块/实体/业务自定义 payload 全走 vanilla 通道（shadow_pull/block_entity/section_delta/light_delta）
+   ├ Play 期：dict/index → 聚合 PENDING → play_init 激活 → 客户端 aggregation_ready ACK → 聚合放行
+   └ 区块/实体/业务自定义 payload 全走 vanilla 通道（shadow_pull/section_delta/light_delta）
 ```
 
 - 网络核心（`network/core/` 进程内网关）、UDP 数据面（`network/dataplane/`）、续流迁移（ResumeTicket）均已裁剪，不复活

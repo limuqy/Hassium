@@ -38,7 +38,8 @@ class ConfigRestructureRoundTripTest {
                     "migrationMinTps", "migrationMaxLoadAverage", "migrationMaintenanceWindow",
                     "migrationHeartbeatIntervalMs", "migrationIdleWindowMs", "migrationSilentTimeoutMs",
                     "migrationFaultTimeoutMs", "migrationPrewarmTtlMs", "resumeTicketTtlMs",
-                    "bindHost", "authToken", "controlReachableEndpoints", "udpListeners");
+                    "bindHost", "authToken", "controlReachableEndpoints", "udpListeners",
+                    "seedGenThreads", "serverChunkPushThreads");
 
     // === 1. defaults 生成：57 键齐全 ===
 
@@ -48,13 +49,13 @@ class ConfigRestructureRoundTripTest {
         Map<String, ConfigEntry<?>> byPath = ConfigSchema.entries().stream()
                 .collect(Collectors.toMap(e -> e.scope() + "/" + e.path(), Function.identity()));
 
-        assertEquals(47, ConfigSchema.entries().size(), "schema 留存键数");
-        assertEquals(47, values.asMap().size(), "defaults 键数");
+        assertEquals(45, ConfigSchema.entries().size(), "schema 留存键数");
+        assertEquals(45, values.asMap().size(), "defaults 键数");
 
         Map<String, Long> prefixCounts = ConfigSchema.entries().stream()
                 .collect(Collectors.groupingBy(e -> e.path().substring(0, e.path().indexOf('.') + 1),
                         Collectors.counting()));
-        assertEquals(Map.of("chunk.", 18L, "master.", 10L, "debug.", 15L,
+        assertEquals(Map.of("chunk.", 17L, "master.", 9L, "debug.", 15L,
                 "storage.", 2L, "compat.", 2L), prefixCounts);
 
         // 双端同名键 chunk.seedGenEnabled 各一
@@ -78,7 +79,7 @@ class ConfigRestructureRoundTripTest {
     void clientTomlRoundTripsNewKeys(@TempDir Path root) throws IOException {
         HassiumConfig.ChunkCoreConfig chunk = new HassiumConfig.ChunkCoreConfig(
                 true, 8192, 0.5, 0.8, 0.2, 1200, 1024, 200,
-                true, true, 16, false, 12, 30, 4, true, true);
+                true, true, 16, false, 12, 30, true, true);
         HassiumConfig.DebugConfig debug = new HassiumConfig.DebugConfig(
                 true, false, true, false, true, false, true, true, true, false);
         // 网关拓扑退役：client.toml 不再承载任何 master.* 键（原迁移策略 6 键已删）
@@ -107,12 +108,12 @@ class ConfigRestructureRoundTripTest {
     void serverTomlRoundTripsNewKeys(@TempDir Path root) throws IOException {
         HassiumConfig.MasterCoreConfig master = new HassiumConfig.MasterCoreConfig(
                 true, 9, false, false, 8, 50L, 131072,
-                Set.of("MAIN_CHANNEL"), 7, 4);
+                Set.of("MAIN_CHANNEL"), 7);
         HassiumConfig.StorageConfig storage = new HassiumConfig.StorageConfig(true, 9);
         // server toml 只写 chunk.lightStrip/chunk.seedGenEnabled 两键，其余键读回默认 → 仅改这两键
         HassiumConfig.ChunkCoreConfig chunk = new HassiumConfig.ChunkCoreConfig(
                 true, 4096, 0.3, 0.7, 0.3, 6000, 0, 100,
-                true, true, 16, false, 6, 15, 2, false, false);
+                true, true, 16, false, 6, 15, false, false);
         HassiumConfig.CompatConfig compat = new HassiumConfig.CompatConfig(true, false);
         HassiumConfig.DebugConfig debug = new HassiumConfig.DebugConfig(
                 false, true, false, true, false, true, false, false, false, true);
@@ -184,9 +185,8 @@ class ConfigRestructureRoundTripTest {
         assertEquals(4, values.get(ConfigSchema.MASTER_AGGREGATION_MIN_BATCH));
         assertEquals(50L, values.get(ConfigSchema.MASTER_AGGREGATION_MAX_WAIT));
         assertEquals(256 * 1024, values.get(ConfigSchema.MASTER_AGGREGATION_MAX_SIZE));
-        // master.maxChunksPerTick / serverChunkPushThreads 默认 5 / 4
+        // master.maxChunksPerTick 默认 5
         assertEquals(5, values.get(ConfigSchema.MASTER_MAX_CHUNKS_PER_TICK));
-        assertEquals(4, values.get(ConfigSchema.MASTER_SERVER_PUSH_THREADS));
         // storage.enabled 默认 false（REQ 决策 6 修正 lang 错误）
         assertEquals(false, values.get(ConfigSchema.STORAGE_ENABLED));
         // debug.* 客户端网络指标默认关闭，退出自动复位默认开启
@@ -195,7 +195,7 @@ class ConfigRestructureRoundTripTest {
         // chunk 区块核心抽查
         assertEquals(6000, values.get(ConfigSchema.CHUNK_CLEANUP_INTERVAL_TICKS));
         assertEquals(0.3, values.get(ConfigSchema.CHUNK_HOT_SCORE_THRESHOLD));
-        // 黑名单 7 项（CHUNK_PAYLOAD_S2C 随 chunk_payload 通道退役移除；旧 SECTION_DELTA_S2C 更早随独立通道删除）
-        assertEquals(7, values.get(ConfigSchema.MASTER_COMPRESSION_BLACKLIST).size());
+        // 黑名单 5 项（handshake / BE 专用通道随退役移除）
+        assertEquals(5, values.get(ConfigSchema.MASTER_COMPRESSION_BLACKLIST).size());
     }
 }

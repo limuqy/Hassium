@@ -16,13 +16,15 @@ class LoginHandshakeTest {
 
     @Test
     void helloAnswerRoundTrips() {
-        LoginHandshake.HelloAnswer original = new LoginHandshake.HelloAnswer(0x1F3, "2.0.0+build.1");
+        LoginHandshake.HelloAnswer original =
+                new LoginHandshake.HelloAnswer(0x1F3, "2.0.0+build.1", 2);
         FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
         try {
             original.encode(buf);
             LoginHandshake.HelloAnswer decoded = LoginHandshake.HelloAnswer.decode(buf);
             assertEquals(original.clientCaps(), decoded.clientCaps());
             assertEquals(original.modVersion(), decoded.modVersion());
+            assertEquals(original.protocolVersion(), decoded.protocolVersion());
         } finally {
             buf.release();
         }
@@ -69,11 +71,26 @@ class LoginHandshakeTest {
     }
 
     @Test
+    void helloAnswerMissingProtocolIsRejected() {
+        FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
+        try {
+            buf.writeVarInt(0x1F3);
+            buf.writeUtf("2.0.0", 128);
+            LoginHandshake.HelloAnswer decoded = LoginHandshake.HelloAnswer.decode(buf);
+            assertEquals(0, decoded.protocolVersion());
+            assertFalse(LoginHandshake.isProtocolVersionAccepted(
+                    decoded.protocolVersion(), 2));
+        } finally {
+            buf.release();
+        }
+    }
+
+    @Test
     void protocolVersionBoundaries() {
-        assertTrue(LoginHandshake.isProtocolVersionAccepted(1, 1));
-        assertTrue(LoginHandshake.isProtocolVersionAccepted(1, 7));
-        assertFalse(LoginHandshake.isProtocolVersionAccepted(0, 7));
-        assertFalse(LoginHandshake.isProtocolVersionAccepted(8, 7));
+        assertTrue(LoginHandshake.isProtocolVersionAccepted(2, 2));
+        assertFalse(LoginHandshake.isProtocolVersionAccepted(1, 2));
+        assertFalse(LoginHandshake.isProtocolVersionAccepted(0, 2));
+        assertFalse(LoginHandshake.isProtocolVersionAccepted(3, 2));
     }
 
     @Test
@@ -91,6 +108,8 @@ class LoginHandshakeTest {
     void describeCapsListsNegotiatedBitsStably() {
         int caps = LoginCaps.AGGREGATION | LoginCaps.SEED_GEN | LoginCaps.SHADOW_PULL;
         assertEquals("[agg,seed,pull]", LoginHandshake.describeCaps(caps));
+        int withPullMode = caps | LoginCaps.PULL_MODE;
+        assertEquals("[agg,seed,pull,pull_mode]", LoginHandshake.describeCaps(withPullMode));
         assertEquals("[]", LoginHandshake.describeCaps(0));
     }
 

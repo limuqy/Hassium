@@ -152,33 +152,7 @@ public final class PayloadHandlers {
         }
     }
 
-    /**
-     * block_entity_data_s2c：方块实体数据 → {@link ClientMetadataHandler}。
-     */
-    public static void handleBlockEntityData(byte[] data) {
-        try {
-            ClientMetadataHandler.handleBlockEntityDataPacket(BlockEntityDataS2CPacket.decode(wrap(data)));
-        } catch (Exception e) {
-            LOGGER.error("[CLIENT] Failed to handle block entity data", e);
-        }
-    }
-
     // ===== 服务端 C2S 解包分发 =====
-
-    /**
-     * block_entity_request_c2s → {@link ServerChunkPushManager}（主线程由 loader 封送）。
-     */
-    public static void handleBlockEntityRequest(byte[] data, ServerPlayer player) {
-        if (player == null) {
-            return;
-        }
-        try {
-            BlockEntityRequestC2SPacket request = BlockEntityRequestC2SPacket.decode(wrap(data));
-            ServerChunkPushManager.getInstance().handleBlockEntityRequest(player, request);
-        } catch (Exception e) {
-            LOGGER.error("[SERVER] Failed to handle block entity request", e);
-        }
-    }
 
     /**
      * shadow_pull_request_c2s：decode → 权威 Compare+Pull → encode，返回响应

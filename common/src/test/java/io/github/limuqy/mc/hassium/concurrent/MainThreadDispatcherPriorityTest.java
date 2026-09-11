@@ -116,19 +116,19 @@ class MainThreadDispatcherPriorityTest {
     }
 
     @Test
-    @DisplayName("同位置不同语义（apply vs BE）互不取代")
+    @DisplayName("同位置不同语义（apply vs light）互不取代")
     void samePosDifferentOpDoNotSupersede() {
         MainThreadDispatcher.updatePlayerPosition(6 * 16 + 8.0, -37 * 16 + 8.0);
 
         List<String> applied = new ArrayList<>();
         ChunkPos pos = new ChunkPos(6, -37);
         MainThreadDispatcher.execute(() -> applied.add("chunk"), pos);
-        MainThreadDispatcher.execute(() -> applied.add("be"),
-                MainThreadDispatcher.chunkKey(pos, MainThreadDispatcher.OP_BLOCK_ENTITY));
+        MainThreadDispatcher.execute(() -> applied.add("light"),
+                MainThreadDispatcher.chunkKey(pos, MainThreadDispatcher.OP_LIGHT_UPDATE));
         MainThreadDispatcher.flushClient(10);
 
         assertEquals(0, MainThreadDispatcher.getClientQueueSize());
-        assertEquals(List.of("chunk", "be"), applied);
+        assertEquals(List.of("chunk", "light"), applied);
     }
 
     @Test

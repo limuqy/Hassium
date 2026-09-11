@@ -38,7 +38,7 @@ Hassium pairs a client and server mod to optimize Minecraft along **efficient co
 - **Goal**: the server never saturates its main thread during joins or view expansion, and the client avoids stutter spikes
 - **Server side**:
   - **Per-tick cap**: `master.maxChunksPerTick` (default `5`) limits per-player per-tick Pull FULL/DELTA completions (5×20 = 100/s at full tick); UNCHANGED is a separate cap of 32
-  - **Background serialization**: encode / ZSTD / hash / send all run on a fixed push pool (`master.serverChunkPushThreads`, default 4); the main thread only builds packet snapshots — aligned with vanilla (main thread builds, netty encodes)
+  - **Background serialization**: encode / ZSTD / hash / send run on a CPU-count push pool (`availableProcessors()`); the main thread only builds packet snapshots — aligned with vanilla (main thread builds, netty encodes)
 - **Client side**:
   - Per-frame apply budget `chunk.mainThreadChunkBudgetMs` (default `15`)
   - JoinBoost temporarily raises the budget for 30s after join (30ms cap window), then falls back
@@ -95,7 +95,7 @@ Hassium pairs a client and server mod to optimize Minecraft along **efficient co
 
 - **Goal**: pristine terrain no longer needs per-chunk transmission — zero-bandwidth generation
 - **How**: for pristine chunks the server sends a reference (seed + coords + hash, tens of bytes) instead of chunk data; the client shadow server generates locally with the same seed, sharing the remote pipeline (lighting → official packet → official channel), and saves on disconnect; failures/timeouts fall back to full requests
-- **Config**: `chunk.seedGenEnabled` (default `false`, both sides same version), `chunk.seedGenThreads` (2)
+- **Config**: `chunk.seedGenEnabled` (default `false`, both sides same version)
 - **Risk**: **server enablement sends the world seed to clients — equivalent to leaking the server seed** (seed maps / exported saves can exploit it)
 
 ---

@@ -36,9 +36,6 @@ public final class ConfigSchema {
             "Per-tick cache-read production cap (shadow enqueue + shadow disk); consume is time-budget only");
     public static final ConfigKey<Integer> CHUNK_MAIN_THREAD_CHUNK_BUDGET_MS = integer("chunk.mainThreadChunkBudgetMs", ConfigScope.CLIENT, Domain.CHUNK_CORE, 15, 1, 50,
             "主线程 apply 预算（ms）", "Main-thread apply budget in ms");
-    public static final ConfigKey<Integer> CHUNK_SEED_GEN_THREADS = integer("chunk.seedGenThreads", ConfigScope.CLIENT, Domain.CHUNK_CORE, 2, 0, 64,
-            "SeedGen 本地生成线程数（0=禁用本地生成，回退全量）",
-            "SeedGen local-generation thread count (0 = disable; falls back to full chunk)");
     public static final ConfigKey<Boolean> CLIENT_CHUNK_SEED_GEN_ENABLED = bool("chunk.seedGenEnabled", ConfigScope.CLIENT, Domain.CHUNK_CORE, false,
             "是否启用 SeedGen（本地生成 pristine 区块；需双端同版本，默认关）。服务端开启时会下发世界种子",
             "Enable SeedGen (local pristine chunks; both sides same version; default off). Server enablement sends the world seed");
@@ -81,9 +78,6 @@ public final class ConfigSchema {
     public static final ConfigKey<Integer> MASTER_MAX_CHUNKS_PER_TICK = integer("master.maxChunksPerTick", ConfigScope.SERVER, Domain.MASTER_CORE, 5, 1, 256,
             "每玩家每 tick 完成的 Pull 裁决上限（FULL/DELTA；满 tick ≈ 本值×20/s）",
             "Per-player per-tick Pull completion cap for FULL/DELTA (≈ value×20/s at full tick)");
-    public static final ConfigKey<Integer> MASTER_SERVER_PUSH_THREADS = integer("master.serverChunkPushThreads", ConfigScope.SERVER, Domain.MASTER_CORE, 4, 1, 64,
-            "服务端区块推送消费线程数（取批调度；实际计算走 CPU 核数全局池）",
-            "Server chunk-push consumer thread count (batch dispatch; compute runs on the global CPU-count pool)");
 
     // === 区块核心（chunk.*；SERVER 2 键）===
     public static final ConfigKey<Boolean> SERVER_CHUNK_SEED_GEN_ENABLED = bool("chunk.seedGenEnabled", ConfigScope.SERVER, Domain.CHUNK_CORE, false,

@@ -25,7 +25,6 @@ public final class ConfigSnapshotAdapter {
                 .with(ConfigSchema.CHUNK_OVD_LOCAL_GENERATION, chunk.ovdLocalGeneration())
                 .with(ConfigSchema.CHUNK_MAX_CHUNKS_PER_FRAME, chunk.maxChunksPerFrame())
                 .with(ConfigSchema.CHUNK_MAIN_THREAD_CHUNK_BUDGET_MS, chunk.mainThreadChunkBudgetMs())
-                .with(ConfigSchema.CHUNK_SEED_GEN_THREADS, chunk.seedGenThreads())
                 .with(ConfigSchema.CLIENT_CHUNK_SEED_GEN_ENABLED, chunk.seedGenEnabled())
                 .with(ConfigSchema.CHUNK_LIGHT_STRIP, chunk.lightStrip());
         HassiumConfig.DebugConfig debug = config.debug();
@@ -55,7 +54,6 @@ public final class ConfigSnapshotAdapter {
                 .with(ConfigSchema.MASTER_AGGREGATION_MAX_SIZE, master.aggregationMaxSize())
                 .with(ConfigSchema.MASTER_COMPRESSION_BLACKLIST, new ArrayList<>(master.compressionBlacklist()))
                 .with(ConfigSchema.MASTER_MAX_CHUNKS_PER_TICK, master.maxChunksPerTick())
-                .with(ConfigSchema.MASTER_SERVER_PUSH_THREADS, master.serverChunkPushThreads())
                 .with(ConfigSchema.SERVER_CHUNK_SEED_GEN_ENABLED, chunk.seedGenEnabled());
 
         HassiumConfig.CompatConfig compat = config.compat();
@@ -91,7 +89,7 @@ public final class ConfigSnapshotAdapter {
                 values.get(ConfigSchema.CHUNK_MAX_RENDER_DISTANCE),
                 values.get(ConfigSchema.CHUNK_OVD_LOCAL_GENERATION),
                 values.get(ConfigSchema.CHUNK_MAX_CHUNKS_PER_FRAME),
-                values.get(ConfigSchema.CHUNK_MAIN_THREAD_CHUNK_BUDGET_MS), values.get(ConfigSchema.CHUNK_SEED_GEN_THREADS),
+                values.get(ConfigSchema.CHUNK_MAIN_THREAD_CHUNK_BUDGET_MS),
                 seedGenValue(values, physicalClient, ConfigSchema.CLIENT_CHUNK_SEED_GEN_ENABLED, ConfigSchema.SERVER_CHUNK_SEED_GEN_ENABLED),
                 values.get(ConfigSchema.CHUNK_LIGHT_STRIP));
         HassiumConfig.MasterCoreConfig master = new HassiumConfig.MasterCoreConfig(
@@ -100,7 +98,7 @@ public final class ConfigSnapshotAdapter {
                 values.get(ConfigSchema.MASTER_AGGREGATION_MIN_BATCH), values.get(ConfigSchema.MASTER_AGGREGATION_MAX_WAIT),
                 values.get(ConfigSchema.MASTER_AGGREGATION_MAX_SIZE),
                 SetCopy.copy(values.get(ConfigSchema.MASTER_COMPRESSION_BLACKLIST)),
-                values.get(ConfigSchema.MASTER_MAX_CHUNKS_PER_TICK), values.get(ConfigSchema.MASTER_SERVER_PUSH_THREADS));
+                values.get(ConfigSchema.MASTER_MAX_CHUNKS_PER_TICK));
         HassiumConfig.CompatConfig compat = new HassiumConfig.CompatConfig(
                 values.get(ConfigSchema.COMPAT_REQUIRE_CLIENT_MOD), values.get(ConfigSchema.COMPAT_AUTO_DOWNGRADE));
         HassiumConfig.DebugConfig debug = new HassiumConfig.DebugConfig(

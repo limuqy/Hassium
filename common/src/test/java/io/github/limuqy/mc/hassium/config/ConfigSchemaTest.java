@@ -41,7 +41,8 @@ class ConfigSchemaTest {
                 "master.migrationMaintenanceWindow", "master.migrationHeartbeatIntervalMs",
                 "master.migrationIdleWindowMs", "master.migrationSilentTimeoutMs",
                 "master.migrationPrewarmTtlMs", "master.resumeTicketTtlMs",
-                "dataplane.enabled", "dataplane.udpListeners"
+                "dataplane.enabled", "dataplane.udpListeners",
+                "chunk.seedGenThreads", "master.serverChunkPushThreads"
         };
         for (String path : retiredPaths) {
             assertTrue(ConfigSchema.entries().stream().noneMatch(e -> e.path().equals(path)),

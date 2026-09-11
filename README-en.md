@@ -88,7 +88,6 @@ Files: `config/hassium/hassium-client.toml`, `config/hassium/hassium-server.toml
 | `chunk.enabled` | `true` | Chunk-core master switch (shadow-world saving/lighting/cache/Pull mode; off = vanilla path everywhere) |
 | `chunk.sectionDeltaEnabled` | `true` | Section delta (server-side planning + client-side apply) |
 | `chunk.seedGenEnabled` | `false` | SeedGen local generation (both sides same version; **server enablement leaks the world seed**) |
-| `chunk.seedGenThreads` | `2` | Local-generation thread count (0 = disable; SeedRef always falls back to full chunks) |
 | `chunk.mainThreadChunkBudgetMs` | `15` | Client per-frame apply budget (ms) |
 | `chunk.maxChunksPerFrame` | `6` | Per-tick cache-read production cap (shadow enqueue + shadow disk) |
 | `chunk.maxSizeMb` | `4096` | Cache size cap (MB; excess triggers heat eviction) |
@@ -104,7 +103,6 @@ Files: `config/hassium/hassium-client.toml`, `config/hassium/hassium-server.toml
 | `master.aggregationMaxSize` | `262144` | Aggregation max size (bytes) |
 | `master.compressionLevel` | `3` | Private-channel ZSTD level |
 | `master.useContextCompression` | `true` | Context compression (dictionary ZSTD) |
-| `master.serverChunkPushThreads` | `4` | Server chunk-push background threads |
 | `master.compressionBlacklist` | control-plane keys | Compression/aggregation blacklist (control plane bypasses the aggregation buffer) |
 | `compat.requireClientMod` | `false` | Allow mod-less clients (true = kick when login handshake fails) |
 | `compat.autoDowngradeOnError` | `true` | Auto-downgrade on error |

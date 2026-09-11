@@ -66,7 +66,7 @@ sequenceDiagram
   S->>C: dictionary_sync / index_sync → 聚合 PENDING（5s 无 ACK 降级直发）
   S->>C: `hassium:play_init_s2c`（协商位 + SeedGen 种子）
   C->>C: 影子端种子初始化（原版压缩层不触碰）
-  C->>S: 激活 ACK（compression_ready 通道，index_sync 后）
+  C->>S: 激活 ACK（aggregation_ready 通道，index_sync 后）
   S->>S: 聚合 PENDING→ENABLED（缓冲帧冲出）
 ```
 
@@ -262,7 +262,7 @@ Sector 2+:    [length(4)][type=126][magic 0x48][hash(8)][ZSTD 压缩数据]
 - **Fabric**：Night Config 自管 toml + jiJ **Cloth**；安装 **Mod Menu** 即可打开。不依赖 FCAP / Configured。
 - **Forge / NeoForge**：原生 ConfigSpec + jiJ **Cloth**（模组列表「配置」按钮）；亦可手改 toml。Configured 仍可选。FCAP Forge 桥已随 Forge 1.20.6 退役。
 
-各项 GUI 文案见 `assets/hassium/lang/*`；toml 注释仍为中文。键集真相源：`ConfigSchema`（41 键）。
+各项 GUI 文案见 `assets/hassium/lang/*`；toml 注释仍为中文。键集真相源：`ConfigSchema`（45 键）。
 
 | 项 | 默认 | 说明 |
 |----|------|------|
@@ -281,21 +281,19 @@ Sector 2+:    [length(4)][type=126][magic 0x48][hash(8)][ZSTD 压缩数据]
 | `chunk.cleanupIntervalTicks` | 6000 | 清理检查间隔（刻） |
 | `chunk.targetSizeMb` | 0（自动） | 目标缓存大小（MB） |
 | `chunk.minCleanupBatchSize` | 100 | 每轮最多淘汰的 region 文件数 |
-| `chunk.seedGenThreads` | 2 | 保留键（SeedRef 工作池已退役；本地生成由影子 tracking 触发 vanilla worldgen） |
 | `chunk.seedGenEnabled` | **false** | 本地区块生成（双端同版本，默认关）。**服务端开启会向客户端下发世界种子（泄露服务端种子）**；客户端门控开时影子 tracking 触发 vanilla worldgen，交付后 compare-pull |
 | `chunk.lightStrip` | true | 服务端光照剥离，必须经 Hassium 能力握手 |
 | `master.enabled` | true | 服务端网络通道总开关（登录期握手/压缩/聚合的门） |
 | `master.compressionLevel` | 3 | 自有通道 ZSTD 压缩等级（速度优先） |
 | `master.useContextCompression` | true | 上下文压缩（字典 ZSTD） |
 | `master.maxChunksPerTick` | **5** | 每玩家每 tick 完成的 Pull FULL/DELTA 上限（主线程 hash/比较；encode/ZSTD 在推送池；满 tick ≈ 100/s） |
-| `master.serverChunkPushThreads` | **4** | 服务端区块推送固定线程数（encode / hash / ZSTD） |
 | `master.enablePacketAggregation` / `aggregationMinBatchSize` / `aggregationMaxWaitTimeMs` / `aggregationMaxSize` | `true` / `4` / `50ms` / `256KB` | 包聚合（服务端拦截 + 客户端反聚合；ACK 超时 5s 自动降级） |
 | `master.compressionBlacklist` | 控制面键集 | 压缩/聚合黑名单（控制面不进聚合缓冲） |
 | `compat.requireClientMod` | false | 无模组客户端可连（true 时登录期握手失败即踢出，替代超时等待） |
 | `compat.autoDowngradeOnError` | true | 出错时自动降级 |
 | `debug.*` | 全 false | 调试分类日志，见 §10 |
 
-网关监听/端点/鉴权（`controlReachableEndpoints` / `bindHost` / `authToken`）、L1 迁移（`master.migration*` 7 键）、续流票据（`resumeTicketTtlMs`）、UDP 数据面（`dataplane.*`）、管线级全局包压缩（`globalPacketCompression` 等 4 键）、`chunk.ovdUnloadDelaySecs`（延迟卸载取消，不再恢复）、`net.*` 客户端网络键族、`chunk.hassiumEngineEnabled` / `chunk.unloadDelaySecs` 均已退役删除；旧 toml 中的残留键由加载器静默清除（legacy key hygiene，见 `FabricTomlConfigIO` 清理表）。OVD 三键（`viewDistanceExtensionEnabled` / `maxRenderDistance` / `ovdLocalGeneration`）随双窗重做恢复。
+网关监听/端点/鉴权（`controlReachableEndpoints` / `bindHost` / `authToken`）、L1 迁移（`master.migration*` 7 键）、续流票据（`resumeTicketTtlMs`）、UDP 数据面（`dataplane.*`）、管线级全局包压缩（`globalPacketCompression` 等 4 键）、`chunk.ovdUnloadDelaySecs`（延迟卸载取消，不再恢复）、`chunk.seedGenThreads` / `master.serverChunkPushThreads`、`net.*` 客户端网络键族、`chunk.hassiumEngineEnabled` / `chunk.unloadDelaySecs` 均已退役删除；旧 toml 中的残留键由加载器静默清除（legacy key hygiene，见 `FabricTomlConfigIO` 清理表）。OVD 三键（`viewDistanceExtensionEnabled` / `maxRenderDistance` / `ovdLocalGeneration`）随双窗重做恢复。
 
 ## 10. 日志策略
 

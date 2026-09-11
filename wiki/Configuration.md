@@ -41,8 +41,7 @@ Hassium 启动时在 `config/hassium/` 自动生成两份 TOML：
 | `chunk.sectionDeltaEnabled` | `true` | 缓存过期时只补变更方块（过多则整段/整块）；关闭则过期走全量 |
 | `chunk.maxChunksPerFrame` | `6` | 每 tick 缓存读取生产上限（影子入队 + 影子读盘）；主线程 apply 只受 `mainThreadChunkBudgetMs` 约束 |
 | `chunk.mainThreadChunkBudgetMs` | `15` | 客户端每帧 apply 区块的预算（ms）；进服 30s 内走 JoinBoost 临时抬高 |
-| `chunk.seedGenThreads` | `2` | 本地区块生成线程数（0=禁用本地生成，SeedRef 一律回退全量） |
-| `chunk.seedGenEnabled` | `false` | 本地区块生成（双端键）：收到 SeedRef 引用时本地按世界种子重新生成区块（哈希校验兜底），避免整块下载；需双端同版本。**服务端开启会下发世界种子（泄露种子）** |
+| `chunk.seedGenEnabled` | `false` | 本地区块生成（双端键）：影子 tracking 触发 vanilla worldgen 后 compare-pull；需双端同版本。**服务端开启会下发世界种子（泄露种子）** |
 
 ### 区块核心（`chunk.*`，服务端）
 
@@ -61,9 +60,8 @@ Hassium 启动时在 `config/hassium/` 自动生成两份 TOML：
 | `master.aggregationMinBatchSize` | `4` | 聚合最小批量 |
 | `master.aggregationMaxWaitTimeMs` | `50` | 聚合最大等待时间（ms；ACK 超时 5s 自动降级直发） |
 | `master.aggregationMaxSize` | `262144` | 聚合最大大小（字节） |
-| `master.compressionBlacklist` | 控制面键集 | 包 ID 列表，命中的包不进压缩/聚合（默认含控制面：握手 / 字典 / 索引 / chunkHash / 光增量 / BE 数据等） |
+| `master.compressionBlacklist` | 控制面键集 | 包 ID 列表，命中的包不进压缩/聚合（默认含控制面：字典 / 索引 / 光增量 / 聚合自身等） |
 | `master.maxChunksPerTick` | `5` | 每玩家每 tick 完成的 Pull FULL/DELTA 上限（发送速率 = 本值 × tick 节奏，满 tick ≈ 5×20 = 100/s；UNCHANGED 另额 32；掉刻自然降速保护主线程） |
-| `master.serverChunkPushThreads` | `4` | 服务端区块推送固定线程数（encode / hash / ZSTD 后台池） |
 
 ### 存储（`storage.*`）
 

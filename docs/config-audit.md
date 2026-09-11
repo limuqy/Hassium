@@ -1,6 +1,6 @@
 # Hassium 配置项审计
 
-> 审计日期：2026-09-10（对齐影子双窗 OVD 恢复三键后键集；真相源 `ConfigSchema`，41 键）。
+> 审计日期：2026-09-12（对齐 SeedGen 线程/直推线程键删除后键集；真相源 `ConfigSchema`，45 键）。
 > 历史审计：2026-07-21（1.1.2 旧结构）、2026-08-09（config-restructure，74 键 + 删键 4）、2026-09-04（直连拓扑裁剪标注）、2026-09-10（OVD 退役 38 键）——键集均已过时，本文为当前唯一快照。
 
 ## 一、配置文件结构与加载链
@@ -17,15 +17,15 @@
 
 > 历史（1.1.2 及更早）：Fabric 三文件模型（`client.toml` + `common.toml` + `server.toml`）、Forge/NeoForge 三 spec（CLIENT/COMMON/SERVER）——2.0.0 已统一为**双文件 / 双 scope** 模型。
 
-**Legacy key hygiene**：旧 toml 残留键由加载器静默清除（`FabricTomlConfigIO` 清理表），不迁移、不报错。已清除键族：`net.*` 全族、`dataplane.*`、`master.controlReachableEndpoints` / `bindHost` / `authToken` / `migration*`（7 键）/ `resumeTicketTtlMs` / `globalPacketCompression` / `globalCompressionLevel` / `globalCompressionThreshold` / `magiclessZstd`、`chunk.ovdUnloadDelaySecs`（延迟卸载取消）/ `hassiumEngineEnabled` / `unloadDelaySecs` / `compressionLevel`、`storage.mode`。OVD 三键（`viewDistanceExtensionEnabled` / `maxRenderDistance` / `ovdLocalGeneration`）已随双窗重做恢复，不再清理。
+**Legacy key hygiene**：旧 toml 残留键由加载器静默清除（`FabricTomlConfigIO` 清理表），不迁移、不报错。已清除键族：`net.*` 全族、`dataplane.*`、`master.controlReachableEndpoints` / `bindHost` / `authToken` / `migration*`（7 键）/ `resumeTicketTtlMs` / `globalPacketCompression` / `globalCompressionLevel` / `globalCompressionThreshold` / `magiclessZstd`、`chunk.ovdUnloadDelaySecs`（延迟卸载取消）/ `hassiumEngineEnabled` / `unloadDelaySecs` / `compressionLevel`、`storage.mode`、`chunk.seedGenThreads` / `master.serverChunkPushThreads`。OVD 三键（`viewDistanceExtensionEnabled` / `maxRenderDistance` / `ovdLocalGeneration`）已随双窗重做恢复，不再清理。
 
-## 二、全部配置项（ConfigSchema，41 键）
+## 二、全部配置项（ConfigSchema，45 键）
 
 键名前缀：区块核心 `chunk.*` / 服务端传输面 `master.*` / 存储 `storage.*` / 兼容 `compat.*` / 调试 `debug.*`。
 
 ### A. CLIENT 键（client.toml / client spec，25 键）
 
-**A1. chunk.\*（18 键，区块核心）**
+**A1. chunk.\*（15 键，区块核心）**
 
 | 配置项 | 默认值 | 说明 |
 |--------|--------|------|
@@ -43,7 +43,6 @@
 | `chunk.ovdLocalGeneration` | `false` | OVD 窗缓存 miss 时本地生成（需真实 seed） |
 | `chunk.maxChunksPerFrame` | `6` | 每 tick 缓存读取生产上限（影子入队 + 影子读盘；主线程消费只受时间预算） |
 | `chunk.mainThreadChunkBudgetMs` | `15` | 主线程 apply 预算（ms） |
-| `chunk.seedGenThreads` | `2` | SeedGen 本地生成线程数（0=禁用本地生成，SeedRef 一律回退全量） |
 | `chunk.seedGenEnabled` | `false` | SeedGen 本地生成（双端同版本；服务端开启时下发世界种子） |
 
 **A2. debug.\*（CLIENT 10 键；与 SERVER 同名键共用路径，scope 隔离）**
@@ -76,7 +75,7 @@
 | `storage.enabled` | `false` | 存档压缩总开关（**默认关**；开启改写存档格式 type 126，启用前备份；仅专用服务器写，单人/局域网保持原版格式、读兼容） |
 | `storage.zstdLevel` | `3` | 存储 ZSTD 压缩等级（1–22） |
 
-**B3. master.\*（10 键，服务端传输面）**
+**B3. master.\*（9 键，服务端传输面）**
 
 | 配置项 | 默认值 | 说明 |
 |--------|--------|------|
@@ -89,7 +88,6 @@
 | `master.aggregationMaxSize` | `262144` | 聚合最大大小（字节） |
 | `master.compressionBlacklist` | 控制面键集 | 压缩/聚合黑名单（控制面不进聚合缓冲） |
 | `master.maxChunksPerTick` | `5` | 每玩家每 tick 完成的 Pull FULL/DELTA 上限（满 tick ≈ 本值×20/s；UNCHANGED 另额 32） |
-| `master.serverChunkPushThreads` | `4` | 服务端区块推送固定线程数（encode / hash / ZSTD） |
 
 **B4. compat.\*（2 键）**
 
@@ -130,13 +128,13 @@
 
 | 分类（前缀） | scope | 键数 | 默认关 / 特殊 |
 |------|--------|------|----------------|
-| `chunk.*` | CLIENT | 18 | `seedGenEnabled`=false；`seedGenThreads`=0 表示禁用；`ovdLocalGeneration`=false |
+| `chunk.*` | CLIENT | 15 | `seedGenEnabled`=false；`ovdLocalGeneration`=false |
 | `debug.*` | CLIENT | 10 | 全 false（`networkMetricsAutoReset`=true） |
 | `storage.*` | SERVER | 2 | `enabled`=false |
-| `master.*` | SERVER | 10 | — |
+| `master.*` | SERVER | 9 | — |
 | `debug.*` | SERVER | 5 | 全 false |
-| `chunk.lightStrip` | SERVER | 1 | — |
-| **合计** | | **41** | |
+| `chunk.lightStrip` / `chunk.seedGenEnabled` | SERVER | 2 | `seedGenEnabled`=false |
+| **合计** | | **45** | |
 
 ## 五、审计方法
 

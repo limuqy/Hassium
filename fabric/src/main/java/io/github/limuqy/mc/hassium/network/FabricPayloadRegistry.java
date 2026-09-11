@@ -31,8 +31,6 @@ public final class FabricPayloadRegistry {
             type("index_sync_s2c");
     public static final CustomPacketPayload.Type<RawPayload> AGGREGATION_S2C_TYPE =
             type("aggregation");
-    public static final CustomPacketPayload.Type<RawPayload> BLOCK_ENTITY_DATA_S2C_TYPE =
-            type("block_entity_data_s2c");
     public static final CustomPacketPayload.Type<RawPayload> LIGHT_DELTA_S2C_TYPE =
             type("light_delta_s2c");
     public static final CustomPacketPayload.Type<RawPayload> SHADOW_PULL_RESPONSE_S2C_TYPE =
@@ -43,10 +41,8 @@ public final class FabricPayloadRegistry {
 
     // ===== C2S payload types (client -> server) =====
 
-    public static final CustomPacketPayload.Type<RawPayload> COMPRESSION_READY_C2S_TYPE =
-            type("compression_ready_c2s");
-    public static final CustomPacketPayload.Type<RawPayload> BLOCK_ENTITY_REQUEST_C2S_TYPE =
-            type("block_entity_request_c2s");
+    public static final CustomPacketPayload.Type<RawPayload> AGGREGATION_READY_C2S_TYPE =
+            type("aggregation_ready_c2s");
     public static final CustomPacketPayload.Type<RawPayload> SHADOW_PULL_REQUEST_C2S_TYPE =
             type("shadow_pull_request_c2s");
 
@@ -103,13 +99,11 @@ public final class FabricPayloadRegistry {
         PayloadTypeRegistry.playS2C().register(DICTIONARY_SYNC_S2C_TYPE, codec(DICTIONARY_SYNC_S2C_TYPE));
         PayloadTypeRegistry.playS2C().register(INDEX_SYNC_S2C_TYPE, codec(INDEX_SYNC_S2C_TYPE));
         PayloadTypeRegistry.playS2C().register(AGGREGATION_S2C_TYPE, codec(AGGREGATION_S2C_TYPE));
-        PayloadTypeRegistry.playS2C().register(BLOCK_ENTITY_DATA_S2C_TYPE, codec(BLOCK_ENTITY_DATA_S2C_TYPE));
         PayloadTypeRegistry.playS2C().register(LIGHT_DELTA_S2C_TYPE, codec(LIGHT_DELTA_S2C_TYPE));
         PayloadTypeRegistry.playS2C().register(SHADOW_PULL_RESPONSE_S2C_TYPE, codec(SHADOW_PULL_RESPONSE_S2C_TYPE));
         PayloadTypeRegistry.playS2C().register(PLAY_INIT_S2C_TYPE, codec(PLAY_INIT_S2C_TYPE));
 
-        PayloadTypeRegistry.playC2S().register(COMPRESSION_READY_C2S_TYPE, codec(COMPRESSION_READY_C2S_TYPE));
-        PayloadTypeRegistry.playC2S().register(BLOCK_ENTITY_REQUEST_C2S_TYPE, codec(BLOCK_ENTITY_REQUEST_C2S_TYPE));
+        PayloadTypeRegistry.playC2S().register(AGGREGATION_READY_C2S_TYPE, codec(AGGREGATION_READY_C2S_TYPE));
         PayloadTypeRegistry.playC2S().register(SHADOW_PULL_REQUEST_C2S_TYPE, codec(SHADOW_PULL_REQUEST_C2S_TYPE));
         // 预握手（login/配置阶段声明能力）：configuration 阶段 C2S payload
         PayloadTypeRegistry.configurationC2S().register(
@@ -117,7 +111,7 @@ public final class FabricPayloadRegistry {
                 io.github.limuqy.mc.hassium.network.PreHandshakePayload.STREAM_CODEC);
 
         // 注册 7 S2C + 3 C2S + 1 configurationC2S
-        LOGGER.info("Hassium: Registered 7 S2C and 3 C2S (+1 config) payload types for 1.21.1+");
+        LOGGER.info("Hassium: Registered 6 S2C and 2 C2S (+1 config) payload types for 1.21.1+");
     }
 
     /**

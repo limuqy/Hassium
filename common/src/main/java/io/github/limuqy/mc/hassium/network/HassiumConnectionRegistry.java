@@ -33,7 +33,7 @@ public class HassiumConnectionRegistry {
 
     /**
      * 将连接从待定提升为完全启用
-     * 收到客户端 CompressionReady 时调用
+     * 收到客户端 aggregation_ready 时调用
      */
     public static void markEnabled(Connection connection) {
         synchronized (PENDING) {

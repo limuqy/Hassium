@@ -41,7 +41,7 @@ import java.util.function.Function;
  * <p>
  * 登录期能力协商（{@code LoginCaps}）经 vanilla login query（1.20.1，common mixin）/
  * 配置阶段 pre-handshake C2S（1.21.1+，本类 messageBuilder 注册）完成；Play 期
- * {@code play_init_s2c} 激活、{@code compression_ready} ACK、字典/索引同步均由 common
+ * {@code play_init_s2c} 激活、{@code aggregation_ready} ACK、字典/索引同步均由 common
  * 握手链（{@code ServerHandshakeActivation} / {@code PlayInitClient}）经 SPI 走本通道，
  * 不再存在网关帧协议 / UDP 数据面 / 续流票据（2.0.0 直连裁剪）。
  */
@@ -131,31 +131,6 @@ public class ForgeNetworkManager implements INetworkManagerService {
                 java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT)
         );
 
-        CHANNEL.<BlockEntityRequestWrapper>registerMessage(
-                packetId++,
-                BlockEntityRequestWrapper.class,
-                BlockEntityRequestWrapper::encode,
-                BlockEntityRequestWrapper::decode,
-                (msg, ctx) -> {
-                    ctx.get().enqueueWork(() ->
-                            PayloadHandlers.handleBlockEntityRequest(msg.data(), ctx.get().getSender()));
-                    ctx.get().setPacketHandled(true);
-                },
-                java.util.Optional.of(NetworkDirection.PLAY_TO_SERVER)
-        );
-
-        CHANNEL.<BlockEntityDataWrapper>registerMessage(
-                packetId++,
-                BlockEntityDataWrapper.class,
-                BlockEntityDataWrapper::encode,
-                BlockEntityDataWrapper::decode,
-                (msg, ctx) -> {
-                    ctx.get().enqueueWork(() -> PayloadHandlers.handleBlockEntityData(msg.data()));
-                    ctx.get().setPacketHandled(true);
-                },
-                java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT)
-        );
-
         CHANNEL.<DictionarySyncWrapper>registerMessage(
                 packetId++,
                 DictionarySyncWrapper.class,
@@ -180,11 +155,11 @@ public class ForgeNetworkManager implements INetworkManagerService {
                 java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT)
         );
 
-        CHANNEL.<CompressionReadyWrapper>registerMessage(
+        CHANNEL.<AggregationReadyWrapper>registerMessage(
                 packetId++,
-                CompressionReadyWrapper.class,
-                CompressionReadyWrapper::encode,
-                CompressionReadyWrapper::decode,
+                AggregationReadyWrapper.class,
+                AggregationReadyWrapper::encode,
+                AggregationReadyWrapper::decode,
                 (msg, ctx) -> {
                     ctx.get().enqueueWork(() -> handleActivationReadyServer(ctx.get().getSender(), msg.ready()));
                     ctx.get().setPacketHandled(true);
@@ -261,12 +236,8 @@ public class ForgeNetworkManager implements INetworkManagerService {
         CHANNEL = channel
                 .play()
                     .serverbound()
-                        .addMain(BlockEntityRequestWrapper.class,
-                                playCodec(BlockEntityRequestWrapper::encode, BlockEntityRequestWrapper::decode),
-                                (msg, ctx) -> ctx.enqueueWork(() ->
-                                        PayloadHandlers.handleBlockEntityRequest(msg.data(), ctx.getSender())))
-                        .addMain(CompressionReadyWrapper.class,
-                                playCodec(CompressionReadyWrapper::encode, CompressionReadyWrapper::decode),
+                        .addMain(AggregationReadyWrapper.class,
+                                playCodec(AggregationReadyWrapper::encode, AggregationReadyWrapper::decode),
                                 (msg, ctx) -> ctx.enqueueWork(() ->
                                         handleActivationReadyServer(ctx.getSender(), msg.ready())))
                         .addMain(ShadowPullRequestWrapper.class,
@@ -276,10 +247,6 @@ public class ForgeNetworkManager implements INetworkManagerService {
                         .addMain(AggregationWrapper.class,
                                 playCodec(AggregationWrapper::encode, AggregationWrapper::decode),
                                 (msg, ctx) -> AggregationDecodeQueue.enqueueClient(msg.data()))
-                        .addMain(BlockEntityDataWrapper.class,
-                                playCodec(BlockEntityDataWrapper::encode, BlockEntityDataWrapper::decode),
-                                (msg, ctx) -> ctx.enqueueWork(() ->
-                                        PayloadHandlers.handleBlockEntityData(msg.data())))
                         .addMain(ShadowPullResponseWrapper.class,
                                 playCodec(ShadowPullResponseWrapper::encode, ShadowPullResponseWrapper::decode),
                                 (msg, ctx) -> ctx.enqueueWork(() ->
@@ -297,7 +264,7 @@ public class ForgeNetworkManager implements INetworkManagerService {
                                 playCodec(LightDeltaWrapper::encode, LightDeltaWrapper::decode),
                                 (msg, ctx) -> ctx.enqueueWork(() -> PayloadHandlers.handleLightDelta(msg.data())))
                 .build();
-        LOGGER.info("Hassium: Registered Forge 50+ ChannelBuilder play channel (3 C2S + 8 S2C)");
+        LOGGER.info("Hassium: Registered Forge 50+ ChannelBuilder play channel (2 C2S + 7 S2C)");
     }
 
     private static <M> StreamCodec<RegistryFriendlyByteBuf, M> playCodec(
@@ -370,7 +337,7 @@ public class ForgeNetworkManager implements INetworkManagerService {
     // ========== 共享处理逻辑 ==========
 
     /**
-     * compression_ready 服务端 handler：转调 common {@code ServerHandshakeActivation.handleActivationReady}
+     * aggregation_ready 服务端 handler：转调 common {@code ServerHandshakeActivation.handleActivationReady}
      * （首个 ACK → 服务端切 ZSTD 管线 + 发 dictionary_sync/index_sync + registry markPending；
      * 客户端 index_sync 后重发的 ready ACK → registry 提升 ENABLED）。
      */
@@ -426,15 +393,15 @@ public class ForgeNetworkManager implements INetworkManagerService {
         io.github.limuqy.mc.hassium.Constants.LOG.info("[PRE_HANDSHAKE] announced (answered forge hello)");
     }
 #endif
-    private static void sendCompressionReadyToServer() {
+    private static void sendAggregationReadyToServer() {
         try {
 #if MC_VER < MC_1_21_1
-            CHANNEL.sendToServer(new CompressionReadyWrapper(true));
+            CHANNEL.sendToServer(new AggregationReadyWrapper(true));
 #else
-            sendToServer(new CompressionReadyWrapper(true));
+            sendToServer(new AggregationReadyWrapper(true));
 #endif
         } catch (Exception e) {
-            LOGGER.error("Hassium: Failed to send compression ready", e);
+            LOGGER.error("Hassium: Failed to send aggregation ready", e);
         }
     }
 
@@ -478,30 +445,6 @@ public class ForgeNetworkManager implements INetworkManagerService {
         }
 #else
         sendToPlayer(player, new ShadowPullResponseWrapper(data));
-#endif
-    }
-
-    @Override
-    public void sendBlockEntityRequest(FriendlyByteBuf buf) {
-        byte[] data = new byte[buf.readableBytes()];
-        buf.readBytes(data);
-        buf.release();
-#if MC_VER < MC_1_21_1
-        CHANNEL.sendToServer(new BlockEntityRequestWrapper(data));
-#else
-        sendToServer(new BlockEntityRequestWrapper(data));
-#endif
-    }
-
-    @Override
-    public void sendBlockEntityData(ServerPlayer player, FriendlyByteBuf buf) {
-        byte[] data = new byte[buf.readableBytes()];
-        buf.readBytes(data);
-        buf.release();
-#if MC_VER < MC_1_21_1
-        CHANNEL.sendTo(new BlockEntityDataWrapper(data), player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
-#else
-        sendToPlayer(player, new BlockEntityDataWrapper(data));
 #endif
     }
 
@@ -566,43 +509,6 @@ public class ForgeNetworkManager implements INetworkManagerService {
 
 
 
-    public record BlockEntityRequestWrapper(byte[] data) {
-        public void encode(FriendlyByteBuf buf) {
-            buf.writeVarInt(data.length);
-            buf.writeBytes(data);
-        }
-
-        public static BlockEntityRequestWrapper decode(FriendlyByteBuf buf) {
-            // review-fix: T10-9: length 无上限 → readTail 式校验（恶意超大 varInt 拒绝分配）
-            int length = buf.readVarInt();
-            if (length < 0 || length > buf.readableBytes()) {
-                throw new IllegalArgumentException("invalid BlockEntityRequestWrapper length: " + length);
-            }
-            byte[] data = new byte[length];
-            buf.readBytes(data);
-            return new BlockEntityRequestWrapper(data);
-        }
-    }
-
-    public record BlockEntityDataWrapper(byte[] data) {
-        public void encode(FriendlyByteBuf buf) {
-            buf.writeVarInt(data.length);
-            buf.writeBytes(data);
-        }
-
-        public static BlockEntityDataWrapper decode(FriendlyByteBuf buf) {
-            // review-fix: T10-9: length 无上限 → readTail 式校验（恶意超大 varInt 拒绝分配）
-            int length = buf.readVarInt();
-            if (length < 0 || length > buf.readableBytes()) {
-                throw new IllegalArgumentException("invalid BlockEntityDataWrapper length: " + length);
-            }
-            byte[] data = new byte[length];
-            buf.readBytes(data);
-            return new BlockEntityDataWrapper(data);
-        }
-    }
-
-
     public record DictionarySyncWrapper(byte[] data) {
         public void encode(FriendlyByteBuf buf) {
             buf.writeVarInt(data.length);
@@ -639,13 +545,13 @@ public class ForgeNetworkManager implements INetworkManagerService {
         }
     }
 
-    public record CompressionReadyWrapper(boolean ready) {
+    public record AggregationReadyWrapper(boolean ready) {
         public void encode(FriendlyByteBuf buf) {
             buf.writeBoolean(ready);
         }
 
-        public static CompressionReadyWrapper decode(FriendlyByteBuf buf) {
-            return new CompressionReadyWrapper(buf.readBoolean());
+        public static AggregationReadyWrapper decode(FriendlyByteBuf buf) {
+            return new AggregationReadyWrapper(buf.readBoolean());
         }
     }
 
@@ -736,10 +642,10 @@ public class ForgeNetworkManager implements INetworkManagerService {
         }
     }
 
-    /** SPI：客户端 compression_ready ACK（C2S；common {@code ClientActivation} 经 Services.NETWORK_MANAGER 消费）。 */
+    /** SPI：客户端 aggregation_ready ACK（C2S；common {@code ClientActivation} 经 Services.NETWORK_MANAGER 消费）。 */
     @Override
-    public void sendCompressionReady() {
-        sendCompressionReadyToServer();
+    public void sendAggregationReady() {
+        sendAggregationReadyToServer();
     }
 }
 

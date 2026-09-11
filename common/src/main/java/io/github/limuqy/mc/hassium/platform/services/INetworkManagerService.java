@@ -17,16 +17,6 @@ public interface INetworkManagerService {
     }
 
     /**
-     * 发送 blockEntity 数据请求到服务端（客户端调用）
-     */
-    void sendBlockEntityRequest(FriendlyByteBuf buf);
-
-    /**
-     * 发送 blockEntity 数据响应到客户端（服务端调用）
-     */
-    void sendBlockEntityData(ServerPlayer player, FriendlyByteBuf buf);
-
-    /**
      * 发送光照增量通知到客户端（服务端调用；vanilla 通道 play S2C 直发）
      */
     void sendLightDeltaPacket(ServerPlayer player, FriendlyByteBuf buf);
@@ -67,9 +57,9 @@ public interface INetworkManagerService {
     }
 
     /**
-     * 客户端回发 compression_ready ACK（index_sync 收到后激活聚合时调用；C2S）。
+     * 客户端回发 aggregation_ready ACK（index_sync 收到后激活聚合时调用；C2S）。
      */
-    default void sendCompressionReady() {
+    default void sendAggregationReady() {
     }
 
 }

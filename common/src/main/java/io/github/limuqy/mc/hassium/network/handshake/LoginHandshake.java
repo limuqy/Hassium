@@ -18,7 +18,7 @@ import net.minecraft.network.FriendlyByteBuf;
  * </ul>
  * 服务端协商结果按玩家 UUID 登记（{@code PlayerCompressionTracker}），Play 期
  * {@code ServerHandshakeActivation} 消费并下发 {@link PlayInitPayload}（协商结果 +
- * SeedGen 种子），客户端据此安装 ZSTD 并回 compression_ready（时序与 1.1.2 期一致）。
+ * SeedGen 种子），客户端据此回 aggregation_ready ACK（index_sync 后放行聚合）。
  */
 public final class LoginHandshake {
 
@@ -37,24 +37,30 @@ public final class LoginHandshake {
     /**
      * 客户端 HELLO 应答（仅 1.20.1 login query 载体；1.20.2+ 走 PreHandshakePayload）。
      *
-     * @param clientCaps 客户端声明能力位
-     * @param modVersion 模组版本（服务端做格式校验，防日志注入）
+     * @param clientCaps      客户端声明能力位
+     * @param modVersion      模组版本（服务端做格式校验，防日志注入）
+     * @param protocolVersion 线格式协议版本；protocol 2 起必填。缺字段按 0 解码，
+     *                        服务端拒绝协商（走原版路径），避免压缩位后静默错协商。
      */
-    public record HelloAnswer(int clientCaps, String modVersion) {
+    public record HelloAnswer(int clientCaps, String modVersion, int protocolVersion) {
         public void encode(FriendlyByteBuf buf) {
             buf.writeVarInt(clientCaps);
             buf.writeUtf(modVersion, 128);
+            buf.writeVarInt(protocolVersion);
         }
 
         public static HelloAnswer decode(FriendlyByteBuf buf) {
-            return new HelloAnswer(buf.readVarInt(), buf.readUtf(128));
+            int clientCaps = buf.readVarInt();
+            String modVersion = buf.readUtf(128);
+            int protocolVersion = buf.isReadable() ? buf.readVarInt() : 0;
+            return new HelloAnswer(clientCaps, modVersion, protocolVersion);
         }
     }
 
     /**
      * Play 期激活（S2C 自定义 payload 体；三端注册 {@code hassium:play_init_s2c}）。
-     * 客户端收到后：协商位入 {@code ClientLoginNegotiation}；globalCompression 协商
-     * → 安装 ZSTD + 回 compression_ready；seedGen 协商 → 影子端种子初始化。
+     * 客户端收到后：协商位入 {@code ClientLoginNegotiation}；seedGen 协商 → 影子端种子初始化。
+     * 聚合由 index_sync 后的 {@code aggregation_ready} ACK 放行。
      *
      * @param negotiatedCaps 服务端按位与后的协商能力位
      * @param worldSeed      主世界种子；seedGenEnabled=false 时为 0（避免关功能仍泄露种子）
@@ -87,9 +93,9 @@ public final class LoginHandshake {
         }
     }
 
-    /** 协议版本校验：须落在 {@code [1, CURRENT]}（允许更旧客户端）。 */
+    /** 协议版本校验：仅接受当前版本（硬切；旧端走原版路径）。 */
     public static boolean isProtocolVersionAccepted(int protocolVersion, int currentVersion) {
-        return protocolVersion >= 1 && protocolVersion <= currentVersion;
+        return protocolVersion == currentVersion;
     }
 
     /**
@@ -118,7 +124,8 @@ public final class LoginHandshake {
         first = appendBit(sb, first, caps, LoginCaps.SECTION_DELTA, "delta");
         first = appendBit(sb, first, caps, LoginCaps.SEED_GEN, "seed");
         first = appendBit(sb, first, caps, LoginCaps.LIGHT_STRIP, "light");
-        appendBit(sb, first, caps, LoginCaps.SHADOW_PULL, "pull");
+        first = appendBit(sb, first, caps, LoginCaps.SHADOW_PULL, "pull");
+        appendBit(sb, first, caps, LoginCaps.PULL_MODE, "pull_mode");
         return sb.append(']').toString();
     }
 

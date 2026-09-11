@@ -29,7 +29,7 @@ import java.util.function.Predicate;
  * </ol>
  * <p>
  * <b>key 语义</b>：key = ({@link Key#posLong()}, {@link Key#op()})。op 由调用方定义，
- * 同一 chunk 位置不同语义的任务（全量 apply / BE apply / 网络请求）必须用不同 op，
+ * 同一 chunk 位置不同语义的任务（全量 apply / 光照更新 / 网络请求）必须用不同 op，
  * 避免互相取代。key 为 null 时退化为普通优先队列（无取代/无校验）。
  * <p>
  * <b>线程安全</b>：内部 {@link PriorityBlockingQueue} + {@link ConcurrentHashMap}，
@@ -37,7 +37,7 @@ import java.util.function.Predicate;
  * 「近似 FIFO」行为（同键不保证严格 FIFO，新插入元素排在已有同键元素之后）。
  * <p>
  * 相同键的多语义用法示例见 {@link MainThreadDispatcher}（OP_CHUNK_APPLY / OP_REQUEST /
- * OP_BLOCK_ENTITY）。
+ * OP_LIGHT_UPDATE）。
  */
 public final class KeyedPriorityQueue<E> {
 
