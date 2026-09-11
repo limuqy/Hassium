@@ -249,6 +249,14 @@ public class ForgeNetworkManager implements NetworkManager {
                 .consumer(ForgeNetworkManager::onPreHandshake)
                 .add();
 
+        // 服务端主导协商（配置阶段任务下发 hello）：客户端在 handler 内同步应答
+        // PreHandshakePayload（上面的 CONFIGURATION_TO_SERVER codec）；任务注册见
+        // ForgeHandshakeEvents（GatherLoginConfigurationTasksEvent）。
+        channel.messageBuilder(PreHandshakeHelloPayload.class, NetworkDirection.CONFIGURATION_TO_CLIENT)
+                .codec(PreHandshakeHelloPayload.STREAM_CODEC)
+                .consumer(ForgeNetworkManager::onPreHandshakeHello)
+                .add();
+
         CHANNEL = channel
                 .play()
                     .serverbound()
@@ -439,29 +447,51 @@ public class ForgeNetworkManager implements NetworkManager {
         io.github.limuqy.mc.hassium.network.handshake.ServerHandshakeActivation.handleActivationReady(player);
     }
 
-    /**
-     * 配置阶段 C2S 能力声明（MixinClientConfigurationPacketListenerImpl 每连接一次性调用）。
-     * <p>
-     * 配置期 {@code Minecraft.getConnection()} 恒为 null（play listener 未创建），必须用
-     * mixin 反射取出的配置监听器 connection 经 {@link Channel#send(Object, Connection)} 直发：
-     * forge 的 SimpleChannel 消息包装为 {@code ForgePayload}（注册于 vanilla dispatch），
-     * 服务端按 {@code hassium:main} channel 名分派 {@code CONFIGURATION_TO_SERVER} codec。
-     * 不能直发 vanilla {@code ServerboundCustomPayloadPacket}——forge 未把消息注册进 vanilla
-     * {@code IdDispatchCodec}，编码时回落 {@code DiscardedPayload} 强转崩溃。
-     */
-    public static void announcePreHandshake(net.minecraft.network.Connection connection) {
 #if MC_VER >= MC_1_21_1
-        if (connection != null && connection.isConnected()) {
-            if (CHANNEL == null) {
-                LOGGER.warn("Hassium: CHANNEL not registered, drop pre-handshake");
-                return;
-            }
-            CHANNEL.send(io.github.limuqy.mc.hassium.network.PreHandshakePayload.create(), connection);
-            // 冒烟门禁/排障依赖此行：区分「handler 未被调用 vs 发早被踢 vs 正常协商」。
-            io.github.limuqy.mc.hassium.Constants.LOG.info("[PRE_HANDSHAKE] announced (forge channel)");
+    /** 配置阶段握手任务类型（服务端内部标识，不落网络）。 */
+    public static final net.minecraft.server.network.ConfigurationTask.Type PRE_HANDSHAKE_TASK_TYPE =
+            new net.minecraft.server.network.ConfigurationTask.Type(Constants.MOD_ID + ":pre_handshake");
+
+    /**
+     * 服务端下发配置阶段 hello（由 {@code GatherLoginConfigurationTasksEvent} 注册的任务调用）。
+     * <p>
+     * Forge 自带的 {@code RegisterChannelsTask} 经同一事件注册且排队靠前，任务执行时对端通道
+     * 注册已完成，这里按 {@link Channel#isRemotePresent(net.minecraft.network.Connection)} 过滤
+     * 原版/异版本客户端（不发起、走原版路径）。消息经 SimpleChannel 发出（{@code ForgePayload}
+     * 包装，对端按 {@code hassium:main} 分派 {@code CONFIGURATION_TO_CLIENT} codec）。
+     */
+    public static void sendPreHandshakeHello(net.minecraft.network.Connection connection) {
+        if (connection == null || !connection.isConnected() || CHANNEL == null) {
+            return;
         }
-#endif
+        // 无条件发送（对齐 Forge 官方 ModVersionsTask/SyncConfigTask：配置任务阶段对端注册包
+        // 尚未到达，remoteChannels/isRemotePresent 恒空，不能作为发送门）。调用方已按
+        // ConnectionType.MODDED 过滤；未装 Hassium 的 Forge 客户端按未知 channel 静默忽略。
+        CHANNEL.send(PreHandshakeHelloPayload.INSTANCE, connection);
+        // 冒烟门禁/排障依赖此行：区分「任务未执行 vs 对端未知 channel 被忽略 vs 正常发起」。
+        io.github.limuqy.mc.hassium.Constants.LOG.info("[PRE_HANDSHAKE] hello sent (forge config task)");
     }
+
+    /**
+     * 客户端应答配置阶段 hello（C2S 能力声明）。
+     * <p>
+     * 同步应答（不 enqueueWork）：hello 处理先于 {@code FinishConfiguration} 处理，TCP 全序下
+     * 应答先于配置完成 ACK 到达服务端，而 ServerPlayer 在 ACK 后创建——协商登记必然先于
+     * {@code ServerHandshakeActivation} 消费。网络开关关闭时不应答（服务端走原版路径）。
+     */
+    private static void onPreHandshakeHello(PreHandshakeHelloPayload msg, CustomPayloadEvent.Context ctx) {
+        ctx.setPacketHandled(true);
+        net.minecraft.network.Connection connection = ctx.getConnection();
+        if (connection == null || !connection.isConnected() || CHANNEL == null) {
+            return;
+        }
+        if (!HassiumConfigService.getInstance().isNetworkCompressionEnabled()) {
+            return;
+        }
+        CHANNEL.send(PreHandshakePayload.create(), connection);
+        io.github.limuqy.mc.hassium.Constants.LOG.info("[PRE_HANDSHAKE] announced (answered forge hello)");
+    }
+#endif
     private static void sendCompressionReadyToServer() {
         try {
 #if MC_VER < MC_1_21_1

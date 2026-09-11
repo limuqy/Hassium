@@ -53,10 +53,5 @@ public class NeoForgeNetworkManagerService implements INetworkManagerService {
                              byte[] stemNbt, boolean seedGenEnabled) {
         NeoForgeNetworkManager.sendPlayInit(player, negotiatedCaps, worldSeed, stemNbt, seedGenEnabled);
     }
-
-    @Override
-    public void announcePreHandshake(net.minecraft.network.Connection connection) {
-        NeoForgeNetworkManager.announcePreHandshake(connection);
-    }
 }
 

@@ -1412,6 +1412,15 @@ public class ShadowSeedServer extends MinecraftServer {
                         || (t.getCause() instanceof InterruptedException)) {
                     break;
                 }
+                // 客户端 Stopping! 后 GLFW 已销毁：pollTask → haveTime → Util.getNanos() 经 GLX
+                // 时钟取时（glfwGetTime）抛 NPE。影子端只服务游戏会话，退出窗口内收敛属正常；
+                // 前置条件 isSharedIoPoolShutdown 把真实崩溃（非 teardown 窗口）排除在外。
+                if (io.github.limuqy.mc.hassium.compat.ShadowServerCompat.isSharedIoPoolShutdown()
+                        && isGlfwClockFailure(t)) {
+                    io.github.limuqy.mc.hassium.Constants.LOG.info(
+                            "[SHADOW_LOOP] shadow main loop exited during client teardown");
+                    break;
+                }
                 io.github.limuqy.mc.hassium.Constants.LOG.error(
                         "[SHADOW_LOOP] shadow main loop crashed; session halted", t);
                 break;
@@ -1434,6 +1443,29 @@ public class ShadowSeedServer extends MinecraftServer {
         if (t != null) {
             t.interrupt();
         }
+    }
+
+    /**
+     * 是否为客户端退出窗口内的 GLFW 时钟失效异常。
+     * <p>
+     * {@code MinecraftServer.haveTime()} 走 {@code Util.getNanos()} → GLX 时钟（{@code glfwGetTime}）；
+     * 客户端 {@code Stopping!} 后 GLFW 已销毁，取时抛 NPE。仅用于把「teardown 引发的正常退出」
+     * 与真实崩溃区分开，调用方须同时校验退出窗口前置条件。
+     */
+    private static boolean isGlfwClockFailure(Throwable t) {
+        for (Throwable current = t; current != null; current = current.getCause()) {
+            if (!(current instanceof NullPointerException)) {
+                continue;
+            }
+            for (StackTraceElement frame : current.getStackTrace()) {
+                String className = frame.getClassName();
+                if ("org.lwjgl.glfw.GLFW".equals(className)
+                        || "com.mojang.blaze3d.platform.GLX".equals(className)) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
     /** 影子端主世界 region 目录（过渡期兼容；新代码请用 {@link #regionDir(String)}）。 */
     java.nio.file.Path regionDir() {

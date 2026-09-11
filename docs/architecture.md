@@ -37,7 +37,7 @@ Hassium 是 Minecraft 多加载器模组（Fabric / Forge / NeoForge），围绕
 
 ## 4. 直连拓扑（登录期握手 + Play 期激活）
 
-直连拓扑下客户端与服务端之间**只有一条 vanilla TCP 连接**：登录期用 vanilla login custom query / 配置阶段 payload 协商能力位，Play 期所有自定义 payload（区块/实体/业务）都走 vanilla 通道。网络核心（进程内网关）、UDP 数据面、续流迁移已裁剪（历史见 [`archive/`](archive/) 与 [`handoff/handoff-2026-09-04-vanilla-direct-network.md`](handoff/handoff-2026-09-04-vanilla-direct-network.md)）。
+直连拓扑下客户端与服务端之间**只有一条 vanilla TCP 连接**：登录期用 vanilla login custom query（1.20.1）/ 配置阶段任务下发的 hello payload（1.21.1+）协商能力位，Play 期所有自定义 payload（区块/实体/业务）都走 vanilla 通道。网络核心（进程内网关）、UDP 数据面、续流迁移已裁剪（历史见 [`archive/`](archive/) 与 [`handoff/handoff-2026-09-04-vanilla-direct-network.md`](handoff/handoff-2026-09-04-vanilla-direct-network.md)）。
 
 | 域 | 进程 | 职责 | 代码范围 |
 |------|------|------|----------|
@@ -56,7 +56,10 @@ sequenceDiagram
   Note over S: 1.20.1：handleAcceptedLogin 内<br/>LoginCompression 之后、GameProfile 之前
   S->>C: login query `hassium:login_hello`
   C->>S: query answer（客户端能力位；原版客户端恒空应答→原版路径）
-  Note over C,S: 1.20.2+：原版 codec 丢弃 login query 应答体，<br/>改走配置阶段 PreHandshakePayload（认证完成后）
+  Note over C,S: 1.21.1+：服务端主导配置阶段任务<br/>（NeoForge RegisterConfigurationTasksEvent / Forge GatherLoginConfigurationTasksEvent）
+  S->>S: hasChannel / isRemotePresent 过滤非 Hassium 客户端（原版零干扰）
+  S->>C: `hassium:prehandshake_hello_s2c`
+  C->>S: 应答 PreHandshakePayload（C2S 能力位；Fabric 为 START 事件主动声明）
   S->>S: 能力位按位与 → PlayerCompressionTracker 登记
   Note over C,S: 登录完成进入 Play
   S->>S: ServerPlayer <init> TAIL 消费协商位（压制原版区块窗口）
@@ -67,8 +70,8 @@ sequenceDiagram
   S->>S: 聚合 PENDING→ENABLED（缓冲帧冲出）
 ```
 
-- **无超时依赖**：空应答或无共同能力位 → 服务端原版路径（`compat.requireClientMod=true` 时登录期踢出）
-- **原版零干扰**：只消费 `hassium:login_hello` 通道与本模组 transactionId，velocity/FML 等未知 query 原样放行
+- **无超时依赖**：空应答或无共同能力位 → 服务端原版路径（`compat.requireClientMod=true` 时登录期踢出）；配置任务 fire-and-forget（发 hello 即完成，不等待应答 → 无 stall 面）
+- **原版零干扰**：1.20.1 只消费 `hassium:login_hello` 通道与本模组 transactionId，velocity/FML 等未知 query 原样放行；1.21.1+ 配置任务仅对声明了 hassium 通道的客户端注册（`hasChannel` / `isRemotePresent`）
 - **原版压缩层不触碰**：管线级全局包压缩已退役；通道压缩 = 聚合包内部字典 ZSTD（EventLoop 阈值翻折防与 vanilla zlib 双重压缩）+ 区块推送自有压缩
 
 ## 5. 模块结构
@@ -91,7 +94,7 @@ Hassium/
 | `compression/`（存储域） | `CompressionCodec` / `CompressionService`、字典注册 |
 | `network/`（直连传输面） | 登录期握手（`network/handshake/`）+ 统一 Compare+Pull（`ServerChunkPushManager.resolveShadowPull` / `ShadowPullClient`）+ 聚合链（字典 ZSTD；`ConnectionChannelAccess`）；SeedRef 推送已退役 |
 | `network/seedgen/`（区块核心 = 影子端后端引擎） | `ShadowSeedServer` 运行虚拟 `ServerPlayer`，由 `ServerChunkCache` / `ChunkMap` / `ChunkHolder` 管理加载、卸载、ChunkStatus 与光照；`ShadowCacheEviction` 负责缓存淘汰 |
-| `network/handshake/`（登录握手） | 双端能力协商与 Play 激活链（1.20.1 login query / 1.20.2+ 配置阶段 payload） |
+| `network/handshake/`（登录握手） | 双端能力协商与 Play 激活链（1.20.1 login query / 1.21.1+ 配置阶段任务 hello + C2S 应答；Fabric 为 START 主动声明） |
 | `network/ClientChunkHandler` → `ClientChunkPipeline` | 仅负责 vanilla payload 解包、官方 packet apply 与状态降级；不维护独立视距/halo |
 | `cache/`（区块核心支撑） | 客户端轻量预算与生命周期（`ClientMainThreadBudget` / `ClientLifecycleHelper` / `ChunkMeshCompileLog`）；缓存存储、读盘和清理由影子服务端承担 |
 | `config/` / `metrics/` / `compat/` / `mixin/`（支撑设施） | `HassiumConfigService` 门面；`NetworkStats` 指标；Manifold 跨版本 API 桥接（`PacketId` / `HassiumChannels`）；全部 Mixin（common only） |

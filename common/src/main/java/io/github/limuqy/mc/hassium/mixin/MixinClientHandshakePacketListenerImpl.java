@@ -31,7 +31,8 @@ public class MixinClientHandshakePacketListenerImpl {
     private void hassium$onLoginCustomQuery(ClientboundCustomQueryPacket packet, CallbackInfo ci) {
 #if MC_VER >= MC_1_21_1
         // 1.20.2+ 原版 codec 丢弃 query 体（DiscardedQueryPayload），登录 query 载体失效；
-        // 能力声明走配置阶段（MixinClientConfigurationPacketListenerImpl）。原样放行。
+        // 能力声明走配置阶段（服务端配置任务下发 hello → 客户端应答 PreHandshakePayload）。
+        // 原样放行。
 #else
         if (!LoginHandshake.HELLO_CHANNEL.equals(packet.getIdentifier().getPath())) {
             return;

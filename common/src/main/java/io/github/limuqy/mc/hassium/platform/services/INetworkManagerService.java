@@ -1,6 +1,5 @@
 package io.github.limuqy.mc.hassium.platform.services;
 
-import net.minecraft.network.Connection;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.server.level.ServerPlayer;
 
@@ -67,15 +66,5 @@ public interface INetworkManagerService {
                               byte[] stemNbt, boolean seedGenEnabled) {
     }
 
-    /**
-     * 客户端配置阶段能力声明（C2S {@code PreHandshakePayload}；仅 1.21.1+，
-     * mixin {@code MixinClientConfigurationPacketListenerImpl} 每连接一次性调用，传入
-     * 配置监听器的 {@link Connection}——配置期 {@code Minecraft.getConnection()} 恒为
-     * null（play listener 尚未创建），实现不得自行获取连接）。
-     * 1.20.1 走 login query 应答（{@code MixinClientHandshakePacketListenerImpl}），本方法空实现；
-     * fabric 由 {@code ClientConfigurationConnectionEvents.START} 经 API 直发，默认实现不发送。
-     */
-    default void announcePreHandshake(Connection connection) {
-    }
 }
 

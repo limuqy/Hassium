@@ -58,8 +58,4 @@ public class ForgeNetworkManagerService implements INetworkManagerService {
                              byte[] stemNbt, boolean seedGenEnabled) {
         ForgeNetworkManager.sendPlayInit(player, negotiatedCaps, worldSeed, stemNbt, seedGenEnabled);
     }
-
-    @Override
-    public void announcePreHandshake(net.minecraft.network.Connection connection) {
-        ForgeNetworkManager.announcePreHandshake(connection);
-    }}
+}

@@ -155,7 +155,7 @@ fabric/ | forge/ | neoforge/
 
 ## 直连拓扑速记
 
-**握手链**（`network/handshake/`）——1.20.1 服务端在 `handleAcceptedLogin` 内 **LoginCompression 之后、GameProfile 之前**发 `hassium:login_hello` query（压缩就绪后发包，消除裸应答被压缩解码器误读的竞态，见 `483e1fb`）、`handleCustomQueryPacket` 解析应答；1.20.2+ 走配置阶段 `PreHandshakePayload`（loader 注册，认证完成后）；能力位 `LoginCaps`（agg/delta/seed/light/pull/shadow_pull/pull_mode）按位与协商，结果入 `PlayerCompressionTracker`。`ServerPlayer <init>` TAIL 消费（`ServerHandshakeActivation.onPlayerInit`：压制原版区块窗口），tick 泵激活：dictionary_sync/index_sync → 聚合 PENDING（5s 无 ACK 降级直发）→ `play_init_s2c`（协商位 + SeedGen 种子）→ 客户端 index_sync 后回激活 ACK → 聚合 ENABLED。**管线级全局包压缩已退役（run9 退役波）**：原版压缩层全程不触碰，通道压缩 = 聚合包内部字典 ZSTD（EventLoop 阈值翻折防双重压缩）+ 区块推送自有压缩。
+**握手链**（`network/handshake/`）——1.20.1 服务端在 `handleAcceptedLogin` 内 **LoginCompression 之后、GameProfile 之前**发 `hassium:login_hello` query（压缩就绪后发包，消除裸应答被压缩解码器误读的竞态，见 `483e1fb`）、`handleCustomQueryPacket` 解析应答；**1.21.1+ 服务端主导配置阶段协商**：NeoForge `RegisterConfigurationTasksEvent` / Forge `GatherLoginConfigurationTasksEvent` 注册配置任务（`hasChannel` / `isRemotePresent` 过滤非 Hassium 客户端 → 原版零干扰；任务执行在通道协商完成之后，无「发早被踢」竞态）→ 下发 `hassium:prehandshake_hello_s2c` → 客户端 handler 内同步应答 `PreHandshakePayload`（C2S）→ `PreHandshakeProtocol` 协商登记（旧客户端主动 announce 仍被接收，向前兼容）；Fabric 走官方 `ClientConfigurationConnectionEvents.START` + `ClientConfigurationNetworking.send` 主动声明（等价官方路径，无竞态）。能力位 `LoginCaps`（agg/delta/seed/light/pull/shadow_pull/pull_mode）按位与协商，结果入 `PlayerCompressionTracker`。`ServerPlayer <init>` TAIL 消费（`ServerHandshakeActivation.onPlayerInit`：压制原版区块窗口），tick 泵激活：dictionary_sync/index_sync → 聚合 PENDING（5s 无 ACK 降级直发）→ `play_init_s2c`（协商位 + SeedGen 种子）→ 客户端 index_sync 后回激活 ACK → 聚合 ENABLED。**管线级全局包压缩已退役（run9 退役波）**：原版压缩层全程不触碰，通道压缩 = 聚合包内部字典 ZSTD（EventLoop 阈值翻折防双重压缩）+ 区块推送自有压缩。
 
 **区块核心**（客户端进程内区块域）——`network/seedgen/` 影子端（= 本域后端引擎：生成/算光/落盘/淘汰）+ `network/` 顶层摄入管线（ClientChunkPipeline / ClientMetadataHandler / ChunkHash 客户端侧）+ `cache/`（MainThreadBudget / 生命周期 / mesh 编译日志）；`chunk.*` 键族 = 本域配置族。
 
@@ -163,7 +163,7 @@ fabric/ | forge/ | neoforge/
 
 ```
 Mod 客户端 ←──唯一 vanilla TCP（登录期握手 + Play 期自定义 payload）──→ Mod 服务端
-   ├ 登录期：login_hello / PreHandshakePayload 协商能力位（空应答=原版路径，不依赖超时）
+   ├ 登录期：login_hello（1.20.1）/ 配置任务 hello + PreHandshakePayload 应答（1.21.1+，Fabric 为 START 主动声明）
    ├ Play 期：dict/index → 聚合 PENDING → play_init 激活 → 客户端 ACK → 聚合放行
    └ 区块/实体/业务自定义 payload 全走 vanilla 通道（shadow_pull/block_entity/section_delta/light_delta）
 ```

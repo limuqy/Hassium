@@ -35,6 +35,7 @@ public class HassiumNeoForge {
         CommonClass.init();
 
         modEventBus.addListener(NeoForgeNetworkManager::registerPayloads);
+        modEventBus.addListener(NeoForgeNetworkManager::onRegisterConfigurationTasks);
         LOGGER.info("Hassium: Registered NeoForge payload handlers");
     }
 

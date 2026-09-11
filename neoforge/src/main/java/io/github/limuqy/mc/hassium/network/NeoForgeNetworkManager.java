@@ -16,6 +16,8 @@ import net.minecraft.network.codec.ByteBufCodecs;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.neoforged.bus.api.SubscribeEvent;
+import net.neoforged.neoforge.network.configuration.ICustomConfigurationTask;
+import net.neoforged.neoforge.network.event.RegisterConfigurationTasksEvent;
 import net.neoforged.neoforge.network.event.RegisterPayloadHandlersEvent;
 import net.neoforged.neoforge.network.handling.IPayloadContext;
 
@@ -250,6 +252,62 @@ public class NeoForgeNetworkManager implements NetworkManager {
         PreHandshakeProtocol.handlePreHandshake(playerId, payload);
     }
 
+    // ===== 服务端主导协商（配置阶段任务，NeoForge 官方机制）=====
+
+    /** 配置阶段握手任务类型（服务端内部标识，不落网络）。 */
+    private static final net.minecraft.server.network.ConfigurationTask.Type PRE_HANDSHAKE_TASK_TYPE =
+            new net.minecraft.server.network.ConfigurationTask.Type(Constants.MOD_ID + ":pre_handshake");
+
+    /**
+     * 注册配置阶段握手任务（{@code RegisterConfigurationTasksEvent}，mod bus）。
+     * <p>
+     * 事件在配置阶段通道协商完成后触发（NeoForge 自身用同一事件注册 CommonVersionTask/
+     * CommonRegisterTask 等协商任务，均以 {@code listener.hasChannel(...)} 判定客户端声明），
+     * 因此这里按「客户端是否声明 hello 通道」过滤：原版与旧版本客户端不注册任务，零干扰；
+     * 任务执行时服务端 payload setup 必已就绪，天然消除「首个配置 tick 发早被踢」竞态。
+     */
+    @SubscribeEvent
+    public static void onRegisterConfigurationTasks(RegisterConfigurationTasksEvent event) {
+        if (!HassiumConfigService.getInstance().isNetworkCompressionEnabled()) {
+            return;
+        }
+        net.minecraft.network.protocol.configuration.ServerConfigurationPacketListener listener = event.getListener();
+        if (!listener.hasChannel(PreHandshakeHelloPayload.TYPE)) {
+            return;
+        }
+        event.register(new PreHandshakeTask(listener));
+    }
+
+    /**
+     * 配置阶段握手任务：下发 hello 后立即完成（fire-and-forget，不等应答）。
+     * <p>
+     * 时序保证：TCP 全序下客户端在 hello handler 内同步应答 C2S 能力声明，该应答先于
+     * {@code FinishConfiguration} 的客户端 ACK 到达服务端，而 ServerPlayer 在 ACK 之后创建
+     * ——协商结果必然先于 {@code ServerHandshakeActivation} 消费。客户端不应答时协商不登记，
+     * 走原版路径（不 stall 登录，故不采用官方 wait-ack 形态）。
+     */
+    private static final class PreHandshakeTask implements ICustomConfigurationTask {
+
+        private final net.minecraft.network.protocol.configuration.ServerConfigurationPacketListener listener;
+
+        private PreHandshakeTask(
+                net.minecraft.network.protocol.configuration.ServerConfigurationPacketListener listener) {
+            this.listener = listener;
+        }
+
+        @Override
+        public void run(java.util.function.Consumer<CustomPacketPayload> sender) {
+            sender.accept(PreHandshakeHelloPayload.INSTANCE);
+            ((net.neoforged.neoforge.common.extensions.IServerConfigurationPacketListenerExtension) listener)
+                    .finishCurrentTask(PRE_HANDSHAKE_TASK_TYPE);
+        }
+
+        @Override
+        public net.minecraft.server.network.ConfigurationTask.Type type() {
+            return PRE_HANDSHAKE_TASK_TYPE;
+        }
+    }
+
     @SubscribeEvent
     public static void registerPayloads(RegisterPayloadHandlersEvent event) {
         // play_init S2C 必须无条件注册（先于下方守卫）：登录协商位非零即下发 play_init
@@ -310,6 +368,14 @@ public class NeoForgeNetworkManager implements NetworkManager {
                 PreHandshakePayload.TYPE,
                 PreHandshakePayload.STREAM_CODEC,
                 (payload, context) -> handlePreHandshake(payload, context)
+        );
+
+        // 服务端主导协商（配置阶段任务下发 hello）：客户端在 handler 内同步应答
+        // PreHandshakePayload（上面的 C2S 通道）；任务注册见 onRegisterConfigurationTasks。
+        registrar.configurationToClient(
+                PreHandshakeHelloPayload.TYPE,
+                PreHandshakeHelloPayload.STREAM_CODEC,
+                (payload, context) -> context.reply(PreHandshakePayload.create())
         );
 
 
@@ -657,51 +723,6 @@ public class NeoForgeNetworkManager implements NetworkManager {
         }
     }
 
-    /**
-     * 配置阶段 C2S 能力声明（MixinClientConfigurationPacketListenerImpl 每连接一次性调用）。
-     * <p>
-     * 配置期 {@code Minecraft.getConnection()} 恒为 null（play listener 未创建），必须用
-     * mixin 反射取出的配置监听器 connection 直发 vanilla 自定义包；NeoForge 按当前
-     * CONFIGURATION 协议分派 {@code configurationToServer} 注册的 codec（未注册 id 才落
-     * DiscardedPayload，原版客户端零干扰）。
-     * <p>
-     * <b>必须等 NeoForge payload setup 完成</b>：NeoForge 在配置期先做
-     * {@code ModdedNetworkQueryPayload}/{@code ModdedNetworkPayload} 通道协商，完成后才写
-     * {@code ChannelAttributes.PAYLOAD_SETUP}。在此之前发任何 mod 自定义 payload，服务端
-     * {@code NetworkRegistry.handleModdedPayload} 会因 payloadSetup==null 直接踢
-     * （「No Payload Setup」）。首个 config tick 往往早于协商完成，因此这里轮询就绪后再发。
-     */
-    public static void announcePreHandshake(net.minecraft.network.Connection connection) {
-        if (connection == null || !connection.isConnected()) {
-            return;
-        }
-        sendWhenPayloadReady(connection, 0);
-    }
-
-    private static void sendWhenPayloadReady(net.minecraft.network.Connection connection, int attempt) {
-        if (!connection.isConnected()) {
-            return;
-        }
-        // Internal API：NeoForge 无公开「payload setup 就绪」查询；ChannelAttributes 是唯一可靠门。
-        if (net.neoforged.neoforge.network.registration.ChannelAttributes.getPayloadSetup(connection) == null) {
-            if (attempt >= 200) { // ~10s @50ms；正常 localhost 1–3 次即就绪
-                LOGGER.warn("Hassium: pre-handshake aborted, NeoForge payload setup timeout");
-                return;
-            }
-            connection.channel().eventLoop().schedule(
-                    () -> sendWhenPayloadReady(connection, attempt + 1), 50, java.util.concurrent.TimeUnit.MILLISECONDS);
-            return;
-        }
-        try {
-            connection.send(new net.minecraft.network.protocol.common.ServerboundCustomPayloadPacket(
-                    io.github.limuqy.mc.hassium.network.PreHandshakePayload.create()));
-            // 冒烟门禁/排障依赖此行：区分「handler 未被调用 vs 发早被踢 vs 正常协商」。
-            io.github.limuqy.mc.hassium.Constants.LOG.info(
-                    "[PRE_HANDSHAKE] announced (payload setup ready, attempt={})", attempt);
-        } catch (Exception e) {
-            LOGGER.warn("Hassium: Failed to send pre-handshake after payload setup", e);
-        }
-    }
     public static void sendCompressionReadyToServer() {
         try {
             var connection = net.minecraft.client.Minecraft.getInstance().getConnection();
