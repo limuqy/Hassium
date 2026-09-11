@@ -31,6 +31,24 @@ final class PullPacingValve {
         return fullDeltaBudget(configured) * LOOKAHEAD_MULTIPLIER;
     }
 
+    /**
+     * 客户端是否带了可比较基线。无基线的权威 FULL 不可能变成 UNCHANGED，
+     * FULL 配额用尽后不应再为其做 section hash。
+     */
+    static boolean hasBaseline(long chunkHash, List<Long> sectionHashes) {
+        return chunkHash != 0L || (sectionHashes != null && !sectionHashes.isEmpty());
+    }
+
+    /**
+     * 本 tick 是否跳过 hash：两边配额都尽，或 FULL 已尽且该柱不可能 UNCHANGED。
+     */
+    static boolean skipHash(int fullLeft, int unchangedLeft, boolean hasBaseline) {
+        if (fullLeft <= 0 && unchangedLeft <= 0) {
+            return true;
+        }
+        return fullLeft <= 0 && !hasBaseline;
+    }
+
     record Candidate(int index, int chunkX, int chunkZ, boolean ready, boolean ticketed) {
     }
 

@@ -14,6 +14,7 @@ import io.github.limuqy.mc.hassium.compat.PlayerCompat;
 import io.github.limuqy.mc.hassium.compat.RegistryCompat;
 import io.github.limuqy.mc.hassium.compat.ResourceLocationCompat;
 import io.github.limuqy.mc.hassium.utils.DebugLogger;
+import io.github.limuqy.mc.hassium.utils.DimensionKey;
 import io.github.limuqy.mc.hassium.compat.LevelCompat;
 import io.github.limuqy.mc.hassium.compat.ShadowChunkMapCompat;
 import io.github.limuqy.mc.hassium.utils.TickMonitor;
@@ -180,6 +181,8 @@ public class ServerChunkPushManager {
     }
 
     private final Map<UUID, ArrayDeque<PendingPull>> pullQueues = new ConcurrentHashMap<>();
+    /** 每玩家已入队柱（DimensionKey），同格重复 Pull 丢弃。 */
+    private final Map<UUID, Set<Long>> pullQueuedKeys = new ConcurrentHashMap<>();
     /** 按需加载引用计数：pos → 持有 FORCED 票的未就绪 pull 数（归零移除原版票）。 */
     private final java.util.Map<Long, Integer> demandTicketRefs = new java.util.HashMap<>();
     private static final int MAX_PENDING_PULLS = 4096;
@@ -196,7 +199,13 @@ public class ServerChunkPushManager {
     private void enqueuePendingPull(ServerPlayer player, ServerLevel level,
                                     ShadowPullRequestC2SPacket request,
                                     ShadowPullRequestC2SPacket.Entry entry, String dimension) {
-        if (request == null || level == null || player == null) {
+        if (request == null || level == null || player == null || entry == null) {
+            return;
+        }
+        long columnKey = DimensionKey.key(dimension, entry.chunkX(), entry.chunkZ());
+        Set<Long> keys = pullQueuedKeys.computeIfAbsent(player.getUUID(),
+                ignored -> ConcurrentHashMap.newKeySet());
+        if (!keys.add(columnKey)) {
             return;
         }
         if (totalPullQueued() >= MAX_PENDING_PULLS) {
@@ -205,6 +214,17 @@ public class ServerChunkPushManager {
         pullQueues.computeIfAbsent(player.getUUID(), ignored -> new ArrayDeque<>())
                 .add(new PendingPull(player, level, dimension, entry,
                         request.requestId(), request.epoch()));
+    }
+
+    private void unqueuePull(PendingPull pending) {
+        if (pending == null || pending.player() == null) {
+            return;
+        }
+        Set<Long> keys = pullQueuedKeys.get(pending.player().getUUID());
+        if (keys != null) {
+            keys.remove(DimensionKey.key(pending.dimension(),
+                    pending.entry().chunkX(), pending.entry().chunkZ()));
+        }
     }
 
     private void evictOldestPull() {
@@ -226,6 +246,7 @@ public class ServerChunkPushManager {
         PendingPull evicted = oldestQueue.poll();
         if (evicted != null) {
             releaseDemandTicket(evicted);
+            unqueuePull(evicted);
             sendPullFailure(evicted, "overflow");
         }
     }
@@ -334,29 +355,31 @@ public class ServerChunkPushManager {
                 candidates, center.x, center.z, ticketedUnready, lookahead)) {
             acquireDemandTicket(live.get(idx));
         }
-        Set<Integer> hashIdx = new java.util.HashSet<>(
-                PullPacingValve.selectReadyToHash(candidates, center.x, center.z, hashBudget));
+        List<Integer> selected = PullPacingValve.selectReadyToHash(
+                candidates, center.x, center.z, hashBudget);
+        boolean[] completed = new boolean[live.size()];
         int unchangedLeft = PullPacingValve.UNCHANGED_PER_TICK;
         int fullLeft = fullBudget;
-        for (int i = 0; i < live.size(); i++) {
-            PendingPull pending = live.get(i);
-            if (!hashIdx.contains(i)) {
-                queue.add(pending);
-                continue;
-            }
-            if (unchangedLeft <= 0 && fullLeft <= 0) {
-                queue.add(pending);
+        for (int idx : selected) {
+            PendingPull pending = live.get(idx);
+            boolean hasBaseline = PullPacingValve.hasBaseline(
+                    pending.entry().chunkHash(), pending.entry().sectionHashes());
+            if (PullPacingValve.skipHash(fullLeft, unchangedLeft, hasBaseline)) {
                 continue;
             }
             if (!completeReadyPull(pending, unchangedLeft, fullLeft)) {
-                queue.add(pending);
                 continue;
             }
-            boolean spentUnchanged = lastCompletedUnchanged;
-            if (spentUnchanged) {
+            completed[idx] = true;
+            if (lastCompletedUnchanged) {
                 unchangedLeft--;
             } else {
                 fullLeft--;
+            }
+        }
+        for (int i = 0; i < live.size(); i++) {
+            if (!completed[i]) {
+                queue.add(live.get(i));
             }
         }
     }
@@ -371,11 +394,13 @@ public class ServerChunkPushManager {
         ServerPlayer player = pending.player();
         if (player == null || player.hasDisconnected() || player.isRemoved()) {
             releaseDemandTicket(pending);
+            unqueuePull(pending);
             return true;
         }
         ServerLevel level = PlayerCompat.getServerLevel(player);
         if (level == null || !LevelCompat.getDimensionId(level).equals(pending.dimension())) {
             releaseDemandTicket(pending);
+            unqueuePull(pending);
             return true;
         }
         LevelChunk chunk = LevelCompat.loadedFullChunk(level, pending.entry().chunkX(), pending.entry().chunkZ());
@@ -384,6 +409,7 @@ public class ServerChunkPushManager {
                 && now - pending.ticketNanos > PENDING_PULL_TIMEOUT_NANOS) {
             // 仅已发票仍未 FULL：装载失败。未持票的柱在 lookahead 外排队，不能按入队时钟超时。
             releaseDemandTicket(pending);
+            unqueuePull(pending);
             sendPullFailure(pending, "unloaded");
             return true;
         }
@@ -414,6 +440,7 @@ public class ServerChunkPushManager {
                 }
                 lastCompletedUnchanged = true;
                 releaseDemandTicket(pending);
+                unqueuePull(pending);
                 sendPullResponse(pending.player(), pending, classified.result());
                 return true;
             }
@@ -422,12 +449,14 @@ public class ServerChunkPushManager {
             }
             lastCompletedUnchanged = false;
             releaseDemandTicket(pending);
+            unqueuePull(pending);
             submitEncodedPull(pending, classified, level.registryAccess());
             return true;
         } catch (Throwable t) {
             Constants.LOG.warn("Hassium: pending pull push failed for ({}, {})",
                     pending.entry().chunkX(), pending.entry().chunkZ(), t);
             releaseDemandTicket(pending);
+            unqueuePull(pending);
             sendPullFailure(pending, "push");
             return true;
         }
@@ -1191,6 +1220,7 @@ public class ServerChunkPushManager {
                 releaseDemandTicket(pending);
             }
         }
+        pullQueuedKeys.remove(playerId);
         initialPlayerChunkPos.remove(playerId);
         resumePlayers.remove(playerId);
         playerLightComputeSupported.remove(playerId);
@@ -1207,6 +1237,7 @@ public class ServerChunkPushManager {
             }
         }
         pullQueues.clear();
+        pullQueuedKeys.clear();
         demandTicketRefs.clear();
         initialPlayerChunkPos.clear();
         resumePlayers.clear();

@@ -149,8 +149,13 @@ public final class ShadowPullClient {
         return true;
     }
 
-    /** 原版 tracking 首包的唯一入口：缓存存在时由 ShadowPull 取代 FULL，否则保留原版包建立基线。 */
+    /** 原版 tracking 首包的唯一入口：缓存存在时由 ShadowPull 取代 FULL，否则保留原版包建立基线。
+     *  pull FULL 回放（{@link ClientChunkHandler#applyShadowPullFull}）必须放行：
+     *  否则会把刚收到的权威包当成原版首包再打一次空基线 Pull，落地被标成 SERVER_PUSH。 */
     public static boolean handleNativeChunk(net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket packet) {
+        if (packet != null && ClientChunkHandler.isPendingPullApply(packet.getX(), packet.getZ())) {
+            return false;
+        }
         if (ClientChunkPipeline.getInstance().isApplyInProgress()) {
             return false;
         }

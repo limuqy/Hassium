@@ -48,6 +48,26 @@ class ServerChunkPushValveTest {
     }
 
     @Test
+    @DisplayName("no baseline cannot be UNCHANGED; empty and zero hash are both no-baseline")
+    void hasBaselineDetectsClientHash() {
+        assertFalse(PullPacingValve.hasBaseline(0L, List.of()));
+        assertFalse(PullPacingValve.hasBaseline(0L, null));
+        assertTrue(PullPacingValve.hasBaseline(1L, List.of()));
+        assertTrue(PullPacingValve.hasBaseline(0L, List.of(1L)));
+    }
+
+    @Test
+    @DisplayName("FULL quota gone: skip hash unless the column might be UNCHANGED")
+    void skipHashWhenFullQuotaGone() {
+        assertTrue(PullPacingValve.skipHash(0, 32, false), "cold FULL must not hash after N");
+        assertFalse(PullPacingValve.skipHash(0, 32, true), "baseline may still be UNCHANGED");
+        assertFalse(PullPacingValve.skipHash(5, 32, false));
+        assertFalse(PullPacingValve.skipHash(1, 0, false));
+        assertTrue(PullPacingValve.skipHash(0, 0, true));
+        assertTrue(PullPacingValve.skipHash(0, 0, false));
+    }
+
+    @Test
     @DisplayName("lookahead does not ticket beyond N×8; already-ticketed unready occupy the window")
     void lookaheadDoesNotTicketPastWindow() {
         int lookahead = PullPacingValve.lookaheadLimit(5);

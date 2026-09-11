@@ -50,18 +50,23 @@ public class ClientChunkHandler {
         }
     }
 
-    /** 在途 pull FULL 落地标记（ChunkPos.asLong；applyShadowPullFull 置位，listener 消费）。 */
-    private static final java.util.concurrent.atomic.AtomicLong PENDING_PULL_APPLY =
-            new java.util.concurrent.atomic.AtomicLong(Long.MIN_VALUE);
+    /** 在途 pull FULL 落地标记（ChunkPos.asLong；applyShadowPullFull 置位，listener 消费）。
+     *  必须是集合：主线程 mc.execute 会积压多柱，单槽 AtomicLong 会被后到的 mark 覆盖。 */
+    private static final java.util.Set<Long> PENDING_PULL_APPLY =
+            java.util.concurrent.ConcurrentHashMap.newKeySet();
 
-    /** pull FULL 响应落地前调用；listener 据此以 REMOTE_PULL 归因（仅诊断链路）。 */
+    /** pull FULL 响应落地前调用；listener 据此以 REMOTE_PULL 归因，且勿走原版首包拦截。 */
     static void markPullApply(int chunkX, int chunkZ) {
-        PENDING_PULL_APPLY.set(ChunkPos.asLong(chunkX, chunkZ));
+        PENDING_PULL_APPLY.add(ChunkPos.asLong(chunkX, chunkZ));
+    }
+
+    static boolean isPendingPullApply(int chunkX, int chunkZ) {
+        return PENDING_PULL_APPLY.contains(ChunkPos.asLong(chunkX, chunkZ));
     }
 
     /** listener 分支消费：该柱是否为在途 pull FULL 落地；命中即清除。 */
     public static boolean consumePullApplyOrigin(int chunkX, int chunkZ) {
-        return PENDING_PULL_APPLY.compareAndSet(ChunkPos.asLong(chunkX, chunkZ), Long.MIN_VALUE);
+        return PENDING_PULL_APPLY.remove(ChunkPos.asLong(chunkX, chunkZ));
     }
 
     /**
@@ -84,6 +89,7 @@ public class ClientChunkHandler {
      * 重置客户端缓存存储（断开连接时调用，转发 pipeline）
      */
     public static void resetStorage() {
+        PENDING_PULL_APPLY.clear();
         ClientChunkPipeline.getInstance().resetStorage();
     }
 

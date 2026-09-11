@@ -8,6 +8,7 @@ import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.network.ClientChunkPipeline;
 import io.github.limuqy.mc.hassium.network.ShadowPullClient;
 import io.github.limuqy.mc.hassium.utils.DebugLogger;
+import io.github.limuqy.mc.hassium.utils.DimensionKey;
 import net.minecraft.client.Minecraft;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
@@ -90,9 +91,10 @@ public final class ShadowTrackingSession {
     /** 单泵最多本地重发柱数。 */
     private static final int MAX_REDELIVER_PER_PUMP = 32;
     private long lastSweepMs;
-    /** 形状扫描在途柱（复合键 → 入队时刻）：已发 pull 未注入；注入后清除。防重复入队。
-     *  超时清除——pull 响应丢失/服务端拒绝时柱会永久卡在在途集导致形状出现永久洞。 */
-    private static final long SWEEP_INFLIGHT_TIMEOUT_MS = 15_000L;
+    /** 形状扫描 / boot / 悬置选柱共用的在途柱（复合键 → 入队时刻）：已发 pull 未注入。
+     *  注入后或超时清除。超时须长于 VD20 冷装填（1529 柱 / 2 tick ≈ 38s），
+     *  15s 会把外环未注入柱当丢失再扫一遍。 */
+    private static final long SWEEP_INFLIGHT_TIMEOUT_MS = 60_000L;
     private final java.util.Map<Long, Long> sweepInFlight =
             new java.util.concurrent.ConcurrentHashMap<>();
     /** 本会话已计 OVD 的坐标（防 materialize/sweep 双计；reset 清空）。 */
@@ -614,6 +616,9 @@ public final class ShadowTrackingSession {
                 continue; // 已物化（注入/本地生成），无需 pull
             }
             ChunkPos pos = new ChunkPos(sel.x(), sel.z());
+            if (!markPullInFlight(sel.dimension(), pos, System.currentTimeMillis())) {
+                continue; // boot / sweep 已发出，同柱不再打第二遍
+            }
             if (ShadowLightCompute.hasLocalPullBaseline(sel.dimension(), pos)) {
                 withBaseline.add(pos);
             } else {
@@ -628,10 +633,14 @@ public final class ShadowTrackingSession {
      * 可见形状周期扫描：移动后 vanilla 选柱链（scheduleChunkLoad → onChunkSelected）会停
      * ——悬置 future 卡住或 2ms tick 预算被卸载耗尽，pendingSelections 不再填充。
      * 本扫描不依赖 vanilla，直接枚举虚拟玩家当前可见形状内「未注入且未在途」的柱补齐 pull。
-     * 形状 = isChunkInRange(serverViewDistance)；已注入 / 已请求（tryRequestMiss 已登记）跳过。
+     * 形状 = isChunkInRange(serverViewDistance)；已注入 / 已请求（{@link #sweepInFlight}）跳过。
      */
     private void sweepVisibleShape(ShadowSeedServer shadow, long nowMs) {
         if (virtualPlayer == null || currentDimension == null || serverViewDistance <= 0) {
+            return;
+        }
+        if (bootGridArmed) {
+            // 基准盘还在发射：未 mark 的外环仍在 bootGridCells 里，sweep 会抢发同一批。
             return;
         }
         if (nowMs - lastSweepMs < SWEEP_INTERVAL_MS) {
@@ -671,8 +680,7 @@ public final class ShadowTrackingSession {
                     continue;
                 }
                 if (shadow.injectedChunk(currentDimension, x, z) != null) {
-                    sweepInFlight.remove(io.github.limuqy.mc.hassium.utils.DimensionKey
-                            .key(currentDimension, x, z));
+                    sweepInFlight.remove(DimensionKey.key(currentDimension, x, z));
                     // 已注入但客户端无落地凭据（真实服半径更小导致 Forget，或 tracking 边沿漏发）：
                     // 入重发队列，由 drainRedeliver 限速 publish
                     ChunkPos injectedPos = new ChunkPos(x, z);
@@ -682,16 +690,17 @@ public final class ShadowTrackingSession {
                     }
                     continue;
                 }
-                // 在途防抖：已发 pull 未注入的柱不重复入队（超时后可重入）
-                long key = io.github.limuqy.mc.hassium.utils.DimensionKey
-                        .key(currentDimension, x, z);
-                if (sweepInFlight.putIfAbsent(key, nowMs) != null) {
+                ChunkPos pos = new ChunkPos(x, z);
+                boolean hasBaseline = ShadowLightCompute.hasLocalPullBaseline(currentDimension, pos);
+                if (!hasBaseline && preferLocalGeneration()) {
+                    continue; // SeedGen 本地生成，不占在途、不发 pull
+                }
+                if (!markPullInFlight(currentDimension, pos, nowMs)) {
                     continue;
                 }
-                ChunkPos pos = new ChunkPos(x, z);
-                if (ShadowLightCompute.hasLocalPullBaseline(currentDimension, pos)) {
+                if (hasBaseline) {
                     withBaseline.add(pos);
-                } else if (!preferLocalGeneration()) {
+                } else {
                     withoutBaseline.add(pos);
                 }
                 sent++;
@@ -740,9 +749,19 @@ public final class ShadowTrackingSession {
         int sent = 0;
         while (sent < maxPerPump && !bootGridCells.isEmpty()) {
             ChunkPos pos = bootGridCells.pollFirst();
-            if (ShadowLightCompute.hasLocalPullBaseline(currentDimension, pos)) {
+            if (shadow.injectedChunk(currentDimension, pos.x, pos.z) != null) {
+                continue;
+            }
+            boolean hasBaseline = ShadowLightCompute.hasLocalPullBaseline(currentDimension, pos);
+            if (!hasBaseline && preferLocalGeneration()) {
+                continue; // SeedGen 本地生成，不占在途、不发 pull
+            }
+            if (!markPullInFlight(currentDimension, pos, nowMs)) {
+                continue;
+            }
+            if (hasBaseline) {
                 withBaseline.add(pos);
-            } else if (!preferLocalGeneration()) {
+            } else {
                 withoutBaseline.add(pos);
             }
             sent++;
@@ -936,6 +955,20 @@ public final class ShadowTrackingSession {
     }
 
     /**
+     * boot / 悬置选柱 / 形状扫描共用在途。{@code true} = 本柱尚未在途，调用方应发出 pull。
+     */
+    private boolean markPullInFlight(String dimension, ChunkPos pos, long nowMs) {
+        if (pos == null) {
+            return false;
+        }
+        String dim = dimension != null ? dimension : currentDimension;
+        if (dim == null) {
+            return false;
+        }
+        return sweepInFlight.putIfAbsent(DimensionKey.key(dim, pos.x, pos.z), nowMs) == null;
+    }
+
+    /**
      * scheduleChunkLoad 影子钩子登记（worldgen 压制柱，无本地数据可悬置）：
      * 由影子主循环泵分批发空基线（或磁盘基线）pull 请求。chunk worker 线程可调。
      */
@@ -1000,6 +1033,9 @@ public final class ShadowTrackingSession {
             DebugLogger.info(DebugLogger.LogType.NETWORK,
                     "[SHADOW_TRACK] materialized ({}, {}) no-local-baseline -> pull (dimension={})",
                     pos.x, pos.z, dimension);
+            if (!markPullInFlight(dimension, pos, System.currentTimeMillis())) {
+                return;
+            }
             if (ShadowLightCompute.hasLocalPullBaseline(dimension, pos)) {
                 ShadowPullClient.requestFull(dimension, java.util.List.of(pos));
             } else {
@@ -1017,10 +1053,13 @@ public final class ShadowTrackingSession {
                         "[SHADOW_TRACK] materialized ({}, {}) redeliver-publish-failed -> pull (dimension={})",
                         pos.x, pos.z, dimension);
                 ShadowLightCompute.clearRequestMiss(dimension, pos);
-                ShadowPullClient.requestAuthoritativeFull(dimension, java.util.List.of(pos));
+                if (markPullInFlight(dimension, pos, System.currentTimeMillis())) {
+                    ShadowPullClient.requestAuthoritativeFull(dimension, java.util.List.of(pos));
+                }
                 return;
             }
-            if (ShadowLightCompute.tryRequestMiss(dimension, pos)) {
+            if (ShadowLightCompute.tryRequestMiss(dimension, pos)
+                    && markPullInFlight(dimension, pos, System.currentTimeMillis())) {
                 ShadowPullClient.requestFull(dimension, java.util.List.of(pos));
             }
             return;
@@ -1030,7 +1069,8 @@ public final class ShadowTrackingSession {
         if (alreadyMaterialized
                 && (ShadowLightCompute.wasNetworkIngress(dimension, pos)
                     || ShadowLightCompute.hasClientApplyEpoch(dimension, pos))) {
-            if (ShadowLightCompute.tryRequestMiss(dimension, pos)) {
+            if (ShadowLightCompute.tryRequestMiss(dimension, pos)
+                    && markPullInFlight(dimension, pos, System.currentTimeMillis())) {
                 ShadowPullClient.requestFull(dimension, java.util.List.of(pos));
             }
             return;
@@ -1042,29 +1082,32 @@ public final class ShadowTrackingSession {
                     "[SHADOW_TRACK] materialized ({}, {}) publish-failed -> pull (dimension={})",
                     pos.x, pos.z, dimension);
             ShadowLightCompute.clearRequestMiss(dimension, pos);
-            ShadowPullClient.requestAuthoritativeFull(dimension, java.util.List.of(pos));
+            if (markPullInFlight(dimension, pos, System.currentTimeMillis())) {
+                ShadowPullClient.requestAuthoritativeFull(dimension, java.util.List.of(pos));
+            }
             return;
         }
         DebugLogger.info(DebugLogger.LogType.NETWORK,
                 "[SHADOW_TRACK] materialized ({}, {}) alreadyMaterialized={} -> publishCached (dimension={})",
                 pos.x, pos.z, alreadyMaterialized, dimension);
         // 已本地交付后，可选对真实服 compare 保新鲜；防抖只作用于网络请求
-        if (ShadowLightCompute.tryRequestMiss(dimension, pos)) {
+        if (ShadowLightCompute.tryRequestMiss(dimension, pos)
+                && markPullInFlight(dimension, pos, System.currentTimeMillis())) {
             ShadowPullClient.requestFull(dimension, java.util.List.of(pos));
         }
     }
 
     /**
      * 网络全量已由 {@code enqueueInjectedForLight} 入 generated（保留网络来源）。
-     * 本方法只清形状扫描在途登记，<b>不得</b>再 publishCachedChunk——否则同一柱
-     * 来源被覆盖成 MEMORY_CACHE，R1 首进被误记成缓存全命中。
+     * 不得在此清 {@link #sweepInFlight}：入队瞬间注入表对扫描线程还不可见，
+     * 清在途会让下一拍 sweep 把同一柱再请求一遍。在途由 {@link #onPullInjected}、
+     * 扫描遇到已注入柱、或 60s 超时清除。<b>不得</b>再 publishCachedChunk。
      */
     public void onNetworkChunkQueued(String dimension, ChunkPos pos) {
-        if (pos == null) {
+        if (pos == null || dimension == null) {
             return;
         }
-        sweepInFlight.remove(io.github.limuqy.mc.hassium.utils.DimensionKey
-                .key(dimension == null ? currentDimension : dimension, pos.x, pos.z));
+        // inflight 保留到注入可见；见方法 javadoc
     }
 
     /**
@@ -1078,8 +1121,7 @@ public final class ShadowTrackingSession {
             return;
         }
         // 形状扫描在途登记清除：柱已注入，下轮扫描不会再拉
-        sweepInFlight.remove(io.github.limuqy.mc.hassium.utils.DimensionKey
-                .key(dimension, pos.x, pos.z));
+        sweepInFlight.remove(DimensionKey.key(dimension, pos.x, pos.z));
         if (!inVanillaVisibleShape(pos.x, pos.z)) {
             return;
         }
@@ -1089,7 +1131,9 @@ public final class ShadowTrackingSession {
         if (!ShadowLightCompute.publishCachedChunk(dimension, pos)) {
             // 注入表有柱但不可物化（异常）：再拉一次权威全量
             ShadowLightCompute.clearRequestMiss(dimension, pos);
-            ShadowPullClient.requestAuthoritativeFull(dimension, java.util.List.of(pos));
+            if (markPullInFlight(dimension, pos, System.currentTimeMillis())) {
+                ShadowPullClient.requestAuthoritativeFull(dimension, java.util.List.of(pos));
+            }
         }
     }
 
