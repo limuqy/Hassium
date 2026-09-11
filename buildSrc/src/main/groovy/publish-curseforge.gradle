@@ -5,9 +5,8 @@ import net.darkhax.curseforgegradle.TaskPublishCurseForge
  * Token：环境变量 CURSEFORGE_TOKEN，或本机 gradle 属性 curseforge_token（勿提交）。
  * 项目 ID：根 gradle.properties 的 curseforge_project_id。
  *
- * 1.20.1 特殊：neoforge 子项目以 loom.platform='forge' 编译（settings.gradle），
- * 产物二进制同时兼容 Forge 与 NeoForge；上传时同一 jar 双标 Forge + NeoForge。
- * 其它版本严格按 builds_for 各自 loader 单标上传。
+ * 各版本严格按 builds_for 各自 loader 单标上传。1.20.1 不构建 neoforge（NeoForge 47.x
+ * 原生兼容 Forge mod，NeoForge 用户直接使用 forge 子项目的 Forge 文件）。
  */
 
 def cfLoaderByProject = [
@@ -62,16 +61,8 @@ afterEvaluate {
         mainFile.addEnvironment('Client', 'Server')
         mainFile.addJavaVersion("Java ${javaVer}")
 
-        // 1.20.1：neoforge 产物 = Forge 二进制兼容 jar，同 file 双标（CF 页面可多选 loader）。
-        // addModLoader 是 varargs，内部累加到 gameVersions Set，可一次传多个。
-        def dualForgeOnNeo = (project.name == 'neoforge' && mcVer == '1.20.1')
-        if (dualForgeOnNeo) {
-            mainFile.addModLoader('NeoForge', 'Forge')
-            mainFile.displayName = "Hassium ${mod_version} — ${mcVer} NeoForge/Forge"
-        } else {
-            mainFile.addModLoader(cfLoader)
-            mainFile.displayName = "Hassium ${mod_version} — ${mcVer} ${cfLoader}"
-        }
+        mainFile.addModLoader(cfLoader)
+        mainFile.displayName = "Hassium ${mod_version} — ${mcVer} ${cfLoader}"
 
         if (project.name == 'fabric') {
             mainFile.addRequirement('fabric-api')

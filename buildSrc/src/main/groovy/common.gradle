@@ -43,35 +43,23 @@ processResources {
     def neoLoader = gradle.ext.has('neoforge_loader') ? gradle.ext.neoforge_loader as String : ''
     def neoLoaderRange = gradle.ext.has('neoforge_loader_version_range') ? gradle.ext.neoforge_loader_version_range : ''
     if (!neoLoaderRange && neoLoader) {
-        // neoforge_loader format: "47.1.105" (Forge-like for 1.20.1) or "20.5.21-beta"
         def majorMinor = neoLoader.tokenize('.').take(2).join('.')
         neoLoaderRange = "[${majorMinor},)"
     }
 
-    // javafml 的 loaderVersion ≠ NeoForge 版本号：
-    // - 1.20.1（Forge 风格 NeoForge，loader 47.x）：与 forge/neoforge loader 区间一致
-    // - ≥1.21.1（FancyModLoader）：language provider Implementation-Version 为 1.0/2.0/...，默认 [1,)
-    // 高版本若需收紧可在 versionProperties 设 javafml_loader_version_range
+    // javafml 的 loaderVersion ≠ NeoForge 版本号（NeoForge ≥1.21.1 FancyModLoader 的
+    // language provider Implementation-Version 为 1.0/2.0/...，默认 [1,)）。
+    // 高版本若需收紧可在 versionProperties 设 javafml_loader_version_range。
     def javafmlRange = gradle.ext.has('javafml_loader_version_range') ? gradle.ext.javafml_loader_version_range : ''
     if (!javafmlRange) {
-        def neoMajor = neoLoader ? neoLoader.tokenize('.')[0].toInteger() : 0
-        javafmlRange = (neoMajor >= 40) ? neoLoaderRange : '[1,)'
+        javafmlRange = '[1,)'
     }
 
-    // mods.toml 里的加载器依赖 modId：
-    // - 1.20.1 NeoForge 仍为 forge；≥1.21.1 为 neoforge
-    def mcVer = gradle.ext.minecraft_version as String
-    def neoDepModId = (mcVer == '1.20.1') ? 'forge' : 'neoforge'
+    // mods.toml 里的加载器依赖 modId：NeoForge ≥1.21.1 恒为 neoforge
+    def neoDepModId = 'neoforge'
 
-    // mods.toml 依赖声明字段：
-    // - 1.20.1（Forge 47.x）：必须用 `mandatory = true`，不支持 `type`
-    // - 1.21.1+（NeoForge 20.4+）：必须用 `type = "required"`，`mandatory` 被拒绝
-    def depRequiredField
-    if (mcVer == '1.20.1') {
-        depRequiredField = 'mandatory = true'
-    } else {
-        depRequiredField = 'type = "required"'
-    }
+    // mods.toml 依赖声明字段：NeoForge 20.4+ 必须用 `type = "required"`，`mandatory` 被拒绝
+    def depRequiredField = 'type = "required"'
 
     var expandProps = ['version'                              : mod_version,
                        'group'                                : project.group,

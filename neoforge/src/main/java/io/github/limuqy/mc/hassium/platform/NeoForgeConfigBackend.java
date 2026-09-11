@@ -7,14 +7,10 @@ import io.github.limuqy.mc.hassium.config.ConfigSchema;
 import io.github.limuqy.mc.hassium.config.ConfigValues;
 import io.github.limuqy.mc.hassium.platform.services.IConfigBackend;
 
-// T10 收口：ForgeConfigSpec(1.20.1) vs ModConfigSpec(1.21.1+) 双类型名无法用 compat 消除，
-// 类型名暴露仅保留 4 处分段点（import / 访问器返回类型 / Builder 构造 / SpecData 定义），
-// 其余读写逻辑全部收敛到 SpecData.get/set 与 Object 局部变量。
-#if MC_VER < MC_1_21_1
-import net.minecraftforge.common.ForgeConfigSpec;
-#else
+// T10 收口：ForgeConfigSpec(1.20.1) vs ModConfigSpec(1.21.1+) 双类型名无法用 compat 消除；
+// 1.20.1 支持退役后仅剩 ModConfigSpec，类型名暴露收敛为单一类型（import / 访问器返回类型 /
+// Builder 构造 / SpecData 定义），其余读写逻辑全部收敛到 SpecData.get/set 与 Object 局部变量。
 import net.neoforged.neoforge.common.ModConfigSpec;
-#endif
 
 import java.util.HashMap;
 import java.util.List;
@@ -30,13 +26,8 @@ public final class NeoForgeConfigBackend implements IConfigBackend {
         server = build(ConfigScope.SERVER);
     }
 
-#if MC_VER < MC_1_21_1
-    public ForgeConfigSpec clientSpec() { return client.spec(); }
-    public ForgeConfigSpec serverSpec() { return server.spec(); }
-#else
     public ModConfigSpec clientSpec() { return client.spec(); }
     public ModConfigSpec serverSpec() { return server.spec(); }
-#endif
 
     @Override
     public ConfigValues load(ConfigScope scope) {
@@ -50,22 +41,12 @@ public final class NeoForgeConfigBackend implements IConfigBackend {
         data(scope).spec().save();
     }
 
-#if MC_VER < MC_1_21_1
-    private static SpecData build(ConfigScope scope) {
-        ForgeConfigSpec.Builder builder = new ForgeConfigSpec.Builder();
-        Map<String, ForgeConfigSpec.ConfigValue<?>> values = new HashMap<>();
-#else
     private static SpecData build(ConfigScope scope) {
         ModConfigSpec.Builder builder = new ModConfigSpec.Builder();
         Map<String, ModConfigSpec.ConfigValue<?>> values = new HashMap<>();
-#endif
         for (ConfigEntry<?> entry : entries(scope)) {
             builder.comment(ConfigComments.lines(entry.comment())).translation(entry.translationKey());
-#if MC_VER < MC_1_21_1
-            ForgeConfigSpec.ConfigValue<?> configValue =
-#else
             ModConfigSpec.ConfigValue<?> configValue =
-#endif
             switch (entry.type()) {
                 case BOOLEAN, STRING -> builder.define(entry.path(), entry.defaultValue());
                 case INT -> builder.defineInRange(entry.path(), (Integer) entry.defaultValue(),
@@ -112,19 +93,6 @@ public final class NeoForgeConfigBackend implements IConfigBackend {
         return scope == ConfigScope.CLIENT ? client : server;
     }
 
-#if MC_VER < MC_1_21_1
-    /** 原生 spec + ConfigValue 表；原生读写收口于 get/set（T10）。 */
-    private record SpecData(ForgeConfigSpec spec, Map<String, ForgeConfigSpec.ConfigValue<?>> values) {
-        Object get(String path) {
-            return values.get(path).get();
-        }
-
-        @SuppressWarnings({"unchecked", "rawtypes"})
-        void set(String path, Object value) {
-            ((ForgeConfigSpec.ConfigValue) values.get(path)).set(value);
-        }
-    }
-#else
     /** 原生 spec + ConfigValue 表；原生读写收口于 get/set（T10）。 */
     private record SpecData(ModConfigSpec spec, Map<String, ModConfigSpec.ConfigValue<?>> values) {
         Object get(String path) {
@@ -136,5 +104,4 @@ public final class NeoForgeConfigBackend implements IConfigBackend {
             ((ModConfigSpec.ConfigValue) values.get(path)).set(value);
         }
     }
-#endif
 }

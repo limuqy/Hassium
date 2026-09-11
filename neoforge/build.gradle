@@ -22,18 +22,11 @@ dependencies {
     library 'com.google.code.findbugs:jsr305:3.0.1'
 
     if (gradle.ext.has('cloth_config_version')) {
-        def clothArtifact = gradle.ext.minecraft_version == '1.20.1'
-                ? 'cloth-config-forge'
-                : 'cloth-config-neoforge'
-        modCompileOnly("me.shedaniel.cloth:${clothArtifact}:${gradle.ext.cloth_config_version}")
+        modCompileOnly("me.shedaniel.cloth:cloth-config-neoforge:${gradle.ext.cloth_config_version}")
     }
 
     if (gradle.ext.has('imblocker_version')) {
-        def imSkip = gradle.ext.minecraft_version == '1.20.1'
-        def imFilter = gradle.ext.minecraft_version == '1.20.1' ? 'forge' : 'neoforge'
-        if (!imSkip) {
-            modLocalRuntime("maven.modrinth:WMDesFsZ:${gradle.ext.imblocker_version}-${imFilter}")
-        }
+        modLocalRuntime("maven.modrinth:WMDesFsZ:${gradle.ext.imblocker_version}-neoforge")
     }
 }
 

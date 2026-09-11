@@ -5,35 +5,18 @@ plugins {
 }
 
 loom {
-    if (gradle.ext.minecraft_version == '1.20.1') {
-        forge {
-            mixinConfig "${mod_id}.mixins.json"
-            mixinConfig "${mod_id}.neoforge.mixins.json"
-        }
-    } else {
-        // 1.20.2+：mixin 由 mods.toml / neoforge.mods.toml 的 [[mixins]] 声明
-        neoForge {
-        }
+    // mixin 由 neoforge.mods.toml 的 [[mixins]] 声明（1.20.1 的 forge mixinConfig 兼容已随 NeoForge 1.20.1 支持退役）
+    neoForge {
     }
 }
 
 def resolveNeoForgeDependency() {
-    def mcVer = gradle.ext.minecraft_version as String
     def loader = gradle.ext.neoforge_loader as String
-    if (mcVer == "1.20.1") {
-        // 1.20.1 的 NeoForge 仍发布在 net.neoforged:forge，版本号带 MC 前缀。
-        return "net.neoforged:forge:${mcVer}-${loader}"
-    }
     return "net.neoforged:neoforge:${loader}"
 }
 
 dependencies {
-    def neoForgeDependency = resolveNeoForgeDependency()
-    if (gradle.ext.minecraft_version == '1.20.1') {
-        forge neoForgeDependency
-    } else {
-        neoForge neoForgeDependency
-    }
+    neoForge resolveNeoForgeDependency()
 }
 
 loom {
@@ -99,17 +82,8 @@ loom {
     }
 }
 
-// NeoForge 元数据文件分界（见 20.5 release notes）：
-// - < 1.20.5：只认 META-INF/mods.toml（1.20.2–1.20.4 若只打 neoforge.mods.toml 会被静默跳过）
-// - >= 1.20.5：只认 META-INF/neoforge.mods.toml
+// NeoForge ≥1.21.1 只认 META-INF/neoforge.mods.toml（<1.20.5 的 mods.toml 兼容已随 1.20.1 支持退役）。
 // 两者不能同时打进 jar。
 processResources {
-    def mcVer = gradle.ext.minecraft_version as String
-    def parts = mcVer.tokenize('.').collect { it as int }
-    def useNeoForgeModsToml = parts[0] > 1 || (parts[0] == 1 && (parts[1] > 20 || (parts[1] == 20 && parts[2] >= 5)))
-    if (useNeoForgeModsToml) {
-        exclude 'META-INF/mods.toml'
-    } else {
-        exclude 'META-INF/neoforge.mods.toml'
-    }
+    exclude 'META-INF/mods.toml'
 }

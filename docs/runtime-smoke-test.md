@@ -9,8 +9,8 @@ Hassium 跨版本（1.20.1–1.21.11）× 多加载器（fabric / neoforge）的
 | 层 | 载体 | 范围 | 说明 |
 |----|------|------|------|
 | **L0** | `common:test` | 随单元测试跑 | JUnit 代码级冒烟，无 MC 实例。代表：`LoginHandshakeTest`（登录期握手编解码/协商）、`ShadowPull*Test`（统一 Compare+Pull 协议族）、`SectionDeltaProtocolTest` |
-| **L1** | classic 场景 | 全矩阵（12 版 × fabric/neoforge） | 两轮连服 VD 切换（VD=20 → 断开 → VD=10），核心缓存 / 分段增量 / 光照 / 聚合通道全链路验证 |
-| **L2** | 场景目录 | 锚点集：1.20.1 fabric+neoforge、1.21.1 neoforge、1.21.11 neoforge | 数据驱动场景（seedgen / dimension），只在锚点版本×加载器组合上跑，控制总时长 |
+| **L1** | classic 场景 | 全矩阵（12 版 × fabric/neoforge，按 `builds_for` 过滤；1.20.1 无 neoforge 自动 SKIP） | 两轮连服 VD 切换（VD=20 → 断开 → VD=10），核心缓存 / 分段增量 / 光照 / 聚合通道全链路验证 |
+| **L2** | 场景目录 | 锚点集：1.20.1 fabric+forge、1.21.1 neoforge、1.21.11 neoforge | 数据驱动场景（seedgen / dimension），只在锚点版本×加载器组合上跑，控制总时长 |
 | **L3** | 人工专项 | 按需 | AI 辅助游戏内功能测试（minecraft-mod-mcp 桥），不进自动 PASS 门禁，见 [`ai-functional-test.md`](ai-functional-test.md) |
 
 ## 概述
@@ -87,14 +87,14 @@ Hassium 跨版本（1.20.1–1.21.11）× 多加载器（fabric / neoforge）的
 | 参数 | 必填 | 默认 | 说明 |
 |------|------|------|------|
 | `-Phase` | 是 | — | `I` 或 `R` |
-| `-Scenarios` | 否 | `classic` | 场景列表（逗号分隔）。`classic` 走全矩阵（`-Versions` × `-Loaders`）；非 classic 场景只跑锚点集（硬编码：1.20.1 fabric+neoforge、1.21.1 neoforge、1.21.11 neoforge，再与 `-Versions`/`-Loaders`/`builds_for` 取交集）。非 classic 会话 sessionId 追加 `_<scenario>` 后缀避免 result JSON 冲突 |
+| `-Scenarios` | 否 | `classic` | 场景列表（逗号分隔）。`classic` 走全矩阵（`-Versions` × `-Loaders`）；非 classic 场景只跑锚点集（硬编码：1.20.1 fabric+forge、1.21.1 neoforge、1.21.11 neoforge，再与 `-Versions`/`-Loaders`/`builds_for` 取交集）。非 classic 会话 sessionId 追加 `_<scenario>` 后缀避免 result JSON 冲突 |
 | `-Versions` | 否 | 全部 12 版 | 指定版本子集 |
 | `-Loaders` | 否 | `fabric,neoforge` | 加载器子集 |
 | `-MaxRetries` | 否 | `3` | 单会话失败重试次数上限 |
-| `-Parallel` | 否 | false | 同版本 fabric+neoforge 并行跑（Start-Process） |
+| `-Parallel` | 否 | false | 同版本多 loader 并行跑（Start-Process） |
 | `-BasePort` | 否 | `25565` | 起始端口；fabric 用此端口，neoforge 自动 +1（仅并行模式生效） |
 
-**batch `CleanWorld` 策略**（按 loader 独立跟踪，因为 fabric/neoforge 各有 `run/server`）：
+**batch `CleanWorld` 策略**（按 loader 独立跟踪，因为 fabric/forge/neoforge 各有 `run/server`）：
 
 | 场景 | 是否清理 |
 |------|----------|

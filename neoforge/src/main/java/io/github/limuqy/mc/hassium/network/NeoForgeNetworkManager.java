@@ -12,18 +12,12 @@ import net.minecraft.server.level.ServerPlayer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-#if MC_VER < MC_1_21_1
-import net.minecraftforge.network.NetworkDirection;
-import net.minecraftforge.network.NetworkRegistry;
-import net.minecraftforge.network.simple.SimpleChannel;
-#else
 import net.minecraft.network.codec.ByteBufCodecs;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.neoforge.network.event.RegisterPayloadHandlersEvent;
 import net.neoforged.neoforge.network.handling.IPayloadContext;
-#endif
 
 import java.util.UUID;
 import io.github.limuqy.mc.hassium.network.HassiumConnectionRegistry;
@@ -36,11 +30,7 @@ import io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute;
 /**
  * NeoForge 平台网络管理器实现。
  * <p>
- * 版本整段切分（见 docs/version-segments.md；1.20.2–1.20.6 支路已随版本线收编退役）：
- * <ul>
- *   <li>{@code MC_VER < MC_1_21_1}：SimpleChannel（1.20.1 仍用 forge 包名）</li>
- *   <li>{@code MC_VER >= MC_1_21_1}：Payload + StreamCodec（API 自 1.21.1 前版本线起变化）</li>
- * </ul>
+ * NeoForge ≥1.21.1：Payload + StreamCodec（1.20.1 的 SimpleChannel 兼容线已随 NeoForge 1.20.1 支持退役）。
  * common 聚合能力由 {@link io.github.limuqy.mc.hassium.compat.NetworkCapability} 门控。
  */
 public class NeoForgeNetworkManager implements NetworkManager {
@@ -68,125 +58,6 @@ public class NeoForgeNetworkManager implements NetworkManager {
         return io.github.limuqy.mc.hassium.compat.PlayerCompat.getConnection(player);
     }
 
-#if MC_VER < MC_1_21_1
-    // 1.20.1: SimpleChannel（forge 包名；neoforged 包名支路已随 1.20.x 支持线退役）
-    public static final SimpleChannel CHANNEL = NetworkRegistry.newSimpleChannel(
-            ResourceLocationCompat.create(Constants.MOD_ID, "main"),
-            () -> PROTOCOL_VERSION,
-            PROTOCOL_VERSION::equals,
-            PROTOCOL_VERSION::equals
-    );
-
-    private static int packetId = 0;
-
-    // 防止重复注册（commonSetup 和 onClientSetup 都可能调用）
-    private static boolean packetsRegistered = false;
-
-    // 1.20.1 包装类定义
-
-    public record BlockEntityDataWrapper(byte[] data) {
-        public void encode(FriendlyByteBuf buf) {
-            buf.writeVarInt(data.length);
-            buf.writeBytes(data);
-        }
-        public static BlockEntityDataWrapper decode(FriendlyByteBuf buf) {
-            int length = buf.readVarInt();
-            byte[] data = new byte[length];
-            buf.readBytes(data);
-            return new BlockEntityDataWrapper(data);
-        }
-    }
-
-    public record LightDeltaWrapper(byte[] data) {
-        public void encode(FriendlyByteBuf buf) {
-            buf.writeVarInt(data.length);
-            buf.writeBytes(data);
-        }
-        public static LightDeltaWrapper decode(FriendlyByteBuf buf) {
-            int length = buf.readVarInt();
-            byte[] data = new byte[length];
-            buf.readBytes(data);
-            return new LightDeltaWrapper(data);
-        }
-    }
-
-    public record DictionarySyncWrapper(byte[] data) {
-        public void encode(FriendlyByteBuf buf) {
-            buf.writeVarInt(data.length);
-            buf.writeBytes(data);
-        }
-        public static DictionarySyncWrapper decode(FriendlyByteBuf buf) {
-            int length = buf.readVarInt();
-            byte[] data = new byte[length];
-            buf.readBytes(data);
-            return new DictionarySyncWrapper(data);
-        }
-    }
-
-    public record IndexSyncWrapper(byte[] data) {
-        public void encode(FriendlyByteBuf buf) {
-            buf.writeVarInt(data.length);
-            buf.writeBytes(data);
-        }
-        public static IndexSyncWrapper decode(FriendlyByteBuf buf) {
-            int length = buf.readVarInt();
-            byte[] data = new byte[length];
-            buf.readBytes(data);
-            return new IndexSyncWrapper(data);
-        }
-    }
-
-    public record AggregationWrapper(byte[] data) {
-        public void encode(FriendlyByteBuf buf) {
-            buf.writeVarInt(data.length);
-            buf.writeBytes(data);
-        }
-        public static AggregationWrapper decode(FriendlyByteBuf buf) {
-            int length = buf.readVarInt();
-            byte[] data = new byte[length];
-            buf.readBytes(data);
-            return new AggregationWrapper(data);
-        }
-    }
-
-
-    /** Play 期激活 S2C（登录协商结果 + SeedGen 种子；common LoginHandshake.PlayInitPayload 线格式）。 */
-    public record PlayInitWrapper(byte[] data) {
-        public void encode(FriendlyByteBuf buf) {
-            buf.writeVarInt(data.length);
-            buf.writeBytes(data);
-        }
-        public static PlayInitWrapper decode(FriendlyByteBuf buf) {
-            int length = buf.readVarInt();
-            byte[] data = new byte[length];
-            buf.readBytes(data);
-            return new PlayInitWrapper(data);
-        }
-    }
-
-    public record CompressionReadyWrapper(boolean ready) {
-        public void encode(FriendlyByteBuf buf) {
-            buf.writeBoolean(ready);
-        }
-        public static CompressionReadyWrapper decode(FriendlyByteBuf buf) {
-            return new CompressionReadyWrapper(buf.readBoolean());
-        }
-    }
-
-    public record BlockEntityRequestWrapper(byte[] data) {
-        public void encode(FriendlyByteBuf buf) {
-            buf.writeVarInt(data.length);
-            buf.writeBytes(data);
-        }
-        public static BlockEntityRequestWrapper decode(FriendlyByteBuf buf) {
-            int length = buf.readVarInt();
-            byte[] data = new byte[length];
-            buf.readBytes(data);
-            return new BlockEntityRequestWrapper(data);
-        }
-    }
-
-#else
     // 1.21.1+: 使用 Payload + StreamCodec
 
     public record ShadowPullRequestPayload(byte[] data) implements CustomPacketPayload {
@@ -338,7 +209,6 @@ public class NeoForgeNetworkManager implements NetworkManager {
         }
     }
 
-#endif
 
     // ========== 注册方法 ==========
 
@@ -350,171 +220,8 @@ public class NeoForgeNetworkManager implements NetworkManager {
             return;
         }
         LOGGER.debug("Hassium: NeoForge network channels will be registered via event");
-#if MC_VER < MC_1_21_1
-        registerSimpleChannelPackets();
-#endif
     }
 
-#if MC_VER < MC_1_21_1
-    /**
-     * 注册 SimpleChannel 数据包（1.20.1 forge）
-     */
-    private void registerSimpleChannelPackets() {
-        if (packetsRegistered) {
-            LOGGER.debug("Hassium: SimpleChannel packets already registered, skipping");
-            return;
-        }
-        packetsRegistered = true;
-        LOGGER.debug("Hassium: Registering SimpleChannel packets");
-
-        // 必须 setPacketHandled(true)，否则会把包交给原版 → Unknown custom packet identifier: hassium:main
-        // S2C / C2S 必须带方向枚举，避免方向校验失败
-        // 注意：Forge 1.20.1 的 consumer 参数是 Supplier<Context>
-
-        // 8: BlockEntity 请求 C2S
-        CHANNEL.registerMessage(packetId++, BlockEntityRequestWrapper.class,
-                BlockEntityRequestWrapper::encode, BlockEntityRequestWrapper::decode,
-                (msg, ctx) -> {
-                    ctx.get().enqueueWork(() -> {
-                        ServerPlayer player = ctx.get().getSender();
-                        if (player == null) return;
-                        try {
-                            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data()));
-                            BlockEntityRequestC2SPacket request = BlockEntityRequestC2SPacket.decode(buf);
-                            ServerChunkPushManager.getInstance().handleBlockEntityRequest(player, request);
-                        } catch (Exception e) {
-                            LOGGER.error("[SERVER] Failed to handle block entity request", e);
-                        }
-                    });
-                    ctx.get().setPacketHandled(true);
-                },
-                java.util.Optional.of(NetworkDirection.PLAY_TO_SERVER));
-
-        // 9: BlockEntity 数据 S2C
-        CHANNEL.registerMessage(packetId++, BlockEntityDataWrapper.class,
-                BlockEntityDataWrapper::encode, BlockEntityDataWrapper::decode,
-                (msg, ctx) -> {
-                    ctx.get().enqueueWork(() -> {
-                        try {
-                            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data()));
-                            BlockEntityDataS2CPacket packet = BlockEntityDataS2CPacket.decode(buf);
-                            ClientMetadataHandler.handleBlockEntityDataPacket(packet);
-                        } catch (Exception e) {
-                            LOGGER.error("[CLIENT] Failed to handle block entity data", e);
-                        }
-                    });
-                    ctx.get().setPacketHandled(true);
-                },
-                java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT));
-
-        // 10: 光照增量更新 S2C（直连拓扑：网关帧链路已裁剪，客户端影子端经 vanilla 通道消费）
-        CHANNEL.registerMessage(packetId++, LightDeltaWrapper.class,
-                LightDeltaWrapper::encode, LightDeltaWrapper::decode,
-                (msg, ctx) -> {
-                    try {
-                        LightDeltaS2CPacket packet = LightDeltaS2CPacket.decode(
-                                new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data())));
-                        ShadowLightCompute.submitLightDelta(packet);
-                    } catch (Exception e) {
-                        LOGGER.error("[CLIENT] Failed to handle light delta", e);
-                    }
-                    ctx.get().setPacketHandled(true);
-                },
-                java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT));
-
-        // 11: 字典同步 S2C
-        CHANNEL.registerMessage(packetId++, DictionarySyncWrapper.class,
-                DictionarySyncWrapper::encode, DictionarySyncWrapper::decode,
-                (msg, ctx) -> {
-                    ctx.get().enqueueWork(() -> handleDictionarySyncClient(msg.data()));
-                    ctx.get().setPacketHandled(true);
-                },
-                java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT));
-
-        // 12: 索引同步 S2C
-        CHANNEL.registerMessage(packetId++, IndexSyncWrapper.class,
-                IndexSyncWrapper::encode, IndexSyncWrapper::decode,
-                (msg, ctx) -> {
-                    ctx.get().enqueueWork(() -> handleIndexSyncClient(msg.data()));
-                    ctx.get().setPacketHandled(true);
-                },
-                java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT));
-
-        // 13: CompressionReady C2S（直连拓扑：转调 common 激活链，时序与 Play 期一致）
-        CHANNEL.registerMessage(packetId++, CompressionReadyWrapper.class,
-                CompressionReadyWrapper::encode, CompressionReadyWrapper::decode,
-                (msg, ctx) -> {
-                    ctx.get().enqueueWork(() -> {
-                        ServerPlayer player = ctx.get().getSender();
-                        if (player != null && msg.ready()) {
-                            ServerHandshakeActivation.handleActivationReady(player);
-                        }
-                    });
-                    ctx.get().setPacketHandled(true);
-                },
-                java.util.Optional.of(NetworkDirection.PLAY_TO_SERVER));
-
-        // 14: 应用层聚合 S2C
-        CHANNEL.registerMessage(packetId++, AggregationWrapper.class,
-                AggregationWrapper::encode, AggregationWrapper::decode,
-                (msg, ctx) -> {
-                    ctx.get().enqueueWork(() -> handleAggregationClient(msg.data()));
-                    ctx.get().setPacketHandled(true);
-                },
-                java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT));
-
-        // 16: Play 期激活 S2C（登录协商结果 + SeedGen 种子 → PlayInitClient）
-        CHANNEL.registerMessage(packetId++, PlayInitWrapper.class,
-                PlayInitWrapper::encode, PlayInitWrapper::decode,
-                (msg, ctx) -> {
-                    ctx.get().enqueueWork(() -> {
-                        try {
-                            LoginHandshake.PlayInitPayload payload = LoginHandshake.PlayInitPayload.decode(
-                                    new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data())));
-                            PlayInitClient.handle(payload);
-                        } catch (Exception e) {
-                            LOGGER.error("[CLIENT] Failed to handle play init", e);
-                        }
-                    });
-                    ctx.get().setPacketHandled(true);
-                },
-                java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT));
-
-        HassiumAggregationManager.setSender((connection, buf) -> {
-            try {
-                if (connection.getPacketListener() instanceof net.minecraft.server.network.ServerGamePacketListenerImpl handler) {
-                    byte[] data = new byte[buf.readableBytes()];
-                    buf.readBytes(data);
-                    CHANNEL.sendTo(new AggregationWrapper(data), handler.getPlayer().connection.connection,
-                            NetworkDirection.PLAY_TO_CLIENT);
-                } else {
-                    LOGGER.error("Cannot send aggregation packet: connection has no player-side packet listener");
-                }
-            } catch (Exception e) {
-                LOGGER.error("Hassium: Failed to send aggregation packet", e);
-            } finally {
-                buf.release();
-            }
-        });
-
-        DictionaryManager.setPushCallback(dictionary -> {
-            try {
-                net.minecraft.server.MinecraftServer server = cachedServer;
-                if (server != null) {
-                    for (ServerPlayer player : server.getPlayerList().getPlayers()) {
-                        sendDictionarySyncPacket(player);
-                    }
-                }
-            } catch (Exception e) {
-                LOGGER.error("Failed to push dictionary to clients", e);
-            }
-        });
-
-        LOGGER.info("Hassium: Registered {} SimpleChannel packets", packetId);
-    }
-
-
-#else
     /**
      * 注册所有 Payload (1.21.1+)
      */
@@ -687,7 +394,7 @@ public class NeoForgeNetworkManager implements NetworkManager {
         });
     }
 
-    // ===== S2C 客户端处理（1.21.1+；处理逻辑对齐 SimpleChannel 注册块）=====
+    // ===== S2C 客户端处理 =====
 
     private static void handleBlockEntityDataS2C(BlockEntityDataPayload payload, IPayloadContext context) {
         context.enqueueWork(() -> {
@@ -708,12 +415,10 @@ public class NeoForgeNetworkManager implements NetworkManager {
     private static void handleIndexSyncS2C(IndexSyncNeoPayload payload, IPayloadContext context) {
         context.enqueueWork(() -> handleIndexSyncClient(payload.data()));
     }
-#endif
 
     // ========== 发送方法实现 ==========
 
 
-#if MC_VER >= MC_1_21_1
     /** NeoForge payload 发送必须经服务端主线程，避免异步推送批次丢失。 */
     private static void sendServerPayload(ServerPlayer player, CustomPacketPayload payload) {
         net.minecraft.server.MinecraftServer server =
@@ -722,34 +427,17 @@ public class NeoForgeNetworkManager implements NetworkManager {
             server.execute(() -> player.connection.send(payload));
         }
     }
-#endif
 
     @Override
     public void sendShadowPullResponse(ServerPlayer player, FriendlyByteBuf buf) {
         byte[] data = new byte[buf.readableBytes()];
         buf.readBytes(data);
         buf.release();
-#if MC_VER < MC_1_21_1
-        // 1.20.1（Forge userdev）：ShadowPull 链路未注册（无响应通道），
-        // 客户端请求走 ShadowPullClient 超时回退（原版注入），此处不发送。
-        LOGGER.debug("Hassium: shadow_pull response suppressed on 1.20.1 (no channel)");
-#else
         sendServerPayload(player, new ShadowPullResponsePayload(data));
-#endif
     }
 
     @Override
     public void sendBlockEntityRequest(FriendlyByteBuf buf) {
-#if MC_VER < MC_1_21_1
-        if (net.minecraft.client.Minecraft.getInstance().getConnection() != null) {
-            byte[] data = new byte[buf.readableBytes()];
-            buf.readBytes(data);
-            buf.release();
-            CHANNEL.sendToServer(new BlockEntityRequestWrapper(data));
-        } else {
-            buf.release();
-        }
-#else
         if (net.minecraft.client.Minecraft.getInstance().getConnection() != null) {
             byte[] data = new byte[buf.readableBytes()];
             buf.readBytes(data);
@@ -760,7 +448,6 @@ public class NeoForgeNetworkManager implements NetworkManager {
         } else {
             buf.release();
         }
-#endif
     }
 
     @Override
@@ -768,13 +455,9 @@ public class NeoForgeNetworkManager implements NetworkManager {
         byte[] data = new byte[buf.readableBytes()];
         buf.readBytes(data);
         buf.release();
-#if MC_VER < MC_1_21_1
-        CHANNEL.sendTo(new BlockEntityDataWrapper(data), player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
-#else
         BlockEntityDataPayload payload = new BlockEntityDataPayload(data);
         sendServerPayload(player, payload);
         LOGGER.debug("Hassium: Sent block entity data packet to {}", player.getName().getString());
-#endif
     }
 
     @Override
@@ -784,11 +467,7 @@ public class NeoForgeNetworkManager implements NetworkManager {
         byte[] data = new byte[buf.readableBytes()];
         buf.readBytes(data);
         buf.release();
-#if MC_VER < MC_1_21_1
-        CHANNEL.sendTo(new LightDeltaWrapper(data), player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
-#else
         sendServerPayload(player, new LightDeltaPayload(data));
-#endif
     }
 
     /**
@@ -797,17 +476,8 @@ public class NeoForgeNetworkManager implements NetworkManager {
     public static void sendPlayInit(ServerPlayer player, int negotiatedCaps, long worldSeed,
                                     byte[] stemNbt, boolean seedGenEnabled) {
         try {
-#if MC_VER < MC_1_21_1
-            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
-            new LoginHandshake.PlayInitPayload(negotiatedCaps, worldSeed, stemNbt, seedGenEnabled).encode(buf);
-            byte[] data = new byte[buf.readableBytes()];
-            buf.readBytes(data);
-            buf.release();
-            CHANNEL.sendTo(new PlayInitWrapper(data), player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
-#else
             sendServerPayload(player, new PlayInitNeoPayload(
                     negotiatedCaps, worldSeed, stemNbt, seedGenEnabled));
-#endif
             LOGGER.debug("Hassium: Sent play init to {} (caps={})",
                     player.getName().getString(), LoginHandshake.describeCaps(negotiatedCaps));
         } catch (Exception e) {
@@ -828,11 +498,7 @@ public class NeoForgeNetworkManager implements NetworkManager {
             byte[] data = new byte[buf.readableBytes()];
             buf.readBytes(data);
             buf.release();
-#if MC_VER < MC_1_21_1
-            CHANNEL.sendTo(new DictionarySyncWrapper(data), player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
-#else
             player.connection.send(new DictionarySyncNeoPayload(data));
-#endif
             LOGGER.debug("Hassium: Sent dictionary sync ({} bytes) to {}", aggregationDict.length, player.getName().getString());
         } catch (Exception e) {
             LOGGER.error("Hassium: Failed to send dictionary sync packet", e);
@@ -852,11 +518,7 @@ public class NeoForgeNetworkManager implements NetworkManager {
             byte[] data = new byte[buf.readableBytes()];
             buf.readBytes(data);
             buf.release();
-#if MC_VER < MC_1_21_1
-            CHANNEL.sendTo(new IndexSyncWrapper(data), player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
-#else
             player.connection.send(new IndexSyncNeoPayload(data));
-#endif
             LOGGER.debug("Hassium: Sent index sync to {}", player.getName().getString());
         } catch (Exception e) {
             LOGGER.error("Hassium: Failed to send index sync packet", e);
@@ -929,23 +591,17 @@ public class NeoForgeNetworkManager implements NetworkManager {
      * DiscardedPayload，原版客户端零干扰）。
      */
     public static void announcePreHandshake(net.minecraft.network.Connection connection) {
-#if MC_VER >= MC_1_21_1
         if (connection != null && connection.isConnected()) {
             connection.send(new net.minecraft.network.protocol.common.ServerboundCustomPayloadPacket(
                     io.github.limuqy.mc.hassium.network.PreHandshakePayload.create()));
         }
-#endif
     }
     public static void sendCompressionReadyToServer() {
         try {
-#if MC_VER < MC_1_21_1
-            CHANNEL.sendToServer(new CompressionReadyWrapper(true));
-#else
             var connection = net.minecraft.client.Minecraft.getInstance().getConnection();
             if (connection != null) {
                 connection.send(new CompressionReadyNeoPayload(true));
             }
-#endif
         } catch (Exception e) {
             LOGGER.error("Hassium: Failed to send compression ready", e);
         }

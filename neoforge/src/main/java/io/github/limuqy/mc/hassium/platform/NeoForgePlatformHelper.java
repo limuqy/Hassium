@@ -1,23 +1,16 @@
 package io.github.limuqy.mc.hassium.platform;
 
 import io.github.limuqy.mc.hassium.platform.services.IPlatformHelper;
-#if MC_VER < MC_1_21_1
-import net.minecraftforge.fml.ModList;
-import net.minecraftforge.fml.loading.FMLLoader;
-import net.minecraftforge.fml.loading.FMLPaths;
-#else
 import net.neoforged.fml.ModList;
 import net.neoforged.fml.loading.FMLLoader;
 import net.neoforged.fml.loading.FMLPaths;
-#endif
 
 import java.nio.file.Path;
 
 /**
  * NeoForge 平台辅助器实现
  * <p>
- * MC_VER &lt; MC_1_21_1（1.20.1）: NeoForge 仍使用 net.minecraftforge 包名
- * MC_VER &gt;= MC_1_21_1: 切换到 net.neoforged 包名（中间版本段已退役）
+ * NeoForge ≥1.21.1：net.neoforged 包名（1.20.1 的 net.minecraftforge 兼容线已随 NeoForge 1.20.1 支持退役）
  */
 public class NeoForgePlatformHelper implements IPlatformHelper {
 

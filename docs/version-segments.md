@@ -67,7 +67,7 @@ MC_1_21_11
 
 | 锚点 | 加载器 |
 |------|--------|
-| 1.20.1 | fabric, forge, neoforge |
+| 1.20.1 | fabric, forge |
 | 1.21.1 | fabric, neoforge, forge |
 | 1.21.2 | fabric, neoforge |
 | 1.21.5 | fabric, neoforge, forge |
@@ -75,6 +75,8 @@ MC_1_21_11
 | 1.21.9 | fabric, neoforge, forge |
 | 1.21.11 | fabric, neoforge |
 
+> **1.20.1 不构建 neoforge**：NeoForge 47.x 原生兼容 Forge mod，NeoForge 用户直接使用 forge 子项目的 Forge 产物（2026-09-11 起）。
+>
 > **Forge 支持 1.20.1 / 1.21.1 / 1.21.3 / 1.21.4 / 1.21.5 / 1.21.6 / 1.21.7 / 1.21.8 / 1.21.9 / 1.21.10**；**1.21.11 起 sunset**（architectury-loom 在 merged jar 重映射阶段打散 anonymous inner class `$N` 编号，outer class `<clinit>` 调用方与实际 class 文件名错位：loom 1.13.469 崩点在 `ByteBufCodecs$N`，loom 1.17.491（2026-07-29 验证 + Gradle 9.6.1）漂移到 `CompoundTag$N` 且 1.21.10 runServer 证实到 `Done`，root cause 同源未修复，详见附录「Forge 1.21.x 适配」）。**1.21.2 上游未发布 Forge userdev**（官方跳过），1.21.11 及后续不构建 Forge，1.21.x 请用 NeoForge。Forge 1.20.6 支持已随 1.20.x 收缩退役（2026-08-22）。
 >
 > **Fabric 配置**：自管 toml + Cloth/Mod Menu，**不依赖 FCAP**。FCAP Forge 桥已随 Forge 1.20.6 退役。

@@ -7,7 +7,7 @@
 #   .\scripts\runtime-smoke-test-batch.ps1 -Phase I -Loaders fabric,forge,neoforge  # 含 Forge（仅 1.20.1/1.21.1+ 部分版本有 builds_for=forge，其它版本自动 SKIP）
 # 每个版本×加载器 1 个会话（客户端自动两轮：VD=20 + VD=10）
 # T8 场景加载: -Scenarios classic,seedgen,dimension（默认仅 classic）。classic 走全矩阵
-# （-Versions × -Loaders）；非 classic 场景只在锚点集跑（硬编码：1.20.1 fabric+neoforge、
+# （-Versions × -Loaders）；非 classic 场景只在锚点集跑（硬编码：1.20.1 fabric+forge、
 # 1.21.1 neoforge、1.21.11 neoforge，再与 -Versions/-Loaders/versionProperties builds_for
 # 取交集）。非 classic 会话 sessionId 追加 _<scenario> 后缀避免 result JSON 冲突；
 # CSV 增 Scenario 列。
@@ -72,7 +72,7 @@ if ($Versions) {
 # 再与 -Versions / -Loaders / versionProperties builds_for 取交集。
 $smokeScenarioAnchors = @(
     @{ Ver = "1.20.1";  Loader = "fabric" },
-    @{ Ver = "1.20.1";  Loader = "neoforge" },
+    @{ Ver = "1.20.1";  Loader = "forge" },
     @{ Ver = "1.21.1";  Loader = "neoforge" },
     @{ Ver = "1.21.11"; Loader = "neoforge" }
 )

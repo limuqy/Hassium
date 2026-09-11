@@ -4,15 +4,8 @@ import io.github.limuqy.mc.hassium.Constants;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.function.Supplier;
-
-#if MC_VER < MC_1_21_1
-import net.minecraftforge.client.ConfigScreenHandler;
-import net.minecraftforge.fml.ModList;
-#else
 import net.neoforged.fml.ModList;
 import net.neoforged.neoforge.client.gui.IConfigScreenFactory;
-#endif
 
 /**
  * 注册模组列表「配置」按钮，打开 Cloth 配置屏。
@@ -33,15 +26,8 @@ public final class HassiumNeoForgeConfigScreens {
             return;
         }
         ModList.get().getModContainerById(Constants.MOD_ID).ifPresentOrElse(container -> {
-#if MC_VER < MC_1_21_1
-            Supplier<ConfigScreenHandler.ConfigScreenFactory> supplier = () ->
-                    new ConfigScreenHandler.ConfigScreenFactory(
-                            (minecraft, parent) -> HassiumClothConfigScreen.create(parent));
-            container.registerExtensionPoint(ConfigScreenHandler.ConfigScreenFactory.class, supplier);
-#else
             IConfigScreenFactory factory = (a, parent) -> HassiumClothConfigScreen.create(parent);
             container.registerExtensionPoint(IConfigScreenFactory.class, factory);
-#endif
             LOGGER.info("Hassium: NeoForge 配置屏已注册（Cloth）");
         }, () -> LOGGER.warn("Hassium: 未找到模组容器，跳过配置屏注册"));
     }

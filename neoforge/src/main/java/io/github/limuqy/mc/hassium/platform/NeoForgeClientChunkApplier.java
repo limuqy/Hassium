@@ -14,12 +14,8 @@ public class NeoForgeClientChunkApplier implements IClientChunkApplier {
     @Override
     public void applyToLevelFromByteBuf(ClientLevel level, ChunkPos pos, FriendlyByteBuf buf) {
         try {
-#if MC_VER < MC_1_21_1
-            ClientboundLevelChunkWithLightPacket packet = new ClientboundLevelChunkWithLightPacket(buf);
-#else
             ClientboundLevelChunkWithLightPacket packet = ClientboundLevelChunkWithLightPacket.STREAM_CODEC
                     .decode(new net.minecraft.network.RegistryFriendlyByteBuf(buf, level.registryAccess()));
-#endif
             if (packet.getX() != pos.x || packet.getZ() != pos.z) {
                 throw new IllegalStateException("Chunk position mismatch");
             }
