@@ -13,6 +13,7 @@ import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.Redirect;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 import java.util.function.BooleanSupplier;
@@ -28,6 +29,33 @@ public class MixinMinecraftServer {
     // tickTimes[tickCount % 100] 的最新槽索引（1.20.1~1.21.11 同名私有字段）
     @Shadow
     private int tickCount;
+
+    /**
+     * B4：影子 {@code ChunkMap} / 光照 mailbox 不挂全局 {@code Util.backgroundExecutor()}，
+     * 避免和客户端 mesh 抢同一 ForkJoin 池。专用服构造走原版返回值。
+     */
+#if MC_VER < MC_1_21_2
+    @Redirect(method = "<init>", at = @At(value = "INVOKE",
+            target = "Lnet/minecraft/Util;backgroundExecutor()Ljava/util/concurrent/ExecutorService;"))
+    private java.util.concurrent.ExecutorService hassium$isolateShadowWorldgenExecutor() {
+        return (java.util.concurrent.ExecutorService)
+                io.github.limuqy.mc.hassium.compat.ShadowServerCompat.shadowWorldgenExecutor();
+    }
+#elif MC_VER < MC_1_21_11
+    @Redirect(method = "<init>", at = @At(value = "INVOKE",
+            target = "Lnet/minecraft/Util;backgroundExecutor()Lnet/minecraft/TracingExecutor;"))
+    private net.minecraft.TracingExecutor hassium$isolateShadowWorldgenExecutor() {
+        return (net.minecraft.TracingExecutor)
+                io.github.limuqy.mc.hassium.compat.ShadowServerCompat.shadowWorldgenExecutor();
+    }
+#else
+    @Redirect(method = "<init>", at = @At(value = "INVOKE",
+            target = "Lnet/minecraft/util/Util;backgroundExecutor()Lnet/minecraft/TracingExecutor;"))
+    private net.minecraft.TracingExecutor hassium$isolateShadowWorldgenExecutor() {
+        return (net.minecraft.TracingExecutor)
+                io.github.limuqy.mc.hassium.compat.ShadowServerCompat.shadowWorldgenExecutor();
+    }
+#endif
 
     // review-fix: T7-59: handler 统一加 hassium$ 前缀（Mixin 惯例，避免与目标类未来同名成员 merge 冲突）
     @Inject(method = "tickServer", at = @At("TAIL"))

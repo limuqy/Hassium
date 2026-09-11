@@ -216,8 +216,12 @@ public final class ShadowPullClient {
             return;
         }
         Minecraft minecraft = Minecraft.getInstance();
+        String clientDim = minecraft != null && minecraft.level != null
+                ? LevelCompat.getDimensionId(minecraft.level) : null;
         if (minecraft == null || minecraft.level == null
-                || !response.dimension().equals(LevelCompat.getDimensionId(minecraft.level))) {
+                || !response.dimension().equals(clientDim)) {
+            Constants.LOG.info("[SHADOW_PULL] drop response dim={} client={}",
+                    response.dimension(), clientDim);
             return;
         }
         Boolean comparedBaseline = REQUEST_MODES.remove(response.requestId());
@@ -306,6 +310,13 @@ public final class ShadowPullClient {
         REQUEST_MODES.clear();
         PENDING_COMPARE.clear();
         RETRIED.clear();
+    }
+
+    /** 真客户端切维：作废旧维度在途 compare / 单次 FULL 重试，避免坐标碰撞串维。 */
+    public static void onClientDimensionChanged() {
+        PENDING_COMPARE.clear();
+        RETRIED.clear();
+        REQUEST_MODES.clear();
     }
 }
 

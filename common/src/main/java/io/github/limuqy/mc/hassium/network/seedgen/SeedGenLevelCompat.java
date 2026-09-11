@@ -230,6 +230,7 @@ public final class SeedGenLevelCompat {
             } catch (Throwable ignored) {
             }
             Constants.LOG.error("Hassium: Failed to create shadow seed server", e);
+            ShadowWorldgenExecutor.shutdown();
             closeQuietly(stem, access);
             if (e instanceof IOException ioe) {
                 throw ioe;
@@ -472,16 +473,20 @@ public final class SeedGenLevelCompat {
             Constants.LOG.warn("Hassium: Shadow seed server halt failed", e);
         }
         try {
+            ShadowWorldgenExecutor.shutdown();
+        } catch (Exception e) {
+            Constants.LOG.warn("Hassium: Shadow worldgen executor shutdown failed", e);
+        }
+        try {
             server.closeStorage();
         } catch (Exception e) {
             Constants.LOG.warn("Hassium: Shadow storage manager close failed", e);
         }
         // 停各维度的 chunk 源：只关 region 文件层（ChunkStorage.close），不关
         // ServerChunkCache——其 mainThreadProcessor.close() → BlockableEventLoop.close()
-        // 会 shutdown 进程级共享的 Util.backgroundExecutor()（1.20.1 BlockableEventLoop
-        // 构造即用该 ForkJoinPool），R2 影子端重建后 light mailbox 全部
-        // RejectedExecutionException（官方 integrated server 切世界也只 halt 不关
-        // chunkSource，共享 pool 生命周期 = 进程生命周期）。
+        // 会 shutdown 构造时传入的 executor。隔离前那是进程级 Util.backgroundExecutor()
+        // （R2 重建后 light mailbox 全拒）；隔离后是影子 FJP，仍由
+        // {@link ShadowWorldgenExecutor#shutdown} 在 halt 之后单独关，不走 chunkSource.close。
         for (ServerLevel level : server.getAllLevels()) {
             try {
 #if MC_VER < MC_1_21_2

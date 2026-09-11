@@ -28,7 +28,8 @@
         "LightUpdatePacketAccessor",
         "LevelChunkWithLightPacketAccessor",
         "MixinReloadableServerResources",
-        "MixinShadowConnectionAccessor"
+        "MixinShadowConnectionAccessor",
+        "EntityAccessor"
     ],
     "client": [
       "MixinMinecraft",

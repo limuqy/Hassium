@@ -245,6 +245,20 @@ class ShadowLightComputeTimingRegressionTest {
     }
 
     @Test
+    @DisplayName("ChunkMap.save mixin 与 withChunkLock 共用可重入锁")
+    void chunkLockAndExplicitLockShareMonitor() {
+        ChunkPos pos = new ChunkPos(4, -8);
+        int[] n = {0};
+        ShadowLightCompute.lockChunk(pos);
+        try {
+            ShadowLightCompute.withChunkLock(pos, () -> n[0]++);
+        } finally {
+            ShadowLightCompute.unlockChunk(pos);
+        }
+        assertEquals(1, n[0]);
+    }
+
+    @Test
     @DisplayName("落地兜底：内存复用记缓存命中，直推记全量；同柱不与 inject 记账叠加")
     void authoritativeLandedAccountsByOriginWithoutDoubleCount() {
         NetworkStats.reset();
@@ -342,6 +356,13 @@ class ShadowLightComputeTimingRegressionTest {
     @DisplayName("影子未就绪时入站不得永久 failShadowServer")
     void missingShadowServerDoesNotFailEngine() {
         assertFalse(ShadowVanillaLightPipeline.shouldFailShadowWhenServerUnavailable());
+    }
+
+    @Test
+    @DisplayName("单柱 inject/光照失败不得关整台影子端")
+    void singleColumnFailureDoesNotFailEngine() {
+        assertFalse(ShadowVanillaLightPipeline.shouldFailShadowOnInjectFailure());
+        assertFalse(ShadowLightCompute.shouldFailShadowOnSingleColumnFailure());
     }
 
     @Test

@@ -85,6 +85,10 @@ public class ClientChunkHandler {
     }
 
 
+    public static void onDimensionChanged() {
+        PENDING_PULL_APPLY.clear();
+    }
+
     /**
      * 重置客户端缓存存储（断开连接时调用，转发 pipeline）
      */

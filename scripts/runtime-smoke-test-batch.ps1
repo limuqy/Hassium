@@ -1,7 +1,6 @@
-# 运行时冒烟测试 — 批量脚本（两轮连服版，支持并行）
+# 运行时冒烟测试 — 批量脚本（两轮连服版，固定串行）
 # 用法:
 #   .\scripts\runtime-smoke-test-batch.ps1 -Phase I                              # 全量初始轮（串行）
-#   .\scripts\runtime-smoke-test-batch.ps1 -Phase I -Parallel                    # 全量初始轮（并行，fabric+neoforge 同时）
 #   .\scripts\runtime-smoke-test-batch.ps1 -Phase I -Versions @("1.20.1","1.21.1")
 #   .\scripts\runtime-smoke-test-batch.ps1 -Phase R                              # 回归轮
 #   .\scripts\runtime-smoke-test-batch.ps1 -Phase I -Loaders fabric,forge,neoforge  # 含 Forge（仅 1.20.1/1.21.1+ 部分版本有 builds_for=forge，其它版本自动 SKIP）
@@ -11,23 +10,19 @@
 # 1.21.1 neoforge、1.21.11 neoforge，再与 -Versions/-Loaders/versionProperties builds_for
 # 取交集）。非 classic 会话 sessionId 追加 _<scenario> 后缀避免 result JSON 冲突；
 # CSV 增 Scenario 列。
-# CleanWorld 策略（按 loader 独立，fabric/forge/neoforge 各有 run/server）:
-#   - 该 loader 的第一个版本：清理服务端存档
-#   - 版本变化（升或降）：清理（worldgen 跨版本可能变化——1.21.9 地形塑造重构、
-#     1.21.4 pale garden 等；复用旧版本 terrain 会让新版本 seedgen 影子端系统性
-#     mismatch，R2 命中率崩塌。T8 1.21.11 实测 17.8%）
-#   - 同版本：复用存档加快启动
-#   - 同会话失败重试：强制清理（干净重试）
-# 并行模式: 同版本多 loader 同时跑，端口按 -Loaders 顺序 fabric=BasePort, forge=+1, neoforge=+2
-#           版本间仍串行（避免跨版本存档冲突）；全程不调 gradlew --stop（全局停 daemon 会误杀
-#           并行会话/其他项目的构建；runServer/runClient 均为 --no-daemon，不依赖 daemon）
+# CleanWorld：存档已按 loader×ver 隔离（parity_<loader>_<ver>），切版本不会互相覆盖，
+# batch 不再因「首个版本 / 退版本」清档。seedgen/dimension 场景脚本内仍强制清理。
+# 重试：仅游戏打不开（服务端未就绪 / 客户端没进世界）才重跑；进过服的业务 FAIL 不重试。
+# 预生成已退役，不再在重试前跑 PregenOnly、也不从 pregen-world 恢复存档。
+# -Parallel 已忽略：单版本（1 服 + 1 客户端 + 影子 worldgen）已经吃满 CPU，并行会过载。
 param(
     [Parameter(Mandatory=$true)][ValidateSet("I","R")][string]$Phase,
     [string[]]$Versions,
     [ValidateSet("fabric","forge","neoforge")][string[]]$Loaders = @("fabric","neoforge"),
     # T8 场景列表（默认仅 classic，保持既有行为）：classic=全矩阵；非 classic 只跑锚点集
     [string[]]$Scenarios = @("classic"),
-    [int]$MaxRetries = 3,
+    [int]$MaxRetries = 3,  # 仅「游戏打不开」时重试；进过世界的业务失败不重跑
+    # 保留开关以免旧命令行报错；单版本已吃满 CPU，下面会强制关掉。
     [switch]$Parallel,
     [int]$BasePort = 25565,
     [int]$ServerReadyTimeoutSec = 300,
@@ -41,6 +36,10 @@ $ErrorActionPreference = "Continue"
 if ($PSVersionTable.PSVersion.Major -lt 7) {
     Write-Error 'runtime-smoke-test-batch.ps1 requires PowerShell 7+ (pwsh).'
     exit 3
+}
+if ($Parallel) {
+    Write-Host "忽略 -Parallel：单版本（服务端+客户端+影子 worldgen）已经吃满 CPU，batch 固定串行。" -ForegroundColor Yellow
+    $Parallel = $false
 }
 
 
@@ -77,59 +76,29 @@ $smokeScenarioAnchors = @(
     @{ Ver = "1.21.11"; Loader = "neoforge" }
 )
 
-# 预展开场景计划：classic=全矩阵 targetVersions；非 classic=锚点集过滤后的版本列表
-# （去重升序，与既有版本循环「低到高」语义一致）。主版本循环按此计划迭代。
+# 预展开场景计划：classic=全矩阵 targetVersions（Loader 空=该版本全部 -Loaders）；
+# 非 classic=精确到 (Ver, Loader) 锚点，禁止把 1.21.1 锚点扩成 fabric+neoforge。
 $scenarioPlan = @()
 foreach ($sc in $Scenarios) {
     if ($sc -eq "classic") {
         foreach ($v in $targetVersions) {
-            $scenarioPlan += [PSCustomObject]@{ Scenario = $sc; Ver = $v }
+            $scenarioPlan += [PSCustomObject]@{ Scenario = $sc; Ver = $v; Loader = "" }
         }
     } else {
-        $anchorVers = @(
+        $anchors = @(
             $smokeScenarioAnchors |
                 Where-Object { $Loaders -contains $_.Loader } |
-                ForEach-Object { $_.Ver } |
-                Select-Object -Unique
+                Where-Object { -not $Versions -or ($targetVersions -contains $_.Ver) }
         )
-        $versForSc = if ($Versions) {
-            @($anchorVers | Where-Object { $targetVersions -contains $_ })
-        } else {
-            $anchorVers
-        }
-        if ($versForSc.Count -eq 0) {
+        if ($anchors.Count -eq 0) {
             Write-Host "[scenario:$sc] 锚点集与 -Versions/-Loaders 无交集，跳过该场景" -ForegroundColor Yellow
             continue
         }
-        Write-Host "[scenario:$sc] 锚点集版本: $($versForSc -join ', ')"
-        foreach ($v in $versForSc) {
-            $scenarioPlan += [PSCustomObject]@{ Scenario = $sc; Ver = $v }
+        Write-Host "[scenario:$sc] 锚点: $(($anchors | ForEach-Object { "$($_.Ver)/$($_.Loader)" }) -join ', ')"
+        foreach ($a in $anchors) {
+            $scenarioPlan += [PSCustomObject]@{ Scenario = $sc; Ver = $a.Ver; Loader = $a.Loader }
         }
     }
-}
-
-# 版本比较函数：返回 true 表示 currentVer < prevVer（退版本）
-function IsVersionDowngrade($current, $previous) {
-    $cur = $current -split '\.' | ForEach-Object { [int]$_ }
-    $prev = $previous -split '\.' | ForEach-Object { [int]$_ }
-    for ($i = 0; $i -lt [Math]::Max($cur.Count, $prev.Count); $i++) {
-        $c = if ($i -lt $cur.Count) { $cur[$i] } else { 0 }
-        $p = if ($i -lt $prev.Count) { $prev[$i] } else { 0 }
-        if ($c -lt $p) { return $true }
-        if ($c -gt $p) { return $false }
-    }
-    return $false
-}
-# 版本相等判断（与 IsVersionDowngrade 同源：数值段比较，避免 "1.9" vs "1.10" 字典序陷阱）
-function IsSameVersion($current, $previous) {
-    $cur = $current -split '\.' | ForEach-Object { [int]$_ }
-    $prev = $previous -split '\.' | ForEach-Object { [int]$_ }
-    for ($i = 0; $i -lt [Math]::Max($cur.Count, $prev.Count); $i++) {
-        $c = if ($i -lt $cur.Count) { $cur[$i] } else { 0 }
-        $p = if ($i -lt $prev.Count) { $prev[$i] } else { 0 }
-        if ($c -ne $p) { return $false }
-    }
-    return $true
 }
 
 # T2 PROBE JSON v1：把单会话 result JSON 的 Probe.RoundN 摘要成一行短串（joined/gateway/counters），
@@ -159,26 +128,24 @@ function Format-SmokeProbeRound {
     return ($parts -join ";")
 }
 
-# 按 loader 决定是否清理服务端存档（fabric/neoforge 各有独立 run/server）
-# 返回: $true=清理, $false=复用
-function Get-ShouldCleanWorld {
+# 游戏打不开才值得重试：服务端没 Done、客户端没写出 ROUND1（没进世界）。
+# 进过服的业务 FAIL（applied=0、analyzer、TRACE）重跑没有意义。
+function Test-SmokeLaunchFailure {
     param(
-        [string]$Ver,
-        [string]$Loader,
-        [hashtable]$PrevVerByLoader
+        [object]$ScriptExit,
+        $ResultObj
     )
-    if (-not $PrevVerByLoader.ContainsKey($Loader)) {
-        return $true  # 该 loader 第一个版本：清理
+    $reason = if ($ResultObj) { [string]$ResultObj.Reason } else { "" }
+    if ($reason -match '^(loader_not_supported|mapping_precheck)') {
+        return $false
     }
-    $prev = $PrevVerByLoader[$Loader]
-    if (-not (IsSameVersion $Ver $prev)) {
-        # 版本变化（升或降）一律清理：worldgen 跨版本可能变化（1.21.9 地形塑造重构 /
-        # 1.21.4 pale garden 生物群系表等），复用旧版本 terrain 会让新版本 seedgen
-        # 影子端系统性 hash mismatch（T8 1.21.11 实测 R2 命中 17.8%，服务端 90+
-        # 条 SECTION_DELTA fallback 风暴）。同版本复用保留「加快启动」语义。
+    if ($ScriptExit -eq 3 -or $reason -eq "server_not_ready") {
         return $true
     }
-    return $false  # 同版本：复用存档加快启动
+    if (-not $ResultObj) {
+        return $true
+    }
+    return -not [bool]$ResultObj.Round1Stats
 }
 
 # 单会话执行函数（封装重试逻辑，供串行路径共用）
@@ -205,32 +172,13 @@ function Invoke-Session {
     $lastReason = ""
     $scriptPath = Join-Path $PSScriptRoot "runtime-smoke-test.ps1"
 
-    while ($attempt -lt $MaxRetries) {
+    $maxAttempts = [Math]::Max(1, $MaxRetries)
+    while ($attempt -lt $maxAttempts) {
         $attempt++
-        # 首试遵循 batch 策略；失败重试强制清档，避免脏存档导致连环失败
-        $doClean = $CleanWorld -or ($attempt -gt 1)
+        $doClean = [bool]$CleanWorld -or ($attempt -gt 1)
         $cleanLabel = if ($doClean) { "CleanWorld" } else { "ReuseWorld" }
-        Write-Host "[$sessionId] 尝试 $attempt/$MaxRetries (port=$ServerPort, $cleanLabel)..."
+        Write-Host "[$sessionId] 尝试 $attempt/$maxAttempts (port=$ServerPort, $cleanLabel)..."
 
-        # CleanWorld 且预生成存档缺失时，先跑一次预生成（49×49 区域），
-        # 让首轮供给曲线由提交上限+充足区块决定，而非 worldgen 节奏。
-        # 预生成失败不阻断冒烟（降级为正常 worldgen）。
-        if ($doClean) {
-            $pregenSrc = Join-Path $projectRoot "build\smoke-test\pregen-world\${Loader}-${Ver}\world"
-            if (-not (Test-Path $pregenSrc)) {
-                Write-Host "[$sessionId] 预生成存档缺失，先执行预生成 (${Loader}/${Ver})..."
-                $pregenArgs = @{
-                    Ver = $Ver; Loader = $Loader; Phase = $Phase
-                    SessionId = "${sessionId}_pregen"; PregenOnly = $true
-                    ServerPort = $ServerPort; ServerReadyTimeoutSec = $ServerReadyTimeoutSec
-                }
-                if ($Scenario -ne "classic") { $pregenArgs.Scenario = $Scenario }
-                & $scriptPath @pregenArgs
-                if ($LASTEXITCODE -ne 0) {
-                    Write-Host "[$sessionId] 预生成失败，降级为正常 worldgen 冒烟" -ForegroundColor Yellow
-                }
-            }
-        }
         $sessionArgs = @{
             Ver = $Ver; Loader = $Loader; Phase = $Phase; SessionId = $sessionId
             CleanWorld = $doClean; ServerPort = $ServerPort
@@ -238,32 +186,51 @@ function Invoke-Session {
             DelayMs = $DelayMs; ReconnectDelayMs = $ReconnectDelayMs
         }
         if ($Scenario -ne "classic") { $sessionArgs.Scenario = $Scenario }
-        $result = & $scriptPath @sessionArgs
-
-        if ($result -eq "PASS") {
+        # 单会话脚本用 Write-Host + exit，不会把 "PASS" 写回管道。
+        & $scriptPath @sessionArgs
+        $scriptExit = $LASTEXITCODE
+        $resultJsonPath = Join-Path $resultsDir "result_${sessionId}.json"
+        $resultObj = $null
+        $jsonResult = $null
+        if (Test-Path $resultJsonPath) {
+            try {
+                $resultObj = Get-Content $resultJsonPath -Raw | ConvertFrom-Json
+                $jsonResult = [string]$resultObj.Result
+            } catch {
+                $jsonResult = $null
+            }
+        }
+        if ($scriptExit -eq 0 -or $jsonResult -eq "PASS") {
             $sessionResult = "PASS"
             $lastReason = ""
             break
         }
 
         $sessionResult = "FAIL"
-        # 读取 result JSON 提取失败原因
-        $resultJsonPath = Join-Path $resultsDir "result_${sessionId}.json"
-        if (Test-Path $resultJsonPath) {
-            try {
-                $resultObj = Get-Content $resultJsonPath -Raw | ConvertFrom-Json
-                $lastReason = if ($resultObj.Reason) { $resultObj.Reason } else {
-                    "Round1Pass=$($resultObj.Round1Pass) Round2Pass=$($resultObj.Round2Pass) Exit=$($resultObj.ClientExitCode)"
-                }
-            } catch {
-                $lastReason = "result JSON parse error"
-            }
+        $lastReason = if ($resultObj -and $resultObj.Reason) {
+            [string]$resultObj.Reason
+        } elseif ($resultObj) {
+            "Round1Pass=$($resultObj.Round1Pass) Round2Pass=$($resultObj.Round2Pass) Exit=$($resultObj.ClientExitCode)"
+        } elseif ($null -ne $scriptExit) {
+            "smoke_exit=$scriptExit"
+        } else {
+            "no_result_json"
         }
-        Write-Host "[$sessionId] 尝试 $attempt 失败: $lastReason" -ForegroundColor Red
+
+        $launchFail = Test-SmokeLaunchFailure -ScriptExit $scriptExit -ResultObj $resultObj
+        if (-not $launchFail) {
+            Write-Host "[$sessionId] 游戏已打开，业务失败不重试: $lastReason" -ForegroundColor Yellow
+            break
+        }
+        if ($attempt -ge $maxAttempts) {
+            Write-Host "[$sessionId] 启动失败且已达重试上限: $lastReason" -ForegroundColor Red
+            break
+        }
+        Write-Host "[$sessionId] 启动失败 ($lastReason)，将重试" -ForegroundColor Red
     }
 
     if ($sessionResult -eq "FAIL") {
-        $failLine = "[$sessionId] FAILED after $MaxRetries attempts: $lastReason"
+        $failLine = "[$sessionId] FAILED after $attempt attempt(s): $lastReason"
         Add-Content -Path $failuresLog -Value $failLine
         Write-Host $failLine -ForegroundColor Red
     }
@@ -295,8 +262,6 @@ function Invoke-Session {
 }
 
 $results = @()
-# 每个 loader 上次成功调度的版本（用于首轮清档 / 退版本强制清档）
-$prevVerByLoader = @{}
 $gradlewPath = Join-Path $projectRoot "gradlew.bat"
 
 foreach ($entry in $scenarioPlan) {
@@ -305,7 +270,9 @@ foreach ($entry in $scenarioPlan) {
     $sfx = Get-SmokeSessionIdSuffix -Scenario $scenario -SessionSuffix $SessionSuffix
     Write-Host ""
     Write-Host "============================================"
-    Write-Host "=== Testing: $ver (scenario: $scenario, loaders: $($Loaders -join ','))"
+    $pinnedLoader = [string]$entry.Loader
+    $loaderHint = if ($pinnedLoader) { $pinnedLoader } else { $Loaders -join ',' }
+    Write-Host "=== Testing: $ver (scenario: $scenario, loaders: $loaderHint)"
     Write-Host "============================================"
 
     # Forge 仅部分版本有 builds_for（1.20.1、1.21.1、1.21.3+ 等）；其它版本强行跑 :forge:runServer
@@ -320,11 +287,16 @@ foreach ($entry in $scenarioPlan) {
             $supportedLoaders = ($m.Groups[1].Value -split ',') | ForEach-Object { $_.Trim() } | Where-Object { $_ }
         }
     }
+    $requestedLoaders = if ($pinnedLoader) { @($pinnedLoader) } else { $Loaders }
     if ($supportedLoaders.Count -gt 0) {
-        $activeLoadersForVer = $Loaders | Where-Object { $supportedLoaders -contains $_ }
+        # @()：Where-Object 只剩 1 个 loader 时 PowerShell 会拆成标量字符串，
+        # `$arr.Count` 变成字符数、`$arr[0]` 变成 'f'，1.20.1 fabric 会变成会话 `1.20.1_f_I`。
+        $activeLoadersForVer = @($requestedLoaders | Where-Object { $supportedLoaders -contains $_ })
+        $skippedLoaders = @($requestedLoaders | Where-Object { $supportedLoaders -notcontains $_ })
     } else {
         # 没读到 builds_for（极少见，如缺失 properties）：保留原 Loaders，由后续编译失败兜底
-        $activeLoadersForVer = $Loaders
+        $activeLoadersForVer = @($requestedLoaders)
+        $skippedLoaders = @()
     }
     # 端口分配仍按原 -Loaders 顺序取下标，保证 fabric=BasePort, forge/neoforge 按位偏移
     $loaderPortIndex = @{}
@@ -342,7 +314,7 @@ foreach ($entry in $scenarioPlan) {
         continue
     }
 
-    if ($Parallel -and $Loaders.Count -gt 1) {
+    if ($Parallel -and $activeLoadersForVer.Count -gt 1) {
         # ===== 并行模式：同版本多 loader 用 Start-Process 同时跑 =====
         # 注意：不能用 Start-Job（Job 内 Start-Process gradlew.bat 会静默失败）
         # 改用 Start-Process pwsh.exe -File 启动独立进程（PowerShell 7，utf8NoBOM 写配置必需；
@@ -371,7 +343,7 @@ foreach ($entry in $scenarioPlan) {
         }
 
         # 过滤掉预编译失败的 loader
-        $activeLoaders = $activeLoadersForVer | Where-Object { -not $precompileFailed[$_] }
+        $activeLoaders = @($activeLoadersForVer | Where-Object { -not $precompileFailed[$_] })
         if ($activeLoaders.Count -eq 0) {
             Write-Host "[$ver] 所有 loader 预编译失败，跳过该版本" -ForegroundColor Red
             foreach ($loader in $activeLoadersForVer) {
@@ -393,12 +365,7 @@ foreach ($entry in $scenarioPlan) {
             $loaderIndex = $loaderPortIndex[$loader]
             $port = $BasePort + $loaderIndex
             $jobName = "${ver}_${loader}_${Phase}${sfx}"
-            $cleanWorld = Get-ShouldCleanWorld -Ver $ver -Loader $loader -PrevVerByLoader $prevVerByLoader
-            $cleanLabel = if ($cleanWorld) { "CleanWorld" } else { "ReuseWorld" }
-            if ($cleanWorld -and $prevVerByLoader.ContainsKey($loader)) {
-                Write-Host "=== [$loader] 退版本 $($prevVerByLoader[$loader]) -> $ver，清理服务端存档 ===" -ForegroundColor Yellow
-            }
-            Write-Host "[$jobName] 启动进程 (port=$port, $cleanLabel)..."
+            Write-Host "[$jobName] 启动进程 (port=$port, ReuseWorld)..."
 
             $procArgs = @(
                 "-NoProfile", "-ExecutionPolicy", "Bypass",
@@ -409,9 +376,6 @@ foreach ($entry in $scenarioPlan) {
                 "-ServerReadyTimeoutSec", $ServerReadyTimeoutSec,
                 "-ClientTimeoutSec", $ClientTimeoutSec
             )
-            if ($cleanWorld) {
-                $procArgs += "-CleanWorld"
-            }
             if ($scenario -ne "classic") {
                 $procArgs += @("-Scenario", $scenario)
             }
@@ -425,8 +389,6 @@ foreach ($entry in $scenarioPlan) {
                 -PassThru -WindowStyle Hidden
 
             $processes += [PSCustomObject]@{ Name=$jobName; Process=$proc; Loader=$loader; Port=$port; OutLog=$procOutLog }
-            # 调度后即记录该 loader 的上一版本（不论成败，下一轮按策略决定是否清档）
-            $prevVerByLoader[$loader] = $ver
 
             # 启动后等 3 秒再启动下一个，避免同时启动竞争资源；最后一个不用等
             if ($i -lt $activeLoaders.Count - 1) {
@@ -503,24 +465,17 @@ foreach ($entry in $scenarioPlan) {
             $_.Name -eq "java.exe" -and $_.CommandLine -and $_.CommandLine -match $dliConfig -and
             $_.CommandLine -match "-Dfabric\.dli\.env=(server|client)"
         } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
-        Start-Sleep -Seconds 3
     } else {
         # ===== 串行模式（默认）=====
         foreach ($loader in $activeLoadersForVer) {
             $sessionId = "${ver}_${loader}_${Phase}${sfx}"
-            $cleanWorld = Get-ShouldCleanWorld -Ver $ver -Loader $loader -PrevVerByLoader $prevVerByLoader
-            $cleanLabel = if ($cleanWorld) { "CleanWorld" } else { "ReuseWorld" }
-            if ($cleanWorld -and $prevVerByLoader.ContainsKey($loader)) {
-                Write-Host "=== [$loader] 退版本 $($prevVerByLoader[$loader]) -> $ver，清理服务端存档 ===" -ForegroundColor Yellow
-            }
             Write-Host ""
-            Write-Host "--- $sessionId ($cleanLabel) ---"
+            Write-Host "--- $sessionId (ReuseWorld) ---"
 
             $r = Invoke-Session -Ver $ver -Loader $loader -Phase $Phase -Scenario $scenario -ServerPort $BasePort -MaxRetries $MaxRetries `
-                -CleanWorld:$cleanWorld -ServerReadyTimeoutSec $ServerReadyTimeoutSec -ClientTimeoutSec $ClientTimeoutSec `
+                -ServerReadyTimeoutSec $ServerReadyTimeoutSec -ClientTimeoutSec $ClientTimeoutSec `
                 -DelayMs $DelayMs -ReconnectDelayMs $ReconnectDelayMs -SessionSuffix $SessionSuffix
             $results += $r
-            $prevVerByLoader[$loader] = $ver
 
             # 杀残留 Minecraft java 进程（仅本工程 loom dev 实例：dli.config + env 标记；
             # 不杀 gradle daemon，不误杀其他项目/会话）
@@ -530,7 +485,6 @@ foreach ($entry in $scenarioPlan) {
                 $_.Name -eq "java.exe" -and $_.CommandLine -and $_.CommandLine -match $dliConfig -and
                 $_.CommandLine -match "-Dfabric\.dli\.env=(server|client)"
             } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
-            Start-Sleep -Seconds 3
 
             # 不调 gradlew --stop：全局停 daemon 会误杀并行会话/其他项目的构建（loom 锁问题由 --no-daemon 规避）
         }

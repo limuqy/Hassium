@@ -189,7 +189,11 @@ def analyze_result(result: dict[str, Any], root: Path) -> dict[str, Any]:
     checks: dict[str, str] = {}
     session = str(result.get("SessionId") or "")
     log_text = ""
-    for path in (root / "logs").glob(f"*{session}*.log"):
+    # Exact session files only. A prefix glob (`*1.21.1_fabric_I*.log`) also
+    # swallows historical `*_p1b` / `*_task` logs and poisons smoke_markers.
+    logs_dir = root / "logs"
+    for name in (f"client_{session}.log", f"server_{session}.log", f"{session}.log"):
+        path = logs_dir / name
         try:
             log_text += path.read_text(encoding="utf-8", errors="replace") + "\n"
         except OSError:

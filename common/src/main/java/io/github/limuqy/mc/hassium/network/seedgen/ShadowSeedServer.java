@@ -463,13 +463,16 @@ public class ShadowSeedServer extends MinecraftServer {
      */
     private void clearChunkLight(ChunkPos pos, LevelChunk chunk) {
         synchronized (ShadowLightCompute.LIGHT_ENGINE_MUTEX) {
+            boolean hasSky = chunkLevel(chunk).dimensionType().hasSkyLight();
             ThreadedLevelLightEngine lightEngine =
                     (ThreadedLevelLightEngine) chunkLevel(chunk).getChunkSource().getLightEngine();
             // 含上下各一层 padding。只清 chunk 实际 section 会残留 padding 光，边界传播时
             // 读到陈旧数据（视距边缘/水面上下边缘黑块来源之一）。
             for (int y = lightEngine.getMinLightSection(); y < lightEngine.getMaxLightSection(); y++) {
                 SectionPos sp = SectionPos.of(pos, y);
-                lightEngine.queueSectionData(LightLayer.SKY, sp, EMPTY_LIGHT_LAYER);
+                if (hasSky) {
+                    lightEngine.queueSectionData(LightLayer.SKY, sp, EMPTY_LIGHT_LAYER);
+                }
                 lightEngine.queueSectionData(LightLayer.BLOCK, sp, EMPTY_LIGHT_LAYER);
             }
         }
@@ -509,8 +512,10 @@ public class ShadowSeedServer extends MinecraftServer {
         // 光增量会改写引擎光照，saveAll 序列化时从引擎读光，必须把该柱标脏重写。
         io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.markLightDirty(dimension, pos);
         synchronized (ShadowLightCompute.LIGHT_ENGINE_MUTEX) {
+            ServerLevel owner = chunkLevel(chunk);
             ThreadedLevelLightEngine lightEngine =
-                    (ThreadedLevelLightEngine) this.overworld().getChunkSource().getLightEngine();
+                    (ThreadedLevelLightEngine) owner.getChunkSource().getLightEngine();
+            boolean hasSky = owner.dimensionType().hasSkyLight();
             int minLight = lightEngine.getMinLightSection();
             int lightCount = lightEngine.getLightSectionCount();
             java.util.TreeSet<Integer> touched = new java.util.TreeSet<>();
@@ -524,7 +529,7 @@ public class ShadowSeedServer extends MinecraftServer {
             for (int y : touched) {
                 SectionPos sp = SectionPos.of(pos, y);
                 int bit = y - minLight;
-                if (skyMask.get(bit) || emptySkyMask.get(bit)) {
+                if (hasSky && (skyMask.get(bit) || emptySkyMask.get(bit))) {
                     lightEngine.queueSectionData(LightLayer.SKY, sp, EMPTY_LIGHT_LAYER);
                 }
                 if (blockMask.get(bit) || emptyBlockMask.get(bit)) {
@@ -673,8 +678,10 @@ public class ShadowSeedServer extends MinecraftServer {
             }
             // 增量应用会就地覆盖 section/heightmap/BE/光，标记为需要 saveAll 重写。
             io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.markContentDirty(dimension, pos);
+            ServerLevel owner = chunkLevel(chunk);
             ThreadedLevelLightEngine lightEngine =
-                    (ThreadedLevelLightEngine) this.overworld().getChunkSource().getLightEngine();
+                    (ThreadedLevelLightEngine) owner.getChunkSource().getLightEngine();
+            boolean hasSky = owner.dimensionType().hasSkyLight();
             // 1) sections 就地覆盖（先于 BE——BE 创建依赖新 block state）
             for (SectionDeltaS2CPacket.SectionData sd : entry.changedSections()) {
                 LevelChunkSection section = chunk.getSection(sd.sectionIndex());
@@ -700,7 +707,9 @@ public class ShadowSeedServer extends MinecraftServer {
                 //    强制覆盖共享空层（notReady 移除对带邻域 section 永不生效，
                 //    见 clearChunkLight 注释）；不在这里 propagate（会被空层安装覆盖白算）。
                 SectionPos sp = SectionPos.of(pos, chunk.getSectionYFromSectionIndex(sd.sectionIndex()));
-                lightEngine.queueSectionData(LightLayer.SKY, sp, EMPTY_LIGHT_LAYER);
+                if (hasSky) {
+                    lightEngine.queueSectionData(LightLayer.SKY, sp, EMPTY_LIGHT_LAYER);
+                }
                 lightEngine.queueSectionData(LightLayer.BLOCK, sp, EMPTY_LIGHT_LAYER);
             }
             // 3) heightmaps 逐 type 覆盖
@@ -986,8 +995,9 @@ public class ShadowSeedServer extends MinecraftServer {
 
     /**
      * 加载进影子端表并显式指定是否需要 saveAll 重写。
+     * 无 hash 时回填 content hash，保证随后 compare-pull 有基线。
      *
-     * @param dirty true = 本地新生成或与磁盘不一致；false = 磁盘 clean 命中
+     * @param dirty true = 本地新生成或与磁盘不一致，必须落盘；false = 磁盘 clean 命中
      */
     public void injectLoadedChunk(String dimension, ChunkPos pos,
                                   net.minecraft.world.level.chunk.LevelChunk chunk, boolean dirty) {
@@ -1003,6 +1013,16 @@ public class ShadowSeedServer extends MinecraftServer {
         }
         ShadowLightCompute.withChunkLock(pos, () -> {
             this.injectedChunks.put(key, chunk);
+            if (io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.get(dimension, pos) == null) {
+                try {
+                    long contentHash = io.github.limuqy.mc.hassium.cache.ChunkContentHashUtil
+                            .combineSectionHashes(io.github.limuqy.mc.hassium.cache.ChunkContentHashUtil
+                                    .computeSectionHashes(chunk));
+                    io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.put(dimension, pos, contentHash);
+                } catch (Throwable ignored) {
+                    // compare 无 hash 会走空基线 FULL；不得因 hash 失败丢柱
+                }
+            }
             SectionDeltaSnapshots.put(dimension, pos, SectionDeltaSnapshot.capture(chunk));
         });
         // 悬置柱放行（同 injectChunk）：读盘/生成柱入表即恢复原版加载链
@@ -1345,8 +1365,6 @@ public class ShadowSeedServer extends MinecraftServer {
      * ServerChunkCache.mainThreadProcessor。前者在无 tick 预算时不会消费后者。
      */
     void runMainLoop() {
-        ServerChunkCache cache = (ServerChunkCache) this.overworld().getChunkSource();
-        ThreadedLevelLightEngine lightEngine = cache.getLightEngine();
         long loopCount = 0;
         while (!Thread.currentThread().isInterrupted()) {
             loopCount++;
@@ -1362,7 +1380,9 @@ public class ShadowSeedServer extends MinecraftServer {
             boolean worked;
             try {
                 worked = this.pollTask();
-                worked |= cache.pollTask();
+                for (ServerLevel level : getAllLevels()) {
+                    worked |= ((ServerChunkCache) level.getChunkSource()).pollTask();
+                }
                 // 影子虚拟玩家 tracking 会话：位置同步消费 + chunk 系统簿记 + pull 请求分批
                 io.github.limuqy.mc.hassium.network.seedgen.ShadowTrackingSession.getInstance()
                         .consumeOnShadowLoop();
@@ -1386,13 +1406,16 @@ public class ShadowSeedServer extends MinecraftServer {
                         "[SHADOW_LOOP] shadow main loop crashed; session halted", t);
                 break;
              }
-            try {
-                lightEngine.tryScheduleUpdate();
-            } catch (Throwable ignored) {
-                // 光照任务驱动失败不影响 worldgen 主循环
+            for (ServerLevel level : getAllLevels()) {
+                try {
+                    ((ThreadedLevelLightEngine) ((ServerChunkCache) level.getChunkSource())
+                            .getLightEngine()).tryScheduleUpdate();
+                } catch (Throwable ignored) {
+                    // 光照任务驱动失败不影响 worldgen 主循环
+                }
             }
             if (!worked) {
-                // 两条原版队列均为空时短暂停驻。
+                // 原版队列均为空时短暂停驻。
                 LockSupport.parkNanos("hassium-seedgen-main", 100_000L);
             }
         }

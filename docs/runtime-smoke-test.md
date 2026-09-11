@@ -41,14 +41,14 @@ Hassium 跨版本（1.20.1–1.21.11）× 多加载器（fabric / neoforge）的
 # 单次会话，指定场景（seedgen / dimension）
 .\scripts\runtime-smoke-test.ps1 -Ver 1.20.1 -Loader fabric -Phase I -SessionId "1.20.1_fabric_I_seedgen" -Scenario seedgen
 
-# 全量初始轮（12 版 × 2 加载器 classic；约 4–6 小时）
+# 全量初始轮（12 版 × 2 加载器 classic；约 4–6 小时，固定串行）
 .\scripts\runtime-smoke-test-batch.ps1 -Phase I
 
-# 并行跑全量初始轮（fabric+neoforge 同时，节省约一半时间）
-.\scripts\runtime-smoke-test-batch.ps1 -Phase I -Parallel
-
-# 批量多场景：classic 走全矩阵，seedgen/dimension 只在锚点集跑
+# 批量多场景：classic 走全矩阵，seedgen/dimension 只在锚点集跑（固定串行）
 .\scripts\runtime-smoke-test-batch.ps1 -Phase I -Scenarios classic,seedgen,dimension
+
+# B4 / 区块核心验证：只跑 L2 锚点（1.20.1 fabric、1.21.1 neoforge、1.21.11 neoforge）
+.\scripts\runtime-smoke-test-batch.ps1 -Phase I -Scenarios seedgen,dimension
 
 # 仅指定版本×fabric
 .\scripts\runtime-smoke-test-batch.ps1 -Phase I -Versions @("1.20.1","1.21.11") -Loaders fabric
@@ -67,7 +67,7 @@ Hassium 跨版本（1.20.1–1.21.11）× 多加载器（fabric / neoforge）的
 | `-SessionId` | 是 | — | 会话 ID，用于日志文件命名，如 `1.20.1_fabric_I` |
 | `-Scenario` | 否 | `classic` | 场景名，加载 `common/src/main/resources/hassium/smoke/scenario/<name>.scenario`；默认 classic 不注入 `-Dhassium.smokeScenario`（既有路径零行为变化）。`seedgen`/`dimension` 强制 `-CleanWorld` |
 | `-CleanWorld` | 否 | false | 删除服务端存档；batch 按 loader 策略决定（见下） |
-| `-PregenOnly` | 否 | false | 只跑服务端预生成（`SmokePhases=pregen`，49×49 区域），产物存 `build/smoke-test/pregen-world/<Loader>-<Ver>/` 供后续 CleanWorld 恢复；不启客户端 |
+| `-PregenOnly` | 否 | false | **已退役**。传入时跳过，不再起服预生成 / 恢复 `pregen-world` |
 | `-SmokeHost` | 否 | 空 | 客户端连服完整地址（如 `127.0.0.1:25566`）；指定后优先于 `-ServerPort` |
 | `-ServerPort` | 否 | `25565` | 服务端监听端口（并行模式由 batch 脚本分配：fabric=BasePort, neoforge=BasePort+1） |
 | `-DelayMs` | 否 | `10000` | 进世界后等待毫秒（classic ROUND1 窗口=DelayMs×2=20s，ROUND2=max(3000, DelayMs)） |
@@ -90,18 +90,19 @@ Hassium 跨版本（1.20.1–1.21.11）× 多加载器（fabric / neoforge）的
 | `-Scenarios` | 否 | `classic` | 场景列表（逗号分隔）。`classic` 走全矩阵（`-Versions` × `-Loaders`）；非 classic 场景只跑锚点集（硬编码：1.20.1 fabric+forge、1.21.1 neoforge、1.21.11 neoforge，再与 `-Versions`/`-Loaders`/`builds_for` 取交集）。非 classic 会话 sessionId 追加 `_<scenario>` 后缀避免 result JSON 冲突 |
 | `-Versions` | 否 | 全部 12 版 | 指定版本子集 |
 | `-Loaders` | 否 | `fabric,neoforge` | 加载器子集 |
-| `-MaxRetries` | 否 | `3` | 单会话失败重试次数上限 |
-| `-Parallel` | 否 | false | 同版本多 loader 并行跑（Start-Process） |
+| `-MaxRetries` | 否 | `3` | 仅游戏打不开时重试（服务端未就绪 / 客户端没写出 ROUND1）。进过世界的业务 FAIL 不重跑 |
+| `-Parallel` | 否 | false | **已忽略**。单版本（服务端 + 客户端 + 影子 worldgen）已经吃满 CPU；传入时打印警告并强制串行 |
+
 | `-BasePort` | 否 | `25565` | 起始端口；fabric 用此端口，neoforge 自动 +1（仅并行模式生效） |
 
-**batch `CleanWorld` 策略**（按 loader 独立跟踪，因为 fabric/forge/neoforge 各有 `run/server`）：
+**batch `CleanWorld` 策略**（存档目录按 loader×ver 隔离为 `parity_<loader>_<ver>`，切版本不会互相覆盖）：
 
 | 场景 | 是否清理 |
 |------|----------|
-| 该 loader 的第一个版本 | 清理 |
-| 版本变化（升或降） | 清理（worldgen 跨版本可能变化——1.21.9 地形塑造重构、1.21.4 pale garden 等；复用旧版本 terrain 会让新版本 seedgen 影子端系统性 mismatch，R2 命中率崩塌。T8 1.21.11 实测 17.8%） |
-| 同版本 | 不清理（复用存档，加快启动） |
-| 同会话失败重试 | 强制清理 |
+| 切版本 / 该 loader 第一个版本 | **不清理**（各版本自己的 `parity_*` 目录，batch 不再因退版本删档） |
+| 同版本再跑 | 不清理（复用该版本存档，加快启动） |
+| 启动失败重试（没进世界） | 强制清理 |
+| 进过世界的业务 FAIL | **不重试** |
 | `seedgen` / `dimension` 场景 | 强制清理（单会话脚本内置，干净世界前置） |
 
 ## 测试流程
@@ -111,8 +112,7 @@ Hassium 跨版本（1.20.1–1.21.11）× 多加载器（fabric / neoforge）的
 │  1. 清理 <loader>/run/client/hassium_cache + crash-reports             │
 │     钉死 options.txt renderDistance=32（三端同一滑块，≥ Vd1）           │
 │  2. 写 <loader>/run/server/server.properties (VD=20, online-mode=false) │
-│  3. (CleanWorld) 删 <loader>/run/server/world*                          │
-│     （有预生成存档时优先从 build/smoke-test/pregen-world/ 恢复）          │
+│  3. (CleanWorld) 删 parity_<loader>_<ver>/（不再从 pregen-world 恢复）    │
 │  4. 启动 :<loader>:runServer  →  ServerSmokeTest 设置 VD=20            │
 │     （hassium.serverSmokeScenario 非空时玩家 join 即自动 OP）            │
 │  5. 等待 server log "Done ("                                            │
@@ -413,7 +413,7 @@ build/smoke-test/
 
 ## 并行模式
 
-`-Parallel` 开关启用后，同版本的 fabric + neoforge 用 `Start-Process` 同时启动，节省约一半时间。
+`-Parallel` **已忽略**：单版本就已经是 1 个专用服 + 1 个客户端 + 影子 worldgen 池，CPU 打满；再叠 fabric/neoforge 会把会话打崩（客户端 NTSTATUS `-1`、区块覆盖缺口）。传入该开关时 batch 打印警告并走串行。下文保留端口/清理约定，供以后若重新打开并行时对照。
 
 **端口分配**：`fabric = BasePort`（默认 25565），`neoforge = BasePort + 1`（默认 25566）。用 `-BasePort` 可整体偏移。
 

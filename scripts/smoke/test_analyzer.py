@@ -98,6 +98,31 @@ class SpatialCheckTest(unittest.TestCase):
             analysis = analyze_result(result, root)
             self.assertIn("PROBE_MISSING", {item["code"] for item in analysis["failures"]})
 
+    def test_historical_session_suffix_logs_do_not_poison_markers(self):
+        from scripts.smoke.analyzer import analyze_result
+        from pathlib import Path
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            logs = root / "logs"
+            logs.mkdir()
+            (logs / "client_1.21.1_fabric_I.log").write_text(
+                "HassiumSmokeTest:PASS\n"
+                "Hassium: play init (caps=1)\n"
+                "Hassium: Aggregation enabled for player\n"
+                "CLIENT_STATS ROUND1 begin\nCLIENT_STATS ROUND1 end\n"
+                "CLIENT_STATS ROUND2 begin\nCLIENT_STATS ROUND2 end\n")
+            (logs / "client_1.21.1_fabric_I_p1b.log").write_text("HassiumSmokeTest:FAIL\n")
+            result = {"SessionId": "1.21.1_fabric_I", "Scenario": "seedgen",
+                      "Probe": {"Round1": {
+                          "stats": {"clientAppliedChunkCount": 1, "clientLandedChunkCount": 1},
+                          "chunkTrace": {},
+                          "clientCache": {"actualPresent": {"positions": [[0, 0]]}, "loadedChunks": 1},
+                      }}}
+            analysis = analyze_result(result, root)
+            self.assertNotIn("SMOKE_FAIL_MARKER_PRESENT", {item["code"] for item in analysis["failures"]})
+            self.assertEqual(analysis["checks"]["smoke_markers"], "PASS")
+
     def test_expected_trace_gap_fails(self):
         from scripts.smoke.analyzer import analyze_result
         from pathlib import Path

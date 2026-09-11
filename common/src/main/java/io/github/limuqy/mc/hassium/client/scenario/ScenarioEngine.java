@@ -59,6 +59,7 @@ public final class ScenarioEngine {
     private static long stepStartMs;
     private static boolean joinAnnounced;
     private static boolean dumpWaitAnnounced;
+    private static boolean dimensionCommandSent;
 
     // 飞行注入：爬升阶段到期 → 转平飞；平飞到期或玩家消失 → 复位按键
     private static long moveUntilMs = -1L;
@@ -102,6 +103,8 @@ public final class ScenarioEngine {
         // 可用 hassium.smokeTest.dimWaitMs / endWaitMs 覆盖）
         vars.put("dimWaitMs", Long.toString(parseLong(
                 System.getProperty("hassium.smokeTest.dimWaitMs"), Math.max(20_000L, delayMs * 2))));
+        vars.put("endWaitMs", Long.toString(parseLong(
+                System.getProperty("hassium.smokeTest.endWaitMs"), Math.max(30_000L, delayMs))));
         // R2 预览光会把 VD 内柱立刻推进 ready FIFO；与 R1 同量等待，
         // 避免 dump 时 loadedRenderOnly 仍为 0。
         vars.put("round2WaitMs", Long.toString(Math.max(3_000L, delayMs * 2)));
@@ -161,7 +164,13 @@ public final class ScenarioEngine {
         // join/wait 等阻塞步骤 RUNNING 时让出本 tick
         for (int guard = 0; guard < 16 && !finished; guard++) {
             ScenarioStep step = steps.get(index);
-            Outcome outcome = execute(step, mc, System.currentTimeMillis());
+            Outcome outcome;
+            try {
+                outcome = execute(step, mc, System.currentTimeMillis());
+            } catch (RuntimeException e) {
+                fail("step crashed: " + currentDesc() + " (" + e.getMessage() + ")", 3);
+                return;
+            }
             if (finished) {
                 return; // 步骤内部已触发失败退出
             }
@@ -179,6 +188,8 @@ public final class ScenarioEngine {
         index++;
         stepStartMs = System.currentTimeMillis();
         joinAnnounced = false;
+        dumpWaitAnnounced = false;
+        dimensionCommandSent = false;
     }
 
     private static String currentDesc() {
@@ -232,7 +243,19 @@ public final class ScenarioEngine {
     // ------------------------------------------------------------------ wait
 
     private static Outcome execWait(ScenarioStep step, Minecraft mc, long now) {
-        return now - stepStartMs >= step.longParam("ms", 0L) ? Outcome.DONE : Outcome.RUNNING;
+        String raw = step.param("ms");
+        if (raw != null && raw.contains("${")) {
+            fail("unresolved wait ms=" + raw + " at " + step, 3);
+            return Outcome.DONE;
+        }
+        long ms;
+        try {
+            ms = step.longParam("ms", 0L);
+        } catch (IllegalArgumentException e) {
+            fail(e.getMessage(), 3);
+            return Outcome.DONE;
+        }
+        return now - stepStartMs >= ms ? Outcome.DONE : Outcome.RUNNING;
     }
 
     /** 非阻塞飞行注入：creative 冒烟本地激活飞行，先爬升 2s 再平飞 Ns（seconds=0 不动）。 */
@@ -327,11 +350,25 @@ public final class ScenarioEngine {
             case "overworld" -> "minecraft:overworld";
             default -> to.contains(":") ? to : "minecraft:" + to;
         };
-        LOGGER.info("HassiumSmokeTest:DIM_CHANGE to={}", target);
-        // sendCommand 即命令路径（ServerboundChatCommandPacket，无需斜杠）；/execute 需 OP（level 2），
-        // 服务端冒烟由 ServerSmokeTest 按 hassium.serverSmokeScenario 自动 op。
-        conn.sendCommand("execute in " + target + " run tp @s ~ ~ ~");
-        return Outcome.DONE;
+        if (!dimensionCommandSent) {
+            LOGGER.info("HassiumSmokeTest:DIM_CHANGE to={}", target);
+            // sendCommand 即命令路径（ServerboundChatCommandPacket，无需斜杠）；/execute 需 OP（level 2），
+            // 服务端冒烟由 ServerSmokeTest 按 hassium.serverSmokeScenario 自动 op。
+            conn.sendCommand("execute in " + target + " run tp @s ~ ~ ~");
+            dimensionCommandSent = true;
+            return Outcome.RUNNING;
+        }
+        String actual = dimensionId(mc.player.level().dimension());
+        if (target.equals(actual)) {
+            LOGGER.info("HassiumSmokeTest:DIM_CHANGE arrived {}", target);
+            return Outcome.DONE;
+        }
+        long timeout = step.longParam("timeoutMs", 20_000L);
+        if (now - stepStartMs > timeout) {
+            fail("dimension change timeout to=" + target + " actual=" + actual, 2);
+            return Outcome.DONE;
+        }
+        return Outcome.RUNNING;
     }
 
     // ------------------------------------------------------------ disconnect / reconnect
@@ -577,9 +614,10 @@ public final class ScenarioEngine {
      *   assertProbe key=stats.staleFullChunkRequestCount op=lt vs=stats.clientAppliedChunkCount
      *   assertProbe key=joined op=eq value=true
      *   assertProbe key=dimension op=eq value=minecraft:the_nether
+     *   assertProbe key=clientCache.loadedChunks op=gt value=64
      * </pre>
      * key path 与 {@link SmokeProbeWriter} PROBE JSON 键同名（counters.* / stats.* /
-     * 顶层 joined、dimension）。数值字段支持
+     * clientCache.* / chunkTrace.* / 顶层 joined、dimension）。数值字段支持
      * gt/ge/lt/le/eq，且可用 vs=&lt;path&gt; 做字段对字段比较；布尔字段（joined）
      * 与字符串字段（dimension）只支持 eq。断言失败按统计
      * 校验失败语义 fail(code 2)；key/op 非法属场景配置错误，fail(code 1)。
@@ -610,7 +648,7 @@ public final class ScenarioEngine {
             return Outcome.DONE;
         }
         // 数值比较
-        Long actual = readNumericProbe(key);
+        Long actual = readNumericProbe(key, mc);
         if (actual == null) {
             fail("assertProbe unknown key '" + key + "' at " + step, 1);
             return Outcome.DONE;
@@ -619,7 +657,7 @@ public final class ScenarioEngine {
         String expectDesc;
         String vsKey = step.param("vs");
         if (vsKey != null) {
-            Long other = readNumericProbe(vsKey);
+            Long other = readNumericProbe(vsKey, mc);
             if (other == null) {
                 fail("assertProbe unknown vs key '" + vsKey + "' at " + step, 1);
                 return Outcome.DONE;
@@ -661,9 +699,13 @@ public final class ScenarioEngine {
      * 一一对应（PROBE JSON 消费方可用同名键写场景断言）。
      * 返回 null = 未知键。
      */
-    private static Long readNumericProbe(String key) {
+    private static Long readNumericProbe(String key, Minecraft mc) {
         io.github.limuqy.mc.hassium.metrics.HassiumMetricsImpl m =
                 io.github.limuqy.mc.hassium.metrics.NetworkStats.getMetrics();
+        String dim = mc != null && mc.player != null && mc.level != null
+                ? dimensionId(mc.player.level().dimension()) : null;
+        io.github.limuqy.mc.hassium.network.seedgen.SmokeChunkTrace.Snapshot trace =
+                io.github.limuqy.mc.hassium.network.seedgen.SmokeChunkTrace.snapshot(dim);
         return switch (key) {
             // counters.*（appendCounters 同名）
             case "counters.sectionDeltaRequestsSent" -> m.getSectionDeltaRequestsSent();
@@ -703,6 +745,13 @@ public final class ScenarioEngine {
             case "stats.lightCacheMissCount" -> m.getLightCacheMissCount();
             case "stats.lightCacheMissBytes" -> m.getLightCacheMissBytes();
             case "stats.noModReceiveBytes" -> m.getNoModReceiveBytes();
+            case "clientCache.loadedChunks" -> {
+                long n = SmokeProbeWriter.currentLoadedChunkCount(mc);
+                yield n < 0L ? 0L : n;
+            }
+            case "chunkTrace.shadowInjected" -> (long) trace.shadowInjected().size();
+            case "chunkTrace.clientApplied" -> (long) trace.clientApplied().size();
+            case "chunkTrace.meshCompiled" -> (long) trace.meshCompiled().size();
             default -> null;
         };
     }

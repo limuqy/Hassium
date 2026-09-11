@@ -156,6 +156,28 @@ public final class ShadowChunkMapCompat {
     }
 
     /**
+     * {@code scheduleChunkLoad} 短路：注入表或影子存档已有柱则直接 Imposter，
+     * <b>禁止再走 worldgen</b>。映像整文件重写后原版 RegionFile 扇区表可能读空，
+     * 必须问 {@link ShadowSeedServer#loadFromDisk}，不能只靠 IOWorker。
+     */
+    public static LevelChunk existingColumnForScheduleLoad(ShadowSeedServer server,
+                                                           String dimension, ChunkPos pos) {
+        if (server == null || pos == null) {
+            return null;
+        }
+        LevelChunk injected = server.injectedChunk(dimension, pos.x, pos.z);
+        if (injected != null) {
+            return injected;
+        }
+        LevelChunk disk = server.loadFromDisk(dimension, pos);
+        if (disk == null) {
+            return null;
+        }
+        server.injectLoadedChunk(dimension, pos, disk, false);
+        return disk;
+    }
+
+    /**
      * 可见 FULL 柱：优先 ChunkMap holder，Imposter 解包为 {@link LevelChunk}。
      * 存储刷脏用；未进 map 时返回 null（调用方回落注入表）。
      */

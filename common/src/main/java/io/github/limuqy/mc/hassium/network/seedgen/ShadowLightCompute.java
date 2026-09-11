@@ -273,27 +273,48 @@ public final class ShadowLightCompute {
      * 静态存活（不随断连清理）：键数 = 会话内触碰 chunk 数（每键 ~40B），可忽略；清空反而
      * 引入新旧 monitor 交错窗口。
      */
-    private static final ConcurrentHashMap<Long, Object> chunkLocks = new ConcurrentHashMap<>();
+    private static final ConcurrentHashMap<Long, java.util.concurrent.locks.ReentrantLock> chunkLocks =
+            new ConcurrentHashMap<>();
 
-    private static Object chunkLock(ChunkPos pos) {
-        return chunkLocks.computeIfAbsent(chunkPosKey(pos), k -> new Object());
+    private static java.util.concurrent.locks.ReentrantLock chunkLock(ChunkPos pos) {
+        return chunkLocks.computeIfAbsent(chunkPosKey(pos),
+                k -> new java.util.concurrent.locks.ReentrantLock());
     }
 
+    /**
+     * 给影子 {@code ChunkMap.save} mixin 与 {@link #withChunkLock} 共用。
+     * 必须成对；可重入（flush 序列化已持锁时再进 vanilla save 包装）。
+     */
+    public static void lockChunk(ChunkPos pos) {
+        chunkLock(pos).lock();
+    }
+
+    public static void unlockChunk(ChunkPos pos) {
+        chunkLock(pos).unlock();
+    }
 
     /**
      * 与注入/hash 比对/apply/落盘序列化共用同一把 per-chunk 锁。
      * {@code injectChunk.replaceWithPacketData} 与 {@code ChunkSerializer.pack}
      * 必须互斥，否则 1.20.1 PalettedContainer ThreadingDetector 会崩影子端。
+     * 原版 {@code ChunkMap.save} 也走这把锁（mixin），避免 flush 线程与
+     * seedgen-main 卸载保存同时 {@code pack} 同一容器。
      */
     public static void withChunkLock(ChunkPos pos, Runnable action) {
-        synchronized (chunkLock(pos)) {
+        lockChunk(pos);
+        try {
             action.run();
+        } finally {
+            unlockChunk(pos);
         }
     }
 
     public static <T> T withChunkLock(ChunkPos pos, java.util.function.Supplier<T> action) {
-        synchronized (chunkLock(pos)) {
+        lockChunk(pos);
+        try {
             return action.get();
+        } finally {
+            unlockChunk(pos);
         }
     }
 
@@ -307,9 +328,7 @@ public final class ShadowLightCompute {
     public static ClientboundLevelChunkWithLightPacket buildPacketLocked(
             ChunkPos pos, net.minecraft.world.level.chunk.LevelChunk chunk,
             net.minecraft.server.level.ServerLevel level) {
-        synchronized (chunkLock(pos)) {
-            return SeedGenChunkCodec.buildPacket(chunk, level);
-        }
+        return withChunkLock(pos, () -> SeedGenChunkCodec.buildPacket(chunk, level));
     }
 
     /**
@@ -373,6 +392,29 @@ public final class ShadowLightCompute {
         networkInFlight.clear();
         accountedCacheHits.clear();
         accountedLights.clear();
+        shadowApplyEpochs.clear();
+        fullApplyTraces.clear();
+        immediateEmitted.clear();
+    }
+
+    /**
+     * 真客户端切维：上一 ClientChunkCache 已卸空，落地凭据与在途回传全部作废。
+     * 影子注入表 / 落盘基线保留，供新维度会话 {@code publishCached} 重发。
+     * <p>
+     * {@link #onClientChunkUnloaded} 用 {@code Minecraft.level} 取维：ClientLevel 替换后
+     * 旧世界 unload 会打到新维 key，R1 主世界 epoch 残留。返主后
+     * {@code hasClientApplyEpoch} 仍为真，boot/sweep/redeliver 全部跳过（实测 1529→23）。
+     */
+    public static void onClientDimensionChanged() {
+        ready.clear();
+        pending.clear();
+        pendingDeltas.clear();
+        generated.clear();
+        pendingLightUpdates.clear();
+        inflightLight.clear();
+        networkInFlight.clear();
+        requestedMisses.clear();
+        accountedIngress.clear();
         shadowApplyEpochs.clear();
         fullApplyTraces.clear();
         immediateEmitted.clear();
@@ -894,6 +936,21 @@ public final class ShadowLightCompute {
     }
 
     /**
+     * 单柱光照/打包失败不得关整台影子端。真服对 Hassium 客户端抑制原版区块包，
+     * {@code failShadowServer} 之后切维（下界/末地/返主）会变成空 ClientChunkCache。
+     */
+    static boolean shouldFailShadowOnSingleColumnFailure() {
+        return false;
+    }
+
+    private static void noteSingleColumnFailure(String message, Object... args) {
+        io.github.limuqy.mc.hassium.Constants.LOG.warn(message, args);
+        if (shouldFailShadowOnSingleColumnFailure()) {
+            ShadowServerRegistry.getInstance().failShadowServer();
+        }
+    }
+
+    /**
      * 登录初始化入口：单端点原版会话没有旧 gateway 握手，影子端按配置常驻至断连 park。
      */
     public static void onLogin() {
@@ -929,12 +986,13 @@ public final class ShadowLightCompute {
         net.minecraft.world.level.chunk.LevelChunk chunk = shadow == null ? null
                 : shadow.injectedChunk(dimension, pos.x, pos.z);
         if (localHash == null && chunk != null) {
-            synchronized (chunkLock(pos)) {
-                localHash = io.github.limuqy.mc.hassium.cache.ChunkContentHashUtil
+            localHash = withChunkLock(pos, () -> {
+                long computed = io.github.limuqy.mc.hassium.cache.ChunkContentHashUtil
                         .combineSectionHashes(io.github.limuqy.mc.hassium.cache.ChunkContentHashUtil
                                 .computeSectionHashes(chunk));
-                io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.put(dimension, pos, localHash);
-            }
+                io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.put(dimension, pos, computed);
+                return computed;
+            });
         }
         if (localHash == null) {
             return new io.github.limuqy.mc.hassium.network.ShadowPullRequestC2SPacket.Entry(
@@ -944,7 +1002,8 @@ public final class ShadowLightCompute {
             return new io.github.limuqy.mc.hassium.network.ShadowPullRequestC2SPacket.Entry(
                     pos.x, pos.z, localHash, List.of(), 0);
         }
-        synchronized (chunkLock(pos)) {
+        final long hashForEntry = localHash;
+        return withChunkLock(pos, () -> {
             io.github.limuqy.mc.hassium.network.sectiondelta.SectionDeltaSnapshot snapshot =
                     io.github.limuqy.mc.hassium.network.sectiondelta.SectionDeltaSnapshots
                             .getOrCapture(dimension, pos, chunk);
@@ -954,8 +1013,8 @@ public final class ShadowLightCompute {
                 sectionHashes.add(hash);
             }
             return new io.github.limuqy.mc.hassium.network.ShadowPullRequestC2SPacket.Entry(
-                    pos.x, pos.z, localHash, sectionHashes, snapshot.planes(), 0);
-        }
+                    pos.x, pos.z, hashForEntry, sectionHashes, snapshot.planes(), 0);
+        });
     }
 
     /** 已登记 hash 或驻留影子柱均可作为统一比较拉取的本地基线。 */
@@ -1134,14 +1193,13 @@ public final class ShadowLightCompute {
         try {
             runBuildOnShadowMain(pos, () -> {
                 ClientboundLevelChunkWithLightPacket packet;
-                synchronized (chunkLock(pos)) {
-                    packet = SeedGenChunkCodec.buildPacket(chunk, level);
-                }
+                packet = withChunkLock(pos, () -> SeedGenChunkCodec.buildPacket(chunk, level));
                 offerReady(DimensionKey.key(dimension, pos.x, pos.z), pos, packet,
                         true, false, origin);
             });
         } catch (Throwable failure) {
-            ShadowServerRegistry.getInstance().failShadowServer();
+            noteSingleColumnFailure("[SHADOW_CHUNK] publish native light failed ({}, {}) dim={}",
+                    pos.x, pos.z, dimension, failure);
         }
     }
 
@@ -1379,9 +1437,8 @@ public final class ShadowLightCompute {
                         boolean hashKnown = remoteHash != 0L;
                         boolean hashMatches = false;
                         if (hashKnown) {
-                            synchronized (chunkLock(pos)) {
-                                hashMatches = diskHashMatches(dimension, existing, pos, remoteHash);
-                            }
+                            hashMatches = withChunkLock(pos, () ->
+                                    diskHashMatches(dimension, existing, pos, remoteHash));
                         }
                     if (!hashKnown || hashMatches) {
                             boolean needRelight = !existing.isLightCorrect();
@@ -1416,15 +1473,11 @@ public final class ShadowLightCompute {
                     }
                     // R1 全量直推：禁 loadFromDisk。内存未命中则注入网络包。
                     if (!server.injectChunk(dimension, pos, pendingEntry.packet())) {
-                        // 注入失败 = 影子链路整体失败：走与握手失败/创建失败同级的
-                        // 关闭核心逻辑（shadowServerFailed → 缓存/OVD/SeedGen 关闭 + 提示）。
-                        pending.clear();
-                        pendingDeltas.clear();
-                        generated.clear();
-                        pendingLightUpdates.clear();
-                        inflightLight.clear();
-                        ShadowServerRegistry.getInstance().failShadowServer();
-                        return;
+                        pending.remove(e.getKey(), pendingEntry);
+                        noteSingleColumnFailure(
+                                "[SHADOW_INJECT] inject failed ({}, {}) dim={}, skip column",
+                                pos.x, pos.z, dimension);
+                        continue;
                     }
                     SmokeChunkTrace.recordShadowInjected(dimension, pos);
                     if (shouldAccountServerPushAsApplied(requestedMisses.contains(e.getKey()))) {
@@ -1452,9 +1505,8 @@ public final class ShadowLightCompute {
                     // （LevelChunkSection.read → PalettedContainer 写）——与 hash 比对线程
                     // （chunkHashOf / computeSectionHashes）同 chunk 锁互斥（T7 崩溃同机制）。
                     boolean applied;
-                    synchronized (chunkLock(pos)) {
-                        applied = server.applySectionDelta(work.dimension(), pos, work.entry());
-                    }
+                    applied = withChunkLock(pos, () ->
+                            server.applySectionDelta(work.dimension(), pos, work.entry()));
                     if (!applied) {
                         DebugLogger.warn(DebugLogger.LogType.ASYNC,
                                 "[SHADOW_DELTA] Apply failed ({}, {}), yield to vanilla tracking",
@@ -1617,7 +1669,7 @@ public final class ShadowLightCompute {
                         }
                     }
                 } catch (Throwable ex) {
-                    abortLight(t.key);
+                    abortLight(t.key, ex);
                 }
             }
         }
@@ -1649,13 +1701,13 @@ public final class ShadowLightCompute {
                             .completeNativeLight(level, inf.nativeChunk))
                     .whenComplete((ignored, throwable) -> {
                         if (throwable != null) {
-                            abortLight(t.key);
+                            abortLight(t.key, throwable);
                         } else {
                             completeLight(inf, true);
                         }
                     });
         } catch (Throwable failure) {
-            abortLight(t.key);
+            abortLight(t.key, failure);
         }
     }
 
@@ -1681,11 +1733,14 @@ public final class ShadowLightCompute {
         }
         return true;
     }
-    /** LIGHT 未完成时退出影子光照，不广播 partial 数据，后续包走完整回退。 */
-    private static void abortLight(long key) {
+    /** LIGHT 未完成时退出该柱光照，不广播 partial；其它柱继续。 */
+    private static void abortLight(long key, Throwable cause) {
         inflightLight.remove(key);
         pendingLightUpdates.remove(key);
-        ShadowServerRegistry.getInstance().failShadowServer();
+        noteSingleColumnFailure(
+                "[SHADOW_LIGHT] abort ({}, {}) dim={}",
+                DimensionKey.chunkXOf(key), DimensionKey.chunkZOf(key),
+                DimensionKey.dimensionOf(key), cause);
     }
 
     /** 原版 LIGHT future 完成后的唯一完成收口。 */
@@ -1754,19 +1809,16 @@ public final class ShadowLightCompute {
                 DimensionKey.chunkXOf(key), DimensionKey.chunkZOf(key));
     }
 
-    /** LIGHT future 超时只触发完整回退，不广播 partial 光照。 */
+    /** LIGHT future 超时只丢该柱，不广播 partial，也不关整台影子端。 */
     private static void sweepLightTimeouts() {
-        ShadowSeedServer server = ShadowServerRegistry.getInstance().get();
         long now = System.currentTimeMillis();
         for (InflightLight inf : inflightLight.values()) {
             if (now >= inf.deadlineMs && inflightLight.remove(inf.key, inf)) {
-                if (server != null) {
-                    ShadowServerRegistry.getInstance().failShadowServer();
-                }
-                DebugLogger.warn(DebugLogger.LogType.ASYNC,
-                        "[SHADOW_LIGHT] Light timeout ({}ms) ({}, {}), switching to vanilla fallback",
-                        CONVERGENCE_WAIT_TIMEOUT_MS, DimensionKey.chunkXOf(inf.key),
-                        DimensionKey.chunkZOf(inf.key));
+                noteSingleColumnFailure(
+                        "[SHADOW_LIGHT] Light timeout ({}ms) ({}, {}) dim={}",
+                        CONVERGENCE_WAIT_TIMEOUT_MS,
+                        DimensionKey.chunkXOf(inf.key), DimensionKey.chunkZOf(inf.key),
+                        DimensionKey.dimensionOf(inf.key));
             }
         }
     }
@@ -1799,9 +1851,7 @@ public final class ShadowLightCompute {
         // ThreadingDetector 崩溃（T7 线程转储：consumeLoop pushReady 打包 vs hash 线程）。
         runBuildOnShadowMain(pos, () -> {
             ClientboundLevelChunkWithLightPacket packet;
-            synchronized (chunkLock(pos)) {
-                packet = SeedGenChunkCodec.buildPacket(chunk, level);
-            }
+            packet = withChunkLock(pos, () -> SeedGenChunkCodec.buildPacket(chunk, level));
             offerReady(key, pos, packet, converged, renderOnly, traceOrigin, standingPreview);
         });
     }
@@ -2275,10 +2325,15 @@ public final class ShadowLightCompute {
      * 「已请求」防抖——否则重进范围无法再交付，形成永久洞。
      */
     public static void onClientChunkUnloaded(ChunkPos pos) {
+        onClientChunkUnloaded(pos, currentDimension());
+    }
+
+    /** {@code dimension} 必须是正在 unload 的 ClientLevel，不能读当前 {@code Minecraft.level}。 */
+    public static void onClientChunkUnloaded(ChunkPos pos, String dimension) {
         if (pos == null) {
             return;
         }
-        String dim = currentDimension();
+        String dim = dimension != null ? dimension : currentDimension();
         long chunkKey = DimensionKey.key(dim, pos.x, pos.z);
         Long removedEpoch = shadowApplyEpochs.remove(chunkKey);
         fullApplyTraces.remove(chunkKey);

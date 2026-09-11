@@ -14,9 +14,7 @@ param(
     # -CleanWorld：重置本 loader×ver 的隔离存档目录 $serverLevelName（parity_<loader>_<ver>，
     # 见路径推导段）；非 CleanWorld 时该目录跨轮持久复用。旧固定 world/ 目录不再使用、不主动删除。
     [switch]$CleanWorld,
-    # -PregenOnly：只跑服务端预生成（SmokePhases=pregen，49×49 区域），
-    # 等 PREGEN_DONE marker 后停服并把存档复制到 build/smoke-test/pregen-world/<Loader>-<Ver>/world，
-    # 供后续冒烟 CleanWorld 时恢复（消除 worldgen 供给波动）。不启客户端。
+    # -PregenOnly：已退役。保留开关以免旧命令行报错，传入时直接跳过。
     [switch]$PregenOnly,
     [string]$SmokeHost = "",
     [int]$ServerPort = 25565,
@@ -470,29 +468,13 @@ if ($Scenario -in @("seedgen", "dimension", "ovdgen")) {
 # 按键值对 patch 双端 hassium toml（须在服务端/客户端启动前完成）。文件不存在则 no-op。
 Invoke-SmokeProfilePatch -Name $Scenario -ClientRunDir $clientRunDir -ServerRunDir $serverRunDir -SessionTag $SessionId
 
-# 3. 清理存档（batch：loader 首轮 / 退版本 / 失败重试 会传 -CleanWorld；单会话默认不清理）
-#    CleanWorld = 重置本 loader×ver 的 $serverLevelName 目录：优先从预生成存档恢复
-#    （build/smoke-test/pregen-world/<Loader>-<Ver>/，源布局不变），消除 worldgen 供给波动；
-#    无预生成存档则删空从头生成。非 CleanWorld 时该目录跨轮持久复用；旧固定 world/ 不动。
+# 3. 清理存档。CleanWorld = 删除本 loader×ver 的 $serverLevelName 目录后空世界启动。
+#    不再从 pregen-world 恢复（预生成已退役）。非 CleanWorld 时该目录跨轮持久复用。
 if ($CleanWorld) {
-    $pregenRoot = Join-Path $logRoot "pregen-world"
-    $pregenSrc = Join-Path $pregenRoot "${Loader}-${Ver}\world"
-    if (-not $PregenOnly -and (Test-Path $pregenSrc)) {
-        Write-Host "[$SessionId] [3/9] 恢复预生成存档 ($pregenSrc)..."
-        Remove-Item -Recurse -Force $serverLevelDir -ErrorAction SilentlyContinue
-        Remove-Item -Recurse -Force (Join-Path $serverRunDir "cache") -ErrorAction SilentlyContinue
-        New-Item -ItemType Directory -Force -Path $serverLevelDir | Out-Null
-        Copy-Item -Path $pregenSrc -Destination $serverLevelDir -Recurse -Force
-        # serverconfig 不随预生成存档复制（Hassium 配置在 config/hassium/；
-        # NeoForge/Forge 自身的 serverconfig 由服务端启动自动重建，复制反而带旧配置）
-        Remove-Item -Recurse -Force (Join-Path $serverLevelDir "serverconfig") -ErrorAction SilentlyContinue
-        New-Item -ItemType Directory -Force -Path (Join-Path $serverLevelDir "serverconfig") -ErrorAction SilentlyContinue | Out-Null
-    } else {
-        Write-Host "[$SessionId] [3/9] 清理服务端存档 ($Loader/run/server/$serverLevelName/)..."
-        Remove-Item -Recurse -Force $serverLevelDir -ErrorAction SilentlyContinue
-        Remove-Item -Recurse -Force (Join-Path $serverRunDir "cache") -ErrorAction SilentlyContinue
-        New-Item -ItemType Directory -Force -Path (Join-Path $serverLevelDir "serverconfig") -ErrorAction SilentlyContinue | Out-Null
-    }
+    Write-Host "[$SessionId] [3/9] 清理服务端存档 ($Loader/run/server/$serverLevelName/)..."
+    Remove-Item -Recurse -Force $serverLevelDir -ErrorAction SilentlyContinue
+    Remove-Item -Recurse -Force (Join-Path $serverRunDir "cache") -ErrorAction SilentlyContinue
+    New-Item -ItemType Directory -Force -Path (Join-Path $serverLevelDir "serverconfig") -ErrorAction SilentlyContinue | Out-Null
 } else {
     Write-Host "[$SessionId] [3/9] 跳过存档清理（复用已有 $serverLevelName）"
 }
@@ -521,7 +503,7 @@ foreach ($p in $portsToFree) {
         foreach ($pid_ in ($theirs | Select-Object -Unique)) {
             Write-Host "[$SessionId] 端口 $p 被非本工程进程 PID $pid_ 占用，跳过不动（可能是并行会话）"
         }
-        if ($ours) { Start-Sleep -Seconds 2 }
+        if ($ours) { Start-Sleep -Milliseconds 400 }
     }
 }
 
@@ -553,62 +535,12 @@ if (-not $PSBoundParameters.ContainsKey('ServerPort')) {
     }
 }
 
-# 4.5 -PregenOnly：只跑服务端预生成（49×49 区域），不启客户端。
-# 等 PREGEN_DONE marker 后停服并把 $serverLevelName 存档复制到 build/smoke-test/pregen-world/<Loader>-<Ver>/world。
+# 4.5 预生成已退役：batch 不再调用；显式 -PregenOnly 直接跳过。
 if ($PregenOnly) {
-    Write-Host "[$SessionId] [PregenOnly] 预生成模式：起服 → 等 PREGEN_DONE → 停服 → 复制存档"
-    # 全新世界（预生成一次后存档复用）
-    Remove-Item -Recurse -Force $serverLevelDir -ErrorAction SilentlyContinue
-    Remove-Item -Recurse -Force (Join-Path $serverRunDir "cache") -ErrorAction SilentlyContinue
-    New-Item -ItemType Directory -Force -Path (Join-Path $serverLevelDir "serverconfig") -ErrorAction SilentlyContinue | Out-Null
-
-    $pregenGradlew = Join-Path $projectRoot "gradlew.bat"
-    # 不调 gradlew --stop：全局停 daemon 会误杀并行会话/其他项目的构建；--no-daemon 不依赖 daemon。
-    Write-Host "[$SessionId] [PregenOnly] 启动服务端 ($Loader / $Ver)..."
-    $pregenArgs = @("--no-daemon", "-Dorg.gradle.jvmargs=-Xmx2G -DsmokeSession=${SessionId}", ":${Loader}:runServer", "-PhassiumSmokeTest=true", "-PhassiumSmokePhases=pregen", "-Pmc_ver=${Ver}")
-    $server = Start-Process -FilePath $pregenGradlew `
-        -ArgumentList $pregenArgs `
-        -RedirectStandardOutput $serverLog `
-        -RedirectStandardError $serverErr `
-        -PassThru -WindowStyle Hidden
-
-    Write-Host "[$SessionId] [PregenOnly] 等待 PREGEN_DONE (超时 ${ServerReadyTimeoutSec}s)..."
-    $pregenDeadline = (Get-Date).AddSeconds($ServerReadyTimeoutSec)
-    $pregenOk = $false
-    while ((Get-Date) -lt $pregenDeadline) {
-        if ($server.HasExited) {
-            Write-Host "[$SessionId] [PregenOnly] 服务端提前退出，退出码: $($server.ExitCode)"
-            break
-        }
-        if (Test-Path $serverLog) {
-            if (Select-String -Path $serverLog -Pattern 'PREGEN_DONE' -Quiet -ErrorAction SilentlyContinue) {
-                $pregenOk = $true
-                break
-            }
-        }
-        Start-Sleep -Seconds 3
-    }
-
-    if (-not $server.HasExited) { Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue }
-    Stop-SessionJava -ServerPort $ServerPort -Loader $Loader
-
-    if ($pregenOk) {
-        $pregenRoot = Join-Path $logRoot "pregen-world"
-        $pregenDest = Join-Path $pregenRoot "${Loader}-${Ver}"
-        Remove-Item -Recurse -Force $pregenDest -ErrorAction SilentlyContinue
-        New-Item -ItemType Directory -Force -Path $pregenDest | Out-Null
-        Copy-Item -Path $serverLevelDir -Destination (Join-Path $pregenDest "world") -Recurse -Force
-        # serverconfig 不随预生成存档复制（Hassium 配置在 config/hassium/；
-        # NeoForge/Forge 自身的 serverconfig 由服务端启动自动重建，复制反而带旧配置）
-        Remove-Item -Recurse -Force (Join-Path $pregenDest "world\serverconfig") -ErrorAction SilentlyContinue
-        Write-Host "[$SessionId] [PregenOnly] 预生成完成，存档已保存到 $pregenDest"
-        $resultObj = @{ SessionId = $SessionId; Ver = $Ver; Loader = $Loader; Phase = "pregen"; Result = "PASS"; Reason = "pregen_done" }
-    } else {
-        Write-Host "[$SessionId] [PregenOnly] 预生成超时或失败" -ForegroundColor Red
-        $resultObj = @{ SessionId = $SessionId; Ver = $Ver; Loader = $Loader; Phase = "pregen"; Result = "FAIL"; Reason = "pregen_timeout" }
-    }
+    Write-Host "[$SessionId] [PregenOnly] 预生成已退役，跳过" -ForegroundColor Yellow
+    $resultObj = @{ SessionId = $SessionId; Ver = $Ver; Loader = $Loader; Phase = "pregen"; Result = "PASS"; Reason = "pregen_retired" }
     $resultObj | ConvertTo-Json -Depth 3 | Out-File (Join-Path $resultsDir "result_${SessionId}.json")
-    if ($pregenOk) { exit 0 } else { exit 2 }
+    exit 0
 }
 
 # 5. 启动服务端（后台，启用 ServerSmokeTest）
@@ -645,7 +577,7 @@ while ((Get-Date) -lt $deadline) {
         Write-Host "[$SessionId] 服务端进程提前退出，退出码: $($server.ExitCode)"
         break
     }
-    Start-Sleep -Seconds 3
+    Start-Sleep -Seconds 1
 }
 
 if (-not $serverReady) {
@@ -714,7 +646,7 @@ $clientProc = Start-Process -FilePath $gradlew `
 Write-Host "[$SessionId] [7/9] 等待客户端退出 (超时 ${ClientTimeoutSec}s)..."
 $clientDeadline = (Get-Date).AddSeconds($ClientTimeoutSec)
 while (-not $clientProc.HasExited -and (Get-Date) -lt $clientDeadline) {
-    Start-Sleep -Seconds 5
+    Start-Sleep -Seconds 1
 }
 if (-not $clientProc.HasExited) {
     Write-Host "[$SessionId] 客户端超时未退出，强制结束"

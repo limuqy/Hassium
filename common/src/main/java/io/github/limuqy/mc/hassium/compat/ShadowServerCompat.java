@@ -2,6 +2,8 @@ package io.github.limuqy.mc.hassium.compat;
 
 import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.mixin.ChunkMapAccessor;
+import io.github.limuqy.mc.hassium.network.seedgen.ShadowWorldgenExecutor;
+import io.github.limuqy.mc.hassium.server.RuntimeServerContext;
 import java.util.concurrent.CompletableFuture;
 import net.minecraft.CrashReport;
 import net.minecraft.core.BlockPos;
@@ -229,6 +231,25 @@ public final class ShadowServerCompat {
         return net.minecraft.Util.ioPool().service().isShutdown();
 #else
         return net.minecraft.Util.ioPool().isShutdown();
+#endif
+    }
+
+    /**
+     * {@code MinecraftServer} 构造里的 worldgen executor：影子端用独立 FJP，
+     * 其余仍返回原版 {@code Util.backgroundExecutor()}（1.21.2+ 为 {@code TracingExecutor}）。
+     */
+    public static java.util.concurrent.Executor shadowWorldgenExecutor() {
+        if (ShadowWorldgenExecutor.shouldIsolate(RuntimeServerContext.isShadowServerContext())) {
+#if MC_VER < MC_1_21_2
+            return ShadowWorldgenExecutor.service();
+#else
+            return new net.minecraft.TracingExecutor(ShadowWorldgenExecutor.service());
+#endif
+        }
+#if MC_VER >= MC_1_21_11
+        return net.minecraft.util.Util.backgroundExecutor();
+#else
+        return net.minecraft.Util.backgroundExecutor();
 #endif
     }
 

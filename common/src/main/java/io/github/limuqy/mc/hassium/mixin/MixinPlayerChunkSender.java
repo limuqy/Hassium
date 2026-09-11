@@ -6,7 +6,6 @@ import net.minecraft.network.protocol.Packet;
 import net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.network.ServerGamePacketListenerImpl;
-import net.minecraft.world.level.ChunkPos;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
@@ -38,16 +37,26 @@ public abstract class MixinPlayerChunkSender {
     private float desiredChunksPerTick;
     @org.spongepowered.asm.mixin.Shadow
     private float batchQuota;
+    @org.spongepowered.asm.mixin.Shadow
+    private int unacknowledgedBatches;
     @org.spongepowered.asm.mixin.Unique
     private boolean hassium$forceQuota;
 
 
     /**
      * 源头定额：把原版 {@code sendNextChunks} 的 batch 钳到 {@code maxChunksPerTick}。
-     * 与压缩/网关会话无关；shadowPull 客户端由主动取数路径接管区块数据。
+     * 影子虚拟玩家没有客户端 ACK，{@code unacknowledgedBatches} 会在首批后永久卡住；
+     * 影子 {@code runMainLoop} 也不走 {@code MinecraftServer} 的 send-chunks 泵，
+     * 由 {@link io.github.limuqy.mc.hassium.compat.ShadowPlayerCompat#flushVirtualPlayerChunks}
+     * 每圈补泵，本钩子把 ACK 闸放开。
      */
     @Inject(method = "sendNextChunks", at = @At("HEAD"))
     private void hassium$capSourceRate(ServerPlayer player, CallbackInfo ci) {
+        if (io.github.limuqy.mc.hassium.server.RuntimeServerContext.isShadowServerContext()) {
+            unacknowledgedBatches = 0;
+            hassium$forceQuota = false;
+            return;
+        }
         if (!hassium$forceQuota) {
             return;
         }
@@ -71,7 +80,27 @@ public abstract class MixinPlayerChunkSender {
             at = @At(value = "FIELD",
                     target = "Lnet/minecraft/server/network/PlayerChunkSender;memoryConnection:Z"))
     private boolean hassium$quotaLimitedCollect(net.minecraft.server.network.PlayerChunkSender self) {
+        if (io.github.limuqy.mc.hassium.server.RuntimeServerContext.isShadowServerContext()) {
+            // 影子待发队列一次性掏空：虚拟连接不是 WAN，且 dummy 永不 ACK。
+            return true;
+        }
         return !hassium$forceQuota && memoryConnection;
+    }
+
+    /**
+     * 影子端禁止组 {@code ClientboundLevelChunkWithLightPacket}：dummy 管道丢包，
+     * 1.21.11 {@code debugSynchronizers().startTrackingChunk} 还会在无同步器时把
+     * 影子主循环打崩。物化桥在 {@code ChunkMap.onChunkReadyToSend}。
+     */
+    @Inject(method = "sendChunk", at = @At("HEAD"), cancellable = true)
+    private static void hassium$skipShadowChunkPackets(
+            ServerGamePacketListenerImpl listener,
+            net.minecraft.server.level.ServerLevel level,
+            net.minecraft.world.level.chunk.LevelChunk chunk,
+            CallbackInfo ci) {
+        if (io.github.limuqy.mc.hassium.server.RuntimeServerContext.isShadowServerContext()) {
+            ci.cancel();
+        }
     }
 
     /**

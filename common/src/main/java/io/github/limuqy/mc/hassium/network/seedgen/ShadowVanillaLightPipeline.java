@@ -32,6 +32,11 @@ public final class ShadowVanillaLightPipeline {
         return false;
     }
 
+    /** 单柱 inject 失败不得关整台影子端：真服仍抑制原版区块包，关引擎后切维世界会空。 */
+    static boolean shouldFailShadowOnInjectFailure() {
+        return false;
+    }
+
     private static void submit(String dimension, ChunkPos pos,
                                ClientboundLevelChunkWithLightPacket packet,
                                ShadowChunkSource source, TraceOrigin origin) {
@@ -54,7 +59,12 @@ public final class ShadowVanillaLightPipeline {
             SmokeChunkTrace.recordNetworkReceived(resolvedDimension, pos);
         }
         if (!server.injectPreLight(resolvedDimension, pos, packet, source)) {
-            ShadowServerRegistry.getInstance().failShadowServer();
+            io.github.limuqy.mc.hassium.Constants.LOG.warn(
+                    "[SHADOW_INJECT] pre-light failed ({}, {}) dim={}",
+                    pos.x, pos.z, resolvedDimension);
+            if (shouldFailShadowOnInjectFailure()) {
+                ShadowServerRegistry.getInstance().failShadowServer();
+            }
             return;
         }
         SmokeChunkTrace.recordShadowInjected(resolvedDimension, pos);

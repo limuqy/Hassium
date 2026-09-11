@@ -115,15 +115,37 @@ public final class ShadowPlayerCompat {
 #endif
     }
 
-    /** 跨维度传送（/tp 语义：changeDimension + 玩家簿记；S2C 进 dummy 管道）。 */
+    /**
+     * 影子虚拟玩家跨维度：不走 {@code ServerPlayer.teleportTo}。
+     * vanilla 切维会往 dummy 连接塞 Respawn/能力/level-info 包，编码失败或管道异常
+     * 会让 {@code ShadowTrackingSession} 卡在旧维度，真客户端切维后世界全空。
+     */
     public static void teleportVirtualPlayer(ServerPlayer player, ServerLevel level,
                                              double x, double y, double z, float yRot, float xRot) {
-#if MC_VER < MC_1_21_2
-        player.teleportTo(level, x, y, z, yRot, xRot);
+        ServerLevel from = PlayerCompat.getServerLevel(player);
+        if (from == level) {
+#if MC_VER < MC_1_21_5
+            player.absMoveTo(x, y, z, yRot, xRot);
 #else
-        // 1.21.2+：6 参 teleportTo(ServerLevel,...) 移除，改为绝对坐标 + 无 relative 标志
-        player.teleportTo(level, x, y, z, java.util.Set.of(), yRot, xRot, true);
+            player.teleportTo(x, y, z);
+            player.setYRot(yRot);
+            player.setXRot(xRot);
 #endif
+            moveVirtualPlayer(player);
+            return;
+        }
+        from.removePlayerImmediately(player, net.minecraft.world.entity.Entity.RemovalReason.CHANGED_DIMENSION);
+        ((io.github.limuqy.mc.hassium.mixin.EntityAccessor) player).hassium$unsetRemoved();
+        player.setPosRaw(x, y, z);
+        player.setYRot(yRot);
+        player.setXRot(xRot);
+        player.setServerLevel(level);
+#if MC_VER < MC_1_21_1
+        level.addDuringCommandTeleport(player);
+#else
+        level.addDuringTeleport(player);
+#endif
+        moveVirtualPlayer(player);
     }
 
     /**
@@ -139,5 +161,27 @@ public final class ShadowPlayerCompat {
     /** 影子 chunk 系统视距（玩家 tracking 半径）；未显式设置时 vanilla 默认 10。 */
     public static void setChunkViewDistance(ServerLevel level, int viewDistance) {
         ((ServerChunkCache) level.getChunkSource()).setViewDistance(viewDistance);
+    }
+
+    /**
+     * 1.21+：把虚拟玩家 {@code PlayerChunkSender} 待发队列泵出去。
+     * <p>
+     * 原版泵在 {@code MinecraftServer.tickServer} 的 {@code send chunks} 阶段；
+     * 影子 {@code runMainLoop} 只 {@code pollTask}，不跑完整 tick，不泵则 pending
+     * 只增不减。组包本身由 {@code MixinPlayerChunkSender.sendChunk} 在影子上下文
+     * 取消（物化桥在 {@code onChunkReadyToSend}）。1.20.1 无 PlayerChunkSender，空操作。
+     */
+    public static void flushVirtualPlayerChunks(ServerPlayer player) {
+#if MC_VER >= MC_1_21_1
+        if (player == null || player.connection == null) {
+            return;
+        }
+        try {
+            player.connection.chunkSender.sendNextChunks(player);
+        } catch (Throwable t) {
+            io.github.limuqy.mc.hassium.Constants.LOG.warn(
+                    "[SHADOW_TRACK] flush virtual player chunks failed", t);
+        }
+#endif
     }
 }

@@ -135,6 +135,9 @@ public final class ClientChunkPipeline {
         this.serverSeedGenEnabled = enabled;
         this.serverSeedAvailable = enabled && levelStemNbt != null && levelStemNbt.length > 0;
         this.hassiumHandshakeDone = true; // 握手响应到达 = 服务端已装 Hassium MOD
+        if (enabled && !this.serverSeedAvailable) {
+            Constants.LOG.warn("Hassium: SeedGen enabled but LevelStem missing; local worldgen gated off");
+        }
         try {
             io.github.limuqy.mc.hassium.cache.client.ClientLifecycleHelper.startShadowIfConfigured();
         } catch (Throwable t) {

@@ -38,8 +38,9 @@ import net.minecraft.world.level.chunk.status.ChunkStep;
 #endif
 
 /**
- * 影子端只接管两处：已 materialize 的区块读盘结果进入原版 {@code scheduleChunkLoad}，
- * 其余区块完全交给原版 ChunkMap 生成与光照流水线。玩家视距、halo、主动 admission 不在此实现。
+ * 影子端接管：已 materialize / 磁盘基线的区块短路进 {@code scheduleChunkLoad}，
+ * 禁止有缓存时再 worldgen。无基线柱交给原版 ChunkMap 生成与光照流水线
+ * （门控开）或悬置等 pull（门控关）。
  */
 @Mixin(net.minecraft.server.level.ChunkMap.class)
 public class MixinChunkMap {
@@ -92,8 +93,7 @@ public class MixinChunkMap {
         if (!RuntimeServerContext.isShadowServerContext() || chunk == null) {
             return;
         }
-        io.github.limuqy.mc.hassium.network.seedgen.ShadowTrackingSession.getInstance()
-                .onChunkMaterialized(hassium$shadowDimension(), chunk.getPos(), chunk);
+        hassium$notifyShadowMaterialized(chunk);
         ci.cancel();
     }
 
@@ -128,8 +128,8 @@ public class MixinChunkMap {
             cir.setReturnValue(suspended);
             return;
         }
-        // 未命中不 cancel：空槽由 MixinRegionFile 返回 null → createEmpty + 透传，
-        // 不得在这里 loadFromDisk（FULL 票邻柱会同步解压整圈）。
+        // 未命中：无注入、无盘。门控开则原版 worldgen；关则上面已悬置。
+        // 有盘基线已由 hassium$chunkForScheduleLoad 短路，禁止再生成。
     }
 
     // 1.20.5–1.20.6 的 ChunkResult/ChunkHolder 中间层注入已随版本支持裁剪删除（API 自 1.21.1 起变化）
@@ -147,11 +147,49 @@ public class MixinChunkMap {
             CompletableFuture<ChunkAccess> suspended = new CompletableFuture<>();
             ShadowChunkMapCompat.registerSuspendedLoad(hassium$shadowDimension(), pos, suspended);
             cir.setReturnValue(suspended);
+            return;
         }
-        // 未命中不 cancel：MixinRegionFile 对非 126 返回 null，避免 completedFuture(null) NPE。
+        // 未命中：无注入、无盘。门控开则原版 worldgen；关则上面已悬置。
+        // 产出经 onChunkReadyToSend → onChunkMaterialized（1.21+ 已无 playerLoadedChunk）。
     }
 
+    /**
+     * 1.21.1：FULL+sendSync 就绪即进 tracking 待发队列。影子 {@code runMainLoop}
+     * 不跑 {@code MinecraftServer} 的 send-chunks 泵，必须在这里转 Compare+Pull 桥，
+     * 否则 locallyGenerated 恒 0、生成柱永不 persist。
+     */
+#if MC_VER < MC_1_21_2
+    @Inject(method = "onChunkReadyToSend(Lnet/minecraft/world/level/chunk/LevelChunk;)V",
+            at = @At("HEAD"))
+    private void hassium$shadowBridgeReadyToSend(LevelChunk chunk, CallbackInfo ci) {
+        hassium$notifyShadowMaterialized(chunk);
+    }
+#else
+    @Inject(method = "onChunkReadyToSend(Lnet/minecraft/server/level/ChunkHolder;Lnet/minecraft/world/level/chunk/LevelChunk;)V",
+            at = @At("HEAD"))
+    private void hassium$shadowBridgeReadyToSend(net.minecraft.server.level.ChunkHolder holder,
+            LevelChunk chunk, CallbackInfo ci) {
+        hassium$notifyShadowMaterialized(chunk);
+    }
 #endif
+
+#endif
+
+    /** 影子虚拟玩家交付桥：1.20.1={@code playerLoadedChunk}，1.21+={@code onChunkReadyToSend}。 */
+    @Unique
+    private void hassium$notifyShadowMaterialized(LevelChunk chunk) {
+        if (!RuntimeServerContext.isShadowServerContext() || chunk == null) {
+            return;
+        }
+        try {
+            io.github.limuqy.mc.hassium.network.seedgen.ShadowTrackingSession.getInstance()
+                    .onChunkMaterialized(hassium$shadowDimension(), chunk.getPos(), chunk);
+        } catch (Throwable t) {
+            io.github.limuqy.mc.hassium.Constants.LOG.error(
+                    "[SHADOW_TRACK] onChunkMaterialized failed ({}, {})",
+                    chunk.getPos().x, chunk.getPos().z, t);
+        }
+    }
 
     /** 本 ChunkMap 所属维度（影子上下文；null 回落 OVERWORLD，与既有钩子同口径）。 */
     @Unique
@@ -173,8 +211,9 @@ public class MixinChunkMap {
      * 服务端裁决 UNCHANGED/DELTA/FULL）。
      * <p>
      * 本地生成门控通过（客户端本地生成开启 + 服务端 SeedGen 开启 + 真实 seed 到达）：
-     * 选中缺失柱由虚拟玩家 tracking 触发影子原版生成链（真实种子），
-     * 不压制、不登记 pull，交付走 onChunkMaterialized → LOCAL_GENERATION publish。
+     * 选中<strong>无缓存基线</strong>的柱由虚拟玩家 tracking 触发影子原版生成链，
+     * 不压制；有注入/磁盘基线时 {@link #hassium$chunkForScheduleLoad} 已短路，不会 worldgen。
+     * 权威窗内生成柱先 compare-pull，再算光交付。
      */
     @Unique
     private boolean hassium$shadowSuppressGeneration(ChunkPos pos) {
@@ -187,8 +226,9 @@ public class MixinChunkMap {
         }
         if (io.github.limuqy.mc.hassium.network.seedgen.SeedGenExecutor.getInstance()
                 .isGenerationGateOpen()) {
-            // 门控通过：虚拟玩家触发原版生成链（真实种子），产出经 playerLoadedChunk
-            // 桥转统一 Compare+Pull（生成内容作基线，服务端裁决）
+            // 门控通过：虚拟玩家触发原版生成链（真实种子），产出经
+            // playerLoadedChunk（1.20.1）/ onChunkReadyToSend（1.21+）桥转
+            // 统一 Compare+Pull（生成内容作基线，服务端裁决）
             return false;
         }
         String dimension = hassium$shadowDimension();
@@ -206,12 +246,37 @@ public class MixinChunkMap {
         if (server == null) {
             return null;
         }
-        LevelChunk injected = server.injectedChunk(hassium$shadowDimension(), pos.x, pos.z);
-        if (injected != null) {
-            return injected;
+        return ShadowChunkMapCompat.existingColumnForScheduleLoad(
+                server, hassium$shadowDimension(), pos);
+    }
+
+    /**
+     * 影子原版 {@code ChunkMap.save} 与 flush 线程 {@code ChunkSerializer.write}
+     * 抢同一份 PalettedContainer → 1.20.1 ThreadingDetector。与
+     * {@link io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute#withChunkLock}
+     * 同一把可重入锁。{@code save} 内部 catch 后仍走 RETURN，成对解锁。
+     */
+    @Unique
+    private static final ThreadLocal<Integer> hassium$saveLockDepth =
+            ThreadLocal.withInitial(() -> 0);
+
+    @Inject(method = "save(Lnet/minecraft/world/level/chunk/ChunkAccess;)Z", at = @At("HEAD"))
+    private void hassium$lockShadowSave(ChunkAccess chunk, CallbackInfoReturnable<Boolean> cir) {
+        if (!RuntimeServerContext.isShadowServerContext() || chunk == null) {
+            return;
         }
-        // 无 materialized 区块：不 cancel，让原版 IOWorker/type126 读盘或生成链决定下一步。
-        return null;
+        io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.lockChunk(chunk.getPos());
+        hassium$saveLockDepth.set(hassium$saveLockDepth.get() + 1);
+    }
+
+    @Inject(method = "save(Lnet/minecraft/world/level/chunk/ChunkAccess;)Z", at = @At("RETURN"))
+    private void hassium$unlockShadowSave(ChunkAccess chunk, CallbackInfoReturnable<Boolean> cir) {
+        int depth = hassium$saveLockDepth.get();
+        if (depth <= 0) {
+            return;
+        }
+        hassium$saveLockDepth.set(depth - 1);
+        io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.unlockChunk(chunk.getPos());
     }
 
 }
