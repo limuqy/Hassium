@@ -1,6 +1,7 @@
 package io.github.limuqy.mc.hassium.command;
 
 import com.mojang.brigadier.CommandDispatcher;
+import com.mojang.brigadier.arguments.LongArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import com.mojang.brigadier.context.CommandContext;
@@ -37,9 +38,12 @@ public class NeoForgeHassiumClientCommand {
                         .executes(NeoForgeHassiumClientCommand::showClientStats))
                 .then(Commands.literal("export")
                         .executes(NeoForgeHassiumClientCommand::exportCurrentWorld)
-                        .then(Commands.argument("args", StringArgumentType.greedyString())
+                        .then(Commands.argument("serverIp", StringArgumentType.word())
                                 .suggests(NeoForgeHassiumClientCommand::suggestCachedServers)
                                 .executes(NeoForgeHassiumClientCommand::exportWithArgs)
+                                .then(Commands.argument("seed", LongArgumentType.longArg())
+                                        .executes(NeoForgeHassiumClientCommand::exportWithArgs)
+                                )
                         )
                 );
         dispatcher.register(hassiumc);
@@ -64,23 +68,14 @@ public class NeoForgeHassiumClientCommand {
         return 1;
     }
 
-    /** 解析参数：serverIp [seed] */
+    /** 解析参数：serverIp [seed]（brigadier 正式参数，自带类型校验与补全） */
     private static int exportWithArgs(CommandContext<CommandSourceStack> context) {
-        String args = StringArgumentType.getString(context, "args");
-        String serverIp;
+        String serverIp = StringArgumentType.getString(context, "serverIp");
         Long seed = null;
-
-        int lastSpace = args.lastIndexOf(' ');
-        if (lastSpace > 0) {
-            String lastPart = args.substring(lastSpace + 1);
-            try {
-                seed = Long.parseLong(lastPart);
-                serverIp = args.substring(0, lastSpace);
-            } catch (NumberFormatException e) {
-                serverIp = args;
-            }
-        } else {
-            serverIp = args;
+        try {
+            seed = LongArgumentType.getLong(context, "seed");
+        } catch (IllegalArgumentException ignored) {
+            // 未提供 seed
         }
 
         String msg = HassiumCommandHandler.startCacheExport(serverIp, seed);

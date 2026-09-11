@@ -66,5 +66,11 @@ public interface INetworkManagerService {
                               byte[] stemNbt, boolean seedGenEnabled) {
     }
 
+    /**
+     * 客户端回发 compression_ready ACK（index_sync 收到后激活聚合时调用；C2S）。
+     */
+    default void sendCompressionReady() {
+    }
+
 }
 

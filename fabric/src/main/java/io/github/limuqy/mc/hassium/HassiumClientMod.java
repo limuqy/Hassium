@@ -3,10 +3,9 @@ package io.github.limuqy.mc.hassium;
 import io.github.limuqy.mc.hassium.cache.client.ClientLifecycleHelper;
 import io.github.limuqy.mc.hassium.client.ClientSmokeTest;
 import io.github.limuqy.mc.hassium.command.FabricHassiumCommand;
-import io.github.limuqy.mc.hassium.network.ClientChunkHandler;
+import io.github.limuqy.mc.hassium.network.ClientActivation;
 import io.github.limuqy.mc.hassium.network.DictionaryManager;
-import io.github.limuqy.mc.hassium.network.handshake.LoginHandshake;
-import io.github.limuqy.mc.hassium.network.handshake.PlayInitClient;
+import io.github.limuqy.mc.hassium.network.PayloadHandlers;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 #if MC_VER >= MC_1_21_1
@@ -48,6 +47,8 @@ public class HassiumClientMod implements ClientModInitializer {
         // ServerPlayNetworking.send 直发）。客户端 receiver：SHADOW_PULL_RESPONSE_S2C
         // （shadowPullV1 FULL 回退）、PLAY_INIT_S2C（Play 期激活）、
         // LIGHT_DELTA_S2C（光照增量）、DICTIONARY_SYNC/INDEX_SYNC/AGGREGATION（聚合链）。
+        // 解包 + 业务分发统一在 common PayloadHandlers（P1b 下沉）；本类只保留
+        // 传输面（1.20.1 从 buf 取 byte[] + 线程封送；1.21.1+ payload 自带 byte[]）。
         // CHUNK_PAYLOAD_S2C 通道已退役（纯 Compare+Pull）；CHUNK_HASH/SECTION_DELTA 等区块
         // 核心增量通道由 common 客户端摄入管线（ClientChunkPipeline / ClientMetadataHandler）消费。
         LOGGER.info("Hassium: Fabric client registers direct-play S2C receivers (SHADOW_PULL_RESPONSE_S2C / PLAY_INIT_S2C / LIGHT_DELTA_S2C / DICTIONARY_SYNC_S2C / INDEX_SYNC_S2C / AGGREGATION_S2C).");
@@ -56,241 +57,73 @@ public class HassiumClientMod implements ClientModInitializer {
 #if MC_VER < MC_1_21_1
         ClientPlayNetworking.registerGlobalReceiver(io.github.limuqy.mc.hassium.network.FabricNetworkManager.SHADOW_PULL_RESPONSE_S2C,
                 (client, handler, buf, responseSender) -> {
-                    byte[] data = new byte[buf.readableBytes()];
-                    buf.readBytes(data);
-                    client.execute(() -> {
-                        net.minecraft.network.FriendlyByteBuf response = new net.minecraft.network.FriendlyByteBuf(
-                                io.netty.buffer.Unpooled.wrappedBuffer(data));
-                        try {
-                            io.github.limuqy.mc.hassium.network.ShadowPullClient.handleResponse(
-                                    io.github.limuqy.mc.hassium.network.ShadowPullResponseS2CPacket.decode(response));
-                        } finally {
-                            response.release();
-                        }
-                    });
+                    byte[] data = PayloadHandlers.readAll(buf);
+                    client.execute(() -> PayloadHandlers.handleShadowPullResponse(data));
                 });
 #else
         ClientPlayNetworking.registerGlobalReceiver(io.github.limuqy.mc.hassium.network.FabricPayloadRegistry.SHADOW_PULL_RESPONSE_S2C_TYPE,
-                (payload, context) -> {
-                    net.minecraft.network.FriendlyByteBuf response =
-                            io.github.limuqy.mc.hassium.network.FabricPayloadRegistry.fromPayload(payload);
-                    try {
-                        io.github.limuqy.mc.hassium.network.ShadowPullClient.handleResponse(
-                                io.github.limuqy.mc.hassium.network.ShadowPullResponseS2CPacket.decode(response));
-                    } finally {
-                        response.release();
-                    }
-                });
+                (payload, context) -> PayloadHandlers.handleShadowPullResponse(payload.data()));
 #endif
         // PLAY_INIT_S2C 客户端 receiver：Play 期激活直收（登录协商结果 + SeedGen 种子）→
         // common PlayInitClient.handle（协商位登记 + 影子端种子初始化；管线级压缩已退役）。
 #if MC_VER < MC_1_21_1
         ClientPlayNetworking.registerGlobalReceiver(io.github.limuqy.mc.hassium.network.FabricNetworkManager.PLAY_INIT_S2C,
                 (client, handler, buf, responseSender) -> {
-                    byte[] data = new byte[buf.readableBytes()];
-                    buf.readBytes(data);
-                    client.execute(() -> {
-                        net.minecraft.network.FriendlyByteBuf playInitBuf = new net.minecraft.network.FriendlyByteBuf(
-                                io.netty.buffer.Unpooled.wrappedBuffer(data));
-                        try {
-                            PlayInitClient.handle(LoginHandshake.PlayInitPayload.decode(playInitBuf));
-                        } finally {
-                            playInitBuf.release();
-                        }
-                    });
+                    byte[] data = PayloadHandlers.readAll(buf);
+                    client.execute(() -> PayloadHandlers.handlePlayInit(data));
                 });
 #else
         ClientPlayNetworking.registerGlobalReceiver(io.github.limuqy.mc.hassium.network.FabricPayloadRegistry.PLAY_INIT_S2C_TYPE,
-                (payload, context) -> {
-                    net.minecraft.network.FriendlyByteBuf playInitBuf =
-                            io.github.limuqy.mc.hassium.network.FabricPayloadRegistry.fromPayload(payload);
-                    try {
-                        LoginHandshake.PlayInitPayload playInit =
-                                LoginHandshake.PlayInitPayload.decode(playInitBuf);
-                        context.client().execute(() -> PlayInitClient.handle(playInit));
-                    } finally {
-                        playInitBuf.release();
-                    }
-                });
+                (payload, context) -> context.client().execute(() ->
+                        PayloadHandlers.handlePlayInit(payload.data())));
 #endif
         // LIGHT_DELTA_S2C 客户端 receiver：直连拓扑光照增量回传 → 影子端
         // ShadowLightCompute.submitLightDelta（任意线程安全；与 Forge/NeoForge receiver 同消费）。
 #if MC_VER < MC_1_21_1
         ClientPlayNetworking.registerGlobalReceiver(io.github.limuqy.mc.hassium.network.FabricNetworkManager.LIGHT_DELTA_S2C,
                 (client, handler, buf, responseSender) -> {
-                    byte[] data = new byte[buf.readableBytes()];
-                    buf.readBytes(data);
-                    client.execute(() -> {
-                        net.minecraft.network.FriendlyByteBuf lightBuf = new net.minecraft.network.FriendlyByteBuf(
-                                io.netty.buffer.Unpooled.wrappedBuffer(data));
-                        try {
-                            io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.submitLightDelta(
-                                    io.github.limuqy.mc.hassium.network.LightDeltaS2CPacket.decode(lightBuf));
-                        } finally {
-                            lightBuf.release();
-                        }
-                    });
+                    byte[] data = PayloadHandlers.readAll(buf);
+                    client.execute(() -> PayloadHandlers.handleLightDelta(data));
                 });
 #else
         ClientPlayNetworking.registerGlobalReceiver(io.github.limuqy.mc.hassium.network.FabricPayloadRegistry.LIGHT_DELTA_S2C_TYPE,
-                (payload, context) -> {
-                    net.minecraft.network.FriendlyByteBuf lightBuf =
-                            io.github.limuqy.mc.hassium.network.FabricPayloadRegistry.fromPayload(payload);
-                    try {
-                        io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.submitLightDelta(
-                                io.github.limuqy.mc.hassium.network.LightDeltaS2CPacket.decode(lightBuf));
-                    } finally {
-                        lightBuf.release();
-                    }
-                });
+                (payload, context) -> PayloadHandlers.handleLightDelta(payload.data()));
 #endif
 
         // DICTIONARY_SYNC_S2C 客户端 receiver：聚合字典直收（聚合包解码前置条件）。
 #if MC_VER < MC_1_21_1
         ClientPlayNetworking.registerGlobalReceiver(io.github.limuqy.mc.hassium.network.FabricNetworkManager.DICTIONARY_SYNC_S2C,
                 (client, handler, buf, responseSender) -> {
-                    byte[] data = new byte[buf.readableBytes()];
-                    buf.readBytes(data);
-                    client.execute(() -> {
-                        net.minecraft.network.FriendlyByteBuf dictBuf = new net.minecraft.network.FriendlyByteBuf(
-                                io.netty.buffer.Unpooled.wrappedBuffer(data));
-                        try {
-                            io.github.limuqy.mc.hassium.network.DictionarySyncPayload payload =
-                                    io.github.limuqy.mc.hassium.network.DictionarySyncPayload.decode(dictBuf);
-                            DictionaryManager.setAggregationDict(payload.dictionary());
-                        } finally {
-                            dictBuf.release();
-                        }
-                    });
+                    byte[] data = PayloadHandlers.readAll(buf);
+                    client.execute(() -> PayloadHandlers.handleDictionarySync(data));
                 });
 #else
         ClientPlayNetworking.registerGlobalReceiver(io.github.limuqy.mc.hassium.network.FabricPayloadRegistry.DICTIONARY_SYNC_S2C_TYPE,
-                (payload, context) -> {
-                    net.minecraft.network.FriendlyByteBuf dictBuf =
-                            io.github.limuqy.mc.hassium.network.FabricPayloadRegistry.fromPayload(payload);
-                    try {
-                        io.github.limuqy.mc.hassium.network.DictionarySyncPayload dict =
-                                io.github.limuqy.mc.hassium.network.DictionarySyncPayload.decode(dictBuf);
-                        context.client().execute(() ->
-                                DictionaryManager.setAggregationDict(dict.dictionary()));
-                    } finally {
-                        dictBuf.release();
-                    }
-                });
+                (payload, context) -> context.client().execute(() ->
+                        PayloadHandlers.handleDictionarySync(payload.data())));
 #endif
         // INDEX_SYNC_S2C 客户端 receiver：包索引登记 → 聚合激活 ACK（compression_ready）。
 #if MC_VER < MC_1_21_1
         ClientPlayNetworking.registerGlobalReceiver(io.github.limuqy.mc.hassium.network.FabricNetworkManager.INDEX_SYNC_S2C,
                 (client, handler, buf, responseSender) -> {
-                    byte[] data = new byte[buf.readableBytes()];
-                    buf.readBytes(data);
-                    client.execute(() -> {
-                        net.minecraft.network.FriendlyByteBuf indexBuf = new net.minecraft.network.FriendlyByteBuf(
-                                io.netty.buffer.Unpooled.wrappedBuffer(data));
-                        try {
-                            int dataLength = indexBuf.readVarInt();
-                            byte[] packetData = new byte[dataLength];
-                            indexBuf.readBytes(packetData);
-                            io.github.limuqy.mc.hassium.network.IndexSyncPacket syncPacket =
-                                    io.github.limuqy.mc.hassium.network.IndexSyncPacket.decode(packetData);
-                            io.github.limuqy.mc.hassium.network.IndexSyncManager.getInstance()
-                                    .handleSyncPacket("client", syncPacket);
-                            var conn = client.getConnection();
-                            if (conn != null) {
-                                io.github.limuqy.mc.hassium.network.HassiumConnectionRegistry.markEnabled(
-                                        conn.getConnection());
-                                io.github.limuqy.mc.hassium.network.HassiumAggregationManager.init();
-                                io.github.limuqy.mc.hassium.network.FabricNetworkManager.sendCompressionReady();
-                            }
-                        } finally {
-                            indexBuf.release();
-                        }
-                    });
+                    byte[] data = PayloadHandlers.readAll(buf);
+                    client.execute(() -> ClientActivation.handleIndexSync(data));
                 });
 #else
         ClientPlayNetworking.registerGlobalReceiver(io.github.limuqy.mc.hassium.network.FabricPayloadRegistry.INDEX_SYNC_S2C_TYPE,
-                (payload, context) -> {
-                    net.minecraft.network.FriendlyByteBuf indexBuf =
-                            io.github.limuqy.mc.hassium.network.FabricPayloadRegistry.fromPayload(payload);
-                    try {
-                        int dataLength = indexBuf.readVarInt();
-                        byte[] packetData = new byte[dataLength];
-                        indexBuf.readBytes(packetData);
-                        io.github.limuqy.mc.hassium.network.IndexSyncPacket syncPacket =
-                                io.github.limuqy.mc.hassium.network.IndexSyncPacket.decode(packetData);
-                        context.client().execute(() -> {
-                            io.github.limuqy.mc.hassium.network.IndexSyncManager.getInstance()
-                                    .handleSyncPacket("client", syncPacket);
-                            var conn = context.client().getConnection();
-                            if (conn != null) {
-                                io.github.limuqy.mc.hassium.network.HassiumConnectionRegistry.markEnabled(
-                                        conn.getConnection());
-                                io.github.limuqy.mc.hassium.network.HassiumAggregationManager.init();
-                                io.github.limuqy.mc.hassium.network.FabricNetworkManager.sendCompressionReady();
-                            }
-                        });
-                    } finally {
-                        indexBuf.release();
-                    }
-                });
+                (payload, context) -> context.client().execute(() ->
+                        ClientActivation.handleIndexSync(payload.data())));
 #endif
         // AGGREGATION_S2C 客户端 receiver：聚合帧拆包分发（原版子包重建 + 自定义 payload 回灌）。
 #if MC_VER < MC_1_21_1
         ClientPlayNetworking.registerGlobalReceiver(io.github.limuqy.mc.hassium.network.FabricNetworkManager.AGGREGATION_S2C,
                 (client, handler, buf, responseSender) -> {
-                    byte[] data = new byte[buf.readableBytes()];
-                    buf.readBytes(data);
-                    client.execute(() -> {
-                        net.minecraft.network.FriendlyByteBuf packetBuf = new net.minecraft.network.FriendlyByteBuf(
-                                io.netty.buffer.Unpooled.wrappedBuffer(data));
-                        try {
-                            var conn = client.getConnection();
-                            if (conn == null) {
-                                LOGGER.error("Hassium: Received aggregation packet but no client connection");
-                                return;
-                            }
-                            io.github.limuqy.mc.hassium.network.NamespaceIndexManager indexManager =
-                                    io.github.limuqy.mc.hassium.network.IndexSyncManager.getInstance()
-                                            .getClientIndexManager();
-                            if (indexManager == null) {
-                                LOGGER.error("Hassium: Received aggregation packet but client index manager not initialized");
-                                return;
-                            }
-                            io.github.limuqy.mc.hassium.network.HassiumAggregationPacket
-                                    .decode(packetBuf, indexManager).handle(conn.getConnection());
-                        } catch (Throwable e) {
-                            LOGGER.error("Hassium: Failed to handle aggregation packet", e);
-                        } finally {
-                            packetBuf.release();
-                        }
-                    });
+                    byte[] data = PayloadHandlers.readAll(buf);
+                    client.execute(() -> PayloadHandlers.handleAggregation(data));
                 });
 #else
         ClientPlayNetworking.registerGlobalReceiver(io.github.limuqy.mc.hassium.network.FabricPayloadRegistry.AGGREGATION_S2C_TYPE,
-                (payload, context) -> {
-                    net.minecraft.network.FriendlyByteBuf packetBuf =
-                            io.github.limuqy.mc.hassium.network.FabricPayloadRegistry.fromPayload(payload);
-                    try {
-                        var conn = context.client().getConnection();
-                        if (conn == null) {
-                            LOGGER.error("Hassium: Received aggregation packet but no client connection");
-                            return;
-                        }
-                        io.github.limuqy.mc.hassium.network.NamespaceIndexManager indexManager =
-                                io.github.limuqy.mc.hassium.network.IndexSyncManager.getInstance()
-                                        .getClientIndexManager();
-                        if (indexManager == null) {
-                            LOGGER.error("Hassium: Received aggregation packet but client index manager not initialized");
-                            return;
-                        }
-                        io.github.limuqy.mc.hassium.network.HassiumAggregationPacket
-                                .decode(packetBuf, indexManager).handle(conn.getConnection());
-                    } catch (Throwable e) {
-                        LOGGER.error("Hassium: Failed to handle aggregation packet", e);
-                    } finally {
-                        packetBuf.release();
-                    }
-                });
+                (payload, context) -> PayloadHandlers.handleAggregation(payload.data()));
 #endif
 
         LOGGER.info("Hassium: Fabric client-side initialization complete");

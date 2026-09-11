@@ -59,8 +59,9 @@ public final class ClientChunkPipeline {
     /**
      * Hassium 内部 apply 进行中标志（缓存读回 / OVD / 压缩通道）。
      * <p>
-     * Hassium 的 applyToLevelFromByteBuf 内部会调用官方区块应用路径，而调用方
-     * （processQueueUntil / HANDLE_COMPRESSED 回调）本身已在主线程预算内——置位此标志
+     * Hassium 的区块应用（{@code ClientChunkHandler.applyShadowPullFull} 等）内部会调用
+     * 官方区块应用路径（vanilla {@code ClientPacketListener.handleLevelChunkWithLight}），
+     * 而调用方（processQueueUntil / HANDLE_COMPRESSED 回调）本身已在主线程预算内——置位此标志
      * 供区块应用路径识别「Hassium 预算内 apply」，避免重入冲突（入队后立即 hasChunk
      * 校验失败 → 假失败 → 缓存路径重请求风暴、OVD 全量失败）。
      */

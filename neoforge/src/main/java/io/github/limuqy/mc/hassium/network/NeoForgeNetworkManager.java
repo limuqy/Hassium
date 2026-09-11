@@ -2,17 +2,17 @@ package io.github.limuqy.mc.hassium.network;
 
 import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.compat.HassiumChannels;
+import io.github.limuqy.mc.hassium.compat.PacketId;
 import io.github.limuqy.mc.hassium.compat.ResourceLocationCompat;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
-import io.github.limuqy.mc.hassium.network.ServerChunkPushManager;
 import io.github.limuqy.mc.hassium.platform.Services;
+import io.github.limuqy.mc.hassium.platform.services.INetworkManagerService;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.network.Connection;
 import net.minecraft.server.level.ServerPlayer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import net.minecraft.network.codec.ByteBufCodecs;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.neoforged.bus.api.SubscribeEvent;
@@ -27,7 +27,6 @@ import io.github.limuqy.mc.hassium.network.HassiumAggregationManager;
 import io.github.limuqy.mc.hassium.network.handshake.LoginHandshake;
 import io.github.limuqy.mc.hassium.network.handshake.PlayInitClient;
 import io.github.limuqy.mc.hassium.network.handshake.ServerHandshakeActivation;
-import io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute;
 
 /**
  * NeoForge 平台网络管理器实现。
@@ -35,23 +34,13 @@ import io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute;
  * NeoForge ≥1.21.1：Payload + StreamCodec（1.20.1 的 SimpleChannel 兼容线已随 NeoForge 1.20.1 支持退役）。
  * common 聚合能力由 {@link io.github.limuqy.mc.hassium.compat.NetworkCapability} 门控。
  */
-public class NeoForgeNetworkManager implements NetworkManager {
+public class NeoForgeNetworkManager implements INetworkManagerService {
 
     private static final Logger LOGGER = LoggerFactory.getLogger("Hassium/NeoForgeNetwork");
     private static final String PROTOCOL_VERSION = "1";
     private static final ShadowPullHandler SHADOW_PULL_HANDLER =
             new ShadowPullHandler(new ShadowPullRequestLedger());
 
-
-    // 缓存服务器实例
-    private static volatile net.minecraft.server.MinecraftServer cachedServer;
-
-    /**
-     * 设置服务器实例
-     */
-    public static void setServerInstance(net.minecraft.server.MinecraftServer server) {
-        cachedServer = server;
-    }
 
     /**
      * 通过反射获取 ServerPlayer 的 Connection
@@ -60,132 +49,48 @@ public class NeoForgeNetworkManager implements NetworkManager {
         return io.github.limuqy.mc.hassium.compat.PlayerCompat.getConnection(player);
     }
 
-    // 1.21.1+: 使用 Payload + StreamCodec
-
-    public record ShadowPullRequestPayload(byte[] data) implements CustomPacketPayload {
-        public static final Type<ShadowPullRequestPayload> TYPE = new Type<>(
-                ResourceLocationCompat.create(Constants.MOD_ID, "shadow_pull_request_c2s"));
-        public static final StreamCodec<FriendlyByteBuf, ShadowPullRequestPayload> STREAM_CODEC =
-                StreamCodec.composite(ByteBufCodecs.BYTE_ARRAY, ShadowPullRequestPayload::data,
-                        ShadowPullRequestPayload::new);
-        @Override public Type<ShadowPullRequestPayload> type() { return TYPE; }
-    }
-
-    public record ShadowPullResponsePayload(byte[] data) implements CustomPacketPayload {
-        public static final Type<ShadowPullResponsePayload> TYPE = new Type<>(
-                ResourceLocationCompat.create(Constants.MOD_ID, "shadow_pull_response_s2c"));
-        public static final StreamCodec<FriendlyByteBuf, ShadowPullResponsePayload> STREAM_CODEC =
-                StreamCodec.composite(ByteBufCodecs.BYTE_ARRAY, ShadowPullResponsePayload::data,
-                        ShadowPullResponsePayload::new);
-        @Override public Type<ShadowPullResponsePayload> type() { return TYPE; }
-    }
+    // 1.21.1+: 使用 Payload + StreamCodec。
+    // byte[] 载荷收敛为单个 ByteArrayPayload（镜像 Fabric RawPayload 模式）：
+    // 每通道独立 Type + codec 闭包，线格式与旧 per-channel record 逐字节一致
+    // （varint 前缀字节数组）。解包 + 业务分发统一在 common PayloadHandlers。
 
     /**
-     * 客户端缓存 Bloom 位图同步 Payload (C2S)
+     * 通用 byte[] 载荷：type 由 codec 闭包捕获（每通道一个 codec 实例），
+     * 发送/接收均按通道 Type 分派。
      */
-
-    /**
-     * 区块哈希 Payload (S2C)
-     */
-
-    /**
-     * BlockEntity 请求 Payload (C2S)
-     */
-    public record BlockEntityRequestPayload(byte[] data) implements CustomPacketPayload {
-
-        public static final Type<BlockEntityRequestPayload> TYPE = new Type<>(
-                ResourceLocationCompat.create(Constants.MOD_ID, "block_entity_request_c2s")
-        );
-
-        public static final StreamCodec<FriendlyByteBuf, BlockEntityRequestPayload> STREAM_CODEC = StreamCodec.composite(
-                ByteBufCodecs.BYTE_ARRAY, BlockEntityRequestPayload::data,
-                BlockEntityRequestPayload::new
-        );
-
+    public record ByteArrayPayload(Type<ByteArrayPayload> type, byte[] data) implements CustomPacketPayload {
         @Override
-        public Type<BlockEntityRequestPayload> type() {
-            return TYPE;
+        public Type<ByteArrayPayload> type() {
+            return type;
         }
     }
 
-    /**
-     * BlockEntity 数据 Payload (S2C)
-     */
-    public record BlockEntityDataPayload(byte[] data) implements CustomPacketPayload {
+    public static final CustomPacketPayload.Type<ByteArrayPayload> SHADOW_PULL_REQUEST_TYPE =
+            payloadType(HassiumChannels.SHADOW_PULL_REQUEST_C2S);
+    public static final CustomPacketPayload.Type<ByteArrayPayload> SHADOW_PULL_RESPONSE_TYPE =
+            payloadType(HassiumChannels.SHADOW_PULL_RESPONSE_S2C);
+    public static final CustomPacketPayload.Type<ByteArrayPayload> BLOCK_ENTITY_REQUEST_TYPE =
+            payloadType(HassiumChannels.BLOCK_ENTITY_REQUEST_C2S);
+    public static final CustomPacketPayload.Type<ByteArrayPayload> BLOCK_ENTITY_DATA_TYPE =
+            payloadType(HassiumChannels.BLOCK_ENTITY_DATA_S2C);
+    public static final CustomPacketPayload.Type<ByteArrayPayload> LIGHT_DELTA_TYPE =
+            payloadType(HassiumChannels.LIGHT_DELTA_S2C);
+    public static final CustomPacketPayload.Type<ByteArrayPayload> DICTIONARY_SYNC_TYPE =
+            payloadType(HassiumChannels.DICTIONARY_SYNC);
+    public static final CustomPacketPayload.Type<ByteArrayPayload> INDEX_SYNC_TYPE =
+            payloadType(HassiumChannels.INDEX_SYNC_S2C);
+    public static final CustomPacketPayload.Type<ByteArrayPayload> AGGREGATION_TYPE =
+            new CustomPacketPayload.Type<>(ResourceLocationCompat.create(Constants.MOD_ID, "aggregation"));
 
-        public static final Type<BlockEntityDataPayload> TYPE = new Type<>(
-                ResourceLocationCompat.create(Constants.MOD_ID, "block_entity_data_s2c")
-        );
-
-        public static final StreamCodec<FriendlyByteBuf, BlockEntityDataPayload> STREAM_CODEC = StreamCodec.composite(
-                ByteBufCodecs.BYTE_ARRAY, BlockEntityDataPayload::data,
-                BlockEntityDataPayload::new
-        );
-
-        @Override
-        public Type<BlockEntityDataPayload> type() {
-            return TYPE;
-        }
+    private static CustomPacketPayload.Type<ByteArrayPayload> payloadType(PacketId id) {
+        return new CustomPacketPayload.Type<>(ResourceLocationCompat.vanilla(id));
     }
 
-    /**
-     * 光照增量通知 Payload (S2C)
-     */
-    public record LightDeltaPayload(byte[] data) implements CustomPacketPayload {
-
-        public static final Type<LightDeltaPayload> TYPE = new Type<>(
-                ResourceLocationCompat.create(Constants.MOD_ID, "light_delta_s2c")
-        );
-
-        public static final StreamCodec<FriendlyByteBuf, LightDeltaPayload> STREAM_CODEC = StreamCodec.composite(
-                ByteBufCodecs.BYTE_ARRAY, LightDeltaPayload::data,
-                LightDeltaPayload::new
-        );
-
-        @Override
-        public Type<LightDeltaPayload> type() {
-            return TYPE;
-        }
-    }
-
-    public record DictionarySyncNeoPayload(byte[] data) implements CustomPacketPayload {
-        public static final Type<DictionarySyncNeoPayload> TYPE = new Type<>(ResourceLocationCompat.vanilla(HassiumChannels.DICTIONARY_SYNC));
-        public static final StreamCodec<FriendlyByteBuf, DictionarySyncNeoPayload> STREAM_CODEC = StreamCodec.composite(
-                ByteBufCodecs.BYTE_ARRAY, DictionarySyncNeoPayload::data,
-                DictionarySyncNeoPayload::new
-        );
-        @Override
-        public Type<DictionarySyncNeoPayload> type() {
-            return TYPE;
-        }
-    }
-
-    public record AggregationNeoPayload(byte[] data) implements CustomPacketPayload {
-        public static final Type<AggregationNeoPayload> TYPE = new Type<>(
-                ResourceLocationCompat.create(Constants.MOD_ID, "aggregation")
-        );
-        public static final StreamCodec<FriendlyByteBuf, AggregationNeoPayload> STREAM_CODEC = StreamCodec.composite(
-                ByteBufCodecs.BYTE_ARRAY, AggregationNeoPayload::data,
-                AggregationNeoPayload::new
-        );
-        @Override
-        public Type<AggregationNeoPayload> type() {
-            return TYPE;
-        }
-    }
-
-    public record IndexSyncNeoPayload(byte[] data) implements CustomPacketPayload {
-        public static final Type<IndexSyncNeoPayload> TYPE = new Type<>(
-                ResourceLocationCompat.create(Constants.MOD_ID, "index_sync_s2c")
-        );
-        public static final StreamCodec<FriendlyByteBuf, IndexSyncNeoPayload> STREAM_CODEC = StreamCodec.composite(
-                ByteBufCodecs.BYTE_ARRAY, IndexSyncNeoPayload::data,
-                IndexSyncNeoPayload::new
-        );
-        @Override
-        public Type<IndexSyncNeoPayload> type() {
-            return TYPE;
-        }
+    private static StreamCodec<FriendlyByteBuf, ByteArrayPayload> codec(
+            CustomPacketPayload.Type<ByteArrayPayload> type) {
+        return StreamCodec.of(
+                (buf, payload) -> buf.writeByteArray(payload.data()),
+                buf -> new ByteArrayPayload(type, buf.readByteArray()));
     }
 
     public record CompressionReadyNeoPayload(boolean ready) implements CustomPacketPayload {
@@ -227,16 +132,6 @@ public class NeoForgeNetworkManager implements NetworkManager {
 
 
     // ========== 注册方法 ==========
-
-    @Override
-    public void registerChannels() {
-        if (!HassiumConfigService.getInstance().isNetworkCompressionEnabled()
-                && !HassiumConfigService.getInstance().isClientCacheEnabled()) {
-            LOGGER.warn("Hassium: master.enabled=false and chunk.enabled=false, skipping NeoForge channel registration");
-            return;
-        }
-        LOGGER.debug("Hassium: NeoForge network channels will be registered via event");
-    }
 
     /**
      * 注册所有 Payload (1.21.1+)
@@ -320,10 +215,7 @@ public class NeoForgeNetworkManager implements NetworkManager {
         io.github.limuqy.mc.hassium.network.HassiumAggregationManager.setSender((connection, buf) -> {
             if (connection.getPacketListener() instanceof net.minecraft.server.network.ServerGamePacketListenerImpl handler) {
                 ServerPlayer player = handler.getPlayer();
-                byte[] data = new byte[buf.readableBytes()];
-                buf.readBytes(data);
-                buf.release();
-                sendServerPayload(player, new AggregationNeoPayload(data));
+                sendServerPayload(player, new ByteArrayPayload(AGGREGATION_TYPE, PayloadHandlers.drain(buf)));
             } else {
                 LOGGER.error("Cannot send aggregation packet: connection has no player");
                 buf.release();
@@ -379,18 +271,15 @@ public class NeoForgeNetworkManager implements NetworkManager {
         );
 
 
-        registrar.playToServer(ShadowPullRequestPayload.TYPE, ShadowPullRequestPayload.STREAM_CODEC,
+        registrar.playToServer(SHADOW_PULL_REQUEST_TYPE, codec(SHADOW_PULL_REQUEST_TYPE),
                 NeoForgeNetworkManager::handleShadowPullRequest);
-        registrar.playToClient(ShadowPullResponsePayload.TYPE, ShadowPullResponsePayload.STREAM_CODEC,
+        registrar.playToClient(SHADOW_PULL_RESPONSE_TYPE, codec(SHADOW_PULL_RESPONSE_TYPE),
                 NeoForgeNetworkManager::handleShadowPullResponse);
 
 
         // 注册 BlockEntity 请求 (C2S)
-        registrar.playToServer(
-                BlockEntityRequestPayload.TYPE,
-                BlockEntityRequestPayload.STREAM_CODEC,
-                NeoForgeNetworkManager::handleBlockEntityRequest
-        );
+        registrar.playToServer(BLOCK_ENTITY_REQUEST_TYPE, codec(BLOCK_ENTITY_REQUEST_TYPE),
+                NeoForgeNetworkManager::handleBlockEntityRequest);
 
         registrar.playToServer(
                 CompressionReadyNeoPayload.TYPE,
@@ -406,129 +295,59 @@ public class NeoForgeNetworkManager implements NetworkManager {
         // ===== S2C（客户端处理；与服务端发送方向一一对应）=====
 
         // BlockEntityData S2C
-        registrar.playToClient(BlockEntityDataPayload.TYPE, BlockEntityDataPayload.STREAM_CODEC,
+        registrar.playToClient(BLOCK_ENTITY_DATA_TYPE, codec(BLOCK_ENTITY_DATA_TYPE),
                 NeoForgeNetworkManager::handleBlockEntityDataS2C);
 
         // LightDelta S2C（直连拓扑：网关帧链路已裁剪，客户端影子端经 vanilla 通道消费）
-        registrar.playToClient(LightDeltaPayload.TYPE, LightDeltaPayload.STREAM_CODEC,
-                (payload, ctx) -> {
-                    try {
-                        LightDeltaS2CPacket packet = LightDeltaS2CPacket.decode(
-                                new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(payload.data())));
-                        ShadowLightCompute.submitLightDelta(packet);
-                    } catch (Exception e) {
-                        LOGGER.error("[CLIENT] Failed to handle light delta", e);
-                    }
-                });
+        registrar.playToClient(LIGHT_DELTA_TYPE, codec(LIGHT_DELTA_TYPE),
+                (payload, ctx) -> PayloadHandlers.handleLightDelta(payload.data()));
 
         // 字典同步 S2C
-        registrar.playToClient(DictionarySyncNeoPayload.TYPE, DictionarySyncNeoPayload.STREAM_CODEC,
-                NeoForgeNetworkManager::handleDictionarySyncS2C);
+        registrar.playToClient(DICTIONARY_SYNC_TYPE, codec(DICTIONARY_SYNC_TYPE),
+                (payload, ctx) -> ctx.enqueueWork(() -> PayloadHandlers.handleDictionarySync(payload.data())));
 
         // 索引同步 S2C
-        registrar.playToClient(IndexSyncNeoPayload.TYPE, IndexSyncNeoPayload.STREAM_CODEC,
-                NeoForgeNetworkManager::handleIndexSyncS2C);
+        registrar.playToClient(INDEX_SYNC_TYPE, codec(INDEX_SYNC_TYPE),
+                (payload, ctx) -> ctx.enqueueWork(() -> ClientActivation.handleIndexSync(payload.data())));
 
         // 聚合帧 S2C（客户端影子端 decode 统计 zstd/vanilla 流量锚点）
-        registrar.playToClient(AggregationNeoPayload.TYPE, AggregationNeoPayload.STREAM_CODEC,
-                (payload, ctx) -> ctx.enqueueWork(() -> handleAggregationClient(payload.data())));
+        registrar.playToClient(AGGREGATION_TYPE, codec(AGGREGATION_TYPE),
+                (payload, ctx) -> ctx.enqueueWork(() -> PayloadHandlers.handleAggregation(payload.data())));
 
         LOGGER.info("Hassium: Registered all NeoForge payload handlers");
     }
 
-    private static void handleShadowPullRequest(ShadowPullRequestPayload payload, IPayloadContext context) {
+    private static void handleShadowPullRequest(ByteArrayPayload payload, IPayloadContext context) {
         context.enqueueWork(() -> {
             if (!(context.player() instanceof ServerPlayer player)) {
                 return;
             }
-            FriendlyByteBuf buf = null;
-            FriendlyByteBuf out = null;
             try {
-                if (payload == null || payload.data() == null) {
-                    throw new IllegalArgumentException("shadowPullV1 request payload is null");
-                }
-                buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(payload.data()));
-                ShadowPullRequestC2SPacket request = ShadowPullRequestC2SPacket.decode(buf);
-                String dimension = io.github.limuqy.mc.hassium.compat.LevelCompat.getDimensionId(player.level());
-                ShadowPullResponseS2CPacket response = SHADOW_PULL_HANDLER.handle(player.getUUID(), request,
-                        dimension, request.epoch(), player.chunkPosition().x, player.chunkPosition().z,
-                        io.github.limuqy.mc.hassium.compat.PlayerCompat.getViewDistance(player)
-                                + io.github.limuqy.mc.hassium.network.ShadowPullRadii.AUTHORITY_MARGIN,
-                        true, player.isAlive() && !player.hasDisconnected(),
-                        (req, entry) -> ServerChunkPushManager.getInstance().resolveShadowPull(player, req, entry, dimension));
-                out = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
-                response.encode(out);
-                byte[] data = new byte[out.readableBytes()];
-                out.readBytes(data);
-                sendServerPayload(player, new ShadowPullResponsePayload(data));
+                // 解码 + 权威 Compare+Pull 应答编码在 common PayloadHandlers；本端只保留 catch 与发送载体。
+                byte[] response = PayloadHandlers.handleShadowPullRequest(SHADOW_PULL_HANDLER, player, payload.data());
+                sendServerPayload(player, new ByteArrayPayload(SHADOW_PULL_RESPONSE_TYPE, response));
             } catch (Exception e) {
                 LOGGER.warn("[SERVER] Failed to handle shadowPullV1 request", e);
-            } finally {
-                if (buf != null) {
-                    buf.release();
-                }
-                if (out != null) {
-                    out.release();
-                }
             }
         });
     }
 
-    private static void handleShadowPullResponse(ShadowPullResponsePayload payload, IPayloadContext context) {
-        context.enqueueWork(() -> {
-            FriendlyByteBuf buf = null;
-            try {
-                if (payload == null || payload.data() == null) {
-                    throw new IllegalArgumentException("shadowPullV1 response payload is null");
-                }
-                buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(payload.data()));
-                ShadowPullClient.handleResponse(ShadowPullResponseS2CPacket.decode(buf));
-            } catch (Exception e) {
-                LOGGER.warn("[CLIENT] Failed to handle shadowPullV1 response", e);
-            } finally {
-                if (buf != null) {
-                    buf.release();
-                }
-            }
-        });
+    private static void handleShadowPullResponse(ByteArrayPayload payload, IPayloadContext context) {
+        context.enqueueWork(() -> PayloadHandlers.handleShadowPullResponse(payload.data()));
     }
 
-
-
-    private static void handleBlockEntityRequest(BlockEntityRequestPayload payload, IPayloadContext context) {
+    private static void handleBlockEntityRequest(ByteArrayPayload payload, IPayloadContext context) {
         context.enqueueWork(() -> {
-            try {
-                if (context.player() instanceof ServerPlayer player) {
-                    FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(payload.data()));
-                    BlockEntityRequestC2SPacket request = BlockEntityRequestC2SPacket.decode(buf);
-                    ServerChunkPushManager.getInstance().handleBlockEntityRequest(player, request);
-                }
-            } catch (Exception e) {
-                LOGGER.error("[SERVER] Failed to handle block entity request", e);
+            if (context.player() instanceof ServerPlayer player) {
+                PayloadHandlers.handleBlockEntityRequest(payload.data(), player);
             }
         });
     }
 
     // ===== S2C 客户端处理 =====
 
-    private static void handleBlockEntityDataS2C(BlockEntityDataPayload payload, IPayloadContext context) {
-        context.enqueueWork(() -> {
-            try {
-                FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(payload.data()));
-                BlockEntityDataS2CPacket packet = BlockEntityDataS2CPacket.decode(buf);
-                ClientMetadataHandler.handleBlockEntityDataPacket(packet);
-            } catch (Exception e) {
-                LOGGER.error("[CLIENT] Failed to handle block entity data", e);
-            }
-        });
-    }
-
-    private static void handleDictionarySyncS2C(DictionarySyncNeoPayload payload, IPayloadContext context) {
-        context.enqueueWork(() -> handleDictionarySyncClient(payload.data()));
-    }
-
-    private static void handleIndexSyncS2C(IndexSyncNeoPayload payload, IPayloadContext context) {
-        context.enqueueWork(() -> handleIndexSyncClient(payload.data()));
+    private static void handleBlockEntityDataS2C(ByteArrayPayload payload, IPayloadContext context) {
+        context.enqueueWork(() -> PayloadHandlers.handleBlockEntityData(payload.data()));
     }
 
     // ========== 发送方法实现 ==========
@@ -545,7 +364,7 @@ public class NeoForgeNetworkManager implements NetworkManager {
 
     /**
      * 客户端 shadowPull 请求（C2S）。fabric 走 FabricSendCompat；本端必须经
-     * play connection 直发 ShadowPullRequestPayload——默认 SPI 实现是 no-op，
+     * play connection 直发 ByteArrayPayload——默认 SPI 实现是 no-op，
      * 漏实现会让整个 Compare+Pull 静默失效（请求发出但永远不落线）。
      */
     @Override
@@ -556,9 +375,8 @@ public class NeoForgeNetworkManager implements NetworkManager {
         try {
             var connection = net.minecraft.client.Minecraft.getInstance().getConnection();
             if (connection != null && buf.isReadable()) {
-                byte[] data = new byte[buf.readableBytes()];
-                buf.readBytes(data);
-                connection.send(new ShadowPullRequestPayload(data));
+                byte[] data = PayloadHandlers.drain(buf);
+                connection.send(new ByteArrayPayload(SHADOW_PULL_REQUEST_TYPE, data));
             }
         } catch (Exception e) {
             LOGGER.warn("Hassium: Failed to send shadowPullV1 request", e);
@@ -571,20 +389,15 @@ public class NeoForgeNetworkManager implements NetworkManager {
 
     @Override
     public void sendShadowPullResponse(ServerPlayer player, FriendlyByteBuf buf) {
-        byte[] data = new byte[buf.readableBytes()];
-        buf.readBytes(data);
-        buf.release();
-        sendServerPayload(player, new ShadowPullResponsePayload(data));
+        sendServerPayload(player, new ByteArrayPayload(SHADOW_PULL_RESPONSE_TYPE, PayloadHandlers.drain(buf)));
     }
 
     @Override
     public void sendBlockEntityRequest(FriendlyByteBuf buf) {
         if (net.minecraft.client.Minecraft.getInstance().getConnection() != null) {
-            byte[] data = new byte[buf.readableBytes()];
-            buf.readBytes(data);
-            buf.release();
-            BlockEntityRequestPayload payload = new BlockEntityRequestPayload(data);
-            net.minecraft.client.Minecraft.getInstance().getConnection().send(payload);
+            byte[] data = PayloadHandlers.drain(buf);
+            net.minecraft.client.Minecraft.getInstance().getConnection()
+                    .send(new ByteArrayPayload(BLOCK_ENTITY_REQUEST_TYPE, data));
             LOGGER.debug("Hassium: Sent block entity request");
         } else {
             buf.release();
@@ -593,11 +406,7 @@ public class NeoForgeNetworkManager implements NetworkManager {
 
     @Override
     public void sendBlockEntityData(ServerPlayer player, FriendlyByteBuf buf) {
-        byte[] data = new byte[buf.readableBytes()];
-        buf.readBytes(data);
-        buf.release();
-        BlockEntityDataPayload payload = new BlockEntityDataPayload(data);
-        sendServerPayload(player, payload);
+        sendServerPayload(player, new ByteArrayPayload(BLOCK_ENTITY_DATA_TYPE, PayloadHandlers.drain(buf)));
         LOGGER.debug("Hassium: Sent block entity data packet to {}", player.getName().getString());
     }
 
@@ -605,17 +414,15 @@ public class NeoForgeNetworkManager implements NetworkManager {
     public void sendLightDeltaPacket(ServerPlayer player, FriendlyByteBuf buf) {
         // 直连拓扑：网关帧链路（LIGHT_DELTA 原唯一消费方）已裁剪，改经 vanilla play S2C payload
         // 下发，客户端影子端 ShadowLightCompute 直连消费（任意线程安全）。
-        byte[] data = new byte[buf.readableBytes()];
-        buf.readBytes(data);
-        buf.release();
-        sendServerPayload(player, new LightDeltaPayload(data));
+        sendServerPayload(player, new ByteArrayPayload(LIGHT_DELTA_TYPE, PayloadHandlers.drain(buf)));
     }
 
     /**
      * 发送 Play 期激活包（协商结果 + SeedGen 种子；直连拓扑 S2C payload）。
      */
-    public static void sendPlayInit(ServerPlayer player, int negotiatedCaps, long worldSeed,
-                                    byte[] stemNbt, boolean seedGenEnabled) {
+    @Override
+    public void sendPlayInit(ServerPlayer player, int negotiatedCaps, long worldSeed,
+                             byte[] stemNbt, boolean seedGenEnabled) {
         try {
             sendServerPayload(player, new PlayInitNeoPayload(
                     negotiatedCaps, worldSeed, stemNbt, seedGenEnabled));
@@ -627,20 +434,24 @@ public class NeoForgeNetworkManager implements NetworkManager {
     }
 
 
+    /** SPI：发送聚合字典同步到客户端（转调静态实现；push 回调同用）。 */
+    @Override
+    public void sendDictionarySync(ServerPlayer player) {
+        sendDictionarySyncPacket(player);
+    }
+
+    /** SPI：发送包索引同步到客户端（转调静态实现）。 */
+    @Override
+    public void sendIndexSync(ServerPlayer player) {
+        sendIndexSyncPacket(player);
+    }
+
     /** 发送聚合字典同步到客户端（SPI：Services.NETWORK_MANAGER.sendDictionarySync 转调）。 */
     public static void sendDictionarySyncPacket(ServerPlayer player) {
         try {
-            byte[] aggregationDict = DictionaryManager.getAggregationDict();
-            if (aggregationDict == null) {
-                aggregationDict = new byte[0];
-            }
-            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
-            new DictionarySyncPayload(aggregationDict, false).encode(buf);
-            byte[] data = new byte[buf.readableBytes()];
-            buf.readBytes(data);
-            buf.release();
-            player.connection.send(new DictionarySyncNeoPayload(data));
-            LOGGER.debug("Hassium: Sent dictionary sync ({} bytes) to {}", aggregationDict.length, player.getName().getString());
+            byte[] body = PayloadHandlers.encodeDictionarySyncBody(DictionaryManager.getAggregationDict());
+            player.connection.send(new ByteArrayPayload(DICTIONARY_SYNC_TYPE, body));
+            LOGGER.debug("Hassium: Sent dictionary sync ({} bytes) to {}", body.length, player.getName().getString());
         } catch (Exception e) {
             LOGGER.error("Hassium: Failed to send dictionary sync packet", e);
         }
@@ -649,78 +460,18 @@ public class NeoForgeNetworkManager implements NetworkManager {
     /** 发送包索引同步到客户端（SPI：Services.NETWORK_MANAGER.sendIndexSync 转调）。 */
     public static void sendIndexSyncPacket(ServerPlayer player) {
         try {
-            IndexSyncManager indexSyncManager = IndexSyncManager.getInstance();
-            indexSyncManager.initializeServerIndex();
-            IndexSyncPacket syncPacket = indexSyncManager.createSyncPacket();
-            byte[] encoded = syncPacket.encode();
-            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
-            buf.writeVarInt(encoded.length);
-            buf.writeBytes(encoded);
-            byte[] data = new byte[buf.readableBytes()];
-            buf.readBytes(data);
-            buf.release();
-            player.connection.send(new IndexSyncNeoPayload(data));
+            byte[] envelope = PayloadHandlers.encodeIndexSyncEnvelope();
+            player.connection.send(new ByteArrayPayload(INDEX_SYNC_TYPE, envelope));
             LOGGER.debug("Hassium: Sent index sync to {}", player.getName().getString());
         } catch (Exception e) {
             LOGGER.error("Hassium: Failed to send index sync packet", e);
         }
     }
 
-    private static void handleDictionarySyncClient(byte[] data) {
-        try {
-            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(data));
-            DictionarySyncPayload payload = DictionarySyncPayload.decode(buf);
-            DictionaryManager.setAggregationDict(payload.dictionary());
-            LOGGER.debug("Hassium: Received aggregation dictionary ({} bytes)",
-                    payload.dictionary() != null ? payload.dictionary().length : 0);
-        } catch (Exception e) {
-            LOGGER.error("Hassium: Failed to handle dictionary sync", e);
-        }
-    }
-
-    private static void handleIndexSyncClient(byte[] data) {
-        try {
-            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(data));
-            int dataLength = buf.readVarInt();
-            byte[] packetData = new byte[dataLength];
-            buf.readBytes(packetData);
-            IndexSyncPacket syncPacket = IndexSyncPacket.decode(packetData);
-            IndexSyncManager indexSyncManager = IndexSyncManager.getInstance();
-            NamespaceIndexManager clientIndexManager = indexSyncManager.handleSyncPacket("client", syncPacket);
-
-            var conn = net.minecraft.client.Minecraft.getInstance().getConnection();
-            if (conn != null) {
-                Connection connection = conn.getConnection();
-                HassiumConnectionRegistry.markEnabled(connection);
-                HassiumAggregationManager.init();
-                sendCompressionReadyToServer();
-            }
-            LOGGER.debug("Hassium: Received index sync ({} types), sent compression ready",
-                    clientIndexManager.size());
-        } catch (Exception e) {
-            LOGGER.error("Hassium: Failed to handle index sync", e);
-        }
-    }
-
-    private static void handleAggregationClient(byte[] data) {
-        FriendlyByteBuf packetBuf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(data));
-        try {
-            var clientConn = net.minecraft.client.Minecraft.getInstance().getConnection();
-            if (clientConn == null) {
-                LOGGER.error("Received aggregation packet but no client connection");
-                return;
-            }
-            NamespaceIndexManager indexManager = IndexSyncManager.getInstance().getClientIndexManager();
-            if (indexManager == null) {
-                LOGGER.error("Received aggregation packet but client index manager not initialized");
-                return;
-            }
-            HassiumAggregationPacket.decode(packetBuf, indexManager).handle(clientConn.getConnection());
-        } catch (Throwable e) { // review-fix: T13-C1（decode 校验抛 IllegalArgumentException/Error 均须收敛，防 OOM 后链路悬挂）
-            LOGGER.error("Failed to handle aggregation packet", e);
-        } finally {
-            packetBuf.release();
-        }
+    /** SPI：客户端 compression_ready ACK（C2S；common {@code ClientActivation} 经 Services.NETWORK_MANAGER 消费）。 */
+    @Override
+    public void sendCompressionReady() {
+        sendCompressionReadyToServer();
     }
 
     public static void sendCompressionReadyToServer() {

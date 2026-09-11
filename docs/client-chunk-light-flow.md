@@ -59,14 +59,13 @@ MixinClientPacketListener.handleLevelChunkWithLight（HEAD / RETURN）
         ├─ 无影子基线 → 原版 apply（首次建基线）
         └─ 有影子基线 → ShadowPull（Compare + Pull）
         ▼
-ClientChunkHandler.applyChunkData / applyShadowPullFull
-        │  解压（后台）→ NBT → apply
+ClientChunkHandler.applyShadowPullFull
+        │  decode 原版包（后台）→ 原版 listener 落地
         ▼
 ClientChunkCache.replaceWithPacketData → renderer
 ```
 
-- `applyChunkData` 是统一入口（官方包字节与 ShadowPull FULL payload 同路径）
-- Loading screen 期间走 `shouldFastApplyForLoadingScreen` 快速通道（仅方块数据，光照延后）
+- `applyShadowPullFull` 是统一 apply 入口（ShadowPull FULL payload = 原版 `ClientboundLevelChunkWithLightPacket` 线格式，decode 后经原版 `handleLevelChunkWithLight` 落地；原 `applyChunkData` 与加载屏快路径已随退役 `chunk_payload` 通道删除）
 - `storePendingContentHash` 在 apply 前登记 chunkHash，供影子端落表
 
 ## 4. 光照管线（影子端统一算光）
@@ -83,7 +82,7 @@ ClientChunkCache.replaceWithPacketData → renderer
 
 | 组件 | 职责 |
 |------|------|
-| `ClientChunkHandler` / `ClientChunkPipeline` | 收包统一入口（官方包 + 自定义 payload）、解压调度、`applyChunkData`、握手/影子端状态机 |
+| `ClientChunkHandler` / `ClientChunkPipeline` | 收包统一入口（官方包 + 自定义 payload）、解压调度、`applyShadowPullFull`、握手/影子端状态机 |
 | `MainThreadDispatcher` | 后台→主线程回调队列（距离优先级） |
 | `ClientMainThreadBudget` | 主线程 apply 时间预算（JoinBoost / normal）；`maxChunksPerFrame` 只限缓存读取生产 |
 | `ShadowLightCompute` | 投递队列（pending/generated/delta/pendingLightUpdates/inflight）+ 屏障重试 + 帧尾落地编排 |

@@ -282,10 +282,10 @@ pull 域用了 `resolveViewDistance()=vd+1`（range=21 → 1665 格盘）而非�
 - **后果**：R1 全新缓存 → 无基线 → 1529 柱全部放行走推送；与 §6「无基线也进 Compare+Pull（服务端答 FULL）」及 stats 口径「新增 = 无本地 baseline FULL」相悖。
 - **目标态**：无基线 = **空基线请求**（机制已有：`ShadowPullClient.requestAuthoritativeFull` 即空基线请求，目前仅作重试路径），服务端答 FULL。
 
-### T3 chunk_payload 解压应用链（过渡载体）
+### T3 chunk_payload 解压应用链（过渡载体，已随通道退役删除）
 
-- `ClientChunkHandler.handleCompressedChunk` → `ChunkCompressionHandler` → `applyChunkData` / `ShadowVanillaLightPipeline.submitVisible`。
-- 目标态下 pull FULL 统一走 `ShadowPullClient` → `ClientChunkHandler.applyShadowPullFull`（已存在）→ vanilla listener → 影子管线；本链路退役。
+- 过渡链 `ClientChunkHandler.handleCompressedChunk` → `ChunkCompressionHandler` → `applyChunkData` 已删除（`chunk_payload` 通道退役后 `applyChunkData` 与加载屏快路径零调用方，整链移除；区块应用收敛到 `applyShadowPullFull`）。
+- pull FULL 统一走 `ShadowPullClient` → `ClientChunkHandler.applyShadowPullFull` → vanilla listener → 影子管线。
 
 ### T4 统计口径过渡
 

@@ -6,6 +6,7 @@ import io.github.limuqy.mc.hassium.compat.ResourceLocationCompat;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.network.handshake.LoginHandshake;
 import io.github.limuqy.mc.hassium.network.handshake.ServerHandshakeActivation;
+import io.github.limuqy.mc.hassium.platform.services.INetworkManagerService;
 import io.github.limuqy.mc.hassium.utils.DebugLogger;
 import io.github.limuqy.mc.hassium.utils.DebugLogger.LogType;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
@@ -36,10 +37,10 @@ import java.util.UUID;
  * </ul>
  * 能力协商在 login/config 阶段由 common（{@code LoginHandshakeManager} / mixin）完成；
  * Play 期激活（{@code play_init_s2c} 下发、compression_ready ACK、ZSTD 切换、Dict/Index）
- * 由 common {@link ServerHandshakeActivation} 收口，本类只做 loader 边界收发与
- * SPI 委托点（{@code FabricNetworkManagerService} 转调静态方法）。
+ * 由 common {@link ServerHandshakeActivation} 收口，本类同时是 SPI
+ * {@link INetworkManagerService} 实现（common {@code Services.NETWORK_MANAGER} 消费）。
  */
-public class FabricNetworkManager implements NetworkManager {
+public class FabricNetworkManager implements INetworkManagerService {
 
     private static final Logger LOGGER = LoggerFactory.getLogger("Hassium/Network");
 
@@ -126,7 +127,6 @@ Identifier
 #endif
 PLAY_INIT_S2C = ResourceLocationCompat.vanilla(HassiumChannels.PLAY_INIT_S2C);
 
-    @Override
     public void registerChannels() {
         if (!HassiumConfigService.getInstance().isNetworkCompressionEnabled()
                 && !HassiumConfigService.getInstance().isClientCacheEnabled()) {
@@ -183,16 +183,6 @@ PLAY_INIT_S2C = ResourceLocationCompat.vanilla(HassiumChannels.PLAY_INIT_S2C);
     }
 
     @Override
-    public void sendShadowPullResponse(ServerPlayer player, FriendlyByteBuf buf) {
-#if MC_VER < MC_1_21_1
-        ServerPlayNetworking.send(player, SHADOW_PULL_RESPONSE_S2C, buf);
-#else
-        ServerPlayNetworking.send(player, FabricPayloadRegistry.toPayload(FabricPayloadRegistry.SHADOW_PULL_RESPONSE_S2C_TYPE, buf));
-#endif
-    }
-
-
-    @Override
     public void sendBlockEntityRequest(FriendlyByteBuf buf) {
         if (Minecraft.getInstance().getConnection() != null) {
 #if MC_VER < MC_1_21_1
@@ -225,66 +215,39 @@ PLAY_INIT_S2C = ResourceLocationCompat.vanilla(HassiumChannels.PLAY_INIT_S2C);
     }
 
     /**
-     * 发送字典同步包到指定玩家
+     * 发送字典同步包到指定玩家（body 编码在 common {@link PayloadHandlers}；
+     * 本类只保留传输面）。
      */
-    private static void sendDictionarySyncPacket(ServerPlayer player) {
+    private static void sendDictionarySyncPacket(ServerPlayer player, byte[] dictionary) {
         try {
-            byte[] aggregationDict = DictionaryManager.getAggregationDict();
-
-            DictionarySyncPayload payload = new DictionarySyncPayload(aggregationDict, false);
-            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
-            payload.encode(buf);
+            byte[] body = PayloadHandlers.encodeDictionarySyncBody(dictionary);
 #if MC_VER < MC_1_21_1
-            ServerPlayNetworking.send(player, DICTIONARY_SYNC_S2C, buf);
+            ServerPlayNetworking.send(player, DICTIONARY_SYNC_S2C,
+                    new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(body)));
 #else
-            ServerPlayNetworking.send(player, FabricPayloadRegistry.toPayload(FabricPayloadRegistry.DICTIONARY_SYNC_S2C_TYPE, buf));
+            ServerPlayNetworking.send(player,
+                    FabricPayloadRegistry.createPayload(FabricPayloadRegistry.DICTIONARY_SYNC_S2C_TYPE, body));
 #endif
             DebugLogger.debug(LogType.NETWORK, "Hassium: Sent aggregation dictionary sync to player {} ({} bytes)",
-                    player.getName().getString(),
-                    aggregationDict != null ? aggregationDict.length : 0);
+                    player.getName().getString(), dictionary != null ? dictionary.length : 0);
         } catch (Exception e) {
             LOGGER.error("Hassium: Failed to send dictionary sync packet", e);
         }
     }
 
     /**
-     * 发送指定字典到玩家
-     */
-    private static void sendDictionarySyncPacket(ServerPlayer player, byte[] dictionary) {
-        try {
-            DictionarySyncPayload payload = new DictionarySyncPayload(dictionary, false);
-            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
-            payload.encode(buf);
-#if MC_VER < MC_1_21_1
-            ServerPlayNetworking.send(player, DICTIONARY_SYNC_S2C, buf);
-#else
-            ServerPlayNetworking.send(player, FabricPayloadRegistry.toPayload(FabricPayloadRegistry.DICTIONARY_SYNC_S2C_TYPE, buf));
-#endif
-            DebugLogger.debug(LogType.NETWORK, "Hassium: Pushed new aggregation dictionary to player {} ({} bytes)",
-                    player.getName().getString(), dictionary != null ? dictionary.length : 0);
-        } catch (Exception e) {
-            LOGGER.error("Hassium: Failed to push dictionary to player {}", player.getName().getString(), e);
-        }
-    }
-
-    /**
-     * 发送索引同步包到指定玩家
+     * 发送索引同步包到指定玩家（信封编码在 common {@link PayloadHandlers}）。
      */
     private static void sendIndexSyncPacket(ServerPlayer player) {
         try {
             IndexSyncManager indexSyncManager = IndexSyncManager.getInstance();
-            indexSyncManager.initializeServerIndex();
-
-            IndexSyncPacket syncPacket = indexSyncManager.createSyncPacket();
-            byte[] data = syncPacket.encode();
-
-            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
-            buf.writeVarInt(data.length);
-            buf.writeBytes(data);
+            byte[] envelope = PayloadHandlers.encodeIndexSyncEnvelope();
 #if MC_VER < MC_1_21_1
-            ServerPlayNetworking.send(player, INDEX_SYNC_S2C, buf);
+            ServerPlayNetworking.send(player, INDEX_SYNC_S2C,
+                    new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(envelope)));
 #else
-            ServerPlayNetworking.send(player, FabricPayloadRegistry.toPayload(FabricPayloadRegistry.INDEX_SYNC_S2C_TYPE, buf));
+            ServerPlayNetworking.send(player,
+                    FabricPayloadRegistry.createPayload(FabricPayloadRegistry.INDEX_SYNC_S2C_TYPE, envelope));
 #endif
             DebugLogger.debug(LogType.NETWORK, "Hassium: Sent index sync packet to player {} ({} packet types)",
                     player.getName().getString(), indexSyncManager.getServerIndexManager().size());
@@ -293,19 +256,21 @@ PLAY_INIT_S2C = ResourceLocationCompat.vanilla(HassiumChannels.PLAY_INIT_S2C);
         }
     }
 
-    // ===== SPI 实现委托点（FabricNetworkManagerService 转调；common ServerHandshakeActivation 消费） =====
+    // ===== SPI 实现（common ServerHandshakeActivation / PlayInitClient 经 Services.NETWORK_MANAGER 消费） =====
 
     /**
      * SPI：发送聚合字典同步到客户端（服务端调用；Play 期 ZSTD 安装后）。
      */
-    public static void sendDictionarySync(ServerPlayer player) {
-        sendDictionarySyncPacket(player);
+    @Override
+    public void sendDictionarySync(ServerPlayer player) {
+        sendDictionarySyncPacket(player, DictionaryManager.getAggregationDict());
     }
 
     /**
      * SPI：发送包索引同步到客户端（服务端调用；Play 期 ZSTD 安装后）。
      */
-    public static void sendIndexSync(ServerPlayer player) {
+    @Override
+    public void sendIndexSync(ServerPlayer player) {
         sendIndexSyncPacket(player);
     }
 
@@ -315,8 +280,9 @@ PLAY_INIT_S2C = ResourceLocationCompat.vanilla(HassiumChannels.PLAY_INIT_S2C);
      * body = {@link LoginHandshake.PlayInitPayload}（协商位 + SeedGen 种子/LevelStem），
      * 客户端 receiver 解码后转调 common {@code PlayInitClient.handle}。
      */
-    public static void sendPlayInit(ServerPlayer player, int negotiatedCaps, long worldSeed,
-                                    byte[] stemNbt, boolean seedGenEnabled) {
+    @Override
+    public void sendPlayInit(ServerPlayer player, int negotiatedCaps, long worldSeed,
+                             byte[] stemNbt, boolean seedGenEnabled) {
         try {
             LoginHandshake.PlayInitPayload payload =
                     new LoginHandshake.PlayInitPayload(negotiatedCaps, worldSeed, stemNbt, seedGenEnabled);
@@ -335,12 +301,14 @@ PLAY_INIT_S2C = ResourceLocationCompat.vanilla(HassiumChannels.PLAY_INIT_S2C);
     }
 
     /**
-     * 客户端激活 ACK（index_sync 收到后回发；C2S）。
+     * SPI：客户端激活 ACK（index_sync 收到后回发；C2S；common {@code ClientActivation}
+     * 经 Services.NETWORK_MANAGER 消费）。
      * <p>
      * body = {@link CompressionReadyPayload}（ready=true），服务端 receiver 转调
      * common {@code ServerHandshakeActivation.handleActivationReady}（聚合 PENDING→ENABLED）。
      */
-    public static void sendCompressionReady() {
+    @Override
+    public void sendCompressionReady() {
         try {
             FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
             new CompressionReadyPayload(true).encode(buf);
@@ -419,16 +387,10 @@ PLAY_INIT_S2C = ResourceLocationCompat.vanilla(HassiumChannels.PLAY_INIT_S2C);
             try {
                 ShadowPullRequestC2SPacket request = ShadowPullRequestC2SPacket.decode(buf);
                 server.execute(() -> {
-                    String dimension = io.github.limuqy.mc.hassium.compat.LevelCompat.getDimensionId(player.level());
                     LOGGER.info("[SHADOW_PULL] server request player={} count={} epoch={}", player.getUUID(),
                             request.entries().size(), request.epoch());
-                    ShadowPullResponseS2CPacket response = new ShadowPullHandler(new ShadowPullRequestLedger()).handle(
-                            player.getUUID(), request, dimension, request.epoch(), player.chunkPosition().x,
-                            player.chunkPosition().z, io.github.limuqy.mc.hassium.compat.PlayerCompat.getViewDistance(player)
-                                    + io.github.limuqy.mc.hassium.network.ShadowPullRadii.AUTHORITY_MARGIN,
-                            true,
-                            player.isAlive() && !player.hasDisconnected(),
-                            (req, entry) -> ServerChunkPushManager.getInstance().resolveShadowPull(player, req, entry, dimension));
+                    ShadowPullResponseS2CPacket response = ShadowPullServer.handleRequest(
+                            new ShadowPullHandler(new ShadowPullRequestLedger()), player, request);
                     FriendlyByteBuf out = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
                     response.encode(out);
                     ServerPlayNetworking.send(player, SHADOW_PULL_RESPONSE_S2C, out);
@@ -444,14 +406,8 @@ PLAY_INIT_S2C = ResourceLocationCompat.vanilla(HassiumChannels.PLAY_INIT_S2C);
                 ShadowPullRequestC2SPacket request = ShadowPullRequestC2SPacket.decode(buf);
                 context.server().execute(() -> {
                     ServerPlayer player = (ServerPlayer) context.player();
-                    String dimension = io.github.limuqy.mc.hassium.compat.LevelCompat.getDimensionId(player.level());
-                    ShadowPullResponseS2CPacket response = new ShadowPullHandler(new ShadowPullRequestLedger()).handle(
-                            player.getUUID(), request, dimension, request.epoch(), player.chunkPosition().x,
-                            player.chunkPosition().z, io.github.limuqy.mc.hassium.compat.PlayerCompat.getViewDistance(player)
-                                    + io.github.limuqy.mc.hassium.network.ShadowPullRadii.AUTHORITY_MARGIN,
-                            true,
-                            player.isAlive() && !player.hasDisconnected(),
-                            (req, entry) -> ServerChunkPushManager.getInstance().resolveShadowPull(player, req, entry, dimension));
+                    ShadowPullResponseS2CPacket response = ShadowPullServer.handleRequest(
+                            new ShadowPullHandler(new ShadowPullRequestLedger()), player, request);
                     FriendlyByteBuf out = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
                     response.encode(out);
                     ServerPlayNetworking.send(player, FabricPayloadRegistry.toPayload(

@@ -3,7 +3,6 @@ package io.github.limuqy.mc.hassium.network;
 import io.github.limuqy.mc.hassium.network.seedgen.ShadowVanillaLightPipeline;
 import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.metrics.NetworkStats;
-import io.github.limuqy.mc.hassium.platform.Services;
 import io.github.limuqy.mc.hassium.utils.DebugLogger;
 import io.github.limuqy.mc.hassium.utils.DebugLogger.LogType;
 import net.minecraft.client.Minecraft;
@@ -74,89 +73,8 @@ public class ClientChunkHandler {
     }
 
     /**
-     * 加载地形屏未关时，玩家脚下切比雪夫 ≤1 的柱先落地方块，避免影子光屏障挡住
-     * {@code LevelRenderer.isChunkCompiled}。加载屏快路径只提前安装方块数据；光照计算
-     * 保持原版默认开启，后续影子端完成的光照包仍可按原版路径校正结果。
+     * 影子端官方通道落地的诊断事件；来源为 null 表示开启日志前已入队。
      */
-    public static boolean shouldFastApplyForLoadingScreen(ChunkPos pos) {
-        Minecraft mc = Minecraft.getInstance();
-        if (mc == null || mc.player == null || pos == null) {
-            return false;
-        }
-#if MC_VER < MC_1_21_9
-        if (!(mc.screen instanceof net.minecraft.client.gui.screens.ReceivingLevelScreen)) {
-            return false;
-        }
-#else
-        if (!(mc.screen instanceof net.minecraft.client.gui.screens.LevelLoadingScreen)) {
-            return false;
-        }
-#endif
-        return isWithinChebyshev(pos, mc.player.chunkPosition(), 1);
-    }
-
-    static boolean isWithinChebyshev(ChunkPos pos, ChunkPos center, int radius) {
-        if (pos == null || center == null || radius < 0) {
-            return false;
-        }
-        return Math.max(Math.abs(pos.x - center.x), Math.abs(pos.z - center.z)) <= radius;
-    }
-
-    /**
-     * 加载屏快路径：只提前写入方块/高度图/BE，并标脏 mesh；客户端光照引擎保持默认开启。
-     * 影子端完成后仍通过类原版光照包发布权威结果。
-     * <p>
-     * 必须在客户端主线程调用。
-     *
-     * @return true=柱已进入客户端缓存（可关加载屏）；false=视距外丢弃等失败
-     */
-    public static boolean applyLoadingScreenBlocksOnly(
-            net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket packet) {
-        if (packet == null) {
-            return false;
-        }
-        Minecraft mc = Minecraft.getInstance();
-        ClientLevel level = mc != null ? mc.level : null;
-        if (level == null) {
-            return false;
-        }
-        int chunkX = packet.getX();
-        int chunkZ = packet.getZ();
-        ChunkPos pos = new ChunkPos(chunkX, chunkZ);
-        logChunkApplyEvent("loading_blocks_only", pos, false, mc);
-        ClientChunkPipeline pipeline = ClientChunkPipeline.getInstance();
-        pipeline.setApplyInProgress(true);
-        try {
-            net.minecraft.network.protocol.game.ClientboundLevelChunkPacketData data = packet.getChunkData();
-            net.minecraft.world.level.chunk.LevelChunk chunk = level.getChunkSource().replaceWithPacketData(
-                    chunkX, chunkZ, data.getReadBuffer(), data.getHeightmaps(),
-                    data.getBlockEntitiesTagsConsumer(chunkX, chunkZ));
-            if (chunk == null || !level.getChunkSource().hasChunk(chunkX, chunkZ)) {
-                logChunkApplyEvent("loading_blocks_miss", pos, false, mc);
-                return false;
-            }
-            // 先催 mesh；光照计算保持 vanilla 默认开启，影子端后续光照包负责收敛权威结果。
-            int minSection = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMinSection(level);
-            int maxSection = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMaxSectionExclusive(level);
-            for (int sectionY = minSection; sectionY < maxSection; sectionY++) {
-                level.setSectionDirtyWithNeighbors(chunkX, sectionY, chunkZ);
-            }
-            io.github.limuqy.mc.hassium.cache.client.ClientMainThreadBudget.noteChunkApplyActivity();
-            NetworkStats.recordChunkApplied(chunkX, chunkZ);
-            DebugLogger.info(LogType.CHUNK_APPLY,
-                    "[APPLY_CHUNK] Loading-screen blocks-only ({}, {}) — client light remains enabled",
-                    chunkX, chunkZ);
-            return true;
-        } catch (Throwable t) {
-            DebugLogger.warn(LogType.CHUNK_APPLY,
-                    "[APPLY_CHUNK] Loading-screen blocks-only failed ({}, {})", chunkX, chunkZ);
-            return false;
-        } finally {
-            pipeline.setApplyInProgress(false);
-        }
-    }
-
-    /** 影子端官方通道落地的诊断事件；来源为 null 表示开启日志前已入队。 */
     public static void logShadowChunkApplyEvent(String phase, ChunkPos pos, boolean renderOnly, TraceOrigin origin) {
         logChunkApplyEvent(phase, pos, renderOnly, Minecraft.getInstance(), origin);
     }
@@ -236,46 +154,6 @@ public class ClientChunkHandler {
 
 
 
-    /** 将官方区块 packet 字节应用到客户端世界。 */
-    public static boolean applyChunkData(int chunkX, int chunkZ, byte[] chunkData) {
-        DebugLogger.info(LogType.CHUNK_APPLY,
-                "[APPLY_CHUNK] Applying chunk [{}, {}] (dataSize={})",
-                chunkX, chunkZ, chunkData.length);
-        long applyStartNs = System.nanoTime();
-        ChunkPos pos = new ChunkPos(chunkX, chunkZ);
-        Minecraft mc = Minecraft.getInstance();
-        ClientLevel level = mc.level;
-        logChunkApplyEvent("attempt", pos, false, mc);
-        if (level == null) {
-            logChunkApplyEvent("level_unavailable", pos, false, mc);
-            DebugLogger.error("[APPLY_CHUNK] Cannot apply chunk [{}, {}], client level is null", chunkX, chunkZ);
-            return false;
-        }
-        try {
-            io.netty.buffer.ByteBuf nettyBuf = io.netty.buffer.Unpooled.wrappedBuffer(chunkData);
-            nettyBuf.readerIndex(0);
-            net.minecraft.network.FriendlyByteBuf friendlyBuf = new net.minecraft.network.FriendlyByteBuf(nettyBuf);
-            ClientChunkPipeline pipeline = ClientChunkPipeline.getInstance();
-            pipeline.setApplyInProgress(true);
-            try {
-                Services.getClientChunkApplier().applyToLevelFromByteBuf(level, pos, friendlyBuf);
-                markChunkSectionsDirty(level, chunkX, chunkZ);
-            } finally {
-                pipeline.setApplyInProgress(false);
-            }
-            DebugLogger.info(LogType.CHUNK_APPLY,
-                    "[APPLY_CHUNK] Successfully applied chunk [{}, {}] to client world in {} ms",
-                    chunkX, chunkZ, String.format("%.2f", (System.nanoTime() - applyStartNs) / 1_000_000.0));
-            logChunkApplyEvent("applied", pos, false, mc);
-            io.github.limuqy.mc.hassium.cache.client.ClientMainThreadBudget.noteChunkApplyActivity();
-            NetworkStats.recordChunkApplied(chunkX, chunkZ);
-            return true;
-        } catch (Exception e) {
-            DebugLogger.error("[APPLY_CHUNK] Failed to apply chunk data for [{}, {}]", e, chunkX, chunkZ);
-            logChunkApplyEvent("failed", pos, false, mc);
-            return false;
-        }
-    }
     /** 标记柱全部 section dirty 触发渲染重建（与原版 apply 后行为对齐）。 */
     public static void markChunkSectionsDirty(ClientLevel level, int chunkX, int chunkZ) {
         int minSection = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMinSection(level);

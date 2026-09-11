@@ -3,6 +3,9 @@ package io.github.limuqy.mc.hassium.network;
 import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.compat.ResourceLocationCompat;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
+import io.github.limuqy.mc.hassium.network.handshake.LoginHandshake;
+import io.github.limuqy.mc.hassium.network.handshake.PlayInitClient;
+import io.github.limuqy.mc.hassium.platform.services.INetworkManagerService;
 import net.minecraft.network.Connection;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.server.level.ServerPlayer;
@@ -42,7 +45,7 @@ import java.util.function.Function;
  * 握手链（{@code ServerHandshakeActivation} / {@code PlayInitClient}）经 SPI 走本通道，
  * 不再存在网关帧协议 / UDP 数据面 / 续流票据（2.0.0 直连裁剪）。
  */
-public class ForgeNetworkManager implements NetworkManager {
+public class ForgeNetworkManager implements INetworkManagerService {
 
     private static final Logger LOGGER = LoggerFactory.getLogger("Hassium/Network");
     private static final String PROTOCOL_VERSION = "1";
@@ -64,7 +67,6 @@ public class ForgeNetworkManager implements NetworkManager {
     public static volatile SimpleChannel CHANNEL;
 #endif
 
-    @Override
     public void registerChannels() {
         if (!HassiumConfigService.getInstance().isNetworkCompressionEnabled()
                 && !HassiumConfigService.getInstance().isClientCacheEnabled()) {
@@ -115,6 +117,7 @@ public class ForgeNetworkManager implements NetworkManager {
     private void registerLegacyChannels() {
         // 必须 setPacketHandled(true)（在 enqueueWork 外），否则 Forge 会把包交给原版
         // S2C / C2S 必须带 NetworkDirection，避免方向校验失败
+        // 解包 + 业务分发统一在 common PayloadHandlers（P1b 下沉）；本类只保留传输面。
 
         CHANNEL.<AggregationWrapper>registerMessage(
                 packetId++,
@@ -122,13 +125,11 @@ public class ForgeNetworkManager implements NetworkManager {
                 AggregationWrapper::encode,
                 AggregationWrapper::decode,
                 (msg, ctx) -> {
-                    ctx.get().enqueueWork(() -> handleAggregationClient(msg));
+                    ctx.get().enqueueWork(() -> PayloadHandlers.handleAggregation(msg.data()));
                     ctx.get().setPacketHandled(true);
                 },
                 java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT)
         );
-
-
 
         CHANNEL.<BlockEntityRequestWrapper>registerMessage(
                 packetId++,
@@ -136,7 +137,8 @@ public class ForgeNetworkManager implements NetworkManager {
                 BlockEntityRequestWrapper::encode,
                 BlockEntityRequestWrapper::decode,
                 (msg, ctx) -> {
-                    ctx.get().enqueueWork(() -> handleBlockEntityRequest(msg, ctx.get().getSender()));
+                    ctx.get().enqueueWork(() ->
+                            PayloadHandlers.handleBlockEntityRequest(msg.data(), ctx.get().getSender()));
                     ctx.get().setPacketHandled(true);
                 },
                 java.util.Optional.of(NetworkDirection.PLAY_TO_SERVER)
@@ -148,12 +150,11 @@ public class ForgeNetworkManager implements NetworkManager {
                 BlockEntityDataWrapper::encode,
                 BlockEntityDataWrapper::decode,
                 (msg, ctx) -> {
-                    ctx.get().enqueueWork(() -> handleBlockEntityData(msg));
+                    ctx.get().enqueueWork(() -> PayloadHandlers.handleBlockEntityData(msg.data()));
                     ctx.get().setPacketHandled(true);
                 },
                 java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT)
         );
-
 
         CHANNEL.<DictionarySyncWrapper>registerMessage(
                 packetId++,
@@ -161,7 +162,7 @@ public class ForgeNetworkManager implements NetworkManager {
                 DictionarySyncWrapper::encode,
                 DictionarySyncWrapper::decode,
                 (msg, ctx) -> {
-                    ctx.get().enqueueWork(() -> handleDictionarySyncClient(msg.data()));
+                    ctx.get().enqueueWork(() -> PayloadHandlers.handleDictionarySync(msg.data()));
                     ctx.get().setPacketHandled(true);
                 },
                 java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT)
@@ -173,7 +174,7 @@ public class ForgeNetworkManager implements NetworkManager {
                 IndexSyncWrapper::encode,
                 IndexSyncWrapper::decode,
                 (msg, ctx) -> {
-                    ctx.get().enqueueWork(() -> handleIndexSyncClient(msg.data()));
+                    ctx.get().enqueueWork(() -> ClientActivation.handleIndexSync(msg.data()));
                     ctx.get().setPacketHandled(true);
                 },
                 java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT)
@@ -202,15 +203,15 @@ public class ForgeNetworkManager implements NetworkManager {
                 packetId++, ShadowPullResponseWrapper.class,
                 ShadowPullResponseWrapper::encode, ShadowPullResponseWrapper::decode,
                 (msg, ctx) -> {
-                    ctx.get().enqueueWork(() -> handleShadowPullResponse(msg));
+                    ctx.get().enqueueWork(() -> PayloadHandlers.handleShadowPullResponse(msg.data()));
                     ctx.get().setPacketHandled(true);
                 }, java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT)
         );
-        CHANNEL.<PlayInitPayload>registerMessage(
-                packetId++, PlayInitPayload.class,
-                PlayInitPayload::encode, PlayInitPayload::decode,
+        CHANNEL.<LoginHandshake.PlayInitPayload>registerMessage(
+                packetId++, LoginHandshake.PlayInitPayload.class,
+                LoginHandshake.PlayInitPayload::encode, LoginHandshake.PlayInitPayload::decode,
                 (msg, ctx) -> {
-                    ctx.get().enqueueWork(() -> onPlayInitReceived(msg));
+                    ctx.get().enqueueWork(() -> PlayInitClient.handle(msg));
                     ctx.get().setPacketHandled(true);
                 }, java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT)
         );
@@ -218,7 +219,7 @@ public class ForgeNetworkManager implements NetworkManager {
                 packetId++, LightDeltaWrapper.class,
                 LightDeltaWrapper::encode, LightDeltaWrapper::decode,
                 (msg, ctx) -> {
-                    ctx.get().enqueueWork(() -> handleLightDelta(msg));
+                    ctx.get().enqueueWork(() -> PayloadHandlers.handleLightDelta(msg.data()));
                     ctx.get().setPacketHandled(true);
                 }, java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT)
         );
@@ -262,34 +263,39 @@ public class ForgeNetworkManager implements NetworkManager {
                     .serverbound()
                         .addMain(BlockEntityRequestWrapper.class,
                                 playCodec(BlockEntityRequestWrapper::encode, BlockEntityRequestWrapper::decode),
-                                ForgeNetworkManager::onBlockEntityRequest)
+                                (msg, ctx) -> ctx.enqueueWork(() ->
+                                        PayloadHandlers.handleBlockEntityRequest(msg.data(), ctx.getSender())))
                         .addMain(CompressionReadyWrapper.class,
                                 playCodec(CompressionReadyWrapper::encode, CompressionReadyWrapper::decode),
-                                ForgeNetworkManager::onCompressionReady)
+                                (msg, ctx) -> ctx.enqueueWork(() ->
+                                        handleActivationReadyServer(ctx.getSender(), msg.ready())))
                         .addMain(ShadowPullRequestWrapper.class,
                                 playCodec(ShadowPullRequestWrapper::encode, ShadowPullRequestWrapper::decode),
-                                ForgeNetworkManager::onShadowPullRequest)
+                                (msg, ctx) -> ctx.enqueueWork(() -> handleShadowPullRequest(msg, ctx.getSender())))
                     .clientbound()
                         .addMain(AggregationWrapper.class,
                                 playCodec(AggregationWrapper::encode, AggregationWrapper::decode),
-                                ForgeNetworkManager::onAggregationClient)
+                                (msg, ctx) -> ctx.enqueueWork(() -> PayloadHandlers.handleAggregation(msg.data())))
                         .addMain(BlockEntityDataWrapper.class,
                                 playCodec(BlockEntityDataWrapper::encode, BlockEntityDataWrapper::decode),
-                                ForgeNetworkManager::onBlockEntityData)
+                                (msg, ctx) -> ctx.enqueueWork(() ->
+                                        PayloadHandlers.handleBlockEntityData(msg.data())))
                         .addMain(ShadowPullResponseWrapper.class,
                                 playCodec(ShadowPullResponseWrapper::encode, ShadowPullResponseWrapper::decode),
-                                ForgeNetworkManager::onShadowPullResponse)
+                                (msg, ctx) -> ctx.enqueueWork(() ->
+                                        PayloadHandlers.handleShadowPullResponse(msg.data())))
                         .addMain(DictionarySyncWrapper.class,
                                 playCodec(DictionarySyncWrapper::encode, DictionarySyncWrapper::decode),
-                                ForgeNetworkManager::onDictionarySync)
+                                (msg, ctx) -> ctx.enqueueWork(() ->
+                                        PayloadHandlers.handleDictionarySync(msg.data())))
                         .addMain(IndexSyncWrapper.class, playCodec(IndexSyncWrapper::encode, IndexSyncWrapper::decode),
-                                ForgeNetworkManager::onIndexSync)
-                        .addMain(PlayInitPayload.class,
-                                playCodec(PlayInitPayload::encode, PlayInitPayload::decode),
-                                ForgeNetworkManager::onPlayInit)
+                                (msg, ctx) -> ctx.enqueueWork(() -> ClientActivation.handleIndexSync(msg.data())))
+                        .addMain(LoginHandshake.PlayInitPayload.class,
+                                playCodec(LoginHandshake.PlayInitPayload::encode, LoginHandshake.PlayInitPayload::decode),
+                                (msg, ctx) -> ctx.enqueueWork(() -> PlayInitClient.handle(msg)))
                         .addMain(LightDeltaWrapper.class,
                                 playCodec(LightDeltaWrapper::encode, LightDeltaWrapper::decode),
-                                ForgeNetworkManager::onLightDelta)
+                                (msg, ctx) -> ctx.enqueueWork(() -> PayloadHandlers.handleLightDelta(msg.data())))
                 .build();
         LOGGER.info("Hassium: Registered Forge 50+ ChannelBuilder play channel (3 C2S + 8 S2C)");
     }
@@ -314,50 +320,6 @@ public class ForgeNetworkManager implements NetworkManager {
             playerId = io.github.limuqy.mc.hassium.compat.PlayerCompat.getProfileId(configListener.getOwner());
         }
         io.github.limuqy.mc.hassium.network.PreHandshakeProtocol.handlePreHandshake(playerId, msg);
-    }
-
-    private static void onPlayInit(PlayInitPayload msg, CustomPayloadEvent.Context ctx) {
-        // review-fix: T10-M1：consumer 在 netty 线程触发，封送主线程（同 legacy enqueueWork / Fabric server.execute）
-        ctx.enqueueWork(() -> onPlayInitReceived(msg));
-    }
-
-    private static void onLightDelta(LightDeltaWrapper msg, CustomPayloadEvent.Context ctx) {
-        ctx.enqueueWork(() -> handleLightDelta(msg));
-    }
-
-    private static void onAggregationClient(AggregationWrapper msg, CustomPayloadEvent.Context ctx) {
-        ctx.enqueueWork(() -> handleAggregationClient(msg));
-    }
-
-
-
-    private static void onShadowPullRequest(ShadowPullRequestWrapper msg, CustomPayloadEvent.Context ctx) {
-        ctx.enqueueWork(() -> handleShadowPullRequest(msg, ctx.getSender()));
-    }
-
-    private static void onShadowPullResponse(ShadowPullResponseWrapper msg, CustomPayloadEvent.Context ctx) {
-        ctx.enqueueWork(() -> handleShadowPullResponse(msg));
-    }
-
-    private static void onBlockEntityRequest(BlockEntityRequestWrapper msg, CustomPayloadEvent.Context ctx) {
-        ctx.enqueueWork(() -> handleBlockEntityRequest(msg, ctx.getSender()));
-    }
-
-    private static void onBlockEntityData(BlockEntityDataWrapper msg, CustomPayloadEvent.Context ctx) {
-        ctx.enqueueWork(() -> handleBlockEntityData(msg));
-    }
-
-
-    private static void onDictionarySync(DictionarySyncWrapper msg, CustomPayloadEvent.Context ctx) {
-        ctx.enqueueWork(() -> handleDictionarySyncClient(msg.data()));
-    }
-
-    private static void onIndexSync(IndexSyncWrapper msg, CustomPayloadEvent.Context ctx) {
-        ctx.enqueueWork(() -> handleIndexSyncClient(msg.data()));
-    }
-
-    private static void onCompressionReady(CompressionReadyWrapper msg, CustomPayloadEvent.Context ctx) {
-        ctx.enqueueWork(() -> handleActivationReadyServer(ctx.getSender(), msg.ready()));
     }
 
     private static void sendToPlayer(ServerPlayer player, Object msg) {
@@ -406,34 +368,6 @@ public class ForgeNetworkManager implements NetworkManager {
     // ========== 辅助方法 ==========
 
     // ========== 共享处理逻辑 ==========
-
-    /**
-     * play_init 客户端 receiver：转调 common {@code PlayInitClient.handle}——
-     * 协商位入 ClientLoginNegotiation、globalCompression 协商 → 安装 ZSTD 并回
-     * compression_ready、seedGen 协商 → 影子端种子初始化（时序与 1.1.2 期握手一致）。
-     */
-    private static void onPlayInitReceived(PlayInitPayload msg) {
-        io.github.limuqy.mc.hassium.network.handshake.PlayInitClient.handle(
-                new io.github.limuqy.mc.hassium.network.handshake.LoginHandshake.PlayInitPayload(
-                        msg.negotiatedCaps(), msg.worldSeed(), msg.stemNbt(), msg.seedGenEnabled()));
-    }
-
-    /**
-     * light_delta 客户端 receiver：直连拓扑光照增量经 vanilla play 通道回传，
-     * 消费方为影子端 {@code ShadowLightCompute.submitLightDelta}（任意线程安全）。
-     */
-    private static void handleLightDelta(LightDeltaWrapper msg) {
-        FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data()));
-        try {
-            io.github.limuqy.mc.hassium.network.LightDeltaS2CPacket packet =
-                    io.github.limuqy.mc.hassium.network.LightDeltaS2CPacket.decode(buf);
-            io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.submitLightDelta(packet);
-        } catch (Exception e) {
-            LOGGER.error("Hassium: Failed to handle light delta packet", e);
-        } finally {
-            buf.release();
-        }
-    }
 
     /**
      * compression_ready 服务端 handler：转调 common {@code ServerHandshakeActivation.handleActivationReady}
@@ -504,99 +438,27 @@ public class ForgeNetworkManager implements NetworkManager {
         }
     }
 
-    private static void handleAggregationClient(AggregationWrapper msg) {
-
-        FriendlyByteBuf packetBuf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data()));
-        try {
-            var clientConn = net.minecraft.client.Minecraft.getInstance().getConnection();
-            if (clientConn == null) {
-                LOGGER.error("Hassium: Received aggregation packet but no client connection");
-                return;
-            }
-            NamespaceIndexManager indexManager = IndexSyncManager.getInstance().getClientIndexManager();
-            if (indexManager == null) {
-                LOGGER.error("Hassium: Received aggregation packet but client index manager not initialized");
-                return;
-            }
-            HassiumAggregationPacket.decode(packetBuf, indexManager).handle(clientConn.getConnection());
-        } catch (Throwable e) { // review-fix: T13-C1（decode 校验抛 IllegalArgumentException/Error 均须收敛，防 OOM 后链路悬挂）
-            LOGGER.error("Hassium: Failed to handle aggregation packet", e);
-        } finally {
-            packetBuf.release();
-        }
-    }
-
+    /**
+     * shadow_pull_request 传输面：解码 + 权威应答在 common
+     * {@link PayloadHandlers#handleShadowPullRequest}，本方法只保留 catch 与
+     * {@link ShadowPullResponseWrapper} 回发载体（两版本段共用）。
+     */
     private static void handleShadowPullRequest(ShadowPullRequestWrapper msg, ServerPlayer player) {
         if (player == null) {
             return;
         }
-        FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data()));
         try {
-            ShadowPullRequestC2SPacket request = ShadowPullRequestC2SPacket.decode(buf);
-            String dimension = io.github.limuqy.mc.hassium.compat.LevelCompat.getDimensionId(player.level());
-            ShadowPullResponseS2CPacket response = SHADOW_PULL_HANDLER.handle(player.getUUID(), request,
-                    dimension, request.epoch(), player.chunkPosition().x, player.chunkPosition().z,
-                    io.github.limuqy.mc.hassium.compat.PlayerCompat.getViewDistance(player)
-                            + io.github.limuqy.mc.hassium.network.ShadowPullRadii.AUTHORITY_MARGIN,
-                    true, player.isAlive() && !player.hasDisconnected(),
-                    (req, entry) -> ServerChunkPushManager.getInstance().resolveShadowPull(player, req, entry, dimension));
-            FriendlyByteBuf out = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
-            try {
-                response.encode(out);
-                byte[] data = new byte[out.readableBytes()];
-                out.readBytes(data);
+            byte[] response = PayloadHandlers.handleShadowPullRequest(SHADOW_PULL_HANDLER, player, msg.data());
 #if MC_VER < MC_1_21_1
-                if (CHANNEL != null) {
-                    CHANNEL.sendTo(new ShadowPullResponseWrapper(data),
-                            player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
-                }
-#else
-                sendToPlayer(player, new ShadowPullResponseWrapper(data));
-#endif
-            } finally {
-                out.release();
+            if (CHANNEL != null) {
+                CHANNEL.sendTo(new ShadowPullResponseWrapper(response),
+                        player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
             }
+#else
+            sendToPlayer(player, new ShadowPullResponseWrapper(response));
+#endif
         } catch (Exception e) {
             LOGGER.warn("[SERVER] Failed to handle shadowPullV1 request", e);
-        } finally {
-            buf.release();
-        }
-    }
-
-
-
-
-    private static void handleShadowPullResponse(ShadowPullResponseWrapper msg) {
-        FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data()));
-        try {
-            ShadowPullClient.handleResponse(ShadowPullResponseS2CPacket.decode(buf));
-        } catch (Exception e) {
-            LOGGER.warn("[CLIENT] Failed to handle shadowPullV1 response", e);
-        } finally {
-            buf.release();
-        }
-    }
-
-    private static void handleBlockEntityRequest(BlockEntityRequestWrapper msg, ServerPlayer player) {
-        try {
-            if (player == null) {
-                return;
-            }
-            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data()));
-            BlockEntityRequestC2SPacket request = BlockEntityRequestC2SPacket.decode(buf);
-            ServerChunkPushManager.getInstance().handleBlockEntityRequest(player, request);
-        } catch (Exception e) {
-            LOGGER.error("Hassium: Failed to handle block entity request", e);
-        }
-    }
-
-    private static void handleBlockEntityData(BlockEntityDataWrapper msg) {
-        try {
-            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(msg.data()));
-            BlockEntityDataS2CPacket packet = BlockEntityDataS2CPacket.decode(buf);
-            ClientMetadataHandler.handleBlockEntityDataPacket(packet);
-        } catch (Exception e) {
-            LOGGER.error("Hassium: Failed to handle block entity data packet", e);
         }
     }
 
@@ -661,36 +523,8 @@ public class ForgeNetworkManager implements NetworkManager {
 
     // ========== 数据包记录 ==========
 
-    /**
-     * Play 期激活（S2C）：登录协商结果 + SeedGen 种子。
-     * wire 布局与 common {@code LoginHandshake.PlayInitPayload} 完全一致
-     * （客户端 receiver 转调 {@code PlayInitClient.handle}）。
-     */
-    public record PlayInitPayload(int negotiatedCaps, long worldSeed, byte[] stemNbt,
-                                  boolean seedGenEnabled) {
-        public void encode(FriendlyByteBuf buf) {
-            buf.writeVarInt(negotiatedCaps);
-            buf.writeLong(worldSeed);
-            buf.writeVarInt(stemNbt != null ? stemNbt.length : 0);
-            if (stemNbt != null) {
-                buf.writeBytes(stemNbt);
-            }
-            buf.writeBoolean(seedGenEnabled);
-        }
-
-        public static PlayInitPayload decode(FriendlyByteBuf buf) {
-            int caps = buf.readVarInt();
-            long worldSeed = buf.readLong();
-            int stemLen = buf.readVarInt();
-            byte[] stemNbt = null;
-            if (stemLen > 0 && stemLen <= buf.readableBytes()) {
-                stemNbt = new byte[stemLen];
-                buf.readBytes(stemNbt);
-            }
-            boolean enabled = buf.readableBytes() >= 1 && buf.readBoolean();
-            return new PlayInitPayload(caps, worldSeed, stemNbt, enabled);
-        }
-    }
+    // play_init S2C 记录已删除：直接注册 common {@link LoginHandshake.PlayInitPayload}
+    // （wire 布局与原本地 record 逐字节一致，receiver 转调 PlayInitClient.handle）。
 
     public record ShadowPullRequestWrapper(byte[] data) {
         public void encode(FriendlyByteBuf buf) { buf.writeVarInt(data.length); buf.writeBytes(data); }
@@ -839,22 +673,13 @@ public class ForgeNetworkManager implements NetworkManager {
 
     private static void sendDictionarySyncPacket(ServerPlayer player) {
         try {
-            byte[] aggregationDict = DictionaryManager.getAggregationDict();
-            if (aggregationDict == null) {
-                aggregationDict = new byte[0];
-            }
-            DictionarySyncPayload payload = new DictionarySyncPayload(aggregationDict, false);
-            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
-            payload.encode(buf);
-            byte[] data = new byte[buf.readableBytes()];
-            buf.readBytes(data);
-            buf.release();
+            byte[] body = PayloadHandlers.encodeDictionarySyncBody(DictionaryManager.getAggregationDict());
 #if MC_VER < MC_1_21_1
-            CHANNEL.sendTo(new DictionarySyncWrapper(data), player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
+            CHANNEL.sendTo(new DictionarySyncWrapper(body), player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
 #else
-            sendToPlayer(player, new DictionarySyncWrapper(data));
+            sendToPlayer(player, new DictionarySyncWrapper(body));
 #endif
-            LOGGER.debug("Hassium: Sent dictionary sync packet ({} bytes)", aggregationDict.length);
+            LOGGER.debug("Hassium: Sent dictionary sync packet ({} bytes)", body.length);
         } catch (Exception e) {
             LOGGER.error("Hassium: Failed to send dictionary sync packet", e);
         }
@@ -862,72 +687,29 @@ public class ForgeNetworkManager implements NetworkManager {
 
     private static void sendIndexSyncPacket(ServerPlayer player) {
         try {
-            IndexSyncManager indexSyncManager = IndexSyncManager.getInstance();
-            indexSyncManager.initializeServerIndex();
-            IndexSyncPacket syncPacket = indexSyncManager.createSyncPacket();
-            byte[] encoded = syncPacket.encode();
-            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
-            buf.writeVarInt(encoded.length);
-            buf.writeBytes(encoded);
-            byte[] data = new byte[buf.readableBytes()];
-            buf.readBytes(data);
-            buf.release();
+            byte[] envelope = PayloadHandlers.encodeIndexSyncEnvelope();
 #if MC_VER < MC_1_21_1
-            CHANNEL.sendTo(new IndexSyncWrapper(data), player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
+            CHANNEL.sendTo(new IndexSyncWrapper(envelope), player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
 #else
-            sendToPlayer(player, new IndexSyncWrapper(data));
+            sendToPlayer(player, new IndexSyncWrapper(envelope));
 #endif
-            LOGGER.debug("Hassium: Sent index sync packet ({} bytes)", encoded.length);
+            LOGGER.debug("Hassium: Sent index sync packet ({} bytes)", envelope.length);
         } catch (Exception e) {
             LOGGER.error("Hassium: Failed to send index sync packet", e);
-        }
-    }
-
-    private static void handleDictionarySyncClient(byte[] data) {
-        try {
-            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(data));
-            DictionarySyncPayload payload = DictionarySyncPayload.decode(buf);
-            DictionaryManager.setAggregationDict(payload.dictionary());
-            LOGGER.debug("Hassium: Received aggregation dictionary ({} bytes)",
-                    payload.dictionary() != null ? payload.dictionary().length : 0);
-        } catch (Exception e) {
-            LOGGER.error("Hassium: Failed to handle dictionary sync", e);
-        }
-    }
-
-    private static void handleIndexSyncClient(byte[] data) {
-        try {
-            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(data));
-            int dataLength = buf.readVarInt();
-            byte[] packetData = new byte[dataLength];
-            buf.readBytes(packetData);
-            IndexSyncPacket syncPacket = IndexSyncPacket.decode(packetData);
-            IndexSyncManager indexSyncManager = IndexSyncManager.getInstance();
-            NamespaceIndexManager clientIndexManager = indexSyncManager.handleSyncPacket("client", syncPacket);
-
-            var conn = net.minecraft.client.Minecraft.getInstance().getConnection();
-            if (conn != null) {
-                Connection connection = conn.getConnection();
-                HassiumConnectionRegistry.markEnabled(connection);
-                HassiumAggregationManager.init();
-                sendCompressionReadyToServer();
-            }
-            LOGGER.debug("Hassium: Received index sync ({} types), sent compression ready",
-                    clientIndexManager.size());
-        } catch (Exception e) {
-            LOGGER.error("Hassium: Failed to handle index sync", e);
         }
     }
 
     // ========== SPI（INetworkManagerService 直连拓扑实现） ==========
 
     /** 字典同步（服务端调用；Play 期服务端 ZSTD 安装后由 common 握手链经 SPI 下发）。 */
-    public static void sendDictionarySync(ServerPlayer player) {
+    @Override
+    public void sendDictionarySync(ServerPlayer player) {
         sendDictionarySyncPacket(player);
     }
 
     /** 包索引同步（服务端调用）。 */
-    public static void sendIndexSync(ServerPlayer player) {
+    @Override
+    public void sendIndexSync(ServerPlayer player) {
         sendIndexSyncPacket(player);
     }
 
@@ -935,16 +717,17 @@ public class ForgeNetworkManager implements NetworkManager {
      * Play 期激活下发（服务端调用；登录协商完成且玩家 connection 挂载后，
      * common {@code ServerHandshakeActivation} 经 SPI 调用）。
      */
-    public static void sendPlayInit(ServerPlayer player, int negotiatedCaps, long worldSeed,
-                                    byte[] stemNbt, boolean seedGenEnabled) {
+    @Override
+    public void sendPlayInit(ServerPlayer player, int negotiatedCaps, long worldSeed,
+                             byte[] stemNbt, boolean seedGenEnabled) {
         try {
 #if MC_VER < MC_1_21_1
             if (CHANNEL != null) {
-                CHANNEL.sendTo(new PlayInitPayload(negotiatedCaps, worldSeed, stemNbt, seedGenEnabled),
+                CHANNEL.sendTo(new LoginHandshake.PlayInitPayload(negotiatedCaps, worldSeed, stemNbt, seedGenEnabled),
                         player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
             }
 #else
-            sendToPlayer(player, new PlayInitPayload(negotiatedCaps, worldSeed, stemNbt, seedGenEnabled));
+            sendToPlayer(player, new LoginHandshake.PlayInitPayload(negotiatedCaps, worldSeed, stemNbt, seedGenEnabled));
 #endif
             LOGGER.info("Hassium: Sent play init to {} (caps={})", player.getName().getString(),
                     io.github.limuqy.mc.hassium.network.handshake.LoginHandshake.describeCaps(negotiatedCaps));
@@ -953,8 +736,9 @@ public class ForgeNetworkManager implements NetworkManager {
         }
     }
 
-    /** 客户端 compression_ready ACK（C2S；Play 期客户端 ZSTD 安装完成后由 PlayInitClient 经 SPI 调用）。 */
-    public static void sendCompressionReady() {
+    /** SPI：客户端 compression_ready ACK（C2S；common {@code ClientActivation} 经 Services.NETWORK_MANAGER 消费）。 */
+    @Override
+    public void sendCompressionReady() {
         sendCompressionReadyToServer();
     }
 }

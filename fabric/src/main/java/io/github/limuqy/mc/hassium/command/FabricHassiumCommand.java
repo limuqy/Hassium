@@ -1,6 +1,7 @@
 package io.github.limuqy.mc.hassium.command;
 
 import com.mojang.brigadier.CommandDispatcher;
+import com.mojang.brigadier.arguments.LongArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import com.mojang.brigadier.context.CommandContext;
@@ -70,9 +71,12 @@ public class FabricHassiumCommand {
                 )
                 .then(ClientCommandManager.literal("export")
                         .executes(FabricHassiumCommand::exportCurrentWorld)
-                        .then(ClientCommandManager.argument("args", StringArgumentType.greedyString())
+                        .then(ClientCommandManager.argument("serverIp", StringArgumentType.word())
                                 .suggests(FabricHassiumCommand::suggestCachedServers)
                                 .executes(FabricHassiumCommand::exportWithArgs)
+                                .then(ClientCommandManager.argument("seed", LongArgumentType.longArg())
+                                        .executes(FabricHassiumCommand::exportWithArgs)
+                                )
                         )
         );
         dispatcher.register(hassiumc);
@@ -91,25 +95,14 @@ public class FabricHassiumCommand {
         return 1;
     }
 
-    /** 解析参数：serverIp [seed] */
+    /** 解析参数：serverIp [seed]（brigadier 正式参数，自带类型校验与补全） */
     private static int exportWithArgs(CommandContext<FabricClientCommandSource> context) {
-        String args = StringArgumentType.getString(context, "args");
-        String serverIp;
+        String serverIp = StringArgumentType.getString(context, "serverIp");
         Long seed = null;
-
-        // 解析：最后一个空格后的部分如果能解析为 long 则是 seed
-        int lastSpace = args.lastIndexOf(' ');
-        if (lastSpace > 0) {
-            String lastPart = args.substring(lastSpace + 1);
-            try {
-                seed = Long.parseLong(lastPart);
-                serverIp = args.substring(0, lastSpace);
-            } catch (NumberFormatException e) {
-                // 不是数字，整个 args 是 serverIp
-                serverIp = args;
-            }
-        } else {
-            serverIp = args;
+        try {
+            seed = LongArgumentType.getLong(context, "seed");
+        } catch (IllegalArgumentException ignored) {
+            // 未提供 seed
         }
 
         String msg = HassiumCommandHandler.startCacheExport(serverIp, seed);
