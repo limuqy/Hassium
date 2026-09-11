@@ -144,7 +144,7 @@ fabric/ | forge/ | neoforge/
 |----|------|------|
 | `storage.enabled` | **false** | 默认关；开启后改存档格式（type 126）→ 提醒备份；仅专用服务器写，单人/局域网保持原版格式（读兼容）；客户端影子端（hassium_cache）固定写 126，不受本开关约束 |
 | `master.enabled` | true | 服务端网络通道总开关（登录期握手/聚合的门） |
-| `master.maxChunksPerTick` | 4 | 每玩家每 tick 提交上限（满 tick ≈ 80/s） |
+| `master.maxChunksPerTick` | 5 | 每玩家每 tick 完成的 Pull FULL/DELTA 上限（满 tick ≈ 100/s；UNCHANGED 另额 32） |
 | `chunk.enabled` | true | 区块核心总开关（影子端世界保存/算光/缓存/Pull 模式；关后全程原版路径） |
 | `chunk.seedGenEnabled` | **false** | 双端同版本；**服务端开启会泄露世界种子** |
 | `chunk.sectionDeltaEnabled` | true | 分段增量 |

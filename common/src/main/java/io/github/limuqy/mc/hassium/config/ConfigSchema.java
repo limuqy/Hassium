@@ -78,9 +78,9 @@ public final class ConfigSchema {
     public static final ConfigKey<List<String>> MASTER_COMPRESSION_BLACKLIST = stringList("master.compressionBlacklist", ConfigScope.SERVER, Domain.MASTER_CORE,
             () -> new ArrayList<>(HassiumConfig.MasterCoreConfig.DEFAULT_COMPRESSION_BLACKLIST),
             "压缩/聚合黑名单", "Compression / aggregation blacklist");
-    public static final ConfigKey<Integer> MASTER_MAX_CHUNKS_PER_TICK = integer("master.maxChunksPerTick", ConfigScope.SERVER, Domain.MASTER_CORE, 4, 1, 256,
-            "每玩家每 tick 提交到后台序列化的区块上限（满 tick ≈ 本值×20/s）",
-            "Per-player per-tick chunk submit cap (≈ value×20/s at full tick)");
+    public static final ConfigKey<Integer> MASTER_MAX_CHUNKS_PER_TICK = integer("master.maxChunksPerTick", ConfigScope.SERVER, Domain.MASTER_CORE, 5, 1, 256,
+            "每玩家每 tick 完成的 Pull 裁决上限（FULL/DELTA；满 tick ≈ 本值×20/s）",
+            "Per-player per-tick Pull completion cap for FULL/DELTA (≈ value×20/s at full tick)");
     public static final ConfigKey<Integer> MASTER_SERVER_PUSH_THREADS = integer("master.serverChunkPushThreads", ConfigScope.SERVER, Domain.MASTER_CORE, 4, 1, 64,
             "服务端区块推送消费线程数（取批调度；实际计算走 CPU 核数全局池）",
             "Server chunk-push consumer thread count (batch dispatch; compute runs on the global CPU-count pool)");

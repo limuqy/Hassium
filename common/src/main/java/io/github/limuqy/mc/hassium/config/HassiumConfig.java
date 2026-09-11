@@ -154,7 +154,7 @@ public record HassiumConfig(
                 50,                // aggregationMaxWaitTimeMs
                 256 * 1024,        // aggregationMaxSize
                 DEFAULT_COMPRESSION_BLACKLIST,
-                4,                 // maxChunksPerTick（满 tick ≈ 80/s）
+                5,                 // maxChunksPerTick（Pull FULL/DELTA 完成配额，满 tick ≈ 100/s）
                 4                  // serverChunkPushThreads
         );
     }

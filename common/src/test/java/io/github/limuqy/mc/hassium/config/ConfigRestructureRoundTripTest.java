@@ -184,8 +184,8 @@ class ConfigRestructureRoundTripTest {
         assertEquals(4, values.get(ConfigSchema.MASTER_AGGREGATION_MIN_BATCH));
         assertEquals(50L, values.get(ConfigSchema.MASTER_AGGREGATION_MAX_WAIT));
         assertEquals(256 * 1024, values.get(ConfigSchema.MASTER_AGGREGATION_MAX_SIZE));
-        // master.maxChunksPerTick / serverChunkPushThreads 默认 4
-        assertEquals(4, values.get(ConfigSchema.MASTER_MAX_CHUNKS_PER_TICK));
+        // master.maxChunksPerTick / serverChunkPushThreads 默认 5 / 4
+        assertEquals(5, values.get(ConfigSchema.MASTER_MAX_CHUNKS_PER_TICK));
         assertEquals(4, values.get(ConfigSchema.MASTER_SERVER_PUSH_THREADS));
         // storage.enabled 默认 false（REQ 决策 6 修正 lang 错误）
         assertEquals(false, values.get(ConfigSchema.STORAGE_ENABLED));

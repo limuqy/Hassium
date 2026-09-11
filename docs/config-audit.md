@@ -88,7 +88,7 @@
 | `master.aggregationMaxWaitTimeMs` | `50` | 聚合最大等待时间（ms；ACK 超时 5s 自动降级直发） |
 | `master.aggregationMaxSize` | `262144` | 聚合最大大小（字节） |
 | `master.compressionBlacklist` | 控制面键集 | 压缩/聚合黑名单（控制面不进聚合缓冲） |
-| `master.maxChunksPerTick` | `4` | 每玩家每 tick 提交到后台序列化的区块上限（满 tick ≈ 本值×20/s） |
+| `master.maxChunksPerTick` | `5` | 每玩家每 tick 完成的 Pull FULL/DELTA 上限（满 tick ≈ 本值×20/s；UNCHANGED 另额 32） |
 | `master.serverChunkPushThreads` | `4` | 服务端区块推送固定线程数（encode / hash / ZSTD） |
 
 **B4. compat.\*（2 键）**

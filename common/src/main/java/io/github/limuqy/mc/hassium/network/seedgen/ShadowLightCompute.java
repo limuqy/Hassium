@@ -1941,7 +1941,10 @@ public final class ShadowLightCompute {
                 if (isChunk) {
                     forceOne = false;
                     chunksAppliedThisFrame++;
+                    long applyStartNs = System.nanoTime();
                     releaseEntry = applyReadyChunk(mc, connection, entry, item);
+                    io.github.limuqy.mc.hassium.utils.ChunkFlowTiming.recordApplyWall(
+                            System.nanoTime() - applyStartNs, ready.size());
                 } else if (isLight) {
                     long chunkKey = DimensionKey.key(entry.key().dimension(), entry.key().posLong());
                     if (!shadowApplyEpochs.containsKey(chunkKey)

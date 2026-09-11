@@ -312,7 +312,7 @@ public class NeoForgeNetworkManager implements INetworkManagerService {
 
         // 聚合帧 S2C（客户端影子端 decode 统计 zstd/vanilla 流量锚点）
         registrar.playToClient(AGGREGATION_TYPE, codec(AGGREGATION_TYPE),
-                (payload, ctx) -> ctx.enqueueWork(() -> PayloadHandlers.handleAggregation(payload.data())));
+                (payload, ctx) -> AggregationDecodeQueue.enqueueClient(payload.data()));
 
         LOGGER.info("Hassium: Registered all NeoForge payload handlers");
     }

@@ -62,7 +62,7 @@ Hassium 启动时在 `config/hassium/` 自动生成两份 TOML：
 | `master.aggregationMaxWaitTimeMs` | `50` | 聚合最大等待时间（ms；ACK 超时 5s 自动降级直发） |
 | `master.aggregationMaxSize` | `262144` | 聚合最大大小（字节） |
 | `master.compressionBlacklist` | 控制面键集 | 包 ID 列表，命中的包不进压缩/聚合（默认含控制面：握手 / 字典 / 索引 / chunkHash / 光增量 / BE 数据等） |
-| `master.maxChunksPerTick` | `4` | 每玩家每 tick 提交上限（发送速率 = 本值 × tick 节奏，满 tick ≈ 4×20 = 80/s；掉刻自然降速保护主线程） |
+| `master.maxChunksPerTick` | `5` | 每玩家每 tick 完成的 Pull FULL/DELTA 上限（发送速率 = 本值 × tick 节奏，满 tick ≈ 5×20 = 100/s；UNCHANGED 另额 32；掉刻自然降速保护主线程） |
 | `master.serverChunkPushThreads` | `4` | 服务端区块推送固定线程数（encode / hash / ZSTD 后台池） |
 
 ### 存储（`storage.*`）

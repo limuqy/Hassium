@@ -21,7 +21,7 @@
 | --- | --- | --- |
 | **Efficient compression** | Storage compression | Chunk ZSTD on disk (type 126), significantly smaller saves; keeps vanilla Region (`.mca`) layout |
 | | Channel compression | Dictionary ZSTD inside aggregated packets + chunk-push native compression; never touches the vanilla compression layer, no cross-mod pipeline conflicts |
-| **Network optimization** | Smooth push | Server-side per-tick submit cap (`master.maxChunksPerTick`, degrades naturally on laggy ticks) + fully backgrounded encode/compress/send; joins never saturate the main thread |
+| **Network optimization** | Smooth push | Per-player per-tick Pull completion cap (`master.maxChunksPerTick`, degrades naturally on laggy ticks) + backgrounded encode/compress; joins never saturate the main thread |
 | | Login-phase capability handshake | `hassium:login_hello` login query on 1.20.1, config-stage payload on 1.20.2+; bitwise capability negotiation with no timeout dependency and zero interference for vanilla clients |
 | | Pull mode | After negotiation the server stops pushing full chunks; chunk data is fetched by the unified Compare+Pull driven by the client shadow virtual player's vanilla tracking |
 | **Chunk cache** | Shadow-world saving | Join chunks are lit and saved into a vanilla save dir (`hassium_cache/<serverId>/world`) by an in-process shadow server (full MinecraftServer); saved on disconnect, reused on reconnect |

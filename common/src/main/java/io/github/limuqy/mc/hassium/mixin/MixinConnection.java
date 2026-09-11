@@ -4,12 +4,16 @@ import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.network.handshake.LoginHandshakeManager;
 import io.github.limuqy.mc.hassium.network.HassiumConnectionRegistry;
 import io.github.limuqy.mc.hassium.network.HassiumAggregationManager;
+import io.github.limuqy.mc.hassium.network.AggregationDecodeQueue;
 import io.github.limuqy.mc.hassium.network.PacketCompressionBlacklist;
 import io.github.limuqy.mc.hassium.network.PacketTypeHelper;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
+import io.github.limuqy.mc.hassium.compat.PacketPayloadCompat;
+import io.netty.channel.ChannelHandlerContext;
 import net.minecraft.network.Connection;
 import net.minecraft.network.PacketListener;
 import net.minecraft.network.protocol.Packet;
+import net.minecraft.network.protocol.PacketFlow;
 import net.minecraft.server.network.ServerGamePacketListenerImpl;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
@@ -31,6 +35,28 @@ public class MixinConnection {
 
     @Shadow
     private PacketListener packetListener;
+
+    @Shadow
+    private PacketFlow receiving;
+
+    /**
+     * 客户端入站：在 {@code PacketUtils} 跳主线程之前拦聚合帧，只拷贝 body 入 FIFO 工人。
+     */
+    @Inject(method = "channelRead0", at = @At("HEAD"), cancellable = true)
+    private void hassium$interceptClientAggregation(ChannelHandlerContext ctx, Packet<?> packet, CallbackInfo ci) {
+        if (receiving != PacketFlow.CLIENTBOUND) {
+            return;
+        }
+        if (!PacketTypeHelper.isAggregationPacket(packet)) {
+            return;
+        }
+        byte[] data = PacketPayloadCompat.extractPayloadData(packet);
+        if (data != null && data.length > 0) {
+            AggregationDecodeQueue.enqueue((Connection) (Object) this, data);
+        }
+        // 1.20.1 getData() 会消费 buffer：识别为聚合帧后必须 cancel，不能再交给原版。
+        ci.cancel();
+    }
 
     // review-fix: T7-59: handler 统一加 hassium$ 前缀（Mixin 惯例，避免与目标类未来同名成员 merge 冲突）
 #if MC_VER < MC_1_21_6
@@ -110,6 +136,7 @@ public class MixinConnection {
         Connection self = (Connection) (Object) this;
         HassiumConnectionRegistry.markDisabled(self);
         HassiumAggregationManager.discardConnection(self);
+        AggregationDecodeQueue.discard(self);
         LoginHandshakeManager.onDisconnect(self);
     }
 }

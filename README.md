@@ -25,7 +25,7 @@
 | --- | --- | --- |
 | **高效压缩** | 存储压缩 | 世界区块 ZSTD 落盘（type 126），存档体积显著减小；仍兼容原版 Region（`.mca`）布局 |
 | | 通道压缩 | 聚合包内部字典 ZSTD + 区块推送自有压缩；不触碰原版压缩层，无跨 mod 管线冲突面 |
-| **网络优化** | 平滑推送 | 服务端每 tick 提交上限限速（`master.maxChunksPerTick`，满 tick ≈ 值×20/s）+ encode/压缩/发送全路径后台化；进服不卡主线程 |
+| **网络优化** | 平滑推送 | 服务端每 tick Pull 完成上限限速（`master.maxChunksPerTick`，满 tick ≈ 值×20/s）+ encode/压缩后台化；进服不卡主线程 |
 | | 登录期能力握手 | 1.20.1 走 `hassium:login_hello` login query，1.20.2+ 走配置阶段 `PreHandshakePayload`；按位与协商能力位，无超时依赖，原版客户端零干扰 |
 | | Pull 模式 | 协商通过后服务端停发整柱推送，区块数据由客户端影子虚拟玩家 tracking 驱动的统一 Compare+Pull 拉取（`ShadowPull`：UNCHANGED / DELTA / FULL / ERROR 四终态） |
 | **区块缓存** | 影子端世界保存 | 进服区块统一由进程内影子服务端（完整 MinecraftServer）算光并落盘原版存档（`hassium_cache/<serverId>/world`），断连保存、重连复用 |
@@ -98,7 +98,7 @@ Forge 支持 1.20.1 / 1.21.1 / 1.21.3–1.21.10（1.21.2 上游无 Forge userdev
 | `storage.enabled` | `false` | 世界存档 ZSTD（默认关；仅专用服务器，请备份） |
 | `storage.zstdLevel` | `3` | 存储 ZSTD 压缩等级 |
 | `master.enabled` | `true` | 服务端网络通道总开关（登录期握手/聚合的门） |
-| `master.maxChunksPerTick` | `4` | 每玩家每 tick 提交上限（满 tick ≈ 值×20/s） |
+| `master.maxChunksPerTick` | `5` | 每玩家每 tick 完成的 Pull FULL/DELTA 上限（满 tick ≈ 值×20/s） |
 | `master.enablePacketAggregation` | `true` | 包聚合 |
 | `master.aggregationMaxWaitTimeMs` | `50` | 聚合最大等待（ms；ACK 超时 5s 自动降级直发） |
 | `master.aggregationMaxSize` | `262144` | 聚合最大大小（字节） |

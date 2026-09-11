@@ -84,10 +84,9 @@ public class ServerChunkPushManager {
     private static final int SECTION_DELTA_VIEW_MARGIN = 1;
 
     /**
-     * Bloom hit 只发 hash：不占 full chunk 批队列配额。
-     * 与 resync 同量级，避免 R2 有缓存时仍按 maxChunksPerTick=5 滴灌导致空窗。
+     * UNCHANGED 每 tick 配额（不占 FULL/DELTA）。与 {@link PullPacingValve#UNCHANGED_PER_TICK} 同值。
      */
-    static final int HASH_SENDS_PER_TICK = 32;
+    static final int HASH_SENDS_PER_TICK = PullPacingValve.UNCHANGED_PER_TICK;
 
     /**
      * 每玩家推送队列：per-player FIFO 批次队列 + 每 tick 封批（≤maxChunksPerTick）。
@@ -126,58 +125,141 @@ public class ServerChunkPushManager {
     }
 
     /**
-     * pull 未就绪柱待推送队列（生成/算光完成后主动推送；超时/已不在加载列表即失败，客户端不重试）。
-     * <p>
-     * 请求即按需加载：入队时为该柱登记原版 {@code net.minecraft.server.level.TicketType.FORCED} FULL 票（引用计数，
-     * 推送/失败后释放）——未就绪柱由原版 chunk 系统异步推进，与原版推送管线同一就绪态
-     * （{@code getTickingChunk()} = FULL），不等光照彻底收敛（FULL 前置 LIGHT 已算）。
+     * 每玩家 Pull 工作队列。收包只入队；hash/比较/编码在 tick 阀门后。
+     * 未就绪柱仅在 lookahead 内持 FORCED 票（只装载，入队当时不发票）。
      */
-    private record PendingPull(ServerPlayer player, ServerLevel level, String dimension,
-                               ShadowPullRequestC2SPacket.Entry entry,
-                               long requestId, long epoch, long enqueueNanos) {}
+    private static final class PendingPull {
+        final ServerPlayer player;
+        final ServerLevel level;
+        final String dimension;
+        final ShadowPullRequestC2SPacket.Entry entry;
+        final long requestId;
+        final long epoch;
+        final long enqueueNanos;
+        boolean ticketed;
+        long ticketNanos;
 
-    private final java.util.ArrayDeque<PendingPull> pendingPulls = new java.util.ArrayDeque<>();
+        PendingPull(ServerPlayer player, ServerLevel level, String dimension,
+                    ShadowPullRequestC2SPacket.Entry entry, long requestId, long epoch) {
+            this.player = player;
+            this.level = level;
+            this.dimension = dimension;
+            this.entry = entry;
+            this.requestId = requestId;
+            this.epoch = epoch;
+            this.enqueueNanos = System.nanoTime();
+        }
+
+        ServerPlayer player() {
+            return player;
+        }
+
+        ServerLevel level() {
+            return level;
+        }
+
+        String dimension() {
+            return dimension;
+        }
+
+        ShadowPullRequestC2SPacket.Entry entry() {
+            return entry;
+        }
+
+        long requestId() {
+            return requestId;
+        }
+
+        long epoch() {
+            return epoch;
+        }
+
+        long enqueueNanos() {
+            return enqueueNanos;
+        }
+    }
+
+    private final Map<UUID, ArrayDeque<PendingPull>> pullQueues = new ConcurrentHashMap<>();
     /** 按需加载引用计数：pos → 持有 FORCED 票的未就绪 pull 数（归零移除原版票）。 */
     private final java.util.Map<Long, Integer> demandTicketRefs = new java.util.HashMap<>();
     private static final int MAX_PENDING_PULLS = 4096;
     private static final long PENDING_PULL_TIMEOUT_NANOS = 15_000_000_000L;
-    /** 单 tick 主动推送上限（与请求分批同理，防首帧风暴；剩余下轮续发）。 */
-    private static final int MAX_PENDING_SENDS_PER_TICK = 128;
+
+    private int totalPullQueued() {
+        int n = 0;
+        for (ArrayDeque<PendingPull> q : pullQueues.values()) {
+            n += q.size();
+        }
+        return n;
+    }
 
     private void enqueuePendingPull(ServerPlayer player, ServerLevel level,
                                     ShadowPullRequestC2SPacket request,
-                                    ShadowPullRequestC2SPacket.Entry entry, String dimension, ChunkPos pos) {
-        if (request == null || level == null) {
+                                    ShadowPullRequestC2SPacket.Entry entry, String dimension) {
+        if (request == null || level == null || player == null) {
             return;
         }
-        if (pendingPulls.size() >= MAX_PENDING_PULLS) {
-            PendingPull evicted = pendingPulls.poll();
-            if (evicted != null) {
-                releaseDemandTicket(evicted);
-                sendPullFailure(evicted, "overflow");
+        if (totalPullQueued() >= MAX_PENDING_PULLS) {
+            evictOldestPull();
+        }
+        pullQueues.computeIfAbsent(player.getUUID(), ignored -> new ArrayDeque<>())
+                .add(new PendingPull(player, level, dimension, entry,
+                        request.requestId(), request.epoch()));
+    }
+
+    private void evictOldestPull() {
+        PendingPull oldest = null;
+        ArrayDeque<PendingPull> oldestQueue = null;
+        for (ArrayDeque<PendingPull> q : pullQueues.values()) {
+            PendingPull head = q.peek();
+            if (head == null) {
+                continue;
+            }
+            if (oldest == null || head.enqueueNanos() < oldest.enqueueNanos()) {
+                oldest = head;
+                oldestQueue = q;
             }
         }
+        if (oldestQueue == null) {
+            return;
+        }
+        PendingPull evicted = oldestQueue.poll();
+        if (evicted != null) {
+            releaseDemandTicket(evicted);
+            sendPullFailure(evicted, "overflow");
+        }
+    }
+
+    private void acquireDemandTicket(PendingPull pending) {
+        if (pending.ticketed) {
+            return;
+        }
+        ChunkPos pos = new ChunkPos(pending.entry().chunkX(), pending.entry().chunkZ());
         long key = pos.toLong();
         int refs = demandTicketRefs.merge(key, 1, Integer::sum);
-        if (refs == 1) {
-#if MC_VER < MC_1_21_5
-            level.getChunkSource().addRegionTicket(net.minecraft.server.level.TicketType.FORCED, pos, 0, pos);
-#else
-            // 1.21.5+：ticket API 收敛至 TicketStorage（ServerChunkCache/DistanceManager 公开方法移除）
-            try {
-                ((io.github.limuqy.mc.hassium.mixin.ServerChunkCacheAccessor) (Object) level.getChunkSource())
-                        .hassium$getTicketStorage()
-                        .addTicketWithRadius(net.minecraft.server.level.TicketType.FORCED, pos, 0);
-            } catch (Throwable ignored) {
-                // ticketStorage 不可达时按无票处理（world 启动期 / 异常关闭）
-            }
-#endif
+        pending.ticketed = true;
+        pending.ticketNanos = System.nanoTime();
+        if (refs != 1) {
+            return;
         }
-        pendingPulls.add(new PendingPull(player, level, dimension, entry,
-                request.requestId(), request.epoch(), System.nanoTime()));
+#if MC_VER < MC_1_21_5
+        pending.level().getChunkSource().addRegionTicket(net.minecraft.server.level.TicketType.FORCED, pos, 0, pos);
+#else
+        try {
+            ((io.github.limuqy.mc.hassium.mixin.ServerChunkCacheAccessor) (Object) pending.level().getChunkSource())
+                    .hassium$getTicketStorage()
+                    .addTicketWithRadius(net.minecraft.server.level.TicketType.FORCED, pos, 0);
+        } catch (Throwable ignored) {
+            // ticketStorage 不可达时按无票处理（world 启动期 / 异常关闭）
+        }
+#endif
     }
 
     private void releaseDemandTicket(PendingPull pending) {
+        if (!pending.ticketed) {
+            return;
+        }
+        pending.ticketed = false;
         ChunkPos pos = new ChunkPos(pending.entry().chunkX(), pending.entry().chunkZ());
         long key = pos.toLong();
         Integer refs = demandTicketRefs.get(key);
@@ -202,67 +284,158 @@ public class ServerChunkPushManager {
         }
     }
 
-    /** 每 tick 泵：就绪柱主动推送；已不在加载列表 / 超时回失败（客户端不重试）。 */
+    /** 每 tick 每玩家泵：lookahead 发票 + 阀门内 hash/比较 + FULL/DELTA 下推 pushPool。 */
     private void pumpPendingPulls() {
-        if (pendingPulls.isEmpty()) {
+        if (pullQueues.isEmpty()) {
             return;
         }
-        int sends = 0;
-        final long now = System.nanoTime();
-        final int scan = pendingPulls.size();
-        for (int i = 0; i < scan; i++) {
-            PendingPull pending = pendingPulls.poll();
-            if (pending == null) {
-                return;
-            }
-            ServerPlayer player = pending.player();
-            if (player == null || player.hasDisconnected() || player.isRemoved()) {
-                releaseDemandTicket(pending);
-                continue; // 会话已失效：静默丢弃（客户端已断连，无重试面）
-            }
-            ServerLevel level = PlayerCompat.getServerLevel(player);
-            if (level == null || !LevelCompat.getDimensionId(level).equals(pending.dimension())) {
-                releaseDemandTicket(pending);
+        int configured = HassiumConfigService.getInstance().getConfig().master().maxChunksPerTick();
+        int fullBudget = PullPacingValve.fullDeltaBudget(configured);
+        int hashBudget = PullPacingValve.hashBudget(configured);
+        int lookahead = PullPacingValve.lookaheadLimit(configured);
+        long now = System.nanoTime();
+        for (Map.Entry<UUID, ArrayDeque<PendingPull>> e : pullQueues.entrySet()) {
+            pumpPlayerPulls(e.getValue(), fullBudget, hashBudget, lookahead, now);
+        }
+        pullQueues.entrySet().removeIf(e -> e.getValue().isEmpty());
+    }
+
+    private void pumpPlayerPulls(ArrayDeque<PendingPull> queue, int fullBudget, int hashBudget,
+                                 int lookahead, long now) {
+        if (queue.isEmpty()) {
+            return;
+        }
+        List<PendingPull> live = new ArrayList<>(queue.size());
+        while (!queue.isEmpty()) {
+            PendingPull pending = queue.poll();
+            if (dropOrKeepLive(pending, now, live)) {
                 continue;
             }
-            LevelChunk chunk = LevelCompat.loadedFullChunk(level, pending.entry().chunkX(), pending.entry().chunkZ());
-            if (chunk == null) {
-                if (!io.github.limuqy.mc.hassium.compat.ShadowChunkMapCompat.hasVisibleHolder(
-                        level.getChunkSource(), pending.entry().chunkX(), pending.entry().chunkZ())
-                        || now - pending.enqueueNanos() > PENDING_PULL_TIMEOUT_NANOS) {
-                    // 已不在加载列表（vanilla 卸载/跑出视距）或超时：终态失败，客户端不重试
-                    releaseDemandTicket(pending);
-                    sendPullFailure(pending, "unloaded");
-                } else {
-                    pendingPulls.add(pending); // 仍在生成/算光：下轮再看
-                }
+        }
+        if (live.isEmpty()) {
+            return;
+        }
+        PendingPull sample = live.get(0);
+        ChunkPos center = sample.player().chunkPosition();
+        List<PullPacingValve.Candidate> candidates = new ArrayList<>(live.size());
+        int ticketedUnready = 0;
+        for (int i = 0; i < live.size(); i++) {
+            PendingPull p = live.get(i);
+            ServerLevel level = PlayerCompat.getServerLevel(p.player());
+            boolean ready = level != null && LevelCompat.loadedFullChunk(
+                    level, p.entry().chunkX(), p.entry().chunkZ()) != null;
+            if (!ready && p.ticketed) {
+                ticketedUnready++;
+            }
+            candidates.add(new PullPacingValve.Candidate(
+                    i, p.entry().chunkX(), p.entry().chunkZ(), ready, p.ticketed));
+        }
+        for (int idx : PullPacingValve.selectLookaheadTickets(
+                candidates, center.x, center.z, ticketedUnready, lookahead)) {
+            acquireDemandTicket(live.get(idx));
+        }
+        Set<Integer> hashIdx = new java.util.HashSet<>(
+                PullPacingValve.selectReadyToHash(candidates, center.x, center.z, hashBudget));
+        int unchangedLeft = PullPacingValve.UNCHANGED_PER_TICK;
+        int fullLeft = fullBudget;
+        for (int i = 0; i < live.size(); i++) {
+            PendingPull pending = live.get(i);
+            if (!hashIdx.contains(i)) {
+                queue.add(pending);
                 continue;
             }
-            if (sends >= MAX_PENDING_SENDS_PER_TICK) {
-                pendingPulls.add(pending); // 推送配额用尽：下轮续发
+            if (unchangedLeft <= 0 && fullLeft <= 0) {
+                queue.add(pending);
                 continue;
             }
-            releaseDemandTicket(pending);
-            try {
-                ShadowPullResponseS2CPacket.Result result =
-                        buildPullResult(pending.entry(), pending.dimension(),
-                                new ChunkPos(pending.entry().chunkX(), pending.entry().chunkZ()), chunk, level);
-                sendPullResponse(player, pending, result);
-                sends++;
-            } catch (Throwable t) {
-                Constants.LOG.warn("Hassium: pending pull push failed for ({}, {})",
-                        pending.entry().chunkX(), pending.entry().chunkZ(), t);
-                sendPullFailure(pending, "push");
+            if (!completeReadyPull(pending, unchangedLeft, fullLeft)) {
+                queue.add(pending);
+                continue;
+            }
+            boolean spentUnchanged = lastCompletedUnchanged;
+            if (spentUnchanged) {
+                unchangedLeft--;
+            } else {
+                fullLeft--;
             }
         }
     }
 
+    /** {@link #completeReadyPull} 最近一次完成是否为 UNCHANGED（供配额记账）。 */
+    private boolean lastCompletedUnchanged;
+
     /**
-     * 在服务端主线程构建单区块 pull 终态；不读取客户端提交的 payload。
-     * <p>
-     * 柱未就绪（生成/算光中）时登记待推送队列并返回 null（本响应省略该柱，不产生
-     * 错误终态）；就绪后由 onServerTick 泵主动推送。仅在柱已不在加载列表（vanilla
-     * 卸载/跑出视距）或超时才回失败——客户端对失败不重试。
+     * @return false = 本柱应留在队列（未就绪或本 tick 配额不足）
+     */
+    private boolean dropOrKeepLive(PendingPull pending, long now, List<PendingPull> live) {
+        ServerPlayer player = pending.player();
+        if (player == null || player.hasDisconnected() || player.isRemoved()) {
+            releaseDemandTicket(pending);
+            return true;
+        }
+        ServerLevel level = PlayerCompat.getServerLevel(player);
+        if (level == null || !LevelCompat.getDimensionId(level).equals(pending.dimension())) {
+            releaseDemandTicket(pending);
+            return true;
+        }
+        LevelChunk chunk = LevelCompat.loadedFullChunk(level, pending.entry().chunkX(), pending.entry().chunkZ());
+        if (chunk == null
+                && pending.ticketed
+                && now - pending.ticketNanos > PENDING_PULL_TIMEOUT_NANOS) {
+            // 仅已发票仍未 FULL：装载失败。未持票的柱在 lookahead 外排队，不能按入队时钟超时。
+            releaseDemandTicket(pending);
+            sendPullFailure(pending, "unloaded");
+            return true;
+        }
+        live.add(pending);
+        return false;
+    }
+
+    /**
+     * 阀门内：主线程 hash/比较；UNCHANGED 当场发送；FULL/DELTA 快照后 pushPool encode+zstd。
+     *
+     * @return true 已完成（从队列移除）；false 应归还队列
+     */
+    private boolean completeReadyPull(PendingPull pending, int unchangedLeft, int fullLeft) {
+        lastCompletedUnchanged = false;
+        ServerLevel level = PlayerCompat.getServerLevel(pending.player());
+        if (level == null) {
+            return false;
+        }
+        LevelChunk chunk = LevelCompat.loadedFullChunk(level, pending.entry().chunkX(), pending.entry().chunkZ());
+        if (chunk == null) {
+            return false;
+        }
+        try {
+            ClassifiedPull classified = classifyPull(pending.entry(), chunk, level);
+            if (classified.unchanged()) {
+                if (unchangedLeft <= 0) {
+                    return false;
+                }
+                lastCompletedUnchanged = true;
+                releaseDemandTicket(pending);
+                sendPullResponse(pending.player(), pending, classified.result());
+                return true;
+            }
+            if (fullLeft <= 0) {
+                return false;
+            }
+            lastCompletedUnchanged = false;
+            releaseDemandTicket(pending);
+            submitEncodedPull(pending, classified, level.registryAccess());
+            return true;
+        } catch (Throwable t) {
+            Constants.LOG.warn("Hassium: pending pull push failed for ({}, {})",
+                    pending.entry().chunkX(), pending.entry().chunkZ(), t);
+            releaseDemandTicket(pending);
+            sendPullFailure(pending, "push");
+            return true;
+        }
+    }
+
+    /**
+     * 收包线程只入队，返回 null（本响应省略该柱）。越界/维度错误由 Handler 当场 ERROR。
+     * hash / 比较 / 编码一律在 tick 阀门后。
      */
     public ShadowPullResponseS2CPacket.Result resolveShadowPull(ServerPlayer player,
                                                                   ShadowPullRequestC2SPacket request,
@@ -275,72 +448,98 @@ public class ServerChunkPushManager {
         if (level == null || !LevelCompat.getDimensionId(level).equals(dimension)) {
             return ShadowPullResponseS2CPacket.Result.error(entry.chunkX(), entry.chunkZ(), "dimension");
         }
-        ChunkPos pos = new ChunkPos(entry.chunkX(), entry.chunkZ());
         try {
-            // 非阻塞就绪判定：阻塞 getChunk 会在主线程串行生成（大批次可拖死 MSPT），
-            // 未就绪柱交给待推送队列，由原版 chunk 系统并行推进。
-            LevelChunk chunk = LevelCompat.loadedFullChunk(level, pos.x, pos.z);
-            if (chunk == null) {
-                enqueuePendingPull(player, level, request, entry, dimension, pos);
-                return null;
-            }
-            return buildPullResult(entry, dimension, pos, chunk, level);
+            enqueuePendingPull(player, level, request, entry, dimension);
+            return null;
         } catch (Throwable t) {
-            Constants.LOG.warn("Hassium: shadowPullV1 failed for {}", pos, t);
+            Constants.LOG.warn("Hassium: shadowPullV1 enqueue failed for ({}, {})",
+                    entry.chunkX(), entry.chunkZ(), t);
             return ShadowPullResponseS2CPacket.Result.error(entry.chunkX(), entry.chunkZ(), "load");
         }
     }
 
-    /** 就绪柱 pull 终态（UNCHANGED/DELTA/FULL）——即时路径与待推送泵共用。 */
-    private ShadowPullResponseS2CPacket.Result buildPullResult(ShadowPullRequestC2SPacket.Entry entry,
-                                                               String dimension, ChunkPos pos,
-                                                               LevelChunk chunk, ServerLevel level) {
+    private record ClassifiedPull(boolean unchanged, ShadowPullResponseS2CPacket.Result result,
+                                  ClientboundLevelChunkWithLightPacket fullPacket,
+                                  SectionDeltaColumnSnap deltaSnap,
+                                  long chunkHash, List<Long> sectionHashList) {
+    }
+
+    /** 主线程：hash + 比较 + FULL 包快照 / DELTA 列快照。encode/zstd 在 pushPool。 */
+    private ClassifiedPull classifyPull(ShadowPullRequestC2SPacket.Entry entry,
+                                        LevelChunk chunk, ServerLevel level) {
         Map<Integer, Long> hashes = ChunkContentHashUtil.computeSectionHashes(chunk);
-            long chunkHash = ChunkContentHashUtil.combineSectionHashes(hashes);
-            long[] sectionHashArray = ChunkContentHashUtil.sectionHashesToArray(hashes);
-            List<Long> sectionHashList = new ArrayList<>(sectionHashArray.length);
-            for (long hash : sectionHashArray) {
-                sectionHashList.add(hash);
+        long chunkHash = ChunkContentHashUtil.combineSectionHashes(hashes);
+        long[] sectionHashArray = ChunkContentHashUtil.sectionHashesToArray(hashes);
+        List<Long> sectionHashList = new ArrayList<>(sectionHashArray.length);
+        for (long hash : sectionHashArray) {
+            sectionHashList.add(hash);
+        }
+        boolean hashMatch = entry.chunkHash() != 0L && entry.chunkHash() == chunkHash;
+        boolean sectionsMatch = !entry.sectionHashes().isEmpty() && entry.sectionHashes().equals(sectionHashList);
+        if (hashMatch || sectionsMatch) {
+            return new ClassifiedPull(true, ShadowPullResponseS2CPacket.Result.unchanged(
+                    entry.chunkX(), entry.chunkZ(), chunkHash, sectionHashList),
+                    null, null, chunkHash, sectionHashList);
+        }
+        SectionDeltaColumnSnap deltaSnap = null;
+        if (!entry.sectionHashes().isEmpty()
+                && HassiumConfigService.getInstance().isSectionDeltaEnabled()) {
+            deltaSnap = snapshotSectionDeltaColumn(chunk);
+        }
+        ClientboundLevelChunkWithLightPacket packet = buildChunkPacket(chunk, level);
+        return new ClassifiedPull(false, null, packet, deltaSnap, chunkHash, sectionHashList);
+    }
+
+    private void submitEncodedPull(PendingPull pending, ClassifiedPull classified, RegistryAccess registryAccess) {
+        ensureInitialized();
+        ShadowPullRequestC2SPacket.Entry entry = pending.entry();
+        pushPool.submit(() -> {
+            try {
+                ShadowPullResponseS2CPacket.Result result = encodeClassifiedPull(pending, classified, entry, registryAccess);
+                if (pending.player() == null || pending.player().hasDisconnected()) {
+                    return;
+                }
+                sendPullResponse(pending.player(), pending, result);
+            } catch (Throwable t) {
+                Constants.LOG.warn("Hassium: pull encode/send failed for ({}, {})",
+                        entry.chunkX(), entry.chunkZ(), t);
+                sendPullFailure(pending, "encode");
             }
-            // 命中判定：客户端基线（chunkHash 或非空 sectionHashes）与服务端权威一致即 UNCHANGED。
-            // chunkHash = combine(sectionHashes)（确定性，空 section 不计），二者等价；
-            // 客户端重连后影子端重建会清 hash 表（chunkHash=0），此时非空 sectionHashes 全一致仍判命中。
-            boolean hashMatch = entry.chunkHash() != 0L && entry.chunkHash() == chunkHash;
-            boolean sectionsMatch = !entry.sectionHashes().isEmpty() && entry.sectionHashes().equals(sectionHashList);
-            if (hashMatch || sectionsMatch) {
-                return ShadowPullResponseS2CPacket.Result.unchanged(entry.chunkX(), entry.chunkZ(),
-                        chunkHash, sectionHashList);
-            }
-            if (!entry.sectionHashes().isEmpty()
-                    && HassiumConfigService.getInstance().isSectionDeltaEnabled()) {
-                SectionDeltaS2CPacket.DeltaEntry planned = planAndSerialize(
-                        snapshotSectionDeltaColumn(chunk), entry);
-                if (planned != null) {
-                    SectionDeltaS2CPacket delta = new SectionDeltaS2CPacket(
-                            dimension, List.of(planned), List.of());
-                    FriendlyByteBuf deltaBuf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
-                    try {
-                        delta.encode(deltaBuf);
-                        byte[] payload = new byte[deltaBuf.readableBytes()];
-                        deltaBuf.readBytes(payload);
-                        return ShadowPullResponseS2CPacket.Result.payload(entry.chunkX(), entry.chunkZ(),
-                                ShadowPullResponseS2CPacket.Kind.DELTA, chunkHash, sectionHashList, payload);
-                    } finally {
-                        deltaBuf.release();
-                    }
+        });
+    }
+
+    private ShadowPullResponseS2CPacket.Result encodeClassifiedPull(PendingPull pending, ClassifiedPull classified,
+                                                                    ShadowPullRequestC2SPacket.Entry entry,
+                                                                    RegistryAccess registryAccess) {
+        if (classified.deltaSnap() != null) {
+            SectionDeltaS2CPacket.DeltaEntry planned = planAndSerialize(classified.deltaSnap(), entry);
+            if (planned != null) {
+                SectionDeltaS2CPacket delta = new SectionDeltaS2CPacket(
+                        pending.dimension(), List.of(planned), List.of());
+                FriendlyByteBuf deltaBuf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
+                try {
+                    delta.encode(deltaBuf);
+                    byte[] payload = new byte[deltaBuf.readableBytes()];
+                    deltaBuf.readBytes(payload);
+                    return ShadowPullResponseS2CPacket.Result.payload(entry.chunkX(), entry.chunkZ(),
+                            ShadowPullResponseS2CPacket.Kind.DELTA, classified.chunkHash(),
+                            classified.sectionHashList(), payload);
+                } finally {
+                    deltaBuf.release();
                 }
             }
-            ClientboundLevelChunkWithLightPacket packet = buildChunkPacket(chunk, level);
-            byte[] payload = packet == null ? null : encodeChunkPacket(packet, level.registryAccess());
-            if (payload != null) {
-                // pull FULL 线缆载荷固定 zstd（通道压缩 = 包聚合 + shadow pull，全部固定算法）；
-                // 客户端 handleResponse 解压并计入带宽压缩统计。不加版本 flag（双端同版本）。
-                payload = compressPullFullPayload(payload);
-            }
-            return payload == null
-                    ? ShadowPullResponseS2CPacket.Result.error(entry.chunkX(), entry.chunkZ(), "encode")
-                    : ShadowPullResponseS2CPacket.Result.payload(entry.chunkX(), entry.chunkZ(),
-                    ShadowPullResponseS2CPacket.Kind.FULL, chunkHash, sectionHashList, payload);
+        }
+        byte[] payload = classified.fullPacket() == null
+                ? null
+                : encodeChunkPacket(classified.fullPacket(), registryAccess);
+        if (payload != null) {
+            payload = compressPullFullPayload(payload);
+        }
+        return payload == null
+                ? ShadowPullResponseS2CPacket.Result.error(entry.chunkX(), entry.chunkZ(), "encode")
+                : ShadowPullResponseS2CPacket.Result.payload(entry.chunkX(), entry.chunkZ(),
+                ShadowPullResponseS2CPacket.Kind.FULL, classified.chunkHash(),
+                classified.sectionHashList(), payload);
     }
 
 
@@ -986,6 +1185,12 @@ public class ServerChunkPushManager {
         if (queue != null) {
             queue.clear();
         }
+        ArrayDeque<PendingPull> pulls = pullQueues.remove(playerId);
+        if (pulls != null) {
+            for (PendingPull pending : pulls) {
+                releaseDemandTicket(pending);
+            }
+        }
         initialPlayerChunkPos.remove(playerId);
         resumePlayers.remove(playerId);
         playerLightComputeSupported.remove(playerId);
@@ -996,6 +1201,13 @@ public class ServerChunkPushManager {
      */
     public void shutdown() {
         pushQueues.clear();
+        for (ArrayDeque<PendingPull> pulls : pullQueues.values()) {
+            for (PendingPull pending : pulls) {
+                releaseDemandTicket(pending);
+            }
+        }
+        pullQueues.clear();
+        demandTicketRefs.clear();
         initialPlayerChunkPos.clear();
         resumePlayers.clear();
         // review-fix: T3-52：能力表一并清理
@@ -1069,7 +1281,7 @@ public class ServerChunkPushManager {
 
     /** 配置异常时保留历史安全默认值；正常配置值即每 tick 单批任务上限。 */
     static int normalizeMaxChunksPerTick(int configured) {
-        return configured > 0 ? configured : 4;
+        return PullPacingValve.fullDeltaBudget(configured);
     }
 
     /** 未封批任务背压最多容纳十个满批，已封装批次另由 PlayerPushQueue 单独限额。 */

@@ -429,7 +429,7 @@ public final class FabricTomlConfigIO {
         set(cfg, "master.aggregationMaxWaitTimeMs", (int) n.aggregationMaxWaitTimeMs(), "聚合最大等待（ms）");
         set(cfg, "master.aggregationMaxSize", n.aggregationMaxSize(), "聚合最大大小（字节）");
         set(cfg, "master.compressionBlacklist", new ArrayList<>(n.compressionBlacklist()), "压缩/聚合黑名单");
-        set(cfg, "master.maxChunksPerTick", n.maxChunksPerTick(), "每玩家每 tick 提交到后台序列化的区块上限（发送速率 = 本值 × tick 节奏，满 tick ≈ 本值×20/s，仅服务端）");
+        set(cfg, "master.maxChunksPerTick", n.maxChunksPerTick(), "每玩家每 tick 完成的 Pull FULL/DELTA 上限（UNCHANGED 另额 32；满 tick ≈ 本值×20/s，仅服务端）");
         set(cfg, "master.serverChunkPushThreads", n.serverChunkPushThreads(), "服务端区块推送线程数（encode/hash/ZSTD 固定后台池，仅服务端）");
         // legacy 键清理：网关监听/鉴权/控制面端点/L1 迁移/续流票据/数据面已随网关拓扑退役；
         // 管线级全局包压缩（globalPacketCompression/globalCompressionLevel/globalCompressionThreshold/magiclessZstd）

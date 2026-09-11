@@ -21,7 +21,7 @@
 | --- | --- | --- |
 | **高效压缩** | 存储压缩 | 区块 ZSTD 落盘（type 126），存档体积显著减小；仍兼容原版 Region（`.mca`）布局 |
 | | 通道压缩 | 聚合包内部字典 ZSTD + 区块推送自有压缩；不触碰原版压缩层，无跨 mod 管线冲突面 |
-| **网络优化** | 平滑推送 | 服务端每 tick 提交上限限速（`master.maxChunksPerTick`，掉刻自然降速）+ encode/压缩/发送全路径后台化；进服不卡主线程 |
+| **网络优化** | 平滑推送 | 服务端每 tick Pull 完成上限限速（`master.maxChunksPerTick`，掉刻自然降速）+ encode/压缩后台化；进服不卡主线程 |
 | | 登录期能力握手 | 1.20.1 走 `hassium:login_hello` login query，1.20.2+ 走配置阶段 payload；按位与协商能力位，无超时依赖，原版客户端零干扰 |
 | | Pull 模式 | 协商通过后服务端停发整柱推送，区块数据由客户端影子虚拟玩家 tracking 驱动的统一 Compare+Pull 拉取 |
 | **区块缓存** | 影子端世界保存 | 进服区块统一由进程内影子服务端（完整 MinecraftServer）算光并落盘原版存档（`hassium_cache/<serverId>/world`），断连保存、重连复用 |

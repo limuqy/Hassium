@@ -204,6 +204,13 @@ public class HassiumAggregationPacket {
 
                 Constants.LOG.debug("Handling aggregated sub-packet: {}", sanitizeLog(type));
 
+                if (type != null && HassiumPacketIds.SHADOW_PULL_RESPONSE_S2C.equals(type.fullId())) {
+                    byte[] body = new byte[data.readableBytes()];
+                    data.readBytes(body);
+                    PayloadHandlers.handleShadowPullResponse(body);
+                    continue;
+                }
+
                 // 检查是否是原版包
                 Integer vanillaId = indexManager.getVanillaPacketId(type, PacketFlow.CLIENTBOUND);
 
@@ -228,16 +235,19 @@ public class HassiumAggregationPacket {
                     packet = PacketPayloadCompat.createClientboundPayload(type, rawBytes);
                 }
 
-                // 分发到处理器
+                // 分发到处理器。工人线程调用 handle()：PacketUtils 会 hop 主线程并抛
+                // RunningOnDifferentThreadException（与 Connection.channelRead0 相同，必须吞掉）。
                 if (packet != null) {
                     try {
                         @SuppressWarnings("rawtypes")
                         Packet rawPacket = packet;
                         rawPacket.handle(connection.getPacketListener());
+                    } catch (net.minecraft.server.RunningOnDifferentThreadException ignored) {
                     } catch (Exception e) {
                         Constants.LOG.error("Failed to handle packet {}", sanitizeLog(type), e);
                     }
                 }
+            } catch (net.minecraft.server.RunningOnDifferentThreadException ignored) {
             } catch (Exception e) {
                 Constants.LOG.error("Failed to handle aggregated sub-packet: {}", sanitizeLog(subPacket.getType()), e);
             }

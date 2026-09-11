@@ -125,8 +125,8 @@ public class ForgeNetworkManager implements INetworkManagerService {
                 AggregationWrapper::encode,
                 AggregationWrapper::decode,
                 (msg, ctx) -> {
-                    ctx.get().enqueueWork(() -> PayloadHandlers.handleAggregation(msg.data()));
                     ctx.get().setPacketHandled(true);
+                    AggregationDecodeQueue.enqueueClient(msg.data());
                 },
                 java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT)
         );
@@ -275,7 +275,7 @@ public class ForgeNetworkManager implements INetworkManagerService {
                     .clientbound()
                         .addMain(AggregationWrapper.class,
                                 playCodec(AggregationWrapper::encode, AggregationWrapper::decode),
-                                (msg, ctx) -> ctx.enqueueWork(() -> PayloadHandlers.handleAggregation(msg.data())))
+                                (msg, ctx) -> AggregationDecodeQueue.enqueueClient(msg.data()))
                         .addMain(BlockEntityDataWrapper.class,
                                 playCodec(BlockEntityDataWrapper::encode, BlockEntityDataWrapper::decode),
                                 (msg, ctx) -> ctx.enqueueWork(() ->

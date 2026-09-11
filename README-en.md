@@ -25,7 +25,7 @@ Smaller world saves and bandwidth than vanilla, local chunk reuse, and smoother 
 | --- | --- | --- |
 | **Efficient compression** | Storage compression | World chunk ZSTD on disk (type 126) for smaller saves; keeps vanilla Region (`.mca`) layout |
 | | Channel compression | Dictionary ZSTD inside aggregated packets + chunk-push native compression; never touches the vanilla compression layer, no cross-mod pipeline conflicts |
-| **Network optimization** | Smooth push | Per-player per-tick submit cap (`master.maxChunksPerTick`, ≈ cap×20/s at full tick) + fully backgrounded encode/compress/send; joins never saturate the main thread |
+| **Network optimization** | Smooth push | Per-player per-tick Pull completion cap (`master.maxChunksPerTick`, ≈ cap×20/s at full tick) + backgrounded encode/compress; joins never saturate the main thread |
 | | Login-phase capability handshake | `hassium:login_hello` login query on 1.20.1, config-stage `PreHandshakePayload` on 1.20.2+; bitwise capability negotiation with no timeout dependency and zero interference for vanilla clients |
 | | Pull mode | After negotiation the server stops pushing full chunks; chunk data is fetched by the unified Compare+Pull driven by the client shadow virtual player's vanilla tracking (`ShadowPull`: UNCHANGED / DELTA / FULL / ERROR) |
 | **Chunk cache** | Shadow-world saving | Join chunks are lit and saved into a vanilla save dir (`hassium_cache/<serverId>/world`) by an in-process shadow server (full MinecraftServer); saved on disconnect, reused on reconnect |
@@ -98,7 +98,7 @@ Files: `config/hassium/hassium-client.toml`, `config/hassium/hassium-server.toml
 | `storage.enabled` | `false` | World-save ZSTD (off by default; dedicated server only, back up first) |
 | `storage.zstdLevel` | `3` | Storage ZSTD level |
 | `master.enabled` | `true` | Server network-channel master switch (gate for login handshake/aggregation) |
-| `master.maxChunksPerTick` | `4` | Per-player per-tick submit cap (≈ cap×20/s at full tick) |
+| `master.maxChunksPerTick` | `5` | Per-player per-tick Pull FULL/DELTA completion cap (≈ cap×20/s at full tick) |
 | `master.enablePacketAggregation` | `true` | Packet aggregation |
 | `master.aggregationMaxWaitTimeMs` | `50` | Aggregation max wait (ms; ACK timeout 5s auto-downgrades to direct send) |
 | `master.aggregationMaxSize` | `262144` | Aggregation max size (bytes) |

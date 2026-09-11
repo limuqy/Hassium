@@ -121,11 +121,22 @@ public final class PayloadHandlers {
      * IllegalArgumentException/Error 均须收敛，防 OOM 后链路悬挂）。
      */
     public static void handleAggregation(byte[] data) {
+        var clientConn = Minecraft.getInstance().getConnection();
+        if (clientConn == null) {
+            LOGGER.error("Received aggregation packet but no client connection");
+            return;
+        }
+        handleAggregation(data, clientConn.getConnection());
+    }
+
+    /**
+     * 工人/任意线程：解压拆包后对子包 {@code packet.handle}（原版 hop 主线程 apply）。
+     */
+    public static void handleAggregation(byte[] data, net.minecraft.network.Connection connection) {
         FriendlyByteBuf packetBuf = wrap(data);
         try {
-            var clientConn = Minecraft.getInstance().getConnection();
-            if (clientConn == null) {
-                LOGGER.error("Received aggregation packet but no client connection");
+            if (connection == null) {
+                LOGGER.error("Received aggregation packet but no connection");
                 return;
             }
             NamespaceIndexManager indexManager = IndexSyncManager.getInstance().getClientIndexManager();
@@ -133,7 +144,7 @@ public final class PayloadHandlers {
                 LOGGER.error("Received aggregation packet but client index manager not initialized");
                 return;
             }
-            HassiumAggregationPacket.decode(packetBuf, indexManager).handle(clientConn.getConnection());
+            HassiumAggregationPacket.decode(packetBuf, indexManager).handle(connection);
         } catch (Throwable e) {
             LOGGER.error("Failed to handle aggregation packet", e);
         } finally {

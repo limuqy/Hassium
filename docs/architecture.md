@@ -247,7 +247,7 @@ Sector 2+:    [length(4)][type=126][magic 0x48][hash(8)][ZSTD 压缩数据]
 | 通道压缩 | **仅两处，均不触碰 vanilla 压缩层**：聚合包内部字典 ZSTD（发送时 EventLoop 阈值翻折防双重压缩）+ 区块推送自有压缩。管线级全局包压缩已退役 | — |
 | 包聚合 | 服务端 vanilla 路径（`MixinConnection` 拦截）；客户端反聚合 receiver；ACK 超时 5s 降级；批次等待默认 50ms | `master.enablePacketAggregation=true` |
 | 紧凑包头 | 聚合包内 `CompactHeaderCodec`（两级 VarInt 命名空间索引，`index_sync_s2c` 同步） | 默认启用（能力位协商） |
-| 平滑推送 | 每 tick 提交上限限速（`master.maxChunksPerTick=4`，满 tick ≈ 80/s，掉刻自然降速）；主线程构建 packet 快照，encode/压缩/hash/发送在固定推送池（`master.serverChunkPushThreads=4`） | 默认启用 |
+| 平滑推送 | 每 tick Pull 完成上限（`master.maxChunksPerTick=5` FULL/DELTA，满 tick ≈ 100/s；UNCHANGED 另额 32）；主线程 hash/比较/packet 快照，encode/ZSTD 在推送池 | 默认启用 |
 
 控制面（握手、index sync、chunkHash 等）在压缩黑名单，不进 PENDING 聚合缓冲。UDP 数据面/网关帧协议/L1 迁移已随直连拓扑裁剪（历史见 [`archive/multi-channel_network_research.md`](archive/multi-channel_network_research.md)）。
 
@@ -287,7 +287,7 @@ Sector 2+:    [length(4)][type=126][magic 0x48][hash(8)][ZSTD 压缩数据]
 | `master.enabled` | true | 服务端网络通道总开关（登录期握手/压缩/聚合的门） |
 | `master.compressionLevel` | 3 | 自有通道 ZSTD 压缩等级（速度优先） |
 | `master.useContextCompression` | true | 上下文压缩（字典 ZSTD） |
-| `master.maxChunksPerTick` | **4** | 每玩家每 tick 提交上限（主线程序列化快照上限；发送速率 = 本值 × tick 节奏，满 tick ≈ 80/s） |
+| `master.maxChunksPerTick` | **5** | 每玩家每 tick 完成的 Pull FULL/DELTA 上限（主线程 hash/比较；encode/ZSTD 在推送池；满 tick ≈ 100/s） |
 | `master.serverChunkPushThreads` | **4** | 服务端区块推送固定线程数（encode / hash / ZSTD） |
 | `master.enablePacketAggregation` / `aggregationMinBatchSize` / `aggregationMaxWaitTimeMs` / `aggregationMaxSize` | `true` / `4` / `50ms` / `256KB` | 包聚合（服务端拦截 + 客户端反聚合；ACK 超时 5s 自动降级） |
 | `master.compressionBlacklist` | 控制面键集 | 压缩/聚合黑名单（控制面不进聚合缓冲） |

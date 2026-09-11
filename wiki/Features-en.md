@@ -37,7 +37,7 @@ Hassium pairs a client and server mod to optimize Minecraft along **efficient co
 
 - **Goal**: the server never saturates its main thread during joins or view expansion, and the client avoids stutter spikes
 - **Server side**:
-  - **Per-tick cap**: `master.maxChunksPerTick` (default `4`) limits per-player per-tick submits (4×20 = 80/s at full tick); on laggy ticks the per-second total drops naturally
+  - **Per-tick cap**: `master.maxChunksPerTick` (default `5`) limits per-player per-tick Pull FULL/DELTA completions (5×20 = 100/s at full tick); UNCHANGED is a separate cap of 32
   - **Background serialization**: encode / ZSTD / hash / send all run on a fixed push pool (`master.serverChunkPushThreads`, default 4); the main thread only builds packet snapshots — aligned with vanilla (main thread builds, netty encodes)
 - **Client side**:
   - Per-frame apply budget `chunk.mainThreadChunkBudgetMs` (default `15`)

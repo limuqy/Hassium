@@ -3,6 +3,7 @@ package io.github.limuqy.mc.hassium;
 import io.github.limuqy.mc.hassium.cache.client.ClientLifecycleHelper;
 import io.github.limuqy.mc.hassium.client.ClientSmokeTest;
 import io.github.limuqy.mc.hassium.command.FabricHassiumCommand;
+import io.github.limuqy.mc.hassium.network.AggregationDecodeQueue;
 import io.github.limuqy.mc.hassium.network.ClientActivation;
 import io.github.limuqy.mc.hassium.network.DictionaryManager;
 import io.github.limuqy.mc.hassium.network.PayloadHandlers;
@@ -119,11 +120,12 @@ public class HassiumClientMod implements ClientModInitializer {
         ClientPlayNetworking.registerGlobalReceiver(io.github.limuqy.mc.hassium.network.FabricNetworkManager.AGGREGATION_S2C,
                 (client, handler, buf, responseSender) -> {
                     byte[] data = PayloadHandlers.readAll(buf);
-                    client.execute(() -> PayloadHandlers.handleAggregation(data));
+                    var connection = handler.getConnection();
+                    AggregationDecodeQueue.enqueue(connection, data);
                 });
 #else
         ClientPlayNetworking.registerGlobalReceiver(io.github.limuqy.mc.hassium.network.FabricPayloadRegistry.AGGREGATION_S2C_TYPE,
-                (payload, context) -> PayloadHandlers.handleAggregation(payload.data()));
+                (payload, context) -> AggregationDecodeQueue.enqueueClient(payload.data()));
 #endif
 
         LOGGER.info("Hassium: Fabric client-side initialization complete");

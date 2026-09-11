@@ -31,6 +31,12 @@ public final class ChunkFlowTiming {
     private static final long[] CNT = new long[4];
     /** 全程 recv→apply 总延迟样本（p50/p95）。 */
     private static final java.util.List<Long> TOTALS = new java.util.ArrayList<>();
+    /** 单柱 handleLevelChunkWithLight 墙钟（ns）。 */
+    private static final java.util.List<Long> APPLY_WALL = new java.util.ArrayList<>();
+    private static long applyWallSumNs;
+    private static long applyWallTickNs;
+    private static int applyWallTickCount;
+    private static int applyWallMaxBacklog;
     private static final Object AGG_LOCK = new Object();
 
     // ---- apply 速率（每帧计数 + 每秒汇总；仅在 1s 窗口内有 apply 时打印）----
@@ -119,7 +125,25 @@ public final class ChunkFlowTiming {
         }
     }
 
-    /** 帧开始（ShadowLightCompute.drainReady 入口；主线程每帧一次）。 */
+    /** 单柱 apply 墙钟（ns）+ 当时 ready 积压。每 256 柱打 p50/p95。 */
+    public static void recordApplyWall(long applyNs, int readyBacklog) {
+        if (!enabled() || applyNs < 0L) {
+            return;
+        }
+        synchronized (AGG_LOCK) {
+            APPLY_WALL.add(applyNs);
+            applyWallSumNs += applyNs;
+            applyWallTickNs += applyNs;
+            applyWallTickCount++;
+            if (readyBacklog > applyWallMaxBacklog) {
+                applyWallMaxBacklog = readyBacklog;
+            }
+            if ((APPLY_WALL.size() & 0xFF) == 0) {
+                printApplyWall("window");
+            }
+        }
+    }
+
     public static void noteFrame() {
         if (!enabled()) {
             return;
@@ -179,6 +203,9 @@ public final class ChunkFlowTiming {
         }
         synchronized (AGG_LOCK) {
             printAggregate("final");
+            if (!APPLY_WALL.isEmpty()) {
+                printApplyWall("final");
+            }
         }
     }
 
@@ -198,5 +225,23 @@ public final class ChunkFlowTiming {
                 tag, applied, seg0, seg1, seg2,
                 String.format("%.1fms", SUM_NS[3] / 1e6 / CNT[3]),
                 p50 / 1e6, p95 / 1e6);
+    }
+
+    private static void printApplyWall(String tag) {
+        if (APPLY_WALL.isEmpty()) {
+            return;
+        }
+        long[] sorted = APPLY_WALL.stream().mapToLong(Long::longValue).sorted().toArray();
+        long p50 = sorted[sorted.length / 2];
+        long p95 = sorted[(int) Math.min(sorted.length - 1, sorted.length * 0.95)];
+        DebugLogger.info(DebugLogger.LogType.NETWORK,
+                "[APPLY-WALL] {} n={} mean={}ms p50={}ms p95={}ms tickSum={}ms tickN={} maxReadyBacklog={}",
+                tag, sorted.length,
+                String.format("%.2f", applyWallSumNs / 1e6 / sorted.length),
+                p50 / 1e6, p95 / 1e6,
+                String.format("%.2f", applyWallTickCount == 0 ? 0.0 : applyWallTickNs / 1e6),
+                applyWallTickCount, applyWallMaxBacklog);
+        applyWallTickNs = 0L;
+        applyWallTickCount = 0;
     }
 }

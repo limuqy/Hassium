@@ -183,6 +183,16 @@ PLAY_INIT_S2C = ResourceLocationCompat.vanilla(HassiumChannels.PLAY_INIT_S2C);
     }
 
     @Override
+    public void sendShadowPullResponse(ServerPlayer player, FriendlyByteBuf buf) {
+#if MC_VER < MC_1_21_1
+        ServerPlayNetworking.send(player, SHADOW_PULL_RESPONSE_S2C, buf);
+#else
+        ServerPlayNetworking.send(player, FabricPayloadRegistry.toPayload(
+                FabricPayloadRegistry.SHADOW_PULL_RESPONSE_S2C_TYPE, buf));
+#endif
+    }
+
+    @Override
     public void sendBlockEntityRequest(FriendlyByteBuf buf) {
         if (Minecraft.getInstance().getConnection() != null) {
 #if MC_VER < MC_1_21_1
