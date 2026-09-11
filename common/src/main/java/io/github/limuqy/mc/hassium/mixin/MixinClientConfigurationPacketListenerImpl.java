@@ -3,7 +3,6 @@ package io.github.limuqy.mc.hassium.mixin;
 import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.compat.ReflectionCompat;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
-import io.github.limuqy.mc.hassium.network.handshake.LoginCaps;
 #if MC_VER >= MC_1_21_1
 import io.github.limuqy.mc.hassium.network.PreHandshakePayload;
 #endif
@@ -48,11 +47,10 @@ public class MixinClientConfigurationPacketListenerImpl {
         try {
             // 载体发送经 loader SPI：配置期 Minecraft.getConnection() 恒为 null（play listener
             // 未创建），必须传本配置监听器的 connection——forge/neoforge 经 vanilla
-            // ServerboundCustomPayloadPacket 直发（loader 按 CONFIGURATION 协议分派 codec）；
+            // ServerboundCustomPayloadPacket 直发（loader 按 CONFIGURATION 协议分派 codec；
+            // NeoForge 还需等 payload setup 就绪，见 NeoForgeNetworkManager.announcePreHandshake）；
             // fabric 走 ClientConfigurationConnectionEvents.START API，本 SPI 为 no-op。
             io.github.limuqy.mc.hassium.platform.Services.NETWORK_MANAGER.announcePreHandshake(connection);
-            Constants.LOG.info("Hassium: pre-handshake announced (config phase, clientCaps=0x{})",
-                    Integer.toHexString(LoginCaps.buildClientCaps()));
         } catch (Exception e) {
             Constants.LOG.warn("Hassium: Failed to send pre-handshake announcement", e);
         }

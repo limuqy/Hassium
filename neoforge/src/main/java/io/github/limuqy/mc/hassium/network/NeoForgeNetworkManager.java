@@ -158,6 +158,20 @@ public class NeoForgeNetworkManager implements NetworkManager {
         }
     }
 
+    public record AggregationNeoPayload(byte[] data) implements CustomPacketPayload {
+        public static final Type<AggregationNeoPayload> TYPE = new Type<>(
+                ResourceLocationCompat.create(Constants.MOD_ID, "aggregation")
+        );
+        public static final StreamCodec<FriendlyByteBuf, AggregationNeoPayload> STREAM_CODEC = StreamCodec.composite(
+                ByteBufCodecs.BYTE_ARRAY, AggregationNeoPayload::data,
+                AggregationNeoPayload::new
+        );
+        @Override
+        public Type<AggregationNeoPayload> type() {
+            return TYPE;
+        }
+    }
+
     public record IndexSyncNeoPayload(byte[] data) implements CustomPacketPayload {
         public static final Type<IndexSyncNeoPayload> TYPE = new Type<>(
                 ResourceLocationCompat.create(Constants.MOD_ID, "index_sync_s2c")
@@ -242,6 +256,37 @@ public class NeoForgeNetworkManager implements NetworkManager {
         //（即便 net/master 全关，SHADOW_PULL 位恒协商成功）——NeoForge checkPacket 对未注册
         // S2C payload 直接抛异常炸 tick。服务端不发送时注册无副作用。
         var registrar = event.registrar(PROTOCOL_VERSION);
+
+        // 聚合帧发送器：fabric 在 registerChannels 设置；neoforge 无对应调用点，
+        // 在 payload 注册事件（服务端/客户端都触发，sender 仅服务端连接生效）设置。
+        io.github.limuqy.mc.hassium.network.HassiumAggregationManager.setSender((connection, buf) -> {
+            if (connection.getPacketListener() instanceof net.minecraft.server.network.ServerGamePacketListenerImpl handler) {
+                ServerPlayer player = handler.getPlayer();
+                byte[] data = new byte[buf.readableBytes()];
+                buf.readBytes(data);
+                buf.release();
+                sendServerPayload(player, new AggregationNeoPayload(data));
+            } else {
+                LOGGER.error("Cannot send aggregation packet: connection has no player");
+                buf.release();
+            }
+        });
+
+        // 字典热推回调（镜像 fabric/forge）：服务端字典重建后向全体在线玩家推送。
+        DictionaryManager.setPushCallback(dictionary -> {
+            try {
+                net.minecraft.server.MinecraftServer server =
+                        net.neoforged.neoforge.server.ServerLifecycleHooks.getCurrentServer();
+                if (server != null) {
+                    for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+                        sendDictionarySyncPacket(player);
+                    }
+                }
+            } catch (Exception e) {
+                LOGGER.error("Failed to push dictionary to clients", e);
+            }
+        });
+
         registrar.playToClient(
                 PlayInitNeoPayload.TYPE,
                 PlayInitNeoPayload.STREAM_CODEC,
@@ -317,6 +362,10 @@ public class NeoForgeNetworkManager implements NetworkManager {
         // 索引同步 S2C
         registrar.playToClient(IndexSyncNeoPayload.TYPE, IndexSyncNeoPayload.STREAM_CODEC,
                 NeoForgeNetworkManager::handleIndexSyncS2C);
+
+        // 聚合帧 S2C（客户端影子端 decode 统计 zstd/vanilla 流量锚点）
+        registrar.playToClient(AggregationNeoPayload.TYPE, AggregationNeoPayload.STREAM_CODEC,
+                (payload, ctx) -> ctx.enqueueWork(() -> handleAggregationClient(payload.data())));
 
         LOGGER.info("Hassium: Registered all NeoForge payload handlers");
     }
@@ -425,6 +474,32 @@ public class NeoForgeNetworkManager implements NetworkManager {
                 io.github.limuqy.mc.hassium.compat.PlayerCompat.getMinecraftServer(player);
         if (server != null) {
             server.execute(() -> player.connection.send(payload));
+        }
+    }
+
+    /**
+     * 客户端 shadowPull 请求（C2S）。fabric 走 FabricSendCompat；本端必须经
+     * play connection 直发 ShadowPullRequestPayload——默认 SPI 实现是 no-op，
+     * 漏实现会让整个 Compare+Pull 静默失效（请求发出但永远不落线）。
+     */
+    @Override
+    public void sendShadowPullRequest(FriendlyByteBuf buf) {
+        if (buf == null) {
+            return;
+        }
+        try {
+            var connection = net.minecraft.client.Minecraft.getInstance().getConnection();
+            if (connection != null && buf.isReadable()) {
+                byte[] data = new byte[buf.readableBytes()];
+                buf.readBytes(data);
+                connection.send(new ShadowPullRequestPayload(data));
+            }
+        } catch (Exception e) {
+            LOGGER.warn("Hassium: Failed to send shadowPullV1 request", e);
+        } finally {
+            if (buf.refCnt() > 0) {
+                buf.release();
+            }
         }
     }
 
@@ -589,11 +664,42 @@ public class NeoForgeNetworkManager implements NetworkManager {
      * mixin 反射取出的配置监听器 connection 直发 vanilla 自定义包；NeoForge 按当前
      * CONFIGURATION 协议分派 {@code configurationToServer} 注册的 codec（未注册 id 才落
      * DiscardedPayload，原版客户端零干扰）。
+     * <p>
+     * <b>必须等 NeoForge payload setup 完成</b>：NeoForge 在配置期先做
+     * {@code ModdedNetworkQueryPayload}/{@code ModdedNetworkPayload} 通道协商，完成后才写
+     * {@code ChannelAttributes.PAYLOAD_SETUP}。在此之前发任何 mod 自定义 payload，服务端
+     * {@code NetworkRegistry.handleModdedPayload} 会因 payloadSetup==null 直接踢
+     * （「No Payload Setup」）。首个 config tick 往往早于协商完成，因此这里轮询就绪后再发。
      */
     public static void announcePreHandshake(net.minecraft.network.Connection connection) {
-        if (connection != null && connection.isConnected()) {
+        if (connection == null || !connection.isConnected()) {
+            return;
+        }
+        sendWhenPayloadReady(connection, 0);
+    }
+
+    private static void sendWhenPayloadReady(net.minecraft.network.Connection connection, int attempt) {
+        if (!connection.isConnected()) {
+            return;
+        }
+        // Internal API：NeoForge 无公开「payload setup 就绪」查询；ChannelAttributes 是唯一可靠门。
+        if (net.neoforged.neoforge.network.registration.ChannelAttributes.getPayloadSetup(connection) == null) {
+            if (attempt >= 200) { // ~10s @50ms；正常 localhost 1–3 次即就绪
+                LOGGER.warn("Hassium: pre-handshake aborted, NeoForge payload setup timeout");
+                return;
+            }
+            connection.channel().eventLoop().schedule(
+                    () -> sendWhenPayloadReady(connection, attempt + 1), 50, java.util.concurrent.TimeUnit.MILLISECONDS);
+            return;
+        }
+        try {
             connection.send(new net.minecraft.network.protocol.common.ServerboundCustomPayloadPacket(
                     io.github.limuqy.mc.hassium.network.PreHandshakePayload.create()));
+            // 冒烟门禁/排障依赖此行：区分「handler 未被调用 vs 发早被踢 vs 正常协商」。
+            io.github.limuqy.mc.hassium.Constants.LOG.info(
+                    "[PRE_HANDSHAKE] announced (payload setup ready, attempt={})", attempt);
+        } catch (Exception e) {
+            LOGGER.warn("Hassium: Failed to send pre-handshake after payload setup", e);
         }
     }
     public static void sendCompressionReadyToServer() {

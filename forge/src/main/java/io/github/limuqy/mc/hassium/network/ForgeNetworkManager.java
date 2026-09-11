@@ -443,14 +443,22 @@ public class ForgeNetworkManager implements NetworkManager {
      * 配置阶段 C2S 能力声明（MixinClientConfigurationPacketListenerImpl 每连接一次性调用）。
      * <p>
      * 配置期 {@code Minecraft.getConnection()} 恒为 null（play listener 未创建），必须用
-     * mixin 反射取出的配置监听器 connection 直发 vanilla 自定义包；Forge 按当前
-     * CONFIGURATION 协议分派 {@code CONFIGURATION_TO_SERVER} 注册的 codec。
+     * mixin 反射取出的配置监听器 connection 经 {@link Channel#send(Object, Connection)} 直发：
+     * forge 的 SimpleChannel 消息包装为 {@code ForgePayload}（注册于 vanilla dispatch），
+     * 服务端按 {@code hassium:main} channel 名分派 {@code CONFIGURATION_TO_SERVER} codec。
+     * 不能直发 vanilla {@code ServerboundCustomPayloadPacket}——forge 未把消息注册进 vanilla
+     * {@code IdDispatchCodec}，编码时回落 {@code DiscardedPayload} 强转崩溃。
      */
     public static void announcePreHandshake(net.minecraft.network.Connection connection) {
 #if MC_VER >= MC_1_21_1
         if (connection != null && connection.isConnected()) {
-            connection.send(new net.minecraft.network.protocol.common.ServerboundCustomPayloadPacket(
-                    io.github.limuqy.mc.hassium.network.PreHandshakePayload.create()));
+            if (CHANNEL == null) {
+                LOGGER.warn("Hassium: CHANNEL not registered, drop pre-handshake");
+                return;
+            }
+            CHANNEL.send(io.github.limuqy.mc.hassium.network.PreHandshakePayload.create(), connection);
+            // 冒烟门禁/排障依赖此行：区分「handler 未被调用 vs 发早被踢 vs 正常协商」。
+            io.github.limuqy.mc.hassium.Constants.LOG.info("[PRE_HANDSHAKE] announced (forge channel)");
         }
 #endif
     }

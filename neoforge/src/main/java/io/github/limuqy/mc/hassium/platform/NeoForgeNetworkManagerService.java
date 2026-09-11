@@ -14,6 +14,16 @@ public class NeoForgeNetworkManagerService implements INetworkManagerService {
     private final NeoForgeNetworkManager networkManager = new NeoForgeNetworkManager();
 
     @Override
+    public void sendShadowPullRequest(FriendlyByteBuf buf) {
+        networkManager.sendShadowPullRequest(buf);
+    }
+
+    @Override
+    public void sendShadowPullResponse(ServerPlayer player, FriendlyByteBuf buf) {
+        networkManager.sendShadowPullResponse(player, buf);
+    }
+
+    @Override
     public void sendBlockEntityRequest(FriendlyByteBuf buf) {
         networkManager.sendBlockEntityRequest(buf);
     }

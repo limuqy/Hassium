@@ -72,6 +72,20 @@ public final class ShadowPlayerCompat {
             public boolean isCreative() {
                 return true;
             }
+#if MC_VER >= MC_1_21_1
+            /**
+             * 1.21.1+ ServerPlayer 构造同步 {@code adjustSpawnLocation → Level.getChunk}，
+             * 而影子端生成任务由 ChunkMap worker 池驱动（非 mainThreadProcessor），
+             * 主循环线程在此等待 chunk future 会自锁（fabric 1.21.1 冒烟实证：影子主循环
+             * 卡死、pull 全零）。直接返回传入落点，跳过探测；位置随后由
+             * {@code ensureVirtualPlayer} 的 {@code setPosRaw/moveVirtualPlayer} 覆盖。
+             */
+            @Override
+            public net.minecraft.core.BlockPos adjustSpawnLocation(
+                    net.minecraft.server.level.ServerLevel $$0, net.minecraft.core.BlockPos $$1) {
+                return $$1;
+            }
+#endif
         };
     }
 
