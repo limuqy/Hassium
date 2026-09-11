@@ -165,6 +165,8 @@ public class NetworkOptimizationTest {
                 HassiumPacketIds.HANDSHAKE_S2C,
                 HassiumPacketIds.DICTIONARY_SYNC_S2C,
                 HassiumPacketIds.INDEX_SYNC_S2C,
+                HassiumPacketIds.PLAY_INIT_S2C,
+                HassiumPacketIds.SHADOW_PULL_RESPONSE_S2C,
                 HassiumPacketIds.LIGHT_DELTA_S2C,
                 HassiumPacketIds.BLOCK_ENTITY_DATA_S2C,
                 HassiumPacketIds.MAIN_CHANNEL,

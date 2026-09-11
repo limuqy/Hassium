@@ -107,6 +107,21 @@ class ShadowLightComputeTimingRegressionTest {
         assertTrue(first < second, "入队序号必须单调递增，drainReady 按到达顺序 apply");
     }
 
+    @Test
+    @DisplayName("进服区块 apply：脚下柱切比雪夫压过 FIFO 序号")
+    void joinWorldChunkPriorityPrefersStandingColumn() {
+        io.github.limuqy.mc.hassium.cache.client.JoinWorldFocus.setFocusChunk(0, 0);
+        try {
+            double standing = io.github.limuqy.mc.hassium.cache.client.JoinWorldFocus
+                    .chunkApplyPriority(0, 0, ShadowLightCompute.fifoApplyPriority());
+            double far = io.github.limuqy.mc.hassium.cache.client.JoinWorldFocus
+                    .chunkApplyPriority(8, 8, ShadowLightCompute.fifoApplyPriority());
+            assertTrue(standing < far, "加载屏脚下柱必须先于远处 boot grid 出队");
+        } finally {
+            io.github.limuqy.mc.hassium.cache.client.JoinWorldFocus.clear();
+        }
+    }
+
 
     @Test
     @DisplayName("影子存档：仅 type126 进入原版 RegionFile 解析")

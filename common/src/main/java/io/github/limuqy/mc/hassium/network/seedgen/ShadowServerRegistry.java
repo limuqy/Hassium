@@ -45,14 +45,16 @@ public final class ShadowServerRegistry {
     private volatile boolean parked;
     /**
      * 仅 {@link #permitUnparkForLogin()}（onLogin）允许把 park 实例拉回 ACTIVE。
-     * ConnectScreen 投机 {@code getOrCreate} 不得在网关/执行器就绪前 unpark——
-     * 否则 onLogin {@code initClient} 会拆掉刚拉起的 pump，R2 入站帧半包。
+     * ConnectScreen 投机 {@code getOrCreate} 不得在 {@code onLogin} 前 unpark。
+     * 连服期 {@code ensureClient} 不再拆执行器，但 park 实例仍须等登录会话再拉活。
      */
     private volatile boolean unparkPermitted;
     /** 当前实例装配用的 world seed（投机创建时可为 0；seed 到达后触发重建判定）。 */
     private volatile long assembledSeed;
     /** createShadowServerWithLockRetry 进行中（onServerSeedArrived 重试等待该标志）。 */
     private volatile boolean creating;
+    /** 连服取消：装配完成后 park，避免标题画面常驻影子端。 */
+    private volatile boolean speculativeAbandoned;
     /** 本次关停后台任务（关停完成时 complete；保存必须落完才能重开同一存档目录）。 */
     private volatile java.util.concurrent.CompletableFuture<Void> shutdownFuture;
     /** 上一次关停的 future（由每次 {@link #shutdown()} 更新为本次 future）——
@@ -160,7 +162,10 @@ public final class ShadowServerRegistry {
                         "[SHADOW] Shadow server ready (seed={}) (+{}ms)",
                         seed, (System.nanoTime() - createStartNs) / 1_000_000L);
                 creating = false;
-                return created;
+                boolean abandon = speculativeAbandoned && !unparkPermitted;
+                if (!abandon) {
+                    return created;
+                }
             } catch (Exception e) {
                 creating = false;
                 failShadowServer();
@@ -169,7 +174,30 @@ public final class ShadowServerRegistry {
                 return null;
             }
         }
+        parkForReuse();
+        return server;
     }
+
+    /** 新的连服意图：清掉上一轮取消标记。 */
+    public void beginSpeculativeConnect() {
+        speculativeAbandoned = false;
+    }
+
+    /**
+     * 连服取消/失败：若尚未 onLogin unpark，把投机实例 park 掉。
+     * 装配仍在进行时只打标，{@link #getOrCreate()} 完成后自行 park。
+     */
+    public void abandonSpeculativeConnect() {
+        speculativeAbandoned = true;
+        if (unparkPermitted) {
+            return;
+        }
+        if (creating) {
+            return;
+        }
+        parkForReuse();
+    }
+
     /**
      * SeedGen 预期下（客户端配置开启）等待握手 seed 到达，有界超时后按现状以 seed=0
      * 装配降级（消费侧本地生成仍被既有 gate 拦截，不产出错误地形）。

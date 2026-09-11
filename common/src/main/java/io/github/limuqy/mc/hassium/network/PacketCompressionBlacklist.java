@@ -30,13 +30,15 @@ public class PacketCompressionBlacklist {
      * 1. 已独立 ZSTD 压缩的数据面包（避免双重压缩）
      * 2. 控制面 / 专用 receiver 通道（禁止进 PENDING 聚合缓冲；
      *    聚合拆包走 RawCustomPayload.handle 会绕开 Fabric/NeoForge receiver，
-     *    导致 chunkHash / IndexSync 等永不触达业务处理器）
+     *    导致 chunkHash / IndexSync / play_init / shadow_pull_response 等永不触达或卡住进服）
      */
     private static final Set<String> HARDCODED_BLACKLIST = Set.of(
             // 控制面：握手 / 字典 / 索引 / hash / 光照增量 / BE 数据
             HassiumPacketIds.HANDSHAKE_S2C,
             HassiumPacketIds.DICTIONARY_SYNC_S2C,
             HassiumPacketIds.INDEX_SYNC_S2C,
+            HassiumPacketIds.PLAY_INIT_S2C,
+            HassiumPacketIds.SHADOW_PULL_RESPONSE_S2C,
             HassiumPacketIds.LIGHT_DELTA_S2C,
             HassiumPacketIds.BLOCK_ENTITY_DATA_S2C,
             // 技术限制：Forge/NeoForge SimpleChannel 共用通道

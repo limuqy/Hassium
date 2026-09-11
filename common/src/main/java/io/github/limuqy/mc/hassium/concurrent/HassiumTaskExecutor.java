@@ -290,6 +290,17 @@ public class HassiumTaskExecutor implements AutoCloseable, Executor {
     }
 
     /**
+     * 连服投机装配与 {@code onLogin} 共用：已在跑则不重建，避免拆掉正在 WorldLoader 的 getOrCreate。
+     */
+    public static synchronized void ensureClient() {
+        HassiumTaskExecutor current = clientInstance;
+        if (current != null && current.isRunning()) {
+            return;
+        }
+        initClient(DEFAULT_CLIENT_THREADS);
+    }
+
+    /**
      * 初始化服务端执行器（服务器启动时调用）
      *
      * @param threads 平台线程数上限

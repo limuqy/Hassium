@@ -99,6 +99,9 @@ public final class HassiumPacketIds {
 
     public static final String SHADOW_PULL_RESPONSE_S2C = "hassium:shadow_pull_response_s2c";
 
+    /** Play 期激活（协商位 + SeedGen 种子）；进服控制面，禁止进 PENDING 聚合。 */
+    public static final String PLAY_INIT_S2C = "hassium:play_init_s2c";
+
 
     /**
      * 服务端 -> 客户端：光照增量通知

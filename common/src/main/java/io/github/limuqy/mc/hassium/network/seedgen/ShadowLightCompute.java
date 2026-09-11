@@ -1,6 +1,8 @@
 package io.github.limuqy.mc.hassium.network.seedgen;
 
 import io.github.limuqy.mc.hassium.cache.client.ClientMainThreadBudget;
+import io.github.limuqy.mc.hassium.cache.client.JoinWorldFocus;
+import io.github.limuqy.mc.hassium.compat.ClientLoadingScreenCompat;
 import io.github.limuqy.mc.hassium.concurrent.HassiumTaskExecutor;
 import io.github.limuqy.mc.hassium.concurrent.KeyedPriorityQueue;
 import io.github.limuqy.mc.hassium.concurrent.TaskCategory;
@@ -157,6 +159,8 @@ public final class ShadowLightCompute {
     private static final java.util.Set<Long> accountedCacheHits = java.util.concurrent.ConcurrentHashMap.newKeySet();
     /** 光照命中/重算已记账柱（复合键）。邻柱 LIGHT_ONLY 补光会把同一片柱刷成千上万次。 */
     private static final java.util.Set<Long> accountedLights = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    /** 第一柱立刻回传去重：同柱只打一次包，避免注入/consume/屏障各排一次影子主线程。 */
+    private static final java.util.Set<Long> immediateEmitted = java.util.concurrent.ConcurrentHashMap.newKeySet();
 
     /** hash 分流计数（会话累计；断连清零）。冒烟探针用，分辨整柱 miss 是内存漂移还是盘上无槽。 */
     private static final AtomicLong hashMemoryHits = new AtomicLong();
@@ -371,6 +375,7 @@ public final class ShadowLightCompute {
         accountedLights.clear();
         shadowApplyEpochs.clear();
         fullApplyTraces.clear();
+        immediateEmitted.clear();
     }
 
     /** 直推已在影子管线里：hash miss 不得再打全量，否则和进服推送抢 4/tick 配额留下虚空。 */
@@ -849,7 +854,8 @@ public final class ShadowLightCompute {
     }
 
     /**
-     * 影子回传入队序号：数值越小越先 apply。区块/光包均 FIFO，不按玩家距离。
+     * 影子回传入队序号：数值越小越先 apply。光包仍 FIFO；区块在有脚下焦点时
+     * 由 {@link JoinWorldFocus#chunkApplyPriority} 把切比雪夫叠到序号上。
      */
     static double fifoApplyPriority() {
         return applyOfferSeq.getAndIncrement();
@@ -1106,8 +1112,9 @@ public final class ShadowLightCompute {
         if (isNetworkOrigin(origin == null ? TraceOrigin.SERVER_PUSH : origin)) {
             networkInFlight.add(key);
         }
-        generated.put(key, new GenEntry(chunk, level, false, false,
-                origin == null ? TraceOrigin.SERVER_PUSH : origin));
+        TraceOrigin resolvedOrigin = origin == null ? TraceOrigin.SERVER_PUSH : origin;
+        generated.put(key, new GenEntry(chunk, level, false, false, resolvedOrigin));
+        emitStandingImmediately(key, chunk, level, false, resolvedOrigin);
         pump();
     }
 
@@ -1227,8 +1234,30 @@ public final class ShadowLightCompute {
             return true;
         }
         generated.put(key, new GenEntry(chunk, level, lightReuse, renderOnly, traceOrigin));
+        emitStandingImmediately(key, chunk, level, renderOnly, traceOrigin);
         pump();
         return true;
+    }
+
+    /**
+     * 第一柱：注入后立刻回传，不等 native 光屏障。光仍后台跑，完成后 REPLACE。
+     * SKIP_IF_PRESENT 避免慢打包盖掉已经入队的带光包。
+     */
+    private static void emitStandingImmediately(long key, LevelChunk chunk,
+                                                net.minecraft.server.level.ServerLevel level,
+                                                boolean renderOnly, TraceOrigin origin) {
+        if (chunk == null || level == null) {
+            return;
+        }
+        JoinWorldFocus.updateFromClient();
+        ChunkPos pos = chunk.getPos();
+        if (!JoinWorldFocus.shouldEmitImmediately(pos.x, pos.z)) {
+            return;
+        }
+        if (!immediateEmitted.add(key)) {
+            return;
+        }
+        pushReady(key, chunk, level, false, renderOnly, origin, true);
     }
 
     private static boolean isNetworkOrigin(TraceOrigin origin) {
@@ -1290,25 +1319,24 @@ public final class ShadowLightCompute {
                     break; // 管道已满：等完成回调释放容量（低于低水位时重新 pump）
                 }
                 int room = PIPELINE_MAX_INFLIGHT - inFlight;
-                List<Map.Entry<Long, PendingEntry>> batch =
-                        new ArrayList<>(Math.min(CONSUME_BATCH_LIMIT, room));
-                for (Map.Entry<Long, PendingEntry> e : pending.entrySet()) {
-                    if (batch.size() >= CONSUME_BATCH_LIMIT || batch.size() >= room) {
-                        break;
-                    }
+                int limit = Math.min(CONSUME_BATCH_LIMIT, room);
+                // 脚下柱若只在 generated：pending 不得占满 24 槽把它挤掉。
+                int pendingLimit = limit;
+                if (JoinWorldFocus.findStandingKey(generated) != null
+                        && JoinWorldFocus.findStandingKey(pending) == null
+                        && pendingLimit > 0) {
+                    pendingLimit = limit - 1;
+                }
+                List<Map.Entry<Long, PendingEntry>> batch = new ArrayList<>(Math.max(4, pendingLimit));
+                JoinWorldFocus.fillDistanceFirst(pending, batch, pendingLimit);
+                for (Map.Entry<Long, PendingEntry> e : batch) {
                     io.github.limuqy.mc.hassium.utils.ChunkFlowTiming.recordConsume(e.getKey());
-                    batch.add(e);
                 }
                 // 本轮提交总量（pending+gen+delta+light）也以 CONSUME_BATCH_LIMIT 封顶：
                 // 防止 gen/delta/light 把单轮任务量叠回 1000 阈值。
-                int remaining = Math.min(room, CONSUME_BATCH_LIMIT) - batch.size();
+                int remaining = limit - batch.size();
                 List<Map.Entry<Long, GenEntry>> genBatch = new ArrayList<>();
-                for (Map.Entry<Long, GenEntry> e : generated.entrySet()) {
-                    if (genBatch.size() >= remaining) {
-                        break;
-                    }
-                    genBatch.add(e);
-                }
+                JoinWorldFocus.fillDistanceFirst(generated, genBatch, remaining);
                 remaining -= genBatch.size();
                 List<Map.Entry<Long, DeltaWork>> deltaBatch = new ArrayList<>();
                 for (Map.Entry<Long, DeltaWork> e : pendingDeltas.entrySet()) {
@@ -1377,6 +1405,8 @@ public final class ShadowLightCompute {
                                     : traceOrigin(TraceOrigin.SHADOW_MEMORY_CACHE);
                             generated.put(e.getKey(), new GenEntry(existing, server.level(dimension), !needRelight,
                                     false, reuseOrigin));
+                            emitStandingImmediately(e.getKey(), existing, server.level(dimension),
+                                    false, reuseOrigin);
                             // 已有内存柱且 hash 未知/一致：复用现有柱，只把它送入光照阶段。
                             // 必须跳过下面的 injectChunk；REPLACE 会清空刚由邻柱传播来的光。
                             continue;
@@ -1402,6 +1432,8 @@ public final class ShadowLightCompute {
                     }
                     accountVisibleNetworkIngress(dimension, pos, staleRepush);
                     LevelChunk injected = server.injectedChunk(dimension, pos.x, pos.z);
+                    emitStandingImmediately(e.getKey(), injected, server.level(dimension),
+                            false, pendingEntry.traceOrigin());
                     lightTasks.add(new LightTask(e.getKey(), LightSource.PENDING, pendingEntry,
                             injected, server.level(dimension), LightMetric.RECOMPUTE,
                             false, pendingEntry.traceOrigin()));
@@ -1466,6 +1498,8 @@ public final class ShadowLightCompute {
                             gen.chunk, gen.level,
                             gen.lightReuse ? LightMetric.REUSE_CACHE : LightMetric.RECOMPUTE,
                             gen.renderOnly, gen.traceOrigin));
+                    emitStandingImmediately(e.getKey(), gen.chunk, gen.level, gen.renderOnly,
+                            gen.traceOrigin);
                 }
                 // 增量算光（LightDelta）：只清服务端声明变化的 section，重算后回传光包
                 // （不回传整柱 chunk 包——方块数据未变，整柱重推是水面「亮→黑→亮」跳变源）。
@@ -1600,6 +1634,9 @@ public final class ShadowLightCompute {
                 t.chunk, t.level, deadlineMs, t.metric, t.renderOnly, t.traceOrigin);
         inf.submittedAtNs = System.nanoTime();
         inflightLight.put(t.key, inf);
+        if (t.source != LightSource.LIGHT_ONLY) {
+            emitStandingImmediately(t.key, t.chunk, t.level, t.renderOnly, t.traceOrigin);
+        }
         try {
             net.minecraft.server.level.ServerLevel level = t.level != null
                     ? t.level : server.overworld();
@@ -1748,6 +1785,13 @@ public final class ShadowLightCompute {
     private static void pushReady(long key, net.minecraft.world.level.chunk.LevelChunk chunk,
                                   net.minecraft.server.level.ServerLevel level, boolean converged,
                                   boolean renderOnly, TraceOrigin traceOrigin) {
+        pushReady(key, chunk, level, converged, renderOnly, traceOrigin, false);
+    }
+
+    private static void pushReady(long key, net.minecraft.world.level.chunk.LevelChunk chunk,
+                                  net.minecraft.server.level.ServerLevel level, boolean converged,
+                                  boolean renderOnly, TraceOrigin traceOrigin,
+                                  boolean standingPreview) {
         ChunkPos pos = chunk.getPos();
         // P1（T7）：buildPacket 读注入 chunk section 容器（extractChunkData →
         // LevelChunkSection.write → PalettedContainer.acquire）——与 hash 比对线程
@@ -1758,7 +1802,7 @@ public final class ShadowLightCompute {
             synchronized (chunkLock(pos)) {
                 packet = SeedGenChunkCodec.buildPacket(chunk, level);
             }
-            offerReady(key, pos, packet, converged, renderOnly, traceOrigin);
+            offerReady(key, pos, packet, converged, renderOnly, traceOrigin, standingPreview);
         });
     }
 
@@ -1784,10 +1828,17 @@ public final class ShadowLightCompute {
     }
 
     /**
-     * 入 ready 队列（pos REPLACE）。{@code packet==null} 只记日志。预览与收敛共用。
+     * 入 ready 队列。第一柱立刻回传用 SKIP_IF_PRESENT，不盖已经入队的带光包；
+     * 光屏障完成后仍 REPLACE。
      */
     private static void offerReady(long key, ChunkPos pos, ClientboundLevelChunkWithLightPacket packet,
                                    boolean converged, boolean renderOnly, TraceOrigin traceOrigin) {
+        offerReady(key, pos, packet, converged, renderOnly, traceOrigin, false);
+    }
+
+    private static void offerReady(long key, ChunkPos pos, ClientboundLevelChunkWithLightPacket packet,
+                                   boolean converged, boolean renderOnly, TraceOrigin traceOrigin,
+                                   boolean standingPreview) {
         if (packet == null) {
             DebugLogger.warn(DebugLogger.LogType.ASYNC,
                     "[SHADOW_CHUNK] Build packet failed ({}, {})", pos.x, pos.z);
@@ -1802,8 +1853,10 @@ public final class ShadowLightCompute {
                 new KeyedPriorityQueue.Key(ChunkPos.asLong(pos.x, pos.z),
                         io.github.limuqy.mc.hassium.concurrent.MainThreadDispatcher.OP_CHUNK_APPLY,
                         DimensionKey.dimensionOf(key)),
-                fifoApplyPriority(),
-                KeyedPriorityQueue.OfferPolicy.REPLACE);
+                JoinWorldFocus.chunkApplyPriority(pos.x, pos.z, fifoApplyPriority()),
+                standingPreview
+                        ? KeyedPriorityQueue.OfferPolicy.SKIP_IF_PRESENT
+                        : KeyedPriorityQueue.OfferPolicy.REPLACE);
     }
 
     /**
@@ -1854,9 +1907,9 @@ public final class ShadowLightCompute {
     }
 
     /**
-     * 帧尾（MixinClientTick，渲染前）：光掩码入同一 FIFO 回传队列后按到达顺序落地。
-     * JoinBoost 两段消费：先 chunk 再光；非 JoinBoost 保持 FIFO。区块包入队时丢掉该柱旧光。
-     * 消费只受时间预算约束。
+     * 帧尾（MixinClientTick，渲染前）：区块按脚下切比雪夫优先，光包仍 FIFO。
+     * JoinBoost 两段消费：先 chunk 再光。加载屏只 apply 脚下 3×3。
+     * 区块包入队时丢掉该柱旧光。消费只受时间预算约束。
      */
     public static void drainReady() {
         drainReady(Long.MAX_VALUE);
@@ -1869,6 +1922,7 @@ public final class ShadowLightCompute {
      */
     public static void drainReady(long deadlineNs) {
         io.github.limuqy.mc.hassium.utils.ChunkFlowTiming.noteFrame(); // T0b 诊断：每帧 apply 计数
+        JoinWorldFocus.updateFromClient();
         ShadowSeedServer server = ShadowServerRegistry.getInstance().get();
         if (server != null && server.isLightConverged()) {
             server.confirmLightsCorrectIfConverged();
@@ -1902,9 +1956,11 @@ public final class ShadowLightCompute {
         }
         List<KeyedPriorityQueue.Entry<ReadyItem>> deferredLights = new ArrayList<>();
         List<KeyedPriorityQueue.Entry<ReadyItem>> deferredRetries = new ArrayList<>();
+        List<KeyedPriorityQueue.Entry<ReadyItem>> deferredFarChunks = new ArrayList<>();
         boolean forceOne = true;
         boolean chunkPassDone = !joinBoost;
         int chunksAppliedThisFrame = 0;
+        boolean loadingScreenVisible = ClientLoadingScreenCompat.isVisible();
         while (true) {
             KeyedPriorityQueue.Entry<ReadyItem> entry = ready.poll();
             if (entry == null) {
@@ -1932,6 +1988,13 @@ public final class ShadowLightCompute {
             boolean isChunk = item.chunkPacket != null;
             boolean isLight = item.lightPacket != null && !isChunk;
             boolean chunkWaiting = joinBoost && !chunkPassDone;
+            if (isChunk) {
+                ChunkPos chunkPos = new ChunkPos(entry.key().posLong());
+                if (JoinWorldFocus.shouldDeferFarChunk(chunkPos.x, chunkPos.z, loadingScreenVisible)) {
+                    deferredFarChunks.add(entry);
+                    continue;
+                }
+            }
             if (isLight && !shouldApplyLightThisFrame(joinBoost, chunkWaiting, chunksAppliedThisFrame)) {
                 deferredLights.add(entry);
                 continue;
@@ -1976,6 +2039,9 @@ public final class ShadowLightCompute {
         }
         for (KeyedPriorityQueue.Entry<ReadyItem> light : deferredLights) {
             ready.reoffer(light, light.priority());
+        }
+        for (KeyedPriorityQueue.Entry<ReadyItem> far : deferredFarChunks) {
+            ready.reoffer(far, far.priority());
         }
         for (KeyedPriorityQueue.Entry<ReadyItem> retry : deferredRetries) {
             ready.reoffer(retry, retry.priority());
@@ -2251,6 +2317,7 @@ public final class ShadowLightCompute {
         resetHashClassify();
         shadowApplyEpochs.clear();
         fullApplyTraces.clear();
+        immediateEmitted.clear();
         consumeRunning.set(false);
         io.github.limuqy.mc.hassium.network.ShadowPullClient.reset();
     }

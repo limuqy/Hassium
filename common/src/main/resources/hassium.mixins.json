@@ -32,6 +32,7 @@
     ],
     "client": [
       "MixinMinecraft",
+      "MixinConnectScreen",
       "MixinClientPacketListener",
       "MixinClientCommonPacketListenerImpl",
       "MixinClientHandshakePacketListenerImpl",

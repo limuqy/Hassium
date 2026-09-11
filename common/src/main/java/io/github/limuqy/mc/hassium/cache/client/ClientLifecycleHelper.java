@@ -26,6 +26,11 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public final class ClientLifecycleHelper {
 
     private static volatile boolean initialized = false;
+    /**
+     * {@link #onStartConnecting} 到 {@link #onLogin} / 连服失败之间为真。
+     * 用于取消连服时 park 投机影子，避免标题画面常驻一份 WorldLoader 实例。
+     */
+    private static volatile boolean connectInFlight = false;
     private static final AtomicBoolean finalized = new AtomicBoolean(false);
     /**
      * 本次会话拆除已跑过 {@link #cleanupOnDisconnect()}。{@link #finalizeDisconnectIfTerminal()}
@@ -64,6 +69,8 @@ public final class ClientLifecycleHelper {
      */
     public static void onLogin() {
         io.github.limuqy.mc.hassium.utils.LoginTiming.markLogin(); // T0b 诊断：handleLogin 时刻（总耗时起点）
+        connectInFlight = false;
+        JoinWorldFocus.updateFromClient();
         // 影子虚拟玩家 tracking 会话随新连接重置：R2 复用 park 实例时旧虚拟玩家仍在
         // 影子世界且位置未变 → 不会重新选柱 → R2 黑洞；登录即重建会话重新 tracking
         io.github.limuqy.mc.hassium.network.seedgen.ShadowTrackingSession.reset();
@@ -74,8 +81,8 @@ public final class ClientLifecycleHelper {
         // drainReady / hash 抽干 / unpark（否则 NeoForge 易卡在暂停态 → landed=0）。
         io.github.limuqy.mc.hassium.storage.ShadowStorageManager.resumeEncoding();
         if (!initialized) {
-            // 先重建执行器再 unpark：投机 ConnectScreen 不得在 park 实例上抢跑 pump。
-            HassiumTaskExecutor.initClient(HassiumTaskExecutor.DEFAULT_CLIENT_THREADS);
+            // 连服投机已 ensureClient 时不得 shutdown 重建——会拆掉正在 WorldLoader 的 getOrCreate。
+            HassiumTaskExecutor.ensureClient();
 
             // 尽早写入玩家坐标，避免首波 hash/payload 在首 tick 前用 (0,0) 算优先级
             try {
@@ -93,6 +100,13 @@ public final class ClientLifecycleHelper {
             io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.onCacheLocationReady();
             io.github.limuqy.mc.hassium.network.seedgen.ShadowServerRegistry.getInstance().permitUnparkForLogin();
             io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.onLogin();
+            // handleLogin 当下就发布位置：不等下一客户端 tick 才武装虚拟玩家。
+            try {
+                io.github.limuqy.mc.hassium.network.seedgen.ShadowTrackingSession
+                        .onClientTick(Minecraft.getInstance());
+            } catch (Exception ignored) {
+                // 影子未就绪时 skip；后续 tick 会再发布
+            }
 
             // M2: 异步初始化存储（热度索引 / section 哈希在后台线程）
             // 影子端只在 Hassium 能力握手确认后启动；原版服务端保持纯原版客户端路径。
@@ -108,11 +122,50 @@ public final class ClientLifecycleHelper {
      * 配置开启即装配影子端（与握手/login 并行）。
      * <p>
      * 触发点：{@link io.github.limuqy.mc.hassium.mixin.MixinConnectScreen} /
-     * NetworkCore 进入 CONNECTING / {@link #onLogin()}。幂等；无 gameDir/serverIp
-     * 时跳过（调用方稍后重试）。
+     * {@link #onLogin()} / play_init。幂等；无 gameDir/serverIp 时跳过（调用方稍后重试）。
      */
     public static void startShadowIfConfigured() {
         startShadowIfConfigured(null);
+    }
+
+    /**
+     * {@code ConnectScreen.startConnecting} TAIL：ensure 执行器并投机 WorldLoader。
+     * SeedGen 开着时不在连服瞬间装配（seed=0 会随后重建，重叠无收益）。
+     */
+    public static void onStartConnecting(net.minecraft.client.multiplayer.ServerData serverData) {
+        connectInFlight = true;
+        io.github.limuqy.mc.hassium.network.seedgen.ShadowServerRegistry.getInstance()
+                .beginSpeculativeConnect();
+        if (!HassiumConfigService.getInstance().isHassiumEngineEnabled()) {
+            return;
+        }
+        HassiumTaskExecutor.ensureClient();
+        recordCacheLocationForConnect(serverData);
+        if (HassiumConfigService.getInstance().isClientSeedGenEnabled()) {
+            io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.onCacheLocationReady();
+            return;
+        }
+        startShadowIfConfigured(serverData);
+    }
+
+    /**
+     * 离开 ConnectScreen。进入地形加载屏则放行；取消/失败则 park 投机实例。
+     */
+    public static void onConnectScreenDismissed(net.minecraft.client.gui.screens.Screen next) {
+        if (io.github.limuqy.mc.hassium.compat.ClientLoadingScreenCompat.isTerrainLoadingScreen(next)) {
+            return;
+        }
+        if (initialized) {
+            connectInFlight = false;
+            return;
+        }
+        connectInFlight = false;
+        io.github.limuqy.mc.hassium.network.seedgen.ShadowServerRegistry.getInstance()
+                .abandonSpeculativeConnect();
+    }
+
+    static boolean isConnectInFlight() {
+        return connectInFlight;
     }
 
     /**
@@ -240,6 +293,8 @@ public final class ClientLifecycleHelper {
         initialized = false;
         finalized.set(false);
         disconnectCleanupArmed.set(true);
+        connectInFlight = false;
+        JoinWorldFocus.clear();
         ClientMainThreadBudget.clearJoinBoost();
         io.github.limuqy.mc.hassium.network.handshake.ClientLoginNegotiation.clear();
         io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.resetRequestDedupForReconnect();

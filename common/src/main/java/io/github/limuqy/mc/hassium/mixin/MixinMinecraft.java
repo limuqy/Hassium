@@ -29,6 +29,9 @@ public abstract class MixinMinecraft {
     @Inject(method = "setScreen(Lnet/minecraft/client/gui/screens/Screen;)V", at = @At("HEAD"))
     private void hassium$onSetScreen(net.minecraft.client.gui.screens.Screen screen, CallbackInfo ci) {
         net.minecraft.client.gui.screens.Screen current = ((Minecraft) (Object) this).screen;
+        if (current instanceof net.minecraft.client.gui.screens.ConnectScreen) {
+            ClientLifecycleHelper.onConnectScreenDismissed(screen);
+        }
 #if MC_VER < MC_1_21_9
         if (current instanceof net.minecraft.client.gui.screens.ReceivingLevelScreen
                 && !(screen instanceof net.minecraft.client.gui.screens.ReceivingLevelScreen)) {
