@@ -177,6 +177,16 @@ public final class ShadowTrackingSession {
         return INSTANCE.effectiveClientVD;
     }
 
+    /** 诊断：虚拟玩家是否已创建（主循环心跳用）。 */
+    public boolean hasVirtualPlayer() {
+        return virtualPlayer != null;
+    }
+
+    /** 诊断：当前跟踪维度（主循环心跳用）。 */
+    public String currentDimension() {
+        return currentDimension;
+    }
+
     /** 影子主循环泵读取的当前跟踪维度 level（无会话/未跟踪返回 null）。 */
     public static ServerLevel trackedLevel() {
         ShadowTrackingSession s = INSTANCE;
@@ -475,14 +485,14 @@ public final class ShadowTrackingSession {
             appliedViewDistance = viewDistance;
             net.minecraft.network.Connection connection = ShadowPlayerCompat.createConnectionStub();
             ServerPlayer player = ShadowPlayerCompat.createVirtualPlayer(shadow, level);
-            ShadowPlayerCompat.placePlayer(shadow, connection, player);
-#if MC_VER < MC_1_21_5
-            player.absMoveTo(state.x(), state.y(), state.z(), state.yRot(), state.xRot());
-#else
-            player.teleportTo(state.x(), state.y(), state.z());
+            // 先同步位置再加入世界（不走移动 API）：forge patch 的 Entity.setPosRaw 在
+            // isAddedToWorld() && !isClientSide 时会同步 level.getChunk(FULL) 等待 chunk
+            // future，影子端该柱未生成会死锁影子主循环；未加入世界时该分支跳过，
+            // fabric 原版路径无此调用，行为不变。
+            player.setPosRaw(state.x(), state.y(), state.z());
             player.setYRot(state.yRot());
             player.setXRot(state.xRot());
-#endif
+            ShadowPlayerCompat.placePlayer(shadow, connection, player);
             ShadowPlayerCompat.moveVirtualPlayer(player);
             virtualPlayer = player;
             currentDimension = state.dimension();

@@ -331,33 +331,6 @@ public class ForgeNetworkManager implements NetworkManager {
         ctx.enqueueWork(() -> handleShadowPullResponse(msg));
     }
 
-
-    @Override
-    public void sendShadowPullRequest(FriendlyByteBuf buf) {
-        if (buf == null) {
-            return;
-        }
-        try {
-            byte[] data = new byte[buf.readableBytes()];
-            buf.readBytes(data);
-#if MC_VER < MC_1_21_1
-            if (CHANNEL != null) {
-                CHANNEL.sendToServer(new ShadowPullRequestWrapper(data));
-            }
-#else
-            sendToServer(new ShadowPullRequestWrapper(data));
-#endif
-        } catch (Exception e) {
-            LOGGER.warn("Hassium: Failed to send shadowPullV1 request", e);
-        } finally {
-            if (buf.refCnt() > 0) {
-                buf.release();
-            }
-        }
-    }
-
-
-
     private static void onBlockEntityRequest(BlockEntityRequestWrapper msg, CustomPayloadEvent.Context ctx) {
         ctx.enqueueWork(() -> handleBlockEntityRequest(msg, ctx.getSender()));
     }
@@ -396,8 +369,33 @@ public class ForgeNetworkManager implements NetworkManager {
     }
 #endif
 
-    // ========== 辅助方法 ==========
+    @Override
+    public void sendShadowPullRequest(FriendlyByteBuf buf) {
+        LOGGER.info("[DIAG] sendShadowPullRequest called, CHANNEL={}, readable={}", CHANNEL != null ? "set" : "null",
+                buf == null ? -1 : buf.readableBytes());
+        if (buf == null) {
+            return;
+        }
+        try {
+            byte[] data = new byte[buf.readableBytes()];
+            buf.readBytes(data);
+#if MC_VER < MC_1_21_1
+            if (CHANNEL != null) {
+                CHANNEL.sendToServer(new ShadowPullRequestWrapper(data));
+            }
+#else
+            sendToServer(new ShadowPullRequestWrapper(data));
+#endif
+        } catch (Exception e) {
+            LOGGER.warn("Hassium: Failed to send shadowPullV1 request", e);
+        } finally {
+            if (buf.refCnt() > 0) {
+                buf.release();
+            }
+        }
+    }
 
+    // ========== 辅助方法 ==========
 
     // ========== 共享处理逻辑 ==========
 

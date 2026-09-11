@@ -19,6 +19,16 @@ public class ForgeNetworkManagerService implements INetworkManagerService {
     private static final ForgeNetworkManager NETWORK_MANAGER = new ForgeNetworkManager();
 
     @Override
+    public void sendShadowPullRequest(FriendlyByteBuf buf) {
+        NETWORK_MANAGER.sendShadowPullRequest(buf);
+    }
+
+    @Override
+    public void sendShadowPullResponse(ServerPlayer player, FriendlyByteBuf buf) {
+        NETWORK_MANAGER.sendShadowPullResponse(player, buf);
+    }
+
+    @Override
     public void sendBlockEntityRequest(FriendlyByteBuf buf) {
         NETWORK_MANAGER.sendBlockEntityRequest(buf);
     }

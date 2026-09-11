@@ -72,8 +72,8 @@ public abstract class MixinServerPlayer extends Player {
             method = "<init>(Lnet/minecraft/server/MinecraftServer;Lnet/minecraft/server/level/ServerLevel;Lcom/mojang/authlib/GameProfile;)V",
             at = @org.spongepowered.asm.mixin.injection.At(value = "INVOKE",
                     target = "Lnet/minecraft/server/level/ServerPlayer;fudgeSpawnLocation(Lnet/minecraft/server/level/ServerLevel;)V"))
-    private static void hassium$skipFudgeSpawn(net.minecraft.server.level.ServerPlayer self,
-                                               net.minecraft.server.level.ServerLevel level) {
+    private void hassium$skipFudgeSpawn(net.minecraft.server.level.ServerPlayer self,
+                                        net.minecraft.server.level.ServerLevel level) {
         if (!io.github.limuqy.mc.hassium.server.RuntimeServerContext.isShadowServerContext()) {
             ((MixinServerPlayer) (Object) self).invokeFudgeSpawnLocation(level);
         }

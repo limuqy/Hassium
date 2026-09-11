@@ -1386,7 +1386,18 @@ public class ShadowSeedServer extends MinecraftServer {
     void runMainLoop() {
         ServerChunkCache cache = (ServerChunkCache) this.overworld().getChunkSource();
         ThreadedLevelLightEngine lightEngine = cache.getLightEngine();
+        long loopCount = 0;
         while (!Thread.currentThread().isInterrupted()) {
+            loopCount++;
+            if (loopCount == 200 || loopCount == 2000 || loopCount == 20000) {
+                io.github.limuqy.mc.hassium.Constants.LOG.info(
+                        "[SHADOW_LOOP] alive loops={} shadowPlayer={} trackingDim={}",
+                        loopCount,
+                        io.github.limuqy.mc.hassium.network.seedgen.ShadowTrackingSession
+                                .getInstance().hasVirtualPlayer(),
+                        io.github.limuqy.mc.hassium.network.seedgen.ShadowTrackingSession
+                                .getInstance().currentDimension());
+            }
             boolean worked;
             try {
                 worked = this.pollTask();
@@ -1394,9 +1405,17 @@ public class ShadowSeedServer extends MinecraftServer {
                 // 影子虚拟玩家 tracking 会话：位置同步消费 + chunk 系统簿记 + pull 请求分批
                 io.github.limuqy.mc.hassium.network.seedgen.ShadowTrackingSession.getInstance()
                         .consumeOnShadowLoop();
-            } catch (Throwable ignored) {
-                break; // server 已 halt
-            }
+            } catch (Throwable t) {
+                // server 已 halt 时 pollTask 会抛中断类异常，属正常退出；
+                // 其余异常静默吞掉会把影子主循环杀成「无声停摆」，必须留痕。
+                if (t instanceof InterruptedException
+                        || (t.getCause() instanceof InterruptedException)) {
+                    break;
+                }
+                io.github.limuqy.mc.hassium.Constants.LOG.error(
+                        "[SHADOW_LOOP] shadow main loop crashed; session halted", t);
+                break;
+             }
             try {
                 lightEngine.tryScheduleUpdate();
             } catch (Throwable ignored) {
