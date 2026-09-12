@@ -465,7 +465,7 @@ if ($needConfigTrackerClean) {
     }
 }
 
-if ($Scenario -in @("seedgen", "dimension", "ovdgen")) {
+if ($Scenario -in @("seedgen", "dimension")) {
     if (-not $CleanWorld) {
         Write-Host "[$SessionId] 场景 '$Scenario' 强制 -CleanWorld（重置 ${Loader}/${Ver} 存档目录）"
     }
@@ -476,7 +476,7 @@ if ($Scenario -in @("seedgen", "dimension", "ovdgen")) {
 # 按键值对 patch 双端 hassium toml（须在服务端/客户端启动前完成）。文件不存在则 no-op。
 Invoke-SmokeProfilePatch -Name $Scenario -ClientRunDir $clientRunDir -ServerRunDir $serverRunDir -SessionTag $SessionId
 if ($Scenario -eq "classic") {
-    # 覆盖 ovdgen 等残留：classic 固定 OVD 上限 16（R1 服 20 > OVD 16 > R2 服 10）
+    # classic 固定 OVD 上限 16（R1 服 20 > OVD 16 > R2 服 10）
     Set-SmokeTomlKeys -Label "classic OVD pin" -ClientRunDir $clientRunDir -ServerRunDir $serverRunDir -SessionTag $SessionId -Pairs @(
         @{ Key = "chunk.maxRenderDistance"; Value = "16" }
     )

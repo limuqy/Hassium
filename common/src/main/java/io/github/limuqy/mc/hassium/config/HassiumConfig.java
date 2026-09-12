@@ -42,7 +42,7 @@ public record HassiumConfig(
     }
 
     /**
-     * 区块核心配置（双端；client.toml chunk.* CLIENT 18 键 + 服务端 chunk.lightStrip/chunk.seedGenEnabled）。
+     * 区块核心配置（双端；client.toml chunk.* CLIENT 14 键 + 服务端 chunk.lightStrip/chunk.seedGenEnabled）。
      * <p>
      * 吸收原 ClientCacheConfig 全族与 network.seedGen.enabled（双端同名键，按物理端加载）。
      * Bloom filter 参数硬编码（enabled=true, insertions=10000, fpp=0.01）。
@@ -63,7 +63,6 @@ public record HassiumConfig(
             // === 超视渲染 OVD（影子双窗；无延迟卸载）===
             boolean viewDistanceExtensionEnabled,
             int maxRenderDistance,
-            boolean ovdLocalGeneration,
             // === 线程与应用（从原 NetworkConfig 吸收的客户端字段）===
             int maxChunksPerFrame,
             int mainThreadChunkBudgetMs,
@@ -84,7 +83,6 @@ public record HassiumConfig(
                 true,    // sectionDeltaEnabled
                 true,    // viewDistanceExtensionEnabled
                 16,      // maxRenderDistance
-                false,   // ovdLocalGeneration
                 6,       // maxChunksPerFrame
                 15,      // mainThreadChunkBudgetMs
                 false,   // seedGenEnabled

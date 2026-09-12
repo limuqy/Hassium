@@ -55,7 +55,7 @@ public class ServerChunkPushManager {
     private static final ServerChunkPushManager INSTANCE = new ServerChunkPushManager();
 
     /**
-     * 每玩家光照计算能力（握手 C2S 上报 lightComputeSupported = 客户端 hassiumEngineEnabled）。
+     * 每玩家光照计算能力（握手 C2S 上报 lightComputeSupported = 客户端 chunk.enabled）。
      * 服务端据此决定是否剥光：客户端声明可本地/影子端算光才剥（stripLightIfConfigured gate）。
      */
     private final Map<UUID, Boolean> playerLightComputeSupported = new ConcurrentHashMap<>();

@@ -90,8 +90,8 @@ public class FabricHassiumCommand {
 
     /** 无参数：导出当前世界（单人世界会提示错误） */
     private static int exportCurrentWorld(CommandContext<FabricClientCommandSource> context) {
-        String msg = HassiumCommandHandler.startCacheExport(null, null);
-        context.getSource().sendFeedback(Component.literal(msg));
+        Component msg = HassiumCommandHandler.startCacheExport(null, null);
+        context.getSource().sendFeedback(msg);
         return 1;
     }
 
@@ -105,8 +105,8 @@ public class FabricHassiumCommand {
             // 未提供 seed
         }
 
-        String msg = HassiumCommandHandler.startCacheExport(serverIp, seed);
-        context.getSource().sendFeedback(Component.literal(msg));
+        Component msg = HassiumCommandHandler.startCacheExport(serverIp, seed);
+        context.getSource().sendFeedback(msg);
         return 1;
     }
 

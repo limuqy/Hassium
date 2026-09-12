@@ -227,11 +227,6 @@ public class HassiumConfigService {
         return config.chunk().maxRenderDistance();
     }
 
-    /** OVD 窗缓存 miss 时本地生成。 */
-    public boolean isOvdLocalGenerationEnabled() {
-        return config.chunk().ovdLocalGeneration();
-    }
-
     /**
      * 影子端运行时可用（= 配置开启 && 服务端已装 MOD && 影子服务端创建成功，启用态）。
      * 启用态下影子端负责权威光照与回传；客户端光照引擎仍保持 vanilla 默认开启。

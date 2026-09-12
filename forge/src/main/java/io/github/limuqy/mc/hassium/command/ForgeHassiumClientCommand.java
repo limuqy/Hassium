@@ -67,8 +67,8 @@ public class ForgeHassiumClientCommand {
 
     /** 无参数：导出当前世界（单人世界会提示错误） */
     private static int exportCurrentWorld(CommandContext<CommandSourceStack> context) {
-        String msg = HassiumCommandHandler.startCacheExport(null, null);
-        context.getSource().sendSuccess(() -> Component.literal(msg), false);
+        Component msg = HassiumCommandHandler.startCacheExport(null, null);
+        context.getSource().sendSuccess(() -> msg, false);
         return 1;
     }
 
@@ -82,8 +82,8 @@ public class ForgeHassiumClientCommand {
             // 未提供 seed
         }
 
-        String msg = HassiumCommandHandler.startCacheExport(serverIp, seed);
-        context.getSource().sendSuccess(() -> Component.literal(msg), false);
+        Component msg = HassiumCommandHandler.startCacheExport(serverIp, seed);
+        context.getSource().sendSuccess(() -> msg, false);
         return 1;
     }
 }

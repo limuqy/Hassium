@@ -253,7 +253,7 @@ def analyze_result(result: dict[str, Any], root: Path) -> dict[str, Any]:
                                          thresholdMs=10_000, chunks=late_near_player[:64],
                                          truncated=len(late_near_player) > 64))
         gaps = trace_report["gaps"]
-        # TRACE 缺口门禁仅 classic：ovdgen 等场景的本地生成/盘回填不走同一 trace 契约
+        # TRACE 缺口门禁仅 classic：其它场景的盘回填不走同一 trace 契约
         if scenario == "classic":
             for key, code in (("expectedNotPresent", "TRACE_EXPECTED_NOT_PRESENT"),
                               ("receivedNotInjected", "TRACE_RECEIVED_NOT_INJECTED"),

@@ -68,7 +68,7 @@ public final class HassiumClothConfigScreen {
                 draft.cacheSectionDeltaEnabled, dCache.sectionDeltaEnabled(),
                 v -> draft.cacheSectionDeltaEnabled = v));
 
-        // === Category 2: 渲染与生成（6 项）===
+        // === Category 2: 渲染、加载与生成（5 项）===
         ConfigCategory rendering = builder.getOrCreateCategory(
                 Component.translatable("hassium.configuration.category.rendering"));
         rendering.addEntry(bool(entries, "hassium.configuration.chunk.viewDistanceExtensionEnabled",
@@ -84,9 +84,6 @@ public final class HassiumClothConfigScreen {
                 v -> draft.mainThreadChunkBudgetMs = v));
         rendering.addEntry(bool(entries, "hassium.configuration.chunk.seedGenEnabled",
                 draft.seedGenEnabled, dCache.seedGenEnabled(), v -> draft.seedGenEnabled = v));
-        rendering.addEntry(bool(entries, "hassium.configuration.chunk.ovdLocalGeneration",
-                draft.ovdLocalGeneration, dCache.ovdLocalGeneration(),
-                v -> draft.ovdLocalGeneration = v));
 
         // === Category 3: 调试（客户端 10 项）===
         ConfigCategory debugCat = builder.getOrCreateCategory(
@@ -176,7 +173,6 @@ public final class HassiumClothConfigScreen {
         boolean cacheSectionDeltaEnabled;
         boolean viewDistanceExtensionEnabled;
         int maxRenderDistance;
-        boolean ovdLocalGeneration;
         int maxChunksPerFrame;
         int mainThreadChunkBudgetMs;
         boolean seedGenEnabled;
@@ -206,7 +202,6 @@ public final class HassiumClothConfigScreen {
             d.cacheSectionDeltaEnabled = cache.sectionDeltaEnabled();
             d.viewDistanceExtensionEnabled = cache.viewDistanceExtensionEnabled();
             d.maxRenderDistance = cache.maxRenderDistance();
-            d.ovdLocalGeneration = cache.ovdLocalGeneration();
             d.maxChunksPerFrame = cache.maxChunksPerFrame();
             d.mainThreadChunkBudgetMs = cache.mainThreadChunkBudgetMs();
             d.seedGenEnabled = cache.seedGenEnabled();
@@ -231,7 +226,7 @@ public final class HassiumClothConfigScreen {
                             cacheHotScoreThreshold, cacheRecencyWeight, cacheFrequencyWeight,
                             cacheCleanupIntervalTicks, cacheTargetCacheSizeMb, cacheMinCleanupBatchSize,
                             cacheSectionDeltaEnabled,
-                            viewDistanceExtensionEnabled, maxRenderDistance, ovdLocalGeneration,
+                            viewDistanceExtensionEnabled, maxRenderDistance,
                             maxChunksPerFrame, mainThreadChunkBudgetMs,
                             seedGenEnabled,
                             HassiumConfig.ChunkCoreConfig.DEFAULT.lightStrip()),

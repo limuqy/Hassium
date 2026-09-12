@@ -9,7 +9,7 @@ import java.util.function.Supplier;
 public final class ConfigSchema {
     private static final List<ConfigEntry<?>> ENTRIES = new ArrayList<>();
 
-    // === 区块核心（chunk.*；CLIENT 15 键）===
+    // === 区块核心（chunk.*；CLIENT 14 键）===
     public static final ConfigKey<Boolean> CHUNK_ENABLED = bool("chunk.enabled", ConfigScope.CLIENT, Domain.CHUNK_CORE, true,
             "是否启用区块核心缓存", "Whether to enable the chunk-core cache");
     public static final ConfigKey<Integer> CHUNK_MAX_SIZE_MB = integer("chunk.maxSizeMb", ConfigScope.CLIENT, Domain.CHUNK_CORE, 4096, 64, 1024 * 1024,
@@ -45,9 +45,6 @@ public final class ConfigSchema {
     public static final ConfigKey<Integer> CHUNK_MAX_RENDER_DISTANCE = integer("chunk.maxRenderDistance", ConfigScope.CLIENT, Domain.CHUNK_CORE, 16, 2, 64,
             "超视渲染 effective clientRD 上限",
             "Max effective client render distance for OVD");
-    public static final ConfigKey<Boolean> CHUNK_OVD_LOCAL_GENERATION = bool("chunk.ovdLocalGeneration", ConfigScope.CLIENT, Domain.CHUNK_CORE, false,
-            "OVD 窗缓存 miss 时按服务端种子本地生成",
-            "Generate OVD-window chunks locally from the server seed on cache miss");
 
 
     // === 存储域（storage.*；SERVER 2 键）===

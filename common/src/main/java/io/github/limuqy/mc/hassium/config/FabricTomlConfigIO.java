@@ -361,7 +361,6 @@ public final class FabricTomlConfigIO {
                 getBool(cfg, "chunk.sectionDeltaEnabled", d.sectionDeltaEnabled()),
                 getBool(cfg, "chunk.viewDistanceExtensionEnabled", d.viewDistanceExtensionEnabled()),
                 getInt(cfg, "chunk.maxRenderDistance", d.maxRenderDistance()),
-                getBool(cfg, "chunk.ovdLocalGeneration", d.ovdLocalGeneration()),
                 getInt(cfg, "chunk.maxChunksPerFrame", d.maxChunksPerFrame()),
                 getInt(cfg, "chunk.mainThreadChunkBudgetMs", d.mainThreadChunkBudgetMs()),
                 getBool(cfg, "chunk.seedGenEnabled", d.seedGenEnabled()),
@@ -381,12 +380,12 @@ public final class FabricTomlConfigIO {
         set(cfg, "chunk.sectionDeltaEnabled", c.sectionDeltaEnabled(), "启用分段增量");
         set(cfg, "chunk.viewDistanceExtensionEnabled", c.viewDistanceExtensionEnabled(), "启用超视渲染 OVD");
         set(cfg, "chunk.maxRenderDistance", c.maxRenderDistance(), "超视渲染 effective clientRD 上限");
-        set(cfg, "chunk.ovdLocalGeneration", c.ovdLocalGeneration(), "OVD 窗缓存 miss 本地生成");
         set(cfg, "chunk.maxChunksPerFrame", c.maxChunksPerFrame(), "每帧最大区块数");
         set(cfg, "chunk.mainThreadChunkBudgetMs", c.mainThreadChunkBudgetMs(), "主线程区块预算");
         set(cfg, "chunk.seedGenEnabled", c.seedGenEnabled(), "启用 SeedGen");
         set(cfg, "chunk.lightStrip", c.lightStrip(), "启用服务端光照剥离");
         cfg.remove("chunk.seedGenThreads");
+        cfg.remove("chunk.ovdLocalGeneration");
     }
 
 

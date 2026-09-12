@@ -4,6 +4,7 @@ import io.github.limuqy.mc.hassium.metrics.HassiumMetricsImpl;
 import io.github.limuqy.mc.hassium.metrics.MetricsTextFormatter;
 import io.github.limuqy.mc.hassium.metrics.NetworkStats;
 import net.minecraft.client.Minecraft;
+import net.minecraft.network.chat.Component;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -250,12 +251,12 @@ public class HassiumCommandHandler {
      *
      * @param serverIp 服务器 IP:Port（null/空时导出当前连接的服务器缓存）
      * @param seed     保留参数（种子已在影子端 level.dat 中，拷贝即可）
-     * @return 启动结果消息
+     * @return 启动结果消息组件（可翻译）
      */
-    public static String startCacheExport(String serverIp, Long seed) {
+    public static Component startCacheExport(String serverIp, Long seed) {
         Minecraft mc = Minecraft.getInstance();
         if (mc == null) {
-            return "§cMinecraft 实例不可用§r";
+            return Component.translatable("hassium.command.export.no_minecraft");
         }
         Path gameDir = mc.gameDirectory.toPath();
 
@@ -265,25 +266,23 @@ public class HassiumCommandHandler {
         } else {
             String serverId = io.github.limuqy.mc.hassium.network.ClientChunkPipeline.getInstance().getServerId();
             if (serverId == null) {
-                return "§c未连接服务器，无法确定导出目标§r";
+                return Component.translatable("hassium.command.export.no_connection");
             }
             cacheId = serverId;
         }
 
         Path src = gameDir.resolve("hassium_cache").resolve(cacheId).resolve("world");
         if (!Files.isDirectory(src)) {
-            return "§c未找到影子端世界目录：" + src + "§r";
+            return Component.translatable("hassium.command.export.world_not_found", src.toString());
         }
 
         Path dst = gameDir.resolve("hassium_exports").resolve(cacheId);
         try {
             Files.createDirectories(dst.getParent());
             copyTreeAsync(src, dst, cacheId);
-            return "§a开始导出 " + cacheId + " 的影子端世界...§r"
-                    + "\n§7目标: " + dst + "§r"
-                    + "\n§7(不导出 entities；保留 type 126 + chunkHash；level.dat 为影子端原版写出)§r";
+            return Component.translatable("hassium.command.export.started", cacheId, dst.toString());
         } catch (Exception e) {
-            return "§c导出启动失败: " + e.getMessage() + "§r";
+            return Component.translatable("hassium.command.export.start_failed", String.valueOf(e.getMessage()));
         }
     }
 
@@ -293,14 +292,14 @@ public class HassiumCommandHandler {
                 copyTree(src, dst);
                 Minecraft mc = Minecraft.getInstance();
                 if (mc != null && mc.gui != null) {
-                    mc.gui.getChat().addMessage(net.minecraft.network.chat.Component.literal(
-                            "§6[Hassium]§r 导出完成: " + dst));
+                    mc.gui.getChat().addMessage(
+                            Component.translatable("hassium.command.export.done", dst.toString()));
                 }
             } catch (Exception e) {
                 Minecraft mc = Minecraft.getInstance();
                 if (mc != null && mc.gui != null) {
-                    mc.gui.getChat().addMessage(net.minecraft.network.chat.Component.literal(
-                            "§c[Hassium]§r 导出失败: " + e.getMessage()));
+                    mc.gui.getChat().addMessage(
+                            Component.translatable("hassium.command.export.failed", String.valueOf(e.getMessage())));
                 }
             }
         }, "hassium-export-" + cacheId);
@@ -352,10 +351,5 @@ public class HassiumCommandHandler {
             return List.of();
         }
         return ids;
-    }
-
-    /** 查询当前导出状态。 */
-    public static String getCacheExportStatus() {
-        return "§a无导出任务（目录拷贝同步完成，见聊天回报）§r";
     }
 }

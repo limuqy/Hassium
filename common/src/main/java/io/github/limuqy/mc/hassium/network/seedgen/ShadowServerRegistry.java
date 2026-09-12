@@ -170,7 +170,7 @@ public final class ShadowServerRegistry {
                 creating = false;
                 failShadowServer();
                 Constants.LOG.error("Hassium: Shadow server creation failed; "
-                        + "client cache/lighting/OVD disabled. Disable 'chunk.hassiumEngineEnabled' to suppress.", e);
+                        + "client cache/lighting/OVD disabled. Disable 'chunk.enabled' to suppress.", e);
                 return null;
             }
         }
@@ -335,7 +335,7 @@ public final class ShadowServerRegistry {
                         mc.player.displayClientMessage(
                                 net.minecraft.network.chat.Component.literal(
                                         "[Hassium] Hassium 引擎异常：客户端缓存/超视渲染/SeedGen 已关闭。"
-                                                + "可在配置中关闭 chunk.hassiumEngineEnabled 抑制本提示。"),
+                                                + "可在配置中关闭 chunk.enabled 抑制本提示。"),
                                 false);
                     }
                 });
