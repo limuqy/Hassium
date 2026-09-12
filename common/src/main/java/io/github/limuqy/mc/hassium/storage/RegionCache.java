@@ -9,6 +9,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import net.minecraft.world.level.ChunkPos;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * 压缩 .mca 映像：只挂 header + 各槽压缩载荷，不解压整柱。
@@ -18,10 +20,29 @@ public final class RegionCache {
 
     static final int SECTOR_SIZE = 4096;
     static final int SLOTS = 1024;
+
+    /**
+     * 单槽扇区数上限：Anvil 头 location 低 8 位，256 槽以上原版走 external {@code .mcc} 承载，
+     * 映像表达不了。
+     */
+    static final int MAX_SLOT_SECTORS = 255;
+
+    private static final Logger LOGGER = LoggerFactory.getLogger("Hassium/RegionCache");
     private static final Pattern REGION_FILE_NAME =
             Pattern.compile("r\\.(-?\\d+)\\.(-?\\d+)\\.mca");
 
     private RegionCache() {}
+
+    /**
+     * 该载荷需要超过 {@link #MAX_SLOT_SECTORS} 个扇区（即映像槽位表达不了）。
+     * 唯一判定点：{@link Image#save} 据此整槽跳过。
+     */
+    static boolean needsExternalSectors(byte[] payloadAfterType) {
+        if (payloadAfterType == null) {
+            return false;
+        }
+        return (5 + payloadAfterType.length + SECTOR_SIZE - 1) / SECTOR_SIZE > MAX_SLOT_SECTORS;
+    }
 
     public static long regionKey(int chunkX, int chunkZ) {
         return ChunkPos.asLong(Math.floorDiv(chunkX, 32), Math.floorDiv(chunkZ, 32));
@@ -210,11 +231,16 @@ public final class RegionCache {
                 if (payload == null) {
                     continue;
                 }
+                if (needsExternalSectors(payload)) {
+                    // 超槽位柱（>1MiB 压缩载荷）整槽不进文件：钳到 255 会让下面的 arraycopy
+                    // 越界、覆写后续槽的数据（或直接 AIOOBE）。邻槽优先——该柱退化为下次
+                    // 会话 cache miss 重拉，绝不静默损坏别的柱。
+                    LOGGER.warn("Hassium: region slot {} oversize ({} bytes) dropped from {}",
+                            i, payload.length, file);
+                    continue;
+                }
                 int size = 5 + payload.length;
                 int sectors = (size + SECTOR_SIZE - 1) / SECTOR_SIZE;
-                if (sectors > 255) {
-                    sectors = 255;
-                }
                 locations[i] = (cursor << 8) | sectors;
                 cursor += sectors;
             }
@@ -225,10 +251,11 @@ public final class RegionCache {
                 buf.putInt(SECTOR_SIZE + i * 4, timestamps[i]);
             }
             for (int i = 0; i < SLOTS; i++) {
-                byte[] payload = payloads[i];
-                if (payload == null) {
+                // locations[i]==0 = 空槽或上面被丢弃的超槽位柱；两者都不得按偏移 0 写
+                if (locations[i] == 0) {
                     continue;
                 }
+                byte[] payload = payloads[i];
                 int fileOffset = (locations[i] >>> 8) * SECTOR_SIZE;
                 buf.putInt(fileOffset, 1 + payload.length);
                 out[fileOffset + 4] = HassiumType126Codec.COMPRESSION_TYPE;

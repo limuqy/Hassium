@@ -11,12 +11,12 @@
 | Bobby / 同类客户端视距外缓存 | **不兼容**；Hassium 影子端自行管理缓存与重交付，勿与 Bobby 同装 |
 | Immersive Portals | **不兼容** |
 | 同类压缩 / 协议替换（改 Netty Zlib 等） | **不兼容**；Hassium 通道压缩虽不触碰 vanilla 压缩层，但同类 mod 若替换原版压缩管线仍有冲突面 |
-| Starlight | **不考虑**（已并入原版光照） |
+| Starlight / ScalableLux | **主动兼容**（见 §7b）：光照引擎被整体替换，影子端 4 处控制面已适配 |
 | 包聚合导致第三方包异常 | 关 `master.enablePacketAggregation`，或把包 ID 加入 `master.compressionBlacklist` |
 | 反透视（改 chunk 发包内容） | **希望兼容**（miss 路径复用已构建包字节，见 §3） |
 | Distant Horizons / Voxy | **希望兼容**（独立 LOD 通道；见 §4） |
 | Sodium / Iris / Lithium / FerriteCore 等热门优化 | **冒烟通过**（Fabric 1.20.1，见 §6 / §10） |
-| C2ME | **Soft Compatible**（默认模块冒烟通过，见 §7） |
+| C2ME | **主动兼容**（读天然兼容 + 写侧接管，见 §7） |
 | 文件级服务端备份（含 InstantBackup） | **兼容**（见 §8）；语义级解压 Anvil 的工具不兼容 |
 
 ## 2. 侵入面摘要
@@ -65,12 +65,95 @@ Sodium / Iris / Lithium / FerriteCore / EntityCulling / ImmediatelyFast 等通�
 
 ## 7. C2ME
 
-- C2ME **不**引入自定义 region compression type；与 Hassium type 126 无「双格式抢写」设计冲突。
-- Hassium 仅拦截 `RegionFile` 的流式读写；若 C2ME 仍委托该 API → 可共存。
-- 若开启 **chunkio rewrite** 且自实现 MCA 读写、只认 type 1/2/3 → 读 126 可能失败。
-- 并发 IO 存在理论竞态；默认模块下 Fabric 1.20.1 冒烟已通过（见 §10），**不承诺** chunkio rewrite 全开时的官方兼容。
+C2ME 与 Hassium 是「加速器与用户」关系：Hassium 影子端的 worldgen 走原版 `ServerChunkCache` /
+`ChunkMap`，C2ME 的多核优化会**一并作用于影子端**（SeedGen 本地生成、缓存未命中加载）。
 
-**逃生：** `storage.enabled = false`（默认已关；保留网络优化）。
+### 7.1 IO 三层，只有第三层需要处理
+
+| C2ME 模块 | 配置键 | 默认 | 是否仍走 vanilla `RegionFile` |
+|-----------|--------|------|------------------------------|
+| `c2me-threading-chunkio` | `ioSystem.async` | true | 是 → Hassium 钩子全生效 |
+| `c2me-opts-chunkio` | `ioSystem.chunkStreamVersion` | -1（不改） | 值为 -1 时对应 mixin 不加载，无影响 |
+| `c2me-rewrites-chunkio` | `ioSystem.replaceImpl` | `globalExecutorParallelism >= 2`（多核机器默认**开**） | 否 → 见 §7.2 |
+
+### 7.2 读天然兼容、写需接管（`ioSystem.replaceImpl`）
+
+- **读已兼容**：`C2MEStorageThread.scheduleChunkRead` 调 `RegionFile.getChunkDataInputStream(ChunkPos)`
+  （公开方法），Hassium `MixinRegionFile` 的 HEAD 注入正好覆盖 → type 126 可读。
+- **写原本失效**：C2ME 自己拼 sector（`out.write(0)×4` → `out.write(format.getId())` →
+  `format.wrap(out)` → `putInt(0, size-5+1)` → `invokeWriteChunk`），**绕过**
+  `getChunkDataOutputStream`，而 Hassium 写钩子挂在后者 → type 126 永不产生；
+  更严重的是影子端 `hassium_cache` 恒写 126，非 126 槽会被影子读侧拒绝
+  （`ShadowChunkMapCompat.shouldSkipVanillaChunkParse`）→ 影子缓存永久 miss。
+
+**接管方式（零重压，两个 hook 都落在 vanilla 类上，不引用 C2ME 内部类）：**
+
+| hook | 位置 | 作用 |
+|------|------|------|
+| `MixinRegionFileVersion` | `RegionFileVersion.wrap(OutputStream)` HEAD | 压缩入口唯一汇合点；gate 放行时替换为 `HassiumPayloadStream`（从原始 NBT 一次性 ZSTD+字典压缩） |
+| `MixinRegionFileWrite` | `RegionFile.write(ChunkPos, ByteBuffer)` HEAD | 所有写入者的唯一汇合点，且只有这里有坐标；按签名检测回填 type 126 与 chunkHash |
+
+- 载荷长度沿用原版约定（length = 载荷 + 1），C2ME 与 vanilla 的 `size-5+1` 回填逻辑均无需改动。
+- 签名检测（`0x48` + 全零 hash）保证对 vanilla 压缩槽与本 mod 已完成槽都是幂等 no-op。
+- **零重压**：载荷在压缩入口即由 Hassium 直接 ZSTD+字典产出，`RegionFile.write` 只改 2 个头字段。
+
+**门控**（与 `MixinRegionFile` 写路径同口径）：影子端恒接管；专用服需 `storage.enabled=true`。
+无 C2ME 时两个 hook 由 `HassiumModCompatMixinPlugin` 整体跳过。
+
+**逃生：** `storage.enabled = false`（默认已关；影子端不受该开关约束，故影子缓存始终受益）。
+
+### 7.3 影子端：`RegionFile.write` 收编而非落盘（单写者）
+
+影子存档（`hassium_cache/<serverId>/world`）的磁盘写者**必须只有** `ShadowStorageManager`
+的 region 映像（整文件重写，按槽位重新紧凑扇区偏移）。原版 `RegionFile` 的 8KB 扇区表只在
+内存维护、每次写入整表回写磁盘且从不重读——两边都写同一 `.mca` 时偏移互相错位：原版按旧
+偏移读回别的柱 → `wrong location; relocating`，或把半截载荷当 type126 → ZSTD 解压失败。
+
+因此 `MixinRegionFile` 在影子上下文把写入**收编进映像**，两条缝都堵：
+
+- `getChunkDataOutputStream(ChunkPos)` HEAD（vanilla `ChunkBuffer` 路径）→ 返回收编缓冲。
+- `RegionFile.write(ChunkPos, ByteBuffer)` HEAD → 收编后 `cancel()` 落盘。C2ME
+  `ioSystem.replaceImpl` 绕过上一条缝，只走这条（§7.2）。
+
+`cancel()` 同时短路挂在同一注入点的后续 HEAD 注入，故影子上下文里 C2ME 的 type126/hash
+补丁不再执行（冒烟实测：2363 次影子写只放行 21 次补丁）。这是冗余而非缺失——收编路径已按
+坐标归一化嵌入 hash，且映像落盘自己写 type 字节；该补丁只在专用服存储路径（非影子）保留
+原有职责。**推论：`modCompat.type126Patched` 在影子上下文只作观测，不作门禁**（门禁改用
+`c2meHookHits`，见 runtime-smoke-test §外部 Mod 手动冒烟）。
+
+读侧同样改道映像（`ShadowSeedServer.loadFromDisk` 早已如此），否则过期扇区表仍会读出错位柱。
+非 Hassium 载荷（vanilla zlib/gzip/lz4/none）不收编，回落原版写盘——单写者约束只为该柱让步，
+不丢数据。需 >255 扇区的超槽位柱（>1 MiB 压缩载荷，Anvil 头 location 低 8 位表达不了）照收进
+映像（本会话仍可服务），但 `RegionCache.Image.save` 整槽跳过：钳位会让 `arraycopy` 越界覆写后续
+槽的数据，邻槽优先，该柱退化为下次会话 cache miss 重拉。
+
+## 7b. Starlight / ScalableLux（外部光照引擎）
+
+两者同源（ScalableLux `provides: ["starlight"]`，与 Starlight 互斥）：都在 `LevelLightEngine` 上
+实现 `StarLightLightingProvider` 并整体替换光照引擎。
+
+### 天然兼容（无需适配）
+
+- **出光**：Hassium 走 `new ClientboundLightUpdatePacket(pos, level.getLightEngine(), masks)`，其内部
+  `ClientboundLightUpdatePacketData.prepareSectionData` 用的正是公开入口
+  `LevelLightEngine.getLayerListener(layer).getDataLayerData(sp)`，而它被替换为返回对方 reader
+  → 回传给客户端的即是对方算好的光。
+- `getMinLightSection` / `getLightSectionCount` / `tryScheduleUpdate` 未被覆写，语义不变。
+- `chunkHash` 输入域是纯 BlockState（不含 LightData），故对方改存档 NBT 光标签不影响缓存身份。
+
+### 已适配的 4 处控制面（`compat.mods.ForeignLightEngine`）
+
+| 控制面 | 外部引擎下的失效原因 | Hassium 降级语义 |
+|--------|----------------------|------------------|
+| 清光 `queueSectionData` | 被覆写为 no-op | 跳过清光；调用方随后以 `lit=false` 全量重算（对方 `lightChunk` 会整柱覆写 nibble） |
+| 重算入参 `lightChunk(chunk, lit)` | `lit=true` 只做 `forceLoadInChunk`，不重算 | 语义已由既有 `LightMetric` 决定：增量/重算路径本就传 `lit=false` |
+| 收敛 `ThreadedLevelLightEngine.lightTasks` | 不再被填充（走对方自己的队列） | 跳过水位判定，只看 `hasLightWork()` |
+| 天光源 `ChunkSkyLightSources` | `update` 被 `@Redirect` 成 no-op，数值过期 | 跳过 `getLowestSourceY` 子检查（天空层判空仍由 `getDataLayerData` 承担） |
+
+**收益**：对方算光更快 → 影子端光照重算更快完成 → 区块更快在客户端显示。
+ScalableLux 另引入 FlowSched 多线程算光，批处理多柱时收益更明显。
+
+**逃生：** `chunk.enabled = false`（全程原版路径，含原版光照）。
 
 ## 8. 服务端备份
 

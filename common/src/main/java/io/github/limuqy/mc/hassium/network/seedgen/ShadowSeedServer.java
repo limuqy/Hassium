@@ -462,6 +462,13 @@ public class ShadowSeedServer extends MinecraftServer {
      * 锁内仅投递任务（addTask，微秒级）。
      */
     private void clearChunkLight(ChunkPos pos, LevelChunk chunk) {
+        if (!io.github.limuqy.mc.hassium.compat.mods.ForeignLightEngine
+                .usesSectionDataClear(chunkLevel(chunk).getChunkSource().getLightEngine())) {
+            // 外部光照引擎（Starlight / ScalableLux）把 queueSectionData 覆写为 no-op，
+            // 清光不再需要：调用方 relightChunk 已先置 lightCorrect=false，
+            // 随后 lightChunk(lit=false) 会走对方的全量重算并覆写 nibble。
+            return;
+        }
         synchronized (ShadowLightCompute.LIGHT_ENGINE_MUTEX) {
             boolean hasSky = chunkLevel(chunk).dimensionType().hasSkyLight();
             ThreadedLevelLightEngine lightEngine =
@@ -511,6 +518,13 @@ public class ShadowSeedServer extends MinecraftServer {
         }
         // 光增量会改写引擎光照，saveAll 序列化时从引擎读光，必须把该柱标脏重写。
         io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.markLightDirty(dimension, pos);
+        if (!io.github.limuqy.mc.hassium.compat.mods.ForeignLightEngine
+                .usesSectionDataClear(chunkLevel(chunk).getChunkSource().getLightEngine())) {
+            // 外部光照引擎下 queueSectionData 为 no-op：跳过分段清光即可。
+            // 调用方（LightDelta 消费）随后以 LightMetric.RECOMPUTE（lit=false）提交该柱，
+            // 对方的 lightChunk 会整柱重算，语义等价且更省。
+            return true;
+        }
         synchronized (ShadowLightCompute.LIGHT_ENGINE_MUTEX) {
             ServerLevel owner = chunkLevel(chunk);
             ThreadedLevelLightEngine lightEngine =
@@ -590,8 +604,14 @@ public class ShadowSeedServer extends MinecraftServer {
                     return false;
                 }
                 if (hasSky && lightEngine.getLayerListener(LightLayer.SKY).getDataLayerData(sp) == null
+                        && io.github.limuqy.mc.hassium.compat.mods.ForeignLightEngine
+                                .skySourcesReliable(lightEngine)
                         && sectionAtOrAboveAnySkySource(skySources, y,
                                 io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMinBlockY(owner))) {
+                    // 外部光照引擎把 ChunkSkyLightSources.update 重定向为 no-op，
+                    // getLowestSourceY 数值过期 → 该子检查不可信，跳过（天空层判空仍由
+                    // 上面的 getDataLayerData 承担，对方的 sky reader 在 emptinessMap
+                    // 缺失时本就返回 null）。
                     return false;
                 }
             }
@@ -973,6 +993,28 @@ public class ShadowSeedServer extends MinecraftServer {
         return map == null ? null : map.get(dimension);
     }
 
+    /**
+     * 影子上下文：按 region 目录定位本端存储管理器（原版 {@code RegionFile} 归属判定）。
+     * <p>
+     * 原版 RegionFile 不携带维度，但携带构造时传入的 region 目录；本端三维度的 region
+     * 目录与 {@code ChunkMap} 的 {@code ChunkStorage} 目录同源（同一 {@code getDimensionPath}），
+     * 可直接比对。未匹配（非本影子存档的 RegionFile）返回 null，调用方回落原版写盘路径。
+     */
+    public io.github.limuqy.mc.hassium.storage.ShadowStorageManager storageForRegionDir(
+            java.nio.file.Path dir) {
+        java.util.concurrent.ConcurrentHashMap<String, io.github.limuqy.mc.hassium.storage.ShadowStorageManager> map = storages;
+        if (dir == null || map == null) {
+            return null;
+        }
+        java.nio.file.Path normalized = dir.toAbsolutePath().normalize();
+        for (io.github.limuqy.mc.hassium.storage.ShadowStorageManager mgr : map.values()) {
+            if (mgr.regionDir().toAbsolutePath().normalize().equals(normalized)) {
+                return mgr;
+            }
+        }
+        return null;
+    }
+
     public boolean hasVisibleChunkHolder(int x, int z) {
         try {
             return ShadowChunkMapCompat.hasVisibleHolder(
@@ -1320,9 +1362,11 @@ public class ShadowSeedServer extends MinecraftServer {
             if (engine.hasLightWork()) {
                 return false;
             }
-            ThreadedLevelLightEngineAccessor acc = (ThreadedLevelLightEngineAccessor) engine;
-            if (!acc.hassium$getLightTasks().isEmpty()) {
-                return false;
+            if (io.github.limuqy.mc.hassium.compat.mods.ForeignLightEngine.usesLightTaskWatermark(engine)) {
+                ThreadedLevelLightEngineAccessor acc = (ThreadedLevelLightEngineAccessor) engine;
+                if (!acc.hassium$getLightTasks().isEmpty()) {
+                    return false;
+                }
             }
             return true;
         } catch (Throwable t) {

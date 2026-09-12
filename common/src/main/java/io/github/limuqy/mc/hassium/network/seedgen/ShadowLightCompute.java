@@ -463,6 +463,12 @@ public final class ShadowLightCompute {
      * 避免超过 vanilla sorter 的并发阈值后出现任务错序与空光层。
      */
     static void awaitEngineTaskDrain(net.minecraft.server.level.ThreadedLevelLightEngine engine) {
+        if (!io.github.limuqy.mc.hassium.compat.mods.ForeignLightEngine.usesLightTaskWatermark(engine)) {
+            // 外部光照引擎（Starlight / ScalableLux）从不填充 lightTasks，水位控制无意义；
+            // 该柱随后以 RECOMPUTE（lit=false）提交，收敛由 isLightConverged 的
+            // hasLightWork()（= 对方自己的 LightQueue）承担。
+            return;
+        }
         try {
             io.github.limuqy.mc.hassium.mixin.ThreadedLevelLightEngineAccessor acc =
                     (io.github.limuqy.mc.hassium.mixin.ThreadedLevelLightEngineAccessor) engine;

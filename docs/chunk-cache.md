@@ -290,7 +290,11 @@ Sector 2+:    [length(4)][type=126][magic 0x48][hash(8)][ZSTD 压缩数据]
 影子端 `ShadowSeedServer` 运行期维护注入区块，断连/卸载统一 `saveAll` 落盘：
 - `ChunkSerializer.write(level, chunk)`（1.21.2+ `SerializableChunkData`）→ NBT
 - `ChunkContentHashUtil.computeSectionHashes(chunk)` → `combineSectionHashes` → contentHash 落 `ShadowStorageHashes`
-- chunkMap.write 落盘（type 126，MixinRegionFile shadow 上下文 gate）
+- **单写者**：`chunkMap.write`（IOWorker）的 type 126 载荷不落 `.mca`，由 `MixinRegionFile` 收编进
+  region 映像（`ShadowStorageManager.adoptEncodedColumn`，覆盖 vanilla 与 C2ME 两条写缝）；
+  磁盘只由 `RegionCache.Image.save` 整文件重写，读也走映像——原版 `RegionFile` 的内存扇区表
+  与整文件重写互不可见，两边都写会错位出 `wrong location; relocating` / ZSTD 解压失败
+  （见 [`mod-compat.md`](mod-compat.md) §7.3）
 - **脏柱增量**：磁盘命中且未修改的柱不重写；网络注入/增量/方块更新/光增量/relight/本地生成才置脏，`saveAll` 只重写脏柱
 - **并行序列化**：脏柱 NBT 序列化在临时池并行（上限 4 线程），ChunkMap 写提交仍串行回到 saver 线程，IOWorker 统一 flush（避免并发写同一 mca 与 `ChunkMap.write` 非线程安全面）
 

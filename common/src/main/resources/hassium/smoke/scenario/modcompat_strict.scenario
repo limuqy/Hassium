@@ -1,0 +1,22 @@
+# 外部 Mod 兼容冒烟（强断言版，仅用于「带 mods」组）。
+#
+# 与 modcompat.scenario 同形，追加兼容层强断言以防"空测"——否则"装没装 mod 都 PASS"
+# 无法证明接管真的生效：
+#   modCompat.c2meChunkIoReplaced eq 1 —— C2ME 自实现区块 IO（ioSystem.replaceImpl）已装
+#   modCompat.c2meHookHits      gt 0   —— 压缩入口接管命中（=0 说明接管未生效）
+#
+# 不断言 modCompat.type126Patched：影子上下文里影子映像已是唯一写者，RegionFile.write
+# 被取消（见 mod-compat.md §7.3），挂在同一注入点的 C2ME type/hash 补丁随之被短路，
+# 该计数只反映"补丁仍被放行"的少数非影子写，会随注入顺序/线程调度漂移，故只作观测字段。
+#
+# 光照组（Starlight / ScalableLux）的 modCompat.foreignLightEngineActive 同样只作观测字段，
+# 不做断言——它随「本次是否装了光照 mod」变化，断言会使本场景无法在各版本间复用。
+join label=WAIT_JOIN_1 since=start timeoutMs=${joinTimeoutMs}
+fly seconds=${moveSeconds} tag=MOVE_
+wait ms=${round1WaitMs}
+dump label=ROUND1 round=1
+assertProbe key=stats.clientAppliedChunkCount op=gt value=0
+assertProbe key=stats.clientLandedChunkCount op=gt value=0
+assertProbe key=modCompat.c2meChunkIoReplaced op=eq value=1
+assertProbe key=modCompat.c2meHookHits op=gt value=0
+exit rounds=1

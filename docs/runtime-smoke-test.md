@@ -224,10 +224,52 @@ Hassium 跨版本（1.20.1–1.21.11）× 多加载器（fabric / neoforge）的
 | `classic.scenario` | 两轮连服 VD 切换（join → R1 dump → disconnect → reconnect → R2 dump → exit），行为不变迁移自旧状态机 | classic 门禁（analyzer 全集）+ validateStats |
 | `seedgen.scenario` | 单轮原版区块流冒烟（join → R1 dump → exit rounds=1）。需 profile=`seedgen` 覆盖影子端兼容配置 + 干净世界；门禁不再把已裁剪的 SeedGen 回退当必经路径 | `stats.clientAppliedChunkCount > 0`；`stats.clientLandedChunkCount > 0` |
 | `dimension.scenario` | 四轮切维冒烟：主世界 → 下界 → 末地 → 回主世界（单连接不断开）；中段轮 `gate=false`；整体 PASS 只看 R1 统计 + 各轮 assertProbe | 每轮 `joined` 且 `dimension` 正确；harness 另加 post-exit 三维度磁盘门禁 |
+| `modcompat.scenario` | 单轮，与 seedgen 同形。锚点刻意 **mod 无关**，供「带外部 mod」与「不带」两组对照跑分 | `stats.clientAppliedChunkCount > 0`、`stats.clientLandedChunkCount > 0` |
+| `modcompat_strict.scenario` | 同上，追加兼容层 **强断言**（防空测），仅用于「带 mods」组 | 另加 `modCompat.c2meChunkIoReplaced == 1`、`modCompat.c2meHookHits > 0`；`type126Patched` 只作观测（影子上下文该补丁被取消短路，见 [mod-compat.md](mod-compat.md) §7.3） |
 
 存在 `scripts/smoke/profiles/<name>.profile.properties` 时，单会话脚本按键值对 patch 双端 hassium toml（客户端 `run/client/config/hassium/hassium-client.toml`、服务端 `run/server/config/hassium/hassium-server.toml`）。行式 `key=value`、`#` 注释；value 须为合法 TOML 字面量（字符串自带引号）。profile 文件不存在时整体 no-op。
 
 例：seedgen 场景需要 `seedgen` 档案提供双端 `chunk.seedGenEnabled=true`；dimension 场景无 toml 改动需求，无档案文件。
+
+## 外部 Mod 手动冒烟（C2ME / Starlight / ScalableLux）
+
+**不改冒烟脚本**：外部 mod jar 由人工放入 `<loader>/run/client/mods` 与 `<loader>/run/server/mods`，
+跑完手动清空；脚本侧只用已有的 `-Scenario` 与 `scripts/smoke/profiles/`。
+
+### 版本矩阵（逐 jar 读取 `fabric.mod.json` 实测；1.20.1 无 neoforge，全部走 fabric）
+
+- **1.20.1**：`c2me-fabric-mc1.20.1-0.2.0+alpha.11.18.jar` + `starlight-1.1.2+fabric.dbc156f.jar`（`minecraft: 1.20.*`）
+- **1.21.1**：`c2me-fabric-mc1.21.1-0.4.0-alpha.0.27.jar` + `ScalableLux-fabric-0.3.0-alpha.0.7-1.21.1.jar`（`=1.21.1`）
+- **1.21.11**：`c2me-fabric-mc1.21.11-0.4.0-alpha.0.26.jar` + `ScalableLux-fabric-0.3.0-alpha.0.3-1.21.11.jar`（`=1.21.11`）
+- 可选：`c2me-fabric-opts-accel-opencl-mc<ver>-*.jar`（OpenCL 世界生成加速）——**要求 Java >= 25**，
+  需先 `$env:JAVA_HOME = '<graalvm-25>'` 再起会话；且 `openclAccel.allowIncompatibilityFallback`
+  默认 `false`，无受支持 OpenCL 设备时会在 `runServer` 直接抛异常导致 exit 3。
+
+Starlight 与 ScalableLux **互斥**（后者 `provides: ["starlight"]`），且各自只覆盖上表版本范围，不要交叉。
+
+### 跑分（A/B 对照）
+
+同一场景跑两组，比对 `result_<SessionId>.json` / probe `modCompat` 与 `stats`：
+
+```powershell
+# 1) 先把矩阵 jar 放入 fabric/run/client/mods 与 fabric/run/server/mods
+.\scripts\runtime-smoke-test.ps1 -Ver 1.20.1 -Loader fabric -Phase I `
+    -SessionId "1.20.1_fabric_I_modcompat" -Scenario modcompat_strict
+
+# 2) 清空 mods 目录后跑对照组（同一场景，锚点 mod 无关，可直接比对）
+.\scripts\runtime-smoke-test.ps1 -Ver 1.20.1 -Loader fabric -Phase I `
+    -SessionId "1.20.1_fabric_I_baseline" -Scenario modcompat
+```
+
+**不要用 batch 脚本**：它把非 classic 场景限定在 neoforge 锚点集，而本矩阵全是 fabric jar。
+
+### PROBE 新增段（`modCompat`，只增不改）
+
+`detected` 为结构性检测；`c2meHookHits` 为压缩入口（`RegionFileVersion.wrap` → Hassium 载荷流）
+的接管命中数——**为 0 说明接管未生效**（C2ME 未装 / 未开 `ioSystem.replaceImpl` / gate 未放行），
+故 `modcompat_strict` 把它作为 P0 断言。`type126Patched` 只在专用服存储路径（非影子）是门禁级信号；
+影子上下文该槽补丁被写侧收编的 `cancel()` 短路（见 [mod-compat.md](mod-compat.md) §7.3），只作观测。
+`foreignLightEngineActive` 表示客户端光照引擎是否已被 Starlight / ScalableLux 替换。
 
 ## 门禁与会话判定
 

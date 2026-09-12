@@ -1,0 +1,19 @@
+# 外部 Mod 兼容冒烟（mod 无关锚点）。
+#
+# 「带 mods」与「不带 mods」两组共用同一场景做对照跑分，因此本场景的锚点刻意不含
+# mod 专属字段；带 mods 组另用 modcompat_strict.scenario 追加强断言（防空测）。
+#
+# 与 seedgen 同形：单轮、干净世界（脚本对非 classic 场景强制 -CleanWorld）。
+# 配置档案 modcompat.profile.properties：chunk.seedGenEnabled + debug.networkMetricsEnabled。
+#
+# 关键观测字段（probe roundN.json 的 modCompat 段，本场景不断言）：
+#   modCompat.c2me / c2meChunkIoReplaced / c2meOpenCl / starlightFamily
+#   modCompat.foreignLightEngineActive —— 光照引擎是否被 Starlight / ScalableLux 替换
+#   modCompat.c2meHookHits / type126Patched —— 写侧接管命中数
+join label=WAIT_JOIN_1 since=start timeoutMs=${joinTimeoutMs}
+fly seconds=${moveSeconds} tag=MOVE_
+wait ms=${round1WaitMs}
+dump label=ROUND1 round=1
+assertProbe key=stats.clientAppliedChunkCount op=gt value=0
+assertProbe key=stats.clientLandedChunkCount op=gt value=0
+exit rounds=1

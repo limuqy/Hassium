@@ -123,6 +123,11 @@ public final class ShadowStorageManager implements AutoCloseable {
         return dimension;
     }
 
+    /** 本 manager 绑定的 region 目录（原版 {@code RegionFile} → 维度归属判定）。 */
+    public Path regionDir() {
+        return regionDir;
+    }
+
     public void markContentDirty(ChunkPos pos) {
         ShadowStorageHashes.markContentDirty(dimension, pos);
     }
@@ -207,6 +212,65 @@ public final class ShadowStorageManager implements AutoCloseable {
 
     public boolean hasUncompressedMirror(ChunkPos pos) {
         return false;
+    }
+
+    /**
+     * 影子上下文：把原版 {@code RegionFile} 已编码的 type126 槽收进映像，不写 .mca。
+     * <p>
+     * 原版 {@code RegionFile} 在内存缓 8KB 扇区表（offsets/timestamps），每次写入把整表
+     * 回写磁盘，且从不重读；本映像的落盘是整文件重写（重新紧凑布局扇区偏移）。两者对
+     * 同一 .mca 互不可见——只要都写，偏移就会互相错位：原版按自己的旧偏移读回别的柱，
+     * 报 {@code wrong location; relocating}，或把半截载荷当 type126 解压失败。
+     * <p>
+     * 因此影子存档单写者 = 本映像：原版 IOWorker 的写入只进映像，磁盘只由
+     * {@link RegionCache.Image#save(Path)} 写。
+     *
+     * @param payloadAfterType type 之后的载荷（0x48 头 + ZSTD），见
+     *                         {@link HassiumType126Codec#payloadAfterType(byte[])}
+     * @return true = 已收进映像
+     */
+    public boolean adoptEncodedColumn(ChunkPos pos, byte[] payloadAfterType, Long hash) {
+        if (pos == null || payloadAfterType == null || payloadAfterType.length == 0) {
+            return false;
+        }
+        // 超槽位载荷（>1MiB 压缩柱）照收：本会话仍由映像服务，落盘时
+        // {@link RegionCache.Image#save} 整槽跳过而不覆写邻槽（该柱退化为下次会话 cache miss）。
+        // 不在此拒绝——拒绝只能回落原版写盘，反而把双写者撕裂放回来。
+        byte[] payload = normalizeEmbeddedHash(payloadAfterType, hash);
+        long regionKey = RegionCache.regionKey(pos.x, pos.z);
+        RegionCache.Image image = imageFor(pos, true);
+        image.writePayload(RegionCache.localIndex(pos.x, pos.z), payload, hash);
+        // 本调用期间 region 可能被 unmountIdleRegions 摘走并已 save：重新挂回，
+        // 让下一次 saveRegions 带上本次写入，别把刚落地的柱丢了。
+        if (images.get(regionKey) != image) {
+            RegionCache.Image raced = images.putIfAbsent(regionKey, image);
+            if (raced != null && raced != image) {
+                raced.writePayload(RegionCache.localIndex(pos.x, pos.z), payload, hash);
+            }
+        }
+        return true;
+    }
+
+    /**
+     * 载荷嵌入的 8B hash 与坐标 hash 归一化。
+     * <p>
+     * 外部区块 IO（C2ME）自拼 sector 时先写 {@code [0x48][8B 全零] + ZSTD}，占位 hash 由
+     * type 补丁回填——补丁与 adopt 无先后约束，此处按坐标 hash 兜底；否则 {@code save} 后
+     * {@link RegionCache.Image#load} 从嵌入头重建 hashes[] 会读到 0，重连会话白白全量拉取。
+     */
+    private static byte[] normalizeEmbeddedHash(byte[] payloadAfterType, Long hash) {
+        if (hash == null
+                || payloadAfterType.length < 1 + HassiumType126Codec.HASH_LENGTH
+                || payloadAfterType[0] != HassiumType126Codec.HASH_MAGIC
+                || hash.equals(HassiumType126Codec.probeHash(payloadAfterType))) {
+            return payloadAfterType;
+        }
+        byte[] normalized = payloadAfterType.clone();
+        long value = hash;
+        for (int i = 0; i < HassiumType126Codec.HASH_LENGTH; i++) {
+            normalized[1 + i] = (byte) (value >>> (8 * (HassiumType126Codec.HASH_LENGTH - 1 - i)));
+        }
+        return normalized;
     }
 
     public int decompressCount() {

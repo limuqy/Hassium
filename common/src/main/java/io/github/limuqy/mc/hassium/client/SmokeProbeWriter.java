@@ -81,6 +81,7 @@ public final class SmokeProbeWriter {
             appendCounters(sb);
             appendDisk(sb);
             appendChunkTrace(sb, dimension);
+            appendModCompat(sb);
             sb.append("}\n");
 
             Path out = Path.of(dir, "round" + round + ".json");
@@ -275,7 +276,43 @@ public final class SmokeProbeWriter {
         appendTraceStage(sb, "appliedNotMeshed", trace.appliedNotMeshed(), true);
         appendTraceTimes(sb, "networkReceivedAtMs", trace.networkReceivedAtMs(), true);
         appendTraceTimes(sb, "clientAppliedAtMs", trace.clientAppliedAtMs(), false);
+        sb.append("  },\n");
+    }
+
+    /**
+     * modCompat：三方兼容层证据（只增不改）。{@code detected*} 为结构性检测结果，
+     * {@code c2meHookHits} 为压缩入口接管的命中次数——**为 0 说明接管未生效**
+     * （典型原因：C2ME 未装 / 未开 {@code ioSystem.replaceImpl} / gate 未放行），
+     * 是防空测的关键锚点。
+     */
+    private static void appendModCompat(StringBuilder sb) {
+        sb.append("  \"modCompat\": {\n");
+        sb.append("    \"c2me\": ")
+                .append(io.github.limuqy.mc.hassium.compat.mods.ModCompatFlags.c2me()).append(",\n");
+        sb.append("    \"c2meChunkIoReplaced\": ")
+                .append(io.github.limuqy.mc.hassium.compat.mods.ModCompatFlags.c2meChunkIoReplaced()).append(",\n");
+        sb.append("    \"c2meOpenCl\": ")
+                .append(io.github.limuqy.mc.hassium.compat.mods.ModCompatFlags.c2meOpenCl()).append(",\n");
+        sb.append("    \"starlightFamily\": ")
+                .append(io.github.limuqy.mc.hassium.compat.mods.ModCompatFlags.starlightFamily()).append(",\n");
+        sb.append("    \"foreignLightEngineActive\": ").append(foreignLightEngineActive()).append(",\n");
+        field(sb, "c2meHookHits", io.github.limuqy.mc.hassium.compat.mods.ModCompatStats.payloadStreams());
+        lastField(sb, "type126Patched", io.github.limuqy.mc.hassium.compat.mods.ModCompatStats.type126Patched());
         sb.append("  }\n");
+    }
+
+    /** 客户端 level 的光照引擎是否已被 Starlight / ScalableLux 替换。 */
+    private static boolean foreignLightEngineActive() {
+        try {
+            net.minecraft.client.Minecraft mc = net.minecraft.client.Minecraft.getInstance();
+            if (mc == null || mc.level == null) {
+                return false;
+            }
+            return io.github.limuqy.mc.hassium.compat.mods.ForeignLightEngine
+                    .isForeign(mc.level.getLightEngine());
+        } catch (Throwable ignored) {
+            return false;
+        }
     }
 
     private static void appendTraceStage(StringBuilder sb, String name,

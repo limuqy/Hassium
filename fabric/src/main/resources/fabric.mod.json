@@ -27,7 +27,8 @@
     },
     "mixins": [
         "${mod_id}.mixins.json",
-        "${mod_id}.fabric.mixins.json"
+        "${mod_id}.fabric.mixins.json",
+        "${mod_id}.modcompat.mixins.json"
     ],
     "depends": {
         "fabricloader": ">=0.14",

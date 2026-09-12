@@ -465,7 +465,7 @@ if ($needConfigTrackerClean) {
     }
 }
 
-if ($Scenario -in @("seedgen", "dimension")) {
+if ($Scenario -in @("seedgen", "dimension", "modcompat", "modcompat_strict")) {
     if (-not $CleanWorld) {
         Write-Host "[$SessionId] 场景 '$Scenario' 强制 -CleanWorld（重置 ${Loader}/${Ver} 存档目录）"
     }
@@ -671,7 +671,7 @@ $clientExit = if ($clientProc.ExitCode) { $clientProc.ExitCode } else { 0 }
 # 9. 解析结果 + 提取统计
 Write-Host "[$SessionId] [8/9] 解析结果 (客户端退出码: $clientExit)..."
 # 单轮场景没有 ROUND2；不得把未运行的轮次写成 stats=false / pass=false。
-$requiresRound2 = $Scenario -ne "seedgen"
+$requiresRound2 = $Scenario -notin @("seedgen", "modcompat", "modcompat_strict")
 $clientContent = if (Test-Path $clientLog) { Get-Content $clientLog -Raw } else { "" }
 
 # 提取 ROUND1 统计（begin 到 end 之间的行）

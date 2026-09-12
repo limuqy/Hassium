@@ -14,6 +14,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -404,6 +405,75 @@ class ShadowStorageManagerTest {
         } finally {
             nether.close();
         }
+    }
+
+    @Test
+    @DisplayName("原版写入收进映像：adopt 柱落盘重载后各自自持（撕裂写回归）")
+    void adoptedVanillaWritesSurviveWholeFileRewrite() throws Exception {
+        // 影子存档单写者 = 映像：原版 RegionFile 的写入经 adoptEncodedColumn 进映像，
+        // 不再写 .mca。多柱（含镜像 localIndex 的跨 region 对）落盘重载后必须各自自持。
+        ChunkPos positive = new ChunkPos(19, 4);
+        ChunkPos negative = new ChunkPos(-13, 4);
+        ChunkPos neighbour = new ChunkPos(20, 4);
+        assertEquals(RegionCache.localIndex(positive.x, positive.z),
+                RegionCache.localIndex(negative.x, negative.z), "前置：镜像槽位");
+
+        assertTrue(manager.adoptEncodedColumn(positive, adoptedPayload(0xA1L, 11), 0xA1L));
+        assertTrue(manager.adoptEncodedColumn(negative, adoptedPayload(0xB2L, 22), 0xB2L));
+        assertTrue(manager.adoptEncodedColumn(neighbour, adoptedPayload(0xC3L, 33), 0xC3L));
+        assertFalse(manager.adoptEncodedColumn(positive, new byte[0], 0xA1L), "空载荷拒绝");
+
+        // 清表走映像路径（HashIndex 命中会短路，掩盖槽位错位）
+        ShadowStorageHashes.clear();
+        assertTrue(manager.probeHash(positive, 0xA1L).match());
+        assertTrue(manager.probeHash(negative, 0xB2L).match());
+        assertTrue(manager.probeHash(neighbour, 0xC3L).match());
+        assertArrayEquals(adoptedNbt(11), manager.readChunk(positive), "解压回读不得串槽");
+
+        assertFalse(manager.saveDirtyRegions(5_000L).timedOut());
+        manager.close();
+        manager = new ShadowStorageManager(regionDir, pos2 -> nbtPayload.clone(), injected::contains, 1);
+        ShadowStorageHashes.clear();
+        assertTrue(manager.probeHash(positive, 0xA1L).match(), "落盘后正 region adopt 柱自持");
+        assertTrue(manager.probeHash(negative, 0xB2L).match(), "落盘后负 region adopt 柱不得串槽");
+        assertTrue(manager.probeHash(neighbour, 0xC3L).match());
+        assertArrayEquals(adoptedNbt(11), manager.readChunk(positive), "重载后解压回读仍自持");
+        assertArrayEquals(adoptedNbt(22), manager.readChunk(negative));
+        assertArrayEquals(adoptedNbt(33), manager.readChunk(neighbour));
+    }
+
+    @Test
+    @DisplayName("超 255 扇区柱整槽不落盘，且不覆写邻槽（钳位回归）")
+    void oversizeColumnIsDroppedWithoutCorruptingNeighbour() throws Exception {
+        // 旧实现把超限柱扇区数钳到 255，随后 arraycopy 越界覆写后续槽数据（或直接 AIOOBE）。
+        // 新实现整槽不进文件：邻槽安全，该柱退化为下次会话 cache miss。
+        ChunkPos neighbour = new ChunkPos(9, 1);
+        ChunkPos oversize = new ChunkPos(10, 1);
+        assertEquals(RegionCache.regionKey(neighbour.x, neighbour.z),
+                RegionCache.regionKey(oversize.x, oversize.z), "前置：同 region");
+        assertTrue(manager.adoptEncodedColumn(neighbour, adoptedPayload(0xD4L, 44), 0xD4L));
+        assertTrue(manager.adoptEncodedColumn(oversize, new byte[255 * 4096], 0xE5L),
+                "超槽位柱照收（本会话仍由映像服务）");
+        assertFalse(manager.saveDirtyRegions(5_000L).timedOut());
+
+        manager.close();
+        manager = new ShadowStorageManager(regionDir, pos2 -> nbtPayload.clone(), injected::contains, 1);
+        ShadowStorageHashes.clear();
+        assertTrue(manager.probeHash(neighbour, 0xD4L).match(), "邻槽不得被超槽位柱覆写");
+        assertArrayEquals(adoptedNbt(44), manager.readChunk(neighbour), "邻槽内容自持");
+        assertEquals(ShadowStorageManager.ProbeStatus.ABSENT, manager.probeHash(oversize, 0xE5L).status(),
+                "超槽位柱整槽不进文件（退化为 cache miss，而非损坏邻槽）");
+    }
+
+    /** adopt 入参：type126 槽的 type-之后载荷（0x48 头 + ZSTD）。 */
+    private static byte[] adoptedPayload(long hash, int marker) throws Exception {
+        return HassiumType126Codec.payloadAfterType(
+                HassiumType126Codec.encodeSector(adoptedNbt(marker), hash, 1));
+    }
+
+    /** 每柱可辨识的 NBT 字节。 */
+    private static byte[] adoptedNbt(int marker) {
+        return new byte[]{(byte) marker, (byte) (marker + 1), (byte) (marker + 2)};
     }
 
     private void persistIngest(ChunkPos pos) {

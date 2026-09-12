@@ -134,6 +134,11 @@ fabric/ | forge/ | neoforge/
 - 存储相关：入口先查 `isStorageEnabled()`
 - 网络相关：入口先查网络开关 + 握手状态
 - 登记：`common/src/main/resources/hassium.mixins.json`
+- **三方兼容 mixin 单独登记**：`hassium.modcompat.mixins.json`（`required:false` +
+  `HassiumModCompatMixinPlugin` 按外部 mod 存在性 gating），代码在 `mixin/modcompat/` 与
+  `compat/mods/`；三端元数据（`fabric.mod.json` / `neoforge.mods.toml` /
+  `buildSrc/src/main/groovy/loom-forge.gradle`）各登记一份。删除该包 + 三行登记即可整体回退。
+  详见 [`docs/mod-compat.md`](docs/mod-compat.md) §7/§7b。
 - 优先 `@Inject` cancellable，避免 `@Overwrite`
 
 ## 配置红线

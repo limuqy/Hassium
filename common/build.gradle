@@ -5,6 +5,9 @@ plugins {
 
 dependencies {
     compileOnly 'org.spongepowered:mixin:0.8.5'
+    // IMixinConfigPlugin 的方法签名引用 org.objectweb.asm.tree.ClassNode；
+    // ASM 由 Mixin 在运行时自带，这里只需编译期可见（compileOnly 不进产物）。
+    compileOnly 'org.ow2.asm:asm-tree:9.7'
     implementation 'com.github.luben:zstd-jni:1.5.5-7'
     implementation 'org.lz4:lz4-java:1.8.0'
     implementation 'com.google.code.findbugs:jsr305:3.0.1'

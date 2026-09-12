@@ -18,6 +18,8 @@ configuredBackground = "minecraft:textures/block/deepslate.png"
 config = "hassium.mixins.json"
 [[mixins]]
 config = "hassium.neoforge.mixins.json"
+[[mixins]]
+config = "hassium.modcompat.mixins.json"
 
 # 1.20.5+：dependency 使用 type=required，禁止 mandatory=
 [[dependencies.hassium]] #optional

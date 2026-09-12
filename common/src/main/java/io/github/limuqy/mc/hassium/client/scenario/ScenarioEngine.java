@@ -752,8 +752,27 @@ public final class ScenarioEngine {
             case "chunkTrace.shadowInjected" -> (long) trace.shadowInjected().size();
             case "chunkTrace.clientApplied" -> (long) trace.clientApplied().size();
             case "chunkTrace.meshCompiled" -> (long) trace.meshCompiled().size();
+            // modCompat.*（appendModCompat 同名；布尔以 0/1 暴露，便于沿用数值断言口径）
+            case "modCompat.c2meHookHits" ->
+                    io.github.limuqy.mc.hassium.compat.mods.ModCompatStats.payloadStreams();
+            case "modCompat.type126Patched" ->
+                    io.github.limuqy.mc.hassium.compat.mods.ModCompatStats.type126Patched();
+            case "modCompat.c2meChunkIoReplaced" ->
+                    io.github.limuqy.mc.hassium.compat.mods.ModCompatFlags.c2meChunkIoReplaced() ? 1L : 0L;
+            case "modCompat.foreignLightEngineActive" -> foreignLightEngineActive(mc) ? 1L : 0L;
             default -> null;
         };
+    }
+
+    /** 客户端 level 的光照引擎是否已被 Starlight / ScalableLux 替换（0/1 数值口径）。 */
+    private static boolean foreignLightEngineActive(Minecraft mc) {
+        try {
+            return mc != null && mc.level != null
+                    && io.github.limuqy.mc.hassium.compat.mods.ForeignLightEngine
+                            .isForeign(mc.level.getLightEngine());
+        } catch (Throwable ignored) {
+            return false;
+        }
     }
 
     // ------------------------------------------------------------------ exit
