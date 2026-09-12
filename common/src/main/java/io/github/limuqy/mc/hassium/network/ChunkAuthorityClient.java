@@ -39,6 +39,10 @@ public final class ChunkAuthorityClient {
     /** 声明时刻表上限：超出即整体作废（声明会随下一轮快照重灌，宁可重算不积压）。 */
     private static final int MAX_DECLARED_ENTRIES = 16_384;
 
+    /** 接收侧丢弃计数（level 未就绪）：仅诊断；>0 即「声明丢过」，靠服务端快照重推自愈。 */
+    private static final java.util.concurrent.atomic.AtomicLong DROPPED_NOT_READY =
+            new java.util.concurrent.atomic.AtomicLong();
+
     /** 协商位在位且已收到权威包 → 权威集合由服务端声明（影子端让位，不再自绘选柱拉取）。 */
     private static volatile boolean authorityDeclared;
     private static volatile long lastAuthorityPacketMs;
@@ -98,6 +102,17 @@ public final class ChunkAuthorityClient {
         }
         Minecraft minecraft = Minecraft.getInstance();
         if (minecraft == null || minecraft.level == null) {
+            // 加入世界窗口期：此时无法解析声明，只能丢弃。**丢弃在这里是可自愈的**——
+            // 服务端在 join/切维 settle 后会把累计声明集合整体重推一次
+            // （ChunkAuthorityNotifier.maybeResendDeclared），故无需本地重试队列。
+            // 但必须留痕：它是「声明在接收侧丢失」这一类缺陷的唯一现场证据。
+            long dropped = DROPPED_NOT_READY.incrementAndGet();
+            if (dropped == 1L || dropped % 64L == 0L) {
+                io.github.limuqy.mc.hassium.utils.DebugLogger.info(
+                        io.github.limuqy.mc.hassium.utils.DebugLogger.LogType.NETWORK,
+                        "[AUTHORITY] declarations dropped before level ready (count={}) - healed by next snapshot",
+                        dropped);
+            }
             return;
         }
         String clientDim = LevelCompat.getDimensionId(minecraft.level);

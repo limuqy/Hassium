@@ -446,7 +446,8 @@ $f='build/smoke-test/logs/client_<SessionId>.log'
 - [x] **F10（P1，harness）**：`dimension` 纳入封闭空洞门禁（P0）＋ 超时默认值对齐 180/300
       —— 2026-09-13 第三轮会话完成，见 §五 F10（含 dimf3b 仍 PASS + neoforge 303 哨兵 + 全量 166 份回放）
 - [x] **F4 收敛矩阵已跑**（第三轮）：编译七锚点 × `builds_for` 全过；运行时 3 版本（1.20.1 / 1.21.1 / 1.21.11）× `builds_for` 9 组合。
-      抓到 **F15**（1.21.11/neoforge R2 空洞，已定性为 **P0**：与 F1 同族、丢在客户端接收侧）。见 §9.9 与 F15。
+      抓到 **F15**（1.21.11/neoforge R2 空洞 → 已定性为 **P0**（F1 同族、丢在客户端接收侧）并**按「快照重推 = 自愈」修复**，
+      两轮复测空洞 0/0；丢弃现场证据待补）。见 §9.9 与 F15。
 - [ ] **F4 余项**：`modcompat` / `seedgen` 场景未在当前代码复跑（收敛口径下是否纳入待定）。
 - [x] **F1 / F2 已落地**（2026-09-13 第三轮；F2 契约方向由用户拍板选 A），但**验收仅部分达成**：
       空洞项全绿；`starved` 仅 1.21.1/fabric 为 0，1.20.1/fabric = 5、1.21.1/forge = 4、neoforge(修复后) = 3。
@@ -462,7 +463,8 @@ $f='build/smoke-test/logs/client_<SessionId>.log'
 > 抑制/权威边沿未生效，见 §五）与一个 **teardown GLFW 守卫**修正（§9.4）。
 > 剩余未闭：**F4 余项**（`modcompat` / `seedgen` 场景）、**F5**（接管态矩阵证据）、F7（`saveAll` 停滞归因）、F8、F9、
 > **F11**（`resolve()` 逐柱发 pull，§9.5）、**F13**（dimension flaky）、**F14**（移动场景门禁口径）、
-> **F15**（1.21.11/neoforge R2 空洞 —— 已定性为 **P0**：与 F1 同族，丢在**客户端接收侧**，见 §九）。
+> **F15 → 已修复**（1.21.11/neoforge R2 空洞：**P0**、F1 同族、丢在客户端接收侧；
+> 按「快照 = 把累计声明集合按当前形状整体重推」实现，两轮复测空洞 0/0 —— **丢弃现场证据待补**，见 §九 F15）。
 
 ---
 
@@ -599,7 +601,26 @@ $f='build/smoke-test/logs/client_<SessionId>.log'
 本轮改为：计数 `PENDING_OVERFLOW` + 首次触发 `Constants.LOG.warn`（正常路径不可达，一旦出现即为真缺陷信号），
 并把注释改成如实描述。实测 8 场 `AUTHORITY pending overflow` = 0 —— 与「不可达」的判断一致。
 
-### F15（P0）→ **已定性（第三轮会话）：与 F1 同一缺陷类，但丢在客户端接收侧**
+### F15（P0）→ **已定性并修复（第三轮会话）：与 F1 同一缺陷类，丢在客户端接收侧**
+
+- **修法（已实施，`ChunkAuthorityNotifier`）**：按「**快照 = 把累计声明集合按当前视距形状整体重推**」实现——
+  `PlayerState.declared`（本维度累计已声明集合）+ `RESEND_SETTLE_MS = 3s`：加入世界 / 切维 settle 后重推一次；
+  真实视距变更时也重推（`requeueDeclared`，用 `ChunkShapeCompat` 裁剪越界项以保持集合有界）。
+  重推**幂等**：客户端 `resolve()` 对已持有柱零动作、在途柱由 `markPullInFlight` 去重。
+  客户端侧只加**丢弃计数留痕**（`DROPPED_NOT_READY` + `[AUTHORITY] declarations dropped before level ready`），
+  **不做本地重试队列**——重推已让它自愈。
+- **为什么不是「挂起 + 重放」**（原先的提案）：重放只是把丢失窗口盖住；**重推是自愈**，同时覆盖丢包 / 握手竞态 / 切维，
+  且复用现有 `snapshot` / `epoch` 字段与幂等的 `resolve()` —— 无新协议、无新队列、无新的跨线程状态。
+  代价是每会话多 1~2 次全量重推（实测 `entriesSum` 2046 → 3117~3267，`snapshot=true` 2 → 4），
+  且只在 join / 切维 / 视距变化时发生，**非周期**（稳态零开销）。
+  **注意**：必须按当前形状裁剪——通知器按设计不跟踪 leave（leave 交原版 Forget），累计集合会随移动无限增大，
+  不裁剪就会把越界柱声明出去（客户端 pull → 服务端 range 拒绝）。
+- **验收判据**：⚠ **部分达成** —— `1.21.11/neoforge` 连续 2 轮（`f15a` / `f15b`）`TRACE_ENCLOSED_HOLE = 0`、
+  空洞 0/0、`pass = True`；**但这两轮的丢弃计数均为 0**（未撞上 level 未就绪窗口），
+  所以「丢过 → 被治好」的现场链路**尚未拿到**。当前证据 = 「重推确实在跑（`snapshot=true` 2→4、
+  `entriesSum` +1071 / +1221）」+ 按构造覆盖该窗口。要拿到现场证据需反复重跑至 `DROPPED_NOT_READY > 0`。
+
+<details><summary>原始定性过程（含一次自我推翻）</summary>
 
 - **现象**：`1.21.11_neoforge_I_f4` R2 `TRACE_ENCLOSED_HOLE`（largest **4**，components `[4,3,1]`，共 8 格）；
   同配置重跑 `f4b` **0 空洞**（声明条目两轮均 2046）⇒ **flaky**。
@@ -633,6 +654,11 @@ $f='build/smoke-test/logs/client_<SessionId>.log'
   - `TRACE_*` 类门禁在声明驱动路径下**结构失明**（R2 实测 `networkReceived = 0`、`shadowInjected = 0`，
     故 `expectedNotPresent` 恒为 0）⇒ **封闭空洞门禁是当前唯一能看见这类空洞的门禁**，其可靠性已成为硬依赖。
 - **验收判据**：连续 ≥2 轮 1.21.11/neoforge 冒烟 `TRACE_ENCLOSED_HOLE` = 0，且新增的「接收侧丢弃」计数 = 0。
+
+（**已按上面的「重推 = 自愈」实施并复测**：`f15a` / `f15b` 两轮 `TRACE_ENCLOSED_HOLE = 0`、
+`snapshot=true` 2→4、`entriesSum` 2046→3117/3267；两轮丢弃计数均为 0 = 未撞上窗口。）
+
+</details>
 
 ---
 

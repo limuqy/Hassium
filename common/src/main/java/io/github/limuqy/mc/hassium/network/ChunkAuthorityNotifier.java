@@ -67,7 +67,20 @@ public final class ChunkAuthorityNotifier {
         private final LinkedHashSet<Long> pending = new LinkedHashSet<>();
         /** 下一次发包是否标记全量快照（epoch 变更后首包）。 */
         private boolean snapshotPending;
+        /**
+         * 本维度内累计「已声明」集合（= 原版 tracking 见过的柱）。
+         * <p>
+         * 快照 = 把本集合**按当前视距形状**整体重推，于是接收侧任何一次丢失（加入世界窗口期、
+         * 丢包）都能在下一个快照点自愈。重推是幂等的：客户端 {@code resolve()} 对已持有柱零动作
+         * （{@code clientHolds} 早退 / hash 命中），已在途柱由 {@code markPullInFlight} 去重。
+         */
+        private final LinkedHashSet<Long> declared = new LinkedHashSet<>();
+        /** 加入世界 / 切维后的首次全量重推时刻（0 = 未排定）。 */
+        private long resendAtMs;
     }
+
+    /** 加入世界（或切维）后延迟多久做首次全量重推：覆盖「客户端 level 就绪前声明被丢弃」的窗口。 */
+    private static final long RESEND_SETTLE_MS = 3_000L;
 
     /**
      * 柱进入权威集合（抑制点调用）。
@@ -87,12 +100,18 @@ public final class ChunkAuthorityNotifier {
             if (dimension == null) {
                 return;
             }
-            PlayerState state = STATES.computeIfAbsent(player.getUUID(), ignored -> new PlayerState());
+            PlayerState state = STATES.computeIfAbsent(player.getUUID(), ignored -> {
+                PlayerState fresh = new PlayerState();
+                fresh.resendAtMs = System.currentTimeMillis() + RESEND_SETTLE_MS;
+                return fresh;
+            });
             synchronized (state) {
                 if (!dimension.equals(state.dimension)) {
                     // 切维：客户端集合按维度键存，无需清；epoch 递增仅用于快照语义
                     state.dimension = dimension;
                     state.pending.clear();
+                    state.declared.clear(); // 新维度的累计集合从头开始
+                    state.resendAtMs = System.currentTimeMillis() + RESEND_SETTLE_MS; // 切维同为「客户端未就绪」窗口
                     state.epoch++;
                     state.snapshotPending = true;
                 }
@@ -106,7 +125,11 @@ public final class ChunkAuthorityNotifier {
                     }
                     return;
                 }
-                state.pending.add(ChunkPos.asLong(pos.x, pos.z));
+                long packed = ChunkPos.asLong(pos.x, pos.z);
+                state.pending.add(packed);
+                if (state.declared.size() < MAX_PENDING_PER_PLAYER) {
+                    state.declared.add(packed);
+                }
             }
         } catch (Throwable t) {
             Constants.LOG.debug("Hassium: authority enter notify skipped ({}, {})", pos.x, pos.z, t);
@@ -137,28 +160,57 @@ public final class ChunkAuthorityNotifier {
             int previous = state.viewDistance;
             state.viewDistance = viewDistance;
             state.epoch++;
-            if (previous > viewDistance) {
-                // 真实视距变小：只剔除超出新半径的待发项（原版会对这些柱 Forget）；
-                // 半径内的声明仍然有效，必须保留——整片清空是同一类丢声明的缺陷。
-                pruneOutOfRange(player, state, viewDistance);
+            if (previous > 0) {
+                // 真实视距变化：把累计声明集合按新形状整体重推（快照语义）。
+                requeueDeclared(player, state, viewDistance);
+            } else {
+                // 会话首个观测点：保留在途缓冲（见方法注释），只标记快照。
+                state.snapshotPending = true;
+            }
+        }
+    }
+
+    /**
+     * 快照 = 把累计声明集合按当前视距形状整体重推（幂等）。
+     * <p>
+     * 语义：让位门把「声明流」当作唯一选柱来源，因此**声明不能有不可恢复的丢失**。接收侧存在真实
+     * 丢失窗口（{@code ChunkAuthorityClient.handle} 在客户端 level 未就绪时丢弃整包），而原版已把
+     * 已推柱移出 {@code pendingChunks}、影子端自绘 pull 又被让位门压住——所以只有重推能自愈。
+     * 重推幂等：客户端 {@code resolve()} 对已持有柱零动作，在途柱由 {@code markPullInFlight} 去重。
+     * <p>
+     * 此处按形状裁剪，既避免把越界柱声明出去（客户端会 pull → 服务端按 range 拒绝），也让累计集合
+     * 有界（越界项作废；玩家回到范围内时原版会重新声明）。
+     */
+    private static void requeueDeclared(ServerPlayer player, PlayerState state, int viewDistance) {
+        synchronized (state) {
+            ChunkPos center = player.chunkPosition();
+            int range = viewDistance + 1; // 与原版玩家 tracking 同参（见 ChunkShapeCompat 文档）
+            state.pending.clear();
+            var iterator = state.declared.iterator();
+            while (iterator.hasNext()) {
+                long packed = iterator.next();
+                if (io.github.limuqy.mc.hassium.compat.ChunkShapeCompat.contains(
+                        center.x, center.z, range, ChunkPos.getX(packed), ChunkPos.getZ(packed))) {
+                    state.pending.add(packed);
+                } else {
+                    iterator.remove();
+                }
             }
             state.snapshotPending = true;
         }
     }
 
-    /** 剔除超出视距半径的待发声明（仅视距变小时调用）。 */
-    private static void pruneOutOfRange(ServerPlayer player, PlayerState state, int viewDistance) {
-        ChunkPos center = player.chunkPosition();
-        var iterator = state.pending.iterator();
-        while (iterator.hasNext()) {
-            long packed = iterator.next();
-            int x = ChunkPos.getX(packed);
-            int z = ChunkPos.getZ(packed);
-            if (!io.github.limuqy.mc.hassium.compat.ChunkShapeCompat.contains(
-                    center.x, center.z, viewDistance, x, z)) {
-                iterator.remove();
+    /** 加入世界 / 切维 settle 后做一次全量重推（覆盖「客户端 level 未就绪」丢声明窗口）。 */
+    private static void maybeResendDeclared(ServerPlayer player, PlayerState state, long nowMs) {
+        int viewDistance;
+        synchronized (state) {
+            if (state.resendAtMs == 0L || nowMs < state.resendAtMs || state.viewDistance <= 0) {
+                return;
             }
+            state.resendAtMs = 0L;
+            viewDistance = state.viewDistance;
         }
+        requeueDeclared(player, state, viewDistance);
     }
 
     /** 每 tick 泵：每玩家一包（受条目上限约束），hash 现算受 {@code hashBudget} 约束。 */
@@ -179,6 +231,7 @@ public final class ChunkAuthorityNotifier {
             }
             STATES.keySet().removeIf(id -> !online.contains(id));
         }
+        long nowMs = System.currentTimeMillis();
         for (ServerPlayer player : players) {
             PlayerState state = STATES.get(player.getUUID());
             if (state == null) {
@@ -187,6 +240,7 @@ public final class ChunkAuthorityNotifier {
             applyViewDistanceIfChanged(player, state);
             int[] budget = {hashBudget};
             try {
+                maybeResendDeclared(player, state, nowMs);
                 pumpPlayer(player, state, budget);
             } catch (Throwable t) {
                 Constants.LOG.debug("Hassium: authority pump failed for {}", player.getUUID(), t);
