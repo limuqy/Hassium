@@ -9,8 +9,8 @@
 
 ## 一、一句话状态
 
-**权威边沿在「内容裁决」层可用并默认开启；在「选柱 / 装载」层，经 F1+F2 修复后影子端自绘 pull 已可完整退场
-（实测 4 场 `authoritative-full pull` = 0/0/0/1、`compare-pull` = 0、`starved` = 0、封闭空洞 = 0）。**
+**权威边沿在「内容裁决」层可用并默认开启；在「选柱 / 装载」层，影子端自绘 pull 目前只在 1.21.1/fabric 上完全退场
+（1.20.1/fabric 与 1.21.1/forge 仍有 5 / 4 次饥饿；neoforge 连抑制都未生效，见 F12）——替换条件未达成，见 §9.7。**
 `P5_TAKEOVER = false`（收尾态不变——接管臂自身的移动/收尾缺陷仍未解，见 §3.3）。
 第一轮会话新增：**封闭空洞冒烟门禁**与**让位门静默丢数据的兜底**；
 第二轮会话关闭 **F10**（dimension 纳入 P0 空洞门禁 + 超时默认值）；
@@ -106,9 +106,10 @@
 把空洞补上之后，填洞的仍然是影子端自绘的 pull（让位门补发），**而不是服务端声明**。
 要裁掉影子端自绘选柱，前置条件是先把声明集合补全（见 §五 F1），而不是在客户端做减法。
 
-> **✅ 该结论已被 F1+F2 翻案（第三轮，见 §九）**：声明集合补全后，影子端自绘 pull **确实退场了**——
-> 实测 4 场（生产态 ×2 + 接管态 ×2）`authoritative-full pull` = 0/0/0/1、`compare-pull` = 0、`starved` = 0、封闭空洞 = 0，
-> 装载改由服务端声明逐柱驱动。原判「不可删」的前提正是 F1 那个缺失的 9 条声明。
+> **✅ 该结论方向已被 F1+F2 翻案，但范围有限（第三轮，见 §9.7）**：**在 1.21.1/fabric 上**影子端自绘 pull 确实退场了——
+> 实测生产态 ×2 + 接管态 ×2：`authoritative-full pull` = 0/0/0/1、`compare-pull` = 0、`starved` = 0、封闭空洞 = 0。
+> 但 1.20.1/fabric（16 批 / 5 次饥饿）与 1.21.1/forge（4 批 / 4 次饥饿）**尚未退场**，neoforge 连机制都没跑（F12）。
+> 原判「不可删」的前提确实正是 F1 那个缺失的声明；但要真删，仍需先让声明流在全部版本/加载器上覆盖完备。
 
 ### 3.3 接管保持关闭，但**理由不是空洞**
 
@@ -163,8 +164,10 @@ TRACE_ENCLOSED_HOLE (+_SMALL, 仅 classic)   scripts/smoke/analyzer.py
 - **改法（已实施，`ChunkAuthorityNotifier`）**：首个观测点**不清空** `pending`；真实视距变小改为
   `pruneOutOfRange` **只剔除越半径项**（半径内声明必须保留）。判据 `previous > viewDistance`：
   首观测 `previous = -1` 不触发剔除。
-- **验收判据**：✅ 达成——接管态 `1.21.1_fabric_I_f1f2_p5b`：**`authority gate starved` = 0**、
-  R1 空洞 0 / R2 空洞 0、`=== RESULT: PASS ===`（analyzer `failures=[] warnings=[]`）。
+- **验收判据**：**部分达成**——✅ 空洞项在全部证据点成立（1.21.1/fabric、1.21.1/forge、1.20.1/fabric、接管态、移动场景
+  封闭空洞均 0）；✅ `starved = 0` **仅在 1.21.1/fabric** 成立；❌ 1.20.1/fabric `starved = 5` + 影子自绘 16 批、
+  1.21.1/forge `starved = 4` + 4 批 ⇒ **声明流尚未在全部版本/加载器上做到让影子端自绘 pull 退场**。
+  另见 §9.7 与 **F12**（neoforge 连抑制都未生效）。
 - **决定性旁证**：修复后首个声明包从 `entries=5` 变为 **`entries=9 hashed=9`**，两轮声明总数
   **1964 → 1982 = 1964 + 9×2**——增量精确等于被找回的落位点 3x3；R1 observed 1520 → **1529**（满窗）、
   R2 444 → **453**。详见 §九。
@@ -189,6 +192,7 @@ TRACE_ENCLOSED_HOLE (+_SMALL, 仅 classic)   scripts/smoke/analyzer.py
 - **验收判据**：✅ 达成——同配置连续两轮（`f1f2_prod1` / `f1f2_prod2`）`hash-hit` 26 / 34（同量级）、
   `authoritative-full pull` 0 / 0、`compare-pull` 0 / 0、`starved` 0 / 0；接管态两轮（`p5` / `p5b`）
   `hash-hit` 60 / 37、`starved` 0 / 0。详见 §九。
+  **但该判据只在 1.21.1/fabric 成立**：1.20.1/fabric `starved = 5`、1.21.1/forge `starved = 4`（见 §9.7）。
 
 ### F3（P1）→ **已结案（2026-09-13 第二轮会话）**：23 个样本无一悬案
 
@@ -305,6 +309,36 @@ F4 的矩阵（含 scenario 锚点 `1.20.1/fabric`、`1.20.1/forge`、`1.21.1/ne
 - **注**：`1.20.1_fabric_I_dimension_world4/round4.json` 的 107 格空洞仍在 R4，而 `dimension` 当前只分析 R1/R2
   （`round_numbers`），故新口径不会看到它；F3 已按 `2a89ead` 归为已修。是否把 dimension 扩到 4 轮是 F4 范畴，本次不动。
 
+### F12（P1，第三轮新增）**neoforge 上整柱抑制与权威边沿全程未生效**
+
+- **现象**：全量 probe 回放（判据 `chunksDecompressed == clientAppliedChunkCount`，即"是否走压缩 pull 载荷落地"）：
+  **11/11 个 neoforge classic 会话（1.21.1–1.21.10）都是"原生流"**，而 **fabric / forge 的 classic 会话（20+ 场，全部版本）全部抑制生效**。
+- **因果链**：抑制点不生效 ⇒ `onAuthoritativeEnter` 从不入队 ⇒ 服务端 `[AUTHORITY] send` = 0 ⇒
+  客户端 `authorityDeclared` 恒 false ⇒ 让位门恒开 ⇒ 影子端自绘整盘（`authoritative-full pull` 13 批 ≈1664 柱）。
+  客户端靠「拦截 `tryInterceptForCompare` 原生包 + 影子端自绘 pull」照样铺满，**空洞 0、门禁 PASS** ⇒ 门禁看不见。
+- **既有性**：`1.21.1_neoforge_I_dimension`（09-12，**权威边沿落地之前**）`decompressed = 0`；`1.21.10_neoforge_I`（历史
+  classic）`applied=1642 / decompressed=574`。⇒ **早于本轮改动，非回归**，且文档无任何记载（`docs/classic-matrix-smoke-report-2026-08-28.md` 只写
+  「两轮 failures=[]」）。
+- **本次实测指纹**（`1.21.1_neoforge_I_f1f2` vs `1.21.1_fabric_I_f1f2_prod1` 的 R1）：
+  `new/stale` = **1529/95** vs 0/1529；`decompressed/applied` = **572/1624** vs 1529/1529；
+  `[AUTHORITY] send` = **0** vs 163；`authoritative-full pull` = **13** vs 0。
+  机制说明：`new = 1529` 表示 1529 次请求无本地基线（应答 FULL、本应走 `decompressPullFull`），
+  但 `decompressed` 仅 572 ⇒ 差额经 `pending.fallback()` 用**原生包数据**落地 = 原生包在流的指纹。
+- **已排除**：mixin 登记齐全（`neoforge.mods.toml` 三份 config 含 `hassium.mixins.json`）；
+  `play_init` 激活链正常（`ACTIVE_CAPS` 有值、`enableCompression` 已调）。
+- **待查（起点）**：反编译 NeoForge 21.1.236 的 patched `PlayerChunkSender`，核对 `sendChunk` 内被
+  `MixinPlayerChunkSender.hassium$onChunkPacketSend` redirect 的 `ServerGamePacketListenerImpl.send(...)` 调用是否仍在
+  （若不在，为何 `injectors.defaultRequire=1` 未报错）。本地未找到 21.1.236 的 patched/sources jar
+  （`~/.gradle/caches/neoformruntime/artifacts` 只有 1.21.11）。
+- **影响**：neoforge 既没吃到「停发整柱」卖点，也没跑权威边沿；**不能作为 F1/F2 的验证点**（本轮已改用 `1.21.1/forge`）。
+
+### F13（P2，第三轮新增）`dimension` 场景是 flaky 的（非本轮回归）
+
+- **现象**：`1.21.1_fabric_I_f1f2_dim` R1 完成（主世界 **1529 柱 / 空洞 0**），R2 切下界时客户端以
+  **`0xCFFFFFFF`（NTSTATUS 原生终止）** 猝死 → `round2=False`、`CLIENT_EXIT_NONZERO`、`PROBE_MISSING`、`SMOKE_PASS_MARKER_MISSING`。
+- **既有性**：`1.21.1_fabric_I_dimf3`（09-13，**F1/F2 之前**）**完全相同的失败形态**；`dimf3b` 通过。⇒ 场景本身 flaky。
+- **处置**：R1 读数有效（可作 F1 证据）；要拿满 4 轮需重跑，或在 F4 里给 dimension 定可重试策略。
+
 ---
 
 ## 六、坑与教训（本会话踩过的，别再踩）
@@ -383,14 +417,18 @@ $f='build/smoke-test/logs/client_<SessionId>.log'
 - [x] **F10（P1，harness）**：`dimension` 纳入封闭空洞门禁（P0）＋ 超时默认值对齐 180/300
       —— 2026-09-13 第三轮会话完成，见 §五 F10（含 dimf3b 仍 PASS + neoforge 303 哨兵 + 全量 166 份回放）
 - [x] F4 仍是必须的一条（当前代码只跑过 classic + dimension 单点；`modcompat` / `seedgen` 未在当前代码复跑）
-- [x] **F1 / F2 已结案**（2026-09-13 第三轮会话；F2 契约方向由用户拍板选 A）——见 §五 F1/F2 与 §九
+- [x] **F1 / F2 已落地**（2026-09-13 第三轮；F2 契约方向由用户拍板选 A），但**验收仅部分达成**：
+      1.21.1/fabric 达标；1.20.1/fabric 与 1.21.1/forge 的 `starved` 仍为 **5 / 4**、影子自绘 16 / 4 批；
+      neoforge 连抑制都没生效（**F12**）。判据与量化见 §9.7。
 
 > **本轮已完成并提交**（`0fd7e28` 门禁 / `55350b2` 权威边沿 + 接管臂 / `4705d95` 文档 / `3257415` 关闭 F3）：
 > 工作区此前 27 改 + 9 新增全部落盘；`ShadowTicketDriver` 调用点已标注；F3 结案写入本文档。
 >
 > **后续轮次**：2026-09-13 第三轮会话落地 F10（`dimension` 纳入 P0 空洞门禁 + 超时默认值 180/300 + 文档同步），
-> 随后关闭 **F1 / F2**（落位点 3x3 空洞根因 + 让位门契约），并额外修掉一个 **teardown GLFW 守卫的类型绑死缺陷**（§九.4）。
-> 剩余未闭：**F4**（全矩阵重建门禁基线）、**F5**（接管态矩阵证据）、F7（`saveAll` 停滞归因）、F8、F9，以及本轮新增的 **F11**（§九.5）。
+> 随后落地 **F1 / F2**（落位点 3x3 空洞根因 + 让位门契约；验收部分达成，见 §9.7）与一个 **teardown GLFW 守卫**修正（§9.4）。
+> 剩余未闭：**F4**（全矩阵重建门禁基线）、**F5**（接管态矩阵证据）、F7（`saveAll` 停滞归因）、F8、F9、
+> **F11**（`resolve()` 逐柱发 pull，§9.5）、**F12**（neoforge 抑制/权威边沿未生效，§五）、
+> **F13**（dimension flaky）、**F14**（移动场景门禁口径）。
 
 ---
 
@@ -478,3 +516,49 @@ $f='build/smoke-test/logs/client_<SessionId>.log'
   稳定的判据是**帧签名 / 调用链**。9.4 就是这个反例。
 - **让位门的宽限必须 ≥ 声明流的存活窗口**：否则「兜底」被当成常态，`starved` 失去信号价值
   （3s 宽限下 `_p5fix1` 每场 15 次假饥饿）。
+
+### 9.7 F1/F2 最小证据集（2026-09-13 第三轮，8 场）
+
+| 会话 | 版本/加载器/场景 | R1/R2 空洞 | `starved` | 影子自绘 pull | 声明条目总数 | 首个声明包 | 判决 |
+|---|---|---|---|---|---|---|---|
+| `f1f2_prod1` | 1.21.1/fabric/classic | 0 / 0 | **0** | 0 | 1982 | `entries=9` | PASS |
+| `f1f2_prod2` | 同上（跨轮） | 0 / 0 | **0** | 0 | — | — | PASS |
+| `f1f2_p5` | 1.21.1/fabric/接管 | 0 / 0 | **0** | 0 | 1982 | `entries=9` | FAIL（仅 teardown 竞态，见 9.4） |
+| `f1f2_p5b` | 同上（守卫修复后） | 0 / 0 | **0** | 1 | 1982 | `entries=9` | PASS |
+| `f1f2_move` | 1.21.1/fabric/classic `-MoveSeconds 12` | R1 0（P1 最大 2） | 0 | 1 | — | — | FAIL（移动场景门禁口径，见 **F14**） |
+| `f1f2_dim` | 1.21.1/fabric/dimension | R1 **0**；R2 崩 | — | — | — | — | FAIL（flaky，见 **F13**） |
+| `1.20.1_fabric_I_f1f2` | **1.20.1**/fabric/classic | 0 / 0 | **5** | **16** | 1982 | `entries=384 hashed=40` | PASS |
+| `1.21.1_forge_I_f1f2` | 1.21.1/**forge**/classic | 0 / 0 | **4** | **4** | 1982 | `entries=9` | PASS |
+| `1.21.1_neoforge_I_f1f2` | 1.21.1/neoforge/classic | 0 / 0 | 0 | 13 | **0** | — | 机制未生效（**F12**） |
+
+**可下的结论**：
+
+1. **空洞项全绿**，含此前必然丢柱的 1.20.1（其首个待发批 **384** 条 —— 旧代码在那个视距观测点会一次抹掉 384 条，
+   远比 1.21.1 的 9 条严重）。F1 的修复在全部证据点成立。
+2. **声明集合是确定且完备的**：`entriesSum` 在 1.21.1/fabric、1.21.1/forge、1.20.1/fabric 上**恒为 1982**
+   （= 164 场基线的 1964 + 找回的 9×2）⇒ 与加载器/版本无关。
+3. **但影子端自绘 pull 只在 1.21.1/fabric 完全退场**（0 批 / 0 饥饿）。1.20.1/fabric = 16 批 / 5 次饥饿；
+   1.21.1/forge = 4 批 / 4 次饥饿 ⇒ **声明流未在这些点上于看门狗窗口内覆盖全部可见柱**，
+   `starved` 这个信号在说真话（不是假饥饿）。neoforge 则连机制都没跑（F12）。
+4. ⇒ **「达到替换条件」的答案：没有。** F1 消除的是"永久空洞"这一类硬缺陷；要让影子端自绘 pull 真正可裁，
+   还差「声明流在全部版本/加载器上覆盖完备且及时」（本轮量化出 1.20.1/forge 的缺口）+ F12 + 接管臂自身的 F5/F7。
+
+### F14（P2，第三轮新增）`-MoveSeconds > 0` 的会话在 `classic` 门禁下永不可能 PASS
+
+- **现象**：`-MoveSeconds 12` 的会话被判 `TRACE_EXPECTED_NOT_PRESENT`（R1 405 / R2 169），配
+  `TRACE_READY_NOT_APPLIED` + `SPATIAL_SNAPSHOT_INCOMPLETE`。成因是门禁的候选集口径：
+  `expected = networkReceived` 假设「收到即常驻」，而移动场景走开后会正常 `CHUNK_UNLOAD`（本场 472 次）。
+- **既有性**：**6/6 场历史移动会话全部 FAIL**，且多为同一失败码（`bandmove1`/`nticketmove1`/`otmove1`/
+  `otmove4`/`move2`…）⇒ **移动场景实际上从未被门禁覆盖过**（与 §六.8「移动场景单轮跨配置对比不可靠」同源）。
+- **改法（候选）**：把 `MoveSeconds` 透传进 result JSON，让 analyzer 对移动会话把
+  `expectedNotPresent` / `readyNotApplied` 降为运行内诊断（同 `LATE_NEAR_PLAYER_CHUNK` 的处理），
+  或按 `CHUNK_UNLOAD` 扣减候选集。**注意**：`TRACE_ENCLOSED_HOLE`（真正的虚空门禁）**不受此影响**，
+  本场它干净（P0 = 0），历史移动场景则都有 9 格 P0。
+- **验收判据**：历史移动会话在新口径下不再因"走开"而亮 P0；真空洞（如历史 3x3）仍然亮。
+
+### 9.8 附带硬化：待发缓冲溢出的静默丢声明（同一缺陷类）
+
+`ChunkAuthorityNotifier.MAX_PENDING_PER_PLAYER` 溢出分支原本是 `return`（**静默丢声明**，且丢的是刚入队的、
+原版已计 ACK 不再重发的那条 ⇒ 与 F1 同一缺陷类），而旧注释「客户端漏收时靠 self-heal 扫描/pull 补齐」是**错的**。
+本轮改为：计数 `PENDING_OVERFLOW` + 首次触发 `Constants.LOG.warn`（正常路径不可达，一旦出现即为真缺陷信号），
+并把注释改成如实描述。实测 8 场 `AUTHORITY pending overflow` = 0 —— 与「不可达」的判断一致。

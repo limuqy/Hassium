@@ -34,10 +34,24 @@ import net.minecraft.world.level.chunk.LevelChunk;
  */
 public final class ChunkAuthorityNotifier {
 
-    /** 单玩家待发 buffer 上限：超出丢弃最旧（客户端漏收时靠 self-heal 扫描/pull 补齐）。 */
+    /**
+     * 单玩家待发 buffer 上限（内存兜底）。
+     * <p>
+     * 实测不可达：泵每 tick 取走 ≤{@link #MAX_ENTRIES_PER_PACKET} 条，而原版整柱推送 ≤
+     * {@code PlayerChunkSender.MAX_CHUNKS_PER_TICK}(64)/tick，稳态待发量在几条到几十条。
+     * <p>
+     * <b>但溢出本身是「静默丢声明」——与落位点 3x3 空洞同一缺陷类</b>：被丢的柱原版已从
+     * {@code pendingChunks} 取走并计了 batch ACK，永不再发 → 客户端再无任何来源。
+     * 因此溢出**必须留痕**（{@link #PENDING_OVERFLOW}），不能无声丢弃；旧注释所称
+     * 「客户端漏收时靠 self-heal 扫描/pull 补齐」是**错的**（见
+     * {@code docs/handoff/handoff-2026-09-13-authority-edge-p5-verdict.md} §9.1）。
+     */
     private static final int MAX_PENDING_PER_PLAYER = 8192;
     /** 单包条目上限（与载荷一致）。 */
     private static final int MAX_ENTRIES_PER_PACKET = ChunkAuthorityS2CPacket.MAX_ENTRIES;
+    /** 待发缓冲溢出计数（仅诊断）：>0 即声明流有缺口，须立即排查，不是可忽略的限流。 */
+    private static final java.util.concurrent.atomic.AtomicLong PENDING_OVERFLOW =
+            new java.util.concurrent.atomic.AtomicLong();
 
     private static final Map<UUID, PlayerState> STATES = new ConcurrentHashMap<>();
 
@@ -83,6 +97,13 @@ public final class ChunkAuthorityNotifier {
                     state.snapshotPending = true;
                 }
                 if (state.pending.size() >= MAX_PENDING_PER_PLAYER) {
+                    // 丢掉的是「刚入队」的声明（本方法末尾才 add）——原版已计 ACK 不再重发，
+                    // 即永久空洞。留痕而非静默：正常路径下不可达，一旦出现即为真缺陷信号。
+                    if (PENDING_OVERFLOW.incrementAndGet() == 1L) {
+                        Constants.LOG.warn("Hassium: authority pending overflow (cap={}) - declarations "
+                                        + "dropped for {}; those columns may never be delivered",
+                                MAX_PENDING_PER_PLAYER, player.getName().getString());
+                    }
                     return;
                 }
                 state.pending.add(ChunkPos.asLong(pos.x, pos.z));
