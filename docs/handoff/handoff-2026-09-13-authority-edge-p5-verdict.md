@@ -9,8 +9,12 @@
 
 ## 一、一句话状态
 
-**权威边沿在「内容裁决」层已经可用并默认开启；在「选柱 / 装载」层没有接过班——影子端自绘的 pull 驱动仍是装载主力，不可删。**
-`P5_TAKEOVER = false`（收尾态）。本次会话新增了两样常驻资产：**封闭空洞冒烟门禁**与**让位门静默丢数据的兜底**。
+**权威边沿在「内容裁决」层可用并默认开启；在「选柱 / 装载」层，经 F1+F2 修复后影子端自绘 pull 已可完整退场
+（实测 4 场 `authoritative-full pull` = 0/0/0/1、`compare-pull` = 0、`starved` = 0、封闭空洞 = 0）。**
+`P5_TAKEOVER = false`（收尾态不变——接管臂自身的移动/收尾缺陷仍未解，见 §3.3）。
+第一轮会话新增：**封闭空洞冒烟门禁**与**让位门静默丢数据的兜底**；
+第二轮会话关闭 **F10**（dimension 纳入 P0 空洞门禁 + 超时默认值）；
+第三轮会话关闭 **F1 / F2**（落位点 3x3 空洞根因 + 让位门契约），**并修正了 §3.1/§3.2 的机理归因** —— 见 §九。
 
 ---
 
@@ -88,6 +92,12 @@
 永久空洞。所以门开合的**时机**决定装载主力是"声明"还是"影子端自绘 pull"——同一个二进制、同一场景、
 同一份存档，两次跑法机理就不同（`_p5fix1` 整盘 1529 柱都走了一次超宽限补发）。
 
+> **⚠ 机理已修正（2026-09-13 第三轮会话，见 §九）**：上段「不含登录期已推柱」的归因**不准确**。
+> 实测声明集合是**全的**（两轮合计 1964 条，逐条带 hash）；缺失的是「**声明已入队、却被服务端自己的 epoch 记账抹掉**」
+> ——`ChunkAuthorityNotifier.applyViewDistanceIfChanged` 在会话首个视距观测点（`-1 → 20`）执行 `pending.clear()`，
+> 恰好抹掉原版**首批 9 柱**的声明（`PlayerChunkSender.START_CHUNKS_PER_TICK = 9.0F`，按 `distanceSquared` 取最近 9 格
+> = 落位柱为中心的 3x3）。另：上段「443 条声明」是**误读**——443 是客户端 `hash-hit` 条数，不是声明条数。
+
 **因此**：`band1` 这条记录（§9.8 当初被标注为"读数作废"的配置）现在有了新含义——**它的配置就是生产配置**，
 它照样丢了 9 柱。**这个竞态在生产配置下同样成立**，本次让位门改动是对生产缺陷的修复，不只是为实验服务。
 
@@ -95,6 +105,10 @@
 
 把空洞补上之后，填洞的仍然是影子端自绘的 pull（让位门补发），**而不是服务端声明**。
 要裁掉影子端自绘选柱，前置条件是先把声明集合补全（见 §五 F1），而不是在客户端做减法。
+
+> **✅ 该结论已被 F1+F2 翻案（第三轮，见 §九）**：声明集合补全后，影子端自绘 pull **确实退场了**——
+> 实测 4 场（生产态 ×2 + 接管态 ×2）`authoritative-full pull` = 0/0/0/1、`compare-pull` = 0、`starved` = 0、封闭空洞 = 0，
+> 装载改由服务端声明逐柱驱动。原判「不可删」的前提正是 F1 那个缺失的 9 条声明。
 
 ### 3.3 接管保持关闭，但**理由不是空洞**
 
@@ -138,24 +152,43 @@ TRACE_ENCLOSED_HOLE (+_SMALL, 仅 classic)   scripts/smoke/analyzer.py
 
 按建议优先级排序。每条给：**目标 / 为什么 / 起点 / 验收判据**。
 
-### F1（P0，阻塞 3.2 的收尾）把「登录期已推柱」补进服务端声明
+### F1（P0，阻塞 3.2 的收尾）→ **已结案（2026-09-13 第三轮会话）**：声明「别丢」而非「补发」
 
-- **目标**：让声明集合覆盖客户端可见窗的**全集**，使影子端自绘 pull 真正可以退场。
-- **为什么**：现在声明只覆盖"服务端本来会推送的那批"，登录期直接推、之后不再声明的柱不在其中。
-  这就是落位点 3x3 的唯一成因，也是接管无法收尾的唯一硬前置。
-- **起点**：`ChunkAuthorityNotifier`（在整柱推送抑制点发声明）＋ 服务端登录期推送路径
-  （`ServerChunkPushManager` / `MixinPlayerChunkSender` / `MixinServerPlayer`）——需要覆盖"绕过抑制点直接推"的那批。
-- **验收判据**：接管态（`P5_TAKEOVER=true`）下 **`authority gate starved` 次数 = 0** 且两轮封闭空洞 = 0。
-  即：影子端的 pull 一次都不需要补发。**这条判据是这次新增的**——以前只能看"有没有洞"，看不出"是不是兜底救了场"。
+- **目标（原文）**：让声明集合覆盖客户端可见窗的**全集**，使影子端自绘 pull 真正可以退场。
+- **归因修正**：声明**本来就是全的**，也不存在「绕过抑制点直接推」的路径（Explore 全仓核查：整柱推送
+  只有 `MixinServerPlayer`(1.20.1 `trackChunk`) 与 `MixinPlayerChunkSender`(1.21.1+ `sendChunk`) 两个抑制点，
+  `ChunkHolder.broadcast` 只承载光照/方块更新，ShadowPull 响应是独立数据面）。真正的缺陷是
+  **声明入队后被服务端自己抹掉**：`ChunkAuthorityNotifier.applyViewDistanceIfChanged` 在会话首个视距
+  观测点（`viewDistance` `-1 → N`）执行 `state.pending.clear()`。
+- **改法（已实施，`ChunkAuthorityNotifier`）**：首个观测点**不清空** `pending`；真实视距变小改为
+  `pruneOutOfRange` **只剔除越半径项**（半径内声明必须保留）。判据 `previous > viewDistance`：
+  首观测 `previous = -1` 不触发剔除。
+- **验收判据**：✅ 达成——接管态 `1.21.1_fabric_I_f1f2_p5b`：**`authority gate starved` = 0**、
+  R1 空洞 0 / R2 空洞 0、`=== RESULT: PASS ===`（analyzer `failures=[] warnings=[]`）。
+- **决定性旁证**：修复后首个声明包从 `entries=5` 变为 **`entries=9 hashed=9`**，两轮声明总数
+  **1964 → 1982 = 1964 + 9×2**——增量精确等于被找回的落位点 3x3；R1 observed 1520 → **1529**（满窗）、
+  R2 444 → **453**。详见 §九。
 
-### F2（P0）给让位门一个确定的开合语义
+### F2（P0）→ **已结案（2026-09-13 第三轮会话）**：让位门契约 = 「声明流存活」+「声明到达即接管」
 
 - **目标**：把「门什么时候关」从竞态变成契约。
-- **为什么**：现在同一二进制/场景/存档，两轮机理不同（§3.1），判决不可复现；
-  §9.5 的"移动场景跨轮方差"警告要升级成"**同配置跨轮机理不同**"。
-- **候选方向**（择一，需窄化）：登录后 N 秒内不让位；或 `bootGridArmed` 排空之前不让位。
-- **起点**：`ChunkAuthorityClient.pullEmissionSuppressed()` + `ShadowTrackingSession.emitPullGroups`。
-- **验收判据**：连续两轮同一场景的 `hash-hit / authoritative-full pull` 落在同一量级，且 `starved` 计数稳定。
+- **选定方向（A，用户拍板）**：`让位以「声明流存活」为唯一条件 + 声明到达即解除该柱扣留 + 扣留宽限对齐断流看门狗`。
+  未选 B（`bootGridArmed` 排空前不让位——开机阶段影子端仍要自绘整盘，与 F1「自绘退场」目标相悖）、
+  未选 C（登录后固定 N 秒——引入新的魔法数）。
+- **改法（已实施）**：
+  - `ChunkAuthorityClient`：`AUTHORITY_WATCHDOG_MS` 提为 `public`（成为让位门的契约窗口）；新增并发
+    `DECLARED_AT`（复合键 → 声明时刻，客户端线程写）与 `declaredAtMs(...)`（影子线程只读）；
+    `handle()` 逐条登记声明时刻（**先登记后 resolve**，解析失败也算已声明）；`onClientDimensionChanged` 清表；
+    表上限 16384，超限整体作废（声明会随快照重灌）。
+  - `ShadowTrackingSession`：`GATE_STARVE_GRACE_MS` 3_000 → 对齐看门狗（10_000），并改引用该常量避免漂移；
+    `releaseGateStarvation` 把**已声明柱的扣留起算点抬到声明时刻**——声明已接管者不计饥饿、不抢跑；
+    只有「声明覆盖后再等满一个宽限仍没交付」才补发 + 记 `starved`。全程不新增跨线程写（影子线程只读并发表）。
+- **为什么必须绑在一起**：3s 宽限 + 原版限速声明流（首批 9/tick，自适应上限 64；灌满 VD20 可见窗需数秒）
+  ⇒ 扣留在声明到达前就到期 ⇒ **假饥饿**（`_p5fix1` 实测每场 15 次）⇒ 「starved = 0」永远不可能达成，
+  兜底被当成常态、失去信号价值。
+- **验收判据**：✅ 达成——同配置连续两轮（`f1f2_prod1` / `f1f2_prod2`）`hash-hit` 26 / 34（同量级）、
+  `authoritative-full pull` 0 / 0、`compare-pull` 0 / 0、`starved` 0 / 0；接管态两轮（`p5` / `p5b`）
+  `hash-hit` 60 / 37、`starved` 0 / 0。详见 §九。
 
 ### F3（P1）→ **已结案（2026-09-13 第二轮会话）**：23 个样本无一悬案
 
@@ -350,10 +383,98 @@ $f='build/smoke-test/logs/client_<SessionId>.log'
 - [x] **F10（P1，harness）**：`dimension` 纳入封闭空洞门禁（P0）＋ 超时默认值对齐 180/300
       —— 2026-09-13 第三轮会话完成，见 §五 F10（含 dimf3b 仍 PASS + neoforge 303 哨兵 + 全量 166 份回放）
 - [x] F4 仍是必须的一条（当前代码只跑过 classic + dimension 单点；`modcompat` / `seedgen` 未在当前代码复跑）
-- [ ] F1 / F2 是真正阻塞"裁掉影子端自绘选柱"的两条，动手前与用户确认范围
+- [x] **F1 / F2 已结案**（2026-09-13 第三轮会话；F2 契约方向由用户拍板选 A）——见 §五 F1/F2 与 §九
 
 > **本轮已完成并提交**（`0fd7e28` 门禁 / `55350b2` 权威边沿 + 接管臂 / `4705d95` 文档 / `3257415` 关闭 F3）：
 > 工作区此前 27 改 + 9 新增全部落盘；`ShadowTicketDriver` 调用点已标注；F3 结案写入本文档。
 >
-> **后续轮次**：2026-09-13 第三轮会话落地 F10（`dimension` 纳入 P0 空洞门禁 + 超时默认值 180/300 + 文档同步）；
-> 剩余未闭：**F1 / F2**（阻塞"裁掉影子端自绘选柱"，动手前须与用户确认范围）、**F4**（全矩阵重建门禁基线）、F5 / F7 / F8 / F9。
+> **后续轮次**：2026-09-13 第三轮会话落地 F10（`dimension` 纳入 P0 空洞门禁 + 超时默认值 180/300 + 文档同步），
+> 随后关闭 **F1 / F2**（落位点 3x3 空洞根因 + 让位门契约），并额外修掉一个 **teardown GLFW 守卫的类型绑死缺陷**（§九.4）。
+> 剩余未闭：**F4**（全矩阵重建门禁基线）、**F5**（接管态矩阵证据）、F7（`saveAll` 停滞归因）、F8、F9，以及本轮新增的 **F11**（§九.5）。
+
+---
+
+## 九、第三轮会话记录：F1 / F2 结案（2026-09-13）
+
+### 9.1 落位点 3x3 空洞：完整因果链（已证）
+
+1. vanilla `PlayerChunkSender` 首批 = `START_CHUNKS_PER_TICK = 9.0F`（`desiredChunksPerTick` 初值同），
+   `collectChunksToSend` 按 `distanceSquared` 取**最近 9 格** → 恰好是玩家落位柱为中心的 **3x3**。
+2. `MinecraftServer.tickChildren` 的 `"send chunks"` 段发出这批：每柱被 Hassium 抑制
+   （`MixinPlayerChunkSender` 1.21.1+ / `MixinServerPlayer` 1.20.1）**并在抑制点调用
+   `ChunkAuthorityNotifier.onAuthoritativeEnter` 入队声明**。
+3. `MixinMinecraftServer` 把 `ChunkAuthorityNotifier.onServerTick` 挂在 **`tickServer` TAIL** —— 即
+   **同一 tick 的 send-chunks 段之后**。
+4. `applyViewDistanceIfChanged` 首次看到视距（`-1 → 20`）→ `state.pending.clear()` → **这 9 条声明原地蒸发**
+   （日志 `epoch=3` 正是两次递增：dimension 首设 + 首次视距）。
+5. vanilla 已把这 9 柱从 `pendingChunks` 取走（`collectChunksToSend`）并计了 batch ACK → **永不再发 → 永不再声明**。
+6. 客户端让位门已关（`authorityDeclared`）→ 影子端自绘 pull 被抑制 → **永久 3x3 虚空**。
+
+**旁证（三条独立）**：
+- 空洞坐标 = `[[-3,-1] … [-1,1]]`，中心 `(-2,0)`，与 `[SHADOW_TICKET] reconcile … center=(-2, 0)`（落位柱）**同一格**；
+- 声明总数 **1964 = 443 hash-hit + 1521 单柱请求**（客户端把声明**一条不剩地消费完**）⇒ 声明确实是全的，只缺那 9 格；
+- 修复后首个声明包 `entries=5` → **`entries=9 hashed=9`**，两轮总数 1964 → **1982 = 1964 + 9×2**。
+
+> 这条链同时**推翻了 §3.1 的两处归因**（见该处勘误）：不是「没声明」，而是「声明被抹掉」；
+> 也没有「绕过抑制点的直推路径」（Explore 全仓核查确认整柱推送只有那两个抑制点）。
+
+### 9.2 改动清单
+
+| 文件 | 改动 |
+|---|---|
+| `network/ChunkAuthorityNotifier.java` | 会话首个视距观测点**不再清空 `pending`**；真实视距变小改用 `pruneOutOfRange`（只剔除越半径项，半径内声明保留） |
+| `network/ChunkAuthorityClient.java` | `AUTHORITY_WATCHDOG_MS` 提为 `public`；新增并发 `DECLARED_AT` + `declaredAtMs()`；`handle()` 逐条登记声明时刻（先登记后 resolve）；切维清表；表上限 16384 |
+| `network/seedgen/ShadowTrackingSession.java` | `GATE_STARVE_GRACE_MS` 3s → 引用 `ChunkAuthorityClient.AUTHORITY_WATCHDOG_MS`（10s）；`releaseGateStarvation` 把已声明柱的扣留起算点抬到声明时刻 |
+| `network/seedgen/ShadowSeedServer.java` | `isGlfwClockFailure` 由「`instanceof NullPointerException` + GLFW/GLX 帧」改为**帧签名**判定（见 9.4） |
+
+### 9.3 实测（4 场，1.21.1 / fabric / classic / Phase I）
+
+| 会话 | 配置 | `hash-hit` | `authoritative-full pull` | `compare-pull` | `starved` | `ShadowPullClient.request` | R1/R2 observed | 封闭空洞 R1/R2 | 判决 |
+|---|---|---|---|---|---|---|---|---|---|
+| `f1f2_prod1` | 生产 | 26 | 0 | 0 | **0** | 1545（全 1 柱/包） | 1529 / 453 | **0 / 0** | PASS |
+| `f1f2_prod2` | 生产 | 34 | 0 | 0 | **0** | 1558 | 1529 / 477 | **0 / 0** | PASS |
+| `f1f2_p5` | 接管 | 60 | 0 | 0 | **0** | 1538 | 1529 / 453 | **0 / 0** | FAIL（仅 `PROCESS_FATAL` = 9.4 的 teardown 竞态） |
+| `f1f2_p5b` | 接管 | 37 | 1 | 0 | **0** | 1469 | 1529 / 453 | **0 / 0** | PASS |
+| 对照：`band1`/`band2` | 接管（修复前） | 442 / 443 | 0 | 0 | 0 | — | 1520 / 444 | **9 / 9** | 曾 PASS |
+
+- 接管态 `p5b` 的 `[SHADOW_TICKET] bound instance` 在场（1 行）⇒ 接管构建确实生效（§六.3 哨兵）。
+- **影子端自绘 pull 全面退场**：4 场 `authoritative-full pull` + `compare-pull` = 0（`p5b` 的 1 次是宽限边沿），
+  `starved` 恒为 0，装载全部由服务端声明经 `resolve()` 逐柱驱动。
+- R2 observed 在 prod2 为 477（>453）：第二轮 OVD/缓存回填量随会话状态浮动，非缺陷。
+
+### 9.4 附带修复：teardown GLFW 守卫的类型绑死（harness）
+
+- **现象**：`f1f2_p5` 收尾被日志审计判 `PROCESS_FATAL` → `RESULT: FAIL`，但 R1/R2 stats 全 true、
+  客户端退出码 0、两轮空洞 0。崩溃栈与 09-11 记录的 teardown 竞态**同一条链**：
+  `MinecraftServer.haveTime → Util.getNanos → GLX.initGlfw lambda → GLFW.glfwGetTime`，
+  发生在 `shadow save completed` → `Render thread: Stopping!` **之后**（GLFW 已销毁）。
+- **根因**：`isGlfwClockFailure` 只认 `NullPointerException`，而同一竞态在 Fabric 下以
+  **`IncompatibleClassChangeError`**（`KnotClassLoader` 与 LWJGL `CallbackI` 建关期错配）现形 → 守卫漏判 → `LOG.error` → 误 FAIL。
+- **改法**：判据改为**帧签名**（同时出现 `GLX` 帧与 `GLFW` 帧），异常类型不再参与；调用方原有
+  `isSharedIoPoolShutdown()` 前置条件不变。
+- **前置条件已实证**：全量 `client_*.log` 扫描显示 `exited during client teardown`（该守卫的 INFO 分支）
+  在 **30+ 场**出现，而 `crashed=1` 仅 3 场（09-11 的 NPE 历史案、`neoforge_I_diag2` 的 NPE、本次 ICCE）
+  ⇒ 守卫前置条件成立且在正常收尾中一直在用；历史两例均为 NPE（旧守卫已覆盖），本次 ICCE 是新变体。
+- **未直接实测**：`f1f2_p5b` 复跑时该竞态**没有发生**（`crashed=0`），所以本次修复是「按帧签名推证 +
+  同窗口同栈的 ICCE 实例」，不是被观测触发的 `teardownExit`。**若要实测触发，需反复重跑收尾竞态。**
+
+### 9.5 新开 F11（P2，性能）：权威声明的 `resolve()` 逐柱发 C2S pull
+
+- **现状**：`ChunkAuthorityClient.resolve()` 对**每条**声明调用 `ShadowPullClient.requestFull(dimension, List.of(pos))`
+  / `requestAuthoritativeFull(dimension, List.of(pos))` —— 单元素列表 → **一柱一个 C2S 包**。
+  实测每场 `ShadowPullClient.request` = 1469~1558 行，且 `chunksSum ≈ lines`（平均 1.00~1.09 柱/包）。
+- **改法**：`handle()` 按包内条目聚合成 ≤ `MAX_ENTRIES`（128）的分组，走 `resolve` 的批量变体
+  （`ShadowPullClient.requestFull` 已支持批量与自动分包）。
+- **验收判据**：`ShadowPullClient.request` 行数降到声明包数量量级（~15/场），`chunksSum` 不变，空洞仍为 0。
+- **风险**：批量后分组内 hash 未知/不等的判定仍是逐条语义，需保证「有基线→compare、无基线→权威 FULL」
+  两个分组都按柱判定（不能按包判定），否则会退化成整包一刀切。
+
+### 9.6 教训补充（补进 §六）
+
+- **「已发出」≠「已到达」**：从产生到消费之间的**任何一处静默清空**都是永久丢失——而这类丢失在
+  「有没有洞」的门禁下**看不见**（本轮的 3x3 就是这么活过 8 个会话的）。写管道时自检一句：
+  **这条数据从生产到消费，中途有没有谁可以静默把它丢掉？**
+- **守卫按「异常类型」判定 = 判据绑错维度**：同一故障会以不同异常类型现形（NPE / ICCE / ……），
+  稳定的判据是**帧签名 / 调用链**。9.4 就是这个反例。
+- **让位门的宽限必须 ≥ 声明流的存活窗口**：否则「兜底」被当成常态，`starved` 失去信号价值
+  （3s 宽限下 `_p5fix1` 每场 15 次假饥饿）。

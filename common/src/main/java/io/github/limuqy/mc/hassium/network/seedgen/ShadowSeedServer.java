@@ -1496,20 +1496,29 @@ public class ShadowSeedServer extends MinecraftServer {
      * 是否为客户端退出窗口内的 GLFW 时钟失效异常。
      * <p>
      * {@code MinecraftServer.haveTime()} 走 {@code Util.getNanos()} → GLX 时钟（{@code glfwGetTime}）；
-     * 客户端 {@code Stopping!} 后 GLFW 已销毁，取时抛 NPE。仅用于把「teardown 引发的正常退出」
+     * 客户端 {@code Stopping!} 后 GLFW 已销毁，取时抛异常。仅用于把「teardown 引发的正常退出」
      * 与真实崩溃区分开，调用方须同时校验退出窗口前置条件。
+     * <p>
+     * 判据 = <b>帧签名</b>而非异常类型。同一竞态实测会以不同异常现形：GLFW 函数表已置空时是
+     * {@code NullPointerException}，而关闭期 Fabric {@code KnotClassLoader} 与 LWJGL
+     * {@code CallbackI} 错配时是 {@code IncompatibleClassChangeError}。真正的证据是
+     * 「{@code GLX} 时钟 lambda + {@code GLFW.glfwGetTime}」这条调用链。早期只认 NPE，
+     * 使 1.21.1 接管态冒烟在收尾竞态下被误判为真实崩溃（日志审计 FAIL）。
      */
     private static boolean isGlfwClockFailure(Throwable t) {
         for (Throwable current = t; current != null; current = current.getCause()) {
-            if (!(current instanceof NullPointerException)) {
-                continue;
-            }
+            boolean glfwGetTime = false;
+            boolean glxClock = false;
             for (StackTraceElement frame : current.getStackTrace()) {
                 String className = frame.getClassName();
-                if ("org.lwjgl.glfw.GLFW".equals(className)
-                        || "com.mojang.blaze3d.platform.GLX".equals(className)) {
-                    return true;
+                if ("org.lwjgl.glfw.GLFW".equals(className)) {
+                    glfwGetTime = true;
+                } else if ("com.mojang.blaze3d.platform.GLX".equals(className)) {
+                    glxClock = true;
                 }
+            }
+            if (glfwGetTime && glxClock) {
+                return true;
             }
         }
         return false;

@@ -154,15 +154,20 @@ public final class ShadowTrackingSession {
             new java.util.concurrent.ConcurrentHashMap<>();
 
     /**
-     * 让位门的**宽带限**：同一柱被让位门扣住超过该时长即无条件补发一次 pull。
+     * 让位门的**兜底宽限**：同一柱被扣住超过该时长（且期间没有新声明覆盖它）即无条件补发一次 pull。
      * <p>
-     * 为什么必须有它：让位门的语义是「权威集合由服务端声明，影子端不自绘选柱」，但声明集合
-     * 覆盖的是**服务端本来会推送的那批**，其中不含「登录期就已推送、此后不再声明」的柱——
-     * 实测 {@code 1.21.1_fabric_I_band2}：服务端只声明 443 柱、恰好不含落位点 3x3，而那 9 柱
-     * 本地无盘也未注入，于是没有任何来源。若让位门只是「静默吞掉」已入队的 pull，这些柱就
-     * 永久空洞（冒烟 PASS 却看不出来）。故让位只能**让路**，不能**放弃**。
+     * 语义 = 「让路不让弃」：让位期间影子端不自绘选柱，但必须保证任一可见柱最终都有来源——
+     * 声明流若漏了某柱、或覆盖后仍交付失败，到期即由影子端补一次 pull。
+     * <p>
+     * 宽限取权威声明流的存活窗口（{@link ChunkAuthorityClient#AUTHORITY_WATCHDOG_MS}）。
+     * 取比它更短的窗口必然产生**假饥饿**：声明流按原版限速下发（首批
+     * {@code PlayerChunkSender.START_CHUNKS_PER_TICK=9}，自适应上限 64），灌满 VD20 可见窗需要
+     * 数秒；扣留在声明到达前就到期，等于把兜底当常态（实测 3s 宽限下 {@code _p5fix1} 每场 15 次补发）。
+     * {@link ChunkAuthorityClient#declaredAtMs} 会把已声明柱的起算点抬到声明时刻，因此本宽限只在
+     * 「声明流真的漏了 / 覆盖后仍没交付」时触发——那才是要看的兜底信号。
      */
-    private static final long GATE_STARVE_GRACE_MS = 3_000L;
+    private static final long GATE_STARVE_GRACE_MS =
+            io.github.limuqy.mc.hassium.network.ChunkAuthorityClient.AUTHORITY_WATCHDOG_MS;
 
     /** 让位期间被扣住的柱 → 首次被扣时间（仅影子主循环线程读写）。 */
     private final java.util.Map<Long, Long> gateWaitingSinceMs = new java.util.HashMap<>();
@@ -1140,9 +1145,13 @@ public final class ShadowTrackingSession {
         java.util.List<ChunkPos> starved = new java.util.ArrayList<>();
         for (ChunkPos pos : pending) {
             long key = DimensionKey.key(dimension, pos.x, pos.z);
+            // 声明到达即把扣留起算点抬到声明时刻：该柱已归权威路径接管，影子端不抢跑、也不计饥饿。
+            // 只有「声明覆盖后再等满一个宽限仍没交付」才是真兜底（此时才补发 + 记 starved）。
+            long declaredAt = io.github.limuqy.mc.hassium.network.ChunkAuthorityClient
+                    .declaredAtMs(dimension, pos.x, pos.z);
             Long since = gateWaitingSinceMs.get(key);
-            if (since == null) {
-                gateWaitingSinceMs.put(key, nowMs);
+            if (since == null || declaredAt > since) {
+                gateWaitingSinceMs.put(key, declaredAt > 0L ? declaredAt : nowMs);
                 sweepInFlight.remove(key);
             } else if (nowMs - since >= GATE_STARVE_GRACE_MS) {
                 gateWaitingSinceMs.remove(key);

@@ -28,12 +28,30 @@ import net.minecraft.world.level.ChunkPos;
  */
 public final class ChunkAuthorityClient {
 
-    /** 权威包断流看门狗：超过该时长未收到 enter/快照即回退影子端 tracking 驱动 pull。 */
-    private static final long AUTHORITY_WATCHDOG_MS = 10_000L;
+    /**
+     * 权威包断流看门狗：超过该时长未收到 enter/快照即回退影子端 tracking 驱动 pull。
+     * <p>
+     * 该值同时是**让位门的契约窗口**：影子端挂起某柱的时长不得超过它，否则等于把兜底当常态
+     * （见 {@code ShadowTrackingSession#GATE_STARVE_GRACE_MS}）。
+     */
+    public static final long AUTHORITY_WATCHDOG_MS = 10_000L;
+
+    /** 声明时刻表上限：超出即整体作废（声明会随下一轮快照重灌，宁可重算不积压）。 */
+    private static final int MAX_DECLARED_ENTRIES = 16_384;
 
     /** 协商位在位且已收到权威包 → 权威集合由服务端声明（影子端让位，不再自绘选柱拉取）。 */
     private static volatile boolean authorityDeclared;
     private static volatile long lastAuthorityPacketMs;
+
+    /**
+     * 柱最近一次被权威声明覆盖的时刻（复合键 → epoch ms）。
+     * <p>
+     * 影子主循环线程经 {@link #declaredAtMs} 读它，把让位门的「扣留起算点」抬到声明时刻：
+     * 已被声明的柱归权威路径接管，不该被影子端记成饥饿；只有「声明覆盖后仍迟迟未交付」才是真兜底。
+     * 客户端线程写、影子线程读，故用并发表；随切维作废。
+     */
+    private static final java.util.Map<Long, Long> DECLARED_AT =
+            new java.util.concurrent.ConcurrentHashMap<>();
 
     private ChunkAuthorityClient() {
     }
@@ -56,6 +74,21 @@ public final class ChunkAuthorityClient {
     public static void onClientDimensionChanged() {
         authorityDeclared = false;
         lastAuthorityPacketMs = 0L;
+        DECLARED_AT.clear();
+    }
+
+    /**
+     * 该柱最近一次被权威声明覆盖的时刻（ms）；从未声明返回 {@code -1}。
+     * <p>
+     * 供影子主循环线程调用（只读，无锁竞争）。
+     */
+    public static long declaredAtMs(String dimension, int chunkX, int chunkZ) {
+        if (dimension == null) {
+            return -1L;
+        }
+        Long at = DECLARED_AT.get(
+                io.github.limuqy.mc.hassium.utils.DimensionKey.key(dimension, chunkX, chunkZ));
+        return at == null ? -1L : at;
     }
 
     /** 收到权威边沿载荷：仅处理当前客户端维度。 */
@@ -82,9 +115,16 @@ public final class ChunkAuthorityClient {
         // 仅记录 epoch 供诊断；重复 enter 由 markPullInFlight / applyEpoch 去重。
         // 注意：声明只做**内容裁决**（hash 命中 / 比较 / 全量），不参与出票——装载几何由
         // ShadowTicketDriver 按本地整方形（含 OVD 环）自行对账，避免两套票源错位起缝。
+        if (DECLARED_AT.size() >= MAX_DECLARED_ENTRIES) {
+            DECLARED_AT.clear();
+        }
+        long declaredAt = lastAuthorityPacketMs;
         List<ChunkAuthorityS2CPacket.Entry> entries = packet.entries();
         for (int i = 0; i < entries.size(); i++) {
             ChunkAuthorityS2CPacket.Entry entry = entries.get(i);
+            // 先登记声明时刻，再解析：让位门据此判定该柱已归权威路径（解析失败也算已声明）。
+            DECLARED_AT.put(io.github.limuqy.mc.hassium.utils.DimensionKey.key(
+                    packet.dimension(), entry.chunkX(), entry.chunkZ()), declaredAt);
             try {
                 resolve(packet.dimension(), new ChunkPos(entry.chunkX(), entry.chunkZ()), entry.hash());
             } catch (Throwable t) {

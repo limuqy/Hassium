@@ -97,6 +97,12 @@ public final class ChunkAuthorityNotifier {
      * <p>
      * 客户端收到快照先清空本地集合；原版 {@code ChunkMap.setViewDistance} 自带全 holder
      * 重跟踪，因此新的 tracking 集合会通过抑制点重新灌入 enter，无需服务端枚举集合。
+     * <p>
+     * <b>会话首个视距观测点不得作废缓冲。</b>此刻 {@code pending} 里可能正躺着原版首批声明——
+     * 首批大小 = {@code PlayerChunkSender.START_CHUNKS_PER_TICK}(9)，按 {@code distanceSquared}
+     * 取最近 9 柱，恰好是玩家落位柱为中心的 3x3。原版已把这批柱从 {@code pendingChunks} 取走并计了
+     * batch ACK，此后永不再发 → 清空即**永久丢失声明**，客户端再无任何来源交付这 9 柱
+     * （实测 {@code 1.21.1_fabric_I_band1/band2} 落位点 3x3 空洞的根因）。
      */
     private static void applyViewDistanceIfChanged(ServerPlayer player, PlayerState state) {
         int viewDistance = io.github.limuqy.mc.hassium.compat.PlayerCompat.getViewDistance(player);
@@ -107,10 +113,30 @@ public final class ChunkAuthorityNotifier {
             if (state.viewDistance == viewDistance) {
                 return;
             }
+            int previous = state.viewDistance;
             state.viewDistance = viewDistance;
             state.epoch++;
-            state.pending.clear();
+            if (previous > viewDistance) {
+                // 真实视距变小：只剔除超出新半径的待发项（原版会对这些柱 Forget）；
+                // 半径内的声明仍然有效，必须保留——整片清空是同一类丢声明的缺陷。
+                pruneOutOfRange(player, state, viewDistance);
+            }
             state.snapshotPending = true;
+        }
+    }
+
+    /** 剔除超出视距半径的待发声明（仅视距变小时调用）。 */
+    private static void pruneOutOfRange(ServerPlayer player, PlayerState state, int viewDistance) {
+        ChunkPos center = player.chunkPosition();
+        var iterator = state.pending.iterator();
+        while (iterator.hasNext()) {
+            long packed = iterator.next();
+            int x = ChunkPos.getX(packed);
+            int z = ChunkPos.getZ(packed);
+            if (!io.github.limuqy.mc.hassium.compat.ChunkShapeCompat.contains(
+                    center.x, center.z, viewDistance, x, z)) {
+                iterator.remove();
+            }
         }
     }
 
