@@ -22,7 +22,10 @@
   取 `clientCache.actualPresent` 的包围盒外扩一圈，从盒外角 4-连通洪水填充；**填不到的缺席格 = 被围住的洞**，
   再算 4-连通分块大小。
 - 分级（**仅 classic**）：最大分块 **≥4 格 → P0** `TRACE_ENCLOSED_HOLE`；1–3 格 → P1 `TRACE_ENCLOSED_HOLE_SMALL`。
-  非 classic 场景按场景排除（`dimension` / `modcompat` / `seedgen` / `ovdgen` 的盘回填不走同一交付契约）。
+  非 classic 场景按场景排除（`dimension` / `modcompat` / `seedgen` 的盘回填不走同一交付契约；
+  `ovdgen` 已在 `8bee742` 随 `chunk.ovdLocalGeneration` 一起退役，不再是活场景）。
+  **注意**：该排除理由已被 §五 F3 部分推翻——`dimension` 的 303 格空洞是**真缺陷**而非契约差异，
+  见 F3 归因结论。
 - **为什么必须有它**：原 `gaps.expectedNotPresent = expected − actual`，而 `expected` 的候选集就是
   `networkReceived`——**从未被投递的柱不在候选集里，结构上永远看不见**。`_spatial_check` 又只做一层邻域判断，
   对一个实心 3x3 空洞只能报出四只角，且只是 P1。于是真实的落位点 3x3 虚空以 `=== RESULT: PASS ===` 收场。
@@ -154,18 +157,52 @@ TRACE_ENCLOSED_HOLE (+_SMALL, 仅 classic)   scripts/smoke/analyzer.py
 - **起点**：`ChunkAuthorityClient.pullEmissionSuppressed()` + `ShadowTrackingSession.emitPullGroups`。
 - **验收判据**：连续两轮同一场景的 `hash-hit / authoritative-full pull` 落在同一量级，且 `starved` 计数稳定。
 
-### F3（P1，最可能有真货）解释非 classic 场景的 10 个封闭空洞样本
+### F3（P1）→ **已结案（2026-09-13 第二轮会话）**：23 个样本无一悬案
 
-- **现象**：门禁按场景排除了它们，但**没有解释**。以下是 **probe 级**扫描（`build/smoke-test/probe/*/round*.json`
-  逐份跑 `_hole_check`）按最大分块降序的结果：
-  `1.21.1_neoforge_I_dimension` **303**、`1.20.1_fabric_I_ovdgen2` 35、`1.20.1_fabric_I_dimension` 23、
-  `1.21.1_fabric_I_modcompat_nomods` 15、`1.21.11_fabric_I_baseline2` 13、
-  `1.21.11_fabric_I_modcompat_b` 5、`1.21.8_fabric_I_seedgen` 4、`1.21.6_fabric_I_seedgen` 1、
-  `bench_1_21_1_mods` 2、`1.21.1_fabric_I_modcompat_nomods2` 1。
-- **为什么**：303 格的**成片**空洞很可能不是采样边缘而是真缺陷（dimension 场景的切维/flush 时序、
-  modcompat 的注册时序）。这条是本次新增门禁带来的**新信息**，白捡的。
-- **起点**：`scripts/smoke/analyzer.py::_hole_check` + 对应 `build/smoke-test/probe/<id>/roundN.json`。
-- **验收判据**：每个样本归到"真缺陷（→ 修）"或"采样边缘（→ 在 analyzer 里写明为什么可以排除）"二选一，不留悬案。
+**样本清单先被修正。** 文档原列 10 个非 classic 命中，实扫（`build/smoke-test/probe/*/round*.json`
+逐份跑 `_hole_check`，160 个 probe 目录）为 **23 个样本**：12 个 classic 3×3（max=9）+ 11 个非 classic。
+原清单**漏了 `1.20.1_fabric_I_dimension_world4/round4.json`**——最大分块 **107**、封闭 123 格、
+observed 808，比清单里第二大的 35 大 3 倍。
+
+**决定性过滤：按构建时间分区（probe JSON mtime）。** 原清单把不同世代的样本混在一起，所以"像真缺陷"。
+
+| 桶 | 样本（mtime） | 相对修复 | 判决 |
+|---|---|---|---|
+| classic 3×3（max=9） | 12 个：`nticketmove1` 03:08 → `bandmove2` 04:23（均 09-13） | **早于**让位门兜底（`GATE_STARVE_GRACE_MS`） | **已修**：04:5x 的 `_p5fix1`/`_p5off2` 实测 0/0 |
+| 非 classic 大洞 303 / 107 / 23 | 09-12 04:06 / 05:23 / 04:44（dimension 场景） | **早于** `2a89ead`（09-12 05:30） | **已修**，见下 |
+| 非 classic 小洞 35 / 15 / 13 / 5 / 4 / 2 / 1 | 09-11 02:10 → 09-12 23:25 | **早于**权威边沿（09-13 落地） | 考古样本，不足以判决；随 F4 矩阵一并复核 |
+
+**303 样本的机理已定：单柱失败关掉影子端 → 切维后客户端缺中心区。** 该场（`1.21.1_neoforge_I_dimension`）
+下界轮内：`CHUNK_APPLY` 3058 → **4**、`CHUNK_MESH` 2020 → **4**、**51 条** `failShadowServer` 降级提示、
+结束时 `loadedChunks=1226 < trackedCandidateCount=1529`；缺口是玩家所在柱为中心的 **19×17 内 303 格**
+（外圈 96 格仍在）——即"引擎关掉后不再补中心"。修复提交 `2a89ead`「keep shadow worlds filled across
+dimension changes」把 4–5 处直呼 `failShadowServer()` 改成受守卫的 `noteSingleColumnFailure` /
+`shouldFailShadowOnInjectFailure`，其注释原文即：*"关引擎后切维（下界/末地/返主）会变成空 ClientChunkCache"*。
+该场日志 mtime 09-12 04:07、文案 `chunk.hassiumEngineEnabled`（早于 09-12 17:25 的键改名）——确认为旧构建产物。
+
+**当前代码复跑（新证据，会话 `1.21.1_fabric_I_dimf3b`，09-13）**：dimension 场景 4 轮 **0 封闭空洞**——
+R1 overworld 1529/1529、R2 nether **1572/1572**（旧场 1226/1529）、R3 end 1529/1529、R4 back 1529/1529
+（R4 `networkReceived=0`，走影子缓存重发）；`=== RESULT: PASS ===`，analyzer `failures=[] warnings=[]`。
+**`2a89ead` 的修复在现有代码上确认有效。**
+
+**F3 副产品：三个 harness 缺口（本次实测）**
+
+1. **dimension 场景看不见这类空洞**：其自身门禁只有 `clientCache.loadedChunks > 64` /
+   `chunkTrace.clientApplied > 64`。1226 驻留、缺 303 照样 `RESULT: PASS`——那个空洞当初是"合法通过"的。
+   建议把 `dimension`（至少 P0 级）纳入封闭空洞门禁；`_hole_check` 对它的输出已在 `analysis.spatial.*.enclosed`。
+2. **超时默认值漂移，使 scenario 复跑必假 FAIL**：`runtime-smoke-test.ps1` 默认
+   `ClientTimeoutSec=120` / `ServerReadyTimeoutSec=60`，而 `docs/runtime-smoke-test.md` 表格写 `240`/`160`、
+   `runtime-smoke-test-batch.ps1` 用 `600`/`300`。dimension 实测需要 ~186s，用默认值必然
+   `客户端超时未退出，强制结束`，并伴随误导性的 `Negative index in crash report handler (13/21)` 门控失败。
+   带 `-ClientTimeoutSec 300 -ServerReadyTimeoutSec 180` 即 PASS。**复跑 scenario 必须显式给足超时**。
+3. **`Round2Pass=false` 在 scenario 会话里是设计态，不是失败**：中段 dump 用 `gate=false`（validation skipped），
+   总判决由 Python analyzer 给。别把它读成回归。
+
+**遗留（转入 F4）**：`modcompat` / `seedgen` 的小洞（max ≤ 15）自权威边沿落地后**未在任何当前代码会话中复跑**；
+F4 的矩阵（含 scenario 锚点 `1.20.1/fabric`、`1.20.1/forge`、`1.21.1/neoforge`、`1.21.11/neoforge`）会覆盖它们。
+
+- **起点**（已用）：`scripts/smoke/analyzer.py::_hole_check` + `build/smoke-test/probe/<id>/roundN.json` 的 mtime。
+- **验收判据**：✅ 达成——23 个样本全部归到"已被修复（含提交号与复跑证据）"或"考古样本（早于相关修复）"，无悬案。
 
 ### F4（P1）用全矩阵重建门禁基线
 
@@ -210,6 +247,17 @@ TRACE_ENCLOSED_HOLE (+_SMALL, 仅 classic)   scripts/smoke/analyzer.py
 `client-chunk-flow-handover.md` §9.5 → §9.9 之间**有三次自我推翻**（作废读数、配错开关、接管相关性记错）。
 现在读起来会被中间那些作废结论误导。建议下次收尾把它整章重写成一份「权威边沿现状 + 已知竞态 + 覆写清单」，
 把作废过程压成一条时间线附录。
+
+### F10（P1，harness，本次新增）把 `dimension` 纳入空洞门禁 + 修正超时默认值
+
+- **现状**：`dimension` 场景自身门禁只有 `loadedChunks > 64` / `clientApplied > 64`，**看不见** 303 格中心空洞
+  （那场当初就是 `RESULT: PASS`）；且 `ovdgen` 退役后，"非 classic 一律排除"的原始理由对 `dimension` 已不成立。
+- **改法**：`scripts/smoke/analyzer.py` 的场景排除表去掉 `dimension`（P0 级即可，P1 可留排除），
+  probe 侧数据已在 `analysis.spatial.<round>.enclosed`。同时把 `runtime-smoke-test.ps1` 的
+  `ClientTimeoutSec` 默认 120 → 300、`ServerReadyTimeoutSec` 60 → 180，并让 `docs/runtime-smoke-test.md`
+  表格与之一致（现写 240/160，batch 用 600/300）。
+- **验收判据**：`1.21.1_fabric_I_dimf3b`（已知 0 空洞）在新口径下仍 PASS；
+  把 09-12 那份 `1.21.1_neoforge_I_dimension` 的 probe 喂给新口径能报出 P0（回归哨兵）。
 
 ---
 
@@ -281,8 +329,15 @@ $f='build/smoke-test/logs/client_<SessionId>.log'
 
 ## 八、交接检查清单
 
-- [ ] 读 §三 三小节（结论），再决定要不要读 §9 系列的原始推演
-- [ ] 确认 `P5_TAKEOVER = false`、`common:compileJava` 通过、`python -m unittest scripts.smoke.test_analyzer` 通过
-- [ ] 决定 F6（`ShadowTicketDriver` 删除 / 保留）
-- [ ] F3 / F4 是**不需要动生产代码**就能推进的两条，建议先做
+- [x] 读 §三 三小节（结论）——2026-09-13 第二轮会话已读
+- [x] 确认 `P5_TAKEOVER = false`（`ShadowTicketDriver:49`）、`common:compileJava` 通过
+      （1.21.1 四模块 + 1.20.1 抽检）、`python -m unittest scripts.smoke.test_analyzer` 通过（17 tests OK）
+- [x] 决定 F6（`ShadowTicketDriver` 保留；`ShadowTrackingSession` 三处调用点已注释为"实验臂，默认关闭"）
+- [x] F3 已结案（23 个样本全部定性，含当前代码 dimension 复跑 0 空洞）
+- [ ] **F10（新增，P1，harness）**：把 `dimension` 纳入封闭空洞门禁 + 修正超时默认值
+      （见 F3 副产品 1/2；`ClientTimeoutSec` 默认 120 与实际需求 300 不符）
+- [x] F4 仍是必须的一条（当前代码只跑过 classic + dimension 单点；`modcompat` / `seedgen` 未在当前代码复跑）
 - [ ] F1 / F2 是真正阻塞"裁掉影子端自绘选柱"的两条，动手前与用户确认范围
+
+> **本轮已完成并提交**（`0fd7e28` 门禁 / `55350b2` 权威边沿 + 接管臂 / `4705d95` 文档）：
+> 工作区此前 27 改 + 9 新增全部落盘；`ShadowTicketDriver` 调用点已标注；F3 结案写入本文档。

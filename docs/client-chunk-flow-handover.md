@@ -603,8 +603,10 @@ javadoc 也已写明 `actualPresent` 只抽样 trace 候选项，其基数不能
 
 - `TRACE_ENCLOSED_HOLE`（**P0**，仅 classic）：最大分块 **≥ 4 格**——成片的实心虚空（≥2x2）。
 - `TRACE_ENCLOSED_HOLE_SMALL`（P1，仅 classic）：1–3 格，多为采样/边界效应。
-- **仅 classic**：其它场景的盘回填不走同一交付契约（`dimension` / `modcompat` / `seedgen` / `ovdgen`
-  的稀疏采样本来就会产生成片"填不到"区域）。
+- **仅 classic**：其它场景的盘回填不走同一交付契约（`dimension` / `modcompat` / `seedgen`
+  的稀疏采样本来就会产生成片"填不到"区域）。`ovdgen` 已随 `chunk.ovdLocalGeneration` 退役（`8bee742`）。
+  **`dimension` 的例外已于 2026-09-13 复核推翻**：那里的 303 格空洞是「单柱失败关掉影子端 → 切维后
+  客户端缺中心区」的真缺陷（`2a89ead` 修复），不是契约差异。
 
 用**全部 164 个历史 result JSON** 回放校验：新增 P0 命中 **8 个会话 / 11 轮样本**（最大分块恒为 9），
 `1.20.1_fabric_I_move2` 只触发 P1（1 格），其余零影响；非 classic 场景的 10 个 probe 级命中样本
