@@ -31,11 +31,11 @@ param(
     # Server view-distance: ROUND1=Vd1, switch to Vd2 after first disconnect.
     [int]$Vd1 = 20,
     [int]$Vd2 = 10,
-    # 客户端视频 RD 滑块（options.txt renderDistance）。1.21+ 服务端跟踪半径 =
-    # min(滑块, 服务器 VD)；三端必须钉死同一值，否则 Forge/NeoForge 新 run 目录
-    # 默认 12/16，R1 只会喂满 VD16 圆柱（1021/1057），和 Fabric 遗留 32 滑块的
-    # 1529/1573 不可比。OVD 上界仍受 chunk.maxRenderDistance=16 钳制，与本滑块无关。
-    [int]$ClientRenderDistance = 32,
+    # 客户端视频 RD 滑块（options.txt renderDistance）。classic 口径：滑块=Vd1=20，
+    # 1.21+ 跟踪半径 min(滑块, 服 VD)=20，R1 喂满 VD20 圆柱（1529 / 1.21.4+ 1573）。
+    # 新 run 目录默认 12/16 会把 R1 钳成 1021/1057。OVD 上界仍是 chunk.maxRenderDistance=16
+    # （R1 服 20 > OVD 16 > R2 服 10）。
+    [int]$ClientRenderDistance = 20,
     [int]$ServerReadyTimeoutSec = 60,
     [int]$ClientTimeoutSec = 120,
     [string]$SmokePhases = "classic",
@@ -292,17 +292,29 @@ function Invoke-SmokeProfilePatch {
         Write-Host "[$SessionTag] profile '$Name' 无有效键值对，跳过 patch"
         return
     }
+    Set-SmokeTomlKeys -Label "profile '$Name'" -ClientRunDir $ClientRunDir -ServerRunDir $ServerRunDir -SessionTag $SessionTag -Pairs $kvPairs
+}
+
+function Set-SmokeTomlKeys {
+    param(
+        [string]$Label,
+        [string]$ClientRunDir,
+        [string]$ServerRunDir,
+        [string]$SessionTag,
+        [object[]]$Pairs
+    )
+    if (-not $Pairs -or $Pairs.Count -eq 0) { return }
     foreach ($toml in @(
         (Join-Path $ClientRunDir "config\hassium\hassium-client.toml"),
         (Join-Path $ServerRunDir "config\hassium\hassium-server.toml")
     )) {
         if (-not (Test-Path $toml)) {
-            Write-Host "[$SessionTag] profile '$Name' 跳过 ${toml}：文件不存在（全新 run 目录由 mod 首启生成默认值）" -ForegroundColor Yellow
+            Write-Host "[$SessionTag] ${Label} 跳过 ${toml}：文件不存在（全新 run 目录由 mod 首启生成默认值）" -ForegroundColor Yellow
             continue
         }
         $lines = @(Get-Content $toml)
         $leaf = Split-Path -Leaf $toml
-        foreach ($kv in $kvPairs) {
+        foreach ($kv in $Pairs) {
             $keyEsc = [regex]::Escape($kv.Key)
             $patched = $false
             $newLines = foreach ($l in $lines) {
@@ -315,16 +327,13 @@ function Invoke-SmokeProfilePatch {
             }
             if ($patched) {
                 $lines = @($newLines)
-                Write-Host "[$SessionTag] profile '$Name': $($kv.Key) = $($kv.Value) -> $leaf"
+                Write-Host "[$SessionTag] ${Label}: $($kv.Key) = $($kv.Value) -> $leaf"
                 continue
             }
-            # 键缺失自愈：按 key 前缀定位 [section]。toml 为 [section] + 裸叶子键格式
-            # （night-config 点路径序列化结果），故先在表内找叶子键原位替换（防重复键），
-            # 找不到才插到该表最后一个键之后（下个 [section] 前）。
             $section = if ($kv.Key -match '^([^.]+)\.') { $Matches[1] } else { $null }
             $leafKey = if ($kv.Key -match '\.([^.]+)$') { $Matches[1] } else { $kv.Key }
             if (-not $section) {
-                Write-Host "[$SessionTag] profile '$Name': 键 $($kv.Key) 无法定位 section，跳过" -ForegroundColor Yellow
+                Write-Host "[$SessionTag] ${Label}: 键 $($kv.Key) 无法定位 section，跳过" -ForegroundColor Yellow
                 continue
             }
             $secStart = -1
@@ -339,17 +348,16 @@ function Invoke-SmokeProfilePatch {
                 }
             }
             if ($secStart -lt 0) {
-                Write-Host "[$SessionTag] profile '$Name': $leaf 无 [${section}] 表，键 $($kv.Key) 跳过" -ForegroundColor Yellow
+                Write-Host "[$SessionTag] ${Label}: $leaf 无 [${section}] 表，键 $($kv.Key) 跳过" -ForegroundColor Yellow
                 continue
             }
-            # 表内叶子键原位替换（保留缩进）
             $leafEsc = [regex]::Escape($leafKey)
             $replaced = $false
             for ($i = $secStart + 1; $i -lt $secEnd; $i++) {
                 if ($lines[$i] -match "^(\s*)${leafEsc}\s*=.*$") {
                     $lines[$i] = "$($Matches[1])$leafKey = $($kv.Value)"
                     $replaced = $true
-                    Write-Host "[$SessionTag] profile '$Name': 替换 [$section] $leafKey = $($kv.Value) -> $leaf"
+                    Write-Host "[$SessionTag] ${Label}: 替换 [$section] $leafKey = $($kv.Value) -> $leaf"
                     break
                 }
             }
@@ -362,7 +370,7 @@ function Invoke-SmokeProfilePatch {
             }
             if ($insertAt -ge $lines.Count) { $out.Add("$leafKey = $($kv.Value)") }
             $lines = $out.ToArray()
-            Write-Host "[$SessionTag] profile '$Name': 插入 [$section] $leafKey = $($kv.Value) -> $leaf"
+            Write-Host "[$SessionTag] ${Label}: 插入 [$section] $leafKey = $($kv.Value) -> $leaf"
         }
         Set-Content -Path $toml -Value $lines -Encoding utf8NoBom
     }
@@ -467,6 +475,12 @@ if ($Scenario -in @("seedgen", "dimension", "ovdgen")) {
 # T8 场景配置档案落盘：存在 scripts/smoke/profiles/<Scenario>.profile.properties 时，
 # 按键值对 patch 双端 hassium toml（须在服务端/客户端启动前完成）。文件不存在则 no-op。
 Invoke-SmokeProfilePatch -Name $Scenario -ClientRunDir $clientRunDir -ServerRunDir $serverRunDir -SessionTag $SessionId
+if ($Scenario -eq "classic") {
+    # 覆盖 ovdgen 等残留：classic 固定 OVD 上限 16（R1 服 20 > OVD 16 > R2 服 10）
+    Set-SmokeTomlKeys -Label "classic OVD pin" -ClientRunDir $clientRunDir -ServerRunDir $serverRunDir -SessionTag $SessionId -Pairs @(
+        @{ Key = "chunk.maxRenderDistance"; Value = "16" }
+    )
+}
 
 # 3. 清理存档。CleanWorld = 删除本 loader×ver 的 $serverLevelName 目录后空世界启动。
 #    不再从 pregen-world 恢复（预生成已退役）。非 CleanWorld 时该目录跨轮持久复用。

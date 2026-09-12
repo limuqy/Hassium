@@ -74,16 +74,22 @@ public final class ShadowPlayerCompat {
             }
 #if MC_VER >= MC_1_21_1
             /**
-             * 1.21.1+ ServerPlayer 构造同步 {@code adjustSpawnLocation → Level.getChunk}，
-             * 而影子端生成任务由 ChunkMap worker 池驱动（非 mainThreadProcessor），
-             * 主循环线程在此等待 chunk future 会自锁（fabric 1.21.1 冒烟实证：影子主循环
-             * 卡死、pull 全零）。直接返回传入落点，跳过探测；位置随后由
-             * {@code ensureVirtualPlayer} 的 {@code setPosRaw/moveVirtualPlayer} 覆盖。
+             * 1.21.1+ {@code ServerPlayer} 构造/落位会同步 {@code adjustSpawnLocation →
+             * Level.getChunk}，而影子端生成任务由 ChunkMap worker 池驱动
+             * （非 mainThreadProcessor），主循环线程在此等待 chunk future 会自锁
+             * （fabric 1.21.1 冒烟实证：影子主循环卡死、pull 全零）。直接返回玩家当前
+             * 落点，跳过探测。
+             * <p>
+             * 必须返回「当前位置」而非传入的共享出生点：1.21.6 起该调用从构造器移到
+             * {@code PlayerList.placeNewPlayer}，且紧跟 {@code snapTo} —— 若返回出生点，
+             * 会把 {@code ensureVirtualPlayer} 预先 {@code setPosRaw} 的客户端坐标重置到
+             * 世界出生点（tracking 轴心错位）。构造期当前位置是 (0,0,0)，位置仍随后由
+             * {@code setPosRaw}/{@code moveVirtualPlayer} 定稿。
              */
             @Override
             public net.minecraft.core.BlockPos adjustSpawnLocation(
                     net.minecraft.server.level.ServerLevel $$0, net.minecraft.core.BlockPos $$1) {
-                return $$1;
+                return this.blockPosition();
             }
 #endif
         };

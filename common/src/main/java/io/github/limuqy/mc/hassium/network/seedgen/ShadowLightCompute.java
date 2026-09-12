@@ -699,9 +699,9 @@ public final class ShadowLightCompute {
         if (pos == null || !isEnabled()) {
             return false;
         }
-        // 仅挡「当前在途」的网络全量：历史 accountedIngress 属于上一会话/已落地，
-        // 不得阻止 R2 UNCHANGED 缓存复用。
-        if (pos != null && networkInFlight.contains(
+        // 权威缓存复用仍避开在途网络全量；OVD 环带只走本地源、永不 pull，
+        // 不得被 R1/权威 in-flight 位卡住（1.20.1 fabric R2 实测 publish 16 柱后全失败）。
+        if (!renderOnly && networkInFlight.contains(
                 DimensionKey.key(dimension == null ? currentDimension() : dimension, pos.x, pos.z))) {
             return false;
         }
@@ -1287,9 +1287,12 @@ public final class ShadowLightCompute {
         long key = DimensionKey.key(dimension, pos.x, pos.z);
         // 同柱已有网络来源（SERVER_PUSH/REMOTE_PULL）时禁止被 cache publish 覆盖来源——
         // 否则 R1 首进全量推送会被改写成 MEMORY_CACHE 假全命中。
+        // OVD 环带例外：本地源必须真正回传，不能报成功却不交付。
         GenEntry queued = generated.get(key);
         if (queued != null && isNetworkOrigin(queued.traceOrigin) && !isNetworkOrigin(traceOrigin)) {
-            return true;
+            if (!renderOnly) {
+                return true;
+            }
         }
         generated.put(key, new GenEntry(chunk, level, lightReuse, renderOnly, traceOrigin));
         emitStandingImmediately(key, chunk, level, renderOnly, traceOrigin);

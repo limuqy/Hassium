@@ -29,6 +29,8 @@ param(
     [int]$ClientTimeoutSec = 600,
     [int]$DelayMs = 20000,
     [int]$ReconnectDelayMs = 3000,
+    # classic 口径：滑块 = Vd1 = 20；OVD 仍由 chunk.maxRenderDistance=16 钳制
+    [int]$ClientRenderDistance = 20,
     [string]$SessionSuffix
 )
 
@@ -163,6 +165,7 @@ function Invoke-Session {
         [int]$ClientTimeoutSec = 300,
         [int]$DelayMs = 10000,
         [int]$ReconnectDelayMs = 3000,
+        [int]$ClientRenderDistance = 20,
         [string]$SessionSuffix = ""
     )
     $sfx = Get-SmokeSessionIdSuffix -Scenario $Scenario -SessionSuffix $SessionSuffix
@@ -184,6 +187,7 @@ function Invoke-Session {
             CleanWorld = $doClean; ServerPort = $ServerPort
             ServerReadyTimeoutSec = $ServerReadyTimeoutSec; ClientTimeoutSec = $ClientTimeoutSec
             DelayMs = $DelayMs; ReconnectDelayMs = $ReconnectDelayMs
+            ClientRenderDistance = $ClientRenderDistance
         }
         if ($Scenario -ne "classic") { $sessionArgs.Scenario = $Scenario }
         # 单会话脚本用 Write-Host + exit，不会把 "PASS" 写回管道。
@@ -374,7 +378,8 @@ foreach ($entry in $scenarioPlan) {
                 "-SessionId", $jobName,
                 "-ServerPort", $port,
                 "-ServerReadyTimeoutSec", $ServerReadyTimeoutSec,
-                "-ClientTimeoutSec", $ClientTimeoutSec
+                "-ClientTimeoutSec", $ClientTimeoutSec,
+                "-ClientRenderDistance", "$ClientRenderDistance"
             )
             if ($scenario -ne "classic") {
                 $procArgs += @("-Scenario", $scenario)
@@ -474,7 +479,7 @@ foreach ($entry in $scenarioPlan) {
 
             $r = Invoke-Session -Ver $ver -Loader $loader -Phase $Phase -Scenario $scenario -ServerPort $BasePort -MaxRetries $MaxRetries `
                 -ServerReadyTimeoutSec $ServerReadyTimeoutSec -ClientTimeoutSec $ClientTimeoutSec `
-                -DelayMs $DelayMs -ReconnectDelayMs $ReconnectDelayMs -SessionSuffix $SessionSuffix
+                -DelayMs $DelayMs -ReconnectDelayMs $ReconnectDelayMs -ClientRenderDistance $ClientRenderDistance -SessionSuffix $SessionSuffix
             $results += $r
 
             # 杀残留 Minecraft java 进程（仅本工程 loom dev 实例：dli.config + env 标记；

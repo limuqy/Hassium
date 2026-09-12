@@ -1367,6 +1367,9 @@ public class ShadowSeedServer extends MinecraftServer {
     void runMainLoop() {
         long loopCount = 0;
         while (!Thread.currentThread().isInterrupted()) {
+            if (ShadowWorldgenExecutor.isTerminated()) {
+                break;
+            }
             loopCount++;
             if (loopCount == 200 || loopCount == 2000 || loopCount == 20000) {
                 io.github.limuqy.mc.hassium.Constants.LOG.info(
@@ -1426,6 +1429,20 @@ public class ShadowSeedServer extends MinecraftServer {
         mainThreadLoop = null;
         if (t != null) {
             t.interrupt();
+        }
+    }
+
+    /** halt 之后、关 worldgen 池之前：等主循环退出，避免 ChunkMap.save 打到已关 FJP。 */
+    void joinMainLoop(long timeoutMs) {
+        Thread t = mainThreadLoop;
+        if (t == null || t == Thread.currentThread()) {
+            return;
+        }
+        t.interrupt();
+        try {
+            t.join(Math.max(1L, timeoutMs));
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
     }
 

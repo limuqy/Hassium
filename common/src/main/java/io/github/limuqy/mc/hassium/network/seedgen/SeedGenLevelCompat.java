@@ -468,6 +468,12 @@ public final class SeedGenLevelCompat {
         // isLightConverged 才可能为 true（提前停会误判未收敛 → 全量标脏 →
         // R2 hash 命中全被拦截）。mainLoop 由 shutdown 内部的 halt 停止。
         try {
+            server.joinMainLoop(5_000L);
+            server.stopMainLoop();
+        } catch (Exception e) {
+            Constants.LOG.warn("Hassium: Shadow seed server main loop join failed", e);
+        }
+        try {
             server.halt(false);
         } catch (Exception e) {
             Constants.LOG.warn("Hassium: Shadow seed server halt failed", e);

@@ -68,6 +68,12 @@ public final class ShadowWorldgenExecutor {
         }
     }
 
+    /** 池已关或尚未创建：影子主循环不得再 tick ChunkMap.save。 */
+    public static boolean isTerminated() {
+        ExecutorService current = pool;
+        return current == null || current.isShutdown() || current.isTerminated();
+    }
+
     private static ExecutorService createPool(int workers) {
         AtomicInteger seq = new AtomicInteger(1);
         return new ForkJoinPool(workers, pool -> {

@@ -25,5 +25,6 @@ class ShadowWorldgenExecutorTest {
         assertEquals(1, ShadowWorldgenExecutor.workerCount(3));
         assertEquals(1, ShadowWorldgenExecutor.workerCount(2));
         assertEquals(1, ShadowWorldgenExecutor.workerCount(1));
+        assertTrue(ShadowWorldgenExecutor.isTerminated(), "测试进程未创建影子池时应视为已终止");
     }
 }

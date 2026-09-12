@@ -19,6 +19,7 @@
         "MixinServerLoginPacketListenerImpl",
         "MixinChunkHolder",
         "MixinServerPlayer",
+        "MixinServerLevel",
         "MixinServerChunkCache",
         "ServerChunkCacheAccessor",
         "MixinLevelTicks",

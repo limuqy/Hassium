@@ -98,6 +98,8 @@ public final class ShadowTrackingSession {
             new java.util.concurrent.ConcurrentHashMap<>();
     /** 本会话已计 OVD 的坐标（防 materialize/sweep 双计；reset 清空）。 */
     private final java.util.Set<Long> ovdCounted = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    /** 本会话已计 OVD miss 的坐标（retry 不再累加「缺失」）。 */
+    private final java.util.Set<Long> ovdMissCounted = java.util.concurrent.ConcurrentHashMap.newKeySet();
     /** OVD miss 冷却（key → 下次允许重试 epoch ms；避免空盘格每 500ms 重读）。 */
     private final java.util.Map<Long, Long> ovdMissRetryAt =
             new java.util.concurrent.ConcurrentHashMap<>();
@@ -224,10 +226,19 @@ public final class ShadowTrackingSession {
         if (now - lastChunkTickMs >= CHUNK_TICK_INTERVAL_MS) {
             lastChunkTickMs = now;
             ServerLevel level = shadow.level(currentDimension);
-            if (level != null) {
+            // 客户端退出窗口守卫（同 SeedGenLevelCompat.shutdown 的 skipSave 语义）：
+            // vanilla Stopping! → Util.shutdownExecutors() 关停共享 ioPool 后，
+            // tickChunkSystem → ChunkMap.processUnloads → saveChunksEagerly → ChunkMap.save
+            // 会对半死池提交任务，vanilla 内部吞掉 RejectedExecutionException 后记
+            // "Failed to save chunk x,z" ERROR（污染 LogAudit 门禁，无害但吵）。
+            // JVM 即将退出，存档无后续消费者，停止簿记是安全的。
+            if (level != null && !ShadowWorldgenExecutor.isTerminated()
+                    && !io.github.limuqy.mc.hassium.compat.ShadowServerCompat.isSharedIoPoolShutdown()) {
                 try {
                     ShadowPlayerCompat.tickChunkSystem(level,
                             System.nanoTime() + CHUNK_TICK_BUDGET_NANOS);
+                } catch (java.util.concurrent.RejectedExecutionException ignored) {
+                    // 关停窗口：worldgen 池已拒绝新任务
                 } catch (Throwable t) {
                     DebugLogger.warn(DebugLogger.LogType.ASYNC,
                             "[SHADOW_TRACK] chunk system tick failed", t);
@@ -249,8 +260,8 @@ public final class ShadowTrackingSession {
      * 只扫环带（chebyshev ∈ (serverVD, clientVD]），内环优先；
      * 盘读与 publish 分开计预算，避免权威方阵空转扫 33²。
      */
-    private static final int OVD_DISK_BUDGET = 32;
-    private static final int OVD_PUBLISH_BUDGET = 16;
+    private static final int OVD_DISK_BUDGET = 64;
+    private static final int OVD_PUBLISH_BUDGET = 64;
     private static final long OVD_SWEEP_INTERVAL_MS = 100L;
 
     private void sweepOvdRing(ShadowSeedServer shadow, long nowMs) {
@@ -445,6 +456,7 @@ public final class ShadowTrackingSession {
         sweepInFlight.clear();
         redeliverQueue.clear();
         ovdCounted.clear();
+        ovdMissCounted.clear();
         ovdMissRetryAt.clear();
         lastOvdSweepMs = 0L;
         homeChunk = new ChunkPos((int) state.x() >> 4, (int) state.z() >> 4);
@@ -503,6 +515,11 @@ public final class ShadowTrackingSession {
             player.setYRot(state.yRot());
             player.setXRot(state.xRot());
             ShadowPlayerCompat.placePlayer(shadow, connection, player);
+            // 1.21.6+ placeNewPlayer 的 snapTo 会用共享出生角覆盖朝向（位置已由
+            // adjustSpawnLocation 覆盖保持）。朝向不参与 tracking，仅作状态保真；
+            // setYRot/setXRot 不触发 chunk 加载，加入世界后重申安全。
+            player.setYRot(state.yRot());
+            player.setXRot(state.xRot());
             try {
                 ShadowPlayerCompat.moveVirtualPlayer(player);
             } catch (Throwable t) {
@@ -864,7 +881,7 @@ public final class ShadowTrackingSession {
             long missKey = io.github.limuqy.mc.hassium.utils.DimensionKey
                     .key(sel.dimension(), pos.x, pos.z);
             ovdMissRetryAt.put(missKey, System.currentTimeMillis() + 2_000L);
-            io.github.limuqy.mc.hassium.metrics.NetworkStats.recordOvdMiss();
+            recordOvdMissOnce(sel.dimension(), pos);
             return; // 无本地数据：等原版 tracking，不 pull
         }
         boolean diskHit = io.github.limuqy.mc.hassium.storage.ShadowStorageHashes
@@ -895,6 +912,13 @@ public final class ShadowTrackingSession {
         long key = io.github.limuqy.mc.hassium.utils.DimensionKey.key(dimension, pos.x, pos.z);
         if (ovdCounted.add(key)) {
             io.github.limuqy.mc.hassium.metrics.NetworkStats.recordOvdLoaded();
+        }
+    }
+
+    private void recordOvdMissOnce(String dimension, ChunkPos pos) {
+        long key = io.github.limuqy.mc.hassium.utils.DimensionKey.key(dimension, pos.x, pos.z);
+        if (ovdMissCounted.add(key)) {
+            io.github.limuqy.mc.hassium.metrics.NetworkStats.recordOvdMiss();
         }
     }
 
@@ -1139,14 +1163,19 @@ public final class ShadowTrackingSession {
         s.serverViewDistance = -1;
         s.effectiveClientVD = -1;
         s.appliedViewDistance = -1;
+        // boundServer 置空后，影子主循环的「实例变化」分支（consumeOnShadowLoop 顶部）
+        // 会在主循环线程上清掉 virtualPlayer/currentDimension —— 不得在此（客户端主线程
+        // onLogin）直接置空：主循环簿记/选柱扫描途中读到「玩家非空、维度已空」的半清状态
+        // 会 NPE（1.21.11 fabric R2 实证 DimensionKey.key(null,…) → [SHADOW_LOOP] crashed、
+        // R2 applied=0）。其余字段保持同步写入：serverViewDistance 等由随后的 R2 视距更新
+        // 覆盖，异步清理会把它抹掉（R2 OVD 窗不开 → ovdLoaded=0）。
         s.boundServer = null;
-        s.virtualPlayer = null;
-        s.currentDimension = null;
         s.createFailed = false;
         s.pendingSelections.clear();
         s.sweepInFlight.clear();
         s.redeliverQueue.clear();
         s.ovdCounted.clear();
+        s.ovdMissCounted.clear();
         s.ovdMissRetryAt.clear();
         s.lastOvdSweepMs = 0;
         s.homeChunk = null;
