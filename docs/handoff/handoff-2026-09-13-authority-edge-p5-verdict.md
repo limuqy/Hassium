@@ -446,7 +446,7 @@ $f='build/smoke-test/logs/client_<SessionId>.log'
 - [x] **F10（P1，harness）**：`dimension` 纳入封闭空洞门禁（P0）＋ 超时默认值对齐 180/300
       —— 2026-09-13 第三轮会话完成，见 §五 F10（含 dimf3b 仍 PASS + neoforge 303 哨兵 + 全量 166 份回放）
 - [x] **F4 收敛矩阵已跑**（第三轮）：编译七锚点 × `builds_for` 全过；运行时 3 版本（1.20.1 / 1.21.1 / 1.21.11）× `builds_for` 9 组合。
-      抓到 **F15**（1.21.11/neoforge R2 边缘空洞，flaky，分类待契约决策）。见 §9.9。
+      抓到 **F15**（1.21.11/neoforge R2 空洞，已定性为 **P0**：与 F1 同族、丢在客户端接收侧）。见 §9.9 与 F15。
 - [ ] **F4 余项**：`modcompat` / `seedgen` 场景未在当前代码复跑（收敛口径下是否纳入待定）。
 - [x] **F1 / F2 已落地**（2026-09-13 第三轮；F2 契约方向由用户拍板选 A），但**验收仅部分达成**：
       空洞项全绿；`starved` 仅 1.21.1/fabric 为 0，1.20.1/fabric = 5、1.21.1/forge = 4、neoforge(修复后) = 3。
@@ -462,7 +462,7 @@ $f='build/smoke-test/logs/client_<SessionId>.log'
 > 抑制/权威边沿未生效，见 §五）与一个 **teardown GLFW 守卫**修正（§9.4）。
 > 剩余未闭：**F4 余项**（`modcompat` / `seedgen` 场景）、**F5**（接管态矩阵证据）、F7（`saveAll` 停滞归因）、F8、F9、
 > **F11**（`resolve()` 逐柱发 pull，§9.5）、**F13**（dimension flaky）、**F14**（移动场景门禁口径）、
-> **F15**（1.21.11/neoforge R2 边缘空洞，§九 —— 需先定「可渲染窗」契约）。
+> **F15**（1.21.11/neoforge R2 空洞 —— 已定性为 **P0**：与 F1 同族，丢在**客户端接收侧**，见 §九）。
 
 ---
 
@@ -599,24 +599,40 @@ $f='build/smoke-test/logs/client_<SessionId>.log'
 本轮改为：计数 `PENDING_OVERFLOW` + 首次触发 `Constants.LOG.warn`（正常路径不可达，一旦出现即为真缺陷信号），
 并把注释改成如实描述。实测 8 场 `AUTHORITY pending overflow` = 0 —— 与「不可达」的判断一致。
 
-### F15（P1，第三轮新增）1.21.11/neoforge R2 边缘空洞（flaky，**分类待契约决策**）
+### F15（P0）→ **已定性（第三轮会话）：与 F1 同一缺陷类，但丢在客户端接收侧**
 
-- **现象**：`1.21.11_neoforge_I_f4` R2 `TRACE_ENCLOSED_HOLE`（largest **4**，components `[4,3,1]`），坐标
-  `[[-11,-9],[-11,-8],[-11,-7],[-11,7],[-10,-8],[-9,-11],[-8,-11],[-7,-11]]`；同配置重跑
-  `1.21.11_neoforge_I_f4b` **0 空洞**（R2 observed 454 vs 465，声明条目两轮均 2046）⇒ **flaky**。
-- **两条决定性读数**：
-  1. `expectedNotPresent = 0` / `receivedNotInjected = 0`（两轮皆 0）⇒ 这 8 格**从未进入 `networkReceived`**
-     —— 又一次印证 §六.1 的候选集盲区，也正是封闭空洞门禁（F10/F1）存在的理由：**它真的抓到了一次「从未投递」**；
-  2. 坐标全部贴 **|坐标| = 11**，即**服务端 VD10 跟踪窗（|≤10|）之外** —— 服务端**本就不该声明**它们。
-- **机理判断**：客户端常驻集 = 服务端声明（|≤10|）∪ 客户端本地 OVD 环（|11|+，best-effort：盘 / 注入 / 本地生成）。
-  OVD 环是**稀疏**的，于是 R2 的边缘呈**锯齿状**；锯齿恰好围住一格时，封闭空洞门禁即亮灯。
-  也因此 `f4`（resident 465）有洞而 `f4b`（resident 454）无洞 —— 关键不是**多少**，而是边缘**形状**。
-- **为什么现在才看见**：F12 修复前 neoforge 走原生整柱下发（|≤10| 每柱实收），边缘形态不同；修复后改走声明驱动。
-- **要决策的**：客户端「可渲染窗」的契约到底是**服务端跟踪半径**（则 |11| 空洞属正常，门禁在窗口外沿过严）
-  还是**客户端 renderDistance + OVD 环**（则这是真缺陷：OVD 环需要补洞，或越窗请求要能被可恢复地服务）。
-  **这一条不定，就无法判 F15 是回归还是门禁口径问题** —— 与 F14 同族（门禁假设与场景语义不匹配）。
-- **起点**：`docs/chunk-load-optimization.md`（OVD 契约）、`ShadowTrackingSession.tryServeOvdLocal`、
-  `scripts/smoke/analyzer.py::_enclosed_holes`（是否应对「窗口外沿」环降级为 P1）。
+- **现象**：`1.21.11_neoforge_I_f4` R2 `TRACE_ENCLOSED_HOLE`（largest **4**，components `[4,3,1]`，共 8 格）；
+  同配置重跑 `f4b` **0 空洞**（声明条目两轮均 2046）⇒ **flaky**。
+- **❌ 已推翻的初判**：曾判为「窗口外沿 OVD 环 best-effort 稀疏、门禁过严（F14 同族）」。
+  **计算推翻**：玩家柱 (-3,-1)、R2 服务端 VD=10 ⇒ 权威窗谓词（原版 `ChunkTrackingView.isWithinDistance`，`contains` 取 `off=2`）
+  `max(0,|dx|-2)² + max(0,|dz|-2)² < 100`；8 格代入判定值 **50 / 52 / 61 / 68 / 72 / 72 / 73 / 80**，
+  **全部 < 100 ⇒ 全在权威窗内**。`ovdMiss = 17` 是 OVD 环自身指标，这 8 格不属于它。⇒ **不是 OVD 边界产物，是真·窗内空洞。**
+- **机理（与 F1 同族，换到客户端接收侧）**：
+  1. 服务端侧完好——声明集合确定（`entriesSum` 2046 = 1573+473，加载器无关），R2 声明 473 = 权威窗全窗，这 8 格在窗内 ⇒ **服务端应当声明了**；
+  2. 客户端侧零踪迹——8 格坐标在客户端日志出现 **0 次**（无 `[CHUNK_APPLY]` / `shadow_attempt`），
+     且 `Request rejected` / `Failed to apply FULL` / `Cache baseline unavailable` / `drop response` **全为 0**
+     ⇒ 客户端**从未请求**它们（不是请求失败，是根本没被驱动）；
+  3. 存在**静默丢弃路径**（代码实证，`ChunkAuthorityClient.handle()`）：
+     ```java
+     if (minecraft == null || minecraft.level == null) return;   // ← 加入世界窗口期内静默丢弃，无重试
+     if (clientDim == null || !clientDim.equals(packet.dimension())) {
+         Constants.LOG.debug("Hassium: drop authority edges ...");  // ← debug 级，默认不可见
+         return;
+     }
+     ```
+  4. **不可恢复**：vanilla 已把这批柱移出 `pendingChunks` ⇒ 服务端**永不再声明**；客户端让位门已关
+     ⇒ 影子端自绘 pull 被抑制 ⇒ 该柱再无来源（**与 §9.1 的第 5/6 步完全同构**）；
+  5. flaky 吻合——是否撞上「level 未就绪」窗口取决于时序，所以两轮同配置一丢一不丢。
+- **结论**：**F1 只修了服务端发送侧的缓冲作废；客户端接收侧的静默丢弃没修。** 门禁（F10/F1）没错，
+  它抓到的是一次真实的永久空洞。
+- **修法（候选，需确认范围）**：
+  - `ChunkAuthorityClient.handle()` 不得静默丢：**早退改为挂起到 `level` 就绪后重放**（小队列），
+    至少也要计数 + `warn`；
+  - 让位门的**武装时机**应与「声明流已被消费」绑定（或服务端对已声明集合做有界周期的重声明），
+    否则任何一次接收侧丢失都不可恢复——这条与 F2 的契约同源；
+  - `TRACE_*` 类门禁在声明驱动路径下**结构失明**（R2 实测 `networkReceived = 0`、`shadowInjected = 0`，
+    故 `expectedNotPresent` 恒为 0）⇒ **封闭空洞门禁是当前唯一能看见这类空洞的门禁**，其可靠性已成为硬依赖。
+- **验收判据**：连续 ≥2 轮 1.21.11/neoforge 冒烟 `TRACE_ENCLOSED_HOLE` = 0，且新增的「接收侧丢弃」计数 = 0。
 
 ---
 
