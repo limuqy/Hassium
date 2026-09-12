@@ -12,7 +12,7 @@ Hassium covers Minecraft **1.20.1 / 1.21.1–1.21.11**, adapted as **7 version s
 
 | Minecraft | Fabric | Forge | NeoForge |
 | --- | --- | --- | --- |
-| 1.20.1 | ✅ | ✅ | ✅ |
+| 1.20.1 | ✅ | ✅ | — |
 | 1.21.1 | ✅ | ✅ | ✅ |
 | 1.21.2 | ✅ | — | ✅ |
 | 1.21.3 | ✅ | ✅ | ✅ |
@@ -26,6 +26,7 @@ Hassium covers Minecraft **1.20.1 / 1.21.1–1.21.11**, adapted as **7 version s
 | 1.21.11 | ✅ | — | ✅ |
 
 - **Forge is available on 1.20.1 / 1.21.1 / 1.21.3–1.21.10**; 1.21.2 is skipped upstream (no official Forge userdev), **1.21.11 is sunset** — use NeoForge for 1.21.x
+- **No separate NeoForge build for 1.20.1**: NeoForge 47.x natively loads Forge mods, so NeoForge users install the Forge build
 - The FCAP Forge bridge was retired with Forge 1.20.6 support (2026-08-22)
 
 ---
@@ -69,4 +70,4 @@ See [Compatibility](Compatibility-en).
 
 ---
 
-[← Compatibility](Compatibility-en) · [Home](Home-en) · [→ Network-Core-and-Master-Migration](Network-Core-and-Master-Migration-en)
+[← Compatibility](Compatibility-en) · [Home](Home-en) · [→ Network-Architecture](Network-Architecture-en)

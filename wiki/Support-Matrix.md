@@ -12,7 +12,7 @@ Hassium 覆盖 Minecraft **1.20.1 / 1.21.1–1.21.11**，按 **7 个版本段 ×
 
 | Minecraft | Fabric | Forge | NeoForge |
 | --- | --- | --- | --- |
-| 1.20.1 | ✅ | ✅ | ✅ |
+| 1.20.1 | ✅ | ✅ | — |
 | 1.21.1 | ✅ | ✅ | ✅ |
 | 1.21.2 | ✅ | — | ✅ |
 | 1.21.3 | ✅ | ✅ | ✅ |
@@ -26,6 +26,7 @@ Hassium 覆盖 Minecraft **1.20.1 / 1.21.1–1.21.11**，按 **7 个版本段 ×
 | 1.21.11 | ✅ | — | ✅ |
 
 - **Forge 支持 1.20.1 / 1.21.1 / 1.21.3–1.21.10**；1.21.2 上游未发布 Forge userdev（官方跳过），**1.21.11 起 sunset**，1.21.x 推荐使用 NeoForge
+- **1.20.1 不单独发 NeoForge 文件**：NeoForge 47.x 原生兼容 Forge mod，NeoForge 用户直接使用 Forge 版
 - FCAP Forge 桥已随 Forge 1.20.6 支持退役（2026-08-22）
 
 ---
@@ -69,4 +70,4 @@ Hassium 覆盖 Minecraft **1.20.1 / 1.21.1–1.21.11**，按 **7 个版本段 ×
 
 ---
 
-[← Compatibility](Compatibility) · [Home](Home) · [→ Network-Core-and-Master-Migration](Network-Core-and-Master-Migration)
+[← Compatibility](Compatibility) · [Home](Home) · [→ Network-Architecture](Network-Architecture)

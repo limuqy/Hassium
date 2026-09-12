@@ -76,7 +76,7 @@ A: **不含**。影子端世界仅含区块/光照与方块实体数据，无玩
 
 ### Q: 超视渲染现在能用吗？
 
-A: **当前版本未启用**（规划中）。2.0.0 直连拓扑回归后旧的环带链路已从代码裁剪，配置键已删除；功能落地时恢复。设计记录见 [Beyond-View-Render](Beyond-View-Render)。
+A: **可以，默认开启**。影子双窗 OVD：权威窗（服务端视距内）走统一 Compare+Pull，视距外环带由影子端本地已有地形（盘 / 注入）回填，**仅参与渲染、不向服务端请求**。用 `chunk.viewDistanceExtensionEnabled = false` 关闭。详见 [Beyond-View-Render](Beyond-View-Render)。
 
 ### Q: 我用 Bobby 会冲突吗？
 
@@ -96,4 +96,4 @@ A: 热路径默认安静。排查时按需打开 `debug.*`：`debug.metadataLogg
 
 ---
 
-[← Network-Core-and-Master-Migration](Network-Core-and-Master-Migration) · [Home](Home) · [→ Troubleshooting](Troubleshooting)
+[← Network-Architecture](Network-Architecture) · [Home](Home) · [→ Troubleshooting](Troubleshooting)

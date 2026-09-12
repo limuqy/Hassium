@@ -4,7 +4,7 @@
 
 > **English**: [Beyond-View-Render-en](Beyond-View-Render-en) · 中文
 
-> **状态：现行功能。** 影子双窗 OVD：tracking 扩到 effective clientRD；权威窗（serverVD）走 Compare+Pull，OVD 窗只从本地源（盘 / 注入 / 可选生成）回填，禁止向真服请求。客户端只抬 `ClientChunkCache` 半径并拦截 Forget。详见 [`docs/chunk-cache.md`](../docs/chunk-cache.md) §10。
+> **状态：现行功能。** 影子双窗 OVD：tracking 扩到 effective clientRD；权威窗（serverVD）走 Compare+Pull，OVD 窗只从本地源（盘 / 注入）回填，禁止向真服请求。客户端只抬 `ClientChunkCache` 半径并拦截 Forget。详见 [`docs/chunk-cache.md`](../docs/chunk-cache.md) §10。
 
 ---
 
@@ -15,7 +15,7 @@
 ## 现行拓扑
 
 - **权威窗**（`dist ≤ serverVD`）：影子 tracking 驱动统一 Compare+Pull
-- **OVD 窗**（`serverVD < dist ≤ effective clientRD`）：只读本地源；`chunk.ovdLocalGeneration=true` 且握手已下发真实种子时，miss 可本地生成
+- **OVD 窗**（`serverVD < dist ≤ effective clientRD`）：只读本地源（注入 / 盘），不向服务端请求
 - **客户端**：抬 `ClientChunkCache` 半径；拦截 vanilla Forget，避免环带被卸载
 - **关开关**：`chunk.viewDistanceExtensionEnabled=false` 时半径回落 serverVD，只走权威窗
 - **与 Bobby 互斥**：Hassium 自研回填，勿与 Bobby 同装
@@ -26,9 +26,8 @@
 | --- | --- | --- |
 | `chunk.viewDistanceExtensionEnabled` | `true` | 超视渲染总开关（依赖 `chunk.enabled`） |
 | `chunk.maxRenderDistance` | `16` | effective clientRD 上限（2–64） |
-| `chunk.ovdLocalGeneration` | `false` | OVD 窗缓存 miss 时按服务端种子本地生成（需真实 seed） |
 
-延迟卸载（`chunk.ovdUnloadDelaySecs`）已取消，双窗不恢复该键。
+延迟卸载（`chunk.ovdUnloadDelaySecs`）已取消，双窗不恢复该键；OVD 本地生成（`chunk.ovdLocalGeneration`）已退役删除。
 
 ---
 

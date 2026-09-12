@@ -1,6 +1,6 @@
 # Hassium 配置项审计
 
-> 审计日期：2026-09-12（对齐 SeedGen 线程/直推线程键删除后键集；真相源 `ConfigSchema`，45 键）。
+> 审计日期：2026-09-12（对齐 SeedGen 线程/直推线程键删除后键集；真相源 `ConfigSchema`，44 键）。
 > 历史审计：2026-07-21（1.1.2 旧结构）、2026-08-09（config-restructure，74 键 + 删键 4）、2026-09-04（直连拓扑裁剪标注）、2026-09-10（OVD 退役 38 键）——键集均已过时，本文为当前唯一快照。
 
 ## 一、配置文件结构与加载链
@@ -17,15 +17,15 @@
 
 > 历史（1.1.2 及更早）：Fabric 三文件模型（`client.toml` + `common.toml` + `server.toml`）、Forge/NeoForge 三 spec（CLIENT/COMMON/SERVER）——2.0.0 已统一为**双文件 / 双 scope** 模型。
 
-**Legacy key hygiene**：旧 toml 残留键由加载器静默清除（`FabricTomlConfigIO` 清理表），不迁移、不报错。已清除键族：`net.*` 全族、`dataplane.*`、`master.controlReachableEndpoints` / `bindHost` / `authToken` / `migration*`（7 键）/ `resumeTicketTtlMs` / `globalPacketCompression` / `globalCompressionLevel` / `globalCompressionThreshold` / `magiclessZstd`、`chunk.ovdUnloadDelaySecs`（延迟卸载取消）/ `hassiumEngineEnabled` / `unloadDelaySecs` / `compressionLevel`、`storage.mode`、`chunk.seedGenThreads` / `master.serverChunkPushThreads`。OVD 三键（`viewDistanceExtensionEnabled` / `maxRenderDistance` / `ovdLocalGeneration`）已随双窗重做恢复，不再清理。
+**Legacy key hygiene**：旧 toml 残留键由加载器静默清除（`FabricTomlConfigIO` 清理表），不迁移、不报错。已清除键族：`net.*` 全族、`dataplane.*`、`master.controlReachableEndpoints` / `bindHost` / `authToken` / `migration*`（7 键）/ `resumeTicketTtlMs` / `globalPacketCompression` / `globalCompressionLevel` / `globalCompressionThreshold` / `magiclessZstd`、`chunk.ovdUnloadDelaySecs`（延迟卸载取消）/ `hassiumEngineEnabled` / `unloadDelaySecs` / `compressionLevel`、`storage.mode`、`chunk.seedGenThreads` / `master.serverChunkPushThreads`、`chunk.ovdLocalGeneration`。OVD 两键（`viewDistanceExtensionEnabled` / `maxRenderDistance`）已随双窗重做恢复，不再清理。
 
-## 二、全部配置项（ConfigSchema，45 键）
+## 二、全部配置项（ConfigSchema，44 键）
 
 键名前缀：区块核心 `chunk.*` / 服务端传输面 `master.*` / 存储 `storage.*` / 兼容 `compat.*` / 调试 `debug.*`。
 
-### A. CLIENT 键（client.toml / client spec，25 键）
+### A. CLIENT 键（client.toml / client spec，24 键）
 
-**A1. chunk.\*（15 键，区块核心）**
+**A1. chunk.\*（14 键，区块核心）**
 
 | 配置项 | 默认值 | 说明 |
 |--------|--------|------|
@@ -40,7 +40,6 @@
 | `chunk.sectionDeltaEnabled` | `true` | 分段增量（服务端规划 + 客户端应用） |
 | `chunk.viewDistanceExtensionEnabled` | `true` | 超视渲染 OVD（影子双窗；见 chunk-cache.md §10） |
 | `chunk.maxRenderDistance` | `16` | 超视渲染 effective clientRD 上限（2–64） |
-| `chunk.ovdLocalGeneration` | `false` | OVD 窗缓存 miss 时本地生成（需真实 seed） |
 | `chunk.maxChunksPerFrame` | `6` | 每 tick 缓存读取生产上限（影子入队 + 影子读盘；主线程消费只受时间预算） |
 | `chunk.mainThreadChunkBudgetMs` | `15` | 主线程 apply 预算（ms） |
 | `chunk.seedGenEnabled` | `false` | SeedGen 本地生成（双端同版本；服务端开启时下发世界种子） |
@@ -60,7 +59,7 @@
 | `debug.networkMetricsEnabled` | `false` | 客户端网络指标（冒烟测试 `hassium.smokeTest=true` 强开） |
 | `debug.networkMetricsAutoReset` | `true` | 客户端退出自动复位指标 |
 
-### B. SERVER 键（server.toml / server spec，22 键）
+### B. SERVER 键（server.toml / server spec，20 键）
 
 **B1. chunk.lightStrip（1 键，区块核心服务端侧）**
 
@@ -119,7 +118,8 @@
 | `master.globalPacketCompression` / `globalCompressionLevel` / `globalCompressionThreshold` / `magiclessZstd` | 4 | 管线级全局包压缩退役（通道压缩 = 聚合字典 ZSTD + 区块推送自有压缩） |
 | `master.enableCompactHeader` / `master.metricsEnabled` | 2 | 紧凑包头改能力位协商；服务端指标并入 `debug.*` |
 | `chunk.ovdUnloadDelaySecs` | 1 | 超视延迟卸载取消（双窗重做不恢复） |
-| `chunk.viewDistanceExtensionEnabled` / `maxRenderDistance` / `ovdLocalGeneration` | — | **已恢复**（2026-09 影子双窗 OVD），见 A1 |
+| `chunk.viewDistanceExtensionEnabled` / `maxRenderDistance` | — | **已恢复**（2026-09 影子双窗 OVD），见 A1 |
+| `chunk.ovdLocalGeneration` | 1 | OVD 窗本地生成退役删除（OVD 回填只读本地已有数据） |
 | `chunk.hassiumEngineEnabled` | 1 | 影子端与 `chunk.enabled` 合并（单一区块核心开关） |
 | `chunk.unloadDelaySecs` / `chunk.compressionLevel` | 2 | 影子端自身 unload 语义承担；客户端压缩等级并入通道压缩 |
 | `storage.mode` | 1 | 存档格式单一化（type 126） |
@@ -128,13 +128,13 @@
 
 | 分类（前缀） | scope | 键数 | 默认关 / 特殊 |
 |------|--------|------|----------------|
-| `chunk.*` | CLIENT | 15 | `seedGenEnabled`=false；`ovdLocalGeneration`=false |
+| `chunk.*` | CLIENT | 14 | `seedGenEnabled`=false |
 | `debug.*` | CLIENT | 10 | 全 false（`networkMetricsAutoReset`=true） |
 | `storage.*` | SERVER | 2 | `enabled`=false |
 | `master.*` | SERVER | 9 | — |
 | `debug.*` | SERVER | 5 | 全 false |
 | `chunk.lightStrip` / `chunk.seedGenEnabled` | SERVER | 2 | `seedGenEnabled`=false |
-| **合计** | | **45** | |
+| **合计** | | **44** | |
 
 ## 五、审计方法
 

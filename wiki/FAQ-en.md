@@ -76,7 +76,7 @@ A: **No**. The shadow world contains only chunks/lighting and block-entity data 
 
 ### Q: Is beyond-view render available now?
 
-A: **Not in the current build** (planned). After the 2.0.0 direct-connection regression the old ring path was cut from the code and its config keys removed; they return when the feature ships. Design notes: [Beyond-View-Render](Beyond-View-Render-en).
+A: **Yes, and it is on by default.** Shadow dual-window OVD: the authoritative window (within the server view distance) uses the unified Compare+Pull, while the ring beyond it is backfilled from terrain the shadow server already has locally (disk/injected) — **render-only, never requested from the server**. Disable with `chunk.viewDistanceExtensionEnabled = false`. See [Beyond-View-Render](Beyond-View-Render-en).
 
 ### Q: Does Bobby conflict?
 
@@ -96,4 +96,4 @@ A: Hot paths are quiet by default. Enable specific `debug.*` keys when diagnosin
 
 ---
 
-[← Network-Core-and-Master-Migration](Network-Core-and-Master-Migration-en) · [Home](Home-en) · [→ Troubleshooting](Troubleshooting-en)
+[← Network-Architecture](Network-Architecture-en) · [Home](Home-en) · [→ Troubleshooting](Troubleshooting-en)

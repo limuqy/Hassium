@@ -26,18 +26,17 @@ Smaller world saves and bandwidth than vanilla, local chunk reuse, and smoother 
 | **Efficient compression** | Storage compression | World chunk ZSTD on disk (type 126) for smaller saves; keeps vanilla Region (`.mca`) layout |
 | | Channel compression | Dictionary ZSTD inside aggregated packets + chunk-push native compression; never touches the vanilla compression layer, no cross-mod pipeline conflicts |
 | **Network optimization** | Smooth push | Per-player per-tick Pull completion cap (`master.maxChunksPerTick`, ≈ cap×20/s at full tick) + backgrounded encode/compress; joins never saturate the main thread |
-| | Login-phase capability handshake | `hassium:login_hello` login query on 1.20.1, config-stage `PreHandshakePayload` on 1.20.2+; bitwise capability negotiation with no timeout dependency and zero interference for vanilla clients |
+| | Login-phase capability handshake | `hassium:login_hello` login query on 1.20.1, config-stage `PreHandshakePayload` on 1.21.1+; bitwise capability negotiation with no timeout dependency and zero interference for vanilla clients |
 | | Pull mode | After negotiation the server stops pushing full chunks; chunk data is fetched by the unified Compare+Pull driven by the client shadow virtual player's vanilla tracking (`ShadowPull`: UNCHANGED / DELTA / FULL / ERROR) |
 | **Chunk cache** | Shadow-world saving | Join chunks are lit and saved into a vanilla save dir (`hassium_cache/<serverId>/world`) by an in-process shadow server (full MinecraftServer); saved on disconnect, reused on reconnect |
 | | Section delta | On stale cache only changed blocks are sent (`SectionDelta`); whole section next, whole chunk beyond that |
 | | Capacity/heat eviction | `heat.idx` tracks heat per region file; over-capacity regions are deleted whole-file (`ShadowCacheEviction`) |
 | | World export | `/hassiumc export` copies the shadow world into an export save (`hassium_exports/<cacheId>`; keeps type 126 + chunkHash; vanilla translation pending) |
-| **Local generation** | SeedGen | For pristine chunks the server sends a coordinate reference (`SeedRef`, tens of bytes); the client generates locally with the same seed and verifies by hash; any failure falls back to full chunks. **Enabling the server switch sends the world seed to clients — equivalent to leaking the server seed** |
+| **Local generation** | SeedGen | With both sides on the same version and the gate open, the server sends the world seed during Play activation (`play_init_s2c`); the client's shadow tracking then runs vanilla worldgen locally for pristine chunks, and results are authority-checked via compare-pull before delivery. **Enabling the server switch sends the world seed to clients — equivalent to leaking the server seed** |
+| **Beyond-view render** | OVD (shadow dual-window) | When the client RD exceeds the server view distance, the ring beyond it is backfilled from terrain the shadow server already has locally (injected/disk); **render-only, never simulated**, and never requested from the server; mutually exclusive with Bobby |
 | **Lighting** | Hassium engine | On join an in-process shadow server takes over **world saving (cache) + chunk lighting + packing official chunk packets** (returned over the official channel); the client no longer computes lighting; auto-degrades on startup failure |
 | | Light stripping | The server may strip light to save bandwidth (`chunk.lightStrip`); the shadow server computes lighting and packs it back |
 | **Utilities** | Traffic monitoring | `/hassium stats` (server) and `/hassiumc stats` (client) show compression and cache effectiveness |
-
-> **Planned**: beyond-view rendering (OVD — backfill terrain beyond the server view distance from local cache when the client RD exceeds the server's). The current build does not enable this path; config keys and docs will return when the feature ships.
 
 Vanilla clients can join by default (`compat.requireClientMod = false`); install on both sides for full compression and caching.
 
@@ -88,6 +87,8 @@ Files: `config/hassium/hassium-client.toml`, `config/hassium/hassium-server.toml
 | `chunk.enabled` | `true` | Chunk-core master switch (shadow-world saving/lighting/cache/Pull mode; off = vanilla path everywhere) |
 | `chunk.sectionDeltaEnabled` | `true` | Section delta (server-side planning + client-side apply) |
 | `chunk.seedGenEnabled` | `false` | SeedGen local generation (both sides same version; **server enablement leaks the world seed**) |
+| `chunk.viewDistanceExtensionEnabled` | `true` | Beyond-view render OVD (shadow dual-window; requires `chunk.enabled`; mutually exclusive with Bobby) |
+| `chunk.maxRenderDistance` | `16` | OVD max effective clientRD (2–64) |
 | `chunk.mainThreadChunkBudgetMs` | `15` | Client per-frame apply budget (ms) |
 | `chunk.maxChunksPerFrame` | `6` | Per-tick cache-read production cap (shadow enqueue + shadow disk) |
 | `chunk.maxSizeMb` | `4096` | Cache size cap (MB; excess triggers heat eviction) |
@@ -106,7 +107,7 @@ Files: `config/hassium/hassium-client.toml`, `config/hassium/hassium-server.toml
 | `master.compressionBlacklist` | control-plane keys | Compression/aggregation blacklist (control plane bypasses the aggregation buffer) |
 | `compat.requireClientMod` | `false` | Allow mod-less clients (true = kick when login handshake fails) |
 | `compat.autoDowngradeOnError` | `true` | Auto-downgrade on error |
-| `debug.*` | `false` | Categorized debug logging (quiet by default; hot paths use `DebugLogger`) |
+| `debug.*` | mostly `false` | Categorized debug logging (quiet by default; hot paths use `DebugLogger`; `networkMetricsAutoReset` defaults to `true`) |
 
 Full reference: [`docs/architecture.md`](docs/architecture.md) and the [config audit](docs/config-audit.md).
 
@@ -131,13 +132,13 @@ Full reference: [`docs/architecture.md`](docs/architecture.md) and the [config a
 flowchart LR
     client["Mod client"] <-->|"single vanilla TCP<br/>login handshake + Play custom payloads"| server["Mod server"]
     subgraph Handshake & activation
-        hs["login_hello (1.20.1) /<br/>PreHandshakePayload (1.20.2+)<br/>bitwise capability negotiation"]
+        hs["login_hello (1.20.1) /<br/>PreHandshakePayload (1.21.1+)<br/>bitwise capability negotiation"]
         act["play_init_s2c activation<br/>dict/index → aggregation PENDING → ACK → ENABLED"]
     end
     subgraph Chunk data plane
         push["Server vanilla tracking push<br/>(vanilla chunk+light / forget)"]
         pull["ShadowPull Compare+Pull<br/>UNCHANGED / DELTA / FULL / ERROR"]
-        seed["SeedRef pristine refs<br/>client local generation"]
+        seed["play_init ships the world seed<br/>shadow-side local pristine generation"]
     end
     shadow["Shadow server (ShadowSeedServer)<br/>inject + official light engine + converge"]
     pack["Pack official lit chunk packets"]

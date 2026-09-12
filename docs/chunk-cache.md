@@ -13,7 +13,7 @@
 
 **卖点特性（已实现）：** 统一 ShadowPull（§3）、分段增量（§11.5）、`/hassiumc export`（§12）。本地生成（SeedGen）开启时握手下发世界种子，由影子端原版写入 `level.dat`（**泄露种子**）；导出或手工把 `hassium_cache/<id>/world` 拷到 `saves/` 即可当存档。
 
-> **规划中**：超视渲染（OVD）。当前版本代码未启用该链路，影子端 vanilla tracking 是区块交付的唯一 owner（§10）。
+> **超视渲染（OVD）为现行功能**（影子双窗，默认开启）：影子端 vanilla tracking 仍是权威窗区块交付的唯一 owner；OVD 窗只从本地源（注入 / 盘）回填，详见 §10。
 
 ## 1. 目标与约束
 
@@ -31,7 +31,7 @@ chunkHash   = combineSectionHashes(sectionIndex → sectionHash)
 
 实现：`ChunkContentHashUtil`。服务端与客户端算法一致。
 
-客户端落盘时 contentHash **必须**等于 `combine(sectionHashes)`（与 `SeedRefS2CPacket` 同值）。影子端 `ShadowStorageHashes` 表落盘同源（apply/注入时重算写入）。
+客户端落盘时 contentHash **必须**等于 `combine(sectionHashes)`（与服务端权威 `chunkHash` 同值）。影子端 `ShadowStorageHashes` 表落盘同源（apply/注入时重算写入）。
 
 命中比对（影子端 `ShadowLightCompute` / 磁盘 `ShadowStorageHashes`）：
 
@@ -66,7 +66,7 @@ ClientChunkCache.replaceWithPacketData → renderer
 
 原版 `ClientPacketListener.handleLevelChunkWithLight` 收到区块时，已有本地影子基线的柱进入唯一 `ShadowPull` 请求；无基线时保留原版 FULL 作为首次建基线路径。请求同时携带 `chunkHash`、`sectionHash` 和 section 平面综合征。
 
-该分支处理 `SeedRef`、影子缓存重放和本地生成失败；不参与区块可见范围或卸载决策。
+该分支处理影子缓存重放、本地生成及其失败回退；不参与区块可见范围或卸载决策。
 
 ```text
 候选区块
@@ -108,7 +108,6 @@ ShadowPull 通过原版 `CustomPayload` 发送；不使用任何网关 Envelope�
 ShadowPullRequestC2SPacket  // 客户端带影子本地 baseline 请求权威比较
 ShadowPullResponseS2CPacket // UNCHANGED / DELTA / FULL / ERROR
 SectionDeltaS2CPacket       // ShadowPull 的 DELTA 终态内嵌载荷
-SeedRefS2CPacket            // pristine 区块坐标引用（替代 ChunkHashS2C）
 BlockEntityRequestC2S / BlockEntityDataS2C  // BE 专用请求（不进缓存命中域）
 LightDeltaS2CPacket         // 增量光变更掩码
 ```
@@ -152,7 +151,7 @@ LightDeltaS2CPacket         // 增量光变更掩码
 
 ### 10.1 目标
 
-多人服且客户端 RD 滑块 > 服务端视距时，用**影子端本地已有地形**（注入表 / 磁盘 / 可选本地生成）回填环带，使曾探索区域在视距外仍可见。
+多人服且客户端 RD 滑块 > 服务端视距时，用**影子端本地已有地形**（注入表 / 磁盘）回填环带，使曾探索区域在视距外仍可见。
 
 | 场景 | 行为 |
 |------|------|
@@ -173,7 +172,7 @@ LightDeltaS2CPacket         // 增量光变更掩码
 │   │ 权威窗 = isChunkInRange(   │     │  → Compare+Pull / bootGrid / sweep
 │   │            serverVD)       │     │  → 真服务端数据源
 │   └───────────────────────────┘     │
-│   OVD 窗 = client 窗 − 权威窗        │  → injected → loadFromDisk → generate
+│   OVD 窗 = client 窗 − 权威窗        │  → injected → loadFromDisk
 │                                     │  → 禁止 ShadowPull / 禁止真服请求
 └─────────────────────────────────────┘
 ```
@@ -192,7 +191,7 @@ LightDeltaS2CPacket         // 增量光变更掩码
                                       │
 影子 ticket(clientVD)                 │
   ├─ 权威窗柱 → 现有 scheduleLoad / pending pull / compare
-  └─ OVD 窗柱 → injected? → disk? → generate?
+  └─ OVD 窗柱 → injected? → disk?
                  └─ 均无：空 Proto 站位（不 pull）
                  └─ 有数据：submitPreLight(renderOnly=true)
                          → 光收敛 → drainReady
@@ -201,8 +200,6 @@ LightDeltaS2CPacket         // 增量光变更掩码
 ```
 
 **外圈→内圈基线**：OVD 柱物化后进 `injectedChunks`；玩家移动使该柱进入权威窗时，`drainSelections` 见 `injectedChunk != null` 跳过 pull，`onChunkMaterialized` 桥带基线走 Compare（UNCHANGED/DELTA），无需二次读盘。
-
-**预生成**：`chunk.ovdLocalGeneration=true` 时 OVD 窗 ticket 触发 `generate`，转入权威窗即有现成基线。
 
 ### 10.4 客户端最小边界
 
@@ -226,9 +223,8 @@ OVD 回传记 ovd 指标，不进缓存命中率分母
 |----|------|------|
 | `chunk.viewDistanceExtensionEnabled` | true | 超视渲染总开关（依赖 `chunk.enabled`；与 Bobby 互斥） |
 | `chunk.maxRenderDistance` | 16 | effective clientRD 上限（2–64） |
-| `chunk.ovdLocalGeneration` | false | OVD 窗缓存 miss 时本地生成（需握手已下发真实 seed，即服务端 `seedGenEnabled`；无种子自动不生成，只读盘） |
 
-`chunk.ovdUnloadDelaySecs` **不再恢复**（延迟卸载取消）。
+`chunk.ovdUnloadDelaySecs` **不再恢复**（延迟卸载取消）；`chunk.ovdLocalGeneration`（OVD 窗本地生成）**已退役删除**，OVD 窗回填只读本地已有数据（注入 / 盘）。
 
 ### 10.7 不做（延续原版化边界）
 
@@ -244,7 +240,6 @@ OVD 回传记 ovd 指标，不进缓存命中率分母
 |------|------|------------------------------|
 | P0 | 影子扩窗 + 双窗分流 + 客户端半径/Forget | R2 环带可见；pull range 拒 = 0；OVD 发送 pull = 0 |
 | P1 | 指标 `ovdLoaded` 等 + miss 空置语义 | `/hassiumc stats` 超视行；G1 `ovdLoaded>0` |
-| P2 | `ovdLocalGeneration` | 开生成外圈补洞；转入内圈不再全量拉 |
 | P3 | L1 + mod-compat 超视条目 | 与 shape4/bootgrid 指标不回归 |
 
 ### 10.9 风险
@@ -252,8 +247,7 @@ OVD 回传记 ovd 指标，不进缓存命中率分母
 1. 扩窗使 `processUnloads` / 光邻域 ticket 按 clientVD 走，OVD 柱占影子内存与算光队列 → 权威队列深时暂停 OVD 泵。
 2. 与 Bobby 等视距模组双主冲突不变。
 3. 若 P0 触发 pull 契约回归，回退 = `setChunkViewDistance` 改回 `serverVD+1`，双窗分流代码可保留作旁路开关。
-4. **OVD 本地生成**：`generateChunk` 必须异步（在影子主循环同步等 worldgen future 会自锁）；产物经队列回影子主循环 `injectLoadedChunk`；**生成柱 `dirty=false` 只进内存**——曾以 dirty 落盘写出缺 palette 的 section，IO 读回即 `wrong location` / ZSTD 解压失败。冒烟 `ovdgen` 需 `-AllowErrorPatterns` 豁免该类 region 噪声。
-5. **重连回放**：`resetRequestDedupForReconnect` 必须清 `shadowApplyEpochs`；否则上一 `ClientChunkCache` 的落地凭据会让 materialize/redeliver 误判「客户端已有」，R2 只回放部分柱（实测 1529→775，移动新区不出现）。
+4. **重连回放**：`resetRequestDedupForReconnect` 必须清 `shadowApplyEpochs`；否则上一 `ClientChunkCache` 的落地凭据会让 materialize/redeliver 误判「客户端已有」，R2 只回放部分柱（实测 1529→775，移动新区不出现）。
 
 ## 11. 磁盘 NBT 缓存格式（影子端存档）
 

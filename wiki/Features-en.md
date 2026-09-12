@@ -4,7 +4,7 @@
 
 > **English**: [Features](Features) · English
 
-Hassium pairs a client and server mod to optimize Minecraft along **efficient compression, network optimization, chunk cache, local generation, lighting, and utilities**. This page summarizes each feature and when it applies.
+Hassium pairs a client and server mod to optimize Minecraft along **efficient compression, network optimization, chunk cache, beyond-view render, local generation, lighting, and utilities**. This page summarizes each feature and when it applies.
 
 ---
 
@@ -50,10 +50,10 @@ Hassium pairs a client and server mod to optimize Minecraft along **efficient co
 
 - **Goal**: zero-timeout capability negotiation, zero interference for vanilla clients; chunk data fetched on demand after negotiation
 - **How**:
-  - On 1.20.1 the server sends the `hassium:login_hello` login query inside `handleAcceptedLogin` (after LoginCompression, before GameProfile); on 1.20.2+ the config-stage `PreHandshakePayload` (after authentication)
+  - On 1.20.1 the server sends the `hassium:login_hello` login query inside `handleAcceptedLogin` (after LoginCompression, before GameProfile); on 1.21.1+ the config-stage `PreHandshakePayload` (after authentication)
   - Bitwise capability negotiation (agg/delta/seed/light/pull/shadow_pull/pull_mode); empty answer or no shared capability → vanilla path (`compat.requireClientMod=true` kicks at login instead)
   - Play-phase activation: `ServerPlayer <init>` TAIL consumes negotiated caps (suppresses the vanilla chunk window) → dictionary_sync/index_sync → aggregation PENDING (5s ACK timeout downgrades to direct send) → `play_init_s2c` → client ACK → aggregation ENABLED
-  - **Pull mode** (`pull_mode` capability): after negotiation the server stops pushing full chunk payloads (forget/metadata/SeedRef continue); chunk data is fetched by the unified Compare+Pull driven by the client shadow virtual player's vanilla tracking (`ShadowPull`: UNCHANGED / DELTA / FULL / ERROR)
+  - **Pull mode** (`pull_mode` capability): after negotiation the server stops pushing full chunk payloads (forget/metadata continue); chunk data is fetched by the unified Compare+Pull driven by the client shadow virtual player's vanilla tracking (`ShadowPull`: UNCHANGED / DELTA / FULL / ERROR)
 - **Config**: `master.enabled` (server gate), `chunk.enabled` (client gate)
 
 ---
@@ -94,9 +94,20 @@ Hassium pairs a client and server mod to optimize Minecraft along **efficient co
 ### Local generation (SeedGen)
 
 - **Goal**: pristine terrain no longer needs per-chunk transmission — zero-bandwidth generation
-- **How**: for pristine chunks the server sends a reference (seed + coords + hash, tens of bytes) instead of chunk data; the client shadow server generates locally with the same seed, sharing the remote pipeline (lighting → official packet → official channel), and saves on disconnect; failures/timeouts fall back to full requests
+- **How**: the server ships the world seed during Play activation (`play_init_s2c`, `LevelStem` NBT); with the gate open the client's shadow vanilla tracking runs worldgen directly for pristine chunks, then the result is authority-checked via compare-pull and takes the same pipeline as remote chunks (lighting → official packet → official channel), saved on disconnect. Failures/mismatches fall back to full requests
 - **Config**: `chunk.seedGenEnabled` (default `false`, both sides same version)
 - **Risk**: **server enablement sends the world seed to clients — equivalent to leaking the server seed** (seed maps / exported saves can exploit it)
+
+---
+
+## Beyond-view render
+
+### OVD (shadow dual-window)
+
+- **Goal**: when the client render distance (RD) exceeds the server view distance (serverVD), backfill the ring beyond it from local cache — **render-only, never simulated**
+- **How**: shadow tracking widens to the effective clientRD; the authoritative window (`dist ≤ serverVD`) uses the unified Compare+Pull, while the OVD window is filled only from local sources (disk / injected) with **no requests to the real server**; the client only raises its `ClientChunkCache` radius and intercepts Forget
+- **Config**: `chunk.viewDistanceExtensionEnabled` (default `true`; requires `chunk.enabled`), `chunk.maxRenderDistance` (default `16`)
+- **Boundary**: mutually exclusive with Bobby; see [Beyond-View-Render](Beyond-View-Render-en) and [`docs/chunk-cache.md`](../docs/chunk-cache.md) §10
 
 ---
 
@@ -139,7 +150,5 @@ Full reference: [Commands](Commands-en).
 ---
 
 > **Compatibility**: vanilla clients can join by default (`compat.requireClientMod = false`) and only get server-side compression; caching and negotiated compression need the mod on both sides. See [Compatibility](Compatibility-en).
-
-> **Planned**: beyond-view rendering (OVD). Not enabled in the current build; design notes in [Beyond-View-Render](Beyond-View-Render-en).
 
 [← Commands](Commands-en) · [Home](Home-en) · [→ Beyond-View-Render](Beyond-View-Render-en)

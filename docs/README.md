@@ -1,7 +1,7 @@
 # Hassium 文档索引
 
 > 结构：`docs/` 顶层为真相源（当前有效）；`docs/handoff/` 为交接文档；`docs/archive/` 为历史/一次性/已退役文档归档。
-> 对齐日期：2026-09-10（2.0.0 功能固定后全文对齐实际代码；直连拓扑为现行拓扑）。
+> 对齐日期：2026-09-12（2.0.0 功能固定后全文对齐实际代码；直连拓扑为现行拓扑，OVD 影子双窗为现行功能，SeedRef 直推等退役路径已清除）。
 
 ## 顶层真相源（状态：当前）
 
@@ -15,7 +15,7 @@
 | [mod-compat.md](mod-compat.md) | 多 Mod 兼容边界与配置逃生 | 当前 |
 | [runtime-smoke-test.md](runtime-smoke-test.md) | 运行时冒烟：L0–L3 分层覆盖、PROBE JSON、场景引擎、门禁与会话判定 | 当前 |
 | [ai-functional-test.md](ai-functional-test.md) | AI 辅助游戏内功能测试（minecraft-mod-mcp，L3 人工专项） | 当前 |
-| [config-audit.md](config-audit.md) | 配置项审计（38 键快照 + 退役键族清单） | 当前 |
+| [config-audit.md](config-audit.md) | 配置项审计（44 键快照 + 退役键族清单） | 当前 |
 | [network-core-followups.md](network-core-followups.md) | 网络核心收尾核销（**已归档**：直连拓扑下仅存档参考） | 归档参考 |
 | [curseforge-description.md](curseforge-description.md) | CurseForge 发布描述草稿 | 当前 |
 

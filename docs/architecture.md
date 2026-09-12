@@ -12,7 +12,7 @@ Hassium 是 Minecraft 多加载器模组（Fabric / Forge / NeoForge），围绕
 - **本地生成** —— SeedGen：影子端对 pristine 区块执行生成前权威校验后再进入原版 ChunkStatus/LightEngine。**开启服务端开关会向客户端下发世界种子，等同泄露服务端种子**
 - **光照优化** —— 影子端原版 LightEngine 统一算光并通过官方 vanilla packet 回传；服务端可剥光（`chunk.lightStrip`）
 
-> **超视渲染（OVD）**：影子双窗设计——tracking 扩到 effective clientRD，权威窗（serverVD）Compare+Pull，OVD 窗仅本地源（盘/注入/可选生成）回填，禁止真服请求。客户端只抬 `ClientChunkCache` 半径并拦 Forget。详见 [`chunk-cache.md`](chunk-cache.md) §10。
+> **超视渲染（OVD）**：影子双窗设计——tracking 扩到 effective clientRD，权威窗（serverVD）Compare+Pull，OVD 窗仅本地源（盘/注入）回填，禁止真服请求。客户端只抬 `ClientChunkCache` 半径并拦 Forget。详见 [`chunk-cache.md`](chunk-cache.md) §10。
 
 目标版本：Minecraft **1.20.1 / 1.21.1–1.21.11**（七段适配，见 version-segments）。Forge 支持 **1.20.1 / 1.21.1 / 1.21.3–1.21.10**（1.21.2 无上游 userdev；1.21.11 sunset）。
 
@@ -262,7 +262,7 @@ Sector 2+:    [length(4)][type=126][magic 0x48][hash(8)][ZSTD 压缩数据]
 - **Fabric**：Night Config 自管 toml + jiJ **Cloth**；安装 **Mod Menu** 即可打开。不依赖 FCAP / Configured。
 - **Forge / NeoForge**：原生 ConfigSpec + jiJ **Cloth**（模组列表「配置」按钮）；亦可手改 toml。Configured 仍可选。FCAP Forge 桥已随 Forge 1.20.6 退役。
 
-各项 GUI 文案见 `assets/hassium/lang/*`；toml 注释仍为中文。键集真相源：`ConfigSchema`（45 键）。
+各项 GUI 文案见 `assets/hassium/lang/*`；toml 注释仍为中文。键集真相源：`ConfigSchema`（44 键）。
 
 | 项 | 默认 | 说明 |
 |----|------|------|
@@ -272,7 +272,6 @@ Sector 2+:    [length(4)][type=126][magic 0x48][hash(8)][ZSTD 压缩数据]
 | `chunk.sectionDeltaEnabled` | true | 缓存过期时只补变更方块（过多则整段/整块） |
 | `chunk.viewDistanceExtensionEnabled` | true | 超视渲染（OVD；依赖 `chunk.enabled`；与 Bobby 互斥）。见 [`chunk-cache.md`](chunk-cache.md) §10 |
 | `chunk.maxRenderDistance` | 16 | 超视渲染 effective clientRD 上限（2–64） |
-| `chunk.ovdLocalGeneration` | false | OVD 窗缓存 miss 时按服务端种子本地生成（需真实 seed） |
 | `chunk.mainThreadChunkBudgetMs` | 15 | 客户端主线程 apply 预算（ms） |
 | `chunk.maxChunksPerFrame` | 6 | 每 tick 缓存读取生产上限（影子入队 + 影子读盘；主线程消费只受时间预算） |
 | `chunk.maxSizeMb` | 4096 | 影子端存档容量上限（MB；超限触发热度淘汰） |
@@ -291,9 +290,9 @@ Sector 2+:    [length(4)][type=126][magic 0x48][hash(8)][ZSTD 压缩数据]
 | `master.compressionBlacklist` | 控制面键集 | 压缩/聚合黑名单（控制面不进聚合缓冲） |
 | `compat.requireClientMod` | false | 无模组客户端可连（true 时登录期握手失败即踢出，替代超时等待） |
 | `compat.autoDowngradeOnError` | true | 出错时自动降级 |
-| `debug.*` | 全 false | 调试分类日志，见 §10 |
+| `debug.*` | 多为 `false` | 调试分类日志，见 §10（`debug.networkMetricsAutoReset` 默认 `true`） |
 
-网关监听/端点/鉴权（`controlReachableEndpoints` / `bindHost` / `authToken`）、L1 迁移（`master.migration*` 7 键）、续流票据（`resumeTicketTtlMs`）、UDP 数据面（`dataplane.*`）、管线级全局包压缩（`globalPacketCompression` 等 4 键）、`chunk.ovdUnloadDelaySecs`（延迟卸载取消，不再恢复）、`chunk.seedGenThreads` / `master.serverChunkPushThreads`、`net.*` 客户端网络键族、`chunk.hassiumEngineEnabled` / `chunk.unloadDelaySecs` 均已退役删除；旧 toml 中的残留键由加载器静默清除（legacy key hygiene，见 `FabricTomlConfigIO` 清理表）。OVD 三键（`viewDistanceExtensionEnabled` / `maxRenderDistance` / `ovdLocalGeneration`）随双窗重做恢复。
+网关监听/端点/鉴权（`controlReachableEndpoints` / `bindHost` / `authToken`）、L1 迁移（`master.migration*` 7 键）、续流票据（`resumeTicketTtlMs`）、UDP 数据面（`dataplane.*`）、管线级全局包压缩（`globalPacketCompression` 等 4 键）、`chunk.ovdUnloadDelaySecs`（延迟卸载取消，不再恢复）、`chunk.seedGenThreads` / `master.serverChunkPushThreads`、`net.*` 客户端网络键族、`chunk.hassiumEngineEnabled` / `chunk.unloadDelaySecs` 均已退役删除；旧 toml 中的残留键由加载器静默清除（legacy key hygiene，见 `FabricTomlConfigIO` 清理表）。OVD 两键（`viewDistanceExtensionEnabled` / `maxRenderDistance`）随双窗重做恢复；`chunk.ovdLocalGeneration` 随后退役删除（已入清理表）。
 
 ## 10. 日志策略
 

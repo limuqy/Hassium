@@ -20,7 +20,7 @@ In-game editors:
 | NeoForge | "Config" button in the mod list | Requires Cloth; Configured optional |
 
 > You can also edit the TOML files and restart; GUI and TOML stay in sync.
-> Key-set source of truth: `ConfigSchema` (38 keys); full audit in the repo [`docs/config-audit.md`](https://github.com/limuqy/Hassium/blob/master/docs/config-audit.md).
+> Key-set source of truth: `ConfigSchema` (44 keys); full audit in the repo [`docs/config-audit.md`](https://github.com/limuqy/Hassium/blob/master/docs/config-audit.md).
 
 ---
 
@@ -42,6 +42,8 @@ In-game editors:
 | `chunk.maxChunksPerFrame` | `6` | Per-tick cache-read production cap (shadow enqueue + shadow disk); main-thread apply is bounded only by `mainThreadChunkBudgetMs` |
 | `chunk.mainThreadChunkBudgetMs` | `15` | Client per-frame apply budget (ms); JoinBoost temporarily raises it for 30s after join |
 | `chunk.seedGenEnabled` | `false` | Local generation (both sides): shadow tracking triggers vanilla worldgen then compare-pull; both sides same version. **Server enablement sends the world seed (seed leak)** |
+| `chunk.viewDistanceExtensionEnabled` | `true` | Beyond-view render OVD (shadow dual-window; requires `chunk.enabled`; mutually exclusive with Bobby) |
+| `chunk.maxRenderDistance` | `16` | OVD max effective clientRD (2–64) |
 
 ### Chunk core (`chunk.*`, server)
 

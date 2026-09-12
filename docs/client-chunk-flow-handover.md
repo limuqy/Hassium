@@ -217,7 +217,7 @@ pull 域用了 `resolveViewDistance()=vd+1`（range=21 → 1665 格盘）而非�
 - **P2 已完整落地（此前文档未单独勾账）**——协商键 `LoginCaps.PULL_MODE`，三层抑制：
   1. **1.20.1 源头拦截**：`MixinServerPlayer.hassium$onTrackChunk` pull 模式 `ci.cancel()`
      （原版 tracking 首包不外发）；
-  2. **1.20.2+ 源头拦截**：`MixinPlayerChunkSender.hassium$onChunkPacketSend` pull 模式
+  2. **1.21.1+ 源头拦截**：`MixinPlayerChunkSender.hassium$onChunkPacketSend` pull 模式
      直接 `return`，不转推送队列（1.20.1 该 mixin 为空壳）；
   3. **队列双保险**：`ServerChunkPushManager.enqueuePushTask` 对
      `FULL_VISIBLE && isPullMode(player)` 拒绝入队。
@@ -258,7 +258,7 @@ pull 域用了 `resolveViewDistance()=vd+1`（range=21 → 1665 格盘）而非�
 | 模块 | 状态 | 关键位置 / 提交 |
 |------|------|----------------|
 | 登录期能力握手 1.20.1（login query） | ✅ | `MixinServerLoginPacketListenerImpl`；**query 已改在 LoginCompression 之后、GameProfile 之前发出**（帧化竞态修复 `483e1fb`，业界依据：Fabric API `ServerLoginNetworkAddon` 先 compression 后 query；Forge 用 NEGOTIATING 状态后置 compression） |
-| 登录期能力握手 1.20.2+（配置阶段） | ✅ | `PreHandshakePayload`（loader 注册）；1.20.2+ 原生无此竞态 |
+| 登录期能力握手 1.21.1+（配置阶段） | ✅ | `PreHandshakePayload`（loader 注册）；1.21.1+ 原生无此竞态 |
 | Play 期激活链 | ✅ | dictionary_sync/index_sync → 聚合 PENDING → `play_init_s2c` → 客户端 ACK → 聚合 ENABLED |
 | 通道压缩 | ✅ | 聚合包内部字典 ZSTD（算法固定，未压缩帧 flag=0）；shadow pull DELTA 内嵌分段增量自有 zstd；原版压缩层全程不触碰 |
 | shadow pull 服务端权威比较 | ✅ | `ServerChunkPushManager.resolveShadowPull`（UNCHANGED/DELTA/FULL/ERROR）+ `ShadowPullHandler` + `ShadowPullResponseS2CPacket`（FULL=原版线格式；DELTA=内嵌 `SectionDeltaS2CPacket`） |
@@ -306,7 +306,7 @@ pull 域用了 `resolveViewDistance()=vd+1`（range=21 → 1665 格盘）而非�
   - 影子 tracking 选中柱 → 有基线：携带 `chunkPos+contentHash+sectionHashes+lightGeneration` 比对请求；无基线：空基线请求（复用 `requestAuthoritativeFull` 的批量/限流框架 `MAX_TRACKED_REQUESTS`）。
   - 服务端已有权威比较（resolveShadowPull），空基线必答 FULL——服务端侧基本零改动。
 - **P2 服务端推送抑制** — ✅ **已落地**（2026-09-09 代码核对回填，见 §0.5）
-  - 协商键 `LoginCaps.PULL_MODE`；三层：mixin 源头拦截（1.20.1 `MixinServerPlayer.trackChunk` / 1.20.2+ `MixinPlayerChunkSender.sendChunk`）+ `enqueuePushTask` 对 `FULL_VISIBLE && isPullMode` 双保险。
+  - 协商键 `LoginCaps.PULL_MODE`；三层：mixin 源头拦截（1.20.1 `MixinServerPlayer.trackChunk` / 1.21.1+ `MixinPlayerChunkSender.sendChunk`）+ `enqueuePushTask` 对 `FULL_VISIBLE && isPullMode` 双保险。
   - 保留：原版整柱推送兼容路径（vanilla 客户端 / 旧客户端版本差期间）——非 pull 模式仍走 `enqueueDirectPush`。
 - **P3 接收端收口**
   - pull FULL 统一 `applyShadowPullFull` → 影子管线；`ClientChunkHandler.handleCompressedChunk` 进入退役观察期（仅旧双端组合触达）。

@@ -2,7 +2,7 @@
 
 本文档是 Hassium 多版本适配的**唯一真相源**。工作单位不是「12 个 MC 版本 × 3 加载器」，而是 **7 个有效代码段 × `builds_for` 中的加载器**。
 
-相关：Manifold `#if MC_VER`（多版本源码预处理，见 AGENTS.md 与 [`.cursor/skills/hassium-manifold/SKILL.md`](../.cursor/skills/hassium-manifold/SKILL.md)）、`versionProperties/*.properties`。
+相关：Manifold `#if MC_VER`（多版本源码预处理，见 AGENTS.md 与 [`.omp/skills/hassium-manifold/SKILL.md`](../.omp/skills/hassium-manifold/SKILL.md)）、`versionProperties/*.properties`。
 
 ---
 
@@ -136,7 +136,7 @@ MC_1_21_11
 
 **当前语义**：不得使用固定 10 秒区块门控。无法在 pre-Play 阶段识别客户端时，立即走完整光照回退；已识别的 Hassium 客户端从首圈进入优化链。预握手只是能力提前声明，不替代 Play 期 `play_init_s2c` 完整激活。
 
-共用载体：`PreHandshakeProtocol`（legacy buf 编解码）/ `PreHandshakePayload`（1.21.1+ payload，StreamCodec 为 FriendlyByteBuf 级，无 registry 依赖）。能力字段：协议版本、mod 版本、clientCache、globalCompression、compactHeader。
+共用载体：`PreHandshakeProtocol`（1.20.1 legacy buf 编解码 / 1.21.1+ payload，StreamCodec 为 FriendlyByteBuf 级，无 registry 依赖）。能力字段：协议版本（`CURRENT_PROTOCOL_VERSION`）、mod 版本（格式校验）、客户端能力位（`LoginCaps`：agg/delta/seed/light/pull/shadow_pull/pull_mode）。
 运行时验证优先级：**1.20.1 → 1.21.1 → 1.21.11**；直连拓扑下无 UDP 断链冒烟（`UdpFailover` harness 与 `FAILOVER_*` / `UDP_*` marker 已随数据面退役）；其余锚点以编译 + 短冒烟为主。详见 [`runtime-smoke-test.md`](runtime-smoke-test.md)。
 
 ---

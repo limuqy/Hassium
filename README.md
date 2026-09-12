@@ -26,18 +26,17 @@
 | **高效压缩** | 存储压缩 | 世界区块 ZSTD 落盘（type 126），存档体积显著减小；仍兼容原版 Region（`.mca`）布局 |
 | | 通道压缩 | 聚合包内部字典 ZSTD + 区块推送自有压缩；不触碰原版压缩层，无跨 mod 管线冲突面 |
 | **网络优化** | 平滑推送 | 服务端每 tick Pull 完成上限限速（`master.maxChunksPerTick`，满 tick ≈ 值×20/s）+ encode/压缩后台化；进服不卡主线程 |
-| | 登录期能力握手 | 1.20.1 走 `hassium:login_hello` login query，1.20.2+ 走配置阶段 `PreHandshakePayload`；按位与协商能力位，无超时依赖，原版客户端零干扰 |
+| | 登录期能力握手 | 1.20.1 走 `hassium:login_hello` login query，1.21.1+ 走配置阶段 `PreHandshakePayload`；按位与协商能力位，无超时依赖，原版客户端零干扰 |
 | | Pull 模式 | 协商通过后服务端停发整柱推送，区块数据由客户端影子虚拟玩家 tracking 驱动的统一 Compare+Pull 拉取（`ShadowPull`：UNCHANGED / DELTA / FULL / ERROR 四终态） |
 | **区块缓存** | 影子端世界保存 | 进服区块统一由进程内影子服务端（完整 MinecraftServer）算光并落盘原版存档（`hassium_cache/<serverId>/world`），断连保存、重连复用 |
 | | 分段增量 | 缓存过期时只补变更方块（`SectionDelta`）；过多则整段，再多则整块 |
 | | 容量/热度淘汰 | `heat.idx` 按 region 文件计热度，超限整文件删除 `.mca`（`ShadowCacheEviction`） |
 | | 世界导出 | `/hassiumc export` 将影子端世界目录整体拷贝为导出存档（`hassium_exports/<cacheId>`；保留 type 126 + chunkHash，原版翻译后续提供） |
-| **本地生成** | SeedGen | 服务端对 pristine 区块发坐标引用（`SeedRef`，几十字节），客户端同种子本地生成并按 hash 校验；失败/校验不过自动回退全量。**开启服务端开关会向客户端下发世界种子，等同泄露服务端种子** |
+| **本地生成** | SeedGen | 双端同版本且开启时，服务端在 Play 激活（`play_init_s2c`）下发世界种子，客户端影子端 tracking 触发原版 worldgen 本地生成 pristine 区块，生成后再经服务端权威 compare-pull 校验交付。**服务端开启会向客户端下发世界种子，等同泄露服务端种子** |
+| **超视渲染** | OVD（影子双窗） | 多人服客户端 RD 大于服务端视距时，用影子端本地已有地形（盘 / 注入）回填视距外环带；**仅参与渲染、不参与模拟**，不向服务端请求视距外区块；与 Bobby 互斥 |
 | **光照优化** | Hassium 引擎 | 进服启动进程内影子服务端统一承担**世界保存（缓存）+ 区块光照计算 + 打包官方区块包**（官方通道回传），客户端不再计算；启动失败自动降级 |
 | | 光照剥离 | 服务端可剥光省流量（`chunk.lightStrip`），由影子端统一计算光照并打包回传 |
 | **实用工具** | 流量监控 | `/hassium stats`（服务端）、`/hassiumc stats`（客户端）查看压缩与缓存效果 |
-
-> **规划中**：超视渲染（OVD，多人服客户端 RD 大于服务端视距时用本地缓存回填视距外地形）。当前版本代码未启用该链路，配置键与文档将在功能落地时一并恢复。
 
 未安装本模组的客户端默认可连接（`compat.requireClientMod = false`）；双端都装才能吃满压缩与缓存。
 
@@ -88,6 +87,8 @@ Forge 支持 1.20.1 / 1.21.1 / 1.21.3–1.21.10（1.21.2 上游无 Forge userdev
 | `chunk.enabled` | `true` | 区块核心总开关（影子端世界保存/算光/缓存/Pull 模式；关后全程原版路径） |
 | `chunk.sectionDeltaEnabled` | `true` | 分段增量（服务端规划 + 客户端应用） |
 | `chunk.seedGenEnabled` | `false` | SeedGen 本地生成（双端同版本；**服务端开启会泄露世界种子**） |
+| `chunk.viewDistanceExtensionEnabled` | `true` | 超视渲染 OVD（影子双窗；依赖 `chunk.enabled`；与 Bobby 互斥） |
+| `chunk.maxRenderDistance` | `16` | OVD effective clientRD 上限（2–64） |
 | `chunk.mainThreadChunkBudgetMs` | `15` | 客户端每帧 apply 预算（ms） |
 | `chunk.maxChunksPerFrame` | `6` | 每 tick 缓存读取生产上限（影子入队 + 影子读盘） |
 | `chunk.maxSizeMb` | `4096` | 缓存容量上限（MB；超限触发热度淘汰） |
@@ -106,7 +107,7 @@ Forge 支持 1.20.1 / 1.21.1 / 1.21.3–1.21.10（1.21.2 上游无 Forge userdev
 | `master.compressionBlacklist` | 控制面键集 | 压缩/聚合黑名单（控制面不进聚合缓冲） |
 | `compat.requireClientMod` | `false` | 无模组客户端可连（true 时登录期握手失败即踢出） |
 | `compat.autoDowngradeOnError` | `true` | 出错时自动降级 |
-| `debug.*` | `false` | 分类调试日志（默认安静；热路径走 `DebugLogger`） |
+| `debug.*` | 多为 `false` | 分类调试日志（默认安静；热路径走 `DebugLogger`；`networkMetricsAutoReset` 默认 `true`） |
 
 完整说明见 [`docs/architecture.md`](docs/architecture.md) 与 [配置审计](docs/config-audit.md)。
 
@@ -131,13 +132,13 @@ Forge 支持 1.20.1 / 1.21.1 / 1.21.3–1.21.10（1.21.2 上游无 Forge userdev
 flowchart LR
     client["Mod 客户端"] <-->|"唯一 vanilla TCP<br/>登录期握手 + Play 期自定义 payload"| server["Mod 服务端"]
     subgraph 握手与激活
-        hs["login_hello（1.20.1）/<br/>PreHandshakePayload（1.20.2+）<br/>能力位按位与协商"]
+        hs["login_hello（1.20.1）/<br/>PreHandshakePayload（1.21.1+）<br/>能力位按位与协商"]
         act["play_init_s2c 激活<br/>dict/index → 聚合 PENDING → ACK → ENABLED"]
     end
     subgraph 区块数据面
         push["服务端原版 tracking 推送<br/>（vanilla chunk+light / forget）"]
         pull["ShadowPull Compare+Pull<br/>UNCHANGED / DELTA / FULL / ERROR"]
-        seed["SeedRef pristine 引用<br/>客户端本地生成"]
+        seed["play_init 下发世界种子<br/>影子端本地生成 pristine"]
     end
     shadow["影子端（ShadowSeedServer）<br/>注入 + 官方引擎算光 + 等收敛"]
     pack["打包带权威光官方包"]

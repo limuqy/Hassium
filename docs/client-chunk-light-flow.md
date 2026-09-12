@@ -23,7 +23,7 @@ flowchart TD
     E --> F["原版 LightEngine 两阶段屏障"]
     F --> G["drainReady 构造官方带光区块包"]
     G --> C
-    H["SeedRef / 缓存 UNCHANGED / delta 回退"] --> I["Compare + Pull 或 Generate + Validate"]
+    H["缓存 UNCHANGED / delta 回退 / 本地生成"] --> I["Compare + Pull 或 Generate + Validate"]
     I -- "缓存可 materialize" --> D
     I -- "FULL" --> D
     I -- "生成失败 / mismatch / delta 失败" --> J["无 baseline 的权威 FULL"]

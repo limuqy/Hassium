@@ -4,7 +4,7 @@
 
 > **English**: [Features-en](Features-en) · 中文
 
-Hassium 用一套客户端 + 服务端配合，从**高效压缩、网络优化、区块缓存、本地生成、光照优化、实用工具**六个方向优化 Minecraft。本页按大类给出每条功能的速览与适用条件。
+Hassium 用一套客户端 + 服务端配合，从**高效压缩、网络优化、区块缓存、超视渲染、本地生成、光照优化、实用工具**七个方向优化 Minecraft。本页按大类给出每条功能的速览与适用条件。
 
 ---
 
@@ -50,10 +50,10 @@ Hassium 用一套客户端 + 服务端配合，从**高效压缩、网络优化�
 
 - **目标**：双端能力协商零超时依赖、原版客户端零干扰；协商通过后区块数据按需拉取
 - **怎么做的**：
-  - 1.20.1 服务端在 `handleAcceptedLogin` 内（LoginCompression 之后、GameProfile 之前）发 `hassium:login_hello` login query；1.20.2+ 走配置阶段 `PreHandshakePayload`（认证完成后）
+  - 1.20.1 服务端在 `handleAcceptedLogin` 内（LoginCompression 之后、GameProfile 之前）发 `hassium:login_hello` login query；1.21.1+ 走配置阶段 `PreHandshakePayload`（认证完成后）
   - 能力位按位与协商（agg/delta/seed/light/pull/shadow_pull/pull_mode）；空应答或无共同能力位 → 服务端原版路径（`compat.requireClientMod=true` 时登录期踢出）
   - Play 期激活链：`ServerPlayer <init>` TAIL 消费协商位（压制原版区块窗口）→ dictionary_sync/index_sync → 聚合 PENDING（5s 无 ACK 降级直发）→ `play_init_s2c` → 客户端 ACK → 聚合 ENABLED
-  - **Pull 模式**（`pull_mode` 能力位）：协商通过后服务端对该玩家停发 chunk_payload 整柱推送（forget/元数据/SeedRef 照常），区块数据全部由客户端影子虚拟玩家 tracking 驱动的统一 Compare+Pull 拉取（`ShadowPull`：UNCHANGED / DELTA / FULL / ERROR 四终态）
+  - **Pull 模式**（`pull_mode` 能力位）：协商通过后服务端对该玩家停发 chunk_payload 整柱推送（forget/元数据照常），区块数据全部由客户端影子虚拟玩家 tracking 驱动的统一 Compare+Pull 拉取（`ShadowPull`：UNCHANGED / DELTA / FULL / ERROR 四终态）
 - **配置**：`master.enabled`（服务端门）、`chunk.enabled`（客户端门）
 
 ---
@@ -94,9 +94,20 @@ Hassium 用一套客户端 + 服务端配合，从**高效压缩、网络优化�
 ### 本地生成（SeedGen）
 
 - **目标**：大片未探索地形（pristine 区块）不再逐块传输，零带宽生成
-- **怎么做的**：服务端对 pristine 区块只发引用（seed + 坐标 + hash，几十字节）替代区块数据；客户端影子服务端用同种子本地生成，与远程区块同链（算光 → 打包官方包 → 官方通道落地），断连一并 `saveAll` 落盘；失败/超时自动回退全量请求
+- **怎么做的**：服务端在 Play 激活（`play_init_s2c`）下发世界种子（`LevelStem` NBT）；门控开时客户端影子端 vanilla tracking 直接触发原版 worldgen 本地生成 pristine 区块，生成后经服务端权威 compare-pull 校验，再走与远程区块相同的（算光 → 打包官方包 → 官方通道落地）链，断连一并 `saveAll` 落盘；失败/校验不过自动回退全量请求
 - **配置**：`chunk.seedGenEnabled`（默认 `false`，需双端同版本同开）
 - **风险**：**服务端开启会向客户端下发世界种子，等同泄露服务端种子**（探图/种子地图/导出存档均可利用）
+
+---
+
+## 超视渲染
+
+### OVD（影子双窗）
+
+- **目标**：多人服客户端渲染距离（RD）大于服务端视距（serverVD）时，用本地缓存回填视距外环带——**仅参与渲染、不参与模拟**
+- **怎么做的**：影子 tracking 扩到 effective clientRD；权威窗（`dist ≤ serverVD`）走统一 Compare+Pull，OVD 窗只从本地源（盘 / 注入）回填，**禁止向真服请求**；客户端只抬 `ClientChunkCache` 半径并拦截 Forget
+- **配置**：`chunk.viewDistanceExtensionEnabled`（默认 `true`；依赖 `chunk.enabled`）、`chunk.maxRenderDistance`（默认 `16`）
+- **边界**：与 Bobby 互斥；详见 [Beyond-View-Render](Beyond-View-Render) 与 [`docs/chunk-cache.md`](../docs/chunk-cache.md) §10
 
 ---
 
@@ -139,7 +150,5 @@ Hassium 用一套客户端 + 服务端配合，从**高效压缩、网络优化�
 ---
 
 > **兼容性**：未安装本模组的客户端默认可连接（`compat.requireClientMod = false`），仅享受服务端侧压缩；缓存、协商压缩等高级特性需要双端都装。对照表见 [Compatibility](Compatibility)。
-
-> **规划中**：超视渲染（OVD）。当前版本代码未启用该链路；设计记录见 [Beyond-View-Render](Beyond-View-Render)。
 
 [← Commands](Commands) · [Home](Home) · [→ Beyond-View-Render](Beyond-View-Render)

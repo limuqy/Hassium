@@ -4,7 +4,7 @@ AI Agent 速查。多版本真相源见 [`docs/version-segments.md`](docs/versio
 
 ## 项目身份
 
-Minecraft 1.20.1 / 1.21.1–1.21.11 多加载器模组（Fabric / Forge / NeoForge），ZSTD 优化存档与网络；七段适配单位见 version-segments。Forge 支持 **1.20.1 / 1.21.1 / 1.21.3–1.21.10**（1.21.2 上游无 Forge userdev；**1.21.11 起 sunset**，该段用 NeoForge）。**1.20.1 不构建 neoforge**：NeoForge 47.x 原生兼容 Forge mod，NeoForge 用户直接使用 forge 子项目的 Forge 产物。**回归直连拓扑**：客户端↔服务端唯一 vanilla TCP（登录期能力握手——1.20.1 走 `hassium:login_hello` login query，1.20.2+ 走配置阶段 `PreHandshakePayload`；Play 期 `play_init_s2c` 激活）；ZSTD 管线压缩/包聚合/区块推送/分段增量/SeedGen/ShadowPull 全走 vanilla 通道，网络核心（进程内网关）/UDP 数据面/续流迁移已裁剪。
+Minecraft 1.20.1 / 1.21.1–1.21.11 多加载器模组（Fabric / Forge / NeoForge），ZSTD 优化存档与网络；七段适配单位见 version-segments。Forge 支持 **1.20.1 / 1.21.1 / 1.21.3–1.21.10**（1.21.2 上游无 Forge userdev；**1.21.11 起 sunset**，该段用 NeoForge）。**1.20.1 不构建 neoforge**：NeoForge 47.x 原生兼容 Forge mod，NeoForge 用户直接使用 forge 子项目的 Forge 产物。**回归直连拓扑**：客户端↔服务端唯一 vanilla TCP（登录期能力握手——1.20.1 走 `hassium:login_hello` login query，1.21.1+ 走配置阶段 `PreHandshakePayload`；Play 期 `play_init_s2c` 激活）；ZSTD 管线压缩/包聚合/区块推送/分段增量/SeedGen/ShadowPull 全走 vanilla 通道，网络核心（进程内网关）/UDP 数据面/续流迁移已裁剪。
 
 ## 关键构建命令
 

@@ -20,7 +20,7 @@ Hassium 启动时在 `config/hassium/` 自动生成两份 TOML：
 | NeoForge | 模组列表「配置」按钮 | 需 Cloth；Configured 可选 |
 
 > 也可以直接编辑 TOML 文件后重启；GUI 与 TOML 互相同步。
-> 键集真相源：`ConfigSchema`（38 键）；完整审计见仓库 [`docs/config-audit.md`](https://github.com/limuqy/Hassium/blob/master/docs/config-audit.md)。
+> 键集真相源：`ConfigSchema`（44 键）；完整审计见仓库 [`docs/config-audit.md`](https://github.com/limuqy/Hassium/blob/master/docs/config-audit.md)。
 
 ---
 
@@ -42,6 +42,8 @@ Hassium 启动时在 `config/hassium/` 自动生成两份 TOML：
 | `chunk.maxChunksPerFrame` | `6` | 每 tick 缓存读取生产上限（影子入队 + 影子读盘）；主线程 apply 只受 `mainThreadChunkBudgetMs` 约束 |
 | `chunk.mainThreadChunkBudgetMs` | `15` | 客户端每帧 apply 区块的预算（ms）；进服 30s 内走 JoinBoost 临时抬高 |
 | `chunk.seedGenEnabled` | `false` | 本地区块生成（双端键）：影子 tracking 触发 vanilla worldgen 后 compare-pull；需双端同版本。**服务端开启会下发世界种子（泄露种子）** |
+| `chunk.viewDistanceExtensionEnabled` | `true` | 超视渲染 OVD（影子双窗；依赖 `chunk.enabled`；与 Bobby 互斥） |
+| `chunk.maxRenderDistance` | `16` | OVD effective clientRD 上限（2–64） |
 
 ### 区块核心（`chunk.*`，服务端）
 
