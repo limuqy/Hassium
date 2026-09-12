@@ -19,6 +19,9 @@ public final class HassiumChannels {
 
     public static final PacketId SHADOW_PULL_RESPONSE_S2C = new PacketId(Constants.MOD_ID, "shadow_pull_response_s2c");
 
+    /** 权威边沿 enter 通知（服务端声明权威集合 + 权威 chunkHash；S2C）。 */
+    public static final PacketId CHUNK_AUTHORITY_S2C = new PacketId(Constants.MOD_ID, "chunk_authority_s2c");
+
     public static final PacketId AGGREGATION_READY_C2S = new PacketId(Constants.MOD_ID, "aggregation_ready_c2s");
 
     public static final PacketId DICTIONARY_SYNC = new PacketId(Constants.MOD_ID, "dictionary_sync");

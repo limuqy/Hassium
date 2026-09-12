@@ -71,6 +71,9 @@ public class NeoForgeNetworkManager implements INetworkManagerService {
             payloadType(HassiumChannels.SHADOW_PULL_RESPONSE_S2C);
     public static final CustomPacketPayload.Type<ByteArrayPayload> LIGHT_DELTA_TYPE =
             payloadType(HassiumChannels.LIGHT_DELTA_S2C);
+    /** 权威边沿 enter 通知（服务端声明权威集合 + 权威 chunkHash）。 */
+    public static final CustomPacketPayload.Type<ByteArrayPayload> CHUNK_AUTHORITY_TYPE =
+            payloadType(HassiumChannels.CHUNK_AUTHORITY_S2C);
     public static final CustomPacketPayload.Type<ByteArrayPayload> DICTIONARY_SYNC_TYPE =
             payloadType(HassiumChannels.DICTIONARY_SYNC);
     public static final CustomPacketPayload.Type<ByteArrayPayload> INDEX_SYNC_TYPE =
@@ -290,6 +293,10 @@ public class NeoForgeNetworkManager implements INetworkManagerService {
         registrar.playToClient(LIGHT_DELTA_TYPE, codec(LIGHT_DELTA_TYPE),
                 (payload, ctx) -> PayloadHandlers.handleLightDelta(payload.data()));
 
+        // 权威边沿 enter S2C：客户端三分支解析（hash 命中 → 零请求本地交付 + 记缓存全命中）
+        registrar.playToClient(CHUNK_AUTHORITY_TYPE, codec(CHUNK_AUTHORITY_TYPE),
+                (payload, ctx) -> ctx.enqueueWork(() -> PayloadHandlers.handleChunkAuthority(payload.data())));
+
         // 字典同步 S2C
         registrar.playToClient(DICTIONARY_SYNC_TYPE, codec(DICTIONARY_SYNC_TYPE),
                 (payload, ctx) -> ctx.enqueueWork(() -> PayloadHandlers.handleDictionarySync(payload.data())));
@@ -364,6 +371,11 @@ public class NeoForgeNetworkManager implements INetworkManagerService {
     @Override
     public void sendShadowPullResponse(ServerPlayer player, FriendlyByteBuf buf) {
         sendServerPayload(player, new ByteArrayPayload(SHADOW_PULL_RESPONSE_TYPE, PayloadHandlers.drain(buf)));
+    }
+
+    @Override
+    public void sendChunkAuthorityS2C(ServerPlayer player, FriendlyByteBuf buf) {
+        sendServerPayload(player, new ByteArrayPayload(CHUNK_AUTHORITY_TYPE, PayloadHandlers.drain(buf)));
     }
 
     @Override

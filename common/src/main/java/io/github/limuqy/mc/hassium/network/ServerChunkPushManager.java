@@ -653,13 +653,14 @@ public class ServerChunkPushManager {
     }
 
 
-    /** 服务端每 tick：泵待推送 Pull 队列。 */
+    /** 服务端每 tick：泵待推送 Pull 队列 + 权威边沿 enter 通知。 */
     public void onServerTick(net.minecraft.server.MinecraftServer server) {
         if (server == null) {
             return;
         }
         ensureInitialized();
         pumpPendingPulls();
+        ChunkAuthorityNotifier.onServerTick(server);
     }
 
 

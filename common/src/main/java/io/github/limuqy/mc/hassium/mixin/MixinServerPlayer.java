@@ -56,6 +56,9 @@ public abstract class MixinServerPlayer extends Player {
             // Pull 模式：服务端停发 chunk_payload，整柱数据由客户端影子 tracking 统一拉取
             if (io.github.limuqy.mc.hassium.network.handshake.ServerHandshakeActivation.hasCaps(
                     self.getUUID(), io.github.limuqy.mc.hassium.network.handshake.LoginCaps.PULL_MODE)) {
+                // 抑制整柱载荷的同时声明权威边沿（enter + 权威 hash）：客户端据此本地解析
+                io.github.limuqy.mc.hassium.network.ChunkAuthorityNotifier.onAuthoritativeEnter(
+                        self, io.github.limuqy.mc.hassium.compat.PlayerCompat.getServerLevel(self), pos);
                 ci.cancel();
             }
             // 非 pull 兼容路径：放行原版 trackChunk（SeedRef 直推已退役）

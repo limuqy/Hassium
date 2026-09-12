@@ -34,6 +34,15 @@ public final class LoginCaps {
      */
     public static final int PULL_MODE = 1 << 5;
 
+    /**
+     * 服务端声明权威边沿（enter 通知 + 权威 chunkHash）。
+     * <p>
+     * 协商通过后服务端在整柱推送抑制点发 {@code chunk_authority_s2c}：客户端本地有基线
+     * 且 hash 相同时<b>不发任何请求</b>直接本地交付（记缓存全命中）；hash 未知/不等才走
+     * Compare+Pull。未协商则客户端完全不消费该载荷，走原路径。
+     */
+    public static final int AUTHORITY_NOTIFY = 1 << 6;
+
     /** 服务端声明位（配置驱动；登录 query 发送时构建）。 */
     public static int buildServerCaps() {
         HassiumConfigService cfg = HassiumConfigService.getInstance();
@@ -43,6 +52,9 @@ public final class LoginCaps {
         }
         if (cfg.isClientCacheEnabled()) {
             caps |= PULL_MODE;
+            // 权威边沿：三端 receiver 已注册（fabric/forge/neoforge 的 chunk_authority_s2c），
+            // 未协商的客户端不受影响（不消费该载荷，走原路径）。
+            caps |= AUTHORITY_NOTIFY;
         }
         if (cfg.isSectionDeltaEnabled()) {
             caps |= SECTION_DELTA;
@@ -75,6 +87,7 @@ public final class LoginCaps {
             // 影子虚拟玩家 tracking 在位（引擎开启）才声明 pull 模式：
             // 停推后区块数据完全依赖客户端 Compare+Pull 采集
             caps |= PULL_MODE;
+            caps |= AUTHORITY_NOTIFY;
         }
         caps |= SHADOW_PULL;
         return caps;

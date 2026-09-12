@@ -93,8 +93,10 @@ public class ShadowSeedServer extends MinecraftServer {
     private final java.nio.file.Path worldRoot;
     /**
      * 注入区块表（{@link DimensionKey} 复合键 → LevelChunk）：网络/读盘 decode 后的
-     * FULL 柱。随后加 {@code TicketType.UNKNOWN} FULL 级票进入 ChunkMap
-     * （{@code scheduleChunkLoad} 短路为 {@code ImposterProtoChunk}）。探活结论：
+     * FULL 柱。柱子靠**外部票**驱动进 ChunkMap（虚拟玩家 tracking 的 PLAYER 票，
+     * 以及 P5 起 {@link ShadowTicketDriver} 按权威声明集合出的 FORCED 票）——
+     * 本类自身不出票。票一到位 {@code scheduleChunkLoad} 即短路为
+     * {@code ImposterProtoChunk}。探活结论：
      * 不能赌金字塔对 FULL+{@code !isLightCorrect} 柱只重跑 LIGHT（邻柱无盘会
      * worldgen），算光仍走 {@code ShadowLightCompute} 官方 {@code initializeLight}+
      * {@code lightChunk}。打包与 saveAll 仍取本表；REPLACE 覆盖。

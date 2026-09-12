@@ -190,6 +190,14 @@ public class ForgeNetworkManager implements INetworkManagerService {
                     ctx.get().setPacketHandled(true);
                 }, java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT)
         );
+        CHANNEL.<ChunkAuthorityWrapper>registerMessage(
+                packetId++, ChunkAuthorityWrapper.class,
+                ChunkAuthorityWrapper::encode, ChunkAuthorityWrapper::decode,
+                (msg, ctx) -> {
+                    ctx.get().enqueueWork(() -> PayloadHandlers.handleChunkAuthority(msg.data()));
+                    ctx.get().setPacketHandled(true);
+                }, java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT)
+        );
         CHANNEL.<LightDeltaWrapper>registerMessage(
                 packetId++, LightDeltaWrapper.class,
                 LightDeltaWrapper::encode, LightDeltaWrapper::decode,
@@ -260,11 +268,15 @@ public class ForgeNetworkManager implements INetworkManagerService {
                         .addMain(LoginHandshake.PlayInitPayload.class,
                                 playCodec(LoginHandshake.PlayInitPayload::encode, LoginHandshake.PlayInitPayload::decode),
                                 (msg, ctx) -> ctx.enqueueWork(() -> PlayInitClient.handle(msg)))
+                        .addMain(ChunkAuthorityWrapper.class,
+                                playCodec(ChunkAuthorityWrapper::encode, ChunkAuthorityWrapper::decode),
+                                (msg, ctx) -> ctx.enqueueWork(() ->
+                                        PayloadHandlers.handleChunkAuthority(msg.data())))
                         .addMain(LightDeltaWrapper.class,
                                 playCodec(LightDeltaWrapper::encode, LightDeltaWrapper::decode),
                                 (msg, ctx) -> ctx.enqueueWork(() -> PayloadHandlers.handleLightDelta(msg.data())))
                 .build();
-        LOGGER.info("Hassium: Registered Forge 50+ ChannelBuilder play channel (2 C2S + 7 S2C)");
+        LOGGER.info("Hassium: Registered Forge 50+ ChannelBuilder play channel (2 C2S + 8 S2C)");
     }
 
     private static <M> StreamCodec<RegistryFriendlyByteBuf, M> playCodec(
@@ -449,6 +461,20 @@ public class ForgeNetworkManager implements INetworkManagerService {
     }
 
     @Override
+    public void sendChunkAuthorityS2C(ServerPlayer player, FriendlyByteBuf buf) {
+        byte[] data = new byte[buf.readableBytes()];
+        buf.readBytes(data);
+        buf.release();
+#if MC_VER < MC_1_21_1
+        if (CHANNEL != null) {
+            CHANNEL.sendTo(new ChunkAuthorityWrapper(data), player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
+        }
+#else
+        sendToPlayer(player, new ChunkAuthorityWrapper(data));
+#endif
+    }
+
+    @Override
     // 直连拓扑（2026-08-23 裁决修订）：光照增量经 LightDelta play S2C 通道下发，
     // 客户端影子端 ShadowLightCompute 消费。
     public void sendLightDeltaPacket(ServerPlayer player, FriendlyByteBuf buf) {
@@ -489,8 +515,26 @@ public class ForgeNetworkManager implements INetworkManagerService {
         }
     }
 
-    public record AggregationWrapper(byte[] data) {
+    /** 权威边沿 enter 通知（服务端声明权威集合 + 权威 chunkHash）。 */
+    public record ChunkAuthorityWrapper(byte[] data) {
         public void encode(FriendlyByteBuf buf) {
+            buf.writeVarInt(data.length);
+            buf.writeBytes(data);
+        }
+
+        public static ChunkAuthorityWrapper decode(FriendlyByteBuf buf) {
+            // length 校验同款（恶意超大 varInt 拒绝分配）
+            int length = buf.readVarInt();
+            if (length < 0 || length > buf.readableBytes()) {
+                throw new IllegalArgumentException("invalid ChunkAuthorityWrapper length: " + length);
+            }
+            byte[] data = new byte[length];
+            buf.readBytes(data);
+            return new ChunkAuthorityWrapper(data);
+        }
+    }
+
+    public record AggregationWrapper(byte[] data) {        public void encode(FriendlyByteBuf buf) {
             buf.writeVarInt(data.length);
             buf.writeBytes(data);
         }

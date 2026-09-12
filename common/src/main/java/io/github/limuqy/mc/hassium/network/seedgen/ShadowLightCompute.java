@@ -94,6 +94,22 @@ public final class ShadowLightCompute {
     private static final AtomicLong shadowApplyEpoch = new AtomicLong();
 
     /**
+     * 「原版忽略该柱」的连续重试计数（复合键 → 次数）。
+     * <p>
+     * 原版 {@code ClientChunkCache} 会拒收不在其 tracking view 内的柱（"Ignoring chunk
+     * since it's not in the view range"）。该拒绝<strong>不可自愈</strong>：只要玩家不再移动
+     * 回该区域，同一柱永远进不去。原先只做「下一帧重试」，于是快速移动后滞留在投递队列里的
+     * 旧窗口柱在 ready 里每帧打转——实测移动冒烟 21s 内 102010 次重试，渲染线程被吃满，
+     * 场景推进不了、客户端 120s 不退出。超过 {@link #MAX_IGNORED_RETRIES} 即放弃该投递条目
+     * （影子注入表与磁盘基线<strong>不</strong>清除，玩家回到该区域时由权威声明/形状扫描重新投递）。
+     */
+    private static final ConcurrentHashMap<Long, Integer> ignoredApplyRetries = new ConcurrentHashMap<>();
+    /** 单柱连续被原版忽略的上限（约 3s @20fps，足以跨过 tracking view 抖动）。 */
+    private static final int MAX_IGNORED_RETRIES = 60;
+    /** 被忽略重试的日志节流：每条最多每 N 次打一行（否则 100k 行写爆日志）。 */
+    private static final int IGNORED_RETRY_LOG_EVERY = 200;
+
+    /**
      * 影子→客户端回传：区块包与光包同一 FIFO（入队序号）+ 同柱同 op REPLACE。
      * 距离优先级只在服务端推送与 {@link io.github.limuqy.mc.hassium.concurrent.MainThreadDispatcher} 缓存读取。
      * 出区块包时丢掉该柱尚未落地的旧光，避免「新区块已亮、旧空光后到盖暗」。
@@ -395,6 +411,7 @@ public final class ShadowLightCompute {
         shadowApplyEpochs.clear();
         fullApplyTraces.clear();
         immediateEmitted.clear();
+        ignoredApplyRetries.clear();
     }
 
     /**
@@ -418,6 +435,7 @@ public final class ShadowLightCompute {
         shadowApplyEpochs.clear();
         fullApplyTraces.clear();
         immediateEmitted.clear();
+        ignoredApplyRetries.clear();
     }
 
     /** 直推已在影子管线里：hash miss 不得再打全量，否则和进服推送抢 4/tick 配额留下虚空。 */
@@ -661,6 +679,21 @@ public final class ShadowLightCompute {
      * <p>
      * MetricsSemantics §1 全命中锚点：UNCHANGED / 内存 hash 一致复用落地时调用。
      */
+    /**
+     * 服务端已断言「权威 hash == 本地基线」：解锁该柱的缓存全命中记账。
+     * <p>
+     * 仅由权威边沿消费端在「客户端已不持有该柱」时调用（见
+     * {@code ChunkAuthorityClient.resolve}）：此时本次交付属于缓存再交付，必须计入全命中。
+     * 首轮网络交付（{@code accountedIngress} 已记账、客户端仍持有）不得被改记成命中——
+     * 那是 R1 双路径假命中红线。
+     */
+    public static void markAuthorityHashConfirmed(String dimension, ChunkPos pos) {
+        if (dimension == null || pos == null) {
+            return;
+        }
+        accountedIngress.remove(DimensionKey.key(dimension, pos.x, pos.z));
+    }
+
     public static boolean accountCacheFullHit(String dimension, ChunkPos pos) {
         if (pos == null) {
             return false;
@@ -1997,6 +2030,7 @@ public final class ShadowLightCompute {
         if (connection == null) {
             drainLightMasks(deadlineNs, false, false, 0); // 断连：与原先一样清空 lightUpdates
             ready.clear();
+            ignoredApplyRetries.clear();
             logStallDrain(0, deadlineNs);
             return;
         }
@@ -2138,6 +2172,7 @@ public final class ShadowLightCompute {
             pipeline.setApplyInProgress(false);
         }
         if (hasClientChunk(mc, chunkX, chunkZ)) {
+            ignoredApplyRetries.remove(chunkKey);
             ClientChunkHandler.logShadowChunkApplyEvent("shadow_applied", chunkPos, item.renderOnly(), item.traceOrigin());
             shadowApplyEpochs.put(chunkKey, shadowApplyEpoch.incrementAndGet());
             recordFullApplyTrace(chunkKey, item.renderOnly(), item.traceOrigin());
@@ -2154,9 +2189,21 @@ public final class ShadowLightCompute {
             return true;
         }
         ClientChunkHandler.logShadowChunkApplyEvent("shadow_ignored", chunkPos, false, item.traceOrigin());
-        DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
-                "[SHADOW_CHUNK] Vanilla ignored authoritative chunk ({}, {}) — retrying next frame",
-                chunkX, chunkZ);
+        // 原版 tracking view 外的柱不可自愈（见 ignoredApplyRetries 注释）：有限重试后放弃投递，
+        // 否则整柱在 ready 里每帧打转，渲染线程被日志+无效 apply 吃满。影子表/磁盘基线保留。
+        int attempts = ignoredApplyRetries.merge(chunkKey, 1, Integer::sum);
+        if (attempts >= MAX_IGNORED_RETRIES) {
+            ignoredApplyRetries.remove(chunkKey);
+            DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
+                    "[SHADOW_CHUNK] drop authoritative chunk ({}, {}) outside vanilla view range "
+                            + "after {} attempts", chunkX, chunkZ, attempts);
+            return true;
+        }
+        if (attempts == 1 || attempts % IGNORED_RETRY_LOG_EVERY == 0) {
+            DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
+                    "[SHADOW_CHUNK] Vanilla ignored authoritative chunk ({}, {}) — retrying next frame "
+                            + "(attempt {}/{})", chunkX, chunkZ, attempts, MAX_IGNORED_RETRIES);
+        }
         return false;
     }
 
@@ -2382,6 +2429,7 @@ public final class ShadowLightCompute {
         shadowApplyEpochs.clear();
         fullApplyTraces.clear();
         immediateEmitted.clear();
+        ignoredApplyRetries.clear();
         consumeRunning.set(false);
         io.github.limuqy.mc.hassium.network.ShadowPullClient.reset();
     }

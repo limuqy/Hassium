@@ -32,6 +32,16 @@ public interface INetworkManagerService {
     }
 
     /**
+     * 服务端 → 客户端：权威边沿 enter 通知（{@code chunk_authority_s2c}）。
+     * buf 所有权转移给实现（未消费时释放）。
+     */
+    default void sendChunkAuthorityS2C(ServerPlayer player, FriendlyByteBuf buf) {
+        if (buf != null && buf.refCnt() > 0) {
+            buf.release();
+        }
+    }
+
+    /**
      * 发送聚合字典同步到客户端（服务端调用；Play 期 ZSTD 安装后）。
      * 三端各自走已注册的 dictionary_sync 通道。
      */

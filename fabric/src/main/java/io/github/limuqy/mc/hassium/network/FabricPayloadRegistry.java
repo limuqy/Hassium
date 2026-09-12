@@ -35,6 +35,9 @@ public final class FabricPayloadRegistry {
             type("light_delta_s2c");
     public static final CustomPacketPayload.Type<RawPayload> SHADOW_PULL_RESPONSE_S2C_TYPE =
             type("shadow_pull_response_s2c");
+    /** 权威边沿 enter 通知（服务端声明权威集合 + 权威 chunkHash）。 */
+    public static final CustomPacketPayload.Type<RawPayload> CHUNK_AUTHORITY_S2C_TYPE =
+            type("chunk_authority_s2c");
     /** Play 期激活（登录协商结果 + SeedGen 种子；body = common LoginHandshake.PlayInitPayload）。 */
     public static final CustomPacketPayload.Type<RawPayload> PLAY_INIT_S2C_TYPE =
             type("play_init_s2c");
@@ -101,6 +104,7 @@ public final class FabricPayloadRegistry {
         PayloadTypeRegistry.playS2C().register(AGGREGATION_S2C_TYPE, codec(AGGREGATION_S2C_TYPE));
         PayloadTypeRegistry.playS2C().register(LIGHT_DELTA_S2C_TYPE, codec(LIGHT_DELTA_S2C_TYPE));
         PayloadTypeRegistry.playS2C().register(SHADOW_PULL_RESPONSE_S2C_TYPE, codec(SHADOW_PULL_RESPONSE_S2C_TYPE));
+        PayloadTypeRegistry.playS2C().register(CHUNK_AUTHORITY_S2C_TYPE, codec(CHUNK_AUTHORITY_S2C_TYPE));
         PayloadTypeRegistry.playS2C().register(PLAY_INIT_S2C_TYPE, codec(PLAY_INIT_S2C_TYPE));
 
         PayloadTypeRegistry.playC2S().register(AGGREGATION_READY_C2S_TYPE, codec(AGGREGATION_READY_C2S_TYPE));
@@ -111,7 +115,7 @@ public final class FabricPayloadRegistry {
                 io.github.limuqy.mc.hassium.network.PreHandshakePayload.STREAM_CODEC);
 
         // 注册 7 S2C + 3 C2S + 1 configurationC2S
-        LOGGER.info("Hassium: Registered 6 S2C and 2 C2S (+1 config) payload types for 1.21.1+");
+        LOGGER.info("Hassium: Registered 7 S2C and 2 C2S (+1 config) payload types for 1.21.1+");
     }
 
     /**

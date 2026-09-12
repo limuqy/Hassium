@@ -104,6 +104,14 @@ ResourceLocation
 Identifier
 #endif
 SHADOW_PULL_RESPONSE_S2C = ResourceLocationCompat.vanilla(HassiumChannels.SHADOW_PULL_RESPONSE_S2C);
+    /** 权威边沿 enter 通知（服务端声明权威集合 + 权威 chunkHash）。 */
+    public static final
+#if MC_VER < MC_1_21_11
+ResourceLocation
+#else
+Identifier
+#endif
+CHUNK_AUTHORITY_S2C = ResourceLocationCompat.vanilla(HassiumChannels.CHUNK_AUTHORITY_S2C);
     /** Play 期激活（登录协商结果 + SeedGen 种子；S2C）。 */
     public static final
 #if MC_VER < MC_1_21_11
@@ -175,6 +183,16 @@ PLAY_INIT_S2C = ResourceLocationCompat.vanilla(HassiumChannels.PLAY_INIT_S2C);
 #else
         ServerPlayNetworking.send(player, FabricPayloadRegistry.toPayload(
                 FabricPayloadRegistry.SHADOW_PULL_RESPONSE_S2C_TYPE, buf));
+#endif
+    }
+
+    @Override
+    public void sendChunkAuthorityS2C(ServerPlayer player, FriendlyByteBuf buf) {
+#if MC_VER < MC_1_21_1
+        ServerPlayNetworking.send(player, CHUNK_AUTHORITY_S2C, buf);
+#else
+        ServerPlayNetworking.send(player, FabricPayloadRegistry.toPayload(
+                FabricPayloadRegistry.CHUNK_AUTHORITY_S2C_TYPE, buf));
 #endif
     }
 

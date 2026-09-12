@@ -28,4 +28,19 @@ public final class ChunkShapeCompat {
                 .contains(x, z);
 #endif
     }
+
+    /**
+     * OVD 环带判定：(x,z) 落在 client 半径的切比雪夫窗内、且**不在** authority 半径的原版形状内。
+     * <p>
+     * 收口理由：该判据原先在 {@code ShadowTrackingSession#inOvdWindow} 手搓（切比雪夫 + {@link #contains}），
+     * 而 OVD 环带现在同时是「本地源服务的窗」与「票驱动的目标集合」——两处各写一遍必然漂移。
+     */
+    public static boolean inOvdBand(int cx, int cz, int authorityRange, int clientRadius,
+                                    int x, int z) {
+        if (clientRadius <= authorityRange) {
+            return false; // 环带为空：client 未超出权威边距
+        }
+        return Math.abs(x - cx) <= clientRadius && Math.abs(z - cz) <= clientRadius
+                && !contains(cx, cz, authorityRange, x, z);
+    }
 }

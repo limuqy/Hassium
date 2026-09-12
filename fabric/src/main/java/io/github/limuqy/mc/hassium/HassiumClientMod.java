@@ -65,6 +65,19 @@ public class HassiumClientMod implements ClientModInitializer {
         ClientPlayNetworking.registerGlobalReceiver(io.github.limuqy.mc.hassium.network.FabricPayloadRegistry.SHADOW_PULL_RESPONSE_S2C_TYPE,
                 (payload, context) -> PayloadHandlers.handleShadowPullResponse(payload.data()));
 #endif
+        // 权威边沿 enter 通知（服务端声明权威集合 + 权威 chunkHash）→ 三分支解析：
+        // hash 已知且本地相同 → 零请求本地交付 + 记缓存全命中；否则带基线比较 / 空基线 FULL。
+#if MC_VER < MC_1_21_1
+        ClientPlayNetworking.registerGlobalReceiver(io.github.limuqy.mc.hassium.network.FabricNetworkManager.CHUNK_AUTHORITY_S2C,
+                (client, handler, buf, responseSender) -> {
+                    byte[] data = PayloadHandlers.readAll(buf);
+                    client.execute(() -> PayloadHandlers.handleChunkAuthority(data));
+                });
+#else
+        ClientPlayNetworking.registerGlobalReceiver(io.github.limuqy.mc.hassium.network.FabricPayloadRegistry.CHUNK_AUTHORITY_S2C_TYPE,
+                (payload, context) -> context.client().execute(() ->
+                        PayloadHandlers.handleChunkAuthority(payload.data())));
+#endif
         // PLAY_INIT_S2C 客户端 receiver：Play 期激活直收（登录协商结果 + SeedGen 种子）→
         // common PlayInitClient.handle（协商位登记 + 影子端种子初始化；管线级压缩已退役）。
 #if MC_VER < MC_1_21_1

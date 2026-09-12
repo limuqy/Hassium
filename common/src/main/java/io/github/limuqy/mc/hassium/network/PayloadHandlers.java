@@ -75,6 +75,21 @@ public final class PayloadHandlers {
     }
 
     /**
+     * chunk_authority_s2c：服务端权威边沿（enter + 权威 hash）→
+     * {@link ChunkAuthorityClient}（三分支解析：零请求命中 / 带基线比较 / 空基线 FULL）。
+     */
+    public static void handleChunkAuthority(byte[] data) {
+        FriendlyByteBuf buf = wrap(data);
+        try {
+            ChunkAuthorityClient.handle(ChunkAuthorityS2CPacket.decode(buf));
+        } catch (Exception e) {
+            LOGGER.warn("[CLIENT] Failed to handle chunk authority edges", e);
+        } finally {
+            buf.release();
+        }
+    }
+
+    /**
      * play_init_s2c：登录协商结果 + SeedGen 种子 → {@link PlayInitClient}（不捕获，
      * 与三端原 receiver 一致，异常沿 execute/enqueueWork 通道上抛）。
      */

@@ -49,6 +49,12 @@ public final class HassiumPacketIds {
 
     public static final String SHADOW_PULL_RESPONSE_S2C = "hassium:shadow_pull_response_s2c";
 
+    /**
+     * 服务端 -> 客户端：权威边沿（真实 tracking 集合 enter 通知 + 权威 chunkHash）。
+     * 独立控制面通道（不进聚合），与 shadow_pull 同属区块核心协议族。
+     */
+    public static final String CHUNK_AUTHORITY_S2C = "hassium:chunk_authority_s2c";
+
     /** Play 期激活（协商位 + SeedGen 种子）；进服控制面，禁止进 PENDING 聚合。 */
     public static final String PLAY_INIT_S2C = "hassium:play_init_s2c";
 

@@ -7,6 +7,7 @@
         "MixinRegionFile",
         "MixinChunkSerializer",
         "MixinIOWorker",
+        "MixinLevelChunk",
         "RegionFileAccessor",
         "ChunkMapAccessor",
         "MixinChunkMap",

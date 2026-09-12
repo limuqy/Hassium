@@ -89,6 +89,62 @@ public final class ShadowTrackingSession {
             new java.util.concurrent.ConcurrentLinkedQueue<>();
     /** 单泵最多本地重发柱数。 */
     private static final int MAX_REDELIVER_PER_PUMP = 32;
+
+    /**
+     * 注入表回收：保留域 = 可见形状 ∪ OVD 圈（即 {@code max(serverVD, clientVD)} 几何）。
+     * 柱离开保留域并超过 {@link #RECLAIM_GRACE_MS} 后交 {@link ShadowSeedServer#unloadChunk}
+     * （先 flush 落盘再摘表）；{@code ShadowStorageHashes} 保留作后续比对基线。
+     * <p>
+     * 背景：客户端卸载不得拆影子表（会造永久洞，见 {@code 935b9ed}），但影子表因此长期只增；
+     * 服务端权威外的柱既收不到更新也不能当权威交付，必须回收以维持内存有界。
+     */
+    private static final long RECLAIM_INTERVAL_MS = 1000L;
+    /** 离开保留域后的宽限（吸收边界抖动 / 来回移动）。 */
+    static final long RECLAIM_GRACE_MS = 6000L;
+    /** 单轮最多回收柱数。 */
+    private static final int MAX_RECLAIM_PER_PASS = 64;
+    /** key(复合键) -> 首次观察到离开保留域的毫秒时刻。 */
+    private final java.util.concurrent.ConcurrentHashMap<Long, Long> outsideSinceMs =
+            new java.util.concurrent.ConcurrentHashMap<>();
+    private long lastReclaimMs;
+
+    /**
+     * 注入表回收专用调度器（独立守护线程）。
+     * <p>
+     * <b>不得在影子主循环内调用</b> {@link ShadowSeedServer#unloadChunk}：其
+     * {@code flushColumn} 会等待影子主循环 → 主循环内调用即自死锁（实测 R2 挂死 /
+     * teardown 悬挂）。本调度器从外部线程驱动回收，主循环只登记候选。
+     */
+    private static final java.util.concurrent.ScheduledExecutorService RECLAIM_TIMER =
+            java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread t = new Thread(r, "hassium-shadow-reclaim");
+                t.setDaemon(true);
+                return t;
+            });
+    private static volatile java.util.concurrent.ScheduledFuture<?> reclaimTask;
+
+    /** 首次登记 leave 时启动回收调度（幂等）。 */
+    private static void ensureReclaimTimer() {        if (reclaimTask != null) {
+            return;
+        }
+        synchronized (ShadowTrackingSession.class) {
+            if (reclaimTask != null) {
+                return;
+            }
+            reclaimTask = RECLAIM_TIMER.scheduleAtFixedRate(() -> {
+                ShadowTrackingSession session = INSTANCE;
+                ShadowSeedServer server = session.boundServer;
+                if (server == null) {
+                    return;
+                }
+                try {
+                    session.reclaimOutOfRetainSet(server, System.currentTimeMillis());
+                } catch (Throwable t) {
+                    DebugLogger.warn(DebugLogger.LogType.ASYNC, "[SHADOW_TRACK] reclaim failed", t);
+                }
+            }, RECLAIM_INTERVAL_MS, RECLAIM_INTERVAL_MS, java.util.concurrent.TimeUnit.MILLISECONDS);
+        }
+    }
     private long lastSweepMs;
     /** 形状扫描 / boot / 悬置选柱共用的在途柱（复合键 → 入队时刻）：已发 pull 未注入。
      *  注入后或超时清除。超时须长于 VD20 冷装填（1529 柱 / 2 tick ≈ 38s），
@@ -96,6 +152,20 @@ public final class ShadowTrackingSession {
     private static final long SWEEP_INFLIGHT_TIMEOUT_MS = 60_000L;
     private final java.util.Map<Long, Long> sweepInFlight =
             new java.util.concurrent.ConcurrentHashMap<>();
+
+    /**
+     * 让位门的**宽带限**：同一柱被让位门扣住超过该时长即无条件补发一次 pull。
+     * <p>
+     * 为什么必须有它：让位门的语义是「权威集合由服务端声明，影子端不自绘选柱」，但声明集合
+     * 覆盖的是**服务端本来会推送的那批**，其中不含「登录期就已推送、此后不再声明」的柱——
+     * 实测 {@code 1.21.1_fabric_I_band2}：服务端只声明 443 柱、恰好不含落位点 3x3，而那 9 柱
+     * 本地无盘也未注入，于是没有任何来源。若让位门只是「静默吞掉」已入队的 pull，这些柱就
+     * 永久空洞（冒烟 PASS 却看不出来）。故让位只能**让路**，不能**放弃**。
+     */
+    private static final long GATE_STARVE_GRACE_MS = 3_000L;
+
+    /** 让位期间被扣住的柱 → 首次被扣时间（仅影子主循环线程读写）。 */
+    private final java.util.Map<Long, Long> gateWaitingSinceMs = new java.util.HashMap<>();
     /** 本会话已计 OVD 的坐标（防 materialize/sweep 双计；reset 清空）。 */
     private final java.util.Set<Long> ovdCounted = java.util.concurrent.ConcurrentHashMap.newKeySet();
     /** 本会话已计 OVD miss 的坐标（retry 不再累加「缺失」）。 */
@@ -222,6 +292,13 @@ public final class ShadowTrackingSession {
             return;
         }
         applyViewDistanceIfChanged(shadow);
+        // P5 接管臂（实验性，默认关闭：P5_TAKEOVER=false 时驱动一行不执行，见 ShadowTicketDriver）。
+        // OVD 环带的票驱动（目标集合 = inOvdBand，与 tryServeOvdLocal 的"缺盘柱交给原版
+        // tracking"那一环同判据）。中心沿用虚拟玩家位置——会话唯一位置真相源，inOvdWindow /
+        // sweep* 也用它，故"出票中心"与"判据中心"天然同源，不会出现票在 A、判据在 B 的一圈缝。
+        ChunkPos ticketCenter = virtualPlayer.chunkPosition();
+        ShadowTicketDriver.consumeOnShadowLoop(shadow, currentDimension,
+                ticketCenter.x, ticketCenter.z, serverViewDistance, effectiveClientVD);
         long now = System.currentTimeMillis();
         if (now - lastChunkTickMs >= CHUNK_TICK_INTERVAL_MS) {
             lastChunkTickMs = now;
@@ -251,6 +328,80 @@ public final class ShadowTrackingSession {
         sweepVisibleShape(shadow, now);
         sweepOvdRing(shadow, now);
         drainRedeliver(shadow);
+        // P3（注入表回收）不在此处调用：ShadowSeedServer.unloadChunk 的 flushColumn 会等待
+        // 影子主循环 → 主循环内调用即自死锁（实测 R2 挂死 / teardown 悬挂）。候选由
+        // onClientChunkUnloaded 登记，回收由独立的 hassium-shadow-reclaim 线程驱动。
+    }
+
+    /**
+     * 回收判定（纯函数，L0 可测）：离开已超宽限 + 非在途 + 客户端未重新持有 → 可回收。
+     * <p>
+     * 任一不满足即不得回收。调用点先用宽限分支保留标记，再用本判定决定是否撤销标记。
+     */
+    static boolean reclaimEligible(long outsideSinceMs, long nowMs, boolean inFlight, boolean clientHolds) {
+        return outsideSinceMs > 0L && nowMs - outsideSinceMs >= RECLAIM_GRACE_MS
+                && !inFlight && !clientHolds;
+    }
+
+    /**
+     * TODO(P3)：由独立异步执行器（非影子主循环）定期调用；见 consumeOnShadowLoop 注记。
+     * 回收「客户端已明确离开」的注入柱（节流 + 限量）。
+     * <p>
+     * <b>触发源必须是客户端 leave（真服 Forget）</b>，不得按影子端自绘几何推断——
+     * 几何驱动会摘掉客户端尚未交付的柱（实测 R1 交付 1636→585）并在断连 teardown 期
+     * flush 卡死。这里只处理 {@link #outsideSinceMs} 里已登记的柱（由
+     * {@code onClientChunkUnloaded} 写入），宽限 {@link #RECLAIM_GRACE_MS} 后仍未回来
+     * 且不在途、未重新交付者，交 {@link ShadowSeedServer#unloadChunk} 回收。
+     */
+    private void reclaimOutOfRetainSet(ShadowSeedServer shadow, long nowMs) {
+        if (shadow == null || outsideSinceMs.isEmpty()) {
+            return;
+        }
+        if (io.github.limuqy.mc.hassium.network.seedgen.ShadowWorldgenExecutor.isTerminated()
+                || io.github.limuqy.mc.hassium.compat.ShadowServerCompat.isSharedIoPoolShutdown()) {
+            return; // 关停窗口：flush 会卡在已停止的主循环上（实测 teardown 悬挂）
+        }
+        if (nowMs - lastReclaimMs < RECLAIM_INTERVAL_MS) {
+            return;
+        }
+        lastReclaimMs = nowMs;
+        int reclaimed = 0;
+        for (java.util.Map.Entry<Long, Long> entry : outsideSinceMs.entrySet()) {
+            if (reclaimed >= MAX_RECLAIM_PER_PASS) {
+                break;
+            }
+            long key = entry.getKey();
+            long since = entry.getValue();
+            if (nowMs - since < RECLAIM_GRACE_MS) {
+                continue;
+            }
+            String dimension = DimensionKey.dimensionOf(key);
+            if (dimension == null) {
+                outsideSinceMs.remove(key);
+                continue;
+            }
+            int x = DimensionKey.chunkXOf(key);
+            int z = DimensionKey.chunkZOf(key);
+            var chunk = shadow.injectedChunk(dimension, x, z);
+            if (chunk == null) {
+                outsideSinceMs.remove(key);
+                continue;
+            }
+            if (!reclaimEligible(since, nowMs,
+                    ShadowLightCompute.isAuthoritativeIngressInFlight(key),
+                    ShadowLightCompute.hasClientApplyEpoch(dimension, new ChunkPos(x, z)))) {
+                // 在途 / 客户端本会话又拿到了：撤销离开标记，不回收
+                outsideSinceMs.remove(key);
+                continue;
+            }
+            if (shadow.unloadChunk(dimension, new ChunkPos(x, z), chunk, false)) {
+                outsideSinceMs.remove(key);
+                reclaimed++;
+                DebugLogger.info(DebugLogger.LogType.NETWORK,
+                        "[SHADOW_TRACK] reclaim ({}, {}) -> flush+evict injected (dimension={})",
+                        x, z, dimension);
+            }
+        }
     }
 
     /**
@@ -356,13 +507,22 @@ public final class ShadowTrackingSession {
         if (pos == null || boundServer == null || currentDimension == null) {
             return;
         }
-        if (!inVanillaVisibleShape(pos.x, pos.z) && !inOvdWindow(pos.x, pos.z)) {
-            return;
-        }
+        long key = DimensionKey.key(currentDimension, pos.x, pos.z);
+        boolean stillWanted = inVanillaVisibleShape(pos.x, pos.z) || inOvdWindow(pos.x, pos.z);
         if (boundServer.injectedChunk(currentDimension, pos.x, pos.z) == null) {
+            outsideSinceMs.remove(key);
             return;
         }
-        redeliverQueue.add(pos);
+        if (stillWanted) {
+            // 客户端仍需要（窗内）：入重发队列，撤销离开标记
+            outsideSinceMs.remove(key);
+            redeliverQueue.add(pos);
+            return;
+        }
+        // 客户端卸载且不在窗内：登记离开时刻，宽限后由 reclaimOutOfRetainSet 回收注入表。
+        // 触发源是真实客户端 leave（真服 Forget），不按影子端自绘几何推断。
+        outsideSinceMs.putIfAbsent(key, System.currentTimeMillis());
+        ensureReclaimTimer();
     }
 
     /** 影子主循环：把「窗内但客户端已无」的柱本地重发（等价原版 trackChunk）。 */
@@ -583,10 +743,8 @@ public final class ShadowTrackingSession {
         if (center == null) {
             return false;
         }
-        int dx = Math.abs(x - center.x);
-        int dz = Math.abs(z - center.z);
-        return dx <= effectiveClientVD && dz <= effectiveClientVD
-                && !ChunkShapeCompat.contains(center.x, center.z, serverViewDistance, x, z);
+        return ChunkShapeCompat.inOvdBand(center.x, center.z, serverViewDistance,
+                effectiveClientVD, x, z);
     }
 
     /**
@@ -596,6 +754,12 @@ public final class ShadowTrackingSession {
      */
     private void applyViewDistanceIfChanged(ShadowSeedServer shadow) {
         int desired = resolveViewDistance();
+        // P5 接管臂（实验性，默认关闭）：只钝化「ChunkMap 的 tracking 半径」，不钝化驱动的
+        // 方形半径（驱动照旧拿 resolveViewDistance() 的真值）。这样压小 tracking 不再连坐
+        // 饿死 OVD 环——整张方形仍由驱动提供，缺口若有就是驱动本身的问题。
+        if (ShadowTicketDriver.trackingSelectionNeutralized()) {
+            desired = ShadowTicketDriver.NEUTRALIZED_VIEW_DISTANCE;
+        }
         if (desired == appliedViewDistance) {
             return;
         }
@@ -925,6 +1089,26 @@ public final class ShadowTrackingSession {
     /** 统一的 pull 分组发射（悬置柱 / 基准光盘共用）：有基线走 compare，无基线走权威 FULL。 */
     private void emitPullGroups(java.util.List<ChunkPos> withBaseline, java.util.List<ChunkPos> withoutBaseline) {
         String dimension = currentDimension;
+        if (io.github.limuqy.mc.hassium.network.ChunkAuthorityClient.pullEmissionSuppressed()) {
+            // 权威集合由服务端声明：唯一解析入口 = ChunkAuthorityClient（三分支本地解析链）。
+            // 影子端继续负责物化/交付/回收，但不再自绘选柱发 pull（避免抢跑声明）。
+            // 但让位只能是**让路**不是**放弃**：声明集合不含「登录期已推、此后不再声明」的柱
+            // （落位点 3x3），静默吞掉已入队的 pull 就会把它们变成永久空洞。故超宽限即补发。
+            long nowMs = System.currentTimeMillis();
+            java.util.List<ChunkPos> escapedWith = releaseGateStarvation(dimension, withBaseline, nowMs);
+            java.util.List<ChunkPos> escapedWithout = releaseGateStarvation(dimension, withoutBaseline, nowMs);
+            pruneGateWaiting(nowMs);
+            if (escapedWith.isEmpty() && escapedWithout.isEmpty()) {
+                return;
+            }
+            DebugLogger.info(DebugLogger.LogType.NETWORK,
+                    "[SHADOW_TRACK] authority gate starved {} chunks beyond {}ms -> pull anyway (dimension={})",
+                    escapedWith.size() + escapedWithout.size(), GATE_STARVE_GRACE_MS, dimension);
+            withBaseline = escapedWith;
+            withoutBaseline = escapedWithout;
+        } else if (!gateWaitingSinceMs.isEmpty()) {
+            gateWaitingSinceMs.clear(); // 让位解除：等待表作废
+        }
         if (!withBaseline.isEmpty()) {
             DebugLogger.info(DebugLogger.LogType.NETWORK,
                     "[SHADOW_TRACK] compare-pull {} chunks (dimension={})",
@@ -937,6 +1121,51 @@ public final class ShadowTrackingSession {
                     withoutBaseline.size(), dimension);
             ShadowPullClient.requestAuthoritativeFull(dimension, withoutBaseline);
         }
+    }
+
+    /**
+     * 让位门扣留判定：登记每柱首次被扣的时间，返回已超 {@link #GATE_STARVE_GRACE_MS}、应无条件补发的柱。
+     * <p>
+     * 扣留中的柱要清掉 {@link #sweepInFlight} 在途标记——否则形状扫描会把它们当成「已发出」而在
+     * {@link #SWEEP_INFLIGHT_TIMEOUT_MS}（60s）内不再重新发现，上面的宽限就永远等不到第二次登记。
+     * 补发出去的柱反过来要保留在途标记（这一次 pull 确实发出去了），并撤销等待登记，避免同一拍里
+     * 第二个调用方（同拍的 shape sweep / selection drain）把同一柱再补一遍。
+     */
+    private java.util.List<ChunkPos> releaseGateStarvation(String dimension,
+                                                           java.util.List<ChunkPos> pending,
+                                                           long nowMs) {
+        if (dimension == null || pending.isEmpty()) {
+            return java.util.List.of();
+        }
+        java.util.List<ChunkPos> starved = new java.util.ArrayList<>();
+        for (ChunkPos pos : pending) {
+            long key = DimensionKey.key(dimension, pos.x, pos.z);
+            Long since = gateWaitingSinceMs.get(key);
+            if (since == null) {
+                gateWaitingSinceMs.put(key, nowMs);
+                sweepInFlight.remove(key);
+            } else if (nowMs - since >= GATE_STARVE_GRACE_MS) {
+                gateWaitingSinceMs.remove(key);
+                starved.add(pos);
+            } else {
+                sweepInFlight.remove(key);
+            }
+        }
+        return starved;
+    }
+
+    /**
+     * 等待表按**年龄**裁剪，不按"是否出现在本拍"裁剪：同一拍里
+     * {@code drainSelections} / {@code sweepVisibleShape} 是两个批次，互相看不见对方的键，
+     * 按本拍裁剪会把对方刚登记的宽限计时抹掉，宽限永远攒不满。补发的柱在补发时已出表，
+     * 故活过 {@code 2 × 宽限} 的条目必然是很久没再出现的，丢弃安全。
+     */
+    private void pruneGateWaiting(long nowMs) {
+        if (gateWaitingSinceMs.isEmpty()) {
+            return;
+        }
+        long staleBefore = nowMs - 2 * GATE_STARVE_GRACE_MS;
+        gateWaitingSinceMs.values().removeIf(since -> since < staleBefore);
     }
 
     /**
@@ -1064,7 +1293,8 @@ public final class ShadowTrackingSession {
                 }
                 return;
             }
-            if (ShadowLightCompute.tryRequestMiss(dimension, pos)
+            if (!io.github.limuqy.mc.hassium.network.ChunkAuthorityClient.pullEmissionSuppressed()
+                    && ShadowLightCompute.tryRequestMiss(dimension, pos)
                     && markPullInFlight(dimension, pos, System.currentTimeMillis())) {
                 ShadowPullClient.requestFull(dimension, java.util.List.of(pos));
             }
@@ -1075,7 +1305,8 @@ public final class ShadowTrackingSession {
         if (alreadyMaterialized
                 && (ShadowLightCompute.wasNetworkIngress(dimension, pos)
                     || ShadowLightCompute.hasClientApplyEpoch(dimension, pos))) {
-            if (ShadowLightCompute.tryRequestMiss(dimension, pos)
+            if (!io.github.limuqy.mc.hassium.network.ChunkAuthorityClient.pullEmissionSuppressed()
+                    && ShadowLightCompute.tryRequestMiss(dimension, pos)
                     && markPullInFlight(dimension, pos, System.currentTimeMillis())) {
                 ShadowPullClient.requestFull(dimension, java.util.List.of(pos));
             }
@@ -1097,9 +1328,10 @@ public final class ShadowTrackingSession {
                 "[SHADOW_TRACK] materialized ({}, {}) alreadyMaterialized={} -> publishCached (dimension={})",
                 pos.x, pos.z, alreadyMaterialized, dimension);
         // 已本地交付后，可选对真实服 compare 保新鲜；防抖只作用于网络请求
-        if (ShadowLightCompute.tryRequestMiss(dimension, pos)
-                && markPullInFlight(dimension, pos, System.currentTimeMillis())) {
-            ShadowPullClient.requestFull(dimension, java.util.List.of(pos));
+            if (!io.github.limuqy.mc.hassium.network.ChunkAuthorityClient.pullEmissionSuppressed()
+                    && ShadowLightCompute.tryRequestMiss(dimension, pos)
+                    && markPullInFlight(dimension, pos, System.currentTimeMillis())) {
+                    ShadowPullClient.requestFull(dimension, java.util.List.of(pos));
         }
     }
 
@@ -1176,6 +1408,9 @@ public final class ShadowTrackingSession {
         s.pendingSelections.clear();
         s.sweepInFlight.clear();
         s.redeliverQueue.clear();
+        s.outsideSinceMs.clear();
+        // P5 接管臂（实验性，默认关闭）：会话边界撤掉声明集合出的票（影子主循环执行；实例已换则由实例对账兜底）
+        ShadowTicketDriver.requestClear();
         s.ovdCounted.clear();
         s.ovdMissCounted.clear();
         s.ovdMissRetryAt.clear();

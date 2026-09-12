@@ -38,6 +38,7 @@ public class PacketCompressionBlacklist {
             HassiumPacketIds.INDEX_SYNC_S2C,
             HassiumPacketIds.PLAY_INIT_S2C,
             HassiumPacketIds.SHADOW_PULL_RESPONSE_S2C,
+            HassiumPacketIds.CHUNK_AUTHORITY_S2C,
             HassiumPacketIds.LIGHT_DELTA_S2C,
             // 技术限制：Forge/NeoForge SimpleChannel 共用通道
             HassiumPacketIds.MAIN_CHANNEL,

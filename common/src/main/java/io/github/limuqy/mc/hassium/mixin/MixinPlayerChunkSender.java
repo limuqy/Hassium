@@ -122,6 +122,11 @@ public abstract class MixinPlayerChunkSender {
                 // Pull 模式：服务端停发 chunk_payload，整柱数据由客户端影子 tracking 统一拉取
                 if (io.github.limuqy.mc.hassium.network.handshake.ServerHandshakeActivation.hasCaps(
                         player.getUUID(), io.github.limuqy.mc.hassium.network.handshake.LoginCaps.PULL_MODE)) {
+                    // 抑制整柱载荷的同时声明权威边沿（enter + 权威 hash）
+                    io.github.limuqy.mc.hassium.network.ChunkAuthorityNotifier.onAuthoritativeEnter(
+                            player,
+                            io.github.limuqy.mc.hassium.compat.PlayerCompat.getServerLevel(player),
+                            new net.minecraft.world.level.ChunkPos(chunkPacket.getX(), chunkPacket.getZ()));
                     return;
                 }
                 // 非 pull 兼容路径：放行原版 send（SeedRef 直推已退役）

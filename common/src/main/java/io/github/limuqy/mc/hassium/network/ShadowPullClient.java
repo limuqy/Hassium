@@ -68,7 +68,9 @@ public final class ShadowPullClient {
     }
 
     private static void request(String dimension, List<ChunkPos> chunks, boolean includeLocalBaseline) {
-        io.github.limuqy.mc.hassium.Constants.LOG.info("[DIAG] ShadowPullClient.request dim={} chunks={} baseline={}",
+        io.github.limuqy.mc.hassium.utils.DebugLogger.info(
+                io.github.limuqy.mc.hassium.utils.DebugLogger.LogType.NETWORK,
+                "[DIAG] ShadowPullClient.request dim={} chunks={} baseline={}",
                 dimension, chunks == null ? -1 : chunks.size(), includeLocalBaseline);
         if (dimension == null || dimension.isEmpty() || chunks == null || chunks.isEmpty()) {
             return;
