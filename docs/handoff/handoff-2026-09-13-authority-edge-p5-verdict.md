@@ -9,8 +9,9 @@
 
 ## 一、一句话状态
 
-**权威边沿在「内容裁决」层可用并默认开启；在「选柱 / 装载」层，影子端自绘 pull 目前只在 1.21.1/fabric 上完全退场
-（1.20.1/fabric 与 1.21.1/forge 仍有 5 / 4 次饥饿；neoforge 连抑制都未生效，见 F12）——替换条件未达成，见 §9.7。**
+**权威边沿在「内容裁决」层可用并默认开启；「选柱 / 装载」层的影子端自绘 pull 尚未在全部加载器上退场
+（1.20.1/fabric 5 次、1.21.1/forge 4 次、1.21.1/neoforge 3 次饥饿）——替换条件未达成，见 §9.7。**
+另：第三轮会话发现并修复了一个**既有 loader 级缺陷 F12**（neoforge 上整柱抑制与权威边沿全程未生效，根因 = NeoForge 把整柱包封进 `ClientboundBundlePacket`）。
 `P5_TAKEOVER = false`（收尾态不变——接管臂自身的移动/收尾缺陷仍未解，见 §3.3）。
 第一轮会话新增：**封闭空洞冒烟门禁**与**让位门静默丢数据的兜底**；
 第二轮会话关闭 **F10**（dimension 纳入 P0 空洞门禁 + 超时默认值）；
@@ -108,7 +109,7 @@
 
 > **✅ 该结论方向已被 F1+F2 翻案，但范围有限（第三轮，见 §9.7）**：**在 1.21.1/fabric 上**影子端自绘 pull 确实退场了——
 > 实测生产态 ×2 + 接管态 ×2：`authoritative-full pull` = 0/0/0/1、`compare-pull` = 0、`starved` = 0、封闭空洞 = 0。
-> 但 1.20.1/fabric（16 批 / 5 次饥饿）与 1.21.1/forge（4 批 / 4 次饥饿）**尚未退场**，neoforge 连机制都没跑（F12）。
+> 但 1.20.1/fabric（16 批 / 5 次饥饿）、1.21.1/forge（4 批 / 4 次饥饿）与 neoforge（修复后 4 批 / 3 次饥饿）**尚未退场**。
 > 原判「不可删」的前提确实正是 F1 那个缺失的声明；但要真删，仍需先让声明流在全部版本/加载器上覆盖完备。
 
 ### 3.3 接管保持关闭，但**理由不是空洞**
@@ -309,7 +310,31 @@ F4 的矩阵（含 scenario 锚点 `1.20.1/fabric`、`1.20.1/forge`、`1.21.1/ne
 - **注**：`1.20.1_fabric_I_dimension_world4/round4.json` 的 107 格空洞仍在 R4，而 `dimension` 当前只分析 R1/R2
   （`round_numbers`），故新口径不会看到它；F3 已按 `2a89ead` 归为已修。是否把 dimension 扩到 4 轮是 F4 范畴，本次不动。
 
-### F12（P1，第三轮新增）**neoforge 上整柱抑制与权威边沿全程未生效**
+### F12（P1）→ **已结案（2026-09-13 第三轮会话）**：NeoForge 把整柱包封进 `ClientboundBundlePacket` 下发
+
+- **根因（一次性诊断钉死）**：在 redirect handler 里临时打印入参运行时类型，neoforge 全程是
+  ```
+  [F12_DIAG] #1 entered packet=ClientboundBundlePacket compression=true pullMode=true shadowCtx=false
+  ```
+  —— redirect **被调用**、压缩门/pullMode/非影子态**全成立**，但 `packet` 不是
+  `ClientboundLevelChunkWithLightPacket`。NeoForge 在 `PlayerChunkSender.sendChunk` 里把它包了一层
+  （1.21.1 与 `1.21.x` 两个分支的 patch 实测一致）：
+  ```java
+  p.send(p.getAuxLightManager(p.getPos()).sendLightDataTo(new ClientboundLevelChunkWithLightPacket(...)));
+  ```
+  于是 `packet instanceof ClientboundLevelChunkWithLightPacket` **恒为假** → 落到 `listener.send(packet)`
+  → 整柱照发、`onAuthoritativeEnter` 从不调用。fabric / forge 发的是裸包，故只有 neoforge 中招。
+- **改法（已实施，`MixinPlayerChunkSender`）**：新增 `hassium$levelChunkPositions(Packet)` 解包
+  `ClientboundBundlePacket.subPackets()`，按**内层**整柱包判定与取坐标；命中即逐柱发声明并抑制整个 bundle
+  （连同其辅助光照子包，与 `lightStrip` 语义一致）。裸包路径行为不变（非整柱载荷照旧放行）；
+  `!pullMode` 分支保持原有「不下发」语义以免顺带改变既有行为。
+- **验收判据**：✅ 达成——`1.21.1_neoforge_I_f12fix`：
+  `origin=server_push` **3068 → 0**；`decompressed/applied` **572/1624 → 1529/1529**；
+  `new/stale` **1529/95 → 0/1529**；服务端 `[AUTHORITY] send` **0 → 154 行 / entriesSum 1982**
+  （与 fabric/forge 完全一致）；首个声明包 `entries=9 hashed=9`；analyzer `failures=[]`、R1 1529 / R2 477、空洞 0。
+- **影响**：neoforge 恢复「停发整柱」卖点并接上权威边沿 ⇒ **重新成为 F1/F2 的有效验证点**
+  （§9.7 的 neoforge 行结论已随之更新）。**注意**：这不改变 §9.7 的总体结论——
+  1.20.1/forge 的 `starved` 缺口与接管臂自身的 F5/F7 仍在。
 
 - **现象**：全量 probe 回放（判据 `chunksDecompressed == clientAppliedChunkCount`，即"是否走压缩 pull 载荷落地"）：
   **11/11 个 neoforge classic 会话（1.21.1–1.21.10）都是"原生流"**，而 **fabric / forge 的 classic 会话（20+ 场，全部版本）全部抑制生效**。
@@ -326,11 +351,15 @@ F4 的矩阵（含 scenario 锚点 `1.20.1/fabric`、`1.20.1/forge`、`1.21.1/ne
   但 `decompressed` 仅 572 ⇒ 差额经 `pending.fallback()` 用**原生包数据**落地 = 原生包在流的指纹。
 - **已排除**：mixin 登记齐全（`neoforge.mods.toml` 三份 config 含 `hassium.mixins.json`）；
   `play_init` 激活链正常（`ACTIVE_CAPS` 有值、`enableCompression` 已调）。
-- **待查（起点）**：反编译 NeoForge 21.1.236 的 patched `PlayerChunkSender`，核对 `sendChunk` 内被
-  `MixinPlayerChunkSender.hassium$onChunkPacketSend` redirect 的 `ServerGamePacketListenerImpl.send(...)` 调用是否仍在
-  （若不在，为何 `injectors.defaultRequire=1` 未报错）。本地未找到 21.1.236 的 patched/sources jar
-  （`~/.gradle/caches/neoformruntime/artifacts` 只有 1.21.11）。
-- **影响**：neoforge 既没吃到「停发整柱」卖点，也没跑权威边沿；**不能作为 F1/F2 的验证点**（本轮已改用 `1.21.1/forge`）。
+- **同类残留风险（未改，无观测症状）**：`MixinChunkHolder.hassium$onBroadcast` 也用裸 `instanceof`
+  （`ClientboundLevelChunkWithLightPacket` / `ClientboundLightUpdatePacket`）。它拦的是 `ChunkHolder.broadcast`
+  的**增量广播**路径，而 NeoForge 的 bundle 封装只出现在 `PlayerChunkSender.sendChunk` 的**初始下发**路径，
+  故当前无症状、不动它；若日后在 neoforge 观察到多余光照下行，先查这里。
+- **影响（已解除）**：修复前 neoforge 既没吃到「停发整柱」卖点、也没跑权威边沿；修复后两者均恢复。
+- **方法与教训**：定性靠「一次性打印入参运行时类型」这一行诊断，比继续猜 patch 快得多——先前已排除的假设
+  （mixin 未登记 / 注入未命中 / 压缩门失效 / 激活链没跑）被这一行全部推翻，真因是**参数类型**。
+  反编译 patched jar 的路子本地不通（NFRT 缓存只有 1.21.11 产物），改为直接取 NeoForge 仓库的 patch 文本
+  （`raw.githubusercontent.com/neoforged/NeoForge/<branch>/patches/net/minecraft/server/network/PlayerChunkSender.java.patch`）。
 
 ### F13（P2，第三轮新增）`dimension` 场景是 flaky 的（非本轮回归）
 
@@ -418,17 +447,19 @@ $f='build/smoke-test/logs/client_<SessionId>.log'
       —— 2026-09-13 第三轮会话完成，见 §五 F10（含 dimf3b 仍 PASS + neoforge 303 哨兵 + 全量 166 份回放）
 - [x] F4 仍是必须的一条（当前代码只跑过 classic + dimension 单点；`modcompat` / `seedgen` 未在当前代码复跑）
 - [x] **F1 / F2 已落地**（2026-09-13 第三轮；F2 契约方向由用户拍板选 A），但**验收仅部分达成**：
-      1.21.1/fabric 达标；1.20.1/fabric 与 1.21.1/forge 的 `starved` 仍为 **5 / 4**、影子自绘 16 / 4 批；
-      neoforge 连抑制都没生效（**F12**）。判据与量化见 §9.7。
+      空洞项全绿；`starved` 仅 1.21.1/fabric 为 0，1.20.1/fabric = 5、1.21.1/forge = 4、neoforge(修复后) = 3。
+      判据与量化见 §9.7。
+- [x] **F12 已结案**（同轮）：neoforge 整柱抑制/权威边沿未生效的根因是 `ClientboundBundlePacket` 封装，
+      已修复并复测通过（§五 F12）。
 
 > **本轮已完成并提交**（`0fd7e28` 门禁 / `55350b2` 权威边沿 + 接管臂 / `4705d95` 文档 / `3257415` 关闭 F3）：
 > 工作区此前 27 改 + 9 新增全部落盘；`ShadowTicketDriver` 调用点已标注；F3 结案写入本文档。
 >
 > **后续轮次**：2026-09-13 第三轮会话落地 F10（`dimension` 纳入 P0 空洞门禁 + 超时默认值 180/300 + 文档同步），
-> 随后落地 **F1 / F2**（落位点 3x3 空洞根因 + 让位门契约；验收部分达成，见 §9.7）与一个 **teardown GLFW 守卫**修正（§9.4）。
+> 随后落地 **F1 / F2**（落位点 3x3 空洞根因 + 让位门契约；验收部分达成，见 §9.7）、**F12**（neoforge 整柱
+> 抑制/权威边沿未生效，见 §五）与一个 **teardown GLFW 守卫**修正（§9.4）。
 > 剩余未闭：**F4**（全矩阵重建门禁基线）、**F5**（接管态矩阵证据）、F7（`saveAll` 停滞归因）、F8、F9、
-> **F11**（`resolve()` 逐柱发 pull，§9.5）、**F12**（neoforge 抑制/权威边沿未生效，§五）、
-> **F13**（dimension flaky）、**F14**（移动场景门禁口径）。
+> **F11**（`resolve()` 逐柱发 pull，§9.5）、**F13**（dimension flaky）、**F14**（移动场景门禁口径）。
 
 ---
 
@@ -529,7 +560,7 @@ $f='build/smoke-test/logs/client_<SessionId>.log'
 | `f1f2_dim` | 1.21.1/fabric/dimension | R1 **0**；R2 崩 | — | — | — | — | FAIL（flaky，见 **F13**） |
 | `1.20.1_fabric_I_f1f2` | **1.20.1**/fabric/classic | 0 / 0 | **5** | **16** | 1982 | `entries=384 hashed=40` | PASS |
 | `1.21.1_forge_I_f1f2` | 1.21.1/**forge**/classic | 0 / 0 | **4** | **4** | 1982 | `entries=9` | PASS |
-| `1.21.1_neoforge_I_f1f2` | 1.21.1/neoforge/classic | 0 / 0 | 0 | 13 | **0** | — | 机制未生效（**F12**） |
+| `1.21.1_neoforge_I_f1f2` | 1.21.1/neoforge/classic | 0 / 0 | 0 | 13 | **0** | — | ~~机制未生效~~ → **F12 已修**：`f12fix` 复测 0 空洞、声明 1982、`server_push` 3068→0 |
 
 **可下的结论**：
 
@@ -539,9 +570,11 @@ $f='build/smoke-test/logs/client_<SessionId>.log'
    （= 164 场基线的 1964 + 找回的 9×2）⇒ 与加载器/版本无关。
 3. **但影子端自绘 pull 只在 1.21.1/fabric 完全退场**（0 批 / 0 饥饿）。1.20.1/fabric = 16 批 / 5 次饥饿；
    1.21.1/forge = 4 批 / 4 次饥饿 ⇒ **声明流未在这些点上于看门狗窗口内覆盖全部可见柱**，
-   `starved` 这个信号在说真话（不是假饥饿）。neoforge 则连机制都没跑（F12）。
+   `starved` 这个信号在说真话（不是假饥饿）。neoforge 在 F12 修复后复测（`f12fix`）为 **4 批 / 3 次饥饿**——
+   同样**未完全退场**。（修复前 neoforge 连机制都没跑，见 F12。）
 4. ⇒ **「达到替换条件」的答案：没有。** F1 消除的是"永久空洞"这一类硬缺陷；要让影子端自绘 pull 真正可裁，
-   还差「声明流在全部版本/加载器上覆盖完备且及时」（本轮量化出 1.20.1/forge 的缺口）+ F12 + 接管臂自身的 F5/F7。
+   还差「声明流在全部版本/加载器上覆盖完备且及时」（本轮量化出 1.20.1 / forge / neoforge 的缺口）
+   + 接管臂自身的 F5/F7。
 
 ### F14（P2，第三轮新增）`-MoveSeconds > 0` 的会话在 `classic` 门禁下永不可能 PASS
 

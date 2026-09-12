@@ -104,9 +104,10 @@ public abstract class MixinPlayerChunkSender {
     }
 
     /**
-     * 截获原版已构造的首个 level-chunk packet：Hassium 客户端交给统一推送队列，
-     * 由压缩/影子光照管线发送；其他客户端原样交回原版发送路径。
-     *
+     * 截获原版首包：压缩门已开的玩家**停发整柱**，并在抑制点声明权威边沿
+     * （{@link io.github.limuqy.mc.hassium.network.ChunkAuthorityNotifier}），
+     * 整柱数据改由客户端影子 tracking 统一 Compare+Pull；其它玩家原样交回原版发送路径。
+     * <p>
      * 1.20.2+ 的 {@code PlayerChunkSender.sendChunk} 是首包入口，不能只丢弃 packet；
      * 否则客户端既收不到原版包，也不会进入 Hassium 的替代数据流。
      */
@@ -116,24 +117,56 @@ public abstract class MixinPlayerChunkSender {
                     ordinal = 0))
     private static void hassium$onChunkPacketSend(ServerGamePacketListenerImpl listener, Packet<?> packet) {
         ServerPlayer player = listener.getPlayer();
-        if (packet instanceof ClientboundLevelChunkWithLightPacket chunkPacket
-                && PlayerCompressionTracker.isCompressionEnabled(player)) {
-            if (!io.github.limuqy.mc.hassium.server.RuntimeServerContext.isShadowServerContext()) {
-                // Pull 模式：服务端停发 chunk_payload，整柱数据由客户端影子 tracking 统一拉取
-                if (io.github.limuqy.mc.hassium.network.handshake.ServerHandshakeActivation.hasCaps(
-                        player.getUUID(), io.github.limuqy.mc.hassium.network.handshake.LoginCaps.PULL_MODE)) {
-                    // 抑制整柱载荷的同时声明权威边沿（enter + 权威 hash）
-                    io.github.limuqy.mc.hassium.network.ChunkAuthorityNotifier.onAuthoritativeEnter(
-                            player,
-                            io.github.limuqy.mc.hassium.compat.PlayerCompat.getServerLevel(player),
-                            new net.minecraft.world.level.ChunkPos(chunkPacket.getX(), chunkPacket.getZ()));
-                    return;
-                }
-                // 非 pull 兼容路径：放行原版 send（SeedRef 直推已退役）
-            }
+        if (!PlayerCompressionTracker.isCompressionEnabled(player)) {
+            listener.send(packet);
             return;
         }
-        listener.send(packet);
+        java.util.List<net.minecraft.world.level.ChunkPos> enters = hassium$levelChunkPositions(packet);
+        if (enters == null) {
+            listener.send(packet); // 非整柱载荷：原样下发
+            return;
+        }
+        if (!io.github.limuqy.mc.hassium.server.RuntimeServerContext.isShadowServerContext()
+                && io.github.limuqy.mc.hassium.network.handshake.ServerHandshakeActivation.hasCaps(
+                        player.getUUID(), io.github.limuqy.mc.hassium.network.handshake.LoginCaps.PULL_MODE)) {
+            // Pull 模式：抑制整柱载荷的同时声明权威边沿（enter + 权威 hash），
+            // 整柱数据由客户端影子 tracking 统一拉取。
+            for (net.minecraft.world.level.ChunkPos pos : enters) {
+                io.github.limuqy.mc.hassium.network.ChunkAuthorityNotifier.onAuthoritativeEnter(
+                        player, io.github.limuqy.mc.hassium.compat.PlayerCompat.getServerLevel(player), pos);
+            }
+        }
+        // 压缩门已开：整柱一律不下发（bundle 情形下连同其辅助光照子包一并丢弃，
+        // 与 lightStrip 语义一致——Hassium 客户端光照由影子端统一计算）。
+    }
+
+    /**
+     * 取该载荷携带的整柱包坐标；非整柱载荷返回 {@code null}。
+     * <p>
+     * <b>必须解包 bundle</b>：NeoForge 在 {@code PlayerChunkSender.sendChunk} 里把整柱包与辅助光照包
+     * 封进 {@link net.minecraft.network.protocol.game.ClientboundBundlePacket} 再 {@code send}
+     * （{@code chunk.getAuxLightManager(pos).sendLightDataTo(packet)}），于是 {@code packet} 的运行时类型
+     * 是 bundle 而非 {@code ClientboundLevelChunkWithLightPacket}，裸 {@code instanceof} 恒为假 ⇒
+     * 既抑制不掉整柱、也发不出声明（F12：neoforge 全版本整柱抑制与权威边沿全程未生效）。
+     * fabric / forge 发的是裸包，行为不变。
+     */
+    @org.spongepowered.asm.mixin.Unique
+    private static java.util.List<net.minecraft.world.level.ChunkPos> hassium$levelChunkPositions(Packet<?> packet) {
+        if (packet instanceof ClientboundLevelChunkWithLightPacket chunkPacket) {
+            return java.util.List.of(new net.minecraft.world.level.ChunkPos(chunkPacket.getX(), chunkPacket.getZ()));
+        }
+        if (packet instanceof net.minecraft.network.protocol.game.ClientboundBundlePacket bundle) {
+            java.util.List<net.minecraft.world.level.ChunkPos> positions = new java.util.ArrayList<>(2);
+            for (Packet<?> sub : bundle.subPackets()) {
+                if (sub instanceof ClientboundLevelChunkWithLightPacket chunkPacket) {
+                    positions.add(new net.minecraft.world.level.ChunkPos(chunkPacket.getX(), chunkPacket.getZ()));
+                }
+            }
+            if (!positions.isEmpty()) {
+                return positions;
+            }
+        }
+        return null;
     }
 
 #endif
