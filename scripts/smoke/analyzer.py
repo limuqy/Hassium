@@ -15,6 +15,15 @@ _ENCLOSED_COMPONENT_LIMIT = 8
 # 包围盒洪水填充的规模上限（已持有集合实测 ≤ ~2000 柱，包围盒 ≤ ~70²；超限则放弃判定而非卡死）。
 _ENCLOSED_BOX_CELL_LIMIT = 1_000_000
 
+# 封闭空洞门禁的场景口径。判据是「该场景的盘回填是否走同一交付后驻留契约」：
+# - P0（成片虚空，largest >= _ENCLOSED_HOLE_P0_CELLS）：`classic` 与 `dimension`。
+#   `dimension` 自身门禁只有 loadedChunks > 64，看不见 303 格中心空洞（F3 实证：该场曾 RESULT: PASS），
+#   而其跨维切换后同样是「交付后驻留」，成片空洞就是真缺陷。
+# - P1（零散小洞）：仅 `classic`。`dimension` 的维边界/采样边缘本就存在单格差异，告警噪声大于信号，
+#   故 P1 留排除。`seedgen` / `modcompat` 的稀疏采样不走同一契约，两档均排除。
+_ENCLOSED_HOLE_P0_SCENARIOS = frozenset({"classic", "dimension"})
+_ENCLOSED_HOLE_P1_SCENARIOS = frozenset({"classic"})
+
 
 def _obj(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
@@ -331,16 +340,15 @@ def analyze_result(result: dict[str, Any], root: Path) -> dict[str, Any]:
                 warnings.append(_failure("LATE_NEAR_PLAYER_CHUNK", severity="P1", round=number,
                                          thresholdMs=10_000, chunks=late_near_player[:64],
                                          truncated=len(late_near_player) > 64))
-        # 封闭空洞门禁仅 classic：其它场景的盘回填不走同一交付契约（dimension / modcompat /
-        # seedgen 的稀疏采样本来就会产生成片的「填不到」区域，实测 22 个命中样本里 10 个来自
-        # 非 classic 场景）。分块大小 ≥ _ENCLOSED_HOLE_P0_CELLS 才算虚空，零散单格降为 P1。
+        # 封闭空洞门禁：P0 判 classic + dimension（口径见 _ENCLOSED_HOLE_P0_SCENARIOS），
+        # P1 仅 classic。分块大小 ≥ _ENCLOSED_HOLE_P0_CELLS 才算虚空。
         holes = spatial["enclosed"]
-        if scenario == "classic" and holes["available"]:
+        if scenario in _ENCLOSED_HOLE_P0_SCENARIOS and holes["available"]:
             largest = holes["largestComponent"]
             if largest >= _ENCLOSED_HOLE_P0_CELLS:
                 failures.append(_failure("TRACE_ENCLOSED_HOLE", round=number, largestComponent=largest,
                                          components=holes["components"], holes=holes["enclosedHoles"]))
-            elif largest:
+            elif largest and scenario in _ENCLOSED_HOLE_P1_SCENARIOS:
                 warnings.append(_failure("TRACE_ENCLOSED_HOLE_SMALL", "P1", round=number,
                                          components=holes["components"], holes=holes["enclosedHoles"]))
         gaps = trace_report["gaps"]

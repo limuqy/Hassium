@@ -190,11 +190,13 @@ R1 overworld 1529/1529、R2 nether **1572/1572**（旧场 1226/1529）、R3 end 
 1. **dimension 场景看不见这类空洞**：其自身门禁只有 `clientCache.loadedChunks > 64` /
    `chunkTrace.clientApplied > 64`。1226 驻留、缺 303 照样 `RESULT: PASS`——那个空洞当初是"合法通过"的。
    建议把 `dimension`（至少 P0 级）纳入封闭空洞门禁；`_hole_check` 对它的输出已在 `analysis.spatial.*.enclosed`。
+   （**已修**：F10 已把 `dimension` 纳入 P0 门禁，见 §五 F10。）
 2. **超时默认值漂移，使 scenario 复跑必假 FAIL**：`runtime-smoke-test.ps1` 默认
    `ClientTimeoutSec=120` / `ServerReadyTimeoutSec=60`，而 `docs/runtime-smoke-test.md` 表格写 `240`/`160`、
    `runtime-smoke-test-batch.ps1` 用 `600`/`300`。dimension 实测需要 ~186s，用默认值必然
    `客户端超时未退出，强制结束`，并伴随误导性的 `Negative index in crash report handler (13/21)` 门控失败。
    带 `-ClientTimeoutSec 300 -ServerReadyTimeoutSec 180` 即 PASS。**复跑 scenario 必须显式给足超时**。
+   （**已修**：F10 已把默认值改为 180/300 并同步 `docs/runtime-smoke-test.md`，见 §五 F10。）
 3. **`Round2Pass=false` 在 scenario 会话里是设计态，不是失败**：中段 dump 用 `gate=false`（validation skipped），
    总判决由 Python analyzer 给。别把它读成回归。
 
@@ -248,16 +250,27 @@ F4 的矩阵（含 scenario 锚点 `1.20.1/fabric`、`1.20.1/forge`、`1.21.1/ne
 现在读起来会被中间那些作废结论误导。建议下次收尾把它整章重写成一份「权威边沿现状 + 已知竞态 + 覆写清单」，
 把作废过程压成一条时间线附录。
 
-### F10（P1，harness，本次新增）把 `dimension` 纳入空洞门禁 + 修正超时默认值
+### F10（P1，harness）→ **已结案（2026-09-13 第三轮会话）**：dimension 纳入 P0 空洞门禁 + 超时默认值对齐
 
-- **现状**：`dimension` 场景自身门禁只有 `loadedChunks > 64` / `clientApplied > 64`，**看不见** 303 格中心空洞
+- **现状**（原文）：`dimension` 场景自身门禁只有 `loadedChunks > 64` / `clientApplied > 64`，**看不见** 303 格中心空洞
   （那场当初就是 `RESULT: PASS`）；且 `ovdgen` 退役后，"非 classic 一律排除"的原始理由对 `dimension` 已不成立。
-- **改法**：`scripts/smoke/analyzer.py` 的场景排除表去掉 `dimension`（P0 级即可，P1 可留排除），
-  probe 侧数据已在 `analysis.spatial.<round>.enclosed`。同时把 `runtime-smoke-test.ps1` 的
-  `ClientTimeoutSec` 默认 120 → 300、`ServerReadyTimeoutSec` 60 → 180，并让 `docs/runtime-smoke-test.md`
-  表格与之一致（现写 240/160，batch 用 600/300）。
-- **验收判据**：`1.21.1_fabric_I_dimf3b`（已知 0 空洞）在新口径下仍 PASS；
-  把 09-12 那份 `1.21.1_neoforge_I_dimension` 的 probe 喂给新口径能报出 P0（回归哨兵）。
+- **改法**（已实施）：
+  - `scripts/smoke/analyzer.py`：新增场景口径常量
+    `_ENCLOSED_HOLE_P0_SCENARIOS = {"classic", "dimension"}` / `_ENCLOSED_HOLE_P1_SCENARIOS = {"classic"}`。
+    P0（`largest >= 4`）判 classic + dimension；P1（零散小洞）仍仅 classic（dimension 维边界/采样边缘噪声大于信号）。
+    `seedgen` / `modcompat` 两档均排除（稀疏采样不走同一交付契约）。
+  - `scripts/runtime-smoke-test.ps1`：`ServerReadyTimeoutSec` 60 → **180**、`ClientTimeoutSec` 120 → **300**。
+  - `docs/runtime-smoke-test.md`：参数表默认改 `180` / `300`，并同步两处引用（快速开始的「内部上限」、退出码 3 的 180s）。
+  - `AGENTS.md`：同步两处陈旧数字（默认 300、最坏 180+300）。
+- **验收判据**：✅ 达成（实测，非推断）
+  - `1.21.1_fabric_I_dimf3b`（当前代码、已知 0 空洞）在新口径下仍 `pass = True`，四轮 `largestComponent = 0`。
+  - 回归哨兵：把 09-12 那份 `1.21.1_neoforge_I_dimension` 的 probe 喂给新口径 → `TRACE_ENCLOSED_HOLE` @ **round2 / largestComponent = 303**，`pass = False`。
+  - 全量回放 166 份 `result_*.json`：新增 P0 命中只有 classic 的 8 会话 / 11 轮（与 F3 已知集合同）＋ dimension 两场
+    （`1.21.1_neoforge_I_dimension` R2=303、`1.20.1_fabric_I_dimension` R2=23）——**两场 mtime 均 09-12，早于 `2a89ead`（09-12 05:30）**，
+    即已修历史样本，无当前代码误报。`python -m unittest scripts.smoke.test_analyzer` → **19 passed**（新增 2 例：
+    `test_dimension_enclosed_hole_fails` / `test_dimension_small_hole_is_not_gated`）。
+- **注**：`1.20.1_fabric_I_dimension_world4/round4.json` 的 107 格空洞仍在 R4，而 `dimension` 当前只分析 R1/R2
+  （`round_numbers`），故新口径不会看到它；F3 已按 `2a89ead` 归为已修。是否把 dimension 扩到 4 轮是 F4 范畴，本次不动。
 
 ---
 
@@ -331,13 +344,16 @@ $f='build/smoke-test/logs/client_<SessionId>.log'
 
 - [x] 读 §三 三小节（结论）——2026-09-13 第二轮会话已读
 - [x] 确认 `P5_TAKEOVER = false`（`ShadowTicketDriver:49`）、`common:compileJava` 通过
-      （1.21.1 四模块 + 1.20.1 抽检）、`python -m unittest scripts.smoke.test_analyzer` 通过（17 tests OK）
+      （1.21.1 四模块 + 1.20.1 抽检）、`python -m unittest scripts.smoke.test_analyzer` 通过（19 tests OK）
 - [x] 决定 F6（`ShadowTicketDriver` 保留；`ShadowTrackingSession` 三处调用点已注释为"实验臂，默认关闭"）
 - [x] F3 已结案（23 个样本全部定性，含当前代码 dimension 复跑 0 空洞）
-- [ ] **F10（新增，P1，harness）**：把 `dimension` 纳入封闭空洞门禁 + 修正超时默认值
-      （见 F3 副产品 1/2；`ClientTimeoutSec` 默认 120 与实际需求 300 不符）
+- [x] **F10（P1，harness）**：`dimension` 纳入封闭空洞门禁（P0）＋ 超时默认值对齐 180/300
+      —— 2026-09-13 第三轮会话完成，见 §五 F10（含 dimf3b 仍 PASS + neoforge 303 哨兵 + 全量 166 份回放）
 - [x] F4 仍是必须的一条（当前代码只跑过 classic + dimension 单点；`modcompat` / `seedgen` 未在当前代码复跑）
 - [ ] F1 / F2 是真正阻塞"裁掉影子端自绘选柱"的两条，动手前与用户确认范围
 
-> **本轮已完成并提交**（`0fd7e28` 门禁 / `55350b2` 权威边沿 + 接管臂 / `4705d95` 文档）：
+> **本轮已完成并提交**（`0fd7e28` 门禁 / `55350b2` 权威边沿 + 接管臂 / `4705d95` 文档 / `3257415` 关闭 F3）：
 > 工作区此前 27 改 + 9 新增全部落盘；`ShadowTicketDriver` 调用点已标注；F3 结案写入本文档。
+>
+> **后续轮次**：2026-09-13 第三轮会话落地 F10（`dimension` 纳入 P0 空洞门禁 + 超时默认值 180/300 + 文档同步）；
+> 剩余未闭：**F1 / F2**（阻塞"裁掉影子端自绘选柱"，动手前须与用户确认范围）、**F4**（全矩阵重建门禁基线）、F5 / F7 / F8 / F9。

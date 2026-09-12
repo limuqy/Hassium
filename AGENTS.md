@@ -63,7 +63,7 @@ Minecraft 1.20.1 / 1.21.1–1.21.11 多加载器模组（Fabric / Forge / NeoFor
 
 - Shell：`block_until_ms` 覆盖本次构建（compile 常 2–10 min；首次 decompile 更长）。**gradlew 退出 = 构建结束，留下 daemon 是正常的。**
 - 若后台跑：只 Await **本次 gradlew 那个 shell job**，pattern 用 `BUILD SUCCESSFUL|BUILD FAILED`；不要按 java PID 轮询，也不要 `notify_on_output` 去盯 daemon。
-- **禁止 `sleep N` / `Start-Sleep` 硬等**（含 `sleep 240; ls logs`）。超时数字（如 `-ClientTimeoutSec` 默认 240）是脚本内部上限，不是你该睡的秒数。等的是**你启动的那条命令退出**或输出里的结束标记。
+- **禁止 `sleep N` / `Start-Sleep` 硬等**（含 `sleep 240; ls logs`）。超时数字（如 `-ClientTimeoutSec` 默认 300）是脚本内部上限，不是你该睡的秒数。等的是**你启动的那条命令退出**或输出里的结束标记。
 - **禁止**构建后 `taskkill /F /IM java.exe`（会杀掉 daemon 和其它 Java）。
 - **禁止**在别人 / IDE 正在编时 `.\gradlew.bat --stop`（全局停所有 daemon，误杀并行会话）。切 `mc_ver` 遇 loom「Waiting for lock...」时先关 IDE Gradle Sync，或确认无其它构建后再 `--stop`。
 - **仅这些用 `--no-daemon`**：直接跑 `runClient` / `runServer`（游戏 JVM 长驻）。等的是就绪日志（服务端 `Done!`），不是进程退出。**冒烟不要自己去等 `Done!`**：`runtime-smoke-test.ps1` 内部已经在等，你等脚本印 `=== RESULT:` 后退出即可。
@@ -205,12 +205,12 @@ pwsh -File ./scripts/runtime-smoke-test.ps1 -Ver 1.20.1 -Loader fabric -Phase I 
 pwsh -File ./scripts/runtime-smoke-test.ps1 -Ver 1.20.1 -Loader fabric -Phase I -SessionId "1.20.1_fabric_I_seedgen" -Scenario seedgen
 ```
 
-**这条 ps1 会自己结束**（起服 → 等 `Done!` → 起客户端 → 两轮 → 写 JSON → 印 `=== RESULT: PASS|FAIL ===` → 退出码 0/2/3）。典型 4–12 min，最坏约 `ServerReadyTimeoutSec`(160) + `ClientTimeoutSec`(240) + 收尾。
+**这条 ps1 会自己结束**（起服 → 等 `Done!` → 起客户端 → 两轮 → 写 JSON → 印 `=== RESULT: PASS|FAIL ===` → 退出码 0/2/3）。典型 4–12 min，最坏约 `ServerReadyTimeoutSec`(180) + `ClientTimeoutSec`(300) + 收尾。
 
 | 做 | 不要 |
 |----|------|
 | 前台：`block_until_ms` 至少 600000（10 min），不够再 Await 同一 job | `sleep 240` 然后 `ls build/smoke-test/logs` |
-| 后台：Await **本次 ps1 那个 job**，pattern `=== RESULT:` | 把 240（客户端超时上限）当成整场时长 |
+| 后台：Await **本次 ps1 那个 job**，pattern `=== RESULT:` | 把 300（客户端超时上限）当成整场时长 |
 | 结束后读 `build/smoke-test/results/result_<SessionId>.json` | `| tail -15`（要等 EOF 才吐行，还丢掉 [1/9]…[9/9]） |
 | 日志按 SessionId：`logs/server_<id>.log`、`client_<id>.log` | `ls -t logs \| head` 猜最新文件 |
 

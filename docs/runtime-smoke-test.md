@@ -32,7 +32,7 @@ Hassium 跨版本（1.20.1–1.21.11）× 多加载器（fabric / neoforge）的
 
 ## 快速开始
 
-代理等待：这条 ps1 **会退出**。等它印 `=== RESULT:`（或读 `build/smoke-test/results/result_<SessionId>.json`），不要 `sleep 240` 再 `ls logs`，也不要 `| tail`。240 是 `-ClientTimeoutSec` 内部上限，不是会话时长。Git Bash 没有对应 `.sh`，用 `pwsh -File ./scripts/runtime-smoke-test.ps1 ...`（不要 `-NoProfile`）。
+代理等待：这条 ps1 **会退出**。等它印 `=== RESULT:`（或读 `build/smoke-test/results/result_<SessionId>.json`），不要 `sleep 240` 再 `ls logs`，也不要 `| tail`。300 是 `-ClientTimeoutSec` 内部上限，不是会话时长。Git Bash 没有对应 `.sh`，用 `pwsh -File ./scripts/runtime-smoke-test.ps1 ...`（不要 `-NoProfile`）。
 
 ```powershell
 # 单次会话（1.20.1 fabric，classic 场景）
@@ -76,8 +76,8 @@ Hassium 跨版本（1.20.1–1.21.11）× 多加载器（fabric / neoforge）的
 | `-MoveSeconds` | 否 | `0` | 进服后飞行移动秒数（先爬升再平飞；0=不动），驱动「进服即移动」补给顺序，非标准默认行为 |
 | `-Vd1` / `-Vd2` | 否 | `20` / `10` | 服务端两轮视距 |
 | `-ClientRenderDistance` | 否 | `32`（且 ≥ Vd1） | 钉死 `<loader>/run/client/options.txt` 的 `renderDistance` 滑块。1.21+ 跟踪半径 = `min(滑块, 服务器 VD)`；三端必须同一值，否则新 run 目录默认 12/16，R1 只喂满 VD16 圆柱（1021 / 1.21.4+ 1057） |
-| `-ServerReadyTimeoutSec` | 否 | `160` | 服务端 `Done!` 出现超时 |
-| `-ClientTimeoutSec` | 否 | `240` | 客户端退出超时 |
+| `-ServerReadyTimeoutSec` | 否 | `180` | 服务端 `Done!` 出现超时 |
+| `-ClientTimeoutSec` | 否 | `300` | 客户端退出超时 |
 | `-SmokePhases` | 否 | `classic` | Java 侧阶段：`classic`（经典两轮）/ `pregen`（预生成，经 `-PregenOnly` 使用） |
 | `-ManualLogout` | 否 | false | ROUND1 断开改走真实手动登出路径（`Minecraft.disconnect(Screen[,Z])` / `clearLevel`），验证手动登出光照/方块落盘 |
 | `-DryRun` 类遗留参数 | 已删除 | — | UdpFailover / Nginx 相关参数已随退役链路整体删除（见文末「退役说明」） |
@@ -333,7 +333,7 @@ PASS ⇔ HasPass && exit==0 && analyzer 门禁全过 && Round2Pass（validateSta
 |--------|------|
 | `0` | PASS：门禁全过且客户端正常退出 |
 | `2` | FAIL：统计/探针校验失败、assertProbe 失败、客户端崩溃或非 0 退出 |
-| `3` | 进服超时 / server_not_ready：服务端 160s 内未出现 `Done!` 或客户端 `joinTimeoutMs` 内未进服 |
+| `3` | 进服超时 / server_not_ready：服务端 180s 内未出现 `Done!` 或客户端 `joinTimeoutMs` 内未进服 |
 
 ## 统计字段说明
 

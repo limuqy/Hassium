@@ -36,8 +36,11 @@ param(
     # 新 run 目录默认 12/16 会把 R1 钳成 1021/1057。OVD 上界仍是 chunk.maxRenderDistance=16
     # （R1 服 20 > OVD 16 > R2 服 10）。
     [int]$ClientRenderDistance = 20,
-    [int]$ServerReadyTimeoutSec = 60,
-    [int]$ClientTimeoutSec = 120,
+    # 服务端就绪 / 客户端退出超时。默认按实测最坏场景给足：dimension 单场约 186s（F3 实测），
+    # 旧的 60/120 会稳定「客户端超时未退出，强制结束」并伴随误导性的 crash-report 门控失败，
+    # 使 scenario 复跑必假 FAIL。调大 -DelayMs / -MoveSeconds 时仍须相应调大。
+    [int]$ServerReadyTimeoutSec = 180,
+    [int]$ClientTimeoutSec = 300,
     [string]$SmokePhases = "classic",
     # T8 场景引擎：-Scenario <name> 加载 common/src/main/resources/hassium/smoke/scenario/<name>.scenario。
     # 默认 classic 不注入 -Dhassium.smokeScenario（保持既有 ClientSmokeTest 经典路径零行为变化）；

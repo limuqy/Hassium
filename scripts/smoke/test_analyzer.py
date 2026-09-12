@@ -177,6 +177,11 @@ class EnclosedHoleTest(unittest.TestCase):
         return [[x, z] for x in range(-2, 3) for z in range(-2, 3) if max(abs(x), abs(z)) == 2]
 
     @staticmethod
+    def _ring_with_center_gap():
+        """3x3 少正中一格：唯一 1 格封闭空洞（P1 量级）。"""
+        return [[x, z] for x in range(3) for z in range(3) if (x, z) != (1, 1)]
+
+    @staticmethod
     def _root_with_logs(directory, name):
         from pathlib import Path
         root = Path(directory)
@@ -187,20 +192,24 @@ class EnclosedHoleTest(unittest.TestCase):
             "CLIENT_STATS ROUND2 begin\nCLIENT_STATS ROUND2 end\n")
         return root
 
-    def _analyze_ring(self, scenario):
+    def _analyze(self, scenario, positions):
         from scripts.smoke.analyzer import analyze_result
         from pathlib import Path
         import tempfile
         with tempfile.TemporaryDirectory() as directory:
             root = self._root_with_logs(directory, scenario)
+            count = len(positions)
             probe = {
-                "stats": {"clientAppliedChunkCount": 16, "clientLandedChunkCount": 16},
+                "stats": {"clientAppliedChunkCount": count, "clientLandedChunkCount": count},
                 "chunkTrace": {},
-                "clientCache": {"actualPresent": {"positions": self._ring_around_3x3()}},
+                "clientCache": {"actualPresent": {"positions": positions}},
             }
             return analyze_result({"SessionId": scenario, "Scenario": scenario,
                                    "ServerSwitched": True,
                                    "Probe": {"Round1": probe, "Round2": probe}}, root)
+
+    def _analyze_ring(self, scenario):
+        return self._analyze(scenario, self._ring_around_3x3())
 
     def test_enclosed_3x3_is_detected_as_one_block(self):
         from scripts.smoke.analyzer import _hole_check
@@ -228,22 +237,23 @@ class EnclosedHoleTest(unittest.TestCase):
         analysis = self._analyze_ring("seedgen")
         self.assertNotIn("TRACE_ENCLOSED_HOLE", {item["code"] for item in analysis["failures"]})
 
+    def test_dimension_enclosed_hole_fails(self):
+        """dimension 纳入 P0：跨维切换后 303 格中心空洞必须亮灯（F3 回归哨兵）。"""
+        failures = [item for item in self._analyze_ring("dimension")["failures"]
+                    if item["code"] == "TRACE_ENCLOSED_HOLE"]
+        self.assertTrue(failures)
+        self.assertEqual(failures[0]["largestComponent"], 9)
+
+    def test_dimension_small_hole_is_not_gated(self):
+        """dimension 只判 P0：零散单格小洞不告警（维边界/采样边缘噪声）。"""
+        analysis = self._analyze("dimension", self._ring_with_center_gap())
+        self.assertNotIn("TRACE_ENCLOSED_HOLE", {item["code"] for item in analysis["failures"]})
+        self.assertNotIn("TRACE_ENCLOSED_HOLE_SMALL", {item["code"] for item in analysis["warnings"]})
+
     def test_small_enclosed_hole_is_warning_not_failure(self):
-        from scripts.smoke.analyzer import analyze_result
-        import tempfile
-        with tempfile.TemporaryDirectory() as directory:
-            root = self._root_with_logs(directory, "classic")
-            probe = {
-                "stats": {"clientAppliedChunkCount": 8, "clientLandedChunkCount": 8},
-                "chunkTrace": {},
-                "clientCache": {"actualPresent": {"positions": [
-                    [0, 0], [1, 0], [2, 0], [0, 1], [2, 1], [0, 2], [1, 2], [2, 2]]}},
-            }
-            analysis = analyze_result({"SessionId": "classic", "Scenario": "classic",
-                                       "ServerSwitched": True,
-                                       "Probe": {"Round1": probe, "Round2": probe}}, root)
-            self.assertNotIn("TRACE_ENCLOSED_HOLE", {item["code"] for item in analysis["failures"]})
-            self.assertIn("TRACE_ENCLOSED_HOLE_SMALL", {item["code"] for item in analysis["warnings"]})
+        analysis = self._analyze("classic", self._ring_with_center_gap())
+        self.assertNotIn("TRACE_ENCLOSED_HOLE", {item["code"] for item in analysis["failures"]})
+        self.assertIn("TRACE_ENCLOSED_HOLE_SMALL", {item["code"] for item in analysis["warnings"]})
 
 
 if __name__ == "__main__":
