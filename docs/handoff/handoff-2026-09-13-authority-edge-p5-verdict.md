@@ -445,7 +445,9 @@ $f='build/smoke-test/logs/client_<SessionId>.log'
 - [x] F3 已结案（23 个样本全部定性，含当前代码 dimension 复跑 0 空洞）
 - [x] **F10（P1，harness）**：`dimension` 纳入封闭空洞门禁（P0）＋ 超时默认值对齐 180/300
       —— 2026-09-13 第三轮会话完成，见 §五 F10（含 dimf3b 仍 PASS + neoforge 303 哨兵 + 全量 166 份回放）
-- [x] F4 仍是必须的一条（当前代码只跑过 classic + dimension 单点；`modcompat` / `seedgen` 未在当前代码复跑）
+- [x] **F4 收敛矩阵已跑**（第三轮）：编译七锚点 × `builds_for` 全过；运行时 3 版本（1.20.1 / 1.21.1 / 1.21.11）× `builds_for` 9 组合。
+      抓到 **F15**（1.21.11/neoforge R2 边缘空洞，flaky，分类待契约决策）。见 §9.9。
+- [ ] **F4 余项**：`modcompat` / `seedgen` 场景未在当前代码复跑（收敛口径下是否纳入待定）。
 - [x] **F1 / F2 已落地**（2026-09-13 第三轮；F2 契约方向由用户拍板选 A），但**验收仅部分达成**：
       空洞项全绿；`starved` 仅 1.21.1/fabric 为 0，1.20.1/fabric = 5、1.21.1/forge = 4、neoforge(修复后) = 3。
       判据与量化见 §9.7。
@@ -458,8 +460,9 @@ $f='build/smoke-test/logs/client_<SessionId>.log'
 > **后续轮次**：2026-09-13 第三轮会话落地 F10（`dimension` 纳入 P0 空洞门禁 + 超时默认值 180/300 + 文档同步），
 > 随后落地 **F1 / F2**（落位点 3x3 空洞根因 + 让位门契约；验收部分达成，见 §9.7）、**F12**（neoforge 整柱
 > 抑制/权威边沿未生效，见 §五）与一个 **teardown GLFW 守卫**修正（§9.4）。
-> 剩余未闭：**F4**（全矩阵重建门禁基线）、**F5**（接管态矩阵证据）、F7（`saveAll` 停滞归因）、F8、F9、
-> **F11**（`resolve()` 逐柱发 pull，§9.5）、**F13**（dimension flaky）、**F14**（移动场景门禁口径）。
+> 剩余未闭：**F4 余项**（`modcompat` / `seedgen` 场景）、**F5**（接管态矩阵证据）、F7（`saveAll` 停滞归因）、F8、F9、
+> **F11**（`resolve()` 逐柱发 pull，§9.5）、**F13**（dimension flaky）、**F14**（移动场景门禁口径）、
+> **F15**（1.21.11/neoforge R2 边缘空洞，§九 —— 需先定「可渲染窗」契约）。
 
 ---
 
@@ -595,3 +598,58 @@ $f='build/smoke-test/logs/client_<SessionId>.log'
 原版已计 ACK 不再重发的那条 ⇒ 与 F1 同一缺陷类），而旧注释「客户端漏收时靠 self-heal 扫描/pull 补齐」是**错的**。
 本轮改为：计数 `PENDING_OVERFLOW` + 首次触发 `Constants.LOG.warn`（正常路径不可达，一旦出现即为真缺陷信号），
 并把注释改成如实描述。实测 8 场 `AUTHORITY pending overflow` = 0 —— 与「不可达」的判断一致。
+
+### F15（P1，第三轮新增）1.21.11/neoforge R2 边缘空洞（flaky，**分类待契约决策**）
+
+- **现象**：`1.21.11_neoforge_I_f4` R2 `TRACE_ENCLOSED_HOLE`（largest **4**，components `[4,3,1]`），坐标
+  `[[-11,-9],[-11,-8],[-11,-7],[-11,7],[-10,-8],[-9,-11],[-8,-11],[-7,-11]]`；同配置重跑
+  `1.21.11_neoforge_I_f4b` **0 空洞**（R2 observed 454 vs 465，声明条目两轮均 2046）⇒ **flaky**。
+- **两条决定性读数**：
+  1. `expectedNotPresent = 0` / `receivedNotInjected = 0`（两轮皆 0）⇒ 这 8 格**从未进入 `networkReceived`**
+     —— 又一次印证 §六.1 的候选集盲区，也正是封闭空洞门禁（F10/F1）存在的理由：**它真的抓到了一次「从未投递」**；
+  2. 坐标全部贴 **|坐标| = 11**，即**服务端 VD10 跟踪窗（|≤10|）之外** —— 服务端**本就不该声明**它们。
+- **机理判断**：客户端常驻集 = 服务端声明（|≤10|）∪ 客户端本地 OVD 环（|11|+，best-effort：盘 / 注入 / 本地生成）。
+  OVD 环是**稀疏**的，于是 R2 的边缘呈**锯齿状**；锯齿恰好围住一格时，封闭空洞门禁即亮灯。
+  也因此 `f4`（resident 465）有洞而 `f4b`（resident 454）无洞 —— 关键不是**多少**，而是边缘**形状**。
+- **为什么现在才看见**：F12 修复前 neoforge 走原生整柱下发（|≤10| 每柱实收），边缘形态不同；修复后改走声明驱动。
+- **要决策的**：客户端「可渲染窗」的契约到底是**服务端跟踪半径**（则 |11| 空洞属正常，门禁在窗口外沿过严）
+  还是**客户端 renderDistance + OVD 环**（则这是真缺陷：OVD 环需要补洞，或越窗请求要能被可恢复地服务）。
+  **这一条不定，就无法判 F15 是回归还是门禁口径问题** —— 与 F14 同族（门禁假设与场景语义不匹配）。
+- **起点**：`docs/chunk-load-optimization.md`（OVD 契约）、`ShadowTrackingSession.tryServeOvdLocal`、
+  `scripts/smoke/analyzer.py::_enclosed_holes`（是否应对「窗口外沿」环降级为 P1）。
+
+---
+
+### 9.9 F4 收敛矩阵（2026-09-13 第三轮，按 `version-segments` 收敛）
+
+**编译层：七锚点 × `builds_for` 全加载器全部通过**（E/F/G/H 为本轮新跑，A/D/I 由本轮冒烟与 F12 验证附带）：
+
+| 段 | 锚点 | 加载器 | 结果 |
+|---|---|---|---|
+| A | 1.20.1 | fabric, forge | ✅ |
+| D | 1.21.1 | fabric, forge, neoforge | ✅ |
+| E | 1.21.2 | fabric, neoforge | ✅ |
+| F | 1.21.5 | fabric, forge, neoforge | ✅ |
+| G | 1.21.6 | fabric, forge, neoforge | ✅ |
+| H | 1.21.9 | fabric, forge, neoforge | ✅ |
+| I | 1.21.11 | fabric, neoforge | ✅ |
+
+⇒ 「三个版本证明全版本适配」在**运行时**维度成立（`docs/version-segments.md` 明载「运行时验证优先级：1.20.1 → 1.21.1 → 1.21.11」）；
+**编译**维度仍需七锚点各自过一遍——段边界的 API 悬崖（`SerializableChunkData` / CompoundTag / `level()` / `PalettedContainerFactory` /
+Identifier）不会在 A/D/I 上暴露（仓库自身反例：1.21.10 forge 能到 `Done`、1.21.11 forge 起不来）。两者合起来才是「全版本适配」的实证。
+
+**运行时：3 版本 × `builds_for` = 9 场组合**
+
+| 版本 / 加载器 | 判决 | R1 / R2 observed | 空洞 | `starved` | 声明条目 | 首个声明包 |
+|---|---|---|---|---|---|---|
+| 1.20.1 / fabric | PASS | 1551 / 573 | 0/0 | 5 | 1982 | `entries=384` |
+| 1.20.1 / forge | PASS | 1600 / 550 | 0/0 | — | 1982 | `entries=384` |
+| 1.21.1 / fabric | PASS ×2 | 1529 / 453 | 0/0 | **0** | 1982 | `entries=9` |
+| 1.21.1 / forge | PASS | 1529 / 453 | 0/0 | 4 | 1982 | `entries=9` |
+| 1.21.1 / neoforge | PASS ×2 | 1529 / 477 | 0/0 | 2~3 | 1982 | `entries=9` |
+| 1.21.11 / fabric | PASS | 1573 / 473 | 0/0 | **0** | 2046 | `entries=9` |
+| 1.21.11 / neoforge | PASS / **FAIL**（flaky，F15） | 1573 / 454~465 | 0 / **4** | 4~5 | 2046 | `entries=9` |
+
+**观察**：`entriesSum` 在每一版本上恒定（1.20.1 / 1.21.1 = **1982**；1.21.11 = **2046** = 1573+473），且**加载器无关**
+⇒ 声明集合由（版本可见窗 × 轮次）唯一决定。影子端自绘 pull 完全退场的只有 **1.21.1/fabric 与 1.21.11/fabric**（`starved` = 0 且自绘 0 批）。
+**注意**：本轮 3 版本矩阵是**收敛口径**（F4 的"全矩阵"按 `version-segments` 收缩）——它照样抓到了 F15，即收敛没有牺牲发现力。
