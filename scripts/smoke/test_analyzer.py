@@ -166,5 +166,85 @@ class SpatialCheckTest(unittest.TestCase):
         self.assertEqual(_server_full_push_timeouts(text), [{
             "count": 2, "timeoutMs": 60000, "player": "Player"
         }])
+
+
+class EnclosedHoleTest(unittest.TestCase):
+    """落位点 3x3 永久空洞（P5-6）的回归门禁：空洞必须被已持有柱完全包围才算。"""
+
+    @staticmethod
+    def _ring_around_3x3():
+        """5x5 方环（切比雪夫 2 的一圈 16 格）：正中间的 3x3 从未投递，且被完全包围。"""
+        return [[x, z] for x in range(-2, 3) for z in range(-2, 3) if max(abs(x), abs(z)) == 2]
+
+    @staticmethod
+    def _root_with_logs(directory, name):
+        from pathlib import Path
+        root = Path(directory)
+        (root / "logs").mkdir()
+        (root / "logs" / f"{name}.log").write_text(
+            "HassiumSmokeTest:PASS\n"
+            "CLIENT_STATS ROUND1 begin\nCLIENT_STATS ROUND1 end\n"
+            "CLIENT_STATS ROUND2 begin\nCLIENT_STATS ROUND2 end\n")
+        return root
+
+    def _analyze_ring(self, scenario):
+        from scripts.smoke.analyzer import analyze_result
+        from pathlib import Path
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._root_with_logs(directory, scenario)
+            probe = {
+                "stats": {"clientAppliedChunkCount": 16, "clientLandedChunkCount": 16},
+                "chunkTrace": {},
+                "clientCache": {"actualPresent": {"positions": self._ring_around_3x3()}},
+            }
+            return analyze_result({"SessionId": scenario, "Scenario": scenario,
+                                   "ServerSwitched": True,
+                                   "Probe": {"Round1": probe, "Round2": probe}}, root)
+
+    def test_enclosed_3x3_is_detected_as_one_block(self):
+        from scripts.smoke.analyzer import _hole_check
+
+        report = _hole_check({"clientCache": {"actualPresent": {"positions": self._ring_around_3x3()}}})
+        self.assertTrue(report["available"])
+        self.assertEqual(report["enclosedCount"], 9)
+        self.assertEqual(report["largestComponent"], 9)
+        self.assertEqual(report["components"], [9])
+
+    def test_open_edge_gap_is_not_a_hole(self):
+        from scripts.smoke.analyzer import _hole_check
+
+        report = _hole_check({"clientCache": {"actualPresent": {"positions": [[0, 0], [1, 0], [2, 0]]}}})
+        self.assertTrue(report["available"])
+        self.assertEqual(report["enclosedCount"], 0)
+
+    def test_classic_enclosed_hole_fails(self):
+        failures = [item for item in self._analyze_ring("classic")["failures"]
+                    if item["code"] == "TRACE_ENCLOSED_HOLE"]
+        self.assertTrue(failures)
+        self.assertEqual(failures[0]["largestComponent"], 9)
+
+    def test_non_classic_scenario_does_not_gate_on_enclosed_hole(self):
+        analysis = self._analyze_ring("seedgen")
+        self.assertNotIn("TRACE_ENCLOSED_HOLE", {item["code"] for item in analysis["failures"]})
+
+    def test_small_enclosed_hole_is_warning_not_failure(self):
+        from scripts.smoke.analyzer import analyze_result
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._root_with_logs(directory, "classic")
+            probe = {
+                "stats": {"clientAppliedChunkCount": 8, "clientLandedChunkCount": 8},
+                "chunkTrace": {},
+                "clientCache": {"actualPresent": {"positions": [
+                    [0, 0], [1, 0], [2, 0], [0, 1], [2, 1], [0, 2], [1, 2], [2, 2]]}},
+            }
+            analysis = analyze_result({"SessionId": "classic", "Scenario": "classic",
+                                       "ServerSwitched": True,
+                                       "Probe": {"Round1": probe, "Round2": probe}}, root)
+            self.assertNotIn("TRACE_ENCLOSED_HOLE", {item["code"] for item in analysis["failures"]})
+            self.assertIn("TRACE_ENCLOSED_HOLE_SMALL", {item["code"] for item in analysis["warnings"]})
+
+
 if __name__ == "__main__":
     unittest.main()

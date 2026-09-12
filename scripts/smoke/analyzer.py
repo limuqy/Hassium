@@ -8,6 +8,13 @@ from typing import Any
 
 _STAGE_NAMES = ("networkReceived", "shadowInjected", "shadowReady", "clientApplied", "meshCompiled")
 
+# classic 场景里，这么大（4-连通单元格）的实心封闭空洞 = 玩家眼前的永久虚空（≥2x2）。
+# 见 _hole_check：空洞必须「被已持有柱完全包围」才算，视图边界/采样边缘不算。
+_ENCLOSED_HOLE_P0_CELLS = 4
+_ENCLOSED_COMPONENT_LIMIT = 8
+# 包围盒洪水填充的规模上限（已持有集合实测 ≤ ~2000 柱，包围盒 ≤ ~70²；超限则放弃判定而非卡死）。
+_ENCLOSED_BOX_CELL_LIMIT = 1_000_000
+
 
 def _obj(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
@@ -144,6 +151,75 @@ def _spatial_check(probe: dict[str, Any]) -> dict[str, Any]:
     return {"available": True, "observed": len(observed), "expected": len(expected),
             "cardinalHoles": sorted(cardinal), "diagonalHoles": sorted(diagonal)}
 
+
+def _enclosed_holes(points: set[tuple[int, int]]) -> set[tuple[int, int]]:
+    """返回「被已持有柱完全包围」的缺席柱——真正看不见的虚空，而非视图/采样边缘。
+
+    判据：取已持有集合的包围盒并外扩一圈，从盒外角 4-连通洪水填充；填不到的缺席柱即被围住的洞。
+
+    这个口径专门补上 `gaps.expectedNotPresent` 的盲区：后者的候选集就是 `networkReceived`，
+    一个**从未被投递**的柱不在候选集里，因此结构上永远看不见。实测 `1.21.1_fabric_I_band2`
+    落位点 3x3 九柱从未投递，而当时的门禁全绿。
+    """
+    if not points:
+        return set()
+    xs = [x for x, _ in points]
+    zs = [z for _, z in points]
+    lo_x, hi_x = min(xs) - 1, max(xs) + 1
+    lo_z, hi_z = min(zs) - 1, max(zs) + 1
+    if (hi_x - lo_x + 1) * (hi_z - lo_z + 1) > _ENCLOSED_BOX_CELL_LIMIT:
+        return set()
+    outside = {(lo_x, lo_z)}
+    stack = [(lo_x, lo_z)]
+    while stack:
+        x, z = stack.pop()
+        for dx, dz in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            neighbour = (x + dx, z + dz)
+            if not (lo_x <= neighbour[0] <= hi_x and lo_z <= neighbour[1] <= hi_z):
+                continue
+            if neighbour in points or neighbour in outside:
+                continue
+            outside.add(neighbour)
+            stack.append(neighbour)
+    return {(x, z) for x in range(lo_x, hi_x + 1) for z in range(lo_z, hi_z + 1)
+            if (x, z) not in points and (x, z) not in outside}
+
+
+def _enclosed_components(holes: set[tuple[int, int]]) -> list[int]:
+    """空洞的 4-连通分块大小（降序）——连续成片的洞才是虚空，零散单格多为采样边缘。"""
+    remaining = set(holes)
+    sizes: list[int] = []
+    while remaining:
+        seed = remaining.pop()
+        stack = [seed]
+        size = 1
+        while stack:
+            x, z = stack.pop()
+            for dx, dz in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                neighbour = (x + dx, z + dz)
+                if neighbour in remaining:
+                    remaining.discard(neighbour)
+                    stack.append(neighbour)
+                    size += 1
+        sizes.append(size)
+    return sorted(sizes, reverse=True)
+
+
+def _hole_check(probe: dict[str, Any]) -> dict[str, Any]:
+    """封闭空洞诊断：口径见 _enclosed_holes，门禁在 analyze_result 里按场景分级。"""
+    cache = _obj(probe.get("clientCache"))
+    if "actualPresent" not in cache:
+        return {"available": False, "reason": "clientCache.actualPresent unavailable"}
+    observed = _positions(cache.get("actualPresent"))
+    if not observed:
+        return {"available": False, "reason": "clientCache.actualPresent empty"}
+    holes = _enclosed_holes(observed)
+    components = _enclosed_components(holes)
+    return {"available": True, "observed": len(observed), "enclosedCount": len(holes),
+            "largestComponent": components[0] if components else 0,
+            "components": components[:_ENCLOSED_COMPONENT_LIMIT],
+            "enclosedHoles": _position_report(holes)}
+
 def _late_near_player(probe: dict[str, Any], threshold_ms: int = 10_000) -> list[dict[str, Any]]:
     """发现近玩家柱相对本轮首批落地长期延迟，覆盖 full/cache/delta 三条路径。"""
     trace = _obj(probe.get("chunkTrace"))
@@ -247,6 +323,7 @@ def analyze_result(result: dict[str, Any], root: Path) -> dict[str, Any]:
         trace_report = _trace_analysis(probe)
         trace_reports[f"round{number}"] = trace_report
         spatial = _spatial_check(probe)
+        spatial["enclosed"] = _hole_check(probe)
         spatial_reports[f"round{number}"] = spatial
         if scenario == "classic":
             late_near_player = _late_near_player(probe)
@@ -254,6 +331,18 @@ def analyze_result(result: dict[str, Any], root: Path) -> dict[str, Any]:
                 warnings.append(_failure("LATE_NEAR_PLAYER_CHUNK", severity="P1", round=number,
                                          thresholdMs=10_000, chunks=late_near_player[:64],
                                          truncated=len(late_near_player) > 64))
+        # 封闭空洞门禁仅 classic：其它场景的盘回填不走同一交付契约（dimension / modcompat /
+        # seedgen 的稀疏采样本来就会产生成片的「填不到」区域，实测 22 个命中样本里 10 个来自
+        # 非 classic 场景）。分块大小 ≥ _ENCLOSED_HOLE_P0_CELLS 才算虚空，零散单格降为 P1。
+        holes = spatial["enclosed"]
+        if scenario == "classic" and holes["available"]:
+            largest = holes["largestComponent"]
+            if largest >= _ENCLOSED_HOLE_P0_CELLS:
+                failures.append(_failure("TRACE_ENCLOSED_HOLE", round=number, largestComponent=largest,
+                                         components=holes["components"], holes=holes["enclosedHoles"]))
+            elif largest:
+                warnings.append(_failure("TRACE_ENCLOSED_HOLE_SMALL", "P1", round=number,
+                                         components=holes["components"], holes=holes["enclosedHoles"]))
         gaps = trace_report["gaps"]
         # TRACE 缺口门禁仅 classic：其它场景的盘回填不走同一 trace 契约
         if scenario == "classic":
