@@ -397,3 +397,14 @@ hassium_exports/server_192.168.1.100_25565/
 5. 影子 vanilla connection 发送官方 chunk+light 与 forget packet；真实客户端不提交 admission 请求。
 
 缓存目录仍为 `hassium_cache/<serverId>/world`，存储和热度淘汰由影子服务端承担。Bloom、`CHUNK_HASH` 和旧独立分段请求不属于当前客户端区块入口；分段增量现作为统一 `ShadowPull` 的 `DELTA` 终态复用。
+
+## 14. 权威边沿与注入表回收（2026-09-13）
+
+- **权威集合由服务端声明**：在整柱推送抑制点（`ServerPlayer.trackChunk` / `PlayerChunkSender.sendChunk`）发 `chunk_authority_s2c`（`ChunkAuthorityS2CPacket`：`dimension`/`epoch`/`snapshot` + `entries{chunkX, chunkZ, hash}`），顺带携带**权威内容 hash**（`ChunkAuthorityHashes`：共享 per-chunk 缓存、方块变更失效、LRU 上限；预算不足附 0）。leave 继续由原版 `ForgetLevelChunkPacket` 承载。
+- **客户端三分支解析**（`ChunkAuthorityClient`）：本地 hash 与声明相同 → **零请求**本地 `publishCachedChunk` 交付并计「区块缓存全命中」；未知/不等 → `requestFull` 比较；无基线 → 空基线 FULL 或 SeedGen。
+- **影子端让位**：协商位在位且权威包未断流时 `pullEmissionSuppressed()` 为真，影子端不再自绘选柱发 pull（10s 断流看门狗自动回退 tracking 驱动）。
+- **让位只能是「让路」，不能是「放弃」**：声明集合覆盖的是"服务端本来会推送的那批"，**不含登录期就已推送、此后不再声明**的柱。让位门原先在 `emitPullGroups` 里直接 `return`，而驱动已经把队列项 `poll` 走、把柱标成在途 → 那些柱永久空洞（落位点 3x3 实测，且冒烟以 PASS 收场）。现在改为：被扣柱登记首扣时刻，**扣留中**清掉它的 `sweepInFlight` 在途标记（否则形状扫描把它当"已发出"，60s 内不再重新发现），超过 `GATE_STARVE_GRACE_MS = 3s` **无条件补发一次 pull**；补发时撤销登记、保留在途标记，避免同一拍里 `drainBootGrid` / `drainSelections` / `sweepVisibleShape` 重复补发。等待表按**年龄**裁剪（不用"本拍成员"裁剪——同一拍里 drain 与 sweep 是两个互不可见的批次，按成员裁会互相抹掉计时）。对应门禁 `TRACE_ENCLOSED_HOLE`（见 [`runtime-smoke-test.md`](runtime-smoke-test.md) 门禁全集）。
+- **注入表回收**：客户端 leave（真服 Forget）登记 `outsideSinceMs`，独立线程 `hassium-shadow-reclaim` 宽限 6s 后 `unloadChunk`（flush + 摘表，`ShadowStorageHashes` 基线保留）。**不得**在影子主循环内调用（`flushColumn` 等待主循环 → 自死锁），也不得按自绘几何推断（会摘掉未交付柱）。
+- **投递重试必须有界**：客户端应用权威包时若原版拒收（`Ignoring chunk since it's not in the view range`，快速移动后滞留在投递队列里的旧窗口柱），该拒绝**不可自愈**。`ShadowLightCompute.applyReadyChunk` 连续被拒 `MAX_IGNORED_RETRIES=60`（≈3s）即放弃该投递条目（`release`），**不清**影子注入表与磁盘基线（玩家回到该区域由声明/扫描重新投递）；重试日志按 200 次节流。无上限重试会让整柱在 `ready` 里每帧打转（移动冒烟实测 21s / 102010 行、日志 84MB、渲染线程吃满、客户端 120s 不退出）。
+- 实测：`1.20.1 fabric classic`（`final2`，不移动）R2 `区块缓存 100.0%`（全命中 1082/16.9MB + 部分命中 5/80KB）、`区块加载 0`、`超视渲染 634/缺失 2`、`流量节省 100.0%`（2.6 KB）；`1.20.1 fabric I`（`move3`，`-MoveSeconds 12` 往返移动）R2 `区块缓存 100.0%`（全命中 1081/16.9MB + 部分命中 6/96KB）、`区块加载 0`、**spatial 550/550 无洞**、`超视渲染 634/缺失 2`、`光照缓存 100.0%`，两轮 `=== RESULT: PASS ===`（exit 0）。端到端取证：服务端 189 条 `[AUTHORITY] send`（含 `snapshot=true epoch=3`），客户端 44 条 `hash-hit zero-request`；回收路径取证见 `-MoveSeconds 12` 的 `reclaim=24`（线程 `hassium-shadow-reclaim`）。详见 [`client-chunk-flow-handover.md`](client-chunk-flow-handover.md) §9。
+- 零行为变化取证（2026-09-13，`1.21.1 fabric classic`）：生产态（`P5_TAKEOVER=false`）`1.21.1_fabric_I_p5off2` failures 0 / warnings 0、R1 1636 / R2 453 且封闭空洞 0、`authority gate starved` **0 次**；P5 接管态 `1.21.1_fabric_I_p5fix1` R1 1529 / R2 453、封闭空洞 0（修复前同种子为 1520 / 444，缺落位点 3x3），补发共约 14 批。

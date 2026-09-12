@@ -198,6 +198,8 @@ sequenceDiagram
 - **compare-pull**：影子有本地基线时请求真实服裁决 UNCHANGED/DELTA/FULL，避免重复下载整柱。
 - **`requestedMisses`**：只防对真实服的重复 pull（含回退风暴），**卸载后应清除**，允许再 compare。
 - **分段增量 / 字典 ZSTD / 聚合**：作用于影子↔真实服务端与通道压缩，不改变「进范围必交付」语义。
+- **权威边沿（2026-09-13）**：服务端在整柱推送抑制点顺带声明「柱进入权威 tracking 集合 + 权威内容 hash」（`chunk_authority_s2c`，含跨会话 `epoch`/`snapshot`）。客户端本地基线 hash 与声明相同时**不发任何请求**、本地交付并计全命中；未知/不等才回退 compare-pull；无基线走空基线 FULL。影子端在此模式下让位（不再自绘选柱发 pull，10s 断流看门狗自动回退），权威判定权归服务端。详见 [`client-chunk-flow-handover.md`](client-chunk-flow-handover.md) §9。
+- **注入表回收**：影子注入表按客户端 leave（真服 Forget）事件 + 6s 宽限回收（先 flush 落盘再摘表），**不得**按影子端自绘几何推断（实测会把未交付柱摘掉并使 teardown flush 悬挂）。
 
 ### 6.5 关键实现锚点
 
@@ -209,6 +211,8 @@ sequenceDiagram
 | 窗内重发 | `drainRedeliver` / sweep 对 `injected && !clientApplyEpoch` 限速 `publishCachedChunk` |
 | 真实服 Forget | 原版 `untrackChunk`（PULL 模式不压制 forget） |
 | 影子选柱/补洞 | `scheduleChunkLoad` 悬置 + `sweepVisibleShape`（只拉**未注入**柱） |
+| 权威边沿（服务端声明 enter + 权威 chunkHash） | `ChunkAuthorityNotifier` → `chunk_authority_s2c` → `ChunkAuthorityClient`（三分支：hash 命中 → 零请求本地交付并记全命中 / 带基线比较 / 空基线 FULL）；`pullEmissionSuppressed()` 为真时影子端不发 pull |
+| 注入表回收 | 客户端 leave（真服 Forget）→ `outsideSinceMs` → `reclaimOutOfRetainSet` 宽限 6s 后 `unloadChunk`（flush + 摘表，`ShadowStorageHashes` 基线保留） |
 
 ### 6.6 关键设计决策
 

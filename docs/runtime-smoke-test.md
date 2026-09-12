@@ -343,7 +343,7 @@ PASS ⇔ HasPass && exit==0 && analyzer 门禁全过 && Round2Pass（validateSta
 |------|------|
 | **带宽压缩** | 压缩效率 = (原始 − 压缩后) / 原始 × 100%；括号内为 **聚合包压缩帧 + shadow pull 分段增量**（SectionDeltaS2CPacket 内嵌载荷，decode 全库唯一调用点在 ShadowPullClient DELTA 终态）的压缩前原始字节与压缩后线缆字节；chunk_payload 全量请求通道与未压缩帧不计入。整体「比无 MOD 少收多少」看下方**流量节省**行 |
 | **压缩比** | 原始 ÷ 压缩后，如 `3.32:1` 表示 zstd 把负载压到 1/3.32 |
-| **区块缓存** | `缓存命中 = (全命中 + 部分命中 − 增量) / 应用`，按内容等价值字节。全命中 = 本地缓存 contentHash 整柱复用；部分命中 = 缓存柱作基线的分段增量；增量 = `FULL` 整段 / `BLOCKS` 按格。**SeedGen 本地生成不算缓存命中**（只在「区块加载 / 本地」）。应用 = 全量请求 + 全命中 + 部分命中 |
+| **区块缓存** | `缓存命中 = (全命中 + 部分命中 − 增量) / 应用`，按内容等价值字节。全命中 = 本地缓存 contentHash 整柱复用（含**权威边沿 hash 断言**：服务端 `chunk_authority_s2c` 携带的权威 hash 与本地基线相同 → 零请求本地交付即计入全命中，见 `client-chunk-flow-handover.md` §9）；部分命中 = 缓存柱作基线的分段增量；增量 = `FULL` 整段 / `BLOCKS` 按格。**SeedGen 本地生成不算缓存命中**（只在「区块加载 / 本地」）。应用 = 全量请求 + 全命中 + 部分命中 |
 | **区块加载** | 总数（新增数/新增字节 + 本地生成数/字节 + 本地命中%）。`本地命中` = 本地生成字节/(网络全量+本地生成)；不再展示「过期」 |
 | **流量节省** | `服务端实际推送 / 无MOD应收 × 100%`（越小越省；已节省 = 100% − 该值）。无MOD应收 = 数据包（区块域埋点：chunk_payload / 分段增量等价 wire，**聚合全局包不计**）+ 本地重算 + 客户端缓存 + 光照 |
 | **光照缓存** | 命中率 = (直连命中 + 影子复用) / (命中 + 本地重算)。影子端本会话重算光（远程全量注入 / 分片增量 / LightDelta / SeedGen 本地生成 / 光脏缓存命中）都计为本地重算；ROUND1 重算为主（命中 0% 正常），ROUND2 有缓存复用且存在分片增量/全量请求时会低于 100% |
@@ -510,11 +510,12 @@ build/smoke-test/
 | ROUND 统计 | classic 两轮 `CLIENT_STATS ROUNDn begin/end` 齐备（seedgen 单轮只查 R1） | `ROUND_STATS_MISSING` |
 | probe 指标 | `applied>0`、`landed>0`、`applied<=landed`、`actual<=loaded` 等一致性（`_check_probe_metrics`） | `CLIENT_CACHE_EMPTY` / `METRIC_*` |
 | trace 缺口 | expectedNotPresent / receivedNotInjected / injectedNotReady 为 P0；readyNotApplied 为 P1；appliedNotMeshed 为 INFO（mesh 异步） | `TRACE_*` |
+| 封闭空洞（仅 classic） | 包围盒洪水填充求 `clientCache.actualPresent` 里被完全围住的缺席柱，取 4-连通最大分块：**≥4 格**为 P0，1–3 格降 P1。补 `expectedNotPresent` 的盲区——后者的候选集是 `networkReceived` 本身，**从未投递**的柱结构上不可见（落位点 3x3 真空洞曾以 PASS 收场） | `TRACE_ENCLOSED_HOLE` / `TRACE_ENCLOSED_HOLE_SMALL` |
 | 服务端切换 | classic 场景 `ServerSwitched=true` | `SERVER_SWITCH_MISSING` |
 | 超时全量推送 | 服务端日志 `[PENDING_CONFIRM] ... confirms timed out`（唯一 P0 门禁）；客户端 `LATE_NEAR_PLAYER_CHUNK`（半径 3 内延迟 ≥10s）仅 P1 诊断 | `SERVER_FULL_PUSH_TIMEOUT` / `LATE_NEAR_PLAYER_CHUNK` |
 | 日志审计 | 双端日志 ERROR/FATAL + crash-reports 非空（豁免清单见脚本 `-AllowErrorPattern`） | `PROCESS_FATAL` |
 
-空间快照（`SPATIAL_SNAPSHOT_INCOMPLETE`，基线/对角线洞）仅作 P1 诊断；区块落地门禁由 probe 指标承担（shadow 预生成/全视距已裁剪）。
+空间快照（`SPATIAL_SNAPSHOT_INCOMPLETE`，只做一层邻域判断的基线/对角线洞）仅作 P1 诊断；区块落地门禁由 probe 指标与**封闭空洞门禁**承担（shadow 预生成/全视距已裁剪）。封闭空洞门禁仅作用于 classic：其它场景的盘回填不走同一交付契约，稀疏采样本来就会产生成片"填不到"区域（`dimension` / `modcompat` / `seedgen` / `ovdgen` 已按场景排除）。口径与零误报校准（250 个历史 probe 样本回放）见 [`client-chunk-flow-handover.md`](client-chunk-flow-handover.md) §9.9。
 
 ### 退役的冒烟面
 

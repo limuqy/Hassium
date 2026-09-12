@@ -350,3 +350,316 @@ pull 域用了 `resolveViewDistance()=vd+1`（range=21 → 1665 格盘）而非�
 - 提交：`c419215`（统计口径）、`483e1fb`（登录竞态修复）、`109ba1b`（门禁白名单）
 - 代码：`ShadowPullClient`（Compare+Pull 客户端边界，两模式）、`ServerChunkPushManager.resolveShadowPull`（权威比较）、`ShadowLightCompute.hasLocalPullBaseline:859`（基线判定）、`MixinClientPacketListener`（vanilla 包三分支入口）、`ClientChunkHandler`（chunk_payload 过渡接收 + pull FULL 应用）
 - 协议背景：Fabric API `ServerLoginNetworkAddon`（compression 先行注释）、Forge `HandshakeHandler`（NEGOTIATING 后置 compression）、wiki.vg《Minecraft Forge Handshake》
+
+## 9. 权威边沿（服务端声明 enter + 权威 chunkHash）——2026-09-13
+
+### 9.1 触发与根因
+
+手工测试「走出十几个区块再走回出生点」时统计恒为 `区块缓存 0.0%` 且 `区块加载` 全为「新增」。逐层核对得到两个独立根因：
+
+1. **权威集合在客户端被「推断」而非「被告知」**：`ShadowTrackingSession.drainSelections` 对已注入柱恒 `continue`，重入只能走 `sweepVisibleShape → drainRedeliver` 的本地 publish（不 compare）；唯一带 compare 的 vanilla 进范围桥要求 `!hasClientApplyEpoch`，重入时不成立。服务端能持续更新的柱 = 真实玩家 tracking 域；域外柱既收不到更新也不能当权威交付。
+2. **注入表只增不减**：`ShadowServer.unloadChunk`（唯一的 flush + 摘表入口）**全仓零调用者**——`935b9ed`（vanilla-align client-shadow chunk bridge）删除了唯一的调用点（客户端卸载拆影子表会造永久洞，该修复本身正确），但影子端自身的回收路径随之断链，`injectedChunks` 会话内单调增长（内存无上限）。
+
+历史对照：`b629fd0` / `8d69067` / `a45f9dc` 时代由**服务端主导**（推送 + hash 命/回执）；`14f63ab` 统一到 §6 Compare+Pull 时把**采集决策权**一并移到了客户端。本轮把「权威判定权」收回服务端，但**不**恢复服务端推送载荷与 per-player hash 表。
+
+### 9.2 设计
+
+```
+服务端 ChunkMap tracking ──抑制点(trackChunk/sendChunk)──> chunk_authority_s2c(dim, epoch, snapshot, entries{pos, hash})
+                                                            │
+客户端 authoritySet ──> 三分支解析 ──┬─ hash 已知且本地相同 → 零请求本地交付 + 记「区块缓存全命中」
+                                     ├─ 未知/不等          → requestFull（带基线比较）
+                                     └─ 无基线            → requestAuthoritativeFull（或 SeedGen）
+真实客户端 Forget（原版）──> 账本解锁 / 重发队列 / 注入表回收候选
+```
+
+- 载荷与发射：`ChunkAuthorityS2CPacket`（批量 128）、`ChunkAuthorityNotifier`（per-player 缓冲、每 tick 一包、hash 缓存 miss 现算但受哈希预算约束、预算不足附 0）、`ChunkAuthorityHashes`（共享 per-chunk 内容 hash 缓存 + 方块变更失效 + LRU）。
+- **失效点（必须接线，否则静默内容错误）**：`MixinLevelChunk` 注入 `LevelChunk#setBlockState` 的 RETURN（返回 null = 内容未变则跳过），仅真实 `ServerLevel` 且非影子上下文时 `ChunkAuthorityHashes.invalidate(...)`。**描述符按段分叉**：1.21.5 起第三参由 `boolean isMoving` 改为 `int flags`，以 `MC_1_21_5` 为界两段共用一个实现体。热路径用 `ChunkAuthorityHashes.hasEntries()`（volatile 免锁）短路——未协商权威位时每次方块变更只多一次 volatile 读。
+- 协商位：`LoginCaps.AUTHORITY_NOTIFY`（1<<6）；未协商客户端不消费该载荷，走原路径。
+- 客户端：`ChunkAuthorityClient`（三分支）+ `PayloadHandlers.handleChunkAuthority`；`ShadowLightCompute.markAuthorityHashConfirmed` 解锁「卸载后再交付」的全命中记账（首轮双路径仍被 `accountedIngress` 挡住，R1 假命中红线不变）。
+- 影子端让位：`ChunkAuthorityClient.pullEmissionSuppressed()`（协商位 + 权威包未断流 10s 看门狗）为真时，`ShadowTrackingSession.emitPullGroups` 与进范围桥的 compare-refresh 不再发 pull；影子端继续负责物化/交付/回收。
+- 回收（事件化）：`onClientChunkUnloaded` 对「窗内」柱入重发队列并撤销离开标记，对「窗外」柱登记 `outsideSinceMs`；影子主循环 `reclaimOutOfRetainSet` 宽限 6s 后 flush + 摘表（在途 / 客户端重新持有 / 关停窗口跳过）。**禁止按影子端自绘几何推断回收**。
+
+### 9.3 实测教训（必须保留）
+
+- **几何驱动回收是错的**：按 `inVanillaVisibleShape || inOvdWindow` 摘表会把客户端尚未交付的柱提前摘掉——R1 `区块加载` 从 1636 掉到 585，且断连 teardown 期 `flushColumn` 悬挂（客户端 teardown TAIL 未完成、退出码 1）。回收触发源必须是客户端 leave（真服 Forget）+ 宽限 + 关停守卫。
+- **客户端解析会被影子端抢跑**：R2 窗口仍有 589 批 `[SHADOW_PULL] server request`，因为 bootGrid 在 join 瞬间先发了 pull；P2（让位）是让 hash 命中真正生效的必要条件。
+- **「原版忽略」的重试必须有限**：`ShadowLightCompute.applyReadyChunk` 在 `hasClientChunk` 判定失败时只做「下一帧原样重投」，**无次数上限、无放弃条件、每次还打一行 INFO**。而原版的 `Ignoring chunk since it's not in the view range` 是**不可自愈**拒绝（玩家不回该区域就永远进不去），于是快速移动后滞留在投递队列里的旧窗口柱在 `ready` 里每帧打转：`1.20.1_fabric_I_move2` 实测 21s 内 **102010 行**（日志被撑到 84MB），渲染线程被日志 + 无效 apply 吃满，R1 的 dump 都没跑到，客户端 120s 不退出被强杀。修法见 §9.5。
+- **`LevelChunk#setBlockState` 的描述符跨段会变**：1.21.5 起第三参 `boolean isMoving` → `int flags`（`(...Z)L...` → `(...I)L...`）。写新 mixin 前用 `minecraft-dev` 的 `analyze_mixin` 逐段验证，别凭记忆写描述符——本次实测各段结果：≤1.21.4 为 `Z`、≥1.21.5 为 `I`（1.20.1/1.21.1/1.21.2/1.21.3/1.21.4 通过 `Z`；1.21.5/1.21.6/1.21.11 通过 `I`）。
+
+### 9.4 验收（`1.20.1 fabric classic`，`SessionId=1.20.1_fabric_I_final2`）
+
+| 轮次 | 读数（冒烟实际数据） |
+|---|---|
+| R1（VD20 冷启） | 带宽压缩 74.2%（31.5MB→8.1MB，3.87:1）；`区块缓存 0.0%`（应用 24.4MB）；`区块加载 1561（新增 1561/24.4MB）`；`超视渲染 0/0`；`光照缓存 0.0%`；`流量节省 79.0%` |
+| R2（VD10 重连） | 带宽压缩 54.2%（7.6KB→3.5KB）；`区块缓存 100.0%`（全命中 1082/16.9MB + 部分命中 5/80KB，增量 10B）；`区块加载 0（新增 0/0B）`；`超视渲染 已加载 634 / 缺失 2`；`光照缓存 100.0%`（命中 1215/19.0MB，重算 0）；`流量节省 100.0%`（当前 2.6KB） |
+
+`=== RESULT: PASS ===`（Round1/Round2 门禁均 True，exit 0）。端到端取证：服务端 **74 条 `[AUTHORITY] send`**（含 `snapshot=true epoch=3` 首包；`hashed` 与 `entries` 同量级），客户端 **46 条 `hash-hit zero-request`**（零请求本地交付并计全命中）。
+
+**未覆盖项（如实记录）**：本轮 `[SHADOW_TRACK] reclaim` 计数 0 —— classic 场景 R2 仅 41s 且玩家不移动，不产生「窗外 leave」；注入表回收路径（§9.2 末条）由**移动型场景**（`-MoveSeconds`）取数，见 §9.5。同理，`[AUTHORITY] hash-hit` 占比受「权威包到达时影子尚未读盘/未有本地 hash」限制，仍是小头（R2 主体命中来自 pull 侧 UNCHANGED），进一步收敛需把比对时机下沉到影子 materialize 之后。
+
+### 9.5 移动场景验收（`-MoveSeconds 12`）：活锁归因与修复
+
+`final2` 只覆盖「进服 → 重连」不移动。往返移动（走出权威再回来）是权威边沿的**正确性主场景**，按它取数时暴露了一个活锁。
+
+**修复（`ShadowLightCompute`）**：给「被原版忽略」加有界重试——连续被拒 `MAX_IGNORED_RETRIES=60`（≈3s @20fps）即**放弃该投递条目**（`release`），影子注入表与磁盘基线**不**清除，玩家回到该区域时由权威声明/形状扫描重新投递；重试日志按 `IGNORED_RETRY_LOG_EVERY=200` 节流。计数表在 `resetRequestDedupForReconnect` / `onClientDimensionChanged` / drain 断连分支 / `onDisconnect` 四处清空。
+
+| 读数 | `move` / `move2`（FAIL，修复前） | `move3`（PASS，修复后） |
+|---|---|---|
+| R1 `区块加载` | 1691 / — | 1600（新增 1600/25.0MB） |
+| R1 trace `injectedNotReady` | 0 / — | 0 |
+| R1 spatial | 1691/1694 | **1600/1600，四向+对角洞 0** |
+| R2 `区块缓存` | 96.5% | **100.0%**（全命中 1081/16.9MB + 部分命中 6/96KB，增量 6B） |
+| R2 `区块加载` | 45（新增 45/720KB） | **0** |
+| R2 `超视渲染` | 1059 / **缺失 353** | **634 / 缺失 2** |
+| R2 `光照缓存` | 92.2%（重算 112/1.8MB） | **100.0%（重算 0）** |
+| R2 trace `injectedNotReady` | **67** | **0** |
+| R2 trace `expectedNotPresent` | **67** | **0** |
+| R2 spatial | 45/112 | **550/550，洞 0** |
+| `Vanilla ignored authoritative chunk` 行数 | 102010（21s） | **0** |
+| `drop ... outside vanilla view range` 行数 | —（无上限，永不放弃） | **0**（重试根本没发生，上限未触发） |
+| 收尾 | R2 `saveAll` 未跑 → 2s 等待超时 → 强退 → `0xC0000409` / 客户端 120s 不退出被强杀 | `shadow save completed (seq 3 → 4)` → 优雅退出 **0** |
+
+`=== RESULT: PASS ===`（`move3`，exit 0；analyzer `failures=0`，7 项门禁全 PASS）。取证：服务端 189 条 `[AUTHORITY] send`（含 `snapshot=true epoch=3`），客户端 44 条 `hash-hit zero-request`。
+
+**回收路径取证（`SessionId=1.20.1_fabric_I_move`）**：`-MoveSeconds 12` 下 R1 出圈 `CHUNK_UNLOAD=24` → **`reclaim=24`**，全部由独立线程 `hassium-shadow-reclaim` 打出，形如
+`[SHADOW_TRACK] reclaim (-5, -12) -> flush+evict injected (dimension=minecraft:overworld)` —— §9.2 末条的回收路径**已被运行时触发并落盘**。（`move3` 该计数为 0：R2 仅 41s，宽限 6s 内玩家已回到原区域，离开标记被撤销。）
+
+**归因边界（不要过度断言）**：`move3` 里 `Vanilla ignored` 与 `drop` 都是 0，说明修复后**连一次被拒都没发生**，上限从未触发。单跑无法区分是「节流掉了日志/CPU 自放大」还是「有界重试清空了队列」消除的拒绝；两条都在本次改动里，方向一致，不再细分。
+
+### 9.6 P5 第 1 步：声明集合直出票 —— 并存试验与 tracking 钝化判定
+
+**动机（对「虚拟玩家必须留」四条依据的重审）**：核代码后，原先那四条依据里三条的表述是错的——`tickChunkSystem` 就是 `ServerChunkCache.tick(haveTime,false)`（`ShadowPlayerCompat:162`，签名无玩家）、`setChunkViewDistance` 是 `ServerChunkCache.setViewDistance`（level 级）、`scheduleChunkLoad` 拦截点与 SeedGen 门控（`MixinChunkMap:111/137/219`）全无玩家参数。虚拟玩家真正不可替代的只剩两项：**(a) ticket 源**（`PlayerList.placeNewPlayer` 的 PLAYER 票 + `ServerChunkCache.move` 的重算）、**(b) 1.20.1 的物化桥挂点**（`playerLoadedChunk(player,…)`；1.21.1+ 已是无玩家的 `ChunkMap.onChunkReadyToSend(LevelChunk)`，只从 `protoChunkToFullChunk` 完成回调调用）。全仓唯一出票处只有 `ServerChunkPushManager:214/219`（真服务端 `FORCED`），影子端一处票都没有——`ShadowSeedServer:96` 说「随后加 `TicketType.UNKNOWN` FULL 级票」是**过期注释**。
+
+**实现**（`ShadowTicketDriver`）：把 `ChunkAuthorityClient` 收到的声明逐条 `DimensionKey` 复合键翻成影子 `ServerLevel` 上的 `TicketType.FORCED` 票，复用 `ServerChunkPushManager` 已跑通的 1.21.5 分叉（`addRegionTicket` / `ticketStorage.addTicketWithRadius`）。网络线程只登记，出票/撤票一律在影子主循环（`vanilla DistanceManager` 单线程）。两个试验常量：`ENABLED`、`NEUTRALIZE_TRACKING`。
+
+**1a 并存（1.20.1 fabric，虚拟玩家不动）**：`ticket1` classic + `ticketmove1` move 双 PASS exit 0。R2 全命中 1082/1085、`区块加载 0`、spatial 无洞、缺口全 0；收尾 `shadow save completed (seq 3 → 4)`。**但这只证明「无回归」，不能证明票生效**——tracking 已覆盖声明集合，票是叠加物，生效与否读数都一样。当时的间接正面证据只有三条：`handle` 确实执行（`[AUTHORITY]` 出自同一 entries 循环后半段）、影子主循环在跑、`add ticket failed` = 0 条（该日志级别在冒烟 profile 下开启）。
+
+**1b 钝化（1.21.1 fabric，tracking 压到 3x3）**：选 1.21.1 是因为该段物化桥已无玩家参数，能把「票能否替代选柱」与「1.20.1 桥改造」解耦。
+
+| 会话 | R1 | R2 | 判定 |
+|---|---|---|---|
+| `1.21.1_fabric_I_nticket1`（classic） | `区块加载 1529`，收/注入/ready/应用 **1529/1529/1529/1529**，spatial **1529/1529 无洞** | `区块缓存 100.0%`（全命中 1084 + 部分 21/336KB）、`区块加载 0`、`超视渲染 632/4`、光照 100%、spatial **453/453 无洞** | **PASS**（failures=0） |
+| `1.21.1_fabric_I_nticketmove1`（move） | `区块加载 1520`，spatial **1520/1520 无洞**（**含 12s 飞行段**） | `区块缓存 97.1%`、`区块加载 38`、`超视渲染 1058/缺失 334`、光照 89.5%；`injectedNotReady 104`、`expectedNotPresent 107`、spatial 35/142 | **FAIL**（exit 1，混变量） |
+
+对照 1.21.1 classic 基线：R1 1605 / R2 全命中 1074 / `区块加载 0` / `超视渲染 634/2`。
+
+**结论**：**票可替代 tracking 的「选柱」职能，含移动窗**——`nticket1` 在 tracking 仅 3x3 时把 1092 柱声明集合完整交付且 R2 全命中 100%；`nticketmove1` 的 R1（含飞行）同样 1520/1520 无洞。**但「拆虚拟玩家」还不够火候**，因为 1b 的 R2 缺口混着两个变量：
+
+1. **OVD 圈被锐化开关连坐饿死（实验设计缺陷）**：OVD 圈（`maxRenderDistance=16` > 权威边距）**不在声明集合内**，其装载原本靠同一个 ChunkMap tracking 半径；压到 3x3 后它同时断了票源 → `超视渲染 缺失 334`。同一旋钮既管「权威窗 tracking」又管「OVD 圈 tracking」，无法分离。**第 2 步的入口因此不是「删虚拟玩家」，而是「先给 OVD 圈独立出票」**，之后再做一次钝化判定才干净。
+2. `injectedNotReady 104`：收了、注入了但没进 ready，需单列归因，暂未定位。
+
+**本次修掉的自有缺陷**：`pendingAdds` 原本在会话边界被**整队 clear**，会把新会话刚登记的声明一起吞掉（影子实例重建分支同样如此）。已改为**带代数戳的队列**——登记时记 `generation`，`requestClear()` / 实例重建各自自增，泵里只消费同代条目、越代丢弃，`clearAll` 不再整清队列。形态与 R2「部分柱永不投递」吻合，但两次 1b 的 `[SHADOW_TICKET] cleared all` 都是 0 条（说明当时走的是实例重建分支、且该分支原本无日志），**故没有证据认定它是 R2 主因**。
+
+**修复后回归**：`1.20.1_fabric_I_ticket2`（classic）PASS exit 0——R1 1551/spatial 1551:1551 无洞；R2 `区块缓存 100.0%`（全命中 1085 + 部分 2/32KB）、`区块加载 0`、`超视渲染 634/2`、缺口全 0。`NEUTRALIZE_TRACKING` 已回 `false`，不把饿死 OVD 圈的状态留在树里。
+
+**流程教训**：`1a` 首次运行失败是我在冒烟运行**同时**改源码，gradle 重编撞上改到一半的中间态（`common:compileJava FAILED`）。再次确认 AGENTS.md 那条红线：构建/改码不得与运行中的游戏 JVM 并发。
+
+### 9.7 P5 第 2 步：本地整方形票驱动（设计与判定边界）
+
+**设计（`ShadowTicketDriver` 重写为对账式）**：输入不再是服务端声明，而是**本地几何**——中心 = 会话唯一位置真相源（`virtualPlayer.chunkPosition()`，与 `inVanillaVisibleShape` / `sweep*` 同源）、半径 = `resolveViewDistance() + 1`（vanilla `setViewDistance(X)` 内部再 +1 才是 tracking 形状半径，与 `ShadowPullRadii.AUTHORITY_MARGIN` 语义一致；实测打出的 `r=22` @VD20 印证）、形状 = `ChunkShapeCompat.contains`（原版谓词）。几何一变即「补齐缺失、撤掉越界」，**天然幂等可续**，故不再需要事件队列与会话代数戳。顺序复刻 vanilla：**增票由近及远**（`ChunkDistancePriority`）、**撤票由远及近**、且固定在增票之后（先增后删，避免边界抖动出瞬时空洞）。服务端 `enter` 声明退回**只做内容裁决**，不参与出票——票源只有一张方形，与今天同构。
+
+**为什么不做「OVD 圈独立出票」**：OVD 从来不是独立机制，它就是同一张方形在 `serverVD` 之外那一环（range 取 `max`）。历史上「服务端出票 + OVD 独立出票」的割裂源于**两套票源的三个不同步**（中心 / 节奏 / 优先级）；再引入第二来源就是复制那个形态。
+
+**已确认的结论**
+
+1. **整方形驱动确实解决了 1b 的 OVD 环饿死**：`1.21.1_fabric_I_ot1`（classic，tracking 钝化到 3x3）R2 `超视渲染 632/缺失 4`，与 tracking 基线 `634/2` 逐项等价；而 1b（只翻服务端声明）是 `缺失 334`。机理：票的作用是让**没有其它驱动**的柱进入 `ChunkMap.scheduleChunkLoad`（→ 悬置 → pull）。权威窗内的柱另有驱动，OVD 环的柱只有票这一条路。
+2. **批量出票必须节流**：`FORCED` 是 level 31（FULL），一拍塞几百张会在单次影子主循环迭代里触发大量同步装载/生成。`512/拍` 在 1.21.1 移动场景出现运行期原生终止（`0xCFFFFFFF`，无 Java 痕迹、无 `hs_err`、无 crash-report、无 OOM；`otmove2` / `otmove3` 各一次，均死在 R1 极早期，日志仅 1749 行）。收到 **64/拍 后消失**（`otmove4` 跑完两轮）。**这是上生产的必要条件，不是优化。**
+
+**两条混淆已查清（P5-3）**
+
+1. **影子端有四条装载驱动，其中三条不依赖票**：
+   - `drainBootGrid`（`ShadowTrackingSession:900`）绕 `homeChunk` 铺静态盘，自己 `emitPullGroups` **直接发 pull**；
+   - `sweepVisibleShape`（`:820`）注释原文"**本扫描不依赖 vanilla**"，周期枚举未注入柱直接发 pull；
+   - `sweepOvdRing` → `tryServeOvdLocal`（`:1019`）："OVD 窗本地源：injected / disk。**绝不发 ShadowPull。缺盘柱交给原版 tracking**"；
+   - ChunkMap 票（虚拟玩家 tracking / 整方形驱动）→ `scheduleChunkLoad` → 悬置 → `drainSelections`。
+   前两条半径都只取 `serverViewDistance`，**故覆盖不到 OVD 环**；OVD 环的**有盘**柱走本地源（不依赖票），**缺盘**柱按设计交给原版 tracking（**依赖票**）。这就是 `otmove4` 的 R1 仅 256 张在售票却交付 1520 柱的原因。
+2. **`超视渲染` 是"本轮扫过的去重 OVD 柱"，不是窗口比率**：`HassiumMetricsImpl` 里是 `AtomicLong` 累加 + `recordOvdLoadedOnce/MissOnce` 的去重集合（`ovdCounted`/`ovdMissCounted`），`reset()` 清零；分子分母都随"扫了多少格"增长，故**跨场景不可比**（classic 636 vs 移动 R2 1586）。但**比值可比**：`otmove4` 443/1586 ≈ 28% 未命中，tracking 版 `move3` 2/636 ≈ 0.3% —— 差两个数量级，**移动 R2 的缺口是真实的**。
+
+**由此得到的方向修正（重要，推翻 §9.5/§9.6 的裁剪清单一部分）**
+
+- **票唯一不可替代的覆盖区间 = OVD 环中「缺盘」的那部分**（外加权威窗内两条 sweep 的周期/预算之外的残余）。这正是 1b（只翻服务端声明）`缺失 334`、而整方形驱动只 `缺失 4` 的原因。
+- **把 `bootGrid`、`sweepVisibleShape` 列为"可裁"是错的**：它们不是冗余兜底，而是**当前权威窗装载的实际主力**（`otmove4` R1 仅 256 张票即交付 1520 柱即为证）。裁剪清单要重排：先裁**选柱推断**，保留这两条 pull 驱动。
+- **B 档（删虚拟玩家）的精确前置条件**：驱动需覆盖"OVD 缺盘柱"，且填充速度跟得上移动。`ot1`（静态）已成立；`otmove4`（移动）28% 未命中说明**填充速度/覆盖不足**（64/拍、且仅在几何变化时对账，追不上移动中不断换新的 OVD 格）。
+
+
+**树状态**：`ShadowTicketDriver.ENABLED = false`、`NEUTRALIZE_TRACKING = false`——判定未成立前不把未验证的驱动默认开启、也不把"饿死 tracking"的实验态留在树里；代码与插桩（`[SHADOW_TICKET] bound / reconcile / cleared`，走 `LogType.NETWORK`）保留供下一轮迭代。
+
+**日志教训**：驱动的插桩最初用 `DebugLogger.LogType.ASYNC`，而该级别受 `debug.asyncLogging` 门控、**冒烟 profile 没开**——导致 §9.6 里"`add ticket failed` = 0 是正面证据"的推断**是错的，已撤回**（那些 `[SHADOW_TRACK]` 行走的是 NETWORK）。实验/热路径日志一律用 profile 会开的级别。
+
+### 9.8 P5 第 2 步改定：票源接到 OVD 环带判据上（不再是整方形）
+
+> **⚠️ 本节第一版读数（`band1` / `bandmove1`）已作废。** 那两轮跑的时候 `ENABLED=false` 配着
+> `NEUTRALIZE_TRACKING=true`——驱动一行没跑、tracking 也没被钝化（`ENABLED && NEUTRALIZE_TRACKING` =
+> false），测出来的是**纯基线行为**。铁证：`[SHADOW_TICKET]` 连无条件打印的首绑行 `bound instance`
+> 都是 **0 条**。故"`band1` 与基线等价"是同义反复、"`bandmove1` 比 `otmove4` 改善"是"驱动开 vs 关"
+> 的差别，**均不构成对环带设计的验证**。已把两个布尔收成单开关 `P5_TAKEOVER`（驱动出票 ⟺ 钝化
+> tracking 恒等联动），杜绝配错的中间态，并以 `band2` / `bandmove2` 重测。
+
+**改法**（比 §9.7 的整方形小得多，因为不再自算几何）：新增 `ChunkShapeCompat.inOvdBand`（把 `inOvdWindow` 原先手搓的「切比雪夫窗内 ∧ 不在 authority 形状内」收口，两处共用），`ShadowTicketDriver` 的目标集合改为**该环带**，入参与 `inOvdWindow` 同源（`serverViewDistance` / `effectiveClientVD`）；驱动不再需要 `VANILLA_TRACKING_MARGIN` 补正。理由：`tryServeOvdLocal` 的注释已写明"**缺盘柱交给原版 tracking**"——那一环就是唯一在等票的集合，票源与判据同源后"覆盖量"这个不确定量直接消失。
+
+**读数（重测：`P5_TAKEOVER=true`，驱动确实在跑——`[SHADOW_TICKET]` 非零且含 `bound instance`）**
+
+| | `band2` classic | tracking 基线 | `bandmove2` move | 整方形驱动 `otmove4` |
+|---|---|---|---|---|
+| R1 spatial | **1520/1520 无洞** | — | **1524/1524 无洞** | 1520/1520 |
+| R2 spatial | **444/444 无洞** | — | **120/120 无洞** | 9/147 |
+| R2 `区块缓存` / `区块加载` | 100.0% / 0 | 100% / 0 | 91.6% / 120 | 91.3% / 119 |
+| R2 `injectedNotReady` / `expectedNotPresent` | 0 / 0 | 0 / 0 | **0 / 0** | **138 / 0** |
+| 收尾 | `shadow save completed (seq 1→2)`，退出 0 | 同 | **`save wait timed out (seq still 1)` → 强退 `0xC0000409`** | 同左 |
+| 判决 | **PASS failures=0** | PASS | **仅 `CLIENT_EXIT_NONZERO`** | `CLIENT_EXIT_NONZERO` + 138 |
+
+**插桩交叉验证（`bandmove2`）**：`reconcile … band=10..16 … desired=636` —— `band=10..16` 恰为 R2 的 `(serverViewDistance=10, effectiveClientVD=16)`，`desired=636` 又恰与 classic R2 的 `超视渲染` 总数 636 吻合。**驱动目标集合与 OVD 判据/指标窗口三者对上了**，`inOvdBand` 收口正确。收敛轨迹也正常：`live` 64→502 随移动爬升，`-21/-23/-46/-50` 随环带滑移撤票。
+
+**结论（P5 第 1 步等价性）**：**1.21.1 数据面已完全打平**——classic 逐项等价（`区块加载 0`、`超视渲染 632/4` vs 基线 634/2、spatial 无洞），move 的 `spatial 120/120`、`injectedNotReady 0`、`expectedNotPresent 0` 全绿（整方形驱动是 9/147 + 138）。**唯一残留失败是收尾**：R2 的 `shadow saveAll` 一直停在 seq 1 → 2s 等待超时 → harness 强退 → `0xC0000409`。
+
+**残留归因（下一轮）**：驱动开启时 R2 收尾保存停滞（`bandmove2`/`otmove4` 两次），驱动关闭时四轮（`move3`/`bandmove1`/`bandoff1`/`band2`… 后两者中 `bandoff1` 为驱动关）都正常完成 → **与驱动的存在相关**。候选机理：驱动持有的 `FORCED` 票让柱常驻，`saveAll` 的等待条件（park/关停路径）被票改变。注意这与最初的 `move` 失败同族（`move` 是驱动不存在时代码就有的：R2 saveAll 未跑 → 强退 → `0xC0000409`），故要先分清"驱动诱发"与"harness 强退本身"。
+
+**方法学注意（重要）**：移动场景**跨轮方差大于待测效应**——同为"驱动关、tracking 全速"的 `move3` 是 `spatial 550/550 / 区块加载 0 / 超视渲染 634:2`，而 `bandmove1` 是 `138/141 / 141 / 1112:456`（差别来自 R2 那 12 秒飞行覆盖的地形量随位置漂移）。**故移动场景的单轮跨配置对比不可靠**，此前基于单轮的"28% vs 0.3%"等比较均已打折看待；判决改用同轮内量（`spatial` / `injectedNotReady` / `expectedNotPresent`）。
+
+**另记**：`(-4,-2) (-3,-2) (-2,-2)` 这 3 柱在**驱动完全没跑**的 `bandmove1` 里就缺、且全日志 0 次出现 → 是移动场景的**既有**缺口，与本驱动无关。
+
+
+**读数陷阱（重要，别再被绕进去）**：`超视渲染 缺失` 是 `tryServeOvdLocal` 的**本地源未命中**计数（盘上没数据），不是"没加载"；`区块加载` 亦然。两者的跨轮差异主要由**本轮飞进了多少未缓存地形**决定——同轮内 `缺失 456` 与 `区块加载 141` 互相印证，而 `move3` 基线的 `缺失 2 / 区块加载 0` 是因为那轮飞行仍在已缓存盘内。**判决必须看 `spatial` / `injectedNotReady` / 退出码**，不能用这两个数。
+
+### 9.9 P5 第 3 步：落位点 3x3 永久空洞——补上真空洞门禁，把让位门从「静默吞」改成「让路不让弃」
+
+§9.8 的"数据面已完全打平"里漏了一件事：**门禁看不见「从未投递」的柱**。
+
+**为什么看不见**：`analyzer.py` 的 `gaps.expectedNotPresent = expected − actual`，而
+`expected = stages["networkReceived"] or stages["shadowReady"]`——**候选集本身就是交付过的事件**。一个
+从头到尾没被投递过的柱不在候选集里，于是"缺柱"这件事在结构上不可表达（`SmokeProbeWriter` 的
+javadoc 也已写明 `actualPresent` 只抽样 trace 候选项，其基数不能当"已加载计数"用）。
+`_spatial_check` 只做**一层**邻域判断（某缺席格的 4 邻 ＋ 8 邻里够多已持有才算洞），于是对一个
+**实心 3x3 空洞**只能看见四只角，看不见另外 5 格——报告的 `diagonalHoles` 恰好是 `(-3,-1) (-3,1) (-1,-1) (-1,1)`，
+而 `SPATIAL_SNAPSHOT_INCOMPLETE` 只是 **P1 警告**。于是一次**真实的落位点 3x3 虚空**以
+`=== RESULT: PASS ===` 收场。
+
+**空洞是真的（同版本同场景对照，非跨版本猜测）**
+
+用包围盒洪水填充（把已持有集合外扩一圈，从盒外角 4-连通填充，填不到的缺席格 = 被围住的洞）重算历史 probe：
+
+**判据不是"接管与否"，而是"基准盘发射那一刻让位门是否已经关上"**
+
+| 会话（1.21.1 fabric classic） | `[SHADOW_TICKET]` | `hash-hit` | `authoritative-full pull` | 封闭空洞 |
+|---|---|---|---|---|
+| `_band1` | **0** | 442 | **0** | **9** |
+| `_band2` / `_ot1` | 3 / 有 | 443 / 442 | **0 / 0** | **9** |
+| `_bandmove1` / `_nticketmove1` / `_otmove1` / `_otmove4` / `_bandmove2` | 有 / 0 / 有 / 有 / 有 | 46 / 45 / 46 / 17 / 23 | **0 / 0 / 1 / 0 / 0** | **9** |
+| `1.21.1_fabric_I` | 0 | 0 | 13 | **0** |
+| `_nticket1` | **0** | 60 | 1 | **0** |
+| `_refactor` | — | 0 | 147 | **0** |
+| `_p5fix1`（修复后，接管态） | 有 | 49 | 15 | **0** |
+| `_p5off2`（修复后，生产态） | **0** | 37 | 13 | **0** |
+
+> **⚠️ 修订（本轮纠正，前面基于 `band1`/`nticketmove1` 的"与 P5 接管强相关"说法作废）。**
+> 有洞的会话 `authoritative-full pull` 全是 **0**（少数 1），没洞的会话是 **1~147**；而 `[SHADOW_TICKET]`
+> 根本不是判据——`_band1` / `_nticket1` 都是 **0**（驱动没跑）。关键是 **`_band1` 的配置是基线等价**的
+> （§9.8 记录的 `ENABLED=false` 且 tracking 未被钝化，故 `[SHADOW_TICKET]` 为 0），它**照样有洞**。
+> 所以这是**让位门的竞态**、不是接管的专属缺陷：门在 boot grid 铺盘期间关上时，影子端的 pull 一个都发不出去
+> （`authoritative-full pull = 0` 即"这两轮一条 pull 都没发"），而落位点 3x3 本地无盘、声明又不覆盖 →
+> 没有第二个来源。**这条竞态在生产配置下同样成立**，本轮的让位门改动因此是对生产缺陷的修复，不只是为实验服务。
+
+- 全部 `observed = 完整盘 − 9`：R1 是 `1529 − 9`、R2 是 `453 − 9`，且 9 格恒为**以玩家所在柱为中心的 3x3**。
+  注意它与 `NEUTRALIZED_VIEW_DISTANCE = 1` 同形**只是巧合**（`band1` 并未钝化 tracking，洞一样是 3x3）——
+  真正的成因是"声明不覆盖的那一批恰好就是登录期已推的落位点邻域"。
+- 三条独立日志证据（取自 `_band2`）：① 服务端该轮共 `[AUTHORITY] send` 443 条，**恰好不含**这 9 格；
+  ② `boot grid primed around (-2,0) radius=10 cells=9 redeliver=444`——盘面枚举出了这 9 格"未注入"，
+  它们被 `drainBootGrid` 取走后**再也没有第二次出现**；③ 整份客户端日志里对这 9 格的**非 `target=`
+  引用为 0 条**（无 `materialized` / `OVD local serve` / `pull-injected` / `reconcile`），
+  `phase=shadow_applied target=(x,z)` 计数也全为 0。
+
+**当前判断（诚实标注未定部分）**
+
+可以确定的是**故障形态**：一个位于本地可见窗口内、本地无盘也未注入、且**服务端声明集合不覆盖**的柱，
+在权威让位门关闭期间**被驱动取走并丢弃**（`drainBootGrid` 的 `pollFirst` 是不可逆的），此后没有任何
+补偿路径——`emitPullGroups` 当时是 `return`（静默吞），`sweepInFlight` 又被标成在途 60s，
+于是 `sweepVisibleShape` 也不会再发现它。
+
+具体落点：**最可能是 `emitPullGroups` 的那句 `return`**——依据是这些轮次 `authoritative-full pull` 为 **0**，
+即影子端在整个跑动里**一条 pull 都没发出去**；能绕过它的另外三个静默分支
+（`injectedChunk != null` / `preferLocalGeneration()` / `markPullInFlight` 失败）都需要**另一个动作方**
+先碰过这 9 柱，而那种触碰都会留日志，日志里没有。**但这仍是推断，没有做单点插桩确认**——四个分支的
+可见表象完全相同（零日志痕迹）。故本轮**只改结构上无争议的那一段**：让位门不能吞掉已入队的工作项。
+
+**改法（一处收口，不新增驱动）**
+
+所有 pull 都从 `ShadowTrackingSession.emitPullGroups` 出去，故只改这一个点：
+
+1. **让位期间仍然登记、但不丢弃**：每柱记录首次被扣时间；**扣留中**的柱顺手清掉它的 `sweepInFlight`
+   在途标记（否则形状扫描把它当"已发出"，60s 内不再重新发现，宽限永远等不到第二次登记）。
+2. **超过 `GATE_STARVE_GRACE_MS = 3s` 即无条件补发一次**（compare-pull / 权威 FULL），并把该柱从等待表
+   移除——保留它的在途标记，避免同一拍里 `drainBootGrid` / `drainSelections` / `sweepVisibleShape`
+   三个调用方对同一柱重复补发；补发失败的话，等 `sweepInFlight` 自然过期后会重新走一遍宽限。
+3. **让位解除即清等待表**（`gateWaitingSinceMs.clear()`），宽度有界、无泄漏；等待表每拍按本拍实际
+   扣留集合 `retainAll` 裁剪。
+
+这与 `ChunkAuthorityClient` 既有的 10s 断流看门狗同一个设计哲学：**等一个可能永远不来的声明，
+不能把兜底也一起关掉**。
+
+**门禁补上（口径与证据都在 `scripts/smoke/analyzer.py`）**
+
+新增 `_hole_check`：包围盒洪水填充求**封闭空洞**，再算 4-连通分块大小。分级：
+
+- `TRACE_ENCLOSED_HOLE`（**P0**，仅 classic）：最大分块 **≥ 4 格**——成片的实心虚空（≥2x2）。
+- `TRACE_ENCLOSED_HOLE_SMALL`（P1，仅 classic）：1–3 格，多为采样/边界效应。
+- **仅 classic**：其它场景的盘回填不走同一交付契约（`dimension` / `modcompat` / `seedgen` / `ovdgen`
+  的稀疏采样本来就会产生成片"填不到"区域）。
+
+用**全部 164 个历史 result JSON** 回放校验：新增 P0 命中 **8 个会话 / 11 轮样本**（最大分块恒为 9），
+`1.20.1_fabric_I_move2` 只触发 P1（1 格），其余零影响；非 classic 场景的 10 个 probe 级命中样本
+（最大分块 4/5/13/15/22/23/35/303）按场景排除。**无非 classic 误报**。
+
+**验证（`1.21.1_fabric_I_p5fix1`，`P5_TAKEOVER = true`）**
+
+驱动确实在跑（避免重演 §9.8 的"配错开关"）：`[SHADOW_TICKET] bound instance` ＋
+`[SHADOW_TICKET] reconcile dim=… center=(-3, 0) band=10..16 +64 -0 live=64 desired=636`。
+
+| | R1 | R2（旧口径对照） |
+|---|---|---|
+| `clientCache.actualPresent` | **1529**（完整盘：`isChunkInRange(20)` 全量） | **453**（完整盘） |
+| 封闭空洞 | **0** | **0** |
+| `boot grid primed` | `around (0,0) radius=20 cells=1529 redeliver=0` | `around (-3,0) radius=10 cells=0 redeliver=453` |
+| 修复前的同一颗种子（`band1`/`band2`/`ot1`） | 1520 ＝ 缺 9 | 444 ＝ 缺 9 |
+
+`=== RESULT: PASS ===`（exit 0，analyzer exit 0，failures 0 / warnings 0——连原先的
+`SPATIAL_SNAPSHOT_INCOMPLETE`（那四只角）也一起消失，是独立旁证）。补发确实生效：
+`[SHADOW_TRACK] authority gate starved N chunks beyond 3000ms -> pull anyway`，R1 里从 128/批递减到 7/批。
+
+**回归（`1.21.1_fabric_I_p5off2`，`P5_TAKEOVER = false` 生产态）**：`=== RESULT: PASS ===`，
+failures 0 / warnings 0，R1 1636 / R2 453、封闭空洞均 0；`[SHADOW_TICKET]` **0 行**（§9.8 留下的哨兵——
+无条件首绑行不出现即证明驱动真的没跑，也证明常量内联没有把 `false` 陈旧地留在依赖类里），
+`authority gate starved` **0 次**。这一轮 `hash-hit = 37` 而 `authoritative-full pull = 13`——**基准盘铺盘时
+让位门还开着**，影子端自己的 pull 正常发出去了，所以新兜底没被唤醒。
+
+**一个必须记下来的观察（它也解释了两次修复后跑法的机理为何不同）**：`p5fix1` 那轮 `hash-hit = 49` 而
+`authoritative-full pull = 15`，补发日志显示**整盘 1529 柱都走了一次「超宽限补发」**——那一轮让位门在
+基准盘还在发的时候就关了。同一个二进制、同一个场景、同一份存档，两轮的门开合时机不同，于是"谁把地铺满"
+就不同。这既坐实了**落位点空洞本质是竞态**（见上表），也说明**兜底不是罕见安全网**：在门关上的那些轮次里
+它就是初始填充的主力。判定因此更硬——把地铺满的仍然是影子端自绘的 pull，服务端声明在这条路径上没有承担装载。
+`p5fix1` 的 R2 `cells=0` 是 R1 已把缺的 9 柱补齐并落盘的结果，故那一轮没有直接重演「服务端声明 443 柱、
+恰好不含落位点 3x3」那一段（R1 已覆盖同一机理：盘面枚举出"未注入"、让位门扣住、超宽限补发）。
+
+**树状态**：`P5_TAKEOVER = false`（收尾态，见下）。`GATE_STARVE_GRACE_MS` 与 `_hole_check` 常驻——
+前者是生产路径上的静默丢数据兜底（让位门在正常运行时同样会关，只是时机随机），后者是常驻冒烟门禁。
+
+**判定（P5 系列到此收束）**：§9.8 的"数据面打平"是在**影子端自己的 pull 驱动仍然在场、且让位门恰好没拦住**的
+前提下测出来的；把这场空洞补上后，填洞的仍然是影子端自绘的 pull，**而不是**服务端声明。也就是说
+「权威边沿之后，影子端的选柱/拉取是冗余的、可以裁掉」这个 P5 前提**不成立**——声明集合覆盖的是
+"服务端本来会推送的那批"，登录期已推、此后不再声明的柱不在其中。
+
+> **不要把空洞记到接管账上**：`_band1` 是基线等价配置（`[SHADOW_TICKET] = 0`、tracking 未钝化）却同样有洞
+> ——那是**让位门的竞态**，接管不是成因（上一轮"与 P5 接管强相关"的说法已按上表作废）。
+> 接管保持关闭另有其自身理由：§9.8 记录的移动场景 OVD 补票速度不足（`bandmove2` 28% 未命中）、
+> 收尾 `saveAll` 停滞、以及大票突发下的运行期原生终止（`0xCFFFFFFF`）。
+
+故 `P5_TAKEOVER` 保持 **false**，且**没有跑满矩阵**（只有 1.21.1 fabric 的 classic + move）。驱动与插桩代码
+保留但默认关闭；下一轮若要做，前置条件是把"登录期已推柱"纳入服务端声明（或明确让客户端对这批柱保留兜底拉取）。
+
+
+
+
+
+
+
+
