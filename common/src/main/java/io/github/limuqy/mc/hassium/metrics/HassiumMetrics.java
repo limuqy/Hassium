@@ -386,6 +386,14 @@ public interface HassiumMetrics {
     long getLightRecomputeBackgroundTimeNs();
 
     /**
+     * 获取被计入 {@link #getLightRecomputeBackgroundTimeNs()} 的重算任务数。
+     * <p>
+     * 「平均每柱重算耗时」= 后台总耗时 / 本计数。与 {@code lightCacheMissCount}（按柱口径）
+     * 可能不等——同柱可提交多次重算任务，故单列一个任务口径的计数。
+     */
+    long getLightRecomputeCount();
+
+    /**
      * 获取收到 LightDeltaS2CPacket 的条目数
      */
     long getLightDeltaReceivedCount();

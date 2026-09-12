@@ -236,6 +236,9 @@ public final class ScenarioEngine {
         if (!joinAnnounced) {
             joinAnnounced = true;
             LOGGER.info("HassiumSmokeTest: {} player entered world at y={}", label, mc.player.getY());
+            // 会话起点置位点：单轮场景不调 SmokeChunkTrace.reset()，
+            // 起点只能在这里落下，否则 probe 的 sessionToAllMs 恒为 -1。
+            io.github.limuqy.mc.hassium.network.seedgen.SmokeChunkTrace.markSessionStart();
         }
         return Outcome.DONE;
     }

@@ -165,7 +165,9 @@ Hassium 跨版本（1.20.1–1.21.11）× 多加载器（fabric / neoforge）的
   "joined": true,                   // player/level 非空；未进服轮次为 false
   "dimension": "minecraft:overworld", // 未进服为 null（跨版本取法兼容 1.21.11 identifier()）
   "playerPos": [x, y, z],           // 定点 6 位小数；未进服为 null
-  "stats": { /* NetworkStats metrics 原值快照，字段名同 HassiumMetricsImpl getter */ },
+  "stats": { /* NetworkStats metrics 原值快照，字段名同 HassiumMetricsImpl getter；
+                例外：lightRecomputeMs 由 lightRecomputeBackgroundTimeNs 定点转毫秒，
+                平均每柱重算耗时 = lightRecomputeMs / lightRecomputeCount */ },
   "clientCache": {
     "loadedChunks": 453,            // ClientChunkCache 驻留数
     "trackedCandidateCount": 0,
@@ -187,7 +189,23 @@ Hassium 跨版本（1.20.1–1.21.11）× 多加载器（fabric / neoforge）的
       "end":        { "regionFileCount": 3  }    // world/DIM1/region
     }
   },
-  "chunkTrace": { /* trace 候选与缺口（analyzer TRACE_* 门禁输入） */ }
+  "chunkTrace": {
+    /* trace 候选与缺口（analyzer TRACE_* 门禁输入）+ networkReceivedAtMs/clientAppliedAtMs 逐柱时间戳。
+       另含本地 worldgen 耗时与可见进度（进程内按真实 long 键配对，外部解析 JSON 大整数键会失真）：
+         sessionStartAtMs —— 会话起点（进服确认时刻；切维 / 断连重置时改写为重置时刻）
+         sessionToAllMs  —— 「进服 → 所有区块应用完成」= 最后一柱 applied − 会话起点（-1 = 无样本
+                           或起点未置位；起点由 ScenarioEngine join 步骤判定完成时落位）
+         worldgenStarts  —— 起点登记次数（诊断：0 = 该轮未走 MixinChunkMap 放行钩子，如 C2ME 改写加载链）
+         worldgenPending —— 已登记起点但未物化的柱数（依赖柱/未成为可见 FULL 柱的柱，自然过期）
+         worldgen        —— 本地生成单柱端到端耗时（进入 scheduleChunkLoad 的 EMPTY 步 → FULL 物化；
+                            含依赖柱生成、限速、compare-pull、算光与交付，不是纯 worldgen CPU 时间）
+         reveal          —— 本维度首柱网络可见 → 各柱落地偏移（整体可见进度）
+       worldgen/reveal 均为 {count, p50Ms, p95Ms, maxMs}，最近秩百分位不插值。
+       worldgen 只在影子链路活跃（shadowInjected/shadowReady > 0）的轮次有意义；起点钩子被外部 mod
+       绕过时 count=0，此时应看 worldgenStarts 是否为 0 来区分「未触达」与「采样失败」。
+       不输出「网络可见→落地」链路延迟：NativeChunkMetrics 在同一时刻同时写 received 与 applied，
+       配对恒为 0，会读成假数。 */
+  }
 }
 ```
 

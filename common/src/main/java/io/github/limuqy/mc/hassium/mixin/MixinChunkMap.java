@@ -222,6 +222,8 @@ public class MixinChunkMap {
         }
         if (ShadowChunkMapCompat.isWorldgenAllowed()) {
             // SeedGen worldgen 窗口：依赖柱不登记、不压制
+            io.github.limuqy.mc.hassium.network.seedgen.SmokeChunkTrace
+                    .recordWorldgenStart(hassium$shadowDimension(), pos);
             return false;
         }
         if (io.github.limuqy.mc.hassium.network.seedgen.SeedGenExecutor.getInstance()
@@ -229,6 +231,8 @@ public class MixinChunkMap {
             // 门控通过：虚拟玩家触发原版生成链（真实种子），产出经
             // playerLoadedChunk（1.20.1）/ onChunkReadyToSend（1.21+）桥转
             // 统一 Compare+Pull（生成内容作基线，服务端裁决）
+            io.github.limuqy.mc.hassium.network.seedgen.SmokeChunkTrace
+                    .recordWorldgenStart(hassium$shadowDimension(), pos);
             return false;
         }
         String dimension = hassium$shadowDimension();

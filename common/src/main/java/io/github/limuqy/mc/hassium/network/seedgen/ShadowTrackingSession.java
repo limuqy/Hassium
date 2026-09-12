@@ -993,6 +993,8 @@ public final class ShadowTrackingSession {
                     SeedGenExecutor.persistAsDirty(diskHit));
         }
         if (localWorldgen) {
+            io.github.limuqy.mc.hassium.network.seedgen.SmokeChunkTrace
+                    .recordWorldgenEnd(dimension, pos);
             io.github.limuqy.mc.hassium.metrics.NetworkStats.recordLocallyGeneratedChunk(
                     io.github.limuqy.mc.hassium.metrics.NetworkStats.ESTIMATED_CHUNK_BYTES);
             DebugLogger.info(DebugLogger.LogType.NETWORK,

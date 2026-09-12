@@ -102,8 +102,14 @@ public class HassiumMetricsImpl implements HassiumMetrics {
     /** 影子链路光照复用等价字节数（key：light.reuse.shadow.bytes；口径 = ESTIMATED_LIGHT_BYTES/chunk）。 */
     private final AtomicLong lightReuseShadowBytes = new AtomicLong(0);
     private final AtomicLong lightRecomputeTimeNs = new AtomicLong(0);
-    /** 后台并行光照重算（ParallelLightEngineImpl solve）总耗时；同步路径恒 0。 */
+    /**
+     * 影子端后台光照重算任务总耗时；同步路径恒 0。写入方 = {@code ShadowLightCompute.finishLight}
+     * 对每个 {@code LightMetric.RECOMPUTE} 任务记 {@code now - submittedAtNs}
+     * （含排队与等依赖柱，不是纯算光 CPU 时间）。
+     */
     private final AtomicLong lightRecomputeBackgroundTimeNs = new AtomicLong(0);
+    /** 被计入 {@link #lightRecomputeBackgroundTimeNs} 的重算任务数（任务口径，与按柱口径的 lightCacheMissCount 可能不等）。 */
+    private final AtomicLong lightRecomputeCount = new AtomicLong(0);
     private final AtomicLong lightDeltaReceivedCount = new AtomicLong(0);
     private final AtomicLong lightVerifyMismatchCount = new AtomicLong(0);
     /** 服务端出站 chunk 包光照数据线格式字节实测（MixinLightDataWrite 累计；剥光时接近 0）。 */
@@ -438,6 +444,11 @@ public class HassiumMetricsImpl implements HassiumMetrics {
     }
 
     @Override
+    public long getLightRecomputeCount() {
+        return lightRecomputeCount.get();
+    }
+
+    @Override
     public long getLightDeltaReceivedCount() {
         return lightDeltaReceivedCount.get();
     }
@@ -572,6 +583,7 @@ public class HassiumMetricsImpl implements HassiumMetrics {
         lightReuseShadowBytes.set(0);
         lightRecomputeTimeNs.set(0);
         lightRecomputeBackgroundTimeNs.set(0);
+        lightRecomputeCount.set(0);
         lightDeltaReceivedCount.set(0);
         lightVerifyMismatchCount.set(0);
         lightDataBytesWritten.set(0);
@@ -866,11 +878,13 @@ public class HassiumMetricsImpl implements HassiumMetrics {
     }
 
     /**
-     * 记录后台并行光照重算耗时（主线程外执行；同步路径不调用）
+     * 记录后台并行光照重算耗时（主线程外执行；同步路径不调用）。
+     * 只在真正累加时同步计数，保证 average = 总耗时 / count 自洽。
      */
     public void recordLightRecomputeBackgroundTime(long timeNs) {
         if (timeNs > 0) {
             lightRecomputeBackgroundTimeNs.addAndGet(timeNs);
+            lightRecomputeCount.incrementAndGet();
         }
     }
 

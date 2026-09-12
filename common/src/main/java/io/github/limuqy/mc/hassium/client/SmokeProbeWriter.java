@@ -128,6 +128,9 @@ public final class SmokeProbeWriter {
         field(sb, "lightReuseShadowCount", m.getLightReuseShadowCount());
         field(sb, "lightReuseShadowBytes", m.getLightReuseShadowBytes());
         field(sb, "lightCacheMissCount", m.getLightCacheMissCount());
+        // 光照重算耗时（ns 累计 → 毫秒定点）：平均每柱 = lightRecomputeMs / lightRecomputeCount
+        fieldMs(sb, "lightRecomputeMs", m.getLightRecomputeBackgroundTimeNs());
+        field(sb, "lightRecomputeCount", m.getLightRecomputeCount());
         lastField(sb, "noModReceiveBytes", m.getNoModReceiveBytes());
         sb.append("  },\n");
     }
@@ -275,8 +278,28 @@ public final class SmokeProbeWriter {
         appendTraceStage(sb, "readyNotApplied", trace.readyNotApplied(), true);
         appendTraceStage(sb, "appliedNotMeshed", trace.appliedNotMeshed(), true);
         appendTraceTimes(sb, "networkReceivedAtMs", trace.networkReceivedAtMs(), true);
-        appendTraceTimes(sb, "clientAppliedAtMs", trace.clientAppliedAtMs(), false);
+        appendTraceTimes(sb, "clientAppliedAtMs", trace.clientAppliedAtMs(), true);
+        field(sb, "sessionStartAtMs", trace.sessionStartAtMs());
+        field(sb, "sessionToAllMs", trace.sessionToAllMs());
+        field(sb, "worldgenStarts", trace.worldgenStarts());
+        field(sb, "worldgenPending", trace.worldgenPending());
+        appendLatency(sb, "worldgen", trace.worldgenLatency(), true);
+        appendLatency(sb, "reveal", trace.revealLatency(), false);
         sb.append("  },\n");
+    }
+
+    /**
+     * 延迟分布字段：{@code {"count": n, "p50Ms": .., "p95Ms": .., "maxMs": ..}}，
+     * 全部在进程内按真实 long 键配对算出（外部解析 JSON 的大整数键会失真）。
+     */
+    private static void appendLatency(StringBuilder sb, String name,
+                                      io.github.limuqy.mc.hassium.network.seedgen.SmokeChunkTrace.Latency latency,
+                                      boolean trailingComma) {
+        sb.append("    \"").append(name).append("\": {\"count\": ").append(latency.count())
+                .append(", \"p50Ms\": ").append(latency.p50Ms())
+                .append(", \"p95Ms\": ").append(latency.p95Ms())
+                .append(", \"maxMs\": ").append(latency.maxMs()).append('}')
+                .append(trailingComma ? ",\n" : "\n");
     }
 
     /**
@@ -371,6 +394,13 @@ public final class SmokeProbeWriter {
     /** 对象末位数值字段（无尾逗号）。 */
     private static void lastField(StringBuilder sb, String name, long value) {
         sb.append("    \"").append(name).append("\": ").append(value).append('\n');
+    }
+
+    /** 纳秒累计量按毫秒定点输出（6 位），避免科学计数法进 JSON。 */
+    private static void fieldMs(StringBuilder sb, String name, long timeNs) {
+        sb.append("    \"").append(name).append("\": ")
+                .append(String.format(java.util.Locale.ROOT, "%.6f", timeNs / 1_000_000.0))
+                .append(",\n");
     }
 
     /** 坐标用定点小数（6 位），避免科学计数法进 JSON。 */
