@@ -81,6 +81,29 @@ public final class ShadowTicketDriver {
     /** 已出票集合（仅影子主循环线程读写）。 */
     private static final Set<Long> ticketed = new HashSet<>();
 
+    /**
+     * 声明驱动的本地生成候选（③，2026-09-13）：{@code ChunkAuthorityClient.resolve} 无基线 + SeedGen
+     * 门控开时注册（Render 线程写），影子主循环消费投递 {@code generateChunkAsync} 显式触发 vanilla
+     * worldgen —— 接管态（tracking 钝化）下这是权威窗内本地生成的唯一触发源（FORCED 票在影子端
+     * 不被 ChunkMap tick 消化，见 2026-09-13 实证）。生产态（tracking 未钝化）下与 tracking 并存无害
+     * （ChunkMap 对同一柱只生成一次，onChunkMaterialized 幂等）。
+     */
+    private static final java.util.Set<Long> pendingLocalGen =
+            java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    /** 本地生成中（已投递 generateChunkAsync，防重复投递；物化/失败后移除）。 */
+    private static final java.util.Set<Long> localGenInFlight =
+            java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    /** 本地生成失败（超时/异常）：该柱本次会话回退网络 FULL（resolve 直出 AUTHORITATIVE_PULL）。 */
+    private static final java.util.Set<Long> localGenFailed =
+            java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    /** 每拍投递上限（小池 + 影子主循环单线程消化物化，过大会把主循环占满）。 */
+    private static final int MAX_LOCAL_GEN_PER_PUMP = 24;
+    /** 生成中在途上限（超出暂停投递，等物化/失败腾位）。 */
+    private static final int MAX_LOCAL_GEN_INFLIGHT = 64;
+
     /** 待清账（会话边界；影子主循环执行撤票）。 */
     private static final AtomicBoolean pendingClear = new AtomicBoolean();
 
@@ -100,6 +123,77 @@ public final class ShadowTicketDriver {
     /** 试验是否在「钝化 tracking 选柱」模式（供会话侧决定给 ChunkMap 下发多大视距）。 */
     public static boolean trackingSelectionNeutralized() {
         return ENABLED && NEUTRALIZE_TRACKING;
+    }
+
+    /**
+     * 声明驱动本地生成候选（③）：{@code resolve} 无基线 + SeedGen 门控开时注册。
+     * 任意线程可调；去重由 {@code pendingLocalGen} / {@code localGenInFlight} 短路。
+     */
+    public static void registerLocalGeneration(String dimension, ChunkPos pos) {
+        if (dimension == null || pos == null) {
+            return;
+        }
+        long key = DimensionKey.key(dimension, pos.x, pos.z);
+        if (localGenFailed.contains(key)) {
+            return; // 已判本地生成失败：回退网络，不重复注册
+        }
+        pendingLocalGen.add(key);
+    }
+
+    /** 本地生成失败标记查询（{@code resolve} 回退网络 FULL 用）。 */
+    public static boolean isLocalGenFailed(String dimension, ChunkPos pos) {
+        return dimension != null && pos != null
+                && localGenFailed.contains(DimensionKey.key(dimension, pos.x, pos.z));
+    }
+
+    /**
+     * 影子主循环消费本地生成候选：投递 {@link ShadowSeedServer#generateChunkAsync} 显式触发
+     * vanilla worldgen（worker 线程执行，主循环回调 {@code onChunkMaterialized} 物化桥 —— 绕过
+     * 1.20.1 {@code playerLoadedChunk} 的 tracking 依赖）。已注入 / 生成中 / 失败柱短路。
+     */
+    private static void consumeLocalGeneration(ShadowSeedServer shadow) {
+        if (pendingLocalGen.isEmpty()) {
+            return;
+        }
+        int ops = 0;
+        for (Long key : pendingLocalGen) {
+            if (ops >= MAX_LOCAL_GEN_PER_PUMP || localGenInFlight.size() >= MAX_LOCAL_GEN_INFLIGHT) {
+                break;
+            }
+            String dimension = DimensionKey.dimensionOf(key);
+            ServerLevel level = dimension == null ? null : shadow.level(dimension);
+            if (level == null) {
+                pendingLocalGen.remove(key);
+                continue;
+            }
+            ChunkPos pos = new ChunkPos(DimensionKey.chunkXOf(key), DimensionKey.chunkZOf(key));
+            if (shadow.injectedChunk(dimension, pos.x, pos.z) != null) {
+                pendingLocalGen.remove(key); // 其它路径已注入：无需生成
+                continue;
+            }
+            if (!pendingLocalGen.remove(key)) {
+                continue;
+            }
+            localGenInFlight.add(key);
+            ops++;
+            final String dim = dimension;
+            shadow.generateChunkAsync(dimension, pos, (d, chunk) -> {
+                localGenInFlight.remove(key);
+                if (chunk == null) {
+                    localGenFailed.add(key); // 生成失败/超时：本次会话回退网络
+                    DebugLogger.warn(DebugLogger.LogType.NETWORK,
+                            "[SHADOW_TICKET] local gen failed ({}, {}) (dimension={})", pos.x, pos.z, dim);
+                    return;
+                }
+                io.github.limuqy.mc.hassium.network.seedgen.ShadowTrackingSession.getInstance()
+                        .onChunkMaterialized(dim, pos, chunk);
+            });
+        }
+        if (ops > 0) {
+            DebugLogger.info(DebugLogger.LogType.NETWORK,
+                    "[SHADOW_TICKET] local-gen dispatched {} (pending={} inFlight={})",
+                    ops, pendingLocalGen.size(), localGenInFlight.size());
+        }
     }
 
     /** 已出票柱数（诊断）。 */
@@ -151,9 +245,11 @@ public final class ShadowTicketDriver {
             return;
         }
         if (pendingClear.compareAndSet(true, false)) {
+            pendingLocalGen.clear();
             removeAll(shadow);
             return; // 清账这一拍不再对账，避免同拍又铺回来
         }
+        consumeLocalGeneration(shadow);
         if (dimension.equals(lastDimension) && centerX == lastCenterX
                 && centerZ == lastCenterZ && authorityRange == lastAuthorityRange
                 && clientRadius == lastClientRadius) {
@@ -303,6 +399,8 @@ public final class ShadowTicketDriver {
             }
         }
         ticketed.clear();
+        localGenInFlight.clear();
+        localGenFailed.clear();
         lastDimension = null;
         DebugLogger.info(DebugLogger.LogType.NETWORK,
                 "[SHADOW_TICKET] cleared {} selection tickets at session boundary", removed);

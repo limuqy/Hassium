@@ -5,6 +5,7 @@ import io.github.limuqy.mc.hassium.compat.LevelCompat;
 import io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute;
 import io.github.limuqy.mc.hassium.network.seedgen.ShadowSeedServer;
 import io.github.limuqy.mc.hassium.network.seedgen.ShadowServerRegistry;
+import io.github.limuqy.mc.hassium.network.seedgen.SeedGenExecutor;
 import io.github.limuqy.mc.hassium.storage.ShadowStorageHashes;
 import java.util.ArrayList;
 import java.util.List;
@@ -21,8 +22,9 @@ import net.minecraft.world.level.ChunkPos;
  *       （见 {@link ShadowLightCompute#markAuthorityHashConfirmed}）。</li>
  *   <li>本地已有基线但 hash 未知/不等 → {@code requestFull}（带基线比较），
  *       服务端裁决 UNCHANGED / DELTA / FULL。</li>
- *   <li>本地无基线 → {@code requestAuthoritativeFull}（空基线，服务端必答 FULL）；
- *       SeedGen 门控开时由既有本地生成路径接管。</li>
+ *   <li>本地无基线 → 空基线请求：SeedGen 门控开时由**声明驱动的本地生成**接管
+ *       （resolve → `LOCAL_GENERATE` → FORCED 票触发 vanilla worldgen，见
+ *       {@code ShadowTicketDriver.registerLocalGeneration}）；门控关 → `requestAuthoritativeFull`。</li>
  * </ol>
  * 客户端已经持有（{@code hasClientApplyEpoch}）且 hash 相同的柱不做任何动作：
  * 同一次交付不得既计「新增」又计「命中」（R1 假命中红线）。
@@ -150,6 +152,8 @@ public final class ChunkAuthorityClient {
                 switch (resolve(packet.dimension(), pos, entry.hash())) {
                     case COMPARE_PULL -> comparePulls.add(pos);
                     case AUTHORITATIVE_PULL -> authoritativePulls.add(pos);
+                    case LOCAL_GENERATE -> io.github.limuqy.mc.hassium.network.seedgen
+                            .ShadowTicketDriver.registerLocalGeneration(packet.dimension(), pos);
                     case NONE -> { }
                 }
             } catch (Throwable t) {
@@ -165,11 +169,12 @@ public final class ChunkAuthorityClient {
         }
     }
 
-    /** {@link #resolve} 的裁决结果：该柱产出哪一路 C2S pull（无动作 / 带基线比较 / 空基线权威 FULL）。 */
+    /** {@link #resolve} 的裁决结果：该柱产出哪一路 C2S pull（无动作 / 带基线比较 / 空基线权威 FULL / 声明驱动本地生成）。 */
     private enum Pull {
         NONE,
         COMPARE_PULL,
-        AUTHORITATIVE_PULL
+        AUTHORITATIVE_PULL,
+        LOCAL_GENERATE
     }
 
     private static Pull resolve(String dimension, ChunkPos pos, long authoritativeHash) {
@@ -178,7 +183,14 @@ public final class ChunkAuthorityClient {
         Long localHash = ShadowStorageHashes.get(dimension, pos);
         boolean hasBaseline = injected || localHash != null;
         if (!hasBaseline) {
-            // 全新柱：空基线请求（SeedGen 门控开时既有路径会在选柱时接管本地生成）
+            // 全新柱：SeedGen 门控开时声明驱动本地生成（③：不拉网络，generateChunkAsync 显式
+            // vanilla worldgen → onChunkMaterialized 计 locallyGenerated → compare-before-light 交付）；
+            // 门控关（或本地生成已判失败）时空基线请求 FULL。
+            if (!io.github.limuqy.mc.hassium.network.seedgen.ShadowTicketDriver
+                    .isLocalGenFailed(dimension, pos)
+                    && SeedGenExecutor.getInstance().isGenerationGateOpen()) {
+                return Pull.LOCAL_GENERATE;
+            }
             return Pull.AUTHORITATIVE_PULL;
         }
         boolean clientHolds = ShadowLightCompute.hasClientApplyEpoch(dimension, pos);

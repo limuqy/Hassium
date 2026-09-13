@@ -266,6 +266,36 @@ public class ShadowSeedServer extends MinecraftServer {
         return chunk instanceof LevelChunk levelChunk ? levelChunk : null;
     }
 
+    /**
+     * ③ 声明驱动本地生成的投递线程池（小池：worldgen 本身在 ChunkMap 生成链的
+     * {@code ShadowWorldgenExecutor} worker 上跑，这里只是等 future + 回主循环）。
+     */
+    private final java.util.concurrent.ExecutorService localGenExecutor =
+            java.util.concurrent.Executors.newFixedThreadPool(4, r -> {
+                Thread t = new Thread(r, "hassium-local-gen");
+                t.setDaemon(true);
+                return t;
+            });
+
+    /**
+     * 声明驱动本地生成（③，2026-09-13）：worker 线程执行 {@link #generateChunk}（同步等 vanilla
+     * 生成链 future，由影子主循环 pollTask 驱动完成），完成后投递主循环执行物化桥回调 —— 绕过
+     * 1.20.1 {@code playerLoadedChunk} 的虚拟玩家 tracking 依赖（接管态 tracking 钝化视距 1；
+     * FORCED 票在影子端不被 ChunkMap tick 消化成生成任务，本地生成只能显式触发）。
+     * 生成失败（null / 超时）以 null 回调，调用方回退网络 FULL。
+     */
+    public void generateChunkAsync(String dimension, ChunkPos pos,
+            java.util.function.BiConsumer<String, LevelChunk> onDone) {
+        localGenExecutor.execute(() -> {
+            LevelChunk chunk = generateChunk(dimension, pos);
+            try {
+                this.execute(() -> onDone.accept(dimension, chunk));
+            } catch (java.util.concurrent.RejectedExecutionException e) {
+                // 主循环已停（断连竞态）：回调丢弃，数据由下次会话 hash 比对兜底
+            }
+        });
+    }
+
     /** 单块按 FULL 状态生成；失败返回 null，由调用方回退全量请求。 */
     private ChunkAccess generateChunkInternal(ServerChunkCache cache, ChunkPos pos, boolean biomesOnly, long deadline) {
         ShadowChunkMapCompat.enterWorldgen();
