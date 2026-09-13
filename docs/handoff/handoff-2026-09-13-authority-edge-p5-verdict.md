@@ -12,8 +12,10 @@
 **权威边沿在「内容裁决」层可用并默认开启；「选柱 / 装载」层的影子端自绘 pull 尚未在全部加载器上退场
 （1.20.1/fabric 5 次、1.21.1/forge 4 次、1.21.1/neoforge 3 次饥饿）——替换条件未达成，见 §9.7。**
 另：第三轮会话发现并修复了一个**既有 loader 级缺陷 F12**（neoforge 上整柱抑制与权威边沿全程未生效，根因 = NeoForge 把整柱包封进 `ClientboundBundlePacket`）。
-`P5_TAKEOVER = false`（收尾态不变——第四轮补齐矩阵证据后**确认接管臂不能开**：classic 在三个 loader 上全绿，
-但 `dimension` 与 `seedgen` 两个场景在接管态不成立；见 §五 F5）。
+`P5_TAKEOVER = false`（收尾态——**第五轮重测后判定改为：接管臂在 classic + dimension 成立**：
+F17 桥维度修复 + F18 桥未命中短路落地后，接管态 dimension 矩阵 4/4 PASS（1.20.1/fabric、1.21.1/fabric、
+1.21.1/forge、1.21.1/neoforge）、空洞 0/0；接管态 classic 回归 PASS。**唯一场景挡路项 = `seedgen`
+（FORCED 票绕过本地生成触发路径 → `locallyGenerated=0`），语义冲突需决策，不是 bug**；见 §五 F5）。
 第一轮会话新增：**封闭空洞冒烟门禁**与**让位门静默丢数据的兜底**；
 第二轮会话关闭 **F10**（dimension 纳入 P0 空洞门禁 + 超时默认值）；
 第三轮会话关闭 **F1 / F2**（落位点 3x3 空洞根因 + 让位门契约）、**F12**（neoforge bundle 未解包）、
@@ -23,6 +25,9 @@
 **F7**（未复现，降为观察项），**并抓到本轮自己引入的 P0 —— F16**（F11 聚合把 C2S 载荷顶过 32 KiB，
 1.20.1 客户端被踢；已修复 + 复测）；
 `1.21.1_fabric_I_f11move` 是**首个 PASS 的移动会话**。
+第五轮关闭 **F17**（桥按实例维度查表，`fe25ff6`）与**新抓到的 P0 —— F18**（桥 FULL 未命中落回原版
+`join()` → 影子主循环自死锁，1.20.1 切维实证；`85001a5` 补未命中短路），并**推翻 F5 的 dimension 判定**；
+见 §五 F5 / F17 / F18。
 
 ---
 
@@ -293,6 +298,22 @@ F4 的矩阵（含 scenario 锚点 `1.20.1/fabric`、`1.20.1/forge`、`1.21.1/ne
   3. ⇒ 「驱动覆盖 OVD 环带」的成立范围是 **classic**；**跨维 / SeedGen 两个场景不成立**。
      与 §9.7「先裁选柱推断、保留 `bootGrid`/`sweepVisibleShape` 两条 pull 驱动」的方向一致：
      **接管臂要开，先得让这两个场景成立。**
+- **✅ 第五轮（2026-09-13）重测：dimension 一项已翻案，只剩 seedgen**。F17（桥按实例维度查表）+ F18
+  （桥 FULL 未命中短路，见下）落地后重跑接管态 dimension 矩阵，**4/4 全 PASS、空洞 0/0**：
+
+  | 会话 | 版本 / 加载器 | 判决 | R1 / R2 封闭空洞 |
+  |---|---|---|---|
+  | `1.21.1_fabric_I_p5_dim_f17fix1` | 1.21.1 / fabric | **PASS**（对照 `p5_dim_f5d`） | 0 / 0（1529 / 1572） |
+  | `1.20.1_fabric_I_p5_dim_f17fix2b` | 1.20.1 / fabric | **PASS**（`f17fix2` 先 FAIL：F18 死锁，修复后过） | 0 / 0（1542 / 1572） |
+  | `1.21.1_forge_I_p5_dim_f18` | 1.21.1 / forge | **PASS** | 0 / 0（1529 / 1572） |
+  | `1.21.1_neoforge_I_p5_dim_f18` | 1.21.1 / neoforge | **PASS** | **3**（R1 单块 P1）/ 0 |
+
+  接管态 classic 回归 `1.20.1_fabric_I_p5_cls_f18` **PASS**（0/0）；生产态（接管关）回归
+  `1.20.1_fabric_I_prod_dim_f18` **PASS**（0/0，此前 1.20.1 dimension 生产态是未爆的死锁雷）。
+  哨兵 `[SHADOW_TICKET] bound instance` 每场 = 1（接管确实在跑）。
+  ⇒ **dimension 的失败不是接管臂的固有缺陷，而是 F17 死锁 + F18 死锁两条 join 路径**；
+  修复后「接管臂在 classic + dimension 成立」。**seedgen（`locallyGenerated=0`，FORCED 票绕过本地
+  生成触发路径）是接管臂现在唯一的场景挡路项**，性质为语义冲突需决策，不是 bug。
 - **开关已翻回 `P5_TAKEOVER = false` 并重建**（`git diff` 对该文件为空 ⇒ 与 HEAD 逐字一致）。
 
 ### F6（P2）`ShadowTicketDriver` 去留决策
@@ -869,8 +890,51 @@ $f='build/smoke-test/logs/client_<SessionId>.log'
 - **修复面（未实施，待批）**：两座桥改为**按本 `ServerChunkCache` 实例的维度**查表
   （`ShadowSeedServer` 装配维度时建 `IdentityHashMap<ServerChunkCache, String>`，`instance → dimension`），
   使 nether/end 注入柱命中桥；并补「桥未命中」诊断以确认 classic 那 2.8% 是否还有第二条 miss 路径。
+- **✅ 已结案（2026-09-13 第五轮）**：
+  - **桥按实例维度查表已落地**：`ShadowSeedServer.dimensionOfCache(ServerChunkCache)`（懒解析 + `cacheDimensions`
+    `IdentityHashMap` 缓存，三维度装配后不变，O(1)）；两座桥（`hassium$shadowGetChunk` / `hassium$shadowChunkForLighting`）
+    均改为按实例维度查 `injectedChunk(dimension, x, z)`。提交 `fe25ff6`。
+  - **复测 6 场**（1.21.1/fabric，F17 修复后）：`f17fix_cls1/2/3` 全 PASS（空洞 0/0）、`f17fix_dim1/2/3`
+    全 PASS（dimension 空洞 0/0/0；`dim1` 唯一 FAIL 是 **ModMenu 更新检查网络错误的假阳性**，与区块链路无关）——
+    **0 次原生终止、0 次 hang dump**（此前 dimension 20% 命中）。
+  - **第二条 miss 路径 = F18（已定性并修复，见下）**：桥未命中时落回原版 `join()` 是 F17 的残留洞，
+    1.20.1 dimension 切维实证（`p5_dim_f5d` 的死亡可能正是它而非 F17 本身）；`85001a5` 已补未命中短路。
 - **harness 升级（已落地，与修复解耦）**：`ClientNativeExitCode`（从 gradle 的 `NTSTATUS 0x…` 行提取；此前 gradlew 恒报 1，
   这类失败与普通构建失败在结果里不可区分）+ `HangDumps`（静默期现场文件清单）写入 `result_<id>.json`。
+
+---
+
+### F18（P0，第五轮新增）**桥 FULL 未命中落回原版 `getChunk` 的 `join()` → 影子主循环自死锁**（F17 残留洞，1.20.1 触发）
+
+- **现象**：接管态重测矩阵里 `1.20.1_fabric_I_p5_dim_f17fix2` FAIL —— F17 修复后 1.20.1 上仍死锁；
+  hang-watch 抓到三帧现场（`hang1/2/3.txt`）。
+- **现场**：`hassium-seedgen-main`（= 影子主循环，持 per-chunk `ReentrantLock`）卡在
+  `applyBlockUpdate → setBlockState → LevelChunk.setBlockState(271) → LiquidBlock.onPlace → shouldSpreadLiquid(138)
+  → Level.getFluidState(379) → getChunkAt(193) → Level.getChunk(198/204) → ServerChunkCache.getChunk(140)
+  → managedBlock(141) → waitForTasks → parkNanos`；`Render thread` 同时 park 在 `injectChunk → withChunkLock`
+  **等同一把 chunk 锁**。死锁发生在切 nether 后 ~3s（20:04:01 切维 → 大量 `baseline=false` pull → 20:04:04 挂）。
+- **机理**（1.20.1 专属触发路径）：
+  1. 1.20.1 `LevelChunk.setBlockState(pos, state, boolean)` **无 flags**，`onPlace` 必然触发
+     （1.21.1+ 的 `setBlockState(pos, state, 0)` flags=0 关 `onPlace`，无此路径）；
+  2. `LiquidBlock.onPlace → shouldSpreadLiquid` 读**邻柱**流体（`pos.west()` 等）→ 邻柱**未注入**
+     （切维瞬间 nether 柱大面积未注入 / sweep missing 的柱）→ `Level.getChunk` 落回原版；
+  3. 桥 `hassium$shadowGetChunk` **未命中时落回原版**（注释声称「未命中且非 worldgen 时对 FULL 取数返回 null」，
+     代码却没有该分支）→ 原版 `getChunkFuture join()`；
+  4. future 完成链依赖影子主循环 pollTask，而主循环正持锁卡在 `managedBlock` 里等这个 future →
+     **自死锁**（与 F17 同族：无 Java 痕迹，Windows 判挂起关闭进程）。
+- **修复（`85001a5`）**：桥补上注释设计的未命中短路 ——
+  `if (status == ChunkStatus.FULL && !SeedGenExecutor.getInstance().isGenerationGateOpen()) cir.setReturnValue(null);`
+  调用方按原版 `@Nullable`（`nonnull=false`，如 `ShadowChunkMapCompat.loadedFullChunk`）或 ISE
+  （`nonnull=true`，上层 `applyBlockUpdate`/`injectChunk` catch Throwable）语义处理，**绝不 join**。
+  SeedGen worldgen 开时不短路（生成链有自己的推进者，不在此路径）。
+- **验证（全矩阵）**：1.20.1/fabric dimension 接管态 `f17fix2b` **PASS**（0/0）；生产态 1.20.1 dimension
+  `prod_dim_f18` **PASS**（0/0，此前是未爆的死锁雷）；1.21.1/forge、1.21.1/neoforge dimension 接管态 PASS；
+  1.20.1/fabric classic 接管态回归 PASS；L0 `common:test` 绿；1.20.1 / 1.21.1 / 1.21.11 三版本编译过。
+- **调用点安全核查**（短路前全查过）：vanilla `onPlace`/decode 上层 catch；`LevelCompat`/`ShadowChunkMapCompat`
+  `nonnull=false`（null 合法，`unwrapLevelChunk(null)` → null）；`ClientChunkHandler` 走客户端 Level 无桥。
+- **剩余**：neoforge 接管态 dimension R1 出现一次 3 格 P1 空洞（`f18`，R2 归零）——观察项，不阻塞。
+- **教训**：F17 修的是「表里有柱但查错维度」；F18 是「表里没柱」（未注入邻柱）。桥的注释意图（未命中短路）
+  比实现超前——注释在，代码没跟上，直到 1.20.1 dimension 把它炸出来。
 
 ---
 
