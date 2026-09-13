@@ -12,13 +12,17 @@
 **权威边沿在「内容裁决」层可用并默认开启；「选柱 / 装载」层的影子端自绘 pull 尚未在全部加载器上退场
 （1.20.1/fabric 5 次、1.21.1/forge 4 次、1.21.1/neoforge 3 次饥饿）——替换条件未达成，见 §9.7。**
 另：第三轮会话发现并修复了一个**既有 loader 级缺陷 F12**（neoforge 上整柱抑制与权威边沿全程未生效，根因 = NeoForge 把整柱包封进 `ClientboundBundlePacket`）。
-`P5_TAKEOVER = false`（收尾态不变——接管臂自身的移动/收尾缺陷仍未解，见 §3.3）。
+`P5_TAKEOVER = false`（收尾态不变——第四轮补齐矩阵证据后**确认接管臂不能开**：classic 在三个 loader 上全绿，
+但 `dimension` 与 `seedgen` 两个场景在接管态不成立；见 §五 F5）。
 第一轮会话新增：**封闭空洞冒烟门禁**与**让位门静默丢数据的兜底**；
 第二轮会话关闭 **F10**（dimension 纳入 P0 空洞门禁 + 超时默认值）；
 第三轮会话关闭 **F1 / F2**（落位点 3x3 空洞根因 + 让位门契约）、**F12**（neoforge bundle 未解包）、
 **F15**（声明被丢 → 快照重推自愈），**并修正了 §3.1/§3.2 的机理归因** —— 见 §九。
 第四轮（收尾）关闭 **F11**（逐柱 pull → 按声明包聚合）、**F14**（移动会话门禁口径）、**F8**（定性结案）、
-**F9**（§9 章首加速览）；`1.21.1_fabric_I_f11move` 是**首个 PASS 的移动会话**。
+**F9**（§9 章首加速览）、**F4 余项**（`seedgen` 干净 / `modcompat` 暂不纳入）、**F5**（接管矩阵：仍不能开）、
+**F7**（未复现，降为观察项），**并抓到本轮自己引入的 P0 —— F16**（F11 聚合把 C2S 载荷顶过 32 KiB，
+1.20.1 客户端被踢；已修复 + 复测）；
+`1.21.1_fabric_I_f11move` 是**首个 PASS 的移动会话**。
 
 ---
 
@@ -263,6 +267,32 @@ F4 的矩阵（含 scenario 锚点 `1.20.1/fabric`、`1.20.1/forge`、`1.21.1/ne
   `ChunkMap.onChunkReadyToSend` 不同码路）、forge、neoforge、dimension / seedgen 场景、移动场景多轮。
 - **为什么**：现在"接管可用"的证据只有 1.21.1 fabric 两个场景。**没有矩阵证据就不能开**。
 - **起点**：同 F4，加 `-P5_TAKEOVER=true` 临时翻开关（**改源码前先冻结，见 §六.5**）。
+- **第四轮已跑（6 场，`P5_TAKEOVER=true`；哨兵 `[SHADOW_TICKET] bound instance` 每场都 **= 1**
+  ⇒ 驱动确实在跑，不是陈旧常量内联）**：
+
+  | 会话 | 场景 | 判决 | R1 / R2 封闭空洞 |
+  |---|---|---|---|
+  | `1.20.1_fabric_I_p5_f5a` | classic | **PASS**（收尾 `save completed seq 3→4`） | 0 / 0（1561 / 453） |
+  | `1.21.1_forge_I_p5_f5b` | classic | **PASS** | 0 / 0（1529 / 453） |
+  | `1.21.11_neoforge_I_p5_f5c` | classic | **PASS** | 0 / 0（1573 / 454） |
+  | `1.21.1_fabric_I_p5_move_f7` | classic `-MoveSeconds 12` | **PASS** | 0 / 0（1614 / 96） |
+  | `1.21.1_fabric_I_p5_dim_f5d` | dimension | **FAIL** | R1 **0**；R2 probe 缺失 |
+  | `1.20.1_fabric_I_p5_seedgen_f5e` | seedgen | **FAIL** | R1 **0** |
+
+- **结论 —— F5 的答案仍是「接管臂不能开」，但现在有矩阵读数了**：
+  1. **classic 在三个 loader 上全绿且 0 空洞**，这是此前缺的主证据；尤其 **1.20.1 的
+     `playerLoadedChunk` 物化分支**（与 1.21.1+ 的 `ChunkMap.onChunkReadyToSend` 不是同一条码路）成立，
+     移动场景也绿 ⇒ 「环带驱动覆盖经典装载」在**数据面**上成立；
+  2. **但两个场景在接管态不成立，且各有明确读数**：
+     - `seedgen`：`counters.locallyGenerated = 0`（场景断言 `gt 0` 失败）——接管的 `FORCED` 票
+       让这些柱改由影子端装载/生成，**SeedGen 的本地生成触发路径被整个绕过**；
+     - `dimension`：nether 段 `[SHADOW_TRACK] sweep missing=26 localGen=false center=(-1,0) radius=20`
+       持续复现（26 柱始终补不上）；期间 `authority gate starved 12 chunks beyond 10000ms -> pull anyway`
+       ——**让位门兜底按契约生效**（F2 的 10 s 宽限 + 回退自绘 pull），但**柱子仍然补不上**。
+  3. ⇒ 「驱动覆盖 OVD 环带」的成立范围是 **classic**；**跨维 / SeedGen 两个场景不成立**。
+     与 §9.7「先裁选柱推断、保留 `bootGrid`/`sweepVisibleShape` 两条 pull 驱动」的方向一致：
+     **接管臂要开，先得让这两个场景成立。**
+- **开关已翻回 `P5_TAKEOVER = false` 并重建**（`git diff` 对该文件为空 ⇒ 与 HEAD 逐字一致）。
 
 ### F6（P2）`ShadowTicketDriver` 去留决策
 
@@ -271,14 +301,19 @@ F4 的矩阵（含 scenario 锚点 `1.20.1/fabric`、`1.20.1/forge`、`1.21.1/ne
 - **建议删除**：重测的前置是 F1（服务端先补声明），到那时这套环带几何很可能要重设计，留着未必能复用；
   git 留得下历史。若决定保留，至少把两处调用点注释成"实验臂，默认关闭"。
 
-### F7（P2，非阻塞）P5-5 收尾 `saveAll` 停滞归因
+### F7（P2，非阻塞）P5-5 收尾 `saveAll` 停滞归因 → **未复现（第四轮），降为观察项**
 
 - **现象**：接管开启时 R2 收尾 `saveAll` 停在 seq 1 → 等待超时 → harness 强退 → `0xC0000409`
   （`bandmove2` / `otmove4`）；接管关闭时均正常（含本次 `_p5fix1`）。
 - **未定**：候选是「`FORCED` 票让柱常驻、改变了 `saveAll` 的等待条件」与「harness 强退本身」两种，**未做分离实验**。
-- **起点**：`build/smoke-test/logs/client_*.log` 的 `save wait timed out (seq still N)` +
-  `runtime-smoke-test.ps1` 的 save wait 段 + `ShadowSeedServer.saveAll`。
-- 因接管默认关闭，该停滞不进生产路径；**它仍然是"未完成"，不是"已完成"**。
+- **第四轮分离实验（已做）**：`1.21.1_fabric_I_p5_move_f7`（**接管开** + 同款 `-MoveSeconds 12` 场景）——
+  `=== RESULT: PASS ===`、收尾 `shadow save completed (seq 1 -> 2)`，**没有** `save wait timed out`。
+  与接管关的 `f11move`（同样 PASS、收尾同样正常）逐项一致。
+  ⇒ **「接管开启 ⇒ saveAll 停滞」这条相关性在当前代码上不成立**；此前那两场（`bandmove2` / `otmove4`）
+  属于**不可复现的历史观测**，不能当作接管臂的固有缺陷来读。
+- **剩余**：候选机理既未证实也未证伪（可能是那两场的 harness 时序），但它**不再阻塞任何判定**——
+  接管臂已被 F5 挡在门外（场景不成立），与收尾停滞无关。结论记作「**未复现，观察项**」。
+- 因接管默认关闭，该停滞不进生产路径。
 
 ### F8（P3）两个既有的小缺口 → **已定性结案（第三轮会话，靠 probe 复核）**
 
@@ -380,7 +415,16 @@ F4 的矩阵（含 scenario 锚点 `1.20.1/fabric`、`1.20.1/forge`、`1.21.1/ne
 - **现象**：`1.21.1_fabric_I_f1f2_dim` R1 完成（主世界 **1529 柱 / 空洞 0**），R2 切下界时客户端以
   **`0xCFFFFFFF`（NTSTATUS 原生终止）** 猝死 → `round2=False`、`CLIENT_EXIT_NONZERO`、`PROBE_MISSING`、`SMOKE_PASS_MARKER_MISSING`。
 - **既有性**：`1.21.1_fabric_I_dimf3`（09-13，**F1/F2 之前**）**完全相同的失败形态**；`dimf3b` 通过。⇒ 场景本身 flaky。
-- **处置**：R1 读数有效（可作 F1 证据）；要拿满 4 轮需重跑，或在 F4 里给 dimension 定可重试策略。
+- **第四轮复跑（1.21.1/fabric × 3）**：`f13a` **PASS**、`f13b` **FAIL**、`f13c` **PASS** ⇒ flaky 复现率 **1/3**。
+  但 `f13b` 的失败**形态与上面那条不同**（**至少两种失败模式**）：
+  - 客户端**没有**原生猝死（`PROBE JSON: round1=True round2=True`），而是场景内 `assertProbe` 失败：
+    `NETHER_CHUNKS key=clientCache.loadedChunks gt 64 (actual=0)`——切下界后**常驻缓存为 0**，
+    而同一轮的 `clientApplied = 2432`照常计数（`CLIENT_CACHE_EMPTY`：`applied=2432, loaded=0`）；
+  - 附带 R1 的 `TRACE_ENCLOSED_HOLE`（18 格，分块 `[5,4,2,1,1,1,1,1]`，坐标散布在 x∈[-21,-17] 与 x∈[7,16]）
+    ——**分块 5/4 刚好越过 P0 的 4 格门槛**，而同配置的 `f13a` / `f13c` 是 0。
+- **处置（未结）**：R1 读数仍有效（可作证据）；`dimension` 需要**可重试策略**（或在门禁里标注"需 ≥2 次取稳定态"）。
+  **`f13b` 的两种现象（切维后常驻缓存为 0 / R1 边界 P0）都没定性**，不要在没有复现的前提下归因到权威边沿——
+  它们与 `f13a`/`f13c` 的差异可能只是同一 flaky 的不同侧面。
 
 ---
 
@@ -471,6 +515,18 @@ $f='build/smoke-test/logs/client_<SessionId>.log'
       且 `trackedCandidateCount == loadedChunks == observed == 806`（无"已跟踪却缺席"的证据）；
       该场景 `locallyGenerated = 1470`（SeedGen 开）⇒ 与「稀疏本地生成 + 单轮 dump 未 settle」一致，
       但**这只是相符、不是证明**。要纳入门禁须先给它一个 settle 判据（或多轮取稳定态）。
+- [x] **F5 接管矩阵已跑**（第四轮，6 场，`P5_TAKEOVER=true`，哨兵每场 `bound instance=1`）：
+      classic × 1.20.1/fabric + 1.21.1/forge + 1.21.11/neoforge + 移动场景 **全 PASS / 空洞 0/0**；
+      `dimension`（nether 段 `sweep missing=26` 持续补不上）与 `seedgen`（`locallyGenerated=0` 断言失败）**FAIL**。
+      ⇒ **接管臂仍不能开**（两个场景不成立），但缺的矩阵证据已补齐。开关已翻回 `false` 并重建。见 §五 F5。
+- [x] **F7 分离实验已做**（第四轮）：接管**开** + 移动场景 `1.21.1_fabric_I_p5_move_f7` = **PASS**、
+      收尾 `shadow save completed (seq 1 -> 2)`、无 `save wait timed out` ⇒ **「接管 ⇒ saveAll 停滞」不成立**，
+      降为观察项。见 §五 F7。
+- [x] **F13 已复现并加注**（第四轮）：1.21.1/fabric `dimension` × 3 = PASS / **FAIL** / PASS（**1/3**），
+      且新失败形态**与文档里那条不同**（切下界后 `clientCache.loadedChunks = 0` + R1 边界 P0）。
+      **未定性**，结论写「需要可重试策略」。见 §五 F13。
+- [ ] **F15 残项仍未闭**：1.21.11/neoforge 累计 **5 轮 PASS / 空洞 0**，但**丢弃计数 5 场全 0**
+      ⇒ 「丢过 → 自愈」的现场链路**没拿到**。继续盲跑性价比低，留给下一轮（定向制造窗口或换场景）。见 §五 F15。
 - [x] **F1 / F2 已落地**（2026-09-13 第三轮；F2 契约方向由用户拍板选 A），但**验收仅部分达成**：
       空洞项全绿；`starved` 仅 1.21.1/fabric 为 0，1.20.1/fabric = 5、1.21.1/forge = 4、neoforge(修复后) = 3。
       判据与量化见 §9.7。
@@ -496,10 +552,16 @@ $f='build/smoke-test/logs/client_<SessionId>.log'
 > 再后一轮收尾：**F11**（逐柱 pull → 按声明包聚合，1500→157 包）、**F14**（移动会话门禁口径 + 端到端 PASS）、
 > **F8**（结案：一项是 F14 同族 P1、一项是 F1 已修缺口的误记）、**F9**（§9 章首加速览，未整章重写）。
 >
-> 剩余未闭：**F4 余项**（`modcompat` / `seedgen` 场景未在当前代码复跑）、**F5**（接管态矩阵证据）、
-> F7（`saveAll` 停滞归因，接管开启时才有）、**F13**（`dimension` 场景 flaky，非本轮回归）、
-> **F15 残项**（修复已两轮复测空洞 0/0，但「丢弃 → 自愈」这条链的**现场观测证据**仍待补：需跑到
-> `DROPPED_NOT_READY > 0`）、**F4 收敛口径下 `modcompat`/`seedgen` 是否纳入待定**。
+> 第四轮（2026-09-13 收尾）：**F11**、**F14**、**F8**、**F9**、**F4 余项**、**F5**（接管矩阵）、**F7**（降级为观察项），
+> 并抓到本轮自引入的 P0 **F16**（F11 聚合顶破 C2S 32 KiB 上限，已修复 + 复测）；`P5_TAKEOVER` 已翻回 `false` 重建。
+>
+> 剩余未闭（第四轮结束时的真实状态）：
+> - **F15 残项**：修复已 5 轮复测空洞 0/0，但「丢弃 → 自愈」的**现场观测证据**仍未拿到（5 场丢弃计数全 0）。
+> - **F13**：`dimension` flaky 已复现（1/3），且出现**第二种失败形态**，**未定性**；需要可重试策略。
+> - **F4 余项遗留**：`modcompat` 43 格封闭空洞**未定性**（暂不纳入 P0 门禁）。
+> - **F5 后续**：接管臂在 `dimension`（nether 段 `sweep missing=26`）与 `seedgen`（`locallyGenerated=0`）
+>   两个场景不成立——这是接管臂要开之前必须先解的两件事。
+> - **F7**：已降为观察项（未复现），不阻塞任何判定。
 
 ---
 
@@ -681,10 +743,13 @@ $f='build/smoke-test/logs/client_<SessionId>.log'
   且只在 join / 切维 / 视距变化时发生，**非周期**（稳态零开销）。
   **注意**：必须按当前形状裁剪——通知器按设计不跟踪 leave（leave 交原版 Forget），累计集合会随移动无限增大，
   不裁剪就会把越界柱声明出去（客户端 pull → 服务端 range 拒绝）。
-- **验收判据**：⚠ **部分达成** —— `1.21.11/neoforge` 连续 2 轮（`f15a` / `f15b`）`TRACE_ENCLOSED_HOLE = 0`、
-  空洞 0/0、`pass = True`；**但这两轮的丢弃计数均为 0**（未撞上 level 未就绪窗口），
-  所以「丢过 → 被治好」的现场链路**尚未拿到**。当前证据 = 「重推确实在跑（`snapshot=true` 2→4、
-  `entriesSum` +1071 / +1221）」+ 按构造覆盖该窗口。要拿到现场证据需反复重跑至 `DROPPED_NOT_READY > 0`。
+- **验收判据**：⚠ **部分达成**（第四轮补记后仍为部分）—— `1.21.11/neoforge` 累计 **5 轮全 PASS**
+  （`f15a` / `f15b` / `f15c` / `f15d` / `f15e`）、`TRACE_ENCLOSED_HOLE = 0`、空洞 0/0；
+  **但这 5 轮的丢弃计数全部为 0**（`[AUTHORITY] declarations dropped before level ready` 一行都没出现），
+  所以「丢过 → 被治好」的现场链路**仍未拿到**（5 场 0 次，窗口没撞上）。
+  当前证据 = 「重推确实在跑（每轮 `snapshot=true` ×4、`entriesSum` 抬高）」+ 按构造覆盖该窗口 + 幂等性设计。
+  **判定：F15 残项保持未闭**——继续盲跑性价比低；要拿到现场证据需能**定向制造** level 未就绪窗口（例如临时注入）
+  或换一个更容易撞窗的场景，这条留给下一轮定。
 
 <details><summary>原始定性过程（含一次自我推翻）</summary>
 
@@ -759,6 +824,34 @@ $f='build/smoke-test/logs/client_<SessionId>.log'
 - **教训（补进 §六）**：**「条数上限」不是「载荷上限」。** 引入任何**聚合/批处理**时，必须同时引入**字节**预算，
   并确认**两个方向的上限不一样**（本例 C2S 32 KiB vs S2C 1 MiB，只有一侧会踩）。F11 的原始验收只看
   「行数降下来、空洞为 0」，**结构上看不见载荷大小**——矩阵复跑（F4 余项）才是抓到它的那条路径。
+- **⚠️ 未定性遗留（F16 之后新出现，见 F17）**：翻回 `P5_TAKEOVER=false` 后的生产态哨兵
+  `1.21.1_fabric_I_p5off_sentinel` **原生终止**（见 §五 F17）。**不能**因为「F16 是纯缓冲区算术」就假定无关——
+  结论要由读数定。
+
+---
+
+### F17（P1，第四轮新增，**未定性**）F16 修复后，生产态 1.21.1/fabric classic 出现一次原生终止
+
+- **现象**：`1.21.1_fabric_I_p5off_sentinel`（`P5_TAKEOVER=false`、classic、与 HEAD 逐字一致的代码）——
+  客户端日志**停在 1267 行**（正常同类场次 12k~18k 行），最后一行是
+  `[SHADOW_TRACK] sweep missing=128 localGen=false center=(-2,0) radius=20`；
+  **无 Java 异常、无 `Stopping!`、无 `hs_err`、无 crash-report**（`fabric/run` 下唯一的 `hs_err` 是 8/26 的服务端残留）。
+  门禁：`PROBE_MISSING` ×2 + `SMOKE_PASS_MARKER_MISSING` + `CLIENT_EXIT_NONZERO`。
+- **为什么不能直接归到已知 flaky**：今日（2026-09-13）同一日志目录里，**原生终止全部集中在 move / 接管臂场景**
+  （`move` / `move2` / `otmove1..4` / `nticketmove1` / `bandmove2`），**classic + `P5_TAKEOVER=false` 在 F16 之前
+  一次都没有过**。F16 之后第一次跑（就是本场）就出现 ⇒ 时间上可疑。
+- **反向证据（不足以结案，但要一起看）**：
+  - 同批第 2 场 `p5off_sentinel2`（**同代码同配置**）**PASS**（`round1=True round2=True`、空洞 0）⇒ 不是必现；
+  - F16 之后接管态 classic 在 **1.20.1/fabric、1.21.1/forge、1.21.11/neoforge 三个 loader 上全部 PASS**
+    （`p5_f5a` / `f5b` / `f5c`）⇒ 不是「F16 后 classic 全挂」；
+  - F16 改动面是 `ShadowPullClient.request` 的分批 + `ShadowPullRequestC2SPacket` 的纯编码测量
+    （无反射、无 JNI、无 Unsafe）——**从代码面上不支持**「引起原生终止」，但这是推理、不是读数。
+- **判定实验（下一轮，必须先做）**：
+  1. 继续在同一代码上跑生产态 classic（目标 ≥5 场）取**速率**；若 ~1/5 或更低，倾向既有 flaky；
+  2. 若速率明显更高（或复现），**把 F16 的分批改动单独回退**再跑同批次，
+     用「同批次 A/B」把 F16 与既有 flaky 分开——这是唯一能定性的做法。
+- **结论**：**未定性，按 P1 挂着**。在此之前，不要把 F16 记成「已完全验证无副作用」——它只被证明
+  「修好了载荷越界」+「1.20.1 seedgen 与三 loader 接管态无回归」。
 
 ---
 
