@@ -1,6 +1,6 @@
 # 交接文档：权威边沿（authority edge）现状 + P5「裁掉影子端自绘选柱」判定 + 落位点空洞竞态
 
-日期：2026-09-13 ｜ 分支：`master` ｜ HEAD：`4cbee50`（**工作区未提交**：27 个已改文件 + 8 个新文件）
+日期：2026-09-13 ｜ 分支：`master` ｜ HEAD：`0c4216e`（**工作区干净**；文档所述一切改动均已提交）
 本文档读者：下一个接手会话的 AI / 开发者。
 配套阅读：[`client-chunk-flow-handover.md`](client-chunk-flow-handover.md) §9.5–§9.9（本次会话的原始推演与三次自我推翻）、
 [`chunk-cache.md`](chunk-cache.md) §14、[`runtime-smoke-test.md`](runtime-smoke-test.md) 门禁全集。
