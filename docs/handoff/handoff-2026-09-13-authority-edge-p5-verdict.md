@@ -17,7 +17,9 @@ F17 桥维度修复 + F18 桥未命中短路落地后，接管态 dimension 矩�
 1.21.1/forge、1.21.1/neoforge）、空洞 0/0；接管态 classic 回归 PASS。**seedgen 挡路项已解（③ 声明驱动
 本地生成，`53da0f0`）**：resolve 无基线 + SeedGen 门开 → `generateChunkAsync` 显式 vanilla worldgen →
 显式物化桥（绕过 1.20.1 `playerLoadedChunk` 的 tracking 依赖），接管态 seedgen 1.20.1/1.21.1 全 PASS、
-生产态 tracking 原样零干扰；见 §五 F5 与「③ 声明驱动本地生成」。
+生产态 tracking 原样零干扰；见 §五 F5 与「③ 声明驱动本地生成」。**接管态移动空洞已修复（`886a56c`）**：
+redeliver + `finishLight` isSuperseded 死锁（f19/f19b 的 R2 空洞根因，非 F14/F8），修复后接管态
+classic 移动 4/4 PASS（`f20a`-`f20d`，R2 P0 空洞全 0）。
 第一轮会话新增：**封闭空洞冒烟门禁**与**让位门静默丢数据的兜底**；
 第二轮会话关闭 **F10**（dimension 纳入 P0 空洞门禁 + 超时默认值）；
 第三轮会话关闭 **F1 / F2**（落位点 3x3 空洞根因 + 让位门契约）、**F12**（neoforge bundle 未解包）、
@@ -990,10 +992,17 @@ $f='build/smoke-test/logs/client_<SessionId>.log'
   | 1.20.1/fabric 接管态 classic（`f19c`/`f19d`） | **PASS** |
   | 1.20.1/fabric 生产态 seedgen（`f19`） | **PASS**：`dispatched=0`（③ 不消费，tracking 原样 1460 本地生成） |
   - 编译 1.20.1/1.21.1/1.21.11、L0 `common:test` 绿。
-- **观察项**：接管态 classic R2 空洞（`f19`/`f19b`，最大分块 7~10）——**既有移动会话常驻衰减
-  （F14/F8 家族）flaky，非 ③ 结构性回归**（③ 后 `f19c`/`f19d` PASS；A/B：stash ③ 后 `ab1`
-  PASS；③ 前 f5a/f18 各 1 场 PASS 属采样运气）。接管态 classic + 移动在 1.20.1 的 R2 空洞率
-  ~50%（2/4），留作观察项不阻塞。
+- **观察项（已修复）**：接管态 classic R2 移动空洞（`f19`/`f19b`，最大分块 7~10）——最初归因
+  F14/F8 移动 flaky，**深度排查后根因坐实为 redeliver + `finishLight` isSuperseded 死锁**（非既有
+  flaky）：`drainRedeliver` 在客户端无落地凭据时每拍重发同柱 → 每次 `publishCachedChunk` 往
+  `generated` 塞同 key 新 entry → GENERATED 光任务完成时 `isSuperseded`（`hasQueuedBlockWork`
+  见同 key）永远拦截 → `pushReady` 永不执行 → 客户端永不应用 → 凭据永不写 → redeliver 永续
+  （f19b：899 次 redeliver 0 应用、0 abort、ready 恒空）。生产态无此问题（tracking 网络拉、
+  不经 redeliver）。**修复（`886a56c`）**：① `isSuperseded` 对 GENERATED 源只认 `pending`
+  （真·新网络数据）为更新，不认 generated（redeliver 本地复用）；② `drainRedeliver` 跳过已在
+  `generated`/`inflightLight` 的 key。**修复后接管态 classic 移动 4/4 PASS**（`f20a`-`f20d`，
+  R2 P0 空洞全 0、R2 应用 3096 vs 修复前单 burst）。残余观察：`f20d` R2 有 2 个 diagonal holes
+  （非 P0 门禁，PASS），接管态移动补柱的 OVD 环带边缘仍偶有斜角缺口，不阻塞。
 - **本地生成失败率偏高**（1.20.1 51%、1.21.1 57%，worker 并发 worldgen 超时）——断言只要求 >0，
   失败柱网络兜底无数据丢失。后续可调 `GENERATION_TIMEOUT_NANOS` / 并发预算优化命中率。
 
