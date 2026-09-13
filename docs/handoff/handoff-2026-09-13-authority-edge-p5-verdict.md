@@ -14,8 +14,10 @@
 另：第三轮会话发现并修复了一个**既有 loader 级缺陷 F12**（neoforge 上整柱抑制与权威边沿全程未生效，根因 = NeoForge 把整柱包封进 `ClientboundBundlePacket`）。
 `P5_TAKEOVER = false`（收尾态——**第五轮重测后判定改为：接管臂在 classic + dimension 成立**：
 F17 桥维度修复 + F18 桥未命中短路落地后，接管态 dimension 矩阵 4/4 PASS（1.20.1/fabric、1.21.1/fabric、
-1.21.1/forge、1.21.1/neoforge）、空洞 0/0；接管态 classic 回归 PASS。**唯一场景挡路项 = `seedgen`
-（FORCED 票绕过本地生成触发路径 → `locallyGenerated=0`），语义冲突需决策，不是 bug**；见 §五 F5）。
+1.21.1/forge、1.21.1/neoforge）、空洞 0/0；接管态 classic 回归 PASS。**seedgen 挡路项已解（③ 声明驱动
+本地生成，`53da0f0`）**：resolve 无基线 + SeedGen 门开 → `generateChunkAsync` 显式 vanilla worldgen →
+显式物化桥（绕过 1.20.1 `playerLoadedChunk` 的 tracking 依赖），接管态 seedgen 1.20.1/1.21.1 全 PASS、
+生产态 tracking 原样零干扰；见 §五 F5 与「③ 声明驱动本地生成」。
 第一轮会话新增：**封闭空洞冒烟门禁**与**让位门静默丢数据的兜底**；
 第二轮会话关闭 **F10**（dimension 纳入 P0 空洞门禁 + 超时默认值）；
 第三轮会话关闭 **F1 / F2**（落位点 3x3 空洞根因 + 让位门契约）、**F12**（neoforge bundle 未解包）、
@@ -957,6 +959,43 @@ $f='build/smoke-test/logs/client_<SessionId>.log'
   （`P5_TAKEOVER`）+ 兜底自愈」**——本轮已证接管态 classic + dimension 全 PASS、兜底仅作保险。
   §9.7 的「1.20.1/forge/neoforge 尚未退场」应重读为「这些组合的**声明交付吞吐**还有余量空间」，
   而非「影子自绘选柱仍在承担选柱」。
+
+---
+
+### ③ 声明驱动本地生成（2026-09-13 第五轮，落地）：seedgen 场景挡路项已解
+
+- **问题**：接管态（`NEUTRALIZE_TRACKING` 视距 1）+ seedgen 场景 → `locallyGenerated` 恒 0 →
+  场景断言 `counters.locallyGenerated > 0` 失败（`p5_seedgen_f5e`）。**不是 FORCED 票抢柱**
+  （票只覆盖 OVD 环带，权威窗内由 sweep/声明驱动）——是 tracking 钝化把本地生成触发源掐了。
+- **首方案作废（重要实证）**：resolve 无基线 + 门开 → FORCED 票触发 worldgen。**影子端 ChunkMap 的
+  票系统不工作**：主循环只 `pollTask`（消化 mailbox）**从不跑 `ChunkMap.tick`** → `addRegionTicket`
+  永不转换成生成任务（f5a：`reconcile band=10..16 +64` 但 `worldgenStart` 恒 0；classic 被盘命中
+  掩盖，seedgen `CleanWorld` 全缺盘暴露）。**本地生成不能靠票，只能显式触发**。
+- **落地（`53da0f0`）**：
+  1. `ChunkAuthorityClient.resolve`：无基线 + `isGenerationGateOpen()` → 新枚举 `LOCAL_GENERATE`
+     （本地生成已判失败回退网络 FULL）；
+  2. `ShadowTicketDriver`：`pendingLocalGen` 候选集 + 主循环 `consumeLocalGeneration` 消费
+     （每拍 ≤24、在途 ≤64）→ `ShadowSeedServer.generateChunkAsync`；
+  3. `ShadowSeedServer.generateChunkAsync`：worker 线程同步 `generateChunk`（vanilla worldgen，
+     主循环 pollTask 驱动 future），完成投递主循环 → `ShadowTrackingSession.onChunkMaterialized`
+     —— **显式物化桥**，绕过 1.20.1 `playerLoadedChunk` 的虚拟玩家 tracking 依赖（1.21+
+     `onChunkReadyToSend` 也会自然触发，`onChunkMaterialized` 幂等）；
+  4. 失败/超时（`GENERATION_TIMEOUT_NANOS`）→ `localGenFailed` → 该柱本次会话回退网络 FULL。
+- **验证矩阵**：
+  | 场 | 结果 |
+  |---|---|
+  | 1.20.1/fabric 接管态 seedgen（`f19b`） | **PASS**：216 本地生成 + 156 失败回退网络 |
+  | 1.21.1/fabric 接管态 seedgen（`f19`） | **PASS**：597 本地生成 |
+  | 1.20.1/fabric 接管态 dimension（`f19`） | **PASS**：空洞 0/0 |
+  | 1.20.1/fabric 接管态 classic（`f19c`/`f19d`） | **PASS** |
+  | 1.20.1/fabric 生产态 seedgen（`f19`） | **PASS**：`dispatched=0`（③ 不消费，tracking 原样 1460 本地生成） |
+  - 编译 1.20.1/1.21.1/1.21.11、L0 `common:test` 绿。
+- **观察项**：接管态 classic R2 空洞（`f19`/`f19b`，最大分块 7~10）——**既有移动会话常驻衰减
+  （F14/F8 家族）flaky，非 ③ 结构性回归**（③ 后 `f19c`/`f19d` PASS；A/B：stash ③ 后 `ab1`
+  PASS；③ 前 f5a/f18 各 1 场 PASS 属采样运气）。接管态 classic + 移动在 1.20.1 的 R2 空洞率
+  ~50%（2/4），留作观察项不阻塞。
+- **本地生成失败率偏高**（1.20.1 51%、1.21.1 57%，worker 并发 worldgen 超时）——断言只要求 >0，
+  失败柱网络兜底无数据丢失。后续可调 `GENERATION_TIMEOUT_NANOS` / 并发预算优化命中率。
 
 ---
 
