@@ -256,5 +256,69 @@ class EnclosedHoleTest(unittest.TestCase):
         self.assertIn("TRACE_ENCLOSED_HOLE_SMALL", {item["code"] for item in analysis["warnings"]})
 
 
+class MobileSessionTraceTest(unittest.TestCase):
+    """F14：`-MoveSeconds > 0` 的会话走开后柱会合法卸载，trace 的「驻留」口径不适用。"""
+
+    _RETENTION_GAP_PROBE = {
+        "chunkTrace": {"networkReceived": {"positions": [[0, 0]]},
+                       "shadowInjected": {"positions": [[0, 0]]},
+                       "shadowReady": {"positions": [[0, 0]]},
+                       "clientApplied": {"positions": []},
+                       "meshCompiled": {"positions": []}},
+        "clientCache": {"actualPresent": {"positions": []}},
+    }
+
+    def _analyze(self, move_seconds, probe):
+        from scripts.smoke.analyzer import analyze_result
+        from pathlib import Path
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "logs").mkdir()
+            (root / "logs" / "s.log").write_text(
+                "HassiumSmokeTest:PASS\n"
+                "CLIENT_STATS ROUND1 begin\nCLIENT_STATS ROUND1 end\n"
+                "CLIENT_STATS ROUND2 begin\nCLIENT_STATS ROUND2 end\n")
+            result = {"SessionId": "s", "Scenario": "classic", "ServerSwitched": True,
+                      "MoveSeconds": move_seconds,
+                      "Probe": {"Round1": probe, "Round2": probe},
+                      "GatewayRound1": {"gatewayState": "ACTIVE", "gatewayC2s": 1},
+                      "GatewayRound2": {"gatewayState": "ACTIVE", "gatewayC2s": 1, "gatewayS2c": 1}}
+            return analyze_result(result, root)
+
+    def test_stationary_session_retention_gap_is_failure(self):
+        analysis = self._analyze(0, self._RETENTION_GAP_PROBE)
+        self.assertIn("TRACE_EXPECTED_NOT_PRESENT", {item["code"] for item in analysis["failures"]})
+
+    def test_mobile_session_retention_gap_is_diagnostic(self):
+        analysis = self._analyze(12, self._RETENTION_GAP_PROBE)
+        codes = {item["code"] for item in analysis["failures"]}
+        self.assertNotIn("TRACE_EXPECTED_NOT_PRESENT", codes)
+        self.assertNotIn("TRACE_READY_NOT_APPLIED", codes)
+        self.assertIn("TRACE_EXPECTED_NOT_PRESENT", {item["code"] for item in analysis["skipped"]})
+
+    def test_mobile_session_delivery_gap_still_fails(self):
+        """投递链缺口（networkReceived→injected→ready）与驻留无关，移动会话同样把守。"""
+        probe = {
+            "chunkTrace": {"networkReceived": {"positions": [[0, 0]]},
+                           "shadowInjected": {"positions": []},
+                           "shadowReady": {"positions": []},
+                           "clientApplied": {"positions": []},
+                           "meshCompiled": {"positions": []}},
+            "clientCache": {"actualPresent": {"positions": []}},
+        }
+        analysis = self._analyze(12, probe)
+        self.assertIn("TRACE_RECEIVED_NOT_INJECTED", {item["code"] for item in analysis["failures"]})
+
+    def test_mobile_session_enclosed_hole_still_fails(self):
+        """真正的虚空门禁不受移动口径影响：成片封闭空洞仍然是 P0。"""
+        ring = [[x, z] for x in range(-2, 3) for z in range(-2, 3) if max(abs(x), abs(z)) == 2]
+        probe = {"chunkTrace": {}, "clientCache": {"actualPresent": {"positions": ring}}}
+        analysis = self._analyze(12, probe)
+        failures = [item for item in analysis["failures"] if item["code"] == "TRACE_ENCLOSED_HOLE"]
+        self.assertTrue(failures)
+        self.assertEqual(failures[0]["largestComponent"], 9)
+
+
 if __name__ == "__main__":
     unittest.main()

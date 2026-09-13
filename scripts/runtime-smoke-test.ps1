@@ -835,6 +835,9 @@ $resultObj = @{
     ProbeGateScenarioGated = ($Scenario -ne "classic")
     ProbeGateFailures = @()
     ServerSwitched = $serverSwitched
+    # 透传给 analyzer：>0 即「移动会话」，其 trace 驻留口径不适用（走开会合法卸载），
+    # analyzer 据此把 TRACE_EXPECTED_NOT_PRESENT / TRACE_READY_NOT_APPLIED 降为诊断（F14）。
+    MoveSeconds = $MoveSeconds
     HasPass = $hasPass
     HasFail = $hasFail
     GatewayRound1 = $gatewayRound1

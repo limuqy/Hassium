@@ -6,6 +6,7 @@ import io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute;
 import io.github.limuqy.mc.hassium.network.seedgen.ShadowSeedServer;
 import io.github.limuqy.mc.hassium.network.seedgen.ShadowServerRegistry;
 import io.github.limuqy.mc.hassium.storage.ShadowStorageHashes;
+import java.util.ArrayList;
 import java.util.List;
 import net.minecraft.client.Minecraft;
 import net.minecraft.world.level.ChunkPos;
@@ -135,35 +136,56 @@ public final class ChunkAuthorityClient {
         }
         long declaredAt = lastAuthorityPacketMs;
         List<ChunkAuthorityS2CPacket.Entry> entries = packet.entries();
+        // 按**声明包**聚合 C2S pull：分组只是打包，判定仍是**逐柱**（见 resolve 的返回值），
+        // 因此不会退化成「按包一刀切」。ShadowPullClient.request 内部再按 MAX_ENTRIES 分包。
+        List<ChunkPos> comparePulls = new ArrayList<>();
+        List<ChunkPos> authoritativePulls = new ArrayList<>();
         for (int i = 0; i < entries.size(); i++) {
             ChunkAuthorityS2CPacket.Entry entry = entries.get(i);
             // 先登记声明时刻，再解析：让位门据此判定该柱已归权威路径（解析失败也算已声明）。
             DECLARED_AT.put(io.github.limuqy.mc.hassium.utils.DimensionKey.key(
                     packet.dimension(), entry.chunkX(), entry.chunkZ()), declaredAt);
+            ChunkPos pos = new ChunkPos(entry.chunkX(), entry.chunkZ());
             try {
-                resolve(packet.dimension(), new ChunkPos(entry.chunkX(), entry.chunkZ()), entry.hash());
+                switch (resolve(packet.dimension(), pos, entry.hash())) {
+                    case COMPARE_PULL -> comparePulls.add(pos);
+                    case AUTHORITATIVE_PULL -> authoritativePulls.add(pos);
+                    case NONE -> { }
+                }
             } catch (Throwable t) {
                 Constants.LOG.debug("Hassium: authority resolve failed ({}, {})",
                         entry.chunkX(), entry.chunkZ(), t);
             }
         }
+        if (!authoritativePulls.isEmpty()) {
+            ShadowPullClient.requestAuthoritativeFull(packet.dimension(), authoritativePulls);
+        }
+        if (!comparePulls.isEmpty()) {
+            ShadowPullClient.requestFull(packet.dimension(), comparePulls);
+        }
     }
 
-    private static void resolve(String dimension, ChunkPos pos, long authoritativeHash) {
+    /** {@link #resolve} 的裁决结果：该柱产出哪一路 C2S pull（无动作 / 带基线比较 / 空基线权威 FULL）。 */
+    private enum Pull {
+        NONE,
+        COMPARE_PULL,
+        AUTHORITATIVE_PULL
+    }
+
+    private static Pull resolve(String dimension, ChunkPos pos, long authoritativeHash) {
         ShadowSeedServer shadow = ShadowServerRegistry.getInstance().get();
         boolean injected = shadow != null && shadow.injectedChunk(dimension, pos.x, pos.z) != null;
         Long localHash = ShadowStorageHashes.get(dimension, pos);
         boolean hasBaseline = injected || localHash != null;
         if (!hasBaseline) {
             // 全新柱：空基线请求（SeedGen 门控开时既有路径会在选柱时接管本地生成）
-            ShadowPullClient.requestAuthoritativeFull(dimension, List.of(pos));
-            return;
+            return Pull.AUTHORITATIVE_PULL;
         }
         boolean clientHolds = ShadowLightCompute.hasClientApplyEpoch(dimension, pos);
         if (authoritativeHash != 0L && localHash != null && localHash == authoritativeHash) {
             if (clientHolds) {
                 // 服务端确认无变更且客户端已持有：零动作（不得记命中，避免与首轮「新增」双计）
-                return;
+                return Pull.NONE;
             }
             // 服务端断言权威内容 == 本地内容：零请求本地交付 + 计全命中
             ShadowLightCompute.markAuthorityHashConfirmed(dimension, pos);
@@ -171,13 +193,12 @@ public final class ChunkAuthorityClient {
                 io.github.limuqy.mc.hassium.utils.DebugLogger.info(
                         io.github.limuqy.mc.hassium.utils.DebugLogger.LogType.NETWORK,
                         "[AUTHORITY] hash-hit zero-request ({}, {}) hash={}", pos.x, pos.z, authoritativeHash);
-                return;
+                return Pull.NONE;
             }
             // 基线条目存在但无法物化（内存/磁盘都取不到）：退回带基线比较
-            ShadowPullClient.requestFull(dimension, List.of(pos));
-            return;
+            return Pull.COMPARE_PULL;
         }
         // hash 未知或不等：带基线比较，由服务端裁决 UNCHANGED / DELTA / FULL
-        ShadowPullClient.requestFull(dimension, List.of(pos));
+        return Pull.COMPARE_PULL;
     }
 }

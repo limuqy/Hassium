@@ -24,6 +24,14 @@ _ENCLOSED_BOX_CELL_LIMIT = 1_000_000
 _ENCLOSED_HOLE_P0_SCENARIOS = frozenset({"classic", "dimension"})
 _ENCLOSED_HOLE_P1_SCENARIOS = frozenset({"classic"})
 
+# 移动会话（`-MoveSeconds > 0`）的 trace 缺口口径失效：`expected = networkReceived` 假设
+# 「收到即常驻」，而走开后 vanilla 会正常 CHUNK_UNLOAD（实测单场 472 次），已收到的柱合法消失。
+# 于是 `expectedNotPresent` / `readyNotApplied` 只反映「走开」，不反映缺陷——6/6 场历史移动会话
+# 全部因此 FAIL，移动场景实际从未被 trace 门禁覆盖过。移动会话里把这两项降为运行内诊断；
+# `TRACE_ENCLOSED_HOLE`（真正的虚空门禁，按「被已持有柱包围」判定）不受影响，仍然把守。
+_MOBILE_TRACE_DIAGNOSTIC_CODES = frozenset(
+    {"TRACE_EXPECTED_NOT_PRESENT", "TRACE_READY_NOT_APPLIED"})
+
 
 def _obj(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
@@ -268,6 +276,9 @@ def _late_near_player(probe: dict[str, Any], threshold_ms: int = 10_000) -> list
 
 def analyze_result(result: dict[str, Any], root: Path) -> dict[str, Any]:
     scenario = str(result.get("Scenario") or "classic")
+    # 移动会话标记（由 runtime-smoke-test.ps1 透传 -MoveSeconds）。>0 ⇒ 走开后柱会合法卸载，
+    # 故 trace 的「驻留」口径不适用（见 _MOBILE_TRACE_DIAGNOSTIC_CODES）。
+    mobile_session = (_num(result.get("MoveSeconds")) or 0) > 0
     failures: list[dict[str, Any]] = []
     warnings: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
@@ -354,14 +365,26 @@ def analyze_result(result: dict[str, Any], root: Path) -> dict[str, Any]:
         gaps = trace_report["gaps"]
         # TRACE 缺口门禁仅 classic：其它场景的盘回填不走同一 trace 契约
         if scenario == "classic":
+            # 驻留口径缺口：expected = networkReceived 假设「收到即常驻」。
+            # 移动会话里已收到的柱会随玩家飞离合法 CHUNK_UNLOAD，故降为运行内诊断；
+            # 非移动会话仍是 P0（收到却从未落地 = 真丢柱）。
             for key, code in (("expectedNotPresent", "TRACE_EXPECTED_NOT_PRESENT"),
-                              ("receivedNotInjected", "TRACE_RECEIVED_NOT_INJECTED"),
+                              ("readyNotApplied", "TRACE_READY_NOT_APPLIED")):
+                if not gaps[key]["count"]:
+                    continue
+                if mobile_session and code in _MOBILE_TRACE_DIAGNOSTIC_CODES:
+                    skipped.append(_failure(code, "INFO", round=number, gap=gaps[key],
+                                            detail="mobile session: received chunks legitimately "
+                                                   "unload as the player flies away"))
+                elif code == "TRACE_READY_NOT_APPLIED":
+                    warnings.append(_failure(code, "P1", round=number, gap=gaps[key]))
+                else:
+                    failures.append(_failure(code, round=number, gap=gaps[key]))
+            # 投递链缺口：与驻留无关（注入/ready 是交付路径本身），移动会话同样把守。
+            for key, code in (("receivedNotInjected", "TRACE_RECEIVED_NOT_INJECTED"),
                               ("injectedNotReady", "TRACE_INJECTED_NOT_READY")):
                 if gaps[key]["count"]:
                     failures.append(_failure(code, round=number, gap=gaps[key]))
-            for key, code in (("readyNotApplied", "TRACE_READY_NOT_APPLIED"),):
-                if gaps[key]["count"]:
-                    warnings.append(_failure(code, "P1", round=number, gap=gaps[key]))
         if gaps["appliedNotMeshed"]["count"]:
             skipped.append(_failure("TRACE_MESH_PENDING", "INFO", round=number,
                                     gap=gaps["appliedNotMeshed"],

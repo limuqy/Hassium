@@ -353,6 +353,45 @@ pull 域用了 `resolveViewDistance()=vd+1`（range=21 → 1665 格盘）而非�
 
 ## 9. 权威边沿（服务端声明 enter + 权威 chunkHash）——2026-09-13
 
+> ### ⚠️ 读这一章之前先看这张速览（2026-09-13 第三轮会话补）
+>
+> **§9.5–§9.9 是过程记录，中间有三次自我推翻**（作废读数、配错开关、接管相关性记错）。原文按时间顺序读会
+> 被中间结论误导。当前态的**唯一权威记录**是
+> [`docs/handoff/handoff-2026-09-13-authority-edge-p5-verdict.md`](handoff/handoff-2026-09-13-authority-edge-p5-verdict.md)；
+> 下面这张表是它的最小摘要，本节其余部分保留为**一手读数与推导过程**，不做重写。
+>
+> **现状（当前代码）**
+>
+> - 协议：服务端对进入玩家真实 tracking 域的柱发 `chunk_authority_s2c`（每柱带权威 chunkHash，可带
+>   `snapshot=true` 整体重推）；客户端三分支解析——hash 命中零请求 / 带基线 compare-pull / 无基线权威 FULL。
+> - 让位门（`ChunkAuthorityClient.pullEmissionSuppressed`）：声明流存活期内，影子端**让路不让弃**——挂起自绘
+>   pull，宽限 = `AUTHORITY_WATCHDOG_MS`（10s）；超时即回退自绘（兜底不是常态）。
+> - 整柱抑制点只有两处：1.20.1 `ServerPlayer.trackChunk`、1.21.1+ `PlayerChunkSender.sendChunk`
+>   （neoforge 经 `ClientboundBundlePacket` 封装，已解包）。
+> - 声明集合在服务端**累计并按当前形状裁剪后整体重推**（join / 切维 settle / 真实视距变更），客户端丢弃即为自愈。
+>
+> **已知竞态 / 缺陷（均已修）**
+>
+> | 编号 | 一句话 |
+> |---|---|
+> | F1 | 会话首次视距观测点清空 `pending`，把**同 tick 刚入队、原版已计 ACK 的声明**抹掉 → 落位点 3x3 永久虚空 |
+> | F2 | 让位门宽限（3s）短于声明流存活窗口 → `starved` 变假信号；已对齐看门狗并重设扣留起算点 |
+> | F12 | neoforge 的整柱包是 bundle，`instanceof` 恒 false → 抑制与权威边沿在 1.21.11/neoforge 整条没生效 |
+> | F15 | 客户端 level 未就绪窗口内的声明被丢弃 → 与 F1 同族；已由「快照重推」自愈 |
+> | F11 | `resolve()` 逐柱发 C2S pull（一柱一包）；已按声明包聚合 |
+>
+> **覆写清单（读 §9.5–§9.9 时请对照）**
+>
+> - 「与 P5 接管强相关」→ **作废**：判据是「基准盘发射时让位门是否已关」，`_band1` 未开接管一样有洞；
+>   这是**生产配置下的缺陷**，不是接管臂专属（§9.9 修订块）。
+> - 「`band1` 与基线等价 / `bandmove1` 比 `otmove4` 改善」→ **作废**：那两轮 `ENABLED=false` 配
+>   `NEUTRALIZE_TRACKING=true`，驱动一行没跑（`bound instance` = 0 条），测的是纯基线（§9.8 首块）。
+> - 「`add ticket failed` = 0 是票生效的正面证据」→ **作废**：该日志级别在冒烟 profile 不生效（§9.7 末）。
+> - 「移动场景既有 3 柱缺口 `(-4,-2)(-3,-2)(-2,-2)`」→ **作废**：复核 probe 后确认它就是 F1 落位点 3x3
+>   空洞的整条下沿，不是独立缺口（handoff §五 F8）。
+> - 「删虚拟玩家 / 把 `bootGrid`、`sweepVisibleShape` 列为可裁」→ **推回**：它们不是冗余兜底，而是权威窗
+>   装载的实际主力（§9.7 方向修正）。
+
 ### 9.1 触发与根因
 
 手工测试「走出十几个区块再走回出生点」时统计恒为 `区块缓存 0.0%` 且 `区块加载` 全为「新增」。逐层核对得到两个独立根因：

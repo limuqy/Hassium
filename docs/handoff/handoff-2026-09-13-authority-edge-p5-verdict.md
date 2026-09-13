@@ -15,7 +15,10 @@
 `P5_TAKEOVER = false`（收尾态不变——接管臂自身的移动/收尾缺陷仍未解，见 §3.3）。
 第一轮会话新增：**封闭空洞冒烟门禁**与**让位门静默丢数据的兜底**；
 第二轮会话关闭 **F10**（dimension 纳入 P0 空洞门禁 + 超时默认值）；
-第三轮会话关闭 **F1 / F2**（落位点 3x3 空洞根因 + 让位门契约），**并修正了 §3.1/§3.2 的机理归因** —— 见 §九。
+第三轮会话关闭 **F1 / F2**（落位点 3x3 空洞根因 + 让位门契约）、**F12**（neoforge bundle 未解包）、
+**F15**（声明被丢 → 快照重推自愈），**并修正了 §3.1/§3.2 的机理归因** —— 见 §九。
+第四轮（收尾）关闭 **F11**（逐柱 pull → 按声明包聚合）、**F14**（移动会话门禁口径）、**F8**（定性结案）、
+**F9**（§9 章首加速览）；`1.21.1_fabric_I_f11move` 是**首个 PASS 的移动会话**。
 
 ---
 
@@ -277,10 +280,21 @@ F4 的矩阵（含 scenario 锚点 `1.20.1/fabric`、`1.20.1/forge`、`1.21.1/ne
   `runtime-smoke-test.ps1` 的 save wait 段 + `ShadowSeedServer.saveAll`。
 - 因接管默认关闭，该停滞不进生产路径；**它仍然是"未完成"，不是"已完成"**。
 
-### F8（P3）两个既有的小缺口
+### F8（P3）两个既有的小缺口 → **已定性结案（第三轮会话，靠 probe 复核）**
 
-- `1.20.1_fabric_I_move2` R1 有 1 格封闭空洞（P1，未定性）。
-- 移动场景的既有 3 柱缺口 `(-4,-2) (-3,-2) (-2,-2)`（§9.8 记，与驱动无关，全日志 0 次出现）——解释或判定可接受。
+- **`1.20.1_fabric_I_move2` R1 的 1 格封闭空洞 `(-20,3)`**：在 trace 里**全链走完**
+  （`networkReceived` → `shadowInjected` → `shadowReady` → `clientApplied` 都有它），但**不在
+  `clientCache.actualPresent`** 里。即「交付成功但已不驻留」——移动会话飞离后的常驻衰减，
+  与 **F14 同族**；且它是 1 格分量（< 4）⇒ 只触发 `TRACE_ENCLOSED_HOLE_SMALL`（**P1 告警，不阻塞**）。
+  本场 `observed = loadedChunks = 1644`、`trackedCandidateCount = 2189`，与"已交付多于常驻"一致。
+- **「移动场景既有 3 柱缺口 `(-4,-2) (-3,-2) (-2,-2)`」→ 该说法作废（勘误）**：复核
+  `1.21.1_fabric_I_bandmove1` R1 的 probe，那 3 柱正是 **F1 落位点 3x3 空洞的整条下沿**
+  （`enclosedHoles` = `[-4..-2] × [-2..0]` 共 9 格，`(-4,-2)(-3,-2)(-2,-2)` 即其中 z=-2 一行），
+  **不是另一个独立缺口**——就是 F1 已修的那一类，且该场在 F1 之前。
+  同一轮 `1.20.1_fabric_I_move2` R1 里这 3 柱**都在 `actualPresent` 中**（已交付：四个 stage 全有）。
+  原文"全日志 0 次出现"说的是**日志文本**没有这三柱的专行，不等于 trace 里缺——据此得出的
+  "既有缺口"结论是把日志口径当成了交付口径。
+- **判决**：两项均**不需要修**（一项是 F14 同族的 P1 常驻衰减，一项是 F1 已修缺口的误记）。
 
 ### F9（P3，文档）§9 系列该整章重写了
 
@@ -454,17 +468,30 @@ $f='build/smoke-test/logs/client_<SessionId>.log'
       判据与量化见 §9.7。
 - [x] **F12 已结案**（同轮）：neoforge 整柱抑制/权威边沿未生效的根因是 `ClientboundBundlePacket` 封装，
       已修复并复测通过（§五 F12）。
+- [x] **F11 已修复并复测**（同轮，`1.21.1_fabric_I_f11`）：C2S pull 由逐柱改为按声明包聚合，
+      `ShadowPullClient.request` **1500 → 157 行**、与 `[AUTHORITY] send` 171 行 **≈1:1**、空洞 0/0。见 §9.5。
+- [x] **F14 已改口径并复测**（同轮）：`MoveSeconds` 透传进 result JSON；移动会话的驻留口径两项降为诊断。
+      端到端 `1.21.1_fabric_I_f11move` **PASS**（空洞 0/0；本场未触发降级，见该节的如实说明）；
+      历史场次 `1.21.1_fabric_I_f1f2_move` 就地重判 **FAIL → PASS**；单测 4 条。
+- [x] **F8 已定性结案**（同轮，probe 复核）：1 格空洞 `(-20,3)` 是「交付成功但不驻留」（F14 同族、P1 不阻塞）；
+      「既有 3 柱缺口 `(-4,-2)(-3,-2)(-2,-2)`」是 **F1 落位点 3x3 的整条下沿**，不是独立缺口——原结论作废。见 §五 F8。
+- [x] **F9 部分达成**（同轮）：未整章重写 `client-chunk-flow-handover.md` §9（保留一手读数与推导过程），
+      改为在章首加 **「读前速览」**——现状 / 已知竞态表 / 覆写清单（5 条作废结论逐条标注）+
+      指向本文档为唯一权威记录。
 
 > **本轮已完成并提交**（`0fd7e28` 门禁 / `55350b2` 权威边沿 + 接管臂 / `4705d95` 文档 / `3257415` 关闭 F3）：
 > 工作区此前 27 改 + 9 新增全部落盘；`ShadowTicketDriver` 调用点已标注；F3 结案写入本文档。
 >
-> **后续轮次**：2026-09-13 第三轮会话落地 F10（`dimension` 纳入 P0 空洞门禁 + 超时默认值 180/300 + 文档同步），
-> 随后落地 **F1 / F2**（落位点 3x3 空洞根因 + 让位门契约；验收部分达成，见 §9.7）、**F12**（neoforge 整柱
-> 抑制/权威边沿未生效，见 §五）与一个 **teardown GLFW 守卫**修正（§9.4）。
-> 剩余未闭：**F4 余项**（`modcompat` / `seedgen` 场景）、**F5**（接管态矩阵证据）、F7（`saveAll` 停滞归因）、F8、F9、
-> **F11**（`resolve()` 逐柱发 pull，§9.5）、**F13**（dimension flaky）、**F14**（移动场景门禁口径）、
-> **F15 → 已修复**（1.21.11/neoforge R2 空洞：**P0**、F1 同族、丢在客户端接收侧；
-> 按「快照 = 把累计声明集合按当前形状整体重推」实现，两轮复测空洞 0/0 —— **丢弃现场证据待补**，见 §九 F15）。
+> **后续轮次**（2026-09-13，同一日两段）：先落地 F10（`dimension` 纳入 P0 空洞门禁 + 超时默认值 180/300 + 文档同步），
+> 随后 **F1 / F2**（落位点 3x3 空洞根因 + 让位门契约；验收部分达成，见 §9.7）、**F12**（neoforge 整柱
+> 抑制/权威边沿未生效，见 §五）、一个 **teardown GLFW 守卫**修正（§9.4）与 **F15**（声明被丢 → 快照重推自愈）。
+> 再后一轮收尾：**F11**（逐柱 pull → 按声明包聚合，1500→157 包）、**F14**（移动会话门禁口径 + 端到端 PASS）、
+> **F8**（结案：一项是 F14 同族 P1、一项是 F1 已修缺口的误记）、**F9**（§9 章首加速览，未整章重写）。
+>
+> 剩余未闭：**F4 余项**（`modcompat` / `seedgen` 场景未在当前代码复跑）、**F5**（接管态矩阵证据）、
+> F7（`saveAll` 停滞归因，接管开启时才有）、**F13**（`dimension` 场景 flaky，非本轮回归）、
+> **F15 残项**（修复已两轮复测空洞 0/0，但「丢弃 → 自愈」这条链的**现场观测证据**仍待补：需跑到
+> `DROPPED_NOT_READY > 0`）、**F4 收敛口径下 `modcompat`/`seedgen` 是否纳入待定**。
 
 ---
 
@@ -532,16 +559,24 @@ $f='build/smoke-test/logs/client_<SessionId>.log'
 - **未直接实测**：`f1f2_p5b` 复跑时该竞态**没有发生**（`crashed=0`），所以本次修复是「按帧签名推证 +
   同窗口同栈的 ICCE 实例」，不是被观测触发的 `teardownExit`。**若要实测触发，需反复重跑收尾竞态。**
 
-### 9.5 新开 F11（P2，性能）：权威声明的 `resolve()` 逐柱发 C2S pull
+### 9.5 F11（P2，性能）→ **已修复（第三轮会话）：权威声明的 `resolve()` 逐柱发 C2S pull**
 
-- **现状**：`ChunkAuthorityClient.resolve()` 对**每条**声明调用 `ShadowPullClient.requestFull(dimension, List.of(pos))`
+- **原状**：`ChunkAuthorityClient.resolve()` 对**每条**声明调用 `ShadowPullClient.requestFull(dimension, List.of(pos))`
   / `requestAuthoritativeFull(dimension, List.of(pos))` —— 单元素列表 → **一柱一个 C2S 包**。
   实测每场 `ShadowPullClient.request` = 1469~1558 行，且 `chunksSum ≈ lines`（平均 1.00~1.09 柱/包）。
-- **改法**：`handle()` 按包内条目聚合成 ≤ `MAX_ENTRIES`（128）的分组，走 `resolve` 的批量变体
-  （`ShadowPullClient.requestFull` 已支持批量与自动分包）。
-- **验收判据**：`ShadowPullClient.request` 行数降到声明包数量量级（~15/场），`chunksSum` 不变，空洞仍为 0。
-- **风险**：批量后分组内 hash 未知/不等的判定仍是逐条语义，需保证「有基线→compare、无基线→权威 FULL」
-  两个分组都按柱判定（不能按包判定），否则会退化成整包一刀切。
+- **改法（已实施）**：`resolve` 改为返回 `Pull` 裁决（`NONE` / `COMPARE_PULL` / `AUTHORITATIVE_PULL`），
+  `handle()` 在**同一条声明包**内把两种裁决各收进一个列表，循环结束后各发**一次**批量请求。
+  判定粒度不变（**逐柱**判 hash / 基线，不是按包一刀切），`ShadowPullClient.request` 内部再按
+  `ShadowPullRequestC2SPacket.MAX_ENTRIES`（384）分包——一条声明包最多对应 2 个 C2S 包。
+- **验收判据**：`ShadowPullClient.request` 行数降到声明包数量量级，`chunksSum` 不变，空洞仍为 0。
+- **复测（`1.21.1_fabric_I_f11`，1.21.1/fabric/classic）**：`=== RESULT: PASS ===`，`failures=[]`、`warnings=[]`、
+  R1/R2 封闭空洞 **0/0**。
+  - 客户端 `[DIAG] ShadowPullClient.request`：**1500 量级 → 157 行**（修复前 §9.5 记 1469~1558）；
+    服务端 `[AUTHORITY] send` = **171 行** ⇒ **≈1:1**（修复前约 10:1）。
+  - `chunksSum` = **1764**，单包最大 **109** 柱（修复前 `chunksSum ≈ lines`、平均 1.00~1.09 柱/包）。
+  - `hash-hit zero-request` 35 行、`[SHADOW_TICKET]` 0 行（接管臂关，符合预期）。
+- **风险（已规避）**：批量后分组内 hash 未知/不等的判定仍是逐条语义，需保证「有基线→compare、无基线→权威 FULL」
+  两个分组都按柱判定（不能按包判定），否则会退化成整包一刀切 —— 由 `resolve` 的返回值保证。
 
 ### 9.6 教训补充（补进 §六）
 
@@ -581,18 +616,37 @@ $f='build/smoke-test/logs/client_<SessionId>.log'
    还差「声明流在全部版本/加载器上覆盖完备且及时」（本轮量化出 1.20.1 / forge / neoforge 的缺口）
    + 接管臂自身的 F5/F7。
 
-### F14（P2，第三轮新增）`-MoveSeconds > 0` 的会话在 `classic` 门禁下永不可能 PASS
+### F14（P2，第三轮新增）→ **已修复（口径）**：`-MoveSeconds > 0` 的会话在 `classic` 门禁下永不可能 PASS
 
 - **现象**：`-MoveSeconds 12` 的会话被判 `TRACE_EXPECTED_NOT_PRESENT`（R1 405 / R2 169），配
   `TRACE_READY_NOT_APPLIED` + `SPATIAL_SNAPSHOT_INCOMPLETE`。成因是门禁的候选集口径：
   `expected = networkReceived` 假设「收到即常驻」，而移动场景走开后会正常 `CHUNK_UNLOAD`（本场 472 次）。
 - **既有性**：**6/6 场历史移动会话全部 FAIL**，且多为同一失败码（`bandmove1`/`nticketmove1`/`otmove1`/
   `otmove4`/`move2`…）⇒ **移动场景实际上从未被门禁覆盖过**（与 §六.8「移动场景单轮跨配置对比不可靠」同源）。
-- **改法（候选）**：把 `MoveSeconds` 透传进 result JSON，让 analyzer 对移动会话把
-  `expectedNotPresent` / `readyNotApplied` 降为运行内诊断（同 `LATE_NEAR_PLAYER_CHUNK` 的处理），
-  或按 `CHUNK_UNLOAD` 扣减候选集。**注意**：`TRACE_ENCLOSED_HOLE`（真正的虚空门禁）**不受此影响**，
-  本场它干净（P0 = 0），历史移动场景则都有 9 格 P0。
+- **改法（已实施，选了「透传 MoveSeconds」这条）**：
+  - `scripts/runtime-smoke-test.ps1`：result JSON 新增 `MoveSeconds = $MoveSeconds`。
+  - `scripts/smoke/analyzer.py`：`mobile_session = MoveSeconds > 0` 时，把**驻留口径**的两项
+    （`TRACE_EXPECTED_NOT_PRESENT` / `TRACE_READY_NOT_APPLIED`）降为 `skipped` 运行内诊断
+    （`_MOBILE_TRACE_DIAGNOSTIC_CODES`），并把**投递链**缺口（`TRACE_RECEIVED_NOT_INJECTED` /
+    `TRACE_INJECTED_NOT_READY`）明确拆出来**继续把守**——它们与「收到后是否常驻」无关。
+  - **`TRACE_ENCLOSED_HOLE`（真正的虚空门禁）不受此影响**：它按「被已持有柱完全包围」判定，
+    与走开无关，本场它干净（P0 = 0），历史移动场景则都有 9 格 P0。
 - **验收判据**：历史移动会话在新口径下不再因"走开"而亮 P0；真空洞（如历史 3x3）仍然亮。
+  已由 4 条单测覆盖（`MobileSessionTraceTest`）：静止会话驻留缺口仍 P0、移动会话降为诊断、
+  移动会话投递链缺口仍 P0、移动会话成片封闭空洞仍 P0。`python -m unittest scripts.smoke.test_analyzer` = **23 tests OK**。
+- **历史回放（就地验证口径）**：对 §9.7 里那场 `1.21.1_fabric_I_f1f2_move` 的 result JSON 做两次判定——
+  按记录原样（无 `MoveSeconds`）**FAIL**（唯一 failure = `TRACE_EXPECTED_NOT_PRESENT`，即 F14 的假失败）；
+  手工补 `"MoveSeconds": 12` 后 **PASS**（该码与 `TRACE_READY_NOT_APPLIED` 一起降到 `skipped`）。
+  两次都**没有** `TRACE_ENCLOSED_HOLE`（本场 P0 = 0）⇒ 新口径只摘掉假失败，没放过真空洞。
+- **端到端复测（`1.21.1_fabric_I_f11move`，1.21.1/fabric/classic `-MoveSeconds 12`）**：`=== RESULT: PASS ===`，
+  `failures = []`、R1/R2 封闭空洞 **0/0**（R1 `observed 1529`、R2 `observed 518`）、`MoveSeconds = 12` 已随
+  result JSON 落盘。warnings 仅 `SPATIAL_SNAPSHOT_INCOMPLETE`（P1，移动中视图外沿的既有噪声，非本轮引入）。
+  **⚠️ 如实说明**：本场 `expectedNotPresent` 两轮都是 **0**，即**这次压根没触发降级路径**——
+  它证明的是「新口径不引入回归、移动会话不再假 FAIL」，**不是**降级确实生效。降级生效的证据在
+  「历史回放」与单测两处（下）。
+- **已知限制（如实记）**：口径靠 `MoveSeconds` 字段，**历史**移动会话的 result JSON 没有这个字段
+  （客户端日志也不打印该属性，无法从日志反推），故**不会被自动重判**——要回放历史场次需手工在该 JSON 里补
+  `"MoveSeconds": 12`。本轮按"显式信号优先"取值，没用 `CHUNK_UNLOAD > 0` 之类的间接推断（会误伤任何走过路的会话）。
 
 ### 9.8 附带硬化：待发缓冲溢出的静默丢声明（同一缺陷类）
 
