@@ -104,11 +104,18 @@ public final class ShadowServerCompat {
                 return null;
             }
         }
+        try {
 #if MC_VER < MC_1_21_1
-        return future.join().left().orElse(null);
+            return future.join().left().orElse(null);
 #else
-        return future.join().orElse(null);
+            return future.join().orElse(null);
 #endif
+        } catch (Throwable t) {
+            // 例如 "No chunk holder after ticket has been added"（票未钉稳时）：
+            // 以失败回调，不得把 CompletionException 抛回 local-gen 池/主循环 pollTask。
+            Constants.LOG.warn("Hassium: awaitGeneratedChunk join failed ({}, {})", pos.x, pos.z, t);
+            return null;
+        }
     }
 
     /** 获取注入柱的原版 LIGHT future；邻柱由 LightEngine 的 getter 读取，不单独请求 holder。 */

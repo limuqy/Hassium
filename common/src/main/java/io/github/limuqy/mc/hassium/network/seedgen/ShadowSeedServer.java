@@ -243,8 +243,16 @@ public class ShadowSeedServer extends MinecraftServer {
         }
     }
 
-    /** 单区块生成超时：原版 worldgen 卡死时兜底回退（3s ≫ 正常生成耗时）。 */
-    private static final long GENERATION_TIMEOUT_NANOS = 3_000_000_000L;
+    /**
+     * 单区块生成超时：原版 worldgen 卡死时兜底回退。
+     * <p>
+     * 原版首启（{@code MinecraftServer.prepareLevels}）对出生点加 {@code START} 票（半径 11）
+     * 并在主线程 {@code waitUntilNextTick} 等到 {@code getTickingGenerated()==441}，由 ticket
+     * 系统限速推进，几乎不因「等 future」失败。影子端声明驱动是多路 {@code getChunkFuture(FULL)}
+     * 并发 + 主循环 mailbox 推进，金字塔邻柱互抢时 3s 会在饱和窗口误判失败（test2/seedfix
+     * 实测失败率 ~25–50%）。抬到 15s：远大于单柱正常 FULL，仍远小于会话时长；超时后仍回退网络。
+     */
+    private static final long GENERATION_TIMEOUT_NANOS = 15_000_000_000L;
 
     /** 仅按请求生成目标 FULL 区块；不再由影子端主动扩展邻域。 */
     public LevelChunk generateChunk(ChunkPos pos) {
@@ -254,6 +262,12 @@ public class ShadowSeedServer extends MinecraftServer {
     /**
      * 在指定维度生成一个服务端请求的 FULL 区块。
      * 原版 ChunkMap 会为生成步骤自行处理依赖区块；影子端不额外预生成 halo。
+     * <p>
+     * <b>调用方必须已在影子主循环钉好 FORCED 票</b>（见 {@link #pinForcedTicket}）：
+     * vanilla {@code getChunkFuture(load=true)} 临时加的是 {@code TicketType.UNKNOWN}
+     * （timeout=**1 tick**），异步 sleep 等待会过期 → holder 降级 → future 以
+     * {@code UNLOADED_CHUNK} 立即完成。票只能在主循环增删，worker 动 DistanceManager
+     * 会弄坏距离图（实测 {@code LeveledPriorityQueue} NSEE）。
      */
     public LevelChunk generateChunk(String dimension, ChunkPos pos) {
         ServerLevel level = level(dimension);
@@ -263,7 +277,52 @@ public class ShadowSeedServer extends MinecraftServer {
         ServerChunkCache cache = (ServerChunkCache) level.getChunkSource();
         long deadline = System.nanoTime() + GENERATION_TIMEOUT_NANOS;
         ChunkAccess chunk = generateChunkInternal(cache, pos, false, deadline);
-        return chunk instanceof LevelChunk levelChunk ? levelChunk : null;
+        // scheduleChunkLoad 短路会以 ImposterProtoChunk 完成 FULL future（已注入/盘命中）；
+        // 它不是 LevelChunk 子类，直接 instanceof 会把「已有数据」误判成生成失败。
+        return ShadowChunkMapCompat.unwrapLevelChunk(chunk);
+    }
+
+    /**
+     * 生成窗口内钉住目标柱（FORCED，radius 0）。<b>仅影子主循环线程可调</b>。
+     * 对齐 {@code prepareLevels} 的 START 票：durable 票覆盖异步等待，完成后再撤。
+     */
+    public static boolean pinForcedTicket(ServerLevel level, ChunkPos pos) {
+        if (level == null || pos == null) {
+            return false;
+        }
+        try {
+#if MC_VER < MC_1_21_5
+            level.getChunkSource().addRegionTicket(
+                    net.minecraft.server.level.TicketType.FORCED, pos, 0, pos);
+#else
+            ((io.github.limuqy.mc.hassium.mixin.ServerChunkCacheAccessor) (Object) level.getChunkSource())
+                    .hassium$getTicketStorage()
+                    .addTicketWithRadius(net.minecraft.server.level.TicketType.FORCED, pos, 0);
+#endif
+            return true;
+        } catch (Throwable t) {
+            LOGGER.warn("Hassium: pin FORCED ticket failed ({}, {})", pos.x, pos.z, t);
+            return false;
+        }
+    }
+
+    /** 与 {@link #pinForcedTicket} 成对；仅影子主循环线程可调。 */
+    public static void unpinForcedTicket(ServerLevel level, ChunkPos pos) {
+        if (level == null || pos == null) {
+            return;
+        }
+        try {
+#if MC_VER < MC_1_21_5
+            level.getChunkSource().removeRegionTicket(
+                    net.minecraft.server.level.TicketType.FORCED, pos, 0, pos);
+#else
+            ((io.github.limuqy.mc.hassium.mixin.ServerChunkCacheAccessor) (Object) level.getChunkSource())
+                    .hassium$getTicketStorage()
+                    .removeTicketWithRadius(net.minecraft.server.level.TicketType.FORCED, pos, 0);
+#endif
+        } catch (Throwable ignored) {
+            // world 已停：票随实例销毁
+        }
     }
 
     /**
@@ -283,15 +342,26 @@ public class ShadowSeedServer extends MinecraftServer {
      * 1.20.1 {@code playerLoadedChunk} 的虚拟玩家 tracking 依赖（接管态 tracking 钝化视距 1；
      * FORCED 票在影子端不被 ChunkMap tick 消化成生成任务，本地生成只能显式触发）。
      * 生成失败（null / 超时）以 null 回调，调用方回退网络 FULL。
+     * <p>
+     * <b>必须从影子主循环调用</b>：在此钉 FORCED 票（UNKNOWN 仅 1 tick，撑不过异步等待），
+     * 回调里撤票。DistanceManager 非线程安全，禁止在 local-gen worker 上增删票。
      */
     public void generateChunkAsync(String dimension, ChunkPos pos,
             java.util.function.BiConsumer<String, LevelChunk> onDone) {
+        ServerLevel pinLevel = level(dimension);
+        pinForcedTicket(pinLevel, pos);
         localGenExecutor.execute(() -> {
             LevelChunk chunk = generateChunk(dimension, pos);
             try {
-                this.execute(() -> onDone.accept(dimension, chunk));
+                this.execute(() -> {
+                    try {
+                        onDone.accept(dimension, chunk);
+                    } finally {
+                        unpinForcedTicket(pinLevel, pos);
+                    }
+                });
             } catch (java.util.concurrent.RejectedExecutionException e) {
-                // 主循环已停（断连竞态）：回调丢弃，数据由下次会话 hash 比对兜底
+                // 主循环已停（断连竞态）：票随影子世界销毁
             }
         });
     }

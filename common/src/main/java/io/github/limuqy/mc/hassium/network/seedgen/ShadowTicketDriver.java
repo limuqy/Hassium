@@ -103,9 +103,12 @@ public final class ShadowTicketDriver {
             java.util.concurrent.ConcurrentHashMap.newKeySet();
 
     /** 每拍投递上限（小池 + 影子主循环单线程消化物化，过大会把主循环占满）。 */
-    private static final int MAX_LOCAL_GEN_PER_PUMP = 24;
-    /** 生成中在途上限（超出暂停投递，等物化/失败腾位）。 */
-    private static final int MAX_LOCAL_GEN_INFLIGHT = 64;
+    private static final int MAX_LOCAL_GEN_PER_PUMP = 8;
+    /**
+     * 生成中在途上限。原版首启靠 START 票限速、不并发灌满；影子端 4 waiter 池 + 高在途
+     * 会让 FULL 金字塔邻柱互抢，3s 超时窗口下失败率被放大。收紧到 waiter 数的数倍。
+     */
+    private static final int MAX_LOCAL_GEN_INFLIGHT = 16;
 
     /** 待清账（会话边界；影子主循环执行撤票）。 */
     private static final AtomicBoolean pendingClear = new AtomicBoolean();
