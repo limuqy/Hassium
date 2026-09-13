@@ -41,6 +41,10 @@ param(
     # 使 scenario 复跑必假 FAIL。调大 -DelayMs / -MoveSeconds 时仍须相应调大。
     [int]$ServerReadyTimeoutSec = 180,
     [int]$ClientTimeoutSec = 300,
+    # F17 看门狗：客户端日志连续静默这么多秒即判定疑似整进程冻结并 attach 取证。
+    # 实测健康场次最长静默 2~3s（92s 会话），取 5s 既不误报，又留得住 ~10s 的抓取窗口。
+    [int]$HangSilenceSec = 5,
+    [int]$HangDumpMax = 3,
     [string]$SmokePhases = "classic",
     # T8 场景引擎：-Scenario <name> 加载 common/src/main/resources/hassium/smoke/scenario/<name>.scenario。
     # 默认 classic 不注入 -Dhassium.smokeScenario（保持既有 ClientSmokeTest 经典路径零行为变化）；
@@ -76,6 +80,9 @@ $serverLog = Join-Path $logDir "server_${SessionId}.log"
 $serverErr = Join-Path $logDir "server_${SessionId}_err.log"
 $clientLog = Join-Path $logDir "client_${SessionId}.log"
 $clientErr = Join-Path $logDir "client_${SessionId}_err.log"
+
+# F17 挂起取证（日志静默 → jcmd 现场）：见 scripts/smoke/hang-watch.ps1 顶部说明。
+. (Join-Path $PSScriptRoot "smoke\hang-watch.ps1")
 
 # Loom runDir 在子项目目录下（fabric/run/client、neoforge/run/server 等）
 $loaderRunDir = Join-Path $projectRoot "$Loader\run"
@@ -662,8 +669,29 @@ $clientProc = Start-Process -FilePath $gradlew `
 # 8. 等待客户端退出（最长 ClientTimeoutSec 秒）
 Write-Host "[$SessionId] [7/9] 等待客户端退出 (超时 ${ClientTimeoutSec}s)..."
 $clientDeadline = (Get-Date).AddSeconds($ClientTimeoutSec)
+# F17 看门狗：整进程冻结时日志会整体静默，而系统「判挂起 → 关闭进程」之间只有 ~10s，
+# 必须在这段窗口里 attach 取证（健康场次最长静默 ≤3s，故阈值取 HangSilenceSec）。
+$hangDumps = @()
+$stallSec = 0
+$lastLogBytes = -1
 while (-not $clientProc.HasExited -and (Get-Date) -lt $clientDeadline) {
     Start-Sleep -Seconds 1
+    $logBytes = if (Test-Path $clientLog) { (Get-Item $clientLog).Length } else { 0 }
+    if ($logBytes -ne $lastLogBytes) {
+        $lastLogBytes = $logBytes
+        $stallSec = 0
+        continue
+    }
+    $stallSec++
+    # 每静默 5s 抓一帧，最多 HangDumpMax 帧（进程可能几秒内被关掉，attach 也未必一次成功）
+    if ($stallSec -lt $HangSilenceSec -or $hangDumps.Count -ge $HangDumpMax) { continue }
+    if (($stallSec - $HangSilenceSec) % 5 -ne 0) { continue }
+    $hangJvm = Find-SmokeClientJvm
+    if (-not $hangJvm) { continue }
+    $hangFile = Join-Path $logDir "client_${SessionId}_hang$($hangDumps.Count + 1).txt"
+    Write-Host "[$SessionId] 客户端日志静默 ${stallSec}s（游戏 JVM PID $($hangJvm.ProcessId)）→ 抓取现场: $hangFile" -ForegroundColor Yellow
+    $null = Save-SmokeHangDump -JvmPid $hangJvm.ProcessId -OutFile $hangFile
+    $hangDumps += $hangFile
 }
 if (-not $clientProc.HasExited) {
     Write-Host "[$SessionId] 客户端超时未退出，强制结束"
@@ -676,6 +704,14 @@ Write-Host "[$SessionId] [8/9] 解析结果 (客户端退出码: $clientExit)...
 # 单轮场景没有 ROUND2；不得把未运行的轮次写成 stats=false / pass=false。
 $requiresRound2 = $Scenario -notin @("seedgen", "modcompat", "modcompat_strict")
 $clientContent = if (Test-Path $clientLog) { Get-Content $clientLog -Raw } else { "" }
+
+# F17：Gradle 会把 fork 出的游戏 JVM 的真实退出码写进自己的失败信息（在 client 的 stderr 日志里）。挂起被系统关闭时是
+# NTSTATUS 0xCFFFFFFF，而 gradlew 自己的退出码恒为 1 —— 不提取这一行，「整进程冻结被系统关闭」
+# 与「普通构建失败」在结果里不可区分（2026-09-13 前那 8 场只能靠翻 WER 事件日志才认得出来）。
+$clientErrContent = if (Test-Path $clientErr) { Get-Content $clientErr -Raw } else { "" }
+$nativeExitMatch = [regex]::Match($clientContent + $clientErrContent,
+    "non-zero exit value -?\d+ \(NTSTATUS (0x[0-9A-Fa-f]+)\)")
+$clientNativeExit = if ($nativeExitMatch.Success) { $nativeExitMatch.Groups[1].Value } else { $null }
 
 # 提取 ROUND1 统计（begin 到 end 之间的行）
 $round1Match = [regex]::Match($clientContent, "HassiumSmokeTest:CLIENT_STATS ROUND1 begin(.+?)HassiumSmokeTest:CLIENT_STATS ROUND1 end", [System.Text.RegularExpressions.RegexOptions]::Singleline)
@@ -786,7 +822,7 @@ $logAuditAllow = @(
     "Cound not schedule mailbox",
     # 环境性网络噪音（外网不可达时的拉取失败，与模组功能无关）
     "Yggdrasil Key Fetcher.*Failed to request yggdrasil public key",
-    "Mod Menu/Update Checker.*Error checking for updates"
+    "Mod Menu/Update Checker.*Error checking for "   # updates / versions 等消息变体（外网不可达，环境噪音）
 ) + @($AllowErrorPatterns)
 $logAuditFailures = @()
 foreach ($auditLog in @($serverLog, $clientLog)) {
@@ -827,6 +863,10 @@ $resultObj = @{
     Scenario = $Scenario
     Result = "UNKNOWN"
     ClientExitCode = $clientExit
+    # F17 挂起取证：ClientNativeExitCode = fork 出的游戏 JVM 真实退出码（gradlew 恒为 1，
+    # 系统判定挂起并关闭进程时是 0xCFFFFFFF）；HangDumps 非空 = 日志静默期间抓到过现场。
+    ClientNativeExitCode = $clientNativeExit
+    HangDumps = @($hangDumps)
     Round1Stats = $round1StatsFound
     Round1Pass = $round1Pass
     Round2Stats = $round2StatsFound

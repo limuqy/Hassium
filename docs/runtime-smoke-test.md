@@ -78,6 +78,8 @@ Hassium 跨版本（1.20.1–1.21.11）× 多加载器（fabric / neoforge）的
 | `-ClientRenderDistance` | 否 | `32`（且 ≥ Vd1） | 钉死 `<loader>/run/client/options.txt` 的 `renderDistance` 滑块。1.21+ 跟踪半径 = `min(滑块, 服务器 VD)`；三端必须同一值，否则新 run 目录默认 12/16，R1 只喂满 VD16 圆柱（1021 / 1.21.4+ 1057） |
 | `-ServerReadyTimeoutSec` | 否 | `180` | 服务端 `Done!` 出现超时 |
 | `-ClientTimeoutSec` | 否 | `300` | 客户端退出超时 |
+| `-HangSilenceSec` | 否 | `5` | **挂起看门狗**：客户端日志连续静默这么多秒即判定疑似整进程冻结，立刻对游戏 JVM 做 `jcmd Thread.print -l` / `VM.info` / `GC.heap_info` 取证（落 `logs/client_<SessionId>_hangN.txt`）。健康场次实测最长静默 2~3s，无一次误报 |
+| `-HangDumpMax` | 否 | `3` | 每场最多抓几帧现场（每再静默 5s 抓一帧） |
 | `-SmokePhases` | 否 | `classic` | Java 侧阶段：`classic`（经典两轮）/ `pregen`（预生成，经 `-PregenOnly` 使用） |
 | `-ManualLogout` | 否 | false | ROUND1 断开改走真实手动登出路径（`Minecraft.disconnect(Screen[,Z])` / `clearLevel`），验证手动登出光照/方块落盘 |
 | `-DryRun` 类遗留参数 | 已删除 | — | UdpFailover / Nginx 相关参数已随退役链路整体删除（见文末「退役说明」） |
@@ -365,7 +367,8 @@ build/smoke-test/
 │   ├── server_<SessionId>.log           # 服务端 stdout
 │   ├── server_<SessionId>_err.log       # 服务端 stderr
 │   ├── client_<SessionId>.log           # 客户端 stdout（含 ROUND1/2 统计原文与场景 marker）
-│   └── client_<SessionId>_err.log       # 客户端 stderr
+│   ├── client_<SessionId>_err.log       # 客户端 stderr（Gradle 失败信息含游戏 JVM 真实退出码 NTSTATUS 0x…）
+│   └── client_<SessionId>_hangN.txt     # 挂起看门狗现场（线程栈 + VM.info + heap；仅日志静默 ≥ HangSilenceSec 时产生）
 ├── probe/<SessionId>/roundN.json        # PROBE JSON v1（SmokeProbeWriter 落盘）
 ├── stats/
 │   ├── <SessionId>_round1_VD20.txt      # 提取后的 ROUND1 统计（VD=20 场景）
@@ -416,6 +419,8 @@ build/smoke-test/
 | `ProbeGateFailures` | classic 四门禁失败名单（空数组 = 全过或 probe 缺失跳过） |
 | `DimensionGateFailures` | dimension 场景 post-exit 磁盘门禁失败名单（仅 dimension 评估） |
 | `Probe.Round1` / `Probe.Round2` | probe roundN.json 原值透传（缺失为 `null`）；batch CSV 将其摘要成一行短串（joined/gateway/counters）观测列 |
+| `ClientNativeExitCode` | fork 出的**游戏 JVM** 的真实退出码（从 client log 的 `finished with non-zero exit value … (NTSTATUS 0x…)` 提取）。`gradlew` 自身退出码恒为 1，不提这一行，「整进程冻结被系统关闭」与普通构建失败不可区分 |
+| `HangDumps` | 看门狗抓到的现场文件路径清单（空数组 = 本场没有疑似冻结） |
 
 ## 失败诊断清单
 
@@ -461,6 +466,27 @@ build/smoke-test/
 
 - 对照「直连拓扑门禁」节失败码定位：`HANDSHAKE_NOT_NEGOTIATED` 看服务端 `play init (caps=`；`AGGREGATION_NOT_ACTIVE` 看 `Aggregation enabled for`；`SERVER_FULL_PUSH_TIMEOUT` 看 `[PENDING_CONFIRM]`；`TRACE_*` 看 probe `chunkTrace` 缺口；石墙注入触发看 server log `[LIGHT-SEG]` / stone wall 日志
 - probe 整体缺失：看 client log 有无 `PROBE_WRITTEN`；无则确认 `-PhassiumSmokeProbeDir` 透传链是否生效（`hassium.smokeTest.probeDir` 未设置时 SmokeProbeWriter 静默 no-op）
+
+### 9. 客户端日志整段静默 / `AppHangB1` / `0xCFFFFFFF`（整进程冻结，非崩溃）
+
+**签名**（三者同时出现即命中，2026-09-13 F17 定性）：客户端 log 在某一秒**全线程同时停写**且此后不再增长
+（健康场次实测最长静默 ≤3s）；`client_<SessionId>_err.log` 里 Gradle 报
+`finished with non-zero exit value -805306369 (NTSTATUS 0xCFFFFFFF)`；**没有** hs_err、crash-report、Java 异常。
+
+- **为什么没有崩溃产物**：这**不是崩溃**，是 Windows 判定窗口「停止与 Windows 交互」后**关闭进程**
+  （事件日志 `Application Hang` id 1002 + `Windows Error Reporting` id 1001，事件名 `AppHangB1`）。
+  JVM 的崩溃处理器只覆盖 SEH 异常路径（实测 `Unsafe` 造 SEGV → exit 1 + 写出 hs_err），
+  所以 coredump / WER LocalDumps **结构性抓不到**——能抓的只有「静默 → 被关闭」之间那几秒的 jcmd 现场。
+- **查现场**：直接读 `logs/client_<SessionId>_hangN.txt`（看门狗已抓）。判读：
+  多帧线程栈逐字相同 = 硬死锁；`jcmd … → TIMEOUT` = VM 卡在 safepoint（本身就是证据）；
+  Render/主线程停在 native 帧 = 图形驱动。
+- **`HangDumps: []` 但该场仍 FAIL** ⇒ 不是本类（去看普通崩溃/门禁路径）。
+- **确认系统侧判定**（可选）：
+  `Get-WinEvent -FilterHashtable @{LogName='Application';ProviderName='Windows Error Reporting';StartTime=…} | ? Message -match 'java.exe'`
+  —— `AppHangB1` = 挂起被关闭；`AppCrash_*` = 真崩溃（那时才有 hs_err/dump 可看）。
+- **已知实例**：F17（影子区块桥 `injectedChunk(x,y)` 写死主世界维度 → nether/end 注入柱落回原版
+  `ServerChunkCache.getChunk` 的 `CompletableFuture.join()` 与影子主循环互等）。命中率：dimension ≈ 20%（nether 刷怪笼密集）、
+  classic ≈ 2.8%；复现优先用 `-Scenario dimension`。
 
 ### 8. 并行模式下 Round2Pass=False（fabric PASS 但 neoforge FAIL）
 

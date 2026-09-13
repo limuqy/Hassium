@@ -67,7 +67,13 @@ public class MixinServerChunkCache {
         if (server == null) {
             return;
         }
-        LevelChunk chunk = server.injectedChunk(x, z);
+        // F17：必须按本 ChunkCache 实例的维度查注入表 —— 2 参数 injectedChunk(x, z) 写死主世界，
+        // nether/end 注入柱会命中不了桥，落回原版 getChunk 的 join() 与影子主循环互等死锁。
+        String dimension = server.dimensionOfCache((net.minecraft.server.level.ServerChunkCache) (Object) this);
+        if (dimension == null) {
+            return;
+        }
+        LevelChunk chunk = server.injectedChunk(dimension, x, z);
         if (chunk != null) {
             cir.setReturnValue(chunk);
         }
@@ -79,6 +85,10 @@ public class MixinServerChunkCache {
      * 原版 {@code ServerChunkCache.getChunk} 查 ChunkHolder。注入票尚未被 pollTask
      * 消化时非主线程 {@code join()} 会永久阻塞（影子端不跑完整 tick）。HEAD 拦截
      * 仍作兜底（恒 FULL）。holder 稳定前不删除本桥。
+     * <p>
+     * F17 修复：按本 ChunkCache 实例的维度查注入表（{@code dimensionOfCache}）——
+     * 2 参数 {@code injectedChunk(x, z)} 写死主世界，nether/end 注入柱命中不了桥，
+     * 会落回原版 {@code getChunk} 的 {@code join()} 与影子主循环互等死锁（2026-09-13 定性）。
      * <p>
      * FULL 票扩散后邻柱可能只有 ProtoChunk：注入表未命中且非 SeedGen worldgen 时
      * 对 FULL 取数返回 null，避免 {@code ServerLevel.getChunk} 把 Proto 强转 LevelChunk。
@@ -96,7 +106,13 @@ public class MixinServerChunkCache {
         if (server == null) {
             return;
         }
-        LevelChunk chunk = server.injectedChunk(x, z);
+        // F17：必须按本 ChunkCache 实例的维度查注入表 —— 2 参数 injectedChunk(x, z) 写死主世界，
+        // nether/end 注入柱会命中不了桥，落回原版 getChunk 的 join() 与影子主循环互等死锁。
+        String dimension = server.dimensionOfCache((net.minecraft.server.level.ServerChunkCache) (Object) this);
+        if (dimension == null) {
+            return;
+        }
+        LevelChunk chunk = server.injectedChunk(dimension, x, z);
         if (chunk != null) {
             cir.setReturnValue(chunk);
             return;

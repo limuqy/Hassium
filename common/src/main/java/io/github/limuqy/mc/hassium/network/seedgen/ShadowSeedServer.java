@@ -108,6 +108,18 @@ public class ShadowSeedServer extends MinecraftServer {
             injectedChunks = new java.util.concurrent.ConcurrentHashMap<>();
 
     /**
+     * ChunkCache 实例 → 维度 id（懒解析后缓存；仅影子上下文使用）。
+     * <p>
+     * F17 根因修复：{@code MixinServerChunkCache} 的两座桥（getChunk / getChunkForLighting）
+     * 原用 2 参数 {@link #injectedChunk(int, int)}（写死主世界），nether/end 注入柱命中不了桥，
+     * 落回原版 {@code ServerChunkCache.getChunk} 的 {@code CompletableFuture.join()}，与影子
+     * 主循环的 managedBlock 互等 ⇒ 硬死锁（Windows 判挂起关闭进程，AppHangB1 + 0xCFFFFFFF）。
+     * 桥改为按本实例维度查表。三维度装配后不变，首次解析后缓存为 O(1)。
+     */
+    private final java.util.concurrent.ConcurrentHashMap<ServerChunkCache, String> cacheDimensions =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+    /**
      * 按维度目录落盘的存储管理器（dimension id → manager，各绑定
      * {@link #regionDir(String)} 对应的 vanilla 布局 region 目录）。
      * 断连 saveAll 是否需要重写该柱：脏位在 {@link io.github.limuqy.mc.hassium.storage.ShadowStorageHashes}
@@ -984,6 +996,29 @@ public class ShadowSeedServer extends MinecraftServer {
     /** ServerLevel 的维度 id 字符串（{@code namespace:path}；两版本 location/identifier 封装）。 */
     static String dimensionId(ServerLevel lvl) {
         return LevelCompat.getDimensionId(lvl);
+    }
+
+    /**
+     * 影子上下文：ChunkCache 实例 → 维度 id。未装配/未匹配返回 null（调用方保持现状不拦截）。
+     * 首次解析后缓存；解析只依赖 {@link #level(String)}（装配后只读）与
+     * {@code ServerLevel.getChunkSource()}（final 字段读），跨线程安全。
+     */
+    public String dimensionOfCache(ServerChunkCache cache) {
+        if (cache == null) {
+            return null;
+        }
+        String known = cacheDimensions.get(cache);
+        if (known != null) {
+            return known;
+        }
+        for (String dim : new String[] { DimensionKey.OVERWORLD, DimensionKey.NETHER, DimensionKey.END }) {
+            ServerLevel lvl = level(dim);
+            if (lvl != null && lvl.getChunkSource() == cache) {
+                cacheDimensions.put(cache, dim);
+                return dim;
+            }
+        }
+        return null;
     }
 
     /**

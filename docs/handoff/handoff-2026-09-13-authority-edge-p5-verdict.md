@@ -123,7 +123,8 @@
 
 `P5_TAKEOVER` 保持 `false`，其自身理由是 §9.8 已记录的：移动场景 OVD 补票速度不足
 （`bandmove2` 28% 未命中；整方形驱动 `otmove4` R2 spatial 9/147）、收尾 `saveAll` 停滞后强退
-（`0xC0000409`）、大票突发下的运行期原生终止（`0xCFFFFFFF`，512/拍触发、收到 64/拍消失）。
+（`0xC0000409`）、大票突发下的运行期原生终止（`0xCFFFFFFF`，512/拍触发、收到 64/拍消失——**该归因已被 F17 推翻**，
+`P5_TAKEOVER=false`、出票一行不执行时同样出现，见 §五 F17）。
 加上**矩阵证据缺口**（只有 1.21.1 fabric 的 classic + move 跑过接管）。
 
 > **别再把空洞和接管绑在一起**。本会话第一版文档写了"与 P5 接管强相关"，那是把
@@ -425,7 +426,7 @@ F4 的矩阵（含 scenario 锚点 `1.20.1/fabric`、`1.20.1/forge`、`1.21.1/ne
 - **处置（未结）**：R1 读数仍有效（可作证据）；`dimension` 需要**可重试策略**（或在门禁里标注"需 ≥2 次取稳定态"）。
   **`f13b` 的两种现象（切维后常驻缓存为 0 / R1 边界 P0）都没定性**，不要在没有复现的前提下归因到权威边沿——
   它们与 `f13a`/`f13c` 的差异可能只是同一 flaky 的不同侧面。
-- **相关**：生产态 classic 上也出现过一次同类**无 Java 痕迹的原生终止**，另立 **F17**（含速率读数 1/6 与判定）。
+- **相关**：生产态 classic 上也出现过一次同类**无 Java 痕迹的原生终止**——**F17 已定性为同一根因**（影子区块桥写死主世界维度的 `getChunk` 死锁），见 §五 F17。
   两处的现象类别相同（无异常、无 `hs_err`、无 crash-report），但**归属未定**。
 
 ---
@@ -564,8 +565,10 @@ $f='build/smoke-test/logs/client_<SessionId>.log'
 > - **F5 后续**：接管臂在 `dimension`（nether 段 `sweep missing=26`）与 `seedgen`（`locallyGenerated=0`）
 >   两个场景不成立——这是接管臂要开之前必须先解的两件事。
 > - **F7**：已降为观察项（未复现），不阻塞任何判定。
-> - **F17**（新）：F16 之后生产态 classic 出现一次**无 Java 痕迹的原生终止**，速率 **1/6**（F16 前同配置 0/10）。
->   样本量不足以定性 ⇒ **F16 记为「修好载荷越界、无已知回归」，但未经证「无副作用」**。见 §五 F17。
+> - **F17 → 已定性（第五轮）**：不是 F16 的副作用，而是**既有缺陷**——影子区块桥的 `injectedChunk(x,z)` 写死主世界维度，
+>   使 nether/end 注入柱落回原版 `ServerChunkCache.getChunk` 的 `CompletableFuture.join()`，与影子主循环互等 ⇒ 硬死锁 →
+>   Windows 判挂起并关闭进程（`AppHangB1` + `0xCFFFFFFF`）。8 次 WER 事件与 8 个 FAIL 会话逐一对应，跨版本/加载器/场景。
+>   ⇒ **F16 可以记成「修好载荷越界、无已知副作用」**（终止与它无关）。见 §五 F17。
 
 ---
 
@@ -828,41 +831,46 @@ $f='build/smoke-test/logs/client_<SessionId>.log'
 - **教训（补进 §六）**：**「条数上限」不是「载荷上限」。** 引入任何**聚合/批处理**时，必须同时引入**字节**预算，
   并确认**两个方向的上限不一样**（本例 C2S 32 KiB vs S2C 1 MiB，只有一侧会踩）。F11 的原始验收只看
   「行数降下来、空洞为 0」，**结构上看不见载荷大小**——矩阵复跑（F4 余项）才是抓到它的那条路径。
-- **⚠️ 未定性遗留（F16 之后新出现，见 F17）**：翻回 `P5_TAKEOVER=false` 后的生产态哨兵
-  `1.21.1_fabric_I_p5off_sentinel` **原生终止**（见 §五 F17）。**不能**因为「F16 是纯缓冲区算术」就假定无关——
+- **⚠️ 已结案（F17，见 §五）**：翻回 `P5_TAKEOVER=false` 后的生产态哨兵
+  `1.21.1_fabric_I_p5off_sentinel` 那次**原生终止 = 影子区块桥的维度写死导致的 `getChunk` 死锁**（与 F16 无关）；
   结论要由读数定。
 
 ---
 
-### F17（P1，第四轮新增，**未定性**）F16 修复后，生产态 1.21.1/fabric classic 出现一次原生终止
+### F17（P1，第四轮新增）→ **已定性（2026-09-13 第五轮会话）：影子区块桥「维度写死主世界」→ nether 注入柱落回原版 `getChunk` 的 `join()` 死锁**
 
-- **现象**：`1.21.1_fabric_I_p5off_sentinel`（`P5_TAKEOVER=false`、classic、与 HEAD 逐字一致的代码）——
-  客户端日志**停在 1267 行**（正常同类场次 12k~18k 行），最后一行是
-  `[SHADOW_TRACK] sweep missing=128 localGen=false center=(-2,0) radius=20`；
-  **无 Java 异常、无 `Stopping!`、无 `hs_err`、无 crash-report**（`fabric/run` 下唯一的 `hs_err` 是 8/26 的服务端残留）。
-  门禁：`PROBE_MISSING` ×2 + `SMOKE_PASS_MARKER_MISSING` + `CLIENT_EXIT_NONZERO`。
-- **为什么不能直接归到已知 flaky**：今日（2026-09-13）同一日志目录里，**原生终止全部集中在 move / 接管臂场景**
-  （`move` / `move2` / `otmove1..4` / `nticketmove1` / `bandmove2`），**classic + `P5_TAKEOVER=false` 在 F16 之前
-  一次都没有过**。F16 之后第一次跑（就是本场）就出现 ⇒ 时间上可疑。
-- **反向证据（不足以结案，但要一起看）**：
-  - 同批第 2 场 `p5off_sentinel2`（**同代码同配置**）**PASS**（`round1=True round2=True`、空洞 0）⇒ 不是必现；
-  - F16 之后接管态 classic 在 **1.20.1/fabric、1.21.1/forge、1.21.11/neoforge 三个 loader 上全部 PASS**
-    （`p5_f5a` / `f5b` / `f5c`）⇒ 不是「F16 后 classic 全挂」；
-  - F16 改动面是 `ShadowPullClient.request` 的分批 + `ShadowPullRequestC2SPacket` 的纯编码测量
-    （无反射、无 JNI、无 Unsafe）——**从代码面上不支持**「引起原生终止」，但这是推理、不是读数。
-- **速率读数（已跑）**：同一代码同一配置 `1.21.1/fabric + classic + P5_TAKEOVER=false` 共 **6 场**：
-  `p5off_sentinel` **FAIL（原生终止）**、`sentinel2` / `sentinel3` / `s4` / `s5` / `s6` 全 **PASS**
-  ⇒ **1/6 ≈ 17%**。对照：**F16 之前**同配置（今日）约 **10 场**（`f1f2_prod1/prod2`、`band1`、`band2`、
-  `nticket1`、`ot1`、`p5fix1`、`p5off1`、`p5off2`、`f11`）**0 次**原生终止。
-- **判定（如实）**：`1/6` vs `0/10` 这个样本量**不足以区分**——Fisher 精确检验 p≈0.38，不显著。
-  ⇒ **F16 与本终止的因果关系「不支持、也不排除」**，本轮**不结案**。
-  同日其它原生终止（`otmove1..4` / `nticketmove1` / `bandmove2` / `move` / `move2` / `dimf3` / `f1f2_dim`）
-  说明 1.21.1/fabric 上**本来就有**这类无 Java 痕迹的终止，故「与既有 flaky 同族」是**相符**解释，**不是证明**。
-- **下一步（不要再盲跑）**：该速率下 A/B（回退 F16 再跑 6 场）同样分辨不出（`0/6` vs `1/6` 更弱）。
-  真正能定性的是**拿到原生层证据**：给客户端 JVM 打开崩溃产物（`-XX:+CreateCoredumpOnCrash` / Windows WER
-  local dump），下次撞上就有现场；否则只能是「低频未解释的原生终止」。
-- **结论**：**未定性，按 P1 挂着（低频）**。在此之前，不要把 F16 记成「已完全验证无副作用」——它被证明的只有
-  「修好载荷越界」+「1.20.1 seedgen 与三 loader 接管态无回归」。
+- **原「下一步」作废**：给客户端 JVM 开崩溃产物（coredump / WER LocalDumps）**抓不到任何东西**。
+  实测本机 JVM 崩溃处理器只覆盖 SEH 异常路径（`Unsafe` 造 SEGV → exit 1 + 写出 hs_err）；
+  而本终止走的是「窗口无响应 → Windows 判挂起 → 关闭进程」——**WER 事件名是 `AppHangB1`（不是 `AppCrash`）**，
+  退出码 `0xCFFFFFFF`（Gradle 报 `NTSTATUS`）、无 hs_err、无 Java 痕迹。⇒ 唯一可行窗口是「日志静默 → 进程被关闭」之间那几秒。
+- **定性手段（已落地）**：harness 看门狗 `scripts/smoke/hang-watch.ps1`（日志静默 ≥5s 即 `jcmd Thread.print -l` /
+  `VM.info` / `GC.heap_info` 到 `logs/client_<id>_hangN.txt`）；健康场次实测最长静默 ≤3s，无一次误报。
+- **复现**：`1.21.1_fabric_I_f17dim1`（dimension，命中率高，见下）——静默 5/10/15s **三帧现场全抓到**；
+  **两帧 Render thread 49 帧栈逐字相同 ⇒ 硬死锁**（非长停顿）；GC 正常（1.14G / 1.8G，无死亡螺旋）。
+- **根因（现场 + 代码双侧确认）**：
+  1. Render thread：`handleLevelChunkWithLight` → `ShadowVanillaLightPipeline.submitVisible` → `ShadowSeedServer.injectPreLight/injectChunk`
+     → `ShadowLightCompute.withChunkLock`（**持影子 chunkLock**）→ `decodeInjectedPacketLocked` → 原版 `LevelChunk.replaceWithPacketData`
+     → 方块实体反序列化 → **`SpawnerBlockEntity.loadAdditional`（刷怪笼）→ `BaseSpawner.load` → `setNextSpawnData` → `Level.getBlockState`**
+     → `ServerChunkCache.getChunk` → **`CompletableFuture.join()`**。
+  2. 原版 `SpawnerBlockEntity$1.setNextSpawnData` 查的是**刷怪笼自身位置**（就在本柱内），而该柱在 decode 前已
+     `injectedChunks.put(key, chunk)`——本该被桥接住。
+  3. 但 `MixinServerChunkCache` 两座桥（`hassium$shadowGetChunk` / `hassium$shadowChunkForLighting`，注释自称「防后台线程 getChunk join 死锁」）
+     调的是 **2 参数** `server.injectedChunk(x, z)`，其定义即 `return injectedChunk(DimensionKey.OVERWORLD, x, z)` ——**写死主世界**。
+     ⇒ **nether / end 的注入柱永远命中不了桥**，落回原版 `getChunk` → `join()`。
+  4. join 的对手方：`hassium-seedgen-main` 同时 park 在 `ServerChunkCache$MainThreadExecutor.managedBlock` 里等另一个 chunk future，
+     `hassium-shadow-worldgen-*` 全部空转 ⇒ **无人能完成该 future，永久死锁**。
+  5. 窗口停止泵消息 → Windows 判「停止与 Windows 交互」并关闭进程 ⇒ 全线程同一秒停写、无 hs_err、`0xCFFFFFFF`。
+- **与命中率吻合**：nether 刷怪笼（堡垒）密度高 ⇒ dimension **3/15 = 20%**；主世界（地牢/矿井）稀疏 ⇒ classic **4/143 = 2.8%**。
+  三次 dimension 终止**全部落在 nether 相（会话 +50~+76s）**，三次 PASS 都走过同一相。
+- **WER 全量核对**：09-12~09-13 的 8 次 java.exe `AppHangB1` 与 8 个 FAIL 会话**逐一对应**（Δ≈0~1s），
+  跨版本（1.20.1/1.21.1/1.21.11）、跨加载器（fabric/neoforge）、跨场景（classic/dimension/move）。
+  ⇒ `otmove2/3`、`f1f2_dim`、`p5_dim_f5d`、`auth2`、`1.21.11_neoforge_I_dimension` 与本场**同一根因**；
+  **F5 记录里「512/拍出票导致运行期原生终止」的归因不成立**（`P5_TAKEOVER=false`、出票一行不执行时同样会撞上）。
+- **修复面（未实施，待批）**：两座桥改为**按本 `ServerChunkCache` 实例的维度**查表
+  （`ShadowSeedServer` 装配维度时建 `IdentityHashMap<ServerChunkCache, String>`，`instance → dimension`），
+  使 nether/end 注入柱命中桥；并补「桥未命中」诊断以确认 classic 那 2.8% 是否还有第二条 miss 路径。
+- **harness 升级（已落地，与修复解耦）**：`ClientNativeExitCode`（从 gradle 的 `NTSTATUS 0x…` 行提取；此前 gradlew 恒报 1，
+  这类失败与普通构建失败在结果里不可区分）+ `HangDumps`（静默期现场文件清单）写入 `result_<id>.json`。
 
 ---
 
