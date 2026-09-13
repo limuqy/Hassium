@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ShadowPullPacketTest {
     @Test
@@ -68,6 +69,41 @@ class ShadowPullPacketTest {
             assertArrayEquals(expected.payload(), actual.payload());
             assertEquals(expected.error(), actual.error());
         }
+    }
+
+    @Test
+    @DisplayName("shadowPullV1 batches are bounded by encoded size, not just entry count")
+    void batchesAreBoundedByEncodedSize() {
+        int planeCount = io.github.limuqy.mc.hassium.network.sectiondelta.SectionPlaneSyndrome.PLANE_COUNT;
+        // 每柱 64 段非零 hash，每段带 planeCount 个 int —— 单柱约 64 * (8 + 4*48) ≈ 12.8 KB。
+        // 这正是「MAX_ENTRIES=384 条上限界不住载荷」的成因。
+        List<Long> sectionHashes = java.util.stream.LongStream.rangeClosed(1, 64).boxed().toList();
+        int[][] planes = new int[64][];
+        for (int i = 0; i < 64; i++) {
+            planes[i] = new int[planeCount];
+            planes[i][0] = i + 1;
+        }
+        List<ShadowPullRequestC2SPacket.Entry> heavy = new java.util.ArrayList<>();
+        for (int i = 0; i < 40; i++) {
+            heavy.add(new ShadowPullRequestC2SPacket.Entry(i, 0, 1L, sectionHashes, planes, 0));
+        }
+        int budget = ShadowPullRequestC2SPacket.MAX_PAYLOAD_BYTES;
+        List<List<ShadowPullRequestC2SPacket.Entry>> batches =
+                ShadowPullRequestC2SPacket.batchesByEncodedSize("minecraft:overworld", heavy, budget);
+        // 不丢条目，且每条都真的落进预算内（不是按条数猜的）
+        assertEquals(40, batches.stream().mapToInt(List::size).sum());
+        assertTrue(batches.size() > 1, "heavy batch should have been split");
+        for (List<ShadowPullRequestC2SPacket.Entry> batch : batches) {
+            FriendlyByteBuf buf = new FriendlyByteBuf(Unpooled.buffer());
+            new ShadowPullRequestC2SPacket("minecraft:overworld", 0L, 1L, batch).encode(buf);
+            assertTrue(buf.readableBytes() <= budget, "batch exceeded budget: " + buf.readableBytes());
+        }
+        // 对照组：同样 40 条但无分段载荷 —— 一条就够，证明切分由字节驱动而非条数
+        List<ShadowPullRequestC2SPacket.Entry> light = java.util.stream.IntStream.range(0, 40)
+                .mapToObj(i -> new ShadowPullRequestC2SPacket.Entry(i, 0, 0L, List.of(), 0))
+                .toList();
+        assertEquals(1, ShadowPullRequestC2SPacket
+                .batchesByEncodedSize("minecraft:overworld", light, budget).size());
     }
 
     @Test

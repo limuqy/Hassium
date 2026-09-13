@@ -462,7 +462,15 @@ $f='build/smoke-test/logs/client_<SessionId>.log'
 - [x] **F4 收敛矩阵已跑**（第三轮）：编译七锚点 × `builds_for` 全过；运行时 3 版本（1.20.1 / 1.21.1 / 1.21.11）× `builds_for` 9 组合。
       抓到 **F15**（1.21.11/neoforge R2 空洞 → 已定性为 **P0**（F1 同族、丢在客户端接收侧）并**按「快照重推 = 自愈」修复**，
       两轮复测空洞 0/0；丢弃现场证据待补）。见 §9.9 与 F15。
-- [ ] **F4 余项**：`modcompat` / `seedgen` 场景未在当前代码复跑（收敛口径下是否纳入待定）。
+- [x] **F4 余项已复跑**（第四轮）：`seedgen` × 1.20.1/fabric（`_f4b` **PASS**、空洞 **0**）、× 1.21.1/fabric（`_f4` **PASS**）；
+      `modcompat` × 1.20.1/fabric（**PASS**，但封闭空洞 **43 格**、最大分块 **31**——比历史 ≤15 大，见下）。
+      **结论**：`seedgen` 口径干净、可纳入 P0 门禁候选；`modcompat` **暂不纳入**（洞大且未定性）。
+      ——顺带抓到 **F16**（F11 聚合把 C2S 载荷顶过 32 KiB，1.20.1 客户端被踢），已修复并复测（见 §五 F16）。
+- [ ] **F4 余项遗留**：`modcompat` 的 43 格封闭空洞**未定性**。已知：43 格在
+      `networkReceived / shadowInjected / shadowReady / clientApplied` **四条链上一次都没出现**，
+      且 `trackedCandidateCount == loadedChunks == observed == 806`（无"已跟踪却缺席"的证据）；
+      该场景 `locallyGenerated = 1470`（SeedGen 开）⇒ 与「稀疏本地生成 + 单轮 dump 未 settle」一致，
+      但**这只是相符、不是证明**。要纳入门禁须先给它一个 settle 判据（或多轮取稳定态）。
 - [x] **F1 / F2 已落地**（2026-09-13 第三轮；F2 契约方向由用户拍板选 A），但**验收仅部分达成**：
       空洞项全绿；`starved` 仅 1.21.1/fabric 为 0，1.20.1/fabric = 5、1.21.1/forge = 4、neoforge(修复后) = 3。
       判据与量化见 §9.7。
@@ -559,7 +567,7 @@ $f='build/smoke-test/logs/client_<SessionId>.log'
 - **未直接实测**：`f1f2_p5b` 复跑时该竞态**没有发生**（`crashed=0`），所以本次修复是「按帧签名推证 +
   同窗口同栈的 ICCE 实例」，不是被观测触发的 `teardownExit`。**若要实测触发，需反复重跑收尾竞态。**
 
-### 9.5 F11（P2，性能）→ **已修复（第三轮会话）：权威声明的 `resolve()` 逐柱发 C2S pull**
+### 9.5 F11（P2，性能）→ **已修复；其"已验证"结论在第四轮被降级（载荷维度漏测，见下）**
 
 - **原状**：`ChunkAuthorityClient.resolve()` 对**每条**声明调用 `ShadowPullClient.requestFull(dimension, List.of(pos))`
   / `requestAuthoritativeFull(dimension, List.of(pos))` —— 单元素列表 → **一柱一个 C2S 包**。
@@ -575,6 +583,10 @@ $f='build/smoke-test/logs/client_<SessionId>.log'
     服务端 `[AUTHORITY] send` = **171 行** ⇒ **≈1:1**（修复前约 10:1）。
   - `chunksSum` = **1764**，单包最大 **109** 柱（修复前 `chunksSum ≈ lines`、平均 1.00~1.09 柱/包）。
   - `hash-hit zero-request` 35 行、`[SHADOW_TICKET]` 0 行（接管臂关，符合预期）。
+- **⚠️ 验收口径被降级（第四轮补记）**：上面这组读数只覆盖了「包数 / 空洞」两个维度，
+  **没有覆盖载荷大小**——而载荷恰恰是它引入缺陷的地方：1.20.1 复跑时聚合出的 compare 请求把
+  C2S 顶过 vanilla 的 32 KiB 上限，客户端被踢（见 §五 **F16**）。故 F11 的结论应读作
+  「包数目标达成、空洞无回归」，**不**读作「已验证无副作用」。
 - **风险（已规避）**：批量后分组内 hash 未知/不等的判定仍是逐条语义，需保证「有基线→compare、无基线→权威 FULL」
   两个分组都按柱判定（不能按包判定），否则会退化成整包一刀切 —— 由 `resolve` 的返回值保证。
 
@@ -713,6 +725,40 @@ $f='build/smoke-test/logs/client_<SessionId>.log'
 `snapshot=true` 2→4、`entriesSum` 2046→3117/3267；两轮丢弃计数均为 0 = 未撞上窗口。）
 
 </details>
+
+---
+
+### F16（P0，第四轮复跑新增）**F11 的聚合把 C2S 载荷顶过 vanilla 的 32 KiB 硬上限**（自己引入、自己抓到）
+
+- **现象**：`1.20.1_fabric_I_seedgen_f4`（F4 余项复跑）R1 客户端被踢：
+  `Player527 lost connection: Internal Exception: ... IllegalArgumentException: Payload may not be larger than 32767 bytes`，
+  门禁报 `SMOKE_PASS_MARKER_MISSING` + `PROBE_MISSING`（场景没跑完就被断开）。
+- **根因链**：
+  1. `ShadowPullRequestC2SPacket` 的 `MAX_ENTRIES = 384` 是**条数**上限，不是**载荷**上限；
+  2. 单柱的载荷是「每段 8 字节 hash + 非零段再带 `PLANE_COUNT(48)` 个 int」⇒ 单段 **200 字节**、
+     单柱最多 64 段 ⇒ **单柱可达 12.8 KB**；
+  3. vanilla 的 C2S 上限是 `ServerboundCustomPayloadPacket.MAX_PAYLOAD_SIZE = 32767`
+     （**S2C 是 1 MiB**，这个不对称是关键）；超限由 vanilla 解码器抛异常并踢掉客户端；
+  4. F11 之前每柱一条请求（1 条/包）永不触顶；**F11 聚合后**才可达 ⇒ 这是本轮**自己引入**的缺陷。
+- **实测触发点**：客户端日志 `chunks=384 false`（空基线，极小，安全）与 **`chunks=160 true`**
+  （带分段基线的 compare 请求）——超限的就是后者；1.21.1 那两轮最大批次只有 109，所以没暴露。
+- **修法（已实施）**：
+  - `ShadowPullRequestC2SPacket` 新增 `MAX_PAYLOAD_BYTES = 32767` 与
+    `batchesByEncodedSize(dimension, entries, maxBytes)`——**按实际 `encode()` 后的字节数二分切分**
+    （每批同时 ≤ `MAX_ENTRIES`），单条自身超限且不可再切时原样返回、由调用方决定策略；
+  - `ShadowPullClient.request()` 改用它，预算 = `MAX_PAYLOAD_BYTES - 1 KiB`
+    （余量给 forge `ShadowPullRequestWrapper` / neoforge `ByteArrayPayload` 的封装）；
+  - 单测 `ShadowPullPacketTest.batchesAreBoundedByEncodedSize`：40 条「每柱 64 段」的重条目被切成多批
+    且每批 `encode()` 后都在预算内；同样 40 条无分段载荷的轻条目仍是 **1 批**（证明切分由**字节**驱动而非条数）。
+- **回归哨兵**：`1.20.1_fabric_I_seedgen_f4b`（同配置复跑）——见下。
+- **回归哨兵（已跑，`1.20.1_fabric_I_seedgen_f4b`，同配置同场景）**：`=== RESULT: PASS ===`、`failures=[]`、
+  `warnings=[]`、R1 空洞 **0**（`observed 1529`）。服务端日志里唯一的 `lost connection` 是场景收尾的正常
+  `Disconnected`，**无** `Payload may not be larger` 命中。
+  客户端最大批次：空基线那批仍是 **384**（空条目 ~14 B/柱 ≈ 5.4 KB，本来就不用切），
+  **带分段的批次最大 190**（切分由字节驱动，所以条数不再是固定数——这正是"按条数猜"会错的地方）。
+- **教训（补进 §六）**：**「条数上限」不是「载荷上限」。** 引入任何**聚合/批处理**时，必须同时引入**字节**预算，
+  并确认**两个方向的上限不一样**（本例 C2S 32 KiB vs S2C 1 MiB，只有一侧会踩）。F11 的原始验收只看
+  「行数降下来、空洞为 0」，**结构上看不见载荷大小**——矩阵复跑（F4 余项）才是抓到它的那条路径。
 
 ---
 

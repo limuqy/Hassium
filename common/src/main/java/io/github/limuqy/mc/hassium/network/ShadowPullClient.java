@@ -36,6 +36,12 @@ public final class ShadowPullClient {
     private static final java.util.concurrent.ConcurrentHashMap<Long, Boolean> REQUEST_MODES =
             new java.util.concurrent.ConcurrentHashMap<>();
     private static final int MAX_TRACKED_REQUESTS = 1_024;
+    /**
+     * C2S 载荷预算余量：vanilla 的 32767 限的是**载荷本身**，而各加载器封装
+     * （forge `ShadowPullRequestWrapper` / neoforge `ByteArrayPayload`）可能再包一层。
+     * 留 1 KiB 使"我们算出的字节数"与"线上载荷"之间不擦边。
+     */
+    private static final int PAYLOAD_HEADROOM_BYTES = 1_024;
     /** 拦截模式在途比较：pos key → 等待响应期间暂存网络数据 apply 回调（响应/超时后按分类执行）。 */
     private static final java.util.concurrent.ConcurrentHashMap<Long, PendingCompare> PENDING_COMPARE =
             new java.util.concurrent.ConcurrentHashMap<>();
@@ -75,20 +81,21 @@ public final class ShadowPullClient {
         if (dimension == null || dimension.isEmpty() || chunks == null || chunks.isEmpty()) {
             return;
         }
-        for (int start = 0; start < chunks.size(); start += ShadowPullRequestC2SPacket.MAX_ENTRIES) {
-            int end = Math.min(start + ShadowPullRequestC2SPacket.MAX_ENTRIES, chunks.size());
+        List<ShadowPullRequestC2SPacket.Entry> entries =
+                fullRequest(dimension, 0L, chunks, includeLocalBaseline).entries();
+        // 按**编码后字节数**分批，而不是只按条数：单柱最多带 64 段 × PLANE_COUNT(48) 个 int 分量，
+        // MAX_ENTRIES 界不住载荷。超 32 KiB 的 C2S 载荷会被 vanilla 拒收并踢掉客户端
+        // （实测：1.20.1 首批 384 条声明聚合出 count=160 的 compare 请求即触发）。
+        int budget = ShadowPullRequestC2SPacket.MAX_PAYLOAD_BYTES - PAYLOAD_HEADROOM_BYTES;
+        for (List<ShadowPullRequestC2SPacket.Entry> batch
+                : ShadowPullRequestC2SPacket.batchesByEncodedSize(dimension, entries, budget)) {
             long requestId = NEXT_REQUEST_ID.incrementAndGet();
-            ShadowPullRequestC2SPacket request = fullRequest(dimension, requestId,
-                    chunks.subList(start, end), includeLocalBaseline);
-            if (request.entries().isEmpty()) {
-                continue;
-            }
             if (REQUEST_MODES.size() >= MAX_TRACKED_REQUESTS) {
                 REQUEST_MODES.clear();
             }
             REQUEST_MODES.put(requestId, includeLocalBaseline);
             FriendlyByteBuf buffer = new FriendlyByteBuf(Unpooled.buffer());
-            request.encode(buffer);
+            new ShadowPullRequestC2SPacket(dimension, 0L, requestId, batch).encode(buffer);
             Services.NETWORK_MANAGER.sendShadowPullRequest(buffer);
         }
     }

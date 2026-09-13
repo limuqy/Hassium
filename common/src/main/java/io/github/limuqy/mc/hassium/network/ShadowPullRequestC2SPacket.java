@@ -1,6 +1,9 @@
 package io.github.limuqy.mc.hassium.network;
 
+import io.netty.buffer.Unpooled;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
 import java.util.List;
 import net.minecraft.network.FriendlyByteBuf;
 
@@ -13,6 +16,15 @@ public record ShadowPullRequestC2SPacket(
 ) {
     public static final int MAX_ENTRIES = 384;
     public static final int MAX_DIMENSION_LENGTH = 128;
+
+    /**
+     * 单条 C2S 自定义载荷的硬上限 —— vanilla {@code ServerboundCustomPayloadPacket.MAX_PAYLOAD_SIZE}。
+     * <p>
+     * <b>S2C 不是这个数</b>（{@code ClientboundCustomPayloadPacket} 是 1 MiB），所以只有客户端→服务端
+     * 这一侧需要按字节收敛；超限会被 vanilla 解码器以
+     * {@code IllegalArgumentException: Payload may not be larger than 32767 bytes} 拒收并踢掉客户端。
+     */
+    public static final int MAX_PAYLOAD_BYTES = 32_767;
 
     public record Entry(int chunkX, int chunkZ, long chunkHash,
                         List<Long> sectionHashes, int[][] planes, int lightGeneration) {
@@ -82,6 +94,50 @@ public record ShadowPullRequestC2SPacket(
                     }
                 }
             }
+        }
+    }
+
+    /**
+     * 按**编码后字节数**把条目切成若干批（每批同时 ≤ {@link #MAX_ENTRIES}）。
+     * <p>
+     * 为什么条数上限不够：{@link Entry} 里每个**非零**分段 hash 都要带
+     * {@code PLANE_COUNT}(48) 个 int 分量 —— 单分段 {@code 8 + 48*4 = 200} 字节，单柱最多 64 段，
+     * 于是一条请求可达数 KB。{@link #MAX_ENTRIES} 只界住**条数**，界不住**载荷**。
+     * <p>
+     * 超限的 C2S 载荷会被 vanilla 解码器以
+     * {@code Payload may not be larger than 32767 bytes} 拒收（客户端被踢下线），故这里按**实际编码长度**
+     * 二分切分，而不是猜每柱多少字节。
+     * <p>
+     * 单条自身超限且已不可再切时**原样返回**——由调用方决定放弃还是缩写，本类不做策略。
+     */
+    public static List<List<Entry>> batchesByEncodedSize(String dimension, List<Entry> entries, int maxBytes) {
+        List<List<Entry>> batches = new ArrayList<>();
+        Deque<List<Entry>> queue = new ArrayDeque<>();
+        for (int start = 0; start < entries.size(); start += MAX_ENTRIES) {
+            queue.addLast(entries.subList(start, Math.min(start + MAX_ENTRIES, entries.size())));
+        }
+        while (!queue.isEmpty()) {
+            List<Entry> batch = queue.pollFirst();
+            if (batch.size() <= 1 || encodedSize(dimension, batch) <= maxBytes) {
+                batches.add(batch);
+            } else {
+                int half = batch.size() / 2;
+                // 先放后半再放前半，pollFirst 拿到的仍是原顺序（近及远不由本方法负责，但顺序不该被打乱）。
+                queue.addFirst(batch.subList(half, batch.size()));
+                queue.addFirst(batch.subList(0, half));
+            }
+        }
+        return batches;
+    }
+
+    /** {@code entries} 单独作为一条请求编码后的字节数（仅供分批时复核预算）。 */
+    private static int encodedSize(String dimension, List<Entry> entries) {
+        FriendlyByteBuf buffer = new FriendlyByteBuf(Unpooled.buffer());
+        try {
+            new ShadowPullRequestC2SPacket(dimension, 0L, 0L, entries).encode(buffer);
+            return buffer.readableBytes();
+        } finally {
+            buffer.release();
         }
     }
 
