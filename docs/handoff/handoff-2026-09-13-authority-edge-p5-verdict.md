@@ -938,6 +938,28 @@ $f='build/smoke-test/logs/client_<SessionId>.log'
 
 ---
 
+### starved 归因（2026-09-13 第五轮，结案）：不是老链路选柱，是权威路径的吞吐兜底重试
+
+- **问题**：§9.7 的「影子端自绘 pull 尚未退场」判据用 `starved` 计数（1.20.1/fabric 5、1.21.1/forge 4、
+  1.21.1/neoforge 2~3）——这些数字是否真的说明「老链路（影子自绘选柱）在干活」？
+- **归因（日志 + 代码实证）**：
+  1. starved 后的补发日志是 **`authoritative-full pull N chunks (dimension=…)`** —— **权威窗重试**，
+     不是影子自绘几何（bootGrid/sweepVisibleShape）驱动的自主选柱。让位门扣留的柱**声明已到达**
+     （`releaseGateStarvation` 以 `declaredAt` 为起算点），兜底只是重新请求同一声明路径。
+  2. **触发条件 = 服务端 FULL 应答吞吐 vs 10s 宽限**：服务端 `maxChunksPerTick=5`（满 tick ≈ 100/s）+
+     区块序列化开销 + 切维时维度装配负载。经典纯 overworld 吞吐足够（1.21.1/fabric classic 三轮
+     starved=0、authFull=0）；1.20.1/fabric classic 偶发（修复前 5 → 修复后 4）；dimension 大窗高发
+     （5~17，跨全部 loader）。
+  3. **与 F17/F18 死锁不同源**：修复前后 1.20.1/fabric classic starved 持平（5→4）。
+  4. **无数据丢失**：兜底全部补齐，本轮全部场次空洞 0/0、PASS。
+- **对「完全替代」的意义**：starved 的 pull-anyway 走**权威窗**（声明驱动链的重试），不构成
+  「老链路选柱未退场」的证据。完全替代判据应从「starved=0 且自绘 0 批」**修正为「选柱归声明
+  （`P5_TAKEOVER`）+ 兜底自愈」**——本轮已证接管态 classic + dimension 全 PASS、兜底仅作保险。
+  §9.7 的「1.20.1/forge/neoforge 尚未退场」应重读为「这些组合的**声明交付吞吐**还有余量空间」，
+  而非「影子自绘选柱仍在承担选柱」。
+
+---
+
 ### 9.9 F4 收敛矩阵（2026-09-13 第三轮，按 `version-segments` 收敛）
 
 **编译层：七锚点 × `builds_for` 全加载器全部通过**（E/F/G/H 为本轮新跑，A/D/I 由本轮冒烟与 F12 验证附带）：
