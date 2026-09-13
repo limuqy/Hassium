@@ -998,11 +998,15 @@ $f='build/smoke-test/logs/client_<SessionId>.log'
   `generated` 塞同 key 新 entry → GENERATED 光任务完成时 `isSuperseded`（`hasQueuedBlockWork`
   见同 key）永远拦截 → `pushReady` 永不执行 → 客户端永不应用 → 凭据永不写 → redeliver 永续
   （f19b：899 次 redeliver 0 应用、0 abort、ready 恒空）。生产态无此问题（tracking 网络拉、
-  不经 redeliver）。**修复（`886a56c`）**：① `isSuperseded` 对 GENERATED 源只认 `pending`
-  （真·新网络数据）为更新，不认 generated（redeliver 本地复用）；② `drainRedeliver` 跳过已在
-  `generated`/`inflightLight` 的 key。**修复后接管态 classic 移动 4/4 PASS**（`f20a`-`f20d`，
-  R2 P0 空洞全 0、R2 应用 3096 vs 修复前单 burst）。残余观察：`f20d` R2 有 2 个 diagonal holes
-  （非 P0 门禁，PASS），接管态移动补柱的 OVD 环带边缘仍偶有斜角缺口，不阻塞。
+  不经 redeliver）。**最终修复（`886a56c` + `6dec7d7`）**：仅保留 `drainRedeliver` 去循环
+  （`ShadowLightCompute.isLocalRequeueInFlight`：跳过已在 `generated`/`inflightLight` 的 key，
+  redeliver 循环直接断开）；**`isSuperseded` 的 GENERATED 放行改动已撤回**——A/B 证明其非必须
+  且有害：fabric 1.20.1 移动原版 supersede + 去循环即 PASS（`f21h`/`f21i`），而 GENERATED 放行
+  会让 forge 1.21.1 的光任务全量实际执行 → 影子端上下文光引擎吞吐崩 → 720 次 `Light timeout`
+  FAIL（`f21c`/`f21d`）；原版 supersede 下 forge/neoforge PASS（`f21g`/`f21k`，光任务量受控）。
+  **最终形态验证：接管态 classic 移动 5/5 PASS**（1.20.1/fabric ×2、1.21.1/fabric、1.21.1/forge、
+  1.21.1/neoforge），生产态光超时 0。残余观察：`f20d` R2 有 2 个 diagonal holes（非 P0 门禁，
+  PASS），OVD 环带边缘斜角缺口不阻塞。
 - **本地生成失败率偏高**（1.20.1 51%、1.21.1 57%，worker 并发 worldgen 超时）——断言只要求 >0，
   失败柱网络兜底无数据丢失。后续可调 `GENERATION_TIMEOUT_NANOS` / 并发预算优化命中率。
 
