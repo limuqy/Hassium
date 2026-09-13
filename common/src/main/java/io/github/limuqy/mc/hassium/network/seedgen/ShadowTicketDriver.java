@@ -183,9 +183,14 @@ public final class ShadowTicketDriver {
             shadow.generateChunkAsync(dimension, pos, (d, chunk) -> {
                 localGenInFlight.remove(key);
                 if (chunk == null) {
-                    localGenFailed.add(key); // 生成失败/超时：本次会话回退网络
+                    // 失败必须立刻网络兜底：resolve 只在声明到达时跑一次，等下一次 enter 可能永不来
+                    //（接管态 tracking 3x3 + 让位门抑制自绘 pull，失败柱会永久空洞——test2 实证 151 失败仅 1 次 auth-full）。
+                    localGenFailed.add(key);
                     DebugLogger.warn(DebugLogger.LogType.NETWORK,
-                            "[SHADOW_TICKET] local gen failed ({}, {}) (dimension={})", pos.x, pos.z, dim);
+                            "[SHADOW_TICKET] local gen failed ({}, {}) -> network FULL (dimension={})",
+                            pos.x, pos.z, dim);
+                    io.github.limuqy.mc.hassium.network.ShadowPullClient.requestAuthoritativeFull(
+                            dim, java.util.List.of(pos));
                     return;
                 }
                 io.github.limuqy.mc.hassium.network.seedgen.ShadowTrackingSession.getInstance()
