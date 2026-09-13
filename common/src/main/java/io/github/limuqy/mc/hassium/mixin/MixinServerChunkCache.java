@@ -3,6 +3,7 @@ import io.github.limuqy.mc.hassium.compat.ShadowChunkMapCompat;
 import io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute;
 import io.github.limuqy.mc.hassium.network.seedgen.ShadowSeedServer;
 import io.github.limuqy.mc.hassium.network.seedgen.ShadowServerRegistry;
+import io.github.limuqy.mc.hassium.network.seedgen.SeedGenExecutor;
 import io.github.limuqy.mc.hassium.server.RuntimeServerContext;
 #if MC_VER < MC_1_21_1
 import net.minecraft.world.level.chunk.ChunkStatus;
@@ -116,6 +117,18 @@ public class MixinServerChunkCache {
         if (chunk != null) {
             cir.setReturnValue(chunk);
             return;
+        }
+        // F17 残留洞（2026-09-13 实证，1.20.1 dimension 切维 AppHang）：
+        // 1.20.1 setBlockState(pos, state, boolean) 无 flags，onPlace 必然触发 →
+        // LiquidBlock.shouldSpreadLiquid 查邻柱流体 → 邻柱未注入时 Level.getChunk
+        // 落回原版 getChunkFuture join()，而 future 完成链依赖影子主循环 pollTask ——
+        // 主循环正卡在 managedBlock 里等它 → 自死锁（无 Java 痕迹，Windows 判挂起）。
+        // 补上本桥注释的原始设计意图：FULL 取数未命中（且非 SeedGen worldgen 生成中）
+        // 短路返回 null —— 调用方按原版 @Nullable（nonnull=false）或 ISE（nonnull=true，
+        // 上层 catch）语义处理，绝不 join。1.21.1+ 的 setBlockState flags=0 已关 onPlace，
+        // 此处为全版本防御（1.21.1 上无触发路径，行为不变）。
+        if (status == ChunkStatus.FULL && !SeedGenExecutor.getInstance().isGenerationGateOpen()) {
+            cir.setReturnValue(null);
         }
     }
 }
