@@ -300,7 +300,7 @@ pull 域用了 `resolveViewDistance()=vd+1`（range=21 → 1665 格盘）而非�
 
 ## 4. 对齐开发计划
 
-> 原则：影子端 vanilla tracking 是**唯一采集决策者**；query 往返与压缩切换不重叠的握手不变；双端版本差期间旧通道保留（见 §5 兼容期）。
+> 原则（2026-09-14 改定）：**服务端权威边沿是内容裁决与 enter/leave 的真相源**；选柱由声明 + OVD 环带票（`ShadowTicketDriver`，`P5_TAKEOVER` 默认开）承担；影子 tracking 降为算光邻域与自愈扫描，**不再作为唯一采集决策者**。query 往返与压缩切换不重叠的握手不变；双端版本差期间旧通道保留（见 §5 兼容期）。
 
 - **P1 影子 tracking 驱动 pull（无基线也发请求）**
   - 影子 tracking 选中柱 → 有基线：携带 `chunkPos+contentHash+sectionHashes+lightGeneration` 比对请求；无基线：空基线请求（复用 `requestAuthoritativeFull` 的批量/限流框架 `MAX_TRACKED_REQUESTS`）。

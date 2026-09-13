@@ -45,8 +45,11 @@ public final class ShadowTicketDriver {
      * 跑完整整一轮冒烟——结果是"驱动没跑、tracking 也没钝化"，测出来的其实是纯基线，我却当成环带设计的
      * 验证读了一轮（`[SHADOW_TICKET]` 连无条件打印的首绑行都是 0 条，是当时唯一在场的铁证）。故现在
      * 收成单开关：要么整体接管（驱动出票 + 钝化 tracking），要么整体关闭，不存在配错的中间态。
+     * <p>
+     * 2026-09-13 第五轮后默认开启：classic + dimension + seedgen 接管矩阵已 PASS
+     * （见 {@code docs/handoff/handoff-2026-09-13-authority-edge-p5-verdict.md}）。
      */
-    private static final boolean P5_TAKEOVER = false;
+    private static final boolean P5_TAKEOVER = true;
 
     /** 驱动总开关（恒等于 {@link #P5_TAKEOVER}）。 */
     static final boolean ENABLED = P5_TAKEOVER;

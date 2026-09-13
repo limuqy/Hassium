@@ -297,10 +297,9 @@ public final class ShadowTrackingSession {
             return;
         }
         applyViewDistanceIfChanged(shadow);
-        // P5 接管臂（实验性，默认关闭：P5_TAKEOVER=false 时驱动一行不执行，见 ShadowTicketDriver）。
-        // OVD 环带的票驱动（目标集合 = inOvdBand，与 tryServeOvdLocal 的"缺盘柱交给原版
-        // tracking"那一环同判据）。中心沿用虚拟玩家位置——会话唯一位置真相源，inOvdWindow /
-        // sweep* 也用它，故"出票中心"与"判据中心"天然同源，不会出现票在 A、判据在 B 的一圈缝。
+        // P5 选柱接管（默认开，见 ShadowTicketDriver.P5_TAKEOVER）：OVD 环带票驱动。
+        // 中心沿用虚拟玩家位置——会话唯一位置真相源，inOvdWindow / sweep* 也用它，
+        // 故"出票中心"与"判据中心"天然同源，不会出现票在 A、判据在 B 的一圈缝。
         ChunkPos ticketCenter = virtualPlayer.chunkPosition();
         ShadowTicketDriver.consumeOnShadowLoop(shadow, currentDimension,
                 ticketCenter.x, ticketCenter.z, serverViewDistance, effectiveClientVD);
@@ -599,14 +598,24 @@ public final class ShadowTrackingSession {
         }
         ChunkPos lastChunk = virtualPlayer.chunkPosition();
         if (newChunk.x != lastChunk.x || newChunk.z != lastChunk.z) {
+            // forge/neoforge：Entity.setPosRaw 在 isAddedToWorld 时会同步 level.getChunk(FULL)，
+            // 目标柱未加载即抛 "Should always be able to create a chunk!"。P5 接管把 tracking
+            // 压到 3x3 后跨 chunk 移动更容易踩空——跳过本拍，下一 pending 在柱就绪后重试。
+            try {
 #if MC_VER < MC_1_21_5
-            virtualPlayer.absMoveTo(state.x(), state.y(), state.z(), state.yRot(), state.xRot());
+                virtualPlayer.absMoveTo(state.x(), state.y(), state.z(), state.yRot(), state.xRot());
 #else
-            // 1.21.5+：absMoveTo/moveTo(5 参) 移除，teleportTo(3 参)+旋转同语义（绝对位置设置）
-            virtualPlayer.teleportTo(state.x(), state.y(), state.z());
-            virtualPlayer.setYRot(state.yRot());
-            virtualPlayer.setXRot(state.xRot());
+                // 1.21.5+：absMoveTo/moveTo(5 参) 移除，teleportTo(3 参)+旋转同语义（绝对位置设置）
+                virtualPlayer.teleportTo(state.x(), state.y(), state.z());
+                virtualPlayer.setYRot(state.yRot());
+                virtualPlayer.setXRot(state.xRot());
 #endif
+            } catch (Throwable t) {
+                DebugLogger.warn(DebugLogger.LogType.NETWORK,
+                        "[SHADOW_TRACK] virtual player move deferred ({}, {}) targetChunk=({},{}) (dimension={})",
+                        state.x(), state.z(), newChunk.x, newChunk.z, state.dimension(), t);
+                return;
+            }
             try {
                 ShadowPlayerCompat.moveVirtualPlayer(virtualPlayer);
             } catch (Throwable t) {

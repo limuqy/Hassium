@@ -7,12 +7,12 @@
 Hassium 是 Minecraft 多加载器模组（Fabric / Forge / NeoForge），围绕「**更小的网络传输 + 更快的本地加载**」优化存档与区块传输。对应 [README 特性表](../README.md) 的五大能力类：
 
 - **高效压缩** —— 存储压缩（ZSTD 落盘 type 126）、通道压缩（聚合包内部字典 ZSTD + 区块推送自有压缩；不触碰 vanilla 压缩层）
-- **网络优化** —— 平滑推送（每 tick 提交上限限速 + 全路径后台化）、登录期能力握手 + Play 期激活链、Pull 模式（影子 tracking 驱动的统一 Compare+Pull）
+- **网络优化** —— 平滑推送（每 tick 提交上限限速 + 全路径后台化）、登录期能力握手 + Play 期激活链、Pull 模式（服务端权威边沿声明 + 客户端 Compare+Pull；OVD 环带票驱动）
 - **区块缓存** —— 影子端世界保存（进程内影子服务端按原版区块机制加载、落盘和推送）、分段增量、容量/热度淘汰、世界导出
 - **本地生成** —— SeedGen：影子端对 pristine 区块执行生成前权威校验后再进入原版 ChunkStatus/LightEngine。**开启服务端开关会向客户端下发世界种子，等同泄露服务端种子**
 - **光照优化** —— 影子端原版 LightEngine 统一算光并通过官方 vanilla packet 回传；服务端可剥光（`chunk.lightStrip`）
 
-> **超视渲染（OVD）**：影子双窗设计——tracking 扩到 effective clientRD，权威窗（serverVD）Compare+Pull，OVD 窗仅本地源（盘/注入）回填，禁止真服请求。客户端只抬 `ClientChunkCache` 半径并拦 Forget。详见 [`chunk-cache.md`](chunk-cache.md) §10。
+> **超视渲染（OVD）**：影子双窗设计——权威窗（serverVD）由服务端 `chunk_authority_s2c` 声明 + Compare+Pull；OVD 环带由 `ShadowTicketDriver` 出票装载（缺盘柱），本地源（盘/注入）回填，禁止真服请求。影子 tracking 半径在接管态压到最小（仅算光邻域 + 自愈扫描）。客户端只抬 `ClientChunkCache` 半径并拦 Forget。详见 [`chunk-cache.md`](chunk-cache.md) §10。
 
 目标版本：Minecraft **1.20.1 / 1.21.1–1.21.11**（七段适配，见 version-segments）。Forge 支持 **1.20.1 / 1.21.1 / 1.21.3–1.21.10**（1.21.2 无上游 userdev；1.21.11 sunset）。
 
@@ -24,7 +24,7 @@ Hassium 是 Minecraft 多加载器模组（Fabric / Forge / NeoForge），围绕
 | 重连服务器 / 再次进入同一区域 | 同一片区域又要重新下载一遍 | **影子端世界保存**：进服区块统一由进程内影子服务端（完整 MinecraftServer）算光并落盘原版存档（`hassium_cache/<serverId>/world`），断连保存、重连复用 |
 | 缓存过期（服务器里东西变了） | 整块重传 | **统一 ShadowPull**：影子有基线时请求服务端权威比较，UNCHANGED 复用缓存、DELTA 只补变更方块（分段增量）、过多则整段/整块 |
 | 大片未探索地形（pristine 区块） | 服务端也要逐块生成并传输 | **影子端本地生成**：先经服务端权威校验，再进入影子端原版 ChunkStatus/LightEngine；**开启服务端开关会泄露世界种子** |
-| 服务端视距与客户端接收 | 客户端需自行维护缓存状态参与 admission | **影子虚拟 ServerPlayer + ServerChunkCache/ChunkMap**：影子端根据同步位置执行原版 tracking，真实客户端只接收 vanilla chunk+light/forget packet（全被动） |
+| 服务端视距与客户端接收 | 客户端需自行维护缓存状态参与 admission | **服务端权威声明 + 影子 ChunkMap**：服务端声明 enter/leave 与权威 hash；影子端物化/算光/交付，真实客户端只接收 vanilla chunk+light/forget packet（全被动） |
 
 ## 3. 谁适合启用
 
@@ -198,7 +198,7 @@ sequenceDiagram
 - **compare-pull**：影子有本地基线时请求真实服裁决 UNCHANGED/DELTA/FULL，避免重复下载整柱。
 - **`requestedMisses`**：只防对真实服的重复 pull（含回退风暴），**卸载后应清除**，允许再 compare。
 - **分段增量 / 字典 ZSTD / 聚合**：作用于影子↔真实服务端与通道压缩，不改变「进范围必交付」语义。
-- **权威边沿（2026-09-13）**：服务端在整柱推送抑制点顺带声明「柱进入权威 tracking 集合 + 权威内容 hash」（`chunk_authority_s2c`，含跨会话 `epoch`/`snapshot`）。客户端本地基线 hash 与声明相同时**不发任何请求**、本地交付并计全命中；未知/不等才回退 compare-pull；无基线走空基线 FULL。影子端在此模式下让位（不再自绘选柱发 pull，10s 断流看门狗自动回退），权威判定权归服务端。详见 [`client-chunk-flow-handover.md`](client-chunk-flow-handover.md) §9。
+- **权威边沿（2026-09-13，默认开启）**：服务端在整柱推送抑制点顺带声明「柱进入权威 tracking 集合 + 权威内容 hash」（`chunk_authority_s2c`，含跨会话 `epoch`/`snapshot`）。客户端本地基线 hash 与声明相同时**不发任何请求**、本地交付并计全命中；未知/不等才回退 compare-pull；无基线走空基线 FULL / 声明驱动 SeedGen。影子端在声明流存活期让位（10s 断流看门狗 + 宽限补发兜底）；**选柱接管**（`P5_TAKEOVER=true`）：OVD 环带由 `ShadowTicketDriver` 出票，影子 tracking 半径压到最小。详见 [`client-chunk-flow-handover.md`](client-chunk-flow-handover.md) §9。
 - **注入表回收**：影子注入表按客户端 leave（真服 Forget）事件 + 6s 宽限回收（先 flush 落盘再摘表），**不得**按影子端自绘几何推断（实测会把未交付柱摘掉并使 teardown flush 悬挂）。
 
 ### 6.5 关键实现锚点
@@ -210,8 +210,9 @@ sequenceDiagram
 | 客户端卸载 | `MixinClientLevel` → `ShadowTrackingSession.onClientChunkUnloaded`（清 epoch；窗内有货则 `redeliverQueue`） |
 | 窗内重发 | `drainRedeliver` / sweep 对 `injected && !clientApplyEpoch` 限速 `publishCachedChunk` |
 | 真实服 Forget | 原版 `untrackChunk`（PULL 模式不压制 forget） |
-| 影子选柱/补洞 | `scheduleChunkLoad` 悬置 + `sweepVisibleShape`（只拉**未注入**柱） |
-| 权威边沿（服务端声明 enter + 权威 chunkHash） | `ChunkAuthorityNotifier` → `chunk_authority_s2c` → `ChunkAuthorityClient`（三分支：hash 命中 → 零请求本地交付并记全命中 / 带基线比较 / 空基线 FULL）；`pullEmissionSuppressed()` 为真时影子端不发 pull |
+| 影子选柱/补洞 | 声明驱动（权威窗）+ `ShadowTicketDriver` 环带票（OVD）+ `sweepVisibleShape` 自愈扫描 |
+| 权威边沿（服务端声明 enter + 权威 chunkHash） | `ChunkAuthorityNotifier` → `chunk_authority_s2c` → `ChunkAuthorityClient`（三分支：hash 命中 → 零请求本地交付并记全命中 / 带基线比较 / 空基线 FULL 或本地生成）；`pullEmissionSuppressed()` 为真时影子端不自绘 pull |
+| P5 选柱接管（默认开） | `ShadowTicketDriver.P5_TAKEOVER=true`：OVD 环带 FORCED 票 + tracking 半径压到 3x3；虚拟玩家仅作算光邻域/位置源 |
 | 注入表回收 | 客户端 leave（真服 Forget）→ `outsideSinceMs` → `reclaimOutOfRetainSet` 宽限 6s 后 `unloadChunk`（flush + 摘表，`ShadowStorageHashes` 基线保留） |
 
 ### 6.6 关键设计决策
