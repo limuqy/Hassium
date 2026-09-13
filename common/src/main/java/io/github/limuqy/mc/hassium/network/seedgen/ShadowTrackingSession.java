@@ -547,6 +547,9 @@ public final class ShadowTrackingSession {
             if (ShadowLightCompute.hasClientApplyEpoch(currentDimension, pos)) {
                 continue; // 本会话已有落地凭据
             }
+            if (ShadowLightCompute.isLocalRequeueInFlight(currentDimension, pos)) {
+                continue; // 本地复用已排队（generated/inflightLight），不重发维持队列抖动
+            }
             // 本会话网络路径已在途/已记账：redeliver 不得再记成缓存全命中
             if (ShadowLightCompute.wasNetworkIngress(currentDimension, pos)
                     && ShadowLightCompute.hasClientApplyEpoch(currentDimension, pos)) {

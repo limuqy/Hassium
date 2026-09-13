@@ -397,6 +397,20 @@ public final class ShadowLightCompute {
     }
 
     /**
+     * redeliver 防循环：本地复用（publishCached）已在 generated 队列或在途光屏障 →
+     * 跳过重发。drainRedeliver 在客户端无落地凭据时每拍重发同柱，若重发持续 put
+     * generated，会与 GENERATED 光任务的完成回传互相踩（旧超时回传被取代/队列抖动），
+     * 并让「已在排队」的柱反复进 generated；此处短路已排队的复用投递。
+     */
+    public static boolean isLocalRequeueInFlight(String dimension, ChunkPos pos) {
+        if (dimension == null || pos == null) {
+            return false;
+        }
+        long key = DimensionKey.key(dimension, pos.x, pos.z);
+        return generated.containsKey(key) || inflightLight.containsKey(key);
+    }
+
+    /**
      * 保活重连的会话边界：保留影子缓存基线，但允许同一柱再次发起 Compare + Pull。
      * 必须清 {@code shadowApplyEpochs}：那是上一 ClientChunkCache 的落地凭据。
      * 不清会让 materialize/redeliver 认为「客户端已有」，R2 只回放部分柱（实测 1529→775）。
@@ -617,9 +631,25 @@ public final class ShadowLightCompute {
     }
 
     private static boolean isSuperseded(LightTask t) {
-        return t != null && isSupersededByNewerWork(
-                t.source != LightSource.LIGHT_ONLY,
-                hasQueuedBlockWork(t.key),
+        if (t == null) {
+            return false;
+        }
+        boolean fullChunkTask = t.source != LightSource.LIGHT_ONLY;
+        boolean blockWork;
+        if (!fullChunkTask) {
+            blockWork = hasQueuedBlockWork(t.key);
+        } else if (t.source == LightSource.GENERATED) {
+            // GENERATED（redeliver 本地复用 / seedgen 本地生成）完成回传不得被同 key 的
+            // generated 再塞 entry supersede：drainRedeliver 的 publishCached 会持续 put
+            // generated（客户端无落地凭据就每拍重发），若把 generated 也当更新，光回传
+            // 永远被拦截、客户端永不落地（接管态移动空洞死锁：1.20.1/fabric classic R2
+            // 实测 899 次 redeliver 0 应用、0 abort、ready 恒空）。只认 pending
+            // （真·新网络数据）与 lightDelta 为更新；generated 内同柱复用不挡回传。
+            blockWork = pending.containsKey(t.key);
+        } else {
+            blockWork = hasQueuedBlockWork(t.key);
+        }
+        return isSupersededByNewerWork(fullChunkTask, blockWork,
                 pendingLightUpdates.containsKey(t.key));
     }
 
