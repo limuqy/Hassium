@@ -631,25 +631,9 @@ public final class ShadowLightCompute {
     }
 
     private static boolean isSuperseded(LightTask t) {
-        if (t == null) {
-            return false;
-        }
-        boolean fullChunkTask = t.source != LightSource.LIGHT_ONLY;
-        boolean blockWork;
-        if (!fullChunkTask) {
-            blockWork = hasQueuedBlockWork(t.key);
-        } else if (t.source == LightSource.GENERATED) {
-            // GENERATED（redeliver 本地复用 / seedgen 本地生成）完成回传不得被同 key 的
-            // generated 再塞 entry supersede：drainRedeliver 的 publishCached 会持续 put
-            // generated（客户端无落地凭据就每拍重发），若把 generated 也当更新，光回传
-            // 永远被拦截、客户端永不落地（接管态移动空洞死锁：1.20.1/fabric classic R2
-            // 实测 899 次 redeliver 0 应用、0 abort、ready 恒空）。只认 pending
-            // （真·新网络数据）与 lightDelta 为更新；generated 内同柱复用不挡回传。
-            blockWork = pending.containsKey(t.key);
-        } else {
-            blockWork = hasQueuedBlockWork(t.key);
-        }
-        return isSupersededByNewerWork(fullChunkTask, blockWork,
+        return t != null && isSupersededByNewerWork(
+                t.source != LightSource.LIGHT_ONLY,
+                hasQueuedBlockWork(t.key),
                 pendingLightUpdates.containsKey(t.key));
     }
 
