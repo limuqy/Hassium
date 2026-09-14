@@ -184,33 +184,43 @@ public class NetworkOptimizationTest {
     }
 
     @Test
-    @DisplayName("高频实体/跟踪包禁止应用层聚合，但仍可进管线压缩语义")
+    @DisplayName("区块图控制包禁止应用层聚合；实体高频包已放开进聚合")
     void testHighFrequencyNoAggregate() {
-        // 1.20.1 嵌套类短 path
-        assertTrue(PacketCompressionBlacklist.isHighFrequencyNoAggregate("minecraft:pos"));
-        assertTrue(PacketCompressionBlacklist.isHighFrequencyNoAggregate("minecraft:pos_rot"));
-        assertTrue(PacketCompressionBlacklist.isHighFrequencyNoAggregate("minecraft:rot"));
+        // 区块图控制路径（pull 模式域）保持直发
         // 1.20.1 snake_case 全名
-        assertTrue(PacketCompressionBlacklist.isHighFrequencyNoAggregate(
-                "minecraft:clientbound_set_entity_motion_packet"));
-        assertTrue(PacketCompressionBlacklist.isHighFrequencyNoAggregate(
-                "minecraft:clientbound_rotate_head_packet"));
         assertTrue(PacketCompressionBlacklist.isHighFrequencyNoAggregate(
                 "minecraft:clientbound_forget_level_chunk_packet"));
         assertTrue(PacketCompressionBlacklist.isHighFrequencyNoAggregate(
                 "minecraft:clientbound_set_chunk_cache_center_packet"));
+        assertTrue(PacketCompressionBlacklist.isHighFrequencyNoAggregate(
+                "minecraft:clientbound_set_chunk_cache_radius_packet"));
         // 1.20.5+ PacketType id 形态
         assertTrue(PacketCompressionBlacklist.isHighFrequencyNoAggregate(
-                "minecraft:set_entity_motion"));
+                "minecraft:forget_level_chunk"));
         assertTrue(PacketCompressionBlacklist.isHighFrequencyNoAggregate(
-                "minecraft:move_entity_pos"));
+                "minecraft:set_chunk_cache_center"));
 
-        // 聚合入口必须拒绝；管线压缩语义仍允许（小包会低于 threshold）
-        assertFalse(PacketCompressionBlacklist.shouldAggregate("minecraft:pos"));
+        // 聚合入口必须拒绝
         assertFalse(PacketCompressionBlacklist.shouldAggregate(
+                "minecraft:clientbound_forget_level_chunk_packet"));
+
+        // 实体高频包（2026-09-14 评估放开）：可聚合、可压缩
+        // 1.20.1 嵌套类短 path
+        assertFalse(PacketCompressionBlacklist.isHighFrequencyNoAggregate("minecraft:pos"));
+        assertFalse(PacketCompressionBlacklist.isHighFrequencyNoAggregate("minecraft:pos_rot"));
+        assertFalse(PacketCompressionBlacklist.isHighFrequencyNoAggregate("minecraft:rot"));
+        // 1.20.1 snake_case 全名
+        assertFalse(PacketCompressionBlacklist.isHighFrequencyNoAggregate(
                 "minecraft:clientbound_set_entity_motion_packet"));
-        assertTrue(PacketCompressionBlacklist.shouldCompress("minecraft:pos"));
-        assertTrue(PacketCompressionBlacklist.shouldCompress(
+        assertFalse(PacketCompressionBlacklist.isHighFrequencyNoAggregate(
+                "minecraft:clientbound_rotate_head_packet"));
+        // 1.20.5+ PacketType id 形态
+        assertFalse(PacketCompressionBlacklist.isHighFrequencyNoAggregate(
+                "minecraft:set_entity_motion"));
+        assertFalse(PacketCompressionBlacklist.isHighFrequencyNoAggregate(
+                "minecraft:move_entity_pos"));
+        assertTrue(PacketCompressionBlacklist.shouldAggregate("minecraft:pos"));
+        assertTrue(PacketCompressionBlacklist.shouldAggregate(
                 "minecraft:clientbound_set_entity_motion_packet"));
 
         // 非高频包仍可聚合

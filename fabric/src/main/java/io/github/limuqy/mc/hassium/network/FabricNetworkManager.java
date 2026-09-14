@@ -333,7 +333,7 @@ PLAY_INIT_S2C = ResourceLocationCompat.vanilla(HassiumChannels.PLAY_INIT_S2C);
         ServerConfigurationNetworking.registerGlobalReceiver(PreHandshakePayload.TYPE,
                 (payload, context) -> {
                     UUID playerId = io.github.limuqy.mc.hassium.compat.PlayerCompat.getProfileId(context.networkHandler().getOwner());
-                    net.minecraft.network.Connection connection = context.networkHandler().getConnection();
+                    net.minecraft.network.Connection connection = io.github.limuqy.mc.hassium.compat.PlayerCompat.getConnection(context.networkHandler());
                     PreHandshakeProtocol.handlePreHandshake(playerId, payload, connection);
                 });
 #endif

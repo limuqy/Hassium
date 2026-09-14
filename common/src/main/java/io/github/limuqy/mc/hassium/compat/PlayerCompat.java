@@ -109,6 +109,22 @@ public final class PlayerCompat {
         }
     }
 
+    /**
+     * 从服务端 packet listener（配置阶段 {@code ServerConfigurationPacketListenerImpl} 等）
+     * 提取底层 {@link Connection}。
+     * <p>
+     * vanilla 无公开访问器（{@code connection} 为 protected 字段，且 1.20.2+ 声明在
+     * 父类 {@code ServerCommonPacketListenerImpl}）；按类型反射对 SRG/intermediary
+     * 生产映射免疫。找不到字段返回 null（调用方 {@code PreHandshakeProtocol} 对
+     * null 连接按非 memory 处理，专用服路径不受影响）。
+     */
+    public static Connection getConnection(net.minecraft.network.PacketListener listener) {
+        if (listener == null) {
+            return null;
+        }
+        Object value = ReflectionCompat.getFieldByTypeOrNull(listener, Connection.class, true);
+        return value instanceof Connection connection ? connection : null;
+    }
     private static Field findConnectionField(Class<?> clazz) throws NoSuchFieldException {
         // 按类型匹配而非字段名：Forge（SRG）/ Fabric（intermediary）生产运行时的字段名
         // 不是 mojmap 名 "connection"，名字反射在 1.20.1 段全线失败。

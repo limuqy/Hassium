@@ -253,7 +253,7 @@ Sector 2+:    [length(4)][type=126][magic 0x48][hash(8)][ZSTD 压缩数据]
 | 紧凑包头 | 聚合包内 `CompactHeaderCodec`（两级 VarInt 命名空间索引，`index_sync_s2c` 同步） | 默认启用（能力位协商） |
 | 平滑推送 | 每 tick Pull 完成上限（`master.maxChunksPerTick=5` FULL/DELTA，满 tick ≈ 100/s；UNCHANGED 另额 32）；主线程 hash/比较/packet 快照，encode/ZSTD 在推送池 | 默认启用 |
 
-控制面（握手、index sync、chunkHash 等）在压缩黑名单，不进 PENDING 聚合缓冲。UDP 数据面/网关帧协议/L1 迁移已随直连拓扑裁剪（历史见 [`archive/multi-channel_network_research.md`](archive/multi-channel_network_research.md)）。
+控制面（握手、index sync、chunkHash 等）在压缩黑名单，不进 PENDING 聚合缓冲；区块图控制包（`forget_level_chunk` / `set_chunk_cache_center` / `set_chunk_cache_radius`）保持直发（pull 模式域，规避顺序倒置窗口）；实体高频包（位移/旋转/motion 等）进聚合（2026-09-14 评估放开：tick 尾 + 50ms watchdog 兜底使帧 staleness 上界恒定，客户端重放路径与原版等价）；`ClientboundBundlePacket` 直发（1.21.1+ play codec 表无 bundle 条目，无法经聚合序列化）。UDP 数据面/网关帧协议/L1 迁移已随直连拓扑裁剪（历史见 [`archive/multi-channel_network_research.md`](archive/multi-channel_network_research.md)）。
 
 ## 9. 配置默认值（安全与行为）
 

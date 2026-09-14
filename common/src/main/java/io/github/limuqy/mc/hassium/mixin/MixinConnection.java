@@ -113,6 +113,16 @@ public class MixinConnection {
         if (PacketTypeHelper.isAggregationPacket(packet)) {
             return;
         }
+        // Bundle 包直发：1.21.1+ play codec 表只注册 bundle_delimiter，bundle 本身
+        // 无法经 IdDispatchCodec 序列化（EncoderException "Sending unknown packet"）；
+        // vanilla 靠管线层 PacketBundlePacker 拆包，而本 mixin 在 Connection.send 层
+        // 拦截，bundle 到不了 packer。若不排除，takeOver 序列化失败后 ci.cancel()
+        // 已执行 → 包被静默丢弃（实体出生包组 ServerEntity.addPairing 走此路径，
+        // 症状 = 聚合激活后实体不可见）。1.20.1 侧 getVanillaIdentifier 对 bundle
+        // 返回 null 本就直发，此处排除使两段行为一致。
+        if (packet instanceof net.minecraft.network.protocol.BundlePacket) {
+            return;
+        }
 
         // 获取包类型
         var packetType = PacketTypeHelper.getPacketType(packet);
@@ -121,7 +131,7 @@ public class MixinConnection {
             return;
         }
 
-        // 检查黑名单 / 高频排除：控制面、独立压缩通道、实体高频包不聚合
+        // 检查黑名单 / 高频排除：控制面、独立压缩通道、区块图控制包不聚合
         String packetTypeId = packetType.toString();
         if (!PacketCompressionBlacklist.shouldAggregate(packetTypeId)) {
             Constants.LOG.debug("Packet {} skipped aggregation (blacklist or high-freq)", packetTypeId);
