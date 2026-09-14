@@ -109,6 +109,12 @@ public class DictionaryManager {
      * @param serverRunDirectory 服务器运行目录（非 null）
      */
     public static void init(Path serverRunDirectory) {
+        if (serverRunDirectory == null) {
+            // 玩家脱离世界/断连窗口取不到 server；字典保持未初始化，读写点已有 null 降级
+            LOGGER.warn("Aggregation dictionary init skipped: server run directory unavailable");
+            aggregationDictPath = null;
+            return;
+        }
         aggregationDictPath = serverRunDirectory
                 .resolve("config")
                 .resolve(Constants.MOD_ID)

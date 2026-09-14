@@ -72,10 +72,15 @@ public final class PlayerCompat {
      * 1.21.1+: 直接返回 {@code Path}。
      */
     public static Path getServerRunDirectory(ServerPlayer player) {
+        // 经 getMinecraftServer 兼容 1.21.9+ 移除 player.getServer() 的差异
+        MinecraftServer server = getMinecraftServer(player);
+        if (server == null) {
+            return null;
+        }
 #if MC_VER < MC_1_21_1
-        return player.getServer().getServerDirectory().toPath();
+        return server.getServerDirectory().toPath();
 #else
-        return player.getServer().getServerDirectory();
+        return server.getServerDirectory();
 #endif
     }
 
