@@ -85,6 +85,12 @@ public final class ShadowTicketDriver {
     private static final Set<Long> ticketed = new HashSet<>();
 
     /**
+     * 上次对账因 {@link #MAX_ADDS_PER_PUMP}/{@link #MAX_TICKETS} 截断、目标集合未铺满。
+     * 几何未变时仍要续做，否则 live 卡在 64、desired=636 后永不补齐。
+     */
+    private static boolean reconcileIncomplete;
+
+    /**
      * 声明驱动的本地生成候选（③，2026-09-13）：{@code ChunkAuthorityClient.resolve} 无基线 + SeedGen
      * 门控开时注册（Render 线程写），影子主循环消费投递 {@code generateChunkAsync} 显式触发 vanilla
      * worldgen —— 接管态（tracking 钝化）下这是权威窗内本地生成的唯一触发源（FORCED 票在影子端
@@ -250,6 +256,7 @@ public final class ShadowTicketDriver {
             ticketed.clear();
             pendingClear.set(false);
             lastDimension = null;
+            reconcileIncomplete = false;
             DebugLogger.info(DebugLogger.LogType.NETWORK,
                     "[SHADOW_TICKET] {} instance (bookkeeping dropped)",
                     first ? "bound" : "re-bound to new");
@@ -263,8 +270,9 @@ public final class ShadowTicketDriver {
         consumeLocalGeneration(shadow);
         if (dimension.equals(lastDimension) && centerX == lastCenterX
                 && centerZ == lastCenterZ && authorityRange == lastAuthorityRange
-                && clientRadius == lastClientRadius) {
-            return; // 几何未变：无事可做（移动时才跨 chunk，故这里是热路径的免枚举短路）
+                && clientRadius == lastClientRadius
+                && !reconcileIncomplete) {
+            return; // 几何未变且目标已铺满：热路径免枚举
         }
         lastDimension = dimension;
         lastCenterX = centerX;
@@ -302,12 +310,14 @@ public final class ShadowTicketDriver {
         }
         // 2) 先增：由近及远，复刻 vanilla 的距离填充涟漪
         int added = 0;
+        boolean incomplete = false;
         if (!missing.isEmpty()) {
             missing.sort(java.util.Comparator.comparingDouble(
                     p -> ChunkDistancePriority.authoritativeFromCenter(p, centerX, centerZ)));
             int ops = 0;
             for (ChunkPos pos : missing) {
                 if (ops >= MAX_ADDS_PER_PUMP || ticketed.size() >= MAX_TICKETS) {
+                    incomplete = true;
                     break;
                 }
                 if (addTicket(level, DimensionKey.key(dimension, pos.x, pos.z), pos)) {
@@ -316,6 +326,7 @@ public final class ShadowTicketDriver {
                 }
             }
         }
+        reconcileIncomplete = incomplete;
         // 3) 后删：由远及近；先增后删保证边界抖动时不出现瞬时空洞
         List<Long> stale = null;
         for (Long key : ticketed) {
@@ -413,6 +424,7 @@ public final class ShadowTicketDriver {
         localGenInFlight.clear();
         localGenFailed.clear();
         lastDimension = null;
+        reconcileIncomplete = false;
         DebugLogger.info(DebugLogger.LogType.NETWORK,
                 "[SHADOW_TICKET] cleared {} selection tickets at session boundary", removed);
     }

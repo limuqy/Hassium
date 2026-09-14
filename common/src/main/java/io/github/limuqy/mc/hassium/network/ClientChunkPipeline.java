@@ -167,6 +167,11 @@ public final class ClientChunkPipeline {
         this.shadowServerReady = ready;
     }
 
+    /** 影子服务端创建成功 / park 复用已 unpark。 */
+    public boolean isShadowServerReady() {
+        return shadowServerReady;
+    }
+
     /** 影子服务端创建失败标记（ShadowLightCompute 启动任务回填）。 */
     public void setShadowServerFailed(boolean failed) {
         this.shadowServerFailed = failed;

@@ -18,8 +18,9 @@ import net.minecraft.world.level.ChunkPos;
  * 三分支（与 {@code docs/client-chunk-flow-handover.md} 的统一 Compare+Pull 语义一致）：
  * <ol>
  *   <li><b>hash 已知且与本地基线相同</b>：服务端已断言权威内容 == 本地内容 →
- *       <b>不发任何请求</b>，本地 {@code publishCachedChunk} 交付，并按「区块缓存全命中」记账
- *       （见 {@link ShadowLightCompute#markAuthorityHashConfirmed}）。</li>
+ *       <b>不发任何请求</b>。客户端尚未持有则本地 {@code publishCachedChunk} 交付；
+ *       已持有（典型为 OVD→权威）则 {@code accountCacheFullHit} 补记缓存全命中。
+ *       两者都按「区块缓存全命中」记账（见 {@link ShadowLightCompute#markAuthorityHashConfirmed}）。</li>
  *   <li>本地已有基线但 hash 未知/不等 → {@code requestFull}（带基线比较），
  *       服务端裁决 UNCHANGED / DELTA / FULL。</li>
  *   <li>本地无基线 → 空基线请求：SeedGen 门控开时由**声明驱动的本地生成**接管
@@ -196,7 +197,15 @@ public final class ChunkAuthorityClient {
         boolean clientHolds = ShadowLightCompute.hasClientApplyEpoch(dimension, pos);
         if (authoritativeHash != 0L && localHash != null && localHash == authoritativeHash) {
             if (clientHolds) {
-                // 服务端确认无变更且客户端已持有：零动作（不得记命中，避免与首轮「新增」双计）
+                // 服务端确认无变更且客户端已持有：不再 PULL。
+                // OVD→权威：本地源已交付 + hash 一致 → 补记缓存全命中（accountCacheFullHit
+                // 对 accountedIngress / 已记命中幂等，不会与网络全量双计）。
+                if (ShadowLightCompute.accountCacheFullHit(dimension, pos)) {
+                    io.github.limuqy.mc.hassium.utils.DebugLogger.info(
+                            io.github.limuqy.mc.hassium.utils.DebugLogger.LogType.NETWORK,
+                            "[AUTHORITY] hash-hit already-held ({}, {}) hash={}",
+                            pos.x, pos.z, authoritativeHash);
+                }
                 return Pull.NONE;
             }
             // 服务端断言权威内容 == 本地内容：零请求本地交付 + 计全命中

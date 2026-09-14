@@ -66,18 +66,53 @@ public final class OvdClientLifecycle {
         }
         int effective = effectiveClientVD(mc);
         ShadowTrackingSession.publishEffectiveClientVD(effective);
-        ensureChunkCacheRadius(mc.level, effective);
+        ensureClientRenderBounds(mc, effective);
         if (effective != lastLoggedEffective) {
             lastLoggedEffective = effective;
+            var pipeline = io.github.limuqy.mc.hassium.network.ClientChunkPipeline.getInstance();
             io.github.limuqy.mc.hassium.Constants.LOG.info(
-                    "[OVD] effectiveClientVD={} serverVD={} slider={} config={} handshake={}",
+                    "[OVD] effectiveClientVD={} serverVD={} slider={} effectiveRD={} config={} engine={} shadowFailed={}",
                     effective, serverViewDistance(),
                     mc.options.renderDistance().get(),
-                    isConfigEnabled(), isEnabled());
+                    mc.options.getEffectiveRenderDistance(),
+                    isConfigEnabled(), isEnabled(),
+                    pipeline.isShadowServerFailed());
         }
     }
 
     private static volatile int lastLoggedEffective = -1;
+
+    /**
+     * 客户端可见半径守护：
+     * <ol>
+     *   <li>抬 {@link ClientChunkCache} 存储半径到 effective（防 {@code SetChunkCacheRadius} 缩回后
+     *       影子 OVD 包被 Storage.inRange 丢弃）。</li>
+     *   <li>抬 {@code Options.serverRenderDistance}——vanilla {@code getEffectiveRenderDistance()}
+     *       = {@code min(slider, serverRenderDistance)}，只扩缓存不抬渲染钳时，OVD 环带
+     *       柱会 apply 进缓存却永不 mesh（R2 实证 max cheb=10）。</li>
+     * </ol>
+     * 无状态，每 tick 调用。
+     */
+    public static void ensureClientRenderBounds(Minecraft mc, int radius) {
+        if (mc == null || mc.level == null || radius <= 0) {
+            return;
+        }
+        try {
+            ClientChunkCacheRadius.apply(((ClientLevelAccessor) mc.level).hassium$getChunkSource(), radius);
+        } catch (Throwable t) {
+            DebugLogger.debug(DebugLogger.LogType.CACHE,
+                    "[OVD] expand ClientChunkCache radius to {} failed", radius, t);
+        }
+        try {
+            // 仅抬不压：SetChunkCacheRadius 仍会写真实 serverVD，下一 tick 本方法再抬回 effective。
+            if (mc.options != null && mc.options.getEffectiveRenderDistance() < radius) {
+                mc.options.setServerRenderDistance(radius);
+            }
+        } catch (Throwable t) {
+            DebugLogger.debug(DebugLogger.LogType.CACHE,
+                    "[OVD] raise serverRenderDistance to {} failed", radius, t);
+        }
+    }
 
     /**
      * 抬高 ClientChunkCache 半径到 effective（防 SetChunkCacheRadius 缩回后

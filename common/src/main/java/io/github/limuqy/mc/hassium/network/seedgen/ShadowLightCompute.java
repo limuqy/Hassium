@@ -138,6 +138,18 @@ public final class ShadowLightCompute {
      */
     private static final ConcurrentHashMap<Long, LightMask> lightUpdates = new ConcurrentHashMap<>();
 
+    /** 缺邻方向位：指向「算光时尚未注入」的邻柱。W/E/N/S → bit0/1/2/3。 */
+    private static final int EDGE_W = 1;
+    private static final int EDGE_E = 2;
+    private static final int EDGE_N = 4;
+    private static final int EDGE_S = 8;
+    /**
+     * 算光提交瞬间四邻缺失位图（复合键 → 方向位）。影子端 lightChunk 不等 9 柱，
+     * 缺邻按基岩挡光会形成屋檐/空穴稳定残差；邻到后仅对置位方向做接缝 SKY 补光。
+     * 邻到自愈或接缝预读无差时清位；断连/取消清空。
+     */
+    private static final ConcurrentHashMap<Long, Integer> edgeMissingBits = new ConcurrentHashMap<>();
+
     /**
      * 单 chunk 光照更新掩码：绝对 sectionY 收集。用 TreeSet 而非 BitSet——绝对
      * sectionY 可为负（-64 高度世界），BitSet 负索引抛异常；攒批时按
@@ -749,7 +761,11 @@ public final class ShadowLightCompute {
      */
     public static boolean publishCachedChunk(String dimension, ChunkPos pos,
                                              boolean localGeneration, boolean renderOnly) {
-        if (pos == null || !isEnabled()) {
+        if (pos == null) {
+            return false;
+        }
+        if (!isEnabled()) {
+            notePublishBlocked(renderOnly, "engineDisabledOrShadowFailed", pos);
             return false;
         }
         // 权威缓存复用仍避开在途网络全量；OVD 环带只走本地源、永不 pull，
@@ -761,10 +777,12 @@ public final class ShadowLightCompute {
         String resolved = dimension == null ? currentDimension() : dimension;
         ShadowSeedServer server = ShadowServerRegistry.getInstance().getOrCreate();
         if (server == null) {
+            notePublishBlocked(renderOnly, "shadowServerNull", pos);
             return false;
         }
         net.minecraft.server.level.ServerLevel level = server.level(resolved);
         if (level == null) {
+            notePublishBlocked(renderOnly, "levelNull", pos);
             return false;
         }
         net.minecraft.world.level.chunk.LevelChunk chunk = server.injectedChunk(resolved, pos.x, pos.z);
@@ -785,6 +803,25 @@ public final class ShadowLightCompute {
         return submitPreLight(ShadowChunkSource.CACHE_SNAPSHOT, pos, chunk, level,
                 traceOrigin(origin), renderOnly);
     }
+
+    /** publish 被门禁挡住时的节流日志（OVD/权威共用；R2 ovdLoaded=0 归因用）。 */
+    private static void notePublishBlocked(boolean renderOnly, String reason, ChunkPos pos) {
+        long now = System.currentTimeMillis();
+        if (now - lastPublishBlockedMs < 2_000L) {
+            return;
+        }
+        lastPublishBlockedMs = now;
+        ClientChunkPipeline pipeline = ClientChunkPipeline.getInstance();
+        io.github.limuqy.mc.hassium.Constants.LOG.warn(
+                "[SHADOW_PUBLISH] blocked reason={} renderOnly={} pos=({},{}) engine={} failed={} ready={} handshake={}",
+                reason, renderOnly, pos.x, pos.z,
+                HassiumConfigService.getInstance().isHassiumEngineEnabled(),
+                pipeline.isShadowServerFailed(),
+                pipeline.isShadowServerReady(),
+                pipeline.isHassiumHandshakeDone());
+    }
+
+    private static volatile long lastPublishBlockedMs;
 
     public static long hashMemoryHitCount() {
         return hashMemoryHits.get();
@@ -1564,11 +1601,12 @@ public final class ShadowLightCompute {
                     applied = withChunkLock(pos, () ->
                             server.applySectionDelta(work.dimension(), pos, work.entry()));
                     if (!applied) {
-                        DebugLogger.warn(DebugLogger.LogType.ASYNC,
+                        // 单柱 delta 失败不得关整台影子端（与 noteSingleColumnFailure 同语义）：
+                        // 整端 fail 会连坐 OVD/缓存 publish（test1 R2 ovdLoaded=0 实证）。
+                        // 该柱让给原版 tracking / 后续 compare-pull。
+                        io.github.limuqy.mc.hassium.Constants.LOG.warn(
                                 "[SHADOW_DELTA] Apply failed ({}, {}), yield to vanilla tracking",
                                 pos.x, pos.z);
-                        io.github.limuqy.mc.hassium.network.ClientChunkPipeline.getInstance()
-                                .setShadowServerFailed(true);
                     } else {
                         // 成功应用：部分命中 = 本地缓存整柱基线；分片 = FULL 整段 / BLOCKS 按格折算。
                         io.github.limuqy.mc.hassium.metrics.NetworkStats.recordCacheDeltaSaved(
@@ -1742,6 +1780,8 @@ public final class ShadowLightCompute {
                 t.chunk, t.level, deadlineMs, t.metric, t.renderOnly, t.traceOrigin);
         inf.submittedAtNs = System.nanoTime();
         inflightLight.put(t.key, inf);
+        // 算光瞬间的四邻齐套快照：缺邻按基岩挡光，邻到后只补置位方向的接缝。
+        recordEdgeMissingAtLightStart(server, DimensionKey.dimensionOf(t.key), t.key);
         if (t.source != LightSource.LIGHT_ONLY) {
             emitStandingImmediately(t.key, t.chunk, t.level, t.renderOnly, t.traceOrigin);
         }
@@ -1801,11 +1841,48 @@ public final class ShadowLightCompute {
 
     /** 原版 LIGHT future 完成后的唯一完成收口。 */
     private static void finishLight(LightTask task, boolean converged) {
-        if (!isEnabled() || isSuperseded(task)) {
+        if (!isEnabled()) {
             return;
         }
         ChunkPos pos = new ChunkPos(DimensionKey.chunkXOf(task.key), DimensionKey.chunkZOf(task.key));
         ShadowSeedServer server = ShadowServerRegistry.getInstance().get();
+        String dimension = DimensionKey.dimensionOf(task.key);
+        boolean hadEdgeMissing = edgeMissingBits.containsKey(task.key);
+        // 引擎侧本柱光已完成：邻柱接缝补光不依赖 isSuperseded（更新投递会再触发一次）。
+        if (server != null && dimension != null) {
+            try {
+                tryRelightNeighborSeams(server, dimension, pos);
+                // 曾缺邻：本柱可能按「空层邻柱」算短，对已 lightCorrect 的邻再对一次接缝。
+                if (hadEdgeMissing) {
+                    trySelfSeamHeal(server, dimension, pos);
+                }
+            } catch (Throwable seamFailure) {
+                DebugLogger.warn(DebugLogger.LogType.ASYNC,
+                        "[SHADOW_SEAM] Neighbor seam relight failed ({}, {})",
+                        pos.x, pos.z);
+            }
+        }
+        if (isSuperseded(task)) {
+            // 更新工作可能走 shouldSkipUnchangedRepush（alreadyShadowApplied + lightCorrect）
+            // 而不再整柱重推——若此处直接 return，客户端会停在 standing 首包欠光
+            //（skyTop=0），引擎已亮也送不出去。仍下发当前引擎光包兜底。
+            if (server != null && task.chunk != null && task.level != null) {
+                try {
+                    pushLightReady(pos, task.level, task.chunk, true, null);
+                    DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
+                            "[SHADOW_LIGHT] Superseded finish still pushed light ({}, {})",
+                            pos.x, pos.z);
+                } catch (Throwable lightPushFailure) {
+                    DebugLogger.warn(DebugLogger.LogType.ASYNC,
+                            "[SHADOW_LIGHT] Superseded light push failed ({}, {})",
+                            pos.x, pos.z);
+                }
+            }
+            if (server != null && task.chunk != null) {
+                server.persistAfterClientLightPush(task.chunk, converged);
+            }
+            return;
+        }
         if (task.metric == LightMetric.RECOMPUTE) {
             long elapsedNs = task.submittedAtNs > 0L
                     ? Math.max(0L, System.nanoTime() - task.submittedAtNs)
@@ -1850,6 +1927,238 @@ public final class ShadowLightCompute {
                 && item.lightPacket.getX() == pos.x && item.lightPacket.getZ() == pos.z);
     }
 
+    /**
+     * 算光提交瞬间记录四邻「不可用」方向。不可用 = 未注入，或已注入但
+     * {@code !isLightCorrect}（有方块无 DataLayer 时 getChunkForLighting 读到空层，
+     * 等价基岩挡光——只判 null 会漏掉「邻柱已到、光未算完」的常见竞态）。
+     * LIGHT_ONLY 也会覆盖写：邻到并算完后重算能清掉已到位方向。
+     */
+    private static void recordEdgeMissingAtLightStart(ShadowSeedServer server, String dimension,
+                                                      long key) {
+        if (server == null || dimension == null) {
+            return;
+        }
+        ChunkPos pos = new ChunkPos(DimensionKey.chunkXOf(key), DimensionKey.chunkZOf(key));
+        int missing = 0;
+        if (neighborLightUnavailable(server, dimension, pos.x - 1, pos.z)) {
+            missing |= EDGE_W;
+        }
+        if (neighborLightUnavailable(server, dimension, pos.x + 1, pos.z)) {
+            missing |= EDGE_E;
+        }
+        if (neighborLightUnavailable(server, dimension, pos.x, pos.z - 1)) {
+            missing |= EDGE_N;
+        }
+        if (neighborLightUnavailable(server, dimension, pos.x, pos.z + 1)) {
+            missing |= EDGE_S;
+        }
+        if (missing == 0) {
+            edgeMissingBits.remove(key);
+            return;
+        }
+        edgeMissingBits.put(key, missing);
+        DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
+                "[SHADOW_SEAM] edgeMissing ({}, {}) bits={}", pos.x, pos.z, missing);
+    }
+
+    private static boolean neighborLightUnavailable(ShadowSeedServer server, String dimension,
+                                                    int x, int z) {
+        LevelChunk neighbor = server.injectedChunk(dimension, x, z);
+        return neighbor == null || !neighbor.isLightCorrect();
+    }
+
+    /**
+     * 候选未注入柱（x,z）是否被任一已注入邻柱「主动等待」——邻柱算光提交时
+     * {@link #recordEdgeMissingAtLightStart} 缺本柱方向置位。pull 扫描据此优先请求
+     * 被等待的柱：邻柱光屏障一次到位，减少接缝补光风暴。
+     * 被动等待（邻已注入但未 lightCorrect）天然不命中：sweep 只对未注入候选查询，
+     * 已注入柱早已被 injectedChunk != null 过滤。
+     */
+    public static boolean hasLightWaitingNeighbors(String dimension, int x, int z) {
+        return isEdgeMissing(dimension, x - 1, z, EDGE_E)
+                || isEdgeMissing(dimension, x + 1, z, EDGE_W)
+                || isEdgeMissing(dimension, x, z - 1, EDGE_S)
+                || isEdgeMissing(dimension, x, z + 1, EDGE_N);
+    }
+
+    private static boolean isEdgeMissing(String dimension, int ax, int az, int bit) {
+        Integer bits = edgeMissingBits.get(DimensionKey.key(dimension, ax, az));
+        return bits != null && (bits & bit) != 0;
+    }
+
+    /**
+     * 本柱（B）光完成：对「算光时缺本邻」的已注入邻柱（A）做接缝 SKY 补光。
+     * 仅当接缝面存在 B&gt;A 的光差时提交 LIGHT_ONLY；预读相等则清位跳过
+     * （邻柱 lightChunk 可能已把光灌回来，不再重复算）。
+     */
+    private static void tryRelightNeighborSeams(ShadowSeedServer server, String dimension,
+                                                ChunkPos bPos) {
+        if (!isEnabled() || server == null || dimension == null || bPos == null) {
+            return;
+        }
+        net.minecraft.server.level.ServerLevel level = server.level(dimension);
+        if (level == null) {
+            return;
+        }
+        // A 在 B 西侧 → A 缺 E 邻；A 东缘 x=15 vs B 西缘 x=0
+        trySeamRelight(server, dimension, level, bPos, -1, 0, EDGE_E, 'x', 15, 0);
+        // A 在 B 东侧 → A 缺 W 邻；A 西缘 x=0 vs B 东缘 x=15
+        trySeamRelight(server, dimension, level, bPos, 1, 0, EDGE_W, 'x', 0, 15);
+        // A 在 B 北侧 → A 缺 S 邻；A 南缘 z=15 vs B 北缘 z=0
+        trySeamRelight(server, dimension, level, bPos, 0, -1, EDGE_S, 'z', 15, 0);
+        // A 在 B 南侧 → A 缺 N 邻；A 北缘 z=0 vs B 南缘 z=15
+        trySeamRelight(server, dimension, level, bPos, 0, 1, EDGE_N, 'z', 0, 15);
+    }
+
+    private static void trySeamRelight(ShadowSeedServer server, String dimension,
+                                       net.minecraft.server.level.ServerLevel level,
+                                       ChunkPos bPos, int dx, int dz, int aMissingBit,
+                                       char axis, int aFace, int bFace) {
+        ChunkPos aPos = new ChunkPos(bPos.x + dx, bPos.z + dz);
+        long aKey = DimensionKey.key(dimension, aPos.x, aPos.z);
+        Integer bits = edgeMissingBits.get(aKey);
+        if (bits == null || (bits & aMissingBit) == 0) {
+            return;
+        }
+        LevelChunk aChunk = server.injectedChunk(dimension, aPos.x, aPos.z);
+        if (aChunk == null) {
+            edgeMissingBits.remove(aKey);
+            return;
+        }
+        LevelLightEngine engine = level.getLightEngine();
+        BitSet skyMask = seamSkyMismatchMask(engine, bPos, aPos, axis, aFace, bFace);
+        boolean probeTarget = ShadowLightProbe.isProbeTarget(aPos);
+        if (skyMask.isEmpty()) {
+            clearEdgeMissingBit(aKey, aMissingBit);
+            if (probeTarget) {
+                ShadowLightProbe.onSeamRelight(aPos, bPos, aMissingBit, false, null);
+            }
+            return;
+        }
+        LightWork work = new LightWork(skyMask, new BitSet(), new BitSet(), new BitSet());
+        pendingLightUpdates.merge(aKey, work, LightWork::merged);
+        clearEdgeMissingBit(aKey, aMissingBit);
+        if (probeTarget) {
+            ShadowLightProbe.onSeamRelight(aPos, bPos, aMissingBit, true, skyMask);
+        }
+        DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
+                "[SHADOW_SEAM] Relight ({}, {}) from ({}, {}) missingBit={} mask={}",
+                aPos.x, aPos.z, bPos.x, bPos.z, aMissingBit, skyMask);
+        pump();
+    }
+
+    /**
+     * 本柱（A）光完成且提交时曾缺邻：对「已 lightCorrect」的四邻做接缝预读。
+     * 邻柱面 &gt; 本柱面则并一次 LIGHT_ONLY。方向位由 collectSelfSeamMismatch 内
+     * clearEdgeMissingBit 精确清除（检查过且无差/已提交补光）；「邻柱尚未注入」
+     * 的方向位保留在 edgeMissingBits，等邻柱算光完成后由 trySeamRelight 消费。
+     */
+    private static void trySelfSeamHeal(ShadowSeedServer server, String dimension, ChunkPos aPos) {
+        if (server == null || dimension == null || aPos == null) {
+            return;
+        }
+        net.minecraft.server.level.ServerLevel level = server.level(dimension);
+        if (level == null) {
+            return;
+        }
+        LevelLightEngine engine = level.getLightEngine();
+        BitSet skyMask = new BitSet();
+        long aKey = DimensionKey.key(dimension, aPos.x, aPos.z);
+        // 西邻 (x-1)：A 西缘 0 vs 邻东缘 15
+        collectSelfSeamMismatch(server, dimension, engine, aPos, aKey,
+                aPos.x - 1, aPos.z, 'x', 0, 15, EDGE_W, skyMask);
+        collectSelfSeamMismatch(server, dimension, engine, aPos, aKey,
+                aPos.x + 1, aPos.z, 'x', 15, 0, EDGE_E, skyMask);
+        collectSelfSeamMismatch(server, dimension, engine, aPos, aKey,
+                aPos.x, aPos.z - 1, 'z', 0, 15, EDGE_N, skyMask);
+        collectSelfSeamMismatch(server, dimension, engine, aPos, aKey,
+                aPos.x, aPos.z + 1, 'z', 15, 0, EDGE_S, skyMask);
+        if (skyMask.isEmpty()) {
+            return;
+        }
+        LightWork work = new LightWork(skyMask, new BitSet(), new BitSet(), new BitSet());
+        pendingLightUpdates.merge(aKey, work, LightWork::merged);
+        DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
+                "[SHADOW_SEAM] SelfHeal ({}, {}) mask={}", aPos.x, aPos.z, skyMask);
+        ShadowLightProbe.onSeamRelight(aPos, aPos, 0, true, skyMask);
+        pump();
+    }
+
+    private static void collectSelfSeamMismatch(ShadowSeedServer server, String dimension,
+                                                LevelLightEngine engine, ChunkPos aPos, long aKey,
+                                                int nX, int nZ, char axis, int aFace, int nFace,
+                                                int missingBit, BitSet skyMask) {
+        LevelChunk neighbor = server.injectedChunk(dimension, nX, nZ);
+        if (neighbor == null || !neighbor.isLightCorrect()) {
+            return;
+        }
+        Integer bits = edgeMissingBits.get(aKey);
+        if (bits == null || (bits & missingBit) == 0) {
+            return;
+        }
+        BitSet partial = seamSkyMismatchMask(engine, new ChunkPos(nX, nZ), aPos,
+                axis, aFace, nFace);
+        skyMask.or(partial);
+        clearEdgeMissingBit(aKey, missingBit);
+    }
+
+    private static void clearEdgeMissingBit(long key, int bit) {
+        edgeMissingBits.computeIfPresent(key, (k, value) -> {
+            int cleared = value & ~bit;
+            return cleared == 0 ? null : Integer.valueOf(cleared);
+        });
+    }
+
+    /**
+     * 接缝面 sky 光预读：任一格 B&gt;A 则该 section 需补光。
+     * null 层按 0（与引擎缺层语义一致）。不读方块透明度——不透光面误触发一次
+     * LIGHT_ONLY 可接受，远小于整柱重算。
+     */
+    private static BitSet seamSkyMismatchMask(LevelLightEngine engine, ChunkPos bPos, ChunkPos aPos,
+                                              char axis, int aFace, int bFace) {
+        BitSet skyMask = new BitSet();
+        if (engine == null) {
+            return skyMask;
+        }
+        int minLight = engine.getMinLightSection();
+        int lightCount = engine.getLightSectionCount();
+        for (int bit = 0; bit < lightCount; bit++) {
+            int sectionY = minLight + bit;
+            boolean mismatch = false;
+            for (int o = 0; o < 16 && !mismatch; o++) {
+                for (int ly = 0; ly < 16; ly++) {
+                    int aLight;
+                    int bLight;
+                    if (axis == 'x') {
+                        aLight = readSkyLight(engine, aPos.x, sectionY, aPos.z, aFace, ly, o);
+                        bLight = readSkyLight(engine, bPos.x, sectionY, bPos.z, bFace, ly, o);
+                    } else {
+                        aLight = readSkyLight(engine, aPos.x, sectionY, aPos.z, o, ly, aFace);
+                        bLight = readSkyLight(engine, bPos.x, sectionY, bPos.z, o, ly, bFace);
+                    }
+                    if (bLight > aLight) {
+                        mismatch = true;
+                        break;
+                    }
+                }
+            }
+            if (mismatch) {
+                skyMask.set(bit);
+            }
+        }
+        return skyMask;
+    }
+
+    private static int readSkyLight(LevelLightEngine engine, int chunkX, int sectionY,
+                                    int chunkZ, int localX, int localY, int localZ) {
+        DataLayer sky = engine.getLayerListener(LightLayer.SKY)
+                .getDataLayerData(SectionPos.of(chunkX, sectionY, chunkZ));
+        if (sky == null) {
+            return 0;
+        }
+        return sky.get(localX, localY, localZ);
+    }
+
     /** 区块卸载前取消该柱所有尚未完成的影子光照/回传工作。 */
     public static void cancelChunkWork(long key) {
         pending.remove(key);
@@ -1859,6 +2168,7 @@ public final class ShadowLightCompute {
         inflightLight.remove(key);
         lightUpdates.remove(key);
         shadowApplyEpochs.remove(key);
+        edgeMissingBits.remove(key);
         discardLightMask(key);
         DebugLogger.info(DebugLogger.LogType.ASYNC,
                 "[SHADOW_LIGHT] Cancelled work before unload ({}, {})",
@@ -2434,6 +2744,7 @@ public final class ShadowLightCompute {
         inflightLight.clear(); // 在途光屏障：回调侧条件移除失败即短路丢弃（断连竞态）
         ready.clear();
         lightUpdates.clear();
+        edgeMissingBits.clear();
         requestedMisses.clear();
         accountedIngress.clear();
         networkInFlight.clear();

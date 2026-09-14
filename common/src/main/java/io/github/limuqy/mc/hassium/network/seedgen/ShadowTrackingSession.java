@@ -867,12 +867,34 @@ public final class ShadowTrackingSession {
         sweepInFlight.entrySet().removeIf(e -> e.getValue() < expireBefore);
         java.util.List<ChunkPos> withBaseline = new java.util.ArrayList<>();
         java.util.List<ChunkPos> withoutBaseline = new java.util.ArrayList<>();
-        int sent = 0;
         int radius = serverViewDistance;
+        // 优先槽：被缺邻柱「主动等待」的未注入柱先收集（预算共享）；
+        // 剩余预算给普通距离环扫描。waiting 判定只查一层（A 缺 B → B 优先，
+        // 不递归），被动等待（邻已注入未 lightCorrect）不参与——sweep 只扫未注入柱。
+        int waitingSent = collectSweepRing(shadow, nowMs, center, radius, true,
+                withBaseline, withoutBaseline, MAX_SWEEP_PER_PUMP);
+        int sent = waitingSent + collectSweepRing(shadow, nowMs, center, radius, false,
+                withBaseline, withoutBaseline, MAX_SWEEP_PER_PUMP - waitingSent);
+        if (sent > 0) {
+            DebugLogger.info(DebugLogger.LogType.NETWORK,
+                    "[SHADOW_TRACK] sweep missing={} waiting={} localGen={} center=({},{}) radius={} (dimension={})",
+                    sent, waitingSent, preferLocalGeneration(), center.x, center.z, radius, currentDimension);
+        }
+        emitPullGroups(withBaseline, withoutBaseline);
+    }
+
+    /** 单遍环扫描收集（waitingOnly 时只收被缺邻柱等待的未注入柱；false 时走原逻辑）。
+     *  两遍共享 sweepInFlight：waiting pass 已 mark 的柱 normal pass 自然去重。 */
+    private int collectSweepRing(ShadowSeedServer shadow, long nowMs, ChunkPos center, int radius,
+                                 boolean waitingOnly,
+                                 java.util.List<ChunkPos> withBaseline,
+                                 java.util.List<ChunkPos> withoutBaseline,
+                                 int budget) {
+        int sent = 0;
         // 逐环由近及远扫描，优先补齐玩家脚下的洞
-        for (int ring = 0; ring <= radius && sent < MAX_SWEEP_PER_PUMP; ring++) {
+        for (int ring = 0; ring <= radius && sent < budget; ring++) {
             int perimeter = ring == 0 ? 1 : 8 * ring;
-            for (int i = 0; i < perimeter && sent < MAX_SWEEP_PER_PUMP; i++) {
+            for (int i = 0; i < perimeter && sent < budget; i++) {
                 int x, z;
                 if (ring == 0) {
                     x = center.x;
@@ -891,6 +913,9 @@ public final class ShadowTrackingSession {
                     continue;
                 }
                 if (shadow.injectedChunk(currentDimension, x, z) != null) {
+                    if (waitingOnly) {
+                        continue; // 已注入柱不参与优先槽；redeliver/在途清理留给 normal pass
+                    }
                     sweepInFlight.remove(DimensionKey.key(currentDimension, x, z));
                     // 已注入但客户端无落地凭据（真实服半径更小导致 Forget，或 tracking 边沿漏发）：
                     // 入重发队列，由 drainRedeliver 限速 publish
@@ -900,6 +925,10 @@ public final class ShadowTrackingSession {
                         redeliverQueue.add(injectedPos);
                     }
                     continue;
+                }
+                if (waitingOnly
+                        && !ShadowLightCompute.hasLightWaitingNeighbors(currentDimension, x, z)) {
+                    continue; // 优先槽只收被缺邻柱等待的柱
                 }
                 ChunkPos pos = new ChunkPos(x, z);
                 boolean hasBaseline = ShadowLightCompute.hasLocalPullBaseline(currentDimension, pos);
@@ -917,12 +946,7 @@ public final class ShadowTrackingSession {
                 sent++;
             }
         }
-        if (sent > 0) {
-            DebugLogger.info(DebugLogger.LogType.NETWORK,
-                    "[SHADOW_TRACK] sweep missing={} localGen={} center=({},{}) radius={} (dimension={})",
-                    sent, preferLocalGeneration(), center.x, center.z, radius, currentDimension);
-        }
-        emitPullGroups(withBaseline, withoutBaseline);
+        return sent;
     }
 
     /** 会话静态基准光盘：起步时把身子背后没有窗口追随的滞留环逐环补齐（气球尾部闭环）。 */

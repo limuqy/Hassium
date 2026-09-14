@@ -310,6 +310,9 @@ public final class ShadowServerRegistry {
             cancelIdleTimeout();
             io.github.limuqy.mc.hassium.storage.ShadowStorageManager.resumeEncoding();
             ClientChunkPipeline.getInstance().setShadowServerReady(true);
+            // 会话级降级随重进清除：R1 单柱失败/误置 failed 会让 R2 OVD publish 恒 false
+            // （test1 实证 ovdLoaded=0），park 复用不得继承上一会话的 failed。
+            ClientChunkPipeline.getInstance().setShadowServerFailed(false);
             ShadowLightCompute.onShadowServerReady();
             DebugLogger.info(DebugLogger.LogType.ASYNC,
                     "[SHADOW] Reusing parked shadow server (serverId={})", boundServerId);

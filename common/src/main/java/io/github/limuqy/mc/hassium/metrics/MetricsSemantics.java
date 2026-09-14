@@ -31,7 +31,8 @@ package io.github.limuqy.mc.hassium.metrics;
  * </ul>
  * 锚点：
  * <ul>
- *   <li>{@code recordCacheFullHit} ← {@code accountCacheFullHit} ← UNCHANGED / 内存 hash 一致</li>
+ *   <li>{@code recordCacheFullHit} ← {@code accountCacheFullHit} ← UNCHANGED /
+ *       内存 hash 一致复用；权威边沿 hash-hit（含 OVD→权威 已持有零请求）</li>
  *   <li>{@code recordCacheDeltaSaved} + {@code recordCacheShard} ← {@code applySectionDelta} 成功</li>
  *   <li>应用字节 = {@code getFullChunkRequestBytes + cacheHitFullChunkBytes
  *       + cacheDeltaSavedBytes + serverPush×ESTIMATED_CHUNK_BYTES}</li>

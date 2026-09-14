@@ -4,6 +4,7 @@ import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.utils.DimensionKey;
 import java.util.Base64;
+import java.util.BitSet;
 import net.minecraft.core.SectionPos;
 import net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket;
 import net.minecraft.world.level.ChunkPos;
@@ -62,6 +63,28 @@ public final class ShadowLightProbe {
 
     private static boolean isProbeChunk(ChunkPos pos) {
         return pos != null && pos.x == CHUNK_X && pos.z == CHUNK_Z;
+    }
+
+    /** 包内可见：接缝补光是否命中探针柱（onSeamRelight 内部再查 enabled）。 */
+    static boolean isProbeTarget(ChunkPos pos) {
+        return isProbeChunk(pos);
+    }
+
+    /**
+     * 邻到接缝补光决策（edgeMissing 路径）。submitted=false 表示接缝预读无 B&gt;A 差、
+     * 仅清位；true 表示已把 sky 掩码并入 pendingLightUpdates。
+     */
+    static void onSeamRelight(ChunkPos target, ChunkPos source, int missingBit,
+                              boolean submitted, BitSet skyMask) {
+        if (!enabled() || !isProbeChunk(target)) {
+            return;
+        }
+        try {
+            Constants.LOG.info("{}SEAM target=({},{}) source=({},{}) missingBit={} submitted={} mask={}",
+                    PREFIX, target.x, target.z, source.x, source.z, missingBit, submitted, skyMask);
+        } catch (Throwable t) {
+            warnHookFailure("onSeamRelight", t);
+        }
     }
 
 
