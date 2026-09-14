@@ -59,6 +59,31 @@ public class MixinConnection {
         ci.cancel();
     }
 
+    /**
+     * 服务端入站：提前消费 1.20.1 Hassium login query 应答。
+     * 应答可能晚于 listener 切到 Game —— 原版 handleCustomQueryPacket 会
+     * ClassCastException（首连偶发「此服务器发送了一个无效的数据包」）。
+     */
+    @Inject(method = "channelRead0", at = @At("HEAD"), cancellable = true)
+    private void hassium$consumeLoginQueryAnswer(ChannelHandlerContext ctx, Packet<?> packet, CallbackInfo ci) {
+        if (receiving != PacketFlow.SERVERBOUND) {
+            return;
+        }
+#if MC_VER < MC_1_21_1
+        if (!(packet instanceof net.minecraft.network.protocol.login.ServerboundCustomQueryPacket query)) {
+            return;
+        }
+        if (query.getTransactionId() != io.github.limuqy.mc.hassium.network.handshake.LoginHandshake.TRANSACTION_ID) {
+            return;
+        }
+        net.minecraft.network.FriendlyByteBuf data = query.getData();
+        Connection self = (Connection) (Object) this;
+        if (LoginHandshakeManager.consumeQueryAnswerAtChannel(self, data)) {
+            ci.cancel();
+        }
+#endif
+    }
+
     // review-fix: T7-59: handler 统一加 hassium$ 前缀（Mixin 惯例，避免与目标类未来同名成员 merge 冲突）
 #if MC_VER < MC_1_21_6
     @Inject(method = "send(Lnet/minecraft/network/protocol/Packet;Lnet/minecraft/network/PacketSendListener;)V", at = @At("HEAD"), cancellable = true)

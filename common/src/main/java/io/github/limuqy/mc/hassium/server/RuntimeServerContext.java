@@ -22,6 +22,7 @@ public final class RuntimeServerContext {
 
     private static volatile boolean dedicatedServer = false;
     private static volatile boolean shadowServer = false;
+    private static volatile net.minecraft.server.MinecraftServer activeServer;
     private static int shadowGeneration = 0;
 
     private RuntimeServerContext() {
@@ -34,6 +35,19 @@ public final class RuntimeServerContext {
     /** @return 当前进程是否运行专用服务器（dedicated server） */
     public static boolean isDedicatedServerContext() {
         return dedicatedServer;
+    }
+
+    /**
+     * 当前主 MinecraftServer（集成服/专用服启动时写入；停止时清空）。
+     * 供登录期等无 server 参数的路径读取 {@code isPublished()}（LAN 是否已开）。
+     */
+    public static void setActiveServer(net.minecraft.server.MinecraftServer server) {
+        activeServer = server;
+    }
+
+    /** @return 当前主 MinecraftServer；未启动/已停止时可能为 {@code null} */
+    public static net.minecraft.server.MinecraftServer getActiveServer() {
+        return activeServer;
     }
 
     /**

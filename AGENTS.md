@@ -142,12 +142,13 @@ fabric/ | forge/ | neoforge/
 
 ## 配置红线
 
-键集真相源：`ConfigSchema`；审计表见 [`docs/config-audit.md`](docs/config-audit.md)。Fabric 双文件 `hassium-client.toml` / `hassium-server.toml`（按物理端二选一）；Forge/NeoForge 双 spec 亦按物理端二选一注册（客户端仅 CLIENT，专用服仅 SERVER，客户端不生成 server toml）。
+键集真相源：`ConfigSchema`；审计表见 [`docs/config-audit.md`](docs/config-audit.md)。Fabric 双文件 `hassium-client.toml` / `hassium-server.toml`；**物理客户端双文件合并**（client 配客户端行为，server 供集成服务器/局域网；UI 只显示客户端键）；专用服仅 server。Forge/NeoForge 物理客户端双注册（CLIENT + COMMON），专用服仅 COMMON。
 
 | 项 | 默认 | 注意 |
 |----|------|------|
-| `storage.enabled` | **false** | 默认关；开启后改存档格式（type 126）→ 提醒备份；仅专用服务器写，单人/局域网保持原版格式（读兼容）；客户端影子端（hassium_cache）固定写 126，不受本开关约束 |
-| `master.enabled` | true | 服务端网络通道总开关（登录期握手/聚合的门） |
+| `storage.enabled` | **false** | 默认关；开启后改存档格式（type 126）→ 提醒备份；**运行时仅专用服生效**（`isStorageEnabled` 门控 `RuntimeServerContext`），单人/局域网保持原版格式（读兼容）；客户端影子端（hassium_cache）固定写 126，不受本开关约束 |
+| `master.enabled` | true | 专用服网络通道总开关（登录期握手/聚合的门） |
+| `master.enabledOnLan` | **false** | 集成服已开局域网时对**远程**玩家启用网络面；本机 memory 恒原版；storage 仍仅专用服 |
 | `master.maxChunksPerTick` | 5 | 每玩家每 tick 完成的 Pull FULL/DELTA 上限（满 tick ≈ 100/s；UNCHANGED 另额 32） |
 | `chunk.enabled` | true | 区块核心总开关（影子端世界保存/算光/缓存/Pull 模式；关后全程原版路径） |
 | `chunk.seedGenEnabled` | **false** | 双端同版本；**服务端开启会泄露世界种子** |

@@ -49,13 +49,13 @@ class ConfigRestructureRoundTripTest {
         Map<String, ConfigEntry<?>> byPath = ConfigSchema.entries().stream()
                 .collect(Collectors.toMap(e -> e.scope() + "/" + e.path(), Function.identity()));
 
-        assertEquals(44, ConfigSchema.entries().size(), "schema 留存键数");
-        assertEquals(44, values.asMap().size(), "defaults 键数");
+        assertEquals(45, ConfigSchema.entries().size(), "schema 留存键数");
+        assertEquals(45, values.asMap().size(), "defaults 键数");
 
         Map<String, Long> prefixCounts = ConfigSchema.entries().stream()
                 .collect(Collectors.groupingBy(e -> e.path().substring(0, e.path().indexOf('.') + 1),
                         Collectors.counting()));
-        assertEquals(Map.of("chunk.", 16L, "master.", 9L, "debug.", 15L,
+        assertEquals(Map.of("chunk.", 16L, "master.", 10L, "debug.", 15L,
                 "storage.", 2L, "compat.", 2L), prefixCounts);
 
         // 双端同名键 chunk.seedGenEnabled 各一
@@ -107,7 +107,7 @@ class ConfigRestructureRoundTripTest {
     @Test
     void serverTomlRoundTripsNewKeys(@TempDir Path root) throws IOException {
         HassiumConfig.MasterCoreConfig master = new HassiumConfig.MasterCoreConfig(
-                true, 9, false, false, 8, 50L, 131072,
+                true, true, 9, false, false, 8, 50L, 131072,
                 Set.of("MAIN_CHANNEL"), 7);
         HassiumConfig.StorageConfig storage = new HassiumConfig.StorageConfig(true, 9);
         // server toml 只写 chunk.lightStrip/chunk.seedGenEnabled 两键，其余键读回默认 → 仅改这两键
@@ -147,6 +147,68 @@ class ConfigRestructureRoundTripTest {
         assertFalse(toml.contains("metadataLogging"), "server toml 不应含客户端专属 debug.metadataLogging:\n" + toml);
         assertFalse(toml.contains("cacheLogging"), "server toml 不应含客户端专属 debug.cacheLogging:\n" + toml);
         assertFalse(toml.contains("lightVerify"), "server toml 不应含客户端专属 debug.lightVerify:\n" + toml);
+        assertFalse(toml.contains("maxRenderDistance"), "server toml 不应含 CLIENT 键 maxRenderDistance:\n" + toml);
+        // 双 scope 同名键注释按 SERVER scope：须含种子泄露警告
+        assertTrue(toml.contains("泄露服务端种子") || toml.contains("leaks the server world seed"),
+                "server toml seedGenEnabled 注释应含泄露警告:\n" + toml);
+    }
+
+    @Test
+    void clientTomlRoundTripDropsServerOnlyLightStrip(@TempDir Path root) throws IOException {
+        // lightStrip 为 SERVER 键：client 写读不得落盘/读回（默认 true 保持）
+        HassiumConfig.ChunkCoreConfig chunk = new HassiumConfig.ChunkCoreConfig(
+                true, 4096, 0.3, 0.7, 0.3, 6000, 0, 100,
+                true, true, 16, 6, 15, false, false);
+        HassiumConfig original = new HassiumConfig(
+                HassiumConfig.StorageConfig.DEFAULT, chunk,
+                HassiumConfig.MasterCoreConfig.DEFAULT, HassiumConfig.CompatConfig.DEFAULT,
+                HassiumConfig.DebugConfig.DEFAULT);
+        FabricTomlConfigIO.saveClient(root, original);
+        String toml = Files.readString(root.resolve("hassium/hassium-client.toml"));
+        assertFalse(toml.contains("lightStrip"), "client toml 不应含 SERVER 键 lightStrip:\n" + toml);
+        assertTrue(toml.contains("maxRenderDistance"), "client toml 缺 maxRenderDistance:\n" + toml);
+    }
+
+    @Test
+    void savePurgesResidualAndCrossScopeKeys(@TempDir Path root) throws IOException {
+        // 预置含残留/跨 scope 键的 server.toml，经 schema 保存路径后应被清除
+        Path server = root.resolve("hassium/hassium-server.toml");
+        Files.createDirectories(server.getParent());
+        Files.writeString(server, """
+                [storage]
+                enabled = false
+                zstdLevel = 3
+                [chunk]
+                lightStrip = true
+                seedGenEnabled = false
+                maxRenderDistance = 16
+                logicalServerId = "stale"
+                [master]
+                enabled = true
+                envelopeZstdLevel = 3
+                serverChunkPushThreads = 4
+                """);
+        FabricTomlConfigIO.saveServer(root, HassiumConfig.DEFAULT);
+        String toml = Files.readString(server);
+        assertFalse(toml.contains("maxRenderDistance"), "残留 CLIENT 键应清除:\n" + toml);
+        assertFalse(toml.contains("logicalServerId"), "退役键应清除:\n" + toml);
+        assertFalse(toml.contains("envelopeZstdLevel"), "退役键应清除:\n" + toml);
+        assertFalse(toml.contains("serverChunkPushThreads"), "退役键应清除:\n" + toml);
+        assertTrue(toml.contains("lightStrip"), "合法 SERVER 键应保留:\n" + toml);
+    }
+
+    @Test
+    void fromMergedPrefersClientChunkAndServerMaster() {
+        ConfigValues client = ConfigValues.defaults(ConfigSchema.clientEntries());
+        client = client.with(ConfigSchema.CHUNK_MAX_RENDER_DISTANCE, 32);
+        ConfigValues server = ConfigValues.defaults(ConfigSchema.serverEntries());
+        server = server.with(ConfigSchema.MASTER_ENABLED, false)
+                .with(ConfigSchema.CHUNK_LIGHT_STRIP, false)
+                .with(ConfigSchema.STORAGE_ENABLED, false);
+        HassiumConfig merged = ConfigSnapshotAdapter.fromMerged(client, server);
+        assertEquals(32, merged.chunk().maxRenderDistance(), "client 键取 client 值");
+        assertEquals(false, merged.master().enabled(), "server 键取 server 值");
+        assertEquals(false, merged.chunk().lightStrip(), "lightStrip 取 server 值");
     }
 
     // === 4. 删键不再出现 ===
@@ -187,6 +249,7 @@ class ConfigRestructureRoundTripTest {
         assertEquals(256 * 1024, values.get(ConfigSchema.MASTER_AGGREGATION_MAX_SIZE));
         // master.maxChunksPerTick 默认 5
         assertEquals(5, values.get(ConfigSchema.MASTER_MAX_CHUNKS_PER_TICK));
+        assertEquals(false, values.get(ConfigSchema.MASTER_ENABLED_ON_LAN));
         // storage.enabled 默认 false（REQ 决策 6 修正 lang 错误）
         assertEquals(false, values.get(ConfigSchema.STORAGE_ENABLED));
         // debug.* 客户端网络指标默认关闭，退出自动复位默认开启

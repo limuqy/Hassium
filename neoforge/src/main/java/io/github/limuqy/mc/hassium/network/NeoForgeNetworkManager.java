@@ -143,7 +143,7 @@ public class NeoForgeNetworkManager implements INetworkManagerService {
         if (context.listener() instanceof net.minecraft.server.network.ServerConfigurationPacketListenerImpl configListener) {
             playerId = io.github.limuqy.mc.hassium.compat.PlayerCompat.getProfileId(configListener.getOwner());
         }
-        PreHandshakeProtocol.handlePreHandshake(playerId, payload);
+        PreHandshakeProtocol.handlePreHandshake(playerId, payload, context.connection());
     }
 
     // ===== 服务端主导协商（配置阶段任务，NeoForge 官方机制）=====
@@ -162,7 +162,7 @@ public class NeoForgeNetworkManager implements INetworkManagerService {
      */
     @SubscribeEvent
     public static void onRegisterConfigurationTasks(RegisterConfigurationTasksEvent event) {
-        if (!HassiumConfigService.getInstance().isNetworkCompressionEnabled()) {
+        if (!io.github.limuqy.mc.hassium.network.ServerNetworkGate.isNetworkServerActive()) {
             return;
         }
         net.minecraft.network.protocol.configuration.ServerConfigurationPacketListener listener = event.getListener();

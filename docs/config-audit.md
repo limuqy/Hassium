@@ -1,7 +1,7 @@
 # Hassium 配置项审计
 
-> 审计日期：2026-09-12（对齐 SeedGen 线程/直推线程键删除后键集；真相源 `ConfigSchema`，44 键）。
-> 历史审计：2026-07-21（1.1.2 旧结构）、2026-08-09（config-restructure，74 键 + 删键 4）、2026-09-04（直连拓扑裁剪标注）、2026-09-10（OVD 退役 38 键）——键集均已过时，本文为当前唯一快照。
+> 审计日期：2026-09-14（+`master.enabledOnLan`；真相源 `ConfigSchema`，45 键）。
+> 历史审计：2026-07-21（1.1.2 旧结构）、2026-08-09（config-restructure，74 键 + 删键 4）、2026-09-04（直连拓扑裁剪标注）、2026-09-10（OVD 退役 38 键）、2026-09-12（44 键）——旧键集见历史提交。
 
 ## 一、配置文件结构与加载链
 
@@ -9,17 +9,17 @@
 
 | 加载器 | 后端 | 文件 / 模型 |
 |--------|------|-------------|
-| Fabric | `FabricTomlConfigIO` | **双文件模型**：`hassium/hassium-client.toml`（CLIENT scope）/ `hassium/hassium-server.toml`（SERVER scope）；物理客户端读 client，专用服读 server |
-| NeoForge | `NeoForgeConfigBackend` | 1.21.1+ `ModConfigSpec`；1.20.1 为 `ForgeConfigSpec`；按 ConfigScope 生成 **CLIENT / SERVER 双 spec** |
-| Forge | `ForgeConfigBackend` | `ForgeConfigSpec`；CLIENT / SERVER 双 spec |
+| Fabric | `FabricTomlConfigIO` | **双文件模型**：`hassium/hassium-client.toml`（CLIENT scope）/ `hassium/hassium-server.toml`（SERVER scope）；**物理客户端双文件合并**（client 配客户端行为，server 供集成服务器/局域网；UI 只显示客户端键）；专用服仅 server |
+| NeoForge | `NeoForgeConfigBackend` | 1.21.1+ `ModConfigSpec`；按 ConfigScope 生成 **CLIENT / SERVER 双 spec**；物理客户端双注册（CLIENT + COMMON），专用服仅 COMMON |
+| Forge | `ForgeConfigBackend` | `ForgeConfigSpec`；CLIENT / SERVER 双 spec；物理客户端双注册（CLIENT + COMMON），专用服仅 COMMON |
 
-生效加载链：`HassiumConfigService.loadFromToml` → `Services.CONFIG.load(scope)` → 三端 backend → `ConfigSnapshotAdapter.fromValues`。
+生效加载链：`HassiumConfigService.loadFromToml` / `syncFromSpec` → 物理客户端 `ConfigSnapshotAdapter.fromMerged(clientValues, serverValues)`，专用服 `fromValues(serverValues, false)` → 三端 backend。
 
-> 历史（1.1.2 及更早）：Fabric 三文件模型（`client.toml` + `common.toml` + `server.toml`）、Forge/NeoForge 三 spec（CLIENT/COMMON/SERVER）——2.0.0 已统一为**双文件 / 双 scope** 模型。
+> 历史（1.1.2 及更早）：Fabric 三文件模型（`client.toml` + `common.toml` + `server.toml`）、Forge/NeoForge 三 spec（CLIENT/COMMON/SERVER）——2.0.0 已统一为**双文件 / 双 scope** 模型。物理客户端曾只读 client.toml（服务端侧键固定默认），后改为双文件合并以支持单人/局域网调节 `master.*` / `chunk.lightStrip` 等。
 
-**Legacy key hygiene**：旧 toml 残留键由加载器静默清除（`FabricTomlConfigIO` 清理表），不迁移、不报错。已清除键族：`net.*` 全族、`dataplane.*`、`master.controlReachableEndpoints` / `bindHost` / `authToken` / `migration*`（7 键）/ `resumeTicketTtlMs` / `globalPacketCompression` / `globalCompressionLevel` / `globalCompressionThreshold` / `magiclessZstd`、`chunk.ovdUnloadDelaySecs`（延迟卸载取消）/ `hassiumEngineEnabled` / `unloadDelaySecs` / `compressionLevel`、`storage.mode`、`chunk.seedGenThreads` / `master.serverChunkPushThreads`、`chunk.ovdLocalGeneration`。OVD 两键（`viewDistanceExtensionEnabled` / `maxRenderDistance`）已随双窗重做恢复，不再清理。
+**Legacy key hygiene**：Fabric 加载/保存时按本 scope Schema 清除未知残留键（`purgeUnknownKeys`），不迁移、不报错。已清除键族：`net.*` 全族、`dataplane.*`、`master.controlReachableEndpoints` / `bindHost` / `authToken` / `migration*`（7 键）/ `resumeTicketTtlMs` / `globalPacketCompression` / `globalCompressionLevel` / `globalCompressionThreshold` / `magiclessZstd`、`chunk.ovdUnloadDelaySecs`（延迟卸载取消）/ `hassiumEngineEnabled` / `unloadDelaySecs` / `compressionLevel`、`storage.mode`、`chunk.seedGenThreads` / `master.serverChunkPushThreads`、`chunk.ovdLocalGeneration`。OVD 两键（`viewDistanceExtensionEnabled` / `maxRenderDistance`）已随双窗重做恢复，**仅 CLIENT scope**；误写入 server.toml 的客户端键（如冒烟脚本历史注入）亦被清除。
 
-## 二、全部配置项（ConfigSchema，44 键）
+## 二、全部配置项（ConfigSchema，45 键）
 
 键名前缀：区块核心 `chunk.*` / 服务端传输面 `master.*` / 存储 `storage.*` / 兼容 `compat.*` / 调试 `debug.*`。
 
@@ -74,11 +74,12 @@
 | `storage.enabled` | `false` | 存档压缩总开关（**默认关**；开启改写存档格式 type 126，启用前备份；仅专用服务器写，单人/局域网保持原版格式、读兼容） |
 | `storage.zstdLevel` | `3` | 存储 ZSTD 压缩等级（1–22） |
 
-**B3. master.\*（9 键，服务端传输面）**
+**B3. master.\*（10 键，服务端传输面）**
 
 | 配置项 | 默认值 | 说明 |
 |--------|--------|------|
-| `master.enabled` | `true` | 服务端网络通道总开关（登录期握手/聚合的门） |
+| `master.enabled` | `true` | 专用服网络通道总开关（登录期握手/聚合的门） |
+| `master.enabledOnLan` | `false` | 集成服已开局域网时，对**远程**玩家启用 Hassium 网络面；主机本机 memory 连接恒原版；`storage.*` 仍仅专用服 |
 | `master.compressionLevel` | `3` | 自有通道 ZSTD 压缩等级 |
 | `master.useContextCompression` | `true` | 上下文压缩（字典 ZSTD） |
 | `master.enablePacketAggregation` | `true` | 包聚合 |
@@ -131,10 +132,10 @@
 | `chunk.*` | CLIENT | 14 | `seedGenEnabled`=false |
 | `debug.*` | CLIENT | 10 | 全 false（`networkMetricsAutoReset`=true） |
 | `storage.*` | SERVER | 2 | `enabled`=false |
-| `master.*` | SERVER | 9 | — |
+| `master.*` | SERVER | 10 | `enabledOnLan`=false |
 | `debug.*` | SERVER | 5 | 全 false |
 | `chunk.lightStrip` / `chunk.seedGenEnabled` | SERVER | 2 | `seedGenEnabled`=false |
-| **合计** | | **44** | |
+| **合计** | | **45** | |
 
 ## 五、审计方法
 

@@ -23,9 +23,12 @@ public class HassiumMod {
     private static final ForgeConfigBackend CONFIG = (ForgeConfigBackend) io.github.limuqy.mc.hassium.platform.Services.CONFIG;
 
     public HassiumMod(FMLJavaModLoadingContext context) {
-        // 按物理端二选一注册（对齐 Fabric 单文件行为）：客户端只出 client toml，专用服只出 server toml。
+        // 物理客户端：CLIENT + COMMON 双注册——client.toml 配客户端行为，server.toml
+        // 供集成服务器/局域网读取（UI 不展示服务端键，仅文件可编辑）。
+        // 专用服：仅注册 server 侧（COMMON）。
         if (io.github.limuqy.mc.hassium.platform.Services.PLATFORM.isPhysicalClient()) {
             context.registerConfig(ModConfig.Type.CLIENT, CONFIG.clientSpec(), Constants.CONFIG_CLIENT_FILE);
+            context.registerConfig(ModConfig.Type.COMMON, CONFIG.serverSpec(), Constants.CONFIG_SERVER_FILE);
         } else {
             context.registerConfig(ModConfig.Type.COMMON, CONFIG.serverSpec(), Constants.CONFIG_SERVER_FILE);
         }

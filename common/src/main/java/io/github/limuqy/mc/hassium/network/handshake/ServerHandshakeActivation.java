@@ -67,7 +67,17 @@ public final class ServerHandshakeActivation {
      * {@code ServerPlayer <init>} TAIL 调用：消费登录协商位（UUID 键，见
      * {@link PlayerCompressionTracker#consumeNegotiatedCaps}）。
      */
+    /** 每玩家 activate 重试次数（connection 晚挂载时回队；超过则放弃并打日志）。 */
+    private static final java.util.Map<UUID, Integer> ACTIVATE_RETRIES = new ConcurrentHashMap<>();
+
+    private static final int MAX_ACTIVATE_RETRIES = 100;
+
     public static void onPlayerInit(ServerPlayer player) {
+        // 主机本机（memory）永不走 Hassium 推送抑制；远程 LAN/专用服玩家才消费协商位
+        if (io.github.limuqy.mc.hassium.network.ServerNetworkGate.shouldSkipForPlayer(player)) {
+            PlayerCompressionTracker.removePlayer(player);
+            return;
+        }
         int caps = PlayerCompressionTracker.consumeNegotiatedCaps(player);
         if (caps == 0) {
             // requireClientMod 的踢出需要 connection（init 期未挂载），延后到 drainPending
@@ -80,6 +90,7 @@ public final class ServerHandshakeActivation {
         // 压缩门即刻生效：首个 tracking 柱即交给 ServerChunkPushManager（压制原版直推）
         PlayerCompressionTracker.setConnected(player);
         PlayerCompressionTracker.enableCompression(player);
+        ACTIVATE_RETRIES.put(player.getUUID(), 0);
         PENDING.add(player);
     }
 
@@ -90,7 +101,7 @@ public final class ServerHandshakeActivation {
     }
 
     /**
-     * 每 tick 泵（MixinMinecraftServer tickServer TAIL；仅专用服）。
+     * 每 tick 泵（MixinMinecraftServer tickServer TAIL；专用服或 LAN 网络面激活时）。
      */
     public static void drainPending(MinecraftServer server) {
         if (PENDING.isEmpty()) {
@@ -108,10 +119,28 @@ public final class ServerHandshakeActivation {
     }
 
     private static void activate(ServerPlayer player) {
-        Connection connection = io.github.limuqy.mc.hassium.compat.PlayerCompat.getConnection(player);
-        if (connection == null || !connection.isConnected()) {
+        if (io.github.limuqy.mc.hassium.network.ServerNetworkGate.shouldSkipForPlayer(player)) {
+            Constants.LOG.info("Hassium: [PLAY_INIT] skip activate for {} (network gate)", player.getName().getString());
             return;
         }
+        Connection connection = io.github.limuqy.mc.hassium.compat.PlayerCompat.getConnection(player);
+        if (connection == null || !connection.isConnected()) {
+            // ServerPlayer <init> 时 connection 常未挂载；回队下 tick 重试，不得丢弃
+            int attempt = ACTIVATE_RETRIES.merge(player.getUUID(), 1, Integer::sum);
+            if (attempt <= MAX_ACTIVATE_RETRIES) {
+                PENDING.add(player);
+                if (attempt == 1 || attempt % 20 == 0) {
+                    Constants.LOG.debug("Hassium: [PLAY_INIT] connection not ready for {}, requeue attempt {}",
+                            player.getName().getString(), attempt);
+                }
+            } else {
+                Constants.LOG.warn("Hassium: [PLAY_INIT] give up activate for {} after {} retries (connection missing)",
+                        player.getName().getString(), attempt);
+                ACTIVATE_RETRIES.remove(player.getUUID());
+            }
+            return;
+        }
+        ACTIVATE_RETRIES.remove(player.getUUID());
         int caps = ACTIVE_CAPS.getOrDefault(player.getUUID(), 0);
         if (caps == 0) {
             if (HassiumConfigService.getInstance().isRequireClientMod()) {
@@ -149,7 +178,7 @@ public final class ServerHandshakeActivation {
         }
         // play_init 下发协商位 + SeedGen 种子（seedGen 未协商/未启用时 seed=0 不泄露）
         sendPlayInit(player, caps);
-        DebugLogger.info(LogType.NETWORK, "[PLAY_INIT] Activated {} {}",
+        Constants.LOG.info("[PLAY_INIT] Activated {} {}",
                 player.getName().getString(), LoginHandshake.describeCaps(caps));
     }
 
@@ -193,5 +222,6 @@ public final class ServerHandshakeActivation {
     public static void removePlayer(UUID playerId) {
         ACTIVE_CAPS.remove(playerId);
         READY_HANDLED.remove(playerId);
+        ACTIVATE_RETRIES.remove(playerId);
     }
 }

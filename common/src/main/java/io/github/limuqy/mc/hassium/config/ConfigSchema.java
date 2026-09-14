@@ -57,6 +57,9 @@ public final class ConfigSchema {
     // === 主控核心（master.*；SERVER）===
     public static final ConfigKey<Boolean> MASTER_ENABLED = bool("master.enabled", ConfigScope.SERVER, Domain.MASTER_CORE, true,
             "是否启用主控核心网络通道", "Enable master-core network channel");
+    public static final ConfigKey<Boolean> MASTER_ENABLED_ON_LAN = bool("master.enabledOnLan", ConfigScope.SERVER, Domain.MASTER_CORE, false,
+            "局域网主机是否对远程玩家启用 Hassium 网络面（握手/聚合/推送/lightStrip 等）。默认关；本机 memory 连接始终原版；storage 仍仅专用服",
+            "Enable Hassium network features for remote LAN players on an Open-to-LAN host (handshake/aggregation/push/lightStrip). Default off; host local memory connection stays vanilla; storage remains dedicated-only");
     public static final ConfigKey<Integer> MASTER_COMPRESSION_LEVEL = integer("master.compressionLevel", ConfigScope.SERVER, Domain.MASTER_CORE, 3, 1, 22,
             "自有通道 ZSTD 压缩等级", "Private-channel ZSTD level");
     public static final ConfigKey<Boolean> MASTER_USE_CONTEXT_COMPRESSION = bool("master.useContextCompression", ConfigScope.SERVER, Domain.MASTER_CORE, true,

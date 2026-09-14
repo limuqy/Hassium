@@ -299,7 +299,7 @@ public class ForgeNetworkManager implements INetworkManagerService {
                 instanceof net.minecraft.server.network.ServerConfigurationPacketListenerImpl configListener) {
             playerId = io.github.limuqy.mc.hassium.compat.PlayerCompat.getProfileId(configListener.getOwner());
         }
-        io.github.limuqy.mc.hassium.network.PreHandshakeProtocol.handlePreHandshake(playerId, msg);
+        io.github.limuqy.mc.hassium.network.PreHandshakeProtocol.handlePreHandshake(playerId, msg, ctx.getConnection());
     }
 
     private static void sendToPlayer(ServerPlayer player, Object msg) {

@@ -1098,10 +1098,21 @@ public final class ShadowLightCompute {
                 || !pendingLightUpdates.isEmpty();
     }
 
-    /** 影子链路可用：引擎开启且影子端未失败；不再依赖旧 NetworkCore 握手。 */
+    /**
+     * 影子链路可用：引擎开启 && 握手完成（对端装了 Hassium）&& 影子未失败。
+     * <p>
+     * 未握手（含单人/局域网主机 memory、纯原版服）必须为 false——否则
+     * {@code handleLevelChunkWithLight} 会 cancel 原版区块却无影子回填 → 虚空。
+     */
     public static boolean isEnabled() {
         return HassiumConfigService.getInstance().isHassiumEngineEnabled()
+                && ClientChunkPipeline.getInstance().isShadowEngineActive()
                 && !ClientChunkPipeline.getInstance().isShadowServerFailed();
+    }
+
+    /** 原版区块可安全 cancel 并交给影子：还需影子实例已 ready（避免创建窗口虚空）。 */
+    public static boolean shouldInterceptVanillaChunks() {
+        return isEnabled() && ClientChunkPipeline.getInstance().isShadowServerReady();
     }
 
     /**
@@ -1133,6 +1144,13 @@ public final class ShadowLightCompute {
     public static void startShadowSpeculative() {
         if (!HassiumConfigService.getInstance().isHassiumEngineEnabled()) {
             return;
+        }
+        try {
+            net.minecraft.client.Minecraft mc = net.minecraft.client.Minecraft.getInstance();
+            if (mc != null && mc.getSingleplayerServer() != null) {
+                return;
+            }
+        } catch (Throwable ignored) {
         }
         HassiumTaskExecutor executor = HassiumTaskExecutor.getClient();
         if (executor == null || !executor.isRunning()) {

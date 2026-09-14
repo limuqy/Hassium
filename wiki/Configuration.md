@@ -8,8 +8,10 @@ Hassium 启动时在 `config/hassium/` 自动生成两份 TOML：
 
 | 文件 | 适用端 | 主要内容 |
 | --- | --- | --- |
-| `hassium-client.toml` | 仅物理客户端 | 区块核心（`chunk.*`）、客户端调试 |
-| `hassium-server.toml` | 仅专用服 | 存储（`storage.*`）、服务端传输面（`master.*`）、兼容（`compat.*`）、调试 |
+| `hassium-client.toml` | 物理客户端 | 区块核心（`chunk.*`）、客户端调试 |
+| `hassium-server.toml` | 物理客户端 + 专用服 | 存储（`storage.*`）、服务端传输面（`master.*`）、兼容（`compat.*`）、`chunk.lightStrip` / `chunk.seedGenEnabled`、服务端调试 |
+
+**物理客户端**会同时读写两份文件：`client.toml` 配客户端行为；`server.toml` 供**单人/开局域网的集成服务器**读取（游戏内配置 UI 只显示客户端键，服务端键请直接编辑 TOML）。专用服只使用 `server.toml`。`storage.enabled` 仅在专用服务器生效，单人/局域网保持原版存档格式。
 
 游戏内编辑入口：
 
@@ -19,7 +21,7 @@ Hassium 启动时在 `config/hassium/` 自动生成两份 TOML：
 | Forge | 模组列表「配置」按钮 | 需 Cloth |
 | NeoForge | 模组列表「配置」按钮 | 需 Cloth；Configured 可选 |
 
-> 也可以直接编辑 TOML 文件后重启；GUI 与 TOML 互相同步。
+> 也可以直接编辑 TOML 文件后重启；GUI 与 TOML 互相同步（GUI 只改客户端字段，服务端字段原样保留）。
 > 键集真相源：`ConfigSchema`（44 键）；完整审计见仓库 [`docs/config-audit.md`](https://github.com/limuqy/Hassium/blob/master/docs/config-audit.md)。
 
 ---
@@ -56,7 +58,8 @@ Hassium 启动时在 `config/hassium/` 自动生成两份 TOML：
 
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
-| `master.enabled` | `true` | 服务端网络通道总开关（登录期握手/聚合的门） |
+| `master.enabled` | `true` | 专用服网络通道总开关（登录期握手/聚合的门） |
+| `master.enabledOnLan` | `false` | 集成服「对局域网开放」后，对**远程**玩家启用 Hassium 网络面（握手/聚合/推送/lightStrip 等）；主机本机始终原版；`storage` 仍仅专用服 |
 | `master.compressionLevel` | `3` | 自有通道 ZSTD 压缩等级（速度优先） |
 | `master.useContextCompression` | `true` | 上下文压缩（字典 ZSTD） |
 | `master.enablePacketAggregation` | `true` | 包聚合；第三方通道被拦截异常时关掉 |

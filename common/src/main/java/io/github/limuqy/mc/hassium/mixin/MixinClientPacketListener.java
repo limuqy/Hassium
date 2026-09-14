@@ -47,7 +47,7 @@ public class MixinClientPacketListener {
             return;
         }
         if (!io.github.limuqy.mc.hassium.network.ClientChunkPipeline.getInstance().isApplyInProgress()
-                && io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.isEnabled()) {
+                && io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.shouldInterceptVanillaChunks()) {
             // pull FULL 响应落地（影子 tracking 采集）以 REMOTE_PULL 归因，区别于服务端自主推送
             io.github.limuqy.mc.hassium.network.ClientChunkHandler.TraceOrigin origin =
                     io.github.limuqy.mc.hassium.network.ClientChunkHandler.consumePullApplyOrigin(

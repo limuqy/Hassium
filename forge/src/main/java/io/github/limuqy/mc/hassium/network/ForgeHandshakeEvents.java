@@ -35,7 +35,7 @@ public final class ForgeHandshakeEvents {
         if (connection == null || ForgeNetworkManager.CHANNEL == null) {
             return;
         }
-        if (!HassiumConfigService.getInstance().isNetworkCompressionEnabled()) {
+        if (!io.github.limuqy.mc.hassium.network.ServerNetworkGate.shouldSendLoginHandshake(connection)) {
             return;
         }
         // 官方同款过滤（ForgeNetworkConfigurationHandler.gatherInit）：仅 modded 连接发 hello。

@@ -8,8 +8,10 @@ Hassium generates two TOML files under `config/hassium/` on first launch:
 
 | File | Side | Contents |
 | --- | --- | --- |
-| `hassium-client.toml` | Physical client only | Chunk core (`chunk.*`), client debug |
-| `hassium-server.toml` | Dedicated server only | Storage (`storage.*`), server transport (`master.*`), compat (`compat.*`), debug |
+| `hassium-client.toml` | Physical client | Chunk core (`chunk.*`), client debug |
+| `hassium-server.toml` | Physical client + dedicated server | Storage (`storage.*`), server transport (`master.*`), compat (`compat.*`), `chunk.lightStrip` / `chunk.seedGenEnabled`, server debug |
+
+On a **physical client** both files are read and written: `client.toml` configures client behavior; `server.toml` is used by the **integrated server / Open to LAN** (the in-game config UI shows client keys only — edit server keys in the TOML directly). Dedicated servers use only `server.toml`. `storage.enabled` takes effect only on dedicated servers; singleplayer/LAN keeps the vanilla save format.
 
 In-game editors:
 
@@ -19,7 +21,7 @@ In-game editors:
 | Forge | "Config" button in the mod list | Requires Cloth |
 | NeoForge | "Config" button in the mod list | Requires Cloth; Configured optional |
 
-> You can also edit the TOML files and restart; GUI and TOML stay in sync.
+> You can also edit the TOML files and restart; GUI and TOML stay in sync (the GUI only changes client fields; server fields are preserved as-is).
 > Key-set source of truth: `ConfigSchema` (44 keys); full audit in the repo [`docs/config-audit.md`](https://github.com/limuqy/Hassium/blob/master/docs/config-audit.md).
 
 ---
@@ -56,7 +58,8 @@ In-game editors:
 
 | Key | Default | Description |
 | --- | --- | --- |
-| `master.enabled` | `true` | Server network-channel master switch (gate for login handshake/aggregation) |
+| `master.enabled` | `true` | Dedicated-server network-channel master switch (gate for login handshake/aggregation) |
+| `master.enabledOnLan` | `false` | After Open to LAN on an integrated server, enable Hassium network features for **remote** players; host local player stays vanilla; `storage` remains dedicated-only |
 | `master.compressionLevel` | `3` | Private-channel ZSTD level (speed-first) |
 | `master.useContextCompression` | `true` | Context compression (dictionary ZSTD) |
 | `master.enablePacketAggregation` | `true` | Packet aggregation; turn off if it breaks third-party channels |

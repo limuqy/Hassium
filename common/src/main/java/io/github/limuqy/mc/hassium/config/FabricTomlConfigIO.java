@@ -13,6 +13,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -85,12 +86,54 @@ public final class FabricTomlConfigIO {
                 for (ConfigEntry<?> entry : entries(scope)) {
                     writeSchemaValue(cfg, entry, values.get(entry.key()));
                 }
+                purgeUnknownKeys(cfg, scope);
                 cfg.save();
             }
             LOGGER.info("Hassium: Toml 配置已保存 ({})", scope);
         } catch (Exception e) {
             LOGGER.error("Hassium: Toml 配置保存失败", e);
         }
+    }
+
+    /**
+     * 删除本 scope Schema 之外的残留键（退役键、冒烟误注入的跨 scope 键、旧版字段）。
+     * @return 是否删除了至少一个键
+     */
+    private static boolean purgeUnknownKeys(CommentedConfig cfg, ConfigScope scope) {
+        Set<String> known = new LinkedHashSet<>();
+        for (ConfigEntry<?> entry : entries(scope)) {
+            known.add(entry.path());
+        }
+        return purgeUnknownKeysRecursive(cfg, "", known);
+    }
+
+    private static boolean purgeUnknownKeysRecursive(CommentedConfig parent, String prefix, Set<String> known) {
+        if (parent == null) {
+            return false;
+        }
+        boolean purged = false;
+        List<String> toRemove = new ArrayList<>();
+        for (Map.Entry<String, Object> e : parent.valueMap().entrySet()) {
+            String key = e.getKey();
+            String path = prefix.isEmpty() ? key : prefix + "." + key;
+            Object value = e.getValue();
+            if (value instanceof CommentedConfig child) {
+                if (purgeUnknownKeysRecursive(child, path, known)) {
+                    purged = true;
+                }
+                if (child.valueMap().isEmpty()) {
+                    toRemove.add(key);
+                    purged = true;
+                }
+            } else if (!known.contains(path)) {
+                toRemove.add(key);
+                purged = true;
+            }
+        }
+        for (String key : toRemove) {
+            parent.remove(key);
+        }
+        return purged;
     }
 
     private static ConfigValues readValuesFile(Path path, ConfigScope scope, ConfigValues values)
@@ -105,6 +148,7 @@ public final class FabricTomlConfigIO {
             }
             return values;
         }
+        boolean purged = false;
         try (CommentedFileConfig cfg = open(path)) {
             stripUtf8BomIfPresent(path);
             cfg.load();
@@ -113,6 +157,11 @@ public final class FabricTomlConfigIO {
                 if (value != null) {
                     values = withSchemaValue(values, entry, value);
                 }
+            }
+            purged = purgeUnknownKeys(cfg, scope);
+            if (purged) {
+                cfg.save();
+                LOGGER.info("Hassium: 已清理 {} 中的非本 scope 残留键", path);
             }
         } catch (Exception e) {
             LOGGER.warn("Hassium: 读取 {} 失败，使用默认配置", path, e);
@@ -188,7 +237,8 @@ public final class FabricTomlConfigIO {
 
     @SuppressWarnings("unchecked")
     private static void writeSchemaValue(CommentedConfig cfg, ConfigEntry<?> entry, Object value) {
-        set(cfg, entry.path(), value, entry.comment());
+        cfg.setComment(entry.path(), entry.comment());
+        cfg.set(entry.path(), value);
     }
 
 
@@ -316,6 +366,7 @@ public final class FabricTomlConfigIO {
         try (CommentedFileConfig cfg = open(path)) {
             writeChunkCore(cfg, chunk);
             writeClientDebug(cfg, debug);
+            purgeUnknownKeys(cfg, ConfigScope.CLIENT);
             cfg.save();
         }
     }
@@ -334,15 +385,17 @@ public final class FabricTomlConfigIO {
             writeMasterCore(cfg, master);
             writeCompat(cfg, compat);
             writeServerDebug(cfg, debug);
+            purgeUnknownKeys(cfg, ConfigScope.SERVER);
             cfg.save();
         }
     }
 
     /** 服务端 chunk.* 键（chunk.lightStrip / chunk.seedGenEnabled；仅专用服 toml）。 */
     private static void writeServerChunk(CommentedConfig cfg, HassiumConfig.ChunkCoreConfig chunk) {
-        set(cfg, "chunk.lightStrip", chunk.lightStrip(), "是否启用光照剥离");
+        set(cfg, "chunk.lightStrip", chunk.lightStrip(), "是否启用光照剥离", ConfigScope.SERVER);
         set(cfg, "chunk.seedGenEnabled", chunk.seedGenEnabled(),
-                "是否启用 SeedGen（服务端开启下发世界种子；客户端门控开时影子 tracking 触发 vanilla worldgen 本地生成，再 compare-pull；需双端同版本，默认关）");
+                "是否启用 SeedGen（服务端开启下发世界种子；客户端门控开时影子 tracking 触发 vanilla worldgen 本地生成，再 compare-pull；需双端同版本，默认关）。警告：开启会向客户端下发世界种子，等同泄露服务端种子",
+                ConfigScope.SERVER);
     }
 
     // --- CLIENT ---
@@ -369,23 +422,20 @@ public final class FabricTomlConfigIO {
     }
 
     private static void writeChunkCore(CommentedConfig cfg, HassiumConfig.ChunkCoreConfig c) {
-        set(cfg, "chunk.enabled", c.enabled(), "是否启用区块核心缓存");
-        set(cfg, "chunk.maxSizeMb", c.maxSizeMb(), "缓存最大容量");
-        set(cfg, "chunk.hotScoreThreshold", c.hotScoreThreshold(), "热点分数阈值");
-        set(cfg, "chunk.recencyWeight", c.recencyWeight(), "最近访问权重");
-        set(cfg, "chunk.frequencyWeight", c.frequencyWeight(), "访问频率权重");
-        set(cfg, "chunk.cleanupIntervalTicks", c.cleanupIntervalTicks(), "清理检查间隔");
-        set(cfg, "chunk.targetSizeMb", c.targetSizeMb(), "目标缓存大小");
-        set(cfg, "chunk.minCleanupBatchSize", c.minCleanupBatchSize(), "每轮淘汰 region 文件数");
-        set(cfg, "chunk.sectionDeltaEnabled", c.sectionDeltaEnabled(), "启用分段增量");
-        set(cfg, "chunk.viewDistanceExtensionEnabled", c.viewDistanceExtensionEnabled(), "启用超视渲染 OVD");
-        set(cfg, "chunk.maxRenderDistance", c.maxRenderDistance(), "超视渲染 effective clientRD 上限");
-        set(cfg, "chunk.maxChunksPerFrame", c.maxChunksPerFrame(), "每帧最大区块数");
-        set(cfg, "chunk.mainThreadChunkBudgetMs", c.mainThreadChunkBudgetMs(), "主线程区块预算");
-        set(cfg, "chunk.seedGenEnabled", c.seedGenEnabled(), "启用 SeedGen");
-        set(cfg, "chunk.lightStrip", c.lightStrip(), "启用服务端光照剥离");
-        cfg.remove("chunk.seedGenThreads");
-        cfg.remove("chunk.ovdLocalGeneration");
+        set(cfg, "chunk.enabled", c.enabled(), "是否启用区块核心缓存", ConfigScope.CLIENT);
+        set(cfg, "chunk.maxSizeMb", c.maxSizeMb(), "缓存最大容量", ConfigScope.CLIENT);
+        set(cfg, "chunk.hotScoreThreshold", c.hotScoreThreshold(), "热点分数阈值", ConfigScope.CLIENT);
+        set(cfg, "chunk.recencyWeight", c.recencyWeight(), "最近访问权重", ConfigScope.CLIENT);
+        set(cfg, "chunk.frequencyWeight", c.frequencyWeight(), "访问频率权重", ConfigScope.CLIENT);
+        set(cfg, "chunk.cleanupIntervalTicks", c.cleanupIntervalTicks(), "清理检查间隔", ConfigScope.CLIENT);
+        set(cfg, "chunk.targetSizeMb", c.targetSizeMb(), "目标缓存大小", ConfigScope.CLIENT);
+        set(cfg, "chunk.minCleanupBatchSize", c.minCleanupBatchSize(), "每轮淘汰 region 文件数", ConfigScope.CLIENT);
+        set(cfg, "chunk.sectionDeltaEnabled", c.sectionDeltaEnabled(), "启用分段增量", ConfigScope.CLIENT);
+        set(cfg, "chunk.viewDistanceExtensionEnabled", c.viewDistanceExtensionEnabled(), "启用超视渲染 OVD", ConfigScope.CLIENT);
+        set(cfg, "chunk.maxRenderDistance", c.maxRenderDistance(), "超视渲染 effective clientRD 上限", ConfigScope.CLIENT);
+        set(cfg, "chunk.maxChunksPerFrame", c.maxChunksPerFrame(), "每帧最大区块数", ConfigScope.CLIENT);
+        set(cfg, "chunk.mainThreadChunkBudgetMs", c.mainThreadChunkBudgetMs(), "主线程区块预算", ConfigScope.CLIENT);
+        set(cfg, "chunk.seedGenEnabled", c.seedGenEnabled(), "启用 SeedGen", ConfigScope.CLIENT);
     }
 
 
@@ -398,14 +448,15 @@ public final class FabricTomlConfigIO {
     }
 
     private static void writeStorage(CommentedConfig cfg, HassiumConfig.StorageConfig s) {
-        set(cfg, "storage.enabled", s.enabled(), "是否启用存档压缩（启用前请备份）");
-        set(cfg, "storage.zstdLevel", s.zstdLevel(), "存储 ZSTD 压缩等级");
+        set(cfg, "storage.enabled", s.enabled(), "是否启用存档压缩（启用前请备份）", ConfigScope.SERVER);
+        set(cfg, "storage.zstdLevel", s.zstdLevel(), "存储 ZSTD 压缩等级", ConfigScope.SERVER);
     }
 
     private static HassiumConfig.MasterCoreConfig readMasterCore(CommentedConfig cfg) {
         var d = HassiumConfig.MasterCoreConfig.DEFAULT;
         return new HassiumConfig.MasterCoreConfig(
                 getBool(cfg, "master.enabled", d.enabled()),
+                getBool(cfg, "master.enabledOnLan", d.enabledOnLan()),
                 getInt(cfg, "master.compressionLevel", d.compressionLevel()),
                 getBool(cfg, "master.useContextCompression", d.useContextCompression()),
                 getBool(cfg, "master.enablePacketAggregation", d.enablePacketAggregation()),
@@ -418,43 +469,18 @@ public final class FabricTomlConfigIO {
     }
 
     private static void writeMasterCore(CommentedConfig cfg, HassiumConfig.MasterCoreConfig n) {
-        set(cfg, "master.enabled", n.enabled(), "是否启用主控核心网络通道");
-        set(cfg, "master.compressionLevel", n.compressionLevel(), "自有通道 ZSTD 等级");
-        set(cfg, "master.useContextCompression", n.useContextCompression(), "是否使用上下文压缩");
-        set(cfg, "master.enablePacketAggregation", n.enablePacketAggregation(), "是否启用包聚合");
-        set(cfg, "master.aggregationMinBatchSize", n.aggregationMinBatchSize(), "聚合最小批量");
-        set(cfg, "master.aggregationMaxWaitTimeMs", (int) n.aggregationMaxWaitTimeMs(), "聚合最大等待（ms）");
-        set(cfg, "master.aggregationMaxSize", n.aggregationMaxSize(), "聚合最大大小（字节）");
-        set(cfg, "master.compressionBlacklist", new ArrayList<>(n.compressionBlacklist()), "压缩/聚合黑名单");
-        set(cfg, "master.maxChunksPerTick", n.maxChunksPerTick(), "每玩家每 tick 完成的 Pull FULL/DELTA 上限（UNCHANGED 另额 32；满 tick ≈ 本值×20/s，仅服务端）");
-        // legacy 键清理：网关监听/鉴权/控制面端点/L1 迁移/续流票据/数据面已随网关拓扑退役；
-        // 管线级全局包压缩（globalPacketCompression/globalCompressionLevel/globalCompressionThreshold/magiclessZstd）
-        // 已随直连拓扑退役（通道压缩由聚合字典 ZSTD + 区块推送自有压缩承担）
-        // ovdUnloadDelaySecs：延迟卸载取消，双窗 OVD 不恢复
-        cfg.remove("chunk.seedGenThreads");
-        cfg.remove("master.serverChunkPushThreads");
-        cfg.remove("chunk.ovdUnloadDelaySecs");
-        cfg.remove("master.dynamicThreadPoolEnabled");
-        cfg.remove("master.minPushThreads");
-        cfg.remove("master.maxPushThreads");
-        cfg.remove("master.magiclessZstd");
-        cfg.remove("master.globalPacketCompression");
-        cfg.remove("master.globalCompressionLevel");
-        cfg.remove("master.globalCompressionThreshold");
-        cfg.remove("master.bindHost");
-        cfg.remove("master.authToken");
-        cfg.remove("master.controlReachableEndpoints");
-        cfg.remove("master.migrationFaultTimeoutMs");
-        cfg.remove("master.migrationPrewarmTtlMs");
-        cfg.remove("master.resumeTicketTtlMs");
-        cfg.remove("master.migrationMinTps");
-        cfg.remove("master.migrationMaxLoadAverage");
-        cfg.remove("master.migrationMaintenanceWindow");
-        cfg.remove("master.migrationHeartbeatIntervalMs");
-        cfg.remove("master.migrationIdleWindowMs");
-        cfg.remove("master.migrationSilentTimeoutMs");
-        cfg.remove("dataplane.enabled");
-        cfg.remove("dataplane.udpListeners");
+        set(cfg, "master.enabled", n.enabled(), "是否启用主控核心网络通道", ConfigScope.SERVER);
+        set(cfg, "master.enabledOnLan", n.enabledOnLan(),
+                "局域网主机是否对远程玩家启用 Hassium 网络面（本机 memory 恒原版；storage 仍仅专用服）",
+                ConfigScope.SERVER);
+        set(cfg, "master.compressionLevel", n.compressionLevel(), "自有通道 ZSTD 等级", ConfigScope.SERVER);
+        set(cfg, "master.useContextCompression", n.useContextCompression(), "是否使用上下文压缩", ConfigScope.SERVER);
+        set(cfg, "master.enablePacketAggregation", n.enablePacketAggregation(), "是否启用包聚合", ConfigScope.SERVER);
+        set(cfg, "master.aggregationMinBatchSize", n.aggregationMinBatchSize(), "聚合最小批量", ConfigScope.SERVER);
+        set(cfg, "master.aggregationMaxWaitTimeMs", (int) n.aggregationMaxWaitTimeMs(), "聚合最大等待（ms）", ConfigScope.SERVER);
+        set(cfg, "master.aggregationMaxSize", n.aggregationMaxSize(), "聚合最大大小（字节）", ConfigScope.SERVER);
+        set(cfg, "master.compressionBlacklist", new ArrayList<>(n.compressionBlacklist()), "压缩/聚合黑名单", ConfigScope.SERVER);
+        set(cfg, "master.maxChunksPerTick", n.maxChunksPerTick(), "每玩家每 tick 完成的 Pull FULL/DELTA 上限（UNCHANGED 另额 32；满 tick ≈ 本值×20/s，仅服务端）", ConfigScope.SERVER);
     }
 
     private static HassiumConfig.CompatConfig readCompat(CommentedConfig cfg) {
@@ -466,8 +492,8 @@ public final class FabricTomlConfigIO {
     }
 
     private static void writeCompat(CommentedConfig cfg, HassiumConfig.CompatConfig c) {
-        set(cfg, "compat.requireClientMod", c.requireClientMod(), "是否强制要求客户端安装 Hassium");
-        set(cfg, "compat.autoDowngradeOnError", c.autoDowngradeOnError(), "出错时是否自动降级");
+        set(cfg, "compat.requireClientMod", c.requireClientMod(), "是否强制要求客户端安装 Hassium", ConfigScope.SERVER);
+        set(cfg, "compat.autoDowngradeOnError", c.autoDowngradeOnError(), "出错时是否自动降级", ConfigScope.SERVER);
     }
 
     private static HassiumConfig.DebugConfig readDebug(CommentedConfig cfg) {
@@ -487,42 +513,57 @@ public final class FabricTomlConfigIO {
     }
 
     private static void writeClientDebug(CommentedConfig cfg, HassiumConfig.DebugConfig d) {
-        set(cfg, "debug.metadataLogging", d.metadataLogging(), "元数据调试日志");
-        set(cfg, "debug.dispatcherLogging", d.dispatcherLogging(), "主线程调度调试日志");
-        set(cfg, "debug.asyncLogging", d.asyncLogging(), "异步任务调试日志");
-        set(cfg, "debug.compressionLogging", d.compressionLogging(), "压缩调试日志");
-        set(cfg, "debug.chunkApplyLogging", d.chunkApplyLogging(), "区块 apply 调试日志");
-        set(cfg, "debug.networkLogging", d.networkLogging(), "网络调试日志");
-        set(cfg, "debug.cacheLogging", d.cacheLogging(), "缓存调试日志");
-        set(cfg, "debug.lightVerify", d.lightVerify(), "光照验算与光包落地探针（CHUNK_PROBE source=light）");
-        set(cfg, "debug.networkMetricsEnabled", d.networkMetricsEnabled(), "客户端网络指标");
-        set(cfg, "debug.networkMetricsAutoReset", d.networkMetricsAutoReset(), "退出服务器时自动复位网络指标");
+        set(cfg, "debug.metadataLogging", d.metadataLogging(), "元数据调试日志", ConfigScope.CLIENT);
+        set(cfg, "debug.dispatcherLogging", d.dispatcherLogging(), "主线程调度调试日志", ConfigScope.CLIENT);
+        set(cfg, "debug.asyncLogging", d.asyncLogging(), "异步任务调试日志", ConfigScope.CLIENT);
+        set(cfg, "debug.compressionLogging", d.compressionLogging(), "压缩调试日志", ConfigScope.CLIENT);
+        set(cfg, "debug.chunkApplyLogging", d.chunkApplyLogging(), "区块 apply 调试日志", ConfigScope.CLIENT);
+        set(cfg, "debug.networkLogging", d.networkLogging(), "网络调试日志", ConfigScope.CLIENT);
+        set(cfg, "debug.cacheLogging", d.cacheLogging(), "缓存调试日志", ConfigScope.CLIENT);
+        set(cfg, "debug.lightVerify", d.lightVerify(), "光照验算与光包落地探针（CHUNK_PROBE source=light）", ConfigScope.CLIENT);
+        set(cfg, "debug.networkMetricsEnabled", d.networkMetricsEnabled(), "客户端网络指标", ConfigScope.CLIENT);
+        set(cfg, "debug.networkMetricsAutoReset", d.networkMetricsAutoReset(), "退出服务器时自动复位网络指标", ConfigScope.CLIENT);
     }
 
     private static void writeServerDebug(CommentedConfig cfg, HassiumConfig.DebugConfig d) {
-        set(cfg, "debug.dispatcherLogging", d.dispatcherLogging(), "主线程调度调试日志");
-        set(cfg, "debug.asyncLogging", d.asyncLogging(), "异步任务调试日志");
-        set(cfg, "debug.compressionLogging", d.compressionLogging(), "压缩调试日志");
-        set(cfg, "debug.chunkApplyLogging", d.chunkApplyLogging(), "区块 apply 调试日志");
-        set(cfg, "debug.networkLogging", d.networkLogging(), "网络调试日志");
+        set(cfg, "debug.dispatcherLogging", d.dispatcherLogging(), "主线程调度调试日志", ConfigScope.SERVER);
+        set(cfg, "debug.asyncLogging", d.asyncLogging(), "异步任务调试日志", ConfigScope.SERVER);
+        set(cfg, "debug.compressionLogging", d.compressionLogging(), "压缩调试日志", ConfigScope.SERVER);
+        set(cfg, "debug.chunkApplyLogging", d.chunkApplyLogging(), "区块 apply 调试日志", ConfigScope.SERVER);
+        set(cfg, "debug.networkLogging", d.networkLogging(), "网络调试日志", ConfigScope.SERVER);
     }
 
     // --- value helpers ---
 
     /**
-     * 写键值与备注。若 path 在 {@link ConfigSchema} 中有登记，优先用 schema 双语备注
-     * （中文一行 / 英文一行）；否则用 {@code fallbackComment}。
+     * 写键值与备注。若 path 在 {@link ConfigSchema} 中有对应 {@code scope} 登记，
+     * 用该 scope 的双语备注；否则用 {@code fallbackComment}。
+     * 双 scope 同名键（seedGenEnabled / debug.*）必须按 scope 取，避免 server 拿到 client 注释。
      */
     private static void set(CommentedConfig cfg, String path, Object value, String fallbackComment) {
-        cfg.setComment(path, schemaCommentOr(path, fallbackComment));
+        set(cfg, path, value, fallbackComment, null);
+    }
+
+    private static void set(CommentedConfig cfg, String path, Object value, String fallbackComment, ConfigScope scope) {
+        cfg.setComment(path, schemaCommentOr(path, scope, fallbackComment));
         cfg.set(path, value);
     }
 
-    private static String schemaCommentOr(String path, String fallbackComment) {
+    private static String schemaCommentOr(String path, ConfigScope scope, String fallbackComment) {
+        ConfigEntry<?> fallbackEntry = null;
         for (ConfigEntry<?> entry : ConfigSchema.entries()) {
-            if (entry.path().equals(path) && entry.comment() != null && !entry.comment().isBlank()) {
+            if (!entry.path().equals(path) || entry.comment() == null || entry.comment().isBlank()) {
+                continue;
+            }
+            if (scope != null && entry.scope() == scope) {
                 return entry.comment();
             }
+            if (fallbackEntry == null) {
+                fallbackEntry = entry;
+            }
+        }
+        if (fallbackEntry != null && scope == null) {
+            return fallbackEntry.comment();
         }
         return fallbackComment;
     }

@@ -69,6 +69,14 @@ public final class ClientLifecycleHelper {
     public static void onLogin() {
         io.github.limuqy.mc.hassium.utils.LoginTiming.markLogin(); // T0b 诊断：handleLogin 时刻（总耗时起点）
         connectInFlight = false;
+        // 单人/集成服本机：纯原版路径——不启影子、不重置 tracking（避免 cancel 原版区块）
+        if (isLocalIntegratedSession()) {
+            if (!initialized) {
+                ClientMainThreadBudget.startJoinBoost();
+                initialized = true;
+            }
+            return;
+        }
         JoinWorldFocus.updateFromClient();
         // 影子虚拟玩家 tracking 会话随新连接重置：R2 复用 park 实例时旧虚拟玩家仍在
         // 影子世界且位置未变 → 不会重新选柱 → R2 黑洞；登录即重建会话重新 tracking
@@ -115,6 +123,16 @@ public final class ClientLifecycleHelper {
         }
         // 单 25565 原版基线：客户端保持原版连接。
         initialized = true;
+    }
+
+    /** 集成服本机会话（单人；局域网主机本机 memory 也走此门，远程玩家才是真服路径）。 */
+    private static boolean isLocalIntegratedSession() {
+        try {
+            Minecraft mc = Minecraft.getInstance();
+            return mc != null && mc.getSingleplayerServer() != null;
+        } catch (Throwable t) {
+            return false;
+        }
     }
 
     /**
@@ -173,6 +191,10 @@ public final class ClientLifecycleHelper {
      */
     public static void startShadowIfConfigured(net.minecraft.client.multiplayer.ServerData serverData) {
         if (!HassiumConfigService.getInstance().isHassiumEngineEnabled()) {
+            return;
+        }
+        // 单人集成服：不启影子（原版 memory 路径）
+        if (isLocalIntegratedSession()) {
             return;
         }
         recordCacheLocationForConnect(serverData);

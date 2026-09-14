@@ -68,7 +68,8 @@ public class MixinMinecraftServer {
         // 仅专用服务器（dedicated）激活：影子端（客户端进程内的 MinecraftServer）
         // 不接网络、无玩家，推送管理器不得对影子端世界生效。
         MinecraftServer server = (MinecraftServer) (Object) this;
-        if (RuntimeServerContext.isDedicatedServerContext()) {
+        boolean networkActive = io.github.limuqy.mc.hassium.network.ServerNetworkGate.isNetworkServerActive();
+        if (networkActive) {
             ServerChunkPushManager.getInstance().onServerTick(server);
             // 登录协商结果 → Play 激活（connection 挂载后下发 play_init；空转零成本）
             ServerHandshakeActivation.drainPending(server);
@@ -85,8 +86,9 @@ public class MixinMinecraftServer {
     private void hassium$onServerInit(CallbackInfo ci) {
         // 服务器初始化时设置服务器实例（用于 Fabric 网络管理器）
         MinecraftServer server = (MinecraftServer) (Object) this;
-        // 记录服务器类型：存储格式等仅专用服务器功能需要（单人/局域网 integrated server 不启用）
+        // 记录服务器类型：存储格式仅专用服；LAN 网络面另看 master.enabledOnLan + isPublished
         RuntimeServerContext.setDedicatedServer(server.isDedicatedServer());
+        RuntimeServerContext.setActiveServer(server);
         try {
             Class<?> fabricNetworkManager = Class.forName("io.github.limuqy.mc.hassium.network.FabricNetworkManager");
             java.lang.reflect.Method setServer = fabricNetworkManager.getMethod("setServerInstance", MinecraftServer.class);
@@ -108,5 +110,6 @@ public class MixinMinecraftServer {
         // 清理玩家压缩状态追踪
         PlayerCompressionTracker.clear();
         Constants.LOG.info("Hassium: PlayerCompressionTracker cleared");
+        RuntimeServerContext.setActiveServer(null);
     }
 }

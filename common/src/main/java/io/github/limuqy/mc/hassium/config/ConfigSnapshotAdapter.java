@@ -7,6 +7,36 @@ import java.util.List;
 public final class ConfigSnapshotAdapter {
     private ConfigSnapshotAdapter() {
     }
+
+    /**
+     * Overlay {@code overlay}'s values for every {@code scope} entry onto {@code base}.
+     * Used on the physical client to merge client.toml (CLIENT scope) with server.toml
+     * (SERVER scope) into one runtime snapshot for integrated-server / LAN use.
+     */
+    public static ConfigValues overlayScope(ConfigValues base, ConfigValues overlay, ConfigScope scope) {
+        ConfigValues result = base;
+        for (ConfigEntry<?> entry : ConfigSchema.entries()) {
+            if (entry.scope() != scope) {
+                continue;
+            }
+            result = overlayEntry(result, overlay, entry);
+        }
+        return result;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <T> ConfigValues overlayEntry(ConfigValues base, ConfigValues overlay, ConfigEntry<T> entry) {
+        return base.with(entry.key(), overlay.get(entry.key()));
+    }
+
+    /** Merge CLIENT + SERVER file values into a full defaults-based snapshot, then adapt. */
+    public static HassiumConfig fromMerged(ConfigValues clientValues, ConfigValues serverValues) {
+        ConfigValues merged = ConfigValues.defaults(ConfigSchema.entries());
+        merged = overlayScope(merged, clientValues, ConfigScope.CLIENT);
+        merged = overlayScope(merged, serverValues, ConfigScope.SERVER);
+        return fromValues(merged, true);
+    }
+
     public static ConfigValues toValues(HassiumConfig config) {
         ConfigValues values = ConfigValues.defaults(ConfigSchema.entries());
         HassiumConfig.ChunkCoreConfig chunk = config.chunk();
@@ -45,6 +75,7 @@ public final class ConfigSnapshotAdapter {
         values = values.with(ConfigSchema.STORAGE_ENABLED, config.storage().enabled())
                 .with(ConfigSchema.STORAGE_ZSTD_LEVEL, config.storage().zstdLevel())
                 .with(ConfigSchema.MASTER_ENABLED, master.enabled())
+                .with(ConfigSchema.MASTER_ENABLED_ON_LAN, master.enabledOnLan())
                 .with(ConfigSchema.MASTER_COMPRESSION_LEVEL, master.compressionLevel())
                 .with(ConfigSchema.MASTER_USE_CONTEXT_COMPRESSION, master.useContextCompression())
                 .with(ConfigSchema.MASTER_PACKET_AGGREGATION, master.enablePacketAggregation())
@@ -87,7 +118,8 @@ public final class ConfigSnapshotAdapter {
                 seedGenValue(values, physicalClient, ConfigSchema.CLIENT_CHUNK_SEED_GEN_ENABLED, ConfigSchema.SERVER_CHUNK_SEED_GEN_ENABLED),
                 values.get(ConfigSchema.CHUNK_LIGHT_STRIP));
         HassiumConfig.MasterCoreConfig master = new HassiumConfig.MasterCoreConfig(
-                values.get(ConfigSchema.MASTER_ENABLED), values.get(ConfigSchema.MASTER_COMPRESSION_LEVEL),
+                values.get(ConfigSchema.MASTER_ENABLED), values.get(ConfigSchema.MASTER_ENABLED_ON_LAN),
+                values.get(ConfigSchema.MASTER_COMPRESSION_LEVEL),
                 values.get(ConfigSchema.MASTER_USE_CONTEXT_COMPRESSION), values.get(ConfigSchema.MASTER_PACKET_AGGREGATION),
                 values.get(ConfigSchema.MASTER_AGGREGATION_MIN_BATCH), values.get(ConfigSchema.MASTER_AGGREGATION_MAX_WAIT),
                 values.get(ConfigSchema.MASTER_AGGREGATION_MAX_SIZE),

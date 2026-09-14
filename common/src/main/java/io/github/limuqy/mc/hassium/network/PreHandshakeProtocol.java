@@ -32,10 +32,31 @@ public final class PreHandshakeProtocol {
      * 配置阶段 payload 入口（fabric 1.20.5+ / forge / neoforge）。
      * 校验（协议版本范围 + mod 版本格式，防日志注入）通过后按位协商并登记。
      */
+    /**
+     * 配置阶段 payload 入口（fabric 1.20.5+ / forge / neoforge）。
+     * 校验（协议版本范围 + mod 版本格式，防日志注入）通过后按位协商并登记。
+     */
     public static void handlePreHandshake(UUID playerId, PreHandshakePayload payload) {
+        handlePreHandshake(playerId, payload, null);
+    }
+
+    /** 带连接的入口：可排除主机本机 memory 连接。 */
+    public static void handlePreHandshake(UUID playerId, PreHandshakePayload payload,
+                                          net.minecraft.network.Connection connection) {
         if (playerId == null || payload == null) {
             DebugLogger.info(LogType.NETWORK,
                     "[PRE_HANDSHAKE] Ignored null pre-handshake (player={})", playerId);
+            return;
+        }
+        if (ServerNetworkGate.isMemoryConnection(connection)) {
+            DebugLogger.info(LogType.NETWORK,
+                    "[PRE_HANDSHAKE] Ignore memory connection pre-handshake from {}", playerId);
+            return;
+        }
+        // 主机本机 memory 连接不参与协商（LAN 远程 / 专用服才登记）
+        if (!ServerNetworkGate.isNetworkServerActive()) {
+            DebugLogger.info(LogType.NETWORK,
+                    "[PRE_HANDSHAKE] Network server inactive, ignore pre-handshake from {}", playerId);
             return;
         }
         if (!LoginHandshake.isProtocolVersionAccepted(payload.protocolVersion(),

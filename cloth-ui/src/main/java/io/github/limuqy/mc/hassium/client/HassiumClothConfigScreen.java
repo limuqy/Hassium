@@ -33,7 +33,8 @@ public final class HassiumClothConfigScreen {
                 .setTitle(Component.translatable("hassium.configuration.title", "Hassium"))
                 .setSavingRunnable(() -> {
                     HassiumConfigService svc = HassiumConfigService.getInstance();
-                    svc.updateConfig(draft.toConfig());
+                    // 服务端字段不在 UI 中：从当前快照原样带回，避免写回时重置 server.toml
+                    svc.updateConfig(draft.toConfig(svc.getConfig()));
                     svc.saveConfig();
                 });
 
@@ -218,9 +219,12 @@ public final class HassiumClothConfigScreen {
             return d;
         }
 
-        HassiumConfig toConfig() {
+        /** 仅改客户端字段；storage/master/compat 与 lightStrip/服务端 debug 从 base 原样保留。 */
+        HassiumConfig toConfig(HassiumConfig base) {
+            var baseChunk = base.chunk();
+            var baseDebug = base.debug();
             return new HassiumConfig(
-                    HassiumConfig.StorageConfig.DEFAULT,
+                    base.storage(),
                     new HassiumConfig.ChunkCoreConfig(
                             cacheEnabled, cacheMaxSizeMb,
                             cacheHotScoreThreshold, cacheRecencyWeight, cacheFrequencyWeight,
@@ -229,9 +233,9 @@ public final class HassiumClothConfigScreen {
                             viewDistanceExtensionEnabled, maxRenderDistance,
                             maxChunksPerFrame, mainThreadChunkBudgetMs,
                             seedGenEnabled,
-                            HassiumConfig.ChunkCoreConfig.DEFAULT.lightStrip()),
-                    HassiumConfig.MasterCoreConfig.DEFAULT,
-                    HassiumConfig.CompatConfig.DEFAULT,
+                            baseChunk.lightStrip()),
+                    base.master(),
+                    base.compat(),
                     new HassiumConfig.DebugConfig(
                             metadataLogging, dispatcherLogging, asyncLogging, compressionLogging,
                             chunkApplyLogging, networkLogging, cacheLogging,

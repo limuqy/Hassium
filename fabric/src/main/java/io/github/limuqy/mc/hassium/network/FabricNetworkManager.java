@@ -1,5 +1,6 @@
 package io.github.limuqy.mc.hassium.network;
 
+import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.compat.HassiumChannels;
 import io.github.limuqy.mc.hassium.compat.ResourceLocationCompat;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
@@ -287,7 +288,7 @@ PLAY_INIT_S2C = ResourceLocationCompat.vanilla(HassiumChannels.PLAY_INIT_S2C);
 #else
             ServerPlayNetworking.send(player, FabricPayloadRegistry.toPayload(FabricPayloadRegistry.PLAY_INIT_S2C_TYPE, buf));
 #endif
-            DebugLogger.info(LogType.NETWORK, "[PLAY_INIT] Sent play_init to {} (caps={})",
+            Constants.LOG.info("[PLAY_INIT] Sent play_init to {} (caps={})",
                     player.getName().getString(), LoginHandshake.describeCaps(negotiatedCaps));
         } catch (Exception e) {
             LOGGER.error("Hassium: Failed to send play init packet to {}", player.getName().getString(), e);
@@ -332,7 +333,8 @@ PLAY_INIT_S2C = ResourceLocationCompat.vanilla(HassiumChannels.PLAY_INIT_S2C);
         ServerConfigurationNetworking.registerGlobalReceiver(PreHandshakePayload.TYPE,
                 (payload, context) -> {
                     UUID playerId = io.github.limuqy.mc.hassium.compat.PlayerCompat.getProfileId(context.networkHandler().getOwner());
-                    PreHandshakeProtocol.handlePreHandshake(playerId, payload);
+                    net.minecraft.network.Connection connection = context.networkHandler().getConnection();
+                    PreHandshakeProtocol.handlePreHandshake(playerId, payload, connection);
                 });
 #endif
     }

@@ -314,10 +314,28 @@ function Set-SmokeTomlKeys {
         [object[]]$Pairs
     )
     if (-not $Pairs -or $Pairs.Count -eq 0) { return }
-    foreach ($toml in @(
-        (Join-Path $ClientRunDir "config\hassium\hassium-client.toml"),
-        (Join-Path $ServerRunDir "config\hassium\hassium-server.toml")
+    # 双 scope 同名键：两端都写；其余按 CLIENT/SERVER 过滤，避免把客户端键塞进 server.toml
+    $dualKeys = @(
+        'chunk.seedGenEnabled',
+        'debug.dispatcherLogging', 'debug.asyncLogging', 'debug.compressionLogging',
+        'debug.chunkApplyLogging', 'debug.networkLogging'
+    )
+    $clientOnlyPatterns = @(
+        '^chunk\.(enabled|maxSizeMb|hotScoreThreshold|recencyWeight|frequencyWeight|cleanupIntervalTicks|targetSizeMb|minCleanupBatchSize|sectionDeltaEnabled|viewDistanceExtensionEnabled|maxRenderDistance|maxChunksPerFrame|mainThreadChunkBudgetMs)$',
+        '^debug\.(metadataLogging|cacheLogging|lightVerify|networkMetricsEnabled|networkMetricsAutoReset)$'
+    )
+    $serverOnlyPatterns = @(
+        '^storage\.',
+        '^master\.',
+        '^compat\.',
+        '^chunk\.lightStrip$'
+    )
+    foreach ($tomlSpec in @(
+        @{ Path = (Join-Path $ClientRunDir "config\hassium\hassium-client.toml"); Side = "client" },
+        @{ Path = (Join-Path $ServerRunDir "config\hassium\hassium-server.toml"); Side = "server" }
     )) {
+        $toml = $tomlSpec.Path
+        $side = $tomlSpec.Side
         if (-not (Test-Path $toml)) {
             Write-Host "[$SessionTag] ${Label} 跳过 ${toml}：文件不存在（全新 run 目录由 mod 首启生成默认值）" -ForegroundColor Yellow
             continue
@@ -325,6 +343,18 @@ function Set-SmokeTomlKeys {
         $lines = @(Get-Content $toml)
         $leaf = Split-Path -Leaf $toml
         foreach ($kv in $Pairs) {
+            $skipForSide = $false
+            if ($dualKeys -notcontains $kv.Key) {
+                if ($side -eq 'server') {
+                    foreach ($p in $clientOnlyPatterns) { if ($kv.Key -match $p) { $skipForSide = $true; break } }
+                } elseif ($side -eq 'client') {
+                    foreach ($p in $serverOnlyPatterns) { if ($kv.Key -match $p) { $skipForSide = $true; break } }
+                }
+            }
+            if ($skipForSide) {
+                Write-Host "[$SessionTag] ${Label}: $($kv.Key) 非 ${side} 键，跳过" -ForegroundColor Yellow
+                continue
+            }
             $keyEsc = [regex]::Escape($kv.Key)
             $patched = $false
             $newLines = foreach ($l in $lines) {

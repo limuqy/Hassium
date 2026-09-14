@@ -54,18 +54,12 @@ public class HassiumConfigService {
         return instance;
     }
 
-    /** Fabric：经 schema 后端从 toml 加载并启用 toml 后端。 */
+    /** Fabric：经 schema 后端从 toml 加载并启用 toml 后端。物理客户端双文件合并。 */
     public void loadFromToml() {
         lock.writeLock().lock();
         try {
             this.tomlBackend.set(true);
-            boolean physicalClient = io.github.limuqy.mc.hassium.platform.Services.PLATFORM.isPhysicalClient();
-            io.github.limuqy.mc.hassium.config.ConfigScope scope =
-                    physicalClient ? io.github.limuqy.mc.hassium.config.ConfigScope.CLIENT
-                                   : io.github.limuqy.mc.hassium.config.ConfigScope.SERVER;
-            HassiumConfig loaded = ConfigSnapshotAdapter.fromValues(
-                    Services.CONFIG.load(scope), physicalClient);
-            applyLoaded(loaded);
+            applyLoaded(loadSnapshotFromBackend());
             LOGGER.info("Hassium: Configuration loaded from Toml");
         } catch (Exception e) {
             LOGGER.error("Hassium: Failed to load Toml configuration", e);
@@ -76,7 +70,24 @@ public class HassiumConfigService {
         }
     }
 
-    /** Fabric：经 schema 后端将当前快照写入 toml。 */
+    /**
+     * 经后端加载当前物理端快照。
+     * <p>
+     * 物理客户端：CLIENT + SERVER 双文件合并（server.toml 供集成服务器/局域网读取；
+     * 单人时服务端侧键有独立可配面）；专用服：仅 SERVER。
+     */
+    private static HassiumConfig loadSnapshotFromBackend() {
+        boolean physicalClient = io.github.limuqy.mc.hassium.platform.Services.PLATFORM.isPhysicalClient();
+        if (physicalClient) {
+            ConfigValues clientValues = Services.CONFIG.load(io.github.limuqy.mc.hassium.config.ConfigScope.CLIENT);
+            ConfigValues serverValues = Services.CONFIG.load(io.github.limuqy.mc.hassium.config.ConfigScope.SERVER);
+            return ConfigSnapshotAdapter.fromMerged(clientValues, serverValues);
+        }
+        return ConfigSnapshotAdapter.fromValues(
+                Services.CONFIG.load(io.github.limuqy.mc.hassium.config.ConfigScope.SERVER), false);
+    }
+
+    /** Fabric：经 schema 后端将当前快照写入 toml。物理客户端写双文件。 */
     public void saveToToml() {
         lock.readLock().lock();
         HassiumConfig snapshot;
@@ -85,11 +96,13 @@ public class HassiumConfigService {
         } finally {
             lock.readLock().unlock();
         }
-        io.github.limuqy.mc.hassium.config.ConfigScope scope =
-                io.github.limuqy.mc.hassium.platform.Services.PLATFORM.isPhysicalClient()
-                        ? io.github.limuqy.mc.hassium.config.ConfigScope.CLIENT
-                        : io.github.limuqy.mc.hassium.config.ConfigScope.SERVER;
-        Services.CONFIG.save(scope, ConfigSnapshotAdapter.toValues(snapshot));
+        ConfigValues values = ConfigSnapshotAdapter.toValues(snapshot);
+        if (io.github.limuqy.mc.hassium.platform.Services.PLATFORM.isPhysicalClient()) {
+            Services.CONFIG.save(io.github.limuqy.mc.hassium.config.ConfigScope.CLIENT, values);
+            Services.CONFIG.save(io.github.limuqy.mc.hassium.config.ConfigScope.SERVER, values);
+        } else {
+            Services.CONFIG.save(io.github.limuqy.mc.hassium.config.ConfigScope.SERVER, values);
+        }
     }
 
     public boolean isTomlBackend() {
@@ -98,7 +111,7 @@ public class HassiumConfigService {
 
     /**
      * 从 ConfigSpec 同步快照与门闩（ModConfig load/reload 与初始化时调用）。
-     * Fabric toml 后端下为空操作。
+     * Fabric toml 后端下为空操作。物理客户端合并 CLIENT + SERVER 两份 spec。
      */
     public void syncFromSpec() {
         if (tomlBackend.get()) {
@@ -106,13 +119,7 @@ public class HassiumConfigService {
         }
         lock.writeLock().lock();
         try {
-            boolean physicalClient = io.github.limuqy.mc.hassium.platform.Services.PLATFORM.isPhysicalClient();
-            io.github.limuqy.mc.hassium.config.ConfigScope scope =
-                    physicalClient ? io.github.limuqy.mc.hassium.config.ConfigScope.CLIENT
-                                   : io.github.limuqy.mc.hassium.config.ConfigScope.SERVER;
-            HassiumConfig loaded = ConfigSnapshotAdapter.fromValues(
-                    Services.CONFIG.load(scope), physicalClient);
-            applyLoaded(loaded);
+            applyLoaded(loadSnapshotFromBackend());
         } catch (Exception e) {
             if (!configLoaded.get()) {
                 applyLoaded(HassiumConfig.DEFAULT);
@@ -133,6 +140,7 @@ public class HassiumConfigService {
 
     /**
      * 持久化当前快照：Fabric 写 toml；Forge/NeoForge 写回 Spec。
+     * 物理客户端写 CLIENT + SERVER 两份（server 侧供集成服务器/局域网）。
      */
     public void saveConfig() {
         if (tomlBackend.get()) {
@@ -146,12 +154,14 @@ public class HassiumConfigService {
         } finally {
             lock.readLock().unlock();
         }
-        io.github.limuqy.mc.hassium.config.ConfigScope scope =
-                io.github.limuqy.mc.hassium.platform.Services.PLATFORM.isPhysicalClient()
-                        ? io.github.limuqy.mc.hassium.config.ConfigScope.CLIENT
-                        : io.github.limuqy.mc.hassium.config.ConfigScope.SERVER;
         try {
-            Services.CONFIG.save(scope, ConfigSnapshotAdapter.toValues(snapshot));
+            ConfigValues values = ConfigSnapshotAdapter.toValues(snapshot);
+            if (io.github.limuqy.mc.hassium.platform.Services.PLATFORM.isPhysicalClient()) {
+                Services.CONFIG.save(io.github.limuqy.mc.hassium.config.ConfigScope.CLIENT, values);
+                Services.CONFIG.save(io.github.limuqy.mc.hassium.config.ConfigScope.SERVER, values);
+            } else {
+                Services.CONFIG.save(io.github.limuqy.mc.hassium.config.ConfigScope.SERVER, values);
+            }
         } catch (Exception e) {
             LOGGER.error("Hassium: Failed to persist configuration", e);
         }
@@ -186,8 +196,15 @@ public class HassiumConfigService {
         networkCompressionEnabled.set(enabled);
     }
 
+    /**
+     * 主世界 type-126 存档压缩：仅专用服务器生效。
+     * <p>
+     * 单人/局域网（物理客户端上的集成服务器）保持原版格式；影子端世界走
+     * {@code shadow} 标志的独立路径，不受本门闩约束。
+     */
     public boolean isStorageEnabled() {
-        return storageEnabled.get();
+        return storageEnabled.get()
+                && io.github.limuqy.mc.hassium.server.RuntimeServerContext.isDedicatedServerContext();
     }
 
     public boolean isClientCacheEnabled() {
@@ -246,6 +263,11 @@ public class HassiumConfigService {
 
     public boolean isMasterEnabled() {
         return config.master().enabled();
+    }
+
+    /** 局域网主机对远程玩家启用网络面（仅集成服 + isPublished 时由 ServerNetworkGate 消费）。 */
+    public boolean isMasterEnabledOnLan() {
+        return config.master().enabledOnLan();
     }
 
     public boolean isRequireClientMod() {

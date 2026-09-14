@@ -7,8 +7,9 @@ import java.util.Set;
 /**
  * Hassium 配置（运行时快照）。
  * <p>
- * 物理客户端从 client.toml 加载：ChunkCoreConfig + DebugConfig。
- * 专用服从 server.toml 加载：StorageConfig + MasterCoreConfig + CompatConfig + DebugConfig。
+ * 物理客户端：client.toml（CLIENT）+ server.toml（SERVER）双文件合并——
+ * 客户端行为 + 集成服务器/局域网用的服务端侧配置。
+ * 专用服：server.toml（SERVER）。
  */
 public record HassiumConfig(
         StorageConfig storage,
@@ -104,13 +105,14 @@ public record HassiumConfig(
 
 
     /**
-     * 主控核心配置（专用服；server.toml master.*）。
+     * 主控核心配置（server.toml master.*）。
      * <p>
-     * 服务端网络行为（压缩/聚合/推送）。原网关监听/鉴权/控制面端点/L1 迁移/续流票据/
-     * 数据面（dataplane.*）键族已随 2.0.0 网关拓扑退役删除。
+     * 服务端网络行为（压缩/聚合/推送）。{@code enabled} 驱动专用服；
+     * {@code enabledOnLan} 仅在集成服已开局域网时对远程玩家生效（本机 memory 恒原版）。
      */
     public record MasterCoreConfig(
             boolean enabled,
+            boolean enabledOnLan,
             int compressionLevel,
             // === 上下文压缩 ===
             boolean useContextCompression,
@@ -138,7 +140,8 @@ public record HassiumConfig(
         );
 
         public static final MasterCoreConfig DEFAULT = new MasterCoreConfig(
-                true,              // enabled（服务端网络通道总开关；直连拓扑下登录期握手/聚合均以此为门）
+                true,              // enabled（专用服网络通道总开关）
+                false,             // enabledOnLan（集成服开局域网后对远程玩家的网络面，默认关）
                 3,                 // compressionLevel
                 true,              // useContextCompression
                 true,              // enablePacketAggregation
