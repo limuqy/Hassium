@@ -1,6 +1,5 @@
 package io.github.limuqy.mc.hassium.config;
 
-import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.metrics.NetworkStats;
 import io.github.limuqy.mc.hassium.platform.Services;
 import org.slf4j.Logger;
@@ -158,14 +157,6 @@ public class HassiumConfigService {
         }
     }
 
-    public void reloadConfig() {
-        if (tomlBackend.get()) {
-            loadFromToml();
-        } else {
-            syncFromSpec();
-        }
-    }
-
     public HassiumConfig getConfig() {
         lock.readLock().lock();
         try {
@@ -199,10 +190,6 @@ public class HassiumConfigService {
         return storageEnabled.get();
     }
 
-    public void setStorageEnabled(boolean enabled) {
-        storageEnabled.set(enabled);
-    }
-
     public boolean isClientCacheEnabled() {
         return config.chunk().enabled();
     }
@@ -227,15 +214,6 @@ public class HassiumConfigService {
         return config.chunk().maxRenderDistance();
     }
 
-    /**
-     * 影子端运行时可用（= 配置开启 && 服务端已装 MOD && 影子服务端创建成功，启用态）。
-     * 启用态下影子端负责权威光照与回传；客户端光照引擎仍保持 vanilla 默认开启。
-     */
-    public boolean isShadowEngineAvailable() {
-        return isHassiumEngineEnabled()
-                && io.github.limuqy.mc.hassium.network.ClientChunkPipeline.getInstance().isShadowEngineAvailable();
-    }
-
     /** 客户端功能 gate；仅在 Hassium 能力握手完成后开放 legacy fallback。 */
     public boolean isClientFeatureGateOpen() {
         if (!isHassiumEngineEnabled()) {
@@ -245,17 +223,6 @@ public class HassiumConfigService {
                 io.github.limuqy.mc.hassium.network.ClientChunkPipeline.getInstance();
         return pipeline.isHassiumHandshakeDone() && !pipeline.isShadowServerFailed();
     }
-    /**
-     * 网络压缩算法（固定 ZSTD，无其它实现可选）。
-     */
-    public String getCompressionAlgorithm() {
-        return Constants.NETWORK_COMPRESSION_ALGORITHM;
-    }
-
-    public static String getNetworkCompressionAlgorithm() {
-        return getInstance().getCompressionAlgorithm();
-    }
-
     public int getCompressionLevel() {
         return config.master().compressionLevel();
     }
@@ -273,64 +240,16 @@ public class HassiumConfigService {
         return config.compat().autoDowngradeOnError();
     }
 
-    public int getMaxCacheSizeMb() {
-        return config.chunk().maxSizeMb();
-    }
-
-    public double getHotScoreThreshold() {
-        return config.chunk().hotScoreThreshold();
-    }
-
-    public double getRecencyWeight() {
-        return config.chunk().recencyWeight();
-    }
-
-    public double getFrequencyWeight() {
-        return config.chunk().frequencyWeight();
-    }
-
     public int getCleanupIntervalTicks() {
         return config.chunk().cleanupIntervalTicks();
-    }
-
-    public int getTargetCacheSizeMb() {
-        return config.chunk().resolvedTargetCacheSizeMb();
-    }
-
-    public long getTargetCacheSizeBytes() {
-        return config.chunk().targetCacheSizeBytes();
     }
 
     public boolean isMasterEnabled() {
         return config.master().enabled();
     }
 
-    public int getMinCleanupBatchSize() {
-        return config.chunk().minCleanupBatchSize();
-    }
-
     public boolean isRequireClientMod() {
         return config.compat().requireClientMod();
-    }
-
-    public ConfigSnapshot createSnapshot() {
-        lock.readLock().lock();
-        try {
-            return new ConfigSnapshot(
-                    config,
-                    networkCompressionEnabled.get(),
-                    storageEnabled.get()
-            );
-        } finally {
-            lock.readLock().unlock();
-        }
-    }
-
-    public record ConfigSnapshot(
-            HassiumConfig config,
-            boolean networkCompressionEnabled,
-            boolean storageEnabled
-    ) {
     }
 
     public boolean isConfigLoaded() {
@@ -369,15 +288,6 @@ public class HassiumConfigService {
         return config.chunk().lightStrip();
     }
 
-    /**
-     * 是否拦截 ClientboundLightUpdatePacket，发送轻量光照增量通知。
-     * 默认 true（剥离光照数据，客户端本地重算）。
-     */
-    public boolean isLightDeltaStrip() {
-        // 随 chunk.lightStrip 一起控制
-        return config.chunk().lightStrip();
-    }
-
     public int getMaxChunksPerFrame() {
         return Math.max(1, config.chunk().maxChunksPerFrame());
     }
@@ -396,7 +306,7 @@ public class HassiumConfigService {
     }
 
     /**
-     * 是否启用指标收集：客户端从 net（网络核心）读取，服务端从 master（主控核心）读取。
+     * 是否启用指标收集：冒烟测试属性强开，否则读 {@code debug.networkMetricsEnabled}。
      */
     public boolean isMetricsEnabled() {
         return resolveMetricsEnabled(config);
@@ -439,7 +349,7 @@ public class HassiumConfigService {
     /**
      * 根据物理端解析 metricsEnabled：
      * 冒烟测试 {@code hassium.smokeTest=true} 或 {@code hassium.serverSmokeTest=true} 时强开；
-     * 否则客户端读 net（网络核心），服务端读 master（主控核心）。
+     * 否则读 {@code debug.networkMetricsEnabled}。
      */
     private static boolean resolveMetricsEnabled(HassiumConfig cfg) {
         if (Boolean.parseBoolean(System.getProperty("hassium.smokeTest", "false"))

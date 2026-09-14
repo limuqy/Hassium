@@ -330,7 +330,7 @@ public final class SeedGenLevelCompat {
     /**
      * 影子端世界根决议（唯一规则，P3 修复；勿在别处另立规则）。优先级：
      * <ol>
-     *   <li>{@code serverId} 已就绪（gateway-only 握手完成时 {@code ClientLifecycleHelper}
+     *   <li>{@code serverId} 已就绪（登录期握手完成时 {@code ClientLifecycleHelper}
      *       已同步记录；正常路径 storage 初始化亦记录）→ {@code <gameDir>/hassium_cache/<serverId>}
      *       （既有目录布局，重连复用）。若真实目录尚不存在且存在同 server 的 pending 目录
      *       （此前 serverId 未就绪期间的落盘），整体改名迁移复用（{@link #migratePendingWorld}）。</li>

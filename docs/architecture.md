@@ -98,7 +98,6 @@ Hassium/
 | `network/ClientChunkHandler` → `ClientChunkPipeline` | 仅负责 vanilla payload 解包、官方 packet apply 与状态降级；不维护独立视距/halo |
 | `cache/`（区块核心支撑） | 客户端轻量预算与生命周期（`ClientMainThreadBudget` / `ClientLifecycleHelper` / `ChunkMeshCompileLog`）；缓存存储、读盘和清理由影子服务端承担 |
 | `config/` / `metrics/` / `compat/` / `mixin/`（支撑设施） | `HassiumConfigService` 门面；`NetworkStats` 指标；Manifold 跨版本 API 桥接（`PacketId` / `HassiumChannels`）；全部 Mixin（common only） |
-| `migration/` / `api/`（支撑设施） | 存档迁移工具与对外 API |
 
 ## 6. 客户端区块数据流
 

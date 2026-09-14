@@ -2780,7 +2780,7 @@ public final class ShadowLightCompute {
      * 客户端原版 unload 钩子：**只**作废光桥凭据（epoch / 未发 light 掩码依赖）。
      * <p>
      * 原版对齐：客户端卸载 ≠ 影子服务端卸载。影子注入表的回收只跟影子 tracking /
-     * {@code unloadDelaySecs} 走；这里不得 {@code unloadChunk} 拆表，也不得登记
+     * {@code RECLAIM_GRACE_MS} 硬编码宽限走；这里不得 {@code unloadChunk} 拆表，也不得登记
      * 「已请求」防抖——否则重进范围无法再交付，形成永久洞。
      */
     public static void onClientChunkUnloaded(ChunkPos pos) {

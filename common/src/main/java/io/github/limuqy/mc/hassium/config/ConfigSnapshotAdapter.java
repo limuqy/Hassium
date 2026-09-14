@@ -58,11 +58,7 @@ public final class ConfigSnapshotAdapter {
         HassiumConfig.CompatConfig compat = config.compat();
         values = values.with(ConfigSchema.COMPAT_REQUIRE_CLIENT_MOD, compat.requireClientMod())
                 .with(ConfigSchema.COMPAT_AUTO_DOWNGRADE, compat.autoDowngradeOnError());
-        return values.with(ConfigSchema.SERVER_DEBUG_DISPATCHER, debug.dispatcherLogging())
-                .with(ConfigSchema.SERVER_DEBUG_ASYNC, debug.asyncLogging())
-                .with(ConfigSchema.SERVER_DEBUG_COMPRESSION, debug.compressionLogging())
-                .with(ConfigSchema.SERVER_DEBUG_CHUNK_APPLY, debug.chunkApplyLogging())
-                .with(ConfigSchema.SERVER_DEBUG_NETWORK, debug.networkLogging());
+        return values;
     }
 
     public static HassiumConfig fromValues(ConfigValues values) {
@@ -73,8 +69,8 @@ public final class ConfigSnapshotAdapter {
      * Restores a runtime snapshot from schema values, choosing CLIENT or SERVER {@code debug.*}
      * keys according to the running physical side. Dual-scoped flags (dispatcher / async /
      * compression / chunkApply / network) read the matching side; client-only flags
-     * (metadata / cache / lightVerify) and the server-only flag (dataplane) always come
-     * from their own schema key (the other side keeps the default {@code false}).
+     * (metadata / cache / lightVerify) always come from their own schema key (the other side
+     * keeps the default {@code false}).
      * The same side-routing applies to the double-scoped {@code chunk.seedGenEnabled}.
      */
     public static HassiumConfig fromValues(ConfigValues values, boolean physicalClient) {

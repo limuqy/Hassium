@@ -148,12 +148,10 @@ MC_1_21_11
 | `PacketPayloadCompat` | 1.21.1 / 1.21.11 | CustomPayload ID / 数据 / 构造 |
 | `ResourceLocationCompat` | 1.21.1 / 1.21.11 | RL / Identifier 创建 |
 | `RegistryCompat` | 1.21.2 | registryOrThrow / lookupOrThrow |
-| `DisconnectCompat` | 1.21.1 | onDisconnect 参数 |
 | `PermissionCompat` | 1.21.11 | 命令权限 API |
 | `PlayerCompat` | 1.21.1 / 1.21.6 / 1.21.9 | `serverLevel()` / `level()`；`getServer()`→`level().getServer()`；`getConnection` 沿继承链取 `connection` |
 | `BlockEntityCompat` | 1.21.1 / 1.21.6 | `load` / `loadWithComponents(CompoundTag)` / `ValueInput` |
 | `LevelChunkSectionCompat` | 1.21.9 | Section 构造 |
-| `CompoundTagCompat` | 1.21.5 | keys / 标量读取 |
 | `ChunkPacketDataCompat` | 1.21.5 | chunk packet heightmaps 跳过/复制（NBT→StreamCodec） |
 | `ChunkDataCompat` | 1.21.2 | Mixin 目标类说明（序列化入口） |
 | `NetworkCapability` | — | 自定义通道是否完整可用（恒 true，历史 1.20.5 分界已退役） |

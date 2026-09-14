@@ -117,7 +117,6 @@ fabric/ | forge/ | neoforge/
 | `network/` | 直连传输面：登录期握手 `network/handshake/`（LoginHandshake / LoginCaps / 双端激活）+ 客户端摄入管线（ClientChunkPipeline / ClientMetadataHandler）+ 服务端区块推送（ServerChunkPushManager）+ 聚合链（HassiumAggregationManager）；区块核心：`network/seedgen/` 影子端（`ShadowSeedServer` 等，= 区块核心后端引擎） |
 | `cache/` | 客户端轻量设施（预算、生命周期、mesh 编译日志）；缓存存储与清理由影子端承担 |
 | `config/` `metrics/` `compat/` `mixin/` | 配置、指标、跨版本桥、Mixin |
-| `migration/` `api/` | 存档迁移工具与对外 API |
 
 ## ServiceLoader
 

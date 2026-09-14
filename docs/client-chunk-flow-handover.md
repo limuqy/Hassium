@@ -321,10 +321,12 @@ pull 域用了 `resolveViewDistance()=vd+1`（range=21 → 1665 格盘）而非�
 
 > 2026-09-09 核对：6 项均未执行；`architecture.md` §6 侧文档项已完成（见 §0.5）。
 > `SeedGenExecutor` 本地生成仍依赖 `handleCompressedChunk` 解压/应用链，删通道前需先迁出该本地路径。
+> **2026-09-14 大扫除核对**：清单 1/2 项已随 P2 推送抑制落地后的改造自动消失（符号全仓零命中），
+> 本清单实际剩余 2 项可执行（第 3 项部分收敛、第 6 项红线）。
 
-- [ ] `ChunkSender` 接口 / `ChunkSenderHolder` / `ServerChunkPushManager` 推送段（`sendCompressedChunk` 调用点 ~:1145）/ 三 loader 的 `CHUNK_PAYLOAD_S2C` receiver 注册
-- [ ] `ClientChunkHandler.handleCompressedChunk` 及仅服务它的 `ChunkCompressionHandler` 分支（wire/vanilla 记账先迁移；**注意 SeedGenExecutor 本地生成复用此链**）
-- [ ] `ShadowPullClient.tryInterceptForCompare` 与 `handleNativeChunk` 的 `hasLocalPullBaseline` 旁路（收敛为链路可用性判断；对齐后 pull-mode 触达面已收窄，见 §0.5）
+- [x] ~~`ChunkSender` 接口 / `ChunkSenderHolder` / `ServerChunkPushManager` 推送段（`sendCompressedChunk` 调用点 ~:1145）/ 三 loader 的 `CHUNK_PAYLOAD_S2C` receiver 注册~~ —— **2026-09-14 核对已消失**：`ChunkSenderHolder`/`sendCompressedChunk`/`enqueueDirectPush`/`CHUNK_PAYLOAD_S2C` 全仓零命中；`ServerChunkPushManager` 现存代码仅剩 Pull 响应职责（`resolveShadowPull`/待推送队列），无旧推送段。
+- [x] ~~`ClientChunkHandler.handleCompressedChunk` 及仅服务它的 `ChunkCompressionHandler` 分支（wire/vanilla 记账先迁移；**注意 SeedGenExecutor 本地生成复用此链**）~~ —— **2026-09-14 核对已删**：`handleCompressedChunk`/`ChunkCompressionHandler` 全仓零命中；`ClientChunkHandler` 现存为纯 Pull 工具类（`applyShadowPullFull` 等），本地生成与区块应用已收敛到 pull 链。
+- [ ] `ShadowPullClient.tryInterceptForCompare` 与 `handleNativeChunk` 的 `hasLocalPullBaseline` 旁路（收敛为链路可用性判断；对齐后 pull-mode 触达面已收窄，见 §0.5）—— **2026-09-14 核对仍存活**：`MixinClientPacketListener:44` 活跃调用 `handleNativeChunk`；旁路属现行兜底，清理需与「双端版本差兼容路径」一起评估（见第 6 项）。
 - [ ] 统计：chunk_payload 调用点的 `recordChunkReceived/recordWireBytesReceived` 迁移（pull 链 `decompressPullFull` 已并行记账）；`fullChunkRequestCount` 语义——**探针读 `newFullChunkRequestCount`**，指标代码已拆分无需再改
 - [x] 文档：`architecture.md` §6 从「目标」改标「现状」（已完成：「已对齐（现状）」）；本文档仍待归档
 - [ ] 兼容期红线：清理前必须确认最低支持客户端/服务端版本均已含对齐改动，否则 chunk_payload 通道不可删
