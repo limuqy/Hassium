@@ -293,6 +293,8 @@ public final class ClientLifecycleHelper {
         ClientMainThreadBudget.clearJoinBoost();
         io.github.limuqy.mc.hassium.network.handshake.ClientLoginNegotiation.clear();
         io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.resetRequestDedupForReconnect();
+        io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.clearDiskPublishInFlight();
+        io.github.limuqy.mc.hassium.network.PullResponseDecodeQueue.discard();
 
         ChunkMeshCompileLog.reset();
 

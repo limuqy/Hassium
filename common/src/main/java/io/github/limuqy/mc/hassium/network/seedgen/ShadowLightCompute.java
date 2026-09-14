@@ -788,6 +788,15 @@ public final class ShadowLightCompute {
         net.minecraft.world.level.chunk.LevelChunk chunk = server.injectedChunk(resolved, pos.x, pos.z);
         TraceOrigin origin = TraceOrigin.SHADOW_MEMORY_CACHE;
         if (chunk == null) {
+            if (scheduleAsyncDiskPublish(server, resolved, pos, localGeneration, renderOnly)) {
+                return true;
+            }
+            // 无客户端执行器（冷启动）才允许同步读盘；配额耗尽时宁可 miss 走 pull，
+            // 不得在主线程再堵 region 冷挂载。
+            HassiumTaskExecutor executor = HassiumTaskExecutor.getClient();
+            if (executor != null && executor.isRunning()) {
+                return false;
+            }
             chunk = server.loadFromDisk(resolved, pos);
             origin = TraceOrigin.SHADOW_DISK_CACHE;
             if (chunk != null) {
@@ -802,6 +811,76 @@ public final class ShadowLightCompute {
         }
         return submitPreLight(ShadowChunkSource.CACHE_SNAPSHOT, pos, chunk, level,
                 traceOrigin(origin), renderOnly);
+    }
+
+    /** 内存 miss 后的在途异步读盘（按柱去重；配额/执行器不可用时返回 false 走同步兜底）。 */
+    private static final java.util.Set<Long> DISK_PUBLISH_INFLIGHT =
+            java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    /** 断连清理：丢弃在途异步读盘标记，避免下一会话同柱被误判为已在途。 */
+    public static void clearDiskPublishInFlight() {
+        DISK_PUBLISH_INFLIGHT.clear();
+    }
+
+    private static boolean scheduleAsyncDiskPublish(ShadowSeedServer server, String dimension,
+                                                    ChunkPos pos, boolean localGeneration,
+                                                    boolean renderOnly) {
+        long key = DimensionKey.key(dimension, pos.x, pos.z);
+        if (!DISK_PUBLISH_INFLIGHT.add(key)) {
+            return true;
+        }
+        if (!ClientMainThreadBudget.tryAcquireCacheRead()) {
+            DISK_PUBLISH_INFLIGHT.remove(key);
+            return false;
+        }
+        HassiumTaskExecutor executor = HassiumTaskExecutor.getClient();
+        if (executor == null || !executor.isRunning()) {
+            ClientMainThreadBudget.refundCacheRead();
+            DISK_PUBLISH_INFLIGHT.remove(key);
+            return false;
+        }
+        server.loadFromDiskAsync(dimension, pos, loaded -> {
+            DISK_PUBLISH_INFLIGHT.remove(key);
+            try {
+                if (loaded == null) {
+                    onDiskPublishMiss(dimension, pos, localGeneration, renderOnly);
+                    return;
+                }
+                server.injectLoadedChunk(dimension, pos, loaded);
+                net.minecraft.server.level.ServerLevel level = server.level(dimension);
+                if (level == null) {
+                    onDiskPublishMiss(dimension, pos, localGeneration, renderOnly);
+                    return;
+                }
+                if (localGeneration) {
+                    submitGenerated(pos, loaded, level, false);
+                } else {
+                    submitPreLight(ShadowChunkSource.CACHE_SNAPSHOT, pos, loaded, level,
+                            TraceOrigin.SHADOW_DISK_CACHE, renderOnly);
+                }
+            } catch (Throwable t) {
+                DebugLogger.debug(DebugLogger.LogType.CACHE,
+                        "[SHADOW_PUBLISH] async disk apply failed ({}, {})", pos.x, pos.z, t);
+                onDiskPublishMiss(dimension, pos, localGeneration, renderOnly);
+            }
+        });
+        return true;
+    }
+
+    /**
+     * 异步读盘落空：调用方已按「会交付」记账（authority NONE / UNCHANGED 不再 pull），
+     * 此处补发权威 FULL；OVD / 本地生成不回退网络。
+     */
+    private static void onDiskPublishMiss(String dimension, ChunkPos pos,
+                                          boolean localGeneration, boolean renderOnly) {
+        DebugLogger.info(DebugLogger.LogType.NETWORK,
+                "[SHADOW_PUBLISH] async disk miss ({}, {}) dim={} renderOnly={} localGen={}",
+                pos.x, pos.z, dimension, renderOnly, localGeneration);
+        if (renderOnly || localGeneration) {
+            return;
+        }
+        io.github.limuqy.mc.hassium.network.ShadowPullClient
+                .requestAuthoritativeFull(dimension, List.of(pos));
     }
 
     /** publish 被门禁挡住时的节流日志（OVD/权威共用；R2 ovdLoaded=0 归因用）。 */

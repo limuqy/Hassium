@@ -15,7 +15,9 @@ import org.slf4j.LoggerFactory;
  * 职责切分：loader 侧只保留「传输面」——通道注册、线程封送
  * （{@code enqueueWork} / {@code client.execute}）、发送载体；本类持有
  * 「解包 + 业务分发」与「发送端编码」，替代此前三端逐字拷贝的 receiver
- * / send 样板。所有方法对调用线程无要求（线程语义由 loader 调用点决定）。
+ * / send 样板。除 {@link #handleShadowPullResponse}（入
+ * {@link PullResponseDecodeQueue} 后台 hop）外，方法对调用线程无要求
+ * （线程语义由 loader 调用点决定）。
  * <p>
  * 线格式不变：byte[] 的封装（Fabric {@code RawPayload} codec /
  * NeoForge {@code ByteArrayPayload} codec / Forge {@code *Wrapper}）仍在
@@ -61,9 +63,15 @@ public final class PayloadHandlers {
     // ===== 客户端 S2C 解包分发 =====
 
     /**
-     * shadow_pull_response_s2c：FULL 回退线格式 → {@link ShadowPullClient} 注入。
+     * shadow_pull_response_s2c：入专用 hop（后台解压/解码），主线程只保留 apply。
+     * Loader receiver 与聚合帧子包共用本入口。
      */
     public static void handleShadowPullResponse(byte[] data) {
+        PullResponseDecodeQueue.enqueue(data);
+    }
+
+    /** 工人线程：ZSTD 解压 + packet 解码 + {@link ShadowPullClient} 业务分发。 */
+    static void processShadowPullResponse(byte[] data) {
         FriendlyByteBuf buf = wrap(data);
         try {
             ShadowPullClient.handleResponse(ShadowPullResponseS2CPacket.decode(buf));

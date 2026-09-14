@@ -5,6 +5,7 @@ import io.github.limuqy.mc.hassium.network.handshake.LoginHandshakeManager;
 import io.github.limuqy.mc.hassium.network.HassiumConnectionRegistry;
 import io.github.limuqy.mc.hassium.network.HassiumAggregationManager;
 import io.github.limuqy.mc.hassium.network.AggregationDecodeQueue;
+import io.github.limuqy.mc.hassium.network.PullResponseDecodeQueue;
 import io.github.limuqy.mc.hassium.network.PacketCompressionBlacklist;
 import io.github.limuqy.mc.hassium.network.PacketTypeHelper;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
@@ -137,6 +138,7 @@ public class MixinConnection {
         HassiumConnectionRegistry.markDisabled(self);
         HassiumAggregationManager.discardConnection(self);
         AggregationDecodeQueue.discard(self);
+        PullResponseDecodeQueue.discard();
         LoginHandshakeManager.onDisconnect(self);
     }
 }

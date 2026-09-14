@@ -1048,6 +1048,34 @@ public class ShadowSeedServer extends MinecraftServer {
         return parseNbtBytes(dimension, pos, nbt);
     }
 
+    /**
+     * 后台读盘 + 主线程回调。客户端主线程 miss（权威 hash 命中 / UNCHANGED）不得
+     * 同步堵在 region 冷挂载与 NBT 解析上。无客户端执行器时退化为同步
+     * {@link #loadFromDisk} 并在调用线程回调。
+     */
+    public void loadFromDiskAsync(String dimension, ChunkPos pos,
+                                  java.util.function.Consumer<LevelChunk> callback) {
+        io.github.limuqy.mc.hassium.concurrent.HassiumTaskExecutor executor =
+                io.github.limuqy.mc.hassium.concurrent.HassiumTaskExecutor.getClient();
+        if (executor == null || !executor.isRunning()) {
+            LevelChunk sync = loadFromDisk(dimension, pos);
+            callback.accept(sync);
+            return;
+        }
+        executor.submit(() -> {
+            LevelChunk loaded = null;
+            try {
+                loaded = loadFromDisk(dimension, pos);
+            } catch (Throwable t) {
+                LOGGER.debug("Hassium: async loadFromDisk failed for ({}, {})", pos.x, pos.z, t);
+            }
+            LevelChunk result = loaded;
+            io.github.limuqy.mc.hassium.concurrent.MainThreadDispatcher.execute(
+                    () -> callback.accept(result), pos,
+                    io.github.limuqy.mc.hassium.concurrent.TaskCategory.SAFE_TO_CANCEL);
+        }, io.github.limuqy.mc.hassium.concurrent.TaskCategory.SAFE_TO_CANCEL);
+    }
+
     /** 官方加载产物为 ProtoChunk（ChunkSerializer.read 语义）：FULL 转换同款。 */
     private LevelChunk toLevelChunk(String dimension, net.minecraft.world.level.chunk.ChunkAccess accChunk, ChunkPos pos) {
         // 读盘命中（R2 缓存复用）记一次访问：容量清理热度评分用。
