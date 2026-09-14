@@ -458,9 +458,7 @@ public final class FabricTomlConfigIO {
                 getBool(cfg, "master.enabled", d.enabled()),
                 getBool(cfg, "master.enabledOnLan", d.enabledOnLan()),
                 getInt(cfg, "master.compressionLevel", d.compressionLevel()),
-                getBool(cfg, "master.useContextCompression", d.useContextCompression()),
                 getBool(cfg, "master.enablePacketAggregation", d.enablePacketAggregation()),
-                getInt(cfg, "master.aggregationMinBatchSize", d.aggregationMinBatchSize()),
                 getLong(cfg, "master.aggregationMaxWaitTimeMs", d.aggregationMaxWaitTimeMs()),
                 getInt(cfg, "master.aggregationMaxSize", d.aggregationMaxSize()),
                 getStringSet(cfg, "master.compressionBlacklist", d.compressionBlacklist()),
@@ -474,10 +472,8 @@ public final class FabricTomlConfigIO {
                 "局域网主机是否对远程玩家启用 Hassium 网络面（本机 memory 恒原版；storage 仍仅专用服）",
                 ConfigScope.SERVER);
         set(cfg, "master.compressionLevel", n.compressionLevel(), "自有通道 ZSTD 等级", ConfigScope.SERVER);
-        set(cfg, "master.useContextCompression", n.useContextCompression(), "是否使用上下文压缩", ConfigScope.SERVER);
         set(cfg, "master.enablePacketAggregation", n.enablePacketAggregation(), "是否启用包聚合", ConfigScope.SERVER);
-        set(cfg, "master.aggregationMinBatchSize", n.aggregationMinBatchSize(), "聚合最小批量", ConfigScope.SERVER);
-        set(cfg, "master.aggregationMaxWaitTimeMs", (int) n.aggregationMaxWaitTimeMs(), "聚合最大等待（ms）", ConfigScope.SERVER);
+        set(cfg, "master.aggregationMaxWaitTimeMs", (int) n.aggregationMaxWaitTimeMs(), "冲刷兜底（ms；tick 尾冲刷为主，超时未冲则强制冲）", ConfigScope.SERVER);
         set(cfg, "master.aggregationMaxSize", n.aggregationMaxSize(), "聚合最大大小（字节）", ConfigScope.SERVER);
         set(cfg, "master.compressionBlacklist", new ArrayList<>(n.compressionBlacklist()), "压缩/聚合黑名单", ConfigScope.SERVER);
         set(cfg, "master.maxChunksPerTick", n.maxChunksPerTick(), "每玩家每 tick 完成的 Pull FULL/DELTA 上限（UNCHANGED 另额 32；满 tick ≈ 本值×20/s，仅服务端）", ConfigScope.SERVER);

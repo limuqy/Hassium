@@ -23,10 +23,10 @@ Hassium 用一套客户端 + 服务端配合，从**高效压缩、网络优化�
 
 - **目标**：进服与跑图时下载等待更短、带宽占用更低
 - **怎么做的**：
-  - 聚合包内部字典 ZSTD（上下文压缩，`master.useContextCompression`）
+  - 聚合包内部字典 ZSTD（达到阈值后始终压缩）
   - 区块推送自有压缩（推送链独立压缩，不触碰原版压缩层）
   - 聚合 + 紧凑包头提升压缩比与包效率
-- **配置**：`master.enabled`、`master.compressionLevel`、`master.useContextCompression`、`master.enablePacketAggregation`
+- **配置**：`master.enabled`、`master.compressionLevel`、`master.enablePacketAggregation`
 - **边界**：不触碰原版压缩层（管线级全局包压缩已退役），无跨 mod 管线冲突面
 
 ---

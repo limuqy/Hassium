@@ -25,16 +25,17 @@ import java.util.concurrent.TimeUnit;
  * <p>
  * 关键设计：
  * 1. 每连接独立的包缓冲区
- * 2. 定时刷新（20ms 周期）
- * 3. PENDING 状态下缓冲但不刷新
- * 4. ENABLED 状态下正常聚合
+ * 2. 冲刷触发：服务端 tick 尾 {@link #flushAllAsync()}（主线程只入队，压缩/发送在 TIMER 线程）
+ * 3. 兜底：每次冲刷后重排一次性 watchdog，超过 {@code aggregationMaxWaitTimeMs}
+ *    未再冲刷则强制冲一次（应对主线程卡顿导致 tick 尾长期不执行）
+ * 4. PENDING 状态下缓冲但不刷新
+ * 5. ENABLED 状态下正常聚合
  */
 public class HassiumAggregationManager {
-    private static int minBatchPackets = 4;
-    private static int maxWaitCycles = 2;
-    /** 定时器粒度；maxWaitCycles = aggregationMaxWaitTimeMs / 本值（默认 50ms → 5 周期）。 */
-    private static final int FLUSH_PERIOD_MS = 10;
+    private static int maxWaitMs = 50;
     private static int maxAggregationSize = 256 * 1024;
+    /** 上次实际执行 flushAll 的墙钟；watchdog 以此判断是否过期。 */
+    private static volatile long lastFlushAtMs = System.currentTimeMillis();
 
     /** 2.0.X 兼容面：聚合 PENDING 缓冲硬上限（字节）= 8 MiB。拍板值（约 2× 配置上限量级）。超限语义=丢弃该连接整个缓冲 + 降级直发 + warn（与 5s ACK 超时降级一致，非直发）。2.0.X 全小版本冻结，不可随配置调整。 */
     private static final long MAX_PENDING_BUFFER_BYTES = 8L * 1024 * 1024;
@@ -52,13 +53,12 @@ public class HassiumAggregationManager {
     }
 
     private static final ConcurrentHashMap<Connection, ConnBuffer> PACKET_BUFFER = new ConcurrentHashMap<>();
-    private static final ConcurrentHashMap<Connection, Integer> FLUSH_WAIT = new ConcurrentHashMap<>();
     private static final ScheduledExecutorService TIMER = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread t = new Thread(r, "Hassium-Flush-thread");
         t.setDaemon(true);
         return t;
     });
-    private static volatile ScheduledFuture<?> flushTask = null;
+    private static volatile ScheduledFuture<?> watchdogTask = null;
     private static volatile boolean initialized = false;
 
     /**
@@ -88,18 +88,13 @@ public class HassiumAggregationManager {
 
         // 从配置读取参数
         HassiumConfigService config = HassiumConfigService.getInstance();
-        minBatchPackets = config.getAggregationMinBatchSize();
-        maxWaitCycles = Math.max(1, (int) (config.getAggregationMaxWaitTimeMs() / FLUSH_PERIOD_MS));
+        maxWaitMs = (int) Math.max(1L, config.getAggregationMaxWaitTimeMs());
         maxAggregationSize = config.getAggregationMaxSize();
 
-        if (flushTask != null) {
-            flushTask.cancel(false);
-        }
-        flushTask = TIMER.scheduleAtFixedRate(HassiumAggregationManager::flush, 0,
-                FLUSH_PERIOD_MS, TimeUnit.MILLISECONDS);
+        rescheduleWatchdog();
         initialized = true;
-        Constants.LOG.info("Hassium aggregation manager initialized (minBatch={}, maxWait={}ms, maxSize={}KB)",
-                minBatchPackets, maxWaitCycles * FLUSH_PERIOD_MS, maxAggregationSize / 1024);
+        Constants.LOG.info("Hassium aggregation manager initialized (maxWait={}ms, maxSize={}KB)",
+                maxWaitMs, maxAggregationSize / 1024);
     }
 
     /**
@@ -168,11 +163,18 @@ public class HassiumAggregationManager {
     }
 
     /**
-     * 定时刷新所有连接
+     * tick 尾异步冲刷：主线程只入队，压缩与发送在 TIMER 线程执行，不阻塞 tick。
      */
-    private static void flush() {
+    public static void flushAllAsync() {
+        TIMER.execute(HassiumAggregationManager::flushAll);
+    }
+
+    /**
+     * 冲刷所有连接的非空缓冲（无批量门槛）。每次调用重置 lastFlushAtMs 并重排 watchdog。
+     */
+    private static void flushAll() {
+        lastFlushAtMs = System.currentTimeMillis();
         PACKET_BUFFER.keySet().removeIf(c -> !c.isConnected());
-        FLUSH_WAIT.keySet().removeIf(c -> !c.isConnected());
 
         for (var entry : PACKET_BUFFER.entrySet()) {
             Connection connection = entry.getKey();
@@ -193,21 +195,22 @@ public class HassiumAggregationManager {
                     continue;
                 }
 
-                // 检查是否达到最小批量
-                if (buffer.packets.size() < minBatchPackets) {
-                    int waited = FLUSH_WAIT.getOrDefault(connection, 0);
-                    if (waited < maxWaitCycles) {
-                        FLUSH_WAIT.put(connection, waited + 1);
-                        Constants.LOG.debug("Waiting for more packets: {} (waited: {}/{})", buffer.packets.size(), waited, maxWaitCycles);
-                        continue;
-                    }
-                }
-
-                FLUSH_WAIT.remove(connection);
                 Constants.LOG.debug("Flushing aggregation buffer: {} packets", buffer.packets.size());
                 flushInternal(connection, buffer);
             }
         }
+        rescheduleWatchdog();
+    }
+
+    /**
+     * 重排一次性兜底：超过 maxWaitMs 未再冲刷则强制冲一次（主线程卡顿时的安全网）。
+     */
+    private static void rescheduleWatchdog() {
+        ScheduledFuture<?> prev = watchdogTask;
+        if (prev != null) {
+            prev.cancel(false);
+        }
+        watchdogTask = TIMER.schedule(HassiumAggregationManager::flushAll, maxWaitMs, TimeUnit.MILLISECONDS);
     }
 
     /**
@@ -234,12 +237,10 @@ public class HassiumAggregationManager {
                 buffer.packets.clear();
             }
         }
-        FLUSH_WAIT.remove(connection);
     }
 
     private static void flushConnectionInternal(Connection connection) {
         PACKET_BUFFER.keySet().removeIf(c -> !c.isConnected());
-        FLUSH_WAIT.remove(connection);
         ConnBuffer buffer = PACKET_BUFFER.get(connection);
         if (buffer == null) return;
         synchronized (buffer.packets) {

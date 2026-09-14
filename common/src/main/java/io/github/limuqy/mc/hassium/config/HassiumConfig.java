@@ -114,11 +114,9 @@ public record HassiumConfig(
             boolean enabled,
             boolean enabledOnLan,
             int compressionLevel,
-            // === 上下文压缩 ===
-            boolean useContextCompression,
             // === 包聚合（应用层，MixinConnection 拦截）===
             boolean enablePacketAggregation,
-            int aggregationMinBatchSize,
+            /** 冲刷兜底：超过该时长未冲刷则强制冲一次（tick 尾冲刷为主，本值仅应对主线程卡顿）。 */
             long aggregationMaxWaitTimeMs,
             int aggregationMaxSize,
             // === 黑名单 ===
@@ -143,10 +141,8 @@ public record HassiumConfig(
                 true,              // enabled（专用服网络通道总开关）
                 false,             // enabledOnLan（集成服开局域网后对远程玩家的网络面，默认关）
                 3,                 // compressionLevel
-                true,              // useContextCompression
                 true,              // enablePacketAggregation
-                4,                 // aggregationMinBatchSize
-                50,                // aggregationMaxWaitTimeMs
+                50,                // aggregationMaxWaitTimeMs（冲刷兜底）
                 256 * 1024,        // aggregationMaxSize
                 DEFAULT_COMPRESSION_BLACKLIST,
                 5                  // maxChunksPerTick（Pull FULL/DELTA 完成配额，满 tick ≈ 100/s）

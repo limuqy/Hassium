@@ -51,7 +51,6 @@ class ConfigSchemaTest {
         }
         // 聚合键族（保留）默认值抽查
         assertEquals(true, values.get(ConfigSchema.MASTER_PACKET_AGGREGATION));
-        assertEquals(4, values.get(ConfigSchema.MASTER_AGGREGATION_MIN_BATCH));
         assertEquals(50L, values.get(ConfigSchema.MASTER_AGGREGATION_MAX_WAIT));
         assertEquals(256 * 1024, values.get(ConfigSchema.MASTER_AGGREGATION_MAX_SIZE));
     }

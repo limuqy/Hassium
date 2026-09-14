@@ -81,10 +81,8 @@
 | `master.enabled` | `true` | 专用服网络通道总开关（登录期握手/聚合的门） |
 | `master.enabledOnLan` | `false` | 集成服已开局域网时，对**远程**玩家启用 Hassium 网络面；主机本机 memory 连接恒原版；`storage.*` 仍仅专用服 |
 | `master.compressionLevel` | `3` | 自有通道 ZSTD 压缩等级 |
-| `master.useContextCompression` | `true` | 上下文压缩（字典 ZSTD） |
 | `master.enablePacketAggregation` | `true` | 包聚合 |
-| `master.aggregationMinBatchSize` | `4` | 聚合最小批量 |
-| `master.aggregationMaxWaitTimeMs` | `50` | 聚合最大等待时间（ms；ACK 超时 5s 自动降级直发） |
+| `master.aggregationMaxWaitTimeMs` | `50` | 冲刷兜底（ms；tick 尾冲刷为主，超过该时长未冲刷则强制冲一次；ACK 超时 5s 自动降级直发） |
 | `master.aggregationMaxSize` | `262144` | 聚合最大大小（字节） |
 | `master.compressionBlacklist` | 控制面键集 | 压缩/聚合黑名单（控制面不进聚合缓冲） |
 | `master.maxChunksPerTick` | `5` | 每玩家每 tick 完成的 Pull FULL/DELTA 上限（满 tick ≈ 本值×20/s；UNCHANGED 另额 32） |

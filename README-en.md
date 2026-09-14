@@ -103,7 +103,6 @@ Files: `config/hassium/hassium-client.toml`, `config/hassium/hassium-server.toml
 | `master.aggregationMaxWaitTimeMs` | `50` | Aggregation max wait (ms; ACK timeout 5s auto-downgrades to direct send) |
 | `master.aggregationMaxSize` | `262144` | Aggregation max size (bytes) |
 | `master.compressionLevel` | `3` | Private-channel ZSTD level |
-| `master.useContextCompression` | `true` | Context compression (dictionary ZSTD) |
 | `master.compressionBlacklist` | control-plane keys | Compression/aggregation blacklist (control plane bypasses the aggregation buffer) |
 | `compat.requireClientMod` | `false` | Allow mod-less clients (true = kick when login handshake fails) |
 | `compat.autoDowngradeOnError` | `true` | Auto-downgrade on error |

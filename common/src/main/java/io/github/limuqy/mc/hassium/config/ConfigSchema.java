@@ -62,14 +62,11 @@ public final class ConfigSchema {
             "Enable Hassium network features for remote LAN players on an Open-to-LAN host (handshake/aggregation/push/lightStrip). Default off; host local memory connection stays vanilla; storage remains dedicated-only");
     public static final ConfigKey<Integer> MASTER_COMPRESSION_LEVEL = integer("master.compressionLevel", ConfigScope.SERVER, Domain.MASTER_CORE, 3, 1, 22,
             "自有通道 ZSTD 压缩等级", "Private-channel ZSTD level");
-    public static final ConfigKey<Boolean> MASTER_USE_CONTEXT_COMPRESSION = bool("master.useContextCompression", ConfigScope.SERVER, Domain.MASTER_CORE, true,
-            "是否使用上下文压缩", "Use context compression");
     public static final ConfigKey<Boolean> MASTER_PACKET_AGGREGATION = bool("master.enablePacketAggregation", ConfigScope.SERVER, Domain.MASTER_CORE, true,
             "是否启用包聚合", "Enable packet aggregation");
-    public static final ConfigKey<Integer> MASTER_AGGREGATION_MIN_BATCH = integer("master.aggregationMinBatchSize", ConfigScope.SERVER, Domain.MASTER_CORE, 4, 1, 256,
-            "聚合最小批量", "Aggregation minimum batch size");
     public static final ConfigKey<Long> MASTER_AGGREGATION_MAX_WAIT = longValue("master.aggregationMaxWaitTimeMs", ConfigScope.SERVER, Domain.MASTER_CORE, 50L, 1L, 5000L,
-            "聚合最大等待时间（ms）", "Aggregation max wait time (ms)");
+            "冲刷兜底：超过该时长（ms）未冲刷则强制冲一次（tick 尾冲刷为主，应对主线程卡顿）",
+            "Flush watchdog: force flush if none happened for this many ms (tick-end flush is primary; covers main-thread stalls)");
     public static final ConfigKey<Integer> MASTER_AGGREGATION_MAX_SIZE = integer("master.aggregationMaxSize", ConfigScope.SERVER, Domain.MASTER_CORE, 256 * 1024, 1024, 8 * 1024 * 1024,
             "聚合最大大小", "Aggregation max size (bytes)");
     public static final ConfigKey<List<String>> MASTER_COMPRESSION_BLACKLIST = stringList("master.compressionBlacklist", ConfigScope.SERVER, Domain.MASTER_CORE,

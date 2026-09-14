@@ -23,10 +23,10 @@ Hassium pairs a client and server mod to optimize Minecraft along **efficient co
 
 - **Goal**: shorter download waits and lower bandwidth when joining or exploring
 - **How**:
-  - Dictionary ZSTD inside aggregated packets (context compression, `master.useContextCompression`)
+  - Dictionary ZSTD inside aggregated packets (always compressed above threshold)
   - Chunk-push native compression (independent of the vanilla compression layer)
   - Aggregation + compact headers improve ratio and packet efficiency
-- **Config**: `master.enabled`, `master.compressionLevel`, `master.useContextCompression`, `master.enablePacketAggregation`
+- **Config**: `master.enabled`, `master.compressionLevel`, `master.enablePacketAggregation`
 - **Boundary**: never touches the vanilla compression layer (pipeline-level global packet compression retired); no cross-mod pipeline conflicts
 
 ---

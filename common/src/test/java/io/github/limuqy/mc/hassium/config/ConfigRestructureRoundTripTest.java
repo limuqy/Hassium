@@ -49,13 +49,13 @@ class ConfigRestructureRoundTripTest {
         Map<String, ConfigEntry<?>> byPath = ConfigSchema.entries().stream()
                 .collect(Collectors.toMap(e -> e.scope() + "/" + e.path(), Function.identity()));
 
-        assertEquals(45, ConfigSchema.entries().size(), "schema 留存键数");
-        assertEquals(45, values.asMap().size(), "defaults 键数");
+        assertEquals(43, ConfigSchema.entries().size(), "schema 留存键数");
+        assertEquals(43, values.asMap().size(), "defaults 键数");
 
         Map<String, Long> prefixCounts = ConfigSchema.entries().stream()
                 .collect(Collectors.groupingBy(e -> e.path().substring(0, e.path().indexOf('.') + 1),
                         Collectors.counting()));
-        assertEquals(Map.of("chunk.", 16L, "master.", 10L, "debug.", 15L,
+        assertEquals(Map.of("chunk.", 16L, "master.", 8L, "debug.", 15L,
                 "storage.", 2L, "compat.", 2L), prefixCounts);
 
         // 双端同名键 chunk.seedGenEnabled 各一
@@ -107,7 +107,7 @@ class ConfigRestructureRoundTripTest {
     @Test
     void serverTomlRoundTripsNewKeys(@TempDir Path root) throws IOException {
         HassiumConfig.MasterCoreConfig master = new HassiumConfig.MasterCoreConfig(
-                true, true, 9, false, false, 8, 50L, 131072,
+                true, true, 9, false, 50L, 131072,
                 Set.of("MAIN_CHANNEL"), 7);
         HassiumConfig.StorageConfig storage = new HassiumConfig.StorageConfig(true, 9);
         // server toml 只写 chunk.lightStrip/chunk.seedGenEnabled 两键，其余键读回默认 → 仅改这两键
@@ -242,9 +242,8 @@ class ConfigRestructureRoundTripTest {
         // chunk.seedGenEnabled 双端默认 false（network.seedGen.enabled → chunk.seedGenEnabled, false）
         assertEquals(false, values.get(ConfigSchema.CLIENT_CHUNK_SEED_GEN_ENABLED));
         assertEquals(false, values.get(ConfigSchema.SERVER_CHUNK_SEED_GEN_ENABLED));
-        // master 聚合键族默认（enablePacketAggregation=true / minBatch=4 / maxWait=20ms / maxSize=256KiB / compactHeader=true）
+        // master 聚合键族默认（enablePacketAggregation=true / maxWait=50ms / maxSize=256KiB）
         assertEquals(true, values.get(ConfigSchema.MASTER_PACKET_AGGREGATION));
-        assertEquals(4, values.get(ConfigSchema.MASTER_AGGREGATION_MIN_BATCH));
         assertEquals(50L, values.get(ConfigSchema.MASTER_AGGREGATION_MAX_WAIT));
         assertEquals(256 * 1024, values.get(ConfigSchema.MASTER_AGGREGATION_MAX_SIZE));
         // master.maxChunksPerTick 默认 5

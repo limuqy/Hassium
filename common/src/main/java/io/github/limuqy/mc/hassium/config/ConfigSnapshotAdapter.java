@@ -77,10 +77,8 @@ public final class ConfigSnapshotAdapter {
                 .with(ConfigSchema.MASTER_ENABLED, master.enabled())
                 .with(ConfigSchema.MASTER_ENABLED_ON_LAN, master.enabledOnLan())
                 .with(ConfigSchema.MASTER_COMPRESSION_LEVEL, master.compressionLevel())
-                .with(ConfigSchema.MASTER_USE_CONTEXT_COMPRESSION, master.useContextCompression())
                 .with(ConfigSchema.MASTER_PACKET_AGGREGATION, master.enablePacketAggregation())
-                .with(ConfigSchema.MASTER_AGGREGATION_MIN_BATCH, master.aggregationMinBatchSize())
-                .with(ConfigSchema.MASTER_AGGREGATION_MAX_WAIT, (long) master.aggregationMaxWaitTimeMs())
+                .with(ConfigSchema.MASTER_AGGREGATION_MAX_WAIT, master.aggregationMaxWaitTimeMs())
                 .with(ConfigSchema.MASTER_AGGREGATION_MAX_SIZE, master.aggregationMaxSize())
                 .with(ConfigSchema.MASTER_COMPRESSION_BLACKLIST, new ArrayList<>(master.compressionBlacklist()))
                 .with(ConfigSchema.MASTER_MAX_CHUNKS_PER_TICK, master.maxChunksPerTick())
@@ -120,8 +118,8 @@ public final class ConfigSnapshotAdapter {
         HassiumConfig.MasterCoreConfig master = new HassiumConfig.MasterCoreConfig(
                 values.get(ConfigSchema.MASTER_ENABLED), values.get(ConfigSchema.MASTER_ENABLED_ON_LAN),
                 values.get(ConfigSchema.MASTER_COMPRESSION_LEVEL),
-                values.get(ConfigSchema.MASTER_USE_CONTEXT_COMPRESSION), values.get(ConfigSchema.MASTER_PACKET_AGGREGATION),
-                values.get(ConfigSchema.MASTER_AGGREGATION_MIN_BATCH), values.get(ConfigSchema.MASTER_AGGREGATION_MAX_WAIT),
+                values.get(ConfigSchema.MASTER_PACKET_AGGREGATION),
+                values.get(ConfigSchema.MASTER_AGGREGATION_MAX_WAIT),
                 values.get(ConfigSchema.MASTER_AGGREGATION_MAX_SIZE),
                 SetCopy.copy(values.get(ConfigSchema.MASTER_COMPRESSION_BLACKLIST)),
                 values.get(ConfigSchema.MASTER_MAX_CHUNKS_PER_TICK));

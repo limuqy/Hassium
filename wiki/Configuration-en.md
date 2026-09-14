@@ -61,10 +61,8 @@ In-game editors:
 | `master.enabled` | `true` | Dedicated-server network-channel master switch (gate for login handshake/aggregation) |
 | `master.enabledOnLan` | `false` | After Open to LAN on an integrated server, enable Hassium network features for **remote** players; host local player stays vanilla; `storage` remains dedicated-only |
 | `master.compressionLevel` | `3` | Private-channel ZSTD level (speed-first) |
-| `master.useContextCompression` | `true` | Context compression (dictionary ZSTD) |
 | `master.enablePacketAggregation` | `true` | Packet aggregation; turn off if it breaks third-party channels |
-| `master.aggregationMinBatchSize` | `4` | Aggregation minimum batch size |
-| `master.aggregationMaxWaitTimeMs` | `50` | Aggregation max wait (ms; ACK timeout 5s auto-downgrades to direct send) |
+| `master.aggregationMaxWaitTimeMs` | `50` | Flush watchdog (ms; tick-end flush is primary; force flush if none happened for this long; ACK timeout 5s auto-downgrades to direct send) |
 | `master.aggregationMaxSize` | `262144` | Aggregation max size (bytes) |
 | `master.compressionBlacklist` | control-plane keys | Packet IDs excluded from compression/aggregation (defaults cover control plane: dictionary / index / light delta / aggregation itself, etc.) |
 | `master.maxChunksPerTick` | `5` | Per-player per-tick Pull FULL/DELTA completion cap (send rate = value × tick pace, ≈ 5×20 = 100/s at full tick; UNCHANGED is a separate cap of 32; degrades naturally on laggy ticks) |

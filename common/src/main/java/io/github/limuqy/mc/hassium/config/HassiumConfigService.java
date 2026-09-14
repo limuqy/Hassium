@@ -286,16 +286,8 @@ public class HassiumConfigService {
         return !config.master().compressionBlacklist().contains(packetType);
     }
 
-    public boolean isUseContextCompression() {
-        return config.master().useContextCompression();
-    }
-
     public boolean isPacketAggregationEnabled() {
         return config.master().enablePacketAggregation();
-    }
-
-    public int getAggregationMinBatchSize() {
-        return config.master().aggregationMinBatchSize();
     }
 
     public long getAggregationMaxWaitTimeMs() {

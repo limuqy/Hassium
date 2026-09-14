@@ -73,9 +73,9 @@ public class HassiumAggregationPacket {
             byte[] rawBytes = new byte[rawSize];
             rawBuf.readBytes(rawBytes);
 
-            // 检查是否需要压缩
+            // 聚合包始终压缩（阈值）；不压缩需求走「关聚合 + 调 network-compression-threshold」
             HassiumConfigService config = HassiumConfigService.getInstance();
-            boolean compress = rawSize >= COMPRESSION_THRESHOLD && config.isUseContextCompression();
+            boolean compress = rawSize >= COMPRESSION_THRESHOLD;
 
             if (compress) {
                 // 使用 ZSTD 压缩（支持聚合包字典）
