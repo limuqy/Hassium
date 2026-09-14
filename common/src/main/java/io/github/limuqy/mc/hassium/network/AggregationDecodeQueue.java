@@ -4,6 +4,7 @@ import io.github.limuqy.mc.hassium.Constants;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import net.minecraft.network.Connection;
 
 /**
@@ -30,7 +31,12 @@ public final class AggregationDecodeQueue {
         }
         byte[] copy = new byte[data.length];
         System.arraycopy(data, 0, copy, 0, data.length);
+        long gen = state.epoch.get();
         state.queue.offer(copy);
+        if (gen != state.epoch.get()) {
+            // 竞态①/②：discard 与本次 enqueue 交错——连接已断。尽力移除（失败无害——worker 已遇 POISON 退出，state 将被 GC）
+            state.queue.remove(copy);
+        }
     }
 
     /** Loader fallback：从当前客户端连接入队（Mixin 已拦截时不会走到这里）。 */
@@ -55,6 +61,7 @@ public final class AggregationDecodeQueue {
             return;
         }
         state.alive.set(false);
+        state.epoch.incrementAndGet();
         state.queue.clear();
         state.queue.offer(POISON);
     }
@@ -64,6 +71,8 @@ public final class AggregationDecodeQueue {
         private final LinkedBlockingQueue<byte[]> queue = new LinkedBlockingQueue<>();
         private final AtomicBoolean alive = new AtomicBoolean(true);
         private final AtomicBoolean started = new AtomicBoolean(false);
+        /** 代际：discard 时递增；enqueue 用它在 offer 前后识别「复活死 ConnState」与 POISON 错序（review §2.8）。 */
+        private final AtomicLong epoch = new AtomicLong();
 
         private ConnState(Connection connection) {
             this.connection = connection;
@@ -88,7 +97,8 @@ public final class AggregationDecodeQueue {
                         Thread.currentThread().interrupt();
                         return;
                     }
-                    if (data == POISON || data.length == 0) {
+                    if (data == POISON || data.length == 0 || !alive.get()) {
+                        // 竞态③：死连接排空——discard 后残留帧直接丢弃退出，不分发到已断连接
                         return;
                     }
                     try {
