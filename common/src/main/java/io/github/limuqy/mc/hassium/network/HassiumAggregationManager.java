@@ -36,7 +36,22 @@ public class HassiumAggregationManager {
     private static final int FLUSH_PERIOD_MS = 10;
     private static int maxAggregationSize = 256 * 1024;
 
-    private static final ConcurrentHashMap<Connection, List<AggregatedSubPacket>> PACKET_BUFFER = new ConcurrentHashMap<>();
+    /** 2.0.X 兼容面：聚合 PENDING 缓冲硬上限（字节）= 8 MiB。拍板值（约 2× 配置上限量级）。超限语义=丢弃该连接整个缓冲 + 降级直发 + warn（与 5s ACK 超时降级一致，非直发）。2.0.X 全小版本冻结，不可随配置调整。 */
+    private static final long MAX_PENDING_BUFFER_BYTES = 8L * 1024 * 1024;
+    /** 2.0.X 兼容面：聚合缓冲硬上限（条数），防小包洪泛时每包对象开销失控。 */
+    private static final int MAX_PENDING_BUFFER_ENTRIES = 65536;
+
+    /**
+     * 单连接聚合缓冲：O(1) 运行计数（takeOver 是 Netty 热路径，逐包累计避免 O(n²)）。
+     * {@code bytes}/{@code count} 与 {@code packets} 在同一把锁内维护，二者恒一致。
+     */
+    private static final class ConnBuffer {
+        final List<AggregatedSubPacket> packets = new ArrayList<>();
+        long bytes;
+        int count;
+    }
+
+    private static final ConcurrentHashMap<Connection, ConnBuffer> PACKET_BUFFER = new ConcurrentHashMap<>();
     private static final ConcurrentHashMap<Connection, Integer> FLUSH_WAIT = new ConcurrentHashMap<>();
     private static final ScheduledExecutorService TIMER = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread t = new Thread(r, "Hassium-Flush-thread");
@@ -128,10 +143,22 @@ public class HassiumAggregationManager {
             }
 
             AggregatedSubPacket subPacket = new AggregatedSubPacket(type, data);
-            List<AggregatedSubPacket> list = PACKET_BUFFER.computeIfAbsent(connection, k -> new ArrayList<>());
-            synchronized (list) {
-                list.add(subPacket);
-                Constants.LOG.debug("Added packet to aggregation buffer: {} (total: {})", type, list.size());
+            ConnBuffer buffer = PACKET_BUFFER.computeIfAbsent(connection, k -> new ConnBuffer());
+            synchronized (buffer.packets) {
+                if (buffer.bytes + data.length > MAX_PENDING_BUFFER_BYTES || buffer.count >= MAX_PENDING_BUFFER_ENTRIES) {
+                    // 2.0.X 兼容面语义：超限丢弃整个缓冲 + 关闭该连接聚合（后续包直发）+ warn
+                    Constants.LOG.warn("Aggregation buffer overflow for {}, dropping {} packets/{} bytes; degrading to direct send",
+                            sanitizeLog(connection.getRemoteAddress()), buffer.count, buffer.bytes);
+                    buffer.packets.clear();
+                    buffer.bytes = 0;
+                    buffer.count = 0;
+                    HassiumConnectionRegistry.markDisabled(connection);
+                    return;
+                }
+                buffer.packets.add(subPacket);
+                buffer.bytes += data.length;
+                buffer.count++;
+                Constants.LOG.debug("Added packet to aggregation buffer: {} (total: {})", type, buffer.count);
             }
         } catch (Exception e) {
             Constants.LOG.error("Failed to serialize packet for aggregation: {}", type, e);
@@ -149,14 +176,14 @@ public class HassiumAggregationManager {
 
         for (var entry : PACKET_BUFFER.entrySet()) {
             Connection connection = entry.getKey();
-            List<AggregatedSubPacket> packets = entry.getValue();
+            ConnBuffer buffer = entry.getValue();
 
-            if (packets == null) {
+            if (buffer == null) {
                 continue;
             }
 
-            synchronized (packets) {
-                if (packets.isEmpty()) {
+            synchronized (buffer.packets) {
+                if (buffer.packets.isEmpty()) {
                     continue;
                 }
 
@@ -167,18 +194,18 @@ public class HassiumAggregationManager {
                 }
 
                 // 检查是否达到最小批量
-                if (packets.size() < minBatchPackets) {
+                if (buffer.packets.size() < minBatchPackets) {
                     int waited = FLUSH_WAIT.getOrDefault(connection, 0);
                     if (waited < maxWaitCycles) {
                         FLUSH_WAIT.put(connection, waited + 1);
-                        Constants.LOG.debug("Waiting for more packets: {} (waited: {}/{})", packets.size(), waited, maxWaitCycles);
+                        Constants.LOG.debug("Waiting for more packets: {} (waited: {}/{})", buffer.packets.size(), waited, maxWaitCycles);
                         continue;
                     }
                 }
 
                 FLUSH_WAIT.remove(connection);
-                Constants.LOG.debug("Flushing aggregation buffer: {} packets", packets.size());
-                flushInternal(connection, packets);
+                Constants.LOG.debug("Flushing aggregation buffer: {} packets", buffer.packets.size());
+                flushInternal(connection, buffer);
             }
         }
     }
@@ -201,10 +228,10 @@ public class HassiumAggregationManager {
      * 丢弃连接的缓冲区
      */
     public static void discardConnection(Connection connection) {
-        List<AggregatedSubPacket> packets = PACKET_BUFFER.remove(connection);
-        if (packets != null) {
-            synchronized (packets) {
-                packets.clear();
+        ConnBuffer buffer = PACKET_BUFFER.remove(connection);
+        if (buffer != null) {
+            synchronized (buffer.packets) {
+                buffer.packets.clear();
             }
         }
         FLUSH_WAIT.remove(connection);
@@ -213,35 +240,39 @@ public class HassiumAggregationManager {
     private static void flushConnectionInternal(Connection connection) {
         PACKET_BUFFER.keySet().removeIf(c -> !c.isConnected());
         FLUSH_WAIT.remove(connection);
-        List<AggregatedSubPacket> packets = PACKET_BUFFER.get(connection);
-        if (packets == null) return;
-        synchronized (packets) {
-            flushInternal(connection, packets);
+        ConnBuffer buffer = PACKET_BUFFER.get(connection);
+        if (buffer == null) return;
+        synchronized (buffer.packets) {
+            flushInternal(connection, buffer);
         }
     }
 
-    private static void flushInternal(Connection connection, List<AggregatedSubPacket> packets) {
+    private static void flushInternal(Connection connection, ConnBuffer buffer) {
         try {
-            if (packets == null || packets.isEmpty()) {
+            if (buffer == null || buffer.packets.isEmpty()) {
                 return;
             }
             if (!connection.isConnected()) {
-                packets.clear();
+                buffer.packets.clear();
+                buffer.bytes = 0;
+                buffer.count = 0;
                 return;
             }
 
             // review-fix: T2-76: sender 未就绪（初始化顺序异常窗口）时保留缓冲，下轮重试不丢数据
             if (sender == null) {
-                Constants.LOG.warn("AggregationSender not set, deferring flush of {} packets", packets.size());
+                Constants.LOG.warn("AggregationSender not set, deferring flush of {} packets", buffer.packets.size());
                 return;
             }
 
             // 复制并清空缓冲区
-            List<AggregatedSubPacket> sendPackets = new ArrayList<>(packets);
-            packets.clear();
+            List<AggregatedSubPacket> sendPackets = new ArrayList<>(buffer.packets);
+            buffer.packets.clear();
+            buffer.bytes = 0;
+            buffer.count = 0;
 
             // 检查聚合大小限制，超过则分批发送
-            int totalSize = 0;
+            long totalSize = 0;
             for (AggregatedSubPacket sp : sendPackets) {
                 totalSize += sp.getData().length;
             }
@@ -249,7 +280,7 @@ public class HassiumAggregationManager {
                 Constants.LOG.warn("Aggregation buffer exceeds max size ({} > {} bytes), splitting",
                         totalSize, maxAggregationSize);
                 List<AggregatedSubPacket> batch = new ArrayList<>();
-                int batchSize = 0;
+                long batchSize = 0;
                 for (AggregatedSubPacket sp : sendPackets) {
                     if (batchSize + sp.getData().length > maxAggregationSize && !batch.isEmpty()) {
                         flushBatch(connection, batch);
@@ -286,9 +317,13 @@ public class HassiumAggregationManager {
                 // review-fix: T2-76: sender 缺失（初始化顺序异常窗口）时回队兜底，不丢数据
                 Constants.LOG.warn("AggregationSender not set, re-queueing {} packets", batch.size());
                 buf.release();
-                List<AggregatedSubPacket> buffer = PACKET_BUFFER.computeIfAbsent(connection, k -> new ArrayList<>());
-                synchronized (buffer) {
-                    buffer.addAll(batch);
+                ConnBuffer buffer = PACKET_BUFFER.computeIfAbsent(connection, k -> new ConnBuffer());
+                synchronized (buffer.packets) {
+                    buffer.packets.addAll(batch);
+                    for (AggregatedSubPacket sp : batch) {
+                        buffer.bytes += sp.getData().length;
+                    }
+                    buffer.count += batch.size();
                 }
             }
 
