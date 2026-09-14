@@ -46,7 +46,7 @@ public final class FabricPayloadRegistry {
     // ===== C2S payload types (client -> server) =====
 
     public static final CustomPacketPayload.Type<RawPayload> AGGREGATION_READY_C2S_TYPE =
-            type("aggregation_ready_c2s");
+            type(HassiumChannels.AGGREGATION_READY_C2S.path());
     public static final CustomPacketPayload.Type<RawPayload> SHADOW_PULL_REQUEST_C2S_TYPE =
             type(HassiumChannels.SHADOW_PULL_REQUEST_C2S.path());
 
