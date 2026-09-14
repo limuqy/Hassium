@@ -6,7 +6,8 @@ import net.darkhax.curseforgegradle.TaskPublishCurseForge
  * 项目 ID：根 gradle.properties 的 curseforge_project_id。
  *
  * 各版本严格按 builds_for 各自 loader 单标上传。1.20.1 不构建 neoforge（NeoForge 47.x
- * 原生兼容 Forge mod，NeoForge 用户直接使用 forge 子项目的 Forge 文件）。
+ * 原生兼容 Forge mod，NeoForge 用户直接使用 forge 子项目的 Forge 文件）；
+ * 因此 1.20.1 的 forge 产物上传时双标 Forge + NeoForge，保证 CF 按 NeoForge 筛也能命中。
  */
 
 def cfLoaderByProject = [
@@ -61,8 +62,16 @@ afterEvaluate {
         mainFile.addEnvironment('Client', 'Server')
         mainFile.addJavaVersion("Java ${javaVer}")
 
-        mainFile.addModLoader(cfLoader)
-        mainFile.displayName = "Hassium ${mod_version} — ${mcVer} ${cfLoader}"
+        // 1.20.1：forge 产物 = Forge 二进制，NeoForge 47.x 原生加载 Forge mod。
+        // 同 file 双标（CF 页面可多选 loader），NeoForge 用户也能筛到该文件。
+        def dualForgeOnNeo = (project.name == 'forge' && mcVer == '1.20.1')
+        if (dualForgeOnNeo) {
+            mainFile.addModLoader('Forge', 'NeoForge')
+            mainFile.displayName = "Hassium ${mod_version} — ${mcVer} Forge/NeoForge"
+        } else {
+            mainFile.addModLoader(cfLoader)
+            mainFile.displayName = "Hassium ${mod_version} — ${mcVer} ${cfLoader}"
+        }
 
         if (project.name == 'fabric') {
             mainFile.addRequirement('fabric-api')
