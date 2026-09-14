@@ -1,6 +1,5 @@
 package io.github.limuqy.mc.hassium.network;
 
-import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.compat.HassiumChannels;
 import io.github.limuqy.mc.hassium.compat.ResourceLocationCompat;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
@@ -68,14 +67,14 @@ ResourceLocation
 #else
 Identifier
 #endif
-AGGREGATION_S2C = ResourceLocationCompat.create(Constants.MOD_ID, "aggregation");
+AGGREGATION_S2C = ResourceLocationCompat.vanilla(HassiumChannels.AGGREGATION_S2C);
     public static final
 #if MC_VER < MC_1_21_11
 ResourceLocation
 #else
 Identifier
 #endif
-DICTIONARY_SYNC_S2C = ResourceLocationCompat.vanilla(HassiumChannels.DICTIONARY_SYNC);
+DICTIONARY_SYNC_S2C = ResourceLocationCompat.vanilla(HassiumChannels.DICTIONARY_SYNC_S2C);
     public static final
 #if MC_VER < MC_1_21_11
 ResourceLocation

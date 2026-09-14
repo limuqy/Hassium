@@ -75,11 +75,11 @@ public class NeoForgeNetworkManager implements INetworkManagerService {
     public static final CustomPacketPayload.Type<ByteArrayPayload> CHUNK_AUTHORITY_TYPE =
             payloadType(HassiumChannels.CHUNK_AUTHORITY_S2C);
     public static final CustomPacketPayload.Type<ByteArrayPayload> DICTIONARY_SYNC_TYPE =
-            payloadType(HassiumChannels.DICTIONARY_SYNC);
+            payloadType(HassiumChannels.DICTIONARY_SYNC_S2C);
     public static final CustomPacketPayload.Type<ByteArrayPayload> INDEX_SYNC_TYPE =
             payloadType(HassiumChannels.INDEX_SYNC_S2C);
     public static final CustomPacketPayload.Type<ByteArrayPayload> AGGREGATION_TYPE =
-            new CustomPacketPayload.Type<>(ResourceLocationCompat.create(Constants.MOD_ID, "aggregation"));
+            new CustomPacketPayload.Type<>(ResourceLocationCompat.vanilla(HassiumChannels.AGGREGATION_S2C));
 
     private static CustomPacketPayload.Type<ByteArrayPayload> payloadType(PacketId id) {
         return new CustomPacketPayload.Type<>(ResourceLocationCompat.vanilla(id));

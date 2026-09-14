@@ -1,6 +1,7 @@
 package io.github.limuqy.mc.hassium.network;
 
 import io.github.limuqy.mc.hassium.Constants;
+import io.github.limuqy.mc.hassium.compat.HassiumChannels;
 import io.github.limuqy.mc.hassium.compat.ResourceLocationCompat;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.network.handshake.LoginHandshake;
@@ -55,7 +56,7 @@ public class ForgeNetworkManager implements INetworkManagerService {
 
 #if MC_VER < MC_1_21_1
     public static final SimpleChannel CHANNEL = NetworkRegistry.newSimpleChannel(
-            ResourceLocationCompat.create(Constants.MOD_ID, "main"),
+            ResourceLocationCompat.vanilla(HassiumChannels.MAIN_CHANNEL),
             () -> PROTOCOL_VERSION,
             PROTOCOL_VERSION::equals,
             PROTOCOL_VERSION::equals
@@ -217,7 +218,7 @@ public class ForgeNetworkManager implements INetworkManagerService {
         }
 
         SimpleChannel channel = ChannelBuilder
-                .named(ResourceLocationCompat.create(Constants.MOD_ID, "main"))
+                .named(ResourceLocationCompat.vanilla(HassiumChannels.MAIN_CHANNEL))
                 .networkProtocolVersion(PROTOCOL_VERSION_INT)
                 .acceptedVersions(Channel.VersionTest.exact(PROTOCOL_VERSION_INT))
                 .simpleChannel();

@@ -2,6 +2,7 @@ package io.github.limuqy.mc.hassium.network;
 
 #if MC_VER >= MC_1_21_1
 import io.github.limuqy.mc.hassium.Constants;
+import io.github.limuqy.mc.hassium.compat.HassiumChannels;
 import io.github.limuqy.mc.hassium.compat.ResourceLocationCompat;
 import io.github.limuqy.mc.hassium.network.handshake.LoginCaps;
 import net.minecraft.network.FriendlyByteBuf;
@@ -27,7 +28,7 @@ public record PreHandshakePayload(
 ) implements CustomPacketPayload {
 
     public static final Type<PreHandshakePayload> TYPE =
-            new Type<>(ResourceLocationCompat.create(Constants.MOD_ID, "prehandshake_c2s"));
+            new Type<>(ResourceLocationCompat.vanilla(HassiumChannels.PRE_HANDSHAKE_C2S));
 
     public static final StreamCodec<FriendlyByteBuf, PreHandshakePayload> STREAM_CODEC =
             StreamCodec.of(PreHandshakePayload::encode, PreHandshakePayload::decode);

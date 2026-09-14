@@ -1,7 +1,7 @@
 package io.github.limuqy.mc.hassium.network;
 
 #if MC_VER >= MC_1_21_1
-import io.github.limuqy.mc.hassium.Constants;
+import io.github.limuqy.mc.hassium.compat.HassiumChannels;
 import io.github.limuqy.mc.hassium.compat.ResourceLocationCompat;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.network.codec.StreamCodec;
@@ -26,7 +26,7 @@ public record PreHandshakeHelloPayload() implements CustomPacketPayload {
     public static final PreHandshakeHelloPayload INSTANCE = new PreHandshakeHelloPayload();
 
     public static final Type<PreHandshakeHelloPayload> TYPE =
-            new Type<>(ResourceLocationCompat.create(Constants.MOD_ID, "prehandshake_hello_s2c"));
+            new Type<>(ResourceLocationCompat.vanilla(HassiumChannels.PRE_HANDSHAKE_HELLO_S2C));
 
     public static final StreamCodec<FriendlyByteBuf, PreHandshakeHelloPayload> STREAM_CODEC =
             StreamCodec.of((buf, payload) -> {

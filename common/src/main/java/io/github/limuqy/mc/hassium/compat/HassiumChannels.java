@@ -24,7 +24,7 @@ public final class HassiumChannels {
 
     public static final PacketId AGGREGATION_READY_C2S = new PacketId(Constants.MOD_ID, "aggregation_ready_c2s");
 
-    public static final PacketId DICTIONARY_SYNC = new PacketId(Constants.MOD_ID, "dictionary_sync");
+    public static final PacketId DICTIONARY_SYNC_S2C = new PacketId(Constants.MOD_ID, "dictionary_sync");
 
     public static final PacketId LIGHT_DELTA_S2C = new PacketId(Constants.MOD_ID, "light_delta_s2c");
 
@@ -33,4 +33,16 @@ public final class HassiumChannels {
 
     /** 包索引同步（紧凑包头两级 VarInt 命名空间索引；S2C）。 */
     public static final PacketId INDEX_SYNC_S2C = new PacketId(Constants.MOD_ID, "index_sync_s2c");
+
+    /** 预握手 hello（S2C，配置阶段触发载体；1.21.1+）。 */
+    public static final PacketId PRE_HANDSHAKE_HELLO_S2C = new PacketId(Constants.MOD_ID, "prehandshake_hello_s2c");
+
+    /** 预握手能力声明（C2S，配置阶段；1.21.1+）。 */
+    public static final PacketId PRE_HANDSHAKE_C2S = new PacketId(Constants.MOD_ID, "prehandshake_c2s");
+
+    /** 聚合包（S2C）。 */
+    public static final PacketId AGGREGATION_S2C = new PacketId(Constants.MOD_ID, "aggregation");
+
+    /** Forge/NeoForge SimpleChannel 共用通道。 */
+    public static final PacketId MAIN_CHANNEL = new PacketId(Constants.MOD_ID, "main");
 }

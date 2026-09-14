@@ -2,6 +2,7 @@
 package io.github.limuqy.mc.hassium.network;
 
 import io.github.limuqy.mc.hassium.Constants;
+import io.github.limuqy.mc.hassium.compat.HassiumChannels;
 import io.github.limuqy.mc.hassium.compat.ResourceLocationCompat;
 import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
 import net.minecraft.network.FriendlyByteBuf;
@@ -26,28 +27,28 @@ public final class FabricPayloadRegistry {
     // ===== S2C payload types (server -> client) =====
 
     public static final CustomPacketPayload.Type<RawPayload> DICTIONARY_SYNC_S2C_TYPE =
-            type("dictionary_sync");
+            type(HassiumChannels.DICTIONARY_SYNC_S2C.path());
     public static final CustomPacketPayload.Type<RawPayload> INDEX_SYNC_S2C_TYPE =
-            type("index_sync_s2c");
+            type(HassiumChannels.INDEX_SYNC_S2C.path());
     public static final CustomPacketPayload.Type<RawPayload> AGGREGATION_S2C_TYPE =
-            type("aggregation");
+            type(HassiumChannels.AGGREGATION_S2C.path());
     public static final CustomPacketPayload.Type<RawPayload> LIGHT_DELTA_S2C_TYPE =
-            type("light_delta_s2c");
+            type(HassiumChannels.LIGHT_DELTA_S2C.path());
     public static final CustomPacketPayload.Type<RawPayload> SHADOW_PULL_RESPONSE_S2C_TYPE =
-            type("shadow_pull_response_s2c");
+            type(HassiumChannels.SHADOW_PULL_RESPONSE_S2C.path());
     /** 权威边沿 enter 通知（服务端声明权威集合 + 权威 chunkHash）。 */
     public static final CustomPacketPayload.Type<RawPayload> CHUNK_AUTHORITY_S2C_TYPE =
-            type("chunk_authority_s2c");
+            type(HassiumChannels.CHUNK_AUTHORITY_S2C.path());
     /** Play 期激活（登录协商结果 + SeedGen 种子；body = common LoginHandshake.PlayInitPayload）。 */
     public static final CustomPacketPayload.Type<RawPayload> PLAY_INIT_S2C_TYPE =
-            type("play_init_s2c");
+            type(HassiumChannels.PLAY_INIT_S2C.path());
 
     // ===== C2S payload types (client -> server) =====
 
     public static final CustomPacketPayload.Type<RawPayload> AGGREGATION_READY_C2S_TYPE =
             type("aggregation_ready_c2s");
     public static final CustomPacketPayload.Type<RawPayload> SHADOW_PULL_REQUEST_C2S_TYPE =
-            type("shadow_pull_request_c2s");
+            type(HassiumChannels.SHADOW_PULL_REQUEST_C2S.path());
 
     // ===== Helper methods =====
 
