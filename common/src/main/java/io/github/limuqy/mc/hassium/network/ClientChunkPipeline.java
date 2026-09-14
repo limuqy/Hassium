@@ -121,6 +121,7 @@ public final class ClientChunkPipeline {
         serverSeed = 0L;
         serverLevelStemNbt = null;
         serverSeedGenEnabled = false;
+        serverSeedAvailable = false; // review-fix: 断连重置漏清脏标志，防先连 Hassium+SeedGen 服再连非 SeedGen 服时消费方读到旧值（review §2.1）
         hassiumHandshakeDone = false;
         shadowServerReady = false;
         shadowServerFailed = false;
