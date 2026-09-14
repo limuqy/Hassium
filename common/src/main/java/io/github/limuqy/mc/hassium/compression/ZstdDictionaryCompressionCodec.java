@@ -84,7 +84,11 @@ public class ZstdDictionaryCompressionCodec implements CompressionCodec {
                 throw new CompressionException.DictionaryLoadException(dictionaryId,
                         "Failed to create ZstdDictCompress for level " + level, e);
             }
-            compressCache.put(level, new CachedDictHandle<>(version, dict));
+            // review-fix: 覆盖旧句柄前先 close，防字典热替换后旧 native 句柄泄漏（缓存命中路径不 close，review §2.5）
+            CachedDictHandle<ZstdDictCompress> old = compressCache.put(level, new CachedDictHandle<>(version, dict));
+            if (old != null) {
+                old.handle.close();
+            }
         }
 
         try {
@@ -114,7 +118,12 @@ public class ZstdDictionaryCompressionCodec implements CompressionCodec {
                         "Failed to create ZstdDictDecompress", e);
             }
             // review-fix: T5-94 解压句柄缓存同样按内容版本失效
+            // review-fix: 覆盖旧句柄前先 close，防字典热替换后旧 native 句柄泄漏（缓存命中路径不 close，review §2.5）
+            CachedDictHandle<ZstdDictDecompress> old = decompressHandle;
             decompressHandle = new CachedDictHandle<>(version, dict);
+            if (old != null) {
+                old.handle.close();
+            }
         }
 
         try {
