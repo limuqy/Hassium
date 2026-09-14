@@ -21,7 +21,7 @@ public final class ShadowPullServer {
      * 返回编码前的响应包；调用方负责 encode 后经各自通道回发。
      * <p>
      * {@code handler} 由调用方传入以保留各加载器既有 ledger 语义
-     * （fabric 每次新建、forge/neoforge 复用进程级 {@code SHADOW_PULL_HANDLER}）。
+     * （三端均为进程级 {@code SHADOW_PULL_HANDLER} 单例，review §2.2）。
      */
     public static ShadowPullResponseS2CPacket handleRequest(ShadowPullHandler handler, ServerPlayer player,
                                                             ShadowPullRequestC2SPacket request) {

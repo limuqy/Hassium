@@ -101,18 +101,22 @@ public class DictionaryManager {
     private static final AtomicBoolean training = new AtomicBoolean(false);
 
     /**
-     * 初始化字典管理器（服务端激活玩家时调用）。
+     * 初始化字典管理器（服务端激活玩家时调用；幂等）。
      * <p>
      * 以 server run directory 锚定聚合包字典落盘路径
      * （2.0.X 冻结兼容面：{@code <serverRunDirectory>/config/<modId>/hassium_aggregation_dict.bin}）。
+     * 首个非 null 路径生效；null 调用仅 warn 跳过，不改写已锚定路径。
      *
-     * @param serverRunDirectory 服务器运行目录（非 null）
+     * @param serverRunDirectory 服务器运行目录（可为 null：脱离世界/断连窗口）
      */
     public static void init(Path serverRunDirectory) {
+        if (aggregationDictPath != null) {
+            // 首个成功激活的玩家决定路径；后续玩家重复激活不重载，避免并发窗口冲掉已锚定路径
+            return;
+        }
         if (serverRunDirectory == null) {
-            // 玩家脱离世界/断连窗口取不到 server；字典保持未初始化，读写点已有 null 降级
+            // 玩家脱离世界/断连窗口取不到 server；不得清空已有 path（未初始化时保持 null，读写点已有降级）
             LOGGER.warn("Aggregation dictionary init skipped: server run directory unavailable");
-            aggregationDictPath = null;
             return;
         }
         aggregationDictPath = serverRunDirectory
