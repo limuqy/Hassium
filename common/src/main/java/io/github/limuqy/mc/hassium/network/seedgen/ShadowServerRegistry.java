@@ -548,7 +548,7 @@ public final class ShadowServerRegistry {
             return false;
         }
         if (wantId == null || boundId == null) {
-            return true; // 身份未齐：保守复用已有实例
+            return false; // review-fix: 身份未齐拒绝复用，防换服错配上一服影子实例（原为保守复用）
         }
         return wantId.equals(boundId);
     }

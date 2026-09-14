@@ -19,9 +19,9 @@ class ShadowStartupOptimizeTest {
                 "server_a", "server_b", true));
         assertFalse(ShadowServerRegistry.shouldReuseParkedInstance(
                 "server_a", "server_a", false));
-        // 身份未齐：保守复用
-        assertTrue(ShadowServerRegistry.shouldReuseParkedInstance(null, "server_a", true));
-        assertTrue(ShadowServerRegistry.shouldReuseParkedInstance("server_a", null, true));
+        // 身份未齐：拒绝复用（换服窗口防错配）
+        assertFalse(ShadowServerRegistry.shouldReuseParkedInstance(null, "server_a", true));
+        assertFalse(ShadowServerRegistry.shouldReuseParkedInstance("server_a", null, true));
     }
 
     @Test
