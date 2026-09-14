@@ -27,12 +27,23 @@ ChunkMap.tick() ─→ TrackedEntity.serverEntity.sendChanges() ─→ broadcast
 
 ### 1.1 vanilla 基线（已核实，1.21.1 mojmap）
 
-| 实体 | updateInterval | 备注 |
-|---|---|---|
-| 牛/猪/村民/僵尸等常规生物 | 3（Builder 默认） | 每 3 tick 一帧 |
-| 掉落物 `item` | 20 | 每 20 tick 一帧 |
-| 经验球 `experience_orb` | 20 | 同上 |
-| 玩家 | 不走 interval（`ServerGamePacketListenerImpl` 每 tick 直发） | 天然豁免 |
+| 实体 | updateInterval | 实际帧率 | 备注 |
+|---|---|---|---|
+| 牛/猪/村民/僵尸等常规生物 | 3（Builder 默认） | 20 帧/s | 每 3 tick 一帧 |
+| 掉落物 `item`（静止/缓动） | 20 | 1 帧/s | delta < tolerance 时不出包 |
+| **掉落物 `item`（物品流中）** | 20（**被绕过**） | **20 帧/s** | `hasImpulse` 绕过 interval（见下） |
+| 经验球 `experience_orb` | 20 | 同掉落物 | 同样可被 impulse 绕过 |
+| 玩家 | 不走 interval（`ServerGamePacketListenerImpl` 每 tick 直发） | 20 帧/s | 天然豁免 |
+
+**掉落物流的 interval 绕过（关键修正，源码核实 1.21.1）**：`ItemEntity.tick()` 中
+`this.hasImpulse |= this.updateInWaterStateAndDoFluidPushing()`（水中每 tick 置位）与
+`deltaMovement 变化量 > 0.01 → hasImpulse = true`（重力/加速/摩擦每 tick 触发），
+而 `sendChanges()` 的判定是 `tickCount % updateInterval == 0 || hasImpulse || ...`——
+`hasImpulse` **完全短路 interval**。物品流（水道运输、世吞、全物品收集、大型合成机/
+熔炉输出、高版本合成器）里每个掉落物实际以 **20 包/s** 直发，interval=20 形同虚设。
+数百掉落物的物品流 = 每玩家每秒数千个位移包，是生电服实体流量的最大单一来源。
+次生流量：`mergeWithNeighbours`（block 坐标变化时每 2 tick 执行）的合并 churn 产生
+持续的 `remove_entities` + `add_entity`（~40B/个，含 UUID+坐标+速度）风暴。
 
 ### 1.2 配置形态（用户指定）
 
@@ -62,10 +73,18 @@ entityTieredUpdateIntervalTiers = [3, 6, 10, 20]
 - 观察者集合：`level.players()` 过滤（不反射 `seenBy` 内部类私有集合）
 - 滞回：interval 只在观察者帧边界重算 + factor 滞回带
 - 客户端零改动；远端实体插值步数偏小 → 帧间静止（"轨迹变粗"，预期行为）
+高。生电场景实体量大、多数处于观察者中远距离。两类主力：(a) 常规生物 interval=3（牛栏/村民繁殖厅/刷怪塔，~20 帧/s/实体，100 实体 = 2000 包/s/玩家）；(b) **物品流掉落物 20 帧/s/个（interval 被 hasImpulse 绕过）**——数百掉落物的世吞/全物品/大型合成机是最大单一流量源，降帧收益 20×（比生物的 6.7× 更大）。按挡位降到 10–20 tick/帧可砍 60–95% 位移包量。物品流的视觉平滑度在远端天然不重要（掉落物渲染本身有 bobbing 动画遮盖），降帧副作用最小。
 
-### 1.4 必要性
+### 1.5 hasImpulse 绕过对 gate 设计的影响
 
-高。生电场景（牛栏/村民繁殖厅/刷怪塔）实体量大、多数处于观察者中远距离；vanilla 常规生物 interval=3 在 100+ 实体时产生 ~33 帧/s/实体 × 100 = 3300 包/s/玩家。按挡位降到 10–20 tick/帧可砍 60–85% 位移包量。掉落物（interval=20）本身已低频，收益次要——但**掉落物堆叠场景**（刷怪塔落点、农场收集口）单点密度极高，见 §2。
+HEAD cancellable 注入天然覆盖绕过路径：`ci.cancel()` 跳过整个 `sendChanges`
+（含 `hasImpulse ||` 短路分支），lastSent 不推进，恢复时 delta 正确。**无需对
+`hasImpulse` 单独处理**——gate 判定 `tickCount % effectiveInterval != 0 → cancel`
+即可，interval 语义对 impulse 类实体（掉落物/经验球/投掷物）同样生效。
+<p>
+注意：`sendChanges` 尾部 `this.entity.hasImpulse = false` 也在 cancel 范围内——
+跳帧时 impulse 标志保留，下一帧放行时 vanilla 判定 `hasImpulse == true` 直接出帧，
+不产生额外延迟。语义正确。
 
 ## 2. 热点降帧（按密度）
 
@@ -83,7 +102,7 @@ hotFactor: 阈值分挡（如 >50 → ×2，>200 → ×4，>500 → ×8）
 
 - 与逐级降帧**相乘叠加**：`effectiveInterval = tierInterval(dist) × hotFactor(density)`
 - 密度统计：per-chunk 计数器，`addEntity`/`removeEntity` 时增减（`ChunkMap` 已有 `entityMap`，mixin 计数器挂 chunk 维度 Map<ChunkPos, Integer>，O(1) 维护）
-- 掉落物特判：`ItemEntity` 合并半径内（0.5 格）的堆叠体 vanilla 不合并时（不同物品/满堆叠），密度极高但**位置静止**——静止实体 `sendChanges` 本就不出位移包（delta < tolerance），热点降帧对它们的收益在 `set_entity_data`/metadata 与出生包，不在位移。**结论：热点降帧的主要目标是高密度移动生物（村民、动物），掉落物收益集中在 metadata 包。**
+- 掉落物特判（修正）：堆叠点静止掉落物 `sendChanges` 不出位移包（delta < tolerance），收益在 metadata/出生包；但**物品流掉落物（世吞/水道/收集装置）每 tick 置 `hasImpulse`，实际 20 包/s/个**（§1.1 绕过修正）——热点降帧对它们是位移包主力收益，与密度计数器天然契合（物品流 = 高密度 chunk）。**结论：热点降帧同时覆盖高密度生物（村民/动物）与物品流掉落物，两者都是位移包大户。**
 
 ### 2.3 可行性
 
@@ -138,8 +157,8 @@ A→B 共享 90% 代码；C 独立但依赖 A/B 落定后的包量基线；D 在
 
 | 功能 | 可行性 | 必要性 | 结论 |
 |---|---|---|---|
-| 逐级降帧（按距离） | 高（双段 mixin 验证通过；per-observer 分流方案已设计） | 高（生电主场景，60–85% 位移包削减） | **做**，专项 Phase A |
-| 热点降帧（按密度） | 高（与 A 共用底座，+20% 工作量） | 中高（"近而密"场景 A 覆盖不了） | **做**，专项 Phase B |
+| 逐级降帧（按距离） | 高（双段 mixin 验证通过；per-observer 分流方案已设计；HEAD cancel 天然覆盖 hasImpulse 绕过） | 高（生物 60–85% + 物品流最高 95% 位移包削减） | **做**，专项 Phase A |
+| 热点降帧（按密度） | 高（与 A 共用底座，+20% 工作量） | 高（"近而密"生物 + 物品流掉落物都是位移包大户，§1.1/§2.2 修正后） | **做**，专项 Phase B |
 | 实体平滑推送（削峰） | 高（全在既有拦截层） | 高（A/B 的必要配套；聚合冲刷削峰） | **做**，专项 Phase C |
 
 三者统一为一个网络优化卖点族：**实体域分级更新**（tiered + density + pacing）。
@@ -150,10 +169,11 @@ A→B 共享 90% 代码；C 独立但依赖 A/B 落定后的包量基线；D 在
 2. 带宽：`NetworkStats.actualBytesReceived`（已有口径）
 3. 客户端主线程：实体包处理耗时采样（`debug.*` 开关已有基建）
 4. 视觉回归：远端实体移动平滑度（L3 手动）、村民繁殖厅行为正常性（AI 不受影响——降帧只影响网络层，服务端 AI tick 不变）
-5. 掉落物堆叠点：metadata 包量（热点降帧对掉落物的实际收益待实测确认 §2.2 结论）
+5. 物品流专项：掉落物位移包量（hasImpulse 绕过路径的实际包量，验证 §1.1 修正）+ add/remove 合并 churn 包量（验证 §7.1 是否需要第四机制）
 
 ## 7. 待用户实测后回填的开放问题
 
-1. 掉落物 metadata 包在堆叠场景的实际占比（决定热点降帧是否需要对 `ItemEntity` 特判加严）
+1. 物品流场景的 add/remove 合并 churn 占比（决定是否需要第四个机制：**合并抑制/批量 remove_entities**——数百掉落物流的 `mergeWithNeighbours` 每 2 tick 级联合并产生 add_entity+remove_entities 风暴，降帧不覆盖出生/移除包）
 2. 真实存档的观察者-实体距离分布（决定默认挡位 `(5,8,12,16)` 是否合理）
 3. 每玩家每 tick 实体包预算的合理默认值（64 是拍脑袋值）
+4. 掉落物远端降帧的视觉阈值（物品流视觉平滑度要求低，末挡 interval 可否比生物更激进，如 40 tick/帧）
