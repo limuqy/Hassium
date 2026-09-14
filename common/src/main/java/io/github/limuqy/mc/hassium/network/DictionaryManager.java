@@ -50,9 +50,13 @@ public class DictionaryManager {
     private static final int MAX_SAMPLE_BYTES = 32 * 1024 * 1024;
 
     /**
-     * 聚合包字典持久化路径
+     * 聚合包字典持久化路径（2.0.X 冻结兼容面：
+     * {@code <serverRunDirectory>/config/<modId>/hassium_aggregation_dict.bin}）。
+     * <p>
+     * 由 {@link #init(Path)} 以 server run directory 锚定；未初始化时为 {@code null}，
+     * 读写点空值降级为 warn + return。
      */
-    private static final Path AGGREGATION_DICT_PATH = Path.of("config", Constants.MOD_ID, "hassium_aggregation_dict.bin");
+    private static volatile Path aggregationDictPath = null;
 
     /**
      * 区块字典（静态，所有用户通用）
@@ -97,9 +101,18 @@ public class DictionaryManager {
     private static final AtomicBoolean training = new AtomicBoolean(false);
 
     /**
-     * 初始化字典管理器（服务端启动时调用）
+     * 初始化字典管理器（服务端激活玩家时调用）。
+     * <p>
+     * 以 server run directory 锚定聚合包字典落盘路径
+     * （2.0.X 冻结兼容面：{@code <serverRunDirectory>/config/<modId>/hassium_aggregation_dict.bin}）。
+     *
+     * @param serverRunDirectory 服务器运行目录（非 null）
      */
-    public static void init() {
+    public static void init(Path serverRunDirectory) {
+        aggregationDictPath = serverRunDirectory
+                .resolve("config")
+                .resolve(Constants.MOD_ID)
+                .resolve("hassium_aggregation_dict.bin");
         serverSide = true;
         loadAggregationDictionary();
     }
@@ -127,9 +140,14 @@ public class DictionaryManager {
      * 加载聚合包字典（动态训练）
      */
     private static void loadAggregationDictionary() {
+        Path path = aggregationDictPath;
+        if (path == null) {
+            LOGGER.warn("Aggregation dictionary path not initialized, skip loading from disk");
+            return;
+        }
         try {
-            if (Files.exists(AGGREGATION_DICT_PATH)) {
-                aggregationDict = Files.readAllBytes(AGGREGATION_DICT_PATH);
+            if (Files.exists(path)) {
+                aggregationDict = Files.readAllBytes(path);
                 LOGGER.info("Loaded trained aggregation dictionary from disk ({} bytes)", aggregationDict.length);
             } else {
                 LOGGER.info("No trained aggregation dictionary found, will train from samples");
@@ -326,10 +344,15 @@ public class DictionaryManager {
      * 持久化聚合包字典到磁盘
      */
     private static void saveAggregationDict(byte[] dict) {
+        Path path = aggregationDictPath;
+        if (path == null) {
+            LOGGER.warn("Aggregation dictionary path not initialized, skip saving to disk");
+            return;
+        }
         try {
-            Files.createDirectories(AGGREGATION_DICT_PATH.getParent());
-            Files.write(AGGREGATION_DICT_PATH, dict);
-            LOGGER.debug("Aggregation dictionary saved to {}", AGGREGATION_DICT_PATH);
+            Files.createDirectories(path.getParent());
+            Files.write(path, dict);
+            LOGGER.debug("Aggregation dictionary saved to {}", path);
         } catch (IOException e) {
             LOGGER.error("Failed to save aggregation dictionary to disk", e);
         }

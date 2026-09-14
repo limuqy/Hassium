@@ -8,6 +8,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.lang.reflect.Field;
+import java.nio.file.Path;
 
 /**
  * ServerPlayer 获取世界 / 服务器 / 连接 API 兼容层。
@@ -61,6 +62,20 @@ public final class PlayerCompat {
         ServerLevel level = player.level();
         MinecraftServer server = level != null ? level.getServer() : null;
         return server != null ? server.getPlayerList().getViewDistance() : 0;
+#endif
+    }
+
+    /**
+     * 获取玩家所属服务器运行目录（字典等落盘路径的锚点；2.0.X 冻结兼容面）。
+     * <p>
+     * 1.20.1: {@code getServerDirectory()} 返回 {@code File}，转 {@code Path}；
+     * 1.21.1+: 直接返回 {@code Path}。
+     */
+    public static Path getServerRunDirectory(ServerPlayer player) {
+#if MC_VER < MC_1_21_1
+        return player.getServer().getServerDirectory().toPath();
+#else
+        return player.getServer().getServerDirectory();
 #endif
     }
 

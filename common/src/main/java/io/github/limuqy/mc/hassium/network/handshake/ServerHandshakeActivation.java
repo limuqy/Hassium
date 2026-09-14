@@ -130,7 +130,7 @@ public final class ServerHandshakeActivation {
             // 激活序列（归拢）：字典/索引先行 → markPending 开启缓冲 → play_init。
             // markPending 必须先于任何可聚合业务流量（isActive 才会接管 Connection.send），
             // 客户端 index_sync ACK（handleActivationReady）前聚合帧不落线。
-            DictionaryManager.init();
+            DictionaryManager.init(io.github.limuqy.mc.hassium.compat.PlayerCompat.getServerRunDirectory(player));
             IndexSyncManager.getInstance().initializeServerIndex();
             Services.NETWORK_MANAGER.sendDictionarySync(player);
             Services.NETWORK_MANAGER.sendIndexSync(player);
