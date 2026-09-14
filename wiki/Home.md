@@ -61,6 +61,7 @@
 | [World-Export](World-Export) | 缓存世界导出 |
 | [Compatibility](Compatibility) | 多 Mod 兼容对照表 |
 | [Support-Matrix](Support-Matrix) | 版本 × 加载器支持矩阵 |
+| [Network-Architecture](Network-Architecture) | 网络架构（直连拓扑） |
 | [FAQ](FAQ) | 常见问题 |
 | [Troubleshooting](Troubleshooting) | 排查路径与日志 |
 

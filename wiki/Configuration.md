@@ -50,6 +50,7 @@ Hassium 启动时在 `config/hassium/` 自动生成两份 TOML：
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
 | `chunk.lightStrip` | `true` | 光照剥离：发包可带空 lightMask；实际剥光由握手协商（客户端声明引擎可用才剥） |
+| `chunk.seedGenEnabled` | `false` | SeedGen 本地生成（与客户端同名键按 scope 隔离；**服务端开启会下发世界种子**，需双端同版本同开） |
 
 ### 服务端传输面（`master.*`）
 

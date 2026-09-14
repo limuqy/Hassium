@@ -50,6 +50,7 @@ In-game editors:
 | Key | Default | Description |
 | --- | --- | --- |
 | `chunk.lightStrip` | `true` | Light stripping: packets may carry an empty lightMask; actual stripping is negotiated at handshake |
+| `chunk.seedGenEnabled` | `false` | SeedGen local generation (same name as the client key, scope-isolated; **server enablement sends the world seed**; both sides same version and both on) |
 
 ### Server transport (`master.*`)
 
