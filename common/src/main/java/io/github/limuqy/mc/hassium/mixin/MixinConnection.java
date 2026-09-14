@@ -138,7 +138,11 @@ public class MixinConnection {
         HassiumConnectionRegistry.markDisabled(self);
         HassiumAggregationManager.discardConnection(self);
         AggregationDecodeQueue.discard(self);
-        PullResponseDecodeQueue.discard();
+        // review-fix: 仅客户端连接断连才清空 pull 解码队列——队列是进程级单例，
+        // LAN/集成服上远程玩家断连不能清掉主机客户端的在途 pull 响应（review §1.3）
+        if (receiving == PacketFlow.CLIENTBOUND) {
+            PullResponseDecodeQueue.discard();
+        }
         LoginHandshakeManager.onDisconnect(self);
     }
 }
