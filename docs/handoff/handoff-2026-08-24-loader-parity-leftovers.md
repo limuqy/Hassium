@@ -14,7 +14,7 @@
 
 - REQ/TASKS：`.omp/workflows/loader-parity-leftovers/{REQ,TASKS}.md`
 - 契约：`.omp/workflows/loader-parity-leftovers/work/CONTRACTS.md`
-- 上轮真相源：`docs/loader-parity-final-report.md`（§5 光照专项、§7 遗留项）
+- 上轮真相源：`docs/archive/loader-parity-final-report.md`（§5 光照专项、§7 遗留项）
 
 ## 拍板记录
 

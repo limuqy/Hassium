@@ -417,7 +417,7 @@ F4 的矩阵（含 scenario 锚点 `1.20.1/fabric`、`1.20.1/forge`、`1.21.1/ne
   客户端 `authorityDeclared` 恒 false ⇒ 让位门恒开 ⇒ 影子端自绘整盘（`authoritative-full pull` 13 批 ≈1664 柱）。
   客户端靠「拦截 `tryInterceptForCompare` 原生包 + 影子端自绘 pull」照样铺满，**空洞 0、门禁 PASS** ⇒ 门禁看不见。
 - **既有性**：`1.21.1_neoforge_I_dimension`（09-12，**权威边沿落地之前**）`decompressed = 0`；`1.21.10_neoforge_I`（历史
-  classic）`applied=1642 / decompressed=574`。⇒ **早于本轮改动，非回归**，且文档无任何记载（`docs/classic-matrix-smoke-report-2026-08-28.md` 只写
+  classic）`applied=1642 / decompressed=574`。⇒ **早于本轮改动，非回归**，且文档无任何记载（`docs/archive/classic-matrix-smoke-report-2026-08-28.md` 只写
   「两轮 failures=[]」）。
 - **本次实测指纹**（`1.21.1_neoforge_I_f1f2` vs `1.21.1_fabric_I_f1f2_prod1` 的 R1）：
   `new/stale` = **1529/95** vs 0/1529；`decompressed/applied` = **572/1624** vs 1529/1529；

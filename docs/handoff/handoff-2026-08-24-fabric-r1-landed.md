@@ -1,7 +1,7 @@
 # Handoff — fabric R1 landed 修复（2026-08-24）
 
 ## 需求
-排查修复 docs/loader-parity-final-report.md §7 遗留项①：MC>=1.21.2 fabric R1 landed ~325 vs neoforge ~1021。
+排查修复 docs/archive/loader-parity-final-report.md §7 遗留项①：MC>=1.21.2 fabric R1 landed ~325 vs neoforge ~1021。
 
 ## 执行方式
 - 主会话只做派发与核验，不自己实现（实现走 task 子代理）

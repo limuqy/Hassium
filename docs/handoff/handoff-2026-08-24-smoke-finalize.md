@@ -26,7 +26,7 @@
 - 主会话统一跑受影响模块编译 → T4 SmokeMatrix 全矩阵冒烟（并发 ≤2，优先 MC≥1.21.2 fabric 格）→ T5 LightProbe 专项复跑（与 T4 错峰）
 
 ### Wave 3
-- T6 Analysis 数据分析与报告 `docs/loader-parity-final-report.md`
+- T6 Analysis 数据分析与报告 `docs/archive/loader-parity-final-report.md`
 
 ## 关键背景
 - loader-parity 主体已提交（041d755 等 5 commit），工作区干净

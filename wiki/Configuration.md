@@ -22,7 +22,8 @@ Hassium 启动时在 `config/hassium/` 自动生成两份 TOML：
 | NeoForge | 模组列表「配置」按钮 | 需 Cloth；Configured 可选 |
 
 > 也可以直接编辑 TOML 文件后重启；GUI 与 TOML 互相同步（GUI 只改客户端字段，服务端字段原样保留）。
-> 键集真相源：`ConfigSchema`（44 键）；完整审计见仓库 [`docs/config-audit.md`](https://github.com/limuqy/Hassium/blob/master/docs/config-audit.md)。
+> 键集真相源：`ConfigSchema`（52 键）；完整审计见仓库 [`docs/config-audit.md`](https://github.com/limuqy/Hassium/blob/master/docs/config-audit.md)。
+> 下表「说明」列与 TOML 内注释同源（`ConfigSchema` commentZh）。
 
 ---
 
@@ -32,54 +33,70 @@ Hassium 启动时在 `config/hassium/` 自动生成两份 TOML：
 
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
-| `chunk.enabled` | `true` | 区块核心总开关（影子端世界保存/算光/缓存/Pull 模式；关后全程原版路径） |
-| `chunk.maxSizeMb` | `4096` | 缓存容量上限（MB）；超过后按热度整文件删除冷 region（`.mca`） |
-| `chunk.hotScoreThreshold` | `0.3` | 热点分数阈值（低于视为冷 region，清理时优先淘汰） |
-| `chunk.recencyWeight` | `0.7` | 热度分数中最近访问权重 |
-| `chunk.frequencyWeight` | `0.3` | 热度分数中访问频率权重 |
+| `chunk.enabled` | `true` | 是否启用区块核心缓存 |
+| `chunk.maxSizeMb` | `4096` | 缓存最大容量（MB；影子端存档容量上限，超限触发热度淘汰） |
+| `chunk.hotScoreThreshold` | `0.3` | 热点分数阈值（低于此值视为冷 region 文件，清理时优先淘汰） |
+| `chunk.recencyWeight` | `0.7` | 最近访问权重 |
+| `chunk.frequencyWeight` | `0.3` | 访问频率权重 |
 | `chunk.cleanupIntervalTicks` | `6000` | 清理检查间隔（刻） |
 | `chunk.targetSizeMb` | `0` | 目标缓存大小（MB；0=自动） |
 | `chunk.minCleanupBatchSize` | `100` | 每轮最多淘汰的 region 文件数 |
-| `chunk.sectionDeltaEnabled` | `true` | 缓存过期时只补变更方块（过多则整段/整块）；关闭则过期走全量 |
-| `chunk.maxChunksPerFrame` | `6` | 每 tick 缓存读取生产上限（影子入队 + 影子读盘）；主线程 apply 只受 `mainThreadChunkBudgetMs` 约束 |
-| `chunk.mainThreadChunkBudgetMs` | `15` | 客户端每帧 apply 区块的预算（ms）；进服 30s 内走 JoinBoost 临时抬高 |
-| `chunk.seedGenEnabled` | `false` | 本地区块生成（双端键）：影子 tracking 触发 vanilla worldgen 后 compare-pull；需双端同版本。**服务端开启会下发世界种子（泄露种子）** |
-| `chunk.viewDistanceExtensionEnabled` | `true` | 超视渲染 OVD（影子双窗；依赖 `chunk.enabled`；与 Bobby 互斥） |
-| `chunk.maxRenderDistance` | `16` | OVD effective clientRD 上限（2–64） |
+| `chunk.sectionDeltaEnabled` | `true` | 是否启用分段增量（服务端规划 + 客户端应用） |
+| `chunk.maxChunksPerFrame` | `6` | 每 tick 缓存读取生产上限（影子入队 + 影子读盘；主线程消费只受时间预算） |
+| `chunk.mainThreadChunkBudgetMs` | `15` | 主线程 apply 预算（ms） |
+| `chunk.seedGenEnabled` | `false` | 是否启用 SeedGen（本地生成 pristine 区块；需双端同版本，默认关）。服务端开启时会下发世界种子 |
+| `chunk.viewDistanceExtensionEnabled` | `true` | 超视渲染 OVD（影子双窗：clientRD>serverVD 时本地源回填环带） |
+| `chunk.maxRenderDistance` | `16` | 超视渲染 effective clientRD 上限 |
 
 ### 区块核心（`chunk.*`，服务端）
 
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
-| `chunk.lightStrip` | `true` | 光照剥离：发包可带空 lightMask；实际剥光由握手协商（客户端声明引擎可用才剥） |
-| `chunk.seedGenEnabled` | `false` | SeedGen 本地生成（与客户端同名键按 scope 隔离；**服务端开启会下发世界种子**，需双端同版本同开） |
+| `chunk.lightStrip` | `true` | 是否启用光照剥离 |
+| `chunk.seedGenEnabled` | `false` | 是否启用 SeedGen（服务端开启下发世界种子；客户端门控开时影子 tracking 触发 vanilla worldgen 本地生成，再 compare-pull；需双端同版本，默认关）。警告：开启会向客户端下发世界种子，等同泄露服务端种子 |
 
 ### 服务端传输面（`master.*`）
 
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
-| `master.enabled` | `true` | 专用服网络通道总开关（登录期握手/聚合的门） |
-| `master.enabledOnLan` | `false` | 集成服「对局域网开放」后，对**远程**玩家启用 Hassium 网络面（握手/聚合/推送/lightStrip 等）；主机本机始终原版；`storage` 仍仅专用服 |
-| `master.compressionLevel` | `3` | 自有通道 ZSTD 压缩等级（速度优先） |
-| `master.enablePacketAggregation` | `true` | 包聚合；第三方通道被拦截异常时关掉 |
-| `master.aggregationMaxWaitTimeMs` | `50` | 冲刷兜底（ms；tick 尾冲刷为主，超过该时长未冲刷则强制冲一次；ACK 超时 5s 自动降级直发） |
-| `master.aggregationMaxSize` | `262144` | 聚合最大大小（字节） |
-| `master.compressionBlacklist` | `[]` | 第三方包 ID 列表，命中的包不进压缩/聚合。**Hassium 控制面**（字典 / 索引 / 光增量 / 聚合自身 / main 等）已硬编码永久排除，写不写本列表都不影响 |
-| `master.maxChunksPerTick` | `5` | 每玩家每 tick 完成的 Pull FULL/DELTA 上限（发送速率 = 本值 × tick 节奏，满 tick ≈ 5×20 = 100/s；UNCHANGED 另额 32；掉刻自然降速保护主线程） |
+| `master.enabled` | `true` | 是否启用主控核心网络通道 |
+| `master.enabledOnLan` | `false` | 局域网主机是否对远程玩家启用 Hassium 网络面（握手/聚合/推送/lightStrip 等）。默认关；本机 memory 连接始终原版；storage 仍仅专用服 |
+| `master.compressionLevel` | `3` | 自有通道 ZSTD 压缩等级 |
+| `master.enablePacketAggregation` | `true` | 是否启用包聚合 |
+| `master.aggregationMaxWaitTimeMs` | `50` | 冲刷兜底：超过该时长（ms）未冲刷则强制冲一次（tick 尾冲刷为主，应对主线程卡顿） |
+| `master.aggregationMaxSize` | `262144` | 聚合最大大小 |
+| `master.compressionBlacklist` | `[]` | 第三方包 ID 的压缩/聚合排除列表（默认空）。Hassium 控制面与独立压缩通道已硬编码排除，改本列表不影响它们 |
+| `master.maxChunksPerTick` | `5` | 每玩家每 tick 区块下发上限：Pull FULL/DELTA 完成 + 原版通道整柱发送（满 tick ≈ 本值×20/s） |
+
+#### 实体优化（`master.entity*`）
+
+只改实体**下发节拍**，不改协议；**原版客户端可直接连并生效**。跟 `master.enabled` 总闸；全部关掉 = 行为等同未接入。
+
+| 键 | 默认 | 说明 |
+| --- | --- | --- |
+| `master.entityTieredUpdateEnabled` | `true` | 是否按玩家距离分四档降频下发实体更新（离得越远更新越稀）。默认开；关闭后距离档表失效，密度/压力/错峰仍可独立生效 |
+| `master.entityTierIntervals` | `"3,6,10,20"` | 四个距离档的实体更新间隔（刻），用逗号分隔，依次为 近/中/远/边缘；挡位边界是实体跟踪范围的 25%/50%/75%。默认 3,6,10,20（越远越稀）。数字要大不要小，须非递减；写 0 或留空用默认值 |
+| `master.entityItemTierIntervals` | `"2,4,8,16"` | 掉落物与经验球的四档更新间隔（刻），逗号分隔、顺序同上，默认 2,4,8,16。物品数量多、带宽吃紧时可以把它们调稀；贴近玩家的掉落物建议不超过 3 刻，否则看起来会一跳一跳 |
+| `master.entityDensityThrottleEnabled` | `true` | 是否启用区块热点降频：某个区块里实体过于密集时，对其中实体进一步加大更新间隔。默认开 |
+| `master.entityDensityTierCounts` | `"32,64,96,128"` | 每档热点阈值：实体所在区块的活跃实体数达到该值时，该档的间隔按对应倍率放大。逗号分隔按 近/中/远/边缘，默认 32,64,96,128，写 0 或留空用默认值 |
+| `master.entityDensityTierFactors` | `"1.0,1.5,2.0,3.0"` | 每档热点倍率：达到上面阈值后间隔乘多少倍，逗号分隔按 近/中/远/边缘，默认 1.0,1.5,2.0,3.0（1.0 = 该档不放大）。支持小数；小于 1 按 1 处理；乘上压力倍率后再受 entityMaxThrottleFactor 限制 |
+| `master.entityMaxThrottleFactor` | `4` | 热点倍率与压力倍率相乘后的总上限（默认 4），用来兜住最坏情况；调大 = 密集时降得更狠 |
+| `master.entityFrameBudgetPerPlayer` | `128` | 每个玩家每 tick 期望收到的实体更新包数（默认 128）。某个玩家持续超过这个量时，他视野内的实体更新会自动变稀，避免卡顿；0 = 不做这个自动限制 |
+| `master.entitySmoothPushEnabled` | `true` | 实体错峰推送：同一更新间隔的实体按 UUID 稳定错开发送时刻，3 刻总量不变但不再齐发尖峰。默认开；关闭后退回原版齐发 |
 
 ### 存储（`storage.*`）
 
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
-| `storage.enabled` | `false` | 世界存档改用 ZSTD type 126（默认关；仅专用服务器可开启，**首次启用前请备份世界**） |
-| `storage.zstdLevel` | `3` | 存储压缩等级；越高省磁盘越多、CPU 越重 |
+| `storage.enabled` | `false` | 是否启用存档压缩（默认关；区块核心缓存独立不受影响） |
+| `storage.zstdLevel` | `3` | 存储 ZSTD 压缩等级 |
 
 ### 兼容（`compat.*`）
 
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
-| `compat.requireClientMod` | `false` | 关 = 无模组客户端可连（仅享受服务端压缩）；开则登录期握手失败即踢出 |
-| `compat.autoDowngradeOnError` | `true` | 出错时自动回退原版行为 |
+| `compat.requireClientMod` | `false` | 是否强制要求客户端安装 Hassium |
+| `compat.autoDowngradeOnError` | `true` | 出错时是否自动降级 |
 
 ### 调试（`debug.*`，按端分离）
 
@@ -87,26 +104,26 @@ Hassium 启动时在 `config/hassium/` 自动生成两份 TOML：
 
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
-| `debug.metadataLogging` | `false` | chunkHash / 元数据比对日志 |
-| `debug.dispatcherLogging` | `false` | 主线程调度日志 |
-| `debug.asyncLogging` | `false` | 异步任务日志（含 SeedGen / 影子端） |
-| `debug.compressionLogging` | `false` | 解压日志 |
-| `debug.chunkApplyLogging` | `false` | 区块 apply 日志 |
-| `debug.networkLogging` | `false` | 网络收发日志 |
-| `debug.cacheLogging` | `false` | 缓存读写日志 |
-| `debug.lightVerify` | `false` | 光照验算日志 |
-| `debug.networkMetricsEnabled` | `false` | 客户端网络指标（冒烟测试 `hassium.smokeTest=true` 强开） |
-| `debug.networkMetricsAutoReset` | `true` | 退出服务器时自动清零本次会话的指标计数 |
+| `debug.metadataLogging` | `false` | 元数据调试日志 |
+| `debug.dispatcherLogging` | `false` | 主线程调度调试日志 |
+| `debug.asyncLogging` | `false` | 异步调试日志 |
+| `debug.compressionLogging` | `false` | 压缩调试日志 |
+| `debug.chunkApplyLogging` | `false` | 区块 apply 调试日志 |
+| `debug.networkLogging` | `false` | 网络调试日志 |
+| `debug.cacheLogging` | `false` | 缓存调试日志 |
+| `debug.lightVerify` | `false` | 光照验算与光包落地探针 |
+| `debug.networkMetricsEnabled` | `false` | 是否启用客户端网络指标 |
+| `debug.networkMetricsAutoReset` | `true` | 登出服务器时自动重置网络指标 |
 
 服务端 `hassium-server.toml`：
 
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
-| `debug.dispatcherLogging` | `false` | 主线程调度 / MSPT 日志 |
-| `debug.asyncLogging` | `false` | 异步任务日志 |
-| `debug.compressionLogging` | `false` | 压缩发包日志 |
-| `debug.chunkApplyLogging` | `false` | 区块补发 / resync 日志 |
-| `debug.networkLogging` | `false` | 网络收发日志 |
+| `debug.dispatcherLogging` | `false` | 主线程调度调试日志 |
+| `debug.asyncLogging` | `false` | 异步调试日志 |
+| `debug.compressionLogging` | `false` | 压缩调试日志 |
+| `debug.chunkApplyLogging` | `false` | 区块 apply 调试日志 |
+| `debug.networkLogging` | `false` | 网络调试日志 |
 
 热路径默认安静（仅少量生命周期 INFO）；排查时按需开启对应 `debug.*`。ERROR / WARN 始终输出。详见 [Troubleshooting](Troubleshooting)。
 
@@ -118,9 +135,11 @@ Hassium 启动时在 `config/hassium/` 自动生成两份 TOML：
 | --- | --- |
 | 关闭存档压缩（保留网络优化） | `storage.enabled = false`（默认已关） |
 | 临时存档前关闭存档压缩以免格式变更 | 同上，再备份世界 |
-| 关闭影子端/缓存（全程原版路径） | `chunk.enabled = false`（服务端不剥光，光照随包自带） |
+| 关闭区块核心缓存（全程原版路径） | `chunk.enabled = false`（服务端不剥光，光照随包自带） |
 | 进服本地生成（双端同版本） | 双端 `chunk.seedGenEnabled = true`（注意种子泄露面） |
 | 第三方通道被聚合误伤 | 关 `master.enablePacketAggregation`，或把通道 ID 加进 `master.compressionBlacklist` |
+| 关闭实体优化（退回原版实体节奏） | `master.entityTieredUpdateEnabled` / `entityDensityThrottleEnabled` / `entitySmoothPushEnabled` 全 `false`，且 `entityFrameBudgetPerPlayer = 0` |
+| 实体包太多仍卡 | 调大 `entityTierIntervals` / `entityItemTierIntervals`，或调小 `entityFrameBudgetPerPlayer`、调大 `entityMaxThrottleFactor` |
 | 仅享受客户端缓存（服务端不装） | 客户端单独安装即可，服务端默认 `compat.requireClientMod = false` |
 | 强制客户端装模组 | 服务端 `compat.requireClientMod = true` |
 

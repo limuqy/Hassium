@@ -19,19 +19,19 @@
 
 | Category | Feature | Description |
 | --- | --- | --- |
-| **Efficient compression** | Storage compression | Chunk ZSTD on disk (type 126), significantly smaller saves; keeps vanilla Region (`.mca`) layout |
-| | Channel compression | Dictionary ZSTD inside aggregated packets + chunk-push native compression; never touches the vanilla compression layer, no cross-mod pipeline conflicts |
-| **Network optimization** | Smooth push | Per-player per-tick Pull completion cap (`master.maxChunksPerTick`, degrades naturally on laggy ticks) + backgrounded encode/compress; joins never saturate the main thread |
-| | Login-phase capability handshake | `hassium:login_hello` login query on 1.20.1, config-stage payload on 1.21.1+; bitwise capability negotiation with no timeout dependency and zero interference for vanilla clients |
-| | Pull mode | After negotiation the server stops pushing full chunks; chunk data is fetched by the unified Compare+Pull driven by the client shadow virtual player's vanilla tracking |
-| **Chunk cache** | Shadow-world saving | Join chunks are lit and saved into a vanilla save dir (`hassium_cache/<serverId>/world`) by an in-process shadow server (full MinecraftServer); saved on disconnect, reused on reconnect |
-| | Section delta | On stale cache only changed blocks are sent; whole section next, whole chunk beyond that |
-| | Capacity/heat eviction | `heat.idx` tracks heat per region file; over-capacity regions are deleted whole-file |
-| | Local generation (SeedGen) | With both sides on the same version and the gate open, the server ships the world seed during Play activation (`play_init_s2c`); the client's shadow tracking runs vanilla worldgen locally for pristine chunks, authority-checked via compare-pull before delivery. **Server enablement sends the world seed (seed leak)** |
-| | World export | `/hassiumc export` copies the shadow world into an export save (keeps type 126; vanilla translation pending) |
-| **Beyond-view render** | OVD (shadow dual-window) | When the client RD exceeds the server view distance, the ring beyond it is backfilled from terrain the shadow server already has locally (injected/disk); **render-only, never simulated**, and never requested from the server; mutually exclusive with Bobby |
-| **Lighting** | Hassium engine | On join an in-process shadow server takes over world saving (cache) + chunk lighting + packing official chunk packets (returned over the official channel); auto-degrades on startup failure |
-| | Light stripping | The server may strip light to save bandwidth (`chunk.lightStrip`); the shadow server computes lighting and packs it back |
+| **Efficient compression** | Storage compression | World chunks are ZSTD-compressed on disk for significantly smaller saves; keeps the vanilla Region (`.mca`) layout |
+| | Channel compression | On-wire compression lowers bandwidth and download waits; never touches the vanilla compression layer, no cross-mod conflicts |
+| **Network optimization** | Smooth push | Chunks are rate-limited per tick and encode/compress work is offloaded; joins and view expansion never stall the main thread |
+| | Entity optimization | Distance-tiered rates, hotspot density throttle, packet-budget backpressure, and phase stagger; replication-only — vanilla clients can join |
+| **Chunk cache** | World save | Chunks you visit are saved to a local cache automatically; saved on disconnect, reused on reconnect — no full re-download |
+| | Section delta | On stale cache only changed blocks or whole sections are fetched instead of the whole chunk |
+| | Local generation | With both sides on the same version, unexplored terrain is generated locally to save bandwidth; **enabling on the server sends the world seed to clients** |
+| | Beyond-view render | When client render distance exceeds server view distance, the outer ring is backfilled from locally cached terrain; **render-only, never requested from the server**; mutually exclusive with Bobby |
+| | Heat eviction | Over-capacity caches are cleaned by region heat automatically |
+| | World export | `/hassiumc export` copies the local cache into a standalone save directory |
+| **Lighting optimization** | Unified lighting | An in-process engine computes chunk lighting and packs it back; the main thread is no longer occupied by lighting on load; auto-degrades on startup failure |
+| | Light stripping | The server may strip light data to save bandwidth; the client computes and writes it back |
+| | Light cache | Computed lighting is saved with the chunk and reused on reconnect, skipping recomputation |
 | **Utilities** | Traffic monitoring | `/hassium stats` (server) and `/hassiumc stats` (client) show compression and cache effectiveness |
 
 Feature details: [Features](Features-en).

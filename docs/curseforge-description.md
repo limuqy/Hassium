@@ -47,21 +47,20 @@ Full instructions: [Installation](https://github.com/limuqy/Hassium/wiki/Install
 
 | Category | Feature | Description |
 | --- | --- | --- |
-| **Efficient compression** | Storage compression | World chunk ZSTD on disk (type 126) for smaller saves; keeps vanilla Region (`.mca`) layout |
-| | Channel compression | Dictionary ZSTD inside aggregated packets + chunk-push native compression — never touches the vanilla compression layer, no cross-mod pipeline conflicts |
-| **Network optimization** | Smooth push | Per-player per-tick submit cap (`master.maxChunksPerTick`, ≈ cap×20/s at full tick) + fully backgrounded encode/compress/send; joins never saturate the main thread |
-| | Login-phase capability handshake | `hassium:login_hello` login query on 1.20.1, config-stage payload on 1.21.1+; bitwise capability negotiation with no timeout dependency and zero interference for vanilla clients |
-| | Pull mode | After negotiation the server stops pushing full chunks; chunk data is fetched by the unified Compare+Pull driven by the client shadow virtual player's vanilla tracking (`ShadowPull`: UNCHANGED / DELTA / FULL / ERROR) |
-| **Chunk cache** | Shadow world save | Every chunk you visit is saved by the shadow engine (full MinecraftServer) into a vanilla-format save (`hassium_cache/<serverId>/world`, type 126 + chunkHash); saved on disconnect, reused on reconnect |
-| | Section delta | On cache mismatch (MISMATCH), fetch only changed blocks (`BLOCKS`) or whole sections (`FULL`) and merge locally instead of the whole chunk |
-| | Local generation (SeedGen) | With both sides on the same version, the server ships the world seed during Play activation; the client's shadow tracking runs vanilla worldgen locally for pristine chunks, authority-checked via compare-pull before delivery. **Enabling this leaks the server world seed to clients.** Falls back to full transfer on failure |
-| | Beyond-view render (OVD) | Shadow dual-window: when the client RD exceeds the server view distance, the ring beyond it is backfilled from terrain the shadow server already has locally — render-only, never requested from the server |
-| | Capacity/heat eviction | `heat.idx` tracks heat per region file; over-capacity regions are deleted whole-file |
-| | World export | `/hassiumc export` copies the shadow-side world directory wholesale to `hassium_exports/<cacheId>` (keeps the type 126 + chunkHash format; vanilla translation is planned later) |
-| **Lighting optimization** | Hassium engine | On join an in-process shadow server (full MinecraftServer) takes over world saving (cache) + chunk lighting + official chunk packet packing, returned over the official vanilla channel; auto-degrades on startup failure |
-| | Light stripping | The server may strip light data (negotiated at handshake); the shadow side computes lighting centrally and packs it back |
-| | Light cache | Shadow-side lighting is saved with the chunk (type 126 + chunkHash); reconnects reuse it, skipping recomputation |
-| **Utilities** | Traffic metrics | `/hassium stats` (server) and `/hassiumc stats` (client) to inspect compression and cache results |
+| **Efficient compression** | Storage compression | World chunks are ZSTD-compressed on disk for significantly smaller saves; keeps the vanilla Region (`.mca`) layout |
+| | Channel compression | On-wire compression lowers bandwidth and download waits; never touches the vanilla compression layer, no cross-mod conflicts |
+| **Network optimization** | Smooth push | Chunks are rate-limited per tick and encode/compress work is offloaded; joins and view expansion never stall the main thread |
+| | Entity optimization | Distance-tiered rates, hotspot density throttle, packet-budget backpressure, and phase stagger; replication-only — vanilla clients can join |
+| **Chunk cache** | World save | Chunks you visit are saved to a local cache automatically; saved on disconnect, reused on reconnect — no full re-download |
+| | Section delta | On stale cache only changed blocks or whole sections are fetched instead of the whole chunk |
+| | Local generation | With both sides on the same version, unexplored terrain is generated locally to save bandwidth; **enabling on the server sends the world seed to clients** |
+| | Beyond-view render | When client render distance exceeds server view distance, the outer ring is backfilled from locally cached terrain; **render-only, never requested from the server**; mutually exclusive with Bobby |
+| | Heat eviction | Over-capacity caches are cleaned by region heat automatically |
+| | World export | `/hassiumc export` copies the local cache into a standalone save directory |
+| **Lighting optimization** | Unified lighting | An in-process engine computes chunk lighting and packs it back; the main thread is no longer occupied by lighting on load; auto-degrades on startup failure |
+| | Light stripping | The server may strip light data to save bandwidth; the client computes and writes it back |
+| | Light cache | Computed lighting is saved with the chunk and reused on reconnect, skipping recomputation |
+| **Utilities** | Traffic monitoring | `/hassium stats` (server) and `/hassiumc stats` (client) show compression and cache effectiveness |
 
 Clients without the mod can connect by default (`compat.requireClientMod = false`); install on both sides for full compression and cache benefits.
 
@@ -104,20 +103,19 @@ Complete matrix: [Support Matrix](https://github.com/limuqy/Hassium/wiki/Support
 
 | 分类 | 能力 | 说明 |
 | --- | --- | --- |
-| **高效压缩** | 存储压缩 | 世界区块 ZSTD 落盘（type 126），存档体积显著减小；仍兼容原版 Region（`.mca`）布局 |
-| | 通道压缩 | 聚合包内部字典 ZSTD + 区块推送自有压缩，降低带宽与下载等待；不触碰原版压缩层，无跨 mod 管线冲突面 |
-| **网络优化** | 平滑推送 | 服务端每 tick 提交上限限速（`master.maxChunksPerTick`，满 tick ≈ 值×20/s）+ 主线程序列化上限与后台化；进服/扩展视野不卡主线程 |
-| | 登录期能力握手 | 1.20.1 走 `hassium:login_hello` login query，1.21.1+ 走配置阶段 payload；按位与协商能力位，无超时依赖，原版客户端零干扰 |
-| | Pull 模式 | 协商通过后服务端停发整柱推送，区块数据由客户端影子虚拟玩家 tracking 驱动的统一 Compare+Pull 拉取（UNCHANGED / DELTA / FULL / ERROR） |
-| **区块缓存** | 影子端世界保存 | 进服区块统一由影子端（完整 MinecraftServer）落盘原版存档（`hassium_cache/<serverId>/world`），断连保存、重连复用 |
-| | 分段增量 | 缓存过期（MISMATCH）时仅拉取变更方块（`BLOCKS`）或整段（`FULL`）本地合并，避免整块重传 |
-| | 本地生成（SeedGen） | 双端同版本时，服务端在 Play 激活下发世界种子；客户端影子端 tracking 触发原版 worldgen 本地生成 pristine 区块，生成后经服务端权威 compare-pull 校验交付；**开启会向客户端下发并泄露服务端世界种子**；失败/校验不过自动回退全量 |
-| | 超视渲染（OVD） | 影子双窗：客户端 RD 大于服务端视距时，视距外环带由影子端本地已有地形回填——**仅渲染**，不向服务端请求 |
-| | 容量/热度淘汰 | `heat.idx` 按 region 文件计热度，超限整文件删除 `.mca` |
-| | 世界导出 | `/hassiumc export` 将影子端世界目录整体拷贝为导出存档（`hassium_exports/<cacheId>`；保留 type 126 + chunkHash，原版翻译后续提供） |
-| **光照优化** | Hassium 引擎 | 进服启动进程内影子服务端（完整 MinecraftServer）统一承担世界保存（缓存）+ 区块光照计算 + 打包官方区块包（官方通道回传），客户端不再计算；启动失败自动降级 |
-| | 光照剥离 | 服务端可剥光省流量（握手协商），由影子端统一计算光照并打包回传 |
-| | 光照缓存 | 影子端算光随区块一体落盘（type 126 + chunkHash），重连复用，跳过重算 |
+| **高效压缩** | 存储压缩 | 世界区块 ZSTD 落盘，存档体积显著减小；仍兼容原版 Region（`.mca`）布局 |
+| | 通道压缩 | 传输通道压缩，降低带宽与下载等待；不触碰原版压缩层，无跨 mod 冲突面 |
+| **网络优化** | 平滑推送 | 区块按每 tick 上限限速下发，编码与压缩后台化；进服与扩展视野不卡主线程 |
+| | 实体优化 | 按距离分档降频、热点密度降频、包量反压、错峰发送；只改下发节拍，原版客户端可直接连 |
+| **区块缓存** | 世界保存 | 进服区块自动落盘本地缓存，断连保存、重连复用，少传全量区块 |
+| | 分段增量 | 缓存过期时只补变更方块或整段，避免整块重传 |
+| | 本地生成 | 双端同版本时，大片未探索地形由本地生成，节省带宽；**服务端开启会向客户端下发世界种子** |
+| | 超视渲染 | 客户端渲染距离大于服务端视距时，用本地已有地形回填视距外环带；**仅渲染，不向服务端请求**；与 Bobby 互斥 |
+| | 热度淘汰 | 缓存超容量时按 region 热度自动清理旧区块 |
+| | 世界导出 | `/hassiumc export` 将本地缓存导出为独立存档目录 |
+| **光照优化** | 统一算光 | 客户端进程内统一计算区块光照并打包回传，加载阶段主线程不再被算光占用；启动失败自动降级 |
+| | 光照剥离 | 服务端可剥离光照数据省流量，由客户端统一计算后写回 |
+| | 光照缓存 | 算好的光照随区块一体落盘，重连复用，跳过重算 |
 | **实用工具** | 流量监控 | `/hassium stats`（服务端）、`/hassiumc stats`（客户端）查看压缩与缓存效果 |
 
 未安装本模组的客户端默认可连接（`compat.requireClientMod = false`）；双端都装才能吃满压缩与缓存。

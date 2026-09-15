@@ -151,7 +151,7 @@ fabric/ | forge/ | neoforge/
 | `master.enabledOnLan` | **false** | 集成服已开局域网时对**远程**玩家启用网络面；本机 memory 恒原版；storage 仍仅专用服 |
 | `master.maxChunksPerTick` | 5 | 每玩家每 tick 区块下发上限：Pull FULL/DELTA 完成 + **原版通道整柱**（专用服全员 / LAN 远程；满 tick ≈ 100/s；UNCHANGED 另额 32） |
 |`master.entity*`|见文档|实体域降帧 **9 键**（分层更新总开关 1 `entityTieredUpdateEnabled`；**两张逗号分隔档位表**（近/中/远/边际，须非降序）`entityTierIntervals`=`3,6,10,20` 与物品流独立的 `entityItemTierIntervals`=`2,4,8,16`——掉落物/经验球原版 `updateInterval`=20 是空闲节拍、位置靠每 tick `hasImpulse`，共用生物表会被压平成 1 包/s 而闪现；热点分档 3 `entityDensityTierCounts`/`entityDensityTierFactors`（逗号分隔按 近/中/远/边缘，支持小数）+ `entityMaxThrottleFactor` 总上限；帧预算压力 1 `entityFrameBudgetPerPlayer`；错峰推送 1 `entitySmoothPushEnabled`——同间隔实体按 UUID 错开发送时刻，3 刻总量不变、摊平齐发尖峰），默认全开；全关 = 行为等同未接入。**vanilla 兼容、不要求客户端握手**：只改复制节拍，门控 = 主服实例 + `master.enabled`/`enabledOnLan` 总闸 + entity* 配置（压力采样覆盖全部游戏态连接）；玩家实体与 ItemFrame 类豁免；**密度按实体自己所在 chunk 统计（局部）**，**压力每观察者一份（独立反压，取最近观察者那份作用于实体）**；只改复制（下发客户端）节拍，不碰服务端实体 tick/漏斗判定。实施与设计修正记录见 [`docs/handoff/entity-network-optimization-plan.md`](docs/handoff/entity-network-optimization-plan.md) §6/§8/§9|
-| `chunk.enabled` | true | 区块核心总开关（影子端世界保存/算光/缓存/Pull 模式；关后全程原版路径） |
+| `chunk.enabled` | true | 区块核心总开关（影子端世界保存/算光/缓存；关后全程原版路径） |
 | `chunk.seedGenEnabled` | **false** | 双端同版本；**服务端开启会泄露世界种子** |
 | `chunk.sectionDeltaEnabled` | true | 分段增量 |
 | `chunk.lightStrip` | true | 服务端光照剥离（影子端统一算光） |
@@ -179,7 +179,7 @@ Mod 客户端 ←──唯一 vanilla TCP（登录期握手 + Play 期自定义 
 
 ## 卖点（已实现，按类）
 
-**高效压缩**——存储压缩（ZSTD 落盘 type 126）、通道压缩（聚合包内部字典 ZSTD + 区块推送自有压缩；管线级全局包压缩已退役——不触碰 vanilla 压缩层，无跨 mod 管线冲突面）；**网络优化**——平滑推送（每 tick 提交上限限速 + 全路径后台化）、登录期能力握手（无超时依赖、原版客户端零干扰）、Pull 模式（影子 tracking 驱动的统一 Compare+Pull）、**实体域降帧**（按观察者距离分挡 / 按 chunk 密度热点降档 / 按每玩家每 tick 实体包实测反压 / UUID 相位错峰摊平齐发；**vanilla 兼容、不要求客户端握手**，跟 master 总闸即可；物品流另用独立档位表以免被原版 20 刻空闲节拍压平；`master.entity*` 9 键，默认开，见 [`docs/handoff/entity-network-optimization-plan.md`](docs/handoff/entity-network-optimization-plan.md)）；**区块缓存**——影子端世界保存（进服区块由进程内影子服务端落盘原版存档 `hassium_cache/<serverId>/world`，断连保存重连复用）、容量/热度淘汰（heat.idx + 整文件删除 `.mca`）、分段增量、本地生成（SeedGen：门控开时影子 tracking 触发 vanilla worldgen，交付后 compare-pull；**服务端开启会泄露世界种子**）、`/hassiumc export` 世界导出；**光照优化**——Hassium 引擎（影子端统一算光 + 官方通道回传，客户端不计算；剥光握手协商）、光照剥离。
+**高效压缩**——存储压缩（ZSTD 落盘 type 126）、通道压缩（聚合包内部字典 ZSTD + 区块推送自有压缩；管线级全局包压缩已退役——不触碰 vanilla 压缩层，无跨 mod 管线冲突面）；**网络优化**——平滑推送（每 tick 区块下发上限限速 + 全路径后台化）、**实体域降帧/错峰**（按观察者距离分挡 / 按 chunk 密度热点降档 / 按每玩家每 tick 实体包实测反压 / UUID 相位错峰摊平齐发；**vanilla 兼容、不要求客户端握手**，跟 master 总闸即可；物品流另用独立档位表以免被原版 20 刻空闲节拍压平；`master.entity*` 9 键，默认开，见 [`docs/handoff/entity-network-optimization-plan.md`](docs/handoff/entity-network-optimization-plan.md)）、登录期能力协商 + Play 激活链与按需 Compare+Pull（内部机制，用户无感）；**区块缓存**——影子端世界保存（进服区块由进程内影子服务端落盘原版存档 `hassium_cache/<serverId>/world`，断连保存重连复用）、容量/热度淘汰（heat.idx + 整文件删除 `.mca`）、分段增量、本地生成（SeedGen：门控开时影子 tracking 触发 vanilla worldgen，交付后 compare-pull；**服务端开启会泄露世界种子**）、`/hassiumc export` 世界导出；**光照优化**——Hassium 引擎（影子端统一算光 + 官方通道回传，客户端不计算；剥光由双端能力协商）、光照剥离。
 
 ## 运行时冒烟
 

@@ -6,11 +6,11 @@
 
 Hassium 是 Minecraft 多加载器模组（Fabric / Forge / NeoForge），围绕「**更小的网络传输 + 更快的本地加载**」优化存档与区块传输。对应 [README 特性表](../README.md) 的五大能力类：
 
-- **高效压缩** —— 存储压缩（ZSTD 落盘 type 126）、通道压缩（聚合包内部字典 ZSTD + 区块推送自有压缩；不触碰 vanilla 压缩层）
-- **网络优化** —— 平滑推送（每 tick 提交上限限速 + 全路径后台化）、登录期能力握手 + Play 期激活链、Pull 模式（服务端权威边沿声明 + 客户端 Compare+Pull；OVD 环带票驱动）
-- **区块缓存** —— 影子端世界保存（进程内影子服务端按原版区块机制加载、落盘和推送）、分段增量、容量/热度淘汰、世界导出
-- **本地生成** —— SeedGen：影子端对 pristine 区块执行生成前权威校验后再进入原版 ChunkStatus/LightEngine。**开启服务端开关会向客户端下发世界种子，等同泄露服务端种子**
-- **光照优化** —— 影子端原版 LightEngine 统一算光并通过官方 vanilla packet 回传；服务端可剥光（`chunk.lightStrip`）
+- **高效压缩** —— 存储压缩、通道压缩
+- **网络优化** —— 平滑推送、实体优化
+- **区块缓存** —— 世界保存、分段增量、本地生成、超视渲染、热度淘汰、世界导出
+- **光照优化** —— 统一算光、光照剥离、光照缓存
+- **实用工具** —— 流量监控
 
 > **超视渲染（OVD）**：影子双窗设计——权威窗（serverVD）由服务端 `chunk_authority_s2c` 声明 + Compare+Pull；OVD 环带由 `ShadowTicketDriver` 出票装载（缺盘柱），本地源（盘/注入）回填，禁止真服请求。影子 tracking 半径在接管态压到最小（仅算光邻域 + 自愈扫描）。客户端只抬 `ClientChunkCache` 半径并拦 Forget。详见 [`chunk-cache.md`](chunk-cache.md) §10。
 
@@ -266,33 +266,34 @@ Sector 2+:    [length(4)][type=126][magic 0x48][hash(8)][ZSTD 压缩数据]
 - **Fabric**：Night Config 自管 toml + jiJ **Cloth**；安装 **Mod Menu** 即可打开。不依赖 FCAP / Configured。
 - **Forge / NeoForge**：原生 ConfigSpec + jiJ **Cloth**（模组列表「配置」按钮）；亦可手改 toml。Configured 仍可选。FCAP Forge 桥已随 Forge 1.20.6 退役。
 
-各项 GUI 文案见 `assets/hassium/lang/*`；toml 注释仍为中文。键集真相源：`ConfigSchema`（45 键）。
+各项 GUI 文案见 `assets/hassium/lang/*`；toml 注释 = `ConfigSchema` 双语 comment。键集真相源：`ConfigSchema`（52 键）。用户侧完整键表见 wiki [Configuration](../wiki/Configuration.md) 与 [`config-audit.md`](config-audit.md)。
 
 | 项 | 默认 | 说明 |
 |----|------|------|
-| `storage.enabled` | **false** | 默认关；开启后存档 ZSTD（type 126）；**启用前请备份世界**。仅专用服务器写（单人/局域网保持原版格式，读兼容） |
-| `storage.zstdLevel` | 3 | 存储压缩等级 |
-| `chunk.enabled` | true | 区块核心总开关（影子端世界保存/算光/缓存/Pull 模式；关后全程原版路径） |
-| `chunk.sectionDeltaEnabled` | true | 缓存过期时只补变更方块（过多则整段/整块） |
-| `chunk.viewDistanceExtensionEnabled` | true | 超视渲染（OVD；依赖 `chunk.enabled`；与 Bobby 互斥）。见 [`chunk-cache.md`](chunk-cache.md) §10 |
-| `chunk.maxRenderDistance` | 16 | 超视渲染 effective clientRD 上限（2–64） |
-| `chunk.mainThreadChunkBudgetMs` | 15 | 客户端主线程 apply 预算（ms） |
+| `storage.enabled` | **false** | 是否启用存档压缩（默认关；区块核心缓存独立不受影响） |
+| `storage.zstdLevel` | 3 | 存储 ZSTD 压缩等级 |
+| `chunk.enabled` | true | 是否启用区块核心缓存 |
+| `chunk.sectionDeltaEnabled` | true | 是否启用分段增量（服务端规划 + 客户端应用） |
+| `chunk.viewDistanceExtensionEnabled` | true | 超视渲染 OVD（影子双窗：clientRD>serverVD 时本地源回填环带）。见 [`chunk-cache.md`](chunk-cache.md) §10 |
+| `chunk.maxRenderDistance` | 16 | 超视渲染 effective clientRD 上限 |
+| `chunk.mainThreadChunkBudgetMs` | 15 | 主线程 apply 预算（ms） |
 | `chunk.maxChunksPerFrame` | 6 | 每 tick 缓存读取生产上限（影子入队 + 影子读盘；主线程消费只受时间预算） |
-| `chunk.maxSizeMb` | 4096 | 影子端存档容量上限（MB；超限触发热度淘汰） |
-| `chunk.hotScoreThreshold` | 0.3 | 热点分数阈值（低于视为冷 region 文件，清理时优先淘汰） |
-| `chunk.recencyWeight` / `chunk.frequencyWeight` | 0.7 / 0.3 | 热度分数中最近访问/访问频率权重 |
+| `chunk.maxSizeMb` | 4096 | 缓存最大容量（MB；影子端存档容量上限，超限触发热度淘汰） |
+| `chunk.hotScoreThreshold` | 0.3 | 热点分数阈值（低于此值视为冷 region 文件，清理时优先淘汰） |
+| `chunk.recencyWeight` / `chunk.frequencyWeight` | 0.7 / 0.3 | 最近访问权重 / 访问频率权重 |
 | `chunk.cleanupIntervalTicks` | 6000 | 清理检查间隔（刻） |
-| `chunk.targetSizeMb` | 0（自动） | 目标缓存大小（MB） |
+| `chunk.targetSizeMb` | 0（自动） | 目标缓存大小（MB；0=自动） |
 | `chunk.minCleanupBatchSize` | 100 | 每轮最多淘汰的 region 文件数 |
-| `chunk.seedGenEnabled` | **false** | 本地区块生成（双端同版本，默认关）。**服务端开启会向客户端下发世界种子（泄露服务端种子）**；客户端门控开时影子 tracking 触发 vanilla worldgen，交付后 compare-pull |
-| `chunk.lightStrip` | true | 服务端光照剥离，必须经 Hassium 能力握手 |
-| `master.enabled` | true | 服务端网络通道总开关（登录期握手/压缩/聚合的门） |
-| `master.compressionLevel` | 3 | 自有通道 ZSTD 压缩等级（速度优先） |
-| `master.maxChunksPerTick` | **5** | 每玩家每 tick 区块下发上限：Pull FULL/DELTA 完成 + 原版通道整柱（专用服全员 / LAN 远程；1.21+ 钳 `PlayerChunkSender`，1.20.1 滴灌 `trackChunk`；满 tick ≈ 100/s） |
-| `master.enablePacketAggregation` / `aggregationMaxWaitTimeMs` / `aggregationMaxSize` | `true` / `50ms` / `256KB` | 包聚合（服务端拦截 + 客户端反聚合；tick 尾异步冲刷 + maxWait 兜底；ACK 超时 5s 自动降级） |
-| `master.compressionBlacklist` | `[]` | 第三方包压缩/聚合排除（默认空）。Hassium 控制面由 `PacketCompressionBlacklist` 硬编码永久排除，改本列表不影响它们 |
-| `compat.requireClientMod` | false | 无模组客户端可连（true 时登录期握手失败即踢出，替代超时等待） |
-| `compat.autoDowngradeOnError` | true | 出错时自动降级 |
+| `chunk.seedGenEnabled` | **false** | 是否启用 SeedGen（本地生成 pristine 区块；需双端同版本，默认关）。服务端开启时会下发世界种子 |
+| `chunk.lightStrip` | true | 是否启用光照剥离 |
+| `master.enabled` | true | 是否启用主控核心网络通道 |
+| `master.compressionLevel` | 3 | 自有通道 ZSTD 压缩等级 |
+| `master.maxChunksPerTick` | **5** | 每玩家每 tick 区块下发上限：Pull FULL/DELTA 完成 + 原版通道整柱发送（满 tick ≈ 本值×20/s） |
+| `master.enablePacketAggregation` / `aggregationMaxWaitTimeMs` / `aggregationMaxSize` | `true` / `50ms` / `256KB` | 是否启用包聚合 / 冲刷兜底（ms）/ 聚合最大大小 |
+| `master.compressionBlacklist` | `[]` | 第三方包 ID 的压缩/聚合排除列表（默认空）。Hassium 控制面与独立压缩通道已硬编码排除，改本列表不影响它们 |
+| `master.entity*`（9 键） | 默认全开 | 实体分层更新 / 物品流档位 / 热点密度 / 帧预算 / 错峰；见 config-audit B3 |
+| `compat.requireClientMod` | false | 是否强制要求客户端安装 Hassium |
+| `compat.autoDowngradeOnError` | true | 出错时是否自动降级 |
 | `debug.*` | 多为 `false` | 调试分类日志，见 §10（`debug.networkMetricsAutoReset` 默认 `true`） |
 
 网关监听/端点/鉴权（`controlReachableEndpoints` / `bindHost` / `authToken`）、L1 迁移（`master.migration*` 7 键）、续流票据（`resumeTicketTtlMs`）、UDP 数据面（`dataplane.*`）、管线级全局包压缩（`globalPacketCompression` 等 4 键）、`chunk.ovdUnloadDelaySecs`（延迟卸载取消，不再恢复）、`chunk.seedGenThreads` / `master.serverChunkPushThreads`、`net.*` 客户端网络键族、`chunk.hassiumEngineEnabled` / `chunk.unloadDelaySecs` 均已退役删除；旧 toml 中的残留键由加载器静默清除（legacy key hygiene，见 `FabricTomlConfigIO` 清理表）。OVD 两键（`viewDistanceExtensionEnabled` / `maxRenderDistance`）随双窗重做恢复；`chunk.ovdLocalGeneration` 随后退役删除（已入清理表）。

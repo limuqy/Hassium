@@ -4,7 +4,7 @@
 
 > **English**: [Features](Features) · English
 
-Hassium pairs a client and server mod to optimize Minecraft along **efficient compression, network optimization, chunk cache, beyond-view render, local generation, lighting, and utilities**. This page summarizes each feature and when it applies.
+Hassium pairs a client and server mod to optimize Minecraft along **efficient compression, network optimization, chunk cache, lighting optimization, and utilities**. This page summarizes each feature and when it applies.
 
 ---
 
@@ -37,7 +37,7 @@ Hassium pairs a client and server mod to optimize Minecraft along **efficient co
 
 - **Goal**: the server never saturates its main thread during joins or view expansion, and the client avoids stutter spikes
 - **Server side**:
-  - **Per-tick cap**: `master.maxChunksPerTick` (default `5`) limits per-player per-tick Pull FULL/DELTA completions (5×20 = 100/s at full tick); UNCHANGED is a separate cap of 32
+  - **Per-tick cap**: `master.maxChunksPerTick` (default `5`) limits per-player per-tick chunk sends (5×20 = 100/s at full tick); rate degrades naturally on laggy ticks
   - **Background serialization**: encode / ZSTD / hash / send run on a CPU-count push pool (`availableProcessors()`); the main thread only builds packet snapshots — aligned with vanilla (main thread builds, netty encodes)
 - **Client side**:
   - Per-frame apply budget `chunk.mainThreadChunkBudgetMs` (default `15`)
@@ -46,26 +46,36 @@ Hassium pairs a client and server mod to optimize Minecraft along **efficient co
 
 ---
 
-### Login-phase handshake + Pull mode
+### Entity optimization
 
-- **Goal**: zero-timeout capability negotiation, zero interference for vanilla clients; chunk data fetched on demand after negotiation
-- **How**:
-  - On 1.20.1 the server sends the `hassium:login_hello` login query inside `handleAcceptedLogin` (after LoginCompression, before GameProfile); on 1.21.1+ the config-stage `PreHandshakePayload` (after authentication)
-  - Bitwise capability negotiation (agg/delta/seed/light/pull/shadow_pull/pull_mode); empty answer or no shared capability → vanilla path (`compat.requireClientMod=true` kicks at login instead)
-  - Play-phase activation: `ServerPlayer <init>` TAIL consumes negotiated caps (suppresses the vanilla chunk window) → dictionary_sync/index_sync → aggregation PENDING (5s ACK timeout downgrades to direct send) → `play_init_s2c` → client ACK → aggregation ENABLED
-  - **Pull mode** (`pull_mode` capability): after negotiation the server stops pushing full chunk payloads (forget/metadata continue); chunk data is fetched by the unified Compare+Pull driven by the client shadow virtual player's vanilla tracking (`ShadowPull`: UNCHANGED / DELTA / FULL / ERROR)
-- **Config**: `master.enabled` (server gate), `chunk.enabled` (client gate)
+- **Goal**: cut bandwidth and main-thread spikes when many mobs/items would otherwise fire on the same tick; **applies to vanilla clients too** (replication cadence only, protocol unchanged)
+- **How** (four orthogonal layers, all on by default):
+  - **Distance tiers**: farther entities update less often (`master.entityTieredUpdateEnabled` + `entityTierIntervals`)
+  - **Item-flow table**: dropped items / XP orbs use their own interval table (`entityItemTierIntervals`, default 2/4/8/16 ticks) so the vanilla 20-tick idle beat cannot flatten them into 1 packet/s flicker
+  - **Hotspot density**: stretch intervals when the entity's own chunk is crowded (`entityDensityThrottleEnabled` + `entityDensityTierCounts/Factors`)
+  - **Packet-budget backpressure**: if a player keeps exceeding the per-tick entity packet budget, entities in their view become sparser (`entityFrameBudgetPerPlayer`, default 128)
+  - **Phase stagger**: same-interval entities are UUID-offset across ticks — total volume over an interval is unchanged, the same-tick burst is flattened (`entitySmoothPushEnabled`)
+- **Boundary**: only the replication (send) cadence; server entity ticks / pickup / hopper logic untouched; player self-motion is exempt
+- **Config**: `master.entity*` (follows the `master.enabled` master switch; all off = vanilla behavior)
 
 ---
 
 ## Chunk cache
 
-### Cache hits (shadow-world saving)
+### World save
 
 - **Goal**: avoid re-downloading full chunks when revisiting an area
-- **How**: the server computes chunkHash before pushing; the client shadow side compares against cached contentHash — on hit it applies locally, skipping the vanilla full download
+- **How**: the server computes a chunk fingerprint before pushing; the client compares against the local cache — on hit it applies locally, skipping the full download
 - **Config**: `chunk.enabled` (default `true`)
-- **Details**: caching is owned by the shadow server — join chunks land in the vanilla save `hassium_cache/<serverId>/world` (type 126 + chunkHash; the legacy HBT1 client cache format is retired); heat-based per-region-file eviction (`heat.idx` accumulates across sessions, whole-file `.mca` deletion). Section delta and world export reuse the same cache (below)
+- **Details**: visited chunks are saved to the local cache directory; section delta, world export, and heat eviction all reuse the same cache (below)
+
+---
+
+### Heat eviction
+
+- **Goal**: keep cache size under the configured cap
+- **How**: region files accumulate access heat; over-capacity colder regions are deleted whole-file first
+- **Config**: `chunk.maxSizeMb` (default `4096`), `chunk.hotScoreThreshold`, `chunk.cleanupIntervalTicks`
 
 ---
 
@@ -85,40 +95,38 @@ Hassium pairs a client and server mod to optimize Minecraft along **efficient co
 
 ### World export
 
-- **Goal**: export the shadow world as a standalone save (keeps type 126 + chunkHash; vanilla translation pending)
+- **Goal**: copy the local cache into a standalone save directory
 - **Command**: `/hassiumc export [<serverIp>] [seed]`
 - **Details**: [World-Export](World-Export-en)
 
 ---
 
-### Local generation (SeedGen)
+### Local generation
 
-- **Goal**: pristine terrain no longer needs per-chunk transmission — zero-bandwidth generation
-- **How**: the server ships the world seed during Play activation (`play_init_s2c`, `LevelStem` NBT); with the gate open the client's shadow vanilla tracking runs worldgen directly for pristine chunks, then the result is authority-checked via compare-pull and takes the same pipeline as remote chunks (lighting → official packet → official channel), saved on disconnect. Failures/mismatches fall back to full requests
+- **Goal**: unexplored terrain is generated locally instead of transferred chunk by chunk
+- **How**: with both sides on the same version and the gate open, the server ships the world seed; the client triggers vanilla worldgen locally, then results are authority-checked before delivery. Failures/mismatches fall back to full requests
 - **Config**: `chunk.seedGenEnabled` (default `false`, both sides same version)
 - **Risk**: **server enablement sends the world seed to clients — equivalent to leaking the server seed** (seed maps / exported saves can exploit it)
 
 ---
 
-## Beyond-view render
+### Beyond-view render
 
-### OVD (shadow dual-window)
-
-- **Goal**: when the client render distance (RD) exceeds the server view distance (serverVD), backfill the ring beyond it from local cache — **render-only, never simulated**
-- **How**: shadow tracking widens to the effective clientRD; the authoritative window (`dist ≤ serverVD`) uses the unified Compare+Pull, while the OVD window is filled only from local sources (disk / injected) with **no requests to the real server**; the client only raises its `ClientChunkCache` radius and intercepts Forget
+- **Goal**: when client render distance exceeds server view distance, backfill the outer ring from local cache — **render-only, never simulated**
+- **How**: the ring beyond server view distance is filled only from local cache with **no requests to the server**; the client raises its local chunk-cache radius and intercepts Forget
 - **Config**: `chunk.viewDistanceExtensionEnabled` (default `true`; requires `chunk.enabled`), `chunk.maxRenderDistance` (default `16`)
-- **Boundary**: mutually exclusive with Bobby; see [Beyond-View-Render](Beyond-View-Render-en) and [`docs/chunk-cache.md`](../docs/chunk-cache.md) §10
+- **Boundary**: mutually exclusive with Bobby; see [Beyond-View-Render](Beyond-View-Render-en)
 
 ---
 
-## Lighting
+## Lighting optimization
 
-### Hassium engine (on by default)
+### Unified lighting (on by default)
 
-- **What**: on join, an in-process shadow server (full MinecraftServer) takes over world saving (cache) + chunk lighting + packing official chunk packets — the client no longer computes lighting, and the loading phase no longer spends main-thread time on light recomputation
-- **Master switch**: `chunk.enabled` (default `true`); when off the shadow server does not start and the server does not strip light (engine capability not declared) — light arrives with packets, vanilla path everywhere
-- **Auto-degrade**: if the shadow server fails to start, client cache / SeedGen are disabled with an in-game notice; networking and basic loading are unaffected. Without the server mod the shadow server does not start (no world seed): light comes with packets while cache / export still work
-- **World seed**: the shadow server uses the worldSeed delivered by the server handshake (server mod installed); it never invents a world
+- **What**: on join, an in-process engine takes over chunk lighting and official chunk-packet packing — the client no longer computes lighting, and the loading phase no longer spends main-thread time on light recomputation. It also owns world saving (cache)
+- **Master switch**: `chunk.enabled` (default `true`); when off, light arrives with packets — vanilla path everywhere
+- **Auto-degrade**: if startup fails, client cache / local generation are disabled with an in-game notice; networking and basic loading are unaffected. Without the server mod, light comes with packets while cache / export still work
+- **World seed**: uses the world seed delivered by the server handshake (when the server mod is installed); it never invents a world
 
 ### Light stripping
 
@@ -128,11 +136,11 @@ Hassium pairs a client and server mod to optimize Minecraft along **efficient co
 
 ---
 
-### Lighting cache
+### Light cache
 
 - **Goal**: avoid recomputing lighting on the client
-- **How**: shadow-computed lighting is written back into the shadow world save (stored with chunk data); later cache hits apply the stored lighting directly; merged SectionDelta is recomputed by the shadow side
-- **Metrics**: `/hassiumc stats` shows `Lighting cache: xx% (hits N, shadow reuse M, recomputed K)` and `Lighting recompute: main x ms, background y ms`
+- **How**: computed lighting is saved with the chunk; later cache hits apply the stored lighting directly; merged section updates are recomputed
+- **Metrics**: `/hassiumc stats` shows lighting cache hit rate and recompute time
 
 ---
 

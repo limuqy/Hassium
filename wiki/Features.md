@@ -4,7 +4,7 @@
 
 > **English**: [Features-en](Features-en) · 中文
 
-Hassium 用一套客户端 + 服务端配合，从**高效压缩、网络优化、区块缓存、超视渲染、本地生成、光照优化、实用工具**七个方向优化 Minecraft。本页按大类给出每条功能的速览与适用条件。
+Hassium 用一套客户端 + 服务端配合，从**高效压缩、网络优化、区块缓存、光照优化、实用工具**五个方向优化 Minecraft。本页按大类给出每条功能的速览与适用条件。
 
 ---
 
@@ -37,7 +37,7 @@ Hassium 用一套客户端 + 服务端配合，从**高效压缩、网络优化�
 
 - **目标**：进服与视野扩展时服务端不把主线程压满、客户端不出现卡顿尖峰
 - **服务端怎么做**（推送侧）：
-  - **tick 粒度限速**：`master.maxChunksPerTick`（默认 `5`）限制每玩家每 tick 完成的 Pull FULL/DELTA（5×20 = 100/s 满 tick）；UNCHANGED 另额 32；掉刻时每秒总量自然下降
+  - **tick 粒度限速**：`master.maxChunksPerTick`（默认 `5`）限制每玩家每 tick 的区块下发量（5×20 = 100/s 满 tick）；掉刻时每秒总量自然下降
   - **序列化后台化**：encode / ZSTD 压缩 / hash 计算 / 发送在 CPU 核数推送池（`availableProcessors()`）；主线程只做 packet 快照构建——与原版对齐（原版也是主线程构建 + netty 线程编码）
 - **客户端怎么做**（加载侧）：
   - 每帧主线程 apply 预算 `chunk.mainThreadChunkBudgetMs`（默认 `15`）
@@ -46,26 +46,36 @@ Hassium 用一套客户端 + 服务端配合，从**高效压缩、网络优化�
 
 ---
 
-### 登录期能力握手 + Pull 模式
+### 实体优化
 
-- **目标**：双端能力协商零超时依赖、原版客户端零干扰；协商通过后区块数据按需拉取
-- **怎么做的**：
-  - 1.20.1 服务端在 `handleAcceptedLogin` 内（LoginCompression 之后、GameProfile 之前）发 `hassium:login_hello` login query；1.21.1+ 走配置阶段 `PreHandshakePayload`（认证完成后）
-  - 能力位按位与协商（agg/delta/seed/light/pull/shadow_pull/pull_mode）；空应答或无共同能力位 → 服务端原版路径（`compat.requireClientMod=true` 时登录期踢出）
-  - Play 期激活链：`ServerPlayer <init>` TAIL 消费协商位（压制原版区块窗口）→ dictionary_sync/index_sync → 聚合 PENDING（5s 无 ACK 降级直发）→ `play_init_s2c` → 客户端 ACK → 聚合 ENABLED
-  - **Pull 模式**（`pull_mode` 能力位）：协商通过后服务端对该玩家停发 chunk_payload 整柱推送（forget/元数据照常），区块数据全部由客户端影子虚拟玩家 tracking 驱动的统一 Compare+Pull 拉取（`ShadowPull`：UNCHANGED / DELTA / FULL / ERROR 四终态）
-- **配置**：`master.enabled`（服务端门）、`chunk.enabled`（客户端门）
+- **目标**：大量生物/掉落物同 tick 齐发时压带宽与主线程；**原版客户端也能吃到**（只改下发节拍，不改协议）
+- **怎么做的**（四层正交叠加，默认全开）：
+  - **距离分档降频**：离得越远更新越稀（`master.entityTieredUpdateEnabled` + `entityTierIntervals`）
+  - **物品流独立档位**：掉落物/经验球单独一张表（`entityItemTierIntervals`，默认 2/4/8/16 刻），避免被原版 20 刻空闲节拍压平导致闪现
+  - **热点密度降频**：实体所在 chunk 过密时按档放大间隔（`entityDensityThrottleEnabled` + `entityDensityTierCounts/Factors`）
+  - **包量反压**：某玩家持续超过每 tick 实体包预算时，他视野内实体自动变稀（`entityFrameBudgetPerPlayer`，默认 128）
+  - **错峰推送**：同间隔实体按 UUID 错开发送时刻，3 刻总量不变、摊平齐发尖峰（`entitySmoothPushEnabled`）
+- **边界**：只改复制（下发）节拍，不碰服务端实体 tick / 拾取 / 漏斗判定；玩家自身位移豁免
+- **配置**：`master.entity*`（跟 `master.enabled` 总闸；全关 = 等同原版）
 
 ---
 
 ## 区块缓存
 
-### 缓存命中（影子端世界保存）
+### 世界保存
 
 - **目标**：再次进入同一区域少传全量区块
-- **怎么做的**：服务端在推送前算 chunkHash；客户端影子端用本地缓存里的 contentHash 比对，命中直接走本地解压 apply，跳过原版全量下载
+- **怎么做的**：服务端在推送前计算区块指纹；客户端用本地缓存比对，命中直接走本地应用，跳过全量下载
 - **配置**：`chunk.enabled`（默认 `true`）
-- **细节**：缓存由影子端承担——进服区块统一落盘原版存档 `hassium_cache/<serverId>/world`（type 126 + chunkHash；旧 HBT1 客户端缓存格式已裁剪）；按 region 文件热度淘汰（`heat.idx` 跨会话累计，整文件删除 `.mca`）。分段增量、世界导出都复用同一份缓存数据（见下）
+- **细节**：进服区块统一落盘到本地缓存目录；分段增量、世界导出、热度淘汰都复用同一份缓存数据（见下）
+
+---
+
+### 热度淘汰
+
+- **目标**：缓存占用不超过设定上限
+- **怎么做的**：按 region 文件累计访问热度，超容量时优先删除较冷的整个 region 文件
+- **配置**：`chunk.maxSizeMb`（默认 `4096`）、`chunk.hotScoreThreshold`、`chunk.cleanupIntervalTicks`
 
 ---
 
@@ -85,40 +95,38 @@ Hassium 用一套客户端 + 服务端配合，从**高效压缩、网络优化�
 
 ### 世界导出
 
-- **目标**：把影子端世界目录导出为独立存档（保留 type 126 + chunkHash 格式，原版翻译后续提供）
+- **目标**：把本地缓存导出为独立存档目录
 - **命令**：`/hassiumc export [<serverIp>] [seed]`
 - **专文**：[World-Export](World-Export)
 
 ---
 
-### 本地生成（SeedGen）
+### 本地生成
 
-- **目标**：大片未探索地形（pristine 区块）不再逐块传输，零带宽生成
-- **怎么做的**：服务端在 Play 激活（`play_init_s2c`）下发世界种子（`LevelStem` NBT）；门控开时客户端影子端 vanilla tracking 直接触发原版 worldgen 本地生成 pristine 区块，生成后经服务端权威 compare-pull 校验，再走与远程区块相同的（算光 → 打包官方包 → 官方通道落地）链，断连一并 `saveAll` 落盘；失败/校验不过自动回退全量请求
+- **目标**：大片未探索地形不再逐块传输，本地生成省带宽
+- **怎么做的**：双端同版本且开启时，服务端下发世界种子；客户端本地触发原版地形生成，生成后经服务端权威校验再落地；失败/校验不过自动回退全量请求
 - **配置**：`chunk.seedGenEnabled`（默认 `false`，需双端同版本同开）
 - **风险**：**服务端开启会向客户端下发世界种子，等同泄露服务端种子**（探图/种子地图/导出存档均可利用）
 
 ---
 
-## 超视渲染
+### 超视渲染
 
-### OVD（影子双窗）
-
-- **目标**：多人服客户端渲染距离（RD）大于服务端视距（serverVD）时，用本地缓存回填视距外环带——**仅参与渲染、不参与模拟**
-- **怎么做的**：影子 tracking 扩到 effective clientRD；权威窗（`dist ≤ serverVD`）走统一 Compare+Pull，OVD 窗只从本地源（盘 / 注入）回填，**禁止向真服请求**；客户端只抬 `ClientChunkCache` 半径并拦截 Forget
+- **目标**：客户端渲染距离大于服务端视距时，用本地缓存回填视距外环带——**仅参与渲染、不参与模拟**
+- **怎么做的**：视距外环带只从本地缓存回填，**禁止向服务端请求**；客户端抬高本地区块缓存半径并拦截 Forget
 - **配置**：`chunk.viewDistanceExtensionEnabled`（默认 `true`；依赖 `chunk.enabled`）、`chunk.maxRenderDistance`（默认 `16`）
-- **边界**：与 Bobby 互斥；详见 [Beyond-View-Render](Beyond-View-Render) 与 [`docs/chunk-cache.md`](../docs/chunk-cache.md) §10
+- **边界**：与 Bobby 互斥；详见 [Beyond-View-Render](Beyond-View-Render)
 
 ---
 
 ## 光照优化
 
-### Hassium 引擎（默认开启）
+### 统一算光（默认开启）
 
-- **是什么**：进服后在客户端进程内启动影子端（完整 MinecraftServer），统一承担世界保存（缓存）+ 区块光照计算 + 打包官方区块包——客户端不再自己算光，加载阶段主线程不再被光照重算占用
-- **总开关**：`chunk.enabled`（默认 `true`）；关闭后影子端不启动，服务端在握手时不剥光（未声明引擎可用），光照随包自带，全程原版路径
-- **启动失败自动降级**：影子端启动失败时自动关闭客户端缓存 / SeedGen 并在游戏内提示，网络与基础加载不受影响；服务端未装 Hassium MOD 时影子端不启动（无世界种子），光随数据包自带，缓存 / 世界导出仍可用
-- **世界种子**：影子端使用服务端握手下发的 worldSeed（服务端已装 MOD），不自行生成世界
+- **是什么**：进服后在客户端进程内统一承担区块光照计算与官方区块包打包——客户端不再自己算光，加载阶段主线程不再被光照重算占用；同时承担世界保存（缓存）
+- **总开关**：`chunk.enabled`（默认 `true`）；关闭后光照随包自带，全程原版路径
+- **启动失败自动降级**：启动失败时自动关闭客户端缓存 / 本地生成并在游戏内提示，网络与基础加载不受影响；服务端未装本模组时光随数据包自带，缓存 / 世界导出仍可用
+- **世界种子**：使用服务端握手下发的世界种子（服务端已装本模组时），不自行生成世界
 
 ### 光照剥离
 
@@ -131,8 +139,8 @@ Hassium 用一套客户端 + 服务端配合，从**高效压缩、网络优化�
 ### 光照缓存
 
 - **目标**：客户端避免重复算光
-- **怎么做的**：影子端算好的光照写回影子端存档（随区块数据一体存储）；后续缓存命中直接 apply 已存光照；SectionDelta 合并后交由影子端重新计算
-- **指标**：`/hassiumc stats` 显示 `光照缓存：xx%（命中 N，影子复用 M，重算 K）` 与 `光照重算：主线程 x ms，后台 y ms`（影子端本会话重算光统一计入重算 K）
+- **怎么做的**：算好的光照随区块一体落盘；后续缓存命中直接应用已存光照；分段增量合并后重新计算
+- **指标**：`/hassiumc stats` 显示光照缓存命中率与重算耗时
 
 ---
 

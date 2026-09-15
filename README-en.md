@@ -23,19 +23,19 @@ Smaller world saves and bandwidth than vanilla, local chunk reuse, and smoother 
 
 | Category | Feature | Description |
 | --- | --- | --- |
-| **Efficient compression** | Storage compression | World chunk ZSTD on disk (type 126) for smaller saves; keeps vanilla Region (`.mca`) layout |
-| | Channel compression | Dictionary ZSTD inside aggregated packets + chunk-push native compression; never touches the vanilla compression layer, no cross-mod pipeline conflicts |
-| **Network optimization** | Smooth push | Per-player per-tick Pull completion cap (`master.maxChunksPerTick`, ≈ cap×20/s at full tick) + backgrounded encode/compress; joins never saturate the main thread |
-| | Login-phase capability handshake | `hassium:login_hello` login query on 1.20.1, config-stage `PreHandshakePayload` on 1.21.1+; bitwise capability negotiation with no timeout dependency and zero interference for vanilla clients |
-| | Pull mode | After negotiation the server stops pushing full chunks; chunk data is fetched by the unified Compare+Pull driven by the client shadow virtual player's vanilla tracking (`ShadowPull`: UNCHANGED / DELTA / FULL / ERROR) |
-| **Chunk cache** | Shadow-world saving | Join chunks are lit and saved into a vanilla save dir (`hassium_cache/<serverId>/world`) by an in-process shadow server (full MinecraftServer); saved on disconnect, reused on reconnect |
-| | Section delta | On stale cache only changed blocks are sent (`SectionDelta`); whole section next, whole chunk beyond that |
-| | Capacity/heat eviction | `heat.idx` tracks heat per region file; over-capacity regions are deleted whole-file (`ShadowCacheEviction`) |
-| | World export | `/hassiumc export` copies the shadow world into an export save (`hassium_exports/<cacheId>`; keeps type 126 + chunkHash; vanilla translation pending) |
-| **Local generation** | SeedGen | With both sides on the same version and the gate open, the server sends the world seed during Play activation (`play_init_s2c`); the client's shadow tracking then runs vanilla worldgen locally for pristine chunks, and results are authority-checked via compare-pull before delivery. **Enabling the server switch sends the world seed to clients — equivalent to leaking the server seed** |
-| **Beyond-view render** | OVD (shadow dual-window) | When the client RD exceeds the server view distance, the ring beyond it is backfilled from terrain the shadow server already has locally (injected/disk); **render-only, never simulated**, and never requested from the server; mutually exclusive with Bobby |
-| **Lighting** | Hassium engine | On join an in-process shadow server takes over **world saving (cache) + chunk lighting + packing official chunk packets** (returned over the official channel); the client no longer computes lighting; auto-degrades on startup failure |
-| | Light stripping | The server may strip light to save bandwidth (`chunk.lightStrip`); the shadow server computes lighting and packs it back |
+| **Efficient compression** | Storage compression | World chunks are ZSTD-compressed on disk for significantly smaller saves; keeps the vanilla Region (`.mca`) layout |
+| | Channel compression | On-wire compression lowers bandwidth and download waits; never touches the vanilla compression layer, no cross-mod conflicts |
+| **Network optimization** | Smooth push | Chunks are rate-limited per tick and encode/compress work is offloaded; joins and view expansion never stall the main thread |
+| | Entity optimization | Distance-tiered rates, hotspot density throttle, packet-budget backpressure, and phase stagger; replication-only — vanilla clients can join |
+| **Chunk cache** | World save | Chunks you visit are saved to a local cache automatically; saved on disconnect, reused on reconnect — no full re-download |
+| | Section delta | On stale cache only changed blocks or whole sections are fetched instead of the whole chunk |
+| | Local generation | With both sides on the same version, unexplored terrain is generated locally to save bandwidth; **enabling on the server sends the world seed to clients** |
+| | Beyond-view render | When client render distance exceeds server view distance, the outer ring is backfilled from locally cached terrain; **render-only, never requested from the server**; mutually exclusive with Bobby |
+| | Heat eviction | Over-capacity caches are cleaned by region heat automatically |
+| | World export | `/hassiumc export` copies the local cache into a standalone save directory |
+| **Lighting optimization** | Unified lighting | An in-process engine computes chunk lighting and packs it back; the main thread is no longer occupied by lighting on load; auto-degrades on startup failure |
+| | Light stripping | The server may strip light data to save bandwidth; the client computes and writes it back |
+| | Light cache | Computed lighting is saved with the chunk and reused on reconnect, skipping recomputation |
 | **Utilities** | Traffic monitoring | `/hassium stats` (server) and `/hassiumc stats` (client) show compression and cache effectiveness |
 
 Vanilla clients can join by default (`compat.requireClientMod = false`); install on both sides for full compression and caching.
@@ -70,9 +70,10 @@ Forge supports 1.20.1 / 1.21.1 / 1.21.3–1.21.10 (no upstream Forge userdev for
 
 Enabled by default:
 
-- Login-phase handshake + Play-phase aggregation/dictionary compression channel
-- Shadow-world saving (join chunks land in `hassium_cache/<serverId>/world`; saved on disconnect, reused on reconnect)
-- In-process shadow server computing lighting (Hassium engine)
+- Channel compression / packet aggregation + smooth chunk push
+- Entity optimization (distance tiers / hotspot throttle / packet-budget backpressure / phase stagger; applies to vanilla clients too)
+- World save (visit chunks land in the local cache; saved on disconnect, reused on reconnect)
+- Unified lighting (in-process chunk lighting; the main thread is no longer occupied by lighting on load)
 
 > Storage compression (`storage.enabled`) is **off** by default and dedicated-server only; enabling rewrites the chunk save format — **back up your world first**. Vanilla clients can join by default (`compat.requireClientMod = false`).
 
@@ -84,31 +85,41 @@ Files: `config/hassium/hassium-client.toml`, `config/hassium/hassium-server.toml
 
 | Key | Default | Description |
 | --- | --- | --- |
-| `chunk.enabled` | `true` | Chunk-core master switch (shadow-world saving/lighting/cache/Pull mode; off = vanilla path everywhere) |
-| `chunk.sectionDeltaEnabled` | `true` | Section delta (server-side planning + client-side apply) |
-| `chunk.seedGenEnabled` | `false` | SeedGen local generation (both sides same version; **server enablement leaks the world seed**) |
-| `chunk.viewDistanceExtensionEnabled` | `true` | Beyond-view render OVD (shadow dual-window; requires `chunk.enabled`; mutually exclusive with Bobby) |
-| `chunk.maxRenderDistance` | `16` | OVD max effective clientRD (2–64) |
-| `chunk.mainThreadChunkBudgetMs` | `15` | Client per-frame apply budget (ms) |
-| `chunk.maxChunksPerFrame` | `6` | Per-tick cache-read production cap (shadow enqueue + shadow disk) |
-| `chunk.maxSizeMb` | `4096` | Cache size cap (MB; excess triggers heat eviction) |
-| `chunk.hotScoreThreshold` | `0.3` | Heat-score threshold (below = cold region, evicted first) |
-| `chunk.cleanupIntervalTicks` | `6000` | Cleanup check interval (ticks) |
-| `chunk.lightStrip` | `true` | Server light stripping (shadow server computes lighting) |
-| `storage.enabled` | `false` | World-save ZSTD (off by default; dedicated server only, back up first) |
-| `storage.zstdLevel` | `3` | Storage ZSTD level |
-| `master.enabled` | `true` | Server network-channel master switch (gate for login handshake/aggregation) |
-| `master.maxChunksPerTick` | `5` | Per-player per-tick Pull FULL/DELTA completion cap (≈ cap×20/s at full tick) |
-| `master.enablePacketAggregation` | `true` | Packet aggregation |
-| `master.aggregationMaxWaitTimeMs` | `50` | Aggregation max wait (ms; ACK timeout 5s auto-downgrades to direct send) |
+| `chunk.enabled` | `true` | Whether to enable the chunk-core cache |
+| `chunk.sectionDeltaEnabled` | `true` | Enable section delta (server-side planning + client-side apply) |
+| `chunk.seedGenEnabled` | `false` | Enable SeedGen (local pristine chunks; both sides same version; default off). Server enablement sends the world seed |
+| `chunk.viewDistanceExtensionEnabled` | `true` | Beyond-view render OVD (shadow dual-window: local fill when clientRD > serverVD) |
+| `chunk.maxRenderDistance` | `16` | Max effective client render distance for OVD |
+| `chunk.mainThreadChunkBudgetMs` | `15` | Main-thread apply budget in ms |
+| `chunk.maxChunksPerFrame` | `6` | Per-tick cache-read production cap (shadow enqueue + shadow disk); consume is time-budget only |
+| `chunk.maxSizeMb` | `4096` | Max cache size in MB (shadow-world disk cap; excess triggers heat eviction) |
+| `chunk.hotScoreThreshold` | `0.3` | Heat-score threshold (below = cold region file; preferred for eviction) |
+| `chunk.cleanupIntervalTicks` | `6000` | Cleanup check interval in ticks |
+| `chunk.lightStrip` | `true` | Enable light stripping |
+| `storage.enabled` | `false` | Enable save compression (default off; chunk cache unaffected) |
+| `storage.zstdLevel` | `3` | Storage ZSTD compression level |
+| `master.enabled` | `true` | Enable master-core network channel |
+| `master.enabledOnLan` | `false` | Enable Hassium network features for remote LAN players on an Open-to-LAN host (handshake/aggregation/push/lightStrip). Default off; host local memory connection stays vanilla; storage remains dedicated-only |
+| `master.maxChunksPerTick` | `5` | Per-player per-tick chunk send cap: Pull FULL/DELTA completions + vanilla whole-chunk path (≈ value×20/s at full tick) |
+| `master.enablePacketAggregation` | `true` | Enable packet aggregation |
+| `master.aggregationMaxWaitTimeMs` | `50` | Flush watchdog: force flush if none happened for this many ms (tick-end flush is primary; covers main-thread stalls) |
 | `master.aggregationMaxSize` | `262144` | Aggregation max size (bytes) |
 | `master.compressionLevel` | `3` | Private-channel ZSTD level |
-| `master.compressionBlacklist` | `[]` | Third-party packet IDs excluded from compression/aggregation (default empty; Hassium control-plane is always hard-coded excluded) |
-| `compat.requireClientMod` | `false` | Allow mod-less clients (true = kick when login handshake fails) |
+| `master.compressionBlacklist` | `[]` | Third-party packet IDs excluded from compression / aggregation (default empty). Hassium control-plane and private channels are always hard-coded excluded; editing this list does not affect them |
+| `master.entityTieredUpdateEnabled` | `true` | Enable distance-tiered entity updates (entities further away are updated less often). Enabled by default; turning it off disables only the distance tables — density, pressure and smooth-push remain independent |
+| `master.entityTierIntervals` | `"3,6,10,20"` | Entity update interval in ticks for the four distance tiers, comma-separated, ordered near/mid/far/edge (tier boundaries at 25%/50%/75% of the tracking range). Default 3,6,10,20. Values must be non-decreasing; 0 or blank means default |
+| `master.entityItemTierIntervals` | `"2,4,8,16"` | Update interval in ticks for dropped items and experience orbs across the same four tiers, default 2,4,8,16. Raise these values when many items are on the ground; keep the near value at 3 ticks or lower so items next to the player still move smoothly |
+| `master.entityDensityThrottleEnabled` | `true` | Enable hotspot throttling: when too many entities pile up in one chunk, their update interval is stretched further. Enabled by default |
+| `master.entityDensityTierCounts` | `"32,64,96,128"` | Per-tier hotspot threshold: once the number of active entities in the entity's own chunk reaches this value, that tier's interval is multiplied by the matching factor. Comma-separated, near/mid/far/edge; default 32,64,96,128 |
+| `master.entityDensityTierFactors` | `"1.0,1.5,2.0,3.0"` | Per-tier hotspot multiplier applied once the threshold above is reached, comma-separated, near/mid/far/edge; default 1.0,1.5,2.0,3.0 (1.0 means no change). Decimals allowed; values below 1 are treated as 1 |
+| `master.entityMaxThrottleFactor` | `4` | Upper bound on the product of the hotspot factor and the pressure factor (default 4). Raise it to throttle harder in crowded areas |
+| `master.entityFrameBudgetPerPlayer` | `128` | Expected entity update packets per player per tick (default 128). When a player keeps exceeding it, entities in their view are updated less often to avoid lag; 0 = no automatic limit |
+| `master.entitySmoothPushEnabled` | `true` | Entity smooth push: entities sharing the same update interval are phase-staggered by UUID so total volume over an interval is unchanged but the per-tick spike is flattened. Enabled by default |
+| `compat.requireClientMod` | `false` | Require the Hassium client mod |
 | `compat.autoDowngradeOnError` | `true` | Auto-downgrade on error |
-| `debug.*` | mostly `false` | Categorized debug logging (quiet by default; hot paths use `DebugLogger`; `networkMetricsAutoReset` defaults to `true`) |
+| `debug.*` | mostly `false` | Categorized debug logging (quiet by default; `networkMetricsAutoReset` defaults to `true`) |
 
-Full reference: [`docs/architecture.md`](docs/architecture.md) and the [config audit](docs/config-audit.md).
+Descriptions match the TOML comments (from `ConfigSchema`). Full key reference: [Configuration](https://github.com/limuqy/Hassium/wiki/Configuration-en) and the [config audit](docs/config-audit.md).
 
 ---
 
