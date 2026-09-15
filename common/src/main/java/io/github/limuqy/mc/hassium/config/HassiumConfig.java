@@ -1,6 +1,7 @@
 package io.github.limuqy.mc.hassium.config;
 
 import io.github.limuqy.mc.hassium.network.HassiumPacketIds;
+import io.github.limuqy.mc.hassium.network.entity.EntityUpdateTiering;
 
 import java.util.List;
 import java.util.Set;
@@ -109,6 +110,12 @@ public record HassiumConfig(
      * <p>
      * 服务端网络行为（压缩/聚合/推送）。{@code enabled} 驱动专用服；
      * {@code enabledOnLan} 仅在集成服已开局域网时对远程玩家生效（本机 memory 恒原版）。
+     * <p>
+     * {@code entity*} 一组为实体网络优化配置面：分层更新（按观察者距离四挡降频，刻间隔递增）
+     * 与实体密度节流（单玩家可见实体数超阈值后叠加降频、受最大倍率约束）可独立开关，
+     * {@code entityFrameBudgetPerPlayer} 为每玩家每 tick 的实体更新帧预算（0 = 不限）；
+     * 物品流（掉落物/经验球）不复用 {@code entityTierInterval*}，另取 {@code entityItemTierInterval*}
+     * 一张表（距离分挡共用），以免被这两类实体原版 20 刻的空闲节拍压平。
      */
     public record MasterCoreConfig(
             boolean enabled,
@@ -122,7 +129,18 @@ public record HassiumConfig(
             // === 黑名单 ===
             Set<String> compressionBlacklist,
             // === 服务端推送 ===
-            int maxChunksPerTick
+            int maxChunksPerTick,
+            // === 实体网络优化（master.entity*）===
+            boolean entityTieredUpdateEnabled,
+            String entityTierIntervals,
+            String entityItemTierIntervals,
+            boolean entityDensityThrottleEnabled,
+            // 热点分档：实体所在 chunk 的活跃实体数 ≥ 该档阈值 ⇒ 该档实体间隔 × 该档倍率（支持小数）
+            String entityDensityTierCounts,
+            String entityDensityTierFactors,
+            int entityMaxThrottleFactor,
+            int entityFrameBudgetPerPlayer,
+            boolean entitySmoothPushEnabled
     ) {
         public MasterCoreConfig {
             compressionBlacklist = Set.copyOf(compressionBlacklist);
@@ -145,7 +163,16 @@ public record HassiumConfig(
                 50,                // aggregationMaxWaitTimeMs（冲刷兜底）
                 256 * 1024,        // aggregationMaxSize
                 DEFAULT_COMPRESSION_BLACKLIST,
-                5                  // maxChunksPerTick（Pull FULL/DELTA 完成配额，满 tick ≈ 100/s）
+                5,                 // maxChunksPerTick（Pull FULL/DELTA 完成配额，满 tick ≈ 100/s）
+                true,              // entityTieredUpdateEnabled（实体分层更新总开关）
+                EntityUpdateTiering.DEFAULT_ENTITY_INTERVALS,     // entityTierIntervals（近/中/远/边缘）
+                EntityUpdateTiering.DEFAULT_ITEM_INTERVALS,       // entityItemTierIntervals（物品流独立表）
+                true,              // entityDensityThrottleEnabled（实体密度节流总开关）
+                EntityUpdateTiering.DEFAULT_DENSITY_COUNTS,       // entityDensityTierCounts（每档热点阈值）
+                EntityUpdateTiering.DEFAULT_DENSITY_FACTORS,      // entityDensityTierFactors（每档热点倍率，支持小数）
+                4,                 // entityMaxThrottleFactor（密度×压力倍率总上限）
+                128,               // entityFrameBudgetPerPlayer（每玩家每 tick 实体包预算；0=不限）
+                true               // entitySmoothPushEnabled（UUID 相位错峰，总量不变）
         );
     }
 

@@ -11,6 +11,7 @@
         "RegionFileAccessor",
         "ChunkMapAccessor",
         "MixinChunkMap",
+        "MixinServerEntity",
         "SimpleRegionStorageAccessor",
         "IOWorkerAccessor",
         "SectionStorageAccessor",

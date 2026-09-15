@@ -20,7 +20,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * T4 config-restructure 一次性 round-trip 验证（.omp/workflows/config-restructure）。
  * <p>
  * 验证点（对照 work/key-mapping.md；网关拓扑退役波后更新）：
- * 1. defaults 生成 57 键，前缀分布 21/16/16/2/2
+ * 1. defaults 生成 56 键，前缀分布 21/16/16/2/2
  * 2. client/server toml 写读 round-trip（含全部新键组）
  * 3. 新键可加载抽查（chunk.seedGenEnabled 双端 / master.* 聚合键族）
  * 4. 删键（recoveryFreeze / controlStallMs / failoverExpiryMs / storage.mode / chunk.loadThreads /
@@ -41,7 +41,7 @@ class ConfigRestructureRoundTripTest {
                     "bindHost", "authToken", "controlReachableEndpoints", "udpListeners",
                     "seedGenThreads", "serverChunkPushThreads");
 
-    // === 1. defaults 生成：57 键齐全 ===
+    // === 1. defaults 生成：52 键齐全 ===
 
     @Test
     void defaultsCoverAll78NewKeys() {
@@ -49,13 +49,13 @@ class ConfigRestructureRoundTripTest {
         Map<String, ConfigEntry<?>> byPath = ConfigSchema.entries().stream()
                 .collect(Collectors.toMap(e -> e.scope() + "/" + e.path(), Function.identity()));
 
-        assertEquals(43, ConfigSchema.entries().size(), "schema 留存键数");
-        assertEquals(43, values.asMap().size(), "defaults 键数");
+        assertEquals(52, ConfigSchema.entries().size(), "schema 留存键数");
+        assertEquals(52, values.asMap().size(), "defaults 键数");
 
         Map<String, Long> prefixCounts = ConfigSchema.entries().stream()
                 .collect(Collectors.groupingBy(e -> e.path().substring(0, e.path().indexOf('.') + 1),
                         Collectors.counting()));
-        assertEquals(Map.of("chunk.", 16L, "master.", 8L, "debug.", 15L,
+        assertEquals(Map.of("chunk.", 16L, "master.", 17L, "debug.", 15L,
                 "storage.", 2L, "compat.", 2L), prefixCounts);
 
         // 双端同名键 chunk.seedGenEnabled 各一
@@ -108,7 +108,8 @@ class ConfigRestructureRoundTripTest {
     void serverTomlRoundTripsNewKeys(@TempDir Path root) throws IOException {
         HassiumConfig.MasterCoreConfig master = new HassiumConfig.MasterCoreConfig(
                 true, true, 9, false, 50L, 131072,
-                Set.of("MAIN_CHANNEL"), 7);
+                Set.of("MAIN_CHANNEL"), 7,
+                false, "4,8,16,32", "1,2,4,8", false, "40,30,20,10", "1.5,2.0,2.5,3.0", 8, 128, false);
         HassiumConfig.StorageConfig storage = new HassiumConfig.StorageConfig(true, 9);
         // server toml 只写 chunk.lightStrip/chunk.seedGenEnabled 两键，其余键读回默认 → 仅改这两键
         HassiumConfig.ChunkCoreConfig chunk = new HassiumConfig.ChunkCoreConfig(
@@ -249,6 +250,17 @@ class ConfigRestructureRoundTripTest {
         // master.maxChunksPerTick 默认 5
         assertEquals(5, values.get(ConfigSchema.MASTER_MAX_CHUNKS_PER_TICK));
         assertEquals(false, values.get(ConfigSchema.MASTER_ENABLED_ON_LAN));
+        // master.entity* 实体网络优化默认（分层更新/密度节流开；实体四挡 3/6/10/20 刻；
+        // 物品流四挡 2/4/8/16 刻；阈值 50 / 倍率 4 / 帧预算 64）
+        assertEquals(true, values.get(ConfigSchema.MASTER_ENTITY_TIERED_UPDATE));
+        assertEquals("3,6,10,20", values.get(ConfigSchema.MASTER_ENTITY_TIER_INTERVALS));
+        assertEquals("2,4,8,16", values.get(ConfigSchema.MASTER_ENTITY_ITEM_TIER_INTERVALS));
+        assertEquals(true, values.get(ConfigSchema.MASTER_ENTITY_DENSITY_THROTTLE));
+        assertEquals("32,64,96,128", values.get(ConfigSchema.MASTER_ENTITY_DENSITY_TIER_COUNTS));
+        assertEquals("1.0,1.5,2.0,3.0", values.get(ConfigSchema.MASTER_ENTITY_DENSITY_TIER_FACTORS));
+        assertEquals(4, values.get(ConfigSchema.MASTER_ENTITY_MAX_THROTTLE_FACTOR));
+        assertEquals(128, values.get(ConfigSchema.MASTER_ENTITY_FRAME_BUDGET_PER_PLAYER));
+        assertEquals(true, values.get(ConfigSchema.MASTER_ENTITY_SMOOTH_PUSH));
         // storage.enabled 默认 false（REQ 决策 6 修正 lang 错误）
         assertEquals(false, values.get(ConfigSchema.STORAGE_ENABLED));
         // debug.* 客户端网络指标默认关闭，退出自动复位默认开启
@@ -261,3 +273,6 @@ class ConfigRestructureRoundTripTest {
         assertEquals(5, values.get(ConfigSchema.MASTER_COMPRESSION_BLACKLIST).size());
     }
 }
+
+
+

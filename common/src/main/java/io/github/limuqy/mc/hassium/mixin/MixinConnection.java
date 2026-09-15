@@ -109,6 +109,11 @@ public class MixinConnection {
             return;
         }
 
+        // 实体更新包实测计数（帧率压力的输入；只计数，不改变投递语义）
+        if (io.github.limuqy.mc.hassium.network.entity.EntityPacketCounters.isEntityUpdatePacket(packet)) {
+            io.github.limuqy.mc.hassium.network.entity.EntityPacketCounters.observe(self);
+        }
+
         // 聚合包自身不拦截
         if (PacketTypeHelper.isAggregationPacket(packet)) {
             return;
@@ -171,6 +176,7 @@ public class MixinConnection {
     private void hassium$onDisconnect(CallbackInfo ci) {
         Connection self = (Connection) (Object) this;
         HassiumConnectionRegistry.markDisabled(self);
+        io.github.limuqy.mc.hassium.network.entity.EntityPacketCounters.forget(self);
         HassiumAggregationManager.discardConnection(self);
         AggregationDecodeQueue.discard(self);
         // review-fix: 仅客户端连接断连才清空 pull 解码队列——队列是进程级单例，

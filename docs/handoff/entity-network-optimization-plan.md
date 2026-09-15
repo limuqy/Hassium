@@ -1,6 +1,6 @@
 # 规划：实体网络优化三件套（逐级降帧 / 热点降帧 / 实体平滑推送）
 
-状态：**规划评估**（未实施；评估结论见 §5）
+状态：**已实施**（2026-09-15；实施记录与四处设计修正见 §8）
 日期：2026-09-15
 前置：高频实体包已放开进聚合（`f7020f3`）；聚合 tick 尾冲刷 + 50ms watchdog 已就位。
 定位：网络优化新卖点。与既有卖点（平滑推送=区块域、聚合=压缩域）正交叠加，本族覆盖**实体域**。
@@ -114,6 +114,11 @@ hotFactor: 阈值分挡（如 >50 → ×2，>200 → ×4，>500 → ×8）
 
 ## 3. 实体平滑推送（削峰）
 
+> **状态更正（2026-09-16）**：本节原案的「延迟投递队列」在实施时因相对包不可自愈而废弃
+> （见 §8.1 第 3 行），改为**只计数 + 源头压力反压**。用户后续明确要求的「平滑推送」是
+> **时间错峰**（同 interval 总量不变、摊平齐发尖峰），不是降速、也不是延迟队列。
+> 错峰实现见 **§9**；压力反压仍保留为超预算时的兜底降速。
+
 ### 3.1 动机（用户判断正确，已核实）
 
 vanilla 实体包投递形态：`ChunkMap.tick()` 遍历 `entityMap`，所有 `tickCount % interval == 0` 的实体**同 tick 齐发**。interval=3 时每 3 tick 一大批（1/3 实体同 tick 出帧），叠加 `ClientboundBundlePacket`（出生包组）后单 tick 包量尖峰显著。对网络（瞬时带宽、聚合缓冲压力）和客户端主线程（`channelRead0` → 主线程 hop 的批处理）都是脉冲式压力。
@@ -148,7 +153,7 @@ per-player per-tick 实体包预算（如 64 包/tick）
 Phase A：EntityUpdateTiering 核心（逐级降帧 gate + per-observer 分流 + far-only 手工帧）
 Phase B：热点降帧（密度计数器 + hotFactor 相乘，同 gate）
 Phase C：实体平滑推送（投递层预算 + 聚合冲刷预算）
-Phase D：实测校准（真实大型生电存档，用户自备；验证指标见 §6）
+Phase D：实测校准（真实大型生电存档，用户自备；验证指标见 §8）
 ```
 
 A→B 共享 90% 代码；C 独立但依赖 A/B 落定后的包量基线；D 在 A/B/C 全部就位后统一测。
@@ -175,5 +180,135 @@ A→B 共享 90% 代码；C 独立但依赖 A/B 落定后的包量基线；D 在
 
 1. 物品流场景的 add/remove 合并 churn 占比（决定是否需要第四个机制：**合并抑制/批量 remove_entities**——数百掉落物流的 `mergeWithNeighbours` 每 2 tick 级联合并产生 add_entity+remove_entities 风暴，降帧不覆盖出生/移除包）
 2. 真实存档的观察者-实体距离分布（决定默认挡位 `(5,8,12,16)` 是否合理）
-3. 每玩家每 tick 实体包预算的合理默认值（64 是拍脑袋值）
-4. 掉落物远端降帧的视觉阈值（物品流视觉平滑度要求低，末挡 interval 可否比生物更激进，如 40 tick/帧）
+3. 每玩家每 tick 实体包预算的合理默认值（64 是拍脑袋值；现为**每观察者独立**口径——该玩家自己的实测值 ÷ 该预算）
+4. 物品流视觉阈值：**已由独立档位表解决**（默认近 2 / 中 4 / 远 8 / 边缘 16 刻；近档落在客户端 3 刻插值窗口内）。若实测仍嫌远端跳，直接调 `entityItemTierIntervals` 的第 4 个元素（该表与生物表解耦，互不影响）。
+
+---
+
+## 8. 实施记录（2026-09-15）
+
+### 8.1 与规划原案的六处设计修正（均为正确性/语义驱动，依据是反编译源码与实测反馈）
+
+| 规划原案 | 实施改为 | 原因 |
+|---|---|---|
+| `@Inject(HEAD, cancellable=true)` 取消 `sendChanges()`，门条件用 `tickCount % effectiveInterval` | `@Redirect` 门条件里的两个**字段读取**（`this.updateInterval` 与 `entity.hasImpulse`），方法结构与调用时机不动 | `this.tickCount++` 在**方法体内、门条件之外**（1.20.1 L198 / 1.21.1 L216 / 1.21.11 L211）。HEAD 取消会冻结 `tickCount` ⇒ `0 % interval == 0` 恒真、闸门自锁失效，并跳过尾部 `hurtMarked` 分支 |
+| far-only 帧由 mixin 手工构造绝对 teleport 包，只发给远端观察者集合 | 取消 per-observer 分流，改**并集语义**：帧间隔取最近观察者的挡位间隔，任一观察者到期即整帧放行全体 | `ServerEntity.positionCodec` 的 base 是**每实体单例**，位置包是相对 base 的 1/4096 量化增量。给子集发相对包（服务端 base 推进、该客户端未收到）或补发绝对包（客户端 base 跳到服务端不知道的值）都会错位，且只有下一次绝对包能自愈。真 per-observer 帧率必须接管整条位置/旋转发送路径（自维护 per-observer lastSent），跨 7 段重写 vanilla 风险不可接受 |
+| 预算 = 延迟投递队列（每 tick 上限，溢出顺延 1–2 tick） | `Connection.send` **只计数**（实测每玩家每 tick 实体包数），tick 起点喂纯逻辑压力控制器（快攻慢放 + 回差），倍率反压回间隔 | 丢相对包不可自愈（同上），而有界延迟队列又降不下持续速率；把压力反压到发送源头才既安全又有效 |
+| 挡位距离 `[5,8,12,16]` 区块（绝对） | **固定比例挡位** `0.25 / 0.5 / 0.75 / 1.0 × 有效跟踪范围`，四挡间隔可配 | `EntityType$Builder` 默认 `clientTrackingRange=5`（80 格）、`updateInterval=3`，观察者判定用 `getEffectiveRange()`：绝对挡位对绝大多数实体不可达（牛/猪/村民只被追踪 80 格） |
+| 物品流与生物共用 `entityTierInterval*` 四挡表 | 物品流（`ItemEntity` + `ExperienceOrb`）**独立一张表** `entityItemTierInterval*`（2/4/8/16），且**原版间隔下限对物品流取 1**（`EntityUpdateTiering.intervalFloor`） | `EntityType.ITEM` / `EXPERIENCE_ORB` 的 `updateInterval = 20` 是它们的**空闲/元数据**节拍，位置节拍实际由每 tick 被置位的 `hasImpulse` 驱动（1 刻）。取 `max(原版 20, 挡位)` ⇒ 物品恒 20 刻 = **1 包/s**、与距离无关，而客户端插值窗口只有 3 刻（`lerpTo(..., 3)`；1.21.11 `InterpolationHandler.DEFAULT_INTERPOLATION_STEPS = 3`），画面上就是「近距离掉落物闪现」。共用表 + 原样 `max` 会让整张档位表被 20 压平 |
+| 密度 = 单一全局阈值 + 连续超量比 `1 + count/阈值`；压力 = 全服一条控制器，输入取**最忙连接** | 密度改**每档阈值 + 每档倍率**（`entityDensityTierCounts` / `entityDensityTierFactors`，逗号分隔两条键，支持小数、单步不叠加）；压力改**每观察者一份**账本（`EntityPressureBook`，每条已协商连接各自反压，取最近观察者那一份作用于实体） | 用户实测反馈两点：(1) 热点应能逐档调阈值/倍率；(2) 压力取全服最忙连接会把**远端热点连坐**到近处实体（实测窗口里 `40tx11800` 即此路径），与「谁超预算降谁的帧」直觉不符。密度本身是局部的（只数实体自己所在 chunk），无需改统计口径 |
+
+### 8.2 落地清单
+
+新增（`common/src/main/java/io/github/limuqy/mc/hassium/`）：
+- `network/entity/EntityUpdatePacing.java` — 引擎接线：tick 快照、观察者扫描、间隔合成、门控与豁免
+- `network/entity/EntityDensityIndex.java` — 每 tick「chunk → 该 chunk 内发生 sendChanges 的实体数」双缓冲索引
+- `network/entity/EntityPacketCounters.java` — 每连接实体包实测（只计数，不改投递）
+- `network/entity/EntityPressureBook.java` — 纯逻辑：**每观察者一份**的压力账本（独立反压 + 断连清理）
+- `network/entity/EntityUpdateTiering.java` — 纯逻辑：挡位/每档热点阈值与倍率/间隔收口
+- `network/entity/EntityFramePressure.java` — 纯逻辑：单观察者的压力控制器（EWMA + 快攻慢放 + 回差）
+- `mixin/MixinServerEntity.java` — 两个字段读取的 redirect
+
+改动：`MixinMinecraftServer`（tick 起点调用 + 停止清理）、`MixinConnection`（实体包计数 + 断连清理）、`hassium.mixins.json`（登记 `MixinServerEntity`）。
+
+配置（**8 键**，`ConfigScope.SERVER` + `Domain.MASTER_CORE`，默认全开；CLIENT 无新键故不需 lang；分档表统一逗号分隔以压缩配置量）：`master.entityTieredUpdateEnabled`、`entityTierIntervals`（`"3,6,10,20"`，逗号分隔按 近/中/远/边缘，须非降序）、`entityItemTierIntervals`（`"2,4,8,16"`，物品流独立表）、`entityDensityThrottleEnabled`、`entityDensityTierCounts`（`"32,64,96,128"`，每档热点阈值）、`entityDensityTierFactors`（`"1.0,1.5,2.0,3.0"`，每档热点倍率，支持小数）、`entityMaxThrottleFactor`（4 = 密度×压力总上限）、`entityFrameBudgetPerPlayer`（128，0=关压力）。四条列表键的容错口径一致：单个元素写坏只回落该元素、元素个数不为 4 则整表回落默认、间隔 ≤ 0 视作未配置（间隔 0 会比原版还费）、倍率 < 1 夹到 1（只降速）。
+
+**老配置自动补齐 + 键序规范化**：`FabricTomlConfigIO` 以前只在「文件不存在」时写出 toml，既有文件永不补键——于是新增键族在老 run 目录里根本不出现（用户会以为没实现）。现在加载后比对 `ConfigSchema`：**缺键或键序与 schema 不一致**时，从空表按 schema 顺序**整表重写**一次（值取自本次读到的快照，用户改过的值原样保留，只有缺键补成默认值），并打一条 INFO。只补键是不够的——在已加载的表上逐键插入会把新键插进旧键之间，文件看着「散落一地」（2026-09-15 用户实测）。实测：`fabric/run/server/config/hassium/hassium-server.toml` 原先停在 7 月的 13 键，现在补齐且按 schema 顺序排列（6325 字节，`[master]` 段自 `enabled` 起顺序与 schema 一致）。
+
+**密度与压力的分工（两张闸，别混）**：
+- **密度**（局部）：只数「实体**自己所在 chunk** 内本 tick 有实体包的实体数」，与该玩家视距/加载范围无关；逐档配置阈值与倍率（`count ≥ counts[tier]` ⇒ `× factors[tier]`，倍率可为小数，单步不叠加）。⇒ 十几区块外的热点不影响近处实体：近处实体只要自己 chunk 未达该档阈值，密度倍率恒 1。
+- **压力**（每观察者独立）：每条**游戏态连接**一份账本（含原版客户端——引擎对全体玩家生效），输入是该连接**自己**当帧的实体包数 ÷ `entityFrameBudgetPerPlayer`；EWMA 比值 > 1.25 升挡（×2，上限 `entityMaxThrottleFactor`），< 0.5 且连续 20 次采样才降 1 挡（回差防抖）。⇒ 一个玩家身边的热点不再连累其它玩家。
+- 单实体帧率取「**最近观察者**的距离档 + **最近观察者**的压力档」（并集语义的必然结果，见 §8.1）；两者相乘后仍受 `entityMaxThrottleFactor` 收口。玩家→连接走 `Connection.getPacketListener() → ServerGamePacketListenerImpl.player`（三版皆 public，不新增 mixin）。
+
+**服务端行为不变的证据（用户关心的「漏斗吸不到掉落物」面）**：本族只改 `ServerEntity.sendChanges()`（唯一调用点 `ChunkMap.TrackedEntity.updatePlayer`）是否构造并广播 `Clientbound*` 包与它自己的 base/lastSent 记账；实体 tick（`ServerLevel.tickNonPassenger` → `ItemEntity.tick` 物理与 `age`）、拾取、漏斗判定（`HopperBlockEntity.getItemsAtAndAbove` 走 `level.getEntitiesOfClass(ItemEntity.class, ...)` 的服务端实体列表）都读不到本族状态。即「只改推送给客户端的频率，不改服务端实体频率」。
+
+### 8.3 门控与豁免（安全边界）
+
+- **不要求客户端握手**（2026-09-16 修正）：实体域只改 vanilla 复制节拍，原版客户端完整兼容，
+  门控只有「**主服务器实例** + `ServerNetworkGate.isNetworkServerActive()`（专用服 `master.enabled` /
+  LAN `enabledOnLan`）+ entity* 配置」；**不再**要求 `HassiumConnectionRegistry.activeCount() > 0`。
+  压力输入同步改为采样全部游戏态连接（`EntityPacketCounters.drainGameInto`）。
+- 客户端进程里的影子端世界 tick 时直接早退，不改共享状态。
+- 玩家实体（`ServerPlayer`）豁免（`PLAYER.updateInterval=2`，他人视角的玩家位移不可降帧）。
+- `vanillaInterval > 40` 的实体（如 ItemFrame 的 `Integer.MAX_VALUE`）原样透传，避免把「原版几乎不发」变成「按我们的间隔发」。
+- 观察者判定**故意取宽**（乘客跟踪范围取较大者、跟随 `entity-broadcast-range-percentage`）：多算观察者只会多发帧（退回原版），少算才会欠帧。
+
+### 8.4 效果边界（写清天花板）
+
+- **物品流（掉落物/经验球）**：原版位置节拍 = 每 tick（`hasImpulse` 驱动，≈20 包/s/个）。压掉冲量后改由**物品流档位表**决定：近挡 2 刻（10 包/s，仍在客户端 3 刻插值窗口内 ⇒ 视觉连续）、中 4 / 远 8 / 边缘 16 刻。**注意这与首版行为不同**：首版误把原版 20 刻当下限取 `max`，导致物品恒 1 包/s（即「近距离掉落物闪现」），见 §8.1 末行与 §8.5 实测。
+- **生物**（原版间隔 3）：近挡仍 3（不降），中/远/边缘挡 6/10/20；热点 chunk 按**该档**阈值/倍率再放大（默认 32/64/96/128 个活跃实体触发，对应 ×1.0/1.5/2.0/3.0），总收口 40 tick。
+- 原版间隔 4–10 刻的实体（`primed_tnt`=10、`eye_of_ender`=4）**保持原版下限**：它们仍被原版间隔压住，本轮不动、行为与本轮之前一致。
+- **多观察者时远端拿不到独立帧率**：帧率 ≈ 最近观察者挡位（并集语义的必然结果，见 §8.1）。压力同理取最近观察者那一份。要突破必须接管发送路径。
+- **热点倍率是单步的**：`count ≥ counts[tier]` ⇒ `× factors[tier]`，没有「超量比连续增长」；要更狠就把该档倍率调大（受 `entityMaxThrottleFactor` 收口）。
+
+### 8.5 验证
+
+| 载体 | 范围 | 结果 |
+|---|---|---|
+| **运行时实测（真实服务端 + 真实客户端 + 真实掉落物）** | 1.20.1 fabric，`runServer`+`runClient`（冒烟客户端自动连服），控制台 `/execute at @a run summon minecraft:item` 投放掉落物，临时探针每 100 tick 打印物品流实际生效间隔 vs 「沿用原版 20 刻下限」的反事实 | 连续窗口 `itemDecisions=16800, actual=2tx100 8tx500 16tx4400 40tx11800, legacyFloor20=20tx5000 40tx11800` ⇒ **近身掉落物每 tick 一次判定、稳定落在 2 刻档**；同一批判定在旧取法下全部落 20 刻（1 包/s）。即「近距离掉落物闪现」的直接复现与修复确认 |
+| `common:test`（L0） | 1.20.1 / 1.21.1（每轮修订冻结后复跑） | 全绿（304 项）。纯逻辑覆盖：`EntityUpdateTieringTest`(13，挡位/物品表回落/物品下限/每档热点表/两条列表键解析/小数倍率取整)、`EntityPressureBookTest`(5，**观察者互不影响**/升档上限/回差退档/断连清理/零配额)、`EntityFramePressureTest`(7)；`ConfigRestructureRoundTripTest` 键数断言 43→52→56→57 同步 |
+| `common:compileJava` | 7 锚点段（1.20.1/1.21.1/1.21.2/1.21.5/1.21.6/1.21.9/1.21.11） | 全部 exit=0 |
+| `minecraft_dev_analyze_mixin` | 7 段静态校验 | 全部 `isValid: true`（无 error/warning） |
+| **运行时冒烟 L1 classic（父修订：三件套主体，全矩阵）** | fabric × 12 版、forge × 10 版、neoforge × 11 版 | `=== RESULT: PASS ===` 全部 33 场；服务端日志出现 `Hassium: entity update pacing active (tiered=true, density=true, budgetPerPlayer=64, maxFactor=4)`。注意：2026-09-16 起门控已去掉握手依赖，master 总闸开且 entity* 配置开即 active，**不再**随 Hassium 客户端断连→重连 inactive→active |
+| **运行时冒烟 L1 classic（物品流档位修订，3 锚点）** | 1.20.1 fabric / 1.21.1 neoforge / 1.21.11 neoforge | 3/3 `PASS`（SessionId `*_entityitem`） |
+| **运行时冒烟 L1 classic（热点分档 + 每观察者反压修订，3 锚点）** | 1.20.1 fabric / 1.21.1 neoforge / 1.21.11 neoforge | 3/3 `PASS`（SessionId `*_entitydensity`）。两轮修订均不触碰版本区段（无新增 `#if MC_VER`、不涉 `PacketId`/`Identifier`/AT/AW），按仓库惯例只回三锚点；服务端 toml 生成路径由 `ConfigRestructureRoundTripTest` 的 `saveServer/loadServer` 往返断言覆盖（新增键用非默认值断言）。**未自动验证的部分**：「远端热点不连坐」的性质由 `EntityPressureBookTest`（观察者隔离）+ 每实体取最近观察者那一份的结构保证；双客户端远/近热点对比未做（需两台客户端 + 可复现热点），留作 L3 |
+
+**（父修订全矩阵期间）唯一一次 FAIL 已定位为环境陈旧数据，与改动无关**：`1.21.6 fabric` 首跑命中「严重错误门控」——`Failed to parse saved data for 'SavedDataType[random_sequences]': No key salt`。该错误是**读取**复用存档 `fabric/run/server/parity_fabric_1_21_6/data/random_sequences.dat` 时抛出的（文件 mtime 2026-09-12 23:41，早于本次改动），而 1.21.1–1.21.11 全段 `RandomSequences.codec` 都要求 `salt`（`Codec.INT.fieldOf("salt")`），即该文件不可能由当前版本矩阵内任一版本写出；本轮不触碰任何存档数据路径。加 `-CleanWorld` 重跑同一组合 → `PASS`。后续若其它复用存档再报同类错误，同样是存档残留，不是回归。
+
+### 8.6 遗留与后续
+
+1. **人眼验证仍待用户**：物品流近档已是 2 刻（视觉连续），但**压力倍率介入时物品最高被收口到 40 tick/帧**（实测窗口里 `40tx11800` 占多数——该测试世界里约 50 个掉落物 + 常规生物已超 `budgetPerPlayer`（现值 128），控制器按设计顶到倍率上限）。若要物品在任何负载下都保持近档手感，可：调大 `entityFrameBudgetPerPlayer`、调小 `entityMaxThrottleFactor`，或（需改代码）让物品流不吃压力倍率。
+2. **出生/移除包风暴未覆盖**（§7 议题 1）：`mergeWithNeighbours` 级联合并产生的 `add_entity`/`remove_entities` churn 不在本族范围内，降帧只管 update 帧。
+3. **per-observer 精确帧率**为并集语义的天花板所限，若要突破需接管 `ServerEntity` 的位置/旋转发送路径（含 per-observer lastSent），风险与收益需单独立项评估。
+4. 真实存档的观察者-实体距离分布、`entityFrameBudgetPerPlayer` 的合理默认值仍属拍脑袋值（§7 议题 2/3），需实测校准。
+
+---
+
+## 9. 实体错峰推送（2026-09-16）
+
+### 9.1 需求澄清
+
+用户要的「平滑推送」是**时间摊平**，不是源头降速：
+
+| | 齐发（vanilla） | 错峰（本节） | 压力反压（§8） |
+|--|----------------|-------------|---------------|
+| interval=3 时 tick 0 | 100 个实体全发 | ~33 个发 | 可能更少（总量也砍） |
+| tick 1 / 2 | 全静默 | 各 ~33 个发 | — |
+| **3 tick 总量** | 100 | **100（不变）** | < 100 |
+
+压力反压与错峰正交叠加：错峰管分布，压力管总量上限。
+
+### 9.2 机制
+
+```
+门条件: tickCount % interval == 0
+      → (tickCount + phase) % interval == 0
+phase  = floorMod(entity.getUUID().hashCode(), interval)
+```
+
+- 任意连续 `interval` 个 tick 内每实体仍只发一次（总量不变）
+- 不同实体按 UUID 稳定落在不同刻，齐发尖峰被摊平
+- **无队列、无延迟积压**——只是相位差
+- 首包仍走 `addPairing` 绝对包，不受影响
+
+### 9.3 实施
+
+- `EntityUpdateTiering.phaseOffset(hash, interval)` — 纯函数
+- `EntityUpdatePacing.staggeredTickCount` — 门条件 tickCount 替换；先算生效间隔并缓存到 SCRATCH，
+  供紧随其后的 `updateInterval` redirect 复用（避免密度索引 double observe）
+- `MixinServerEntity` 新增 `tickCount` GETFIELD `ordinal=0` redirect（门条件第一处；
+  方法内后面的 `% 60` 绝对包与 `> 0` 首帧判定保持原版）
+- 配置：`master.entitySmoothPushEnabled`（默认 true；关掉退回齐发）
+- 顺带修 P1：压力读取不再绑死 `entityTieredUpdateEnabled`——关掉距离分层时，
+  密度 + `entityFrameBudgetPerPlayer` 压力仍独立生效（`computeEffectiveInterval` 在
+  `tiered || budget > 0` 时都做最近观察者扫描）
+
+### 9.4 与既有门控的关系
+
+```
+最终间隔 = max(原版下限, 距离档) × 密度 × 压力   ← §1/§2/§8，管总量
+发送时刻 = (tickCount + uuidHash % 间隔) % 间隔   ← 本节，管分布
+```
+
+玩家豁免 / 无 Hassium 客户端**不影响启用**（vanilla 兼容，只跟 master 总闸）/ 影子端不参与 / `hasImpulse` 已被 gate 压住，
+与既有安全边界一致；`isDirty()` 元数据仍直通。

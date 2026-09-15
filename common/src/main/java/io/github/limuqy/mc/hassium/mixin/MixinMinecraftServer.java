@@ -57,6 +57,15 @@ public class MixinMinecraftServer {
     }
 #endif
 
+    /**
+     * tick 起点：翻实体密度页 + 重建降帧快照 + 用上一 tick 实测实体包数更新压力倍率。
+     * 必须早于 {@code ChunkMap.tick()}（即早于本 tick 的任何实体发包）。
+     */
+    @Inject(method = "tickServer", at = @At("HEAD"))
+    private void hassium$onServerTickStart(BooleanSupplier hasTimeLeft, CallbackInfo ci) {
+        io.github.limuqy.mc.hassium.network.entity.EntityUpdatePacing.onServerTickStart((MinecraftServer) (Object) this);
+    }
+
     // review-fix: T7-59: handler 统一加 hassium$ 前缀（Mixin 惯例，避免与目标类未来同名成员 merge 冲突）
     @Inject(method = "tickServer", at = @At("TAIL"))
     private void hassium$onServerTick(BooleanSupplier hasTimeLeft, CallbackInfo ci) {
@@ -112,6 +121,8 @@ public class MixinMinecraftServer {
         // 清理玩家压缩状态追踪
         PlayerCompressionTracker.clear();
         Constants.LOG.info("Hassium: PlayerCompressionTracker cleared");
+        // 清理实体降帧引擎状态（密度索引 / 每连接实体包计数）
+        io.github.limuqy.mc.hassium.network.entity.EntityUpdatePacing.clear();
         RuntimeServerContext.setActiveServer(null);
     }
 }

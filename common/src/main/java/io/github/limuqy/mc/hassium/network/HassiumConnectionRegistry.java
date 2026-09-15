@@ -74,6 +74,20 @@ public class HassiumConnectionRegistry {
     }
 
     /**
+     * 处于待定或启用状态的连接数（诊断用）。
+     * <p>
+     * 实体降帧引擎已不再依赖本值：实体域是 vanilla 兼容的复制节拍优化，跟 master 总闸即可，
+     * 不要求存在已协商的 Hassium 客户端。
+     */
+    public static int activeCount() {
+        synchronized (PENDING) {
+            synchronized (ENABLED) {
+                return ENABLED.size() + PENDING.size();
+            }
+        }
+    }
+
+    /**
      * 原子地将待定连接降级为禁用
      * 返回 true 如果连接确实是待定状态
      */

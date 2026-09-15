@@ -1,7 +1,7 @@
 # Hassium 配置项审计
 
-> 审计日期：2026-09-14（+`master.enabledOnLan`；真相源 `ConfigSchema`，45 键）。
-> 历史审计：2026-07-21（1.1.2 旧结构）、2026-08-09（config-restructure，74 键 + 删键 4）、2026-09-04（直连拓扑裁剪标注）、2026-09-10（OVD 退役 38 键）、2026-09-12（44 键）——旧键集见历史提交。
+> 审计日期：2026-09-15（`master.entity*` 实体网络优化键族共 8 键：分层更新 2 + 物品流独立档位 1 + 热点分档 3 + 帧预算压力 2；分档表统一逗号分隔；真相源 `ConfigSchema`，51 键）。
+> 历史审计：2026-07-21（1.1.2 旧结构）、2026-08-09（config-restructure，74 键 + 删键 4）、2026-09-04（直连拓扑裁剪标注）、2026-09-10（OVD 退役 38 键）、2026-09-12（44 键）、2026-09-14（+`master.enabledOnLan`，45 键）——旧键集见历史提交。
 
 ## 一、配置文件结构与加载链
 
@@ -19,7 +19,7 @@
 
 **Legacy key hygiene**：Fabric 加载/保存时按本 scope Schema 清除未知残留键（`purgeUnknownKeys`），不迁移、不报错。已清除键族：`net.*` 全族、`dataplane.*`、`master.controlReachableEndpoints` / `bindHost` / `authToken` / `migration*`（7 键）/ `resumeTicketTtlMs` / `globalPacketCompression` / `globalCompressionLevel` / `globalCompressionThreshold` / `magiclessZstd`、`chunk.ovdUnloadDelaySecs`（延迟卸载取消）/ `hassiumEngineEnabled` / `unloadDelaySecs` / `compressionLevel`、`storage.mode`、`chunk.seedGenThreads` / `master.serverChunkPushThreads`、`chunk.ovdLocalGeneration`。OVD 两键（`viewDistanceExtensionEnabled` / `maxRenderDistance`）已随双窗重做恢复，**仅 CLIENT scope**；误写入 server.toml 的客户端键（如冒烟脚本历史注入）亦被清除。
 
-## 二、全部配置项（ConfigSchema，45 键）
+## 二、全部配置项（ConfigSchema，51 键）
 
 键名前缀：区块核心 `chunk.*` / 服务端传输面 `master.*` / 存储 `storage.*` / 兼容 `compat.*` / 调试 `debug.*`。
 
@@ -59,7 +59,7 @@
 | `debug.networkMetricsEnabled` | `false` | 客户端网络指标（冒烟测试 `hassium.smokeTest=true` 强开） |
 | `debug.networkMetricsAutoReset` | `true` | 客户端退出自动复位指标 |
 
-### B. SERVER 键（server.toml / server spec，20 键）
+### B. SERVER 键（server.toml / server spec，28 键；含双 scope 键 `chunk.seedGenEnabled` 的服务端侧，客户端侧见 A1）
 
 **B1. chunk.lightStrip（1 键，区块核心服务端侧）**
 
@@ -74,18 +74,27 @@
 | `storage.enabled` | `false` | 存档压缩总开关（**默认关**；开启改写存档格式 type 126，启用前备份；仅专用服务器写，单人/局域网保持原版格式、读兼容） |
 | `storage.zstdLevel` | `3` | 存储 ZSTD 压缩等级（1–22） |
 
-**B3. master.\*（10 键，服务端传输面）**
+**B3. master.\*（16 键，服务端传输面 / 实体网络优化）**
 
 | 配置项 | 默认值 | 说明 |
 |--------|--------|------|
 | `master.enabled` | `true` | 专用服网络通道总开关（登录期握手/聚合的门） |
 | `master.enabledOnLan` | `false` | 集成服已开局域网时，对**远程**玩家启用 Hassium 网络面；主机本机 memory 连接恒原版；`storage.*` 仍仅专用服 |
-| `master.compressionLevel` | `3` | 自有通道 ZSTD 压缩等级 |
+| `master.compressionLevel` | `3` | 自有通道 ZSTD 压缩等级（1–22） |
 | `master.enablePacketAggregation` | `true` | 包聚合 |
 | `master.aggregationMaxWaitTimeMs` | `50` | 冲刷兜底（ms；tick 尾冲刷为主，超过该时长未冲刷则强制冲一次；ACK 超时 5s 自动降级直发） |
-| `master.aggregationMaxSize` | `262144` | 聚合最大大小（字节） |
+| `master.aggregationMaxSize` | `262144` | 聚合最大大小（字节；1024–8388608） |
 | `master.compressionBlacklist` | 控制面键集 | 压缩/聚合黑名单（控制面不进聚合缓冲） |
 | `master.maxChunksPerTick` | `5` | 每玩家每 tick 完成的 Pull FULL/DELTA 上限（满 tick ≈ 本值×20/s；UNCHANGED 另额 32） |
+| `master.entityTieredUpdateEnabled` | `true` | 实体分层更新总开关（按观察者距离分四挡降频下发实体更新） |
+| `master.entityTierIntervals` | `"3,6,10,20"` | 实体各档更新间隔（刻），逗号分隔按 **近/中/远/边缘**；挡位边界 = 有效跟踪范围的 25%/50%/75%/100%。须非降序（远档更勤会被上推到前档）；≤ 0 = 未配置 ⇒ 回落默认；元素个数必须为 4，否则整表回落默认 |
+| `master.entityItemTierIntervals` | `"2,4,8,16"` | 物品流（掉落物/经验球）各档更新间隔（刻），逗号分隔、顺序同上、容错口径同上。物品流必须单独一张表（其原版 `updateInterval=20` 是空闲节拍） |
+| `master.entityDensityThrottleEnabled` | `true` | 实体密度节流总开关（实体所在 chunk 活跃实体数达该档阈值后按该档倍率放大间隔；与分层更新独立） |
+| `master.entityDensityTierCounts` | `"32,64,96,128"` | 每档热点阈值（逗号分隔，近/中/远/边缘）；实体数 ≥ 阈值 ⇒ 生效。元素个数错整表回落默认，单元素坏只回落该元素 |
+| `master.entityDensityTierFactors` | `"1.0,1.5,2.0,3.0"` | 每档热点倍率（逗号分隔，近/中/远/边缘；**支持小数**，1.0 = 该档不放大；< 1 夹到 1）；与压力倍率相乘后受 `entityMaxThrottleFactor` 收口 |
+| `master.entityMaxThrottleFactor` | `4` | 最大节流倍率（密度倍率 × 压力倍率的总上限；1–16） |
+| `master.entityFrameBudgetPerPlayer` | `128` | 每玩家每 tick 实体更新帧预算（0 = 不限；0–100000）；该玩家持续超标 ⇒ 其视野内实体更新自动变稀 |
+| `master.entitySmoothPushEnabled` | `true` | 实体错峰推送：同 interval 实体按 UUID 稳定错开发送时刻，总量不变、摊平齐发尖峰 |
 
 **B4. compat.\*（2 键）**
 
@@ -130,10 +139,11 @@
 | `chunk.*` | CLIENT | 14 | `seedGenEnabled`=false |
 | `debug.*` | CLIENT | 10 | 全 false（`networkMetricsAutoReset`=true） |
 | `storage.*` | SERVER | 2 | `enabled`=false |
-| `master.*` | SERVER | 10 | `enabledOnLan`=false |
+| `master.*` | SERVER | 16 | `enabledOnLan`=false；`entity*` 键族 = 实体网络优化 8 键（分层更新总开关 + 两张逗号分隔档位表 + 每档热点阈值/倍率 + 倍率上限 + 帧预算压力，默认全开） |
+| `compat.*` | SERVER | 2 | `requireClientMod`=false |
 | `debug.*` | SERVER | 5 | 全 false |
 | `chunk.lightStrip` / `chunk.seedGenEnabled` | SERVER | 2 | `seedGenEnabled`=false |
-| **合计** | | **45** | |
+| **合计** | | **52** | |
 
 ## 五、审计方法
 
@@ -142,3 +152,5 @@
 3. 双端语义（`isNetworkCompressionEnabled` 等）以 `resolveNetworkEnabled` 实现为准：客户端解析 `chunk.enabled`，服务端解析 `master.enabled`。
 
 [← architecture](architecture.md) · [Home](../README.md) · [→ version-segments](version-segments.md)
+
+

@@ -82,6 +82,15 @@ public final class ConfigSnapshotAdapter {
                 .with(ConfigSchema.MASTER_AGGREGATION_MAX_SIZE, master.aggregationMaxSize())
                 .with(ConfigSchema.MASTER_COMPRESSION_BLACKLIST, new ArrayList<>(master.compressionBlacklist()))
                 .with(ConfigSchema.MASTER_MAX_CHUNKS_PER_TICK, master.maxChunksPerTick())
+                .with(ConfigSchema.MASTER_ENTITY_TIERED_UPDATE, master.entityTieredUpdateEnabled())
+                .with(ConfigSchema.MASTER_ENTITY_TIER_INTERVALS, master.entityTierIntervals())
+                .with(ConfigSchema.MASTER_ENTITY_ITEM_TIER_INTERVALS, master.entityItemTierIntervals())
+                .with(ConfigSchema.MASTER_ENTITY_DENSITY_THROTTLE, master.entityDensityThrottleEnabled())
+                .with(ConfigSchema.MASTER_ENTITY_DENSITY_TIER_COUNTS, master.entityDensityTierCounts())
+                .with(ConfigSchema.MASTER_ENTITY_DENSITY_TIER_FACTORS, master.entityDensityTierFactors())
+                .with(ConfigSchema.MASTER_ENTITY_MAX_THROTTLE_FACTOR, master.entityMaxThrottleFactor())
+                .with(ConfigSchema.MASTER_ENTITY_FRAME_BUDGET_PER_PLAYER, master.entityFrameBudgetPerPlayer())
+                .with(ConfigSchema.MASTER_ENTITY_SMOOTH_PUSH, master.entitySmoothPushEnabled())
                 .with(ConfigSchema.SERVER_CHUNK_SEED_GEN_ENABLED, chunk.seedGenEnabled());
 
         HassiumConfig.CompatConfig compat = config.compat();
@@ -122,7 +131,16 @@ public final class ConfigSnapshotAdapter {
                 values.get(ConfigSchema.MASTER_AGGREGATION_MAX_WAIT),
                 values.get(ConfigSchema.MASTER_AGGREGATION_MAX_SIZE),
                 SetCopy.copy(values.get(ConfigSchema.MASTER_COMPRESSION_BLACKLIST)),
-                values.get(ConfigSchema.MASTER_MAX_CHUNKS_PER_TICK));
+                values.get(ConfigSchema.MASTER_MAX_CHUNKS_PER_TICK),
+                values.get(ConfigSchema.MASTER_ENTITY_TIERED_UPDATE),
+                values.get(ConfigSchema.MASTER_ENTITY_TIER_INTERVALS),
+                values.get(ConfigSchema.MASTER_ENTITY_ITEM_TIER_INTERVALS),
+                values.get(ConfigSchema.MASTER_ENTITY_DENSITY_THROTTLE),
+                values.get(ConfigSchema.MASTER_ENTITY_DENSITY_TIER_COUNTS),
+                values.get(ConfigSchema.MASTER_ENTITY_DENSITY_TIER_FACTORS),
+                values.get(ConfigSchema.MASTER_ENTITY_MAX_THROTTLE_FACTOR),
+                values.get(ConfigSchema.MASTER_ENTITY_FRAME_BUDGET_PER_PLAYER),
+                values.get(ConfigSchema.MASTER_ENTITY_SMOOTH_PUSH));
         HassiumConfig.CompatConfig compat = new HassiumConfig.CompatConfig(
                 values.get(ConfigSchema.COMPAT_REQUIRE_CLIENT_MOD), values.get(ConfigSchema.COMPAT_AUTO_DOWNGRADE));
         HassiumConfig.DebugConfig debug = new HassiumConfig.DebugConfig(

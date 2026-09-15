@@ -348,6 +348,51 @@ public class HassiumConfigService {
         return config.chunk().enabled();
     }
 
+    /** 实体分层更新总开关（按观察者距离四挡降频；本键族的总闸）。 */
+    public boolean isEntityTieredUpdateEnabled() {
+        return config.master().entityTieredUpdateEnabled();
+    }
+
+    /** 实体各档更新间隔（刻），逗号分隔，按 近/中/远/边缘 顺序。 */
+    public String getEntityTierIntervals() {
+        return config.master().entityTierIntervals();
+    }
+
+    /** 物品流（掉落物/经验球）各档更新间隔（刻），逗号分隔，顺序同上。 */
+    public String getEntityItemTierIntervals() {
+        return config.master().entityItemTierIntervals();
+    }
+
+    /** 实体密度节流总开关（实体所在 chunk 活跃实体数达该档阈值后按该档倍率放大间隔）。 */
+    public boolean isEntityDensityThrottleEnabled() {
+        return config.master().entityDensityThrottleEnabled();
+    }
+
+    /** 每档热点阈值（逗号分隔，近/中/远/边缘）。 */
+    public String getEntityDensityTierCounts() {
+        return config.master().entityDensityTierCounts();
+    }
+
+    /** 每档热点倍率（逗号分隔，近/中/远/边缘；支持小数）。 */
+    public String getEntityDensityTierFactors() {
+        return config.master().entityDensityTierFactors();
+    }
+
+    /** 最大节流倍率（密度倍率 × 压力倍率的总上限）。 */
+    public int getEntityMaxThrottleFactor() {
+        return config.master().entityMaxThrottleFactor();
+    }
+
+    /** 每玩家每 tick 实体更新帧预算（0 = 不限）。 */
+    public int getEntityFrameBudgetPerPlayer() {
+        return config.master().entityFrameBudgetPerPlayer();
+    }
+
+    /** 实体错峰推送：同 interval 实体按 UUID 错开发送时刻，总量不变。 */
+    public boolean isEntitySmoothPushEnabled() {
+        return config.master().entitySmoothPushEnabled();
+    }
+
     // --- internal helpers ---
     private static boolean resolveNetworkEnabled(HassiumConfig cfg) {
         try {

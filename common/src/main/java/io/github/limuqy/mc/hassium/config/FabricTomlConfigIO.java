@@ -1,6 +1,7 @@
 package io.github.limuqy.mc.hassium.config;
 
 import com.electronwill.nightconfig.core.CommentedConfig;
+import com.electronwill.nightconfig.core.UnmodifiableConfig;
 import com.electronwill.nightconfig.core.file.CommentedFileConfig;
 import com.electronwill.nightconfig.core.io.WritingMode;
 import io.github.limuqy.mc.hassium.Constants;
@@ -149,24 +150,75 @@ public final class FabricTomlConfigIO {
             return values;
         }
         boolean purged = false;
+        boolean missing = false;
+        boolean orderDiffers = false;
         try (CommentedFileConfig cfg = open(path)) {
             stripUtf8BomIfPresent(path);
             cfg.load();
+            List<String> filePaths = new ArrayList<>();
+            flatten(cfg, "", filePaths);
+            orderDiffers = !filePaths.equals(schemaPaths(scope));
             for (ConfigEntry<?> entry : entries(scope)) {
                 Object value = readSchemaValue(cfg, entry);
                 if (value != null) {
                     values = withSchemaValue(values, entry, value);
+                } else if (cfg.get(entry.path()) == null) {
+                    missing = true;
                 }
             }
             purged = purgeUnknownKeys(cfg, scope);
-            if (purged) {
+            if (purged && !missing && !orderDiffers) {
                 cfg.save();
                 LOGGER.info("Hassium: 已清理 {} 中的非本 scope 残留键", path);
             }
         } catch (Exception e) {
             LOGGER.warn("Hassium: 读取 {} 失败，使用默认配置", path, e);
+            return values;
+        }
+        if (missing || orderDiffers) {
+            // 键缺失或键序与 schema 不符时**整表重写**：在已加载的表上逐个补写，新键会插进旧键之间
+            // （旧文件顺序 + 逐键插入），文件看起来"散落一地"（2026-09-15 用户实测）。
+            // 从空表按 schema 顺序写完再落盘，结果与首次生成的文件逐行一致；值取自本次读到的快照，
+            // 用户改过的值原样保留，只有缺的键补成默认值。
+            writeAll(path, scope, values);
+            LOGGER.info("Hassium: {} 的配置键{}，已按 schema 顺序整表重写（原有值保持不变）",
+                    path, missing ? "有新增" : "顺序与当前版本不一致");
         }
         return values;
+    }
+
+    /** 该 scope 的键序（与写文件时一致，决定文件里各键的排列）。 */
+    private static List<String> schemaPaths(ConfigScope scope) {
+        List<ConfigEntry<?>> entries = entries(scope);
+        List<String> paths = new ArrayList<>(entries.size());
+        for (ConfigEntry<?> entry : entries) {
+            paths.add(entry.path());
+        }
+        return paths;
+    }
+
+    /** 按文件里的实际顺序展开嵌套表为 {@code a.b} 形式的键路径。 */
+    private static void flatten(UnmodifiableConfig config, String prefix, List<String> out) {
+        for (Map.Entry<String, Object> entry : config.valueMap().entrySet()) {
+            String path = prefix.isEmpty() ? entry.getKey() : prefix + "." + entry.getKey();
+            if (entry.getValue() instanceof UnmodifiableConfig nested) {
+                flatten(nested, path, out);
+            } else {
+                out.add(path);
+            }
+        }
+    }
+
+    /** 从空表按 schema 顺序写出该 scope 的全部键（与首次生成路径同构）。 */
+    private static void writeAll(Path path, ConfigScope scope, ConfigValues values) {
+        try (CommentedFileConfig cfg = open(path)) {
+            for (ConfigEntry<?> entry : entries(scope)) {
+                writeSchemaValue(cfg, entry, values.get(entry.key()));
+            }
+            cfg.save();
+        } catch (Exception e) {
+            LOGGER.warn("Hassium: 重写 {} 失败", path, e);
+        }
     }
 
     /**
@@ -462,7 +514,16 @@ public final class FabricTomlConfigIO {
                 getLong(cfg, "master.aggregationMaxWaitTimeMs", d.aggregationMaxWaitTimeMs()),
                 getInt(cfg, "master.aggregationMaxSize", d.aggregationMaxSize()),
                 getStringSet(cfg, "master.compressionBlacklist", d.compressionBlacklist()),
-                getInt(cfg, "master.maxChunksPerTick", d.maxChunksPerTick())
+                getInt(cfg, "master.maxChunksPerTick", d.maxChunksPerTick()),
+                getBool(cfg, "master.entityTieredUpdateEnabled", d.entityTieredUpdateEnabled()),
+                getString(cfg, "master.entityTierIntervals", d.entityTierIntervals()),
+                getString(cfg, "master.entityItemTierIntervals", d.entityItemTierIntervals()),
+                getBool(cfg, "master.entityDensityThrottleEnabled", d.entityDensityThrottleEnabled()),
+                getString(cfg, "master.entityDensityTierCounts", d.entityDensityTierCounts()),
+                getString(cfg, "master.entityDensityTierFactors", d.entityDensityTierFactors()),
+                getInt(cfg, "master.entityMaxThrottleFactor", d.entityMaxThrottleFactor()),
+                getInt(cfg, "master.entityFrameBudgetPerPlayer", d.entityFrameBudgetPerPlayer()),
+                getBool(cfg, "master.entitySmoothPushEnabled", d.entitySmoothPushEnabled())
         );
     }
 
@@ -477,6 +538,15 @@ public final class FabricTomlConfigIO {
         set(cfg, "master.aggregationMaxSize", n.aggregationMaxSize(), "聚合最大大小（字节）", ConfigScope.SERVER);
         set(cfg, "master.compressionBlacklist", new ArrayList<>(n.compressionBlacklist()), "压缩/聚合黑名单", ConfigScope.SERVER);
         set(cfg, "master.maxChunksPerTick", n.maxChunksPerTick(), "每玩家每 tick 完成的 Pull FULL/DELTA 上限（UNCHANGED 另额 32；满 tick ≈ 本值×20/s，仅服务端）", ConfigScope.SERVER);
+        set(cfg, "master.entityTieredUpdateEnabled", n.entityTieredUpdateEnabled(), "启用实体分层更新（按观察者距离四挡降频）", ConfigScope.SERVER);
+        set(cfg, "master.entityTierIntervals", n.entityTierIntervals(), "实体各档更新间隔（刻），逗号分隔，按 近/中/远/边缘 顺序；挡位边界 = 有效跟踪范围的 25%/50%/75%/100%", ConfigScope.SERVER);
+        set(cfg, "master.entityItemTierIntervals", n.entityItemTierIntervals(), "掉落物与经验球的四档更新间隔（刻），逗号分隔、顺序同上，默认 2,4,8,16", ConfigScope.SERVER);
+        set(cfg, "master.entityDensityThrottleEnabled", n.entityDensityThrottleEnabled(), "启用实体密度节流（可见实体数超阈值后叠加降频）", ConfigScope.SERVER);
+        set(cfg, "master.entityDensityTierCounts", n.entityDensityTierCounts(), "每档热点阈值（逗号分隔，按 近/中/远/边缘 顺序）：实体所在 chunk 活跃实体数 ≥ 阈值时按对应倍率放大", ConfigScope.SERVER);
+        set(cfg, "master.entityDensityTierFactors", n.entityDensityTierFactors(), "每档热点倍率（逗号分隔，按 近/中/远/边缘 顺序，支持小数；1.0 = 不放大）", ConfigScope.SERVER);
+        set(cfg, "master.entityMaxThrottleFactor", n.entityMaxThrottleFactor(), "最大节流倍率（更新间隔放大上限）", ConfigScope.SERVER);
+        set(cfg, "master.entityFrameBudgetPerPlayer", n.entityFrameBudgetPerPlayer(), "每玩家每 tick 实体更新帧预算（0=不限）", ConfigScope.SERVER);
+        set(cfg, "master.entitySmoothPushEnabled", n.entitySmoothPushEnabled(), "实体错峰推送（同间隔实体按 UUID 错开发送时刻，总量不变）", ConfigScope.SERVER);
     }
 
     private static HassiumConfig.CompatConfig readCompat(CommentedConfig cfg) {
@@ -576,6 +646,14 @@ public final class FabricTomlConfigIO {
         Object v = cfg.get(path);
         if (v instanceof Number n) {
             return n.intValue();
+        }
+        return def;
+    }
+
+    private static String getString(CommentedConfig cfg, String path, String def) {
+        Object v = cfg.get(path);
+        if (v instanceof String s) {
+            return s;
         }
         return def;
     }

@@ -1,5 +1,7 @@
 package io.github.limuqy.mc.hassium.config;
 
+import io.github.limuqy.mc.hassium.network.entity.EntityUpdateTiering;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
@@ -54,7 +56,7 @@ public final class ConfigSchema {
     public static final ConfigKey<Integer> STORAGE_ZSTD_LEVEL = integer("storage.zstdLevel", ConfigScope.SERVER, Domain.STORAGE, 3, 1, 22,
             "存储 ZSTD 压缩等级", "Storage ZSTD compression level");
 
-    // === 主控核心（master.*；SERVER）===
+    // === 主控核心（master.*；SERVER 17 键）===
     public static final ConfigKey<Boolean> MASTER_ENABLED = bool("master.enabled", ConfigScope.SERVER, Domain.MASTER_CORE, true,
             "是否启用主控核心网络通道", "Enable master-core network channel");
     public static final ConfigKey<Boolean> MASTER_ENABLED_ON_LAN = bool("master.enabledOnLan", ConfigScope.SERVER, Domain.MASTER_CORE, false,
@@ -75,6 +77,35 @@ public final class ConfigSchema {
     public static final ConfigKey<Integer> MASTER_MAX_CHUNKS_PER_TICK = integer("master.maxChunksPerTick", ConfigScope.SERVER, Domain.MASTER_CORE, 5, 1, 256,
             "每玩家每 tick 完成的 Pull 裁决上限（FULL/DELTA；满 tick ≈ 本值×20/s）",
             "Per-player per-tick Pull completion cap for FULL/DELTA (≈ value×20/s at full tick)");
+
+    // === 实体网络优化（master.entity*；SERVER 键族；分档表统一逗号分隔，减少配置量）===
+    public static final ConfigKey<Boolean> MASTER_ENTITY_TIERED_UPDATE = bool("master.entityTieredUpdateEnabled", ConfigScope.SERVER, Domain.MASTER_CORE, true,
+            "是否按玩家距离分四档降频下发实体更新（离得越远更新越稀）。默认开；关闭后距离档表失效，密度/压力/错峰仍可独立生效",
+            "Enable distance-tiered entity updates (entities further away are updated less often). Enabled by default; turning it off disables only the distance tables — density, pressure and smooth-push remain independent");
+    public static final ConfigKey<String> MASTER_ENTITY_TIER_INTERVALS = string("master.entityTierIntervals", ConfigScope.SERVER, Domain.MASTER_CORE, EntityUpdateTiering.DEFAULT_ENTITY_INTERVALS,
+            "四个距离档的实体更新间隔（刻），用逗号分隔，依次为 近/中/远/边缘；挡位边界是实体跟踪范围的 25%/50%/75%。默认 3,6,10,20（越远越稀）。数字要大不要小，须非递减；写 0 或留空用默认值",
+            "Entity update interval in ticks for the four distance tiers, comma-separated, ordered near/mid/far/edge (tier boundaries at 25%/50%/75% of the tracking range). Default 3,6,10,20. Values must be non-decreasing; 0 or blank means default");
+    public static final ConfigKey<String> MASTER_ENTITY_ITEM_TIER_INTERVALS = string("master.entityItemTierIntervals", ConfigScope.SERVER, Domain.MASTER_CORE, EntityUpdateTiering.DEFAULT_ITEM_INTERVALS,
+            "掉落物与经验球的四档更新间隔（刻），逗号分隔、顺序同上，默认 2,4,8,16。物品数量多、带宽吃紧时可以把它们调稀；贴近玩家的掉落物建议不超过 3 刻，否则看起来会一跳一跳",
+            "Update interval in ticks for dropped items and experience orbs across the same four tiers, default 2,4,8,16. Raise these values when many items are on the ground; keep the near value at 3 ticks or lower so items next to the player still move smoothly");
+    public static final ConfigKey<Boolean> MASTER_ENTITY_DENSITY_THROTTLE = bool("master.entityDensityThrottleEnabled", ConfigScope.SERVER, Domain.MASTER_CORE, true,
+            "是否启用区块热点降频：某个区块里实体过于密集时，对其中实体进一步加大更新间隔。默认开",
+            "Enable hotspot throttling: when too many entities pile up in one chunk, their update interval is stretched further. Enabled by default");
+    public static final ConfigKey<String> MASTER_ENTITY_DENSITY_TIER_COUNTS = string("master.entityDensityTierCounts", ConfigScope.SERVER, Domain.MASTER_CORE, EntityUpdateTiering.DEFAULT_DENSITY_COUNTS,
+            "每档热点阈值：实体所在区块的活跃实体数达到该值时，该档的间隔按对应倍率放大。逗号分隔按 近/中/远/边缘，默认 32,64,96,128，写 0 或留空用默认值",
+            "Per-tier hotspot threshold: once the number of active entities in the entity's own chunk reaches this value, that tier's interval is multiplied by the matching factor. Comma-separated, near/mid/far/edge; default 32,64,96,128");
+    public static final ConfigKey<String> MASTER_ENTITY_DENSITY_TIER_FACTORS = string("master.entityDensityTierFactors", ConfigScope.SERVER, Domain.MASTER_CORE, EntityUpdateTiering.DEFAULT_DENSITY_FACTORS,
+            "每档热点倍率：达到上面阈值后间隔乘多少倍，逗号分隔按 近/中/远/边缘，默认 1.0,1.5,2.0,3.0（1.0 = 该档不放大）。支持小数；小于 1 按 1 处理；乘上压力倍率后再受 entityMaxThrottleFactor 限制",
+            "Per-tier hotspot multiplier applied once the threshold above is reached, comma-separated, near/mid/far/edge; default 1.0,1.5,2.0,3.0 (1.0 means no change). Decimals allowed; values below 1 are treated as 1");
+    public static final ConfigKey<Integer> MASTER_ENTITY_MAX_THROTTLE_FACTOR = integer("master.entityMaxThrottleFactor", ConfigScope.SERVER, Domain.MASTER_CORE, 4, 1, 16,
+            "热点倍率与压力倍率相乘后的总上限（默认 4），用来兜住最坏情况；调大 = 密集时降得更狠",
+            "Upper bound on the product of the hotspot factor and the pressure factor (default 4). Raise it to throttle harder in crowded areas");
+    public static final ConfigKey<Integer> MASTER_ENTITY_FRAME_BUDGET_PER_PLAYER = integer("master.entityFrameBudgetPerPlayer", ConfigScope.SERVER, Domain.MASTER_CORE, 128, 0, 100000,
+            "每个玩家每 tick 期望收到的实体更新包数（默认 128）。某个玩家持续超过这个量时，他视野内的实体更新会自动变稀，避免卡顿；0 = 不做这个自动限制",
+            "Expected entity update packets per player per tick (default 128). When a player keeps exceeding it, entities in their view are updated less often to avoid lag; 0 = no automatic limit");
+    public static final ConfigKey<Boolean> MASTER_ENTITY_SMOOTH_PUSH = bool("master.entitySmoothPushEnabled", ConfigScope.SERVER, Domain.MASTER_CORE, true,
+            "实体错峰推送：同一更新间隔的实体按 UUID 稳定错开发送时刻，3 刻总量不变但不再齐发尖峰。默认开；关闭后退回原版齐发",
+            "Entity smooth push: entities sharing the same update interval are phase-staggered by UUID so total volume over an interval is unchanged but the per-tick spike is flattened. Enabled by default");
 
     // === 区块核心（chunk.*；SERVER 2 键）===
     public static final ConfigKey<Boolean> SERVER_CHUNK_SEED_GEN_ENABLED = bool("chunk.seedGenEnabled", ConfigScope.SERVER, Domain.CHUNK_CORE, false,
@@ -175,6 +206,11 @@ public final class ConfigSchema {
     private static ConfigKey<Double> decimal(String path, ConfigScope scope, Domain domain, double defaultValue, double min, double max,
                                              String commentZh, String commentEn) {
         return add(path, scope, domain, ConfigType.DOUBLE, defaultValue, min, max, commentZh, commentEn, Double.class);
+    }
+
+    private static ConfigKey<String> string(String path, ConfigScope scope, Domain domain, String defaultValue,
+                                            String commentZh, String commentEn) {
+        return add(path, scope, domain, ConfigType.STRING, defaultValue, null, null, commentZh, commentEn, String.class);
     }
 
     private static ConfigKey<List<String>> stringList(String path, ConfigScope scope, Domain domain,
